@@ -1,0 +1,12 @@
+{
+  "id": "orientation-axes",
+  "name": "Orientation Axes",
+  "version": "1.0.0",
+  "creator": "IRIBHM",
+  "placement": "tools",
+  "group": "visuals",
+  "subtype": "toggle",
+  "icon": "compass",
+  "order": 25,
+  "description": "Affiche le triple axe d'orientation (A/P, D/V, L/R) de l'embryon."
+}

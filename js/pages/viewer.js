@@ -148,7 +148,7 @@ const ViewerApp = (() => {
     // ── Pre-load Module Manifest ──────────────────────────────
     if (typeof PluginRegistry !== 'undefined') {
       const moduleManifest = [
-        'tools/toggle-grid', 'tools/toggle-axes', 'tools/toggle-volume',
+        'tools/toggle-grid', 'tools/toggle-axes', 'tools/orientation-axes', 'tools/toggle-volume',
         'tools/screenshot', 'tools/presentation-mode', 'tools/save-workspace',
         'tools/restore-workspace', 'tools/download-center', 'tools/decompose-channels',
         'tools/zstack-browser', 'tools/deepzoom-2d', 'tools/slice-inspector',

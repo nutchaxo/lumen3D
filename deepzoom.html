@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>IRIBHM - Vérité Terrain (Deep Zoom)</title>
+    <style>
+        body, html { margin: 0; padding: 0; height: 100%; background-color: #000; overflow: hidden; }
+        #viewer-container { width: 100%; height: 100%; }
+        #overlay-ui { position: absolute; top: 10px; left: 10px; z-index: 10; color: white; font-family: sans-serif; background: rgba(0,0,0,0.5); padding: 10px; border-radius: 5px; }
+    </style>
+    <!-- Include OpenSeadragon -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/openseadragon/3.0.0/openseadragon.min.js"></script>
+    <script src="js/components/deepzoom-viewer.js?v=20260504"></script>
+</head>
+<body>
+    <div id="overlay-ui">
+        <h3 data-i18n="deepzoom.title">Explorateur Z-Stack (Natif)</h3>
+        <p id="meta-info">Chargement...</p>
+        <button id="btn-sync-studio" data-i18n="deepzoom.studio2d">Ouvrir dans le Studio 2D</button>
+    </div>
+    <div id="viewer-container"></div>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', () => {
+            DeepZoomViewer.init('viewer-container');
+            
+            // Simulation of loading a dataset
+            const datasetUrl = "DATA_WEB/example/tiles2d/manifest.dzi"; // Remplacez par l'URL réelle
+            
+            // In a real scenario, you'd fetch the manifest first to get metadata
+            document.getElementById('meta-info').innerText = "Mode: Deep Zoom OME-TIFF/DZI";
+            
+            // Load the image pyramid
+            // DeepZoomViewer.load(datasetUrl);
+            
+            document.getElementById('btn-sync-studio').addEventListener('click', () => {
+                const bounds = DeepZoomViewer.getViewportBounds();
+                console.log("Sync requested for bounds:", bounds);
+                alert("Synchronisation avec le Studio (A implémenter : transfert du canvas)");
+            });
+        });
+    </script>
+</body>
+</html>

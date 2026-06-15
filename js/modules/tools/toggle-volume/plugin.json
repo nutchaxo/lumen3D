@@ -1,0 +1,12 @@
+{
+  "id": "toggle-volume",
+  "name": "Hide / Show 3D Volume",
+  "version": "1.0.0",
+  "creator": "IRIBHM",
+  "placement": "tools",
+  "group": "visuals",
+  "subtype": "toggle",
+  "icon": "eye-off",
+  "order": 30,
+  "description": "Toggle volume cube visibility while keeping slice projections visible."
+}

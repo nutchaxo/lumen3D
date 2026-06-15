@@ -1,0 +1,12 @@
+{
+  "id": "toggle-axes",
+  "name": "Toggle Axes",
+  "version": "1.0.0",
+  "creator": "IRIBHM",
+  "placement": "tools",
+  "group": "visuals",
+  "subtype": "toggle",
+  "icon": "corner-down-right",
+  "order": 20,
+  "description": "Show or hide the 3D coordinate axes helper."
+}

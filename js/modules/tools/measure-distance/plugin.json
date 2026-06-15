@@ -1,0 +1,12 @@
+{
+  "id": "measure-distance",
+  "name": "Measure Distance",
+  "version": "1.0.0",
+  "creator": "IRIBHM",
+  "placement": "tools",
+  "group": "tools",
+  "subtype": "tool",
+  "icon": "ruler",
+  "order": 30,
+  "description": "Pick two 3D surface points to measure calibrated physical distance in µm."
+}

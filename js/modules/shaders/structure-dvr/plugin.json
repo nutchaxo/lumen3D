@@ -1,0 +1,10 @@
+{
+  "id": "structure-dvr",
+  "name": "🏗️ Structure (DVR)",
+  "version": "1.0.0",
+  "creator": "IRIBHM",
+  "placement": "shaders",
+  "renderModeValue": 0,
+  "order": 20,
+  "description": "Direct Volume Rendering with depth/occlusion compositing."
+}

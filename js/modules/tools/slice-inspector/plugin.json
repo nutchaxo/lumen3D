@@ -1,0 +1,12 @@
+{
+  "id": "slice-inspector",
+  "name": "Slice through Volume",
+  "version": "1.0.0",
+  "creator": "IRIBHM",
+  "placement": "tools",
+  "group": "tools",
+  "subtype": "tool",
+  "icon": "scissors",
+  "order": 40,
+  "description": "Interactive oblique cross-section inspector with real-time GPU slice rendering."
+}

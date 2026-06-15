@@ -1,0 +1,258 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>IRIBHM Microscopy Platform — Confocal Imaging Data Viewer</title>
+  <meta name="description" content="Interactive platform for exploring confocal microscopy data of mouse embryos. Visualize, analyze, and compare 3D and 4D imaging datasets from the IRIBHM laboratory at ULB.">
+  <meta name="keywords" content="confocal microscopy, mouse embryo, immunofluorescence, live imaging, cell tracking, IRIBHM, ULB">
+
+  <!-- Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+
+  <!-- Lucide Icons -->
+  <script src="https://unpkg.com/lucide@0.344.0/dist/umd/lucide.min.js"></script>
+
+  <!-- Three.js (for hero 3D background) -->
+  <script src="https://unpkg.com/three@0.167.0/build/three.module.js" type="module"></script>
+
+  <!-- Stylesheets -->
+  <link rel="stylesheet" href="css/variables.css">
+  <link rel="stylesheet" href="css/themes.css">
+  <link rel="stylesheet" href="css/base.css">
+  <link rel="stylesheet" href="css/components.css">
+  <link rel="stylesheet" href="css/layout.css">
+  <link rel="stylesheet" href="css/landing.css">
+  <link rel="stylesheet" href="css/tools.css">
+
+  <style>
+    /* Inline critical styles for faster FCP */
+    body { opacity: 0; transition: opacity 0.3s ease; }
+    body.loaded { opacity: 1; }
+  </style>
+</head>
+<body>
+
+  <!-- ═══════════════════════════════════════════════════════════ -->
+  <!-- Navigation Bar                                             -->
+  <!-- ═══════════════════════════════════════════════════════════ -->
+  <nav class="navbar" id="navbar">
+    <a href="index.html" class="navbar-brand">
+      <div class="navbar-brand-icon">🔬</div>
+      <span data-i18n="app.lab">IRIBHM — ULB</span>
+    </a>
+
+    <div class="navbar-links">
+      <a href="index.html" class="navbar-link active" data-i18n="nav.home">Home</a>
+      <a href="explorer.html" class="navbar-link" data-i18n="nav.explorer">Data Explorer</a>
+      <a href="compare.html" class="navbar-link" data-i18n="nav.compare">Compare</a>
+      <a href="about.html" class="navbar-link" data-i18n="nav.about">About</a>
+    </div>
+
+    <div class="navbar-actions">
+      <!-- Language Switcher -->
+      <div class="dropdown" id="lang-dropdown">
+        <button class="btn btn-icon btn-ghost" onclick="toggleDropdown('lang-dropdown')" data-i18n-title="lang.switch">
+          <i data-lucide="languages" style="width:20px;height:20px"></i>
+        </button>
+        <div class="dropdown-menu">
+          <button class="dropdown-item" onclick="switchLanguage('en')">
+            <span>🇬🇧</span> English
+          </button>
+          <button class="dropdown-item" onclick="switchLanguage('fr')">
+            <span>🇫🇷</span> Français
+          </button>
+          <button class="dropdown-item" onclick="switchLanguage('es')">
+            <span>🇪🇸</span> Español
+          </button>
+        </div>
+      </div>
+
+                  <!-- Color Blindness Toggle -->
+      <button class="btn btn-icon btn-ghost" onclick="ColorBlind.openModal()" data-i18n-title="colorblind.toggle">
+        <i data-lucide="eye" style="width:20px;height:20px"></i>
+      </button>
+
+      <!-- Theme Toggle -->
+      <button class="btn btn-icon btn-ghost" onclick="Theme.toggle()" data-i18n-title="theme.toggle" id="theme-toggle">
+        <i data-lucide="moon" style="width:20px;height:20px" data-theme-icon></i>
+      </button>
+    </div>
+  </nav>
+
+  <!-- ═══════════════════════════════════════════════════════════ -->
+  <!-- Hero Section                                                -->
+  <!-- ═══════════════════════════════════════════════════════════ -->
+  <section class="hero" id="hero">
+    <div class="hero-bg">
+      <canvas id="hero-canvas"></canvas>
+    </div>
+    <div class="hero-gradient"></div>
+
+    <div class="container hero-content animate-fade-in-up">
+      <div class="hero-badge">
+        <span class="dot"></span>
+        <span data-i18n="app.lab">IRIBHM — ULB</span>
+      </div>
+
+      <h1 data-i18n="landing.heroTitle">Explore Embryonic Development</h1>
+
+      <p class="hero-subtitle" data-i18n="landing.heroSubtitle">
+        An interactive platform for exploring confocal microscopy data of mouse embryos
+        — visualize, analyze, and compare 3D and 4D imaging datasets.
+      </p>
+
+      <div class="hero-actions">
+        <a href="explorer.html" class="btn btn-accent btn-lg" data-i18n="landing.exploreBtn">
+          Explore Data
+        </a>
+        <a href="#data-types" class="btn btn-ghost btn-lg" data-i18n="landing.learnMore">
+          Learn More
+        </a>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══════════════════════════════════════════════════════════ -->
+  <!-- Statistics Bar                                              -->
+  <!-- ═══════════════════════════════════════════════════════════ -->
+  <section class="section-sm" style="border-bottom: 1px solid var(--border-subtle);">
+    <div class="container">
+      <div class="stats-bar" id="stats-bar">
+        <div class="stat-item animate-fade-in-up delay-1">
+          <div class="stat-number" id="stat-datasets">0</div>
+          <div class="stat-label" data-i18n="landing.statsDatasets">Datasets</div>
+        </div>
+        <div class="stat-item animate-fade-in-up delay-2">
+          <div class="stat-number" id="stat-embryos">0</div>
+          <div class="stat-label" data-i18n="landing.statsEmbryos">Embryos</div>
+        </div>
+        <div class="stat-item animate-fade-in-up delay-3">
+          <div class="stat-number" id="stat-cells">0</div>
+          <div class="stat-label" data-i18n="landing.statsCells">Tracked Cells</div>
+        </div>
+        <div class="stat-item animate-fade-in-up delay-4">
+          <div class="stat-number" id="stat-regions">0</div>
+          <div class="stat-label" data-i18n="landing.statsRegions">Anatomical Regions</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══════════════════════════════════════════════════════════ -->
+  <!-- Data Types Section                                          -->
+  <!-- ═══════════════════════════════════════════════════════════ -->
+  <section class="section" id="data-types">
+    <div class="container">
+      <div class="section-header animate-fade-in-up">
+        <h2 data-i18n="landing.typesTitle">Data Types</h2>
+        <p data-i18n="landing.typesSubtitle">Navigate across our comprehensive dataset collection</p>
+      </div>
+
+      <div class="type-cards">
+        <!-- Fixed Imaging -->
+        <a href="explorer.html?type=fixed" class="type-card type-card--fixed animate-fade-in-up delay-1">
+          <div class="type-card-glow"></div>
+          <div class="type-card-icon">
+            <i data-lucide="layers" style="width:28px;height:28px"></i>
+          </div>
+          <h3 data-i18n="landing.fixedTitle">Fixed Imaging</h3>
+          <p data-i18n="landing.fixedDesc">
+            High-resolution 3D confocal stacks of fixed embryos with immunofluorescence labeling.
+            Multi-channel imaging with DAPI, GFP, Pecam1, and more.
+          </p>
+          <div class="type-card-count" id="count-fixed">4 datasets</div>
+          <div class="type-card-arrow">
+            <i data-lucide="arrow-right" style="width:16px;height:16px"></i>
+          </div>
+        </a>
+
+        <!-- Live Imaging -->
+        <a href="explorer.html?type=live" class="type-card type-card--live animate-fade-in-up delay-2">
+          <div class="type-card-glow"></div>
+          <div class="type-card-icon">
+            <i data-lucide="video" style="width:28px;height:28px"></i>
+          </div>
+          <h3 data-i18n="landing.liveTitle">Live Imaging</h3>
+          <p data-i18n="landing.liveDesc">
+            Time-lapse 4D confocal recordings of developing embryos.
+            Watch vascular development unfold in real time.
+          </p>
+          <div class="type-card-count" id="count-live">2 datasets</div>
+          <div class="type-card-arrow">
+            <i data-lucide="arrow-right" style="width:16px;height:16px"></i>
+          </div>
+        </a>
+
+        <!-- Cell Tracking -->
+        <a href="explorer.html?type=tracking" class="type-card type-card--tracking animate-fade-in-up delay-3">
+          <div class="type-card-glow"></div>
+          <div class="type-card-icon">
+            <i data-lucide="git-branch" style="width:28px;height:28px"></i>
+          </div>
+          <h3 data-i18n="landing.trackingTitle">Cell Tracking</h3>
+          <p data-i18n="landing.trackingDesc">
+            Quantitative analysis of individual cell trajectories, velocities,
+            lineage trees, and neighbor relationships over time.
+          </p>
+          <div class="type-card-count" id="count-tracking">9 datasets</div>
+          <div class="type-card-arrow">
+            <i data-lucide="arrow-right" style="width:16px;height:16px"></i>
+          </div>
+        </a>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══════════════════════════════════════════════════════════ -->
+  <!-- Featured Datasets                                           -->
+  <!-- ═══════════════════════════════════════════════════════════ -->
+  <section class="section" style="background: var(--bg-surface);">
+    <div class="container">
+      <div class="section-header animate-fade-in-up">
+        <h2 data-i18n="landing.featuredTitle">Featured Datasets</h2>
+        <p data-i18n="landing.featuredSubtitle">Recent highlights from our imaging collection</p>
+      </div>
+
+      <div class="featured-grid" id="featured-grid">
+        <!-- Populated by JS -->
+      </div>
+
+      <div class="text-center mt-8">
+        <a href="explorer.html" class="btn btn-ghost btn-lg" data-i18n="landing.browseAll">Browse All</a>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══════════════════════════════════════════════════════════ -->
+  <!-- Footer                                                      -->
+  <!-- ═══════════════════════════════════════════════════════════ -->
+  <footer class="footer" id="about">
+    <div class="container">
+      <div class="footer-content">
+        <div class="footer-brand">
+          © 2026 IRIBHM — Université Libre de Bruxelles
+        </div>
+        <div class="footer-links">
+          <a href="https://www.ulb.be/en/research-institute/iribhm" target="_blank" rel="noopener">IRIBHM</a>
+          <a href="https://www.ulb.be" target="_blank" rel="noopener">ULB</a>
+          <a href="about.html" data-i18n="nav.about">About</a>
+          <a href="about.html#contact" data-i18n="about.contact">Contact</a>
+        </div>
+      </div>
+    </div>
+  </footer>
+
+  <!-- ═══════════════════════════════════════════════════════════ -->
+  <!-- Scripts                                                     -->
+  <!-- ═══════════════════════════════════════════════════════════ -->
+  <script src="js/core/utils.js?v=20260504"></script>
+  <script src="js/core/i18n.js?v=20260504"></script>
+    <script src="js/core/theme.js?v=20260504"></script>
+  <script src="js/core/colorblind.js?v=20260528"></script>
+  <script src="js/core/catalog.js?v=20260504"></script>
+  <script src="js/pages/landing.js?v=20260504"></script>
+</body>
+</html>

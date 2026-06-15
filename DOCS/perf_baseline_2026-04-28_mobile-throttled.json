@@ -1,0 +1,22 @@
+{
+  "profile": {
+    "name": "mobile-throttled",
+    "viewport": "390x844@3x",
+    "cpuThrottleRate": 4,
+    "network": {
+      "latencyMs": 180,
+      "downKbps": 1800,
+      "upKbps": 768
+    }
+  },
+  "viewerReady": null,
+  "viewerProbe": null,
+  "consoleEvents": [
+    {
+      "method": "Log.entryAdded",
+      "level": "error",
+      "text": "Failed to load resource: the server responded with a status of 404 (File not found)",
+      "url": "http://127.0.0.1:8765/favicon.ico"
+    }
+  ]
+}

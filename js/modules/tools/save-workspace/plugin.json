@@ -1,0 +1,12 @@
+{
+  "id": "save-workspace",
+  "name": "Save Workspace",
+  "version": "1.0.0",
+  "creator": "IRIBHM",
+  "placement": "tools",
+  "group": "export",
+  "subtype": "action",
+  "icon": "save",
+  "order": 20,
+  "description": "Persist the current viewer state to browser local storage."
+}

@@ -1,0 +1,12 @@
+{
+  "id": "deepzoom-2d",
+  "name": "2D Ground Truth (Deep Zoom)",
+  "version": "1.0.0",
+  "creator": "IRIBHM",
+  "placement": "tools",
+  "group": "tools",
+  "subtype": "toggle",
+  "icon": "scan-eye",
+  "order": 70,
+  "description": "Switch to high-resolution 2D tile viewer mode for ground truth inspection."
+}

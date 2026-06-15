@@ -1,0 +1,274 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Admin — IRIBHM Microscopy Platform</title>
+  <meta name="robots" content="noindex, nofollow">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap">
+  <link rel="stylesheet" href="css/admpan.css">
+</head>
+<body>
+
+<!-- ═══════════════════════════════════════════════════════
+     LOGIN SCREEN
+════════════════════════════════════════════════════════ -->
+<div id="login-screen">
+  <div class="login-card">
+    <div class="login-logo">
+      <span class="login-logo-icon">🔬</span>
+      <div>
+        <div class="login-logo-title">IRIBHM Admin</div>
+        <div class="login-logo-sub">Microscopy Platform — Administration</div>
+      </div>
+    </div>
+
+    <div class="login-divider"></div>
+
+    <div class="login-error" id="login-error">
+      <span id="login-error-msg">Identifiants incorrects.</span>
+    </div>
+
+    <div class="login-form">
+      <div>
+        <label style="display:block;font-size:12px;font-weight:500;color:var(--adm-text-sec);margin-bottom:5px;text-transform:uppercase;letter-spacing:0.04em;">Identifiant</label>
+        <input type="text" id="login-username" autocomplete="username"
+               placeholder="admin" spellcheck="false"
+               style="width:100%;padding:10px 14px;background:rgba(255,255,255,0.04);border:1px solid var(--adm-border);border-radius:var(--adm-radius-sm);color:var(--adm-text);font-size:14px;font-family:inherit;outline:none;transition:border-color 0.2s">
+      </div>
+      <div>
+        <label style="display:block;font-size:12px;font-weight:500;color:var(--adm-text-sec);margin-bottom:5px;text-transform:uppercase;letter-spacing:0.04em;">Mot de passe</label>
+        <input type="password" id="login-password" autocomplete="current-password"
+               placeholder="••••••••"
+               style="width:100%;padding:10px 14px;background:rgba(255,255,255,0.04);border:1px solid var(--adm-border);border-radius:var(--adm-radius-sm);color:var(--adm-text);font-size:14px;font-family:inherit;outline:none;transition:border-color 0.2s">
+      </div>
+      <button class="adm-btn adm-btn-accent login-submit" id="btn-login">
+        Se connecter
+      </button>
+    </div>
+
+    <div class="login-footer">IRIBHM · ULB · Accès restreint</div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════
+     MAIN ADMIN APP
+════════════════════════════════════════════════════════ -->
+<!-- MAIN ADMIN APP -->
+<div id="admin-app">
+
+  <!-- Header -->
+  <header class="admin-header">
+    <div class="admin-header-left">
+      <span class="admin-header-logo">🔬</span>
+      <span class="admin-header-title">
+        IRIBHM <span class="admin-header-accent">Admin</span>
+      </span>
+      <span class="admin-header-sep">·</span>
+      <span class="admin-header-sub" id="header-username">admin</span>
+    </div>
+
+    <div id="header-unsaved-wrap" style="display:none">
+      <span class="header-unsaved">
+        <span>●</span> Modifications non sauvegardées
+      </span>
+    </div>
+
+    <div class="admin-header-right">
+      <a href="explorer.html" class="adm-btn adm-btn-ghost adm-btn-sm" target="_blank">← Explorer</a>
+      <button class="adm-btn adm-btn-danger adm-btn-sm" id="btn-logout">Déconnexion</button>
+    </div>
+  </header>
+
+  <div class="admin-main">
+
+    <!-- 3-column body -->
+    <div class="admin-body">
+
+      <!-- LEFT: Dataset list -->
+      <aside class="panel panel-list">
+        <div class="panel-header">
+          <div class="panel-header-row">
+            <span class="panel-title">Datasets</span>
+            <div>
+              <span class="datasets-count-badge" id="dataset-count">0</span>
+              <button id="btn-collapse-list" style="background:none;border:none;color:var(--adm-text-sec);cursor:pointer;margin-left:8px;font-size:14px;transition:transform 0.3s;">◀</button>
+            </div>
+          </div>
+          <div class="list-search-wrap">
+            <span class="list-search-icon">🔍</span>
+            <input type="text" class="list-search-input" id="dataset-search"
+                   placeholder="Rechercher…" autocomplete="off">
+            <button class="list-search-clear" id="search-clear" style="display:none">✕</button>
+          </div>
+          <div class="list-filter-tabs">
+            <button class="filter-tab active" data-type="all">Tous</button>
+            <button class="filter-tab" data-type="fixed">Fixed</button>
+            <button class="filter-tab" data-type="live">Live</button>
+          </div>
+        </div>
+
+        <div class="dataset-list" id="dataset-list">
+          <!-- Loading skeletons -->
+          <div class="list-loading" id="list-loading">
+            <div class="skeleton-card"></div>
+            <div class="skeleton-card"></div>
+            <div class="skeleton-card"></div>
+            <div class="skeleton-card"></div>
+          </div>
+        </div>
+      </aside>
+
+      <!-- CENTER: Live preview -->
+      <section class="panel panel-preview">
+        <div class="preview-placeholder" id="preview-placeholder">
+          <div class="preview-placeholder-inner">
+            <div class="preview-placeholder-icon">🧬</div>
+            <div class="preview-placeholder-title">Aucun dataset sélectionné</div>
+            <div class="preview-placeholder-sub">Cliquez sur un dataset dans la liste pour le prévisualiser ici.</div>
+          </div>
+        </div>
+
+        <div class="preview-loading" id="preview-loading" style="display:none">
+          <div class="spinner spinner-lg"></div>
+          <div class="preview-loading-text">Chargement du viewer…</div>
+        </div>
+
+        <div class="preview-frame-wrap" id="preview-frame-wrap" style="display:none">
+          <iframe class="preview-iframe" id="preview-frame" title="Dataset Preview"
+                  sandbox="allow-scripts allow-same-origin allow-forms allow-popups"></iframe>
+        </div>
+
+        <div class="preview-label-bar" id="preview-label-bar" style="display:none">
+          <span class="preview-label-name" id="preview-label-name">—</span>
+          <span class="preview-label-dim" id="preview-label-dim"></span>
+          <button class="adm-btn adm-btn-ghost adm-btn-sm" id="btn-set-preview" style="margin-left:auto; font-size:11px; height:24px; padding:0 8px; font-weight:500;" title="Redéfinir la capture d'écran actuelle comme preview de l'explorer">
+            📸 Redéfinir la preview
+          </button>
+        </div>
+      </section>
+
+      <!-- RIGHT: Config panel -->
+      <aside class="panel panel-config">
+
+        <!-- Empty state -->
+        <div class="config-empty" id="config-empty">
+          <div style="font-size:40px;opacity:0.2;margin-bottom:12px">⚙️</div>
+          <div style="font-size:13px;color:var(--adm-text-muted);text-align:center;line-height:1.6">
+            Sélectionnez un dataset<br>pour éditer ses paramètres.
+          </div>
+        </div>
+
+        <!-- Config form -->
+        <div id="config-panel" style="display:none;flex-direction:column;height:100%">
+
+          <!-- Top save bar -->
+          <div class="config-topbar">
+            <div class="config-topbar-info">
+              <div class="config-topbar-name" id="topbar-name">—</div>
+              <div class="config-topbar-type" id="topbar-type"></div>
+            </div>
+            <button class="adm-btn adm-btn-ghost adm-btn-sm" id="btn-reset" title="Annuler les modifications">↺ Reset</button>
+            <button class="adm-btn adm-btn-accent adm-btn-sm" id="btn-save" title="Sauvegarder (Ctrl+S)">
+              💾 Sauvegarder
+            </button>
+          </div>
+
+          <!-- Scrollable body -->
+          <div class="config-body">
+
+            <!-- Section: Identification -->
+            <div class="config-section">
+              <div class="config-section-title">Identification</div>
+
+              <div class="config-field">
+                <label class="config-label" for="f-name">Nom d'affichage</label>
+                <input class="config-input" type="text" id="f-name" placeholder="Ex: Egfl7-eGFP E8.5 Em1">
+              </div>
+              <div class="config-row">
+                <div class="config-field">
+                  <label class="config-label" for="f-stage">Stade</label>
+                  <input class="config-input" type="text" id="f-stage" placeholder="E8.5">
+                </div>
+                <div class="config-field">
+                  <label class="config-label" for="f-embryo">Embryon</label>
+                  <input class="config-input" type="text" id="f-embryo" placeholder="Em1">
+                </div>
+              </div>
+              <div class="config-field">
+                <label class="config-label" for="f-description">Description</label>
+                <textarea class="config-input config-textarea" id="f-description" rows="3"
+                  placeholder="Description libre du dataset…"></textarea>
+              </div>
+              <div class="config-field">
+                <label class="config-label">Dossier source</label>
+                <div class="config-readonly" id="f-folder">—</div>
+              </div>
+              <div class="config-field">
+                <label class="config-label">Dimensions</label>
+                <div class="config-readonly" id="f-dims">—</div>
+              </div>
+            </div>
+
+
+            <!-- Section: Calibration -->
+            <div class="config-section">
+              <div class="config-section-title">Calibration physique</div>
+              <div class="config-row">
+                <div class="config-field">
+                  <label class="config-label" for="f-vox-x">Voxel X (µm)</label>
+                  <input class="config-input" type="number" id="f-vox-x" step="0.001" min="0" placeholder="0.650">
+                </div>
+                <div class="config-field">
+                  <label class="config-label" for="f-vox-y">Voxel Y (µm)</label>
+                  <input class="config-input" type="number" id="f-vox-y" step="0.001" min="0" placeholder="0.650">
+                </div>
+                <div class="config-field">
+                  <label class="config-label" for="f-vox-z">Voxel Z (µm)</label>
+                  <input class="config-input" type="number" id="f-vox-z" step="0.001" min="0" placeholder="2.000">
+                </div>
+              </div>
+            </div>
+
+            <!-- Section: Paramètres d'affichage -->
+            <div class="config-section">
+              <div class="config-section-title">Paramètres d'affichage</div>
+              <div class="config-field" style="margin-top:12px;">
+                <label class="config-label" for="f-exposure">Visibilité (Exposure)</label>
+                <div style="display:flex;align-items:center;gap:10px;">
+                  <input type="range" id="f-exposure" min="20" max="500" value="100" step="10" style="flex:1; accent-color: var(--adm-accent);">
+                  <span id="f-exposure-val" style="font-family:'JetBrains Mono',monospace;font-size:12px;min-width:40px;text-align:right;">1.00×</span>
+                </div>
+              </div>
+            </div>
+
+            <!-- Section: Catalogue -->
+            <div class="config-section">
+              <div class="config-section-title">Catalogue</div>
+              <button class="adm-btn adm-btn-ghost" id="btn-rebuild-catalog"
+                      style="width:100%;justify-content:center;gap:8px">
+                🔄 Régénérer catalog.json
+              </button>
+              <div id="rebuild-status"
+                   style="font-size:11.5px;color:var(--adm-text-muted);text-align:center;margin-top:8px;line-height:1.4">
+                Le catalogue est mis à jour après chaque sauvegarde.
+              </div>
+            </div>
+
+          </div><!-- /config-body -->
+        </div><!-- /config-panel -->
+
+      </aside>
+
+    </div><!-- /admin-body -->
+  </div><!-- /admin-main -->
+</div><!-- /admin-app -->
+
+<!-- Toast container -->
+<div id="toast-container" style="position:fixed;bottom:24px;right:24px;z-index:9999;display:flex;flex-direction:column;gap:10px;pointer-events:none"></div>
+
+<script type="module" src="js/pages/admpan.js?v=20260605-v1"></script>
+</body>
+</html>

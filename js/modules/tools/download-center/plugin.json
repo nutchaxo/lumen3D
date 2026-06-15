@@ -1,0 +1,12 @@
+{
+  "id": "download-center",
+  "name": "Download Center",
+  "version": "1.0.0",
+  "creator": "IRIBHM",
+  "placement": "tools",
+  "group": "export",
+  "subtype": "action",
+  "icon": "download",
+  "order": 10,
+  "description": "Open the export modal with all download options for the current dataset."
+}

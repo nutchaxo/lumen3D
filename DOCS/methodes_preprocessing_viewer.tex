@@ -1,0 +1,119 @@
+\documentclass[11pt,a4paper]{article}
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[french]{babel}
+\usepackage[a4paper,margin=2.2cm]{geometry}
+\usepackage{amsmath,amssymb,amsfonts}
+\usepackage{bm}
+\usepackage{mathtools}
+\usepackage{enumitem}
+\usepackage{booktabs}
+\usepackage{hyperref}
+
+\setlist[itemize]{leftmargin=1.6em}
+\setlength{\parindent}{0pt}
+\setlength{\parskip}{0.55em}
+\setcounter{tocdepth}{2}
+
+\begin{document}
+
+\title{Méthodes de Pré-traitement pour la Plateforme Web de Microscopie}
+\author{IRIBHM — ULB / AgroParisTech}
+\date{\today}
+\maketitle
+
+\tableofcontents
+
+\section{Introduction et architecture générale}
+
+Les jeux de données bruts de microscopie confocale (formats ND2, CZI) générés par le laboratoire IRIBHM atteignent des tailles considérables, allant de 15 à 30 Go par fichier pour les images à haute résolution. Ces volumes de données sont incompatibles avec une visualisation directe et fluide dans un navigateur web standard. 
+
+Pour résoudre ce problème, une architecture en deux temps a été mise en place :
+\begin{enumerate}
+    \item \textbf{Un pipeline de pré-traitement hors-ligne (Python)} : Il est chargé de lire les données brutes, de les normaliser, de les échantillonner et de les compresser dans des formats optimisés pour le web (WebP, JSON).
+    \item \textbf{Une plateforme de visualisation client-side (HTML/JS/WebGL)} : Elle charge dynamiquement les données pré-traitées de manière asynchrone pour garantir une expérience utilisateur fluide.
+\end{enumerate}
+
+Ce document détaille les méthodes mathématiques et algorithmiques utilisées dans le pipeline de pré-traitement.
+
+\section{Imagerie Fixée (Format ND2)}
+
+\paragraph{Principe intuitif.}
+Les fichiers ND2 issus des microscopes Nikon contiennent des volumes 3D multicanaux encodés sur 12 ou 16 bits. Le pipeline extrait chaque coupe Z et chaque canal, étire le contraste pour maximiser la dynamique visuelle sur 8 bits, sous-échantillonne spatialement l'image pour le web, et la compresse en WebP.
+
+\subsection{Extraction et normalisation radiométrique}
+
+Soit $I_{z,c}(x,y)$ l'intensité du pixel de coordonnées $(x,y)$ sur la coupe $z$ et le canal $c$. L'image brute est encodée sur $N$ bits (souvent 12 bits stockés dans des conteneurs 16 bits), avec des valeurs $I_{z,c}(x,y) \in [0, 2^{16}-1]$.
+
+Pour chaque canal $c$ sur l'ensemble du volume 3D, nous calculons les percentiles robustes afin d'éliminer les valeurs aberrantes (bruit de fond et pixels chauds) :
+\[
+p_{\min}^{(c)} = \operatorname{Perc}_{1\%}\big(I_{\cdot,c}\big), \qquad p_{\max}^{(c)} = \operatorname{Perc}_{99.9\%}\big(I_{\cdot,c}\big)
+\]
+
+L'image est ensuite normalisée sur 8 bits $\tilde{I}_{z,c}(x,y) \in [0, 255]$ via un étirement de contraste linéaire :
+\[
+\tilde{I}_{z,c}(x,y) = \lfloor 255 \times \operatorname{clip}\left( \frac{I_{z,c}(x,y) - p_{\min}^{(c)}}{p_{\max}^{(c)} - p_{\min}^{(c)}}, \, 0, \, 1 \right) \rfloor
+\]
+
+\subsection{Sous-échantillonnage spatial}
+
+Les images brutes ont typiquement une résolution $X \times Y$ très élevée (ex: $3789 \times 3789$). Pour une navigation web fluide, l'image normalisée $\tilde{I}$ est sous-échantillonnée vers une résolution cible maximale $W_{\max} = 1024$. 
+
+Le facteur de redimensionnement est :
+\[
+s = \min\left(1, \frac{W_{\max}}{\max(X, Y)}\right)
+\]
+
+L'image finale $\hat{I}_{z,c}$ de taille $(sX) \times (sY)$ est obtenue par interpolation bicubique. Chaque image $\hat{I}_{z,c}$ est sauvegardée sous forme de fichier WebP avec une qualité de compression de 90\%, permettant de réduire le poids d'une coupe de $\sim 28$ Mo à $\sim 50$ Ko.
+
+\subsection{Projections d'Intensité Maximale (MIP)}
+
+Pour fournir un aperçu global 2D du volume 3D, une Projection d'Intensité Maximale (MIP) est calculée pour chaque canal :
+\[
+M_c(x,y) = \max_{z} \hat{I}_{z,c}(x,y)
+\]
+Ces images MIP sont utilisées pour la vue d'ensemble et combinées sous forme de vignettes composites colorisées pour le catalogue.
+
+\section{Imagerie In Vivo (Format CZI)}
+
+\paragraph{Principe intuitif.}
+Les fichiers CZI (Zeiss) utilisés pour l'imagerie in vivo (LiveImaging) ajoutent une dimension temporelle ($t$). La résolution spatiale par coupe est généralement déjà adaptée au web ($1024 \times 1024$), mais le volume de données reste important en raison de la dimension temporelle ($T \times Z \times C$).
+
+\subsection{Traitement 4D}
+
+Pour chaque point temporel $t$, la méthode de normalisation et d'extraction décrite à la section précédente est appliquée :
+\[
+\tilde{I}_{t,z,c}(x,y) = \lfloor 255 \times \operatorname{clip}\left( \frac{I_{t,z,c}(x,y) - p_{\min}^{(c)}}{p_{\max}^{(c)} - p_{\min}^{(c)}}, \, 0, \, 1 \right) \rfloor
+\]
+Note : Les percentiles $p_{\min}^{(c)}$ et $p_{\max}^{(c)}$ sont calculés \emph{globalement} sur l'ensemble du volume 4D pour éviter un scintillement (flickering) lors de la lecture de l'animation temporelle.
+
+\section{Données de Suivi Cellulaire (Tracking)}
+
+\paragraph{Principe intuitif.}
+Les résultats d'analyse de suivi (tracking) générés par Imaris sont exportés sous la forme d'archives \texttt{.imaris\_track} (fichiers JSON compressés via gzip) accompagnées de maillages 3D (\texttt{.glb}) et de statistiques (\texttt{.xlsx}). Le pipeline extrait uniquement la géométrie et la topologie du réseau de trajectoires nécessaires au rendu WebGL (Three.js), réduisant considérablement la taille des fichiers.
+
+\subsection{Extraction des trajectoires et arbres de lignage}
+
+L'archive contient un ensemble de cellules $\mathcal{C}$ et de trajectoires $\mathcal{T}$. Chaque cellule $c_i \in \mathcal{C}$ est définie par :
+\begin{itemize}
+    \item Une position spatiale stabilisée $\mathbf{x}_i \in \mathbb{R}^3$.
+    \item Un temps d'observation $t_i$.
+    \item Un identifiant de piste $T_i \in \mathcal{T}$.
+    \item Des relations de parenté : cellule mère $m_i$ et cellules filles $d_{i,1}, d_{i,2}$.
+\end{itemize}
+
+Le pipeline structure ces données en un graphe acyclique dirigé (DAG) optimisé pour le rendu. Les coordonnées sont traduites par rapport au centre de la boîte englobante pour éviter les problèmes de précision en virgule flottante (jitter) dans WebGL :
+\[
+\mathbf{\bar{x}} = \frac{1}{|\mathcal{C}|} \sum_{c_i \in \mathcal{C}} \mathbf{x}_i, \qquad \mathbf{x}'_i = \mathbf{x}_i - \mathbf{\bar{x}}
+\]
+
+\subsection{Intégration des statistiques (XLSX)}
+
+Les métriques de migration (vélocité instantanée, déplacement net $D$, longueur totale de la trajectoire $L$, et indice de rectitude $S = D/L$) sont extraites des fichiers Excel d'analyse et injectées dans la structure JSON de chaque cellule. Cela permet au client web d'afficher ces statistiques interactivement sans recalcul.
+
+\section{Structure de Sortie et Catalogue}
+
+À l'issue du pré-traitement, l'ensemble des métadonnées (dimensions, résolutions physiques $\Delta x, \Delta y, \Delta z$, noms des canaux) est compilé dans un fichier \texttt{catalog.json}. Ce fichier agit comme la base de données de la plateforme, permettant à l'explorateur web de filtrer, trier et rechercher les différents jeux de données.
+
+\end{document}

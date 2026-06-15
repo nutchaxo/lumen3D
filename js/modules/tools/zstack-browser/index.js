@@ -1,0 +1,278 @@
+/* Z-Stack Browser — index.js
+ *
+ * Migrates the full Z-Stack Browser from viewer.js:
+ *   _bindZStackBrowser, _zstackShow, _zstackGoToSlice,
+ *   _zstackNudge, _zstackGetDims, _zstackPopulateInfo,
+ *   _zstackDrawDiagram, _applyZstackState (panel-local part)
+ *
+ * Cross-iframe sync (SYNC_ZSTACK_SLICE) and the early-listener
+ * _applyZstackState still live in viewer.js because they require
+ * direct access to ViewerApp's internal IIFE scope.
+ */
+PluginRegistry.implement('zstack-browser', {
+  _ctx: null,
+
+  init(ctx) {
+    this._ctx = ctx;
+    this._bindControls();
+    return this;
+  },
+
+  // ── Public toggle (called by toolbar button binding) ──────
+
+  activate() {
+    const st = this._ctx._state;
+    st.zstackActive = !st.zstackActive;
+    this._show(st.zstackActive);
+    const btn = document.getElementById('btn-toggle-zstack');
+    if (btn) {
+      btn.classList.toggle('btn-solid', st.zstackActive);
+      btn.classList.toggle('btn-ghost', !st.zstackActive);
+    }
+    return { active: st.zstackActive };
+  },
+
+  // ── Apply programmatic state (called by _applyZstackState in viewer.js) ──
+
+  applyState(desired, slice = null) {
+    const st = this._ctx._state;
+    st.zstackActive = desired;
+    const btn = document.getElementById('btn-toggle-zstack');
+    if (btn) {
+      btn.classList.toggle('btn-solid', desired);
+      btn.classList.toggle('btn-ghost', !desired);
+    }
+    this._show(desired);
+    if (desired && Number.isFinite(slice) && slice > 0) {
+      setTimeout(() => this._goToSlice(slice), 80);
+    }
+  },
+
+  // ── Workspace state ───────────────────────────────────────
+
+  getState() {
+    const st = this._ctx._state;
+    return {
+      zstackActive: st.zstackActive,
+      zstackSlice: st.zstackCurrentSlice
+    };
+  },
+
+  setState(s) {
+    if (!s) return;
+    // Restored by _applyWorkspaceStateNow in viewer.js (calls applyState)
+    if (typeof s.zstackActive === 'boolean') {
+      this.applyState(s.zstackActive, s.zstackSlice ?? 0);
+    }
+  },
+
+  // ── Private helpers ───────────────────────────────────────
+
+  _bindControls() {
+    const btn = document.getElementById('btn-toggle-zstack');
+    if (!btn) return;
+
+    // Remove any residual listener from viewer.js (none now, but guard anyway)
+    btn.addEventListener('click', () => {
+      const st = this._ctx._state;
+      st.zstackActive = !st.zstackActive;
+      btn.classList.toggle('btn-solid', st.zstackActive);
+      btn.classList.toggle('btn-ghost', !st.zstackActive);
+      this._show(st.zstackActive);
+    });
+
+    document.getElementById('btn-close-zstack')?.addEventListener('click', () => {
+      const st = this._ctx._state;
+      st.zstackActive = false;
+      if (btn) { btn.classList.remove('btn-solid'); btn.classList.add('btn-ghost'); }
+      this._show(false);
+    });
+
+    const slider = document.getElementById('zstack-slice-slider');
+    if (slider) {
+      slider.addEventListener('input', () => this._goToSlice(Number(slider.value)));
+    }
+
+    document.getElementById('btn-zstack-prev')?.addEventListener('click', () => this._nudge(-1));
+    document.getElementById('btn-zstack-next')?.addEventListener('click', () => this._nudge(1));
+
+    // Click on Z-stack diagram canvas → pick slice
+    const diagCanvas = document.getElementById('zstack-diagram-canvas');
+    if (diagCanvas) {
+      diagCanvas.style.cursor = 'pointer';
+      diagCanvas.addEventListener('click', (e) => {
+        const rect = diagCanvas.getBoundingClientRect();
+        const scaleY = diagCanvas.height / rect.height;
+        const clickY = (e.clientY - rect.top) * scaleY;
+        const { z } = this._getDims();
+        if (z < 1) return;
+        const stackTop = 20;
+        const stackBottom = diagCanvas.height - 30;
+        const t = Math.max(0, Math.min(1, (clickY - stackTop) / (stackBottom - stackTop)));
+        const sliceIndex = Math.round(t * (z - 1));
+        this._goToSlice(sliceIndex);
+      });
+    }
+
+    document.getElementById('btn-zstack-studio')?.addEventListener('click', () => this._ctx.ui.openStudio());
+  },
+
+  _show(visible) {
+    const panel = document.getElementById('zstack-browser');
+    if (!panel) return;
+    panel.classList.toggle('zstack-hidden', !visible);
+    const v = this._ctx.viewer;
+    if (visible) {
+      v.setView('xy');
+      v.setRotationLocked(true);
+      this._populateInfo();
+      this._goToSlice(0);
+      this._drawDiagram();
+    } else {
+      v.setRotationLocked(false);
+      v.resetClipping();
+      this._ctx._state.zstackCurrentSlice = 0;
+    }
+    this._ctx.ui.scheduleResize();
+  },
+
+  _getDims() {
+    const meta = this._ctx.dataset.getMeta();
+    const dims = meta?.dimensions || {};
+    const vs = meta?.voxel_size || {};
+    const z = Number(dims.z) || 1;
+    const c = Number(dims.c) || 1;
+    const vz = Number(vs.z) || 1;
+    const totalRange = z > 1 ? (z - 1) * vz : vz;
+    const interval = z > 1 ? vz : 0;
+    return { z, c, vz, totalRange, interval };
+  },
+
+  _populateInfo() {
+    const { z, c, vz, totalRange, interval } = this._getDims();
+    const set = (id, text) => { const el = document.getElementById(id); if (el) el.textContent = text; };
+    set('zstack-total-slices', String(z));
+    set('zstack-range', `${totalRange.toFixed(2)} µm`);
+    set('zstack-interval', interval > 0 ? `${interval.toFixed(2)} µm` : '—');
+    set('zstack-voxel-z', `${vz.toFixed(4)} µm`);
+    set('zstack-channels', String(c));
+    const slider = document.getElementById('zstack-slice-slider');
+    if (slider) { slider.min = 0; slider.max = z - 1; slider.value = 0; }
+  },
+
+  _goToSlice(index) {
+    const { z, vz } = this._getDims();
+    const safeIndex = Math.max(0, Math.min(z - 1, index));
+    const st = this._ctx._state;
+    st.zstackCurrentSlice = safeIndex;
+
+    const slider = document.getElementById('zstack-slice-slider');
+    if (slider) slider.value = safeIndex;
+
+    const label    = document.getElementById('zstack-slice-label');
+    const posLabel = document.getElementById('zstack-position-label');
+    const posInfo  = document.getElementById('zstack-position-info');
+
+    if (label) label.textContent = `${safeIndex + 1} / ${z}`;
+    const pos = safeIndex * vz;
+    if (posLabel) posLabel.textContent = `${pos.toFixed(2)} µm`;
+    if (posInfo)  posInfo.textContent  = `Slice ${safeIndex + 1} of ${z} — depth ${pos.toFixed(2)} µm`;
+
+    // 5-slice slab (±2) for bright rendering
+    const pad = 2;
+    const loIdx = Math.max(0, safeIndex - pad);
+    const hiIdx = Math.min(z, safeIndex + pad + 1);
+    this._ctx.viewer.setClipRange_z(loIdx / z, hiIdx / z);
+
+    this._drawDiagram();
+
+    // Broadcast to sibling panels in compare mode
+    if (this._ctx.iframe.isIframe() && !st.suppressZstackSync) {
+      this._ctx.iframe.postMessage({
+        type: 'SYNC_ZSTACK_SLICE',
+        sliceIndex: safeIndex,
+        sliceTotal: z,
+        lo: loIdx / z,
+        hi: hiIdx / z,
+        sourceIndex: this._ctx.iframe.panelIndex()
+      });
+    }
+  },
+
+  _nudge(delta) {
+    const { z } = this._getDims();
+    const st = this._ctx._state;
+    const next = Math.max(0, Math.min(z - 1, st.zstackCurrentSlice + delta));
+    this._goToSlice(next);
+  },
+
+  _drawDiagram() {
+    const canvas = document.getElementById('zstack-diagram-canvas');
+    if (!canvas) return;
+    const ctx2d = canvas.getContext('2d');
+    const W = canvas.width;
+    const H = canvas.height;
+    ctx2d.clearRect(0, 0, W, H);
+
+    const { z } = this._getDims();
+    if (z < 1) return;
+
+    const maxVisible  = Math.min(z, 40);
+    const step        = z > maxVisible ? z / maxVisible : 1;
+    const planeCount  = Math.min(z, maxVisible);
+    const planeW      = 130;
+    const planeDepth  = 14;
+    const skewX       = 20;
+    const stackTop    = 20;
+    const stackBottom = H - 30;
+    const stackRange  = stackBottom - stackTop;
+    const currentSlice = this._ctx._state.zstackCurrentSlice;
+
+    // Find closest visual plane to current slice
+    let closestPlane = 0;
+    let closestDist  = Infinity;
+    for (let i = 0; i < planeCount; i++) {
+      const ri = Math.round(i * step);
+      const d  = Math.abs(ri - currentSlice);
+      if (d < closestDist) { closestDist = d; closestPlane = i; }
+    }
+
+    for (let i = 0; i < planeCount; i++) {
+      const t  = i / Math.max(1, planeCount - 1);
+      const y  = stackTop + t * stackRange;
+      const cx = (W - planeW) / 2;
+      const isSelected = (i === closestPlane);
+
+      ctx2d.save();
+      ctx2d.globalAlpha = isSelected ? 1.0 : 0.1;
+      ctx2d.beginPath();
+      ctx2d.moveTo(cx + skewX,          y);
+      ctx2d.lineTo(cx + planeW + skewX, y);
+      ctx2d.lineTo(cx + planeW,         y + planeDepth);
+      ctx2d.lineTo(cx,                  y + planeDepth);
+      ctx2d.closePath();
+
+      if (isSelected) {
+        ctx2d.fillStyle   = 'rgba(80, 180, 255, 0.55)';
+        ctx2d.strokeStyle = 'rgba(80, 200, 255, 0.95)';
+        ctx2d.lineWidth   = 2;
+      } else {
+        ctx2d.fillStyle   = 'rgba(50, 90, 160, 0.3)';
+        ctx2d.strokeStyle = 'rgba(100, 160, 220, 0.25)';
+        ctx2d.lineWidth   = 1;
+      }
+      ctx2d.fill();
+      ctx2d.stroke();
+      ctx2d.restore();
+    }
+
+    ctx2d.save();
+    ctx2d.font      = 'bold 11px Inter, sans-serif';
+    ctx2d.fillStyle = 'rgba(255,255,255,0.7)';
+    ctx2d.textAlign = 'center';
+    ctx2d.fillText(`Z ${currentSlice + 1} / ${z}`, W / 2, H - 6);
+    ctx2d.restore();
+  },
+
+  dispose() {}
+});

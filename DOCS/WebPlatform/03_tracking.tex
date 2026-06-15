@@ -1,0 +1,78 @@
+\chapter{Page Tracking : Suivi et Analyse Temporelle 4D}
+\label{chap:tracking}
+
+La page \textbf{Tracking} (\texttt{tracking.html} et son contrôleur \texttt{js/pages/tracking.js}) constitue le module d'analyse cinématique de la plateforme. Elle permet d'étudier la dynamique, la généalogie, et les relations spatiales des populations cellulaires au cours du temps (Imagerie Live 4D).
+
+Contrairement au Viewer 3D qui calcule un rendu volumique lourd basé sur des pixels bruts, le TrackingViewer charge des \textbf{Nuages de Points} vectoriels (\textit{Point Clouds}) géométriques (\texttt{tracks.json}) et des maillages (\textit{Meshes} GLB), assurant des performances optimales via le pipeline \texttt{InstancedMesh} de Three.js.
+
+\section{Le Moteur d'Animation et de Stabilisation Mathématique}
+
+\subsection{Interpolation Temporelle Vectorielle}
+
+Les acquisitions confocales étant souvent espacées de plusieurs minutes, le moteur d'animation (\texttt{Timeline}) calcule en temps réel à chaque \textit{frame} de rendu (\texttt{requestAnimationFrame}) la position sub-temporelle exacte $P(t)$ de chaque cellule via une interpolation linéaire (\textit{Lerp}) :
+\begin{equation}
+P(t) = (1 - \alpha) P_{t_0} + \alpha P_{t_1}
+\end{equation}
+Où $\alpha \in [0, 1]$ représente l'avancement temporel fractionnaire entre deux \textit{timepoints} $t_0$ et $t_1$. Pour des mouvements complexes, une interpolation par \textbf{Spline de Catmull-Rom} est optionnellement appliquée pour arrondir les trajectoires.
+
+\subsection{Stabilisation de Dérive : Algorithme de Kabsch}
+Les embryons vivants bougent et grandissent au fil des heures. Pour analyser le mouvement interne spécifique des cellules indépendamment de la dérive globale de l'embryon, la plateforme utilise les données issues du script Python (\texttt{registration.py}) qui applique l'\textbf{Algorithme de Kabsch}.
+Cet algorithme trouve la matrice de rotation optimale $R$ et le vecteur de translation $\vec{t}$ minimisant l'erreur quadratique moyenne (RMSD) entre deux nuages de points via la Décomposition en Valeurs Singulières (SVD) de la matrice de covariance :
+\begin{equation}
+R = V \cdot \text{diag}(1, 1, \det(V U^T)) \cdot U^T
+\end{equation}
+Le filtre "Stabilized Coordinates" de l'interface applique cette transformation inverse $R^{-1}$ aux matrices de rendu WebGL pour ancrer l'embryon au centre géométrique.
+
+\section{La Barre d'Outils Principale (Top Toolbar)}
+
+\subsection{Outils d'Interaction (Tools)}
+\begin{itemize}
+    \item \textbf{Selection (Raycasting)} : Outil permettant de cibler une cellule. Mathématiquement, l'intersection avec un nuage de particules utilise un `Raycaster` avec un seuil de tolérance (\texttt{threshold}) expansé dynamiquement selon la distance à la caméra.
+    \item \textbf{Measure} : Les mesures temporelles se divisent en deux modes. 
+    \begin{itemize}
+        \item \textit{Static Snapshot} : Distance fixe entre deux points de l'espace.
+        \item \textit{Dynamic Follow} : Calcule la distance relative entre les centres de masse dynamiques de deux cellules, mise à jour à chaque \textit{frame} via : $d(t) = \left\| \vec{P_{\text{cell1}}}(t) - \vec{P_{\text{cell2}}}(t) \right\| \times V_s$.
+    \end{itemize}
+\end{itemize}
+
+\subsection{Mises en Page et Vues (Layouts)}
+\begin{itemize}
+    \item \textbf{Tracking vs Volume Split} : Divise l'écran pour superposer synchroniquement les marqueurs vectoriels 3D et le rendu volumique brut, permettant de vérifier la fidélité de l'algorithme de segmentation.
+    \item \textbf{Lineage Tree View} : Remplace le canevas 3D par un graphe nodal (D3.js) dessinant l'arbre généalogique complet depuis la cellule fondatrice.
+\end{itemize}
+
+\subsection{Effets Visuels et Modificateurs (Visuals)}
+\begin{itemize}
+    \item \textbf{Comet Trails (Queues de Comète)} : Pour visualiser le sens du mouvement, le shader \texttt{LineBasicMaterial} stocke un historique de positions et applique une atténuation Alpha décroissante $\alpha = e^{-\lambda \cdot \Delta t}$, créant une traînée visuelle cinétique.
+    \item \textbf{Embryo Mesh Overlay} : Affiche la surface globale (\textit{Skin}) extraite de la segmentation, souvent rendue avec un \textit{Matcap} transparent pour le contexte morphologique.
+\end{itemize}
+
+\section{Le Panneau de Contrôle Latéral (Left Menu)}
+
+\subsection{Filtres Biologiques de Comportement}
+Le module \texttt{AnalysisStore} conserve le graphe complet JSON en RAM. Les filtres permettent d'isoler via des expressions régulières ou des attributs :
+
+\begin{itemize}
+    \item \textbf{Mitose (Cell Division)} : Isole les nœuds du graphe ayant deux \textit{Edges} enfants ou plus.
+    \item \textbf{Fusion} : Événement rare où deux \textit{Edges} parentes convergent vers un unique enfant.
+\end{itemize}
+
+\subsection{Color Mapping et Physique (Colormaps)}
+Le panneau permet de colorer dynamiquement le nuage de points selon des variables physiques calculées au vol :
+\begin{itemize}
+    \item \textbf{Speed (Vitesse Instantanée)} : Coloriage via LUT (ex: \textit{Turbo}) proportionnel à la norme du vecteur vélocité $v(t) = \frac{\| P_{t+1} - P_{t} \|}{\Delta t}$.
+    \item \textbf{Local Density (Densité Spatiale)} : Détermine les zones surpeuplées. Pour optimiser la performance sur des millions de points, le moteur JavaScript utilise un \textbf{KD-Tree} (K-Dimensional Tree) qui trouve tous les voisins situés dans un rayon $R$ avec une complexité logarithmique $\mathcal{O}(\log N)$, contrairement à la boucle naïve en $\mathcal{O}(N^2)$.
+\end{itemize}
+
+\section{Analyses Quantitatives Avancées (\texttt{ChartStudio})}
+
+\subsection{L'Inspecteur de Cellule (Cell Inspector)}
+
+Le composant \texttt{CellInspector} présente un rapport individuel. L'une des métriques clés est le \textbf{Straightness Index} (Indice de Rectitude), défini comme le ratio entre le déplacement net (Euclidien) et la distance cumulée réelle parcourue (Path Length) :
+\begin{equation}
+S = \frac{\left\| P_{\text{end}} - P_{\text{start}} \right\|}{\sum_{i=1}^{n-1} \left\| P_{i+1} - P_i \right\|}
+\end{equation}
+Un index proche de $1.0$ indique une migration dirigée (ex: migration neurale), tandis qu'un index proche de $0.0$ indique un mouvement brownien chaotique.
+
+\subsection{Réseau de Voisinage (Nearest Neighbors Network)}
+Un graphe de connectivité dynamique peut être affiché. En utilisant l'algorithme KD-Tree, le système génère des géométries \texttt{LineSegments} connectant la cellule sélectionnée à tous ses voisins spatiaux valides ($d < T_{\text{threshold}}$). Le shader ajuste dynamiquement l'épaisseur ou la couleur de la ligne selon la force de la connexion.

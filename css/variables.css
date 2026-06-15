@@ -1,0 +1,115 @@
+/* ============================================================
+   IRIBHM Microscopy Platform — Design Tokens
+   ============================================================
+   All design decisions (colors, spacing, typography, shadows,
+   transitions) are centralized here as CSS custom properties.
+   ============================================================ */
+
+:root {
+  /* ── Color Palette ─────────────────────────────────────── */
+  --color-primary:        #00A654;
+  --color-primary-hover:  #1FBB6C;
+  --color-primary-dark:   #008A45;
+  --color-primary-subtle: rgba(0, 166, 84, 0.15);
+
+  --color-accent:         #00D2FF;
+  --color-accent-hover:   #33DBFF;
+  --color-accent-dark:    #00B8E0;
+  --color-accent-subtle:  rgba(0, 210, 255, 0.12);
+
+  --color-green:          #0FC57A;
+  --color-green-hover:    #2DD68E;
+  --color-green-subtle:   rgba(15, 197, 122, 0.12);
+
+  --color-error:          #FF6B6B;
+  --color-error-subtle:   rgba(255, 107, 107, 0.12);
+  --color-warning:        #FECA57;
+  --color-warning-subtle: rgba(254, 202, 87, 0.12);
+  --color-success:        #0FC57A;
+
+  /* ── Microscopy Channel Colors ─────────────────────────── */
+  --channel-dapi:         #4488FF;
+  --channel-gfp:          #44FF44;
+  --channel-rfp:          #FF4444;
+  --channel-cy5:          #FF44FF;
+  --channel-brightfield:  #CCCCCC;
+
+  /* ── Typography ────────────────────────────────────────── */
+  --font-sans:   'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  --font-mono:   'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace;
+
+  --text-xs:     0.6875rem;  /* 11px */
+  --text-sm:     0.8125rem;  /* 13px */
+  --text-base:   0.9375rem;  /* 15px */
+  --text-md:     1.0625rem;  /* 17px */
+  --text-lg:     1.25rem;    /* 20px */
+  --text-xl:     1.5rem;     /* 24px */
+  --text-2xl:    2rem;       /* 32px */
+  --text-3xl:    2.5rem;     /* 40px */
+  --text-4xl:    3.25rem;    /* 52px */
+
+  --leading-tight:   1.2;
+  --leading-normal:  1.5;
+  --leading-relaxed: 1.7;
+
+  --weight-normal:   400;
+  --weight-medium:   500;
+  --weight-semibold: 600;
+  --weight-bold:     700;
+
+  /* ── Spacing Scale ─────────────────────────────────────── */
+  --space-1:   0.25rem;   /* 4px  */
+  --space-2:   0.5rem;    /* 8px  */
+  --space-3:   0.75rem;   /* 12px */
+  --space-4:   1rem;      /* 16px */
+  --space-5:   1.25rem;   /* 20px */
+  --space-6:   1.5rem;    /* 24px */
+  --space-8:   2rem;      /* 32px */
+  --space-10:  2.5rem;    /* 40px */
+  --space-12:  3rem;      /* 48px */
+  --space-16:  4rem;      /* 64px */
+  --space-20:  5rem;      /* 80px */
+  --space-24:  6rem;      /* 96px */
+
+  /* ── Border Radius ─────────────────────────────────────── */
+  --radius-sm:    6px;
+  --radius-md:    10px;
+  --radius-lg:    14px;
+  --radius-xl:    20px;
+  --radius-full:  9999px;
+
+  /* ── Shadows ───────────────────────────────────────────── */
+  --shadow-sm:    0 1px 3px rgba(0, 0, 0, 0.25), 0 1px 2px rgba(0, 0, 0, 0.15);
+  --shadow-md:    0 4px 12px rgba(0, 0, 0, 0.3), 0 2px 4px rgba(0, 0, 0, 0.2);
+  --shadow-lg:    0 10px 30px rgba(0, 0, 0, 0.35), 0 4px 8px rgba(0, 0, 0, 0.2);
+  --shadow-xl:    0 20px 50px rgba(0, 0, 0, 0.4), 0 8px 16px rgba(0, 0, 0, 0.25);
+  --shadow-glow:  0 0 20px rgba(0, 166, 84, 0.3);
+  --shadow-glow-accent: 0 0 20px rgba(0, 210, 255, 0.25);
+
+  /* ── Transitions ───────────────────────────────────────── */
+  --transition-fast:    150ms ease;
+  --transition-base:    250ms ease;
+  --transition-slow:    400ms ease;
+  --transition-spring:  350ms cubic-bezier(0.34, 1.56, 0.64, 1);
+
+  /* ── Z-Index Scale ─────────────────────────────────────── */
+  --z-dropdown:    100;
+  --z-sticky:      200;
+  --z-overlay:     300;
+  --z-modal:       400;
+  --z-popover:     500;
+  --z-tooltip:     600;
+  --z-toast:       700;
+
+  /* ── Layout ────────────────────────────────────────────── */
+  --sidebar-width:    320px;
+  --sidebar-collapsed: 60px;
+  --header-height:    64px;
+  --toolbar-height:   48px;
+  --content-max:      1400px;
+
+  /* ── Glass Effect ──────────────────────────────────────── */
+  --glass-bg:       rgba(26, 26, 46, 0.75);
+  --glass-border:   rgba(255, 255, 255, 0.08);
+  --glass-blur:     16px;
+}

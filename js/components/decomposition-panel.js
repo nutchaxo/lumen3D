@@ -1,0 +1,661 @@
+/* ============================================================
+   IRIBHM Microscopy Platform — Decomposition Panel
+   ============================================================ */
+
+const DecompositionPanel = (() => {
+  let _isOpen = false;
+  let _customViews = []; // { id: string, name: string, state: array of channel states }
+  let _baseViews = {}; // idx -> { state: array of channel states, edited: boolean }
+  let _canvases = []; // { canvas, ctx, state: array of channel states }
+  
+  let _editingCustomId = null;
+  let _savedGlobalState = null;
+  let _exportLayout = 'main-right';
+
+  function _deepCopy(obj) {
+    return JSON.parse(JSON.stringify(obj));
+  }
+
+  function init() {
+    const btnToggle = document.getElementById('btn-toggle-decomposition');
+    const btnClose = document.getElementById('btn-close-decomposition');
+    const btnExport = document.getElementById('btn-export-decomposition');
+    const panel = document.getElementById('decomposition-panel');
+
+    // Layout buttons
+    const layoutGroup = document.getElementById('export-layout-group');
+    if (layoutGroup) {
+      const btns = layoutGroup.querySelectorAll('[data-layout]');
+      btns.forEach(btn => {
+        btn.addEventListener('click', () => {
+          btns.forEach(b => b.classList.remove('active'));
+          btn.classList.add('active');
+          _exportLayout = btn.dataset.layout;
+        });
+      });
+    }
+
+    if (btnToggle) {
+      btnToggle.addEventListener('click', () => {
+        _isOpen = !_isOpen;
+        if (_isOpen) {
+          panel.classList.remove('hidden');
+          btnToggle.classList.add('active');
+          _rebuildList();
+          if (typeof VolumeViewer !== 'undefined' && VolumeViewer.recompileShaderForActiveChannels) {
+            VolumeViewer.recompileShaderForActiveChannels();
+          }
+          VolumeViewer.triggerRender();
+        } else {
+          _closePanel(panel, btnToggle);
+        }
+      });
+    }
+
+    if (btnClose) {
+      btnClose.addEventListener('click', () => _closePanel(panel, btnToggle));
+    }
+
+    if (btnExport) {
+      btnExport.addEventListener('click', _exportImage);
+    }
+
+    if (typeof VolumeViewer !== 'undefined') {
+      VolumeViewer.setOnPostRender(() => {
+        if (_isOpen) _renderDecompositions();
+      });
+    }
+
+    window.addEventListener('channels-updated', () => {
+      if (!_isOpen) return;
+      const globalState = _getGlobalChannels();
+
+      if (_editingCustomId !== null) {
+        if (_editingCustomId.startsWith('base_')) {
+          const idx = parseInt(_editingCustomId.split('_')[1]);
+          if (_baseViews[idx]) {
+            _baseViews[idx].state = _deepCopy(globalState);
+            _baseViews[idx].edited = true;
+          }
+        } else {
+          const view = _customViews.find(v => v.id === _editingCustomId);
+          if (view) view.state = _deepCopy(globalState);
+        }
+      } else {
+        // Update unedited base views
+        globalState.forEach((ch, idx) => {
+          if (_baseViews[idx] && !_baseViews[idx].edited) {
+            const singleState = _deepCopy(globalState);
+            singleState.forEach((sCh, sIdx) => { sCh.enabled = (sIdx === idx); });
+            _baseViews[idx].state = singleState;
+          }
+        });
+      }
+      _rebuildList();
+      VolumeViewer.triggerRender();
+    });
+  }
+
+  function _closePanel(panel, btnToggle) {
+    _isOpen = false;
+    panel.classList.add('hidden');
+    if (btnToggle) btnToggle.classList.remove('active');
+    if (_editingCustomId !== null) {
+      _stopEditing();
+    }
+    if (typeof VolumeViewer !== 'undefined' && VolumeViewer.recompileShaderForActiveChannels) {
+      VolumeViewer.recompileShaderForActiveChannels();
+      VolumeViewer.triggerRender();
+    }
+  }
+
+  function _getGlobalChannels() {
+    if (typeof ChannelPanel !== 'undefined') {
+      return ChannelPanel.getState() || [];
+    }
+    return [];
+  }
+
+  function _stopEditing() {
+    const tempSavedState = _savedGlobalState;
+    _editingCustomId = null;
+    _savedGlobalState = null;
+
+    if (tempSavedState && typeof ChannelPanel !== 'undefined') {
+      ChannelPanel.setState(tempSavedState, { notify: true });
+    }
+    _rebuildList();
+    if (typeof VolumeViewer !== 'undefined' && VolumeViewer.recompileShaderForActiveChannels) {
+      VolumeViewer.recompileShaderForActiveChannels();
+    }
+    VolumeViewer.triggerRender();
+  }
+
+  function _startEditing(customId) {
+    let stateToLoad = null;
+    if (customId.startsWith('base_')) {
+      const idx = parseInt(customId.split('_')[1]);
+      if (_baseViews[idx]) stateToLoad = _baseViews[idx].state;
+    } else {
+      const view = _customViews.find(v => v.id === customId);
+      if (view) stateToLoad = view.state;
+    }
+    
+    if (!stateToLoad) return;
+    
+    // Save global state if we aren't already editing
+    if (_editingCustomId === null) {
+      _savedGlobalState = _deepCopy(_getGlobalChannels());
+    }
+    
+    _editingCustomId = customId;
+    
+    // Apply this view's state to the main viewer
+    if (typeof ChannelPanel !== 'undefined') {
+      ChannelPanel.setState(_deepCopy(stateToLoad), { notify: false });
+    }
+    
+    _rebuildList();
+    VolumeViewer.triggerRender();
+  }
+
+  function _rebuildList() {
+    const list = document.getElementById('decomposition-list');
+    if (!list) return;
+
+    list.innerHTML = '';
+    _canvases = [];
+    
+    // We use the "real" global state for the single-channel automatic views
+    // If we are editing a custom view, the "real" global state is the saved one.
+    const baseState = _editingCustomId !== null && _savedGlobalState ? _savedGlobalState : _getGlobalChannels();
+
+    // 1. One view per active channel
+    baseState.forEach((ch, idx) => {
+      if (!ch.enabled) return;
+      if (!_baseViews[idx]) {
+        const singleState = _deepCopy(baseState);
+        singleState.forEach((sCh, sIdx) => { sCh.enabled = (sIdx === idx); });
+        _baseViews[idx] = { state: singleState, edited: false };
+      } else if (!_baseViews[idx].edited) {
+        const singleState = _deepCopy(baseState);
+        singleState.forEach((sCh, sIdx) => { sCh.enabled = (sIdx === idx); });
+        _baseViews[idx].state = singleState;
+      }
+      const title = _baseViews[idx].edited ? `Channel: ${ch.name} (Edited)` : `Channel: ${ch.name}`;
+      _createViewItem(list, title, _baseViews[idx].state, ch.color, `base_${idx}`);
+    });
+
+    // 2. Custom views
+    _customViews.forEach((cv) => {
+      _createViewItem(list, cv.name, cv.state, '#ffffff', cv.id);
+    });
+
+    // 3. Add Custom button
+    const btnAdd = document.createElement('button');
+    btnAdd.className = 'btn btn-outline btn-sm';
+    btnAdd.style.width = '100%';
+    btnAdd.style.height = '40px';
+    btnAdd.style.borderStyle = 'dashed';
+    btnAdd.innerHTML = '<i data-lucide="plus"></i> Add Combination';
+    btnAdd.onclick = () => {
+      const newState = _deepCopy(baseState);
+      _customViews.push({
+        id: 'custom_' + Date.now() + '_' + Math.random(),
+        name: `Custom ${_customViews.length + 1}`,
+        state: newState
+      });
+      _rebuildList();
+      VolumeViewer.triggerRender();
+    };
+    list.appendChild(btnAdd);
+
+    if (typeof lucide !== 'undefined') {
+      lucide.createIcons();
+    }
+  }
+
+  function _createViewItem(container, titleText, state, titleColor, customId) {
+    const item = document.createElement('div');
+    item.className = 'decomposition-item';
+    item.style.flexShrink = '0';
+    item.style.background = 'var(--bg-panel)';
+    item.style.borderRadius = '8px';
+    item.style.overflow = 'hidden';
+    
+    const isEditingThis = (_editingCustomId === customId);
+    if (isEditingThis) {
+      item.style.border = '2px solid var(--primary)';
+      item.style.boxShadow = '0 0 0 2px rgba(var(--primary-rgb), 0.3)';
+    } else {
+      item.style.border = '1px solid var(--border-light)';
+    }
+    
+    // Header
+    const header = document.createElement('div');
+    header.style.padding = '6px 8px';
+    header.style.display = 'flex';
+    header.style.alignItems = 'center';
+    header.style.justifyContent = 'space-between';
+    header.style.borderBottom = '1px solid var(--border-light)';
+    header.style.fontSize = '12px';
+    header.style.fontWeight = '600';
+    
+    const titleSpan = document.createElement('span');
+    titleSpan.textContent = titleText;
+    titleSpan.style.color = titleColor;
+    header.appendChild(titleSpan);
+
+    const actions = document.createElement('div');
+    actions.style.display = 'flex';
+    actions.style.gap = '4px';
+
+    if (isEditingThis) {
+      const btnDone = document.createElement('button');
+      btnDone.className = 'btn btn-primary btn-sm';
+      btnDone.style.padding = '0 6px';
+      btnDone.style.height = '20px';
+      btnDone.style.fontSize = '10px';
+      btnDone.innerHTML = '<i data-lucide="check" style="width:12px;height:12px;margin-right:2px;"></i> Done';
+      btnDone.onclick = (e) => {
+        e.stopPropagation();
+        _stopEditing();
+      };
+      actions.appendChild(btnDone);
+    } else {
+      const isBase = customId.startsWith('base_');
+      if (isBase) {
+        const idx = parseInt(customId.split('_')[1]);
+        if (_baseViews[idx] && _baseViews[idx].edited) {
+          const btnReset = document.createElement('button');
+          btnReset.className = 'btn btn-icon btn-ghost btn-sm';
+          btnReset.style.width = '20px';
+          btnReset.style.height = '20px';
+          btnReset.title = "Reset to original";
+          btnReset.innerHTML = '<i data-lucide="rotate-ccw" style="width:12px;height:12px;"></i>';
+          btnReset.onclick = (e) => {
+            e.stopPropagation();
+            _baseViews[idx].edited = false;
+            _rebuildList(); VolumeViewer.triggerRender();
+          };
+          actions.appendChild(btnReset);
+        }
+      } else {
+        const btnRemove = document.createElement('button');
+        btnRemove.className = 'btn btn-icon btn-ghost btn-sm';
+        btnRemove.style.width = '20px';
+        btnRemove.style.height = '20px';
+        btnRemove.innerHTML = '<i data-lucide="trash-2" style="width:12px;height:12px;"></i>';
+        btnRemove.onclick = (e) => {
+          e.stopPropagation();
+          _customViews = _customViews.filter(v => v.id !== customId);
+          _rebuildList(); VolumeViewer.triggerRender();
+        };
+        actions.appendChild(btnRemove);
+      }
+    }
+    header.appendChild(actions);
+    item.appendChild(header);
+
+    // Canvas Container
+    const canvasWrap = document.createElement('div');
+    canvasWrap.style.width = '100%';
+    canvasWrap.style.aspectRatio = '1 / 1';
+    canvasWrap.style.position = 'relative';
+    canvasWrap.style.background = '#000';
+
+    const canvas = document.createElement('canvas');
+    canvas.style.width = '100%';
+    canvas.style.height = '100%';
+    canvas.style.display = 'block';
+    canvasWrap.appendChild(canvas);
+    item.appendChild(canvasWrap);
+
+    // Add markers overlay on the image
+    const markersWrap = document.createElement('div');
+    markersWrap.style.position = 'absolute';
+    markersWrap.style.top = '4px';
+    markersWrap.style.left = '6px';
+    markersWrap.style.display = 'flex';
+    markersWrap.style.flexDirection = 'column';
+    markersWrap.style.pointerEvents = 'none';
+
+    state.forEach(ch => {
+      if (ch.enabled) {
+        const marker = document.createElement('span');
+        marker.textContent = ch.name;
+        marker.style.color = ch.color;
+        marker.style.fontSize = '12px';
+        marker.style.fontWeight = '700';
+        marker.style.lineHeight = '1.2';
+        marker.style.textShadow = '-1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000, 1px 1px 0 #000';
+        markersWrap.appendChild(marker);
+      }
+    });
+    canvasWrap.appendChild(markersWrap);
+
+    if (!isEditingThis) {
+      canvasWrap.style.cursor = 'pointer';
+      canvasWrap.title = "Click to edit this view";
+      canvasWrap.onclick = () => {
+        _startEditing(customId);
+      };
+      // Overlay hover effect
+      canvasWrap.style.transition = 'opacity 0.2s';
+      canvasWrap.onmouseover = () => canvasWrap.style.opacity = '0.85';
+      canvasWrap.onmouseout = () => canvasWrap.style.opacity = '1';
+    }
+
+    container.appendChild(item);
+
+    _canvases.push({ canvas, ctx: canvas.getContext('2d'), state });
+  }
+
+  function _applyStateToMaterial(stateArray, material) {
+    if (!material.uniforms) return;
+    const hexToRgb = (hex) => {
+      const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
+      return result ? {
+        r: parseInt(result[1], 16)/255,
+        g: parseInt(result[2], 16)/255,
+        b: parseInt(result[3], 16)/255
+      } : { r: 1, g: 1, b: 1 };
+    };
+
+    for (let i = 0; i < 4; i++) {
+      const ch = stateArray[i];
+      if (!ch) {
+        if (material.uniforms[`en${i}`]) material.uniforms[`en${i}`].value = 0;
+        continue;
+      }
+      if (material.uniforms[`en${i}`]) material.uniforms[`en${i}`].value = ch.enabled ? 1 : 0;
+      if (material.uniforms[`color${i}`]) {
+        const c = hexToRgb(ch.color);
+        if (material.uniforms[`color${i}`].value.setRGB) {
+          material.uniforms[`color${i}`].value.setRGB(c.r, c.g, c.b);
+        } else {
+          material.uniforms[`color${i}`].value.set(c.r, c.g, c.b);
+        }
+      }
+      if (material.uniforms[`min${i}`]) material.uniforms[`min${i}`].value = ch.min;
+      if (material.uniforms[`max${i}`]) material.uniforms[`max${i}`].value = ch.max;
+      if (material.uniforms[`gamma${i}`]) material.uniforms[`gamma${i}`].value = ch.gamma;
+      if (material.uniforms[`opacity${i}`]) material.uniforms[`opacity${i}`].value = ch.opacity;
+    }
+  }
+
+  function _renderDecompositions() {
+    if (_canvases.length === 0) return;
+    if (typeof VolumeViewer === 'undefined') return;
+
+    const renderer = VolumeViewer.getRenderer();
+    const scene = VolumeViewer.getScene();
+    const camera = VolumeViewer.getCamera();
+    const material = VolumeViewer.getMaterial();
+
+    if (!renderer || !scene || !camera || !material) return;
+
+    const pixelRatio = renderer.getPixelRatio() || 1;
+    const origWidth = renderer.domElement.width / pixelRatio;
+    const origHeight = renderer.domElement.height / pixelRatio;
+    const origAspect = camera.aspect;
+
+    for (const view of _canvases) {
+      const rect = view.canvas.getBoundingClientRect();
+      const w = rect.width * (window.devicePixelRatio || 1);
+      const h = rect.height * (window.devicePixelRatio || 1);
+      
+      if (w === 0 || h === 0) continue;
+
+      view.canvas.width = w;
+      view.canvas.height = h;
+
+      renderer.setSize(w / (window.devicePixelRatio || 1), h / (window.devicePixelRatio || 1), false);
+      camera.aspect = w / h;
+      camera.updateProjectionMatrix();
+
+      _applyStateToMaterial(view.state, material);
+
+      renderer.render(scene, camera);
+      view.ctx.drawImage(renderer.domElement, 0, 0, w, h);
+    }
+
+    // Restore Main View Rendering State
+    renderer.setSize(origWidth, origHeight, false);
+    camera.aspect = origAspect;
+    camera.updateProjectionMatrix();
+
+    // The main view always shows the ACTUAL active channels from ChannelPanel
+    _applyStateToMaterial(_getGlobalChannels(), material);
+    
+    // We MUST render the main scene one last time because the canvas buffer was cleared/overwritten!
+    renderer.render(scene, camera);
+  }
+
+  function _drawMarkersForState(ctx, state, x, y, width, height, isMain) {
+    const fontSize = isMain ? Math.max(24, Math.floor(height * 0.035)) : Math.max(16, Math.floor(height * 0.045));
+    ctx.font = `bold ${fontSize}px sans-serif`;
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'top';
+    
+    let textY = y + fontSize * 0.5;
+    const textX = x + fontSize * 0.5;
+    
+    state.forEach(ch => {
+      if (ch.enabled) {
+        ctx.fillStyle = ch.color;
+        ctx.strokeStyle = '#000000';
+        ctx.lineWidth = Math.max(2, fontSize * 0.15);
+        ctx.strokeText(ch.name, textX, textY);
+        ctx.fillText(ch.name, textX, textY);
+        textY += fontSize * 1.2;
+      }
+    });
+  }
+
+  function _drawMeasurementLegend(ctx, measurements, x, y, heightScale) {
+    if (!measurements || measurements.length === 0) return;
+    
+    const visibleMeasurements = measurements.filter(m => m.visible !== false);
+    if (visibleMeasurements.length === 0) return;
+
+    const fontSize = Math.max(16, Math.floor(heightScale * 0.025));
+    ctx.font = `bold ${fontSize}px sans-serif`;
+    ctx.textBaseline = 'bottom';
+    ctx.textAlign = 'right';
+
+    ctx.save();
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.6)';
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.2)';
+    ctx.lineWidth = 1;
+    
+    let maxTextWidth = 0;
+    visibleMeasurements.forEach(m => {
+       const labelText = m.label ? `${m.label}: ` : '';
+       const text = `${labelText}${m.distance.toFixed(1)} µm`;
+       const metrics = ctx.measureText(text);
+       if (metrics.width > maxTextWidth) maxTextWidth = metrics.width;
+    });
+    
+    const boxPad = fontSize * 0.8;
+    const boxHeight = visibleMeasurements.length * (fontSize * 1.5) + boxPad;
+    const boxWidth = maxTextWidth + boxPad * 2;
+    
+    ctx.fillRect(x - boxWidth, y - boxHeight, boxWidth, boxHeight);
+    ctx.strokeRect(x - boxWidth, y - boxHeight, boxWidth, boxHeight);
+    ctx.restore();
+
+    let currentY = y - (boxPad * 0.5);
+
+    for (let i = visibleMeasurements.length - 1; i >= 0; i--) {
+      const m = visibleMeasurements[i];
+      const labelText = m.label ? `${m.label}: ` : '';
+      const text = `${labelText}${m.distance.toFixed(1)} µm`;
+      ctx.fillStyle = m.color || '#ff4d4f';
+      ctx.strokeStyle = '#000000';
+      ctx.lineWidth = Math.max(2, fontSize * 0.15);
+      
+      const textX = x - boxPad;
+      ctx.strokeText(text, textX, currentY);
+      ctx.fillText(text, textX, currentY);
+      
+      currentY -= (fontSize * 1.5);
+    }
+  }
+
+  function _exportImage() {
+    if (typeof VolumeViewer === 'undefined') return;
+    const renderer = VolumeViewer.getRenderer();
+    const scene = VolumeViewer.getScene();
+    const camera = VolumeViewer.getCamera();
+    const material = VolumeViewer.getMaterial();
+    if (!renderer || !scene || !camera || !material) return;
+
+    const mainCanvas = renderer.domElement;
+    const mainAspect = camera.aspect;
+
+    // Get active volume resolution or default to 1024
+    const activeVol = VolumeViewer.getSamplingVolume?.();
+    let itemSize = 1024;
+    if (activeVol && activeVol.width) {
+      itemSize = Math.max(activeVol.width, activeVol.height || 0);
+    }
+    // Clamp to a safe range (512 to 4096) to prevent context loss or memory crashes
+    itemSize = Math.max(512, Math.min(4096, itemSize));
+
+    const layout = _exportLayout;
+    const padding = 20;
+    
+    let totalWidth = 0;
+    let totalHeight = 0;
+    let exportMainWidth = 0;
+    let exportMainHeight = 0;
+
+    let cols = 1;
+    let rows = _canvases.length;
+
+    if (layout === 'grid') {
+      cols = Math.max(1, Math.ceil(Math.sqrt(_canvases.length)));
+      rows = Math.ceil(_canvases.length / cols);
+      totalWidth = cols * itemSize + (cols + 1) * padding;
+      totalHeight = rows * itemSize + (rows + 1) * padding;
+    } else if (layout === 'horizontal') {
+      exportMainHeight = itemSize;
+      exportMainWidth = exportMainHeight * mainAspect;
+      totalWidth = padding + exportMainWidth + padding + _canvases.length * (itemSize + padding);
+      totalHeight = itemSize + padding * 2;
+    } else {
+      // main-right
+      exportMainHeight = Math.max(800, _canvases.length * (itemSize + padding) + padding);
+      exportMainWidth = exportMainHeight * mainAspect;
+      const decompWidth = _canvases.length > 0 ? itemSize + padding * 2 : 0;
+      totalWidth = exportMainWidth + decompWidth;
+      totalHeight = exportMainHeight;
+    }
+
+    const exportCanvas = document.createElement('canvas');
+    exportCanvas.width = totalWidth;
+    exportCanvas.height = totalHeight;
+    const ctx = exportCanvas.getContext('2d');
+
+    ctx.fillStyle = '#000000';
+    ctx.fillRect(0, 0, totalWidth, totalHeight);
+
+    const pixelRatio = renderer.getPixelRatio() || 1;
+    const origWidth = renderer.domElement.width / pixelRatio;
+    const origHeight = renderer.domElement.height / pixelRatio;
+    const origAspect = camera.aspect;
+
+    // 1. Draw the Main View at High-Res if layout requires it
+    if (layout === 'main-right') {
+      renderer.setSize(exportMainWidth, exportMainHeight, false);
+      camera.aspect = mainAspect;
+      camera.updateProjectionMatrix();
+      _applyStateToMaterial(_getGlobalChannels(), material);
+      renderer.render(scene, camera);
+      ctx.drawImage(renderer.domElement, 0, 0, exportMainWidth, exportMainHeight);
+      _drawMarkersForState(ctx, _getGlobalChannels(), 0, 0, exportMainWidth, exportMainHeight, true);
+    } else if (layout === 'horizontal') {
+      renderer.setSize(exportMainWidth, exportMainHeight, false);
+      camera.aspect = mainAspect;
+      camera.updateProjectionMatrix();
+      _applyStateToMaterial(_getGlobalChannels(), material);
+      renderer.render(scene, camera);
+      ctx.drawImage(renderer.domElement, padding, padding, exportMainWidth, exportMainHeight);
+      _drawMarkersForState(ctx, _getGlobalChannels(), padding, padding, exportMainWidth, exportMainHeight, true);
+    }
+
+    // 2. Draw Decompositions at High-Res
+    renderer.setSize(itemSize, itemSize, false);
+    camera.aspect = 1;
+    camera.updateProjectionMatrix();
+
+    for (let i = 0; i < _canvases.length; i++) {
+      let currentX = 0, currentY = 0;
+
+      if (layout === 'grid') {
+        const c = i % cols;
+        const r = Math.floor(i / cols);
+        currentX = padding + c * (itemSize + padding);
+        currentY = padding + r * (itemSize + padding);
+      } else if (layout === 'horizontal') {
+        currentX = padding + exportMainWidth + padding + i * (itemSize + padding);
+        currentY = padding;
+      } else {
+        // main-right
+        currentX = exportMainWidth + padding;
+        currentY = padding + i * (itemSize + padding);
+      }
+
+      const view = _canvases[i];
+      _applyStateToMaterial(view.state, material);
+
+      renderer.render(scene, camera);
+      ctx.drawImage(renderer.domElement, currentX, currentY, itemSize, itemSize);
+
+      _drawMarkersForState(ctx, view.state, currentX, currentY, itemSize, itemSize, false);
+
+      ctx.strokeStyle = '#333333';
+      ctx.lineWidth = 2;
+      ctx.strokeRect(currentX, currentY, itemSize, itemSize);
+    }
+
+    // 3. Restore Main View Screen State
+    renderer.setSize(origWidth, origHeight, false);
+    camera.aspect = origAspect;
+    camera.updateProjectionMatrix();
+    _applyStateToMaterial(_getGlobalChannels(), material);
+    renderer.render(scene, camera);
+
+    // 4. Draw Measurement Legend
+    const measurements = (typeof VolumeViewer !== 'undefined' && VolumeViewer.getMeasurementState) ? VolumeViewer.getMeasurementState() : [];
+    let legendX, legendY, heightScale;
+    if (layout === 'main-right') {
+       legendX = exportMainWidth - 20;
+       legendY = exportMainHeight - 20;
+       heightScale = exportMainHeight;
+    } else if (layout === 'horizontal') {
+       legendX = padding + exportMainWidth - 20;
+       legendY = padding + exportMainHeight - 20;
+       heightScale = exportMainHeight;
+    } else {
+       legendX = totalWidth - padding - 20;
+       legendY = totalHeight - padding - 20;
+       heightScale = totalHeight;
+    }
+    _drawMeasurementLegend(ctx, measurements, legendX, legendY, heightScale);
+
+    // 5. Trigger download
+    const link = document.createElement('a');
+    link.download = `decomposition_${layout}_${Date.now()}.png`;
+    link.href = exportCanvas.toDataURL('image/png');
+    link.click();
+  }
+
+  return {
+    init,
+    isOpen: () => _isOpen
+  };
+})();
+
+document.addEventListener('DOMContentLoaded', () => DecompositionPanel.init());

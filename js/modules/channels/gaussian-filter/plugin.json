@@ -1,0 +1,10 @@
+{
+  "id": "gaussian-filter",
+  "name": "Gaussian Filter",
+  "version": "1.0.0",
+  "creator": "IRIBHM",
+  "placement": "channels",
+  "subtype": "per-channel",
+  "order": 20,
+  "description": "Per-channel Gaussian blur/denoising slider."
+}

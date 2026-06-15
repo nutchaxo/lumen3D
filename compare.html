@@ -1,0 +1,691 @@
+﻿<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Compare - IRIBHM Microscopy</title>
+
+  <!-- Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+
+  <!-- Lucide Icons -->
+  <script src="https://unpkg.com/lucide@0.344.0/dist/umd/lucide.min.js"></script>
+
+  <!-- Stylesheets -->
+  <link rel="stylesheet" href="css/variables.css">
+  <link rel="stylesheet" href="css/themes.css">
+  <link rel="stylesheet" href="css/base.css">
+  <link rel="stylesheet" href="css/components.css">
+  <link rel="stylesheet" href="css/layout.css">
+  <link rel="stylesheet" href="css/tools.css">
+  <link rel="stylesheet" href="css/viewer.css?v=20260528">
+  
+  <style>
+    .compare-layout {
+      display: flex;
+      flex-direction: column;
+      height: 100vh;
+      overflow: hidden;
+      background: var(--bg-surface);
+    }
+    
+    .compare-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: var(--space-3) var(--space-6);
+      background: var(--bg-surface);
+      border-bottom: 1px solid var(--border-light);
+      z-index: 10;
+    }
+
+    .compare-toolbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: var(--space-2) var(--space-6);
+      background: var(--bg-surface-2);
+      border-bottom: 1px solid var(--border-light);
+      z-index: 9;
+    }
+
+    .compare-grid {
+      flex: 1;
+      display: grid;
+      gap: 2px;
+      background: var(--border-light);
+      position: relative;
+      min-height: 0;
+      overflow: hidden;
+    }
+
+    /* Dynamic Grid Layouts */
+    .compare-grid.layout-0 { display: flex; align-items: center; justify-content: center; }
+    .compare-grid.layout-1 { grid-template-columns: 1fr; grid-template-rows: 1fr; }
+    .compare-grid.layout-2 { grid-template-columns: 1fr 1fr; grid-template-rows: 1fr; }
+    .compare-grid.layout-3 { grid-template-columns: 1fr 1fr; grid-template-rows: 1fr 1fr; }
+    .compare-grid.layout-4 { grid-template-columns: 1fr 1fr; grid-template-rows: 1fr 1fr; }
+
+    /* For layout-3, make the first child span 2 columns */
+    .compare-grid.layout-3 > .compare-panel:first-child { grid-column: span 2; }
+    .compare-grid.layout-custom > .compare-panel:first-child { grid-column: auto; }
+
+    .compare-panel {
+      position: relative;
+      background: var(--bg-surface);
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    .panel-header {
+      position: absolute;
+      top: 0; left: 0; right: 0;
+      padding: 8px 12px;
+      background: linear-gradient(180deg, rgba(0,0,0,0.8) 0%, rgba(0,0,0,0) 100%);
+      z-index: 10;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .panel-title-badge {
+      background: var(--bg-surface-3);
+      border: 1px solid var(--border-light);
+      color: var(--text-primary);
+      padding: 4px 12px;
+      border-radius: var(--radius-full);
+      font-size: var(--text-sm);
+      font-weight: 500;
+      backdrop-filter: blur(4px);
+    }
+
+    .panel-actions {
+      display: flex;
+      gap: 8px;
+    }
+
+    .panel-content {
+      flex: 1;
+      position: relative;
+    }
+
+    .panel-visual-tools {
+      position: absolute;
+      bottom: 10px;
+      right: 10px;
+      z-index: 15;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+
+    .panel-tool-btn {
+      width: 30px;
+      height: 30px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      border-radius: var(--radius-md);
+      background: color-mix(in srgb, var(--bg-surface) 80%, transparent);
+      backdrop-filter: blur(6px);
+      border: 1px solid var(--border-light);
+      color: var(--text-secondary);
+      cursor: pointer;
+      transition: all 0.15s ease;
+      padding: 0;
+    }
+
+    .panel-tool-btn:hover {
+      background: color-mix(in srgb, var(--bg-surface) 95%, transparent);
+      color: var(--text-primary);
+      border-color: var(--border-default);
+    }
+
+    .panel-tool-btn.btn-solid {
+      background: var(--color-primary);
+      color: #fff;
+      border-color: var(--color-primary);
+    }
+
+    .panel-tool-btn.btn-solid:hover {
+      background: var(--color-primary-hover, var(--color-primary));
+      color: #fff;
+    }
+
+    .panel-load-state {
+      position: absolute;
+      left: var(--space-4);
+      bottom: var(--space-4);
+      z-index: 20;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: var(--space-3) var(--space-4);
+      border-radius: var(--radius-md);
+      border: 1px solid var(--border-light);
+      background: color-mix(in srgb, var(--bg-surface) 88%, transparent);
+      backdrop-filter: blur(6px);
+      font-size: var(--text-xs);
+      color: var(--text-secondary);
+      pointer-events: none;
+    }
+
+    .panel-load-state.hidden {
+      display: none;
+    }
+
+    iframe.viewer-frame {
+      width: 100%;
+      height: 100%;
+      border: none;
+    }
+
+    .compare-split-handle {
+      position: absolute;
+      z-index: 30;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      pointer-events: auto;
+      touch-action: none;
+    }
+
+    .compare-split-handle::before {
+      content: "";
+      display: block;
+      border-radius: var(--radius-full);
+      background: rgba(255, 255, 255, 0.55);
+      box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.35);
+      opacity: 0.35;
+      transition: opacity var(--transition-fast), background var(--transition-fast), transform var(--transition-fast);
+    }
+
+    .compare-split-handle:hover::before,
+    .compare-split-handle.is-dragging::before {
+      opacity: 1;
+      background: var(--color-primary);
+      transform: scale(1.2);
+    }
+
+    .compare-split-handle.vertical {
+      top: 0;
+      bottom: 0;
+      width: 18px;
+      transform: translateX(-9px);
+      cursor: col-resize;
+    }
+
+    .compare-split-handle.vertical::before {
+      width: 3px;
+      height: 64px;
+      max-height: 40%;
+    }
+
+    .compare-split-handle.horizontal {
+      left: 0;
+      right: 0;
+      height: 18px;
+      transform: translateY(-9px);
+      cursor: row-resize;
+    }
+
+    .compare-split-handle.horizontal::before {
+      width: 64px;
+      max-width: 40%;
+      height: 3px;
+    }
+
+    body.compare-dragging {
+      user-select: none;
+    }
+
+    body.compare-dragging iframe.viewer-frame {
+      pointer-events: none;
+    }
+
+    /* Modal */
+    .modal-overlay {
+      position: fixed; inset: 0;
+      background: rgba(0,0,0,0.8);
+      backdrop-filter: blur(4px);
+      z-index: 9999;
+      display: none; align-items: center; justify-content: center;
+    }
+    .modal-overlay.active { display: flex; }
+    
+    .modal-content {
+      background: var(--bg-surface);
+      border: 1px solid var(--border-light);
+      border-radius: var(--radius-lg);
+      width: 800px; max-width: 90vw;
+      height: 600px; max-height: 90vh;
+      display: flex; flex-direction: column;
+      box-shadow: var(--shadow-xl);
+    }
+    .modal-header {
+      padding: var(--space-4);
+      border-bottom: 1px solid var(--border-light);
+      display: flex; justify-content: space-between; align-items: center;
+    }
+    .modal-body {
+      padding: var(--space-4);
+      overflow-y: auto;
+      flex: 1;
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+      gap: var(--space-4);
+    }
+    
+    .dataset-mini-card {
+      background: var(--bg-surface-2);
+      border: 1px solid var(--border-light);
+      border-radius: var(--radius-md);
+      padding: var(--space-3);
+      cursor: pointer;
+      transition: all var(--transition-fast);
+    }
+    .dataset-mini-card:hover {
+      border-color: var(--color-primary);
+      transform: translateY(-2px);
+    }
+    .dataset-mini-card .card-type {
+      font-size: 10px; padding: 2px 6px; border-radius: 10px; margin-bottom: 4px; display: inline-block;
+    }
+  </style>
+</head>
+<body>
+
+  <div class="compare-layout">
+    
+    <!-- Header -->
+    <header class="compare-header">
+      <div class="flex items-center gap-4">
+        <a href="explorer.html" class="btn btn-icon btn-ghost" data-i18n-title="nav.back">
+          <i data-lucide="arrow-left"></i>
+        </a>
+        <h1 class="text-xl font-bold" data-i18n="compare.title">Multi-Panel Comparison</h1>
+      </div>
+      <div class="flex items-center gap-2">
+        <a class="btn btn-icon btn-ghost" href="about.html" title="Help and methods" data-i18n-title="tips.help" aria-label="Help and methods" data-i18n-aria="tips.help">
+          <i data-lucide="help-circle"></i>
+        </a>
+              <!-- Color Blindness Toggle -->
+      <button class="btn btn-icon btn-ghost" onclick="ColorBlind.openModal()" data-i18n-title="colorblind.toggle">
+        <i data-lucide="eye" style="width:20px;height:20px"></i>
+      </button>
+      <button class="btn btn-icon btn-ghost" onclick="Theme.toggle()" data-i18n-title="theme.toggle" id="theme-toggle">
+          <i data-lucide="moon" data-theme-icon></i>
+        </button>
+      </div>
+    </header>
+
+    <!-- Toolbar -->
+    <div class="compare-toolbar">
+      <div class="flex items-center gap-4">
+        <button class="btn btn-primary btn-sm flex items-center gap-2" id="btn-add-dataset">
+          <i data-lucide="plus"></i> Add Dataset
+        </button>
+        <div class="toolbar-cluster" style="display: flex; gap: 4px; padding-left: 12px; border-left: 1px solid var(--border-light);">
+          <button class="btn btn-icon btn-ghost tool-chip active" data-tool="navigate" title="Navigate" data-i18n-title="tips.navigate" aria-label="Navigate" data-i18n-aria="tips.navigate">
+            <i data-lucide="mouse-pointer-2"></i>
+          </button>
+          <button class="btn btn-icon btn-ghost tool-chip" data-tool="slice" title="Slice through volume" data-i18n-title="tips.sliceVol" aria-label="Slice tool" data-i18n-aria="tips.sliceTool">
+            <i data-lucide="scissors"></i>
+          </button>
+          <button class="btn btn-icon btn-ghost tool-chip" data-tool="measure" title="Measure distance" data-i18n-title="tips.measureDist" aria-label="Measure distance" data-i18n-aria="tips.measureDist">
+            <i data-lucide="ruler"></i>
+          </button>
+        </div>
+
+        <button class="btn btn-outline btn-sm flex items-center gap-2" id="btn-decompose" title="Decompose channels into separate panels" data-i18n-title="tips.decompPanels" style="display: none; margin-left: 12px;">
+          <i data-lucide="split-square-horizontal"></i> Decompose
+        </button>
+        <button class="btn btn-outline btn-sm flex items-center gap-2" id="btn-export-compare">
+          <i data-lucide="download"></i> Export
+        </button>
+        <button class="btn btn-outline btn-sm flex items-center gap-2" id="btn-save-compare-workspace">
+          <i data-lucide="save"></i> Save
+        </button>
+        <button class="btn btn-outline btn-sm flex items-center gap-2" id="btn-restore-compare-workspace">
+          <i data-lucide="folder-open"></i> Restore
+        </button>
+        <select class="btn btn-outline btn-sm" id="compare-layout-mode" title="Panel layout" data-i18n-title="tips.panelLayout">
+          <option value="auto" selected data-i18n="compare.layoutAuto">Auto layout</option>
+          <option value="columns" data-i18n="compare.layoutCols">Columns</option>
+          <option value="rows" data-i18n="compare.layoutRows">Rows</option>
+          <option value="grid" data-i18n="compare.layoutGrid">Grid</option>
+        </select>
+      </div>
+
+      <div class="flex items-center gap-4">
+        <label class="text-sm text-muted font-semibold" data-i18n="compare.syncTitle">SYNC</label>
+        <label class="flex items-center gap-2 cursor-pointer text-sm">
+          <input type="checkbox" id="sync-z" checked> Z-Stack
+        </label>
+        <label class="flex items-center gap-2 cursor-pointer text-sm">
+          <input type="checkbox" id="sync-time" checked> Time
+        </label>
+        <label class="flex items-center gap-2 cursor-pointer text-sm">
+          <input type="checkbox" id="sync-camera" checked> Camera (3D)
+        </label>
+        <label class="flex items-center gap-2 cursor-pointer text-sm">
+          <input type="checkbox" id="sync-channels" checked> Channels
+        </label>
+      </div>
+    </div>
+
+    <!-- Grid -->
+    <div class="compare-grid layout-0" id="compare-grid">
+      <div class="text-muted flex flex-col items-center gap-4" id="empty-state">
+        <i data-lucide="grid" class="w-16 h-16 opacity-20"></i>
+        <p data-i18n="compare.emptyTitle">No datasets selected for comparison.</p>
+        <button class="btn btn-outline" onclick="document.getElementById('btn-add-dataset').click()" data-i18n="compare.chooseBtn">Choose Dataset</button>
+      </div>
+      <!-- Panels are appended here by JS -->
+    </div>
+
+  </div>
+
+  <!-- Modal Dataset Selector -->
+  <div class="modal-overlay" id="modal-select">
+    <div class="modal-content animate-scale-in">
+      <div class="modal-header">
+        <h2 class="text-lg font-bold" data-i18n="compare.modalTitle">Select Dataset to Add</h2>
+        <button class="btn btn-icon btn-ghost w-8 h-8 p-0" id="btn-close-modal"><i data-lucide="x"></i></button>
+      </div>
+      <div class="modal-body" id="modal-dataset-list">
+        <!-- JS populates cards here -->
+      </div>
+    </div>
+  </div>
+
+  <!-- Studio Editor Mode -->
+  <div class="studio-layout hidden" id="studio-layout">
+    <div class="studio-header">
+      <div class="studio-header-left">
+        <h2 data-i18n="compare.studioTitle">Slice Studio (Compare Mode)</h2>
+        <span class="text-xs text-muted" id="studio-subtitle" data-i18n="compare.studioSubtitle">Edit and Annotate</span>
+      </div>
+      <div class="studio-header-right">
+        <select class="form-select form-select-sm bg-surface" id="studio-scale-mode" title="Scale Mode" data-i18n-title="tips.scaleMode">
+          <option value="visual" data-i18n="compare.scaleVisual">Visual Size</option>
+          <option value="physical" data-i18n="compare.scalePhysical">Physical Scale</option>
+        </select>
+        <div class="divider-vertical"></div>
+        <input type="file" id="studio-import-file" accept=".json" class="hidden">
+        <button class="btn btn-outline btn-sm" id="btn-studio-import"><i data-lucide="upload"></i> <span data-i18n="compare.importJson">Import JSON</span></button>
+        <button class="btn btn-outline btn-sm" id="btn-studio-export-json"><i data-lucide="file-json"></i> <span data-i18n="compare.saveJson">Save JSON</span></button>
+        <button class="btn btn-primary btn-sm" id="btn-studio-export-png"><i data-lucide="download"></i> <span data-i18n="compare.exportPng">Export PNG</span></button>
+        <button class="btn btn-outline btn-sm" id="btn-studio-reset-view" title="Reset View" data-i18n-title="tips.resetView"><i data-lucide="refresh-ccw"></i></button>
+        <div class="divider-vertical"></div>
+        <button class="btn btn-icon btn-ghost" id="btn-close-studio" title="Back to 3D Viewer" data-i18n-title="tips.back3d"><i data-lucide="x"></i></button>
+      </div>
+    </div>
+    <div class="studio-body">
+      <div class="studio-sidebar-left">
+        <div class="panel-section">
+          <div class="panel-title" data-i18n="compare.tools">Tools</div>
+          <div class="studio-tools-grid">
+            <button class="btn btn-ghost btn-sm active" data-studio-tool="select" title="Select/Move" data-i18n-title="tips.selectMove"><i data-lucide="mouse-pointer-2"></i></button>
+            <button class="btn btn-ghost btn-sm" data-studio-tool="rectangle" title="Rectangle" data-i18n-title="tips.rect"><i data-lucide="square"></i></button>
+            <button class="btn btn-ghost btn-sm" data-studio-tool="ellipse" title="Ellipse" data-i18n-title="tips.ellipse"><i data-lucide="circle"></i></button>
+            <button class="btn btn-ghost btn-sm" data-studio-tool="arrow" title="Arrow" data-i18n-title="tips.arrow"><i data-lucide="move-right"></i></button>
+            <button class="btn btn-ghost btn-sm" data-studio-tool="line" title="Line" data-i18n-title="tips.line"><i data-lucide="minus"></i></button>
+            <button class="btn btn-ghost btn-sm" data-studio-tool="text" title="Text" data-i18n-title="tips.text"><i data-lucide="type"></i></button>
+            <button class="btn btn-ghost btn-sm" data-studio-tool="scalebar" title="Scale Bar" data-i18n-title="tips.scaleBar"><i data-lucide="ruler"></i></button>
+          </div>
+        </div>
+        <div class="panel-section flex-1" style="display:flex; flex-direction:column; min-height:0;">
+          <div class="panel-title" data-i18n="compare.layers">Layers</div>
+          <div class="studio-layers-list" id="studio-layers-list">
+            <!-- Populated via JS -->
+          </div>
+        </div>
+      </div>
+      <div class="studio-workspace" id="studio-workspace">
+        <canvas id="studio-canvas"></canvas>
+      </div>
+      <div class="studio-sidebar-right">
+        <div class="panel-section">
+          <div class="panel-title" data-i18n="compare.properties">Properties</div>
+          <div class="studio-properties" id="studio-properties">
+            <p class="text-xs text-muted" data-i18n="studio.selectObject">Select an object to edit properties.</p>
+            <div class="studio-property-row">
+              <button class="btn btn-outline btn-sm" data-studio-command="add-guide-x" data-i18n="studio.guideX">Guide X</button>
+              <button class="btn btn-outline btn-sm" data-studio-command="add-guide-y" data-i18n="studio.guideY">Guide Y</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="panel-section">
+          <div class="panel-title" data-i18n="compare.channels">Channels</div>
+          <div id="studio-channels" class="studio-channels-list">
+            <!-- Populated via JS -->
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="js/core/utils.js?v=20260504"></script>
+  <script src="js/core/i18n.js?v=20260504"></script>
+    }
+    
+    .dataset-mini-card {
+      background: var(--bg-surface-2);
+      border: 1px solid var(--border-light);
+      border-radius: var(--radius-md);
+      padding: var(--space-3);
+      cursor: pointer;
+      transition: all var(--transition-fast);
+    }
+    .dataset-mini-card:hover {
+      border-color: var(--color-primary);
+      transform: translateY(-2px);
+    }
+    .dataset-mini-card .card-type {
+      font-size: 10px; padding: 2px 6px; border-radius: 10px; margin-bottom: 4px; display: inline-block;
+    }
+  </style>
+</head>
+<body>
+
+  <div class="compare-layout">
+    
+    <!-- Header -->
+    <header class="compare-header">
+      <div class="flex items-center gap-4">
+        <a href="explorer.html" class="btn btn-icon btn-ghost" data-i18n-title="nav.back">
+          <i data-lucide="arrow-left"></i>
+        </a>
+        <h1 class="text-xl font-bold" data-i18n="compare.title">Multi-Panel Comparison</h1>
+      </div>
+      <div class="flex items-center gap-2">
+        <a class="btn btn-icon btn-ghost" href="about.html" title="Help and methods" data-i18n-title="tips.help" aria-label="Help and methods" data-i18n-aria="tips.help">
+          <i data-lucide="help-circle"></i>
+        </a>
+              <!-- Color Blindness Toggle -->
+      <button class="btn btn-icon btn-ghost" onclick="ColorBlind.openModal()" data-i18n-title="colorblind.toggle">
+        <i data-lucide="eye" style="width:20px;height:20px"></i>
+      </button>
+      <button class="btn btn-icon btn-ghost" onclick="Theme.toggle()" data-i18n-title="theme.toggle" id="theme-toggle">
+          <i data-lucide="moon" data-theme-icon></i>
+        </button>
+      </div>
+    </header>
+
+    <!-- Toolbar -->
+    <div class="compare-toolbar">
+      <div class="flex items-center gap-4">
+        <button class="btn btn-primary btn-sm flex items-center gap-2" id="btn-add-dataset">
+          <i data-lucide="plus"></i> Add Dataset
+        </button>
+        <div class="toolbar-cluster" style="display: flex; gap: 4px; padding-left: 12px; border-left: 1px solid var(--border-light);">
+          <button class="btn btn-icon btn-ghost tool-chip active" data-tool="navigate" title="Navigate" data-i18n-title="tips.navigate" aria-label="Navigate" data-i18n-aria="tips.navigate">
+            <i data-lucide="mouse-pointer-2"></i>
+          </button>
+          <button class="btn btn-icon btn-ghost tool-chip" data-tool="slice" title="Slice through volume" data-i18n-title="tips.sliceVol" aria-label="Slice tool" data-i18n-aria="tips.sliceTool">
+            <i data-lucide="scissors"></i>
+          </button>
+          <button class="btn btn-icon btn-ghost tool-chip" data-tool="measure" title="Measure distance" data-i18n-title="tips.measureDist" aria-label="Measure distance" data-i18n-aria="tips.measureDist">
+            <i data-lucide="ruler"></i>
+          </button>
+        </div>
+
+        <button class="btn btn-outline btn-sm flex items-center gap-2" id="btn-decompose" title="Decompose channels into separate panels" data-i18n-title="tips.decompPanels" style="display: none; margin-left: 12px;">
+          <i data-lucide="split-square-horizontal"></i> Decompose
+        </button>
+        <button class="btn btn-outline btn-sm flex items-center gap-2" id="btn-export-compare">
+          <i data-lucide="download"></i> Export
+        </button>
+        <button class="btn btn-outline btn-sm flex items-center gap-2" id="btn-save-compare-workspace">
+          <i data-lucide="save"></i> Save
+        </button>
+        <button class="btn btn-outline btn-sm flex items-center gap-2" id="btn-restore-compare-workspace">
+          <i data-lucide="folder-open"></i> Restore
+        </button>
+        <select class="btn btn-outline btn-sm" id="compare-layout-mode" title="Panel layout" data-i18n-title="tips.panelLayout">
+          <option value="auto" selected data-i18n="compare.layoutAuto">Auto layout</option>
+          <option value="columns" data-i18n="compare.layoutCols">Columns</option>
+          <option value="rows" data-i18n="compare.layoutRows">Rows</option>
+          <option value="grid" data-i18n="compare.layoutGrid">Grid</option>
+        </select>
+      </div>
+
+      <div class="flex items-center gap-4">
+        <label class="text-sm text-muted font-semibold" data-i18n="compare.syncTitle">SYNC</label>
+        <label class="flex items-center gap-2 cursor-pointer text-sm">
+          <input type="checkbox" id="sync-z" checked> Z-Stack
+        </label>
+        <label class="flex items-center gap-2 cursor-pointer text-sm">
+          <input type="checkbox" id="sync-time" checked> Time
+        </label>
+        <label class="flex items-center gap-2 cursor-pointer text-sm">
+          <input type="checkbox" id="sync-camera" checked> Camera (3D)
+        </label>
+        <label class="flex items-center gap-2 cursor-pointer text-sm">
+          <input type="checkbox" id="sync-channels" checked> Channels
+        </label>
+      </div>
+    </div>
+
+    <!-- Grid -->
+    <div class="compare-grid layout-0" id="compare-grid">
+      <div class="text-muted flex flex-col items-center gap-4" id="empty-state">
+        <i data-lucide="grid" class="w-16 h-16 opacity-20"></i>
+        <p data-i18n="compare.emptyTitle">No datasets selected for comparison.</p>
+        <button class="btn btn-outline" onclick="document.getElementById('btn-add-dataset').click()" data-i18n="compare.chooseBtn">Choose Dataset</button>
+      </div>
+      <!-- Panels are appended here by JS -->
+    </div>
+
+  </div>
+
+  <!-- Modal Dataset Selector -->
+  <div class="modal-overlay" id="modal-select">
+    <div class="modal-content animate-scale-in">
+      <div class="modal-header">
+        <h2 class="text-lg font-bold" data-i18n="compare.modalTitle">Select Dataset to Add</h2>
+        <button class="btn btn-icon btn-ghost w-8 h-8 p-0" id="btn-close-modal"><i data-lucide="x"></i></button>
+      </div>
+      <div class="modal-body" id="modal-dataset-list">
+        <!-- JS populates cards here -->
+      </div>
+    </div>
+  </div>
+
+  <!-- Studio Editor Mode -->
+  <div class="studio-layout hidden" id="studio-layout">
+    <div class="studio-header">
+      <div class="studio-header-left">
+        <h2 data-i18n="compare.studioTitle">Slice Studio (Compare Mode)</h2>
+        <span class="text-xs text-muted" id="studio-subtitle" data-i18n="compare.studioSubtitle">Edit and Annotate</span>
+      </div>
+      <div class="studio-header-right">
+        <select class="form-select form-select-sm bg-surface" id="studio-scale-mode" title="Scale Mode" data-i18n-title="tips.scaleMode">
+          <option value="visual" data-i18n="compare.scaleVisual">Visual Size</option>
+          <option value="physical" data-i18n="compare.scalePhysical">Physical Scale</option>
+        </select>
+        <div class="divider-vertical"></div>
+        <input type="file" id="studio-import-file" accept=".json" class="hidden">
+        <button class="btn btn-outline btn-sm" id="btn-studio-import"><i data-lucide="upload"></i> <span data-i18n="compare.importJson">Import JSON</span></button>
+        <button class="btn btn-outline btn-sm" id="btn-studio-export-json"><i data-lucide="file-json"></i> <span data-i18n="compare.saveJson">Save JSON</span></button>
+        <button class="btn btn-primary btn-sm" id="btn-studio-export-png"><i data-lucide="download"></i> <span data-i18n="compare.exportPng">Export PNG</span></button>
+        <button class="btn btn-outline btn-sm" id="btn-studio-reset-view" title="Reset View" data-i18n-title="tips.resetView"><i data-lucide="refresh-ccw"></i></button>
+        <div class="divider-vertical"></div>
+        <button class="btn btn-icon btn-ghost" id="btn-close-studio" title="Back to 3D Viewer" data-i18n-title="tips.back3d"><i data-lucide="x"></i></button>
+      </div>
+    </div>
+    <div class="studio-body">
+      <div class="studio-sidebar-left">
+        <div class="panel-section">
+          <div class="panel-title" data-i18n="compare.tools">Tools</div>
+          <div class="studio-tools-grid">
+            <button class="btn btn-ghost btn-sm active" data-studio-tool="select" title="Select/Move" data-i18n-title="tips.selectMove"><i data-lucide="mouse-pointer-2"></i></button>
+            <button class="btn btn-ghost btn-sm" data-studio-tool="rectangle" title="Rectangle" data-i18n-title="tips.rect"><i data-lucide="square"></i></button>
+            <button class="btn btn-ghost btn-sm" data-studio-tool="ellipse" title="Ellipse" data-i18n-title="tips.ellipse"><i data-lucide="circle"></i></button>
+            <button class="btn btn-ghost btn-sm" data-studio-tool="arrow" title="Arrow" data-i18n-title="tips.arrow"><i data-lucide="move-right"></i></button>
+            <button class="btn btn-ghost btn-sm" data-studio-tool="line" title="Line" data-i18n-title="tips.line"><i data-lucide="minus"></i></button>
+            <button class="btn btn-ghost btn-sm" data-studio-tool="text" title="Text" data-i18n-title="tips.text"><i data-lucide="type"></i></button>
+            <button class="btn btn-ghost btn-sm" data-studio-tool="scalebar" title="Scale Bar" data-i18n-title="tips.scaleBar"><i data-lucide="ruler"></i></button>
+          </div>
+        </div>
+        <div class="panel-section flex-1" style="display:flex; flex-direction:column; min-height:0;">
+          <div class="panel-title" data-i18n="compare.layers">Layers</div>
+          <div class="studio-layers-list" id="studio-layers-list">
+            <!-- Populated via JS -->
+          </div>
+        </div>
+      </div>
+      <div class="studio-workspace" id="studio-workspace">
+        <canvas id="studio-canvas"></canvas>
+      </div>
+      <div class="studio-sidebar-right">
+        <div class="panel-section">
+          <div class="panel-title" data-i18n="compare.properties">Properties</div>
+          <div class="studio-properties" id="studio-properties">
+            <p class="text-xs text-muted" data-i18n="studio.selectObject">Select an object to edit properties.</p>
+            <div class="studio-property-row">
+              <button class="btn btn-outline btn-sm" data-studio-command="add-guide-x" data-i18n="studio.guideX">Guide X</button>
+              <button class="btn btn-outline btn-sm" data-studio-command="add-guide-y" data-i18n="studio.guideY">Guide Y</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="panel-section">
+          <div class="panel-title" data-i18n="compare.channels">Channels</div>
+          <div id="studio-channels" class="studio-channels-list">
+            <!-- Populated via JS -->
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="js/core/utils.js?v=20260504"></script>
+  <script src="js/core/i18n.js?v=20260504"></script>
+    <script src="js/core/theme.js?v=20260504"></script>
+  <script src="js/core/colorblind.js?v=20260528"></script>
+  <script src="js/core/catalog.js?v=20260504"></script>
+  <script src="js/core/download-manifest.js?v=20260504"></script>
+  <script src="js/core/workspace-state.js?v=20260504"></script>
+  <script src="js/core/url-state.js?v=20260601-v5"></script>
+  <script src="js/core/export-manager.js?v=20260529-v2"></script>
+  <script src="js/core/annotation-manager.js?v=20260504"></script>
+  <script src="js/components/channel-panel.js?v=20260529-v16"></script>
+  <script src="js/components/annotation-layer.js?v=20260529-v16"></script>
+  <script src="js/components/studio-editor.js?v=20260529-v16"></script>
+  <script src="js/pages/compare.js?v=20260604-v7"></script>
+</body>
+</html>
+
+
+
+
+
+
+
+

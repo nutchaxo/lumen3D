@@ -1,0 +1,35 @@
+\chapter{Références et Bibliographie}
+\label{chap:references}
+
+Les algorithmes et méthodes d'informatique graphique et de vision par ordinateur implémentés dans cette plateforme s'appuient sur les travaux fondamentaux suivants :
+
+\begin{thebibliography}{9}
+
+\bibitem{levoy1988}
+Levoy, Marc. 
+\textit{Display of surfaces from volume data.}
+IEEE Computer graphics and Applications 8.3 (1988): 29-37.
+\newblock (Fondation théorique du Direct Volume Rendering et du Raymarching utilisés dans le \texttt{VolumeViewer}).
+
+\bibitem{kabsch1976}
+Kabsch, Wolfgang. 
+\textit{A solution for the best rotation to relate two sets of vectors.}
+Acta Crystallographica Section A: Crystal Physics, Diffraction, Theoretical and General Crystallography 32.5 (1976): 922-923.
+\newblock (Algorithme de stabilisation Rigid-Body par SVD utilisé dans \texttt{registration.py}).
+
+\bibitem{threejs}
+Cabello, Ricardo, et al.
+\textit{Three.js: A JavaScript 3D library.}
+\newblock \url{https://threejs.org/} (Moteur 3D sous-jacent au \texttt{VolumeViewer} et \texttt{TrackingViewer}).
+
+\bibitem{openseadragon}
+OpenSeadragon Contributors.
+\textit{OpenSeadragon: An open-source, web-based viewer for zoomable images.}
+\newblock \url{https://openseadragon.github.io/} (Moteur de rendu pyramidal 2D utilisé par le \texttt{DeepZoomViewer}).
+
+\bibitem{imaris}
+Bitplane / Oxford Instruments.
+\textit{Imaris: 3D/4D Image Visualization and Analysis Software.}
+\newblock \url{https://imaris.oxinst.com/} (Inspiration pour l'UX du mode \textit{Emission/MIP} et la gestion des canaux fluorescents).
+
+\end{thebibliography}

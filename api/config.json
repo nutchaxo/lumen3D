@@ -1,0 +1,5 @@
+{
+  "username": "admin",
+  "password_sha256": "abf6d140e5002afc965335a3dbc62960a5fb05b7d5faa6ec9c0a17a7ceead20e",
+  "note": "Change password via: python dev_server.py --set-password"
+}

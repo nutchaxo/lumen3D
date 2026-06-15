@@ -1,0 +1,24 @@
+# Environments
+.venv-312/
+.env
+__pycache__/
+*.pyc
+
+# Datasets / Large files
+DATA_WEB/
+*.nii
+*.nii.gz
+*.ome.tif
+*.tif
+*.tiff
+*.dzi
+*.db
+
+# IDEs
+.vscode/
+.agents/
+.idea/
+
+# Logs
+logs/
+*.log

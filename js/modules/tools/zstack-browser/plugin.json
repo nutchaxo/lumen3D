@@ -1,0 +1,12 @@
+{
+  "id": "zstack-browser",
+  "name": "Z-Stack Browser",
+  "version": "1.0.0",
+  "creator": "IRIBHM",
+  "placement": "tools",
+  "group": "tools",
+  "subtype": "toggle",
+  "icon": "layers-3",
+  "order": 60,
+  "description": "Browse the Z-stack slice by slice with synchronized multi-panel support."
+}

@@ -1,0 +1,254 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Widgets & Controllers — IRIBHM</title>
+
+  <!-- Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+
+  <!-- Lucide Icons -->
+  <script src="https://unpkg.com/lucide@0.344.0/dist/umd/lucide.min.js"></script>
+
+  <!-- Stylesheets -->
+  <link rel="stylesheet" href="css/variables.css">
+  <link rel="stylesheet" href="css/themes.css">
+  <link rel="stylesheet" href="css/base.css">
+  <link rel="stylesheet" href="css/components.css">
+  <link rel="stylesheet" href="css/viewer.css?v=20260506">
+  <style>
+    body {
+      padding: 2rem;
+      background: var(--bg-default);
+      color: var(--text-primary);
+      min-height: 100vh;
+      overflow-y: auto;
+    }
+    .widget-section {
+      margin-bottom: 3rem;
+      padding-bottom: 2rem;
+      border-bottom: 1px solid var(--border-subtle);
+    }
+    .widget-section h2 {
+      margin-bottom: 1.5rem;
+      font-size: 1.5rem;
+      color: var(--color-primary);
+    }
+    .widget-grid {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 1.5rem;
+      align-items: flex-start;
+    }
+    .widget-box {
+      background: var(--bg-surface);
+      border: 1px solid var(--border-default);
+      border-radius: var(--radius-lg);
+      padding: 1.5rem;
+      min-width: 300px;
+    }
+    .widget-box h3 {
+      font-size: 1rem;
+      margin-bottom: 1.5rem;
+      color: var(--text-secondary);
+      border-bottom: 1px solid var(--border-subtle);
+      padding-bottom: 0.5rem;
+    }
+    .mb-2 { margin-bottom: 0.5rem; }
+    .mb-4 { margin-bottom: 1rem; }
+    .mt-4 { margin-top: 1rem; }
+    .flex { display: flex; }
+    .gap-2 { gap: 0.5rem; }
+    .items-center { align-items: center; }
+  </style>
+</head>
+<body>
+
+  <h1>UI Widgets & Controllers</h1>
+  <p class="text-muted mb-4">Technical page to preview all the standard components used across the platform, including the requested histograms.</p>
+
+  <!-- Channels & Histograms -->
+  <div class="widget-section">
+    <h2>Histograms & Channels</h2>
+    <p class="text-sm text-muted mb-4">This is the complex histogram controller reused on 3D viewer pages.</p>
+    <div class="widget-grid">
+      <div class="widget-box" style="width: 400px; background: var(--bg-surface-2);">
+        <h3>Channel Panel Example</h3>
+        <!-- This container is populated by ChannelPanel.init -->
+        <div id="channel-container"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Timeline -->
+  <div class="widget-section">
+    <h2>Timeline (Tracking / Live Imaging)</h2>
+    <div class="widget-grid">
+      <div class="widget-box" style="flex: 1; min-width: 500px;">
+        <h3>Video / Timeline Scrubber</h3>
+        <div id="timeline-container" style="border-radius: var(--radius-md); border: 1px solid var(--border-default); overflow: hidden;"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Buttons -->
+  <div class="widget-section">
+    <h2>Buttons</h2>
+    <div class="widget-grid">
+      <div class="widget-box">
+        <h3>Standard Buttons</h3>
+        <div class="flex gap-2 mb-2">
+          <button class="btn btn-primary">Primary</button>
+          <button class="btn btn-accent">Accent</button>
+        </div>
+        <div class="flex gap-2 mb-2">
+          <button class="btn btn-ghost">Ghost</button>
+          <button class="btn btn-outline" style="border: 1px solid var(--border-default); background: transparent; color: var(--text-primary); border-radius: var(--radius-md); padding: var(--space-2) var(--space-5); height: 40px;">Outline</button>
+        </div>
+      </div>
+      <div class="widget-box">
+        <h3>Icon Buttons</h3>
+        <div class="flex gap-2 items-center">
+          <button class="btn btn-icon btn-ghost"><i data-lucide="camera"></i></button>
+          <button class="btn btn-icon btn-solid" style="background: var(--bg-active); color: var(--text-primary); border-radius: var(--radius-md); width: 40px; height: 40px; display: inline-flex; align-items: center; justify-content: center;"><i data-lucide="play"></i></button>
+          <button class="btn btn-icon btn-primary"><i data-lucide="save"></i></button>
+        </div>
+      </div>
+      <div class="widget-box">
+        <h3>Sizes</h3>
+        <div class="flex gap-2 items-center">
+          <button class="btn btn-primary btn-sm">Small</button>
+          <button class="btn btn-primary">Normal</button>
+          <button class="btn btn-primary btn-lg">Large</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Forms & Inputs -->
+  <div class="widget-section">
+    <h2>Forms & Controls</h2>
+    <div class="widget-grid">
+      <div class="widget-box">
+        <h3>Range Slider</h3>
+        <input type="range" class="range-slider mb-4" min="0" max="100" value="50">
+        
+        <h3 class="mt-4">Toggle Switch</h3>
+        <div class="flex items-center gap-2">
+          <label class="toggle">
+            <input type="checkbox" checked>
+            <span class="toggle-track"></span>
+            <span class="toggle-thumb"></span>
+          </label>
+          <span class="text-sm text-secondary">Active state</span>
+        </div>
+        <div class="flex items-center gap-2 mt-2">
+          <label class="toggle">
+            <input type="checkbox">
+            <span class="toggle-track"></span>
+            <span class="toggle-thumb"></span>
+          </label>
+          <span class="text-sm text-secondary">Inactive state</span>
+        </div>
+      </div>
+      
+      <div class="widget-box">
+        <h3>Select Dropdown</h3>
+        <select class="form-select text-sm p-1 rounded border border-light bg-surface text-primary mb-4" style="width:100%; height: 36px;">
+          <option>Low Quality</option>
+          <option selected>Medium Quality</option>
+          <option>Native Quality</option>
+        </select>
+        
+        <h3 class="mt-4">Color Picker</h3>
+        <input type="color" value="#00FF66" class="form-input" style="height:36px;padding:4px;width:100%;border-radius: var(--radius-md);background: var(--bg-surface);border: 1px solid var(--border-default);">
+      </div>
+    </div>
+  </div>
+
+  <!-- Badges & Chips -->
+  <div class="widget-section">
+    <h2>Badges & Chips</h2>
+    <div class="widget-grid">
+      <div class="widget-box">
+        <h3>Badges</h3>
+        <div class="flex gap-2">
+          <span class="badge badge-fixed badge-dot">Fixed</span>
+          <span class="badge badge-live badge-dot">Live</span>
+          <span class="badge badge-tracking badge-dot">Tracking</span>
+        </div>
+      </div>
+      
+      <div class="widget-box">
+        <h3>Chips</h3>
+        <div class="flex gap-2">
+          <div class="chip">Standard</div>
+          <div class="chip active">Active</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="js/core/utils.js"></script>
+  <script src="js/components/channel-panel.js?v=20260506h"></script>
+  <script src="js/components/timeline.js?v=20260506"></script>
+  <script>
+    // Initialize icons
+    lucide.createIcons();
+
+    // Initialize ChannelPanel dummy data
+    const dummyMetadata = {
+      dimensions: { c: 3 },
+      channels: [
+        { name: 'DAPI', color: '#2F6BFF' },
+        { name: 'GFP', color: '#00FF66' },
+        { name: 'RFP', color: '#FF3030' }
+      ]
+    };
+    
+    // Create some dummy histogram data (bell curves)
+    const createHist = (offset = 0) => {
+      const counts = [];
+      for (let i = 0; i < 256; i++) {
+        const val = Math.exp(-Math.pow(i - (100 + offset), 2) / 2000) * 1000 + Math.random() * 50;
+        counts.push(val);
+      }
+      return { counts, total: 256 * 1000 };
+    };
+
+    if (typeof Timeline !== 'undefined') {
+      Timeline.init('timeline-container', {
+        totalFrames: 120,
+        showSpeed: true,
+        showSmooth: true,
+        stepped: true
+      }, (state) => {
+        console.log('Timeline updated:', state);
+      });
+      
+      // Simulate buffer loading
+      let buffered = 0;
+      const bufferInterval = setInterval(() => {
+        buffered += 2;
+        Timeline.updateBuffer(buffered);
+        if (buffered >= 120) clearInterval(bufferInterval);
+      }, 200);
+    } else {
+      console.error("Timeline component not loaded.");
+    }
+
+    if (typeof ChannelPanel !== 'undefined') {
+      ChannelPanel.init('channel-container', dummyMetadata, (idx, state) => {
+        console.log('Channel', idx, 'changed to:', state);
+      });
+      
+      ChannelPanel.setHistograms([createHist(0), createHist(30), createHist(-30)]);
+    } else {
+      console.error("ChannelPanel component not loaded.");
+    }
+  </script>
+</body>
+</html>

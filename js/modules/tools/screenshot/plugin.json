@@ -1,0 +1,12 @@
+{
+  "id": "screenshot",
+  "name": "Screenshot",
+  "version": "1.0.0",
+  "creator": "IRIBHM",
+  "placement": "tools",
+  "group": "export",
+  "subtype": "action",
+  "icon": "camera",
+  "order": 40,
+  "description": "Capture the current 3D view as a PNG image."
+}

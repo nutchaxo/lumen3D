@@ -1,0 +1,12 @@
+{
+  "id": "toggle-grid",
+  "name": "Toggle Grid",
+  "version": "1.0.0",
+  "creator": "IRIBHM",
+  "placement": "tools",
+  "group": "visuals",
+  "subtype": "toggle",
+  "icon": "grid",
+  "order": 10,
+  "description": "Cycle through grid display modes: none → normal → fine."
+}

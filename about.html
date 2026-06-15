@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>About — IRIBHM Microscopy Platform</title>
+  <meta name="description" content="Methods, citation, data access, and scientific tools for the IRIBHM microscopy platform.">
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <script src="https://unpkg.com/lucide@0.344.0/dist/umd/lucide.min.js"></script>
+
+  <link rel="stylesheet" href="css/variables.css">
+  <link rel="stylesheet" href="css/themes.css">
+  <link rel="stylesheet" href="css/base.css">
+  <link rel="stylesheet" href="css/components.css">
+  <link rel="stylesheet" href="css/layout.css">
+  <link rel="stylesheet" href="css/tools.css">
+</head>
+<body>
+  <nav class="navbar" id="navbar" style="background: var(--bg-base); border-bottom: 1px solid var(--border-subtle);">
+    <a href="index.html" class="navbar-brand">
+      <div class="navbar-brand-icon">IR</div>
+      <span data-i18n="app.lab">IRIBHM — ULB</span>
+    </a>
+    <div class="navbar-links">
+      <a href="index.html" class="navbar-link" data-i18n="nav.home">Home</a>
+      <a href="explorer.html" class="navbar-link" data-i18n="nav.explorer">Data Explorer</a>
+      <a href="compare.html" class="navbar-link" data-i18n="nav.compare">Compare</a>
+      <a href="about.html" class="navbar-link active" data-i18n="nav.about">About</a>
+    </div>
+    <div class="navbar-actions">
+            <!-- Color Blindness Toggle -->
+      <button class="btn btn-icon btn-ghost" onclick="ColorBlind.openModal()" data-i18n-title="colorblind.toggle">
+        <i data-lucide="eye" style="width:20px;height:20px"></i>
+      </button>
+      <button class="btn btn-icon btn-ghost" onclick="Theme.toggle()" data-i18n-title="theme.toggle" id="theme-toggle">
+        <i data-lucide="moon" data-theme-icon></i>
+      </button>
+    </div>
+  </nav>
+
+  <header class="about-hero">
+    <div class="container">
+      <div class="hero-badge">
+        <span class="dot"></span>
+        <span data-i18n="about.subtitle">Methods, access, and citation</span>
+      </div>
+      <h1 data-i18n="about.title">About This Platform</h1>
+      <p class="hero-subtitle" data-i18n="about.description">
+        This platform was developed at IRIBHM, Universite Libre de Bruxelles, to explore confocal microscopy data of mouse embryonic development.
+      </p>
+    </div>
+  </header>
+
+  <main>
+    <section class="section">
+      <div class="container about-grid">
+        <article class="about-card">
+          <h3 data-i18n="about.scopeTitle">Scientific Scope</h3>
+          <p data-i18n="about.scopeDesc">Fixed imaging, live imaging, and cell tracking datasets can be explored independently or side by side. Linked datasets expose registration metadata when available.</p>
+        </article>
+        <article class="about-card">
+          <h3 data-i18n="about.methodsTitle">Methods</h3>
+          <p data-i18n="about.methodsDesc">Raw ND2, CZI, Imaris, XLSX, and GLB files are converted into web-ready metadata, WebP stacks, compressed JSON tracks, and optimized 3D models.</p>
+        </article>
+        <article class="about-card">
+          <h3 data-i18n="about.accessTitle">Data Access</h3>
+          <p data-i18n="about.accessDesc">The Download Center lists raw and web-ready files per dataset, with size warnings for very large microscopy sources.</p>
+        </article>
+        <article class="about-card">
+          <h3 data-i18n="about.cite">How to Cite</h3>
+          <p data-i18n="about.citeDesc">Please cite the IRIBHM microscopy platform, the original experiment, and any publications associated with the dataset. A citation block can be copied from each dataset workspace export.</p>
+        </article>
+      </div>
+    </section>
+
+    <section class="section" style="background: var(--bg-surface);">
+      <div class="container">
+        <div class="section-header">
+          <h2 data-i18n="about.toolsTitle">Scientific Tools</h2>
+          <p data-i18n="about.toolsDesc">Tools are designed for direct interaction with embryos, cells, cuts, graphs, and exported figures.</p>
+        </div>
+        <div class="tools-grid">
+          <article class="tool-roadmap-card"><h3 data-i18n="about.cutsTitle">Interactive Cuts</h3><p data-i18n="about.cutsDesc">Move clipping planes in the 3D embryo and save views as reproducible workspace states.</p></article>
+          <article class="tool-roadmap-card"><h3 data-i18n="about.analysisTitle">Cell Analysis</h3><p data-i18n="about.analysisDesc">Inspect cell tracks, lineage, speed, displacement, and nearest neighbors from the tracking viewer.</p></article>
+          <article class="tool-roadmap-card"><h3 data-i18n="about.chartTitle">Chart Studio</h3><p data-i18n="about.chartDesc">Build exportable population, velocity, neighbor, and mitosis graphs linked to the timeline.</p></article>
+          <article class="tool-roadmap-card"><h3 data-i18n="about.figureTitle">Figure Builder</h3><p data-i18n="about.figureDesc">Export publication-oriented figures, graph panels, and complete workspace JSON files.</p></article>
+        </div>
+      </div>
+    </section>
+
+    <section class="section">
+      <div class="container about-grid">
+        <article class="about-card">
+          <h3 data-i18n="about.catalogTitle">Current Catalog</h3>
+          <p id="about-catalog-summary">Loading catalog summary...</p>
+        </article>
+        <article class="about-card">
+          <h3 data-i18n="about.contact">Contact</h3>
+          <p data-i18n="about.contactDesc">IRIBHM — Universite Libre de Bruxelles. For dataset corrections, metadata, or reuse questions, contact the dataset owner or IRIBHM lab contact.</p>
+        </article>
+      </div>
+    </section>
+  </main>
+
+  <script src="js/core/utils.js?v=20260504"></script>
+  <script src="js/core/i18n.js?v=20260504"></script>
+    <script src="js/core/theme.js?v=20260504"></script>
+  <script src="js/core/colorblind.js?v=20260528"></script>
+  <script src="js/core/catalog.js?v=20260504"></script>
+  <script src="js/pages/about.js?v=20260504"></script>
+</body>
+</html>

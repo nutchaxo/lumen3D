@@ -1,0 +1,516 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Viewer — IRIBHM Microscopy</title>
+
+  <!-- Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+
+  <!-- Lucide Icons -->
+  <script src="https://unpkg.com/lucide@0.344.0/dist/umd/lucide.min.js"></script>
+  
+  <!-- Three.js (r147) -->
+  <script src="https://cdn.jsdelivr.net/npm/three@0.147.0/build/three.min.js"></script>
+
+  <!-- OpenSeadragon for Deep Zoom 2D mode -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/openseadragon/3.0.0/openseadragon.min.js" defer></script>
+
+  <!-- Stylesheets -->
+  <link rel="stylesheet" href="css/variables.css">
+  <link rel="stylesheet" href="css/themes.css">
+  <link rel="stylesheet" href="css/base.css">
+  <link rel="stylesheet" href="css/components.css?v=20260615-fixed1">
+  <link rel="stylesheet" href="css/viewer.css?v=20260615-fixed1">
+  <link rel="stylesheet" href="css/tools.css?v=20260615-fixed1">
+</head>
+<body>
+
+  <div class="viewer-layout">
+    
+    <!-- Header -->
+    <header class="viewer-header">
+      <div class="viewer-header-left">
+        <a href="explorer.html" class="btn btn-icon btn-ghost" data-i18n-title="nav.back">
+          <i data-lucide="arrow-left"></i>
+        </a>
+        <div>
+          <div class="viewer-title" id="dataset-title">Loading Dataset...</div>
+          <div class="viewer-subtitle" id="dataset-subtitle">--</div>
+        </div>
+      </div>
+      <!-- Hamburger Menu Button -->
+      <button class="btn btn-icon btn-ghost hamburger-menu-btn" id="btn-hamburger" title="Menu" aria-label="Toggle menu" style="display: none;">
+        <i data-lucide="menu"></i>
+      </button>
+      <div class="viewer-header-right viewer-toolbar" id="viewer-toolbar">
+        <div class="toolbar-cluster">
+          <span class="toolbar-label" data-i18n="viewer.tools">Tools</span>
+          <div class="toolbar-actions">
+            <button class="btn btn-icon btn-ghost tool-chip" data-tool="navigate" title="Navigate" data-i18n-title="tips.navigate" aria-label="Navigate" data-i18n-aria="tips.navigate">
+              <i data-lucide="mouse-pointer-2"></i>
+            </button>
+            <button class="btn btn-icon btn-ghost tool-chip" data-tool="slice" title="Slice through volume" data-i18n-title="tips.sliceVol" aria-label="Slice tool" data-i18n-aria="tips.sliceTool">
+              <i data-lucide="scissors"></i>
+            </button>
+            <button class="btn btn-icon btn-ghost tool-chip" data-tool="measure" title="Measure distance" data-i18n-title="tips.measureDist" aria-label="Measure distance" data-i18n-aria="tips.measureDist">
+              <i data-lucide="ruler"></i>
+            </button>
+          </div>
+        </div>
+        <div class="toolbar-cluster">
+          <span class="toolbar-label" data-i18n="viewer.export">Export</span>
+          <div class="toolbar-actions">
+            <button class="btn btn-icon btn-ghost" id="btn-export" data-plugin-id="download-center" title="Download Center" data-i18n-title="tips.download" aria-label="Download Center" data-i18n-aria="tips.download">
+              <i data-lucide="download"></i>
+            </button>
+            <button class="btn btn-icon btn-ghost" id="btn-save-workspace" data-plugin-id="save-workspace" title="Save workspace" data-i18n-title="tips.saveWksp" aria-label="Save workspace" data-i18n-aria="tips.saveWksp">
+              <i data-lucide="save"></i>
+            </button>
+            <button class="btn btn-icon btn-ghost" id="btn-restore-workspace" data-plugin-id="restore-workspace" title="Restore workspace" data-i18n-title="tips.restoreWksp" aria-label="Restore workspace" data-i18n-aria="tips.restoreWksp">
+              <i data-lucide="folder-open"></i>
+            </button>
+            <button class="btn btn-icon btn-ghost" id="btn-screenshot" data-plugin-id="screenshot" data-i18n-title="viewer.screenshot">
+              <i data-lucide="camera"></i>
+            </button>
+          </div>
+        </div>
+        <div class="toolbar-cluster">
+          <span class="toolbar-label" data-i18n="viewer.visuals">Visuals</span>
+          <div class="toolbar-actions">
+            <button class="btn btn-icon btn-ghost" id="btn-toggle-grid" data-plugin-id="toggle-grid" title="Toggle Grid (None / Normal / Fine)" data-i18n-title="tips.toggleGridFull" aria-label="Toggle Grid" data-i18n-aria="tips.toggleGrid">
+              <i data-lucide="grid"></i>
+            </button>
+            <button class="btn btn-icon btn-ghost" id="btn-toggle-axes" data-plugin-id="toggle-axes" title="Toggle Axes" data-i18n-title="tips.toggleAxes" aria-label="Toggle Axes" data-i18n-aria="tips.toggleAxes">
+              <i data-lucide="corner-down-right"></i>
+            </button>
+            <button class="btn btn-icon btn-ghost" id="btn-toggle-volume" data-plugin-id="toggle-volume" title="Hide / Show 3D Volume (keep projections)" data-i18n-title="tips.hideVol" aria-label="Toggle Volume Visibility" data-i18n-aria="tips.toggleVol">
+              <i data-lucide="eye-off"></i>
+            </button>
+          </div>
+        </div>
+        <div class="toolbar-cluster">
+          <span class="toolbar-label" data-i18n="viewer.layouts">Layouts</span>
+          <div class="toolbar-actions">
+            <button class="btn btn-icon btn-ghost" id="btn-presentation" data-plugin-id="presentation-mode" title="Presentation mode" data-i18n-title="tips.presentation" aria-label="Presentation mode" data-i18n-aria="tips.presentation">
+              <i data-lucide="presentation"></i>
+            </button>
+            <button class="btn btn-icon btn-ghost" id="btn-toggle-deepzoom" title="2D Ground Truth mode (Deep Zoom)" data-i18n-title="tips.deepZoom" aria-label="Toggle 2D mode" data-i18n-aria="tips.toggle2d">
+              <i data-lucide="layers"></i>
+            </button>
+            <button class="btn btn-icon btn-ghost" id="btn-toggle-decomposition" title="Decompose by channel" data-i18n-title="tips.decompChan" aria-label="Decompose channels" data-i18n-aria="tips.decompChans">
+              <i data-lucide="layout-grid"></i>
+            </button>
+            <button class="btn btn-icon btn-ghost" id="btn-toggle-zstack" title="Z-Stack Browser" data-i18n-title="tips.zstack" aria-label="Z-Stack Browser" data-i18n-aria="tips.zstack">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <rect x="4" y="2" width="16" height="4" rx="1"/>
+                <rect x="4" y="10" width="16" height="4" rx="1"/>
+                <rect x="4" y="18" width="16" height="4" rx="1"/>
+              </svg>
+            </button>
+          </div>
+        </div>
+        <div class="toolbar-cluster">
+          <span class="toolbar-label" data-i18n="viewer.help">Help</span>
+          <div class="toolbar-actions">
+            <a class="btn btn-icon btn-ghost" href="about.html" title="Help and methods" data-i18n-title="tips.help" aria-label="Help and methods" data-i18n-aria="tips.help">
+              <i data-lucide="help-circle"></i>
+            </a>
+            <!-- Color Blindness Toggle -->
+            <button class="btn btn-icon btn-ghost" onclick="ColorBlind.openModal()" data-i18n-title="colorblind.toggle">
+              <i data-lucide="eye" style="width:20px;height:20px"></i>
+            </button>
+            <button class="btn btn-icon btn-ghost" onclick="Theme.toggle()" data-i18n-title="theme.toggle" id="theme-toggle">
+              <i data-lucide="moon" data-theme-icon></i>
+            </button>
+          </div>
+        </div>
+      </div>
+    </header>
+
+    <!-- Main Workspace -->
+    <div class="viewer-workspace">
+      
+      <!-- Sidebar -->
+      <aside class="viewer-sidebar" id="viewer-sidebar">
+
+        <!-- Sidebar header with collapse button -->
+        <div class="sidebar-topbar">
+          <span class="sidebar-topbar-title" data-i18n="viewer.controls">Controls</span>
+          <button class="btn btn-icon btn-ghost btn-sm" id="btn-collapse-sidebar" title="Hide sidebar" aria-label="Hide sidebar">
+            <i data-lucide="panel-left-close"></i>
+          </button>
+        </div>
+
+        <!-- Channels Panel -->
+        <div class="panel-section">
+          <div class="panel-title">
+            <span data-i18n="viewer.channels">Channels</span>
+          </div>
+          <div id="channel-container">
+            <!-- Populated dynamically by channel-panel.js -->
+          </div>
+        </div>
+
+        <!-- Physical Scale Panel -->
+        <div class="panel-section">
+          <div class="panel-title">
+            <span data-i18n="viewer.scalePhysical">Physical Scale</span>
+            <button class="btn btn-outline btn-sm" id="btn-reset-z-scale" title="Reset display override" data-i18n-title="tips.resetDisplay" aria-label="Reset display override" data-i18n-aria="tips.resetDisplay">1:1</button>
+          </div>
+          <div>
+            <div class="slider-label"><span data-i18n="viewer.zOverride">Display Z override</span><span id="val-z-scale">1.00x</span></div>
+            <input type="range" id="slider-z-scale" min="25" max="200" value="100" step="1">
+          </div>
+          <div class="physical-status" id="physical-size-status" role="status" data-i18n="viewer.dimPending">Physical dimensions pending.</div>
+        </div>
+
+        <!-- Render Quality Panel -->
+        <div class="panel-section">
+          <div class="panel-title" data-i18n="viewer.renderQuality">Render Quality</div>
+            <select id="select-quality" class="form-select text-sm p-1 rounded border border-light bg-surface text-primary" style="width:100%;">
+              <option value="256x256">256x256</option>
+              <option value="512x512" selected>512x512</option>
+              <option value="1024x1024">1024x1024</option>
+              <option value="native">Native</option>
+            </select>
+            <div class="quality-status" id="quality-status">512x512 par défaut, fallback 256x256 si indisponible.</div>
+        </div>
+
+        <div class="panel-section">
+          <div class="panel-title" data-i18n="viewer.display">Display</div>
+          <div class="flex flex-col gap-3 mt-3">
+            <label class="text-xs text-muted">
+              Render Mode
+              <select id="select-render-mode" data-plugin-render-mode class="form-select text-sm p-1 rounded border border-light bg-surface text-primary" style="width:100%;" title="Select Render Mode" data-i18n-title="tips.renderModeDesc">
+                <!-- Populated dynamically by PluginRegistry (shaders) -->
+              </select>
+            </label>
+            <label class="text-xs text-muted">
+              Visibility (Exposure)
+              <div style="display:flex;align-items:center;gap:6px;">
+                <input type="range" id="slider-exposure" min="20" max="500" value="100" step="10" style="flex:1;">
+                <span id="val-exposure" style="min-width:36px;text-align:right;font-size:11px;">1.00×</span>
+              </div>
+            </label>
+            <label class="text-xs text-muted">
+              Background
+              <select id="select-background-preset" class="form-select text-sm p-1 rounded border border-light bg-surface text-primary" style="width:100%;">
+                <option value="dark" selected data-i18n="viewer.dark">Dark</option>
+                <option value="light" data-i18n="viewer.light">Light</option>
+                <option value="paper" data-i18n="viewer.paper">Paper</option>
+                <option value="transparent" data-i18n="viewer.transparent">Transparent</option>
+                <option value="custom" data-i18n="viewer.custom">Custom</option>
+              </select>
+            </label>
+            <label class="text-xs text-muted hidden" id="label-background-custom">
+              Custom color
+              <input type="color" id="input-background-color" value="#000000" class="form-input" style="height:36px;padding:4px;">
+            </label>
+            <div class="quality-status" id="volume-source-status" data-i18n="viewer.volSource">Volume source: web slice stack.</div>
+          </div>
+        </div>
+         
+       </aside>
+
+      <!-- Slice Inspector (right panel, hidden by default) -->
+      <aside class="slice-inspector hidden" id="slice-inspector">
+        <div class="panel-section">
+          <div class="panel-title" data-i18n="viewer.sliceInspector">Slice Inspector</div>
+          <div id="slicer-preview-mount" class="slicer-preview-mount"></div>
+        </div>
+        <div class="panel-section">
+          <div class="panel-title" style="margin-bottom:8px;" data-i18n="viewer.presets">Presets</div>
+          <div class="slicer-presets">
+            <button class="btn btn-outline btn-sm slicer-preset active" data-preset="xy" data-i18n="viewer.xy">XY</button>
+            <button class="btn btn-outline btn-sm slicer-preset" data-preset="xz" data-i18n="viewer.xz">XZ</button>
+            <button class="btn btn-outline btn-sm slicer-preset" data-preset="yz" data-i18n="viewer.yz">YZ</button>
+          </div>
+        </div>
+        <div class="panel-section">
+          <div class="slider-label"><span data-i18n="viewer.position">Position</span><span id="slicer-val-pos">0.50</span></div>
+          <input type="range" id="slicer-position" min="0" max="100" value="50" step="1">
+          <div class="slider-label"><span data-i18n="viewer.yaw">Yaw</span><span id="slicer-val-yaw">0°</span></div>
+          <input type="range" id="slicer-yaw" min="-180" max="180" value="0" step="1">
+          <div class="slider-label"><span data-i18n="viewer.pitch">Pitch</span><span id="slicer-val-pitch">0°</span></div>
+          <input type="range" id="slicer-pitch" min="-89" max="89" value="0" step="1">
+          <div class="slider-label"><span data-i18n="viewer.roll">Roll</span><span id="slicer-val-roll">0°</span></div>
+          <input type="range" id="slicer-roll" min="-180" max="180" value="0" step="1">
+        </div>
+        <div class="panel-section">
+          <div class="slider-label"><span data-i18n="viewer.slabThick">Slab thickness</span><span id="slicer-val-slab">1</span></div>
+          <input type="range" id="slicer-slab" min="1" max="32" value="1" step="1">
+          <label class="text-xs text-muted" style="margin-top:6px;">
+            Projection
+            <select id="slicer-projection" class="form-select text-sm p-1 rounded border border-light bg-surface text-primary" style="width:100%;">
+              <option value="single" selected data-i18n="viewer.single">Single</option>
+              <option value="mip" data-i18n="viewer.mip">MIP</option>
+              <option value="average" data-i18n="viewer.average">Average</option>
+            </select>
+          </label>
+        </div>
+        <div class="panel-section">
+          <button class="btn btn-primary btn-sm" id="btn-slicer-studio" style="width:100%;">
+            <i data-lucide="microscope"></i> Open in Studio (HD)
+          </button>
+        </div>
+      </aside>
+
+      <!-- Z-Stack Browser (right panel, hidden by default) -->
+      <aside class="zstack-browser zstack-hidden" id="zstack-browser">
+        <div class="panel-section">
+          <div class="panel-title" style="display:flex;align-items:center;justify-content:space-between;">
+            <span data-i18n="viewer.zstackBrowser">Z-Stack Browser</span>
+            <button class="btn btn-icon btn-ghost btn-sm" id="btn-close-zstack" title="Close Z-Stack browser" data-i18n-title="tips.closeZstack" aria-label="Close" data-i18n-aria="tips.close">
+              <i data-lucide="x"></i>
+            </button>
+          </div>
+          <!-- Z-Stack diagram + vertical slider side by side -->
+          <div class="zstack-diagram-row">
+            <div class="zstack-diagram" id="zstack-diagram">
+              <canvas id="zstack-diagram-canvas" width="200" height="280"></canvas>
+            </div>
+            <div class="zstack-vslider-wrap">
+              <input type="range" id="zstack-slice-slider" class="zstack-vslider" min="0" max="0" value="0" step="1">
+            </div>
+          </div>
+          <div class="zstack-nav-row">
+            <button class="btn btn-outline btn-sm" id="btn-zstack-prev" title="Previous slice" data-i18n-title="tips.prevSlice"><i data-lucide="chevron-up"></i></button>
+            <span class="zstack-slice-readout" id="zstack-slice-label">1 / 1</span>
+            <button class="btn btn-outline btn-sm" id="btn-zstack-next" title="Next slice" data-i18n-title="tips.nextSlice"><i data-lucide="chevron-down"></i></button>
+          </div>
+        </div>
+        <div class="panel-section">
+          <div class="panel-title" style="margin-bottom:8px;" data-i18n="viewer.stackInfo">Stack Info</div>
+          <div class="zstack-info" id="zstack-info">
+            <div class="zstack-info-row"><span class="zstack-info-label" data-i18n="viewer.slices">Slices</span><span class="zstack-info-value" id="zstack-total-slices">—</span></div>
+            <div class="zstack-info-row"><span class="zstack-info-label">Range</span><span class="zstack-info-value" id="zstack-range">—</span></div>
+            <div class="zstack-info-row"><span class="zstack-info-label">Interval</span><span class="zstack-info-value" id="zstack-interval">—</span></div>
+            <div class="zstack-info-row"><span class="zstack-info-label" data-i18n="viewer.voxelZ">Voxel Z</span><span class="zstack-info-value" id="zstack-voxel-z">—</span></div>
+            <div class="zstack-info-row"><span class="zstack-info-label" data-i18n="viewer.channels">Channels</span><span class="zstack-info-value" id="zstack-channels">—</span></div>
+          </div>
+        </div>
+        <div class="panel-section">
+          <div class="slider-label"><span data-i18n="viewer.position">Position</span><span id="zstack-position-label">0.00 µm</span></div>
+          <div class="zstack-position-info" id="zstack-position-info" style="font-size:11px;color:var(--text-muted);margin-top:4px;">—</div>
+          <button class="btn btn-primary btn-sm" id="btn-zstack-studio" style="width:100%; margin-top:12px;">
+            <i data-lucide="scissors"></i> Open in Slice Studio
+          </button>
+        </div>
+      </aside>
+
+      <!-- Canvas Area -->
+      <div class="viewer-canvas-container" style="position: relative;">
+        <!-- Floating button to reopen the sidebar when collapsed -->
+        <button class="sidebar-reopen-btn" id="btn-reopen-sidebar" title="Show sidebar" aria-label="Show sidebar" style="display:none;">
+          <i data-lucide="panel-left-open"></i>
+        </button>
+        <canvas id="webgl-canvas"></canvas>
+        <div id="viewer-scale-bar" class="hidden" style="position:absolute; bottom:20px; right:20px; border-bottom:2px solid #fff; color:#fff; text-align:center; font-size:12px; font-weight:600; padding-bottom:4px; text-shadow:1px 1px 2px #000; z-index:10; pointer-events:none; min-width:40px; box-sizing: border-box;">200 µm</div>
+        <!-- Deep Zoom 2D Ground Truth Container (hidden by default) -->
+        <div id="deepzoom-container" class="deepzoom-container hidden" style="position:absolute;inset:0;z-index:5;background:#000;"></div>
+        <div id="deepzoom-controls" class="deepzoom-controls hidden" style="position:absolute;bottom:16px;left:50%;transform:translateX(-50%);z-index:6;display:flex;gap:8px;align-items:center;background:rgba(0,0,0,0.7);padding:6px 14px;border-radius:8px;">
+          <button class="btn btn-icon btn-ghost btn-sm" id="btn-dz-prev" title="Previous slice" data-i18n-title="tips.prevSlice"><i data-lucide="chevron-left"></i></button>
+          <span id="dz-slice-label" style="color:#fff;font-size:12px;font-family:var(--font-mono);min-width:80px;text-align:center;">Z 0 / 0</span>
+          <button class="btn btn-icon btn-ghost btn-sm" id="btn-dz-next" title="Next slice" data-i18n-title="tips.nextSlice"><i data-lucide="chevron-right"></i></button>
+          <button class="btn btn-outline btn-sm" id="btn-dz-exit" style="margin-left:8px;" data-i18n="viewer.back3d">Back to 3D</button>
+        </div>
+        
+        <!-- Controls Overlay (center-left) -->
+        <div class="canvas-overlay">
+          <button class="btn btn-icon btn-solid" id="btn-center-sample" title="Center sample" data-i18n-title="tips.center" aria-label="Center sample" data-i18n-aria="tips.center">
+            <i data-lucide="focus"></i>
+          </button>
+          <button class="btn btn-icon btn-solid" id="btn-reset-view" title="Reset view" data-i18n-title="tips.resetViewLow" aria-label="Reset view" data-i18n-aria="tips.resetViewLow">
+            <i data-lucide="rotate-ccw"></i>
+          </button>
+        </div>
+
+        <!-- Quality loading progress (bottom-left) -->
+        <div class="quality-stream-progress hidden" id="quality-stream-progress" aria-live="polite">
+          <div class="quality-stream-progress-text" id="quality-stream-progress-text">Medium 0%</div>
+          <div class="quality-stream-progress-track">
+            <div class="quality-stream-progress-fill" id="quality-stream-progress-fill"></div>
+          </div>
+        </div>
+
+        <!-- Gaussian blur progress toast (bottom-right) -->
+        <div class="blur-progress-toast hidden" id="blur-progress-toast" aria-live="polite">
+          <i data-lucide="sparkles" class="blur-progress-icon"></i>
+          <div class="blur-progress-body">
+            <div class="blur-progress-label">Denoising...</div>
+            <div class="blur-progress-track">
+              <div class="blur-progress-fill" id="blur-progress-fill"></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Distance Measurement Panel -->
+        <div class="scientific-panel" id="volume-measure-panel">
+          <div class="scientific-panel-header">
+            <strong data-i18n="viewer.distMeasure">Distance Measurement</strong>
+            <button class="btn btn-icon btn-ghost" id="btn-close-volume-measure" aria-label="Close measurement" data-i18n-aria="tips.closeMeasure">
+              <i data-lucide="x"></i>
+            </button>
+          </div>
+          <div class="scientific-panel-body">
+            <div id="volume-measure-status" class="tracking-inspector text-sm text-muted" data-i18n="viewer.measureDesc">Click two points on the embryo surface.</div>
+            <div style="margin-bottom: 8px; display: flex; align-items: center; gap: 8px;">
+              <label class="flex items-center gap-2 text-sm cursor-pointer" style="color: var(--text-primary);">
+                <input type="checkbox" id="toggle-measure-3d-labels" checked>
+                <span>Valeurs 3D</span>
+              </label>
+              <input type="range" id="measure-text-size" min="10" max="100" value="48" style="flex: 1; min-width: 0;" title="Taille du texte" data-i18n-title="tips.textSize">
+            </div>
+            <div class="tracking-science-box" id="volume-measure-list" data-i18n="viewer.noMeasure">No saved measurement yet.</div>
+            <div class="channel-actions">
+              <button class="btn btn-outline btn-sm" id="btn-clear-volume-measure">
+                <i data-lucide="eraser"></i> Clear measurements
+              </button>
+            </div>
+          </div>
+        </div>
+        
+        <!-- Loader -->
+        <div class="viewer-loader" id="viewer-loader">
+          <i data-lucide="loader-2" class="animate-spin" style="width:48px;height:48px;margin-bottom:16px;"></i>
+          <h3 id="loader-text">Loading dataset...</h3>
+          <div class="progress-bar-container">
+            <div class="progress-bar-fill" id="loader-progress"></div>
+          </div>
+        </div>
+      </div>
+      
+      <!-- Decomposition Panel (right panel, hidden by default) -->
+      <aside class="decomposition-panel hidden" id="decomposition-panel" style="width: 250px; flex-shrink: 0; background: var(--bg-surface); border-left: 1px solid var(--border-light); display: flex; flex-direction: column;">
+        <div class="panel-section" style="flex-shrink: 0; border-bottom: 1px solid var(--border-light);">
+          <div class="panel-title" style="display:flex;align-items:center;justify-content:space-between;">
+            <span data-i18n="viewer.split">Channel Split</span>
+            <button class="btn btn-icon btn-ghost btn-sm" id="btn-close-decomposition" title="Close Decomposition" data-i18n-title="tips.closeDecomp" aria-label="Close" data-i18n-aria="tips.close">
+              <i data-lucide="x"></i>
+            </button>
+          </div>
+          <div style="display: flex; gap: 4px; margin-top: 8px;" id="export-layout-group">
+            <button class="btn btn-outline btn-sm active" data-layout="main-right" title="Main + Right" data-i18n-title="tips.mainRight" style="flex: 1; padding: 0;">
+              <i data-lucide="layout-template"></i>
+            </button>
+            <button class="btn btn-outline btn-sm" data-layout="grid" title="Grid Only" data-i18n-title="tips.gridOnly" style="flex: 1; padding: 0;">
+              <i data-lucide="grid-3x3"></i>
+            </button>
+            <button class="btn btn-outline btn-sm" data-layout="horizontal" title="Horizontal Strip" data-i18n-title="tips.horiz" style="flex: 1; padding: 0;">
+              <i data-lucide="gallery-horizontal-end"></i>
+            </button>
+            <button class="btn btn-primary btn-sm" id="btn-export-decomposition" style="flex: 2; padding: 0 4px;">
+              <i data-lucide="download"></i> Export
+            </button>
+          </div>
+        </div>
+        <div class="decomposition-list" id="decomposition-list" style="flex: 1; overflow-y: auto; padding: 12px; display: flex; flex-direction: column; gap: 12px;">
+           <!-- Squares go here -->
+        </div>
+      </aside>
+      
+    </div>
+
+    <!-- Timeline (Hidden by default, shown for LiveImaging) -->
+    <div id="timeline-panel" class="hidden" style="flex-shrink: 0; width: 100%;"></div>
+
+  </div>
+  <!-- Studio Editor Mode -->
+  <div class="studio-layout hidden" id="studio-layout">
+    <div class="studio-header">
+      <div class="studio-header-left">
+        <h2 data-i18n="viewer.sliceStudio">Slice Studio</h2>
+        <span class="text-xs text-muted" id="studio-subtitle" data-i18n="viewer.studioSubtitle">Edit and Annotate</span>
+      </div>
+      <div class="studio-header-right">
+        <input type="file" id="studio-import-file" accept=".json" class="hidden">
+        <button class="btn btn-outline btn-sm" id="btn-studio-import"><i data-lucide="upload"></i><span data-i18n="viewer.importJson">Import JSON</span></button>
+        <button class="btn btn-outline btn-sm" id="btn-studio-export-json"><i data-lucide="file-json"></i><span data-i18n="viewer.saveJson">Save JSON</span></button>
+        <button class="btn btn-primary btn-sm" id="btn-studio-export-png"><i data-lucide="download"></i><span data-i18n="viewer.exportPng">Export PNG</span></button>
+        <button class="btn btn-outline btn-sm" id="btn-studio-reset-view" title="Reset View" data-i18n-title="tips.resetView"><i data-lucide="refresh-ccw"></i></button>
+        <div class="divider-vertical"></div>
+        <button class="btn btn-icon btn-ghost" id="btn-close-studio" title="Back to 3D Viewer" data-i18n-title="tips.back3d"><i data-lucide="x"></i></button>
+      </div>
+    </div>
+    <div class="studio-body">
+      <div class="studio-sidebar-left">
+        <div class="panel-section">
+          <div class="panel-title" data-i18n="viewer.tools">Tools</div>
+          <div class="studio-tools-grid">
+            <button class="btn btn-ghost btn-sm active" data-studio-tool="select" title="Select/Move" data-i18n-title="tips.selectMove"><i data-lucide="mouse-pointer-2"></i></button>
+            <button class="btn btn-ghost btn-sm" data-studio-tool="rectangle" title="Rectangle" data-i18n-title="tips.rect"><i data-lucide="square"></i></button>
+            <button class="btn btn-ghost btn-sm" data-studio-tool="ellipse" title="Ellipse" data-i18n-title="tips.ellipse"><i data-lucide="circle"></i></button>
+            <button class="btn btn-ghost btn-sm" data-studio-tool="arrow" title="Arrow" data-i18n-title="tips.arrow"><i data-lucide="move-right"></i></button>
+            <button class="btn btn-ghost btn-sm" data-studio-tool="line" title="Line" data-i18n-title="tips.line"><i data-lucide="minus"></i></button>
+            <button class="btn btn-ghost btn-sm" data-studio-tool="text" title="Text" data-i18n-title="tips.text"><i data-lucide="type"></i></button>
+            <button class="btn btn-ghost btn-sm" data-studio-tool="scalebar" title="Scale Bar" data-i18n-title="tips.scaleBar"><i data-lucide="ruler"></i></button>
+          </div>
+        </div>
+        <div class="panel-section flex-1" style="display:flex; flex-direction:column; min-height:0;">
+          <div class="panel-title" data-i18n="viewer.layers">Layers</div>
+          <div class="studio-layers-list" id="studio-layers-list">
+            <!-- Populated via JS -->
+          </div>
+        </div>
+      </div>
+      <div class="studio-workspace" id="studio-workspace">
+        <canvas id="studio-canvas"></canvas>
+      </div>
+      <div class="studio-sidebar-right">
+        <div class="panel-section">
+          <div class="panel-title" data-i18n="viewer.properties">Properties</div>
+          <div class="studio-properties" id="studio-properties">
+            <p class="text-xs text-muted" data-i18n="studio.selectObject">Select an object to edit properties.</p>
+            <div class="studio-property-row">
+              <button class="btn btn-outline btn-sm" data-studio-command="add-guide-x" data-i18n="studio.guideX">Guide X</button>
+              <button class="btn btn-outline btn-sm" data-studio-command="add-guide-y" data-i18n="studio.guideY">Guide Y</button>
+            </div>
+          </div>
+        </div>
+        <div class="panel-section">
+          <div class="panel-title" data-i18n="viewer.channels">Channels</div>
+          <div id="studio-channels" class="studio-channels-list">
+            <!-- Populated via JS -->
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <script src="js/core/utils.js"></script>
+  <script src="js/core/i18n.js"></script>
+  <script src="js/core/theme.js"></script>
+  <script src="js/core/colorblind.js?v=20260615-fixed1"></script>
+  <script src="js/core/catalog.js"></script>
+  <script src="js/core/download-manifest.js"></script>
+  <script src="js/core/display-presets.js"></script>
+  <script src="js/core/volume-source-manager.js"></script>
+  <script src="js/core/workspace-state.js"></script>
+  <script src="js/core/measurement-store.js"></script>
+  <script src="js/core/url-state.js?v=20260615-fixed1"></script>
+  <script src="js/core/export-manager.js?v=20260615-fixed1"></script>
+  <script src="js/core/tool-manager.js?v=20260615-fixed1"></script>
+  <script src="js/core/annotation-manager.js?v=20260615-fixed1"></script>
+  <script src="js/core/perf-telemetry.js"></script>
+  <script src="js/core/plugin-registry.js?v=20260615-fixed1"></script>
+  <script src="js/core/svr-manager.js?v=20260615-fixed1"></script>
+  <script src="js/core/brick-loader.js?v=20260615-fixed1"></script>
+  <script src="js/core/aabb-intersector.js"></script>
+
+  <script src="js/components/channel-panel.js?v=20260615-fixed1"></script>
+  <script src="js/components/decomposition-panel.js"></script>
+  <script src="js/components/timeline.js?v=20260615-fixed1"></script>
+  <script src="js/components/annotation-layer.js?v=20260615-fixed1"></script>
+  <script src="js/components/studio-editor.js?v=20260615-fixed1"></script>
+  <script src="js/components/deepzoom-viewer.js"></script>
+  <script src="js/viewers/volume-grid.js?v=20260615-fixed1"></script>
+
+  <script src="js/viewers/volume-slicer.js?v=20260615-fixed1"></script>
+  <script src="js/viewers/volume-viewer.js?v=20260615-fixed1"></script>
+  <script src="js/pages/viewer.js?v=20260615-fixed1"></script>
+  <!-- Modules are loaded dynamically by PluginRegistry.loadModules() in viewer.js -->
+</body>
+</html>

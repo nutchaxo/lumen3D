@@ -1,0 +1,104 @@
+\chapter{Introduction et Vue d'Ensemble}
+\label{chap:introduction}
+
+Ce manuel constitue la documentation complète et technique de la plateforme web d'exploration de données biologiques 3D et 4D (WebPlatform) développée pour l'IRIBHM (Université Libre de Bruxelles). Il est destiné à la fois aux utilisateurs scientifiques souhaitant comprendre en détail le fonctionnement des outils, et aux développeurs ou ingénieurs chargés de la maintenance ou de l'évolution de la plateforme.
+
+\section{Contexte et Objectifs de la Plateforme}
+
+La \textbf{WebPlatform} a été conçue pour visualiser, analyser et comparer des jeux de données de microscopie confocale de très grande taille (de plusieurs gigaoctets) concernant le développement d'embryons de souris.
+
+\subsection{Typologies de Données Supportées}
+La plateforme gère nativement trois grandes catégories d'acquisitions issues des microscopes de l'IRIBHM :
+\begin{itemize}
+    \item \textbf{L'imagerie de tissus fixés (Fixed Imaging)} : piles confocales 3D haute résolution avec marquage par immunofluorescence (ex: DAPI pour les noyaux, GFP pour les lignées cellulaires spécifiques, Pecam1 pour le système vasculaire). Ces données capturent des états statiques mais à très haute fidélité spatiale.
+    \item \textbf{L'imagerie in vivo (Live Imaging)} : enregistrements confocaux 4D (3D + temps) qui permettent de suivre la dynamique temporelle du développement embryonnaire, notamment les mouvements cellulaires et la morphogenèse vasculaire sur plusieurs dizaines d'heures.
+    \item \textbf{Le suivi cellulaire (Cell Tracking)} : données spatiotemporelles complexes associant à chaque cellule détectée des coordonnées 3D au cours du temps, son arbre généalogique (lineage), ses divisions (mitoses) et ses fusions, permettant une modélisation quantitative fine.
+\end{itemize}
+
+\subsection{Défis Technologiques de l'Imagerie à l'IRIBHM}
+L'analyse de ces images pose des contraintes sévères sur les infrastructures informatiques :
+\begin{itemize}
+    \item \textbf{La volumétrie des fichiers} : Une pile d'acquisition confocale brute oscille typiquement entre 5 et 50 gigaoctets par embryon. Transférer ou charger de tels fichiers directement dans un navigateur web provoquerait instantanément une erreur de saturation de la mémoire (Heap Memory Crash).
+    \item \textbf{Les limitations mémoires des navigateurs} : Les moteurs JavaScript modernes (comme V8 dans Chrome) limitent l'allocation mémoire par onglet (souvent autour de 4 Go). Il est donc mathématiquement impossible de stocker l'intégralité d'un volume 3D non compressé en RAM.
+    \item \textbf{La bande passante réseau} : L'exploration en temps réel ne doit pas être pénalisée par des temps de chargement initiaux rédhibitoires. Un streaming asynchrone et intelligent est nécessaire pour obtenir un affichage immédiat.
+\end{itemize}
+
+\section{Principes de Conception (Philosophie du Projet)}
+
+Le développement de cette plateforme repose sur des principes fondamentaux stricts qui guident chaque ligne de code écrite :
+
+\subsection{La Rigueur Scientifique et "Zéro Approximation"}
+Toutes les formules, les transformations de coordonnées (matrices de projection, translations) et les calculs biologiques sont exacts. Il n'y a pas de données artificiellement mockées ou d'approximations visuelles altérant la vérité scientifique. Par exemple :
+\begin{itemize}
+    \item Les intensités de fluorescence affichées à l'écran correspondent exactement aux valeurs de numérisation du capteur du microscope (pas de lissage destructeur).
+    \item Les calculs de distances physiques prennent rigoureusement en compte l'anisotropie des voxels (la résolution en Z étant généralement différente de celle en X/Y).
+\end{itemize}
+
+\subsection{Haute Performance et Objectifs Visuels (60 FPS)}
+La visualisation fluide (cible de 60 images par seconde) de volumes massifs est assurée par des structures de données optimisées :
+\begin{itemize}
+    \item \textbf{Vanilla JavaScript et Three.js} : Le choix de ne pas utiliser de framework sur-couche lourd (comme React ou Angular) pour la partie rendu 3D permet de contrôler précisément le Garbage Collector de JavaScript, d'éviter les réallocations d'objets dans la boucle de rendu (\texttt{requestAnimationFrame}) et de libérer manuellement et proprement la VRAM (mémoire GPU) lors du déchargement des modèles.
+    \item \textbf{Octrees et structures de partitionnement spatial} : Permettent de ne rendre que les parties du volume visibles à l'écran (Frustum Culling) et de charger dynamiquement le niveau de détail approprié (LOD).
+\end{itemize}
+
+\subsection{La Transparence Algorithmique}
+Aucun calcul n'est dissimulé. Les algorithmes de rendu volumique (comme le Raymarching) et de recalage physique (comme la méthode de Kabsch) sont documentés mathématiquement au sein de ce manuel et explicitement implémentés dans le code source pour permettre une auditabilité totale par les chercheurs de l'ULB.
+
+\section{Architecture Technique et Pipeline de Données}
+
+L'écosystème de la WebPlatform est conçu de manière symétrique entre le traitement de données hors-ligne et l'exploration interactive en ligne.
+
+\subsection{Flux de Données Global (Data Flow)}
+Le cycle de vie d'une donnée d'étude suit le schéma rigoureux suivant :
+\begin{enumerate}
+    \item \textbf{Acquisition} : Capture sous le microscope confocal (fichiers bruts \texttt{.nd2}, \texttt{.czi}, \texttt{.tif}).
+    \item \textbf{Prétraitement local (DataPreprocessor)} :
+    \begin{itemize}
+        \item Extraction des métadonnées physiques.
+        \item Subdivision en blocs compressés (\texttt{Bricks}) via Dask.
+        \item Stabilisation spatio-temporelle 3D par l'algorithme de Kabsch.
+        \item Génération des projections d'intensité maximale (MIP) pour les aperçus.
+    \end{itemize}
+    \item \textbf{Stockage Statique (DATA\_WEB)} : Dépôt des fichiers optimisés sur un serveur de fichiers sécurisé.
+    \item \textbf{Chargement Asynchrone (Client Web)} : Requêtes HTTP partielles (Range Requests) effectuées par le navigateur pour ne récupérer que les "bricks" nécessaires au point de vue de l'utilisateur.
+    \item \textbf{Rendu WebGL (GPU)} : Raymarching en temps réel dans les shaders fragment pour reconstruire le volume 3D ou affichage interactif 2D tuilé pour le DeepZoom.
+\end{enumerate}
+
+\subsection{Arborescence Technique du Projet (Project Directory Tree)}
+L'organisation du code source reflète cette séparation stricte des concepts :
+
+\begin{lstlisting}[caption=Structure générale des dossiers du projet]
+WebPlatform/
+|-- DATA_WEB/                 # Stockage des données biologiques optimisées
+|   |-- fixed/                # Volumes 3D statiques
+|   |-- live/                 # Volumes 4D dynamiques (temporels)
+|   |-- tracking/             # Données de suivi cellulaire (.json)
+|   |-- tiles2d/              # Pyramides d'images pour le DeepZoom 2D
+|   `-- catalog.json          # Index central des métadonnées de l'étude
+|-- DOCS/                     # Documentation technique LaTeX
+|-- preprocess/               # Scripts Python de prétraitement (Dask, Kabsch)
+|-- css/                      # Feuilles de style pour l'interface UI
+|-- js/                       # Code source JavaScript applicatif
+|   |-- components/           # Composants réutilisables (deepzoom-viewer.js, etc.)
+|   |-- core/                 # Cœur mathématique et chargement (catalog.js)
+|   `-- pages/                # Logique applicative par page (viewer.js, compare.js)
+|-- explorer.html             # Page du catalogue
+|-- viewer.html               # Page de visualisation 3D individuelle
+|-- compare.html              # Page de comparaison multi-panneaux
+|-- tracking.html             # Page de suivi temporel 4D
+`-- deepzoom.html             # Page d'imagerie 2D ultra-haute résolution
+\end{lstlisting}
+
+\section{Sécurité, Confidentialité et Intégrité}
+
+Bien que la plateforme soit déployée en réseau local ou privé (intranet de l'IRIBHM) sans système d'authentification centralisé, elle intègre des mesures strictes pour préserver l'intégrité des stations de recherche.
+
+\subsection{Intégrité des Entrées (Input Sanitization)}
+Afin de prévenir tout déni de service (DoS) du navigateur web ou des failles mémoires (Memory Overflows), le chargeur de données valide rigoureusement la structure des fichiers importés (fichiers de trajectoires JSON, formats de tuiles). Tout fichier corrompu ou ne respectant pas le schéma attendu est immédiatement rejeté avec une alerte explicite à l'utilisateur, empêchant ainsi le blocage du thread principal ou le plantage du contexte WebGL.
+
+\subsection{Souveraineté des Données (Data Privacy)}
+Conformément aux exigences de confidentialité de la recherche médicale :
+\begin{itemize}
+    \item \textbf{Local-First} : L'intégralité du traitement et de l'affichage des données s'effectue localement. Aucune coordonnée de cellule, aucune image brute et aucun résultat d'étude n'est envoyé vers des API ou des serveurs tiers.
+    \item \textbf{Absence de Télémétrie} : La plateforme ne contient aucun outil de tracking ou d'analyse publicitaire externe, assurant l'anonymat total des travaux de recherche avant leur publication officielle.
+\end{itemize}

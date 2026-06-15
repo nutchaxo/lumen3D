@@ -1,0 +1,10 @@
+{
+  "id": "histogram",
+  "name": "Histogram Controls",
+  "version": "1.0.0",
+  "creator": "IRIBHM",
+  "placement": "channels",
+  "subtype": "per-channel",
+  "order": 10,
+  "description": "Per-channel intensity histogram and min/max/gamma sliders."
+}

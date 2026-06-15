@@ -1,0 +1,412 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Tracking Viewer — IRIBHM Microscopy</title>
+
+  <!-- Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+
+  <!-- Libraries -->
+  <script src="https://unpkg.com/lucide@0.344.0/dist/umd/lucide.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.147.0/build/three.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.147.0/examples/js/controls/OrbitControls.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.147.0/examples/js/loaders/GLTFLoader.js"></script>
+  <script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
+
+  <!-- Stylesheets -->
+  <link rel="stylesheet" href="css/variables.css">
+  <link rel="stylesheet" href="css/themes.css">
+  <link rel="stylesheet" href="css/base.css">
+  <link rel="stylesheet" href="css/components.css">
+  <link rel="stylesheet" href="css/viewer.css">
+  <link rel="stylesheet" href="css/tools.css">
+  <style>
+    .tracking-stats-panel {
+      position: absolute;
+      top: 16px;
+      left: 16px;
+      z-index: 10;
+      background: var(--bg-surface);
+      border: 1px solid var(--border-light);
+      border-radius: var(--radius-lg);
+      padding: 12px;
+      box-shadow: var(--shadow-lg);
+      width: 350px;
+      height: 250px;
+      display: none;
+      flex-direction: column;
+    }
+    .tracking-stats-panel.visible {
+      display: flex;
+    }
+    .panel-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 8px;
+    }
+    .panel-row label {
+      font-size: var(--text-sm);
+      color: var(--text-secondary);
+      flex: 1;
+    }
+  </style>
+</head>
+<body>
+
+  <div class="viewer-layout">
+    
+    <!-- Header -->
+    <header class="viewer-header">
+      <div class="viewer-header-left">
+        <a href="explorer.html" class="btn btn-icon btn-ghost" data-i18n-title="nav.back">
+          <i data-lucide="arrow-left"></i>
+        </a>
+        <div>
+          <div class="viewer-title" id="dataset-title">Loading Dataset...</div>
+          <div class="viewer-subtitle" id="dataset-subtitle">--</div>
+        </div>
+      </div>
+      <div class="viewer-header-right viewer-toolbar">
+        <div class="toolbar-cluster">
+          <span class="toolbar-label">Tools</span>
+          <div class="toolbar-actions">
+            <button class="btn btn-icon btn-ghost tool-chip" data-tool="navigate" title="Navigate" data-i18n-title="tips.navigate" aria-label="Navigate" data-i18n-aria="tips.navigate">
+              <i data-lucide="mouse-pointer-2"></i>
+            </button>
+            <button class="btn btn-icon btn-ghost tool-chip" data-tool="inspect" title="Inspect cell" data-i18n-title="tips.inspect" aria-label="Inspect cell" data-i18n-aria="tips.inspect">
+              <i data-lucide="scan-search"></i>
+            </button>
+            <button class="btn btn-icon btn-ghost tool-chip" data-tool="cut" title="Clip embryo surface" data-i18n-title="tips.clip" aria-label="Clip embryo surface" data-i18n-aria="tips.clip">
+              <i data-lucide="slice"></i>
+            </button>
+            <button class="btn btn-icon btn-ghost tool-chip" data-tool="measure" title="Measure cell distance" data-i18n-title="tips.measureCell" aria-label="Measure cell distance" data-i18n-aria="tips.measureCell">
+              <i data-lucide="ruler"></i>
+            </button>
+            <button class="btn btn-outline btn-sm" id="btn-toggle-graph" disabled>
+              <i data-lucide="bar-chart-2"></i> <span>Chart Studio</span>
+            </button>
+          </div>
+        </div>
+        <div class="toolbar-cluster">
+          <span class="toolbar-label">Export</span>
+          <div class="toolbar-actions">
+            <button class="btn btn-icon btn-ghost" id="btn-export" title="Download Center" data-i18n-title="tips.download" aria-label="Download Center" data-i18n-aria="tips.download">
+              <i data-lucide="download"></i>
+            </button>
+            <button class="btn btn-icon btn-ghost" id="btn-save-workspace" title="Save workspace" data-i18n-title="tips.saveWksp" aria-label="Save workspace" data-i18n-aria="tips.saveWksp">
+              <i data-lucide="save"></i>
+            </button>
+            <button class="btn btn-icon btn-ghost" id="btn-restore-workspace" title="Restore workspace" data-i18n-title="tips.restoreWksp" aria-label="Restore workspace" data-i18n-aria="tips.restoreWksp">
+              <i data-lucide="folder-open"></i>
+            </button>
+          </div>
+        </div>
+        <div class="toolbar-cluster">
+          <span class="toolbar-label">Visuals</span>
+          <div class="toolbar-actions">
+            <button class="btn btn-icon btn-ghost" id="btn-toggle-grid" title="Toggle Grid (None / Normal / Fine)" data-i18n-title="tips.toggleGridFull" aria-label="Toggle Grid" data-i18n-aria="tips.toggleGrid">
+              <i data-lucide="grid"></i>
+            </button>
+            <button class="btn btn-icon btn-ghost" id="btn-toggle-axes" title="Toggle Axes" data-i18n-title="tips.toggleAxes" aria-label="Toggle Axes" data-i18n-aria="tips.toggleAxes">
+              <i data-lucide="corner-down-right"></i>
+            </button>
+          </div>
+        </div>
+        <div class="toolbar-cluster">
+          <span class="toolbar-label">Layouts</span>
+          <div class="toolbar-actions">
+            <button class="btn btn-icon btn-ghost" id="btn-presentation" title="Presentation mode" data-i18n-title="tips.presentation" aria-label="Presentation mode" data-i18n-aria="tips.presentation">
+              <i data-lucide="presentation"></i>
+            </button>
+          </div>
+        </div>
+        <div class="toolbar-cluster">
+          <span class="toolbar-label" data-i18n="tracking.linkedData">Linked Data</span>
+          <div class="toolbar-actions">
+            <button class="btn btn-icon btn-ghost" id="btn-linked-data" title="Linked datasets" data-i18n-title="tips.linked" aria-label="Linked datasets" data-i18n-aria="tips.linked">
+              <i data-lucide="link-2"></i>
+            </button>
+          </div>
+        </div>
+        <div class="toolbar-cluster">
+          <span class="toolbar-label">Help</span>
+          <div class="toolbar-actions">
+            <a class="btn btn-icon btn-ghost" href="about.html" title="Help and methods" data-i18n-title="tips.help" aria-label="Help and methods" data-i18n-aria="tips.help">
+              <i data-lucide="help-circle"></i>
+            </a>
+                  <!-- Color Blindness Toggle -->
+      <button class="btn btn-icon btn-ghost" onclick="ColorBlind.openModal()" data-i18n-title="colorblind.toggle">
+        <i data-lucide="eye" style="width:20px;height:20px"></i>
+      </button>
+      <button class="btn btn-icon btn-ghost" onclick="Theme.toggle()" data-i18n-title="theme.toggle" id="theme-toggle">
+              <i data-lucide="moon" data-theme-icon></i>
+            </button>
+          </div>
+        </div>
+      </div>
+    </header>
+
+    <!-- Main Workspace -->
+    <div class="viewer-workspace">
+      
+      <!-- Sidebar -->
+      <aside class="viewer-sidebar">
+        
+        <!-- Filters Panel -->
+        <div class="panel-section">
+          <div class="panel-title" data-i18n="tracking.filters">Tracking Filters</div>
+          <div class="flex flex-col gap-2 mt-3">
+            <label class="flex items-center gap-2 cursor-pointer text-sm">
+              <input type="checkbox" id="toggle-mitosis" checked>
+              <span class="w-3 h-3 rounded-full" style="background: #e74c3c"></span>
+              Mitoses
+            </label>
+            <label class="flex items-center gap-2 cursor-pointer text-sm">
+              <input type="checkbox" id="toggle-fusion" checked>
+              <span class="w-3 h-3 rounded-full" style="background: #000; border: 1px solid var(--border-light)"></span>
+              Fusions
+            </label>
+            <label class="flex items-center gap-2 cursor-pointer text-sm">
+              <input type="checkbox" id="toggle-stabilized">
+              <span class="w-3 h-3 rounded-full" style="background: var(--color-primary)"></span>
+              Stabilized Coordinates
+            </label>
+          </div>
+        </div>
+
+        <!-- Surface Panel -->
+        <div class="panel-section">
+          <div class="panel-title" data-i18n="tracking.surface">Embryo Surface</div>
+          <div class="flex flex-col gap-3 mt-3">
+            <div>
+              <div class="slider-label"><span data-i18n="tracking.opacity">Opacity</span><span id="val-opacity">0%</span></div>
+              <input type="range" id="slider-opacity" min="0" max="100" value="0">
+            </div>
+            
+             <div class="flex flex-col gap-1 mt-2">
+               <label class="text-xs font-semibold text-muted" data-i18n="tracking.colorMode">Color Mode</label>
+               <select id="select-surface-color" class="form-select text-sm p-1 rounded border border-light bg-surface text-primary">
+                 <option value="uniform" data-i18n="tracking.uniform">Uniform</option>
+                 <option value="density" selected data-i18n="tracking.density">Density</option>
+                 <option value="region" data-i18n="tracking.region">Region</option>
+               </select>
+             </div>
+           </div>
+         </div>
+
+         <div class="panel-section">
+           <div class="panel-title" data-i18n="tracking.display">Display</div>
+           <div class="flex flex-col gap-3 mt-3">
+             <div>
+               <div class="slider-label"><span data-i18n="tracking.pointSize">Point Size</span><span id="val-point-scale">1.0x</span></div>
+               <input type="range" id="slider-point-scale" min="0.1" max="2.0" step="0.1" value="1.0">
+             </div>
+             <label class="text-xs text-muted">
+               Background
+               <select id="select-background-preset" class="form-select text-sm p-1 rounded border border-light bg-surface text-primary">
+                 <option value="dark" selected data-i18n="tracking.dark">Dark</option>
+                 <option value="light" data-i18n="tracking.light">Light</option>
+                 <option value="paper" data-i18n="tracking.paper">Paper</option>
+                 <option value="transparent" data-i18n="tracking.transparent">Transparent</option>
+                 <option value="custom" data-i18n="tracking.custom">Custom</option>
+               </select>
+             </label>
+             <label class="text-xs text-muted hidden" id="label-background-custom">
+               Custom color
+               <input type="color" id="input-background-color" value="#1a1d27" class="form-input" style="height:36px;padding:4px;">
+             </label>
+           </div>
+         </div>
+
+        <!-- Find Cell -->
+        <div class="panel-section">
+          <div class="panel-title" data-i18n="tracking.findCell">Find Cell</div>
+          <div class="flex items-center gap-2 mt-3">
+            <input type="text" id="input-find-cell" placeholder="Cell ID (e.g. 75)" class="form-input flex-1 text-sm p-1.5 rounded border border-light bg-surface text-primary">
+            <button class="btn btn-primary btn-sm" id="btn-find-cell" disabled data-i18n="tracking.findBtn">Find</button>
+          </div>
+          <div id="find-cell-status" class="text-xs text-muted mt-2 h-4"></div>
+        </div>
+
+        <div class="panel-section">
+          <div class="panel-title" data-i18n="tracking.inspector">Cell Inspector</div>
+          <div id="cell-inspector" class="tracking-inspector text-muted text-sm" data-i18n="tracking.inspectorDesc">Click a cell or search by ID.</div>
+        </div>
+
+        <div class="panel-section">
+          <div class="panel-title" data-i18n="tracking.tools">Tracking Tools</div>
+          <div class="tracking-tool-stack">
+            <label class="tool-toggle">
+              <input type="checkbox" id="toggle-velocity-field">
+              <span><i data-lucide="move-3d"></i> <span data-i18n="tracking.velocityField">Velocity field</span></span>
+            </label>
+            <label class="tool-toggle">
+              <input type="checkbox" id="toggle-neighbor-network">
+              <span><i data-lucide="network"></i> <span data-i18n="tracking.neighborNetwork">Neighbor network</span></span>
+            </label>
+            <label class="text-xs text-muted">
+              Neighbor distance
+              <select id="select-neighbor-threshold" class="form-select text-sm p-1 rounded border border-light bg-surface text-primary">
+                <option value="35" data-i18n="tracking.tight">Tight (35)</option>
+                <option value="55" selected data-i18n="tracking.standard">Standard (55)</option>
+                <option value="85" data-i18n="tracking.broad">Broad (85)</option>
+                <option value="120" data-i18n="tracking.exploratory">Exploratory (120)</option>
+              </select>
+            </label>
+            <div class="tracking-tool-actions">
+              <button class="btn btn-outline btn-sm" id="btn-export-neighbors"><i data-lucide="table"></i> <span data-i18n="tracking.neighborsCsv">Neighbors CSV</span></button>
+              <button class="btn btn-outline btn-sm" id="btn-export-lineage"><i data-lucide="git-branch"></i> <span data-i18n="tracking.lineageJson">Lineage JSON</span></button>
+            </div>
+          </div>
+        </div>
+
+        <div class="panel-section">
+          <div class="panel-title" data-i18n="tracking.lineageTree">Lineage Tree</div>
+          <div id="lineage-tree" class="tracking-science-box text-muted text-sm" data-i18n="tracking.lineageDesc">Select a cell to inspect lineage.</div>
+        </div>
+
+        <div class="panel-section">
+          <div class="panel-title" data-i18n="tracking.neighborTitle">Neighbor Network</div>
+          <div id="neighbor-network" class="tracking-science-box text-muted text-sm" data-i18n="tracking.neighborDesc">Select a cell to inspect neighbors at the current frame.</div>
+        </div>
+
+        <div class="panel-section">
+          <div class="panel-title" data-i18n="tracking.presetsTitle">Scientific Presets</div>
+          <div class="chart-actions">
+            <button class="btn btn-outline btn-sm" data-chart-metric="population" disabled data-i18n="tracking.population">Population</button>
+            <button class="btn btn-outline btn-sm" data-chart-metric="velocity" disabled data-i18n="tracking.velocity">Velocity</button>
+            <button class="btn btn-outline btn-sm" data-chart-metric="neighbors" disabled data-i18n="tracking.neighbors">Neighbors</button>
+            <button class="btn btn-outline btn-sm" data-chart-metric="mitoses" disabled data-i18n="tracking.mitoses">Mitoses</button>
+          </div>
+        </div>
+
+        <!-- Linked Data Panel -->
+        <div class="panel-section hidden" id="related-panel">
+          <div class="panel-title" data-i18n="tracking.linkedData">Linked Data</div>
+          <div class="related-list" id="related-datasets"></div>
+        </div>
+        
+      </aside>
+
+      <!-- Canvas Area -->
+      <div class="viewer-canvas-container" style="position: relative;">
+        <div id="viewer-scale-bar" class="hidden" style="position:absolute; bottom:20px; right:20px; border-bottom:2px solid #fff; color:#fff; text-align:center; font-size:12px; font-weight:600; padding-bottom:4px; text-shadow:1px 1px 2px #000; z-index:10; pointer-events:none; min-width:40px; box-sizing: border-box;">200 µm</div>
+        <div id="tracking-canvas" style="width: 100%; height: 100%;"></div>
+        <div class="viewer-legend hidden" id="tracking-legend"></div>
+
+        <div class="canvas-overlay">
+          <button class="btn btn-icon btn-solid" id="btn-center-sample" title="Center sample" data-i18n-title="tips.center" aria-label="Center sample" data-i18n-aria="tips.center">
+            <i data-lucide="focus"></i>
+          </button>
+        </div>
+        
+        <!-- Plotly Graph Overlay -->
+        <div class="tracking-stats-panel" id="stats-panel">
+          <div class="flex justify-between items-center mb-2 shrink-0">
+            <strong class="text-primary text-sm flex items-center gap-2" id="stats-title"><i data-lucide="pie-chart" class="w-4 h-4"></i> Population Metrics</strong>
+            <div class="flex items-center gap-2">
+              <button class="btn btn-outline btn-sm active" id="btn-chart-scale-linear" data-i18n="tracking.linear">Linear</button>
+              <button class="btn btn-outline btn-sm" id="btn-chart-scale-log" data-i18n="tracking.log">Log</button>
+              <button class="btn btn-icon btn-ghost w-6 h-6 p-0" id="btn-close-graph"><i data-lucide="x" class="w-4 h-4"></i></button>
+            </div>
+          </div>
+          <div id="stats-graph" class="flex-1 w-full h-full"></div>
+        </div>
+
+        <div class="scientific-panel" id="tracking-measure-panel">
+          <div class="scientific-panel-header">
+            <strong data-i18n="tracking.cellDist">Cell Distance</strong>
+            <button class="btn btn-icon btn-ghost" id="btn-close-tracking-measure" aria-label="Close measurement" data-i18n-aria="tips.closeMeasure">
+              <i data-lucide="x"></i>
+            </button>
+          </div>
+          <div class="scientific-panel-body">
+            <div class="segmented" id="tracking-measure-mode">
+              <button class="btn btn-ghost btn-sm active" data-measure-mode="snapshot" data-i18n="tracking.snapshot">Snapshot</button>
+              <button class="btn btn-ghost btn-sm" data-measure-mode="follow-cells" data-i18n="tracking.followCells">Follow cells</button>
+            </div>
+            <div id="tracking-measure-status" class="tracking-inspector text-sm text-muted" data-i18n="tracking.measureDesc">Click two cells to measure their distance.</div>
+            <div class="tracking-science-box" id="tracking-measure-list" data-i18n="tracking.noMeasure">No saved measurement yet.</div>
+            <div class="channel-actions">
+              <button class="btn btn-outline btn-sm" id="btn-clear-tracking-measure">
+                <i data-lucide="eraser"></i> Clear measurements
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <div class="scientific-panel" id="tracking-cut-panel">
+          <div class="scientific-panel-header">
+            <strong data-i18n="tracking.surfaceClip">Surface Clip</strong>
+            <button class="btn btn-icon btn-ghost" id="btn-close-tracking-cut" aria-label="Close clip panel" data-i18n-aria="tips.closeClip">
+              <i data-lucide="x"></i>
+            </button>
+          </div>
+          <div class="scientific-panel-body">
+            <div class="segmented" id="tracking-clip-mode">
+              <button class="btn btn-ghost btn-sm active" data-clip-mode="xy">XY</button>
+              <button class="btn btn-ghost btn-sm" data-clip-mode="xz">XZ</button>
+              <button class="btn btn-ghost btn-sm" data-clip-mode="yz">YZ</button>
+              <button class="btn btn-ghost btn-sm" data-clip-mode="oblique" data-i18n="tracking.oblique">Oblique</button>
+            </div>
+            <div>
+              <div class="slider-label"><span data-i18n="tracking.planePos">Plane position</span><span id="tracking-clip-pos-label">100%</span></div>
+              <input type="range" id="tracking-clip-position" min="0" max="100" value="100">
+            </div>
+            <div class="slice-studio-grid">
+              <label>
+                <span data-i18n="tracking.yaw">Yaw</span>
+                <input type="number" id="tracking-clip-yaw" min="-180" max="180" step="1" value="0">
+              </label>
+              <label>
+                <span data-i18n="tracking.pitch">Pitch</span>
+                <input type="number" id="tracking-clip-pitch" min="-89" max="89" step="1" value="0">
+              </label>
+            </div>
+            <div class="slice-actions">
+              <button class="btn btn-outline btn-sm" id="btn-reset-tracking-clip"><i data-lucide="rotate-ccw"></i> <span data-i18n="tracking.resetClip">Reset clip</span></button>
+              <button class="btn btn-outline btn-sm" id="btn-disable-tracking-clip"><i data-lucide="eye-off"></i> <span data-i18n="tracking.disable">Disable</span></button>
+            </div>
+            <p class="text-xs text-muted" data-i18n="tracking.clipDesc">Use orthogonal presets or switch to oblique clipping to inspect the embryo surface.</p>
+          </div>
+        </div>
+        
+        <!-- Loader -->
+        <div class="viewer-loader" id="viewer-loader">
+          <i data-lucide="loader-2" class="animate-spin" style="width:48px;height:48px;margin-bottom:16px;"></i>
+          <h3 id="loader-text" data-i18n="tracking.loading">Loading model and tracks...</h3>
+        </div>
+      </div>
+      
+    </div>
+
+    <!-- Timeline -->
+    <div id="timeline-panel" style="flex-shrink: 0; width: 100%;"></div>
+
+  </div>
+
+  <script src="js/core/utils.js?v=20260504"></script>
+  <script src="js/core/i18n.js?v=20260504"></script>
+    <script src="js/core/theme.js?v=20260504"></script>
+  <script src="js/core/colorblind.js?v=20260528"></script>
+  <script src="js/core/catalog.js?v=20260504"></script>
+  <script src="js/core/download-manifest.js?v=20260504"></script>
+  <script src="js/core/display-presets.js?v=20260504"></script>
+  <script src="js/core/workspace-state.js?v=20260504"></script>
+  <script src="js/core/measurement-store.js?v=20260504"></script>
+  <script src="js/core/export-manager.js?v=20260504"></script>
+  <script src="js/core/tool-manager.js?v=20260504"></script>
+  <script src="js/core/annotation-manager.js?v=20260504"></script>
+  <script src="js/components/timeline.js?v=20260506"></script>
+  <script src="js/core/analysis-store.js?v=20260504"></script>
+  <script src="js/components/chart-studio.js?v=20260504"></script>
+  
+  <script src="js/viewers/tracking-viewer.js?v=20260505-grid-fix15"></script>
+  <script src="js/pages/tracking.js?v=20260505-grid-fix15"></script>
+</body>
+</html>

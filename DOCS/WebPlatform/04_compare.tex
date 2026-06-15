@@ -1,0 +1,46 @@
+\chapter{Page Compare : Outil de Comparaison}
+\label{chap:compare}
+
+La page \textbf{Compare} (\texttt{compare.html} et \texttt{js/pages/compare.js}) offre un espace de travail multidimensionnel permettant de juxtaposer jusqu'à quatre jeux de données (statiques ou temporels). Elle est conçue pour l'analyse visuelle comparative, le contrôle qualité et la génération de planches de figures multicompartiments.
+
+\section{Architecture Multi-Panneaux}
+
+Afin d'isoler les contextes WebGL complexes et d'éviter les conflits d'états (variables globales de shaders), la page Compare adopte une architecture par \textbf{iFrames}.
+Lorsqu'un jeu de données est ajouté, l'application instancie dynamiquement un nouvel \texttt{iframe} pointant soit vers \texttt{viewer.html}, soit vers \texttt{tracking.html} en mode masqué (\texttt{hideHeader=true}).
+
+\subsection{Gestion de Grille et Redimensionnement}
+Le système propose plusieurs agencements (Layouts) : Grille automatique (Grid), Colonnes ou Lignes.
+Les séparateurs (Split Handles) permettent le redimensionnement interactif. L'algorithme met à jour un tableau de poids (\texttt{\_layoutWeights}) distribué via des grilles CSS (\texttt{grid-template-columns: minmax(0, Xfr)}).
+
+\section{Synchronisation Inter-Processus}
+
+L'une des fonctionnalités phares est la synchronisation bidirectionnelle. Les iframes communiquent entre eux et avec la page parent (Compare) via l'API Web \texttt{window.postMessage}.
+Les paramètres synchronisables (désactivables via la barre d'outils) sont :
+\begin{itemize}
+    \item \textbf{Caméra (\texttt{SYNC\_CAMERA})} : Synchronise le Quaternion de rotation, le panoramique (Pan) et le niveau de Zoom.
+    \item \textbf{Profondeur Z (\texttt{SYNC\_Z})} : Aligne le plan de coupe Slicer.
+    \item \textbf{Temps (\texttt{SYNC\_TIME})} : Synchronise la frame temporelle courante pour les données Live.
+    \item \textbf{Canaux (\texttt{SYNC\_CHANNELS})} : Synchronise l'activation et les seuils des canaux fluorescents.
+\end{itemize}
+
+\section{Décomposition par Canaux (Channel Decomposition)}
+
+La fonction \texttt{\_decomposeChannels()} est un outil analytique puissant pour l'étude des colocalisations. 
+Lorsqu'un utilisateur charge un volume possédant de multiples canaux fluorescents (ex: Noyau, Membrane, Protéine d'intérêt) et déclenche cet outil :
+\begin{enumerate}
+    \item L'outil clone l'iframe courant autant de fois qu'il y a de canaux (limité à 4 panneaux maximum).
+    \item Il désactive la synchronisation des couleurs (\texttt{SYNC\_CHANNELS = false}).
+    \item Il assigne via \texttt{postMessage} l'affichage exclusif du canal $0$ au premier panneau, du canal $1$ au deuxième, etc.
+\end{enumerate}
+
+\section{Compare Studio et Export Combiné}
+
+À l'instar du Studio Editor unique, la fonction \texttt{\_openCompareStudio()} capture le flux de tous les iframes actifs.
+\subsection{Calcul d'Échelle Physique (Physical Scaling)}
+Un défi majeur de la combinaison de plusieurs sources est le respect de la taille réelle. Des microscopes différents ou des grossissements différents génèrent des ratios pixels/$\mu m$ distincts.
+Si l'option \textbf{Physical Scale} est activée, l'algorithme :
+\begin{enumerate}
+    \item Calcule le rapport minimal Pixel/Micromètre par pixel parmi tous les panneaux : \texttt{minPxPerUm}.
+    \item Redimensionne les canevas extraits (\texttt{drawW = physW * minPxPerUm}) lors du dessin dans le buffer global \texttt{ctx.drawImage()}.
+\end{enumerate}
+Ainsi, deux cellules de même taille physique sur deux microscopes différents apparaîtront exactement de la même taille sur la planche de figures finale générée.

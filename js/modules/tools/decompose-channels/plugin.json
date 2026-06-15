@@ -1,0 +1,12 @@
+{
+  "id": "decompose-channels",
+  "name": "Decompose by Channel",
+  "version": "1.0.0",
+  "creator": "IRIBHM",
+  "placement": "tools",
+  "group": "tools",
+  "subtype": "toggle",
+  "icon": "layers",
+  "order": 50,
+  "description": "Open side-by-side channel decomposition view."
+}

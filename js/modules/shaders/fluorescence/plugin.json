@@ -1,0 +1,11 @@
+{
+  "id": "fluorescence",
+  "name": "🔬 Fluorescence (Imaris-like)",
+  "version": "1.0.0",
+  "creator": "IRIBHM",
+  "placement": "shaders",
+  "renderModeValue": 1,
+  "default": true,
+  "order": 10,
+  "description": "Additive emission MIP per-channel, mimicking Imaris fluorescence rendering."
+}

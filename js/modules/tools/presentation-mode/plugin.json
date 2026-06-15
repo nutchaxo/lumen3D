@@ -1,0 +1,12 @@
+{
+  "id": "presentation-mode",
+  "name": "Presentation Mode",
+  "version": "1.0.0",
+  "creator": "IRIBHM",
+  "placement": "tools",
+  "group": "layouts",
+  "subtype": "toggle",
+  "icon": "presentation",
+  "order": 10,
+  "description": "Toggle fullscreen presentation mode, hiding sidebar and header."
+}

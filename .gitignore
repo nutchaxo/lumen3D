@@ -5,7 +5,8 @@ __pycache__/
 *.pyc
 
 # Datasets / Large files
-DATA_WEB/
+DATA_WEB/*
+!DATA_WEB/.gitkeep
 *.nii
 *.nii.gz
 *.ome.tif
@@ -13,6 +14,12 @@ DATA_WEB/
 *.tiff
 *.dzi
 *.db
+
+# Work in progress / Personal files
+DOCS/
+platform_data_inventory.xlsx
+platform_preselection_fixed_live.xlsx
+test_meta.html
 
 # IDEs
 .vscode/

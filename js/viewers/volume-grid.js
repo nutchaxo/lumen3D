@@ -107,8 +107,28 @@ const VolumeGrid = (() => {
   function getGridGroup() { return _gridGroup; }
   function getAxesGroup() { return _axesGroup; }
 
-  // ─── Rebuild Grid & Axes ───
+  // ─── Helpers ───
+  function _createTextSprite(text, position, colorHex) {
+    const canvas = document.createElement('canvas');
+    canvas.width = 64;
+    canvas.height = 64;
+    const ctx = canvas.getContext('2d');
+    ctx.font = 'bold 48px Inter, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillStyle = '#' + colorHex.toString(16).padStart(6, '0');
+    ctx.fillText(text, 32, 32);
 
+    const texture = new THREE.CanvasTexture(canvas);
+    texture.minFilter = THREE.LinearFilter;
+    const spriteMaterial = new THREE.SpriteMaterial({ map: texture, depthTest: false, transparent: true });
+    const sprite = new THREE.Sprite(spriteMaterial);
+    sprite.position.copy(position);
+    sprite.scale.set(0.15, 0.15, 0.15);
+    return sprite;
+  }
+
+  // ─── Rebuild Grid & Axes ───
   function rebuild() {
     if (!_scene) return;
     if (_gridGroup) { _scene.remove(_gridGroup); _gridGroup = null; }
@@ -220,6 +240,11 @@ const VolumeGrid = (() => {
       const yAxis = new THREE.ArrowHelper(new THREE.Vector3(0, 1, 0), origin, arrowLen, 0x00ff00, arrowLen * 0.1, arrowLen * 0.05);
       const zAxis = new THREE.ArrowHelper(new THREE.Vector3(0, 0, 1), origin, arrowLen, 0x0088ff, arrowLen * 0.1, arrowLen * 0.05);
       _axesGroup.add(xAxis, yAxis, zAxis);
+
+      const xLabel = _createTextSprite("X", new THREE.Vector3(arrowLen + 0.1, 0, 0), 0xff0000);
+      const yLabel = _createTextSprite("Y", new THREE.Vector3(0, arrowLen + 0.1, 0), 0x00ff00);
+      const zLabel = _createTextSprite("Z", new THREE.Vector3(0, 0, arrowLen + 0.1), 0x0088ff);
+      _axesGroup.add(xLabel, yLabel, zLabel);
 
       const sphereGeom = new THREE.SphereGeometry(0.06, 16, 16);
       const sphereMat = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.0, depthTest: false });

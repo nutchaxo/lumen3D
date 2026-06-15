@@ -74,8 +74,12 @@ const DOM = {
   fExposure        : el('f-exposure'),
   fExposureVal     : el('f-exposure-val'),
   btnSetPreview    : el('btn-set-preview'),
+  btnDefineOrientation: el('btn-define-orientation'),
+  orientationStatus: el('orientation-status'),
   toastContainer   : el('toast-container'),
 };
+
+let _isCalibratingOrientation = false;
 
 // ── Utils ─────────────────────────────────────────────────────
 
@@ -402,6 +406,16 @@ function populateForm() {
     DOM.fExposure.value = Math.max(20, Math.min(500, Math.round(exp * 100)));
     if (DOM.fExposureVal) DOM.fExposureVal.textContent = `${exp.toFixed(2)}×`;
   }
+
+  _isCalibratingOrientation = false;
+  if (DOM.btnDefineOrientation) {
+    DOM.btnDefineOrientation.classList.remove('adm-btn-accent');
+    DOM.btnDefineOrientation.classList.add('adm-btn-ghost');
+    DOM.btnDefineOrientation.innerHTML = '🧭 Définir l\'orientation';
+  }
+  if (DOM.orientationStatus) {
+    DOM.orientationStatus.textContent = m.orientation ? 'Orientation définie ✓' : '(Aucune orientation définie)';
+  }
 }
 
 // ── Save / Reset ──────────────────────────────────────────────
@@ -411,6 +425,33 @@ async function saveDataset() {
 
   DOM.btnSave.disabled = true;
   DOM.btnSave.innerHTML = '<span class="spinner spinner-sm"></span> Sauvegarde…';
+
+  // Fetch orientation if in calibration mode
+  if (_isCalibratingOrientation && DOM.previewFrame.contentWindow) {
+    DOM.previewFrame.contentWindow.postMessage({ type: 'GET_ORIENTATION' }, '*');
+    await new Promise(resolve => {
+      const handler = (e) => {
+        if (e.data?.type === 'ORIENTATION_RESULT') {
+          _draft.orientation = e.data.quaternion;
+          window.removeEventListener('message', handler);
+          resolve();
+        }
+      };
+      window.addEventListener('message', handler);
+      setTimeout(() => { window.removeEventListener('message', handler); resolve(); }, 1500);
+    });
+    
+    _isCalibratingOrientation = false;
+    if (DOM.btnDefineOrientation) {
+      DOM.btnDefineOrientation.classList.remove('adm-btn-accent');
+      DOM.btnDefineOrientation.classList.add('adm-btn-ghost');
+      DOM.btnDefineOrientation.innerHTML = '🧭 Définir l\'orientation';
+    }
+    if (DOM.orientationStatus) {
+      DOM.orientationStatus.textContent = 'Orientation définie ✓';
+    }
+    DOM.previewFrame.contentWindow.postMessage({ type: 'CALIBRATE_ORIENTATION_STOP' }, '*');
+  }
 
   // Merge form values into draft
   _draft.name        = (DOM.fName.value || '').trim() || _draft.name;
@@ -593,6 +634,36 @@ if (DOM.fExposure) {
       _draft.exposure = val;
       markDirty();
       schedulePreviewUpdate();
+    }
+  });
+}
+
+// Orientation definition
+if (DOM.btnDefineOrientation) {
+  DOM.btnDefineOrientation.addEventListener('click', () => {
+    if (!_current) return;
+    _isCalibratingOrientation = !_isCalibratingOrientation;
+    if (_isCalibratingOrientation) {
+      DOM.btnDefineOrientation.classList.add('adm-btn-accent');
+      DOM.btnDefineOrientation.classList.remove('adm-btn-ghost');
+      DOM.btnDefineOrientation.innerHTML = '❌ Annuler l\'orientation';
+      if (DOM.orientationStatus) {
+        DOM.orientationStatus.textContent = 'Ajustez l\'embryon sur les axes (Puis Sauvegardez)...';
+      }
+      if (DOM.previewFrame.contentWindow) {
+        DOM.previewFrame.contentWindow.postMessage({ type: 'CALIBRATE_ORIENTATION_START' }, '*');
+      }
+      markDirty(); // Make sure user can save
+    } else {
+      DOM.btnDefineOrientation.classList.remove('adm-btn-accent');
+      DOM.btnDefineOrientation.classList.add('adm-btn-ghost');
+      DOM.btnDefineOrientation.innerHTML = '🧭 Définir l\'orientation';
+      if (DOM.orientationStatus) {
+        DOM.orientationStatus.textContent = _draft?.orientation ? 'Orientation définie ✓' : '(Aucune orientation définie)';
+      }
+      if (DOM.previewFrame.contentWindow) {
+        DOM.previewFrame.contentWindow.postMessage({ type: 'CALIBRATE_ORIENTATION_STOP' }, '*');
+      }
     }
   });
 }

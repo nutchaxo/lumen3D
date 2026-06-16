@@ -12,6 +12,31 @@ const DecompositionPanel = (() => {
   let _savedGlobalState = null;
   let _exportLayout = 'main-right';
 
+  // ELE-27 (PERF-001): decouple vignette rendering from the hot post-render loop.
+  // The post-render fires on every dirty frame (camera rotation); rendering N+1
+  // ray-marches per frame collapses the FPS. Debounce to the camera-stable state:
+  // each dirty frame (re)arms the timer; vignettes render once after _DECOMP_QUIET_MS
+  // with no new frame. Any input that changes a vignette (camera/cube pose via
+  // post-render, view.state via _rebuildList) arms a deferred render, so at rest the
+  // image is exact.
+  let _decompDirty = false;
+  let _decompRenderTimer = null;
+  const _DECOMP_QUIET_MS = 140;
+
+  function _scheduleDecompRender() {
+    _decompDirty = true;
+    if (_decompRenderTimer !== null) clearTimeout(_decompRenderTimer);
+    _decompRenderTimer = setTimeout(() => {
+      _decompRenderTimer = null;
+      if (_isOpen && _decompDirty) _renderDecompositions();
+    }, _DECOMP_QUIET_MS);
+  }
+
+  function _flushDecompRender() {
+    if (_decompRenderTimer !== null) { clearTimeout(_decompRenderTimer); _decompRenderTimer = null; }
+    if (_isOpen) { _decompDirty = true; _renderDecompositions(); }
+  }
+
   function _deepCopy(obj) {
     return JSON.parse(JSON.stringify(obj));
   }
@@ -46,6 +71,7 @@ const DecompositionPanel = (() => {
             VolumeViewer.recompileShaderForActiveChannels();
           }
           VolumeViewer.triggerRender();
+          _flushDecompRender(); // ELE-27: render vignettes immediately on open
         } else {
           _closePanel(panel, btnToggle);
         }
@@ -61,8 +87,10 @@ const DecompositionPanel = (() => {
     }
 
     if (typeof VolumeViewer !== 'undefined') {
+      // ELE-27: do NOT render vignettes synchronously in the hot loop — mark
+      // dirty + (re)arm the debounce; a single render fires when the camera stops.
       VolumeViewer.setOnPostRender(() => {
-        if (_isOpen) _renderDecompositions();
+        if (_isOpen) _scheduleDecompRender();
       });
     }
 
@@ -98,6 +126,10 @@ const DecompositionPanel = (() => {
 
   function _closePanel(panel, btnToggle) {
     _isOpen = false;
+    // ELE-27: cancel any in-flight debounced render so no vignette render (nor its
+    // setSize/render restoration) fires after the panel is closed.
+    if (_decompRenderTimer !== null) { clearTimeout(_decompRenderTimer); _decompRenderTimer = null; }
+    _decompDirty = false;
     panel.classList.add('hidden');
     if (btnToggle) btnToggle.classList.remove('active');
     if (_editingCustomId !== null) {
@@ -385,6 +417,7 @@ const DecompositionPanel = (() => {
   }
 
   function _renderDecompositions() {
+    _decompDirty = false; // ELE-27: consume the flag at the start of the real render
     if (_canvases.length === 0) return;
     if (typeof VolumeViewer === 'undefined') return;
 
@@ -407,8 +440,13 @@ const DecompositionPanel = (() => {
       
       if (w === 0 || h === 0) continue;
 
-      view.canvas.width = w;
-      view.canvas.height = h;
+      // ELE-27: only reset the canvas if the size actually changed. Reassigning
+      // width/height clears the canvas and is costly; at rest the size is stable.
+      // (The drawImage below rewrites the whole canvas anyway.)
+      if (view.canvas.width !== w || view.canvas.height !== h) {
+        view.canvas.width = w;
+        view.canvas.height = h;
+      }
 
       renderer.setSize(w / (window.devicePixelRatio || 1), h / (window.devicePixelRatio || 1), false);
       camera.aspect = w / h;

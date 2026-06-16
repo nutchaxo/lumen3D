@@ -1,0 +1,5 @@
+# Plateforme Web — v1.0.36
+
+## [OPTIMIZED]
+- **ELE-27 (PERF-001)** — `js/components/decomposition-panel.js` : `_renderDecompositions` (N+1 re-render WebGL + `renderer.setSize` + `drawImage`) était appelé **en synchrone à chaque frame de post-render** (boucle chaude, ex. rotation caméra) → effondrement du FPS. Découplé via un **debounce** vers l'état caméra-stable (`_scheduleDecompRender`, ~140 ms) : chaque frame dirty ré-arme le timer, les vignettes ne sont rendues qu'une fois après l'arrêt de la caméra. Rendu immédiat à l'ouverture (`_flushDecompRender`), annulation du rendu différé à la fermeture (pas de rendu fantôme ni de `setSize`/`render` post-fermeture), et le canvas n'est ré-initialisé que si sa taille change réellement. Au repos, l'image reste exacte (toute entrée d'une vignette arme un rendu différé).
+- Test : `tests/js/test_decomp_debounce.mjs` (structurel : hook post-render débounce et non plus synchrone, timer ré-armé, annulation à la fermeture, chemin de rendu préservé, resize gardé) + `node --check`.

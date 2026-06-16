@@ -124,7 +124,11 @@ def _check_credentials(username: str, password: str) -> bool:
 
 def _new_session(username: str) -> str:
     token = secrets.token_hex(32)
-    _SESSIONS[token] = {"username": username, "expires": time.time() + SESSION_TTL}
+    _SESSIONS[token] = {
+        "username": username,
+        "expires": time.time() + SESSION_TTL,
+        "csrf": secrets.token_hex(32),
+    }
     return token
 
 
@@ -148,6 +152,33 @@ def _get_cookie_token(cookie_header: str | None) -> str | None:
         if part.startswith("admpan_token="):
             return part[len("admpan_token="):]
     return None
+
+
+WRITE_ACTIONS = ("save", "save_thumbnail", "rebuild_catalog")
+
+
+def _is_write_action(action: str) -> bool:
+    return action in WRITE_ACTIONS
+
+
+def _check_csrf(session: dict | None, token: str | None) -> bool:
+    if not session or not token:
+        return False
+    return secrets.compare_digest(str(session.get("csrf", "")), str(token))
+
+
+def _authorize_write(method: str, session: dict | None, csrf_header: str | None):
+    """Authorise a state-changing API action. Returns (ok, status, payload).
+
+    Requires POST (blocks GET-triggered CSRF such as rebuild_catalog via a link,
+    which the SameSite=Lax cookie would still authorise) and a CSRF token
+    matching the session (a cross-site form cannot set the X-CSRF-Token header).
+    """
+    if method != "POST":
+        return False, 405, {"error": "Method not allowed (use POST)"}
+    if not _check_csrf(session, csrf_header):
+        return False, 403, {"error": "Invalid or missing CSRF token"}
+    return True, 200, {}
 
 
 def _is_forbidden_static(request_path: str) -> bool:
@@ -425,7 +456,8 @@ class AdminHandler(http.server.SimpleHTTPRequestHandler):
             if action == "status":
                 session = _get_session(self._token())
                 self._json(200, {"authenticated": session is not None,
-                                 "username": session["username"] if session else None})
+                                 "username": session["username"] if session else None,
+                                 "csrf": session["csrf"] if session else None})
 
             elif action == "login":
                 ip = self.address_string()
@@ -439,7 +471,7 @@ class AdminHandler(http.server.SimpleHTTPRequestHandler):
                 if _check_credentials(username, password):
                     _BRUTE.pop(ip, None)
                     token = _new_session(username)
-                    self._json(200, {"ok": True, "username": username}, cookie=f"admpan_token={token}; Path=/; HttpOnly; SameSite=Lax")
+                    self._json(200, {"ok": True, "username": username, "csrf": _SESSIONS[token]["csrf"]}, cookie=f"admpan_token={token}; Path=/; HttpOnly; SameSite=Lax")
                 else:
                     bf["count"] = bf.get("count", 0) + 1
                     if bf["count"] >= MAX_ATTEMPTS:
@@ -462,6 +494,14 @@ class AdminHandler(http.server.SimpleHTTPRequestHandler):
             if not session:
                 self._json(401, {"error": "Not authenticated"})
                 return
+
+            if _is_write_action(action):
+                ok, status, payload = _authorize_write(
+                    self.command, session, self.headers.get("X-CSRF-Token")
+                )
+                if not ok:
+                    self._json(status, payload)
+                    return
 
             if action == "list":
                 self._json(200, {"datasets": _list_datasets()})

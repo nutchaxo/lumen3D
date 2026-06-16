@@ -3462,6 +3462,7 @@ const VolumeViewer = (() => {
 
   // --- Grid and Axes (delegated to VolumeGrid module) ---
 
+  let _gridDisposeBound = false;
   function _initVolumeGrid() {
     if (typeof VolumeGrid === 'undefined') return;
     VolumeGrid.init({
@@ -3474,6 +3475,16 @@ const VolumeViewer = (() => {
       fragmentShader,
       onDirty: _scheduleFrame
     });
+    // LEAK-001/ELE-30 (Rule 1.2): VolumeGrid.dispose() releases the grid/axes
+    // groups' GPU resources (geometries, materials, sprite CanvasTextures). In a
+    // mono-shot page the one real teardown event is pagehide — wire it so the
+    // dispose contract is actually honored (and per-iframe on the Compare page).
+    if (typeof window !== 'undefined' && !_gridDisposeBound) {
+      _gridDisposeBound = true;
+      window.addEventListener('pagehide', () => {
+        if (typeof VolumeGrid !== 'undefined') VolumeGrid.dispose();
+      });
+    }
   }
 
   function _updateGridsAndAxes() {
@@ -3596,7 +3607,13 @@ const VolumeViewer = (() => {
     getScene: () => scene,
     getCamera: () => camera,
     triggerRender: _scheduleFrame,
-    setOnPostRender: (cb) => { _onPostRender = cb; },
+    setOnPostRender: (cb) => {
+      _onPostRender = cb;
+      // LEAK-015 (Rule 1.2): hand back an unsubscribe so a consumer (e.g.
+      // DecompositionPanel) can release the hook — and the closure it captures —
+      // on teardown. Idempotent: only clears the slot if it still holds this cb.
+      return () => { if (_onPostRender === cb) _onPostRender = null; };
+    },
     loadBrickedVolumeStream,
     isBrickReady: () => typeof BrickLoader !== 'undefined' && BrickLoader.isReady(),
     recompileShaderForActiveChannels: _recompileShaderForActiveChannels

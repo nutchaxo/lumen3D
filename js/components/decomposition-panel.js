@@ -23,6 +23,11 @@ const DecompositionPanel = (() => {
   let _decompRenderTimer = null;
   const _DECOMP_QUIET_MS = 140;
 
+  // LEAK-015 (Rule 1.2): unsubscribe returned by VolumeViewer.setOnPostRender, kept
+  // so the permanent post-render hook (and the _canvases it captures in closure) can
+  // be released on page teardown instead of living until unload.
+  let _offPostRender = null;
+
   function _scheduleDecompRender() {
     _decompDirty = true;
     if (_decompRenderTimer !== null) clearTimeout(_decompRenderTimer);
@@ -89,9 +94,17 @@ const DecompositionPanel = (() => {
     if (typeof VolumeViewer !== 'undefined') {
       // ELE-27: do NOT render vignettes synchronously in the hot loop — mark
       // dirty + (re)arm the debounce; a single render fires when the camera stops.
-      VolumeViewer.setOnPostRender(() => {
+      // LEAK-015: keep the unsubscribe so teardown can release the hook + closure.
+      _offPostRender = VolumeViewer.setOnPostRender(() => {
         if (_isOpen) _scheduleDecompRender();
       });
+    }
+
+    // LEAK-015 (Rule 1.2): in a mono-shot page the one real teardown is pagehide.
+    // Release the post-render hook and drop the captured canvases so the
+    // VolumeViewer↔DecompositionPanel coupling is not held until unload.
+    if (typeof window !== 'undefined') {
+      window.addEventListener('pagehide', dispose);
     }
 
     window.addEventListener('channels-updated', () => {
@@ -139,6 +152,16 @@ const DecompositionPanel = (() => {
       VolumeViewer.recompileShaderForActiveChannels();
       VolumeViewer.triggerRender();
     }
+  }
+
+  // LEAK-015 (Rule 1.2): full teardown — cancel any deferred render, unsubscribe the
+  // permanent post-render hook, and drop the captured canvases so neither the hook's
+  // closure nor the <canvas>/2D-context array is retained after teardown.
+  function dispose() {
+    if (_decompRenderTimer !== null) { clearTimeout(_decompRenderTimer); _decompRenderTimer = null; }
+    _decompDirty = false;
+    if (_offPostRender) { _offPostRender(); _offPostRender = null; }
+    _canvases = [];
   }
 
   function _getGlobalChannels() {
@@ -692,6 +715,7 @@ const DecompositionPanel = (() => {
 
   return {
     init,
+    dispose,            // LEAK-015: release post-render hook + canvases on teardown
     isOpen: () => _isOpen
   };
 })();

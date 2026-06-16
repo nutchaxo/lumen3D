@@ -3121,7 +3121,16 @@ const ViewerApp = (() => {
     }
     _zstackShow(_zstackActive);
     if (desired && Number.isFinite(slice) && slice > 0) {
-      setTimeout(() => _zstackGoToSlice(slice), 80);
+      // ELE-14 (RACE-005): re-arm the echo guard INSIDE the deferred callback. The
+      // receiver clears _suppressZstackSync synchronously (well before this 80ms
+      // timer), so without this the deferred _zstackGoToSlice would re-broadcast
+      // SYNC_ZSTACK_SLICE and ping-pong with the sibling panel. Restore prev to
+      // keep nesting safe.
+      setTimeout(() => {
+        const prev = _suppressZstackSync;
+        _suppressZstackSync = true;
+        try { _zstackGoToSlice(slice); } finally { _suppressZstackSync = prev; }
+      }, 80);
     }
   }
 

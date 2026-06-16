@@ -3689,7 +3689,15 @@ const VolumeViewer = (() => {
       concurrentLoads: options.concurrency || _brickConcurrencyForQuality(quality),
       verifyHashes: Boolean(options.verifyHashes ?? window.IRIBHM_VERIFY_BRICK_HASHES)
     });
-    BrickLoader.init(`${basePath}/${brickDir}${tpSelection.subPath ? `/${tpSelection.subPath}` : ''}`, tpSelection.manifest);
+    try {
+      BrickLoader.init(`${basePath}/${brickDir}${tpSelection.subPath ? `/${tpSelection.subPath}` : ''}`, tpSelection.manifest);
+    } catch (err) {
+      // ELE-21: a rejected (malformed) manifest degrades to the {available:false}
+      // contract (Rule 1.1/1.4) instead of an opaque throw.
+      console.error('[VolumeViewer] Brick manifest rejected:', err);
+      _perf()?.event('volume.bricks.manifest_rejected', { quality, reason: err.message });
+      return { available: false, reason: err.message };
+    }
     _brickStreamAbort = { cancelled: false, loadId };
     const abortRef = _brickStreamAbort;
     const levelCount = tpSelection.manifest.levels ? (Array.isArray(tpSelection.manifest.levels) ? tpSelection.manifest.levels.length : Object.keys(tpSelection.manifest.levels).length) : 1;

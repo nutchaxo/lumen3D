@@ -1395,6 +1395,13 @@ const VolumeViewer = (() => {
       failedLoads: 0,
       histograms: _channelHistograms?.length ? _channelHistograms : _computeChannelHistograms(textures, width, height, depth, channelCount)
     };
+    // ELE-10 (RACE-001): a newer load (dataset / timepoint / quality switch) may
+    // have bumped _loadCounter while this one was preparing. Do not publish this
+    // entry (it rebinds the material uniforms + recenters the camera) on a stale load.
+    if (loadId !== _loadCounter && options.cancelStale !== false) {
+      _perf()?.end(perfId, { status: 'stale', quality });
+      return { stale: true };
+    }
     _activateVolumeEntry(entry, metadata, sourceDepth, sourceWidth, channels, { ...options, fitCamera: !_hasLoadedVolume });
     _emitQualityState({ active: quality, mode: 'slice', progress: 0, message: `Streaming ${quality} slices...` });
 
@@ -1445,13 +1452,19 @@ const VolumeViewer = (() => {
         entry.failedLoads = failedLoads;
       } finally {
         completed++;
-        if (completed >= tasks.length || (Date.now() - (textures[0]._lastUpdateTime || 0) > 1000)) {
-          textures.forEach(t => { t.needsUpdate = true; t._lastUpdateTime = Date.now(); });
-          _scheduleFrame();
-          pendingUploads = 0;
+        // ELE-10 (RACE-001): if a newer load took over during the await, don't push
+        // GPU uploads or progress for this stale load — the material / _activeVolumeEntry
+        // now point at another dataset. Just let the runner drain.
+        const stale = loadId !== _loadCounter && options.cancelStale !== false;
+        if (!stale) {
+          if (completed >= tasks.length || (Date.now() - (textures[0]._lastUpdateTime || 0) > 1000)) {
+            textures.forEach(t => { t.needsUpdate = true; t._lastUpdateTime = Date.now(); });
+            _scheduleFrame();
+            pendingUploads = 0;
+          }
+          if (onProgress) onProgress(completed / tasks.length, quality);
+          _emitQualityState({ progress: completed / Math.max(1, tasks.length) });
         }
-        if (onProgress) onProgress(completed / tasks.length, quality);
-        _emitQualityState({ progress: completed / Math.max(1, tasks.length) });
       }
     });
 

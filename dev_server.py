@@ -46,9 +46,10 @@ ROOT       = Path(__file__).resolve().parent
 DATA_WEB   = ROOT / "DATA_WEB"
 CONFIG_FILE = ROOT / "api" / "config.json"
 
-# ── Default credentials (bcrypt-style via hashlib sha256 for simplicity) ──────
+# ── Default credentials ───────────────────────────────────────────────────────
+# No hardcoded password: a random one is generated on first run (printed once)
+# and only its salted PBKDF2 hash is persisted.
 DEFAULT_USERNAME = "admin"
-DEFAULT_PASSWORD = "iribhm2024"
 
 # ── Session store (in-memory) ──────────────────────────────────────────────────
 # { token: { "username": ..., "expires": time.time() + TTL } }
@@ -62,33 +63,62 @@ LOCKOUT_S    = 900  # 15 min
 
 # ── Config helpers ─────────────────────────────────────────────────────────────
 
+def _sha256(plain: str) -> str:
+    return hashlib.sha256(plain.encode()).hexdigest()
+
+
+def _hash_password(plain: str, salt=None, iterations: int = 200_000) -> str:
+    """Salted PBKDF2-HMAC-SHA256, stored as 'pbkdf2_sha256$iters$salt_hex$hash_hex'."""
+    if salt is None:
+        salt = secrets.token_bytes(16)
+    elif isinstance(salt, str):
+        salt = bytes.fromhex(salt)
+    dk = hashlib.pbkdf2_hmac("sha256", plain.encode(), salt, iterations)
+    return f"pbkdf2_sha256${iterations}${salt.hex()}${dk.hex()}"
+
+
+def _verify_password(plain: str, stored: str) -> bool:
+    if not stored:
+        return False
+    if stored.startswith("pbkdf2_sha256$"):
+        try:
+            _scheme, iters, salt_hex, _hash_hex = stored.split("$")
+            return secrets.compare_digest(
+                _hash_password(plain, salt=salt_hex, iterations=int(iters)), stored
+            )
+        except Exception:
+            return False
+    # Legacy unsalted SHA-256 (deprecated; kept so existing configs keep working).
+    return secrets.compare_digest(stored, _sha256(plain))
+
+
 def _load_config() -> dict:
     if CONFIG_FILE.exists():
         try:
             return json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
         except Exception:
             pass
-    # First-run: create default config
+    # First-run: create config with a RANDOM password (printed once), never a
+    # hardcoded/guessable default. Only the salted hash is persisted.
+    generated = secrets.token_urlsafe(12)
     cfg = {
         "username": DEFAULT_USERNAME,
-        "password_sha256": _sha256(DEFAULT_PASSWORD),
+        "password_pbkdf2": _hash_password(generated),
         "note": "Change password via: python dev_server.py --set-password",
     }
     CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
     CONFIG_FILE.write_text(json.dumps(cfg, indent=2), encoding="utf-8")
+    print(f"  [dev-server] Generated admin password for user '{DEFAULT_USERNAME}': {generated}")
+    print("  [dev-server] Save it now; change it via: python dev_server.py --set-password")
     return cfg
-
-
-def _sha256(plain: str) -> str:
-    return hashlib.sha256(plain.encode()).hexdigest()
 
 
 def _check_credentials(username: str, password: str) -> bool:
     cfg = _load_config()
     if username != cfg.get("username"):
         return False
-    ph = cfg.get("password_sha256", "")
-    return ph == _sha256(password)
+    stored = cfg.get("password_pbkdf2") or cfg.get("password_sha256") or ""
+    return _verify_password(password, stored)
 
 
 def _new_session(username: str) -> str:
@@ -489,7 +519,8 @@ def main():
         username = input(f"Username [{cfg.get('username', 'admin')}]: ").strip() or cfg.get("username", "admin")
         password = getpass.getpass("New password: ")
         cfg["username"]       = username
-        cfg["password_sha256"] = _sha256(password)
+        cfg["password_pbkdf2"] = _hash_password(password)
+        cfg.pop("password_sha256", None)  # drop legacy unsalted hash on update
         CONFIG_FILE.write_text(json.dumps(cfg, indent=2), encoding="utf-8")
         print(f"✅ Password updated for user '{username}'")
         sys.exit(0)

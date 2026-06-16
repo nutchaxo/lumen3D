@@ -74,10 +74,13 @@ class SVRManager {
     this._selectAtlasConfig(renderer, options);
     this.brickMap.clear();
     this.slotQueue = [];
+    // BUG-035 / STREAMING-21: slotToBrick + freeSlots are sized AFTER the atlas
+    // cascade below has fixed the definitive maxSlots — not here on the provisional
+    // _selectAtlasConfig pick (which the cascade may grow if a smaller atlas fails
+    // GPU allocation). See the post-cascade allocation for the full rationale.
     this.freeSlots = [];
-    this.slotToBrick = new Array(this.maxSlots).fill(null);
-    for(let i=0; i<this.maxSlots; i++) this.freeSlots.push(i);
-    
+    this.slotToBrick = [];
+
     this.ptNx = Math.ceil(volumeDim.x / this.brickSize);
     this.ptNy = Math.ceil(volumeDim.y / this.brickSize);
     this.ptNz = Math.ceil(volumeDim.z / this.brickSize);
@@ -142,6 +145,15 @@ class SVRManager {
     if (!atlasAllocated || !allocatedAtlases.length) {
       throw new Error('SVR atlas GPU allocation failed for all fallback sizes');
     }
+    // BUG-035 / STREAMING-21: build slotToBrick AND freeSlots ONCE, on the FINAL
+    // maxSlots the cascade actually allocated. If the cascade fell back to a LARGER
+    // atlas than _selectAtlasConfig's provisional pick, a slotToBrick sized on that
+    // initial pick would be too short: at eviction `oldKey = slotToBrick[slotIndex]`
+    // reads undefined for the extra slots, the `if (oldKey)` guard skips clearing the
+    // stale PageTable entry, and that slot keeps pointing at the wrong brick — the
+    // shader then samples another brick's voxels (corrupted scientific data) under
+    // VRAM pressure. Invariant restored: slotToBrick.length === freeSlots.length === maxSlots.
+    this.slotToBrick = new Array(this.maxSlots).fill(null);
     this.freeSlots = [];
     for(let i=0; i<this.maxSlots; i++) this.freeSlots.push(i);
     this.atlases.push(...allocatedAtlases);

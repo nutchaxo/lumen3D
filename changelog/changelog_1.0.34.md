@@ -1,0 +1,5 @@
+# Plateforme Web — v1.0.34
+
+## [OPTIMIZED]
+- **ELE-29 (PERF-003)** — `js/viewers/tracking-viewer.js` : `setTimepoint` recalculait la densité/region de surface en **O(vertices × cellules)** sur le thread principal à **chaque** frame de scrub, même sans changement. Mémoïsation via une signature `_surfaceColorSig` (mode de couleur + frame **quantifiée** `_surfaceFrameValue(_currentTime)` + smoothing + filtres mitosis/fusion/stabilized + seuil de voisinage + révision de palette `_regionRevision`) ; `_updateSurfaceColor` court-circuite **avant** le recalcul lourd (et avant `updateMatrixWorld`) si la signature est inchangée. Invalidation correcte sur changement de mode/filtre/smoothing et reconstruction de la palette de régions. Rendu inchangé (mêmes inputs → même couleur, granularité alignée sur la sélection de géométrie de surface).
+- Test : `tests/js/test_tracking_surface_memo.mjs` (structurel : garde mémo avant le travail lourd, signature complète, invalidation ≥ 3 mutateurs + palette) + `node --check`.

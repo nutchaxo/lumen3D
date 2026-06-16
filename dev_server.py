@@ -213,11 +213,11 @@ def _list_datasets() -> list[dict]:
 
 def _get_dataset(dataset_id: str) -> dict | None:
     """dataset_id = 'fixed/FolderName' """
-    parts = dataset_id.split("/", 1)
-    if len(parts) != 2:
+    safe = _safe_dataset_dir(dataset_id)
+    if safe is None:
         return None
-    type_dir, folder = parts
-    meta_path = DATA_WEB / type_dir / folder / "metadata.json"
+    type_dir, folder, ds_dir = safe
+    meta_path = ds_dir / "metadata.json"
     if not meta_path.exists():
         return None
     try:

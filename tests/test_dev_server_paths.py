@@ -103,5 +103,33 @@ class TestWriteGuards(unittest.TestCase):
         self.assertEqual(status, 400)
 
 
+class TestReadGuard(unittest.TestCase):
+    """CRIT-03 (SEC-002): _get_dataset must not read outside DATA_WEB."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self._orig = dev_server.DATA_WEB
+        dev_server.DATA_WEB = Path(self.tmp) / "DATA_WEB"
+        d = dev_server.DATA_WEB / "fixed" / "Demo"
+        d.mkdir(parents=True)
+        (d / "metadata.json").write_text('{"name": "Demo"}', encoding="utf-8")
+        # a secret file outside the dataset tree (must never be reachable)
+        (Path(self.tmp) / "secret.json").write_text('{"secret": true}', encoding="utf-8")
+
+    def tearDown(self):
+        dev_server.DATA_WEB = self._orig
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_get_valid(self):
+        meta = dev_server._get_dataset("fixed/Demo")
+        self.assertIsNotNone(meta)
+        self.assertEqual(meta["folderName"], "Demo")
+        self.assertEqual(meta["id"], "fixed/Demo")
+
+    def test_get_traversal_blocked(self):
+        for bid in BAD_IDS:
+            self.assertIsNone(dev_server._get_dataset(bid), f"should reject: {bid!r}")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

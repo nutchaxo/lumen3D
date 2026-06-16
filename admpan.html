@@ -137,8 +137,13 @@
         </div>
 
         <div class="preview-frame-wrap" id="preview-frame-wrap" style="display:none">
+          <!-- SEC-009: preview always loads first-party, same-origin viewer.html.
+               allow-scripts + allow-same-origin are REQUIRED (the viewer uses ES
+               module scripts and localStorage, which throws under an opaque
+               sandbox origin). Least privilege: allow-forms/allow-popups removed
+               (the preview never submits forms nor opens popups). -->
           <iframe class="preview-iframe" id="preview-frame" title="Dataset Preview"
-                  sandbox="allow-scripts allow-same-origin allow-forms allow-popups"></iframe>
+                  sandbox="allow-scripts allow-same-origin"></iframe>
         </div>
 
         <div class="preview-label-bar" id="preview-label-bar" style="display:none">

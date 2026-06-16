@@ -129,10 +129,32 @@ const VolumeGrid = (() => {
   }
 
   // ─── Rebuild Grid & Axes ───
+
+  // ELE-30 (LEAK-001, Rule 1.2): libérer récursivement les ressources GPU des
+  // enfants d'un groupe retiré de la scène (geometries, materials, CanvasTexture
+  // des sprites X/Y/Z).
+  // ATTENTION : THREE.ArrowHelper partage ses géométries line/cone comme
+  // singletons au niveau module (three r0.167) — les disposer corromprait tous
+  // les autres ArrowHelper. On saute donc la géométrie des enfants d'ArrowHelper
+  // et on ne libère que leur material (par instance).
+  function _disposeGroup(group) {
+    group.traverse((obj) => {
+      const isArrowChild = obj.parent && obj.parent.type === 'ArrowHelper';
+      if (!isArrowChild) obj.geometry?.dispose?.();
+      const mat = obj.material;
+      if (Array.isArray(mat)) {
+        mat.forEach((m) => { m?.map?.dispose?.(); m?.dispose?.(); });
+      } else if (mat) {
+        mat.map?.dispose?.();
+        mat.dispose?.();
+      }
+    });
+  }
+
   function rebuild() {
     if (!_scene) return;
-    if (_gridGroup) { _scene.remove(_gridGroup); _gridGroup = null; }
-    if (_axesGroup) { _scene.remove(_axesGroup); _axesGroup = null; }
+    if (_gridGroup) { _scene.remove(_gridGroup); _disposeGroup(_gridGroup); _gridGroup = null; }
+    if (_axesGroup) { _scene.remove(_axesGroup); _disposeGroup(_axesGroup); _axesGroup = null; }
 
     if (_gridMode === 0 && !_axesVisible) {
       _dirty();
@@ -369,10 +391,20 @@ const VolumeGrid = (() => {
     }
   }
 
+  // ELE-30: teardown complet (switch de dataset / destruction du viewer) — Rule 1.2.
+  function dispose() {
+    if (_gridGroup && _scene) { _scene.remove(_gridGroup); }
+    if (_gridGroup) { _disposeGroup(_gridGroup); _gridGroup = null; }
+    if (_axesGroup && _scene) { _scene.remove(_axesGroup); }
+    if (_axesGroup) { _disposeGroup(_axesGroup); _axesGroup = null; }
+  }
+
   return {
     init,
     updateRefs,
     rebuild,
+    dispose,
+    _disposeGroup,   // exposed for unit testing (ELE-30)
     syncTransforms,
     setGridMode,
     getGridMode,

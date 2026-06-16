@@ -4643,7 +4643,11 @@ const VolumeViewer = (() => {
 
     function processNextChunk() {
       if (abortRef.cancelled || loadId !== _loadCounter) {
-        return; // Abort silently
+        // ELE-26 (BUG-005): resolve the seed Promise even on abort, otherwise the
+        // `await new Promise(resolve => _seedTexturesFromActiveAsync(..., resolve))`
+        // in loadBrickedVolumeStream stays suspended forever on a mid-seed switch.
+        onDone();
+        return;
       }
 
       const zEnd = Math.min(depth, z + chunkSlices);

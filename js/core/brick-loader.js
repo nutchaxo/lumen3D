@@ -1,12 +1,17 @@
 /* ============================================================
    IRIBHM Microscopy Platform — Brick Loader
    ============================================================
-   Loads chunked volume bricks (128³) from a manifest,
+   Loads chunked volume bricks (64³) from a manifest,
    manages an LRU memory cache, and provides sampling API.
    ============================================================ */
 
 const BrickLoader = (() => {
-  const BRICK_SIZE = 128;
+  // Real bricks are 64³ (preprocess/3-chunk_packer.py: BRICK_SIZE=64, mosaicked 8×8
+  // into 512² tiles). This is the fallback used only when a manifest level omits
+  // brickSize; it MUST match the decode/SVR/shader size (all hardcoded to 64).
+  // The old value 128 was a legacy constant that never matched real data and made
+  // every fallback wrong (mis-sized blank bricks, 8× cache-memory estimate).
+  const BRICK_SIZE = 64;
   const LRU_LIMIT = 200;
   const PACK_CACHE_LIMIT = 128;
   const DEFAULT_CONCURRENT_LOADS = 24;

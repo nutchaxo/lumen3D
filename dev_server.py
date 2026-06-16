@@ -30,6 +30,7 @@ import hashlib
 import http.server
 import json
 import os
+import posixpath
 import re
 import secrets
 import sys
@@ -147,6 +148,20 @@ def _get_cookie_token(cookie_header: str | None) -> str | None:
         if part.startswith("admpan_token="):
             return part[len("admpan_token="):]
     return None
+
+
+def _is_forbidden_static(request_path: str) -> bool:
+    """True for sensitive server-side files that must never be served statically.
+
+    Blocks the whole server-side ``api/`` directory (which holds ``config.json``
+    with the admin password hash). The path is normalised first so traversal
+    tricks like ``/x/../api/config.json`` or backslash/case variants are still
+    caught. The two real API routes are dispatched before this check, so they
+    are unaffected.
+    """
+    p = request_path.replace("\\", "/")
+    p = posixpath.normpath("/" + p).lstrip("/").lower()
+    return p == "api" or p.startswith("api/")
 
 
 # ── Dataset helpers ────────────────────────────────────────────────────────────
@@ -343,6 +358,8 @@ class AdminHandler(http.server.SimpleHTTPRequestHandler):
             self._serve_dynamic_catalog()
         elif parsed.path in ("/api/auth.php", "/api/datasets.php"):
             self._handle_api(parsed, body=None)
+        elif _is_forbidden_static(clean_path):
+            self._json(404, {"error": "Not found"})
         else:
             super().do_GET()
 

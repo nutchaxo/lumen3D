@@ -49,7 +49,7 @@ self.onmessage = async (event) => {
     // NATIVE DIRECT FETCH (unpacked)
     if (!packed) {
         if (_manifest?.brickTransport?.mode === 'packs' || _packIndex.size > 0) {
-            const bs = _manifest?.levels?.[0]?.brickSize || 128;
+            const bs = _manifest?.levels?.[0]?.brickSize || 64; // real bricks are 64³ (was misleading legacy 128)
             const channels = encoding === 'raw-rgba-gzip' ? 4 : 1;
             return new Uint8Array(bs * bs * bs * channels);
         }
@@ -59,7 +59,7 @@ self.onmessage = async (event) => {
             const url = `${_basePath}/${targetRel}`;
             const resp = await fetch(url);
             if (!resp.ok) {
-                const bs = _manifest?.levels?.[0]?.brickSize || 128;
+                const bs = _manifest?.levels?.[0]?.brickSize || 64; // real bricks are 64³ (was misleading legacy 128)
                 const channels = encoding === 'raw-rgba-gzip' ? 4 : 1;
                 return new Uint8Array(bs * bs * bs * channels);
             }

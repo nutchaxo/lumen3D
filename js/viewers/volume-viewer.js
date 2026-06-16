@@ -76,6 +76,11 @@ const VolumeViewer = (() => {
   let _onPostRender = null;
 
   const RGBA_TEXTURE_BYTES_PER_VOXEL = 4;
+  // ELE-24 (BUG-003): brick edge length (voxels). Authoritative across the pipeline:
+  // SVR atlas slot (svr-manager.js:43), the shader `brickSize` uniform, the decode
+  // worker, and preprocess 3-chunk_packer.py (BRICK_SIZE=64). The legacy
+  // brick-loader.js BRICK_SIZE=128 is NOT authoritative — never fall back to 128 here.
+  const VOLUME_BRICK_SIZE = 64;
   const MONOLITHIC_RGBA_LIMIT_BYTES = Math.floor(1.5 * 1024 * 1024 * 1024);
 
   let _needsRender = true;
@@ -3993,7 +3998,7 @@ const VolumeViewer = (() => {
           if (abortRef.cancelled || loadId !== _loadCounter) return;
           if (channel === -1) {
             if (streamSvrManager && streamSvrManager !== _svrManager) {
-              const bs = dims.brickSize || 128;
+              const bs = dims.brickSize || VOLUME_BRICK_SIZE;
               const ox = bx * bs;
               const oy = by * bs;
               const oz = bz * bs;
@@ -4026,9 +4031,9 @@ const VolumeViewer = (() => {
             }
             pending.data[channel] = brickData;
             if (pending.count >= channels) {
-              const rgbaBrick = _composeRgbaBrickFromScalarChannels(pending.data, floorLuts, channels, dims.brickSize || 128);
+              const rgbaBrick = _composeRgbaBrickFromScalarChannels(pending.data, floorLuts, channels, dims.brickSize || VOLUME_BRICK_SIZE);
               if (streamSvrManager) {
-                const bs = dims.brickSize || 128;
+                const bs = dims.brickSize || VOLUME_BRICK_SIZE;
                 const ox = bx * bs;
                 const oy = by * bs;
                 const oz = bz * bs;
@@ -4068,7 +4073,7 @@ const VolumeViewer = (() => {
           onBrickLoaded: ({ bx, by, bz, data }) => {
             if (abortRef.cancelled || loadId !== _loadCounter) return;
             if (streamSvrManager && streamSvrManager !== _svrManager) {
-              const bs = dims.brickSize || 128;
+              const bs = dims.brickSize || VOLUME_BRICK_SIZE;
               const ox = bx * bs;
               const oy = by * bs;
               const oz = bz * bs;
@@ -4098,7 +4103,7 @@ const VolumeViewer = (() => {
             const pixels = brickData.get(`${bx}_${by}_${bz}`);
             if (!pixels) continue;
             if (streamSvrManager && streamSvrManager !== _svrManager) {
-              const bs = dims.brickSize || 128;
+              const bs = dims.brickSize || VOLUME_BRICK_SIZE;
               const ox = bx * bs;
               const oy = by * bs;
               const oz = bz * bs;
@@ -4119,9 +4124,9 @@ const VolumeViewer = (() => {
 
     if (pendingScalarBricks.size) {
       for (const pending of pendingScalarBricks.values()) {
-        const rgbaBrick = _composeRgbaBrickFromScalarChannels(pending.data, floorLuts, channels, dims.brickSize || 128);
+        const rgbaBrick = _composeRgbaBrickFromScalarChannels(pending.data, floorLuts, channels, dims.brickSize || VOLUME_BRICK_SIZE);
         if (streamSvrManager) {
-          const bs = dims.brickSize || 128;
+          const bs = dims.brickSize || VOLUME_BRICK_SIZE;
           const ox = pending.bx * bs;
           const oy = pending.by * bs;
           const oz = pending.bz * bs;
@@ -4425,7 +4430,7 @@ const VolumeViewer = (() => {
   }
 
   function _writeBrick(textures, dims, brick, channel, brickData, floorOrLut = 0) {
-    const bs = dims.brickSize || 128;
+    const bs = dims.brickSize || VOLUME_BRICK_SIZE;
     const ox = brick.bx * bs;
     const oy = brick.by * bs;
     const oz = brick.bz * bs;
@@ -4497,7 +4502,7 @@ const VolumeViewer = (() => {
         window._loggedWriteBrick++;
       }
     }
-    const bs = dims.brickSize || 128;
+    const bs = dims.brickSize || VOLUME_BRICK_SIZE;
     const ox = brick.bx * bs;
     const oy = brick.by * bs;
     const oz = brick.bz * bs;

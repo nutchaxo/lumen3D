@@ -282,6 +282,20 @@ function renderList() {
 
 // ── Select dataset ────────────────────────────────────────────
 
+// Rule 1.4: a malformed metadata.json must be rejected at mount time, not
+// partially mounted. Returns null when valid, else a human-readable reason.
+function validateDatasetMeta(meta) {
+  if (!meta || typeof meta !== 'object') return 'réponse vide';
+  if (typeof meta.id !== 'string' || !meta.id) return 'identifiant manquant';
+  if (!['fixed', 'live', 'tracking'].includes(meta.type)) return 'type invalide';
+  const d = meta.dimensions;
+  if (!d || typeof d !== 'object') return 'dimensions manquantes';
+  const dimOk = ['x', 'y', 'z', 'c'].every(k => Number.isFinite(d[k]) && d[k] > 0);
+  if (!dimOk) return 'dimensions invalides';
+  if (!Array.isArray(meta.channels) || meta.channels.length === 0) return 'canaux manquants';
+  return null;
+}
+
 async function selectDataset(id) {
   if (_dirty) {
     const ok = confirm('Modifications non sauvegardées. Continuer sans sauvegarder ?');
@@ -304,6 +318,13 @@ async function selectDataset(id) {
   // Ignore the stale response so it can't overwrite _draft/_original/_current.
   if (myGen !== _selectGen) return;
   if (!meta) { toast('Impossible de charger le dataset.', 'error'); return; }
+
+  // Rule 1.4: reject a malformed dataset before any mount/edit state is created.
+  const invalidReason = validateDatasetMeta(meta);
+  if (invalidReason) {
+    toast(`Dataset malformé, montage refusé (${invalidReason}).`, 'error');
+    return;
+  }
 
   meta.channels = normaliseChannels(meta.channels, meta.dimensions?.c || 0);
   _draft    = deepClone(meta);

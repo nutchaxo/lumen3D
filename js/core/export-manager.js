@@ -219,7 +219,7 @@ const ExportManager = (() => {
       ? 'target="_blank" rel="noopener"'
       : 'download';
     return `
-      <a class="download-item ${item.directory ? 'is-directory' : ''} ${kind === 'bundle' ? 'is-bundle' : ''}" href="${item.path}" ${attrs}>
+      <a class="download-item ${item.directory ? 'is-directory' : ''} ${kind === 'bundle' ? 'is-bundle' : ''}" href="${Utils.escapeHtml(item.path)}" ${attrs}>
         <span class="download-format">${Utils.escapeHtml(item.format || 'FILE')}</span>
         <span class="download-main">
           <strong>${Utils.escapeHtml(item.label)}</strong>
@@ -327,6 +327,7 @@ const ExportManager = (() => {
     downloadBlob: _downloadBlob,
     toast: _toast,
     saveWorkspace,
-    restoreWorkspace
+    restoreWorkspace,
+    _itemHtml  // exposed for unit testing (pure HTML render helper)
   };
 })();

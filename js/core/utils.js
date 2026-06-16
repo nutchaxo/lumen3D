@@ -247,6 +247,19 @@ const Utils = (() => {
       .replace(/'/g, '&#39;');
   }
 
+  /**
+   * Whether a postMessage event originates from this page's own origin.
+   * Cross-panel sync (compare.html ↔ its same-origin viewer iframes) is strictly
+   * same-origin, so messages from any other origin must be ignored.
+   * @param {MessageEvent} event
+   * @returns {boolean}
+   */
+  function isTrustedMessageOrigin(event) {
+    if (!event) return false;
+    const here = (typeof window !== 'undefined' && window.location) ? window.location.origin : null;
+    return here !== null && event.origin === here;
+  }
+
   return {
     formatFileSize,
     formatDate,
@@ -262,6 +275,7 @@ const Utils = (() => {
     lerp,
     mapRange,
     uid,
-    escapeHtml
+    escapeHtml,
+    isTrustedMessageOrigin
   };
 })();

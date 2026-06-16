@@ -4,7 +4,7 @@
 
 **Stack** : Vanilla JS (no framework, IIFE modules), Three.js (UMD via CDN), custom WebGL2 ray-marcher, Python preprocessing (h5py / numpy / scipy / PIL), dev server in Python (`dev_server.py`) — PHP fallback in `api/` for legacy hosts.
 
-**Current versions** : Plateforme Web `1.0.1` (see `changelog/`), Preprocessing `0.12.15` (see `preprocess/changelog/`). Versions are tracked in `package.json`-equivalents : `dev_server.py:__version__`, `preprocess/*.py:__version__`.
+**Current versions** : Plateforme Web `1.0.4` (latest changelog `changelog/changelog_1.0.4.md`), Preprocessing `0.12.15` (`preprocess/run_preprocess.py:__version__`). ⚠️ Note: `dev_server.py:__version__` is still `0.12.41` and **drifts from the web platform version** — it tracks the server tool itself, not the platform. The Web platform version lives **only** in the `changelog/` filenames; bump by adding a new `changelog_X.Y.Z.md`.
 
 ---
 
@@ -33,8 +33,8 @@ The user expects this to happen silently as part of every edit:
 
 * **SemVer** : `0.Y.Z` until the explicit `1.0.0` order was given (already received — web is now in `1.x`). Bump `Z` on every fix / shader tweak / script change. Bump `Y` every 3–5 minor versions or when integrating a major tool / new rendering engine / new compression algorithm.
 * **Component scope** : two independent versioned components.
-  * `Plateforme Web` → version string in `dev_server.py:__version__` (and surfaced in the UI). Changelogs in `changelog/changelog_X.Y.Z.md`.
-  * `Outil de Preprocessing` → version string in `preprocess/run_preprocess.py:__version__` and the four step scripts (`preprocess/1-…py` → `4-…py`). Changelogs in `preprocess/changelog/changelog_X.Y.Z.md`.
+  * `Plateforme Web` → bump only by creating a new `changelog/changelog_X.Y.Z.md`. There is no single source-of-truth `__version__` constant for the Web platform (the `dev_server.py:__version__` is the dev server's own version, not the platform's — has drifted).
+  * `Outil de Preprocessing` → version string in `preprocess/run_preprocess.py:__version__` (and the four step scripts `preprocess/1-…py` → `4-…py` carry their own `__version__` where relevant). Changelogs in `preprocess/changelog/changelog_X.Y.Z.md`.
 * **Changelog format** : sections `[ADDED]` (features/tools), `[OPTIMIZED]` (perf, shaders, parsing), `[FIXED]` (bugs). Markdown headings — see `changelog/changelog_0.12.45.md` for the canonical shape.
 * **End-of-response notice** : after a versioning bump, append a discreet line, e.g.
   `[Versioning] Plateforme Web → v1.0.2. changelog_1.0.2.md généré.`
@@ -90,7 +90,7 @@ Loaded as classic `<script>` (no ESM), each exposes a global IIFE.
 | [colorblind.js](js/core/colorblind.js) | CB-safe channel palettes |
 | [download-manifest.js](js/core/download-manifest.js) | Builds export bundles |
 | [export-manager.js](js/core/export-manager.js) | Screenshot / video export glue |
-| [perf-telemetry.js](js/core/perf-telemetry.js) | `PerfTelemetry.start/end/event/setContext` — used everywhere in viewer.js for baselines (see `DOCS/perf_baseline_*.json`) |
+| [perf-telemetry.js](js/core/perf-telemetry.js) | `PerfTelemetry.start/end/event/setContext` — instrumentation calls scattered in `viewer.js`. The historical `DOCS/perf_baseline_*.json` snapshots have been removed from the repo. |
 
 ### 2.4. JS viewers — Three.js renderers under `js/viewers/`
 
@@ -121,6 +121,7 @@ Plugin pattern : each module has `plugin.json` (metadata) + `index.js` (calls `P
 | Path | Purpose |
 |---|---|
 | `tools/toggle-grid` `toggle-axes` `toggle-volume` | Scene visibility toggles |
+| `tools/orientation-axes` | **Interactive embryo orientation gizmo** (A/P green, D/V blue, L/R red). Drag to recalibrate; quaternion persisted to `metadata.json`. Hooks into admin panel via `postMessage` (no coupling to `VolumeViewer` internals — see [changelog_1.0.2.md](changelog/changelog_1.0.2.md)). |
 | `tools/screenshot` | PNG capture |
 | `tools/presentation-mode` | Fullscreen / kiosk mode |
 | `tools/save-workspace` `restore-workspace` | Workspace persistence (camera + channels) |
@@ -251,7 +252,8 @@ DATA_WEB/
 | Adjust preprocessing background subtraction | [preprocess/2-image_processor.py](preprocess/2-image_processor.py) — Otsu + morphological opening |
 | Change brick size / ESS threshold | [preprocess/3-chunk_packer.py](preprocess/3-chunk_packer.py) — `BRICK_SIZE`, `occ > 0.0005` |
 | Stage / embryo regex | [preprocess/4-catalog_generator.py](preprocess/4-catalog_generator.py) `_parse_stage`, `_parse_embryo` |
-| Perf telemetry baselines | [DOCS/perf_baseline_*.json](DOCS/) — used by `PerfTelemetry` calls scattered in `viewer.js` |
+| Perf telemetry instrumentation | `PerfTelemetry.start/end/event/setContext` calls scattered in `viewer.js` + [js/core/perf-telemetry.js](js/core/perf-telemetry.js). Note: the old `DOCS/perf_baseline_*.json` snapshots were removed from the repo — regenerate locally if needed. |
+| Embryo orientation calibration | [js/modules/tools/orientation-axes/index.js](js/modules/tools/orientation-axes/index.js) (drag gizmo + postMessage to admin) |
 
 ---
 

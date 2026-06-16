@@ -597,7 +597,12 @@ const BrickLoader = (() => {
     const data = new Uint8Array(totalVoxels);
     const srcData = imageData.data;
     if (packing?.mode === 'grid') {
-      const cols = Math.max(1, Number(packing.cols) || 16);
+      // ELE-25 (BUG-004): miroir du défaut du worker — la mosaïque réelle est 8x8
+      // (3-chunk_packer.py). Dériver de la géométrie réelle plutôt que le 16 magique trompeur.
+      const _gridCols = Number(packing.cols);
+      const cols = (Number.isFinite(_gridCols) && _gridCols >= 1)
+        ? _gridCols
+        : Math.ceil(bs / Math.ceil(Math.sqrt(bs)));
       const canvasWidth = img.width;
       const srcDataLocal = srcData;
       const dataLocal = data;

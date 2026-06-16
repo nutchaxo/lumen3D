@@ -55,7 +55,14 @@ async function processDecode(msg, epoch) {
     const srcData = imgData.data;
     
     if (packing.mode === 'grid') {
-      const cols = Math.max(1, Number(packing.cols) || 16);
+      // ELE-25 (BUG-004): la mosaïque réelle (3-chunk_packer.py) est invariablement 8x8
+      // pour bs=64. Le défaut historique 16 ne correspondait à AUCUN format produit et
+      // provoquait un délacement Z silencieux (ok:true) si un manifest grid omettait `cols`.
+      // On dérive le défaut de la géométrie réelle : ceil(bs/ceil(sqrt(bs))) -> 64 => 8.
+      const _gridCols = Number(packing.cols);
+      const cols = (Number.isFinite(_gridCols) && _gridCols >= 1)
+        ? _gridCols
+        : Math.ceil(bs / Math.ceil(Math.sqrt(bs)));
       const bmpWidth = bmp.width;
       const srcDataLocal = srcData;
       const bytesLocal = bytes;

@@ -2443,6 +2443,7 @@ const ViewerApp = (() => {
 
     // Listen from parent
     window.addEventListener('message', (e) => {
+      if (!Utils.isTrustedMessageOrigin(e)) return;
       const data = e.data;
       if (!data || !data.type) return;
 
@@ -3316,6 +3317,7 @@ window.ViewerApp = ViewerApp;
 // message may have already been delivered and lost. We install here to guarantee
 // it is always caught, regardless of init() timing.
 window.addEventListener('message', (e) => {
+  if (!Utils.isTrustedMessageOrigin(e)) return;
   const data = e.data;
   if (!data || data.type !== 'APPLY_WORKSPACE_STATE' || !data.state) return;
   console.log('[ViewerApp] Early listener: APPLY_WORKSPACE_STATE received — routing to ViewerApp.applyWorkspaceState');
@@ -3326,6 +3328,7 @@ window.addEventListener('message', (e) => {
 // before _bindIframeSync() (and its message listener) is set up inside init().
 // If already initialized, apply immediately. Otherwise buffer inside the IIFE.
 window.addEventListener('message', (e) => {
+  if (!Utils.isTrustedMessageOrigin(e)) return;
   const data = e.data;
   if (!data || data.type !== 'TOGGLE_ZSTACK') return;
   const desired = !!data.state;

@@ -45,6 +45,11 @@ const TrackingViewer = (() => {
   let _surfaceOpts = { opacity: 0.0, colorMode: 'density' };
   let _displayState = { backgroundPreset: 'paper', backgroundColor: '#ffffff' };
   let _surfaceLegendState = { kind: 'uniform', title: 'Surface', items: [] };
+  // ELE-29 (PERF-003): memoize the O(vertices x cells) surface-color pass.
+  // _surfaceColorSig encodes every input the dynamic density/region recompute
+  // reads; set it to null to force a recompute on the next call.
+  let _surfaceColorSig = null;
+  let _regionRevision = 0;
   // Pre-allocated surface materials (swap, never toggle vertexColors)
   let _surfaceMatUniform = null;
   let _surfaceMatDensity = null;
@@ -511,6 +516,7 @@ const TrackingViewer = (() => {
     let i = 0;
     regions.forEach(r => {
       _regionColorMap[r] = new THREE.Color(REGION_COLORS[i % REGION_COLORS.length]);
+      _regionRevision++;   // ELE-29: invalidate the surface-color memo when the region palette (re)builds
       i++;
     });
   }
@@ -769,6 +775,7 @@ const TrackingViewer = (() => {
     }
     setTimepoint(_currentTime);
     _updateSurfaceVisibility();
+    _surfaceColorSig = null;   // ELE-29: filter change -> force recompute
     _updateSurfaceColor();
   }
 
@@ -798,6 +805,7 @@ const TrackingViewer = (() => {
 
   function setSurfaceColorMode(mode) {
     _surfaceOpts.colorMode = ['uniform', 'density', 'region'].includes(mode) ? mode : 'uniform';
+    _surfaceColorSig = null;   // ELE-29: color mode changed -> force recompute
     _updateSurfaceColor();
   }
 
@@ -814,7 +822,22 @@ const TrackingViewer = (() => {
 
   function _updateSurfaceColor() {
     if (!_glbScene) return;
-    
+
+    // ELE-29: skip the O(vertices x cells) recompute when no surface-coloring input
+    // changed. Key = mode + quantized surface frame (same granularity as
+    // _visibleSurfaceMeshes) + smoothing + filters + neighbor threshold + region
+    // palette revision. Set _surfaceColorSig = null elsewhere to force a recompute.
+    const _sig = [
+      _surfaceOpts.colorMode,
+      _surfaceFrameValue(_currentTime),
+      _smoothing,
+      _filters.mitosis, _filters.fusion, _filters.stabilized,
+      _neighborThreshold,
+      _regionRevision
+    ].join('|');
+    if (_sig === _surfaceColorSig) return;
+    _surfaceColorSig = _sig;
+
     _scene.updateMatrixWorld(true);
     
     const mode = _surfaceOpts.colorMode;
@@ -1359,6 +1382,7 @@ const TrackingViewer = (() => {
 
   function setSmoothing(val) {
     _smoothing = val;
+    _surfaceColorSig = null;   // ELE-29: smoothing change -> force recompute
     _updateSurfaceVisibility();
     _updateSurfaceColor();
   }

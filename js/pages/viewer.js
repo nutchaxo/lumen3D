@@ -162,6 +162,9 @@ const ViewerApp = (() => {
     VolumeViewer.init('webgl-canvas');
     _qualityProgressUnsub?.();
     _qualityProgressUnsub = VolumeViewer.onQualityProgress?.(_handleQualityProgress) || null;
+    // ELE-18 (EDGE-001): surface a visible status on GPU context loss/restore (Rule 1.1).
+    VolumeViewer.onContextLost?.(() => _setQualityStatus('Contexte GPU perdu — rendu en pause. Rechargez la page si l\'image ne revient pas.'));
+    VolumeViewer.onContextRestored?.(() => _setQualityStatus('Contexte GPU restauré — rechargez le volume pour réafficher.'));
     VolumeViewer.setZDisplayScale(_zDisplayScale, { notify: false });
     VolumeViewer.setMeasurements(_volumeMeasurements);
     if (_isIframe || true) { // Always bind onCameraChange now

@@ -4,15 +4,26 @@
 let decodeQueue = Promise.resolve();
 let canvas = null;
 let ctx = null;
+let cancelEpoch = 0;   // bumped on CANCEL; queued/in-flight decodes from an older epoch are dropped
 
 self.onmessage = (event) => {
   const msg = event.data || {};
+  if (msg.type === 'CANCEL') {
+    // A superseded load (dataset / quality / timepoint switch) asked to cancel:
+    // bump the epoch so queued jobs are skipped and in-flight results suppressed.
+    // (The CPU decode loop is not abortable mid-flight, so we gate the result.)
+    cancelEpoch++;
+    return;
+  }
   if (msg.type === 'DECODE') {
-    decodeQueue = decodeQueue.then(() => processDecode(msg)).catch(console.error);
+    const epoch = cancelEpoch;
+    decodeQueue = decodeQueue.then(() => processDecode(msg, epoch)).catch(console.error);
   }
 };
 
-async function processDecode(msg) {
+async function processDecode(msg, epoch) {
+  // Skip a job cancelled before it started running.
+  if (epoch !== cancelEpoch) return;
   const id = msg.id;
   try {
     const t0 = performance.now();
@@ -115,14 +126,17 @@ async function processDecode(msg) {
     
     const t3 = performance.now();
     
-    self.postMessage({ 
-      type: 'DECODE_RESULT', 
-      id, 
-      ok: true, 
+    // Suppress the result if a CANCEL arrived while we were decoding.
+    if (epoch !== cancelEpoch) return;
+    self.postMessage({
+      type: 'DECODE_RESULT',
+      id,
+      ok: true,
       buffer: bytes.buffer,
       perf: { bmp: t1-t0, img: t2-t1, loop: t3-t2, total: t3-t0 }
     }, [bytes.buffer]);
   } catch (err) {
+    if (epoch !== cancelEpoch) return;
     self.postMessage({ type: 'DECODE_RESULT', id, ok: false, message: err.message });
   }
 }

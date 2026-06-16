@@ -351,20 +351,19 @@ class SVRManager {
   writeBrick(channel, bx, by, bz, brickData, bw, bh, bd) {
     if (channel >= this.channels) return;
     const slotIndex = this.getSlot(bx, by, bz);
-    
-    // Update Page Table
-    const ptIdx = (bz * this.ptNx * this.ptNy + by * this.ptNx + bx) * 4;
-    if (this.pageData[ptIdx + 3] === 0) {
-      const coord = this._slotCoord(slotIndex);
-      this.pageData[ptIdx + 0] = coord.x;
-      this.pageData[ptIdx + 1] = coord.y;
-      this.pageData[ptIdx + 2] = coord.z;
-      this.pageData[ptIdx + 3] = coord.atlas + 1;
-      this.pageTable.needsUpdate = true; // small texture, full update is fine
-    }
-    
-    // Upload to Atlas
     const coord = this._slotCoord(slotIndex);
+
+    // ELE-23 (BUG-002): always (re)point the PageTable at the slot getSlot just
+    // assigned. The slot may have been recycled from another brick by eviction,
+    // so a non-zero alpha does NOT guarantee this entry already maps the right slot.
+    const ptIdx = (bz * this.ptNx * this.ptNy + by * this.ptNx + bx) * 4;
+    this.pageData[ptIdx + 0] = coord.x;
+    this.pageData[ptIdx + 1] = coord.y;
+    this.pageData[ptIdx + 2] = coord.z;
+    this.pageData[ptIdx + 3] = coord.atlas + 1;
+    this.pageTable.needsUpdate = true; // small texture, full update is fine
+
+    // Upload to Atlas
     const sx = coord.x * this.brickSize;
     const sy = coord.y * this.brickSize;
     const sz = coord.z * this.brickSize;
@@ -375,17 +374,17 @@ class SVRManager {
 
   writeRgbaBrick(bx, by, bz, brickData, bw, bh, bd) {
     const slotIndex = this.getSlot(bx, by, bz);
-    const ptIdx = (bz * this.ptNx * this.ptNy + by * this.ptNx + bx) * 4;
-    if (this.pageData[ptIdx + 3] === 0) {
-      const coord = this._slotCoord(slotIndex);
-      this.pageData[ptIdx + 0] = coord.x;
-      this.pageData[ptIdx + 1] = coord.y;
-      this.pageData[ptIdx + 2] = coord.z;
-      this.pageData[ptIdx + 3] = coord.atlas + 1;
-      this.pageTable.needsUpdate = true;
-    }
-
     const coord = this._slotCoord(slotIndex);
+
+    // ELE-23 (BUG-002): always (re)point the PageTable at the slot getSlot just
+    // assigned (it may have been recycled by eviction); a non-zero alpha does not
+    // guarantee this entry already maps to the correct slot.
+    const ptIdx = (bz * this.ptNx * this.ptNy + by * this.ptNx + bx) * 4;
+    this.pageData[ptIdx + 0] = coord.x;
+    this.pageData[ptIdx + 1] = coord.y;
+    this.pageData[ptIdx + 2] = coord.z;
+    this.pageData[ptIdx + 3] = coord.atlas + 1;
+    this.pageTable.needsUpdate = true;
     const sx = coord.x * this.brickSize;
     const sy = coord.y * this.brickSize;
     const sz = coord.z * this.brickSize;

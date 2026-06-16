@@ -689,6 +689,7 @@ const CompareApp = (() => {
   // --- Synchronization ---
 
   function _handleIframeMessage(event) {
+    if (!Utils.isTrustedMessageOrigin(event)) return;
     const data = event.data;
     if (!data || !data.type || !data.sourceIndex) return;
 
@@ -1324,7 +1325,8 @@ const CompareApp = (() => {
     getWorkspaceState: _getWorkspaceState,
     applyWorkspaceState: _applyWorkspaceState,
     composeFigure: _composeCompareFigure,
-    exportFigure: _exportCompareFigure
+    exportFigure: _exportCompareFigure,
+    _handleIframeMessage  // exposed for unit testing (origin guard)
   };
 })();
 

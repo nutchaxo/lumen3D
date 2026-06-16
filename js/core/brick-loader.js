@@ -23,6 +23,9 @@ const BrickLoader = (() => {
   let _workerReady = false;
   let _workerPending = new Map();
   let _pendingAbort = null;
+  let _generation = 0;     // ELE-12: bumped on every init(); tags in-flight loads so stale results are dropped
+  let _datasetTag = '';    // ELE-12/13: identifies the current dataset; part of the cache key
+  let _packFetchController = (typeof AbortController !== 'undefined') ? new AbortController() : null;  // ELE-17: loader-owned, lifetime = pack cache (NOT per-load)
   let _loading = false;
   let _fallbackWarningCount = 0;
   let _fallbackCanvas = null;
@@ -43,10 +46,16 @@ const BrickLoader = (() => {
    * @param {object} manifest  parsed manifest.json
    */
   function init(basePath, manifest) {
+    cancelPending();                 // ELE-12: abort any prior in-flight load BEFORE mutating shared state
+    _generation++;                   // ELE-12: invalidate tasks that captured the previous generation
     _basePath = basePath.replace(/\/$/, '');
+    _datasetTag = _basePath;         // ELE-12/13: dataset identity, part of the cache key
     _manifest = manifest;
     _cache.clear();
     _packCache.clear();
+    // ELE-17: a real dataset switch -> cancel orphaned pack fetches and renew the loader-owned controller
+    if (_packFetchController) { try { _packFetchController.abort(); } catch (e) {} }
+    _packFetchController = (typeof AbortController !== 'undefined') ? new AbortController() : null;
     _buildPackIndex();
     _initWorker();
     
@@ -210,6 +219,7 @@ const BrickLoader = (() => {
     const controller = new AbortController();
     _pendingAbort = controller;
     _loading = true;
+    const generation = _generation;   // ELE-12: snapshot; drop results if a dataset switch bumps _generation
 
     const results = new Map();
     const toLoad = [];
@@ -266,7 +276,7 @@ const BrickLoader = (() => {
     ));
     let index = 0;
     const workers = Array.from({ length: concurrency }, async () => {
-      while (index < queued.length && !controller.signal.aborted) {
+      while (index < queued.length && !controller.signal.aborted && generation === _generation) {
         const { bx, by, bz, channel, lod, key } = queued[index++];
         let success = false;
         let retries = 3;
@@ -274,6 +284,7 @@ const BrickLoader = (() => {
           try {
             const url = _brickUrl(lod, channel, bx, by, bz);
             const data = await _fetchBrickImage(url, controller.signal);
+            if (generation !== _generation) { success = true; break; }  // ELE-12: switch during fetch -> don't write to the new dataset's cache
             if (useDecodedCache) {
               _cache.set(key, { data, lod, channel, lastUsed: performance.now() });
               _trimCache();
@@ -410,6 +421,9 @@ const BrickLoader = (() => {
   function clearCache() {
     _cache.clear();
     _packCache.clear();
+    // ELE-17: teardown of the pack cache -> abort orphaned pack fetches, renew controller
+    if (_packFetchController) { try { _packFetchController.abort(); } catch (e) {} }
+    _packFetchController = (typeof AbortController !== 'undefined') ? new AbortController() : null;
     _workers.forEach(w => w.postMessage({ type: 'CANCEL' }));
   }
 
@@ -463,7 +477,10 @@ const BrickLoader = (() => {
   // ── Internal ──────────────────────────────────────────────
 
   function _cacheKey(lod, channel, bx, by, bz) {
-    return `${lod}:c${channel}:${bx}_${by}_${bz}`;
+    // ELE-13: prefix with the dataset tag so bricks from different datasets can
+    // never collide in the shared LRU cache. The '|' delimiter keeps the coord
+    // as the last ':'-segment (preserves key.split(':').pop() used elsewhere).
+    return `${_datasetTag}|${lod}:c${channel}:${bx}_${by}_${bz}`;
   }
 
   function _brickUrl(lod, channel, bx, by, bz) {
@@ -755,12 +772,19 @@ const BrickLoader = (() => {
     return resp.blob();
   }
 
+  // ELE-17 (RACE-031): the per-URL pack promise is shared between concurrent
+  // loads. Binding the actual fetch to the FIRST caller's per-load signal meant
+  // a stale load's cancellation aborted bricks of the current load. Bind the
+  // shared fetch to the loader-owned _packFetchController (lifetime = pack cache,
+  // only aborted on init()/clearCache) and honour the caller's own signal by
+  // racing the shared promise against it — without poisoning it for others.
   async function _fetchPackBuffer(relativeUrl, signal) {
     const url = `${_basePath}/${String(relativeUrl).replace(/^\/+/, '')}`;
     let entry = _packCache.get(url);
     if (!entry) {
       _trimPackCache(PACK_CACHE_LIMIT - 1);
-      const promise = fetch(url, { signal }).then(async resp => {
+      const fetchSignal = _packFetchController ? _packFetchController.signal : signal;
+      const promise = fetch(url, { signal: fetchSignal }).then(async resp => {
         if (!resp.ok) throw new Error(`HTTP ${resp.status} for ${url}`);
         return resp.arrayBuffer();
       }).catch(err => {
@@ -772,7 +796,22 @@ const BrickLoader = (() => {
     } else {
       entry.lastUsed = performance.now?.() || Date.now();
     }
-    return entry.promise;
+    return _awaitWithSignal(entry.promise, signal);
+  }
+
+  // Resolve/reject with `promise`, but reject early (AbortError) if `signal`
+  // aborts — without aborting the underlying shared fetch (other callers keep it).
+  function _awaitWithSignal(promise, signal) {
+    if (!signal) return promise;
+    if (signal.aborted) return Promise.reject(new DOMException('Aborted', 'AbortError'));
+    return new Promise((resolve, reject) => {
+      const onAbort = () => reject(new DOMException('Aborted', 'AbortError'));
+      signal.addEventListener('abort', onAbort, { once: true });
+      promise.then(
+        (v) => { signal.removeEventListener('abort', onAbort); resolve(v); },
+        (e) => { signal.removeEventListener('abort', onAbort); reject(e); }
+      );
+    });
   }
 
   function _trimPackCache(limit = PACK_CACHE_LIMIT) {
@@ -872,6 +911,8 @@ const BrickLoader = (() => {
     cancelPending,
     isLoading,
     getCacheStats,
-    clearCache
+    clearCache,
+    _cacheKey,        // exposed for unit testing (ELE-13)
+    _fetchPackBuffer  // exposed for unit testing (ELE-17)
   };
 })();

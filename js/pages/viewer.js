@@ -101,7 +101,14 @@ const ViewerApp = (() => {
       if (!_isIframe) setTimeout(() => { window.location.href = 'explorer.html'; }, 1400);
       return;
     }
-    await _mergeDatasetMetadata();
+    try {
+      await _mergeDatasetMetadata();
+    } catch (err) {
+      _perf()?.end(initPerfId, { status: 'invalid-metadata', datasetId });
+      _showLoadingError(err);
+      if (!_isIframe) setTimeout(() => { window.location.href = 'explorer.html'; }, 1400);
+      return;
+    }
     if (!datasetMeta.volumeSources) datasetMeta.volumeSources = [];
     if (!datasetMeta.volumeSources) datasetMeta.volumeSources = [];
 
@@ -510,6 +517,41 @@ const ViewerApp = (() => {
     btnReopen.addEventListener('click', () => _expand());
   }
 
+  // Rule 1.4 — un metadata.json présent doit être structurellement cohérent ; un
+  // metadata incohérent est REJETÉ (pas monté partiellement). On ne valide que ce
+  // qui est présent : un champ absent reste pris dans le fallback catalogue.
+  function _validateDatasetMetadata(meta, expectLive) {
+    if (!meta || typeof meta !== 'object' || Array.isArray(meta)) {
+      return { ok: false, reason: 'racine non-objet' };
+    }
+    const _posInt = (v) => Number.isFinite(v) && Number.isInteger(v) && v > 0;
+    const d = meta.dimensions;
+    if (d !== undefined) {
+      if (!d || typeof d !== 'object' || Array.isArray(d)) return { ok: false, reason: 'dimensions non-objet' };
+      if (!_posInt(d.x) || !_posInt(d.y) || !_posInt(d.z)) return { ok: false, reason: 'dimensions x/y/z invalides' };
+      if (d.c !== undefined && !_posInt(d.c)) return { ok: false, reason: 'dimensions.c invalide' };
+      if (d.t !== undefined && !_posInt(d.t)) return { ok: false, reason: 'dimensions.t invalide' };
+    }
+    // Live : le scrubber lit dimensions.t — il doit exister, dans metadata.json OU le
+    // catalogue (datasetMeta n'est pas encore fusionné ici, d'où le fallback effectif).
+    if (expectLive) {
+      const effT = (d && _posInt(d.t)) ? d.t : datasetMeta?.dimensions?.t;
+      if (!_posInt(effT)) return { ok: false, reason: 'dataset live sans dimensions.t' };
+    }
+    if (meta.voxel_size !== undefined) {
+      const v = meta.voxel_size;
+      if (!v || typeof v !== 'object' || Array.isArray(v)) return { ok: false, reason: 'voxel_size non-objet' };
+      const _posNum = (x) => Number.isFinite(x) && x > 0;
+      if (!_posNum(v.x) || !_posNum(v.y) || !_posNum(v.z)) return { ok: false, reason: 'voxel_size x/y/z invalides' };
+    }
+    if (meta.channels !== undefined) {
+      if (!Array.isArray(meta.channels) || meta.channels.length === 0) return { ok: false, reason: 'channels non-tableau ou vide' };
+      if (meta.channels.some((c) => !c || typeof c !== 'object')) return { ok: false, reason: 'channels contient un élément non-objet' };
+      if (d && _posInt(d.c) && meta.channels.length !== d.c) return { ok: false, reason: `channels.length (${meta.channels.length}) != dimensions.c (${d.c})` };
+    }
+    return { ok: true };
+  }
+
   async function _mergeDatasetMetadata() {
     const datasetPath = datasetMeta?.path || datasetMeta?.id;
     if (!datasetPath) return;
@@ -517,6 +559,9 @@ const ViewerApp = (() => {
       const resp = await fetch(`DATA_WEB/${datasetPath}/metadata.json`);
       if (!resp.ok) return;
       const meta = await resp.json();
+      const expectLive = datasetMeta?.type === 'live' || meta?.type === 'live';
+      const v = _validateDatasetMetadata(meta, expectLive);
+      if (!v.ok) throw new Error(`metadata.json invalide : ${v.reason}`);
       datasetMeta = {
         ...datasetMeta,
         ...meta,
@@ -530,7 +575,8 @@ const ViewerApp = (() => {
         datasetMeta.volumeSources = VolumeSourceManager.normalizeSources(datasetMeta);
       }
     } catch (err) {
-      console.warn('[ViewerApp] Could not merge dataset metadata:', err);
+      console.warn('[ViewerApp] Dataset metadata rejected:', err);
+      throw err;   // Rule 1.4: propagate so init aborts instead of mounting partial data
     }
   }
 

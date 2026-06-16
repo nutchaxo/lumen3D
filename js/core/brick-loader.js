@@ -40,12 +40,49 @@ const BrickLoader = (() => {
     verifyHashes: false
   };
 
+  // ELE-21 (Rule 1.4): encodages que le décodeur sait traiter (cf. _fetchPackedRawBrick).
+  const _KNOWN_ENCODINGS = new Set(['raw-u8', 'raw-u8-gzip', 'raw-rgba-gzip', 'webp-lossless']);
+
+  /**
+   * ELE-21 (Rule 1.4): valide la structure minimale d'un manifest AVANT montage.
+   * Throw explicite si malformé -> rejet propre plutôt qu'un TypeError opaque plus loin
+   * (getDimensions / volume-viewer). N'inspecte PAS nonEmpty/occupiedRatio : une brick
+   * vide (ESS, ELE-20) est un état légitime, pas une erreur de structure.
+   */
+  function _validateManifest(manifest) {
+    const reject = (msg) => { throw new Error('[BrickLoader] Manifest rejected: ' + msg); };
+    if (!manifest || typeof manifest !== 'object') reject('manifest is not an object.');
+    if (!Array.isArray(manifest.levels) || manifest.levels.length === 0) reject('levels must be a non-empty array.');
+    if (manifest.channels !== undefined && !(Number.isInteger(manifest.channels) && manifest.channels >= 1)) {
+      reject('channels must be an integer >= 1.');
+    }
+    if (manifest.brickSize !== undefined && !(Number.isInteger(manifest.brickSize) && manifest.brickSize > 0)) {
+      reject('brickSize must be a positive integer.');
+    }
+    manifest.levels.forEach((level, i) => {
+      if (!level || typeof level !== 'object') reject('level[' + i + '] is not an object.');
+      if (!Number.isInteger(level.level) || level.level < 0) reject('level[' + i + '].level must be a non-negative integer.');
+      const d = level.dimensions;
+      if (!d || typeof d !== 'object') reject('level[' + i + '].dimensions is missing.');
+      for (const axis of ['x', 'y', 'z']) {
+        if (!(Number.isFinite(d[axis]) && d[axis] > 0)) reject('level[' + i + '].dimensions.' + axis + ' must be a positive number.');
+      }
+      const bs = level.brickSize !== undefined ? level.brickSize : manifest.brickSize;
+      if (bs !== undefined && !(Number.isInteger(bs) && bs > 0)) reject('level[' + i + '].brickSize must be a positive integer.');
+    });
+    const enc = manifest.brickTransport && manifest.brickTransport.encoding;
+    if (enc !== undefined && enc !== null && !_KNOWN_ENCODINGS.has(enc)) {
+      reject('unknown brickTransport.encoding "' + enc + '".');
+    }
+  }
+
   /**
    * Initialize from a brick manifest JSON.
    * @param {string} basePath  e.g. "DATA_WEB/fixed/dataset-name/bricks"
    * @param {object} manifest  parsed manifest.json
    */
   function init(basePath, manifest) {
+    _validateManifest(manifest);     // ELE-21 (Rule 1.4): rejet AVANT toute mutation d'état partagé
     cancelPending();                 // ELE-12: abort any prior in-flight load BEFORE mutating shared state
     _generation++;                   // ELE-12: invalidate tasks that captured the previous generation
     _basePath = basePath.replace(/\/$/, '');
@@ -912,7 +949,8 @@ const BrickLoader = (() => {
     isLoading,
     getCacheStats,
     clearCache,
-    _cacheKey,        // exposed for unit testing (ELE-13)
-    _fetchPackBuffer  // exposed for unit testing (ELE-17)
+    _cacheKey,         // exposed for unit testing (ELE-13)
+    _fetchPackBuffer,  // exposed for unit testing (ELE-17)
+    _validateManifest  // exposed for unit testing (ELE-21)
   };
 })();

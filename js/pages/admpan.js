@@ -93,10 +93,16 @@ function escHtml(str) {
     .replace(/'/g, '&#39;');
 }
 
+let _csrfToken = null;  // CSRF token for state-changing requests (set after auth)
+
 async function apiFetch(url, options = {}) {
   try {
     const res = await fetch(url, {
-      headers: { 'Content-Type': 'application/json', ...(options.headers || {}) },
+      headers: {
+        'Content-Type': 'application/json',
+        ...(_csrfToken ? { 'X-CSRF-Token': _csrfToken } : {}),
+        ...(options.headers || {}),
+      },
       ...options,
     });
     if (res.status === 401) {
@@ -143,6 +149,7 @@ function clearDirty() {
 async function checkAuth() {
   const data = await apiFetch(`${API_AUTH}?action=status`);
   if (data?.authenticated) {
+    _csrfToken = data.csrf || null;
     showApp();
     loadDatasets();
   } else {
@@ -179,6 +186,7 @@ async function doLogin() {
   DOM.btnLogin.innerHTML = 'Se connecter';
 
   if (data?.ok) {
+    _csrfToken = data.csrf || null;
     DOM.headerUsername.textContent = username;
     showApp();
     loadDatasets();

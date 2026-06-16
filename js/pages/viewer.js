@@ -2146,6 +2146,10 @@ const ViewerApp = (() => {
     });
     _currentTimepoint = t;
     const loadToken = ++_activeLoadToken;
+    // ELE-11 (RACE-002): any post-await resumption on a stale load (quality/timepoint
+    // changed meanwhile) must NOT mutate _brickManifest, the quality select, or _qualityMode.
+    const _isStale = () => loadToken !== _activeLoadToken;
+    const _bailStale = () => { _perf()?.end(perfId, { status: 'stale', timepoint: t, quality: primaryQuality }); };
     const loader = document.getElementById('viewer-loader');
     const progressFill = document.getElementById('loader-progress');
     const loaderText = document.getElementById('loader-text');
@@ -2177,6 +2181,7 @@ const ViewerApp = (() => {
           progressFill.style.width = `${progress * 100}%`;
         }
       }, { deferActivation: isQualitySwitch });
+      if (_isStale()) { _bailStale(); return; }
       if ((!result || result.available === false) && primaryQuality === '512x512') {
         console.warn('[ViewerApp] 512x512 unavailable, falling back to 256x256:', result?.reason || 'unknown');
         primaryQuality = '256x256';
@@ -2189,8 +2194,9 @@ const ViewerApp = (() => {
             progressFill.style.width = `${progress * 100}%`;
           }
         }, { deferActivation: isQualitySwitch });
+        if (_isStale()) { _bailStale(); return; }
       }
-      if (result && result.manifest) {
+      if (!_isStale() && result && result.manifest) {
         _brickManifest = result.manifest;
         _updateQualityOptionLabels();
       }
@@ -2207,6 +2213,7 @@ const ViewerApp = (() => {
             progressFill.style.width = `${progress * 100}%`;
           }
         }, { deferActivation: isQualitySwitch });
+        if (_isStale()) { _bailStale(); return; }
       } else {
       _perf()?.end(perfId, {
         status: 'error',
@@ -2217,6 +2224,8 @@ const ViewerApp = (() => {
       throw err;
       }
     }
+
+    if (_isStale()) { _bailStale(); return; }
 
     if (result && result.manifest) {
       _brickManifest = result.manifest;

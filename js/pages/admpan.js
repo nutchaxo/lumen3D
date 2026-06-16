@@ -28,6 +28,7 @@ let _dirty       = false;
 let _typeFilter  = 'all';
 let _searchQuery = '';
 let _previewTimer = null;
+let _selectGen = 0;   // ELE-15: monotonic token; a slow get() for a superseded selection is ignored
 
 // ── DOM refs ──────────────────────────────────────────────────
 const el = id => document.getElementById(id);
@@ -288,6 +289,7 @@ async function selectDataset(id) {
     clearDirty();
   }
 
+  const myGen = ++_selectGen;   // ELE-15 (RACE-006): invalidate any earlier in-flight selection
   _current = _datasets.find(ds => ds.id === id) || null;
   if (!_current) return;
 
@@ -298,6 +300,9 @@ async function selectDataset(id) {
 
   // Load full metadata
   const meta = await apiFetch(`${API_DATASETS}?action=get&id=${encodeURIComponent(id)}`);
+  // ELE-15: a newer selection superseded this one while get() was in flight.
+  // Ignore the stale response so it can't overwrite _draft/_original/_current.
+  if (myGen !== _selectGen) return;
   if (!meta) { toast('Impossible de charger le dataset.', 'error'); return; }
 
   meta.channels = normaliseChannels(meta.channels, meta.dimensions?.c || 0);

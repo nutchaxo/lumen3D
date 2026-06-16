@@ -692,6 +692,10 @@ window.addEventListener('beforeunload', e => {
 
 // Listen to Viewer's iframe to sync channel configurations, exposure, and screenshots
 window.addEventListener('message', e => {
+  // SEC-006: only accept cross-frame messages from this page's own origin
+  // (the embedded viewer iframe is same-origin). admpan.js is an ES module and
+  // does not load the classic Utils global, so the check is inlined here.
+  if (e.origin !== window.location.origin) return;
   if (e.data?.type === 'SYNC_CHANNELS' && e.data.value) {
     if (_draft && _draft.channels) {
       const idx = e.data.channelIndex;

@@ -44,7 +44,17 @@ PluginRegistry.implement('zstack-browser', {
     }
     this._show(desired);
     if (desired && Number.isFinite(slice) && slice > 0) {
-      setTimeout(() => this._goToSlice(slice), 80);
+      // ELE-14 (RACE-005): re-arm the echo guard inside the deferred callback. The
+      // SYNC_ZSTACK_SLICE receiver in viewer.js clears suppressZstackSync
+      // synchronously, long before this 80ms timer fires; without re-arming,
+      // _goToSlice would re-broadcast and ping-pong with the sibling panel.
+      // Restore prev to keep nesting safe.
+      setTimeout(() => {
+        const st = this._ctx._state;
+        const prev = st.suppressZstackSync;
+        st.suppressZstackSync = true;
+        try { this._goToSlice(slice); } finally { st.suppressZstackSync = prev; }
+      }, 80);
     }
   },
 

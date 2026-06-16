@@ -101,6 +101,7 @@ PluginRegistry.implement('orientation-axes', {
   },
 
   _onMessage(e) {
+    if (!Utils.isTrustedMessageOrigin(e)) return;
     if (e.data?.type === 'CALIBRATE_ORIENTATION_START') {
       this._calibrationMode = true;
       if (!this._visible) {
@@ -112,7 +113,7 @@ PluginRegistry.implement('orientation-axes', {
       const cube = this._getCube();
       if (cube) {
         const q = cube.quaternion;
-        e.source.postMessage({ type: 'ORIENTATION_RESULT', quaternion: { x: q.x, y: q.y, z: q.z, w: q.w } }, '*');
+        e.source.postMessage({ type: 'ORIENTATION_RESULT', quaternion: { x: q.x, y: q.y, z: q.z, w: q.w } }, e.origin);
       }
     }
   },

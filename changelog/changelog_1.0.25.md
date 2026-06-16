@@ -1,0 +1,5 @@
+# Plateforme Web — v1.0.25
+
+## [FIXED]
+- **ELE-18 (EDGE-001)** — `js/viewers/volume-viewer.js` + `js/pages/viewer.js` : aucune gestion de la perte de contexte WebGL. Une perte (épuisement VRAM, reset driver/TDR, onglet en arrière-plan) laissait le viewer figé/écran noir sans récupération ni statut. Ajout de handlers `webglcontextlost` (`preventDefault()` — requis pour autoriser la restauration — + arrêt de la boucle de rendu + flag `_contextLost` + télémétrie) et `webglcontextrestored`, avec gardes dans `_animate` et `_scheduleFrame` (jamais de draw call sur contexte perdu). Statut **visible** surfacé via de nouveaux hooks `onContextLost`/`onContextRestored` câblés dans `viewer.js` sur `_setQualityStatus`. Dégradation gracieuse **tracée** (Rule 1.1). Limite assumée : les pages d'atlas SVR ne sont pas re-uploadées automatiquement à la restauration (rechargement du volume requis) — finding de suivi.
+- Test : `tests/js/test_volume_viewer_contextloss.mjs` (structurel) + `node --check` sur les deux fichiers.

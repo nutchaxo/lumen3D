@@ -7,6 +7,9 @@ const VolumeViewer = (() => {
   let _container;
   let texture3D;
   let animationId;
+  let _contextLost = false;     // ELE-18: true between webglcontextlost and webglcontextrestored
+  let _onContextLost = null;    // ELE-18: visible-status hooks (wired by viewer.js)
+  let _onContextRestored = null;
   let _resizeObserver = null;
   const _cameraListeners = new Set();
   let _loadCounter = 0;
@@ -578,6 +581,26 @@ const VolumeViewer = (() => {
     // Renderer
     const canvas = container;
     renderer = new THREE.WebGLRenderer({ canvas: canvas, alpha: true, antialias: true, preserveDrawingBuffer: true });
+    // ELE-18 (EDGE-001): WebGL context loss (VRAM exhaustion, driver reset/TDR, tab
+    // backgrounding) must degrade gracefully (Rule 1.1). preventDefault() is REQUIRED so the
+    // browser may later restore the context; we stop the render loop and surface a visible
+    // status (hooks wired in viewer.js) instead of drawing on a dead context.
+    canvas.addEventListener('webglcontextlost', (e) => {
+      e.preventDefault();
+      _contextLost = true;
+      if (animationId) { cancelAnimationFrame(animationId); animationId = null; }
+      console.error('[VolumeViewer] WebGL context lost - rendering paused.');
+      _perf()?.event('viewer.context_lost', { quality: _qualityTarget });
+      _emitQualityState({ message: 'GPU context lost', progress: 0 });
+      _onContextLost?.();
+    }, false);
+    canvas.addEventListener('webglcontextrestored', () => {
+      _contextLost = false;
+      console.warn('[VolumeViewer] WebGL context restored - volume must be reloaded.');
+      _perf()?.event('viewer.context_restored', { quality: _qualityTarget });
+      _onContextRestored?.();
+      _scheduleFrame();
+    }, false);
     renderer.setSize(w, h, false);
     renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
     renderer.setClearColor(0x000000, 1); // Force Noir Pur pour l'Additive Blending
@@ -1171,6 +1194,7 @@ const VolumeViewer = (() => {
   }
 
   function _animate() {
+    if (_contextLost) { animationId = null; return; }   // ELE-18: never draw on a lost context
     const now = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
     const isInteractingNow = _isInteracting || (_activePointers.size === 2) || (Date.now() - _lastInteractionTime < 250);
 
@@ -1279,7 +1303,7 @@ const VolumeViewer = (() => {
   /** Wake the render loop if it's sleeping */
   function _scheduleFrame() {
     _needsRender = true;
-    if (!animationId && renderer) {
+    if (!animationId && renderer && !_contextLost) {   // ELE-18: don't wake the loop on a lost context
       animationId = requestAnimationFrame(_animate);
     }
   }
@@ -3422,6 +3446,10 @@ const VolumeViewer = (() => {
     return () => _qualityListeners.delete(callback);
   }
 
+  // ELE-18: visible-status hooks for WebGL context loss/restore (wired by viewer.js).
+  function onContextLost(callback) { _onContextLost = (typeof callback === 'function') ? callback : null; }
+  function onContextRestored(callback) { _onContextRestored = (typeof callback === 'function') ? callback : null; }
+
   function _emitQualityState(patch = {}) {
     _qualityState = { ..._qualityState, ...patch };
     _qualityListeners.forEach(callback => callback({ ..._qualityState }));
@@ -3529,6 +3557,8 @@ const VolumeViewer = (() => {
     setQualityTarget,
     getQualityState,
     onQualityProgress,
+    onContextLost,
+    onContextRestored,
     setShowMeasurementLabels,
     setMeasurementTextSize,
     setMeasurements,

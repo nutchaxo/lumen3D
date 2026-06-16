@@ -320,7 +320,7 @@ const BrickLoader = (() => {
         while (retries > 0 && !success && !controller.signal.aborted) {
           try {
             const url = _brickUrl(lod, channel, bx, by, bz);
-            const data = await _fetchBrickImage(url, controller.signal);
+            const data = await _fetchBrickImage(url, controller.signal, { bx, by, bz, lod });
             if (generation !== _generation) { success = true; break; }  // ELE-12: switch during fetch -> don't write to the new dataset's cache
             if (useDecodedCache) {
               _cache.set(key, { data, lod, channel, lastUsed: performance.now() });
@@ -341,6 +341,9 @@ const BrickLoader = (() => {
             retries--;
             if (retries === 0) {
               console.warn(`[BrickLoader] Failed to load brick ${key} after retries:`, err);
+              // ELE-20: dégradation gracieuse TRACÉE (Rule 1.1) — la brick est droppée
+              // (jamais écrite au cache/atlas) et le viewer est notifié pour surfacer un statut.
+              options.onBrickError?.({ bx, by, bz, channel, lod, error: err });
             } else {
               await new Promise(r => setTimeout(r, 500));
             }
@@ -535,11 +538,11 @@ const BrickLoader = (() => {
     return _packIndex.get(rel)?.url || rel;
   }
 
-  async function _fetchBrickImage(url, signal) {
+  async function _fetchBrickImage(url, signal, coord = null) {
     const perf = _perf();
     const span = perf?.start('brick.fetch.decode.unpack', { url });
     const t0 = performance.now?.() || Date.now();
-    const raw = await _fetchPackedRawBrick(url, signal);
+    const raw = await _fetchPackedRawBrick(url, signal, coord);
     if (raw) {
       const t1 = performance.now?.() || Date.now();
       perf?.end(span, {
@@ -675,7 +678,11 @@ const BrickLoader = (() => {
     return data;
   }
 
-  async function _fetchPackedRawBrick(url, signal) {
+  async function _fetchPackedRawBrick(url, signal, coord = null) {
+    // ELE-20: une brick attendue (présente dans _activeBricksSet via hasBrick) mais
+    // absente de _packIndex OU renvoyant 404 est un ÉCHEC (-> throw -> drop tracé), pas
+    // un vide d'ESS. Seul un vide non référencé par le manifest est un zéro légitime.
+    const _expected = coord ? hasBrick(coord.bx, coord.by, coord.bz, coord.lod) : false;
     const encoding = _manifest?.brickTransport?.encoding;
     const isGzip = encoding === 'raw-u8-gzip' || encoding === 'raw-rgba-gzip';
     const isWebp = encoding === 'webp-lossless';
@@ -689,6 +696,9 @@ const BrickLoader = (() => {
     // NATIVE DIRECT FETCH (unpacked)
     if (!packed) {
       if (_manifest?.brickTransport?.mode === 'packs' || _packIndex.size > 0) {
+        // ELE-20: brick réclamée par le manifest mais absente de l'index pack =
+        // pack/manifest incohérent -> échec tracé, pas un vide silencieux.
+        if (_expected) throw new Error('Brick expected but missing from pack index: ' + url);
         const bs = _manifest?.levels?.[0]?.brickSize || BRICK_SIZE;
         const channels = encoding === 'raw-rgba-gzip' ? 4 : 1;
         return new Uint8Array(bs * bs * bs * channels);
@@ -707,8 +717,8 @@ const BrickLoader = (() => {
         if (isWebp && _workers.length > 0 && _workerReady) {
             const resp = await fetch(chunkUrl, { signal });
             if (!resp.ok) {
-                const bs = _manifest?.levels?.[0]?.brickSize || BRICK_SIZE;
-                return new Uint8Array(bs * bs * bs * (encoding === 'raw-rgba-gzip' ? 4 : 1));
+                // ELE-20: 404 / range non honoré -> échec tracé (retry + drop), jamais des zéros silencieux.
+                throw new Error('HTTP ' + resp.status + ' for ' + chunkUrl);
             }
             const buffer = await resp.arrayBuffer();
             try {
@@ -720,9 +730,8 @@ const BrickLoader = (() => {
         
         const resp = await fetch(chunkUrl, { signal });
         if (!resp.ok) {
-            const bs = _manifest?.levels?.[0]?.brickSize || BRICK_SIZE;
-            const channels = encoding === 'raw-rgba-gzip' ? 4 : 1;
-            return new Uint8Array(bs * bs * bs * channels);
+            // ELE-20: 404 sur fetch raw/gzip direct -> échec tracé, pas des zéros silencieux.
+            throw new Error('HTTP ' + resp.status + ' for ' + chunkUrl);
         }
         const buffer = await resp.arrayBuffer();
         if (isGzip) return await _decompressSlice(buffer);

@@ -1,0 +1,5 @@
+# Plateforme Web — v1.0.28
+
+## [FIXED]
+- **ELE-20 (EDGE-003)** — `js/core/brick-loader.js` : une brick en échec (404, range non honoré, ou absente de l'index pack alors qu'attendue) était renvoyée comme `Uint8Array` de zéros **silencieusement** (viole Rule 1.1 — dégradation tracée). Désormais : les échecs réseau (404) **lèvent** (retry × 3 puis drop), et une brick *attendue* (présente dans `_activeBricksSet` via `hasBrick`) mais absente de l'index pack lève (incohérence pack/manifest). La brick en échec est **droppée** (jamais écrite au cache/atlas) et `options.onBrickError` notifie le viewer pour surfacer un statut. L'**Empty-Space-Skipping est préservé** : une brick non référencée par le manifest (vide légitime) renvoie toujours des zéros, sans erreur. `_fetchBrickImage`/`_fetchPackedRawBrick` reçoivent la coordonnée pour distinguer échec-attendu et vide-légitime.
+- Test : `tests/js/test_brick_loader_degrade.mjs` (échec → drop + `onBrickError` + non-caché ; ESS → zéros silencieux sans erreur) + `node --check`. Suite complète verte (22 fichiers).

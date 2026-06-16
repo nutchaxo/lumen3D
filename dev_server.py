@@ -121,6 +121,38 @@ def _get_cookie_token(cookie_header: str | None) -> str | None:
 
 # ── Dataset helpers ────────────────────────────────────────────────────────────
 
+# Path-traversal guard for the `id` query param (= "<type>/<folder>").
+ALLOWED_TYPE_DIRS = ("fixed", "live", "tracking")
+_SAFE_FOLDER_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9._-]*$")
+
+
+def _safe_dataset_dir(dataset_id: str):
+    """Resolve a dataset id ('<type>/<folder>') to a directory under DATA_WEB.
+
+    Returns (type_dir, folder, Path) for a valid id, or None if the id is
+    malformed or attempts path traversal. The type segment must be one of the
+    allowed dataset roots, the folder must be a single safe path component, and
+    the resolved path must stay inside DATA_WEB/<type> (defense in depth).
+    """
+    if not isinstance(dataset_id, str):
+        return None
+    parts = dataset_id.split("/", 1)
+    if len(parts) != 2:
+        return None
+    type_dir, folder = parts[0].strip(), parts[1].strip()
+    if type_dir not in ALLOWED_TYPE_DIRS:
+        return None
+    if folder in (".", "..") or not _SAFE_FOLDER_RE.match(folder):
+        return None
+    base = (DATA_WEB / type_dir).resolve()
+    candidate = (base / folder).resolve()
+    try:
+        candidate.relative_to(base)
+    except ValueError:
+        return None
+    return type_dir, folder, candidate
+
+
 def _list_datasets() -> list[dict]:
     datasets = []
     for type_dir in ["fixed", "live", "tracking"]:
@@ -198,11 +230,10 @@ def _get_dataset(dataset_id: str) -> dict | None:
 
 
 def _save_dataset(dataset_id: str, body: dict) -> bool:
-    parts = dataset_id.split("/", 1)
-    if len(parts) != 2:
+    safe = _safe_dataset_dir(dataset_id)
+    if safe is None:
         return False
-    type_dir, folder = parts
-    ds_dir = DATA_WEB / type_dir / folder
+    type_dir, folder, ds_dir = safe
     ds_dir.mkdir(parents=True, exist_ok=True)
     meta_path = ds_dir / "metadata.json"
 
@@ -223,6 +254,28 @@ def _save_dataset(dataset_id: str, body: dict) -> bool:
 
     meta_path.write_text(json.dumps(existing, indent=2, ensure_ascii=False), encoding="utf-8")
     return True
+
+
+def _save_thumbnail_bytes(dataset_id: str, image_data: str):
+    """Decode a data:image/... URL and write it as the dataset thumbnail.
+
+    Returns (http_status, payload). Path-traversal-safe via _safe_dataset_dir.
+    """
+    if not isinstance(image_data, str) or not image_data.startswith("data:image/"):
+        return 400, {"error": "Invalid image format"}
+    safe = _safe_dataset_dir(dataset_id)
+    if safe is None:
+        return 400, {"error": "Invalid dataset ID"}
+    type_dir, folder, ds_dir = safe
+    try:
+        import base64
+        _, base64_str = image_data.split(",", 1)
+        img_bytes = base64.b64decode(base64_str)
+    except Exception as e:
+        return 500, {"error": f"Failed to save thumbnail: {e}"}
+    ds_dir.mkdir(parents=True, exist_ok=True)
+    (ds_dir / "thumbnail.webp").write_bytes(img_bytes)
+    return 200, {"ok": True, "path": f"DATA_WEB/{type_dir}/{folder}/thumbnail.webp"}
 
 
 def _rebuild_catalog() -> int:
@@ -383,27 +436,10 @@ class AdminHandler(http.server.SimpleHTTPRequestHandler):
                     self._json(400, {"error": "Invalid dataset ID"})
 
             elif action == "save_thumbnail":
-                ds_id = params.get("id", "")
-                image_data = (body or {}).get("image", "")
-                if image_data.startswith("data:image/"):
-                    try:
-                        import base64
-                        header, base64_str = image_data.split(",", 1)
-                        img_bytes = base64.b64decode(base64_str)
-                        
-                        parts = ds_id.split("/", 1)
-                        if len(parts) == 2:
-                            type_dir, folder = parts
-                            thumb_path = DATA_WEB / type_dir / folder / "thumbnail.webp"
-                            thumb_path.parent.mkdir(parents=True, exist_ok=True)
-                            thumb_path.write_bytes(img_bytes)
-                            self._json(200, {"ok": True, "path": f"DATA_WEB/{type_dir}/{folder}/thumbnail.webp"})
-                        else:
-                            self._json(400, {"error": "Invalid dataset ID"})
-                    except Exception as e:
-                        self._json(500, {"error": f"Failed to save thumbnail: {e}"})
-                else:
-                    self._json(400, {"error": "Invalid image format"})
+                status, payload = _save_thumbnail_bytes(
+                    params.get("id", ""), (body or {}).get("image", "")
+                )
+                self._json(status, payload)
 
             elif action == "rebuild_catalog":
                 count = _rebuild_catalog()

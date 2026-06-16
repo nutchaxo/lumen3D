@@ -32,6 +32,12 @@ const TrackingViewer = (() => {
   };
   let _clipPlaneHelper = null;
   let _clipCapGroup = null;
+  // ELE-28 (PERF-002): invalidation key for the clip cap. The cap is a pure
+  // function of the clip plane spec (+ derived _clipSpan) and the set of
+  // currently-visible surface meshes (which changes as the scrub picks the
+  // nearest surface variant). Rebuild — full per-triangle walk + GPU alloc — only
+  // when this key changes.
+  let _clipCapKey = null;
   
   // Meshes
   let _cellMesh; // InstancedMesh
@@ -1252,13 +1258,33 @@ const TrackingViewer = (() => {
     _scene.add(_clipPlaneHelper);
   }
 
+  function _clipCapSignature(meshes) {
+    if (!_meshClipSpec.enabled || !_glbScene) return 'disabled';
+    const s = _meshClipSpec;
+    const variantKeys = meshes
+      .map(m => m.userData?.surfaceVariant?.key ?? m.uuid)
+      .sort()
+      .join(',');
+    // _clipSpan reflects the scene bbox; it feeds _buildClipPlane's coplanar point,
+    // so a span change (e.g. model re-attach) must invalidate the cap.
+    return [s.enabled, s.mode, s.value, s.yaw, s.pitch, s.color, s.opacity, _clipSpan(), variantKeys].join('|');
+  }
+
   function _updateClipCap() {
     if (!_clipCapGroup) return;
-    _clearGroup(_clipCapGroup);
-    if (!_meshClipSpec.enabled || !_glbScene) return;
-    const plane = _buildClipPlane();
+    if (!_meshClipSpec.enabled || !_glbScene) {
+      // Teardown: free the cap and force a rebuild on re-enable.
+      if (_clipCapKey !== 'disabled') { _clearGroup(_clipCapGroup); _clipCapKey = 'disabled'; }
+      return;
+    }
     const meshes = _visibleSurfaceMeshes();
+    const signature = _clipCapSignature(meshes);
+    // Cache hit: plane + visible surface-mesh set unchanged -> existing cap is correct.
+    if (signature === _clipCapKey && _clipCapGroup.children.length) return;
+    _clearGroup(_clipCapGroup);
+    _clipCapKey = signature;
     if (!meshes.length) return;
+    const plane = _buildClipPlane();
     const segments = [];
     meshes.forEach(mesh => _collectPlaneSegments(mesh, plane, segments));
     if (segments.length < 3) return;

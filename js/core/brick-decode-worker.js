@@ -25,14 +25,18 @@ async function processDecode(msg, epoch) {
   // Skip a job cancelled before it started running.
   if (epoch !== cancelEpoch) return;
   const id = msg.id;
+  let bmp = null;
   try {
     const t0 = performance.now();
     const buffer = msg.buffer;
     const bs = msg.brickSize || 64;
-    const packing = msg.packing || { mode: 'vertical' };
-    
+    // BUG-065: no implicit 'vertical' default — a linear read of a grid-mosaic image
+    // scrambles the volume (silent garbage with ok:true). An unknown/absent mode now
+    // fails loud below instead of mounting corrupt voxels.
+    const packing = msg.packing || {};
+
     const blob = new Blob([buffer], { type: 'image/webp' });
-    const bmp = await createImageBitmap(blob);
+    bmp = await createImageBitmap(blob);
     const t1 = performance.now();
 
     if (!canvas) {
@@ -120,7 +124,9 @@ async function processDecode(msg, epoch) {
           }
         }
       }
-    } else {
+    } else if (packing.mode === 'vertical') {
+      // Explicit legacy vertical layout (width=bs, height=bs*bs). No current dataset
+      // produces this; kept only for an explicitly-tagged manifest, never as a default.
       const len = Math.min(totalVoxels, srcData.length >> 2);
       const srcDataLocal = srcData;
       const bytesLocal = bytes;
@@ -129,10 +135,17 @@ async function processDecode(msg, epoch) {
         bytesLocal[i] = srcDataLocal[srcIdx];
         srcIdx += 4;
       }
+    } else {
+      // BUG-065 (Rule 1.4 / 1.1): unknown or absent packing mode — fail loud rather
+      // than silently producing a scrambled volume. The loader surfaces the dropped
+      // brick as a status (onBrickError) instead of mounting corrupt data.
+      if (epoch !== cancelEpoch) return;
+      self.postMessage({ type: 'DECODE_RESULT', id, ok: false, message: 'unknown packing mode: ' + JSON.stringify(packing.mode) });
+      return;
     }
-    
+
     const t3 = performance.now();
-    
+
     // Suppress the result if a CANCEL arrived while we were decoding.
     if (epoch !== cancelEpoch) return;
     self.postMessage({
@@ -145,5 +158,9 @@ async function processDecode(msg, epoch) {
   } catch (err) {
     if (epoch !== cancelEpoch) return;
     self.postMessage({ type: 'DECODE_RESULT', id, ok: false, message: err.message });
+  } finally {
+    // LEAK-011 (Rule 1.2): release the decoded ImageBitmap graphics handle on every
+    // path (success, cancel-suppress, error) — otherwise one bitmap leaks per brick.
+    if (bmp && typeof bmp.close === 'function') bmp.close();
   }
 }

@@ -13,8 +13,13 @@ const Utils = (() => {
    */
   function formatFileSize(bytes) {
     if (bytes === 0) return '0 B';
+    // EDGE-043: Math.log of a negative/NaN size is NaN and Math.log(Infinity) is
+    // Infinity, so the unit index goes out of range and the output degrades to
+    // 'NaN undefined'. Reject non-finite/negative sizes, and clamp the index so a
+    // value larger than 1 PB still reports in TB rather than indexing past the array.
+    if (!Number.isFinite(bytes) || bytes < 0) return '—';
     const units = ['B', 'KB', 'MB', 'GB', 'TB'];
-    const i = Math.floor(Math.log(bytes) / Math.log(1024));
+    const i = Math.min(units.length - 1, Math.floor(Math.log(bytes) / Math.log(1024)));
     return (bytes / Math.pow(1024, i)).toFixed(i > 0 ? 1 : 0) + ' ' + units[i];
   }
 
@@ -24,7 +29,6 @@ const Utils = (() => {
    * @returns {string}
    */
   function formatDate(dateStr) {
-    if (!dateStr) return '-';
     if (!dateStr) return '—';
     // Handle DDMMYYYY format
     if (/^\d{8}$/.test(dateStr)) {
@@ -96,7 +100,6 @@ const Utils = (() => {
    * @returns {string} e.g. "E7.5"
    */
   function formatStage(stage) {
-    if (!stage) return '-';
     if (!stage) return '—';
     const match = stage.match(/^E(\d+)$/i);
     if (!match) return stage;

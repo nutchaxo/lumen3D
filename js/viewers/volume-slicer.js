@@ -1,9 +1,12 @@
 /* ============================================================
    IRIBHM Microscopy Platform — Volume Slicer (GPU)
    ============================================================
-   Renders arbitrary-orientation slices through the loaded 3D
-   texture entirely on the GPU. Shares the same DataTexture3D
-   and channel uniforms as the main volume renderer (zero copy).
+   Renders arbitrary-orientation slices through the loaded volume
+   entirely on the GPU. Samples the same SVR atlas pages
+   (svrAtlas0..7 + pageTable) and links the same channel uniforms
+   (color/min/max/gamma/opacity/enabled) as the main volume
+   renderer, by reference (zero copy); falls back to sampling
+   svrAtlas0 as a plain 3D texture when ENABLE_SVR is off.
    ============================================================ */
 
 const VolumeSlicer = (() => {
@@ -78,7 +81,6 @@ const VolumeSlicer = (() => {
     uniform vec3  sliceRight;
     uniform vec3  sliceUp;
     uniform vec3  sliceNormal;
-    uniform vec3  volumeScale;
     uniform float sliceExtent;
     uniform int   slabSteps;
     uniform float slabDelta;
@@ -275,7 +277,6 @@ const VolumeSlicer = (() => {
     u.sliceRight  = { value: new THREE.Vector3(1,0,0) };
     u.sliceUp     = { value: new THREE.Vector3(0,1,0) };
     u.sliceNormal = { value: new THREE.Vector3(0,0,1) };
-    u.volumeScale = { value: new THREE.Vector3(1,1,1) };
     u.sliceExtent = { value: EXTENT };
     u.slabSteps   = { value: 1 };
     u.slabDelta   = { value: 0.005 };
@@ -323,7 +324,10 @@ const VolumeSlicer = (() => {
       up     = new THREE.Vector3(0, 1, 0);
     }
 
-    const origin = normal.clone().multiplyScalar((spec.value || 0.5) - 0.5);
+    // EDGE-034: use spec.value directly (sanitized to [0,1] in setPlaneSpec) so a
+    // legitimate 0 is honored instead of being rewritten to 0.5 by `value || 0.5`.
+    const value = Number.isFinite(+spec.value) ? +spec.value : 0.5;
+    const origin = normal.clone().multiplyScalar(value - 0.5);
     return { origin, right, up, normal };
   }
 
@@ -336,19 +340,25 @@ const VolumeSlicer = (() => {
     // so that 1.0 in pc corresponds to maxP physical microns.
     if (typeof VolumeViewer !== 'undefined' && VolumeViewer.getPhysicalSize) {
       const physical = VolumeViewer.getPhysicalSize() || {x: 1, y: 1, z: 1};
-      const maxP = Math.max(physical.x, physical.y, physical.z);
-      right.x *= maxP / physical.x;
-      right.y *= maxP / physical.y;
-      right.z *= maxP / physical.z;
-      
-      up.x *= maxP / physical.x;
-      up.y *= maxP / physical.y;
-      up.z *= maxP / physical.z;
-      
+      // EDGE-035: the `|| {1,1,1}` guard only catches a null return, not an object
+      // with a 0 dimension (malformed metadata scaleInfo) — which gave maxP/0 = ∞
+      // (or 0/0 = NaN) uniforms. Replace any non-positive physical dim with 1.
+      const px = physical.x > 0 ? physical.x : 1;
+      const py = physical.y > 0 ? physical.y : 1;
+      const pz = physical.z > 0 ? physical.z : 1;
+      const maxP = Math.max(px, py, pz) || 1;
+      right.x *= maxP / px;
+      right.y *= maxP / py;
+      right.z *= maxP / pz;
+
+      up.x *= maxP / px;
+      up.y *= maxP / py;
+      up.z *= maxP / pz;
+
       // Slab delta also needs to be in uvw space for normal
-      normal.x *= maxP / physical.x;
-      normal.y *= maxP / physical.y;
-      normal.z *= maxP / physical.z;
+      normal.x *= maxP / px;
+      normal.y *= maxP / py;
+      normal.z *= maxP / pz;
     }
 
     u.sliceOrigin.value.copy(origin);
@@ -575,7 +585,22 @@ const VolumeSlicer = (() => {
   // ── Public API ───────────────────────────────────────────
 
   function setPlaneSpec(spec) {
-    Object.assign(_spec, spec);
+    // EDGE-009 / EDGE-034 (Rule 1.4): sanitize before merging. A NaN angle is falsy
+    // (coerced to 0 downstream) but Infinity / a truthy non-numeric flowed into the
+    // Euler->quaternion and produced a degenerate (NaN/Inf) normal/right/up. `value`
+    // was accepted unbounded (offsetting the plane outside the [0,1] cube) and a
+    // legitimate 0 was wrongly turned into 0.5 by `value || 0.5`.
+    const merged = { ...spec };
+    for (const k of ['yaw', 'pitch', 'roll']) {
+      if (k in merged) merged[k] = Number.isFinite(+merged[k]) ? +merged[k] : 0;
+    }
+    if (merged.value != null) {
+      merged.value = Math.min(1, Math.max(0, Number.isFinite(+merged.value) ? +merged.value : 0.5));
+    }
+    if (merged.slabThickness != null) {
+      merged.slabThickness = Math.min(64, Math.max(1, Math.round(+merged.slabThickness) || 1));
+    }
+    Object.assign(_spec, merged);
     if (_visible) _scheduleRender();
     _listeners.forEach(cb => cb({ ..._spec }));
   }

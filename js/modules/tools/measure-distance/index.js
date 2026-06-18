@@ -111,7 +111,7 @@ PluginRegistry.implement('measure-distance', {
             <button class="btn btn-ghost btn-sm measure-color-btn" type="button"
               data-volume-measure-action="toggle-color" data-measurement-id="${esc(item.id)}"
               style="padding:0;width:24px;height:24px;border:none;flex-shrink:0;">
-              <span style="background:${item.color};width:16px;height:16px;display:inline-block;border-radius:3px;border:1px solid rgba(255,255,255,0.2);vertical-align:middle;"></span>
+              <span style="background:${esc(item.color)};width:16px;height:16px;display:inline-block;border-radius:3px;border:1px solid rgba(255,255,255,0.2);vertical-align:middle;"></span>
             </button>
             <input type="text" value="${esc(item.label || '')}" placeholder="Label"
               class="form-input text-xs" data-volume-measure-action="rename" data-measurement-id="${esc(item.id)}"

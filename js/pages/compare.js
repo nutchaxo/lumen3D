@@ -144,11 +144,13 @@ const CompareApp = (() => {
     const list = document.getElementById('modal-dataset-list');
     list.innerHTML = _datasets.map(d => {
       const color = d.type === 'fixed' ? '#00D2FF' : (d.type === 'live' ? '#FFA726' : '#00A654');
+      // SEC-014: dataset fields (id/thumbnail/name/type) are catalog data — escape
+      // before innerHTML interpolation (cf. _addPanel which already uses escapeHtml).
       return `
-        <div class="dataset-mini-card" data-id="${d.id}">
-          ${d.thumbnail ? `<img src="${d.thumbnail}" alt="" style="width:100%;aspect-ratio:16/9;object-fit:cover;border-radius:var(--radius-sm);margin-bottom:8px;">` : ''}
-          <span class="card-type" style="background: ${color}22; color: ${color}; border: 1px solid ${color}55">${d.type.toUpperCase()}</span>
-          <div class="font-bold text-sm mt-1">${d.name}</div>
+        <div class="dataset-mini-card" data-id="${Utils.escapeHtml(d.id)}">
+          ${d.thumbnail ? `<img src="${Utils.escapeHtml(d.thumbnail)}" alt="" style="width:100%;aspect-ratio:16/9;object-fit:cover;border-radius:var(--radius-sm);margin-bottom:8px;">` : ''}
+          <span class="card-type" style="background: ${color}22; color: ${color}; border: 1px solid ${color}55">${Utils.escapeHtml(String(d.type).toUpperCase())}</span>
+          <div class="font-bold text-sm mt-1">${Utils.escapeHtml(d.name)}</div>
           <div class="text-xs text-muted mt-1">${Utils.formatStage(d.stage)}</div>
         </div>
       `;

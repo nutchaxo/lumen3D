@@ -11,6 +11,10 @@ const I18n = (() => {
   let _fallbackLang = 'en';
   let _loaded = {};
   const _listeners = [];
+  // BUG-015: the shipped locales. The browser-language auto-detector and any
+  // future locale switch read from this single list, so adding a language is a
+  // one-line change and 'es' (lang/es.json ships) is no longer silently dropped.
+  const SUPPORTED = ['en', 'fr', 'es'];
 
   /**
    * Load a language file
@@ -50,7 +54,7 @@ const I18n = (() => {
     // Check saved preference
     const saved = localStorage.getItem('iribhm-lang');
     const browserLang = navigator.language.split('-')[0];
-    const lang = saved || (['fr', 'en'].includes(browserLang) ? browserLang : 'en');
+    const lang = saved || (SUPPORTED.includes(browserLang) ? browserLang : _fallbackLang);
 
     // Load fallback first, then target
     await loadLanguage(_fallbackLang);
@@ -101,6 +105,10 @@ const I18n = (() => {
       value = _resolve(key, _loaded[_fallbackLang]);
     }
     if (value === undefined) return key;
+    // BUG-016: a non-leaf key (e.g. t('nav') where 'nav' is a sub-object) resolves
+    // to an object/array; the .replace() below would throw. Treat a non-string
+    // resolution like an unresolved key and return the key itself.
+    if (typeof value !== 'string') return key;
 
     // Replace {param} placeholders
     if (params) {

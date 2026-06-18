@@ -99,15 +99,6 @@ const Catalog = (() => {
   }
 
   /**
-   * Get unique data types
-   * @returns {Array<string>}
-   */
-  function getTypes() {
-    const types = new Set(_datasets.map(d => d.type));
-    return [...types];
-  }
-
-  /**
    * Get related datasets for a given dataset
    * @param {string} id - Dataset ID
    * @returns {Array}
@@ -279,7 +270,6 @@ const Catalog = (() => {
     getById,
     filter,
     getStages,
-    getTypes,
     getRelated,
     getRelationMeta,
     getStats,

@@ -16,9 +16,11 @@ const Theme = (() => {
     if (saved) {
       _current = saved;
     } else {
-      // Check system preference
-      const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
-      _current = prefersDark ? 'dark' : 'dark'; // Default to dark for microscopy
+      // BUG-045: previously a no-op ternary selected dark in both branches after
+      // reading (and discarding) the system preference. Dark is the intentional
+      // default for microscopy (high-contrast fluorescence on black); the system
+      // scheme is not auto-followed on first visit.
+      _current = 'dark';
     }
     _apply();
 

@@ -178,6 +178,9 @@ window.createChannelPanel = function() {
 
   function _channelHtml(channel) {
     const safeName = Utils.escapeHtml ? Utils.escapeHtml(channel.name) : channel.name;
+    // SEC-019: channel.color is dataset/user data injected into inline styles —
+    // escape before interpolation to prevent CSS/attribute injection.
+    const safeColor = Utils.escapeHtml ? Utils.escapeHtml(channel.color) : channel.color;
     const expanded = channel.expanded ? 'expanded' : '';
     
     let pluginsHtml = '';
@@ -195,7 +198,7 @@ window.createChannelPanel = function() {
               <div class="channel-name" style="cursor:default">
                 <label style="display:flex;align-items:center;margin:0;cursor:pointer;">
                   <input type="checkbox" id="ch-toggle-${channel.idx}" ${channel.enabled ? 'checked' : ''}>
-                  <span class="channel-swatch" style="background:${channel.color};margin-left:8px;"></span>
+                  <span class="channel-swatch" style="background:${safeColor};margin-left:8px;"></span>
                 </label>
                 <input type="text" id="ch-name-input-${channel.idx}" value="${safeName}" spellcheck="false" style="background:transparent;border:none;border-bottom:1px solid transparent;color:inherit;font-size:inherit;font-family:inherit;font-weight:inherit;outline:none;width:100%;transition:border-color 0.2s;" onfocus="this.style.borderColor='rgba(255,255,255,0.2)'" onblur="this.style.borderColor='transparent'">
               </div>
@@ -208,7 +211,7 @@ window.createChannelPanel = function() {
               </button>
               <div style="position: relative; display: inline-block;">
                 <button class="btn btn-ghost btn-sm channel-icon-btn" type="button" data-channel-action="toggle-color" data-channel-idx="${channel.idx}" title="Channel color" data-i18n-title="js.channelColor">
-                  <span class="channel-swatch" style="background:${channel.color}; width:16px; height:16px; display:inline-block; border-radius:3px; border:1px solid rgba(255,255,255,0.2); vertical-align:middle;"></span>
+                  <span class="channel-swatch" style="background:${safeColor}; width:16px; height:16px; display:inline-block; border-radius:3px; border:1px solid rgba(255,255,255,0.2); vertical-align:middle;"></span>
                 </button>
                 ${_colorGridHtml(channel.idx)}
               </div>

@@ -530,13 +530,16 @@ const TrackingApp = (() => {
           ${maps.map(n => {
             const stops = TrackingViewer.getDensityColormapStops ? TrackingViewer.getDensityColormapStops(n) : [];
             const isSel = n === activeMap;
+            // SEC-021: hover/selection via CSS state (.colormap-option[.selected]) instead
+            // of inline onmouseover/onmouseout (CSP hygiene); escape the colormap name and
+            // stop colors defensively even though they are internal constants.
             return `
-              <div class="colormap-option" data-map="${n}" style="display:flex; align-items:center; gap:8px; padding:6px; cursor:pointer; border-radius:var(--radius-sm); background:${isSel?'var(--bg-active)':'transparent'};" onmouseover="this.style.background='var(--bg-hover)'" onmouseout="this.style.background='${isSel?'var(--bg-active)':'transparent'}'">
+              <div class="colormap-option${isSel ? ' selected' : ''}" data-map="${Utils.escapeHtml(n)}" style="display:flex; align-items:center; gap:8px; padding:6px; cursor:pointer; border-radius:var(--radius-sm);">
                 <div style="width:12px; font-size:11px; text-align:center; color:var(--text-primary); font-weight:bold;">${isSel?'✓':''}</div>
                 <div style="flex:1; display:flex; height:12px; border-radius:3px; overflow:hidden;">
-                  ${stops.map(c => `<span style="flex:1; background:${c};"></span>`).join('')}
+                  ${stops.map(c => `<span style="flex:1; background:${Utils.escapeHtml(c)};"></span>`).join('')}
                 </div>
-                <div style="font-size:11px; width:54px; text-transform:capitalize; color:var(--text-secondary);">${n}</div>
+                <div style="font-size:11px; width:54px; text-transform:capitalize; color:var(--text-secondary);">${Utils.escapeHtml(n)}</div>
               </div>
             `;
           }).join('')}

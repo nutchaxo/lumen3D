@@ -198,8 +198,9 @@ function createDatasetCard(dataset, index = 0) {
     tracking: 'linear-gradient(135deg, #00A65422, #1A1A2E44)'
   };
 
+  // SEC-015: dataset fields are catalog data — escape before innerHTML (mirrors explorer.js).
   const image = dataset.thumbnail
-    ? `<img src="${dataset.thumbnail}" alt="">`
+    ? `<img src="${Utils.escapeHtml(dataset.thumbnail)}" alt="">`
     : `<i data-lucide="${typeIcons[dataset.type]}" style="width:48px;height:48px;color:var(--text-muted);opacity:0.4"></i>`;
 
   return `
@@ -211,8 +212,8 @@ function createDatasetCard(dataset, index = 0) {
         <div style="display:flex;align-items:center;gap:var(--space-2);margin-bottom:var(--space-2)">
           <span class="badge badge-dot ${typeClass[dataset.type]}">${typeLabels[dataset.type]}</span>
         </div>
-        <div class="card-title">${dataset.name}</div>
-        <div class="card-subtitle">${dataset.description || ''}</div>
+        <div class="card-title">${Utils.escapeHtml(dataset.name)}</div>
+        <div class="card-subtitle">${Utils.escapeHtml(dataset.description || '')}</div>
         <div class="card-meta">
           ${metaItems.join('<span style="opacity:0.3">·</span>')}
         </div>

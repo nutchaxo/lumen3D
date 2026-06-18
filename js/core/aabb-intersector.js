@@ -82,22 +82,27 @@ const AABBIntersector = (() => {
     } else if (mode === 'xz') {
       nx = 0; ny = 1; nz = 0;
     } else if (mode === 'oblique') {
-      const yaw = (planeSpec.yaw || 0) * Math.PI / 180;
-      const pitch = (planeSpec.pitch || 0) * Math.PI / 180;
-      nx = Math.cos(pitch) * Math.sin(yaw);
-      ny = Math.sin(pitch);
-      nz = Math.cos(pitch) * Math.cos(yaw);
-      // Normalize
-      const len = Math.hypot(nx, ny, nz) || 1;
-      nx /= len;
-      ny /= len;
-      nz /= len;
+      // EDGE-009 (Rule 1.4): `yaw || 0` let Infinity / a truthy non-numeric through
+      // (Math.sin(Infinity)=NaN), and `hypot(NaN,…)||1` normalizes by 1 so NaN
+      // propagated into the plane equation. Sanitize angles to finite numbers; if the
+      // resulting normal is degenerate (non-finite or zero length), fall back to xy.
+      const yawV = (Number.isFinite(+planeSpec.yaw) ? +planeSpec.yaw : 0) * Math.PI / 180;
+      const pitchV = (Number.isFinite(+planeSpec.pitch) ? +planeSpec.pitch : 0) * Math.PI / 180;
+      nx = Math.cos(pitchV) * Math.sin(yawV);
+      ny = Math.sin(pitchV);
+      nz = Math.cos(pitchV) * Math.cos(yawV);
+      const len = Math.hypot(nx, ny, nz);
+      if (Number.isFinite(len) && len > 0) {
+        nx /= len; ny /= len; nz /= len;
+      } else {
+        nx = 0; ny = 0; nz = 1;
+      }
     } else {
       // XY mode
       nx = 0; ny = 0; nz = 1;
     }
 
-    const value = planeSpec.value ?? 0.5;
+    const value = Number.isFinite(+planeSpec.value) ? Math.min(1, Math.max(0, +planeSpec.value)) : 0.5;
     const span = Math.max(volumeDims.x || 1, volumeDims.y || 1, volumeDims.z || 1);
     const center = {
       x: (volumeDims.x * 0.5) + (nx * (value - 0.5) * span),

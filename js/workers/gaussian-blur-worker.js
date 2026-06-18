@@ -102,6 +102,12 @@ function _boxesForGauss(sigma, n) {
  * Opère sur un buffer mono-canal (Float32Array).
  */
 function _boxBlurH(src, dst, w, h, r) {
+  // BUG-014 : un grand σ donne r ≥ w/2 ; sans bornage, les trois sous-plages de la
+  // moyenne glissante se chevauchent/s'inversent et lisent au-delà de la ligne
+  // (jusque dans la ligne suivante, ou hors buffer sur la dernière ligne). On borne
+  // le rayon effectif à la demi-largeur de ligne ; le chemin normal (r < w/2) est
+  // inchangé. Pour w ≤ 2, r retombe à 0 → copie (pas de flou horizontal possible).
+  if (r > ((w - 1) >> 1)) r = (w - 1) >> 1;
   if (r <= 0) { dst.set(src); return; }
   const iarr = 1.0 / (r + r + 1);
   for (let y = 0; y < h; y++) {
@@ -120,6 +126,9 @@ function _boxBlurH(src, dst, w, h, r) {
  * Opère sur un buffer mono-canal (Float32Array).
  */
 function _boxBlurV(src, dst, w, h, r) {
+  // BUG-014 : même bornage que _boxBlurH, sur la hauteur de colonne (r ≥ h/2 ferait
+  // lire/écrire au-delà de la dernière ligne). Chemin normal (r < h/2) inchangé.
+  if (r > ((h - 1) >> 1)) r = (h - 1) >> 1;
   if (r <= 0) { dst.set(src); return; }
   const iarr = 1.0 / (r + r + 1);
   for (let x = 0; x < w; x++) {

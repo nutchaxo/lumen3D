@@ -23,7 +23,8 @@ window.createChannelPanel = function() {
     const displayDefaults = Array.isArray(metadata?.display_defaults) ? metadata.display_defaults : [];
     const prepApplied = Boolean(metadata?.preprocessing_applied);
     _channels = [];
-    _container.innerHTML = '';
+    // BUG-070: no clear here — _renderAll() below replaces the container's innerHTML
+    // wholesale, so this write was immediately overwritten (dead DOM churn).
 
     for (let i = 0; i < numChannels; i++) {
       const channelMeta = metaChannels[i];
@@ -110,8 +111,11 @@ window.createChannelPanel = function() {
     if (!Array.isArray(state)) return;
     state.forEach((item, idx) => {
       if (!_channels[idx]) return;
-      const nextMin = _clamp01(item.min ?? _channels[idx].min);
-      const nextMax = Math.max(_clamp01(item.max ?? _channels[idx].max), nextMin + 0.01);
+      // BUG-044: the +0.01 floor was applied AFTER clamping min and never re-clamped,
+      // so min===1.0 produced max=1.01 (>1) which propagated unclamped to the shader
+      // uniform. Cap min at 0.99 and re-clamp max into [0,1] while keeping max>min.
+      const nextMin = Math.min(_clamp01(item.min ?? _channels[idx].min), 0.99);
+      const nextMax = _clamp01(Math.max(_clamp01(item.max ?? _channels[idx].max), nextMin + 0.01));
       
       let nextGamma = Number.isFinite(item.gamma) ? item.gamma : _channels[idx].gamma;
       let nextMidtone = item.midtone ?? item.mid ?? null;
@@ -377,18 +381,29 @@ window.createChannelPanel = function() {
     return Number.isFinite(num) ? Math.max(0, Math.min(1, num)) : 0;
   }
 
-  // Close color popups when clicking outside
-  document.addEventListener('click', (e) => {
+  // Close color popups when clicking outside.
+  // LEAK-016 (Rule 1.2): keep a handle so the document-level listener can be torn
+  // down (it was registered once at construction and never removed).
+  const _onDocClick = (e) => {
     if (!e.target.closest('[data-channel-action="toggle-color"]') && !e.target.closest('.color-grid-popup')) {
       document.querySelectorAll('.color-grid-popup').forEach(p => p.style.display = 'none');
     }
-  });
+  };
+  document.addEventListener('click', _onDocClick);
+
+  function dispose() {
+    document.removeEventListener('click', _onDocClick);
+  }
+  if (typeof window !== 'undefined') {
+    window.addEventListener('pagehide', dispose);
+  }
 
   return {
     init,
     setHistograms,
     getState,
-    setState
+    setState,
+    dispose
   };
 };
 const ChannelPanel = window.createChannelPanel();

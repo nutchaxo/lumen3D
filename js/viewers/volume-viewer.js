@@ -54,6 +54,8 @@ const VolumeViewer = (() => {
   // Module-level ref to the label sprite currently being dragged (null when idle).
   // Read by _animate so repulsion is skipped for the whole frame, not just during pointermove.
   let _activeDragSprite = null;
+  // BUG-006: declared at module scope; was previously an implicit global (assigned without let).
+  let _draggedLabelSprite = null;
   let _rotGizmo = null;
   let _gizmoHovered = false;
   let _qualityTarget = '512x512';
@@ -66,6 +68,9 @@ const VolumeViewer = (() => {
   let _qualityState = { target: '512x512', active: null, mode: 'slice', progress: 0, message: '' };
   const _qualityListeners = new Set();
   let _brickStreamAbort = null;
+  // LEAK-023: handle for the LOD-seed rAF chunk loop so a mid-seed dataset/quality
+  // switch can cancel the pending frame instead of leaking it.
+  let _seedRafId = null;
   let _firstInteractionLogged = false;
   const _frameStats = {
     lastTs: 0,
@@ -761,13 +766,10 @@ const VolumeViewer = (() => {
 
       // Check if user clicked a measurement label
       if (_showMeasurementLabels && _measurementSprites.length > 0) {
-        const mouseNorm = new THREE.Vector2(
-          (off.x / canvas.clientWidth) * 2 - 1,
-          -(off.y / canvas.clientHeight) * 2 + 1
-        );
-        const raycaster = new THREE.Raycaster();
-        raycaster.setFromCamera(mouseNorm, camera);
-        const hit = raycaster.intersectObjects(_labelsGroup.children, false);
+        // PERF-004: reuse module-level _raycaster/_pointer (synchronous, not retained)
+        _pointer.set((off.x / canvas.clientWidth) * 2 - 1, -(off.y / canvas.clientHeight) * 2 + 1);
+        _raycaster.setFromCamera(_pointer, camera);
+        const hit = _raycaster.intersectObjects(_labelsGroup.children, false);
         if (hit && hit.length > 0) {
           dragMode = 'drag-label';
           _draggedLabelSprite = hit[0].object;
@@ -881,7 +883,11 @@ const VolumeViewer = (() => {
             _scheduleFrame();
           }
         }
-        const interactionHit = _intersectInteractionHandles(e.clientX, e.clientY);
+        // PERF-020: only raycast axes/grid handles when those features are actually shown;
+        // when off, interactionHit stays null and the forEach loops below clear any stale hover.
+        const _axesGridActive = (typeof VolumeGrid !== 'undefined') &&
+          (VolumeGrid.isAxesVisible() || VolumeGrid.getGridMode() > 0);
+        const interactionHit = _axesGridActive ? _intersectInteractionHandles(e.clientX, e.clientY) : null;
         let hoverAxes = false;
         let hoverGrid = null;
         if (interactionHit) {
@@ -911,13 +917,10 @@ const VolumeViewer = (() => {
         // Label hover check
         let hoverLabel = false;
         if (_showMeasurementLabels && _measurementSprites.length > 0) {
-          const mouseNorm = new THREE.Vector2(
-            (off.x / canvas.clientWidth) * 2 - 1,
-            -(off.y / canvas.clientHeight) * 2 + 1
-          );
-          const raycaster = new THREE.Raycaster();
-          raycaster.setFromCamera(mouseNorm, camera);
-          const hit = raycaster.intersectObjects(_labelsGroup.children, false);
+          // PERF-004: reuse module-level _raycaster/_pointer (synchronous, not retained)
+          _pointer.set((off.x / canvas.clientWidth) * 2 - 1, -(off.y / canvas.clientHeight) * 2 + 1);
+          _raycaster.setFromCamera(_pointer, camera);
+          const hit = _raycaster.intersectObjects(_labelsGroup.children, false);
           if (hit && hit.length > 0) hoverLabel = true;
         }
 
@@ -943,15 +946,12 @@ const VolumeViewer = (() => {
           const plane = new THREE.Plane().setFromNormalAndCoplanarPoint(worldNormal, cornerWorld);
           
           const rect = renderer.domElement.getBoundingClientRect();
-          const ndc = new THREE.Vector2(
-            ((e.clientX - rect.left) / rect.width) * 2 - 1,
-            -((e.clientY - rect.top) / rect.height) * 2 + 1
-          );
-          const raycaster = new THREE.Raycaster();
-          raycaster.setFromCamera(ndc, camera);
+          // PERF-004: reuse module-level _raycaster/_pointer (synchronous, not retained)
+          _pointer.set(((e.clientX - rect.left) / rect.width) * 2 - 1, -((e.clientY - rect.top) / rect.height) * 2 + 1);
+          _raycaster.setFromCamera(_pointer, camera);
           const targetWorld = new THREE.Vector3();
           
-          if (raycaster.ray.intersectPlane(plane, targetWorld)) {
+          if (_raycaster.ray.intersectPlane(plane, targetWorld)) {
             const targetLocal = targetWorld.sub(cube.position).applyQuaternion(cube.quaternion.clone().invert());
             let rawSize = 0;
             if (_gridDragState.plane === 'xy') {
@@ -1326,11 +1326,21 @@ const VolumeViewer = (() => {
       timepoint
     });
     if (_brickStreamAbort) _brickStreamAbort.cancelled = true;
+    if (_seedRafId !== null) { cancelAnimationFrame(_seedRafId); _seedRafId = null; } // LEAK-023
     const loadId = ++_loadCounter;
     const quality = _normalizeQualityKey(options.quality || '1024x1024');
     _emitQualityState({ active: quality, mode: 'slice', progress: 0, message: `Loading ${quality} slices...` });
     const qualityInfo = _resolveQuality(metadata, quality);
     const { x: sourceWidth, y: sourceHeight, z: sourceDepth, c: channels } = metadata.dimensions;
+    // EDGE-027 (Rule 1.4): reject malformed dimensions before any buffer allocation.
+    // A non-finite or non-positive extent would otherwise produce a NaN/0-sized
+    // Uint8Array (silent corruption) or a multi-GB over-allocation.
+    if (![sourceWidth, sourceHeight, sourceDepth, channels].every(v => Number.isFinite(v) && v > 0)) {
+      const msg = `Invalid volume dimensions: ${sourceWidth}x${sourceHeight}x${sourceDepth}, channels=${channels}`;
+      _emitQualityState({ active: quality, mode: 'slice', progress: 0, message: msg });
+      _perf()?.end(perfId, { status: 'error', reason: 'invalid-dimensions' });
+      throw new Error(`[VolumeViewer] ${msg}`);
+    }
     const cacheKey = _volumeCacheKey(basePath, quality, timepoint);
     const cached = options.ignoreVolumeCache ? null : _getCachedVolume(cacheKey);
     if (cached) {
@@ -2157,11 +2167,16 @@ const VolumeViewer = (() => {
     if (idx < 0 || idx > 3) return;
     
     if (params.color) {
-      // Hex to RGB [0-1]
-      const r = parseInt(params.color.slice(1,3), 16) / 255;
-      const g = parseInt(params.color.slice(3,5), 16) / 255;
-      const b = parseInt(params.color.slice(5,7), 16) / 255;
-      material.uniforms[`color${idx}`].value.set(r, g, b);
+      // EDGE-026: reject malformed hex before parseInt — otherwise NaN reaches the color uniform.
+      if (/^#[0-9a-fA-F]{6}$/.test(params.color)) {
+        // Hex to RGB [0-1]
+        const r = parseInt(params.color.slice(1,3), 16) / 255;
+        const g = parseInt(params.color.slice(3,5), 16) / 255;
+        const b = parseInt(params.color.slice(5,7), 16) / 255;
+        material.uniforms[`color${idx}`].value.set(r, g, b);
+      } else {
+        console.warn(`[VolumeViewer] updateChannel: invalid hex color "${params.color}" for channel ${idx} — ignored`);
+      }
     }
     
     if (params.min !== undefined) material.uniforms[`min${idx}`].value = params.min;
@@ -2330,6 +2345,9 @@ const VolumeViewer = (() => {
   }
   
   function setView(view) {
+    if (!cube) return;
+    // BUG-027: honor the rotation lock — don't snap orientation back to a preset axis when locked.
+    if (_rotationLocked) { _notifyCameraChange(); return; }
     // Reset rotation
     cube.quaternion.identity();
     
@@ -2355,7 +2373,8 @@ const VolumeViewer = (() => {
   function resetView(options = {}) {
     if (!cube) return;
     cube.position.set(0, 0, 0);
-    cube.quaternion.identity();
+    // BUG-027: preserve orientation while rotation is locked; still allow position/clip reset.
+    if (!_rotationLocked) cube.quaternion.identity();
     if (options.resetClipping) {
       resetClipping();
     }
@@ -2747,7 +2766,9 @@ const VolumeViewer = (() => {
         const anchorLocal = aDist > bDist ? a.clone() : b.clone();
         
         const labelText = item.label ? `${item.label}: ` : '';
-        const text = `${labelText}${item.distance.toFixed(1)} µm`;
+        // BUG-007: distance may be absent/non-finite (e.g. degenerate or partially-restored measurement) — show em-dash instead of throwing.
+        const d = Number.isFinite(item.distance) ? item.distance.toFixed(1) + ' µm' : '—';
+        const text = `${labelText}${d}`;
         const sprite = _createMeasurementTextSprite(text, color, anchorLocal);
         if (sprite) {
           sprite.userData.id = item.id;
@@ -2851,27 +2872,12 @@ const VolumeViewer = (() => {
     };
   }
 
-  function _intersectGizmo(clientX, clientY) {
-    if (!_raycaster || !_pointer || !camera || !_rotGizmo || !renderer) return null;
-    if (!_rotGizmo.visible) return null;
-    const rect = renderer.domElement.getBoundingClientRect();
-    _pointer.x = ((clientX - rect.left) / Math.max(1, rect.width)) * 2 - 1;
-    _pointer.y = -(((clientY - rect.top) / Math.max(1, rect.height)) * 2 - 1);
-    _raycaster.setFromCamera(_pointer, camera);
-    const hits = _raycaster.intersectObject(_rotGizmo, true);
-    const gizmoHit = hits.find(hit => hit.object.userData.axis);
-    return gizmoHit || null;
-  }
-
   function _intersectInteractionHandles(clientX, clientY) {
     if (!camera || !renderer) return null;
     const rect = renderer.domElement.getBoundingClientRect();
-    const ndc = new THREE.Vector2(
-      ((clientX - rect.left) / rect.width) * 2 - 1,
-      -((clientY - rect.top) / rect.height) * 2 + 1
-    );
-    const raycaster = new THREE.Raycaster();
-    raycaster.setFromCamera(ndc, camera);
+    // PERF-004: reuse module-level _raycaster/_pointer (synchronous, not retained)
+    _pointer.set(((clientX - rect.left) / rect.width) * 2 - 1, -((clientY - rect.top) / rect.height) * 2 + 1);
+    _raycaster.setFromCamera(_pointer, camera);
     const intersectables = [];
     const _vgAxesGroup = typeof VolumeGrid !== 'undefined' ? VolumeGrid.getAxesGroup() : null;
     const _vgGridGroup = typeof VolumeGrid !== 'undefined' ? VolumeGrid.getGridGroup() : null;
@@ -2881,7 +2887,7 @@ const VolumeViewer = (() => {
     if ((typeof VolumeGrid !== 'undefined' && VolumeGrid.getGridMode() > 0) && _vgGridGroup) {
       _vgGridGroup.children.forEach(c => { if (c.userData && c.userData.isGridHandle && c.material.opacity > 0) intersectables.push(c); });
     }
-    const hits = raycaster.intersectObjects(intersectables);
+    const hits = _raycaster.intersectObjects(intersectables);
     return hits.length > 0 ? hits[0] : null;
   }
 
@@ -3040,7 +3046,13 @@ const VolumeViewer = (() => {
 
   function _orientationForPlaneSpec(spec = _planeSpec) {
     if (spec.mode !== 'oblique') {
-      return new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 0, 1), _normalForPlaneSpec(spec));
+      // BUG-038: apply roll about the plane normal (local +Z) in orthogonal modes too — previously ignored for xy/xz/yz.
+      const base = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 0, 1), _normalForPlaneSpec(spec));
+      const roll = THREE.MathUtils.degToRad(_finiteNumber(spec.roll, 0));
+      if (roll !== 0) {
+        base.multiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), roll));
+      }
+      return base;
     }
     return new THREE.Quaternion().setFromEuler(new THREE.Euler(
       -_finiteNumber(spec.pitch, 0) * Math.PI / 180,
@@ -3104,7 +3116,6 @@ const VolumeViewer = (() => {
     const rect = renderer.domElement.getBoundingClientRect();
     _pointer.x = ((clientX - rect.left) / Math.max(1, rect.width)) * 2 - 1;
     _pointer.y = -(((clientY - rect.top) / Math.max(1, rect.height)) * 2 - 1);
-    _raycaster.setFromCamera(_pointer, camera);
     _raycaster.setFromCamera(_pointer, camera);
     
     let local = null;
@@ -3401,10 +3412,12 @@ const VolumeViewer = (() => {
     if (Number.isFinite(state.zDisplayScale)) {
       setZDisplayScale(state.zDisplayScale, { notify: false });
     }
-    if (Array.isArray(state.quaternion) && state.quaternion.length === 4) {
-      cube.quaternion.fromArray(state.quaternion);
+    // BUG-029: validate restored transform — reject non-finite / degenerate quaternions and normalize before copy.
+    if (Array.isArray(state.quaternion) && state.quaternion.length === 4 && state.quaternion.every(Number.isFinite)) {
+      const q = new THREE.Quaternion().fromArray(state.quaternion);
+      if (q.lengthSq() > 1e-8) cube.quaternion.copy(q.normalize());
     }
-    if (Array.isArray(state.position) && state.position.length === 3) {
+    if (Array.isArray(state.position) && state.position.length === 3 && state.position.every(Number.isFinite)) {
       cube.position.fromArray(state.position);
     }
     _scheduleFrame();
@@ -3621,6 +3634,7 @@ const VolumeViewer = (() => {
 
   async function loadBrickedVolumeStream(basePath, metadata, timepoint = null, onProgress = null, options = {}) {
     if (_brickStreamAbort) _brickStreamAbort.cancelled = true;
+    if (_seedRafId !== null) { cancelAnimationFrame(_seedRafId); _seedRafId = null; } // LEAK-023
     _clearTransitionVolume();
     window._loggedWriteBrick = 0;
     _dirtyRegions = [];
@@ -4006,11 +4020,23 @@ const VolumeViewer = (() => {
     };
 
     if (streamTasks.length && typeof BrickLoader.loadBrickTasks === 'function') {
+      let failedBricks = 0; // BUG-011: dropped/corrupt bricks for this load
       await BrickLoader.loadBrickTasks(streamTasks, {
         concurrency: options.concurrency || _brickConcurrencyForQuality(quality),
         cancelPrevious: true,
         preserveOrder: true,
         streamOnly: true,
+        onBrickError: ({ bx, by, bz, channel, error } = {}) => {
+          // BUG-011 (Rule 1.1): a dropped brick must surface as a degraded-quality
+          // status, not vanish silently. The render still degrades gracefully (the
+          // atlas slot keeps its seeded/empty content), but the user is told.
+          if (abortRef.cancelled || loadId !== _loadCounter) return;
+          failedBricks++;
+          console.warn(`[VolumeViewer] brick load failed (${bx},${by},${bz}) ch=${channel}:`, error);
+          _emitQualityState({
+            message: `${quality} loaded with ${failedBricks} dropped brick${failedBricks > 1 ? 's' : ''}`
+          });
+        },
         onBrickLoaded: ({ bx, by, bz, channel, data: brickData }) => {
           if (abortRef.cancelled || loadId !== _loadCounter) return;
           if (channel === -1) {
@@ -4592,47 +4618,6 @@ const VolumeViewer = (() => {
     }
   }
 
-  function _seedTexturesFromActive(textures, width, height, depth, channels) {
-    const src = _activeVolumeEntry;
-    if (!src || !src.textures || !src.width || !src.height || !src.depth) return false;
-    
-    const srcW = src.width;
-    const srcH = src.height;
-    const srcD = src.depth;
-
-    for (let c = 0; c < channels; c++) {
-      if (c >= textures.length || c >= src.textures.length) continue;
-      const dstData = textures[c].image.data;
-      const srcData = src.textures[c].image.data;
-      if (!dstData || !srcData) continue;
-
-      const lutX = new Int32Array(width);
-      for (let x = 0; x < width; x++) {
-        lutX[x] = Math.max(0, Math.min(srcW - 1, Math.floor((x / width) * srcW)));
-      }
-
-      const lutY = new Int32Array(height);
-      for (let y = 0; y < height; y++) {
-        lutY[y] = Math.max(0, Math.min(srcH - 1, Math.floor((y / height) * srcH)));
-      }
-
-      for (let z = 0; z < depth; z++) {
-        const sz = Math.max(0, Math.min(srcD - 1, Math.floor((z / depth) * srcD)));
-        const srcZOff = sz * srcH * srcW;
-        const dstZOff = z * height * width;
-        
-        for (let y = 0; y < height; y++) {
-          const srcYOff = srcZOff + lutY[y] * srcW;
-          const dstYOff = dstZOff + y * width;
-          for (let x = 0; x < width; x++) {
-            dstData[dstYOff + x] = srcData[srcYOff + lutX[x]];
-          }
-        }
-      }
-    }
-    return true;
-  }
-
   function _seedTexturesFromActiveAsync(textures, width, height, depth, channels, loadId, abortRef, onDone) {
     const src = _activeVolumeEntry;
     if (!src || !src.textures || !src.width || !src.height || !src.depth) {
@@ -4663,6 +4648,7 @@ const VolumeViewer = (() => {
         // ELE-26 (BUG-005): resolve the seed Promise even on abort, otherwise the
         // `await new Promise(resolve => _seedTexturesFromActiveAsync(..., resolve))`
         // in loadBrickedVolumeStream stays suspended forever on a mid-seed switch.
+        _seedRafId = null; // LEAK-023: this chunk ran; no rAF is pending past it.
         onDone();
         return;
       }
@@ -4697,13 +4683,14 @@ const VolumeViewer = (() => {
 
       z = zEnd;
       if (z < depth) {
-        requestAnimationFrame(processNextChunk);
+        _seedRafId = requestAnimationFrame(processNextChunk); // LEAK-023
       } else {
+        _seedRafId = null;
         onDone();
       }
     }
 
-    requestAnimationFrame(processNextChunk);
+    _seedRafId = requestAnimationFrame(processNextChunk); // LEAK-023
   }
 
   function _applyRgbaBrickLuts(brickData, floorLuts = null, channels = 4) {
@@ -4813,9 +4800,9 @@ const VolumeViewer = (() => {
   }
 
   function _orderBricksForStreaming(bricks, dims) {
-    const cx = (dims.gridSize?.x || Math.ceil(dims.x / Math.max(1, dims.brickSize))) / 2;
-    const cy = (dims.gridSize?.y || Math.ceil(dims.y / Math.max(1, dims.brickSize))) / 2;
-    const cz = (dims.gridSize?.z || Math.ceil(dims.z / Math.max(1, dims.brickSize))) / 2;
+    const cx = Math.ceil(dims.x / Math.max(1, dims.brickSize)) / 2;
+    const cy = Math.ceil(dims.y / Math.max(1, dims.brickSize)) / 2;
+    const cz = Math.ceil(dims.z / Math.max(1, dims.brickSize)) / 2;
     return [...bricks].sort((a, b) => {
       const da = Math.hypot(a.bx - cx, a.by - cy, a.bz - cz);
       const db = Math.hypot(b.bx - cx, b.by - cy, b.bz - cz);

@@ -16,7 +16,7 @@
 * **Render fallbacks** : if VRAM is exhausted or a brick is corrupted, the viewer must degrade gracefully (lower LOD, drop the brick, surface a status). Never crash the tab. Reference impl : [SVRManager.atlasConfigs](js/core/svr-manager.js) — cascading atlas sizes; [BrickLoader fallback path](js/core/brick-loader.js) — `_supportsWebGL3D` + 2D fallback canvas.
 
 ### 1.2. Performance constraints (the file size mandates this)
-* **Streaming over loading** : volumes are sliced into 64³ bricks, packed in `.bin` packs with a `manifest.json` per dataset. Never load a full volume in one buffer. See [brick-loader.js](js/core/brick-loader.js), [brick-fetch-worker.js](js/core/brick-fetch-worker.js), [brick-decode-worker.js](js/core/brick-decode-worker.js).
+* **Streaming over loading** : volumes are sliced into 64³ bricks, packed in `.bin` packs with a `manifest.json` per dataset. Never load a full volume in one buffer. See [brick-loader.js](js/core/brick-loader.js), [brick-decode-worker.js](js/core/brick-decode-worker.js).
 * **GPU memory hygiene** : every `THREE.Texture`/`Geometry`/`Material` must be `.dispose()`'d on dataset switch or tool teardown. The `SVRManager` reuses 3D atlas pages — do not allocate new textures per brick.
 * **Main thread inviolable** : heavy work (decode, gaussian blur, parsing) lives in Web Workers (`js/workers/`, `js/core/brick-*-worker.js`). UI thread reserved for Three.js + DOM.
 
@@ -77,8 +77,7 @@ Loaded as classic `<script>` (no ESM), each exposes a global IIFE.
 | [plugin-registry.js](js/core/plugin-registry.js) | **Module loader** — fetches `plugin.json` + injects `index.js`, dispatches hooks. See §3.1. |
 | [tool-manager.js](js/core/tool-manager.js) | Active tool mux (navigate / measure / slice / …) |
 | [svr-manager.js](js/core/svr-manager.js) | **Sparse Volume Renderer** — manages 3D texture atlas pages on the GPU, cascading sizes for VRAM resilience |
-| [brick-loader.js](js/core/brick-loader.js) | LRU brick cache, fetch coordination, dispatches to workers |
-| [brick-fetch-worker.js](js/core/brick-fetch-worker.js) | Worker — HTTP fetch + range slicing of pack files |
+| [brick-loader.js](js/core/brick-loader.js) | LRU brick cache, fetches whole `.bin` packs (main thread), dispatches WebP tiles to the decode-worker pool |
 | [brick-decode-worker.js](js/core/brick-decode-worker.js) | Worker — WebP decode (createImageBitmap) + un-mosaic 64³ bricks |
 | [volume-source-manager.js](js/core/volume-source-manager.js) | Normalizes per-dataset `volumeSources` (webstack / bricks / live) |
 | [annotation-manager.js](js/core/annotation-manager.js) | 3D annotation primitives + persistence |

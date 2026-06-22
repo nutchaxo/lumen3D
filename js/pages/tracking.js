@@ -50,8 +50,7 @@ const TrackingApp = (() => {
 
     // 4. Update Header UI
     document.getElementById('dataset-title').textContent = _datasetMeta.name || _datasetId;
-    document.getElementById('dataset-subtitle').textContent = 
-      `${Utils.formatStage(_datasetMeta.stage)} · ${Utils.formatDate(_datasetMeta.date)} · Tracking`;
+    // DEAD-036: single assignment (the first '·'-separated write was immediately overwritten).
     document.getElementById('dataset-subtitle').textContent =
       `${Utils.formatStage(_datasetMeta.stage)} - ${Utils.formatDate(_datasetMeta.date)} - Tracking`;
     _renderRelatedDatasets();
@@ -92,8 +91,11 @@ const TrackingApp = (() => {
       _setTrackingControlsReady(true);
       document.getElementById('viewer-loader').style.display = 'none';
       
-      // Initialize Timeline
-      const totalFrames = _datasetMeta.dimensions?.t || 10;
+      // Initialize Timeline — EDGE-016: derive the frame count from the loaded track
+      // data (TrackingViewer.getFrameCount), not a hardcoded 10; clamp to >= 1.
+      const totalFrames = Math.max(1,
+        (TrackingViewer.getFrameCount && TrackingViewer.getFrameCount())
+        || Number(_datasetMeta.dimensions?.t) || 1);
       _initTimeline(totalFrames);
       
     } catch (e) {
@@ -508,6 +510,14 @@ const TrackingApp = (() => {
   function _renderTrackingLegend() {
     const node = document.getElementById('tracking-legend');
     if (!node || typeof TrackingViewer === 'undefined') return;
+    // LEAK-008: detach any prior outside-click listener BEFORE the early returns, so
+    // switching to a legend mode without the colormap button (uniform/region) can't
+    // leave the previous density-mode document listener attached (it accumulated one
+    // document listener per density re-render that wasn't followed by another density one).
+    if (node._outsideClickListener) {
+      document.removeEventListener('click', node._outsideClickListener);
+      node._outsideClickListener = null;
+    }
     const legend = TrackingViewer.getLegendState?.();
     if (!legend || legend.kind === 'uniform') {
       node.classList.add('hidden');

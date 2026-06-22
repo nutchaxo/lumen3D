@@ -192,6 +192,14 @@ const DeepZoomViewer = (() => {
     if (!_viewer || !_manifest) return;
 
     const basePath = _manifest.basePath || _manifest.base_path || '';
+    // SEC-020 (Rule 1.4): basePath is manifest-sourced and concatenated raw into the
+    // tile URLs below — refuse a value that could escape the dataset dir (a scheme
+    // like http:/file:, a protocol-relative //host, or a '..' path segment).
+    if (/^[a-z][a-z0-9+.-]*:/i.test(basePath) || String(basePath).startsWith('//') ||
+        String(basePath).replace(/^\/+/, '').split(/[\\/]/).includes('..')) {
+      console.warn(`[DeepZoomViewer] refusing unsafe manifest basePath "${basePath}"`);
+      return;
+    }
     const tileSize = _manifest.tileSize || _manifest.tile_size || 256;
     const width = _manifest.width || 1;
     const height = _manifest.height || 1;

@@ -32,10 +32,10 @@
     </div>
     <div class="navbar-actions">
             <!-- Color Blindness Toggle -->
-      <button class="btn btn-icon btn-ghost" onclick="ColorBlind.openModal()" data-i18n-title="colorblind.toggle">
+      <button class="btn btn-icon btn-ghost" onclick="window.ColorBlind && ColorBlind.openModal()" data-i18n-title="colorblind.toggle">
         <i data-lucide="eye" style="width:20px;height:20px"></i>
       </button>
-      <button class="btn btn-icon btn-ghost" onclick="Theme.toggle()" data-i18n-title="theme.toggle" id="theme-toggle">
+      <button class="btn btn-icon btn-ghost" onclick="window.Theme && Theme.toggle()" data-i18n-title="theme.toggle" id="theme-toggle">
         <i data-lucide="moon" data-theme-icon></i>
       </button>
     </div>

@@ -280,9 +280,11 @@ th {
   to { transform: rotate(360deg); }
 }
 
+/* PERF-034: shimmer animates a compositor transform (translateX) on an overlay
+   pseudo-element instead of background-position, which forced a paint every frame. */
 @keyframes shimmer {
-  0%   { background-position: -200% 0; }
-  100% { background-position: 200% 0; }
+  0%   { transform: translateX(-100%); }
+  100% { transform: translateX(100%); }
 }
 
 .animate-fade-in     { animation: fadeIn 0.4s ease both; }

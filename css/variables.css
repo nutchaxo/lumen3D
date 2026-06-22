@@ -100,6 +100,17 @@
   --z-popover:     500;
   --z-tooltip:     600;
   --z-toast:       700;
+  /* DEAD-025: viewer/admin high-tier layers — previously raw giant literals
+     (1000–10020) scattered across viewer.css/tools.css/admpan.css and coexisting
+     confusingly with the --z-* tokens above. Values are preserved EXACTLY so the
+     existing stacking order is unchanged; centralized here as the single source. */
+  --z-viewer-base:      1000;
+  --z-viewer-raised:    1010;
+  --z-viewer-elevated:  1100;
+  --z-admin-overlay:    9998;
+  --z-viewer-popover:   9999;
+  --z-viewer-modal:    10000;
+  --z-viewer-modal-top: 10020;
 
   /* ── Layout ────────────────────────────────────────────── */
   --sidebar-width:    320px;

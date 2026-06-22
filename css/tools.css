@@ -492,7 +492,7 @@ body.presentation-mode .viewer-layout {
 .export-modal-overlay {
   position: fixed;
   inset: 0;
-  z-index: 9999;
+  z-index: var(--z-viewer-popover);
   display: none;
   align-items: center;
   justify-content: center;
@@ -622,7 +622,7 @@ body.presentation-mode .viewer-layout {
   position: fixed;
   left: 50%;
   bottom: var(--space-6);
-  z-index: 10000;
+  z-index: var(--z-viewer-modal);
   transform: translateX(-50%) translateY(16px);
   opacity: 0;
   padding: var(--space-3) var(--space-4);

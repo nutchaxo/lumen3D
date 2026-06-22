@@ -30,11 +30,13 @@ class TestRealTree(unittest.TestCase):
         for p in plugins:
             self.assertIn("path", p)
             self.assertEqual(p["path"].split("/")[0], p["placement"])
-        self.assertEqual(len(plugins), 18, "18 built-in plugins discovered from js/modules/")
+        # Floor rather than exact count: the platform is meant to gain plugins by
+        # folder presence, so a new folder must not break discovery's own test.
+        self.assertGreaterEqual(len(plugins), 19, "all built-in plugins discovered from js/modules/")
         self.assertEqual(
             {p["placement"] for p in plugins}, {"tools", "channels", "shaders"}
         )
-        for must in ("screenshot", "histogram", "fluorescence", "measure-distance"):
+        for must in ("screenshot", "histogram", "fluorescence", "natural-fluorescence", "measure-distance"):
             self.assertIn(must, ids)
 
 

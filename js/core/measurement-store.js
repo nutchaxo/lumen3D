@@ -48,6 +48,17 @@ const MeasurementStore = (() => {
     return [];
   }
 
+  // LEAK-020: clear() only empties an entry's array; the Map key lives forever, so
+  // _state grows one entry per (scope, dataset) visited. dropDataset removes the entry
+  // entirely (call on dataset switch); reset purges everything (call on teardown).
+  function dropDataset(datasetId, scope = 'viewer') {
+    return _state.delete(key(datasetId, scope));
+  }
+
+  function reset() {
+    _state.clear();
+  }
+
   function toCsv(items = []) {
     const rows = [[
       'id',
@@ -135,6 +146,8 @@ const MeasurementStore = (() => {
     update,
     remove,
     clear,
+    dropDataset,
+    reset,
     toCsv,
     toJson
   };

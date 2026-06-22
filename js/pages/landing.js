@@ -56,27 +56,17 @@ function updateThemeIcon() {
 }
 
 /* ── Dropdown Toggle ─────────────────────────────────────── */
+// DEAD-035: global name retained for the inline HTML onclick handlers; the
+// implementation lives once in Utils (shared by landing + explorer).
 function toggleDropdown(id) {
-  const el = document.getElementById(id);
-  if (!el) return;
-  el.classList.toggle('open');
-
-  // Close on outside click
-  const close = (e) => {
-    if (!el.contains(e.target)) {
-      el.classList.remove('open');
-      document.removeEventListener('click', close);
-    }
-  };
-  setTimeout(() => document.addEventListener('click', close), 0);
+  Utils.toggleDropdown(id);
 }
 
 /* ── Language Switch ─────────────────────────────────────── */
 async function switchLanguage(lang) {
   await I18n.setLanguage(lang);
-  // Close dropdown
-  document.querySelectorAll('.dropdown').forEach(d => d.classList.remove('open'));
-  // Re-populate dynamic content
+  Utils.closeDropdowns(); // DEAD-035: shared dropdown-close step
+  // Page-specific: re-render the featured grid in the new language
   populateFeatured();
 }
 
@@ -145,11 +135,11 @@ function populateFeatured() {
     }
   });
 
+  // PERF-028: single innerHTML write. Non-ASCII glyphs are emitted as HTML
+  // entities at the source (see createDatasetCard) so they render correctly
+  // regardless of how the host serves the file's charset, removing the need
+  // for the former second-pass mojibake repair.
   grid.innerHTML = featured.map((d, i) => createDatasetCard(d, i)).join('');
-  grid.innerHTML = grid.innerHTML
-    .replace(/\u00c2\u00b7/g, '·')
-    .replace(/\u00c3\u2014/g, 'x')
-    .replace(/\u00e2\u20ac\u201d/g, '—');
 
   if (window.lucide) lucide.createIcons({ nodes: [grid] });
 }
@@ -188,7 +178,7 @@ function createDatasetCard(dataset, index = 0) {
   if (dataset.nCells) metaItems.push(`<span>${dataset.nCells} ${I18n.t('tracking.cells').toLowerCase()}</span>`);
   if (dataset.dimensions?.x && dataset.dimensions?.y && dataset.dimensions?.z) {
     const d = dataset.dimensions;
-    metaItems.push(`<span>${d.x}×${d.y}×${d.z}</span>`);
+    metaItems.push(`<span>${d.x}&times;${d.y}&times;${d.z}</span>`);
   }
 
   // Thumbnail placeholder with gradient
@@ -198,8 +188,9 @@ function createDatasetCard(dataset, index = 0) {
     tracking: 'linear-gradient(135deg, #00A65422, #1A1A2E44)'
   };
 
+  // SEC-015: dataset fields are catalog data — escape before innerHTML (mirrors explorer.js).
   const image = dataset.thumbnail
-    ? `<img src="${dataset.thumbnail}" alt="">`
+    ? `<img src="${Utils.escapeHtml(dataset.thumbnail)}" alt="">`
     : `<i data-lucide="${typeIcons[dataset.type]}" style="width:48px;height:48px;color:var(--text-muted);opacity:0.4"></i>`;
 
   return `
@@ -211,10 +202,10 @@ function createDatasetCard(dataset, index = 0) {
         <div style="display:flex;align-items:center;gap:var(--space-2);margin-bottom:var(--space-2)">
           <span class="badge badge-dot ${typeClass[dataset.type]}">${typeLabels[dataset.type]}</span>
         </div>
-        <div class="card-title">${dataset.name}</div>
-        <div class="card-subtitle">${dataset.description || ''}</div>
+        <div class="card-title">${Utils.escapeHtml(dataset.name)}</div>
+        <div class="card-subtitle">${Utils.escapeHtml(dataset.description || '')}</div>
         <div class="card-meta">
-          ${metaItems.join('<span style="opacity:0.3">·</span>')}
+          ${metaItems.join('<span style="opacity:0.3">&middot;</span>')}
         </div>
       </div>
     </a>
@@ -308,13 +299,19 @@ function initHeroAnimation() {
     ctx.clearRect(0, 0, width, height);
 
     // Draw connections
+    // PERF-031: O(n²) per frame — compare squared distance to skip the sqrt for
+    // the (vast majority of) pairs that fall outside the connection radius, and
+    // only take the sqrt for surviving pairs whose alpha needs the real distance.
+    const maxDist = 160;
+    const maxDistSq = maxDist * maxDist;
     for (let i = 0; i < particles.length; i++) {
       for (let j = i + 1; j < particles.length; j++) {
         const dx = particles[i].x - particles[j].x;
         const dy = particles[i].y - particles[j].y;
-        const dist = Math.sqrt(dx * dx + dy * dy);
-        if (dist < 160) {
-          const alpha = (1 - dist / 160) * 0.15;
+        const distSq = dx * dx + dy * dy;
+        if (distSq < maxDistSq) {
+          const dist = Math.sqrt(distSq);
+          const alpha = (1 - dist / maxDist) * 0.15;
           ctx.beginPath();
           ctx.moveTo(particles[i].x, particles[i].y);
           ctx.lineTo(particles[j].x, particles[j].y);
@@ -337,8 +334,12 @@ function initHeroAnimation() {
   }
 
   function animate() {
-    update();
-    draw();
+    // PERF-031: skip the O(n²) connection sweep + redraw while the tab is hidden;
+    // keep the RAF loop alive so it resumes seamlessly on visibility return.
+    if (!document.hidden) {
+      update();
+      draw();
+    }
     animFrame = requestAnimationFrame(animate);
   }
 

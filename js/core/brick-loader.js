@@ -48,6 +48,19 @@ const BrickLoader = (() => {
   // ELE-21 (Rule 1.4): encodages que le décodeur sait traiter (cf. _fetchPackedRawBrick).
   const _KNOWN_ENCODINGS = new Set(['raw-u8', 'raw-u8-gzip', 'raw-rgba-gzip', 'webp-lossless']);
 
+  // SEC-017 (Rule 1.4): une URL de pack vient du manifest et est concaténée telle
+  // quelle sur le basePath du dataset puis fetchée. On refuse toute URL pouvant
+  // s'échapper du répertoire dataset : segment '..', URL absolue (scheme:) ou
+  // protocole-relative (//host). Les coords bx/by/bz de _brickUrl sont dérivées
+  // d'entiers (pas de chaîne utilisateur) — seul l'URL issue du manifest est un vecteur.
+  function _isSafePackUrl(u) {
+    const s = String(u == null ? '' : u).trim();
+    if (!s) return false;
+    if (/^[a-z][a-z0-9+.-]*:/i.test(s)) return false;   // scheme: (http:, file:, data:, …)
+    if (s.startsWith('//')) return false;               // protocole-relative
+    return !s.replace(/^\/+/, '').split(/[\\/]/).includes('..');
+  }
+
   /**
    * ELE-21 (Rule 1.4): valide la structure minimale d'un manifest AVANT montage.
    * Throw explicite si malformé -> rejet propre plutôt qu'un TypeError opaque plus loin
@@ -78,6 +91,36 @@ const BrickLoader = (() => {
     const enc = manifest.brickTransport && manifest.brickTransport.encoding;
     if (enc !== undefined && enc !== null && !_KNOWN_ENCODINGS.has(enc)) {
       reject('unknown brickTransport.encoding "' + enc + '".');
+    }
+    // BUG-065 (Rule 1.4): le défaut historique `brickPacking || {mode:'vertical'}` faisait
+    // décoder une mosaïque grid en lecture linéaire -> volume mélangé silencieux (ok:true).
+    // On valide le packing : si présent, mode ∈ {grid, vertical} (grid => cols/rows entiers
+    // positifs) ; et un dataset webp-lossless DOIT porter un grid valide (le préproc en écrit
+    // toujours un) — sinon rejet plutôt que montage corrompu.
+    const bp = manifest.brickPacking;
+    if (bp !== undefined && bp !== null) {
+      if (typeof bp !== 'object' || (bp.mode !== 'grid' && bp.mode !== 'vertical')) {
+        reject('brickPacking.mode must be "grid" or "vertical".');
+      }
+      if (bp.mode === 'grid') {
+        for (const k of ['cols', 'rows']) {
+          if (bp[k] !== undefined && !(Number.isInteger(bp[k]) && bp[k] >= 1)) {
+            reject('brickPacking.' + k + ' must be a positive integer.');
+          }
+        }
+      }
+    }
+    if (enc === 'webp-lossless' && !(bp && bp.mode === 'grid')) {
+      reject('webp-lossless requires brickPacking.mode "grid".');
+    }
+    // SEC-017 (Rule 1.4): rejet du manifest si une URL de pack peut s'échapper du dataset.
+    const b2p = manifest.brickTransport && manifest.brickTransport.brickToPack;
+    if (b2p && typeof b2p === 'object') {
+      for (const entry of Object.values(b2p)) {
+        if (entry && entry.url !== undefined && !_isSafePackUrl(entry.url)) {
+          reject('brickTransport.brickToPack contains an unsafe pack url "' + entry.url + '".');
+        }
+      }
     }
   }
 
@@ -210,13 +253,22 @@ const BrickLoader = (() => {
     const dims = getDimensions(lod);
     if (!dims) return [];
     const bs = dims.brickSize;
+    const nx = Math.ceil(dims.x / bs);
+    const ny = Math.ceil(dims.y / bs);
+    const nz = Math.ceil(dims.z / bs);
 
-    const x0 = Math.floor(minNorm.x * dims.x / bs);
-    const y0 = Math.floor(minNorm.y * dims.y / bs);
-    const z0 = Math.floor(minNorm.z * dims.z / bs);
-    const x1 = Math.floor(maxNorm.x * dims.x / bs);
-    const y1 = Math.floor(maxNorm.y * dims.y / bs);
-    const z1 = Math.floor(maxNorm.z * dims.z / bs);
+    // EDGE-055 / BUG-034: borne chaque index de brick à [0, n-1]. Sans clamp,
+    // maxNorm=1.0 émet un index hors grille (floor(dim/bs) == n quand dim est un
+    // multiple exact de bs) et un minNorm négatif émet des coords négatives. Les
+    // appelants compensaient avec maxNorm=0.9999 + un filtre hasBrick() ; le clamp
+    // rend la fonction correcte seule, robuste à un futur appelant sans ces gardes.
+    const clamp = (v, n) => Math.max(0, Math.min(n - 1, Math.floor(v)));
+    const x0 = clamp(minNorm.x * dims.x / bs, nx);
+    const y0 = clamp(minNorm.y * dims.y / bs, ny);
+    const z0 = clamp(minNorm.z * dims.z / bs, nz);
+    const x1 = clamp(maxNorm.x * dims.x / bs, nx);
+    const y1 = clamp(maxNorm.y * dims.y / bs, ny);
+    const z1 = clamp(maxNorm.z * dims.z / bs, nz);
 
     const bricks = [];
     for (let bz = z0; bz <= z1; bz++) {
@@ -270,6 +322,18 @@ const BrickLoader = (() => {
     const total = list.length;
     let cacheHits = 0;
     const useDecodedCache = options.cacheResults === true || (!options.streamOnly && options.cacheResults !== false);
+    // PERF-022: yield on a ~8ms time budget instead of a hard per-brick setTimeout(1).
+    // The old per-brick yield was clamped to >=1ms (often 4ms+ in throttled tabs) and
+    // capped each worker's throughput regardless of fetch/decode speed.
+    const YIELD_BUDGET_MS = 8;
+    let _lastYield = performance.now();
+    const _yieldIfBudgetSpent = async () => {
+      const now = performance.now();
+      if (now - _lastYield > YIELD_BUDGET_MS) {
+        await new Promise(r => setTimeout(r, 0));
+        _lastYield = performance.now();
+      }
+    };
 
     // Check cache first
     for (const task of list) {
@@ -293,11 +357,10 @@ const BrickLoader = (() => {
         loaded++;
         cacheHits++;
         if (options.onProgress) options.onProgress(loaded / total);
-        
-        // Yield to prevent GPU upload lockups when processing thousands of cached bricks
-        if (cacheHits % 4 === 0) {
-          await new Promise(r => setTimeout(r, 0));
-        }
+
+        // PERF-022: yield to keep GPU uploads/UI responsive when replaying thousands
+        // of cached bricks — gated on the time budget instead of every 4th hit.
+        await _yieldIfBudgetSpent();
       } else {
         toLoad.push({ bx, by, bz, channel, lod, key });
       }
@@ -356,9 +419,10 @@ const BrickLoader = (() => {
         }
         loaded++;
         if (options.onProgress) options.onProgress(loaded / total);
-        
-        // Yield slightly to prevent blocking UI when downloads are super fast (e.g. localhost)
-        await new Promise(r => setTimeout(r, 1));
+
+        // PERF-022: yield on the shared time budget rather than an unconditional
+        // per-brick setTimeout(1) (which floored each worker at ~1-4ms/brick).
+        await _yieldIfBudgetSpent();
       }
     });
     await Promise.allSettled(workers);
@@ -470,6 +534,10 @@ const BrickLoader = (() => {
     if (_packFetchController) { try { _packFetchController.abort(); } catch (e) {} }
     _packFetchController = (typeof AbortController !== 'undefined') ? new AbortController() : null;
     _workers.forEach(w => w.postMessage({ type: 'CANCEL' }));
+    // LEAK-013 (Rule 1.2): release the main-thread decode-fallback canvas (grown to the
+    // largest mosaic seen, willReadFrequently) so it is GC'd on dataset teardown.
+    _fallbackCtx = null;
+    _fallbackCanvas = null;
   }
 
   function _perf() {
@@ -580,7 +648,10 @@ const BrickLoader = (() => {
     // Legacy packing: vertical stack (width=bs, height=bs*bs).
     // v2 packing: atlas grid (cols x rows tiles of bs x bs slices).
     const bs = _manifest?.levels?.[0]?.brickSize || BRICK_SIZE;
-    const packing = _manifest?.brickPacking || { mode: 'vertical' };
+    // BUG-065: pas de défaut 'vertical' (lecture linéaire => volume mélangé silencieux).
+    // _validateManifest garantit un grid valide pour webp-lossless ; sinon le worker/le
+    // décodeur échoue franchement (ok:false) au lieu de produire des voxels corrompus.
+    const packing = _manifest?.brickPacking || {};
     if (!_fallbackCanvas) {
       _fallbackCanvas = typeof OffscreenCanvas !== 'undefined'
         ? new OffscreenCanvas(img.width, img.height)
@@ -732,7 +803,7 @@ const BrickLoader = (() => {
             }
             const buffer = await resp.arrayBuffer();
             try {
-              return await _decodeWebpBrickInWorkerPool(buffer, signal, _manifest?.levels?.[0]?.brickSize || BRICK_SIZE, _manifest?.brickPacking || { mode: 'vertical' });
+              return await _decodeWebpBrickInWorkerPool(buffer, signal, _manifest?.levels?.[0]?.brickSize || BRICK_SIZE, _manifest?.brickPacking || {});
             } catch (e) {
               console.error('[BrickLoader] Worker decode failed, falling back:', e);
             }
@@ -764,7 +835,7 @@ const BrickLoader = (() => {
     if (isWebp && _workers.length > 0 && _workerReady) {
       const sliceCopy = compressedSlice.slice(0); // Copy to avoid detached buffer fallback error
       try {
-        return await _decodeWebpBrickInWorkerPool(sliceCopy, signal, _manifest?.levels?.[0]?.brickSize || BRICK_SIZE, _manifest?.brickPacking || { mode: 'vertical' });
+        return await _decodeWebpBrickInWorkerPool(sliceCopy, signal, _manifest?.levels?.[0]?.brickSize || BRICK_SIZE, _manifest?.brickPacking || {});
       } catch (e) {
         console.error('[BrickLoader] Worker decode failed, falling back:', e);
       }
@@ -885,6 +956,7 @@ const BrickLoader = (() => {
     if (!index || typeof index !== 'object') return;
     for (const [brickPath, entry] of Object.entries(index)) {
       if (!entry?.url || !Number.isFinite(Number(entry.offset)) || !Number.isFinite(Number(entry.length))) continue;
+      if (!_isSafePackUrl(entry.url)) continue;  // SEC-017: defense-in-depth (manifest already validated upfront)
       _packIndex.set(String(brickPath).replace(/^\/+/, ''), {
         url: String(entry.url).replace(/^\/+/, ''),
         offset: Number(entry.offset),

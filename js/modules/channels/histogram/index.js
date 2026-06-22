@@ -51,11 +51,15 @@ PluginRegistry.implement('histogram', {
         event.preventDefault();
         handle.setPointerCapture?.(event.pointerId);
         
-        const move = (clientX) => {
+        // PERF-012: onStateChange updates a shader uniform (and can trigger a recompile),
+        // so firing it on every pointermove thrashed. Coalesce drag updates to one per
+        // animation frame; the initial click applies immediately and pointerup flushes
+        // the final value so the last position always lands.
+        const apply = (clientX) => {
           const rect = editor.getBoundingClientRect();
           const raw = clamp01((clientX - rect.left) / Math.max(1, rect.width));
           const state = getState(idx);
-          
+
           if (kind === 'min') {
             state.min = Math.min(raw, state.max - 0.01);
           } else if (kind === 'max') {
@@ -63,14 +67,23 @@ PluginRegistry.implement('histogram', {
           } else {
             state.midtone = clamp(raw, state.min + 0.01, state.max - 0.01);
           }
-          
+
           onStateChange(idx, state);
         };
-        move(event.clientX);
+        let _latestX = null;
+        let _rafId = 0;
+        const move = (clientX) => {
+          _latestX = clientX;
+          if (_rafId) return;
+          _rafId = requestAnimationFrame(() => { _rafId = 0; apply(_latestX); });
+        };
+        apply(event.clientX);
         const onMove = (e) => move(e.clientX);
         const onUp = () => {
           window.removeEventListener('pointermove', onMove);
           window.removeEventListener('pointerup', onUp);
+          if (_rafId) { cancelAnimationFrame(_rafId); _rafId = 0; }
+          if (_latestX != null) apply(_latestX);
         };
         window.addEventListener('pointermove', onMove);
         window.addEventListener('pointerup', onUp);

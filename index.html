@@ -15,8 +15,10 @@
   <!-- Lucide Icons -->
   <script src="https://unpkg.com/lucide@0.344.0/dist/umd/lucide.min.js" integrity="sha384-tTkFttkBclaU1cloKwOi9xk3pbao3VZxTjLNBt8iFABWDBQibbAbWpVmO28zMuxq" crossorigin="anonymous"></script>
 
-  <!-- Three.js (for hero 3D background) -->
-  <script src="https://unpkg.com/three@0.167.0/build/three.module.js" integrity="sha384-efR4yFjiLe4PrOyKvJfuUnmdEz0ohNoJEvmCVrdgDU5eigOkblJOVZwt1g8+64kv" crossorigin="anonymous" type="module"></script>
+  <!-- DEAD-008: removed the unused three.module.js import — the landing hero is a 2D
+       canvas particle system (landing.js), so no Three.js is needed here; loading it as
+       an ESM module also exposed no window.THREE (major-version-inconsistent with the
+       UMD r167 the viewer uses). -->
 
   <!-- Stylesheets -->
   <link rel="stylesheet" href="css/variables.css">

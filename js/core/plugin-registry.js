@@ -40,7 +40,7 @@ const PluginRegistry = (() => {
     'tools/screenshot', 'tools/presentation-mode', 'tools/save-workspace',
     'tools/restore-workspace', 'tools/download-center', 'tools/decompose-channels',
     'tools/zstack-browser', 'tools/deepzoom-2d', 'tools/slice-inspector',
-    'tools/measure-distance', 'shaders/fluorescence', 'shaders/structure-dvr',
+    'tools/measure-distance', 'shaders/natural-fluorescence', 'shaders/fluorescence', 'shaders/structure-dvr',
     'channels/histogram', 'channels/gaussian-filter'
   ];
 

@@ -144,11 +144,13 @@ const CompareApp = (() => {
     const list = document.getElementById('modal-dataset-list');
     list.innerHTML = _datasets.map(d => {
       const color = d.type === 'fixed' ? '#00D2FF' : (d.type === 'live' ? '#FFA726' : '#00A654');
+      // SEC-014: dataset fields (id/thumbnail/name/type) are catalog data — escape
+      // before innerHTML interpolation (cf. _addPanel which already uses escapeHtml).
       return `
-        <div class="dataset-mini-card" data-id="${d.id}">
-          ${d.thumbnail ? `<img src="${d.thumbnail}" alt="" style="width:100%;aspect-ratio:16/9;object-fit:cover;border-radius:var(--radius-sm);margin-bottom:8px;">` : ''}
-          <span class="card-type" style="background: ${color}22; color: ${color}; border: 1px solid ${color}55">${d.type.toUpperCase()}</span>
-          <div class="font-bold text-sm mt-1">${d.name}</div>
+        <div class="dataset-mini-card" data-id="${Utils.escapeHtml(d.id)}">
+          ${d.thumbnail ? `<img src="${Utils.escapeHtml(d.thumbnail)}" alt="" style="width:100%;aspect-ratio:16/9;object-fit:cover;border-radius:var(--radius-sm);margin-bottom:8px;">` : ''}
+          <span class="card-type" style="background: ${color}22; color: ${color}; border: 1px solid ${color}55">${Utils.escapeHtml(String(d.type).toUpperCase())}</span>
+          <div class="font-bold text-sm mt-1">${Utils.escapeHtml(d.name)}</div>
           <div class="text-xs text-muted mt-1">${Utils.formatStage(d.stage)}</div>
         </div>
       `;
@@ -334,18 +336,15 @@ const CompareApp = (() => {
     const iframe = document.getElementById(`iframe-${panelIndex}`);
     if (!iframe?.dataset.src) return;
     _panelQualityState.set(panelIndex, { previewReady: false, highReady: false });
-    _setPanelLoadState(panelIndex, 'Loading preview data...');
     iframe.src = iframe.dataset.src;
     delete iframe.dataset.src;
     const ready = await _waitForPanelReady(panelIndex, 180000);
     if (ready) {
-      _setPanelLoadState(panelIndex, '', true);
       const panel = document.getElementById(`panel-${panelIndex}`);
       if (panel?.dataset.datasetType !== 'tracking') {
         _queueHighDetailLoad(panelIndex);
       }
     }
-    else _setPanelLoadState(panelIndex, 'Still loading. The panel will keep updating in place.');
     _notifyFramesResize();
   }
 
@@ -363,7 +362,6 @@ const CompareApp = (() => {
       const iframe = document.getElementById(`iframe-${panelIndex}`);
       if (!iframe?.contentWindow) continue;
       _activeHighDetailLoads++;
-      _setPanelLoadState(panelIndex, 'Loading high detail...');
       iframe.contentWindow.postMessage({ type: 'START_HIGH_DETAIL', sourceIndex: 'parent' }, '*');
       
       // Fallback timeout: if the iframe hangs and never sends high-ready or high-error
@@ -417,11 +415,6 @@ const CompareApp = (() => {
       };
       tick();
     });
-  }
-
-  function _setPanelLoadState(panelIndex, text, hidden = false) {
-    // No-op: We now rely exclusively on the viewer iframe's internal status UI (quality-stream-progress)
-    // to avoid z-index overlapping issues with the sidebar.
   }
 
   function _frameVisualState(iframe) {
@@ -756,8 +749,6 @@ const CompareApp = (() => {
       state.highLoading = false;
       _panelQualityState.set(idx, state);
       _activeHighDetailLoads = Math.max(0, _activeHighDetailLoads - 1);
-      if (value.phase === 'high-ready') _setPanelLoadState(idx, '', true);
-      else _setPanelLoadState(idx, 'Preview active. High detail unavailable.');
       _drainHighDetailQueue();
     }
   }

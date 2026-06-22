@@ -5,7 +5,7 @@
   "creator": "IRIBHM",
   "placement": "shaders",
   "renderModeValue": 1,
-  "default": true,
+  "default": false,
   "order": 10,
   "description": "Additive emission MIP per-channel, mimicking Imaris fluorescence rendering."
 }

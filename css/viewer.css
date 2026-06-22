@@ -669,6 +669,18 @@ input[type="range"]::-moz-range-thumb {
   flex: 1;
 }
 
+/* SEC-021: colormap menu hover/selection moved off inline onmouseover/onmouseout
+   (CSP hygiene) onto CSS state. .selected marks the active map. */
+.colormap-option {
+  background: transparent;
+}
+.colormap-option:hover {
+  background: var(--bg-hover);
+}
+.colormap-option.selected {
+  background: var(--bg-active);
+}
+
 .viewer-legend-items {
   display: grid;
   gap: 6px;

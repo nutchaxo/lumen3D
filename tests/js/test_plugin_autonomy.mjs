@@ -63,7 +63,7 @@ const btns = g => containers[`[data-tool-group="${g}"]`].children;
 currentFetch = async () => ({ ok: false, status: 404 });
 {
   const paths = await PR.discover('js/modules');
-  assert.equal(paths.length, 18, 'discover embedded default = 18 module paths');
+  assert.equal(paths.length, 19, 'discover embedded default = 19 module paths');
   assert.ok(paths.includes('channels/histogram') && paths.includes('shaders/fluorescence'),
     'embedded default spans channels + shaders, not just tools');
 }
@@ -94,7 +94,7 @@ currentFetch = async (url) => (url === 'api/plugins.php'
   : { ok: false, status: 404 });
 {
   const paths = await PR.discover('js/modules');
-  assert.equal(paths.length, 18, 'non-JSON php body is rejected, falls through to embedded default');
+  assert.equal(paths.length, 19, 'non-JSON php body is rejected, falls through to embedded default');
 }
 
 // ── loadModules(): registers every discovered tool from disk ──────────────────
@@ -109,7 +109,7 @@ currentFetch = async (url) => {
 const all = await PR.discover('js/modules');
 await PR.loadModules('js/modules', all);
 assert.equal(PR.listByPlacement('tools').length, 14, 'loadModules registered all 14 tool plugins');
-assert.equal(PR.listByPlacement('shaders').length, 2, '2 shaders registered');
+assert.equal(PR.listByPlacement('shaders').length, 3, '3 shaders registered (incl. natural-fluorescence)');
 assert.equal(PR.listByPlacement('channels').length, 2, '2 channel plugins registered');
 
 // ── buildToolbarButtons(): generation, clustering, ordering, types, visibility ─

@@ -23,7 +23,8 @@ window.createChannelPanel = function() {
     const displayDefaults = Array.isArray(metadata?.display_defaults) ? metadata.display_defaults : [];
     const prepApplied = Boolean(metadata?.preprocessing_applied);
     _channels = [];
-    _container.innerHTML = '';
+    // BUG-070: no clear here — _renderAll() below replaces the container's innerHTML
+    // wholesale, so this write was immediately overwritten (dead DOM churn).
 
     for (let i = 0; i < numChannels; i++) {
       const channelMeta = metaChannels[i];
@@ -110,8 +111,11 @@ window.createChannelPanel = function() {
     if (!Array.isArray(state)) return;
     state.forEach((item, idx) => {
       if (!_channels[idx]) return;
-      const nextMin = _clamp01(item.min ?? _channels[idx].min);
-      const nextMax = Math.max(_clamp01(item.max ?? _channels[idx].max), nextMin + 0.01);
+      // BUG-044: the +0.01 floor was applied AFTER clamping min and never re-clamped,
+      // so min===1.0 produced max=1.01 (>1) which propagated unclamped to the shader
+      // uniform. Cap min at 0.99 and re-clamp max into [0,1] while keeping max>min.
+      const nextMin = Math.min(_clamp01(item.min ?? _channels[idx].min), 0.99);
+      const nextMax = _clamp01(Math.max(_clamp01(item.max ?? _channels[idx].max), nextMin + 0.01));
       
       let nextGamma = Number.isFinite(item.gamma) ? item.gamma : _channels[idx].gamma;
       let nextMidtone = item.midtone ?? item.mid ?? null;
@@ -178,6 +182,9 @@ window.createChannelPanel = function() {
 
   function _channelHtml(channel) {
     const safeName = Utils.escapeHtml ? Utils.escapeHtml(channel.name) : channel.name;
+    // SEC-019: channel.color is dataset/user data injected into inline styles —
+    // escape before interpolation to prevent CSS/attribute injection.
+    const safeColor = Utils.escapeHtml ? Utils.escapeHtml(channel.color) : channel.color;
     const expanded = channel.expanded ? 'expanded' : '';
     
     let pluginsHtml = '';
@@ -195,7 +202,7 @@ window.createChannelPanel = function() {
               <div class="channel-name" style="cursor:default">
                 <label style="display:flex;align-items:center;margin:0;cursor:pointer;">
                   <input type="checkbox" id="ch-toggle-${channel.idx}" ${channel.enabled ? 'checked' : ''}>
-                  <span class="channel-swatch" style="background:${channel.color};margin-left:8px;"></span>
+                  <span class="channel-swatch" style="background:${safeColor};margin-left:8px;"></span>
                 </label>
                 <input type="text" id="ch-name-input-${channel.idx}" value="${safeName}" spellcheck="false" style="background:transparent;border:none;border-bottom:1px solid transparent;color:inherit;font-size:inherit;font-family:inherit;font-weight:inherit;outline:none;width:100%;transition:border-color 0.2s;" onfocus="this.style.borderColor='rgba(255,255,255,0.2)'" onblur="this.style.borderColor='transparent'">
               </div>
@@ -208,7 +215,7 @@ window.createChannelPanel = function() {
               </button>
               <div style="position: relative; display: inline-block;">
                 <button class="btn btn-ghost btn-sm channel-icon-btn" type="button" data-channel-action="toggle-color" data-channel-idx="${channel.idx}" title="Channel color" data-i18n-title="js.channelColor">
-                  <span class="channel-swatch" style="background:${channel.color}; width:16px; height:16px; display:inline-block; border-radius:3px; border:1px solid rgba(255,255,255,0.2); vertical-align:middle;"></span>
+                  <span class="channel-swatch" style="background:${safeColor}; width:16px; height:16px; display:inline-block; border-radius:3px; border:1px solid rgba(255,255,255,0.2); vertical-align:middle;"></span>
                 </button>
                 ${_colorGridHtml(channel.idx)}
               </div>
@@ -374,18 +381,29 @@ window.createChannelPanel = function() {
     return Number.isFinite(num) ? Math.max(0, Math.min(1, num)) : 0;
   }
 
-  // Close color popups when clicking outside
-  document.addEventListener('click', (e) => {
+  // Close color popups when clicking outside.
+  // LEAK-016 (Rule 1.2): keep a handle so the document-level listener can be torn
+  // down (it was registered once at construction and never removed).
+  const _onDocClick = (e) => {
     if (!e.target.closest('[data-channel-action="toggle-color"]') && !e.target.closest('.color-grid-popup')) {
       document.querySelectorAll('.color-grid-popup').forEach(p => p.style.display = 'none');
     }
-  });
+  };
+  document.addEventListener('click', _onDocClick);
+
+  function dispose() {
+    document.removeEventListener('click', _onDocClick);
+  }
+  if (typeof window !== 'undefined') {
+    window.addEventListener('pagehide', dispose);
+  }
 
   return {
     init,
     setHistograms,
     getState,
-    setState
+    setState,
+    dispose
   };
 };
 const ChannelPanel = window.createChannelPanel();

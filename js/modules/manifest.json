@@ -86,6 +86,11 @@
       "id": "fluorescence"
     },
     {
+      "path": "shaders/natural-fluorescence",
+      "placement": "shaders",
+      "id": "natural-fluorescence"
+    },
+    {
       "path": "shaders/structure-dvr",
       "placement": "shaders",
       "id": "structure-dvr"

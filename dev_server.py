@@ -35,6 +35,8 @@ import posixpath
 import re
 import secrets
 import sys
+import tempfile
+import threading
 import time
 import urllib.parse
 from datetime import datetime
@@ -63,6 +65,67 @@ SESSION_TTL = 28800  # 8 hours
 _BRUTE: dict[str, dict] = {}
 MAX_ATTEMPTS = 10
 LOCKOUT_S    = 900  # 15 min
+# BUG-055: peers allowed to set X-Forwarded-For / X-Real-IP for the brute-force key.
+# Empty by default -> direct connections keyed on the TCP peer (behaviour unchanged).
+TRUSTED_PROXIES: set[str] = set()
+# EDGE-021 / EDGE-049: ceiling for an admin-uploaded thumbnail (reject before write).
+MAX_THUMB_BYTES = 5 * 1024 * 1024
+# RACE-020: serialize JSON writers (ThreadingHTTPServer runs handlers concurrently).
+_WRITE_LOCK = threading.Lock()
+# PERF-035: memoized catalog listing, keyed on the metadata.json mtime signature.
+_CATALOG_CACHE: dict = {"sig": None, "data": None}
+
+
+def _atomic_write(path: Path, data, *, binary: bool = False) -> None:
+    """RACE-020: write to a temp sibling then os.replace (atomic rename on the same
+    filesystem), guarded by a process-wide lock — so two concurrent admin POSTs (or a
+    save racing a rebuild) can never interleave/truncate a half-written JSON file."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with _WRITE_LOCK:
+        fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=".tmp-", suffix=path.suffix or ".tmp")
+        try:
+            if binary:
+                with os.fdopen(fd, "wb") as f:
+                    f.write(data)
+            else:
+                with os.fdopen(fd, "w", encoding="utf-8") as f:
+                    f.write(data)
+            os.replace(tmp, str(path))
+        except BaseException:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+            raise
+
+
+def _client_ip(handler) -> str:
+    """BUG-055: brute-force key. Honor X-Forwarded-For / X-Real-IP only when the direct
+    peer is a configured trusted proxy; otherwise use the real TCP peer address. This
+    avoids a shared-proxy-IP global lockout while not trusting client-supplied headers
+    from arbitrary peers."""
+    peer = handler.client_address[0] if getattr(handler, "client_address", None) else handler.address_string()
+    if peer in TRUSTED_PROXIES:
+        xff = handler.headers.get("X-Forwarded-For")
+        if xff:
+            return xff.split(",")[0].strip()
+        xri = handler.headers.get("X-Real-IP")
+        if xri:
+            return xri.strip()
+    return peer
+
+
+def _is_supported_image(b: bytes) -> bool:
+    """EDGE-021 / EDGE-049 (Rule 1.4): true only for a real image by magic bytes — so a
+    `data:image/...` prefix can't smuggle arbitrary binary onto disk. Accepts the formats
+    a browser canvas/export can produce (WebP/PNG/JPEG/GIF); the file is named .webp but
+    browsers sniff content, so a PNG/JPEG thumbnail still renders."""
+    return (
+        (b[0:4] == b"RIFF" and b[8:12] == b"WEBP")   # WebP
+        or b[0:8] == b"\x89PNG\r\n\x1a\n"            # PNG
+        or b[0:3] == b"\xff\xd8\xff"                 # JPEG
+        or b[0:6] in (b"GIF87a", b"GIF89a")          # GIF
+    )
 
 
 # ── Config helpers ─────────────────────────────────────────────────────────────
@@ -110,8 +173,7 @@ def _load_config() -> dict:
         "password_pbkdf2": _hash_password(generated),
         "note": "Change password via: python dev_server.py --set-password",
     }
-    CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
-    CONFIG_FILE.write_text(json.dumps(cfg, indent=2), encoding="utf-8")
+    _atomic_write(CONFIG_FILE, json.dumps(cfg, indent=2))  # RACE-020
     print(f"  [dev-server] Generated admin password for user '{DEFAULT_USERNAME}': {generated}")
     print("  [dev-server] Save it now; change it via: python dev_server.py --set-password")
     return cfg
@@ -331,7 +393,8 @@ def _save_dataset(dataset_id: str, body: dict) -> bool:
     existing["configured"]  = True
     existing["lastModified"] = datetime.now().isoformat()
 
-    meta_path.write_text(json.dumps(existing, indent=2, ensure_ascii=False), encoding="utf-8")
+    _atomic_write(meta_path, json.dumps(existing, indent=2, ensure_ascii=False))  # RACE-020
+    _CATALOG_CACHE["sig"] = None  # PERF-035: force a recompute on the next catalog read
     return True
 
 
@@ -352,22 +415,70 @@ def _save_thumbnail_bytes(dataset_id: str, image_data: str):
         img_bytes = base64.b64decode(base64_str)
     except Exception as e:
         return 500, {"error": f"Failed to save thumbnail: {e}"}
+    # EDGE-021 / EDGE-049 (Rule 1.4): the `data:image/` prefix is attacker-controlled
+    # text; verify a real image by magic bytes and a size ceiling before writing,
+    # instead of dropping arbitrary binary onto disk.
+    if len(img_bytes) > MAX_THUMB_BYTES:
+        return 400, {"error": "Thumbnail too large"}
+    if not _is_supported_image(img_bytes):
+        return 400, {"error": "Not a valid image (expected WebP/PNG/JPEG/GIF)"}
     ds_dir.mkdir(parents=True, exist_ok=True)
-    (ds_dir / "thumbnail.webp").write_bytes(img_bytes)
+    _atomic_write(ds_dir / "thumbnail.webp", img_bytes, binary=True)  # RACE-020
+    _CATALOG_CACHE["sig"] = None  # PERF-035
     return 200, {"ok": True, "path": f"DATA_WEB/{type_dir}/{folder}/thumbnail.webp"}
 
 
-def _rebuild_catalog() -> int:
-    datasets = _list_datasets()
-    catalog = []
-    for ds in datasets:
-        if not ds.get("configured") and ds.get("thumbnail") is None:
-            continue  # skip incomplete preprocessed datasets
-        catalog.append(ds)
+def _catalog_mtime_sig() -> float:
+    """PERF-035: cheap change signature — the newest metadata.json mtime across the
+    three dataset roots (plus each root dir mtime to catch added/removed datasets)."""
+    sig = 0.0
+    for t in ("fixed", "live", "tracking"):
+        base = DATA_WEB / t
+        if not base.is_dir():
+            continue
+        try:
+            sig = max(sig, base.stat().st_mtime)
+        except OSError:
+            pass
+        for ds in base.iterdir():
+            try:
+                sig = max(sig, (ds / "metadata.json").stat().st_mtime)
+            except OSError:
+                pass
+    return sig
 
-    catalog_path = ROOT / "DATA_WEB" / "catalog.json"
-    catalog_path.parent.mkdir(parents=True, exist_ok=True)
-    catalog_path.write_text(json.dumps(catalog, indent=2, ensure_ascii=False), encoding="utf-8")
+
+def _list_datasets_cached() -> list[dict]:
+    """PERF-035: re-parsing every metadata.json on each catalog.json GET was O(datasets)
+    JSON loads per request. Recompute only when the mtime signature changes."""
+    sig = _catalog_mtime_sig()
+    if _CATALOG_CACHE["sig"] == sig and _CATALOG_CACHE["data"] is not None:
+        return _CATALOG_CACHE["data"]
+    data = _list_datasets()
+    _CATALOG_CACHE["sig"] = sig
+    _CATALOG_CACHE["data"] = data
+    return data
+
+
+def _build_catalog() -> list[dict]:
+    """BUG-062: single filter + sort shared by the static rebuild and the dynamic GET
+    handler, so the two outputs are byte-identical (removes the dev-vs-fast divergence)."""
+    catalog = [ds for ds in _list_datasets_cached()
+               if ds.get("configured") or ds.get("thumbnail") is not None]
+
+    # BUG-061: collapse every missing/'Unknown' date to one sentinel so it sorts last
+    # under reverse=True, instead of the previous mix of 'Unknown'/'1970-01-01'/ISO.
+    def _date_key(x):
+        d = x.get("date")
+        return d if isinstance(d, str) and d not in ("", "Unknown") else "0000-00-00"
+    catalog.sort(key=lambda x: (_date_key(x), x.get("name", "")), reverse=True)
+    return catalog
+
+
+def _rebuild_catalog() -> int:
+    catalog = _build_catalog()
+    catalog_path = DATA_WEB / "catalog.json"  # global (== ROOT/DATA_WEB in prod; lets tests redirect)
+    _atomic_write(catalog_path, json.dumps(catalog, indent=2, ensure_ascii=False))  # RACE-020
     return len(catalog)
 
 
@@ -458,26 +569,15 @@ class AdminHandler(http.server.SimpleHTTPRequestHandler):
             super().do_GET()
 
     def _serve_dynamic_catalog(self):
-        datasets = _list_datasets()
-        catalog = []
-        for ds in datasets:
-            if ds.get("configured") or ds.get("thumbnail") is not None:
-                catalog.append(ds)
-        
-        # Sort catalog by date (most recent first)
-        catalog.sort(
-            key=lambda x: (x.get("date") or "Unknown" if x.get("date") != "Unknown" else "1970-01-01", x.get("name", "")),
-            reverse=True
-        )
-        
+        # BUG-062/PERF-035: same filter+sort as the static rebuild, off the mtime cache.
+        catalog = _build_catalog()
         body = json.dumps(catalog, indent=2, ensure_ascii=False).encode("utf-8")
         self.send_response(200)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
-        self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0')
-        self.send_header('Pragma', 'no-cache')
-        self.send_header('Expires', '0')
+        # BUG-060: do NOT re-send Access-Control-Allow-Origin / Cache-Control / Pragma /
+        # Expires here — end_headers() already emits CORS and (for a .json path) the
+        # no-cache trio. Sending them again duplicated every one of those headers.
         self.end_headers()
         self.wfile.write(body)
 
@@ -539,7 +639,7 @@ class AdminHandler(http.server.SimpleHTTPRequestHandler):
                                  "csrf": session["csrf"] if session else None})
 
             elif action == "login":
-                ip = self.address_string()
+                ip = _client_ip(self)  # BUG-055: proxy-aware client IP, not the raw peer
                 bf = _BRUTE.get(ip, {"count": 0, "until": 0})
                 if bf["until"] > time.time():
                     remaining = int(bf["until"] - time.time())
@@ -657,7 +757,7 @@ def main():
         cfg["username"]       = username
         cfg["password_pbkdf2"] = _hash_password(password)
         cfg.pop("password_sha256", None)  # drop legacy unsalted hash on update
-        CONFIG_FILE.write_text(json.dumps(cfg, indent=2), encoding="utf-8")
+        _atomic_write(CONFIG_FILE, json.dumps(cfg, indent=2))  # RACE-020
         print(f"✅ Password updated for user '{username}'")
         sys.exit(0)
 

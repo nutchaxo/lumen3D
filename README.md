@@ -20,7 +20,7 @@ The platform bridges raw scientific data and seamless web exploration through a 
 *   **Progressive Level-of-Detail (LOD)**: Instant first paint with low-resolution previews (`512×512`, `1024×1024`), then background streaming of higher-resolution bricks up to `native` quality.
 
 ### 2. Smart Slicing & Oblique Cuts
-*   **Off-Thread Brick Decoding**: Brick fetch (HTTP range requests over `.bin` pack files) and decode (gunzip + un-mosaic 64³ blocks) both run in dedicated Web Workers (`js/core/brick-fetch-worker.js`, `js/core/brick-decode-worker.js`), keeping the UI thread reserved for Three.js and DOM.
+*   **Off-Thread Brick Decoding**: `.bin` pack files (fetched whole — no HTTP range) are sliced and their WebP tiles decoded (`createImageBitmap` + un-mosaic 64³ blocks) in a dedicated decode-worker pool (`js/core/brick-decode-worker.js`), keeping the UI thread reserved for Three.js and DOM.
 *   **AABB Plane Intersection**: A pure-JS slab-method intersector (`js/core/aabb-intersector.js`) selects only the bricks crossing the current slicing plane, enabling sub-millisecond chunk picking for thousands of bricks.
 *   **Empty Space Skipping**: Bricks with occupancy `< 0.05%` are dropped at preprocessing time (`3-chunk_packer.py`), shrinking the streamed dataset by orders of magnitude.
 
@@ -37,7 +37,7 @@ The platform bridges raw scientific data and seamless web exploration through a 
 ### 5. Python Preprocessing Pipeline
 *   **Imaris (`.ims`) input**: Reads HDF5-based Imaris files via `h5py` and extracts metadata, dimensions, and per-channel calibration.
 *   **Scientific Image Processing**: Otsu thresholding, morphological opening to suppress sensor hot pixels, window leveling, and per-LOD downscaling (`scipy.ndimage`, `skimage`, `PIL`).
-*   **Web-Optimized Brick Format**: 64³ chunks mosaicked into 512² PNGs and gzip-packed into binary `.bin` pack files with a `manifest.json` index for HTTP range requests.
+*   **Web-Optimized Brick Format**: 64³ chunks mosaicked 8×8 into 512² WebP tiles and packed into binary `.bin` pack files with a `manifest.json` index (packs fetched whole, decoded off-thread).
 *   **False-Color Thumbnails**: Maximum Intensity Projection (MIP) composite WebP thumbnails generated per dataset.
 
 ### 6. Extensible Plugin Architecture
@@ -66,11 +66,9 @@ graph TD
     subgraph Client [Browser - WebGL2]
         I --> J[Catalog.js]
         J --> K[VolumeSourceManager]
-        F --> L[BrickLoader + LRU]
-        L --> M[brick-fetch-worker]
-        L --> N[brick-decode-worker]
-        M --> O[SVRManager - 3D Atlas]
-        N --> O
+        F --> L[BrickLoader + LRU - fetches whole .bin packs]
+        L --> N[brick-decode-worker pool - WebP decode]
+        N --> O[SVRManager - 3D Atlas]
         O --> P[VolumeViewer - Three.js Ray-March]
         P --> Q[WebGL2 Canvas]
         R[PluginRegistry] --> P
@@ -99,7 +97,7 @@ graph TD
 ├── preprocess/                # Python pipeline
 │   ├── 1-ims_metadata.py      # Imaris metadata extractor (h5py)
 │   ├── 2-image_processor.py   # Normalization, Otsu thresholding, morphological opening (scipy/skimage)
-│   ├── 3-chunk_packer.py      # 64³ bricks, mosaic 512², gzip-pack into .bin
+│   ├── 3-chunk_packer.py      # 64³ bricks, WebP mosaic 512² (8×8), pack into .bin
 │   ├── 4-catalog_generator.py # metadata.json + catalog entry
 │   ├── run_preprocess.py      # Unified runner (orchestrates 1 → 4)
 │   ├── requirements.txt       # Python dependencies

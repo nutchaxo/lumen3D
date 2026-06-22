@@ -466,7 +466,18 @@ async function saveDataset() {
     await new Promise(resolve => {
       const handler = (e) => {
         if (e.data?.type === 'ORIENTATION_RESULT') {
-          _draft.orientation = e.data.quaternion;
+          // EDGE-018 (Rule 1.4): validate + normalize before storing — a non-finite or
+          // degenerate (near-zero length) quaternion would corrupt the persisted
+          // orientation. On bad input, keep the prior orientation. Shape is preserved.
+          const q = e.data.quaternion;
+          const a = Array.isArray(q) ? q.slice() : (q && typeof q === 'object' ? [q.x, q.y, q.z, q.w] : null);
+          if (a && a.length === 4 && a.every(Number.isFinite)) {
+            const len = Math.hypot(a[0], a[1], a[2], a[3]);
+            if (len > 1e-6) {
+              const n = a.map(v => v / len);
+              _draft.orientation = Array.isArray(q) ? n : { x: n[0], y: n[1], z: n[2], w: n[3] };
+            }
+          }
           window.removeEventListener('message', handler);
           resolve();
         }
@@ -524,8 +535,10 @@ async function saveDataset() {
     }
     renderList();
 
-    // Silent catalog rebuild
-    apiFetch(`${API_DATASETS}?action=rebuild_catalog`, { method: 'POST', body: '{}' });
+    // BUG-057: await the rebuild and surface its outcome (was fire-and-forget,
+    // swallowing failures so the catalogue could silently drift from saved metadata).
+    const rb = await apiFetch(`${API_DATASETS}?action=rebuild_catalog`, { method: 'POST', body: '{}' });
+    if (!rb?.ok) toast('Sauvegardé, mais catalogue non régénéré — relancez la reconstruction.', 'warning');
   } else {
     toast('Erreur lors de la sauvegarde.', 'error');
   }
@@ -575,8 +588,9 @@ async function saveThumbnail(dataUrl) {
     // Refresh the list to show the new thumbnail
     renderList();
     
-    // Silent catalog rebuild to ensure consistency
-    apiFetch(`${API_DATASETS}?action=rebuild_catalog`, { method: 'POST', body: '{}' });
+    // BUG-057: await the rebuild and surface its outcome (was fire-and-forget).
+    const rb = await apiFetch(`${API_DATASETS}?action=rebuild_catalog`, { method: 'POST', body: '{}' });
+    if (!rb?.ok) toast('Vignette enregistrée, mais catalogue non régénéré — relancez la reconstruction.', 'warning');
   } else {
     toast(`Erreur lors de l'enregistrement de la preview : ${data?.error || 'Inconnue'}`, 'error');
   }

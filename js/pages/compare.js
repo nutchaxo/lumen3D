@@ -336,18 +336,15 @@ const CompareApp = (() => {
     const iframe = document.getElementById(`iframe-${panelIndex}`);
     if (!iframe?.dataset.src) return;
     _panelQualityState.set(panelIndex, { previewReady: false, highReady: false });
-    _setPanelLoadState(panelIndex, 'Loading preview data...');
     iframe.src = iframe.dataset.src;
     delete iframe.dataset.src;
     const ready = await _waitForPanelReady(panelIndex, 180000);
     if (ready) {
-      _setPanelLoadState(panelIndex, '', true);
       const panel = document.getElementById(`panel-${panelIndex}`);
       if (panel?.dataset.datasetType !== 'tracking') {
         _queueHighDetailLoad(panelIndex);
       }
     }
-    else _setPanelLoadState(panelIndex, 'Still loading. The panel will keep updating in place.');
     _notifyFramesResize();
   }
 
@@ -365,7 +362,6 @@ const CompareApp = (() => {
       const iframe = document.getElementById(`iframe-${panelIndex}`);
       if (!iframe?.contentWindow) continue;
       _activeHighDetailLoads++;
-      _setPanelLoadState(panelIndex, 'Loading high detail...');
       iframe.contentWindow.postMessage({ type: 'START_HIGH_DETAIL', sourceIndex: 'parent' }, '*');
       
       // Fallback timeout: if the iframe hangs and never sends high-ready or high-error
@@ -419,11 +415,6 @@ const CompareApp = (() => {
       };
       tick();
     });
-  }
-
-  function _setPanelLoadState(panelIndex, text, hidden = false) {
-    // No-op: We now rely exclusively on the viewer iframe's internal status UI (quality-stream-progress)
-    // to avoid z-index overlapping issues with the sidebar.
   }
 
   function _frameVisualState(iframe) {
@@ -758,8 +749,6 @@ const CompareApp = (() => {
       state.highLoading = false;
       _panelQualityState.set(idx, state);
       _activeHighDetailLoads = Math.max(0, _activeHighDetailLoads - 1);
-      if (value.phase === 'high-ready') _setPanelLoadState(idx, '', true);
-      else _setPanelLoadState(idx, 'Preview active. High detail unavailable.');
       _drainHighDetailQueue();
     }
   }

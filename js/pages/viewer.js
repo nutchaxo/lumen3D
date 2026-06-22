@@ -69,7 +69,8 @@ const ViewerApp = (() => {
           const sidebar = document.querySelector('.viewer-sidebar');
           if (sidebar && !sidebar.classList.contains('sidebar-hidden') && !e.target.closest('.viewer-sidebar')) {
             sidebar.classList.add('sidebar-hidden');
-            window.parent.postMessage({ type: 'SIDEBAR_CLOSED', sourceIndex: _panelIndex }, '*');
+            // SEC-012: restrict targetOrigin to this page's origin (no wildcard leak).
+            window.parent.postMessage({ type: 'SIDEBAR_CLOSED', sourceIndex: _panelIndex }, Utils.trustedTargetOrigin());
           }
         });
       }
@@ -110,7 +111,6 @@ const ViewerApp = (() => {
       return;
     }
     if (!datasetMeta.volumeSources) datasetMeta.volumeSources = [];
-    if (!datasetMeta.volumeSources) datasetMeta.volumeSources = [];
 
     if (datasetMeta.volumeSources.length === 0 && typeof VolumeSourceManager !== 'undefined') {
       datasetMeta.volumeSources = VolumeSourceManager.normalizeSources(datasetMeta);
@@ -142,8 +142,6 @@ const ViewerApp = (() => {
 
     // Update UI Header
     document.getElementById('dataset-title').textContent = datasetMeta.name;
-    document.getElementById('dataset-subtitle').textContent = 
-      `${I18n.t(`explorer.${datasetMeta.type}`)} · ${Utils.formatStage(datasetMeta.stage)} · ${Utils.formatDate(datasetMeta.date)}`;
     document.getElementById('dataset-subtitle').textContent =
       `${I18n.t(`explorer.${datasetMeta.type}`)} - ${Utils.formatStage(datasetMeta.stage)} - ${Utils.formatDate(datasetMeta.date)}`;
     if (typeof AnnotationManager !== 'undefined') AnnotationManager.init({ items: [] });
@@ -179,18 +177,20 @@ const ViewerApp = (() => {
         // Never broadcast camera changes when z-stack is active:
         // _zstackShow() forces setView('xy') which would corrupt other panels' cameras.
         if (_isIframe && !_zstackActive) {
-          window.parent.postMessage({ type: 'SYNC_CAMERA', value: state, sourceIndex: _panelIndex }, '*');
+          // SEC-012: restrict targetOrigin to this page's origin (no wildcard leak).
+          window.parent.postMessage({ type: 'SYNC_CAMERA', value: state, sourceIndex: _panelIndex }, Utils.trustedTargetOrigin());
         }
       });
       // Broadcast full slicer plane spec to sibling decompose panels on every change.
       // Uses onPlaneSpecChange which fires for all plane mutations (position, yaw, pitch, roll, slab, mode).
       VolumeViewer.onPlaneSpecChange?.((spec) => {
         if (_suppressSlicerSync || _zstackActive) return;
+        // SEC-012: restrict targetOrigin to this page's origin (no wildcard leak).
         window.parent.postMessage({
           type: 'SYNC_SLICER_SPEC',
           spec,
           sourceIndex: _panelIndex
-        }, '*');
+        }, Utils.trustedTargetOrigin());
       });
     }
     
@@ -215,7 +215,8 @@ const ViewerApp = (() => {
       VolumeViewer.updateChannel(idx, params);
       window.dispatchEvent(new CustomEvent('channels-updated'));
       if (_isIframe) {
-        window.parent.postMessage({ type: 'SYNC_CHANNELS', sourceIndex: _panelIndex, channelIndex: idx, value: params }, '*');
+        // SEC-012: restrict targetOrigin to this page's origin (no wildcard leak).
+        window.parent.postMessage({ type: 'SYNC_CHANNELS', sourceIndex: _panelIndex, channelIndex: idx, value: params }, Utils.trustedTargetOrigin());
       }
     });
 
@@ -237,7 +238,13 @@ const ViewerApp = (() => {
 
     try {
       if (isLive) {
-        const totalFrames = datasetMeta.dimensions.t;
+        // BUG-032 (Rule 1.4): a malformed live dataset may lack dimensions.t (or
+        // dimensions entirely) -> reject explicitly instead of throwing a raw
+        // TypeError on property access.
+        const totalFrames = datasetMeta.dimensions?.t;
+        if (!Number.isFinite(totalFrames) || totalFrames <= 0) {
+          throw new Error('dataset live sans dimensions.t');
+        }
         Timeline.init('timeline-panel', {
           totalFrames: totalFrames,
           showSpeed: false,
@@ -342,7 +349,8 @@ const ViewerApp = (() => {
         iframe: {
           isIframe: () => _isIframe,
           panelIndex: () => _panelIndex,
-          postMessage: (data) => window.parent.postMessage(data, '*')
+          // SEC-012: restrict targetOrigin to this page's origin (no wildcard leak).
+          postMessage: (data) => window.parent.postMessage(data, Utils.trustedTargetOrigin())
         },
         workspace: {
           getState: _getWorkspaceState,
@@ -553,11 +561,25 @@ const ViewerApp = (() => {
   }
 
   async function _mergeDatasetMetadata() {
+    // BUG-033 (Rule 1.4): metadata.json fetch may fail (no path / non-ok). The
+    // catalogue fallback is acceptable ONLY if it already carries dimensions;
+    // otherwise downstream calibration would compute on NaN, so abort init with
+    // a clear error instead of mounting incomplete metadata.
+    const _hasCatalogDims = !!datasetMeta?.dimensions
+      && Number.isFinite(datasetMeta.dimensions.x)
+      && Number.isFinite(datasetMeta.dimensions.y)
+      && Number.isFinite(datasetMeta.dimensions.z);
     const datasetPath = datasetMeta?.path || datasetMeta?.id;
-    if (!datasetPath) return;
+    if (!datasetPath) {
+      if (!_hasCatalogDims) throw new Error('metadata.json introuvable et dimensions absentes du catalogue');
+      return;
+    }
     try {
       const resp = await fetch(`DATA_WEB/${datasetPath}/metadata.json`);
-      if (!resp.ok) return;
+      if (!resp.ok) {
+        if (!_hasCatalogDims) throw new Error(`metadata.json inaccessible (HTTP ${resp.status}) et dimensions absentes du catalogue`);
+        return;
+      }
       const meta = await resp.json();
       const expectLive = datasetMeta?.type === 'live' || meta?.type === 'live';
       const v = _validateDatasetMetadata(meta, expectLive);
@@ -764,138 +786,6 @@ const ViewerApp = (() => {
     }
   }
 
-  function _lodForQuality(quality, levelCount, levels = null) {
-    const maxIdx = Math.max(0, levelCount - 1);
-    if (!quality || quality === 'native') return 0;
-
-    const lodMatch = quality.match(/^lod(\d+)$/);
-    if (lodMatch) {
-      return Math.min(maxIdx, parseInt(lodMatch[1], 10));
-    }
-
-    // Handle resolution keys (e.g. 256x256, 512x512, 1024x1024)
-    const match = quality.match(/^(\d+)x\d+$/);
-    if (match) {
-      const targetSize = parseInt(match[1], 10);
-      if (levels && Array.isArray(levels)) {
-        let bestLod = 0;
-        let minDiff = Infinity;
-        for (let i = 0; i < levels.length; i++) {
-          const dims = levels[i]?.dimensions;
-          if (dims && dims.x && dims.y) {
-            const maxDim = Math.max(dims.x, dims.y);
-            const diff = Math.abs(maxDim - targetSize);
-            if (diff < minDiff) {
-              minDiff = diff;
-              bestLod = i;
-            }
-          }
-        }
-        return bestLod;
-      } else {
-        // Fallback calculation based on typical levels
-        if (targetSize <= 256) return maxIdx;
-        if (targetSize <= 512) return Math.min(maxIdx, Math.max(0, maxIdx - 1));
-        if (targetSize <= 1024) return Math.min(maxIdx, Math.max(0, maxIdx - 2));
-        return 0;
-      }
-    }
-
-    // Fallbacks for legacy/abstract keys
-    if (quality === 'preview' || quality === 'low') return maxIdx;
-    if (quality === 'balanced' || quality === 'medium') return Math.min(maxIdx, Math.max(0, maxIdx - 1));
-    if (quality === 'high') return Math.min(maxIdx, Math.max(0, maxIdx - 2));
-    return 0;
-  }
-
-  function _qualityDimsLabel(quality) {
-    const dims = _qualityDims(quality);
-    return dims ? ` (${dims.x}x${dims.y}x${dims.z})` : '';
-  }
-
-  function _qualityDims(quality) {
-    const levels = Array.isArray(_brickManifest?.levels) ? _brickManifest.levels : null;
-    if (levels?.length) {
-      const lod = _lodForQuality(quality, levels.length, levels);
-      const dims = levels[lod]?.dimensions;
-      if (dims?.x && dims?.y && dims?.z) return dims;
-    }
-    const dims = datasetMeta?.dimensions;
-    if (!dims?.x || !dims?.y || !dims?.z) return null;
-    if (quality === 'native') return { x: dims.x, y: dims.y, z: dims.z };
-    
-    // Fallback dimension calculations
-    let targetSize = 256;
-    let maxZ = 56;
-    if (quality === '256x256' || quality === 'preview') {
-      targetSize = 256;
-      maxZ = 56;
-    } else if (quality === '512x512' || quality === 'balanced') {
-      targetSize = 512;
-      maxZ = 96;
-    } else if (quality === '1024x1024' || quality === 'high') {
-      targetSize = 1024;
-      maxZ = 192;
-    }
-    
-    const scale = Math.min(1, targetSize / Math.max(dims.x, dims.y));
-    const isBricks = datasetMeta?.volumeSources?.some(s => s.kind === 'bricks');
-    const finalZ = isBricks ? dims.z : Math.min(dims.z, maxZ);
-    return {
-      x: Math.max(1, Math.round(dims.x * scale)),
-      y: Math.max(1, Math.round(dims.y * scale)),
-      z: finalZ
-    };
-  }
-
-  function _bindVolumeControls() {
-    const centerBtn = document.getElementById('btn-center-sample');
-    if (centerBtn) {
-      centerBtn.addEventListener('click', () => {
-        VolumeViewer.centerSample();
-      });
-    }
-
-    const resetBtn = document.getElementById('btn-reset-view');
-    if (resetBtn) {
-      resetBtn.addEventListener('click', () => {
-        VolumeViewer.resetView({ resetClipping: true });
-        if (typeof ToolManager !== 'undefined') ToolManager.activate('navigate');
-        _resetClipSliders();
-      });
-    }
-  }
-
-  function _bindZScaleControls() {
-    const slider = document.getElementById('slider-z-scale');
-    const resetBtn = document.getElementById('btn-reset-z-scale');
-    if (!slider) return;
-
-    slider.value = Math.round(_zDisplayScale * 100);
-    _updateZScaleLabel();
-    _updatePhysicalStatus();
-
-    slider.addEventListener('input', (e) => {
-      _zDisplayScale = _clampZDisplayScale(parseInt(e.target.value, 10) / 100);
-      slider.value = Math.round(_zDisplayScale * 100);
-      VolumeViewer.setZDisplayScale(_zDisplayScale);
-      _saveZDisplayScale();
-      _updateZScaleLabel();
-      _updatePhysicalStatus();
-    });
-
-    if (resetBtn) {
-      resetBtn.addEventListener('click', () => {
-        _zDisplayScale = 1.0;
-        slider.value = 100;
-        VolumeViewer.setZDisplayScale(_zDisplayScale);
-        _saveZDisplayScale();
-        _updateZScaleLabel();
-        _updatePhysicalStatus();
-      });
-    }
-  }
-
   function _bindDisplayControls() {
     // --- Render Mode ---
     const renderModeSelect = document.getElementById('select-render-mode');
@@ -938,7 +828,9 @@ const ViewerApp = (() => {
         if (exposureLabel) exposureLabel.textContent = `${val.toFixed(2)}×`;
         VolumeViewer.setExposure(val);
         if (_isIframe) {
-          window.parent.postMessage({ type: 'SYNC_EXPOSURE', value: val }, '*');
+          // DEAD-021: include sourceIndex so compare.js's routing guard can attribute the
+          // message; SEC-012: restrict targetOrigin to this page's origin (no wildcard leak).
+          window.parent.postMessage({ type: 'SYNC_EXPOSURE', value: val, sourceIndex: _panelIndex }, Utils.trustedTargetOrigin());
         }
       };
       exposureSlider.addEventListener('input', syncExposure);
@@ -1039,7 +931,8 @@ const ViewerApp = (() => {
     if (typeof StudioEditor === 'undefined' && !_isIframe) return;
 
     if (_isIframe) {
-      window.parent.postMessage({ type: 'REQUEST_COMPARE_STUDIO', sourceIndex: _panelIndex }, '*');
+      // SEC-012: restrict targetOrigin to this page's origin (no wildcard leak).
+      window.parent.postMessage({ type: 'REQUEST_COMPARE_STUDIO', sourceIndex: _panelIndex }, Utils.trustedTargetOrigin());
       return;
     }
 
@@ -1451,28 +1344,6 @@ const ViewerApp = (() => {
     }
   }
 
-  function _drawSliceResult(result) {
-    const canvas = document.getElementById('slice-preview-canvas');
-    const overlay = document.getElementById('slice-overlay-canvas');
-    const wrap = document.getElementById('slice-canvas-wrap');
-    if (!canvas || !result?.canvas) return;
-    canvas.width = result.width;
-    canvas.height = result.height;
-    canvas.getContext('2d').drawImage(result.canvas, 0, 0);
-    if (overlay) {
-      overlay.width = result.width;
-      overlay.height = result.height;
-    }
-    const annCanvas = document.getElementById('annotation-canvas');
-    if (annCanvas) {
-      annCanvas.width = result.width;
-      annCanvas.height = result.height;
-      if (typeof AnnotationLayer !== 'undefined') AnnotationLayer.redraw();
-    }
-    if (wrap) wrap.style.aspectRatio = `${result.width} / ${result.height}`;
-    _drawSliceOverlay();
-  }
-
   function _setSliceStatus(text) {
     const node = document.getElementById('slice-render-status');
     if (node) node.textContent = text;
@@ -1480,224 +1351,6 @@ const ViewerApp = (() => {
 
   function _currentChannelState() {
     return ChannelPanel.getState?.() || _channelState;
-  }
-
-  function _bindSliceGizmo() {
-    const slider = document.getElementById('oblique-depth-slider');
-    if (slider) {
-      slider.addEventListener('input', e => {
-        VolumeViewer.setPlaneSpec({ value: parseFloat(e.target.value) + 0.5, visible: true });
-      });
-    }
-    
-    // Use the central handler instead of local overwriting
-    VolumeViewer.onPlaneSpecChange(_handlePlaneSpecChange);
-
-    const container = document.getElementById('slice-gizmo');
-    if (!container || typeof THREE === 'undefined') return;
-    
-    // Clear old HTML
-    container.innerHTML = '';
-    
-    const renderer = new THREE.WebGLRenderer({ alpha: true, antialias: true });
-    renderer.setSize(120, 120);
-    container.appendChild(renderer.domElement);
-    
-    const scene = new THREE.Scene();
-    const camera = new THREE.PerspectiveCamera(40, 1, 0.1, 10);
-    camera.position.z = 3;
-    
-    const gizmoGroup = new THREE.Group();
-    scene.add(gizmoGroup);
-    
-    const ringGeom = new THREE.TorusGeometry(0.8, 0.05, 16, 64);
-    
-    const matX = new THREE.MeshBasicMaterial({ color: 0xff4d4f, depthTest: false, transparent: true, opacity: 0.8 });
-    const ringX = new THREE.Mesh(ringGeom, matX);
-    ringX.rotation.y = Math.PI / 2;
-    ringX.userData.axis = 'x';
-    gizmoGroup.add(ringX);
-    
-    const matY = new THREE.MeshBasicMaterial({ color: 0x00a654, depthTest: false, transparent: true, opacity: 0.8 });
-    const ringY = new THREE.Mesh(ringGeom, matY);
-    ringY.rotation.x = Math.PI / 2;
-    ringY.userData.axis = 'y';
-    gizmoGroup.add(ringY);
-    
-    const matZ = new THREE.MeshBasicMaterial({ color: 0x00d2ff, depthTest: false, transparent: true, opacity: 0.8 });
-    const ringZ = new THREE.Mesh(ringGeom, matZ);
-    ringZ.userData.axis = 'z';
-    gizmoGroup.add(ringZ);
-
-    const sphereGeom = new THREE.SphereGeometry(0.75, 32, 32);
-    const sphereMat = new THREE.MeshBasicMaterial({ color: 0x222222, transparent: true, opacity: 0.5 });
-    gizmoGroup.add(new THREE.Mesh(sphereGeom, sphereMat));
-
-    let activeRing = null;
-    let activeHitPoint = null;
-    let isDragging = false;
-    let freeRotate = false;
-    let velocity = { yaw: 0, pitch: 0, roll: 0 };
-    let inertiaFrame = null;
-    let previousMouse = { x: 0, y: 0 };
-    const raycaster = new THREE.Raycaster();
-    const mouse = new THREE.Vector2();
-
-    container.addEventListener('pointerdown', (e) => {
-      const rect = container.getBoundingClientRect();
-      mouse.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
-      mouse.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
-      
-      raycaster.setFromCamera(mouse, camera);
-      const intersects = raycaster.intersectObjects([ringX, ringY, ringZ]);
-      if (inertiaFrame) {
-        cancelAnimationFrame(inertiaFrame);
-        inertiaFrame = null;
-      }
-      velocity = { yaw: 0, pitch: 0, roll: 0 };
-      isDragging = true;
-      freeRotate = intersects.length === 0;
-      if (intersects.length > 0) {
-        activeRing = intersects[0].object;
-        activeHitPoint = intersects[0].point.clone();
-        previousMouse = { x: e.clientX, y: e.clientY };
-        container.setPointerCapture(e.pointerId);
-      } else {
-        activeRing = null;
-        activeHitPoint = null;
-        previousMouse = { x: e.clientX, y: e.clientY };
-        container.setPointerCapture(e.pointerId);
-      }
-    });
-
-    container.addEventListener('pointermove', (e) => {
-      const rect = container.getBoundingClientRect();
-      mouse.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
-      mouse.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
-      
-      if (!isDragging) {
-        raycaster.setFromCamera(mouse, camera);
-        const intersects = raycaster.intersectObjects([ringX, ringY, ringZ]);
-        
-        [ringX, ringY, ringZ].forEach(r => {
-            r.material.opacity = 0.4;
-            r.scale.setScalar(1);
-        });
-
-        if (intersects.length > 0) {
-          container.style.cursor = 'grab';
-          const r = intersects[0].object;
-          r.material.opacity = 1.0;
-          r.scale.setScalar(1.08);
-        } else {
-          container.style.cursor = 'crosshair';
-        }
-        return;
-      }
-
-      const dx = e.clientX - previousMouse.x;
-      const dy = e.clientY - previousMouse.y;
-      previousMouse = { x: e.clientX, y: e.clientY };
-      
-      const spec = VolumeViewer.getPlaneSpec();
-      let yaw = spec.yaw || 0;
-      let pitch = spec.pitch || 0;
-      let roll = spec.roll || 0;
-
-      if (freeRotate || !activeRing) {
-        const yawDelta = dx * 0.5;
-        const pitchDelta = -dy * 0.5;
-        velocity = { yaw: yawDelta, pitch: pitchDelta, roll: 0 };
-        VolumeViewer.setPlaneSpec({ mode: 'oblique', yaw: yaw + yawDelta, pitch: pitch + pitchDelta, roll, visible: true });
-        return;
-      }
-
-      const axisName = activeRing.userData.axis;
-      const axisVec = new THREE.Vector3(
-          axisName === 'x' ? 1 : 0,
-          axisName === 'y' ? 1 : 0,
-          axisName === 'z' ? 1 : 0
-      ).applyQuaternion(gizmoGroup.quaternion).normalize();
-
-      const hitPoint = (activeHitPoint || new THREE.Vector3(0.8, 0, 0)).clone();
-      const center = gizmoGroup.position.clone();
-      const toHit = hitPoint.sub(center).normalize();
-      const tangent = new THREE.Vector3().crossVectors(axisVec, toHit).normalize();
-      
-      // For the mini-gizmo, we can use a simpler heuristic or the same projection
-      const project = (v) => {
-          const p = v.clone().applyQuaternion(gizmoGroup.quaternion).project(camera);
-          return { x: p.x * rect.width, y: -p.y * rect.height };
-      };
-
-      const p1 = project(new THREE.Vector3(0,0,0));
-      const p2 = project(tangent.multiplyScalar(0.1));
-      const screenT = { x: p2.x - p1.x, y: p2.y - p1.y };
-      const mag = Math.hypot(screenT.x, screenT.y);
-      
-      if (mag > 0.0001) {
-          const movement = (dx * (screenT.x/mag)) + (dy * (screenT.y/mag));
-          const sensitivity = 0.8;
-          if (axisName === 'y') yaw += movement * sensitivity;
-          if (axisName === 'x') pitch -= movement * sensitivity;
-          if (axisName === 'z') roll += movement * sensitivity;
-          velocity = {
-            yaw: axisName === 'y' ? movement * sensitivity : 0,
-            pitch: axisName === 'x' ? -movement * sensitivity : 0,
-            roll: axisName === 'z' ? movement * sensitivity : 0
-          };
-          VolumeViewer.setPlaneSpec({ mode: 'oblique', yaw, pitch, roll, visible: true });
-      }
-    });
-
-    const stopDrag = () => {
-      if (isDragging && Math.hypot(velocity.yaw, velocity.pitch, velocity.roll) > 0.08) {
-        let v = { ...velocity };
-        const tick = () => {
-          v.yaw *= 0.84;
-          v.pitch *= 0.84;
-          v.roll *= 0.84;
-          if (Math.hypot(v.yaw, v.pitch, v.roll) < 0.025) {
-            inertiaFrame = null;
-            return;
-          }
-          const spec = VolumeViewer.getPlaneSpec();
-          VolumeViewer.setPlaneSpec({
-            mode: 'oblique',
-            yaw: (spec.yaw || 0) + v.yaw,
-            pitch: (spec.pitch || 0) + v.pitch,
-            roll: (spec.roll || 0) + v.roll,
-            visible: true
-          });
-          inertiaFrame = requestAnimationFrame(tick);
-        };
-        inertiaFrame = requestAnimationFrame(tick);
-      }
-      isDragging = false;
-      activeRing = null;
-      activeHitPoint = null;
-      freeRotate = false;
-    };
-    container.addEventListener('pointerup', stopDrag);
-    container.addEventListener('pointercancel', stopDrag);
-
-    function render() {
-      requestAnimationFrame(render);
-      const spec = VolumeViewer.getPlaneSpec();
-      if (spec.mode === 'oblique') {
-        const euler = new THREE.Euler(
-          -(spec.pitch || 0) * Math.PI / 180,
-          -(spec.yaw || 0) * Math.PI / 180,
-          (spec.roll || 0) * Math.PI / 180,
-          'YXZ'
-        );
-        gizmoGroup.setRotationFromEuler(euler);
-      } else {
-        gizmoGroup.rotation.set(0,0,0);
-      }
-      renderer.render(scene, camera);
-    }
-    render();
   }
 
   function _rotateSliceRoll(delta) {
@@ -1720,31 +1373,6 @@ const ViewerApp = (() => {
     const pitch = Math.round((spec.pitch || 0) / 45) * 45;
     const exact = normals.find(row => Math.abs(yaw - row.yaw) < 1 && Math.abs(pitch - row.pitch) < 1);
     VolumeViewer.setPlaneSpec(exact ? { mode: exact.mode, yaw: 0, pitch: 0, roll: 0, visible: true } : { yaw, pitch, roll: 0, visible: true });
-  }
-
-  function _drawSliceOverlay() {
-    const canvas = document.getElementById('slice-overlay-canvas');
-    if (!canvas) return;
-    const ctx = canvas.getContext('2d');
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-    _drawSliceScaleOverlay(ctx);
-  }
-
-  function _drawSliceScaleOverlay(ctx) {
-    if (!bar) return;
-    ctx.save();
-    const style = bar.style || {};
-    ctx.strokeStyle = style.stroke || '#ffffff';
-    ctx.fillStyle = style.stroke || '#ffffff';
-    ctx.globalAlpha = Number.isFinite(style.opacity) ? style.opacity : 0.95;
-    ctx.lineWidth = Math.max(1, Number(style.strokeWidth) || 2);
-    ctx.beginPath();
-    ctx.moveTo(bar.x1, bar.y1);
-    ctx.lineTo(bar.x2, bar.y2);
-    ctx.stroke();
-    ctx.font = `${Math.max(10, Number(style.fontSize) || 12)}px Inter, Arial, sans-serif`;
-    ctx.fillText(`${bar.value} ${bar.unit || 'um'}`, bar.x1, bar.y1 - 6);
-    ctx.restore();
   }
 
   function _getSliceExports() {
@@ -2312,7 +1940,8 @@ const ViewerApp = (() => {
     if (isLive) {
       Timeline.updateBuffer(loadedTimepoints.size);
       if (_isIframe) {
-        window.parent.postMessage({ type: 'SYNC_TIME', value: t, sourceIndex: _panelIndex }, '*');
+        // SEC-012: restrict targetOrigin to this page's origin (no wildcard leak).
+        window.parent.postMessage({ type: 'SYNC_TIME', value: t, sourceIndex: _panelIndex }, Utils.trustedTargetOrigin());
       }
     }
 
@@ -2492,7 +2121,8 @@ const ViewerApp = (() => {
 
     // Send Z sync
     document.getElementById('slicer-position')?.addEventListener('input', (e) => {
-      window.parent.postMessage({ type: 'SYNC_Z', value: parseInt(e.target.value, 10) / 100, sourceIndex: _panelIndex }, '*');
+      // SEC-012: restrict targetOrigin to this page's origin (no wildcard leak).
+      window.parent.postMessage({ type: 'SYNC_Z', value: parseInt(e.target.value, 10) / 100, sourceIndex: _panelIndex }, Utils.trustedTargetOrigin());
     });
 
     // Send Time sync
@@ -2608,6 +2238,8 @@ const ViewerApp = (() => {
       } else if (data.type === 'TOGGLE_ZSTACK') {
         // Handled by the early module-level listener (_applyZstackState).
         // This path runs only if the message arrives AFTER _bindIframeSync (i.e. late messages).
+        // LEAK-002: z-stack mode supersedes the slicer overlay — stop its rAF loop.
+        if (data.state) _slicerOverlayStop();
         _applyZstackState(!!data.state, data.slice ?? null);
       } else if (data.type === 'ZSTACK_HOVER_STATE') {
         if (_zstackActive) {
@@ -2619,7 +2251,9 @@ const ViewerApp = (() => {
       } else if (data.type === 'REQUEST_SCREENSHOT') {
         try {
           let canvas = null;
-          if (_deepZoomActive && typeof DeepZoomViewer !== 'undefined' && DeepZoomViewer.isActive()) {
+          // BUG-008: rely on DeepZoomViewer.isActive() (the dead _deepZoomActive
+          // flag was never set true, making this branch inert).
+          if (typeof DeepZoomViewer !== 'undefined' && DeepZoomViewer.isActive()) {
             canvas = document.querySelector('#deepzoom-container canvas');
           } else if (_zstackActive || (typeof VolumeSlicer !== 'undefined' && VolumeSlicer.isVisible())) {
             const sr = getCurrentSliceResult();
@@ -2637,7 +2271,8 @@ const ViewerApp = (() => {
           }
 
           if (!canvas) {
-            window.parent.postMessage({ type: 'SCREENSHOT_RESPONSE', success: false, error: 'No active canvas found' }, '*');
+            // SEC-012: restrict targetOrigin to this page's origin (no wildcard leak).
+            window.parent.postMessage({ type: 'SCREENSHOT_RESPONSE', success: false, error: 'No active canvas found' }, Utils.trustedTargetOrigin());
             return;
           }
           const size = 512;
@@ -2658,9 +2293,11 @@ const ViewerApp = (() => {
           
           ctx.drawImage(canvas, dx, dy, dWidth, dHeight);
           const dataUrl = thumbCanvas.toDataURL('image/webp', 0.9);
-          window.parent.postMessage({ type: 'SCREENSHOT_RESPONSE', success: true, dataUrl }, '*');
+          // SEC-012: restrict targetOrigin to this page's origin (no wildcard leak).
+          window.parent.postMessage({ type: 'SCREENSHOT_RESPONSE', success: true, dataUrl }, Utils.trustedTargetOrigin());
         } catch (err) {
-          window.parent.postMessage({ type: 'SCREENSHOT_RESPONSE', success: false, error: err.message }, '*');
+          // SEC-012: restrict targetOrigin to this page's origin (no wildcard leak).
+          window.parent.postMessage({ type: 'SCREENSHOT_RESPONSE', success: false, error: err.message }, Utils.trustedTargetOrigin());
         }
       }
     });
@@ -2847,7 +2484,9 @@ const ViewerApp = (() => {
       }
     }
 
-    if (_deepZoomActive && typeof DeepZoomViewer !== 'undefined' && DeepZoomViewer.isActive()) {
+    // BUG-008: rely on DeepZoomViewer.isActive() (the dead _deepZoomActive flag
+    // was never set true, making this branch inert).
+    if (typeof DeepZoomViewer !== 'undefined' && DeepZoomViewer.isActive()) {
       const canvas = document.querySelector('#deepzoom-container canvas');
       if (canvas) {
         const tempCanvas = document.createElement('canvas');
@@ -3047,6 +2686,10 @@ const ViewerApp = (() => {
           _slicerSetSpec({ value: 0.5 });
           _slicerSyncSlidersFromSpec();
         }
+      } else {
+        // LEAK-002: tear down the slicer-sync overlay rAF loop when the slice
+        // tool is turned off, otherwise the loop runs forever in the background.
+        _slicerOverlayStop();
       }
     }
     // Show plane mesh in 3D
@@ -3055,7 +2698,6 @@ const ViewerApp = (() => {
   }
 
   // ── Deep Zoom 2D Mode — Delegated to js/modules/tools/deepzoom-2d/index.js ──
-  let _deepZoomActive = false;
 
   // _bindDeepZoomToggle is now handled by the deepzoom-2d module.
   function _bindDeepZoomToggle() {
@@ -3269,13 +2911,14 @@ const ViewerApp = (() => {
     // Broadcast to sibling decompose panels in compare mode.
     // _suppressZstackSync prevents echo when WE are the receiver of a SYNC_ZSTACK_SLICE.
     if (_isIframe && !_suppressZstackSync) {
+      // SEC-012: restrict targetOrigin to this page's origin (no wildcard leak).
       window.parent.postMessage({
         type: 'SYNC_ZSTACK_SLICE',
         sliceIndex: safeIndex,
         sliceTotal: z,
         lo, hi,
         sourceIndex: _panelIndex
-      }, '*');
+      }, Utils.trustedTargetOrigin());
     }
   }
 

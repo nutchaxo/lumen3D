@@ -5,7 +5,6 @@
 const StudioEditor = (() => {
   const DOC_VERSION = 2;
   const COLORS = ['#ff4d4f', '#00d2ff', '#ffd166', '#00a654', '#9b59b6', '#ffffff'];
-  const OPACITY_LEVELS = [1, 0.7, 0.42];
   const STUDIO_SLICE_SUPPRESSION = {
     floorMax: 128,
     signalThreshold: 6
@@ -2054,6 +2053,22 @@ const StudioEditor = (() => {
       startCap: old.startCap || old.style?.startCap || 'none',
       endCap: old.endCaps || old.style?.endCap || old.endCap || 'none'
     };
+    // EDGE-019 (Rule 1.4): an imported JSON can carry NaN/Infinity/non-numeric geometry
+    // (?? only guards null/undefined, not NaN) that would corrupt the canvas. Coerce
+    // every numeric field to a finite value (reusing _clamp/_clamp01).
+    const _num = (v, d) => (Number.isFinite(Number(v)) ? Number(v) : d);
+    layer.x = _num(layer.x, 0);
+    layer.y = _num(layer.y, 0);
+    layer.w = _num(layer.w, 0);
+    layer.h = _num(layer.h, 0);
+    if (Array.isArray(layer.points)) {
+      layer.points = layer.points
+        .filter(p => p && Number.isFinite(Number(p.x)) && Number.isFinite(Number(p.y)))
+        .map(p => ({ ...p, x: Number(p.x), y: Number(p.y) }));
+    }
+    layer.style.strokeWidth = _clamp(layer.style.strokeWidth, 0, 200);
+    layer.style.fontSize = _clamp(layer.style.fontSize, 1, 400);
+    layer.style.opacity = _clamp01(layer.style.opacity);
     if (old.unit === 'µm') layer.unit = 'um';
     return layer;
   }

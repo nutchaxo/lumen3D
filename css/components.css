@@ -448,15 +448,21 @@
 
 /* ── Skeleton Loading ────────────────────────────────────── */
 .skeleton {
-  background: linear-gradient(
-    90deg,
-    var(--bg-active) 25%,
-    var(--bg-hover) 50%,
-    var(--bg-active) 75%
-  );
-  background-size: 200% 100%;
-  animation: shimmer 1.5s ease infinite;
+  position: relative;
+  overflow: hidden;
+  background: var(--bg-active);
   border-radius: var(--radius-md);
+}
+/* PERF-034: the moving highlight is a transform-animated overlay (compositor) rather
+   than an animated background-position on the element itself (repaint every frame). */
+.skeleton::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, transparent, var(--bg-hover), transparent);
+  transform: translateX(-100%);
+  animation: shimmer 1.5s ease infinite;
+  will-change: transform;
 }
 
 /* ── Chip / Tag ──────────────────────────────────────────── */

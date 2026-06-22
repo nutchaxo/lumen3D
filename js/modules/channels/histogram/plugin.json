@@ -6,5 +6,10 @@
   "placement": "channels",
   "subtype": "per-channel",
   "order": 10,
-  "description": "Per-channel intensity histogram and min/max/gamma sliders."
+  "description": "Per-channel intensity histogram and min/max/gamma sliders.",
+  "i18nLanguages": [
+    "en",
+    "fr",
+    "es"
+  ]
 }

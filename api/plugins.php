@@ -49,6 +49,17 @@ function discover_plugins(): array {
             if (!empty($meta['placement']) && $meta['placement'] !== $placement) continue;
             $meta['placement'] = $placement;
             $meta['path']      = $placement . '/' . $name;
+            // Advertise the locales this plugin ships (lang/<code>.json), mirroring
+            // dev_server.py so the client loads only those and falls back to English.
+            $shipped = [];
+            $lang_dir = $mod_dir . DIRECTORY_SEPARATOR . 'lang';
+            if (is_dir($lang_dir)) {
+                foreach ((scandir($lang_dir) ?: []) as $lf) {
+                    if (preg_match('/^([a-z]{2,3}(-[A-Za-z]{2,4})?)\.json$/', $lf, $m)) $shipped[] = $m[1];
+                }
+                sort($shipped);
+            }
+            if ($shipped) $meta['i18nLanguages'] = $shipped;
             $plugins[] = $meta;
         }
     }

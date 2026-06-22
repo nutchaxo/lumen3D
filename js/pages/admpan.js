@@ -19,6 +19,22 @@ const API_AUTH     = 'api/auth.php';
 const API_DATASETS = 'api/datasets.php';
 const PREVIEW_DEBOUNCE = 150;
 
+// ── i18n / utils bridges ──────────────────────────────────────
+// i18n.js / utils.js are classic scripts: their top-level `const I18n`/`const Utils`
+// live in the global LEXICAL scope, NOT on `window`. From this ES module we reach
+// them via `globalThis` only if present — so resolve them through a typeof guard.
+const _I18n  = (typeof I18n  !== 'undefined') ? I18n  : null;
+const _Utils = (typeof Utils !== 'undefined') ? Utils : null;
+
+// Returns the translated string for `k`, or `def` (the original French) when
+// I18n is unavailable or the key is missing (I18n.t echoes the key on a miss).
+// `params` feeds I18n's `{placeholder}` interpolation.
+const _t = (k, def, params) => {
+  if (!_I18n || typeof _I18n.t !== 'function') return def;
+  const v = _I18n.t(k, params);
+  return v === k ? def : v;
+};
+
 // ── State ─────────────────────────────────────────────────────
 let _datasets    = [];
 let _current     = null;
@@ -175,7 +191,7 @@ async function doLogin() {
   if (!username || !password) return;
 
   DOM.btnLogin.disabled = true;
-  DOM.btnLogin.innerHTML = '<span class="spinner spinner-sm"></span> Connexion…';
+  DOM.btnLogin.innerHTML = `<span class="spinner spinner-sm"></span> ${escHtml(_t('admin.signingIn', 'Connexion…'))}`;
   DOM.loginError.style.display = 'none';
 
   const data = await apiFetch(`${API_AUTH}?action=login`, {
@@ -184,7 +200,7 @@ async function doLogin() {
   });
 
   DOM.btnLogin.disabled = false;
-  DOM.btnLogin.innerHTML = 'Se connecter';
+  DOM.btnLogin.innerHTML = _t('admin.signIn', 'Se connecter');
 
   if (data?.ok) {
     _csrfToken = data.csrf || null;
@@ -192,7 +208,7 @@ async function doLogin() {
     showApp();
     loadDatasets();
   } else {
-    DOM.loginErrorMsg.textContent = data?.error || 'Identifiants incorrects.';
+    DOM.loginErrorMsg.textContent = data?.error || _t('admin.badCreds', 'Identifiants incorrects.');
     DOM.loginError.style.display = 'block';
     DOM.loginPassword.value = '';
     DOM.loginPassword.focus();
@@ -211,7 +227,7 @@ async function doLogout() {
 async function loadDatasets() {
   const data = await apiFetch(`${API_DATASETS}?action=list`);
   if (!data?.datasets) {
-    DOM.listLoading.innerHTML = '<div style="padding:20px;text-align:center;font-size:12px;color:var(--adm-text-muted)">Impossible de charger les datasets.<br>Vérifiez que PHP est actif.</div>';
+    DOM.listLoading.innerHTML = `<div style="padding:20px;text-align:center;font-size:12px;color:var(--adm-text-muted)">${escHtml(_t('admin.loadFailed', 'Impossible de charger les datasets. Vérifiez que PHP est actif.'))}</div>`;
     return;
   }
   _datasets = data.datasets;
@@ -241,7 +257,7 @@ function renderList() {
     if (!empty) {
       empty = document.createElement('div');
       empty.className = 'list-empty';
-      empty.innerHTML = `<div class="list-empty-icon">🔍</div><div class="list-empty-text">Aucun dataset trouvé.</div>`;
+      empty.innerHTML = `<div class="list-empty-icon">🔍</div><div class="list-empty-text">${escHtml(_t('admin.noDatasetFound', 'Aucun dataset trouvé.'))}</div>`;
       DOM.datasetList.appendChild(empty);
     }
     return;
@@ -270,7 +286,7 @@ function renderList() {
         <div class="item-name">${escHtml(ds.name)}</div>
         <div class="item-meta">${stageBadge}${embryoText}</div>
       </div>
-      <span class="item-status ${statusClass}" title="${ds.configured ? 'Configuré' : 'Non configuré'}"></span>
+      <span class="item-status ${statusClass}" title="${escHtml(ds.configured ? _t('admin.configured', 'Configuré') : _t('admin.unconfigured', 'Non configuré'))}"></span>
     `;
 
     item.addEventListener('click', () => selectDataset(ds.id));
@@ -285,20 +301,20 @@ function renderList() {
 // Rule 1.4: a malformed metadata.json must be rejected at mount time, not
 // partially mounted. Returns null when valid, else a human-readable reason.
 function validateDatasetMeta(meta) {
-  if (!meta || typeof meta !== 'object') return 'réponse vide';
-  if (typeof meta.id !== 'string' || !meta.id) return 'identifiant manquant';
-  if (!['fixed', 'live', 'tracking'].includes(meta.type)) return 'type invalide';
+  if (!meta || typeof meta !== 'object') return _t('admin.reasonEmpty', 'réponse vide');
+  if (typeof meta.id !== 'string' || !meta.id) return _t('admin.reasonNoId', 'identifiant manquant');
+  if (!['fixed', 'live', 'tracking'].includes(meta.type)) return _t('admin.reasonBadType', 'type invalide');
   const d = meta.dimensions;
-  if (!d || typeof d !== 'object') return 'dimensions manquantes';
+  if (!d || typeof d !== 'object') return _t('admin.reasonNoDims', 'dimensions manquantes');
   const dimOk = ['x', 'y', 'z', 'c'].every(k => Number.isFinite(d[k]) && d[k] > 0);
-  if (!dimOk) return 'dimensions invalides';
-  if (!Array.isArray(meta.channels) || meta.channels.length === 0) return 'canaux manquants';
+  if (!dimOk) return _t('admin.reasonBadDims', 'dimensions invalides');
+  if (!Array.isArray(meta.channels) || meta.channels.length === 0) return _t('admin.reasonNoChannels', 'canaux manquants');
   return null;
 }
 
 async function selectDataset(id) {
   if (_dirty) {
-    const ok = confirm('Modifications non sauvegardées. Continuer sans sauvegarder ?');
+    const ok = confirm(_t('admin.confirmDiscard', 'Modifications non sauvegardées. Continuer sans sauvegarder ?'));
     if (!ok) return;
     clearDirty();
   }
@@ -317,12 +333,12 @@ async function selectDataset(id) {
   // ELE-15: a newer selection superseded this one while get() was in flight.
   // Ignore the stale response so it can't overwrite _draft/_original/_current.
   if (myGen !== _selectGen) return;
-  if (!meta) { toast('Impossible de charger le dataset.', 'error'); return; }
+  if (!meta) { toast(_t('admin.loadDatasetFailed', 'Impossible de charger le dataset.'), 'error'); return; }
 
   // Rule 1.4: reject a malformed dataset before any mount/edit state is created.
   const invalidReason = validateDatasetMeta(meta);
   if (invalidReason) {
-    toast(`Dataset malformé, montage refusé (${invalidReason}).`, 'error');
+    toast(_t('admin.malformedRejected', `Dataset malformé, montage refusé (${invalidReason}).`, { reason: invalidReason }), 'error');
     return;
   }
 
@@ -427,7 +443,7 @@ function populateForm() {
 
   const d = m.dimensions || {};
   DOM.fDims.textContent = d.x
-    ? `${d.x} × ${d.y} × ${d.z} px · ${d.c} canal(ux)`
+    ? `${d.x} × ${d.y} × ${d.z} px · ${_t('admin.dimsChannels', `${d.c} canal(ux)`, { count: d.c })}`
     : '—';
 
   const vs = m.voxel_size || {};
@@ -445,10 +461,12 @@ function populateForm() {
   if (DOM.btnDefineOrientation) {
     DOM.btnDefineOrientation.classList.remove('adm-btn-accent');
     DOM.btnDefineOrientation.classList.add('adm-btn-ghost');
-    DOM.btnDefineOrientation.innerHTML = '🧭 Définir l\'orientation';
+    DOM.btnDefineOrientation.innerHTML = _t('admin.defineOrientation', '🧭 Définir l\'orientation');
   }
   if (DOM.orientationStatus) {
-    DOM.orientationStatus.textContent = m.orientation ? 'Orientation définie ✓' : '(Aucune orientation définie)';
+    DOM.orientationStatus.textContent = m.orientation
+      ? _t('admin.orientationSet', 'Orientation définie ✓')
+      : _t('admin.noOrientation', '(Aucune orientation définie)');
   }
 }
 
@@ -458,7 +476,7 @@ async function saveDataset() {
   if (!_current || !_draft) return;
 
   DOM.btnSave.disabled = true;
-  DOM.btnSave.innerHTML = '<span class="spinner spinner-sm"></span> Sauvegarde…';
+  DOM.btnSave.innerHTML = `<span class="spinner spinner-sm"></span> ${escHtml(_t('admin.saving', 'Sauvegarde…'))}`;
 
   // Fetch orientation if in calibration mode
   if (_isCalibratingOrientation && DOM.previewFrame.contentWindow) {
@@ -490,10 +508,10 @@ async function saveDataset() {
     if (DOM.btnDefineOrientation) {
       DOM.btnDefineOrientation.classList.remove('adm-btn-accent');
       DOM.btnDefineOrientation.classList.add('adm-btn-ghost');
-      DOM.btnDefineOrientation.innerHTML = '🧭 Définir l\'orientation';
+      DOM.btnDefineOrientation.innerHTML = _t('admin.defineOrientation', '🧭 Définir l\'orientation');
     }
     if (DOM.orientationStatus) {
-      DOM.orientationStatus.textContent = 'Orientation définie ✓';
+      DOM.orientationStatus.textContent = _t('admin.orientationSet', 'Orientation définie ✓');
     }
     DOM.previewFrame.contentWindow.postMessage({ type: 'CALIBRATE_ORIENTATION_STOP' }, '*');
   }
@@ -520,12 +538,12 @@ async function saveDataset() {
   );
 
   DOM.btnSave.disabled = false;
-  DOM.btnSave.innerHTML = '💾 Sauvegarder';
+  DOM.btnSave.innerHTML = _t('admin.save', '💾 Sauvegarder');
 
   if (data?.ok) {
     _original = deepClone(_draft);
     clearDirty();
-    toast('Dataset sauvegardé ✓');
+    toast(_t('admin.toastSaved', 'Dataset sauvegardé ✓'));
     DOM.topbarName.textContent = _draft.name;
 
     const idx = _datasets.findIndex(d => d.id === _current.id);
@@ -538,9 +556,9 @@ async function saveDataset() {
     // BUG-057: await the rebuild and surface its outcome (was fire-and-forget,
     // swallowing failures so the catalogue could silently drift from saved metadata).
     const rb = await apiFetch(`${API_DATASETS}?action=rebuild_catalog`, { method: 'POST', body: '{}' });
-    if (!rb?.ok) toast('Sauvegardé, mais catalogue non régénéré — relancez la reconstruction.', 'warning');
+    if (!rb?.ok) toast(_t('admin.toastSavedNoCatalog', 'Sauvegardé, mais catalogue non régénéré — relancez la reconstruction.'), 'warning');
   } else {
-    toast('Erreur lors de la sauvegarde.', 'error');
+    toast(_t('admin.toastSaveError', 'Erreur lors de la sauvegarde.'), 'error');
   }
 }
 
@@ -556,9 +574,9 @@ async function saveThumbnail(dataUrl) {
   if (!_current) return;
   if (DOM.btnSetPreview) {
     DOM.btnSetPreview.disabled = true;
-    DOM.btnSetPreview.innerHTML = '<span class="spinner spinner-sm"></span> Enregistrement…';
+    DOM.btnSetPreview.innerHTML = `<span class="spinner spinner-sm"></span> ${escHtml(_t('admin.savingPreview', 'Enregistrement…'))}`;
   }
-  
+
   const data = await apiFetch(
     `${API_DATASETS}?action=save_thumbnail&id=${encodeURIComponent(_current.id)}`,
     {
@@ -566,14 +584,14 @@ async function saveThumbnail(dataUrl) {
       body: JSON.stringify({ image: dataUrl })
     }
   );
-  
+
   if (DOM.btnSetPreview) {
     DOM.btnSetPreview.disabled = false;
-    DOM.btnSetPreview.innerHTML = '📸 Redéfinir la preview';
+    DOM.btnSetPreview.innerHTML = _t('admin.setPreview', '📸 Redéfinir la preview');
   }
-  
+
   if (data?.ok) {
-    toast('Preview mise à jour ✓');
+    toast(_t('admin.toastPreviewUpdated', 'Preview mise à jour ✓'));
     
     // Update the thumbnail in the current state and list
     const timestamp = Date.now();
@@ -590,9 +608,10 @@ async function saveThumbnail(dataUrl) {
     
     // BUG-057: await the rebuild and surface its outcome (was fire-and-forget).
     const rb = await apiFetch(`${API_DATASETS}?action=rebuild_catalog`, { method: 'POST', body: '{}' });
-    if (!rb?.ok) toast('Vignette enregistrée, mais catalogue non régénéré — relancez la reconstruction.', 'warning');
+    if (!rb?.ok) toast(_t('admin.toastPreviewNoCatalog', 'Vignette enregistrée, mais catalogue non régénéré — relancez la reconstruction.'), 'warning');
   } else {
-    toast(`Erreur lors de l'enregistrement de la preview : ${data?.error || 'Inconnue'}`, 'error');
+    const reason = data?.error || _t('admin.unknownError', 'Inconnue');
+    toast(_t('admin.toastPreviewError', `Erreur lors de l'enregistrement de la preview : ${reason}`, { reason }), 'error');
   }
 }
 
@@ -606,7 +625,7 @@ function parseStageNumeric(stage) {
 async function rebuildCatalog() {
   DOM.btnRebuild.disabled = true;
   const prev = DOM.btnRebuild.innerHTML;
-  DOM.btnRebuild.innerHTML = '<span class="spinner spinner-sm"></span> Génération…';
+  DOM.btnRebuild.innerHTML = `<span class="spinner spinner-sm"></span> ${escHtml(_t('admin.generating', 'Génération…'))}`;
 
   const data = await apiFetch(`${API_DATASETS}?action=rebuild_catalog`,
     { method: 'POST', body: '{}' });
@@ -615,12 +634,13 @@ async function rebuildCatalog() {
   DOM.btnRebuild.innerHTML = prev;
 
   if (data?.ok) {
-    const t = new Date().toLocaleTimeString('fr-FR');
-    DOM.rebuildStatus.textContent = `✅ ${data.count} datasets — ${t}`;
-    toast(`Catalogue régénéré : ${data.count} datasets.`);
+    const locale = (_I18n && _I18n.getLanguage) ? _I18n.getLanguage() : 'fr-FR';
+    const t = new Date().toLocaleTimeString(locale);
+    DOM.rebuildStatus.textContent = _t('admin.catalogStatusOk', `✅ ${data.count} datasets — ${t}`, { count: data.count, time: t });
+    toast(_t('admin.toastCatalogRebuilt', `Catalogue régénéré : ${data.count} datasets.`, { count: data.count }));
   } else {
-    DOM.rebuildStatus.textContent = '❌ Erreur lors de la génération.';
-    toast('Erreur lors de la génération du catalogue.', 'error');
+    DOM.rebuildStatus.textContent = _t('admin.catalogStatusError', '❌ Erreur lors de la génération.');
+    toast(_t('admin.toastCatalogError', 'Erreur lors de la génération du catalogue.'), 'error');
   }
 }
 
@@ -694,9 +714,9 @@ if (DOM.btnDefineOrientation) {
     if (_isCalibratingOrientation) {
       DOM.btnDefineOrientation.classList.add('adm-btn-accent');
       DOM.btnDefineOrientation.classList.remove('adm-btn-ghost');
-      DOM.btnDefineOrientation.innerHTML = '❌ Annuler l\'orientation';
+      DOM.btnDefineOrientation.innerHTML = _t('admin.cancelOrientation', '❌ Annuler l\'orientation');
       if (DOM.orientationStatus) {
-        DOM.orientationStatus.textContent = 'Ajustez l\'embryon sur les axes (Puis Sauvegardez)...';
+        DOM.orientationStatus.textContent = _t('admin.orientationAdjustHint', 'Ajustez l\'embryon sur les axes (Puis Sauvegardez)...');
       }
       if (DOM.previewFrame.contentWindow) {
         DOM.previewFrame.contentWindow.postMessage({ type: 'CALIBRATE_ORIENTATION_START' }, '*');
@@ -705,9 +725,11 @@ if (DOM.btnDefineOrientation) {
     } else {
       DOM.btnDefineOrientation.classList.remove('adm-btn-accent');
       DOM.btnDefineOrientation.classList.add('adm-btn-ghost');
-      DOM.btnDefineOrientation.innerHTML = '🧭 Définir l\'orientation';
+      DOM.btnDefineOrientation.innerHTML = _t('admin.defineOrientation', '🧭 Définir l\'orientation');
       if (DOM.orientationStatus) {
-        DOM.orientationStatus.textContent = _draft?.orientation ? 'Orientation définie ✓' : '(Aucune orientation définie)';
+        DOM.orientationStatus.textContent = _draft?.orientation
+          ? _t('admin.orientationSet', 'Orientation définie ✓')
+          : _t('admin.noOrientation', '(Aucune orientation définie)');
       }
       if (DOM.previewFrame.contentWindow) {
         DOM.previewFrame.contentWindow.postMessage({ type: 'CALIBRATE_ORIENTATION_STOP' }, '*');
@@ -722,7 +744,7 @@ if (DOM.btnSetPreview) {
     if (!_current) return;
     if (DOM.previewFrame.contentWindow) {
       DOM.btnSetPreview.disabled = true;
-      DOM.btnSetPreview.innerHTML = '<span class="spinner spinner-sm"></span> Capturing…';
+      DOM.btnSetPreview.innerHTML = `<span class="spinner spinner-sm"></span> ${escHtml(_t('admin.capturing', 'Capture…'))}`;
       DOM.previewFrame.contentWindow.postMessage({ type: 'REQUEST_SCREENSHOT' }, '*');
     }
   });
@@ -778,15 +800,57 @@ window.addEventListener('message', e => {
   if (e.data?.type === 'SCREENSHOT_RESPONSE') {
     if (DOM.btnSetPreview) {
       DOM.btnSetPreview.disabled = false;
-      DOM.btnSetPreview.innerHTML = '📸 Redéfinir la preview';
+      DOM.btnSetPreview.innerHTML = _t('admin.setPreview', '📸 Redéfinir la preview');
     }
     if (e.data.error) {
-      toast(`Erreur de capture : ${e.data.error}`, 'error');
+      toast(_t('admin.toastCaptureError', `Erreur de capture : ${e.data.error}`, { error: e.data.error }), 'error');
     } else if (e.data.dataUrl) {
       saveThumbnail(e.data.dataUrl);
     }
   }
 });
 
+// ── Language switcher ─────────────────────────────────────────
+// Mirrors the explorer.js pattern: setLanguage → close menu → repopulate →
+// re-translate static nodes → re-render the dynamic admin content so the
+// inline _t() strings (toasts already gone, but list/form labels) refresh.
+async function switchLanguage(lang) {
+  if (!_I18n || !_I18n.setLanguage) return;
+  await _I18n.setLanguage(lang);             // also re-applies data-i18n* to the DOM
+  if (_Utils) {
+    _Utils.closeDropdowns?.();
+    _Utils.populateLanguageMenu?.(switchLanguage);
+  }
+  document.getElementById('lang-dropdown')?.classList.remove('open');
+  // Re-render dynamic content built with inline _t() so it picks up the new locale.
+  if (_datasets.length) renderList();
+  if (_draft) populateForm();
+}
+
+function _bindLanguageSwitcher() {
+  const dropdown = document.getElementById('lang-dropdown');
+  const btn = document.getElementById('btn-lang');
+  if (!dropdown || !btn) return;
+  btn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    dropdown.classList.toggle('open');
+  });
+  // Close on outside click.
+  document.addEventListener('click', (e) => {
+    if (!dropdown.contains(e.target)) dropdown.classList.remove('open');
+  });
+  if (_Utils) _Utils.populateLanguageMenu?.(switchLanguage);
+}
+
 // ── Init ──────────────────────────────────────────────────────
-checkAuth();
+async function boot() {
+  // i18n must be ready before the first UI paint so static data-i18n* nodes
+  // (login screen, headers, form labels) render in the saved language.
+  if (_I18n && _I18n.init) {
+    try { await _I18n.init(); } catch (_) { /* degrade to French defaults */ }
+  }
+  _bindLanguageSwitcher();
+  checkAuth();
+}
+
+boot();

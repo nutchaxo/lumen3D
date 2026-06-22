@@ -10,6 +10,11 @@
   "order": 10,
   "description": "Cycle through grid display modes: none → normal → fine.",
   "buttonId": "btn-toggle-grid",
-  "i18nTitle": "tips.toggleGridFull",
-  "i18nAria": "tips.toggleGrid"
+  "i18nTitle": "title",
+  "i18nAria": "aria",
+  "i18nLanguages": [
+    "en",
+    "fr",
+    "es"
+  ]
 }

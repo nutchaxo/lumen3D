@@ -7,5 +7,10 @@
   "renderModeValue": 2,
   "default": true,
   "order": 5,
-  "description": "Rendu volumétrique émission–absorption : couleurs de fluorescence éclatantes avec profondeur 3D réelle, sans saturation blanche. Comme observer l'embryon à l'œil nu dans le microscope."
+  "description": "Rendu volumétrique émission–absorption : couleurs de fluorescence éclatantes avec profondeur 3D réelle, sans saturation blanche. Comme observer l'embryon à l'œil nu dans le microscope.",
+  "i18nLanguages": [
+    "en",
+    "fr",
+    "es"
+  ]
 }

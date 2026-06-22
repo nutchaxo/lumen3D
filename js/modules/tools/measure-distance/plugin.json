@@ -10,7 +10,11 @@
   "order": 20,
   "description": "Pick two 3D surface points to measure calibrated physical distance in µm.",
   "tool": "measure",
-  "i18nTitle": "tips.measureDist",
-  "i18nAria": "tips.measureDist",
-  "shortcut": "m"
+  "i18nTitle": "title",
+  "shortcut": "m",
+  "i18nLanguages": [
+    "en",
+    "fr",
+    "es"
+  ]
 }

@@ -10,6 +10,11 @@
   "order": 30,
   "description": "Open side-by-side channel decomposition view.",
   "buttonId": "btn-toggle-decomposition",
-  "i18nTitle": "tips.decompChan",
-  "i18nAria": "tips.decompChans"
+  "i18nTitle": "title",
+  "i18nAria": "aria",
+  "i18nLanguages": [
+    "en",
+    "fr",
+    "es"
+  ]
 }

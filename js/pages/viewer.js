@@ -803,7 +803,17 @@ const ViewerApp = (() => {
         shaders.forEach(s => {
           const opt = document.createElement('option');
           opt.value = s.id;
-          opt.textContent = s.name;
+          // Prefer the shader's own lang dictionary (plugins.<id>.title), so
+          // the render-mode label translates and re-translates on switch;
+          // fall back to the plugin.json name.
+          const nsKey = `plugins.${s.id}.title`;
+          const label = (window.I18n && I18n.t) ? I18n.t(nsKey) : nsKey;
+          if (label !== nsKey) {
+            opt.textContent = label;
+            opt.setAttribute('data-i18n', nsKey);
+          } else {
+            opt.textContent = s.name;
+          }
           if (s.default) defaultId = s.id;
           renderModeSelect.appendChild(opt);
         });
@@ -1690,7 +1700,7 @@ const ViewerApp = (() => {
             <button class="btn btn-ghost btn-sm measure-color-btn" type="button" data-volume-measure-action="toggle-color" data-measurement-id="${Utils.escapeHtml(item.id)}" style="padding: 0; width: 24px; height: 24px; border: none; flex-shrink: 0;">
               <span style="background:${item.color}; width:16px; height:16px; display:inline-block; border-radius:3px; border:1px solid rgba(255,255,255,0.2); vertical-align:middle;"></span>
             </button>
-            <input type="text" value="${Utils.escapeHtml(item.label || '')}" placeholder="Vide" class="form-input text-xs" style="flex: 1; min-width: 0; width: 50px; padding: 2px 4px; background: rgba(0,0,0,0.2); border: 1px solid var(--border-light); color: var(--text-primary); border-radius: 4px;" data-volume-measure-action="rename" data-measurement-id="${Utils.escapeHtml(item.id)}">
+            <input type="text" value="${Utils.escapeHtml(item.label || '')}" placeholder="${window.I18n ? I18n.t('plugins.measure-distance.labelPlaceholder') : 'Label'}" class="form-input text-xs" style="flex: 1; min-width: 0; width: 50px; padding: 2px 4px; background: rgba(0,0,0,0.2); border: 1px solid var(--border-light); color: var(--text-primary); border-radius: 4px;" data-volume-measure-action="rename" data-measurement-id="${Utils.escapeHtml(item.id)}">
             <span style="white-space: nowrap; font-size: 11px; color: var(--text-muted);">
               ${item.visible === false ? 'Hidden' : `${_fmtUm(item.distance)} µm`}
             </span>
@@ -2082,7 +2092,7 @@ const ViewerApp = (() => {
     const physical = VolumeViewer.getPhysicalSize();
     const calibration = VolumeViewer.getPhysicalCalibration?.();
     if (!physical || !calibration) {
-      status.textContent = 'Physical dimensions pending.';
+      status.textContent = I18n.t('viewer.dimPending');
       return;
     }
 
@@ -2347,7 +2357,7 @@ const ViewerApp = (() => {
       ? VolumeSourceManager.preferred(datasetMeta, _volumeSourcePreference)
       : null;
     if (!preferred) {
-      node.textContent = 'Volume source: unavailable.';
+      node.textContent = I18n.t('viewer.volSourceUnavailable');
       return;
     }
     node.textContent = `Display: ${preferred.label}.`;

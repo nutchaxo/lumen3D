@@ -18,31 +18,32 @@
 <body>
     <div id="overlay-ui">
         <h3 data-i18n="deepzoom.title">Explorateur Z-Stack (Natif)</h3>
-        <p id="meta-info">Chargement...</p>
+        <p id="meta-info" data-i18n="app.loading">Loading...</p>
         <button id="btn-sync-studio" data-i18n="deepzoom.studio2d">Ouvrir dans le Studio 2D</button>
     </div>
     <div id="viewer-container"></div>
 
     <script>
-        document.addEventListener('DOMContentLoaded', () => {
-            // BUG-058: translate the data-i18n labels (no-op fallback keeps the static
-            // French text if a key is absent). Fire-and-forget — UI is usable meanwhile.
-            if (typeof I18n !== 'undefined') I18n.init();
+        document.addEventListener('DOMContentLoaded', async () => {
+            // BUG-058: translate the data-i18n labels. Await init so the JS-set
+            // strings below resolve in the active language too.
+            if (typeof I18n !== 'undefined') await I18n.init();
+            const t = (k, def) => (typeof I18n !== 'undefined' && I18n.t && I18n.t(k) !== k) ? I18n.t(k) : def;
             DeepZoomViewer.init('viewer-container');
-            
+
             // Simulation of loading a dataset
             const datasetUrl = "DATA_WEB/example/tiles2d/manifest.dzi"; // Remplacez par l'URL réelle
-            
+
             // In a real scenario, you'd fetch the manifest first to get metadata
-            document.getElementById('meta-info').innerText = "Mode: Deep Zoom OME-TIFF/DZI";
-            
+            document.getElementById('meta-info').innerText = t('deepzoom.mode', 'Mode: Deep Zoom OME-TIFF/DZI');
+
             // Load the image pyramid
             // DeepZoomViewer.load(datasetUrl);
-            
+
             document.getElementById('btn-sync-studio').addEventListener('click', () => {
                 const bounds = DeepZoomViewer.getViewportBounds();
                 console.log("Sync requested for bounds:", bounds);
-                alert("Synchronisation avec le Studio (A implémenter : transfert du canvas)");
+                alert(t('deepzoom.syncTodo', 'Studio sync (to be implemented: canvas transfer)'));
             });
         });
     </script>

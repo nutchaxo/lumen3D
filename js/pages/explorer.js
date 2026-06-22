@@ -25,6 +25,9 @@ const Explorer = (() => {
     _updateThemeIcon();
     Theme.onChange(_updateThemeIcon);
 
+    // Build the language switcher from the platform's discovered locales.
+    Utils.populateLanguageMenu(window.switchLanguage);
+
     // Read URL params
     const params = new URLSearchParams(window.location.search);
     if (params.has('type')) {
@@ -308,6 +311,7 @@ window.toggleDropdown = window.toggleDropdown || function toggleDropdown(id) {
 window.switchLanguage = window.switchLanguage || async function switchLanguage(lang) {
   await I18n.setLanguage(lang);
   Utils.closeDropdowns(); // DEAD-035: shared dropdown-close step
+  Utils.populateLanguageMenu(window.switchLanguage); // refresh active-item highlight
   // Page-specific: re-render the dataset grid in the new language
   Explorer.refresh();
 };

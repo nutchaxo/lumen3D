@@ -6,5 +6,10 @@
   "placement": "channels",
   "subtype": "per-channel",
   "order": 20,
-  "description": "Per-channel Gaussian blur/denoising slider."
+  "description": "Per-channel Gaussian blur/denoising slider.",
+  "i18nLanguages": [
+    "en",
+    "fr",
+    "es"
+  ]
 }

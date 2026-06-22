@@ -10,5 +10,10 @@
   "order": 40,
   "description": "Capture the current 3D view as a PNG image.",
   "buttonId": "btn-screenshot",
-  "i18nTitle": "viewer.screenshot"
+  "i18nTitle": "title",
+  "i18nLanguages": [
+    "en",
+    "fr",
+    "es"
+  ]
 }

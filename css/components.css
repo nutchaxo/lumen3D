@@ -315,6 +315,13 @@
   color: var(--text-primary);
 }
 
+/* Active language in the (dynamically generated) language switcher. */
+.dropdown-item.active {
+  background: var(--bg-surface-3);
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
 .dropdown-divider {
   height: 1px;
   background: var(--border-subtle);

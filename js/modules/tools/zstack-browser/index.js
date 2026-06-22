@@ -178,7 +178,7 @@ PluginRegistry.implement('zstack-browser', {
     if (label) label.textContent = `${safeIndex + 1} / ${z}`;
     const pos = safeIndex * vz;
     if (posLabel) posLabel.textContent = `${pos.toFixed(2)} µm`;
-    if (posInfo)  posInfo.textContent  = `Slice ${safeIndex + 1} of ${z} — depth ${pos.toFixed(2)} µm`;
+    if (posInfo)  posInfo.textContent  = this._ctx.i18n.t('sliceDepth', { n: safeIndex + 1, total: z, depth: pos.toFixed(2) });
 
     // 5-slice slab (±2) for bright rendering
     const pad = 2;

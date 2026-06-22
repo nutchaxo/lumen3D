@@ -51,6 +51,9 @@ DATA_WEB   = ROOT / "DATA_WEB"
 CONFIG_FILE = ROOT / "api" / "config.json"
 MODULES_DIR = ROOT / "js" / "modules"
 PLUGIN_PLACEMENTS = ("tools", "channels", "shaders")
+LANG_DIR = ROOT / "lang"
+# A bare locale code (BCP-47-ish): two/three letters with an optional region.
+_LANG_CODE_RE = re.compile(r"^[a-z]{2,3}(-[A-Za-z]{2,4})?$")
 
 # ── Default credentials ───────────────────────────────────────────────────────
 # No hardcoded password: a random one is generated on first run (printed once)
@@ -516,8 +519,57 @@ def _list_plugins() -> list[dict]:
                 continue
             meta["placement"] = placement
             meta["path"] = f"{placement}/{mod_dir.name}"
+            # Advertise the locales this plugin actually ships (lang/<code>.json),
+            # so the client can load only those and fall back to English for the
+            # rest. Folder scan keeps i18nLanguages honest even if plugin.json
+            # drifts; missing dir simply yields no override.
+            shipped = _scan_plugin_locales(mod_dir)
+            if shipped:
+                meta["i18nLanguages"] = shipped
             plugins.append(meta)
     return plugins
+
+
+def _scan_plugin_locales(mod_dir: Path) -> list[str]:
+    """Return the sorted locale codes a plugin ships as lang/<code>.json."""
+    lang_dir = mod_dir / "lang"
+    if not lang_dir.is_dir():
+        return []
+    codes = []
+    for f in lang_dir.glob("*.json"):
+        code = f.stem
+        if _LANG_CODE_RE.match(code):
+            codes.append(code)
+    return sorted(codes)
+
+
+def _list_languages() -> list[str]:
+    """Scan lang/<code>.json and return the platform's available locale codes.
+
+    'en' is guaranteed present (the fallback locale) so the UI can never end up
+    with an empty switcher. manifest.json is excluded (it is the index, not a
+    locale). Mirrors plugin discovery so dropping lang/zh.json is picked up live.
+    """
+    codes = set()
+    if LANG_DIR.is_dir():
+        for f in LANG_DIR.glob("*.json"):
+            if f.stem == "manifest":
+                continue
+            if _LANG_CODE_RE.match(f.stem):
+                codes.add(f.stem)
+    codes.add("en")
+    # Keep 'en' first, then the rest alphabetically — stable, predictable order.
+    rest = sorted(c for c in codes if c != "en")
+    return ["en", *rest]
+
+
+def _write_languages_manifest(codes: list[str]) -> None:
+    """Persist lang/manifest.json so static hosts inherit the discovered locale
+    list with no build step. Best-effort, atomic (mirrors the plugin manifest)."""
+    try:
+        _atomic_write(LANG_DIR / "manifest.json", json.dumps({"languages": codes}, indent=2, ensure_ascii=False))
+    except Exception:
+        pass
 
 
 def _write_plugins_manifest(plugins: list[dict]) -> None:
@@ -561,6 +613,8 @@ class AdminHandler(http.server.SimpleHTTPRequestHandler):
             self._serve_dynamic_catalog()
         elif parsed.path in ("/api/plugins", "/api/plugins.php"):
             self._serve_plugins()
+        elif parsed.path in ("/api/languages", "/api/languages.php"):
+            self._serve_languages()
         elif parsed.path in ("/api/auth.php", "/api/datasets.php"):
             self._handle_api(parsed, body=None)
         elif _is_forbidden_static(clean_path):
@@ -588,6 +642,23 @@ class AdminHandler(http.server.SimpleHTTPRequestHandler):
         plugins = _list_plugins()
         _write_plugins_manifest(plugins)
         body = json.dumps({"plugins": plugins}, indent=2, ensure_ascii=False).encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0')
+        self.send_header('Pragma', 'no-cache')
+        self.send_header('Expires', '0')
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _serve_languages(self):
+        """Live language discovery: enumerate lang/<code>.json and return the
+        platform's available locales, refreshing lang/manifest.json so static
+        deploys stay current. no-store so dropping lang/zh.json is reflected on
+        the next reload."""
+        codes = _list_languages()
+        _write_languages_manifest(codes)
+        body = json.dumps({"languages": codes}, indent=2, ensure_ascii=False).encode("utf-8")
         self.send_response(200)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))

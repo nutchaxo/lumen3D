@@ -6,5 +6,10 @@
   "placement": "shaders",
   "renderModeValue": 0,
   "order": 20,
-  "description": "Direct Volume Rendering with depth/occlusion compositing."
+  "description": "Direct Volume Rendering with depth/occlusion compositing.",
+  "i18nLanguages": [
+    "en",
+    "fr",
+    "es"
+  ]
 }

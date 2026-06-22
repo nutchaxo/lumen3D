@@ -170,6 +170,45 @@ const Utils = (() => {
   }
 
   /**
+   * Build the navbar language switcher from the platform's *discovered*
+   * locales (I18n.getAvailableLanguages()) instead of a hardcoded en/fr/es
+   * list. Dropping a new lang/<code>.json therefore adds a menu entry with
+   * no HTML edit, and a locale the platform does not ship is never offered.
+   *
+   * Each item shows the locale's flag + native name and calls the page's
+   * onSwitch(code) (which forwards to I18n.setLanguage plus any page-local
+   * re-render). The active locale is marked. Idempotent: it fully rebuilds
+   * the menu, so it can be re-run after a language change.
+   *
+   * @param {function(string):void} onSwitch  invoked with the chosen code
+   * @param {string} [dropdownId='lang-dropdown']
+   */
+  function populateLanguageMenu(onSwitch, dropdownId = 'lang-dropdown') {
+    if (typeof I18n === 'undefined' || !I18n.getAvailableLanguages) return;
+    const dropdown = document.getElementById(dropdownId);
+    const menu = dropdown && dropdown.querySelector('.dropdown-menu');
+    if (!menu) return;
+
+    const current = I18n.getLanguage();
+    menu.textContent = '';
+    for (const lang of I18n.getAvailableLanguages()) {
+      const btn = document.createElement('button');
+      btn.className = 'dropdown-item' + (lang.code === current ? ' active' : '');
+      btn.type = 'button';
+      btn.dataset.lang = lang.code;
+      btn.setAttribute('lang', lang.code);
+      const flag = document.createElement('span');
+      flag.textContent = lang.flag;
+      btn.appendChild(flag);
+      btn.appendChild(document.createTextNode(' ' + lang.native));
+      btn.addEventListener('click', () => {
+        if (typeof onSwitch === 'function') onSwitch(lang.code);
+      });
+      menu.appendChild(btn);
+    }
+  }
+
+  /**
    * Create an HTML element with attributes and children
    * @param {string} tag
    * @param {object} attrs
@@ -315,6 +354,7 @@ const Utils = (() => {
     throttle,
     toggleDropdown,
     closeDropdowns,
+    populateLanguageMenu,
     el,
     animateCounter,
     nextFrame,

@@ -7,5 +7,10 @@
   "renderModeValue": 1,
   "default": false,
   "order": 10,
-  "description": "Additive emission MIP per-channel, mimicking Imaris fluorescence rendering."
+  "description": "Additive emission MIP per-channel, mimicking Imaris fluorescence rendering.",
+  "i18nLanguages": [
+    "en",
+    "fr",
+    "es"
+  ]
 }

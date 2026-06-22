@@ -6,6 +6,7 @@ PluginRegistry.implement('histogram', {
   },
 
   getChannelUI(channel) {
+    const t = (k) => this._ctx.i18n.t(k);
     return `
       <div class="histogram-editor" id="ch-editor-${channel.idx}">
         <div class="histogram-band" id="ch-band-${channel.idx}"></div>
@@ -15,9 +16,9 @@ PluginRegistry.implement('histogram', {
         <button class="hist-handle handle-max" type="button" id="ch-handle-max-${channel.idx}" title="Maximum threshold" data-i18n-title="js.maxThresh"></button>
       </div>
       <div class="channel-advanced-row">
-        <span id="lbl-min-${channel.idx}">Min 0</span>
-        <span id="lbl-mid-${channel.idx}">Gamma 1.00</span>
-        <span id="lbl-max-${channel.idx}">Max 100</span>
+        <span id="lbl-min-${channel.idx}">${t('min')} 0</span>
+        <span id="lbl-mid-${channel.idx}">${t('gamma')} 1.00</span>
+        <span id="lbl-max-${channel.idx}">${t('max')} 100</span>
       </div>
       <div class="channel-actions mt-2" style="display: flex; justify-content: space-between; align-items: center;">
         <div style="display: flex; gap: 8px;">
@@ -28,7 +29,7 @@ PluginRegistry.implement('histogram', {
         </div>
         <label class="flex items-center gap-2 text-xs text-muted cursor-pointer" title="Filtre passe-haut pour écraser le fond noir" data-i18n-title="js.highPass">
           <input type="checkbox" id="ch-filter-${channel.idx}" data-channel-action="toggle-filter" data-channel-idx="${channel.idx}" ${channel.filterBackground ? 'checked' : ''}>
-          Ignore low
+          <span data-i18n="plugins.histogram.ignoreLow">${t('ignoreLow')}</span>
         </label>
       </div>
     `;
@@ -178,9 +179,10 @@ PluginRegistry.implement('histogram', {
     const lblMin = container.querySelector(`#lbl-min-${idx}`);
     const lblMid = container.querySelector(`#lbl-mid-${idx}`);
     const lblMax = container.querySelector(`#lbl-max-${idx}`);
-    if (lblMin) lblMin.textContent = `Min ${Math.round(channel.min * 255)}`;
-    if (lblMid) lblMid.textContent = `Gamma ${channel.gamma.toFixed(2)}`;
-    if (lblMax) lblMax.textContent = `Max ${Math.round(channel.max * 255)}`;
+    const t = (k) => this._ctx.i18n.t(k);
+    if (lblMin) lblMin.textContent = `${t('min')} ${Math.round(channel.min * 255)}`;
+    if (lblMid) lblMid.textContent = `${t('gamma')} ${channel.gamma.toFixed(2)}`;
+    if (lblMax) lblMax.textContent = `${t('max')} ${Math.round(channel.max * 255)}`;
 
     this._renderHistogram(idx, channel, container, getHistograms);
   },

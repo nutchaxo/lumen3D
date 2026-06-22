@@ -3,6 +3,11 @@
    ============================================================ */
 
 const TrackingApp = (() => {
+  // i18n helper: resolve key (with optional {params}), else the literal default.
+  const _t = (k, def, params) => {
+    const v = (window.I18n && I18n.t) ? I18n.t(k, params) : k;
+    return v === k ? def : v;
+  };
   let _datasetId = null;
   let _datasetMeta = null;
   let _isIframe = false;
@@ -100,7 +105,7 @@ const TrackingApp = (() => {
       
     } catch (e) {
       console.error(e);
-      _showError(`Failed to load tracking data: ${e.message}`);
+      _showError(_t('tracking.loadFailed', `Failed to load tracking data: ${e.message}`, { error: e.message }));
     }
   }
 
@@ -230,10 +235,10 @@ const TrackingApp = (() => {
       if (!val) return;
       const found = TrackingViewer.findCell(val);
       if (found) {
-        statusFind.textContent = `Found cell ${val} (Track ${found.track_id})`;
+        statusFind.textContent = _t('tracking.foundCell', `Found cell ${val} (Track ${found.track_id})`, { id: val, track: found.track_id });
         statusFind.style.color = 'var(--color-success)';
       } else {
-        statusFind.textContent = `Cell ${val} not found`;
+        statusFind.textContent = _t('tracking.cellNotFound', `Cell ${val} not found`, { id: val });
         statusFind.style.color = 'var(--color-error)';
       }
     });
@@ -398,7 +403,7 @@ const TrackingApp = (() => {
       if (window.lucide) lucide.createIcons({ root: list });
     }
     if (!draft || !draft.cells?.length) {
-      node.innerHTML = 'Click two cells to measure their distance.';
+      node.innerHTML = _t('tracking.measureDesc', 'Click two cells to measure their distance.');
       return;
     }
     if (draft.cells.length === 1) {
@@ -469,7 +474,7 @@ const TrackingApp = (() => {
     const node = document.getElementById('cell-inspector');
     if (!node) return;
     if (!cell) {
-      node.innerHTML = 'Click a cell or search by ID.';
+      node.innerHTML = _t('tracking.inspectorDesc', 'Click a cell or search by ID.');
       return;
     }
     const id = selectedId || cell.id || cell.track_id;
@@ -615,12 +620,12 @@ const TrackingApp = (() => {
     const selected = TrackingViewer.getSelectedCell();
     const id = selected?.id || selected?.track_id;
     if (!id) {
-      node.innerHTML = 'Select a cell to inspect lineage.';
+      node.innerHTML = _t('tracking.lineageDesc', 'Select a cell to inspect lineage.');
       return;
     }
     const lineage = AnalysisStore.lineageForCell(id);
     if (!lineage) {
-      node.innerHTML = 'No lineage data for this cell.';
+      node.innerHTML = _t('tracking.noLineage', 'No lineage data for this cell.');
       return;
     }
     const daughters = lineage.daughters || [];
@@ -646,12 +651,12 @@ const TrackingApp = (() => {
     if (!node) return;
     const selected = TrackingViewer.getSelectedCell();
     if (!selected) {
-      node.innerHTML = 'Select a cell to inspect neighbors at the current frame.';
+      node.innerHTML = _t('tracking.neighborDesc', 'Select a cell to inspect neighbors at the current frame.');
       return;
     }
     const rows = TrackingViewer.getNeighborNetworkRows(10);
     if (!rows.length) {
-      node.innerHTML = 'No neighbor inside the current distance threshold.';
+      node.innerHTML = _t('tracking.noNeighbors', 'No neighbor inside the current distance threshold.');
       return;
     }
     node.innerHTML = rows.map((row, idx) => `
@@ -849,12 +854,12 @@ const TrackingApp = (() => {
     const node = document.getElementById('stats-title');
     if (!node) return;
     const labels = {
-      population: 'Population Metrics',
-      velocity: 'Velocity Metrics',
-      neighbors: 'Neighbor Metrics',
-      mitoses: 'Mitosis Metrics'
+      population: _t('tracking.popMetrics', 'Population Metrics'),
+      velocity: _t('tracking.velocityMetrics', 'Velocity Metrics'),
+      neighbors: _t('tracking.neighborMetrics', 'Neighbor Metrics'),
+      mitoses: _t('tracking.mitosisMetrics', 'Mitosis Metrics')
     };
-    node.innerHTML = `<i data-lucide="pie-chart" class="w-4 h-4"></i> ${Utils.escapeHtml(labels[metric] || 'Population Metrics')}`;
+    node.innerHTML = `<i data-lucide="pie-chart" class="w-4 h-4"></i> ${Utils.escapeHtml(labels[metric] || labels.population)}`;
     if (window.lucide) lucide.createIcons({ root: node });
   }
 

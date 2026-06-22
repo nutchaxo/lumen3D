@@ -166,7 +166,7 @@ const CompareApp = (() => {
 
   function _openModal() {
     if (_activePanels.length >= MAX_PANELS) {
-      _toast(`Maximum of ${MAX_PANELS} panels reached.`);
+      _toast(_t('toast.maxPanels', `Maximum of ${MAX_PANELS} panels reached.`, { count: MAX_PANELS }));
       return;
     }
     document.getElementById('modal-select').classList.add('active');
@@ -794,7 +794,7 @@ const CompareApp = (() => {
     
     const sr = iframe.contentWindow.ViewerApp.getCurrentSliceResult();
     if (!sr || !sr.channelState || sr.channelState.length <= 1) {
-      _toast('Dataset does not have multiple channels to decompose.');
+      _toast(_t('toast.noMultiChannel', 'Dataset does not have multiple channels to decompose.'));
       return;
     }
     
@@ -1158,6 +1158,12 @@ const CompareApp = (() => {
   function _safeName(value) {
     return String(value || 'compare').replace(/[^a-z0-9._-]+/gi, '_').replace(/^_+|_+$/g, '').slice(0, 140);
   }
+
+  // i18n helper: resolve key (with optional {params}), else the literal default.
+  const _t = (k, def, params) => {
+    const v = (window.I18n && I18n.t) ? I18n.t(k, params) : k;
+    return v === k ? def : v;
+  };
 
   function _toast(text) {
     if (typeof ExportManager !== 'undefined' && typeof ExportManager.toast === 'function') {

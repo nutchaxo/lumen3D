@@ -5,8 +5,21 @@ PluginRegistry.implement('histogram', {
     return this;
   },
 
+  // Channel UI is rendered by ChannelPanel BEFORE PluginRegistry.initAll runs
+  // this plugin's init(ctx), so `this._ctx` is not yet set here. Resolve via the
+  // global I18n singleton (plugin dictionaries are loaded during loadModules,
+  // before the channel panel paints) with a literal English fallback.
+  _t(key, fallback) {
+    const k = `plugins.histogram.${key}`;
+    if (typeof I18n !== 'undefined' && I18n.t) {
+      const v = I18n.t(k);
+      if (v !== k) return v;
+    }
+    return fallback;
+  },
+
   getChannelUI(channel) {
-    const t = (k) => this._ctx.i18n.t(k);
+    const t = (k, d) => this._t(k, d);
     return `
       <div class="histogram-editor" id="ch-editor-${channel.idx}">
         <div class="histogram-band" id="ch-band-${channel.idx}"></div>
@@ -16,9 +29,9 @@ PluginRegistry.implement('histogram', {
         <button class="hist-handle handle-max" type="button" id="ch-handle-max-${channel.idx}" title="Maximum threshold" data-i18n-title="js.maxThresh"></button>
       </div>
       <div class="channel-advanced-row">
-        <span id="lbl-min-${channel.idx}">${t('min')} 0</span>
-        <span id="lbl-mid-${channel.idx}">${t('gamma')} 1.00</span>
-        <span id="lbl-max-${channel.idx}">${t('max')} 100</span>
+        <span id="lbl-min-${channel.idx}">${t('min', 'Min')} 0</span>
+        <span id="lbl-mid-${channel.idx}">${t('gamma', 'Gamma')} 1.00</span>
+        <span id="lbl-max-${channel.idx}">${t('max', 'Max')} 100</span>
       </div>
       <div class="channel-actions mt-2" style="display: flex; justify-content: space-between; align-items: center;">
         <div style="display: flex; gap: 8px;">
@@ -29,7 +42,7 @@ PluginRegistry.implement('histogram', {
         </div>
         <label class="flex items-center gap-2 text-xs text-muted cursor-pointer" title="Filtre passe-haut pour écraser le fond noir" data-i18n-title="js.highPass">
           <input type="checkbox" id="ch-filter-${channel.idx}" data-channel-action="toggle-filter" data-channel-idx="${channel.idx}" ${channel.filterBackground ? 'checked' : ''}>
-          <span data-i18n="plugins.histogram.ignoreLow">${t('ignoreLow')}</span>
+          <span data-i18n="plugins.histogram.ignoreLow">${t('ignoreLow', 'Ignore low')}</span>
         </label>
       </div>
     `;
@@ -179,10 +192,10 @@ PluginRegistry.implement('histogram', {
     const lblMin = container.querySelector(`#lbl-min-${idx}`);
     const lblMid = container.querySelector(`#lbl-mid-${idx}`);
     const lblMax = container.querySelector(`#lbl-max-${idx}`);
-    const t = (k) => this._ctx.i18n.t(k);
-    if (lblMin) lblMin.textContent = `${t('min')} ${Math.round(channel.min * 255)}`;
-    if (lblMid) lblMid.textContent = `${t('gamma')} ${channel.gamma.toFixed(2)}`;
-    if (lblMax) lblMax.textContent = `${t('max')} ${Math.round(channel.max * 255)}`;
+    const t = (k, d) => this._t(k, d);
+    if (lblMin) lblMin.textContent = `${t('min', 'Min')} ${Math.round(channel.min * 255)}`;
+    if (lblMid) lblMid.textContent = `${t('gamma', 'Gamma')} ${channel.gamma.toFixed(2)}`;
+    if (lblMax) lblMax.textContent = `${t('max', 'Max')} ${Math.round(channel.max * 255)}`;
 
     this._renderHistogram(idx, channel, container, getHistograms);
   },

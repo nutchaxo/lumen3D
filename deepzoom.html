@@ -11,6 +11,8 @@
     </style>
     <!-- Include OpenSeadragon -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/openseadragon/3.0.0/openseadragon.min.js" integrity="sha384-0TthTVAT+JjS3H3s6LZrp0NqOHpnOV00EYQPfel+8b7Sz8y4AkeEG8aNmC1LxBxs" crossorigin="anonymous"></script>
+    <!-- BUG-058: i18n was referenced via data-i18n attributes but never loaded -->
+    <script src="js/core/i18n.js?v=20260504"></script>
     <script src="js/components/deepzoom-viewer.js?v=20260504"></script>
 </head>
 <body>
@@ -23,6 +25,9 @@
 
     <script>
         document.addEventListener('DOMContentLoaded', () => {
+            // BUG-058: translate the data-i18n labels (no-op fallback keeps the static
+            // French text if a key is absent). Fire-and-forget — UI is usable meanwhile.
+            if (typeof I18n !== 'undefined') I18n.init();
             DeepZoomViewer.init('viewer-container');
             
             // Simulation of loading a dataset

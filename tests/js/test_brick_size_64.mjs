@@ -60,7 +60,9 @@ function makeLoader() {
   assert.equal(stats.memoryEstimateMB, 0, 'empty cache estimate is 0');
 }
 
-// ── Structural: header comment fixed + brick-fetch-worker literals are 64. ──
+// ── Structural: header comment fixed + BRICK_SIZE drives the cache estimate. ──
+// (The brick-fetch-worker.js assertions were removed in v1.0.50 — that worker was
+//  dead code, never instantiated, and the file was deleted per DEAD-003/DEAD-039.)
 {
   const loaderSrc = readFileSync(path.join(ROOT, 'js/core/brick-loader.js'), 'utf8');
   assert.ok(/const BRICK_SIZE = 64;/.test(loaderSrc), 'BRICK_SIZE constant is 64');
@@ -68,11 +70,6 @@ function makeLoader() {
   // the 8×-wrong cache estimate is now driven by the corrected constant
   assert.ok(/_cache\.size \* BRICK_SIZE \* BRICK_SIZE \* BRICK_SIZE/.test(loaderSrc),
     'getCacheStats still derives from BRICK_SIZE (now 64)');
-
-  const workerSrc = readFileSync(path.join(ROOT, 'js/core/brick-fetch-worker.js'), 'utf8');
-  assert.ok(!/brickSize \|\| 128/.test(workerSrc), 'fetch-worker no longer falls back to 128');
-  const matches64 = workerSrc.match(/brickSize \|\| 64/g) || [];
-  assert.equal(matches64.length, 2, 'both fetch-worker blank-brick fallbacks use 64');
 }
 
 console.log('STREAMING-2 BRICK_SIZE=64 fallback: OK');

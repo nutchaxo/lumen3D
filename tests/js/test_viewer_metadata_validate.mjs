@@ -21,8 +21,10 @@ for (const f of ['dimensions', 'voxel_size', 'channels']) {
 assert.ok(src.includes('datasetMeta?.dimensions?.t'), 'live t-check uses the effective (catalogue) dimension');
 
 // _mergeDatasetMetadata throws on invalid + the catch re-throws (not swallowed)
+// (window widened in v1.0.49: BUG-033 added an explicit "dimensions absent" throw,
+//  lengthening the function so `throw err;` now sits past the old 1600-char slice.)
 const mergeStart = src.indexOf('async function _mergeDatasetMetadata');
-const mergeBody = src.slice(mergeStart, mergeStart + 1600);
+const mergeBody = src.slice(mergeStart, mergeStart + 2400);
 assert.ok(mergeBody.includes('if (!v.ok) throw new Error'), 'invalid metadata throws');
 assert.ok(mergeBody.includes('throw err;'), 'catch re-throws (no longer swallowed)');
 

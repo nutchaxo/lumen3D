@@ -263,6 +263,19 @@ const Utils = (() => {
     return here !== null && event.origin === here;
   }
 
+  /**
+   * SEC-012: the targetOrigin for outbound postMessage. Cross-panel sync targets are
+   * strictly same-origin (compare.html ↔ its own viewer iframes), so we post to this
+   * page's exact origin instead of the wildcard '*' (which would leak study state to
+   * any parent that framed the page). Falls back to '*' only outside a browser.
+   * @returns {string}
+   */
+  function trustedTargetOrigin() {
+    return (typeof window !== 'undefined' && window.location && window.location.origin)
+      ? window.location.origin
+      : '*';
+  }
+
   return {
     formatFileSize,
     formatDate,
@@ -279,6 +292,7 @@ const Utils = (() => {
     mapRange,
     uid,
     escapeHtml,
-    isTrustedMessageOrigin
+    isTrustedMessageOrigin,
+    trustedTargetOrigin
   };
 })();

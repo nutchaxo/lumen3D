@@ -1,0 +1,22 @@
+# Plateforme Web — v1.1.1
+
+> Refonte complète de la page « À propos » — crédits de création, contexte scientifique, institutions (logos), citations prêtes à copier et navigation fonctionnelle. Faits institutionnels recherchés et vérifiés de façon adversariale sur sources officielles (IRIBHM, ULB, ORCID, PubMed/Frontiers). Vérifiée par inspection DOM/CSSOM/géométrie dans le serveur de dev.
+
+## [ADDED]
+- **À propos — crédits & création** : carte mettant en avant le créateur de la plateforme, **Morgan Climent** (conception & développement intégral, avec l'aide d'outils d'IA — Claude, Gemini, ChatGPT, affichés en puces). Bouton **GitHub** (`github.com/nutchaxo/lumen3D`) dans la carte et dans la barre de navigation.
+- **À propos — contexte scientifique** : carte dédiée replaçant la plateforme dans le cadre des travaux de doctorat de **Kristof Van Schoor** (IRIBHM, ULB, équipe d'**Isabelle Migeotte**), avec bloc de citation du travail « *Origin and flow-mediated remodeling of the murine and human extraembryonic circulation systems* » (Front. Physiol. 2024, DOI 10.3389/fphys.2024.1395006) et mention explicite de la provenance des données. ⚠️ Orthographe corrigée : **Van Schoor** (et non « Van Shoor »), confirmée sur IRIBHM / PubMed / ORCID.
+- **À propos — institutions** : trois cartes avec logos sur plaques claires — **ULB** (SVG officiel, Wikimedia, domaine public), **IRIBHM — Jacques E. Dumont** (logo officiel) et un monogramme dégradé pour l'**équipe Migeotte**. Logos servis localement (`assets/logos/`) — **aucune nouvelle dépendance CDN** (la plateforme reste hors-ligne).
+- **À propos — « Comment citer »** : section fonctionnelle avec deux blocs de citation **prêts à copier** (plateforme + publication source, format international) chacun avec un bouton **Copier** (API Presse-papiers + repli `execCommand`), et un **BibTeX** dépliable pour la publication.
+- **À propos — accès rapide** : cartes-liens fonctionnelles vers l'Explorateur, la Comparaison et le Centre de téléchargement, plus un **bandeau de statistiques** du catalogue (jeux de données, embryons, cellules suivies, régions).
+- **À propos — contact** : coordonnées vérifiées (Isabelle Migeotte `isabelle.migeotte@ulb.be`, `iribhm@ulb.be`, Campus Erasme — Route de Lennik 808, 1070 Bruxelles) ; crédit « Created by Morgan Climent » au pied de page.
+
+## [OPTIMIZED]
+- **CSS dédié `css/about.css`** (nouveau, chargé avec `?v=`) : les styles de la page À propos quittent `tools.css` pour un fichier propre, suivant la convention des CSS par page (`landing.css`, `explorer.css`…). ⚠️ **Corrige la cause racine du rendu cassé signalé** : `about.html` liait `tools.css` sans version → le navigateur servait une feuille en cache (cartes/grilles absentes, double logo, texte vertical brut). Un fichier neuf versionné se charge toujours frais, et il est lié **après** `tools.css` donc il l'emporte. ~266 lignes de styles À propos retirées de `tools.css`.
+- **Langage visuel organique/fluide** : halos en dégradé de marque (vert→cyan) dans le héros, monogramme et chiffres de statistiques en dégradé, cartes généreusement arrondies, transitions au survol.
+- **Logo institutionnel** : un seul `<img>` par institution sur une plaque claire (lisible dans les deux thèmes) — **supprime structurellement le bug du double logo IRIBHM** (plus de bascule clair/sombre fragile ; variante `iribhm-dark.webp` retirée).
+- **i18n** : contenu statique piloté à 100 % par `data-i18n` (en/fr/es, parité **57/57** clés) ; le résumé du catalogue devient un bandeau de statistiques avec **état vide gracieux** (`about.catalogEmpty`) au lieu d'un mur de « 0 » quand `DATA_WEB` est absent.
+- **`about.js`** : suppression de l'ancienne surcouche `_hydrateStaticCopy` (réécriture FR/EN par index de carte, anglais forcé en espagnol). Le contrôleur gère désormais l'icône de thème, le bandeau de stats et les contrôles de citation (copie + BibTeX).
+
+## [TESTS]
+- Parité des clés i18n `about` (57/57 en/fr/es) ; équilibre des accolades `about.css` (79/79) et `tools.css` (112/112) ; `test_html_hardening.mjs`, `test_html_escaping.mjs`, `test_sri.py` — tous **OK**.
+- Vérifié par inspection DOM/CSSOM/géométrie : cartes feature côte à côte (2 colonnes), institutions sur une ligne (un seul logo IRIBHM), bandeau de stats masqué + note vide affichée, halo de héros présent, bouton Copier (« Copied! ») et bascule BibTeX fonctionnels, i18n EN/FR sans clé brute.

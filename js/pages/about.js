@@ -1,5 +1,10 @@
 /* ============================================================
    IRIBHM Microscopy Platform — About Page
+   ============================================================
+   Static copy is driven by data-i18n attributes (see
+   lang/{en,fr,es}.json -> "about"). This controller wires the
+   theme icon, the catalog stat strip, and the citation
+   copy / BibTeX controls.
    ============================================================ */
 
 const AboutApp = (() => {
@@ -10,58 +15,77 @@ const AboutApp = (() => {
     document.title = 'About - IRIBHM Microscopy Platform';
     _updateThemeIcon();
     Theme.onChange(_updateThemeIcon);
-    I18n.onLanguageChange(() => {
-      _hydrateStaticCopy();
-      _renderCatalogSummary();
-    });
-    _hydrateStaticCopy();
-    _renderCatalogSummary();
+    _renderStats();
+    _bindCitations();
     if (window.lucide) lucide.createIcons();
     document.body.classList.add('loaded');
   }
 
-  function _renderCatalogSummary() {
-    const node = document.getElementById('about-catalog-summary');
-    if (!node) return;
+  function _renderStats() {
+    const strip = document.getElementById('about-stats');
+    const empty = document.getElementById('about-stats-empty');
+    if (!strip || !empty) return;
     const stats = Catalog.getStats();
-    node.textContent = `${stats.totalDatasets} datasets, ${stats.byType.fixed} fixed stacks, ${stats.byType.live} live-imaging datasets, ${stats.byType.tracking} tracking datasets, and ${stats.totalCells.toLocaleString()} tracked cells available through the platform.`;
+    // No catalog bundled (e.g. dev build with empty DATA_WEB) -> show a
+    // neutral note instead of a wall of zeros.
+    if (!stats || stats.totalDatasets === 0) {
+      strip.hidden = true;
+      empty.hidden = false;
+      return;
+    }
+    strip.hidden = false;
+    empty.hidden = true;
+    const set = (id, val) => { const n = document.getElementById(id); if (n) n.textContent = Number(val || 0).toLocaleString(); };
+    set('stat-datasets', stats.totalDatasets);
+    set('stat-embryos', stats.totalEmbryos);
+    set('stat-cells', stats.totalCells);
+    set('stat-regions', stats.totalRegions);
   }
 
-  function _hydrateStaticCopy() {
-    const fr = I18n.getLanguage() === 'fr';
-    const heroBadge = document.querySelector('.about-hero .hero-badge span:last-child');
-    if (heroBadge) heroBadge.textContent = fr
-      ? 'Methodes, acces, citation et notes de production'
-      : 'Methods, access, citation, and production notes';
+  function _bindCitations() {
+    document.querySelectorAll('.copy-btn[data-copy-target]').forEach(btn => {
+      btn.addEventListener('click', () => _copy(btn));
+    });
+    document.querySelectorAll('.bibtex-toggle[data-bibtex-toggle]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const block = document.getElementById(btn.getAttribute('data-bibtex-toggle'));
+        if (block) block.classList.toggle('open');
+      });
+    });
+  }
 
-    const cards = [...document.querySelectorAll('.about-grid .about-card')];
-    if (cards[0]?.querySelector('p')) {
-      cards[0].querySelector('p').textContent = fr
-        ? 'Les jeux de donnees fixes, live et tracking peuvent etre explores separement, compares cote a cote, et relies quand des metadonnees de registration existent.'
-        : 'Fixed imaging, live imaging, and cell tracking datasets can be explored independently, compared side by side, and linked when registration metadata exists.';
+  async function _copy(btn) {
+    const target = document.getElementById(btn.getAttribute('data-copy-target'));
+    if (!target) return;
+    const text = target.innerText.trim();
+    try {
+      await navigator.clipboard.writeText(text);
+    } catch (err) {
+      // Clipboard API unavailable (insecure context / older browser): fall back
+      // to a transient textarea + execCommand so copy still works on http://.
+      const ta = document.createElement('textarea');
+      ta.value = text;
+      ta.style.position = 'fixed';
+      ta.style.opacity = '0';
+      document.body.appendChild(ta);
+      ta.select();
+      try { document.execCommand('copy'); } catch (_) { /* give up silently */ }
+      ta.remove();
     }
-    if (cards[1]?.querySelector('p')) {
-      cards[1].querySelector('p').textContent = fr
-        ? 'Les fichiers bruts ND2, CZI, Imaris, XLSX et GLB sont convertis en metadonnees web, stacks WebP, JSON compresses, modeles 3D optimises et bundles telechargeables reproductibles.'
-        : 'Raw ND2, CZI, Imaris, XLSX, and GLB files are converted into web-ready metadata, WebP stacks, compressed JSON tracks, optimized 3D models, and reproducible download bundles.';
-    }
-    if (cards[2]?.querySelector('p')) {
-      cards[2].querySelector('p').textContent = fr
-        ? 'Le Download Center expose les sources brutes, les assets web, les bundles generes et les exports de workspace reproductibles avec alertes pour les tres gros fichiers.'
-        : 'The Download Center exposes raw sources, web-ready assets, generated bundles, and reproducible workspace exports with size warnings for very large microscopy files.';
-    }
-    if (cards[3]?.querySelector('p')) {
-      cards[3].querySelector('p').textContent = fr
-        ? 'Merci de citer la plateforme IRIBHM, l\'experience originale et toute publication associee. Les exports workspace incluent un bloc de citation reutilisable et un resume du dataset.'
-        : 'Please cite the IRIBHM microscopy platform, the original experiment, and any associated publication. Workspace exports include a reusable citation block and dataset summary.';
-    }
+    _flashCopied(btn);
+  }
 
-    const contact = document.querySelectorAll('.about-grid .about-card')[5]?.querySelector('p');
-    if (contact) {
-      contact.textContent = fr
-        ? 'IRIBHM - Universite Libre de Bruxelles. Pour les corrections de dataset, metadonnees ou questions de reutilisation, contactez le proprietaire du dataset ou le contact IRIBHM.'
-        : 'IRIBHM - Universite Libre de Bruxelles. For dataset corrections, metadata, or reuse questions, contact the dataset owner or the IRIBHM lab contact.';
-    }
+  function _flashCopied(btn) {
+    const label = btn.querySelector('span');
+    if (!label) return;
+    const original = label.textContent;
+    label.textContent = I18n.t('about.copied');
+    btn.classList.add('copied');
+    clearTimeout(btn._copyTimer);
+    btn._copyTimer = setTimeout(() => {
+      label.textContent = original;
+      btn.classList.remove('copied');
+    }, 1600);
   }
 
   function _updateThemeIcon() {

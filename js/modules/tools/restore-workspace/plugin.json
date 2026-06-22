@@ -8,5 +8,8 @@
   "subtype": "action",
   "icon": "folder-open",
   "order": 30,
-  "description": "Load a previously saved viewer state from browser local storage."
+  "description": "Load a previously saved viewer state from browser local storage.",
+  "buttonId": "btn-restore-workspace",
+  "i18nTitle": "tips.restoreWksp",
+  "i18nAria": "tips.restoreWksp"
 }

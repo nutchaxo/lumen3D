@@ -8,5 +8,8 @@
   "subtype": "action",
   "icon": "download",
   "order": 10,
-  "description": "Open the export modal with all download options for the current dataset."
+  "description": "Open the export modal with all download options for the current dataset.",
+  "buttonId": "btn-export",
+  "i18nTitle": "tips.download",
+  "i18nAria": "tips.download"
 }

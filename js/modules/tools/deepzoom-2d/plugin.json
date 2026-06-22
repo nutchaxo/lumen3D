@@ -4,9 +4,15 @@
   "version": "1.0.0",
   "creator": "IRIBHM",
   "placement": "tools",
-  "group": "tools",
+  "group": "layouts",
   "subtype": "toggle",
   "icon": "scan-eye",
-  "order": 70,
-  "description": "Switch to high-resolution 2D tile viewer mode for ground truth inspection."
+  "order": 20,
+  "description": "Switch to high-resolution 2D tile viewer mode for ground truth inspection.",
+  "buttonId": "btn-toggle-deepzoom",
+  "i18nTitle": "tips.deepZoom",
+  "i18nAria": "tips.toggle2d",
+  "requires": [
+    "deepzoom2d"
+  ]
 }

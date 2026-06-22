@@ -29,6 +29,65 @@ const PluginRegistry = (() => {
   // ViewerContext provided by viewer.js
   let _ctx = null;
 
+  // ─── Discovery ────────────────────────────────────────────
+
+  // Crash-proof floor (rule 1.1): if both the live endpoint and the generated
+  // manifest are unavailable, the viewer still boots with the core plugin set.
+  // This is the ONLY place the built-in list is enumerated; it is intentionally
+  // a safety net, not the source of truth — real discovery is folder-driven.
+  const _DEFAULT_MODULE_PATHS = [
+    'tools/toggle-grid', 'tools/toggle-axes', 'tools/orientation-axes', 'tools/toggle-volume',
+    'tools/screenshot', 'tools/presentation-mode', 'tools/save-workspace',
+    'tools/restore-workspace', 'tools/download-center', 'tools/decompose-channels',
+    'tools/zstack-browser', 'tools/deepzoom-2d', 'tools/slice-inspector',
+    'tools/measure-distance', 'shaders/natural-fluorescence', 'shaders/fluorescence', 'shaders/structure-dvr',
+    'channels/histogram', 'channels/gaussian-filter'
+  ];
+
+  /**
+   * Fetch a plugin list from one source and normalize it to an array of paths.
+   * Returns null on any failure (network, non-OK, non-JSON such as raw PHP
+   * served statically, or wrong shape) so the caller can fall through.
+   */
+  async function _fetchPluginList(url) {
+    try {
+      const resp = await fetch(url, { cache: 'no-store' });
+      if (!resp.ok) return null;
+      const data = await resp.json(); // throws on non-JSON body → caught below
+      const plugins = Array.isArray(data) ? data : data?.plugins;
+      if (!Array.isArray(plugins)) return null;
+      const paths = plugins
+        .map(p => (typeof p === 'string' ? p : p?.path))
+        .filter(p => typeof p === 'string' && p.includes('/'));
+      return paths.length ? paths : null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /**
+   * Resolve the list of plugin module paths with a hybrid strategy so the
+   * platform auto-detects folders dropped into js/modules/ without a hardcoded
+   * manifest, while still booting on any host:
+   *   1. live discovery endpoint  (dev_server.py /api/plugins, or PHP plugins.php)
+   *   2. generated static manifest (js/modules/manifest.json — static/PHP hosts)
+   *   3. embedded default list     (crash-proof floor)
+   * @param {string} basePath  e.g. 'js/modules'
+   * @returns {Promise<string[]>} module paths like ['tools/toggle-grid', …]
+   */
+  async function discover(basePath = 'js/modules') {
+    const candidates = ['api/plugins', 'api/plugins.php', `${basePath}/manifest.json`];
+    for (const url of candidates) {
+      const paths = await _fetchPluginList(url);
+      if (paths) {
+        console.log(`[PluginRegistry] Discovered ${paths.length} plugins via ${url}`);
+        return paths;
+      }
+    }
+    console.warn('[PluginRegistry] Discovery failed (endpoint + manifest unavailable) — using embedded default list.');
+    return _DEFAULT_MODULE_PATHS.slice();
+  }
+
   // ─── Module Loading ───────────────────────────────────────
 
   /**
@@ -249,6 +308,90 @@ const PluginRegistry = (() => {
     }
   }
 
+  // ─── Toolbar Button Generation ────────────────────────────
+
+  /**
+   * Generate toolbar buttons for every 'tools' plugin from its plugin.json,
+   * so the toolbar is driven by what is in js/modules/tools/ (drop-in / drop-out)
+   * exactly the way the shader dropdown and per-channel controls already are.
+   *
+   * Per plugin.json: `group` selects the cluster, `order` the position,
+   * `subtype` the kind (action/toggle → data-plugin-id wired by
+   * bindToolbarButtons; tool → data-tool chip wired by ToolManager),
+   * `icon`/`i18nTitle`/`i18nAria`/`buttonId` the presentation, and an optional
+   * `requires` array gates visibility against the dataset's volumeSources.
+   *
+   * Idempotent: previously generated nodes are removed first, so re-running it
+   * (or booting N compare iframes) never duplicates buttons.
+   *
+   * @param {Object} opts
+   * @param {Array<{group:string, container:(HTMLElement|string)}>} opts.groups
+   *        ordered cluster mapping (container is an element or a CSS selector)
+   * @param {Object} [opts.dataset]  dataset meta, for `requires` predicates
+   */
+  function buildToolbarButtons(opts = {}) {
+    const groups = Array.isArray(opts.groups) ? opts.groups : [];
+    const sources = Array.isArray(opts.dataset?.volumeSources) ? opts.dataset.volumeSources : [];
+    const hasSource = (kind) => sources.some(s => s && s.kind === kind && s.available !== false);
+
+    const containerFor = {};
+    const touched = [];
+    for (const g of groups) {
+      const el = typeof g.container === 'string' ? document.querySelector(g.container) : g.container;
+      if (!el) continue;
+      // Remove buttons from a previous build (keeps static core chips like navigate).
+      el.querySelectorAll('[data-plugin-generated]').forEach(n => n.remove());
+      containerFor[g.group] = el;
+      touched.push(el);
+    }
+
+    const t = (key, fallback) =>
+      (key && typeof I18n !== 'undefined' && I18n.t) ? I18n.t(key) : (fallback || key || '');
+
+    for (const meta of listByPlacement('tools')) {
+      const container = containerFor[meta.group];
+      if (!container) {
+        console.warn(`[PluginRegistry] Tool "${meta.id}" has group "${meta.group}" with no toolbar cluster — button skipped.`);
+        continue;
+      }
+
+      const btn = document.createElement('button');
+      btn.dataset.pluginGenerated = '1';
+      if (meta.buttonId) btn.id = meta.buttonId;
+
+      if (meta.subtype === 'tool') {
+        // ToolManager-mux tool (exclusive): wired by ToolManager via [data-tool].
+        btn.className = 'btn btn-icon btn-ghost tool-chip';
+        btn.dataset.tool = meta.tool || meta.id;
+      } else {
+        // action / toggle: wired by bindToolbarButtons via [data-plugin-id].
+        btn.className = 'btn btn-icon btn-ghost';
+        btn.dataset.pluginId = meta.id;
+      }
+
+      const titleText = t(meta.i18nTitle, meta.name || meta.id);
+      const ariaText = t(meta.i18nAria || meta.i18nTitle, titleText);
+      btn.title = titleText;
+      btn.setAttribute('aria-label', ariaText);
+      if (meta.i18nTitle) btn.setAttribute('data-i18n-title', meta.i18nTitle);
+      if (meta.i18nAria || meta.i18nTitle) btn.setAttribute('data-i18n-aria', meta.i18nAria || meta.i18nTitle);
+
+      const icon = document.createElement('i');
+      icon.setAttribute('data-lucide', meta.icon || 'square');
+      btn.appendChild(icon);
+
+      // Declarative visibility: hide until the dataset offers the required source(s).
+      if (Array.isArray(meta.requires) && meta.requires.length && !meta.requires.every(hasSource)) {
+        btn.style.display = 'none';
+      }
+
+      container.appendChild(btn);
+    }
+
+    if (window.lucide && touched.length) lucide.createIcons({ nodes: touched });
+    if (typeof I18n !== 'undefined' && I18n.translateDOM) I18n.translateDOM();
+  }
+
   // ─── Toolbar Button Binding ───────────────────────────────
 
   /**
@@ -320,6 +463,7 @@ const PluginRegistry = (() => {
   // ─── Public API ───────────────────────────────────────────
 
   return {
+    discover,
     loadModules,
     implement,
     initAll,
@@ -328,6 +472,7 @@ const PluginRegistry = (() => {
     getModule,
     listByPlacement,
     listByGroup,
+    buildToolbarButtons,
     getWorkspaceState,
     setWorkspaceState,
     bindToolbarButtons,

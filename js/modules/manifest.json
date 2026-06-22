@@ -1,0 +1,99 @@
+{
+  "plugins": [
+    {
+      "path": "tools/decompose-channels",
+      "placement": "tools",
+      "id": "decompose-channels"
+    },
+    {
+      "path": "tools/deepzoom-2d",
+      "placement": "tools",
+      "id": "deepzoom-2d"
+    },
+    {
+      "path": "tools/download-center",
+      "placement": "tools",
+      "id": "download-center"
+    },
+    {
+      "path": "tools/measure-distance",
+      "placement": "tools",
+      "id": "measure-distance"
+    },
+    {
+      "path": "tools/orientation-axes",
+      "placement": "tools",
+      "id": "orientation-axes"
+    },
+    {
+      "path": "tools/presentation-mode",
+      "placement": "tools",
+      "id": "presentation-mode"
+    },
+    {
+      "path": "tools/restore-workspace",
+      "placement": "tools",
+      "id": "restore-workspace"
+    },
+    {
+      "path": "tools/save-workspace",
+      "placement": "tools",
+      "id": "save-workspace"
+    },
+    {
+      "path": "tools/screenshot",
+      "placement": "tools",
+      "id": "screenshot"
+    },
+    {
+      "path": "tools/slice-inspector",
+      "placement": "tools",
+      "id": "slice-inspector"
+    },
+    {
+      "path": "tools/toggle-axes",
+      "placement": "tools",
+      "id": "toggle-axes"
+    },
+    {
+      "path": "tools/toggle-grid",
+      "placement": "tools",
+      "id": "toggle-grid"
+    },
+    {
+      "path": "tools/toggle-volume",
+      "placement": "tools",
+      "id": "toggle-volume"
+    },
+    {
+      "path": "tools/zstack-browser",
+      "placement": "tools",
+      "id": "zstack-browser"
+    },
+    {
+      "path": "channels/gaussian-filter",
+      "placement": "channels",
+      "id": "gaussian-filter"
+    },
+    {
+      "path": "channels/histogram",
+      "placement": "channels",
+      "id": "histogram"
+    },
+    {
+      "path": "shaders/fluorescence",
+      "placement": "shaders",
+      "id": "fluorescence"
+    },
+    {
+      "path": "shaders/natural-fluorescence",
+      "placement": "shaders",
+      "id": "natural-fluorescence"
+    },
+    {
+      "path": "shaders/structure-dvr",
+      "placement": "shaders",
+      "id": "structure-dvr"
+    }
+  ]
+}

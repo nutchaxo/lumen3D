@@ -8,5 +8,8 @@
   "subtype": "action",
   "icon": "save",
   "order": 20,
-  "description": "Persist the current viewer state to browser local storage."
+  "description": "Persist the current viewer state to browser local storage.",
+  "buttonId": "btn-save-workspace",
+  "i18nTitle": "tips.saveWksp",
+  "i18nAria": "tips.saveWksp"
 }

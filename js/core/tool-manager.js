@@ -5,9 +5,29 @@
 const ToolManager = (() => {
   let _activeTool = 'navigate';
   let _callbacks = {};
+  // Keyboard shortcuts → tool name. 'navigate' is the built-in core tool; all
+  // other tools declare their own shortcut in plugin.json (subtype:'tool'), so
+  // adding/removing a tool plugin adds/removes its shortcut with no edit here.
+  let _shortcuts = { v: 'navigate', escape: 'navigate' };
+
+  /**
+   * Register a tool's keyboard shortcut. Called for each discovered tool plugin
+   * in init(); also exposed so a plugin can register one explicitly.
+   */
+  function registerTool(def) {
+    if (def && def.name && def.shortcut) {
+      _shortcuts[String(def.shortcut).toLowerCase()] = def.name;
+    }
+  }
 
   function init(options = {}) {
     _callbacks = options;
+    // Pull shortcuts declared by tool-subtype plugins (data-driven autonomy).
+    if (typeof PluginRegistry !== 'undefined' && PluginRegistry.listByPlacement) {
+      PluginRegistry.listByPlacement('tools')
+        .filter(m => m.subtype === 'tool' && m.shortcut)
+        .forEach(m => registerTool({ name: m.tool || m.id, shortcut: m.shortcut }));
+    }
     document.querySelectorAll('[data-tool]').forEach(button => {
       if (!button.disabled) {
         button.addEventListener('click', () => activate(button.dataset.tool));
@@ -33,11 +53,8 @@ const ToolManager = (() => {
 
   function _handleShortcut(e) {
     if (e.target && ['INPUT', 'TEXTAREA', 'SELECT'].includes(e.target.tagName)) return;
-    const key = e.key.toLowerCase();
-    if (key === 'v') activate('navigate');
-    if (key === 'c') activate('cut');
-    if (key === 'm') activate('measure');
-    if (key === 'escape') activate('navigate');
+    const tool = _shortcuts[e.key.toLowerCase()];
+    if (tool) activate(tool);
   }
 
   function _isToolAvailable(tool) {
@@ -46,5 +63,5 @@ const ToolManager = (() => {
     return Boolean(button && !button.disabled);
   }
 
-  return { init, activate, current };
+  return { init, activate, current, registerTool };
 })();

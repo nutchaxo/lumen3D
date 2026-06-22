@@ -8,5 +8,8 @@
   "subtype": "toggle",
   "icon": "compass",
   "order": 25,
-  "description": "Affiche le triple axe d'orientation (A/P, D/V, L/R) de l'embryon."
+  "description": "Affiche le triple axe d'orientation (A/P, D/V, L/R) de l'embryon.",
+  "buttonId": "btn-orientation-axes",
+  "i18nTitle": "tips.orientationAxes",
+  "i18nAria": "tips.orientationAxes"
 }

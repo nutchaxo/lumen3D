@@ -8,5 +8,7 @@
   "subtype": "action",
   "icon": "camera",
   "order": 40,
-  "description": "Capture the current 3D view as a PNG image."
+  "description": "Capture the current 3D view as a PNG image.",
+  "buttonId": "btn-screenshot",
+  "i18nTitle": "viewer.screenshot"
 }

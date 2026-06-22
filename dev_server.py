@@ -18,6 +18,7 @@ API routes handled:
     GET  /api/datasets.php?action=get&id=...
     POST /api/datasets.php?action=save&id=...
     POST /api/datasets.php?action=rebuild_catalog
+    GET  /api/plugins            (auto-discovery of js/modules/<placement>/<id>/)
 
 Everything else is served as a static file from the current directory.
 
@@ -48,6 +49,8 @@ __version__ = "0.12.41"
 ROOT       = Path(__file__).resolve().parent
 DATA_WEB   = ROOT / "DATA_WEB"
 CONFIG_FILE = ROOT / "api" / "config.json"
+MODULES_DIR = ROOT / "js" / "modules"
+PLUGIN_PLACEMENTS = ("tools", "channels", "shaders")
 
 # ── Default credentials ───────────────────────────────────────────────────────
 # No hardcoded password: a random one is generated on first run (printed once)
@@ -479,6 +482,64 @@ def _rebuild_catalog() -> int:
     return len(catalog)
 
 
+# ── Plugin discovery helpers ─────────────────────────────────────────────────────
+
+def _list_plugins() -> list[dict]:
+    """Scan js/modules/<placement>/<id>/plugin.json and return discovered plugins.
+
+    Each entry is the full plugin.json meta plus a derived ``path`` (``<placement>/<id>``)
+    and ``placement`` (forced to the directory it lives in). Folder names are
+    validated with _SAFE_FOLDER_RE so the scan can never walk outside
+    js/modules/<placement>/ (rule 1.4). A malformed/unreadable plugin.json or a
+    placement mismatch skips that single plugin without aborting the batch
+    (rule 1.1, mirrors the client-side loadModules tolerance).
+    """
+    plugins = []
+    for placement in PLUGIN_PLACEMENTS:
+        base = MODULES_DIR / placement
+        if not base.is_dir():
+            continue
+        for mod_dir in sorted(base.iterdir()):
+            if not mod_dir.is_dir() or not _SAFE_FOLDER_RE.match(mod_dir.name):
+                continue
+            meta_path = mod_dir / "plugin.json"
+            if not meta_path.exists():
+                continue
+            try:
+                meta = json.loads(meta_path.read_text(encoding="utf-8"))
+            except Exception:
+                continue
+            if not isinstance(meta, dict):
+                continue
+            # Preserve the placement-from-directory contract (mirrors plugin-registry.js:51-55).
+            if meta.get("placement") and meta["placement"] != placement:
+                continue
+            meta["placement"] = placement
+            meta["path"] = f"{placement}/{mod_dir.name}"
+            plugins.append(meta)
+    return plugins
+
+
+def _write_plugins_manifest(plugins: list[dict]) -> None:
+    """Persist the discovered list to js/modules/manifest.json so static hosts
+    (fast_server.py, ``python -m http.server``, PHP) inherit a fresh fallback
+    with no manual build step. Best-effort: a write failure must not break the
+    live endpoint."""
+    try:
+        manifest = {
+            "plugins": [
+                {"path": p["path"], "placement": p["placement"], "id": p.get("id")}
+                for p in plugins
+            ]
+        }
+        MODULES_DIR.mkdir(parents=True, exist_ok=True)
+        (MODULES_DIR / "manifest.json").write_text(
+            json.dumps(manifest, indent=2, ensure_ascii=False), encoding="utf-8"
+        )
+    except Exception:
+        pass
+
+
 # ── HTTP handler ───────────────────────────────────────────────────────────────
 
 class AdminHandler(http.server.SimpleHTTPRequestHandler):
@@ -498,6 +559,8 @@ class AdminHandler(http.server.SimpleHTTPRequestHandler):
         clean_path = parsed.path.strip("/")
         if clean_path in ("DATA_WEB/catalog.json", "DATA_WEB/catalog.json/"):
             self._serve_dynamic_catalog()
+        elif parsed.path in ("/api/plugins", "/api/plugins.php"):
+            self._serve_plugins()
         elif parsed.path in ("/api/auth.php", "/api/datasets.php"):
             self._handle_api(parsed, body=None)
         elif _is_forbidden_static(clean_path):
@@ -515,6 +578,22 @@ class AdminHandler(http.server.SimpleHTTPRequestHandler):
         # BUG-060: do NOT re-send Access-Control-Allow-Origin / Cache-Control / Pragma /
         # Expires here — end_headers() already emits CORS and (for a .json path) the
         # no-cache trio. Sending them again duplicated every one of those headers.
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _serve_plugins(self):
+        """Live plugin discovery: enumerate js/modules/ and return the list, also
+        refreshing js/modules/manifest.json on disk so static deploys stay current.
+        no-store so dropping/removing a plugin folder is reflected on the next reload."""
+        plugins = _list_plugins()
+        _write_plugins_manifest(plugins)
+        body = json.dumps({"plugins": plugins}, indent=2, ensure_ascii=False).encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0')
+        self.send_header('Pragma', 'no-cache')
+        self.send_header('Expires', '0')
         self.end_headers()
         self.wfile.write(body)
 

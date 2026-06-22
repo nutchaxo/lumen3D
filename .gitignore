@@ -16,7 +16,8 @@ DATA_WEB/*
 *.db
 
 # Work in progress / Personal files
-DOCS/
+DOCS/*
+!DOCS/plugins/
 platform_data_inventory.xlsx
 platform_preselection_fixed_live.xlsx
 test_meta.html

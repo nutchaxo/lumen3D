@@ -4,9 +4,12 @@
   "version": "1.0.0",
   "creator": "IRIBHM",
   "placement": "tools",
-  "group": "tools",
+  "group": "layouts",
   "subtype": "toggle",
   "icon": "layers",
-  "order": 50,
-  "description": "Open side-by-side channel decomposition view."
+  "order": 30,
+  "description": "Open side-by-side channel decomposition view.",
+  "buttonId": "btn-toggle-decomposition",
+  "i18nTitle": "tips.decompChan",
+  "i18nAria": "tips.decompChans"
 }

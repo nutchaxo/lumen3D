@@ -3,10 +3,28 @@
    ============================================================ */
 
 const VolumeSourceManager = (() => {
+  // EDGE-031 (Rule 1.4): the source kinds the renderer can actually mount.
+  const ALLOWED_KINDS = new Set(['webstack', 'bricks', 'deepzoom2d', 'live']);
+
   function normalizeSources(dataset = null) {
     const listed = Array.isArray(dataset?.volumeSources) ? dataset.volumeSources : [];
-    if (listed.length) {
-      return listed.map((source, index) => {
+    // EDGE-031: reject (drop + warn) entries the renderer can't handle instead of
+    // normalizing them into a plausible-but-broken source — an unknown kind, or a
+    // path that is present but not a string.
+    const normalized = listed
+      .filter((source) => {
+        const kind = (source && source.kind) || 'webstack';
+        if (!ALLOWED_KINDS.has(kind)) {
+          console.warn(`[VolumeSourceManager] dropping volume source with unknown kind "${source && source.kind}"`);
+          return false;
+        }
+        if (source && source.path != null && typeof source.path !== 'string') {
+          console.warn('[VolumeSourceManager] dropping volume source with a non-string path');
+          return false;
+        }
+        return true;
+      })
+      .map((source, index) => {
         const kind = source.kind || 'webstack';
         return {
           ...source,
@@ -18,7 +36,7 @@ const VolumeSourceManager = (() => {
           path: source.path || null
         };
       }).sort((a, b) => a.priority - b.priority);
-    }
+    if (normalized.length) return normalized;
 
     return [{
       kind: 'webstack',

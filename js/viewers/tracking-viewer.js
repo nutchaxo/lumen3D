@@ -434,6 +434,18 @@ const TrackingViewer = (() => {
   }
 
   function _attachModel(gltf) {
+    // LEAK-007 (Rule 1.2): on reload, dispose the previous GLB scene (geometries +
+    // materials) and remove its surface group, otherwise each reload leaks them and
+    // orphans a Three.js group in the scene.
+    if (_glbScene) {
+      _surfaceGroup?.remove(_glbScene);
+      _glbScene.traverse((c) => {
+        c.geometry?.dispose?.();
+        const m = c.material;
+        (Array.isArray(m) ? m : [m]).forEach(mm => mm?.dispose?.());
+      });
+    }
+    if (_surfaceGroup) { _scene.remove(_surfaceGroup); _surfaceGroup = null; }
     _glbScene = gltf.scene;
 
     const box = new THREE.Box3().setFromObject(_glbScene);
@@ -528,8 +540,15 @@ const TrackingViewer = (() => {
   }
 
   function _initInstancedMesh() {
-    if (_cellMesh) _scene.remove(_cellMesh);
-    
+    // LEAK-007 (Rule 1.2): dispose the previous InstancedMesh's geometry/material +
+    // instance buffers before replacing it, not just remove it from the scene.
+    if (_cellMesh) {
+      _scene.remove(_cellMesh);
+      _cellMesh.geometry?.dispose?.();
+      _cellMesh.material?.dispose?.();
+      _cellMesh.dispose?.();
+    }
+
     const cellEntries = Object.entries(_trackData.cells);
     const count = cellEntries.length;
     _cellIds = [];
@@ -1065,7 +1084,12 @@ const TrackingViewer = (() => {
       }
       return { uuid: mesh.uuid, values };
     });
-    return { rows, stats: _globalDensityStats };
+    // BUG-052: derive the real {min,max,p10,p90} from the computed densities instead
+    // of the hardcoded _globalDensityStats placeholder, so the colour normalization
+    // matches the actual distribution (fall back to the placeholder only if empty).
+    const allValues = rows.flatMap(r => r.values);
+    const stats = allValues.length ? _densityStats(allValues) : _globalDensityStats;
+    return { rows, stats };
   }
 
   function _computeRegionVertexColors(mesh, cellRows) {
@@ -2146,9 +2170,18 @@ const TrackingViewer = (() => {
     return COLOR_MAPS[name] || [];
   }
 
+  // EDGE-016: the real timepoint count from the loaded data (falls back to the
+  // catalogue dimension, then 1) — so the timeline isn't hardcoded to 10 frames.
+  function getFrameCount() {
+    const n = (_trackData && Array.isArray(_trackData.timepoints)) ? _trackData.timepoints.length
+      : Number(_datasetMeta && _datasetMeta.dimensions && _datasetMeta.dimensions.t);
+    return (Number.isFinite(n) && n > 0) ? n : 1;
+  }
+
   return {
     init,
     loadData,
+    getFrameCount,
     setTimepoint,
     setFilter,
     setSurfaceOpacity,

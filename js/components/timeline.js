@@ -32,7 +32,13 @@ const Timeline = (() => {
       smoothMax: 9
     }, options || {});
 
-    _totalFrames = Math.max(1, _options.totalFrames);
+    // EDGE-040: coerce caller-supplied numerics so a NaN/undefined option can't
+    // poison the scrubber (Math.max(1, NaN) is NaN) or playback. Defaults: 1 frame,
+    // speed 5, smooth 0.
+    const tf = Number(_options.totalFrames);
+    _totalFrames = (Number.isFinite(tf) && tf > 0) ? Math.floor(tf) : 1;
+    _options.speedValue = Number.isFinite(Number(_options.speedValue)) ? Number(_options.speedValue) : 5;
+    _options.smoothValue = Number.isFinite(Number(_options.smoothValue)) ? Number(_options.smoothValue) : 0;
     _onChangeCallback = onChange;
     _currentFrame = 0;
     _isPlaying = false;
@@ -146,30 +152,31 @@ const Timeline = (() => {
     setPlayIcon('pause');
     
     _lastTime = performance.now();
-    _playTimer = window.setInterval(() => {
-      if (!_isPlaying) {
-        clearInterval(_playTimer);
-        _playTimer = null;
-        return;
-      }
+    // PERF-025: requestAnimationFrame loop instead of setInterval(50ms) — it
+    // auto-throttles in background tabs (no drift / wasted ticks) and syncs to the
+    // render cadence; the dt-based advance keeps playback speed correct.
+    const tick = () => {
+      if (!_isPlaying) { _playTimer = null; return; }
       const now = performance.now();
       const dt = now - _lastTime;
       _lastTime = now;
-      
+
       const speed = _options.showSpeed ? _options.speedValue : 5;
       _currentFrame += (speed * 2) * (dt / 1000); // 2 to 20 fps
-      
+
       if (_currentFrame >= _totalFrames - 1) {
         _currentFrame = 0; // loop
       }
       setFrame(_currentFrame, false, true);
-    }, 50);
+      _playTimer = requestAnimationFrame(tick);
+    };
+    _playTimer = requestAnimationFrame(tick);
   }
 
   function pause() {
     _isPlaying = false;
     if (_playTimer) {
-      clearInterval(_playTimer);
+      cancelAnimationFrame(_playTimer);
       _playTimer = null;
     }
     setPlayIcon('play');

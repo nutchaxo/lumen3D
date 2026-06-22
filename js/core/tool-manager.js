@@ -5,10 +5,13 @@
 const ToolManager = (() => {
   let _activeTool = 'navigate';
   let _callbacks = {};
-  // Keyboard shortcuts → tool name. 'navigate' is the built-in core tool; all
-  // other tools declare their own shortcut in plugin.json (subtype:'tool'), so
-  // adding/removing a tool plugin adds/removes its shortcut with no edit here.
-  let _shortcuts = { v: 'navigate', escape: 'navigate' };
+  // Keyboard shortcuts → tool name. Viewer-page tools declare their own shortcut
+  // in plugin.json (subtype:'tool') and override these defaults via registerTool()
+  // in init(). The non-plugin built-ins are seeded here so pages that DON'T load
+  // PluginRegistry (tracking.html: 'cut'/'measure' tools wired statically) keep
+  // their keyboard accelerators — activate() is still gated by _isToolAvailable(),
+  // so a default for a tool absent on the current page is a harmless no-op.
+  let _shortcuts = { v: 'navigate', escape: 'navigate', c: 'cut', m: 'measure' };
 
   /**
    * Register a tool's keyboard shortcut. Called for each discovered tool plugin

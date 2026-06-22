@@ -125,7 +125,10 @@ PluginRegistry.implement('deepzoom-2d', {
     dzContainer.classList.remove('hidden');
     dzControls?.classList.remove('hidden');
     if (canvas) canvas.style.visibility = 'hidden';
-    if (btn) btn.classList.add('active');
+    // Keep the toggle's visual state consistent with PluginRegistry.bindToolbarButtons
+    // (which sets btn-solid/btn-ghost) so EVERY exit path — toolbar, Escape, dz-exit,
+    // failed-load — leaves matching classes. Mirrors decomposition-panel _syncToolbarButton.
+    if (btn) { btn.classList.add('active', 'btn-solid'); btn.classList.remove('btn-ghost'); }
     this._active = true;
 
     DeepZoomViewer.init('deepzoom-container');
@@ -161,7 +164,7 @@ PluginRegistry.implement('deepzoom-2d', {
     if (dzContainer) dzContainer.classList.add('hidden');
     if (dzControls)  dzControls.classList.add('hidden');
     if (canvas) canvas.style.visibility = '';
-    if (btn) btn.classList.remove('active');
+    if (btn) { btn.classList.remove('active', 'btn-solid'); btn.classList.add('btn-ghost'); }
 
     if (typeof DeepZoomViewer !== 'undefined') DeepZoomViewer.destroy();
     this._active = false;

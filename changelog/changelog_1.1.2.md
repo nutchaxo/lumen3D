@@ -1,0 +1,20 @@
+# Plateforme Web — v1.1.2
+
+> Correctifs des régressions/bugs introduits par v1.1.0 (« plateforme de plugins autonome », PR #55), trouvés lors d'une revue adversariale dédiée (5 relecteurs par dimension → vérification adversariale de chaque finding, 6 confirmés / 0 infirmé). Tests unitaires uniquement (aucun navigateur).
+
+## [FIXED]
+- **Raccourcis clavier `c` / `m` morts sur `tracking.html`** (`js/core/tool-manager.js`) — v1.1.0 a rendu la table de raccourcis de `ToolManager` pilotée par `PluginRegistry` (les outils déclarent leur `shortcut` dans `plugin.json`). Mais `tracking.html` ne charge **pas** `plugin-registry.js` : le bloc `init()` qui peuplait `c`/`m` était sauté, laissant `_shortcuts = {v, escape}` → presser `c` (Clip) ou `m` (Mesure) sur la page tracking ne faisait plus rien (les boutons souris fonctionnaient toujours). Les built-ins `c:'cut'`/`m:'measure'` sont désormais **seedés par défaut** ; sur la page viewer, `registerTool()` les surcharge en `c:'slice'`/`m:'measure'`. `activate()` reste gardé par `_isToolAvailable()`, donc un défaut pour un outil absent de la page est un no-op inoffensif.
+- **État visuel du bouton DeepZoom désynchronisé** (`js/modules/tools/deepzoom-2d/index.js`) — v1.1.0 a retiré le click-handler auto-câblé du bouton et le route via `bindToolbarButtons()` (qui bascule `btn-solid`/`btn-ghost`), mais `_enter`/`_exit` ne géraient que la classe `active`. Sortir du mode 2D par une voie **autre que le bouton** (touche Échap, bouton `dz-exit`, ou échec de chargement du manifeste) laissait `btn-ghost` retiré et jamais restauré → bouton sans style jusqu'au prochain clic. `_enter`/`_exit` gèrent désormais `active`+`btn-solid`/`btn-ghost` symétriquement (aligné sur `decomposition-panel`).
+- **`manifest.json` réécrit de façon non atomique sur un GET** (`dev_server.py`) — `_write_plugins_manifest` (appelé à chaque `GET /api/plugins`) utilisait `write_text` brut alors que le serveur est `ThreadingHTTPServer` : deux chargements concurrents pouvaient s'entrelacer et corrompre le fichier (suivi par git + repli des hôtes statiques). Bascule sur le helper atomique `_atomic_write` (temp + `os.replace`, verrou) introduit en v1.0.45.
+- **Bouton Export double-câblé** (`js/pages/viewer.js`) — après la migration de `download-center` en plugin générant `btn-export` (`data-plugin-id`, câblé par `bindToolbarButtons` → `activate()`), un `addEventListener('click')` manuel subsistait → la modale d'export s'ouvrait **deux fois** par clic. Handler manuel retiré ; le plugin ouvre la modale avec des options identiques (`getCanvasBlob`/`getCustomExports` exposés sur le `ViewerContext`).
+
+## [DOCS]
+- `changelog/changelog_1.1.0.md` — correction d'un comptage factuel de la section [TESTS] (« 2 shaders / 18 plugins » → **3 shaders / 19 plugins**, conforme à l'arbre `js/modules/` réellement livré).
+
+## [NOTES] (non corrigé — choix de conception laissé à l'équipe)
+- `GET /api/plugins` (et `api/plugins.php`) **mute un fichier suivi par git** (`js/modules/manifest.json`) comme effet de bord, et les écrivains divergent en formatage (PHP `JSON_PRETTY_PRINT` 4 espaces vs Python 2 ; fichier committé en CRLF vs écrivains en LF) → churn git récurrent. Deux options légitimes : (a) `gitignore` `manifest.json` (artefact généré) ; (b) uniformiser le format des trois écrivains. Non tranché ici car cela touche la stratégie de repli des hôtes statiques (décision v1.1.0). La corruption concurrente, elle, est corrigée ci-dessus.
+
+## [TESTS]
+- `tests/js/test_plugin_review_fixes.mjs` (nouveau) — `ToolManager` en `vm` **sans** `PluginRegistry` : `c`/`m` activent `cut`/`measure`, clé non mappée = no-op, seed structurel (#1) ; assertions symétrie `_enter`/`_exit` deepzoom (#2) et absence du handler `btn-export` manuel (#6).
+- `tests/test_plugin_review_fixes.py` (nouveau) — `_write_plugins_manifest` écrit atomiquement (contenu correct, aucun temp résiduel) et route via `_atomic_write` (#4).
+- Non-régression : `test_plugin_autonomy.mjs` + `test_dev_server_plugins.py` (tests de v1.1.0) verts.

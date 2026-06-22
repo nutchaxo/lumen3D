@@ -532,10 +532,10 @@ def _write_plugins_manifest(plugins: list[dict]) -> None:
                 for p in plugins
             ]
         }
-        MODULES_DIR.mkdir(parents=True, exist_ok=True)
-        (MODULES_DIR / "manifest.json").write_text(
-            json.dumps(manifest, indent=2, ensure_ascii=False), encoding="utf-8"
-        )
+        # RACE-020: /api/plugins is a GET that rewrites this file, and the server is
+        # ThreadingHTTPServer — concurrent loads could interleave a plain write_text and
+        # truncate/corrupt manifest.json. Use the atomic (temp + os.replace, locked) helper.
+        _atomic_write(MODULES_DIR / "manifest.json", json.dumps(manifest, indent=2, ensure_ascii=False))
     except Exception:
         pass
 

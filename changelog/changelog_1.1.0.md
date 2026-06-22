@@ -20,6 +20,6 @@
 - **`tips.orientationAxes` manquant** — clé i18n absente des trois langues (`en`/`fr`/`es`) alors que le bouton la référençait ; ajoutée, le tooltip n'affiche plus la clé brute.
 
 ## [TESTS]
-- `tests/js/test_plugin_autonomy.mjs` (nouveau) — harnais Node vm : repli hybride de `discover()` (endpoint → manifeste → défaut embarqué, rejet du non-JSON), `loadModules` enregistre les 14 outils + 2 shaders + 2 channels, et `buildToolbarButtons` génère les bons boutons (cluster, ordre, `data-plugin-id` vs `data-tool`, visibilité `requires`, idempotence).
-- `tests/test_dev_server_plugins.py` (nouveau) — `_list_plugins` sur l'arbre réel (18 plugins) et sur un arbre temporaire : ajout/retrait de dossier, `plugin.json` malformé ignoré, mismatch de placement rejeté, nom de dossier non sûr ignoré, forme du manifeste écrit.
+- `tests/js/test_plugin_autonomy.mjs` (nouveau) — harnais Node vm : repli hybride de `discover()` (endpoint → manifeste → défaut embarqué, rejet du non-JSON), `loadModules` enregistre les 14 outils + 3 shaders + 2 channels, et `buildToolbarButtons` génère les bons boutons (cluster, ordre, `data-plugin-id` vs `data-tool`, visibilité `requires`, idempotence).
+- `tests/test_dev_server_plugins.py` (nouveau) — `_list_plugins` sur l'arbre réel (19 plugins) et sur un arbre temporaire : ajout/retrait de dossier, `plugin.json` malformé ignoré, mismatch de placement rejeté, nom de dossier non sûr ignoré, forme du manifeste écrit.
 - Non-régression : suite complète verte (28 tests JS, 8 tests Python) après le lot.

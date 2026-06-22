@@ -179,8 +179,10 @@ const Explorer = (() => {
       `;
     } else {
       container.className = _currentView === 'grid' ? 'dataset-grid' : 'dataset-list';
+      // PERF-028: single innerHTML write. The meta separator is emitted as an
+      // HTML entity (&middot;) at the source so it renders correctly regardless
+      // of charset handling, removing the former second-pass mojibake repair.
       container.innerHTML = filtered.map(d => _currentView === 'grid' ? _createGridCard(d) : _createListCard(d)).join('');
-      container.innerHTML = container.innerHTML.replace(/\u00c2\u00b7/g, '-');
     }
 
     if (window.lucide) lucide.createIcons({ nodes: [container] });
@@ -217,7 +219,7 @@ const Explorer = (() => {
           </div>
           <div class="card-title">${Utils.escapeHtml(dataset.name)}</div>
           <div class="card-subtitle">${Utils.escapeHtml(dataset.description || '')}</div>
-          <div class="card-meta">${metaItems.join('<span style="opacity:0.3">·</span>')}</div>
+          <div class="card-meta">${metaItems.join('<span style="opacity:0.3">&middot;</span>')}</div>
         </div>
         <div class="card-actions dataset-card-actions">
           <span class="btn btn-primary btn-sm"><i data-lucide="eye"></i> View</span>
@@ -245,12 +247,12 @@ const Explorer = (() => {
     return `
       <a href="${_datasetUrl(dataset)}" class="dataset-list-item animate-fade-in" style="animation-duration:0.3s;">
         <div class="dataset-list-icon" style="background: ${gradients[dataset.type] || gradients.fixed};">
-          ${dataset.thumbnail ? `<img src="${dataset.thumbnail}?v=${Date.now()}" alt="" style="width:100%;height:100%;object-fit:cover;border-radius:inherit">` : `<i data-lucide="${typeIcons[dataset.type]}" style="color:var(--text-muted);opacity:0.6"></i>`}
+          ${dataset.thumbnail ? `<img src="${dataset.thumbnail}" alt="" style="width:100%;height:100%;object-fit:cover;border-radius:inherit">` : `<i data-lucide="${typeIcons[dataset.type]}" style="color:var(--text-muted);opacity:0.6"></i>`}
         </div>
         <div class="dataset-list-content">
           <div style="display:flex;align-items:center;gap:var(--space-2);margin-bottom:var(--space-1)">
             <span class="badge badge-dot ${typeClass[dataset.type]}" style="font-size:10px;padding:2px 6px;">${typeLabels[dataset.type]}</span>
-            <span style="font-size:var(--text-sm);color:var(--text-secondary);">${stageDisplay !== '—' ? stageDisplay + ' · ' : ''}${dateDisplay}</span>
+            <span style="font-size:var(--text-sm);color:var(--text-secondary);">${stageDisplay !== '—' ? stageDisplay + ' &middot; ' : ''}${dateDisplay}</span>
             ${_availabilityBadges(dataset)}
           </div>
           <div class="dataset-list-title">${Utils.escapeHtml(dataset.name)}</div>
@@ -272,7 +274,7 @@ const Explorer = (() => {
 
   function _datasetPreview(dataset, typeIcons) {
     if (dataset.thumbnail) {
-      return `<img src="${dataset.thumbnail}?v=${Date.now()}" alt="">`;
+      return `<img src="${dataset.thumbnail}" alt="">`;
     }
     return `<i data-lucide="${typeIcons[dataset.type]}" style="width:48px;height:48px;color:var(--text-muted);opacity:0.4"></i>`;
   }
@@ -297,23 +299,16 @@ const Explorer = (() => {
   return { init, refresh };
 })();
 
+// DEAD-035: global name retained for the inline HTML onclick handlers; the
+// implementation lives once in Utils (shared by landing + explorer).
 window.toggleDropdown = window.toggleDropdown || function toggleDropdown(id) {
-  const el = document.getElementById(id);
-  if (!el) return;
-  el.classList.toggle('open');
-
-  const close = (e) => {
-    if (!el.contains(e.target)) {
-      el.classList.remove('open');
-      document.removeEventListener('click', close);
-    }
-  };
-  setTimeout(() => document.addEventListener('click', close), 0);
+  Utils.toggleDropdown(id);
 };
 
 window.switchLanguage = window.switchLanguage || async function switchLanguage(lang) {
   await I18n.setLanguage(lang);
-  document.querySelectorAll('.dropdown').forEach(dropdown => dropdown.classList.remove('open'));
+  Utils.closeDropdowns(); // DEAD-035: shared dropdown-close step
+  // Page-specific: re-render the dataset grid in the new language
   Explorer.refresh();
 };
 

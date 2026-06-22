@@ -140,6 +140,36 @@ const Utils = (() => {
   }
 
   /**
+   * DEAD-035: shared navbar dropdown toggle (was duplicated verbatim in
+   * landing.js and explorer.js). Toggles `.open` on the target dropdown and
+   * installs a one-shot outside-click listener that removes itself once it
+   * closes the menu — so no listener leaks across repeated toggles.
+   * @param {string} id - element id of the dropdown container
+   */
+  function toggleDropdown(id) {
+    const dropdown = document.getElementById(id);
+    if (!dropdown) return;
+    dropdown.classList.toggle('open');
+
+    const close = (e) => {
+      if (!dropdown.contains(e.target)) {
+        dropdown.classList.remove('open');
+        document.removeEventListener('click', close);
+      }
+    };
+    setTimeout(() => document.addEventListener('click', close), 0);
+  }
+
+  /**
+   * DEAD-035: close every open navbar dropdown. Shared between the page-level
+   * switchLanguage handlers, whose only common step is closing the menus before
+   * each page repopulates its own dynamic content.
+   */
+  function closeDropdowns() {
+    document.querySelectorAll('.dropdown').forEach(d => d.classList.remove('open'));
+  }
+
+  /**
    * Create an HTML element with attributes and children
    * @param {string} tag
    * @param {object} attrs
@@ -283,6 +313,8 @@ const Utils = (() => {
     formatStage,
     debounce,
     throttle,
+    toggleDropdown,
+    closeDropdowns,
     el,
     animateCounter,
     nextFrame,

@@ -59,17 +59,9 @@
         <button class="btn btn-icon btn-ghost" onclick="toggleDropdown('lang-dropdown')" data-i18n-title="lang.switch">
           <i data-lucide="languages" style="width:20px;height:20px"></i>
         </button>
-        <div class="dropdown-menu">
-          <button class="dropdown-item" onclick="switchLanguage('en')">
-            <span>🇬🇧</span> English
-          </button>
-          <button class="dropdown-item" onclick="switchLanguage('fr')">
-            <span>🇫🇷</span> Français
-          </button>
-          <button class="dropdown-item" onclick="switchLanguage('es')">
-            <span>🇪🇸</span> Español
-          </button>
-        </div>
+        <!-- Items are generated from the platform's discovered locales by
+             Utils.populateLanguageMenu() — see landing.js. -->
+        <div class="dropdown-menu"></div>
       </div>
 
                   <!-- Color Blindness Toggle -->

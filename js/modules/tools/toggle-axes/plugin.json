@@ -10,6 +10,10 @@
   "order": 20,
   "description": "Show or hide the 3D coordinate axes helper.",
   "buttonId": "btn-toggle-axes",
-  "i18nTitle": "tips.toggleAxes",
-  "i18nAria": "tips.toggleAxes"
+  "i18nTitle": "title",
+  "i18nLanguages": [
+    "en",
+    "fr",
+    "es"
+  ]
 }

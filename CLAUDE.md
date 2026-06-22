@@ -70,7 +70,7 @@ Loaded as classic `<script>` (no ESM), each exposes a global IIFE.
 |---|---|
 | [catalog.js](js/core/catalog.js) | Loads `DATA_WEB/catalog.json`, exposes `Catalog.getById`, `list`, filters |
 | [theme.js](js/core/theme.js) | Theme toggle + `data-theme` attribute, `Theme.onChange` listener |
-| [i18n.js](js/core/i18n.js) | Loads `lang/{en,fr,es}.json`, exposes `I18n.t(key)` |
+| [i18n.js](js/core/i18n.js) | Loads `lang/{en,fr,es}.json`, exposes `I18n.t(key)`. Languages are **discovered dynamically** (`GET /api/languages` → `lang/manifest.json` → embedded default); plugin dictionaries (`js/modules/.../lang/<code>.json`) merge under `plugins.<id>` so per-plugin English fallback is automatic. `I18n.forPlugin(id)`→`ctx.i18n`; `getAvailableLanguages()` + `Utils.populateLanguageMenu()` drive the switcher. See [changelog_1.2.0.md](changelog/changelog_1.2.0.md). |
 | [utils.js](js/core/utils.js) | Date / stage formatting, math helpers |
 | [url-state.js](js/core/url-state.js) | Serializes viewer state into URL params |
 | [workspace-state.js](js/core/workspace-state.js) | Save/restore camera + channels + tool state |
@@ -246,8 +246,9 @@ DATA_WEB/
 | Workspace save / restore | [js/core/workspace-state.js](js/core/workspace-state.js) + `tools/save-workspace`, `tools/restore-workspace` |
 | Multi-panel compare sync | `compare.js` (parent) + `viewer.js` `postMessage` handlers |
 | Dataset CRUD (admin) | [js/pages/admpan.js](js/pages/admpan.js) + `api/datasets.php` (or Python equivalent in `dev_server.py`) |
-| Translations | `lang/{en,fr,es}.json` |
-| Add a new tool | Create `js/modules/tools/<id>/{plugin.json, index.js}` — auto-discovered, no manifest to edit. `plugin.json` drives the button (`group`, `subtype`, `icon`, `order`, `i18nTitle`, optional `tool`/`shortcut`/`requires`). Toolbar generation: [plugin-registry.js](js/core/plugin-registry.js) `buildToolbarButtons` |
+| Translations (platform) | `lang/{en,fr,es}.json` — full key parity required. Add a language by dropping `lang/<code>.json` (auto-discovered); display name/flag/RTL come from `LANG_META` in [i18n.js](js/core/i18n.js). |
+| Translations (a plugin's own strings) | `js/modules/<placement>/<id>/lang/<code>.json` — call `ctx.i18n.t('key')` in `index.js`. List shipped locales in `plugin.json#i18nLanguages`. `en.json` is the mandatory fallback. |
+| Add a new tool | Create `js/modules/tools/<id>/{plugin.json, index.js, lang/}` — auto-discovered, no manifest to edit. `plugin.json` drives the button (`group`, `subtype`, `icon`, `order`, `i18nTitle`→a key in the plugin's `lang/`, optional `tool`/`shortcut`/`requires`/`i18nLanguages`). Toolbar generation: [plugin-registry.js](js/core/plugin-registry.js) `buildToolbarButtons` |
 | Adjust preprocessing background subtraction | [preprocess/2-image_processor.py](preprocess/2-image_processor.py) — Otsu + morphological opening |
 | Change brick size / ESS threshold | [preprocess/3-chunk_packer.py](preprocess/3-chunk_packer.py) — `BRICK_SIZE`, `occ > 0.0005` |
 | Stage / embryo regex | [preprocess/4-catalog_generator.py](preprocess/4-catalog_generator.py) `_parse_stage`, `_parse_embryo` |

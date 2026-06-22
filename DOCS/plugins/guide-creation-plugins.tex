@@ -187,8 +187,9 @@ doit être libérée dans \code{dispose()}.
 \code{group}         & tools & Cluster de la toolbar : \code{tools}, \code{export}, \code{visuals}, \code{layouts}. \\
 \code{subtype}       & tools & \code{action} / \code{toggle} / \code{tool} (voir §\ref{sec:tools}). \\
 \code{icon}          & tools & Nom d'icône Lucide (ex. \code{camera}, \code{ruler}). \\
-\code{i18nTitle}     & tools & Clé i18n du tooltip (repli sur \code{name}). \\
+\code{i18nTitle}     & tools & Clé i18n du tooltip --- résolue d'abord dans \filepath{lang/} du plugin (\code{plugins.<id>.<clé>}), sinon clé plateforme, sinon \code{name}. \\
 \code{i18nAria}      & tools & Clé i18n de l'\code{aria-label} (repli sur \code{i18nTitle}). \\
+\code{i18nLanguages} & tous & Locales embarquées dans le \filepath{lang/} du plugin (ex. \code{["en","fr"]}). Tenu à jour par le scan serveur. \\
 \code{buttonId}      & tools & \code{id} HTML du bouton généré (optionnel). \\
 \code{tool}          & tools & (subtype \code{tool}) nom d'outil ToolManager (valeur \code{data-tool}). \\
 \code{shortcut}      & tools & (subtype \code{tool}) raccourci clavier (ex. \code{m}). \\
@@ -230,6 +231,7 @@ toujours par \code{ctx}, ce qui garde votre plugin découplé.
                       \code{createIcons(opts)}, \code{openStudio()}, \code{perf()} \\
 \code{ctx.iframe}   & \code{isIframe()}, \code{panelIndex()}, \code{postMessage(data)} \\
 \code{ctx.workspace}& \code{getState()}, \code{applyState(s)} \\
+\code{ctx.i18n}     & \code{t(clé, params)} (scopé \code{plugins.<id>}), \code{getLanguage()}, \code{onLanguageChange(fn)} \\
 \code{ctx.\_state}  & État mutable partagé (z-stack, sync) --- via getters/setters. \\
 \bottomrule
 \end{tabularx}
@@ -426,12 +428,39 @@ deepzoom :
 \end{lstlisting}
 
 \subsection{Internationalisation}
+\label{sec:i18n}
 
-Mettez la \emph{clé} i18n dans \code{i18nTitle}/\code{i18nAria} et ajoutez sa
-traduction dans \filepath{lang/en.json}, \filepath{lang/fr.json},
-\filepath{lang/es.json}. La plateforme retraduit les boutons générés
-automatiquement. Si la clé n'existe pas, la clé brute (ou \code{name}) est
-affichée.
+Un plugin est \textbf{auto-contenu} : ses textes vivent dans son propre dossier
+\filepath{lang/}, pas dans les fichiers plateforme.
+
+\begin{lstlisting}
+js/modules/tools/say-hello/
+  |-- plugin.json     # "i18nTitle": "title", "i18nLanguages": ["en","fr","es"]
+  |-- index.js
+  |-- lang/
+       |-- en.json    # { "title": "Say hello", "greeting": "Hello {name}!" }
+       |-- fr.json    # { "title": "Dire bonjour", "greeting": "Bonjour {name} !" }
+       |-- es.json    # { "title": "Decir hola", "greeting": "¡Hola {name}!" }
+\end{lstlisting}
+
+\noindent\textbf{Dans le code}, utilisez la façade scopée : \code{ctx.i18n.t('greeting', \{ name \})}
+résout \code{plugins.<id>.greeting}. Pour les boutons générés, pointez
+\code{i18nTitle}/\code{i18nAria} sur une clé locale (ex. \code{"title"}).
+
+\noindent\textbf{Règle de repli} (automatique) :
+\begin{itemize}[leftmargin=1.4em]
+  \item Une langue \emph{présente côté plateforme} mais absente de votre plugin
+        retombe sur votre \filepath{en.json} (le reste de l'UI reste dans la
+        langue active). \filepath{en.json} est donc \textbf{obligatoire}.
+  \item Une langue que votre plugin embarque mais que la plateforme n'a pas
+        n'est \emph{jamais} proposée tant qu'un \filepath{lang/<code>.json}
+        plateforme n'existe pas. Le menu de langues ne liste que les locales de
+        la plateforme.
+\end{itemize}
+
+\noindent Listez les locales embarquées dans \code{i18nLanguages} (évite les 404 ;
+le \filepath{dev\_server.py} le synchronise en scannant le dossier). Aucun fichier
+plateforme à éditer : déposez le dossier, c'est tout.
 
 %====================================================================
 \section{Type 2 --- Contrôles par canal}

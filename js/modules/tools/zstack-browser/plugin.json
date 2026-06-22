@@ -10,6 +10,10 @@
   "order": 40,
   "description": "Browse the Z-stack slice by slice with synchronized multi-panel support.",
   "buttonId": "btn-toggle-zstack",
-  "i18nTitle": "tips.zstack",
-  "i18nAria": "tips.zstack"
+  "i18nTitle": "title",
+  "i18nLanguages": [
+    "en",
+    "fr",
+    "es"
+  ]
 }

@@ -20,9 +20,8 @@ document.addEventListener('DOMContentLoaded', async () => {
   Theme.onChange(updateThemeIcon);
   const brand = document.querySelector('.navbar-brand-icon');
   if (brand) brand.textContent = 'IR';
-  const langItems = document.querySelectorAll('#lang-dropdown .dropdown-item');
-  if (langItems[0]) langItems[0].innerHTML = '<span>EN</span> English';
-  if (langItems[1]) langItems[1].innerHTML = '<span>FR</span> Francais';
+  // Build the language switcher from the platform's discovered locales.
+  Utils.populateLanguageMenu(switchLanguage);
 
   // Initialize hero animation
   initHeroAnimation();
@@ -66,6 +65,7 @@ function toggleDropdown(id) {
 async function switchLanguage(lang) {
   await I18n.setLanguage(lang);
   Utils.closeDropdowns(); // DEAD-035: shared dropdown-close step
+  Utils.populateLanguageMenu(switchLanguage); // refresh active-item highlight
   // Page-specific: re-render the featured grid in the new language
   populateFeatured();
 }

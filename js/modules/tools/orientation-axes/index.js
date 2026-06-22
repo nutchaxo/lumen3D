@@ -67,12 +67,16 @@ PluginRegistry.implement('orientation-axes', {
     this._group.add(sphere);
 
     // Text Sprites
-    this._addTextSprite("A", new THREE.Vector3(0, arrowLen + 0.1, 0), 0x00ff00);
-    this._addTextSprite("P", new THREE.Vector3(0, -arrowLen - 0.1, 0), 0x00ff00);
-    this._addTextSprite("V", new THREE.Vector3(0, 0, arrowLen + 0.1), 0x0088ff);
-    this._addTextSprite("D", new THREE.Vector3(0, 0, -arrowLen - 0.1), 0x0088ff);
-    this._addTextSprite("R", new THREE.Vector3(arrowLen + 0.1, 0, 0), 0xff0000);
-    this._addTextSprite("L", new THREE.Vector3(-arrowLen - 0.1, 0, 0), 0xff0000);
+    // Anatomical axis glyphs default to the standard A/P/V/D/R/L notation in
+    // every locale, but are sourced from the plugin lang folder so they can be
+    // localized per language if ever needed.
+    const t = (k) => this._ctx.i18n.t(k);
+    this._addTextSprite(t('axisA'), new THREE.Vector3(0, arrowLen + 0.1, 0), 0x00ff00);
+    this._addTextSprite(t('axisP'), new THREE.Vector3(0, -arrowLen - 0.1, 0), 0x00ff00);
+    this._addTextSprite(t('axisV'), new THREE.Vector3(0, 0, arrowLen + 0.1), 0x0088ff);
+    this._addTextSprite(t('axisD'), new THREE.Vector3(0, 0, -arrowLen - 0.1), 0x0088ff);
+    this._addTextSprite(t('axisR'), new THREE.Vector3(arrowLen + 0.1, 0, 0), 0xff0000);
+    this._addTextSprite(t('axisL'), new THREE.Vector3(-arrowLen - 0.1, 0, 0), 0xff0000);
   },
 
   _addTextSprite(text, position, colorHex) {

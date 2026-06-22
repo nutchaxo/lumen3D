@@ -39,7 +39,7 @@ const ExportManager = (() => {
     }
     const canvas = _ctx.getCanvas?.();
     if (!canvas) {
-      _toast('Figure export is not available on this page');
+      _toast(_t('toast.figureUnavailable', 'Figure export is not available on this page'));
       return;
     }
     const mime = options.mime || 'image/png';
@@ -53,7 +53,7 @@ const ExportManager = (() => {
   async function exportGraph(format = 'png') {
     const graph = _ctx.getGraph?.();
     if (!graph || !window.Plotly) {
-      _toast('Graph export is not available on this page');
+      _toast(_t('toast.graphUnavailable', 'Graph export is not available on this page'));
       return;
     }
     if (format === 'csv') {
@@ -86,18 +86,18 @@ const ExportManager = (() => {
 
   function saveWorkspace(scope = _ctx.scope || 'viewer') {
     const payload = WorkspaceState.save(_ctx.dataset?.id, scope, _ctx.getWorkspaceState?.() || {});
-    _toast('Workspace saved');
+    _toast(_t('toast.workspaceSaved', 'Workspace saved'));
     return payload;
   }
 
   function restoreWorkspace(scope = _ctx.scope || 'viewer') {
     const payload = WorkspaceState.load(_ctx.dataset?.id, scope);
     if (!payload) {
-      _toast('No saved workspace found');
+      _toast(_t('toast.noWorkspace', 'No saved workspace found'));
       return null;
     }
     _ctx.applyWorkspaceState?.(payload.state || {});
-    _toast('Workspace restored');
+    _toast(_t('toast.workspaceRestored', 'Workspace restored'));
     return payload;
   }
 
@@ -109,10 +109,10 @@ const ExportManager = (() => {
       <div class="export-modal" role="dialog" aria-modal="true" aria-labelledby="download-title">
         <div class="export-modal-header">
           <div>
-            <h2 id="download-title">Download Center</h2>
-            <p id="download-subtitle">Raw sources, web-ready assets, figures, analysis exports, and reproducible workspaces.</p>
+            <h2 id="download-title">${_t('download.title', 'Download Center')}</h2>
+            <p id="download-subtitle">${_t('download.subtitle', 'Raw sources, web-ready assets, figures, analysis exports, and reproducible workspaces.')}</p>
           </div>
-          <button class="btn btn-icon btn-ghost" data-export-close aria-label="Close">
+          <button class="btn btn-icon btn-ghost" data-export-close aria-label="${_t('app.close', 'Close')}">
             <i data-lucide="x"></i>
           </button>
         </div>
@@ -146,11 +146,11 @@ const ExportManager = (() => {
     const dataset = _ctx.dataset || null;
     const groups = DownloadManifest.byCategory(dataset);
     const categoryNames = {
-      raw: 'Raw source files',
-      web: 'Web-ready data',
-      generated: 'Generated analysis',
-      figure: 'Figures & media',
-      workspace: 'Workspace'
+      raw: _t('download.catRaw', 'Raw source files'),
+      web: _t('download.catWeb', 'Web-ready data'),
+      generated: _t('download.catGenerated', 'Generated analysis'),
+      figure: _t('download.catFigure', 'Figures & media'),
+      workspace: _t('download.catWorkspace', 'Workspace')
     };
     const hasCanvas = Boolean(_ctx.getCanvas?.());
     const hasGraph = Boolean(_ctx.getGraph?.() && window.Plotly);
@@ -166,15 +166,15 @@ const ExportManager = (() => {
         </section>
       ` : ''}
       <section class="export-quick-actions">
-        ${_quickAction('canvas-png', 'image', 'Figure PNG', hasCanvas, 'No visible canvas here')}
-        ${_quickAction('canvas-webp', 'image-down', 'Figure WebP', hasCanvas, 'No visible canvas here')}
-        ${_quickAction('graph-png', 'bar-chart-2', 'Graph PNG', hasGraph, 'No visible graph here')}
-        ${_quickAction('graph-svg', 'line-chart', 'Graph SVG', hasGraph, 'No visible graph here')}
-        ${_quickAction('graph-csv', 'table', 'Graph CSV', hasGraph, 'No visible graph here')}
-        <button class="btn btn-outline btn-sm" data-export-action="workspace-json"><i data-lucide="braces"></i> Workspace JSON</button>
-        <button class="btn btn-outline btn-sm" data-export-action="save-workspace"><i data-lucide="save"></i> Save state</button>
-        <button class="btn btn-outline btn-sm" data-export-action="restore-workspace"><i data-lucide="folder-open"></i> Restore state</button>
-        ${_customExports.map(item => _quickAction(item.action, item.icon || 'flask-conical', item.label, item.enabled !== false, item.disabledTitle || 'Export unavailable')).join('')}
+        ${_quickAction('canvas-png', 'image', _t('download.figurePng','Figure PNG'), hasCanvas, _t('download.noCanvas','No visible canvas here'))}
+        ${_quickAction('canvas-webp', 'image-down', _t('download.figureWebp','Figure WebP'), hasCanvas, _t('download.noCanvas','No visible canvas here'))}
+        ${_quickAction('graph-png', 'bar-chart-2', _t('download.graphPng','Graph PNG'), hasGraph, _t('download.noGraph','No visible graph here'))}
+        ${_quickAction('graph-svg', 'line-chart', _t('download.graphSvg','Graph SVG'), hasGraph, _t('download.noGraph','No visible graph here'))}
+        ${_quickAction('graph-csv', 'table', _t('download.graphCsv','Graph CSV'), hasGraph, _t('download.noGraph','No visible graph here'))}
+        <button class="btn btn-outline btn-sm" data-export-action="workspace-json"><i data-lucide="braces"></i> ${_t('download.workspaceJson', 'Workspace JSON')}</button>
+        <button class="btn btn-outline btn-sm" data-export-action="save-workspace"><i data-lucide="save"></i> ${_t('download.saveState', 'Save state')}</button>
+        <button class="btn btn-outline btn-sm" data-export-action="restore-workspace"><i data-lucide="folder-open"></i> ${_t('download.restoreState', 'Restore state')}</button>
+        ${_customExports.map(item => _quickAction(item.action, item.icon || 'flask-conical', item.label, item.enabled !== false, item.disabledTitle || _t('download.exportUnavailable', 'Export unavailable'))).join('')}
       </section>
       ${Object.keys(categoryNames).map(key => _categoryHtml(categoryNames[key], groups[key] || [])).join('')}
     `;
@@ -196,7 +196,7 @@ const ExportManager = (() => {
       return `
         <section class="download-category">
           <h3>${title}</h3>
-          <div class="download-empty">No file currently available for this category.</div>
+          <div class="download-empty">${_t('download.noFile', 'No file currently available for this category.')}</div>
         </section>
       `;
     }
@@ -211,9 +211,9 @@ const ExportManager = (() => {
   }
 
   function _itemHtml(item) {
-    const size = item.sizeBytes ? Utils.formatFileSize(item.sizeBytes) : (item.count ? `${item.count} files` : '');
-    const warning = item.large ? '<span class="download-warning">large file</span>' : '';
-    const primary = item.primary ? '<span class="download-warning">recommended</span>' : '';
+    const size = item.sizeBytes ? Utils.formatFileSize(item.sizeBytes) : (item.count ? _t('download.files', `${item.count} files`, { count: item.count }) : '');
+    const warning = item.large ? `<span class="download-warning">${_t('download.largeFile', 'large file')}</span>` : '';
+    const primary = item.primary ? `<span class="download-warning">${_t('download.recommended', 'recommended')}</span>` : '';
     const kind = item.kind || (item.directory ? 'directory' : 'file');
     const attrs = item.directory
       ? 'target="_blank" rel="noopener"'
@@ -303,6 +303,13 @@ const ExportManager = (() => {
       dataset.date || null
     ].filter(Boolean);
     return `${bits.join(' | ')}${dataset.description ? ` | ${dataset.description}` : ''}`;
+  }
+
+  // i18n helper: resolve a key, falling back to the literal English default
+  // when I18n is absent or the key is unknown (keeps toasts robust on any page).
+  function _t(key, def) {
+    const v = (typeof I18n !== 'undefined' && I18n.t) ? I18n.t(key) : key;
+    return v === key ? (def || key) : v;
   }
 
   function _toast(text) {

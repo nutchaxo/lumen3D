@@ -10,6 +10,10 @@
   "order": 10,
   "description": "Toggle fullscreen presentation mode, hiding sidebar and header.",
   "buttonId": "btn-presentation",
-  "i18nTitle": "tips.presentation",
-  "i18nAria": "tips.presentation"
+  "i18nTitle": "title",
+  "i18nLanguages": [
+    "en",
+    "fr",
+    "es"
+  ]
 }

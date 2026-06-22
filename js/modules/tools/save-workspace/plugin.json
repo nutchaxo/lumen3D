@@ -10,6 +10,10 @@
   "order": 20,
   "description": "Persist the current viewer state to browser local storage.",
   "buttonId": "btn-save-workspace",
-  "i18nTitle": "tips.saveWksp",
-  "i18nAria": "tips.saveWksp"
+  "i18nTitle": "title",
+  "i18nLanguages": [
+    "en",
+    "fr",
+    "es"
+  ]
 }

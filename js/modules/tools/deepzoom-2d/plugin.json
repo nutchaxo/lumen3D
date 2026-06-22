@@ -10,9 +10,14 @@
   "order": 20,
   "description": "Switch to high-resolution 2D tile viewer mode for ground truth inspection.",
   "buttonId": "btn-toggle-deepzoom",
-  "i18nTitle": "tips.deepZoom",
-  "i18nAria": "tips.toggle2d",
+  "i18nTitle": "title",
+  "i18nAria": "aria",
   "requires": [
     "deepzoom2d"
+  ],
+  "i18nLanguages": [
+    "en",
+    "fr",
+    "es"
   ]
 }

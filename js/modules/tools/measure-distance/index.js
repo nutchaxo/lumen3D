@@ -22,6 +22,13 @@ PluginRegistry.implement('measure-distance', {
   ],
   COLORS: ['#00FFFF','#FFD700','#FF1493','#7FFF00','#FF4500','#9400D3','#00FF7F','#FF69B4'],
 
+  // Plugin-scoped i18n: resolves plugins.measure-distance.<key> with the
+  // automatic English fallback when the active locale is not shipped here.
+  _t(key, params) { return this._ctx.i18n.t(key, params); },
+
+  // Re-render dynamic status/list text when the language changes.
+  onLanguageChange() { this._render(); },
+
   init(ctx) {
     this._ctx = ctx;
     // Load persisted measurements
@@ -62,11 +69,11 @@ PluginRegistry.implement('measure-distance', {
   _handlePoint(point) {
     const calibration = this._ctx.viewer.getPhysicalCalibration?.();
     if (calibration?.calibrationStatus === 'metadata-missing') {
-      this._setStatus('Physical calibration is missing for this dataset. Distance measurement needs calibrated voxel metadata.');
+      this._setStatus(this._t('calibMissing'));
       return;
     }
     if (!point?.physicalUm) {
-      this._setStatus('No calibrated volume point was detected.');
+      this._setStatus(this._t('noPoint'));
       return;
     }
     if (this._draft.length >= 2) this._draft = [];
@@ -81,7 +88,7 @@ PluginRegistry.implement('measure-distance', {
     const color = this.COLORS[this._measurements.length % this.COLORS.length];
     this._ctx.measurements.add('viewer', {
       scope: 'viewer',
-      label: `Measure ${this._measurements.length + 1}`,
+      label: this._t('measureN', { n: this._measurements.length + 1 }),
       unit: 'um',
       distance: this._dist3d(aPoint.physicalUm, bPoint.physicalUm),
       points: this._draft.map(p => ({ normalized: p.normalized, physicalUm: p.physicalUm })),
@@ -116,11 +123,11 @@ PluginRegistry.implement('measure-distance', {
               style="padding:0;width:24px;height:24px;border:none;flex-shrink:0;">
               <span style="background:${esc(item.color)};width:16px;height:16px;display:inline-block;border-radius:3px;border:1px solid rgba(255,255,255,0.2);vertical-align:middle;"></span>
             </button>
-            <input type="text" value="${esc(item.label || '')}" placeholder="Label"
+            <input type="text" value="${esc(item.label || '')}" placeholder="${esc(this._t('labelPlaceholder'))}"
               class="form-input text-xs" data-volume-measure-action="rename" data-measurement-id="${esc(item.id)}"
               style="flex:1;min-width:0;width:50px;padding:2px 4px;background:rgba(0,0,0,0.2);border:1px solid var(--border-light);color:var(--text-primary);border-radius:4px;">
             <span style="white-space:nowrap;font-size:11px;color:var(--text-muted);">
-              ${item.visible === false ? 'Hidden' : `${this._fmtUm(item.distance)} µm`}
+              ${item.visible === false ? esc(this._t('hidden')) : `${this._fmtUm(item.distance)} µm`}
             </span>
             <span class="related-actions" style="display:flex;gap:2px;">
               <button class="btn btn-ghost btn-sm" type="button"
@@ -134,20 +141,20 @@ PluginRegistry.implement('measure-distance', {
             </span>
           </div>
         `).join('')
-        : 'No saved measurement yet.';
+        : esc(this._t('noMeasure'));
       this._ctx.ui.createIcons({ nodes: [list] });
     }
 
     // Status / live result area
     if (!this._draft.length) {
-      this._setStatus('Click two points on the embryo surface.');
+      this._setStatus(esc(this._t('clickTwo')));
       return;
     }
     if (this._draft.length === 1) {
       const p = this._draft[0].physicalUm;
       this._setStatus(`
-        <div class="metric-tile"><small>Point A</small><strong>${this._fmtUm(p.x)}, ${this._fmtUm(p.y)}, ${this._fmtUm(p.z)} um</strong></div>
-        <div class="text-xs text-muted">Click a second point to measure distance.</div>
+        <div class="metric-tile"><small>${esc(this._t('pointA'))}</small><strong>${this._fmtUm(p.x)}, ${this._fmtUm(p.y)}, ${this._fmtUm(p.z)} um</strong></div>
+        <div class="text-xs text-muted">${esc(this._t('clickSecond'))}</div>
       `);
       return;
     }
@@ -155,10 +162,10 @@ PluginRegistry.implement('measure-distance', {
     const dist   = this._dist3d(a, b);
     this._setStatus(`
       <div class="metric-grid">
-        <div class="metric-tile"><small>Distance</small><strong>${this._fmtUm(dist)} um</strong></div>
-        <div class="metric-tile"><small>Delta Z</small><strong>${this._fmtUm(Math.abs(a.z - b.z))} um</strong></div>
+        <div class="metric-tile"><small>${esc(this._t('distance'))}</small><strong>${this._fmtUm(dist)} um</strong></div>
+        <div class="metric-tile"><small>${esc(this._t('deltaZ'))}</small><strong>${this._fmtUm(Math.abs(a.z - b.z))} um</strong></div>
       </div>
-      <div class="text-xs text-muted">Measured between two picked surface points in calibrated physical coordinates.</div>
+      <div class="text-xs text-muted">${esc(this._t('measuredBetween'))}</div>
     `);
   },
 

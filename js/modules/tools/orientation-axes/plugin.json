@@ -10,6 +10,10 @@
   "order": 25,
   "description": "Affiche le triple axe d'orientation (A/P, D/V, L/R) de l'embryon.",
   "buttonId": "btn-orientation-axes",
-  "i18nTitle": "tips.orientationAxes",
-  "i18nAria": "tips.orientationAxes"
+  "i18nTitle": "title",
+  "i18nLanguages": [
+    "en",
+    "fr",
+    "es"
+  ]
 }

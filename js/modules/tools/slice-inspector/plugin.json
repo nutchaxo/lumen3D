@@ -10,7 +10,12 @@
   "order": 10,
   "description": "Interactive oblique cross-section inspector with real-time GPU slice rendering.",
   "tool": "slice",
-  "i18nTitle": "tips.sliceVol",
-  "i18nAria": "tips.sliceTool",
-  "shortcut": "c"
+  "i18nTitle": "title",
+  "i18nAria": "aria",
+  "shortcut": "c",
+  "i18nLanguages": [
+    "en",
+    "fr",
+    "es"
+  ]
 }

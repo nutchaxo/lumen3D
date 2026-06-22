@@ -10,6 +10,10 @@
   "order": 10,
   "description": "Open the export modal with all download options for the current dataset.",
   "buttonId": "btn-export",
-  "i18nTitle": "tips.download",
-  "i18nAria": "tips.download"
+  "i18nTitle": "title",
+  "i18nLanguages": [
+    "en",
+    "fr",
+    "es"
+  ]
 }

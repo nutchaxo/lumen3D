@@ -82,7 +82,7 @@ const StudioEditor = (() => {
 
   function open(sliceResult) {
     if (!sliceResult?.canvas) {
-      _toast('Render a slice before opening Studio.');
+      _toast(_t('toast.renderSliceFirst', 'Render a slice before opening Studio.'));
       return;
     }
     const preparedSlice = _prepareSliceForStudio(sliceResult);
@@ -1905,7 +1905,7 @@ const StudioEditor = (() => {
 
   async function _exportPng() {
     if (!_doc || !_sliceResult) return;
-    _toast('Rendering native export...');
+    _toast(_t('toast.renderingNative', 'Rendering native export...'));
     let source = _sliceResult;
 
     // ── Compare mode (layoutMaps): recompose all panels at full resolution ──
@@ -2018,7 +2018,7 @@ const StudioEditor = (() => {
         _renderAll();
       } catch (err) {
         console.warn('[StudioEditor] Invalid JSON:', err);
-        _toast('Invalid Studio JSON.');
+        _toast(_t('toast.invalidStudioJson', 'Invalid Studio JSON.'));
       } finally {
         event.target.value = '';
       }
@@ -2157,6 +2157,12 @@ const StudioEditor = (() => {
   function _safeName(value) {
     return String(value || 'export').replace(/[^a-z0-9._-]+/gi, '_').replace(/^_+|_+$/g, '').slice(0, 140);
   }
+
+  // i18n helper: resolve key (with optional {params}), else the literal default.
+  const _t = (k, def, params) => {
+    const v = (window.I18n && I18n.t) ? I18n.t(k, params) : k;
+    return v === k ? def : v;
+  };
 
   function _toast(text) {
     ExportManager?.toast?.(text);

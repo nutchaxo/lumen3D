@@ -10,6 +10,11 @@
   "order": 30,
   "description": "Toggle volume cube visibility while keeping slice projections visible.",
   "buttonId": "btn-toggle-volume",
-  "i18nTitle": "tips.hideVol",
-  "i18nAria": "tips.toggleVol"
+  "i18nTitle": "title",
+  "i18nAria": "aria",
+  "i18nLanguages": [
+    "en",
+    "fr",
+    "es"
+  ]
 }

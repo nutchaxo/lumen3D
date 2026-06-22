@@ -1,0 +1,15 @@
+{
+  "title": "Mesurer la distance",
+  "calibMissing": "La calibration physique est absente pour ce dataset. La mesure de distance nécessite des métadonnées de voxel calibrées.",
+  "noPoint": "Aucun point de volume calibré n'a été détecté.",
+  "measureN": "Mesure {n}",
+  "labelPlaceholder": "Étiquette",
+  "hidden": "Masqué",
+  "noMeasure": "Aucune mesure enregistrée.",
+  "clickTwo": "Cliquez sur deux points de la surface de l'embryon.",
+  "pointA": "Point A",
+  "clickSecond": "Cliquez sur un second point pour mesurer la distance.",
+  "distance": "Distance",
+  "deltaZ": "Delta Z",
+  "measuredBetween": "Mesuré entre deux points de surface sélectionnés en coordonnées physiques calibrées."
+}

@@ -29,6 +29,8 @@ const ctx = {
   _state: { zstackActive: false, zstackCurrentSlice: 0, suppressZstackSync: false },
   iframe: { isIframe: () => true, postMessage: (m) => broadcasts.push(m), panelIndex: () => 0 },
   viewer: { setClipRange_z() {} },
+  // Per-plugin i18n façade is part of the ctx contract (PluginRegistry.initAll).
+  i18n: { t: (k, p) => k, getLanguage: () => 'en', onLanguageChange: () => {} },
 };
 plugin._ctx = ctx;
 plugin._getDims = () => ({ z: 100, vz: 1 });

@@ -8,7 +8,7 @@ PluginRegistry.implement('gaussian-filter', {
   getChannelUI(channel) {
     return `
       <div class="channel-denoise-row" style="display: flex; align-items: center; gap: 8px; padding: 4px 0 2px 0;">
-        <label for="ch-denoise-${channel.idx}" class="text-xs text-muted" style="white-space: nowrap;">Filtre gaussien \u03C3</label>
+        <label for="ch-denoise-${channel.idx}" class="text-xs text-muted" style="white-space: nowrap;" data-i18n="plugins.gaussian-filter.label">${this._ctx.i18n.t('label')}</label>
         <input type="range" id="ch-denoise-${channel.idx}" min="0" max="5.0" step="0.1" value="${channel.denoise_sigma}" style="flex: 1; accent-color: ${channel.color};">
         <span id="ch-denoise-val-${channel.idx}" class="text-xs text-muted" style="min-width: 28px; text-align: right;">${Number(channel.denoise_sigma).toFixed(1)}</span>
       </div>

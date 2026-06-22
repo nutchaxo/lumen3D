@@ -123,6 +123,15 @@ const PluginRegistry = (() => {
           state: 'registered'
         });
 
+        // Pre-load this plugin's own translation dictionaries into the i18n
+        // tree (plugins.<id>.*) BEFORE any UI is built, so toolbar labels and
+        // runtime strings resolve on first paint. `i18nLanguages` (plugin.json)
+        // lists the shipped locales; English is always loaded as the per-plugin
+        // fallback (rule: a platform locale the plugin lacks → English).
+        if (typeof I18n !== 'undefined' && I18n.loadPluginLang) {
+          await I18n.loadPluginLang(meta.id, meta._path, meta.i18nLanguages);
+        }
+
         // Inject <script> for index.js
         await _loadScript(`${basePath}/${modPath}/index.js`);
 
@@ -186,14 +195,44 @@ const PluginRegistry = (() => {
       }
       try {
         if (typeof entry.impl.init === 'function') {
-          entry.instance = await entry.impl.init(_ctx);
+          // Each plugin gets its own ctx whose `i18n` is bound to the plugin
+          // id (ctx.i18n.t('key') → plugins.<id>.key). The shared ctx is the
+          // prototype, so every other façade (viewer/dataset/ui/…) is inherited.
+          const pctx = Object.create(ctx);
+          pctx.i18n = (typeof I18n !== 'undefined' && I18n.forPlugin)
+            ? I18n.forPlugin(id)
+            : { t: (k) => k, getLanguage: () => 'en', onLanguageChange: () => {} };
+          entry.ctx = pctx;
+          entry.instance = await entry.impl.init(pctx);
         }
         entry.state = 'initialized';
       } catch (err) {
         console.error(`[PluginRegistry] Failed to init module "${id}":`, err);
       }
     }
+    _bindLanguageChange();
     _emit('modules-initialized');
+  }
+
+  // Re-render plugin-owned dynamic content on a language switch. Static
+  // toolbar labels carry data-i18n-title and are handled by I18n itself;
+  // this drives the runtime strings a plugin paints into its panels.
+  let _langBound = false;
+  function _bindLanguageChange() {
+    if (_langBound || typeof I18n === 'undefined' || !I18n.onLanguageChange) return;
+    _langBound = true;
+    I18n.onLanguageChange(() => {
+      for (const [id, entry] of _modules) {
+        if (entry.state === 'disposed' || !entry.impl) continue;
+        if (typeof entry.impl.onLanguageChange === 'function') {
+          try {
+            entry.impl.onLanguageChange.call(entry.instance || entry.impl);
+          } catch (err) {
+            console.warn(`[PluginRegistry] onLanguageChange failed for "${id}":`, err);
+          }
+        }
+      }
+    });
   }
 
   /**
@@ -345,8 +384,22 @@ const PluginRegistry = (() => {
       touched.push(el);
     }
 
-    const t = (key, fallback) =>
-      (key && typeof I18n !== 'undefined' && I18n.t) ? I18n.t(key) : (fallback || key || '');
+    // Resolve a toolbar label preferring the plugin's OWN dictionary
+    // (plugins.<id>.<key>) and falling back to a platform key (legacy
+    // plugin.json values like 'tips.measureDist'), then to a literal
+    // fallback. Returns the resolved text plus the key to stamp into
+    // data-i18n-* so the label re-translates on a language switch.
+    const resolveLabel = (id, key, fallback) => {
+      if (!key || typeof I18n === 'undefined' || !I18n.t) {
+        return { text: fallback || key || '', attrKey: null };
+      }
+      const nsKey = `plugins.${id}.${key}`;
+      const ns = I18n.t(nsKey);
+      if (ns !== nsKey) return { text: ns, attrKey: nsKey };
+      const plat = I18n.t(key);
+      if (plat !== key) return { text: plat, attrKey: key };
+      return { text: fallback || key, attrKey: key };
+    };
 
     for (const meta of listByPlacement('tools')) {
       const container = containerFor[meta.group];
@@ -369,12 +422,12 @@ const PluginRegistry = (() => {
         btn.dataset.pluginId = meta.id;
       }
 
-      const titleText = t(meta.i18nTitle, meta.name || meta.id);
-      const ariaText = t(meta.i18nAria || meta.i18nTitle, titleText);
-      btn.title = titleText;
-      btn.setAttribute('aria-label', ariaText);
-      if (meta.i18nTitle) btn.setAttribute('data-i18n-title', meta.i18nTitle);
-      if (meta.i18nAria || meta.i18nTitle) btn.setAttribute('data-i18n-aria', meta.i18nAria || meta.i18nTitle);
+      const titleR = resolveLabel(meta.id, meta.i18nTitle, meta.name || meta.id);
+      const ariaR = resolveLabel(meta.id, meta.i18nAria || meta.i18nTitle, titleR.text);
+      btn.title = titleR.text;
+      btn.setAttribute('aria-label', ariaR.text);
+      if (titleR.attrKey) btn.setAttribute('data-i18n-title', titleR.attrKey);
+      if (ariaR.attrKey) btn.setAttribute('data-i18n-aria', ariaR.attrKey);
 
       const icon = document.createElement('i');
       icon.setAttribute('data-lucide', meta.icon || 'square');

@@ -45,13 +45,10 @@ PluginRegistry.implement('deepzoom-2d', {
   },
 
   _bindControls() {
+    // Toolbar button is generated + wired to activate() by PluginRegistry.
+    // This module manages only the in-mode panel controls and button visibility.
     const btn = document.getElementById('btn-toggle-deepzoom');
-    if (!btn) return;
-    btn.style.display = 'none'; // Hidden until dataset confirms tiles2d
-
-    btn.addEventListener('click', () => {
-      if (this._active) { this._exit(); } else { this._enter(); }
-    });
+    if (btn) btn.style.display = 'none'; // Hidden until dataset confirms tiles2d
 
     document.getElementById('btn-dz-exit')?.addEventListener('click', () => this._exit());
 

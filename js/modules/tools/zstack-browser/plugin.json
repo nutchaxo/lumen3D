@@ -4,9 +4,12 @@
   "version": "1.0.0",
   "creator": "IRIBHM",
   "placement": "tools",
-  "group": "tools",
+  "group": "layouts",
   "subtype": "toggle",
   "icon": "layers-3",
-  "order": 60,
-  "description": "Browse the Z-stack slice by slice with synchronized multi-panel support."
+  "order": 40,
+  "description": "Browse the Z-stack slice by slice with synchronized multi-panel support.",
+  "buttonId": "btn-toggle-zstack",
+  "i18nTitle": "tips.zstack",
+  "i18nAria": "tips.zstack"
 }

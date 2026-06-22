@@ -116,11 +116,9 @@ const ViewerApp = (() => {
       datasetMeta.volumeSources = VolumeSourceManager.normalizeSources(datasetMeta);
     }
 
-    // Show/hide DeepZoom toggle based on tiles2d availability
-    if (_hasTiles2dSource()) {
-      const dzBtn = document.getElementById('btn-toggle-deepzoom');
-      if (dzBtn) dzBtn.style.display = '';
-    }
+    // DeepZoom toggle visibility is now declarative: the deepzoom-2d plugin.json
+    // declares requires:['deepzoom2d'], and PluginRegistry.buildToolbarButtons()
+    // hides the button unless the dataset offers that source.
 
     _zDisplayScale = _loadZDisplayScale();
     _volumeMeasurements = MeasurementStore.list(datasetId, 'viewer');
@@ -152,17 +150,25 @@ const ViewerApp = (() => {
       document.getElementById('timeline-panel').classList.remove('hidden');
     }
 
-    // ── Pre-load Module Manifest ──────────────────────────────
+    // ── Auto-discover & pre-load plugin modules ───────────────
+    // No hardcoded manifest: discover() resolves the folder list (live endpoint
+    // → generated manifest → embedded default). MUST stay fully awaited here,
+    // before any UI build (tools/shaders/channels lists) — the v0.12.45 invariant.
     if (typeof PluginRegistry !== 'undefined') {
-      const moduleManifest = [
-        'tools/toggle-grid', 'tools/toggle-axes', 'tools/orientation-axes', 'tools/toggle-volume',
-        'tools/screenshot', 'tools/presentation-mode', 'tools/save-workspace',
-        'tools/restore-workspace', 'tools/download-center', 'tools/decompose-channels',
-        'tools/zstack-browser', 'tools/deepzoom-2d', 'tools/slice-inspector',
-        'tools/measure-distance', 'shaders/fluorescence', 'shaders/structure-dvr',
-        'channels/histogram', 'channels/gaussian-filter'
-      ];
-      await PluginRegistry.loadModules('js/modules', moduleManifest);
+      const modulePaths = await PluginRegistry.discover('js/modules');
+      await PluginRegistry.loadModules('js/modules', modulePaths);
+      // Generate toolbar buttons from the loaded plugins' metadata. Runs before
+      // ToolManager.init (_bindTooling) so the data-tool chips exist to be wired,
+      // and before bindToolbarButtons() (after initAll) wires the data-plugin-id ones.
+      PluginRegistry.buildToolbarButtons({
+        dataset: datasetMeta,
+        groups: [
+          { group: 'tools',   container: '[data-tool-group="tools"]' },
+          { group: 'export',  container: '[data-tool-group="export"]' },
+          { group: 'visuals', container: '[data-tool-group="visuals"]' },
+          { group: 'layouts', container: '[data-tool-group="layouts"]' }
+        ]
+      });
     }
 
     // Initialize WebGL Viewer
@@ -3060,11 +3066,6 @@ const ViewerApp = (() => {
   // _bindDeepZoomToggle is now handled by the deepzoom-2d module.
   function _bindDeepZoomToggle() {
     // Delegated to js/modules/tools/deepzoom-2d/index.js
-  }
-
-  function _hasTiles2dSource() {
-    if (!datasetMeta?.volumeSources) return false;
-    return datasetMeta.volumeSources.some(s => s.kind === 'deepzoom2d' && s.available !== false);
   }
 
   async function _enterDeepZoom() {

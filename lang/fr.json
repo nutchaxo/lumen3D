@@ -424,6 +424,7 @@
     "text": "Texte",
     "toggle2d": "Basculer en mode 2D",
     "toggleAxes": "Basculer les Axes",
+    "orientationAxes": "Basculer les axes d'orientation",
     "toggleGrid": "Basculer la Grille",
     "toggleGridFull": "Basculer la Grille (Aucune / Normale / Fine)",
     "toggleVol": "Basculer la visibilité du volume",

@@ -425,6 +425,7 @@
     "text": "Texto",
     "toggle2d": "Cambiar al modo 2D",
     "toggleAxes": "Cambiar los Ejes",
+    "orientationAxes": "Cambiar ejes de orientación",
     "toggleGrid": "Cambiar la Cuadrícula",
     "toggleGridFull": "Cambiar la Cuadrícula (Ninguna / Normal / Fina)",
     "toggleVol": "Cambiar la visibilidad del volumen",

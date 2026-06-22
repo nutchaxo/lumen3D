@@ -1,0 +1,639 @@
+\documentclass[11pt,a4paper]{article}
+
+% ---- Encoding & fonts ----
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[french]{babel}
+\usepackage{lmodern}
+
+% ---- Layout ----
+\usepackage[margin=2.4cm]{geometry}
+\usepackage{enumitem}
+\usepackage{xcolor}
+\usepackage{tabularx}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{titlesec}
+\usepackage{parskip}
+
+% ---- Code listings ----
+\usepackage{listings}
+
+\definecolor{codebg}{RGB}{248,248,250}
+\definecolor{codeframe}{RGB}{210,210,216}
+\definecolor{kw}{RGB}{30,80,170}
+\definecolor{cmt}{RGB}{0,128,64}
+\definecolor{str}{RGB}{150,40,140}
+\definecolor{accent}{RGB}{20,90,150}
+
+\lstdefinestyle{code}{
+  basicstyle=\ttfamily\footnotesize,
+  backgroundcolor=\color{codebg},
+  frame=single,
+  rulecolor=\color{codeframe},
+  breaklines=true,
+  breakatwhitespace=false,
+  showstringspaces=false,
+  columns=fullflexible,
+  keepspaces=true,
+  tabsize=2,
+  captionpos=b,
+  commentstyle=\color{cmt}\itshape,
+  keywordstyle=\color{kw}\bfseries,
+  stringstyle=\color{str},
+  morekeywords={const,let,var,function,return,if,else,for,while,this,async,await,typeof,new,true,false,null,undefined,class,import,export,from}
+}
+\lstset{style=code}
+\lstdefinelanguage{json}{
+  basicstyle=\ttfamily\footnotesize,
+  showstringspaces=false,
+  breaklines=true,
+  frame=single,
+  rulecolor=\color{codeframe},
+  backgroundcolor=\color{codebg},
+  stringstyle=\color{str},
+  literate=*{:}{{{\color{kw}:}}}{1}
+}
+
+% ---- Inline code helper (escapes underscores safely) ----
+\newcommand{\code}[1]{\texttt{#1}}
+
+\usepackage[colorlinks=true,linkcolor=accent,urlcolor=accent,citecolor=accent]{hyperref}
+
+\titleformat{\section}{\Large\bfseries\color{accent}}{\thesection}{0.6em}{}
+\titleformat{\subsection}{\large\bfseries}{\thesubsection}{0.6em}{}
+
+\newcommand{\filepath}[1]{\texttt{\small #1}}
+
+\title{\textbf{Lumen3D --- Guide de création de plugins}\\[4pt]
+\large Outils de la toolbar, contrôles par canal, et shaders}
+\author{Plateforme Web IRIBHM / Lumen3D}
+\date{Version plateforme 1.1.0}
+
+\begin{document}
+\maketitle
+\tableofcontents
+\vspace{1em}
+\hrule
+\vspace{1em}
+
+%====================================================================
+\section{Vue d'ensemble}
+
+Depuis la version 1.1.0, le viewer (\filepath{viewer.html}) est \textbf{totalement
+modulaire}. On ajoute une fonctionnalité en déposant un dossier dans
+\filepath{js/modules/}, et on la retire en supprimant ce dossier --- \emph{sans
+toucher au code de la plateforme}. La plateforme détecte les plugins présents au
+chargement et incorpore automatiquement leurs contrôles.
+
+\subsection{Les trois emplacements (« placements »)}
+
+\begin{center}
+\begin{tabularx}{\linewidth}{@{}l l X@{}}
+\toprule
+\textbf{Placement} & \textbf{Dossier} & \textbf{Où apparaît le plugin} \\
+\midrule
+\code{tools} & \filepath{js/modules/tools/} & Boutons de la barre d'outils en haut du viewer \\
+\code{channels} & \filepath{js/modules/channels/} & Contrôles ajoutés sous chaque canal, dans le menu latéral \\
+\code{shaders} & \filepath{js/modules/shaders/} & Entrées du menu déroulant « Render Mode » (mode de rendu 3D) \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+\subsection{Comment la détection fonctionne (résolution hybride)}
+
+\code{PluginRegistry.discover()} résout la liste des plugins selon un ordre de
+repli robuste, de sorte que le viewer démarre toujours :
+
+\begin{enumerate}[leftmargin=2em]
+  \item \textbf{Endpoint live} \code{GET /api/plugins} --- servi par
+        \filepath{dev\_server.py} (et \filepath{api/plugins.php} pour PHP). Scanne
+        \filepath{js/modules/} en direct : déposer/retirer un dossier est pris en
+        compte au rechargement, sans aucune étape manuelle.
+  \item \textbf{Manifeste statique} \filepath{js/modules/manifest.json} --- pour
+        les hôtes purement statiques (\filepath{fast\_server.py},
+        \code{python -m http.server}). Régénéré automatiquement par l'endpoint, ou
+        à la main avec \filepath{tools/gen\_plugins\_manifest.py}.
+  \item \textbf{Liste cœur embarquée} dans \filepath{plugin-registry.js} ---
+        plancher anti-crash si rien d'autre n'est joignable.
+\end{enumerate}
+
+\noindent\textbf{En pratique :} si vous développez avec \filepath{dev\_server.py}
+(recommandé), il n'y a \emph{rien} à faire d'autre que créer le dossier. Voir la
+section~\ref{sec:deploiement} pour les hôtes statiques.
+
+%====================================================================
+\section{Anatomie d'un plugin}
+
+Tout plugin, quel que soit son type, est un dossier contenant exactement deux
+fichiers :
+
+\begin{lstlisting}[language=bash]
+js/modules/<placement>/<mon-plugin>/
+  |-- plugin.json   # metadonnees (id, nom, placement, icone, ...)
+  |-- index.js      # implementation : appelle PluginRegistry.implement(...)
+\end{lstlisting}
+
+\textbf{Règles :}
+\begin{itemize}[leftmargin=1.5em]
+  \item Le nom du dossier doit correspondre au champ \code{id} de
+        \filepath{plugin.json} et respecter \code{[A-Za-z0-9\_][A-Za-z0-9.\_-]*}
+        (pas d'espaces, pas de point initial).
+  \item Le \code{placement} déclaré dans \filepath{plugin.json} doit correspondre
+        au dossier parent (\code{tools}/\code{channels}/\code{shaders}), sinon le
+        plugin est rejeté.
+  \item \filepath{index.js} ne fait \emph{que} appeler
+        \code{PluginRegistry.implement(id, impl)} ; le corps n'est pas exécuté
+        avant que la plateforme n'appelle \code{init(ctx)}.
+\end{itemize}
+
+\subsection{Cycle de vie}
+
+\begin{enumerate}[leftmargin=2em]
+  \item \code{discover()} puis \code{loadModules()} : la plateforme lit
+        \filepath{plugin.json} (métadonnées enregistrées) puis injecte
+        \filepath{index.js} (qui appelle \code{implement}).
+  \item \code{buildToolbarButtons()} : génère les boutons des outils depuis les
+        métadonnées (placement \code{tools} uniquement).
+  \item \code{initAll(ctx)} : appelle \code{init(ctx)} de chaque plugin, en lui
+        passant le \emph{ViewerContext}. La valeur retournée devient
+        \code{this} pour les appels \code{activate()} ultérieurs.
+  \item \code{bindToolbarButtons()} : connecte le clic des boutons générés
+        (\code{data-plugin-id}) à \code{activate()}.
+  \item À l'extinction / changement de dataset : \code{disposeAll()} appelle
+        \code{dispose()} de chaque plugin.
+\end{enumerate}
+
+\textbf{Invariant à respecter :} tout le travail lourd doit rester hors du thread
+principal (workers), et toute texture / géométrie Three.js allouée par un plugin
+doit être libérée dans \code{dispose()}.
+
+%====================================================================
+\section{Référence : \filepath{plugin.json}}
+
+\begin{center}
+\begin{tabularx}{\linewidth}{@{}l l X@{}}
+\toprule
+\textbf{Champ} & \textbf{Placement} & \textbf{Rôle} \\
+\midrule
+\code{id}            & tous & Identifiant unique = nom du dossier. \\
+\code{name}          & tous & Nom lisible (menu déroulant des shaders, repli de tooltip). \\
+\code{placement}     & tous & \code{tools} / \code{channels} / \code{shaders}. \\
+\code{version}       & tous & SemVer du plugin (informatif). \\
+\code{creator}       & tous & Auteur (informatif). \\
+\code{description}   & tous & Description courte (informatif). \\
+\code{order}         & tous & Entier de tri (croissant) dans son groupe / sa liste. \\
+\midrule
+\code{group}         & tools & Cluster de la toolbar : \code{tools}, \code{export}, \code{visuals}, \code{layouts}. \\
+\code{subtype}       & tools & \code{action} / \code{toggle} / \code{tool} (voir §\ref{sec:tools}). \\
+\code{icon}          & tools & Nom d'icône Lucide (ex. \code{camera}, \code{ruler}). \\
+\code{i18nTitle}     & tools & Clé i18n du tooltip (repli sur \code{name}). \\
+\code{i18nAria}      & tools & Clé i18n de l'\code{aria-label} (repli sur \code{i18nTitle}). \\
+\code{buttonId}      & tools & \code{id} HTML du bouton généré (optionnel). \\
+\code{tool}          & tools & (subtype \code{tool}) nom d'outil ToolManager (valeur \code{data-tool}). \\
+\code{shortcut}      & tools & (subtype \code{tool}) raccourci clavier (ex. \code{m}). \\
+\code{requires}      & tools & Tableau de \code{kind} de \code{volumeSources} requis pour afficher le bouton. \\
+\midrule
+\code{renderModeValue} & shaders & Entier passé à \code{VolumeViewer.setRenderMode()} (voir §\ref{sec:shaders}). \\
+\code{default}         & shaders & \code{true} pour le mode sélectionné par défaut. \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+\noindent Tous les champs au-delà des identifiants de base sont optionnels et ont
+un repli : les \filepath{plugin.json} existants restent valides.
+
+%====================================================================
+\section{Le ViewerContext (\code{ctx})}
+
+\code{init(ctx)} reçoit une façade stable vers la plateforme. \textbf{N'accédez
+jamais aux singletons internes directement} (\code{VolumeViewer}, etc.) : passez
+toujours par \code{ctx}, ce qui garde votre plugin découplé.
+
+\begin{center}
+\begin{tabularx}{\linewidth}{@{}l X@{}}
+\toprule
+\textbf{Sous-objet} & \textbf{Méthodes principales} \\
+\midrule
+\code{ctx.dataset}  & \code{getMeta()}, \code{getId()}, \code{getBasePath()} \\
+\code{ctx.viewer}   & \code{getRenderer()}, \code{getMaterial()}, \code{getScene()}, \code{getCamera()},
+                      \code{setRenderMode(n)}, \code{setClipRange(...)}, \code{resetClipping()},
+                      \code{setGridMode(m)}, \code{setAxesVisible(v)}, \code{setVolumeVisible(v)},
+                      \code{setView(v)}, \code{setRotationLocked(v)}, \code{resize()},
+                      \code{setCutPlaneVisible(v)}, \code{setMeasurements(m)},
+                      \code{onMeasurePoint(cb)}, \code{onPlaneSpecChange(cb)},
+                      \code{getPhysicalCalibration()} \\
+\code{ctx.slicer}   & \code{init/setVisible/isVisible/setPlaneSpec/getPlaneSpec/getPreviewCanvas/updateMaterial} \\
+\code{ctx.channels} & \code{getState()}, \code{setState(s, opts)} \\
+\code{ctx.measurements} & \code{list/add/update/remove/clear/setAll(scope, ...)} \\
+\code{ctx.ui}       & \code{toast(msg)}, \code{scheduleResize()}, \code{escapeHtml(s)},
+                      \code{createIcons(opts)}, \code{openStudio()}, \code{perf()} \\
+\code{ctx.iframe}   & \code{isIframe()}, \code{panelIndex()}, \code{postMessage(data)} \\
+\code{ctx.workspace}& \code{getState()}, \code{applyState(s)} \\
+\code{ctx.\_state}  & État mutable partagé (z-stack, sync) --- via getters/setters. \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+%====================================================================
+\section{Type 1 --- Outils de la toolbar}\label{sec:tools}
+
+\subsection{Où le bouton apparaît : le champ \code{group}}
+
+La barre d'outils est divisée en clusters. Le champ \code{group} place votre
+bouton dans l'un d'eux :
+
+\begin{center}
+\begin{tabularx}{\linewidth}{@{}l X@{}}
+\toprule
+\textbf{\code{group}} & \textbf{Cluster (libellé)} \\
+\midrule
+\code{tools}   & « Tools » --- outils interactifs (à côté de l'outil cœur \emph{Navigate}) \\
+\code{export}  & « Export » --- capture, sauvegarde/restauration d'espace de travail \\
+\code{visuals} & « Visuals » --- bascules d'affichage (grille, axes, volume\dots) \\
+\code{layouts} & « Layouts » --- modes/vues (présentation, decompose, z-stack\dots) \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+À l'intérieur d'un cluster, l'ordre suit \code{order} (croissant). Un \code{group}
+inconnu n'a pas de cluster : le bouton est ignoré (avec un avertissement console).
+
+\subsection{Le comportement du bouton : le champ \code{subtype}}
+
+\begin{itemize}[leftmargin=1.5em]
+  \item \code{action} --- bouton « one-shot » (ex. capture d'écran). \code{activate()}
+        exécute l'action.
+  \item \code{toggle} --- bouton on/off. \code{activate()} renvoie
+        \code{\{ active: bool \}} ; la plateforme bascule automatiquement le style
+        \code{btn-solid}/\code{btn-ghost} et, optionnellement, l'icône
+        (\code{\{ active, icon \}}).
+  \item \code{tool} --- outil \emph{exclusif} géré par \code{ToolManager} (comme
+        \emph{Navigate}). Génère un chip \code{data-tool} ; déclarez \code{tool}
+        (nom de l'outil) et éventuellement \code{shortcut}.
+\end{itemize}
+
+\subsection{Exemple A --- une action simple}
+
+\filepath{js/modules/tools/say-hello/plugin.json}
+\begin{lstlisting}[language=json]
+{
+  "id": "say-hello",
+  "name": "Say Hello",
+  "placement": "tools",
+  "group": "visuals",
+  "subtype": "action",
+  "icon": "sparkles",
+  "order": 99,
+  "i18nTitle": "Say hello"
+}
+\end{lstlisting}
+
+\filepath{js/modules/tools/say-hello/index.js}
+\begin{lstlisting}[language=Java]
+/* Say Hello -- a minimal one-shot tool */
+PluginRegistry.implement('say-hello', {
+  init(ctx) { this._ctx = ctx; return this; },
+
+  activate() {
+    const name = this._ctx.dataset.getMeta()?.name || 'dataset';
+    this._ctx.ui.toast(`Hello from ${name}!`);
+  },
+
+  dispose() {}
+});
+\end{lstlisting}
+
+C'est tout : déposer ce dossier fait apparaître un bouton « étincelles » dans le
+cluster \emph{Visuals}. Le supprimer le retire.
+
+\subsection{Exemple B --- une bascule avec menu latéral auto-créé}
+
+C'est le cas le plus demandé : un bouton qui ouvre/ferme un panneau dans la barre
+latérale. \textbf{Pour rester totalement autonome, le plugin crée lui-même son
+panneau} (au lieu de dépendre de HTML statique). On l'injecte dans la barre
+latérale \code{\#viewer-sidebar} et on bascule sa visibilité.
+
+\filepath{js/modules/tools/notes-panel/plugin.json}
+\begin{lstlisting}[language=json]
+{
+  "id": "notes-panel",
+  "name": "Notes",
+  "placement": "tools",
+  "group": "layouts",
+  "subtype": "toggle",
+  "icon": "notebook-pen",
+  "order": 50,
+  "i18nTitle": "Open notes panel"
+}
+\end{lstlisting}
+
+\filepath{js/modules/tools/notes-panel/index.js}
+\begin{lstlisting}[language=Java]
+/* Notes -- a toggle tool that creates its own sidebar panel */
+PluginRegistry.implement('notes-panel', {
+  _open: false,
+
+  init(ctx) {
+    this._ctx = ctx;
+    // Create the panel once, append it to the viewer sidebar.
+    const sidebar = document.getElementById('viewer-sidebar');
+    const section = document.createElement('div');
+    section.className = 'panel-section';
+    section.id = 'notes-panel-section';
+    section.style.display = 'none';            // hidden until toggled
+    section.innerHTML = `
+      <div class="panel-title"><span>Notes</span></div>
+      <textarea id="notes-area" rows="6" style="width:100%"
+                placeholder="Free notes about this dataset..."></textarea>`;
+    sidebar.appendChild(section);
+    this._section = section;
+    // Persist per dataset via localStorage (key scoped by id).
+    const key = 'notes:' + ctx.dataset.getId();
+    const area = section.querySelector('#notes-area');
+    area.value = localStorage.getItem(key) || '';
+    area.addEventListener('input', () => localStorage.setItem(key, area.value));
+    return this;
+  },
+
+  // Toggle: return { active } so the registry styles the button.
+  activate() {
+    this._open = !this._open;
+    this._section.style.display = this._open ? '' : 'none';
+    return { active: this._open };
+  },
+
+  // Workspace persistence (optional): saved/restored across sessions.
+  getState() { return { open: this._open }; },
+  setState(s) {
+    this._open = !!(s && s.open);
+    if (this._section) this._section.style.display = this._open ? '' : 'none';
+  },
+
+  dispose() { this._section?.remove(); }
+});
+\end{lstlisting}
+
+\noindent\textbf{Pourquoi auto-créer le DOM ?} Les plugins historiques (z-stack,
+slice inspector\dots) s'appuient sur du HTML pré-écrit dans \filepath{viewer.html}
+et s'y attachent par \code{id}. C'est fonctionnel mais \emph{non} drop-in (il
+faudrait éditer \filepath{viewer.html}). Pour un nouveau plugin autonome,
+créez votre DOM dans \code{init()} et libérez-le dans \code{dispose()}.
+
+\subsection{Exemple C --- un outil ToolManager exclusif}
+
+Un \code{subtype: "tool"} devient l'outil actif exclusif (le curseur de la souris
+sur le canevas lui est dédié, comme \emph{Measure}). Déclarez \code{tool} (la
+valeur \code{data-tool}) et un \code{shortcut} clavier facultatif.
+
+\begin{lstlisting}[language=json]
+{
+  "id": "my-picker", "name": "Picker", "placement": "tools",
+  "group": "tools", "subtype": "tool", "tool": "pick",
+  "shortcut": "p", "icon": "crosshair", "order": 30,
+  "i18nTitle": "Pick a point"
+}
+\end{lstlisting}
+
+\begin{lstlisting}[language=Java]
+PluginRegistry.implement('my-picker', {
+  init(ctx) {
+    this._ctx = ctx;
+    // React to 3D picks; behaviour depends on the active ToolManager tool.
+    ctx.viewer.onMeasurePoint(pt => {
+      if (typeof ToolManager !== 'undefined' && ToolManager.current() !== 'pick') return;
+      ctx.ui.toast('Picked: ' + JSON.stringify(pt.normalized));
+    });
+    return this;
+  },
+  dispose() {}
+});
+\end{lstlisting}
+
+Le raccourci \code{p} (déclaré dans \filepath{plugin.json}) active l'outil
+automatiquement : \code{ToolManager} lit les raccourcis des plugins de
+\code{subtype: "tool"} au démarrage.
+
+\subsection{Visibilité conditionnelle (\code{requires})}
+
+Pour n'afficher un bouton que si le dataset offre une source donnée, déclarez
+\code{requires} (liste de \code{kind} de \code{volumeSources}). Exemple du plugin
+deepzoom :
+
+\begin{lstlisting}[language=json]
+{ "id": "deepzoom-2d", "placement": "tools", "group": "layouts",
+  "subtype": "toggle", "requires": ["deepzoom2d"], "...": "..." }
+\end{lstlisting}
+
+\subsection{Internationalisation}
+
+Mettez la \emph{clé} i18n dans \code{i18nTitle}/\code{i18nAria} et ajoutez sa
+traduction dans \filepath{lang/en.json}, \filepath{lang/fr.json},
+\filepath{lang/es.json}. La plateforme retraduit les boutons générés
+automatiquement. Si la clé n'existe pas, la clé brute (ou \code{name}) est
+affichée.
+
+%====================================================================
+\section{Type 2 --- Contrôles par canal}
+
+Un plugin \code{channels} ajoute des contrôles \emph{sous chaque canal} du menu
+latéral (comme l'histogramme ou le filtre gaussien). Le panneau de canaux appelle
+votre plugin pour \emph{chaque} canal : vous fournissez le HTML, puis vous le
+câblez.
+
+\subsection{Contrat}
+
+\begin{center}
+\begin{tabularx}{\linewidth}{@{}l X@{}}
+\toprule
+\textbf{Méthode} & \textbf{Rôle} \\
+\midrule
+\code{init(ctx)} & Initialisation (comme les autres types). \\
+\code{getChannelUI(channel)} & Retourne une \emph{chaîne HTML} insérée dans la
+  ligne du canal. Suffixez vos \code{id} par \code{channel.idx} pour rester unique. \\
+\code{bindChannelUI(idx, channel, container, callbacks)} & Câble les événements.
+  \code{callbacks = \{ getState, onStateChange, getHistograms \}}. \\
+\code{syncUI(idx, channel, container, getHistograms)} & (Re)synchronise l'UI quand
+  l'état du canal change (appelé après chaque modification). \\
+\code{dispose()} & Nettoyage. \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+\noindent\textbf{L'objet \code{channel}} expose notamment :
+\code{idx}, \code{min}, \code{max}, \code{midtone}, \code{gamma}, \code{color},
+\code{enabled}, \code{opacity}, \code{name}. \textbf{Les callbacks :}
+\code{getState(idx)} lit l'état courant, \code{onStateChange(idx, state)}
+applique une modification (et redéclenche le rendu),
+\code{getHistograms()[idx]} donne \code{\{ counts: [...], total \}}.
+
+\subsection{Exemple --- un curseur d'opacité par canal}
+
+\filepath{js/modules/channels/opacity-slider/plugin.json}
+\begin{lstlisting}[language=json]
+{
+  "id": "opacity-slider",
+  "name": "Opacity Slider",
+  "placement": "channels",
+  "subtype": "per-channel",
+  "order": 20
+}
+\end{lstlisting}
+
+\filepath{js/modules/channels/opacity-slider/index.js}
+\begin{lstlisting}[language=Java]
+PluginRegistry.implement('opacity-slider', {
+  init(ctx) { this._ctx = ctx; return this; },
+
+  // 1. HTML injected under each channel (ids suffixed by idx).
+  getChannelUI(channel) {
+    return `
+      <div class="channel-advanced-row">
+        <label class="text-xs text-muted">Opacity
+          <input type="range" id="op-${channel.idx}" min="5" max="100"
+                 value="${Math.round((channel.opacity ?? 1) * 100)}">
+        </label>
+      </div>`;
+  },
+
+  // 2. Wire the control to the channel state.
+  bindChannelUI(idx, channel, container, { getState, onStateChange }) {
+    const slider = container.querySelector(`#op-${idx}`);
+    if (!slider) return;
+    slider.addEventListener('input', () => {
+      const state = getState(idx);
+      state.opacity = Number(slider.value) / 100;
+      onStateChange(idx, state);   // applies + re-renders
+    });
+  },
+
+  // 3. Keep the UI in sync when the state changes elsewhere.
+  syncUI(idx, channel, container) {
+    const slider = container.querySelector(`#op-${idx}`);
+    if (slider) slider.value = Math.round((channel.opacity ?? 1) * 100);
+  },
+
+  dispose() {}
+});
+\end{lstlisting}
+
+Déposer ce dossier ajoute un curseur d'opacité sous chaque canal ; le supprimer le
+retire de tous les canaux.
+
+%====================================================================
+\section{Type 3 --- Shaders (modes de rendu)}\label{sec:shaders}
+
+Un plugin \code{shaders} ajoute une entrée au menu déroulant « Render Mode ».
+\code{activate()} bascule le mode de rendu via
+\code{VolumeViewer.setRenderMode(n)}.
+
+\subsection{Contrat et \filepath{plugin.json}}
+
+\filepath{js/modules/shaders/my-shader/plugin.json}
+\begin{lstlisting}[language=json]
+{
+  "id": "my-shader",
+  "name": "My Shader",
+  "placement": "shaders",
+  "renderModeValue": 1,
+  "default": false,
+  "order": 30
+}
+\end{lstlisting}
+
+\begin{lstlisting}[language=Java]
+PluginRegistry.implement('my-shader', {
+  init(ctx) { this._ctx = ctx; return this; },
+  activate() { this._ctx.viewer.setRenderMode(1); },  // 0 = DVR, 1 = Emission
+  dispose() {}
+});
+\end{lstlisting}
+
+\subsection{Nuance importante : réutiliser vs créer un mode de rendu}
+
+Le \code{renderModeValue} est un \emph{entier} que le shader GLSL du ray-marcher
+sait interpréter. Deux cas :
+
+\begin{itemize}[leftmargin=1.5em]
+  \item \textbf{Réutiliser un mode existant} (\code{0} = Direct Volume Rendering,
+        \code{1} = émission/fluorescence) : \emph{pur drop-in}. Votre plugin
+        propose simplement une autre entrée de menu qui sélectionne un rendu
+        déjà implémenté --- aucune autre modification.
+  \item \textbf{Créer un nouvel algorithme de rendu} : il faut, \emph{en plus} du
+        plugin, ajouter la branche GLSL correspondante dans
+        \filepath{js/viewers/volume-viewer.js} (le \code{switch} sur
+        \code{renderMode} dans le fragment shader). Le plugin reste l'entrée de
+        menu + l'activation ; le moteur doit connaître le nouveau code de rendu.
+        C'est la seule partie qui n'est pas « dossier seul ».
+\end{itemize}
+
+%====================================================================
+\section{Déploiement \& découverte}\label{sec:deploiement}
+
+\begin{itemize}[leftmargin=1.5em]
+  \item \textbf{Développement} (\filepath{dev\_server.py}) : rien à faire. Le
+        dossier est détecté au rechargement, et \filepath{js/modules/manifest.json}
+        est réécrit à chaque appel de l'endpoint.
+  \item \textbf{Hôte statique} (\filepath{fast\_server.py},
+        \code{python -m http.server}) ou \textbf{PHP} sans avoir lancé le dev
+        server : régénérez le manifeste une fois :
+\begin{lstlisting}[language=bash]
+python tools/gen_plugins_manifest.py
+\end{lstlisting}
+        Committez \filepath{js/modules/manifest.json} pour les déploiements
+        statiques.
+  \item \textbf{Vérifier} la découverte : ouvrez \code{/api/plugins} (doit lister
+        votre plugin) ; la console du viewer affiche
+        \code{[PluginRegistry] Discovered N plugins via ...}.
+\end{itemize}
+
+%====================================================================
+\section{Bonnes pratiques \& pièges}
+
+\begin{itemize}[leftmargin=1.5em]
+  \item \textbf{Toujours libérer} dans \code{dispose()} : DOM créé, textures /
+        géométries Three.js, écouteurs globaux, timers. (Règle d'hygiène GPU.)
+  \item \textbf{Pas de travail lourd sur le thread principal} : décodage, flou,
+        parsing $\rightarrow$ Web Worker (voir les workers existants).
+  \item \textbf{Passez par \code{ctx}}, pas par les singletons internes : votre
+        plugin reste découplé et survit aux refontes.
+  \item \textbf{Idempotence} : la page \emph{Compare} monte N iframes du viewer ;
+        votre \code{init()} s'exécute une fois par panneau. Évitez les effets de
+        bord globaux non réentrants.
+  \item \textbf{N'éditez pas \filepath{viewer.html}} pour un nouveau plugin :
+        créez votre DOM dans \code{init()}. Le HTML statique est réservé aux
+        plugins historiques.
+  \item \textbf{Tri} : utilisez \code{order} pour positionner votre bouton /
+        entrée ; ne dépendez pas de l'ordre de chargement.
+  \item \textbf{Robustesse} : un \filepath{plugin.json} invalide est ignoré
+        (le reste continue de charger) --- mais vérifiez votre JSON.
+\end{itemize}
+
+%====================================================================
+\section{Aide-mémoire (checklist)}
+
+\begin{enumerate}[leftmargin=2em]
+  \item Créer \filepath{js/modules/<placement>/<id>/}.
+  \item Écrire \filepath{plugin.json} (\code{id} = nom du dossier ; \code{placement}
+        = dossier parent).
+  \item Écrire \filepath{index.js} : \code{PluginRegistry.implement(id, \{ ... \})}.
+  \item Tools : choisir \code{group} (cluster) + \code{subtype} ; ajouter
+        \code{icon} et \code{i18nTitle}.
+  \item Channels : implémenter \code{getChannelUI} / \code{bindChannelUI} /
+        \code{syncUI}.
+  \item Shaders : \code{activate()} $\rightarrow$ \code{setRenderMode(n)} ; ajouter
+        la branche GLSL si nouveau mode.
+  \item Recharger le viewer (dev server) ou régénérer le manifeste (statique).
+  \item Vérifier dans la console et tester le retrait du dossier.
+\end{enumerate}
+
+\vfill
+\hrule
+\vspace{0.5em}
+\noindent\small Référence code : \filepath{js/core/plugin-registry.js} (découverte,
+génération toolbar, cycle de vie) ; \filepath{js/components/channel-panel.js}
+(intégration channels) ; \filepath{js/pages/viewer.js} (construction du
+ViewerContext). Tests : \filepath{tests/js/test\_plugin\_autonomy.mjs},
+\filepath{tests/test\_dev\_server\_plugins.py}.
+
+\end{document}

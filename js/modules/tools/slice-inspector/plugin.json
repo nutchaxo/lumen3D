@@ -7,6 +7,10 @@
   "group": "tools",
   "subtype": "tool",
   "icon": "scissors",
-  "order": 40,
-  "description": "Interactive oblique cross-section inspector with real-time GPU slice rendering."
+  "order": 10,
+  "description": "Interactive oblique cross-section inspector with real-time GPU slice rendering.",
+  "tool": "slice",
+  "i18nTitle": "tips.sliceVol",
+  "i18nAria": "tips.sliceTool",
+  "shortcut": "c"
 }

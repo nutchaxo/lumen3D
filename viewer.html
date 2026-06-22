@@ -47,73 +47,35 @@
         <i data-lucide="menu"></i>
       </button>
       <div class="viewer-header-right viewer-toolbar" id="viewer-toolbar">
+        <!-- Toolbar plugin buttons are generated at runtime by
+             PluginRegistry.buildToolbarButtons() from js/modules/tools/<id>/plugin.json.
+             Each cluster's .toolbar-actions carries a data-tool-group injection
+             target; only the core, non-plugin 'navigate' tool stays static. -->
         <div class="toolbar-cluster">
           <span class="toolbar-label" data-i18n="viewer.tools">Tools</span>
-          <div class="toolbar-actions">
+          <div class="toolbar-actions" data-tool-group="tools">
             <button class="btn btn-icon btn-ghost tool-chip" data-tool="navigate" title="Navigate" data-i18n-title="tips.navigate" aria-label="Navigate" data-i18n-aria="tips.navigate">
               <i data-lucide="mouse-pointer-2"></i>
             </button>
-            <button class="btn btn-icon btn-ghost tool-chip" data-tool="slice" title="Slice through volume" data-i18n-title="tips.sliceVol" aria-label="Slice tool" data-i18n-aria="tips.sliceTool">
-              <i data-lucide="scissors"></i>
-            </button>
-            <button class="btn btn-icon btn-ghost tool-chip" data-tool="measure" title="Measure distance" data-i18n-title="tips.measureDist" aria-label="Measure distance" data-i18n-aria="tips.measureDist">
-              <i data-lucide="ruler"></i>
-            </button>
+            <!-- slice (slice-inspector) + measure (measure-distance) chips injected here -->
           </div>
         </div>
         <div class="toolbar-cluster">
           <span class="toolbar-label" data-i18n="viewer.export">Export</span>
-          <div class="toolbar-actions">
-            <button class="btn btn-icon btn-ghost" id="btn-export" data-plugin-id="download-center" title="Download Center" data-i18n-title="tips.download" aria-label="Download Center" data-i18n-aria="tips.download">
-              <i data-lucide="download"></i>
-            </button>
-            <button class="btn btn-icon btn-ghost" id="btn-save-workspace" data-plugin-id="save-workspace" title="Save workspace" data-i18n-title="tips.saveWksp" aria-label="Save workspace" data-i18n-aria="tips.saveWksp">
-              <i data-lucide="save"></i>
-            </button>
-            <button class="btn btn-icon btn-ghost" id="btn-restore-workspace" data-plugin-id="restore-workspace" title="Restore workspace" data-i18n-title="tips.restoreWksp" aria-label="Restore workspace" data-i18n-aria="tips.restoreWksp">
-              <i data-lucide="folder-open"></i>
-            </button>
-            <button class="btn btn-icon btn-ghost" id="btn-screenshot" data-plugin-id="screenshot" data-i18n-title="viewer.screenshot">
-              <i data-lucide="camera"></i>
-            </button>
+          <div class="toolbar-actions" data-tool-group="export">
+            <!-- download-center, save-workspace, restore-workspace, screenshot injected here -->
           </div>
         </div>
         <div class="toolbar-cluster">
           <span class="toolbar-label" data-i18n="viewer.visuals">Visuals</span>
-          <div class="toolbar-actions">
-            <button class="btn btn-icon btn-ghost" id="btn-toggle-grid" data-plugin-id="toggle-grid" title="Toggle Grid (None / Normal / Fine)" data-i18n-title="tips.toggleGridFull" aria-label="Toggle Grid" data-i18n-aria="tips.toggleGrid">
-              <i data-lucide="grid"></i>
-            </button>
-            <button class="btn btn-icon btn-ghost" id="btn-toggle-axes" data-plugin-id="toggle-axes" title="Toggle Axes" data-i18n-title="tips.toggleAxes" aria-label="Toggle Axes" data-i18n-aria="tips.toggleAxes">
-              <i data-lucide="corner-down-right"></i>
-            </button>
-            <button class="btn btn-icon btn-ghost" id="btn-orientation-axes" data-plugin-id="orientation-axes" title="Toggle Orientation Axes" data-i18n-title="tips.orientationAxes" aria-label="Toggle Orientation Axes" data-i18n-aria="tips.orientationAxes">
-              <i data-lucide="compass"></i>
-            </button>
-            <button class="btn btn-icon btn-ghost" id="btn-toggle-volume" data-plugin-id="toggle-volume" title="Hide / Show 3D Volume (keep projections)" data-i18n-title="tips.hideVol" aria-label="Toggle Volume Visibility" data-i18n-aria="tips.toggleVol">
-              <i data-lucide="eye-off"></i>
-            </button>
+          <div class="toolbar-actions" data-tool-group="visuals">
+            <!-- toggle-grid, toggle-axes, orientation-axes, toggle-volume injected here -->
           </div>
         </div>
         <div class="toolbar-cluster">
           <span class="toolbar-label" data-i18n="viewer.layouts">Layouts</span>
-          <div class="toolbar-actions">
-            <button class="btn btn-icon btn-ghost" id="btn-presentation" data-plugin-id="presentation-mode" title="Presentation mode" data-i18n-title="tips.presentation" aria-label="Presentation mode" data-i18n-aria="tips.presentation">
-              <i data-lucide="presentation"></i>
-            </button>
-            <button class="btn btn-icon btn-ghost" id="btn-toggle-deepzoom" title="2D Ground Truth mode (Deep Zoom)" data-i18n-title="tips.deepZoom" aria-label="Toggle 2D mode" data-i18n-aria="tips.toggle2d">
-              <i data-lucide="layers"></i>
-            </button>
-            <button class="btn btn-icon btn-ghost" id="btn-toggle-decomposition" title="Decompose by channel" data-i18n-title="tips.decompChan" aria-label="Decompose channels" data-i18n-aria="tips.decompChans">
-              <i data-lucide="layout-grid"></i>
-            </button>
-            <button class="btn btn-icon btn-ghost" id="btn-toggle-zstack" title="Z-Stack Browser" data-i18n-title="tips.zstack" aria-label="Z-Stack Browser" data-i18n-aria="tips.zstack">
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <rect x="4" y="2" width="16" height="4" rx="1"/>
-                <rect x="4" y="10" width="16" height="4" rx="1"/>
-                <rect x="4" y="18" width="16" height="4" rx="1"/>
-              </svg>
-            </button>
+          <div class="toolbar-actions" data-tool-group="layouts">
+            <!-- presentation-mode, deepzoom-2d, decompose-channels, zstack-browser injected here -->
           </div>
         </div>
         <div class="toolbar-cluster">

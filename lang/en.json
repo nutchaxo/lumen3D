@@ -424,6 +424,7 @@
     "text": "Text",
     "toggle2d": "Toggle 2D mode",
     "toggleAxes": "Toggle Axes",
+    "orientationAxes": "Toggle Orientation Axes",
     "toggleGrid": "Toggle Grid",
     "toggleGridFull": "Toggle Grid (None / Normal / Fine)",
     "toggleVol": "Toggle Volume Visibility",

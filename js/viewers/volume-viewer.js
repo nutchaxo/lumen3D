@@ -399,9 +399,17 @@ const VolumeViewer = (() => {
     #endif
     uniform int numChannels;
     uniform int steps;
-    uniform int renderMode;   // 0 = DVR, 1 = Emission
+    uniform int renderMode;   // 0 = DVR, 1 = Emission (MIP), 2 = Natural Fluorescence
     uniform float exposure;   // global brightness multiplier
-    
+
+    // ── Natural Fluorescence (renderMode 2) controls ──
+    uniform float absorption;    // Beer-Lambert extinction (front-to-back occlusion → 3D form)
+    uniform float emissionGain;  // fluorophore glow brightness (multiplies exposure)
+    uniform float whitePoint;    // extended-Reinhard luminance white point (highlight headroom)
+    uniform float saturation;    // constant-luminance chroma push (fluorescent vividness)
+    uniform float colocWhiten;   // max desaturation when 3-4 channels truly co-localize
+    uniform float colocGamma;    // gate exponent suppressing faint-channel contamination
+
     uniform vec3 color0; uniform float min0; uniform float max0; uniform float gamma0; uniform float opacity0; uniform int en0;
     uniform vec3 color1; uniform float min1; uniform float max1; uniform float gamma1; uniform float opacity1; uniform int en1;
     uniform vec3 color2; uniform float min2; uniform float max2; uniform float gamma2; uniform float opacity2; uniform int en2;
@@ -458,6 +466,19 @@ const VolumeViewer = (() => {
       // ── DVR accumulators (mode 0 - Structure) ──
       vec3  accumDVR   = vec3(0.0);
       float accumAlpha = 0.0;
+
+      // ── Natural Fluorescence accumulators (mode 2) ──
+      // Front-to-back emission–absorption: clebColor = composited glow, clebChan =
+      // per-channel radiance (drives co-localization), clebT = running transmittance.
+      vec3  clebColor = vec3(0.0);
+      vec4  clebChan  = vec4(0.0);
+      float clebT     = 1.0;
+      // Step-size independence: tie both opacity and emission to the physical step length
+      // 'delta', so brightness/occlusion stay invariant to 'steps' (the 24..600 LOD swing).
+      // Beer-Lambert transmittance prod(1-aStep)=prod(exp(-clebK*d))=exp(-absorption*int d ds)
+      // is then EXACT regardless of step count; exposure is folded into the emission scale.
+      float clebK    = absorption * delta;
+      float clebEmit = emissionGain * exposure * delta;
 
       int maxSteps = steps;
       for (int i = 0; i < 768; i++) {
@@ -544,17 +565,98 @@ const VolumeViewer = (() => {
             #if ENABLE_CHANNEL_3
             mip3 = max(mip3, v3);
             #endif
+          } else if (renderMode == 2) {
+            // Achromatic density = strongest channel (max, NOT sum: co-located channels
+            // share one structure's opacity rather than double-darkening it into mud).
+            float d = 0.0;
+            #if ENABLE_CHANNEL_0
+            d = max(d, v0);
+            #endif
+            #if ENABLE_CHANNEL_1
+            d = max(d, v1);
+            #endif
+            #if ENABLE_CHANNEL_2
+            d = max(d, v2);
+            #endif
+            #if ENABLE_CHANNEL_3
+            d = max(d, v3);
+            #endif
+
+            if (d > 0.0025) {
+              // Beer-Lambert slab opacity (exact per segment, step-size independent).
+              float aStep = 1.0 - exp(-clebK * d);
+
+              // Emission = fluorophore colours weighted by their OWN intensity, so a
+              // green-only voxel emits pure green (additive — correct for independent
+              // emitters). eCh retains per-channel radiance for co-localization logic.
+              vec3 emit = vec3(0.0);
+              vec4 eCh  = vec4(0.0);
+              #if ENABLE_CHANNEL_0
+              eCh.x = v0; emit += v0 * color0;
+              #endif
+              #if ENABLE_CHANNEL_1
+              eCh.y = v1; emit += v1 * color1;
+              #endif
+              #if ENABLE_CHANNEL_2
+              eCh.z = v2; emit += v2 * color2;
+              #endif
+              #if ENABLE_CHANNEL_3
+              eCh.w = v3; emit += v3 * color3;
+              #endif
+
+              // Front-to-back: emission attenuated by everything already in front (clebT).
+              // Dense near structures occlude the glow behind them → real 3D depth/form.
+              float wT = clebT * clebEmit;
+              clebColor += wT * emit;
+              clebChan  += wT * eCh;
+              clebT     *= (1.0 - aStep);
+
+              if (clebT < 0.004) break;  // early-ray-termination (MIP can never terminate)
+            }
           } else {
             float localAlpha = max(max(v0, v1), max(v2, v3));
             if (localAlpha > 0.01) {
               vec3 localColor = v0 * color0 + v1 * color1 + v2 * color2 + v3 * color3;
-              accumDVR   += localColor * localAlpha * 0.05; 
+              accumDVR   += localColor * localAlpha * 0.05;
               accumAlpha += localAlpha * 0.05;
             }
           }
         }
         t += delta;
         p += rayDir * delta;
+      }
+
+      // ── Natural Fluorescence (mode 2): luminance-only Reinhard + chroma lock ──
+      if (renderMode == 2) {
+        // Negligible glow → nothing to draw (mirrors the mode-1 / DVR discard).
+        if (max(max(clebColor.r, clebColor.g), clebColor.b) < 0.0015) discard;
+
+        vec3 LUMA = vec3(0.2126, 0.7152, 0.0722);   // Rec.709 achromatic axis
+
+        // (1) Compress LUMINANCE ONLY (extended Reinhard, knee at whitePoint).
+        float Lin   = dot(clebColor, LUMA);
+        float invW2 = 1.0 / max(whitePoint * whitePoint, 1e-4);
+        float Lout  = Lin * (1.0 + Lin * invW2) / (1.0 + Lin);
+
+        // (2) CHROMA LOCK: scale every channel by the SAME ratio → chromaticity is
+        // invariant, so a bright single fluorophore (0,g,0) stays pure green and can
+        // NEVER wash to white, no matter how intense. This is the core anti-whiteout fix.
+        vec3 toned = clebColor * (Lout / max(Lin, 1e-5));
+
+        // (3) Controlled co-localization whitening: only GENUINE 3-4 channel overlap
+        // trends white; 1- and 2-channel mixes (e.g. green+red = vivid yellow) are spared
+        // (coloc starts ramping past two co-present channels), and the colocGamma gate
+        // suppresses a faint secondary channel so it cannot contaminate a bright primary.
+        float cmax   = max(max(clebChan.x, clebChan.y), max(clebChan.z, clebChan.w));
+        vec4  cn     = clebChan / max(cmax, 1e-5);
+        float coloc  = clamp((cn.x + cn.y + cn.z + cn.w) - 2.0, 0.0, 1.0);
+        float whiten = pow(coloc, colocGamma) * colocWhiten;
+        toned = mix(toned, vec3(Lout), whiten);   // desaturate toward gray of EQUAL luminance
+
+        // (4) Constant-luminance saturation push for fluorescent brilliance.
+        vec3 fluColor = clamp(mix(vec3(Lout), toned, saturation), 0.0, 1.0);
+        fragColor = vec4(fluColor, 1.0);
+        return;
       }
 
       vec3 finalColor;
@@ -648,8 +750,15 @@ const VolumeViewer = (() => {
         brickSize: { value: 64.0 },
         numChannels: { value: 0 },
         steps: { value: 100 },
-        renderMode: { value: 1 },  // 1 = Emission (Imaris-like) by default
+        renderMode: { value: 2 },  // 2 = Natural Fluorescence by default
         exposure: { value: 1.0 },  // global brightness
+        // Natural Fluorescence (mode 2) — tuned defaults for embryo immunofluorescence.
+        absorption:   { value: 1.8 },
+        emissionGain: { value: 2.2 },
+        whitePoint:   { value: 2.0 },
+        saturation:   { value: 1.18 },
+        colocWhiten:  { value: 0.5 },
+        colocGamma:   { value: 2.0 },
         clipMin: { value: new THREE.Vector3(0, 0, 0) },
         clipMax: { value: new THREE.Vector3(1, 1, 1) },
         
@@ -3529,11 +3638,40 @@ const VolumeViewer = (() => {
   }
 
   /**
-   * Switch render mode: 0 = DVR (depth/structure), 1 = Emission (Imaris-like fluorescence)
+   * Switch render mode: 0 = DVR (depth/structure), 1 = Emission MIP (Imaris-like),
+   * 2 = Natural Fluorescence (emission–absorption, chroma-locked).
    */
   function setRenderMode(mode) {
     if (!material?.uniforms) return;
-    material.uniforms.renderMode.value = (mode === 0 || mode === 'dvr') ? 0 : 1;
+    let m;
+    if (mode === 0 || mode === 'dvr' || mode === 'structure-dvr') m = 0;
+    else if (mode === 2 || mode === 'natural' || mode === 'natural-fluorescence') m = 2;
+    else m = 1;
+    material.uniforms.renderMode.value = m;
+    // Keep an in-flight cross-fade material consistent if the mode changes mid-transition.
+    if (_transitionMaterial?.uniforms?.renderMode) _transitionMaterial.uniforms.renderMode.value = m;
+    _scheduleFrame();
+  }
+
+  /**
+   * Tune the Natural Fluorescence (mode 2) look. Every key is optional and clamped to a
+   * safe range; unknown / non-finite values are ignored.
+   */
+  function setFluorescenceParams(params = {}) {
+    if (!material?.uniforms) return;
+    const u = material.uniforms;
+    const set = (key, v, lo, hi) => {
+      if (v === undefined || v === null) return;
+      const n = Number(v);
+      if (!Number.isFinite(n)) return;
+      u[key].value = Math.max(lo, Math.min(hi, n));
+    };
+    set('absorption',   params.absorption,   0.3, 6.0);
+    set('emissionGain', params.emissionGain, 0.2, 6.0);
+    set('whitePoint',   params.whitePoint,   0.1, 8.0);
+    set('saturation',   params.saturation,   0.5, 2.0);
+    set('colocWhiten',  params.colocWhiten,  0.0, 1.0);
+    set('colocGamma',   params.colocGamma,   1.0, 4.0);
     _scheduleFrame();
   }
 
@@ -3612,6 +3750,7 @@ const VolumeViewer = (() => {
     setVolumeVisible,
     setRenderMode,
     setExposure,
+    setFluorescenceParams,
     getRenderer: () => renderer,
     getMaterial: () => material,
     makeRgbaBrickFromScalarChannels: _composeRgbaBrickFromScalarChannels,

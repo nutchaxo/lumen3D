@@ -79,7 +79,7 @@ PluginRegistry.implement('measure-distance', {
     if (this._draft.length !== 2) return;
     const [aPoint, bPoint] = this._draft;
     const color = this.COLORS[this._measurements.length % this.COLORS.length];
-    const measurement = this._ctx.measurements.add('viewer', {
+    this._ctx.measurements.add('viewer', {
       scope: 'viewer',
       label: `Measure ${this._measurements.length + 1}`,
       unit: 'um',
@@ -88,7 +88,10 @@ PluginRegistry.implement('measure-distance', {
       timepoint: this._ctx._state.currentTimepoint,
       color
     });
-    this._measurements.push(measurement);
+    // BUG-031: re-read the store rather than manually pushing into the local mirror,
+    // so the mirror is always exactly the store (the store normalizes/ids the entry,
+    // and a manual push could drift if add() ever transforms it).
+    this._measurements = this._ctx.measurements.list('viewer');
     this._draft = [];
     this._ctx.viewer.setMeasurements(this._measurements);
   },

@@ -145,16 +145,9 @@ PluginRegistry.implement('orientation-axes', {
       this._group.position.copy(worldPos);
     }
 
-    // Keep text sprites upright relative to camera
-    const invCam = camera.quaternion.clone().invert();
-    this._group.children.forEach(c => {
-      if (c instanceof THREE.Sprite) {
-        // Sprites auto-face camera, but their roll needs to be zeroed if attached to a rotated group?
-        // Actually THREE.Sprite always faces the camera regardless of parent rotation.
-      } else if (c.userData.isOrientationSphere) {
-        // Hover effect check (if we implemented raycasting on it)
-      }
-    });
+    // BUG-069: removed a dead per-frame forEach (both branches were empty —
+    // THREE.Sprite already faces the camera regardless of parent rotation, and the
+    // sphere-hover branch was never implemented). It only added GC/iteration cost.
 
     this._rafId = requestAnimationFrame(this._update.bind(this));
   },  _bindDragEvents() {

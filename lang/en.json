@@ -470,15 +470,8 @@
     "achromatomaly": "Achromatomaly",
     "toggle": "Colorblind filters"
   },
-  "deepzoom": {
-    "title": "Z-Stack Explorer (Native)",
-    "studio2d": "Open in 2D Studio",
-    "mode": "Mode: Deep Zoom OME-TIFF/DZI",
-    "syncTodo": "Studio sync (to be implemented: canvas transfer)"
-  },
   "tips": {
     "renderModeDesc": "Select render mode",
-    "deepZoom": "2D Ground Truth mode (Deep Zoom)",
     "arrow": "Arrow",
     "back3d": "Back to 3D Viewer",
     "center": "Center sample",

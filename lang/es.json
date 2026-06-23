@@ -470,15 +470,8 @@
     "achromatomaly": "Acromatomalía",
     "toggle": "Filtros para daltonismo"
   },
-  "deepzoom": {
-    "title": "Explorador Z-Stack (Nativo)",
-    "studio2d": "Abrir en Studio 2D",
-    "mode": "Modo: Deep Zoom OME-TIFF/DZI",
-    "syncTodo": "Sincronización con el Studio (por implementar: transferencia del lienzo)"
-  },
   "tips": {
     "renderModeDesc": "Seleccionar el modo de renderizado",
-    "deepZoom": "Modo de verdad fundamental 2D (Deep Zoom)",
     "arrow": "Flecha",
     "back3d": "Volver al Visor 3D",
     "center": "Centrar la muestra",

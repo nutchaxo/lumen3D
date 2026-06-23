@@ -1,9 +1,6 @@
 // Regression tests for bugs found reviewing PR #55 (plugin system autonomy, v1.1.0):
 //   #1 (tool-manager) 'c'/'m' shortcuts went dead on pages that don't load
 //      PluginRegistry (tracking.html) — the shortcut table became PluginRegistry-seeded.
-//   #2 (deepzoom-2d) toolbar button visual state desynced on non-toolbar exit paths
-//      (Escape / dz-exit / failed load) because _enter/_exit only touched `active`
-//      while bindToolbarButtons toggles btn-solid/btn-ghost.
 //   #6 (viewer.js) btn-export was double-wired (manual handler + download-center plugin).
 //
 // Run: node tests/js/test_plugin_review_fixes.mjs
@@ -49,15 +46,6 @@ const read = (rel) => readFileSync(path.join(ROOT, rel), 'utf8');
   assert.ok(/_shortcuts = \{[^}]*c: 'cut'[^}]*m: 'measure'/.test(src), "#1: core c/m shortcuts seeded independent of PluginRegistry");
 }
 
-// ── #2: deepzoom-2d _enter/_exit keep btn-solid/btn-ghost in sync with bindToolbarButtons ──
-{
-  const dz = read('js/modules/tools/deepzoom-2d/index.js');
-  assert.ok(/classList\.add\('active', 'btn-solid'\);\s*btn\.classList\.remove\('btn-ghost'\)/.test(dz),
-    '#2: _enter adds active+btn-solid and removes btn-ghost');
-  assert.ok(/classList\.remove\('active', 'btn-solid'\);\s*btn\.classList\.add\('btn-ghost'\)/.test(dz),
-    '#2: _exit removes active+btn-solid and restores btn-ghost (every exit path symmetric)');
-}
-
 // ── #6: viewer.js no longer double-wires btn-export (plugin handles it) ──
 {
   const v = read('js/pages/viewer.js');
@@ -65,4 +53,4 @@ const read = (rel) => readFileSync(path.join(ROOT, rel), 'utf8');
     '#6: manual btn-export click handler removed (download-center plugin opens the modal)');
 }
 
-console.log('plugin-autonomy review fixes (#1 shortcuts, #2 deepzoom state, #6 export double-wire): OK');
+console.log('plugin-autonomy review fixes (#1 shortcuts, #6 export double-wire): OK');

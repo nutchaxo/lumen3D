@@ -140,6 +140,12 @@ class SVRManager {
           atlas.dispose?.();
         }
         allocatedAtlases = [];
+        // SVR-012: drain any stale GL errors produced by the failed glTexStorage3D so they
+        // don't contaminate texSubImage3D calls on the next (smaller) atlas config.
+        if (renderer) {
+          const gl = renderer.getContext();
+          let _e; while ((_e = gl.getError()) !== gl.NO_ERROR) { /* drain */ }
+        }
       }
     }
     if (!atlasAllocated || !allocatedAtlases.length) {
@@ -381,7 +387,12 @@ class SVRManager {
     const sz = coord.z * this.brickSize;
     this._writeChannelToSlot(slotIndex, channel, brickData, bw, bh, bd);
     const uploadData = this._extractSlotRegion(slotIndex, bw, bh, bd);
-    this._uploadRgbaRegion(coord.atlas, sx, sy, sz, bw, bh, bd, uploadData);
+    // SVR-012: if the GPU upload fails, clear the PageTable entry so the shader
+    // treats this brick as missing (ray skip) rather than sampling garbage memory.
+    if (this._uploadRgbaRegion(coord.atlas, sx, sy, sz, bw, bh, bd, uploadData) === false) {
+      this.pageData[ptIdx + 3] = 0;
+      this.pageTable.needsUpdate = true;
+    }
   }
 
   writeRgbaBrick(bx, by, bz, brickData, bw, bh, bd) {
@@ -401,7 +412,11 @@ class SVRManager {
     const sy = coord.y * this.brickSize;
     const sz = coord.z * this.brickSize;
     const uploadData = this._compactRgbaBrickData(brickData, bw, bh, bd);
-    this._uploadRgbaRegion(coord.atlas, sx, sy, sz, bw, bh, bd, uploadData);
+    // SVR-012: if the GPU upload fails, clear the PageTable entry (same as writeBrick).
+    if (this._uploadRgbaRegion(coord.atlas, sx, sy, sz, bw, bh, bd, uploadData) === false) {
+      this.pageData[ptIdx + 3] = 0;
+      this.pageTable.needsUpdate = true;
+    }
   }
 
   _compactRgbaBrickData(brickData, bw, bh, bd) {
@@ -528,18 +543,30 @@ class SVRManager {
         gl.UNSIGNED_BYTE,
         uploadData
       );
-      
+
+      // SVR-012: check for GL error after upload. If glTexStorage3D failed during the
+      // cascade, stale GL state can cause texSubImage3D to silently fail — leaving the
+      // atlas slot with uninitialised GPU memory (appears as pink/garbage in the shader).
+      const glErr = gl.getError();
+
       gl.pixelStorei(gl.UNPACK_ALIGNMENT, 4);
       gl.pixelStorei(gl.UNPACK_ROW_LENGTH, 0);
       gl.pixelStorei(gl.UNPACK_IMAGE_HEIGHT, 0);
       gl.pixelStorei(gl.UNPACK_SKIP_PIXELS, 0);
       gl.pixelStorei(gl.UNPACK_SKIP_ROWS, 0);
       gl.pixelStorei(gl.UNPACK_SKIP_IMAGES, 0);
-      
+
       if (prevBinding !== null) {
         gl.bindTexture(gl.TEXTURE_3D, prevBinding);
       }
+
+      if (glErr !== gl.NO_ERROR) {
+        console.warn('[SVRManager] texSubImage3D failed (glError=' + glErr + ') at atlas=' + atlasIndex + ' offset=' + sx + ',' + sy + ',' + sz);
+        return false;
+      }
+      return true;
     }
+    return true;
   }
 
   dispose() {

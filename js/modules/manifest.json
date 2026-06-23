@@ -6,11 +6,6 @@
       "id": "decompose-channels"
     },
     {
-      "path": "tools/deepzoom-2d",
-      "placement": "tools",
-      "id": "deepzoom-2d"
-    },
-    {
       "path": "tools/download-center",
       "placement": "tools",
       "id": "download-center"
@@ -29,16 +24,6 @@
       "path": "tools/presentation-mode",
       "placement": "tools",
       "id": "presentation-mode"
-    },
-    {
-      "path": "tools/restore-workspace",
-      "placement": "tools",
-      "id": "restore-workspace"
-    },
-    {
-      "path": "tools/save-workspace",
-      "placement": "tools",
-      "id": "save-workspace"
     },
     {
       "path": "tools/screenshot",
@@ -84,11 +69,6 @@
       "path": "shaders/fluorescence",
       "placement": "shaders",
       "id": "fluorescence"
-    },
-    {
-      "path": "shaders/natural-fluorescence",
-      "placement": "shaders",
-      "id": "natural-fluorescence"
     },
     {
       "path": "shaders/structure-dvr",

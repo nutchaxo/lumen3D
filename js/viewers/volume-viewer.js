@@ -358,6 +358,10 @@ const VolumeViewer = (() => {
     uniform sampler3D svrAtlas7;
     #ifdef HAS_OCCUPANCY
     uniform sampler3D mapOccupancy;
+    // OCC-Z: maps a normalized volume coord to the per-brick occupancy grid so the
+    // grid cells align with the 64^3 brick boundaries even when the volume size is
+    // not a multiple of the brick size (partial last brick) = volumeDim/(brickSize*gridDim).
+    uniform vec3 occupancyScale;
     #endif
     
     #ifdef ENABLE_SVR
@@ -508,7 +512,11 @@ const VolumeViewer = (() => {
           }
           #else
             #ifdef HAS_OCCUPANCY
-            float occ = texture(mapOccupancy, uvw).r;
+            // OCC-Z: scale into the brick-aligned occupancy grid (see uniform above).
+            // Sampling at raw uvw mis-placed the cell boundaries whenever a volume axis
+            // was not a multiple of 64, skipping populated slices of the last brick row
+            // (e.g. a 72-deep volume cut at z=36 instead of the real brick edge z=64).
+            float occ = texture(mapOccupancy, uvw * occupancyScale).r;
             if (occ < 0.5) {
                t += delta * 2.5;
                p += rayDir * (delta * 2.5); // Leap forward safely
@@ -750,6 +758,7 @@ const VolumeViewer = (() => {
         svrAtlas6: { value: null },
         svrAtlas7: { value: null },
         mapOccupancy: { value: null },
+        occupancyScale: { value: new THREE.Vector3(1, 1, 1) },
         pageTable: { value: null },
         atlasDim: { value: new THREE.Vector3(512, 512, 512) },
         volumeDim: { value: new THREE.Vector3(1, 1, 1) },
@@ -1863,6 +1872,9 @@ const VolumeViewer = (() => {
     if (entry.occupancyMap) {
       material.defines.HAS_OCCUPANCY = 1;
       material.uniforms.mapOccupancy.value = entry.occupancyMap;
+      if (material.uniforms.occupancyScale && entry.occupancyScale) {
+        material.uniforms.occupancyScale.value.copy(entry.occupancyScale);
+      }
     } else {
       delete material.defines.HAS_OCCUPANCY;
       if (material.uniforms.mapOccupancy) {
@@ -1931,6 +1943,9 @@ const VolumeViewer = (() => {
     if (entry.occupancyMap) {
       _transitionMaterial.defines.HAS_OCCUPANCY = 1;
       _transitionMaterial.uniforms.mapOccupancy.value = entry.occupancyMap;
+      if (_transitionMaterial.uniforms.occupancyScale && entry.occupancyScale) {
+        _transitionMaterial.uniforms.occupancyScale.value.copy(entry.occupancyScale);
+      }
     } else {
       delete _transitionMaterial.defines.HAS_OCCUPANCY;
       if (_transitionMaterial.uniforms.mapOccupancy) _transitionMaterial.uniforms.mapOccupancy.value = null;
@@ -4050,8 +4065,10 @@ const VolumeViewer = (() => {
     console.log(`[VolumeViewer] Streaming LOD${lod}: ${orderedBricks.length} active bricks out of ${allBricks.length} logical bricks.`);
     
     let occTex = null;
+    let occScale = null;
     if (tpSelection.manifest?.levels?.[lod]) {
-      const grid = tpSelection.manifest.levels[lod].gridSize;
+      const lvl = tpSelection.manifest.levels[lod];
+      const grid = lvl.gridSize;
       if (grid) {
         const occNx = grid.x || 1;
         const occNy = grid.y || 1;
@@ -4070,6 +4087,16 @@ const VolumeViewer = (() => {
         occTex.magFilter = THREE.NearestFilter;
         occTex.unpackAlignment = 1;
         occTex.needsUpdate = true;
+        // OCC-Z: the occupancy grid spans gridDim*brickSize voxels, which OVER-covers the
+        // volume when an axis is not a multiple of brickSize (partial last brick). Scale
+        // the normalized sample coord by volumeDim/(brickSize*gridDim) so NEAREST selects
+        // texel floor(voxel/brickSize) == the brick coord. For aligned axes this is 1.0.
+        const bs = dims.brickSize || VOLUME_BRICK_SIZE;
+        occScale = new THREE.Vector3(
+          width / (bs * occNx),
+          height / (bs * occNy),
+          depth / (bs * occNz)
+        );
       }
     }
 
@@ -4094,6 +4121,7 @@ const VolumeViewer = (() => {
       texture: texture3D || textures[0] || null,
       data: rgbaData,
       occupancyMap: occTex,
+      occupancyScale: occScale,
       width,
       height,
       depth,

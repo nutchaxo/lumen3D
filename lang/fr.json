@@ -470,15 +470,8 @@
     "achromatomaly": "Achromatomalie",
     "toggle": "Filtres daltonisme"
   },
-  "deepzoom": {
-    "title": "Explorateur Z-Stack (Natif)",
-    "studio2d": "Ouvrir dans le Studio 2D",
-    "mode": "Mode : Deep Zoom OME-TIFF/DZI",
-    "syncTodo": "Synchronisation avec le Studio (à implémenter : transfert du canvas)"
-  },
   "tips": {
     "renderModeDesc": "Sélectionner le mode de rendu",
-    "deepZoom": "Mode vérité terrain 2D (Deep Zoom)",
     "arrow": "Flèche",
     "back3d": "Retour au Visualiseur 3D",
     "center": "Centrer l'échantillon",

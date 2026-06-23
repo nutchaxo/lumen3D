@@ -777,9 +777,11 @@ const BrickLoader = (() => {
     // NATIVE DIRECT FETCH (unpacked)
     if (!packed) {
       if (_manifest?.brickTransport?.mode === 'packs' || _packIndex.size > 0) {
-        // ELE-20: brick réclamée par le manifest mais absente de l'index pack =
-        // pack/manifest incohérent -> échec tracé, pas un vide silencieux.
-        if (_expected) throw new Error('Brick expected but missing from pack index: ' + url);
+        // ELE-20 (revised): brickToPack is the per-channel authority in pack mode.
+        // A brick absent from brickToPack is legitimately ESS-skipped for this channel
+        // even if the union-based manifest nonEmpty flag says the spatial slot is occupied
+        // (because another channel has data there). Return zeros (transparent voxels).
+        if (_expected) console.debug('[BrickLoader] Brick absent from pack index for this channel (channel ESS): ' + url);
         const bs = _manifest?.levels?.[0]?.brickSize || BRICK_SIZE;
         const channels = encoding === 'raw-rgba-gzip' ? 4 : 1;
         return new Uint8Array(bs * bs * bs * channels);

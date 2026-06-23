@@ -4,7 +4,7 @@
 
 const VolumeSourceManager = (() => {
   // EDGE-031 (Rule 1.4): the source kinds the renderer can actually mount.
-  const ALLOWED_KINDS = new Set(['webstack', 'bricks', 'deepzoom2d', 'live']);
+  const ALLOWED_KINDS = new Set(['webstack', 'bricks', 'live']);
 
   function normalizeSources(dataset = null) {
     const listed = Array.isArray(dataset?.volumeSources) ? dataset.volumeSources : [];
@@ -73,7 +73,6 @@ const VolumeSourceManager = (() => {
 
   function _label(kind) {
     if (kind === 'bricks') return 'Chunked bricks volume';
-    if (kind === 'deepzoom2d') return '2D source tiles pyramid';
     if (kind === 'webstack') return 'Web slice stack';
     return 'Volume source';
   }

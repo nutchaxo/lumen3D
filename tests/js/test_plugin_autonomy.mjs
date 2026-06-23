@@ -63,7 +63,7 @@ const btns = g => containers[`[data-tool-group="${g}"]`].children;
 currentFetch = async () => ({ ok: false, status: 404 });
 {
   const paths = await PR.discover('js/modules');
-  assert.equal(paths.length, 19, 'discover embedded default = 19 module paths');
+  assert.equal(paths.length, 15, 'discover embedded default = 15 module paths');
   assert.ok(paths.includes('channels/histogram') && paths.includes('shaders/fluorescence'),
     'embedded default spans channels + shaders, not just tools');
 }
@@ -94,7 +94,7 @@ currentFetch = async (url) => (url === 'api/plugins.php'
   : { ok: false, status: 404 });
 {
   const paths = await PR.discover('js/modules');
-  assert.equal(paths.length, 19, 'non-JSON php body is rejected, falls through to embedded default');
+  assert.equal(paths.length, 15, 'non-JSON php body is rejected, falls through to embedded default');
 }
 
 // ── loadModules(): registers every discovered tool from disk ──────────────────
@@ -108,13 +108,13 @@ currentFetch = async (url) => {
 };
 const all = await PR.discover('js/modules');
 await PR.loadModules('js/modules', all);
-assert.equal(PR.listByPlacement('tools').length, 14, 'loadModules registered all 14 tool plugins');
-assert.equal(PR.listByPlacement('shaders').length, 3, '3 shaders registered (incl. natural-fluorescence)');
+assert.equal(PR.listByPlacement('tools').length, 11, 'loadModules registered all 11 tool plugins');
+assert.equal(PR.listByPlacement('shaders').length, 2, '2 shaders registered (fluorescence + structure-dvr)');
 assert.equal(PR.listByPlacement('channels').length, 2, '2 channel plugins registered');
 
 // ── buildToolbarButtons(): generation, clustering, ordering, types, visibility ─
 PR.buildToolbarButtons({
-  dataset: { volumeSources: [{ kind: 'webstack', available: true }] }, // no deepzoom2d source
+  dataset: { volumeSources: [{ kind: 'webstack', available: true }] },
   groups: [
     { group: 'tools', container: '[data-tool-group="tools"]' },
     { group: 'export', container: '[data-tool-group="export"]' },
@@ -122,29 +122,25 @@ PR.buildToolbarButtons({
     { group: 'layouts', container: '[data-tool-group="layouts"]' },
   ],
 });
-assert.equal(btns('export').length, 4, 'export cluster has 4 generated buttons');
+assert.equal(btns('export').length, 2, 'export cluster has 2 generated buttons');
 assert.ok(btns('export').every(b => b.dataset.pluginId), 'export buttons are data-plugin-id (activate-wired)');
 assert.deepEqual(btns('export').map(b => b.dataset.pluginId),
-  ['download-center', 'save-workspace', 'restore-workspace', 'screenshot'], 'export honors plugin.json order');
+  ['download-center', 'screenshot'], 'export honors plugin.json order');
 assert.equal(btns('visuals').length, 4, 'visuals cluster has 4 buttons');
 assert.equal(btns('tools').length, 2, 'tools cluster has the 2 tool-subtype chips');
 assert.ok(btns('tools').every(b => b.dataset.tool && !b.dataset.pluginId && b.className.includes('tool-chip')),
   'tool-subtype plugins become data-tool chips (ToolManager-wired), not data-plugin-id');
 assert.deepEqual(btns('tools').map(b => b.dataset.tool), ['slice', 'measure'], 'tool chips ordered slice then measure');
-assert.equal(btns('layouts').length, 4, 'layouts cluster has 4 buttons');
+assert.equal(btns('layouts').length, 3, 'layouts cluster has 3 buttons');
 
-const dz = btns('layouts').find(b => b.id === 'btn-toggle-deepzoom');
-assert.ok(dz && dz.style.display === 'none', 'deepzoom hidden: requires deepzoom2d source which is absent');
 const zs = btns('layouts').find(b => b.id === 'btn-toggle-zstack');
 assert.ok(zs && zs.dataset.pluginId === 'zstack-browser' && zs.style.display !== 'none', 'zstack visible + data-plugin-id');
 
-// ── buildToolbarButtons(): idempotent rebuild + requires re-evaluated ─────────
+// ── buildToolbarButtons(): idempotent rebuild ──────────────────────────────────
 PR.buildToolbarButtons({
-  dataset: { volumeSources: [{ kind: 'deepzoom2d', available: true }] },
+  dataset: { volumeSources: [{ kind: 'webstack', available: true }] },
   groups: [{ group: 'layouts', container: '[data-tool-group="layouts"]' }],
 });
-assert.equal(btns('layouts').length, 4, 'rebuild does not duplicate (idempotent)');
-const dz2 = btns('layouts').find(b => b.id === 'btn-toggle-deepzoom');
-assert.ok(dz2 && dz2.style.display !== 'none', 'deepzoom shown once the dataset offers a deepzoom2d source');
+assert.equal(btns('layouts').length, 3, 'rebuild does not duplicate (idempotent)');
 
 console.log('plugin autonomy (discover hybrid + dynamic toolbar generation): OK');

@@ -86,7 +86,15 @@ const VolumeViewer = (() => {
   // worker, and preprocess 3-chunk_packer.py (BRICK_SIZE=64). The legacy
   // brick-loader.js BRICK_SIZE=128 is NOT authoritative — never fall back to 128 here.
   const VOLUME_BRICK_SIZE = 64;
-  const MONOLITHIC_RGBA_LIMIT_BYTES = Math.floor(1.5 * 1024 * 1024 * 1024);
+  // MONO-3DTEX: ceiling above which an RGBA volume is rendered through SVRManager
+  // (sparse atlas of 64^3 bricks) instead of a single monolithic Data3DTexture.
+  // Lowered from 1.5 GiB to 512 MiB: ANGLE/D3D11 silently rejects a single ~1 GiB
+  // TEXTURE_3D ("glTexStorage3D: too large") even though it is under 1.5 GiB, leaving
+  // a storage-less texture that brick uploads paint with uninitialised GPU memory
+  // (pink chunks). 512 MiB is a conservative size ANGLE reliably honours for a single
+  // 3D resource; anything larger goes to the SVR atlas, whose per-page allocations are
+  // small and whose cascade (svr-manager.js) degrades gracefully on VRAM pressure.
+  const MONOLITHIC_RGBA_LIMIT_BYTES = Math.floor(0.5 * 1024 * 1024 * 1024);
 
   let _needsRender = true;
   let _idleFrameCount = 0;
@@ -3977,9 +3985,22 @@ const VolumeViewer = (() => {
           texture3D.needsUpdate = true;
           if (renderer) {
               const t0 = performance.now();
+              const _gl = renderer.getContext();
+              // MONO-3DTEX: drain pre-existing GL errors so the post-alloc read reflects
+              // only this allocation, then check whether ANGLE accepted the 3D texture.
+              while (_gl.getError() !== _gl.NO_ERROR) { /* drain stale errors */ }
               renderer.initTexture(texture3D);
+              const _allocErr = _gl.getError();
               const t1 = performance.now();
               console.log(`[PERF-INIT] RGBA volume allocated in ${(t1-t0).toFixed(2)}ms (${Math.round(rgbaByteLength / 1024 / 1024)} MiB)`);
+              if (_allocErr !== _gl.NO_ERROR) {
+                  // ANGLE/D3D11 can reject a large single TEXTURE_3D without throwing
+                  // ("glTexStorage3D: too large"). initTexture leaves no backing storage,
+                  // so without this check __webglInit would be set on a storage-less texture
+                  // and subsequent brick texSubImage3D uploads would write into uninitialised
+                  // GPU memory (pink). Throw so the catch downgrades the LOD (rule 1.1).
+                  throw new Error(`monolithic 3D texture allocation failed (glError=${_allocErr}, ${width}x${height}x${depth}, ${Math.round(rgbaByteLength / 1024 / 1024)} MiB)`);
+              }
               const properties = renderer.properties.get(texture3D);
               const webglTexture = properties?.__webglTexture;
               if (webglTexture) {

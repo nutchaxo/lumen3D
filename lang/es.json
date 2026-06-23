@@ -50,6 +50,7 @@
     "recommended": "recomendado",
     "files": "{count} archivos",
     "filesTitle": "Archivos del dataset",
+    "noDataset": "Abre un dataset para explorar sus archivos descargables.",
     "filesRoot": "download",
     "folder": "Carpeta",
     "itemCount": "{count} elementos",

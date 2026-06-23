@@ -273,25 +273,10 @@ const ViewerApp = (() => {
     if (window.lucide) lucide.createIcons();
     _perf()?.end(initPerfId, { status: 'ok', isLive, qualityMode: _qualityMode });
 
-    if (window.location.hash && window.location.hash.startsWith('#state=')) {
-      if (typeof UrlState !== 'undefined') {
-        const urlState = await UrlState.decodeState(window.location.hash);
-        if (urlState) {
-          _applyWorkspaceStateNow(urlState.state || urlState);
-        }
-      }
-    }
-    if (_pendingWorkspaceState) {
-      console.log('[ViewerApp] Applying pending workspace state after init, camera:', _pendingWorkspaceState?.viewer?.camera?.cameraZ, 'measurements:', _pendingWorkspaceState?.viewer?.measurements?.length);
-      _applyWorkspaceStateNow(_pendingWorkspaceState);
-      _pendingWorkspaceState = null;
-    }
-
-    // Apply buffered TOGGLE_ZSTACK that arrived before init() completed
-    if (_pendingZstackState !== null) {
-      _applyZstackState(_pendingZstackState.desired, _pendingZstackState.slice);
-      _pendingZstackState = null;
-    }
+    // ELE-26: workspace/zstack restore moved BELOW PluginRegistry.initAll() (further down).
+    // Applying saved plugin state (chunk-debug, measure-distance, zstack-browser, …) before
+    // the plugins were initialised called setState()/applyState() on an uninitialised
+    // instance (null _ctx / undefined fields) — it threw and the state was silently dropped.
 
     // ── Module System Integration ──────────────────────────────
     if (typeof PluginRegistry !== 'undefined') {
@@ -386,6 +371,28 @@ const ViewerApp = (() => {
 
       const shadersCount = PluginRegistry.listByPlacement('shaders').length;
       console.log(`[ViewerApp] PluginRegistry initialized — ${toolsCount} tools, ${shadersCount} shaders`);
+    }
+
+    // ELE-26: apply saved workspace + buffered z-stack state AFTER initAll, so plugin
+    // setState()/applyState() run on fully-initialised plugin instances (_ctx + fields set).
+    if (window.location.hash && window.location.hash.startsWith('#state=')) {
+      if (typeof UrlState !== 'undefined') {
+        const urlState = await UrlState.decodeState(window.location.hash);
+        if (urlState) {
+          _applyWorkspaceStateNow(urlState.state || urlState);
+        }
+      }
+    }
+    if (_pendingWorkspaceState) {
+      console.log('[ViewerApp] Applying pending workspace state after init, camera:', _pendingWorkspaceState?.viewer?.camera?.cameraZ, 'measurements:', _pendingWorkspaceState?.viewer?.measurements?.length);
+      _applyWorkspaceStateNow(_pendingWorkspaceState);
+      _pendingWorkspaceState = null;
+    }
+
+    // Apply buffered TOGGLE_ZSTACK that arrived before init() completed
+    if (_pendingZstackState !== null) {
+      _applyZstackState(_pendingZstackState.desired, _pendingZstackState.slice);
+      _pendingZstackState = null;
     }
     
     _isInitialized = true;

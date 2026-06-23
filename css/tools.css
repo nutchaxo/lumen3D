@@ -618,6 +618,64 @@ body.presentation-mode .viewer-layout {
   font-size: var(--text-sm);
 }
 
+/* ── Dataset file explorer (download/ folder) ───────────────────────────── */
+.dl-breadcrumb {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1);
+  margin-bottom: var(--space-3);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+}
+
+.dl-crumb {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 6px;
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
+  text-decoration: none;
+  transition: color var(--transition-fast), background var(--transition-fast);
+}
+
+.dl-crumb:hover {
+  color: var(--color-primary);
+  background: var(--bg-hover);
+}
+
+.dl-crumb:last-of-type {
+  color: var(--text-primary);
+}
+
+.dl-crumb i {
+  width: 13px;
+  height: 13px;
+}
+
+.dl-crumb-sep {
+  color: var(--text-muted);
+}
+
+/* Folder rows are navigable (override the dimmed, non-interactive .is-directory
+   look used by the legacy manifest list). */
+.download-item.dl-folder {
+  cursor: pointer;
+}
+
+.download-item.dl-folder .download-format i {
+  width: 18px;
+  height: 18px;
+  color: var(--color-accent);
+}
+
+.download-item .download-format i {
+  width: 14px;
+  height: 14px;
+  vertical-align: -2px;
+}
+
 .app-toast {
   position: fixed;
   left: 50%;

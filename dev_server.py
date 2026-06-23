@@ -297,6 +297,85 @@ def _safe_dataset_dir(dataset_id: str):
     return type_dir, folder, candidate
 
 
+def _safe_subpath(root: Path, rel):
+    """Resolve a user-supplied relative path under an already-resolved ``root``.
+
+    Returns the resolved Path (``root`` itself for an empty path), or ``None`` if
+    the path is malformed or escapes ``root``. Mirrors the layered defense of
+    ``_safe_dataset_dir``: reject ``..``/dotfile/absolute/backslash segments up
+    front, then ``resolve()`` + ``relative_to()`` as the authoritative
+    containment check, so a crafted ``path=../../api/config.json`` can never
+    climb out of the dataset's download folder (Rule 1.4).
+    """
+    if rel is None:
+        rel = ""
+    if not isinstance(rel, str) or "\x00" in rel:
+        return None
+    rel = rel.replace("\\", "/").strip("/")
+    if rel in ("", "."):
+        return root
+    segments = rel.split("/")
+    for seg in segments:
+        if seg in ("", ".", "..") or seg.startswith("."):
+            return None
+    candidate = (root / Path(*segments)).resolve()
+    try:
+        candidate.relative_to(root)
+    except ValueError:
+        return None
+    return candidate
+
+
+def _list_download_entries(download_root: Path, target: Path, dataset_id: str, rel: str):
+    """List the immediate children of ``target`` (a dir inside ``download_root``).
+
+    Skips dotfiles and any entry whose resolved path escapes ``download_root`` (a
+    symlink pointing outside). Directories report a (non-dotfile) child count;
+    files report a byte size, an uppercase extension, and a static ``href`` under
+    ``DATA_WEB/``. Sorted directories-first, then case-insensitive by name.
+    """
+    entries = []
+    try:
+        scan = list(os.scandir(target))
+    except OSError:
+        scan = []
+    for de in scan:
+        name = de.name
+        if name.startswith("."):
+            continue
+        try:
+            Path(de.path).resolve().relative_to(download_root)
+        except (OSError, ValueError):
+            continue  # symlink (or junction) pointing outside the download root
+        child_rel = f"{rel}/{name}" if rel else name
+        try:
+            is_dir = de.is_dir()
+        except OSError:
+            continue
+        if is_dir:
+            try:
+                count = sum(1 for s in os.scandir(de.path) if not s.name.startswith("."))
+            except OSError:
+                count = 0
+            entries.append({"name": name, "kind": "dir", "path": child_rel, "count": count})
+        elif de.is_file():
+            try:
+                size = de.stat().st_size
+            except OSError:
+                size = None
+            ext = name.rsplit(".", 1)[-1].upper() if "." in name else "FILE"
+            entries.append({
+                "name": name,
+                "kind": "file",
+                "ext": ext,
+                "sizeBytes": size,
+                "path": child_rel,
+                "href": f"DATA_WEB/{dataset_id}/download/{child_rel}",
+            })
+    entries.sort(key=lambda e: (e["kind"] != "dir", e["name"].lower()))
+    return entries
+
+
 def _list_datasets() -> list[dict]:
     datasets = []
     for type_dir in ["fixed", "live", "tracking"]:
@@ -615,6 +694,8 @@ class AdminHandler(http.server.SimpleHTTPRequestHandler):
             self._serve_plugins()
         elif parsed.path in ("/api/languages", "/api/languages.php"):
             self._serve_languages()
+        elif parsed.path in ("/api/downloads", "/api/downloads.php"):
+            self._serve_downloads(parsed)
         elif parsed.path in ("/api/auth.php", "/api/datasets.php"):
             self._handle_api(parsed, body=None)
         elif _is_forbidden_static(clean_path):
@@ -667,6 +748,41 @@ class AdminHandler(http.server.SimpleHTTPRequestHandler):
         self.send_header('Expires', '0')
         self.end_headers()
         self.wfile.write(body)
+
+    def _serve_downloads(self, parsed):
+        """Live per-dataset file listing for the Download Center's file explorer.
+
+        GET /api/downloads?dataset=<type>/<folder>&path=<subdir>
+        Lists DATA_WEB/<type>/<folder>/download/<subdir>. Read-only and
+        unauthenticated (the files under it are already statically downloadable),
+        no-store so a freshly dropped file shows up on the next open. Path
+        traversal is blocked on BOTH params: the dataset id via _safe_dataset_dir
+        and the inner path via _safe_subpath (Rule 1.4 — reject, never partially
+        mount)."""
+        params = dict(urllib.parse.parse_qsl(parsed.query))
+        info = _safe_dataset_dir(params.get("dataset", ""))
+        if not info:
+            self._json_nostore(400, {"error": "Invalid dataset"})
+            return
+        type_dir, folder, ds_dir = info
+        dataset_id = f"{type_dir}/{folder}"
+        download_root = (ds_dir / "download").resolve()
+        target = _safe_subpath(download_root, params.get("path", ""))
+        if target is None:
+            self._json_nostore(400, {"error": "Invalid path"})
+            return
+        if not download_root.is_dir():
+            # No download/ folder provisioned for this dataset — empty, not an error.
+            self._json_nostore(200, {"dataset": dataset_id, "path": "", "available": False, "entries": []})
+            return
+        if not target.is_dir():
+            self._json_nostore(404, {"error": "Not found"})
+            return
+        rel = target.relative_to(download_root).as_posix()
+        if rel == ".":
+            rel = ""
+        entries = _list_download_entries(download_root, target, dataset_id, rel)
+        self._json_nostore(200, {"dataset": dataset_id, "path": rel, "available": True, "entries": entries})
 
     def end_headers(self):
         self._cors_headers()
@@ -806,6 +922,21 @@ class AdminHandler(http.server.SimpleHTTPRequestHandler):
         self._cors_headers()
         if cookie:
             self.send_header("Set-Cookie", cookie)
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _json_nostore(self, status: int, data: dict):
+        # Like _json but with the explicit no-store trio used by the discovery
+        # endpoints. /api/* paths don't end in .json, so end_headers() won't add
+        # no-cache for them — a directory listing must not be cached. CORS is
+        # emitted by end_headers(); do not re-send it here (would duplicate).
+        body = json.dumps(data, ensure_ascii=False).encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0")
+        self.send_header("Pragma", "no-cache")
+        self.send_header("Expires", "0")
         self.end_headers()
         self.wfile.write(body)
 

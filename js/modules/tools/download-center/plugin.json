@@ -1,14 +1,14 @@
 {
   "id": "download-center",
   "name": "Download Center",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "creator": "IRIBHM",
   "placement": "tools",
   "group": "export",
   "subtype": "action",
   "icon": "download",
   "order": 10,
-  "description": "Open the export modal with all download options for the current dataset.",
+  "description": "Open the Download Center: a file explorer over the dataset's download/ folder plus generated exports (measurements, metadata, annotations, figures, workspace).",
   "buttonId": "btn-export",
   "i18nTitle": "title",
   "i18nLanguages": [

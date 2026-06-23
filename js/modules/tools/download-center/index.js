@@ -13,7 +13,9 @@ PluginRegistry.implement('download-center', {
       getCanvasBlob: this._ctx.getCanvasBlob,
       getCustomExports: this._ctx.getCustomExports,
       getWorkspaceState: this._ctx.workspace.getState,
-      applyWorkspaceState: this._ctx.workspace.applyState
+      applyWorkspaceState: this._ctx.workspace.applyState,
+      getMeasurements: () => this._ctx.measurements.list('viewer'),
+      getAnnotations: () => (typeof AnnotationManager !== 'undefined' ? AnnotationManager.all() : [])
     });
   },
 

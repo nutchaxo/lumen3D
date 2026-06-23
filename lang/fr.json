@@ -48,7 +48,23 @@
     "noFile": "Aucun fichier disponible pour cette catégorie.",
     "largeFile": "fichier volumineux",
     "recommended": "recommandé",
-    "files": "{count} fichiers"
+    "files": "{count} fichiers",
+    "filesTitle": "Fichiers du dataset",
+    "filesRoot": "download",
+    "folder": "Dossier",
+    "itemCount": "{count} éléments",
+    "explorerLoading": "Chargement des fichiers…",
+    "explorerEmpty": "Aucun fichier téléchargeable fourni pour ce dataset.",
+    "explorerFolderEmpty": "Ce dossier est vide.",
+    "explorerError": "Listing des fichiers indisponible (serveur de la plateforme requis).",
+    "generatedTitle": "Exports générés",
+    "measuresCsv": "Mesures CSV",
+    "measuresJson": "Mesures JSON",
+    "metadataJson": "Métadonnées JSON",
+    "annotationsJson": "Annotations JSON",
+    "noMeasures": "Aucune mesure à exporter",
+    "noMetadata": "Aucune métadonnée disponible",
+    "noAnnotations": "Aucune annotation à exporter"
   },
   "nav": {
     "back": "Retour",
@@ -456,15 +472,8 @@
     "achromatomaly": "Achromatomalie",
     "toggle": "Filtres daltonisme"
   },
-  "deepzoom": {
-    "title": "Explorateur Z-Stack (Natif)",
-    "studio2d": "Ouvrir dans le Studio 2D",
-    "mode": "Mode : Deep Zoom OME-TIFF/DZI",
-    "syncTodo": "Synchronisation avec le Studio (à implémenter : transfert du canvas)"
-  },
   "tips": {
     "renderModeDesc": "Sélectionner le mode de rendu",
-    "deepZoom": "Mode vérité terrain 2D (Deep Zoom)",
     "arrow": "Flèche",
     "back3d": "Retour au Visualiseur 3D",
     "center": "Centrer l'échantillon",

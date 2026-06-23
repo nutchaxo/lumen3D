@@ -63,7 +63,7 @@
         <div class="toolbar-cluster">
           <span class="toolbar-label" data-i18n="viewer.export">Export</span>
           <div class="toolbar-actions" data-tool-group="export">
-            <!-- download-center, save-workspace, restore-workspace, screenshot injected here -->
+            <!-- download-center, screenshot injected here -->
           </div>
         </div>
         <div class="toolbar-cluster">
@@ -75,7 +75,7 @@
         <div class="toolbar-cluster">
           <span class="toolbar-label" data-i18n="viewer.layouts">Layouts</span>
           <div class="toolbar-actions" data-tool-group="layouts">
-            <!-- presentation-mode, deepzoom-2d, decompose-channels, zstack-browser injected here -->
+            <!-- presentation-mode, decompose-channels, zstack-browser injected here -->
           </div>
         </div>
         <div class="toolbar-cluster">
@@ -275,15 +275,6 @@
         </button>
         <canvas id="webgl-canvas"></canvas>
         <div id="viewer-scale-bar" class="hidden" style="position:absolute; bottom:20px; right:20px; border-bottom:2px solid #fff; color:#fff; text-align:center; font-size:12px; font-weight:600; padding-bottom:4px; text-shadow:1px 1px 2px #000; z-index:10; pointer-events:none; min-width:40px; box-sizing: border-box;">200 µm</div>
-        <!-- Deep Zoom 2D Ground Truth Container (hidden by default) -->
-        <div id="deepzoom-container" class="deepzoom-container hidden" style="position:absolute;inset:0;z-index:5;background:#000;"></div>
-        <div id="deepzoom-controls" class="deepzoom-controls hidden" style="position:absolute;bottom:16px;left:50%;transform:translateX(-50%);z-index:6;display:flex;gap:8px;align-items:center;background:rgba(0,0,0,0.7);padding:6px 14px;border-radius:8px;">
-          <button class="btn btn-icon btn-ghost btn-sm" id="btn-dz-prev" title="Previous slice" data-i18n-title="tips.prevSlice"><i data-lucide="chevron-left"></i></button>
-          <span id="dz-slice-label" style="color:#fff;font-size:12px;font-family:var(--font-mono);min-width:80px;text-align:center;">Z 0 / 0</span>
-          <button class="btn btn-icon btn-ghost btn-sm" id="btn-dz-next" title="Next slice" data-i18n-title="tips.nextSlice"><i data-lucide="chevron-right"></i></button>
-          <button class="btn btn-outline btn-sm" id="btn-dz-exit" style="margin-left:8px;" data-i18n="viewer.back3d">Back to 3D</button>
-        </div>
-        
         <!-- Controls Overlay (center-left) -->
         <div class="canvas-overlay">
           <button class="btn btn-icon btn-solid" id="btn-center-sample" title="Center sample" data-i18n-title="tips.center" aria-label="Center sample" data-i18n-aria="tips.center">
@@ -470,7 +461,6 @@
   <script src="js/components/timeline.js?v=20260615-fixed1"></script>
   <script src="js/components/annotation-layer.js?v=20260615-fixed1"></script>
   <script src="js/components/studio-editor.js?v=20260615-fixed1"></script>
-  <script src="js/components/deepzoom-viewer.js"></script>
   <script src="js/viewers/volume-grid.js?v=20260615-fixed1"></script>
 
   <script src="js/viewers/volume-slicer.js?v=20260615-fixed1"></script>

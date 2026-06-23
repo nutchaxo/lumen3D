@@ -37,10 +37,9 @@ const PluginRegistry = (() => {
   // a safety net, not the source of truth — real discovery is folder-driven.
   const _DEFAULT_MODULE_PATHS = [
     'tools/toggle-grid', 'tools/toggle-axes', 'tools/orientation-axes', 'tools/toggle-volume',
-    'tools/screenshot', 'tools/presentation-mode', 'tools/save-workspace',
-    'tools/restore-workspace', 'tools/download-center', 'tools/decompose-channels',
-    'tools/zstack-browser', 'tools/deepzoom-2d', 'tools/slice-inspector',
-    'tools/measure-distance', 'shaders/natural-fluorescence', 'shaders/fluorescence', 'shaders/structure-dvr',
+    'tools/screenshot', 'tools/presentation-mode', 'tools/download-center', 'tools/decompose-channels',
+    'tools/zstack-browser', 'tools/slice-inspector',
+    'tools/measure-distance', 'shaders/fluorescence', 'shaders/structure-dvr',
     'channels/histogram', 'channels/gaussian-filter'
   ];
 

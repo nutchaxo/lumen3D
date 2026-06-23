@@ -26,7 +26,12 @@ const SVRManager = loadModule('js/core/svr-manager.js', 'SVRManager', {
 });
 
 function makeRenderer(max3D = 2048) {
-  return { capabilities: { max3DTextureSize: max3D }, getContext: () => ({}) };
+  // GL stub: init() drains GL errors (while gl.getError() !== gl.NO_ERROR), so the
+  // mock context must expose both — otherwise the drain loop throws/never exits.
+  return {
+    capabilities: { max3DTextureSize: max3D },
+    getContext: () => ({ NO_ERROR: 0, getError: () => 0 }),
+  };
 }
 
 // Build an SVR whose GPU side is fully stubbed (no real WebGL), so init() exercises

@@ -9,7 +9,6 @@
 //   DEAD-021 SYNC_EXPOSURE emitted without sourceIndex (admpan handles it; compare couldn't route)
 //   DEAD-020 compare.js _setPanelLoadState no-op called from 7 sites
 //   LEAK-002 _slicerOverlayStop never called -> overlay rAF leak
-//   BUG-008  _deepZoomActive never set -> DeepZoom branches inert
 //   BUG-032  live dataset read dimensions.t without guard
 //   BUG-033  _mergeDatasetMetadata mounted incomplete metadata silently
 //
@@ -56,10 +55,6 @@ const count = (s, re) => (s.match(re) || []).length;
   // LEAK-002
   assert.ok(count(v, /_slicerOverlayStop\(\)/g) >= 2, 'LEAK-002: _slicerOverlayStop now called');
 
-  // BUG-008
-  assert.ok(/DeepZoomViewer\.isActive\(\)/.test(v), 'BUG-008: uses DeepZoomViewer.isActive()');
-  assert.equal(count(v, /_deepZoomActive\s*=/g), 0, 'BUG-008: dead _deepZoomActive flag removed');
-
   // BUG-032 / BUG-033
   assert.ok(/Number\.isFinite\(totalFrames\)/.test(v), 'BUG-032: live dimensions.t guarded');
   assert.ok(/dimensions absentes du catalogue|dimensions manquantes/.test(v), 'BUG-033: incomplete metadata rejected');
@@ -71,4 +66,4 @@ const count = (s, re) => (s.match(re) || []).length;
   assert.equal(count(c, /_setPanelLoadState/g), 0, 'DEAD-020: _setPanelLoadState no-op + all call sites removed');
 }
 
-console.log('viewer/compare postMessage + dead code (SEC-012, DEAD-001/002/013/015/020/021, BUG-008/030/032/033, LEAK-002): OK');
+console.log('viewer/compare postMessage + dead code (SEC-012, DEAD-001/002/013/015/020/021, BUG-030/032/033, LEAK-002): OK');

@@ -1,10 +1,22 @@
 class SVRManager {
   static estimateMaxSlots(renderer, brickSize = 64) {
-    return Math.max(4096, SVRManager._lastWorkingSlots || 0);
+    // CAP-008: ceiling raised 4096 -> 8192 (8 atlas pages, the shader's svrAtlas0..7
+    // limit). This lets the viewer attempt the native LOD for datasets up to ~8192
+    // active bricks; if the GPU cannot allocate the corresponding 5-8 GiB atlas the
+    // init() cascade throws and the caller downgrades the LOD gracefully.
+    return Math.max(8192, SVRManager._lastWorkingSlots || 0);
   }
 
   static atlasConfigs() {
     return [
+      // CAP-008: 8->5 page tiers (8/7/6/5 GiB, 1 GiB per 1024x1024x256 texture).
+      // 8 pages == the shader's svrAtlas0..7 sampler limit. Only ever selected when
+      // an explicit targetSlots demands >4096 slots (smallest-sufficient first); the
+      // untargeted path is capped at 4096 in init() so tiny loads never probe 8 GiB.
+      { dim: 1024, depth: 256, pages: 8 }, // 8192 slots
+      { dim: 1024, depth: 256, pages: 7 }, // 7168 slots
+      { dim: 1024, depth: 256, pages: 6 }, // 6144 slots
+      { dim: 1024, depth: 256, pages: 5 }, // 5120 slots
       // 4096 slots (4 GiB total, 1 GiB per texture)
       { dim: 1024, depth: 256, pages: 4 },
       // 3072 slots
@@ -109,6 +121,10 @@ class SVRManager {
       configs = configs
         .filter(cfg => SVRManager.slotsForConfig(cfg, this.brickSize) >= targetSlots)
         .sort((a, b) => SVRManager.slotsForConfig(a, this.brickSize) - SVRManager.slotsForConfig(b, this.brickSize));
+    } else {
+      // CAP-008: no explicit brick demand — keep the historical 4096-slot ceiling so a
+      // degenerate (0-1 brick) load never probes the 5-8 GiB tiers added above.
+      configs = configs.filter(cfg => SVRManager.slotsForConfig(cfg, this.brickSize) <= 4096);
     }
     for (const config of configs) {
       this._applyAtlasConfig(config);
@@ -140,6 +156,12 @@ class SVRManager {
           atlas.dispose?.();
         }
         allocatedAtlases = [];
+        // SVR-012: drain any stale GL errors produced by the failed glTexStorage3D so they
+        // don't contaminate texSubImage3D calls on the next (smaller) atlas config.
+        const gl = renderer?.getContext?.();
+        if (gl && typeof gl.getError === 'function') {
+          while (gl.getError() !== gl.NO_ERROR) { /* drain */ }
+        }
       }
     }
     if (!atlasAllocated || !allocatedAtlases.length) {
@@ -183,7 +205,10 @@ class SVRManager {
       this._applyAtlasConfig(candidates[0] || configs[configs.length - 1]);
       return;
     }
-    const preferredSlots = SVRManager._lastWorkingSlots || Infinity;
+    // CAP-008: default the untargeted preference to the historical 4096 ceiling (not
+    // Infinity) so the provisional pick never lands on the 5-8 GiB tiers without an
+    // explicit targetSlots demand.
+    const preferredSlots = SVRManager._lastWorkingSlots || 4096;
     const config = configs.find(cfg => SVRManager.slotsForConfig(cfg, this.brickSize) <= preferredSlots) || configs[configs.length - 1];
     this._applyAtlasConfig(config);
   }
@@ -381,7 +406,12 @@ class SVRManager {
     const sz = coord.z * this.brickSize;
     this._writeChannelToSlot(slotIndex, channel, brickData, bw, bh, bd);
     const uploadData = this._extractSlotRegion(slotIndex, bw, bh, bd);
-    this._uploadRgbaRegion(coord.atlas, sx, sy, sz, bw, bh, bd, uploadData);
+    // SVR-012: if the GPU upload fails, clear the PageTable entry so the shader
+    // treats this brick as missing (ray skip) rather than sampling garbage memory.
+    if (this._uploadRgbaRegion(coord.atlas, sx, sy, sz, bw, bh, bd, uploadData) === false) {
+      this.pageData[ptIdx + 3] = 0;
+      this.pageTable.needsUpdate = true;
+    }
   }
 
   writeRgbaBrick(bx, by, bz, brickData, bw, bh, bd) {
@@ -401,7 +431,11 @@ class SVRManager {
     const sy = coord.y * this.brickSize;
     const sz = coord.z * this.brickSize;
     const uploadData = this._compactRgbaBrickData(brickData, bw, bh, bd);
-    this._uploadRgbaRegion(coord.atlas, sx, sy, sz, bw, bh, bd, uploadData);
+    // SVR-012: if the GPU upload fails, clear the PageTable entry (same as writeBrick).
+    if (this._uploadRgbaRegion(coord.atlas, sx, sy, sz, bw, bh, bd, uploadData) === false) {
+      this.pageData[ptIdx + 3] = 0;
+      this.pageTable.needsUpdate = true;
+    }
   }
 
   _compactRgbaBrickData(brickData, bw, bh, bd) {
@@ -528,18 +562,30 @@ class SVRManager {
         gl.UNSIGNED_BYTE,
         uploadData
       );
-      
+
+      // SVR-012: check for GL error after upload. If glTexStorage3D failed during the
+      // cascade, stale GL state can cause texSubImage3D to silently fail — leaving the
+      // atlas slot with uninitialised GPU memory (appears as pink/garbage in the shader).
+      const glErr = gl.getError();
+
       gl.pixelStorei(gl.UNPACK_ALIGNMENT, 4);
       gl.pixelStorei(gl.UNPACK_ROW_LENGTH, 0);
       gl.pixelStorei(gl.UNPACK_IMAGE_HEIGHT, 0);
       gl.pixelStorei(gl.UNPACK_SKIP_PIXELS, 0);
       gl.pixelStorei(gl.UNPACK_SKIP_ROWS, 0);
       gl.pixelStorei(gl.UNPACK_SKIP_IMAGES, 0);
-      
+
       if (prevBinding !== null) {
         gl.bindTexture(gl.TEXTURE_3D, prevBinding);
       }
+
+      if (glErr !== gl.NO_ERROR) {
+        console.warn('[SVRManager] texSubImage3D failed (glError=' + glErr + ') at atlas=' + atlasIndex + ' offset=' + sx + ',' + sy + ',' + sz);
+        return false;
+      }
+      return true;
     }
+    return true;
   }
 
   dispose() {

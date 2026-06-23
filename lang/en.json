@@ -155,6 +155,8 @@
     "slab": "Slab",
     "renderNative": "Render native",
     "cancelNative": "Cancel native render",
+    "resDowngrade": "{requested} resolution exceeds available GPU memory — displaying {actual} instead.",
+    "resDowngradeOk": "OK",
     "roiStats": "ROI statistics",
     "tools": "Tools",
     "export": "Export",

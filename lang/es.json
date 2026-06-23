@@ -153,6 +153,8 @@
     "slab": "Grosor",
     "renderNative": "Renderizado nativo",
     "cancelNative": "Cancelar renderizado nativo",
+    "resDowngrade": "La resolución {requested} supera la memoria GPU disponible — mostrando {actual}.",
+    "resDowngradeOk": "OK",
     "roiStats": "Estadísticas de ROI",
     "errNoDataset": "No se proporcionó un identificador de datos.",
     "errNotFound": "Conjunto de datos no encontrado en el catálogo.",

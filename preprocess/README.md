@@ -4,7 +4,7 @@
 
 **De l'image brute du microscope `.ims` à un volume 3D fluide dans le navigateur.**
 
-`version 0.13.0` · `Imaris HDF5 → briques 64³ WebP` · Python (h5py · numpy · scipy · Pillow)
+`version 0.13.1` · `Imaris HDF5 → briques 64³ WebP` · Python (h5py · numpy · scipy · Pillow)
 
 </div>
 
@@ -89,7 +89,7 @@ Cinq scripts s'enchaînent. Chacun fait une chose et la passe au suivant :
 
 ## Table des matières
 1. [Prérequis & environnement](#1-prérequis--environnement)
-2. [Exécution (CLI)](#2-exécution-cli)
+2. [Exécution : lanceur `.bat` (le plus simple) ou CLI](#2-exécution)
 3. [Contrat d'entrée : structure du fichier `.ims` (Imaris HDF5)](#3-contrat-dentrée--structure-du-fichier-ims-imaris-hdf5)
 4. [Carte des fichiers](#4-carte-des-fichiers)
 5. [Étape 1 — Extraction des métadonnées](#5-étape-1--extraction-des-métadonnées-1-ims_metadatapy)
@@ -122,6 +122,8 @@ Cinq scripts s'enchaînent. Chacun fait une chose et la passe au suivant :
   pip install h5py numpy scipy Pillow tqdm
   ```
 
+  (Un [`requirements.txt`](requirements.txt) est fourni. 💡 Le lanceur [`run_preprocess.bat`](#21-le-plus-simple--le-lanceur-run_preprocessbat-recommandé) détecte Python et installe ces dépendances pour vous au besoin — voir §2.1.)
+
   > ⚠️ `scikit-image` n'est **plus** nécessaire (les imports Otsu/morphologie skimage de l'ancienne version ont été supprimés en v0.13.0). Seul `scipy.ndimage` est utilisé pour la morphologie/le médian.
 
 * **RAM** : l'étape 2 charge **tout le volume d'un canal en `float32`** (`D×H×W×4` octets). Ex. 3789×3789×178 ≈ **10.2 Go/canal**, pic ~32 Go avec masque + blocs + sortie. Prévoir large (machine de référence : 128 Go / 20 cœurs).
@@ -129,7 +131,35 @@ Cinq scripts s'enchaînent. Chacun fait une chose et la passe au suivant :
 
 ---
 
-## 2. Exécution (CLI)
+## 2. Exécution
+
+Deux façons de lancer le pipeline : le **lanceur `.bat`** (interactif, sans rien retenir — recommandé) ou la **ligne de commande** (pour scripter / automatiser).
+
+### 2.1. Le plus simple — le lanceur `run_preprocess.bat` *(recommandé)*
+
+Pas besoin de retenir la commande Python : **un double‑clic suffit.**
+
+1. Ouvrir le dossier `preprocess/` et **double‑cliquer sur [`run_preprocess.bat`](run_preprocess.bat)** (ou le lancer depuis une console).
+2. Le script déroule tout seul **4 étapes** :
+   * **[1/4]** détecte automatiquement un interpréteur **Python 3** (essaie successivement `py -3`, `python`, `python3`, `py`) ;
+   * **[2/4]** vérifie les dépendances (`numpy`, `Pillow`, `h5py`, `scipy`, `tqdm`) et **propose de les installer** via `pip` si elles manquent ;
+   * **[3/4]** pose **3 questions** :
+
+     | Question | Quoi saisir |
+     |---|---|
+     | Dossier contenant les `.ims` | Le chemin du dossier d'entrée. Validé : il doit exister, et le **nombre de `.ims` détectés** est affiché. |
+     | Dossier de sortie `DATA_WEB` | **Entrée** ⏎ = valeur par défaut `..\DATA_WEB` (le `DATA_WEB` du dépôt). Ou un autre chemin. |
+     | Filtre optionnel *(glob)* | Ex. `*E8*` pour ne traiter que certains embryons. **Entrée** ⏎ = tous les fichiers. |
+
+   * **[4/4]** affiche un **récapitulatif**, demande **confirmation** (`O/n`), puis lance le traitement avec la **progression en temps réel** (barres `tqdm`).
+3. À la fin, le **code de retour** est affiché (succès / erreur) et la fenêtre attend une touche (`pause`).
+
+> ✅ **Portable** : le `.bat` n'utilise **aucun chemin absolu** (tout est résolu via `%~dp0`, relativement à son emplacement). Il suffit qu'il reste **à côté de `run_preprocess.py`** dans `preprocess/`.
+> 💡 **Cas courant** : on colle le dossier d'entrée, puis on appuie sur **Entrée** à chaque autre question pour accepter les valeurs par défaut.
+
+### 2.2. En ligne de commande (CLI)
+
+Pour scripter, automatiser, ou tourner sous Linux/macOS. C'est exactement ce que le `.bat` appelle en interne :
 
 ```bash
 python run_preprocess.py --input <dossier_des_ims> --output <DATA_WEB> [--only "<glob>"]
@@ -198,7 +228,9 @@ Détails importants :
 
 | Fichier | Rôle | Entrée | Sortie |
 |---|---|---|---|
+| [`run_preprocess.bat`](run_preprocess.bat) | **Lanceur interactif** Windows (détection Python, install deps, saisie guidée). | double‑clic | appelle `run_preprocess.py` |
 | [`run_preprocess.py`](run_preprocess.py) | Orchestrateur + vignette. `__version__` du pipeline. | `--input`, `--output`, `--only` | appelle 1→4 ; écrit `thumbnail.webp` |
+| [`requirements.txt`](requirements.txt) | Dépendances Python épinglées (utilisé par le `.bat` en secours). | — | — |
 | [`1-ims_metadata.py`](1-ims_metadata.py) | Lit les attributs HDF5. | `<ims>`, `<out.json>` | `meta.json` |
 | [`2-image_processor.py`](2-image_processor.py) | Débruitage + normalisation 8‑bits + pyramide LOD. | `<ims>`, `<meta.json>`, `<temp>` | `temp/t*_c*_lod*.bin`, `temp/processing_meta.json` |
 | [`3-chunk_packer.py`](3-chunk_packer.py) | Découpe 64³, mosaïque, WebP lossless, packs. | `<temp>`, `<out_dir>` | `out/bricks/manifest.json`, `out/bricks/lod*/c*/pack_*.bin` |
@@ -544,5 +576,5 @@ Pour réimplémenter et obtenir le **même résultat** :
 ---
 
 <div align="center">
-<sub>IRIBHM · ULB — Lumen3D Microscopy Platform · pipeline de preprocessing v0.13.0</sub>
+<sub>IRIBHM · ULB — Lumen3D Microscopy Platform · pipeline de preprocessing v0.13.1</sub>
 </div>

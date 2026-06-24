@@ -233,7 +233,7 @@ DATA_WEB/
 | `start.bat` | Windows launcher — opens browser + `python -m http.server 8000`. **No admin API.** |
 | PHP (`api/*.php`) | Legacy — only if hosting on PHP. `dev_server.py` re-implements the same routes. |
 
-**Admin credentials** : `api/config.json` (SHA-256 hashed password). Default user `admin`. Change via `python dev_server.py --set-password`.
+**Admin credentials** (since web v1.4.0) : `api/admin_credential.json` — a one-way salted **PBKDF2-HMAC-SHA256** hash (no plaintext), never served over HTTP (`api/` is blocked + `api/.htaccess`). No default password: a **missing** credential drives a first-run **setup** screen in the admin panel (`POST /api/auth.php?action=setup`, create-exclusive so it can't overwrite a live credential). Change it in-panel (Sécurité tab, needs the current password) or via `python dev_server.py --set-password` (operator override). The old `api/config.json` password store is no longer read (gitignored).
 
 ---
 

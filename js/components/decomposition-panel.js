@@ -488,7 +488,7 @@ const DecompositionPanel = (() => {
 
       // ELE-27: only reset the canvas if the size actually changed. Reassigning
       // width/height clears the canvas and is costly; at rest the size is stable.
-      // (The drawImage below rewrites the whole canvas anyway.)
+      // (We clearRect before drawImage below to wipe the previous frame.)
       if (view.canvas.width !== w || view.canvas.height !== h) {
         view.canvas.width = w;
         view.canvas.height = h;
@@ -501,6 +501,12 @@ const DecompositionPanel = (() => {
       _applyStateToMaterial(view.state, material);
 
       renderer.render(scene, camera);
+      // The WebGL canvas is cleared to a TRANSPARENT background (setBackgroundPreset
+      // forces clearAlpha 0), so the volume's empty space carries alpha 0. drawImage
+      // composites source-over, so without clearing first those transparent regions
+      // let the previous frame show through — the embryo's earlier orientations pile
+      // up as ghosts as the camera moves. Wipe the vignette before each draw.
+      view.ctx.clearRect(0, 0, view.canvas.width, view.canvas.height);
       view.ctx.drawImage(renderer.domElement, 0, 0, w, h);
     }
 

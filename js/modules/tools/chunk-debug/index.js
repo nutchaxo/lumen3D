@@ -290,6 +290,8 @@ PluginRegistry.implement('chunk-debug', {
       (+ps.yaw || 0).toFixed(2),
       (+ps.pitch || 0).toFixed(2),
       (+ps.roll || 0).toFixed(2),
+      ps.projection || 'single',
+      (+ps.slabThickness || 1) | 0,
       this._currentQuality()
     ].join('|');
   },
@@ -427,16 +429,56 @@ PluginRegistry.implement('chunk-debug', {
       const normZ = z > 1 ? (s + 0.5) / z : 0.5;
       const n = new THREE.Vector3(0, 0, 1);
       const basis = this._planeBasis(n);
-      return { type: 'slice', n, d: normZ - 0.5, u: basis.u, v: basis.v };
+      return { type: 'slice', n, d: normZ - 0.5, u: basis.u, v: basis.v, h: 0 };
     }
     let ps = null;
     try { ps = VolumeViewer.getPlaneSpec(); } catch (e) {}
     if (ps && ps.visible && Array.isArray(ps.normal)) {
-      const n = new THREE.Vector3().fromArray(ps.normal).normalize();
+      // ps.normal is defined in the cube's UNSCALED local space, but the cube carries
+      // a non-uniform scale (anisotropic voxels + z display stretch). The actual cut
+      // plane the viewer renders has, in the displayed [-0.5,0.5]³ grid, the normal
+      // normalize(scale ⊙ rawNormal) — NOT rawNormal. Clipping the chunks with the raw
+      // normal put every oblique section on a different plane than the rendered cut
+      // mesh (axis-aligned cuts are immune: scale ⊙ eᵢ ∥ eᵢ, so they were unaffected).
+      // Derivation: the plane mesh sits at world point cubeR·(localPos⊙scale)+pos with
+      // world normal cubeR·rawN; pulling that back through the cube transform gives
+      //   x · (scale ⊙ rawN) = (value-0.5)·((scale ⊙ rawN)·rawN)   in local space.
+      const rawN = new THREE.Vector3().fromArray(ps.normal).normalize();
+      const scale = (this._cube && this._cube.scale) || new THREE.Vector3(1, 1, 1);
+      const Np = new THREE.Vector3(rawN.x * scale.x, rawN.y * scale.y, rawN.z * scale.z);
+      const npLen = Np.length() || 1;
+      const n = Np.clone().multiplyScalar(1 / npLen);
+      const d = ((Number(ps.value) || 0) - 0.5) * Np.dot(rawN) / npLen;
       const basis = this._planeBasis(n);
-      return { type: 'slice', n, d: (Number(ps.value) || 0) - 0.5, u: basis.u, v: basis.v };
+      const h = this._slabHalfThickness(ps, npLen);
+      return { type: 'slice', n, d, u: basis.u, v: basis.v, h };
     }
     return { type: 'box' };
+  },
+
+  // Half-thickness of the MIP/average slab expressed in the cube's local [-0.5,0.5]³
+  // grid, measured as an offset of the (scaled) cut plane along its normal. Mirrors
+  // volume-slicer.js: each of the (slabThickness-1) extra samples integrates maxP/256
+  // µm of depth along the plane normal, so the slab spans (steps-1)·maxP/256 µm. One
+  // world unit equals `reference` µm (max of the x/y physical extents, the cube scale
+  // reference), and a world offset δ along the normal shifts the local plane by δ/|Np|
+  // (Np = scale ⊙ rawNormal). Returns 0 for the thin single-sample plane so the overlay
+  // collapses to its original behaviour. Kept in lock-step with VolumeViewer's slab
+  // faces so the yellow band and the blue slab mesh always coincide.
+  _slabHalfThickness(ps, npLen) {
+    const proj = ps.projection || 'single';
+    const steps = Math.max(1, Math.min(64, Number(ps.slabThickness) || 1));
+    if ((proj !== 'mip' && proj !== 'average') || steps <= 1) return 0;
+    let physical = null;
+    try { physical = VolumeViewer.getPhysicalSize ? VolumeViewer.getPhysicalSize() : null; } catch (e) {}
+    const px = physical && physical.x > 0 ? physical.x : 1;
+    const py = physical && physical.y > 0 ? physical.y : 1;
+    const pz = physical && physical.z > 0 ? physical.z : 1;
+    const maxP = Math.max(px, py, pz);
+    const reference = Math.max(px, py) || 1;
+    const totalUm = (steps - 1) * maxP / 256;     // slab depth along the normal (µm)
+    const halfWorld = totalUm / (2 * reference);  // world half-thickness
+    return halfWorld / npLen;                     // → local offset along the scaled normal
   },
 
   _planeBasis(n) {
@@ -463,21 +505,91 @@ PluginRegistry.implement('chunk-debug', {
       }
     } else {
       for (const c of this._chunks) {
-        const poly = this._clipBoxByPlane(c.localMin, c.localMax, mode);
-        if (!poly) { c.corners = null; c.edges = null; c.poly2 = null; continue; }
-        c.corners = poly;
-        const edges = [];
-        for (let i = 0; i < poly.length; i++) edges.push([i, (i + 1) % poly.length]);
-        c.edges = edges;
-        c.poly2 = poly.map(p => ({ u: p.dot(mode.u), v: p.dot(mode.v) }));
+        const shape = mode.h > 0
+          ? this._clipBoxBySlab(c.localMin, c.localMax, mode)
+          : this._thinSliceShape(c.localMin, c.localMax, mode);
+        if (!shape) { c.corners = null; c.edges = null; c.poly2 = null; continue; }
+        c.corners = shape.corners;
+        c.edges = shape.edges;
+        c.poly2 = shape.poly2;
       }
     }
   },
 
+  // Single thin cut: box ∩ plane → one closed polygon outline.
+  _thinSliceShape(m, M, mode) {
+    const poly = this._clipBoxByPlane(m, M, mode.n, mode.d, mode.u, mode.v);
+    if (!poly) return null;
+    const edges = [];
+    for (let i = 0; i < poly.length; i++) edges.push([i, (i + 1) % poly.length]);
+    return { corners: poly, edges, poly2: poly.map(p => ({ u: p.dot(mode.u), v: p.dot(mode.v) })) };
+  },
+
+  // Slab (MIP/average): the box ∩ slab solid drawn as two cap outlines (where each
+  // slab face cuts the box) plus the box's own edges trimmed to the [d-h, d+h] band.
+  // A chunk fully inside the slab yields no caps but full trimmed edges (a whole box);
+  // a chunk straddling one face yields one cap + partial edges — both read correctly.
+  _clipBoxBySlab(m, M, mode) {
+    const { n, d, u, v, h } = mode;
+    const corners = [];
+    const edges = [];
+    const addLoop = (poly) => {
+      if (!poly || poly.length < 2) return;
+      const base = corners.length;
+      for (const p of poly) corners.push(p);
+      for (let i = 0; i < poly.length; i++) edges.push([base + i, base + ((i + 1) % poly.length)]);
+    };
+    addLoop(this._clipBoxByPlane(m, M, n, d - h, u, v));
+    addLoop(this._clipBoxByPlane(m, M, n, d + h, u, v));
+
+    const c = [
+      [m.x, m.y, m.z], [M.x, m.y, m.z], [M.x, M.y, m.z], [m.x, M.y, m.z],
+      [m.x, m.y, M.z], [M.x, m.y, M.z], [M.x, M.y, M.z], [m.x, M.y, M.z]
+    ];
+    const E = [[0, 1], [1, 2], [2, 3], [3, 0], [4, 5], [5, 6], [6, 7], [7, 4], [0, 4], [1, 5], [2, 6], [3, 7]];
+    for (const [ia, ib] of E) {
+      const seg = this._clipSegmentToSlab(c[ia], c[ib], n, d, h);
+      if (!seg) continue;
+      const base = corners.length;
+      corners.push(new THREE.Vector3(seg.a[0], seg.a[1], seg.a[2]));
+      corners.push(new THREE.Vector3(seg.b[0], seg.b[1], seg.b[2]));
+      edges.push([base, base + 1]);
+    }
+    if (corners.length === 0) return null;
+
+    // Hover hit-testing uses the centre section; chunks the centre plane misses (but
+    // that still lie in the slab) are covered by the ray↔slab test in _recomputeStack.
+    const centre = this._clipBoxByPlane(m, M, n, d, u, v);
+    const poly2 = centre ? centre.map(p => ({ u: p.dot(u), v: p.dot(v) })) : null;
+    return { corners, edges, poly2 };
+  },
+
+  // Clip segment A→B to the slab band d-h ≤ n·p ≤ d+h. Returns the trimmed
+  // endpoints {a, b} (arrays) or null if the segment lies entirely outside the band.
+  _clipSegmentToSlab(A, B, n, d, h) {
+    const fa = n.x * A[0] + n.y * A[1] + n.z * A[2] - d;
+    const df = (n.x * B[0] + n.y * B[1] + n.z * B[2] - d) - fa;
+    let t0 = 0, t1 = 1;
+    // Two half-space constraints: f ≤ h (sign +1) and -f ≤ h (sign -1).
+    for (const sign of [1, -1]) {
+      const aa = sign * df;
+      const bb = h - sign * fa;          // require aa·t ≤ bb
+      if (Math.abs(aa) < 1e-12) {
+        if (bb < 0) return null;          // violated for all t
+      } else if (aa > 0) {
+        if (bb / aa < t1) t1 = bb / aa;   // upper bound
+      } else {
+        if (bb / aa > t0) t0 = bb / aa;   // lower bound
+      }
+    }
+    if (t1 < t0) return null;
+    const lerp = (t) => [A[0] + t * (B[0] - A[0]), A[1] + t * (B[1] - A[1]), A[2] + t * (B[2] - A[2])];
+    return { a: lerp(t0), b: lerp(t1) };
+  },
+
   // Box ∩ plane (normal·x = d) → ordered polygon, via edge crossings. 4 points
   // for an axis-aligned cut (a square), 3–6 for an oblique one. Null if no cut.
-  _clipBoxByPlane(m, M, mode) {
-    const n = mode.n, d = mode.d;
+  _clipBoxByPlane(m, M, n, d, u, v) {
     const c = [
       [m.x, m.y, m.z], [M.x, m.y, m.z], [M.x, M.y, m.z], [m.x, M.y, m.z],
       [m.x, m.y, M.z], [M.x, m.y, M.z], [M.x, M.y, M.z], [m.x, M.y, M.z]
@@ -498,7 +610,6 @@ PluginRegistry.implement('chunk-debug', {
     }
     if (pts.length < 3) return null;
     // Order CCW around the centroid in the in-plane (u,v) basis.
-    const u = mode.u, v = mode.v;
     let cu = 0, cv = 0;
     for (const p of pts) { cu += p.dot(u); cv += p.dot(v); }
     cu /= pts.length; cv /= pts.length;
@@ -569,6 +680,14 @@ PluginRegistry.implement('chunk-debug', {
         const t = this._rayAabb(ray, c.localMin, c.localMax);
         if (t !== null) hits.push({ c, t });
       }
+    } else if (this._mode.h > 0) {
+      // Slab: a chunk is under the cursor when the ray crosses (box ∩ slab).
+      const { n, d, h } = this._mode;
+      for (const c of this._chunks) {
+        if (!this._raySlabBox(ray, c.localMin, c.localMax, n, d, h)) continue;
+        const center = c.localMin.clone().add(c.localMax).multiplyScalar(0.5);
+        hits.push({ c, t: center.sub(ray.origin).dot(ray.direction) });
+      }
     } else {
       const { n, d, u, v } = this._mode;
       const denom = n.dot(ray.direction);
@@ -612,6 +731,48 @@ PluginRegistry.implement('chunk-debug', {
     }
     if (tmax < 0) return null;
     return tmin >= 0 ? tmin : tmax; // entry distance (exit if the camera is inside)
+  },
+
+  // Ray ↔ AABB as the full [t0, t1] entry/exit interval (null = miss). Unlike
+  // _rayAabb it keeps both bounds so the slab test can intersect the two intervals.
+  _rayAabbRange(ray, min, max) {
+    const o = ray.origin, dir = ray.direction;
+    let tmin = -Infinity, tmax = Infinity;
+    for (const ax of ['x', 'y', 'z']) {
+      const dd = dir[ax];
+      if (Math.abs(dd) < 1e-9) {
+        if (o[ax] < min[ax] || o[ax] > max[ax]) return null;
+        continue;
+      }
+      const inv = 1 / dd;
+      let t1 = (min[ax] - o[ax]) * inv;
+      let t2 = (max[ax] - o[ax]) * inv;
+      if (t1 > t2) { const tmp = t1; t1 = t2; t2 = tmp; }
+      if (t1 > tmin) tmin = t1;
+      if (t2 < tmax) tmax = t2;
+      if (tmax < tmin) return null;
+    }
+    return { t0: tmin, t1: tmax };
+  },
+
+  // True when the ray crosses (box ∩ slab) in front of the camera — i.e. the box
+  // entry/exit interval, the slab band -h ≤ n·p-d ≤ h interval and t ≥ 0 all overlap.
+  _raySlabBox(ray, min, max, n, d, h) {
+    const box = this._rayAabbRange(ray, min, max);
+    if (!box) return false;
+    let s0 = -Infinity, s1 = Infinity;
+    const a = n.dot(ray.direction);
+    const b = n.dot(ray.origin) - d;
+    if (Math.abs(a) < 1e-9) {
+      if (Math.abs(b) > h) return false;     // ray parallel to the slab and outside it
+    } else {
+      let ta = (-h - b) / a, tb = (h - b) / a;
+      if (ta > tb) { const tmp = ta; ta = tb; tb = tmp; }
+      s0 = ta; s1 = tb;
+    }
+    const lo = Math.max(box.t0, s0);
+    const hi = Math.min(box.t1, s1);
+    return hi >= lo && hi >= 0;
   },
 
   _pointInPoly(px, py, poly) {

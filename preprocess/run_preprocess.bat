@@ -149,6 +149,7 @@ echo.
 
 rem --- [4/4] Execution du pipeline ---
 echo [4/4] Execution du pipeline...
+echo       ^(Ctrl+C pendant le traitement : une confirmation sera demandee avant l'arret.^)
 echo.
 rem Sortie non bufferisee + UTF-8 pour une progression propre en temps reel
 set "PYTHONUNBUFFERED=1"
@@ -165,6 +166,8 @@ echo.
 echo ============================================================================
 if "!RC!"=="0" (
     echo   Traitement termine avec succes.
+) else if "!RC!"=="130" (
+    echo   Pipeline interrompu par l'utilisateur ^(Ctrl+C^). Etat nettoye.
 ) else (
     echo   Le pipeline s'est termine avec le code d'erreur !RC!.
 )

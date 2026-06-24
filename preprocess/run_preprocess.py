@@ -4,6 +4,8 @@ import fnmatch
 import json
 import os
 import shutil
+import signal
+import subprocess
 import sys
 import traceback
 from datetime import datetime
@@ -11,11 +13,68 @@ from pathlib import Path
 import numpy as np
 from PIL import Image
 
-__version__ = "0.13.1"
+__version__ = "0.13.2"
 
 # ── Paths ──────────────────────────────────────────────────────────────────────
 SCRIPT_DIR = Path(__file__).resolve().parent
 PYTHON_EXE = sys.executable
+
+# ── Graceful interruption (Ctrl+C) ──────────────────────────────────────────────
+# Each step runs in its OWN process group, so a console Ctrl+C is NOT delivered to
+# the child directly. The orchestrator intercepts SIGINT, asks the user to confirm,
+# and only then tears the running step (and the worker pool it spawned) down.
+# Declining the prompt resumes the step transparently — it never received the signal.
+if os.name == "nt":
+    _STEP_SPAWN = {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP}
+else:
+    _STEP_SPAWN = {"start_new_session": True}
+
+_current_proc = None    # Popen of the step currently running (or None)
+_confirming = False     # re-entrancy guard for the confirmation prompt
+
+
+def _kill_tree(proc) -> None:
+    """Terminate a step process and every worker it spawned (ProcessPoolExecutor)."""
+    if proc is None or proc.poll() is not None:
+        return
+    try:
+        if os.name == "nt":
+            subprocess.run(["taskkill", "/F", "/T", "/PID", str(proc.pid)],
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        else:
+            os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
+    except Exception:
+        pass
+    try:
+        proc.wait(timeout=10)
+    except Exception:
+        try:
+            proc.kill()
+        except Exception:
+            pass
+
+
+def _install_sigint_handler() -> None:
+    """On Ctrl+C, ask for confirmation. Confirm -> abort cleanly; decline -> resume."""
+    def _handler(signum, frame):
+        global _confirming
+        if _confirming:
+            # A second Ctrl+C while the prompt is up means: stop now, for sure.
+            raise KeyboardInterrupt
+        _confirming = True
+        try:
+            sys.stderr.write("\n")
+            try:
+                answer = input("[INTERRUPTION] Arreter le pipeline en cours ? "
+                               "Les fichiers temporaires seront nettoyes. [o/N] ")
+            except EOFError:
+                answer = "o"   # non-interactive stdin: cannot ask -> stop
+        finally:
+            _confirming = False
+        if answer.strip().lower() in ("o", "oui", "y", "yes"):
+            raise KeyboardInterrupt
+        print("[REPRISE] Poursuite du traitement...")
+    signal.signal(signal.SIGINT, _handler)
 
 # Hex colors to RGB mapping for composite thumbnail (matches channel colors)
 THUMB_COLORS = [
@@ -91,10 +150,21 @@ def build_thumbnail(temp_dir: Path, output_dir: Path, proc_meta: dict) -> None:
     print(f"[THUMBNAIL] Wrote thumbnail to {thumb_path}")
 
 def run_step(script_name: str, *args) -> None:
-    import subprocess
+    global _current_proc
     cmd = [PYTHON_EXE, str(SCRIPT_DIR / script_name), *args]
     print(f"\n[RUNNING] {' '.join(cmd)}")
-    subprocess.run(cmd, check=True)
+    proc = subprocess.Popen(cmd, **_STEP_SPAWN)
+    _current_proc = proc
+    try:
+        ret = proc.wait()
+    except KeyboardInterrupt:
+        # Confirmed abort during this step: tear down the step and its worker pool.
+        _kill_tree(proc)
+        raise
+    finally:
+        _current_proc = None
+    if ret != 0:
+        raise subprocess.CalledProcessError(ret, cmd)
 
 def process_ims_file(ims_path: Path, output_root: Path) -> None:
     dataset_name = ims_path.stem
@@ -142,9 +212,11 @@ def process_ims_file(ims_path: Path, output_root: Path) -> None:
         print(f"[ERROR] Failed to process dataset {dataset_name}: {e}", file=sys.stderr)
         traceback.print_exc()
     finally:
-        # Clean up temporary processing binary files to free space
+        # Clean up temporary processing binary files to free space.
+        # ignore_errors: on a Ctrl+C teardown a just-killed worker may still hold a
+        # handle for a few ms — never let cleanup mask the interruption.
         if temp_dir.exists():
-            shutil.rmtree(temp_dir)
+            shutil.rmtree(temp_dir, ignore_errors=True)
 
 def main():
     parser = argparse.ArgumentParser(description="IRIBHM Microscopy Preprocessing Unified Pipeline")
@@ -180,25 +252,38 @@ def main():
 
     print("=" * 80)
 
-    from concurrent.futures import ThreadPoolExecutor, as_completed
-    
-    max_workers = 1 # Process 1 dataset at a time to save RAM, heavily multithread inner processes
-    print(f"\n[MULTITHREADING] Starting ThreadPoolExecutor with max_workers={max_workers}\n")
-    
-    with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        future_to_ims = {executor.submit(process_ims_file, ims_file, output_dir): ims_file for ims_file in ims_files}
-        
-        for i, future in enumerate(as_completed(future_to_ims)):
-            ims_file = future_to_ims[future]
-            try:
-                future.result()
-                print(f"[PROGRESS] Completed dataset {i+1}/{len(ims_files)}: {ims_file.name}")
-            except Exception as exc:
-                print(f"[ERROR] Dataset {ims_file.name} generated an exception: {exc}")
+    # Graceful Ctrl+C: confirm with the user, then tear the running step down cleanly.
+    _install_sigint_handler()
+
+    # One dataset at a time (bounded RAM) — each step already multithreads internally.
+    interrupted = False
+    for i, ims_file in enumerate(ims_files):
+        try:
+            process_ims_file(ims_file, output_dir)
+            print(f"[PROGRESS] Completed dataset {i+1}/{len(ims_files)}: {ims_file.name}")
+        except KeyboardInterrupt:
+            interrupted = True
+            break
+        except Exception as exc:
+            print(f"[ERROR] Dataset {ims_file.name} generated an exception: {exc}")
+
+    if interrupted:
+        # Remove any half-written temp folder left by the aborted dataset.
+        for stray in output_dir.glob(".temp_preprocess_*"):
+            shutil.rmtree(stray, ignore_errors=True)
+        print("\n" + "=" * 80)
+        print(" Pipeline interrompu par l'utilisateur (Ctrl+C). Etat nettoye.")
+        print("=" * 80)
+        sys.exit(130)
 
     print("\n" + "=" * 80)
     print(" Pipeline execution complete!")
     print("=" * 80)
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except KeyboardInterrupt:
+        # Ctrl+C confirmed outside a dataset (e.g. between steps) — exit cleanly.
+        print("\n[INTERRUPTION] Pipeline arrete.", file=sys.stderr)
+        sys.exit(130)

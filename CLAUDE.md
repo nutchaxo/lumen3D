@@ -39,11 +39,11 @@ The user expects this to happen silently as part of every edit:
 * **End-of-response notice** : after a versioning bump, append a discreet line, e.g.
   `[Versioning] Plateforme Web → v1.0.2. changelog_1.0.2.md généré.`
 
-### 1.6. Git workflow — work on `main` only (user preference, 2026-06-24)
-The user works **single-branch on `main`** and does **not** want git worktrees or feature-branch churn.
-* **No worktrees** : never create git worktrees, and never spawn agents with `isolation: "worktree"`. Always work in the main checkout (`C:\Users\Administrator\Desktop\WebPlatform`).
-* **Commit straight to `main`** : default to committing/pushing on `main` (it is not protected — direct pushes succeed). Don't spin up `feat/…`/`fix/…` branches for routine work.
-* **Exception** : only create a branch / open a PR when the user *explicitly* asks (e.g. invokes the create-PR command). That request overrides this default for that task only.
+### 1.6. Git workflow — develop on `dev`, keep `main` stable (user preference, updated 2026-06-24)
+The repo keeps **exactly two branches** : **`main`** (stable) and **`dev`** (active development). The user wants **all development on `dev`**, with **no sub-branches** (`feat/…`, `fix/…`, `claude/…`) and no git worktrees.
+* **No worktrees / no sub-branches** : never create git worktrees, never spawn agents with `isolation: "worktree"`, and don't spin up `feat/…`/`fix/…` branches for routine work. Always work in the main checkout (`C:\Users\Administrator\Desktop\WebPlatform`) on the `dev` branch.
+* **Commit straight to `dev`** : default to committing/pushing on `dev` (not protected — direct pushes succeed). Commit finished, verified work promptly — untracked files have been wiped before by branch updates.
+* **Integrate `dev → main` only when the user explicitly asks.** Likewise, only create a branch / open a PR when the user *explicitly* asks (e.g. invokes the create-PR command). That request overrides this default for that task only.
 
 ---
 

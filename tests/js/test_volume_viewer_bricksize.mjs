@@ -16,7 +16,7 @@ const count = (s, sub) => s.split(sub).length - 1;
 const vv = read('js/viewers/volume-viewer.js');
 assert.ok(vv.includes('const VOLUME_BRICK_SIZE = 64;'), 'VOLUME_BRICK_SIZE = 64 constant defined');
 assert.equal(count(vv, 'dims.brickSize || 128'), 0, 'no `|| 128` fallback remains');
-assert.equal(count(vv, 'dims.brickSize || VOLUME_BRICK_SIZE'), 9, 'all 9 sites use the constant');
+assert.equal(count(vv, 'dims.brickSize || VOLUME_BRICK_SIZE'), 10, 'all 10 sites use the constant');
 
 // Cross-module: 64 is authoritative.
 const svr = read('js/core/svr-manager.js');

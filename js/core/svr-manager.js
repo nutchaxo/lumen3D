@@ -1,10 +1,22 @@
 class SVRManager {
   static estimateMaxSlots(renderer, brickSize = 64) {
-    return Math.max(4096, SVRManager._lastWorkingSlots || 0);
+    // CAP-008: ceiling raised 4096 -> 8192 (8 atlas pages, the shader's svrAtlas0..7
+    // limit). This lets the viewer attempt the native LOD for datasets up to ~8192
+    // active bricks; if the GPU cannot allocate the corresponding 5-8 GiB atlas the
+    // init() cascade throws and the caller downgrades the LOD gracefully.
+    return Math.max(8192, SVRManager._lastWorkingSlots || 0);
   }
 
   static atlasConfigs() {
     return [
+      // CAP-008: 8->5 page tiers (8/7/6/5 GiB, 1 GiB per 1024x1024x256 texture).
+      // 8 pages == the shader's svrAtlas0..7 sampler limit. Only ever selected when
+      // an explicit targetSlots demands >4096 slots (smallest-sufficient first); the
+      // untargeted path is capped at 4096 in init() so tiny loads never probe 8 GiB.
+      { dim: 1024, depth: 256, pages: 8 }, // 8192 slots
+      { dim: 1024, depth: 256, pages: 7 }, // 7168 slots
+      { dim: 1024, depth: 256, pages: 6 }, // 6144 slots
+      { dim: 1024, depth: 256, pages: 5 }, // 5120 slots
       // 4096 slots (4 GiB total, 1 GiB per texture)
       { dim: 1024, depth: 256, pages: 4 },
       // 3072 slots
@@ -109,6 +121,10 @@ class SVRManager {
       configs = configs
         .filter(cfg => SVRManager.slotsForConfig(cfg, this.brickSize) >= targetSlots)
         .sort((a, b) => SVRManager.slotsForConfig(a, this.brickSize) - SVRManager.slotsForConfig(b, this.brickSize));
+    } else {
+      // CAP-008: no explicit brick demand — keep the historical 4096-slot ceiling so a
+      // degenerate (0-1 brick) load never probes the 5-8 GiB tiers added above.
+      configs = configs.filter(cfg => SVRManager.slotsForConfig(cfg, this.brickSize) <= 4096);
     }
     for (const config of configs) {
       this._applyAtlasConfig(config);
@@ -142,9 +158,9 @@ class SVRManager {
         allocatedAtlases = [];
         // SVR-012: drain any stale GL errors produced by the failed glTexStorage3D so they
         // don't contaminate texSubImage3D calls on the next (smaller) atlas config.
-        if (renderer) {
-          const gl = renderer.getContext();
-          let _e; while ((_e = gl.getError()) !== gl.NO_ERROR) { /* drain */ }
+        const gl = renderer?.getContext?.();
+        if (gl && typeof gl.getError === 'function') {
+          while (gl.getError() !== gl.NO_ERROR) { /* drain */ }
         }
       }
     }
@@ -189,7 +205,10 @@ class SVRManager {
       this._applyAtlasConfig(candidates[0] || configs[configs.length - 1]);
       return;
     }
-    const preferredSlots = SVRManager._lastWorkingSlots || Infinity;
+    // CAP-008: default the untargeted preference to the historical 4096 ceiling (not
+    // Infinity) so the provisional pick never lands on the 5-8 GiB tiers without an
+    // explicit targetSlots demand.
+    const preferredSlots = SVRManager._lastWorkingSlots || 4096;
     const config = configs.find(cfg => SVRManager.slotsForConfig(cfg, this.brickSize) <= preferredSlots) || configs[configs.length - 1];
     this._applyAtlasConfig(config);
   }

@@ -760,9 +760,13 @@ const BrickLoader = (() => {
   }
 
   async function _fetchPackedRawBrick(url, signal, coord = null) {
-    // ELE-20: une brick attendue (présente dans _activeBricksSet via hasBrick) mais
-    // absente de _packIndex OU renvoyant 404 est un ÉCHEC (-> throw -> drop tracé), pas
-    // un vide d'ESS. Seul un vide non référencé par le manifest est un zéro légitime.
+    // ELE-20 (revised): hasBrick() / _activeBricksSet use the manifest `nonEmpty` flag,
+    // which is the UNION of all channels (a slot is "non-empty" if ANY channel has data
+    // there). `brickToPack`, however, is PER-CHANNEL. So a brick can be expected by the
+    // union yet legitimately absent from the pack index for one channel that was ESS-
+    // skipped at that position. That is NOT a pack/manifest inconsistency — it is a
+    // transparent (zero) brick for this channel. Only a 404 on a brick that IS in the
+    // pack index is a real failure (handled in the fetch path below).
     const _expected = coord ? hasBrick(coord.bx, coord.by, coord.bz, coord.lod) : false;
     const encoding = _manifest?.brickTransport?.encoding;
     const isGzip = encoding === 'raw-u8-gzip' || encoding === 'raw-rgba-gzip';
@@ -777,11 +781,11 @@ const BrickLoader = (() => {
     // NATIVE DIRECT FETCH (unpacked)
     if (!packed) {
       if (_manifest?.brickTransport?.mode === 'packs' || _packIndex.size > 0) {
-        // ELE-20 (revised): brickToPack is the per-channel authority in pack mode.
-        // A brick absent from brickToPack is legitimately ESS-skipped for this channel
-        // even if the union-based manifest nonEmpty flag says the spatial slot is occupied
-        // (because another channel has data there). Return zeros (transparent voxels).
-        if (_expected) console.debug('[BrickLoader] Brick absent from pack index for this channel (channel ESS): ' + url);
+        // ELE-20 (revised): brickToPack is the per-channel authority in pack mode. A brick
+        // absent from it is legitimately ESS-skipped for THIS channel even when the union-
+        // based nonEmpty flag marks the spatial slot occupied (another channel has data
+        // there). Return zeros (transparent voxels) instead of throwing a false failure.
+        if (_expected) console.debug('[BrickLoader] Brick absent from pack index for this channel (per-channel ESS): ' + url);
         const bs = _manifest?.levels?.[0]?.brickSize || BRICK_SIZE;
         const channels = encoding === 'raw-rgba-gzip' ? 4 : 1;
         return new Uint8Array(bs * bs * bs * channels);

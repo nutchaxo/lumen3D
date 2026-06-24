@@ -857,6 +857,47 @@ body.presentation-mode .viewer-layout {
   transform: translateX(-50%) translateY(0);
 }
 
+/* CAP-008: resolution-downgrade acknowledgement banner (requires an explicit OK). */
+.res-downgrade-notice {
+  position: fixed;
+  left: 50%;
+  top: var(--space-5);
+  transform: translateX(-50%);
+  z-index: var(--z-viewer-modal);
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  max-width: min(92vw, 560px);
+  padding: var(--space-3) var(--space-4);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-light);
+  border-left: 3px solid var(--color-warning, #d9822b);
+  border-radius: var(--radius-md);
+  color: var(--text-primary);
+  box-shadow: var(--shadow-lg);
+  font-size: var(--text-sm);
+}
+
+.res-downgrade-notice__msg {
+  flex: 1;
+  line-height: 1.4;
+}
+
+.res-downgrade-notice__ok {
+  flex: 0 0 auto;
+  padding: var(--space-1) var(--space-4);
+  background: var(--color-accent, var(--text-primary));
+  color: var(--bg-elevated);
+  border: none;
+  border-radius: var(--radius-sm);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.res-downgrade-notice__ok:hover {
+  filter: brightness(1.08);
+}
+
 @media (max-width: 720px) {
   .viewer-toolbar {
     gap: 4px;

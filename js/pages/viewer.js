@@ -268,25 +268,10 @@ const ViewerApp = (() => {
     if (window.lucide) lucide.createIcons();
     _perf()?.end(initPerfId, { status: 'ok', isLive, qualityMode: _qualityMode });
 
-    if (window.location.hash && window.location.hash.startsWith('#state=')) {
-      if (typeof UrlState !== 'undefined') {
-        const urlState = await UrlState.decodeState(window.location.hash);
-        if (urlState) {
-          _applyWorkspaceStateNow(urlState.state || urlState);
-        }
-      }
-    }
-    if (_pendingWorkspaceState) {
-      console.log('[ViewerApp] Applying pending workspace state after init, camera:', _pendingWorkspaceState?.viewer?.camera?.cameraZ, 'measurements:', _pendingWorkspaceState?.viewer?.measurements?.length);
-      _applyWorkspaceStateNow(_pendingWorkspaceState);
-      _pendingWorkspaceState = null;
-    }
-
-    // Apply buffered TOGGLE_ZSTACK that arrived before init() completed
-    if (_pendingZstackState !== null) {
-      _applyZstackState(_pendingZstackState.desired, _pendingZstackState.slice);
-      _pendingZstackState = null;
-    }
+    // ELE-26: workspace/zstack restore moved BELOW PluginRegistry.initAll() (further down).
+    // Applying saved plugin state (chunk-debug, measure-distance, zstack-browser, …) before
+    // the plugins were initialised called setState()/applyState() on an uninitialised
+    // instance (null _ctx / undefined fields) — it threw and the state was silently dropped.
 
     // ── Module System Integration ──────────────────────────────
     if (typeof PluginRegistry !== 'undefined') {
@@ -381,6 +366,28 @@ const ViewerApp = (() => {
 
       const shadersCount = PluginRegistry.listByPlacement('shaders').length;
       console.log(`[ViewerApp] PluginRegistry initialized — ${toolsCount} tools, ${shadersCount} shaders`);
+    }
+
+    // ELE-26: apply saved workspace + buffered z-stack state AFTER initAll, so plugin
+    // setState()/applyState() run on fully-initialised plugin instances (_ctx + fields set).
+    if (window.location.hash && window.location.hash.startsWith('#state=')) {
+      if (typeof UrlState !== 'undefined') {
+        const urlState = await UrlState.decodeState(window.location.hash);
+        if (urlState) {
+          _applyWorkspaceStateNow(urlState.state || urlState);
+        }
+      }
+    }
+    if (_pendingWorkspaceState) {
+      console.log('[ViewerApp] Applying pending workspace state after init, camera:', _pendingWorkspaceState?.viewer?.camera?.cameraZ, 'measurements:', _pendingWorkspaceState?.viewer?.measurements?.length);
+      _applyWorkspaceStateNow(_pendingWorkspaceState);
+      _pendingWorkspaceState = null;
+    }
+
+    // Apply buffered TOGGLE_ZSTACK that arrived before init() completed
+    if (_pendingZstackState !== null) {
+      _applyZstackState(_pendingZstackState.desired, _pendingZstackState.slice);
+      _pendingZstackState = null;
     }
     
     _isInitialized = true;
@@ -653,6 +660,18 @@ const ViewerApp = (() => {
       || options.find(option => option.value === '256x256')
       || options[0];
     select.value = options.some(option => option.value === current) ? current : (fallback?.value || '512x512');
+  }
+
+  // CAP-008: inverse of the option labeling in _updateQualityOptionLabels — maps a LOD
+  // index back to the <select> value it is shown under (lod 0 => 'native', else the
+  // power-of-two label). Used to sync the selector to the resolution actually rendered.
+  function _qualityValueForLod(lod, levels) {
+    if (!Array.isArray(levels) || !levels[lod] || !levels[lod].dimensions) return null;
+    if (lod === 0) return 'native';
+    const dims = levels[lod].dimensions;
+    const maxDim = Math.max(dims.x, dims.y, dims.z);
+    const labelDim = Math.pow(2, Math.round(Math.log2(maxDim)));
+    return `${labelDim}x${labelDim}`;
   }
 
   function _lodForQuality(quality, levelCount, levels = null) {
@@ -1933,6 +1952,24 @@ const ViewerApp = (() => {
     if (loader) loader.style.display = 'none';
     ChannelPanel.setHistograms(VolumeViewer.getChannelHistograms());
     _updateVolumeSourceStatus();
+
+    // CAP-008: the atlas/VRAM cascade may have rendered a coarser LOD than requested
+    // (e.g. native exceeds the GPU's atlas budget). Reflect the resolution actually
+    // displayed in the selector and tell the user, requiring an explicit OK ack.
+    if (result.downgraded && Number.isFinite(result.lod) && Array.isArray(_brickManifest?.levels)) {
+      const actualQuality = _qualityValueForLod(result.lod, _brickManifest.levels);
+      if (actualQuality && actualQuality !== primaryQuality) {
+        const requestedLabel = _qualityLabel(primaryQuality);
+        const actualLabel = _qualityLabel(actualQuality);
+        _qualityMode = actualQuality;
+        primaryQuality = actualQuality; // so the status line below shows the real resolution
+        const qSelect = document.getElementById('select-quality');
+        if (qSelect) qSelect.value = actualQuality;
+        VolumeViewer.setQualityTarget?.(actualQuality, actualQuality);
+        _showResolutionDowngradeNotice(requestedLabel, actualLabel);
+      }
+    }
+
     _setQualityStatus(`${_qualityLabel(primaryQuality)} active${result ? ` (${result.width}x${result.height}x${result.depth})` : ''}${result?.fromCache ? ' from cache' : ''}${_sliceWarning(result)}.`);
     _updatePhysicalStatus();
 
@@ -2053,6 +2090,38 @@ const ViewerApp = (() => {
   function _setQualityStatus(text) {
     const status = document.getElementById('quality-status');
     if (status) status.textContent = text;
+  }
+
+  // CAP-008: dismissible notice shown when the requested resolution could not fit in GPU
+  // memory and a lower LOD was rendered instead. Requires an explicit OK to acknowledge.
+  function _showResolutionDowngradeNotice(requestedLabel, actualLabel) {
+    const _t = (k, def, params) => {
+      const res = window.I18n ? window.I18n.t(k, params) : k;
+      return res === k ? def : res;
+    };
+    document.querySelector('.res-downgrade-notice')?.remove();
+    const notice = document.createElement('div');
+    notice.className = 'res-downgrade-notice';
+    notice.setAttribute('role', 'alertdialog');
+    notice.setAttribute('aria-live', 'assertive');
+
+    const msg = document.createElement('span');
+    msg.className = 'res-downgrade-notice__msg';
+    msg.textContent = _t(
+      'viewer.resDowngrade',
+      `Résolution ${requestedLabel} trop lourde pour la mémoire GPU — affichage en ${actualLabel}.`,
+      { requested: requestedLabel, actual: actualLabel }
+    );
+
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'res-downgrade-notice__ok';
+    btn.textContent = _t('viewer.resDowngradeOk', 'OK');
+    btn.addEventListener('click', () => notice.remove());
+
+    notice.appendChild(msg);
+    notice.appendChild(btn);
+    document.body.appendChild(notice);
   }
 
   function _loadZDisplayScale() {

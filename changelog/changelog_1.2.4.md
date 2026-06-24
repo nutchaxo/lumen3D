@@ -1,0 +1,12 @@
+# Plateforme Web — v1.2.4
+
+> **Faux échec « Brick expected but missing from pack index » sur datasets multi-canaux.** Au chargement (surtout en natif/LOD0), des bricks légitimement vides pour UN canal mais pleines pour un autre déclenchaient en masse une erreur tracée + 3 retries dans la console. Cause : la détection « brick attendue » est channel-agnostique (flag `nonEmpty` = union des canaux) alors que l'index de packs est par-canal. Corrigé en traitant ces bricks comme un ESS par-canal (voxels transparents) plutôt qu'un échec.
+
+## [FIXED]
+- **ELE-20 (révisé) — faux positif `Brick expected but missing from pack index`** ([js/core/brick-loader.js](../js/core/brick-loader.js)) : `hasBrick()`/`_activeBricksSet` reposent sur le flag manifest `nonEmpty`, calculé comme l'**union** de tous les canaux (un emplacement est « non-vide » si *n'importe quel* canal y a de la matière). Mais `brickTransport.brickToPack` est **par-canal** : un canal vide à cette position ne génère pas d'entrée pack. Une brick pouvait donc être « attendue » par l'union tout en étant légitimement absente du pack pour un canal ESS-skippé — ce qui levait `throw new Error('Brick expected but missing from pack index')`, comptait comme échec, retentait 3×, puis remontait `onBrickError`. Reproduit massivement sur `Egfl7eGFP-E95-1` en natif (LOD0), p.ex. brick `(55,41,2)` canal 2 (canaux 0/1 présents, occ union 0.087) et `(52,53,0)` canal 0 (canaux 1/2 présents). Désormais : en mode `packs`, `brickToPack` fait foi par canal — une brick absente est traitée comme **ESS par-canal** et renvoie des zéros (voxels transparents) avec un `console.debug`, au lieu de lancer une exception. Un 404 sur une brick **présente** dans l'index reste un échec tracé (`onBrickError`), inchangé.
+  - *Contexte* : ce correctif avait été appliqué en début de chantier puis perdu lors d'un changement de branche (feat → main) ; il est réintroduit ici avec un test de non-régression dédié pour qu'il ne disparaisse plus.
+
+## [TESTS]
+- `tests/js/test_brick_loader_degrade.mjs` : ajout **T3** — une brick attendue par l'union mais absente de l'index pack pour son canal résout en zéros **sans** `onBrickError` (verrouille le comportement ESS par-canal). T1 (404 sur brick indexée → erreur tracée) et T2 (brick non référencée → zéros) inchangés. Suite complète : **46 tests JS** verts.
+
+[Versioning] Plateforme Web → v1.2.4. changelog_1.2.4.md généré.

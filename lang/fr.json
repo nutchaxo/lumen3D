@@ -170,6 +170,8 @@
     "slab": "Epaisseur",
     "renderNative": "Rendu natif",
     "cancelNative": "Annuler le rendu natif",
+    "resDowngrade": "La résolution {requested} dépasse la mémoire GPU disponible — affichage en {actual}.",
+    "resDowngradeOk": "OK",
     "roiStats": "Statistiques ROI",
     "errNoDataset": "Aucun identifiant de jeu de donnees fourni.",
     "errNotFound": "Jeu de donnees introuvable dans le catalogue.",

@@ -336,6 +336,9 @@ const PluginRegistry = (() => {
     for (const [id, moduleState] of Object.entries(state)) {
       const entry = _modules.get(id);
       if (!entry || entry.state === 'disposed' || !entry.impl) continue;
+      // A module that is only 'registered' (index.js ran implement() but initAll()
+      // hasn't called init(ctx) yet) has a null context — setState would throw.
+      if (entry.state === 'registered') continue;
       if (typeof entry.impl.setState === 'function') {
         try {
           entry.impl.setState.call(entry.instance || entry.impl, moduleState);

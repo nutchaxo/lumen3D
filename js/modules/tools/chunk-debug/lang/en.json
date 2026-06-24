@@ -1,0 +1,17 @@
+{
+  "title": "Chunk debug (brick boundaries)",
+  "aria": "Toggle chunk debug overlay",
+  "noBricks": "This dataset has no brick data to inspect.",
+  "noVolume": "Volume not ready yet — load it before enabling chunk debug.",
+  "tipId": "Chunk",
+  "tipSize": "Size",
+  "tipVox": "vox",
+  "tipStored": "Stored",
+  "tipFile": "File",
+  "tipChannels": "channels",
+  "tipLod": "LOD",
+  "tipDepth": "overlap",
+  "copied": "Chunk metadata copied to clipboard",
+  "hintCopy": "Click to copy",
+  "hintCycle": "Ctrl + wheel: depth"
+}

@@ -1,6 +1,11 @@
 {
   "plugins": [
     {
+      "path": "tools/chunk-debug",
+      "placement": "tools",
+      "id": "chunk-debug"
+    },
+    {
       "path": "tools/decompose-channels",
       "placement": "tools",
       "id": "decompose-channels"

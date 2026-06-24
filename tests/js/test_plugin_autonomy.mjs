@@ -63,7 +63,7 @@ const btns = g => containers[`[data-tool-group="${g}"]`].children;
 currentFetch = async () => ({ ok: false, status: 404 });
 {
   const paths = await PR.discover('js/modules');
-  assert.equal(paths.length, 15, 'discover embedded default = 15 module paths');
+  assert.equal(paths.length, 16, 'discover embedded default = 16 module paths');
   assert.ok(paths.includes('channels/histogram') && paths.includes('shaders/fluorescence'),
     'embedded default spans channels + shaders, not just tools');
 }
@@ -94,7 +94,7 @@ currentFetch = async (url) => (url === 'api/plugins.php'
   : { ok: false, status: 404 });
 {
   const paths = await PR.discover('js/modules');
-  assert.equal(paths.length, 15, 'non-JSON php body is rejected, falls through to embedded default');
+  assert.equal(paths.length, 16, 'non-JSON php body is rejected, falls through to embedded default');
 }
 
 // ── loadModules(): registers every discovered tool from disk ──────────────────
@@ -108,7 +108,7 @@ currentFetch = async (url) => {
 };
 const all = await PR.discover('js/modules');
 await PR.loadModules('js/modules', all);
-assert.equal(PR.listByPlacement('tools').length, 11, 'loadModules registered all 11 tool plugins');
+assert.equal(PR.listByPlacement('tools').length, 12, 'loadModules registered all 12 tool plugins');
 assert.equal(PR.listByPlacement('shaders').length, 2, '2 shaders registered (fluorescence + structure-dvr)');
 assert.equal(PR.listByPlacement('channels').length, 2, '2 channel plugins registered');
 
@@ -126,7 +126,9 @@ assert.equal(btns('export').length, 2, 'export cluster has 2 generated buttons')
 assert.ok(btns('export').every(b => b.dataset.pluginId), 'export buttons are data-plugin-id (activate-wired)');
 assert.deepEqual(btns('export').map(b => b.dataset.pluginId),
   ['download-center', 'screenshot'], 'export honors plugin.json order');
-assert.equal(btns('visuals').length, 4, 'visuals cluster has 4 buttons');
+assert.equal(btns('visuals').length, 5, 'visuals cluster has 5 buttons (incl. chunk-debug)');
+const cd = btns('visuals').find(b => b.id === 'btn-chunk-debug');
+assert.ok(cd && cd.style.display === 'none', 'chunk-debug hidden: requires a bricks source which is absent');
 assert.equal(btns('tools').length, 2, 'tools cluster has the 2 tool-subtype chips');
 assert.ok(btns('tools').every(b => b.dataset.tool && !b.dataset.pluginId && b.className.includes('tool-chip')),
   'tool-subtype plugins become data-tool chips (ToolManager-wired), not data-plugin-id');

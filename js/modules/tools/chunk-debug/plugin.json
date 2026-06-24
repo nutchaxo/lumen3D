@@ -1,0 +1,23 @@
+{
+  "id": "chunk-debug",
+  "name": "Chunk Debug",
+  "version": "1.0.0",
+  "creator": "IRIBHM",
+  "placement": "tools",
+  "group": "visuals",
+  "subtype": "toggle",
+  "icon": "bug",
+  "order": 90,
+  "description": "Debug overlay: draw brick (chunk) boundaries, inspect each chunk's id / size / pack file on hover, cycle overlapping chunks with Ctrl + wheel, and click to copy a chunk's metadata. Works in 3D, z-stack and oblique-slice modes.",
+  "buttonId": "btn-chunk-debug",
+  "requires": [
+    "bricks"
+  ],
+  "i18nTitle": "title",
+  "i18nAria": "aria",
+  "i18nLanguages": [
+    "en",
+    "fr",
+    "es"
+  ]
+}

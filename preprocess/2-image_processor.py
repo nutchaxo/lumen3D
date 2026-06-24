@@ -5,26 +5,41 @@ from pathlib import Path
 import h5py
 import numpy as np
 from PIL import Image
-from skimage.restoration import estimate_sigma
-from skimage.filters import threshold_otsu
-from skimage.morphology import disk
-from scipy.ndimage import binary_fill_holes, binary_closing, binary_dilation, gaussian_filter
-import scipy.ndimage
+from scipy.ndimage import median_filter, binary_opening, binary_dilation
 from concurrent.futures import ProcessPoolExecutor
 import os
 from tqdm import tqdm
 
+__version__ = "0.13.0"
+
 def process_z_block(args):
-    z_start, z_end, block_data, bg_floor, sig_max = args
-    
-    # Min-Max Scaling directly from [bg_floor, sig_max] to [0, 255]
+    """Selective Masked Median Filtering + Window Leveling for one Z-block.
+
+    Inside the signal mask the original (sharp) biological signal is kept as-is;
+    outside the mask the background is replaced by a 3D median (size=3) that
+    crushes shot-noise and isolated hot pixels without blurring the cells. The
+    block carries a ±1 Z halo so the median sees real neighbours across block
+    seams; the halo is stripped before return. Finally a Window Leveling maps
+    [bg_floor, sig_max] -> [0, 255] (uint8) — any value <= bg_floor collapses to
+    an absolute 0, guaranteeing pure-black empty space for the SVR brick packer.
+    """
+    z_start, halo_lo, halo_hi, block_data, block_mask, bg_floor, sig_max = args
+
     if sig_max - bg_floor <= 0.0:
         sig_max = bg_floor + 1.0
-        
-    clean_16b = np.clip(block_data, bg_floor, sig_max)
-    norm = (clean_16b - bg_floor) / (sig_max - bg_floor)
+
+    # Masked compositing: keep signal inside the mask, smooth the rest
+    smoothed = median_filter(block_data, size=3)
+    composite = np.where(block_mask, block_data, smoothed)
+
+    # Window Leveling [bg_floor, sig_max] -> [0, 255]
+    clean = np.clip(composite, bg_floor, sig_max)
+    norm = (clean - bg_floor) / (sig_max - bg_floor)
     block_u8 = (norm * 255.0).astype(np.uint8)
-    return z_start, block_u8
+
+    # Strip the Z halo before reassembly
+    z_hi = block_u8.shape[0] - halo_hi
+    return z_start, block_u8[halo_lo:z_hi]
 
 def process_image(input_ims: Path, metadata_json: Path, temp_dir: Path):
     with open(metadata_json, "r", encoding="utf-8") as f:
@@ -87,7 +102,10 @@ def process_image(input_ims: Path, metadata_json: Path, temp_dir: Path):
             # Extremely fast compared to reading slice-by-slice in Python
             vol = ds[:D, :H, :W].astype(np.float32)
 
-            # Étape 1 : Estimation des bornes (16-bits)
+            # ─── Step 1 : Bound estimation (Corner Sampling) ──────────────────
+            # bg_floor = 99th percentile of the 8 volume corners (pure camera
+            # background, no embryo there); sig_max = 99.9th percentile of the
+            # globally sub-sampled volume (saturate the brightest 0.1 %).
             print("  Step 1: Estimation des bornes (Corner Sampling)...", flush=True)
             corner_size = max(1, min(32, W // 4, H // 4, D // 4))
             corners = [
@@ -101,36 +119,52 @@ def process_image(input_ims: Path, metadata_json: Path, temp_dir: Path):
                 vol[-corner_size:, -corner_size:, -corner_size:]
             ]
             corner_data = np.concatenate([c.flatten() for c in corners])
-            bg_floor = float(np.percentile(corner_data, 50.0))
-            print(f"    bg_floor (Bruit de fond médian des coins): {bg_floor:.2f}", flush=True)
-            
-            print("  Step 2: Estimating global sig_max...", flush=True)
-            # Utiliser une version sous-échantillonnée pour la vitesse
+            bg_floor = float(np.percentile(corner_data, 99.0))
+            print(f"    bg_floor (99e centile du bruit des coins): {bg_floor:.2f}", flush=True)
+
+            # Sub-sampled global volume for a fast, RAM-cheap white-point estimate
             down_vol = vol[::4, ::4, ::4]
             sig_max = float(np.percentile(down_vol, 99.9))
             del down_vol
-            print(f"    sig_max (Signal max 99.9ème centile global): {sig_max:.2f}", flush=True)
-            
-            print("  Step 3: Multithreaded Normalization...", flush=True)
+            print(f"    sig_max (99.9e centile global): {sig_max:.2f}", flush=True)
+
+            # ─── Step 2 : Signal mask ─────────────────────────────────────────
+            # Threshold 10 % above the noise floor; a morphological opening drops
+            # isolated hot pixels (so they get median-crushed below), then a
+            # 3-iteration dilation guards the natural fluorescent fade-out around
+            # the biological signal so the median filter never bites into cells.
+            print("  Step 2: Construction du masque de signal...", flush=True)
+            mask = vol > (bg_floor * 1.1)
+            mask = binary_opening(mask, iterations=1)
+            mask = binary_dilation(mask, iterations=3)
+            print(f"    Couverture du masque: {100.0 * mask.mean():.2f}% des voxels", flush=True)
+
+            # ─── Step 3 : Masked median filtering + Window Leveling ───────────
+            # Parallel over Z-blocks; each block carries a ±1 Z halo for the
+            # 3D median so there is no seam between blocks.
+            print("  Step 3: Masked Median Filtering + Window Leveling...", flush=True)
             vol_u8 = np.zeros((D, H, W), dtype=np.uint8)
-            # Pas de overlap nécessaire car pas de filtre médian
             z_chunk_size = max(4, D // (os.cpu_count() * 2))
             tasks = []
             for z_start in range(0, D, z_chunk_size):
                 z_end = min(z_start + z_chunk_size, D)
-                block_data = np.copy(vol[z_start:z_end])
-                tasks.append((z_start, z_end, block_data, bg_floor, sig_max))
-                
+                halo_lo = 1 if z_start > 0 else 0
+                halo_hi = 1 if z_end < D else 0
+                zs, ze = z_start - halo_lo, z_end + halo_hi
+                block_data = np.copy(vol[zs:ze])
+                block_mask = np.copy(mask[zs:ze])
+                tasks.append((z_start, halo_lo, halo_hi, block_data, block_mask, bg_floor, sig_max))
+
             with ProcessPoolExecutor(max_workers=os.cpu_count()) as executor:
-                for result in tqdm(executor.map(process_z_block, tasks), total=len(tasks), desc="Normalizing Z-Blocks", leave=False, ascii=True, mininterval=2.0):
+                for result in tqdm(executor.map(process_z_block, tasks), total=len(tasks), desc="Masked Median + Leveling", leave=False, ascii=True, mininterval=2.0):
                     z_start_res, block_u8 = result
                     z_end_res = z_start_res + block_u8.shape[0]
                     vol_u8[z_start_res:z_end_res] = block_u8
-                    
-            del vol
 
-            # 6. Step 5: Exporting downscaled LOD levels
-            print("  Step 5: Exporting downscaled LOD levels...", flush=True)
+            del vol, mask
+
+            # ─── Step 4 : Exporting downscaled LOD levels ─────────────────────
+            print("  Step 4: Exporting downscaled LOD levels...", flush=True)
             lod_files = {}
             for li in lod_info:
                 lod_num = li["lod"]

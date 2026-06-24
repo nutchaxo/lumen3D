@@ -4,6 +4,9 @@
 __pycache__/
 *.pyc
 
+# Local Python runtime bootstrapped by the self-contained preprocess launcher
+.runtime/
+
 # Datasets / Large files
 DATA_WEB/*
 !DATA_WEB/.gitkeep

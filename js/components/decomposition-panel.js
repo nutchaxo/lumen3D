@@ -12,16 +12,23 @@ const DecompositionPanel = (() => {
   let _savedGlobalState = null;
   let _exportLayout = 'main-right';
 
-  // ELE-27 (PERF-001): decouple vignette rendering from the hot post-render loop.
-  // The post-render fires on every dirty frame (camera rotation); rendering N+1
-  // ray-marches per frame collapses the FPS. Debounce to the camera-stable state:
-  // each dirty frame (re)arms the timer; vignettes render once after _DECOMP_QUIET_MS
-  // with no new frame. Any input that changes a vignette (camera/cube pose via
-  // post-render, view.state via _rebuildList) arms a deferred render, so at rest the
-  // image is exact.
+  // ELE-27 (PERF-001) / ELE-31: vignette rendering is decoupled from the hot post-render
+  // loop. The post-render fires on every dirty frame (camera/cube motion); rendering N+1
+  // ray-marches per frame would collapse the FPS. A pure debounce fixed the FPS but made
+  // the vignettes feel dead — each moving frame re-armed the timer, so during a continuous
+  // drag nothing redrew for 1–2 s (only once you stopped). We now THROTTLE instead:
+  //   • while moving → a reduced-resolution "draft" vignette render at most every
+  //     _DECOMP_THROTTLE_MS, so the previews track the embryo live (≈15 fps);
+  //   • _DECOMP_QUIET_MS after the last dirty frame → one full-resolution render
+  //     (trailing edge) so the settled image is pixel-exact.
+  // Draft renders shrink the WebGL buffer by _DECOMP_DRAFT_SCALE and let drawImage upscale
+  // into the full-res 2D canvas: live-but-soft while dragging, sharp the instant you stop.
   let _decompDirty = false;
   let _decompRenderTimer = null;
+  let _lastDecompRenderTs = 0;
   const _DECOMP_QUIET_MS = 140;
+  const _DECOMP_THROTTLE_MS = 66;   // ≈15 live updates/s during motion
+  const _DECOMP_DRAFT_SCALE = 0.5;  // draft buffer = half-res (≈4× cheaper), then upscaled
 
   // LEAK-015 (Rule 1.2): unsubscribe returned by VolumeViewer.setOnPostRender, kept
   // so the permanent post-render hook (and the _canvases it captures in closure) can
@@ -29,12 +36,20 @@ const DecompositionPanel = (() => {
   let _offPostRender = null;
 
   function _scheduleDecompRender() {
+    if (!_isOpen) return;
     _decompDirty = true;
+    // Trailing edge: always (re)arm a full-quality render for when motion settles.
     if (_decompRenderTimer !== null) clearTimeout(_decompRenderTimer);
     _decompRenderTimer = setTimeout(() => {
       _decompRenderTimer = null;
-      if (_isOpen && _decompDirty) _renderDecompositions();
+      if (_isOpen && _decompDirty) _renderDecompositions({ draft: false });
     }, _DECOMP_QUIET_MS);
+    // Throttled leading edge: render a live draft now if enough time has elapsed since the
+    // last one, so the vignettes follow the embryo in real time instead of only at rest.
+    const now = (typeof performance !== 'undefined' ? performance.now() : Date.now());
+    if (now - _lastDecompRenderTs >= _DECOMP_THROTTLE_MS) {
+      _renderDecompositions({ draft: true });
+    }
   }
 
   function _flushDecompRender() {
@@ -462,11 +477,13 @@ const DecompositionPanel = (() => {
     }
   }
 
-  function _renderDecompositions() {
+  function _renderDecompositions(opts) {
     _decompDirty = false; // ELE-27: consume the flag at the start of the real render
+    _lastDecompRenderTs = (typeof performance !== 'undefined' ? performance.now() : Date.now());
     if (_canvases.length === 0) return;
     if (typeof VolumeViewer === 'undefined') return;
 
+    const draft = !!(opts && opts.draft); // ELE-31: half-res live frame during motion
     const renderer = VolumeViewer.getRenderer();
     const scene = VolumeViewer.getScene();
     const camera = VolumeViewer.getCamera();
@@ -479,22 +496,27 @@ const DecompositionPanel = (() => {
     const origHeight = renderer.domElement.height / pixelRatio;
     const origAspect = camera.aspect;
 
+    // ELE-31: draft frames render the volume into a smaller WebGL buffer (≈4× fewer
+    // fragments at 0.5×) and rely on drawImage to upscale into the full-res vignette
+    // canvas — soft while dragging, re-sharpened by the trailing full render at rest.
+    const scale = draft ? _DECOMP_DRAFT_SCALE : 1;
+
     for (const view of _canvases) {
       const rect = view.canvas.getBoundingClientRect();
       const w = rect.width * (window.devicePixelRatio || 1);
       const h = rect.height * (window.devicePixelRatio || 1);
-      
+
       if (w === 0 || h === 0) continue;
 
-      // ELE-27: only reset the canvas if the size actually changed. Reassigning
-      // width/height clears the canvas and is costly; at rest the size is stable.
-      // (We clearRect before drawImage below to wipe the previous frame.)
+      // Keep the 2D vignette canvas at full resolution (crisp at rest); only the WebGL
+      // render buffer scales down for drafts. Reassigning width/height clears the canvas
+      // and is costly, so only do it when the displayed size actually changed.
       if (view.canvas.width !== w || view.canvas.height !== h) {
         view.canvas.width = w;
         view.canvas.height = h;
       }
 
-      renderer.setSize(w / (window.devicePixelRatio || 1), h / (window.devicePixelRatio || 1), false);
+      renderer.setSize(Math.max(1, rect.width * scale), Math.max(1, rect.height * scale), false);
       camera.aspect = w / h;
       camera.updateProjectionMatrix();
 
@@ -507,7 +529,12 @@ const DecompositionPanel = (() => {
       // let the previous frame show through — the embryo's earlier orientations pile
       // up as ghosts as the camera moves. Wipe the vignette before each draw.
       view.ctx.clearRect(0, 0, view.canvas.width, view.canvas.height);
-      view.ctx.drawImage(renderer.domElement, 0, 0, w, h);
+      // Source = the whole (possibly shrunk) WebGL buffer → dest = full vignette canvas.
+      view.ctx.drawImage(
+        renderer.domElement,
+        0, 0, renderer.domElement.width, renderer.domElement.height,
+        0, 0, view.canvas.width, view.canvas.height
+      );
     }
 
     // Restore Main View Rendering State

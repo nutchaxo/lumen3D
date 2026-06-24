@@ -4,7 +4,7 @@
 
 **Stack** : Vanilla JS (no framework, IIFE modules), Three.js (UMD via CDN), custom WebGL2 ray-marcher, Python preprocessing (h5py / numpy / scipy / PIL), dev server in Python (`dev_server.py`) — PHP fallback in `api/` for legacy hosts.
 
-**Current versions** : Plateforme Web `1.3.3` (latest changelog `changelog/changelog_1.3.3.md`), Preprocessing `0.12.15` (`preprocess/run_preprocess.py:__version__`). ⚠️ Note: `dev_server.py:__version__` is still `0.12.41` and **drifts from the web platform version** — it tracks the server tool itself, not the platform. The Web platform version lives **only** in the `changelog/` filenames; bump by adding a new `changelog_X.Y.Z.md`.
+**Current versions** : Plateforme Web `1.3.4` (latest changelog `changelog/changelog_1.3.4.md`), Preprocessing `0.12.15` (`preprocess/run_preprocess.py:__version__`). ⚠️ Note: `dev_server.py:__version__` is still `0.12.41` and **drifts from the web platform version** — it tracks the server tool itself, not the platform. The Web platform version lives **only** in the `changelog/` filenames; bump by adding a new `changelog_X.Y.Z.md`.
 
 ---
 

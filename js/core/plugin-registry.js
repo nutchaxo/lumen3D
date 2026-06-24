@@ -39,7 +39,8 @@ const PluginRegistry = (() => {
     'tools/toggle-grid', 'tools/toggle-axes', 'tools/orientation-axes', 'tools/toggle-volume',
     'tools/screenshot', 'tools/presentation-mode', 'tools/download-center', 'tools/decompose-channels',
     'tools/zstack-browser', 'tools/slice-inspector',
-    'tools/measure-distance', 'shaders/fluorescence', 'shaders/structure-dvr',
+    'tools/measure-distance', 'tools/chunk-debug',
+    'shaders/fluorescence', 'shaders/structure-dvr',
     'channels/histogram', 'channels/gaussian-filter'
   ];
 

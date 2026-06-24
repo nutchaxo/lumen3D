@@ -1,0 +1,17 @@
+{
+  "title": "Depuración de chunks (bordes de bricks)",
+  "aria": "Activar la capa de depuración de chunks",
+  "noBricks": "Este dataset no tiene datos en bricks para inspeccionar.",
+  "noVolume": "El volumen aún no está listo — cárgalo antes de activar la depuración de chunks.",
+  "tipId": "Chunk",
+  "tipSize": "Tamaño",
+  "tipVox": "vox",
+  "tipStored": "Almacenado",
+  "tipFile": "Archivo",
+  "tipChannels": "canales",
+  "tipLod": "LOD",
+  "tipDepth": "superposición",
+  "copied": "Metadatos del chunk copiados al portapapeles",
+  "hintCopy": "Clic: copiar",
+  "hintCycle": "Ctrl + rueda: profundidad"
+}

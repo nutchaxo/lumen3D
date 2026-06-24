@@ -1,0 +1,17 @@
+{
+  "title": "Débogage des chunks (arêtes des bricks)",
+  "aria": "Activer la surcouche de débogage des chunks",
+  "noBricks": "Ce dataset n'a pas de données en bricks à inspecter.",
+  "noVolume": "Volume pas encore prêt — chargez-le avant d'activer le débogage des chunks.",
+  "tipId": "Chunk",
+  "tipSize": "Taille",
+  "tipVox": "vox",
+  "tipStored": "Stocké",
+  "tipFile": "Fichier",
+  "tipChannels": "canaux",
+  "tipLod": "LOD",
+  "tipDepth": "superposition",
+  "copied": "Métadonnées du chunk copiées dans le presse-papiers",
+  "hintCopy": "Clic : copier",
+  "hintCycle": "Ctrl + molette : profondeur"
+}

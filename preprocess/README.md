@@ -4,7 +4,7 @@
 
 **De l'image brute du microscope `.ims` à un volume 3D fluide dans le navigateur.**
 
-`version 0.13.1` · `Imaris HDF5 → briques 64³ WebP` · Python (h5py · numpy · scipy · Pillow)
+`version 0.14.0` · `Imaris HDF5 → briques 64³ WebP` · Python (h5py · numpy · scipy · Pillow)
 
 </div>
 
@@ -89,7 +89,7 @@ Cinq scripts s'enchaînent. Chacun fait une chose et la passe au suivant :
 
 ## Table des matières
 1. [Prérequis & environnement](#1-prérequis--environnement)
-2. [Exécution : lanceur `.bat` (le plus simple) ou CLI](#2-exécution)
+2. [Exécution : lanceur autonome `.bat` ou CLI](#2-exécution)
 3. [Contrat d'entrée : structure du fichier `.ims` (Imaris HDF5)](#3-contrat-dentrée--structure-du-fichier-ims-imaris-hdf5)
 4. [Carte des fichiers](#4-carte-des-fichiers)
 5. [Étape 1 — Extraction des métadonnées](#5-étape-1--extraction-des-métadonnées-1-ims_metadatapy)
@@ -107,6 +107,8 @@ Cinq scripts s'enchaînent. Chacun fait une chose et la passe au suivant :
 
 ## 1. Prérequis & environnement
 
+> 🚀 **Avec le lanceur `run_preprocess.bat` ([§2.1](#2-exécution)), vous n'avez rien à installer** : il fournit lui‑même un Python local **et** les dépendances. Les prérequis ci‑dessous ne concernent que l'usage **manuel** (CLI §2.2 ou réimplémentation).
+
 * **Python ≥ 3.10** (testé 3.14.3 sur Windows).
 * Dépendances Python :
 
@@ -122,7 +124,7 @@ Cinq scripts s'enchaînent. Chacun fait une chose et la passe au suivant :
   pip install h5py numpy scipy Pillow tqdm
   ```
 
-  (Un [`requirements.txt`](requirements.txt) est fourni. 💡 Le lanceur [`run_preprocess.bat`](#21-le-plus-simple--le-lanceur-run_preprocessbat-recommandé) détecte Python et installe ces dépendances pour vous au besoin — voir §2.1.)
+  (Un [`requirements.txt`](requirements.txt) est fourni pour `pip install -r`. 💡 Ou laissez le lanceur **`run_preprocess.bat`** ([§2.1](#2-exécution)) fournir Python **et** ces dépendances pour vous.)
 
   > ⚠️ `scikit-image` n'est **plus** nécessaire (les imports Otsu/morphologie skimage de l'ancienne version ont été supprimés en v0.13.0). Seul `scipy.ndimage` est utilisé pour la morphologie/le médian.
 
@@ -133,29 +135,42 @@ Cinq scripts s'enchaînent. Chacun fait une chose et la passe au suivant :
 
 ## 2. Exécution
 
-Deux façons de lancer le pipeline : le **lanceur `.bat`** (interactif, sans rien retenir — recommandé) ou la **ligne de commande** (pour scripter / automatiser).
+Deux façons de lancer le pipeline : le **lanceur autonome `.bat`** (zéro installation — recommandé) ou la **ligne de commande** (pour scripter / réimplémenter).
 
-### 2.1. Le plus simple — le lanceur `run_preprocess.bat` *(recommandé)*
+### 2.1. Lanceur autonome `run_preprocess.bat` *(recommandé)*
 
-Pas besoin de retenir la commande Python : **un double‑clic suffit.**
+> **Un seul fichier suffit.** Le `.bat` est **auto‑suffisant** : on peut le copier **seul** sur n'importe quel PC Windows — même **sans Python et sans le dépôt** — et il met tout en place. Les 5 scripts Python du pipeline y sont **embarqués** (encodés en base64) ; s'il n'y a pas de Python, il en **télécharge et installe un, en local**.
 
-1. Ouvrir le dossier `preprocess/` et **double‑cliquer sur [`run_preprocess.bat`](run_preprocess.bat)** (ou le lancer depuis une console).
-2. Le script déroule tout seul **4 étapes** :
-   * **[1/4]** détecte automatiquement un interpréteur **Python 3** (essaie successivement `py -3`, `python`, `python3`, `py`) ;
-   * **[2/4]** vérifie les dépendances (`numpy`, `Pillow`, `h5py`, `scipy`, `tqdm`) et **propose de les installer** via `pip` si elles manquent ;
-   * **[3/4]** pose **3 questions** :
+**Utilisation : double‑cliquer sur [`run_preprocess.bat`](run_preprocess.bat).** Il déroule **5 étapes** automatiques :
 
-     | Question | Quoi saisir |
-     |---|---|
-     | Dossier contenant les `.ims` | Le chemin du dossier d'entrée. Validé : il doit exister, et le **nombre de `.ims` détectés** est affiché. |
-     | Dossier de sortie `DATA_WEB` | **Entrée** ⏎ = valeur par défaut `..\DATA_WEB` (le `DATA_WEB` du dépôt). Ou un autre chemin. |
-     | Filtre optionnel *(glob)* | Ex. `*E8*` pour ne traiter que certains embryons. **Entrée** ⏎ = tous les fichiers. |
+| Étape | Ce qu'il fait |
+|---|---|
+| **[1/5]** Scripts | Extrait les 5 scripts du pipeline embarqués (décodage `certutil`, intégrité vérifiée par **SHA‑256**). S'ils sont **déjà présents** à côté du `.bat`, ils sont **conservés** (on peut donc exécuter une version modifiée). |
+| **[2/5]** Python | Détection en cascade : runtime local `.runtime\python` → Python **système** (`py -3`/`python`/`python3`) → sinon **propose d'installer** un **Python 3.12.8 embarquable** (téléchargé depuis python.org dans `.runtime\python`, avec `pip`). Isolé, **sans droits admin**, supprimable. |
+| **[3/5]** Dépendances | Vérifie `numpy`/`Pillow`/`h5py`/`scipy`/`tqdm` (par import) et **propose de les installer** via `pip`. |
+| **[4/5]** Paramètres | Pose **3 questions** (voir ci‑dessous), affiche un **récapitulatif**, demande confirmation. |
+| **[5/5]** Exécution | Lance le pipeline avec une **interface colorée** et la **progression en temps réel**. `Ctrl+C` demande une **confirmation** avant d'arrêter (arrêt propre — voir « Orchestration interne » plus bas). |
 
-   * **[4/4]** affiche un **récapitulatif**, demande **confirmation** (`O/n`), puis lance le traitement avec la **progression en temps réel** (barres `tqdm`).
-3. À la fin, le **code de retour** est affiché (succès / erreur) et la fenêtre attend une touche (`pause`).
+Les **3 questions** de l'étape [4/5] :
 
-> ✅ **Portable** : le `.bat` n'utilise **aucun chemin absolu** (tout est résolu via `%~dp0`, relativement à son emplacement). Il suffit qu'il reste **à côté de `run_preprocess.py`** dans `preprocess/`.
-> 💡 **Cas courant** : on colle le dossier d'entrée, puis on appuie sur **Entrée** à chaque autre question pour accepter les valeurs par défaut.
+| Question | Quoi saisir |
+|---|---|
+| Dossier des `.ims` | Le chemin du dossier d'entrée. Validé : il doit exister, et le **nombre de `.ims`** trouvés est affiché. |
+| Dossier de sortie `DATA_WEB` | **Entrée** ⏎ = valeur par défaut `..\DATA_WEB`. Ou un autre chemin. |
+| Filtre optionnel *(glob)* | Ex. `*E8*` pour ne traiter que certains embryons. **Entrée** ⏎ = tous les fichiers. |
+
+**Modes en ligne de commande** (optionnels) :
+
+```bat
+run_preprocess.bat                      :: mode interactif (défaut)
+run_preprocess.bat --check              :: vérifie scripts + Python + dépendances, puis quitte
+run_preprocess.bat --extract [dossier]  :: reconstruit juste les .py embarqués
+run_preprocess.bat --force-local        :: ignore le Python système, utilise/installe le Python local
+run_preprocess.bat --help
+```
+
+> ✅ **Portable** : aucun chemin absolu (tout est résolu via `%~dp0`). Le dossier `.runtime\` (Python local) est créé **à côté du `.bat`** ; il est isolé et se supprime sans risque pour repartir de zéro.
+> ⚠️ **Ne pas éditer le `.bat` à la main** : il est **généré** — voir [§2.3](#23-régénérer-le-lanceur-build_launcherpy).
 
 ### 2.2. En ligne de commande (CLI)
 
@@ -183,11 +198,24 @@ python run_preprocess.py \
 > Sur Windows, si `python` est intercepté par l'alias Microsoft Store, utiliser le launcher `py`.
 
 **Orchestration interne** (`run_preprocess.py`) :
-* `ThreadPoolExecutor(max_workers=1)` → **un dataset à la fois** (pour économiser la RAM ; le parallélisme est *intra*‑dataset — voir [§11](#11-pourquoi-ces-choix-de-conception-)).
+* **Un dataset à la fois**, en boucle séquentielle sur le thread principal (pour économiser la RAM ; le parallélisme est *intra*‑dataset — voir [§11](#11-pourquoi-ces-choix-de-conception-)).
 * Le **nom du dataset** = `Path(ims).stem` (nom du fichier sans `.ims`).
-* `temp_dir = <output>/.temp_preprocess_<nom>` : recréé à neuf à chaque run, **supprimé dans le `finally`** (même en cas d'erreur).
+* `temp_dir = <output>/.temp_preprocess_<nom>` : recréé à neuf à chaque run, **supprimé en fin de traitement** (même en cas d'erreur).
 * `dataset_output_dir = <output>/fixed/<nom>` : si un `bricks/` existe déjà, il est supprimé avant de régénérer.
-* Ordre des étapes : **1 → 2 → vignette → 3 → 4**.
+* Ordre des étapes : **1 → 2 → vignette → 3 → 4**. Chaque étape tourne dans un **sous‑processus isolé** (`subprocess.Popen`, nouveau groupe de processus : `CREATE_NEW_PROCESS_GROUP` Windows / `start_new_session` POSIX).
+* **Arrêt propre sur `Ctrl+C`** : l'orchestrateur intercepte `SIGINT` et **demande confirmation**. *Refus* → le traitement **reprend** sans perte (l'étape en cours n'a pas reçu le signal) ; *confirmation* → l'étape **et tout son pool de workers** sont arrêtés (`taskkill /F /T` / `killpg`), les `.temp_preprocess_*` nettoyés, sortie en code **130**.
+
+### 2.3. Régénérer le lanceur (`build_launcher.py`)
+
+Le `.bat` est **généré**, jamais écrit à la main. Après toute modification d'un script `.py` ou du template, régénère‑le :
+
+```bash
+python build_launcher.py
+```
+
+* [`build_launcher.py`](build_launcher.py) lit le template [`launcher_template.bat.in`](launcher_template.bat.in), y injecte la configuration (la version est lue dans `run_preprocess.py:__version__`, la version de Python embarquable, la liste des scripts) et **ré‑embarque** les 5 scripts en base64 (blocs `#<index>#…`, 76 caractères/ligne).
+* L'**ordre d'embarquement est figé** (`run_preprocess.py` = index 0, puis `1-`→`4-`) : le `.bat` extrait le bloc *N* pour le *N*ᵉ nom de sa liste interne `SCRIPTS`.
+* Sortie en **ASCII + CRLF** (ce que `cmd.exe` préfère).
 
 ---
 
@@ -228,9 +256,11 @@ Détails importants :
 
 | Fichier | Rôle | Entrée | Sortie |
 |---|---|---|---|
-| [`run_preprocess.bat`](run_preprocess.bat) | **Lanceur interactif** Windows (détection Python, install deps, saisie guidée). | double‑clic | appelle `run_preprocess.py` |
+| [`run_preprocess.bat`](run_preprocess.bat) | **Lanceur autonome** Windows (scripts embarqués, Python local au besoin, install deps, saisie guidée). **Généré — ne pas éditer.** | double‑clic | extrait + appelle `run_preprocess.py` |
+| [`build_launcher.py`](build_launcher.py) | **Générateur** du `.bat` (ré‑embarque les scripts en base64, injecte la version). | les 5 `.py` + le template | `run_preprocess.bat` |
+| [`launcher_template.bat.in`](launcher_template.bat.in) | Template du lanceur (logique batch + emplacements `@@@…@@@`). | — | — |
 | [`run_preprocess.py`](run_preprocess.py) | Orchestrateur + vignette. `__version__` du pipeline. | `--input`, `--output`, `--only` | appelle 1→4 ; écrit `thumbnail.webp` |
-| [`requirements.txt`](requirements.txt) | Dépendances Python épinglées (utilisé par le `.bat` en secours). | — | — |
+| [`requirements.txt`](requirements.txt) | Dépendances Python épinglées (pour `pip install -r`, usage manuel). | — | — |
 | [`1-ims_metadata.py`](1-ims_metadata.py) | Lit les attributs HDF5. | `<ims>`, `<out.json>` | `meta.json` |
 | [`2-image_processor.py`](2-image_processor.py) | Débruitage + normalisation 8‑bits + pyramide LOD. | `<ims>`, `<meta.json>`, `<temp>` | `temp/t*_c*_lod*.bin`, `temp/processing_meta.json` |
 | [`3-chunk_packer.py`](3-chunk_packer.py) | Découpe 64³, mosaïque, WebP lossless, packs. | `<temp>`, `<out_dir>` | `out/bricks/manifest.json`, `out/bricks/lod*/c*/pack_*.bin` |
@@ -576,5 +606,5 @@ Pour réimplémenter et obtenir le **même résultat** :
 ---
 
 <div align="center">
-<sub>IRIBHM · ULB — Lumen3D Microscopy Platform · pipeline de preprocessing v0.13.1</sub>
+<sub>IRIBHM · ULB — Lumen3D Microscopy Platform · pipeline de preprocessing v0.14.0</sub>
 </div>

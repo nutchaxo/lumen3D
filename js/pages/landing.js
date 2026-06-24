@@ -7,6 +7,14 @@
 
 /* ── Initialization ──────────────────────────────────────── */
 document.addEventListener('DOMContentLoaded', async () => {
+  // Usage telemetry: count one site visit per browser session (fire-and-forget).
+  try {
+    if (!sessionStorage.getItem('lumen_visit')) {
+      sessionStorage.setItem('lumen_visit', '1');
+      navigator.sendBeacon?.('api/telemetry.php?action=visit');
+    }
+  } catch (_) { /* private mode / no beacon — ignore */ }
+
   // Init core systems
   Theme.init();
   await I18n.init();

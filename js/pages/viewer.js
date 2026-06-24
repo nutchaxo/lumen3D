@@ -122,7 +122,19 @@ const ViewerApp = (() => {
 
     _zDisplayScale = _loadZDisplayScale();
     _volumeMeasurements = MeasurementStore.list(datasetId, 'viewer');
-    
+
+    // Usage telemetry: count one dataset view per browser session. Skip admin
+    // previews (mode=admin) so editing a dataset doesn't inflate its view count.
+    if (!isAdmin) {
+      try {
+        const _vk = `lumen_view_${datasetId}`;
+        if (!sessionStorage.getItem(_vk)) {
+          sessionStorage.setItem(_vk, '1');
+          navigator.sendBeacon?.(`api/telemetry.php?action=view&id=${encodeURIComponent(datasetMeta.path || datasetId)}`);
+        }
+      } catch (_) { /* private mode / no beacon — ignore */ }
+    }
+
     isLive = datasetMeta.type === 'live';
     _perf()?.setContext({
       scope: 'viewer',

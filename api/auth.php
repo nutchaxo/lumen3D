@@ -1,146 +1,87 @@
 <?php
 /**
- * IRIBHM Microscopy Platform — Admin Authentication
- * ==================================================
- * Handles login/logout/status for the /admpan admin panel.
- *
- * Security model:
- *  - Credentials stored in config.php (never in DATA_WEB)
- *  - PHP sessions (HttpOnly, SameSite=Strict cookie)
- *  - Brute-force protection: 5 attempts → 15-minute lockout
- *  - CORS locked to same-origin
+ * IRIBHM Microscopy Platform — Admin Authentication (PHP fallback)
+ * ================================================================
+ * Mirrors dev_server.py's auth routes. The admin password lives ONLY in the
+ * dedicated credential store (api/admin_credential.json) as a one-way PBKDF2 hash
+ * — never in plaintext, never served (see api/.htaccess). First-run setup is
+ * create-exclusive so it can never overwrite a live credential.
  *
  * Endpoints:
- *   POST ?action=login   {username, password} → {ok, error?}
- *   POST ?action=logout  → {ok}
- *   GET  ?action=status  → {authenticated}
+ *   GET  ?action=status           → {authenticated, username, csrf, needsSetup}
+ *   POST ?action=login            {username,password} → {ok, csrf} | {error}
+ *   POST ?action=logout           → {ok}
+ *   POST ?action=setup            {username,password} → {ok, username, csrf} (only if no credential)
+ *   POST ?action=change_password  {current,new} → {ok} (auth + CSRF + current pw)
  */
 
 declare(strict_types=1);
+require_once __DIR__ . '/_admin_lib.php';
 
-header('Content-Type: application/json; charset=utf-8');
 header('X-Content-Type-Options: nosniff');
-header('Cache-Control: no-store, no-cache');
+admin_session_start();
 
-// ── Config ───────────────────────────────────────────────────────────────────
-$CONFIG_FILE = __DIR__ . '/config.php';
+// ── Brute-force lockout (per server, file-based; mirrors the Python budget) ──
+$LOCKOUT_FILE = sys_get_temp_dir() . '/iribhm_admin_lockout_' . md5(__DIR__) . '.json';
+$MAX_ATTEMPTS = 10;
+$LOCKOUT_SECS = 900;
+function bf_load(): array { global $LOCKOUT_FILE; $d = @json_decode(@file_get_contents($LOCKOUT_FILE), true); return is_array($d) ? $d : ['attempts' => 0, 'until' => 0]; }
+function bf_locked(): bool { $l = bf_load(); return ($l['until'] ?? 0) > time(); }
+function bf_fail(): void { global $LOCKOUT_FILE, $MAX_ATTEMPTS, $LOCKOUT_SECS; $l = bf_load(); $l['attempts'] = ($l['attempts'] ?? 0) + 1; if ($l['attempts'] >= $MAX_ATTEMPTS) { $l['until'] = time() + $LOCKOUT_SECS; $l['attempts'] = 0; } @file_put_contents($LOCKOUT_FILE, json_encode($l)); }
+function bf_clear(): void { global $LOCKOUT_FILE; @file_put_contents($LOCKOUT_FILE, json_encode(['attempts' => 0, 'until' => 0])); }
 
-if (!file_exists($CONFIG_FILE)) {
-    // First-run: create default config with a hashed password
-    // Default credentials: admin / iribhm2024  (CHANGE ON FIRST LOGIN)
-    $default = '<?php' . "\n" .
-        '// Admin credentials — edit this file to change password' . "\n" .
-        '$ADMIN_USERNAME = "admin";' . "\n" .
-        '// To generate a new hash: php -r "echo password_hash(\'yourpassword\', PASSWORD_BCRYPT);"' . "\n" .
-        '$ADMIN_PASSWORD_HASH = "' . password_hash('iribhm2024', PASSWORD_BCRYPT) . '";' . "\n" .
-        '$ADMIN_SESSION_LIFETIME = 28800; // 8 hours' . "\n";
-    file_put_contents($CONFIG_FILE, $default);
-}
-require_once $CONFIG_FILE;
-
-// ── Session ──────────────────────────────────────────────────────────────────
-$session_lifetime = $ADMIN_SESSION_LIFETIME ?? 28800;
-session_set_cookie_params([
-    'lifetime' => $session_lifetime,
-    'path'     => '/',
-    'secure'   => isset($_SERVER['HTTPS']),
-    'httponly' => true,
-    'samesite' => 'Strict',
-]);
-session_name('iribhm_admin');
-session_start();
-
-// ── Brute-force lockout ──────────────────────────────────────────────────────
-$LOCKOUT_FILE   = sys_get_temp_dir() . '/iribhm_admin_lockout_' . md5(__DIR__) . '.json';
-$MAX_ATTEMPTS   = 5;
-$LOCKOUT_SECS   = 900; // 15 min
-
-function load_lockout(): array {
-    global $LOCKOUT_FILE;
-    if (!file_exists($LOCKOUT_FILE)) return ['attempts' => 0, 'locked_until' => 0];
-    return json_decode(file_get_contents($LOCKOUT_FILE), true) ?? ['attempts' => 0, 'locked_until' => 0];
-}
-
-function save_lockout(array $data): void {
-    global $LOCKOUT_FILE;
-    file_put_contents($LOCKOUT_FILE, json_encode($data));
-}
-
-function is_locked_out(): bool {
-    $l = load_lockout();
-    return $l['locked_until'] > time();
-}
-
-function record_failed_attempt(): void {
-    global $MAX_ATTEMPTS, $LOCKOUT_SECS;
-    $l = load_lockout();
-    $l['attempts']++;
-    if ($l['attempts'] >= $MAX_ATTEMPTS) {
-        $l['locked_until'] = time() + $LOCKOUT_SECS;
-        $l['attempts'] = 0;
-    }
-    save_lockout($l);
-}
-
-function clear_lockout(): void {
-    save_lockout(['attempts' => 0, 'locked_until' => 0]);
-}
-
-// ── Helpers ──────────────────────────────────────────────────────────────────
-function json_out(array $data, int $code = 200): never {
-    http_response_code($code);
-    echo json_encode($data, JSON_UNESCAPED_UNICODE);
-    exit;
-}
-
-function require_auth(): void {
-    if (empty($_SESSION['admin_authenticated'])) {
-        json_out(['error' => 'Unauthorized'], 401);
-    }
-}
-
-// ── Router ───────────────────────────────────────────────────────────────────
-$action = $_GET['action'] ?? ($_POST['action'] ?? '');
-if ($action === '' && $_SERVER['REQUEST_METHOD'] === 'POST') {
-    $body   = json_decode(file_get_contents('php://input'), true) ?? [];
-    $action = $body['action'] ?? '';
-} else {
-    $body = [];
-}
+$action = $_GET['action'] ?? '';
+$method = $_SERVER['REQUEST_METHOD'] ?? 'GET';
+$body   = $method === 'POST' ? (json_decode(file_get_contents('php://input'), true) ?: []) : [];
 
 switch ($action) {
 
     case 'status':
-        json_out(['authenticated' => !empty($_SESSION['admin_authenticated'])]);
+        admin_json_out([
+            'authenticated' => admin_is_auth(),
+            'username'      => $_SESSION['admin_user'] ?? null,
+            'csrf'          => admin_is_auth() ? admin_csrf() : null,
+            'needsSetup'    => !admin_credential_exists(),
+        ]);
 
     case 'login':
-        $body     = $body ?: (json_decode(file_get_contents('php://input'), true) ?? []);
-        $username = trim($body['username'] ?? '');
-        $password = $body['password'] ?? '';
-
-        if (is_locked_out()) {
-            json_out(['error' => 'Too many failed attempts. Try again in 15 minutes.'], 429);
-        }
-
-        if ($username !== ($ADMIN_USERNAME ?? '') ||
-            !password_verify($password, $ADMIN_PASSWORD_HASH ?? '')) {
-            record_failed_attempt();
-            json_out(['error' => 'Invalid credentials.'], 401);
-        }
-
-        // Success
-        clear_lockout();
+        if (bf_locked()) admin_json_out(['error' => 'Trop de tentatives. Réessayez plus tard.'], 429);
+        $u = trim($body['username'] ?? '');
+        $p = $body['password'] ?? '';
+        if (!admin_check_credentials($u, $p)) { bf_fail(); admin_json_out(['error' => 'Identifiants incorrects.'], 401); }
+        bf_clear();
         session_regenerate_id(true);
         $_SESSION['admin_authenticated'] = true;
-        $_SESSION['admin_user']          = $username;
-        $_SESSION['admin_login_time']    = time();
-        json_out(['ok' => true, 'username' => $username]);
+        $_SESSION['admin_user'] = $u;
+        admin_json_out(['ok' => true, 'username' => $u, 'csrf' => admin_csrf()]);
 
     case 'logout':
         $_SESSION = [];
         session_destroy();
-        json_out(['ok' => true]);
+        admin_json_out(['ok' => true]);
+
+    case 'setup':
+        if ($method !== 'POST') admin_json_out(['error' => 'Method not allowed (use POST)'], 405);
+        if (bf_locked()) admin_json_out(['error' => 'Trop de tentatives. Réessayez plus tard.'], 429);
+        $u = $body['username'] ?? 'admin';
+        $p = $body['password'] ?? '';
+        [$ok, $code, $payload] = admin_setup_credential($u, $p);
+        if ($ok) {
+            session_regenerate_id(true);
+            $_SESSION['admin_authenticated'] = true;
+            $_SESSION['admin_user'] = $payload['username'];
+            $payload['csrf'] = admin_csrf();
+            admin_json_out($payload);
+        }
+        bf_fail();
+        admin_json_out($payload, $code);
+
+    case 'change_password':
+        if (!admin_is_auth()) admin_json_out(['error' => 'Not authenticated'], 401);
+        admin_require_write();
+        [$ok, $code, $payload] = admin_change_credential($body['current'] ?? '', $body['new'] ?? '');
+        admin_json_out($payload, $code);
 
     default:
-        json_out(['error' => 'Unknown action.'], 400);
+        admin_json_out(['error' => 'Unknown action.'], 400);
 }

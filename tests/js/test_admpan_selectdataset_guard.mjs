@@ -11,7 +11,8 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
-const src = readFileSync(path.join(ROOT, 'js/pages/admpan.js'), 'utf8');
+// v1.4.0: the dataset editor moved out of admpan.js into the admin SPA tab module.
+const src = readFileSync(path.join(ROOT, 'js/pages/admin/tab-datasets.js'), 'utf8');
 
 assert.ok(/let _selectGen = 0;/.test(src), '_selectGen token declared at module scope');
 

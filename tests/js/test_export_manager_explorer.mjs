@@ -32,12 +32,18 @@ const EM = loadModule('js/core/export-manager.js', 'ExportManager', {
 assert.equal(typeof EM._explorerRow, 'function', '_explorerRow exposed');
 assert.equal(typeof EM._breadcrumbHtml, 'function', '_breadcrumbHtml exposed');
 assert.equal(typeof EM._iconForExt, 'function', '_iconForExt exposed');
+assert.equal(typeof EM._catForExt, 'function', '_catForExt exposed');
 
-// ── extension → icon mapping ────────────────────────────────────────────────
-assert.equal(EM._iconForExt('csv'), 'table');
-assert.equal(EM._iconForExt('IMS'), 'box');        // case-insensitive
+// ── extension → icon + colour-category mapping ──────────────────────────────
+assert.equal(EM._iconForExt('csv'), 'file-spreadsheet');
+assert.equal(EM._iconForExt('PNG'), 'file-image');  // case-insensitive
+assert.equal(EM._iconForExt('IMS'), 'box');
 assert.equal(EM._iconForExt('glb'), 'shapes');
 assert.equal(EM._iconForExt('unknownext'), 'file'); // fallback
+assert.equal(EM._catForExt('csv'), 'table');
+assert.equal(EM._catForExt('ims'), 'volume');
+assert.equal(EM._catForExt('zip'), 'archive');
+assert.equal(EM._catForExt('unknownext'), 'default'); // fallback
 
 // ── file row ────────────────────────────────────────────────────────────────
 const fileRow = EM._explorerRow({

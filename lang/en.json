@@ -50,6 +50,7 @@
     "recommended": "recommended",
     "files": "{count} files",
     "filesTitle": "Dataset files",
+    "noDataset": "Open a dataset to browse its downloadable files.",
     "filesRoot": "download",
     "folder": "Folder",
     "itemCount": "{count} items",

@@ -36,6 +36,8 @@ const VolumeViewer = (() => {
   };
   let _cutPlaneMesh = null;
   let _planeBorderMesh = null;   // red edge highlight on hover
+  let _cutSlabFaceA = null;      // MIP/average slab faces, ± along the plane normal
+  let _cutSlabFaceB = null;
   let _volumeBoundingBox = null;
   let _svrManager = null;
   let _planeHovered = false;
@@ -2588,6 +2590,34 @@ const VolumeViewer = (() => {
     _planeBorderMesh.renderOrder = 21;
     _cutPlaneMesh.add(_planeBorderMesh);
 
+    // Slab faces — shown only for MIP/average projection with slabThickness > 1, to
+    // visualise the depth the projection integrates over. They are children of the cut
+    // plane mesh (so they inherit its orbit-synced orientation) and offset along local
+    // +Z, which is the plane normal. Parent Z-scale stays 1 (see _syncCutPlaneToOrbit),
+    // so a local-Z position equals a world offset along the normal. Excluded from
+    // raycasting so they never interfere with plane hover/drag picking.
+    const _slabFaceMat = () => new THREE.MeshBasicMaterial({
+      color: 0x7de7ff, transparent: true, opacity: 0.045, side: THREE.DoubleSide, depthWrite: false
+    });
+    const _slabEdge = () => {
+      const ls = new THREE.LineSegments(
+        new THREE.EdgesGeometry(new THREE.PlaneGeometry(1, 1)),
+        new THREE.LineBasicMaterial({ color: 0x7de7ff, transparent: true, opacity: 0.4, depthTest: false })
+      );
+      ls.renderOrder = 21;
+      ls.raycast = () => {};
+      return ls;
+    };
+    _cutSlabFaceA = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), _slabFaceMat());
+    _cutSlabFaceB = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), _slabFaceMat());
+    [_cutSlabFaceA, _cutSlabFaceB].forEach(face => {
+      face.renderOrder = 20;
+      face.visible = false;
+      face.raycast = () => {};
+      face.add(_slabEdge());
+      _cutPlaneMesh.add(face);
+    });
+
     // _rotGizmo is kept as an empty group (no rings) so existing code doesn't crash
     _rotGizmo = new THREE.Group();
     _rotGizmo.visible = false;
@@ -3057,6 +3087,39 @@ const VolumeViewer = (() => {
     const s = _planeSpec.mode === 'oblique' ? 1.45 : 1.04;
     const maxScale = Math.max(cube.scale.x, cube.scale.y, cube.scale.z);
     _cutPlaneMesh.scale.set(s * maxScale, s * maxScale, 1);
+
+    _updateCutSlabFaces();
+  }
+
+  // World half-thickness of the MIP/average slab, measured along the plane normal.
+  // Mirrors volume-slicer.js: each of the (slabThickness-1) extra samples integrates
+  // maxP/256 µm along the normal, so the slab spans (steps-1)·maxP/256 µm; one world
+  // unit equals `reference` µm (max x/y physical extent, the cube-scale reference).
+  // Returns 0 for the thin single-sample plane. chunk-debug derives the same value, so
+  // its yellow band and these faces always coincide.
+  function _slabHalfWorld() {
+    const proj = _planeSpec.projection || 'single';
+    const steps = Math.max(1, Math.min(64, _finiteNumber(_planeSpec.slabThickness, 1)));
+    if ((proj !== 'mip' && proj !== 'average') || steps <= 1) return 0;
+    const p = _physicalSizeUm;
+    const px = p && p.x > 0 ? p.x : 1;
+    const py = p && p.y > 0 ? p.y : 1;
+    const pz = p && p.z > 0 ? p.z : 1;
+    const maxP = Math.max(px, py, pz);
+    const reference = Math.max(px, py) || 1;
+    return ((steps - 1) * maxP / 256) / (2 * reference);
+  }
+
+  // Position/show the two slab faces at ±halfWorld along the plane normal (local +Z).
+  function _updateCutSlabFaces() {
+    if (!_cutSlabFaceA || !_cutSlabFaceB) return;
+    const half = _slabHalfWorld();
+    const on = half > 0 && Boolean(_planeSpec.visible);
+    _cutSlabFaceA.visible = on;
+    _cutSlabFaceB.visible = on;
+    if (!on) return;
+    _cutSlabFaceA.position.set(0, 0, half);
+    _cutSlabFaceB.position.set(0, 0, -half);
   }
 
   function _syncRotGizmoTransform() {

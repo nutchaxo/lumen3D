@@ -168,6 +168,27 @@ for %%S in (!SCRIPTS!) do (
     set "_skip="
 )
 if "!_fail!"=="1" exit /b 1
+call :ensure_download_script
+exit /b 0
+
+rem ---- build_download_bundles.py : tools/ du depot, sinon extraction (index 5) -
+:ensure_download_script
+if not "!FORCE_EXTRACT!"=="1" (
+    if exist "!BATDIR!\..\tools\build_download_bundles.py" (
+        call :info "build_download_bundles.py !DIM!(tools/, conserve)!R!"
+        exit /b 0
+    )
+    if exist "!WORK!\build_download_bundles.py" (
+        call :info "build_download_bundles.py !DIM!(present, conserve)!R!"
+        exit /b 0
+    )
+)
+call :extract 5 "!WORK!\build_download_bundles.py"
+if exist "!WORK!\build_download_bundles.py" (
+    call :ok "build_download_bundles.py !DIM!(extrait)!R!"
+) else (
+    call :warnmsg "build_download_bundles.py indisponible (option download/ desactivee)."
+)
 exit /b 0
 
 rem ---- Decode un bloc base64 embarque (index %~1) vers le fichier %~2 --------
@@ -302,6 +323,16 @@ if errorlevel 1 (
 call :ok "Dependances installees."
 exit /b 0
 
+rem ---- Dependance optionnelle pour download/ : tifffile (OME-TIFF) ----------
+:ensure_tifffile
+%PY% -c "import tifffile" >nul 2>&1
+if not errorlevel 1 exit /b 0
+call :info "Dependance download/ manquante : tifffile (installation)..."
+%PY% -m pip install --no-warn-script-location tifffile >nul 2>&1
+%PY% -c "import tifffile" >nul 2>&1
+if errorlevel 1 call :warnmsg "tifffile indisponible : l'OME-TIFF pourrait echouer."
+exit /b 0
+
 
 rem ---- Saisie des parametres -------------------------------------------------
 :ask_params
@@ -339,13 +370,20 @@ set "FILTER="
 set /p "FILTER=   Filtre optionnel (glob, ex: *E8*) [Entree = tous] : "
 if defined FILTER set FILTER=!FILTER:"=!
 
+rem Option : generer aussi le contenu de download/ (lourd : relit le .ims, OME-TIFF, zip)
+set "WITH_DOWNLOADS="
+set "_ans="
+set /p "_ans=   Generer aussi les fichiers download/ (archive, OME-TIFF, MIP) ? [o/N] "
+if /i "!_ans!"=="o" set "WITH_DOWNLOADS=1"
+
 echo.
 echo !DIM!--------------------------------------------------------------------------------!R!
 echo    !BOLD!Recapitulatif!R!
-echo      Python : !PY!
-echo      Entree : !INPUT!
-echo      Sortie : !OUTPUT!
-if defined FILTER (echo      Filtre : !FILTER!) else (echo      Filtre : tous les fichiers)
+echo      Python   : !PY!
+echo      Entree   : !INPUT!
+echo      Sortie   : !OUTPUT!
+if defined FILTER (echo      Filtre   : !FILTER!) else (echo      Filtre   : tous les fichiers)
+if defined WITH_DOWNLOADS (echo      Download/ : oui) else (echo      Download/ : non)
 echo !DIM!--------------------------------------------------------------------------------!R!
 set "_ans="
 set /p "_ans=   Lancer le traitement ? [O/n] "
@@ -363,10 +401,15 @@ call :info "Ctrl+C pendant le traitement : une confirmation sera demandee avant 
 echo.
 set "PYTHONUNBUFFERED=1"
 set "PYTHONIOENCODING=utf-8"
+set "EXTRA="
+if defined WITH_DOWNLOADS (
+    call :ensure_tifffile
+    set "EXTRA=--with-downloads"
+)
 if defined FILTER (
-    %PY% "!WORK!\!ENTRY!" --input "!INPUT!" --output "!OUTPUT!" --only "!FILTER!"
+    %PY% "!WORK!\!ENTRY!" --input "!INPUT!" --output "!OUTPUT!" --only "!FILTER!" !EXTRA!
 ) else (
-    %PY% "!WORK!\!ENTRY!" --input "!INPUT!" --output "!OUTPUT!"
+    %PY% "!WORK!\!ENTRY!" --input "!INPUT!" --output "!OUTPUT!" !EXTRA!
 )
 set "RC=!errorlevel!"
 echo.

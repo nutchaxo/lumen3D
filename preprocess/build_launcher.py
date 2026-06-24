@@ -27,6 +27,10 @@ SCRIPTS = [
     "4-catalog_generator.py",
 ]
 ENTRY = "run_preprocess.py"
+# The download-bundle tool lives in ../tools/ but is embedded too (index 5) so the
+# self-contained launcher can extract it on a fresh machine. The orchestrator finds
+# it in either tools/ (repo) or next to itself (extracted).
+DOWNLOAD_TOOL = "build_download_bundles.py"
 PY_VERSION = "3.12.8"
 DEPS = "numpy Pillow h5py scipy tqdm"
 IMPORT_CHECK = "import numpy, PIL, h5py, scipy, tqdm"
@@ -59,6 +63,12 @@ def main() -> None:
             sys.exit(f"[FATAL] Script du pipeline introuvable : {path}")
         embedded += encode_block(index, path)
 
+    # Download-bundle tool (index 5), embedded from ../tools/.
+    dl_path = HERE.parent / "tools" / DOWNLOAD_TOOL
+    if not dl_path.exists():
+        sys.exit(f"[FATAL] Outil download introuvable : {dl_path}")
+    embedded += encode_block(len(SCRIPTS), dl_path)
+
     template = TEMPLATE.read_text(encoding="utf-8")
     batch = (template
              .replace("@@@PP_VERSION@@@", read_pp_version())
@@ -74,7 +84,7 @@ def main() -> None:
     OUTPUT.write_bytes(data.encode("ascii"))
 
     kb = OUTPUT.stat().st_size / 1024
-    print(f"[OK] {OUTPUT.name} genere ({kb:.1f} Ko, {len(SCRIPTS)} scripts embarques)")
+    print(f"[OK] {OUTPUT.name} genere ({kb:.1f} Ko, {len(SCRIPTS) + 1} scripts embarques)")
 
 
 if __name__ == "__main__":

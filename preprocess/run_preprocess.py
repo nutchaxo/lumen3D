@@ -13,7 +13,7 @@ from pathlib import Path
 import numpy as np
 from PIL import Image
 
-__version__ = "0.14.0"
+__version__ = "0.14.1"
 
 # ── Paths ──────────────────────────────────────────────────────────────────────
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -177,10 +177,10 @@ def build_thumbnail(temp_dir: Path, output_dir: Path, proc_meta: dict) -> None:
     out.save(str(thumb_path), "WEBP", quality=88, method=6)
     print(f"[THUMBNAIL] Wrote thumbnail to {thumb_path}")
 
-def run_step(script_name: str, *args) -> None:
+def run_script(script_path, *args, label=None) -> None:
     global _current_proc
-    cmd = [PYTHON_EXE, str(SCRIPT_DIR / script_name), *args]
-    print(_dim(f"   - {script_name}"))
+    cmd = [PYTHON_EXE, str(script_path), *args]
+    print(_dim(f"   - {label or Path(script_path).name}"))
     proc = subprocess.Popen(cmd, **_STEP_SPAWN)
     _current_proc = proc
     try:
@@ -194,7 +194,24 @@ def run_step(script_name: str, *args) -> None:
     if ret != 0:
         raise subprocess.CalledProcessError(ret, cmd)
 
-def process_ims_file(ims_path: Path, output_root: Path, idx: int = 0, total: int = 0) -> None:
+
+def run_step(script_name: str, *args) -> None:
+    run_script(SCRIPT_DIR / script_name, *args)
+
+
+DOWNLOAD_SCRIPT_NAME = "build_download_bundles.py"
+
+def _resolve_download_script():
+    """The download-bundle tool sits in tools/ in the repo, but is extracted next
+    to this script by the self-contained launcher — accept either location."""
+    for cand in (SCRIPT_DIR / DOWNLOAD_SCRIPT_NAME,
+                 SCRIPT_DIR.parent / "tools" / DOWNLOAD_SCRIPT_NAME):
+        if cand.exists():
+            return cand.resolve()
+    return None
+
+def process_ims_file(ims_path: Path, output_root: Path, idx: int = 0, total: int = 0,
+                     with_downloads: bool = False) -> None:
     dataset_name = ims_path.stem
     counter = f"[{idx}/{total}] " if total else ""
     print()
@@ -234,7 +251,21 @@ def process_ims_file(ims_path: Path, output_root: Path, idx: int = 0, total: int
         
         # Step 5: Catalog metadata (dataset.json / metadata.json)
         run_step("4-catalog_generator.py", str(temp_dir), str(dataset_output_dir))
-        
+
+        # Step 6 (optional): download/ bundle — archive, original .ims, OME-TIFF,
+        # per-channel MIPs, README. Runs after step 4 so metadata.json exists. The
+        # source .ims is the one being processed, so point the tool at its folder.
+        if with_downloads:
+            dl_script = _resolve_download_script()
+            if dl_script is None:
+                print(_warn(f"   [!] {DOWNLOAD_SCRIPT_NAME} introuvable — download/ ignore"))
+            else:
+                run_script(dl_script,
+                           "--data-web", str(output_root),
+                           "--raw-dir", str(ims_path.parent),
+                           "--datasets", dataset_name,
+                           label="download/ (archive, OME-TIFF, MIP)")
+
         elapsed = (datetime.now() - t0).total_seconds()
         print(_ok(f"   [OK] {dataset_name} termine en {elapsed:.0f}s"))
     except Exception as e:
@@ -252,6 +283,9 @@ def main():
     parser.add_argument("--input", required=True, help="Input directory containing raw .ims files.")
     parser.add_argument("--output", required=True, help="Output DATA_WEB directory of the web platform.")
     parser.add_argument("--only", default=None, help="Glob pattern to filter files to process (e.g. '*E8*').")
+    parser.add_argument("--with-downloads", action="store_true",
+                        help="After each dataset, also build its download/ bundle "
+                             "(web archive, original .ims, OME-TIFF, per-channel MIP, README).")
     args = parser.parse_args()
 
     input_dir = Path(args.input)
@@ -276,6 +310,7 @@ def main():
     print(_dim(f"  source      : {input_dir}"))
     print(_dim(f"  destination : {output_dir}"))
     print(_dim(f"  datasets    : {len(ims_files)}   (filtre: {args.only or '*'})"))
+    print(_dim(f"  download/   : {'oui' if args.with_downloads else 'non'}"))
 
     # Graceful Ctrl+C: confirm with the user, then tear the running step down cleanly.
     _install_sigint_handler()
@@ -284,7 +319,8 @@ def main():
     interrupted = False
     for i, ims_file in enumerate(ims_files):
         try:
-            process_ims_file(ims_file, output_dir, i + 1, len(ims_files))
+            process_ims_file(ims_file, output_dir, i + 1, len(ims_files),
+                             with_downloads=args.with_downloads)
         except KeyboardInterrupt:
             interrupted = True
             break

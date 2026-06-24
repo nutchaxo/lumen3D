@@ -105,8 +105,23 @@ def hex_to_rgb(value, fallback):
 
 
 # ── Dataset discovery ───────────────────────────────────────────────────────
+def _read_meta_json(d):
+    """Per-dataset metadata.json — the authoritative source for channels/voxels.
+    utf-8-sig tolerates a stray BOM (hand-edited files) without breaking the parse."""
+    p = d / "metadata.json"
+    if p.exists():
+        try:
+            return json.loads(p.read_text(encoding="utf-8-sig"))
+        except Exception:
+            return {}
+    return {}
+
+
 def load_datasets(filter_substr=None, types=DATASET_TYPES):
-    """Return [{id, type, folder, dir, meta}], driven by catalog.json when present."""
+    """Return [{id, type, folder, dir, meta}], driven by catalog.json when present.
+    metadata.json (written by the preprocess pipeline) takes precedence for `meta`
+    so this works even when run right after a dataset is built, before catalog.json
+    has aggregated it."""
     out, seen = [], set()
     catalog = DATA_WEB / "catalog.json"
     entries = []
@@ -123,7 +138,8 @@ def load_datasets(filter_substr=None, types=DATASET_TYPES):
         typ, folder = parts
         d = DATA_WEB / typ / folder
         if typ in types and d.is_dir():
-            out.append({"id": path, "type": typ, "folder": folder, "dir": d, "meta": e})
+            out.append({"id": path, "type": typ, "folder": folder, "dir": d,
+                        "meta": _read_meta_json(d) or e})
             seen.add(path)
     # dir-scan fallback for anything not in the catalog
     for typ in types:
@@ -133,7 +149,8 @@ def load_datasets(filter_substr=None, types=DATASET_TYPES):
         for d in sorted(base.iterdir()):
             pid = f"{typ}/{d.name}"
             if d.is_dir() and pid not in seen:
-                out.append({"id": pid, "type": typ, "folder": d.name, "dir": d, "meta": {}})
+                out.append({"id": pid, "type": typ, "folder": d.name, "dir": d,
+                            "meta": _read_meta_json(d)})
     if filter_substr:
         out = [o for o in out if filter_substr.lower() in o["folder"].lower()]
     return out
@@ -447,10 +464,12 @@ def process(ds, args):
 
 
 def main():
-    global TARGET_PX
+    global TARGET_PX, DATA_WEB, RAW_DATA_DIRS
     ap = argparse.ArgumentParser(description="Populate each dataset's download/ folder.")
     ap.add_argument("--datasets", help="case-insensitive substring filter on folder name")
     ap.add_argument("--types", default=",".join(DATASET_TYPES), help="comma list: fixed,live,tracking")
+    ap.add_argument("--data-web", help="override the DATA_WEB directory (default: <repo>/DATA_WEB)")
+    ap.add_argument("--raw-dir", help="directory to search first for the source .ims (prepended to RAW_DATA_DIRS)")
     ap.add_argument("--tiff-px", type=int, default=TARGET_PX, help="target long XY side of the OME-TIFF")
     ap.add_argument("--no-archive", action="store_true")
     ap.add_argument("--no-ims", action="store_true")
@@ -461,6 +480,10 @@ def main():
     args = ap.parse_args()
 
     TARGET_PX = args.tiff_px
+    if args.data_web:
+        DATA_WEB = Path(args.data_web)
+    if args.raw_dir:
+        RAW_DATA_DIRS = [Path(args.raw_dir)] + RAW_DATA_DIRS
     types = tuple(t.strip() for t in args.types.split(",") if t.strip())
 
     datasets = load_datasets(args.datasets, types)

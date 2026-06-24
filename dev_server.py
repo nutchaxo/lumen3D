@@ -43,7 +43,7 @@ from datetime import datetime
 from http import HTTPStatus
 from pathlib import Path
 
-__version__ = "0.12.41"
+__version__ = "0.12.42"
 
 # ── Paths ──────────────────────────────────────────────────────────────────────
 ROOT       = Path(__file__).resolve().parent
@@ -77,6 +77,11 @@ MAX_THUMB_BYTES = 5 * 1024 * 1024
 _WRITE_LOCK = threading.Lock()
 # PERF-035: memoized catalog listing, keyed on the metadata.json mtime signature.
 _CATALOG_CACHE: dict = {"sig": None, "data": None}
+# PERF: a synchronous console write per request sits on the response hot path
+# (dozens per page load; the Windows console is slow and serializes across the
+# ThreadingHTTPServer workers). Off by default; enable with --verbose. Errors
+# (4xx/5xx) always log regardless — see AdminHandler.log_error.
+_LOG_REQUESTS = False
 
 
 def _atomic_write(path: Path, data, *, binary: bool = False) -> None:
@@ -605,6 +610,20 @@ def _list_plugins() -> list[dict]:
             shipped = _scan_plugin_locales(mod_dir)
             if shipped:
                 meta["i18nLanguages"] = shipped
+                # PERF: inline each shipped locale's dictionary so the client can
+                # graft them synchronously from this single /api/plugins response,
+                # eliminating one per-plugin per-locale lang round-trip on the viewer
+                # boot path (16-32 requests across the plugin set). Best-effort: a
+                # malformed file is skipped; the client falls back to fetching it.
+                # Only advertised when English (the per-plugin fallback) is present.
+                dicts = {}
+                for code in shipped:
+                    try:
+                        dicts[code] = json.loads((mod_dir / "lang" / f"{code}.json").read_text(encoding="utf-8"))
+                    except Exception:
+                        pass
+                if dicts.get("en"):
+                    meta["i18n"] = dicts
             plugins.append(meta)
     return plugins
 
@@ -644,9 +663,19 @@ def _list_languages() -> list[str]:
 
 def _write_languages_manifest(codes: list[str]) -> None:
     """Persist lang/manifest.json so static hosts inherit the discovered locale
-    list with no build step. Best-effort, atomic (mirrors the plugin manifest)."""
+    list with no build step. Best-effort, atomic (mirrors the plugin manifest).
+    PERF: skip the write entirely when the on-disk content is already current, so
+    a discovery GET on the boot path does no temp-file churn / lock contention in
+    the common (unchanged) case."""
     try:
-        _atomic_write(LANG_DIR / "manifest.json", json.dumps({"languages": codes}, indent=2, ensure_ascii=False))
+        new_text = json.dumps({"languages": codes}, indent=2, ensure_ascii=False)
+        target = LANG_DIR / "manifest.json"
+        try:
+            if target.read_text(encoding="utf-8") == new_text:
+                return
+        except (OSError, ValueError):
+            pass
+        _atomic_write(target, new_text)
     except Exception:
         pass
 
@@ -663,10 +692,22 @@ def _write_plugins_manifest(plugins: list[dict]) -> None:
                 for p in plugins
             ]
         }
+        # Canonical on-disk form stays the {path,placement,id} triple — the inline
+        # plugin meta / i18n dicts in the /api/plugins response are NOT persisted
+        # (static hosts must keep fetching plugin.json, see plugin-registry.js).
+        new_text = json.dumps(manifest, indent=2, ensure_ascii=False)
+        target = MODULES_DIR / "manifest.json"
+        # PERF: skip the write when already current, so a discovery GET on the boot
+        # path does no temp-file churn / _WRITE_LOCK contention in the common case.
+        try:
+            if target.read_text(encoding="utf-8") == new_text:
+                return
+        except (OSError, ValueError):
+            pass
         # RACE-020: /api/plugins is a GET that rewrites this file, and the server is
-        # ThreadingHTTPServer — concurrent loads could interleave a plain write_text and
+        # ThreadingHTTPServer — concurrent loads could interleave a plain write and
         # truncate/corrupt manifest.json. Use the atomic (temp + os.replace, locked) helper.
-        _atomic_write(MODULES_DIR / "manifest.json", json.dumps(manifest, indent=2, ensure_ascii=False))
+        _atomic_write(target, new_text)
     except Exception:
         pass
 
@@ -680,8 +721,14 @@ class AdminHandler(http.server.SimpleHTTPRequestHandler):
     """
 
     def log_message(self, format, *args):
-        # Compact log format
-        print(f"  {self.address_string()} [{self.log_date_time_string()}] {format % args}")
+        # Compact log format. Quiet by default (PERF: skip the synchronous
+        # per-request console write on the response hot path); enable with --verbose.
+        if _LOG_REQUESTS:
+            print(f"  {self.address_string()} [{self.log_date_time_string()}] {format % args}")
+
+    def log_error(self, format, *args):
+        # 4xx/5xx must always surface, even when routine request logging is quiet.
+        print(f"  {self.address_string()} [{self.log_date_time_string()}] ERROR {format % args}")
 
     # ── Route dispatch ─────────────────────────────────────────────────────────
 
@@ -949,7 +996,12 @@ def main():
     parser.add_argument("--port", type=int, default=8080)
     parser.add_argument("--set-password", action="store_true",
                         help="Interactively set a new admin password")
+    parser.add_argument("--verbose", action="store_true",
+                        help="Log every request to the console (off by default for speed)")
     args = parser.parse_args()
+
+    global _LOG_REQUESTS
+    _LOG_REQUESTS = bool(args.verbose)
 
     if args.set_password:
         import getpass

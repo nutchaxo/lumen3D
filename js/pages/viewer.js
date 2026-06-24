@@ -28,6 +28,7 @@ const ViewerApp = (() => {
   let _isInitialized = false;
   let _pendingWorkspaceState = null;
   let _pendingZstackState = null; // buffered TOGGLE_ZSTACK arriving before init()
+  let _pendingPluginState = null; // plugin workspace state restored before PluginRegistry.initAll() ran
   let _volumeMeasureDraft = [];
   let _channelState = [];
   let _slicePreviewTimer = null;
@@ -376,6 +377,13 @@ const ViewerApp = (() => {
       // Initialize all loaded modules with the context
       await PluginRegistry.initAll(moduleCtx);
       PluginRegistry.bindToolbarButtons();
+
+      // Now that every module has its ViewerContext, flush any plugin workspace
+      // state that _applyWorkspaceStateNow() captured before initAll() ran.
+      if (_pendingPluginState) {
+        PluginRegistry.setWorkspaceState(_pendingPluginState);
+        _pendingPluginState = null;
+      }
 
       const toolsCount = PluginRegistry.listByPlacement('tools').length;
 
@@ -1590,9 +1598,16 @@ const ViewerApp = (() => {
     }
     _updateVolumeSourceStatus();
 
-    // Restore plugin states
+    // Restore plugin states. During the initial page load this runs before
+    // PluginRegistry.initAll() has handed each module its ViewerContext (this._ctx
+    // is still null), so a plugin's setState would throw. Defer to the deferred-apply
+    // hook right after initAll(); at runtime (_isInitialized) apply immediately.
     if (state.plugins && typeof PluginRegistry !== 'undefined') {
-      PluginRegistry.setWorkspaceState(state.plugins);
+      if (_isInitialized) {
+        PluginRegistry.setWorkspaceState(state.plugins);
+      } else {
+        _pendingPluginState = state.plugins;
+      }
     }
   }
 

@@ -39,6 +39,12 @@ The user expects this to happen silently as part of every edit:
 * **End-of-response notice** : after a versioning bump, append a discreet line, e.g.
   `[Versioning] Plateforme Web → v1.0.2. changelog_1.0.2.md généré.`
 
+### 1.6. Git workflow — work on `main` only (user preference, 2026-06-24)
+The user works **single-branch on `main`** and does **not** want git worktrees or feature-branch churn.
+* **No worktrees** : never create git worktrees, and never spawn agents with `isolation: "worktree"`. Always work in the main checkout (`C:\Users\Administrator\Desktop\WebPlatform`).
+* **Commit straight to `main`** : default to committing/pushing on `main` (it is not protected — direct pushes succeed). Don't spin up `feat/…`/`fix/…` branches for routine work.
+* **Exception** : only create a branch / open a PR when the user *explicitly* asks (e.g. invokes the create-PR command). That request overrides this default for that task only.
+
 ---
 
 ## 2. Architecture map — where each thing lives

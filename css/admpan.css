@@ -352,14 +352,9 @@ html, body {
    ADMIN MAIN LAYOUT
    ═══════════════════════════════════════════════════════════ */
 
-#admin-app {
-  height: 100vh;
-  display: none;
-  flex-direction: column;
-}
-#admin-app.visible {
-  display: flex;
-}
+/* #admin-app layout is owned by admin-shell.css (multi-tab shell: sidebar row +
+   content column). The pre-rewrite `flex-direction: column` rule that lived here
+   forced the sidebar to stack ON TOP of the content on desktop — removed. */
 
 .admin-main {
   flex: 1;

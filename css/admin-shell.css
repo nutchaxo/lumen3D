@@ -68,7 +68,7 @@
 .adm-gate-footer { text-align: center; font-size: 11px; color: var(--adm-text-muted); margin-top: 18px; }
 
 /* ── App shell ─────────────────────────────────────────────── */
-#admin-app { display: flex; height: 100vh; width: 100vw; overflow: hidden; }
+#admin-app { display: flex; flex-direction: row; height: 100vh; width: 100vw; overflow: hidden; }
 
 .adm-sidebar {
   width: 248px; flex-shrink: 0; display: flex; flex-direction: column; overflow: hidden;

@@ -4,7 +4,7 @@
 
 **Stack** : Vanilla JS (no framework, IIFE modules), Three.js (UMD via CDN), custom WebGL2 ray-marcher, Python preprocessing (h5py / numpy / scipy / PIL), dev server in Python (`dev_server.py`) — PHP fallback in `api/` for legacy hosts.
 
-**Current versions** : Plateforme Web `1.3.3` (latest changelog `changelog/changelog_1.3.3.md`), Preprocessing `0.12.15` (`preprocess/run_preprocess.py:__version__`). ⚠️ Note: `dev_server.py:__version__` is still `0.12.41` and **drifts from the web platform version** — it tracks the server tool itself, not the platform. The Web platform version lives **only** in the `changelog/` filenames; bump by adding a new `changelog_X.Y.Z.md`.
+**Current versions** : Plateforme Web `1.4.0` (latest changelog `changelog/changelog_1.4.0.md`), Preprocessing `0.14.1` (`preprocess/run_preprocess.py:__version__`). ⚠️ Note: `dev_server.py:__version__` is `0.13.0` and **drifts from the web platform version** — it tracks the server tool itself, not the platform. The Web platform version lives **only** in the `changelog/` filenames; bump by adding a new `changelog_X.Y.Z.md`.
 
 ---
 
@@ -41,7 +41,7 @@ The user expects this to happen silently as part of every edit:
 
 ### 1.6. Git workflow — develop on `dev`, keep `main` stable (user preference, updated 2026-06-24)
 The repo keeps **exactly two branches** : **`main`** (stable) and **`dev`** (active development). The user wants **all development on `dev`**, with **no sub-branches** (`feat/…`, `fix/…`, `claude/…`) and no git worktrees.
-* **No worktrees / no sub-branches** : never create git worktrees, never spawn agents with `isolation: "worktree"`, and don't spin up `feat/…`/`fix/…` branches for routine work. Always work in the main checkout (`C:\Users\Administrator\Desktop\WebPlatform`) on the `dev` branch.
+* **No worktrees / no sub-branches** : never create git worktrees, never spawn agents with `isolation: "worktree"`, and don't spin up `feat/…`/`fix/…` branches for routine work. Always work in the primary checkout of this repo, on the `dev` branch — the checkout path varies by machine (e.g. `D:\Coding\WebPlatform` on host MSI), so don't assume a hardcoded location.
 * **Commit straight to `dev`** : default to committing/pushing on `dev` (not protected — direct pushes succeed). Commit finished, verified work promptly — untracked files have been wiped before by branch updates.
 * **Integrate `dev → main` only when the user explicitly asks.** Likewise, only create a branch / open a PR when the user *explicitly* asks (e.g. invokes the create-PR command). That request overrides this default for that task only.
 
@@ -59,10 +59,13 @@ Each `*.html` at the repo root is a standalone page; its JS controller lives in 
 | Viewer | `viewer.html` | [viewer.js](js/pages/viewer.js) | **Main 3D/2D viewer** — heart of the app |
 | Compare | `compare.html` | [compare.js](js/pages/compare.js) | Side-by-side panels via iframes of `viewer.html` |
 | Tracking | `tracking.html` | [tracking.js](js/pages/tracking.js) | Cell tracking timelapse viewer |
-| Admin | `admpan.html` | [admpan.js](js/pages/admpan.js) | Dataset metadata CRUD (auth via `api/`) |
+| Admin | `admpan.html` | [admpan.js](js/pages/admpan.js) | Multi-tab admin SPA — datasets CRUD, stats, plugin visibility, security/password, GitHub update check (auth via `api/`). See note below. |
 | About | `about.html` | [about.js](js/pages/about.js) | Lab info |
-| DeepZoom | `deepzoom.html` | embedded in [components/deepzoom-viewer.js](js/components/deepzoom-viewer.js) | OSD-style 2D pyramid |
 | Widgets | `widgets.html` | — | Standalone widget demo |
+
+> **Admin panel is the one ESM exception** (since web v1.4.0 / commit `38660ca`) : `admpan.html` loads `admpan.js` via `<script type="module">`, and `admpan.js` + the tab modules under `js/pages/admin/{shell,bus,shared,tab-datasets,tab-stats,tab-plugins,tab-security,tab-updates}.js` use real `import`/`export`. This is a deliberate carve-out from the "no ESM" rule in §8 — the rest of the platform stays classic-script/IIFE.
+>
+> **DeepZoom removed** : the former `deepzoom.html` page, `js/components/deepzoom-viewer.js`, and `js/modules/tools/deepzoom-2d` plugin were deleted (see `changelog/changelog_1.2.1.md`). There is currently no 2D DZI pyramid viewer in the platform.
 
 ### 2.2. CSS (`css/`)
 Cascade order from [index.html](index.html:22) : `variables.css` → `themes.css` → `base.css` → `components.css` → `layout.css` → per-page (`landing.css` / `explorer.css` / `viewer.css` / `admpan.css`) → `tools.css`.
@@ -94,7 +97,7 @@ Loaded as classic `<script>` (no ESM), each exposes a global IIFE.
 | [display-presets.js](js/core/display-presets.js) | Background presets (dark, ortho, paper) |
 | [colorblind.js](js/core/colorblind.js) | CB-safe channel palettes |
 | [download-manifest.js](js/core/download-manifest.js) | Builds export bundles |
-| [export-manager.js](js/core/export-manager.js) | Screenshot / video export glue |
+| [export-manager.js](js/core/export-manager.js) | Backs the Download Center — workspace save/restore, measures/metadata/annotations export, downloadable-bundle browser, citation block |
 | [perf-telemetry.js](js/core/perf-telemetry.js) | `PerfTelemetry.start/end/event/setContext` — instrumentation calls scattered in `viewer.js`. The historical `DOCS/perf_baseline_*.json` snapshots have been removed from the repo. |
 
 ### 2.4. JS viewers — Three.js renderers under `js/viewers/`
@@ -103,7 +106,7 @@ Loaded as classic `<script>` (no ESM), each exposes a global IIFE.
 |---|---|
 | [volume-viewer.js](js/viewers/volume-viewer.js) | **Main 3D ray-marcher** — owns scene/camera/renderer, cube material, slice plane, gizmos, measurement sprites |
 | [volume-slicer.js](js/viewers/volume-slicer.js) | 2D oblique slice extraction from the volume |
-| [volume-grid.js](js/viewers/volume-grid.js) | Multi-slice grid view |
+| [volume-grid.js](js/viewers/volume-grid.js) | Spatial reference grid (xy/xz/yz planes), coordinate-axes gizmo, and scale-bar overlay — split out of `volume-viewer.js` for modularity |
 | [tracking-viewer.js](js/viewers/tracking-viewer.js) | Cell tracking timelapse render |
 
 ### 2.5. JS components (UI panels) under `js/components/`
@@ -113,8 +116,7 @@ Loaded as classic `<script>` (no ESM), each exposes a global IIFE.
 | [channel-panel.js](js/components/channel-panel.js) | Per-channel sidebar (color, gamma, min/max, hosts channel-placement plugins) |
 | [chart-studio.js](js/components/chart-studio.js) | Inline chart editor for histograms / analysis |
 | [decomposition-panel.js](js/components/decomposition-panel.js) | Channel decomposition UI (decompose-channels tool) |
-| [deepzoom-viewer.js](js/components/deepzoom-viewer.js) | DZI pyramid viewer for 2D tiles |
-| [studio-editor.js](js/components/studio-editor.js) | Admin panel dataset editor |
+| [studio-editor.js](js/components/studio-editor.js) | "Production Slice Studio" — in-viewer figure/annotation export tool (rectangle/line/arrow/distance/scale-bar/text layers) for publication-ready slice captures; opened from `viewer.js` / `compare.js` — **not** part of the admin panel despite the name |
 | [timeline.js](js/components/timeline.js) | Live timepoint scrubber |
 | [annotation-layer.js](js/components/annotation-layer.js) | Renders annotations on top of the canvas |
 
@@ -129,13 +131,12 @@ Plugin pattern : each module has `plugin.json` (metadata) + `index.js` (calls `P
 | `tools/orientation-axes` | **Interactive embryo orientation gizmo** (A/P green, D/V blue, L/R red). Drag to recalibrate; quaternion persisted to `metadata.json`. Hooks into admin panel via `postMessage` (no coupling to `VolumeViewer` internals — see [changelog_1.0.2.md](changelog/changelog_1.0.2.md)). |
 | `tools/screenshot` | PNG capture |
 | `tools/presentation-mode` | Fullscreen / kiosk mode |
-| `tools/save-workspace` `restore-workspace` | Workspace persistence (camera + channels) |
-| `tools/download-center` | Export bundles (PNG, slice stacks, metadata) |
+| `tools/download-center` | Export bundles (PNG, slice stacks, metadata) + workspace save/restore ("Save state" / "Restore state" buttons, via [export-manager.js](js/core/export-manager.js)) |
 | `tools/decompose-channels` | Per-channel decomposition panel |
 | `tools/zstack-browser` | Z-stack slice browser overlay |
-| `tools/deepzoom-2d` | Switch to 2D DeepZoom mode |
 | `tools/slice-inspector` | Oblique slice viewport |
 | `tools/measure-distance` | 3D point-pick → calibrated µm distance |
+| `tools/chunk-debug` | Debug overlay — draws brick/chunk boundaries, inspect chunk id/size/pack file on hover, Ctrl+wheel to cycle overlaps, click to copy metadata (3D / z-stack / oblique-slice) |
 | `shaders/fluorescence` | Default fluorescence ray-march (color × density) |
 | `shaders/structure-dvr` | Direct Volume Rendering structural mode |
 | `channels/histogram` | Per-channel histogram + min/max sliders |
@@ -196,7 +197,7 @@ Run end-to-end with [run_preprocess.py](preprocess/run_preprocess.py) — it orc
 | Step | Script | Output |
 |---|---|---|
 | 1 | [1-ims_metadata.py](preprocess/1-ims_metadata.py) | `meta.json` — dataset dimensions, voxel size, channels (parses HDF5 `DataSetInfo`) |
-| 2 | [2-image_processor.py](preprocess/2-image_processor.py) | Per-channel `.bin` LOD pyramids — background subtraction (Otsu + morphological opening to kill hot pixels), window leveling, downscale, `uint16 → uint8`. **Heavy CPU step.** |
+| 2 | [2-image_processor.py](preprocess/2-image_processor.py) | Per-channel `.bin` LOD pyramids — corner-sampling percentile background subtraction (`bg_floor` = 99th percentile of the 8 volume corners, `sig_max` = 99.9th percentile of a subsampled volume; `binary_opening` + `binary_dilation` mask cleanup kills hot pixels while preserving signal fade-out — Otsu was tried and deliberately removed in v0.12.0, see `preprocess/changelog/changelog_0.12.0.md`), masked median filtering, window leveling, downscale, `uint16 → uint8`. **Heavy CPU step.** |
 | — | (inline) `build_thumbnail` in `run_preprocess.py` | `thumbnail.webp` — false-color MIP composite |
 | 3 | [3-chunk_packer.py](preprocess/3-chunk_packer.py) | `bricks/lodN/...` — splits to 64³ chunks, mosaics into 512² WebP tiles (8×8, `brickPacking.mode = "grid"`), packs into `.bin` packs + `manifest.json`. ESS (Empty Space Skipping) : drops bricks with occupancy < 0.0005. |
 | 4 | [4-catalog_generator.py](preprocess/4-catalog_generator.py) | `metadata.json` per dataset — pushed into root `DATA_WEB/catalog.json` |
@@ -213,9 +214,10 @@ DATA_WEB/
 ├── fixed/<dataset>/            # Static volumes
 │   ├── metadata.json           # Per-dataset config: dims, voxels, channels, volumeSources
 │   ├── thumbnail.webp
-│   └── bricks/
-│       ├── manifest.json       # Brick index (lod, coords → pack offset/length)
-│       ├── lod0/  lod1/  lod2/ lod3/   # .bin pack files (WebP 8×8 mosaics of 64³ bricks)
+│   ├── bricks/
+│   │   ├── manifest.json       # Brick index (lod, coords → pack offset/length)
+│   │   └── lod0/  lod1/  lod2/ lod3/   # .bin pack files (WebP 8×8 mosaics of 64³ bricks)
+│   └── download/               # optional (--with-downloads): original .ims (hardlink), calibrated OME-TIFF, per-channel MIP PNGs, _web.zip, README.txt
 ├── live/<dataset>/             # 4D timelapse volumes (same shape + per-timepoint folders)
 └── tracking/<dataset>/         # Cell tracking trajectories
 ```
@@ -233,7 +235,7 @@ DATA_WEB/
 | `start.bat` | Windows launcher — opens browser + `python -m http.server 8000`. **No admin API.** |
 | PHP (`api/*.php`) | Legacy — only if hosting on PHP. `dev_server.py` re-implements the same routes. |
 
-**Admin credentials** : `api/config.json` (SHA-256 hashed password). Default user `admin`. Change via `python dev_server.py --set-password`.
+**Admin credentials** (since web v1.4.0) : `api/admin_credential.json` — a one-way salted **PBKDF2-HMAC-SHA256** hash (no plaintext), never served over HTTP (`api/` is blocked + `api/.htaccess`). No default password: a **missing** credential drives a first-run **setup** screen in the admin panel (`POST /api/auth.php?action=setup`, create-exclusive so it can't overwrite a live credential). Change it in-panel (Sécurité tab, needs the current password) or via `python dev_server.py --set-password` (operator override). The old `api/config.json` password store is no longer read (gitignored).
 
 ---
 
@@ -247,15 +249,15 @@ DATA_WEB/
 | Slice plane (oblique / orthogonal) | [js/viewers/volume-viewer.js](js/viewers/volume-viewer.js) `_planeSpec`, [js/viewers/volume-slicer.js](js/viewers/volume-slicer.js) |
 | 3D measurement (distance picking) | [js/modules/tools/measure-distance/index.js](js/modules/tools/measure-distance/index.js) + [js/core/measurement-store.js](js/core/measurement-store.js) |
 | Channel UI (gamma, color, min/max) | [js/components/channel-panel.js](js/components/channel-panel.js) + `js/modules/channels/*` |
-| Histogram computation | [js/modules/channels/histogram/index.js](js/modules/channels/histogram/index.js) (uses `AnalysisStore`) |
+| Histogram computation | [js/modules/channels/histogram/index.js](js/modules/channels/histogram/index.js) (data supplied via a `getHistograms` callback from [js/components/channel-panel.js](js/components/channel-panel.js); `AnalysisStore` is used by `chart-studio.js` / `tracking.js`, not this plugin) |
 | Per-channel gaussian blur | [js/modules/channels/gaussian-filter/index.js](js/modules/channels/gaussian-filter/index.js) + [js/workers/gaussian-blur-worker.js](js/workers/gaussian-blur-worker.js) |
-| Workspace save / restore | [js/core/workspace-state.js](js/core/workspace-state.js) + `tools/save-workspace`, `tools/restore-workspace` |
+| Workspace save / restore | [js/core/workspace-state.js](js/core/workspace-state.js) + [js/core/export-manager.js](js/core/export-manager.js) (wired into `tools/download-center`; also direct buttons on Tracking/Compare pages) |
 | Multi-panel compare sync | `compare.js` (parent) + `viewer.js` `postMessage` handlers |
-| Dataset CRUD (admin) | [js/pages/admpan.js](js/pages/admpan.js) + `api/datasets.php` (or Python equivalent in `dev_server.py`) |
+| Dataset CRUD (admin) | [js/pages/admin/tab-datasets.js](js/pages/admin/tab-datasets.js) (registered by [admpan.js](js/pages/admpan.js)) + `api/datasets.php` (or Python equivalent in `dev_server.py`) |
 | Translations (platform) | `lang/{en,fr,es}.json` — full key parity required. Add a language by dropping `lang/<code>.json` (auto-discovered); display name/flag/RTL come from `LANG_META` in [i18n.js](js/core/i18n.js). |
 | Translations (a plugin's own strings) | `js/modules/<placement>/<id>/lang/<code>.json` — call `ctx.i18n.t('key')` in `index.js`. List shipped locales in `plugin.json#i18nLanguages`. `en.json` is the mandatory fallback. |
 | Add a new tool | Create `js/modules/tools/<id>/{plugin.json, index.js, lang/}` — auto-discovered, no manifest to edit. `plugin.json` drives the button (`group`, `subtype`, `icon`, `order`, `i18nTitle`→a key in the plugin's `lang/`, optional `tool`/`shortcut`/`requires`/`i18nLanguages`). Toolbar generation: [plugin-registry.js](js/core/plugin-registry.js) `buildToolbarButtons` |
-| Adjust preprocessing background subtraction | [preprocess/2-image_processor.py](preprocess/2-image_processor.py) — Otsu + morphological opening |
+| Adjust preprocessing background subtraction | [preprocess/2-image_processor.py](preprocess/2-image_processor.py) — corner-sampling percentile (`bg_floor`/`sig_max`) + `binary_opening`/`binary_dilation` |
 | Change brick size / ESS threshold | [preprocess/3-chunk_packer.py](preprocess/3-chunk_packer.py) — `BRICK_SIZE`, `occ > 0.0005` |
 | Stage / embryo regex | [preprocess/4-catalog_generator.py](preprocess/4-catalog_generator.py) `_parse_stage`, `_parse_embryo` |
 | Perf telemetry instrumentation | `PerfTelemetry.start/end/event/setContext` calls scattered in `viewer.js` + [js/core/perf-telemetry.js](js/core/perf-telemetry.js). Note: the old `DOCS/perf_baseline_*.json` snapshots were removed from the repo — regenerate locally if needed. |
@@ -265,7 +267,7 @@ DATA_WEB/
 
 ## 8. Conventions
 
-* **No ESM, no bundler** — JS is `<script>`-tag concatenation order from the HTML. Module pattern is IIFE returning a singleton (`const Foo = (() => { … return { … }; })();`).
+* **No ESM, no bundler** — JS is `<script>`-tag concatenation order from the HTML. Module pattern is IIFE returning a singleton (`const Foo = (() => { … return { … }; })();`). **Exception** : the admin panel (`admpan.html` + `js/pages/admpan.js` + `js/pages/admin/*.js`, since v1.4.0) is loaded via `<script type="module">` and uses real `import`/`export` — this is a deliberate, contained carve-out for that one page, not a platform-wide shift.
 * **Globals live on `window`** by virtue of top-level `const` in classic script context (each file is its own `<script>` element).
 * **No build step** — edits in `js/` are reflected on page reload. Dev server forces `no-cache` headers.
 * **CDN deps** are pinned (Three.js `0.167.0`, Lucide `0.344.0`) — see `index.html` `<head>`.

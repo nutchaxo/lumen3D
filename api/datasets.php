@@ -18,6 +18,8 @@ header('Content-Type: application/json; charset=utf-8');
 header('X-Content-Type-Options: nosniff');
 header('Cache-Control: no-store');
 
+require_once __DIR__ . '/_admin_lib.php';  // admin_check_csrf, admin_record_event, etc.
+
 // ── Session / Auth ───────────────────────────────────────────────────────────
 session_name('iribhm_admin');
 session_start();
@@ -92,6 +94,7 @@ function list_datasets(): array {
                 'dimensions'  => $meta['dimensions'] ?? [],
                 'thumbnail'   => thumbnail_url($id),
                 'configured'  => isset($meta['_adminConfigured']) && $meta['_adminConfigured'],
+                'hidden'      => !empty($meta['hidden']),
                 'hasBricks'   => $hasBricks,
             ];
         }
@@ -122,6 +125,7 @@ function rebuild_catalog(): array {
             if (!is_dir($ds_dir)) continue;
             $meta     = read_json($ds_dir . DIRECTORY_SEPARATOR . 'metadata.json');
             if (!$meta) continue;
+            if (!empty($meta['hidden'])) continue;   // hidden datasets are excluded from the public catalog
 
             $id = $type . '/' . $name;
 
@@ -247,8 +251,11 @@ $method = $_SERVER['REQUEST_METHOD'];
 $action = $_GET['action'] ?? '';
 $id     = trim($_GET['id'] ?? '', '/');
 
-// All write operations require auth
-if ($method === 'POST') require_auth();
+// All write operations require auth + a valid CSRF token (mirrors dev_server.py)
+if ($method === 'POST') {
+    require_auth();
+    if (!admin_check_csrf()) json_out(['error' => 'Invalid or missing CSRF token'], 403);
+}
 
 switch ($action) {
 
@@ -319,6 +326,21 @@ switch ($action) {
         $catalog_path = $DATA_WEB . DIRECTORY_SEPARATOR . 'catalog.json';
         if (!write_json($catalog_path, $catalog)) json_out(['error' => 'Catalog write failed'], 500);
         json_out(['ok' => true, 'count' => count($catalog['datasets'])]);
+
+    case 'set_visibility':
+        require_auth();
+        if (!$id) json_out(['error' => 'Missing id'], 400);
+        if (strpos($id, '..') !== false) json_out(['error' => 'Invalid id'], 400);
+        $body = json_decode(file_get_contents('php://input'), true) ?: [];
+        $meta_path = dataset_dir($id) . DIRECTORY_SEPARATOR . 'metadata.json';
+        $meta = read_json($meta_path);
+        if (!$meta) json_out(['error' => 'Not found'], 404);
+        $meta['hidden'] = !empty($body['hidden']);
+        $meta['_lastModified'] = date('c');
+        if (!write_json($meta_path, $meta)) json_out(['error' => 'Write failed'], 500);
+        $catalog = rebuild_catalog();
+        write_json($DATA_WEB . DIRECTORY_SEPARATOR . 'catalog.json', $catalog);
+        json_out(['ok' => true, 'hidden' => $meta['hidden']]);
 
     default:
         json_out(['error' => 'Unknown action'], 400);

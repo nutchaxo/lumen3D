@@ -80,5 +80,18 @@ function write_manifest(array $plugins): void {
 }
 
 $plugins = discover_plugins();
+
+// Filter out admin-disabled plugins HERE (in discovery, before the client builds any
+// UI) so the load-order invariant holds; the persisted manifest mirrors the exclusion.
+$disabledPath = __DIR__ . DIRECTORY_SEPARATOR . 'disabled-plugins.json';
+$disabled = [];
+if (is_file($disabledPath)) {
+    $dj = json_decode((string)@file_get_contents($disabledPath), true);
+    if (is_array($dj) && isset($dj['disabled']) && is_array($dj['disabled'])) $disabled = $dj['disabled'];
+}
+if ($disabled) {
+    $plugins = array_values(array_filter($plugins, fn($p) => !in_array($p['path'], $disabled, true)));
+}
+
 write_manifest($plugins);
 echo json_encode(['plugins' => $plugins], JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE);

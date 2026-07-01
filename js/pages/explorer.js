@@ -17,8 +17,10 @@ const Explorer = (() => {
   async function init() {
     // Init core systems
     Theme.init();
-    await I18n.init();
-    await Catalog.load();
+    // PERF: I18n.init() and Catalog.load() are independent network fetches —
+    // overlapping them makes first paint of the grid wait on max(), not the sum,
+    // of the two. Both subsystems guard re-entry and tolerate their own failures.
+    await Promise.all([I18n.init(), Catalog.load()]);
     document.title = 'Data Explorer - IRIBHM Microscopy';
     if (typeof ExportManager !== 'undefined') ExportManager.init({ scope: 'explorer' });
 

@@ -6,6 +6,12 @@
       "runtimeExecutable": "py",
       "runtimeArgs": ["dev_server.py"],
       "port": 8080
+    },
+    {
+      "name": "verify",
+      "runtimeExecutable": "py",
+      "runtimeArgs": ["dev_server.py", "--port", "8090"],
+      "port": 8090
     }
   ]
 }

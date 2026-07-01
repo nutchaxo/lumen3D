@@ -1,0 +1,461 @@
+@echo off
+chcp 65001 >nul
+setlocal EnableExtensions EnableDelayedExpansion
+title IRIBHM - Pipeline de Preprocessing
+
+rem #############################################################################
+rem #  LANCEUR AUTONOME DU PIPELINE DE PREPROCESSING IRIBHM / Lumen3D
+rem #  Fichier .bat auto-suffisant : il embarque les scripts Python du pipeline,
+rem #  detecte (ou installe localement) un Python utilisable, installe les
+rem #  dependances, puis lance le traitement. Aucun chemin absolu, tout est
+rem #  relatif au dossier de ce .bat.
+rem #
+rem #  GENERE automatiquement par build_launcher.py -- NE PAS editer a la main :
+rem #  modifiez les .py / le template puis relancez le generateur.
+rem #############################################################################
+
+rem ===== Configuration (injectee par le generateur) ===========================
+set "PP_VERSION=@@@PP_VERSION@@@"
+set "PY_VERSION=@@@PY_VERSION@@@"
+set "SCRIPTS=@@@SCRIPTS@@@"
+set "ENTRY=@@@ENTRY@@@"
+set "REQUIRED_DEPS=@@@DEPS@@@"
+set "IMPORT_CHECK=@@@IMPORT_CHECK@@@"
+set "PY_URL=https://www.python.org/ftp/python/@@@PY_VERSION@@@/python-@@@PY_VERSION@@@-embed-amd64.zip"
+set "GETPIP_URL=https://bootstrap.pypa.io/get-pip.py"
+
+rem ===== Couleurs ANSI (capture du caractere ESC 0x1B) ========================
+for /f %%a in ('echo prompt $E ^| cmd') do set "E=%%a"
+set "R=!E![0m"
+set "TITLE=!E![1;96m"
+set "ACC=!E![96m"
+set "OK=!E![92m"
+set "ERR=!E![91m"
+set "WARN=!E![93m"
+set "DIM=!E![90m"
+set "BOLD=!E![1m"
+
+rem ===== Chemins (relatifs au .bat) ===========================================
+set "BATDIR=%~dp0"
+if "!BATDIR:~-1!"=="\" set "BATDIR=!BATDIR:~0,-1!"
+set "WORK=!BATDIR!"
+set "RUNTIME=!BATDIR!\.runtime"
+set "PYDIR=!RUNTIME!\python"
+set "LOCALPY=!PYDIR!\python.exe"
+
+set "PY="
+set "RC=0"
+set "FORCE_LOCAL="
+set "FORCE_EXTRACT="
+set "MODE=run"
+
+rem ===== Analyse des arguments ================================================
+:parse_args
+if "%~1"=="" goto :after_args
+if /i "%~1"=="--check"       set "MODE=check"        & shift & goto :parse_args
+if /i "%~1"=="--force-local" set "FORCE_LOCAL=1"     & shift & goto :parse_args
+if /i "%~1"=="--extract" (
+    set "MODE=extract"
+    set "FORCE_EXTRACT=1"
+    if not "%~2"=="" set "WORK=%~2"
+    shift & shift & goto :parse_args
+)
+if /i "%~1"=="--help"  goto :show_help
+if /i "%~1"=="-h"      goto :show_help
+echo Argument inconnu : %~1
+goto :show_help
+:after_args
+
+call :banner
+
+rem ===== Mode extraction seule ================================================
+if "!MODE!"=="extract" (
+    call :ensure_scripts
+    if errorlevel 1 goto :fatal
+    echo.
+    echo !OK!Scripts extraits dans!R! !WORK!
+    goto :end
+)
+
+rem ===== [1/5] Scripts du pipeline ============================================
+call :step 1 5 "Scripts du pipeline"
+call :ensure_scripts
+if errorlevel 1 goto :fatal
+
+rem ===== [2/5] Environnement Python ===========================================
+call :step 2 5 "Environnement Python"
+call :ensure_python
+if errorlevel 1 goto :fatal
+
+rem ===== [3/5] Dependances Python =============================================
+call :step 3 5 "Dependances Python"
+call :ensure_deps
+if errorlevel 1 goto :fatal
+
+if "!MODE!"=="check" (
+    echo.
+    echo !OK!Environnement pret.!R! Python : !DIM!!PY!!R!
+    goto :end
+)
+
+rem ===== [4/5] Parametres =====================================================
+call :step 4 5 "Parametres du traitement"
+call :ask_params
+if errorlevel 2 goto :end
+if errorlevel 1 goto :fatal
+
+rem ===== [5/5] Execution ======================================================
+call :step 5 5 "Execution du pipeline"
+call :run_pipeline
+goto :end
+
+
+rem ############################################################################
+rem #  SOUS-ROUTINES
+rem ############################################################################
+
+:banner
+echo.
+echo !TITLE!================================================================================!R!
+echo !TITLE!   IRIBHM MICROSCOPY  ^|  Pipeline de Preprocessing  ^|  v!PP_VERSION!!R!
+echo !TITLE!================================================================================!R!
+exit /b 0
+
+:step
+rem %~1 = numero, %~2 = total, %~3 = titre
+echo.
+echo !ACC![%~1/%~2]!R! !BOLD!%~3!R!
+echo !DIM!--------------------------------------------------------------------------------!R!
+exit /b 0
+
+:ok
+echo    !OK![OK]!R! %~1
+exit /b 0
+
+:info
+echo    !DIM!-!R!  %~1
+exit /b 0
+
+:warnmsg
+echo    !WARN![*]!R! %~1
+exit /b 0
+
+:errmsg
+echo    !ERR![X]!R! %~1
+exit /b 0
+
+
+rem ---- Verifie/extrait les scripts du pipeline (par nom seulement) -----------
+:ensure_scripts
+set "_idx=-1"
+set "_fail=0"
+for %%S in (!SCRIPTS!) do (
+    set /a "_idx+=1"
+    set "_dst=!WORK!\%%S"
+    if exist "!_dst!" if not "!FORCE_EXTRACT!"=="1" (
+        call :info "%%S !DIM!(present, conserve)!R!"
+        set "_skip=1"
+    )
+    if not "!_skip!"=="1" (
+        call :extract !_idx! "!_dst!"
+        if exist "!_dst!" (
+            call :ok "%%S !DIM!(extrait)!R!"
+        ) else (
+            call :errmsg "%%S : extraction impossible"
+            set "_fail=1"
+        )
+    )
+    set "_skip="
+)
+if "!_fail!"=="1" exit /b 1
+call :ensure_download_script
+exit /b 0
+
+rem ---- build_download_bundles.py : tools/ du depot, sinon extraction (index 5) -
+:ensure_download_script
+if not "!FORCE_EXTRACT!"=="1" (
+    if exist "!BATDIR!\..\tools\build_download_bundles.py" (
+        call :info "build_download_bundles.py !DIM!(tools/, conserve)!R!"
+        exit /b 0
+    )
+    if exist "!WORK!\build_download_bundles.py" (
+        call :info "build_download_bundles.py !DIM!(present, conserve)!R!"
+        exit /b 0
+    )
+)
+call :extract 5 "!WORK!\build_download_bundles.py"
+if exist "!WORK!\build_download_bundles.py" (
+    call :ok "build_download_bundles.py !DIM!(extrait)!R!"
+) else (
+    call :warnmsg "build_download_bundles.py indisponible (option download/ desactivee)."
+)
+exit /b 0
+
+rem ---- Decode un bloc base64 embarque (index %~1) vers le fichier %~2 --------
+:extract
+set "_b64=%TEMP%\_iribhm_extract_%~1.b64"
+if exist "!_b64!" del "!_b64!" >nul 2>&1
+> "!_b64!" (
+    for /f "usebackq tokens=1* delims=#" %%a in (`findstr /b /c:"#%~1#" "%~f0"`) do echo(%%b
+)
+certutil -decode "!_b64!" "%~2" >nul 2>&1
+del "!_b64!" >nul 2>&1
+exit /b 0
+
+
+rem ---- Garantit un Python 3 utilisable (PY) ---------------------------------
+:ensure_python
+rem 1) runtime local deja installe ?
+if exist "!LOCALPY!" (
+    call :py_works "!LOCALPY!"
+    if not errorlevel 1 (
+        set PY="!LOCALPY!"
+        call :ok "Python local : !DIM!!LOCALPY!!R!"
+        exit /b 0
+    )
+)
+rem 2) Python systeme (sauf si --force-local)
+if not "!FORCE_LOCAL!"=="1" (
+    for %%C in ("py -3" "python" "python3" "py") do (
+        if not defined PY (
+            call :py_works %%~C
+            if not errorlevel 1 set "PY=%%~C"
+        )
+    )
+    if defined PY (
+        for /f "tokens=*" %%V in ('!PY! --version 2^>^&1') do set "PYVER=%%V"
+        call :ok "Python systeme : !DIM!!PY! (!PYVER!)!R!"
+        exit /b 0
+    )
+)
+rem 3) aucun Python : proposer l'installation locale
+call :warnmsg "Aucun Python utilisable trouve sur ce poste."
+call :info "Un Python !PY_VERSION! autonome peut etre installe ici :"
+echo        !DIM!!PYDIR!!R!
+set "_ans="
+set /p "_ans=   Telecharger et installer ce Python local ? [O/n] "
+if /i "!_ans!"=="n" (
+    call :errmsg "Python requis : operation annulee."
+    exit /b 1
+)
+call :install_python
+if errorlevel 1 exit /b 1
+set PY="!LOCALPY!"
+call :ok "Python local installe : !DIM!!LOCALPY!!R!"
+exit /b 0
+
+rem ---- Teste qu'une invocation est bien un Python 3 -------------------------
+:py_works
+%* -c "import sys; sys.exit(0 if sys.version_info[0]==3 else 1)" >nul 2>&1
+exit /b !errorlevel!
+
+rem ---- Telecharge + installe un Python embarquable local + pip --------------
+:install_python
+if not exist "!RUNTIME!" mkdir "!RUNTIME!" >nul 2>&1
+if not exist "!PYDIR!"   mkdir "!PYDIR!"   >nul 2>&1
+set "_zip=!RUNTIME!\python-embed.zip"
+call :info "Telechargement de Python !PY_VERSION!..."
+curl -L --fail -o "!_zip!" "!PY_URL!"
+if errorlevel 1 (
+    call :errmsg "Echec du telechargement de Python."
+    exit /b 1
+)
+call :info "Extraction..."
+tar -xf "!_zip!" -C "!PYDIR!" >nul 2>&1
+if errorlevel 1 (
+    powershell -NoProfile -Command "Expand-Archive -Force -LiteralPath '!_zip!' -DestinationPath '!PYDIR!'" >nul 2>&1
+)
+del "!_zip!" >nul 2>&1
+if not exist "!LOCALPY!" (
+    call :errmsg "Extraction de Python invalide."
+    exit /b 1
+)
+rem Activer les site-packages (decommenter 'import site' dans le fichier ._pth)
+for %%P in ("!PYDIR!\python*._pth") do (
+    powershell -NoProfile -Command "$f='%%~fP'; (Get-Content -LiteralPath $f) -replace '^\s*#\s*import\s+site','import site' | Set-Content -LiteralPath $f" >nul 2>&1
+)
+rem Amorcer pip
+set "_getpip=!RUNTIME!\get-pip.py"
+call :info "Installation de pip..."
+curl -L --fail -o "!_getpip!" "!GETPIP_URL!"
+if errorlevel 1 (
+    call :errmsg "Echec du telechargement de get-pip.py."
+    exit /b 1
+)
+"!LOCALPY!" "!_getpip!" --no-warn-script-location
+set "_piprc=!errorlevel!"
+del "!_getpip!" >nul 2>&1
+if not "!_piprc!"=="0" (
+    call :errmsg "Echec de l'installation de pip."
+    exit /b 1
+)
+exit /b 0
+
+
+rem ---- Garantit les dependances Python --------------------------------------
+:ensure_deps
+%PY% -c "!IMPORT_CHECK!" >nul 2>&1
+if not errorlevel 1 (
+    call :ok "Dependances presentes : !DIM!!REQUIRED_DEPS!!R!"
+    exit /b 0
+)
+call :warnmsg "Dependances manquantes : !REQUIRED_DEPS!"
+rem S'assurer que pip est disponible
+%PY% -m pip --version >nul 2>&1
+if errorlevel 1 %PY% -m ensurepip --default-pip >nul 2>&1
+set "_ans="
+set /p "_ans=   Installer les dependances maintenant ? [O/n] "
+if /i "!_ans!"=="n" (
+    call :errmsg "Dependances requises : operation annulee."
+    exit /b 1
+)
+call :info "Installation (cela peut prendre quelques minutes)..."
+%PY% -m pip install --no-warn-script-location !REQUIRED_DEPS!
+if errorlevel 1 (
+    call :errmsg "Echec de l'installation des dependances."
+    exit /b 1
+)
+%PY% -c "!IMPORT_CHECK!" >nul 2>&1
+if errorlevel 1 (
+    call :errmsg "Dependances toujours introuvables apres installation."
+    exit /b 1
+)
+call :ok "Dependances installees."
+exit /b 0
+
+rem ---- Dependance optionnelle pour download/ : tifffile (OME-TIFF) ----------
+:ensure_tifffile
+%PY% -c "import tifffile" >nul 2>&1
+if not errorlevel 1 exit /b 0
+call :info "Dependance download/ manquante : tifffile (installation)..."
+%PY% -m pip install --no-warn-script-location tifffile >nul 2>&1
+%PY% -c "import tifffile" >nul 2>&1
+if errorlevel 1 call :warnmsg "tifffile indisponible : l'OME-TIFF pourrait echouer."
+exit /b 0
+
+
+rem ---- Saisie des parametres -------------------------------------------------
+:ask_params
+:ask_input
+echo.
+set "INPUT="
+set /p "INPUT=   Dossier des fichiers .ims : "
+if not defined INPUT (
+    call :warnmsg "Veuillez saisir un dossier."
+    goto :ask_input
+)
+set INPUT=!INPUT:"=!
+if not exist "!INPUT!\" (
+    call :warnmsg "Dossier introuvable : !INPUT!"
+    goto :ask_input
+)
+set "IMSCOUNT=0"
+for %%F in ("!INPUT!\*.ims") do set /a IMSCOUNT+=1
+if "!IMSCOUNT!"=="0" (
+    call :warnmsg "Aucun fichier .ims detecte dans ce dossier."
+    set "_ans="
+    set /p "_ans=   Continuer quand meme ? [o/N] "
+    if /i not "!_ans!"=="o" goto :ask_input
+) else (
+    call :ok "!IMSCOUNT! fichier(s) .ims detecte(s)."
+)
+
+for %%I in ("!BATDIR!\..\DATA_WEB") do set "DEFAULT_OUT=%%~fI"
+set "OUTPUT="
+set /p "OUTPUT=   Dossier de sortie DATA_WEB [Entree = !DEFAULT_OUT!] : "
+if defined OUTPUT set OUTPUT=!OUTPUT:"=!
+if not defined OUTPUT set "OUTPUT=!DEFAULT_OUT!"
+
+set "FILTER="
+set /p "FILTER=   Filtre optionnel (glob, ex: *E8*) [Entree = tous] : "
+if defined FILTER set FILTER=!FILTER:"=!
+
+rem Option : generer aussi le contenu de download/ (lourd : relit le .ims, OME-TIFF, zip)
+set "WITH_DOWNLOADS="
+set "_ans="
+set /p "_ans=   Generer aussi les fichiers download/ (archive, OME-TIFF, MIP) ? [o/N] "
+if /i "!_ans!"=="o" set "WITH_DOWNLOADS=1"
+
+echo.
+echo !DIM!--------------------------------------------------------------------------------!R!
+echo    !BOLD!Recapitulatif!R!
+echo      Python   : !PY!
+echo      Entree   : !INPUT!
+echo      Sortie   : !OUTPUT!
+if defined FILTER (echo      Filtre   : !FILTER!) else (echo      Filtre   : tous les fichiers)
+if defined WITH_DOWNLOADS (echo      Download/ : oui) else (echo      Download/ : non)
+echo !DIM!--------------------------------------------------------------------------------!R!
+set "_ans="
+set /p "_ans=   Lancer le traitement ? [O/n] "
+if /i "!_ans!"=="n" (
+    call :info "Abandon a la demande de l'utilisateur."
+    exit /b 2
+)
+exit /b 0
+
+
+rem ---- Execution du pipeline -------------------------------------------------
+:run_pipeline
+echo.
+call :info "Ctrl+C pendant le traitement : une confirmation sera demandee avant l'arret."
+echo.
+set "PYTHONUNBUFFERED=1"
+set "PYTHONIOENCODING=utf-8"
+set "EXTRA="
+if defined WITH_DOWNLOADS (
+    call :ensure_tifffile
+    set "EXTRA=--with-downloads"
+)
+if defined FILTER (
+    %PY% "!WORK!\!ENTRY!" --input "!INPUT!" --output "!OUTPUT!" --only "!FILTER!" !EXTRA!
+) else (
+    %PY% "!WORK!\!ENTRY!" --input "!INPUT!" --output "!OUTPUT!" !EXTRA!
+)
+set "RC=!errorlevel!"
+echo.
+if "!RC!"=="0" (
+    echo !OK!================================================================================!R!
+    echo !OK!  Traitement termine avec succes.!R!
+    echo !OK!================================================================================!R!
+) else if "!RC!"=="130" (
+    echo !WARN!================================================================================!R!
+    echo !WARN!  Pipeline interrompu par l'utilisateur (Ctrl+C). Etat nettoye.!R!
+    echo !WARN!================================================================================!R!
+) else (
+    echo !ERR!================================================================================!R!
+    echo !ERR!  Le pipeline s'est termine avec le code d'erreur !RC!.!R!
+    echo !ERR!================================================================================!R!
+)
+exit /b 0
+
+
+:show_help
+echo.
+echo Usage : %~nx0 [options]
+echo.
+echo   (aucun)          Lance le pipeline en mode interactif.
+echo   --check          Verifie scripts + Python + dependances, puis quitte.
+echo   --extract [dir]  Extrait les scripts embarques (defaut : dossier du .bat).
+echo   --force-local    Ignore le Python systeme, utilise/installe le Python local.
+echo   --help, -h       Affiche cette aide.
+goto :end
+
+
+:fatal
+echo.
+call :errmsg "Arret : l'environnement n'a pas pu etre prepare."
+set "RC=1"
+goto :end
+
+
+:end
+echo.
+pause
+endlocal & exit /b %RC%
+
+rem ############################################################################
+rem #  DONNEES EMBARQUEES (scripts Python encodes en base64)
+rem #  Ne jamais executer : le flux s'arrete a 'exit /b' ci-dessus.
+rem #  Format : lignes "#<index>#<base64>", un index par script (ordre SCRIPTS).
+rem ############################################################################
+@@@EMBEDDED@@@

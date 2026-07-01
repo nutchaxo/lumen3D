@@ -14,9 +14,9 @@ import { fileURLToPath } from 'node:url';
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const read = (rel) => readFileSync(path.join(ROOT, rel), 'utf8');
 
-// ── admpan.js ──
+// ── admin datasets tab (was admpan.js before the v1.4.0 SPA refactor) ──
 {
-  const s = read('js/pages/admpan.js');
+  const s = read('js/pages/admin/tab-datasets.js');
   // BUG-057: both rebuild_catalog calls in save paths are awaited + checked
   assert.equal((s.match(/await apiFetch\(`\$\{API_DATASETS\}\?action=rebuild_catalog`/g) || []).length, 3,
     'BUG-057: rebuild_catalog awaited in saveDataset + saveThumbnail (+ manual rebuild)');

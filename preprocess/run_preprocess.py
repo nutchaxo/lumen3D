@@ -4,6 +4,8 @@ import fnmatch
 import json
 import os
 import shutil
+import signal
+import subprocess
 import sys
 import traceback
 from datetime import datetime
@@ -11,11 +13,96 @@ from pathlib import Path
 import numpy as np
 from PIL import Image
 
-__version__ = "0.12.15"
+__version__ = "0.14.1"
 
 # ── Paths ──────────────────────────────────────────────────────────────────────
 SCRIPT_DIR = Path(__file__).resolve().parent
 PYTHON_EXE = sys.executable
+
+# ── Console styling (graceful ANSI; degrades to plain on redirect / no-VT) ──────
+def _supports_color() -> bool:
+    if not sys.stdout.isatty():
+        return False
+    if os.name == "nt":
+        try:
+            import ctypes
+            k = ctypes.windll.kernel32
+            h = k.GetStdHandle(-11)
+            mode = ctypes.c_uint32()
+            if not k.GetConsoleMode(h, ctypes.byref(mode)):
+                return False
+            k.SetConsoleMode(h, mode.value | 0x0004)  # ENABLE_VIRTUAL_TERMINAL_PROCESSING
+        except Exception:
+            return False
+    return True
+
+_COLOR = _supports_color()
+
+def _style(code: str, text: str) -> str:
+    return f"\033[{code}m{text}\033[0m" if _COLOR else text
+
+def _hdr(s):  return _style("1;96", s)   # bold cyan
+def _ok(s):   return _style("92", s)     # green
+def _err(s):  return _style("91", s)     # red
+def _warn(s): return _style("93", s)     # yellow
+def _dim(s):  return _style("90", s)     # grey
+
+# ── Graceful interruption (Ctrl+C) ──────────────────────────────────────────────
+# Each step runs in its OWN process group, so a console Ctrl+C is NOT delivered to
+# the child directly. The orchestrator intercepts SIGINT, asks the user to confirm,
+# and only then tears the running step (and the worker pool it spawned) down.
+# Declining the prompt resumes the step transparently — it never received the signal.
+if os.name == "nt":
+    _STEP_SPAWN = {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP}
+else:
+    _STEP_SPAWN = {"start_new_session": True}
+
+_current_proc = None    # Popen of the step currently running (or None)
+_confirming = False     # re-entrancy guard for the confirmation prompt
+
+
+def _kill_tree(proc) -> None:
+    """Terminate a step process and every worker it spawned (ProcessPoolExecutor)."""
+    if proc is None or proc.poll() is not None:
+        return
+    try:
+        if os.name == "nt":
+            subprocess.run(["taskkill", "/F", "/T", "/PID", str(proc.pid)],
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        else:
+            os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
+    except Exception:
+        pass
+    try:
+        proc.wait(timeout=10)
+    except Exception:
+        try:
+            proc.kill()
+        except Exception:
+            pass
+
+
+def _install_sigint_handler() -> None:
+    """On Ctrl+C, ask for confirmation. Confirm -> abort cleanly; decline -> resume."""
+    def _handler(signum, frame):
+        global _confirming
+        if _confirming:
+            # A second Ctrl+C while the prompt is up means: stop now, for sure.
+            raise KeyboardInterrupt
+        _confirming = True
+        try:
+            sys.stderr.write("\n")
+            try:
+                answer = input(_warn("[!] Arreter le pipeline en cours ? ") +
+                               "Les fichiers temporaires seront nettoyes. [o/N] ")
+            except EOFError:
+                answer = "o"   # non-interactive stdin: cannot ask -> stop
+        finally:
+            _confirming = False
+        if answer.strip().lower() in ("o", "oui", "y", "yes"):
+            raise KeyboardInterrupt
+        print(_dim("    reprise du traitement..."))
+    signal.signal(signal.SIGINT, _handler)
 
 # Hex colors to RGB mapping for composite thumbnail (matches channel colors)
 THUMB_COLORS = [
@@ -90,17 +177,46 @@ def build_thumbnail(temp_dir: Path, output_dir: Path, proc_meta: dict) -> None:
     out.save(str(thumb_path), "WEBP", quality=88, method=6)
     print(f"[THUMBNAIL] Wrote thumbnail to {thumb_path}")
 
-def run_step(script_name: str, *args) -> None:
-    import subprocess
-    cmd = [PYTHON_EXE, str(SCRIPT_DIR / script_name), *args]
-    print(f"\n[RUNNING] {' '.join(cmd)}")
-    subprocess.run(cmd, check=True)
+def run_script(script_path, *args, label=None) -> None:
+    global _current_proc
+    cmd = [PYTHON_EXE, str(script_path), *args]
+    print(_dim(f"   - {label or Path(script_path).name}"))
+    proc = subprocess.Popen(cmd, **_STEP_SPAWN)
+    _current_proc = proc
+    try:
+        ret = proc.wait()
+    except KeyboardInterrupt:
+        # Confirmed abort during this step: tear down the step and its worker pool.
+        _kill_tree(proc)
+        raise
+    finally:
+        _current_proc = None
+    if ret != 0:
+        raise subprocess.CalledProcessError(ret, cmd)
 
-def process_ims_file(ims_path: Path, output_root: Path) -> None:
+
+def run_step(script_name: str, *args) -> None:
+    run_script(SCRIPT_DIR / script_name, *args)
+
+
+DOWNLOAD_SCRIPT_NAME = "build_download_bundles.py"
+
+def _resolve_download_script():
+    """The download-bundle tool sits in tools/ in the repo, but is extracted next
+    to this script by the self-contained launcher — accept either location."""
+    for cand in (SCRIPT_DIR / DOWNLOAD_SCRIPT_NAME,
+                 SCRIPT_DIR.parent / "tools" / DOWNLOAD_SCRIPT_NAME):
+        if cand.exists():
+            return cand.resolve()
+    return None
+
+def process_ims_file(ims_path: Path, output_root: Path, idx: int = 0, total: int = 0,
+                     with_downloads: bool = False) -> None:
     dataset_name = ims_path.stem
-    print(f"\n" + "=" * 80)
-    print(f"[START] Processing dataset: {dataset_name}")
-    print(f"  Source : {ims_path}")
+    counter = f"[{idx}/{total}] " if total else ""
+    print()
+    print(_hdr(f">> {counter}{dataset_name}"))
+    print(_dim(f"   source : {ims_path}"))
     t0 = datetime.now()
     
     # Setup directories
@@ -135,22 +251,41 @@ def process_ims_file(ims_path: Path, output_root: Path) -> None:
         
         # Step 5: Catalog metadata (dataset.json / metadata.json)
         run_step("4-catalog_generator.py", str(temp_dir), str(dataset_output_dir))
-        
+
+        # Step 6 (optional): download/ bundle — archive, original .ims, OME-TIFF,
+        # per-channel MIPs, README. Runs after step 4 so metadata.json exists. The
+        # source .ims is the one being processed, so point the tool at its folder.
+        if with_downloads:
+            dl_script = _resolve_download_script()
+            if dl_script is None:
+                print(_warn(f"   [!] {DOWNLOAD_SCRIPT_NAME} introuvable — download/ ignore"))
+            else:
+                run_script(dl_script,
+                           "--data-web", str(output_root),
+                           "--raw-dir", str(ims_path.parent),
+                           "--datasets", dataset_name,
+                           label="download/ (archive, OME-TIFF, MIP)")
+
         elapsed = (datetime.now() - t0).total_seconds()
-        print(f"[SUCCESS] Dataset {dataset_name} finished in {elapsed:.0f}s!")
+        print(_ok(f"   [OK] {dataset_name} termine en {elapsed:.0f}s"))
     except Exception as e:
-        print(f"[ERROR] Failed to process dataset {dataset_name}: {e}", file=sys.stderr)
+        print(_err(f"   [X] {dataset_name} : {e}"), file=sys.stderr)
         traceback.print_exc()
     finally:
-        # Clean up temporary processing binary files to free space
+        # Clean up temporary processing binary files to free space.
+        # ignore_errors: on a Ctrl+C teardown a just-killed worker may still hold a
+        # handle for a few ms — never let cleanup mask the interruption.
         if temp_dir.exists():
-            shutil.rmtree(temp_dir)
+            shutil.rmtree(temp_dir, ignore_errors=True)
 
 def main():
     parser = argparse.ArgumentParser(description="IRIBHM Microscopy Preprocessing Unified Pipeline")
     parser.add_argument("--input", required=True, help="Input directory containing raw .ims files.")
     parser.add_argument("--output", required=True, help="Output DATA_WEB directory of the web platform.")
     parser.add_argument("--only", default=None, help="Glob pattern to filter files to process (e.g. '*E8*').")
+    parser.add_argument("--with-downloads", action="store_true",
+                        help="After each dataset, also build its download/ bundle "
+                             "(web archive, original .ims, OME-TIFF, per-channel MIP, README).")
     args = parser.parse_args()
 
     input_dir = Path(args.input)
@@ -167,38 +302,46 @@ def main():
         ims_files = [p for p in ims_files if fnmatch.fnmatch(p.name, args.only)]
 
     if not ims_files:
-        print(f"No matching .ims files found in {input_dir}")
+        print(_warn(f"Aucun fichier .ims correspondant dans {input_dir}"))
         sys.exit(0)
 
-    print("=" * 80)
-    print(f" IRIBHM MICROSCOPY PREPROCESSING PIPELINE (v{__version__})")
-    print(f" Source   : {input_dir}")
-    print(f" Destination : {output_dir}")
-    print(f" Matching : {args.only or '*'}")
-    print(f" Found files: {len(ims_files)}")
-    print("=" * 80)
+    print()
+    print(_hdr("  Pipeline de preprocessing  ") + _dim(f"v{__version__}"))
+    print(_dim(f"  source      : {input_dir}"))
+    print(_dim(f"  destination : {output_dir}"))
+    print(_dim(f"  datasets    : {len(ims_files)}   (filtre: {args.only or '*'})"))
+    print(_dim(f"  download/   : {'oui' if args.with_downloads else 'non'}"))
 
-    print("=" * 80)
+    # Graceful Ctrl+C: confirm with the user, then tear the running step down cleanly.
+    _install_sigint_handler()
 
-    from concurrent.futures import ThreadPoolExecutor, as_completed
-    
-    max_workers = 1 # Process 1 dataset at a time to save RAM, heavily multithread inner processes
-    print(f"\n[MULTITHREADING] Starting ThreadPoolExecutor with max_workers={max_workers}\n")
-    
-    with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        future_to_ims = {executor.submit(process_ims_file, ims_file, output_dir): ims_file for ims_file in ims_files}
-        
-        for i, future in enumerate(as_completed(future_to_ims)):
-            ims_file = future_to_ims[future]
-            try:
-                future.result()
-                print(f"[PROGRESS] Completed dataset {i+1}/{len(ims_files)}: {ims_file.name}")
-            except Exception as exc:
-                print(f"[ERROR] Dataset {ims_file.name} generated an exception: {exc}")
+    # One dataset at a time (bounded RAM) — each step already multithreads internally.
+    interrupted = False
+    for i, ims_file in enumerate(ims_files):
+        try:
+            process_ims_file(ims_file, output_dir, i + 1, len(ims_files),
+                             with_downloads=args.with_downloads)
+        except KeyboardInterrupt:
+            interrupted = True
+            break
+        except Exception as exc:
+            print(_err(f"   [X] {ims_file.name} : {exc}"))
 
-    print("\n" + "=" * 80)
-    print(" Pipeline execution complete!")
-    print("=" * 80)
+    if interrupted:
+        # Remove any half-written temp folder left by the aborted dataset.
+        for stray in output_dir.glob(".temp_preprocess_*"):
+            shutil.rmtree(stray, ignore_errors=True)
+        print()
+        print(_warn("  Pipeline interrompu par l'utilisateur (Ctrl+C). Etat nettoye."))
+        sys.exit(130)
+
+    print()
+    print(_ok("  Pipeline termine."))
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except KeyboardInterrupt:
+        # Ctrl+C confirmed outside a dataset (e.g. between steps) — exit cleanly.
+        print(_warn("\n[!] Pipeline arrete."), file=sys.stderr)
+        sys.exit(130)

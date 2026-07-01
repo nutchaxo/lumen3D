@@ -44,8 +44,11 @@ const ViewerApp = (() => {
     const initPerfId = _perf()?.start('viewer.init');
     // 1. Init core
     Theme.init();
-    await I18n.init();
-    await Catalog.load();
+    // PERF: I18n.init() and Catalog.load() are independent network fetches —
+    // overlap them so the boot head waits on max(), not the sum, of the two.
+    // Both must still be fully resolved before Catalog.getById (below) and the
+    // v0.12.45 plugin-load order downstream; do NOT fold the plugin discovery in.
+    await Promise.all([I18n.init(), Catalog.load()]);
 
     if (window.lucide) lucide.createIcons();
     _updateThemeIcon();
@@ -119,7 +122,19 @@ const ViewerApp = (() => {
 
     _zDisplayScale = _loadZDisplayScale();
     _volumeMeasurements = MeasurementStore.list(datasetId, 'viewer');
-    
+
+    // Usage telemetry: count one dataset view per browser session. Skip admin
+    // previews (mode=admin) so editing a dataset doesn't inflate its view count.
+    if (!isAdmin) {
+      try {
+        const _vk = `lumen_view_${datasetId}`;
+        if (!sessionStorage.getItem(_vk)) {
+          sessionStorage.setItem(_vk, '1');
+          navigator.sendBeacon?.(`api/telemetry.php?action=view&id=${encodeURIComponent(datasetMeta.path || datasetId)}`);
+        }
+      } catch (_) { /* private mode / no beacon — ignore */ }
+    }
+
     isLive = datasetMeta.type === 'live';
     _perf()?.setContext({
       scope: 'viewer',
@@ -197,7 +212,56 @@ const ViewerApp = (() => {
       });
     }
     
-    // Bind UI controls
+    // ── Resolve paths + camera-restore pre-set, then KICK OFF the volume load ──
+    const datasetPath = datasetMeta.path || datasetMeta.id;
+    const basePath = `DATA_WEB/${datasetPath}`;
+    _basePath = basePath;
+
+    // Si un état caméra sera restauré après le chargement (URL hash ou iframe pending),
+    // signaler au VolumeViewer de ne PAS appeler fitCameraToVolume lors du premier load.
+    // Autrement, le preview changerait le cameraZ avant la restauration de l'état sauvé,
+    // et la différence de scale preview/high causerait un décalage → écran noir.
+    // MUST run before the volume kick-off below.
+    const hasPendingCameraState = (window.location.hash && window.location.hash.startsWith('#state='))
+      || (_pendingWorkspaceState && _pendingWorkspaceState?.viewer?.camera);
+    if (hasPendingCameraState && VolumeViewer.setHasLoadedVolume) {
+      VolumeViewer.setHasLoadedVolume(true);
+      console.log('[ViewerApp] Pre-set _hasLoadedVolume=true to skip fitCameraToVolume (state will be restored)');
+    }
+
+    // PERF: start brick streaming + GPU upload NOW (without awaiting) so it overlaps
+    // the synchronous _bind*/ChannelPanel wiring below. The load is awaited just past
+    // ChannelPanel.init, so channel state is established before any frame renders: the
+    // synchronous wiring runs to completion long before the first brick fetch resolves.
+    let volumeP;
+    if (isLive) {
+      // BUG-032 (Rule 1.4): a malformed live dataset may lack dimensions.t (or
+      // dimensions entirely) -> reject explicitly instead of throwing a raw
+      // TypeError on property access.
+      const totalFrames = datasetMeta.dimensions?.t;
+      if (!Number.isFinite(totalFrames) || totalFrames <= 0) {
+        volumeP = Promise.reject(new Error('dataset live sans dimensions.t'));
+      } else {
+        Timeline.init('timeline-panel', {
+          totalFrames: totalFrames,
+          showSpeed: false,
+          showSmooth: false,
+          stepped: false
+        }, (state) => {
+          _loadTimepoint(basePath, state.frame).catch(_showLoadingError);
+        });
+        // Load first frame
+        volumeP = _loadTimepoint(basePath, 0);
+      }
+    } else {
+      // Load single volume
+      volumeP = _loadTimepoint(basePath, null);
+    }
+    // Prevent an unhandled-rejection warning during the overlap window; the real
+    // error handling is the awaited try/catch below.
+    volumeP.catch(() => {});
+
+    // Bind UI controls (synchronous — overlaps the in-flight volume load above)
     _bindScreenshot();
     _bindQualityControls();
     _updateQualityOptionLabels();
@@ -222,45 +286,9 @@ const ViewerApp = (() => {
       }
     });
 
-    // Load Data
-    const datasetPath = datasetMeta.path || datasetMeta.id;
-    const basePath = `DATA_WEB/${datasetPath}`;
-    _basePath = basePath;
-
-    // Si un état caméra sera restauré après le chargement (URL hash ou iframe pending),
-    // signaler au VolumeViewer de ne PAS appeler fitCameraToVolume lors du premier load.
-    // Autrement, le preview changerait le cameraZ avant la restauration de l'état sauvé,
-    // et la différence de scale preview/high causerait un décalage → écran noir.
-    const hasPendingCameraState = (window.location.hash && window.location.hash.startsWith('#state='))
-      || (_pendingWorkspaceState && _pendingWorkspaceState?.viewer?.camera);
-    if (hasPendingCameraState && VolumeViewer.setHasLoadedVolume) {
-      VolumeViewer.setHasLoadedVolume(true);
-      console.log('[ViewerApp] Pre-set _hasLoadedVolume=true to skip fitCameraToVolume (state will be restored)');
-    }
-
+    // Await the volume load kicked off above (channel state is now established).
     try {
-      if (isLive) {
-        // BUG-032 (Rule 1.4): a malformed live dataset may lack dimensions.t (or
-        // dimensions entirely) -> reject explicitly instead of throwing a raw
-        // TypeError on property access.
-        const totalFrames = datasetMeta.dimensions?.t;
-        if (!Number.isFinite(totalFrames) || totalFrames <= 0) {
-          throw new Error('dataset live sans dimensions.t');
-        }
-        Timeline.init('timeline-panel', {
-          totalFrames: totalFrames,
-          showSpeed: false,
-          showSmooth: false,
-          stepped: false
-        }, (state) => {
-          _loadTimepoint(basePath, state.frame).catch(_showLoadingError);
-        });
-        // Load first frame
-        await _loadTimepoint(basePath, 0);
-      } else {
-        // Load single volume
-        await _loadTimepoint(basePath, null);
-      }
+      await volumeP;
     } catch (err) {
       _perf()?.event('viewer.init.error', { message: err?.message || String(err) });
       _showLoadingError(err);

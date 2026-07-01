@@ -11,18 +11,21 @@ Usage:
     python dev_server.py --host 0.0.0.0 --port 8080
 
 API routes handled:
-    GET  /api/auth.php?action=status
-    POST /api/auth.php?action=login
-    POST /api/auth.php?action=logout
-    GET  /api/datasets.php?action=list
-    GET  /api/datasets.php?action=get&id=...
-    POST /api/datasets.php?action=save&id=...
-    POST /api/datasets.php?action=rebuild_catalog
-    GET  /api/plugins            (auto-discovery of js/modules/<placement>/<id>/)
+    GET  /api/auth.php?action=status            (+ needsSetup flag)
+    POST /api/auth.php?action=login | logout
+    POST /api/auth.php?action=setup             (first-run password, create-exclusive)
+    POST /api/auth.php?action=change_password
+    GET  /api/datasets.php?action=list | get
+    POST /api/datasets.php?action=save | save_thumbnail | rebuild_catalog | set_visibility
+    POST /api/telemetry.php?action=visit | view | download   (public usage beacons)
+    GET  /api/admin.php?action=stats | plugins | version | update_check | update_status
+    POST /api/admin.php?action=set_plugin | update_apply
+    GET  /api/plugins            (auto-discovery, honoring api/disabled-plugins.json)
 
 Everything else is served as a static file from the current directory.
 
-Credentials: stored in api/config.json (auto-created on first run).
+Credentials: api/admin_credential.json (one-way PBKDF2 hash; created via the panel's
+             first-run setup or `--set-password`; never served over HTTP).
 Sessions:    in-memory dict (lost on server restart — that's fine for dev).
 """
 
@@ -34,21 +37,35 @@ import os
 import posixpath
 import re
 import secrets
+import shutil
 import sys
 import tempfile
 import threading
 import time
+import urllib.error
 import urllib.parse
+import urllib.request
+import zipfile
 from datetime import datetime
 from http import HTTPStatus
 from pathlib import Path
 
-__version__ = "0.12.41"
+__version__ = "0.13.0"
 
 # ── Paths ──────────────────────────────────────────────────────────────────────
 ROOT       = Path(__file__).resolve().parent
 DATA_WEB   = ROOT / "DATA_WEB"
 CONFIG_FILE = ROOT / "api" / "config.json"
+# Admin credential store (separate, single source of truth for the password).
+# Lives under api/ → never served over HTTP (see _is_forbidden_static).
+CRED_FILE = ROOT / "api" / "admin_credential.json"
+# Usage analytics (visits / dataset views / downloads) and plugin enable state.
+STATS_FILE = ROOT / "api" / "stats.json"
+DISABLED_PLUGINS_FILE = ROOT / "api" / "disabled-plugins.json"
+# Self-update: where pre-update backups land, and the GitHub repo to pull releases from.
+BACKUPS_DIR = ROOT / "backups"
+CHANGELOG_DIR = ROOT / "changelog"
+GITHUB_REPO = "nutchaxo/lumen3D"
 MODULES_DIR = ROOT / "js" / "modules"
 PLUGIN_PLACEMENTS = ("tools", "channels", "shaders")
 LANG_DIR = ROOT / "lang"
@@ -75,8 +92,19 @@ TRUSTED_PROXIES: set[str] = set()
 MAX_THUMB_BYTES = 5 * 1024 * 1024
 # RACE-020: serialize JSON writers (ThreadingHTTPServer runs handlers concurrently).
 _WRITE_LOCK = threading.Lock()
+# Serialize the read-modify-write of stats.json so concurrent beacons can't lose
+# increments. A SEPARATE lock from _WRITE_LOCK (which _atomic_write takes) — they are
+# never held nested in the same order, so no deadlock (threading.Lock isn't reentrant).
+_STATS_LOCK = threading.Lock()
+# Live self-update progress, polled by the admin UI via /api/admin.php?action=update_status.
+_UPDATE_STATE = {"phase": "idle", "pct": 0, "message": "", "error": None, "running": False, "target": None}
 # PERF-035: memoized catalog listing, keyed on the metadata.json mtime signature.
 _CATALOG_CACHE: dict = {"sig": None, "data": None}
+# PERF: a synchronous console write per request sits on the response hot path
+# (dozens per page load; the Windows console is slow and serializes across the
+# ThreadingHTTPServer workers). Off by default; enable with --verbose. Errors
+# (4xx/5xx) always log regardless — see AdminHandler.log_error.
+_LOG_REQUESTS = False
 
 
 def _atomic_write(path: Path, data, *, binary: bool = False) -> None:
@@ -163,31 +191,141 @@ def _verify_password(plain: str, stored: str) -> bool:
 
 
 def _load_config() -> dict:
+    """Non-secret server config (currently just a default username hint).
+
+    The admin PASSWORD no longer lives here — it moved to the dedicated credential
+    store (CRED_FILE). No password is ever auto-generated: a missing credential puts
+    the panel into first-run setup mode (see _credential_exists / the setup action).
+    """
     if CONFIG_FILE.exists():
         try:
             return json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
         except Exception:
             pass
-    # First-run: create config with a RANDOM password (printed once), never a
-    # hardcoded/guessable default. Only the salted hash is persisted.
-    generated = secrets.token_urlsafe(12)
-    cfg = {
-        "username": DEFAULT_USERNAME,
-        "password_pbkdf2": _hash_password(generated),
-        "note": "Change password via: python dev_server.py --set-password",
+    return {"username": DEFAULT_USERNAME}
+
+
+# ── Admin credential store ─────────────────────────────────────────────────────
+# Single source of truth for the admin password. Holds ONLY a one-way salted PBKDF2
+# hash (no plaintext, no reversible secret) in a file that is never served over HTTP.
+# Possessing the file yields neither the password nor an auth bypass. The only reset
+# path is DELETING the file (then the panel re-enters setup) — and the HTTP setup
+# action is create-exclusive (O_EXCL), so it can NEVER overwrite a live credential.
+
+def _load_credential() -> dict | None:
+    if CRED_FILE.exists():
+        try:
+            rec = json.loads(CRED_FILE.read_text(encoding="utf-8"))
+            return rec if isinstance(rec, dict) else None
+        except Exception:
+            return None
+    return None
+
+
+def _credential_exists() -> bool:
+    return CRED_FILE.exists()
+
+
+def _credential_record(username: str, password: str) -> dict:
+    now = datetime.now().isoformat()
+    return {
+        "version": 1,
+        "username": (username or DEFAULT_USERNAME).strip() or DEFAULT_USERNAME,
+        "password_pbkdf2": _hash_password(password),  # 'pbkdf2_sha256$iters$salt$hash'
+        "created": now,
+        "rotated": now,
     }
-    _atomic_write(CONFIG_FILE, json.dumps(cfg, indent=2))  # RACE-020
-    print(f"  [dev-server] Generated admin password for user '{DEFAULT_USERNAME}': {generated}")
-    print("  [dev-server] Save it now; change it via: python dev_server.py --set-password")
-    return cfg
+
+
+def _harden_perms(path: Path) -> None:
+    """Best-effort: restrict the credential file to the server's own user.
+
+    POSIX: chmod 0600. Windows: reset ACL inheritance and grant only the current
+    user (icacls). Best-effort — a failure must not break setup/login.
+    """
+    try:
+        os.chmod(path, 0o600)
+    except OSError:
+        pass
+    if os.name == "nt":
+        try:
+            import getpass
+            import subprocess
+            user = os.environ.get("USERNAME") or getpass.getuser()
+            subprocess.run(
+                ["icacls", str(path), "/inheritance:r", "/grant:r", f"{user}:F"],
+                capture_output=True, timeout=5,
+            )
+        except Exception:
+            pass
+
+
+def _setup_credential(username: str, password: str):
+    """Create the credential ONLY if none exists. Returns (ok, status, payload).
+
+    The anti-overwrite guarantee is the O_CREAT|O_EXCL open: it atomically fails if
+    the file already exists, so this HTTP-reachable path can never replace a live
+    password (race-free, even under concurrent setup requests).
+    """
+    if not isinstance(password, str) or len(password) < 4:
+        return False, 400, {"error": "weak_password"}
+    rec = _credential_record(username, password)
+    data = json.dumps(rec, indent=2, ensure_ascii=False).encode("utf-8")
+    CRED_FILE.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        fd = os.open(str(CRED_FILE), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+    except FileExistsError:
+        return False, 409, {"error": "already_configured"}
+    except OSError as e:
+        return False, 500, {"error": f"setup_failed: {e}"}
+    try:
+        with os.fdopen(fd, "wb") as f:
+            f.write(data)
+    except OSError as e:
+        return False, 500, {"error": f"setup_write_failed: {e}"}
+    _harden_perms(CRED_FILE)
+    return True, 200, {"ok": True, "username": rec["username"]}
+
+
+def _change_credential(current: str, new: str):
+    """Rotate the password — requires the CURRENT password. Returns (ok, status, payload).
+
+    This is the only path that overwrites an existing credential, and it is gated on
+    knowing the live password (the caller is additionally session-authenticated).
+    """
+    rec = _load_credential()
+    if not rec:
+        return False, 409, {"error": "not_configured"}
+    if not _verify_password(current or "", rec.get("password_pbkdf2") or ""):
+        return False, 401, {"error": "bad_current"}
+    if not isinstance(new, str) or len(new) < 4:
+        return False, 400, {"error": "weak_password"}
+    newrec = _credential_record(rec.get("username") or DEFAULT_USERNAME, new)
+    newrec["created"] = rec.get("created", newrec["created"])
+    _atomic_write(CRED_FILE, json.dumps(newrec, indent=2, ensure_ascii=False))  # RACE-020
+    _harden_perms(CRED_FILE)
+    return True, 200, {"ok": True}
+
+
+def _write_credential_force(username: str, password: str) -> None:
+    """Operator-only (CLI --set-password): write/overwrite the credential without the
+    old password. Intentionally NOT exposed over HTTP — an operator with shell access
+    is already trusted (and could delete the file anyway)."""
+    rec = _credential_record(username, password)
+    existing = _load_credential()
+    if existing:
+        rec["created"] = existing.get("created", rec["created"])
+    _atomic_write(CRED_FILE, json.dumps(rec, indent=2, ensure_ascii=False))  # RACE-020
+    _harden_perms(CRED_FILE)
 
 
 def _check_credentials(username: str, password: str) -> bool:
-    cfg = _load_config()
-    if username != cfg.get("username"):
+    rec = _load_credential()
+    if not rec:
         return False
-    stored = cfg.get("password_pbkdf2") or cfg.get("password_sha256") or ""
-    return _verify_password(password, stored)
+    if username != rec.get("username"):
+        return False
+    return _verify_password(password, rec.get("password_pbkdf2") or "")
 
 
 def _new_session(username: str) -> str:
@@ -222,7 +360,7 @@ def _get_cookie_token(cookie_header: str | None) -> str | None:
     return None
 
 
-WRITE_ACTIONS = ("save", "save_thumbnail", "rebuild_catalog")
+WRITE_ACTIONS = ("save", "save_thumbnail", "rebuild_catalog", "set_visibility")
 
 
 def _is_write_action(action: str) -> bool:
@@ -261,6 +399,341 @@ def _is_forbidden_static(request_path: str) -> bool:
     p = request_path.replace("\\", "/")
     p = posixpath.normpath("/" + p).lstrip("/").lower()
     return p == "api" or p.startswith("api/")
+
+
+# ── Usage statistics ───────────────────────────────────────────────────────────
+
+def _load_stats() -> dict:
+    if STATS_FILE.exists():
+        try:
+            d = json.loads(STATS_FILE.read_text(encoding="utf-8"))
+            if isinstance(d, dict):
+                d.setdefault("global", {})
+                d.setdefault("daily", {})
+                d.setdefault("datasets", {})
+                return d
+        except Exception:
+            pass
+    return {"global": {"visits": 0, "views": 0, "downloads": 0, "since": datetime.now().isoformat()},
+            "daily": {}, "datasets": {}}
+
+
+def _record_event(kind: str, dataset_id: str | None = None) -> None:
+    """Increment a usage counter (visit / view / download) — global, per-day, and
+    per-dataset. Serialized by _STATS_LOCK so concurrent beacons never lose an
+    increment; the actual file write is the atomic temp+rename helper."""
+    field = {"visit": "visits", "view": "views", "download": "downloads"}.get(kind)
+    if not field:
+        return
+    now = datetime.now()
+    today = now.strftime("%Y-%m-%d")
+    with _STATS_LOCK:
+        stats = _load_stats()
+        g = stats["global"]
+        g[field] = int(g.get(field, 0)) + 1
+        g.setdefault("since", now.isoformat())
+        day = stats["daily"].setdefault(today, {})
+        day[field] = int(day.get(field, 0)) + 1
+        if dataset_id and kind in ("view", "download"):
+            ds = stats["datasets"].setdefault(dataset_id, {})
+            ds[field] = int(ds.get(field, 0)) + 1
+            if kind == "view":
+                ds["lastViewed"] = now.isoformat()
+        _atomic_write(STATS_FILE, json.dumps(stats, indent=2, ensure_ascii=False))  # RACE-020
+
+
+def _admin_stats() -> dict:
+    """Stats enriched with dataset display names for the admin table."""
+    stats = _load_stats()
+    names = {}
+    try:
+        for ds in _list_datasets_cached():
+            names[ds.get("id")] = ds.get("name")
+    except Exception:
+        pass
+    rows = []
+    for ds_id, v in stats.get("datasets", {}).items():
+        rows.append({
+            "id": ds_id,
+            "name": names.get(ds_id, ds_id),
+            "views": int(v.get("views", 0)),
+            "downloads": int(v.get("downloads", 0)),
+            "lastViewed": v.get("lastViewed"),
+        })
+    rows.sort(key=lambda r: (r["views"] + r["downloads"]), reverse=True)
+    return {"global": stats.get("global", {}), "daily": stats.get("daily", {}), "datasets": rows}
+
+
+# ── Plugin enable/disable state ────────────────────────────────────────────────
+
+def _load_disabled_plugins() -> set:
+    if DISABLED_PLUGINS_FILE.exists():
+        try:
+            d = json.loads(DISABLED_PLUGINS_FILE.read_text(encoding="utf-8"))
+            return set(d.get("disabled", [])) if isinstance(d, dict) else set()
+        except Exception:
+            pass
+    return set()
+
+
+def _save_disabled_plugins(disabled: set) -> None:
+    _atomic_write(DISABLED_PLUGINS_FILE,
+                  json.dumps({"disabled": sorted(disabled)}, indent=2, ensure_ascii=False))  # RACE-020
+
+
+def _admin_plugins() -> list:
+    """Full plugin inventory (unfiltered) annotated with enabled/protected, for the
+    admin Plugins tab. 'protected' = the last still-enabled shader (disabling it would
+    leave the viewer with no render mode)."""
+    disabled = _load_disabled_plugins()
+    plugins = _list_plugins()  # raw scan, no manifest write
+    enabled_shaders = [p for p in plugins
+                       if p.get("placement") == "shaders" and p["path"] not in disabled]
+    enabled_shader_paths = {p["path"] for p in enabled_shaders}
+    out = []
+    for p in plugins:
+        path = p["path"]
+        is_enabled = path not in disabled
+        out.append({
+            "id": p.get("id"),
+            "path": path,
+            "placement": p.get("placement"),
+            "name": p.get("name") or p.get("id") or path,
+            "icon": p.get("icon"),
+            "group": p.get("group"),
+            "subtype": p.get("subtype"),
+            "version": p.get("version"),
+            "creator": p.get("creator"),
+            "enabled": is_enabled,
+            "protected": len(enabled_shaders) <= 1 and path in enabled_shader_paths,
+        })
+    out.sort(key=lambda x: (x["placement"] or "", x.get("group") or "", x.get("name") or ""))
+    return out
+
+
+def _set_plugin_enabled(plugin_path: str, enabled: bool):
+    """Toggle a plugin. Returns (ok, status, payload). Refuses to disable the last
+    enabled shader (the viewer needs at least one render mode)."""
+    known = {p["path"] for p in _list_plugins()}
+    if plugin_path not in known:
+        return False, 404, {"error": "unknown_plugin"}
+    disabled = _load_disabled_plugins()
+    if not enabled:
+        if plugin_path.startswith("shaders/"):
+            enabled_shaders = [p for p in _list_plugins()
+                               if p.get("placement") == "shaders" and p["path"] not in disabled]
+            if len(enabled_shaders) <= 1 and plugin_path in {p["path"] for p in enabled_shaders}:
+                return False, 409, {"error": "last_shader"}
+        disabled.add(plugin_path)
+    else:
+        disabled.discard(plugin_path)
+    _save_disabled_plugins(disabled)
+    return True, 200, {"ok": True, "enabled": enabled}
+
+
+# ── Version & self-update ──────────────────────────────────────────────────────
+
+_VERSION_RE = re.compile(r"^changelog_(\d+)\.(\d+)\.(\d+)\.md$")
+
+
+def _parse_versions_in(dir_path: Path) -> list:
+    vs = []
+    if dir_path.is_dir():
+        for f in dir_path.glob("changelog_*.md"):
+            m = _VERSION_RE.match(f.name)
+            if m:
+                vs.append(tuple(int(x) for x in m.groups()))
+    return sorted(vs)
+
+
+def _max_version(dir_path: Path):
+    vs = _parse_versions_in(dir_path)
+    return ".".join(map(str, vs[-1])) if vs else None
+
+
+def _version_tuple(s: str) -> tuple:
+    try:
+        nums = re.findall(r"\d+", s or "")
+        return tuple(int(x) for x in nums[:3]) or (0, 0, 0)
+    except Exception:
+        return (0, 0, 0)
+
+
+def _preprocess_version():
+    try:
+        txt = (ROOT / "preprocess" / "run_preprocess.py").read_text(encoding="utf-8")
+        m = re.search(r'__version__\s*=\s*["\']([\d.]+)["\']', txt)
+        if m:
+            return m.group(1)
+    except Exception:
+        pass
+    return _max_version(ROOT / "preprocess" / "changelog")
+
+
+def _version_info() -> dict:
+    """Web platform version = newest changelog/changelog_X.Y.Z.md (the convention's
+    single source of truth — no constant introduced)."""
+    return {
+        "web": _max_version(CHANGELOG_DIR),
+        "devServer": __version__,
+        "preprocess": _preprocess_version(),
+        "repo": GITHUB_REPO,
+    }
+
+
+def _http_get_json(url: str, timeout: int = 10) -> dict:
+    req = urllib.request.Request(url, headers={
+        "Accept": "application/vnd.github+json",
+        "User-Agent": "lumen3d-admin",
+    })
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        return json.loads(r.read().decode("utf-8"))
+
+
+def _update_check() -> dict:
+    current = _max_version(CHANGELOG_DIR) or "0.0.0"
+    try:
+        rel = _http_get_json(f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest")
+    except urllib.error.HTTPError as e:
+        if e.code == 404:
+            return {"current": current, "latest": None, "available": False, "noReleases": True}
+        return {"current": current, "latest": None, "available": False, "error": f"HTTP {e.code}"}
+    except Exception as e:
+        return {"current": current, "latest": None, "available": False, "error": str(e)}
+    latest = (rel.get("tag_name") or "").lstrip("v") or None
+    available = bool(latest) and _version_tuple(latest) > _version_tuple(current)
+    return {
+        "current": current,
+        "latest": latest,
+        "available": available,
+        "notes": rel.get("body"),
+        "publishedAt": rel.get("published_at"),
+        "zipUrl": rel.get("zipball_url"),
+        "htmlUrl": rel.get("html_url"),
+    }
+
+
+# Paths (relative, posix) that the updater must never overwrite or delete: user data,
+# the credential/stats/plugin state, logs, backups, and VCS/runtime dirs.
+_UPDATE_PROTECT = (
+    "DATA_WEB", ".git", ".conda", "logs", "backups", "node_modules",
+    "api/admin_credential.json", "api/config.json", "api/stats.json",
+    "api/disabled-plugins.json",
+)
+
+
+def _is_protected_rel(rel: str) -> bool:
+    rel = rel.replace("\\", "/").strip("/")
+    for p in _UPDATE_PROTECT:
+        if rel == p or rel.startswith(p + "/"):
+            return True
+    return False
+
+
+def _set_update(phase: str, pct: int, message: str, error=None) -> None:
+    _UPDATE_STATE.update({"phase": phase, "pct": pct, "message": message})
+    if error is not None:
+        _UPDATE_STATE["error"] = error
+
+
+def _start_update():
+    """Validate + kick off a guarded update in a background thread.
+    Returns (ok, status, payload)."""
+    if _UPDATE_STATE.get("running"):
+        return False, 409, {"error": "already_running"}
+    info = _update_check()
+    if not info.get("available") or not info.get("zipUrl"):
+        return False, 400, {"error": "no_update_available", "info": info}
+    _UPDATE_STATE.update({"phase": "starting", "pct": 0, "message": "Préparation…",
+                          "error": None, "running": True, "target": info.get("latest")})
+    threading.Thread(target=_run_update, args=(info,), daemon=True).start()
+    return True, 200, {"ok": True, "restarting": True, "target": info.get("latest")}
+
+
+def _make_backup_zip(backup_path: Path) -> None:
+    backup_path.parent.mkdir(parents=True, exist_ok=True)
+    with zipfile.ZipFile(backup_path, "w", zipfile.ZIP_DEFLATED) as zf:
+        for root, dirs, files in os.walk(ROOT):
+            rel_root = os.path.relpath(root, ROOT).replace("\\", "/")
+            rel_root = "" if rel_root == "." else rel_root
+            dirs[:] = [d for d in dirs
+                       if not _is_protected_rel(f"{rel_root}/{d}" if rel_root else d)]
+            for f in files:
+                rel = f"{rel_root}/{f}" if rel_root else f
+                if _is_protected_rel(rel):
+                    continue
+                try:
+                    zf.write(os.path.join(root, f), rel)
+                except OSError:
+                    pass
+
+
+def _download_file(url: str, dest: Path) -> None:
+    req = urllib.request.Request(url, headers={"User-Agent": "lumen3d-admin"})
+    with urllib.request.urlopen(req, timeout=120) as r, open(dest, "wb") as f:
+        shutil.copyfileobj(r, f)
+
+
+def _copy_tree_filtered(src_root: Path, dst_root: Path) -> None:
+    for root, dirs, files in os.walk(src_root):
+        rel_root = os.path.relpath(root, src_root).replace("\\", "/")
+        rel_root = "" if rel_root == "." else rel_root
+        dirs[:] = [d for d in dirs
+                   if not _is_protected_rel(f"{rel_root}/{d}" if rel_root else d)]
+        for f in files:
+            rel = f"{rel_root}/{f}" if rel_root else f
+            if _is_protected_rel(rel):
+                continue
+            dst = dst_root / rel
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            try:
+                shutil.copy2(os.path.join(root, f), dst)
+            except OSError:
+                pass
+
+
+def _delayed_restart(delay: float) -> None:
+    time.sleep(delay)
+    try:
+        # Re-exec the same interpreter + argv. Python source isn't locked once imported,
+        # so the freshly written dev_server.py loads on restart (Windows-safe).
+        os.execv(sys.executable, [sys.executable, *sys.argv])
+    except Exception:
+        os._exit(0)
+
+
+def _run_update(info: dict) -> None:
+    tmpdir = None
+    try:
+        ts = datetime.now().strftime("%Y%m%d-%H%M%S")
+        current = info.get("current") or "unknown"
+        _set_update("backup", 10, "Sauvegarde de l'installation…")
+        _make_backup_zip(BACKUPS_DIR / f"backup-{current}-{ts}.zip")
+
+        _set_update("download", 35, "Téléchargement de la mise à jour…")
+        tmpdir = Path(tempfile.mkdtemp(prefix="lumen-update-"))
+        zip_path = tmpdir / "release.zip"
+        _download_file(info["zipUrl"], zip_path)
+
+        _set_update("extract", 60, "Extraction…")
+        extract_dir = tmpdir / "extracted"
+        with zipfile.ZipFile(zip_path) as zf:
+            zf.extractall(extract_dir)
+        roots = [p for p in extract_dir.iterdir() if p.is_dir()]
+        src_root = roots[0] if len(roots) == 1 else extract_dir  # strip GitHub's top folder
+
+        _set_update("apply", 80, "Application des fichiers…")
+        _copy_tree_filtered(src_root, ROOT)
+
+        _UPDATE_STATE["running"] = False
+        _set_update("done", 100, "Mise à jour terminée. Redémarrage…")
+        threading.Thread(target=_delayed_restart, args=(1.5,), daemon=True).start()
+    except Exception as e:
+        _UPDATE_STATE["running"] = False
+        _set_update("error", 0, "Échec de la mise à jour.", error=str(e))
+    finally:
+        if tmpdir is not None:
+            shutil.rmtree(tmpdir, ignore_errors=True)
 
 
 # ── Dataset helpers ────────────────────────────────────────────────────────────
@@ -480,6 +953,27 @@ def _save_dataset(dataset_id: str, body: dict) -> bool:
     return True
 
 
+def _set_dataset_hidden(dataset_id: str, hidden: bool) -> bool:
+    """Flip the `hidden` flag on a dataset's metadata.json. Hidden datasets are
+    omitted from the public catalog.json (_build_catalog) but still listed in admin."""
+    safe = _safe_dataset_dir(dataset_id)
+    if safe is None:
+        return False
+    _type_dir, _folder, ds_dir = safe
+    meta_path = ds_dir / "metadata.json"
+    if not meta_path.exists():
+        return False
+    try:
+        meta = json.loads(meta_path.read_text(encoding="utf-8"))
+    except Exception:
+        return False
+    meta["hidden"] = bool(hidden)
+    meta["lastModified"] = datetime.now().isoformat()
+    _atomic_write(meta_path, json.dumps(meta, indent=2, ensure_ascii=False))  # RACE-020
+    _CATALOG_CACHE["sig"] = None  # PERF-035
+    return True
+
+
 def _save_thumbnail_bytes(dataset_id: str, image_data: str):
     """Decode a data:image/... URL and write it as the dataset thumbnail.
 
@@ -546,7 +1040,8 @@ def _build_catalog() -> list[dict]:
     """BUG-062: single filter + sort shared by the static rebuild and the dynamic GET
     handler, so the two outputs are byte-identical (removes the dev-vs-fast divergence)."""
     catalog = [ds for ds in _list_datasets_cached()
-               if ds.get("configured") or ds.get("thumbnail") is not None]
+               if (ds.get("configured") or ds.get("thumbnail") is not None)
+               and not ds.get("hidden")]
 
     # BUG-061: collapse every missing/'Unknown' date to one sentinel so it sorts last
     # under reverse=True, instead of the previous mix of 'Unknown'/'1970-01-01'/ISO.
@@ -605,6 +1100,20 @@ def _list_plugins() -> list[dict]:
             shipped = _scan_plugin_locales(mod_dir)
             if shipped:
                 meta["i18nLanguages"] = shipped
+                # PERF: inline each shipped locale's dictionary so the client can
+                # graft them synchronously from this single /api/plugins response,
+                # eliminating one per-plugin per-locale lang round-trip on the viewer
+                # boot path (16-32 requests across the plugin set). Best-effort: a
+                # malformed file is skipped; the client falls back to fetching it.
+                # Only advertised when English (the per-plugin fallback) is present.
+                dicts = {}
+                for code in shipped:
+                    try:
+                        dicts[code] = json.loads((mod_dir / "lang" / f"{code}.json").read_text(encoding="utf-8"))
+                    except Exception:
+                        pass
+                if dicts.get("en"):
+                    meta["i18n"] = dicts
             plugins.append(meta)
     return plugins
 
@@ -644,9 +1153,19 @@ def _list_languages() -> list[str]:
 
 def _write_languages_manifest(codes: list[str]) -> None:
     """Persist lang/manifest.json so static hosts inherit the discovered locale
-    list with no build step. Best-effort, atomic (mirrors the plugin manifest)."""
+    list with no build step. Best-effort, atomic (mirrors the plugin manifest).
+    PERF: skip the write entirely when the on-disk content is already current, so
+    a discovery GET on the boot path does no temp-file churn / lock contention in
+    the common (unchanged) case."""
     try:
-        _atomic_write(LANG_DIR / "manifest.json", json.dumps({"languages": codes}, indent=2, ensure_ascii=False))
+        new_text = json.dumps({"languages": codes}, indent=2, ensure_ascii=False)
+        target = LANG_DIR / "manifest.json"
+        try:
+            if target.read_text(encoding="utf-8") == new_text:
+                return
+        except (OSError, ValueError):
+            pass
+        _atomic_write(target, new_text)
     except Exception:
         pass
 
@@ -663,15 +1182,31 @@ def _write_plugins_manifest(plugins: list[dict]) -> None:
                 for p in plugins
             ]
         }
+        # Canonical on-disk form stays the {path,placement,id} triple — the inline
+        # plugin meta / i18n dicts in the /api/plugins response are NOT persisted
+        # (static hosts must keep fetching plugin.json, see plugin-registry.js).
+        new_text = json.dumps(manifest, indent=2, ensure_ascii=False)
+        target = MODULES_DIR / "manifest.json"
+        # PERF: skip the write when already current, so a discovery GET on the boot
+        # path does no temp-file churn / _WRITE_LOCK contention in the common case.
+        try:
+            if target.read_text(encoding="utf-8") == new_text:
+                return
+        except (OSError, ValueError):
+            pass
         # RACE-020: /api/plugins is a GET that rewrites this file, and the server is
-        # ThreadingHTTPServer — concurrent loads could interleave a plain write_text and
+        # ThreadingHTTPServer — concurrent loads could interleave a plain write and
         # truncate/corrupt manifest.json. Use the atomic (temp + os.replace, locked) helper.
-        _atomic_write(MODULES_DIR / "manifest.json", json.dumps(manifest, indent=2, ensure_ascii=False))
+        _atomic_write(target, new_text)
     except Exception:
         pass
 
 
 # ── HTTP handler ───────────────────────────────────────────────────────────────
+
+# A served file under a dataset's download/ folder (used to count downloads).
+_DOWNLOAD_RE = re.compile(r"^DATA_WEB/(fixed|live|tracking)/([^/]+)/download/.+", re.IGNORECASE)
+
 
 class AdminHandler(http.server.SimpleHTTPRequestHandler):
     """
@@ -680,8 +1215,14 @@ class AdminHandler(http.server.SimpleHTTPRequestHandler):
     """
 
     def log_message(self, format, *args):
-        # Compact log format
-        print(f"  {self.address_string()} [{self.log_date_time_string()}] {format % args}")
+        # Compact log format. Quiet by default (PERF: skip the synchronous
+        # per-request console write on the response hot path); enable with --verbose.
+        if _LOG_REQUESTS:
+            print(f"  {self.address_string()} [{self.log_date_time_string()}] {format % args}")
+
+    def log_error(self, format, *args):
+        # 4xx/5xx must always surface, even when routine request logging is quiet.
+        print(f"  {self.address_string()} [{self.log_date_time_string()}] ERROR {format % args}")
 
     # ── Route dispatch ─────────────────────────────────────────────────────────
 
@@ -696,12 +1237,29 @@ class AdminHandler(http.server.SimpleHTTPRequestHandler):
             self._serve_languages()
         elif parsed.path in ("/api/downloads", "/api/downloads.php"):
             self._serve_downloads(parsed)
-        elif parsed.path in ("/api/auth.php", "/api/datasets.php"):
+        elif parsed.path in ("/api/auth.php", "/api/datasets.php", "/api/admin.php", "/api/telemetry.php"):
             self._handle_api(parsed, body=None)
         elif _is_forbidden_static(clean_path):
             self._json(404, {"error": "Not found"})
         else:
+            self._maybe_count_download(clean_path)
             super().do_GET()
+
+    def _maybe_count_download(self, clean_path: str):
+        """Count a download when a file under DATA_WEB/<type>/<folder>/download/ is
+        served. Server-side is the reliable hook (static GETs aren't POSTed). Range
+        continuations are skipped so one download ≈ one increment."""
+        if "Range" in self.headers:
+            return
+        m = _DOWNLOAD_RE.match(clean_path.replace("\\", "/"))
+        if not m:
+            return
+        ds_id = f"{m.group(1)}/{m.group(2)}"
+        if _safe_dataset_dir(ds_id):
+            try:
+                _record_event("download", ds_id)
+            except Exception:
+                pass
 
     def _serve_dynamic_catalog(self):
         # BUG-062/PERF-035: same filter+sort as the static rebuild, off the mtime cache.
@@ -719,8 +1277,12 @@ class AdminHandler(http.server.SimpleHTTPRequestHandler):
     def _serve_plugins(self):
         """Live plugin discovery: enumerate js/modules/ and return the list, also
         refreshing js/modules/manifest.json on disk so static deploys stay current.
-        no-store so dropping/removing a plugin folder is reflected on the next reload."""
-        plugins = _list_plugins()
+        no-store so dropping/removing a plugin folder is reflected on the next reload.
+        Admin-disabled plugins are filtered out HERE (in discovery, before the client
+        builds any UI) so the load-order invariant is preserved; the persisted manifest
+        mirrors the filtered list so static hosts inherit the same exclusions."""
+        disabled = _load_disabled_plugins()
+        plugins = [p for p in _list_plugins() if p.get("path") not in disabled]
         _write_plugins_manifest(plugins)
         body = json.dumps({"plugins": plugins}, indent=2, ensure_ascii=False).encode("utf-8")
         self.send_response(200)
@@ -795,7 +1357,7 @@ class AdminHandler(http.server.SimpleHTTPRequestHandler):
 
     def do_POST(self):
         parsed = urllib.parse.urlparse(self.path)
-        if parsed.path in ("/api/auth.php", "/api/datasets.php"):
+        if parsed.path in ("/api/auth.php", "/api/datasets.php", "/api/admin.php", "/api/telemetry.php"):
             length = int(self.headers.get("Content-Length", 0))
             raw = self.rfile.read(length) if length else b"{}"
             try:
@@ -823,7 +1385,8 @@ class AdminHandler(http.server.SimpleHTTPRequestHandler):
                 session = _get_session(self._token())
                 self._json(200, {"authenticated": session is not None,
                                  "username": session["username"] if session else None,
-                                 "csrf": session["csrf"] if session else None})
+                                 "csrf": session["csrf"] if session else None,
+                                 "needsSetup": not _credential_exists()})
 
             elif action == "login":
                 ip = _client_ip(self)  # BUG-055: proxy-aware client IP, not the raw peer
@@ -849,6 +1412,50 @@ class AdminHandler(http.server.SimpleHTTPRequestHandler):
                 token = self._token()
                 _SESSIONS.pop(token, None)
                 self._json(200, {"ok": True}, cookie="admpan_token=; Path=/; Max-Age=0")
+
+            elif action == "setup":
+                # First-run password creation. _setup_credential is create-exclusive
+                # (O_EXCL) so it can NEVER overwrite a live credential. No session is
+                # required (none can exist before a password is set) but it is
+                # rate-limited like login, and a 409 also costs a brute-force attempt.
+                if self.command != "POST":
+                    self._json(405, {"error": "Method not allowed (use POST)"})
+                    return
+                ip = _client_ip(self)
+                bf = _BRUTE.get(ip, {"count": 0, "until": 0})
+                if bf["until"] > time.time():
+                    remaining = int(bf["until"] - time.time())
+                    self._json(429, {"error": f"Trop de tentatives. Réessayez dans {remaining}s."})
+                    return
+                username = (body or {}).get("username") or DEFAULT_USERNAME
+                password = (body or {}).get("password", "")
+                ok, status, payload = _setup_credential(username, password)
+                if ok:
+                    token = _new_session(payload["username"])
+                    self._json(200, {**payload, "csrf": _SESSIONS[token]["csrf"]},
+                               cookie=f"admpan_token={token}; Path=/; HttpOnly; SameSite=Lax")
+                else:
+                    bf["count"] = bf.get("count", 0) + 1
+                    if bf["count"] >= MAX_ATTEMPTS:
+                        bf["until"] = time.time() + LOCKOUT_S
+                    _BRUTE[ip] = bf
+                    self._json(status, payload)
+
+            elif action == "change_password":
+                session = _get_session(self._token())
+                if not session:
+                    self._json(401, {"error": "Not authenticated"})
+                    return
+                ok, status, payload = _authorize_write(
+                    self.command, session, self.headers.get("X-CSRF-Token")
+                )
+                if not ok:
+                    self._json(status, payload)
+                    return
+                ok2, st2, pl2 = _change_credential(
+                    (body or {}).get("current", ""), (body or {}).get("new", "")
+                )
+                self._json(st2, pl2)
 
             else:
                 self._json(400, {"error": f"Unknown action: {action}"})
@@ -898,6 +1505,67 @@ class AdminHandler(http.server.SimpleHTTPRequestHandler):
                 count = _rebuild_catalog()
                 self._json(200, {"ok": True, "count": count})
 
+            elif action == "set_visibility":
+                ds_id = params.get("id", "")
+                hidden = bool((body or {}).get("hidden", False))
+                if _set_dataset_hidden(ds_id, hidden):
+                    _rebuild_catalog()
+                    self._json(200, {"ok": True, "hidden": hidden})
+                else:
+                    self._json(400, {"error": "Invalid dataset ID"})
+
+            else:
+                self._json(400, {"error": f"Unknown action: {action}"})
+            return
+
+        # ── Telemetry (public usage beacons, no auth) ──────────────────────────
+        if path == "/api/telemetry.php":
+            kind = action  # visit | view | download
+            if kind not in ("visit", "view", "download"):
+                self._json(400, {"error": "bad_kind"})
+                return
+            ds_id = params.get("id") or (body or {}).get("id")
+            if kind in ("view", "download"):
+                if not ds_id or _safe_dataset_dir(ds_id) is None:
+                    ds_id = None  # still count globally if the id is missing/invalid
+            else:
+                ds_id = None
+            _record_event(kind, ds_id)
+            self._json(200, {"ok": True})
+            return
+
+        # ── Admin feature endpoints (require auth) ─────────────────────────────
+        if path == "/api/admin.php":
+            session = _get_session(self._token())
+            if not session:
+                self._json(401, {"error": "Not authenticated"})
+                return
+            if action in ("set_plugin", "update_apply"):
+                ok, status, payload = _authorize_write(
+                    self.command, session, self.headers.get("X-CSRF-Token")
+                )
+                if not ok:
+                    self._json(status, payload)
+                    return
+
+            if action == "stats":
+                self._json(200, _admin_stats())
+            elif action == "plugins":
+                self._json(200, {"plugins": _admin_plugins()})
+            elif action == "set_plugin":
+                ok2, st2, pl2 = _set_plugin_enabled(
+                    (body or {}).get("id", ""), bool((body or {}).get("enabled", True))
+                )
+                self._json(st2, pl2)
+            elif action == "version":
+                self._json(200, _version_info())
+            elif action == "update_check":
+                self._json(200, _update_check())
+            elif action == "update_apply":
+                ok2, st2, pl2 = _start_update()
+                self._json(st2, pl2)
+            elif action == "update_status":
+                self._json(200, dict(_UPDATE_STATE))
             else:
                 self._json(400, {"error": f"Unknown action: {action}"})
             return
@@ -949,25 +1617,36 @@ def main():
     parser.add_argument("--port", type=int, default=8080)
     parser.add_argument("--set-password", action="store_true",
                         help="Interactively set a new admin password")
+    parser.add_argument("--verbose", action="store_true",
+                        help="Log every request to the console (off by default for speed)")
     args = parser.parse_args()
+
+    global _LOG_REQUESTS
+    _LOG_REQUESTS = bool(args.verbose)
 
     if args.set_password:
         import getpass
-        cfg = _load_config()
-        username = input(f"Username [{cfg.get('username', 'admin')}]: ").strip() or cfg.get("username", "admin")
+        rec = _load_credential()
+        default_user = (rec or {}).get("username", DEFAULT_USERNAME)
+        username = input(f"Username [{default_user}]: ").strip() or default_user
         password = getpass.getpass("New password: ")
-        cfg["username"]       = username
-        cfg["password_pbkdf2"] = _hash_password(password)
-        cfg.pop("password_sha256", None)  # drop legacy unsalted hash on update
-        _atomic_write(CONFIG_FILE, json.dumps(cfg, indent=2))  # RACE-020
-        print(f"✅ Password updated for user '{username}'")
+        if len(password) < 4:
+            print("❌ Password too short (min 4 chars).")
+            sys.exit(1)
+        # Operator CLI may overwrite (already trusted with the filesystem); the
+        # HTTP setup path remains create-exclusive (cannot overwrite a live credential).
+        _write_credential_force(username, password)
+        print(f"✅ Password set for user '{username}' (api/admin_credential.json)")
         sys.exit(0)
 
     # Serve from the platform root
     os.chdir(ROOT)
 
-    # Load/create config on startup
-    cfg = _load_config()
+    rec = _load_credential()
+    if rec:
+        cred_line = f"  Login   : {rec.get('username', DEFAULT_USERNAME)}  (password in api/admin_credential.json)\n"
+    else:
+        cred_line = "  Login   : (first run — open the admin panel to create a password)\n"
     print(
         "\n"
         "=" * 60 + "\n"
@@ -976,8 +1655,7 @@ def main():
         f"  URL     : http://{args.host}:{args.port}\n"
         f"  Admin   : http://{args.host}:{args.port}/admpan.html\n"
         f"  Viewer  : http://{args.host}:{args.port}/explorer.html\n"
-        f"  Login   : {cfg.get('username', 'admin')}\n"
-        f"  Password: (stored in api/config.json)\n"
+        f"{cred_line}"
         "  Ctrl+C to stop\n"
         "=" * 60 + "\n"
     )

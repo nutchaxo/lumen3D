@@ -180,8 +180,41 @@ const I18n = (() => {
   async function loadPluginLang(id, path, langs) {
     if (!id || !path) return;
     _plugins[id] = { path, langs: Array.isArray(langs) ? langs.slice() : null };
-    await _ensurePluginLang(id, _fallbackLang);
-    if (_currentLang !== _fallbackLang) await _ensurePluginLang(id, _currentLang);
+    // PERF: fetch the fallback (en) and the active locale concurrently rather
+    // than serially. 'en' is always loaded (per-plugin English fallback); the
+    // active locale only when it differs.
+    await Promise.all([
+      _ensurePluginLang(id, _fallbackLang),
+      ...(_currentLang !== _fallbackLang ? [_ensurePluginLang(id, _currentLang)] : [])
+    ]);
+  }
+
+  /**
+   * Synchronously register a plugin's translation dictionaries delivered inline
+   * (e.g. embedded in the /api/plugins discovery payload), avoiding a per-plugin
+   * per-locale network round-trip. Mirrors the graft in _ensurePluginLang. The
+   * async loadPluginLang path remains the fallback for hosts that do not inline
+   * dictionaries (static manifest / PHP / embedded default).
+   *
+   * Caller contract: `dicts` MUST include the fallback locale ('en') so the
+   * per-plugin English fallback in t() is never missing; `langs` SHOULD match the
+   * plugin's shipped locales (plugin.json i18nLanguages) so a later setLanguage
+   * makes the same fetch/skip decisions; each dict MUST equal the on-disk file.
+   * @param {string} id        plugin id
+   * @param {string} path      'js/modules/<placement>/<id>'
+   * @param {Object} dicts     { '<code>': {<translations>}, ... }, must contain 'en'
+   * @param {string[]} [langs] shipped locales (plugin.json i18nLanguages)
+   */
+  function registerPluginLang(id, path, dicts, langs) {
+    if (!id || !path || !dicts || typeof dicts !== 'object') return;
+    _plugins[id] = { path, langs: Array.isArray(langs) ? langs.slice() : null };
+    for (const [code, dict] of Object.entries(dicts)) {
+      if (!dict || typeof dict !== 'object') continue;
+      _loaded[code] = _loaded[code] || {};
+      _loaded[code].plugins = _loaded[code].plugins || {};
+      _loaded[code].plugins[id] = dict;
+      if (code === _currentLang) _translations = _loaded[_currentLang] || _translations;
+    }
   }
 
   /**
@@ -409,6 +442,7 @@ const I18n = (() => {
     onLanguageChange,
     loadLanguage,
     loadPluginLang,
+    registerPluginLang,
     discoverLanguages,
     getAvailableLanguages,
     getLanguageMeta,

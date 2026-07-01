@@ -44,10 +44,30 @@ const PluginRegistry = (() => {
     'channels/histogram', 'channels/gaussian-filter'
   ];
 
+  // Rich plugin metadata captured during discover() when a source provides it
+  // inline. The live /api/plugins endpoint returns each plugin's full plugin.json
+  // (plus an `i18n` map of its translation dictionaries); the static manifest
+  // returns only {path,placement,id} triples and the embedded default only bare
+  // paths. Keyed by module path ('<placement>/<id>'). loadModules() consults this
+  // to skip the redundant per-plugin plugin.json fetch (and, when `i18n` is
+  // present, the per-locale lang fetches). Empty ⇒ loadModules fetches plugin.json
+  // as before, so static/PHP hosts are unaffected (no v0.12.45-class regression).
+  const _discoveredMeta = new Map();
+
+  // A discovery entry is "rich" — a full plugin.json safe to use without a
+  // separate fetch — only when it carries fields the {path,placement,id} manifest
+  // triple never has. `name` is mandatory in every plugin.json; never trust the
+  // triple as authoritative for toolbar fields (group/subtype/icon/order/i18n*).
+  function _isRichMeta(p) {
+    return !!p && typeof p === 'object'
+      && (typeof p.name === 'string' || typeof p.subtype === 'string' || !!p.i18n);
+  }
+
   /**
    * Fetch a plugin list from one source and normalize it to an array of paths.
    * Returns null on any failure (network, non-OK, non-JSON such as raw PHP
-   * served statically, or wrong shape) so the caller can fall through.
+   * served statically, or wrong shape) so the caller can fall through. As a side
+   * effect, captures any rich inline metadata into _discoveredMeta (see above).
    */
   async function _fetchPluginList(url) {
     try {
@@ -56,6 +76,11 @@ const PluginRegistry = (() => {
       const data = await resp.json(); // throws on non-JSON body → caught below
       const plugins = Array.isArray(data) ? data : data?.plugins;
       if (!Array.isArray(plugins)) return null;
+      // Capture rich inline meta as a side effect (no array allocation here).
+      for (const p of plugins) {
+        const mp = typeof p === 'string' ? p : p?.path;
+        if (typeof mp === 'string' && mp.includes('/') && _isRichMeta(p)) _discoveredMeta.set(mp, p);
+      }
       const paths = plugins
         .map(p => (typeof p === 'string' ? p : p?.path))
         .filter(p => typeof p === 'string' && p.includes('/'));
@@ -76,6 +101,7 @@ const PluginRegistry = (() => {
    * @returns {Promise<string[]>} module paths like ['tools/toggle-grid', …]
    */
   async function discover(basePath = 'js/modules') {
+    _discoveredMeta.clear(); // drop any inline meta from a previous discover()
     const candidates = ['api/plugins', 'api/plugins.php', `${basePath}/manifest.json`];
     for (const url of candidates) {
       const paths = await _fetchPluginList(url);
@@ -98,13 +124,19 @@ const PluginRegistry = (() => {
   async function loadModules(basePath, modulePaths) {
     const loadPromises = modulePaths.map(async (modPath) => {
       try {
-        const jsonUrl = `${basePath}/${modPath}/plugin.json`;
-        const resp = await fetch(jsonUrl);
-        if (!resp.ok) {
-          console.error(`[PluginRegistry] Failed to load ${jsonUrl}: ${resp.status}`);
-          return;
+        // Prefer rich metadata captured during discover() (live endpoint) to skip
+        // a redundant plugin.json round-trip; otherwise fetch it (static manifest
+        // / PHP / embedded-default hosts, or a direct loadModules(paths) call).
+        let meta = _discoveredMeta.get(modPath) || null;
+        if (!meta) {
+          const jsonUrl = `${basePath}/${modPath}/plugin.json`;
+          const resp = await fetch(jsonUrl);
+          if (!resp.ok) {
+            console.error(`[PluginRegistry] Failed to load ${jsonUrl}: ${resp.status}`);
+            return;
+          }
+          meta = await resp.json();
         }
-        const meta = await resp.json();
 
         // Validate placement matches directory
         const expectedPlacement = modPath.split('/')[0]; // 'tools', 'channels', 'shaders'
@@ -123,17 +155,28 @@ const PluginRegistry = (() => {
           state: 'registered'
         });
 
-        // Pre-load this plugin's own translation dictionaries into the i18n
-        // tree (plugins.<id>.*) BEFORE any UI is built, so toolbar labels and
-        // runtime strings resolve on first paint. `i18nLanguages` (plugin.json)
-        // lists the shipped locales; English is always loaded as the per-plugin
-        // fallback (rule: a platform locale the plugin lacks → English).
-        if (typeof I18n !== 'undefined' && I18n.loadPluginLang) {
-          await I18n.loadPluginLang(meta.id, meta._path, meta.i18nLanguages);
+        // Load this plugin's own translation dictionaries into the i18n tree
+        // (plugins.<id>.*) BEFORE any UI is built, so toolbar labels and runtime
+        // strings resolve on first paint. Either way the dictionaries are in place
+        // before this promise resolves, preserving the v0.12.45 "loadModules
+        // before UI build" invariant. `i18nLanguages` lists the shipped locales;
+        // English is always present as the per-plugin fallback.
+        //   • Live endpoint: dictionaries arrive inline in meta.i18n → graft them
+        //     synchronously, zero round-trips.
+        //   • Otherwise: fetch them (the parallelized loadPluginLang fallback).
+        let langWork = Promise.resolve();
+        if (typeof I18n !== 'undefined') {
+          if (meta.i18n && meta.i18n.en && I18n.registerPluginLang) {
+            I18n.registerPluginLang(meta.id, meta._path, meta.i18n, meta.i18nLanguages);
+          } else if (I18n.loadPluginLang) {
+            langWork = I18n.loadPluginLang(meta.id, meta._path, meta.i18nLanguages);
+          }
         }
 
-        // Inject <script> for index.js
-        await _loadScript(`${basePath}/${modPath}/index.js`);
+        // Inject <script> for index.js — concurrent with any lang fetch fallback
+        // (no plugin reads its dictionary at module-eval time; all read i18n only
+        // inside init/activate/getChannelUI).
+        await Promise.all([langWork, _loadScript(`${basePath}/${modPath}/index.js`)]);
 
       } catch (err) {
         console.error(`[PluginRegistry] Error loading module "${modPath}":`, err);

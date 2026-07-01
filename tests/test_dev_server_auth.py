@@ -49,36 +49,79 @@ class TestPasswordHashing(unittest.TestCase):
         src = Path(ROOT, "dev_server.py").read_text(encoding="utf-8")
         self.assertNotIn("iribhm2024", src)
 
-    def test_first_run_generates_random_pbkdf2_config(self):
+    def test_load_config_no_longer_stores_password(self):
+        # v1.4.0: the password moved to the dedicated credential store. _load_config
+        # no longer auto-generates one — a missing credential drives first-run setup.
         tmp = tempfile.mkdtemp()
-        orig = dev_server.CONFIG_FILE
+        orig_cfg, orig_cred = dev_server.CONFIG_FILE, dev_server.CRED_FILE
         try:
             dev_server.CONFIG_FILE = Path(tmp) / "config.json"
+            dev_server.CRED_FILE = Path(tmp) / "admin_credential.json"
             cfg = dev_server._load_config()
-            self.assertIn("password_pbkdf2", cfg)
-            self.assertNotIn("password_sha256", cfg)
-            self.assertTrue(cfg["password_pbkdf2"].startswith("pbkdf2_sha256$"))
-            # the persisted file must not contain a cleartext password
-            persisted = json.loads(dev_server.CONFIG_FILE.read_text(encoding="utf-8"))
-            self.assertNotIn("password", persisted)
+            self.assertNotIn("password_pbkdf2", cfg)
+            self.assertEqual(cfg.get("username"), dev_server.DEFAULT_USERNAME)
+            self.assertFalse(dev_server.CONFIG_FILE.exists())  # a read must not write
+            self.assertFalse(dev_server._credential_exists())
         finally:
-            dev_server.CONFIG_FILE = orig
+            dev_server.CONFIG_FILE, dev_server.CRED_FILE = orig_cfg, orig_cred
             shutil.rmtree(tmp, ignore_errors=True)
 
-    def test_check_credentials_with_pbkdf2_config(self):
+    def test_credential_setup_and_check(self):
         tmp = tempfile.mkdtemp()
-        orig = dev_server.CONFIG_FILE
+        orig = dev_server.CRED_FILE
         try:
-            dev_server.CONFIG_FILE = Path(tmp) / "config.json"
-            dev_server.CONFIG_FILE.write_text(json.dumps({
-                "username": "admin",
-                "password_pbkdf2": dev_server._hash_password("hunter2"),
-            }), encoding="utf-8")
+            dev_server.CRED_FILE = Path(tmp) / "admin_credential.json"
+            self.assertFalse(dev_server._credential_exists())
+            ok, status, _ = dev_server._setup_credential("admin", "hunter2")
+            self.assertTrue(ok)
+            self.assertEqual(status, 200)
             self.assertTrue(dev_server._check_credentials("admin", "hunter2"))
             self.assertFalse(dev_server._check_credentials("admin", "bad"))
             self.assertFalse(dev_server._check_credentials("root", "hunter2"))
+            # persisted record holds only a one-way hash, never cleartext
+            text = dev_server.CRED_FILE.read_text(encoding="utf-8")
+            self.assertIn("pbkdf2_sha256$", text)
+            self.assertNotIn("hunter2", text)
         finally:
-            dev_server.CONFIG_FILE = orig
+            dev_server.CRED_FILE = orig
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_setup_is_exclusive(self):
+        # Anti-overwrite guarantee: a second setup can never replace a live credential.
+        tmp = tempfile.mkdtemp()
+        orig = dev_server.CRED_FILE
+        try:
+            dev_server.CRED_FILE = Path(tmp) / "admin_credential.json"
+            ok1, _, _ = dev_server._setup_credential("admin", "first-pw")
+            self.assertTrue(ok1)
+            ok2, status2, payload2 = dev_server._setup_credential("admin", "second-pw")
+            self.assertFalse(ok2)
+            self.assertEqual(status2, 409)
+            self.assertEqual(payload2.get("error"), "already_configured")
+            # the overwrite attempt had no effect — original password still valid
+            self.assertTrue(dev_server._check_credentials("admin", "first-pw"))
+            self.assertFalse(dev_server._check_credentials("admin", "second-pw"))
+        finally:
+            dev_server.CRED_FILE = orig
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_change_requires_current_password(self):
+        tmp = tempfile.mkdtemp()
+        orig = dev_server.CRED_FILE
+        try:
+            dev_server.CRED_FILE = Path(tmp) / "admin_credential.json"
+            dev_server._setup_credential("admin", "old-pw")
+            ok, status, _ = dev_server._change_credential("wrong", "new-pw")
+            self.assertFalse(ok)
+            self.assertEqual(status, 401)
+            self.assertTrue(dev_server._check_credentials("admin", "old-pw"))
+            ok2, status2, _ = dev_server._change_credential("old-pw", "new-pw")
+            self.assertTrue(ok2)
+            self.assertEqual(status2, 200)
+            self.assertTrue(dev_server._check_credentials("admin", "new-pw"))
+            self.assertFalse(dev_server._check_credentials("admin", "old-pw"))
+        finally:
+            dev_server.CRED_FILE = orig
             shutil.rmtree(tmp, ignore_errors=True)
 
 

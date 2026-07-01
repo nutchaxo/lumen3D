@@ -4,6 +4,9 @@
 __pycache__/
 *.pyc
 
+# Local Python runtime bootstrapped by the self-contained preprocess launcher
+.runtime/
+
 # Datasets / Large files
 DATA_WEB/*
 !DATA_WEB/.gitkeep
@@ -30,3 +33,12 @@ test_meta.html
 # Logs
 logs/
 *.log
+
+# Admin runtime state (secret / machine-local — never commit)
+api/config.json
+api/admin_credential.json
+api/stats.json
+api/disabled-plugins.json
+
+# Self-update backups
+backups/

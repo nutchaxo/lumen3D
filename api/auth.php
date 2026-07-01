@@ -25,7 +25,7 @@ admin_session_start();
 $LOCKOUT_FILE = sys_get_temp_dir() . '/iribhm_admin_lockout_' . md5(__DIR__) . '.json';
 $MAX_ATTEMPTS = 10;
 $LOCKOUT_SECS = 900;
-function bf_load(): array { global $LOCKOUT_FILE; $d = @json_decode(@file_get_contents($LOCKOUT_FILE), true); return is_array($d) ? $d : ['attempts' => 0, 'until' => 0]; }
+function bf_load(): array { global $LOCKOUT_FILE; $raw = @file_get_contents($LOCKOUT_FILE); $d = $raw !== false ? json_decode($raw, true) : null; return is_array($d) ? $d : ['attempts' => 0, 'until' => 0]; }
 function bf_locked(): bool { $l = bf_load(); return ($l['until'] ?? 0) > time(); }
 function bf_fail(): void { global $LOCKOUT_FILE, $MAX_ATTEMPTS, $LOCKOUT_SECS; $l = bf_load(); $l['attempts'] = ($l['attempts'] ?? 0) + 1; if ($l['attempts'] >= $MAX_ATTEMPTS) { $l['until'] = time() + $LOCKOUT_SECS; $l['attempts'] = 0; } @file_put_contents($LOCKOUT_FILE, json_encode($l)); }
 function bf_clear(): void { global $LOCKOUT_FILE; @file_put_contents($LOCKOUT_FILE, json_encode(['attempts' => 0, 'until' => 0])); }

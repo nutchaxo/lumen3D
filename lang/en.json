@@ -682,6 +682,8 @@
     "datasetHidden": "Dataset hidden from the explorer.",
     "datasetShown": "Dataset visible in the explorer.",
     "visibilityError": "Error while changing visibility.",
+    "hideDataset": "Hide from the explorer",
+    "showDataset": "Show in the explorer",
     "secPassword": "Administrator password",
     "securityPageSub": "Change the panel access password.",
     "changePassword": "Change password",

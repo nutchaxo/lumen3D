@@ -11,7 +11,7 @@
 'use strict';
 
 import {
-  API_DATASETS, t, escHtml, apiFetch, toast, el, deepClone,
+  API_DATASETS, t, escHtml, apiFetch, toast, el, deepClone, refreshIcons,
 } from './shared.js';
 import { setUnsaved, setDirtyGuard } from './bus.js';
 
@@ -135,18 +135,32 @@ function renderList() {
     const embryoText = ds.embryo ? `<span class="item-embryo">${escHtml(ds.embryo)}</span>` : '';
     const hiddenBadge = ds.hidden ? `<span class="item-hidden-badge" title="${escHtml(t('admin.hidden', 'Masqué'))}">${escHtml(t('admin.hiddenShort', 'masqué'))}</span>` : '';
     const statusClass = ds.configured ? 'configured' : 'unconfigured';
+    // Per-item visibility toggle. Icon reflects current state (eye = visible,
+    // eye-off = hidden); the title spells out the action. No delete control —
+    // dataset removal is a filesystem operation by design.
+    const visTitle = ds.hidden ? t('admin.showDataset', 'Afficher dans l\'explorer') : t('admin.hideDataset', 'Masquer de l\'explorer');
+    const visBtn = `<button type="button" class="item-vis-btn${ds.hidden ? ' is-off' : ''}" data-vis-btn title="${escHtml(visTitle)}" aria-label="${escHtml(visTitle)}"><i data-lucide="${ds.hidden ? 'eye-off' : 'eye'}"></i></button>`;
     item.innerHTML = `
       ${thumbHtml}
       <div class="item-info">
         <div class="item-name">${escHtml(ds.name)}</div>
         <div class="item-meta">${stageBadge}${embryoText}${hiddenBadge}</div>
       </div>
+      ${visBtn}
       <span class="item-status ${statusClass}" title="${escHtml(ds.configured ? t('admin.configured', 'Configuré') : t('admin.unconfigured', 'Non configuré'))}"></span>`;
     item.addEventListener('click', () => selectDataset(ds.id));
     item.addEventListener('keydown', (e) => { if (e.key === 'Enter') selectDataset(ds.id); });
     item.setAttribute('tabindex', '0');
+
+    const vbtn = item.querySelector('[data-vis-btn]');
+    if (vbtn) {
+      // Stop the row's click/Enter from selecting the dataset when toggling.
+      vbtn.addEventListener('click', (e) => { e.stopPropagation(); toggleItemVisibility(ds.id, vbtn); });
+      vbtn.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') e.stopPropagation(); });
+    }
     DOM.datasetList.appendChild(item);
   });
+  refreshIcons(DOM.datasetList);
 }
 
 // ── Validation (Rule 1.4) ──────────────────────────────────────
@@ -284,26 +298,49 @@ function updateVisibilityUI() {
   }
 }
 
-async function toggleVisibility() {
-  if (!_current || !_draft) return;
-  const newHidden = !!DOM.fVisible && !DOM.fVisible.checked;  // checkbox = "visible"
-  DOM.fVisible.disabled = true;
-  const data = await apiFetch(`${API_DATASETS}?action=set_visibility&id=${encodeURIComponent(_current.id)}`,
+// Persist a dataset's hidden flag and sync every surface (list + open editor).
+// Reused by the config-panel checkbox and the per-item list button, so it works
+// for ANY dataset id — not only the currently selected one.
+async function applyVisibility(id, newHidden) {
+  const data = await apiFetch(`${API_DATASETS}?action=set_visibility&id=${encodeURIComponent(id)}`,
     { method: 'POST', body: JSON.stringify({ hidden: newHidden }) });
-  DOM.fVisible.disabled = false;
-  if (data?.ok) {
-    _draft.hidden = newHidden;
-    _original.hidden = newHidden;
-    _current.hidden = newHidden;
-    const idx = _datasets.findIndex((d) => d.id === _current.id);
-    if (idx !== -1) _datasets[idx].hidden = newHidden;
-    updateVisibilityUI();
-    renderList();
-    toast(newHidden ? t('admin.datasetHidden', 'Dataset masqué de l\'explorer.') : t('admin.datasetShown', 'Dataset visible dans l\'explorer.'));
-  } else {
-    if (DOM.fVisible) DOM.fVisible.checked = !newHidden;  // revert
+  if (!data?.ok) {
     toast(t('admin.visibilityError', 'Erreur lors du changement de visibilité.'), 'error');
+    return false;
   }
+  const idx = _datasets.findIndex((d) => d.id === id);
+  if (idx !== -1) _datasets[idx].hidden = newHidden;
+  // Visibility is persisted immediately, independent of the draft save. If the
+  // toggled dataset is the one open in the editor, mirror the flag into draft +
+  // original so it doesn't register as an unsaved diff.
+  if (_current?.id === id) {
+    _current.hidden = newHidden;
+    if (_draft) _draft.hidden = newHidden;
+    if (_original) _original.hidden = newHidden;
+    updateVisibilityUI();
+  }
+  renderList();
+  toast(newHidden ? t('admin.datasetHidden', 'Dataset masqué de l\'explorer.') : t('admin.datasetShown', 'Dataset visible dans l\'explorer.'));
+  return true;
+}
+
+// Config-panel checkbox (checked = "visible").
+async function toggleVisibility() {
+  if (!_current) return;
+  const newHidden = !!DOM.fVisible && !DOM.fVisible.checked;
+  DOM.fVisible.disabled = true;
+  const ok = await applyVisibility(_current.id, newHidden);
+  DOM.fVisible.disabled = false;
+  if (!ok && DOM.fVisible) DOM.fVisible.checked = !newHidden;  // revert on failure
+}
+
+// Per-item list button — toggles visibility without opening the dataset.
+async function toggleItemVisibility(id, btn) {
+  const ds = _datasets.find((d) => d.id === id);
+  if (!ds) return;
+  if (btn) btn.disabled = true;
+  const ok = await applyVisibility(id, !ds.hidden);
+  if (!ok && btn) btn.disabled = false;  // on success the list re-renders
 }
 
 // ── Save / Reset ───────────────────────────────────────────────

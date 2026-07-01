@@ -12,6 +12,12 @@
       "runtimeExecutable": "py",
       "runtimeArgs": ["dev_server.py", "--port", "8090"],
       "port": 8090
+    },
+    {
+      "name": "php",
+      "runtimeExecutable": "C:\\php-portable\\php.exe",
+      "runtimeArgs": ["-S", "127.0.0.1:8082", "-t", "D:\\Coding\\WebPlatform", "router.php"],
+      "port": 8082
     }
   ]
 }

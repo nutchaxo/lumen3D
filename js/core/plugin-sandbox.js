@@ -361,7 +361,13 @@ const PluginSandbox = (() => {
     }
     if (!_listenerBound) { window.addEventListener('message', _onMessage); _listenerBound = true; _startHeartbeat(); }
 
-    const nonce = _rand(16);
+    // The srcdoc frame INHERITS the parent page's CSP (about:srcdoc is a local
+    // scheme), and CSP is conjunctive — the frame's inline scripts must satisfy BOTH
+    // the frame's own meta-CSP AND the inherited parent script-src. So they must
+    // carry the PAGE nonce, not a fresh one. `token` stays random (RPC auth factor).
+    // Fallback to random only on a host with no CSP header (nonce is inert there).
+    const pageNonceEl = document.querySelector('meta[name="csp-nonce"]');
+    const nonce = (pageNonceEl && pageNonceEl.getAttribute('content')) || _rand(16);
     const token = _rand(24);
     const iframe = document.createElement('iframe');
     iframe.setAttribute('sandbox', 'allow-scripts');   // NEVER allow-same-origin (INV-6)

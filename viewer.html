@@ -2,6 +2,7 @@
 <html lang="en" data-theme="dark">
 <head>
   <meta charset="UTF-8">
+  <meta name="csp-nonce" content="{{CSP_NONCE}}">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Viewer — IRIBHM Microscopy</title>
 
@@ -11,13 +12,13 @@
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 
   <!-- Lucide Icons -->
-  <script src="https://unpkg.com/lucide@0.344.0/dist/umd/lucide.min.js" integrity="sha384-tTkFttkBclaU1cloKwOi9xk3pbao3VZxTjLNBt8iFABWDBQibbAbWpVmO28zMuxq" crossorigin="anonymous"></script>
+  <script src="js/vendor/lucide.min.js" integrity="sha384-tTkFttkBclaU1cloKwOi9xk3pbao3VZxTjLNBt8iFABWDBQibbAbWpVmO28zMuxq" crossorigin="anonymous"></script>
   
   <!-- Three.js (r147) -->
-  <script src="https://cdn.jsdelivr.net/npm/three@0.147.0/build/three.min.js" integrity="sha384-vV17nr/rMaJqmeZkFUzXLpHdQ+ME5QHKdydaqqN+3Ga39RJlNrTatJxHwGV4ml2C" crossorigin="anonymous"></script>
+  <script src="js/vendor/three.min.js" integrity="sha384-vV17nr/rMaJqmeZkFUzXLpHdQ+ME5QHKdydaqqN+3Ga39RJlNrTatJxHwGV4ml2C" crossorigin="anonymous"></script>
 
   <!-- OpenSeadragon for Deep Zoom 2D mode -->
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/openseadragon/3.0.0/openseadragon.min.js" integrity="sha384-0TthTVAT+JjS3H3s6LZrp0NqOHpnOV00EYQPfel+8b7Sz8y4AkeEG8aNmC1LxBxs" crossorigin="anonymous" defer></script>
+  <script src="js/vendor/openseadragon.min.js" integrity="sha384-0TthTVAT+JjS3H3s6LZrp0NqOHpnOV00EYQPfel+8b7Sz8y4AkeEG8aNmC1LxBxs" crossorigin="anonymous" defer></script>
 
   <!-- Stylesheets -->
   <link rel="stylesheet" href="css/variables.css">
@@ -85,10 +86,10 @@
               <i data-lucide="help-circle"></i>
             </a>
             <!-- Color Blindness Toggle -->
-            <button class="btn btn-icon btn-ghost" onclick="ColorBlind.openModal()" data-i18n-title="colorblind.toggle">
+            <button class="btn btn-icon btn-ghost" data-action="colorblind" data-i18n-title="colorblind.toggle">
               <i data-lucide="eye" style="width:20px;height:20px"></i>
             </button>
-            <button class="btn btn-icon btn-ghost" onclick="Theme.toggle()" data-i18n-title="theme.toggle" id="theme-toggle">
+            <button class="btn btn-icon btn-ghost" data-action="theme-toggle" data-i18n-title="theme.toggle" id="theme-toggle">
               <i data-lucide="moon" data-theme-icon></i>
             </button>
           </div>
@@ -437,6 +438,7 @@
     </div>
   </div>
   <script src="js/core/utils.js"></script>
+  <script src="js/core/ui-actions.js"></script>
   <script src="js/core/i18n.js"></script>
   <script src="js/core/theme.js"></script>
   <script src="js/core/colorblind.js?v=20260615-fixed1"></script>

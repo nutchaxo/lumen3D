@@ -13,9 +13,9 @@ LumenPlugin.register({
       const info = await LumenPlugin.getInfo();
       const name = (info && info.name ? info.name : 'viewer').replace(/[^\w.-]+/g, '_');
       await LumenPlugin.download(`${name}_screenshot.png`, 'image/png', bytes);
-      LumenPlugin.toast(LumenPlugin.t('saved'));
+      LumenPlugin.toast(LumenPlugin.t('saved')).catch(function () {});
     } catch (e) {
-      LumenPlugin.toast(LumenPlugin.t('failed'));
+      LumenPlugin.toast(LumenPlugin.t('failed')).catch(function () {});
     }
     return { active: false };  // an action, not a persistent toggle
   },

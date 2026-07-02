@@ -2,6 +2,7 @@
 <html lang="en" data-theme="dark">
 <head>
   <meta charset="UTF-8">
+  <meta name="csp-nonce" content="{{CSP_NONCE}}">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>About — IRIBHM Microscopy Platform</title>
   <meta name="description" content="Lumen3D — created by Morgan Climent at the IRIBHM (ULB), Migeotte lab. Scientific context, citation, institutions, and data access for the microscopy platform.">
@@ -9,7 +10,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
-  <script src="https://unpkg.com/lucide@0.344.0/dist/umd/lucide.min.js" integrity="sha384-tTkFttkBclaU1cloKwOi9xk3pbao3VZxTjLNBt8iFABWDBQibbAbWpVmO28zMuxq" crossorigin="anonymous"></script>
+  <script src="js/vendor/lucide.min.js" integrity="sha384-tTkFttkBclaU1cloKwOi9xk3pbao3VZxTjLNBt8iFABWDBQibbAbWpVmO28zMuxq" crossorigin="anonymous"></script>
 
   <link rel="stylesheet" href="css/variables.css">
   <link rel="stylesheet" href="css/themes.css">
@@ -36,10 +37,10 @@
         <i data-lucide="github" style="width:20px;height:20px"></i>
       </a>
       <!-- Color Blindness Toggle -->
-      <button class="btn btn-icon btn-ghost" onclick="window.ColorBlind && ColorBlind.openModal()" data-i18n-title="colorblind.toggle">
+      <button class="btn btn-icon btn-ghost" data-action="colorblind" data-i18n-title="colorblind.toggle">
         <i data-lucide="eye" style="width:20px;height:20px"></i>
       </button>
-      <button class="btn btn-icon btn-ghost" onclick="window.Theme && Theme.toggle()" data-i18n-title="theme.toggle" id="theme-toggle">
+      <button class="btn btn-icon btn-ghost" data-action="theme-toggle" data-i18n-title="theme.toggle" id="theme-toggle">
         <i data-lucide="moon" data-theme-icon></i>
       </button>
     </div>
@@ -267,6 +268,7 @@
   </footer>
 
   <script src="js/core/utils.js?v=20260504"></script>
+  <script src="js/core/ui-actions.js"></script>
   <script src="js/core/i18n.js?v=20260504"></script>
     <script src="js/core/theme.js?v=20260504"></script>
   <script src="js/core/colorblind.js?v=20260528"></script>

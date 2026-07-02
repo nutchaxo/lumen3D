@@ -55,9 +55,15 @@ Plugin de référence : [js/modules/tools/screenshot-sandboxed/](../../js/module
 ## CSP (le verrou d'exécution, INV-1)
 
 Sans CSP stricte, le refus d'injection côté client est contournable par tout script in-page.
-En v1.6 la CSP est posée en **`Content-Security-Policy-Report-Only`** (`script-src 'self'
-'nonce-…' blob: <CDN>`, sans `unsafe-inline`/`unsafe-eval`) : elle **ne casse rien** et
-**révèle** les scripts inline à noncer avant de passer en enforcing (le vrai verrou).
+La CSP est **enforcée** : `dev_server.py` (`_serve_html` + `_csp_policy`) injecte un **nonce
+par requête** (`{{CSP_NONCE}}` → nonce) et pose `Content-Security-Policy: script-src 'self'
+'nonce-…' <CDN>` — **sans** `unsafe-inline`/`unsafe-eval`/`blob:`. Les handlers inline sont
+remplacés par une délégation `data-action` ([js/core/ui-actions.js](../../js/core/ui-actions.js)) ;
+le `<script>` Blob-URL d'un plugin trusté passe par le **nonce de page** (donc `blob:` reste
+hors `script-src` → un script in-page compromis ne peut pas injecter un blob non-noncé).
+Hôtes PHP/statiques (pas d'injection per-request) : placeholder inerte, enforcing réservé au
+serveur Python. **Piège corrigé** : `const Theme = …` en script classique est un binding
+lexical global, PAS `window.Theme` — `ui-actions.js` référence les noms nus.
 
 ## Périmètre v1.6 (franchise)
 

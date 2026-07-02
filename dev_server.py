@@ -129,18 +129,29 @@ _CATALOG_CACHE: dict = {"sig": None, "data": None}
 # sandboxes at runtime (trustEpoch).
 _DEV_TRUST = False
 _TRUST_EPOCH = 0
-# CSP target (INV-1): the strict policy that makes the null-origin sandbox the only
-# execution path for non-approved code. Emitted Report-Only in v1.6 (breaks nothing;
-# surfaces inline scripts to nonce) before flipping to enforcing. blob: in script-src
-# is required for the trusted-plugin Blob-URL exec path (_execTrustedInPage).
-_CSP_REPORT_ONLY = (
-    "default-src 'self'; "
-    "script-src 'self' blob: https://unpkg.com https://cdn.jsdelivr.net https://cdnjs.cloudflare.com; "
-    "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
-    "font-src 'self' https://fonts.gstatic.com; "
-    "img-src 'self' data: blob:; connect-src 'self'; worker-src 'self' blob:; "
-    "frame-src 'self'; object-src 'none'; base-uri 'self'"
-)
+# CSP (INV-1): the strict policy that makes the null-origin sandbox the only path
+# for non-approved code. ENFORCED (not report-only) — the dev server injects a
+# per-request nonce into each HTML document ({{CSP_NONCE}} placeholder) and stamps
+# the matching 'nonce-…' here. No 'unsafe-inline'/'unsafe-eval'; no blob: in
+# script-src (a trusted plugin's Blob-URL <script> is allowed by its nonce, so a
+# compromised in-page script still cannot inject an un-nonced blob).
+def _csp_policy(nonce: str) -> str:
+    # script-src collapses to 'self' + the per-request nonce — all libraries are
+    # self-hosted under js/vendor/ (no multi-tenant CDN origin remains as an
+    # injection target, and the platform loads offline). worker-src 'self' (no
+    # blob: — the only Workers are same-origin file URLs). frame-ancestors 'self'
+    # blocks cross-origin framing (clickjacking); the compare page frames only
+    # same-origin viewer.html. style-src keeps 'unsafe-inline' (inline style=
+    # attributes; not script-executing) — tracked for later removal.
+    return (
+        "default-src 'self'; "
+        f"script-src 'self' 'nonce-{nonce}'; "
+        "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
+        "font-src 'self' https://fonts.gstatic.com; "
+        "img-src 'self' data: blob:; connect-src 'self'; worker-src 'self'; "
+        "frame-src 'self'; child-src 'self'; object-src 'none'; base-uri 'self'; "
+        "form-action 'self'; frame-ancestors 'self'"
+    )
 # PERF: a synchronous console write per request sits on the response hot path
 # (dozens per page load; the Windows console is slow and serializes across the
 # ThreadingHTTPServer workers). Off by default; enable with --verbose. Errors
@@ -2340,6 +2351,10 @@ class AdminHandler(http.server.SimpleHTTPRequestHandler):
             self._handle_api(parsed, body=None)
         elif _is_forbidden_static(clean_path):
             self._json(404, {"error": "Not found"})
+        elif clean_path == "" or clean_path.endswith(".html"):
+            # HTML documents get a per-request CSP nonce injected + the enforcing
+            # nonce-CSP header (INV-1). '' → index.html (the directory index).
+            self._serve_html(clean_path or "index.html")
         else:
             self._maybe_count_download(clean_path)
             super().do_GET()
@@ -2473,13 +2488,38 @@ class AdminHandler(http.server.SimpleHTTPRequestHandler):
             self.send_header('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0')
             self.send_header('Pragma', 'no-cache')
             self.send_header('Expires', '0')
-        # CSP in REPORT-ONLY (v1.6): the target strict policy (script-src 'self' +
-        # pinned CDNs, no 'unsafe-inline'/'unsafe-eval') that INV-1 needs — reported,
-        # not enforced, so it breaks nothing while surfacing the inline scripts that
-        # must be nonced before flipping to enforcing. HTML documents only.
-        if path_no_query.endswith('.html') or path_no_query in ('', '/'):
-            self.send_header('Content-Security-Policy-Report-Only', _CSP_REPORT_ONLY)
+        # HTML documents carry the ENFORCING nonce-CSP set in _serve_html (not here —
+        # the nonce is per-request). Non-HTML responses need no CSP.
         super().end_headers()
+
+    def _serve_html(self, rel_path: str):
+        """Serve an HTML document with a fresh per-request CSP nonce substituted for
+        the {{CSP_NONCE}} placeholder, and the matching ENFORCING CSP header (INV-1).
+        Only the dev/PHP server can do per-request nonce injection; pure-static hosts
+        serve the literal placeholder (harmless — the nonce attr is inert with no CSP)."""
+        rel = rel_path.replace("\\", "/").lstrip("/")
+        fs_path = (ROOT / rel).resolve()
+        try:
+            fs_path.relative_to(ROOT)
+        except ValueError:
+            self._json(404, {"error": "Not found"}); return
+        if not fs_path.is_file():
+            super().do_GET(); return  # let the base handler 404 / directory-index
+        try:
+            html = fs_path.read_text(encoding="utf-8")
+        except OSError:
+            self._json(500, {"error": "read failed"}); return
+        nonce = secrets.token_urlsafe(18)
+        body = html.replace("{{CSP_NONCE}}", nonce).encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Content-Security-Policy", _csp_policy(nonce))
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("X-Frame-Options", "SAMEORIGIN")  # clickjacking (legacy; CSP frame-ancestors covers modern)
+        self.send_header("Cache-Control", "no-store")  # per-request nonce → never cache
+        self.end_headers()
+        self.wfile.write(body)
 
     def do_POST(self):
         parsed = urllib.parse.urlparse(self.path)

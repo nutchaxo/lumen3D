@@ -2,6 +2,7 @@
 <html lang="en" data-theme="dark">
 <head>
   <meta charset="UTF-8">
+  <meta name="csp-nonce" content="{{CSP_NONCE}}">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Widgets & Controllers — IRIBHM</title>
 
@@ -11,7 +12,7 @@
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 
   <!-- Lucide Icons -->
-  <script src="https://unpkg.com/lucide@0.344.0/dist/umd/lucide.min.js" integrity="sha384-tTkFttkBclaU1cloKwOi9xk3pbao3VZxTjLNBt8iFABWDBQibbAbWpVmO28zMuxq" crossorigin="anonymous"></script>
+  <script src="js/vendor/lucide.min.js" integrity="sha384-tTkFttkBclaU1cloKwOi9xk3pbao3VZxTjLNBt8iFABWDBQibbAbWpVmO28zMuxq" crossorigin="anonymous"></script>
 
   <!-- Stylesheets -->
   <link rel="stylesheet" href="css/variables.css">
@@ -193,9 +194,10 @@
   </div>
 
   <script src="js/core/utils.js"></script>
+  <script src="js/core/ui-actions.js"></script>
   <script src="js/components/channel-panel.js?v=20260506h"></script>
   <script src="js/components/timeline.js?v=20260506"></script>
-  <script>
+  <script nonce="{{CSP_NONCE}}">
     // Initialize icons
     lucide.createIcons();
 

@@ -24,6 +24,11 @@ audits/              export-ignore
 start_dev.bat        export-ignore
 start_php_server.bat export-ignore
 
+# Vendored third-party libraries: byte-stable across platforms (NO line-ending
+# conversion) so their SRI hashes on the HTML <script integrity="…"> tags stay
+# valid on every checkout, and version.json digests are reproducible.
+js/vendor/** -text
+
 # Normalize line endings for cross-platform text files (Windows dev, Linux CI).
 *.py   text eol=lf
 *.php  text eol=lf

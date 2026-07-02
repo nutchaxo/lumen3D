@@ -399,6 +399,26 @@ const ViewerApp = (() => {
       // the load phase: per-plugin init failures are quarantined by the registry;
       // a registry-level throw must still leave the viewer alive.
       try {
+        // Give the sandbox lane its capability target — a NARROW adapter (INV-8),
+        // never the raw moduleCtx. Installed before bindToolbarButtons so a click
+        // (→ activate → capability request) always finds it ready.
+        if (typeof PluginSandbox !== 'undefined') {
+          PluginSandbox.bindContext({
+            ui: {
+              toast: moduleCtx.ui.toast,
+              downloadBlob: (blob, name) => {
+                if (typeof ExportManager !== 'undefined' && ExportManager.downloadBlob) ExportManager.downloadBlob(blob, name);
+              }
+            },
+            getCanvasBlob: moduleCtx.getCanvasBlob,
+            viewer: {
+              setRenderMode: (m) => moduleCtx.viewer.setRenderMode(m),
+              renderModes: () => PluginRegistry.listByPlacement('shaders').map(s => s.id)
+            },
+            channels: { getState: moduleCtx.channels.getState },
+            dataset: { meta: () => datasetMeta }
+          });
+        }
         await PluginRegistry.initAll(moduleCtx);
         PluginRegistry.bindToolbarButtons();
 

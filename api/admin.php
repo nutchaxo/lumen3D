@@ -23,7 +23,7 @@ if (!admin_is_auth()) admin_json_out(['error' => 'Not authenticated'], 401);
 $action = $_GET['action'] ?? '';
 $body   = ($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST' ? (json_decode(file_get_contents('php://input'), true) ?: []) : [];
 
-if (in_array($action, ['set_plugin', 'update_apply'], true)) admin_require_write();
+if (in_array($action, ['set_plugin', 'update_apply', 'approve_plugin', 'revoke_plugin'], true)) admin_require_write();
 
 switch ($action) {
 
@@ -52,12 +52,15 @@ switch ($action) {
         $disabled = admin_load_disabled();
         $plugins = admin_list_plugins();
         $ver = admin_max_version(changelog_dir());
+        $approvals = admin_load_trust();
+        $manifest = admin_release_manifest();
         $enabledShaders = array_filter($plugins, fn($p) => ($p['placement'] ?? '') === 'shaders' && !in_array($p['path'], $disabled, true));
         $enabledShaderPaths = array_map(fn($p) => $p['path'], $enabledShaders);
         $out = [];
         foreach ($plugins as $p) {
             $isEnabled = !in_array($p['path'], $disabled, true);
             [$compatOk, $compatReason] = admin_compat_satisfies($ver, $p['platformCompat'] ?? null);
+            $tr = admin_classify_plugin($p['path'], modules_dir() . '/' . $p['path'], $approvals, $manifest);
             $out[] = [
                 'id' => $p['id'] ?? null, 'path' => $p['path'], 'placement' => $p['placement'] ?? null,
                 'name' => $p['name'] ?? ($p['id'] ?? $p['path']), 'icon' => $p['icon'] ?? null,
@@ -67,10 +70,47 @@ switch ($action) {
                 'protected' => count($enabledShaderPaths) <= 1 && in_array($p['path'], $enabledShaderPaths, true),
                 'platformCompat' => $p['platformCompat'] ?? null,
                 'compat' => $compatOk, 'compatReason' => $compatReason,
+                'trust' => ['tier' => $tr['tier'], 'hash' => $tr['hash'], 'mode' => $tr['mode'] ?? null,
+                            'caps' => $tr['caps'] ?? null, 'reason' => $tr['reason'] ?? null,
+                            'declaredCaps' => admin_plugin_declared_caps(modules_dir() . '/' . $p['path'])],
             ];
         }
         usort($out, fn($a, $b) => [$a['placement'], $a['group'] ?? '', $a['name'] ?? ''] <=> [$b['placement'], $b['group'] ?? '', $b['name'] ?? '']);
         admin_json_out(['plugins' => $out]);
+    }
+
+    case 'plugin_trust':
+        admin_json_out(['approvals' => admin_load_trust(), 'devTrust' => is_dir(admin_root() . '/.git')]);
+
+    case 'approve_plugin': {
+        // INV-4: re-auth with the current password; the server re-hashes on disk and
+        // requires client==server agreement on the exact bytes.
+        $rec = admin_credential();
+        if (!$rec || !admin_verify_password($body['password'] ?? '', $rec['password_pbkdf2'] ?? '')) admin_json_out(['error' => 'bad_password'], 401);
+        $path = $body['path'] ?? ''; $mode = $body['mode'] ?? '';
+        if (!in_array($mode, ['trusted', 'sandboxed'], true)) admin_json_out(['error' => 'bad_mode'], 400);
+        if (!preg_match('#^(tools|channels|shaders)/[A-Za-z0-9_][A-Za-z0-9._-]*$#', $path)) admin_json_out(['error' => 'bad_path'], 400);
+        $modDir = modules_dir() . '/' . $path;
+        if (!is_file($modDir . '/plugin.json')) admin_json_out(['error' => 'unknown_plugin'], 404);
+        $serverHash = admin_plugin_hash(admin_plugin_file_hashes($modDir));
+        if (($body['sha256'] ?? '') !== $serverHash) admin_json_out(['error' => 'hash_mismatch', 'serverHash' => $serverHash], 409);
+        $declared = admin_plugin_declared_caps($modDir);
+        $caps = array_values(array_intersect(is_array($body['caps'] ?? null) ? $body['caps'] : [], SANDBOX_CAP_ALLOWLIST));
+        $caps = array_values(array_unique(array_merge($caps, $declared)));
+        $approvals = array_values(array_filter(admin_load_trust(), fn($a) => ($a['path'] ?? '') !== $path));
+        $approvals[] = ['path' => $path, 'sha256' => $serverHash, 'mode' => $mode, 'caps' => $caps,
+                        'at' => date('c'), 'by' => $_SESSION['admin_user'] ?? 'admin'];
+        admin_save_trust($approvals);
+        admin_json_out(['ok' => true, 'hash' => $serverHash, 'mode' => $mode, 'caps' => $caps]);
+    }
+
+    case 'revoke_plugin': {
+        $path = $body['path'] ?? '';
+        $approvals = admin_load_trust();
+        $remaining = array_values(array_filter($approvals, fn($a) => ($a['path'] ?? '') !== $path));
+        if (count($remaining) === count($approvals)) admin_json_out(['error' => 'not_approved'], 404);
+        admin_save_trust($remaining);
+        admin_json_out(['ok' => true]);
     }
 
     case 'set_plugin': {

@@ -22,6 +22,7 @@ DATA_WEB/*
 DOCS/*
 !DOCS/plugins/
 !DOCS/update-system/
+!DOCS/plugin-sandbox/
 platform_data_inventory.xlsx
 platform_preselection_fixed_live.xlsx
 test_meta.html
@@ -41,6 +42,8 @@ api/config.json
 api/admin_credential.json
 api/stats.json
 api/disabled-plugins.json
+api/quarantined-plugins.json
+api/plugin-trust.json
 
 # Self-update backups + runtime artifacts (version.json ships in the release
 # artifact and is written by updates — never tracked in git)

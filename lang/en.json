@@ -764,6 +764,19 @@
     "lastUpdateOutcome": "Last update",
     "ack": "Got it",
     "compatIncompatible": "incompatible",
-    "compatIntro": "An incompatible plugin is not loaded by the viewer; it becomes active again once an update satisfies its version constraint."
+    "compatIntro": "An incompatible plugin is not loaded by the viewer; it becomes active again once an update satisfies its version constraint.",
+    "approveSandboxed": "Approve (sandboxed)",
+    "approveTrusted": "Approve (in-page)",
+    "revoke": "Revoke",
+    "approveCapsNote": "Granted capabilities",
+    "approveTrustedWarn": "WARNING: this plugin will run with full page privileges (like a bundled plugin). Only approve 'in-page' code you have audited.",
+    "approveSandboxedWarn": "This plugin will run isolated in a sandbox (no DOM or admin-API access).",
+    "approveHashNote": "Fingerprint",
+    "reauthPrompt": "Confirm your admin password to approve:",
+    "pluginApproved": "Plugin approved ✓ (reload the viewer)",
+    "badPassword": "Incorrect password.",
+    "hashMismatch": "The plugin content changed — reload the list and re-check.",
+    "revokeConfirm": "Revoke this plugin's approval? It will no longer load.",
+    "pluginRevoked": "Approval revoked ✓"
   }
 }

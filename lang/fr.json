@@ -764,6 +764,19 @@
     "lastUpdateOutcome": "Dernière mise à jour",
     "ack": "Compris",
     "compatIncompatible": "incompatible",
-    "compatIntro": "Un plugin incompatible n'est pas chargé par le viewer ; il redevient actif dès qu'une mise à jour satisfait sa contrainte de version."
+    "compatIntro": "Un plugin incompatible n'est pas chargé par le viewer ; il redevient actif dès qu'une mise à jour satisfait sa contrainte de version.",
+    "approveSandboxed": "Approuver (bac à sable)",
+    "approveTrusted": "Approuver (in-page)",
+    "revoke": "Révoquer",
+    "approveCapsNote": "Capabilities accordées",
+    "approveTrustedWarn": "ATTENTION : ce plugin s'exécutera avec les pleins privilèges de la page (comme un plugin intégré). N'approuvez « in-page » que du code que vous avez audité.",
+    "approveSandboxedWarn": "Ce plugin s'exécutera isolé dans un bac à sable (sans accès au DOM ni à l'API admin).",
+    "approveHashNote": "Empreinte",
+    "reauthPrompt": "Confirmez votre mot de passe administrateur pour approuver :",
+    "pluginApproved": "Plugin approuvé ✓ (rechargez le viewer)",
+    "badPassword": "Mot de passe incorrect.",
+    "hashMismatch": "Le contenu du plugin a changé — rechargez la liste et revérifiez.",
+    "revokeConfirm": "Révoquer l'approbation de ce plugin ? Il ne se chargera plus.",
+    "pluginRevoked": "Approbation révoquée ✓"
   }
 }

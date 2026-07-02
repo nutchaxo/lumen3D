@@ -102,5 +102,20 @@ $plugins = array_values(array_filter(
     fn($p) => admin_compat_satisfies($platformVer, $p['platformCompat'] ?? null)[0]
 ));
 
+// Fail-closed trust gate: untrusted plugins are excluded; survivors carry a `trust`
+// vouch the client re-verifies over the exact bytes it executes.
+$approvals = admin_load_trust();
+$manifest  = admin_release_manifest();
+$trusted = [];
+foreach ($plugins as $p) {
+    $tr = admin_classify_plugin($p['path'], $MODULES_DIR . '/' . $p['path'], $approvals, $manifest);
+    if ($tr['tier'] === 'untrusted') continue;
+    $fh = admin_plugin_file_hashes($MODULES_DIR . '/' . $p['path']);
+    $p['trust'] = ['tier' => $tr['tier'], 'hash' => $tr['hash'], 'mode' => $tr['mode'] ?? null,
+                   'caps' => $tr['caps'] ?? null, 'files' => array_keys($fh)];
+    $trusted[] = $p;
+}
+$plugins = $trusted;
+
 write_manifest($plugins);
 echo json_encode(['plugins' => $plugins], JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE);

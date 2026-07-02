@@ -27,6 +27,7 @@ function api_dir(): string { return __DIR__; }
 function cred_file(): string { return __DIR__ . '/admin_credential.json'; }
 function stats_file(): string { return __DIR__ . '/stats.json'; }
 function disabled_file(): string { return __DIR__ . '/disabled-plugins.json'; }
+function trust_file(): string { return __DIR__ . '/plugin-trust.json'; }
 function data_web(): string { return admin_root() . '/DATA_WEB'; }
 function changelog_dir(): string { return admin_root() . '/changelog'; }
 function modules_dir(): string { return admin_root() . '/js/modules'; }
@@ -276,6 +277,106 @@ function admin_preprocess_version(): ?string {
         if ($txt && preg_match('/__version__\s*=\s*["\']([\d.]+)["\']/', $txt, $m)) return $m[1];
     }
     return admin_max_version(admin_root() . '/preprocess/changelog');
+}
+
+// ── Plugin trust (twin of dev_server.py trust module) ─────────────────────────
+// Canonical hash + classification, so a PHP host gates untrusted plugins like the
+// Python server. Hash MUST match (validated by tests/plugin-trust-vector.json).
+
+const TRUST_SCHEME = 'lumen-plugin-trust/1';
+const TRUST_HASH_EXT = ['js', 'json', 'mjs', 'css', 'html'];
+const SANDBOX_CAP_ALLOWLIST = [
+    'toolbar.addButton', 'ui.toast', 'ui.download', 'viewer.getCanvasBlob',
+    'viewer.getInfo', 'viewer.setRenderMode', 'channels.getState', 'events.subscribe',
+];
+// Fallback effective caps for a sandboxed plugin that declares none — MUST match
+// dev_server.py:_SANDBOX_DEFAULT_CAPS (twin parity), not the full allowlist.
+const SANDBOX_DEFAULT_CAPS = ['toolbar.addButton', 'ui.toast', 'viewer.getInfo'];
+
+/** {relpath: sha256hex} over raw bytes for every identity-bearing file. */
+function admin_plugin_file_hashes(string $modDir): array {
+    $out = [];
+    if (!is_dir($modDir)) return $out;
+    $it = new RecursiveIteratorIterator(new RecursiveDirectoryIterator($modDir, FilesystemIterator::SKIP_DOTS));
+    foreach ($it as $f) {
+        if (!$f->isFile()) continue;
+        $ext = strtolower($f->getExtension());
+        if (!in_array($ext, TRUST_HASH_EXT, true) || $f->getFilename()[0] === '.') continue;
+        $rel = str_replace('\\', '/', substr($f->getPathname(), strlen($modDir) + 1));
+        $out[$rel] = hash_file('sha256', $f->getPathname());
+    }
+    ksort($out);
+    return $out;
+}
+
+function admin_plugin_hash(array $fileHashes): string {
+    ksort($fileHashes);
+    $lines = [];
+    foreach ($fileHashes as $rel => $h) $lines[] = "$rel:$h";
+    return hash('sha256', TRUST_SCHEME . "\n" . implode("\n", $lines));
+}
+
+function admin_release_manifest(): ?array {
+    $vj = admin_root() . '/version.json';
+    if (!is_file($vj)) return null;
+    $d = admin_read_json($vj);
+    return (is_array($d) && isset($d['files']) && is_array($d['files'])) ? $d['files'] : null;
+}
+
+function admin_load_trust(): array {
+    $d = admin_read_json(trust_file());
+    return (is_array($d) && isset($d['approvals']) && is_array($d['approvals'])) ? $d['approvals'] : [];
+}
+
+function admin_save_trust(array $approvals): bool {
+    return admin_write_json(trust_file(), ['version' => 1, 'approvals' => array_values($approvals)]);
+}
+
+function admin_plugin_declared_caps(string $modDir): array {
+    $meta = admin_read_json($modDir . '/plugin.json');
+    $req = is_array($meta) && isset($meta['sandboxCapabilities']) ? $meta['sandboxCapabilities'] : [];
+    return is_array($req) ? array_values(array_intersect($req, SANDBOX_CAP_ALLOWLIST)) : [];
+}
+
+/** Returns ['tier'=>..,'hash'=>..,'mode'=>?,'caps'=>?,'reason'=>..]. Twin of _classify_plugin. */
+function admin_classify_plugin(string $pluginPath, string $modDir, array $approvals, ?array $manifest): array {
+    $fh = admin_plugin_file_hashes($modDir);
+    $hash = admin_plugin_hash($fh);
+    $base = ['hash' => $hash];
+    // bundled: content match against version.json
+    if ($manifest !== null && $fh) {
+        $prefix = "js/modules/$pluginPath/";
+        $allMatch = true;
+        foreach ($fh as $rel => $h) { if (($manifest[$prefix . $rel] ?? null) !== $h) { $allMatch = false; break; } }
+        if ($allMatch) return $base + ['tier' => 'bundled', 'reason' => 'in release manifest'];
+    }
+    // Find this plugin's approval (if any), validated against the CURRENT bytes.
+    $ap = null;
+    foreach ($approvals as $a) { if (($a['path'] ?? null) === $pluginPath) { $ap = $a; break; } }
+    $eff = [];
+    $apValid = $ap !== null && ($ap['sha256'] ?? null) === $hash;
+    if ($apValid) {
+        $approved = $ap['caps'] ?? [];
+        $disk = admin_plugin_declared_caps($modDir);
+        if (array_diff($disk, $approved)) { $apValid = false; }  // requests caps beyond approved
+        else { $eff = array_values(array_intersect($disk ?: SANDBOX_DEFAULT_CAPS, $approved, SANDBOX_CAP_ALLOWLIST)); }
+    }
+    // A 'sandboxed' approval is a deliberate containment choice — it wins even on a
+    // dev-trust host (else the operator's sandbox decision is silently overridden).
+    if ($apValid && ($ap['mode'] ?? '') === 'sandboxed')
+        return $base + ['tier' => 'sandboxed', 'mode' => 'sandboxed', 'caps' => $eff, 'reason' => 'operator-approved'];
+
+    // dev: .git checkout, but ONLY for a loopback request (a LAN/public visitor to a
+    // PHP host with .git present must not get dev-trust — mirrors the Python loopback gate).
+    $remote = $_SERVER['REMOTE_ADDR'] ?? '';
+    if (is_dir(admin_root() . '/.git') && in_array($remote, ['127.0.0.1', '::1', ''], true))
+        return $base + ['tier' => 'dev', 'reason' => 'dev-trust (loopback git checkout)'];
+
+    if ($apValid && ($ap['mode'] ?? '') === 'trusted')
+        return $base + ['tier' => 'approved-trusted', 'mode' => 'trusted', 'caps' => $eff, 'reason' => 'operator-approved'];
+    if ($ap !== null && !$apValid)
+        return $base + ['tier' => 'untrusted', 'reason' => 'approval void — content or caps changed'];
+    return $base + ['tier' => 'untrusted', 'reason' => 'not approved'];
 }
 
 // ── Plugin/platform compatibility (twin of js/core/compat.js + dev_server.py) ──

@@ -251,6 +251,10 @@
 .adm-progress-msg { font-size: 13px; color: var(--adm-text-sec); margin-top: 12px; }
 .adm-error { color: var(--adm-danger, #f87171); font-weight: 600; }
 .adm-tag-warn { background: rgba(251, 191, 36, 0.15); color: var(--adm-warning); }
+.adm-tag-ok { background: rgba(52, 211, 153, 0.15); color: var(--adm-success); }
+.adm-tag-danger { background: rgba(248, 113, 113, 0.15); color: var(--adm-danger, #f87171); }
+/* Trust approval controls under an untrusted / approved plugin row. */
+.adm-trust-actions { display: flex; gap: 8px; margin-top: 8px; flex-wrap: wrap; }
 .adm-compat-reason { color: var(--adm-warning); }
 .adm-preflight { margin-top: 14px; padding: 14px; background: var(--adm-bg); border: 1px solid var(--adm-border); border-radius: 10px; }
 .adm-preflight .adm-release-notes-head { margin-top: 0; }

@@ -36,6 +36,11 @@
       "id": "screenshot"
     },
     {
+      "path": "tools/screenshot-sandboxed",
+      "placement": "tools",
+      "id": "screenshot-sandboxed"
+    },
+    {
       "path": "tools/slice-inspector",
       "placement": "tools",
       "id": "slice-inspector"

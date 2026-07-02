@@ -49,6 +49,7 @@ API_RUNTIME_STATE = frozenset(
         "stats.json",
         "disabled-plugins.json",
         "quarantined-plugins.json",
+        "plugin-trust.json",  # operator approvals — never ship (would pre-approve plugins)
     }
 )
 

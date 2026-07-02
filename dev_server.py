@@ -50,7 +50,7 @@ from datetime import datetime
 from http import HTTPStatus
 from pathlib import Path
 
-__version__ = "0.14.0"
+__version__ = "0.15.0"
 
 # ── Paths ──────────────────────────────────────────────────────────────────────
 ROOT       = Path(__file__).resolve().parent
@@ -62,6 +62,9 @@ CRED_FILE = ROOT / "api" / "admin_credential.json"
 # Usage analytics (visits / dataset views / downloads) and plugin enable state.
 STATS_FILE = ROOT / "api" / "stats.json"
 DISABLED_PLUGINS_FILE = ROOT / "api" / "disabled-plugins.json"
+# Operator plugin-approval store (third-party trust). Never served over HTTP, never
+# touched by the updater, never seedable by a release (see _classify_plugin / INV-5).
+TRUST_FILE = ROOT / "api" / "plugin-trust.json"
 # Self-update: where pre-update backups land, and the GitHub repo to pull releases from.
 BACKUPS_DIR = ROOT / "backups"
 LOGS_DIR = ROOT / "logs"
@@ -120,6 +123,24 @@ _SERVE_PORT = 8080
 _SERVE_ARGS: list = []
 # PERF-035: memoized catalog listing, keyed on the metadata.json mtime signature.
 _CATALOG_CACHE: dict = {"sig": None, "data": None}
+# INV-3: dev-trust is a POSITIVE operator signal (--dev-trust-local), NEVER inferred
+# from a missing version.json. On a real deployment this stays False, so the trust
+# gate is fail-closed. Bumped on every approve/revoke so viewers can drop revoked
+# sandboxes at runtime (trustEpoch).
+_DEV_TRUST = False
+_TRUST_EPOCH = 0
+# CSP target (INV-1): the strict policy that makes the null-origin sandbox the only
+# execution path for non-approved code. Emitted Report-Only in v1.6 (breaks nothing;
+# surfaces inline scripts to nonce) before flipping to enforcing. blob: in script-src
+# is required for the trusted-plugin Blob-URL exec path (_execTrustedInPage).
+_CSP_REPORT_ONLY = (
+    "default-src 'self'; "
+    "script-src 'self' blob: https://unpkg.com https://cdn.jsdelivr.net https://cdnjs.cloudflare.com; "
+    "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
+    "font-src 'self' https://fonts.gstatic.com; "
+    "img-src 'self' data: blob:; connect-src 'self'; worker-src 'self' blob:; "
+    "frame-src 'self'; object-src 'none'; base-uri 'self'"
+)
 # PERF: a synchronous console write per request sits on the response hot path
 # (dozens per page load; the Windows console is slow and serializes across the
 # ThreadingHTTPServer workers). Off by default; enable with --verbose. Errors
@@ -508,6 +529,8 @@ def _admin_plugins() -> list:
     disabled = _load_disabled_plugins()
     plugins = _list_plugins()  # raw scan, no manifest write
     ver = _max_version(CHANGELOG_DIR)
+    approvals = _load_trust_store()
+    manifest = _release_manifest_files()
     enabled_shaders = [p for p in plugins
                        if p.get("placement") == "shaders" and p["path"] not in disabled]
     enabled_shader_paths = {p["path"] for p in enabled_shaders}
@@ -516,6 +539,7 @@ def _admin_plugins() -> list:
         path = p["path"]
         is_enabled = path not in disabled
         compat_ok, compat_reason = _compat_satisfies(ver, p.get("platformCompat"))
+        trust = _classify_plugin(path, MODULES_DIR / path, approvals, manifest)
         out.append({
             "id": p.get("id"),
             "path": path,
@@ -531,9 +555,71 @@ def _admin_plugins() -> list:
             "platformCompat": p.get("platformCompat"),
             "compat": compat_ok,
             "compatReason": compat_reason,
+            # Trust surface for the admin approval UI (all plugins, incl. untrusted).
+            "trust": {"tier": trust["tier"], "hash": trust["hash"],
+                      "mode": trust.get("mode"), "caps": trust.get("caps"),
+                      "reason": trust.get("reason"),
+                      "declaredCaps": sorted(_plugin_declared_caps(MODULES_DIR / path))},
         })
     out.sort(key=lambda x: (x["placement"] or "", x.get("group") or "", x.get("name") or ""))
     return out
+
+
+def _approve_plugin(path: str, sha256: str, mode: str, caps, current_pw: str):
+    """Record an operator approval PINNED to the exact on-disk content hash.
+    Returns (ok, status, payload). Hardened per INV-4: re-auth with the current
+    password, and the server recomputes the hash itself (never trusts the client's
+    sha256 as truth) and requires client==server agreement on the bytes."""
+    if not _verify_password(current_pw or "", (_load_credential() or {}).get("password_pbkdf2") or ""):
+        return False, 401, {"error": "bad_password"}
+    if mode not in ("trusted", "sandboxed"):
+        return False, 400, {"error": "bad_mode"}
+    safe = _safe_plugin_path(path)
+    if not safe:
+        return False, 400, {"error": "bad_path"}
+    mod_dir = MODULES_DIR / path
+    if not (mod_dir / "plugin.json").exists():
+        return False, 404, {"error": "unknown_plugin"}
+    server_hash = _plugin_hash(_plugin_file_hashes(mod_dir))
+    if sha256 != server_hash:
+        # The operator reviewed bytes X; the disk is now Y. Refuse (INV-4).
+        return False, 409, {"error": "hash_mismatch", "serverHash": server_hash}
+    declared = _plugin_declared_caps(mod_dir)
+    req_caps = {c for c in (caps or []) if c in _SANDBOX_CAP_ALLOWLIST}
+    # The approval must cover at least what the plugin declares it needs.
+    if not declared.issubset(req_caps):
+        req_caps |= declared
+    approvals = [a for a in _load_trust_store() if a.get("path") != path]
+    approvals.append({
+        "path": path, "sha256": server_hash, "mode": mode,
+        "caps": sorted(req_caps), "at": datetime.now().isoformat(),
+        "by": (_load_credential() or {}).get("username", DEFAULT_USERNAME),
+    })
+    _save_trust_store(approvals)
+    return True, 200, {"ok": True, "hash": server_hash, "mode": mode, "caps": sorted(req_caps)}
+
+
+def _revoke_plugin(path: str):
+    approvals = _load_trust_store()
+    remaining = [a for a in approvals if a.get("path") != path]
+    if len(remaining) == len(approvals):
+        return False, 404, {"error": "not_approved"}
+    _save_trust_store(remaining)
+    return True, 200, {"ok": True}
+
+
+def _safe_plugin_path(path: str):
+    """'<placement>/<id>' with both segments validated (no traversal, known
+    placement). Returns the pair or None."""
+    if not isinstance(path, str):
+        return None
+    parts = path.split("/")
+    if len(parts) != 2:
+        return None
+    placement, folder = parts
+    if placement not in PLUGIN_PLACEMENTS or not _SAFE_FOLDER_RE.match(folder):
+        return None
+    return placement, folder
 
 
 def _set_plugin_enabled(plugin_path: str, enabled: bool):
@@ -706,6 +792,161 @@ def _compat_satisfies(platform_version, decl):
     return False, f"unreadable constraint (type {type(decl).__name__})"
 
 
+# ── Plugin trust (third-party isolation) ────────────────────────────────────────
+# The SERVER is the trust authority: it classifies every plugin (bundled / dev /
+# approved / untrusted), excludes untrusted from discovery, and vouches a content
+# hash the client re-verifies over the exact bytes it executes (INV-1/2/3). Twin of
+# js/core/plugin-trust.js — hashing validated by tests/plugin-trust-vector.json.
+
+_TRUST_SCHEME = "lumen-plugin-trust/1"
+# Files inside a plugin folder that define its identity (code + manifest + shipped
+# locales). Any change to any of them changes the hash → a prior approval is void.
+_TRUST_HASH_EXT = (".js", ".json", ".mjs", ".css", ".html")
+
+
+def _sha256_bytes(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
+
+
+def _plugin_file_hashes(mod_dir: Path) -> dict:
+    """{posix-relpath-within-folder: sha256hex} for every identity-bearing file,
+    hashed over RAW BYTES AS SERVED (no CRLF/BOM normalization — must match the
+    browser's fetch(...).arrayBuffer(), which the server serves verbatim)."""
+    out = {}
+    if not mod_dir.is_dir():
+        return out
+    for p in sorted(mod_dir.rglob("*")):
+        if p.is_file() and p.suffix.lower() in _TRUST_HASH_EXT and not p.name.startswith("."):
+            rel = p.relative_to(mod_dir).as_posix()
+            try:
+                out[rel] = _sha256_bytes(p.read_bytes())
+            except OSError:
+                out[rel] = "unreadable"
+    return out
+
+
+def _plugin_hash(file_hashes: dict) -> str:
+    """Composite identity hash: sha256 over the scheme + sorted 'relpath:filehash'
+    lines. Order-stable and unambiguous (concatenating file bytes would not be)."""
+    lines = [f"{rel}:{file_hashes[rel]}" for rel in sorted(file_hashes)]
+    doc = _TRUST_SCHEME + "\n" + "\n".join(lines)
+    return _sha256_bytes(doc.encode("utf-8"))
+
+
+def _release_manifest_files() -> dict | None:
+    """version.json `files` map (repo-relative posix → sha256) for a release install,
+    or None on a dev checkout (no version.json). Source of truth for `bundled`."""
+    vj = ROOT / "version.json"
+    if not vj.exists():
+        return None
+    try:
+        m = json.loads(vj.read_text(encoding="utf-8"))
+        f = m.get("files")
+        return f if isinstance(f, dict) else None
+    except (OSError, ValueError):
+        return None
+
+
+def _load_trust_store() -> list:
+    """Operator approvals: [{path, sha256, mode, caps, at, by}]. Absent ⇒ []."""
+    if TRUST_FILE.exists():
+        try:
+            d = json.loads(TRUST_FILE.read_text(encoding="utf-8"))
+            ap = d.get("approvals") if isinstance(d, dict) else None
+            return ap if isinstance(ap, list) else []
+        except (OSError, ValueError):
+            return []
+    return []
+
+
+def _save_trust_store(approvals: list) -> None:
+    global _TRUST_EPOCH
+    _atomic_write(TRUST_FILE, json.dumps({"version": 1, "approvals": approvals},
+                                         indent=2, ensure_ascii=False))
+    _harden_perms(TRUST_FILE)
+    _TRUST_EPOCH += 1  # signal viewers to re-evaluate / tear down revoked sandboxes
+
+
+# Capabilities a sandboxed plugin may hold. The operator's approval pins a subset;
+# effective = intersection(disk request, approved, this allowlist).
+_SANDBOX_CAP_ALLOWLIST = frozenset({
+    "toolbar.addButton", "ui.toast", "ui.download",
+    "viewer.getCanvasBlob", "viewer.getInfo", "viewer.setRenderMode",
+    "channels.getState", "events.subscribe",
+})
+_SANDBOX_DEFAULT_CAPS = ("toolbar.addButton", "ui.toast", "viewer.getInfo")
+
+
+def _classify_plugin(plugin_path: str, mod_dir: Path, approvals: list,
+                     manifest: dict | None) -> dict:
+    """Authoritative trust classification. Returns
+    {tier, hash, files, mode?, caps?, reason}. First matching tier wins.
+
+      bundled  — every folder file is in version.json.files with a matching digest
+                 (content match, never path match → closes dependency-confusion).
+      dev      — only when the operator ran --dev-trust-local (POSITIVE signal;
+                 NEVER inferred from a missing version.json — INV-3).
+      approved — an operator approval matches the CURRENT on-disk hash AND the
+                 on-disk caps are a subset of what was approved.
+      untrusted— default (not loaded in-page; excluded from discovery).
+    """
+    file_hashes = _plugin_file_hashes(mod_dir)
+    phash = _plugin_hash(file_hashes)
+    base = {"hash": phash, "files": file_hashes}
+
+    # bundled: content-addressed against the signed release manifest.
+    if manifest is not None:
+        prefix = f"js/modules/{plugin_path}/"
+        all_match = bool(file_hashes) and all(
+            manifest.get(prefix + rel) == h for rel, h in file_hashes.items()
+        )
+        if all_match:
+            return {**base, "tier": "bundled", "reason": "in release manifest"}
+
+    # Find this plugin's approval (if any), validated against the CURRENT bytes.
+    ap = next((a for a in approvals if a.get("path") == plugin_path), None)
+    ap_valid = ap is not None and ap.get("sha256") == phash
+    if ap_valid:
+        approved_caps = set(ap.get("caps") or [])
+        disk_caps = _plugin_declared_caps(mod_dir)
+        if not disk_caps.issubset(approved_caps):
+            ap_valid = False  # plugin now requests caps beyond what the operator approved
+        else:
+            eff = sorted((disk_caps or set(_SANDBOX_DEFAULT_CAPS)) & approved_caps & _SANDBOX_CAP_ALLOWLIST)
+
+    # A 'sandboxed' approval is a deliberate CONTAINMENT choice — it must win even on
+    # a dev-trust host, or the operator's decision to sandbox would be silently
+    # overridden into full in-page execution.
+    if ap_valid and ap.get("mode") == "sandboxed":
+        return {**base, "tier": "sandboxed", "mode": "sandboxed",
+                "caps": eff, "reason": "operator-approved (sandboxed)"}
+
+    # dev: positive operator signal (explicit flag or loopback .git checkout).
+    if _DEV_TRUST:
+        return {**base, "tier": "dev", "reason": "dev-trust (local)"}
+
+    if ap_valid and ap.get("mode") == "trusted":
+        return {**base, "tier": "approved-trusted", "mode": "trusted",
+                "caps": eff, "reason": "operator-approved (in-page)"}
+    if ap is not None and not ap_valid:
+        return {**base, "tier": "untrusted", "reason": "approval void — content or caps changed"}
+
+    return {**base, "tier": "untrusted", "reason": "not approved"}
+
+
+def _plugin_declared_caps(mod_dir: Path) -> set:
+    """The sandboxCapabilities a plugin.json requests, intersected with the host
+    allowlist (an unknown cap can never be granted)."""
+    try:
+        meta = json.loads((mod_dir / "plugin.json").read_text(encoding="utf-8"))
+        req = meta.get("sandboxCapabilities")
+        if isinstance(req, list):
+            return {c for c in req if c in _SANDBOX_CAP_ALLOWLIST}
+    except (OSError, ValueError):
+        pass
+    return set()
+
+
 def _preprocess_version():
     try:
         txt = (ROOT / "preprocess" / "run_preprocess.py").read_text(encoding="utf-8")
@@ -784,7 +1025,7 @@ _UPDATE_PROTECT = (
     # User / runtime state
     "DATA_WEB", "logs", "backups",
     "api/admin_credential.json", "api/config.json", "api/stats.json",
-    "api/disabled-plugins.json", "api/quarantined-plugins.json",
+    "api/disabled-plugins.json", "api/quarantined-plugins.json", "api/plugin-trust.json",
     # Local environments / VCS / caches
     ".git", ".conda", ".venv-312", ".runtime", "__pycache__", "node_modules",
     # Dev-checkout content (absent from release artifacts by construction)
@@ -979,6 +1220,10 @@ def _validate_staging(staging: Path, target: str) -> None:
     missing = [r for r in required if not (staging / r).exists()]
     if missing:
         raise OSError("arbre incomplet: " + ", ".join(missing))
+    # INV-5: a release must NEVER carry the operator trust store — that would let a
+    # malicious release pre-approve an attacker plugin. Reject such an artifact.
+    if (staging / "api" / "plugin-trust.json").exists():
+        raise OSError("artefact rejeté: contient api/plugin-trust.json (pré-approbation interdite)")
     staged_version = _max_version(staging / "changelog")
     if staged_version != target:
         raise OSError(f"version stagée {staged_version!r} ≠ cible {target!r} (release mal taguée)")
@@ -2079,7 +2324,8 @@ class AdminHandler(http.server.SimpleHTTPRequestHandler):
             # minimal by design (the version is already public on GitHub). The
             # lastUpdate summary (phase+target only, no details) lets the admin UI
             # report the outcome across the restart, before re-authentication.
-            payload = {"ok": True, "web": _max_version(CHANGELOG_DIR), "server": __version__}
+            payload = {"ok": True, "web": _max_version(CHANGELOG_DIR), "server": __version__,
+                       "devTrust": _DEV_TRUST, "trustEpoch": _TRUST_EPOCH}
             last = _read_last_update()
             if last and last.get("phase") in ("done", "rolled_back"):
                 payload["lastUpdate"] = {"phase": last["phase"], "target": last.get("target")}
@@ -2136,14 +2382,29 @@ class AdminHandler(http.server.SimpleHTTPRequestHandler):
         mirrors the filtered list so static hosts inherit the same exclusions."""
         disabled = _load_disabled_plugins()
         ver = _max_version(CHANGELOG_DIR)
-        # Fail-closed on hosts with an API: an incompatible plugin is filtered out
-        # of discovery, so its index.js is never even a load candidate. The client
-        # (plugin-registry.js + compat.js) applies the same gate for static hosts.
-        plugins = [p for p in _list_plugins()
-                   if p.get("path") not in disabled
-                   and _compat_satisfies(ver, p.get("platformCompat"))[0]]
+        approvals = _load_trust_store()
+        manifest = _release_manifest_files()
+        # Fail-closed on hosts with an API: incompatible OR untrusted plugins are
+        # filtered out of discovery, so an untrusted index.js is never even a load
+        # candidate (defense in depth — the real containment is the CSP, INV-1).
+        # Surviving plugins carry a `trust` vouch (tier/hash/mode/caps) the client
+        # re-verifies over the exact bytes it executes (INV-2).
+        plugins = []
+        for p in _list_plugins():
+            if p.get("path") in disabled:
+                continue
+            if not _compat_satisfies(ver, p.get("platformCompat"))[0]:
+                continue
+            trust = _classify_plugin(p["path"], MODULES_DIR / p["path"], approvals, manifest)
+            if trust["tier"] == "untrusted":
+                continue
+            p["trust"] = {"tier": trust["tier"], "hash": trust["hash"],
+                          "mode": trust.get("mode"), "caps": trust.get("caps"),
+                          "files": sorted(trust["files"].keys())}
+            plugins.append(p)
         _write_plugins_manifest(plugins)
-        body = json.dumps({"plugins": plugins}, indent=2, ensure_ascii=False).encode("utf-8")
+        body = json.dumps({"plugins": plugins, "devTrust": _DEV_TRUST,
+                           "trustEpoch": _TRUST_EPOCH}, indent=2, ensure_ascii=False).encode("utf-8")
         self.send_response(200)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
@@ -2212,6 +2473,12 @@ class AdminHandler(http.server.SimpleHTTPRequestHandler):
             self.send_header('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0')
             self.send_header('Pragma', 'no-cache')
             self.send_header('Expires', '0')
+        # CSP in REPORT-ONLY (v1.6): the target strict policy (script-src 'self' +
+        # pinned CDNs, no 'unsafe-inline'/'unsafe-eval') that INV-1 needs — reported,
+        # not enforced, so it breaks nothing while surfacing the inline scripts that
+        # must be nonced before flipping to enforcing. HTML documents only.
+        if path_no_query.endswith('.html') or path_no_query in ('', '/'):
+            self.send_header('Content-Security-Policy-Report-Only', _CSP_REPORT_ONLY)
         super().end_headers()
 
     def do_POST(self):
@@ -2399,7 +2666,8 @@ class AdminHandler(http.server.SimpleHTTPRequestHandler):
             if not session:
                 self._json(401, {"error": "Not authenticated"})
                 return
-            if action in ("set_plugin", "update_apply", "update_ack"):
+            if action in ("set_plugin", "update_apply", "update_ack",
+                          "approve_plugin", "revoke_plugin"):
                 ok, status, payload = _authorize_write(
                     self.command, session, self.headers.get("X-CSRF-Token")
                 )
@@ -2415,6 +2683,18 @@ class AdminHandler(http.server.SimpleHTTPRequestHandler):
                 ok2, st2, pl2 = _set_plugin_enabled(
                     (body or {}).get("id", ""), bool((body or {}).get("enabled", True))
                 )
+                self._json(st2, pl2)
+            elif action == "plugin_trust":
+                self._json(200, {"approvals": _load_trust_store(),
+                                 "devTrust": _DEV_TRUST, "trustEpoch": _TRUST_EPOCH})
+            elif action == "approve_plugin":
+                b = body or {}
+                ok2, st2, pl2 = _approve_plugin(b.get("path", ""), b.get("sha256", ""),
+                                                b.get("mode", ""), b.get("caps"),
+                                                b.get("password", ""))
+                self._json(st2, pl2)
+            elif action == "revoke_plugin":
+                ok2, st2, pl2 = _revoke_plugin((body or {}).get("path", ""))
                 self._json(st2, pl2)
             elif action == "version":
                 self._json(200, _version_info())
@@ -2496,10 +2776,20 @@ def main():
     parser.add_argument("--root", default=None,
                         help="Tree to validate with --check (default: this script's folder)")
     parser.add_argument("--pivot", default=None, help=argparse.SUPPRESS)  # internal: update supervisor
+    parser.add_argument("--dev-trust-local", action="store_true",
+                        help="Trust every plugin in js/modules as first-party (DEV ONLY — never on a real deployment)")
     args = parser.parse_args()
 
-    global _LOG_REQUESTS
+    global _LOG_REQUESTS, _DEV_TRUST
     _LOG_REQUESTS = bool(args.verbose)
+    # Dev-trust is a POSITIVE signal (INV-3), never "version.json is missing". Two
+    # positive sources: the explicit --dev-trust-local flag, OR a `.git/` checkout
+    # BOUND TO LOOPBACK ONLY. The loopback gate is essential: a `.git` checkout
+    # served on 0.0.0.0 (LAN/public) must NOT auto-trust local plugins — otherwise a
+    # dropped-in third-party plugin would run in-page for every LAN visitor. A real
+    # deployment (release artifact, no .git) stays fail-closed regardless of host.
+    _git_dev = (ROOT / ".git").exists() and (args.host or "localhost") in ("localhost", "127.0.0.1", "::1")
+    _DEV_TRUST = bool(args.dev_trust_local) or _git_dev
 
     if args.check:
         sys.exit(_check_main(args.root))
@@ -2536,6 +2826,9 @@ def main():
         cred_line = f"  Login   : {rec.get('username', DEFAULT_USERNAME)}  (password in api/admin_credential.json)\n"
     else:
         cred_line = "  Login   : (first run — open the admin panel to create a password)\n"
+    trust_line = ("  Trust   : DEV — all local plugins trusted (.git checkout / --dev-trust-local)\n"
+                  if _DEV_TRUST else
+                  "  Trust   : PROD — only bundled + operator-approved plugins load\n")
     print(
         "\n"
         "=" * 60 + "\n"
@@ -2545,6 +2838,7 @@ def main():
         f"  Admin   : http://{args.host}:{args.port}/admpan.html\n"
         f"  Viewer  : http://{args.host}:{args.port}/explorer.html\n"
         f"{cred_line}"
+        f"{trust_line}"
         "  Ctrl+C to stop\n"
         "=" * 60 + "\n"
     )

@@ -138,12 +138,24 @@ const PluginRegistry = (() => {
    * @param {string} basePath  e.g. 'js/modules'
    * @param {string[]} modulePaths  e.g. ['tools/toggle-grid', 'shaders/fluorescence']
    */
+  // version.json `files` map (release installs) — the content-addressed source of
+  // truth for 'bundled'. Fetched once per loadModules batch; null on dev/static.
+  async function _releaseManifest() {
+    try {
+      const resp = await fetch('version.json', { cache: 'no-store' });
+      if (!resp.ok) return null;
+      const m = await resp.json();
+      return (m && m.files && typeof m.files === 'object') ? m.files : null;
+    } catch (_) { return null; }
+  }
+
   async function loadModules(basePath, modulePaths) {
     // Resolved once for the whole batch: version.json (release installs) →
     // /api/health (dev server) → null (gate inert — see js/core/compat.js).
     const platformVer = (typeof Compat !== 'undefined' && Compat.platformVersion)
       ? await Compat.platformVersion()
       : null;
+    const releaseManifest = (typeof PluginTrust !== 'undefined') ? await _releaseManifest() : null;
 
     const loadPromises = modulePaths.map(async (modPath) => {
       try {
@@ -199,42 +211,59 @@ const PluginRegistry = (() => {
         meta._path = `${basePath}/${modPath}`;
         meta._modPath = modPath;
 
-        // Register metadata
-        _modules.set(meta.id, {
-          meta,
-          impl: null,
-          instance: null,
-          state: 'registered'
-        });
-
-        // Load this plugin's own translation dictionaries into the i18n tree
-        // (plugins.<id>.*) BEFORE any UI is built, so toolbar labels and runtime
-        // strings resolve on first paint. Either way the dictionaries are in place
-        // before this promise resolves, preserving the v0.12.45 "loadModules
-        // before UI build" invariant. `i18nLanguages` lists the shipped locales;
-        // English is always present as the per-plugin fallback.
-        //   • Live endpoint: dictionaries arrive inline in meta.i18n → graft them
-        //     synchronously, zero round-trips.
-        //   • Otherwise: fetch them (the parallelized loadPluginLang fallback).
-        let langWork = Promise.resolve();
-        if (typeof I18n !== 'undefined') {
-          if (meta.i18n && meta.i18n.en && I18n.registerPluginLang) {
-            I18n.registerPluginLang(meta.id, meta._path, meta.i18n, meta.i18nLanguages);
-          } else if (I18n.loadPluginLang) {
-            langWork = I18n.loadPluginLang(meta.id, meta._path, meta.i18nLanguages);
+        // ── Trust gate (Phase 2) — untrusted code must NOT run in-page ──────────
+        // The server vouches a tier + hash in meta.trust; PluginTrust re-hashes the
+        // EXACT bytes it will execute (anti-TOCTOU, INV-2) and returns the tier.
+        //   untrusted → never injected (quarantined for operator approval);
+        //   sandboxed → runs in a null-origin iframe via PluginSandbox (no ctx/DOM);
+        //   bundled/dev/approved-trusted → executed IN-PAGE from the hashed bytes.
+        if (typeof PluginTrust !== 'undefined') {
+          const verdict = await PluginTrust.evaluate(meta, basePath, modPath, releaseManifest);
+          if (verdict.tier === 'untrusted') {
+            _quarantine(modPath, 'untrusted', verdict.reason);
+            return;
           }
+          meta._trust = { tier: verdict.tier, hash: verdict.hash };
+
+          if (verdict.tier === 'sandboxed') {
+            if (expectedPlacement !== 'tools' ||
+                (meta.subtype !== 'action' && meta.subtype !== 'toggle')) {
+              _quarantine(modPath, 'sandbox-unsupported-placement',
+                `sandboxed plugins support only tools action/toggle (got ${expectedPlacement}/${meta.subtype})`);
+              return;
+            }
+            if (typeof PluginSandbox === 'undefined') {
+              _quarantine(modPath, 'sandbox-unavailable', 'PluginSandbox not loaded on this page');
+              return;
+            }
+            const code = new TextDecoder('utf-8').decode(verdict.bytes);
+            try {
+              const shim = await PluginSandbox.spawn(meta, verdict.hash, verdict.caps || [], code);
+              _modules.set(meta.id, { meta, impl: shim, instance: shim, state: 'initialized' });
+            } catch (e) {
+              // Defense in depth: ensure no live/zombie frame survives a boot failure
+              // (spawn() also self-cleans on timeout — this covers every reject path).
+              try { PluginSandbox.kill(meta.id, 'boot-failed'); } catch (_) {}
+              _quarantine(modPath, 'sandbox-boot-failed', String(e && e.message || e));
+            }
+            return;
+          }
+          // Trusted in-page: register + execute the exact hashed bytes (no re-fetch).
+          _modules.set(meta.id, { meta, impl: null, instance: null, state: 'registered' });
+          const [, execOk] = await Promise.all([_grafti18n(meta), _execTrustedInPage(meta, verdict.bytes)]);
+          if (!execOk) {
+            _modules.delete(meta.id);
+            _quarantine(modPath, 'script-failed', 'index.js failed to load or parse');
+          }
+          return;
         }
 
-        // Inject <script> for index.js — concurrent with any lang fetch fallback
-        // (no plugin reads its dictionary at module-eval time; all read i18n only
-        // inside init/activate/getChannelUI).
-        const [, scriptOk] = await Promise.all([
-          langWork, _loadScript(`${basePath}/${modPath}/index.js`),
-        ]);
-        if (!scriptOk) {
-          _modules.delete(meta.id);
-          _quarantine(modPath, 'script-failed', 'index.js failed to load or parse');
-        }
+        // FAIL CLOSED: PluginTrust is a mandatory security dependency. If it failed
+        // to load, we must NOT inject unverified code — quarantine instead of
+        // falling back to a trust-less URL injection (that would be fail-open).
+        _quarantine(modPath, 'trust-unavailable',
+          'plugin-trust.js not loaded — refusing to inject an unverified plugin');
+        return;
 
       } catch (err) {
         _quarantine(modPath, 'load-error', String(err && err.message || err));
@@ -244,22 +273,51 @@ const PluginRegistry = (() => {
   }
 
   /**
-   * Dynamically inject a <script> tag and wait for it to load.
-   * @param {string} src
-   * @returns {Promise<void>}
+   * Graft a plugin's own translation dictionaries into the i18n tree before UI is
+   * built (preserves the v0.12.45 invariant). Returns a promise for the fetch
+   * fallback, or a resolved promise when dictionaries arrived inline (live endpoint).
    */
-  function _loadScript(src) {
+  function _grafti18n(meta) {
+    if (typeof I18n === 'undefined') return Promise.resolve();
+    if (meta.i18n && meta.i18n.en && I18n.registerPluginLang) {
+      I18n.registerPluginLang(meta.id, meta._path, meta.i18n, meta.i18nLanguages);
+      return Promise.resolve();
+    }
+    if (I18n.loadPluginLang) return I18n.loadPluginLang(meta.id, meta._path, meta.i18nLanguages);
+    return Promise.resolve();
+  }
+
+  /**
+   * Execute a TRUSTED plugin's index.js from the EXACT bytes that were hashed
+   * (INV-2, anti-TOCTOU): a Blob URL of those bytes — never a re-fetch by the
+   * plugin's URL, which would let the file change between hash and execution.
+   * The Blob URL is same-origin-ish 'self' script for CSP purposes.
+   */
+  function _execTrustedInPage(meta, bytes) {
     return new Promise((resolve) => {
+      const url = URL.createObjectURL(new Blob([bytes], { type: 'text/javascript' }));
       const script = document.createElement('script');
-      script.src = src;
-      script.onload = () => resolve(true);
+      script.src = url;
+      if (_pageNonce) script.setAttribute('nonce', _pageNonce);
+      script.onload = () => { URL.revokeObjectURL(url); resolve(true); };
       script.onerror = () => {
-        console.error(`[PluginRegistry] Failed to load script: ${src}`);
-        resolve(false); // Don't break the chain — the caller quarantines this one
+        URL.revokeObjectURL(url);
+        console.error(`[PluginRegistry] Failed to execute plugin: ${meta._modPath}`);
+        resolve(false);
       };
       document.body.appendChild(script);
     });
   }
+
+  // Per-page nonce for the strict-CSP path: legitimate scripts (incl. trusted plugin
+  // blob-URLs) carry it; plugin code can never read it. Read from a meta tag the
+  // page/server stamps; null when CSP isn't enforced (nonce simply omitted).
+  const _pageNonce = (() => {
+    try {
+      const m = document.querySelector('meta[name="csp-nonce"]');
+      return m ? m.getAttribute('content') : null;
+    } catch (_) { return null; }
+  })();
 
   // ─── Implementation Binding ───────────────────────────────
 

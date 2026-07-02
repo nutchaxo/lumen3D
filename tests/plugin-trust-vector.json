@@ -1,0 +1,28 @@
+{
+  "_comment": "Shared hash-parity vector for js/core/plugin-trust.js (Node) + dev_server.py (_plugin_hash). scheme + sorted 'relpath:filehash' lines. Bytes are base64 to preserve CRLF/BOM byte-for-byte.",
+  "scheme": "lumen-plugin-trust/1",
+  "files": [
+    {
+      "rel": "index.js",
+      "b64": "THVtZW5QbHVnaW4ucmVnaXN0ZXIoeyBpbml0KCl7fSB9KTsNCg==",
+      "fileHash": "0fe976acc6a3417e4da04f47c9ed8bc2b5c24597153d4481f4df76794c38665c"
+    },
+    {
+      "rel": "plugin.json",
+      "b64": "ewogICJpZCI6ICJ4IiwKICAicGxhY2VtZW50IjogInRvb2xzIgp9Cg==",
+      "fileHash": "12f904821a97d2800b36fd649b9552e33a9b02027735f48dbe5aca5f784fe3b9"
+    },
+    {
+      "rel": "lang/en.json",
+      "b64": "77u/eyJ0aXRsZSI6IlgifQ==",
+      "fileHash": "c14e2e50cbcbaa95f9870d41083a1d0c0199a3e939a65f732faa70dfe174bd31"
+    }
+  ],
+  "pluginHash": "7787684cf0be7b719ded8dc00c6f240e9418286d75749b3fda18e986ddb3458a",
+  "singleFile": {
+    "rel": "index.js",
+    "b64": "YQ==",
+    "fileHash": "ca978112ca1bbdcafac231b39a23dc4da786eff8147c4e72b9807785afee48bb",
+    "pluginHash": "5fda5c1f2d84c78bfb1c3d8bb0aa2cb61d785a04c94aea0049dbf0b5d2e3e7d8"
+  }
+}

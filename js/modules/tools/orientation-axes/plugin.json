@@ -2,6 +2,7 @@
   "id": "orientation-axes",
   "name": "Orientation Axes",
   "version": "1.0.0",
+  "platformCompat": "1.x",
   "creator": "IRIBHM",
   "placement": "tools",
   "group": "visuals",

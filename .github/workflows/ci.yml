@@ -1,0 +1,22 @@
+name: CI
+
+on:
+  push:
+    branches: [main, dev]
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Changelog structure check
+        run: python tools/check_version.py --no-tag
+
+      - name: Server self-check
+        run: python dev_server.py --check

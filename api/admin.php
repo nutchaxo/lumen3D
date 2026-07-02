@@ -51,11 +51,13 @@ switch ($action) {
     case 'plugins': {
         $disabled = admin_load_disabled();
         $plugins = admin_list_plugins();
+        $ver = admin_max_version(changelog_dir());
         $enabledShaders = array_filter($plugins, fn($p) => ($p['placement'] ?? '') === 'shaders' && !in_array($p['path'], $disabled, true));
         $enabledShaderPaths = array_map(fn($p) => $p['path'], $enabledShaders);
         $out = [];
         foreach ($plugins as $p) {
             $isEnabled = !in_array($p['path'], $disabled, true);
+            [$compatOk, $compatReason] = admin_compat_satisfies($ver, $p['platformCompat'] ?? null);
             $out[] = [
                 'id' => $p['id'] ?? null, 'path' => $p['path'], 'placement' => $p['placement'] ?? null,
                 'name' => $p['name'] ?? ($p['id'] ?? $p['path']), 'icon' => $p['icon'] ?? null,
@@ -63,6 +65,8 @@ switch ($action) {
                 'version' => $p['version'] ?? null, 'creator' => $p['creator'] ?? null,
                 'enabled' => $isEnabled,
                 'protected' => count($enabledShaderPaths) <= 1 && in_array($p['path'], $enabledShaderPaths, true),
+                'platformCompat' => $p['platformCompat'] ?? null,
+                'compat' => $compatOk, 'compatReason' => $compatReason,
             ];
         }
         usort($out, fn($a, $b) => [$a['placement'], $a['group'] ?? '', $a['name'] ?? ''] <=> [$b['placement'], $b['group'] ?? '', $b['name'] ?? '']);
@@ -113,6 +117,32 @@ switch ($action) {
             'notes' => $rel['body'] ?? null, 'publishedAt' => $rel['published_at'] ?? null,
             'zipUrl' => $rel['zipball_url'] ?? null, 'htmlUrl' => $rel['html_url'] ?? null,
         ]);
+    }
+
+    case 'update_preflight': {
+        // Compat report against the target version (mirrors dev_server.py). PHP
+        // can't self-apply, but the admin UI still shows which plugins a manual
+        // upgrade would render incompatible.
+        $target = $_GET['target'] ?? null;
+        $current = admin_max_version(changelog_dir());
+        $disabled = admin_load_disabled();
+        $ok = []; $willQuarantine = []; $blocking = []; $shadersSurviving = 0;
+        foreach (admin_list_plugins() as $p) {
+            [$okT] = admin_compat_satisfies($target, $p['platformCompat'] ?? null);
+            $entry = ['path' => $p['path'], 'name' => $p['name'] ?? ($p['id'] ?? null), 'platformCompat' => $p['platformCompat'] ?? null];
+            if ($okT) {
+                $ok[] = $entry;
+                if (($p['placement'] ?? '') === 'shaders' && !in_array($p['path'], $disabled, true)) $shadersSurviving++;
+            } else {
+                [$okNow] = admin_compat_satisfies($current, $p['platformCompat'] ?? null);
+                $entry['okNow'] = $okNow;
+                $willQuarantine[] = $entry;
+            }
+        }
+        if ($target && $shadersSurviving === 0) {
+            $blocking[] = ['reason' => 'no_render_mode', 'detail' => 'Aucun mode de rendu (shader) ne resterait compatible.'];
+        }
+        admin_json_out(['target' => $target, 'current' => $current, 'ok' => $ok, 'willQuarantine' => $willQuarantine, 'blocking' => $blocking]);
     }
 
     case 'update_status':

@@ -1,0 +1,36 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Guard — tag matches newest changelog
+        run: python tools/check_version.py --tag "${GITHUB_REF_NAME}"
+
+      - name: Server self-check
+        run: python dev_server.py --check
+
+      - name: Build release artifact
+        run: python tools/build_release.py --version "${GITHUB_REF_NAME#v}" --out dist --commit "${GITHUB_SHA}"
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: >
+          gh release create "$GITHUB_REF_NAME"
+          dist/lumen3d-web-*.zip dist/SHA256SUMS
+          --title "Lumen3D Web ${GITHUB_REF_NAME}"
+          --notes-file "changelog/changelog_${GITHUB_REF_NAME#v}.md"

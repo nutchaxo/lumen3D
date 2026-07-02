@@ -1,0 +1,31 @@
+# ── Source-archive slimming ────────────────────────────────────────────────────
+# Files marked export-ignore are excluded from GitHub's "Source code" archives
+# (the zipball_url the self-updater and install.php use as a FALLBACK when a
+# release has no curated asset). The primary artifact is the allowlist-built
+# lumen3d-web-<version>.zip (tools/build_release.py); this denylist keeps the
+# fallback path equally free of dev/CI-only content.
+#
+# Rule of thumb: if it is not needed to RUN the web platform, it is ignored here
+# AND absent from the build_release.py allowlist — keep the two in sync.
+
+README.md            export-ignore
+CLAUDE.md            export-ignore
+.gitattributes       export-ignore
+.gitignore           export-ignore
+.github/             export-ignore
+.claude/             export-ignore
+.agents/             export-ignore
+.vscode/             export-ignore
+DOCS/                export-ignore
+preprocess/          export-ignore
+tests/               export-ignore
+tools/               export-ignore
+audits/              export-ignore
+start_dev.bat        export-ignore
+start_php_server.bat export-ignore
+
+# Normalize line endings for cross-platform text files (Windows dev, Linux CI).
+*.py   text eol=lf
+*.php  text eol=lf
+*.yml  text eol=lf
+*.bat  text eol=crlf

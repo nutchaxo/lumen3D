@@ -2,6 +2,7 @@
   "id": "fluorescence",
   "name": "🔬 Fluorescence",
   "version": "1.0.0",
+  "platformCompat": "1.x",
   "creator": "IRIBHM",
   "placement": "shaders",
   "renderModeValue": 1,

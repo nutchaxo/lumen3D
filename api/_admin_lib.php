@@ -32,7 +32,10 @@ function changelog_dir(): string { return admin_root() . '/changelog'; }
 function modules_dir(): string { return admin_root() . '/js/modules'; }
 
 // ── JSON I/O ────────────────────────────────────────────────────────────────
-function admin_json_out(array $data, int $code = 200): never {
+// NOTE: no `: never` return type here — this file is require_once'd by the PUBLIC
+// plugins.php on the advertised PHP >= 7.4 floor, and `never` is 8.1+ syntax (a
+// parse error on 7.4/8.0 would 500 every plugin-discovery request). It exits anyway.
+function admin_json_out(array $data, int $code = 200) {
     http_response_code($code);
     header('Content-Type: application/json; charset=utf-8');
     header('Cache-Control: no-store, no-cache');
@@ -273,4 +276,110 @@ function admin_preprocess_version(): ?string {
         if ($txt && preg_match('/__version__\s*=\s*["\']([\d.]+)["\']/', $txt, $m)) return $m[1];
     }
     return admin_max_version(admin_root() . '/preprocess/changelog');
+}
+
+// ── Plugin/platform compatibility (twin of js/core/compat.js + dev_server.py) ──
+// Validated against tests/compat-vector.json. Fail-closed: a present-but-unreadable
+// declaration is INCOMPATIBLE. Fail-open only for an unknown platform version.
+
+/** "1.4.1-rc" → [1,4,1] (numeric dotted prefix) | null when no leading number. */
+function admin_compat_nums($s): ?array {
+    if (!preg_match('/^(\d+(?:\.\d+){0,2})/', trim((string)$s), $m)) return null;
+    return array_map('intval', explode('.', $m[1]));
+}
+
+function admin_compat_cmp(array $a, array $b): int {
+    for ($i = 0; $i < 3; $i++) {
+        $x = $a[$i] ?? 0; $y = $b[$i] ?? 0;
+        if ($x !== $y) return $x < $y ? -1 : 1;
+    }
+    return 0;
+}
+
+/** Bare token → ['any'] | ['exact',nums] | ['range',min,maxEx] | null. */
+function admin_compat_bare(string $tok): ?array {
+    $tok = trim($tok);
+    if ($tok === '*' || $tok === 'x') return ['any'];
+    $stripped = preg_replace('/\.[x*]$/i', '', $tok);
+    $wild = $stripped !== $tok;
+    if (!preg_match('/^\d+(\.\d+){0,2}$/', $stripped)) return null;
+    $nums = admin_compat_nums($stripped);
+    if (count($nums) === 3 && !$wild) return ['exact', $nums];
+    $maxEx = $nums; $maxEx[count($maxEx) - 1]++;
+    return ['range', $nums, $maxEx];
+}
+
+/** One RANGE comparator → [op, nums] | null (op '' = bare). */
+function admin_compat_comparator(string $tok) {
+    if (!preg_match('/^(>=|<=|>|<|=|\^|~)?(.+)$/', trim($tok), $m)) return null;
+    $op = $m[1] ?? ''; $body = $m[2];
+    if ($op === '') { $b = admin_compat_bare($body); return $b === null ? null : ['bare', $b]; }
+    if (!preg_match('/^\d+(\.\d+){0,2}([.-].*)?$/', trim($body))) return null;
+    $nums = admin_compat_nums($body);
+    return $nums === null ? null : [$op, $nums];
+}
+
+function admin_compat_pred_ok(array $cmp, array $v): bool {
+    [$op, $a] = $cmp;
+    if ($op === 'bare') {
+        $b = $a;
+        if ($b[0] === 'any') return true;
+        if ($b[0] === 'exact') return admin_compat_cmp($v, $b[1]) === 0;
+        return admin_compat_cmp($v, $b[1]) >= 0 && admin_compat_cmp($v, $b[2]) < 0;
+    }
+    switch ($op) {
+        case '>=': return admin_compat_cmp($v, $a) >= 0;
+        case '>':  return admin_compat_cmp($v, $a) > 0;
+        case '<=': return admin_compat_cmp($v, $a) <= 0;
+        case '<':  return admin_compat_cmp($v, $a) < 0;
+        case '=':  return admin_compat_cmp($v, $a) === 0;
+        case '^':  return admin_compat_cmp($v, $a) >= 0 && admin_compat_cmp($v, [$a[0] + 1, 0, 0]) < 0;
+        case '~':  return admin_compat_cmp($v, $a) >= 0 && admin_compat_cmp($v, [$a[0], ($a[1] ?? 0) + 1, 0]) < 0;
+    }
+    return false;
+}
+
+/** @return array{0:bool,1:string} [ok, reason]. See js/core/compat.js for the contract. */
+function admin_compat_satisfies($platformVersion, $decl): array {
+    if ($decl === null) return [true, 'no constraint declared'];
+    if ($platformVersion === null) return [true, 'platform version unknown — gate disabled'];
+    $v = admin_compat_nums($platformVersion);
+    if ($v === null) return [true, 'platform version unreadable — gate disabled'];
+
+    if (is_string($decl)) {
+        $tokens = preg_split('/\s+/', trim($decl), -1, PREG_SPLIT_NO_EMPTY);
+        if (!$tokens) return [false, 'empty constraint'];
+        foreach ($tokens as $tok) {
+            $cmp = admin_compat_comparator($tok);
+            if ($cmp === null) return [false, "unreadable constraint token \"$tok\""];
+            if (!admin_compat_pred_ok($cmp, $v)) return [false, "platform $platformVersion fails \"$decl\""];
+        }
+        return [true, "matches \"$decl\""];
+    }
+
+    if (is_array($decl)) {
+        if (!$decl) return [false, 'empty constraint list'];
+        // A JSON object decodes to an associative array in PHP; only a 0-based
+        // sequential list is the OR-list form. Reject object form (fail-closed),
+        // matching js/core/compat.js (Array.isArray=false) and dev_server.py
+        // (isinstance list=false) — otherwise PHP would iterate object VALUES and
+        // fail-OPEN on e.g. {"min":"1.4"} that the two twins reject.
+        if (array_keys($decl) !== range(0, count($decl) - 1)) {
+            return [false, 'unreadable constraint (object form not supported)'];
+        }
+        foreach ($decl as $item) {
+            $hasOp = is_string($item) && preg_match('/^(>=|<=|>|<|=|\^|~)/', trim($item));
+            if (!is_string($item) || $hasOp) return [false, "invalid list item (bare tokens only)"];
+            $b = admin_compat_bare($item);
+            if ($b === null) return [false, "unreadable list token \"$item\""];
+            if ($b[0] === 'any') return [true, 'wildcard'];
+            $ok = $b[0] === 'exact'
+                ? admin_compat_cmp($v, $b[1]) === 0
+                : (admin_compat_cmp($v, $b[1]) >= 0 && admin_compat_cmp($v, $b[2]) < 0);
+            if ($ok) return [true, "matches \"$item\""];
+        }
+        return [false, "platform $platformVersion matches none of the list"];
+    }
+
+    return [false, 'unreadable constraint (wrong type)'];
 }

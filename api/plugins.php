@@ -14,6 +14,7 @@
  */
 
 declare(strict_types=1);
+require_once __DIR__ . '/_admin_lib.php';   // admin_compat_satisfies + admin_max_version
 
 header('Content-Type: application/json; charset=utf-8');
 header('X-Content-Type-Options: nosniff');
@@ -92,6 +93,14 @@ if (is_file($disabledPath)) {
 if ($disabled) {
     $plugins = array_values(array_filter($plugins, fn($p) => !in_array($p['path'], $disabled, true)));
 }
+
+// Fail-closed compat gate (mirrors dev_server.py): an incompatible plugin is
+// dropped from discovery so its index.js is never loaded on this host either.
+$platformVer = admin_max_version($ROOT . '/changelog');
+$plugins = array_values(array_filter(
+    $plugins,
+    fn($p) => admin_compat_satisfies($platformVer, $p['platformCompat'] ?? null)[0]
+));
 
 write_manifest($plugins);
 echo json_encode(['plugins' => $plugins], JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE);

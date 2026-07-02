@@ -21,14 +21,16 @@ DATA_WEB/*
 # Work in progress / Personal files
 DOCS/*
 !DOCS/plugins/
+!DOCS/update-system/
 platform_data_inventory.xlsx
 platform_preselection_fixed_live.xlsx
 test_meta.html
 
-# IDEs
+# IDEs / assistant local state
 .vscode/
 .agents/
 .idea/
+.claude/settings.local.json
 
 # Logs
 logs/
@@ -40,5 +42,13 @@ api/admin_credential.json
 api/stats.json
 api/disabled-plugins.json
 
-# Self-update backups
+# Self-update backups + runtime artifacts (version.json ships in the release
+# artifact and is written by updates — never tracked in git)
 backups/
+version.json
+dist/
+
+# One-file installer runtime state (install.php) — never commit
+.install-state.json
+.install-lock
+.install-download.zip.part

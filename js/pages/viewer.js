@@ -165,20 +165,28 @@ const ViewerApp = (() => {
     // → generated manifest → embedded default). MUST stay fully awaited here,
     // before any UI build (tools/shaders/channels lists) — the v0.12.45 invariant.
     if (typeof PluginRegistry !== 'undefined') {
-      const modulePaths = await PluginRegistry.discover('js/modules');
-      await PluginRegistry.loadModules('js/modules', modulePaths);
-      // Generate toolbar buttons from the loaded plugins' metadata. Runs before
-      // ToolManager.init (_bindTooling) so the data-tool chips exist to be wired,
-      // and before bindToolbarButtons() (after initAll) wires the data-plugin-id ones.
-      PluginRegistry.buildToolbarButtons({
-        dataset: datasetMeta,
-        groups: [
-          { group: 'tools',   container: '[data-tool-group="tools"]' },
-          { group: 'export',  container: '[data-tool-group="export"]' },
-          { group: 'visuals', container: '[data-tool-group="visuals"]' },
-          { group: 'layouts', container: '[data-tool-group="layouts"]' }
-        ]
-      });
+      // Isolation barrier: a total plugin-subsystem failure (registry bug, broken
+      // discovery payload, quota error mid-injection) degrades to a plugin-less
+      // viewer — the 3D canvas must always boot (rule 1.1). Individual plugin
+      // failures are already quarantined inside the registry; this catches the rest.
+      try {
+        const modulePaths = await PluginRegistry.discover('js/modules');
+        await PluginRegistry.loadModules('js/modules', modulePaths);
+        // Generate toolbar buttons from the loaded plugins' metadata. Runs before
+        // ToolManager.init (_bindTooling) so the data-tool chips exist to be wired,
+        // and before bindToolbarButtons() (after initAll) wires the data-plugin-id ones.
+        PluginRegistry.buildToolbarButtons({
+          dataset: datasetMeta,
+          groups: [
+            { group: 'tools',   container: '[data-tool-group="tools"]' },
+            { group: 'export',  container: '[data-tool-group="export"]' },
+            { group: 'visuals', container: '[data-tool-group="visuals"]' },
+            { group: 'layouts', container: '[data-tool-group="layouts"]' }
+          ]
+        });
+      } catch (err) {
+        console.error('[ViewerApp] Plugin subsystem failed — booting the viewer without plugins.', err);
+      }
     }
 
     // Initialize WebGL Viewer
@@ -387,15 +395,21 @@ const ViewerApp = (() => {
         }
       };
 
-      // Initialize all loaded modules with the context
-      await PluginRegistry.initAll(moduleCtx);
-      PluginRegistry.bindToolbarButtons();
+      // Initialize all loaded modules with the context. Same isolation barrier as
+      // the load phase: per-plugin init failures are quarantined by the registry;
+      // a registry-level throw must still leave the viewer alive.
+      try {
+        await PluginRegistry.initAll(moduleCtx);
+        PluginRegistry.bindToolbarButtons();
 
-      // Now that every module has its ViewerContext, flush any plugin workspace
-      // state that _applyWorkspaceStateNow() captured before initAll() ran.
-      if (_pendingPluginState) {
-        PluginRegistry.setWorkspaceState(_pendingPluginState);
-        _pendingPluginState = null;
+        // Now that every module has its ViewerContext, flush any plugin workspace
+        // state that _applyWorkspaceStateNow() captured before initAll() ran.
+        if (_pendingPluginState) {
+          PluginRegistry.setWorkspaceState(_pendingPluginState);
+          _pendingPluginState = null;
+        }
+      } catch (err) {
+        console.error('[ViewerApp] Plugin initialisation failed — continuing without plugin tools.', err);
       }
 
       const toolsCount = PluginRegistry.listByPlacement('tools').length;
@@ -3116,5 +3130,10 @@ window.addEventListener('message', (e) => {
   }
 });
 
-document.addEventListener('DOMContentLoaded', ViewerApp.init);
+// Boot-level safety net (defense in depth): init() is async — if any UI-build step
+// throws despite the per-subsystem try/catch barriers, surface it instead of a silent
+// unhandled rejection, so failures are diagnosable rather than a blank viewer.
+document.addEventListener('DOMContentLoaded', () => {
+  Promise.resolve(ViewerApp.init()).catch(err => console.error('[ViewerApp] boot failed:', err));
+});
 

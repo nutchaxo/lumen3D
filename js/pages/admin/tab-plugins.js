@@ -19,19 +19,22 @@ const PLACEMENTS = [
 ];
 
 function row(p, isProtected) {
-  const dis = p.enabled ? '' : 'is-off';
-  const lock = isProtected ? 'disabled' : '';
+  // compat === false → the server-side gate excludes this plugin from discovery
+  // (its index.js is never loaded); explain WHY inline and freeze the toggle.
+  const incompatible = p.compat === false;
+  const dis = (p.enabled && !incompatible) ? '' : 'is-off';
+  const lock = (isProtected || incompatible) ? 'disabled' : '';
   const meta = [p.version ? `v${escHtml(p.version)}` : '', p.creator ? escHtml(p.creator) : '', escHtml(p.path)]
     .filter(Boolean).join(' · ');
   return `
     <div class="adm-plugin-row ${dis}" data-path="${escHtml(p.path)}">
       <span class="adm-plugin-ic"><i data-lucide="${escHtml(p.icon || 'puzzle')}"></i></span>
       <div class="adm-plugin-info">
-        <div class="adm-plugin-name">${escHtml(p.name || p.id)}${isProtected ? ` <span class="adm-tag">${escHtml(t('admin.protectedPlugin', 'protégé'))}</span>` : ''}</div>
-        <div class="adm-plugin-meta">${meta}</div>
+        <div class="adm-plugin-name">${escHtml(p.name || p.id)}${isProtected ? ` <span class="adm-tag">${escHtml(t('admin.protectedPlugin', 'protégé'))}</span>` : ''}${incompatible ? ` <span class="adm-tag adm-tag-warn" title="${escHtml(p.compatReason || '')}">${escHtml(t('admin.compatIncompatible', 'incompatible'))}</span>` : ''}</div>
+        <div class="adm-plugin-meta">${meta}${incompatible && p.compatReason ? ` · <span class="adm-compat-reason">${escHtml(p.compatReason)}</span>` : ''}</div>
       </div>
-      <label class="adm-switch" title="${isProtected ? escHtml(t('admin.lastShaderWarn', 'Au moins un mode de rendu doit rester actif.')) : ''}">
-        <input type="checkbox" class="adm-plugin-toggle" data-path="${escHtml(p.path)}" ${p.enabled ? 'checked' : ''} ${lock}>
+      <label class="adm-switch" title="${isProtected ? escHtml(t('admin.lastShaderWarn', 'Au moins un mode de rendu doit rester actif.')) : (incompatible ? escHtml(t('admin.compatIntro', 'Un plugin incompatible n\'est pas chargé par le viewer ; il redevient actif dès qu\'une mise à jour satisfait sa contrainte de version.')) : '')}">
+        <input type="checkbox" class="adm-plugin-toggle" data-path="${escHtml(p.path)}" ${p.enabled && !incompatible ? 'checked' : ''} ${lock}>
         <span class="adm-switch-track"><span class="adm-switch-thumb"></span></span>
       </label>
     </div>`;
@@ -58,6 +61,7 @@ function render() {
       </div>`;
   }).join('');
 
+  const incompatCount = _plugins.filter((p) => p.compat === false).length;
   root.innerHTML = `
     <div class="adm-page-head">
       <div>
@@ -65,6 +69,7 @@ function render() {
         <p class="adm-page-sub">${escHtml(t('admin.pluginsIntro', 'Activez ou désactivez les modules. Les changements s\'appliquent au prochain chargement du viewer.'))} · ${enabled}/${_plugins.length}</p>
       </div>
     </div>
+    ${incompatCount ? `<div class="adm-update-state adm-warn" style="margin-bottom:14px"><i data-lucide="alert-triangle"></i> ${escHtml(t('admin.compatIntro', 'Un plugin incompatible n\'est pas chargé par le viewer ; il redevient actif dès qu\'une mise à jour satisfait sa contrainte de version.'))}</div>` : ''}
     ${groups}`;
 
   root.querySelectorAll('.adm-plugin-toggle').forEach((cb) =>

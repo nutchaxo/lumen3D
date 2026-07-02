@@ -2,6 +2,7 @@
   "id": "zstack-browser",
   "name": "Z-Stack Browser",
   "version": "1.0.0",
+  "platformCompat": "1.x",
   "creator": "IRIBHM",
   "placement": "tools",
   "group": "layouts",

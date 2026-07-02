@@ -2,6 +2,7 @@
   "id": "toggle-grid",
   "name": "Toggle Grid",
   "version": "1.0.0",
+  "platformCompat": "1.x",
   "creator": "IRIBHM",
   "placement": "tools",
   "group": "visuals",

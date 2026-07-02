@@ -30,7 +30,9 @@ function require_auth(): void {
     }
 }
 
-function json_out(array $data, int $code = 200): never {
+// No `: never` return type — 8.1+ syntax that would parse-error (500) on the
+// advertised PHP >= 7.4 floor. It exits anyway.
+function json_out(array $data, int $code = 200) {
     http_response_code($code);
     echo json_encode($data, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT);
     exit;

@@ -54,6 +54,22 @@ const PluginRegistry = (() => {
   // as before, so static/PHP hosts are unaffected (no v0.12.45-class regression).
   const _discoveredMeta = new Map();
 
+  // Quarantine ledger: every plugin rejected before/at load or failing init lands
+  // here with an actionable reason, instead of silently vanishing from the UI.
+  // Surfaced to the admin panel (and the console) via getQuarantined().
+  // Keyed by module path ('<placement>/<id>') — reset on each discover().
+  const _quarantined = new Map();
+
+  function _quarantine(modPath, reason, detail) {
+    _quarantined.set(modPath, { path: modPath, reason, detail, at: Date.now() });
+    console.warn(`[PluginRegistry] Quarantined "${modPath}" (${reason}): ${detail}`);
+  }
+
+  /** @returns {Array<{path, reason, detail, at}>} plugins rejected this session */
+  function getQuarantined() {
+    return Array.from(_quarantined.values());
+  }
+
   // A discovery entry is "rich" — a full plugin.json safe to use without a
   // separate fetch — only when it carries fields the {path,placement,id} manifest
   // triple never has. `name` is mandatory in every plugin.json; never trust the
@@ -102,6 +118,7 @@ const PluginRegistry = (() => {
    */
   async function discover(basePath = 'js/modules') {
     _discoveredMeta.clear(); // drop any inline meta from a previous discover()
+    _quarantined.clear();
     const candidates = ['api/plugins', 'api/plugins.php', `${basePath}/manifest.json`];
     for (const url of candidates) {
       const paths = await _fetchPluginList(url);
@@ -122,6 +139,12 @@ const PluginRegistry = (() => {
    * @param {string[]} modulePaths  e.g. ['tools/toggle-grid', 'shaders/fluorescence']
    */
   async function loadModules(basePath, modulePaths) {
+    // Resolved once for the whole batch: version.json (release installs) →
+    // /api/health (dev server) → null (gate inert — see js/core/compat.js).
+    const platformVer = (typeof Compat !== 'undefined' && Compat.platformVersion)
+      ? await Compat.platformVersion()
+      : null;
+
     const loadPromises = modulePaths.map(async (modPath) => {
       try {
         // Prefer rich metadata captured during discover() (live endpoint) to skip
@@ -132,20 +155,49 @@ const PluginRegistry = (() => {
           const jsonUrl = `${basePath}/${modPath}/plugin.json`;
           const resp = await fetch(jsonUrl);
           if (!resp.ok) {
-            console.error(`[PluginRegistry] Failed to load ${jsonUrl}: ${resp.status}`);
+            _quarantine(modPath, 'meta-unreachable', `plugin.json fetch failed (${resp.status})`);
             return;
           }
-          meta = await resp.json();
+          try {
+            meta = await resp.json();
+          } catch (err) {
+            _quarantine(modPath, 'invalid-meta', `plugin.json is not valid JSON (${err.message})`);
+            return;
+          }
         }
 
-        // Validate placement matches directory
-        const expectedPlacement = modPath.split('/')[0]; // 'tools', 'channels', 'shaders'
-        if (meta.placement && meta.placement !== expectedPlacement) {
-          console.error(`[PluginRegistry] Module "${meta.id}" declares placement="${meta.placement}" but is in "${expectedPlacement}/". Skipping.`);
+        // Hard meta validation BEFORE anything executes or gets keyed: an id-less
+        // or mis-labelled plugin.json must never register (Map key `undefined`
+        // would shadow/collide) and must never inject code.
+        const [expectedPlacement, folderId] = modPath.split('/');
+        if (!meta || typeof meta.id !== 'string' || !meta.id.trim()) {
+          _quarantine(modPath, 'invalid-meta', 'plugin.json has no usable "id"');
           return;
         }
+        if (meta.id !== folderId) {
+          _quarantine(modPath, 'invalid-meta', `id "${meta.id}" ≠ folder "${folderId}"`);
+          return;
+        }
+        if (meta.placement && meta.placement !== expectedPlacement) {
+          _quarantine(modPath, 'invalid-meta',
+            `declares placement="${meta.placement}" but lives in "${expectedPlacement}/"`);
+          return;
+        }
+
+        // Compatibility gate (fail-closed) — an incompatible plugin's index.js is
+        // NEVER injected; the viewer boots without it and the admin panel explains
+        // why. Restored automatically once a core update satisfies the constraint.
+        if (typeof Compat !== 'undefined') {
+          const compat = Compat.satisfies(platformVer, meta.platformCompat);
+          if (!compat.ok) {
+            _quarantine(modPath, 'incompatible', compat.reason);
+            return;
+          }
+        }
+
         meta.placement = meta.placement || expectedPlacement;
         meta._path = `${basePath}/${modPath}`;
+        meta._modPath = modPath;
 
         // Register metadata
         _modules.set(meta.id, {
@@ -176,10 +228,16 @@ const PluginRegistry = (() => {
         // Inject <script> for index.js — concurrent with any lang fetch fallback
         // (no plugin reads its dictionary at module-eval time; all read i18n only
         // inside init/activate/getChannelUI).
-        await Promise.all([langWork, _loadScript(`${basePath}/${modPath}/index.js`)]);
+        const [, scriptOk] = await Promise.all([
+          langWork, _loadScript(`${basePath}/${modPath}/index.js`),
+        ]);
+        if (!scriptOk) {
+          _modules.delete(meta.id);
+          _quarantine(modPath, 'script-failed', 'index.js failed to load or parse');
+        }
 
       } catch (err) {
-        console.error(`[PluginRegistry] Error loading module "${modPath}":`, err);
+        _quarantine(modPath, 'load-error', String(err && err.message || err));
       }
     });
     await Promise.all(loadPromises);
@@ -191,13 +249,13 @@ const PluginRegistry = (() => {
    * @returns {Promise<void>}
    */
   function _loadScript(src) {
-    return new Promise((resolve, reject) => {
+    return new Promise((resolve) => {
       const script = document.createElement('script');
       script.src = src;
-      script.onload = () => resolve();
+      script.onload = () => resolve(true);
       script.onerror = () => {
         console.error(`[PluginRegistry] Failed to load script: ${src}`);
-        resolve(); // Don't break the chain — continue loading other modules
+        resolve(false); // Don't break the chain — the caller quarantines this one
       };
       document.body.appendChild(script);
     });
@@ -233,7 +291,9 @@ const PluginRegistry = (() => {
     _ctx = ctx;
     for (const [id, entry] of _modules) {
       if (!entry.impl) {
-        console.warn(`[PluginRegistry] Module "${id}" has no implementation (index.js missing or failed to call implement).`);
+        entry.state = 'quarantined';
+        _quarantine(entry.meta._modPath || id, 'no-impl',
+          'index.js loaded but never called implement()');
         continue;
       }
       try {
@@ -250,7 +310,9 @@ const PluginRegistry = (() => {
         }
         entry.state = 'initialized';
       } catch (err) {
-        console.error(`[PluginRegistry] Failed to init module "${id}":`, err);
+        // One plugin throwing in init() must never block the others (rule 1.1).
+        entry.state = 'quarantined';
+        _quarantine(entry.meta._modPath || id, 'init-failed', String(err && err.message || err));
       }
     }
     _bindLanguageChange();
@@ -284,12 +346,19 @@ const PluginRegistry = (() => {
    */
   function activate(id) {
     const entry = _modules.get(id);
-    if (!entry || !entry.impl || entry.state === 'disposed') return null;
+    if (!entry || !entry.impl || entry.state === 'disposed' || entry.state === 'quarantined') return null;
     if (typeof entry.impl.activate === 'function') {
-      const result = entry.impl.activate.call(entry.instance || entry.impl);
-      entry.state = 'active';
-      _emit('module-activated', { id, result });
-      return result;
+      try {
+        const result = entry.impl.activate.call(entry.instance || entry.impl);
+        entry.state = 'active';
+        _emit('module-activated', { id, result });
+        return result;
+      } catch (err) {
+        // A throwing activate() must not surface as an uncaught error on a
+        // toolbar click, and must not flip the state to 'active'.
+        console.error(`[PluginRegistry] activate failed for "${id}":`, err);
+        return null;
+      }
     }
     return null;
   }
@@ -299,9 +368,13 @@ const PluginRegistry = (() => {
    */
   function deactivate(id) {
     const entry = _modules.get(id);
-    if (!entry || !entry.impl) return;
+    if (!entry || !entry.impl || entry.state === 'quarantined') return;
     if (typeof entry.impl.deactivate === 'function') {
-      entry.impl.deactivate.call(entry.instance || entry.impl);
+      try {
+        entry.impl.deactivate.call(entry.instance || entry.impl);
+      } catch (err) {
+        console.error(`[PluginRegistry] deactivate failed for "${id}":`, err);
+      }
     }
     if (entry.state === 'active') entry.state = 'initialized';
     _emit('module-deactivated', { id });
@@ -448,6 +521,7 @@ const PluginRegistry = (() => {
     };
 
     for (const meta of listByPlacement('tools')) {
+      try {
       const container = containerFor[meta.group];
       if (!container) {
         console.warn(`[PluginRegistry] Tool "${meta.id}" has group "${meta.group}" with no toolbar cluster — button skipped.`);
@@ -485,6 +559,11 @@ const PluginRegistry = (() => {
       }
 
       container.appendChild(btn);
+      } catch (err) {
+        // One malformed plugin.json must never cost the other plugins their
+        // buttons — skip this one, keep building (rule 1.1).
+        console.warn(`[PluginRegistry] Toolbar build failed for "${meta && meta.id}":`, err);
+      }
     }
 
     if (window.lucide && touched.length) lucide.createIcons({ nodes: touched });
@@ -569,6 +648,7 @@ const PluginRegistry = (() => {
     activate,
     deactivate,
     getModule,
+    getQuarantined,
     listByPlacement,
     listByGroup,
     buildToolbarButtons,

@@ -1,6 +1,6 @@
 # Système de mise à jour — documentation technique
 
-> Comment ça marche concrètement. Pour le *pourquoi*, voir [WALKTHROUGH.md](WALKTHROUGH.md).
+> Comment ça marche concrètement. Pour le *pourquoi*, voir [WALKTHROUGH.md](WALKTHROUGH.md) ; pour la **marche à suivre opérationnelle** (publier une release, mettre à jour un plugin, appliquer), voir [RELEASING.md](RELEASING.md).
 
 ## 1. Vue d'ensemble
 

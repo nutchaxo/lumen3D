@@ -1,0 +1,21 @@
+# Lumen3D — route HTML documents through the nonce-injecting CSP server so a PHP/
+# Apache deployment enforces the SAME strict Content-Security-Policy as the Python
+# dev server (per-request nonce). Non-HTML assets (js/css/img) and api/*.php routes
+# are served normally. Requires mod_rewrite; without it, HTML is served statically
+# with no CSP (the trust gate is then bypassable — prefer the Python server or add
+# a reverse-proxy that injects the nonce). See DOCS/plugin-sandbox/TECHNICAL.md.
+<IfModule mod_rewrite.c>
+    RewriteEngine On
+    # Directory index → _serve.php (serves index.html with the nonce + CSP).
+    RewriteRule ^$ _serve.php [L]
+    # Every *.html document → _serve.php. Real files that are not .html (assets,
+    # api/*.php) never match, so they are served directly by Apache.
+    RewriteRule ^(.+)\.html$ _serve.php [L,QSA]
+</IfModule>
+
+# Never serve the PHP entry/handler sources as text (only execute them).
+<FilesMatch "^(_serve|router)\.php$">
+    <IfModule mod_authz_core.c>
+        Require all granted
+    </IfModule>
+</FilesMatch>

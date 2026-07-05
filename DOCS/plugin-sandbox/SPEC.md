@@ -442,9 +442,21 @@ LumenPlugin.register({
 8. **Révocation runtime** (`trustEpoch`, teardown) — INV (RT-Rev).
 9. **Changelog `changelog/changelog_1.6.0.md`** (`[ADDED]` trust gate + sandbox, `[OPTIMIZED]` blob-URL exec, `[FIXED]` — néant nouveau) + notice `[Versioning] Plateforme Web → v1.6.0`.
 
-### 4.2. Hors-scope v1
+### 4.2. Portée des placements (décision d'architecture, pas une lacune)
 
-- **Sandboxing des `channels`/`shaders`** : bloqué à `tools` action/toggle. Un schéma « declarative channel UI » (l'hôte rend depuis un JSON que la frame renvoie) est une design séparée si des channel plugins tiers deviennent un besoin.
+Seuls les `tools` `subtype ∈ {action,toggle}` sont sandbox-éligibles. Ce n'est **pas** un raccourci d'implémentation — c'est une frontière imposée par la nature de chaque placement. Un plugin tiers qui résout `sandboxed` dans un autre placement est **quarantiné** avec un motif spécifique (`plugin-registry.js` §trust gate), jamais chargé in-page en douce.
+
+- **`shaders` — sandbox impossible, in-page-trust obligatoire (permanent).** Un shader plugin fournit du GLSL compilé **synchroniquement** dans le material du volume, puis exécuté sur le **GPU à chaque frame** avec accès direct à la texture 3D. Il n'existe aucune frontière RPC async derrière laquelle une iframe null-origin pourrait s'intercaler : le compilateur de shader exige la source GLSL au moment (synchrone) du compile, et le code tourne ensuite hors JS. Un shader tiers ne peut donc être exécuté que si l'opérateur lui accorde la **confiance in-page** (tier `approved`). Il n'y a pas de v2 qui lève ça — c'est structurel. (La seule isolation théorique serait une validation/sanitization GLSL, non fiable et hors sujet.)
+
+- **`channels` — différé par conception (chemin déclaratif esquissé).** L'API channel-panel remet au plugin le **nœud DOM vivant de l'item de canal** : `getChannelUI(channel)` renvoie du HTML injecté **synchroniquement** dans l'`innerHTML`, et `bindChannelUI(idx, ch, itemEl, api)` câble des handlers **sur ce DOM**. C'est exactement le privilège que le sandbox retire. Sandboxer proprement suppose un **sous-système parallèle déclaratif** — le plugin ne renvoie plus de DOM mais un *schéma JSON* de contrôles, que l'hôte rend lui-même et dont il route les événements par RPC — **plus** une surface de capabilities d'effet-canal (lire les stats d'un canal, pousser gamma/couleur/min-max, demander une passe worker par canal) qui **n'existe pas encore**. Construire ce framework **sans aucun consommateur** (histogram + gaussian-filter sont bundled, in-page) violerait la règle projet « pas de placeholder, robuste et final » : ce serait de l'infrastructure spéculative non exerçable de bout en bout. Il est donc **délibérément différé** jusqu'à l'apparition d'un vrai channel plugin tiers.
+
+  Design retenu pour ce jour-là (à implémenter tel quel) :
+  1. capability `channels.declareUI` → la frame renvoie **une fois** (à l'init) un schéma `{ perChannel: [ {type:'slider'|'toggle'|'button'|'label', key, label, min?, max?, step?, default?} ] }` ;
+  2. l'hôte rend ces contrôles depuis une **whitelist de types** (aucun HTML tiers ; anti-injection par construction), un jeu par canal ;
+  3. les interactions → RPC `dir:'req' type:'channel.control'` `{channelIndex, key, value}` vers la frame ;
+  4. réponses/effets via des capabilities d'effet-canal étroites et projetées (jamais le retour vivant de `ChannelPanel`), sur le modèle exact de `channels.getState` (RT-L-snapshot).
+
+  Le rendu host-side du schéma se greffe en **chemin additif** dans `channel-panel.js` (`getChannelUI`/`bindChannelUI` restent pour les plugins in-page) : aucun régression sur histogram/gaussian.
 - **Authenticité Ed25519 / clé éditeur** : pas de crypto asymétrique en stdlib Python. L'authenticité vient de HTTPS-vers-first-party + sha256 (même modèle que l'updater). Un vérificateur Ed25519 pure-Python vendored pourrait épingler une clé éditeur plus tard — hors-scope sauf si trivial ; le sandbox est robuste sans (origine null + caps étroites).
 - **Approbation `trusted` sur host pur-statique** : impossible (les endpoints exigent Python/PHP). Un pur-statique n'exécute in-page que ce que `version.json` liste ; le reste est sandbox-only ou désactivé.
 - **`structuredClone` de secours** : baseline moderne assumée ; l'algorithme de clone structuré est de toute façon intégré à `postMessage`. Repli JSON possible si un moteur cible en manque.

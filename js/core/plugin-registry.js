@@ -28,6 +28,10 @@ const PluginRegistry = (() => {
   const _hooks = new Map();
   // ViewerContext provided by viewer.js
   let _ctx = null;
+  // Trust epoch (from /api/plugins) — bumped server-side on approve/revoke. The
+  // runtime-revocation watcher compares it to detect a live revocation.
+  let _trustEpoch = null;
+  let _trustWatchTimer = null;
 
   // ─── Discovery ────────────────────────────────────────────
 
@@ -92,6 +96,9 @@ const PluginRegistry = (() => {
       const data = await resp.json(); // throws on non-JSON body → caught below
       const plugins = Array.isArray(data) ? data : data?.plugins;
       if (!Array.isArray(plugins)) return null;
+      // Capture the trust epoch so the runtime-revocation watcher can detect an
+      // approve/revoke on the server and tear down a now-revoked sandboxed plugin.
+      if (data && typeof data.trustEpoch === 'number') _trustEpoch = data.trustEpoch;
       // Capture rich inline meta as a side effect (no array allocation here).
       for (const p of plugins) {
         const mp = typeof p === 'string' ? p : p?.path;
@@ -228,8 +235,20 @@ const PluginRegistry = (() => {
           if (verdict.tier === 'sandboxed') {
             if (expectedPlacement !== 'tools' ||
                 (meta.subtype !== 'action' && meta.subtype !== 'toggle')) {
-              _quarantine(modPath, 'sandbox-unsupported-placement',
-                `sandboxed plugins support only tools action/toggle (got ${expectedPlacement}/${meta.subtype})`);
+              // By design, not a bug — see DOCS/plugin-sandbox/SPEC.md §"Placement scope".
+              // shaders: a GLSL render mode compiles synchronously into the volume
+              //   material and runs on the GPU every frame; there is no async RPC
+              //   boundary a null-origin iframe could sit behind → in-page trust ONLY.
+              // channels: the channel-panel API hands plugins the channel-item DOM
+              //   element directly (getChannelUI/bindChannelUI) — the exact privilege
+              //   the sandbox removes; a sandboxed channel would need a declarative
+              //   schema + channel-effect capabilities that no plugin yet consumes.
+              const why = expectedPlacement === 'shaders'
+                ? 'shader plugins run GLSL on the GPU synchronously and cannot be sandboxed (in-page trust required)'
+                : expectedPlacement === 'channels'
+                  ? 'sandboxed channel UI is not yet supported (declarative-schema path deferred — see SPEC.md)'
+                  : `sandboxed plugins support only tools action/toggle (got ${expectedPlacement}/${meta.subtype})`;
+              _quarantine(modPath, 'sandbox-unsupported-placement', why);
               return;
             }
             if (typeof PluginSandbox === 'undefined') {
@@ -310,12 +329,18 @@ const PluginRegistry = (() => {
   }
 
   // Per-page nonce for the strict-CSP path: legitimate scripts (incl. trusted plugin
-  // blob-URLs) carry it; plugin code can never read it. Read from a meta tag the
-  // page/server stamps; null when CSP isn't enforced (nonce simply omitted).
+  // blob-URLs) carry it; plugin code can never read it. Sourced from THIS script tag's
+  // own nonce (L9) — `document.currentScript.nonce`, captured synchronously at load
+  // while currentScript is still valid. The browser hides the nonce from the DOM
+  // (element.getAttribute('nonce')==='' post-parse) yet keeps the .nonce IDL property,
+  // so it can't be exfiltrated via a CSS attribute-selector side channel the way a
+  // world-readable <meta content> could. null when CSP isn't enforced (unsubstituted
+  // placeholder on a static host → treated as absent).
   const _pageNonce = (() => {
     try {
-      const m = document.querySelector('meta[name="csp-nonce"]');
-      return m ? m.getAttribute('content') : null;
+      const s = document.currentScript;
+      const n = s && s.nonce;
+      return n && n !== '{{CSP_NONCE}}' ? n : null;
     } catch (_) { return null; }
   })();
 
@@ -696,6 +721,49 @@ const PluginRegistry = (() => {
     }
   }
 
+  // ─── Runtime trust revocation ─────────────────────────────
+  // An operator approve/revoke bumps the server's trustEpoch. This watcher notices
+  // the change in an already-open viewer and tears down a now-revoked SANDBOXED
+  // plugin (killing its iframe removes all its capabilities immediately). In-page
+  // plugins (bundled/dev/approved-trusted) cannot be un-executed at runtime, so a
+  // revocation of those still takes effect on the next reload (server excludes them
+  // from discovery) — only the iframe lane supports live teardown.
+
+  async function _revokeCheck() {
+    let epoch;
+    try {
+      const h = await (await fetch('api/health', { cache: 'no-store' })).json();
+      epoch = h && h.trustEpoch;
+    } catch (_) { return; }
+    if (typeof epoch !== 'number' || _trustEpoch === null || epoch === _trustEpoch) return;
+    _trustEpoch = epoch;
+    // Re-fetch the authoritative vouched set; anything sandboxed and no longer
+    // vouched (revoked / made incompatible) is torn down.
+    let vouched;
+    try {
+      const data = await (await fetch('api/plugins', { cache: 'no-store' })).json();
+      vouched = new Set((data.plugins || []).map(p => p.id));
+    } catch (_) { return; }
+    for (const [id, entry] of _modules) {
+      const sandboxed = typeof PluginSandbox !== 'undefined' && PluginSandbox.isSandboxed && PluginSandbox.isSandboxed(id);
+      if (sandboxed && !vouched.has(id)) {
+        try { PluginSandbox.kill(id, 'revoked'); } catch (_) {}
+        _modules.delete(id);
+        _quarantine(entry.meta._modPath || id, 'revoked', 'operator revoked approval (torn down live)');
+        // Remove its toolbar button (action/toggle → data-plugin-id).
+        document.querySelectorAll(`[data-plugin-id="${CSS.escape(id)}"]`).forEach(b => b.remove());
+        console.info(`[PluginRegistry] sandboxed plugin "${id}" revoked — iframe torn down`);
+      }
+    }
+  }
+
+  /** Start watching for live approve/revoke (poll + on tab focus). Idempotent. */
+  function startTrustWatch(intervalMs = 8000) {
+    if (_trustWatchTimer || typeof PluginSandbox === 'undefined') return;
+    _trustWatchTimer = setInterval(_revokeCheck, intervalMs);
+    document.addEventListener('visibilitychange', () => { if (!document.hidden) _revokeCheck(); });
+  }
+
   // ─── Public API ───────────────────────────────────────────
 
   return {
@@ -714,6 +782,7 @@ const PluginRegistry = (() => {
     setWorkspaceState,
     bindToolbarButtons,
     disposeAll,
+    startTrustWatch,
     on
   };
 })();

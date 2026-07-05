@@ -29,6 +29,16 @@ const GITHUB_REPO = 'nutchaxo/lumen3D';                    // HARDCODED — neve
 const GITHUB_API_LATEST = 'https://api.github.com/repos/' . GITHUB_REPO . '/releases/latest';
 const INSTALLER_UA = 'Lumen3D-Installer/1.0 (+https://github.com/' . GITHUB_REPO . ')';
 
+// Release authenticity (L7): the project signing PUBLIC key (Ed25519, 32-byte hex).
+// CI signs SHA256SUMS with the matching private seed; the installer verifies the
+// detached SHA256SUMS.sig against THIS pinned key (PHP's built-in libsodium) before
+// trusting the manifest — the manifest then pins the archive's sha256.
+//   - Empty  → authenticity "not configured": sha256 integrity only (with a notice).
+//   - Set    → signature is MANDATORY (fail-closed): a release that is unsigned, or
+//              whose signature does not verify, is REFUSED before any extraction.
+// Keep in lockstep with dev_server.py `_RELEASE_PUBKEY_HEX`. See tools/gen_signing_key.py.
+const PINNED_PUBKEY = '';
+
 const STATE_FILE = '.install-state.json';
 const LOCK_FILE  = '.install-lock';
 const PART_FILE  = '.install-download.zip.part';
@@ -480,6 +490,39 @@ function stream_download_tick(string $url, $fp, int $offset, int $rangeEnd, ?int
 // ── GitHub release resolution ────────────────────────────────────────────────
 
 /**
+ * Verify a detached Ed25519 signature over the SHA256SUMS bytes against the pinned
+ * public key, using PHP's built-in libsodium (PHP 7.2+). The signature body may be
+ * hex (128 chars) or raw 64-byte binary. Returns false on any malformed input or if
+ * sodium is unavailable — fail-closed (the caller refuses the release).
+ */
+function release_signature_ok(string $sumsBody, string $sigBody): bool {
+    if (!function_exists('sodium_crypto_sign_verify_detached')) return false;
+    $pkHex = trim(PINNED_PUBKEY);
+    if (!preg_match('/^[0-9a-fA-F]{64}$/', $pkHex)) return false;
+    $pk = @hex2bin($pkHex);
+    if ($pk === false || strlen($pk) !== 32) return false;
+
+    // Canonical form is hex (CI writes sig.hex()); tolerate an exact raw 64-byte
+    // binary. Never trim a raw signature — an Ed25519 sig can begin/end with a byte
+    // that equals ASCII whitespace, which trim() would corrupt.
+    $txt = trim($sigBody);
+    if (preg_match('/^[0-9a-fA-F]{128}$/', $txt)) {
+        $sig = @hex2bin($txt);
+    } elseif (strlen($sigBody) === 64) {
+        $sig = $sigBody;
+    } else {
+        $sig = $txt;
+    }
+    if (!is_string($sig) || strlen($sig) !== 64) return false;
+
+    try {
+        return sodium_crypto_sign_verify_detached($sig, $sumsBody, $pk);
+    } catch (\Throwable $e) {
+        return false;
+    }
+}
+
+/**
  * Fetch releases/latest, pick the lumen3d-web-<version>.zip asset (fallback:
  * zipball_url), and resolve the expected sha256 from a SHA256SUMS asset if any.
  * Returns ['ok'=>bool, 'error'=>?, 'retryAfterMin'=>?, 'release'=>?array].
@@ -517,8 +560,11 @@ function fetch_release_info(): array {
     }
 
     $shaAsset = null;
+    $sigAsset = null;
     foreach ($assets as $a) {
-        if (preg_match('/^sha256sums(\.txt)?$/i', (string)($a['name'] ?? ''))) { $shaAsset = $a; break; }
+        $nm = (string)($a['name'] ?? '');
+        if ($shaAsset === null && preg_match('/^sha256sums(\.txt)?$/i', $nm)) { $shaAsset = $a; }
+        elseif ($sigAsset === null && preg_match('/^sha256sums(\.txt)?\.sig$/i', $nm)) { $sigAsset = $a; }
     }
 
     $info = [
@@ -546,16 +592,40 @@ function fetch_release_info(): array {
     }
 
     // Checksums apply to named assets only (a zipball is not listed in SHA256SUMS).
+    $info['signingConfigured'] = (PINNED_PUBKEY !== '');
+    $info['sigVerified'] = false;
     if ($shaAsset !== null && !$info['zipball'] && !empty($shaAsset['browser_download_url']) && https_only((string)$shaAsset['browser_download_url'])) {
         $sums = http_get_small((string)$shaAsset['browser_download_url']);
         if ($sums['ok']) {
+            // Authenticity gate BEFORE trusting any digest from this manifest.
+            if (PINNED_PUBKEY !== '') {
+                if (!function_exists('sodium_crypto_sign_verify_detached')) {
+                    return ['ok' => false, 'error' => 'signature_unsupported', 'retryAfterMin' => null, 'release' => null];
+                }
+                $sigUrl = ($sigAsset !== null && !empty($sigAsset['browser_download_url'])
+                           && https_only((string)$sigAsset['browser_download_url']))
+                          ? (string)$sigAsset['browser_download_url'] : null;
+                if ($sigUrl === null) {
+                    return ['ok' => false, 'error' => 'signature_missing', 'retryAfterMin' => null, 'release' => null];
+                }
+                $sigResp = http_get_small($sigUrl);
+                if (!$sigResp['ok'] || !release_signature_ok($sums['body'], $sigResp['body'])) {
+                    return ['ok' => false, 'error' => 'signature_invalid', 'retryAfterMin' => null, 'release' => null];
+                }
+                $info['sigVerified'] = true;
+            }
             foreach (preg_split('/\r?\n/', $sums['body']) as $line) {
                 if (preg_match('/^([0-9a-fA-F]{64})\s+\*?(.+)$/', trim($line), $m) && basename(trim($m[2])) === $info['assetName']) {
                     $info['sha256'] = strtolower($m[1]);
                     break;
                 }
             }
+        } elseif (PINNED_PUBKEY !== '') {
+            return ['ok' => false, 'error' => 'signature_invalid', 'retryAfterMin' => null, 'release' => null];
         }
+    } elseif (PINNED_PUBKEY !== '') {
+        // A key is pinned but the release has no (named-asset) SHA256SUMS to authenticate.
+        return ['ok' => false, 'error' => 'signature_missing', 'retryAfterMin' => null, 'release' => null];
     }
     return ['ok' => true, 'error' => null, 'retryAfterMin' => null, 'release' => $info];
 }
@@ -797,6 +867,8 @@ function handle_check(): void {
             'assetName' => $release['assetName'], 'zipball' => $release['zipball'],
             'size' => $release['size'], 'hasSha256' => $release['sha256'] !== null,
             'publishedAt' => $release['publishedAt'],
+            'signingConfigured' => $release['signingConfigured'] ?? false,
+            'sigVerified' => $release['sigVerified'] ?? false,
         ],
         'state' => state_summary($existing),
     ]);
@@ -1217,11 +1289,13 @@ p.sub{color:var(--muted);font-size:.88rem;margin-bottom:1.1rem}
 .banner-info{border-color:var(--accent);background:rgba(79,140,255,.08);color:var(--text)}
 .banner-warn{border-color:var(--warn);background:rgba(251,191,36,.08);color:var(--text)}
 .banner-error{border-color:var(--error);background:rgba(248,113,113,.08);color:var(--text)}
+.banner-ok{border-color:var(--ok,#34d399);background:rgba(52,211,153,.10);color:var(--text)}
 .banner b{display:block;font-size:.86rem}
 .banner .bicon{flex:none;font-weight:700}
 .banner-warn .bicon{color:var(--warn)}
 .banner-error .bicon{color:var(--error)}
 .banner-info .bicon{color:var(--accent)}
+.banner-ok .bicon{color:var(--ok,#34d399)}
 form .field{margin-bottom:1rem}
 label{display:block;font-size:.82rem;font-weight:600;color:var(--muted);margin-bottom:.35rem}
 input[type=text],input[type=password]{
@@ -1320,6 +1394,7 @@ const DICT = {
     release_label: "Dernière version",
     release_asset: "archive de release", release_zipball: "archive du dépôt (zipball)",
     release_no_sha: "Aucun fichier SHA256SUMS dans la release : l'intégrité ne pourra pas être vérifiée par empreinte.",
+    release_sig_ok: "Signature d'authenticité vérifiée (Ed25519) : cette archive provient bien de la clé de signature du projet.",
     btn_install: "Installer la version {v}", btn_recheck: "Réessayer",
     dl_title: "Téléchargement", dl_sub: "L'archive est téléchargée par tranches et peut reprendre après une coupure.",
     dl_progress: "Téléchargement {got} / {total} Mo", dl_progress_nototal: "Téléchargement {got} Mo",
@@ -1359,6 +1434,9 @@ const DICT = {
     err_rate_limited_nom: "Limite d'API GitHub atteinte. Réessayez dans quelques minutes.",
     err_no_release: "Aucune release publiée sur le dépôt GitHub {repo}.",
     err_no_release_zip: "La release ne contient aucune archive zip exploitable.",
+    err_signature_missing: "Cette release n'est pas signée alors qu'une clé de signature est épinglée : authenticité impossible à prouver. Installation refusée.",
+    err_signature_invalid: "La signature de la release est invalide (clé épinglée). L'archive n'a pas été produite par la clé de signature du projet. Installation refusée.",
+    err_signature_unsupported: "Une clé de signature est épinglée mais l'extension PHP « sodium » est absente : impossible de vérifier l'authenticité. Activez ext-sodium (incluse dans PHP ≥ 7.2).",
     err_github_unreachable: "Impossible de joindre l'API GitHub. Vérifiez la connectivité sortante du serveur.",
     err_github_bad_response: "Réponse inattendue de l'API GitHub.",
     err_no_http_capability: "Ni curl ni allow_url_fopen ne sont disponibles : le serveur ne peut rien télécharger.",
@@ -1419,6 +1497,7 @@ const DICT = {
     release_label: "Latest release",
     release_asset: "release archive", release_zipball: "repository archive (zipball)",
     release_no_sha: "No SHA256SUMS file in this release: integrity cannot be checksum-verified.",
+    release_sig_ok: "Authenticity signature verified (Ed25519): this archive genuinely comes from the project signing key.",
     btn_install: "Install version {v}", btn_recheck: "Retry",
     dl_title: "Download", dl_sub: "The archive is downloaded in slices and resumes after an interruption.",
     dl_progress: "Downloading {got} / {total} MB", dl_progress_nototal: "Downloading {got} MB",
@@ -1458,6 +1537,9 @@ const DICT = {
     err_rate_limited_nom: "GitHub API rate limit reached. Retry in a few minutes.",
     err_no_release: "No release published on the GitHub repository {repo}.",
     err_no_release_zip: "The release contains no usable zip archive.",
+    err_signature_missing: "This release is unsigned but a signing key is pinned: authenticity cannot be proven. Installation refused.",
+    err_signature_invalid: "The release signature is invalid (pinned key). The archive was not produced by the project signing key. Installation refused.",
+    err_signature_unsupported: "A signing key is pinned but the PHP \"sodium\" extension is missing: authenticity cannot be verified. Enable ext-sodium (bundled with PHP ≥ 7.2).",
     err_github_unreachable: "Cannot reach the GitHub API. Check the server's outbound connectivity.",
     err_github_bad_response: "Unexpected response from the GitHub API.",
     err_no_http_capability: "Neither curl nor allow_url_fopen is available: the server cannot download anything.",
@@ -1527,7 +1609,7 @@ function setStep(n) {
   });
 }
 function banner(kind, textKey, vars, bold) {
-  const icons = { info: 'i', warn: '!', error: '×' };
+  const icons = { info: 'i', warn: '!', error: '×', ok: '✓' };
   return el('div', { class: 'banner banner-' + kind, role: kind === 'error' ? 'alert' : 'note' }, [
     el('span', { class: 'bicon', text: icons[kind] || 'i', 'aria-hidden': 'true' }),
     el('div', {}, [
@@ -1685,6 +1767,7 @@ async function runCheck() {
     ])
   ]));
   if (!rel.hasSha256) children.push(banner('warn', 'release_no_sha'));
+  if (rel.sigVerified) children.push(banner('ok', 'release_sig_ok'));
   const pass = resp.requirementsPass;
   children.push(el('div', { class: 'actions' }, [
     el('button', { class: 'btn btn-primary', type: 'button', text: t('btn_install', { v: rel.version }), onclick: runPipeline, ...(pass ? {} : { disabled: 'disabled' }) }),

@@ -12,7 +12,7 @@
 # drifting as new state files are added. Nginx equivalent:
 #   location ~* /api/.*\.json$ { deny all; }
 #   location ~* /api/_admin_lib\.php$ { deny all; }
-<FilesMatch "\.json$|^_admin_lib\.php$">
+<FilesMatch "\.json$|^_[A-Za-z0-9_]+\.php$">
     <IfModule mod_authz_core.c>
         Require all denied
     </IfModule>

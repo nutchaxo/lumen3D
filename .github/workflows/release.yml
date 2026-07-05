@@ -23,14 +23,26 @@ jobs:
       - name: Server self-check
         run: python dev_server.py --check
 
-      - name: Build release artifact
+      - name: Build release artifact (signs SHA256SUMS if a key is configured)
+        env:
+          # Ed25519 private seed (64 hex). Optional: if the secret is unset the
+          # release is built unsigned. Once the public key is pinned in
+          # dev_server.py/install.php, the updater REQUIRES this signature.
+          LUMEN_SIGNING_KEY: ${{ secrets.LUMEN_SIGNING_KEY }}
         run: python tools/build_release.py --version "${GITHUB_REF_NAME#v}" --out dist --commit "${GITHUB_SHA}"
+
+      - name: Collect release assets (include SHA256SUMS.sig when present)
+        run: |
+          set -e
+          ASSETS="dist/lumen3d-web-${GITHUB_REF_NAME#v}.zip dist/SHA256SUMS"
+          if [ -f dist/SHA256SUMS.sig ]; then ASSETS="$ASSETS dist/SHA256SUMS.sig"; fi
+          echo "RELEASE_ASSETS=$ASSETS" >> "$GITHUB_ENV"
 
       - name: Create GitHub release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: >
           gh release create "$GITHUB_REF_NAME"
-          dist/lumen3d-web-*.zip dist/SHA256SUMS
+          $RELEASE_ASSETS
           --title "Lumen3D Web ${GITHUB_REF_NAME}"
           --notes-file "changelog/changelog_${GITHUB_REF_NAME#v}.md"

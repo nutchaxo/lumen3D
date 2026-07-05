@@ -2,7 +2,6 @@
 <html lang="en" data-theme="dark">
 <head>
   <meta charset="UTF-8">
-  <meta name="csp-nonce" content="{{CSP_NONCE}}">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Data Explorer — IRIBHM Microscopy</title>
 
@@ -23,7 +22,7 @@
   <link rel="stylesheet" href="css/explorer.css">
   <link rel="stylesheet" href="css/tools.css">
 
-  <style>
+  <style nonce="{{CSP_NONCE}}">
     body { padding-top: var(--header-height); }
   </style>
 </head>
@@ -156,7 +155,7 @@
   <script src="js/core/ui-actions.js"></script>
   <script src="js/core/i18n.js?v=20260504"></script>
     <script src="js/core/theme.js?v=20260504"></script>
-  <script src="js/core/colorblind.js?v=20260528"></script>
+  <script src="js/core/colorblind.js?v=20260528" nonce="{{CSP_NONCE}}"></script>
   <script src="js/core/catalog.js?v=20260504"></script>
   <script src="js/core/download-manifest.js?v=20260504"></script>
   <script src="js/core/workspace-state.js?v=20260504"></script>

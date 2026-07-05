@@ -14,6 +14,7 @@ Usage:
 import argparse
 import hashlib
 import json
+import os
 import re
 import sys
 import zipfile
@@ -21,6 +22,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(REPO_ROOT))
 
 ROOT_FILES = (
     "index.html",
@@ -33,7 +35,10 @@ ROOT_FILES = (
     "widgets.html",
     "dev_server.py",
     "fast_server.py",
+    "ed25519_pure.py",  # vendored release-signature verifier (updater authenticity)
     "router.php",
+    "_serve.php",     # Apache HTML entry (nonce-CSP) — rewritten to by the root .htaccess
+    ".htaccess",      # routes *.html → _serve.php on Apache
     "start.bat",
     "LICENCE",
 )
@@ -141,6 +146,9 @@ def main():
     parser.add_argument("--version", required=True, help="platform version X.Y.Z")
     parser.add_argument("--out", required=True, help="output directory")
     parser.add_argument("--commit", default=None, help="git commit sha to record")
+    parser.add_argument("--sign-seed-hex", default=None,
+                        help="Ed25519 private seed (64 hex chars) to sign SHA256SUMS; "
+                             "falls back to the LUMEN_SIGNING_KEY env var")
     args = parser.parse_args()
 
     if not re.fullmatch(r"\d+\.\d+\.\d+", args.version):
@@ -177,12 +185,34 @@ def main():
     write_zip(zip_path, entries)
 
     zip_digest = sha256_hex(zip_path.read_bytes())
-    (out_dir / "SHA256SUMS").write_text(
-        f"{zip_digest}  {zip_name}\n", encoding="utf-8", newline="\n"
-    )
+    sums_bytes = f"{zip_digest}  {zip_name}\n".encode("utf-8")
+    sums_path = out_dir / "SHA256SUMS"
+    sums_path.write_bytes(sums_bytes)
 
     print(f"OK: {zip_path} ({len(entries)} files, {zip_path.stat().st_size} bytes)")
     print(f"    sha256 {zip_digest}")
+
+    # Release authenticity (L7): sign the SHA256SUMS bytes with the Ed25519 seed
+    # (hex) from --sign-seed-hex or the LUMEN_SIGNING_KEY env var. The detached
+    # signature (hex) is written next to the zip and uploaded as SHA256SUMS.sig; the
+    # updater/install.php verify it against their pinned public key before applying.
+    seed_hex = (args.sign_seed_hex or os.environ.get("LUMEN_SIGNING_KEY") or "").strip()
+    if seed_hex:
+        try:
+            import ed25519_pure as ed
+        except Exception as e:
+            print(f"ERROR: cannot import ed25519_pure to sign: {e}")
+            return 1
+        if not re.fullmatch(r"[0-9a-fA-F]{64}", seed_hex):
+            print("ERROR: signing seed must be 64 hex chars (32-byte Ed25519 seed)")
+            return 1
+        seed = bytes.fromhex(seed_hex)
+        sig = ed.sign(seed, sums_bytes)
+        (out_dir / "SHA256SUMS.sig").write_text(sig.hex() + "\n", encoding="utf-8", newline="\n")
+        pub = ed.publickey(seed).hex()
+        print(f"    signed SHA256SUMS (Ed25519); public key {pub}")
+    else:
+        print("    NOTE: no signing seed (LUMEN_SIGNING_KEY unset) — release is unsigned.")
     return 0
 
 

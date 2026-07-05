@@ -38,6 +38,19 @@ const PluginSandbox = (() => {
   const DOWNLOAD_MIME = new Set(['image/png', 'image/jpeg', 'application/json', 'text/csv', 'text/plain']);
   const EVENT_TOPICS = new Set(['render', 'channels-updated', 'camera']);
 
+  // Per-page CSP nonce (L9): sourced from THIS script tag's own .nonce, captured
+  // synchronously at load (document.currentScript valid only during initial run).
+  // The srcdoc frame inherits the parent CSP, so its inline bootstrap must carry the
+  // PAGE nonce. Nonce-hiding keeps the .nonce IDL property but clears the DOM
+  // attribute → not exfiltrable via a CSS attribute-selector, unlike a <meta content>.
+  const _PAGE_NONCE = (() => {
+    try {
+      const s = document.currentScript;
+      const n = s && s.nonce;
+      return n && n !== '{{CSP_NONCE}}' ? n : null;
+    } catch (_) { return null; }
+  })();
+
   const _hosts = new Map();   // Window → entry   (INV-7 primary authenticator)
   const _byId = new Map();    // pluginId → entry
   let _hostCtx = null;        // capability target, installed by bindContext()
@@ -103,6 +116,7 @@ const PluginSandbox = (() => {
         getChannels: function () { return request('channels.getState', {}); },
         on: function (topic, cb) { (subs[topic] = subs[topic] || []).push(cb); post('sys', 'subscribe', { topic: String(topic) }); },
         off: function (topic, cb) { if (subs[topic]) subs[topic] = subs[topic].filter(function (f) { return f !== cb; }); },
+        saveState: function (s) { post('sys', 'state', s); },   // pushed to the host cache for workspace save
         t: function (k) { return (dict && dict[k]) || k; }
       };
       function _b64(data) {
@@ -141,6 +155,7 @@ const PluginSandbox = (() => {
             return;
           }
           if (env.type === 'deactivate') { try { impl && impl.deactivate && impl.deactivate(); } catch (_) {} return; }
+          if (env.type === 'set-state') { try { impl && impl.setState && impl.setState(env.payload); } catch (_) {} return; }
           if (env.type === 'i18n') { dict = env.payload || {}; return; }
           if (env.type === 'teardown') { try { impl && impl.dispose && impl.dispose(); } catch (_) {} return; }
         }
@@ -230,6 +245,12 @@ const PluginSandbox = (() => {
         break;
       case 'button-state':
         entry.lastToggle = _plainToggle(env.payload);
+        _applyButtonState(entry);   // L5: drive the toolbar button from the real result
+        break;
+      case 'state':
+        // Workspace state pushed by the plugin — cached (opaque, by value; already
+        // a structured-clone with no functions) for getWorkspaceState() to read.
+        entry.cachedState = env.payload;
         break;
       case 'subscribe':
         _subscribe(entry, String(env.payload && env.payload.topic || ''));
@@ -366,8 +387,7 @@ const PluginSandbox = (() => {
     // the frame's own meta-CSP AND the inherited parent script-src. So they must
     // carry the PAGE nonce, not a fresh one. `token` stays random (RPC auth factor).
     // Fallback to random only on a host with no CSP header (nonce is inert there).
-    const pageNonceEl = document.querySelector('meta[name="csp-nonce"]');
-    const nonce = (pageNonceEl && pageNonceEl.getAttribute('content')) || _rand(16);
+    const nonce = _PAGE_NONCE || _rand(16);
     const token = _rand(24);
     const iframe = document.createElement('iframe');
     iframe.setAttribute('sandbox', 'allow-scripts');   // NEVER allow-same-origin (INV-6)
@@ -413,14 +433,28 @@ const PluginSandbox = (() => {
       activate() { entry.lastActivateAt = _now(); entry.downloadUsed = false;
                    _send(entry, 'sys', 'activate'); return entry.lastToggle; },
       deactivate() { _send(entry, 'sys', 'deactivate'); },
-      // v1 stubs: workspace state is NOT yet bridged across the sandbox boundary
-      // (the example plugin is stateless). Wiring get/set-state RPC is a future add.
+      // Workspace state is bridged: the plugin pushes state via LumenPlugin.saveState
+      // (cached in entry.cachedState, read here on save); restore forwards it back.
       getState() { return entry.cachedState; },
-      setState() { /* no-op in v1 — sandboxed plugins do not persist workspace state yet */ },
+      setState(s) { entry.cachedState = s; _send(entry, 'sys', 'set-state', s); },
       dispose() { kill(entry.meta.id, 'dispose'); },
       onLanguageChange() { entry.i18n = (entry.meta.i18n && (entry.meta.i18n[_lang()] || entry.meta.i18n.en)) || {};
                            _send(entry, 'sys', 'i18n', entry.i18n); },
     };
+  }
+
+  // L5: drive the toolbar button visual state from the plugin's REAL toggle result
+  // (arrives async via 'button-state'), not the stale synchronous shim return.
+  function _applyButtonState(entry) {
+    const t = entry.lastToggle || {};
+    const btn = document.querySelector(`[data-plugin-id="${(window.CSS && CSS.escape) ? CSS.escape(entry.meta.id) : entry.meta.id}"]`);
+    if (!btn) return;
+    btn.classList.toggle('btn-solid', !!t.active);
+    btn.classList.toggle('btn-ghost', !t.active);
+    if (t.icon) {
+      const iconEl = btn.querySelector('i[data-lucide]');
+      if (iconEl) { iconEl.setAttribute('data-lucide', t.icon); if (window.lucide) lucide.createIcons({ nodes: [btn] }); }
+    }
   }
 
   /** Install the real capability target once the ViewerContext exists (after the

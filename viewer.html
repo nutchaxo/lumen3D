@@ -2,7 +2,6 @@
 <html lang="en" data-theme="dark">
 <head>
   <meta charset="UTF-8">
-  <meta name="csp-nonce" content="{{CSP_NONCE}}">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Viewer — IRIBHM Microscopy</title>
 
@@ -438,7 +437,7 @@
   <script src="js/core/ui-actions.js"></script>
   <script src="js/core/i18n.js"></script>
   <script src="js/core/theme.js"></script>
-  <script src="js/core/colorblind.js?v=20260615-fixed1"></script>
+  <script src="js/core/colorblind.js?v=20260615-fixed1" nonce="{{CSP_NONCE}}"></script>
   <script src="js/core/catalog.js"></script>
   <script src="js/core/download-manifest.js"></script>
   <script src="js/core/display-presets.js"></script>
@@ -452,8 +451,8 @@
   <script src="js/core/perf-telemetry.js"></script>
   <script src="js/core/compat.js"></script>
   <script src="js/core/plugin-trust.js"></script>
-  <script src="js/core/plugin-sandbox.js"></script>
-  <script src="js/core/plugin-registry.js?v=20260615-fixed1"></script>
+  <script src="js/core/plugin-sandbox.js" nonce="{{CSP_NONCE}}"></script>
+  <script src="js/core/plugin-registry.js?v=20260615-fixed1" nonce="{{CSP_NONCE}}"></script>
   <script src="js/core/svr-manager.js?v=20260615-fixed1"></script>
   <script src="js/core/brick-loader.js?v=20260615-fixed1"></script>
   <script src="js/core/aabb-intersector.js"></script>

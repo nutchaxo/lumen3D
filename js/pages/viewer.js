@@ -206,6 +206,11 @@ const ViewerApp = (() => {
           // SEC-012: restrict targetOrigin to this page's origin (no wildcard leak).
           window.parent.postMessage({ type: 'SYNC_CAMERA', value: state, sourceIndex: _panelIndex }, Utils.trustedTargetOrigin());
         }
+        // Fan out to subscribed sandboxed plugins (projected payload; the view moved).
+        if (typeof PluginSandbox !== 'undefined') {
+          PluginSandbox.emit('camera', state);
+          PluginSandbox.emit('render');
+        }
       });
       // Broadcast full slicer plane spec to sibling decompose panels on every change.
       // Uses onPlaneSpecChange which fires for all plane mutations (position, yaw, pitch, roll, slab, mode).
@@ -288,6 +293,7 @@ const ViewerApp = (() => {
       _channelState[idx] = { ...params };
       VolumeViewer.updateChannel(idx, params);
       window.dispatchEvent(new CustomEvent('channels-updated'));
+      if (typeof PluginSandbox !== 'undefined') PluginSandbox.emit('channels-updated');
       if (_isIframe) {
         // SEC-012: restrict targetOrigin to this page's origin (no wildcard leak).
         window.parent.postMessage({ type: 'SYNC_CHANNELS', sourceIndex: _panelIndex, channelIndex: idx, value: params }, Utils.trustedTargetOrigin());
@@ -421,6 +427,9 @@ const ViewerApp = (() => {
         }
         await PluginRegistry.initAll(moduleCtx);
         PluginRegistry.bindToolbarButtons();
+        // Live trust revocation: tear down a sandboxed plugin if the operator revokes
+        // its approval while this viewer is open (polls the server trustEpoch).
+        if (PluginRegistry.startTrustWatch) PluginRegistry.startTrustWatch();
 
         // Now that every module has its ViewerContext, flush any plugin workspace
         // state that _applyWorkspaceStateNow() captured before initAll() ran.

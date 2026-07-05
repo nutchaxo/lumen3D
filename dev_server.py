@@ -115,6 +115,24 @@ LAST_UPDATE_FILE = BACKUPS_DIR / "last-update.json"
 # The curated release artifact (allowlist-built by tools/build_release.py). Preferred
 # over GitHub's raw source zipball: it ships version.json with per-file sha256.
 _RELEASE_ASSET_RE = re.compile(r"^lumen3d-web-.*\.zip$", re.IGNORECASE)
+
+# Release AUTHENTICITY (L7): the project signing public key (Ed25519, 32 bytes hex).
+# CI signs the release's SHA256SUMS with the matching private seed (held in the
+# LUMEN_SIGNING_KEY GitHub secret) → SHA256SUMS.sig asset. Before applying an
+# update, the running server re-verifies that detached signature against THIS key
+# (pinned in the currently-installed code, never taken from the download).
+#   - Empty  → authenticity "not configured": integrity-only (sha256) with a loud
+#              warning. This is the pre-setup state; run tools/gen_signing_key.py.
+#   - Set    → signature is MANDATORY. A release missing SHA256SUMS.sig, or whose
+#              signature does not verify under this key, is REJECTED (fail-closed).
+# To enable: generate a keypair (tools/gen_signing_key.py), paste the public key
+# here AND into install.php's $PINNED_PUBKEY, and store the seed as the CI secret.
+_RELEASE_PUBKEY_HEX = ""
+
+try:
+    import ed25519_pure as _ed25519           # vendored, stdlib-only (RFC 8032)
+except Exception:
+    _ed25519 = None
 # Set by main() so the update thread can stop serve_forever cleanly before the
 # pivot, and so the pivot journal records how to respawn the server.
 _HTTPD = None
@@ -141,12 +159,24 @@ def _csp_policy(nonce: str) -> str:
     # injection target, and the platform loads offline). worker-src 'self' (no
     # blob: — the only Workers are same-origin file URLs). frame-ancestors 'self'
     # blocks cross-origin framing (clickjacking); the compare page frames only
-    # same-origin viewer.html. style-src keeps 'unsafe-inline' (inline style=
-    # attributes; not script-executing) — tracked for later removal.
+    # same-origin viewer.html.
+    #
+    # style (L8): the ELEMENT context is nonce-locked — style-src-elem has NO
+    # 'unsafe-inline', so an injected <style> stylesheet (the strong CSS vector:
+    # full-page redressing, @import) is blocked; our own inline <style> blocks carry
+    # the per-request nonce, and same-origin/Google-Fonts <link>s are host-allowed.
+    # The ATTRIBUTE context keeps 'unsafe-inline' (style-src-attr): the platform sets
+    # ~200 data-driven style="" values (widths, channel colors) whose only CSP-clean
+    # forms are utility-class sprawl or CSSOM rewrites — disproportionate given the
+    # residual threat is CSS-only (script-src is nonce-locked) and url()-exfiltration
+    # is already closed by img-src/connect-src 'self'. `style-src` remains as the CSP2
+    # fallback for engines that don't honor the -elem/-attr split.
     return (
         "default-src 'self'; "
         f"script-src 'self' 'nonce-{nonce}'; "
         "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
+        f"style-src-elem 'self' 'nonce-{nonce}' https://fonts.googleapis.com; "
+        "style-src-attr 'unsafe-inline'; "
         "font-src 'self' https://fonts.gstatic.com; "
         "img-src 'self' data: blob:; connect-src 'self'; worker-src 'self'; "
         "frame-src 'self'; child-src 'self'; object-src 'none'; base-uri 'self'; "
@@ -1031,7 +1061,7 @@ def _update_check() -> dict:
     # Prefer the curated runtime artifact (allowlist-built by tools/build_release.py,
     # ships version.json with per-file sha256) over GitHub's raw source zipball, and
     # pick up the SHA256SUMS asset when published so the download can be verified.
-    asset_url = asset_name = sums_url = None
+    asset_url = asset_name = sums_url = sig_url = None
     asset_size = None
     for a in rel.get("assets") or []:
         name = a.get("name") or ""
@@ -1039,6 +1069,8 @@ def _update_check() -> dict:
             asset_url, asset_name, asset_size = a.get("browser_download_url"), name, a.get("size")
         elif name == "SHA256SUMS":
             sums_url = a.get("browser_download_url")
+        elif name == "SHA256SUMS.sig":
+            sig_url = a.get("browser_download_url")
     return {
         "current": current,
         "latest": latest,
@@ -1051,6 +1083,8 @@ def _update_check() -> dict:
         "assetName": asset_name,
         "assetSize": asset_size,
         "sumsUrl": sums_url,
+        "sigUrl": sig_url,
+        "signingConfigured": bool(_RELEASE_PUBKEY_HEX),
     }
 
 
@@ -1214,16 +1248,66 @@ def _sha256_file(path: Path) -> str:
     return h.hexdigest()
 
 
+def _fetch_url_bytes(url: str, *, limit: int = 1 << 20) -> bytes:
+    """Fetch a small release asset (SHA256SUMS / .sig) fully into memory, capped."""
+    req = urllib.request.Request(url, headers={"User-Agent": "lumen3d-admin"})
+    with urllib.request.urlopen(req, timeout=30) as r:
+        return r.read(limit + 1)[:limit]
+
+
+def _parse_sha256sums(raw: bytes) -> dict:
+    """Parse coreutils-style SHA256SUMS bytes → {filename: hex}."""
+    out = {}
+    for line in raw.decode("utf-8", "replace").splitlines():
+        parts = line.strip().split()
+        if len(parts) == 2 and re.fullmatch(r"[0-9a-fA-F]{64}", parts[0]):
+            out[parts[1].lstrip("*")] = parts[0].lower()
+    return out
+
+
 def _fetch_sha256sums(url: str) -> dict:
     """Parse a coreutils-style SHA256SUMS release asset → {filename: hex}."""
-    req = urllib.request.Request(url, headers={"User-Agent": "lumen3d-admin"})
-    out = {}
-    with urllib.request.urlopen(req, timeout=30) as r:
-        for line in r.read().decode("utf-8", "replace").splitlines():
-            parts = line.strip().split()
-            if len(parts) == 2 and re.fullmatch(r"[0-9a-fA-F]{64}", parts[0]):
-                out[parts[1].lstrip("*")] = parts[0].lower()
-    return out
+    return _parse_sha256sums(_fetch_url_bytes(url))
+
+
+def _verify_release_signature(sums_raw: bytes, info: dict) -> None:
+    """Authenticity gate (L7). The detached SHA256SUMS.sig must verify against the
+    PINNED public key (_RELEASE_PUBKEY_HEX) over the EXACT bytes of SHA256SUMS.
+
+    Fail-closed once a key is pinned: a release without a valid signature is refused.
+    With no key pinned, this is a no-op except for a loud "unsigned" warning — the
+    integrity chain (sha256) still holds, but authenticity is not proven.
+    """
+    if not _RELEASE_PUBKEY_HEX:
+        print("MAJ: clé de signature non configurée — vérification d'intégrité "
+              "seule (sha256), authenticité NON prouvée. Voir tools/gen_signing_key.py.",
+              flush=True)
+        return
+    if _ed25519 is None:
+        raise OSError("vérificateur Ed25519 indisponible (ed25519_pure.py) — "
+                      "impossible d'authentifier la release (fail-closed)")
+    sig_url = info.get("sigUrl")
+    if not sig_url:
+        raise OSError("release non signée: asset SHA256SUMS.sig absent alors qu'une "
+                      "clé de signature est épinglée (fail-closed)")
+    try:
+        raw = _fetch_url_bytes(sig_url, limit=4096)
+        txt = raw.strip()
+        # Canonical form is hex (CI writes sig.hex()+"\n"); tolerate an exact raw
+        # 64-byte binary. NB: never .strip() a raw signature — an Ed25519 sig can
+        # legitimately begin/end with a byte that equals ASCII whitespace.
+        if re.fullmatch(rb"[0-9a-fA-F]{128}", txt):
+            sig = bytes.fromhex(txt.decode("ascii"))
+        elif len(raw) == 64:
+            sig = raw
+        else:
+            sig = txt
+    except Exception as e:
+        raise OSError(f"signature illisible: {e}")
+    if not _ed25519.verify(bytes.fromhex(_RELEASE_PUBKEY_HEX), sums_raw, sig):
+        raise OSError("signature de release invalide — authenticité refusée (fail-closed)")
+    print(f"MAJ: signature de release vérifiée (Ed25519, clé {_RELEASE_PUBKEY_HEX[:16]}…).",
+          flush=True)
 
 
 def _extract_release(zip_path: Path, dest: Path) -> Path:
@@ -1454,11 +1538,20 @@ def _run_update(info: dict) -> None:
                        expected_size=info.get("assetSize") if info.get("assetUrl") else None,
                        progress=_dl_progress)
 
-        _set_update("verify", 55, "Vérification de l'intégrité…")
+        _set_update("verify", 55, "Vérification de l'authenticité…")
+        # Authenticity + integrity chain: (pinned key) —sig→ SHA256SUMS —sha256→ zip.
+        # Fetch the manifest bytes ONCE: the signature is over those exact bytes, and
+        # the zip digest is read from the same bytes we authenticated.
         if info.get("sumsUrl") and info.get("assetUrl") and info.get("assetName"):
-            expected = _fetch_sha256sums(info["sumsUrl"]).get(info["assetName"])
+            sums_raw = _fetch_url_bytes(info["sumsUrl"])
+            _verify_release_signature(sums_raw, info)          # fail-closed if key pinned
+            expected = _parse_sha256sums(sums_raw).get(info["assetName"])
             if expected and _sha256_file(zip_path) != expected:
                 raise OSError("empreinte SHA-256 de l'archive invalide")
+        elif _RELEASE_PUBKEY_HEX:
+            # A signing key is pinned but the release ships no SHA256SUMS to sign over.
+            raise OSError("release sans SHA256SUMS alors qu'une clé de signature est "
+                          "épinglée — authenticité impossible à prouver (fail-closed)")
         with zipfile.ZipFile(zip_path) as zf:
             bad = zf.testzip()
         if bad:

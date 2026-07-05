@@ -52,7 +52,7 @@ const E = (source, data, origin) => ({ source, data, origin: origin === undefine
 
 (async () => {
   const meta = { id: 'p1', name: 'P1', placement: 'tools', subtype: 'action', i18n: {} };
-  const caps = ['ui.toast', 'ui.download', 'viewer.getInfo'];
+  const caps = ['ui.toast', 'ui.download', 'viewer.getInfo', 'events.subscribe'];
   const spawnP = PluginSandbox.spawn(meta, 'hash', caps, 'LumenPlugin.register({});');
 
   // The frame was created synchronously; extract the per-frame token the host minted
@@ -68,7 +68,7 @@ const E = (source, data, origin) => ({ source, data, origin: origin === undefine
   // Handshake: ready → host sends init; init-done → spawn resolves.
   messageHandler(E(win, { ns: 'lumen-plugin', v: 1, dir: 'sys', id: 1, plugin: 'p1', token, type: 'ready', payload: {} }));
   messageHandler(E(win, { ns: 'lumen-plugin', v: 1, dir: 'sys', id: 2, plugin: 'p1', token, type: 'init-done' }));
-  await spawnP;
+  const shim = await spawnP;
 
   let fails = 0;
   const check = (name, cond) => { console.log((cond ? '  ok   ' : '  FAIL ') + name); if (!cond) fails++; };
@@ -97,6 +97,22 @@ const E = (source, data, origin) => ({ source, data, origin: origin === undefine
   posted.length = 0;
   messageHandler(E(win, mk({ type: 'ui.download', payload: { filename: 'x.png', mime: 'image/png', dataB64: btoa('abc') } })));
   check('INV-11 download without gesture refused', posted.some(p => p.dir === 'res' && p.error && p.error.code === 'no-gesture'));
+
+  // L3/L4 use sys messages — run BEFORE the flood drains the (all-message) bucket.
+  // L3: a subscribed frame receives projected events via emit().
+  messageHandler(E(win, { ns: 'lumen-plugin', v: 1, dir: 'sys', id: 5, plugin: 'p1', token, type: 'subscribe', payload: { topic: 'camera' } }));
+  posted.length = 0;
+  PluginSandbox.emit('camera', { position: [1, 2, 3], target: [0, 0, 0], secret: 'x' });
+  const camEvt = posted.find(p => p.dir === 'evt' && p.type === 'camera');
+  check('L3 subscribed frame receives projected camera event',
+        !!camEvt && Array.isArray(camEvt.payload.position) && camEvt.payload.secret === undefined);
+  posted.length = 0;
+  PluginSandbox.emit('channels-updated');
+  check('L3 unsubscribed topic not delivered', !posted.some(p => p.dir === 'evt' && p.type === 'channels-updated'));
+
+  // L4: workspace state pushed by the plugin is cached and read back by getState.
+  messageHandler(E(win, { ns: 'lumen-plugin', v: 1, dir: 'sys', id: 6, plugin: 'p1', token, type: 'state', payload: { count: 7 } }));
+  check('L4 pushed workspace state is cached', shim.getState() && shim.getState().count === 7);
 
   posted.length = 0;
   for (let i = 0; i < 80; i++) messageHandler(E(win, mk({ id: 100 + i })));

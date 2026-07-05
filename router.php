@@ -11,7 +11,11 @@
 
 $path = urldecode(parse_url($_SERVER['REQUEST_URI'], PHP_URL_PATH));
 
-if (preg_match('#^/api/(admin_credential|stats|disabled-plugins|config)\.json$#i', $path)
+// Deny EVERY api/*.json (credential/stats/plugin toggles/quarantine/TRUST STORE)
+// plus the shared PHP include — mirrors api/.htaccess's `\.json$` catch-all so this
+// php -S twin can't drift as new state files are added (e.g. plugin-trust.json). The
+// real API routes are .php (auth/datasets/admin/plugins), unaffected.
+if (preg_match('#^/api/[^/]+\.json$#i', $path)
     || preg_match('#^/api/(_admin_lib|config)\.php$#i', $path)) {
     http_response_code(403);
     header('Content-Type: text/plain');

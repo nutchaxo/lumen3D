@@ -413,8 +413,10 @@ const PluginSandbox = (() => {
       activate() { entry.lastActivateAt = _now(); entry.downloadUsed = false;
                    _send(entry, 'sys', 'activate'); return entry.lastToggle; },
       deactivate() { _send(entry, 'sys', 'deactivate'); },
+      // v1 stubs: workspace state is NOT yet bridged across the sandbox boundary
+      // (the example plugin is stateless). Wiring get/set-state RPC is a future add.
       getState() { return entry.cachedState; },
-      setState(s) { /* opaque, by value — forwarded only if the plugin asked */ },
+      setState() { /* no-op in v1 — sandboxed plugins do not persist workspace state yet */ },
       dispose() { kill(entry.meta.id, 'dispose'); },
       onLanguageChange() { entry.i18n = (entry.meta.i18n && (entry.meta.i18n[_lang()] || entry.meta.i18n.en)) || {};
                            _send(entry, 'sys', 'i18n', entry.i18n); },

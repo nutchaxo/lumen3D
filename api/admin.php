@@ -80,7 +80,7 @@ switch ($action) {
     }
 
     case 'plugin_trust':
-        admin_json_out(['approvals' => admin_load_trust(), 'devTrust' => is_dir(admin_root() . '/.git')]);
+        admin_json_out(['approvals' => admin_load_trust(), 'devTrust' => admin_dev_trust()]);
 
     case 'approve_plugin': {
         // INV-4: re-auth with the current password; the server re-hashes on disk and

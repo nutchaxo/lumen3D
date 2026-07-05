@@ -905,6 +905,21 @@ def _classify_plugin(plugin_path: str, mod_dir: Path, approvals: list,
     phash = _plugin_hash(file_hashes)
     base = {"hash": phash, "files": file_hashes}
 
+    # `sandbox: true` in plugin.json is the AUTHOR's declaration that the plugin is
+    # written for the LumenPlugin sandbox SDK (not the in-page ViewerContext). It
+    # decides the LANE; trust decides only whether it loads at all. So a trusted
+    # (bundled/dev/approved) sandbox plugin still runs in the iframe — otherwise its
+    # `LumenPlugin.*` calls would be undefined in-page and it would crash.
+    wants_sandbox = _plugin_wants_sandbox(mod_dir)
+    declared = _plugin_declared_caps(mod_dir)
+    sb_caps = sorted((declared or set(_SANDBOX_DEFAULT_CAPS)) & _SANDBOX_CAP_ALLOWLIST)
+
+    def _trusted_result(tier, mode, reason, caps=None):
+        if wants_sandbox:
+            return {**base, "tier": "sandboxed", "mode": "sandboxed",
+                    "caps": caps if caps is not None else sb_caps, "reason": reason + " + sandbox:true"}
+        return {**base, "tier": tier, "mode": mode, "caps": caps, "reason": reason}
+
     # bundled: content-addressed against the signed release manifest.
     if manifest is not None:
         prefix = f"js/modules/{plugin_path}/"
@@ -912,7 +927,7 @@ def _classify_plugin(plugin_path: str, mod_dir: Path, approvals: list,
             manifest.get(prefix + rel) == h for rel, h in file_hashes.items()
         )
         if all_match:
-            return {**base, "tier": "bundled", "reason": "in release manifest"}
+            return _trusted_result("bundled", None, "in release manifest")
 
     # Find this plugin's approval (if any), validated against the CURRENT bytes.
     ap = next((a for a in approvals if a.get("path") == plugin_path), None)
@@ -934,11 +949,12 @@ def _classify_plugin(plugin_path: str, mod_dir: Path, approvals: list,
 
     # dev: positive operator signal (explicit flag or loopback .git checkout).
     if _DEV_TRUST:
-        return {**base, "tier": "dev", "reason": "dev-trust (local)"}
+        return _trusted_result("dev", None, "dev-trust (local)")
 
     if ap_valid and ap.get("mode") == "trusted":
-        return {**base, "tier": "approved-trusted", "mode": "trusted",
-                "caps": eff, "reason": "operator-approved (in-page)"}
+        # An in-page approval of a sandbox:true plugin still runs it sandboxed
+        # (author's SDK requires it) — with declared ∩ approved caps (eff).
+        return _trusted_result("approved-trusted", "trusted", "operator-approved (in-page)", caps=eff)
     if ap is not None and not ap_valid:
         return {**base, "tier": "untrusted", "reason": "approval void — content or caps changed"}
 
@@ -956,6 +972,17 @@ def _plugin_declared_caps(mod_dir: Path) -> set:
     except (OSError, ValueError):
         pass
     return set()
+
+
+def _plugin_wants_sandbox(mod_dir: Path) -> bool:
+    """True if plugin.json declares `sandbox: true` — the author says this plugin
+    is written for the LumenPlugin sandbox SDK, so it must run in the iframe lane
+    regardless of trust tier (running it in-page would crash on LumenPlugin.*)."""
+    try:
+        meta = json.loads((mod_dir / "plugin.json").read_text(encoding="utf-8"))
+        return meta.get("sandbox") is True
+    except (OSError, ValueError):
+        return False
 
 
 def _preprocess_version():

@@ -164,10 +164,18 @@ Le serveur est une **deuxième barrière indépendante**, pas la seule (RT-C2 : 
 
 ### 1.6. Confinement d'exécution — CSP (résout RT-C2, critique)
 
-Sans ceci, la Partie 1 client est contournable par n'importe quel script in-page. Livré en **deux formes** :
+Sans ceci, la Partie 1 client est contournable par n'importe quel script in-page.
 
-- **Header** émis par `dev_server.py` (`end_headers`) et PHP, sur les pages HTML.
-- **`<meta http-equiv="Content-Security-Policy">`** en tête de chaque `*.html` (hosts statiques/PHP sans header).
+> **CORRECTION (comme construit v1.6.0 — remplace le plan initial ci-dessous)** : la
+> CSP enforcing est émise en **en-tête HTTP uniquement**, par `dev_server.py:_serve_html`,
+> qui injecte un **nonce par requête** (`{{CSP_NONCE}}` → nonce) — un nonce ne peut pas
+> être figé dans une balise `<meta>` statique. Les pages portent seulement
+> `<meta name="csp-nonce">` (lu par le client, inerte sans en-tête). Un hôte **PHP/statique**
+> (Apache, `php -S`, `python -m http.server`, S3) **n'a donc PAS de CSP enforcing** → le
+> refus client des plugins non-fiables y est contournable (RT-C2) ; le confinement fort
+> ne tient que sous le serveur Python (recommander ce serveur, ou un reverse-proxy HTTPS
+> injectant un nonce). Les libs sont **self-hostées** (`js/vendor/`) → `script-src 'self'
+> 'nonce-…'`, aucun hôte CDN. Le plan « deux formes » initial (ci-dessous) était incorrect.
 
 Politique (page principale) :
 ```
@@ -177,7 +185,7 @@ script-src 'self' 'nonce-<PAGE_NONCE>'
   /* hashes/URLs CDN épinglés — Three, Lucide, OpenSeadragon (déjà SRI dans viewer.html) */
 object-src 'none';
 base-uri 'self';
-frame-src 'self';            /* les iframes sandbox utilisent srcdoc → autorisé */
+frame-src 'self';            /* CORRECTION (comme construit) : frame-src ne régit que le CHARGEMENT de l'iframe. Une frame srcdoc HÉRITE de la CSP parente, donc ses scripts inline sont aussi soumis au script-src parent → ils doivent porter le NONCE DE PAGE (voir plugin-sandbox.js:spawn). Libs finalement self-hostées (js/vendor/), pas de CDN dans script-src. */
 connect-src 'self';
 /* PAS de 'unsafe-inline', PAS de 'unsafe-eval' */
 ```

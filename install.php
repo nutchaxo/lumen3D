@@ -971,8 +971,11 @@ function handle_configure(): void {
     // api/.htaccess: only create when the release zip did not ship one.
     $ht = $apiDir . '/.htaccess';
     if (!file_exists($ht)) {
+        // Deny EVERY api/*.json (credential/stats/plugin toggles/quarantine/trust
+        // store) + the shared PHP include — matches the shipped api/.htaccess so a
+        // fallback-created file can't leave plugin-trust.json web-readable.
         $rules = "# Lumen3D — protect admin state files (created by install.php)\n"
-            . "<FilesMatch \"^(admin_credential|stats|disabled-plugins|config)\\.json$|^_admin_lib\\.php$\">\n"
+            . "<FilesMatch \"\\.json$|^_admin_lib\\.php$\">\n"
             . "    <IfModule mod_authz_core.c>\n        Require all denied\n    </IfModule>\n"
             . "    <IfModule !mod_authz_core.c>\n        Order allow,deny\n        Deny from all\n    </IfModule>\n"
             . "</FilesMatch>\n";

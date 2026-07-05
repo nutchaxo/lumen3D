@@ -339,16 +339,39 @@ function admin_plugin_declared_caps(string $modDir): array {
 }
 
 /** Returns ['tier'=>..,'hash'=>..,'mode'=>?,'caps'=>?,'reason'=>..]. Twin of _classify_plugin. */
+function admin_plugin_wants_sandbox(string $modDir): bool {
+    $meta = admin_read_json($modDir . '/plugin.json');
+    return is_array($meta) && ($meta['sandbox'] ?? null) === true;
+}
+
+/** Dev-trust: a .git checkout served to a LOOPBACK client only (mirrors the Python
+ *  loopback gate). Single source of truth so the classifier and the plugin_trust
+ *  endpoint report the same value. */
+function admin_dev_trust(): bool {
+    $remote = $_SERVER['REMOTE_ADDR'] ?? '';
+    return is_dir(admin_root() . '/.git') && in_array($remote, ['127.0.0.1', '::1', ''], true);
+}
+
 function admin_classify_plugin(string $pluginPath, string $modDir, array $approvals, ?array $manifest): array {
     $fh = admin_plugin_file_hashes($modDir);
     $hash = admin_plugin_hash($fh);
     $base = ['hash' => $hash];
+    // `sandbox: true` decides the LANE — a trusted sandbox plugin still runs in the
+    // iframe (in-page it would crash on LumenPlugin.*). Twin of _plugin_wants_sandbox.
+    $wantsSandbox = admin_plugin_wants_sandbox($modDir);
+    $declared = admin_plugin_declared_caps($modDir);
+    $sbCaps = array_values(array_intersect($declared ?: SANDBOX_DEFAULT_CAPS, SANDBOX_CAP_ALLOWLIST));
+    $trusted = function ($tier, $mode, $reason, $caps) use ($base, $wantsSandbox, $sbCaps) {
+        if ($wantsSandbox) return $base + ['tier' => 'sandboxed', 'mode' => 'sandboxed',
+            'caps' => ($caps !== null ? $caps : $sbCaps), 'reason' => $reason . ' + sandbox:true'];
+        return $base + ['tier' => $tier, 'mode' => $mode, 'caps' => $caps, 'reason' => $reason];
+    };
     // bundled: content match against version.json
     if ($manifest !== null && $fh) {
         $prefix = "js/modules/$pluginPath/";
         $allMatch = true;
         foreach ($fh as $rel => $h) { if (($manifest[$prefix . $rel] ?? null) !== $h) { $allMatch = false; break; } }
-        if ($allMatch) return $base + ['tier' => 'bundled', 'reason' => 'in release manifest'];
+        if ($allMatch) return $trusted('bundled', null, 'in release manifest', null);
     }
     // Find this plugin's approval (if any), validated against the CURRENT bytes.
     $ap = null;
@@ -368,12 +391,11 @@ function admin_classify_plugin(string $pluginPath, string $modDir, array $approv
 
     // dev: .git checkout, but ONLY for a loopback request (a LAN/public visitor to a
     // PHP host with .git present must not get dev-trust — mirrors the Python loopback gate).
-    $remote = $_SERVER['REMOTE_ADDR'] ?? '';
-    if (is_dir(admin_root() . '/.git') && in_array($remote, ['127.0.0.1', '::1', ''], true))
-        return $base + ['tier' => 'dev', 'reason' => 'dev-trust (loopback git checkout)'];
+    if (admin_dev_trust())
+        return $trusted('dev', null, 'dev-trust (loopback git checkout)', null);
 
     if ($apValid && ($ap['mode'] ?? '') === 'trusted')
-        return $base + ['tier' => 'approved-trusted', 'mode' => 'trusted', 'caps' => $eff, 'reason' => 'operator-approved'];
+        return $trusted('approved-trusted', 'trusted', 'operator-approved', $eff);
     if ($ap !== null && !$apValid)
         return $base + ['tier' => 'untrusted', 'reason' => 'approval void — content or caps changed'];
     return $base + ['tier' => 'untrusted', 'reason' => 'not approved'];

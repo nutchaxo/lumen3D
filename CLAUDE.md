@@ -2,9 +2,11 @@
 
 > **Light-based Unified Microscopy Exploration in 3D** — High-performance browser-based viewer for multi-gigabyte confocal microscopy volumes (mouse embryos, IRIBHM lab @ ULB). 60 FPS streaming, scientific tooling, Python preprocessing pipeline.
 
-**Stack** : Vanilla JS (no framework, IIFE modules), Three.js (UMD via CDN), custom WebGL2 ray-marcher, Python preprocessing (h5py / numpy / scipy / PIL), dev server in Python (`dev_server.py`) — PHP fallback in `api/` for legacy hosts.
+**Stack** : Vanilla JS (no framework, IIFE modules), Three.js (UMD, **self-hosted** under `js/vendor/` since v1.6.0 — not CDN), custom WebGL2 ray-marcher, Python preprocessing (h5py / numpy / scipy / PIL), dev server in Python (`dev_server.py`) — PHP fallback in `api/` for legacy hosts.
 
-**Current versions** : Plateforme Web `1.4.0` (latest changelog `changelog/changelog_1.4.0.md`), Preprocessing `0.14.1` (`preprocess/run_preprocess.py:__version__`). ⚠️ Note: `dev_server.py:__version__` is `0.13.0` and **drifts from the web platform version** — it tracks the server tool itself, not the platform. The Web platform version lives **only** in the `changelog/` filenames; bump by adding a new `changelog_X.Y.Z.md`.
+**Current versions** : Plateforme Web `1.6.0` (latest changelog `changelog/changelog_1.6.0.md`; v1.5.0 is the first published GitHub release), Preprocessing `0.14.1` (`preprocess/run_preprocess.py:__version__`). ⚠️ Note: `dev_server.py:__version__` is `0.15.0` and **drifts from the web platform version** — it tracks the server tool itself, not the platform. The Web platform version lives **only** in the `changelog/` filenames; bump by adding a new `changelog_X.Y.Z.md`. Older 0.x → 1.2.x changelogs are archived under `changelog/archive/` (excluded from version computation — it globs the flat level only).
+
+> **Since v1.5.0/v1.6.0 the platform gained three major subsystems** (details in §2/§7, `DOCS/update-system/`, `DOCS/plugin-sandbox/`): **(1) robust self-updater** — Blue-Green staging swap + health-gated restart + auto-rollback in `dev_server.py`; a **release CI** (`.github/workflows/`, `tools/build_release.py` → curated `lumen3d-web-X.Y.Z.zip` + `version.json` + `SHA256SUMS`); a one-file `install.php`. **(2) plugin↔platform compatibility** — `platformCompat` (list/range) in `plugin.json`, resolver twins `js/core/compat.js` + `dev_server.py:_compat_satisfies` + `api/_admin_lib.php`. **(3) third-party plugin isolation** — default-deny **trust gate** (`js/core/plugin-trust.js`; operator approval pinned to a content hash) + **iframe sandbox** (`js/core/plugin-sandbox.js`) + **enforced strict CSP** (per-request nonce injected by `dev_server.py:_serve_html`; libs self-hosted in `js/vendor/`; inline handlers → `js/core/ui-actions.js` `data-action` delegation).
 
 ---
 
@@ -26,7 +28,7 @@
 
 ### 1.4. Security (no auth, but defensive)
 * Validate dataset structure on load (dimensions, channel count, manifest integrity). A malformed `metadata.json` must be rejected, not partially mounted.
-* Never POST study data to third parties. The platform is offline-capable; only CDN deps are Three.js, Lucide icons, Google Fonts.
+* Never POST study data to third parties. The platform is offline-capable; JS libraries (Three.js, Lucide, OpenSeadragon, Plotly) are **self-hosted** under `js/vendor/`. The only remote dependency is Google Fonts (CSS/fonts), allowed by `style-src`/`font-src` in the CSP.
 
 ### 1.5. Autonomous versioning — APPLY ON EVERY CHANGE, NO REMINDER NEEDED
 The user expects this to happen silently as part of every edit:
@@ -99,6 +101,10 @@ Loaded as classic `<script>` (no ESM), each exposes a global IIFE.
 | [download-manifest.js](js/core/download-manifest.js) | Builds export bundles |
 | [export-manager.js](js/core/export-manager.js) | Backs the Download Center — workspace save/restore, measures/metadata/annotations export, downloadable-bundle browser, citation block |
 | [perf-telemetry.js](js/core/perf-telemetry.js) | `PerfTelemetry.start/end/event/setContext` — instrumentation calls scattered in `viewer.js`. The historical `DOCS/perf_baseline_*.json` snapshots have been removed from the repo. |
+| [compat.js](js/core/compat.js) | `Compat.satisfies(platformVer, decl)` — plugin↔platform compat resolver (list/range, `^`/`~`/`.x`). Twin of `dev_server.py:_compat_satisfies` + PHP; validated by `tests/compat-vector.json`. Fail-closed. |
+| [plugin-trust.js](js/core/plugin-trust.js) | `PluginTrust.evaluate` — client trust twin: canonical content hash (`crypto.subtle` over raw bytes) re-verified against the server vouch, anti-TOCTOU. Tiers bundled/dev/approved/untrusted. |
+| [plugin-sandbox.js](js/core/plugin-sandbox.js) | `PluginSandbox` — HOST side of the iframe-sandbox RPC broker (null-origin `srcdoc`, capability-scoped `postMessage`, rate-limit/gesture-gate/heartbeat). Runs approved-sandboxed plugins. |
+| [ui-actions.js](js/core/ui-actions.js) | `data-action` event delegation for header controls (theme/lang/colorblind) — replaces inline `onclick=` handlers so the strict CSP has no `unsafe-inline`. |
 
 ### 2.4. JS viewers — Three.js renderers under `js/viewers/`
 
@@ -262,15 +268,21 @@ DATA_WEB/
 | Stage / embryo regex | [preprocess/4-catalog_generator.py](preprocess/4-catalog_generator.py) `_parse_stage`, `_parse_embryo` |
 | Perf telemetry instrumentation | `PerfTelemetry.start/end/event/setContext` calls scattered in `viewer.js` + [js/core/perf-telemetry.js](js/core/perf-telemetry.js). Note: the old `DOCS/perf_baseline_*.json` snapshots were removed from the repo — regenerate locally if needed. |
 | Embryo orientation calibration | [js/modules/tools/orientation-axes/index.js](js/modules/tools/orientation-axes/index.js) (drag gizmo + postMessage to admin) |
+| Self-update pipeline (staging swap / rollback / health-gate) | [dev_server.py](dev_server.py) `_run_update` → `_pivot_main` (supervisor) / `_reconcile_pivot` (boot recovery) / `--check` (offline boot gate). Admin UI: [tab-updates.js](js/pages/admin/tab-updates.js). Design: `DOCS/update-system/`. |
+| Release build / CI / version guard | [tools/build_release.py](tools/build_release.py) (allowlist → curated zip + `version.json` + `SHA256SUMS`), [tools/check_version.py](tools/check_version.py) (tag==newest changelog), [.github/workflows/{release,ci}.yml](.github/workflows/release.yml). One-file installer: [install.php](install.php). |
+| Plugin↔platform compatibility (`platformCompat`) | [js/core/compat.js](js/core/compat.js) + [dev_server.py](dev_server.py) `_compat_satisfies` + [api/_admin_lib.php](api/_admin_lib.php) `admin_compat_satisfies`. Vector: `tests/compat-vector.json`. Declare `platformCompat` (list/range) in `plugin.json`. |
+| Plugin trust / operator approval (third-party isolation) | [js/core/plugin-trust.js](js/core/plugin-trust.js) + [dev_server.py](dev_server.py) `_classify_plugin`/`_approve_plugin` (store `api/plugin-trust.json`, protected). Admin approve/revoke UI: [tab-plugins.js](js/pages/admin/tab-plugins.js). Untrusted plugins are excluded from `/api/plugins`. |
+| Plugin sandbox (run untrusted UI plugin in an iframe) | [js/core/plugin-sandbox.js](js/core/plugin-sandbox.js) (host RPC broker) + example [js/modules/tools/screenshot-sandboxed/](js/modules/tools/screenshot-sandboxed/). Capability adapter wired in [viewer.js](js/pages/viewer.js) `PluginSandbox.bindContext`. |
+| Content-Security-Policy (enforced, nonce) | [dev_server.py](dev_server.py) `_csp_policy` + `_serve_html` (per-request nonce injected into `{{CSP_NONCE}}`). Inline handlers → `data-action` ([js/core/ui-actions.js](js/core/ui-actions.js)). Self-hosted libs: `js/vendor/`. Enforced by the Python server only (PHP/static hosts have no per-request nonce → no CSP). |
 
 ---
 
 ## 8. Conventions
 
 * **No ESM, no bundler** — JS is `<script>`-tag concatenation order from the HTML. Module pattern is IIFE returning a singleton (`const Foo = (() => { … return { … }; })();`). **Exception** : the admin panel (`admpan.html` + `js/pages/admpan.js` + `js/pages/admin/*.js`, since v1.4.0) is loaded via `<script type="module">` and uses real `import`/`export` — this is a deliberate, contained carve-out for that one page, not a platform-wide shift.
-* **Globals live on `window`** by virtue of top-level `const` in classic script context (each file is its own `<script>` element).
+* **Cross-file globals** — each file is its own classic `<script>`, and a top-level `const Foo = (…)()` is a global **lexical** binding: reachable by the bare name `Foo` from any other script on the page, but **NOT** exposed as `window.Foo` (only `var`/explicit `window.x=` attach to `window`). So reference singletons by bare name (`Theme`, `Utils`, `I18n`), guarded with `typeof Foo !== 'undefined'` — never `window.Foo`, which is `undefined` for these (this misconception caused a real toggle-breaking bug in v1.6.0, see `js/core/ui-actions.js`).
 * **No build step** — edits in `js/` are reflected on page reload. Dev server forces `no-cache` headers.
-* **CDN deps** are pinned (Three.js `0.167.0`, Lucide `0.344.0`) — see `index.html` `<head>`.
+* **Vendored deps** are **self-hosted** under `js/vendor/` since v1.6.0 (Three.js `0.147.0`, Lucide `0.344.0`, OpenSeadragon `3.0.0`, Plotly `2.27.0`), loaded with SRI `integrity` from `'self'` so the strict CSP needs no CDN origin and the platform runs offline. `js/vendor/**` is marked `-text` in `.gitattributes` (byte-stable → SRI stays valid). Only Google Fonts is still remote (CSS/font-src, not script). Do **not** re-introduce a CDN `<script src>` — it would be blocked by the enforced `script-src 'self' 'nonce-…'`.
 * **Comments** : keep them only when the WHY is non-obvious (a constraint, a workaround, a scientific formula). Don't narrate WHAT the code does — well-named identifiers cover that. Don't reference past tasks / issue numbers in code.
 * **Logs** dropped to `logs/` at server runtime (`dev_server.py` writes `dev-server-<timestamp>.{log,err.log}`).
 

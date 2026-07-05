@@ -38,8 +38,16 @@ def main():
     print(f"  {pub.hex()}\n")
     print("PRIVATE SEED (GitHub secret `LUMEN_SIGNING_KEY` — keep secret, never commit):")
     print(f"  {seed.hex()}\n")
-    print("Next: paste the public key into the two pinned constants, add the seed as the")
-    print("CI secret, then cut a release — CI will attach a verified SHA256SUMS.sig.")
+    print("Next steps:")
+    print("  1. Paste the PUBLIC key into the pinned constants IN THE REPO SOURCE and COMMIT it")
+    print("     (dev_server.py `_RELEASE_PUBKEY_HEX`, install.php `$PINNED_PUBKEY`). It must live")
+    print("     in source so it ships in every release — dev_server.py is NOT update-protected,")
+    print("     so a key set only on a deployed host would be OVERWRITTEN by the next update.")
+    print("  2. Add the SEED as the GitHub Actions secret `LUMEN_SIGNING_KEY`.")
+    print("  3. Cut a release — CI attaches a verified SHA256SUMS.sig.")
+    print("  NOTE: the FIRST release that introduces the key is authenticated by sha256 only")
+    print("  (the running, still-keyless server cannot verify a signature it doesn't yet pin);")
+    print("  every subsequent update is signature-verified fail-closed.")
     return 0
 
 

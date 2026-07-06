@@ -85,6 +85,13 @@ _LANG_CODE_RE = re.compile(r"^[a-z]{2,3}(-[A-Za-z]{2,4})?$")
 CONFIG_DIR = ROOT / "config"
 CONFIG_DEFAULTS_DIR = CONFIG_DIR / "defaults" / "neutral"
 INSTANCE_FILE = CONFIG_DIR / "instance.json"
+# Theme editor: config/theme.json (operator tokens) is compiled to a served
+# config/theme.css (a single :root{…} + [data-theme=…] block) that every page
+# loads via <link> AFTER themes.css. Generated file — never hand-edited.
+THEME_CSS_FILE = CONFIG_DIR / "theme.css"
+# A CSS custom-property name: --kebab-or-camel. Anything else is dropped (the
+# generated CSS is built from operator input; validate names + scrub values).
+_THEME_TOKEN_RE = re.compile(r"^--[A-Za-z0-9-]+$")
 # Cache the parsed instance config, invalidated on the file's mtime, so the
 # per-request {{SITE:…}} head injection never re-parses JSON on the hot path.
 _INSTANCE_CACHE: dict = {"sig": None, "data": {}}
@@ -332,24 +339,74 @@ def _save_site_doc(doc: str, data) -> bool:
     _atomic_write(active, json.dumps(data, indent=2, ensure_ascii=False), mode=0o644)
     if doc == "instance":
         _INSTANCE_CACHE.update({"sig": None, "data": {}})
+    elif doc == "theme":
+        try:
+            _regenerate_theme_css(data)
+        except Exception:
+            pass
     return True
 
 
+def _scrub_css_value(v) -> str:
+    """Neutralize characters that could break out of a CSS declaration/rule. The
+    generated theme.css is compiled from operator (admin) input; even though the
+    operator is trusted, values are scrubbed + length-capped so a stray brace can
+    never corrupt the whole stylesheet (Rule 1.4: reject malformed, never half-apply)."""
+    s = str(v)
+    for ch in ("{", "}", ";", "<", ">", "\\", "@"):
+        s = s.replace(ch, "")
+    return s.replace("\n", " ").replace("\r", " ").strip()[:200]
+
+
+def _theme_css_block(selector: str, tokens) -> str:
+    if not isinstance(tokens, dict):
+        return ""
+    decls = []
+    for name, val in tokens.items():
+        if not isinstance(name, str) or not _THEME_TOKEN_RE.match(name):
+            continue
+        sv = _scrub_css_value(val)
+        if sv:
+            decls.append(f"{name}:{sv}")
+    return (selector + "{" + ";".join(decls) + "}\n") if decls else ""
+
+
+def _generate_theme_css(theme: dict) -> str:
+    """Compile config/theme.json → a CSS override sheet: :root{ structural tokens }
+    plus optional [data-theme=dark|light]{ surface tokens }. Loaded AFTER themes.css
+    so it wins the cascade. Twin of api/site.php:site_generate_theme_css."""
+    if not isinstance(theme, dict):
+        theme = {}
+    out = ["/* GENERATED from config/theme.json by the theme editor — do not edit by hand. */\n"]
+    out.append(_theme_css_block(":root", theme.get("tokens")))
+    if theme.get("dark"):
+        out.append(_theme_css_block('[data-theme="dark"]', theme.get("dark")))
+    if theme.get("light"):
+        out.append(_theme_css_block('[data-theme="light"]', theme.get("light")))
+    return "".join(out)
+
+
+def _regenerate_theme_css(theme: dict | None = None) -> None:
+    if theme is None:
+        theme = _load_site_doc("theme")
+    _atomic_write(THEME_CSS_FILE, _generate_theme_css(theme if isinstance(theme, dict) else {}), mode=0o644)
+
+
 def _reset_site_doc(doc: str) -> bool:
-    """Restore a site-config doc to its shipped neutral default (revert-to-default)."""
+    """Restore a site-config doc to its shipped neutral default (revert-to-default).
+    Routes through _save_site_doc so side effects (instance cache flush, theme.css
+    regeneration) fire exactly as on a normal save."""
     res = _site_doc_path(doc)
     if not res:
         return False
     _active, default = res
     try:
-        content = default.read_text(encoding="utf-8") if default.exists() else "{}"
-        json.loads(content)  # validate
+        data = json.loads(default.read_text(encoding="utf-8")) if default.exists() else {}
+        if not isinstance(data, (dict, list)):
+            data = {}
     except Exception:
-        content = "{}"
-    _atomic_write(res[0], content, mode=0o644)
-    if doc == "instance":
-        _INSTANCE_CACHE.update({"sig": None, "data": {}})
-    return True
+        data = {}
+    return _save_site_doc(doc, data)
 
 
 def _publish_site_doc(doc: str) -> bool:

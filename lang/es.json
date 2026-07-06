@@ -777,6 +777,41 @@
     "badPassword": "Contraseña incorrecta.",
     "hashMismatch": "El contenido del plugin cambió — recargue la lista y vuelva a verificar.",
     "revokeConfirm": "¿Revocar la aprobación de este plugin? Ya no se cargará.",
-    "pluginRevoked": "Aprobación revocada ✓"
+    "pluginRevoked": "Aprobación revocada ✓",
+    "navAppearance": "Apariencia"
+  },
+  "appearance": {
+    "title": "Apariencia",
+    "sub": "Personalice el tema del sitio público (colores, fuente, esquinas). Vista previa en vivo.",
+    "colors": "Colores de marca",
+    "colPrimary": "Color primario",
+    "colAccent": "Color de acento",
+    "colSuccess": "Éxito",
+    "colError": "Error",
+    "colWarning": "Advertencia",
+    "typography": "Tipografía",
+    "fontLabel": "Fuente",
+    "font": {
+      "inter": "Inter (predeterminada)",
+      "system": "Sistema",
+      "grotesk": "Grotesca",
+      "serif": "Serif",
+      "rounded": "Redondeada"
+    },
+    "shape": "Formas",
+    "radiusLabel": "Radio de esquinas",
+    "radius": {
+      "default": "Estándar",
+      "sharp": "Recto",
+      "soft": "Suave",
+      "round": "Redondo"
+    },
+    "preview": "Vista previa en vivo",
+    "reset": "Restablecer",
+    "save": "Guardar",
+    "saved": "Tema guardado.",
+    "saveError": "Error al guardar el tema.",
+    "resetConfirm": "¿Restablecer el tema a los valores predeterminados?",
+    "resetDone": "Tema restablecido."
   }
 }

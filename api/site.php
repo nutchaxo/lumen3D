@@ -69,10 +69,47 @@ function site_write_public(string $path, array $data): bool {
     return true;
 }
 
+/** Scrub a CSS value so operator input can never break out of a declaration. */
+function site_scrub_css_value($v): string {
+    $s = (string)$v;
+    $s = str_replace(['{', '}', ';', '<', '>', '\\', '@', "\n", "\r"], ['', '', '', '', '', '', '', ' ', ' '], $s);
+    return substr(trim($s), 0, 200);
+}
+
+function site_theme_block(string $selector, $tokens): string {
+    if (!is_array($tokens)) return '';
+    $decls = [];
+    foreach ($tokens as $name => $val) {
+        if (!is_string($name) || !preg_match('/^--[A-Za-z0-9-]+$/', $name)) continue;
+        $sv = site_scrub_css_value($val);
+        if ($sv !== '') $decls[] = "$name:$sv";
+    }
+    return $decls ? ($selector . '{' . implode(';', $decls) . "}\n") : '';
+}
+
+/** Compile config/theme.json → the override sheet. Twin of dev_server.py:_generate_theme_css. */
+function site_generate_theme_css($theme): string {
+    if (!is_array($theme)) $theme = [];
+    $out = "/* GENERATED from config/theme.json by the theme editor — do not edit by hand. */\n";
+    $out .= site_theme_block(':root', $theme['tokens'] ?? null);
+    if (!empty($theme['dark']))  $out .= site_theme_block('[data-theme="dark"]', $theme['dark']);
+    if (!empty($theme['light'])) $out .= site_theme_block('[data-theme="light"]', $theme['light']);
+    return $out;
+}
+
 function site_save_doc(string $doc, $data): bool {
     $res = site_doc_path($doc);
     if ($res === null || !is_array($data)) return false;
-    return site_write_public($res[0], $data);
+    if (!site_write_public($res[0], $data)) return false;
+    if ($doc === 'theme') {
+        $css = site_generate_theme_css($data);
+        $cssPath = site_config_dir() . '/theme.css';
+        $tmp = tempnam(dirname($cssPath), '.tmp-');
+        if ($tmp !== false && @file_put_contents($tmp, $css) !== false && @rename($tmp, $cssPath)) {
+            @chmod($cssPath, 0644);
+        } elseif ($tmp !== false) { @unlink($tmp); }
+    }
+    return true;
 }
 
 function site_reset_doc(string $doc): bool {
@@ -81,7 +118,8 @@ function site_reset_doc(string $doc): bool {
     [$active, $default] = $res;
     $content = is_file($default) ? json_decode((string)@file_get_contents($default), true) : [];
     if (!is_array($content)) $content = [];
-    return site_write_public($active, $content);
+    // Route through save so theme.css regeneration fires on reset too.
+    return site_save_doc($doc, $content);
 }
 
 function site_publish_doc(string $doc): bool {

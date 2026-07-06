@@ -15,11 +15,13 @@ import { StatsTab } from './admin/tab-stats.js';
 import { PluginsTab } from './admin/tab-plugins.js';
 import { SecurityTab } from './admin/tab-security.js';
 import { UpdatesTab } from './admin/tab-updates.js';
+import { AppearanceTab } from './admin/tab-appearance.js';
 
 registerTab(DatasetsTab);
 registerTab(StatsTab);
 registerTab(PluginsTab);
 registerTab(SecurityTab);
 registerTab(UpdatesTab);
+registerTab(AppearanceTab);
 
 boot();

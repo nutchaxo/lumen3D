@@ -777,6 +777,41 @@
     "badPassword": "Incorrect password.",
     "hashMismatch": "The plugin content changed — reload the list and re-check.",
     "revokeConfirm": "Revoke this plugin's approval? It will no longer load.",
-    "pluginRevoked": "Approval revoked ✓"
+    "pluginRevoked": "Approval revoked ✓",
+    "navAppearance": "Appearance"
+  },
+  "appearance": {
+    "title": "Appearance",
+    "sub": "Customize the public site theme (colors, font, corners). Live preview.",
+    "colors": "Brand colors",
+    "colPrimary": "Primary color",
+    "colAccent": "Accent color",
+    "colSuccess": "Success",
+    "colError": "Error",
+    "colWarning": "Warning",
+    "typography": "Typography",
+    "fontLabel": "Font",
+    "font": {
+      "inter": "Inter (default)",
+      "system": "System",
+      "grotesk": "Grotesque",
+      "serif": "Serif",
+      "rounded": "Rounded"
+    },
+    "shape": "Shapes",
+    "radiusLabel": "Corner radius",
+    "radius": {
+      "default": "Standard",
+      "sharp": "Sharp",
+      "soft": "Soft",
+      "round": "Round"
+    },
+    "preview": "Live preview",
+    "reset": "Reset",
+    "save": "Save",
+    "saved": "Theme saved.",
+    "saveError": "Failed to save the theme.",
+    "resetConfirm": "Reset the theme to defaults?",
+    "resetDone": "Theme reset."
   }
 }

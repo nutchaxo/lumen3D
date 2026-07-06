@@ -777,6 +777,41 @@
     "badPassword": "Mot de passe incorrect.",
     "hashMismatch": "Le contenu du plugin a changé — rechargez la liste et revérifiez.",
     "revokeConfirm": "Révoquer l'approbation de ce plugin ? Il ne se chargera plus.",
-    "pluginRevoked": "Approbation révoquée ✓"
+    "pluginRevoked": "Approbation révoquée ✓",
+    "navAppearance": "Apparence"
+  },
+  "appearance": {
+    "title": "Apparence",
+    "sub": "Personnalisez le thème du site public (couleurs, police, arrondis). Aperçu en direct.",
+    "colors": "Couleurs de marque",
+    "colPrimary": "Couleur primaire",
+    "colAccent": "Couleur d'accent",
+    "colSuccess": "Succès",
+    "colError": "Erreur",
+    "colWarning": "Avertissement",
+    "typography": "Typographie",
+    "fontLabel": "Police",
+    "font": {
+      "inter": "Inter (défaut)",
+      "system": "Système",
+      "grotesk": "Grotesque",
+      "serif": "Serif",
+      "rounded": "Arrondie"
+    },
+    "shape": "Formes",
+    "radiusLabel": "Arrondi des coins",
+    "radius": {
+      "default": "Standard",
+      "sharp": "Net",
+      "soft": "Doux",
+      "round": "Rond"
+    },
+    "preview": "Aperçu en direct",
+    "reset": "Réinitialiser",
+    "save": "Enregistrer",
+    "saved": "Thème enregistré.",
+    "saveError": "Échec de l'enregistrement du thème.",
+    "resetConfirm": "Réinitialiser le thème aux valeurs par défaut ?",
+    "resetDone": "Thème réinitialisé."
   }
 }

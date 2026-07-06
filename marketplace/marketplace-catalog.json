@@ -1,0 +1,25 @@
+{
+  "version": 1,
+  "plugins": [
+    {
+      "id": "dataset-info",
+      "name": "Dataset Info",
+      "placement": "tools",
+      "subtype": "action",
+      "description": "Shows the current dataset's name and dimensions in a toast. Reference first-party marketplace plugin — installed from the signed catalog, runs sandboxed via capability RPC (no DOM / ctx / admin-API access).",
+      "creator": "Lumen3D",
+      "icon": "info",
+      "platformCompat": ">=1.8.0",
+      "sandboxCapabilities": [
+        "toolbar.addButton",
+        "viewer.getInfo",
+        "ui.toast"
+      ],
+      "latestVersion": "1.0.0",
+      "assetUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/dev/marketplace/plugins/dataset-info/plugin-dataset-info-1.0.0.zip",
+      "sumsUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/dev/marketplace/plugins/dataset-info/SHA256SUMS",
+      "sigUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/dev/marketplace/plugins/dataset-info/SHA256SUMS.sig",
+      "sha256": "af27956babd50c53affb46ebbfdae4636e1e217bbd681e189a6ead7e6a755c08"
+    }
+  ]
+}

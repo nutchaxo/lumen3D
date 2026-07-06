@@ -37,6 +37,9 @@ test_meta.html
 logs/
 *.log
 
+# Signing seeds (marketplace / release private keys — machine-local, NEVER commit)
+secrets/
+
 # Admin runtime state (secret / machine-local — never commit)
 api/config.json
 api/admin_credential.json

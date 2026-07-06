@@ -512,8 +512,8 @@ function admin_compat_satisfies($platformVersion, $decl): array {
 // install lands in the SAME trust gate as any plugin. SEPARATE key from the core
 // release key (install.php $PINNED_PUBKEY): plugin-signing authority is decoupled.
 // Empty key ⇒ sha256 integrity only + warning; SET ⇒ signature MANDATORY (fail-closed).
-const MARKETPLACE_PUBKEY      = '';   // hex ed25519 public key (pin in source, commit)
-const MARKETPLACE_CATALOG_URL = '';   // signed catalog JSON URL (+ '.sig'); empty ⇒ off
+const MARKETPLACE_PUBKEY      = '7f5feaddd11dac38c836f556cd7d7b09fe9a7bda307c20e1e062aafa0ab27d3e';
+const MARKETPLACE_CATALOG_URL = 'https://raw.githubusercontent.com/nutchaxo/lumen3D/dev/marketplace/marketplace-catalog.json';
 const MARKETPLACE_MAX_ZIP     = 8388608;
 
 function mkt_fetch_bytes(string $url, int $limit): ?string {

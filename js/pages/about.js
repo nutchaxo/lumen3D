@@ -20,7 +20,34 @@ const AboutApp = (() => {
     _renderStats();
     _bindCitations();
     if (window.lucide) lucide.createIcons();
+    await _maybeRenderAboutBlocks();
     document.body.classList.add('loaded');
+  }
+
+  /* White-label: render operator-published About blocks in place of the default. */
+  function _renderAboutBlocks(blocks) {
+    const host = document.getElementById('about-blocks');
+    const def = document.getElementById('about-default');
+    if (!host || typeof PageRenderer === 'undefined') return;
+    const n = PageRenderer.render(host, blocks, { wrap: true });
+    if (n) { host.style.display = ''; if (def) def.style.display = 'none'; }
+    else { host.style.display = 'none'; if (def) def.style.display = ''; }
+  }
+
+  async function _maybeRenderAboutBlocks() {
+    if (typeof PageRenderer === 'undefined') return;
+    const preview = new URLSearchParams(location.search).get('preview') === 'draft';
+    window.addEventListener('message', (e) => {
+      if (e.source !== window.parent) return;
+      const m = e.data;
+      if (m && m.type === 'LUMEN_PREVIEW_BLOCKS' && Array.isArray(m.blocks)) _renderAboutBlocks(m.blocks);
+    });
+    let blocks = [];
+    try { blocks = await PageRenderer.fetchBlocks('about', preview); } catch (_) {}
+    if (blocks && blocks.length) {
+      _renderAboutBlocks(blocks);
+      if (typeof I18n !== 'undefined' && I18n.onLanguageChange) I18n.onLanguageChange(() => _renderAboutBlocks(blocks));
+    }
   }
 
   function _renderStats() {

@@ -181,6 +181,52 @@ const InstanceConfig = (() => {
         if (typeof v === 'string') el.setAttribute(attr, v);
       });
     });
+    try { applyNav(root); } catch (_) {}
+  }
+
+  /**
+   * Make the public navbar config-driven: toggle the standard links by the
+   * nav.showX flags, inject operator-created custom pages, and a Legal link.
+   * Idempotent — re-injected links are tagged and cleared before re-appending
+   * (applyDom may run again after a language switch).
+   */
+  function applyNav(root) {
+    root = root || document;
+    const nav = _config.nav || {};
+    const stdMap = {
+      'explorer.html': nav.showExplorer,
+      'compare.html': nav.showCompare,
+      'tracking.html': nav.showTracking,
+      'about.html': nav.showAbout
+    };
+    root.querySelectorAll('.navbar-links').forEach(container => {
+      container.querySelectorAll('a.navbar-link').forEach(a => {
+        if (a.hasAttribute('data-instance-navlink')) return;
+        const href = (a.getAttribute('href') || '').split('?')[0].split('#')[0];
+        if (href in stdMap) a.style.display = (stdMap[href] === false) ? 'none' : '';
+      });
+      container.querySelectorAll('[data-instance-navlink]').forEach(e => e.remove());
+      const pages = Array.isArray(nav.customPages) ? nav.customPages : [];
+      pages.forEach(pg => {
+        if (!pg || pg.show === false || !pg.slug) return;
+        const a = document.createElement('a');
+        a.className = 'navbar-link';
+        a.setAttribute('data-instance-navlink', '');
+        a.href = 'page.html?slug=' + encodeURIComponent(pg.slug);
+        a.textContent = _localized(pg.label) || pg.slug;
+        container.appendChild(a);
+      });
+      if (nav.showLegal) {
+        const a = document.createElement('a');
+        a.className = 'navbar-link';
+        a.setAttribute('data-instance-navlink', '');
+        a.href = 'legal.html';
+        let label = 'Legal';
+        try { if (typeof I18n !== 'undefined' && I18n.t) { const v = I18n.t('legal.pageTitle'); if (v && v !== 'legal.pageTitle') label = v; } } catch (_) {}
+        a.textContent = label;
+        container.appendChild(a);
+      }
+    });
   }
 
   /**
@@ -221,5 +267,5 @@ const InstanceConfig = (() => {
     _listeners.forEach(fn => { try { fn(_config); } catch (_) {} });
   }
 
-  return { load, boot, get, all, tokens, applyDom, applyHead, onChange, isLoaded };
+  return { load, boot, get, all, tokens, applyDom, applyHead, applyNav, onChange, isLoaded };
 })();

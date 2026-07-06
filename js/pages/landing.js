@@ -50,9 +50,40 @@ document.addEventListener('DOMContentLoaded', async () => {
   // Intersection observer for scroll animations
   initScrollAnimations();
 
+  // White-label: if the operator published a block layout for the home page,
+  // render it in place of the default landing.
+  await maybeRenderHomeBlocks();
+
   // Show page
   document.body.classList.add('loaded');
 });
+
+/* ── White-label home block override ─────────────────────────── */
+function _renderHomeBlocks(blocks) {
+  const host = document.getElementById('home-blocks');
+  const def = document.getElementById('home-default');
+  if (!host || typeof PageRenderer === 'undefined') return;
+  const n = PageRenderer.render(host, blocks, { wrap: true });
+  if (n) { host.style.display = ''; if (def) def.style.display = 'none'; }
+  else { host.style.display = 'none'; if (def) def.style.display = ''; }
+}
+
+async function maybeRenderHomeBlocks() {
+  if (typeof PageRenderer === 'undefined') return;
+  const preview = new URLSearchParams(location.search).get('preview') === 'draft';
+  // Live-preview bridge for the admin Pages tab (works even with no published blocks).
+  window.addEventListener('message', (e) => {
+    if (e.source !== window.parent) return;
+    const m = e.data;
+    if (m && m.type === 'LUMEN_PREVIEW_BLOCKS' && Array.isArray(m.blocks)) _renderHomeBlocks(m.blocks);
+  });
+  let blocks = [];
+  try { blocks = await PageRenderer.fetchBlocks('home', preview); } catch (_) {}
+  if (blocks && blocks.length) {
+    _renderHomeBlocks(blocks);
+    if (typeof I18n !== 'undefined' && I18n.onLanguageChange) I18n.onLanguageChange(() => _renderHomeBlocks(blocks));
+  }
+}
 
 /* ── Theme Icon ──────────────────────────────────────────── */
 function updateThemeIcon() {

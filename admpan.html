@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Admin — IRIBHM Microscopy Platform</title>
+  <title>{{SITE:pageTitles.admin|Admin — Lumen3D}}</title>
   <meta name="robots" content="noindex, nofollow">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -11,7 +11,7 @@
   <link rel="stylesheet" href="css/admpan.css">
   <link rel="stylesheet" href="css/admin-shell.css">
 </head>
-<body>
+<body data-page="admin">
 
 <!-- ═══════════════════════════════════════════════════════
      FIRST-RUN SETUP SCREEN (no credential configured yet)
@@ -19,7 +19,7 @@
 <div id="setup-screen" class="adm-gate" style="display:none">
   <div class="adm-gate-card">
     <div class="adm-gate-logo">
-      <span class="adm-gate-logo-icon">🔬</span>
+      <span class="adm-gate-logo-icon" data-instance="brand.logoEmoji">🔬</span>
       <div>
         <div class="adm-gate-title" data-i18n="admin.setupTitle">Configuration initiale</div>
         <div class="adm-gate-sub" data-i18n="admin.setupSubtitle">Définissez le mot de passe administrateur</div>
@@ -58,7 +58,7 @@
 <div id="login-screen" class="adm-gate" style="display:none">
   <div class="adm-gate-card">
     <div class="adm-gate-logo">
-      <span class="adm-gate-logo-icon">🔬</span>
+      <span class="adm-gate-logo-icon" data-instance="brand.logoEmoji">🔬</span>
       <div>
         <div class="adm-gate-title" data-i18n="admin.loginTitle">IRIBHM Admin</div>
         <div class="adm-gate-sub" data-i18n="admin.loginSubtitle">Microscopy Platform — Administration</div>
@@ -94,9 +94,9 @@
   <!-- LEFT SIDEBAR -->
   <aside class="adm-sidebar" id="adm-sidebar">
     <div class="adm-sidebar-brand">
-      <span class="adm-brand-icon">🔬</span>
+      <span class="adm-brand-icon" data-instance="brand.logoEmoji">🔬</span>
       <span class="adm-brand-text">
-        <span class="adm-brand-title">IRIBHM <b>Admin</b></span>
+        <span class="adm-brand-title"><span data-instance="brand.shortName">IRIBHM</span> <b>Admin</b></span>
         <span class="adm-brand-sub" data-i18n="admin.brandSub">Microscopy Platform</span>
       </span>
     </div>
@@ -414,6 +414,7 @@
      are available in the shared global lexical scope. -->
 <script src="js/core/utils.js?v=20260504"></script>
 <script src="js/core/ui-actions.js"></script>
+<script src="js/core/instance-config.js?v=20260706"></script>
 <script src="js/core/i18n.js?v=20260504"></script>
 <script type="module" src="js/pages/admpan.js?v=20260624-shell"></script>
 </body>

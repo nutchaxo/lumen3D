@@ -10,9 +10,11 @@
 const AboutApp = (() => {
   async function init() {
     Theme.init();
+    await InstanceConfig.load();
     await I18n.init();
+    InstanceConfig.applyHead();
+    InstanceConfig.applyDom();
     await Catalog.load();
-    document.title = 'About - IRIBHM Microscopy Platform';
     _updateThemeIcon();
     Theme.onChange(_updateThemeIcon);
     _renderStats();

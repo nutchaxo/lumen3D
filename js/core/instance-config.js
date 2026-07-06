@@ -109,6 +109,27 @@ const InstanceConfig = (() => {
 
   function _cap(s) { s = String(s || ''); return s ? s[0].toUpperCase() + s.slice(1) : s; }
 
+  function _curLocale() {
+    try {
+      if (typeof I18n !== 'undefined' && I18n.getLanguage) return I18n.getLanguage();
+    } catch (_) { /* fall through */ }
+    return 'en';
+  }
+
+  // A localizable value: either a flat string (same in every language) or a
+  // per-locale object like { en:"embryo", fr:"embryon" }. Resolves current
+  // locale → 'en' → first available. Lets the specimen noun be grammatically
+  // correct per language while a single-language deployment can stay a string.
+  function _localized(v) {
+    if (v == null) return '';
+    if (typeof v === 'string') return v;
+    if (typeof v === 'object' && !Array.isArray(v)) {
+      const loc = _curLocale();
+      return v[loc] || v.en || Object.values(v)[0] || '';
+    }
+    return String(v);
+  }
+
   /**
    * Token map injected into every I18n.t() resolution so locale strings can
    * reference {brand}, {specimen}, … instead of baking a domain noun in.
@@ -117,17 +138,19 @@ const InstanceConfig = (() => {
     const b = _config.brand || {};
     const sp = _config.specimen || {};
     const org = _config.org || {};
+    const sing = _localized(sp.singular);
+    const plur = _localized(sp.plural);
     return {
-      brand: b.name || '',
-      brandShort: b.shortName || b.name || '',
-      product: b.productName || b.name || '',
-      tagline: b.tagline || '',
-      org: org.name || b.organization || '',
-      orgShort: b.organization || org.name || '',
-      specimen: sp.singular || '',
-      specimenPlural: sp.plural || '',
-      Specimen: _cap(sp.singular),
-      SpecimenPlural: _cap(sp.plural)
+      brand: _localized(b.name) || '',
+      brandShort: _localized(b.shortName) || _localized(b.name) || '',
+      product: _localized(b.productName) || _localized(b.name) || '',
+      tagline: _localized(b.tagline) || '',
+      org: _localized(org.name) || _localized(b.organization) || '',
+      orgShort: _localized(b.organization) || _localized(org.name) || '',
+      specimen: sing,
+      specimenPlural: plur,
+      Specimen: _cap(sing),
+      SpecimenPlural: _cap(plur)
     };
   }
 

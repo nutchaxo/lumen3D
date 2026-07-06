@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Data Explorer — IRIBHM Microscopy</title>
+  <title>{{SITE:pageTitles.explorer|Data Explorer — IRIBHM Microscopy}}</title>
 
   <!-- Fonts -->
   <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -26,13 +26,13 @@
     body { padding-top: var(--header-height); }
   </style>
 </head>
-<body>
+<body data-page="explorer">
 
   <!-- Navigation Bar -->
   <nav class="navbar" id="navbar" style="background: var(--bg-base); border-bottom: 1px solid var(--border-subtle);">
     <a href="index.html" class="navbar-brand">
-      <div class="navbar-brand-icon">🔬</div>
-      <span data-i18n="app.lab">IRIBHM — ULB</span>
+      <div class="navbar-brand-icon" data-instance="brand.logoEmoji">🔬</div>
+      <span data-instance="brand.organization">IRIBHM — ULB</span>
     </a>
 
     <div class="navbar-links">
@@ -153,6 +153,7 @@
 
   <script src="js/core/utils.js?v=20260504"></script>
   <script src="js/core/ui-actions.js"></script>
+  <script src="js/core/instance-config.js?v=20260706"></script>
   <script src="js/core/i18n.js?v=20260504"></script>
     <script src="js/core/theme.js?v=20260504"></script>
   <script src="js/core/colorblind.js?v=20260528" nonce="{{CSP_NONCE}}"></script>

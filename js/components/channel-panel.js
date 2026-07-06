@@ -379,10 +379,21 @@ window.createChannelPanel = function() {
 
   function _colorForChannel(name, idx) {
     const lower = String(name || '').toLowerCase();
-    if (lower.includes('gfp')) return '#00FF00';
-    if (lower.includes('dapi') || lower.includes('hoechst')) return '#00AAFF';
-    if (lower.includes('pecam') || lower.includes('picam')) return '#FF00FF';
-    if (lower.includes('rfp') || lower.includes('mcherry') || lower.includes('alexa')) return '#FF0000';
+    // White-label: channel-name → colour presets come from the instance config
+    // (channelColorPresets: [{match, color}]) rather than a hardcoded fluorophore
+    // map, so the engine presumes no imaging domain. Falls back to the neutral
+    // DEFAULT_COLORS cycle when nothing matches (or no presets are configured).
+    try {
+      if (typeof InstanceConfig !== 'undefined' && InstanceConfig.get) {
+        const presets = InstanceConfig.get('channelColorPresets');
+        if (Array.isArray(presets)) {
+          for (const p of presets) {
+            if (p && typeof p.match === 'string' && p.color &&
+                lower.includes(p.match.toLowerCase())) return p.color;
+          }
+        }
+      }
+    } catch (_) { /* fall through to the neutral default cycle */ }
     return DEFAULT_COLORS[idx % DEFAULT_COLORS.length];
   }
 

@@ -374,19 +374,20 @@ Bump **Y** justifié (nouveaux sous‑systèmes majeurs). Chaque phase ajoute so
 
 ---
 
-## 9. Décisions ouvertes (à confirmer avant la Phase 0)
+## 9. Décisions arrêtées (validées par l'opérateur, 2026-07-05)
 
-1. **Clé de signature marketplace** : clé dédiée `_MARKETPLACE_PUBKEY_HEX` séparée du cœur
-   *(recommandé)*, ou réutiliser la clé de release cœur ?
-2. **Emplacement du store config** : nouveau dossier public `config/` à la racine *(recommandé)*,
-   ou sous `DATA_WEB/` ?
-3. **Modèle de contenu éditable** : blocs avec textes **inline multi‑locale** dans `config/pages/*`
-   *(recommandé — meilleure UX admin, pas d'écriture dans les `lang/*.json` publics)*, ou réinjecter
-   dans i18n ?
-4. **Pages custom + éditeur de menu** (§3.2 stretch) : inclus en Phase 3, ou différé après le socle ?
-5. **Parité PHP du marketplace** : implémentée *(recommandé pour cohérence)*, ou marketplace
-   `dev_server`‑only comme `update_apply` ?
-6. **Découplage du preprocessing** (regex stage/embryo) : inclus, ou laissé au composant preprocessing ?
+1. **Clé de signature marketplace** → **clé dédiée `_MARKETPLACE_PUBKEY_HEX`** séparée de la clé de
+   release cœur (autorité de signature des plugins découplée, rotation indépendante).
+2. **Emplacement du store config** → **nouveau dossier public `config/` à la racine**.
+3. **Modèle de contenu éditable** → **blocs avec textes inline multi‑locale** dans `config/pages/*`.
+   Contrainte confirmée : à chaque saisie de texte, l'éditeur DOIT permettre de saisir la valeur
+   dans **plusieurs langues** (un champ par locale disponible, repli `en`).
+4. **Pages custom + éditeur de menu** → **tout inclus, rien différé** — livrable achevé attendu.
+5. **Parité PHP** → **priorité absolue au PHP** : la plateforme doit fonctionner à 100 % sur un
+   hôte PHP. Chaque endpoint (config, thème, pages, wizard, **marketplace**) a une implémentation PHP
+   de premier plan (pas un repli). *(Note : l'auto-pivot Blue-Green de l'updater reste `dev_server`
+   uniquement par nature — l'install marketplace, elle, est portée en PHP via `install.php`.)*
+6. **Découplage du preprocessing** → **laissé aux scripts Python séparés** (hors scope Web).
 
 ---
 

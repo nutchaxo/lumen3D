@@ -241,7 +241,15 @@ function bindChrome() {
 }
 
 export async function boot() {
+  // Instance config first so I18n.t() sees the brand/specimen tokens and the
+  // admin head/brand reflect the operator's identity. InstanceConfig is a
+  // global-lexical binding from the classic instance-config.js loaded before
+  // this module (same access path as I18n/Utils).
+  if (typeof InstanceConfig !== 'undefined') { try { await InstanceConfig.load(); } catch (_) {} }
   if (I18n?.init) { try { await I18n.init(); } catch (_) {} }
+  if (typeof InstanceConfig !== 'undefined') {
+    try { InstanceConfig.applyHead(); InstanceConfig.applyDom(); } catch (_) {}
+  }
   setUnauthorizedHandler(() => { if (_appReady) showGate('login'); });
   setNavigator(switchTab);
   applyTheme(loadTheme());

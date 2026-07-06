@@ -18,9 +18,13 @@ const TrackingApp = (() => {
   let _displayState = { backgroundPreset: 'paper', backgroundColor: '#ffffff' };
 
   async function init() {
-    // 1. Init core
+    // 1. Init core. Instance config loads FIRST so I18n.t() can interpolate the
+    // brand/specimen tokens and the head reflects the operator's identity.
+    await InstanceConfig.load();
     Theme.init();
     await I18n.init();
+    InstanceConfig.applyHead();
+    InstanceConfig.applyDom();
     await Catalog.load();
 
     if (window.lucide) lucide.createIcons();
@@ -51,7 +55,7 @@ const TrackingApp = (() => {
       _showError(I18n.t('viewer.errNotFound'));
       return;
     }
-    document.title = `${_datasetMeta.name || _datasetId} - IRIBHM Tracking`;
+    document.title = `${_datasetMeta.name || _datasetId} — ${InstanceConfig.get('brand.name', 'Lumen3D')}`;
 
     // 4. Update Header UI
     document.getElementById('dataset-title').textContent = _datasetMeta.name || _datasetId;

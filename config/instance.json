@@ -10,8 +10,8 @@
     "organization": "IRIBHM — ULB"
   },
   "specimen": {
-    "singular": "embryo",
-    "plural": "embryos"
+    "singular": { "en": "embryo", "fr": "embryon", "es": "embrión" },
+    "plural": { "en": "embryos", "fr": "embryons", "es": "embriones" }
   },
   "org": {
     "name": "IRIBHM — Université Libre de Bruxelles",
@@ -45,5 +45,15 @@
     "showAbout": true,
     "showLegal": false,
     "customPages": []
-  }
+  },
+  "channelColorPresets": [
+    { "match": "gfp", "color": "#00FF00" },
+    { "match": "dapi", "color": "#00AAFF" },
+    { "match": "hoechst", "color": "#00AAFF" },
+    { "match": "pecam", "color": "#FF00FF" },
+    { "match": "picam", "color": "#FF00FF" },
+    { "match": "rfp", "color": "#FF0000" },
+    { "match": "mcherry", "color": "#FF0000" },
+    { "match": "alexa", "color": "#FF0000" }
+  ]
 }

@@ -44,11 +44,15 @@ const ViewerApp = (() => {
     const initPerfId = _perf()?.start('viewer.init');
     // 1. Init core
     Theme.init();
+    // Instance config first so I18n.t() sees the brand/specimen tokens.
+    await InstanceConfig.load();
     // PERF: I18n.init() and Catalog.load() are independent network fetches —
     // overlap them so the boot head waits on max(), not the sum, of the two.
     // Both must still be fully resolved before Catalog.getById (below) and the
     // v0.12.45 plugin-load order downstream; do NOT fold the plugin discovery in.
     await Promise.all([I18n.init(), Catalog.load()]);
+    InstanceConfig.applyHead();
+    InstanceConfig.applyDom();
 
     if (window.lucide) lucide.createIcons();
     _updateThemeIcon();
@@ -148,7 +152,7 @@ const ViewerApp = (() => {
       datasetType: datasetMeta?.type || null,
       qualityMode: _qualityMode
     });
-    document.title = `${datasetMeta.name} - IRIBHM Microscopy`;
+    document.title = `${datasetMeta.name} — ${InstanceConfig.get('brand.name', 'Lumen3D')}`;
 
     // Update UI Header
     document.getElementById('dataset-title').textContent = datasetMeta.name;

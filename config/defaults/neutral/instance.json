@@ -42,5 +42,6 @@
     "showAbout": true,
     "showLegal": false,
     "customPages": []
-  }
+  },
+  "channelColorPresets": []
 }

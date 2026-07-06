@@ -153,6 +153,23 @@ _RELEASE_ASSET_RE = re.compile(r"^lumen3d-web-.*\.zip$", re.IGNORECASE)
 # here AND into install.php's $PINNED_PUBKEY, and store the seed as the CI secret.
 _RELEASE_PUBKEY_HEX = ""
 
+# ── First-party plugin marketplace (white-label) ────────────────────────────────
+# A CURATED, first-party catalog of plugins the operator can browse + install in one
+# click from the admin panel. The catalog and each plugin release are Ed25519-signed;
+# installs are ALWAYS operator-initiated, verified fail-closed, and land in the SAME
+# trust gate + sandbox as any other plugin (no new arbitrary-code-execution surface).
+#
+# _MARKETPLACE_PUBKEY_HEX is SEPARATE from the core release key so plugin-signing
+# authority can be rotated independently of core-release authority. Empty ⇒ integrity
+# only (sha256) + a loud warning; SET ⇒ signature MANDATORY, fail-closed (a catalog or
+# plugin release without a valid signature is refused). Pin it in repo SOURCE (like
+# _RELEASE_PUBKEY_HEX) so it ships in every release and survives self-updates.
+# _MARKETPLACE_CATALOG_URL points at the signed catalog JSON (its detached signature is
+# fetched from the same URL + ".sig"). Empty ⇒ the marketplace tab is inert (no source).
+_MARKETPLACE_PUBKEY_HEX = ""
+_MARKETPLACE_CATALOG_URL = ""
+_MARKETPLACE_MAX_ZIP = 8 * 1024 * 1024      # per-plugin download ceiling
+
 try:
     import ed25519_pure as _ed25519           # vendored, stdlib-only (RFC 8032)
 except Exception:
@@ -1545,6 +1562,224 @@ def _extract_release(zip_path: Path, dest: Path) -> Path:
     if len(entries) == 1 and (entries[0] / "dev_server.py").exists():
         return entries[0]
     raise OSError("archive invalide: dev_server.py introuvable à la racine")
+
+
+# ── Plugin marketplace (curated, signed, operator-initiated) ─────────────────────
+
+def _verify_marketplace_signature(data_raw: bytes, sig_url) -> None:
+    """Verify a detached Ed25519 signature over data_raw against the PINNED marketplace
+    key. Fail-closed once keyed (missing/invalid sig ⇒ refuse); no-op + warning when
+    unkeyed. Twin of _verify_release_signature, but with the SEPARATE marketplace key."""
+    if not _MARKETPLACE_PUBKEY_HEX:
+        print("MARKETPLACE: clé non configurée — intégrité sha256 seule, authenticité "
+              "NON prouvée. Voir tools/gen_signing_key.py.", flush=True)
+        return
+    if _ed25519 is None:
+        raise OSError("vérificateur Ed25519 indisponible (fail-closed)")
+    if not sig_url:
+        raise OSError("signature marketplace absente alors qu'une clé est épinglée (fail-closed)")
+    raw = _fetch_url_bytes(sig_url, limit=4096)
+    txt = raw.strip()
+    if re.fullmatch(rb"[0-9a-fA-F]{128}", txt):
+        sig = bytes.fromhex(txt.decode("ascii"))
+    elif len(raw) == 64:
+        sig = raw
+    else:
+        sig = txt
+    if not _ed25519.verify(bytes.fromhex(_MARKETPLACE_PUBKEY_HEX), data_raw, sig):
+        raise OSError("signature marketplace invalide — authenticité refusée (fail-closed)")
+
+
+def _fetch_marketplace_catalog() -> list:
+    """Fetch + signature-verify the curated catalog JSON. Returns its plugin list.
+    The catalog itself is signed (URL + '.sig') so the LIST of what-to-install is not
+    forgeable, not just each release."""
+    if not _MARKETPLACE_CATALOG_URL:
+        raise OSError("marketplace_not_configured")
+    raw = _fetch_url_bytes(_MARKETPLACE_CATALOG_URL, limit=1 << 20)
+    _verify_marketplace_signature(raw, _MARKETPLACE_CATALOG_URL + ".sig")
+    data = json.loads(raw.decode("utf-8"))
+    plugins = data.get("plugins") if isinstance(data, dict) else None
+    if not isinstance(plugins, list):
+        raise OSError("catalogue marketplace invalide")
+    return plugins
+
+
+_MARKETPLACE_CARD_KEYS = ("id", "name", "placement", "subtype", "description",
+                          "creator", "icon", "platformCompat", "sandboxCapabilities",
+                          "latestVersion")
+
+
+def _marketplace_list() -> dict:
+    """Catalog annotated with installed + compat status, for the admin Marketplace tab.
+    Fetch/verify failures are surfaced (never fatal to the panel)."""
+    base = {"configured": bool(_MARKETPLACE_CATALOG_URL), "signed": bool(_MARKETPLACE_PUBKEY_HEX)}
+    if not _MARKETPLACE_CATALOG_URL:
+        return {**base, "plugins": []}
+    try:
+        entries = _fetch_marketplace_catalog()
+    except Exception as e:
+        return {**base, "error": str(e), "plugins": []}
+    ver = _max_version(CHANGELOG_DIR)
+    installed = {p["path"] for p in _list_plugins()}
+    out = []
+    for e in entries:
+        if not isinstance(e, dict):
+            continue
+        pid = str(e.get("id", ""))
+        placement = e.get("placement")
+        path = f"{placement}/{pid}" if placement in PLUGIN_PLACEMENTS else None
+        ok_c, reason_c = _compat_satisfies(ver, e.get("platformCompat"))
+        card = {k: e.get(k) for k in _MARKETPLACE_CARD_KEYS}
+        card.update({"installed": (path in installed) if path else False,
+                     "compat": ok_c, "compatReason": reason_c})
+        out.append(card)
+    return {**base, "plugins": out}
+
+
+def _download_capped(url: str, dest: Path, limit: int) -> None:
+    req = urllib.request.Request(url, headers={"User-Agent": "lumen3d-admin"})
+    with urllib.request.urlopen(req, timeout=60) as r, open(dest, "wb") as f:
+        got = 0
+        while True:
+            chunk = r.read(1 << 16)
+            if not chunk:
+                break
+            got += len(chunk)
+            if got > limit:
+                raise OSError("téléchargement trop volumineux")
+            f.write(chunk)
+
+
+def _extract_plugin_zip(zip_path: Path, dest: Path) -> Path:
+    """Hardened extraction of a plugin zip (remote input, rule 1.4): reject
+    traversal/absolute/drive/backslash entries, cap entry count + total size. Returns
+    the directory holding plugin.json (flat or single-nested)."""
+    dest.mkdir(parents=True, exist_ok=True)
+    MAX_ENTRIES, MAX_TOTAL = 500, 24 * 1024 * 1024
+    with zipfile.ZipFile(zip_path) as zf:
+        infos = zf.infolist()
+        if len(infos) > MAX_ENTRIES:
+            raise OSError("archive plugin: trop d'entrées")
+        total = 0
+        for m in infos:
+            name = m.filename
+            first = name.split("/", 1)[0]
+            if (not name or name.startswith(("/", "\\")) or "\\" in name
+                    or ":" in first or ".." in name.split("/")):
+                raise OSError(f"entrée d'archive rejetée: {name!r}")
+            total += m.file_size
+            if total > MAX_TOTAL:
+                raise OSError("archive plugin: trop volumineuse")
+        zf.extractall(dest)
+    if (dest / "plugin.json").exists():
+        return dest
+    subs = [p for p in dest.iterdir() if p.is_dir()]
+    if len(subs) == 1 and (subs[0] / "plugin.json").exists():
+        return subs[0]
+    raise OSError("archive plugin invalide: plugin.json introuvable")
+
+
+def _install_marketplace_plugin(catalog_id: str, password: str):
+    """Install a first-party plugin from the signed catalog. Operator-initiated,
+    re-auth'd, verified fail-closed; on ANY failure js/modules is left untouched. The
+    plugin lands as an operator-approved (server-recomputed hash) plugin the existing
+    loadModules trust gate re-verifies. Returns (ok, status, payload)."""
+    if not _MARKETPLACE_CATALOG_URL:
+        return False, 400, {"error": "marketplace_not_configured"}
+    if not _verify_password(password or "", (_load_credential() or {}).get("password_pbkdf2") or ""):
+        return False, 401, {"error": "bad_password"}
+    try:
+        entries = _fetch_marketplace_catalog()
+    except Exception as e:
+        return False, 502, {"error": "catalog_fetch_failed", "detail": str(e)}
+    entry = next((e for e in entries if isinstance(e, dict) and str(e.get("id")) == str(catalog_id)), None)
+    if not entry:
+        return False, 404, {"error": "unknown_catalog_id"}
+    placement, pid = entry.get("placement"), str(entry.get("id", ""))
+    if placement not in PLUGIN_PLACEMENTS or not _SAFE_FOLDER_RE.match(pid):
+        return False, 400, {"error": "bad_plugin_id"}
+    path = f"{placement}/{pid}"
+    target_dir = MODULES_DIR / placement / pid
+    if target_dir.exists():
+        return False, 409, {"error": "already_installed"}
+    ok_c, reason_c = _compat_satisfies(_max_version(CHANGELOG_DIR), entry.get("platformCompat"))
+    if not ok_c:
+        return False, 409, {"error": "incompatible", "detail": reason_c}
+    asset_url, sums_url, sig_url = entry.get("assetUrl"), entry.get("sumsUrl"), entry.get("sigUrl")
+    if not asset_url:
+        return False, 400, {"error": "no_asset"}
+    tmp_root = Path(tempfile.mkdtemp(prefix=".mkt-", dir=str(MODULES_DIR)))
+    moved = False
+    try:
+        zip_path = tmp_root / "plugin.zip"
+        _download_capped(asset_url, zip_path, _MARKETPLACE_MAX_ZIP)
+        digest = _sha256_file(zip_path)
+        # Authenticity: verify the detached signature over SHA256SUMS (fail-closed when
+        # keyed), THEN read the expected zip digest from those authenticated bytes.
+        if sums_url:
+            sums_raw = _fetch_url_bytes(sums_url, limit=1 << 16)
+            _verify_marketplace_signature(sums_raw, sig_url)
+            sums = _parse_sha256sums(sums_raw)
+            zip_name = asset_url.rsplit("/", 1)[-1]
+            expected = sums.get(zip_name) or sums.get(zip_name.lstrip("*")) or (next(iter(sums.values()), None) if len(sums) == 1 else None)
+            if not expected or expected != digest:
+                raise OSError("sha256 du zip absent/≠ SHA256SUMS")
+        elif entry.get("sha256"):
+            if str(entry["sha256"]).lower() != digest:
+                raise OSError("sha256 du zip ≠ catalogue")
+        else:
+            raise OSError("aucune empreinte à vérifier (ni SHA256SUMS ni sha256)")
+        proot = _extract_plugin_zip(zip_path, tmp_root / "x")
+        meta = json.loads((proot / "plugin.json").read_text(encoding="utf-8"))
+        if str(meta.get("id", "")) != pid:
+            raise OSError("plugin.json id ≠ catalogue")
+        if meta.get("placement") and meta["placement"] != placement:
+            raise OSError("plugin.json placement ≠ catalogue")
+        target_dir.parent.mkdir(parents=True, exist_ok=True)
+        _rename_retry(proot, target_dir)
+        moved = True
+    except Exception as e:
+        if moved:
+            shutil.rmtree(target_dir, ignore_errors=True)
+        return False, 502, {"error": "install_failed", "detail": str(e)}
+    finally:
+        shutil.rmtree(tmp_root, ignore_errors=True)
+    # Operator approval PINNED to the on-disk bytes (server recomputes the hash — INV-4).
+    server_hash = _plugin_hash(_plugin_file_hashes(target_dir))
+    declared = sorted(_plugin_declared_caps(target_dir))
+    wants_sandbox = bool(meta.get("sandbox")) or (placement == "tools" and bool(declared))
+    mode = "sandboxed" if wants_sandbox else "trusted"
+    ok_a, st_a, pl_a = _approve_plugin(path, server_hash, mode, declared, password)
+    if not ok_a:
+        shutil.rmtree(target_dir, ignore_errors=True)
+        return False, st_a, {**pl_a, "stage": "approve"}
+    global _TRUST_EPOCH
+    _TRUST_EPOCH += 1
+    return True, 200, {"ok": True, "path": path, "mode": mode}
+
+
+def _uninstall_marketplace_plugin(path: str):
+    """Remove an installed plugin folder + its approval. Idempotent; folder-driven
+    (next discovery simply omits it). Refuses to remove the last enabled shader."""
+    safe = _safe_plugin_path(path)
+    if not safe:
+        return False, 400, {"error": "bad_path"}
+    placement, folder = safe
+    target = MODULES_DIR / placement / folder
+    if not target.exists():
+        return False, 404, {"error": "not_installed"}
+    if placement == "shaders":
+        disabled = _load_disabled_plugins()
+        enabled_shaders = [p for p in _list_plugins()
+                           if p.get("placement") == "shaders" and p["path"] not in disabled]
+        if len(enabled_shaders) <= 1 and path in {p["path"] for p in enabled_shaders}:
+            return False, 409, {"error": "last_shader"}
+    shutil.rmtree(target, ignore_errors=True)
+    _revoke_plugin(path)  # drop approval (tolerate not_approved)
+    global _TRUST_EPOCH
+    _TRUST_EPOCH += 1
+    return True, 200, {"ok": True}
 
 
 def _validate_staging(staging: Path, target: str) -> None:
@@ -3080,7 +3315,8 @@ class AdminHandler(http.server.SimpleHTTPRequestHandler):
                 self._json(401, {"error": "Not authenticated"})
                 return
             if action in ("set_plugin", "update_apply", "update_ack",
-                          "approve_plugin", "revoke_plugin"):
+                          "approve_plugin", "revoke_plugin",
+                          "install_plugin", "uninstall_plugin"):
                 ok, status, payload = _authorize_write(
                     self.command, session, self.headers.get("X-CSRF-Token")
                 )
@@ -3108,6 +3344,15 @@ class AdminHandler(http.server.SimpleHTTPRequestHandler):
                 self._json(st2, pl2)
             elif action == "revoke_plugin":
                 ok2, st2, pl2 = _revoke_plugin((body or {}).get("path", ""))
+                self._json(st2, pl2)
+            elif action == "marketplace_catalog":
+                self._json(200, _marketplace_list())
+            elif action == "install_plugin":
+                b = body or {}
+                ok2, st2, pl2 = _install_marketplace_plugin(b.get("id", ""), b.get("password", ""))
+                self._json(st2, pl2)
+            elif action == "uninstall_plugin":
+                ok2, st2, pl2 = _uninstall_marketplace_plugin((body or {}).get("path", ""))
                 self._json(st2, pl2)
             elif action == "version":
                 self._json(200, _version_info())

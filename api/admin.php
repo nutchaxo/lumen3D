@@ -23,7 +23,7 @@ if (!admin_is_auth()) admin_json_out(['error' => 'Not authenticated'], 401);
 $action = $_GET['action'] ?? '';
 $body   = ($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST' ? (json_decode(file_get_contents('php://input'), true) ?: []) : [];
 
-if (in_array($action, ['set_plugin', 'update_apply', 'approve_plugin', 'revoke_plugin'], true)) admin_require_write();
+if (in_array($action, ['set_plugin', 'update_apply', 'approve_plugin', 'revoke_plugin', 'install_plugin', 'uninstall_plugin'], true)) admin_require_write();
 
 switch ($action) {
 
@@ -111,6 +111,20 @@ switch ($action) {
         if (count($remaining) === count($approvals)) admin_json_out(['error' => 'not_approved'], 404);
         admin_save_trust($remaining);
         admin_json_out(['ok' => true]);
+    }
+
+    // ── Marketplace (curated signed plugin catalog) — twin of dev_server.py ──
+    case 'marketplace_catalog':
+        admin_json_out(mkt_list());
+
+    case 'install_plugin': {
+        [$st, $pl] = mkt_install((string)($body['id'] ?? ''), (string)($body['password'] ?? ''));
+        admin_json_out($pl, $st);
+    }
+
+    case 'uninstall_plugin': {
+        [$st, $pl] = mkt_uninstall((string)($body['path'] ?? ''));
+        admin_json_out($pl, $st);
     }
 
     case 'set_plugin': {

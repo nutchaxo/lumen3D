@@ -506,3 +506,167 @@ function admin_compat_satisfies($platformVersion, $decl): array {
 
     return [false, 'unreadable constraint (wrong type)'];
 }
+
+// ── Plugin marketplace (curated, signed, operator-initiated) ──────────────────
+// PHP twin of dev_server.py's marketplace. Reuses the trust helpers above so an
+// install lands in the SAME trust gate as any plugin. SEPARATE key from the core
+// release key (install.php $PINNED_PUBKEY): plugin-signing authority is decoupled.
+// Empty key ⇒ sha256 integrity only + warning; SET ⇒ signature MANDATORY (fail-closed).
+const MARKETPLACE_PUBKEY      = '';   // hex ed25519 public key (pin in source, commit)
+const MARKETPLACE_CATALOG_URL = '';   // signed catalog JSON URL (+ '.sig'); empty ⇒ off
+const MARKETPLACE_MAX_ZIP     = 8388608;
+
+function mkt_fetch_bytes(string $url, int $limit): ?string {
+    $ctx = stream_context_create(['http' => ['timeout' => 60, 'header' => "User-Agent: lumen3d-admin\r\n"]]);
+    $d = @file_get_contents($url, false, $ctx, 0, $limit + 1);
+    return $d === false ? null : substr($d, 0, $limit);
+}
+
+/** Verify a detached Ed25519 sig over $data against the pinned marketplace key.
+ *  Fail-closed once keyed; true = OK/not-required, false = refused. */
+function mkt_verify_signature(string $data, ?string $sigUrl): bool {
+    if (MARKETPLACE_PUBKEY === '') return true;                     // unkeyed: integrity only
+    if (!function_exists('sodium_crypto_sign_verify_detached')) return false;
+    if (!$sigUrl) return false;
+    $sig = mkt_fetch_bytes($sigUrl, 4096);
+    if ($sig === null) return false;
+    $sig = trim($sig);
+    if (preg_match('/^[0-9a-fA-F]{128}$/', $sig)) $sig = hex2bin($sig);
+    if (strlen($sig) !== 64) return false;
+    $pub = @hex2bin(MARKETPLACE_PUBKEY);
+    return $pub !== false && strlen($pub) === 32 && sodium_crypto_sign_verify_detached($sig, $data, $pub);
+}
+
+/** @return array{0:bool,1:mixed} [ok, plugins | error-string] */
+function mkt_fetch_catalog(): array {
+    if (MARKETPLACE_CATALOG_URL === '') return [false, 'marketplace_not_configured'];
+    $raw = mkt_fetch_bytes(MARKETPLACE_CATALOG_URL, 1 << 20);
+    if ($raw === null) return [false, 'catalog_fetch_failed'];
+    if (!mkt_verify_signature($raw, MARKETPLACE_CATALOG_URL . '.sig')) return [false, 'catalog_signature_invalid'];
+    $d = json_decode($raw, true);
+    if (!is_array($d) || !isset($d['plugins']) || !is_array($d['plugins'])) return [false, 'invalid_catalog'];
+    return [true, $d['plugins']];
+}
+
+function mkt_list(): array {
+    $base = ['configured' => MARKETPLACE_CATALOG_URL !== '', 'signed' => MARKETPLACE_PUBKEY !== ''];
+    if (MARKETPLACE_CATALOG_URL === '') return $base + ['plugins' => []];
+    [$ok, $res] = mkt_fetch_catalog();
+    if (!$ok) return $base + ['error' => $res, 'plugins' => []];
+    $ver = admin_max_version(changelog_dir());
+    $installed = array_map(fn($p) => $p['path'], admin_list_plugins());
+    $out = [];
+    foreach ($res as $e) {
+        if (!is_array($e)) continue;
+        $pid = (string)($e['id'] ?? '');
+        $placement = $e['placement'] ?? null;
+        $path = in_array($placement, ['tools', 'channels', 'shaders'], true) ? "$placement/$pid" : null;
+        [$c, $cr] = admin_compat_satisfies($ver, $e['platformCompat'] ?? null);
+        $out[] = [
+            'id' => $pid, 'name' => $e['name'] ?? $pid, 'placement' => $placement, 'subtype' => $e['subtype'] ?? null,
+            'description' => $e['description'] ?? null, 'creator' => $e['creator'] ?? null, 'icon' => $e['icon'] ?? null,
+            'platformCompat' => $e['platformCompat'] ?? null, 'sandboxCapabilities' => $e['sandboxCapabilities'] ?? null,
+            'latestVersion' => $e['latestVersion'] ?? null,
+            'installed' => $path ? in_array($path, $installed, true) : false, 'compat' => $c, 'compatReason' => $cr,
+        ];
+    }
+    return $base + ['plugins' => $out];
+}
+
+function mkt_rmrf(string $p): void {
+    if (is_dir($p) && !is_link($p)) { foreach (scandir($p) as $c) { if ($c !== '.' && $c !== '..') mkt_rmrf("$p/$c"); } @rmdir($p); }
+    elseif (is_file($p) || is_link($p)) @unlink($p);
+}
+
+/** Hardened extraction → dir holding plugin.json, or null. */
+function mkt_extract_zip(string $zipPath, string $dest): ?string {
+    if (!class_exists('ZipArchive')) return null;
+    $zip = new ZipArchive();
+    if ($zip->open($zipPath) !== true) return null;
+    $total = 0;
+    if ($zip->numFiles > 500) { $zip->close(); return null; }
+    for ($i = 0; $i < $zip->numFiles; $i++) {
+        $st = $zip->statIndex($i);
+        $name = $st['name'];
+        $first = explode('/', $name)[0];
+        if ($name === '' || $name[0] === '/' || strpos($name, '\\') !== false || strpos($first, ':') !== false || in_array('..', explode('/', $name), true)) { $zip->close(); return null; }
+        $total += (int)$st['size'];
+        if ($total > 24 * 1024 * 1024) { $zip->close(); return null; }
+    }
+    @mkdir($dest, 0755, true);
+    $zip->extractTo($dest);
+    $zip->close();
+    if (is_file("$dest/plugin.json")) return $dest;
+    $subs = array_values(array_filter(glob("$dest/*") ?: [], 'is_dir'));
+    if (count($subs) === 1 && is_file($subs[0] . '/plugin.json')) return $subs[0];
+    return null;
+}
+
+/** @return array{0:int,1:array} [httpStatus, payload] */
+function mkt_install(string $catalogId, string $password): array {
+    if (MARKETPLACE_CATALOG_URL === '') return [400, ['error' => 'marketplace_not_configured']];
+    $rec = admin_credential();
+    if (!$rec || !admin_verify_password($password, $rec['password_pbkdf2'] ?? '')) return [401, ['error' => 'bad_password']];
+    [$ok, $res] = mkt_fetch_catalog();
+    if (!$ok) return [502, ['error' => $res]];
+    $entry = null;
+    foreach ($res as $e) { if (is_array($e) && (string)($e['id'] ?? '') === $catalogId) { $entry = $e; break; } }
+    if (!$entry) return [404, ['error' => 'unknown_catalog_id']];
+    $placement = $entry['placement'] ?? ''; $pid = (string)($entry['id'] ?? '');
+    if (!in_array($placement, ['tools', 'channels', 'shaders'], true) || !preg_match('/^[A-Za-z0-9_][A-Za-z0-9._-]*$/', $pid)) return [400, ['error' => 'bad_plugin_id']];
+    $path = "$placement/$pid"; $targetDir = modules_dir() . "/$placement/$pid";
+    if (is_dir($targetDir)) return [409, ['error' => 'already_installed']];
+    [$c, $cr] = admin_compat_satisfies(admin_max_version(changelog_dir()), $entry['platformCompat'] ?? null);
+    if (!$c) return [409, ['error' => 'incompatible', 'detail' => $cr]];
+    $assetUrl = $entry['assetUrl'] ?? null; $sumsUrl = $entry['sumsUrl'] ?? null; $sigUrl = $entry['sigUrl'] ?? null;
+    if (!$assetUrl) return [400, ['error' => 'no_asset']];
+    $tmp = sys_get_temp_dir() . '/mkt-' . bin2hex(random_bytes(6));
+    @mkdir($tmp, 0755, true);
+    $zipData = mkt_fetch_bytes($assetUrl, MARKETPLACE_MAX_ZIP);
+    if ($zipData === null) { mkt_rmrf($tmp); return [502, ['error' => 'download_failed']]; }
+    $zipPath = "$tmp/plugin.zip"; file_put_contents($zipPath, $zipData);
+    $digest = hash('sha256', $zipData);
+    if ($sumsUrl) {
+        $sumsRaw = mkt_fetch_bytes($sumsUrl, 1 << 16);
+        if ($sumsRaw === null || !mkt_verify_signature($sumsRaw, $sigUrl)) { mkt_rmrf($tmp); return [502, ['error' => 'install_failed', 'detail' => 'signature']]; }
+        $sums = [];
+        foreach (explode("\n", $sumsRaw) as $ln) { if (preg_match('/^([0-9a-fA-F]{64})\s+\*?(.+)$/', trim($ln), $mm)) $sums[$mm[2]] = strtolower($mm[1]); }
+        $zipName = basename($assetUrl);
+        $expected = $sums[$zipName] ?? (count($sums) === 1 ? reset($sums) : null);
+        if (!$expected || $expected !== $digest) { mkt_rmrf($tmp); return [502, ['error' => 'install_failed', 'detail' => 'sha256']]; }
+    } elseif (!empty($entry['sha256'])) {
+        if (strtolower((string)$entry['sha256']) !== $digest) { mkt_rmrf($tmp); return [502, ['error' => 'install_failed', 'detail' => 'sha256']]; }
+    } else { mkt_rmrf($tmp); return [502, ['error' => 'install_failed', 'detail' => 'no_hash']]; }
+    $proot = mkt_extract_zip($zipPath, "$tmp/x");
+    if ($proot === null) { mkt_rmrf($tmp); return [502, ['error' => 'install_failed', 'detail' => 'extract']]; }
+    $meta = admin_read_json("$proot/plugin.json");
+    if (!is_array($meta) || (string)($meta['id'] ?? '') !== $pid || (isset($meta['placement']) && $meta['placement'] !== $placement)) { mkt_rmrf($tmp); return [502, ['error' => 'install_failed', 'detail' => 'metadata']]; }
+    @mkdir(dirname($targetDir), 0755, true);
+    if (!@rename($proot, $targetDir)) { mkt_rmrf($tmp); return [502, ['error' => 'install_failed', 'detail' => 'move']]; }
+    mkt_rmrf($tmp);
+    $serverHash = admin_plugin_hash(admin_plugin_file_hashes($targetDir));
+    $declared = admin_plugin_declared_caps($targetDir);
+    $wantsSandbox = (($meta['sandbox'] ?? null) === true) || ($placement === 'tools' && !empty($declared));
+    $mode = $wantsSandbox ? 'sandboxed' : 'trusted';
+    $approvals = array_values(array_filter(admin_load_trust(), fn($a) => ($a['path'] ?? '') !== $path));
+    $approvals[] = ['path' => $path, 'sha256' => $serverHash, 'mode' => $mode, 'caps' => array_values($declared), 'at' => date('c'), 'by' => $rec['username'] ?? 'admin'];
+    admin_save_trust($approvals);
+    return [200, ['ok' => true, 'path' => $path, 'mode' => $mode]];
+}
+
+/** @return array{0:int,1:array} */
+function mkt_uninstall(string $path): array {
+    if (!preg_match('#^(tools|channels|shaders)/[A-Za-z0-9_][A-Za-z0-9._-]*$#', $path)) return [400, ['error' => 'bad_path']];
+    $target = modules_dir() . '/' . $path;
+    if (!is_dir($target)) return [404, ['error' => 'not_installed']];
+    if (strpos($path, 'shaders/') === 0) {
+        $disabled = admin_load_disabled();
+        $enabled = array_filter(admin_list_plugins(), fn($p) => ($p['placement'] ?? '') === 'shaders' && !in_array($p['path'], $disabled, true));
+        $paths = array_map(fn($p) => $p['path'], $enabled);
+        if (count($paths) <= 1 && in_array($path, $paths, true)) return [409, ['error' => 'last_shader']];
+    }
+    mkt_rmrf($target);
+    $approvals = array_values(array_filter(admin_load_trust(), fn($a) => ($a['path'] ?? '') !== $path));
+    admin_save_trust($approvals);
+    return [200, ['ok' => true]];
+}

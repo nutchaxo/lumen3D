@@ -781,7 +781,8 @@
     "navAppearance": "Appearance",
     "navBranding": "Identity",
     "navLegal": "Legal",
-    "navPages": "Pages"
+    "navPages": "Pages",
+    "navMarketplace": "Catalog"
   },
   "appearance": {
     "title": "Appearance",
@@ -961,5 +962,38 @@
     "finishing": "Finishing…",
     "weak": "Password too short ({n} characters minimum).",
     "done": "Setup complete ✓"
+  },
+  "mkt": {
+    "title": "Plugin catalog",
+    "sub": "Curated, signed first-party plugins. One-click, verified install.",
+    "notConfigured": "No catalog source configured (_MARKETPLACE_CATALOG_URL). The marketplace is inactive.",
+    "signedOn": "signature verified",
+    "signedOff": "unsigned",
+    "signedOffHint": "Signing key not configured — sha256 integrity only.",
+    "refresh": "Refresh",
+    "error": "Catalog unavailable",
+    "installed": "Installed",
+    "available": "Available",
+    "incompatible2": "Incompatible",
+    "empty": "No plugins in the catalog.",
+    "sandboxHint": "Runs isolated (sandbox)",
+    "sandboxed": "sandbox",
+    "trustedHint": "Full in-page trust (shaders/channels)",
+    "fullTrust": "full trust",
+    "caps": "Capabilities",
+    "incompatible": "incompatible",
+    "install": "Install",
+    "uninstall": "Uninstall",
+    "installConfirm": "Install this plugin? Confirm with your admin password:",
+    "installing": "Installing (download + verification)…",
+    "installed2": "Plugin installed and approved ✓",
+    "badPassword": "Wrong password.",
+    "alreadyInstalled": "Already installed.",
+    "installFailed": "Install failed (verification failed).",
+    "catalogFail": "Catalog unreachable.",
+    "uninstallConfirm": "Uninstall this plugin?",
+    "uninstalled": "Plugin uninstalled.",
+    "lastShader": "Cannot: last render mode.",
+    "uninstallFailed": "Uninstall failed."
   }
 }

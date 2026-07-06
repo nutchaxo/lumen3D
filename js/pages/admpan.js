@@ -19,6 +19,7 @@ import { AppearanceTab } from './admin/tab-appearance.js';
 import { BrandingTab } from './admin/tab-branding.js';
 import { PagesTab } from './admin/tab-pages.js';
 import { LegalTab } from './admin/tab-legal.js';
+import { MarketplaceTab } from './admin/tab-marketplace.js';
 
 registerTab(DatasetsTab);
 registerTab(StatsTab);
@@ -29,5 +30,6 @@ registerTab(BrandingTab);
 registerTab(PagesTab);
 registerTab(AppearanceTab);
 registerTab(LegalTab);
+registerTab(MarketplaceTab);
 
 boot();

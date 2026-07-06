@@ -781,7 +781,8 @@
     "navAppearance": "Apariencia",
     "navBranding": "Identidad",
     "navLegal": "Aviso legal",
-    "navPages": "Páginas"
+    "navPages": "Páginas",
+    "navMarketplace": "Catálogo"
   },
   "appearance": {
     "title": "Apariencia",
@@ -961,5 +962,38 @@
     "finishing": "Finalizando…",
     "weak": "Contraseña demasiado corta (mínimo {n} caracteres).",
     "done": "Instalación completada ✓"
+  },
+  "mkt": {
+    "title": "Catálogo de plugins",
+    "sub": "Plugins propios, curados y firmados. Instalación en un clic, verificada.",
+    "notConfigured": "No hay fuente de catálogo configurada (_MARKETPLACE_CATALOG_URL). El marketplace está inactivo.",
+    "signedOn": "firma verificada",
+    "signedOff": "sin firmar",
+    "signedOffHint": "Clave de firma no configurada — solo integridad sha256.",
+    "refresh": "Actualizar",
+    "error": "Catálogo no disponible",
+    "installed": "Instalados",
+    "available": "Disponibles",
+    "incompatible2": "Incompatibles",
+    "empty": "No hay plugins en el catálogo.",
+    "sandboxHint": "Se ejecuta aislado (sandbox)",
+    "sandboxed": "sandbox",
+    "trustedHint": "Confianza total en página (shaders/canales)",
+    "fullTrust": "confianza total",
+    "caps": "Capacidades",
+    "incompatible": "incompatible",
+    "install": "Instalar",
+    "uninstall": "Desinstalar",
+    "installConfirm": "¿Instalar este plugin? Confirme con su contraseña de administrador:",
+    "installing": "Instalando (descarga + verificación)…",
+    "installed2": "Plugin instalado y aprobado ✓",
+    "badPassword": "Contraseña incorrecta.",
+    "alreadyInstalled": "Ya instalado.",
+    "installFailed": "Error de instalación (verificación fallida).",
+    "catalogFail": "Catálogo inaccesible.",
+    "uninstallConfirm": "¿Desinstalar este plugin?",
+    "uninstalled": "Plugin desinstalado.",
+    "lastShader": "No se puede: último modo de render.",
+    "uninstallFailed": "Error al desinstalar."
   }
 }

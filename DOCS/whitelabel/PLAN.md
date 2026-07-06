@@ -361,6 +361,10 @@ hors `_UPDATE_PROTECT`) · Ed25519 stdlib‑only (`ed25519_pure.py`) / libsodium
 
 ## 8. Feuille de route par phases (chaque phase livrable & rétro‑compatible)
 
+> **État : TOUTES LES PHASES LIVRÉES** (web v1.8.0 → v1.11.0). Objectifs 1–4 complets. Vérifié sur
+> hôtes Python **et** PHP ; flux protégés par authentification admin à exercer connecté ; le marketplace
+> s'active en posant la clé Ed25519 + l'URL de catalogue (état par défaut : inactif/sûr).
+
 | Phase | Contenu | Version cible |
 |---|---|---|
 | **0 — Fondations** | `instance-config.js` + store `config/` public + `/api/site.php` (+ PHP) + injection `_serve_html` (+ PHP) + `_UPDATE_PROTECT` + défauts neutres + substitution tokens i18n | **web v1.8.0** |

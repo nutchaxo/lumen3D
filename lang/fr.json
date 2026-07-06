@@ -781,7 +781,8 @@
     "navAppearance": "Apparence",
     "navBranding": "Identité",
     "navLegal": "Mentions légales",
-    "navPages": "Pages"
+    "navPages": "Pages",
+    "navMarketplace": "Catalogue"
   },
   "appearance": {
     "title": "Apparence",
@@ -961,5 +962,38 @@
     "finishing": "Finalisation…",
     "weak": "Mot de passe trop court ({n} caractères minimum).",
     "done": "Installation terminée ✓"
+  },
+  "mkt": {
+    "title": "Catalogue de plugins",
+    "sub": "Plugins first-party curés et signés. Installation en un clic, vérifiée.",
+    "notConfigured": "Aucune source de catalogue configurée (_MARKETPLACE_CATALOG_URL). Le marketplace est inactif.",
+    "signedOn": "signature vérifiée",
+    "signedOff": "non signé",
+    "signedOffHint": "Clé de signature non configurée — intégrité sha256 seule.",
+    "refresh": "Actualiser",
+    "error": "Catalogue indisponible",
+    "installed": "Installés",
+    "available": "Disponibles",
+    "incompatible2": "Incompatibles",
+    "empty": "Aucun plugin dans le catalogue.",
+    "sandboxHint": "Exécuté isolé (bac à sable)",
+    "sandboxed": "bac à sable",
+    "trustedHint": "Confiance totale en page (shaders/canaux)",
+    "fullTrust": "confiance totale",
+    "caps": "Capacités",
+    "incompatible": "incompatible",
+    "install": "Installer",
+    "uninstall": "Désinstaller",
+    "installConfirm": "Installer ce plugin ? Confirmez avec votre mot de passe administrateur :",
+    "installing": "Installation en cours (téléchargement + vérification)…",
+    "installed2": "Plugin installé et approuvé ✓",
+    "badPassword": "Mot de passe incorrect.",
+    "alreadyInstalled": "Déjà installé.",
+    "installFailed": "Échec de l'installation (vérification échouée).",
+    "catalogFail": "Catalogue inaccessible.",
+    "uninstallConfirm": "Désinstaller ce plugin ?",
+    "uninstalled": "Plugin désinstallé.",
+    "lastShader": "Impossible : dernier mode de rendu.",
+    "uninstallFailed": "Échec de la désinstallation."
   }
 }

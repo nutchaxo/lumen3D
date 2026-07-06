@@ -121,26 +121,6 @@
       "recommended": true
     },
     {
-      "id": "e2e-test-tool",
-      "name": "E2E Test Tool",
-      "placement": "tools",
-      "subtype": "action",
-      "description": "Throwaway plugin used to verify the publish_plugin.py tool end-to-end.",
-      "creator": "Lumen3D",
-      "icon": "check",
-      "platformCompat": ">=1.8.0",
-      "sandboxCapabilities": [
-        "toolbar.addButton",
-        "ui.toast"
-      ],
-      "latestVersion": "1.0.0",
-      "assetUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/dev/marketplace/plugins/e2e-test-tool/plugin-e2e-test-tool-1.0.0.zip",
-      "sumsUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/dev/marketplace/plugins/e2e-test-tool/SHA256SUMS",
-      "sigUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/dev/marketplace/plugins/e2e-test-tool/SHA256SUMS.sig",
-      "sha256": "1b39851826b5e7f1415c6aaf84e63846a75fe8f61a01fad68d8dc3e0f31ada56",
-      "recommended": true
-    },
-    {
       "id": "measure-distance",
       "name": "Measure Distance",
       "placement": "tools",

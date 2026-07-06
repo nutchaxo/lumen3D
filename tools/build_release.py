@@ -74,6 +74,15 @@ def is_excluded(rel_path):
         return True
     if rel_path.parts[0] == "api" and rel_path.name in API_RUNTIME_STATE:
         return True
+    # App-store model: bundled plugins are NOT shipped in the release — they are
+    # installed on demand from the signed marketplace (first-run picker). js/modules/
+    # itself stays (installs land there); every plugin folder + the stale discovery
+    # manifest are dropped so a fresh install starts plugin-less.
+    parts = rel_path.parts
+    if len(parts) >= 4 and parts[0] == "js" and parts[1] == "modules" and parts[2] in ("tools", "channels", "shaders"):
+        return True
+    if parts[:2] == ("js", "modules") and rel_path.name == "manifest.json":
+        return True
     return False
 
 

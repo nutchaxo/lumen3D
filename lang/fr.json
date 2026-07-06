@@ -961,7 +961,17 @@
     "finish": "Terminer",
     "finishing": "Finalisation…",
     "weak": "Mot de passe trop court ({n} caractères minimum).",
-    "done": "Installation terminée ✓"
+    "done": "Installation terminée ✓",
+    "step5sub": "Plugins",
+    "pluginsIntro": "Choisissez les plugins à installer. Les recommandés sont déjà cochés — décochez ce dont vous n'avez pas besoin. Vous pourrez en ajouter/retirer plus tard depuis le catalogue.",
+    "pluginsLoading": "Chargement du catalogue…",
+    "pluginsNone": "Catalogue indisponible — vous pourrez installer des plugins plus tard depuis l'onglet Catalogue.",
+    "plShaders": "Rendu",
+    "plChannels": "Canaux",
+    "plTools": "Outils",
+    "installing2": "Installation des plugins…",
+    "installedN": "{n} plugin(s) installé(s).",
+    "failed": "échoué(s)"
   },
   "mkt": {
     "title": "Catalogue de plugins",

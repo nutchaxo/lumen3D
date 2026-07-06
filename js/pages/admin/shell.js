@@ -9,7 +9,7 @@
 'use strict';
 
 import {
-  I18n, Utils, API_AUTH, API_SITE, t, apiFetch, apiFetchStatus, setCsrf,
+  I18n, Utils, API_AUTH, API_SITE, API_ADMIN, t, escHtml, apiFetch, apiFetchStatus, setCsrf,
   setUnauthorizedHandler, toast, refreshIcons, el,
 } from './shared.js';
 import { isDirty, setNavigator } from './bus.js';
@@ -65,6 +65,7 @@ const WIZ_PRESETS = [
 
 let _wizStep = 1;
 let _wizUsername = 'admin';
+let _wizPassword = '';
 let _wizPreset = WIZ_PRESETS[0];
 
 function setupError(msg) {
@@ -100,11 +101,11 @@ function initWizard() {
 function renderWizStep() {
   document.querySelectorAll('.setup-step').forEach((s) => { s.style.display = (+s.getAttribute('data-step') === _wizStep) ? '' : 'none'; });
   document.querySelectorAll('.setup-dot').forEach((d) => { d.style.background = (+d.getAttribute('data-step') <= _wizStep) ? 'var(--color-primary,#00A654)' : 'var(--border-subtle,#333)'; });
-  const subs = { 1: t('wizard.step1sub', 'Compte administrateur'), 2: t('wizard.step2sub', 'Identité'), 3: t('wizard.step3sub', 'Thème'), 4: t('wizard.step4sub', 'Textes') };
+  const subs = { 1: t('wizard.step1sub', 'Compte administrateur'), 2: t('wizard.step2sub', 'Identité'), 3: t('wizard.step3sub', 'Thème'), 4: t('wizard.step4sub', 'Textes'), 5: t('wizard.step5sub', 'Plugins') };
   const sub = el('setup-step-sub'); if (sub) sub.textContent = subs[_wizStep] || '';
   el('setup-back').style.display = _wizStep > 1 ? '' : 'none';
   el('setup-skip').style.display = _wizStep > 1 ? '' : 'none';
-  el('setup-next').textContent = _wizStep >= 4 ? t('wizard.finish', 'Terminer') : t('wizard.next', 'Suivant');
+  el('setup-next').textContent = _wizStep >= 5 ? t('wizard.finish', 'Terminer') : t('wizard.next', 'Suivant');
   setupError('');
 }
 
@@ -118,12 +119,12 @@ async function wizNext() {
     const btn = el('setup-next'); btn.disabled = true; btn.innerHTML = `<span class="spinner spinner-sm"></span> ${t('admin.creating', 'Création…')}`;
     const r = await apiFetchStatus(`${API_AUTH}?action=setup`, { method: 'POST', body: JSON.stringify({ username, password: p1 }) });
     btn.disabled = false; btn.textContent = t('wizard.next', 'Suivant');
-    if (r.ok && r.data?.ok) { setCsrf(r.data.csrf || null); _wizUsername = r.data.username || username; _wizStep = 2; renderWizStep(); }
+    if (r.ok && r.data?.ok) { setCsrf(r.data.csrf || null); _wizUsername = r.data.username || username; _wizPassword = p1; _wizStep = 2; renderWizStep(); }
     else if (r.status === 409) setupError(t('admin.setupExists', 'Un mot de passe existe déjà. Rechargez la page pour vous connecter.'));
     else setupError(r.data?.error === 'weak_password' ? t('wizard.weak', `Mot de passe trop court (${MIN_PASSWORD} caractères minimum).`, { n: MIN_PASSWORD }) : t('admin.setupFailed', 'Échec de la création du mot de passe.'));
     return;
   }
-  if (_wizStep < 4) { _wizStep++; renderWizStep(); return; }
+  if (_wizStep < 5) { _wizStep++; renderWizStep(); if (_wizStep === 5) _loadWizardPlugins(); return; }
   await finishWizard();
 }
 
@@ -147,8 +148,55 @@ async function finishWizard() {
     if (_wizPreset && _wizPreset.tokens) await apiFetchStatus(`${API_SITE}?action=save&doc=theme`, { method: 'POST', body: JSON.stringify({ tokens: _wizPreset.tokens, dark: {}, light: {} }) });
     try { if (typeof InstanceConfig !== 'undefined') { await InstanceConfig.load(); InstanceConfig.applyHead(); InstanceConfig.applyDom(); } } catch (_) {}
   } catch (_) { /* seeding is best-effort; the account is already created */ }
+  await _installWizardPlugins();
   toast(t('wizard.done', 'Installation terminée ✓'));
   enterApp(_wizUsername);
+}
+
+// ── First-run plugin picker (installs the selected first-party plugins) ─────────
+const _PLACEMENT_LABEL = () => ({
+  shaders: t('wizard.plShaders', 'Rendu'), channels: t('wizard.plChannels', 'Canaux'), tools: t('wizard.plTools', 'Outils'),
+});
+
+async function _loadWizardPlugins() {
+  const host = el('setup-plugins');
+  if (!host) return;
+  host.innerHTML = `<div class="adm-loading" style="padding:10px"><span class="spinner spinner-sm"></span> ${escHtml(t('wizard.pluginsLoading', 'Chargement du catalogue…'))}</div>`;
+  const data = await apiFetch(`${API_ADMIN}?action=marketplace_catalog`);
+  const plugins = (data && Array.isArray(data.plugins)) ? data.plugins : [];
+  if (!plugins.length) {
+    host.innerHTML = `<p class="adm-page-sub" style="padding:6px">${escHtml(t('wizard.pluginsNone', 'Catalogue indisponible — vous pourrez installer des plugins plus tard depuis l\'onglet Catalogue.'))}</p>`;
+    return;
+  }
+  const labels = _PLACEMENT_LABEL();
+  const byPlace = {};
+  plugins.forEach((p) => { (byPlace[p.placement] = byPlace[p.placement] || []).push(p); });
+  host.innerHTML = ['shaders', 'channels', 'tools'].filter((pl) => byPlace[pl]).map((pl) => `
+    <div style="margin-bottom:10px">
+      <div style="font-size:11px;text-transform:uppercase;opacity:.6;margin:4px 0 3px">${escHtml(labels[pl] || pl)}</div>
+      ${byPlace[pl].map((p) => {
+        const disabled = p.compat === false;
+        const checked = !disabled && (p.recommended || p.installed);
+        return `<label style="display:flex;align-items:center;gap:8px;padding:3px 0;cursor:${disabled ? 'not-allowed' : 'pointer'};opacity:${disabled ? '.5' : '1'}">
+          <input type="checkbox" class="wiz-plugin" value="${escHtml(p.id)}" ${checked ? 'checked' : ''} ${disabled ? 'disabled' : ''}>
+          <span style="flex:1">${escHtml(p.name || p.id)}${disabled ? ' <span style="opacity:.6">(' + escHtml(t('mkt.incompatible', 'incompatible')) + ')</span>' : ''}</span>
+        </label>`;
+      }).join('')}
+    </div>`).join('');
+}
+
+async function _installWizardPlugins() {
+  const boxes = [...document.querySelectorAll('#setup-plugins .wiz-plugin:checked')];
+  if (!boxes.length) return;
+  const prog = el('setup-plugins-progress');
+  if (prog) prog.style.display = '';
+  let done = 0, failed = 0;
+  for (let i = 0; i < boxes.length; i++) {
+    if (prog) prog.textContent = `${t('wizard.installing2', 'Installation des plugins…')} (${i + 1}/${boxes.length})`;
+    const r = await apiFetchStatus(`${API_ADMIN}?action=install_plugin`, { method: 'POST', body: JSON.stringify({ id: boxes[i].value, password: _wizPassword }) });
+    if ((r.ok && r.data?.ok) || r.data?.error === 'already_installed') done++; else failed++;
+  }
+  if (prog) prog.textContent = t('wizard.installedN', '{n} plugin(s) installé(s).', { n: done }) + (failed ? ` (${failed} ${t('wizard.failed', 'échoué(s)')})` : '');
 }
 
 // ── Login ──────────────────────────────────────────────────────

@@ -1709,6 +1709,7 @@ def _install_marketplace_plugin(catalog_id: str, password: str):
     asset_url, sums_url, sig_url = entry.get("assetUrl"), entry.get("sumsUrl"), entry.get("sigUrl")
     if not asset_url:
         return False, 400, {"error": "no_asset"}
+    MODULES_DIR.mkdir(parents=True, exist_ok=True)   # fresh (un-bundled) install: js/modules may not exist yet
     tmp_root = Path(tempfile.mkdtemp(prefix=".mkt-", dir=str(MODULES_DIR)))
     moved = False
     try:

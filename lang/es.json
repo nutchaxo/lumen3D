@@ -961,7 +961,17 @@
     "finish": "Finalizar",
     "finishing": "Finalizando…",
     "weak": "Contraseña demasiado corta (mínimo {n} caracteres).",
-    "done": "Instalación completada ✓"
+    "done": "Instalación completada ✓",
+    "step5sub": "Plugins",
+    "pluginsIntro": "Elija los plugins a instalar. Los recomendados ya están marcados — desmarque lo que no necesite. Podrá añadir/quitar más tarde desde el catálogo.",
+    "pluginsLoading": "Cargando el catálogo…",
+    "pluginsNone": "Catálogo no disponible — podrá instalar plugins más tarde desde la pestaña Catálogo.",
+    "plShaders": "Renderizado",
+    "plChannels": "Canales",
+    "plTools": "Herramientas",
+    "installing2": "Instalando plugins…",
+    "installedN": "{n} plugin(s) instalado(s).",
+    "failed": "fallido(s)"
   },
   "mkt": {
     "title": "Catálogo de plugins",

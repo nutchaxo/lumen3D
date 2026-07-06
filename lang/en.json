@@ -961,7 +961,17 @@
     "finish": "Finish",
     "finishing": "Finishing…",
     "weak": "Password too short ({n} characters minimum).",
-    "done": "Setup complete ✓"
+    "done": "Setup complete ✓",
+    "step5sub": "Plugins",
+    "pluginsIntro": "Choose the plugins to install. The recommended ones are already checked — uncheck what you don't need. You can add/remove more later from the catalog.",
+    "pluginsLoading": "Loading the catalog…",
+    "pluginsNone": "Catalog unavailable — you can install plugins later from the Catalog tab.",
+    "plShaders": "Rendering",
+    "plChannels": "Channels",
+    "plTools": "Tools",
+    "installing2": "Installing plugins…",
+    "installedN": "{n} plugin(s) installed.",
+    "failed": "failed"
   },
   "mkt": {
     "title": "Plugin catalog",

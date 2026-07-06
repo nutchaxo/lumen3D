@@ -32,6 +32,7 @@
       <span class="setup-dot" data-step="2" style="flex:1;height:4px;border-radius:2px;background:var(--border-subtle,#333)"></span>
       <span class="setup-dot" data-step="3" style="flex:1;height:4px;border-radius:2px;background:var(--border-subtle,#333)"></span>
       <span class="setup-dot" data-step="4" style="flex:1;height:4px;border-radius:2px;background:var(--border-subtle,#333)"></span>
+      <span class="setup-dot" data-step="5" style="flex:1;height:4px;border-radius:2px;background:var(--border-subtle,#333)"></span>
     </div>
 
     <div class="adm-gate-error" id="setup-error" style="display:none"><span id="setup-error-msg"></span></div>
@@ -81,6 +82,13 @@
         <div class="adm-field"><label class="adm-field-label" data-i18n="wizard.copyright">Pied de page</label>
           <input type="text" id="setup-copyright" class="adm-field-input" placeholder="© Mon organisation"></div>
       </div>
+    </div>
+
+    <!-- Step 5: plugin picker (first-run marketplace selection) -->
+    <div class="setup-step" data-step="5" style="display:none">
+      <p class="adm-gate-intro" data-i18n="wizard.pluginsIntro">Choisissez les plugins à installer. Les recommandés sont déjà cochés — décochez ce dont vous n'avez pas besoin. Vous pourrez en ajouter/retirer plus tard depuis le catalogue.</p>
+      <div id="setup-plugins" style="max-height:300px;overflow:auto;text-align:left;margin:6px 0"></div>
+      <div id="setup-plugins-progress" style="display:none;font-size:13px;opacity:.8;margin-top:8px"></div>
     </div>
 
     <div style="display:flex;justify-content:space-between;align-items:center;margin-top:16px">

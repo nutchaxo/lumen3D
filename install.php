@@ -152,9 +152,12 @@ function clear_artifacts(bool $includeState): void {
 // ── Self-locking ─────────────────────────────────────────────────────────────
 
 /**
- * The installer refuses to act on a configured platform. The only exception:
- * our own install flow just wrote the credential (phase 'configured') and
- * still needs to run finalize.
+ * The installer refuses to act on an already-live platform. It locks once the
+ * LOCK_FILE is written (finalize). A fresh install has no admin credential yet
+ * — that account is created by the platform's guided setup wizard on first
+ * visit, not here — so absence of the credential means "install may proceed".
+ * A credential that DOES exist without our lock means a live platform: stay
+ * locked unless we are still mid-flow (state phase 'configured', pre-finalize).
  */
 function is_locked(): bool {
     if (file_exists(tpath(LOCK_FILE))) return true;
@@ -1026,16 +1029,14 @@ function handle_extract(): void {
 
 /** Admin account creation (create-exclusive) + data dirs + api/.htaccess if missing. */
 function handle_configure(): void {
+    // White-label: the installer no longer creates the admin account — it only
+    // prepares the infrastructure (api/.htaccess + data dirs). The platform's guided
+    // setup wizard creates the account + identity + theme + plugins on the FIRST VISIT
+    // (needsSetup stays true while api/admin_credential.json is absent).
     $s = require_state(['installed', 'configured']);
-    if ($s['phase'] === 'configured' && file_exists(credential_path())) {
+    if ($s['phase'] === 'configured') {
         json_out(['ok' => true, 'already' => true]);
     }
-    $body = post_body();
-    $username = trim((string)($body['username'] ?? ''));
-    if ($username === '') $username = 'admin';
-    if (strlen($username) > 64 || preg_match('/[\x00-\x1F\x7F]/', $username)) json_fail('invalid_username', 400);
-    $password = (string)($body['password'] ?? '');
-    if (strlen($password) < MIN_PASSWORD) json_fail('weak_password', 400);
 
     $apiDir = tpath('api');
     if (!is_dir($apiDir) && !@mkdir($apiDir, 0755, true) && !is_dir($apiDir)) json_fail('mkdir_failed', 500);
@@ -1054,27 +1055,6 @@ function handle_configure(): void {
         if (file_put_contents($ht, $rules) === false) json_fail('htaccess_write_failed', 500);
     }
 
-    // Create-exclusive: can never overwrite a live credential.
-    $fp = @fopen(credential_path(), 'x');
-    if ($fp === false) {
-        json_fail(file_exists(credential_path()) ? 'already_configured' : 'credential_write_failed',
-                  file_exists(credential_path()) ? 409 : 500);
-    }
-    $salt = random_bytes(16);
-    $hash = hash_pbkdf2('sha256', $password, $salt, PBKDF2_ITERS, 0, false);
-    $now = date('c');
-    $record = [
-        'version' => 1,
-        'username' => $username,
-        'password_pbkdf2' => 'pbkdf2_sha256$' . PBKDF2_ITERS . '$' . bin2hex($salt) . '$' . $hash,
-        'created' => $now,
-        'rotated' => $now,
-    ];
-    $written = fwrite($fp, json_encode($record, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
-    fclose($fp);
-    if ($written === false) { @unlink(credential_path()); json_fail('credential_write_failed', 500); }
-    @chmod(credential_path(), 0600);
-
     // Data layout (only create what is absent — never touch existing data).
     foreach (['DATA_WEB', 'DATA_WEB/fixed', 'DATA_WEB/live', 'DATA_WEB/tracking'] as $d) {
         $p = tpath($d);
@@ -1087,13 +1067,12 @@ function handle_configure(): void {
 
     $s['phase'] = 'configured';
     if (!write_state($s)) json_fail('state_write_failed', 500);
-    json_out(['ok' => true, 'username' => $username]);
+    json_out(['ok' => true]);
 }
 
 /** Write .install-lock, remove installer working files. */
 function handle_finalize(): void {
     $s = require_state(['configured']);
-    if (!file_exists(credential_path())) json_fail('not_configured', 409);
     $lock = json_encode(['installedAt' => date('c'), 'version' => $s['release']['version'] ?? null]);
     if (file_put_contents(tpath(LOCK_FILE), $lock) === false) json_fail('lock_write_failed', 500);
     clear_artifacts(true);
@@ -1407,16 +1386,18 @@ const DICT = {
     ex_progress: "Extraction {i} / {n} fichiers",
     vi_text: "Vérification de l'installation…",
     warn_no_version_json: "version.json absent de la release (les mises à jour automatiques pourraient ne pas le détecter).",
-    cfg_title: "Compte administrateur",
-    cfg_sub: "Créez le compte qui gérera la plateforme (datasets, plugins, sécurité). Le mot de passe est haché (PBKDF2-SHA256) et n'est jamais stocké en clair.",
+    cfg_title: "Préparer l'installation",
+    cfg_sub: "Cette étape prépare les dossiers de données et la protection de api/. Le compte administrateur, l'identité (nom, logo, textes), le thème et les plugins se créent au premier lancement de la plateforme, via l'assistant guidé.",
+    cfg_account_note: "Aucun compte n'est créé maintenant. À la première ouverture du panneau d'administration, un assistant vous guidera pour créer votre compte et personnaliser la plateforme.",
     cfg_user: "Nom d'utilisateur", cfg_user_ph: "admin",
     cfg_pass: "Mot de passe", cfg_pass2: "Confirmer le mot de passe",
     cfg_min: "8 caractères minimum.",
     cfg_mismatch: "Les deux mots de passe ne correspondent pas.",
     strength0: "trop court", strength1: "faible", strength2: "moyen", strength3: "bon", strength4: "excellent",
     btn_create: "Créer le compte et terminer",
+    btn_finish: "Préparer et terminer",
     done_title: "Installation terminée",
-    done_sub: "Lumen3D {v} est installé et le compte administrateur est configuré.",
+    done_sub: "Lumen3D {v} est installé. Ouvrez le panneau d'administration pour créer votre compte et personnaliser la plateforme (assistant guidé).",
     link_home: "Ouvrir la plateforme", link_home_d: "index.html",
     link_admin: "Panneau d'administration", link_admin_d: "admpan.html",
     done_delete: "Recommandation : supprimez install.php maintenant. Il refuse désormais de se réexécuter, mais un fichier d'installation n'a plus sa place sur un serveur en production.",
@@ -1510,16 +1491,18 @@ const DICT = {
     ex_progress: "Extracting {i} / {n} files",
     vi_text: "Verifying the installation…",
     warn_no_version_json: "version.json missing from the release (auto-updates may not detect it).",
-    cfg_title: "Admin account",
-    cfg_sub: "Create the account that will manage the platform (datasets, plugins, security). The password is hashed (PBKDF2-SHA256) and never stored in plaintext.",
+    cfg_title: "Prepare the install",
+    cfg_sub: "This step prepares the data folders and the api/ protection. The admin account, identity (name, logo, texts), theme and plugins are created on the platform's first launch, via the guided setup wizard.",
+    cfg_account_note: "No account is created now. The first time you open the admin panel, a wizard will guide you through creating your account and customizing the platform.",
     cfg_user: "Username", cfg_user_ph: "admin",
     cfg_pass: "Password", cfg_pass2: "Confirm password",
     cfg_min: "Minimum 8 characters.",
     cfg_mismatch: "The two passwords do not match.",
     strength0: "too short", strength1: "weak", strength2: "fair", strength3: "good", strength4: "excellent",
     btn_create: "Create account and finish",
+    btn_finish: "Prepare and finish",
     done_title: "Installation complete",
-    done_sub: "Lumen3D {v} is installed and the admin account is configured.",
+    done_sub: "Lumen3D {v} is installed. Open the admin panel to create your account and customize the platform (guided wizard).",
     link_home: "Open the platform", link_home_d: "index.html",
     link_admin: "Admin panel", link_admin_d: "admpan.html",
     done_delete: "Recommendation: delete install.php now. It refuses to run again, but an installer file has no place on a production server.",
@@ -1870,44 +1853,27 @@ function pwScore(pw) {
 function renderConfigure() {
   currentRender = renderConfigure;
   setStep(4);
-  const userIn = el('input', { type: 'text', id: 'cfgUser', autocomplete: 'username', placeholder: t('cfg_user_ph'), maxlength: '64' });
-  const passIn = el('input', { type: 'password', id: 'cfgPass', autocomplete: 'new-password', minlength: '8' });
-  const pass2In = el('input', { type: 'password', id: 'cfgPass2', autocomplete: 'new-password', minlength: '8' });
-  const strength = el('div', { class: 'strength', 'aria-live': 'polite' }, [
-    el('span', { class: 'bars', 'aria-hidden': 'true' }, [el('i'), el('i'), el('i'), el('i')]),
-    el('span', { class: 'txt', text: t('cfg_min') })
-  ]);
-  passIn.addEventListener('input', () => {
-    const s = pwScore(passIn.value);
-    strength.className = 'strength s' + s;
-    strength.querySelector('.txt').textContent = passIn.value ? t('strength' + s) : t('cfg_min');
-  });
+  // White-label: the installer no longer creates the admin account here. It only
+  // prepares the data folders + api/.htaccess; the guided setup wizard (admin panel,
+  // first visit) creates the account + identity + theme + plugins. This step is a
+  // single confirmation button.
   const errBox = el('div');
-  const submitBtn = el('button', { class: 'btn btn-primary', type: 'submit', text: t('btn_create') });
+  const submitBtn = el('button', { class: 'btn btn-primary', type: 'submit', text: t('btn_finish') });
   const form = el('form', {}, [
-    el('div', { class: 'field' }, [el('label', { for: 'cfgUser', text: t('cfg_user') }), userIn]),
-    el('div', { class: 'field' }, [el('label', { for: 'cfgPass', text: t('cfg_pass') }), passIn, strength]),
-    el('div', { class: 'field' }, [el('label', { for: 'cfgPass2', text: t('cfg_pass2') }), pass2In]),
+    banner('info', 'cfg_account_note'),
     errBox,
     el('div', { class: 'actions' }, [submitBtn])
   ]);
   form.addEventListener('submit', async (e) => {
     e.preventDefault();
     errBox.textContent = '';
-    if (passIn.value.length < 8) { errBox.appendChild(banner('error', 'err_weak_password')); return; }
-    if (passIn.value !== pass2In.value) { errBox.appendChild(banner('error', 'cfg_mismatch')); return; }
     submitBtn.disabled = true;
     try {
-      await api('configure', { username: userIn.value, password: passIn.value });
-      passIn.value = ''; pass2In.value = '';
+      await api('configure', {});                  // prepare infra (no account here)
       await runPipeline();                         // → configured → finalize → done
     } catch (err) {
       submitBtn.disabled = false;
-      if (err.code === 'weak_password' || err.code === 'invalid_username') {
-        errBox.appendChild(banner('error', errorMessage(err)));
-      } else {
-        renderError(err, renderConfigure);
-      }
+      renderError(err, renderConfigure);
     }
   });
   view(el('h2', { text: t('cfg_title') }), el('p', { class: 'sub', text: t('cfg_sub') }), form);

@@ -43,7 +43,7 @@ ROOT_FILES = (
     "LICENCE",
 )
 
-ROOT_DIRS = ("css", "js", "lang", "assets", "changelog", "api")
+ROOT_DIRS = ("css", "js", "lang", "assets", "changelog", "api", "config")
 
 # Runtime state written by the admin API on the deployed host — shipping it
 # would overwrite live credentials/config on update.
@@ -82,6 +82,14 @@ def is_excluded(rel_path):
     if len(parts) >= 4 and parts[0] == "js" and parts[1] == "modules" and parts[2] in ("tools", "channels", "shaders"):
         return True
     if parts[:2] == ("js", "modules") and rel_path.name == "manifest.json":
+        return True
+    # White-label config: ship the neutral DEFAULTS (config/defaults/**) + the empty
+    # generated theme.css (avoids a pre-first-save 404), but NEVER the operator/IRIBHM
+    # config data (instance.json / theme.json / legal.json / pages/*) — a fresh install
+    # must start neutral and get its identity from the setup wizard.
+    if parts[0] == "config":
+        if parts[:2] == ("config", "defaults") or rel_path.name == "theme.css":
+            return False
         return True
     return False
 

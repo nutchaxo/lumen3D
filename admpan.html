@@ -123,9 +123,17 @@
         <span class="adm-nav-label" data-i18n="admin.navUpdates">Mises à jour</span>
         <span class="adm-nav-dot" id="nav-update-dot" style="display:none"></span>
       </button>
+      <button class="adm-nav-item" data-tab="branding">
+        <i data-lucide="badge"></i>
+        <span class="adm-nav-label" data-i18n="admin.navBranding">Identité</span>
+      </button>
       <button class="adm-nav-item" data-tab="appearance">
         <i data-lucide="palette"></i>
         <span class="adm-nav-label" data-i18n="admin.navAppearance">Apparence</span>
+      </button>
+      <button class="adm-nav-item" data-tab="legal">
+        <i data-lucide="scale"></i>
+        <span class="adm-nav-label" data-i18n="admin.navLegal">Mentions légales</span>
       </button>
     </nav>
 
@@ -403,9 +411,19 @@
       <div class="adm-tab-inner" id="updates-root"></div>
     </section>
 
+    <!-- ───────── TAB: BRANDING (white-label identity) ───────── -->
+    <section class="adm-tabpanel" id="tab-branding" data-tab="branding">
+      <div class="adm-tab-inner" id="branding-root"></div>
+    </section>
+
     <!-- ───────── TAB: APPEARANCE (white-label theme editor) ───────── -->
     <section class="adm-tabpanel" id="tab-appearance" data-tab="appearance">
       <div class="adm-tab-inner" id="appearance-root"></div>
+    </section>
+
+    <!-- ───────── TAB: LEGAL (white-label legal notice) ───────── -->
+    <section class="adm-tabpanel" id="tab-legal" data-tab="legal">
+      <div class="adm-tab-inner" id="legal-root"></div>
     </section>
 
   </div><!-- /adm-content -->

@@ -1607,7 +1607,7 @@ def _fetch_marketplace_catalog() -> list:
 
 _MARKETPLACE_CARD_KEYS = ("id", "name", "placement", "subtype", "description",
                           "creator", "icon", "platformCompat", "sandboxCapabilities",
-                          "latestVersion")
+                          "latestVersion", "recommended")
 
 
 def _marketplace_list() -> dict:

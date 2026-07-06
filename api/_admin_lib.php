@@ -566,7 +566,7 @@ function mkt_list(): array {
             'id' => $pid, 'name' => $e['name'] ?? $pid, 'placement' => $placement, 'subtype' => $e['subtype'] ?? null,
             'description' => $e['description'] ?? null, 'creator' => $e['creator'] ?? null, 'icon' => $e['icon'] ?? null,
             'platformCompat' => $e['platformCompat'] ?? null, 'sandboxCapabilities' => $e['sandboxCapabilities'] ?? null,
-            'latestVersion' => $e['latestVersion'] ?? null,
+            'latestVersion' => $e['latestVersion'] ?? null, 'recommended' => $e['recommended'] ?? false,
             'installed' => $path ? in_array($path, $installed, true) : false, 'compat' => $c, 'compatReason' => $cr,
         ];
     }

@@ -1,0 +1,49 @@
+{
+  "$schema": "lumen3d-instance/1",
+  "brand": {
+    "name": "IRIBHM Microscopy Platform",
+    "shortName": "Lumen3D",
+    "productName": "Lumen3D",
+    "monogram": "IR",
+    "logoEmoji": "🔬",
+    "tagline": "Confocal Imaging Data Viewer",
+    "organization": "IRIBHM — ULB"
+  },
+  "specimen": {
+    "singular": "embryo",
+    "plural": "embryos"
+  },
+  "org": {
+    "name": "IRIBHM — Université Libre de Bruxelles",
+    "url": "https://www.ulb.be/en/research-institute/iribhm"
+  },
+  "seo": {
+    "description": "Interactive platform for exploring confocal microscopy data of mouse embryos. Visualize, analyze, and compare 3D and 4D imaging datasets from the IRIBHM laboratory at ULB.",
+    "keywords": "confocal microscopy, mouse embryo, immunofluorescence, live imaging, cell tracking, IRIBHM, ULB"
+  },
+  "pageTitles": {
+    "home": "IRIBHM Microscopy Platform — Confocal Imaging Data Viewer",
+    "explorer": "Data Explorer — IRIBHM Microscopy",
+    "viewer": "Viewer — IRIBHM Microscopy",
+    "compare": "Compare — IRIBHM Microscopy",
+    "tracking": "Cell Tracking — IRIBHM Microscopy",
+    "about": "About — IRIBHM Microscopy Platform",
+    "admin": "Admin — IRIBHM Microscopy Platform",
+    "legal": "Legal — IRIBHM Microscopy Platform"
+  },
+  "footer": {
+    "copyright": "© 2026 IRIBHM — Université Libre de Bruxelles",
+    "links": [
+      { "label": "IRIBHM", "url": "https://www.ulb.be/en/research-institute/iribhm" },
+      { "label": "ULB", "url": "https://www.ulb.be" }
+    ]
+  },
+  "nav": {
+    "showExplorer": true,
+    "showCompare": true,
+    "showTracking": true,
+    "showAbout": true,
+    "showLegal": false,
+    "customPages": []
+  }
+}

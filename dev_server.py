@@ -76,6 +76,23 @@ LANG_DIR = ROOT / "lang"
 # A bare locale code (BCP-47-ish): two/three letters with an optional region.
 _LANG_CODE_RE = re.compile(r"^[a-z]{2,3}(-[A-Za-z]{2,4})?$")
 
+# ── White-label instance configuration (PUBLIC, served like lang/*.json) ────────
+# Operator-editable "study content" that the generic engine must never hardcode:
+# brand, specimen vocabulary, SEO/head text, footer, nav, theme, page layouts,
+# legal. Lives OUTSIDE api/ (which is static-blocked) precisely because the public
+# pages must fetch it. Secrets NEVER go here. Protected from the self-updater by
+# _UPDATE_PROTECT so an update never wipes operator customisation.
+CONFIG_DIR = ROOT / "config"
+CONFIG_DEFAULTS_DIR = CONFIG_DIR / "defaults" / "neutral"
+INSTANCE_FILE = CONFIG_DIR / "instance.json"
+# Cache the parsed instance config, invalidated on the file's mtime, so the
+# per-request {{SITE:…}} head injection never re-parses JSON on the hot path.
+_INSTANCE_CACHE: dict = {"sig": None, "data": {}}
+# {{SITE:dotted.path|fallback}} — server-side head/brand substitution.
+_SITE_PLACEHOLDER_RE = re.compile(r"\{\{SITE:([^}|]+)(?:\|([^}]*))?\}\}")
+# A site-config doc slug for pages/<slug> (lowercase, url-safe).
+_SITE_SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
+
 # ── Default credentials ───────────────────────────────────────────────────────
 # No hardcoded password: a random one is generated on first run (printed once)
 # and only its salted PBKDF2 hash is persisted.
@@ -189,10 +206,15 @@ def _csp_policy(nonce: str) -> str:
 _LOG_REQUESTS = False
 
 
-def _atomic_write(path: Path, data, *, binary: bool = False) -> None:
+def _atomic_write(path: Path, data, *, binary: bool = False, mode: int | None = None) -> None:
     """RACE-020: write to a temp sibling then os.replace (atomic rename on the same
     filesystem), guarded by a process-wide lock — so two concurrent admin POSTs (or a
-    save racing a rebuild) can never interleave/truncate a half-written JSON file."""
+    save racing a rebuild) can never interleave/truncate a half-written JSON file.
+
+    ``mode`` (POSIX): when set, chmod the final file. mkstemp creates 0600 temp files,
+    which is right for api/ secrets but would make a PUBLIC config/ file unreadable by
+    a separate static server (e.g. Apache serving a php-fpm-written file) — pass
+    mode=0o644 for public config so any host can serve it."""
     path.parent.mkdir(parents=True, exist_ok=True)
     with _WRITE_LOCK:
         fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=".tmp-", suffix=path.suffix or ".tmp")
@@ -203,6 +225,11 @@ def _atomic_write(path: Path, data, *, binary: bool = False) -> None:
             else:
                 with os.fdopen(fd, "w", encoding="utf-8") as f:
                     f.write(data)
+            if mode is not None:
+                try:
+                    os.chmod(tmp, mode)
+                except OSError:
+                    pass
             os.replace(tmp, str(path))
         except BaseException:
             try:
@@ -210,6 +237,132 @@ def _atomic_write(path: Path, data, *, binary: bool = False) -> None:
             except OSError:
                 pass
             raise
+
+
+# ── White-label instance config: load + head injection + doc store ──────────────
+
+def _esc_html(s: str) -> str:
+    """Minimal HTML escaping for values substituted into served HTML (head/brand)."""
+    return (str(s).replace("&", "&amp;").replace("<", "&lt;")
+            .replace(">", "&gt;").replace('"', "&quot;"))
+
+
+def _load_instance() -> dict:
+    """Parsed config/instance.json, memoized on the file mtime. Tolerant: a missing or
+    malformed file yields {} (the HTML placeholders then use their inline fallbacks)."""
+    try:
+        st = INSTANCE_FILE.stat()
+        sig = st.st_mtime_ns
+    except OSError:
+        _INSTANCE_CACHE.update({"sig": None, "data": {}})
+        return {}
+    if _INSTANCE_CACHE.get("sig") == sig:
+        return _INSTANCE_CACHE["data"]
+    try:
+        data = json.loads(INSTANCE_FILE.read_text(encoding="utf-8"))
+        if not isinstance(data, dict):
+            data = {}
+    except Exception:
+        data = {}
+    _INSTANCE_CACHE.update({"sig": sig, "data": data})
+    return data
+
+
+def _apply_site_placeholders(text: str) -> str:
+    """Replace {{SITE:dotted.path|fallback}} in an HTML document with the matching
+    instance-config value (HTML-escaped), or the inline fallback when unset. Twin of
+    api/_html_server.php:lumen_apply_site — keep the two in lockstep."""
+    if "{{SITE:" not in text:
+        return text
+    inst = _load_instance()
+
+    def _repl(m):
+        path = m.group(1).strip()
+        fallback = m.group(2) if m.group(2) is not None else ""
+        val = inst
+        for seg in path.split("."):
+            if isinstance(val, dict) and seg in val:
+                val = val[seg]
+            else:
+                val = None
+                break
+        if not isinstance(val, str) or val == "":
+            val = fallback
+        return _esc_html(val)
+
+    return _SITE_PLACEHOLDER_RE.sub(_repl, text)
+
+
+def _site_doc_path(doc: str):
+    """Map a site-config doc name to (active_path, default_path) under config/, or None
+    for an unknown/unsafe name. Supported: instance | theme | legal | pages/<slug>."""
+    doc = (doc or "").strip()
+    if doc in ("instance", "theme", "legal"):
+        return CONFIG_DIR / f"{doc}.json", CONFIG_DEFAULTS_DIR / f"{doc}.json"
+    if doc.startswith("pages/"):
+        slug = doc[len("pages/"):]
+        if _SITE_SLUG_RE.match(slug):
+            return CONFIG_DIR / "pages" / f"{slug}.json", CONFIG_DEFAULTS_DIR / "pages" / f"{slug}.json"
+    return None
+
+
+def _load_site_doc(doc: str):
+    """Read a site-config doc (active → default → empty). None on an invalid doc name."""
+    res = _site_doc_path(doc)
+    if not res:
+        return None
+    for p in res:
+        try:
+            if p.exists():
+                d = json.loads(p.read_text(encoding="utf-8"))
+                if isinstance(d, (dict, list)):
+                    return d
+        except Exception:
+            pass
+    return {}
+
+
+def _save_site_doc(doc: str, data) -> bool:
+    """Persist a site-config doc atomically (public, world-readable 0644). instance.json
+    also drops the mtime cache so the next served page picks up the head change."""
+    res = _site_doc_path(doc)
+    if not res or not isinstance(data, (dict, list)):
+        return False
+    active, _default = res
+    _atomic_write(active, json.dumps(data, indent=2, ensure_ascii=False), mode=0o644)
+    if doc == "instance":
+        _INSTANCE_CACHE.update({"sig": None, "data": {}})
+    return True
+
+
+def _reset_site_doc(doc: str) -> bool:
+    """Restore a site-config doc to its shipped neutral default (revert-to-default)."""
+    res = _site_doc_path(doc)
+    if not res:
+        return False
+    _active, default = res
+    try:
+        content = default.read_text(encoding="utf-8") if default.exists() else "{}"
+        json.loads(content)  # validate
+    except Exception:
+        content = "{}"
+    _atomic_write(res[0], content, mode=0o644)
+    if doc == "instance":
+        _INSTANCE_CACHE.update({"sig": None, "data": {}})
+    return True
+
+
+def _publish_site_doc(doc: str) -> bool:
+    """Promote a doc's draft to published (page builder). Copies the `draft` block over
+    `published` in-place; no-op-safe for docs without a draft/published split."""
+    res = _site_doc_path(doc)
+    if not res:
+        return False
+    data = _load_site_doc(doc)
+    if isinstance(data, dict) and "draft" in data:
+        data["published"] = data.get("draft")
+        return _save_site_doc(doc, data)
+    return True
 
 
 def _client_ip(handler) -> str:
@@ -1098,6 +1251,10 @@ _UPDATE_PROTECT = (
     "DATA_WEB", "logs", "backups",
     "api/admin_credential.json", "api/config.json", "api/stats.json",
     "api/disabled-plugins.json", "api/quarantined-plugins.json", "api/plugin-trust.json",
+    # White-label operator config (public, editable from admin). NOT the whole
+    # config/ dir — config/defaults/ ships in releases and MUST stay updatable.
+    "config/instance.json", "config/theme.json", "config/theme.css",
+    "config/legal.json", "config/pages",
     # Local environments / VCS / caches
     ".git", ".conda", ".venv-312", ".runtime", "__pycache__", "node_modules",
     # Dev-checkout content (absent from release artifacts by construction)
@@ -2467,7 +2624,7 @@ class AdminHandler(http.server.SimpleHTTPRequestHandler):
             self._serve_languages()
         elif parsed.path in ("/api/downloads", "/api/downloads.php"):
             self._serve_downloads(parsed)
-        elif parsed.path in ("/api/auth.php", "/api/datasets.php", "/api/admin.php", "/api/telemetry.php"):
+        elif parsed.path in ("/api/auth.php", "/api/datasets.php", "/api/admin.php", "/api/telemetry.php", "/api/site.php"):
             self._handle_api(parsed, body=None)
         elif _is_forbidden_static(clean_path):
             self._json(404, {"error": "Not found"})
@@ -2630,7 +2787,10 @@ class AdminHandler(http.server.SimpleHTTPRequestHandler):
         except OSError:
             self._json(500, {"error": "read failed"}); return
         nonce = secrets.token_urlsafe(18)
-        body = html.replace("{{CSP_NONCE}}", nonce).encode("utf-8")
+        # White-label head/brand injection: resolve {{SITE:…}} from instance.json
+        # (SEO-correct, flash-free), then the per-request CSP nonce.
+        doc = _apply_site_placeholders(html)
+        body = doc.replace("{{CSP_NONCE}}", nonce).encode("utf-8")
         self.send_response(200)
         self.send_header("Content-Type", "text/html; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
@@ -2664,6 +2824,42 @@ class AdminHandler(http.server.SimpleHTTPRequestHandler):
         params = dict(urllib.parse.parse_qsl(parsed.query))
         action = params.get("action", "")
         path   = parsed.path
+
+        # ── Site config (white-label) ─────────────────────────────────────────
+        # Public GET of a config doc (instance/theme/legal/pages/<slug>); writes
+        # (save/reset/publish) require an authenticated admin session + CSRF. The
+        # PUBLISHED docs are also fetchable directly as static config/*.json — the
+        # GET action exists so the admin editor can read a doc uniformly. Twin: api/site.php.
+        if path == "/api/site.php":
+            if action == "get":
+                data = _load_site_doc(params.get("doc", ""))
+                if data is None:
+                    self._json(400, {"error": "Invalid doc"})
+                else:
+                    self._json_nostore(200, data)
+                return
+            session = _get_session(self._token())
+            if not session:
+                self._json(401, {"error": "Not authenticated"})
+                return
+            if action in ("save", "reset", "publish"):
+                ok, status, payload = _authorize_write(
+                    self.command, session, self.headers.get("X-CSRF-Token"))
+                if not ok:
+                    self._json(status, payload)
+                    return
+            if action == "save":
+                ok = _save_site_doc(params.get("doc", ""), body or {})
+                self._json(200 if ok else 400, {"ok": True} if ok else {"error": "Invalid doc"})
+            elif action == "reset":
+                ok = _reset_site_doc(params.get("doc", ""))
+                self._json(200 if ok else 400, {"ok": True} if ok else {"error": "Invalid doc"})
+            elif action == "publish":
+                ok = _publish_site_doc(params.get("doc", ""))
+                self._json(200 if ok else 400, {"ok": True} if ok else {"error": "Invalid doc"})
+            else:
+                self._json(400, {"error": f"Unknown action: {action}"})
+            return
 
         # ── Auth ──────────────────────────────────────────────────────────────
         if path == "/api/auth.php":

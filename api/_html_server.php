@@ -36,6 +36,44 @@ function lumen_csp_nonce(): string {
 }
 
 /**
+ * Parsed config/instance.json (white-label). Cached per request. Tolerant: a
+ * missing/malformed file yields [] (placeholders then use their inline fallbacks).
+ * Twin of dev_server.py:_load_instance.
+ */
+function lumen_instance_config(): array {
+    static $cache = null;
+    if ($cache !== null) return $cache;
+    $f = dirname(__DIR__) . '/config/instance.json';
+    $d = is_file($f) ? json_decode((string)@file_get_contents($f), true) : null;
+    $cache = is_array($d) ? $d : [];
+    return $cache;
+}
+
+/** Resolve a dotted path against the instance config → string or null. */
+function lumen_site_lookup(array $cfg, string $path) {
+    $v = $cfg;
+    foreach (explode('.', $path) as $seg) {
+        if (is_array($v) && array_key_exists($seg, $v)) $v = $v[$seg];
+        else return null;
+    }
+    return is_string($v) ? $v : null;
+}
+
+/**
+ * Replace {{SITE:dotted.path|fallback}} with the instance-config value (HTML-escaped)
+ * or the inline fallback. Twin of dev_server.py:_apply_site_placeholders — keep in step.
+ */
+function lumen_apply_site(string $html): string {
+    if (strpos($html, '{{SITE:') === false) return $html;
+    $cfg = lumen_instance_config();
+    return preg_replace_callback('/\{\{SITE:([^}|]+)(?:\|([^}]*))?\}\}/', function ($m) use ($cfg) {
+        $val = lumen_site_lookup($cfg, trim($m[1]));
+        if ($val === null || $val === '') $val = $m[2] ?? '';
+        return htmlspecialchars($val, ENT_QUOTES, 'UTF-8');
+    }, $html);
+}
+
+/**
  * Serve $root/$rel (an .html file) with the injected nonce + enforcing CSP header.
  * Returns true if it served the response, false if the path is not a servable
  * .html under $root (caller then falls through / 404s). Path-contained.
@@ -53,7 +91,9 @@ function lumen_serve_html(string $root, string $rel): bool {
     $html = file_get_contents($full);
     if ($html === false) return false;
     $nonce = lumen_csp_nonce();
-    $body = str_replace('{{CSP_NONCE}}', $nonce, $html);
+    // White-label head/brand injection ({{SITE:…}}), then the per-request nonce.
+    $body = lumen_apply_site($html);
+    $body = str_replace('{{CSP_NONCE}}', $nonce, $body);
 
     header('Content-Type: text/html; charset=utf-8');
     header('Content-Security-Policy: ' . lumen_csp_policy($nonce));

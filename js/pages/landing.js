@@ -15,10 +15,13 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
   } catch (_) { /* private mode / no beacon — ignore */ }
 
-  // Init core systems
+  // Init core systems. Instance config loads FIRST so I18n.t() can interpolate
+  // the brand/specimen tokens and the head/brand reflect the operator's identity.
+  await InstanceConfig.load();
   Theme.init();
   await I18n.init();
-  document.title = 'IRIBHM Microscopy Platform - Confocal Imaging Data Viewer';
+  InstanceConfig.applyHead();
+  InstanceConfig.applyDom();
 
   // Load catalog
   await Catalog.load();
@@ -26,8 +29,6 @@ document.addEventListener('DOMContentLoaded', async () => {
   // Update theme icon
   updateThemeIcon();
   Theme.onChange(updateThemeIcon);
-  const brand = document.querySelector('.navbar-brand-icon');
-  if (brand) brand.textContent = 'IR';
   // Build the language switcher from the platform's discovered locales.
   Utils.populateLanguageMenu(switchLanguage);
 

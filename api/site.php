@@ -1,0 +1,115 @@
+<?php
+/**
+ * Lumen3D — Site configuration API (white-label). PHP twin of the
+ * dev_server.py /api/site.php handler. PHP is the PRIMARY deployment target,
+ * so this endpoint is a first-class implementation, not a fallback.
+ *
+ *   GET  ?action=get&doc=<instance|theme|legal|pages/<slug>>   (PUBLIC read)
+ *   POST ?action=save&doc=...   body = JSON document            (admin + CSRF)
+ *   POST ?action=reset&doc=...                                  (admin + CSRF)
+ *   POST ?action=publish&doc=pages/<slug>                       (admin + CSRF)
+ *
+ * The docs live under the PUBLIC config/ dir (served like lang/*.json) so the
+ * public pages can fetch them; they are written world-readable (0644), NOT
+ * 0600 like api/ secrets, so a separate static server can serve them.
+ */
+
+declare(strict_types=1);
+require_once __DIR__ . '/_admin_lib.php';
+admin_session_start();
+
+$action = $_GET['action'] ?? '';
+$method = $_SERVER['REQUEST_METHOD'] ?? 'GET';
+$body   = $method === 'POST'
+    ? (json_decode(file_get_contents('php://input'), true) ?: [])
+    : [];
+
+function site_config_dir(): string { return admin_root() . '/config'; }
+function site_defaults_dir(): string { return admin_root() . '/config/defaults/neutral'; }
+
+/** Map a doc name to [active, default] paths under config/, or null if unsafe. */
+function site_doc_path(string $doc): ?array {
+    $doc = trim($doc);
+    if (in_array($doc, ['instance', 'theme', 'legal'], true)) {
+        return [site_config_dir() . "/$doc.json", site_defaults_dir() . "/$doc.json"];
+    }
+    if (strncmp($doc, 'pages/', 6) === 0) {
+        $slug = substr($doc, 6);
+        if (preg_match('/^[a-z0-9][a-z0-9_-]{0,63}$/', $slug)) {
+            return [site_config_dir() . "/pages/$slug.json", site_defaults_dir() . "/pages/$slug.json"];
+        }
+    }
+    return null;
+}
+
+/** Read a doc: active → default → empty. false on invalid doc name. */
+function site_load_doc(string $doc) {
+    $res = site_doc_path($doc);
+    if ($res === null) return false;
+    foreach ($res as $p) {
+        if (is_file($p)) {
+            $d = json_decode((string)@file_get_contents($p), true);
+            if (is_array($d)) return $d;
+        }
+    }
+    return [];
+}
+
+/** Atomic write of a PUBLIC config doc (0644, not 0600). */
+function site_write_public(string $path, array $data): bool {
+    $dir = dirname($path);
+    if (!is_dir($dir)) @mkdir($dir, 0755, true);
+    $tmp = tempnam($dir, '.tmp-');
+    if ($tmp === false) return false;
+    if (@file_put_contents($tmp, json_encode($data, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT)) === false) {
+        @unlink($tmp); return false;
+    }
+    if (!@rename($tmp, $path)) { @unlink($tmp); return false; }
+    @chmod($path, 0644);
+    return true;
+}
+
+function site_save_doc(string $doc, $data): bool {
+    $res = site_doc_path($doc);
+    if ($res === null || !is_array($data)) return false;
+    return site_write_public($res[0], $data);
+}
+
+function site_reset_doc(string $doc): bool {
+    $res = site_doc_path($doc);
+    if ($res === null) return false;
+    [$active, $default] = $res;
+    $content = is_file($default) ? json_decode((string)@file_get_contents($default), true) : [];
+    if (!is_array($content)) $content = [];
+    return site_write_public($active, $content);
+}
+
+function site_publish_doc(string $doc): bool {
+    $data = site_load_doc($doc);
+    if ($data === false) return false;
+    if (is_array($data) && array_key_exists('draft', $data)) {
+        $data['published'] = $data['draft'];
+        return site_save_doc($doc, $data);
+    }
+    return true;
+}
+
+// ── Public read ───────────────────────────────────────────────────────────────
+if ($action === 'get') {
+    $data = site_load_doc($_GET['doc'] ?? '');
+    if ($data === false) admin_json_out(['error' => 'Invalid doc'], 400);
+    admin_json_out(is_array($data) ? $data : []);
+}
+
+// ── Writes: admin session + CSRF ──────────────────────────────────────────────
+if (!admin_is_auth()) admin_json_out(['error' => 'Not authenticated'], 401);
+
+if (in_array($action, ['save', 'reset', 'publish'], true)) {
+    admin_require_write();  // POST + CSRF; exits on failure
+    $doc = $_GET['doc'] ?? '';
+    if ($action === 'save')    admin_json_out(site_save_doc($doc, is_array($body) ? $body : []) ? ['ok' => true] : ['error' => 'Invalid doc'], site_doc_path($doc) === null ? 400 : 200);
+    if ($action === 'reset')   admin_json_out(site_reset_doc($doc) ? ['ok' => true] : ['error' => 'Invalid doc'], site_doc_path($doc) === null ? 400 : 200);
+    if ($action === 'publish') admin_json_out(site_publish_doc($doc) ? ['ok' => true] : ['error' => 'Invalid doc'], site_doc_path($doc) === null ? 400 : 200);
+}
+
+admin_json_out(['error' => 'Unknown action'], 400);

@@ -121,6 +121,26 @@
       "recommended": true
     },
     {
+      "id": "e2e-test-tool",
+      "name": "E2E Test Tool",
+      "placement": "tools",
+      "subtype": "action",
+      "description": "Throwaway plugin used to verify the publish_plugin.py tool end-to-end.",
+      "creator": "Lumen3D",
+      "icon": "check",
+      "platformCompat": ">=1.8.0",
+      "sandboxCapabilities": [
+        "toolbar.addButton",
+        "ui.toast"
+      ],
+      "latestVersion": "1.0.0",
+      "assetUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/dev/marketplace/plugins/e2e-test-tool/plugin-e2e-test-tool-1.0.0.zip",
+      "sumsUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/dev/marketplace/plugins/e2e-test-tool/SHA256SUMS",
+      "sigUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/dev/marketplace/plugins/e2e-test-tool/SHA256SUMS.sig",
+      "sha256": "1b39851826b5e7f1415c6aaf84e63846a75fe8f61a01fad68d8dc3e0f31ada56",
+      "recommended": true
+    },
+    {
       "id": "measure-distance",
       "name": "Measure Distance",
       "placement": "tools",
@@ -172,6 +192,23 @@
       "recommended": true
     },
     {
+      "id": "screenshot",
+      "name": "Screenshot",
+      "placement": "tools",
+      "subtype": "action",
+      "description": "Capture the current 3D view as a PNG image.",
+      "creator": "IRIBHM",
+      "icon": "camera",
+      "platformCompat": "1.x",
+      "sandboxCapabilities": null,
+      "latestVersion": "1.0.0",
+      "assetUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/dev/marketplace/plugins/screenshot/plugin-screenshot-1.0.0.zip",
+      "sumsUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/dev/marketplace/plugins/screenshot/SHA256SUMS",
+      "sigUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/dev/marketplace/plugins/screenshot/SHA256SUMS.sig",
+      "sha256": "cae81ecc6fea9b704c683bdec99f0db371963e2a3b748f893098152145689ed9",
+      "recommended": true
+    },
+    {
       "id": "screenshot-sandboxed",
       "name": "Screenshot (sandboxed)",
       "placement": "tools",
@@ -193,23 +230,6 @@
       "sigUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/dev/marketplace/plugins/screenshot-sandboxed/SHA256SUMS.sig",
       "sha256": "0220e2329049c569262ed8238fef018578f31b8f46b39ea4b877b005c429df58",
       "recommended": false
-    },
-    {
-      "id": "screenshot",
-      "name": "Screenshot",
-      "placement": "tools",
-      "subtype": "action",
-      "description": "Capture the current 3D view as a PNG image.",
-      "creator": "IRIBHM",
-      "icon": "camera",
-      "platformCompat": "1.x",
-      "sandboxCapabilities": null,
-      "latestVersion": "1.0.0",
-      "assetUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/dev/marketplace/plugins/screenshot/plugin-screenshot-1.0.0.zip",
-      "sumsUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/dev/marketplace/plugins/screenshot/SHA256SUMS",
-      "sigUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/dev/marketplace/plugins/screenshot/SHA256SUMS.sig",
-      "sha256": "cae81ecc6fea9b704c683bdec99f0db371963e2a3b748f893098152145689ed9",
-      "recommended": true
     },
     {
       "id": "slice-inspector",

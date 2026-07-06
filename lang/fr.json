@@ -937,5 +937,29 @@
       "spacer": "Espace",
       "html": "HTML"
     }
+  },
+  "wizard": {
+    "title": "Installation guidée",
+    "step1sub": "Compte administrateur",
+    "step2sub": "Identité",
+    "step3sub": "Thème",
+    "step4sub": "Textes",
+    "accountIntro": "Créez le compte administrateur. Le mot de passe est stocké de façon irréversible (hash) et n'est jamais transmis à des tiers.",
+    "identityIntro": "Nommez votre instance et le type d'objet que vous visualisez. Vous pourrez tout affiner ensuite.",
+    "themeIntro": "Choisissez une couleur de marque. Vous pourrez personnaliser tout le thème plus tard.",
+    "textsIntro": "Derniers réglages : accroche et mention de pied de page.",
+    "instanceName": "Nom de l'instance",
+    "org": "Organisation (option.)",
+    "specimenSingular": "Objet (singulier)",
+    "specimenPlural": "Objet (pluriel)",
+    "tagline": "Accroche",
+    "copyright": "Pied de page",
+    "back": "Retour",
+    "skip": "Passer",
+    "next": "Suivant",
+    "finish": "Terminer",
+    "finishing": "Finalisation…",
+    "weak": "Mot de passe trop court ({n} caractères minimum).",
+    "done": "Installation terminée ✓"
   }
 }

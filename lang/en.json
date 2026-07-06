@@ -937,5 +937,29 @@
       "spacer": "Spacer",
       "html": "HTML"
     }
+  },
+  "wizard": {
+    "title": "Guided setup",
+    "step1sub": "Admin account",
+    "step2sub": "Identity",
+    "step3sub": "Theme",
+    "step4sub": "Texts",
+    "accountIntro": "Create the administrator account. The password is stored irreversibly (hash) and never sent to third parties.",
+    "identityIntro": "Name your instance and the kind of object you visualize. You can refine everything later.",
+    "themeIntro": "Pick a brand color. You can customize the whole theme later.",
+    "textsIntro": "Last touches: tagline and footer line.",
+    "instanceName": "Instance name",
+    "org": "Organization (optional)",
+    "specimenSingular": "Object (singular)",
+    "specimenPlural": "Object (plural)",
+    "tagline": "Tagline",
+    "copyright": "Footer",
+    "back": "Back",
+    "skip": "Skip",
+    "next": "Next",
+    "finish": "Finish",
+    "finishing": "Finishing…",
+    "weak": "Password too short ({n} characters minimum).",
+    "done": "Setup complete ✓"
   }
 }

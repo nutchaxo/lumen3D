@@ -17,36 +17,76 @@
      FIRST-RUN SETUP SCREEN (no credential configured yet)
 ════════════════════════════════════════════════════════ -->
 <div id="setup-screen" class="adm-gate" style="display:none">
-  <div class="adm-gate-card">
+  <div class="adm-gate-card" style="max-width:540px">
     <div class="adm-gate-logo">
       <span class="adm-gate-logo-icon" data-instance="brand.logoEmoji">🔬</span>
       <div>
-        <div class="adm-gate-title" data-i18n="admin.setupTitle">Configuration initiale</div>
-        <div class="adm-gate-sub" data-i18n="admin.setupSubtitle">Définissez le mot de passe administrateur</div>
+        <div class="adm-gate-title" data-i18n="wizard.title">Installation guidée</div>
+        <div class="adm-gate-sub" id="setup-step-sub" data-i18n="wizard.step1sub">Compte administrateur</div>
       </div>
     </div>
-    <div class="adm-gate-divider"></div>
-    <p class="adm-gate-intro" data-i18n="admin.setupIntro">
-      Aucun mot de passe n'est configuré. Créez-en un pour sécuriser l'accès au panneau d'administration.
-      Il est stocké de façon irréversible (hash) et n'est jamais transmis à des tiers.
-    </p>
-    <div class="adm-gate-error" id="setup-error" style="display:none">
-      <span id="setup-error-msg"></span>
+
+    <!-- Stepper -->
+    <div id="setup-stepper" style="display:flex;gap:6px;margin:14px 0">
+      <span class="setup-dot" data-step="1" style="flex:1;height:4px;border-radius:2px;background:var(--color-primary,#00A654)"></span>
+      <span class="setup-dot" data-step="2" style="flex:1;height:4px;border-radius:2px;background:var(--border-subtle,#333)"></span>
+      <span class="setup-dot" data-step="3" style="flex:1;height:4px;border-radius:2px;background:var(--border-subtle,#333)"></span>
+      <span class="setup-dot" data-step="4" style="flex:1;height:4px;border-radius:2px;background:var(--border-subtle,#333)"></span>
     </div>
-    <div class="adm-gate-form">
-      <div class="adm-field">
-        <label class="adm-field-label" data-i18n="admin.username">Identifiant</label>
-        <input type="text" id="setup-username" class="adm-field-input" value="admin" autocomplete="username" spellcheck="false">
+
+    <div class="adm-gate-error" id="setup-error" style="display:none"><span id="setup-error-msg"></span></div>
+
+    <!-- Step 1: account -->
+    <div class="setup-step" data-step="1">
+      <p class="adm-gate-intro" data-i18n="wizard.accountIntro">Créez le compte administrateur. Le mot de passe est stocké de façon irréversible (hash) et n'est jamais transmis à des tiers.</p>
+      <div class="adm-gate-form">
+        <div class="adm-field"><label class="adm-field-label" data-i18n="admin.username">Identifiant</label>
+          <input type="text" id="setup-username" class="adm-field-input" value="admin" autocomplete="username" spellcheck="false"></div>
+        <div class="adm-field"><label class="adm-field-label" data-i18n="admin.newPassword">Nouveau mot de passe</label>
+          <input type="password" id="setup-password" class="adm-field-input" autocomplete="new-password" placeholder="••••••••"></div>
+        <div class="adm-field"><label class="adm-field-label" data-i18n="admin.confirmPassword">Confirmer le mot de passe</label>
+          <input type="password" id="setup-password2" class="adm-field-input" autocomplete="new-password" placeholder="••••••••"></div>
       </div>
-      <div class="adm-field">
-        <label class="adm-field-label" data-i18n="admin.newPassword">Nouveau mot de passe</label>
-        <input type="password" id="setup-password" class="adm-field-input" autocomplete="new-password" placeholder="••••••••">
+    </div>
+
+    <!-- Step 2: identity -->
+    <div class="setup-step" data-step="2" style="display:none">
+      <p class="adm-gate-intro" data-i18n="wizard.identityIntro">Nommez votre instance et le type d'objet que vous visualisez. Vous pourrez tout affiner ensuite.</p>
+      <div class="adm-gate-form">
+        <div class="adm-field"><label class="adm-field-label" data-i18n="wizard.instanceName">Nom de l'instance</label>
+          <input type="text" id="setup-name" class="adm-field-input" placeholder="Lumen3D"></div>
+        <div class="adm-field"><label class="adm-field-label" data-i18n="wizard.org">Organisation (option.)</label>
+          <input type="text" id="setup-org" class="adm-field-input" placeholder="Mon laboratoire"></div>
+        <div style="display:flex;gap:10px">
+          <div class="adm-field" style="flex:1"><label class="adm-field-label" data-i18n="wizard.specimenSingular">Objet (singulier)</label>
+            <input type="text" id="setup-spec-s" class="adm-field-input" placeholder="sample"></div>
+          <div class="adm-field" style="flex:1"><label class="adm-field-label" data-i18n="wizard.specimenPlural">Objet (pluriel)</label>
+            <input type="text" id="setup-spec-p" class="adm-field-input" placeholder="samples"></div>
+        </div>
       </div>
-      <div class="adm-field">
-        <label class="adm-field-label" data-i18n="admin.confirmPassword">Confirmer le mot de passe</label>
-        <input type="password" id="setup-password2" class="adm-field-input" autocomplete="new-password" placeholder="••••••••">
+    </div>
+
+    <!-- Step 3: theme -->
+    <div class="setup-step" data-step="3" style="display:none">
+      <p class="adm-gate-intro" data-i18n="wizard.themeIntro">Choisissez une couleur de marque. Vous pourrez personnaliser tout le thème plus tard.</p>
+      <div id="setup-swatches" style="display:flex;gap:10px;flex-wrap:wrap;justify-content:center;margin:8px 0"></div>
+    </div>
+
+    <!-- Step 4: texts -->
+    <div class="setup-step" data-step="4" style="display:none">
+      <p class="adm-gate-intro" data-i18n="wizard.textsIntro">Derniers réglages : accroche et mention de pied de page.</p>
+      <div class="adm-gate-form">
+        <div class="adm-field"><label class="adm-field-label" data-i18n="wizard.tagline">Accroche</label>
+          <input type="text" id="setup-tagline" class="adm-field-input" placeholder="3D Imaging Data Viewer"></div>
+        <div class="adm-field"><label class="adm-field-label" data-i18n="wizard.copyright">Pied de page</label>
+          <input type="text" id="setup-copyright" class="adm-field-input" placeholder="© Mon organisation"></div>
       </div>
-      <button class="adm-btn adm-btn-accent adm-gate-submit" id="btn-setup" data-i18n="admin.createPassword">Créer le mot de passe</button>
+    </div>
+
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-top:16px">
+      <button class="adm-btn adm-btn-ghost" id="setup-back" style="display:none" data-i18n="wizard.back">Retour</button>
+      <button class="adm-btn adm-btn-ghost adm-btn-sm" id="setup-skip" style="display:none;margin-left:auto;margin-right:8px" data-i18n="wizard.skip">Passer</button>
+      <button class="adm-btn adm-btn-accent" id="setup-next" data-i18n="wizard.next">Suivant</button>
     </div>
     <div class="adm-gate-footer" data-i18n="admin.loginFooter">IRIBHM · ULB · Accès restreint</div>
   </div>

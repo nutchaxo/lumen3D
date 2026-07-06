@@ -559,7 +559,7 @@ def _setup_credential(username: str, password: str):
     the file already exists, so this HTTP-reachable path can never replace a live
     password (race-free, even under concurrent setup requests).
     """
-    if not isinstance(password, str) or len(password) < 4:
+    if not isinstance(password, str) or len(password) < 8:
         return False, 400, {"error": "weak_password"}
     rec = _credential_record(username, password)
     data = json.dumps(rec, indent=2, ensure_ascii=False).encode("utf-8")
@@ -590,7 +590,7 @@ def _change_credential(current: str, new: str):
         return False, 409, {"error": "not_configured"}
     if not _verify_password(current or "", rec.get("password_pbkdf2") or ""):
         return False, 401, {"error": "bad_current"}
-    if not isinstance(new, str) or len(new) < 4:
+    if not isinstance(new, str) or len(new) < 8:
         return False, 400, {"error": "weak_password"}
     newrec = _credential_record(rec.get("username") or DEFAULT_USERNAME, new)
     newrec["created"] = rec.get("created", newrec["created"])
@@ -3215,8 +3215,8 @@ def main():
         default_user = (rec or {}).get("username", DEFAULT_USERNAME)
         username = input(f"Username [{default_user}]: ").strip() or default_user
         password = getpass.getpass("New password: ")
-        if len(password) < 4:
-            print("❌ Password too short (min 4 chars).")
+        if len(password) < 8:
+            print("❌ Password too short (min 8 chars).")
             sys.exit(1)
         # Operator CLI may overwrite (already trusted with the filesystem); the
         # HTTP setup path remains create-exclusive (cannot overwrite a live credential).

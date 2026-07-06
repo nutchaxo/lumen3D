@@ -937,5 +937,29 @@
       "spacer": "Espacio",
       "html": "HTML"
     }
+  },
+  "wizard": {
+    "title": "Instalación guiada",
+    "step1sub": "Cuenta de administrador",
+    "step2sub": "Identidad",
+    "step3sub": "Tema",
+    "step4sub": "Textos",
+    "accountIntro": "Cree la cuenta de administrador. La contraseña se almacena de forma irreversible (hash) y nunca se envía a terceros.",
+    "identityIntro": "Nombre su instancia y el tipo de objeto que visualiza. Podrá refinar todo más tarde.",
+    "themeIntro": "Elija un color de marca. Podrá personalizar todo el tema más tarde.",
+    "textsIntro": "Últimos ajustes: lema y línea de pie de página.",
+    "instanceName": "Nombre de la instancia",
+    "org": "Organización (opcional)",
+    "specimenSingular": "Objeto (singular)",
+    "specimenPlural": "Objeto (plural)",
+    "tagline": "Lema",
+    "copyright": "Pie de página",
+    "back": "Atrás",
+    "skip": "Omitir",
+    "next": "Siguiente",
+    "finish": "Finalizar",
+    "finishing": "Finalizando…",
+    "weak": "Contraseña demasiado corta (mínimo {n} caracteres).",
+    "done": "Instalación completada ✓"
   }
 }

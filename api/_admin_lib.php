@@ -106,7 +106,7 @@ function admin_credential_record(string $username, string $password): array {
 /** Create the credential ONLY if absent. Returns [ok, status, payload].
  *  fopen('x') is the anti-overwrite guarantee (create-exclusive). */
 function admin_setup_credential(string $username, string $password): array {
-    if (strlen($password) < 4) return [false, 400, ['error' => 'weak_password']];
+    if (strlen($password) < 8) return [false, 400, ['error' => 'weak_password']];
     $fp = @fopen(cred_file(), 'x');               // create-exclusive
     if ($fp === false) {
         return file_exists(cred_file())
@@ -125,7 +125,7 @@ function admin_change_credential(string $current, string $new): array {
     $rec = admin_credential();
     if (!$rec) return [false, 409, ['error' => 'not_configured']];
     if (!admin_verify_password($current, $rec['password_pbkdf2'] ?? '')) return [false, 401, ['error' => 'bad_current']];
-    if (strlen($new) < 4) return [false, 400, ['error' => 'weak_password']];
+    if (strlen($new) < 8) return [false, 400, ['error' => 'weak_password']];
     $newrec = admin_credential_record($rec['username'] ?? 'admin', $new);
     $newrec['created'] = $rec['created'] ?? $newrec['created'];
     return admin_write_json(cred_file(), $newrec)

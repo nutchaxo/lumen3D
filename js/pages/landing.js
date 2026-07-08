@@ -59,11 +59,11 @@ document.addEventListener('DOMContentLoaded', async () => {
 });
 
 /* ── White-label home block override ─────────────────────────── */
-function _renderHomeBlocks(blocks) {
+function _renderHomeSource(source) {
   const host = document.getElementById('home-blocks');
   const def = document.getElementById('home-default');
   if (!host || typeof PageRenderer === 'undefined') return;
-  const n = PageRenderer.render(host, blocks, { wrap: true });
+  const n = PageRenderer.renderSource(host, source, { wrap: true });
   if (n) { host.style.display = ''; if (def) def.style.display = 'none'; }
   else { host.style.display = 'none'; if (def) def.style.display = ''; }
 }
@@ -71,17 +71,19 @@ function _renderHomeBlocks(blocks) {
 async function maybeRenderHomeBlocks() {
   if (typeof PageRenderer === 'undefined') return;
   const preview = new URLSearchParams(location.search).get('preview') === 'draft';
-  // Live-preview bridge for the admin Pages tab (works even with no published blocks).
+  // Live-preview bridge for the admin Pages tab (works even with no published content).
   window.addEventListener('message', (e) => {
     if (e.source !== window.parent) return;
     const m = e.data;
-    if (m && m.type === 'LUMEN_PREVIEW_BLOCKS' && Array.isArray(m.blocks)) _renderHomeBlocks(m.blocks);
+    if (m && m.type === 'LUMEN_PREVIEW_DOC' && m.source) _renderHomeSource(m.source);
+    else if (m && m.type === 'LUMEN_PREVIEW_BLOCKS' && Array.isArray(m.blocks)) _renderHomeSource({ blocks: m.blocks });
   });
-  let blocks = [];
-  try { blocks = await PageRenderer.fetchBlocks('home', preview); } catch (_) {}
-  if (blocks && blocks.length) {
-    _renderHomeBlocks(blocks);
-    if (typeof I18n !== 'undefined' && I18n.onLanguageChange) I18n.onLanguageChange(() => _renderHomeBlocks(blocks));
+  let source = { sections: [] };
+  try { source = await PageRenderer.fetchSource('home', preview); } catch (_) {}
+  const has = (source.sections && source.sections.length) || (source.blocks && source.blocks.length);
+  if (has) {
+    _renderHomeSource(source);
+    if (typeof I18n !== 'undefined' && I18n.onLanguageChange) I18n.onLanguageChange(() => _renderHomeSource(source));
   }
 }
 

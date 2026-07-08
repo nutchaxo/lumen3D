@@ -1,3 +1,54 @@
 {
-  "sections": []
+  "$schema": "lumen3d-legal/1",
+  "_note": "Neutral, editable legal templates. Replace the [bracketed] placeholders in the admin Legal tab. These are generic starting points, NOT legal advice — have them reviewed for your jurisdiction.",
+  "sections": [
+    {
+      "title": { "en": "Publisher", "fr": "Éditeur du site", "es": "Editor del sitio" },
+      "body": {
+        "en": "This platform is published by [Organization name], [postal address].\n\nContact: [email address].\nPublication director: [name].\nHosting provider: [host name and address].",
+        "fr": "Cette plateforme est éditée par [Nom de l'organisation], [adresse postale].\n\nContact : [adresse e-mail].\nDirecteur de la publication : [nom].\nHébergeur : [nom et adresse de l'hébergeur].",
+        "es": "Esta plataforma está publicada por [Nombre de la organización], [dirección postal].\n\nContacto: [correo electrónico].\nDirector de publicación: [nombre].\nProveedor de alojamiento: [nombre y dirección del alojamiento]."
+      }
+    },
+    {
+      "title": { "en": "Data protection & privacy", "fr": "Protection des données & vie privée", "es": "Protección de datos y privacidad" },
+      "body": {
+        "en": "We process personal data in accordance with applicable data-protection law (including, where relevant, the EU GDPR).\n\nData collected: [describe what is collected — e.g. account credentials, usage analytics]. Purpose: [operating and securing the platform]. Legal basis: [legitimate interest / consent].\n\nData is retained no longer than necessary and is never sold to third parties. You may request access, rectification, or erasure of your data at [email address]. You may also lodge a complaint with your national data-protection authority.",
+        "fr": "Nous traitons les données personnelles conformément à la réglementation applicable (notamment le RGPD de l'UE le cas échéant).\n\nDonnées collectées : [décrire — ex. identifiants de compte, statistiques d'usage]. Finalité : [exploiter et sécuriser la plateforme]. Base légale : [intérêt légitime / consentement].\n\nLes données ne sont pas conservées plus longtemps que nécessaire et ne sont jamais vendues à des tiers. Vous pouvez demander l'accès, la rectification ou l'effacement de vos données à [adresse e-mail]. Vous pouvez également introduire une réclamation auprès de votre autorité nationale de protection des données.",
+        "es": "Tratamos los datos personales de acuerdo con la normativa aplicable (incluido el RGPD de la UE cuando corresponda).\n\nDatos recogidos: [describir — p. ej. credenciales de cuenta, analítica de uso]. Finalidad: [operar y proteger la plataforma]. Base jurídica: [interés legítimo / consentimiento].\n\nLos datos no se conservan más de lo necesario y nunca se venden a terceros. Puede solicitar acceso, rectificación o supresión de sus datos en [correo electrónico]. También puede presentar una reclamación ante su autoridad nacional de protección de datos."
+      }
+    },
+    {
+      "title": { "en": "Cookies & local storage", "fr": "Cookies & stockage local", "es": "Cookies y almacenamiento local" },
+      "body": {
+        "en": "This platform uses only strictly necessary cookies and browser local storage — for example to keep an administrator session and to remember display preferences (theme, language). No third-party advertising or tracking cookies are used.\n\nYou can clear this data at any time from your browser settings.",
+        "fr": "Cette plateforme n'utilise que des cookies strictement nécessaires et le stockage local du navigateur — par exemple pour maintenir une session administrateur et mémoriser les préférences d'affichage (thème, langue). Aucun cookie publicitaire ou de traçage tiers n'est utilisé.\n\nVous pouvez effacer ces données à tout moment depuis les réglages de votre navigateur.",
+        "es": "Esta plataforma utiliza únicamente cookies estrictamente necesarias y el almacenamiento local del navegador — por ejemplo, para mantener una sesión de administrador y recordar las preferencias de visualización (tema, idioma). No se utilizan cookies publicitarias ni de rastreo de terceros.\n\nPuede borrar estos datos en cualquier momento desde la configuración de su navegador."
+      }
+    },
+    {
+      "title": { "en": "Intellectual property", "fr": "Propriété intellectuelle", "es": "Propiedad intelectual" },
+      "body": {
+        "en": "The content published on this platform (data, images, text, and branding) is the property of [Organization name] or its contributors, unless stated otherwise. Any reuse, reproduction, or redistribution requires prior written authorization, except where an explicit licence is provided.\n\nThe underlying viewer software is distributed under its own licence (see the project repository).",
+        "fr": "Les contenus publiés sur cette plateforme (données, images, textes et identité visuelle) sont la propriété de [Nom de l'organisation] ou de ses contributeurs, sauf mention contraire. Toute réutilisation, reproduction ou rediffusion nécessite une autorisation écrite préalable, sauf lorsqu'une licence explicite est fournie.\n\nLe logiciel de visualisation sous-jacent est distribué sous sa propre licence (voir le dépôt du projet).",
+        "es": "Los contenidos publicados en esta plataforma (datos, imágenes, textos e identidad visual) son propiedad de [Nombre de la organización] o de sus colaboradores, salvo que se indique lo contrario. Cualquier reutilización, reproducción o redistribución requiere autorización previa por escrito, salvo cuando se proporcione una licencia explícita.\n\nEl software de visualización subyacente se distribuye bajo su propia licencia (véase el repositorio del proyecto)."
+      }
+    },
+    {
+      "title": { "en": "Disclaimer & liability", "fr": "Avertissement & responsabilité", "es": "Aviso legal y responsabilidad" },
+      "body": {
+        "en": "This platform and its content are provided \"as is\", without warranty of any kind. [Organization name] makes no guarantee as to the accuracy, completeness, or fitness for a particular purpose of the data presented, and shall not be held liable for any direct or indirect damage arising from its use.\n\nThe platform may be modified or interrupted at any time without notice.",
+        "fr": "Cette plateforme et son contenu sont fournis « en l'état », sans garantie d'aucune sorte. [Nom de l'organisation] ne garantit ni l'exactitude, ni l'exhaustivité, ni l'adéquation à un usage particulier des données présentées, et ne saurait être tenu responsable de tout dommage direct ou indirect résultant de son utilisation.\n\nLa plateforme peut être modifiée ou interrompue à tout moment sans préavis.",
+        "es": "Esta plataforma y su contenido se ofrecen «tal cual», sin garantía de ningún tipo. [Nombre de la organización] no garantiza la exactitud, integridad o idoneidad para un fin determinado de los datos presentados, y no será responsable de ningún daño directo o indirecto derivado de su uso.\n\nLa plataforma puede modificarse o interrumpirse en cualquier momento sin previo aviso."
+      }
+    },
+    {
+      "title": { "en": "Contact", "fr": "Contact", "es": "Contacto" },
+      "body": {
+        "en": "For any question regarding these notices, data access requests, or content corrections, contact us at [email address].",
+        "fr": "Pour toute question concernant ces mentions, une demande d'accès aux données ou une correction de contenu, contactez-nous à [adresse e-mail].",
+        "es": "Para cualquier consulta sobre estos avisos, solicitudes de acceso a datos o correcciones de contenido, contáctenos en [correo electrónico]."
+      }
+    }
+  ]
 }

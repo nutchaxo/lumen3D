@@ -1417,7 +1417,7 @@ const DICT = {
     done_title: "Installation terminée",
     done_sub: "Lumen3D {v} est installé. Ouvrez le panneau d'administration pour créer votre compte et personnaliser la plateforme (assistant guidé).",
     link_home: "Ouvrir la plateforme", link_home_d: "index.html",
-    link_admin: "Panneau d'administration", link_admin_d: "admpan.html",
+    link_admin: "Configurer la plateforme", link_admin_d: "Créez votre compte + personnalisez (assistant)",
     done_delete: "Recommandation : supprimez install.php maintenant. Il refuse désormais de se réexécuter, mais un fichier d'installation n'a plus sa place sur un serveur en production.",
     done_updates: "Les mises à jour futures se font depuis le panneau d'administration (onglet Mises à jour).",
     btn_selfdelete: "Supprimer install.php",
@@ -1522,7 +1522,7 @@ const DICT = {
     done_title: "Installation complete",
     done_sub: "Lumen3D {v} is installed. Open the admin panel to create your account and customize the platform (guided wizard).",
     link_home: "Open the platform", link_home_d: "index.html",
-    link_admin: "Admin panel", link_admin_d: "admpan.html",
+    link_admin: "Set up the platform", link_admin_d: "Create your account + customize (wizard)",
     done_delete: "Recommendation: delete install.php now. It refuses to run again, but an installer file has no place on a production server.",
     done_updates: "Future updates are handled from the admin panel (Updates tab).",
     btn_selfdelete: "Delete install.php",
@@ -1916,7 +1916,6 @@ function renderDone(version) {
     el('p', { class: 'sub center', text: t('done_sub', { v: version ? 'v' + version : '' }) }),
     warnBox,
     el('div', { class: 'final-links' }, [
-      el('a', { href: 'index.html' }, [el('span', { text: t('link_home'), style: 'display:block' }), el('span', { text: t('link_home_d') })]),
       el('a', { href: 'admpan.html' }, [el('span', { text: t('link_admin'), style: 'display:block' }), el('span', { text: t('link_admin_d') })])
     ]),
     banner('info', 'done_delete'),

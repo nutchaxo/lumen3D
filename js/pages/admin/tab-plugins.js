@@ -11,6 +11,9 @@
 import { API_ADMIN, t, escHtml, apiFetch, apiFetchStatus, toast, el, refreshIcons } from './shared.js';
 
 let _plugins = [];
+let _state = 'loading';   // 'loading' | 'loaded' | 'error' — distinguishes a genuine
+                          // empty list from a still-loading / failed fetch (was an
+                          // infinite spinner on a fresh install with 0 plugins).
 
 const PLACEMENTS = [
   { key: 'tools',    icon: 'wrench',  labelKey: 'admin.placementTools',    labelDef: 'Outils (barre d\'outils)' },
@@ -75,7 +78,41 @@ function row(p, isProtected) {
 function render() {
   const root = el('plugins-root');
   if (!root) return;
-  if (!_plugins.length) { root.innerHTML = `<div class="adm-loading"><span class="spinner spinner-lg"></span></div>`; return; }
+
+  if (_state === 'loading') {
+    root.innerHTML = `<div class="adm-loading"><span class="spinner spinner-lg"></span></div>`;
+    return;
+  }
+  if (_state === 'error') {
+    root.innerHTML = `
+      <div class="adm-page-head"><div><h2 class="adm-page-title">${escHtml(t('admin.pluginsTitle', 'Plugins'))}</h2></div></div>
+      <div class="adm-update-state adm-warn" style="display:flex;align-items:center;gap:10px">
+        <i data-lucide="alert-triangle"></i>
+        <span>${escHtml(t('admin.pluginsLoadError', 'Impossible de charger la liste des plugins.'))}</span>
+        <button class="adm-btn adm-btn-ghost adm-btn-sm" id="plugins-retry">${escHtml(t('admin.retry', 'Réessayer'))}</button>
+      </div>`;
+    el('plugins-retry')?.addEventListener('click', load);
+    refreshIcons(root);
+    return;
+  }
+  if (!_plugins.length) {
+    // Loaded, genuinely empty — a fresh (un-bundled) install has no plugins until
+    // the operator installs from the Catalog. Point them there instead of spinning.
+    root.innerHTML = `
+      <div class="adm-page-head"><div>
+        <h2 class="adm-page-title">${escHtml(t('admin.pluginsTitle', 'Plugins'))}</h2>
+        <p class="adm-page-sub">${escHtml(t('admin.pluginsIntro', 'Activez ou désactivez les modules. Les changements s\'appliquent au prochain chargement du viewer.'))}</p>
+      </div></div>
+      <div class="adm-empty" style="text-align:center;padding:48px 24px;opacity:.85">
+        <i data-lucide="puzzle" style="width:40px;height:40px;opacity:.5"></i>
+        <p style="margin:14px 0 4px;font-weight:600">${escHtml(t('admin.pluginsEmptyTitle', 'Aucun plugin installé'))}</p>
+        <p class="adm-page-sub" style="margin:0 0 16px">${escHtml(t('admin.pluginsEmptyHint', 'Les plugins s\'installent à la demande depuis le catalogue.'))}</p>
+        <button class="adm-btn adm-btn-accent adm-btn-sm" id="plugins-goto-catalog"><i data-lucide="store"></i> ${escHtml(t('admin.pluginsGotoCatalog', 'Ouvrir le catalogue'))}</button>
+      </div>`;
+    el('plugins-goto-catalog')?.addEventListener('click', () => { location.hash = '#marketplace'; });
+    refreshIcons(root);
+    return;
+  }
 
   const enabled = _plugins.filter((p) => p.enabled).length;
   // Recompute "protected" (last enabled shader) from the live in-memory state so a
@@ -177,8 +214,11 @@ async function onToggle(cb) {
 }
 
 async function load() {
+  _state = 'loading';
+  render();
   const data = await apiFetch(`${API_ADMIN}?action=plugins`);
-  if (data?.plugins) _plugins = data.plugins;
+  if (data && Array.isArray(data.plugins)) { _plugins = data.plugins; _state = 'loaded'; }
+  else { _state = 'error'; }
   render();
 }
 
@@ -187,7 +227,7 @@ export const PluginsTab = {
   titleKey: 'admin.navPlugins',
   titleDefault: 'Plugins',
   mounted: false,
-  mount() { render(); load(); },
+  mount() { load(); },
   activate() { load(); },
   relabel() { render(); },
 };

@@ -23,16 +23,14 @@
     return String(v);
   }
 
-  function _blocks() {
-    const src = (_preview && _doc && _doc.draft) ? _doc.draft : (_doc && _doc.published);
-    return (src && Array.isArray(src.blocks)) ? src.blocks : [];
+  function _source() {
+    return (_preview && _doc && _doc.draft) ? _doc.draft : ((_doc && _doc.published) || {});
   }
 
   function renderPage() {
     const host = document.getElementById('page-blocks');
     const empty = document.getElementById('page-empty');
-    const blocks = _blocks();
-    const n = (typeof PageRenderer !== 'undefined') ? PageRenderer.render(host, blocks, { wrap: true }) : 0;
+    const n = (typeof PageRenderer !== 'undefined') ? PageRenderer.renderSource(host, _source(), { wrap: true }) : 0;
     if (empty) empty.style.display = n ? 'none' : '';
     // Title from the page doc (localized), falling back to the brand name.
     const title = _lv(_doc && _doc.title);
@@ -67,9 +65,14 @@
     window.addEventListener('message', (e) => {
       if (e.source !== window.parent) return;
       const m = e.data;
-      if (m && m.type === 'LUMEN_PREVIEW_BLOCKS' && Array.isArray(m.blocks)) {
+      if (m && m.type === 'LUMEN_PREVIEW_DOC' && m.source && typeof m.source === 'object') {
         _doc = _doc || {};
-        _doc.draft = { blocks: m.blocks };
+        _doc.draft = m.source;                 // v2 editor posts the full {sections} source
+        _preview = true;
+        renderPage();
+      } else if (m && m.type === 'LUMEN_PREVIEW_BLOCKS' && Array.isArray(m.blocks)) {
+        _doc = _doc || {};
+        _doc.draft = { blocks: m.blocks };      // legacy flat-blocks preview
         _preview = true;
         renderPage();
       }

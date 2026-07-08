@@ -167,7 +167,7 @@ _RELEASE_PUBKEY_HEX = ""
 # _MARKETPLACE_CATALOG_URL points at the signed catalog JSON (its detached signature is
 # fetched from the same URL + ".sig"). Empty ⇒ the marketplace tab is inert (no source).
 _MARKETPLACE_PUBKEY_HEX = "7f5feaddd11dac38c836f556cd7d7b09fe9a7bda307c20e1e062aafa0ab27d3e"
-_MARKETPLACE_CATALOG_URL = "https://raw.githubusercontent.com/nutchaxo/lumen3D/dev/marketplace/marketplace-catalog.json"
+_MARKETPLACE_CATALOG_URL = "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/marketplace-catalog.json"
 _MARKETPLACE_MAX_ZIP = 8 * 1024 * 1024      # per-plugin download ceiling
 
 try:

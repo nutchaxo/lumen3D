@@ -111,8 +111,10 @@ Contrôlé par `--recommended true|false` (par défaut : conserve l'existant, `t
   **Toute échec laisse `js/modules/` intact.**
 - **URLs.** L'outil dérive automatiquement la base d'URL du `_MARKETPLACE_CATALOG_URL` épinglé, donc
   les `assetUrl`/`sumsUrl`/`sigUrl` correspondent toujours à ce que la plateforme va chercher. Le
-  catalogue est servi via **GitHub raw** sur la **branche** de cette URL (actuellement `dev`) — publie
-  sur cette branche (l'outil t'avertit si tu n'y es pas).
+  catalogue est servi via **GitHub raw** sur la **branche** de cette URL (**`main`** depuis v1.12.4,
+  pour que le marketplace soit servi depuis la branche stable des releases) — un plugin n'est **live**
+  qu'une fois sur `main`. Comme le dev se fait sur `dev` ([[CLAUDE.md §1.6]]), publie puis **merge
+  `dev → main`** (l'outil t'avertit si tu publies depuis une autre branche que `main`).
 - **Octets stables.** `SHA256SUMS` et le catalogue sont écrits en **octets bruts (LF)** pour que
   *signé == publié* (une conversion CRLF casserait la signature). Les zips sont **déterministes**
   (entrées triées, timestamp 1980, 0644) → sha256 reproductible.

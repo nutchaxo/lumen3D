@@ -74,6 +74,45 @@ function lumen_apply_site(string $html): string {
 }
 
 /**
+ * Resolve the requested .html file (relative to the install dir) from the server
+ * vars, tolerating installation in a SUBDIRECTORY (e.g. /tools/webplatform/).
+ *
+ * Apache rewrites every *.html to _serve.php but REQUEST_URI keeps the full path
+ * INCLUDING the subdirectory prefix. That prefix must be stripped before resolving
+ * against the install dir — otherwise "<subdir>/<subdir>/index.html" is looked up
+ * and every page 404s ("works only at the domain root" bug). The mount base is
+ * dirname(SCRIPT_NAME) (the dir the executed script lives in, relative to the web
+ * root); a DOCUMENT_ROOT-vs-appDir fallback covers hosts that misreport it. Pure
+ * (no globals/output) so it is unit-testable. Twin intent: dev_server serves from
+ * its own root, so it has no prefix to strip.
+ */
+function lumen_request_rel(array $server, string $appDir): string {
+    $reqPath = parse_url((string)($server['REQUEST_URI'] ?? '/'), PHP_URL_PATH);
+    if ($reqPath === null || $reqPath === false || $reqPath === '') $reqPath = '/';
+
+    $base = str_replace('\\', '/', dirname((string)($server['SCRIPT_NAME'] ?? '')));
+    if ($base === '.') $base = '/';
+    if (($base === '' || $base === '/') && !empty($server['DOCUMENT_ROOT'])) {
+        $docRoot = rtrim(str_replace('\\', '/', (string)$server['DOCUMENT_ROOT']), '/');
+        $app     = rtrim(str_replace('\\', '/', $appDir), '/');
+        if ($docRoot !== '' && strncmp($app, $docRoot, strlen($docRoot)) === 0) {
+            $base = substr($app, strlen($docRoot));            // e.g. "/tools/webplatform"
+        }
+    }
+    $base = rtrim($base, '/');
+
+    if ($base !== '' && $base !== '/') {
+        if (strncmp($reqPath, $base . '/', strlen($base) + 1) === 0) {
+            $reqPath = substr($reqPath, strlen($base));
+        } elseif ($reqPath === $base) {
+            $reqPath = '/';
+        }
+    }
+    if ($reqPath === '' || $reqPath === '/') return 'index.html';
+    return ltrim(urldecode($reqPath), '/');
+}
+
+/**
  * Serve $root/$rel (an .html file) with the injected nonce + enforcing CSP header.
  * Returns true if it served the response, false if the path is not a servable
  * .html under $root (caller then falls through / 404s). Path-contained.

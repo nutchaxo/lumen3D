@@ -97,7 +97,10 @@ window.createChannelPanel = function() {
         const item = _getEl(`channel-item-${idx}`);
         plugins.forEach(p => {
           const mod = PluginRegistry.getModule(p.id);
-          if (mod?.impl?.syncUI) mod.impl.syncUI(idx, _channels[idx], item, () => _histograms);
+          if (mod?.impl?.syncUI) {
+            try { mod.impl.syncUI(idx, _channels[idx], item, () => _histograms); }
+            catch (err) { console.warn(`[ChannelPanel] syncUI failed for "${p.id}":`, err); }
+          }
         });
       });
     }
@@ -191,7 +194,13 @@ window.createChannelPanel = function() {
     if (typeof PluginRegistry !== 'undefined') {
       PluginRegistry.listByPlacement('channels').forEach(p => {
         const mod = PluginRegistry.getModule(p.id);
-        if (mod?.impl?.getChannelUI) pluginsHtml += mod.impl.getChannelUI(channel);
+        // A throwing channel plugin must degrade to "no extra UI", never abort the
+        // panel render (which would reject viewer boot). Mirrors PluginRegistry's
+        // per-plugin isolation for the channel-panel host extension points.
+        if (mod?.impl?.getChannelUI) {
+          try { pluginsHtml += mod.impl.getChannelUI(channel); }
+          catch (err) { console.warn(`[ChannelPanel] getChannelUI failed for "${p.id}":`, err); }
+        }
       });
     }
 
@@ -305,16 +314,18 @@ window.createChannelPanel = function() {
       PluginRegistry.listByPlacement('channels').forEach(p => {
         const mod = PluginRegistry.getModule(p.id);
         if (mod?.impl?.bindChannelUI) {
-          mod.impl.bindChannelUI(idx, _channels[idx], item, {
-            getState: (i) => _channels[i],
-            onStateChange: (i, state) => {
-              _channels[i] = { ..._channels[i], ...state };
-              _clampMidtone(i);
-              _syncChannelUi(i);
-              _notify(i);
-            },
-            getHistograms: () => _histograms
-          });
+          try {
+            mod.impl.bindChannelUI(idx, _channels[idx], item, {
+              getState: (i) => _channels[i],
+              onStateChange: (i, state) => {
+                _channels[i] = { ..._channels[i], ...state };
+                _clampMidtone(i);
+                _syncChannelUi(i);
+                _notify(i);
+              },
+              getHistograms: () => _histograms
+            });
+          } catch (err) { console.warn(`[ChannelPanel] bindChannelUI failed for "${p.id}":`, err); }
         }
       });
     }
@@ -337,7 +348,10 @@ window.createChannelPanel = function() {
     if (typeof PluginRegistry !== 'undefined' && item) {
       PluginRegistry.listByPlacement('channels').forEach(p => {
         const mod = PluginRegistry.getModule(p.id);
-        if (mod?.impl?.syncUI) mod.impl.syncUI(idx, channel, item, () => _histograms);
+        if (mod?.impl?.syncUI) {
+          try { mod.impl.syncUI(idx, channel, item, () => _histograms); }
+          catch (err) { console.warn(`[ChannelPanel] syncUI failed for "${p.id}":`, err); }
+        }
       });
     }
   }
@@ -365,10 +379,21 @@ window.createChannelPanel = function() {
 
   function _colorForChannel(name, idx) {
     const lower = String(name || '').toLowerCase();
-    if (lower.includes('gfp')) return '#00FF00';
-    if (lower.includes('dapi') || lower.includes('hoechst')) return '#00AAFF';
-    if (lower.includes('pecam') || lower.includes('picam')) return '#FF00FF';
-    if (lower.includes('rfp') || lower.includes('mcherry') || lower.includes('alexa')) return '#FF0000';
+    // White-label: channel-name → colour presets come from the instance config
+    // (channelColorPresets: [{match, color}]) rather than a hardcoded fluorophore
+    // map, so the engine presumes no imaging domain. Falls back to the neutral
+    // DEFAULT_COLORS cycle when nothing matches (or no presets are configured).
+    try {
+      if (typeof InstanceConfig !== 'undefined' && InstanceConfig.get) {
+        const presets = InstanceConfig.get('channelColorPresets');
+        if (Array.isArray(presets)) {
+          for (const p of presets) {
+            if (p && typeof p.match === 'string' && p.color &&
+                lower.includes(p.match.toLowerCase())) return p.color;
+          }
+        }
+      }
+    } catch (_) { /* fall through to the neutral default cycle */ }
     return DEFAULT_COLORS[idx % DEFAULT_COLORS.length];
   }
 

@@ -28,6 +28,10 @@ const PluginRegistry = (() => {
   const _hooks = new Map();
   // ViewerContext provided by viewer.js
   let _ctx = null;
+  // Trust epoch (from /api/plugins) — bumped server-side on approve/revoke. The
+  // runtime-revocation watcher compares it to detect a live revocation.
+  let _trustEpoch = null;
+  let _trustWatchTimer = null;
 
   // ─── Discovery ────────────────────────────────────────────
 
@@ -54,6 +58,22 @@ const PluginRegistry = (() => {
   // as before, so static/PHP hosts are unaffected (no v0.12.45-class regression).
   const _discoveredMeta = new Map();
 
+  // Quarantine ledger: every plugin rejected before/at load or failing init lands
+  // here with an actionable reason, instead of silently vanishing from the UI.
+  // Surfaced to the admin panel (and the console) via getQuarantined().
+  // Keyed by module path ('<placement>/<id>') — reset on each discover().
+  const _quarantined = new Map();
+
+  function _quarantine(modPath, reason, detail) {
+    _quarantined.set(modPath, { path: modPath, reason, detail, at: Date.now() });
+    console.warn(`[PluginRegistry] Quarantined "${modPath}" (${reason}): ${detail}`);
+  }
+
+  /** @returns {Array<{path, reason, detail, at}>} plugins rejected this session */
+  function getQuarantined() {
+    return Array.from(_quarantined.values());
+  }
+
   // A discovery entry is "rich" — a full plugin.json safe to use without a
   // separate fetch — only when it carries fields the {path,placement,id} manifest
   // triple never has. `name` is mandatory in every plugin.json; never trust the
@@ -76,6 +96,9 @@ const PluginRegistry = (() => {
       const data = await resp.json(); // throws on non-JSON body → caught below
       const plugins = Array.isArray(data) ? data : data?.plugins;
       if (!Array.isArray(plugins)) return null;
+      // Capture the trust epoch so the runtime-revocation watcher can detect an
+      // approve/revoke on the server and tear down a now-revoked sandboxed plugin.
+      if (data && typeof data.trustEpoch === 'number') _trustEpoch = data.trustEpoch;
       // Capture rich inline meta as a side effect (no array allocation here).
       for (const p of plugins) {
         const mp = typeof p === 'string' ? p : p?.path;
@@ -102,6 +125,7 @@ const PluginRegistry = (() => {
    */
   async function discover(basePath = 'js/modules') {
     _discoveredMeta.clear(); // drop any inline meta from a previous discover()
+    _quarantined.clear();
     const candidates = ['api/plugins', 'api/plugins.php', `${basePath}/manifest.json`];
     for (const url of candidates) {
       const paths = await _fetchPluginList(url);
@@ -121,7 +145,25 @@ const PluginRegistry = (() => {
    * @param {string} basePath  e.g. 'js/modules'
    * @param {string[]} modulePaths  e.g. ['tools/toggle-grid', 'shaders/fluorescence']
    */
+  // version.json `files` map (release installs) — the content-addressed source of
+  // truth for 'bundled'. Fetched once per loadModules batch; null on dev/static.
+  async function _releaseManifest() {
+    try {
+      const resp = await fetch('version.json', { cache: 'no-store' });
+      if (!resp.ok) return null;
+      const m = await resp.json();
+      return (m && m.files && typeof m.files === 'object') ? m.files : null;
+    } catch (_) { return null; }
+  }
+
   async function loadModules(basePath, modulePaths) {
+    // Resolved once for the whole batch: version.json (release installs) →
+    // /api/health (dev server) → null (gate inert — see js/core/compat.js).
+    const platformVer = (typeof Compat !== 'undefined' && Compat.platformVersion)
+      ? await Compat.platformVersion()
+      : null;
+    const releaseManifest = (typeof PluginTrust !== 'undefined') ? await _releaseManifest() : null;
+
     const loadPromises = modulePaths.map(async (modPath) => {
       try {
         // Prefer rich metadata captured during discover() (live endpoint) to skip
@@ -132,76 +174,175 @@ const PluginRegistry = (() => {
           const jsonUrl = `${basePath}/${modPath}/plugin.json`;
           const resp = await fetch(jsonUrl);
           if (!resp.ok) {
-            console.error(`[PluginRegistry] Failed to load ${jsonUrl}: ${resp.status}`);
+            _quarantine(modPath, 'meta-unreachable', `plugin.json fetch failed (${resp.status})`);
             return;
           }
-          meta = await resp.json();
-        }
-
-        // Validate placement matches directory
-        const expectedPlacement = modPath.split('/')[0]; // 'tools', 'channels', 'shaders'
-        if (meta.placement && meta.placement !== expectedPlacement) {
-          console.error(`[PluginRegistry] Module "${meta.id}" declares placement="${meta.placement}" but is in "${expectedPlacement}/". Skipping.`);
-          return;
-        }
-        meta.placement = meta.placement || expectedPlacement;
-        meta._path = `${basePath}/${modPath}`;
-
-        // Register metadata
-        _modules.set(meta.id, {
-          meta,
-          impl: null,
-          instance: null,
-          state: 'registered'
-        });
-
-        // Load this plugin's own translation dictionaries into the i18n tree
-        // (plugins.<id>.*) BEFORE any UI is built, so toolbar labels and runtime
-        // strings resolve on first paint. Either way the dictionaries are in place
-        // before this promise resolves, preserving the v0.12.45 "loadModules
-        // before UI build" invariant. `i18nLanguages` lists the shipped locales;
-        // English is always present as the per-plugin fallback.
-        //   • Live endpoint: dictionaries arrive inline in meta.i18n → graft them
-        //     synchronously, zero round-trips.
-        //   • Otherwise: fetch them (the parallelized loadPluginLang fallback).
-        let langWork = Promise.resolve();
-        if (typeof I18n !== 'undefined') {
-          if (meta.i18n && meta.i18n.en && I18n.registerPluginLang) {
-            I18n.registerPluginLang(meta.id, meta._path, meta.i18n, meta.i18nLanguages);
-          } else if (I18n.loadPluginLang) {
-            langWork = I18n.loadPluginLang(meta.id, meta._path, meta.i18nLanguages);
+          try {
+            meta = await resp.json();
+          } catch (err) {
+            _quarantine(modPath, 'invalid-meta', `plugin.json is not valid JSON (${err.message})`);
+            return;
           }
         }
 
-        // Inject <script> for index.js — concurrent with any lang fetch fallback
-        // (no plugin reads its dictionary at module-eval time; all read i18n only
-        // inside init/activate/getChannelUI).
-        await Promise.all([langWork, _loadScript(`${basePath}/${modPath}/index.js`)]);
+        // Hard meta validation BEFORE anything executes or gets keyed: an id-less
+        // or mis-labelled plugin.json must never register (Map key `undefined`
+        // would shadow/collide) and must never inject code.
+        const [expectedPlacement, folderId] = modPath.split('/');
+        if (!meta || typeof meta.id !== 'string' || !meta.id.trim()) {
+          _quarantine(modPath, 'invalid-meta', 'plugin.json has no usable "id"');
+          return;
+        }
+        if (meta.id !== folderId) {
+          _quarantine(modPath, 'invalid-meta', `id "${meta.id}" ≠ folder "${folderId}"`);
+          return;
+        }
+        if (meta.placement && meta.placement !== expectedPlacement) {
+          _quarantine(modPath, 'invalid-meta',
+            `declares placement="${meta.placement}" but lives in "${expectedPlacement}/"`);
+          return;
+        }
+
+        // Compatibility gate (fail-closed) — an incompatible plugin's index.js is
+        // NEVER injected; the viewer boots without it and the admin panel explains
+        // why. Restored automatically once a core update satisfies the constraint.
+        if (typeof Compat !== 'undefined') {
+          const compat = Compat.satisfies(platformVer, meta.platformCompat);
+          if (!compat.ok) {
+            _quarantine(modPath, 'incompatible', compat.reason);
+            return;
+          }
+        }
+
+        meta.placement = meta.placement || expectedPlacement;
+        meta._path = `${basePath}/${modPath}`;
+        meta._modPath = modPath;
+
+        // ── Trust gate (Phase 2) — untrusted code must NOT run in-page ──────────
+        // The server vouches a tier + hash in meta.trust; PluginTrust re-hashes the
+        // EXACT bytes it will execute (anti-TOCTOU, INV-2) and returns the tier.
+        //   untrusted → never injected (quarantined for operator approval);
+        //   sandboxed → runs in a null-origin iframe via PluginSandbox (no ctx/DOM);
+        //   bundled/dev/approved-trusted → executed IN-PAGE from the hashed bytes.
+        if (typeof PluginTrust !== 'undefined') {
+          const verdict = await PluginTrust.evaluate(meta, basePath, modPath, releaseManifest);
+          if (verdict.tier === 'untrusted') {
+            _quarantine(modPath, 'untrusted', verdict.reason);
+            return;
+          }
+          meta._trust = { tier: verdict.tier, hash: verdict.hash };
+
+          if (verdict.tier === 'sandboxed') {
+            if (expectedPlacement !== 'tools' ||
+                (meta.subtype !== 'action' && meta.subtype !== 'toggle')) {
+              // By design, not a bug — see DOCS/plugin-sandbox/SPEC.md §"Placement scope".
+              // shaders: a GLSL render mode compiles synchronously into the volume
+              //   material and runs on the GPU every frame; there is no async RPC
+              //   boundary a null-origin iframe could sit behind → in-page trust ONLY.
+              // channels: the channel-panel API hands plugins the channel-item DOM
+              //   element directly (getChannelUI/bindChannelUI) — the exact privilege
+              //   the sandbox removes; a sandboxed channel would need a declarative
+              //   schema + channel-effect capabilities that no plugin yet consumes.
+              const why = expectedPlacement === 'shaders'
+                ? 'shader plugins run GLSL on the GPU synchronously and cannot be sandboxed (in-page trust required)'
+                : expectedPlacement === 'channels'
+                  ? 'sandboxed channel UI is not yet supported (declarative-schema path deferred — see SPEC.md)'
+                  : `sandboxed plugins support only tools action/toggle (got ${expectedPlacement}/${meta.subtype})`;
+              _quarantine(modPath, 'sandbox-unsupported-placement', why);
+              return;
+            }
+            if (typeof PluginSandbox === 'undefined') {
+              _quarantine(modPath, 'sandbox-unavailable', 'PluginSandbox not loaded on this page');
+              return;
+            }
+            const code = new TextDecoder('utf-8').decode(verdict.bytes);
+            try {
+              const shim = await PluginSandbox.spawn(meta, verdict.hash, verdict.caps || [], code);
+              _modules.set(meta.id, { meta, impl: shim, instance: shim, state: 'initialized' });
+            } catch (e) {
+              // Defense in depth: ensure no live/zombie frame survives a boot failure
+              // (spawn() also self-cleans on timeout — this covers every reject path).
+              try { PluginSandbox.kill(meta.id, 'boot-failed'); } catch (_) {}
+              _quarantine(modPath, 'sandbox-boot-failed', String(e && e.message || e));
+            }
+            return;
+          }
+          // Trusted in-page: register + execute the exact hashed bytes (no re-fetch).
+          _modules.set(meta.id, { meta, impl: null, instance: null, state: 'registered' });
+          const [, execOk] = await Promise.all([_grafti18n(meta), _execTrustedInPage(meta, verdict.bytes)]);
+          if (!execOk) {
+            _modules.delete(meta.id);
+            _quarantine(modPath, 'script-failed', 'index.js failed to load or parse');
+          }
+          return;
+        }
+
+        // FAIL CLOSED: PluginTrust is a mandatory security dependency. If it failed
+        // to load, we must NOT inject unverified code — quarantine instead of
+        // falling back to a trust-less URL injection (that would be fail-open).
+        _quarantine(modPath, 'trust-unavailable',
+          'plugin-trust.js not loaded — refusing to inject an unverified plugin');
+        return;
 
       } catch (err) {
-        console.error(`[PluginRegistry] Error loading module "${modPath}":`, err);
+        _quarantine(modPath, 'load-error', String(err && err.message || err));
       }
     });
     await Promise.all(loadPromises);
   }
 
   /**
-   * Dynamically inject a <script> tag and wait for it to load.
-   * @param {string} src
-   * @returns {Promise<void>}
+   * Graft a plugin's own translation dictionaries into the i18n tree before UI is
+   * built (preserves the v0.12.45 invariant). Returns a promise for the fetch
+   * fallback, or a resolved promise when dictionaries arrived inline (live endpoint).
    */
-  function _loadScript(src) {
-    return new Promise((resolve, reject) => {
+  function _grafti18n(meta) {
+    if (typeof I18n === 'undefined') return Promise.resolve();
+    if (meta.i18n && meta.i18n.en && I18n.registerPluginLang) {
+      I18n.registerPluginLang(meta.id, meta._path, meta.i18n, meta.i18nLanguages);
+      return Promise.resolve();
+    }
+    if (I18n.loadPluginLang) return I18n.loadPluginLang(meta.id, meta._path, meta.i18nLanguages);
+    return Promise.resolve();
+  }
+
+  /**
+   * Execute a TRUSTED plugin's index.js from the EXACT bytes that were hashed
+   * (INV-2, anti-TOCTOU): a Blob URL of those bytes — never a re-fetch by the
+   * plugin's URL, which would let the file change between hash and execution.
+   * The Blob URL is same-origin-ish 'self' script for CSP purposes.
+   */
+  function _execTrustedInPage(meta, bytes) {
+    return new Promise((resolve) => {
+      const url = URL.createObjectURL(new Blob([bytes], { type: 'text/javascript' }));
       const script = document.createElement('script');
-      script.src = src;
-      script.onload = () => resolve();
+      script.src = url;
+      if (_pageNonce) script.setAttribute('nonce', _pageNonce);
+      script.onload = () => { URL.revokeObjectURL(url); resolve(true); };
       script.onerror = () => {
-        console.error(`[PluginRegistry] Failed to load script: ${src}`);
-        resolve(); // Don't break the chain — continue loading other modules
+        URL.revokeObjectURL(url);
+        console.error(`[PluginRegistry] Failed to execute plugin: ${meta._modPath}`);
+        resolve(false);
       };
       document.body.appendChild(script);
     });
   }
+
+  // Per-page nonce for the strict-CSP path: legitimate scripts (incl. trusted plugin
+  // blob-URLs) carry it; plugin code can never read it. Sourced from THIS script tag's
+  // own nonce (L9) — `document.currentScript.nonce`, captured synchronously at load
+  // while currentScript is still valid. The browser hides the nonce from the DOM
+  // (element.getAttribute('nonce')==='' post-parse) yet keeps the .nonce IDL property,
+  // so it can't be exfiltrated via a CSS attribute-selector side channel the way a
+  // world-readable <meta content> could. null when CSP isn't enforced (unsubstituted
+  // placeholder on a static host → treated as absent).
+  const _pageNonce = (() => {
+    try {
+      const s = document.currentScript;
+      const n = s && s.nonce;
+      return n && n !== '{{CSP_NONCE}}' ? n : null;
+    } catch (_) { return null; }
+  })();
 
   // ─── Implementation Binding ───────────────────────────────
 
@@ -233,7 +374,9 @@ const PluginRegistry = (() => {
     _ctx = ctx;
     for (const [id, entry] of _modules) {
       if (!entry.impl) {
-        console.warn(`[PluginRegistry] Module "${id}" has no implementation (index.js missing or failed to call implement).`);
+        entry.state = 'quarantined';
+        _quarantine(entry.meta._modPath || id, 'no-impl',
+          'index.js loaded but never called implement()');
         continue;
       }
       try {
@@ -250,7 +393,9 @@ const PluginRegistry = (() => {
         }
         entry.state = 'initialized';
       } catch (err) {
-        console.error(`[PluginRegistry] Failed to init module "${id}":`, err);
+        // One plugin throwing in init() must never block the others (rule 1.1).
+        entry.state = 'quarantined';
+        _quarantine(entry.meta._modPath || id, 'init-failed', String(err && err.message || err));
       }
     }
     _bindLanguageChange();
@@ -284,12 +429,19 @@ const PluginRegistry = (() => {
    */
   function activate(id) {
     const entry = _modules.get(id);
-    if (!entry || !entry.impl || entry.state === 'disposed') return null;
+    if (!entry || !entry.impl || entry.state === 'disposed' || entry.state === 'quarantined') return null;
     if (typeof entry.impl.activate === 'function') {
-      const result = entry.impl.activate.call(entry.instance || entry.impl);
-      entry.state = 'active';
-      _emit('module-activated', { id, result });
-      return result;
+      try {
+        const result = entry.impl.activate.call(entry.instance || entry.impl);
+        entry.state = 'active';
+        _emit('module-activated', { id, result });
+        return result;
+      } catch (err) {
+        // A throwing activate() must not surface as an uncaught error on a
+        // toolbar click, and must not flip the state to 'active'.
+        console.error(`[PluginRegistry] activate failed for "${id}":`, err);
+        return null;
+      }
     }
     return null;
   }
@@ -299,9 +451,13 @@ const PluginRegistry = (() => {
    */
   function deactivate(id) {
     const entry = _modules.get(id);
-    if (!entry || !entry.impl) return;
+    if (!entry || !entry.impl || entry.state === 'quarantined') return;
     if (typeof entry.impl.deactivate === 'function') {
-      entry.impl.deactivate.call(entry.instance || entry.impl);
+      try {
+        entry.impl.deactivate.call(entry.instance || entry.impl);
+      } catch (err) {
+        console.error(`[PluginRegistry] deactivate failed for "${id}":`, err);
+      }
     }
     if (entry.state === 'active') entry.state = 'initialized';
     _emit('module-deactivated', { id });
@@ -448,6 +604,7 @@ const PluginRegistry = (() => {
     };
 
     for (const meta of listByPlacement('tools')) {
+      try {
       const container = containerFor[meta.group];
       if (!container) {
         console.warn(`[PluginRegistry] Tool "${meta.id}" has group "${meta.group}" with no toolbar cluster — button skipped.`);
@@ -485,6 +642,11 @@ const PluginRegistry = (() => {
       }
 
       container.appendChild(btn);
+      } catch (err) {
+        // One malformed plugin.json must never cost the other plugins their
+        // buttons — skip this one, keep building (rule 1.1).
+        console.warn(`[PluginRegistry] Toolbar build failed for "${meta && meta.id}":`, err);
+      }
     }
 
     if (window.lucide && touched.length) lucide.createIcons({ nodes: touched });
@@ -559,6 +721,49 @@ const PluginRegistry = (() => {
     }
   }
 
+  // ─── Runtime trust revocation ─────────────────────────────
+  // An operator approve/revoke bumps the server's trustEpoch. This watcher notices
+  // the change in an already-open viewer and tears down a now-revoked SANDBOXED
+  // plugin (killing its iframe removes all its capabilities immediately). In-page
+  // plugins (bundled/dev/approved-trusted) cannot be un-executed at runtime, so a
+  // revocation of those still takes effect on the next reload (server excludes them
+  // from discovery) — only the iframe lane supports live teardown.
+
+  async function _revokeCheck() {
+    let epoch;
+    try {
+      const h = await (await fetch('api/health', { cache: 'no-store' })).json();
+      epoch = h && h.trustEpoch;
+    } catch (_) { return; }
+    if (typeof epoch !== 'number' || _trustEpoch === null || epoch === _trustEpoch) return;
+    _trustEpoch = epoch;
+    // Re-fetch the authoritative vouched set; anything sandboxed and no longer
+    // vouched (revoked / made incompatible) is torn down.
+    let vouched;
+    try {
+      const data = await (await fetch('api/plugins', { cache: 'no-store' })).json();
+      vouched = new Set((data.plugins || []).map(p => p.id));
+    } catch (_) { return; }
+    for (const [id, entry] of _modules) {
+      const sandboxed = typeof PluginSandbox !== 'undefined' && PluginSandbox.isSandboxed && PluginSandbox.isSandboxed(id);
+      if (sandboxed && !vouched.has(id)) {
+        try { PluginSandbox.kill(id, 'revoked'); } catch (_) {}
+        _modules.delete(id);
+        _quarantine(entry.meta._modPath || id, 'revoked', 'operator revoked approval (torn down live)');
+        // Remove its toolbar button (action/toggle → data-plugin-id).
+        document.querySelectorAll(`[data-plugin-id="${CSS.escape(id)}"]`).forEach(b => b.remove());
+        console.info(`[PluginRegistry] sandboxed plugin "${id}" revoked — iframe torn down`);
+      }
+    }
+  }
+
+  /** Start watching for live approve/revoke (poll + on tab focus). Idempotent. */
+  function startTrustWatch(intervalMs = 8000) {
+    if (_trustWatchTimer || typeof PluginSandbox === 'undefined') return;
+    _trustWatchTimer = setInterval(_revokeCheck, intervalMs);
+    document.addEventListener('visibilitychange', () => { if (!document.hidden) _revokeCheck(); });
+  }
+
   // ─── Public API ───────────────────────────────────────────
 
   return {
@@ -569,6 +774,7 @@ const PluginRegistry = (() => {
     activate,
     deactivate,
     getModule,
+    getQuarantined,
     listByPlacement,
     listByGroup,
     buildToolbarButtons,
@@ -576,6 +782,7 @@ const PluginRegistry = (() => {
     setWorkspaceState,
     bindToolbarButtons,
     disposeAll,
+    startTrustWatch,
     on
   };
 })();

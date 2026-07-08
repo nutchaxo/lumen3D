@@ -27,6 +27,7 @@ export const API_AUTH      = 'api/auth.php';
 export const API_DATASETS  = 'api/datasets.php';
 export const API_ADMIN     = 'api/admin.php';
 export const API_TELEMETRY = 'api/telemetry.php';
+export const API_SITE      = 'api/site.php';   // white-label config (instance/theme/pages/legal)
 
 // Translated string for `k`, or `def` (the original French) on miss / no I18n.
 export function t(k, def, params) {

@@ -44,11 +44,15 @@ const ViewerApp = (() => {
     const initPerfId = _perf()?.start('viewer.init');
     // 1. Init core
     Theme.init();
+    // Instance config first so I18n.t() sees the brand/specimen tokens.
+    await InstanceConfig.load();
     // PERF: I18n.init() and Catalog.load() are independent network fetches —
     // overlap them so the boot head waits on max(), not the sum, of the two.
     // Both must still be fully resolved before Catalog.getById (below) and the
     // v0.12.45 plugin-load order downstream; do NOT fold the plugin discovery in.
     await Promise.all([I18n.init(), Catalog.load()]);
+    InstanceConfig.applyHead();
+    InstanceConfig.applyDom();
 
     if (window.lucide) lucide.createIcons();
     _updateThemeIcon();
@@ -148,7 +152,7 @@ const ViewerApp = (() => {
       datasetType: datasetMeta?.type || null,
       qualityMode: _qualityMode
     });
-    document.title = `${datasetMeta.name} - IRIBHM Microscopy`;
+    document.title = `${datasetMeta.name} — ${InstanceConfig.get('brand.name', 'Lumen3D')}`;
 
     // Update UI Header
     document.getElementById('dataset-title').textContent = datasetMeta.name;
@@ -165,20 +169,28 @@ const ViewerApp = (() => {
     // → generated manifest → embedded default). MUST stay fully awaited here,
     // before any UI build (tools/shaders/channels lists) — the v0.12.45 invariant.
     if (typeof PluginRegistry !== 'undefined') {
-      const modulePaths = await PluginRegistry.discover('js/modules');
-      await PluginRegistry.loadModules('js/modules', modulePaths);
-      // Generate toolbar buttons from the loaded plugins' metadata. Runs before
-      // ToolManager.init (_bindTooling) so the data-tool chips exist to be wired,
-      // and before bindToolbarButtons() (after initAll) wires the data-plugin-id ones.
-      PluginRegistry.buildToolbarButtons({
-        dataset: datasetMeta,
-        groups: [
-          { group: 'tools',   container: '[data-tool-group="tools"]' },
-          { group: 'export',  container: '[data-tool-group="export"]' },
-          { group: 'visuals', container: '[data-tool-group="visuals"]' },
-          { group: 'layouts', container: '[data-tool-group="layouts"]' }
-        ]
-      });
+      // Isolation barrier: a total plugin-subsystem failure (registry bug, broken
+      // discovery payload, quota error mid-injection) degrades to a plugin-less
+      // viewer — the 3D canvas must always boot (rule 1.1). Individual plugin
+      // failures are already quarantined inside the registry; this catches the rest.
+      try {
+        const modulePaths = await PluginRegistry.discover('js/modules');
+        await PluginRegistry.loadModules('js/modules', modulePaths);
+        // Generate toolbar buttons from the loaded plugins' metadata. Runs before
+        // ToolManager.init (_bindTooling) so the data-tool chips exist to be wired,
+        // and before bindToolbarButtons() (after initAll) wires the data-plugin-id ones.
+        PluginRegistry.buildToolbarButtons({
+          dataset: datasetMeta,
+          groups: [
+            { group: 'tools',   container: '[data-tool-group="tools"]' },
+            { group: 'export',  container: '[data-tool-group="export"]' },
+            { group: 'visuals', container: '[data-tool-group="visuals"]' },
+            { group: 'layouts', container: '[data-tool-group="layouts"]' }
+          ]
+        });
+      } catch (err) {
+        console.error('[ViewerApp] Plugin subsystem failed — booting the viewer without plugins.', err);
+      }
     }
 
     // Initialize WebGL Viewer
@@ -197,6 +209,11 @@ const ViewerApp = (() => {
         if (_isIframe && !_zstackActive) {
           // SEC-012: restrict targetOrigin to this page's origin (no wildcard leak).
           window.parent.postMessage({ type: 'SYNC_CAMERA', value: state, sourceIndex: _panelIndex }, Utils.trustedTargetOrigin());
+        }
+        // Fan out to subscribed sandboxed plugins (projected payload; the view moved).
+        if (typeof PluginSandbox !== 'undefined') {
+          PluginSandbox.emit('camera', state);
+          PluginSandbox.emit('render');
         }
       });
       // Broadcast full slicer plane spec to sibling decompose panels on every change.
@@ -280,6 +297,7 @@ const ViewerApp = (() => {
       _channelState[idx] = { ...params };
       VolumeViewer.updateChannel(idx, params);
       window.dispatchEvent(new CustomEvent('channels-updated'));
+      if (typeof PluginSandbox !== 'undefined') PluginSandbox.emit('channels-updated');
       if (_isIframe) {
         // SEC-012: restrict targetOrigin to this page's origin (no wildcard leak).
         window.parent.postMessage({ type: 'SYNC_CHANNELS', sourceIndex: _panelIndex, channelIndex: idx, value: params }, Utils.trustedTargetOrigin());
@@ -387,15 +405,44 @@ const ViewerApp = (() => {
         }
       };
 
-      // Initialize all loaded modules with the context
-      await PluginRegistry.initAll(moduleCtx);
-      PluginRegistry.bindToolbarButtons();
+      // Initialize all loaded modules with the context. Same isolation barrier as
+      // the load phase: per-plugin init failures are quarantined by the registry;
+      // a registry-level throw must still leave the viewer alive.
+      try {
+        // Give the sandbox lane its capability target — a NARROW adapter (INV-8),
+        // never the raw moduleCtx. Installed before bindToolbarButtons so a click
+        // (→ activate → capability request) always finds it ready.
+        if (typeof PluginSandbox !== 'undefined') {
+          PluginSandbox.bindContext({
+            ui: {
+              toast: moduleCtx.ui.toast,
+              downloadBlob: (blob, name) => {
+                if (typeof ExportManager !== 'undefined' && ExportManager.downloadBlob) ExportManager.downloadBlob(blob, name);
+              }
+            },
+            getCanvasBlob: moduleCtx.getCanvasBlob,
+            viewer: {
+              setRenderMode: (m) => moduleCtx.viewer.setRenderMode(m),
+              renderModes: () => PluginRegistry.listByPlacement('shaders').map(s => s.id)
+            },
+            channels: { getState: moduleCtx.channels.getState },
+            dataset: { meta: () => datasetMeta }
+          });
+        }
+        await PluginRegistry.initAll(moduleCtx);
+        PluginRegistry.bindToolbarButtons();
+        // Live trust revocation: tear down a sandboxed plugin if the operator revokes
+        // its approval while this viewer is open (polls the server trustEpoch).
+        if (PluginRegistry.startTrustWatch) PluginRegistry.startTrustWatch();
 
-      // Now that every module has its ViewerContext, flush any plugin workspace
-      // state that _applyWorkspaceStateNow() captured before initAll() ran.
-      if (_pendingPluginState) {
-        PluginRegistry.setWorkspaceState(_pendingPluginState);
-        _pendingPluginState = null;
+        // Now that every module has its ViewerContext, flush any plugin workspace
+        // state that _applyWorkspaceStateNow() captured before initAll() ran.
+        if (_pendingPluginState) {
+          PluginRegistry.setWorkspaceState(_pendingPluginState);
+          _pendingPluginState = null;
+        }
+      } catch (err) {
+        console.error('[ViewerApp] Plugin initialisation failed — continuing without plugin tools.', err);
       }
 
       const toolsCount = PluginRegistry.listByPlacement('tools').length;
@@ -3116,5 +3163,10 @@ window.addEventListener('message', (e) => {
   }
 });
 
-document.addEventListener('DOMContentLoaded', ViewerApp.init);
+// Boot-level safety net (defense in depth): init() is async — if any UI-build step
+// throws despite the per-subsystem try/catch barriers, surface it instead of a silent
+// unhandled rejection, so failures are diagnosable rather than a blank viewer.
+document.addEventListener('DOMContentLoaded', () => {
+  Promise.resolve(ViewerApp.init()).catch(err => console.error('[ViewerApp] boot failed:', err));
+});
 

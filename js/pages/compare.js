@@ -31,7 +31,10 @@ const CompareApp = (() => {
 
   async function init() {
     Theme.init();
+    await InstanceConfig.load();
     await I18n.init();
+    InstanceConfig.applyHead();
+    InstanceConfig.applyDom();
     await Catalog.load();
 
     _datasets = Catalog.getAll();
@@ -49,7 +52,6 @@ const CompareApp = (() => {
 
     if (window.lucide) lucide.createIcons();
     if (typeof StudioEditor !== 'undefined') StudioEditor.init();
-    document.title = 'Compare - IRIBHM Microscopy';
 
     if (window.location.hash && window.location.hash.startsWith('#state=')) {
       if (typeof UrlState !== 'undefined') {

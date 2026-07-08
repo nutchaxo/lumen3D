@@ -1,0 +1,47 @@
+{
+  "$schema": "lumen3d-instance/1",
+  "brand": {
+    "name": "Lumen3D",
+    "shortName": "Lumen3D",
+    "productName": "Lumen3D",
+    "monogram": "L3",
+    "logoEmoji": "🔬",
+    "tagline": "3D Imaging Data Viewer",
+    "organization": ""
+  },
+  "specimen": {
+    "singular": "sample",
+    "plural": "samples"
+  },
+  "org": {
+    "name": "",
+    "url": ""
+  },
+  "seo": {
+    "description": "Browser-based viewer for large 3D imaging volumes — visualize, analyze, and compare 3D and 4D datasets in your browser.",
+    "keywords": "3D viewer, volume rendering, imaging, dataset viewer"
+  },
+  "pageTitles": {
+    "home": "Lumen3D — 3D Imaging Data Viewer",
+    "explorer": "Data Explorer — Lumen3D",
+    "viewer": "Viewer — Lumen3D",
+    "compare": "Compare — Lumen3D",
+    "tracking": "Tracking — Lumen3D",
+    "about": "About — Lumen3D",
+    "admin": "Admin — Lumen3D",
+    "legal": "Legal — Lumen3D"
+  },
+  "footer": {
+    "copyright": "© Lumen3D",
+    "links": []
+  },
+  "nav": {
+    "showExplorer": true,
+    "showCompare": true,
+    "showTracking": true,
+    "showAbout": true,
+    "showLegal": false,
+    "customPages": []
+  },
+  "channelColorPresets": []
+}

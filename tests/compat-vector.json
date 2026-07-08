@@ -1,0 +1,55 @@
+{
+  "_comment": "Shared conformance vector for the TWIN compat resolvers (js/core/compat.js + dev_server.py:_compat_satisfies). Run tests/test_compat.py AND tests/test_compat.js — both must pass identically. decl null = field absent. platform null = unknown platform (dev checkout).",
+  "cases": [
+    { "platform": "1.5.0", "decl": null, "expect": true, "why": "absent field = compatible (back-compat)" },
+    { "platform": "1.5.0", "decl": "*", "expect": true, "why": "explicit wildcard string" },
+    { "platform": "1.5.0", "decl": "x", "expect": true, "why": "x wildcard string" },
+    { "platform": null, "decl": ">=9.0.0", "expect": true, "why": "unknown platform = gate disabled (fail-open only here)" },
+
+    { "platform": "1.5.0", "decl": ">=1.4.0 <2.0.0", "expect": true, "why": "classic AND range" },
+    { "platform": "2.0.0", "decl": ">=1.4.0 <2.0.0", "expect": false, "why": "upper bound exclusive" },
+    { "platform": "1.3.9", "decl": ">=1.4.0 <2.0.0", "expect": false, "why": "below lower bound" },
+    { "platform": "1.4.0", "decl": ">=1.4.0", "expect": true, "why": "inclusive lower bound" },
+    { "platform": "1.4.0", "decl": ">1.4.0", "expect": false, "why": "strict lower bound" },
+    { "platform": "1.4.0", "decl": "<=1.4.0", "expect": true, "why": "inclusive upper bound" },
+    { "platform": "1.4.1", "decl": "=1.4.1", "expect": true, "why": "explicit equality" },
+
+    { "platform": "1.5.0", "decl": "^1.4.0", "expect": true, "why": "caret: >=1.4.0 <2.0.0" },
+    { "platform": "2.0.0", "decl": "^1.4.0", "expect": false, "why": "caret excludes next major" },
+    { "platform": "1.4.5", "decl": "~1.4.1", "expect": true, "why": "tilde: >=1.4.1 <1.5.0" },
+    { "platform": "1.5.0", "decl": "~1.4.1", "expect": false, "why": "tilde excludes next minor" },
+    { "platform": "1.4.0", "decl": "~1.4.1", "expect": false, "why": "tilde lower bound" },
+
+    { "platform": "1.4.7", "decl": "1.4", "expect": true, "why": "bare 2-part token = prefix (1.4.x)" },
+    { "platform": "1.5.0", "decl": "1.4", "expect": false, "why": "prefix excludes next minor" },
+    { "platform": "1.4.7", "decl": "1.4.x", "expect": true, "why": ".x wildcard suffix" },
+    { "platform": "1.4.7", "decl": "1.4.*", "expect": true, "why": ".* wildcard suffix" },
+    { "platform": "1.9.9", "decl": "1.x", "expect": true, "why": "major-line wildcard" },
+    { "platform": "2.0.0", "decl": "1.x", "expect": false, "why": "major-line bound" },
+    { "platform": "1.9.9", "decl": "1", "expect": true, "why": "bare 1-part token = major prefix" },
+    { "platform": "1.4.1", "decl": "1.4.1", "expect": true, "why": "bare 3-part token = exact" },
+    { "platform": "1.4.2", "decl": "1.4.1", "expect": false, "why": "exact mismatch" },
+
+    { "platform": "1.4.7", "decl": ["1.3", "1.4.x"], "expect": true, "why": "LIST = OR, second matches" },
+    { "platform": "1.3.2", "decl": ["1.3", "1.4.x"], "expect": true, "why": "LIST = OR, first matches" },
+    { "platform": "1.5.0", "decl": ["1.3", "1.4.x"], "expect": false, "why": "LIST = OR, none match" },
+    { "platform": "1.4.1", "decl": ["1.4.0", "1.4.1"], "expect": true, "why": "exact pin list" },
+    { "platform": "1.5.0", "decl": ["1.x"], "expect": true, "why": "single wildcard list" },
+    { "platform": "1.5.0", "decl": ["*"], "expect": true, "why": "wildcard inside list" },
+
+    { "platform": "1.5.0", "decl": "", "expect": false, "why": "present-but-empty = fail-closed" },
+    { "platform": "1.5.0", "decl": [], "expect": false, "why": "empty list = fail-closed" },
+    { "platform": "1.5.0", "decl": "banana", "expect": false, "why": "unreadable token = fail-closed" },
+    { "platform": "1.5.0", "decl": ">=1.4.0 <x.y", "expect": false, "why": "one bad token poisons the AND" },
+    { "platform": "1.5.0", "decl": [">=1.4.0"], "expect": false, "why": "operators forbidden inside a list" },
+    { "platform": "1.5.0", "decl": [""], "expect": false, "why": "empty list token = fail-closed" },
+    { "platform": "1.5.0", "decl": 42, "expect": false, "why": "wrong type = fail-closed" },
+    { "platform": "1.5.0", "decl": { "min": "1.4" }, "expect": false, "why": "object form not supported = fail-closed" },
+    { "platform": "1.4.7", "decl": { "min": "1.4" }, "expect": false, "why": "object form fail-closed EVEN when a value would match (PHP assoc-array trap)" },
+    { "platform": "1.5.0", "decl": { "any": "*" }, "expect": false, "why": "object with wildcard value still fail-closed" },
+    { "platform": "1.5.0", "decl": "1.x.4", "expect": false, "why": "non-terminal wildcard rejected" },
+
+    { "platform": "1.5.0-rc1", "decl": ">=1.5.0", "expect": true, "why": "pre-release suffix ignored on platform" },
+    { "platform": "1.5.0", "decl": ">=1.5.0-rc1", "expect": true, "why": "pre-release suffix ignored in constraint" }
+  ]
+}

@@ -4,13 +4,15 @@
     Deny from all
 </Files>
 
-# Protect admin state files (credentials, stats, plugin toggles) and PHP includes.
-# dev_server.py blocks the whole api/ dir from static serving; on a raw Apache/PHP
-# host these *.json files would otherwise be downloadable (the credential is a
-# one-way hash, but still private). Nginx equivalent:
-#   location ~* /api/(admin_credential|stats|disabled-plugins|config)\.json$ { deny all; }
+# Protect ALL admin state files and PHP includes. dev_server.py blocks the whole
+# api/ dir from static serving; on a raw Apache/PHP host these files would otherwise
+# be downloadable. Denying every api/*.json (credentials, stats, plugin toggles,
+# quarantine, and the OPERATOR TRUST STORE plugin-trust.json — which lists approved
+# paths, pinned hashes, granted caps and the admin username) prevents this list from
+# drifting as new state files are added. Nginx equivalent:
+#   location ~* /api/.*\.json$ { deny all; }
 #   location ~* /api/_admin_lib\.php$ { deny all; }
-<FilesMatch "^(admin_credential|stats|disabled-plugins|config)\.json$|^_admin_lib\.php$">
+<FilesMatch "\.json$|^_[A-Za-z0-9_]+\.php$">
     <IfModule mod_authz_core.c>
         Require all denied
     </IfModule>

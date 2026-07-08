@@ -15,11 +15,21 @@ import { StatsTab } from './admin/tab-stats.js';
 import { PluginsTab } from './admin/tab-plugins.js';
 import { SecurityTab } from './admin/tab-security.js';
 import { UpdatesTab } from './admin/tab-updates.js';
+import { AppearanceTab } from './admin/tab-appearance.js';
+import { BrandingTab } from './admin/tab-branding.js';
+import { PagesTab } from './admin/tab-pages.js';
+import { LegalTab } from './admin/tab-legal.js';
+import { MarketplaceTab } from './admin/tab-marketplace.js';
 
 registerTab(DatasetsTab);
 registerTab(StatsTab);
 registerTab(PluginsTab);
 registerTab(SecurityTab);
 registerTab(UpdatesTab);
+registerTab(BrandingTab);
+registerTab(PagesTab);
+registerTab(AppearanceTab);
+registerTab(LegalTab);
+registerTab(MarketplaceTab);
 
 boot();

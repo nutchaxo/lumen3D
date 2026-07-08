@@ -72,16 +72,16 @@ class TestPasswordHashing(unittest.TestCase):
         try:
             dev_server.CRED_FILE = Path(tmp) / "admin_credential.json"
             self.assertFalse(dev_server._credential_exists())
-            ok, status, _ = dev_server._setup_credential("admin", "hunter2")
+            ok, status, _ = dev_server._setup_credential("admin", "hunterPass")
             self.assertTrue(ok)
             self.assertEqual(status, 200)
-            self.assertTrue(dev_server._check_credentials("admin", "hunter2"))
+            self.assertTrue(dev_server._check_credentials("admin", "hunterPass"))
             self.assertFalse(dev_server._check_credentials("admin", "bad"))
-            self.assertFalse(dev_server._check_credentials("root", "hunter2"))
+            self.assertFalse(dev_server._check_credentials("root", "hunterPass"))
             # persisted record holds only a one-way hash, never cleartext
             text = dev_server.CRED_FILE.read_text(encoding="utf-8")
             self.assertIn("pbkdf2_sha256$", text)
-            self.assertNotIn("hunter2", text)
+            self.assertNotIn("hunterPass", text)
         finally:
             dev_server.CRED_FILE = orig
             shutil.rmtree(tmp, ignore_errors=True)
@@ -110,16 +110,16 @@ class TestPasswordHashing(unittest.TestCase):
         orig = dev_server.CRED_FILE
         try:
             dev_server.CRED_FILE = Path(tmp) / "admin_credential.json"
-            dev_server._setup_credential("admin", "old-pw")
-            ok, status, _ = dev_server._change_credential("wrong", "new-pw")
+            dev_server._setup_credential("admin", "old-pass")
+            ok, status, _ = dev_server._change_credential("wrong", "new-pass")
             self.assertFalse(ok)
             self.assertEqual(status, 401)
-            self.assertTrue(dev_server._check_credentials("admin", "old-pw"))
-            ok2, status2, _ = dev_server._change_credential("old-pw", "new-pw")
+            self.assertTrue(dev_server._check_credentials("admin", "old-pass"))
+            ok2, status2, _ = dev_server._change_credential("old-pass", "new-pass")
             self.assertTrue(ok2)
             self.assertEqual(status2, 200)
-            self.assertTrue(dev_server._check_credentials("admin", "new-pw"))
-            self.assertFalse(dev_server._check_credentials("admin", "old-pw"))
+            self.assertTrue(dev_server._check_credentials("admin", "new-pass"))
+            self.assertFalse(dev_server._check_credentials("admin", "old-pass"))
         finally:
             dev_server.CRED_FILE = orig
             shutil.rmtree(tmp, ignore_errors=True)

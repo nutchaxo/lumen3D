@@ -2,6 +2,7 @@
   "id": "slice-inspector",
   "name": "Slice through Volume",
   "version": "1.0.0",
+  "platformCompat": "1.x",
   "creator": "IRIBHM",
   "placement": "tools",
   "group": "tools",

@@ -3,27 +3,28 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>About — IRIBHM Microscopy Platform</title>
-  <meta name="description" content="Lumen3D — created by Morgan Climent at the IRIBHM (ULB), Migeotte lab. Scientific context, citation, institutions, and data access for the microscopy platform.">
+  <title>{{SITE:pageTitles.about|About — IRIBHM Microscopy Platform}}</title>
+  <meta name="description" content="{{SITE:seo.description|Lumen3D — created by Morgan Climent at the IRIBHM (ULB), Migeotte lab. Scientific context, citation, institutions, and data access for the microscopy platform.}}">
 
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
-  <script src="https://unpkg.com/lucide@0.344.0/dist/umd/lucide.min.js" integrity="sha384-tTkFttkBclaU1cloKwOi9xk3pbao3VZxTjLNBt8iFABWDBQibbAbWpVmO28zMuxq" crossorigin="anonymous"></script>
+  <script src="js/vendor/lucide.min.js" integrity="sha384-tTkFttkBclaU1cloKwOi9xk3pbao3VZxTjLNBt8iFABWDBQibbAbWpVmO28zMuxq" crossorigin="anonymous"></script>
 
   <link rel="stylesheet" href="css/variables.css">
   <link rel="stylesheet" href="css/themes.css">
+  <link rel="stylesheet" href="config/theme.css">
   <link rel="stylesheet" href="css/base.css">
   <link rel="stylesheet" href="css/components.css">
   <link rel="stylesheet" href="css/layout.css">
   <link rel="stylesheet" href="css/tools.css">
   <link rel="stylesheet" href="css/about.css?v=20260622">
 </head>
-<body>
+<body data-page="about">
   <nav class="navbar" id="navbar" style="background: var(--bg-base); border-bottom: 1px solid var(--border-subtle);">
     <a href="index.html" class="navbar-brand">
-      <div class="navbar-brand-icon">IR</div>
-      <span data-i18n="app.lab">IRIBHM — ULB</span>
+      <div class="navbar-brand-icon" data-instance="brand.monogram">IR</div>
+      <span data-instance="brand.organization">IRIBHM — ULB</span>
     </a>
     <div class="navbar-links">
       <a href="index.html" class="navbar-link" data-i18n="nav.home">Home</a>
@@ -36,14 +37,19 @@
         <i data-lucide="github" style="width:20px;height:20px"></i>
       </a>
       <!-- Color Blindness Toggle -->
-      <button class="btn btn-icon btn-ghost" onclick="window.ColorBlind && ColorBlind.openModal()" data-i18n-title="colorblind.toggle">
+      <button class="btn btn-icon btn-ghost" data-action="colorblind" data-i18n-title="colorblind.toggle">
         <i data-lucide="eye" style="width:20px;height:20px"></i>
       </button>
-      <button class="btn btn-icon btn-ghost" onclick="window.Theme && Theme.toggle()" data-i18n-title="theme.toggle" id="theme-toggle">
+      <button class="btn btn-icon btn-ghost" data-action="theme-toggle" data-i18n-title="theme.toggle" id="theme-toggle">
         <i data-lucide="moon" data-theme-icon></i>
       </button>
     </div>
   </nav>
+
+  <!-- White-label: operator-published About blocks render here, replacing the
+       default content below. Empty by default → default shows. -->
+  <div id="about-blocks" style="display:none"></div>
+  <div id="about-default">
 
   <header class="about-hero">
     <div class="container">
@@ -249,11 +255,12 @@
       </div>
     </section>
   </main>
+  </div><!-- /about-default -->
 
   <footer class="footer">
     <div class="container">
       <div class="footer-content">
-        <div class="footer-brand">
+        <div class="footer-brand" data-instance="footer.copyright">
           © 2026 IRIBHM — Université libre de Bruxelles · <span data-i18n="about.footerCredit">Created by Morgan Climent</span>
         </div>
         <div class="footer-links">
@@ -267,10 +274,13 @@
   </footer>
 
   <script src="js/core/utils.js?v=20260504"></script>
+  <script src="js/core/ui-actions.js"></script>
+  <script src="js/core/instance-config.js?v=20260706"></script>
   <script src="js/core/i18n.js?v=20260504"></script>
     <script src="js/core/theme.js?v=20260504"></script>
-  <script src="js/core/colorblind.js?v=20260528"></script>
+  <script src="js/core/colorblind.js?v=20260528" nonce="{{CSP_NONCE}}"></script>
   <script src="js/core/catalog.js?v=20260504"></script>
-  <script src="js/pages/about.js?v=20260622b"></script>
+  <script src="js/core/page-renderer.js?v=20260706"></script>
+  <script src="js/pages/about.js?v=20260706"></script>
 </body>
 </html>

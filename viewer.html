@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Viewer — IRIBHM Microscopy</title>
+  <title>{{SITE:pageTitles.viewer|Viewer — Lumen3D}}</title>
 
   <!-- Fonts -->
   <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -11,23 +11,21 @@
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 
   <!-- Lucide Icons -->
-  <script src="https://unpkg.com/lucide@0.344.0/dist/umd/lucide.min.js" integrity="sha384-tTkFttkBclaU1cloKwOi9xk3pbao3VZxTjLNBt8iFABWDBQibbAbWpVmO28zMuxq" crossorigin="anonymous"></script>
+  <script src="js/vendor/lucide.min.js" integrity="sha384-tTkFttkBclaU1cloKwOi9xk3pbao3VZxTjLNBt8iFABWDBQibbAbWpVmO28zMuxq" crossorigin="anonymous"></script>
   
   <!-- Three.js (r147) -->
-  <script src="https://cdn.jsdelivr.net/npm/three@0.147.0/build/three.min.js" integrity="sha384-vV17nr/rMaJqmeZkFUzXLpHdQ+ME5QHKdydaqqN+3Ga39RJlNrTatJxHwGV4ml2C" crossorigin="anonymous"></script>
-
-  <!-- OpenSeadragon for Deep Zoom 2D mode -->
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/openseadragon/3.0.0/openseadragon.min.js" integrity="sha384-0TthTVAT+JjS3H3s6LZrp0NqOHpnOV00EYQPfel+8b7Sz8y4AkeEG8aNmC1LxBxs" crossorigin="anonymous" defer></script>
+  <script src="js/vendor/three.min.js" integrity="sha384-vV17nr/rMaJqmeZkFUzXLpHdQ+ME5QHKdydaqqN+3Ga39RJlNrTatJxHwGV4ml2C" crossorigin="anonymous"></script>
 
   <!-- Stylesheets -->
   <link rel="stylesheet" href="css/variables.css">
   <link rel="stylesheet" href="css/themes.css">
+  <link rel="stylesheet" href="config/theme.css">
   <link rel="stylesheet" href="css/base.css">
   <link rel="stylesheet" href="css/components.css?v=20260615-fixed1">
   <link rel="stylesheet" href="css/viewer.css?v=20260615-fixed1">
   <link rel="stylesheet" href="css/tools.css?v=20260615-fixed1">
 </head>
-<body>
+<body data-page="viewer">
 
   <div class="viewer-layout">
     
@@ -85,10 +83,10 @@
               <i data-lucide="help-circle"></i>
             </a>
             <!-- Color Blindness Toggle -->
-            <button class="btn btn-icon btn-ghost" onclick="ColorBlind.openModal()" data-i18n-title="colorblind.toggle">
+            <button class="btn btn-icon btn-ghost" data-action="colorblind" data-i18n-title="colorblind.toggle">
               <i data-lucide="eye" style="width:20px;height:20px"></i>
             </button>
-            <button class="btn btn-icon btn-ghost" onclick="Theme.toggle()" data-i18n-title="theme.toggle" id="theme-toggle">
+            <button class="btn btn-icon btn-ghost" data-action="theme-toggle" data-i18n-title="theme.toggle" id="theme-toggle">
               <i data-lucide="moon" data-theme-icon></i>
             </button>
           </div>
@@ -437,9 +435,11 @@
     </div>
   </div>
   <script src="js/core/utils.js"></script>
+  <script src="js/core/instance-config.js?v=20260706"></script>
+  <script src="js/core/ui-actions.js"></script>
   <script src="js/core/i18n.js"></script>
   <script src="js/core/theme.js"></script>
-  <script src="js/core/colorblind.js?v=20260615-fixed1"></script>
+  <script src="js/core/colorblind.js?v=20260615-fixed1" nonce="{{CSP_NONCE}}"></script>
   <script src="js/core/catalog.js"></script>
   <script src="js/core/download-manifest.js"></script>
   <script src="js/core/display-presets.js"></script>
@@ -451,7 +451,10 @@
   <script src="js/core/tool-manager.js?v=20260615-fixed1"></script>
   <script src="js/core/annotation-manager.js?v=20260615-fixed1"></script>
   <script src="js/core/perf-telemetry.js"></script>
-  <script src="js/core/plugin-registry.js?v=20260615-fixed1"></script>
+  <script src="js/core/compat.js"></script>
+  <script src="js/core/plugin-trust.js"></script>
+  <script src="js/core/plugin-sandbox.js" nonce="{{CSP_NONCE}}"></script>
+  <script src="js/core/plugin-registry.js?v=20260615-fixed1" nonce="{{CSP_NONCE}}"></script>
   <script src="js/core/svr-manager.js?v=20260615-fixed1"></script>
   <script src="js/core/brick-loader.js?v=20260615-fixed1"></script>
   <script src="js/core/aabb-intersector.js"></script>

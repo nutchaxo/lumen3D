@@ -9,6 +9,17 @@
 const ColorBlind = (() => {
   let _current = 'none';
 
+  // Per-page CSP nonce (L9): from THIS script tag's own .nonce, captured at load
+  // (document.currentScript is valid only during initial synchronous execution).
+  // Used to nonce the modal's injected <style> so style-src-elem admits it.
+  const _PAGE_NONCE = (() => {
+    try {
+      const s = document.currentScript;
+      const n = s && s.nonce;
+      return n && n !== '{{CSP_NONCE}}' ? n : null;
+    } catch (_) { return null; }
+  })();
+
   const _filters = {
     'none': '',
     'protanopia': `
@@ -247,6 +258,9 @@ const ColorBlind = (() => {
     if (document.getElementById('cb-modal-styles')) return;
     const style = document.createElement('style');
     style.id = 'cb-modal-styles';
+    // CSP (L8): style-src-elem is nonce-gated (no 'unsafe-inline'), so a
+    // dynamically injected <style> is refused unless it carries the page nonce.
+    if (_PAGE_NONCE) style.nonce = _PAGE_NONCE;
     style.innerHTML = `
       .cb-modal-overlay {
         position: fixed;

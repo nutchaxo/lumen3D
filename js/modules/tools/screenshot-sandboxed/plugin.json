@@ -1,0 +1,17 @@
+{
+  "id": "screenshot-sandboxed",
+  "name": "Screenshot (sandboxed)",
+  "version": "1.0.0",
+  "platformCompat": ">=1.6.0",
+  "creator": "IRIBHM",
+  "placement": "tools",
+  "group": "export",
+  "subtype": "action",
+  "icon": "camera",
+  "order": 31,
+  "description": "Reference sandboxed plugin: captures the viewer canvas and downloads it as PNG, running entirely inside a null-origin iframe via capability RPC — no DOM, ctx, or admin-API access.",
+  "sandbox": true,
+  "sandboxCapabilities": ["toolbar.addButton", "viewer.getCanvasBlob", "viewer.getInfo", "ui.download", "ui.toast"],
+  "i18nTitle": "title",
+  "i18nLanguages": ["en", "fr"]
+}

@@ -1,0 +1,61 @@
+name: CI
+
+on:
+  push:
+    branches: [main, dev]
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.1'   # the advertised PHP floor for the fallback
+
+      - name: Changelog structure check
+        run: python tools/check_version.py --no-tag
+
+      - name: Server self-check (offline boot gate)
+        run: python dev_server.py --check
+
+      # ── Conformance vectors — the three-language twins must agree ──
+      - name: Compat resolver parity (py/js/php)
+        run: |
+          python tests/test_compat.py
+          node tests/test_compat.js
+          php tests/test_compat.php
+      - name: Plugin-trust hash parity (py/js/php)
+        run: |
+          python tests/test_plugin_trust.py
+          node tests/test_plugin_trust.js
+          php tests/test_plugin_trust.php
+      - name: Trust classification (py + php parity) + sandbox broker + updater core
+        run: |
+          python tests/test_plugin_trust_classify.py
+          php tests/test_plugin_trust_classify.php
+          node tests/test_plugin_sandbox.js
+          python tests/test_update_pivot.py
+          PYTHONUTF8=1 python tests/test_update_reconcile.py
+
+      # ── Security invariants (fail the build on regression) ──
+      - name: Sandbox must never grant allow-same-origin (INV-6)
+        run: |
+          if grep -RnE "sandbox=[\"'][^\"']*allow-same-origin" js/; then
+            echo "::error::an iframe sandbox attribute grants allow-same-origin"; exit 1; fi
+      - name: No eval / new Function in first-party JS (CSP hardening)
+        run: |
+          if grep -RnE "\beval\s*\(|new Function\s*\(" js/core js/pages js/components js/modules js/viewers js/workers; then
+            echo "::error::eval / new Function found in first-party JS"; exit 1; fi
+      - name: No CDN <script src> in HTML (libs are self-hosted; CSP has no CDN)
+        run: |
+          if grep -RnE "<script[^>]+src=[\"']https?://" *.html; then
+            echo "::error::a CDN <script src> would be blocked by the enforced script-src 'self'"; exit 1; fi

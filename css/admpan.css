@@ -352,14 +352,9 @@ html, body {
    ADMIN MAIN LAYOUT
    ═══════════════════════════════════════════════════════════ */
 
-#admin-app {
-  height: 100vh;
-  display: none;
-  flex-direction: column;
-}
-#admin-app.visible {
-  display: flex;
-}
+/* #admin-app layout is owned by admin-shell.css (multi-tab shell: sidebar row +
+   content column). The pre-rewrite `flex-direction: column` rule that lived here
+   forced the sidebar to stack ON TOP of the content on desktop — removed. */
 
 .admin-main {
   flex: 1;
@@ -744,6 +739,38 @@ html, body {
   background: var(--adm-success);
   box-shadow: 0 0 6px rgba(52,211,153,0.5);
 }
+
+/* Per-item visibility toggle (eye / eye-off). Subtle by default, emphasised on
+   row hover; hidden datasets keep it lit (amber) so their state reads at a glance. */
+.item-vis-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  flex-shrink: 0;
+  border-radius: 7px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--adm-text-muted);
+  cursor: pointer;
+  opacity: 0.55;
+  transition: background var(--adm-trans), color var(--adm-trans), opacity var(--adm-trans);
+}
+.dataset-item:hover .item-vis-btn { opacity: 1; }
+.item-vis-btn:hover {
+  background: var(--adm-card-hover);
+  border-color: var(--adm-border);
+  color: var(--adm-text);
+}
+.item-vis-btn:focus-visible {
+  opacity: 1;
+  outline: 2px solid var(--adm-border-active);
+  outline-offset: 1px;
+}
+.item-vis-btn.is-off { color: var(--adm-warning); opacity: 1; }
+.item-vis-btn:disabled { opacity: 0.4; cursor: default; }
+.item-vis-btn i { width: 15px; height: 15px; }
 
 /* Empty list state */
 .list-empty {

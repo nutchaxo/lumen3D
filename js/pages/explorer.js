@@ -15,13 +15,16 @@ const Explorer = (() => {
    * Initialize the Explorer
    */
   async function init() {
-    // Init core systems
+    // Init core systems. Instance config loads FIRST so I18n.t() can interpolate
+    // the brand/specimen tokens and the head/brand reflect the operator's identity.
+    await InstanceConfig.load();
     Theme.init();
     // PERF: I18n.init() and Catalog.load() are independent network fetches —
     // overlapping them makes first paint of the grid wait on max(), not the sum,
     // of the two. Both subsystems guard re-entry and tolerate their own failures.
     await Promise.all([I18n.init(), Catalog.load()]);
-    document.title = 'Data Explorer - IRIBHM Microscopy';
+    InstanceConfig.applyHead();
+    InstanceConfig.applyDom();
     if (typeof ExportManager !== 'undefined') ExportManager.init({ scope: 'explorer' });
 
     _updateThemeIcon();

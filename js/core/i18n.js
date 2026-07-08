@@ -327,13 +327,33 @@ const I18n = (() => {
     // resolution like an unresolved key and return the key itself.
     if (typeof value !== 'string') return key;
 
-    // Replace {param} placeholders
-    if (params) {
-      Object.keys(params).forEach(p => {
-        value = value.replace(new RegExp(`\\{${p}\\}`, 'g'), params[p]);
-      });
-    }
+    // White-label token substitution: every string may reference brand/specimen
+    // tokens from the instance config ({brand}, {specimen}, {specimenPlural}, …)
+    // so locale files stay domain-neutral. Explicit call-site params win over
+    // instance tokens on a name clash. A function replacement avoids $-pattern
+    // pitfalls in the replacement value.
+    const merged = _instanceTokens();
+    if (params) Object.assign(merged, params);
+    Object.keys(merged).forEach(p => {
+      if (value.indexOf('{' + p + '}') === -1) return;
+      const rep = String(merged[p]);
+      value = value.replace(new RegExp(`\\{${p}\\}`, 'g'), () => rep);
+    });
     return value;
+  }
+
+  /**
+   * Brand/specimen tokens from the instance config (white-label). Guarded so
+   * i18n keeps working if InstanceConfig is absent (e.g. a page that does not
+   * load it) — tokens then simply resolve to nothing and any {token} stays literal.
+   */
+  function _instanceTokens() {
+    try {
+      if (typeof InstanceConfig !== 'undefined' && InstanceConfig && InstanceConfig.tokens) {
+        return Object.assign({}, InstanceConfig.tokens());
+      }
+    } catch (_) { /* fall through */ }
+    return {};
   }
 
   /**

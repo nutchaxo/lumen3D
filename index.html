@@ -3,9 +3,9 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>IRIBHM Microscopy Platform — Confocal Imaging Data Viewer</title>
-  <meta name="description" content="Interactive platform for exploring confocal microscopy data of mouse embryos. Visualize, analyze, and compare 3D and 4D imaging datasets from the IRIBHM laboratory at ULB.">
-  <meta name="keywords" content="confocal microscopy, mouse embryo, immunofluorescence, live imaging, cell tracking, IRIBHM, ULB">
+  <title>{{SITE:pageTitles.home|Lumen3D — 3D Imaging Data Viewer}}</title>
+  <meta name="description" content="{{SITE:seo.description|Browser-based viewer for large 3D imaging volumes.}}">
+  <meta name="keywords" content="{{SITE:seo.keywords|3D viewer, volume rendering, imaging}}">
 
   <!-- Fonts -->
   <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -13,7 +13,7 @@
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 
   <!-- Lucide Icons -->
-  <script src="https://unpkg.com/lucide@0.344.0/dist/umd/lucide.min.js" integrity="sha384-tTkFttkBclaU1cloKwOi9xk3pbao3VZxTjLNBt8iFABWDBQibbAbWpVmO28zMuxq" crossorigin="anonymous"></script>
+  <script src="js/vendor/lucide.min.js" integrity="sha384-tTkFttkBclaU1cloKwOi9xk3pbao3VZxTjLNBt8iFABWDBQibbAbWpVmO28zMuxq" crossorigin="anonymous"></script>
 
   <!-- DEAD-008: removed the unused three.module.js import — the landing hero is a 2D
        canvas particle system (landing.js), so no Three.js is needed here; loading it as
@@ -23,27 +23,28 @@
   <!-- Stylesheets -->
   <link rel="stylesheet" href="css/variables.css">
   <link rel="stylesheet" href="css/themes.css">
+  <link rel="stylesheet" href="config/theme.css">
   <link rel="stylesheet" href="css/base.css">
   <link rel="stylesheet" href="css/components.css">
   <link rel="stylesheet" href="css/layout.css">
   <link rel="stylesheet" href="css/landing.css">
   <link rel="stylesheet" href="css/tools.css">
 
-  <style>
+  <style nonce="{{CSP_NONCE}}">
     /* Inline critical styles for faster FCP */
     body { opacity: 0; transition: opacity 0.3s ease; }
     body.loaded { opacity: 1; }
   </style>
 </head>
-<body>
+<body data-page="home">
 
   <!-- ═══════════════════════════════════════════════════════════ -->
   <!-- Navigation Bar                                             -->
   <!-- ═══════════════════════════════════════════════════════════ -->
   <nav class="navbar" id="navbar">
     <a href="index.html" class="navbar-brand">
-      <div class="navbar-brand-icon">🔬</div>
-      <span data-i18n="app.lab">IRIBHM — ULB</span>
+      <div class="navbar-brand-icon" data-instance="brand.monogram">IR</div>
+      <span data-instance="brand.organization">IRIBHM — ULB</span>
     </a>
 
     <div class="navbar-links">
@@ -56,7 +57,7 @@
     <div class="navbar-actions">
       <!-- Language Switcher -->
       <div class="dropdown" id="lang-dropdown">
-        <button class="btn btn-icon btn-ghost" onclick="toggleDropdown('lang-dropdown')" data-i18n-title="lang.switch">
+        <button class="btn btn-icon btn-ghost" data-action="lang-dropdown" data-i18n-title="lang.switch">
           <i data-lucide="languages" style="width:20px;height:20px"></i>
         </button>
         <!-- Items are generated from the platform's discovered locales by
@@ -65,16 +66,21 @@
       </div>
 
                   <!-- Color Blindness Toggle -->
-      <button class="btn btn-icon btn-ghost" onclick="ColorBlind.openModal()" data-i18n-title="colorblind.toggle">
+      <button class="btn btn-icon btn-ghost" data-action="colorblind" data-i18n-title="colorblind.toggle">
         <i data-lucide="eye" style="width:20px;height:20px"></i>
       </button>
 
       <!-- Theme Toggle -->
-      <button class="btn btn-icon btn-ghost" onclick="Theme.toggle()" data-i18n-title="theme.toggle" id="theme-toggle">
+      <button class="btn btn-icon btn-ghost" data-action="theme-toggle" data-i18n-title="theme.toggle" id="theme-toggle">
         <i data-lucide="moon" style="width:20px;height:20px" data-theme-icon></i>
       </button>
     </div>
   </nav>
+
+  <!-- White-label: operator-published home blocks render here (page builder),
+       replacing the default landing below. Empty by default → default shows. -->
+  <div id="home-blocks" style="display:none"></div>
+  <div id="home-default">
 
   <!-- ═══════════════════════════════════════════════════════════ -->
   <!-- Hero Section                                                -->
@@ -88,7 +94,7 @@
     <div class="container hero-content animate-fade-in-up">
       <div class="hero-badge">
         <span class="dot"></span>
-        <span data-i18n="app.lab">IRIBHM — ULB</span>
+        <span data-instance="brand.organization">IRIBHM — ULB</span>
       </div>
 
       <h1 data-i18n="landing.heroTitle">Explore Embryonic Development</h1>
@@ -220,13 +226,15 @@
     </div>
   </section>
 
+  </div><!-- /home-default -->
+
   <!-- ═══════════════════════════════════════════════════════════ -->
   <!-- Footer                                                      -->
   <!-- ═══════════════════════════════════════════════════════════ -->
   <footer class="footer" id="about">
     <div class="container">
       <div class="footer-content">
-        <div class="footer-brand">
+        <div class="footer-brand" data-instance="footer.copyright">
           © 2026 IRIBHM — Université Libre de Bruxelles
         </div>
         <div class="footer-links">
@@ -243,10 +251,13 @@
   <!-- Scripts                                                     -->
   <!-- ═══════════════════════════════════════════════════════════ -->
   <script src="js/core/utils.js?v=20260504"></script>
+  <script src="js/core/ui-actions.js"></script>
+  <script src="js/core/instance-config.js?v=20260706"></script>
   <script src="js/core/i18n.js?v=20260504"></script>
     <script src="js/core/theme.js?v=20260504"></script>
-  <script src="js/core/colorblind.js?v=20260528"></script>
+  <script src="js/core/colorblind.js?v=20260528" nonce="{{CSP_NONCE}}"></script>
   <script src="js/core/catalog.js?v=20260504"></script>
-  <script src="js/pages/landing.js?v=20260504"></script>
+  <script src="js/core/page-renderer.js?v=20260706"></script>
+  <script src="js/pages/landing.js?v=20260706"></script>
 </body>
 </html>

@@ -208,12 +208,24 @@ const Catalog = (() => {
     return sorted;
   }
 
+  // White-label: the relation type key stays 'same-embryo' (it is only emitted for
+  // datasets carrying specimen+stage metadata), but the human label uses the
+  // operator's specimen noun instead of a hardcoded 'embryo'.
+  function _specimenNoun() {
+    try {
+      if (typeof InstanceConfig !== 'undefined' && InstanceConfig.get) {
+        return InstanceConfig.get('specimen.singular', 'sample');
+      }
+    } catch (_) { /* fall through */ }
+    return 'sample';
+  }
+
   function _relationLabel(type) {
     return {
       'tracking-link': 'Linked tracking',
       registered: 'Registered',
       related: 'Related dataset',
-      'same-embryo': 'Same embryo/stage',
+      'same-embryo': `Same ${_specimenNoun()}/stage`,
       context: 'Context dataset'
     }[type] || 'Related dataset';
   }
@@ -225,7 +237,7 @@ const Catalog = (() => {
       return `${method}${median}`;
     }
     if (type === 'tracking-link') return 'Tracking dataset linked to this acquisition.';
-    if (type === 'same-embryo') return 'Matched by embryo and stage metadata.';
+    if (type === 'same-embryo') return `Matched by ${_specimenNoun()} and stage metadata.`;
     if (type === 'related') return 'Explicitly linked by dataset metadata.';
     return 'Related by experimental context.';
   }

@@ -2,6 +2,7 @@
   "id": "histogram",
   "name": "Histogram Controls",
   "version": "1.0.0",
+  "platformCompat": "1.x",
   "creator": "IRIBHM",
   "placement": "channels",
   "subtype": "per-channel",

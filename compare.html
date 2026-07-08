@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Compare - IRIBHM Microscopy</title>
+  <title>{{SITE:pageTitles.compare|Compare - IRIBHM Microscopy}}</title>
 
   <!-- Fonts -->
   <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -11,18 +11,19 @@
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 
   <!-- Lucide Icons -->
-  <script src="https://unpkg.com/lucide@0.344.0/dist/umd/lucide.min.js" integrity="sha384-tTkFttkBclaU1cloKwOi9xk3pbao3VZxTjLNBt8iFABWDBQibbAbWpVmO28zMuxq" crossorigin="anonymous"></script>
+  <script src="js/vendor/lucide.min.js" integrity="sha384-tTkFttkBclaU1cloKwOi9xk3pbao3VZxTjLNBt8iFABWDBQibbAbWpVmO28zMuxq" crossorigin="anonymous"></script>
 
   <!-- Stylesheets -->
   <link rel="stylesheet" href="css/variables.css">
   <link rel="stylesheet" href="css/themes.css">
+  <link rel="stylesheet" href="config/theme.css">
   <link rel="stylesheet" href="css/base.css">
   <link rel="stylesheet" href="css/components.css">
   <link rel="stylesheet" href="css/layout.css">
   <link rel="stylesheet" href="css/tools.css">
   <link rel="stylesheet" href="css/viewer.css?v=20260528">
   
-  <style>
+  <style nonce="{{CSP_NONCE}}">
     .compare-layout {
       display: flex;
       flex-direction: column;
@@ -296,7 +297,7 @@
     }
   </style>
 </head>
-<body>
+<body data-page="compare">
 
   <div class="compare-layout">
     
@@ -313,10 +314,10 @@
           <i data-lucide="help-circle"></i>
         </a>
               <!-- Color Blindness Toggle -->
-      <button class="btn btn-icon btn-ghost" onclick="window.ColorBlind && ColorBlind.openModal()" data-i18n-title="colorblind.toggle">
+      <button class="btn btn-icon btn-ghost" data-action="colorblind" data-i18n-title="colorblind.toggle">
         <i data-lucide="eye" style="width:20px;height:20px"></i>
       </button>
-      <button class="btn btn-icon btn-ghost" onclick="window.Theme && Theme.toggle()" data-i18n-title="theme.toggle" id="theme-toggle">
+      <button class="btn btn-icon btn-ghost" data-action="theme-toggle" data-i18n-title="theme.toggle" id="theme-toggle">
           <i data-lucide="moon" data-theme-icon></i>
         </button>
       </div>
@@ -382,7 +383,7 @@
       <div class="text-muted flex flex-col items-center gap-4" id="empty-state">
         <i data-lucide="grid" class="w-16 h-16 opacity-20"></i>
         <p data-i18n="compare.emptyTitle">No datasets selected for comparison.</p>
-        <button class="btn btn-outline" onclick="document.getElementById('btn-add-dataset').click()" data-i18n="compare.chooseBtn">Choose Dataset</button>
+        <button class="btn btn-outline" data-action="add-dataset" data-i18n="compare.chooseBtn">Choose Dataset</button>
       </div>
       <!-- Panels are appended here by JS -->
     </div>
@@ -471,9 +472,11 @@
   </div>
 
   <script src="js/core/utils.js?v=20260504"></script>
+  <script src="js/core/ui-actions.js"></script>
+  <script src="js/core/instance-config.js?v=20260706"></script>
   <script src="js/core/i18n.js?v=20260504"></script>
     <script src="js/core/theme.js?v=20260504"></script>
-  <script src="js/core/colorblind.js?v=20260528"></script>
+  <script src="js/core/colorblind.js?v=20260528" nonce="{{CSP_NONCE}}"></script>
   <script src="js/core/catalog.js?v=20260504"></script>
   <script src="js/core/download-manifest.js?v=20260504"></script>
   <script src="js/core/workspace-state.js?v=20260504"></script>

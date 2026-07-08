@@ -517,9 +517,40 @@ const MARKETPLACE_CATALOG_URL = 'https://raw.githubusercontent.com/nutchaxo/lume
 const MARKETPLACE_MAX_ZIP     = 8388608;
 
 function mkt_fetch_bytes(string $url, int $limit): ?string {
-    $ctx = stream_context_create(['http' => ['timeout' => 60, 'header' => "User-Agent: lumen3d-admin\r\n"]]);
-    $d = @file_get_contents($url, false, $ctx, 0, $limit + 1);
-    return $d === false ? null : substr($d, 0, $limit);
+    // Prefer cURL (enabled on most shared hosts even when allow_url_fopen is OFF —
+    // matching install.php's http_get_small); fall back to the stream wrapper only
+    // when allow_url_fopen is available. A host with neither returns null. The write
+    // callback caps the body at $limit+1 bytes so an oversized response can't balloon
+    // memory (a truncated body then fails the signature check — fail-closed).
+    if (function_exists('curl_init')) {
+        $buf = '';
+        $ch = curl_init($url);
+        curl_setopt_array($ch, [
+            CURLOPT_FOLLOWLOCATION  => true,
+            CURLOPT_MAXREDIRS       => 5,
+            CURLOPT_PROTOCOLS       => CURLPROTO_HTTPS,
+            CURLOPT_REDIR_PROTOCOLS => CURLPROTO_HTTPS,
+            CURLOPT_CONNECTTIMEOUT  => 20,
+            CURLOPT_TIMEOUT         => 60,
+            CURLOPT_SSL_VERIFYPEER  => true,
+            CURLOPT_SSL_VERIFYHOST  => 2,
+            CURLOPT_USERAGENT       => 'lumen3d-admin',
+            CURLOPT_WRITEFUNCTION   => function ($c, $chunk) use (&$buf, $limit) {
+                $buf .= $chunk;
+                return strlen($buf) > $limit + 1 ? 0 : strlen($chunk);   // 0 aborts (over cap)
+            },
+        ]);
+        curl_exec($ch);
+        $code = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        curl_close($ch);
+        if ($buf !== '' && $code >= 200 && $code < 300) return substr($buf, 0, $limit);
+    }
+    if (filter_var(ini_get('allow_url_fopen'), FILTER_VALIDATE_BOOLEAN)) {
+        $ctx = stream_context_create(['http' => ['timeout' => 60, 'header' => "User-Agent: lumen3d-admin\r\n"]]);
+        $d = @file_get_contents($url, false, $ctx, 0, $limit + 1);
+        if ($d !== false) return substr($d, 0, $limit);
+    }
+    return null;
 }
 
 /** Verify a detached Ed25519 sig over $data against the pinned marketplace key.

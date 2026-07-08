@@ -9,8 +9,9 @@
 declare(strict_types=1);
 require_once __DIR__ . '/api/_html_server.php';
 
-$path = parse_url($_SERVER['REQUEST_URI'] ?? '/', PHP_URL_PATH);
-$rel = ($path === null || $path === '/' || $path === '') ? 'index.html' : ltrim(urldecode($path), '/');
+// Subdirectory-aware (strips the install-dir prefix from REQUEST_URI) so the
+// platform works whether it lives at the domain root or under e.g. /tools/webplatform/.
+$rel = lumen_request_rel($_SERVER, __DIR__);
 
 if (!lumen_serve_html(__DIR__, $rel)) {
     http_response_code(404);

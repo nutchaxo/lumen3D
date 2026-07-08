@@ -29,7 +29,7 @@ if (preg_match('#^/api/[^/]+\.json$#i', $path)
 // {{CSP_NONCE}} placeholder with no CSP header, leaving the trust gate cosmetic.
 if ($path === '/' || substr($path, -5) === '.html') {
     require_once __DIR__ . '/api/_html_server.php';
-    if (lumen_serve_html(__DIR__, $path === '/' ? 'index.html' : ltrim($path, '/'))) {
+    if (lumen_serve_html(__DIR__, lumen_request_rel($_SERVER, __DIR__))) {
         return true;
     }
 }

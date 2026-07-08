@@ -697,6 +697,24 @@ function is_protected_entry(string $rel): bool {
 }
 
 /**
+ * The release archive is universal (Python + PHP hosts). install.php only ever
+ * runs on a PHP host, so the Python dev servers, the Python-only Ed25519 verifier
+ * and the Windows launcher have no place in the deployed web root — they are dead
+ * weight and needlessly expose server-side source. The PHP host serves HTML via
+ * _serve.php/router.php and verifies signatures with libsodium, so none of these
+ * are used. (Kept: router.php/_serve.php/.htaccess/api + LICENCE.)
+ */
+function is_php_host_skip(string $rel): bool {
+    static $skip = [
+        'dev_server.py'   => true,   // Python dev/admin server — not runnable on PHP hosting
+        'fast_server.py'  => true,   // Python static server
+        'ed25519_pure.py' => true,   // Python signature verifier (PHP uses libsodium)
+        'start.bat'       => true,   // Windows launcher
+    ];
+    return isset($skip[$rel]);
+}
+
+/**
  * If every entry lives under a single top-level directory (GitHub zipball
  * layout: nutchaxo-lumen3D-<sha>/...), return that "dir/" prefix to strip.
  */
@@ -761,7 +779,7 @@ function extract_entry(ZipArchive $zip, int $index, string $stripPrefix, ?bool &
     if ($stripPrefix !== '' && strncmp($rel, $stripPrefix, strlen($stripPrefix)) === 0) {
         $rel = substr($rel, strlen($stripPrefix));
     }
-    if ($rel === '' || is_protected_entry($rel)) { $skipped = true; return 0; }
+    if ($rel === '' || is_protected_entry($rel) || is_php_host_skip($rel)) { $skipped = true; return 0; }
 
     $dest = tpath($rel);
     if (substr($name, -1) === '/') {                                         // directory entry

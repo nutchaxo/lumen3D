@@ -657,7 +657,14 @@ function mkt_install(string $catalogId, string $password): array {
     if ($zipData === null) { mkt_rmrf($tmp); return [502, ['error' => 'download_failed']]; }
     $zipPath = "$tmp/plugin.zip"; file_put_contents($zipPath, $zipData);
     $digest = hash('sha256', $zipData);
-    if ($sumsUrl) {
+    // Fast path: when the catalog is signed (MARKETPLACE_PUBKEY set), mkt_fetch_catalog
+    // already verified its Ed25519 signature fail-closed, so entry.sha256 is AUTHENTICATED.
+    // Trust it and skip the extra per-plugin SHA256SUMS + .sig round-trips (2 fewer GitHub
+    // fetches per install — the install was ~12s from 5 sequential raw.githubusercontent
+    // requests). Fall back to the detached SHA256SUMS chain when the catalog is unsigned.
+    if (MARKETPLACE_PUBKEY !== '' && !empty($entry['sha256'])) {
+        if (strtolower((string)$entry['sha256']) !== $digest) { mkt_rmrf($tmp); return [502, ['error' => 'install_failed', 'detail' => 'sha256']]; }
+    } elseif ($sumsUrl) {
         $sumsRaw = mkt_fetch_bytes($sumsUrl, 1 << 16);
         if ($sumsRaw === null || !mkt_verify_signature($sumsRaw, $sigUrl)) { mkt_rmrf($tmp); return [502, ['error' => 'install_failed', 'detail' => 'signature']]; }
         $sums = [];

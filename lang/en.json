@@ -578,7 +578,7 @@
     "username": "Username",
     "password": "Password",
     "signIn": "Sign in",
-    "loginFooter": "{org} · Restricted access",
+    "loginFooter": "Restricted access",
     "unsavedChanges": "Unsaved changes",
     "backToExplorer": "← Explorer",
     "logout": "Log out",

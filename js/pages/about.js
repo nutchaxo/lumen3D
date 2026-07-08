@@ -25,11 +25,11 @@ const AboutApp = (() => {
   }
 
   /* White-label: render operator-published About blocks in place of the default. */
-  function _renderAboutBlocks(blocks) {
+  function _renderAboutSource(source) {
     const host = document.getElementById('about-blocks');
     const def = document.getElementById('about-default');
     if (!host || typeof PageRenderer === 'undefined') return;
-    const n = PageRenderer.render(host, blocks, { wrap: true });
+    const n = PageRenderer.renderSource(host, source, { wrap: true });
     if (n) { host.style.display = ''; if (def) def.style.display = 'none'; }
     else { host.style.display = 'none'; if (def) def.style.display = ''; }
   }
@@ -40,13 +40,15 @@ const AboutApp = (() => {
     window.addEventListener('message', (e) => {
       if (e.source !== window.parent) return;
       const m = e.data;
-      if (m && m.type === 'LUMEN_PREVIEW_BLOCKS' && Array.isArray(m.blocks)) _renderAboutBlocks(m.blocks);
+      if (m && m.type === 'LUMEN_PREVIEW_DOC' && m.source) _renderAboutSource(m.source);
+      else if (m && m.type === 'LUMEN_PREVIEW_BLOCKS' && Array.isArray(m.blocks)) _renderAboutSource({ blocks: m.blocks });
     });
-    let blocks = [];
-    try { blocks = await PageRenderer.fetchBlocks('about', preview); } catch (_) {}
-    if (blocks && blocks.length) {
-      _renderAboutBlocks(blocks);
-      if (typeof I18n !== 'undefined' && I18n.onLanguageChange) I18n.onLanguageChange(() => _renderAboutBlocks(blocks));
+    let source = { sections: [] };
+    try { source = await PageRenderer.fetchSource('about', preview); } catch (_) {}
+    const has = (source.sections && source.sections.length) || (source.blocks && source.blocks.length);
+    if (has) {
+      _renderAboutSource(source);
+      if (typeof I18n !== 'undefined' && I18n.onLanguageChange) I18n.onLanguageChange(() => _renderAboutSource(source));
     }
   }
 

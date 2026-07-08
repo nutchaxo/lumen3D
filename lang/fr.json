@@ -578,7 +578,7 @@
     "username": "Identifiant",
     "password": "Mot de passe",
     "signIn": "Se connecter",
-    "loginFooter": "{org} · Accès restreint",
+    "loginFooter": "Accès restreint",
     "unsavedChanges": "Modifications non sauvegardées",
     "backToExplorer": "← Explorer",
     "logout": "Déconnexion",

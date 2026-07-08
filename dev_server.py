@@ -1716,9 +1716,15 @@ def _install_marketplace_plugin(catalog_id: str, password: str):
         zip_path = tmp_root / "plugin.zip"
         _download_capped(asset_url, zip_path, _MARKETPLACE_MAX_ZIP)
         digest = _sha256_file(zip_path)
-        # Authenticity: verify the detached signature over SHA256SUMS (fail-closed when
-        # keyed), THEN read the expected zip digest from those authenticated bytes.
-        if sums_url:
+        # Authenticity. Fast path: when the marketplace is keyed, _fetch_marketplace_catalog
+        # already verified the catalog's Ed25519 signature fail-closed, so entry.sha256 is
+        # AUTHENTICATED — trust it and skip the per-plugin SHA256SUMS + .sig fetches (2 fewer
+        # sequential GitHub round-trips per install; the install was ~12s from 5 raw requests).
+        # Fall back to the detached SHA256SUMS chain when the catalog is unsigned.
+        if _MARKETPLACE_PUBKEY_HEX and entry.get("sha256"):
+            if str(entry["sha256"]).lower() != digest:
+                raise OSError("sha256 du zip ≠ catalogue (signé)")
+        elif sums_url:
             sums_raw = _fetch_url_bytes(sums_url, limit=1 << 16)
             _verify_marketplace_signature(sums_raw, sig_url)
             sums = _parse_sha256sums(sums_raw)

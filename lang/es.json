@@ -578,7 +578,7 @@
     "username": "Usuario",
     "password": "Contraseña",
     "signIn": "Iniciar sesión",
-    "loginFooter": "{org} · Acceso restringido",
+    "loginFooter": "Acceso restringido",
     "unsavedChanges": "Cambios sin guardar",
     "backToExplorer": "← Explorador",
     "logout": "Cerrar sesión",

@@ -971,7 +971,11 @@
     "selectHint": "Haz clic en una sección, columna o widget para editarlo.",
     "sub2": "Construye tus páginas con secciones, columnas y widgets. Arrastra y suelta, redimensiona columnas, publica.",
     "vAlign": "Alineación vertical",
-    "widgets": "Widgets"
+    "widgets": "Widgets",
+    "showInMenu": "Visible en el menú",
+    "builtinNavHint": "La visibilidad de las páginas integradas se ajusta en la pestaña Identidad (Navegación).",
+    "pageShown": "Página mostrada en el menú.",
+    "pageHidden": "Página oculta del menú."
   },
   "wizard": {
     "title": "Instalación guiada",

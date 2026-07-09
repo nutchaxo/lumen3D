@@ -971,7 +971,11 @@
     "selectHint": "Click a section, column, or widget to edit it.",
     "sub2": "Build your pages with sections, columns, and widgets. Drag and drop, resize columns, publish.",
     "vAlign": "Vertical alignment",
-    "widgets": "Widgets"
+    "widgets": "Widgets",
+    "showInMenu": "Visible in the menu",
+    "builtinNavHint": "Built-in page visibility is set in the Identity tab (Navigation).",
+    "pageShown": "Page shown in the menu.",
+    "pageHidden": "Page hidden from the menu."
   },
   "wizard": {
     "title": "Guided setup",

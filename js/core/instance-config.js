@@ -52,7 +52,7 @@ const InstanceConfig = (() => {
     footer: { copyright: '© Lumen3D', links: [] },
     nav: {
       showExplorer: true, showCompare: true, showTracking: true,
-      showAbout: true, showLegal: false, customPages: []
+      showAbout: true, showLegal: true, customPages: []
     }
   };
 

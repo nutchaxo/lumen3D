@@ -233,6 +233,68 @@ def bundle_pages(by_name):
     return by_name
 
 
+# Local css/js reference in an HTML doc: href="css/…" / src="js/…" (optional ./,
+# optional existing ?query). Vendor + bundle refs are handled specially in the
+# callback (kept as-is). config/theme.css never matches (starts with "config/").
+_ASSET_REF_RE = re.compile(
+    r'(?P<attr>\b(?:href|src))="(?P<path>(?:\./)?(?:css|js)/[^"]+?)"',
+    re.IGNORECASE,
+)
+# Static ESM specifier: from|import "./x.js" / "../y.mjs" (optional existing query).
+_ESM_IMPORT_RE = re.compile(
+    r'(?P<pre>\b(?:from|import)\s+["\'])(?P<spec>\.{1,2}/[^"\'?]+\.m?js)(?:\?[^"\']*)?(?P<post>["\'])'
+)
+
+
+def stamp_asset_versions(by_name, version):
+    """Stamp ?v=<version> onto every local css/js URL in HTML AND onto the admin
+    ESM import specifiers, so a version bump changes every asset URL. Without this,
+    the .htaccess long-cache (max-age=604800) freezes stale css/js for up to a week
+    after an update — the exact reason a fresh release showed the OLD admin editor
+    and an OLD stylesheet. Hand-maintained ?v= strings on individual tags kept
+    drifting out of date; this makes busting automatic and total per release.
+
+    Skips js/vendor/** (SRI + immutable → keep the bare URL) and js/bundle/**
+    (already content-hashed by bundle_pages). config/theme.css is untouched (the
+    server busts it by mtime so operator theme edits show immediately)."""
+    tag = "?v=" + version
+
+    def _repl_html(m):
+        attr, path = m.group("attr"), m.group("path")
+        base = path.split("?", 1)[0]
+        low = base.lower()
+        if low.startswith(("js/vendor/", "./js/vendor/", "js/bundle/", "./js/bundle/")):
+            return m.group(0)
+        if not low.endswith((".css", ".js", ".mjs")):
+            return m.group(0)
+        return f'{attr}="{base}{tag}"'
+
+    html_n = imp_n = 0
+    for arc in list(by_name.keys()):
+        if arc.endswith(".html"):
+            try:
+                text = by_name[arc].decode("utf-8")
+                new = _ASSET_REF_RE.sub(_repl_html, text)
+                if new != text:
+                    by_name[arc] = new.encode("utf-8")
+                    html_n += 1
+            except Exception:
+                pass
+        elif arc.endswith(".js") and (arc == "js/pages/admpan.js" or arc.startswith("js/pages/admin/")):
+            # The admin is ESM (not bundled): its import graph is invisible to the
+            # HTML, so version each relative specifier here or the imports stay cached.
+            try:
+                text = by_name[arc].decode("utf-8")
+                new = _ESM_IMPORT_RE.sub(lambda m: m.group("pre") + m.group("spec") + tag + m.group("post"), text)
+                if new != text:
+                    by_name[arc] = new.encode("utf-8")
+                    imp_n += 1
+            except Exception:
+                pass
+    print(f"    stamped ?v={version} on {html_n} HTML docs + {imp_n} admin ESM modules")
+    return by_name
+
+
 def main():
     parser = argparse.ArgumentParser(description="Build the Lumen3D web release zip.")
     parser.add_argument("--version", required=True, help="platform version X.Y.Z")
@@ -259,6 +321,9 @@ def main():
     # version.json covers the shipped (bundled) bytes.
     by_name = {arcname: path.read_bytes() for arcname, path in files}
     bundle_pages(by_name)
+    # Cache-bust: stamp ?v=<version> on every local css/js URL + admin ESM import
+    # so the .htaccess long-cache can never serve stale admin/CSS after an update.
+    stamp_asset_versions(by_name, args.version)
 
     file_hashes = {arc: sha256_hex(data) for arc, data in by_name.items()}
     entries = list(by_name.items())

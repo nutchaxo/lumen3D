@@ -19,3 +19,34 @@
         Require all granted
     </IfModule>
 </FilesMatch>
+
+# ── Caching ──────────────────────────────────────────────────────────────────
+# The platform ships as ~25 separate JS files + CSS + fonts (no bundler). Without
+# caching, EVERY page navigation (index → explorer → viewer → admin) re-requests
+# all of them, and on hosts with aggressive per-IP rate limiting that burst returns
+# HTTP 429 and the viewer/admin fail to boot. These headers let the browser cache
+# the immutable static assets so each is fetched once, cutting request volume by an
+# order of magnitude. Static asset URLs carry ?v=… version strings, so a long
+# max-age is safe (a version bump changes the URL and busts the cache).
+# HTML is NOT cached here: it is served via _serve.php with a per-request CSP nonce
+# and its own Cache-Control: no-store. Config JSON is kept revalidated (operator edits).
+<IfModule mod_headers.c>
+    <FilesMatch "\.(js|mjs|css|webp|png|jpe?g|gif|svg|ico|woff2?|ttf|eot)$">
+        Header set Cache-Control "public, max-age=604800"
+    </FilesMatch>
+    <FilesMatch "\.json$">
+        Header set Cache-Control "no-cache"
+    </FilesMatch>
+</IfModule>
+<IfModule mod_expires.c>
+    ExpiresActive On
+    ExpiresByType application/javascript "access plus 7 days"
+    ExpiresByType text/javascript        "access plus 7 days"
+    ExpiresByType text/css               "access plus 7 days"
+    ExpiresByType image/webp             "access plus 30 days"
+    ExpiresByType image/png              "access plus 30 days"
+    ExpiresByType image/jpeg             "access plus 30 days"
+    ExpiresByType image/svg+xml          "access plus 30 days"
+    ExpiresByType font/woff2             "access plus 30 days"
+    ExpiresByType application/json       "access plus 0 seconds"
+</IfModule>

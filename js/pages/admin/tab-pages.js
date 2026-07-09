@@ -463,11 +463,28 @@ function renderSettings() {
 function _panelHead(title, icon) { return `<div class="adm-card-head" style="margin:0 0 10px"><i data-lucide="${icon}"></i><span>${escHtml(title)}</span></div>`; }
 
 function _pageSettings(host) {
+  const isCustom = !SPECIAL.some((s) => s.slug === _slug);
+  const pg = isCustom ? (Array.isArray(_instance?.nav?.customPages) ? _instance.nav.customPages.find((p) => p.slug === _slug) : null) : null;
   host.innerHTML = _panelHead(t('pages.pageSettings', 'Page'), 'file') +
     `<label class="adm-field"><span class="adm-field-label">${escHtml(t('pages.pageTitle', 'Titre de la page'))} (${escHtml(_editLoc)})</span><input type="text" class="adm-field-input" id="pb-page-title" value="${escHtml(_lv(_doc.title))}"></label>` +
+    (isCustom
+      ? `<label class="adm-field" style="flex-direction:row;justify-content:space-between;align-items:center"><span class="adm-field-label" style="margin:0">${escHtml(t('pages.showInMenu', 'Visible dans le menu'))}</span><input type="checkbox" id="pb-page-show" ${(!pg || pg.show !== false) ? 'checked' : ''}></label>`
+      : `<p class="adm-page-sub" style="font-size:12px">${escHtml(t('pages.builtinNavHint', 'La visibilité des pages intégrées se règle dans l\'onglet Identité (Navigation).'))}</p>`) +
     `<p class="adm-page-sub" style="font-size:12px;margin-top:10px">${escHtml(t('pages.selectHint', 'Cliquez une section, une colonne ou un widget pour l\'éditer.'))}</p>`;
   el('pb-page-title').addEventListener('input', (e) => { if (typeof _doc.title !== 'object' || !_doc.title) _doc.title = {}; _doc.title[_editLoc] = e.target.value; _mark(true); });
+  el('pb-page-show')?.addEventListener('change', (e) => _setPageVisibility(_slug, e.target.checked));
   refreshIcons(host);
+}
+
+async function _setPageVisibility(slug, show) {
+  const pg = (_instance.nav && Array.isArray(_instance.nav.customPages)) ? _instance.nav.customPages.find((p) => p.slug === slug) : null;
+  if (!pg) return;
+  pg.show = show;
+  const r = await apiFetchStatus(`${API_SITE}?action=save&doc=instance`, { method: 'POST', body: JSON.stringify(_instance) });
+  if (r.ok) {
+    try { if (typeof InstanceConfig !== 'undefined') await InstanceConfig.load(); } catch (_) {}
+    toast(show ? t('pages.pageShown', 'Page affichée dans le menu.') : t('pages.pageHidden', 'Page masquée du menu.'), 'success');
+  } else toast(t('pages.saveError', "Échec de l'enregistrement."), 'error');
 }
 
 function _sectionSettings(host, sec, si) {

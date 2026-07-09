@@ -40,7 +40,7 @@
     "showCompare": true,
     "showTracking": true,
     "showAbout": true,
-    "showLegal": false,
+    "showLegal": true,
     "customPages": []
   },
   "channelColorPresets": []

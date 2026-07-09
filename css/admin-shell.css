@@ -7,6 +7,19 @@
    (stats / plugins / security / updates), plus a light theme.
    ============================================================ */
 
+/* ── Native control color-scheme (select popups, scrollbars) ──
+   The admin panel loads ONLY admpan.css + admin-shell.css — NOT themes.css —
+   so the themes.css color-scheme binding never reaches it. Without its own
+   binding, a native <select> popup is drawn by the OS: on a Windows box with
+   the OS in light mode but the admin in dark theme, the popup renders white
+   while our option text stays light → unreadable light-gray-on-white (the exact
+   symptom operators reported). Bind color-scheme to the APP theme here too. */
+:root, [data-theme="dark"] { color-scheme: dark; }
+[data-theme="light"]       { color-scheme: light; }
+/* Explicit option colors as a belt-and-suspenders (Chromium/Windows quirk). */
+[data-theme="dark"] select option,  [data-theme="dark"] select optgroup  { color: #e5e7eb; background-color: #1e1e2e; }
+[data-theme="light"] select option, [data-theme="light"] select optgroup { color: #1f2937; background-color: #ffffff; }
+
 /* ── Light theme (flips the --adm-* tokens) ────────────────── */
 [data-theme="light"] {
   --adm-bg:          #f3f4fb;

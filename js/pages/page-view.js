@@ -13,6 +13,7 @@
 
   let _slug = '';
   let _preview = false;
+  let _edit = false;
   let _doc = null;
 
   function _loc() { try { return (typeof I18n !== 'undefined' && I18n.getLanguage) ? I18n.getLanguage() : 'en'; } catch (_) { return 'en'; } }
@@ -41,6 +42,7 @@
     const params = new URLSearchParams(window.location.search);
     _slug = (params.get('slug') || '').trim();
     _preview = params.get('preview') === 'draft';
+    _edit = params.get('edit') === '1';
     if (!/^[a-z0-9][a-z0-9_-]{0,63}$/.test(_slug)) { window.location.replace('index.html'); return; }
 
     if (typeof InstanceConfig !== 'undefined') { try { await InstanceConfig.load(); } catch (_) {} }
@@ -48,6 +50,11 @@
     if (typeof I18n !== 'undefined') { try { await I18n.init(); } catch (_) {} }
     if (typeof InstanceConfig !== 'undefined') { try { InstanceConfig.applyHead(); InstanceConfig.applyDom(); } catch (_) {} }
     if (typeof Catalog !== 'undefined' && Catalog.load) { try { await Catalog.load(); } catch (_) {} }
+
+    // Edit mode: the admin Pages tab embeds this page as a live editing surface.
+    // Hand the whole content area over to the in-iframe editor runtime; it owns
+    // rendering + affordances and talks to the parent over postMessage.
+    if (_edit && typeof PageEditFrame !== 'undefined') { PageEditFrame.init(); return; }
 
     try {
       const resp = await fetch(`./config/pages/${encodeURIComponent(_slug)}.json`, { cache: 'no-store' });

@@ -8,6 +8,12 @@
 /* ── Dark Theme (Default) ────────────────────────────────── */
 :root,
 [data-theme="dark"] {
+  /* Bind native form-control rendering (select popups, scrollbars, date
+     pickers) to the APP theme, not the OS. Without this a Windows box with the
+     OS in light mode renders the native <select> popup white while our option
+     text stays light → unreadable light-gray-on-white. */
+  color-scheme: dark;
+
   --bg-body:          #0D0D1A;
   --bg-surface:       #1A1A2E;
   --bg-surface-2:     #16213E;
@@ -42,6 +48,8 @@
 
 /* ── Light Theme ─────────────────────────────────────────── */
 [data-theme="light"] {
+  color-scheme: light;
+
   --bg-body:          #F5F5FA;
   --bg-surface:       #FFFFFF;
   --bg-surface-2:     #F0F0F8;

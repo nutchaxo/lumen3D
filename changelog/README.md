@@ -7,10 +7,11 @@ Un bump de version = ajouter un nouveau fichier ici — jamais de constante à �
 
 ## Organisation
 
-- **Niveau plat** : les deux lignes mineures les plus récentes (lisibilité).
+- **Niveau plat** : les lignes mineures récentes (à ce jour, depuis `1.3.0`).
+  Seules les versions `≤ 1.2.x` (et toute la série `0.x`) sont archivées.
 - **`archive/`** : tout l'historique antérieur, même format de nommage.
   Le calcul de version ignore `archive/` (glob non-récursif) — n'y déplacer une
-  ligne mineure que lorsqu'une plus récente la remplace au niveau plat.
+  ligne mineure que lorsqu'elle est bien remplacée au niveau plat.
 
 ## Format d'un changelog
 

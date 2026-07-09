@@ -1,29 +1,33 @@
 /**
- * Admin SPA — Pages (Elementor-style section/column/widget editor, white-label)
+ * Admin SPA — Pages (Elementor-style full-page visual editor, white-label)
  * ============================================================================
- * A structured visual page builder for the public pages. The operator creates
- * custom pages (rendered by page.html?slug=…, auto-added to the nav) and edits
- * their layout as a tree of SECTIONS → COLUMNS → WIDGETS:
+ * Two views:
  *
- *   • Sections stack vertically (full-width or contained, background, padding).
- *   • Columns sit side-by-side inside a section on a 12-unit grid; the boundary
- *     between two columns is a drag handle that SNAPS to whole grid units.
- *   • Widgets live in columns; drag one from the palette into a column, or drag
- *     an existing widget to reorder / move it between columns.
+ *  1. LAUNCHER (inside the admin shell) — pick a page (built-in home/about or a
+ *     custom page), see a read-only preview, and click "Edit with the editor".
  *
- * The center canvas is WYSIWYG — each widget is rendered with the real
- * PageRenderer and wrapped in editor chrome. The right panel shows contextual
- * settings for the current selection (widget / column / section / page). A live
- * preview iframe mirrors the draft via postMessage (LUMEN_PREVIEW_DOC). Draft /
- * Publish / Revert persist config/pages/<slug>.json through /api/site.php.
+ *  2. EDITOR (full-screen) — the REAL page opens in an iframe (page.html?slug=…
+ *     &edit=1) as a live editing surface: real navbar, footer, theme and the
+ *     actual PageRenderer output, with every section / column / widget wrapped
+ *     in editor chrome (hover outline, click-to-select, inline toolbar, drag to
+ *     reorder, drop zones). A left sidebar holds the ELEMENTS palette and the
+ *     contextual SETTINGS for the current selection. This is the Elementor model
+ *     the operator asked for: you edit the page itself, full-width — not an
+ *     abstract block-tree in a cramped panel.
+ *
+ * DATA-FLOW: this tab is the single source of truth. It holds the working model
+ * (_sections) and posts it to the iframe (LUMEN_EDIT_DOC via js/core/page-edit-
+ * frame.js). The frame renders + emits intents (select / drop / action / resize)
+ * back; this tab mutates the model and re-posts. Draft / Publish / Revert persist
+ * config/pages/<slug>.json through /api/site.php.
  *
  *   doc = { title:{loc}, published:{sections:[]}, draft:{sections:[]} }
  *   Section = { id, props:{bg,padY,fullWidth,maxWidth,gap,vAlign}, columns:[Column] }
  *   Column  = { id, width(1–12), props:{vAlign,padding}, widgets:[Widget] }
  *   Widget  = { id, type, text, props }   (same types as PageRenderer)
  *
- * Legacy flat { blocks:[] } docs are migrated to one contained section with a
- * single 12-unit column — so pages built with the old editor keep working.
+ * Legacy flat { blocks:[] } docs migrate to one contained section / 12-unit
+ * column so pages built with the old editor keep working.
  */
 
 'use strict';
@@ -41,48 +45,18 @@ let _sections = [];                 // working draft
 let _sel = null;                    // { si, ci, wi } — ci/wi null = column/section scope
 let _editLoc = 'en';
 let _dirty = false;
-let _showPreview = false;
-let _fullscreen = false;            // full-viewport editing mode
-let _dropHint = null;               // { si, ci } column currently under a drag
-
-// Starter layouts for the built-in pages (home/about) — their real default is
-// static HTML (index/about.html), so there are no blocks to load; this gives the
-// operator an editable starting point instead of a blank "Empty page".
-function _defaultTemplate(slug) {
-  if (slug === 'home') {
-    return _sanitizeSections([
-      { props: { fullWidth: false, padY: 64, maxWidth: 1080, gap: 24, vAlign: 'stretch', bg: '' }, columns: [{ width: 12, widgets: [
-        { type: 'hero', text: { en: 'Welcome', fr: 'Bienvenue', es: 'Bienvenido' }, props: { subtitle: { en: 'Explore your 3D imaging datasets in the browser.', fr: 'Explorez vos jeux de données d\'imagerie 3D dans le navigateur.', es: 'Explora tus conjuntos de datos de imagen 3D en el navegador.' }, bg: '', cta: { text: { en: 'Explore data', fr: 'Explorer les données', es: 'Explorar datos' }, href: 'explorer.html' } } },
-      ] }] },
-      { props: { fullWidth: false, padY: 32, maxWidth: 1080, gap: 24, vAlign: 'stretch', bg: '' }, columns: [{ width: 12, widgets: [
-        { type: 'heading', text: { en: 'Latest datasets', fr: 'Derniers jeux de données', es: 'Últimos conjuntos de datos' }, props: { level: '2', align: 'center' } },
-        { type: 'latest-datasets', props: { count: 4 } },
-      ] }] },
-    ]);
-  }
-  if (slug === 'about') {
-    return _sanitizeSections([
-      { props: { fullWidth: false, padY: 48, maxWidth: 840, gap: 24, vAlign: 'stretch', bg: '' }, columns: [{ width: 12, widgets: [
-        { type: 'heading', text: { en: 'About', fr: 'À propos', es: 'Acerca de' }, props: { level: '1', align: 'left' } },
-        { type: 'richtext', text: { en: 'Describe your platform, your team, and how to get in touch.\n\nEdit this text, add sections and widgets, then publish.', fr: 'Décrivez votre plateforme, votre équipe et comment vous contacter.\n\nModifiez ce texte, ajoutez des sections et des widgets, puis publiez.', es: 'Describe tu plataforma, tu equipo y cómo contactar.\n\nEdita este texto, añade secciones y widgets, y publica.' }, props: { align: 'left' } },
-      ] }] },
-    ]);
-  }
-  return [];
-}
-function loadDefaultTemplate() {
-  const tpl = _defaultTemplate(_slug);
-  if (!tpl.length) return;
-  _sections = tpl; _sel = { si: 0, ci: null, wi: null };
-  _changed(); renderCanvas(); renderSettings();
-}
+let _mode = 'launcher';             // 'launcher' | 'editor'
+let _side = 'elements';             // editor sidebar: 'elements' | 'settings'
+let _bound = false;                 // window 'message' listener installed once
 
 const _id = (p) => p + Math.random().toString(36).slice(2, 9);
-function _mark(on) { _dirty = on; setUnsaved(on); const s = el('pages-save'); if (s) s.disabled = !on; }
+function _mark(on) { _dirty = on; setUnsaved(on); ['pages-save', 'pe-save'].forEach((id) => { const s = el(id); if (s) s.disabled = !on; }); }
 function _locales() { try { if (I18n && I18n.getAvailableLanguages) { const l = I18n.getAvailableLanguages(); if (l.length) return l; } } catch (_) {} return [{ code: 'en', native: 'EN' }, { code: 'fr', native: 'FR' }, { code: 'es', native: 'ES' }]; }
 function _lv(v) { if (v == null) return ''; if (typeof v === 'string') return v; if (typeof v === 'object') return v[_editLoc] || ''; return String(v); }
-function _short(v) { const s = _lv(v).trim(); return s ? (s.length > 32 ? s.slice(0, 32) + '…' : s) : ''; }
-function _changed() { _mark(true); _pushPreview(); }
+
+// A frame mutation just happened → mark dirty, refresh the sidebar (selection
+// may have moved) and push the new model into the iframe.
+function _afterMutate() { _mark(true); renderSidebar(); _syncFrame(); }
 
 // ── Widget palette / defaults ───────────────────────────────────
 const PALETTE = [
@@ -131,7 +105,6 @@ function _newSection(widths) {
   return { id: _id('s'), props: { bg: '', padY: 48, fullWidth: false, maxWidth: 1080, gap: 24, vAlign: 'stretch' }, columns: (widths || [12]).map(_newColumn) };
 }
 
-// Normalize any stored source (sections / flat blocks) into a sections array.
 function _migrate(src) {
   if (!src || typeof src !== 'object') return [];
   if (Array.isArray(src.sections)) return JSON.parse(JSON.stringify(src.sections));
@@ -142,7 +115,6 @@ function _migrate(src) {
   return [];
 }
 function _sanitizeSections(list) {
-  // Guarantee ids + shape so the editor never trips on a hand-edited/legacy doc.
   return (Array.isArray(list) ? list : []).map((s) => ({
     id: s.id || _id('s'),
     props: Object.assign({ bg: '', padY: 48, fullWidth: false, maxWidth: 1080, gap: 24, vAlign: 'stretch' }, s.props || {}),
@@ -153,12 +125,43 @@ function _sanitizeSections(list) {
   }));
 }
 
+// Starter layouts for the built-in pages (home/about) — their real default is
+// static HTML, so there are no blocks to load; this gives an editable start.
+function _defaultTemplate(slug) {
+  if (slug === 'home') {
+    return _sanitizeSections([
+      { props: { fullWidth: false, padY: 64, maxWidth: 1080, gap: 24, vAlign: 'stretch', bg: '' }, columns: [{ width: 12, widgets: [
+        { type: 'hero', text: { en: 'Welcome', fr: 'Bienvenue', es: 'Bienvenido' }, props: { subtitle: { en: 'Explore your 3D imaging datasets in the browser.', fr: 'Explorez vos jeux de données d\'imagerie 3D dans le navigateur.', es: 'Explora tus conjuntos de datos de imagen 3D en el navegador.' }, bg: '', cta: { text: { en: 'Explore data', fr: 'Explorer les données', es: 'Explorar datos' }, href: 'explorer.html' } } },
+      ] }] },
+      { props: { fullWidth: false, padY: 32, maxWidth: 1080, gap: 24, vAlign: 'stretch', bg: '' }, columns: [{ width: 12, widgets: [
+        { type: 'heading', text: { en: 'Latest datasets', fr: 'Derniers jeux de données', es: 'Últimos conjuntos de datos' }, props: { level: '2', align: 'center' } },
+        { type: 'latest-datasets', props: { count: 4 } },
+      ] }] },
+    ]);
+  }
+  if (slug === 'about') {
+    return _sanitizeSections([
+      { props: { fullWidth: false, padY: 48, maxWidth: 840, gap: 24, vAlign: 'stretch', bg: '' }, columns: [{ width: 12, widgets: [
+        { type: 'heading', text: { en: 'About', fr: 'À propos', es: 'Acerca de' }, props: { level: '1', align: 'left' } },
+        { type: 'richtext', text: { en: 'Describe your platform, your team, and how to get in touch.\n\nEdit this text, add sections and widgets, then publish.', fr: 'Décrivez votre plateforme, votre équipe et comment vous contacter.\n\nModifiez ce texte, ajoutez des sections et des widgets, puis publiez.', es: 'Describe tu plataforma, tu equipo y cómo contactar.\n\nEdita este texto, añade secciones y widgets, y publica.' }, props: { align: 'left' } },
+      ] }] },
+    ]);
+  }
+  return [];
+}
+function _hasTemplateFor(slug) { return _defaultTemplate(slug).length > 0; }
+function loadDefaultTemplate() {
+  const tpl = _defaultTemplate(_slug);
+  if (!tpl.length) return;
+  _sections = tpl; _sel = { si: 0, ci: null, wi: null }; _side = 'settings';
+  _afterMutate();
+}
+
 // ── Path helpers for widget settings ────────────────────────────
 function _get(o, path) { let v = o; for (const s of path.split('.')) { if (v != null && typeof v === 'object') v = v[s]; else return undefined; } return v; }
 function _put(o, path, val) { const s = path.split('.'); let c = o; for (let i = 0; i < s.length - 1; i++) { if (typeof c[s[i]] !== 'object' || c[s[i]] == null) c[s[i]] = {}; c = c[s[i]]; } c[s[s.length - 1]] = val; }
 function _selWidget() { if (!_sel || _sel.wi == null) return null; return _sections[_sel.si]?.columns[_sel.ci]?.widgets[_sel.wi] || null; }
 
-// ── Field schema per widget type (reused from the flat editor) ──
 function _fields(type) {
   const align = { k: 'props.align', t: 'select', l: t('pages.align', 'Alignement'), opts: [['left', '⯇ Gauche'], ['center', '≡ Centre'], ['right', 'Droite ⯈']] };
   switch (type) {
@@ -177,337 +180,244 @@ function _fields(type) {
 }
 
 // ══════════════════════════════════════════════════════════════
-// Render — toolbar + [palette | canvas | settings] + preview
+// Top-level view dispatch
 // ══════════════════════════════════════════════════════════════
 function render() {
   const root = el('pages-root');
   if (!root) return;
+  if (_mode === 'editor') renderEditor();
+  else renderLauncher();
+}
 
-  const pageOpts = _pages.map((p) => `<option value="${escHtml(p.slug)}" ${p.slug === _slug ? 'selected' : ''}>${escHtml(p.builtin ? p.slug + ' ' + t('pages.builtin', '(intégrée)') : (p.label || p.slug))}</option>`).join('');
-  const locOpts = _locales().map((l) => `<option value="${escHtml(l.code)}" ${l.code === _editLoc ? 'selected' : ''}>${escHtml(l.native || l.code)}</option>`).join('');
-  const palette = PALETTE.map((b) => `<button class="adm-btn adm-btn-ghost adm-btn-sm pb-add" data-type="${b.type}" draggable="true" style="justify-content:flex-start;cursor:grab"><i data-lucide="${b.icon}"></i> ${escHtml(t('pages.block.' + b.type, b.def))}</button>`).join('');
+function _pageOptions() {
+  return _pages.map((p) => `<option value="${escHtml(p.slug)}" ${p.slug === _slug ? 'selected' : ''}>${escHtml(p.builtin ? p.slug + ' ' + t('pages.builtin', '(intégrée)') : (p.label || p.slug))}</option>`).join('');
+}
+function _locOptions() {
+  return _locales().map((l) => `<option value="${escHtml(l.code)}" ${l.code === _editLoc ? 'selected' : ''}>${escHtml(l.native || l.code)}</option>`).join('');
+}
+function _editUrl() { return `page.html?slug=${encodeURIComponent(_slug || 'home')}&edit=1`; }
+function _viewUrl() {
+  if (_slug === 'home') return 'index.html';
+  if (_slug === 'about') return 'about.html';
+  return `page.html?slug=${encodeURIComponent(_slug || 'home')}`;
+}
 
+// ── Launcher (inside the admin shell) ───────────────────────────
+function renderLauncher() {
+  const root = el('pages-root');
+  root.style.cssText = '';
   root.innerHTML = `
     <div class="adm-page-head">
       <div>
         <h2 class="adm-page-title">${escHtml(t('pages.title', 'Pages'))}</h2>
-        <p class="adm-page-sub">${escHtml(t('pages.sub2', 'Construisez vos pages en sections, colonnes et widgets. Glissez-déposez, redimensionnez les colonnes, publiez.'))}</p>
+        <p class="adm-page-sub">${escHtml(t('pages.launcherSub', 'Choisissez une page et ouvrez l\'éditeur visuel pour la modifier comme une vraie page web.'))}</p>
       </div>
+    </div>
+    <div class="adm-card" style="padding:16px;display:flex;flex-direction:column;gap:14px">
       <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-        <select class="adm-field-input" id="pages-select" style="width:auto">${pageOpts}</select>
+        <select class="adm-field-input" id="pages-select" style="width:auto;min-width:200px">${_pageOptions()}</select>
         <button class="adm-btn adm-btn-ghost adm-btn-sm" id="pages-new"><i data-lucide="plus"></i> ${escHtml(t('pages.new', 'Nouvelle page'))}</button>
-        <button class="adm-btn adm-btn-ghost adm-btn-sm" id="pages-delete" title="${escHtml(t('pages.delete', 'Supprimer la page'))}"><i data-lucide="trash-2"></i></button>
-        <label style="display:flex;gap:6px;align-items:center;font-size:13px">${escHtml(t('pages.lang', 'Langue'))}<select class="adm-field-input" id="pages-loc" style="width:auto">${locOpts}</select></label>
-        <button class="adm-btn adm-btn-ghost adm-btn-sm" id="pages-preview-toggle"><i data-lucide="eye"></i> ${escHtml(t('pages.preview', 'Aperçu'))}</button>
-        <button class="adm-btn adm-btn-ghost adm-btn-sm" id="pages-fullscreen"><i data-lucide="${_fullscreen ? 'minimize-2' : 'maximize-2'}"></i> ${escHtml(_fullscreen ? t('pages.exitFullscreen', 'Quitter') : t('pages.fullscreen', 'Plein écran'))}</button>
-        <button class="adm-btn adm-btn-ghost adm-btn-sm" id="pages-revert"><i data-lucide="rotate-ccw"></i> ${escHtml(t('pages.revert', 'Défaut'))}</button>
-        <button class="adm-btn adm-btn-ghost adm-btn-sm" id="pages-save" disabled><i data-lucide="save"></i> ${escHtml(t('pages.saveDraft', 'Brouillon'))}</button>
-        <button class="adm-btn adm-btn-accent adm-btn-sm" id="pages-publish"><i data-lucide="upload"></i> ${escHtml(t('pages.publish', 'Publier'))}</button>
+        <button class="adm-btn adm-btn-ghost adm-btn-sm" id="pages-delete"><i data-lucide="trash-2"></i> ${escHtml(t('pages.delete', 'Supprimer'))}</button>
+        <label style="display:flex;gap:6px;align-items:center;font-size:13px">${escHtml(t('pages.lang', 'Langue'))}<select class="adm-field-input" id="pages-loc" style="width:auto">${_locOptions()}</select></label>
+        <span style="flex:1"></span>
+        <button class="adm-btn adm-btn-accent" id="pages-edit"><i data-lucide="pencil-ruler"></i> ${escHtml(t('pages.editWith', 'Modifier avec l\'éditeur'))}</button>
       </div>
-    </div>
-
-    <div style="display:grid;grid-template-columns:186px 1fr 300px;gap:14px;align-items:start">
-      <div class="adm-card" style="padding:12px;position:sticky;top:8px">
-        <div class="adm-card-head" style="margin-bottom:8px"><i data-lucide="shapes"></i><span>${escHtml(t('pages.widgets', 'Widgets'))}</span></div>
-        <p class="adm-page-sub" style="font-size:11px;margin:0 0 8px">${escHtml(t('pages.dragHint', 'Glissez dans une colonne'))}</p>
-        <div style="display:flex;flex-direction:column;gap:5px">${palette}</div>
+      <div style="border:1px solid var(--border-subtle,#2a2a3a);border-radius:12px;overflow:hidden">
+        <div class="adm-card-head" style="padding:8px 12px;border-bottom:1px solid var(--border-subtle,#2a2a3a);display:flex;align-items:center;gap:8px;margin:0">
+          <i data-lucide="eye"></i><span>${escHtml(t('pages.preview', 'Aperçu'))}</span>
+          <span style="flex:1"></span>
+          <span class="adm-page-sub" style="font-size:11px;margin:0">${escHtml(t('pages.launcherHint', 'Cliquez « Modifier » pour éditer cette page'))}</span>
+        </div>
+        <iframe id="pages-view" title="preview" src="${escHtml(_viewUrl())}" style="width:100%;height:520px;border:none;display:block;background:var(--bg-base,#0d0d1a);pointer-events:none"></iframe>
       </div>
-
-      <div class="adm-card" style="padding:14px;min-height:420px">
-        <div id="pages-canvas" class="pb-canvas"></div>
-        <button class="adm-btn adm-btn-ghost pb-add-section" id="pb-add-section" style="width:100%;margin-top:12px;border-style:dashed"><i data-lucide="plus"></i> ${escHtml(t('pages.addSection', 'Ajouter une section'))}</button>
-      </div>
-
-      <div class="adm-card" style="padding:12px;position:sticky;top:8px">
-        <div id="pages-settings"></div>
-      </div>
-    </div>
-
-    <div class="adm-card" id="pb-preview-wrap" style="padding:0;overflow:hidden;margin-top:14px;display:${_showPreview ? 'block' : 'none'}">
-      <div class="adm-card-head" style="padding:10px 14px"><i data-lucide="monitor-play"></i><span>${escHtml(t('pages.livePreview', 'Aperçu en direct'))}</span></div>
-      <iframe id="pages-preview" title="preview" style="width:100%;height:560px;border:none;border-top:1px solid var(--border-subtle,#2a2a3a);background:#0d0d1a"></iframe>
     </div>`;
-
   el('pages-select').addEventListener('change', (e) => selectPage(e.target.value));
-  el('pages-loc').addEventListener('change', (e) => { _editLoc = e.target.value; renderCanvas(); renderSettings(); });
   el('pages-new').addEventListener('click', newPage);
   el('pages-delete').addEventListener('click', deletePage);
-  el('pages-save').addEventListener('click', saveDraft);
-  el('pages-publish').addEventListener('click', publish);
-  el('pages-revert').addEventListener('click', revert);
-  el('pages-preview-toggle').addEventListener('click', togglePreview);
-  el('pages-fullscreen').addEventListener('click', toggleFullscreen);
-  el('pb-add-section').addEventListener('click', () => addSection());
-
-  // Palette drag source (also click = append to the selected/last column).
-  root.querySelectorAll('.pb-add').forEach((b) => {
-    const type = b.getAttribute('data-type');
-    b.addEventListener('dragstart', (e) => { e.dataTransfer.setData('text/plain', 'new:' + type); e.dataTransfer.effectAllowed = 'copy'; });
-    b.addEventListener('click', () => addWidgetToSelection(type));
-  });
-
-  renderCanvas();
-  renderSettings();
-  if (_showPreview) _loadPreview();
-  _applyFullscreen();
+  el('pages-loc').addEventListener('change', (e) => { _editLoc = e.target.value; });
+  el('pages-edit').addEventListener('click', enterEditor);
   refreshIcons(root);
 }
 
-function toggleFullscreen() { _fullscreen = !_fullscreen; render(); }
-function _applyFullscreen() {
+// ── Editor (full-screen: sidebar + iframe of the real page) ─────
+function renderEditor() {
   const root = el('pages-root');
-  if (!root) return;
-  // Full-viewport editing: the editor covers the whole screen so the canvas gets
-  // real page width (Elementor-style), not a cramped panel inside the admin shell.
-  root.style.cssText = _fullscreen
-    ? 'position:fixed;inset:0;z-index:2000;background:var(--bg-base,#0d0d1a);padding:16px 20px;overflow:auto'
-    : '';
+  root.style.cssText = 'position:fixed;inset:0;z-index:2000;background:var(--bg-base,#0d0d1a);display:flex;flex-direction:column';
+  root.innerHTML = `
+    <div style="display:flex;align-items:center;gap:8px;padding:8px 12px;border-bottom:1px solid var(--border-subtle,#2a2a3a);flex-wrap:wrap">
+      <button class="adm-btn adm-btn-ghost adm-btn-sm" id="pe-exit"><i data-lucide="arrow-left"></i> ${escHtml(t('pages.exitEditor', 'Quitter'))}</button>
+      <strong style="font-size:14px;display:inline-flex;align-items:center;gap:6px"><i data-lucide="layout-template"></i> ${escHtml(t('pages.editorTitle', 'Éditeur de page'))}</strong>
+      <select class="adm-field-input" id="pe-select" style="width:auto;min-width:160px">${_pageOptions()}</select>
+      <label style="display:flex;gap:6px;align-items:center;font-size:13px">${escHtml(t('pages.lang', 'Langue'))}<select class="adm-field-input" id="pe-loc" style="width:auto">${_locOptions()}</select></label>
+      <span style="flex:1"></span>
+      <a class="adm-btn adm-btn-ghost adm-btn-sm" id="pe-open" target="_blank" rel="noopener" href="${escHtml(_viewUrl())}"><i data-lucide="external-link"></i> ${escHtml(t('pages.openTab', 'Ouvrir'))}</a>
+      <button class="adm-btn adm-btn-ghost adm-btn-sm" id="pe-revert"><i data-lucide="rotate-ccw"></i> ${escHtml(t('pages.revert', 'Défaut'))}</button>
+      <button class="adm-btn adm-btn-ghost adm-btn-sm" id="pe-save" ${_dirty ? '' : 'disabled'}><i data-lucide="save"></i> ${escHtml(t('pages.saveDraft', 'Brouillon'))}</button>
+      <button class="adm-btn adm-btn-accent adm-btn-sm" id="pe-publish"><i data-lucide="upload"></i> ${escHtml(t('pages.publish', 'Publier'))}</button>
+    </div>
+    <div style="flex:1;display:flex;min-height:0">
+      <div id="pages-side" style="width:300px;flex:0 0 300px;border-right:1px solid var(--border-subtle,#2a2a3a);padding:12px;overflow:auto"></div>
+      <div style="flex:1;min-width:0;position:relative;background:var(--bg-base,#0d0d1a)">
+        <iframe id="pages-frame" title="editor" src="${escHtml(_editUrl())}" style="width:100%;height:100%;border:none;display:block;background:var(--bg-base,#0d0d1a)"></iframe>
+      </div>
+    </div>`;
+  el('pe-exit').addEventListener('click', exitEditor);
+  el('pe-select').addEventListener('change', (e) => selectPage(e.target.value));
+  el('pe-loc').addEventListener('change', (e) => { _editLoc = e.target.value; renderSidebar(); _syncFrame(); });
+  el('pe-revert').addEventListener('click', revert);
+  el('pe-save').addEventListener('click', saveDraft);
+  el('pe-publish').addEventListener('click', publish);
+  renderSidebar();
+  refreshIcons(root);
+  // The iframe posts LUMEN_EDIT_READY once page-edit-frame.js is initialised;
+  // _onMessage answers with the current doc — no need to sync here.
 }
 
-// ── Canvas (WYSIWYG) ────────────────────────────────────────────
-function renderCanvas() {
-  const canvas = el('pages-canvas');
-  if (!canvas) return;
-  canvas.textContent = '';
-  if (!_sections.length) {
-    const wrap = document.createElement('div');
-    wrap.style.cssText = 'text-align:center;padding:40px 0';
-    const empty = document.createElement('p');
-    empty.className = 'adm-page-sub';
-    empty.textContent = t('pages.emptyCanvas', 'Page vide — ajoutez une section pour commencer.');
-    wrap.appendChild(empty);
-    // Built-in pages (home/about) render static HTML by default (nothing to load),
-    // so offer a starter layout the operator can edit + publish to override it.
-    if (SPECIAL.some((s) => s.slug === _slug) && _defaultTemplate(_slug).length) {
-      const hint = document.createElement('p');
-      hint.className = 'adm-page-sub';
-      hint.style.cssText = 'font-size:12px;opacity:.7;margin:2px 0 12px';
-      hint.textContent = t('pages.builtinEmptyHint', 'Cette page affiche sa mise en page par défaut. Créez une version par blocs pour la remplacer.');
-      wrap.appendChild(hint);
-      const btn = document.createElement('button');
-      btn.className = 'adm-btn adm-btn-accent adm-btn-sm';
-      btn.innerHTML = '<i data-lucide="wand-2"></i> ' + escHtml(t('pages.startFromDefault', 'Partir d\'une mise en page par défaut'));
-      btn.addEventListener('click', loadDefaultTemplate);
-      wrap.appendChild(btn);
-    }
-    canvas.appendChild(wrap);
-    return;
-  }
-  _sections.forEach((sec, si) => canvas.appendChild(_sectionEl(sec, si)));
-}
+function enterEditor() { _mode = 'editor'; _sel = null; _side = 'elements'; render(); }
+function exitEditor() { _mode = 'launcher'; const root = el('pages-root'); if (root) root.style.cssText = ''; render(); }
 
-function _ctrlBtn(icon, title, onClick) {
-  const b = document.createElement('button');
-  b.className = 'adm-icon-btn';
-  b.title = title;
-  b.style.cssText = 'width:24px;height:24px;display:inline-flex;align-items:center;justify-content:center;padding:0';
-  b.innerHTML = `<i data-lucide="${icon}" style="width:14px;height:14px"></i>`;
-  b.addEventListener('click', (e) => { e.stopPropagation(); onClick(e); });
-  return b;
-}
-
-function _sectionEl(sec, si) {
-  const selSec = _sel && _sel.si === si && _sel.ci == null;
-  const wrap = document.createElement('div');
-  wrap.className = 'pb-section';
-  wrap.style.cssText = `border:1px solid ${selSec ? 'var(--color-primary,#00A654)' : 'var(--border-subtle,#2a2a3a)'};border-radius:10px;margin-bottom:12px;background:var(--bg-surface,#161622)`;
-
-  // Section header / toolbar
-  const head = document.createElement('div');
-  head.style.cssText = 'display:flex;align-items:center;gap:6px;padding:6px 8px;border-bottom:1px solid var(--border-subtle,#2a2a3a);cursor:pointer';
-  head.addEventListener('click', () => { _sel = { si, ci: null, wi: null }; renderCanvas(); renderSettings(); });
-  const label = document.createElement('span');
-  label.style.cssText = 'flex:1;font-size:11px;text-transform:uppercase;letter-spacing:.04em;opacity:.6';
-  label.innerHTML = `<i data-lucide="rows-3" style="width:13px;height:13px;vertical-align:-2px"></i> ${escHtml(t('pages.section', 'Section'))} ${si + 1} · ${sec.columns.length} ${escHtml(t('pages.cols', 'col.'))}`;
-  head.appendChild(label);
-  head.appendChild(_ctrlBtn('chevron-up', t('pages.moveUp', 'Monter'), () => moveSection(si, -1)));
-  head.appendChild(_ctrlBtn('chevron-down', t('pages.moveDown', 'Descendre'), () => moveSection(si, 1)));
-  head.appendChild(_ctrlBtn('columns-2', t('pages.addColumn', 'Ajouter une colonne'), () => addColumn(si)));
-  head.appendChild(_ctrlBtn('copy', t('pages.duplicate', 'Dupliquer'), () => duplicateSection(si)));
-  head.appendChild(_ctrlBtn('trash-2', t('pages.delete', 'Supprimer'), () => deleteSection(si)));
-  wrap.appendChild(head);
-
-  // Columns row
-  const row = document.createElement('div');
-  row.style.cssText = 'display:flex;align-items:stretch;padding:10px;gap:0';
-  sec.columns.forEach((col, ci) => {
-    if (ci > 0) row.appendChild(_resizeHandle(si, ci));
-    row.appendChild(_columnEl(sec, si, col, ci));
-  });
-  wrap.appendChild(row);
-  return wrap;
-}
-
-function _resizeHandle(si, ci) {
-  // Drag boundary between column (ci-1) and column (ci); snaps to 12-grid units.
-  const h = document.createElement('div');
-  h.style.cssText = 'flex:0 0 10px;cursor:col-resize;display:flex;align-items:center;justify-content:center;align-self:stretch';
-  h.title = t('pages.resizeCols', 'Glisser pour redimensionner (aligné sur 12 colonnes)');
-  h.innerHTML = '<div style="width:3px;border-radius:2px;height:36px;background:var(--border-strong,#3a3a4a)"></div>';
-  h.addEventListener('pointerdown', (e) => _startResize(e, si, ci));
-  return h;
-}
-
-function _startResize(e, si, ci) {
-  e.preventDefault(); e.stopPropagation();
-  const sec = _sections[si];
-  const left = sec.columns[ci - 1], right = sec.columns[ci];
-  const row = e.target.closest('div').parentElement;   // the columns row
-  const rowW = row.getBoundingClientRect().width || 1;
-  const startX = e.clientX;
-  const startLeft = left.width, pairTotal = left.width + right.width;
-  const unitPx = rowW / 12;
-  const onMove = (ev) => {
-    const dxUnits = Math.round((ev.clientX - startX) / unitPx);   // SNAP to whole units
-    let lw = Math.min(pairTotal - 1, Math.max(1, startLeft + dxUnits));
-    left.width = lw; right.width = pairTotal - lw;
-    _liveWidths(si);
+// ── Iframe bridge ───────────────────────────────────────────────
+function _frameEl() { return el('pages-frame'); }
+function _frameLabels() {
+  return {
+    section: t('pages.section', 'Section'), moveUp: t('pages.moveUp', 'Monter'), moveDown: t('pages.moveDown', 'Descendre'),
+    addColumn: t('pages.addColumn', 'Ajouter une colonne'), settings: t('pages.settings', 'Réglages'),
+    duplicate: t('pages.duplicate', 'Dupliquer'), delete: t('pages.delete', 'Supprimer'),
+    resizeCols: t('pages.resizeCols', 'Glisser pour redimensionner'), dropHere: t('pages.dropHere', '＋ Glissez un élément ici'),
+    drag: t('pages.drag', 'Déplacer'), addSection: t('pages.addSection', '＋ Ajouter une section'),
+    emptyTitle: t('pages.emptyTitle', 'Page vierge'), emptyBody: t('pages.emptyBody', 'Ajoutez une section, puis glissez des éléments depuis le panneau de gauche.'),
+    startFromDefault: t('pages.startFromDefault', 'Partir d\'un modèle'),
   };
-  const onUp = () => {
-    window.removeEventListener('pointermove', onMove);
-    window.removeEventListener('pointerup', onUp);
-    _changed(); renderCanvas(); renderSettings();
-  };
-  window.addEventListener('pointermove', onMove);
-  window.addEventListener('pointerup', onUp);
 }
-
-// Update only the flex-basis of a section's columns during a live resize drag.
-function _liveWidths(si) {
-  const secEl = el('pages-canvas').children[si];
-  if (!secEl) return;
-  const row = secEl.querySelector(':scope > div:last-child');
-  const cols = row.querySelectorAll(':scope > .pb-col');
-  _sections[si].columns.forEach((c, i) => { if (cols[i]) cols[i].style.flexBasis = `calc(${(c.width / 12) * 100}% - 12px)`; });
+function _syncFrame() {
+  const f = _frameEl();
+  if (!f || !f.contentWindow) return;
+  try { f.contentWindow.postMessage({ type: 'LUMEN_EDIT_DOC', sections: _sections, sel: _sel, editLoc: _editLoc, messages: _frameLabels(), hasTemplate: _hasTemplateFor(_slug) }, '*'); } catch (_) {}
 }
+function _postFrame(msg) { const f = _frameEl(); if (f && f.contentWindow) try { f.contentWindow.postMessage(msg, '*'); } catch (_) {} }
 
-function _columnEl(sec, si, col, ci) {
-  const selCol = _sel && _sel.si === si && _sel.ci === ci && _sel.wi == null;
-  const c = document.createElement('div');
-  c.className = 'pb-col';
-  c.dataset.si = si; c.dataset.ci = ci;
-  const active = _dropHint && _dropHint.si === si && _dropHint.ci === ci;
-  c.style.cssText = `flex:1 1 calc(${(col.width / 12) * 100}% - 12px);min-width:60px;box-sizing:border-box;margin:0 6px;` +
-    `border:1px dashed ${active ? 'var(--color-primary,#00A654)' : (selCol ? 'var(--color-primary,#00A654)' : 'var(--border-subtle,#2a2a3a)')};` +
-    `border-radius:8px;padding:8px;min-height:60px;background:${active ? 'color-mix(in srgb,var(--color-primary,#00A654) 12%,transparent)' : 'transparent'}`;
-
-  // Column mini-header (width badge + select + remove)
-  const ch = document.createElement('div');
-  ch.style.cssText = 'display:flex;align-items:center;gap:4px;margin-bottom:6px';
-  const badge = document.createElement('span');
-  badge.style.cssText = 'font-size:10px;opacity:.5;flex:1';
-  badge.textContent = `${col.width}/12`;
-  badge.addEventListener('click', (e) => { e.stopPropagation(); _sel = { si, ci, wi: null }; renderCanvas(); renderSettings(); });
-  ch.appendChild(badge);
-  if (sec.columns.length > 1) ch.appendChild(_ctrlBtn('x', t('pages.removeColumn', 'Retirer la colonne'), () => removeColumn(si, ci)));
-  c.appendChild(ch);
-
-  // Widgets
-  col.widgets.forEach((w, wi) => c.appendChild(_widgetEl(w, si, ci, wi)));
-  if (!col.widgets.length) {
-    const dz = document.createElement('div');
-    dz.style.cssText = 'text-align:center;opacity:.4;font-size:12px;padding:14px 0';
-    dz.textContent = t('pages.dropHere', '＋ Glissez un widget ici');
-    c.appendChild(dz);
+function _onMessage(e) {
+  const f = _frameEl();
+  if (!f || e.source !== f.contentWindow) return;
+  const m = e.data;
+  if (!m || typeof m !== 'object') return;
+  switch (m.type) {
+    case 'LUMEN_EDIT_READY': _syncFrame(); break;
+    case 'LUMEN_EDIT_SELECT': _sel = m.sel; _side = 'settings'; renderSidebar(); _syncFrame(); break;
+    case 'LUMEN_EDIT_DROP': _applyDrop(m.target, m.payload); break;
+    case 'LUMEN_EDIT_RESIZE': _applyResize(m.si, m.ci, m.leftWidth); break;
+    case 'LUMEN_EDIT_ACTION': _applyAction(m.action, m.sel, m.arg); break;
   }
-
-  // Column as a drop target
-  c.addEventListener('dragover', (e) => { e.preventDefault(); if (!_dropHint || _dropHint.si !== si || _dropHint.ci !== ci) { _dropHint = { si, ci }; _paintDrop(); } });
-  c.addEventListener('dragleave', (e) => { if (!c.contains(e.relatedTarget)) { if (_dropHint && _dropHint.si === si && _dropHint.ci === ci) { _dropHint = null; _paintDrop(); } } });
-  c.addEventListener('drop', (e) => { e.preventDefault(); _dropHint = null; _handleDrop(e, si, ci, col.widgets.length); });
-  return c;
 }
 
-function _paintDrop() {
-  document.querySelectorAll('#pages-canvas .pb-col').forEach((c) => {
-    const active = _dropHint && +c.dataset.si === _dropHint.si && +c.dataset.ci === _dropHint.ci;
-    c.style.background = active ? 'color-mix(in srgb,var(--color-primary,#00A654) 12%,transparent)' : 'transparent';
-    c.style.borderColor = active ? 'var(--color-primary,#00A654)' : c.style.borderColor;
-  });
-}
-
-function _widgetEl(w, si, ci, wi) {
-  const sel = _sel && _sel.si === si && _sel.ci === ci && _sel.wi === wi;
-  const box = document.createElement('div');
-  box.className = 'pb-widget';
-  box.draggable = true;
-  box.style.cssText = `position:relative;border:1px solid ${sel ? 'var(--color-primary,#00A654)' : 'transparent'};border-radius:8px;margin-bottom:8px;padding:4px`;
-  box.addEventListener('click', (e) => { e.stopPropagation(); _sel = { si, ci, wi }; renderCanvas(); renderSettings(); });
-  box.addEventListener('dragstart', (e) => { e.stopPropagation(); e.dataTransfer.setData('text/plain', `move:${si}:${ci}:${wi}`); e.dataTransfer.effectAllowed = 'move'; });
-  // insert-before target
-  box.addEventListener('dragover', (e) => { e.preventDefault(); e.stopPropagation(); if (!_dropHint || _dropHint.si !== si || _dropHint.ci !== ci) { _dropHint = { si, ci }; _paintDrop(); } });
-  box.addEventListener('drop', (e) => { e.preventDefault(); e.stopPropagation(); _dropHint = null; _handleDrop(e, si, ci, wi); });
-
-  // Toolbar (always visible so no :hover CSS is needed)
-  const bar = document.createElement('div');
-  bar.style.cssText = 'position:absolute;top:2px;right:2px;display:flex;gap:2px;z-index:2;background:var(--bg-elevated,#1a1a28);border-radius:6px;padding:2px';
-  bar.appendChild(_ctrlBtn('copy', t('pages.duplicate', 'Dupliquer'), () => duplicateWidget(si, ci, wi)));
-  bar.appendChild(_ctrlBtn('trash-2', t('pages.delete', 'Supprimer'), () => deleteWidget(si, ci, wi)));
-  box.appendChild(bar);
-
-  const tag = document.createElement('div');
-  tag.style.cssText = 'font-size:9px;text-transform:uppercase;letter-spacing:.05em;opacity:.45;margin-bottom:2px';
-  tag.textContent = t('pages.block.' + w.type, w.type);
-  box.appendChild(tag);
-
-  // WYSIWYG render (inert — clicks select the box, not the inner links)
-  const view = document.createElement('div');
-  view.style.cssText = 'pointer-events:none';
-  try {
-    if (typeof PageRenderer !== 'undefined') { const n = PageRenderer.renderWidget(w); if (n) view.appendChild(n); }
-  } catch (_) {}
-  if (!view.childNodes.length) { view.style.cssText = 'opacity:.6;font-size:12px;padding:6px'; view.textContent = _short(w.text) || t('pages.block.' + w.type, w.type); }
-  box.appendChild(view);
-  return box;
-}
-
-// ── Drag/drop resolution ────────────────────────────────────────
-function _handleDrop(e, si, ci, index) {
-  const data = e.dataTransfer.getData('text/plain') || '';
-  const col = _sections[si]?.columns[ci];
+function _applyDrop(target, payload) {
+  const col = _sections[target.si]?.columns[target.ci];
   if (!col) return;
-  if (data.startsWith('new:')) {
-    const w = _newWidget(data.slice(4));
-    col.widgets.splice(index, 0, w);
-    _sel = { si, ci, wi: index };
-  } else if (data.startsWith('move:')) {
-    const [, fsi, fci, fwi] = data.split(':').map((x, i) => i === 0 ? x : +x);
-    const from = _sections[fsi]?.columns[fci];
-    if (!from) return;
-    const [w] = from.widgets.splice(fwi, 1);
+  if (payload.kind === 'new') {
+    const w = _newWidget(payload.wtype);
+    col.widgets.splice(target.index, 0, w);
+    _sel = { si: target.si, ci: target.ci, wi: target.index };
+  } else if (payload.kind === 'move') {
+    const from = payload.from;
+    const fc = _sections[from.si]?.columns[from.ci];
+    if (!fc) return;
+    const [w] = fc.widgets.splice(from.wi, 1);
     if (!w) return;
-    let target = index;
-    if (fsi === si && fci === ci && fwi < index) target--;   // account for the removed item
-    col.widgets.splice(target, 0, w);
-    _sel = { si, ci, wi: target };
+    let idx = target.index;
+    if (from.si === target.si && from.ci === target.ci && from.wi < idx) idx--;
+    col.widgets.splice(idx, 0, w);
+    _sel = { si: target.si, ci: target.ci, wi: idx };
   } else return;
-  _changed(); renderCanvas(); renderSettings();
+  _side = 'settings';
+  _afterMutate();
 }
 
-// ── Structural ops ──────────────────────────────────────────────
-function addSection(widths) {
-  _sections.push(_newSection(widths));
-  // Select the SECTION (not a column) so its layout picker + settings are
-  // immediately visible — the operator usually chooses the column layout first.
-  _sel = { si: _sections.length - 1, ci: null, wi: null };
-  _changed(); renderCanvas(); renderSettings();
+function _applyResize(si, ci, leftWidth) {
+  const sec = _sections[si];
+  if (!sec) return;
+  const left = sec.columns[ci - 1], right = sec.columns[ci];
+  if (!left || !right) return;
+  const total = left.width + right.width;
+  left.width = Math.min(total - 1, Math.max(1, leftWidth));
+  right.width = total - left.width;
+  _afterMutate();
 }
-function deleteSection(si) { if (!confirm(t('pages.delSectionConfirm', 'Supprimer cette section ?'))) return; _sections.splice(si, 1); _sel = null; _changed(); renderCanvas(); renderSettings(); }
-function duplicateSection(si) { const clone = JSON.parse(JSON.stringify(_sections[si])); clone.id = _id('s'); clone.columns.forEach((c) => { c.id = _id('c'); c.widgets.forEach((w) => w.id = _id('w')); }); _sections.splice(si + 1, 0, clone); _changed(); renderCanvas(); }
-function moveSection(si, dir) { const to = si + dir; if (to < 0 || to >= _sections.length) return; const [s] = _sections.splice(si, 1); _sections.splice(to, 0, s); _sel = { si: to, ci: null, wi: null }; _changed(); renderCanvas(); renderSettings(); }
-function addColumn(si) { const sec = _sections[si]; if (sec.columns.length >= 6) { toast(t('pages.maxCols', 'Maximum 6 colonnes.'), 'warning'); return; } sec.columns.push(_newColumn(Math.max(1, Math.round(12 / (sec.columns.length + 1))))); _rebalance(sec); _changed(); renderCanvas(); }
-function removeColumn(si, ci) { const sec = _sections[si]; if (sec.columns.length <= 1) return; const [dead] = sec.columns.splice(ci, 1); if (dead.widgets.length && sec.columns[0]) sec.columns[0].widgets.push(...dead.widgets); _rebalance(sec); _sel = null; _changed(); renderCanvas(); renderSettings(); }
-function _rebalance(sec) { const n = sec.columns.length; const base = Math.floor(12 / n); let rem = 12 - base * n; sec.columns.forEach((c) => { c.width = base + (rem-- > 0 ? 1 : 0); }); }
-function duplicateWidget(si, ci, wi) { const col = _sections[si].columns[ci]; const clone = JSON.parse(JSON.stringify(col.widgets[wi])); clone.id = _id('w'); col.widgets.splice(wi + 1, 0, clone); _changed(); renderCanvas(); }
-function deleteWidget(si, ci, wi) { _sections[si].columns[ci].widgets.splice(wi, 1); _sel = null; _changed(); renderCanvas(); renderSettings(); }
-function addWidgetToSelection(type) {
-  let si = _sel ? _sel.si : _sections.length - 1;
-  if (si < 0) { addSection(); si = 0; }
-  const ci = (_sel && _sel.ci != null) ? _sel.ci : 0;
-  const col = _sections[si].columns[ci] || _sections[si].columns[0];
-  col.widgets.push(_newWidget(type));
-  _sel = { si, ci: _sections[si].columns.indexOf(col), wi: col.widgets.length - 1 };
-  _changed(); renderCanvas(); renderSettings();
+
+function _applyAction(action, sel, arg) {
+  switch (action) {
+    case 'addSection': addSection(); break;
+    case 'loadDefault': loadDefaultTemplate(); break;
+    case 'dupSection': duplicateSection(sel.si); break;
+    case 'delSection': deleteSection(sel.si); break;
+    case 'moveSection': moveSection(sel.si, arg); break;
+    case 'addColumn': addColumn(sel.si); break;
+    case 'delColumn': removeColumn(sel.si, sel.ci); break;
+    case 'dupWidget': duplicateWidget(sel.si, sel.ci, sel.wi); break;
+    case 'delWidget': deleteWidget(sel.si, sel.ci, sel.wi); break;
+  }
+}
+
+// ── Sidebar: Elements palette + contextual Settings ─────────────
+function renderSidebar() {
+  const host = el('pages-side');
+  if (!host) return;
+  const tab = (id, icon, label) => `<button class="adm-btn ${_side === id ? 'adm-btn-accent' : 'adm-btn-ghost'} adm-btn-sm" data-side="${id}" style="flex:1"><i data-lucide="${icon}"></i> ${escHtml(label)}</button>`;
+  host.innerHTML = `<div style="display:flex;gap:6px;margin-bottom:12px">${tab('elements', 'shapes', t('pages.elements', 'Éléments'))}${tab('settings', 'sliders-horizontal', t('pages.settings', 'Réglages'))}</div><div id="pages-side-body"></div>`;
+  host.querySelectorAll('[data-side]').forEach((b) => b.addEventListener('click', () => { _side = b.getAttribute('data-side'); renderSidebar(); }));
+  const body = el('pages-side-body');
+  if (_side === 'elements') _renderPalette(body);
+  else { body.innerHTML = '<div id="pages-settings"></div>'; renderSettings(); }
+  refreshIcons(host);
+}
+
+function _renderPalette(body) {
+  body.innerHTML = `<p class="adm-page-sub" style="font-size:12px;margin:0 0 10px">${escHtml(t('pages.dragOrClick', 'Cliquez ou glissez un élément dans la page.'))}</p><div id="pages-palette" style="display:grid;grid-template-columns:1fr 1fr;gap:6px"></div>`;
+  const grid = el('pages-palette');
+  PALETTE.forEach((b) => {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'adm-btn adm-btn-ghost adm-btn-sm';
+    btn.style.cssText = 'justify-content:flex-start;cursor:grab;touch-action:none';
+    btn.innerHTML = `<i data-lucide="${b.icon}"></i> ${escHtml(t('pages.block.' + b.type, b.def))}`;
+    btn.addEventListener('pointerdown', (e) => _startPaletteDrag(e, b.type, btn));
+    grid.appendChild(btn);
+  });
+  refreshIcons(body);
+}
+
+// Pointer-based drag from the (parent) palette into the (iframe) page. Native
+// HTML5 drag-drop across the frame boundary is unreliable, so we drive it
+// ourselves: a floating ghost follows the pointer; while over the iframe we
+// forward frame-local coords so the frame paints a drop indicator; on release
+// over the iframe we tell it to drop, otherwise we just append to the selection.
+function _startPaletteDrag(e, type, btn) {
+  e.preventDefault();
+  const frame = _frameEl();
+  const label = btn ? btn.textContent.trim() : type;
+  const ghost = document.createElement('div');
+  ghost.textContent = label;
+  ghost.style.cssText = 'position:fixed;z-index:3000;pointer-events:none;padding:6px 10px;background:var(--color-primary,#2F6BFF);color:#fff;border-radius:6px;font-size:12px;box-shadow:0 6px 16px rgba(0,0,0,.35)';
+  document.body.appendChild(ghost);
+  let moved = false;
+  const over = (ev) => { const r = frame.getBoundingClientRect(); return ev.clientX >= r.left && ev.clientX <= r.right && ev.clientY >= r.top && ev.clientY <= r.bottom ? r : null; };
+  const move = (ev) => {
+    moved = true;
+    ghost.style.left = (ev.clientX + 10) + 'px';
+    ghost.style.top = (ev.clientY + 10) + 'px';
+    const r = over(ev);
+    if (r) _postFrame({ type: 'LUMEN_EDIT_DRAGMOVE', x: ev.clientX - r.left, y: ev.clientY - r.top });
+    else _postFrame({ type: 'LUMEN_EDIT_DRAGCLEAR' });
+  };
+  const up = (ev) => {
+    window.removeEventListener('pointermove', move);
+    window.removeEventListener('pointerup', up);
+    ghost.remove();
+    const r = over(ev);
+    if (r && moved) _postFrame({ type: 'LUMEN_EDIT_DROP_AT', x: ev.clientX - r.left, y: ev.clientY - r.top, payload: { kind: 'new', wtype: type } });
+    else { _postFrame({ type: 'LUMEN_EDIT_DRAGCLEAR' }); if (!moved) addWidgetToSelection(type); }
+  };
+  window.addEventListener('pointermove', move);
+  window.addEventListener('pointerup', up);
 }
 
 // ══════════════════════════════════════════════════════════════
@@ -533,7 +443,7 @@ function _pageSettings(host) {
     (isCustom
       ? `<label class="adm-field" style="flex-direction:row;justify-content:space-between;align-items:center"><span class="adm-field-label" style="margin:0">${escHtml(t('pages.showInMenu', 'Visible dans le menu'))}</span><input type="checkbox" id="pb-page-show" ${(!pg || pg.show !== false) ? 'checked' : ''}></label>`
       : `<p class="adm-page-sub" style="font-size:12px">${escHtml(t('pages.builtinNavHint', 'La visibilité des pages intégrées se règle dans l\'onglet Identité (Navigation).'))}</p>`) +
-    `<p class="adm-page-sub" style="font-size:12px;margin-top:10px">${escHtml(t('pages.selectHint', 'Cliquez une section, une colonne ou un widget pour l\'éditer.'))}</p>`;
+    `<p class="adm-page-sub" style="font-size:12px;margin-top:10px">${escHtml(t('pages.selectHint', 'Cliquez une section, une colonne ou un widget dans la page pour l\'éditer.'))}</p>`;
   el('pb-page-title').addEventListener('input', (e) => { if (typeof _doc.title !== 'object' || !_doc.title) _doc.title = {}; _doc.title[_editLoc] = e.target.value; _mark(true); });
   el('pb-page-show')?.addEventListener('change', (e) => _setPageVisibility(_slug, e.target.checked));
   refreshIcons(host);
@@ -565,7 +475,7 @@ function _sectionSettings(host, sec, si) {
       <button class="adm-btn adm-btn-ghost adm-btn-sm" id="pb-sec-dup"><i data-lucide="copy"></i> ${escHtml(t('pages.duplicate', 'Dupliquer'))}</button>
       <button class="adm-btn adm-btn-ghost adm-btn-sm" id="pb-sec-del"><i data-lucide="trash-2"></i> ${escHtml(t('pages.delete', 'Supprimer'))}</button>
     </div>`;
-  const upd = (fn) => { fn(); _changed(); renderCanvas(); };
+  const upd = (fn) => { fn(); _mark(true); _syncFrame(); };
   host.querySelectorAll('.pb-layout').forEach((b) => b.addEventListener('click', () => {
     const widths = b.getAttribute('data-w').split('-').map(Number);
     upd(() => { const old = sec.columns; sec.columns = widths.map((wd, i) => old[i] ? Object.assign(old[i], { width: wd }) : _newColumn(wd)); if (old.length > widths.length) { const extra = old.slice(widths.length).flatMap((c) => c.widgets); sec.columns[sec.columns.length - 1].widgets.push(...extra); } });
@@ -593,13 +503,12 @@ function _columnSettings(host, sec, si, ci) {
       ${sec.columns.length > 1 ? `<button class="adm-btn adm-btn-ghost adm-btn-sm" id="pb-col-del"><i data-lucide="trash-2"></i> ${escHtml(t('pages.removeColumn', 'Retirer'))}</button>` : ''}
     </div>`;
   el('pb-cw').addEventListener('input', (e) => {
-    // adjust this column, compensate the next (or previous) so the row still fits ~12
     const nv = +e.target.value; const other = sec.columns[ci + 1] || sec.columns[ci - 1];
     if (other) { const total = col.width + other.width; other.width = Math.max(1, total - nv); }
-    col.width = nv; el('pb-cw-val').textContent = nv + '/12'; _changed(); renderCanvas();
+    col.width = nv; el('pb-cw-val').textContent = nv + '/12'; _mark(true); _syncFrame();
   });
-  el('pb-cva').addEventListener('change', (e) => { col.props = col.props || {}; col.props.vAlign = e.target.value; _changed(); });
-  el('pb-cpad').addEventListener('input', (e) => { col.props = col.props || {}; col.props.padding = Math.max(0, +e.target.value || 0); _changed(); renderCanvas(); });
+  el('pb-cva').addEventListener('change', (e) => { col.props = col.props || {}; col.props.vAlign = e.target.value; _mark(true); _syncFrame(); });
+  el('pb-cpad').addEventListener('input', (e) => { col.props = col.props || {}; col.props.padding = Math.max(0, +e.target.value || 0); _mark(true); _syncFrame(); });
   el('pb-col-add').addEventListener('click', () => addColumn(si));
   el('pb-col-del')?.addEventListener('click', () => removeColumn(si, ci));
   refreshIcons(host);
@@ -608,8 +517,14 @@ function _columnSettings(host, sec, si, ci) {
 function _widgetSettings(host, b) {
   const fields = _fields(b.type);
   host.innerHTML = _panelHead(t('pages.block.' + b.type, b.type), 'settings-2') +
-    (fields.map((f) => _fieldHtml(b, f)).join('') || `<p class="adm-page-sub">${escHtml(t('pages.noSettings', 'Pas de réglages.'))}</p>`);
+    (fields.map((f) => _fieldHtml(b, f)).join('') || `<p class="adm-page-sub">${escHtml(t('pages.noSettings', 'Pas de réglages.'))}</p>`) +
+    `<div style="display:flex;gap:6px;margin-top:12px">
+      <button class="adm-btn adm-btn-ghost adm-btn-sm" id="pb-w-dup"><i data-lucide="copy"></i> ${escHtml(t('pages.duplicate', 'Dupliquer'))}</button>
+      <button class="adm-btn adm-btn-ghost adm-btn-sm" id="pb-w-del"><i data-lucide="trash-2"></i> ${escHtml(t('pages.delete', 'Supprimer'))}</button>
+    </div>`;
   _wireFields(host, b, fields);
+  el('pb-w-dup').addEventListener('click', () => duplicateWidget(_sel.si, _sel.ci, _sel.wi));
+  el('pb-w-del').addEventListener('click', () => deleteWidget(_sel.si, _sel.ci, _sel.wi));
   refreshIcons(host);
 }
 
@@ -626,13 +541,13 @@ function _fieldHtml(b, f) {
 }
 
 function _wireFields(host, b, _fields2) {
-  const redraw = () => { renderCanvas(); };
+  const redraw = () => { _syncFrame(); };
   host.querySelectorAll('[data-f]').forEach((inp) => {
     inp.addEventListener('input', () => {
       const path = inp.getAttribute('data-f');
       if (inp.getAttribute('data-lt')) { let obj = _get(b, path); if (typeof obj !== 'object' || obj == null) { obj = {}; _put(b, path, obj); } obj[_editLoc] = inp.value; }
       else _put(b, path, inp.value);
-      _changed(); redraw();
+      _mark(true); redraw();
     });
   });
   const gwrap = host.querySelector('#pages-gallery');
@@ -640,11 +555,11 @@ function _wireFields(host, b, _fields2) {
     const imgs = (b.props.images = Array.isArray(b.props.images) ? b.props.images : []);
     const draw = () => {
       gwrap.innerHTML = imgs.map((im, i) => `<div style="display:flex;gap:6px;margin-bottom:5px"><input type="text" class="adm-field-input g-src" data-i="${i}" value="${escHtml(im.src || '')}" placeholder="URL" style="flex:1"><button class="adm-icon-btn g-del" data-i="${i}">✕</button></div>`).join('');
-      gwrap.querySelectorAll('.g-src').forEach((s) => s.addEventListener('input', () => { imgs[+s.getAttribute('data-i')].src = s.value; _changed(); renderCanvas(); }));
-      gwrap.querySelectorAll('.g-del').forEach((d) => d.addEventListener('click', () => { imgs.splice(+d.getAttribute('data-i'), 1); _changed(); draw(); renderCanvas(); }));
+      gwrap.querySelectorAll('.g-src').forEach((s) => s.addEventListener('input', () => { imgs[+s.getAttribute('data-i')].src = s.value; _mark(true); _syncFrame(); }));
+      gwrap.querySelectorAll('.g-del').forEach((d) => d.addEventListener('click', () => { imgs.splice(+d.getAttribute('data-i'), 1); _mark(true); draw(); _syncFrame(); }));
     };
     draw();
-    host.querySelector('#pages-gallery-add').addEventListener('click', () => { imgs.push({ src: '', alt: {} }); _changed(); draw(); renderCanvas(); });
+    host.querySelector('#pages-gallery-add').addEventListener('click', () => { imgs.push({ src: '', alt: {} }); _mark(true); draw(); _syncFrame(); });
   }
   const swrap = host.querySelector('#pages-stats');
   if (swrap) {
@@ -655,25 +570,41 @@ function _wireFields(host, b, _fields2) {
           <select class="adm-field-input s-src" data-i="${i}" style="width:auto"><option value="datasetCount" ${st.source === 'datasetCount' ? 'selected' : ''}>#</option><option value="custom" ${st.source !== 'datasetCount' ? 'selected' : ''}>${escHtml(t('pages.custom', 'Fixe'))}</option></select>
           <input type="text" class="adm-field-input s-val" data-i="${i}" value="${escHtml(st.value != null ? String(st.value) : '')}" placeholder="123" style="width:60px" ${st.source === 'datasetCount' ? 'disabled' : ''}>
           <button class="adm-icon-btn s-del" data-i="${i}">✕</button></div>`).join('');
-      swrap.querySelectorAll('.s-label').forEach((s) => s.addEventListener('input', () => { const st = stats[+s.getAttribute('data-i')]; if (typeof st.label !== 'object' || st.label == null) st.label = {}; st.label[_editLoc] = s.value; _changed(); renderCanvas(); }));
-      swrap.querySelectorAll('.s-src').forEach((s) => s.addEventListener('change', () => { stats[+s.getAttribute('data-i')].source = s.value; _changed(); draw(); renderCanvas(); }));
-      swrap.querySelectorAll('.s-val').forEach((s) => s.addEventListener('input', () => { stats[+s.getAttribute('data-i')].value = s.value; _changed(); renderCanvas(); }));
-      swrap.querySelectorAll('.s-del').forEach((d) => d.addEventListener('click', () => { stats.splice(+d.getAttribute('data-i'), 1); _changed(); draw(); renderCanvas(); }));
+      swrap.querySelectorAll('.s-label').forEach((s) => s.addEventListener('input', () => { const st = stats[+s.getAttribute('data-i')]; if (typeof st.label !== 'object' || st.label == null) st.label = {}; st.label[_editLoc] = s.value; _mark(true); _syncFrame(); }));
+      swrap.querySelectorAll('.s-src').forEach((s) => s.addEventListener('change', () => { stats[+s.getAttribute('data-i')].source = s.value; _mark(true); draw(); _syncFrame(); }));
+      swrap.querySelectorAll('.s-val').forEach((s) => s.addEventListener('input', () => { stats[+s.getAttribute('data-i')].value = s.value; _mark(true); _syncFrame(); }));
+      swrap.querySelectorAll('.s-del').forEach((d) => d.addEventListener('click', () => { stats.splice(+d.getAttribute('data-i'), 1); _mark(true); draw(); _syncFrame(); }));
     };
     draw();
-    host.querySelector('#pages-stats-add').addEventListener('click', () => { stats.push({ label: {}, source: 'custom', value: '' }); _changed(); draw(); renderCanvas(); });
+    host.querySelector('#pages-stats-add').addEventListener('click', () => { stats.push({ label: {}, source: 'custom', value: '' }); _mark(true); draw(); _syncFrame(); });
   }
 }
 
-// ── Preview ─────────────────────────────────────────────────────
-function togglePreview() { _showPreview = !_showPreview; const w = el('pb-preview-wrap'); if (w) w.style.display = _showPreview ? 'block' : 'none'; if (_showPreview) _loadPreview(); }
-function _previewUrl() {
-  if (_slug === 'home') return 'index.html?preview=draft';
-  if (_slug === 'about') return 'about.html?preview=draft';
-  return `page.html?slug=${encodeURIComponent(_slug || 'home')}&preview=draft`;
+// ── Structural ops (all end in _afterMutate → sidebar + frame sync) ─────
+function addSection(widths) {
+  _sections.push(_newSection(widths));
+  _sel = { si: _sections.length - 1, ci: null, wi: null };
+  _side = 'settings';
+  _afterMutate();
 }
-function _loadPreview() { const f = el('pages-preview'); if (!f) return; if (f.src.indexOf(_previewUrl()) < 0) f.src = _previewUrl(); f.onload = () => _pushPreview(); _pushPreview(); }
-function _pushPreview() { if (!_showPreview) return; const f = el('pages-preview'); try { f.contentWindow.postMessage({ type: 'LUMEN_PREVIEW_DOC', source: { sections: _sections } }, '*'); } catch (_) {} }
+function deleteSection(si) { if (!confirm(t('pages.delSectionConfirm', 'Supprimer cette section ?'))) return; _sections.splice(si, 1); _sel = null; _afterMutate(); }
+function duplicateSection(si) { const clone = JSON.parse(JSON.stringify(_sections[si])); clone.id = _id('s'); clone.columns.forEach((c) => { c.id = _id('c'); c.widgets.forEach((w) => w.id = _id('w')); }); _sections.splice(si + 1, 0, clone); _sel = { si: si + 1, ci: null, wi: null }; _afterMutate(); }
+function moveSection(si, dir) { const to = si + dir; if (to < 0 || to >= _sections.length) return; const [s] = _sections.splice(si, 1); _sections.splice(to, 0, s); _sel = { si: to, ci: null, wi: null }; _afterMutate(); }
+function addColumn(si) { const sec = _sections[si]; if (sec.columns.length >= 6) { toast(t('pages.maxCols', 'Maximum 6 colonnes.'), 'warning'); return; } sec.columns.push(_newColumn(Math.max(1, Math.round(12 / (sec.columns.length + 1))))); _rebalance(sec); _afterMutate(); }
+function removeColumn(si, ci) { const sec = _sections[si]; if (sec.columns.length <= 1) return; const [dead] = sec.columns.splice(ci, 1); if (dead.widgets.length && sec.columns[0]) sec.columns[0].widgets.push(...dead.widgets); _rebalance(sec); _sel = { si, ci: null, wi: null }; _afterMutate(); }
+function _rebalance(sec) { const n = sec.columns.length; const base = Math.floor(12 / n); let rem = 12 - base * n; sec.columns.forEach((c) => { c.width = base + (rem-- > 0 ? 1 : 0); }); }
+function duplicateWidget(si, ci, wi) { const col = _sections[si].columns[ci]; const clone = JSON.parse(JSON.stringify(col.widgets[wi])); clone.id = _id('w'); col.widgets.splice(wi + 1, 0, clone); _sel = { si, ci, wi: wi + 1 }; _afterMutate(); }
+function deleteWidget(si, ci, wi) { _sections[si].columns[ci].widgets.splice(wi, 1); _sel = { si, ci, wi: null }; _afterMutate(); }
+function addWidgetToSelection(type) {
+  let si = _sel ? _sel.si : _sections.length - 1;
+  if (si == null || si < 0) { _sections.push(_newSection()); si = _sections.length - 1; }
+  const ci = (_sel && _sel.ci != null) ? _sel.ci : 0;
+  const col = _sections[si].columns[ci] || _sections[si].columns[0];
+  col.widgets.push(_newWidget(type));
+  _sel = { si, ci: _sections[si].columns.indexOf(col), wi: col.widgets.length - 1 };
+  _side = 'settings';
+  _afterMutate();
+}
 
 // ── Page management + persistence ───────────────────────────────
 function _buildPageList() {
@@ -708,6 +639,7 @@ async function newPage() {
   _buildPageList();
   toast(t('pages.created', 'Page créée.'), 'success');
   await selectPage(slug);
+  enterEditor();
 }
 
 async function deletePage() {
@@ -748,6 +680,7 @@ async function revert() {
 }
 
 async function load() {
+  if (!_bound) { window.addEventListener('message', _onMessage); _bound = true; }
   const inst = await apiFetch(`${API_SITE}?action=get&doc=instance`);
   _instance = (inst && typeof inst === 'object') ? inst : {};
   try { _editLoc = (I18n && I18n.getLanguage) ? I18n.getLanguage() : 'en'; } catch (_) { _editLoc = 'en'; }

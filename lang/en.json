@@ -979,7 +979,19 @@
     "fullscreen": "Full screen",
     "exitFullscreen": "Exit",
     "startFromDefault": "Start from a default layout",
-    "builtinEmptyHint": "This page shows its default layout. Build a block version to replace it."
+    "builtinEmptyHint": "This page shows its default layout. Build a block version to replace it.",
+    "launcherSub": "Pick a page and open the visual editor to edit it like a real web page.",
+    "launcherHint": "Click “Edit” to edit this page",
+    "editWith": "Edit with the editor",
+    "editorTitle": "Page editor",
+    "exitEditor": "Exit",
+    "openTab": "Open",
+    "elements": "Elements",
+    "settings": "Settings",
+    "dragOrClick": "Click or drag an element into the page.",
+    "drag": "Move",
+    "emptyTitle": "Blank page",
+    "emptyBody": "Add a section, then drag elements from the left panel."
   },
   "wizard": {
     "title": "Guided setup",

@@ -4,7 +4,7 @@
 
 **De l'image brute du microscope `.ims` à un volume 3D fluide dans le navigateur.**
 
-`version 0.14.0` · `Imaris HDF5 → briques 64³ WebP` · Python (h5py · numpy · scipy · Pillow)
+`version 0.14.1` · `Imaris HDF5 → briques 64³ WebP` · Python (h5py · numpy · scipy · Pillow)
 
 </div>
 
@@ -124,10 +124,11 @@ Cinq scripts s'enchaînent. Chacun fait une chose et la passe au suivant :
   pip install h5py numpy scipy Pillow tqdm
   ```
 
-  (Un [`requirements.txt`](requirements.txt) est fourni pour `pip install -r`. 💡 Ou laissez le lanceur **`run_preprocess.bat`** ([§2.1](#2-exécution)) fournir Python **et** ces dépendances pour vous.)
+  (Un [`requirements.txt`](requirements.txt) est fourni pour `pip install -r` — il liste exactement ces 5 paquets, comme la constante `DEPS` du lanceur. 💡 Ou laissez le lanceur **`run_preprocess.bat`** ([§2.1](#2-exécution)) fournir Python **et** ces dépendances pour vous.)
 
   > ⚠️ `scikit-image` n'est **plus** nécessaire (les imports Otsu/morphologie skimage de l'ancienne version ont été supprimés en v0.13.0). Seul `scipy.ndimage` est utilisé pour la morphologie/le médian.
 
+* **Dépendance optionnelle** : `tifffile` — uniquement pour l'export **OME‑TIFF** du dossier `download/` (option `--with-downloads`, [§2.2](#22-en-ligne-de-commande-cli)). Le lanceur `.bat` l'installe **automatiquement à la demande** si l'option est choisie ; en usage CLI manuel, `pip install tifffile`.
 * **RAM** : l'étape 2 charge **tout le volume d'un canal en `float32`** (`D×H×W×4` octets). Ex. 3789×3789×178 ≈ **10.2 Go/canal**, pic ~32 Go avec masque + blocs + sortie. Prévoir large (machine de référence : 128 Go / 20 cœurs).
 * **CPU** : l'étape 2 (médian) et l'étape 3 (WebP) parallélisent sur `os.cpu_count()` via `ProcessPoolExecutor`. Le résultat est **indépendant** du nombre de cœurs (voir §12).
 
@@ -139,25 +140,26 @@ Deux façons de lancer le pipeline : le **lanceur autonome `.bat`** (zéro insta
 
 ### 2.1. Lanceur autonome `run_preprocess.bat` *(recommandé)*
 
-> **Un seul fichier suffit.** Le `.bat` est **auto‑suffisant** : on peut le copier **seul** sur n'importe quel PC Windows — même **sans Python et sans le dépôt** — et il met tout en place. Les 5 scripts Python du pipeline y sont **embarqués** (encodés en base64) ; s'il n'y a pas de Python, il en **télécharge et installe un, en local**.
+> **Un seul fichier suffit.** Le `.bat` est **auto‑suffisant** : on peut le copier **seul** sur n'importe quel PC Windows — même **sans Python et sans le dépôt** — et il met tout en place. Les **6 scripts** — les 5 du pipeline (`run_preprocess.py` + `1-`→`4-`) plus l'outil optionnel de bundles `download/` (`build_download_bundles.py`) — y sont **embarqués** (encodés en base64) ; s'il n'y a pas de Python, il en **télécharge et installe un, en local**.
 
 **Utilisation : double‑cliquer sur [`run_preprocess.bat`](run_preprocess.bat).** Il déroule **5 étapes** automatiques :
 
 | Étape | Ce qu'il fait |
 |---|---|
-| **[1/5]** Scripts | Extrait les 5 scripts du pipeline embarqués (décodage `certutil`, intégrité vérifiée par **SHA‑256**). S'ils sont **déjà présents** à côté du `.bat`, ils sont **conservés** (on peut donc exécuter une version modifiée). |
+| **[1/5]** Scripts | Extrait les **6 scripts** embarqués (les 5 du pipeline + `build_download_bundles.py`, décodage `certutil`, intégrité vérifiée par **SHA‑256**). S'ils sont **déjà présents** à côté du `.bat`, ils sont **conservés** (on peut donc exécuter une version modifiée). |
 | **[2/5]** Python | Détection en cascade : runtime local `.runtime\python` → Python **système** (`py -3`/`python`/`python3`) → sinon **propose d'installer** un **Python 3.12.8 embarquable** (téléchargé depuis python.org dans `.runtime\python`, avec `pip`). Isolé, **sans droits admin**, supprimable. |
 | **[3/5]** Dépendances | Vérifie `numpy`/`Pillow`/`h5py`/`scipy`/`tqdm` (par import) et **propose de les installer** via `pip`. |
-| **[4/5]** Paramètres | Pose **3 questions** (voir ci‑dessous), affiche un **récapitulatif**, demande confirmation. |
+| **[4/5]** Paramètres | Pose **4 questions** (voir ci‑dessous), affiche un **récapitulatif**, demande confirmation. |
 | **[5/5]** Exécution | Lance le pipeline avec une **interface colorée** et la **progression en temps réel**. `Ctrl+C` demande une **confirmation** avant d'arrêter (arrêt propre — voir « Orchestration interne » plus bas). |
 
-Les **3 questions** de l'étape [4/5] :
+Les **4 questions** de l'étape [4/5] :
 
 | Question | Quoi saisir |
 |---|---|
 | Dossier des `.ims` | Le chemin du dossier d'entrée. Validé : il doit exister, et le **nombre de `.ims`** trouvés est affiché. |
 | Dossier de sortie `DATA_WEB` | **Entrée** ⏎ = valeur par défaut `..\DATA_WEB`. Ou un autre chemin. |
 | Filtre optionnel *(glob)* | Ex. `*E8*` pour ne traiter que certains embryons. **Entrée** ⏎ = tous les fichiers. |
+| Générer aussi `download/` ? | `o` / **N** (défaut : non). Si `o`, `tifffile` est installé au besoin et `--with-downloads` est passé au pipeline (archive `_web.zip`, `.ims` original, OME‑TIFF, MIP par canal, `README.txt`). **Lourd** : relit le `.ims`. |
 
 **Modes en ligne de commande** (optionnels) :
 
@@ -177,7 +179,7 @@ run_preprocess.bat --help
 Pour scripter, automatiser, ou tourner sous Linux/macOS. C'est exactement ce que le `.bat` appelle en interne :
 
 ```bash
-python run_preprocess.py --input <dossier_des_ims> --output <DATA_WEB> [--only "<glob>"]
+python run_preprocess.py --input <dossier_des_ims> --output <DATA_WEB> [--only "<glob>"] [--with-downloads]
 ```
 
 | Argument | Obligatoire | Rôle |
@@ -185,6 +187,7 @@ python run_preprocess.py --input <dossier_des_ims> --output <DATA_WEB> [--only "
 | `--input`  | oui | Dossier contenant un ou plusieurs `.ims` (recherche **non récursive** : `input_dir.glob("*.ims")`). |
 | `--output` | oui | Racine `DATA_WEB` de la plateforme. La sortie ira dans `<output>/fixed/<nom_du_ims_sans_extension>/`. |
 | `--only`   | non | Filtre `fnmatch` sur le **nom de fichier** (ex. `"*Em7*"` ou le nom exact). Sans lui : tous les `.ims`. |
+| `--with-downloads` | non | Après chaque dataset, construit aussi son dossier `download/` via `tools/build_download_bundles.py` (archive `_web.zip`, `.ims` original en hardlink, OME‑TIFF calibré, MIP PNG par canal, `README.txt`). Étape lourde : relit le `.ims`. Nécessite `tifffile`. |
 
 Exemple réel (1 dataset) :
 
@@ -202,7 +205,7 @@ python run_preprocess.py \
 * Le **nom du dataset** = `Path(ims).stem` (nom du fichier sans `.ims`).
 * `temp_dir = <output>/.temp_preprocess_<nom>` : recréé à neuf à chaque run, **supprimé en fin de traitement** (même en cas d'erreur).
 * `dataset_output_dir = <output>/fixed/<nom>` : si un `bricks/` existe déjà, il est supprimé avant de régénérer.
-* Ordre des étapes : **1 → 2 → vignette → 3 → 4**. Chaque étape tourne dans un **sous‑processus isolé** (`subprocess.Popen`, nouveau groupe de processus : `CREATE_NEW_PROCESS_GROUP` Windows / `start_new_session` POSIX).
+* Ordre des étapes : **1 → 2 → vignette → 3 → 4**, puis — **uniquement si `--with-downloads`** — `build_download_bundles.py` **après l'étape 4** (pour que `metadata.json` existe déjà). Chaque étape tourne dans un **sous‑processus isolé** (`subprocess.Popen`, nouveau groupe de processus : `CREATE_NEW_PROCESS_GROUP` Windows / `start_new_session` POSIX).
 * **Arrêt propre sur `Ctrl+C`** : l'orchestrateur intercepte `SIGINT` et **demande confirmation**. *Refus* → le traitement **reprend** sans perte (l'étape en cours n'a pas reçu le signal) ; *confirmation* → l'étape **et tout son pool de workers** sont arrêtés (`taskkill /F /T` / `killpg`), les `.temp_preprocess_*` nettoyés, sortie en code **130**.
 
 ### 2.3. Régénérer le lanceur (`build_launcher.py`)
@@ -213,8 +216,8 @@ Le `.bat` est **généré**, jamais écrit à la main. Après toute modification
 python build_launcher.py
 ```
 
-* [`build_launcher.py`](build_launcher.py) lit le template [`launcher_template.bat.in`](launcher_template.bat.in), y injecte la configuration (la version est lue dans `run_preprocess.py:__version__`, la version de Python embarquable, la liste des scripts) et **ré‑embarque** les 5 scripts en base64 (blocs `#<index>#…`, 76 caractères/ligne).
-* L'**ordre d'embarquement est figé** (`run_preprocess.py` = index 0, puis `1-`→`4-`) : le `.bat` extrait le bloc *N* pour le *N*ᵉ nom de sa liste interne `SCRIPTS`.
+* [`build_launcher.py`](build_launcher.py) lit le template [`launcher_template.bat.in`](launcher_template.bat.in), y injecte la configuration (la version est lue dans `run_preprocess.py:__version__`, la version de Python embarquable, la liste des scripts) et **ré‑embarque** les **6 scripts** en base64 (blocs `#<index>#…`, 76 caractères/ligne).
+* L'**ordre d'embarquement est figé** (`run_preprocess.py` = index 0, puis `1-`→`4-` en index 1‑4, et `build_download_bundles.py` en **index 5**, tiré de `../tools/`) : le `.bat` extrait le bloc *N* pour le *N*ᵉ nom de sa liste interne.
 * Sortie en **ASCII + CRLF** (ce que `cmd.exe` préfère).
 
 ---
@@ -257,14 +260,15 @@ Détails importants :
 | Fichier | Rôle | Entrée | Sortie |
 |---|---|---|---|
 | [`run_preprocess.bat`](run_preprocess.bat) | **Lanceur autonome** Windows (scripts embarqués, Python local au besoin, install deps, saisie guidée). **Généré — ne pas éditer.** | double‑clic | extrait + appelle `run_preprocess.py` |
-| [`build_launcher.py`](build_launcher.py) | **Générateur** du `.bat` (ré‑embarque les scripts en base64, injecte la version). | les 5 `.py` + le template | `run_preprocess.bat` |
+| [`build_launcher.py`](build_launcher.py) | **Générateur** du `.bat` (ré‑embarque les scripts en base64, injecte la version). | les 5 `.py` + `../tools/build_download_bundles.py` + le template | `run_preprocess.bat` |
 | [`launcher_template.bat.in`](launcher_template.bat.in) | Template du lanceur (logique batch + emplacements `@@@…@@@`). | — | — |
-| [`run_preprocess.py`](run_preprocess.py) | Orchestrateur + vignette. `__version__` du pipeline. | `--input`, `--output`, `--only` | appelle 1→4 ; écrit `thumbnail.webp` |
+| [`run_preprocess.py`](run_preprocess.py) | Orchestrateur + vignette. `__version__` du pipeline. | `--input`, `--output`, `--only`, `--with-downloads` | appelle 1→4 (+ download optionnel) ; écrit `thumbnail.webp` |
 | [`requirements.txt`](requirements.txt) | Dépendances Python épinglées (pour `pip install -r`, usage manuel). | — | — |
 | [`1-ims_metadata.py`](1-ims_metadata.py) | Lit les attributs HDF5. | `<ims>`, `<out.json>` | `meta.json` |
 | [`2-image_processor.py`](2-image_processor.py) | Débruitage + normalisation 8‑bits + pyramide LOD. | `<ims>`, `<meta.json>`, `<temp>` | `temp/t*_c*_lod*.bin`, `temp/processing_meta.json` |
 | [`3-chunk_packer.py`](3-chunk_packer.py) | Découpe 64³, mosaïque, WebP lossless, packs. | `<temp>`, `<out_dir>` | `out/bricks/manifest.json`, `out/bricks/lod*/c*/pack_*.bin` |
 | [`4-catalog_generator.py`](4-catalog_generator.py) | Histogrammes + `metadata.json`. | `<temp>`, `<out_dir>` | `out/metadata.json` (+ histogrammes injectés dans `manifest.json`) |
+| [`../tools/build_download_bundles.py`](../tools/build_download_bundles.py) | **Optionnel** (`--with-downloads`) — construit le dossier `download/` d'un dataset. Embarqué à l'**index 5** du lanceur ; résolu par `run_preprocess.py` dans `../tools/` ou à côté de lui. | `--data-web`, `--raw-dir`, `--datasets` | `fixed/<nom>/download/` (`_web.zip`, `.ims`, OME‑TIFF, MIP, `README.txt`) |
 | [`changelog/`](changelog/) | Historique versionné de l'outil. | — | — |
 
 ---
@@ -445,11 +449,13 @@ Arborescence finale d'un dataset :
 DATA_WEB/fixed/<nom>/
 ├── metadata.json          # config dataset (dims, voxels, canaux, volumeSources)
 ├── thumbnail.webp         # vignette MIP fausses couleurs 512²
-└── bricks/
-    ├── manifest.json      # index des briques + packs + histogrammes
-    ├── lod0/c0/pack_00.bin, pack_01.bin, …
-    ├── lod0/c1/…  …  (un sous-dossier par canal)
-    ├── lod1/…  lod2/…  lod3/…  lod4/…
+├── bricks/
+│   ├── manifest.json      # index des briques + packs + histogrammes
+│   ├── lod0/c0/pack_00.bin, pack_01.bin, …
+│   ├── lod0/c1/…  …  (un sous-dossier par canal)
+│   └── lod1/…  lod2/…  lod3/…  lod4/…
+└── download/              # OPTIONNEL (--with-downloads) : _web.zip, .ims original,
+                           #   OME-TIFF calibré, MIP PNG par canal, README.txt
 ```
 
 ### 10.1. `metadata.json`
@@ -606,5 +612,5 @@ Pour réimplémenter et obtenir le **même résultat** :
 ---
 
 <div align="center">
-<sub>IRIBHM · ULB — Lumen3D Microscopy Platform · pipeline de preprocessing v0.14.0</sub>
+<sub>IRIBHM · ULB — Lumen3D Microscopy Platform · pipeline de preprocessing v0.14.1</sub>
 </div>

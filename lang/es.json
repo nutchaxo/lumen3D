@@ -979,7 +979,19 @@
     "fullscreen": "Pantalla completa",
     "exitFullscreen": "Salir",
     "startFromDefault": "Empezar con un diseño predeterminado",
-    "builtinEmptyHint": "Esta página muestra su diseño predeterminado. Crea una versión por bloques para reemplazarla."
+    "builtinEmptyHint": "Esta página muestra su diseño predeterminado. Crea una versión por bloques para reemplazarla.",
+    "launcherSub": "Elige una página y abre el editor visual para editarla como una página web real.",
+    "launcherHint": "Haz clic en «Editar» para editar esta página",
+    "editWith": "Editar con el editor",
+    "editorTitle": "Editor de página",
+    "exitEditor": "Salir",
+    "openTab": "Abrir",
+    "elements": "Elementos",
+    "settings": "Ajustes",
+    "dragOrClick": "Haz clic o arrastra un elemento a la página.",
+    "drag": "Mover",
+    "emptyTitle": "Página en blanco",
+    "emptyBody": "Añade una sección y luego arrastra elementos desde el panel izquierdo."
   },
   "wizard": {
     "title": "Instalación guiada",

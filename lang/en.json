@@ -975,7 +975,11 @@
     "showInMenu": "Visible in the menu",
     "builtinNavHint": "Built-in page visibility is set in the Identity tab (Navigation).",
     "pageShown": "Page shown in the menu.",
-    "pageHidden": "Page hidden from the menu."
+    "pageHidden": "Page hidden from the menu.",
+    "fullscreen": "Full screen",
+    "exitFullscreen": "Exit",
+    "startFromDefault": "Start from a default layout",
+    "builtinEmptyHint": "This page shows its default layout. Build a block version to replace it."
   },
   "wizard": {
     "title": "Guided setup",

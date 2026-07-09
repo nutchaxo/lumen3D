@@ -132,6 +132,12 @@ function lumen_serve_html(string $root, string $rel): bool {
     $nonce = lumen_csp_nonce();
     // White-label head/brand injection ({{SITE:…}}), then the per-request nonce.
     $body = lumen_apply_site($html);
+    // Cache-bust config/theme.css by its mtime so an operator theme change appears
+    // immediately even though CSS is long-cached (.htaccess). The URL only changes
+    // when theme.css is regenerated (theme editor / wizard) → cache stays effective.
+    $themeCss = dirname(__DIR__) . '/config/theme.css';
+    $tv = is_file($themeCss) ? (int)@filemtime($themeCss) : 0;
+    $body = str_replace('href="config/theme.css"', 'href="config/theme.css?v=' . $tv . '"', $body);
     $body = str_replace('{{CSP_NONCE}}', $nonce, $body);
 
     header('Content-Type: text/html; charset=utf-8');

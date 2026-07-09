@@ -651,7 +651,15 @@ function mkt_install(string $catalogId, string $password): array {
     if (!$c) return [409, ['error' => 'incompatible', 'detail' => $cr]];
     $assetUrl = $entry['assetUrl'] ?? null; $sumsUrl = $entry['sumsUrl'] ?? null; $sigUrl = $entry['sigUrl'] ?? null;
     if (!$assetUrl) return [400, ['error' => 'no_asset']];
-    $tmp = sys_get_temp_dir() . '/mkt-' . bin2hex(random_bytes(6));
+    // Extract UNDER the modules dir (same filesystem as the final target). The final
+    // step is an atomic rename() into js/modules/<placement>/<id>; if the temp lived in
+    // sys_get_temp_dir() (/tmp), that rename fails with EXDEV on the MANY shared hosts
+    // where /tmp is a different mount than the web root — silently leaving an empty
+    // placement folder and no installed plugin. Keeping the temp on the same volume
+    // makes the rename same-filesystem (matches the Python twin's tempfile.mkdtemp(dir=MODULES_DIR)).
+    $modBase = modules_dir();
+    if (!is_dir($modBase) && !@mkdir($modBase, 0755, true) && !is_dir($modBase)) return [500, ['error' => 'install_failed', 'detail' => 'modules_dir']];
+    $tmp = $modBase . '/.mkt-' . bin2hex(random_bytes(6));
     @mkdir($tmp, 0755, true);
     $zipData = mkt_fetch_bytes($assetUrl, MARKETPLACE_MAX_ZIP);
     if ($zipData === null) { mkt_rmrf($tmp); return [502, ['error' => 'download_failed']]; }

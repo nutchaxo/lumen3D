@@ -33,6 +33,8 @@ ROOT_FILES = (
     "admpan.html",
     "about.html",
     "widgets.html",
+    "legal.html",   # legal notices page (footer link) — was missing → 404
+    "page.html",    # custom-page host (page.html?slug=…) for the page builder — was missing → 404
     "dev_server.py",
     "fast_server.py",
     "ed25519_pure.py",  # vendored release-signature verifier (updater authenticity)

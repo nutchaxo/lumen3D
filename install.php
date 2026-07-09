@@ -1420,6 +1420,8 @@ const DICT = {
     link_admin: "Configurer la plateforme", link_admin_d: "Créez votre compte + personnalisez (assistant)",
     done_delete: "Recommandation : supprimez install.php maintenant. Il refuse désormais de se réexécuter, mais un fichier d'installation n'a plus sa place sur un serveur en production.",
     done_updates: "Les mises à jour futures se font depuis le panneau d'administration (onglet Mises à jour).",
+    done_redirect: "Redirection automatique vers la configuration (compte + identité + plugins)…",
+    btn_gosetup: "Aller à la configuration",
     btn_selfdelete: "Supprimer install.php",
     deleted_title: "install.php supprimé",
     deleted_text: "L'installateur s'est supprimé du serveur. Bonne exploration !",
@@ -1525,6 +1527,8 @@ const DICT = {
     link_admin: "Set up the platform", link_admin_d: "Create your account + customize (wizard)",
     done_delete: "Recommendation: delete install.php now. It refuses to run again, but an installer file has no place on a production server.",
     done_updates: "Future updates are handled from the admin panel (Updates tab).",
+    done_redirect: "Redirecting to setup (account + identity + plugins)…",
+    btn_gosetup: "Go to setup",
     btn_selfdelete: "Delete install.php",
     deleted_title: "install.php deleted",
     deleted_text: "The installer removed itself from the server. Happy exploring!",
@@ -1915,15 +1919,18 @@ function renderDone(version) {
     el('h2', { class: 'center', text: t('done_title') }),
     el('p', { class: 'sub center', text: t('done_sub', { v: version ? 'v' + version : '' }) }),
     warnBox,
-    el('div', { class: 'final-links' }, [
-      el('a', { href: 'admpan.html' }, [el('span', { text: t('link_admin'), style: 'display:block' }), el('span', { text: t('link_admin_d') })])
+    el('p', { class: 'sub center', text: t('done_redirect') }),
+    el('div', { class: 'actions' }, [
+      el('a', { class: 'btn btn-primary', href: 'admpan.html', text: t('btn_gosetup') })
     ]),
     banner('info', 'done_delete'),
-    el('p', { class: 'sub', text: t('done_updates') }),
     el('div', { class: 'actions' }, [
-      el('button', { class: 'btn btn-danger', type: 'button', text: t('btn_selfdelete'), onclick: selfDelete })
+      el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: t('btn_selfdelete'), onclick: selfDelete })
     ])
   );
+  // The home page is blank until the operator completes the admin setup wizard, so
+  // send them straight there. (A manual button is shown too, in case JS nav is blocked.)
+  try { setTimeout(function () { location.href = 'admpan.html'; }, 3000); } catch (e) {}
 }
 function renderLocked() {
   currentRender = renderLocked;
@@ -1933,7 +1940,6 @@ function renderLocked() {
     el('p', { class: 'sub', text: t(BOOT.lockedReason === 'lock' ? 'locked_text_lock' : 'locked_text_credential') }),
     banner('info', 'locked_hint'),
     BOOT.hasIndex ? el('div', { class: 'final-links' }, [
-      el('a', { href: 'index.html' }, [el('span', { text: t('link_home'), style: 'display:block' }), el('span', { text: t('link_home_d') })]),
       el('a', { href: 'admpan.html' }, [el('span', { text: t('link_admin'), style: 'display:block' }), el('span', { text: t('link_admin_d') })])
     ]) : null,
     el('div', { class: 'actions' }, [
@@ -1950,7 +1956,7 @@ async function selfDelete() {
       el('h2', { class: 'center', text: t('deleted_title') }),
       el('p', { class: 'sub center', text: t('deleted_text') }),
       el('div', { class: 'final-links' }, [
-        el('a', { href: 'index.html' }, [el('span', { text: t('link_home'), style: 'display:block' }), el('span', { text: t('link_home_d') })])
+        el('a', { href: 'admpan.html' }, [el('span', { text: t('link_admin'), style: 'display:block' }), el('span', { text: t('link_admin_d') })])
       ])
     );
   } catch (err) {

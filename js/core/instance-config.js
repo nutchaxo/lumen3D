@@ -216,15 +216,21 @@ const InstanceConfig = (() => {
         a.textContent = _localized(pg.label) || pg.slug;
         container.appendChild(a);
       });
+    });
+
+    // Legal notices live in the FOOTER (not the header nav). Inject / remove a
+    // Legal link in every .footer-links when nav.showLegal is on. Idempotent
+    // (tagged links are cleared and re-appended, e.g. after a language switch).
+    let legalLabel = 'Legal';
+    try { if (typeof I18n !== 'undefined' && I18n.t) { const v = I18n.t('legal.pageTitle'); if (v && v !== 'legal.pageTitle') legalLabel = v; } } catch (_) {}
+    root.querySelectorAll('.footer-links').forEach(fl => {
+      fl.querySelectorAll('[data-instance-legal]').forEach(e => e.remove());
       if (nav.showLegal) {
         const a = document.createElement('a');
-        a.className = 'navbar-link';
-        a.setAttribute('data-instance-navlink', '');
+        a.setAttribute('data-instance-legal', '');
         a.href = 'legal.html';
-        let label = 'Legal';
-        try { if (typeof I18n !== 'undefined' && I18n.t) { const v = I18n.t('legal.pageTitle'); if (v && v !== 'legal.pageTitle') label = v; } } catch (_) {}
-        a.textContent = label;
-        container.appendChild(a);
+        a.textContent = legalLabel;
+        fl.appendChild(a);
       }
     });
   }

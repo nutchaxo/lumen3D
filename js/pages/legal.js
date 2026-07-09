@@ -59,8 +59,18 @@
     if (typeof InstanceConfig !== 'undefined') { try { InstanceConfig.applyHead(); InstanceConfig.applyDom(); } catch (_) {} }
 
     try {
+      let d = null;
       const resp = await fetch('./config/legal.json', { cache: 'no-store' });
-      if (resp.ok) { const d = await resp.json(); if (d && typeof d === 'object') _legal = d; }
+      if (resp.ok) d = await resp.json();
+      // Fresh install (no operator legal published yet) → show the shipped neutral
+      // default templates so the page is useful instead of blank.
+      if (!d || !Array.isArray(d.sections) || !d.sections.length) {
+        try {
+          const r2 = await fetch('./config/defaults/neutral/legal.json', { cache: 'no-store' });
+          if (r2.ok) { const dd = await r2.json(); if (dd && Array.isArray(dd.sections) && dd.sections.length) d = dd; }
+        } catch (_) {}
+      }
+      if (d && typeof d === 'object') _legal = d;
     } catch (_) { /* no legal content yet */ }
     renderSections();
 

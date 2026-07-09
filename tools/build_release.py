@@ -160,6 +160,79 @@ def write_zip(zip_path, entries):
             zf.writestr(info, data)
 
 
+# ── Per-page JS bundling (request-count reduction) ──────────────────────────
+# The platform ships as ~25-35 separate classic <script> files per page (no dev
+# bundler by design). On hosts with aggressive per-IP request rate limiting that
+# burst returns HTTP 429 and the page's JS never loads (e.g. the viewer stuck on
+# "Loading dataset"). At RELEASE time only, we concatenate each classic page's
+# LOCAL app scripts (js/… except js/vendor/…) into a single js/bundle/<page>.js and
+# rewrite the page to load that one file — cutting ~35 requests to ~3 (bundle + the
+# shared vendor libs). This changes nothing at dev time (the repo keeps separate
+# files) and preserves semantics: top-level `const` in a classic script lands in the
+# shared global lexical scope whether the scripts are separate or concatenated, and
+# the 3 nonce-reading scripts (colorblind/plugin-registry/plugin-sandbox) capture
+# document.currentScript.nonce — so the bundle <script> carries nonce="{{CSP_NONCE}}".
+# admpan.html is EXCLUDED (its ESM module graph cannot be concatenated).
+BUNDLE_PAGES = (
+    "index.html", "explorer.html", "viewer.html", "compare.html",
+    "tracking.html", "about.html", "legal.html", "page.html", "widgets.html",
+)
+_SCRIPT_TAG_RE = re.compile(
+    r'[ \t]*<script\b(?P<attrs>[^>]*?)\bsrc="(?P<src>[^"]+)"(?P<rest>[^>]*)>\s*</script>[ \t]*\n?',
+    re.IGNORECASE,
+)
+
+
+def bundle_pages(by_name):
+    """Rewrite each classic page to load one concatenated bundle instead of many
+    <script> tags. Mutates and returns the {arcname: bytes} map. Vendor libs and
+    module scripts are left untouched; a page is skipped if anything looks unsafe."""
+    for page in BUNDLE_PAGES:
+        html_bytes = by_name.get(page)
+        if html_bytes is None:
+            continue
+        text = html_bytes.decode("utf-8")
+        local = []   # (match, arcname) for bundle-able local scripts, in order
+        for m in _SCRIPT_TAG_RE.finditer(text):
+            tag = m.group(0)
+            if "type=module" in tag.replace(" ", "").replace('"', "").lower():
+                continue  # never concatenate ESM
+            src = m.group("src")
+            arc = src.split("?", 1)[0]
+            if arc.startswith("js/") and not arc.startswith("js/vendor/"):
+                local.append((m, arc))
+        if len(local) < 3:
+            continue  # not worth a bundle
+        parts, ok = [], True
+        for _, arc in local:
+            data = by_name.get(arc)
+            if data is None:
+                ok = False
+                break
+            parts.append(("\n/* " + arc + " */\n").encode("utf-8") + data)
+        if not ok:
+            continue
+        bundle = b"\n;\n".join(parts)
+        digest8 = sha256_hex(bundle)[:10]
+        bundle_arc = "js/bundle/" + page[:-5] + ".js"
+        by_name[bundle_arc] = bundle
+        # Rebuild the HTML: drop every bundled tag, insert one bundle tag where the
+        # first bundled script was (after the vendor libs, preserving load order).
+        bundle_tag = ('<script src="' + bundle_arc + "?v=" + digest8
+                      + '" nonce="{{CSP_NONCE}}"></script>\n')
+        pieces, idx, inserted = [], 0, False
+        for m, _ in local:
+            pieces.append(text[idx:m.start()])
+            if not inserted:
+                pieces.append(bundle_tag)
+                inserted = True
+            idx = m.end()
+        pieces.append(text[idx:])
+        by_name[page] = "".join(pieces).encode("utf-8")
+        print(f"    bundled {page}: {len(local)} scripts -> 1 ({len(bundle)} bytes)")
+    return by_name
+
+
 def main():
     parser = argparse.ArgumentParser(description="Build the Lumen3D web release zip.")
     parser.add_argument("--version", required=True, help="platform version X.Y.Z")
@@ -181,12 +254,14 @@ def main():
 
     files = collect_files(REPO_ROOT)
 
-    entries = []
-    file_hashes = {}
-    for arcname, path in files:
-        data = path.read_bytes()
-        file_hashes[arcname] = sha256_hex(data)
-        entries.append((arcname, data))
+    # Load every file into memory, then bundle each classic page's scripts (this
+    # rewrites the page HTML and adds js/bundle/<page>.js) BEFORE hashing, so
+    # version.json covers the shipped (bundled) bytes.
+    by_name = {arcname: path.read_bytes() for arcname, path in files}
+    bundle_pages(by_name)
+
+    file_hashes = {arc: sha256_hex(data) for arc, data in by_name.items()}
+    entries = list(by_name.items())
     entries.append(
         (
             "version.json",

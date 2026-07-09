@@ -334,7 +334,7 @@ const PluginSandbox = (() => {
   // Whitelisted read projections — a fresh plain object, never a live THREE object
   // or the raw ctx return (which could carry callbacks/DOM → clone error / leak).
   function _projectInfo() {
-    const ds = (_hostCtx.dataset && _hostCtx.dataset.meta && _hostCtx.dataset.meta()) || {};
+    const ds = (_hostCtx && _hostCtx.dataset && _hostCtx.dataset.meta && _hostCtx.dataset.meta()) || {};
     return {
       datasetId: String(ds.id || ''), name: String(ds.name || ''),
       dims: Array.isArray(ds.dimensions) ? ds.dimensions.map(Number) : null,
@@ -343,7 +343,7 @@ const PluginSandbox = (() => {
     };
   }
   function _projectChannels() {
-    const g = _hostCtx.channels && _hostCtx.channels.getState;
+    const g = _hostCtx && _hostCtx.channels && _hostCtx.channels.getState;
     const raw = g ? g() : [];
     return (Array.isArray(raw) ? raw : []).map((c, i) => ({
       index: i, color: String(c && c.color || ''), gamma: Number(c && c.gamma) || 1,
@@ -357,7 +357,10 @@ const PluginSandbox = (() => {
     entry.subscribed.add(topic);
   }
   function emit(topic, payload) {
-    if (!EVENT_TOPICS.has(topic)) return;
+    // Nothing to fan out before a host context is bound (bindContext) or when no
+    // sandboxed plugin is listening — and projecting without _hostCtx would throw
+    // (a component can emit 'channels-updated' during boot before bindContext runs).
+    if (!EVENT_TOPICS.has(topic) || !_hostCtx || _hosts.size === 0) return;
     const safe = _projectEvent(topic, payload);
     for (const entry of _hosts.values()) {
       if (entry.subscribed.has(topic)) _send(entry, 'evt', topic, safe);

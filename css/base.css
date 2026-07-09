@@ -162,7 +162,8 @@ input, select, textarea {
 select {
   color: var(--text-primary);
   background-color: var(--bg-surface);
-  color-scheme: dark light;
+  /* color-scheme is set on :root per app theme (themes.css) — do NOT force
+     `dark light` here or the native popup follows the OS pref, not the app. */
   -webkit-appearance: none;
   -moz-appearance: none;
   appearance: none;

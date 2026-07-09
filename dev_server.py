@@ -3089,6 +3089,14 @@ class AdminHandler(http.server.SimpleHTTPRequestHandler):
         # White-label head/brand injection: resolve {{SITE:…}} from instance.json
         # (SEO-correct, flash-free), then the per-request CSP nonce.
         doc = _apply_site_placeholders(html)
+        # Cache-bust config/theme.css by its mtime so an operator theme change is
+        # picked up immediately even though CSS is otherwise long-cached (.htaccess).
+        # The URL changes only when theme.css is regenerated → best of both worlds.
+        try:
+            _tv = int(THEME_CSS_FILE.stat().st_mtime) if THEME_CSS_FILE.exists() else 0
+        except OSError:
+            _tv = 0
+        doc = doc.replace('href="config/theme.css"', f'href="config/theme.css?v={_tv}"')
         body = doc.replace("{{CSP_NONCE}}", nonce).encode("utf-8")
         self.send_response(200)
         self.send_header("Content-Type", "text/html; charset=utf-8")

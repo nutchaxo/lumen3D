@@ -975,7 +975,11 @@
     "showInMenu": "Visible dans le menu",
     "builtinNavHint": "La visibilité des pages intégrées se règle dans l'onglet Identité (Navigation).",
     "pageShown": "Page affichée dans le menu.",
-    "pageHidden": "Page masquée du menu."
+    "pageHidden": "Page masquée du menu.",
+    "fullscreen": "Plein écran",
+    "exitFullscreen": "Quitter",
+    "startFromDefault": "Partir d'une mise en page par défaut",
+    "builtinEmptyHint": "Cette page affiche sa mise en page par défaut. Créez une version par blocs pour la remplacer."
   },
   "wizard": {
     "title": "Installation guidée",

@@ -42,7 +42,40 @@ let _sel = null;                    // { si, ci, wi } — ci/wi null = column/se
 let _editLoc = 'en';
 let _dirty = false;
 let _showPreview = false;
+let _fullscreen = false;            // full-viewport editing mode
 let _dropHint = null;               // { si, ci } column currently under a drag
+
+// Starter layouts for the built-in pages (home/about) — their real default is
+// static HTML (index/about.html), so there are no blocks to load; this gives the
+// operator an editable starting point instead of a blank "Empty page".
+function _defaultTemplate(slug) {
+  if (slug === 'home') {
+    return _sanitizeSections([
+      { props: { fullWidth: false, padY: 64, maxWidth: 1080, gap: 24, vAlign: 'stretch', bg: '' }, columns: [{ width: 12, widgets: [
+        { type: 'hero', text: { en: 'Welcome', fr: 'Bienvenue', es: 'Bienvenido' }, props: { subtitle: { en: 'Explore your 3D imaging datasets in the browser.', fr: 'Explorez vos jeux de données d\'imagerie 3D dans le navigateur.', es: 'Explora tus conjuntos de datos de imagen 3D en el navegador.' }, bg: '', cta: { text: { en: 'Explore data', fr: 'Explorer les données', es: 'Explorar datos' }, href: 'explorer.html' } } },
+      ] }] },
+      { props: { fullWidth: false, padY: 32, maxWidth: 1080, gap: 24, vAlign: 'stretch', bg: '' }, columns: [{ width: 12, widgets: [
+        { type: 'heading', text: { en: 'Latest datasets', fr: 'Derniers jeux de données', es: 'Últimos conjuntos de datos' }, props: { level: '2', align: 'center' } },
+        { type: 'latest-datasets', props: { count: 4 } },
+      ] }] },
+    ]);
+  }
+  if (slug === 'about') {
+    return _sanitizeSections([
+      { props: { fullWidth: false, padY: 48, maxWidth: 840, gap: 24, vAlign: 'stretch', bg: '' }, columns: [{ width: 12, widgets: [
+        { type: 'heading', text: { en: 'About', fr: 'À propos', es: 'Acerca de' }, props: { level: '1', align: 'left' } },
+        { type: 'richtext', text: { en: 'Describe your platform, your team, and how to get in touch.\n\nEdit this text, add sections and widgets, then publish.', fr: 'Décrivez votre plateforme, votre équipe et comment vous contacter.\n\nModifiez ce texte, ajoutez des sections et des widgets, puis publiez.', es: 'Describe tu plataforma, tu equipo y cómo contactar.\n\nEdita este texto, añade secciones y widgets, y publica.' }, props: { align: 'left' } },
+      ] }] },
+    ]);
+  }
+  return [];
+}
+function loadDefaultTemplate() {
+  const tpl = _defaultTemplate(_slug);
+  if (!tpl.length) return;
+  _sections = tpl; _sel = { si: 0, ci: null, wi: null };
+  _changed(); renderCanvas(); renderSettings();
+}
 
 const _id = (p) => p + Math.random().toString(36).slice(2, 9);
 function _mark(on) { _dirty = on; setUnsaved(on); const s = el('pages-save'); if (s) s.disabled = !on; }
@@ -166,6 +199,7 @@ function render() {
         <button class="adm-btn adm-btn-ghost adm-btn-sm" id="pages-delete" title="${escHtml(t('pages.delete', 'Supprimer la page'))}"><i data-lucide="trash-2"></i></button>
         <label style="display:flex;gap:6px;align-items:center;font-size:13px">${escHtml(t('pages.lang', 'Langue'))}<select class="adm-field-input" id="pages-loc" style="width:auto">${locOpts}</select></label>
         <button class="adm-btn adm-btn-ghost adm-btn-sm" id="pages-preview-toggle"><i data-lucide="eye"></i> ${escHtml(t('pages.preview', 'Aperçu'))}</button>
+        <button class="adm-btn adm-btn-ghost adm-btn-sm" id="pages-fullscreen"><i data-lucide="${_fullscreen ? 'minimize-2' : 'maximize-2'}"></i> ${escHtml(_fullscreen ? t('pages.exitFullscreen', 'Quitter') : t('pages.fullscreen', 'Plein écran'))}</button>
         <button class="adm-btn adm-btn-ghost adm-btn-sm" id="pages-revert"><i data-lucide="rotate-ccw"></i> ${escHtml(t('pages.revert', 'Défaut'))}</button>
         <button class="adm-btn adm-btn-ghost adm-btn-sm" id="pages-save" disabled><i data-lucide="save"></i> ${escHtml(t('pages.saveDraft', 'Brouillon'))}</button>
         <button class="adm-btn adm-btn-accent adm-btn-sm" id="pages-publish"><i data-lucide="upload"></i> ${escHtml(t('pages.publish', 'Publier'))}</button>
@@ -202,6 +236,7 @@ function render() {
   el('pages-publish').addEventListener('click', publish);
   el('pages-revert').addEventListener('click', revert);
   el('pages-preview-toggle').addEventListener('click', togglePreview);
+  el('pages-fullscreen').addEventListener('click', toggleFullscreen);
   el('pb-add-section').addEventListener('click', () => addSection());
 
   // Palette drag source (also click = append to the selected/last column).
@@ -214,7 +249,19 @@ function render() {
   renderCanvas();
   renderSettings();
   if (_showPreview) _loadPreview();
+  _applyFullscreen();
   refreshIcons(root);
+}
+
+function toggleFullscreen() { _fullscreen = !_fullscreen; render(); }
+function _applyFullscreen() {
+  const root = el('pages-root');
+  if (!root) return;
+  // Full-viewport editing: the editor covers the whole screen so the canvas gets
+  // real page width (Elementor-style), not a cramped panel inside the admin shell.
+  root.style.cssText = _fullscreen
+    ? 'position:fixed;inset:0;z-index:2000;background:var(--bg-base,#0d0d1a);padding:16px 20px;overflow:auto'
+    : '';
 }
 
 // ── Canvas (WYSIWYG) ────────────────────────────────────────────
@@ -223,11 +270,27 @@ function renderCanvas() {
   if (!canvas) return;
   canvas.textContent = '';
   if (!_sections.length) {
+    const wrap = document.createElement('div');
+    wrap.style.cssText = 'text-align:center;padding:40px 0';
     const empty = document.createElement('p');
     empty.className = 'adm-page-sub';
-    empty.style.cssText = 'text-align:center;padding:40px 0';
     empty.textContent = t('pages.emptyCanvas', 'Page vide — ajoutez une section pour commencer.');
-    canvas.appendChild(empty);
+    wrap.appendChild(empty);
+    // Built-in pages (home/about) render static HTML by default (nothing to load),
+    // so offer a starter layout the operator can edit + publish to override it.
+    if (SPECIAL.some((s) => s.slug === _slug) && _defaultTemplate(_slug).length) {
+      const hint = document.createElement('p');
+      hint.className = 'adm-page-sub';
+      hint.style.cssText = 'font-size:12px;opacity:.7;margin:2px 0 12px';
+      hint.textContent = t('pages.builtinEmptyHint', 'Cette page affiche sa mise en page par défaut. Créez une version par blocs pour la remplacer.');
+      wrap.appendChild(hint);
+      const btn = document.createElement('button');
+      btn.className = 'adm-btn adm-btn-accent adm-btn-sm';
+      btn.innerHTML = '<i data-lucide="wand-2"></i> ' + escHtml(t('pages.startFromDefault', 'Partir d\'une mise en page par défaut'));
+      btn.addEventListener('click', loadDefaultTemplate);
+      wrap.appendChild(btn);
+    }
+    canvas.appendChild(wrap);
     return;
   }
   _sections.forEach((sec, si) => canvas.appendChild(_sectionEl(sec, si)));

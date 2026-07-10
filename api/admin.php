@@ -17,6 +17,7 @@
 declare(strict_types=1);
 require_once __DIR__ . '/_admin_lib.php';
 
+admin_update_finish_pending();   // no-op unless a prior update parked busy files
 admin_session_start();
 if (!admin_is_auth()) admin_json_out(['error' => 'Not authenticated'], 401);
 
@@ -202,11 +203,14 @@ switch ($action) {
     case 'update_status':
         admin_json_out(['phase' => 'idle', 'pct' => 0, 'message' => '', 'running' => false]);
 
-    case 'update_apply':
-        // Self-update + restart is tied to the long-lived Python process. Under
-        // PHP-FPM/Apache there is no reliable in-process restart, so the UI is told
-        // to fall back to a manual update (use the Python server, or update by hand).
-        admin_json_out(['supported' => false, 'error' => 'unsupported_on_php'], 400);
+    case 'update_apply': {
+        // PHP is per-request (no process to restart): download → verify → staged
+        // extract → protected copy-over, synchronously. The response carries the
+        // outcome directly (`applied`) — no status pipeline to poll, unlike the
+        // Python server's Blue-Green swap.
+        [$code, $payload] = admin_update_apply_php();
+        admin_json_out($payload, $code);
+    }
 
     default:
         admin_json_out(['error' => 'Unknown action'], 400);

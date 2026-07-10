@@ -716,3 +716,217 @@ function mkt_uninstall(string $path): array {
     admin_save_trust($approvals);
     return [200, ['ok' => true]];
 }
+
+// ── Platform self-update (PHP hosts) ────────────────────────────────────────
+// The Python server self-updates via a Blue-Green staging swap because it must
+// restart a long-lived process. PHP is per-request (nothing to restart), so an
+// update is just: download the release zip → verify (sha256 + optional Ed25519,
+// fail-closed when keyed) → staged extract UNDER the web root (same volume, no
+// EXDEV) → move files into place, skipping operator state. Synchronous — the
+// admin UI gets the outcome in the update_apply response itself.
+
+/** Pinned Ed25519 release publisher key (hex, 32 bytes). Twin of
+ *  dev_server.py:_RELEASE_PUBKEY_HEX / install.php:$PINNED_PUBKEY. Empty ⇒
+ *  sha256-only (the sums file itself is unauthenticated); set ⇒ signature
+ *  verification is MANDATORY and failures abort the update. */
+const LUMEN_RELEASE_PUBKEY = '';
+
+/** Paths an update must never overwrite (twin of dev_server._UPDATE_PROTECT,
+ *  restricted to what can exist on a PHP host) + Python/dev files that have no
+ *  business on a PHP deployment (twin of install.php:is_php_host_skip). */
+function admin_update_protected(string $rel): bool {
+    static $phpHostSkip = ['dev_server.py', 'fast_server.py', 'ed25519_pure.py', 'start.bat'];
+    if (in_array($rel, $phpHostSkip, true)) return true;
+    // Operator-edited config: protect only once it exists (a fresh file from the
+    // release is fine on first install; an update must not clobber the operator's).
+    static $protectExisting = ['config/instance.json', 'config/theme.json', 'config/theme.css', 'config/legal.json'];
+    if (in_array($rel, $protectExisting, true)) return is_file(admin_root() . '/' . $rel);
+    // Runtime/operator state — never shipped in a release, but fail-safe anyway.
+    static $stateFiles = ['api/admin_credential.json', 'api/config.json', 'api/stats.json',
+                          'api/disabled-plugins.json', 'api/quarantined-plugins.json', 'api/plugin-trust.json',
+                          'api/.update-pending.json'];
+    if (in_array($rel, $stateFiles, true)) return true;
+    foreach (['config/pages/', 'DATA_WEB/', 'logs/', 'backups/', 'js/modules/'] as $prefix) {
+        if (strpos($rel, $prefix) === 0) return true;
+    }
+    return false;
+}
+
+/** @return array{0:int,1:array} [httpStatus, payload] — apply the latest GitHub
+ *  release in place. No rollback under PHP (per-request runtime; a failed apply
+ *  can simply be re-run — the copy pass is idempotent). */
+function admin_update_apply_php(): array {
+    if (!class_exists('ZipArchive')) return [500, ['error' => 'zip_unavailable']];
+    @set_time_limit(300);
+    $root = admin_root();
+
+    // 1. Resolve the latest release + its assets.
+    $raw = mkt_fetch_bytes('https://api.github.com/repos/' . GITHUB_REPO . '/releases/latest', 512 * 1024);
+    $rel = $raw !== null ? json_decode($raw, true) : null;
+    if (!is_array($rel) || !is_array($rel['assets'] ?? null)) return [502, ['error' => 'release_unreachable']];
+    $latest = ltrim((string)($rel['tag_name'] ?? ''), 'v');
+    $current = admin_max_version(changelog_dir()) ?? '0.0.0';
+    if ($latest === '' || admin_version_tuple($latest) <= admin_version_tuple($current)) {
+        return [400, ['error' => 'no_update_available', 'current' => $current, 'latest' => $latest]];
+    }
+    $zipUrl = $sumsUrl = $sigUrl = null;
+    foreach ($rel['assets'] as $a) {
+        $n = (string)($a['name'] ?? ''); $u = (string)($a['browser_download_url'] ?? '');
+        if (preg_match('/^lumen3d-web-[0-9.]+\.zip$/', $n)) $zipUrl = $u;
+        elseif ($n === 'SHA256SUMS') $sumsUrl = $u;
+        elseif ($n === 'SHA256SUMS.sig') $sigUrl = $u;
+    }
+    if (!$zipUrl || !$sumsUrl) return [502, ['error' => 'release_assets_missing']];
+
+    // 2. Download + verify. SHA256SUMS authenticates the zip; the pinned key (when
+    //    set) authenticates SHA256SUMS itself — same chain as install.php.
+    $sums = mkt_fetch_bytes($sumsUrl, 64 * 1024);
+    if ($sums === null) return [502, ['error' => 'sums_unreachable']];
+    if (LUMEN_RELEASE_PUBKEY !== '') {
+        if (!function_exists('sodium_crypto_sign_verify_detached')) return [500, ['error' => 'sodium_unavailable']];
+        $sigHex = $sigUrl !== null ? mkt_fetch_bytes($sigUrl, 4096) : null;
+        $sig = $sigHex !== null ? @hex2bin(trim($sigHex)) : false;
+        $pub = @hex2bin(LUMEN_RELEASE_PUBKEY);
+        if ($sig === false || strlen((string)$sig) !== 64 || $pub === false || strlen((string)$pub) !== 32
+            || !sodium_crypto_sign_verify_detached($sig, $sums, $pub)) {
+            return [502, ['error' => 'release_signature_invalid']];
+        }
+    }
+    $zipBytes = mkt_fetch_bytes($zipUrl, 64 * 1024 * 1024);
+    if ($zipBytes === null) return [502, ['error' => 'zip_unreachable']];
+    $zipName = basename((string)parse_url($zipUrl, PHP_URL_PATH));
+    $expect = null;
+    foreach (preg_split('/\r?\n/', $sums) as $line) {
+        if (preg_match('/^([0-9a-f]{64})\s+\*?(.+)$/', trim($line), $m) && trim($m[2]) === $zipName) { $expect = $m[1]; break; }
+    }
+    if ($expect === null || !hash_equals($expect, hash('sha256', $zipBytes))) return [502, ['error' => 'zip_digest_mismatch']];
+
+    // 3. Staged extract under the web root (same filesystem → rename is cheap and
+    //    same-volume; extracting under /tmp broke on shared hosts before — EXDEV).
+    $staging = $root . '/.update-staging-' . bin2hex(random_bytes(4));
+    if (!@mkdir($staging, 0755, true)) return [500, ['error' => 'staging_mkdir_failed']];
+    $zipPath = $staging . '/release.zip';
+    if (@file_put_contents($zipPath, $zipBytes) === false) { mkt_rmrf($staging); return [500, ['error' => 'staging_write_failed']]; }
+    $zipBytes = null; // free the in-memory copy before extraction
+    $zip = new ZipArchive();
+    if ($zip->open($zipPath) !== true) { mkt_rmrf($staging); return [500, ['error' => 'zip_open_failed']]; }
+    if ($zip->numFiles > 5000) { $zip->close(); mkt_rmrf($staging); return [500, ['error' => 'zip_too_large']]; }
+    $names = []; $total = 0;
+    for ($i = 0; $i < $zip->numFiles; $i++) {
+        $st = $zip->statIndex($i);
+        $name = (string)$st['name'];
+        if ($name === '' || substr($name, -1) === '/') continue;                    // directory entries
+        $segs = explode('/', $name);
+        $first = $segs[0];
+        // Canonical posix path only. Reject traversal AND '.'/'' segments + '//'
+        // — a release zip never contains them, and a '.' alias (e.g.
+        // "api/./admin_credential.json") would otherwise slip past the literal
+        // string match in admin_update_protected() while the FS resolves it to a
+        // protected file. Defense-in-depth atop the TLS-authenticated source.
+        if ($name[0] === '/' || strpos($name, '\\') !== false || strpos($first, ':') !== false
+            || in_array('..', $segs, true) || in_array('.', $segs, true) || in_array('', $segs, true)) {
+            $zip->close(); mkt_rmrf($staging); return [500, ['error' => 'zip_entry_unsafe']];
+        }
+        $total += (int)$st['size'];
+        if ($total > 128 * 1024 * 1024) { $zip->close(); mkt_rmrf($staging); return [500, ['error' => 'zip_too_large']]; }
+        $names[] = $name;
+    }
+    $exDir = $staging . '/x';
+    @mkdir($exDir, 0755, true);
+    if (!$zip->extractTo($exDir)) { $zip->close(); mkt_rmrf($staging); return [500, ['error' => 'zip_extract_failed']]; }
+    $zip->close();
+
+    // 4. Move files into place, skipping protected paths. Overwriting the very
+    //    scripts serving this request is safe under PHP (already compiled). On
+    //    Windows an OPEN file can't be unlinked but CAN be renamed — park the old
+    //    file aside as *.lumen-old, then place the new one; leftovers are swept
+    //    below (and by the next run once the handle is released).
+    //
+    //    Copy the changelog/ files LAST: admin_max_version() derives the deployed
+    //    version from changelog filenames, and it is the retry gate (a
+    //    <=-comparison rejects re-applying the same version). If a mid-copy
+    //    failure (quota, FPM kill) landed the new changelog early, a retry would
+    //    see the new version and refuse to finish — leaving a broken old/new mix.
+    //    Writing changelog last means a partial run keeps the OLD version, so
+    //    re-running heals it (the copy pass is idempotent).
+    usort($names, function ($a, $b) {
+        $ca = strncmp($a, 'changelog/', 10) === 0 ? 1 : 0;
+        $cb = strncmp($b, 'changelog/', 10) === 0 ? 1 : 0;
+        return $ca !== $cb ? $ca - $cb : strcmp($a, $b);
+    });
+    $updated = 0; $skipped = 0; $pending = []; $phpWritten = [];
+    foreach ($names as $relPath) {
+        if (admin_update_protected($relPath)) { $skipped++; continue; }
+        $srcF = $exDir . '/' . $relPath;
+        if (!is_file($srcF)) continue;
+        $dstF = $root . '/' . $relPath;
+        $dir = dirname($dstF);
+        if (!is_dir($dir) && !@mkdir($dir, 0755, true)) { mkt_rmrf($staging); return [500, ['error' => 'mkdir_failed', 'path' => $relPath, 'filesUpdated' => $updated]]; }
+        // Rename-aside FIRST: it frees the name atomically and works even on an
+        // OPEN file (Windows allows rename, not delete-in-place; a plain unlink
+        // there only marks delete-pending and the name stays blocked until the
+        // handle closes — the new file then can't land). unlink is the fallback.
+        if (file_exists($dstF)) {
+            @unlink($dstF . '.lumen-old');
+            if (!@rename($dstF, $dstF . '.lumen-old')) @unlink($dstF);
+        }
+        if (!@rename($srcF, $dstF) && !@copy($srcF, $dstF)) {
+            // Name still blocked (delete-pending / AV lock): park the new bytes
+            // beside it; a later request finalizes (admin_update_finish_pending).
+            if (@rename($srcF, $dstF . '.lumen-new') || @copy($srcF, $dstF . '.lumen-new')) { $pending[] = $relPath; $updated++; continue; }
+            mkt_rmrf($staging);
+            return [500, ['error' => 'write_failed', 'path' => $relPath, 'filesUpdated' => $updated]];
+        }
+        if (substr($relPath, -4) === '.php') $phpWritten[] = $dstF;
+        $updated++;
+    }
+    foreach ($names as $relPath) @unlink($root . '/' . $relPath . '.lumen-old');   // best-effort sweep
+    mkt_rmrf($staging);
+    if ($pending) @file_put_contents($root . '/api/.update-pending.json', json_encode(array_values($pending)));
+    admin_opcache_flush($phpWritten);   // else opcache serves the OLD compiled *.php
+    return [200, ['ok' => true, 'applied' => $latest, 'from' => $current, 'filesUpdated' => $updated,
+                  'skippedProtected' => $skipped, 'pendingFinalize' => count($pending),
+                  'signature' => LUMEN_RELEASE_PUBKEY !== '' ? 'verified' : 'sha256-only']];
+}
+
+/** Drop stale bytecode for freshly-overwritten *.php so the NEW code answers the
+ *  next request. Without this, a host with opcache (validate_timestamps off or a
+ *  long revalidate_freq — common on mutualisé perf tuning) keeps executing the
+ *  pre-update admin.php/_admin_lib.php after the update "succeeded". Per-file
+ *  invalidate (less likely blocked by opcache.restrict_api than opcache_reset). */
+function admin_opcache_flush(array $phpPaths): void {
+    if (!function_exists('opcache_invalidate')) { if (function_exists('opcache_reset')) @opcache_reset(); return; }
+    foreach ($phpPaths as $p) @opcache_invalidate($p, true);
+}
+
+/** Finish a self-update whose busy files (Windows) were parked as *.lumen-new —
+ *  swap them into place once their handles are released. Cheap no-op when the
+ *  marker is absent (the Linux path). Never touches the entry script currently
+ *  executing; the next request through ANOTHER endpoint finalizes that one. */
+function admin_update_finish_pending(): void {
+    $root = admin_root();
+    $marker = $root . '/api/.update-pending.json';
+    if (!is_file($marker)) return;
+    $list = json_decode((string)@file_get_contents($marker), true);
+    if (!is_array($list)) { @unlink($marker); return; }
+    $self = str_replace('\\', '/', (string)@realpath((string)($_SERVER['SCRIPT_FILENAME'] ?? '')));
+    $left = []; $swapped = [];
+    foreach ($list as $rel) {
+        if (!is_string($rel) || $rel === '' || strpos($rel, '..') !== false) continue;
+        $dst = $root . '/' . $rel;
+        $new = $dst . '.lumen-new';
+        if (!is_file($new)) { @unlink($dst . '.lumen-old'); continue; }        // already finalized
+        if ($self !== '' && str_replace('\\', '/', (string)@realpath($dst)) === $self) { $left[] = $rel; continue; }
+        if (file_exists($dst)) {
+            @unlink($dst . '.lumen-old');
+            if (!@rename($dst, $dst . '.lumen-old')) @unlink($dst);
+        }
+        if (!@rename($new, $dst) && !@copy($new, $dst)) { $left[] = $rel; continue; }
+        @unlink($new);
+        @unlink($dst . '.lumen-old');
+        if (substr($rel, -4) === '.php') $swapped[] = $dst;
+    }
+    if ($swapped) admin_opcache_flush($swapped);
+    if ($left) @file_put_contents($marker, json_encode(array_values($left)));
+    else @unlink($marker);
+}

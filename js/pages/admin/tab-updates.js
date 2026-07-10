@@ -193,11 +193,27 @@ async function startPreflight() {
 
 /** Step 2 — the operator confirmed with the report in view: launch the pipeline. */
 async function confirmUpdate() {
+  const btn = el('btn-confirm-update');
+  if (btn) { btn.disabled = true; btn.innerHTML = `<span class="spinner spinner-sm"></span> ${t('admin.updating', 'Mise à jour…')}`; }
   const r = await apiFetchStatus(`${API_ADMIN}?action=update_apply`, { method: 'POST', body: '{}' });
   if (!(r.ok && r.data?.ok)) {
+    if (btn) { btn.disabled = false; btn.textContent = t('admin.confirmUpdate', 'Confirmer la mise à jour'); }
     toast(r.data?.error === 'no_update_available'
       ? t('admin.upToDate', 'Vous êtes à jour.')
-      : t('admin.updateFailed', 'Échec du lancement de la mise à jour.'), 'error');
+      : t('admin.updateFailed', 'Échec du lancement de la mise à jour.') + (r.data?.error ? ` (${r.data.error})` : ''), 'error');
+    return;
+  }
+  // Synchronous apply (PHP hosts): the whole download→verify→swap ran inside this
+  // one request and `applied` carries the landed version. Reload to pick up the
+  // fresh HTML (whose ?v=<version> asset URLs bust the browser cache).
+  if (r.data.applied) {
+    _preflight = null;
+    render();
+    const msg = t('admin.updateApplied', 'Mise à jour appliquée (v{v}) — rechargement…', { v: r.data.applied }).replace('{v}', r.data.applied);
+    el('progress-card') && (el('progress-card').style.display = 'block');
+    setProgress(100, msg);
+    toast(msg, 'success');
+    setTimeout(() => location.reload(), 2000);
     return;
   }
   _preflight = null;

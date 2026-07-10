@@ -17,6 +17,10 @@ import { isDirty, setNavigator } from './bus.js';
 const _tabs = new Map();   // id -> { id, mount, activate, relabel?, titleKey, titleDefault }
 let _activeTab = null;
 let _appReady = false;
+// Dedicated page-editor tab (admpan.html?editor=<slug>): the shell hides its own
+// chrome (sidebar/topbar) and boots straight into the Pages tab, whose editor
+// then owns the whole window — the Elementor model (edit in its own tab).
+const _editorOnly = /^[a-z0-9][a-z0-9_-]{0,63}$/.test(new URLSearchParams(location.search).get('editor') || '');
 
 export function registerTab(tab) { _tabs.set(tab.id, tab); }
 
@@ -43,6 +47,11 @@ function enterApp(username) {
   _appReady = true;
   if (Utils) Utils.populateLanguageMenu?.(switchLanguage);
   refreshIcons();
+  if (_editorOnly) {
+    document.body.classList.add('adm-editor-only');
+    switchTab('pages', true);
+    return;
+  }
   const initial = (location.hash || '#datasets').replace('#', '');
   switchTab(_tabs.has(initial) ? initial : 'datasets', true);
 }

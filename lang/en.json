@@ -787,7 +787,8 @@
     "pluginsEmptyHint": "Plugins are installed on demand from the catalog.",
     "pluginsGotoCatalog": "Open the catalog",
     "pluginsLoadError": "Could not load the plugin list.",
-    "retry": "Retry"
+    "retry": "Retry",
+    "updateApplied": "Update applied (v{v}) — reloading…"
   },
   "appearance": {
     "title": "Appearance",
@@ -991,7 +992,10 @@
     "dragOrClick": "Click or drag an element into the page.",
     "drag": "Move",
     "emptyTitle": "Blank page",
-    "emptyBody": "Add a section, then drag elements from the left panel."
+    "emptyBody": "Add a section, then drag elements from the left panel.",
+    "seedNotice": "Starter template — the published page keeps its built-in layout until you publish this version.",
+    "exitUnsaved": "Unsaved changes. Exit without publishing?",
+    "publishSeedConfirm": "Publishing this starter template will replace this page’s built-in layout. Continue?"
   },
   "wizard": {
     "title": "Guided setup",

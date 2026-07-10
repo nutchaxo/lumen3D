@@ -20,6 +20,15 @@
 [data-theme="dark"] select option,  [data-theme="dark"] select optgroup  { color: #e5e7eb; background-color: #1e1e2e; }
 [data-theme="light"] select option, [data-theme="light"] select optgroup { color: #1f2937; background-color: #ffffff; }
 
+/* ── Dedicated page-editor tab (admpan.html?editor=<slug>) ────
+   The Pages editor owns the whole window: the shell's own chrome is hidden and
+   the tab container goes full-bleed, so the editor (position:fixed) sits on a
+   clean, unconstrained page — its own tab, like Elementor. */
+body.adm-editor-only .adm-sidebar,
+body.adm-editor-only .adm-topbar,
+body.adm-editor-only .adm-sidebar-overlay { display: none !important; }
+body.adm-editor-only .adm-tab-inner { max-width: none; padding: 0; }
+
 /* ── Light theme (flips the --adm-* tokens) ────────────────── */
 [data-theme="light"] {
   --adm-bg:          #f3f4fb;

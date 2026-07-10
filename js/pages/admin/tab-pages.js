@@ -48,6 +48,9 @@ let _dirty = false;
 let _mode = 'launcher';             // 'launcher' | 'editor'
 let _side = 'elements';             // editor sidebar: 'elements' | 'settings'
 let _bound = false;                 // window 'message' listener installed once
+let _editorOnly = false;            // dedicated editor tab (admpan.html?editor=<slug>)
+let _seeded = false;                // built-in page: showing the starter template (not yet published)
+let _beforeUnloadBound = false;     // editor-tab unsaved-work guard installed once
 
 const _id = (p) => p + Math.random().toString(36).slice(2, 9);
 function _mark(on) { _dirty = on; setUnsaved(on); ['pages-save', 'pe-save'].forEach((id) => { const s = el(id); if (s) s.disabled = !on; }); }
@@ -273,8 +276,24 @@ function renderEditor() {
   // _onMessage answers with the current doc — no need to sync here.
 }
 
-function enterEditor() { _mode = 'editor'; _sel = null; _side = 'elements'; render(); }
-function exitEditor() { _mode = 'launcher'; const root = el('pages-root'); if (root) root.style.cssText = ''; render(); }
+function enterEditor() {
+  // Elementor model: the editor lives in its OWN TAB (admpan.html?editor=<slug>)
+  // — a dedicated full-window surface, not an overlay inside the admin shell.
+  // Popup blocked → fall back to the in-shell full-screen editor.
+  const w = window.open(`admpan.html?editor=${encodeURIComponent(_slug || 'home')}`, '_blank');
+  if (w) return;
+  _mode = 'editor'; _sel = null; _side = 'elements'; render();
+}
+function exitEditor() {
+  if (_editorOnly) {
+    if (_dirty && !confirm(t('pages.exitUnsaved', 'Modifications non enregistrées. Quitter sans publier ?'))) return;
+    _dirty = false;                                     // let beforeunload proceed silently
+    window.close();                                     // script-opened tab → closes
+    setTimeout(() => { location.href = 'admpan.html#pages'; }, 250);  // direct-URL tab → back to admin
+    return;
+  }
+  _mode = 'launcher'; const root = el('pages-root'); if (root) root.style.cssText = ''; render();
+}
 
 // ── Iframe bridge ───────────────────────────────────────────────
 function _frameEl() { return el('pages-frame'); }
@@ -371,7 +390,10 @@ function renderSidebar() {
 }
 
 function _renderPalette(body) {
-  body.innerHTML = `<p class="adm-page-sub" style="font-size:12px;margin:0 0 10px">${escHtml(t('pages.dragOrClick', 'Cliquez ou glissez un élément dans la page.'))}</p><div id="pages-palette" style="display:grid;grid-template-columns:1fr 1fr;gap:6px"></div>`;
+  const seedNote = _seeded
+    ? `<div style="font-size:11.5px;line-height:1.45;padding:8px 10px;margin:0 0 10px;border:1px solid var(--color-primary,#2F6BFF);border-radius:8px;background:color-mix(in srgb,var(--color-primary,#2F6BFF) 10%,transparent)">${escHtml(t('pages.seedNotice', 'Modèle de départ — la page publiée garde sa mise en page intégrée tant que vous ne publiez pas cette version.'))}</div>`
+    : '';
+  body.innerHTML = `${seedNote}<p class="adm-page-sub" style="font-size:12px;margin:0 0 10px">${escHtml(t('pages.dragOrClick', 'Cliquez ou glissez un élément dans la page.'))}</p><div id="pages-palette" style="display:grid;grid-template-columns:1fr 1fr;gap:6px"></div>`;
   const grid = el('pages-palette');
   PALETTE.forEach((b) => {
     const btn = document.createElement('button');
@@ -618,8 +640,20 @@ async function selectPage(slug) {
   _doc = (data && typeof data === 'object') ? data : { title: {}, published: { sections: [] }, draft: { sections: [] } };
   const src = (_doc.draft && (Array.isArray(_doc.draft.sections) || Array.isArray(_doc.draft.blocks))) ? _doc.draft : (_doc.published || {});
   _sections = _sanitizeSections(_migrate(src));
+  // Built-in pages (home/about) default to static HTML — nothing stored as
+  // sections. Showing "blank" would be wrong (the real page is anything but):
+  // seed the editable starter template so the surface opens with content. Not
+  // marked dirty — nothing changes until the operator saves/publishes.
+  _seeded = false;
+  if (!_sections.length) {
+    const tpl = _defaultTemplate(slug);
+    if (tpl.length) { _sections = tpl; _seeded = true; }
+  }
   _sel = null;
   _mark(false);
+  if (_editorOnly) {
+    try { history.replaceState(null, '', `admpan.html?editor=${encodeURIComponent(slug)}`); } catch (_) {}
+  }
   render();
 }
 
@@ -664,11 +698,15 @@ async function saveDraft() {
 }
 
 async function publish() {
+  // Guard the footgun: publishing an untouched starter seed would replace a
+  // built-in page's real (static) layout with the generic template. If nothing
+  // was edited, make the operator confirm that intent.
+  if (_seeded && !_dirty && !confirm(t('pages.publishSeedConfirm', 'Publier ce modèle de départ remplacera la mise en page intégrée de cette page. Continuer ?'))) return;
   _doc.draft = { sections: _sections };
   const s = await apiFetchStatus(`${API_SITE}?action=save&doc=pages/${encodeURIComponent(_slug)}`, { method: 'POST', body: JSON.stringify(_doc) });
   if (!s.ok) { toast(t('pages.saveError', "Échec de l'enregistrement."), 'error'); return; }
   const r = await apiFetchStatus(`${API_SITE}?action=publish&doc=pages/${encodeURIComponent(_slug)}`, { method: 'POST', body: '{}' });
-  if (r.ok) { _mark(false); _doc.published = { sections: JSON.parse(JSON.stringify(_sections)) }; toast(t('pages.published', 'Page publiée ✓'), 'success'); }
+  if (r.ok) { _mark(false); _doc.published = { sections: JSON.parse(JSON.stringify(_sections)) }; _seeded = false; renderSidebar(); toast(t('pages.published', 'Page publiée ✓'), 'success'); }
   else toast(t('pages.saveError', "Échec de l'enregistrement."), 'error');
 }
 
@@ -685,6 +723,20 @@ async function load() {
   _instance = (inst && typeof inst === 'object') ? inst : {};
   try { _editLoc = (I18n && I18n.getLanguage) ? I18n.getLanguage() : 'en'; } catch (_) { _editLoc = 'en'; }
   _buildPageList();
+  // Dedicated editor tab: admpan.html?editor=<slug> boots straight into the
+  // full-window editor for that page (the shell hides its sidebar/topbar).
+  const eslug = new URLSearchParams(location.search).get('editor');
+  if (eslug && /^[a-z0-9][a-z0-9_-]{0,63}$/.test(eslug)) {
+    _editorOnly = true;
+    _mode = 'editor';
+    _slug = _pages.some((p) => p.slug === eslug) ? eslug : 'home';
+    // Dedicated editor tab owns the window → guard against losing unsaved work on
+    // close/reload (the in-shell editor kept it in SPA memory; a tab can't).
+    if (!_beforeUnloadBound) {
+      _beforeUnloadBound = true;
+      window.addEventListener('beforeunload', (e) => { if (_dirty) { e.preventDefault(); e.returnValue = ''; } });
+    }
+  }
   await selectPage(_slug || 'home');
 }
 

@@ -18,6 +18,7 @@
 declare(strict_types=1);
 require_once __DIR__ . '/_admin_lib.php';
 
+admin_update_finish_pending();   // no-op unless a prior update parked busy files
 header('X-Content-Type-Options: nosniff');
 admin_session_start();
 

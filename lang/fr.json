@@ -787,7 +787,8 @@
     "pluginsEmptyHint": "Les plugins s'installent à la demande depuis le catalogue.",
     "pluginsGotoCatalog": "Ouvrir le catalogue",
     "pluginsLoadError": "Impossible de charger la liste des plugins.",
-    "retry": "Réessayer"
+    "retry": "Réessayer",
+    "updateApplied": "Mise à jour appliquée (v{v}) — rechargement…"
   },
   "appearance": {
     "title": "Apparence",
@@ -991,7 +992,10 @@
     "dragOrClick": "Cliquez ou glissez un élément dans la page.",
     "drag": "Déplacer",
     "emptyTitle": "Page vierge",
-    "emptyBody": "Ajoutez une section, puis glissez des éléments depuis le panneau de gauche."
+    "emptyBody": "Ajoutez une section, puis glissez des éléments depuis le panneau de gauche.",
+    "seedNotice": "Modèle de départ — la page publiée garde sa mise en page intégrée tant que vous ne publiez pas cette version.",
+    "exitUnsaved": "Modifications non enregistrées. Quitter sans publier ?",
+    "publishSeedConfirm": "Publier ce modèle de départ remplacera la mise en page intégrée de cette page. Continuer ?"
   },
   "wizard": {
     "title": "Installation guidée",

@@ -67,7 +67,7 @@ const PALETTE = [
   { type: 'heading', icon: 'heading', def: 'Titre' },
   { type: 'richtext', icon: 'align-left', def: 'Texte' },
   { type: 'hero', icon: 'flag', def: 'Héros' },
-  { type: 'button', icon: 'square-mouse-pointer', def: 'Bouton' },
+  { type: 'button', icon: 'mouse-pointer-click', def: 'Bouton' },
   { type: 'image', icon: 'image', def: 'Image' },
   { type: 'gallery', icon: 'images', def: 'Galerie' },
   { type: 'stat-grid', icon: 'bar-chart-2', def: 'Statistiques' },

@@ -995,7 +995,11 @@
     "emptyBody": "Añade una sección y luego arrastra elementos desde el panel izquierdo.",
     "seedNotice": "Plantilla inicial — la página publicada conserva su diseño integrado hasta que publiques esta versión.",
     "exitUnsaved": "Cambios sin guardar. ¿Salir sin publicar?",
-    "publishSeedConfirm": "Publicar esta plantilla inicial reemplazará el diseño integrado de esta página. ¿Continuar?"
+    "publishSeedConfirm": "Publicar esta plantilla inicial reemplazará el diseño integrado de esta página. ¿Continuar?",
+    "srcDatasets": "Conjuntos",
+    "srcSpecimen": "Especímenes",
+    "srcCells": "Células",
+    "srcRegions": "Regiones"
   },
   "wizard": {
     "title": "Instalación guiada",

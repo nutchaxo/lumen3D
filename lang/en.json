@@ -995,7 +995,11 @@
     "emptyBody": "Add a section, then drag elements from the left panel.",
     "seedNotice": "Starter template — the published page keeps its built-in layout until you publish this version.",
     "exitUnsaved": "Unsaved changes. Exit without publishing?",
-    "publishSeedConfirm": "Publishing this starter template will replace this page’s built-in layout. Continue?"
+    "publishSeedConfirm": "Publishing this starter template will replace this page’s built-in layout. Continue?",
+    "srcDatasets": "Datasets",
+    "srcSpecimen": "Specimens",
+    "srcCells": "Cells",
+    "srcRegions": "Regions"
   },
   "wizard": {
     "title": "Guided setup",

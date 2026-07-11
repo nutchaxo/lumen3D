@@ -51,6 +51,7 @@ let _bound = false;                 // window 'message' listener installed once
 let _editorOnly = false;            // dedicated editor tab (admpan.html?editor=<slug>)
 let _seeded = false;                // built-in page: showing the starter template (not yet published)
 let _beforeUnloadBound = false;     // editor-tab unsaved-work guard installed once
+const _langDicts = {};              // locale code → loaded i18n dict (for faithful templates)
 
 const _id = (p) => p + Math.random().toString(36).slice(2, 9);
 function _mark(on) { _dirty = on; setUnsaved(on); ['pages-save', 'pe-save'].forEach((id) => { const s = el(id); if (s) s.disabled = !on; }); }
@@ -130,7 +131,89 @@ function _sanitizeSections(list) {
 
 // Starter layouts for the built-in pages (home/about) — their real default is
 // static HTML, so there are no blocks to load; this gives an editable start.
+//
+// The RICH template mirrors the actual landing/about page: it reuses the very
+// same localized strings (landing.* / about.*, with {specimen}/{brand} tokens
+// that PageRenderer interpolates) across every available locale, so opening the
+// editor shows content faithful to what visitors see (and publishing it makes
+// the live page render exactly that). Falls back to a minimal template if the
+// locale dictionaries aren't loaded yet.
 function _defaultTemplate(slug) {
+  if (slug !== 'home' && slug !== 'about') return [];
+  return _richTemplate(slug) || _minimalTemplate(slug);
+}
+
+// Multi-locale text object for an i18n key, read from the pre-loaded dicts.
+function _tpl(key) {
+  const out = {};
+  for (const code of Object.keys(_langDicts)) {
+    const v = key.split('.').reduce((o, k) => (o && o[k] !== undefined ? o[k] : undefined), _langDicts[code]);
+    if (typeof v === 'string') out[code] = v;
+  }
+  return Object.keys(out).length ? out : undefined;
+}
+
+function _richTemplate(slug) {
+  if (slug === 'home') {
+    const hero = _tpl('landing.heroTitle');
+    if (!hero) return null;   // dicts not loaded → caller uses the minimal template
+    const typeCol = (titleKey, descKey, type) => ({ width: 4, widgets: [
+      { type: 'heading', text: _tpl(titleKey), props: { level: '3', align: 'left' } },
+      { type: 'richtext', text: _tpl(descKey), props: { align: 'left' } },
+      { type: 'button', text: _tpl('landing.viewCollection'), props: { href: 'explorer.html?type=' + type, style: 'ghost', align: 'left' } },
+    ] });
+    return _sanitizeSections([
+      { props: { fullWidth: false, padY: 72, maxWidth: 1080, gap: 24, vAlign: 'stretch', bg: '' }, columns: [{ width: 12, widgets: [
+        { type: 'hero', text: hero, props: { subtitle: _tpl('landing.heroSubtitle'), bg: '', cta: { text: _tpl('landing.exploreBtn'), href: 'explorer.html' } } },
+      ] }] },
+      { props: { fullWidth: false, padY: 24, maxWidth: 1080, gap: 24, vAlign: 'stretch', bg: '' }, columns: [{ width: 12, widgets: [
+        { type: 'stat-grid', props: { stats: [
+          { label: _tpl('landing.statsDatasets'), source: 'datasetCount', value: '' },
+          { label: _tpl('landing.statsEmbryos'), source: 'specimenCount', value: '' },
+          { label: _tpl('landing.statsCells'), source: 'cellCount', value: '' },
+          { label: _tpl('landing.statsRegions'), source: 'regionCount', value: '' },
+        ] } },
+      ] }] },
+      { props: { fullWidth: false, padY: 32, maxWidth: 1080, gap: 24, vAlign: 'stretch', bg: '' }, columns: [{ width: 12, widgets: [
+        { type: 'heading', text: _tpl('landing.typesTitle'), props: { level: '2', align: 'center' } },
+        { type: 'richtext', text: _tpl('landing.typesSubtitle'), props: { align: 'center' } },
+      ] }] },
+      { props: { fullWidth: false, padY: 8, maxWidth: 1080, gap: 24, vAlign: 'stretch', bg: '' }, columns: [
+        typeCol('landing.fixedTitle', 'landing.fixedDesc', 'fixed'),
+        typeCol('landing.liveTitle', 'landing.liveDesc', 'live'),
+        typeCol('landing.trackingTitle', 'landing.trackingDesc', 'tracking'),
+      ] },
+      { props: { fullWidth: false, padY: 40, maxWidth: 1080, gap: 24, vAlign: 'stretch', bg: '' }, columns: [{ width: 12, widgets: [
+        { type: 'heading', text: _tpl('landing.featuredTitle'), props: { level: '2', align: 'center' } },
+        { type: 'latest-datasets', props: { count: 3 } },
+      ] }] },
+    ]);
+  }
+  if (slug === 'about') {
+    const title = _tpl('about.title');
+    if (!title) return null;
+    return _sanitizeSections([
+      { props: { fullWidth: false, padY: 56, maxWidth: 860, gap: 24, vAlign: 'stretch', bg: '' }, columns: [{ width: 12, widgets: [
+        { type: 'heading', text: title, props: { level: '1', align: 'left' } },
+        { type: 'richtext', text: _tpl('about.description'), props: { align: 'left' } },
+      ] }] },
+      { props: { fullWidth: false, padY: 16, maxWidth: 860, gap: 24, vAlign: 'stretch', bg: '' }, columns: [{ width: 12, widgets: [
+        { type: 'heading', text: _tpl('about.statsTitle'), props: { level: '2', align: 'left' } },
+        { type: 'stat-grid', props: { stats: [
+          { label: _tpl('landing.statsDatasets'), source: 'datasetCount', value: '' },
+          { label: _tpl('landing.statsEmbryos'), source: 'specimenCount', value: '' },
+        ] } },
+      ] }] },
+      { props: { fullWidth: false, padY: 16, maxWidth: 860, gap: 24, vAlign: 'stretch', bg: '' }, columns: [{ width: 12, widgets: [
+        { type: 'heading', text: _tpl('about.contextTitle'), props: { level: '2', align: 'left' } },
+        { type: 'richtext', text: _tpl('about.contextDesc'), props: { align: 'left' } },
+      ] }] },
+    ]);
+  }
+  return null;
+}
+
+function _minimalTemplate(slug) {
   if (slug === 'home') {
     return _sanitizeSections([
       { props: { fullWidth: false, padY: 64, maxWidth: 1080, gap: 24, vAlign: 'stretch', bg: '' }, columns: [{ width: 12, widgets: [
@@ -587,10 +670,12 @@ function _wireFields(host, b, _fields2) {
   if (swrap) {
     const stats = (b.props.stats = Array.isArray(b.props.stats) ? b.props.stats : []);
     const draw = () => {
+      const SRCOPTS = [['datasetCount', t('pages.srcDatasets', 'Datasets')], ['specimenCount', t('pages.srcSpecimen', 'Spécimens')], ['cellCount', t('pages.srcCells', 'Cellules')], ['regionCount', t('pages.srcRegions', 'Régions')], ['custom', t('pages.custom', 'Fixe')]];
+      const LIVE = ['datasetCount', 'specimenCount', 'cellCount', 'regionCount'];
       swrap.innerHTML = stats.map((st, i) => `<div style="display:flex;gap:6px;margin-bottom:5px;align-items:center">
           <input type="text" class="adm-field-input s-label" data-i="${i}" value="${escHtml(_lv(st.label))}" placeholder="${escHtml(t('pages.statLabel', 'Libellé'))}" style="flex:1">
-          <select class="adm-field-input s-src" data-i="${i}" style="width:auto"><option value="datasetCount" ${st.source === 'datasetCount' ? 'selected' : ''}>#</option><option value="custom" ${st.source !== 'datasetCount' ? 'selected' : ''}>${escHtml(t('pages.custom', 'Fixe'))}</option></select>
-          <input type="text" class="adm-field-input s-val" data-i="${i}" value="${escHtml(st.value != null ? String(st.value) : '')}" placeholder="123" style="width:60px" ${st.source === 'datasetCount' ? 'disabled' : ''}>
+          <select class="adm-field-input s-src" data-i="${i}" style="width:auto">${SRCOPTS.map(([v, l]) => `<option value="${v}" ${(st.source || 'custom') === v ? 'selected' : ''}>${escHtml(l)}</option>`).join('')}</select>
+          <input type="text" class="adm-field-input s-val" data-i="${i}" value="${escHtml(st.value != null ? String(st.value) : '')}" placeholder="123" style="width:60px" ${LIVE.includes(st.source) ? 'disabled' : ''}>
           <button class="adm-icon-btn s-del" data-i="${i}">✕</button></div>`).join('');
       swrap.querySelectorAll('.s-label').forEach((s) => s.addEventListener('input', () => { const st = stats[+s.getAttribute('data-i')]; if (typeof st.label !== 'object' || st.label == null) st.label = {}; st.label[_editLoc] = s.value; _mark(true); _syncFrame(); }));
       swrap.querySelectorAll('.s-src').forEach((s) => s.addEventListener('change', () => { stats[+s.getAttribute('data-i')].source = s.value; _mark(true); draw(); _syncFrame(); }));
@@ -722,6 +807,13 @@ async function load() {
   const inst = await apiFetch(`${API_SITE}?action=get&doc=instance`);
   _instance = (inst && typeof inst === 'object') ? inst : {};
   try { _editLoc = (I18n && I18n.getLanguage) ? I18n.getLanguage() : 'en'; } catch (_) { _editLoc = 'en'; }
+  // Pre-load every available locale's dict so the built-in-page starter template
+  // can mirror the real landing/about strings in all languages (see _richTemplate).
+  try {
+    for (const l of _locales()) {
+      if (!_langDicts[l.code] && I18n && I18n.loadLanguage) { try { _langDicts[l.code] = await I18n.loadLanguage(l.code); } catch (_) {} }
+    }
+  } catch (_) {}
   _buildPageList();
   // Dedicated editor tab: admpan.html?editor=<slug> boots straight into the
   // full-window editor for that page (the shell hides its sidebar/topbar).

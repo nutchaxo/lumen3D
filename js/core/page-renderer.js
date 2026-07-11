@@ -29,11 +29,24 @@ const PageRenderer = (() => {
     try { if (typeof I18n !== 'undefined' && I18n.getLanguage) return I18n.getLanguage(); } catch (_) {}
     return 'en';
   }
+  // White-label token substitution ({brand}, {specimen}, {specimenPlural}, …),
+  // mirroring I18n.t() so authored widget text and the built-in-page starter
+  // templates read the operator's identity instead of a baked-in domain noun —
+  // and so the editor iframe shows exactly what the live site renders.
+  function _interp(s) {
+    if (typeof s !== 'string' || s.indexOf('{') === -1) return s;
+    let tk = null;
+    try { if (typeof InstanceConfig !== 'undefined' && InstanceConfig.tokens) tk = InstanceConfig.tokens(); } catch (_) {}
+    if (!tk) return s;
+    return s.replace(/\{(\w+)\}/g, (m, k) => (k in tk && tk[k] != null ? String(tk[k]) : m));
+  }
   function _lv(v) {
-    if (v == null) return '';
-    if (typeof v === 'string') return v;
-    if (typeof v === 'object' && !Array.isArray(v)) { const l = _loc(); return v[l] || v.en || Object.values(v)[0] || ''; }
-    return String(v);
+    let s;
+    if (v == null) s = '';
+    else if (typeof v === 'string') s = v;
+    else if (typeof v === 'object' && !Array.isArray(v)) { const l = _loc(); s = v[l] || v.en || Object.values(v)[0] || ''; }
+    else s = String(v);
+    return _interp(s);
   }
   function _el(tag, style, text) {
     const e = document.createElement(tag);
@@ -116,10 +129,14 @@ const PageRenderer = (() => {
     },
     'stat-grid'(b) {
       const grid = _el('div', 'display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:16px;text-align:center');
+      // Live sources mirror the landing's counters (Catalog.getStats()).
+      const SRC = { datasetCount: 'totalDatasets', specimenCount: 'totalEmbryos', cellCount: 'totalCells', regionCount: 'totalRegions' };
+      let stats0 = null;
+      try { if (typeof Catalog !== 'undefined' && Catalog.getStats) stats0 = Catalog.getStats(); } catch (_) {}
       (Array.isArray(b.props?.stats) ? b.props.stats : []).forEach((st) => {
         const card = _el('div', 'padding:20px;background:var(--bg-surface,#161622);border-radius:var(--radius-md,10px)');
         let value = st.value;
-        if (st.source === 'datasetCount') { try { value = (typeof Catalog !== 'undefined' && Catalog.list) ? Catalog.list().length : (value || 0); } catch (_) { value = value || 0; } }
+        if (SRC[st.source]) value = stats0 ? (stats0[SRC[st.source]] ?? 0) : (value || 0);
         card.appendChild(_el('div', 'font-size:var(--text-3xl,2.5rem);font-weight:700;color:var(--color-primary,#00A654)', String(value ?? 0)));
         card.appendChild(_el('div', 'opacity:.7;margin-top:4px', _lv(st.label)));
         grid.appendChild(card);

@@ -999,7 +999,9 @@
     "srcDatasets": "Conjuntos",
     "srcSpecimen": "Especímenes",
     "srcCells": "Células",
-    "srcRegions": "Regiones"
+    "srcRegions": "Regiones",
+    "publishing": "Publicando…",
+    "publishedBtn": "Publicado ✓"
   },
   "wizard": {
     "title": "Instalación guiada",

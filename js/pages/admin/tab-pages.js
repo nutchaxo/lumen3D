@@ -782,17 +782,29 @@ async function saveDraft() {
   else toast(t('pages.saveError', "Échec de l'enregistrement."), 'error');
 }
 
+function _restorePublishBtn(btn) {
+  if (!btn) return;
+  btn.disabled = false;
+  btn.innerHTML = `<i data-lucide="upload"></i> ${escHtml(t('pages.publish', 'Publier'))}`;
+  try { refreshIcons(btn.parentElement || document); } catch (_) {}
+}
+
 async function publish() {
-  // Guard the footgun: publishing an untouched starter seed would replace a
-  // built-in page's real (static) layout with the generic template. If nothing
-  // was edited, make the operator confirm that intent.
-  if (_seeded && !_dirty && !confirm(t('pages.publishSeedConfirm', 'Publier ce modèle de départ remplacera la mise en page intégrée de cette page. Continuer ?'))) return;
+  // Publishing is a deliberate click and one-click-revertible ("Défaut"); no
+  // blocking confirm (an earlier seed-confirm made a cancelled dialog look like
+  // "Publish does nothing"). Give clear in-button feedback since the toast is
+  // easy to miss in the full-window editor.
+  const btn = el('pe-publish');
+  if (btn) { btn.disabled = true; btn.innerHTML = `<span class="spinner spinner-sm"></span> ${escHtml(t('pages.publishing', 'Publication…'))}`; }
   _doc.draft = { sections: _sections };
   const s = await apiFetchStatus(`${API_SITE}?action=save&doc=pages/${encodeURIComponent(_slug)}`, { method: 'POST', body: JSON.stringify(_doc) });
-  if (!s.ok) { toast(t('pages.saveError', "Échec de l'enregistrement."), 'error'); return; }
+  if (!s.ok) { _restorePublishBtn(btn); toast(t('pages.saveError', "Échec de l'enregistrement."), 'error'); return; }
   const r = await apiFetchStatus(`${API_SITE}?action=publish&doc=pages/${encodeURIComponent(_slug)}`, { method: 'POST', body: '{}' });
-  if (r.ok) { _mark(false); _doc.published = { sections: JSON.parse(JSON.stringify(_sections)) }; _seeded = false; renderSidebar(); toast(t('pages.published', 'Page publiée ✓'), 'success'); }
-  else toast(t('pages.saveError', "Échec de l'enregistrement."), 'error');
+  if (r.ok) {
+    _mark(false); _doc.published = { sections: JSON.parse(JSON.stringify(_sections)) }; _seeded = false; renderSidebar();
+    toast(t('pages.published', 'Page publiée ✓'), 'success');
+    if (btn) { btn.disabled = false; btn.innerHTML = `<i data-lucide="check"></i> ${escHtml(t('pages.publishedBtn', 'Publié ✓'))}`; try { refreshIcons(btn.parentElement || document); } catch (_) {} setTimeout(() => _restorePublishBtn(btn), 2600); }
+  } else { _restorePublishBtn(btn); toast(t('pages.saveError', "Échec de l'enregistrement."), 'error'); }
 }
 
 async function revert() {

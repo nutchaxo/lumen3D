@@ -999,7 +999,9 @@
     "srcDatasets": "Datasets",
     "srcSpecimen": "Specimens",
     "srcCells": "Cells",
-    "srcRegions": "Regions"
+    "srcRegions": "Regions",
+    "publishing": "Publishing…",
+    "publishedBtn": "Published ✓"
   },
   "wizard": {
     "title": "Guided setup",

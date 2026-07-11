@@ -999,7 +999,9 @@
     "srcDatasets": "Jeux de données",
     "srcSpecimen": "Spécimens",
     "srcCells": "Cellules",
-    "srcRegions": "Régions"
+    "srcRegions": "Régions",
+    "publishing": "Publication…",
+    "publishedBtn": "Publié ✓"
   },
   "wizard": {
     "title": "Installation guidée",

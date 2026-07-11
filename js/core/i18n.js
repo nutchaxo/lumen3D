@@ -123,7 +123,11 @@ const I18n = (() => {
    */
   async function discoverLanguages() {
     const basePath = _getBasePath();
-    const candidates = ['api/languages', 'api/languages.php', `${basePath}lang/manifest.json`];
+    // Try the .php route FIRST: it works on both the Python dev server (which
+    // routes /api/languages.php) and PHP hosts. The extensionless /api/languages
+    // only exists on the Python server, so requesting it first 404s (noisy) on an
+    // Apache/PHP deployment before falling through.
+    const candidates = ['api/languages.php', 'api/languages', `${basePath}lang/manifest.json`];
     for (const url of candidates) {
       try {
         const resp = await fetch(url, { cache: 'no-store' });

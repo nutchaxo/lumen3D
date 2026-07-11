@@ -66,6 +66,17 @@ const PageRenderer = (() => {
     if (text != null) e.textContent = text;
     return e;
   }
+  // Localized "no datasets" placeholder (I18n.t returns the key itself when a
+  // string is missing, so fall back to a neutral default).
+  function _emptyDatasetsLabel() {
+    try {
+      if (typeof I18n !== 'undefined' && I18n.t) {
+        const s = I18n.t('pages.noDatasetsYet');
+        if (s && s !== 'pages.noDatasetsYet') return s;
+      }
+    } catch (_) {}
+    return 'No datasets to show yet.';
+  }
   // One CSS *value* (color, gradient, …) — never a declaration: strip anything
   // that could close the property or smuggle extra ones in.
   function _sanitizeCss(v) { return String(v == null ? '' : v).replace(/[<>;{}]/g, '').replace(/expression\s*\(/gi, '').slice(0, 200); }
@@ -279,7 +290,20 @@ const PageRenderer = (() => {
       const cols = _n(p.cols, 1, 6);
       const wrap = _el('div', `display:grid;grid-template-columns:${cols ? `repeat(${cols},1fr)` : 'repeat(auto-fill,minmax(200px,1fr))'};gap:16px`);
       let list = [];
-      try { if (typeof Catalog !== 'undefined' && Catalog.list) list = Catalog.list().slice(0, Math.max(1, Math.min(12, +(p.count) || 4))); } catch (_) {}
+      // The catalog exposes getAll() (NOT list()); mirror the landing's "featured"
+      // ordering — newest first by date — then take `count`.
+      try {
+        if (typeof Catalog !== 'undefined' && Catalog.getAll) {
+          list = [...Catalog.getAll()]
+            .sort((a, c) => String(c.date || '').localeCompare(String(a.date || '')))
+            .slice(0, Math.max(1, Math.min(12, +(p.count) || 4)));
+        }
+      } catch (_) {}
+      if (!list.length) {
+        wrap.style.gridTemplateColumns = '1fr';
+        wrap.appendChild(_el('div', 'opacity:.55;padding:18px;text-align:center;border:1px dashed var(--border-subtle,#2a2a3a);border-radius:var(--radius-md,10px)', _emptyDatasetsLabel()));
+        return wrap;
+      }
       list.forEach((ds) => {
         const a = document.createElement('a');
         a.href = `viewer.html?id=${encodeURIComponent(ds.id)}`;

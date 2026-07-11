@@ -1053,7 +1053,8 @@
       "marginBottom": "Marge bas",
       "maxWidth": "Largeur max (px)",
       "minHeight": "Hauteur min (px)"
-    }
+    },
+    "noDatasetsYet": "Aucun jeu de données à afficher pour le moment."
   },
   "wizard": {
     "title": "Installation guidée",

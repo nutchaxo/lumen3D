@@ -719,10 +719,17 @@ function _buildPageList() {
   _pages = [...SPECIAL.map((s) => ({ slug: s.slug, builtin: true })), ...custom];
 }
 
+function _emptyDoc() { return { title: {}, published: { sections: [] }, draft: { sections: [] } }; }
+
 async function selectPage(slug) {
   _slug = slug;
   const data = await apiFetch(`${API_SITE}?action=get&doc=pages/${encodeURIComponent(slug)}`);
-  _doc = (data && typeof data === 'object') ? data : { title: {}, published: { sections: [] }, draft: { sections: [] } };
+  // A MISSING doc comes back as [] on PHP hosts (site.php) and {} on the Python
+  // dev server. `typeof [] === 'object'`, so without the Array guard _doc became
+  // an ARRAY — then `_doc.draft = …` set a named property that JSON.stringify
+  // silently drops (arrays serialize indices only), so save persisted `[]` and
+  // every edit vanished on reload. Always normalize to a real doc object.
+  _doc = (data && typeof data === 'object' && !Array.isArray(data)) ? data : _emptyDoc();
   const src = (_doc.draft && (Array.isArray(_doc.draft.sections) || Array.isArray(_doc.draft.blocks))) ? _doc.draft : (_doc.published || {});
   _sections = _sanitizeSections(_migrate(src));
   // Built-in pages (home/about) default to static HTML — nothing stored as
@@ -775,6 +782,7 @@ async function deletePage() {
 }
 
 async function saveDraft() {
+  if (!_doc || typeof _doc !== 'object' || Array.isArray(_doc)) _doc = _emptyDoc();
   _doc.draft = { sections: _sections };
   _doc.published = _doc.published || { sections: [] };
   const r = await apiFetchStatus(`${API_SITE}?action=save&doc=pages/${encodeURIComponent(_slug)}`, { method: 'POST', body: JSON.stringify(_doc) });
@@ -796,6 +804,7 @@ async function publish() {
   // easy to miss in the full-window editor.
   const btn = el('pe-publish');
   if (btn) { btn.disabled = true; btn.innerHTML = `<span class="spinner spinner-sm"></span> ${escHtml(t('pages.publishing', 'Publication…'))}`; }
+  if (!_doc || typeof _doc !== 'object' || Array.isArray(_doc)) _doc = _emptyDoc();
   _doc.draft = { sections: _sections };
   const s = await apiFetchStatus(`${API_SITE}?action=save&doc=pages/${encodeURIComponent(_slug)}`, { method: 'POST', body: JSON.stringify(_doc) });
   if (!s.ok) { _restorePublishBtn(btn); toast(t('pages.saveError', "Échec de l'enregistrement."), 'error'); return; }

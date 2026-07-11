@@ -69,6 +69,7 @@ const PALETTE = [
   { type: 'hero', icon: 'flag', def: 'Héros' },
   { type: 'button', icon: 'mouse-pointer-click', def: 'Bouton' },
   { type: 'image', icon: 'image', def: 'Image' },
+  { type: 'icon', icon: 'star', def: 'Icône' },
   { type: 'gallery', icon: 'images', def: 'Galerie' },
   { type: 'stat-grid', icon: 'bar-chart-2', def: 'Statistiques' },
   { type: 'latest-datasets', icon: 'layers', def: 'Derniers éléments' },
@@ -82,13 +83,14 @@ function _newWidget(type) {
   switch (type) {
     case 'heading': return { id, type, text: {}, props: { level: '2', align: 'left' } };
     case 'richtext': return { id, type, text: {}, props: { align: 'left' } };
-    case 'hero': return { id, type, text: {}, props: { subtitle: {}, bg: '', cta: { text: {}, href: '' } } };
-    case 'button': return { id, type, text: {}, props: { href: '#', style: 'accent', align: 'left' } };
-    case 'image': return { id, type, props: { src: '', alt: {}, align: 'center', width: '', href: '' } };
-    case 'gallery': return { id, type, props: { images: [] } };
-    case 'stat-grid': return { id, type, props: { stats: [{ label: {}, source: 'datasetCount', value: '' }] } };
-    case 'latest-datasets': return { id, type, props: { count: 4 } };
-    case 'divider': return { id, type, props: {} };
+    case 'hero': return { id, type, text: {}, props: { subtitle: {}, bg: '', align: 'center', titleSize: '', subSize: '', cta: { text: {}, href: '' }, cta2: { text: {}, href: '' } } };
+    case 'button': return { id, type, text: {}, props: { href: '#', variant: 'accent', align: 'left', fullWidth: false } };
+    case 'image': return { id, type, props: { src: '', alt: {}, align: 'center', width: '', height: '', fit: '', href: '' } };
+    case 'icon': return { id, type, props: { name: 'star', size: 48, color: '', align: 'center' } };
+    case 'gallery': return { id, type, props: { images: [], cols: '', height: '', gap: '' } };
+    case 'stat-grid': return { id, type, props: { stats: [{ label: {}, source: 'datasetCount', value: '' }], cols: '', cardBg: '', valueColor: '', valueSize: '', labelColor: '' } };
+    case 'latest-datasets': return { id, type, props: { count: 4, cols: '' } };
+    case 'divider': return { id, type, props: { color: '', thickness: '', width: '', lineStyle: 'solid' } };
     case 'spacer': return { id, type, props: { height: 32 } };
     case 'html': return { id, type, props: { html: {} } };
     default: return { id, type, props: {} };
@@ -124,7 +126,17 @@ function _sanitizeSections(list) {
     props: Object.assign({ bg: '', padY: 48, fullWidth: false, maxWidth: 1080, gap: 24, vAlign: 'stretch' }, s.props || {}),
     columns: (Array.isArray(s.columns) ? s.columns : [_newColumn(12)]).map((c) => ({
       id: c.id || _id('c'), width: Math.min(12, Math.max(1, +c.width || 12)), props: c.props || {},
-      widgets: (Array.isArray(c.widgets) ? c.widgets : []).map((w) => Object.assign({ id: w.id || _id('w') }, w)),
+      widgets: (Array.isArray(c.widgets) ? c.widgets : []).map((w) => {
+        const nw = Object.assign({ id: w.id || _id('w') }, w);
+        // Legacy buttons kept the variant in props.style (a string); the generic
+        // style panel now owns props.style (an object), so move it to props.variant
+        // — otherwise the first style edit would clobber the variant and vice-versa.
+        if (nw.type === 'button' && nw.props && typeof nw.props.style === 'string') {
+          nw.props = Object.assign({}, nw.props, { variant: nw.props.variant || nw.props.style });
+          delete nw.props.style;
+        }
+        return nw;
+      }),
     })),
   }));
 }
@@ -250,19 +262,122 @@ function _selWidget() { if (!_sel || _sel.wi == null) return null; return _secti
 
 function _fields(type) {
   const align = { k: 'props.align', t: 'select', l: t('pages.align', 'Alignement'), opts: [['left', '⯇ Gauche'], ['center', '≡ Centre'], ['right', 'Droite ⯈']] };
+  const cols = { k: 'props.cols', t: 'number', l: t('pages.cols', 'Colonnes (vide = auto)'), ph: 'auto' };
   switch (type) {
     case 'heading': return [{ k: 'text', t: 'ltext', l: t('pages.text', 'Texte') }, { k: 'props.level', t: 'select', l: t('pages.level', 'Niveau'), opts: [['1', 'H1'], ['2', 'H2'], ['3', 'H3'], ['4', 'H4']] }, align];
     case 'richtext': return [{ k: 'text', t: 'ltextarea', l: t('pages.text', 'Texte') }, align];
-    case 'hero': return [{ k: 'text', t: 'ltext', l: t('pages.heroTitle', 'Titre') }, { k: 'props.subtitle', t: 'ltext', l: t('pages.heroSub', 'Sous-titre') }, { k: 'props.bg', t: 'color', l: t('pages.bg', 'Fond') }, { k: 'props.cta.text', t: 'ltext', l: t('pages.ctaText', 'Bouton') }, { k: 'props.cta.href', t: 'text', l: t('pages.ctaHref', 'Lien du bouton') }];
-    case 'button': return [{ k: 'text', t: 'ltext', l: t('pages.label', 'Libellé') }, { k: 'props.href', t: 'text', l: t('pages.href', 'Lien') }, { k: 'props.style', t: 'select', l: t('pages.style', 'Style'), opts: [['accent', 'Accent'], ['ghost', 'Ghost'], ['lg', 'Grand']] }, align];
-    case 'image': return [{ k: 'props.src', t: 'text', l: 'URL' }, { k: 'props.alt', t: 'ltext', l: t('pages.alt', 'Texte alt') }, { k: 'props.width', t: 'number', l: t('pages.width', 'Largeur (px)') }, { k: 'props.href', t: 'text', l: t('pages.linkOpt', 'Lien (option.)') }, align];
-    case 'gallery': return [{ k: 'props.images', t: 'gallery', l: t('pages.images', 'Images') }];
-    case 'stat-grid': return [{ k: 'props.stats', t: 'stats', l: t('pages.stats', 'Statistiques') }];
-    case 'latest-datasets': return [{ k: 'props.count', t: 'number', l: t('pages.count', 'Nombre') }];
+    case 'hero': return [
+      { k: 'text', t: 'ltext', l: t('pages.heroTitle', 'Titre') },
+      { k: 'props.titleSize', t: 'number', l: t('pages.titleSize', 'Taille du titre (px)'), ph: 'auto' },
+      { k: 'props.subtitle', t: 'ltext', l: t('pages.heroSub', 'Sous-titre') },
+      { k: 'props.subSize', t: 'number', l: t('pages.subSize', 'Taille du sous-titre (px)'), ph: 'auto' },
+      { k: 'props.bg', t: 'color', l: t('pages.bg', 'Fond') },
+      { k: 'props.style.overlay', t: 'color', l: t('pages.overlay', 'Voile (couleur sur le fond)') },
+      { k: 'props.align', t: 'select', l: t('pages.align', 'Alignement'), opts: [['center', '≡ Centre'], ['left', '⯇ Gauche'], ['right', 'Droite ⯈']] },
+      { k: 'props.cta.text', t: 'ltext', l: t('pages.ctaText', 'Bouton') },
+      { k: 'props.cta.href', t: 'text', l: t('pages.ctaHref', 'Lien du bouton') },
+      { k: 'props.cta2.text', t: 'ltext', l: t('pages.cta2Text', 'Bouton secondaire') },
+      { k: 'props.cta2.href', t: 'text', l: t('pages.cta2Href', 'Lien du bouton secondaire') },
+    ];
+    case 'button': return [
+      { k: 'text', t: 'ltext', l: t('pages.label', 'Libellé') },
+      { k: 'props.href', t: 'text', l: t('pages.href', 'Lien') },
+      { k: 'props.variant', t: 'select', l: t('pages.style', 'Style'), opts: [['accent', 'Accent'], ['ghost', 'Ghost'], ['lg', 'Grand']] },
+      { k: 'props.fullWidth', t: 'check', l: t('pages.fullWidthBtn', 'Pleine largeur') },
+      align,
+    ];
+    case 'image': return [
+      { k: 'props.src', t: 'text', l: 'URL' },
+      { k: 'props.alt', t: 'ltext', l: t('pages.alt', 'Texte alt') },
+      { k: 'props.width', t: 'number', l: t('pages.width', 'Largeur (px)'), ph: 'auto' },
+      { k: 'props.height', t: 'number', l: t('pages.imgHeight', 'Hauteur (px)'), ph: 'auto' },
+      { k: 'props.fit', t: 'select', l: t('pages.imgFit', 'Cadrage'), opts: [['cover', 'Remplir (cover)'], ['contain', 'Contenir (contain)']] },
+      { k: 'props.href', t: 'text', l: t('pages.linkOpt', 'Lien (option.)') },
+      align,
+    ];
+    case 'icon': return [
+      { k: 'props.name', t: 'text', l: t('pages.iconName', 'Icône (nom Lucide)'), ph: 'star', hint: t('pages.iconHint', 'Ex. microscope, video, activity, atom, leaf — noms sur lucide.dev') },
+      { k: 'props.size', t: 'number', l: t('pages.iconSize', 'Taille (px)') },
+      { k: 'props.color', t: 'color', l: t('pages.stroke', 'Couleur') },
+      align,
+    ];
+    case 'gallery': return [
+      { k: 'props.images', t: 'gallery', l: t('pages.images', 'Images') },
+      cols,
+      { k: 'props.height', t: 'number', l: t('pages.imgHeight', 'Hauteur (px)') },
+      { k: 'props.gap', t: 'number', l: t('pages.hgap', 'Espacement (px)') },
+    ];
+    case 'stat-grid': return [
+      { k: 'props.stats', t: 'stats', l: t('pages.stats', 'Statistiques') },
+      cols,
+      { k: 'props.cardBg', t: 'color', l: t('pages.cardBg', 'Fond des cartes') },
+      { k: 'props.valueColor', t: 'color', l: t('pages.valueColor', 'Couleur des valeurs') },
+      { k: 'props.valueSize', t: 'number', l: t('pages.valueSize', 'Taille des valeurs (px)'), ph: 'auto' },
+      { k: 'props.labelColor', t: 'color', l: t('pages.labelColor', 'Couleur des libellés') },
+    ];
+    case 'latest-datasets': return [{ k: 'props.count', t: 'number', l: t('pages.count', 'Nombre') }, cols];
+    case 'divider': return [
+      { k: 'props.color', t: 'color', l: t('pages.stroke', 'Couleur') },
+      { k: 'props.thickness', t: 'number', l: t('pages.thickness', 'Épaisseur (px)') },
+      { k: 'props.width', t: 'number', l: t('pages.widthPct', 'Largeur (%)'), ph: '100' },
+      { k: 'props.lineStyle', t: 'select', l: t('pages.lineStyle', 'Trait'), opts: [['solid', 'Plein'], ['dashed', 'Tirets'], ['dotted', 'Points']] },
+    ];
     case 'spacer': return [{ k: 'props.height', t: 'number', l: t('pages.height', 'Hauteur (px)') }];
     case 'html': return [{ k: 'props.html', t: 'ltextarea', l: 'HTML' }];
     default: return [];
   }
+}
+
+// ── Style panel (generic, shared by widget / column / section scopes) ────────
+// Every field writes props.style.* — compiled to inline CSS by
+// PageRenderer.styleCss; the live page and the edit frame render it identically.
+function _styleGroups(scope) {
+  const surface = [
+    { k: 'props.style.bg', t: 'color', l: t('pages.st.bg', 'Fond (couleur / dégradé)') },
+    { k: 'props.style.bgImage', t: 'text', l: t('pages.st.bgImage', 'Image de fond (URL)') },
+    { k: 'props.style.radius', t: 'number', l: t('pages.st.radius', 'Arrondi (px)'), ph: 'auto' },
+    { k: 'props.style.borderWidth', t: 'number', l: t('pages.st.borderWidth', 'Bordure (px)'), ph: '0' },
+    { k: 'props.style.borderColor', t: 'color', l: t('pages.st.borderColor', 'Couleur de bordure') },
+    { k: 'props.style.borderStyle', t: 'select', l: t('pages.st.borderStyle', 'Style de bordure'), opts: [['solid', 'Pleine'], ['dashed', 'Tirets'], ['dotted', 'Points']] },
+    { k: 'props.style.shadow', t: 'select', l: t('pages.st.shadow', 'Ombre'), opts: [['', 'Aucune'], ['sm', 'Légère'], ['md', 'Moyenne'], ['lg', 'Forte']] },
+    { k: 'props.style.opacity', t: 'number', l: t('pages.st.opacity', 'Opacité (%)'), ph: '100' },
+  ];
+  if (scope === 'section') surface.splice(2, 0, { k: 'props.style.overlay', t: 'color', l: t('pages.overlay', 'Voile (couleur sur le fond)') });
+  return [
+    { title: t('pages.st.text', 'Texte'), icon: 'type', fields: [
+      { k: 'props.style.color', t: 'color', l: t('pages.st.textColor', 'Couleur du texte') },
+      { k: 'props.style.fontSize', t: 'number', l: t('pages.st.fontSize', 'Taille (px)'), ph: 'auto' },
+      { k: 'props.style.fontWeight', t: 'select', l: t('pages.st.fontWeight', 'Graisse'), opts: [['', 'Auto'], ['300', 'Light 300'], ['400', 'Normal 400'], ['500', 'Medium 500'], ['600', 'Semi-bold 600'], ['700', 'Bold 700'], ['800', 'Extra 800']] },
+      { k: 'props.style.lineHeight', t: 'number', l: t('pages.st.lineHeight', 'Interligne (ex. 1.5)'), step: '0.05', ph: 'auto' },
+      { k: 'props.style.letterSpacing', t: 'number', l: t('pages.st.letterSpacing', 'Espac. lettres (px)'), step: '0.5', ph: '0' },
+      { k: 'props.style.align', t: 'select', l: t('pages.align', 'Alignement'), opts: [['', 'Auto'], ['left', 'Gauche'], ['center', 'Centre'], ['right', 'Droite']] },
+      { k: 'props.style.italic', t: 'check', l: t('pages.st.italic', 'Italique') },
+      { k: 'props.style.uppercase', t: 'check', l: t('pages.st.uppercase', 'Majuscules') },
+    ] },
+    { title: t('pages.st.surface', 'Fond & bordure'), icon: 'paint-bucket', fields: surface },
+    { title: t('pages.st.spacing', 'Espacement'), icon: 'move', grid: true, fields: [
+      { k: 'props.style.padTop', t: 'number', l: t('pages.st.padTop', 'Padding haut'), ph: 'auto' },
+      { k: 'props.style.padBottom', t: 'number', l: t('pages.st.padBottom', 'Padding bas'), ph: 'auto' },
+      { k: 'props.style.padLeft', t: 'number', l: t('pages.st.padLeft', 'Padding gauche'), ph: 'auto' },
+      { k: 'props.style.padRight', t: 'number', l: t('pages.st.padRight', 'Padding droite'), ph: 'auto' },
+      { k: 'props.style.marginTop', t: 'number', l: t('pages.st.marginTop', 'Marge haut'), ph: 'auto' },
+      { k: 'props.style.marginBottom', t: 'number', l: t('pages.st.marginBottom', 'Marge bas'), ph: 'auto' },
+    ] },
+    { title: t('pages.st.size', 'Taille'), icon: 'scaling', grid: true, fields: [
+      { k: 'props.style.maxWidth', t: 'number', l: t('pages.st.maxWidth', 'Largeur max (px)'), ph: 'auto' },
+      { k: 'props.style.minHeight', t: 'number', l: t('pages.st.minHeight', 'Hauteur min (px)'), ph: 'auto' },
+    ] },
+  ];
+}
+
+function _styleGroupsHtml(obj, scope) {
+  const groups = _styleGroups(scope);
+  return `<div style="margin-top:12px;border-top:1px solid var(--border-subtle,#2a2a3a);padding-top:10px">
+      <div class="adm-field-label" style="margin-bottom:8px;display:flex;align-items:center;gap:6px"><i data-lucide="brush"></i>${escHtml(t('pages.st.title', 'Style'))}</div>` +
+    groups.map((g) => `<details style="margin-bottom:8px;border:1px solid var(--border-subtle,#2a2a3a);border-radius:8px;padding:6px 9px">
+        <summary style="cursor:pointer;font-size:12.5px;font-weight:600;display:flex;align-items:center;gap:7px;user-select:none;list-style:none"><i data-lucide="${g.icon}" style="width:13px;height:13px"></i>${escHtml(g.title)}</summary>
+        <div style="margin-top:8px;${g.grid ? 'display:grid;grid-template-columns:1fr 1fr;gap:0 8px' : ''}">${g.fields.map((f) => _fieldHtml(obj, f)).join('')}</div>
+      </details>`).join('') + '</div>';
 }
 
 // ══════════════════════════════════════════════════════════════
@@ -495,34 +610,45 @@ function _renderPalette(body) {
 // ourselves: a floating ghost follows the pointer; while over the iframe we
 // forward frame-local coords so the frame paints a drop indicator; on release
 // over the iframe we tell it to drop, otherwise we just append to the selection.
+// setPointerCapture is what lets the ghost cross INTO the iframe: without it
+// the frame's document swallows every pointermove the moment the cursor
+// leaves the sidebar, freezing the ghost against the panel edge.
 function _startPaletteDrag(e, type, btn) {
   e.preventDefault();
+  try { btn.setPointerCapture(e.pointerId); } catch (_) {}
   const frame = _frameEl();
   const label = btn ? btn.textContent.trim() : type;
   const ghost = document.createElement('div');
   ghost.textContent = label;
-  ghost.style.cssText = 'position:fixed;z-index:3000;pointer-events:none;padding:6px 10px;background:var(--color-primary,#2F6BFF);color:#fff;border-radius:6px;font-size:12px;box-shadow:0 6px 16px rgba(0,0,0,.35)';
+  ghost.style.cssText = 'position:fixed;z-index:3000;display:none;pointer-events:none;padding:6px 10px;background:var(--color-primary,#2F6BFF);color:#fff;border-radius:6px;font-size:12px;box-shadow:0 6px 16px rgba(0,0,0,.35)';
   document.body.appendChild(ghost);
+  const startX = e.clientX, startY = e.clientY;
   let moved = false;
-  const over = (ev) => { const r = frame.getBoundingClientRect(); return ev.clientX >= r.left && ev.clientX <= r.right && ev.clientY >= r.top && ev.clientY <= r.bottom ? r : null; };
+  const over = (ev) => { if (!frame) return null; const r = frame.getBoundingClientRect(); return ev.clientX >= r.left && ev.clientX <= r.right && ev.clientY >= r.top && ev.clientY <= r.bottom ? r : null; };
   const move = (ev) => {
+    if (!moved && Math.hypot(ev.clientX - startX, ev.clientY - startY) < 5) return;   // click jitter ≠ drag
     moved = true;
+    ghost.style.display = 'block';
     ghost.style.left = (ev.clientX + 10) + 'px';
     ghost.style.top = (ev.clientY + 10) + 'px';
     const r = over(ev);
     if (r) _postFrame({ type: 'LUMEN_EDIT_DRAGMOVE', x: ev.clientX - r.left, y: ev.clientY - r.top });
     else _postFrame({ type: 'LUMEN_EDIT_DRAGCLEAR' });
   };
-  const up = (ev) => {
+  const finish = (ev, cancelled) => {
     window.removeEventListener('pointermove', move);
     window.removeEventListener('pointerup', up);
+    window.removeEventListener('pointercancel', cancel);
     ghost.remove();
-    const r = over(ev);
+    const r = (!cancelled && ev) ? over(ev) : null;
     if (r && moved) _postFrame({ type: 'LUMEN_EDIT_DROP_AT', x: ev.clientX - r.left, y: ev.clientY - r.top, payload: { kind: 'new', wtype: type } });
-    else { _postFrame({ type: 'LUMEN_EDIT_DRAGCLEAR' }); if (!moved) addWidgetToSelection(type); }
+    else { _postFrame({ type: 'LUMEN_EDIT_DRAGCLEAR' }); if (!moved && !cancelled) addWidgetToSelection(type); }
   };
+  const up = (ev) => finish(ev, false);
+  const cancel = () => finish(null, true);
   window.addEventListener('pointermove', move);
   window.addEventListener('pointerup', up);
+  window.addEventListener('pointercancel', cancel);
 }
 
 // ══════════════════════════════════════════════════════════════
@@ -576,6 +702,7 @@ function _sectionSettings(host, sec, si) {
     <label class="adm-field"><span class="adm-field-label">${escHtml(t('pages.gap', 'Espace entre colonnes (px)'))}</span><input type="number" class="adm-field-input" id="pb-gap" value="${escHtml(String(p.gap ?? 24))}"></label>
     <label class="adm-field"><span class="adm-field-label">${escHtml(t('pages.vAlign', 'Alignement vertical'))}</span><select class="adm-field-input" id="pb-va">${[['stretch', '↕'], ['start', '↑'], ['center', '↔'], ['end', '↓']].map(([v, l]) => `<option value="${v}" ${p.vAlign === v ? 'selected' : ''}>${l} ${v}</option>`).join('')}</select></label>
     <label class="adm-field"><span class="adm-field-label">${escHtml(t('pages.bg', 'Fond (CSS)'))}</span><input type="text" class="adm-field-input" id="pb-bg" value="${escHtml(p.bg || '')}" placeholder="#111 / linear-gradient(…)"></label>
+    ${_styleGroupsHtml(sec, 'section')}
     <div style="display:flex;gap:6px;margin-top:10px">
       <button class="adm-btn adm-btn-ghost adm-btn-sm" id="pb-sec-dup"><i data-lucide="copy"></i> ${escHtml(t('pages.duplicate', 'Dupliquer'))}</button>
       <button class="adm-btn adm-btn-ghost adm-btn-sm" id="pb-sec-del"><i data-lucide="trash-2"></i> ${escHtml(t('pages.delete', 'Supprimer'))}</button>
@@ -594,6 +721,7 @@ function _sectionSettings(host, sec, si) {
   el('pb-bg').addEventListener('input', (e) => upd(() => p.bg = e.target.value));
   el('pb-sec-dup').addEventListener('click', () => duplicateSection(si));
   el('pb-sec-del').addEventListener('click', () => deleteSection(si));
+  _wireFields(host, sec, []);
   refreshIcons(host);
 }
 
@@ -603,6 +731,8 @@ function _columnSettings(host, sec, si, ci) {
     <label class="adm-field"><span class="adm-field-label">${escHtml(t('pages.colWidth', 'Largeur (unités /12)'))}</span><input type="range" min="1" max="12" step="1" id="pb-cw" value="${col.width}"><span class="adm-page-sub" id="pb-cw-val">${col.width}/12</span></label>
     <label class="adm-field"><span class="adm-field-label">${escHtml(t('pages.vAlign', 'Alignement vertical'))}</span><select class="adm-field-input" id="pb-cva">${[['', '—'], ['flex-start', '↑'], ['center', '↔'], ['flex-end', '↓']].map(([v, l]) => `<option value="${v}" ${(col.props?.vAlign || '') === v ? 'selected' : ''}>${l} ${v || 'auto'}</option>`).join('')}</select></label>
     <label class="adm-field"><span class="adm-field-label">${escHtml(t('pages.colPad', 'Padding interne (px)'))}</span><input type="number" class="adm-field-input" id="pb-cpad" value="${escHtml(String(col.props?.padding || 0))}"></label>
+    <button class="adm-btn adm-btn-ghost adm-btn-sm" id="pb-col-card" style="width:100%;justify-content:center"><i data-lucide="sparkles"></i> ${escHtml(t('pages.cardPreset', 'Transformer en carte'))}</button>
+    ${_styleGroupsHtml(col, 'column')}
     <div style="display:flex;gap:6px;margin-top:10px">
       <button class="adm-btn adm-btn-ghost adm-btn-sm" id="pb-col-add"><i data-lucide="plus"></i> ${escHtml(t('pages.addColumn', 'Colonne'))}</button>
       ${sec.columns.length > 1 ? `<button class="adm-btn adm-btn-ghost adm-btn-sm" id="pb-col-del"><i data-lucide="trash-2"></i> ${escHtml(t('pages.removeColumn', 'Retirer'))}</button>` : ''}
@@ -614,8 +744,17 @@ function _columnSettings(host, sec, si, ci) {
   });
   el('pb-cva').addEventListener('change', (e) => { col.props = col.props || {}; col.props.vAlign = e.target.value; _mark(true); _syncFrame(); });
   el('pb-cpad').addEventListener('input', (e) => { col.props = col.props || {}; col.props.padding = Math.max(0, +e.target.value || 0); _mark(true); _syncFrame(); });
+  el('pb-col-card').addEventListener('click', () => {
+    col.props = col.props || {};
+    col.props.style = Object.assign({}, col.props.style, {
+      bg: 'var(--bg-surface)', radius: 12, borderWidth: 1, borderColor: 'var(--border-subtle)',
+      shadow: 'sm', padTop: 24, padRight: 24, padBottom: 24, padLeft: 24,
+    });
+    _mark(true); renderSettings(); _syncFrame();
+  });
   el('pb-col-add').addEventListener('click', () => addColumn(si));
   el('pb-col-del')?.addEventListener('click', () => removeColumn(si, ci));
+  _wireFields(host, col, []);
   refreshIcons(host);
 }
 
@@ -623,6 +762,7 @@ function _widgetSettings(host, b) {
   const fields = _fields(b.type);
   host.innerHTML = _panelHead(t('pages.block.' + b.type, b.type), 'settings-2') +
     (fields.map((f) => _fieldHtml(b, f)).join('') || `<p class="adm-page-sub">${escHtml(t('pages.noSettings', 'Pas de réglages.'))}</p>`) +
+    _styleGroupsHtml(b, 'widget') +
     `<div style="display:flex;gap:6px;margin-top:12px">
       <button class="adm-btn adm-btn-ghost adm-btn-sm" id="pb-w-dup"><i data-lucide="copy"></i> ${escHtml(t('pages.duplicate', 'Dupliquer'))}</button>
       <button class="adm-btn adm-btn-ghost adm-btn-sm" id="pb-w-del"><i data-lucide="trash-2"></i> ${escHtml(t('pages.delete', 'Supprimer'))}</button>
@@ -635,14 +775,24 @@ function _widgetSettings(host, b) {
 
 function _fieldHtml(b, f) {
   const val = _get(b, f.k);
+  const hint = f.hint ? `<span class="adm-page-sub" style="font-size:11px;margin-top:2px">${escHtml(f.hint)}</span>` : '';
   if (f.t === 'ltext') return `<label class="adm-field"><span class="adm-field-label">${escHtml(f.l)}</span><input type="text" class="adm-field-input" data-f="${escHtml(f.k)}" data-lt="1" value="${escHtml(_lv(val))}"></label>`;
   if (f.t === 'ltextarea') return `<label class="adm-field"><span class="adm-field-label">${escHtml(f.l)}</span><textarea class="adm-field-input" data-f="${escHtml(f.k)}" data-lt="1" rows="4" style="resize:vertical">${escHtml(_lv(val))}</textarea></label>`;
-  if (f.t === 'select') return `<label class="adm-field"><span class="adm-field-label">${escHtml(f.l)}</span><select class="adm-field-input" data-f="${escHtml(f.k)}">${f.opts.map(([v, lab]) => `<option value="${escHtml(v)}" ${String(val) === v ? 'selected' : ''}>${escHtml(lab)}</option>`).join('')}</select></label>`;
-  if (f.t === 'color') return `<label class="adm-field" style="flex-direction:row;justify-content:space-between;align-items:center"><span class="adm-field-label" style="margin:0">${escHtml(f.l)}</span><input type="text" class="adm-field-input" data-f="${escHtml(f.k)}" value="${escHtml(typeof val === 'string' ? val : '')}" placeholder="#… / transparent" style="width:150px"></label>`;
-  if (f.t === 'number') return `<label class="adm-field"><span class="adm-field-label">${escHtml(f.l)}</span><input type="number" class="adm-field-input" data-f="${escHtml(f.k)}" value="${escHtml(val != null ? String(val) : '')}"></label>`;
+  if (f.t === 'select') return `<label class="adm-field"><span class="adm-field-label">${escHtml(f.l)}</span><select class="adm-field-input" data-f="${escHtml(f.k)}">${f.opts.map(([v, lab]) => `<option value="${escHtml(v)}" ${String(val ?? '') === v ? 'selected' : ''}>${escHtml(lab)}</option>`).join('')}</select></label>`;
+  if (f.t === 'color') {
+    const sval = typeof val === 'string' ? val : '';
+    const hex = /^#[0-9a-f]{6}$/i.test(sval) ? sval : '#888888';
+    return `<label class="adm-field"><span class="adm-field-label">${escHtml(f.l)}</span>
+      <div style="display:flex;gap:6px;align-items:center">
+        <input type="color" data-cs="${escHtml(f.k)}" value="${escHtml(hex)}" style="width:34px;height:32px;padding:2px;border:1px solid var(--border-subtle,#2a2a3a);border-radius:6px;background:transparent;cursor:pointer;flex:0 0 auto">
+        <input type="text" class="adm-field-input" data-f="${escHtml(f.k)}" value="${escHtml(sval)}" placeholder="#… / var(--…) / linear-gradient(…)" style="flex:1;min-width:0">
+      </div></label>`;
+  }
+  if (f.t === 'check') return `<label class="adm-field" style="flex-direction:row;justify-content:space-between;align-items:center;gap:8px"><span class="adm-field-label" style="margin:0">${escHtml(f.l)}</span><input type="checkbox" data-f="${escHtml(f.k)}" ${val ? 'checked' : ''}></label>`;
+  if (f.t === 'number') return `<label class="adm-field"><span class="adm-field-label">${escHtml(f.l)}</span><input type="number" ${f.step ? `step="${escHtml(f.step)}"` : ''} class="adm-field-input" data-f="${escHtml(f.k)}" value="${escHtml(val != null ? String(val) : '')}" placeholder="${escHtml(f.ph || '')}"></label>`;
   if (f.t === 'gallery') return `<div class="adm-field"><span class="adm-field-label">${escHtml(f.l)}</span><div id="pages-gallery"></div><button class="adm-btn adm-btn-ghost adm-btn-sm" id="pages-gallery-add"><i data-lucide="plus"></i> ${escHtml(t('pages.addImage', 'Image'))}</button></div>`;
   if (f.t === 'stats') return `<div class="adm-field"><span class="adm-field-label">${escHtml(f.l)}</span><div id="pages-stats"></div><button class="adm-btn adm-btn-ghost adm-btn-sm" id="pages-stats-add"><i data-lucide="plus"></i> ${escHtml(t('pages.addStat', 'Stat'))}</button></div>`;
-  return `<label class="adm-field"><span class="adm-field-label">${escHtml(f.l)}</span><input type="text" class="adm-field-input" data-f="${escHtml(f.k)}" value="${escHtml(typeof val === 'string' ? val : (val != null ? String(val) : ''))}"></label>`;
+  return `<label class="adm-field"><span class="adm-field-label">${escHtml(f.l)}</span><input type="text" class="adm-field-input" data-f="${escHtml(f.k)}" value="${escHtml(typeof val === 'string' ? val : (val != null ? String(val) : ''))}" placeholder="${escHtml(f.ph || '')}">${hint}</label>`;
 }
 
 function _wireFields(host, b, _fields2) {
@@ -650,8 +800,24 @@ function _wireFields(host, b, _fields2) {
   host.querySelectorAll('[data-f]').forEach((inp) => {
     inp.addEventListener('input', () => {
       const path = inp.getAttribute('data-f');
+      const v = inp.type === 'checkbox' ? inp.checked : inp.value;
       if (inp.getAttribute('data-lt')) { let obj = _get(b, path); if (typeof obj !== 'object' || obj == null) { obj = {}; _put(b, path, obj); } obj[_editLoc] = inp.value; }
-      else _put(b, path, inp.value);
+      else _put(b, path, v);
+      // Typing a #rrggbb hex keeps the color swatch of a combo field in sync.
+      if (inp.type === 'text' && /^#[0-9a-f]{6}$/i.test(inp.value)) {
+        const sw = host.querySelector(`[data-cs="${path}"]`);
+        if (sw) sw.value = inp.value;
+      }
+      _mark(true); redraw();
+    });
+  });
+  // Color swatch → text twin + model (swatches only emit #rrggbb).
+  host.querySelectorAll('[data-cs]').forEach((sw) => {
+    sw.addEventListener('input', () => {
+      const path = sw.getAttribute('data-cs');
+      const txt = host.querySelector(`[data-f="${path}"]`);
+      if (txt) txt.value = sw.value;
+      _put(b, path, sw.value);
       _mark(true); redraw();
     });
   });

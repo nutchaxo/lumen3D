@@ -124,15 +124,23 @@ const PageEditFrame = (() => {
     return b;
   }
 
+  // Section/column CSS comes from PageRenderer (sectionCss/columnCss) so the
+  // editing surface renders exactly what the live page will; the frame only
+  // adds its chrome (outline, chip, toolbar) and swaps the row's column-gap
+  // for in-flow resize handles of exactly `gap`px. (The old fixed-width
+  // handles plus "- gap" column bases overflowed the flex line, wrapping every
+  // column to its own full-width row.)
   function _sectionNode(sec, si) {
     const p = sec.props || {};
     const selected = _sel && _sel.si === si && _sel.ci == null && _sel.wi == null;
+    const css = PageRenderer.sectionCss(p);
+    const gap = css.gap;
     const outer = document.createElement('section');
     outer.dataset.ebSi = si;
-    const gap = Math.max(0, Math.min(80, +p.gap ?? 24));
-    outer.style.cssText = `position:relative;padding:${Math.max(0, +p.padY ?? 48)}px 0;` +
-      `${p.bg ? 'background:' + String(p.bg).replace(/[<>]/g, '') + ';' : ''}` +
-      `outline:2px solid ${selected ? PRIMARY : 'transparent'};outline-offset:-2px;transition:outline-color .12s`;
+    outer.style.cssText = css.outer +
+      `;outline:2px solid ${selected ? PRIMARY : 'transparent'};outline-offset:-2px;transition:outline-color .12s`;
+    const ov = PageRenderer.overlayNode(p.style);
+    if (ov) outer.appendChild(ov);
 
     const chip = _chip(`${_msg('section', 'Section')} ${si + 1}`);
     const bar = _bar('right:6px');
@@ -151,50 +159,62 @@ const PageEditFrame = (() => {
     outer.appendChild(bar);
 
     const inner = document.createElement('div');
-    inner.style.cssText = p.fullWidth
-      ? 'width:100%;padding:0 24px;box-sizing:border-box'
-      : `max-width:${Math.max(480, Math.min(1600, +p.maxWidth || 1080))}px;margin:0 auto;padding:0 24px;box-sizing:border-box`;
+    inner.style.cssText = css.inner;
     const row = document.createElement('div');
-    const valign = { start: 'flex-start', center: 'center', end: 'flex-end', stretch: 'stretch' }[p.vAlign] || 'stretch';
-    row.style.cssText = `display:flex;flex-wrap:wrap;gap:${gap}px;align-items:${valign}`;
+    // Match the live renderer EXACTLY: column-gap between columns (which, unlike
+    // an in-flow spacer element, is suppressed at wrap boundaries) so wrapped
+    // multi-column layouts render identically here and on the published page.
+    // Resize handles are absolute overlays straddling each boundary (see
+    // _resizeHandle) — they consume no layout width.
+    row.style.cssText = css.row + `;column-gap:${gap}px`;
     (Array.isArray(sec.columns) ? sec.columns : []).forEach((col, ci) => {
-      if (ci > 0) row.appendChild(_resizeHandle(si, ci, sec));
-      row.appendChild(_columnNode(sec, si, col, ci, gap));
+      const colNode = _columnNode(sec, si, col, ci, gap);
+      if (ci > 0) colNode.appendChild(_resizeHandle(si, ci, sec, gap));
+      row.appendChild(colNode);
     });
     inner.appendChild(row);
     outer.appendChild(inner);
     return outer;
   }
 
-  function _resizeHandle(si, ci, sec) {
+  // Absolute overlay straddling the gap on THIS column's left edge. Because it
+  // is position:absolute it adds NO flex width — column-gap alone governs
+  // spacing, so the row wraps exactly like the live page. Anchored to the
+  // column (which is position:relative in _columnNode).
+  function _resizeHandle(si, ci, sec, gap) {
     const h = document.createElement('div');
     h.title = _msg('resizeCols', 'Glisser pour redimensionner');
-    h.style.cssText = 'flex:0 0 12px;align-self:stretch;cursor:col-resize;display:flex;align-items:center;justify-content:center;z-index:4';
+    h.style.cssText = `position:absolute;top:0;bottom:0;left:${-gap / 2}px;transform:translateX(-50%);` +
+      'width:16px;min-height:40px;cursor:col-resize;display:flex;align-items:center;justify-content:center;z-index:5;touch-action:none';
     const grip = document.createElement('div');
     grip.style.cssText = 'width:4px;height:44px;border-radius:3px;background:var(--border-strong,#3a3a4a)';
     h.appendChild(grip);
     h.addEventListener('mouseenter', () => (grip.style.background = 'var(--color-primary,#2F6BFF)'));
     h.addEventListener('mouseleave', () => (grip.style.background = 'var(--border-strong,#3a3a4a)'));
-    h.addEventListener('pointerdown', (e) => _startResize(e, si, ci, sec, h));
+    h.addEventListener('pointerdown', (e) => _startResize(e, si, ci, sec, h, gap));
     return h;
   }
 
-  function _startResize(e, si, ci, sec, handle) {
+  function _startResize(e, si, ci, sec, handle, gap) {
     e.preventDefault(); e.stopPropagation();
+    // Keep receiving pointer events even when the cursor leaves the iframe.
+    try { e.currentTarget.setPointerCapture(e.pointerId); } catch (_) {}
     const left = sec.columns[ci - 1], right = sec.columns[ci];
     if (!left || !right) return;
-    const row = handle.parentElement;
+    const row = handle.parentElement.parentElement;   // handle → column → row
+    if (!row) return;
     const rowW = row.getBoundingClientRect().width || 1;
     const unit = rowW / 12;
     const startX = e.clientX, startLeft = left.width, total = left.width + right.width;
     let finalLeft = startLeft;
     const cols = [...row.querySelectorAll(':scope > [data-eb-col]')];
+    const n = sec.columns.length;
+    const share = (n > 1 ? (gap * (n - 1)) / n + 0.5 : 0).toFixed(2);
     const onMove = (ev) => {
       const d = Math.round((ev.clientX - startX) / unit);
       finalLeft = Math.min(total - 1, Math.max(1, startLeft + d));
       // live visual resize (no round-trip) — parent commits on pointerup
-      const gap = 0;
-      cols.forEach((cel) => { const cci = +cel.dataset.ebCi; if (cci === ci - 1) cel.style.flexBasis = `calc(${(finalLeft / 12) * 100}% - ${gap}px)`; else if (cci === ci) cel.style.flexBasis = `calc(${((total - finalLeft) / 12) * 100}% - ${gap}px)`; });
+      cols.forEach((cel) => { const cci = +cel.dataset.ebCi; if (cci === ci - 1) cel.style.flexBasis = `calc(${(finalLeft / 12) * 100}% - ${share}px)`; else if (cci === ci) cel.style.flexBasis = `calc(${((total - finalLeft) / 12) * 100}% - ${share}px)`; });
     };
     const onUp = () => {
       window.removeEventListener('pointermove', onMove);
@@ -206,13 +226,13 @@ const PageEditFrame = (() => {
   }
 
   function _columnNode(sec, si, col, ci, gap) {
-    const width = Math.min(12, Math.max(1, +col.width || 12));
     const selected = _sel && _sel.si === si && _sel.ci === ci && _sel.wi == null;
     const c = document.createElement('div');
     c.dataset.ebCol = '1'; c.dataset.ebSi = si; c.dataset.ebCi = ci;
-    c.style.cssText = `flex:1 1 calc(${(width / 12) * 100}% - ${gap}px);min-width:min(100%,220px);box-sizing:border-box;` +
-      `${col.props?.padding ? 'padding:' + (parseInt(col.props.padding) || 0) + 'px;' : ''}` +
-      `outline:1px dashed ${selected ? PRIMARY : 'transparent'};outline-offset:-1px;border-radius:8px;transition:outline-color .12s`;
+    // position:relative anchors the absolute resize-handle overlay; chrome radius
+    // first so a column style radius (in columnCss) overrides it.
+    c.style.cssText = 'position:relative;border-radius:8px;' + PageRenderer.columnCss(col, gap, sec.columns.length) +
+      `;outline:1px dashed ${selected ? PRIMARY : 'transparent'};outline-offset:-1px;transition:outline-color .12s`;
     c.addEventListener('mouseenter', () => { if (!selected) c.style.outlineColor = 'var(--border-subtle,#2a2a3a)'; });
     c.addEventListener('mouseleave', () => { if (!selected) c.style.outlineColor = 'transparent'; });
     c.addEventListener('click', (e) => { e.stopPropagation(); _select({ si, ci, wi: null }); });
@@ -242,7 +262,7 @@ const PageEditFrame = (() => {
     const handle = document.createElement('div');
     handle.title = _msg('drag', 'Déplacer');
     handle.style.cssText = `position:absolute;top:6px;left:6px;z-index:6;width:26px;height:26px;border-radius:6px;background:${PRIMARY};` +
-      'color:#fff;display:flex;align-items:center;justify-content:center;cursor:grab;opacity:' + (selected ? '1' : '0') + ';transition:opacity .12s';
+      'color:#fff;display:flex;align-items:center;justify-content:center;cursor:grab;touch-action:none;opacity:' + (selected ? '1' : '0') + ';transition:opacity .12s';
     handle.innerHTML = '<i data-lucide="grip-vertical" style="width:15px;height:15px"></i>';
     handle.addEventListener('pointerdown', (e) => _beginMove(e, si, ci, wi));
     handle.addEventListener('click', (e) => e.stopPropagation());
@@ -269,6 +289,8 @@ const PageEditFrame = (() => {
   // ── reorder (drag within the frame) ─────────────────────────────
   function _beginMove(e, si, ci, wi) {
     e.preventDefault(); e.stopPropagation();
+    // Keep receiving pointer events even when the cursor leaves the iframe.
+    try { e.currentTarget.setPointerCapture(e.pointerId); } catch (_) {}
     const from = { si, ci, wi };
     document.body.style.cursor = 'grabbing';
     const onMove = (ev) => _paintIndicator(_slotAt(ev.clientX, ev.clientY));

@@ -1053,7 +1053,8 @@
       "marginBottom": "Margen inferior",
       "maxWidth": "Anchura máx (px)",
       "minHeight": "Altura mín (px)"
-    }
+    },
+    "noDatasetsYet": "Aún no hay conjuntos de datos que mostrar."
   },
   "wizard": {
     "title": "Instalación guiada",

@@ -1053,7 +1053,8 @@
       "marginBottom": "Margin bottom",
       "maxWidth": "Max width (px)",
       "minHeight": "Min height (px)"
-    }
+    },
+    "noDatasetsYet": "No datasets to show yet."
   },
   "wizard": {
     "title": "Guided setup",

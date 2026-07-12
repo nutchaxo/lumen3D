@@ -35,6 +35,8 @@
 import { API_SITE, I18n, t, escHtml, apiFetch, apiFetchStatus, toast, el, refreshIcons } from './shared.js';
 import { setUnsaved } from './bus.js';
 import { renderFields } from './pages-controls.js';
+import { renderTranslatePanel } from './pages-translate.js';
+import { renderVariablesPanel } from './pages-variables.js';
 
 const SPECIAL = [{ slug: 'home', builtin: true }, { slug: 'about', builtin: true }];
 
@@ -43,6 +45,7 @@ let _pages = [];
 let _slug = null;
 let _doc = { title: {}, published: { sections: [] }, draft: { sections: [] } };
 let _sections = [];                 // working draft
+let _background = null;             // working draft page background { preset, params } | null
 let _sel = null;                    // { si, ci, wi } — ci/wi null = column/section scope
 let _editLoc = 'en';
 let _dirty = false;
@@ -55,7 +58,8 @@ let _beforeUnloadBound = false;     // editor-tab unsaved-work guard installed o
 const _langDicts = {};              // locale code → loaded i18n dict (for faithful templates)
 
 const _id = (p) => p + Math.random().toString(36).slice(2, 9);
-function _mark(on) { _dirty = on; setUnsaved(on); ['pages-save', 'pe-save'].forEach((id) => { const s = el(id); if (s) s.disabled = !on; }); }
+let _editGen = 0;                   // bumped on every edit — lets an in-flight autosave know if newer edits arrived
+function _mark(on) { if (on) _editGen++; _dirty = on; setUnsaved(on); ['pages-save', 'pe-save'].forEach((id) => { const s = el(id); if (s) s.disabled = !on; }); }
 function _locales() { try { if (I18n && I18n.getAvailableLanguages) { const l = I18n.getAvailableLanguages(); if (l.length) return l; } } catch (_) {} return [{ code: 'en', native: 'EN' }, { code: 'fr', native: 'FR' }, { code: 'es', native: 'ES' }]; }
 function _lv(v) { if (v == null) return ''; if (typeof v === 'string') return v; if (typeof v === 'object') return v[_editLoc] || ''; return String(v); }
 
@@ -101,7 +105,7 @@ function _newWidget(type) {
     case 'icon': return { id, type, props: { name: 'star', size: 48, color: '', align: 'center' } };
     case 'gallery': return { id, type, props: { images: [], cols: '', height: '', gap: '' } };
     case 'stat-grid': return { id, type, props: { stats: [{ label: {}, source: 'datasetCount', value: '' }], cols: '', cardBg: '', valueColor: '', valueSize: '', labelColor: '' } };
-    case 'latest-datasets': return { id, type, props: { count: 4, cols: '' } };
+    case 'latest-datasets': return { id, type, props: { count: 4, cols: '', thumbHeight: '', showMeta: true } };
     case 'divider': return { id, type, props: { color: '', thickness: '', width: '', lineStyle: 'solid' } };
     case 'spacer': return { id, type, props: { height: 32 } };
     case 'html': return { id, type, props: { html: {} } };
@@ -352,12 +356,15 @@ function _fields(type) {
             { k: 'label', t: 'ltext', l: t('pages.statLabel', 'Libellé') },
             { k: 'source', t: 'select', l: t('pages.statSource', 'Source'), opts: SRCOPTS, refresh: true },
             { k: 'value', t: 'text', l: t('pages.statValue', 'Valeur fixe'), ph: '123', dis: (it) => LIVE.includes(it.source) },
+            { k: 'bg', t: 'color', grad: true, l: t('pages.statBg', 'Fond de cet encart') },
+            { k: 'valueColor', t: 'color', grad: true, l: t('pages.valueColor', 'Couleur des valeurs') },
+            { k: 'labelColor', t: 'color', l: t('pages.labelColor', 'Couleur des libellés') },
           ],
-          mk: () => ({ label: {}, source: 'custom', value: '' }), addLabel: t('pages.addStat', 'Ajouter une stat'),
+          mk: () => ({ label: {}, source: 'custom', value: '', bg: '', valueColor: '', labelColor: '' }), addLabel: t('pages.addStat', 'Ajouter une stat'),
           summary: (st, lv) => lv(st.label) },
         cols(8),
         { k: 'props.cardBg', t: 'color', grad: true, l: t('pages.cardBg', 'Fond des cartes') },
-        { k: 'props.valueColor', t: 'color', l: t('pages.valueColor', 'Couleur des valeurs') },
+        { k: 'props.valueColor', t: 'color', grad: true, l: t('pages.valueColor', 'Couleur des valeurs') },
         { k: 'props.valueSize', t: 'slider', l: t('pages.valueSize', 'Taille des valeurs'), min: 14, max: 90, ph: 'auto', dv: 40 },
         { k: 'props.labelColor', t: 'color', l: t('pages.labelColor', 'Couleur des libellés') },
       ];
@@ -365,6 +372,8 @@ function _fields(type) {
     case 'latest-datasets': return [
       { k: 'props.count', t: 'slider', l: t('pages.count', 'Nombre'), min: 1, max: 12, dv: 4 },
       cols(6),
+      { k: 'props.thumbHeight', t: 'slider', l: t('pages.thumbHeight', 'Hauteur des vignettes'), min: 60, max: 320, step: 10, ph: '120', dv: 120 },
+      { k: 'props.showMeta', t: 'check', l: t('pages.showMeta', 'Afficher type et date') },
     ];
     case 'divider': return [
       { k: 'props.color', t: 'color', l: t('pages.stroke', 'Couleur') },
@@ -507,13 +516,16 @@ function _ctlCtx() {
 function _gradPresets() {
   return (_instance && _instance.editor && Array.isArray(_instance.editor.gradientPresets)) ? _instance.editor.gradientPresets : [];
 }
-function _saveGradPresets(list) {
+async function _saveGradPresets(list) {
   if (!_instance || typeof _instance !== 'object' || Array.isArray(_instance)) _instance = {};
   _instance.editor = (_instance.editor && typeof _instance.editor === 'object') ? _instance.editor : {};
   _instance.editor.gradientPresets = (Array.isArray(list) ? list : []).slice(0, 40);
-  apiFetchStatus(`${API_SITE}?action=save&doc=instance`, { method: 'POST', body: JSON.stringify(_instance) })
-    .then((r) => { if (!r.ok) toast(t('pages.saveError', "Échec de l'enregistrement."), 'error'); else toast(t('pages.pc.presetSaved', 'Préréglages de dégradés mis à jour.'), 'success'); })
-    .catch(() => {});
+  await _reconcileInstance();   // don't clobber a concurrent Identity save
+  try {
+    const r = await apiFetchStatus(`${API_SITE}?action=save&doc=instance`, { method: 'POST', body: JSON.stringify(_instance) });
+    if (!r.ok) toast(t('pages.saveError', "Échec de l'enregistrement."), 'error');
+    else toast(t('pages.pc.presetSaved', 'Préréglages de dégradés mis à jour.'), 'success');
+  } catch (_) {}
 }
 
 // ══════════════════════════════════════════════════════════════
@@ -645,7 +657,7 @@ function _frameLabels() {
 function _syncFrame() {
   const f = _frameEl();
   if (!f || !f.contentWindow) return;
-  try { f.contentWindow.postMessage({ type: 'LUMEN_EDIT_DOC', sections: _sections, sel: _sel, editLoc: _editLoc, messages: _frameLabels(), hasTemplate: _hasTemplateFor(_slug) }, '*'); } catch (_) {}
+  try { f.contentWindow.postMessage({ type: 'LUMEN_EDIT_DOC', sections: _sections, background: _background, sel: _sel, editLoc: _editLoc, messages: _frameLabels(), hasTemplate: _hasTemplateFor(_slug) }, '*'); } catch (_) {}
 }
 function _postFrame(msg) { const f = _frameEl(); if (f && f.contentWindow) try { f.contentWindow.postMessage(msg, '*'); } catch (_) {} }
 
@@ -714,13 +726,158 @@ function _applyAction(action, sel, arg) {
 function renderSidebar() {
   const host = el('pages-side');
   if (!host) return;
-  const tab = (id, icon, label) => `<button class="adm-btn ${_side === id ? 'adm-btn-accent' : 'adm-btn-ghost'} adm-btn-sm" data-side="${id}" style="flex:1"><i data-lucide="${icon}"></i> ${escHtml(label)}</button>`;
-  host.innerHTML = `<div style="display:flex;gap:6px;margin-bottom:12px">${tab('elements', 'shapes', t('pages.elements', 'Éléments'))}${tab('settings', 'sliders-horizontal', t('pages.settings', 'Réglages'))}</div><div id="pages-side-body"></div>`;
+  const TABS = [
+    ['elements', 'shapes', t('pages.elements', 'Éléments')],
+    ['settings', 'sliders-horizontal', t('pages.settings', 'Réglages')],
+    ['bg', 'wallpaper', t('pages.bgTab', 'Fond')],
+    ['translate', 'languages', t('pages.trTab', 'Traduire')],
+    ['vars', 'braces', t('pages.vrTab', 'Variables')],
+  ];
+  const tab = ([id, icon, label]) => `<button class="adm-btn ${_side === id ? 'adm-btn-accent' : 'adm-btn-ghost'} adm-btn-sm" data-side="${id}" title="${escHtml(label)}" style="flex:1;flex-direction:column;gap:3px;padding:7px 2px"><i data-lucide="${icon}"></i><span style="font-size:9.5px;line-height:1">${escHtml(label)}</span></button>`;
+  host.innerHTML = `<div style="display:flex;gap:4px;margin-bottom:12px">${TABS.map(tab).join('')}</div><div id="pages-side-body"></div>`;
   host.querySelectorAll('[data-side]').forEach((b) => b.addEventListener('click', () => { _side = b.getAttribute('data-side'); renderSidebar(); }));
   const body = el('pages-side-body');
   if (_side === 'elements') _renderPalette(body);
-  else { body.innerHTML = '<div id="pages-settings"></div>'; renderSettings(); }
+  else if (_side === 'bg') _renderBackgroundPanel(body);
+  else if (_side === 'translate') {
+    renderTranslatePanel(body, {
+      sections: _sections, doc: _doc, locales: _locales(), editLoc: _editLoc,
+      onChange: () => { _mark(true); _syncFrame(); },
+      requestAutosave: _requestAutosave, t,
+    });
+  } else if (_side === 'vars') {
+    renderVariablesPanel(body, { instance: _instance, saveInstance: _saveInstanceDoc, t });
+  } else { body.innerHTML = '<div id="pages-settings"></div>'; renderSettings(); }
   refreshIcons(host);
+}
+
+// Silent debounced draft autosave (used by the Traduire panel: translations
+// are many small edits — saving each one immediately would spam the API).
+let _autosaveTimer = null;
+function _cancelAutosave() { clearTimeout(_autosaveTimer); _autosaveTimer = null; }
+function _requestAutosave() {
+  clearTimeout(_autosaveTimer);
+  _autosaveTimer = setTimeout(async () => {
+    if (!_doc || typeof _doc !== 'object' || Array.isArray(_doc)) _doc = _emptyDoc();
+    _doc.draft = _draftSource();
+    _doc.published = _doc.published || { sections: [] };
+    // Capture the edit generation at serialize time: edits made DURING the
+    // network round-trip aren't in this payload, so only clear the dirty flag
+    // if nothing changed since (else the beforeunload guard would disarm with
+    // unsaved edits still pending).
+    const gen = _editGen;
+    const r = await apiFetchStatus(`${API_SITE}?action=save&doc=pages/${encodeURIComponent(_slug)}`, { method: 'POST', body: JSON.stringify(_doc) });
+    if (r.ok && _editGen === gen) _mark(false);
+  }, 1200);
+}
+
+// The editor tab holds a single _instance snapshot for its whole lifetime and
+// never re-fetches; a concurrent Identity (tab-branding) save in another tab
+// would be clobbered by a full-snapshot POST. Before persisting our own keys,
+// pull in concurrent changes to the keys THIS tab does not own — keeping the
+// live _instance object identity stable (the Variables panel holds it by ref).
+const _INSTANCE_OWNED = new Set(['variables', 'editor']);
+async function _reconcileInstance() {
+  try {
+    const d = await apiFetch(`${API_SITE}?action=get&doc=instance`);
+    if (d && typeof d === 'object' && !Array.isArray(d)) {
+      for (const k of Object.keys(d)) if (!_INSTANCE_OWNED.has(k)) _instance[k] = d[k];
+    }
+  } catch (_) { /* offline / first-run → keep our snapshot */ }
+}
+
+async function _saveInstanceDoc() {
+  if (!_instance || typeof _instance !== 'object' || Array.isArray(_instance)) _instance = {};
+  await _reconcileInstance();
+  const r = await apiFetchStatus(`${API_SITE}?action=save&doc=instance`, { method: 'POST', body: JSON.stringify(_instance) });
+  if (r.ok) { try { if (typeof InstanceConfig !== 'undefined') await InstanceConfig.load(); } catch (_) {} }
+  return r.ok;
+}
+
+// The draft/published SOURCE object: sections + optional page background.
+function _draftSource() {
+  const src = { sections: _sections };
+  if (_background && _background.preset) src.background = _background;
+  return src;
+}
+
+// ── Fond (page background) panel ───────────────────────────────
+const BG_PARAM_LABELS = {
+  color: 'Couleur', color2: 'Couleur 2', count: 'Quantité', size: 'Taille', speed: 'Vitesse',
+  opacity: 'Opacité', amplitude: 'Amplitude', spacing: 'Espacement', radius: 'Rayon',
+  linkDist: 'Distance de liaison', length: 'Longueur', intensity: 'Intensité',
+  frequency: 'Fréquence', depth: 'Profondeur', thickness: 'Épaisseur',
+};
+function _bgPresets() {
+  try { if (typeof PageBackground !== 'undefined' && Array.isArray(PageBackground.PRESETS)) return PageBackground.PRESETS; } catch (_) {}
+  return [];
+}
+function _renderBackgroundPanel(body) {
+  const presets = _bgPresets();
+  body.innerHTML = `
+    <p class="adm-page-sub" style="font-size:12px;margin:0 0 10px">${escHtml(t('pages.bgHint', 'Un fond animé discret derrière toute la page. Respecte automatiquement « réduire les animations ».'))}</p>
+    <div id="pb-bg-grid" style="display:grid;grid-template-columns:1fr 1fr;gap:6px"></div>
+    <div id="pb-bg-params" style="margin-top:12px"></div>`;
+  const grid = el('pb-bg-grid');
+  const cur = _background && _background.preset;
+  const mkTile = (key, label, badge, icon) => {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'adm-btn adm-btn-sm ' + ((cur || '') === key ? 'adm-btn-accent' : 'adm-btn-ghost');
+    b.style.cssText = 'flex-direction:column;gap:3px;padding:9px 4px;justify-content:center';
+    const ic = document.createElement('i');
+    ic.setAttribute('data-lucide', icon);
+    b.appendChild(ic);
+    const sp = document.createElement('span');
+    sp.style.cssText = 'font-size:10.5px;line-height:1.15';
+    sp.textContent = label;
+    b.appendChild(sp);
+    if (badge) {
+      const bd = document.createElement('span');
+      bd.style.cssText = 'font-size:8.5px;letter-spacing:.06em;text-transform:uppercase;opacity:.6';
+      bd.textContent = badge;
+      b.appendChild(bd);
+    }
+    return b;
+  };
+  const none = mkTile('', t('pages.bgNone', 'Aucun fond'), '', 'circle-slash-2');
+  none.addEventListener('click', () => { _background = null; _mark(true); _syncFrame(); _renderBackgroundPanel(body); refreshIcons(body); });
+  grid.appendChild(none);
+  const ICONS = { drift: 'sparkles', waves: 'waves', aurora: 'cloud-sun', stars: 'star', grid: 'grip', constellation: 'share-2', orbs: 'circle-dot', ripples: 'radio', flow: 'wind', spotlight: 'sun' };
+  presets.forEach((ps) => {
+    const tile = mkTile(ps.key, t('pages.bgpreset.' + ps.key, ps.name), ps.mode === 'mouse' ? t('pages.bgMouse', 'Souris') : t('pages.bgPassive', 'Passif'), ICONS[ps.key] || 'sparkles');
+    tile.addEventListener('click', () => {
+      _background = { preset: ps.key, params: {} };
+      _mark(true); _syncFrame();
+      _renderBackgroundPanel(body); refreshIcons(body);
+    });
+    grid.appendChild(tile);
+  });
+  const paramsBox = el('pb-bg-params');
+  if (cur) {
+    const ps = presets.find((x) => x.key === cur);
+    if (ps && Array.isArray(ps.params) && ps.params.length) {
+      const head = document.createElement('div');
+      head.className = 'adm-field-label';
+      head.style.cssText = 'margin-bottom:8px';
+      head.textContent = t('pages.bgParams', 'Paramètres') + ' — ' + t('pages.bgpreset.' + ps.key, ps.name);
+      paramsBox.appendChild(head);
+      const form = document.createElement('div');
+      form.style.cssText = 'display:flex;flex-direction:column;gap:10px';
+      _background.params = (_background.params && typeof _background.params === 'object') ? _background.params : {};
+      const fields = ps.params.map((pd) => ({
+        k: 'params.' + pd.k,
+        t: pd.t === 'color' ? 'color' : 'slider',
+        grad: !!pd.grad,
+        l: t('pages.bgp.' + pd.lk, BG_PARAM_LABELS[pd.lk] || pd.lk),
+        min: pd.min, max: pd.max, step: pd.step, unit: pd.unit, dv: pd.dv,
+        ph: pd.t === 'color' ? undefined : String(pd.dv),
+      }));
+      renderFields(form, _background, fields, _ctlCtx());
+      paramsBox.appendChild(form);
+    }
+  }
+  refreshIcons(body);
 }
 
 function _renderPalette(body) {
@@ -828,6 +985,10 @@ function _pageSettings(host) {
 }
 
 async function _setPageVisibility(slug, show) {
+  // Reconcile BEFORE mutating: nav is not an owned key, so pull the fresh copy
+  // in first, then set our one flag on it — otherwise reconcile would overwrite
+  // the change we just made.
+  await _reconcileInstance();
   const pg = (_instance.nav && Array.isArray(_instance.nav.customPages)) ? _instance.nav.customPages.find((p) => p.slug === slug) : null;
   if (!pg) return;
   pg.show = show;
@@ -961,6 +1122,10 @@ function _buildPageList() {
 function _emptyDoc() { return { title: {}, published: { sections: [] }, draft: { sections: [] } }; }
 
 async function selectPage(slug) {
+  // A pending translate-panel autosave must not fire across a page switch:
+  // at fire time it would persist the NEW page's just-loaded state (for a
+  // built-in page, that silently writes the seeded template as its draft).
+  clearTimeout(_autosaveTimer);
   _slug = slug;
   const data = await apiFetch(`${API_SITE}?action=get&doc=pages/${encodeURIComponent(slug)}`);
   // A MISSING doc comes back as [] on PHP hosts (site.php) and {} on the Python
@@ -971,6 +1136,8 @@ async function selectPage(slug) {
   _doc = (data && typeof data === 'object' && !Array.isArray(data)) ? data : _emptyDoc();
   const src = (_doc.draft && (Array.isArray(_doc.draft.sections) || Array.isArray(_doc.draft.blocks))) ? _doc.draft : (_doc.published || {});
   _sections = _sanitizeSections(_migrate(src));
+  _background = (src && src.background && typeof src.background === 'object' && src.background.preset)
+    ? JSON.parse(JSON.stringify(src.background)) : null;
   // Built-in pages (home/about) default to static HTML — nothing stored as
   // sections. Showing "blank" would be wrong (the real page is anything but):
   // seed the editable starter template so the surface opens with content. Not
@@ -1021,8 +1188,9 @@ async function deletePage() {
 }
 
 async function saveDraft() {
+  _cancelAutosave();   // this IS the save — a late debounced one would be redundant/racing
   if (!_doc || typeof _doc !== 'object' || Array.isArray(_doc)) _doc = _emptyDoc();
-  _doc.draft = { sections: _sections };
+  _doc.draft = _draftSource();
   _doc.published = _doc.published || { sections: [] };
   const r = await apiFetchStatus(`${API_SITE}?action=save&doc=pages/${encodeURIComponent(_slug)}`, { method: 'POST', body: JSON.stringify(_doc) });
   if (r.ok) { _mark(false); toast(t('pages.draftSaved', 'Brouillon enregistré.'), 'success'); }
@@ -1041,15 +1209,19 @@ async function publish() {
   // blocking confirm (an earlier seed-confirm made a cancelled dialog look like
   // "Publish does nothing"). Give clear in-button feedback since the toast is
   // easy to miss in the full-window editor.
+  // Cancel any pending translate autosave: it serialized an OLD _doc (with the
+  // pre-publish `published` block) and would, if it landed after this publish,
+  // overwrite the freshly-published doc wholesale.
+  _cancelAutosave();
   const btn = el('pe-publish');
   if (btn) { btn.disabled = true; btn.innerHTML = `<span class="spinner spinner-sm"></span> ${escHtml(t('pages.publishing', 'Publication…'))}`; }
   if (!_doc || typeof _doc !== 'object' || Array.isArray(_doc)) _doc = _emptyDoc();
-  _doc.draft = { sections: _sections };
+  _doc.draft = _draftSource();
   const s = await apiFetchStatus(`${API_SITE}?action=save&doc=pages/${encodeURIComponent(_slug)}`, { method: 'POST', body: JSON.stringify(_doc) });
   if (!s.ok) { _restorePublishBtn(btn); toast(t('pages.saveError', "Échec de l'enregistrement."), 'error'); return; }
   const r = await apiFetchStatus(`${API_SITE}?action=publish&doc=pages/${encodeURIComponent(_slug)}`, { method: 'POST', body: '{}' });
   if (r.ok) {
-    _mark(false); _doc.published = { sections: JSON.parse(JSON.stringify(_sections)) }; _seeded = false; renderSidebar();
+    _mark(false); _doc.published = JSON.parse(JSON.stringify(_draftSource())); _seeded = false; renderSidebar();
     toast(t('pages.published', 'Page publiée ✓'), 'success');
     if (btn) { btn.disabled = false; btn.innerHTML = `<i data-lucide="check"></i> ${escHtml(t('pages.publishedBtn', 'Publié ✓'))}`; try { refreshIcons(btn.parentElement || document); } catch (_) {} setTimeout(() => _restorePublishBtn(btn), 2600); }
   } else { _restorePublishBtn(btn); toast(t('pages.saveError', "Échec de l'enregistrement."), 'error'); }
@@ -1057,6 +1229,7 @@ async function publish() {
 
 async function revert() {
   if (!confirm(t('pages.revertConfirm', 'Réinitialiser cette page à son état par défaut ?'))) return;
+  _cancelAutosave();   // a late autosave would re-write the draft we're about to reset
   const r = await apiFetchStatus(`${API_SITE}?action=reset&doc=pages/${encodeURIComponent(_slug)}`, { method: 'POST', body: '{}' });
   if (r.ok) { toast(t('pages.reverted', 'Réinitialisée.'), 'success'); await selectPage(_slug); }
   else toast(t('pages.saveError', "Échec de l'enregistrement."), 'error');

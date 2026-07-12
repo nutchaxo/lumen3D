@@ -66,6 +66,9 @@ function _renderHomeSource(source) {
   const n = PageRenderer.renderSource(host, source, { wrap: true });
   if (n) { host.style.display = ''; if (def) def.style.display = 'none'; }
   else { host.style.display = 'none'; if (def) def.style.display = ''; }
+  // Operator-authored animated page background (only when the override is live —
+  // the default landing keeps its own hero canvas).
+  try { if (typeof PageBackground !== 'undefined') PageBackground.apply(n ? source && source.background : null); } catch (_) {}
 }
 
 async function maybeRenderHomeBlocks() {

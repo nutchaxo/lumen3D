@@ -308,7 +308,10 @@ function ctlColor(obj, f, ctx) {
   const btn = mkBtn('pbc-colbtn');
   const chip = mk('span', 'pbc-chip');
   const lbl = mk('span', 'pbc-colbtn-val');
-  const caret = mkIcon('chevron-down', 13);
+  // Rotate a wrapper span, not the <i>: lucide.createIcons REPLACES the <i>
+  // with an <svg>, which would leave `caret` pointing at a detached node.
+  const caret = mk('span', 'pbc-caret');
+  caret.appendChild(mkIcon('chevron-down', 13));
   btn.appendChild(chip); btn.appendChild(lbl); btn.appendChild(caret);
   const sync = () => { applyChip(chip, cur()); lbl.textContent = prettyColorLabel(cur()); };
   sync();
@@ -580,7 +583,8 @@ function ctlIcon(obj, f, ctx) {
   const cur = () => String(pathGet(obj, f.k) || 'star');
   prev.appendChild(mkIcon(cur(), 17));
   const lbl = mk('span', 'pbc-colbtn-val', cur());
-  const caret = mkIcon('chevron-down', 13);
+  const caret = mk('span', 'pbc-caret');
+  caret.appendChild(mkIcon('chevron-down', 13));
   btn.appendChild(prev); btn.appendChild(lbl); btn.appendChild(caret);
   w.appendChild(btn);
 

@@ -54,10 +54,16 @@ const PageRenderer = (() => {
   // and so the editor iframe shows exactly what the live site renders.
   function _interp(s) {
     if (typeof s !== 'string' || s.indexOf('{') === -1) return s;
-    let tk = null;
-    try { if (typeof InstanceConfig !== 'undefined' && InstanceConfig.tokens) tk = InstanceConfig.tokens(); } catch (_) {}
-    if (!tk) return s;
-    return s.replace(/\{(\w+)\}/g, (m, k) => (k in tk && tk[k] != null ? String(tk[k]) : m));
+    // Null-proto map: {constructor}, {toString}, {hasOwnProperty}… must NOT
+    // resolve to inherited Object.prototype members (which would render
+    // "function Object() { [native code] }" into public page text).
+    const tk = Object.create(null);
+    try { if (typeof InstanceConfig !== 'undefined' && InstanceConfig.tokens) Object.assign(tk, InstanceConfig.tokens()); } catch (_) {}
+    // Page variables (dynamic builtins like {year}/{time} + operator-defined
+    // fixed variables) — resolved after the brand tokens so they can win.
+    try { if (typeof PageVars !== 'undefined' && PageVars.tokens) Object.assign(tk, PageVars.tokens()); } catch (_) {}
+    if (!Object.keys(tk).length) return s;
+    return s.replace(/\{(\w+)\}/g, (m, k) => (tk[k] != null ? String(tk[k]) : m));
   }
   function _lv(v) {
     let s;
@@ -125,13 +131,23 @@ const PageRenderer = (() => {
   // (background-clip:text + transparent color), anything else is a plain color.
   // Guarded — a non-gradient as background-image would be an invalid
   // declaration and color:transparent would blank the text.
+  function _isGradientFill(v) { return /^(linear|radial|conic)-gradient\(/i.test(String(v == null ? '' : v).trim()); }
   function _textFillCss(v) {
     const s = String(v == null ? '' : v).trim();
     if (!s) return '';
-    if (/^(linear|radial|conic)-gradient\(/i.test(s)) {
+    if (_isGradientFill(s)) {
       return `background-image:${_sanitizeCss(s)};-webkit-background-clip:text;background-clip:text;color:transparent;`;
     }
     return `color:${_sanitizeCss(s)};`;
+  }
+  // background-clip:text paints across the element BOX, so a full-width block
+  // keeps the gradient centered on the box even when the text is aligned left
+  // or right. Shrink the box onto the text and reposition it with margins.
+  function _gradFitCss(align) {
+    return 'width:fit-content;max-width:100%;' +
+      (align === 'center' ? 'margin-left:auto;margin-right:auto;'
+        : align === 'right' ? 'margin-left:auto;margin-right:0;'
+        : 'margin-left:0;margin-right:auto;');
   }
 
   function styleCss(st, groups) {
@@ -253,12 +269,16 @@ const PageRenderer = (() => {
       // Style-panel text group is the shared base; the dedicated per-part fills
       // (props.titleColor / props.subColor — color OR gradient) are appended
       // after it so each part is adjustable independently.
-      if (_lv(b.text)) inner.appendChild(_el('h1', 'margin:0 0 14px;' + (ts ? `font-size:${ts}px;line-height:1.15;` : '') + styleCss(st, ['text']) + _textFillCss(p.titleColor), _lv(b.text)));
+      const titleFill = p.titleColor || st.textGradient || st.color;
+      if (_lv(b.text)) inner.appendChild(_el('h1', 'margin:0 0 14px;' + (ts ? `font-size:${ts}px;line-height:1.15;` : '') + styleCss(st, ['text']) + _textFillCss(p.titleColor) +
+        (_isGradientFill(titleFill) ? _gradFitCss(align) : ''), _lv(b.text)));
       const ss = _n(p.subSize, 8, 80);
       // Subtitle follows the shared text style except size and the legacy
       // title-only textGradient field.
       const stSub = Object.assign({}, st, { fontSize: '', textGradient: '' });
-      if (_lv(p.subtitle)) inner.appendChild(_el('p', `font-size:${ss ? ss + 'px' : 'var(--text-lg,1.25rem)'};opacity:.85;margin:0 0 22px;` + styleCss(stSub, ['text']) + _textFillCss(p.subColor), _lv(p.subtitle)));
+      const subFill = p.subColor || st.color;
+      if (_lv(p.subtitle)) inner.appendChild(_el('p', `font-size:${ss ? ss + 'px' : 'var(--text-lg,1.25rem)'};opacity:.85;margin:0 0 22px;` + styleCss(stSub, ['text']) + _textFillCss(p.subColor) +
+        (_isGradientFill(subFill) ? _gradFitCss(align) : ''), _lv(p.subtitle)));
       const ctas = [];
       if (p.cta && _lv(p.cta.text)) ctas.push(['btn btn-accent btn-lg', p.cta]);
       if (p.cta2 && _lv(p.cta2.text)) ctas.push(['btn btn-ghost btn-lg', p.cta2]);
@@ -310,11 +330,18 @@ const PageRenderer = (() => {
       try { if (typeof Catalog !== 'undefined' && Catalog.getStats) stats0 = Catalog.getStats(); } catch (_) {}
       const vs = _n(p.valueSize, 10, 120);
       (Array.isArray(p.stats) ? p.stats : []).forEach((st0) => {
-        const card = _el('div', `padding:20px;background:${p.cardBg ? _sanitizeCss(p.cardBg) : 'var(--bg-surface,#161622)'};border-radius:var(--radius-md,10px)`);
+        // Per-stat colors override the widget-wide defaults (bg / valueColor /
+        // labelColor on the item), each accepting a color OR a gradient.
+        const cardBg = st0.bg || p.cardBg;
+        const vFill = st0.valueColor || p.valueColor;
+        const lFill = st0.labelColor || p.labelColor;
+        const card = _el('div', `padding:20px;background:${cardBg ? _sanitizeCss(cardBg) : 'var(--bg-surface,#161622)'};border-radius:var(--radius-md,10px)`);
         let value = st0.value;
         if (SRC[st0.source]) value = stats0 ? (stats0[SRC[st0.source]] ?? 0) : (value || 0);
-        card.appendChild(_el('div', `font-size:${vs ? vs + 'px' : 'var(--text-3xl,2.5rem)'};font-weight:700;color:${p.valueColor ? _sanitizeCss(p.valueColor) : 'var(--color-primary,#00A654)'}`, String(value ?? 0)));
-        card.appendChild(_el('div', `opacity:.75;margin-top:4px;${p.labelColor ? 'color:' + _sanitizeCss(p.labelColor) + ';' : ''}`, _lv(st0.label)));
+        card.appendChild(_el('div', `font-size:${vs ? vs + 'px' : 'var(--text-3xl,2.5rem)'};font-weight:700;` +
+          (vFill ? _textFillCss(vFill) + (_isGradientFill(vFill) ? _gradFitCss('center') : '') : 'color:var(--color-primary,#00A654);'), String(value ?? 0)));
+        card.appendChild(_el('div', `opacity:.75;margin-top:4px;` +
+          (lFill ? _textFillCss(lFill) + (_isGradientFill(lFill) ? _gradFitCss('center') : '') : ''), _lv(st0.label)));
         grid.appendChild(card);
       });
       return grid;
@@ -338,14 +365,41 @@ const PageRenderer = (() => {
         wrap.appendChild(_el('div', 'opacity:.55;padding:18px;text-align:center;border:1px dashed var(--border-subtle,#2a2a3a);border-radius:var(--radius-md,10px)', _emptyDatasetsLabel()));
         return wrap;
       }
+      const th = _n(p.thumbHeight, 60, 320) || 120;
+      const showMeta = p.showMeta !== false;
+      let needIcons = false;
       list.forEach((ds) => {
         const a = document.createElement('a');
         a.href = `viewer.html?id=${encodeURIComponent(ds.id)}`;
-        a.style.cssText = 'display:block;padding:14px;background:var(--bg-surface,#161622);border-radius:var(--radius-md,10px);text-decoration:none;color:inherit';
-        a.appendChild(_el('div', 'font-weight:600', ds.name || ds.id));
-        if (ds.type) a.appendChild(_el('div', 'opacity:.6;font-size:var(--text-sm,.8rem);margin-top:4px', ds.type));
+        a.style.cssText = 'display:block;overflow:hidden;background:var(--bg-surface,#161622);border-radius:var(--radius-md,10px);text-decoration:none;color:inherit;border:1px solid var(--border-subtle,#2a2a3a)';
+        const thumb = _el('div', `height:${th}px;display:flex;align-items:center;justify-content:center;background:color-mix(in srgb, var(--color-primary,#00A654) 7%, transparent)`);
+        if (ds.thumbnail) {
+          const img = document.createElement('img');
+          img.src = ds.thumbnail; img.alt = ds.name || ds.id; img.loading = 'lazy';
+          img.style.cssText = 'width:100%;height:100%;object-fit:cover';
+          thumb.appendChild(img);
+        } else {
+          const i = document.createElement('i');
+          i.setAttribute('data-lucide', 'layers');
+          i.style.cssText = 'width:30px;height:30px;color:var(--text-muted,#8a8a9a);opacity:.6';
+          thumb.appendChild(i);
+          needIcons = true;
+        }
+        a.appendChild(thumb);
+        const body = _el('div', 'padding:12px 14px');
+        body.appendChild(_el('div', 'font-weight:600;line-height:1.35', ds.name || ds.id));
+        if (showMeta) {
+          const meta = _el('div', 'display:flex;gap:10px;align-items:baseline;margin-top:5px;font-size:var(--text-sm,.8rem)');
+          if (ds.type) meta.appendChild(_el('span', 'color:var(--color-primary,#00A654);font-weight:600;text-transform:uppercase;font-size:.7rem;letter-spacing:.05em', ds.type));
+          let dateStr = '';
+          try { dateStr = (typeof Utils !== 'undefined' && Utils.formatDate) ? Utils.formatDate(ds.date) : String(ds.date || ''); } catch (_) { dateStr = String(ds.date || ''); }
+          if (dateStr) meta.appendChild(_el('span', 'opacity:.55', dateStr));
+          if (meta.childNodes.length) body.appendChild(meta);
+        }
+        a.appendChild(body);
         wrap.appendChild(a);
       });
+      if (needIcons) setTimeout(() => { try { if (window.lucide && window.lucide.createIcons) lucide.createIcons({ nodes: [wrap] }); } catch (_) {} }, 0);
       return wrap;
     },
     html(b) { const div = document.createElement('div'); div.innerHTML = _sanitizeHtml(_lv(b.props?.html)); return div; },
@@ -482,6 +536,10 @@ const PageRenderer = (() => {
   // (button → the <a>, image → the <img>, …); everyone else gets it on the root.
   const SELF_STYLED = new Set(['button', 'image', 'hero', 'icon']);
 
+  // Text-only widgets where a gradient text fill must shrink-wrap onto the text
+  // (see _gradFitCss); container widgets keep their natural full-width box.
+  const GRAD_FIT = new Set(['heading', 'richtext']);
+
   function renderWidget(w) {
     const fn = RENDERERS[w && w.type];
     if (!fn) return null;
@@ -489,7 +547,13 @@ const PageRenderer = (() => {
       const node = fn(w);
       if (!node) return null;
       const st = w.props && w.props.style;
-      if (st && !SELF_STYLED.has(w.type)) node.style.cssText += ';' + styleCss(st);
+      if (st && !SELF_STYLED.has(w.type)) {
+        node.style.cssText += ';' + styleCss(st);
+        const fill = st.textGradient || st.color;
+        if (GRAD_FIT.has(w.type) && _isGradientFill(fill)) {
+          node.style.cssText += ';' + _gradFitCss(ALIGN(st.align || (w.props && w.props.align) || 'left'));
+        }
+      }
       const box = _el('div', 'margin:0 0 10px');
       box.appendChild(node);
       return box;

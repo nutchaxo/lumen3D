@@ -20,6 +20,10 @@
    these fields; the edit frame (page-edit-frame.js) reuses sectionCss/columnCss
    below so editor and live page can never drift.
 
+   16 widget types: heading, richtext, image, button, divider, spacer, hero,
+   gallery, icon, stat-grid, latest-datasets, html + (v1.16.0) feature-card,
+   quote, accordion, timeline, cta-banner.
+
    BACKWARD-COMPAT: a legacy flat source { blocks:[…] } (or a bare array) is
    normalized to a single full-width section with one 12-unit column whose
    widgets are those blocks — so old pages keep rendering (and stop showing a
@@ -315,6 +319,131 @@ const PageRenderer = (() => {
       return wrap;
     },
     html(b) { const div = document.createElement('div'); div.innerHTML = _sanitizeHtml(_lv(b.props?.html)); return div; },
+    'feature-card'(b) {
+      const p = b.props || {};
+      const align = ALIGN(p.align || 'left');
+      const card = _el('div', `padding:26px;background:var(--bg-surface,#161622);border-radius:var(--radius-md,12px);text-align:${align};height:100%;box-sizing:border-box`);
+      const iconName = String(p.icon || '').replace(/[^a-z0-9-]/gi, '').slice(0, 60);
+      if (iconName) {
+        const isz = _n(p.iconSize, 12, 120) || 34;
+        const badge = _el('div', `display:inline-flex;align-items:center;justify-content:center;width:${isz + 26}px;height:${isz + 26}px;margin-bottom:14px;` +
+          `border-radius:${p.iconShape === 'square' ? '12px' : '50%'};` +
+          `background:${p.iconBg ? _sanitizeCss(p.iconBg) : 'color-mix(in srgb, var(--color-primary,#00A654) 14%, transparent)'};`);
+        const i = document.createElement('i');
+        i.setAttribute('data-lucide', iconName);
+        i.style.cssText = `width:${isz}px;height:${isz}px;color:${p.iconColor ? _sanitizeCss(p.iconColor) : 'var(--color-primary,#00A654)'}`;
+        badge.appendChild(i);
+        card.appendChild(badge);
+        setTimeout(() => { try { if (window.lucide && window.lucide.createIcons) lucide.createIcons({ nodes: [card] }); } catch (_) {} }, 0);
+      }
+      if (_lv(b.text)) card.appendChild(_el('h3', 'margin:0 0 8px;font-size:1.15rem;line-height:1.3', _lv(b.text)));
+      if (_lv(p.desc)) card.appendChild(_el('p', 'margin:0;opacity:.75;line-height:1.65;white-space:pre-wrap', _lv(p.desc)));
+      if (p.link && _lv(p.link.text)) {
+        const a = document.createElement('a');
+        a.href = p.link.href || '#';
+        a.style.cssText = 'display:inline-flex;align-items:center;gap:6px;margin-top:14px;color:var(--color-primary,#00A654);text-decoration:none;font-weight:600;font-size:.92rem';
+        a.textContent = _lv(p.link.text) + ' →';
+        card.appendChild(a);
+      }
+      return card;
+    },
+    quote(b) {
+      const p = b.props || {};
+      const variant = (p.variant === 'card' || p.variant === 'big') ? p.variant : 'bar';
+      const accent = p.accent ? _sanitizeCss(p.accent) : 'var(--color-primary,#00A654)';
+      const root = _el('figure',
+        variant === 'card' ? 'margin:0;position:relative;background:var(--bg-surface,#161622);border-radius:var(--radius-md,12px);padding:28px 28px 24px'
+        : variant === 'big' ? 'margin:0;text-align:center;padding:8px 0'
+        : `margin:0;border-left:4px solid ${accent};padding:6px 0 6px 20px`);
+      if (variant === 'card') root.appendChild(_el('div', `position:absolute;top:6px;left:16px;font-size:64px;line-height:1;font-family:Georgia,serif;color:${accent};opacity:.28;pointer-events:none`, '“'));
+      if (variant === 'big') root.appendChild(_el('div', `font-size:56px;line-height:.9;font-family:Georgia,serif;color:${accent}`, '“'));
+      const q = _el('blockquote', `margin:0;font-style:italic;line-height:1.7;white-space:pre-wrap;` +
+        (variant === 'big' ? 'font-size:1.3rem;' : 'font-size:1.02rem;') + (variant === 'card' ? 'position:relative;' : ''), _lv(b.text));
+      root.appendChild(q);
+      if (_lv(p.author) || _lv(p.role) || p.avatar) {
+        const cap = document.createElement('figcaption');
+        cap.style.cssText = `display:flex;align-items:center;gap:11px;margin-top:16px;${variant === 'big' ? 'justify-content:center;' : ''}`;
+        if (p.avatar) {
+          const img = document.createElement('img');
+          img.src = p.avatar; img.alt = _lv(p.author) || ''; img.loading = 'lazy';
+          img.style.cssText = 'width:42px;height:42px;border-radius:50%;object-fit:cover;flex:0 0 auto';
+          cap.appendChild(img);
+        }
+        const who = _el('div', 'text-align:left');
+        if (_lv(p.author)) who.appendChild(_el('div', 'font-weight:700;font-style:normal;font-size:.95rem', _lv(p.author)));
+        if (_lv(p.role)) who.appendChild(_el('div', 'opacity:.6;font-size:.82rem', _lv(p.role)));
+        cap.appendChild(who);
+        root.appendChild(cap);
+      }
+      return root;
+    },
+    accordion(b) {
+      const p = b.props || {};
+      const items = Array.isArray(p.items) ? p.items : [];
+      // `name` makes <details> mutually exclusive in modern browsers; elsewhere
+      // items simply stay independently openable (graceful degradation).
+      const group = p.single ? 'acc-' + String(b.id || Math.random().toString(36).slice(2, 8)).replace(/[^a-z0-9_-]/gi, '') : null;
+      const accent = p.iconColor ? _sanitizeCss(p.iconColor) : 'var(--color-primary,#00A654)';
+      const wrap = _el('div', 'display:flex;flex-direction:column;gap:10px');
+      items.forEach((it, idx) => {
+        const d = document.createElement('details');
+        if (group) d.setAttribute('name', group);
+        if (p.firstOpen && idx === 0) d.open = true;
+        d.style.cssText = 'background:var(--bg-surface,#161622);border:1px solid var(--border-subtle,#2a2a3a);border-radius:10px;overflow:hidden';
+        const s = document.createElement('summary');
+        s.style.cssText = 'display:flex;align-items:center;justify-content:space-between;gap:12px;padding:14px 18px;cursor:pointer;font-weight:600;list-style:none;user-select:none';
+        s.appendChild(_el('span', 'flex:1', _lv(it.q)));
+        const chev = _el('span', `display:inline-flex;flex:0 0 auto;color:${accent};transition:transform .18s;${d.open ? 'transform:rotate(180deg);' : ''}`);
+        const ic = document.createElement('i');
+        ic.setAttribute('data-lucide', 'chevron-down');
+        ic.style.cssText = 'width:18px;height:18px';
+        chev.appendChild(ic);
+        s.appendChild(chev);
+        d.appendChild(s);
+        d.appendChild(_el('div', 'padding:0 18px 16px;line-height:1.65;opacity:.85;white-space:pre-wrap', _lv(it.a)));
+        d.addEventListener('toggle', () => { chev.style.transform = d.open ? 'rotate(180deg)' : ''; });
+        wrap.appendChild(d);
+      });
+      setTimeout(() => { try { if (window.lucide && window.lucide.createIcons) lucide.createIcons({ nodes: [wrap] }); } catch (_) {} }, 0);
+      return wrap;
+    },
+    timeline(b) {
+      const p = b.props || {};
+      const items = Array.isArray(p.items) ? p.items : [];
+      const accent = p.accent ? _sanitizeCss(p.accent) : 'var(--color-primary,#00A654)';
+      const line = p.lineColor ? _sanitizeCss(p.lineColor) : 'var(--border-subtle,#2a2a3a)';
+      const wrap = _el('div', 'position:relative;padding-left:30px');
+      wrap.appendChild(_el('div', `position:absolute;left:9px;top:8px;bottom:8px;width:2px;border-radius:1px;background:${line}`));
+      items.forEach((it, idx) => {
+        const item = _el('div', `position:relative;${idx < items.length - 1 ? 'margin:0 0 26px;' : ''}`);
+        item.appendChild(_el('div', `position:absolute;left:-27px;top:4px;width:12px;height:12px;border-radius:50%;background:${accent};box-shadow:0 0 0 4px color-mix(in srgb, ${accent} 22%, transparent)`));
+        if (_lv(it.date)) item.appendChild(_el('div', `font-size:.76rem;font-weight:700;letter-spacing:.07em;text-transform:uppercase;color:${accent};margin-bottom:3px`, _lv(it.date)));
+        if (_lv(it.title)) item.appendChild(_el('h4', 'margin:0 0 5px;font-size:1.04rem', _lv(it.title)));
+        if (_lv(it.text)) item.appendChild(_el('p', 'margin:0;opacity:.72;line-height:1.6;white-space:pre-wrap', _lv(it.text)));
+        wrap.appendChild(item);
+      });
+      return wrap;
+    },
+    'cta-banner'(b) {
+      const p = b.props || {};
+      const centered = p.align === 'center';
+      const bg = p.bg ? _sanitizeCss(p.bg) : 'linear-gradient(135deg, var(--color-primary,#00A654) 0%, var(--color-accent,#00D2FF) 100%)';
+      const root = _el('div', `position:relative;overflow:hidden;display:flex;align-items:center;gap:20px 28px;flex-wrap:wrap;padding:30px 34px;` +
+        `border-radius:var(--radius-lg,14px);background:${bg};color:#fff;` +
+        (centered ? 'flex-direction:column;text-align:center;justify-content:center;' : 'justify-content:space-between;'));
+      const txt = _el('div', centered ? '' : 'flex:1;min-width:220px');
+      if (_lv(b.text)) txt.appendChild(_el('h3', 'margin:0 0 6px;font-size:1.45rem;line-height:1.25;color:inherit', _lv(b.text)));
+      if (_lv(p.subtitle)) txt.appendChild(_el('p', 'margin:0;opacity:.85;line-height:1.55', _lv(p.subtitle)));
+      root.appendChild(txt);
+      if (p.cta && _lv(p.cta.text)) {
+        const a = document.createElement('a');
+        a.href = p.cta.href || '#';
+        a.style.cssText = 'flex:0 0 auto;display:inline-block;padding:12px 24px;border-radius:10px;background:#fff;color:#14141f;font-weight:700;text-decoration:none;white-space:nowrap;box-shadow:0 4px 14px rgba(0,0,0,.22)';
+        a.textContent = _lv(p.cta.text);
+        root.appendChild(a);
+      }
+      return root;
+    },
   };
 
   const WIDGET_TYPES = Object.keys(RENDERERS);

@@ -34,6 +34,7 @@
 
 import { API_SITE, I18n, t, escHtml, apiFetch, apiFetchStatus, toast, el, refreshIcons } from './shared.js';
 import { setUnsaved } from './bus.js';
+import { renderFields } from './pages-controls.js';
 
 const SPECIAL = [{ slug: 'home', builtin: true }, { slug: 'about', builtin: true }];
 
@@ -64,18 +65,29 @@ function _afterMutate() { _mark(true); renderSidebar(); _syncFrame(); }
 
 // ── Widget palette / defaults ───────────────────────────────────
 const PALETTE = [
-  { type: 'heading', icon: 'heading', def: 'Titre' },
-  { type: 'richtext', icon: 'align-left', def: 'Texte' },
-  { type: 'hero', icon: 'flag', def: 'Héros' },
-  { type: 'button', icon: 'mouse-pointer-click', def: 'Bouton' },
-  { type: 'image', icon: 'image', def: 'Image' },
-  { type: 'icon', icon: 'star', def: 'Icône' },
-  { type: 'gallery', icon: 'images', def: 'Galerie' },
-  { type: 'stat-grid', icon: 'bar-chart-2', def: 'Statistiques' },
-  { type: 'latest-datasets', icon: 'layers', def: 'Derniers éléments' },
-  { type: 'divider', icon: 'minus', def: 'Séparateur' },
-  { type: 'spacer', icon: 'move-vertical', def: 'Espace' },
-  { type: 'html', icon: 'code', def: 'HTML' },
+  { type: 'heading', icon: 'heading', def: 'Titre', cat: 'basics' },
+  { type: 'richtext', icon: 'align-left', def: 'Texte', cat: 'basics' },
+  { type: 'image', icon: 'image', def: 'Image', cat: 'basics' },
+  { type: 'icon', icon: 'star', def: 'Icône', cat: 'basics' },
+  { type: 'button', icon: 'mouse-pointer-click', def: 'Bouton', cat: 'basics' },
+  { type: 'hero', icon: 'flag', def: 'Héros', cat: 'content' },
+  { type: 'cta-banner', icon: 'megaphone', def: 'Bandeau d\'action', cat: 'content' },
+  { type: 'feature-card', icon: 'badge-check', def: 'Carte icône', cat: 'content' },
+  { type: 'quote', icon: 'quote', def: 'Citation', cat: 'content' },
+  { type: 'gallery', icon: 'images', def: 'Galerie', cat: 'content' },
+  { type: 'accordion', icon: 'chevrons-down-up', def: 'Accordéon / FAQ', cat: 'lists' },
+  { type: 'timeline', icon: 'milestone', def: 'Frise chronologique', cat: 'lists' },
+  { type: 'stat-grid', icon: 'bar-chart-2', def: 'Statistiques', cat: 'lists' },
+  { type: 'latest-datasets', icon: 'layers', def: 'Derniers éléments', cat: 'lists' },
+  { type: 'divider', icon: 'minus', def: 'Séparateur', cat: 'layout' },
+  { type: 'spacer', icon: 'move-vertical', def: 'Espace', cat: 'layout' },
+  { type: 'html', icon: 'code', def: 'HTML', cat: 'layout' },
+];
+const PALETTE_CATS = [
+  ['basics', 'Bases'],
+  ['content', 'Contenu'],
+  ['lists', 'Listes & données'],
+  ['layout', 'Structure'],
 ];
 
 function _newWidget(type) {
@@ -93,6 +105,11 @@ function _newWidget(type) {
     case 'divider': return { id, type, props: { color: '', thickness: '', width: '', lineStyle: 'solid' } };
     case 'spacer': return { id, type, props: { height: 32 } };
     case 'html': return { id, type, props: { html: {} } };
+    case 'feature-card': return { id, type, text: {}, props: { icon: 'sparkles', iconSize: 34, iconColor: '', iconBg: '', iconShape: 'round', desc: {}, link: { text: {}, href: '' }, align: 'left' } };
+    case 'quote': return { id, type, text: {}, props: { author: {}, role: {}, avatar: '', variant: 'bar', accent: '' } };
+    case 'accordion': return { id, type, props: { items: [{ q: {}, a: {} }, { q: {}, a: {} }], single: true, firstOpen: true, iconColor: '' } };
+    case 'timeline': return { id, type, props: { items: [{ date: {}, title: {}, text: {} }, { date: {}, title: {}, text: {} }], accent: '', lineColor: '' } };
+    case 'cta-banner': return { id, type, text: {}, props: { subtitle: {}, bg: '', align: 'left', cta: { text: {}, href: 'explorer.html' } } };
     default: return { id, type, props: {} };
   }
 }
@@ -255,25 +272,31 @@ function loadDefaultTemplate() {
   _afterMutate();
 }
 
-// ── Path helpers for widget settings ────────────────────────────
-function _get(o, path) { let v = o; for (const s of path.split('.')) { if (v != null && typeof v === 'object') v = v[s]; else return undefined; } return v; }
-function _put(o, path, val) { const s = path.split('.'); let c = o; for (let i = 0; i < s.length - 1; i++) { if (typeof c[s[i]] !== 'object' || c[s[i]] == null) c[s[i]] = {}; c = c[s[i]]; } c[s[s.length - 1]] = val; }
 function _selWidget() { if (!_sel || _sel.wi == null) return null; return _sections[_sel.si]?.columns[_sel.ci]?.widgets[_sel.wi] || null; }
 
+// ── Field descriptors (rendered by pages-controls.js → renderFields) ────────
+// Click-first: sliders for every numeric value, segmented buttons for enums,
+// the rich color/gradient picker (grad:true) for backgrounds, the Lucide icon
+// picker for icons, and the repeatable items editor for lists.
+const ALIGN_OPTS = [['left', '', 'align-left'], ['center', '', 'align-center'], ['right', '', 'align-right']];
 function _fields(type) {
-  const align = { k: 'props.align', t: 'select', l: t('pages.align', 'Alignement'), opts: [['left', '⯇ Gauche'], ['center', '≡ Centre'], ['right', 'Droite ⯈']] };
-  const cols = { k: 'props.cols', t: 'number', l: t('pages.cols', 'Colonnes (vide = auto)'), ph: 'auto' };
+  const align = { k: 'props.align', t: 'seg', l: t('pages.align', 'Alignement'), opts: ALIGN_OPTS };
+  const cols = (max) => ({ k: 'props.cols', t: 'slider', l: t('pages.colsAuto', 'Colonnes (auto si vide)'), min: 1, max: max || 8, ph: 'auto', dv: 3 });
   switch (type) {
-    case 'heading': return [{ k: 'text', t: 'ltext', l: t('pages.text', 'Texte') }, { k: 'props.level', t: 'select', l: t('pages.level', 'Niveau'), opts: [['1', 'H1'], ['2', 'H2'], ['3', 'H3'], ['4', 'H4']] }, align];
+    case 'heading': return [
+      { k: 'text', t: 'ltext', l: t('pages.text', 'Texte') },
+      { k: 'props.level', t: 'seg', l: t('pages.level', 'Niveau'), opts: [['1', 'H1'], ['2', 'H2'], ['3', 'H3'], ['4', 'H4']] },
+      align,
+    ];
     case 'richtext': return [{ k: 'text', t: 'ltextarea', l: t('pages.text', 'Texte') }, align];
     case 'hero': return [
       { k: 'text', t: 'ltext', l: t('pages.heroTitle', 'Titre') },
-      { k: 'props.titleSize', t: 'number', l: t('pages.titleSize', 'Taille du titre (px)'), ph: 'auto' },
+      { k: 'props.titleSize', t: 'slider', l: t('pages.titleSize', 'Taille du titre'), min: 16, max: 160, ph: 'auto', dv: 44 },
       { k: 'props.subtitle', t: 'ltext', l: t('pages.heroSub', 'Sous-titre') },
-      { k: 'props.subSize', t: 'number', l: t('pages.subSize', 'Taille du sous-titre (px)'), ph: 'auto' },
-      { k: 'props.bg', t: 'color', l: t('pages.bg', 'Fond') },
-      { k: 'props.style.overlay', t: 'color', l: t('pages.overlay', 'Voile (couleur sur le fond)') },
-      { k: 'props.align', t: 'select', l: t('pages.align', 'Alignement'), opts: [['center', '≡ Centre'], ['left', '⯇ Gauche'], ['right', 'Droite ⯈']] },
+      { k: 'props.subSize', t: 'slider', l: t('pages.subSize', 'Taille du sous-titre'), min: 10, max: 60, ph: 'auto', dv: 20 },
+      { k: 'props.bg', t: 'color', grad: true, l: t('pages.bg', 'Fond') },
+      { k: 'props.style.overlay', t: 'color', grad: true, l: t('pages.overlay', 'Voile (couleur sur le fond)') },
+      { k: 'props.align', t: 'seg', l: t('pages.align', 'Alignement'), opts: ALIGN_OPTS },
       { k: 'props.cta.text', t: 'ltext', l: t('pages.ctaText', 'Bouton') },
       { k: 'props.cta.href', t: 'text', l: t('pages.ctaHref', 'Lien du bouton') },
       { k: 'props.cta2.text', t: 'ltext', l: t('pages.cta2Text', 'Bouton secondaire') },
@@ -282,48 +305,114 @@ function _fields(type) {
     case 'button': return [
       { k: 'text', t: 'ltext', l: t('pages.label', 'Libellé') },
       { k: 'props.href', t: 'text', l: t('pages.href', 'Lien') },
-      { k: 'props.variant', t: 'select', l: t('pages.style', 'Style'), opts: [['accent', 'Accent'], ['ghost', 'Ghost'], ['lg', 'Grand']] },
+      { k: 'props.variant', t: 'seg', l: t('pages.style', 'Style'), opts: [['accent', 'Accent'], ['ghost', 'Ghost'], ['lg', t('pages.big', 'Grand')]] },
       { k: 'props.fullWidth', t: 'check', l: t('pages.fullWidthBtn', 'Pleine largeur') },
       align,
     ];
     case 'image': return [
       { k: 'props.src', t: 'text', l: 'URL' },
       { k: 'props.alt', t: 'ltext', l: t('pages.alt', 'Texte alt') },
-      { k: 'props.width', t: 'number', l: t('pages.width', 'Largeur (px)'), ph: 'auto' },
-      { k: 'props.height', t: 'number', l: t('pages.imgHeight', 'Hauteur (px)'), ph: 'auto' },
-      { k: 'props.fit', t: 'select', l: t('pages.imgFit', 'Cadrage'), opts: [['cover', 'Remplir (cover)'], ['contain', 'Contenir (contain)']] },
+      { k: 'props.width', t: 'slider', l: t('pages.width', 'Largeur'), min: 40, max: 1200, step: 10, ph: 'auto', dv: 400 },
+      { k: 'props.height', t: 'slider', l: t('pages.imgHeight', 'Hauteur'), min: 40, max: 1000, step: 10, ph: 'auto', dv: 300 },
+      { k: 'props.fit', t: 'seg', l: t('pages.imgFit', 'Cadrage'), opts: [['', 'Auto'], ['cover', t('pages.fitCover', 'Remplir')], ['contain', t('pages.fitContain', 'Contenir')]] },
       { k: 'props.href', t: 'text', l: t('pages.linkOpt', 'Lien (option.)') },
       align,
     ];
     case 'icon': return [
-      { k: 'props.name', t: 'text', l: t('pages.iconName', 'Icône (nom Lucide)'), ph: 'star', hint: t('pages.iconHint', 'Ex. microscope, video, activity, atom, leaf — noms sur lucide.dev') },
-      { k: 'props.size', t: 'number', l: t('pages.iconSize', 'Taille (px)') },
+      { k: 'props.name', t: 'icon', l: t('pages.iconName', 'Icône') },
+      { k: 'props.size', t: 'slider', l: t('pages.iconSize', 'Taille'), min: 12, max: 160, dv: 48 },
       { k: 'props.color', t: 'color', l: t('pages.stroke', 'Couleur') },
       align,
     ];
     case 'gallery': return [
-      { k: 'props.images', t: 'gallery', l: t('pages.images', 'Images') },
-      cols,
-      { k: 'props.height', t: 'number', l: t('pages.imgHeight', 'Hauteur (px)') },
-      { k: 'props.gap', t: 'number', l: t('pages.hgap', 'Espacement (px)') },
+      { k: 'props.images', t: 'items', l: t('pages.images', 'Images'),
+        item: [{ k: 'src', t: 'text', l: 'URL' }, { k: 'alt', t: 'ltext', l: t('pages.alt', 'Texte alt') }],
+        mk: () => ({ src: '', alt: {} }), addLabel: t('pages.addImage', 'Ajouter une image'),
+        summary: (im) => (im.src || '').split('/').pop() },
+      cols(8),
+      { k: 'props.height', t: 'slider', l: t('pages.imgHeight', 'Hauteur'), min: 60, max: 600, step: 10, ph: 'auto', dv: 160 },
+      { k: 'props.gap', t: 'slider', l: t('pages.hgap', 'Espacement'), min: 0, max: 40, ph: 'auto', dv: 12 },
     ];
-    case 'stat-grid': return [
-      { k: 'props.stats', t: 'stats', l: t('pages.stats', 'Statistiques') },
-      cols,
-      { k: 'props.cardBg', t: 'color', l: t('pages.cardBg', 'Fond des cartes') },
-      { k: 'props.valueColor', t: 'color', l: t('pages.valueColor', 'Couleur des valeurs') },
-      { k: 'props.valueSize', t: 'number', l: t('pages.valueSize', 'Taille des valeurs (px)'), ph: 'auto' },
-      { k: 'props.labelColor', t: 'color', l: t('pages.labelColor', 'Couleur des libellés') },
+    case 'stat-grid': {
+      const SRCOPTS = [['datasetCount', t('pages.srcDatasets', 'Jeux de données')], ['specimenCount', t('pages.srcSpecimen', 'Spécimens')], ['cellCount', t('pages.srcCells', 'Cellules')], ['regionCount', t('pages.srcRegions', 'Régions')], ['custom', t('pages.custom', 'Fixe')]];
+      const LIVE = ['datasetCount', 'specimenCount', 'cellCount', 'regionCount'];
+      return [
+        { k: 'props.stats', t: 'items', l: t('pages.stats', 'Statistiques'),
+          item: [
+            { k: 'label', t: 'ltext', l: t('pages.statLabel', 'Libellé') },
+            { k: 'source', t: 'select', l: t('pages.statSource', 'Source'), opts: SRCOPTS, refresh: true },
+            { k: 'value', t: 'text', l: t('pages.statValue', 'Valeur fixe'), ph: '123', dis: (it) => LIVE.includes(it.source) },
+          ],
+          mk: () => ({ label: {}, source: 'custom', value: '' }), addLabel: t('pages.addStat', 'Ajouter une stat'),
+          summary: (st, lv) => lv(st.label) },
+        cols(8),
+        { k: 'props.cardBg', t: 'color', grad: true, l: t('pages.cardBg', 'Fond des cartes') },
+        { k: 'props.valueColor', t: 'color', l: t('pages.valueColor', 'Couleur des valeurs') },
+        { k: 'props.valueSize', t: 'slider', l: t('pages.valueSize', 'Taille des valeurs'), min: 14, max: 90, ph: 'auto', dv: 40 },
+        { k: 'props.labelColor', t: 'color', l: t('pages.labelColor', 'Couleur des libellés') },
+      ];
+    }
+    case 'latest-datasets': return [
+      { k: 'props.count', t: 'slider', l: t('pages.count', 'Nombre'), min: 1, max: 12, dv: 4 },
+      cols(6),
     ];
-    case 'latest-datasets': return [{ k: 'props.count', t: 'number', l: t('pages.count', 'Nombre') }, cols];
     case 'divider': return [
       { k: 'props.color', t: 'color', l: t('pages.stroke', 'Couleur') },
-      { k: 'props.thickness', t: 'number', l: t('pages.thickness', 'Épaisseur (px)') },
-      { k: 'props.width', t: 'number', l: t('pages.widthPct', 'Largeur (%)'), ph: '100' },
-      { k: 'props.lineStyle', t: 'select', l: t('pages.lineStyle', 'Trait'), opts: [['solid', 'Plein'], ['dashed', 'Tirets'], ['dotted', 'Points']] },
+      { k: 'props.thickness', t: 'slider', l: t('pages.thickness', 'Épaisseur'), min: 1, max: 12, dv: 1 },
+      { k: 'props.width', t: 'slider', l: t('pages.widthPct', 'Largeur'), min: 5, max: 100, step: 5, unit: '%', ph: '100', dv: 100 },
+      { k: 'props.lineStyle', t: 'seg', l: t('pages.lineStyle', 'Trait'), opts: [['solid', t('pages.lineSolid', 'Plein')], ['dashed', t('pages.lineDashed', 'Tirets')], ['dotted', t('pages.lineDotted', 'Points')]] },
     ];
-    case 'spacer': return [{ k: 'props.height', t: 'number', l: t('pages.height', 'Hauteur (px)') }];
+    case 'spacer': return [{ k: 'props.height', t: 'slider', l: t('pages.height', 'Hauteur'), min: 4, max: 400, dv: 32 }];
     case 'html': return [{ k: 'props.html', t: 'ltextarea', l: 'HTML' }];
+    case 'feature-card': return [
+      { k: 'props.icon', t: 'icon', l: t('pages.iconName', 'Icône') },
+      { k: 'props.iconSize', t: 'slider', l: t('pages.iconSize', 'Taille'), min: 14, max: 96, dv: 34 },
+      { k: 'props.iconColor', t: 'color', l: t('pages.fc.iconColor', 'Couleur de l\'icône') },
+      { k: 'props.iconBg', t: 'color', grad: true, l: t('pages.fc.iconBg', 'Fond de l\'icône') },
+      { k: 'props.iconShape', t: 'seg', l: t('pages.fc.iconShape', 'Forme'), opts: [['round', t('pages.fc.round', 'Rond')], ['square', t('pages.fc.square', 'Carré')]] },
+      { k: 'text', t: 'ltext', l: t('pages.heroTitle', 'Titre') },
+      { k: 'props.desc', t: 'ltextarea', l: t('pages.text', 'Texte') },
+      { k: 'props.link.text', t: 'ltext', l: t('pages.fc.linkText', 'Lien (libellé)') },
+      { k: 'props.link.href', t: 'text', l: t('pages.href', 'Lien') },
+      align,
+    ];
+    case 'quote': return [
+      { k: 'text', t: 'ltextarea', l: t('pages.qt.text', 'Citation') },
+      { k: 'props.author', t: 'ltext', l: t('pages.qt.author', 'Auteur') },
+      { k: 'props.role', t: 'ltext', l: t('pages.qt.role', 'Rôle / affiliation') },
+      { k: 'props.avatar', t: 'text', l: t('pages.qt.avatar', 'Photo (URL, option.)') },
+      { k: 'props.variant', t: 'seg', l: t('pages.style', 'Style'), opts: [['bar', t('pages.qt.bar', 'Barre')], ['card', t('pages.qt.card', 'Carte')], ['big', t('pages.big', 'Grand')]] },
+      { k: 'props.accent', t: 'color', l: t('pages.qt.accent', 'Couleur d\'accent') },
+    ];
+    case 'accordion': return [
+      { k: 'props.items', t: 'items', l: t('pages.ac.items', 'Questions / sections'),
+        item: [{ k: 'q', t: 'ltext', l: t('pages.ac.q', 'Titre / question') }, { k: 'a', t: 'ltextarea', l: t('pages.ac.a', 'Contenu / réponse') }],
+        mk: () => ({ q: {}, a: {} }), addLabel: t('pages.ac.add', 'Ajouter une question'),
+        summary: (it, lv) => lv(it.q) },
+      { k: 'props.single', t: 'check', l: t('pages.ac.single', 'Une seule ouverte à la fois') },
+      { k: 'props.firstOpen', t: 'check', l: t('pages.ac.firstOpen', 'Première ouverte par défaut') },
+      { k: 'props.iconColor', t: 'color', l: t('pages.ac.chevron', 'Couleur du chevron') },
+    ];
+    case 'timeline': return [
+      { k: 'props.items', t: 'items', l: t('pages.tl.items', 'Étapes'),
+        item: [
+          { k: 'date', t: 'ltext', l: t('pages.tl.date', 'Date / étiquette') },
+          { k: 'title', t: 'ltext', l: t('pages.heroTitle', 'Titre') },
+          { k: 'text', t: 'ltextarea', l: t('pages.text', 'Texte') },
+        ],
+        mk: () => ({ date: {}, title: {}, text: {} }), addLabel: t('pages.tl.add', 'Ajouter une étape'),
+        summary: (it, lv) => lv(it.title) || lv(it.date) },
+      { k: 'props.accent', t: 'color', l: t('pages.tl.accent', 'Couleur des points') },
+      { k: 'props.lineColor', t: 'color', l: t('pages.tl.line', 'Couleur de la ligne') },
+    ];
+    case 'cta-banner': return [
+      { k: 'text', t: 'ltext', l: t('pages.heroTitle', 'Titre') },
+      { k: 'props.subtitle', t: 'ltext', l: t('pages.heroSub', 'Sous-titre') },
+      { k: 'props.cta.text', t: 'ltext', l: t('pages.ctaText', 'Bouton') },
+      { k: 'props.cta.href', t: 'text', l: t('pages.ctaHref', 'Lien du bouton') },
+      { k: 'props.bg', t: 'color', grad: true, l: t('pages.bg', 'Fond') },
+      { k: 'props.align', t: 'seg', l: t('pages.align', 'Alignement'), opts: [['left', '', 'align-left'], ['center', '', 'align-center']] },
+    ];
     default: return [];
   }
 }
@@ -333,51 +422,88 @@ function _fields(type) {
 // PageRenderer.styleCss; the live page and the edit frame render it identically.
 function _styleGroups(scope) {
   const surface = [
-    { k: 'props.style.bg', t: 'color', l: t('pages.st.bg', 'Fond (couleur / dégradé)') },
+    { k: 'props.style.bg', t: 'color', grad: true, l: t('pages.st.bg', 'Fond') },
     { k: 'props.style.bgImage', t: 'text', l: t('pages.st.bgImage', 'Image de fond (URL)') },
-    { k: 'props.style.radius', t: 'number', l: t('pages.st.radius', 'Arrondi (px)'), ph: 'auto' },
-    { k: 'props.style.borderWidth', t: 'number', l: t('pages.st.borderWidth', 'Bordure (px)'), ph: '0' },
+    { k: 'props.style.radius', t: 'slider', l: t('pages.st.radius', 'Arrondi'), min: 0, max: 100, ph: 'auto', dv: 12 },
+    { k: 'props.style.borderWidth', t: 'slider', l: t('pages.st.borderWidth', 'Bordure'), min: 0, max: 12, ph: '0', dv: 1 },
     { k: 'props.style.borderColor', t: 'color', l: t('pages.st.borderColor', 'Couleur de bordure') },
-    { k: 'props.style.borderStyle', t: 'select', l: t('pages.st.borderStyle', 'Style de bordure'), opts: [['solid', 'Pleine'], ['dashed', 'Tirets'], ['dotted', 'Points']] },
-    { k: 'props.style.shadow', t: 'select', l: t('pages.st.shadow', 'Ombre'), opts: [['', 'Aucune'], ['sm', 'Légère'], ['md', 'Moyenne'], ['lg', 'Forte']] },
-    { k: 'props.style.opacity', t: 'number', l: t('pages.st.opacity', 'Opacité (%)'), ph: '100' },
+    { k: 'props.style.borderStyle', t: 'seg', l: t('pages.st.borderStyle', 'Style de bordure'), opts: [['solid', t('pages.lineSolid', 'Plein')], ['dashed', t('pages.lineDashed', 'Tirets')], ['dotted', t('pages.lineDotted', 'Points')]] },
+    { k: 'props.style.shadow', t: 'seg', l: t('pages.st.shadow', 'Ombre'), opts: [['', '—'], ['sm', 'S'], ['md', 'M'], ['lg', 'L']] },
+    { k: 'props.style.opacity', t: 'slider', l: t('pages.st.opacity', 'Opacité'), min: 0, max: 100, step: 5, unit: '%', ph: '100', dv: 100 },
   ];
-  if (scope === 'section') surface.splice(2, 0, { k: 'props.style.overlay', t: 'color', l: t('pages.overlay', 'Voile (couleur sur le fond)') });
+  if (scope === 'section') surface.splice(2, 0, { k: 'props.style.overlay', t: 'color', grad: true, l: t('pages.overlay', 'Voile (couleur sur le fond)') });
   return [
     { title: t('pages.st.text', 'Texte'), icon: 'type', fields: [
       { k: 'props.style.color', t: 'color', l: t('pages.st.textColor', 'Couleur du texte') },
-      { k: 'props.style.fontSize', t: 'number', l: t('pages.st.fontSize', 'Taille (px)'), ph: 'auto' },
-      { k: 'props.style.fontWeight', t: 'select', l: t('pages.st.fontWeight', 'Graisse'), opts: [['', 'Auto'], ['300', 'Light 300'], ['400', 'Normal 400'], ['500', 'Medium 500'], ['600', 'Semi-bold 600'], ['700', 'Bold 700'], ['800', 'Extra 800']] },
-      { k: 'props.style.lineHeight', t: 'number', l: t('pages.st.lineHeight', 'Interligne (ex. 1.5)'), step: '0.05', ph: 'auto' },
-      { k: 'props.style.letterSpacing', t: 'number', l: t('pages.st.letterSpacing', 'Espac. lettres (px)'), step: '0.5', ph: '0' },
-      { k: 'props.style.align', t: 'select', l: t('pages.align', 'Alignement'), opts: [['', 'Auto'], ['left', 'Gauche'], ['center', 'Centre'], ['right', 'Droite']] },
+      { k: 'props.style.fontSize', t: 'slider', l: t('pages.st.fontSize', 'Taille'), min: 8, max: 160, ph: 'auto', dv: 16 },
+      { k: 'props.style.fontWeight', t: 'slider', l: t('pages.st.fontWeight', 'Graisse'), min: 100, max: 900, step: 100, unit: '', ph: 'auto', dv: 400 },
+      { k: 'props.style.lineHeight', t: 'slider', l: t('pages.st.lineHeight', 'Interligne'), min: 0.8, max: 2.6, step: 0.05, unit: '×', ph: 'auto', dv: 1.5 },
+      { k: 'props.style.letterSpacing', t: 'slider', l: t('pages.st.letterSpacing', 'Espac. lettres'), min: -3, max: 12, step: 0.5, ph: '0', dv: 0 },
+      { k: 'props.style.align', t: 'seg', l: t('pages.align', 'Alignement'), opts: [['', 'Auto'], ...ALIGN_OPTS] },
       { k: 'props.style.italic', t: 'check', l: t('pages.st.italic', 'Italique') },
       { k: 'props.style.uppercase', t: 'check', l: t('pages.st.uppercase', 'Majuscules') },
     ] },
     { title: t('pages.st.surface', 'Fond & bordure'), icon: 'paint-bucket', fields: surface },
-    { title: t('pages.st.spacing', 'Espacement'), icon: 'move', grid: true, fields: [
-      { k: 'props.style.padTop', t: 'number', l: t('pages.st.padTop', 'Padding haut'), ph: 'auto' },
-      { k: 'props.style.padBottom', t: 'number', l: t('pages.st.padBottom', 'Padding bas'), ph: 'auto' },
-      { k: 'props.style.padLeft', t: 'number', l: t('pages.st.padLeft', 'Padding gauche'), ph: 'auto' },
-      { k: 'props.style.padRight', t: 'number', l: t('pages.st.padRight', 'Padding droite'), ph: 'auto' },
-      { k: 'props.style.marginTop', t: 'number', l: t('pages.st.marginTop', 'Marge haut'), ph: 'auto' },
-      { k: 'props.style.marginBottom', t: 'number', l: t('pages.st.marginBottom', 'Marge bas'), ph: 'auto' },
+    { title: t('pages.st.spacing', 'Espacement'), icon: 'move', fields: [
+      { k: 'props.style.padTop', t: 'slider', l: t('pages.st.padTop', 'Padding haut'), min: 0, max: 160, ph: 'auto', dv: 0 },
+      { k: 'props.style.padBottom', t: 'slider', l: t('pages.st.padBottom', 'Padding bas'), min: 0, max: 160, ph: 'auto', dv: 0 },
+      { k: 'props.style.padLeft', t: 'slider', l: t('pages.st.padLeft', 'Padding gauche'), min: 0, max: 160, ph: 'auto', dv: 0 },
+      { k: 'props.style.padRight', t: 'slider', l: t('pages.st.padRight', 'Padding droite'), min: 0, max: 160, ph: 'auto', dv: 0 },
+      { k: 'props.style.marginTop', t: 'slider', l: t('pages.st.marginTop', 'Marge haut'), min: -100, max: 200, ph: 'auto', dv: 0 },
+      { k: 'props.style.marginBottom', t: 'slider', l: t('pages.st.marginBottom', 'Marge bas'), min: -100, max: 200, ph: 'auto', dv: 0 },
     ] },
-    { title: t('pages.st.size', 'Taille'), icon: 'scaling', grid: true, fields: [
-      { k: 'props.style.maxWidth', t: 'number', l: t('pages.st.maxWidth', 'Largeur max (px)'), ph: 'auto' },
-      { k: 'props.style.minHeight', t: 'number', l: t('pages.st.minHeight', 'Hauteur min (px)'), ph: 'auto' },
+    { title: t('pages.st.size', 'Taille'), icon: 'scaling', fields: [
+      { k: 'props.style.maxWidth', t: 'slider', l: t('pages.st.maxWidth', 'Largeur max'), min: 100, max: 1600, step: 10, ph: 'auto', dv: 800 },
+      { k: 'props.style.minHeight', t: 'slider', l: t('pages.st.minHeight', 'Hauteur min'), min: 0, max: 1000, step: 10, ph: 'auto', dv: 0 },
     ] },
   ];
 }
 
-function _styleGroupsHtml(obj, scope) {
-  const groups = _styleGroups(scope);
-  return `<div style="margin-top:12px;border-top:1px solid var(--border-subtle,#2a2a3a);padding-top:10px">
-      <div class="adm-field-label" style="margin-bottom:8px;display:flex;align-items:center;gap:6px"><i data-lucide="brush"></i>${escHtml(t('pages.st.title', 'Style'))}</div>` +
-    groups.map((g) => `<details style="margin-bottom:8px;border:1px solid var(--border-subtle,#2a2a3a);border-radius:8px;padding:6px 9px">
-        <summary style="cursor:pointer;font-size:12.5px;font-weight:600;display:flex;align-items:center;gap:7px;user-select:none;list-style:none"><i data-lucide="${g.icon}" style="width:13px;height:13px"></i>${escHtml(g.title)}</summary>
-        <div style="margin-top:8px;${g.grid ? 'display:grid;grid-template-columns:1fr 1fr;gap:0 8px' : ''}">${g.fields.map((f) => _fieldHtml(obj, f)).join('')}</div>
-      </details>`).join('') + '</div>';
+// Mount the Style accordion groups into `host` (DOM-built via renderFields).
+function _mountStyleGroups(host, obj, scope, ctx) {
+  const box = document.createElement('div');
+  box.style.cssText = 'margin-top:12px;border-top:1px solid var(--adm-border,rgba(255,255,255,.07));padding-top:10px';
+  const head = document.createElement('div');
+  head.className = 'adm-field-label';
+  head.style.cssText = 'margin-bottom:8px;display:flex;align-items:center;gap:6px';
+  head.innerHTML = `<i data-lucide="brush"></i>${escHtml(t('pages.st.title', 'Style'))}`;
+  box.appendChild(head);
+  _styleGroups(scope).forEach((g) => {
+    const det = document.createElement('details');
+    det.style.cssText = 'margin-bottom:8px;border:1px solid var(--adm-border,rgba(255,255,255,.07));border-radius:8px;padding:6px 9px';
+    const sum = document.createElement('summary');
+    sum.style.cssText = 'cursor:pointer;font-size:12.5px;font-weight:600;display:flex;align-items:center;gap:7px;user-select:none;list-style:none';
+    sum.innerHTML = `<i data-lucide="${g.icon}" style="width:13px;height:13px"></i>${escHtml(g.title)}`;
+    det.appendChild(sum);
+    const bodyBox = document.createElement('div');
+    bodyBox.style.cssText = 'margin-top:8px;display:flex;flex-direction:column;gap:10px';
+    renderFields(bodyBox, obj, g.fields, ctx);
+    det.appendChild(bodyBox);
+    box.appendChild(det);
+  });
+  host.appendChild(box);
+}
+
+// ── Control context: model writes → dirty + live iframe sync; custom gradient
+// presets persist in the PUBLIC instance doc (config/instance.json → editor.*),
+// so they follow the site (any browser / operator), not one browser profile.
+function _ctlCtx() {
+  return {
+    loc: _editLoc,
+    onChange() { _mark(true); _syncFrame(); },
+    gradients: { get: _gradPresets, save: _saveGradPresets },
+  };
+}
+function _gradPresets() {
+  return (_instance && _instance.editor && Array.isArray(_instance.editor.gradientPresets)) ? _instance.editor.gradientPresets : [];
+}
+function _saveGradPresets(list) {
+  if (!_instance || typeof _instance !== 'object' || Array.isArray(_instance)) _instance = {};
+  _instance.editor = (_instance.editor && typeof _instance.editor === 'object') ? _instance.editor : {};
+  _instance.editor.gradientPresets = (Array.isArray(list) ? list : []).slice(0, 40);
+  apiFetchStatus(`${API_SITE}?action=save&doc=instance`, { method: 'POST', body: JSON.stringify(_instance) })
+    .then((r) => { if (!r.ok) toast(t('pages.saveError', "Échec de l'enregistrement."), 'error'); else toast(t('pages.pc.presetSaved', 'Préréglages de dégradés mis à jour.'), 'success'); })
+    .catch(() => {});
 }
 
 // ══════════════════════════════════════════════════════════════
@@ -591,16 +717,27 @@ function _renderPalette(body) {
   const seedNote = _seeded
     ? `<div style="font-size:11.5px;line-height:1.45;padding:8px 10px;margin:0 0 10px;border:1px solid var(--color-primary,#2F6BFF);border-radius:8px;background:color-mix(in srgb,var(--color-primary,#2F6BFF) 10%,transparent)">${escHtml(t('pages.seedNotice', 'Modèle de départ — la page publiée garde sa mise en page intégrée tant que vous ne publiez pas cette version.'))}</div>`
     : '';
-  body.innerHTML = `${seedNote}<p class="adm-page-sub" style="font-size:12px;margin:0 0 10px">${escHtml(t('pages.dragOrClick', 'Cliquez ou glissez un élément dans la page.'))}</p><div id="pages-palette" style="display:grid;grid-template-columns:1fr 1fr;gap:6px"></div>`;
-  const grid = el('pages-palette');
-  PALETTE.forEach((b) => {
-    const btn = document.createElement('button');
-    btn.type = 'button';
-    btn.className = 'adm-btn adm-btn-ghost adm-btn-sm';
-    btn.style.cssText = 'justify-content:flex-start;cursor:grab;touch-action:none';
-    btn.innerHTML = `<i data-lucide="${b.icon}"></i> ${escHtml(t('pages.block.' + b.type, b.def))}`;
-    btn.addEventListener('pointerdown', (e) => _startPaletteDrag(e, b.type, btn));
-    grid.appendChild(btn);
+  body.innerHTML = `${seedNote}<p class="adm-page-sub" style="font-size:12px;margin:0 0 10px">${escHtml(t('pages.dragOrClick', 'Cliquez ou glissez un élément dans la page.'))}</p><div id="pages-palette"></div>`;
+  const wrap = el('pages-palette');
+  PALETTE_CATS.forEach(([cat, catDef]) => {
+    const items = PALETTE.filter((b) => b.cat === cat);
+    if (!items.length) return;
+    const h = document.createElement('div');
+    h.className = 'pbc-cat';
+    h.textContent = t('pages.cat.' + cat, catDef);
+    wrap.appendChild(h);
+    const grid = document.createElement('div');
+    grid.style.cssText = 'display:grid;grid-template-columns:1fr 1fr;gap:6px';
+    items.forEach((b) => {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'adm-btn adm-btn-ghost adm-btn-sm';
+      btn.style.cssText = 'justify-content:flex-start;cursor:grab;touch-action:none';
+      btn.innerHTML = `<i data-lucide="${b.icon}"></i> ${escHtml(t('pages.block.' + b.type, b.def))}`;
+      btn.addEventListener('pointerdown', (e) => _startPaletteDrag(e, b.type, btn));
+      grid.appendChild(btn);
+    });
+    wrap.appendChild(grid);
   });
   refreshIcons(body);
 }
@@ -692,17 +829,11 @@ async function _setPageVisibility(slug, show) {
 }
 
 function _sectionSettings(host, sec, si) {
-  const p = sec.props;
   host.innerHTML = _panelHead(`${t('pages.section', 'Section')} ${si + 1}`, 'rows-3') + `
     <label class="adm-field"><span class="adm-field-label">${escHtml(t('pages.layout', 'Disposition'))}</span>
       <div style="display:flex;gap:5px;flex-wrap:wrap">${LAYOUTS.map((L) => `<button class="adm-btn adm-btn-ghost adm-btn-sm pb-layout" data-w="${L.widths.join('-')}" title="${L.widths.join(' / ')}">${escHtml(L.label)}</button>`).join('')}</div></label>
-    <label class="adm-field" style="flex-direction:row;justify-content:space-between;align-items:center"><span class="adm-field-label" style="margin:0">${escHtml(t('pages.fullWidth', 'Pleine largeur'))}</span><input type="checkbox" id="pb-fw" ${p.fullWidth ? 'checked' : ''}></label>
-    <label class="adm-field"><span class="adm-field-label">${escHtml(t('pages.maxWidth', 'Largeur max (px)'))}</span><input type="number" class="adm-field-input" id="pb-mw" value="${escHtml(String(p.maxWidth || 1080))}" ${p.fullWidth ? 'disabled' : ''}></label>
-    <label class="adm-field"><span class="adm-field-label">${escHtml(t('pages.padY', 'Marge verticale (px)'))}</span><input type="number" class="adm-field-input" id="pb-py" value="${escHtml(String(p.padY ?? 48))}"></label>
-    <label class="adm-field"><span class="adm-field-label">${escHtml(t('pages.gap', 'Espace entre colonnes (px)'))}</span><input type="number" class="adm-field-input" id="pb-gap" value="${escHtml(String(p.gap ?? 24))}"></label>
-    <label class="adm-field"><span class="adm-field-label">${escHtml(t('pages.vAlign', 'Alignement vertical'))}</span><select class="adm-field-input" id="pb-va">${[['stretch', '↕'], ['start', '↑'], ['center', '↔'], ['end', '↓']].map(([v, l]) => `<option value="${v}" ${p.vAlign === v ? 'selected' : ''}>${l} ${v}</option>`).join('')}</select></label>
-    <label class="adm-field"><span class="adm-field-label">${escHtml(t('pages.bg', 'Fond (CSS)'))}</span><input type="text" class="adm-field-input" id="pb-bg" value="${escHtml(p.bg || '')}" placeholder="#111 / linear-gradient(…)"></label>
-    ${_styleGroupsHtml(sec, 'section')}
+    <div id="pb-sfields" style="display:flex;flex-direction:column;gap:10px;margin-top:10px"></div>
+    <div id="pb-sstyle"></div>
     <div style="display:flex;gap:6px;margin-top:10px">
       <button class="adm-btn adm-btn-ghost adm-btn-sm" id="pb-sec-dup"><i data-lucide="copy"></i> ${escHtml(t('pages.duplicate', 'Dupliquer'))}</button>
       <button class="adm-btn adm-btn-ghost adm-btn-sm" id="pb-sec-del"><i data-lucide="trash-2"></i> ${escHtml(t('pages.delete', 'Supprimer'))}</button>
@@ -713,26 +844,28 @@ function _sectionSettings(host, sec, si) {
     upd(() => { const old = sec.columns; sec.columns = widths.map((wd, i) => old[i] ? Object.assign(old[i], { width: wd }) : _newColumn(wd)); if (old.length > widths.length) { const extra = old.slice(widths.length).flatMap((c) => c.widgets); sec.columns[sec.columns.length - 1].widgets.push(...extra); } });
     renderSettings();
   }));
-  el('pb-fw').addEventListener('change', (e) => { upd(() => p.fullWidth = e.target.checked); renderSettings(); });
-  el('pb-mw').addEventListener('input', (e) => upd(() => p.maxWidth = +e.target.value || 1080));
-  el('pb-py').addEventListener('input', (e) => upd(() => p.padY = Math.max(0, +e.target.value || 0)));
-  el('pb-gap').addEventListener('input', (e) => upd(() => p.gap = Math.max(0, +e.target.value || 0)));
-  el('pb-va').addEventListener('change', (e) => upd(() => p.vAlign = e.target.value));
-  el('pb-bg').addEventListener('input', (e) => upd(() => p.bg = e.target.value));
+  const ctx = _ctlCtx();
+  renderFields(el('pb-sfields'), sec, [
+    { k: 'props.fullWidth', t: 'check', l: t('pages.fullWidth', 'Pleine largeur') },
+    { k: 'props.maxWidth', t: 'slider', l: t('pages.maxWidth', 'Largeur max'), min: 480, max: 1600, step: 20, dv: 1080 },
+    { k: 'props.padY', t: 'slider', l: t('pages.padY', 'Marge verticale'), min: 0, max: 240, dv: 48 },
+    { k: 'props.gap', t: 'slider', l: t('pages.gap', 'Espace entre colonnes'), min: 0, max: 80, dv: 24 },
+    { k: 'props.vAlign', t: 'seg', l: t('pages.vAlign', 'Alignement vertical'), opts: [['stretch', t('pages.va.stretch', 'Étiré')], ['start', t('pages.va.start', 'Haut')], ['center', t('pages.va.center', 'Centre')], ['end', t('pages.va.end', 'Bas')]] },
+    { k: 'props.bg', t: 'color', grad: true, l: t('pages.bg', 'Fond') },
+  ], ctx);
+  _mountStyleGroups(el('pb-sstyle'), sec, 'section', ctx);
   el('pb-sec-dup').addEventListener('click', () => duplicateSection(si));
   el('pb-sec-del').addEventListener('click', () => deleteSection(si));
-  _wireFields(host, sec, []);
   refreshIcons(host);
 }
 
 function _columnSettings(host, sec, si, ci) {
   const col = sec.columns[ci];
   host.innerHTML = _panelHead(`${t('pages.column', 'Colonne')} ${ci + 1} · ${col.width}/12`, 'columns-2') + `
-    <label class="adm-field"><span class="adm-field-label">${escHtml(t('pages.colWidth', 'Largeur (unités /12)'))}</span><input type="range" min="1" max="12" step="1" id="pb-cw" value="${col.width}"><span class="adm-page-sub" id="pb-cw-val">${col.width}/12</span></label>
-    <label class="adm-field"><span class="adm-field-label">${escHtml(t('pages.vAlign', 'Alignement vertical'))}</span><select class="adm-field-input" id="pb-cva">${[['', '—'], ['flex-start', '↑'], ['center', '↔'], ['flex-end', '↓']].map(([v, l]) => `<option value="${v}" ${(col.props?.vAlign || '') === v ? 'selected' : ''}>${l} ${v || 'auto'}</option>`).join('')}</select></label>
-    <label class="adm-field"><span class="adm-field-label">${escHtml(t('pages.colPad', 'Padding interne (px)'))}</span><input type="number" class="adm-field-input" id="pb-cpad" value="${escHtml(String(col.props?.padding || 0))}"></label>
-    <button class="adm-btn adm-btn-ghost adm-btn-sm" id="pb-col-card" style="width:100%;justify-content:center"><i data-lucide="sparkles"></i> ${escHtml(t('pages.cardPreset', 'Transformer en carte'))}</button>
-    ${_styleGroupsHtml(col, 'column')}
+    <label class="adm-field"><span class="adm-field-label">${escHtml(t('pages.colWidth', 'Largeur (unités /12)'))}</span><input type="range" min="1" max="12" step="1" id="pb-cw" value="${col.width}" class="pbc-range"><span class="adm-page-sub" id="pb-cw-val">${col.width}/12</span></label>
+    <div id="pb-cfields" style="display:flex;flex-direction:column;gap:10px;margin-top:6px"></div>
+    <button class="adm-btn adm-btn-ghost adm-btn-sm" id="pb-col-card" style="width:100%;justify-content:center;margin-top:10px"><i data-lucide="sparkles"></i> ${escHtml(t('pages.cardPreset', 'Transformer en carte'))}</button>
+    <div id="pb-cstyle"></div>
     <div style="display:flex;gap:6px;margin-top:10px">
       <button class="adm-btn adm-btn-ghost adm-btn-sm" id="pb-col-add"><i data-lucide="plus"></i> ${escHtml(t('pages.addColumn', 'Colonne'))}</button>
       ${sec.columns.length > 1 ? `<button class="adm-btn adm-btn-ghost adm-btn-sm" id="pb-col-del"><i data-lucide="trash-2"></i> ${escHtml(t('pages.removeColumn', 'Retirer'))}</button>` : ''}
@@ -742,8 +875,13 @@ function _columnSettings(host, sec, si, ci) {
     if (other) { const total = col.width + other.width; other.width = Math.max(1, total - nv); }
     col.width = nv; el('pb-cw-val').textContent = nv + '/12'; _mark(true); _syncFrame();
   });
-  el('pb-cva').addEventListener('change', (e) => { col.props = col.props || {}; col.props.vAlign = e.target.value; _mark(true); _syncFrame(); });
-  el('pb-cpad').addEventListener('input', (e) => { col.props = col.props || {}; col.props.padding = Math.max(0, +e.target.value || 0); _mark(true); _syncFrame(); });
+  const ctx = _ctlCtx();
+  col.props = col.props || {};
+  renderFields(el('pb-cfields'), col, [
+    { k: 'props.vAlign', t: 'seg', l: t('pages.vAlign', 'Alignement vertical'), opts: [['', 'Auto'], ['flex-start', t('pages.va.start', 'Haut')], ['center', t('pages.va.center', 'Centre')], ['flex-end', t('pages.va.end', 'Bas')]] },
+    { k: 'props.padding', t: 'slider', l: t('pages.colPad', 'Padding interne'), min: 0, max: 80, dv: 0 },
+  ], ctx);
+  _mountStyleGroups(el('pb-cstyle'), col, 'column', ctx);
   el('pb-col-card').addEventListener('click', () => {
     col.props = col.props || {};
     col.props.style = Object.assign({}, col.props.style, {
@@ -754,104 +892,29 @@ function _columnSettings(host, sec, si, ci) {
   });
   el('pb-col-add').addEventListener('click', () => addColumn(si));
   el('pb-col-del')?.addEventListener('click', () => removeColumn(si, ci));
-  _wireFields(host, col, []);
   refreshIcons(host);
 }
 
 function _widgetSettings(host, b) {
   const fields = _fields(b.type);
   host.innerHTML = _panelHead(t('pages.block.' + b.type, b.type), 'settings-2') +
-    (fields.map((f) => _fieldHtml(b, f)).join('') || `<p class="adm-page-sub">${escHtml(t('pages.noSettings', 'Pas de réglages.'))}</p>`) +
-    _styleGroupsHtml(b, 'widget') +
-    `<div style="display:flex;gap:6px;margin-top:12px">
+    `<div id="pb-wfields" style="display:flex;flex-direction:column;gap:10px"></div>
+    <div id="pb-wstyle"></div>
+    <div style="display:flex;gap:6px;margin-top:12px">
       <button class="adm-btn adm-btn-ghost adm-btn-sm" id="pb-w-dup"><i data-lucide="copy"></i> ${escHtml(t('pages.duplicate', 'Dupliquer'))}</button>
       <button class="adm-btn adm-btn-ghost adm-btn-sm" id="pb-w-del"><i data-lucide="trash-2"></i> ${escHtml(t('pages.delete', 'Supprimer'))}</button>
     </div>`;
-  _wireFields(host, b, fields);
+  const ctx = _ctlCtx();
+  const fbox = el('pb-wfields');
+  if (fields.length) renderFields(fbox, b, fields, ctx);
+  else fbox.innerHTML = `<p class="adm-page-sub">${escHtml(t('pages.noSettings', 'Pas de réglages.'))}</p>`;
+  _mountStyleGroups(el('pb-wstyle'), b, 'widget', ctx);
   el('pb-w-dup').addEventListener('click', () => duplicateWidget(_sel.si, _sel.ci, _sel.wi));
   el('pb-w-del').addEventListener('click', () => deleteWidget(_sel.si, _sel.ci, _sel.wi));
   refreshIcons(host);
 }
 
-function _fieldHtml(b, f) {
-  const val = _get(b, f.k);
-  const hint = f.hint ? `<span class="adm-page-sub" style="font-size:11px;margin-top:2px">${escHtml(f.hint)}</span>` : '';
-  if (f.t === 'ltext') return `<label class="adm-field"><span class="adm-field-label">${escHtml(f.l)}</span><input type="text" class="adm-field-input" data-f="${escHtml(f.k)}" data-lt="1" value="${escHtml(_lv(val))}"></label>`;
-  if (f.t === 'ltextarea') return `<label class="adm-field"><span class="adm-field-label">${escHtml(f.l)}</span><textarea class="adm-field-input" data-f="${escHtml(f.k)}" data-lt="1" rows="4" style="resize:vertical">${escHtml(_lv(val))}</textarea></label>`;
-  if (f.t === 'select') return `<label class="adm-field"><span class="adm-field-label">${escHtml(f.l)}</span><select class="adm-field-input" data-f="${escHtml(f.k)}">${f.opts.map(([v, lab]) => `<option value="${escHtml(v)}" ${String(val ?? '') === v ? 'selected' : ''}>${escHtml(lab)}</option>`).join('')}</select></label>`;
-  if (f.t === 'color') {
-    const sval = typeof val === 'string' ? val : '';
-    const hex = /^#[0-9a-f]{6}$/i.test(sval) ? sval : '#888888';
-    return `<label class="adm-field"><span class="adm-field-label">${escHtml(f.l)}</span>
-      <div style="display:flex;gap:6px;align-items:center">
-        <input type="color" data-cs="${escHtml(f.k)}" value="${escHtml(hex)}" style="width:34px;height:32px;padding:2px;border:1px solid var(--border-subtle,#2a2a3a);border-radius:6px;background:transparent;cursor:pointer;flex:0 0 auto">
-        <input type="text" class="adm-field-input" data-f="${escHtml(f.k)}" value="${escHtml(sval)}" placeholder="#… / var(--…) / linear-gradient(…)" style="flex:1;min-width:0">
-      </div></label>`;
-  }
-  if (f.t === 'check') return `<label class="adm-field" style="flex-direction:row;justify-content:space-between;align-items:center;gap:8px"><span class="adm-field-label" style="margin:0">${escHtml(f.l)}</span><input type="checkbox" data-f="${escHtml(f.k)}" ${val ? 'checked' : ''}></label>`;
-  if (f.t === 'number') return `<label class="adm-field"><span class="adm-field-label">${escHtml(f.l)}</span><input type="number" ${f.step ? `step="${escHtml(f.step)}"` : ''} class="adm-field-input" data-f="${escHtml(f.k)}" value="${escHtml(val != null ? String(val) : '')}" placeholder="${escHtml(f.ph || '')}"></label>`;
-  if (f.t === 'gallery') return `<div class="adm-field"><span class="adm-field-label">${escHtml(f.l)}</span><div id="pages-gallery"></div><button class="adm-btn adm-btn-ghost adm-btn-sm" id="pages-gallery-add"><i data-lucide="plus"></i> ${escHtml(t('pages.addImage', 'Image'))}</button></div>`;
-  if (f.t === 'stats') return `<div class="adm-field"><span class="adm-field-label">${escHtml(f.l)}</span><div id="pages-stats"></div><button class="adm-btn adm-btn-ghost adm-btn-sm" id="pages-stats-add"><i data-lucide="plus"></i> ${escHtml(t('pages.addStat', 'Stat'))}</button></div>`;
-  return `<label class="adm-field"><span class="adm-field-label">${escHtml(f.l)}</span><input type="text" class="adm-field-input" data-f="${escHtml(f.k)}" value="${escHtml(typeof val === 'string' ? val : (val != null ? String(val) : ''))}" placeholder="${escHtml(f.ph || '')}">${hint}</label>`;
-}
-
-function _wireFields(host, b, _fields2) {
-  const redraw = () => { _syncFrame(); };
-  host.querySelectorAll('[data-f]').forEach((inp) => {
-    inp.addEventListener('input', () => {
-      const path = inp.getAttribute('data-f');
-      const v = inp.type === 'checkbox' ? inp.checked : inp.value;
-      if (inp.getAttribute('data-lt')) { let obj = _get(b, path); if (typeof obj !== 'object' || obj == null) { obj = {}; _put(b, path, obj); } obj[_editLoc] = inp.value; }
-      else _put(b, path, v);
-      // Typing a #rrggbb hex keeps the color swatch of a combo field in sync.
-      if (inp.type === 'text' && /^#[0-9a-f]{6}$/i.test(inp.value)) {
-        const sw = host.querySelector(`[data-cs="${path}"]`);
-        if (sw) sw.value = inp.value;
-      }
-      _mark(true); redraw();
-    });
-  });
-  // Color swatch → text twin + model (swatches only emit #rrggbb).
-  host.querySelectorAll('[data-cs]').forEach((sw) => {
-    sw.addEventListener('input', () => {
-      const path = sw.getAttribute('data-cs');
-      const txt = host.querySelector(`[data-f="${path}"]`);
-      if (txt) txt.value = sw.value;
-      _put(b, path, sw.value);
-      _mark(true); redraw();
-    });
-  });
-  const gwrap = host.querySelector('#pages-gallery');
-  if (gwrap) {
-    const imgs = (b.props.images = Array.isArray(b.props.images) ? b.props.images : []);
-    const draw = () => {
-      gwrap.innerHTML = imgs.map((im, i) => `<div style="display:flex;gap:6px;margin-bottom:5px"><input type="text" class="adm-field-input g-src" data-i="${i}" value="${escHtml(im.src || '')}" placeholder="URL" style="flex:1"><button class="adm-icon-btn g-del" data-i="${i}">✕</button></div>`).join('');
-      gwrap.querySelectorAll('.g-src').forEach((s) => s.addEventListener('input', () => { imgs[+s.getAttribute('data-i')].src = s.value; _mark(true); _syncFrame(); }));
-      gwrap.querySelectorAll('.g-del').forEach((d) => d.addEventListener('click', () => { imgs.splice(+d.getAttribute('data-i'), 1); _mark(true); draw(); _syncFrame(); }));
-    };
-    draw();
-    host.querySelector('#pages-gallery-add').addEventListener('click', () => { imgs.push({ src: '', alt: {} }); _mark(true); draw(); _syncFrame(); });
-  }
-  const swrap = host.querySelector('#pages-stats');
-  if (swrap) {
-    const stats = (b.props.stats = Array.isArray(b.props.stats) ? b.props.stats : []);
-    const draw = () => {
-      const SRCOPTS = [['datasetCount', t('pages.srcDatasets', 'Datasets')], ['specimenCount', t('pages.srcSpecimen', 'Spécimens')], ['cellCount', t('pages.srcCells', 'Cellules')], ['regionCount', t('pages.srcRegions', 'Régions')], ['custom', t('pages.custom', 'Fixe')]];
-      const LIVE = ['datasetCount', 'specimenCount', 'cellCount', 'regionCount'];
-      swrap.innerHTML = stats.map((st, i) => `<div style="display:flex;gap:6px;margin-bottom:5px;align-items:center">
-          <input type="text" class="adm-field-input s-label" data-i="${i}" value="${escHtml(_lv(st.label))}" placeholder="${escHtml(t('pages.statLabel', 'Libellé'))}" style="flex:1">
-          <select class="adm-field-input s-src" data-i="${i}" style="width:auto">${SRCOPTS.map(([v, l]) => `<option value="${v}" ${(st.source || 'custom') === v ? 'selected' : ''}>${escHtml(l)}</option>`).join('')}</select>
-          <input type="text" class="adm-field-input s-val" data-i="${i}" value="${escHtml(st.value != null ? String(st.value) : '')}" placeholder="123" style="width:60px" ${LIVE.includes(st.source) ? 'disabled' : ''}>
-          <button class="adm-icon-btn s-del" data-i="${i}">✕</button></div>`).join('');
-      swrap.querySelectorAll('.s-label').forEach((s) => s.addEventListener('input', () => { const st = stats[+s.getAttribute('data-i')]; if (typeof st.label !== 'object' || st.label == null) st.label = {}; st.label[_editLoc] = s.value; _mark(true); _syncFrame(); }));
-      swrap.querySelectorAll('.s-src').forEach((s) => s.addEventListener('change', () => { stats[+s.getAttribute('data-i')].source = s.value; _mark(true); draw(); _syncFrame(); }));
-      swrap.querySelectorAll('.s-val').forEach((s) => s.addEventListener('input', () => { stats[+s.getAttribute('data-i')].value = s.value; _mark(true); _syncFrame(); }));
-      swrap.querySelectorAll('.s-del').forEach((d) => d.addEventListener('click', () => { stats.splice(+d.getAttribute('data-i'), 1); _mark(true); draw(); _syncFrame(); }));
-    };
-    draw();
-    host.querySelector('#pages-stats-add').addEventListener('click', () => { stats.push({ label: {}, source: 'custom', value: '' }); _mark(true); draw(); _syncFrame(); });
-  }
-}
+// (Field rendering + wiring live in pages-controls.js → renderFields.)
 
 // ── Structural ops (all end in _afterMutate → sidebar + frame sync) ─────
 function addSection(widths) {

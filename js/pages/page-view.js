@@ -31,8 +31,10 @@
   function renderPage() {
     const host = document.getElementById('page-blocks');
     const empty = document.getElementById('page-empty');
-    const n = (typeof PageRenderer !== 'undefined') ? PageRenderer.renderSource(host, _source(), { wrap: true }) : 0;
+    const src = _source();
+    const n = (typeof PageRenderer !== 'undefined') ? PageRenderer.renderSource(host, src, { wrap: true }) : 0;
     if (empty) empty.style.display = n ? 'none' : '';
+    try { if (typeof PageBackground !== 'undefined') PageBackground.apply(src && src.background); } catch (_) {}
     // Title from the page doc (localized), falling back to the brand name.
     const title = _lv(_doc && _doc.title);
     if (title) document.title = title + ' — ' + (typeof InstanceConfig !== 'undefined' ? InstanceConfig.get('brand.name', 'Lumen3D') : 'Lumen3D');

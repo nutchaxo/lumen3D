@@ -347,6 +347,8 @@ const PageEditFrame = (() => {
         if (typeof m.editLoc === 'string') _editLoc = m.editLoc;
         if (m.messages && typeof m.messages === 'object') _msgs = m.messages;
         if (typeof m.hasTemplate === 'boolean') _hasTemplate = m.hasTemplate;
+        // Live page-background preview (the doc carries { preset, params }).
+        try { if (typeof PageBackground !== 'undefined') PageBackground.apply(m.background); } catch (_) {}
         render();
         break;
       case 'LUMEN_EDIT_DRAGMOVE':

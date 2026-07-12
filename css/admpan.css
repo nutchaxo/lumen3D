@@ -1759,3 +1759,7 @@ html, body {
 /* per-stop transparency row (gradient builder) */
 .pbc-stop-alpha { padding: 0 4px 2px 8px; }
 .pbc-stop-alpha .pbc-unit:first-child { min-width: 10px; opacity: 0.7; }
+
+/* hidden must beat .pbc-pop{display:flex} — this is what makes re-click collapse work */
+.pbc-pop[hidden] { display: none; }
+.pbc-caret { display: inline-flex; flex: 0 0 auto; transition: transform 0.15s; }

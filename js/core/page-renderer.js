@@ -15,7 +15,9 @@
        bg, bgImage, overlay, radius, borderWidth, borderColor, borderStyle, shadow, opacity,
        padTop, padRight, padBottom, padLeft, marginTop, marginBottom,
        maxWidth, minHeight }
-     textGradient (v1.16.1): a gradient painted INTO the glyphs (background-clip:text).
+     color (since v1.16.2) accepts a plain color OR a gradient — a gradient is
+     painted INTO the glyphs (background-clip:text). textGradient is the legacy
+     v1.16.1 separate field, still honored (editor migrates it into color).
    Compiled to sanitized inline CSS by styleCss(style, groups) — groups being
    'text' | 'surface' | 'spacing' | 'size'. The editor (tab-pages.js) writes
    these fields; the edit frame (page-edit-frame.js) reuses sectionCss/columnCss
@@ -119,18 +121,29 @@ const PageRenderer = (() => {
   const SHADOWS = { sm: '0 1px 3px rgba(0,0,0,.25)', md: '0 4px 16px rgba(0,0,0,.28)', lg: '0 14px 36px rgba(0,0,0,.38)' };
   const BORDER_STYLES = ['solid', 'dashed', 'dotted'];
 
+  // Text fill from a single value: a gradient paints INTO the glyphs
+  // (background-clip:text + transparent color), anything else is a plain color.
+  // Guarded — a non-gradient as background-image would be an invalid
+  // declaration and color:transparent would blank the text.
+  function _textFillCss(v) {
+    const s = String(v == null ? '' : v).trim();
+    if (!s) return '';
+    if (/^(linear|radial|conic)-gradient\(/i.test(s)) {
+      return `background-image:${_sanitizeCss(s)};-webkit-background-clip:text;background-clip:text;color:transparent;`;
+    }
+    return `color:${_sanitizeCss(s)};`;
+  }
+
   function styleCss(st, groups) {
     if (!st || typeof st !== 'object') return '';
     const has = (g) => !groups || groups.indexOf(g) !== -1;
     let c = '';
     if (has('text')) {
-      if (st.color) c += `color:${_sanitizeCss(st.color)};`;
-      // Gradient text: paint the gradient behind the glyphs and clip it to them.
-      // Guarded to real gradients — a plain color as background-image would be
-      // an invalid declaration and color:transparent would blank the text.
-      if (st.textGradient && /^(linear|radial|conic)-gradient\(/i.test(String(st.textGradient).trim())) {
-        c += `background-image:${_sanitizeCss(st.textGradient)};-webkit-background-clip:text;background-clip:text;color:transparent;`;
-      } else if (st.textGradient) c += `color:${_sanitizeCss(st.textGradient)};`;
+      // st.color accepts a plain color OR a gradient (painted into the glyphs).
+      // st.textGradient is the legacy v1.16.1 field — still honored (it used to
+      // win over color, and _textFillCss keeps that precedence).
+      const fill = (st.textGradient && String(st.textGradient).trim()) || st.color;
+      if (fill) c += _textFillCss(fill);
       const fs = _n(st.fontSize, 8, 220); if (fs != null) c += `font-size:${fs}px;`;
       const fw = _n(st.fontWeight, 100, 900); if (fw != null) c += `font-weight:${fw};`;
       const lh = _n(st.lineHeight, 0.7, 4); if (lh != null) c += `line-height:${lh};`;
@@ -237,11 +250,15 @@ const PageRenderer = (() => {
       const inner = _el('div', 'position:relative;max-width:760px;margin:0 auto;' +
         (align === 'left' ? 'margin-left:0;' : align === 'right' ? 'margin-right:0;' : ''));
       const ts = _n(p.titleSize, 10, 200);
-      if (_lv(b.text)) inner.appendChild(_el('h1', 'margin:0 0 14px;' + (ts ? `font-size:${ts}px;line-height:1.15;` : '') + styleCss(st, ['text']), _lv(b.text)));
+      // Style-panel text group is the shared base; the dedicated per-part fills
+      // (props.titleColor / props.subColor — color OR gradient) are appended
+      // after it so each part is adjustable independently.
+      if (_lv(b.text)) inner.appendChild(_el('h1', 'margin:0 0 14px;' + (ts ? `font-size:${ts}px;line-height:1.15;` : '') + styleCss(st, ['text']) + _textFillCss(p.titleColor), _lv(b.text)));
       const ss = _n(p.subSize, 8, 80);
-      // Subtitle follows the text style except size and gradient (kept on the title).
+      // Subtitle follows the shared text style except size and the legacy
+      // title-only textGradient field.
       const stSub = Object.assign({}, st, { fontSize: '', textGradient: '' });
-      if (_lv(p.subtitle)) inner.appendChild(_el('p', `font-size:${ss ? ss + 'px' : 'var(--text-lg,1.25rem)'};opacity:.85;margin:0 0 22px;` + styleCss(stSub, ['text']), _lv(p.subtitle)));
+      if (_lv(p.subtitle)) inner.appendChild(_el('p', `font-size:${ss ? ss + 'px' : 'var(--text-lg,1.25rem)'};opacity:.85;margin:0 0 22px;` + styleCss(stSub, ['text']) + _textFillCss(p.subColor), _lv(p.subtitle)));
       const ctas = [];
       if (p.cta && _lv(p.cta.text)) ctas.push(['btn btn-accent btn-lg', p.cta]);
       if (p.cta2 && _lv(p.cta2.text)) ctas.push(['btn btn-ghost btn-lg', p.cta2]);

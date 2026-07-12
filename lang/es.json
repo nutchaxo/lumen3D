@@ -1056,8 +1056,7 @@
       "marginTop": "Margen superior",
       "marginBottom": "Margen inferior",
       "maxWidth": "Ancho máximo",
-      "minHeight": "Alto mínimo",
-      "textGradient": "Degradado del texto"
+      "minHeight": "Alto mínimo"
     },
     "noDatasetsYet": "Aún no hay conjuntos de datos que mostrar.",
     "colsAuto": "Columnas (auto si vacío)",
@@ -1144,7 +1143,9 @@
       "colorText": "Texto",
       "colorTextMuted": "Texto atenuado",
       "colorBorder": "Borde"
-    }
+    },
+    "titleColor": "Color del título",
+    "subColor": "Color del subtítulo"
   },
   "wizard": {
     "title": "Instalación guiada",

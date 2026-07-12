@@ -1056,7 +1056,8 @@
       "marginTop": "Margen superior",
       "marginBottom": "Margen inferior",
       "maxWidth": "Ancho máximo",
-      "minHeight": "Alto mínimo"
+      "minHeight": "Alto mínimo",
+      "textGradient": "Degradado del texto"
     },
     "noDatasetsYet": "Aún no hay conjuntos de datos que mostrar.",
     "colsAuto": "Columnas (auto si vacío)",

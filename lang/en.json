@@ -1056,8 +1056,7 @@
       "marginTop": "Margin top",
       "marginBottom": "Margin bottom",
       "maxWidth": "Max width",
-      "minHeight": "Min height",
-      "textGradient": "Text gradient"
+      "minHeight": "Min height"
     },
     "noDatasetsYet": "No datasets to show yet.",
     "colsAuto": "Columns (auto if empty)",
@@ -1144,7 +1143,9 @@
       "colorText": "Text",
       "colorTextMuted": "Muted text",
       "colorBorder": "Border"
-    }
+    },
+    "titleColor": "Title color",
+    "subColor": "Subtitle color"
   },
   "wizard": {
     "title": "Guided setup",

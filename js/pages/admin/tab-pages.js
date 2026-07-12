@@ -95,7 +95,7 @@ function _newWidget(type) {
   switch (type) {
     case 'heading': return { id, type, text: {}, props: { level: '2', align: 'left' } };
     case 'richtext': return { id, type, text: {}, props: { align: 'left' } };
-    case 'hero': return { id, type, text: {}, props: { subtitle: {}, bg: '', align: 'center', titleSize: '', subSize: '', cta: { text: {}, href: '' }, cta2: { text: {}, href: '' } } };
+    case 'hero': return { id, type, text: {}, props: { subtitle: {}, bg: '', align: 'center', titleSize: '', titleColor: '', subSize: '', subColor: '', cta: { text: {}, href: '' }, cta2: { text: {}, href: '' } } };
     case 'button': return { id, type, text: {}, props: { href: '#', variant: 'accent', align: 'left', fullWidth: false } };
     case 'image': return { id, type, props: { src: '', alt: {}, align: 'center', width: '', height: '', fit: '', href: '' } };
     case 'icon': return { id, type, props: { name: 'star', size: 48, color: '', align: 'center' } };
@@ -151,6 +151,14 @@ function _sanitizeSections(list) {
         if (nw.type === 'button' && nw.props && typeof nw.props.style === 'string') {
           nw.props = Object.assign({}, nw.props, { variant: nw.props.variant || nw.props.style });
           delete nw.props.style;
+        }
+        // v1.16.1 stored text gradients in a separate style.textGradient field;
+        // since v1.16.2 style.color holds either a color or a gradient (one
+        // unified picker). Fold the legacy field in (it used to win over color).
+        if (nw.props && nw.props.style && typeof nw.props.style === 'object' && nw.props.style.textGradient) {
+          const stl = Object.assign({}, nw.props.style, { color: nw.props.style.textGradient });
+          delete stl.textGradient;
+          nw.props = Object.assign({}, nw.props, { style: stl });
         }
         return nw;
       }),
@@ -292,8 +300,10 @@ function _fields(type) {
     case 'hero': return [
       { k: 'text', t: 'ltext', l: t('pages.heroTitle', 'Titre') },
       { k: 'props.titleSize', t: 'slider', l: t('pages.titleSize', 'Taille du titre'), min: 16, max: 160, ph: 'auto', dv: 44 },
+      { k: 'props.titleColor', t: 'color', grad: true, l: t('pages.titleColor', 'Couleur du titre') },
       { k: 'props.subtitle', t: 'ltext', l: t('pages.heroSub', 'Sous-titre') },
       { k: 'props.subSize', t: 'slider', l: t('pages.subSize', 'Taille du sous-titre'), min: 10, max: 60, ph: 'auto', dv: 20 },
+      { k: 'props.subColor', t: 'color', grad: true, l: t('pages.subColor', 'Couleur du sous-titre') },
       { k: 'props.bg', t: 'color', grad: true, l: t('pages.bg', 'Fond') },
       { k: 'props.style.overlay', t: 'color', grad: true, l: t('pages.overlay', 'Voile (couleur sur le fond)') },
       { k: 'props.align', t: 'seg', l: t('pages.align', 'Alignement'), opts: ALIGN_OPTS },
@@ -434,8 +444,7 @@ function _styleGroups(scope) {
   if (scope === 'section') surface.splice(2, 0, { k: 'props.style.overlay', t: 'color', grad: true, l: t('pages.overlay', 'Voile (couleur sur le fond)') });
   return [
     { title: t('pages.st.text', 'Texte'), icon: 'type', fields: [
-      { k: 'props.style.color', t: 'color', l: t('pages.st.textColor', 'Couleur du texte') },
-      { k: 'props.style.textGradient', t: 'color', grad: true, gradFirst: true, l: t('pages.st.textGradient', 'Dégradé du texte') },
+      { k: 'props.style.color', t: 'color', grad: true, l: t('pages.st.textColor', 'Couleur du texte') },
       { k: 'props.style.fontSize', t: 'slider', l: t('pages.st.fontSize', 'Taille'), min: 8, max: 160, ph: 'auto', dv: 16 },
       { k: 'props.style.fontWeight', t: 'slider', l: t('pages.st.fontWeight', 'Graisse'), min: 100, max: 900, step: 100, unit: '', ph: 'auto', dv: 400 },
       { k: 'props.style.lineHeight', t: 'slider', l: t('pages.st.lineHeight', 'Interligne'), min: 0.8, max: 2.6, step: 0.05, unit: '×', ph: 'auto', dv: 1.5 },

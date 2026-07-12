@@ -1755,3 +1755,7 @@ html, body {
 /* palette categories (elements panel) */
 .pbc-cat { font-size: 10.5px; font-weight: 700; letter-spacing: 0.07em; text-transform: uppercase; color: var(--adm-text-muted); margin: 12px 0 6px; }
 .pbc-cat:first-child { margin-top: 0; }
+
+/* per-stop transparency row (gradient builder) */
+.pbc-stop-alpha { padding: 0 4px 2px 8px; }
+.pbc-stop-alpha .pbc-unit:first-child { min-width: 10px; opacity: 0.7; }

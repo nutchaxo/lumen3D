@@ -435,6 +435,7 @@ function _styleGroups(scope) {
   return [
     { title: t('pages.st.text', 'Texte'), icon: 'type', fields: [
       { k: 'props.style.color', t: 'color', l: t('pages.st.textColor', 'Couleur du texte') },
+      { k: 'props.style.textGradient', t: 'color', grad: true, gradFirst: true, l: t('pages.st.textGradient', 'Dégradé du texte') },
       { k: 'props.style.fontSize', t: 'slider', l: t('pages.st.fontSize', 'Taille'), min: 8, max: 160, ph: 'auto', dv: 16 },
       { k: 'props.style.fontWeight', t: 'slider', l: t('pages.st.fontWeight', 'Graisse'), min: 100, max: 900, step: 100, unit: '', ph: 'auto', dv: 400 },
       { k: 'props.style.lineHeight', t: 'slider', l: t('pages.st.lineHeight', 'Interligne'), min: 0.8, max: 2.6, step: 0.05, unit: '×', ph: 'auto', dv: 1.5 },

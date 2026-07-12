@@ -1056,7 +1056,8 @@
       "marginTop": "Margin top",
       "marginBottom": "Margin bottom",
       "maxWidth": "Max width",
-      "minHeight": "Min height"
+      "minHeight": "Min height",
+      "textGradient": "Text gradient"
     },
     "noDatasetsYet": "No datasets to show yet.",
     "colsAuto": "Columns (auto if empty)",

@@ -11,10 +11,11 @@
      Widget  = { id, type, text, props }        // the former "block"
 
    STYLE OBJECT (v3, per widget/column/section — props.style, all optional):
-     { color, fontSize, fontWeight, lineHeight, letterSpacing, italic, uppercase, align,
+     { color, textGradient, fontSize, fontWeight, lineHeight, letterSpacing, italic, uppercase, align,
        bg, bgImage, overlay, radius, borderWidth, borderColor, borderStyle, shadow, opacity,
        padTop, padRight, padBottom, padLeft, marginTop, marginBottom,
        maxWidth, minHeight }
+     textGradient (v1.16.1): a gradient painted INTO the glyphs (background-clip:text).
    Compiled to sanitized inline CSS by styleCss(style, groups) — groups being
    'text' | 'surface' | 'spacing' | 'size'. The editor (tab-pages.js) writes
    these fields; the edit frame (page-edit-frame.js) reuses sectionCss/columnCss
@@ -82,8 +83,9 @@ const PageRenderer = (() => {
     return 'No datasets to show yet.';
   }
   // One CSS *value* (color, gradient, …) — never a declaration: strip anything
-  // that could close the property or smuggle extra ones in.
-  function _sanitizeCss(v) { return String(v == null ? '' : v).replace(/[<>;{}]/g, '').replace(/expression\s*\(/gi, '').slice(0, 200); }
+  // that could close the property or smuggle extra ones in. 400 chars leaves
+  // room for a 3-stop gradient whose stops are color-mix(...)-wrapped var()s.
+  function _sanitizeCss(v) { return String(v == null ? '' : v).replace(/[<>;{}]/g, '').replace(/expression\s*\(/gi, '').slice(0, 400); }
   function _urlCss(u) { return String(u == null ? '' : u).replace(/["'\\<>;{}()]/g, '').slice(0, 500); }
   const ALIGN = (a) => (a === 'center' || a === 'right' ? a : 'left');
   // Numeric style field: ''/null/undefined → unset (null); else clamped number.
@@ -123,6 +125,12 @@ const PageRenderer = (() => {
     let c = '';
     if (has('text')) {
       if (st.color) c += `color:${_sanitizeCss(st.color)};`;
+      // Gradient text: paint the gradient behind the glyphs and clip it to them.
+      // Guarded to real gradients — a plain color as background-image would be
+      // an invalid declaration and color:transparent would blank the text.
+      if (st.textGradient && /^(linear|radial|conic)-gradient\(/i.test(String(st.textGradient).trim())) {
+        c += `background-image:${_sanitizeCss(st.textGradient)};-webkit-background-clip:text;background-clip:text;color:transparent;`;
+      } else if (st.textGradient) c += `color:${_sanitizeCss(st.textGradient)};`;
       const fs = _n(st.fontSize, 8, 220); if (fs != null) c += `font-size:${fs}px;`;
       const fw = _n(st.fontWeight, 100, 900); if (fw != null) c += `font-weight:${fw};`;
       const lh = _n(st.lineHeight, 0.7, 4); if (lh != null) c += `line-height:${lh};`;
@@ -218,17 +226,22 @@ const PageRenderer = (() => {
       const p = b.props || {}, st = p.style || {};
       const align = ALIGN(p.align || 'center');
       const mh = _n(st.minHeight, 0, 1600);
+      // The text style group must land on the inner h1/p, NOT the root div:
+      // base.css pins color/font-size on h1..h6, so inherited values from the
+      // root never reach the title (the "hero text color does nothing" bug).
       const sec = _el('div', `position:relative;overflow:hidden;padding:56px 24px;text-align:${align};border-radius:var(--radius-lg,14px);` +
         `${p.bg ? 'background:' + _sanitizeCss(p.bg) + ';' : ''}` +
         (mh ? 'display:flex;flex-direction:column;justify-content:center;' : '') +
-        styleCss(st));
+        styleCss(st, ['surface', 'spacing', 'size']));
       const ov = overlayNode(st); if (ov) sec.appendChild(ov);
       const inner = _el('div', 'position:relative;max-width:760px;margin:0 auto;' +
         (align === 'left' ? 'margin-left:0;' : align === 'right' ? 'margin-right:0;' : ''));
       const ts = _n(p.titleSize, 10, 200);
-      if (_lv(b.text)) inner.appendChild(_el('h1', 'margin:0 0 14px;' + (ts ? `font-size:${ts}px;line-height:1.15;` : ''), _lv(b.text)));
+      if (_lv(b.text)) inner.appendChild(_el('h1', 'margin:0 0 14px;' + (ts ? `font-size:${ts}px;line-height:1.15;` : '') + styleCss(st, ['text']), _lv(b.text)));
       const ss = _n(p.subSize, 8, 80);
-      if (_lv(p.subtitle)) inner.appendChild(_el('p', `font-size:${ss ? ss + 'px' : 'var(--text-lg,1.25rem)'};opacity:.85;margin:0 0 22px`, _lv(p.subtitle)));
+      // Subtitle follows the text style except size and gradient (kept on the title).
+      const stSub = Object.assign({}, st, { fontSize: '', textGradient: '' });
+      if (_lv(p.subtitle)) inner.appendChild(_el('p', `font-size:${ss ? ss + 'px' : 'var(--text-lg,1.25rem)'};opacity:.85;margin:0 0 22px;` + styleCss(stSub, ['text']), _lv(p.subtitle)));
       const ctas = [];
       if (p.cta && _lv(p.cta.text)) ctas.push(['btn btn-accent btn-lg', p.cta]);
       if (p.cta2 && _lv(p.cta2.text)) ctas.push(['btn btn-ghost btn-lg', p.cta2]);
@@ -336,7 +349,7 @@ const PageRenderer = (() => {
         card.appendChild(badge);
         setTimeout(() => { try { if (window.lucide && window.lucide.createIcons) lucide.createIcons({ nodes: [card] }); } catch (_) {} }, 0);
       }
-      if (_lv(b.text)) card.appendChild(_el('h3', 'margin:0 0 8px;font-size:1.15rem;line-height:1.3', _lv(b.text)));
+      if (_lv(b.text)) card.appendChild(_el('h3', 'margin:0 0 8px;font-size:1.15rem;line-height:1.3;color:inherit', _lv(b.text)));
       if (_lv(p.desc)) card.appendChild(_el('p', 'margin:0;opacity:.75;line-height:1.65;white-space:pre-wrap', _lv(p.desc)));
       if (p.link && _lv(p.link.text)) {
         const a = document.createElement('a');
@@ -418,7 +431,7 @@ const PageRenderer = (() => {
         const item = _el('div', `position:relative;${idx < items.length - 1 ? 'margin:0 0 26px;' : ''}`);
         item.appendChild(_el('div', `position:absolute;left:-27px;top:4px;width:12px;height:12px;border-radius:50%;background:${accent};box-shadow:0 0 0 4px color-mix(in srgb, ${accent} 22%, transparent)`));
         if (_lv(it.date)) item.appendChild(_el('div', `font-size:.76rem;font-weight:700;letter-spacing:.07em;text-transform:uppercase;color:${accent};margin-bottom:3px`, _lv(it.date)));
-        if (_lv(it.title)) item.appendChild(_el('h4', 'margin:0 0 5px;font-size:1.04rem', _lv(it.title)));
+        if (_lv(it.title)) item.appendChild(_el('h4', 'margin:0 0 5px;font-size:1.04rem;color:inherit', _lv(it.title)));
         if (_lv(it.text)) item.appendChild(_el('p', 'margin:0;opacity:.72;line-height:1.6;white-space:pre-wrap', _lv(it.text)));
         wrap.appendChild(item);
       });

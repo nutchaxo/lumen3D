@@ -1056,7 +1056,8 @@
       "marginTop": "Marge haut",
       "marginBottom": "Marge bas",
       "maxWidth": "Largeur max",
-      "minHeight": "Hauteur min"
+      "minHeight": "Hauteur min",
+      "textGradient": "Dégradé du texte"
     },
     "noDatasetsYet": "Aucun jeu de données à afficher pour le moment.",
     "colsAuto": "Colonnes (auto si vide)",

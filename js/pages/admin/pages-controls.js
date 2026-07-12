@@ -331,7 +331,9 @@ function ctlColor(obj, f, ctx) {
 
   function buildPanel() {
     pop.textContent = '';
-    if (mode == null) mode = isGradient(cur()) ? 'grad' : 'color';
+    // gradFirst: fields whose whole point is a gradient (e.g. text gradient)
+    // open on the Dégradé tab when still empty.
+    if (mode == null) mode = isGradient(cur()) ? 'grad' : (f.gradFirst && !cur() ? 'grad' : 'color');
     if (f.grad) {
       const seg = mk('div', 'pbc-seg');
       [['color', t('pages.pc.solid', 'Couleur')], ['grad', t('pages.pc.gradient', 'Dégradé')]].forEach(([m, lab]) => {
@@ -388,7 +390,7 @@ function ctlColor(obj, f, ctx) {
     const rowA = mk('div', 'pbc-row');
     rowA.appendChild(mk('span', 'pbc-mini-label', t('pages.pc.opacity', 'Opacité')));
     const al = document.createElement('input');
-    al.type = 'range'; al.className = 'pbc-range'; al.min = 5; al.max = 100; al.step = 5;
+    al.type = 'range'; al.className = 'pbc-range'; al.min = 0; al.max = 100; al.step = 5;
     al.value = state.alpha;
     const alv = mk('span', 'pbc-unit', state.alpha + '%');
     al.addEventListener('input', () => {
@@ -468,19 +470,22 @@ function ctlColor(obj, f, ctx) {
     });
     pop.appendChild(save);
 
-    // stops
+    // stops — each one carries its own transparency (composed via color-mix so
+    // "fade to transparent" gradients need zero hand-written rgba()).
     const stopsBox = mk('div', 'pbc-stops');
     const drawStops = () => {
       stopsBox.textContent = '';
-      g.stops.forEach((c, i) => {
+      g.stops.forEach((stop, i) => {
+        const sa = parseAlphaColor(stop);
+        const commit = () => { g.stops[i] = composeAlphaColor(sa.base, sa.alpha); apply(); };
         const row = mk('div', 'pbc-row');
         const nat = document.createElement('input');
         nat.type = 'color'; nat.className = 'pbc-native';
-        nat.value = /^#[0-9a-f]{6}$/i.test(c) ? c : '#888888';
+        nat.value = /^#[0-9a-f]{6}$/i.test(sa.base) ? sa.base : '#888888';
         const raw = mk('input', 'adm-field-input pbc-stop-raw');
-        raw.type = 'text'; raw.value = c;
-        nat.addEventListener('input', () => { g.stops[i] = nat.value; raw.value = nat.value; apply(); });
-        raw.addEventListener('input', () => { g.stops[i] = raw.value; if (/^#[0-9a-f]{6}$/i.test(raw.value)) nat.value = raw.value; apply(); });
+        raw.type = 'text'; raw.value = sa.base;
+        nat.addEventListener('input', () => { sa.base = nat.value; raw.value = sa.base; commit(); });
+        raw.addEventListener('input', () => { sa.base = raw.value; if (/^#[0-9a-f]{6}$/i.test(sa.base)) nat.value = sa.base; commit(); });
         row.appendChild(nat); row.appendChild(raw);
         if (g.stops.length > 2) {
           const del = mkBtn('pbc-reset', t('pages.delete', 'Supprimer'));
@@ -489,6 +494,16 @@ function ctlColor(obj, f, ctx) {
           row.appendChild(del);
         }
         stopsBox.appendChild(row);
+        const rowA = mk('div', 'pbc-row pbc-stop-alpha');
+        rowA.title = t('pages.pc.opacity', 'Opacité');
+        rowA.appendChild(mk('span', 'pbc-unit', 'α'));
+        const al = document.createElement('input');
+        al.type = 'range'; al.className = 'pbc-range'; al.min = 0; al.max = 100; al.step = 5;
+        al.value = sa.alpha;
+        const alv = mk('span', 'pbc-unit', sa.alpha + '%');
+        al.addEventListener('input', () => { sa.alpha = +al.value; alv.textContent = sa.alpha + '%'; commit(); });
+        rowA.appendChild(al); rowA.appendChild(alv);
+        stopsBox.appendChild(rowA);
       });
       if (g.stops.length < 3) {
         const add = mkBtn('pbc-addstop');

@@ -34,7 +34,7 @@
 
 import { API_SITE, I18n, t, escHtml, apiFetch, apiFetchStatus, toast, el, refreshIcons } from './shared.js';
 import { setUnsaved } from './bus.js';
-import { renderFields } from './pages-controls.js';
+import { renderFields, renderGroups } from './pages-controls.js';
 import { renderTranslatePanel } from './pages-translate.js';
 import { renderVariablesPanel } from './pages-variables.js';
 
@@ -51,6 +51,7 @@ let _editLoc = 'en';
 let _dirty = false;
 let _mode = 'launcher';             // 'launcher' | 'editor'
 let _side = 'elements';             // editor sidebar: 'elements' | 'settings'
+let _settingsTab = 'content';       // settings-panel mode tab: 'content' | 'style' | 'advanced' — persists across selections
 let _bound = false;                 // window 'message' listener installed once
 let _editorOnly = false;            // dedicated editor tab (admpan.html?editor=<slug>)
 let _seeded = false;                // built-in page: showing the starter template (not yet published)
@@ -86,6 +87,10 @@ const PALETTE = [
   { type: 'divider', icon: 'minus', def: 'Séparateur', cat: 'layout' },
   { type: 'spacer', icon: 'move-vertical', def: 'Espace', cat: 'layout' },
   { type: 'html', icon: 'code', def: 'HTML', cat: 'layout' },
+  { type: 'badge', icon: 'tag', def: 'Badges', cat: 'basics' },
+  { type: 'icon-list', icon: 'list-checks', def: 'Liste à icônes', cat: 'lists' },
+  { type: 'profile', icon: 'contact', def: 'Profil', cat: 'content' },
+  { type: 'cite-block', icon: 'clipboard-copy', def: 'Citation copiable', cat: 'content' },
 ];
 const PALETTE_CATS = [
   ['basics', 'Bases'],
@@ -98,22 +103,26 @@ function _newWidget(type) {
   const id = _id('w');
   switch (type) {
     case 'heading': return { id, type, text: {}, props: { level: '2', align: 'left' } };
-    case 'richtext': return { id, type, text: {}, props: { align: 'left' } };
-    case 'hero': return { id, type, text: {}, props: { subtitle: {}, bg: '', align: 'center', titleSize: '', titleColor: '', subSize: '', subColor: '', cta: { text: {}, href: '' }, cta2: { text: {}, href: '' } } };
-    case 'button': return { id, type, text: {}, props: { href: '#', variant: 'accent', align: 'left', fullWidth: false } };
-    case 'image': return { id, type, props: { src: '', alt: {}, align: 'center', width: '', height: '', fit: '', href: '' } };
+    case 'richtext': return { id, type, text: {}, props: { align: 'left', markup: true } };
+    case 'hero': return { id, type, text: {}, props: { subtitle: {}, bg: '', align: 'center', titleSize: '', titleColor: '', subSize: '', subColor: '', cta: { text: {}, href: '' }, cta2: { text: {}, href: '' }, badge: { text: {}, icon: '', dot: true }, badgeColor: '', glow: false, glowColor1: '', glowColor2: '' } };
+    case 'button': return { id, type, text: {}, props: { href: '#', variant: 'accent', align: 'left', fullWidth: false, icon: '', iconPos: 'left', size: '' } };
+    case 'image': return { id, type, props: { src: '', alt: {}, align: 'center', width: '', height: '', fit: '', href: '', caption: {} } };
     case 'icon': return { id, type, props: { name: 'star', size: 48, color: '', align: 'center' } };
-    case 'gallery': return { id, type, props: { images: [], cols: '', height: '', gap: '' } };
-    case 'stat-grid': return { id, type, props: { stats: [{ label: {}, source: 'datasetCount', value: '' }], cols: '', cardBg: '', valueColor: '', valueSize: '', labelColor: '' } };
-    case 'latest-datasets': return { id, type, props: { count: 4, cols: '', thumbHeight: '', showMeta: true } };
+    case 'gallery': return { id, type, props: { images: [], cols: '', height: '', gap: '', zoom: false, captions: false } };
+    case 'stat-grid': return { id, type, props: { stats: [{ label: {}, source: 'datasetCount', value: '' }], cols: '', cardBg: '', valueColor: '', valueSize: '', labelColor: '', borderColor: '', radius: '', pad: '' } };
+    case 'latest-datasets': return { id, type, props: { count: 4, cols: '', thumbHeight: '', showMeta: true, cardBg: '', borderColor: '', radius: '', titleColor: '', hover: false } };
     case 'divider': return { id, type, props: { color: '', thickness: '', width: '', lineStyle: 'solid' } };
     case 'spacer': return { id, type, props: { height: 32 } };
     case 'html': return { id, type, props: { html: {} } };
-    case 'feature-card': return { id, type, text: {}, props: { icon: 'sparkles', iconSize: 34, iconColor: '', iconBg: '', iconShape: 'round', desc: {}, link: { text: {}, href: '' }, align: 'left' } };
-    case 'quote': return { id, type, text: {}, props: { author: {}, role: {}, avatar: '', variant: 'bar', accent: '' } };
-    case 'accordion': return { id, type, props: { items: [{ q: {}, a: {} }, { q: {}, a: {} }], single: true, firstOpen: true, iconColor: '' } };
+    case 'feature-card': return { id, type, text: {}, props: { icon: 'sparkles', iconSize: 34, iconColor: '', iconBg: '', iconShape: 'round', desc: {}, link: { text: {}, href: '' }, align: 'left', media: 'icon', href: '' } };
+    case 'quote': return { id, type, text: {}, props: { author: {}, role: {}, avatar: '', variant: 'bar', accent: '', label: {}, link: { text: {}, href: '' } } };
+    case 'accordion': return { id, type, props: { items: [{ q: {}, a: {} }, { q: {}, a: {} }], single: true, firstOpen: true, iconColor: '', itemBg: '', borderColor: '' } };
     case 'timeline': return { id, type, props: { items: [{ date: {}, title: {}, text: {} }, { date: {}, title: {}, text: {} }], accent: '', lineColor: '' } };
-    case 'cta-banner': return { id, type, text: {}, props: { subtitle: {}, bg: '', align: 'left', cta: { text: {}, href: 'explorer.html' } } };
+    case 'cta-banner': return { id, type, text: {}, props: { subtitle: {}, bg: '', align: 'left', cta: { text: {}, href: 'explorer.html' }, cta2: { text: {}, href: '' } } };
+    case 'badge': return { id, type, props: { items: [{ text: {}, icon: '' }], align: 'left', dot: true, mono: false, size: '', gap: '', pillBg: '', pillColor: '', borderColor: '' } };
+    case 'icon-list': return { id, type, props: { items: [{ icon: 'check', text: {}, href: '' }], layout: 'v', iconColor: '', iconSize: '', gap: '', textSize: '' } };
+    case 'profile': return { id, type, props: { name: {}, role: {}, desc: {}, mediaKind: 'monogram', monogram: 'AB', img: '', icon: 'user', mediaBg: '', mediaColor: '', mediaSize: '', mediaRadius: '', roleColor: '', nameSize: '', layout: 'h', glowMedia: true } };
+    case 'cite-block': return { id, type, props: { title: {}, text: {}, mono: true, copy: true, extraLabel: {}, extra: {} } };
     default: return { id, type, props: {} };
   }
 }
@@ -194,6 +203,17 @@ function _tpl(key) {
   return Object.keys(out).length ? out : undefined;
 }
 
+// Merge two i18n keys into "**Label** Description" per locale (richtext mini-
+// markup bold) — used by the About template's "data provenance" line.
+function _tplBold(labelKey, descKey) {
+  const lab = _tpl(labelKey) || {};
+  const desc = _tpl(descKey) || {};
+  const codes = new Set([...Object.keys(lab), ...Object.keys(desc)]);
+  const out = {};
+  codes.forEach((c) => { out[c] = `**${lab[c] || lab.en || ''}** ${desc[c] || desc.en || ''}`; });
+  return Object.keys(out).length ? out : undefined;
+}
+
 function _richTemplate(slug) {
   if (slug === 'home') {
     const hero = _tpl('landing.heroTitle');
@@ -205,7 +225,7 @@ function _richTemplate(slug) {
     ] });
     return _sanitizeSections([
       { props: { fullWidth: false, padY: 72, maxWidth: 1080, gap: 24, vAlign: 'stretch', bg: '' }, columns: [{ width: 12, widgets: [
-        { type: 'hero', text: hero, props: { subtitle: _tpl('landing.heroSubtitle'), bg: '', cta: { text: _tpl('landing.exploreBtn'), href: 'explorer.html' } } },
+        { type: 'hero', text: hero, props: { subtitle: _tpl('landing.heroSubtitle'), bg: '', glow: true, cta: { text: _tpl('landing.exploreBtn'), href: 'explorer.html' } } },
       ] }] },
       { props: { fullWidth: false, padY: 24, maxWidth: 1080, gap: 24, vAlign: 'stretch', bg: '' }, columns: [{ width: 12, widgets: [
         { type: 'stat-grid', props: { stats: [
@@ -232,22 +252,107 @@ function _richTemplate(slug) {
   }
   if (slug === 'about') {
     const title = _tpl('about.title');
-    if (!title) return null;
+    if (!title) return null;   // dicts not loaded → caller uses the minimal template
+    // Faithful 1:1 reproduction of about.html (SPEC §5.4) — instance-specific
+    // content (names, thesis, DOI, e-mails, address, citations) is hardcoded
+    // ({en:'…'}); every string with an i18n key uses _tpl so the editor mirrors
+    // the live page across every available locale.
+    // Fresh object per call — two columns must never share the same style
+    // reference (editing one column's padding would otherwise silently mutate
+    // the other's too).
+    const cardStyle = () => ({ bg: 'var(--bg-surface)', radius: 22, borderWidth: 1, borderColor: 'var(--border-subtle)', shadow: 'md', padTop: 32, padRight: 32, padBottom: 32, padLeft: 32, hover: 'lift' });
     return _sanitizeSections([
-      { props: { fullWidth: false, padY: 56, maxWidth: 860, gap: 24, vAlign: 'stretch', bg: '' }, columns: [{ width: 12, widgets: [
-        { type: 'heading', text: title, props: { level: '1', align: 'left' } },
-        { type: 'richtext', text: _tpl('about.description'), props: { align: 'left' } },
+      // 1 — Hero (badge = subtitle eyebrow, transparent bg + radius 0 so it sits
+      // flush inside the surface section, exactly like .about-hero).
+      { props: { fullWidth: false, padY: 72, maxWidth: 1080, gap: 24, vAlign: 'stretch', bg: 'var(--bg-surface)' }, columns: [{ width: 12, widgets: [
+        { type: 'hero', text: title, props: {
+          badge: { text: _tpl('about.subtitle'), dot: true },
+          subtitle: _tpl('about.description'), align: 'left', glow: true, bg: '',
+          style: { radius: 0 },
+        } },
       ] }] },
-      { props: { fullWidth: false, padY: 16, maxWidth: 860, gap: 24, vAlign: 'stretch', bg: '' }, columns: [{ width: 12, widgets: [
-        { type: 'heading', text: _tpl('about.statsTitle'), props: { level: '2', align: 'left' } },
-        { type: 'stat-grid', props: { stats: [
+      // 2 — Creator & scientific context, two card columns.
+      { props: { fullWidth: false, padY: 56, maxWidth: 1080, gap: 24, vAlign: 'stretch', bg: '' }, columns: [
+        { width: 6, props: { style: cardStyle() }, widgets: [
+          { type: 'profile', props: { name: { en: 'Morgan Climent' }, role: _tpl('about.creatorRole'), monogram: 'MC' } },
+          { type: 'richtext', text: _tpl('about.creatorDesc'), props: {} },
+          { type: 'richtext', text: _tpl('about.aiAssisted'), props: { style: { fontSize: 11, uppercase: true, letterSpacing: 1, color: 'var(--text-muted)' } } },
+          { type: 'badge', props: { items: [{ text: { en: 'Claude' } }, { text: { en: 'Gemini' } }, { text: { en: 'ChatGPT' } }], mono: true, dot: false } },
+          { type: 'button', text: _tpl('about.githubBtn'), props: { href: 'https://github.com/nutchaxo/lumen3D', icon: 'github', variant: 'accent' } },
+        ] },
+        { width: 6, props: { style: cardStyle() }, widgets: [
+          { type: 'heading', text: _tpl('about.contextTitle'), props: { level: '2', align: 'left' } },
+          { type: 'richtext', text: _tpl('about.contextDesc'), props: {} },
+          { type: 'quote', text: { en: 'Origin and flow-mediated remodeling of the murine and human extraembryonic circulation systems' }, props: {
+            label: _tpl('about.thesisLabel'),
+            author: { en: 'Kristof Van Schoor — IRIBHM, Université libre de Bruxelles' },
+            variant: 'bar',
+            link: { text: { en: 'Front. Physiol. 2024 · DOI 10.3389/fphys.2024.1395006' }, href: 'https://doi.org/10.3389/fphys.2024.1395006' },
+            style: { bg: 'color-mix(in srgb, var(--color-accent) 7%, var(--bg-base))', radius: 16, borderWidth: 1, borderColor: 'color-mix(in srgb, var(--color-accent) 28%, var(--border-subtle))', padTop: 20, padRight: 20, padBottom: 20, padLeft: 24 },
+          } },
+          { type: 'richtext', text: _tplBold('about.dataLabel', 'about.dataDesc'), props: { markup: true } },
+        ] },
+      ] },
+      // 3 — Institutions: heading + 3 logo/monogram cards.
+      { props: { fullWidth: false, padY: 56, maxWidth: 1080, gap: 24, vAlign: 'stretch', bg: 'var(--bg-surface)' }, columns: [{ width: 12, widgets: [
+        { type: 'heading', text: _tpl('about.institutionsTitle'), props: { level: '2', align: 'center' } },
+        { type: 'richtext', text: _tpl('about.institutionsDesc'), props: { align: 'center' } },
+      ] }] },
+      { props: { fullWidth: false, padY: 8, maxWidth: 1080, gap: 24, vAlign: 'stretch', bg: 'var(--bg-surface)' }, columns: [
+        { width: 4, widgets: [{ type: 'feature-card', text: { en: 'Université libre de Bruxelles' }, props: { media: 'image', img: 'assets/logos/ulb.svg', plateBg: '#FFFFFF', imgH: 74, align: 'center', href: 'https://www.ulb.be', style: { hover: 'lift' } } }] },
+        { width: 4, widgets: [{ type: 'feature-card', text: { en: 'IRIBHM — Jacques E. Dumont' }, props: { media: 'image', img: 'assets/logos/iribhm.webp', plateBg: '#FFFFFF', imgH: 60, align: 'center', href: 'https://www.iribhm.org/', style: { hover: 'lift' } } }] },
+        { width: 4, widgets: [{ type: 'feature-card', text: { en: 'Migeotte Lab — I. Migeotte (PI)' }, props: { media: 'monogram', monogram: 'IM', align: 'center', href: 'https://www.iribhm.org/research-labs/i-migeotte', style: { hover: 'lift' } } }] },
+      ] },
+      // 4 — Catalog stats.
+      { props: { fullWidth: false, padY: 56, maxWidth: 1080, gap: 24, vAlign: 'stretch', bg: '' }, columns: [{ width: 12, widgets: [
+        { type: 'heading', text: _tpl('about.statsTitle'), props: { level: '2', align: 'center' } },
+        { type: 'stat-grid', props: { cols: '', stats: [
           { label: _tpl('landing.statsDatasets'), source: 'datasetCount', value: '' },
           { label: _tpl('landing.statsEmbryos'), source: 'specimenCount', value: '' },
-        ] } },
+          { label: _tpl('landing.statsCells'), source: 'cellCount', value: '' },
+          { label: _tpl('landing.statsRegions'), source: 'regionCount', value: '' },
+        ], borderColor: 'var(--border-subtle)', radius: 16, valueColor: 'linear-gradient(135deg, var(--color-primary) 0%, var(--color-accent) 100%)' } },
       ] }] },
-      { props: { fullWidth: false, padY: 16, maxWidth: 860, gap: 24, vAlign: 'stretch', bg: '' }, columns: [{ width: 12, widgets: [
-        { type: 'heading', text: _tpl('about.contextTitle'), props: { level: '2', align: 'left' } },
-        { type: 'richtext', text: _tpl('about.contextDesc'), props: { align: 'left' } },
+      // 5 — Explore / quick access.
+      { props: { fullWidth: false, padY: 56, maxWidth: 1080, gap: 24, vAlign: 'stretch', bg: 'var(--bg-surface)' }, columns: [{ width: 12, widgets: [
+        { type: 'heading', text: _tpl('about.exploreTitle'), props: { level: '2', align: 'center' } },
+        { type: 'richtext', text: _tpl('about.exploreDesc'), props: { align: 'center' } },
+      ] }] },
+      { props: { fullWidth: false, padY: 8, maxWidth: 1080, gap: 24, vAlign: 'stretch', bg: 'var(--bg-surface)' }, columns: [
+        { width: 4, widgets: [{ type: 'feature-card', text: _tpl('about.linkExploreTitle'), props: { icon: 'layout-grid', desc: _tpl('about.linkExploreDesc'), link: { text: _tpl('about.open'), href: 'explorer.html' }, align: 'left', style: { hover: 'lift', radius: 18, borderWidth: 1, borderColor: 'var(--border-subtle)' } } }] },
+        { width: 4, widgets: [{ type: 'feature-card', text: _tpl('about.linkCompareTitle'), props: { icon: 'columns-2', desc: _tpl('about.linkCompareDesc'), link: { text: _tpl('about.open'), href: 'compare.html' }, align: 'left', style: { hover: 'lift', radius: 18, borderWidth: 1, borderColor: 'var(--border-subtle)' } } }] },
+        { width: 4, widgets: [{ type: 'feature-card', text: _tpl('about.linkDownloadTitle'), props: { icon: 'download', desc: _tpl('about.linkDownloadDesc'), link: { text: _tpl('about.open'), href: 'explorer.html' }, align: 'left', style: { hover: 'lift', radius: 18, borderWidth: 1, borderColor: 'var(--border-subtle)' } } }] },
+      ] },
+      // 6 — How to cite.
+      { props: { fullWidth: false, padY: 56, maxWidth: 1080, gap: 24, vAlign: 'stretch', bg: '' }, columns: [{ width: 12, widgets: [
+        { type: 'heading', text: _tpl('about.cite'), props: { level: '2', align: 'center' } },
+        { type: 'richtext', text: _tpl('about.citeIntro'), props: { align: 'center' } },
+      ] }] },
+      { props: { fullWidth: false, padY: 8, maxWidth: 1080, gap: 24, vAlign: 'stretch', bg: '' }, columns: [
+        { width: 6, widgets: [{ type: 'cite-block', props: {
+          title: _tpl('about.citePlatform'),
+          text: { en: 'Climent, M. (2026). Lumen3D — IRIBHM Microscopy Platform [Computer software]. Institut de Recherche Interdisciplinaire en Biologie humaine et moléculaire (IRIBHM), Université libre de Bruxelles. https://github.com/nutchaxo/lumen3D' },
+        } }] },
+        { width: 6, widgets: [{ type: 'cite-block', props: {
+          title: _tpl('about.citePublication'),
+          text: { en: 'Van Schoor, K., Bruet, E., Vincent Jones, E. A., & Migeotte, I. (2024). Origin and flow-mediated remodeling of the murine and human extraembryonic circulation systems. Frontiers in Physiology, 15, 1395006. https://doi.org/10.3389/fphys.2024.1395006' },
+          extraLabel: { en: 'BibTeX' },
+          extra: { en: '@article{vanschoor2024extraembryonic,\n  author  = {Van Schoor, Kristof and Bruet, Emmanuel and Vincent Jones, Elizabeth Anne and Migeotte, Isabelle},\n  title   = {Origin and flow-mediated remodeling of the murine and human extraembryonic circulation systems},\n  journal = {Frontiers in Physiology},\n  volume  = {15},\n  pages   = {1395006},\n  year    = {2024},\n  doi     = {10.3389/fphys.2024.1395006}\n}' },
+        } }] },
+      ] },
+      // 7 — Contact.
+      { props: { fullWidth: false, padY: 56, maxWidth: 1080, gap: 24, vAlign: 'stretch', bg: 'var(--bg-surface)' }, columns: [{ width: 12, widgets: [
+        { type: 'heading', text: _tpl('about.contact'), props: { level: '2', align: 'center' } },
+      ] }] },
+      { props: { fullWidth: false, padY: 8, maxWidth: 1080, gap: 24, vAlign: 'stretch', bg: 'var(--bg-surface)' }, columns: [{ width: 12, props: {
+        style: { bg: 'var(--bg-surface)', borderWidth: 1, borderColor: 'var(--border-subtle)', radius: 20, padTop: 24, padRight: 24, padBottom: 24, padLeft: 24, maxWidth: 640 },
+      }, widgets: [
+        { type: 'richtext', text: _tpl('about.contactDesc'), props: {} },
+        { type: 'icon-list', props: { items: [
+          { icon: 'user', text: { en: 'Isabelle Migeotte (PI) — isabelle.migeotte@ulb.be' }, href: 'mailto:isabelle.migeotte@ulb.be' },
+          { icon: 'building-2', text: { en: 'IRIBHM — iribhm@ulb.be' }, href: 'mailto:iribhm@ulb.be' },
+          { icon: 'map-pin', text: { en: 'Campus Erasme, Route de Lennik 808, 1070 Bruxelles, Belgique' }, href: '' },
+        ] } },
       ] }] },
     ]);
   }
@@ -286,71 +391,76 @@ function loadDefaultTemplate() {
 
 function _selWidget() { if (!_sel || _sel.wi == null) return null; return _sections[_sel.si]?.columns[_sel.ci]?.widgets[_sel.wi] || null; }
 
-// ── Field descriptors (rendered by pages-controls.js → renderFields) ────────
+// ── Field descriptors (rendered by pages-controls.js → renderFields/renderGroups) ─
 // Click-first: sliders for every numeric value, segmented buttons for enums,
 // the rich color/gradient picker (grad:true) for backgrounds, the Lucide icon
 // picker for icons, and the repeatable items editor for lists.
+//
+// Split Contenu/Style/Avancé (v1.18.0): text/links/items/data → _contentGroups
+// (Contenu tab); colors/shapes/layout specific to a widget → _styleGroupsSpecific
+// (Style tab, ahead of the generic Texte/Fond & bordure groups); spacing/size/
+// hover/visibility/custom-CSS → _advancedGroups (Avancé tab, shared by widget/
+// section/column). Field descriptors are rebuilt fresh on every render (never
+// cached at module scope) so t()'s labels track the active admin language.
 const ALIGN_OPTS = [['left', '', 'align-left'], ['center', '', 'align-center'], ['right', '', 'align-right']];
-function _fields(type) {
-  const align = { k: 'props.align', t: 'seg', l: t('pages.align', 'Alignement'), opts: ALIGN_OPTS };
-  const cols = (max) => ({ k: 'props.cols', t: 'slider', l: t('pages.colsAuto', 'Colonnes (auto si vide)'), min: 1, max: max || 8, ph: 'auto', dv: 3 });
+function _alignField() { return { k: 'props.align', t: 'seg', l: t('pages.align', 'Alignement'), opts: ALIGN_OPTS }; }
+function _colsField(max) { return { k: 'props.cols', t: 'slider', l: t('pages.colsAuto', 'Colonnes (auto si vide)'), min: 1, max: max || 8, ph: 'auto', dv: 3 }; }
+
+function _contentGroups(type) {
+  const content = t('pages.grp.content', 'Contenu');
   switch (type) {
-    case 'heading': return [
+    case 'heading': return [{ title: content, icon: 'file-text', fields: [
       { k: 'text', t: 'ltext', l: t('pages.text', 'Texte') },
       { k: 'props.level', t: 'seg', l: t('pages.level', 'Niveau'), opts: [['1', 'H1'], ['2', 'H2'], ['3', 'H3'], ['4', 'H4']] },
-      align,
-    ];
-    case 'richtext': return [{ k: 'text', t: 'ltextarea', l: t('pages.text', 'Texte') }, align];
-    case 'hero': return [
-      { k: 'text', t: 'ltext', l: t('pages.heroTitle', 'Titre') },
-      { k: 'props.titleSize', t: 'slider', l: t('pages.titleSize', 'Taille du titre'), min: 16, max: 160, ph: 'auto', dv: 44 },
-      { k: 'props.titleColor', t: 'color', grad: true, l: t('pages.titleColor', 'Couleur du titre') },
-      { k: 'props.subtitle', t: 'ltext', l: t('pages.heroSub', 'Sous-titre') },
-      { k: 'props.subSize', t: 'slider', l: t('pages.subSize', 'Taille du sous-titre'), min: 10, max: 60, ph: 'auto', dv: 20 },
-      { k: 'props.subColor', t: 'color', grad: true, l: t('pages.subColor', 'Couleur du sous-titre') },
-      { k: 'props.bg', t: 'color', grad: true, l: t('pages.bg', 'Fond') },
-      { k: 'props.style.overlay', t: 'color', grad: true, l: t('pages.overlay', 'Voile (couleur sur le fond)') },
-      { k: 'props.align', t: 'seg', l: t('pages.align', 'Alignement'), opts: ALIGN_OPTS },
-      { k: 'props.cta.text', t: 'ltext', l: t('pages.ctaText', 'Bouton') },
-      { k: 'props.cta.href', t: 'text', l: t('pages.ctaHref', 'Lien du bouton') },
-      { k: 'props.cta2.text', t: 'ltext', l: t('pages.cta2Text', 'Bouton secondaire') },
-      { k: 'props.cta2.href', t: 'text', l: t('pages.cta2Href', 'Lien du bouton secondaire') },
-    ];
-    case 'button': return [
-      { k: 'text', t: 'ltext', l: t('pages.label', 'Libellé') },
-      { k: 'props.href', t: 'text', l: t('pages.href', 'Lien') },
-      { k: 'props.variant', t: 'seg', l: t('pages.style', 'Style'), opts: [['accent', 'Accent'], ['ghost', 'Ghost'], ['lg', t('pages.big', 'Grand')]] },
-      { k: 'props.fullWidth', t: 'check', l: t('pages.fullWidthBtn', 'Pleine largeur') },
-      align,
-    ];
-    case 'image': return [
+    ] }];
+    case 'richtext': return [{ title: content, icon: 'file-text', fields: [
+      { k: 'text', t: 'ltextarea', l: t('pages.text', 'Texte') },
+      { k: 'props.markup', t: 'check', l: t('pages.markup', 'Mise en forme') + ' — ' + t('pages.richtextHint', '**gras**, *italique*, [lien](url)') },
+    ] }];
+    case 'image': return [{ title: content, icon: 'file-text', fields: [
       { k: 'props.src', t: 'text', l: 'URL' },
       { k: 'props.alt', t: 'ltext', l: t('pages.alt', 'Texte alt') },
-      { k: 'props.width', t: 'slider', l: t('pages.width', 'Largeur'), min: 40, max: 1200, step: 10, ph: 'auto', dv: 400 },
-      { k: 'props.height', t: 'slider', l: t('pages.imgHeight', 'Hauteur'), min: 40, max: 1000, step: 10, ph: 'auto', dv: 300 },
-      { k: 'props.fit', t: 'seg', l: t('pages.imgFit', 'Cadrage'), opts: [['', 'Auto'], ['cover', t('pages.fitCover', 'Remplir')], ['contain', t('pages.fitContain', 'Contenir')]] },
+      { k: 'props.caption', t: 'ltext', l: t('pages.imgCaption', 'Légende') },
       { k: 'props.href', t: 'text', l: t('pages.linkOpt', 'Lien (option.)') },
-      align,
-    ];
-    case 'icon': return [
+    ] }];
+    case 'icon': return [{ title: content, icon: 'file-text', fields: [
       { k: 'props.name', t: 'icon', l: t('pages.iconName', 'Icône') },
-      { k: 'props.size', t: 'slider', l: t('pages.iconSize', 'Taille'), min: 12, max: 160, dv: 48 },
-      { k: 'props.color', t: 'color', l: t('pages.stroke', 'Couleur') },
-      align,
+    ] }];
+    case 'button': return [{ title: content, icon: 'file-text', fields: [
+      { k: 'text', t: 'ltext', l: t('pages.label', 'Libellé') },
+      { k: 'props.href', t: 'text', l: t('pages.href', 'Lien') },
+      { k: 'props.icon', t: 'icon', l: t('pages.btn.icon', 'Icône') },
+      { k: 'props.iconPos', t: 'seg', l: t('pages.btn.iconPos', "Position de l'icône"), opts: [['left', t('pages.btn.iconLeft', 'Gauche')], ['right', t('pages.btn.iconRight', 'Droite')]] },
+    ] }];
+    case 'hero': return [
+      { title: t('pages.grp.badge', 'Badge'), icon: 'badge-check', fields: [
+        { k: 'props.badge.text', t: 'ltext', l: t('pages.hero.badgeText', 'Texte du badge') },
+        { k: 'props.badge.icon', t: 'icon', l: t('pages.hero.badgeIcon', 'Icône du badge') },
+        { k: 'props.badge.dot', t: 'check', l: t('pages.hero.badgeDot', 'Pastille') },
+      ] },
+      { title: content, icon: 'file-text', fields: [
+        { k: 'text', t: 'ltext', l: t('pages.heroTitle', 'Titre') },
+        { k: 'props.subtitle', t: 'ltext', l: t('pages.heroSub', 'Sous-titre') },
+      ] },
+      { title: t('pages.grp.buttons', 'Boutons'), icon: 'mouse-pointer-click', fields: [
+        { k: 'props.cta.text', t: 'ltext', l: t('pages.ctaText', 'Bouton') },
+        { k: 'props.cta.href', t: 'text', l: t('pages.ctaHref', 'Lien du bouton') },
+        { k: 'props.cta2.text', t: 'ltext', l: t('pages.cta2Text', 'Bouton secondaire') },
+        { k: 'props.cta2.href', t: 'text', l: t('pages.cta2Href', 'Lien du bouton secondaire') },
+      ] },
     ];
-    case 'gallery': return [
+    case 'gallery': return [{ title: t('pages.grp.items', 'Éléments'), icon: 'images', fields: [
       { k: 'props.images', t: 'items', l: t('pages.images', 'Images'),
         item: [{ k: 'src', t: 'text', l: 'URL' }, { k: 'alt', t: 'ltext', l: t('pages.alt', 'Texte alt') }],
         mk: () => ({ src: '', alt: {} }), addLabel: t('pages.addImage', 'Ajouter une image'),
         summary: (im) => (im.src || '').split('/').pop() },
-      cols(8),
-      { k: 'props.height', t: 'slider', l: t('pages.imgHeight', 'Hauteur'), min: 60, max: 600, step: 10, ph: 'auto', dv: 160 },
-      { k: 'props.gap', t: 'slider', l: t('pages.hgap', 'Espacement'), min: 0, max: 40, ph: 'auto', dv: 12 },
-    ];
+      { k: 'props.captions', t: 'check', l: t('pages.gal.captions', 'Légendes') },
+      { k: 'props.zoom', t: 'check', l: t('pages.gal.zoom', 'Zoom au survol') },
+    ] }];
     case 'stat-grid': {
       const SRCOPTS = [['datasetCount', t('pages.srcDatasets', 'Jeux de données')], ['specimenCount', t('pages.srcSpecimen', 'Spécimens')], ['cellCount', t('pages.srcCells', 'Cellules')], ['regionCount', t('pages.srcRegions', 'Régions')], ['custom', t('pages.custom', 'Fixe')]];
       const LIVE = ['datasetCount', 'specimenCount', 'cellCount', 'regionCount'];
-      return [
+      return [{ title: t('pages.grp.items', 'Éléments'), icon: 'bar-chart-2', fields: [
         { k: 'props.stats', t: 'items', l: t('pages.stats', 'Statistiques'),
           item: [
             { k: 'label', t: 'ltext', l: t('pages.statLabel', 'Libellé') },
@@ -362,57 +472,53 @@ function _fields(type) {
           ],
           mk: () => ({ label: {}, source: 'custom', value: '', bg: '', valueColor: '', labelColor: '' }), addLabel: t('pages.addStat', 'Ajouter une stat'),
           summary: (st, lv) => lv(st.label) },
-        cols(8),
-        { k: 'props.cardBg', t: 'color', grad: true, l: t('pages.cardBg', 'Fond des cartes') },
-        { k: 'props.valueColor', t: 'color', grad: true, l: t('pages.valueColor', 'Couleur des valeurs') },
-        { k: 'props.valueSize', t: 'slider', l: t('pages.valueSize', 'Taille des valeurs'), min: 14, max: 90, ph: 'auto', dv: 40 },
-        { k: 'props.labelColor', t: 'color', l: t('pages.labelColor', 'Couleur des libellés') },
-      ];
+      ] }];
     }
-    case 'latest-datasets': return [
+    case 'latest-datasets': return [{ title: content, icon: 'layers', fields: [
       { k: 'props.count', t: 'slider', l: t('pages.count', 'Nombre'), min: 1, max: 12, dv: 4 },
-      cols(6),
-      { k: 'props.thumbHeight', t: 'slider', l: t('pages.thumbHeight', 'Hauteur des vignettes'), min: 60, max: 320, step: 10, ph: '120', dv: 120 },
       { k: 'props.showMeta', t: 'check', l: t('pages.showMeta', 'Afficher type et date') },
-    ];
-    case 'divider': return [
-      { k: 'props.color', t: 'color', l: t('pages.stroke', 'Couleur') },
-      { k: 'props.thickness', t: 'slider', l: t('pages.thickness', 'Épaisseur'), min: 1, max: 12, dv: 1 },
-      { k: 'props.width', t: 'slider', l: t('pages.widthPct', 'Largeur'), min: 5, max: 100, step: 5, unit: '%', ph: '100', dv: 100 },
-      { k: 'props.lineStyle', t: 'seg', l: t('pages.lineStyle', 'Trait'), opts: [['solid', t('pages.lineSolid', 'Plein')], ['dashed', t('pages.lineDashed', 'Tirets')], ['dotted', t('pages.lineDotted', 'Points')]] },
-    ];
-    case 'spacer': return [{ k: 'props.height', t: 'slider', l: t('pages.height', 'Hauteur'), min: 4, max: 400, dv: 32 }];
-    case 'html': return [{ k: 'props.html', t: 'ltextarea', l: 'HTML' }];
+    ] }];
+    case 'divider': return [];
+    case 'spacer': return [{ title: content, icon: 'move-vertical', fields: [
+      { k: 'props.height', t: 'slider', l: t('pages.height', 'Hauteur'), min: 4, max: 400, dv: 32 },
+    ] }];
+    case 'html': return [{ title: content, icon: 'code', fields: [{ k: 'props.html', t: 'ltextarea', l: 'HTML' }] }];
     case 'feature-card': return [
-      { k: 'props.icon', t: 'icon', l: t('pages.iconName', 'Icône') },
-      { k: 'props.iconSize', t: 'slider', l: t('pages.iconSize', 'Taille'), min: 14, max: 96, dv: 34 },
-      { k: 'props.iconColor', t: 'color', l: t('pages.fc.iconColor', 'Couleur de l\'icône') },
-      { k: 'props.iconBg', t: 'color', grad: true, l: t('pages.fc.iconBg', 'Fond de l\'icône') },
-      { k: 'props.iconShape', t: 'seg', l: t('pages.fc.iconShape', 'Forme'), opts: [['round', t('pages.fc.round', 'Rond')], ['square', t('pages.fc.square', 'Carré')]] },
-      { k: 'text', t: 'ltext', l: t('pages.heroTitle', 'Titre') },
-      { k: 'props.desc', t: 'ltextarea', l: t('pages.text', 'Texte') },
-      { k: 'props.link.text', t: 'ltext', l: t('pages.fc.linkText', 'Lien (libellé)') },
-      { k: 'props.link.href', t: 'text', l: t('pages.href', 'Lien') },
-      align,
+      { title: t('pages.grp.media', 'Média'), icon: 'image', fields: [
+        { k: 'props.media', t: 'seg', l: t('pages.fc.media', 'Média'), refresh: true, opts: [
+          ['icon', t('pages.fc.mediaIcon', 'Icône')], ['image', t('pages.fc.mediaImage', 'Image')],
+          ['monogram', t('pages.fc.mediaMono', 'Monogramme')], ['none', t('pages.fc.mediaNone', 'Aucun')],
+        ] },
+        { k: 'props.icon', t: 'icon', l: t('pages.iconName', 'Icône'), showIf: (o) => ((o.props || {}).media || 'icon') === 'icon' },
+        { k: 'props.img', t: 'text', l: t('pages.fc.img', 'Image (URL)'), showIf: (o) => (o.props || {}).media === 'image' },
+        { k: 'props.monogram', t: 'text', l: t('pages.fc.monogram', 'Monogramme'), showIf: (o) => (o.props || {}).media === 'monogram' },
+      ] },
+      { title: content, icon: 'file-text', fields: [
+        { k: 'text', t: 'ltext', l: t('pages.heroTitle', 'Titre') },
+        { k: 'props.desc', t: 'ltextarea', l: t('pages.text', 'Texte') },
+        { k: 'props.href', t: 'text', l: t('pages.fc.cardHref', 'Lien de la carte') },
+        { k: 'props.link.text', t: 'ltext', l: t('pages.fc.linkText', 'Lien (libellé)') },
+        { k: 'props.link.href', t: 'text', l: t('pages.href', 'Lien') },
+      ] },
     ];
-    case 'quote': return [
+    case 'quote': return [{ title: content, icon: 'quote', fields: [
+      { k: 'props.label', t: 'ltext', l: t('pages.qt.label', 'Étiquette (eyebrow)') },
       { k: 'text', t: 'ltextarea', l: t('pages.qt.text', 'Citation') },
       { k: 'props.author', t: 'ltext', l: t('pages.qt.author', 'Auteur') },
       { k: 'props.role', t: 'ltext', l: t('pages.qt.role', 'Rôle / affiliation') },
       { k: 'props.avatar', t: 'text', l: t('pages.qt.avatar', 'Photo (URL, option.)') },
-      { k: 'props.variant', t: 'seg', l: t('pages.style', 'Style'), opts: [['bar', t('pages.qt.bar', 'Barre')], ['card', t('pages.qt.card', 'Carte')], ['big', t('pages.big', 'Grand')]] },
-      { k: 'props.accent', t: 'color', l: t('pages.qt.accent', 'Couleur d\'accent') },
-    ];
-    case 'accordion': return [
+      { k: 'props.link.text', t: 'ltext', l: t('pages.qt.linkText', 'Lien (libellé)') },
+      { k: 'props.link.href', t: 'text', l: t('pages.qt.linkHref', 'Lien (URL)') },
+    ] }];
+    case 'accordion': return [{ title: t('pages.grp.items', 'Éléments'), icon: 'chevrons-down-up', fields: [
       { k: 'props.items', t: 'items', l: t('pages.ac.items', 'Questions / sections'),
         item: [{ k: 'q', t: 'ltext', l: t('pages.ac.q', 'Titre / question') }, { k: 'a', t: 'ltextarea', l: t('pages.ac.a', 'Contenu / réponse') }],
         mk: () => ({ q: {}, a: {} }), addLabel: t('pages.ac.add', 'Ajouter une question'),
         summary: (it, lv) => lv(it.q) },
       { k: 'props.single', t: 'check', l: t('pages.ac.single', 'Une seule ouverte à la fois') },
       { k: 'props.firstOpen', t: 'check', l: t('pages.ac.firstOpen', 'Première ouverte par défaut') },
-      { k: 'props.iconColor', t: 'color', l: t('pages.ac.chevron', 'Couleur du chevron') },
-    ];
-    case 'timeline': return [
+    ] }];
+    case 'timeline': return [{ title: t('pages.grp.items', 'Éléments'), icon: 'milestone', fields: [
       { k: 'props.items', t: 'items', l: t('pages.tl.items', 'Étapes'),
         item: [
           { k: 'date', t: 'ltext', l: t('pages.tl.date', 'Date / étiquette') },
@@ -421,25 +527,242 @@ function _fields(type) {
         ],
         mk: () => ({ date: {}, title: {}, text: {} }), addLabel: t('pages.tl.add', 'Ajouter une étape'),
         summary: (it, lv) => lv(it.title) || lv(it.date) },
-      { k: 'props.accent', t: 'color', l: t('pages.tl.accent', 'Couleur des points') },
-      { k: 'props.lineColor', t: 'color', l: t('pages.tl.line', 'Couleur de la ligne') },
-    ];
-    case 'cta-banner': return [
+    ] }];
+    case 'cta-banner': return [{ title: content, icon: 'megaphone', fields: [
       { k: 'text', t: 'ltext', l: t('pages.heroTitle', 'Titre') },
       { k: 'props.subtitle', t: 'ltext', l: t('pages.heroSub', 'Sous-titre') },
       { k: 'props.cta.text', t: 'ltext', l: t('pages.ctaText', 'Bouton') },
       { k: 'props.cta.href', t: 'text', l: t('pages.ctaHref', 'Lien du bouton') },
-      { k: 'props.bg', t: 'color', grad: true, l: t('pages.bg', 'Fond') },
-      { k: 'props.align', t: 'seg', l: t('pages.align', 'Alignement'), opts: [['left', '', 'align-left'], ['center', '', 'align-center']] },
-    ];
+      { k: 'props.cta2.text', t: 'ltext', l: t('pages.cta2Text', 'Bouton secondaire') },
+      { k: 'props.cta2.href', t: 'text', l: t('pages.cta2Href', 'Lien du bouton secondaire') },
+    ] }];
+    case 'badge': return [{ title: t('pages.grp.items', 'Éléments'), icon: 'tag', fields: [
+      { k: 'props.items', t: 'items', l: t('pages.bd.items', 'Badges'),
+        item: [{ k: 'text', t: 'ltext', l: t('pages.label', 'Libellé') }, { k: 'icon', t: 'icon', l: t('pages.iconName', 'Icône') }],
+        mk: () => ({ text: {}, icon: '' }), addLabel: t('pages.bd.addItem', 'Ajouter un badge'),
+        summary: (it, lv) => lv(it.text) },
+    ] }];
+    case 'icon-list': return [{ title: t('pages.grp.items', 'Éléments'), icon: 'list-checks', fields: [
+      { k: 'props.items', t: 'items', l: t('pages.il.items', 'Éléments'),
+        item: [
+          { k: 'icon', t: 'icon', l: t('pages.iconName', 'Icône') },
+          { k: 'text', t: 'ltext', l: t('pages.label', 'Libellé') },
+          { k: 'href', t: 'text', l: t('pages.href', 'Lien') },
+        ],
+        mk: () => ({ icon: 'check', text: {}, href: '' }), addLabel: t('pages.il.addItem', 'Ajouter un élément'),
+        summary: (it, lv) => lv(it.text) },
+    ] }];
+    case 'profile': return [{ title: content, icon: 'contact', fields: [
+      { k: 'props.name', t: 'ltext', l: t('pages.pf.name', 'Nom') },
+      { k: 'props.role', t: 'ltext', l: t('pages.pf.role', 'Rôle') },
+      { k: 'props.desc', t: 'ltextarea', l: t('pages.pf.desc', 'Description') },
+      { k: 'props.mediaKind', t: 'seg', l: t('pages.pf.mediaKind', 'Média'), refresh: true, opts: [
+        ['monogram', t('pages.fc.mediaMono', 'Monogramme')], ['image', t('pages.fc.mediaImage', 'Image')],
+        ['icon', t('pages.fc.mediaIcon', 'Icône')], ['none', t('pages.fc.mediaNone', 'Aucun')],
+      ] },
+      { k: 'props.monogram', t: 'text', l: t('pages.pf.monogram', 'Monogramme'), showIf: (o) => ((o.props || {}).mediaKind || 'monogram') === 'monogram' },
+      { k: 'props.img', t: 'text', l: t('pages.pf.image', 'Image (URL)'), showIf: (o) => (o.props || {}).mediaKind === 'image' },
+      { k: 'props.icon', t: 'icon', l: t('pages.iconName', 'Icône'), showIf: (o) => (o.props || {}).mediaKind === 'icon' },
+    ] }];
+    case 'cite-block': return [{ title: content, icon: 'clipboard-copy', fields: [
+      { k: 'props.title', t: 'ltext', l: t('pages.cb.title', 'Titre') },
+      { k: 'props.text', t: 'ltextarea', l: t('pages.cb.text', 'Texte de la citation') },
+      { k: 'props.extraLabel', t: 'ltext', l: t('pages.cb.extraLabel', 'Libellé du bloc repliable') },
+      { k: 'props.extra', t: 'ltextarea', l: t('pages.cb.extra', 'Contenu repliable (BibTeX…)') },
+    ] }];
     default: return [];
   }
 }
 
+// Widget-specific Style groups (colors / shapes / layout) — rendered BEFORE the
+// generic Texte / Fond & bordure groups (see _styleGroupsFor).
+function _styleGroupsSpecific(type) {
+  const align = _alignField();
+  switch (type) {
+    case 'heading':
+    case 'richtext':
+      return [{ title: t('pages.grp.format', 'Mise en forme'), icon: 'align-left', fields: [align] }];
+    case 'image':
+      return [{ title: t('pages.grp.layout', 'Mise en page'), icon: 'layout-grid', fields: [
+        { k: 'props.width', t: 'slider', l: t('pages.width', 'Largeur'), min: 40, max: 1200, step: 10, ph: 'auto', dv: 400 },
+        { k: 'props.height', t: 'slider', l: t('pages.imgHeight', 'Hauteur'), min: 40, max: 1000, step: 10, ph: 'auto', dv: 300 },
+        { k: 'props.fit', t: 'seg', l: t('pages.imgFit', 'Cadrage'), opts: [['', 'Auto'], ['cover', t('pages.fitCover', 'Remplir')], ['contain', t('pages.fitContain', 'Contenir')]] },
+        align,
+      ] }];
+    case 'icon':
+      return [{ title: t('pages.grp.layout', 'Mise en page'), icon: 'sliders-horizontal', fields: [
+        { k: 'props.size', t: 'slider', l: t('pages.iconSize', 'Taille'), min: 12, max: 160, dv: 48 },
+        { k: 'props.color', t: 'color', l: t('pages.stroke', 'Couleur') },
+        align,
+      ] }];
+    case 'button':
+      return [{ title: t('pages.grp.buttons', 'Boutons'), icon: 'mouse-pointer-click', fields: [
+        { k: 'props.variant', t: 'seg', l: t('pages.style', 'Style'), opts: [['accent', 'Accent'], ['ghost', 'Ghost'], ['outline', t('pages.btn.outline', 'Contour')]] },
+        { k: 'props.size', t: 'seg', l: t('pages.btn.size', 'Taille'), opts: [['sm', 'S'], ['', 'M'], ['lg', 'L']] },
+        { k: 'props.fullWidth', t: 'check', l: t('pages.fullWidthBtn', 'Pleine largeur') },
+        align,
+      ] }];
+    case 'hero':
+      return [
+        { title: t('pages.grp.colors', 'Couleurs'), icon: 'palette', fields: [
+          { k: 'props.titleSize', t: 'slider', l: t('pages.titleSize', 'Taille du titre'), min: 16, max: 160, ph: 'auto', dv: 44 },
+          { k: 'props.titleColor', t: 'color', grad: true, l: t('pages.titleColor', 'Couleur du titre') },
+          { k: 'props.subSize', t: 'slider', l: t('pages.subSize', 'Taille du sous-titre'), min: 10, max: 60, ph: 'auto', dv: 20 },
+          { k: 'props.subColor', t: 'color', grad: true, l: t('pages.subColor', 'Couleur du sous-titre') },
+          { k: 'props.badgeColor', t: 'color', l: t('pages.hero.badgeColor', 'Couleur du badge') },
+          { k: 'props.bg', t: 'color', grad: true, l: t('pages.bg', 'Fond') },
+          { k: 'props.style.overlay', t: 'color', grad: true, l: t('pages.overlay', 'Voile (couleur sur le fond)') },
+          align,
+        ] },
+        { title: t('pages.grp.glow', 'Halo décoratif'), icon: 'sparkles', fields: [
+          { k: 'props.glow', t: 'check', l: t('pages.hero.glow', 'Halo décoratif') },
+          { k: 'props.glowColor1', t: 'color', l: t('pages.hero.glowC1', 'Couleur du halo 1') },
+          { k: 'props.glowColor2', t: 'color', l: t('pages.hero.glowC2', 'Couleur du halo 2') },
+        ] },
+      ];
+    case 'gallery':
+      return [{ title: t('pages.grp.layout', 'Mise en page'), icon: 'layout-grid', fields: [
+        _colsField(8),
+        { k: 'props.height', t: 'slider', l: t('pages.imgHeight', 'Hauteur'), min: 60, max: 600, step: 10, ph: 'auto', dv: 160 },
+        { k: 'props.gap', t: 'slider', l: t('pages.hgap', 'Espacement'), min: 0, max: 40, ph: 'auto', dv: 12 },
+      ] }];
+    case 'stat-grid':
+      return [
+        { title: t('pages.grp.layout', 'Mise en page'), icon: 'layout-grid', fields: [_colsField(8)] },
+        { title: t('pages.grp.colors', 'Couleurs'), icon: 'palette', fields: [
+          { k: 'props.cardBg', t: 'color', grad: true, l: t('pages.cardBg', 'Fond des cartes') },
+          { k: 'props.borderColor', t: 'color', l: t('pages.sg.border', 'Bordure des cartes') },
+          { k: 'props.radius', t: 'slider', l: t('pages.sg.radius', 'Arrondi des cartes'), min: 0, max: 40, ph: 'auto', dv: 10 },
+          { k: 'props.pad', t: 'slider', l: t('pages.sg.pad', 'Padding des cartes'), min: 0, max: 60, ph: 'auto', dv: 20 },
+          { k: 'props.valueColor', t: 'color', grad: true, l: t('pages.valueColor', 'Couleur des valeurs') },
+          { k: 'props.valueSize', t: 'slider', l: t('pages.valueSize', 'Taille des valeurs'), min: 14, max: 90, ph: 'auto', dv: 40 },
+          { k: 'props.labelColor', t: 'color', l: t('pages.labelColor', 'Couleur des libellés') },
+        ] },
+      ];
+    case 'latest-datasets':
+      return [
+        { title: t('pages.grp.layout', 'Mise en page'), icon: 'layout-grid', fields: [
+          _colsField(6),
+          { k: 'props.thumbHeight', t: 'slider', l: t('pages.thumbHeight', 'Hauteur des vignettes'), min: 60, max: 320, step: 10, ph: '120', dv: 120 },
+        ] },
+        { title: t('pages.grp.colors', 'Couleurs'), icon: 'palette', fields: [
+          { k: 'props.cardBg', t: 'color', grad: true, l: t('pages.ld.cardBg', 'Fond des cartes') },
+          { k: 'props.borderColor', t: 'color', l: t('pages.ld.border', 'Bordure des cartes') },
+          { k: 'props.radius', t: 'slider', l: t('pages.ld.radius', 'Arrondi'), min: 0, max: 40, ph: 'auto', dv: 10 },
+          { k: 'props.titleColor', t: 'color', l: t('pages.ld.titleColor', 'Couleur des titres') },
+          { k: 'props.hover', t: 'check', l: t('pages.ld.hover', 'Lévitation au survol') },
+        ] },
+      ];
+    case 'divider':
+      return [{ title: t('pages.grp.colors', 'Couleurs'), icon: 'palette', fields: [
+        { k: 'props.color', t: 'color', grad: true, l: t('pages.stroke', 'Couleur') },
+        { k: 'props.thickness', t: 'slider', l: t('pages.thickness', 'Épaisseur'), min: 1, max: 12, dv: 1 },
+        { k: 'props.width', t: 'slider', l: t('pages.widthPct', 'Largeur'), min: 5, max: 100, step: 5, unit: '%', ph: '100', dv: 100 },
+        { k: 'props.lineStyle', t: 'seg', l: t('pages.lineStyle', 'Trait'), opts: [['solid', t('pages.lineSolid', 'Plein')], ['dashed', t('pages.lineDashed', 'Tirets')], ['dotted', t('pages.lineDotted', 'Points')]] },
+      ] }];
+    case 'feature-card':
+      return [
+        { title: t('pages.grp.layout', 'Mise en page'), icon: 'layout-grid', fields: [
+          { k: 'props.layout', t: 'seg', l: t('pages.layout', 'Disposition'), opts: [['v', t('pages.fc.layoutV', 'Verticale')], ['h', t('pages.fc.layoutH', 'Horizontale')]] },
+          align,
+        ] },
+        { title: t('pages.grp.icon', 'Icône'), icon: 'star', fields: [
+          { k: 'props.iconSize', t: 'slider', l: t('pages.iconSize', 'Taille'), min: 14, max: 96, dv: 34, showIf: (o) => ((o.props || {}).media || 'icon') === 'icon' },
+          { k: 'props.iconColor', t: 'color', l: t('pages.fc.iconColor', "Couleur de l'icône"), showIf: (o) => ((o.props || {}).media || 'icon') === 'icon' },
+          { k: 'props.iconBg', t: 'color', grad: true, l: t('pages.fc.iconBg', "Fond de l'icône"), showIf: (o) => ((o.props || {}).media || 'icon') === 'icon' },
+          { k: 'props.iconShape', t: 'seg', l: t('pages.fc.iconShape', 'Forme'), opts: [['round', t('pages.fc.round', 'Rond')], ['square', t('pages.fc.square', 'Carré')]], showIf: (o) => ((o.props || {}).media || 'icon') === 'icon' },
+        ] },
+        { title: t('pages.grp.media', 'Média'), icon: 'image', fields: [
+          { k: 'props.imgH', t: 'slider', l: t('pages.fc.imgH', "Hauteur de l'image"), min: 20, max: 800, ph: 'auto', dv: 96, showIf: (o) => (o.props || {}).media === 'image' },
+          { k: 'props.plateBg', t: 'color', grad: true, l: t('pages.fc.plateBg', 'Fond de plaque'), showIf: (o) => (o.props || {}).media === 'image' },
+          { k: 'props.monoBg', t: 'color', grad: true, l: t('pages.fc.monoBg', 'Fond du monogramme'), showIf: (o) => (o.props || {}).media === 'monogram' },
+          { k: 'props.monoColor', t: 'color', l: t('pages.fc.monoColor', 'Couleur du monogramme'), showIf: (o) => (o.props || {}).media === 'monogram' },
+        ] },
+        { title: t('pages.grp.colors', 'Couleurs'), icon: 'palette', fields: [
+          { k: 'props.titleColor', t: 'color', grad: true, l: t('pages.fc.titleColor', 'Couleur du titre') },
+          { k: 'props.titleSize', t: 'slider', l: t('pages.fc.titleSize', 'Taille du titre'), min: 10, max: 60, ph: 'auto', dv: 18 },
+          { k: 'props.descColor', t: 'color', grad: true, l: t('pages.fc.descColor', 'Couleur du texte') },
+          { k: 'props.linkColor', t: 'color', grad: true, l: t('pages.fc.linkColor', 'Couleur du lien') },
+          { k: 'props.linkArrow', t: 'check', l: t('pages.fc.linkArrow', "Flèche du lien") },
+        ] },
+      ];
+    case 'quote':
+      return [
+        { title: t('pages.grp.layout', 'Mise en page'), icon: 'layout-grid', fields: [
+          { k: 'props.variant', t: 'seg', l: t('pages.style', 'Style'), opts: [['bar', t('pages.qt.bar', 'Barre')], ['card', t('pages.qt.card', 'Carte')], ['big', t('pages.big', 'Grand')]] },
+        ] },
+        { title: t('pages.grp.colors', 'Couleurs'), icon: 'palette', fields: [
+          { k: 'props.accent', t: 'color', l: t('pages.qt.accent', "Couleur d'accent") },
+        ] },
+      ];
+    case 'accordion':
+      return [{ title: t('pages.grp.colors', 'Couleurs'), icon: 'palette', fields: [
+        { k: 'props.iconColor', t: 'color', l: t('pages.ac.chevron', 'Couleur du chevron') },
+        { k: 'props.itemBg', t: 'color', grad: true, l: t('pages.ac.itemBg', 'Fond des éléments') },
+        { k: 'props.borderColor', t: 'color', l: t('pages.ac.border', 'Bordure') },
+      ] }];
+    case 'timeline':
+      return [{ title: t('pages.grp.colors', 'Couleurs'), icon: 'palette', fields: [
+        { k: 'props.accent', t: 'color', l: t('pages.tl.accent', 'Couleur des points') },
+        { k: 'props.lineColor', t: 'color', l: t('pages.tl.line', 'Couleur de la ligne') },
+      ] }];
+    case 'cta-banner':
+      return [
+        { title: t('pages.grp.colors', 'Couleurs'), icon: 'palette', fields: [
+          { k: 'props.bg', t: 'color', grad: true, l: t('pages.bg', 'Fond') },
+        ] },
+        { title: t('pages.grp.layout', 'Mise en page'), icon: 'layout-grid', fields: [
+          { k: 'props.align', t: 'seg', l: t('pages.align', 'Alignement'), opts: [['left', '', 'align-left'], ['center', '', 'align-center']] },
+        ] },
+      ];
+    case 'badge':
+      return [{ title: t('pages.grp.badge', 'Badge'), icon: 'tag', fields: [
+        { k: 'props.dot', t: 'check', l: t('pages.bd.dot', 'Pastille colorée') },
+        { k: 'props.mono', t: 'check', l: t('pages.bd.mono', 'Police mono') },
+        { k: 'props.size', t: 'slider', l: t('pages.bd.size', 'Taille du texte'), min: 8, max: 30, step: 0.5, ph: 'auto', dv: 12.5 },
+        { k: 'props.gap', t: 'slider', l: t('pages.bd.gap', 'Espacement'), min: 0, max: 40, ph: 'auto', dv: 8 },
+        { k: 'props.pillBg', t: 'color', grad: true, l: t('pages.bd.pillBg', 'Fond des badges') },
+        { k: 'props.pillColor', t: 'color', l: t('pages.bd.pillColor', 'Texte des badges') },
+        { k: 'props.borderColor', t: 'color', l: t('pages.bd.border', 'Bordure') },
+        align,
+      ] }];
+    case 'icon-list':
+      return [{ title: t('pages.grp.layout', 'Mise en page'), icon: 'layout-grid', fields: [
+        { k: 'props.layout', t: 'seg', l: t('pages.il.layout', 'Disposition'), opts: [['v', t('pages.il.v', 'Vertical')], ['h', t('pages.il.h', 'Horizontal')]] },
+        { k: 'props.iconColor', t: 'color', l: t('pages.il.iconColor', 'Couleur des icônes') },
+        { k: 'props.iconSize', t: 'slider', l: t('pages.il.iconSize', 'Taille des icônes'), min: 8, max: 80, ph: 'auto', dv: 18 },
+        { k: 'props.gap', t: 'slider', l: t('pages.il.gap', 'Espacement'), min: 0, max: 80, ph: 'auto', dv: 12 },
+      ] }];
+    case 'profile':
+      return [{ title: t('pages.grp.layout', 'Mise en page'), icon: 'layout-grid', fields: [
+        { k: 'props.layout', t: 'seg', l: t('pages.layout', 'Disposition'), opts: [['h', t('pages.fc.layoutH', 'Horizontale')], ['v', t('pages.fc.layoutV', 'Verticale')]] },
+        { k: 'props.mediaSize', t: 'slider', l: t('pages.pf.mediaSize', 'Taille du média'), min: 24, max: 200, ph: 'auto', dv: 64 },
+        { k: 'props.mediaRadius', t: 'slider', l: t('pages.pf.mediaRadius', 'Arrondi du média'), min: 0, max: 100, ph: 'auto', dv: 18 },
+        { k: 'props.mediaBg', t: 'color', grad: true, l: t('pages.pf.mediaBg', 'Fond du média') },
+        { k: 'props.mediaColor', t: 'color', l: t('pages.pf.mediaColor', 'Couleur du média') },
+        { k: 'props.glowMedia', t: 'check', l: t('pages.pf.glow', 'Ombre lumineuse') },
+        { k: 'props.roleColor', t: 'color', l: t('pages.pf.roleColor', 'Couleur du rôle') },
+        { k: 'props.nameSize', t: 'slider', l: t('pages.pf.nameSize', 'Taille du nom'), min: 10, max: 80, ph: 'auto', dv: 22 },
+      ] }];
+    case 'cite-block':
+      return [{ title: t('pages.grp.format', 'Mise en forme'), icon: 'type', fields: [
+        { k: 'props.mono', t: 'check', l: t('pages.cb.mono', 'Police mono') },
+        { k: 'props.copy', t: 'check', l: t('pages.cb.copyBtn', 'Bouton copier') },
+      ] }];
+    default:
+      return [];
+  }
+}
+
+// Widget Style tab = widget-specific groups, then the generic Texte/Fond & bordure.
+function _styleGroupsFor(w) { return [..._styleGroupsSpecific(w.type), ..._genericStyleGroups('widget')]; }
+
 // ── Style panel (generic, shared by widget / column / section scopes) ────────
 // Every field writes props.style.* — compiled to inline CSS by
 // PageRenderer.styleCss; the live page and the edit frame render it identically.
-function _styleGroups(scope) {
+// Spacing/size/opacity moved to _advancedGroups (v1.18.0) — only Texte and
+// Fond & bordure remain generic Style groups (shadow is now the 'shadow' control).
+function _genericStyleGroups(scope) {
   const surface = [
     { k: 'props.style.bg', t: 'color', grad: true, l: t('pages.st.bg', 'Fond') },
     { k: 'props.style.bgImage', t: 'text', l: t('pages.st.bgImage', 'Image de fond (URL)') },
@@ -447,8 +770,7 @@ function _styleGroups(scope) {
     { k: 'props.style.borderWidth', t: 'slider', l: t('pages.st.borderWidth', 'Bordure'), min: 0, max: 12, ph: '0', dv: 1 },
     { k: 'props.style.borderColor', t: 'color', l: t('pages.st.borderColor', 'Couleur de bordure') },
     { k: 'props.style.borderStyle', t: 'seg', l: t('pages.st.borderStyle', 'Style de bordure'), opts: [['solid', t('pages.lineSolid', 'Plein')], ['dashed', t('pages.lineDashed', 'Tirets')], ['dotted', t('pages.lineDotted', 'Points')]] },
-    { k: 'props.style.shadow', t: 'seg', l: t('pages.st.shadow', 'Ombre'), opts: [['', '—'], ['sm', 'S'], ['md', 'M'], ['lg', 'L']] },
-    { k: 'props.style.opacity', t: 'slider', l: t('pages.st.opacity', 'Opacité'), min: 0, max: 100, step: 5, unit: '%', ph: '100', dv: 100 },
+    { t: 'shadow', k: 'props.style.shadow', colorKey: 'props.style.shadowColor', l: t('pages.st.shadow', 'Ombre') },
   ];
   if (scope === 'section') surface.splice(2, 0, { k: 'props.style.overlay', t: 'color', grad: true, l: t('pages.overlay', 'Voile (couleur sur le fond)') });
   return [
@@ -463,44 +785,33 @@ function _styleGroups(scope) {
       { k: 'props.style.uppercase', t: 'check', l: t('pages.st.uppercase', 'Majuscules') },
     ] },
     { title: t('pages.st.surface', 'Fond & bordure'), icon: 'paint-bucket', fields: surface },
-    { title: t('pages.st.spacing', 'Espacement'), icon: 'move', fields: [
-      { k: 'props.style.padTop', t: 'slider', l: t('pages.st.padTop', 'Padding haut'), min: 0, max: 160, ph: 'auto', dv: 0 },
-      { k: 'props.style.padBottom', t: 'slider', l: t('pages.st.padBottom', 'Padding bas'), min: 0, max: 160, ph: 'auto', dv: 0 },
-      { k: 'props.style.padLeft', t: 'slider', l: t('pages.st.padLeft', 'Padding gauche'), min: 0, max: 160, ph: 'auto', dv: 0 },
-      { k: 'props.style.padRight', t: 'slider', l: t('pages.st.padRight', 'Padding droite'), min: 0, max: 160, ph: 'auto', dv: 0 },
-      { k: 'props.style.marginTop', t: 'slider', l: t('pages.st.marginTop', 'Marge haut'), min: -100, max: 200, ph: 'auto', dv: 0 },
-      { k: 'props.style.marginBottom', t: 'slider', l: t('pages.st.marginBottom', 'Marge bas'), min: -100, max: 200, ph: 'auto', dv: 0 },
+  ];
+}
+
+// Avancé tab (widget / section / column, identical shape): linked spacing grids,
+// max-width/min-height, hover + opacity, responsive visibility, raw CSS escape hatch.
+function _advancedGroups(scope) {
+  return [
+    { title: t('pages.grp.spacing', 'Espacement'), icon: 'move', fields: [
+      { t: 'spacing', l: t('pages.st.padding', 'Padding'), keys: { top: 'props.style.padTop', right: 'props.style.padRight', bottom: 'props.style.padBottom', left: 'props.style.padLeft' }, min: 0, max: 300 },
+      { t: 'spacing', l: t('pages.st.margin', 'Marge'), keys: { top: 'props.style.marginTop', right: 'props.style.marginRight', bottom: 'props.style.marginBottom', left: 'props.style.marginLeft' }, min: -200, max: 500 },
     ] },
     { title: t('pages.st.size', 'Taille'), icon: 'scaling', fields: [
       { k: 'props.style.maxWidth', t: 'slider', l: t('pages.st.maxWidth', 'Largeur max'), min: 100, max: 1600, step: 10, ph: 'auto', dv: 800 },
       { k: 'props.style.minHeight', t: 'slider', l: t('pages.st.minHeight', 'Hauteur min'), min: 0, max: 1000, step: 10, ph: 'auto', dv: 0 },
     ] },
+    { title: t('pages.grp.effects', 'Effets'), icon: 'sparkles', fields: [
+      { k: 'props.style.hover', t: 'seg', l: t('pages.st.hover', 'Effet au survol'), opts: [['', t('pages.st.hovNone', 'Aucun')], ['lift', t('pages.st.hovLift', 'Lévitation')], ['glow', t('pages.st.hovGlow', 'Halo')], ['zoom', t('pages.st.hovZoom', 'Zoom')]] },
+      { k: 'props.style.opacity', t: 'slider', l: t('pages.st.opacity', 'Opacité'), min: 0, max: 100, step: 5, unit: '%', ph: '100', dv: 100 },
+    ] },
+    { title: t('pages.grp.visibility', 'Visibilité'), icon: 'eye-off', fields: [
+      { k: 'props.style.hideMobile', t: 'check', l: t('pages.st.hideMobile', 'Masquer sur mobile') },
+      { k: 'props.style.hideDesktop', t: 'check', l: t('pages.st.hideDesktop', 'Masquer sur ordinateur') },
+    ] },
+    { title: t('pages.grp.customCss', 'CSS personnalisé'), icon: 'code', fields: [
+      { k: 'props.style.css', t: 'text', l: t('pages.st.customCss', 'CSS inline'), ph: 'letter-spacing:2px; text-shadow:…', hint: t('pages.st.customCssHint', "Déclarations CSS appliquées à l'élément.") },
+    ] },
   ];
-}
-
-// Mount the Style accordion groups into `host` (DOM-built via renderFields).
-function _mountStyleGroups(host, obj, scope, ctx) {
-  const box = document.createElement('div');
-  box.style.cssText = 'margin-top:12px;border-top:1px solid var(--adm-border,rgba(255,255,255,.07));padding-top:10px';
-  const head = document.createElement('div');
-  head.className = 'adm-field-label';
-  head.style.cssText = 'margin-bottom:8px;display:flex;align-items:center;gap:6px';
-  head.innerHTML = `<i data-lucide="brush"></i>${escHtml(t('pages.st.title', 'Style'))}`;
-  box.appendChild(head);
-  _styleGroups(scope).forEach((g) => {
-    const det = document.createElement('details');
-    det.style.cssText = 'margin-bottom:8px;border:1px solid var(--adm-border,rgba(255,255,255,.07));border-radius:8px;padding:6px 9px';
-    const sum = document.createElement('summary');
-    sum.style.cssText = 'cursor:pointer;font-size:12.5px;font-weight:600;display:flex;align-items:center;gap:7px;user-select:none;list-style:none';
-    sum.innerHTML = `<i data-lucide="${g.icon}" style="width:13px;height:13px"></i>${escHtml(g.title)}`;
-    det.appendChild(sum);
-    const bodyBox = document.createElement('div');
-    bodyBox.style.cssText = 'margin-top:8px;display:flex;flex-direction:column;gap:10px';
-    renderFields(bodyBox, obj, g.fields, ctx);
-    det.appendChild(bodyBox);
-    box.appendChild(det);
-  });
-  host.appendChild(box);
 }
 
 // ── Control context: model writes → dirty + live iframe sync; custom gradient
@@ -605,7 +916,7 @@ function renderEditor() {
       <button class="adm-btn adm-btn-accent adm-btn-sm" id="pe-publish"><i data-lucide="upload"></i> ${escHtml(t('pages.publish', 'Publier'))}</button>
     </div>
     <div style="flex:1;display:flex;min-height:0">
-      <div id="pages-side" style="width:300px;flex:0 0 300px;border-right:1px solid var(--border-subtle,#2a2a3a);padding:12px;overflow:auto"></div>
+      <div id="pages-side" style="width:340px;flex:0 0 340px;border-right:1px solid var(--border-subtle,#2a2a3a);padding:12px;overflow:auto"></div>
       <div style="flex:1;min-width:0;position:relative;background:var(--bg-base,#0d0d1a)">
         <iframe id="pages-frame" title="editor" src="${escHtml(_editUrl())}" style="width:100%;height:100%;border:none;display:block;background:var(--bg-base,#0d0d1a)"></iframe>
       </div>
@@ -999,24 +1310,90 @@ async function _setPageVisibility(slug, show) {
   } else toast(t('pages.saveError', "Échec de l'enregistrement."), 'error');
 }
 
-function _sectionSettings(host, sec, si) {
-  host.innerHTML = _panelHead(`${t('pages.section', 'Section')} ${si + 1}`, 'rows-3') + `
-    <label class="adm-field"><span class="adm-field-label">${escHtml(t('pages.layout', 'Disposition'))}</span>
-      <div style="display:flex;gap:5px;flex-wrap:wrap">${LAYOUTS.map((L) => `<button class="adm-btn adm-btn-ghost adm-btn-sm pb-layout" data-w="${L.widths.join('-')}" title="${L.widths.join(' / ')}">${escHtml(L.label)}</button>`).join('')}</div></label>
-    <div id="pb-sfields" style="display:flex;flex-direction:column;gap:10px;margin-top:10px"></div>
-    <div id="pb-sstyle"></div>
-    <div style="display:flex;gap:6px;margin-top:10px">
-      <button class="adm-btn adm-btn-ghost adm-btn-sm" id="pb-sec-dup"><i data-lucide="copy"></i> ${escHtml(t('pages.duplicate', 'Dupliquer'))}</button>
-      <button class="adm-btn adm-btn-ghost adm-btn-sm" id="pb-sec-del"><i data-lucide="trash-2"></i> ${escHtml(t('pages.delete', 'Supprimer'))}</button>
-    </div>`;
-  const upd = (fn) => { fn(); _mark(true); _syncFrame(); };
-  host.querySelectorAll('.pb-layout').forEach((b) => b.addEventListener('click', () => {
-    const widths = b.getAttribute('data-w').split('-').map(Number);
-    upd(() => { const old = sec.columns; sec.columns = widths.map((wd, i) => old[i] ? Object.assign(old[i], { width: wd }) : _newColumn(wd)); if (old.length > widths.length) { const extra = old.slice(widths.length).flatMap((c) => c.widgets); sec.columns[sec.columns.length - 1].widgets.push(...extra); } });
-    renderSettings();
+// ── Settings-panel chrome: header (icon+title+actions), breadcrumbs, mode tabs ─
+// Shared by widget / section / column so the three settings panels have
+// visually identical structure (SPEC §5.1: "même structure 3 onglets").
+function _proHead(icon, title, actions) {
+  const acts = (actions || []).map(([key, label, ic]) => `<button type="button" class="pbc-mini" data-headact="${escHtml(key)}" title="${escHtml(label)}"><i data-lucide="${ic}"></i></button>`).join('');
+  return `<div class="pbc-head"><span class="pbc-head-icon"><i data-lucide="${icon}"></i></span><span class="pbc-head-title">${escHtml(title)}</span><span class="pbc-head-actions">${acts}</span></div>`;
+}
+function _bindHeadActions(host, handlers) {
+  host.querySelectorAll('[data-headact]').forEach((b) => b.addEventListener('click', () => { const fn = handlers[b.getAttribute('data-headact')]; if (fn) fn(); }));
+}
+
+// Breadcrumb trail: "Section N › Colonne N › Widget". Every crumb is clickable
+// (including the current one — a no-op re-select), so the operator can jump
+// back up to the section/column from a deeply nested widget.
+function _crumbItems(si, ci, wi) {
+  const items = [];
+  if (si != null && _sections[si]) items.push({ sel: { si, ci: null, wi: null }, label: `${t('pages.section', 'Section')} ${si + 1}` });
+  if (ci != null && _sections[si] && _sections[si].columns[ci]) items.push({ sel: { si, ci, wi: null }, label: `${t('pages.column', 'Colonne')} ${ci + 1}` });
+  if (wi != null) {
+    const w = _sections[si]?.columns[ci]?.widgets[wi];
+    items.push({ sel: { si, ci, wi }, label: w ? t('pages.block.' + w.type, w.type) : '' });
+  }
+  return items;
+}
+function _crumbsHtml(si, ci, wi) {
+  const items = _crumbItems(si, ci, wi);
+  return `<div class="pbc-crumbs">${items.map((it, i) => (i > 0 ? '<span class="pbc-crumbs-sep">›</span>' : '') + `<button type="button" data-crumb="${i}">${escHtml(it.label)}</button>`).join('')}</div>`;
+}
+function _bindCrumbs(host, si, ci, wi) {
+  const items = _crumbItems(si, ci, wi);
+  host.querySelectorAll('[data-crumb]').forEach((btn) => {
+    const idx = +btn.getAttribute('data-crumb');
+    btn.addEventListener('click', () => { const it = items[idx]; if (!it) return; _sel = it.sel; _side = 'settings'; renderSidebar(); _syncFrame(); });
+  });
+}
+
+// Contenu / Style / Avancé mode tabs. State is module-level (_settingsTab) so
+// it survives re-selecting a different widget/section/column.
+const _SETTINGS_TABS = [['content', 'pencil'], ['style', 'brush'], ['advanced', 'settings-2']];
+function _tabsHtml() {
+  return `<div class="pbc-tabs">${_SETTINGS_TABS.map(([id, icon]) => `<button type="button" class="${_settingsTab === id ? 'on' : ''}" data-tab="${id}"><i data-lucide="${icon}"></i><span>${escHtml(t('pages.tab.' + id, id))}</span></button>`).join('')}</div>`;
+}
+function _bindTabs(host) {
+  host.querySelectorAll('[data-tab]').forEach((btn) => btn.addEventListener('click', () => { _settingsTab = btn.getAttribute('data-tab'); renderSettings(); }));
+}
+
+// Renders the active tab's body into `host`. `contentFn(host, ctx)` overrides
+// the Contenu tab for section/column (which mix custom controls — layout
+// picker, width slider — with plain field groups); widgets always use the
+// generic _contentGroups(type). Style/Avancé are always renderGroups-driven.
+function _drawTabBody(host, obj, scope, ctx, contentFn) {
+  if (!host) return;
+  host.textContent = '';
+  const groupCtx = Object.assign({}, ctx, { groupKey: (scope === 'widget' ? obj.type : scope) + '|' + _settingsTab });
+  if (_settingsTab === 'content') {
+    if (contentFn) contentFn(host, groupCtx);
+    else renderGroups(host, obj, _contentGroups(obj.type), groupCtx);
+  } else if (_settingsTab === 'style') {
+    renderGroups(host, obj, scope === 'widget' ? _styleGroupsFor(obj) : _genericStyleGroups(scope), groupCtx);
+  } else {
+    renderGroups(host, obj, _advancedGroups(scope), groupCtx);
+  }
+}
+
+// Section Contenu tab: layout picker (column-count buttons) + the section-wide
+// fields (fullWidth/maxWidth/padY/gap/vAlign/bg) — not a plain field group
+// because the layout buttons rebuild `sec.columns` rather than writing a path.
+function _sectionContentBody(host, sec, ctx) {
+  const layoutBox = document.createElement('div');
+  layoutBox.className = 'adm-field';
+  layoutBox.innerHTML = `<span class="adm-field-label">${escHtml(t('pages.layout', 'Disposition'))}</span>` +
+    `<div style="display:flex;gap:5px;flex-wrap:wrap">${LAYOUTS.map((L) => `<button type="button" class="adm-btn adm-btn-ghost adm-btn-sm pb-layout" data-w="${L.widths.join('-')}" title="${L.widths.join(' / ')}">${escHtml(L.label)}</button>`).join('')}</div>`;
+  host.appendChild(layoutBox);
+  layoutBox.querySelectorAll('.pb-layout').forEach((btn) => btn.addEventListener('click', () => {
+    const widths = btn.getAttribute('data-w').split('-').map(Number);
+    const old = sec.columns;
+    sec.columns = widths.map((wd, i) => (old[i] ? Object.assign(old[i], { width: wd }) : _newColumn(wd)));
+    if (old.length > widths.length) { const extra = old.slice(widths.length).flatMap((c) => c.widgets); sec.columns[sec.columns.length - 1].widgets.push(...extra); }
+    _mark(true); renderSettings(); _syncFrame();
   }));
-  const ctx = _ctlCtx();
-  renderFields(el('pb-sfields'), sec, [
+  const fbox = document.createElement('div');
+  fbox.style.cssText = 'display:flex;flex-direction:column;gap:10px;margin-top:10px';
+  host.appendChild(fbox);
+  renderFields(fbox, sec, [
     { k: 'props.fullWidth', t: 'check', l: t('pages.fullWidth', 'Pleine largeur') },
     { k: 'props.maxWidth', t: 'slider', l: t('pages.maxWidth', 'Largeur max'), min: 480, max: 1600, step: 20, dv: 1080 },
     { k: 'props.padY', t: 'slider', l: t('pages.padY', 'Marge verticale'), min: 0, max: 240, dv: 48 },
@@ -1024,68 +1401,95 @@ function _sectionSettings(host, sec, si) {
     { k: 'props.vAlign', t: 'seg', l: t('pages.vAlign', 'Alignement vertical'), opts: [['stretch', t('pages.va.stretch', 'Étiré')], ['start', t('pages.va.start', 'Haut')], ['center', t('pages.va.center', 'Centre')], ['end', t('pages.va.end', 'Bas')]] },
     { k: 'props.bg', t: 'color', grad: true, l: t('pages.bg', 'Fond') },
   ], ctx);
-  _mountStyleGroups(el('pb-sstyle'), sec, 'section', ctx);
-  el('pb-sec-dup').addEventListener('click', () => duplicateSection(si));
-  el('pb-sec-del').addEventListener('click', () => deleteSection(si));
   refreshIcons(host);
 }
 
-function _columnSettings(host, sec, si, ci) {
-  const col = sec.columns[ci];
-  host.innerHTML = _panelHead(`${t('pages.column', 'Colonne')} ${ci + 1} · ${col.width}/12`, 'columns-2') + `
-    <label class="adm-field"><span class="adm-field-label">${escHtml(t('pages.colWidth', 'Largeur (unités /12)'))}</span><input type="range" min="1" max="12" step="1" id="pb-cw" value="${col.width}" class="pbc-range"><span class="adm-page-sub" id="pb-cw-val">${col.width}/12</span></label>
-    <div id="pb-cfields" style="display:flex;flex-direction:column;gap:10px;margin-top:6px"></div>
-    <button class="adm-btn adm-btn-ghost adm-btn-sm" id="pb-col-card" style="width:100%;justify-content:center;margin-top:10px"><i data-lucide="sparkles"></i> ${escHtml(t('pages.cardPreset', 'Transformer en carte'))}</button>
-    <div id="pb-cstyle"></div>
-    <div style="display:flex;gap:6px;margin-top:10px">
-      <button class="adm-btn adm-btn-ghost adm-btn-sm" id="pb-col-add"><i data-lucide="plus"></i> ${escHtml(t('pages.addColumn', 'Colonne'))}</button>
-      ${sec.columns.length > 1 ? `<button class="adm-btn adm-btn-ghost adm-btn-sm" id="pb-col-del"><i data-lucide="trash-2"></i> ${escHtml(t('pages.removeColumn', 'Retirer'))}</button>` : ''}
-    </div>`;
-  el('pb-cw').addEventListener('input', (e) => {
-    const nv = +e.target.value; const other = sec.columns[ci + 1] || sec.columns[ci - 1];
+// Column Contenu tab: width slider (rebalances the sibling column) + vAlign +
+// inner padding + "Turn into a card" preset button.
+function _columnContentBody(host, sec, si, ci, col, ctx) {
+  const wrap = document.createElement('label');
+  wrap.className = 'adm-field';
+  wrap.innerHTML = `<span class="adm-field-label">${escHtml(t('pages.colWidth', 'Largeur (unités /12)'))}</span>` +
+    `<input type="range" min="1" max="12" step="1" class="pbc-range" id="pb-cw"><span class="adm-page-sub" id="pb-cw-val">${col.width}/12</span>`;
+  host.appendChild(wrap);
+  const rng = wrap.querySelector('#pb-cw');
+  const valEl = wrap.querySelector('#pb-cw-val');
+  rng.value = col.width;
+  rng.addEventListener('input', () => {
+    const nv = +rng.value;
+    const other = sec.columns[ci + 1] || sec.columns[ci - 1];
     if (other) { const total = col.width + other.width; other.width = Math.max(1, total - nv); }
-    col.width = nv; el('pb-cw-val').textContent = nv + '/12'; _mark(true); _syncFrame();
+    col.width = nv;
+    if (valEl) valEl.textContent = nv + '/12';
+    _mark(true); _syncFrame();
   });
-  const ctx = _ctlCtx();
-  col.props = col.props || {};
-  renderFields(el('pb-cfields'), col, [
+  const fbox = document.createElement('div');
+  fbox.style.cssText = 'display:flex;flex-direction:column;gap:10px;margin-top:10px';
+  host.appendChild(fbox);
+  renderFields(fbox, col, [
     { k: 'props.vAlign', t: 'seg', l: t('pages.vAlign', 'Alignement vertical'), opts: [['', 'Auto'], ['flex-start', t('pages.va.start', 'Haut')], ['center', t('pages.va.center', 'Centre')], ['flex-end', t('pages.va.end', 'Bas')]] },
     { k: 'props.padding', t: 'slider', l: t('pages.colPad', 'Padding interne'), min: 0, max: 80, dv: 0 },
   ], ctx);
-  _mountStyleGroups(el('pb-cstyle'), col, 'column', ctx);
-  el('pb-col-card').addEventListener('click', () => {
-    col.props = col.props || {};
+  const cardBtn = document.createElement('button');
+  cardBtn.type = 'button';
+  cardBtn.className = 'adm-btn adm-btn-ghost adm-btn-sm';
+  cardBtn.style.cssText = 'width:100%;justify-content:center;margin-top:4px';
+  cardBtn.innerHTML = `<i data-lucide="sparkles"></i> ${escHtml(t('pages.cardPreset', 'Transformer en carte'))}`;
+  cardBtn.addEventListener('click', () => {
     col.props.style = Object.assign({}, col.props.style, {
       bg: 'var(--bg-surface)', radius: 12, borderWidth: 1, borderColor: 'var(--border-subtle)',
       shadow: 'sm', padTop: 24, padRight: 24, padBottom: 24, padLeft: 24,
     });
     _mark(true); renderSettings(); _syncFrame();
   });
-  el('pb-col-add').addEventListener('click', () => addColumn(si));
-  el('pb-col-del')?.addEventListener('click', () => removeColumn(si, ci));
+  host.appendChild(cardBtn);
+  refreshIcons(host);
+}
+
+function _sectionSettings(host, sec, si) {
+  host.innerHTML = _proHead('rows-3', `${t('pages.section', 'Section')} ${si + 1}`, [
+    ['dup', t('pages.duplicate', 'Dupliquer'), 'copy'],
+    ['del', t('pages.delete', 'Supprimer'), 'trash-2'],
+  ]) + _crumbsHtml(si, null, null) + _tabsHtml() + `<div id="pbc-tabbody" style="margin-top:12px"></div>`;
+  _bindHeadActions(host, { dup: () => duplicateSection(si), del: () => deleteSection(si) });
+  _bindCrumbs(host, si, null, null);
+  _bindTabs(host);
+  const ctx = _ctlCtx();
+  _drawTabBody(el('pbc-tabbody'), sec, 'section', ctx, (h, gctx) => _sectionContentBody(h, sec, gctx));
+  refreshIcons(host);
+}
+
+function _columnSettings(host, sec, si, ci) {
+  const col = sec.columns[ci];
+  col.props = col.props || {};
+  const actions = [];
+  if (sec.columns.length > 1) actions.push(['del', t('pages.removeColumn', 'Retirer'), 'trash-2']);
+  actions.push(['add', t('pages.addColumn', 'Colonne'), 'plus']);
+  host.innerHTML = _proHead('columns-2', `${t('pages.column', 'Colonne')} ${ci + 1} · ${col.width}/12`, actions) +
+    _crumbsHtml(si, ci, null) + _tabsHtml() + `<div id="pbc-tabbody" style="margin-top:12px"></div>`;
+  _bindHeadActions(host, { del: () => removeColumn(si, ci), add: () => addColumn(si) });
+  _bindCrumbs(host, si, ci, null);
+  _bindTabs(host);
+  const ctx = _ctlCtx();
+  _drawTabBody(el('pbc-tabbody'), col, 'column', ctx, (h, gctx) => _columnContentBody(h, sec, si, ci, col, gctx));
   refreshIcons(host);
 }
 
 function _widgetSettings(host, b) {
-  const fields = _fields(b.type);
-  host.innerHTML = _panelHead(t('pages.block.' + b.type, b.type), 'settings-2') +
-    `<div id="pb-wfields" style="display:flex;flex-direction:column;gap:10px"></div>
-    <div id="pb-wstyle"></div>
-    <div style="display:flex;gap:6px;margin-top:12px">
-      <button class="adm-btn adm-btn-ghost adm-btn-sm" id="pb-w-dup"><i data-lucide="copy"></i> ${escHtml(t('pages.duplicate', 'Dupliquer'))}</button>
-      <button class="adm-btn adm-btn-ghost adm-btn-sm" id="pb-w-del"><i data-lucide="trash-2"></i> ${escHtml(t('pages.delete', 'Supprimer'))}</button>
-    </div>`;
+  const pal = PALETTE.find((p) => p.type === b.type);
+  host.innerHTML = _proHead(pal ? pal.icon : 'square', t('pages.block.' + b.type, b.type), [
+    ['dup', t('pages.duplicate', 'Dupliquer'), 'copy'],
+    ['del', t('pages.delete', 'Supprimer'), 'trash-2'],
+  ]) + _crumbsHtml(_sel.si, _sel.ci, _sel.wi) + _tabsHtml() + `<div id="pbc-tabbody" style="margin-top:12px"></div>`;
+  _bindHeadActions(host, { dup: () => duplicateWidget(_sel.si, _sel.ci, _sel.wi), del: () => deleteWidget(_sel.si, _sel.ci, _sel.wi) });
+  _bindCrumbs(host, _sel.si, _sel.ci, _sel.wi);
+  _bindTabs(host);
   const ctx = _ctlCtx();
-  const fbox = el('pb-wfields');
-  if (fields.length) renderFields(fbox, b, fields, ctx);
-  else fbox.innerHTML = `<p class="adm-page-sub">${escHtml(t('pages.noSettings', 'Pas de réglages.'))}</p>`;
-  _mountStyleGroups(el('pb-wstyle'), b, 'widget', ctx);
-  el('pb-w-dup').addEventListener('click', () => duplicateWidget(_sel.si, _sel.ci, _sel.wi));
-  el('pb-w-del').addEventListener('click', () => deleteWidget(_sel.si, _sel.ci, _sel.wi));
+  _drawTabBody(el('pbc-tabbody'), b, 'widget', ctx);
   refreshIcons(host);
 }
 
-// (Field rendering + wiring live in pages-controls.js → renderFields.)
+// (Field rendering + wiring live in pages-controls.js → renderFields/renderGroups.)
 
 // ── Structural ops (all end in _afterMutate → sidebar + frame sync) ─────
 function addSection(widths) {

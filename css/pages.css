@@ -1,0 +1,27 @@
+/* ============================================================
+   Lumen3D — Page builder static rules (v1.18.0)
+   ============================================================
+   PageRenderer (js/core/page-renderer.js) renders widgets with inline
+   style="" almost exclusively — no <style> is ever injected by JS (the
+   enforced CSP has no 'unsafe-inline' for style-src-elem). The handful of
+   effects that genuinely require a stylesheet — :hover states and @media
+   responsive-visibility — live here instead, in this static, CSP-'self' file.
+
+   Hover effects (style.hover) — inline styles can't express :hover; this static
+   sheet is CSP-'self'. --pr-glow is set inline by PageRenderer.
+   ============================================================ */
+
+.pr-hov-lift, .pr-hov-glow, .pr-hov-zoom { transition: transform .22s ease, box-shadow .22s ease, border-color .22s ease; }
+.pr-hov-lift:hover { transform: translateY(-4px); box-shadow: 0 14px 32px rgba(0,0,0,.30); }
+.pr-hov-glow:hover { box-shadow: 0 8px 28px var(--pr-glow, color-mix(in srgb, var(--color-primary,#00A654) 40%, transparent)); }
+.pr-hov-zoom:hover { transform: scale(1.03); }
+
+/* gallery zoom-on-hover (widget props.zoom) */
+.pr-hov-parent .pr-gal-img { transition: transform .35s ease; }
+.pr-hov-parent:hover .pr-gal-img { transform: scale(1.06); }
+
+/* Responsive visibility (style.hideMobile/hideDesktop). Neutralized while
+   editing (body[data-editing]) so hidden widgets stay selectable. */
+@media (max-width: 767px) { body:not([data-editing]) .pr-hide-mobile { display: none !important; } }
+@media (min-width: 768px) { body:not([data-editing]) .pr-hide-desktop { display: none !important; } }
+body[data-editing] .pr-hide-mobile, body[data-editing] .pr-hide-desktop { opacity: .45; }

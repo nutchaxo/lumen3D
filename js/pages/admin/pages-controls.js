@@ -10,19 +10,35 @@
  *   text | ltext | ltextarea      plain / localized inputs (ph, hint)
  *   select                        dropdown, opts: [[value, label]]
  *   check                         toggle switch
- *   seg                           segmented buttons, opts: [[value, label, icon?]]
+ *   seg                           segmented buttons, opts: [[value, label, icon?]];
+ *                                 refresh:true re-runs ctx.refresh() after commit
  *   slider                        range + fine number twin (min, max, step,
  *                                 unit, dv = visual default; ph ⇒ clearable "auto")
- *   color                         rich picker: theme tokens + palette + custom
- *                                 + opacity (color-mix); grad:true adds the
- *                                 GRADIENT tab (presets, stops, angle pad,
+ *   color                         rich picker: theme tokens + Récents + palette +
+ *                                 custom + opacity (color-mix); grad:true adds
+ *                                 the GRADIENT tab (presets, stops, angle pad,
  *                                 linear/radial, save-as-preset)
- *   icon                          searchable Lucide icon picker
+ *   icon                          searchable Lucide icon picker (first tile
+ *                                 clears the field to '' — "Aucune")
  *   items                         repeatable list editor (item: [subfields],
  *                                 mk: () => newItem, summary: (item,lv) => str;
  *                                 subfields support refresh:true + dis(item))
+ *   spacing                       4-side linked padding/margin control:
+ *                                 keys:{top,right,bottom,left} (dot-paths), min, max
+ *   shadow                        preset seg ('' | sm | md | lg | glow) at `k`,
+ *                                 with a conditional color picker at `colorKey`
  *
- * ctx = { loc, onChange(), gradients: { get: () => [css…], save: (list) => } }
+ * Any field descriptor may also carry:
+ *   showIf(obj) → false           skip rendering the field entirely
+ *
+ * ctx = { loc, onChange(), gradients: { get: () => [css…], save: (list) => },
+ *         refresh?, groupKey? }    refresh/groupKey are supplied by renderGroups.
+ *
+ * renderGroups(host, obj, groups, ctx) — groups: [{title, icon, fields, open?}].
+ * Renders each as a <details class="pbc-group"> (open-state remembered across
+ * re-renders, keyed by `${ctx.groupKey}|${title}`); passes each group's own
+ * fields through renderFields with a `refresh` that redraws just that group's
+ * body (used by seg fields declaring refresh:true, e.g. media-kind switches).
  *
  * The generated CSS strings stay 100% compatible with PageRenderer's
  * sanitizers (_sanitizeCss keeps parens, strips <>;{}) — colors compose to
@@ -57,6 +73,16 @@ const PALETTE_COLORS = [
   '#14b8a6', '#06b6d4', '#0ea5e9', '#3b82f6', '#6366f1', '#8b5cf6', '#a855f7',
   '#d946ef', '#ec4899', '#f43f5e',
 ];
+// Session-only "recently used" solid colors (not persisted — resets on reload,
+// shared across every color field so a pick in one control shows up in others).
+const _recentColors = [];
+function _pushRecentColor(v) {
+  if (!v || isGradient(v)) return;
+  const i = _recentColors.indexOf(v);
+  if (i !== -1) _recentColors.splice(i, 1);
+  _recentColors.unshift(v);
+  if (_recentColors.length > 8) _recentColors.length = 8;
+}
 export const BUILTIN_GRADIENTS = [
   'linear-gradient(135deg, var(--color-primary,#00A654) 0%, var(--color-accent,#00D2FF) 100%)',
   'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
@@ -249,6 +275,7 @@ function ctlSeg(obj, f, ctx) {
       btns.forEach((x) => x.classList.remove('on'));
       b.classList.add('on');
       ctx.onChange();
+      if (f.refresh && ctx.refresh) ctx.refresh();
     });
     btns.push(b);
     seg.appendChild(b);
@@ -300,6 +327,126 @@ function ctlSlider(obj, f, ctx) {
   return w;
 }
 
+// ── Linked 4-side spacing control (Elementor-style padding/margin) ────────
+const _SPACING_SIDES = ['top', 'right', 'bottom', 'left'];
+const _SPACING_LBL = { top: 'T', right: 'R', bottom: 'B', left: 'L' };
+function ctlSpacing(obj, f, ctx) {
+  const min = f.min != null ? +f.min : 0;
+  const max = f.max != null ? +f.max : 300;
+  const w = mk('div', 'adm-field');
+  const head = mk('div', 'pbc-slider-head');
+  head.appendChild(mk('span', 'adm-field-label', f.l));
+  const linkBtn = mkBtn('pbc-mini pbc-spacing-link');
+  head.appendChild(linkBtn);
+  w.appendChild(head);
+
+  const grid = mk('div', 'pbc-spacing');
+  const inputs = {};
+  _SPACING_SIDES.forEach((side) => {
+    const cell = mk('div', 'pbc-spacing-cell');
+    const inp = mk('input', 'pbc-num');
+    inp.type = 'number';
+    inp.min = min; inp.max = max;
+    inp.placeholder = 'auto';
+    inputs[side] = inp;
+    cell.appendChild(inp);
+    cell.appendChild(mk('span', 'pbc-spacing-lbl', _SPACING_LBL[side]));
+    grid.appendChild(cell);
+  });
+  const reset = mkBtn('pbc-reset', t('pages.pc.reset', 'Réinitialiser (auto)'));
+  reset.textContent = '×';
+  grid.appendChild(reset);
+  w.appendChild(grid);
+
+  const getVal = (side) => {
+    const v = pathGet(obj, f.keys[side]);
+    return (v === '' || v == null || isNaN(+v)) ? '' : +v;
+  };
+  const allSame = () => {
+    const vals = _SPACING_SIDES.map(getVal);
+    return vals.every((v) => v === vals[0]);
+  };
+  let linked = allSame();
+
+  const syncLinkBtn = () => {
+    linkBtn.textContent = '';
+    linkBtn.appendChild(mkIcon(linked ? 'link' : 'unlink', 13));
+    linkBtn.classList.toggle('on', linked);
+    linkBtn.title = linked ? t('pages.st.linked', 'Lier les côtés') : t('pages.st.unlinked', 'Côtés indépendants');
+    refreshIcons(linkBtn);
+  };
+  const syncInputs = () => { _SPACING_SIDES.forEach((s) => { const v = getVal(s); inputs[s].value = v === '' ? '' : String(v); }); };
+  syncLinkBtn();
+  syncInputs();
+
+  const commitSide = (side, val) => pathPut(obj, f.keys[side], val);
+
+  _SPACING_SIDES.forEach((side) => {
+    inputs[side].addEventListener('input', () => {
+      const raw = inputs[side].value;
+      const val = raw === '' ? '' : Math.max(min, Math.min(max, +raw));
+      if (linked) {
+        _SPACING_SIDES.forEach((s) => { commitSide(s, val); if (s !== side) inputs[s].value = val === '' ? '' : String(val); });
+      } else {
+        commitSide(side, val);
+      }
+      ctx.onChange();
+    });
+  });
+
+  linkBtn.addEventListener('click', () => {
+    linked = !linked;
+    if (linked) {
+      const first = _SPACING_SIDES.map(getVal).find((v) => v !== '');
+      _SPACING_SIDES.forEach((s) => commitSide(s, first == null ? '' : first));
+      syncInputs();
+      ctx.onChange();
+    }
+    syncLinkBtn();
+  });
+
+  reset.addEventListener('click', () => {
+    _SPACING_SIDES.forEach((s) => commitSide(s, ''));
+    syncInputs();
+    ctx.onChange();
+  });
+
+  return w;
+}
+
+// ── Shadow preset + conditional color ──────────────────────────────
+function ctlShadow(obj, f, ctx) {
+  const w = mk('div', 'adm-field');
+  const colorHost = mk('div');
+  const drawColor = () => {
+    colorHost.textContent = '';
+    const v = String(pathGet(obj, f.k) || '');
+    if (v && f.colorKey) {
+      colorHost.appendChild(ctlColor(obj, {
+        k: f.colorKey,
+        l: t('pages.st.shadowColor', "Couleur de l'ombre"),
+        grad: false,
+      }, ctx));
+    }
+  };
+  const seg = ctlSeg(obj, {
+    k: f.k,
+    l: f.l,
+    refresh: true,
+    opts: [
+      ['', '—'],
+      ['sm', 'S'],
+      ['md', 'M'],
+      ['lg', 'L'],
+      ['glow', t('pages.st.shadowGlow', 'Halo')],
+    ],
+  }, Object.assign({}, ctx, { refresh: drawColor }));
+  w.appendChild(seg);
+  w.appendChild(colorHost);
+  drawColor();
+  return w;
+}
+
 // ── Rich color / gradient picker ──────────────────────────────────
 function ctlColor(obj, f, ctx) {
   const w = fieldWrap(f.l);
@@ -321,7 +468,7 @@ function ctlColor(obj, f, ctx) {
   pop.hidden = true;
   w.appendChild(pop);
 
-  const set = (v) => { pathPut(obj, f.k, v); sync(); ctx.onChange(); };
+  const set = (v) => { pathPut(obj, f.k, v); _pushRecentColor(v); sync(); ctx.onChange(); };
 
   let mode = null; // 'color' | 'grad'
   const openPanel = () => {
@@ -370,6 +517,15 @@ function ctlColor(obj, f, ctx) {
       b.addEventListener('click', () => { state.base = tok; set(composeAlphaColor(state.base, state.alpha)); });
       grid.appendChild(b);
     });
+    if (_recentColors.length) {
+      grid.appendChild(mk('div', 'pbc-recent-label', t('pages.pc.recent', 'Récents')));
+      _recentColors.forEach((c) => {
+        const b = mkBtn('pbc-sw', c);
+        b.style.background = previewBg(c);
+        b.addEventListener('click', () => set(c));
+        grid.appendChild(b);
+      });
+    }
     PALETTE_COLORS.forEach((c) => {
       const b = mkBtn('pbc-sw', c);
       b.style.background = c;
@@ -602,6 +758,16 @@ function ctlIcon(obj, f, ctx) {
   const all = allLucideNames();
   const draw = () => {
     grid.textContent = '';
+    const none = mkBtn(null, t('pages.pc.noIcon', 'Aucune'));
+    none.appendChild(mkIcon('ban', 17));
+    none.addEventListener('click', () => {
+      pathPut(obj, f.k, '');
+      lbl.textContent = t('pages.pc.noIcon', 'Aucune');
+      prev.textContent = '';
+      pop.hidden = true; caret.style.transform = '';
+      ctx.onChange();
+    });
+    grid.appendChild(none);
     const q = search.value.trim().toLowerCase();
     const list = q ? all.filter((n) => n.includes(q)) : FAVORITE_ICONS.filter((n) => all.includes(n));
     const shown = list.slice(0, 96);
@@ -703,6 +869,7 @@ function ctlItems(obj, f, ctx) {
 // ══════════════════════════════════════════════════════════════════
 export function renderFields(host, obj, fields, ctx) {
   (fields || []).forEach((f) => {
+    if (typeof f.showIf === 'function' && !f.showIf(obj)) return;
     let node = null;
     switch (f.t) {
       case 'ltext': node = ctlLText(obj, f, ctx, false); break;
@@ -714,6 +881,8 @@ export function renderFields(host, obj, fields, ctx) {
       case 'color': node = ctlColor(obj, f, ctx); break;
       case 'icon': node = ctlIcon(obj, f, ctx); break;
       case 'items': node = ctlItems(obj, f, ctx); break;
+      case 'spacing': node = ctlSpacing(obj, f, ctx); break;
+      case 'shadow': node = ctlShadow(obj, f, ctx); break;
       case 'number': node = ctlSlider(obj, Object.assign({ min: 0, max: 500 }, f), ctx); break;
       default: node = ctlText(obj, f, ctx);
     }
@@ -721,6 +890,39 @@ export function renderFields(host, obj, fields, ctx) {
       if (f.disabled) node.querySelectorAll('input,select,textarea,button').forEach((x) => (x.disabled = true));
       host.appendChild(node);
     }
+  });
+  refreshIcons(host);
+}
+
+// ── Grouped-fields accordion (Elementor-style settings panel) ─────
+// groups: [{ title, icon, fields, open? }]. Open/closed state per group
+// persists across re-renders (widget re-selection, tab switch) for the
+// session, keyed by `${ctx.groupKey}|${title}` so different widgets/tabs
+// don't fight over the same key.
+const _groupOpenState = new Map();
+export function renderGroups(host, obj, groups, ctx) {
+  (groups || []).forEach((g) => {
+    const key = (ctx && ctx.groupKey ? ctx.groupKey : '') + '|' + g.title;
+    const det = document.createElement('details');
+    det.className = 'pbc-group';
+    const remembered = _groupOpenState.get(key);
+    det.open = remembered != null ? remembered : (groups.length === 1 || !!g.open);
+    const sum = mk('summary');
+    if (g.icon) sum.appendChild(mkIcon(g.icon, 14));
+    sum.appendChild(mk('span', null, g.title));
+    const caret = mk('span', 'pbc-group-caret');
+    caret.appendChild(mkIcon('chevron-down', 14));
+    sum.appendChild(caret);
+    det.appendChild(sum);
+    const body = mk('div', 'pbc-group-body');
+    det.appendChild(body);
+    const redraw = () => {
+      body.textContent = '';
+      renderFields(body, obj, g.fields, Object.assign({}, ctx, { refresh: redraw }));
+    };
+    redraw();
+    det.addEventListener('toggle', () => { _groupOpenState.set(key, det.open); });
+    host.appendChild(det);
   });
   refreshIcons(host);
 }

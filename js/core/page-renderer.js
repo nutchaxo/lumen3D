@@ -10,35 +10,53 @@
      Column  = { id, width(1–12), props:{vAlign,padding,style}, widgets:[ Widget ] }
      Widget  = { id, type, text, props }        // the former "block"
 
-   STYLE OBJECT (v3, per widget/column/section — props.style, all optional):
+   STYLE OBJECT (v3.1, per widget/column/section — props.style, all optional):
      { color, textGradient, fontSize, fontWeight, lineHeight, letterSpacing, italic, uppercase, align,
-       bg, bgImage, overlay, radius, borderWidth, borderColor, borderStyle, shadow, opacity,
-       padTop, padRight, padBottom, padLeft, marginTop, marginBottom,
-       maxWidth, minHeight }
+       bg, bgImage, overlay, radius, borderWidth, borderColor, borderStyle, shadow, shadowColor, opacity,
+       padTop, padRight, padBottom, padLeft, marginTop, marginBottom, marginLeft, marginRight,
+       maxWidth, minHeight, hover, hideMobile, hideDesktop, css }
      color (since v1.16.2) accepts a plain color OR a gradient — a gradient is
      painted INTO the glyphs (background-clip:text). textGradient is the legacy
      v1.16.1 separate field, still honored (editor migrates it into color).
+     Since v1.18.0: shadow gains a 'glow' preset (soft colored box-shadow) on top
+     of sm/md/lg; shadowColor recolors sm/md/lg (keeping their offsets/blur) and
+     supplies the glow color. hover ('lift'|'glow'|'zoom') adds a CSS class — no
+     inline :hover is possible, so the class + its rule live in css/pages.css
+     (styleClasses/applyStyleExtras below). hideMobile/hideDesktop likewise add
+     responsive-visibility classes. css is a raw, sanitized inline-CSS escape
+     hatch appended after everything else, regardless of which `groups` were
+     requested.
    Compiled to sanitized inline CSS by styleCss(style, groups) — groups being
-   'text' | 'surface' | 'spacing' | 'size'. The editor (tab-pages.js) writes
-   these fields; the edit frame (page-edit-frame.js) reuses sectionCss/columnCss
-   below so editor and live page can never drift.
+   'text' | 'surface' | 'spacing' | 'size' (hover/hide/css bypass the group
+   filter — see styleClasses/applyStyleExtras). The editor (tab-pages.js) writes
+   these fields; the edit frame (page-edit-frame.js) reuses sectionCss/
+   columnCss/applyStyleExtras below so editor and live page can never drift.
 
-   16 widget types: heading, richtext, image, button, divider, spacer, hero,
-   gallery, icon, stat-grid, latest-datasets, html + (v1.16.0) feature-card,
-   quote, accordion, timeline, cta-banner.
+   20 widget types: heading, richtext, image, button, divider, spacer, hero,
+   gallery, icon, stat-grid, latest-datasets, html, feature-card, quote,
+   accordion, timeline, cta-banner + (v1.18.0) badge, icon-list, profile,
+   cite-block.
 
    BACKWARD-COMPAT: a legacy flat source { blocks:[…] } (or a bare array) is
    normalized to a single full-width section with one 12-unit column whose
    widgets are those blocks — so old pages keep rendering (and stop showing a
    blank page). Legacy props (section.bg/padY, column.padding, hero.bg…) are
-   still honored; props.style overrides them (appended last).
+   still honored; props.style overrides them (appended last). Every field
+   introduced by v1.18.0 is optional and defaults to the exact pre-v1.18.0
+   markup/CSS — a stored v1.17 doc renders pixel-identical.
 
    Text fields are LOCALIZED objects ({en, fr, …}); _lv() picks the current
-   locale (→ en → first). Rendering is injection-safe: text via textContent; the
-   "html" widget is sanitized; every CSS value flows through _sanitizeCss/_n.
-   CSS lives in inline styles + var() fallbacks so it renders even before the
-   full stylesheet cascade and inside the CSP (no injected <style>). Classic
-   IIFE singleton — bare name PageRenderer.
+   locale (→ en → first). Rendering is injection-safe: text via textContent
+   (the richtext bold/italic/link mini-markup — "**bold**", "*italic*",
+   "[link](url)" — is parsed into strong/em/a/text DOM nodes, never innerHTML;
+   see _appendRichInline); the "html" widget is
+   sanitized; every CSS value flows through _sanitizeCss/_urlCss/_n; every
+   widget-authored href flows through _safeHref (refuses javascript:/
+   vbscript:/data:). CSS lives in inline styles + var() fallbacks so it renders
+   even before the full stylesheet cascade and inside the CSP (no injected
+   <style>) — except the small set of hover/visibility rules that genuinely
+   need a stylesheet (:hover, @media), which live in the static, CSP-'self'
+   css/pages.css. Classic IIFE singleton — bare name PageRenderer.
    ============================================================ */
 
 const PageRenderer = (() => {
@@ -95,6 +113,26 @@ const PageRenderer = (() => {
   // room for a 3-stop gradient whose stops are color-mix(...)-wrapped var()s.
   function _sanitizeCss(v) { return String(v == null ? '' : v).replace(/[<>;{}]/g, '').replace(/expression\s*\(/gi, '').slice(0, 400); }
   function _urlCss(u) { return String(u == null ? '' : u).replace(/["'\\<>;{}()]/g, '').slice(0, 500); }
+  // A raw CSS *block* (props.style.css power-user escape hatch) — unlike
+  // _sanitizeCss this legitimately contains `;` (it separates declarations),
+  // so only the genuinely dangerous constructs are stripped.
+  function _sanitizeCssBlock(v) {
+    return String(v == null ? '' : v)
+      .replace(/[<>{}]/g, '')
+      .replace(/expression\s*\(/gi, '')
+      .replace(/javascript\s*:/gi, '')
+      .slice(0, 600);
+  }
+  // Anchor href guard for widget-authored links: never let a javascript:/
+  // vbscript:/data: URI reach an href. Used by the link-accepting fields
+  // introduced/extended in v1.18.0 (richtext inline links, icon-list items,
+  // feature-card card-level href, quote.link). '' means "don't render this
+  // link" (callers fall back to plain text).
+  function _safeHref(u) {
+    const s = String(u == null ? '' : u).trim();
+    if (!s || /^\s*(javascript|vbscript|data)\s*:/i.test(s)) return '';
+    return s;
+  }
   const ALIGN = (a) => (a === 'center' || a === 'right' ? a : 'left');
   // Numeric style field: ''/null/undefined → unset (null); else clamped number.
   function _n(v, min, max) {
@@ -124,7 +162,13 @@ const PageRenderer = (() => {
   }
 
   // ── Generic style engine (widgets, columns, sections) ──────────────────────
-  const SHADOWS = { sm: '0 1px 3px rgba(0,0,0,.25)', md: '0 4px 16px rgba(0,0,0,.28)', lg: '0 14px 36px rgba(0,0,0,.38)' };
+  // off/c split so shadowColor can recolor a preset while keeping its offsets/
+  // blur (see styleCss 'surface' group below).
+  const SHADOWS = {
+    sm: { off: '0 1px 3px', c: 'rgba(0,0,0,.25)' },
+    md: { off: '0 4px 16px', c: 'rgba(0,0,0,.28)' },
+    lg: { off: '0 14px 36px', c: 'rgba(0,0,0,.38)' },
+  };
   const BORDER_STYLES = ['solid', 'dashed', 'dotted'];
 
   // Text fill from a single value: a gradient paints INTO the glyphs
@@ -174,11 +218,17 @@ const PageRenderer = (() => {
       const r = _n(st.radius, 0, 300); if (r != null) c += `border-radius:${r}px;`;
       const bw = _n(st.borderWidth, 0, 24);
       if (bw) c += `border:${bw}px ${BORDER_STYLES.includes(st.borderStyle) ? st.borderStyle : 'solid'} ${_sanitizeCss(st.borderColor || 'var(--border-subtle,#2a2a3a)')};`;
-      if (SHADOWS[st.shadow]) c += `box-shadow:${SHADOWS[st.shadow]};`;
+      if (st.shadow === 'glow') {
+        const gc = st.shadowColor ? _sanitizeCss(st.shadowColor) : 'color-mix(in srgb, var(--color-primary,#00A654) 35%, transparent)';
+        c += `box-shadow:0 8px 24px ${gc};`;
+      } else if (SHADOWS[st.shadow]) {
+        const sh = SHADOWS[st.shadow];
+        c += `box-shadow:${sh.off} ${st.shadowColor ? _sanitizeCss(st.shadowColor) : sh.c};`;
+      }
       const op = _n(st.opacity, 0, 100); if (op != null && op < 100) c += `opacity:${op / 100};`;
     }
     if (has('spacing')) {
-      const MAP = { padTop: 'padding-top', padRight: 'padding-right', padBottom: 'padding-bottom', padLeft: 'padding-left', marginTop: 'margin-top', marginBottom: 'margin-bottom' };
+      const MAP = { padTop: 'padding-top', padRight: 'padding-right', padBottom: 'padding-bottom', padLeft: 'padding-left', marginTop: 'margin-top', marginBottom: 'margin-bottom', marginLeft: 'margin-left', marginRight: 'margin-right' };
       for (const k in MAP) {
         const v = _n(st[k], k.indexOf('margin') === 0 ? -200 : 0, 500);
         if (v != null) c += `${MAP[k]}:${v}px;`;
@@ -188,7 +238,36 @@ const PageRenderer = (() => {
       const mw = _n(st.maxWidth, 40, 1920); if (mw != null) c += `max-width:${mw}px;margin-left:auto;margin-right:auto;`;
       const mh = _n(st.minHeight, 0, 1600); if (mh != null) c += `min-height:${mh}px;`;
     }
+    // Power-user raw CSS: group-independent (applied regardless of `groups`).
+    if (st.css) {
+      const cc = _sanitizeCssBlock(st.css);
+      if (cc) c += cc;
+    }
     return c;
+  }
+
+  // Hover/visibility can only be expressed with :hover / @media, which inline
+  // styles can't do — these become classes resolved by the static css/pages.css.
+  function styleClasses(st) {
+    const classes = [];
+    if (!st || typeof st !== 'object') return classes;
+    if (st.hover === 'lift' || st.hover === 'glow' || st.hover === 'zoom') classes.push('pr-hov-' + st.hover);
+    if (st.hideMobile) classes.push('pr-hide-mobile');
+    if (st.hideDesktop) classes.push('pr-hide-desktop');
+    return classes;
+  }
+  // Applies styleClasses() to `node` plus the inline --pr-glow custom property
+  // the 'glow' hover class reads. Called on the WIDGET ROOT node (renderWidget),
+  // and on the section/column root nodes (renderSection/renderColumn) — the
+  // edit frame calls this too, on the section/column nodes it builds itself.
+  function applyStyleExtras(node, st) {
+    if (!node || !st || typeof st !== 'object') return;
+    const classes = styleClasses(st);
+    if (classes.length) node.classList.add(...classes);
+    if (st.hover === 'glow') {
+      const gc = st.shadowColor ? _sanitizeCss(st.shadowColor) : 'color-mix(in srgb, var(--color-primary,#00A654) 35%, transparent)';
+      node.style.setProperty('--pr-glow', gc);
+    }
   }
 
   // Tint layer over a bgImage/bg (style.overlay) — DOM, not CSS, so it needs a
@@ -199,6 +278,73 @@ const PageRenderer = (() => {
     return _el('div', `position:absolute;inset:0;pointer-events:none;background:${_sanitizeCss(st.overlay)};${r != null ? `border-radius:${r}px;` : ''}`);
   }
 
+  // ── Shared widget-rendering helpers ─────────────────────────────────────────
+  // richtext mini-markup — **bold**, *italic*, [text](url) — parsed and built
+  // as DOM nodes (never innerHTML). Plain text with no markup produces exactly
+  // one text node, matching the pre-v1.18.0 textContent assignment byte-for-byte.
+  const _RICH_RE = /\*\*([^*]+)\*\*|\*([^*]+)\*|\[([^\]]+)\]\(([^)]+)\)/g;
+  function _appendRichInline(container, text) {
+    _RICH_RE.lastIndex = 0;
+    let last = 0, m;
+    while ((m = _RICH_RE.exec(text))) {
+      if (m.index > last) container.appendChild(document.createTextNode(text.slice(last, m.index)));
+      if (m[1] !== undefined) container.appendChild(_el('strong', '', m[1]));
+      else if (m[2] !== undefined) container.appendChild(_el('em', '', m[2]));
+      else {
+        const href = _safeHref(m[4]);
+        if (href) { const a = document.createElement('a'); a.href = href; a.textContent = m[3]; container.appendChild(a); }
+        else container.appendChild(document.createTextNode(m[3]));
+      }
+      last = _RICH_RE.lastIndex;
+    }
+    if (last < text.length) container.appendChild(document.createTextNode(text.slice(last)));
+  }
+
+  // feature-card media box: icon | image | monogram | none. `compact` selects
+  // the fixed 64×64 sizing used by the horizontal (props.layout:'h') layout;
+  // compact=false (the 'v' layout / legacy default) reproduces the pre-v1.18.0
+  // icon markup byte-for-byte when media is unset.
+  function _featureMedia(p, compact) {
+    const media = p.media || 'icon';
+    if (media === 'none') return null;
+    const mb = compact ? '' : 'margin-bottom:14px;';
+    const flexRule = compact ? 'flex:0 0 auto;' : '';
+    if (media === 'image') {
+      if (!p.img) return null;
+      const imgH = _n(p.imgH, 20, 800) || 96;
+      const img = document.createElement('img');
+      img.src = p.img; img.alt = ''; img.loading = 'lazy';
+      if (p.plateBg) {
+        const plateH = compact ? 64 : imgH + 32;
+        const plate = _el('div', `${compact ? 'width:64px;' : 'width:100%;'}height:${plateH}px;border-radius:14px;display:flex;align-items:center;justify-content:center;padding:${compact ? '6px' : '16px'};box-sizing:border-box;${mb}${flexRule}background:${_sanitizeCss(p.plateBg)}`);
+        img.style.cssText = 'max-height:100%;max-width:100%;object-fit:contain';
+        plate.appendChild(img);
+        return plate;
+      }
+      const h = compact ? 64 : imgH;
+      img.style.cssText = `${compact ? 'width:64px;' : 'width:100%;'}height:${h}px;object-fit:cover;border-radius:14px;${mb}${flexRule}display:block`;
+      return img;
+    }
+    if (media === 'monogram') {
+      return _el('div', `${compact ? 'width:64px;' : 'width:100%;'}height:${compact ? 64 : 96}px;border-radius:14px;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:1.5rem;letter-spacing:.06em;${mb}${flexRule}` +
+        `background:${p.monoBg ? _sanitizeCss(p.monoBg) : 'linear-gradient(135deg, var(--color-primary,#00A654), var(--color-accent,#00D2FF))'};color:${p.monoColor ? _sanitizeCss(p.monoColor) : '#fff'}`,
+        String(p.monogram || '').slice(0, 4));
+    }
+    // icon (default)
+    const iconName = String(p.icon || '').replace(/[^a-z0-9-]/gi, '').slice(0, 60);
+    if (!iconName) return null;
+    const isz = _n(p.iconSize, 12, 120) || 34;
+    const dim = compact ? 64 : isz + 26;
+    const badge = _el('div', `display:inline-flex;align-items:center;justify-content:center;width:${dim}px;height:${dim}px;${mb}${flexRule}` +
+      `border-radius:${p.iconShape === 'square' ? '12px' : '50%'};` +
+      `background:${p.iconBg ? _sanitizeCss(p.iconBg) : 'color-mix(in srgb, var(--color-primary,#00A654) 14%, transparent)'};`);
+    const i = document.createElement('i');
+    i.setAttribute('data-lucide', iconName);
+    i.style.cssText = `width:${isz}px;height:${isz}px;color:${p.iconColor ? _sanitizeCss(p.iconColor) : 'var(--color-primary,#00A654)'}`;
+    badge.appendChild(i);
+    return badge;
+  }
+
   // ── Widget renderers (the former block renderers; type names unchanged) ─────
   const RENDERERS = {
     heading(b) {
@@ -207,12 +353,24 @@ const PageRenderer = (() => {
     },
     richtext(b) {
       const wrap = _el('div', `text-align:${ALIGN(b.props?.align)}`);
-      _lv(b.text).split(/\n{2,}/).forEach((para) => wrap.appendChild(_el('p', 'line-height:1.7;margin:0 0 14px;white-space:pre-wrap', para)));
+      // props.markup opts INTO the inline mini-markup. It defaults off because
+      // stored text predating v1.18.0 may legitimately contain asterisks (a
+      // figure legend like "* p<0.05, ** p<0.01" would silently lose them), so
+      // only content authored against the parser gets parsed. The editor sets
+      // markup:true on newly created richtext widgets.
+      const markup = !!(b.props && b.props.markup);
+      _lv(b.text).split(/\n{2,}/).forEach((para) => {
+        const p = _el('p', 'line-height:1.7;margin:0 0 14px;white-space:pre-wrap');
+        if (markup) _appendRichInline(p, para);
+        else p.textContent = para;
+        wrap.appendChild(p);
+      });
       return wrap;
     },
     image(b) {
       const p = b.props || {}, st = p.style || {};
-      const wrap = _el('div', `text-align:${ALIGN(p.align || 'center')};` + styleCss(st, ['spacing', 'text']));
+      const hasCaption = !!_lv(p.caption);
+      const wrap = _el(hasCaption ? 'figure' : 'div', `text-align:${ALIGN(p.align || 'center')};${hasCaption ? 'margin:0;' : ''}` + styleCss(st, ['spacing', 'text']));
       const img = document.createElement('img');
       img.src = p.src || ''; img.alt = _lv(p.alt) || ''; img.loading = 'lazy';
       const h = _n(p.height, 10, 2000);
@@ -222,6 +380,7 @@ const PageRenderer = (() => {
         styleCss(st, ['surface', 'size']);
       if (p.href) { const a = document.createElement('a'); a.href = p.href; a.appendChild(img); wrap.appendChild(a); }
       else wrap.appendChild(img);
+      if (hasCaption) wrap.appendChild(_el('figcaption', 'font-size:.82rem;opacity:.65;margin-top:8px', _lv(p.caption)));
       return wrap;
     },
     button(b) {
@@ -235,9 +394,32 @@ const PageRenderer = (() => {
       const wrap = _el('div', `text-align:${ALIGN(p.align || 'left')};margin:6px 0;` + styleCss(st, ['spacing']));
       const a = document.createElement('a');
       a.href = p.href || '#';
-      a.className = 'btn ' + (variant === 'ghost' ? 'btn-ghost' : (variant === 'lg' ? 'btn-accent btn-lg' : 'btn-accent'));
-      a.textContent = _lv(b.text) || 'Button';
+      // variant 'lg' is the legacy (pre-v1.18.0) value: 'accent' + the existing
+      // btn-lg class, ignoring props.size (spec-mandated back-compat).
+      let cls = 'btn ';
+      if (variant === 'ghost') cls += 'btn-ghost';
+      else if (variant === 'lg') cls += 'btn-accent btn-lg';
+      else if (variant === 'outline') cls += '';
+      else cls += 'btn-accent';
+      if (variant !== 'lg' && p.size === 'lg') cls += ' btn-lg';
+      a.className = cls.trim();
+      const iconName = String(p.icon || '').replace(/[^a-z0-9-]/gi, '').slice(0, 60);
+      const label = _lv(b.text) || 'Button';
+      if (iconName) {
+        const ic = document.createElement('i');
+        ic.setAttribute('data-lucide', iconName);
+        ic.style.cssText = 'width:16px;height:16px;flex:0 0 auto';
+        const txt = document.createTextNode(label);
+        a.style.cssText += ';display:inline-flex;align-items:center;gap:8px;';
+        if (p.iconPos === 'right') { a.appendChild(txt); a.appendChild(ic); }
+        else { a.appendChild(ic); a.appendChild(txt); }
+        setTimeout(() => { try { if (window.lucide && window.lucide.createIcons) lucide.createIcons({ nodes: [a] }); } catch (_) {} }, 0);
+      } else {
+        a.textContent = label;
+      }
       let extra = styleCss(st, ['text', 'surface', 'size']);
+      if (variant === 'outline') extra += 'background:transparent;border:1px solid var(--color-primary,#00A654);color:var(--color-primary,#00A654);';
+      if (p.size === 'sm' && variant !== 'lg') extra += 'padding:7px 14px;font-size:.85rem;';
       if (p.fullWidth) extra += 'display:flex;width:100%;justify-content:center;box-sizing:border-box;';
       if (extra) a.style.cssText += ';' + extra;
       wrap.appendChild(a);
@@ -248,7 +430,13 @@ const PageRenderer = (() => {
       const th = _n(p.thickness, 1, 20) || 1;
       const wd = _n(p.width, 1, 100);
       const ls = BORDER_STYLES.includes(p.lineStyle) ? p.lineStyle : 'solid';
-      return _el('hr', `border:none;border-top:${th}px ${ls} ${p.color ? _sanitizeCss(p.color) : 'var(--border-subtle,#2a2a3a)'};margin:24px auto;${wd != null ? `width:${wd}%;` : ''}`);
+      const wdCss = wd != null ? `width:${wd}%;` : '';
+      // A gradient color can't paint a border-top, so it renders as a filled
+      // bar instead of the classic <hr> when props.color is a gradient.
+      if (p.color && _isGradientFill(p.color)) {
+        return _el('div', `height:${th}px;background:${_sanitizeCss(p.color)};border-radius:2px;margin:24px auto;${wdCss}`);
+      }
+      return _el('hr', `border:none;border-top:${th}px ${ls} ${p.color ? _sanitizeCss(p.color) : 'var(--border-subtle,#2a2a3a)'};margin:24px auto;${wdCss}`);
     },
     spacer(b) { return _el('div', `height:${Math.max(0, Math.min(400, +(b.props?.height) || 32))}px`); },
     hero(b) {
@@ -263,8 +451,32 @@ const PageRenderer = (() => {
         (mh ? 'display:flex;flex-direction:column;justify-content:center;' : '') +
         styleCss(st, ['surface', 'spacing', 'size']));
       const ov = overlayNode(st); if (ov) sec.appendChild(ov);
+      // Two soft radial glows behind the content (mirrors .about-hero::before).
+      if (p.glow) {
+        const g1 = p.glowColor1 ? _sanitizeCss(p.glowColor1) : 'color-mix(in srgb, var(--color-primary,#00A654) 24%, transparent)';
+        const g2 = p.glowColor2 ? _sanitizeCss(p.glowColor2) : 'color-mix(in srgb, var(--color-accent,#00D2FF) 20%, transparent)';
+        sec.appendChild(_el('div', `position:absolute;inset:-45% -10% auto -10%;height:150%;pointer-events:none;background:radial-gradient(55% 60% at 15% 0%, ${g1}, transparent 70%), radial-gradient(50% 55% at 88% 8%, ${g2}, transparent 72%)`));
+      }
       const inner = _el('div', 'position:relative;max-width:760px;margin:0 auto;' +
         (align === 'left' ? 'margin-left:0;' : align === 'right' ? 'margin-right:0;' : ''));
+      // Badge pill, above the title. Renders nothing when the text is empty.
+      if (p.badge && _lv(p.badge.text)) {
+        const badgeColor = p.badgeColor ? _sanitizeCss(p.badgeColor) : 'var(--text-secondary,#b8b8c8)';
+        const pill = _el('span', `display:inline-flex;align-items:center;gap:8px;padding:5px 14px;border-radius:999px;` +
+          `border:1px solid color-mix(in srgb, var(--color-primary,#00A654) 30%, transparent);` +
+          `background:color-mix(in srgb, var(--color-primary,#00A654) 10%, transparent);font-size:13px;margin:0 0 16px;color:${badgeColor}`);
+        if (p.badge.dot) {
+          pill.appendChild(_el('span', 'width:7px;height:7px;border-radius:50%;flex:0 0 auto;background:linear-gradient(135deg, var(--color-primary,#00A654), var(--color-accent,#00D2FF))'));
+        } else if (p.badge.icon) {
+          const ic = document.createElement('i');
+          ic.setAttribute('data-lucide', String(p.badge.icon).replace(/[^a-z0-9-]/gi, '').slice(0, 60));
+          ic.style.cssText = 'width:14px;height:14px;flex:0 0 auto';
+          pill.appendChild(ic);
+        }
+        pill.appendChild(_el('span', '', _lv(p.badge.text)));
+        inner.appendChild(pill);
+        setTimeout(() => { try { if (window.lucide && window.lucide.createIcons) lucide.createIcons({ nodes: [pill] }); } catch (_) {} }, 0);
+      }
       const ts = _n(p.titleSize, 10, 200);
       // Style-panel text group is the shared base; the dedicated per-part fills
       // (props.titleColor / props.subColor — color OR gradient) are appended
@@ -296,12 +508,24 @@ const PageRenderer = (() => {
       const gp = _n(p.gap, 0, 60);
       const h = _n(p.height, 40, 1000) || 160;
       const r = _n(st.radius, 0, 300);
+      const radiusCss = r != null ? r + 'px' : 'var(--radius-md,10px)';
       const grid = _el('div', `display:grid;grid-template-columns:${cols ? `repeat(${cols},1fr)` : 'repeat(auto-fill,minmax(160px,1fr))'};gap:${gp != null ? gp : 12}px`);
       (Array.isArray(p.images) ? p.images : []).forEach((im) => {
         const img = document.createElement('img');
         img.src = im.src || ''; img.alt = _lv(im.alt) || ''; img.loading = 'lazy';
-        img.style.cssText = `width:100%;height:${h}px;object-fit:cover;border-radius:${r != null ? r + 'px' : 'var(--radius-md,10px)'}`;
-        grid.appendChild(img);
+        const needWrap = !!(p.zoom || p.captions);
+        if (p.zoom) {
+          img.className = 'pr-gal-img';
+          img.style.cssText = `width:100%;height:${h}px;object-fit:cover;display:block`;
+        } else {
+          img.style.cssText = `width:100%;height:${h}px;object-fit:cover;border-radius:${radiusCss}`;
+        }
+        if (!needWrap) { grid.appendChild(img); return; }
+        const cell = _el('div', p.zoom ? `overflow:hidden;border-radius:${radiusCss}` : '');
+        if (p.zoom) cell.className = 'pr-hov-parent';
+        cell.appendChild(img);
+        if (p.captions) cell.appendChild(_el('div', 'font-size:.78rem;opacity:.6;margin-top:4px', _lv(im.alt)));
+        grid.appendChild(cell);
       });
       return grid;
     },
@@ -329,13 +553,16 @@ const PageRenderer = (() => {
       let stats0 = null;
       try { if (typeof Catalog !== 'undefined' && Catalog.getStats) stats0 = Catalog.getStats(); } catch (_) {}
       const vs = _n(p.valueSize, 10, 120);
+      const padPx = _n(p.pad, 0, 120);
+      const radiusPx = _n(p.radius, 0, 300);
+      const borderCss = p.borderColor ? `border:1px solid ${_sanitizeCss(p.borderColor)};` : '';
       (Array.isArray(p.stats) ? p.stats : []).forEach((st0) => {
         // Per-stat colors override the widget-wide defaults (bg / valueColor /
         // labelColor on the item), each accepting a color OR a gradient.
         const cardBg = st0.bg || p.cardBg;
         const vFill = st0.valueColor || p.valueColor;
         const lFill = st0.labelColor || p.labelColor;
-        const card = _el('div', `padding:20px;background:${cardBg ? _sanitizeCss(cardBg) : 'var(--bg-surface,#161622)'};border-radius:var(--radius-md,10px)`);
+        const card = _el('div', `padding:${padPx != null ? padPx : 20}px;background:${cardBg ? _sanitizeCss(cardBg) : 'var(--bg-surface,#161622)'};border-radius:${radiusPx != null ? radiusPx + 'px' : 'var(--radius-md,10px)'};${borderCss}`);
         let value = st0.value;
         if (SRC[st0.source]) value = stats0 ? (stats0[SRC[st0.source]] ?? 0) : (value || 0);
         card.appendChild(_el('div', `font-size:${vs ? vs + 'px' : 'var(--text-3xl,2.5rem)'};font-weight:700;` +
@@ -367,11 +594,17 @@ const PageRenderer = (() => {
       }
       const th = _n(p.thumbHeight, 60, 320) || 120;
       const showMeta = p.showMeta !== false;
+      const cardBg = p.cardBg ? _sanitizeCss(p.cardBg) : 'var(--bg-surface,#161622)';
+      const borderColor = p.borderColor ? _sanitizeCss(p.borderColor) : 'var(--border-subtle,#2a2a3a)';
+      const radiusN = _n(p.radius, 0, 300);
+      const radiusCss = radiusN != null ? radiusN + 'px' : 'var(--radius-md,10px)';
+      const titleColorCss = p.titleColor ? `;color:${_sanitizeCss(p.titleColor)}` : '';
       let needIcons = false;
       list.forEach((ds) => {
         const a = document.createElement('a');
         a.href = `viewer.html?id=${encodeURIComponent(ds.id)}`;
-        a.style.cssText = 'display:block;overflow:hidden;background:var(--bg-surface,#161622);border-radius:var(--radius-md,10px);text-decoration:none;color:inherit;border:1px solid var(--border-subtle,#2a2a3a)';
+        a.style.cssText = `display:block;overflow:hidden;background:${cardBg};border-radius:${radiusCss};text-decoration:none;color:inherit;border:1px solid ${borderColor}`;
+        if (p.hover) a.classList.add('pr-hov-lift');
         const thumb = _el('div', `height:${th}px;display:flex;align-items:center;justify-content:center;background:color-mix(in srgb, var(--color-primary,#00A654) 7%, transparent)`);
         if (ds.thumbnail) {
           const img = document.createElement('img');
@@ -387,7 +620,7 @@ const PageRenderer = (() => {
         }
         a.appendChild(thumb);
         const body = _el('div', 'padding:12px 14px');
-        body.appendChild(_el('div', 'font-weight:600;line-height:1.35', ds.name || ds.id));
+        body.appendChild(_el('div', 'font-weight:600;line-height:1.35' + titleColorCss, ds.name || ds.id));
         if (showMeta) {
           const meta = _el('div', 'display:flex;gap:10px;align-items:baseline;margin-top:5px;font-size:var(--text-sm,.8rem)');
           if (ds.type) meta.appendChild(_el('span', 'color:var(--color-primary,#00A654);font-weight:600;text-transform:uppercase;font-size:.7rem;letter-spacing:.05em', ds.type));
@@ -406,28 +639,42 @@ const PageRenderer = (() => {
     'feature-card'(b) {
       const p = b.props || {};
       const align = ALIGN(p.align || 'left');
-      const card = _el('div', `padding:26px;background:var(--bg-surface,#161622);border-radius:var(--radius-md,12px);text-align:${align};height:100%;box-sizing:border-box`);
-      const iconName = String(p.icon || '').replace(/[^a-z0-9-]/gi, '').slice(0, 60);
-      if (iconName) {
-        const isz = _n(p.iconSize, 12, 120) || 34;
-        const badge = _el('div', `display:inline-flex;align-items:center;justify-content:center;width:${isz + 26}px;height:${isz + 26}px;margin-bottom:14px;` +
-          `border-radius:${p.iconShape === 'square' ? '12px' : '50%'};` +
-          `background:${p.iconBg ? _sanitizeCss(p.iconBg) : 'color-mix(in srgb, var(--color-primary,#00A654) 14%, transparent)'};`);
-        const i = document.createElement('i');
-        i.setAttribute('data-lucide', iconName);
-        i.style.cssText = `width:${isz}px;height:${isz}px;color:${p.iconColor ? _sanitizeCss(p.iconColor) : 'var(--color-primary,#00A654)'}`;
-        badge.appendChild(i);
-        card.appendChild(badge);
-        setTimeout(() => { try { if (window.lucide && window.lucide.createIcons) lucide.createIcons({ nodes: [card] }); } catch (_) {} }, 0);
-      }
-      if (_lv(b.text)) card.appendChild(_el('h3', 'margin:0 0 8px;font-size:1.15rem;line-height:1.3;color:inherit', _lv(b.text)));
-      if (_lv(p.desc)) card.appendChild(_el('p', 'margin:0;opacity:.75;line-height:1.65;white-space:pre-wrap', _lv(p.desc)));
+      const layout = p.layout === 'h' ? 'h' : 'v';
+      // Whole-card link (v1.18.0): the card itself becomes an <a> when a valid
+      // href is supplied; falls back to a plain <div> otherwise (unchanged).
+      const href = p.href ? _safeHref(p.href) : '';
+      const card = href ? document.createElement('a') : document.createElement('div');
+      card.style.cssText = `padding:26px;background:var(--bg-surface,#161622);border-radius:var(--radius-md,12px);text-align:${align};height:100%;box-sizing:border-box` +
+        (href ? ';display:block;color:inherit;text-decoration:none' : '') +
+        (layout === 'h' ? ';display:flex;align-items:flex-start;gap:18px' : '');
+      if (href) card.href = href;
+
+      const mediaNode = _featureMedia(p, layout === 'h');
+      if (mediaNode) setTimeout(() => { try { if (window.lucide && window.lucide.createIcons) lucide.createIcons({ nodes: [card] }); } catch (_) {} }, 0);
+
+      const textCol = layout === 'h' ? _el('div', 'flex:1 1 auto;min-width:0;text-align:' + align) : null;
+      const target = textCol || card;
+
+      const titleSize = _n(p.titleSize, 10, 60);
+      if (_lv(b.text)) target.appendChild(_el('h3', `margin:0 0 8px;font-size:${titleSize != null ? titleSize + 'px' : '1.15rem'};line-height:1.3;` +
+        (p.titleColor ? `color:${_sanitizeCss(p.titleColor)}` : 'color:inherit'), _lv(b.text)));
+      if (_lv(p.desc)) target.appendChild(_el('p', 'margin:0;opacity:.75;line-height:1.65;white-space:pre-wrap' +
+        (p.descColor ? `;color:${_sanitizeCss(p.descColor)}` : ''), _lv(p.desc)));
       if (p.link && _lv(p.link.text)) {
         const a = document.createElement('a');
         a.href = p.link.href || '#';
-        a.style.cssText = 'display:inline-flex;align-items:center;gap:6px;margin-top:14px;color:var(--color-primary,#00A654);text-decoration:none;font-weight:600;font-size:.92rem';
-        a.textContent = _lv(p.link.text) + ' →';
-        card.appendChild(a);
+        a.style.cssText = `display:inline-flex;align-items:center;gap:6px;margin-top:14px;color:${p.linkColor ? _sanitizeCss(p.linkColor) : 'var(--color-primary,#00A654)'};text-decoration:none;font-weight:600;font-size:.92rem`;
+        a.textContent = _lv(p.link.text) + (p.linkArrow === false ? '' : ' →');
+        target.appendChild(a);
+      }
+
+      if (layout === 'h') {
+        if (mediaNode) card.appendChild(mediaNode);
+        card.appendChild(textCol);
+      } else if (mediaNode) {
+        // Inserted first so a stored-without-media legacy card (mediaNode===null)
+        // keeps appending h3/p/link directly to `card` in the exact original order.
+        card.insertBefore(mediaNode, card.firstChild);
       }
       return card;
     },
@@ -439,6 +686,7 @@ const PageRenderer = (() => {
         variant === 'card' ? 'margin:0;position:relative;background:var(--bg-surface,#161622);border-radius:var(--radius-md,12px);padding:28px 28px 24px'
         : variant === 'big' ? 'margin:0;text-align:center;padding:8px 0'
         : `margin:0;border-left:4px solid ${accent};padding:6px 0 6px 20px`);
+      if (_lv(p.label)) root.appendChild(_el('div', `font-size:.76rem;text-transform:uppercase;letter-spacing:.1em;font-weight:600;color:${accent};margin-bottom:7px`, _lv(p.label)));
       if (variant === 'card') root.appendChild(_el('div', `position:absolute;top:6px;left:16px;font-size:64px;line-height:1;font-family:Georgia,serif;color:${accent};opacity:.28;pointer-events:none`, '“'));
       if (variant === 'big') root.appendChild(_el('div', `font-size:56px;line-height:.9;font-family:Georgia,serif;color:${accent}`, '“'));
       const q = _el('blockquote', `margin:0;font-style:italic;line-height:1.7;white-space:pre-wrap;` +
@@ -459,6 +707,14 @@ const PageRenderer = (() => {
         cap.appendChild(who);
         root.appendChild(cap);
       }
+      if (p.link && _lv(p.link.text)) {
+        const href = _safeHref(p.link.href);
+        const linkEl = href ? document.createElement('a') : document.createElement('span');
+        if (href) linkEl.href = href;
+        linkEl.textContent = _lv(p.link.text);
+        linkEl.style.cssText = `display:block;margin-top:10px;font-family:var(--font-mono,monospace);font-size:.78rem;color:${accent}`;
+        root.appendChild(linkEl);
+      }
       return root;
     },
     accordion(b) {
@@ -468,12 +724,14 @@ const PageRenderer = (() => {
       // items simply stay independently openable (graceful degradation).
       const group = p.single ? 'acc-' + String(b.id || Math.random().toString(36).slice(2, 8)).replace(/[^a-z0-9_-]/gi, '') : null;
       const accent = p.iconColor ? _sanitizeCss(p.iconColor) : 'var(--color-primary,#00A654)';
+      const itemBg = p.itemBg ? _sanitizeCss(p.itemBg) : 'var(--bg-surface,#161622)';
+      const borderColor = p.borderColor ? _sanitizeCss(p.borderColor) : 'var(--border-subtle,#2a2a3a)';
       const wrap = _el('div', 'display:flex;flex-direction:column;gap:10px');
       items.forEach((it, idx) => {
         const d = document.createElement('details');
         if (group) d.setAttribute('name', group);
         if (p.firstOpen && idx === 0) d.open = true;
-        d.style.cssText = 'background:var(--bg-surface,#161622);border:1px solid var(--border-subtle,#2a2a3a);border-radius:10px;overflow:hidden';
+        d.style.cssText = `background:${itemBg};border:1px solid ${borderColor};border-radius:10px;overflow:hidden`;
         const s = document.createElement('summary');
         s.style.cssText = 'display:flex;align-items:center;justify-content:space-between;gap:12px;padding:14px 18px;cursor:pointer;font-weight:600;list-style:none;user-select:none';
         s.appendChild(_el('span', 'flex:1', _lv(it.q)));
@@ -519,13 +777,211 @@ const PageRenderer = (() => {
       if (_lv(b.text)) txt.appendChild(_el('h3', 'margin:0 0 6px;font-size:1.45rem;line-height:1.25;color:inherit', _lv(b.text)));
       if (_lv(p.subtitle)) txt.appendChild(_el('p', 'margin:0;opacity:.85;line-height:1.55', _lv(p.subtitle)));
       root.appendChild(txt);
-      if (p.cta && _lv(p.cta.text)) {
+      const mkCta = (cta, ghost) => {
         const a = document.createElement('a');
-        a.href = p.cta.href || '#';
-        a.style.cssText = 'flex:0 0 auto;display:inline-block;padding:12px 24px;border-radius:10px;background:#fff;color:#14141f;font-weight:700;text-decoration:none;white-space:nowrap;box-shadow:0 4px 14px rgba(0,0,0,.22)';
-        a.textContent = _lv(p.cta.text);
-        root.appendChild(a);
+        a.href = cta.href || '#';
+        a.style.cssText = ghost
+          ? 'flex:0 0 auto;display:inline-block;padding:12px 24px;border-radius:10px;background:transparent;border:1px solid rgba(255,255,255,.5);color:#fff;font-weight:700;text-decoration:none;white-space:nowrap'
+          : 'flex:0 0 auto;display:inline-block;padding:12px 24px;border-radius:10px;background:#fff;color:#14141f;font-weight:700;text-decoration:none;white-space:nowrap;box-shadow:0 4px 14px rgba(0,0,0,.22)';
+        a.textContent = _lv(cta.text);
+        return a;
+      };
+      const hasCta1 = p.cta && _lv(p.cta.text);
+      const hasCta2 = p.cta2 && _lv(p.cta2.text);
+      if (hasCta1 && hasCta2) {
+        // Two buttons: group them so they wrap/center together.
+        const row = _el('div', 'flex:0 0 auto;display:flex;gap:12px;flex-wrap:wrap;' + (centered ? 'justify-content:center;' : ''));
+        row.appendChild(mkCta(p.cta, false));
+        row.appendChild(mkCta(p.cta2, true));
+        root.appendChild(row);
+      } else if (hasCta1) {
+        // Legacy single-CTA shape: appended directly to root, unchanged.
+        root.appendChild(mkCta(p.cta, false));
+      } else if (hasCta2) {
+        root.appendChild(mkCta(p.cta2, true));
       }
+      return root;
+    },
+    badge(b) {
+      const p = b.props || {};
+      const align = ALIGN(p.align);
+      const items = Array.isArray(p.items) ? p.items : [];
+      const pillBg = p.pillBg ? _sanitizeCss(p.pillBg) : 'color-mix(in srgb, var(--bg-base,#0d0d1a) 65%, transparent)';
+      const pillColor = p.pillColor ? _sanitizeCss(p.pillColor) : 'var(--text-secondary,#b8b8c8)';
+      const borderColor = p.borderColor ? _sanitizeCss(p.borderColor) : 'var(--border-default,#3a3a4a)';
+      const size = _n(p.size, 8, 60) || 12.5;
+      const gap = _n(p.gap, 0, 60);
+      const gp = gap != null ? gap : 8;
+      const mono = !!p.mono;
+      const dot = p.dot !== false;
+      const wrap = _el('div', `display:flex;flex-wrap:wrap;gap:${gp}px;justify-content:${align === 'center' ? 'center' : align === 'right' ? 'flex-end' : 'flex-start'}`);
+      let needIcons = false;
+      items.forEach((it) => {
+        const pill = _el('span', `display:inline-flex;align-items:center;gap:7px;padding:5px 13px;border-radius:999px;border:1px solid ${borderColor};background:${pillBg};color:${pillColor};font-size:${size}px;` +
+          (mono ? 'font-family:var(--font-mono,monospace);' : ''));
+        const iconName = String(it.icon || '').replace(/[^a-z0-9-]/gi, '').slice(0, 60);
+        if (iconName) {
+          const i = document.createElement('i');
+          i.setAttribute('data-lucide', iconName);
+          i.style.cssText = `width:14px;height:14px;color:${pillColor};flex:0 0 auto`;
+          pill.appendChild(i);
+          needIcons = true;
+        } else if (dot) {
+          pill.appendChild(_el('span', 'width:7px;height:7px;border-radius:50%;flex:0 0 auto;background:linear-gradient(135deg, var(--color-primary,#00A654), var(--color-accent,#00D2FF))'));
+        }
+        pill.appendChild(_el('span', '', _lv(it.text)));
+        wrap.appendChild(pill);
+      });
+      if (needIcons) setTimeout(() => { try { if (window.lucide && window.lucide.createIcons) lucide.createIcons({ nodes: [wrap] }); } catch (_) {} }, 0);
+      return wrap;
+    },
+    'icon-list'(b) {
+      const p = b.props || {};
+      const items = Array.isArray(p.items) ? p.items : [];
+      const layout = p.layout === 'h' ? 'h' : 'v';
+      const iconColor = p.iconColor ? _sanitizeCss(p.iconColor) : 'var(--color-accent,#00D2FF)';
+      const iconSize = _n(p.iconSize, 8, 80) || 18;
+      const gap = _n(p.gap, 0, 80);
+      const gp = gap != null ? gap : 12;
+      const textSize = _n(p.textSize, 8, 60);
+      const wrap = _el('div', `display:flex;${layout === 'h' ? 'flex-direction:row;flex-wrap:wrap;' : 'flex-direction:column;'}gap:${gp}px`);
+      let needIcons = false;
+      items.forEach((it) => {
+        const row = _el('div', `display:flex;align-items:center;gap:10px${textSize != null ? `;font-size:${textSize}px` : ''}`);
+        const iconName = String(it.icon || 'check').replace(/[^a-z0-9-]/gi, '').slice(0, 60) || 'check';
+        const ic = document.createElement('i');
+        ic.setAttribute('data-lucide', iconName);
+        ic.style.cssText = `width:${iconSize}px;height:${iconSize}px;flex:0 0 auto;color:${iconColor}`;
+        row.appendChild(ic);
+        needIcons = true;
+        // mailto: is a normal safe scheme; only javascript:/vbscript:/data: are refused.
+        const href = it.href ? _safeHref(it.href) : '';
+        if (href) {
+          const a = document.createElement('a');
+          a.href = href; a.textContent = _lv(it.text);
+          a.style.cssText = 'color:var(--color-accent,#00D2FF);text-decoration:none';
+          row.appendChild(a);
+        } else {
+          row.appendChild(_el('span', '', _lv(it.text)));
+        }
+        wrap.appendChild(row);
+      });
+      if (needIcons) setTimeout(() => { try { if (window.lucide && window.lucide.createIcons) lucide.createIcons({ nodes: [wrap] }); } catch (_) {} }, 0);
+      return wrap;
+    },
+    profile(b) {
+      const p = b.props || {};
+      const layout = p.layout === 'v' ? 'v' : 'h';
+      const mediaKind = ['monogram', 'image', 'icon', 'none'].includes(p.mediaKind) ? p.mediaKind : 'monogram';
+      const mediaSize = _n(p.mediaSize, 24, 300) || 64;
+      const mediaRadiusN = _n(p.mediaRadius, 0, 300);
+      const mediaRadiusCss = mediaRadiusN != null ? mediaRadiusN + 'px' : '18px';
+      const mediaBg = p.mediaBg ? _sanitizeCss(p.mediaBg) : 'linear-gradient(135deg, var(--color-primary,#00A654), var(--color-accent,#00D2FF))';
+      const mediaColor = p.mediaColor ? _sanitizeCss(p.mediaColor) : '#fff';
+      const roleColor = p.roleColor ? _sanitizeCss(p.roleColor) : 'var(--color-accent,#00D2FF)';
+      const nameSize = _n(p.nameSize, 10, 80) || 22;
+      const glowMedia = p.glowMedia !== false;
+
+      const root = _el('div', layout === 'v' ? 'text-align:center' : '');
+      const header = _el('div', layout === 'v' ? 'display:flex;flex-direction:column;align-items:center' : 'display:flex;align-items:center;gap:16px');
+
+      let mediaNode = null;
+      if (mediaKind === 'monogram') {
+        mediaNode = _el('div', `width:${mediaSize}px;height:${mediaSize}px;border-radius:${mediaRadiusCss};display:flex;align-items:center;justify-content:center;flex:0 0 auto;font-weight:700;font-size:${mediaSize * 0.33}px;letter-spacing:.04em;background:${mediaBg};color:${mediaColor}`,
+          String(p.monogram || 'AB').slice(0, 4));
+      } else if (mediaKind === 'image' && p.img) {
+        const img = document.createElement('img');
+        img.src = p.img; img.alt = _lv(p.name) || ''; img.loading = 'lazy';
+        img.style.cssText = `width:${mediaSize}px;height:${mediaSize}px;border-radius:${mediaRadiusCss};object-fit:cover;flex:0 0 auto;display:block`;
+        mediaNode = img;
+      } else if (mediaKind === 'icon') {
+        const iconName = String(p.icon || 'user').replace(/[^a-z0-9-]/gi, '').slice(0, 60) || 'user';
+        const box = _el('div', `width:${mediaSize}px;height:${mediaSize}px;border-radius:${mediaRadiusCss};display:flex;align-items:center;justify-content:center;flex:0 0 auto;background:${mediaBg};color:${mediaColor}`);
+        const ic = document.createElement('i');
+        ic.setAttribute('data-lucide', iconName);
+        const iconPx = Math.round(mediaSize * 0.55);
+        ic.style.cssText = `width:${iconPx}px;height:${iconPx}px`;
+        box.appendChild(ic);
+        mediaNode = box;
+        setTimeout(() => { try { if (window.lucide && window.lucide.createIcons) lucide.createIcons({ nodes: [box] }); } catch (_) {} }, 0);
+      }
+      if (mediaNode) {
+        if (glowMedia) mediaNode.style.cssText += ';box-shadow:0 8px 24px color-mix(in srgb, var(--color-primary,#00A654) 35%, transparent)';
+        if (layout === 'v') mediaNode.style.cssText += ';margin:0 auto 12px';
+        header.appendChild(mediaNode);
+      }
+
+      const idBlock = _el('div', '');
+      if (_lv(p.name)) idBlock.appendChild(_el('div', `font-size:${nameSize}px;font-weight:700;line-height:1.1`, _lv(p.name)));
+      if (_lv(p.role)) idBlock.appendChild(_el('div', `margin-top:5px;font-size:.72rem;font-weight:600;text-transform:uppercase;letter-spacing:.12em;color:${roleColor}`, _lv(p.role)));
+      header.appendChild(idBlock);
+
+      root.appendChild(header);
+      if (_lv(p.desc)) root.appendChild(_el('p', 'margin-top:10px;opacity:.75;line-height:1.6;white-space:pre-wrap', _lv(p.desc)));
+      return root;
+    },
+    'cite-block'(b) {
+      const p = b.props || {};
+      const mono = p.mono !== false;
+      const showCopy = p.copy !== false;
+      const root = _el('div', 'border:1px solid var(--border-subtle,#2a2a3a);border-radius:18px;background:var(--bg-surface,#161622);overflow:hidden');
+      const header = _el('div', 'display:flex;align-items:center;justify-content:space-between;gap:10px;padding:14px 18px;border-bottom:1px solid var(--border-subtle,#2a2a3a)');
+      if (_lv(p.title)) header.appendChild(_el('h3', 'font-size:.95rem;margin:0', _lv(p.title)));
+      let copyBtn = null, copyLabelEl = null;
+      if (showCopy) {
+        copyBtn = document.createElement('button');
+        copyBtn.type = 'button';
+        copyBtn.style.cssText = 'display:inline-flex;align-items:center;gap:6px;height:30px;padding:0 12px;font-size:.75rem;font-weight:600;background:var(--bg-base,#0d0d1a);border:1px solid var(--border-default,#3a3a4a);border-radius:8px;cursor:pointer;color:var(--text-secondary,#b8b8c8)';
+        const ic = document.createElement('i');
+        ic.setAttribute('data-lucide', 'copy');
+        ic.style.cssText = 'width:14px;height:14px';
+        copyLabelEl = document.createElement('span');
+        let copyLabel = 'Copier';
+        try { if (typeof I18n !== 'undefined' && I18n.t) { const s = I18n.t('pages.w.copy'); if (s && s !== 'pages.w.copy') copyLabel = s; } } catch (_) {}
+        copyLabelEl.textContent = copyLabel;
+        copyBtn.appendChild(ic); copyBtn.appendChild(copyLabelEl);
+        header.appendChild(copyBtn);
+      }
+      root.appendChild(header);
+
+      const body = _el('div', 'padding:18px');
+      body.appendChild(_el('p', `margin:0;font-size:.82rem;line-height:1.7;color:var(--text-secondary,#b8b8c8);white-space:pre-wrap;word-break:break-word;${mono ? 'font-family:var(--font-mono,monospace)' : ''}`, _lv(p.text)));
+
+      if (copyBtn) {
+        // Clipboard access can be denied inside the editor iframe — fail silent.
+        copyBtn.addEventListener('click', () => {
+          try {
+            navigator.clipboard.writeText(_lv(p.text)).then(() => {
+              const prev = copyLabelEl.textContent;
+              let copiedLabel = 'Copié ✓';
+              try { if (typeof I18n !== 'undefined' && I18n.t) { const s = I18n.t('pages.w.copied'); if (s && s !== 'pages.w.copied') copiedLabel = s; } } catch (_) {}
+              copyLabelEl.textContent = copiedLabel;
+              setTimeout(() => { copyLabelEl.textContent = prev; }, 1600);
+            }).catch(() => {});
+          } catch (_) {}
+        });
+      }
+
+      if (_lv(p.extra)) {
+        const toggle = document.createElement('button');
+        toggle.type = 'button';
+        toggle.style.cssText = 'background:none;border:none;font-family:var(--font-mono,monospace);font-size:.75rem;color:var(--text-muted,#8a8a9a);cursor:pointer;margin-top:10px;display:inline-flex;align-items:center;gap:6px;padding:0';
+        const ic2 = document.createElement('i');
+        ic2.setAttribute('data-lucide', 'braces');
+        ic2.style.cssText = 'width:13px;height:13px';
+        const toggleLabelEl = document.createElement('span');
+        toggleLabelEl.textContent = _lv(p.extraLabel) || 'BibTeX';
+        toggle.appendChild(ic2); toggle.appendChild(toggleLabelEl);
+        const pre = document.createElement('pre');
+        pre.style.cssText = 'display:none;margin-top:10px;padding:14px;border:1px solid var(--border-subtle,#2a2a3a);border-radius:12px;background:var(--bg-base,#0d0d1a);font-family:var(--font-mono,monospace);font-size:.75rem;overflow-x:auto';
+        pre.textContent = _lv(p.extra);
+        toggle.addEventListener('click', () => { pre.style.display = pre.style.display === 'none' ? 'block' : 'none'; });
+        body.appendChild(toggle);
+        body.appendChild(pre);
+      }
+
+      root.appendChild(body);
+      setTimeout(() => { try { if (window.lucide && window.lucide.createIcons) lucide.createIcons({ nodes: [root] }); } catch (_) {} }, 0);
       return root;
     },
   };
@@ -554,6 +1010,10 @@ const PageRenderer = (() => {
           node.style.cssText += ';' + _gradFitCss(ALIGN(st.align || (w.props && w.props.align) || 'left'));
         }
       }
+      // Hover/hide classes + --pr-glow apply to the widget ROOT regardless of
+      // SELF_STYLED (they're a visual affordance on the whole widget box, not
+      // part of the text/surface/spacing/size groups).
+      if (st) applyStyleExtras(node, st);
       const box = _el('div', 'margin:0 0 10px');
       box.appendChild(node);
       return box;
@@ -617,6 +1077,7 @@ const PageRenderer = (() => {
 
   function renderColumn(col, gap, n) {
     const el = _el('div', columnCss(col, gap, n));
+    applyStyleExtras(el, (col && col.props || {}).style);
     const widgets = Array.isArray(col && col.widgets) ? col.widgets : [];
     widgets.forEach((w) => { const node = renderWidget(w); if (node) el.appendChild(node); });
     if (!widgets.length) el.appendChild(_el('div', 'min-height:1px'));
@@ -627,6 +1088,7 @@ const PageRenderer = (() => {
     const p = (sec && sec.props) || {};
     const c = sectionCss(p);
     const outer = _el('section', c.outer);
+    applyStyleExtras(outer, p.style);
     const ov = overlayNode(p.style); if (ov) outer.appendChild(ov);
     const inner = _el('div', c.inner);
     const row = _el('div', c.row + `;column-gap:${c.gap}px`);
@@ -674,7 +1136,7 @@ const PageRenderer = (() => {
 
   return {
     render, renderSource, renderWidget, renderSection,
-    styleCss, sectionCss, columnCss, overlayNode,
+    styleCss, sectionCss, columnCss, overlayNode, styleClasses, applyStyleExtras,
     fetchSource, fetchBlocks, normalize: _normalize, lv: _lv,
     WIDGET_TYPES, BLOCK_TYPES: WIDGET_TYPES,
   };

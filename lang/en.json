@@ -948,7 +948,11 @@
       "quote": "Quote",
       "accordion": "Accordion / FAQ",
       "timeline": "Timeline",
-      "cta-banner": "Call-to-action"
+      "cta-banner": "Call-to-action",
+      "badge": "Badges",
+      "icon-list": "Icon list",
+      "profile": "Profile",
+      "cite-block": "Copyable citation"
     },
     "addColumn": "Add a column",
     "addSection": "Add a section",
@@ -1056,7 +1060,26 @@
       "marginTop": "Margin top",
       "marginBottom": "Margin bottom",
       "maxWidth": "Max width",
-      "minHeight": "Min height"
+      "minHeight": "Min height",
+      "hover": "Hover effect",
+      "hovNone": "None",
+      "hovLift": "Lift",
+      "hovGlow": "Glow",
+      "hovZoom": "Zoom",
+      "shadowColor": "Shadow color",
+      "shadowGlow": "Glow",
+      "hideMobile": "Hide on mobile",
+      "hideDesktop": "Hide on desktop",
+      "customCss": "Inline CSS",
+      "customCssHint": "CSS declarations applied directly to the element.",
+      "padding": "Padding",
+      "margin": "Margin",
+      "linked": "Link sides",
+      "top": "Top",
+      "right": "Right",
+      "bottom": "Bottom",
+      "left": "Left",
+      "unlinked": "Independent sides"
     },
     "noDatasetsYet": "No datasets to show yet.",
     "colsAuto": "Columns (auto if empty)",
@@ -1074,7 +1097,26 @@
       "iconShape": "Shape",
       "round": "Round",
       "square": "Square",
-      "linkText": "Link (label)"
+      "linkText": "Link (label)",
+      "media": "Media",
+      "mediaIcon": "Icon",
+      "mediaImage": "Image",
+      "mediaMono": "Monogram",
+      "mediaNone": "None",
+      "img": "Image (URL)",
+      "imgH": "Image height",
+      "plateBg": "Plate background",
+      "monogram": "Monogram",
+      "monoBg": "Monogram background",
+      "monoColor": "Monogram color",
+      "layoutH": "Horizontal",
+      "layoutV": "Vertical",
+      "titleColor": "Title color",
+      "titleSize": "Title size",
+      "descColor": "Text color",
+      "linkColor": "Link color",
+      "linkArrow": "Link arrow",
+      "cardHref": "Card link"
     },
     "qt": {
       "text": "Quote",
@@ -1083,7 +1125,10 @@
       "avatar": "Photo (URL, optional)",
       "bar": "Bar",
       "card": "Card",
-      "accent": "Accent color"
+      "accent": "Accent color",
+      "label": "Label (eyebrow)",
+      "linkText": "Link (label)",
+      "linkHref": "Link (URL)"
     },
     "ac": {
       "items": "Questions / sections",
@@ -1092,7 +1137,9 @@
       "add": "Add a question",
       "single": "Only one open at a time",
       "firstOpen": "First one open by default",
-      "chevron": "Chevron color"
+      "chevron": "Chevron color",
+      "itemBg": "Item background",
+      "border": "Border"
     },
     "tl": {
       "items": "Steps",
@@ -1142,7 +1189,9 @@
       "colorSurface": "Surface / card",
       "colorText": "Text",
       "colorTextMuted": "Muted text",
-      "colorBorder": "Border"
+      "colorBorder": "Border",
+      "recent": "Recent",
+      "noIcon": "None"
     },
     "titleColor": "Title color",
     "subColor": "Subtitle color",
@@ -1210,7 +1259,116 @@
       "frequency": "Frequency",
       "depth": "Depth",
       "thickness": "Thickness"
-    }
+    },
+    "tab": {
+      "content": "Content",
+      "style": "Style",
+      "advanced": "Advanced"
+    },
+    "grp": {
+      "text": "Text",
+      "surface": "Background & border",
+      "spacing": "Spacing",
+      "size": "Size",
+      "effects": "Effects",
+      "visibility": "Visibility",
+      "customCss": "Custom CSS",
+      "content": "Content",
+      "media": "Media",
+      "colors": "Colors",
+      "layout": "Layout",
+      "items": "Items",
+      "links": "Links",
+      "buttons": "Buttons",
+      "icon": "Icon",
+      "badge": "Badge",
+      "glow": "Decorative glow",
+      "format": "Formatting"
+    },
+    "w": {
+      "copy": "Copy",
+      "copied": "Copied ✓"
+    },
+    "bd": {
+      "items": "Badges",
+      "dot": "Colored dot",
+      "mono": "Monospace font",
+      "size": "Text size",
+      "gap": "Spacing",
+      "pillBg": "Badge background",
+      "pillColor": "Badge text",
+      "border": "Border",
+      "addItem": "Add a badge"
+    },
+    "il": {
+      "items": "Items",
+      "layout": "Layout",
+      "v": "Vertical",
+      "h": "Horizontal",
+      "iconColor": "Icon color",
+      "iconSize": "Icon size",
+      "gap": "Spacing",
+      "addItem": "Add an item"
+    },
+    "pf": {
+      "name": "Name",
+      "role": "Role",
+      "desc": "Description",
+      "mediaKind": "Media",
+      "monogram": "Monogram",
+      "image": "Image (URL)",
+      "mediaSize": "Media size",
+      "mediaRadius": "Media corner radius",
+      "mediaBg": "Media background",
+      "mediaColor": "Media color",
+      "glow": "Glow shadow",
+      "roleColor": "Role color",
+      "nameSize": "Name size"
+    },
+    "cb": {
+      "title": "Title",
+      "text": "Citation text",
+      "extraLabel": "Collapsible block label",
+      "extra": "Collapsible content (BibTeX…)",
+      "mono": "Monospace font",
+      "copyBtn": "Copy button"
+    },
+    "hero": {
+      "badgeText": "Badge text",
+      "badgeIcon": "Badge icon",
+      "badgeDot": "Dot",
+      "badgeColor": "Badge color",
+      "glow": "Decorative glow",
+      "glowC1": "Glow color 1",
+      "glowC2": "Glow color 2"
+    },
+    "btn": {
+      "icon": "Icon",
+      "iconPos": "Icon position",
+      "iconLeft": "Left",
+      "iconRight": "Right",
+      "size": "Size",
+      "outline": "Outline"
+    },
+    "gal": {
+      "captions": "Captions",
+      "zoom": "Zoom on hover"
+    },
+    "sg": {
+      "border": "Card border",
+      "radius": "Card corner radius",
+      "pad": "Card padding"
+    },
+    "ld": {
+      "cardBg": "Card background",
+      "border": "Card border",
+      "radius": "Corner radius",
+      "titleColor": "Title color",
+      "hover": "Lift on hover"
+    },
+    "richtextHint": "**bold**, *italic*, [link](url)",
+    "imgCaption": "Caption",
+    "markup": "Rich formatting"
   },
   "wizard": {
     "title": "Guided setup",

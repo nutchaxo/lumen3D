@@ -139,6 +139,7 @@ const PageEditFrame = (() => {
     outer.dataset.ebSi = si;
     outer.style.cssText = css.outer +
       `;outline:2px solid ${selected ? PRIMARY : 'transparent'};outline-offset:-2px;transition:outline-color .12s`;
+    PageRenderer.applyStyleExtras(outer, p.style);
     const ov = PageRenderer.overlayNode(p.style);
     if (ov) outer.appendChild(ov);
 
@@ -233,6 +234,7 @@ const PageEditFrame = (() => {
     // first so a column style radius (in columnCss) overrides it.
     c.style.cssText = 'position:relative;border-radius:8px;' + PageRenderer.columnCss(col, gap, sec.columns.length) +
       `;outline:1px dashed ${selected ? PRIMARY : 'transparent'};outline-offset:-1px;transition:outline-color .12s`;
+    PageRenderer.applyStyleExtras(c, (col.props || {}).style);
     c.addEventListener('mouseenter', () => { if (!selected) c.style.outlineColor = 'var(--border-subtle,#2a2a3a)'; });
     c.addEventListener('mouseleave', () => { if (!selected) c.style.outlineColor = 'transparent'; });
     c.addEventListener('click', (e) => { e.stopPropagation(); _select({ si, ci, wi: null }); });

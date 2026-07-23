@@ -51,6 +51,7 @@ let _editLoc = 'en';
 let _dirty = false;
 let _mode = 'launcher';             // 'launcher' | 'editor'
 let _side = 'elements';             // editor sidebar: 'elements' | 'settings'
+let _previewDevice = 'desktop';     // editor canvas width: 'desktop' | 'tablet' | 'mobile'
 let _settingsTab = 'content';       // settings-panel mode tab: 'content' | 'style' | 'advanced' — persists across selections
 let _bound = false;                 // window 'message' listener installed once
 let _editorOnly = false;            // dedicated editor tab (admpan.html?editor=<slug>)
@@ -130,6 +131,8 @@ function _onKey(e) {
   if (mod && ((e.shiftKey && k === 'z') || k === 'y')) { e.preventDefault(); redo(); return; }
   if (mod && k === 's') { e.preventDefault(); saveDraft(); return; }
   if (mod && k === 'd') { if (_sel && _sel.wi != null) { e.preventDefault(); duplicateWidget(_sel.si, _sel.ci, _sel.wi); } return; }
+  if (mod && k === 'c' && !typing) { if (_sel && _sel.wi != null) { e.preventDefault(); _copyWidget(); } return; }
+  if (mod && k === 'v' && !typing) { e.preventDefault(); _pasteWidget(); return; }
   if (!typing && (e.key === 'Delete' || e.key === 'Backspace')) {
     if (_sel && _sel.wi != null) { e.preventDefault(); deleteWidget(_sel.si, _sel.ci, _sel.wi); }
     return;
@@ -983,6 +986,11 @@ function renderEditor() {
       <label style="display:flex;gap:6px;align-items:center;font-size:13px">${escHtml(t('pages.lang', 'Langue'))}<select class="adm-field-input" id="pe-loc" style="width:auto">${_locOptions()}</select></label>
       <button class="adm-btn adm-btn-ghost adm-btn-sm" id="pe-undo" title="${escHtml(t('pages.undo', 'Annuler') + ' (Ctrl+Z)')}" disabled><i data-lucide="undo-2"></i></button>
       <button class="adm-btn adm-btn-ghost adm-btn-sm" id="pe-redo" title="${escHtml(t('pages.redo', 'Rétablir') + ' (Ctrl+Shift+Z)')}" disabled><i data-lucide="redo-2"></i></button>
+      <span style="display:inline-flex;gap:2px;margin-left:2px">
+        <button class="adm-btn adm-btn-sm adm-btn-ghost" id="pe-dev-desktop" title="${escHtml(t('pages.dev.desktop', 'Bureau'))}"><i data-lucide="monitor"></i></button>
+        <button class="adm-btn adm-btn-sm adm-btn-ghost" id="pe-dev-tablet" title="${escHtml(t('pages.dev.tablet', 'Tablette'))}"><i data-lucide="tablet"></i></button>
+        <button class="adm-btn adm-btn-sm adm-btn-ghost" id="pe-dev-mobile" title="${escHtml(t('pages.dev.mobile', 'Mobile'))}"><i data-lucide="smartphone"></i></button>
+      </span>
       <span style="flex:1"></span>
       <span id="pe-status" style="font-size:11px;white-space:nowrap;opacity:.9"></span>
       <a class="adm-btn adm-btn-ghost adm-btn-sm" id="pe-open" target="_blank" rel="noopener" href="${escHtml(_viewUrl())}"><i data-lucide="external-link"></i> ${escHtml(t('pages.openTab', 'Ouvrir'))}</a>
@@ -992,7 +1000,7 @@ function renderEditor() {
     </div>
     <div style="flex:1;display:flex;min-height:0">
       <div id="pages-side" style="width:340px;flex:0 0 340px;border-right:1px solid var(--border-subtle,#2a2a3a);padding:12px;overflow:auto"></div>
-      <div style="flex:1;min-width:0;position:relative;background:var(--bg-base,#0d0d1a)">
+      <div id="pages-frame-wrap" style="flex:1;min-width:0;position:relative;overflow:auto;background:var(--bg-base,#0d0d1a)">
         <iframe id="pages-frame" title="editor" src="${escHtml(_editUrl())}" style="width:100%;height:100%;border:none;display:block;background:var(--bg-base,#0d0d1a)"></iframe>
       </div>
     </div>`;
@@ -1004,10 +1012,12 @@ function renderEditor() {
   el('pe-redo').addEventListener('click', redo);
   el('pe-save').addEventListener('click', saveDraft);
   el('pe-publish').addEventListener('click', publish);
+  ['desktop', 'tablet', 'mobile'].forEach((d) => el('pe-dev-' + d).addEventListener('click', () => { _previewDevice = d; _applyPreviewDevice(); }));
   renderSidebar();
   refreshIcons(root);
   _updateHistButtons();
   _updateSaveChip();
+  _applyPreviewDevice();
   // The iframe posts LUMEN_EDIT_READY once page-edit-frame.js is initialised;
   // _onMessage answers with the current doc — no need to sync here.
 }
@@ -1029,6 +1039,23 @@ function exitEditor() {
     return;
   }
   _mode = 'launcher'; const root = el('pages-root'); if (root) root.style.cssText = ''; render();
+}
+
+// ── Responsive device preview (constrain the iframe canvas width) ─
+const _DEV_W = { desktop: '100%', tablet: '820px', mobile: '390px' };
+function _applyPreviewDevice() {
+  const f = _frameEl();
+  if (f) {
+    const w = _DEV_W[_previewDevice] || '100%';
+    f.style.width = w;
+    f.style.maxWidth = '100%';
+    f.style.margin = _previewDevice === 'desktop' ? '0' : '0 auto';
+    f.style.boxShadow = _previewDevice === 'desktop' ? 'none' : '0 0 0 1px var(--border-subtle,#2a2a3a)';
+  }
+  ['desktop', 'tablet', 'mobile'].forEach((d) => {
+    const b = el('pe-dev-' + d);
+    if (b) { b.classList.toggle('adm-btn-accent', d === _previewDevice); b.classList.toggle('adm-btn-ghost', d !== _previewDevice); }
+  });
 }
 
 // ── Iframe bridge ───────────────────────────────────────────────
@@ -1109,7 +1136,19 @@ function _applyAction(action, sel, arg) {
     case 'delColumn': removeColumn(sel.si, sel.ci); break;
     case 'dupWidget': duplicateWidget(sel.si, sel.ci, sel.wi); break;
     case 'delWidget': deleteWidget(sel.si, sel.ci, sel.wi); break;
+    case 'setText': _applySetText(sel, arg); break;
   }
+}
+
+// Inline on-canvas text edit: the frame double-clicks a title/label, edits it in
+// place (contenteditable) and posts the new plain text for the current locale.
+// The parent owns the model (one-way data flow), so it writes w.text here.
+function _applySetText(sel, arg) {
+  const w = _sections[sel.si] && _sections[sel.si].columns[sel.ci] && _sections[sel.si].columns[sel.ci].widgets[sel.wi];
+  if (!w) return;
+  if (typeof w.text !== 'object' || w.text == null) w.text = {};
+  w.text[_editLoc] = (arg && arg.value != null) ? String(arg.value) : '';
+  _afterMutate();
 }
 
 // ── Sidebar: Elements palette + contextual Settings ─────────────
@@ -1601,6 +1640,30 @@ function removeColumn(si, ci) { const sec = _sections[si]; if (sec.columns.lengt
 function _rebalance(sec) { const n = sec.columns.length; const base = Math.floor(12 / n); let rem = 12 - base * n; sec.columns.forEach((c) => { c.width = base + (rem-- > 0 ? 1 : 0); }); }
 function duplicateWidget(si, ci, wi) { const col = _sections[si].columns[ci]; const clone = JSON.parse(JSON.stringify(col.widgets[wi])); clone.id = _id('w'); col.widgets.splice(wi + 1, 0, clone); _sel = { si, ci, wi: wi + 1 }; _afterMutate(); }
 function deleteWidget(si, ci, wi) { _sections[si].columns[ci].widgets.splice(wi, 1); _sel = { si, ci, wi: null }; _afterMutate(); }
+// ── Copy / paste widgets (sessionStorage clipboard → survives the per-page
+// editor-tab reload, so it works across pages) ──────────────────
+const _CLIP_KEY = 'lumenWidgetClip';
+function _copyWidget() {
+  const w = _selWidget(); if (!w) return;
+  try { sessionStorage.setItem(_CLIP_KEY, JSON.stringify(w)); toast(t('pages.copied', 'Élément copié.'), 'success'); } catch (_) {}
+}
+function _pasteWidget() {
+  let w = null; try { w = JSON.parse(sessionStorage.getItem(_CLIP_KEY) || 'null'); } catch (_) {}
+  if (!w || !w.type) return;
+  let si = _sel ? _sel.si : _sections.length - 1;
+  if (si == null || si < 0 || !_sections[si]) return;
+  const ci = (_sel && _sel.ci != null) ? _sel.ci : 0;
+  const col = _sections[si].columns[ci] || _sections[si].columns[0];
+  if (!col) return;
+  const realCi = _sections[si].columns.indexOf(col);
+  const clone = JSON.parse(JSON.stringify(w)); clone.id = _id('w');
+  const at = (_sel && _sel.wi != null && _sel.si === si && _sel.ci === realCi) ? _sel.wi + 1 : col.widgets.length;
+  col.widgets.splice(at, 0, clone);
+  _sel = { si, ci: realCi, wi: at };
+  _side = 'settings';
+  _afterMutate();
+}
+
 function addWidgetToSelection(type) {
   let si = _sel ? _sel.si : _sections.length - 1;
   if (si == null || si < 0) { _sections.push(_newSection()); si = _sections.length - 1; }

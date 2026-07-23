@@ -292,7 +292,62 @@ const PageEditFrame = (() => {
       view.textContent = _lv(w.text) || (w.type || 'widget');
     }
     box.appendChild(view);
+
+    // Inline on-canvas text edit: double-click a plain-text title/label to edit
+    // it directly (contenteditable). Limited to widgets whose main text is a
+    // plain string (heading/button/hero/cta-banner/feature-card) — richtext keeps
+    // the sidebar because its markup would be lost by a textContent round-trip.
+    const inlineSel = _INLINE_TEXT[w.type];
+    if (inlineSel) {
+      box.addEventListener('dblclick', (e) => {
+        const target = view.querySelector(inlineSel);
+        if (!target) return;
+        e.preventDefault(); e.stopPropagation();
+        _inlineEdit(target, view, { si, ci, wi });
+      });
+    }
     return box;
+  }
+
+  // ── inline text editing (double-click a title/label) ───────────
+  // Map widget type → selector for its primary plain-text element inside the
+  // rendered view. Only widgets whose main text is a plain string.
+  const _INLINE_TEXT = {
+    heading: 'h1,h2,h3,h4,h5,h6',
+    button: 'a',
+    hero: 'h1,h2,h3',
+    'cta-banner': 'h3,h2',
+    'feature-card': 'h3',
+  };
+  function _inlineEdit(elm, view, sel) {
+    const original = elm.textContent;
+    const prevPE = view.style.pointerEvents;
+    view.style.pointerEvents = 'auto';          // the view is normally inert (clicks select)
+    elm.setAttribute('contenteditable', 'true');
+    elm.style.outline = '2px solid ' + PRIMARY;
+    elm.style.outlineOffset = '2px';
+    elm.focus();
+    try { const r = document.createRange(); r.selectNodeContents(elm); const s = window.getSelection(); s.removeAllRanges(); s.addRange(r); } catch (_) {}
+    let done = false;
+    const finish = (commit) => {
+      if (done) return; done = true;
+      elm.removeEventListener('blur', onBlur);
+      elm.removeEventListener('keydown', onKey);
+      elm.removeAttribute('contenteditable');
+      elm.style.outline = ''; elm.style.outlineOffset = '';
+      view.style.pointerEvents = prevPE || 'none';
+      const val = elm.textContent;
+      if (commit) { if (val !== original) _action('setText', sel, { value: val }); }
+      else elm.textContent = original;
+    };
+    const onBlur = () => finish(true);
+    const onKey = (ev) => {
+      ev.stopPropagation();
+      if (ev.key === 'Escape') { ev.preventDefault(); finish(false); }
+      else if (ev.key === 'Enter' && !ev.shiftKey) { ev.preventDefault(); finish(true); }
+    };
+    elm.addEventListener('blur', onBlur);
+    elm.addEventListener('keydown', onKey);
   }
 
   // ── reorder (drag within the frame) ─────────────────────────────

@@ -458,6 +458,88 @@ def _publish_site_doc(doc: str) -> bool:
     return True
 
 
+# ── Media library (operator image uploads → config/uploads/) ──────────────────
+MEDIA_DIR = CONFIG_DIR / "uploads"
+# Raster only: SVG is excluded on purpose (an uploaded SVG served from the config/
+# origin could carry inline script if opened directly).
+_MEDIA_EXT = {"png", "jpg", "jpeg", "webp", "gif", "avif"}
+_MEDIA_MAX = 8 * 1024 * 1024  # 8 MB decoded
+
+
+def _media_safe_name(name: str):
+    name = (name or "").strip().replace("\\", "/").split("/")[-1]
+    if "." not in name:
+        return None
+    stem, ext = name.rsplit(".", 1)
+    ext = ext.lower()
+    if ext not in _MEDIA_EXT:
+        return None
+    stem = re.sub(r"[^a-zA-Z0-9_-]+", "-", stem).strip("-").lower()[:60] or "image"
+    return f"{stem}.{ext}"
+
+
+def _media_list():
+    out = []
+    try:
+        if MEDIA_DIR.exists():
+            files = [p for p in MEDIA_DIR.iterdir()
+                     if p.is_file() and "." in p.name and p.name.rsplit(".", 1)[1].lower() in _MEDIA_EXT]
+            for p in sorted(files, key=lambda x: x.stat().st_mtime, reverse=True):
+                out.append({"name": p.name, "url": f"config/uploads/{p.name}", "size": p.stat().st_size})
+    except Exception:
+        pass
+    return out
+
+
+def _media_upload(body):
+    import base64
+    body = body or {}
+    name = _media_safe_name(body.get("filename") or body.get("name") or "")
+    if not name:
+        return {"ok": False, "error": "Type de fichier non supporté (png, jpg, webp, gif, avif)"}
+    data = body.get("data") or ""
+    if isinstance(data, str) and data.startswith("data:"):
+        comma = data.find(",")
+        if comma != -1:
+            data = data[comma + 1:]
+    try:
+        raw = base64.b64decode(data or "", validate=False)
+    except Exception:
+        return {"ok": False, "error": "Données invalides"}
+    if not raw or len(raw) > _MEDIA_MAX:
+        return {"ok": False, "error": "Fichier vide ou trop volumineux (max 8 Mo)"}
+    try:
+        MEDIA_DIR.mkdir(parents=True, exist_ok=True)
+        stem, ext = name.rsplit(".", 1)
+        target = MEDIA_DIR / name
+        i = 1
+        while target.exists():
+            name = f"{stem}-{i}.{ext}"
+            target = MEDIA_DIR / name
+            i += 1
+        target.write_bytes(raw)
+        try:
+            target.chmod(0o644)
+        except Exception:
+            pass
+        return {"ok": True, "url": f"config/uploads/{name}", "name": name}
+    except Exception:
+        return {"ok": False, "error": "Écriture impossible"}
+
+
+def _media_delete(name: str) -> bool:
+    name = _media_safe_name(name)
+    if not name:
+        return False
+    try:
+        p = MEDIA_DIR / name
+        if p.exists():
+            p.unlink()
+        return True
+    except Exception:
+        return False
+
+
 def _client_ip(handler) -> str:
     """BUG-055: brute-force key. Honor X-Forwarded-For / X-Real-IP only when the direct
     peer is a configured trusted proxy; otherwise use the real TCP peer address. This
@@ -3129,7 +3211,7 @@ class AdminHandler(http.server.SimpleHTTPRequestHandler):
 
     def do_POST(self):
         parsed = urllib.parse.urlparse(self.path)
-        if parsed.path in ("/api/auth.php", "/api/datasets.php", "/api/admin.php", "/api/telemetry.php", "/api/site.php"):
+        if parsed.path in ("/api/auth.php", "/api/datasets.php", "/api/admin.php", "/api/telemetry.php", "/api/site.php", "/api/media.php"):
             length = int(self.headers.get("Content-Length", 0))
             raw = self.rfile.read(length) if length else b"{}"
             try:
@@ -3186,6 +3268,30 @@ class AdminHandler(http.server.SimpleHTTPRequestHandler):
             elif action == "publish":
                 ok = _publish_site_doc(params.get("doc", ""))
                 self._json(200 if ok else 400, {"ok": True} if ok else {"error": "Invalid doc"})
+            else:
+                self._json(400, {"error": f"Unknown action: {action}"})
+            return
+
+        # ── Media library (operator image uploads) ────────────────────────────
+        if path == "/api/media.php":
+            session = _get_session(self._token())
+            if not session:
+                self._json(401, {"error": "Not authenticated"})
+                return
+            if action in ("upload", "delete"):
+                ok, status, payload = _authorize_write(
+                    self.command, session, self.headers.get("X-CSRF-Token"))
+                if not ok:
+                    self._json(status, payload)
+                    return
+            if action == "list":
+                self._json(200, {"files": _media_list()})
+            elif action == "upload":
+                res = _media_upload(body or {})
+                self._json(200 if res.get("ok") else 400, res)
+            elif action == "delete":
+                ok = _media_delete((body or {}).get("name", ""))
+                self._json(200 if ok else 400, {"ok": True} if ok else {"error": "Invalid file"})
             else:
                 self._json(400, {"error": f"Unknown action: {action}"})
             return

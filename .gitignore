@@ -58,3 +58,6 @@ dist/
 .install-state.json
 .install-lock
 .install-download.zip.part
+
+# Operator-uploaded media (runtime, per-deployment — not source)
+config/uploads/

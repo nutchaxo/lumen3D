@@ -487,7 +487,7 @@ function _contentGroups(type) {
       { k: 'props.markup', t: 'check', l: t('pages.markup', 'Mise en forme') + ' — ' + t('pages.richtextHint', '**gras**, *italique*, [lien](url)') },
     ] }];
     case 'image': return [{ title: content, icon: 'file-text', fields: [
-      { k: 'props.src', t: 'text', l: 'URL' },
+      { k: 'props.src', t: 'media', l: t('pages.image', 'Image') },
       { k: 'props.alt', t: 'ltext', l: t('pages.alt', 'Texte alt') },
       { k: 'props.caption', t: 'ltext', l: t('pages.imgCaption', 'Légende') },
       { k: 'props.href', t: 'text', l: t('pages.linkOpt', 'Lien (option.)') },
@@ -520,7 +520,7 @@ function _contentGroups(type) {
     ];
     case 'gallery': return [{ title: t('pages.grp.items', 'Éléments'), icon: 'images', fields: [
       { k: 'props.images', t: 'items', l: t('pages.images', 'Images'),
-        item: [{ k: 'src', t: 'text', l: 'URL' }, { k: 'alt', t: 'ltext', l: t('pages.alt', 'Texte alt') }],
+        item: [{ k: 'src', t: 'media', l: t('pages.image', 'Image') }, { k: 'alt', t: 'ltext', l: t('pages.alt', 'Texte alt') }],
         mk: () => ({ src: '', alt: {} }), addLabel: t('pages.addImage', 'Ajouter une image'),
         summary: (im) => (im.src || '').split('/').pop() },
       { k: 'props.captions', t: 'check', l: t('pages.gal.captions', 'Légendes') },
@@ -559,7 +559,7 @@ function _contentGroups(type) {
           ['monogram', t('pages.fc.mediaMono', 'Monogramme')], ['none', t('pages.fc.mediaNone', 'Aucun')],
         ] },
         { k: 'props.icon', t: 'icon', l: t('pages.iconName', 'Icône'), showIf: (o) => ((o.props || {}).media || 'icon') === 'icon' },
-        { k: 'props.img', t: 'text', l: t('pages.fc.img', 'Image (URL)'), showIf: (o) => (o.props || {}).media === 'image' },
+        { k: 'props.img', t: 'media', l: t('pages.fc.img', 'Image'), showIf: (o) => (o.props || {}).media === 'image' },
         { k: 'props.monogram', t: 'text', l: t('pages.fc.monogram', 'Monogramme'), showIf: (o) => (o.props || {}).media === 'monogram' },
       ] },
       { title: content, icon: 'file-text', fields: [
@@ -575,7 +575,7 @@ function _contentGroups(type) {
       { k: 'text', t: 'ltextarea', l: t('pages.qt.text', 'Citation') },
       { k: 'props.author', t: 'ltext', l: t('pages.qt.author', 'Auteur') },
       { k: 'props.role', t: 'ltext', l: t('pages.qt.role', 'Rôle / affiliation') },
-      { k: 'props.avatar', t: 'text', l: t('pages.qt.avatar', 'Photo (URL, option.)') },
+      { k: 'props.avatar', t: 'media', l: t('pages.qt.avatar', 'Photo (option.)') },
       { k: 'props.link.text', t: 'ltext', l: t('pages.qt.linkText', 'Lien (libellé)') },
       { k: 'props.link.href', t: 'text', l: t('pages.qt.linkHref', 'Lien (URL)') },
     ] }];
@@ -630,7 +630,7 @@ function _contentGroups(type) {
         ['icon', t('pages.fc.mediaIcon', 'Icône')], ['none', t('pages.fc.mediaNone', 'Aucun')],
       ] },
       { k: 'props.monogram', t: 'text', l: t('pages.pf.monogram', 'Monogramme'), showIf: (o) => ((o.props || {}).mediaKind || 'monogram') === 'monogram' },
-      { k: 'props.img', t: 'text', l: t('pages.pf.image', 'Image (URL)'), showIf: (o) => (o.props || {}).mediaKind === 'image' },
+      { k: 'props.img', t: 'media', l: t('pages.pf.image', 'Image'), showIf: (o) => (o.props || {}).mediaKind === 'image' },
       { k: 'props.icon', t: 'icon', l: t('pages.iconName', 'Icône'), showIf: (o) => (o.props || {}).mediaKind === 'icon' },
     ] }];
     case 'cite-block': return [{ title: content, icon: 'clipboard-copy', fields: [
@@ -834,7 +834,7 @@ function _styleGroupsFor(w) { return [..._styleGroupsSpecific(w.type), ..._gener
 function _genericStyleGroups(scope) {
   const surface = [
     { k: 'props.style.bg', t: 'color', grad: true, l: t('pages.st.bg', 'Fond') },
-    { k: 'props.style.bgImage', t: 'text', l: t('pages.st.bgImage', 'Image de fond (URL)') },
+    { k: 'props.style.bgImage', t: 'media', l: t('pages.st.bgImage', 'Image de fond') },
     { k: 'props.style.radius', t: 'slider', l: t('pages.st.radius', 'Arrondi'), min: 0, max: 100, ph: 'auto', dv: 12 },
     { k: 'props.style.borderWidth', t: 'slider', l: t('pages.st.borderWidth', 'Bordure'), min: 0, max: 12, ph: '0', dv: 1 },
     { k: 'props.style.borderColor', t: 'color', l: t('pages.st.borderColor', 'Couleur de bordure') },

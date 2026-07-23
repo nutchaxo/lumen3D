@@ -48,7 +48,7 @@
 
 'use strict';
 
-import { t, refreshIcons } from './shared.js';
+import { t, refreshIcons, apiFetchStatus, API_MEDIA } from './shared.js';
 
 // ── Path + locale helpers ─────────────────────────────────────────
 export function pathGet(o, path) { let v = o; for (const s of path.split('.')) { if (v != null && typeof v === 'object') v = v[s]; else return undefined; } return v; }
@@ -907,6 +907,98 @@ function ctlItems(obj, f, ctx) {
 // ══════════════════════════════════════════════════════════════════
 // Entry point
 // ══════════════════════════════════════════════════════════════════
+// Media picker: a URL field + preview thumb + a popover with an upload zone
+// (drag-drop or click), the operator's uploaded-image library, a paste-URL
+// field, and a clear button. Uploads go to config/uploads/ via /api/media.php
+// and the field stores the returned relative URL — so a non-technical operator
+// can place their own logo/photo without hosting it elsewhere.
+function ctlMedia(obj, f, ctx) {
+  const w = fieldWrap(f.l);
+  const row = mk('div');
+  row.style.cssText = 'display:flex;gap:8px;align-items:center';
+  const thumb = mk('div');
+  thumb.style.cssText = 'width:44px;height:44px;flex:0 0 44px;border-radius:8px;border:1px solid var(--adm-border,#2a2a3a);overflow:hidden;display:flex;align-items:center;justify-content:center;opacity:.85';
+  const inp = mk('input', 'adm-field-input');
+  inp.type = 'text'; inp.placeholder = f.ph || t('pages.media.urlPh', 'URL de l\'image'); inp.style.flex = '1';
+  const btn = mk('button', 'adm-btn adm-btn-ghost adm-btn-sm');
+  btn.type = 'button'; btn.title = t('pages.media.pick', 'Choisir une image');
+  btn.appendChild(mkIcon('image-plus', 15));
+  const cur = () => { const v = pathGet(obj, f.k); return typeof v === 'string' ? v : ''; };
+  const setThumb = (v) => {
+    thumb.textContent = '';
+    if (v) {
+      const im = mk('img'); im.src = v; im.style.cssText = 'width:100%;height:100%;object-fit:cover';
+      im.addEventListener('error', () => { thumb.textContent = ''; thumb.appendChild(mkIcon('image', 18)); refreshIcons(thumb); });
+      thumb.appendChild(im);
+    } else { thumb.appendChild(mkIcon('image', 18)); refreshIcons(thumb); }
+  };
+  const set = (v) => { pathPut(obj, f.k, v); inp.value = v; setThumb(v); ctx.onChange(); };
+  inp.value = cur(); setThumb(cur());
+  inp.addEventListener('input', () => { pathPut(obj, f.k, inp.value); setThumb(inp.value); ctx.onChange(); });
+  row.appendChild(thumb); row.appendChild(inp); row.appendChild(btn);
+  w.appendChild(row);
+
+  const pop = mk('div', 'pbc-pop'); pop.hidden = true; pop.setAttribute('role', 'dialog'); w.appendChild(pop);
+  btn.setAttribute('aria-haspopup', 'true'); btn.setAttribute('aria-expanded', 'false');
+  const close = () => { pop.hidden = true; btn.setAttribute('aria-expanded', 'false'); };
+  const open = () => { pop.hidden = false; btn.setAttribute('aria-expanded', 'true'); buildPop(); };
+  btn.addEventListener('click', () => (pop.hidden ? open() : close()));
+  registerPopover(pop, btn, close);
+
+  async function doUpload(file0) {
+    if (!file0 || !/^image\//.test(file0.type)) return;
+    const reader = new FileReader();
+    reader.onload = async () => {
+      const r = await apiFetchStatus(`${API_MEDIA}?action=upload`, { method: 'POST', body: JSON.stringify({ filename: file0.name, data: String(reader.result || '') }) });
+      if (r.ok && r.data && r.data.url) { set(r.data.url); close(); }
+      else { const m = mk('div', 'adm-page-sub', (r.data && r.data.error) || t('pages.media.uploadErr', 'Échec du téléversement.')); m.style.cssText = 'color:var(--color-danger,#e5484d);font-size:11px;margin-top:6px'; pop.appendChild(m); }
+    };
+    reader.readAsDataURL(file0);
+  }
+
+  async function buildPop() {
+    pop.textContent = '';
+    const up = mk('label');
+    up.style.cssText = 'display:block;border:1.5px dashed var(--adm-border,#3a3a4a);border-radius:8px;padding:14px;text-align:center;cursor:pointer;font-size:12px;margin-bottom:10px';
+    up.appendChild(mk('span', null, t('pages.media.upload', 'Cliquez ou déposez une image à téléverser')));
+    const file = mk('input'); file.type = 'file'; file.accept = 'image/png,image/jpeg,image/webp,image/gif,image/avif'; file.style.display = 'none';
+    up.appendChild(file);
+    file.addEventListener('change', () => { if (file.files && file.files[0]) doUpload(file.files[0]); });
+    up.addEventListener('dragover', (e) => { e.preventDefault(); up.style.borderColor = 'var(--color-primary,#2F6BFF)'; });
+    up.addEventListener('dragleave', () => { up.style.borderColor = 'var(--adm-border,#3a3a4a)'; });
+    up.addEventListener('drop', (e) => { e.preventDefault(); up.style.borderColor = 'var(--adm-border,#3a3a4a)'; if (e.dataTransfer.files && e.dataTransfer.files[0]) doUpload(e.dataTransfer.files[0]); });
+    pop.appendChild(up);
+
+    const grid = mk('div');
+    grid.style.cssText = 'display:grid;grid-template-columns:repeat(3,1fr);gap:6px;max-height:180px;overflow:auto';
+    grid.appendChild(mk('div', 'adm-page-sub', t('pages.media.loading', 'Chargement…')));
+    pop.appendChild(grid);
+    try {
+      const r = await apiFetchStatus(`${API_MEDIA}?action=list`, { method: 'POST', body: '{}' });
+      const files = (r.ok && r.data && Array.isArray(r.data.files)) ? r.data.files : [];
+      grid.textContent = '';
+      if (!files.length) { const e = mk('div', 'adm-page-sub', t('pages.media.empty', 'Aucune image téléversée.')); e.style.cssText = 'grid-column:1/-1;font-size:11px'; grid.appendChild(e); }
+      files.forEach((im) => {
+        const cell = mk('button'); cell.type = 'button'; cell.title = im.name;
+        cell.style.cssText = 'border:1px solid var(--adm-border,#2a2a3a);border-radius:6px;overflow:hidden;aspect-ratio:1;cursor:pointer;padding:0;background:transparent';
+        const g = mk('img'); g.src = im.url; g.loading = 'lazy'; g.style.cssText = 'width:100%;height:100%;object-fit:cover';
+        cell.appendChild(g);
+        cell.addEventListener('click', () => { set(im.url); close(); });
+        grid.appendChild(cell);
+      });
+    } catch (_) { grid.textContent = t('pages.media.listErr', 'Bibliothèque indisponible.'); }
+
+    const clr = mk('button', 'adm-btn adm-btn-ghost adm-btn-sm');
+    clr.type = 'button'; clr.style.marginTop = '8px';
+    clr.appendChild(mk('span', null, t('pages.media.clear', 'Retirer l\'image')));
+    clr.addEventListener('click', () => { set(''); close(); });
+    pop.appendChild(clr);
+    refreshIcons(pop);
+  }
+
+  return w;
+}
+
 export function renderFields(host, obj, fields, ctx) {
   (fields || []).forEach((f) => {
     if (typeof f.showIf === 'function' && !f.showIf(obj)) return;
@@ -920,6 +1012,7 @@ export function renderFields(host, obj, fields, ctx) {
       case 'slider': node = ctlSlider(obj, f, ctx); break;
       case 'color': node = ctlColor(obj, f, ctx); break;
       case 'icon': node = ctlIcon(obj, f, ctx); break;
+      case 'media': node = ctlMedia(obj, f, ctx); break;
       case 'items': node = ctlItems(obj, f, ctx); break;
       case 'spacing': node = ctlSpacing(obj, f, ctx); break;
       case 'shadow': node = ctlShadow(obj, f, ctx); break;

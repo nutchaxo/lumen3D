@@ -82,12 +82,16 @@ const PageEditFrame = (() => {
   // ── render ──────────────────────────────────────────────────────
   function render() {
     if (!_host) return;
+    // Preserve scroll: replacing every child (textContent='') resets the window
+    // scroll on tall pages, yanking the viewport on every keystroke-driven push.
+    const sx = window.scrollX, sy = window.scrollY;
     _host.textContent = '';
     if (_empty) _empty.style.display = 'none';
     if (!_sections.length) { _host.appendChild(_emptyState()); return; }
     _sections.forEach((sec, si) => _host.appendChild(_sectionNode(sec, si)));
     _host.appendChild(_addSectionBar());
     _icons(_host);
+    window.scrollTo(sx, sy);
   }
 
   function _emptyState() {
@@ -217,13 +221,16 @@ const PageEditFrame = (() => {
       // live visual resize (no round-trip) — parent commits on pointerup
       cols.forEach((cel) => { const cci = +cel.dataset.ebCi; if (cci === ci - 1) cel.style.flexBasis = `calc(${(finalLeft / 12) * 100}% - ${share}px)`; else if (cci === ci) cel.style.flexBasis = `calc(${((total - finalLeft) / 12) * 100}% - ${share}px)`; });
     };
-    const onUp = () => {
+    const teardown = () => {
       window.removeEventListener('pointermove', onMove);
       window.removeEventListener('pointerup', onUp);
-      _post({ type: 'LUMEN_EDIT_RESIZE', si, ci, leftWidth: finalLeft });
+      window.removeEventListener('pointercancel', onCancel);
     };
+    const onUp = () => { teardown(); _post({ type: 'LUMEN_EDIT_RESIZE', si, ci, leftWidth: finalLeft }); };
+    const onCancel = () => teardown();   // cancelled → keep the pre-drag layout
     window.addEventListener('pointermove', onMove);
     window.addEventListener('pointerup', onUp);
+    window.addEventListener('pointercancel', onCancel);
   }
 
   function _columnNode(sec, si, col, ci, gap) {
@@ -295,17 +302,24 @@ const PageEditFrame = (() => {
     try { e.currentTarget.setPointerCapture(e.pointerId); } catch (_) {}
     const from = { si, ci, wi };
     document.body.style.cursor = 'grabbing';
-    const onMove = (ev) => _paintIndicator(_slotAt(ev.clientX, ev.clientY));
-    const onUp = (ev) => {
+    const repaint = (x, y) => _paintIndicator(_slotAt(x, y));
+    const onMove = (ev) => { repaint(ev.clientX, ev.clientY); _autoFeed(ev.clientX, ev.clientY, repaint); };
+    // Shared teardown: also runs on pointercancel (right-click menu, touch
+    // interruption, focus loss) so the drag can never wedge the editor with a
+    // stuck cursor + leaked listeners + a phantom drop on the next click.
+    const teardown = () => {
       window.removeEventListener('pointermove', onMove);
       window.removeEventListener('pointerup', onUp);
+      window.removeEventListener('pointercancel', onCancel);
+      _autoStop();
       document.body.style.cursor = '';
       _clearIndicator();
-      const slot = _slotAt(ev.clientX, ev.clientY);
-      if (slot) _post({ type: 'LUMEN_EDIT_DROP', target: { si: slot.si, ci: slot.ci, index: slot.index }, payload: { kind: 'move', from } });
     };
+    const onUp = (ev) => { const slot = _slotAt(ev.clientX, ev.clientY); teardown(); if (slot) _post({ type: 'LUMEN_EDIT_DROP', target: { si: slot.si, ci: slot.ci, index: slot.index }, payload: { kind: 'move', from } }); };
+    const onCancel = () => teardown();   // cancelled → no drop
     window.addEventListener('pointermove', onMove);
     window.addEventListener('pointerup', onUp);
+    window.addEventListener('pointercancel', onCancel);
   }
 
   // ── drop-slot resolution (shared by reorder + palette drops) ────
@@ -337,6 +351,29 @@ const PageEditFrame = (() => {
   }
   function _clearIndicator() { if (_ind) _ind.style.display = 'none'; }
 
+  // ── Edge auto-scroll (shared by reorder + palette drops) ────────
+  // When the pointer nears the top/bottom of the iframe viewport during a drag,
+  // scroll the page so off-screen columns become reachable — otherwise a page
+  // taller than the viewport is un-droppable below the fold. rAF-driven; the
+  // repaint callback re-resolves the drop slot as content moves under a still
+  // pointer.
+  const _EDGE = 56, _EDGE_SPEED = 18;
+  let _autoRaf = 0, _autoDir = 0, _autoX = 0, _autoY = 0, _autoRepaint = null;
+  function _autoTick() {
+    _autoRaf = 0;
+    if (!_autoDir) return;
+    window.scrollBy(0, _autoDir * _EDGE_SPEED);
+    if (_autoRepaint) _autoRepaint(_autoX, _autoY);
+    _autoRaf = requestAnimationFrame(_autoTick);
+  }
+  function _autoFeed(x, y, repaint) {
+    _autoX = x; _autoY = y; _autoRepaint = repaint || null;
+    const h = window.innerHeight || document.documentElement.clientHeight;
+    _autoDir = (y < _EDGE) ? -1 : (y > h - _EDGE) ? 1 : 0;
+    if (_autoDir && !_autoRaf) _autoRaf = requestAnimationFrame(_autoTick);
+  }
+  function _autoStop() { _autoDir = 0; _autoRepaint = null; if (_autoRaf) { cancelAnimationFrame(_autoRaf); _autoRaf = 0; } }
+
   // ── parent messages ─────────────────────────────────────────────
   function _onMessage(e) {
     if (e.source !== window.parent) return;
@@ -355,14 +392,17 @@ const PageEditFrame = (() => {
         break;
       case 'LUMEN_EDIT_DRAGMOVE':
         _paintIndicator(_slotAt(m.x, m.y));
+        _autoFeed(m.x, m.y, (x, y) => _paintIndicator(_slotAt(x, y)));
         break;
       case 'LUMEN_EDIT_DROP_AT': {
         const slot = _slotAt(m.x, m.y);
+        _autoStop();
         _clearIndicator();
         if (slot) _post({ type: 'LUMEN_EDIT_DROP', target: { si: slot.si, ci: slot.ci, index: slot.index }, payload: m.payload });
         break;
       }
       case 'LUMEN_EDIT_DRAGCLEAR':
+        _autoStop();
         _clearIndicator();
         break;
     }

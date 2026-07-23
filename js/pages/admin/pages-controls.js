@@ -55,6 +55,30 @@ export function pathGet(o, path) { let v = o; for (const s of path.split('.')) {
 export function pathPut(o, path, val) { const s = path.split('.'); let c = o; for (let i = 0; i < s.length - 1; i++) { if (typeof c[s[i]] !== 'object' || c[s[i]] == null) c[s[i]] = {}; c = c[s[i]]; } c[s[s.length - 1]] = val; }
 function locVal(v, loc) { if (v == null) return ''; if (typeof v === 'string') return v; if (typeof v === 'object') return v[loc] || ''; return String(v); }
 
+// ── Shared popover dismissal (color + icon pickers) ───────────────
+// One document-level listener closes any OPEN sidebar popover on outside-click
+// or Escape, so pickers don't pile up open and clutter the 340px sidebar.
+// Popovers register {pop, trigger, close}; detached entries are pruned lazily.
+const _popovers = new Set();
+let _popDocBound = false;
+function _bindPopDismiss() {
+  if (_popDocBound) return;
+  _popDocBound = true;
+  document.addEventListener('pointerdown', (e) => {
+    _popovers.forEach((p) => {
+      if (!p.pop.isConnected) { _popovers.delete(p); return; }
+      if (p.pop.hidden) return;
+      if (p.pop.contains(e.target) || (p.trigger && p.trigger.contains(e.target))) return;
+      p.close();
+    });
+  }, true);
+  document.addEventListener('keydown', (e) => {
+    if (e.key !== 'Escape') return;
+    _popovers.forEach((p) => { if (p.pop.isConnected && !p.pop.hidden) p.close(); });
+  });
+}
+function registerPopover(pop, trigger, close) { _bindPopDismiss(); _popovers.add({ pop, trigger, close }); }
+
 // ── Design constants ──────────────────────────────────────────────
 // Theme tokens: previews use the public-site fallbacks (the admin page does
 // not load the site theme); the live iframe shows the truly resolved color.
@@ -263,17 +287,22 @@ function ctlCheck(obj, f, ctx) {
 function ctlSeg(obj, f, ctx) {
   const w = fieldWrap(f.l);
   const seg = mk('div', 'pbc-seg');
+  seg.setAttribute('role', 'radiogroup');
+  if (f.l) seg.setAttribute('aria-label', f.l);
   const cur = String(pathGet(obj, f.k) ?? '');
   const btns = [];
   (f.opts || []).forEach(([v, lab, icon]) => {
     const b = mkBtn(null, lab || v);
+    b.setAttribute('role', 'radio');
+    b.setAttribute('aria-checked', cur === String(v) ? 'true' : 'false');
     if (icon) b.appendChild(mkIcon(icon, 14));
     if (lab) b.appendChild(mk('span', null, lab));
     if (cur === String(v)) b.classList.add('on');
     b.addEventListener('click', () => {
       pathPut(obj, f.k, v);
-      btns.forEach((x) => x.classList.remove('on'));
+      btns.forEach((x) => { x.classList.remove('on'); x.setAttribute('aria-checked', 'false'); });
       b.classList.add('on');
+      b.setAttribute('aria-checked', 'true');
       ctx.onChange();
       if (f.refresh && ctx.refresh) ctx.refresh();
     });
@@ -471,13 +500,18 @@ function ctlColor(obj, f, ctx) {
   const set = (v) => { pathPut(obj, f.k, v); _pushRecentColor(v); sync(); ctx.onChange(); };
 
   let mode = null; // 'color' | 'grad'
+  btn.setAttribute('aria-haspopup', 'true');
+  btn.setAttribute('aria-expanded', 'false');
+  pop.setAttribute('role', 'dialog');
   const openPanel = () => {
     pop.hidden = false;
+    btn.setAttribute('aria-expanded', 'true');
     caret.style.transform = 'rotate(180deg)';
     buildPanel();
   };
-  const closePanel = () => { pop.hidden = true; caret.style.transform = ''; };
+  const closePanel = () => { pop.hidden = true; btn.setAttribute('aria-expanded', 'false'); caret.style.transform = ''; };
   btn.addEventListener('click', () => (pop.hidden ? openPanel() : closePanel()));
+  registerPopover(pop, btn, closePanel);
 
   function buildPanel() {
     pop.textContent = '';
@@ -791,11 +825,17 @@ function ctlIcon(obj, f, ctx) {
     refreshIcons(grid);
   };
   search.addEventListener('input', draw);
+  btn.setAttribute('aria-haspopup', 'true');
+  btn.setAttribute('aria-expanded', 'false');
+  pop.setAttribute('role', 'dialog');
+  const iconClose = () => { pop.hidden = true; caret.style.transform = ''; btn.setAttribute('aria-expanded', 'false'); };
   btn.addEventListener('click', () => {
     pop.hidden = !pop.hidden;
     caret.style.transform = pop.hidden ? '' : 'rotate(180deg)';
+    btn.setAttribute('aria-expanded', pop.hidden ? 'false' : 'true');
     if (!pop.hidden) { draw(); search.focus(); }
   });
+  registerPopover(pop, btn, iconClose);
   return w;
 }
 

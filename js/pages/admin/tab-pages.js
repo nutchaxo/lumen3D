@@ -60,13 +60,82 @@ const _langDicts = {};              // locale code → loaded i18n dict (for fai
 
 const _id = (p) => p + Math.random().toString(36).slice(2, 9);
 let _editGen = 0;                   // bumped on every edit — lets an in-flight autosave know if newer edits arrived
-function _mark(on) { if (on) _editGen++; _dirty = on; setUnsaved(on); ['pages-save', 'pe-save'].forEach((id) => { const s = el(id); if (s) s.disabled = !on; }); }
+function _mark(on) { if (on) _editGen++; _dirty = on; setUnsaved(on); ['pages-save', 'pe-save'].forEach((id) => { const s = el(id); if (s) s.disabled = !on; }); _updateSaveChip(); }
 function _locales() { try { if (I18n && I18n.getAvailableLanguages) { const l = I18n.getAvailableLanguages(); if (l.length) return l; } } catch (_) {} return [{ code: 'en', native: 'EN' }, { code: 'fr', native: 'FR' }, { code: 'es', native: 'ES' }]; }
 function _lv(v) { if (v == null) return ''; if (typeof v === 'string') return v; if (typeof v === 'object') return v[_editLoc] || ''; return String(v); }
 
-// A frame mutation just happened → mark dirty, refresh the sidebar (selection
-// may have moved) and push the new model into the iframe.
-function _afterMutate() { _mark(true); renderSidebar(); _syncFrame(); }
+// A frame mutation just happened → mark dirty, snapshot for undo, refresh the
+// sidebar (selection may have moved), push the model into the iframe, and
+// schedule a debounced draft autosave.
+function _afterMutate() { _mark(true); _histPush(); renderSidebar(); _syncFrame(); _requestAutosave(); }
+
+// ── Undo / redo history ─────────────────────────────────────────
+// Bounded snapshot stack of the working model (JSON strings so structuredClone
+// isn't needed and equality is a cheap string compare). Structural ops push
+// immediately via _afterMutate; text/field edits push debounced so a burst of
+// typing collapses into a single history entry.
+const _HIST_MAX = 60;
+let _history = [];
+let _histIndex = -1;
+let _histTimer = null;
+let _lastSavedAt = null;
+function _snap() { return JSON.stringify({ s: _sections, b: _background }); }
+function _histReset() { _history = [_snap()]; _histIndex = 0; clearTimeout(_histTimer); _histTimer = null; _updateHistButtons(); }
+function _histPush() {
+  const snap = _snap();
+  if (_history[_histIndex] === snap) return;   // nothing actually changed
+  _history = _history.slice(0, _histIndex + 1);
+  _history.push(snap);
+  if (_history.length > _HIST_MAX) _history.shift();
+  _histIndex = _history.length - 1;
+  _updateHistButtons();
+}
+function _histPushDebounced() { clearTimeout(_histTimer); _histTimer = setTimeout(() => { _histTimer = null; _histPush(); }, 450); }
+function _flushHist() { if (_histTimer) { clearTimeout(_histTimer); _histTimer = null; _histPush(); } }
+function _histRestore(snap) {
+  let o; try { o = JSON.parse(snap); } catch (_) { return; }
+  _sections = Array.isArray(o.s) ? o.s : [];
+  _background = o.b || null;
+  _sel = null;
+  _mark(true); _requestAutosave();
+  renderSidebar(); _syncFrame();
+  _updateHistButtons();
+}
+function undo() { _flushHist(); if (_histIndex <= 0) return; _histIndex--; _histRestore(_history[_histIndex]); }
+function redo() { if (_histIndex >= _history.length - 1) return; _histIndex++; _histRestore(_history[_histIndex]); }
+function _updateHistButtons() {
+  const u = el('pe-undo'), r = el('pe-redo');
+  if (u) u.disabled = _histIndex <= 0;
+  if (r) r.disabled = _histIndex >= _history.length - 1;
+}
+
+// ── Save-status chip ────────────────────────────────────────────
+function _fmtTime(d) { try { return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }); } catch (_) { return ''; } }
+function _updateSaveChip() {
+  const c = el('pe-status'); if (!c) return;
+  if (_dirty) { c.textContent = '● ' + t('pages.unsaved', 'Non enregistré'); c.style.color = 'var(--color-warning,#e6a817)'; }
+  else if (_lastSavedAt) { c.textContent = '✓ ' + t('pages.savedAt', 'Enregistré') + ' ' + _fmtTime(_lastSavedAt); c.style.color = 'var(--text-muted,#8a8a9a)'; }
+  else { c.textContent = ''; }
+}
+
+// ── Editor keyboard shortcuts (active only in editor mode) ───────
+let _keysBound = false;
+function _onKey(e) {
+  if (_mode !== 'editor') return;
+  const mod = e.ctrlKey || e.metaKey;
+  const tag = (e.target && e.target.tagName) || '';
+  const typing = /^(INPUT|TEXTAREA|SELECT)$/.test(tag) || (e.target && e.target.isContentEditable);
+  const k = (e.key || '').toLowerCase();
+  if (mod && !e.shiftKey && k === 'z') { e.preventDefault(); undo(); return; }
+  if (mod && ((e.shiftKey && k === 'z') || k === 'y')) { e.preventDefault(); redo(); return; }
+  if (mod && k === 's') { e.preventDefault(); saveDraft(); return; }
+  if (mod && k === 'd') { if (_sel && _sel.wi != null) { e.preventDefault(); duplicateWidget(_sel.si, _sel.ci, _sel.wi); } return; }
+  if (!typing && (e.key === 'Delete' || e.key === 'Backspace')) {
+    if (_sel && _sel.wi != null) { e.preventDefault(); deleteWidget(_sel.si, _sel.ci, _sel.wi); }
+    return;
+  }
+  if (e.key === 'Escape' && !typing) { if (_sel) { _sel = null; renderSidebar(); _syncFrame(); } }
+}
 
 // ── Widget palette / defaults ───────────────────────────────────
 const PALETTE = [
@@ -820,7 +889,7 @@ function _advancedGroups(scope) {
 function _ctlCtx() {
   return {
     loc: _editLoc,
-    onChange() { _mark(true); _syncFrame(); },
+    onChange() { _mark(true); _syncFrame(); _histPushDebounced(); _requestAutosave(); },
     gradients: { get: _gradPresets, save: _saveGradPresets },
   };
 }
@@ -912,7 +981,10 @@ function renderEditor() {
       <strong style="font-size:14px;display:inline-flex;align-items:center;gap:6px"><i data-lucide="layout-template"></i> ${escHtml(t('pages.editorTitle', 'Éditeur de page'))}</strong>
       <select class="adm-field-input" id="pe-select" style="width:auto;min-width:160px">${_pageOptions()}</select>
       <label style="display:flex;gap:6px;align-items:center;font-size:13px">${escHtml(t('pages.lang', 'Langue'))}<select class="adm-field-input" id="pe-loc" style="width:auto">${_locOptions()}</select></label>
+      <button class="adm-btn adm-btn-ghost adm-btn-sm" id="pe-undo" title="${escHtml(t('pages.undo', 'Annuler') + ' (Ctrl+Z)')}" disabled><i data-lucide="undo-2"></i></button>
+      <button class="adm-btn adm-btn-ghost adm-btn-sm" id="pe-redo" title="${escHtml(t('pages.redo', 'Rétablir') + ' (Ctrl+Shift+Z)')}" disabled><i data-lucide="redo-2"></i></button>
       <span style="flex:1"></span>
+      <span id="pe-status" style="font-size:11px;white-space:nowrap;opacity:.9"></span>
       <a class="adm-btn adm-btn-ghost adm-btn-sm" id="pe-open" target="_blank" rel="noopener" href="${escHtml(_viewUrl())}"><i data-lucide="external-link"></i> ${escHtml(t('pages.openTab', 'Ouvrir'))}</a>
       <button class="adm-btn adm-btn-ghost adm-btn-sm" id="pe-revert" title="${escHtml(revertTitle)}"><i data-lucide="rotate-ccw"></i> ${escHtml(revertLabel)}</button>
       <button class="adm-btn adm-btn-ghost adm-btn-sm" id="pe-save" ${_dirty ? '' : 'disabled'}><i data-lucide="save"></i> ${escHtml(t('pages.saveDraft', 'Brouillon'))}</button>
@@ -928,10 +1000,14 @@ function renderEditor() {
   el('pe-select').addEventListener('change', (e) => selectPage(e.target.value));
   el('pe-loc').addEventListener('change', (e) => { _editLoc = e.target.value; renderSidebar(); _syncFrame(); });
   el('pe-revert').addEventListener('click', revert);
+  el('pe-undo').addEventListener('click', undo);
+  el('pe-redo').addEventListener('click', redo);
   el('pe-save').addEventListener('click', saveDraft);
   el('pe-publish').addEventListener('click', publish);
   renderSidebar();
   refreshIcons(root);
+  _updateHistButtons();
+  _updateSaveChip();
   // The iframe posts LUMEN_EDIT_READY once page-edit-frame.js is initialised;
   // _onMessage answers with the current doc — no need to sync here.
 }
@@ -1056,7 +1132,7 @@ function renderSidebar() {
   else if (_side === 'translate') {
     renderTranslatePanel(body, {
       sections: _sections, doc: _doc, locales: _locales(), editLoc: _editLoc,
-      onChange: () => { _mark(true); _syncFrame(); },
+      onChange: () => { _mark(true); _syncFrame(); _histPushDebounced(); },
       requestAutosave: _requestAutosave, t,
     });
   } else if (_side === 'vars') {
@@ -1081,7 +1157,7 @@ function _requestAutosave() {
     // unsaved edits still pending).
     const gen = _editGen;
     const r = await apiFetchStatus(`${API_SITE}?action=save&doc=pages/${encodeURIComponent(_slug)}`, { method: 'POST', body: JSON.stringify(_doc) });
-    if (r.ok && _editGen === gen) _mark(false);
+    if (r.ok && _editGen === gen) { _lastSavedAt = new Date(); _mark(false); }
   }, 1200);
 }
 
@@ -1198,29 +1274,45 @@ function _renderPalette(body) {
   const seedNote = _seeded
     ? `<div style="font-size:11.5px;line-height:1.45;padding:8px 10px;margin:0 0 10px;border:1px solid var(--color-primary,#2F6BFF);border-radius:8px;background:color-mix(in srgb,var(--color-primary,#2F6BFF) 10%,transparent)">${escHtml(t('pages.seedNotice', 'Modèle de départ — la page publiée garde sa mise en page intégrée tant que vous ne publiez pas cette version.'))}</div>`
     : '';
-  body.innerHTML = `${seedNote}<p class="adm-page-sub" style="font-size:12px;margin:0 0 10px">${escHtml(t('pages.dragOrClick', 'Cliquez ou glissez un élément dans la page.'))}</p><div id="pages-palette"></div>`;
+  body.innerHTML = `${seedNote}<p class="adm-page-sub" style="font-size:12px;margin:0 0 8px">${escHtml(t('pages.dragOrClick', 'Cliquez ou glissez un élément dans la page.'))}</p>` +
+    `<input type="search" id="pages-palette-search" class="adm-field-input" autocomplete="off" placeholder="${escHtml(t('pages.searchWidgets', 'Rechercher un élément…'))}" style="margin:0 0 10px">` +
+    `<div id="pages-palette"></div>`;
   const wrap = el('pages-palette');
-  PALETTE_CATS.forEach(([cat, catDef]) => {
-    const items = PALETTE.filter((b) => b.cat === cat);
-    if (!items.length) return;
-    const h = document.createElement('div');
-    h.className = 'pbc-cat';
-    h.textContent = t('pages.cat.' + cat, catDef);
-    wrap.appendChild(h);
-    const grid = document.createElement('div');
-    grid.style.cssText = 'display:grid;grid-template-columns:1fr 1fr;gap:6px';
-    items.forEach((b) => {
-      const btn = document.createElement('button');
-      btn.type = 'button';
-      btn.className = 'adm-btn adm-btn-ghost adm-btn-sm';
-      btn.style.cssText = 'justify-content:flex-start;cursor:grab;touch-action:none';
-      btn.innerHTML = `<i data-lucide="${b.icon}"></i> ${escHtml(t('pages.block.' + b.type, b.def))}`;
-      btn.addEventListener('pointerdown', (e) => _startPaletteDrag(e, b.type, btn));
-      grid.appendChild(btn);
+  const build = (q) => {
+    q = (q || '').trim().toLowerCase();
+    wrap.textContent = '';
+    let any = false;
+    PALETTE_CATS.forEach(([cat, catDef]) => {
+      const items = PALETTE.filter((b) => b.cat === cat && (!q || t('pages.block.' + b.type, b.def).toLowerCase().includes(q) || b.type.includes(q)));
+      if (!items.length) return;
+      any = true;
+      const h = document.createElement('div');
+      h.className = 'pbc-cat';
+      h.textContent = t('pages.cat.' + cat, catDef);
+      wrap.appendChild(h);
+      const grid = document.createElement('div');
+      grid.style.cssText = 'display:grid;grid-template-columns:1fr 1fr;gap:6px';
+      items.forEach((b) => {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'adm-btn adm-btn-ghost adm-btn-sm';
+        btn.style.cssText = 'justify-content:flex-start;cursor:grab;touch-action:none';
+        btn.innerHTML = `<i data-lucide="${b.icon}"></i> ${escHtml(t('pages.block.' + b.type, b.def))}`;
+        btn.addEventListener('pointerdown', (e) => _startPaletteDrag(e, b.type, btn));
+        // Keyboard path: pointerdown never fires for Enter/Space, so add the widget
+        // directly (no double-add — the mouse click-to-add lives in the pointerup
+        // branch of _startPaletteDrag, which a keyboard activation never triggers).
+        btn.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); addWidgetToSelection(b.type); } });
+        grid.appendChild(btn);
+      });
+      wrap.appendChild(grid);
     });
-    wrap.appendChild(grid);
-  });
-  refreshIcons(body);
+    if (!any) { const none = document.createElement('p'); none.className = 'adm-page-sub'; none.style.cssText = 'font-size:12px'; none.textContent = t('pages.noWidgetMatch', 'Aucun élément.'); wrap.appendChild(none); }
+    refreshIcons(wrap);
+  };
+  build('');
+  const search = el('pages-palette-search');
+  if (search) search.addEventListener('input', (e) => build(e.target.value));
 }
 
 // Pointer-based drag from the (parent) palette into the (iframe) page. Native
@@ -1353,7 +1445,7 @@ function _bindCrumbs(host, si, ci, wi) {
 // it survives re-selecting a different widget/section/column.
 const _SETTINGS_TABS = [['content', 'pencil'], ['style', 'brush'], ['advanced', 'settings-2']];
 function _tabsHtml() {
-  return `<div class="pbc-tabs">${_SETTINGS_TABS.map(([id, icon]) => `<button type="button" class="${_settingsTab === id ? 'on' : ''}" data-tab="${id}"><i data-lucide="${icon}"></i><span>${escHtml(t('pages.tab.' + id, id))}</span></button>`).join('')}</div>`;
+  return `<div class="pbc-tabs" role="tablist">${_SETTINGS_TABS.map(([id, icon]) => `<button type="button" role="tab" aria-selected="${_settingsTab === id ? 'true' : 'false'}" class="${_settingsTab === id ? 'on' : ''}" data-tab="${id}"><i data-lucide="${icon}"></i><span>${escHtml(t('pages.tab.' + id, id))}</span></button>`).join('')}</div>`;
 }
 function _bindTabs(host) {
   host.querySelectorAll('[data-tab]').forEach((btn) => btn.addEventListener('click', () => { _settingsTab = btn.getAttribute('data-tab'); renderSettings(); }));
@@ -1560,7 +1652,9 @@ async function selectPage(slug) {
     if (tpl.length) { _sections = tpl; _seeded = true; }
   }
   _sel = null;
+  _lastSavedAt = null;
   _mark(false);
+  _histReset();
   if (_editorOnly) {
     try { history.replaceState(null, '', `admpan.html?editor=${encodeURIComponent(slug)}`); } catch (_) {}
   }
@@ -1634,7 +1728,7 @@ async function saveDraft() {
   _doc.draft = _draftSource();
   _doc.published = _doc.published || { sections: [] };
   const r = await apiFetchStatus(`${API_SITE}?action=save&doc=pages/${encodeURIComponent(_slug)}`, { method: 'POST', body: JSON.stringify(_doc) });
-  if (r.ok) { _mark(false); toast(t('pages.draftSaved', 'Brouillon enregistré.'), 'success'); }
+  if (r.ok) { _lastSavedAt = new Date(); _mark(false); toast(t('pages.draftSaved', 'Brouillon enregistré.'), 'success'); }
   else toast(t('pages.saveError', "Échec de l'enregistrement."), 'error');
 }
 
@@ -1662,6 +1756,7 @@ async function publish() {
   if (!s.ok) { _restorePublishBtn(btn); toast(t('pages.saveError', "Échec de l'enregistrement."), 'error'); return; }
   const r = await apiFetchStatus(`${API_SITE}?action=publish&doc=pages/${encodeURIComponent(_slug)}`, { method: 'POST', body: '{}' });
   if (r.ok) {
+    _lastSavedAt = new Date();
     _mark(false); _doc.published = JSON.parse(JSON.stringify(_draftSource())); _seeded = false; renderSidebar();
     await _revealPageInNav(_slug);   // first publish of a custom page → make it visible in the menu
     toast(t('pages.published', 'Page publiée ✓'), 'success');
@@ -1707,6 +1802,7 @@ async function load() {
     _beforeUnloadBound = true;
     window.addEventListener('beforeunload', (e) => { if (_dirty) { e.preventDefault(); e.returnValue = ''; } });
   }
+  if (!_keysBound) { _keysBound = true; window.addEventListener('keydown', _onKey); }
   const inst = await apiFetch(`${API_SITE}?action=get&doc=instance`);
   _instance = (inst && typeof inst === 'object') ? inst : {};
   try { _editLoc = (I18n && I18n.getLanguage) ? I18n.getLanguage() : 'en'; } catch (_) { _editLoc = 'en'; }

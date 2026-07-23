@@ -242,9 +242,21 @@ const PageEditFrame = (() => {
     c.style.cssText = 'position:relative;border-radius:8px;' + PageRenderer.columnCss(col, gap, sec.columns.length) +
       `;outline:1px dashed ${selected ? PRIMARY : 'transparent'};outline-offset:-1px;transition:outline-color .12s`;
     PageRenderer.applyStyleExtras(c, (col.props || {}).style);
-    c.addEventListener('mouseenter', () => { if (!selected) c.style.outlineColor = 'var(--border-subtle,#2a2a3a)'; });
-    c.addEventListener('mouseleave', () => { if (!selected) c.style.outlineColor = 'transparent'; });
+
+    // Column chrome: a compact toolbar (move left/right, settings, duplicate,
+    // delete) so a column can be managed in-canvas like sections and widgets.
+    const cbar = _bar('right:4px'); cbar.style.top = '4px';
+    if (ci > 0) cbar.appendChild(_btn('chevron-left', _msg('moveLeft', 'Gauche'), () => _action('moveColumn', { si, ci }, -1)));
+    if (ci < (sec.columns.length - 1)) cbar.appendChild(_btn('chevron-right', _msg('moveRight', 'Droite'), () => _action('moveColumn', { si, ci }, 1)));
+    cbar.appendChild(_btn('settings-2', _msg('settings', 'Réglages'), () => _select({ si, ci, wi: null })));
+    cbar.appendChild(_btn('copy', _msg('duplicate', 'Dupliquer'), () => _action('dupColumn', { si, ci })));
+    if (sec.columns.length > 1) cbar.appendChild(_btn('trash-2', _msg('delete', 'Supprimer'), () => _action('delColumn', { si, ci })));
+    c.appendChild(cbar);
+
+    c.addEventListener('mouseenter', () => { if (!selected) c.style.outlineColor = 'var(--border-subtle,#2a2a3a)'; cbar.style.opacity = '1'; });
+    c.addEventListener('mouseleave', () => { if (!selected) c.style.outlineColor = 'transparent'; if (!selected) cbar.style.opacity = '0'; });
     c.addEventListener('click', (e) => { e.stopPropagation(); _select({ si, ci, wi: null }); });
+    if (selected) cbar.style.opacity = '1';
 
     const widgets = Array.isArray(col.widgets) ? col.widgets : [];
     widgets.forEach((w, wi) => c.appendChild(_widgetNode(w, si, ci, wi)));

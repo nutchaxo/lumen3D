@@ -445,6 +445,63 @@ def _delete_site_doc(doc: str) -> bool:
         return False
 
 
+_PAGE_MAX_BYTES = 2 * 1024 * 1024   # 2 MB per page doc
+_PAGE_SCHEMA_VERSION = 2
+
+
+def _validate_page_doc(data):
+    """Structural gate for a page doc before it is written (rule 1.4: reject a
+    malformed doc, don't half-write it). Enforces a size cap, the
+    {title?,draft?,published?} shape, bounded section/column/widget counts, and
+    width 1–12 (clamped). Forward-compatible: unknown widget TYPES are allowed
+    (the renderer degrades gracefully) — only gross structural violations are
+    rejected. Stamps schemaVersion. Returns (ok, error|None); mutates `data`
+    (schemaVersion + width clamp)."""
+    try:
+        raw = json.dumps(data)
+    except Exception:
+        return False, "Malformed page document"
+    if len(raw) > _PAGE_MAX_BYTES:
+        return False, "Page document too large"
+    if not isinstance(data, dict):
+        return False, "Page document must be an object"
+    data["schemaVersion"] = _PAGE_SCHEMA_VERSION
+    for key in ("published", "draft"):
+        src = data.get(key)
+        if src is None:
+            continue
+        if not isinstance(src, dict):
+            return False, f"Invalid '{key}' block"
+        secs = src.get("sections")
+        if secs is None:
+            continue   # legacy {blocks:[]} shape → left to the renderer's normalizer
+        if not isinstance(secs, list) or len(secs) > 300:
+            return False, "Invalid sections"
+        for s in secs:
+            if not isinstance(s, dict):
+                return False, "Invalid section"
+            cols = s.get("columns")
+            if cols is None:
+                continue
+            if not isinstance(cols, list) or len(cols) > 12:
+                return False, "Invalid columns"
+            for c in cols:
+                if not isinstance(c, dict):
+                    return False, "Invalid column"
+                w = c.get("width")
+                if isinstance(w, (int, float)):
+                    c["width"] = max(1, min(12, int(w)))
+                widgets = c.get("widgets")
+                if widgets is None:
+                    continue
+                if not isinstance(widgets, list) or len(widgets) > 500:
+                    return False, "Invalid widgets"
+                for wd in widgets:
+                    if not isinstance(wd, dict) or not isinstance(wd.get("type"), str):
+                        return False, "Invalid widget"
+    return True, None
+
+
 def _publish_site_doc(doc: str) -> bool:
     """Promote a doc's draft to published (page builder). Copies the `draft` block over
     `published` in-place; no-op-safe for docs without a draft/published split."""
@@ -3257,7 +3314,13 @@ class AdminHandler(http.server.SimpleHTTPRequestHandler):
                     self._json(status, payload)
                     return
             if action == "save":
-                ok = _save_site_doc(params.get("doc", ""), body or {})
+                _doc_name = params.get("doc", "")
+                if _doc_name.startswith("pages/"):
+                    _vok, _verr = _validate_page_doc(body if isinstance(body, dict) else {})
+                    if not _vok:
+                        self._json(400, {"error": _verr or "Invalid page"})
+                        return
+                ok = _save_site_doc(_doc_name, body or {})
                 self._json(200 if ok else 400, {"ok": True} if ok else {"error": "Invalid doc"})
             elif action == "reset":
                 ok = _reset_site_doc(params.get("doc", ""))

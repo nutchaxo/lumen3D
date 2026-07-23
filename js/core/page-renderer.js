@@ -32,10 +32,10 @@
    these fields; the edit frame (page-edit-frame.js) reuses sectionCss/
    columnCss/applyStyleExtras below so editor and live page can never drift.
 
-   21 widget types: heading, richtext, image, button, divider, spacer, hero,
+   24 widget types: heading, richtext, image, button, divider, spacer, hero,
    gallery, icon, stat-grid, latest-datasets, html, feature-card, quote,
    accordion, timeline, cta-banner + (v1.18.0) badge, icon-list, profile,
-   cite-block.
+   cite-block + (v1.22.0) tabs, counter, video.
 
    BACKWARD-COMPAT: a legacy flat source { blocks:[…] } (or a bare array) is
    normalized to a single full-width section with one 12-unit column whose
@@ -1017,6 +1017,105 @@ const PageRenderer = (() => {
       root.appendChild(body);
       _scheduleIcons();
       return root;
+    },
+    tabs(b) {
+      const p = b.props || {};
+      const items = Array.isArray(p.items) ? p.items : [];
+      const accent = p.accent ? _sanitizeCss(p.accent) : 'var(--color-primary,#00A654)';
+      const wrap = _el('div', 'display:flex;flex-direction:column;gap:14px');
+      const row = _el('div', 'display:flex;flex-wrap:wrap;gap:6px;border-bottom:1px solid var(--border-subtle,#2a2a3a)');
+      const panels = _el('div', '');
+      items.forEach((it, i) => {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.textContent = _lv(it.label) || ('Tab ' + (i + 1));
+        btn.style.cssText = 'appearance:none;background:transparent;border:none;border-bottom:2px solid transparent;padding:8px 14px;cursor:pointer;font-weight:600;color:inherit;opacity:.7;margin-bottom:-1px';
+        const panel = _el('div', 'line-height:1.7;white-space:pre-wrap;padding-top:4px' + (i === 0 ? '' : ';display:none'), _lv(it.content));
+        if (i === 0) { btn.style.opacity = '1'; btn.style.borderBottomColor = accent; btn.style.color = accent; }
+        btn.addEventListener('click', () => {
+          [...row.children].forEach((x) => { x.style.opacity = '.7'; x.style.borderBottomColor = 'transparent'; x.style.color = 'inherit'; });
+          [...panels.children].forEach((pn) => (pn.style.display = 'none'));
+          btn.style.opacity = '1'; btn.style.borderBottomColor = accent; btn.style.color = accent;
+          panel.style.display = '';
+        });
+        row.appendChild(btn); panels.appendChild(panel);
+      });
+      wrap.appendChild(row); wrap.appendChild(panels);
+      return wrap;
+    },
+    counter(b) {
+      const p = b.props || {};
+      const target = parseFloat(p.value);
+      const val = isNaN(target) ? 0 : target;
+      const prefix = p.prefix != null ? String(p.prefix) : '';
+      const suffix = p.suffix != null ? String(p.suffix) : '';
+      const sizeN = _n(p.size, 20, 240);
+      const align = ALIGN(p.align || 'center');
+      const wrap = _el('div', 'text-align:' + align);
+      const num = _el('div', `font-size:${sizeN != null ? sizeN + 'px' : '3rem'};font-weight:800;line-height:1.1;` +
+        (p.color ? '' : 'color:var(--color-primary,#00A654);'));
+      if (p.color) { num.style.cssText += ';color:' + _sanitizeCss(p.color); if (_isGradientFill(p.color)) num.style.cssText += ';' + _textFillCss(p.color) + _gradFitCss(align); }
+      const decimals = ((String(p.value).split('.')[1]) || '').length;
+      const fmt = (n) => prefix + (decimals ? n.toFixed(decimals) : Math.round(n).toLocaleString()) + suffix;
+      num.textContent = fmt(0);
+      wrap.appendChild(num);
+      if (_lv(b.text)) wrap.appendChild(_el('div', 'margin-top:6px;opacity:.75;font-weight:500', _lv(b.text)));
+      let done = false;
+      const run = () => {
+        if (done) return; done = true;
+        const dur = 1100; let t0 = null;
+        const step = (t) => { if (t0 == null) t0 = t; const k = Math.min(1, (t - t0) / dur); num.textContent = fmt(val * (1 - Math.pow(1 - k, 3))); if (k < 1) requestAnimationFrame(step); };
+        requestAnimationFrame(step);
+        // Safety net: rAF is paused in background tabs, so guarantee the final
+        // value lands even if the animation frames never run (never stuck at 0).
+        setTimeout(() => { num.textContent = fmt(val); }, dur + 250);
+      };
+      // Run on scroll-into-view; but if the widget is ALREADY in the viewport at
+      // mount (above the fold — the common case), start right away instead of
+      // waiting for an intersection that may never come.
+      try {
+        const io = new IntersectionObserver((ents) => ents.forEach((en) => { if (en.isIntersecting) { run(); io.disconnect(); } }), { threshold: 0.35 });
+        setTimeout(() => {
+          try {
+            const r = wrap.getBoundingClientRect();
+            const vh = window.innerHeight || document.documentElement.clientHeight || 0;
+            if (r.height > 0 && r.top < vh && r.bottom > 0) run();   // already visible
+            else io.observe(wrap);                                   // below fold → on scroll
+          } catch (_) { run(); }
+        }, 30);
+      } catch (_) { run(); }
+      return wrap;
+    },
+    video(b) {
+      const p = b.props || {};
+      const src = _safeHref(p.src);
+      const align = ALIGN(p.align || 'center');
+      const maxW = _n(p.width, 120, 1600);
+      const radius = 'border-radius:var(--radius-md,10px);';
+      const wrap = _el('div', 'text-align:' + align);
+      const isFile = /\.(mp4|webm|ogg|mov)(\?|#|$)/i.test(src);
+      if (src && isFile) {
+        const v = document.createElement('video');
+        v.src = src; v.controls = true;
+        if (p.poster) { const ph = _safeHref(p.poster); if (ph) v.poster = ph; }
+        if (p.autoplay) { v.autoplay = true; v.muted = true; v.loop = !!p.loop; v.setAttribute('playsinline', ''); }
+        v.style.cssText = `max-width:100%;width:${maxW != null ? maxW + 'px' : '100%'};${radius}display:inline-block`;
+        wrap.appendChild(v);
+      } else if (src) {
+        // External embed (YouTube/Vimeo…): the strict CSP forbids inline iframes,
+        // so present a poster + play badge that opens the video in a new tab.
+        const a = document.createElement('a');
+        a.href = src; a.target = '_blank'; a.rel = 'noopener noreferrer';
+        a.style.cssText = `position:relative;display:inline-block;max-width:100%;width:${maxW != null ? maxW + 'px' : '100%'};aspect-ratio:16/9;${radius}overflow:hidden;background:#000 center/cover no-repeat;text-decoration:none`;
+        if (p.poster) { const ph = _urlCss(p.poster); if (ph) a.style.backgroundImage = `url("${ph}")`; }
+        const badge = _el('span', 'position:absolute;inset:0;display:flex;align-items:center;justify-content:center');
+        badge.appendChild(_el('span', 'width:60px;height:60px;border-radius:50%;background:rgba(0,0,0,.55);color:#fff;font-size:22px;display:flex;align-items:center;justify-content:center', '▶'));
+        a.appendChild(badge);
+        wrap.appendChild(a);
+      } else {
+        wrap.appendChild(_el('div', 'opacity:.5;font-size:13px;padding:20px;border:1px dashed var(--border-subtle,#2a2a3a);border-radius:8px', _lv(b.text) || 'Vidéo'));
+      }
+      return wrap;
     },
   };
 

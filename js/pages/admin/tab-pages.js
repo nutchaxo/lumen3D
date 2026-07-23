@@ -163,6 +163,9 @@ const PALETTE = [
   { type: 'icon-list', icon: 'list-checks', def: 'Liste à icônes', cat: 'lists' },
   { type: 'profile', icon: 'contact', def: 'Profil', cat: 'content' },
   { type: 'cite-block', icon: 'clipboard-copy', def: 'Citation copiable', cat: 'content' },
+  { type: 'tabs', icon: 'panels-top-left', def: 'Onglets', cat: 'lists' },
+  { type: 'counter', icon: 'timer', def: 'Compteur animé', cat: 'content' },
+  { type: 'video', icon: 'video', def: 'Vidéo', cat: 'content' },
 ];
 const PALETTE_CATS = [
   ['basics', 'Bases'],
@@ -195,6 +198,9 @@ function _newWidget(type) {
     case 'icon-list': return { id, type, props: { items: [{ icon: 'check', text: {}, href: '' }], layout: 'v', iconColor: '', iconSize: '', gap: '', textSize: '' } };
     case 'profile': return { id, type, props: { name: {}, role: {}, desc: {}, mediaKind: 'monogram', monogram: 'AB', img: '', icon: 'user', mediaBg: '', mediaColor: '', mediaSize: '', mediaRadius: '', roleColor: '', nameSize: '', layout: 'h', glowMedia: true } };
     case 'cite-block': return { id, type, props: { title: {}, text: {}, mono: true, copy: true, extraLabel: {}, extra: {} } };
+    case 'tabs': return { id, type, props: { items: [{ label: {}, content: {} }, { label: {}, content: {} }], accent: '' } };
+    case 'counter': return { id, type, text: {}, props: { value: '100', prefix: '', suffix: '', size: '', color: '', align: 'center' } };
+    case 'video': return { id, type, text: {}, props: { src: '', poster: '', width: '', align: 'center', autoplay: false, loop: false } };
     default: return { id, type, props: {} };
   }
 }
@@ -642,6 +648,21 @@ function _contentGroups(type) {
       { k: 'props.extraLabel', t: 'ltext', l: t('pages.cb.extraLabel', 'Libellé du bloc repliable') },
       { k: 'props.extra', t: 'ltextarea', l: t('pages.cb.extra', 'Contenu repliable (BibTeX…)') },
     ] }];
+    case 'tabs': return [{ title: t('pages.grp.items', 'Éléments'), icon: 'panels-top-left', fields: [
+      { k: 'props.items', t: 'items', l: t('pages.tabs.items', 'Onglets'),
+        item: [{ k: 'label', t: 'ltext', l: t('pages.tabs.label', 'Titre de l\'onglet') }, { k: 'content', t: 'ltextarea', l: t('pages.tabs.content', 'Contenu') }],
+        mk: () => ({ label: {}, content: {} }), addLabel: t('pages.tabs.add', 'Ajouter un onglet'),
+        summary: (it, lv) => lv(it.label) }] }];
+    case 'counter': return [{ title: content, icon: 'timer', fields: [
+      { k: 'props.value', t: 'text', l: t('pages.cnt.value', 'Valeur cible'), ph: '100' },
+      { k: 'props.prefix', t: 'text', l: t('pages.cnt.prefix', 'Préfixe'), ph: '' },
+      { k: 'props.suffix', t: 'text', l: t('pages.cnt.suffix', 'Suffixe'), ph: '%, +, k…' },
+      { k: 'text', t: 'ltext', l: t('pages.cnt.label', 'Libellé') },
+    ] }];
+    case 'video': return [{ title: content, icon: 'video', fields: [
+      { k: 'props.src', t: 'text', l: t('pages.vid.src', 'Vidéo (fichier .mp4/.webm ou lien YouTube/Vimeo)') },
+      { k: 'props.poster', t: 'media', l: t('pages.vid.poster', 'Image d\'aperçu (poster)') },
+    ] }];
     default: return [];
   }
 }
@@ -820,6 +841,23 @@ function _styleGroupsSpecific(type) {
       return [{ title: t('pages.grp.format', 'Mise en forme'), icon: 'type', fields: [
         { k: 'props.mono', t: 'check', l: t('pages.cb.mono', 'Police mono') },
         { k: 'props.copy', t: 'check', l: t('pages.cb.copyBtn', 'Bouton copier') },
+      ] }];
+    case 'tabs':
+      return [{ title: t('pages.grp.colors', 'Couleurs'), icon: 'palette', fields: [
+        { k: 'props.accent', t: 'color', l: t('pages.tabs.accent', 'Couleur de l\'onglet actif') },
+      ] }];
+    case 'counter':
+      return [{ title: t('pages.grp.layout', 'Mise en page'), icon: 'layout-grid', fields: [
+        { k: 'props.size', t: 'slider', l: t('pages.cnt.size', 'Taille du nombre'), min: 20, max: 200, ph: 'auto', dv: 48 },
+        { k: 'props.color', t: 'color', grad: true, l: t('pages.cnt.color', 'Couleur du nombre') },
+        align,
+      ] }];
+    case 'video':
+      return [{ title: t('pages.grp.layout', 'Mise en page'), icon: 'layout-grid', fields: [
+        { k: 'props.width', t: 'slider', l: t('pages.width', 'Largeur'), min: 120, max: 1600, step: 10, ph: 'auto', dv: 640 },
+        { k: 'props.autoplay', t: 'check', l: t('pages.vid.autoplay', 'Lecture auto (muet, fichier local)') },
+        { k: 'props.loop', t: 'check', l: t('pages.vid.loop', 'Boucle') },
+        align,
       ] }];
     default:
       return [];
@@ -1063,6 +1101,7 @@ function _frameEl() { return el('pages-frame'); }
 function _frameLabels() {
   return {
     section: t('pages.section', 'Section'), moveUp: t('pages.moveUp', 'Monter'), moveDown: t('pages.moveDown', 'Descendre'),
+    moveLeft: t('pages.moveLeft', 'Vers la gauche'), moveRight: t('pages.moveRight', 'Vers la droite'), column: t('pages.column', 'Colonne'),
     addColumn: t('pages.addColumn', 'Ajouter une colonne'), settings: t('pages.settings', 'Réglages'),
     duplicate: t('pages.duplicate', 'Dupliquer'), delete: t('pages.delete', 'Supprimer'),
     resizeCols: t('pages.resizeCols', 'Glisser pour redimensionner'), dropHere: t('pages.dropHere', '＋ Glissez un élément ici'),
@@ -1134,6 +1173,8 @@ function _applyAction(action, sel, arg) {
     case 'moveSection': moveSection(sel.si, arg); break;
     case 'addColumn': addColumn(sel.si); break;
     case 'delColumn': removeColumn(sel.si, sel.ci); break;
+    case 'dupColumn': duplicateColumn(sel.si, sel.ci); break;
+    case 'moveColumn': moveColumn(sel.si, sel.ci, arg); break;
     case 'dupWidget': duplicateWidget(sel.si, sel.ci, sel.wi); break;
     case 'delWidget': deleteWidget(sel.si, sel.ci, sel.wi); break;
     case 'setText': _applySetText(sel, arg); break;
@@ -1637,6 +1678,8 @@ function duplicateSection(si) { const clone = JSON.parse(JSON.stringify(_section
 function moveSection(si, dir) { const to = si + dir; if (to < 0 || to >= _sections.length) return; const [s] = _sections.splice(si, 1); _sections.splice(to, 0, s); _sel = { si: to, ci: null, wi: null }; _afterMutate(); }
 function addColumn(si) { const sec = _sections[si]; if (sec.columns.length >= 6) { toast(t('pages.maxCols', 'Maximum 6 colonnes.'), 'warning'); return; } sec.columns.push(_newColumn(Math.max(1, Math.round(12 / (sec.columns.length + 1))))); _rebalance(sec); _afterMutate(); }
 function removeColumn(si, ci) { const sec = _sections[si]; if (sec.columns.length <= 1) return; const [dead] = sec.columns.splice(ci, 1); if (dead.widgets.length && sec.columns[0]) sec.columns[0].widgets.push(...dead.widgets); _rebalance(sec); _sel = { si, ci: null, wi: null }; _afterMutate(); }
+function duplicateColumn(si, ci) { const sec = _sections[si]; if (!sec) return; if (sec.columns.length >= 6) { toast(t('pages.maxCols', 'Maximum 6 colonnes.'), 'warning'); return; } const clone = JSON.parse(JSON.stringify(sec.columns[ci])); clone.id = _id('c'); (clone.widgets || []).forEach((w) => (w.id = _id('w'))); sec.columns.splice(ci + 1, 0, clone); _rebalance(sec); _sel = { si, ci: ci + 1, wi: null }; _afterMutate(); }
+function moveColumn(si, ci, dir) { const sec = _sections[si]; if (!sec) return; const to = ci + dir; if (to < 0 || to >= sec.columns.length) return; const [c] = sec.columns.splice(ci, 1); sec.columns.splice(to, 0, c); _sel = { si, ci: to, wi: null }; _afterMutate(); }
 function _rebalance(sec) { const n = sec.columns.length; const base = Math.floor(12 / n); let rem = 12 - base * n; sec.columns.forEach((c) => { c.width = base + (rem-- > 0 ? 1 : 0); }); }
 function duplicateWidget(si, ci, wi) { const col = _sections[si].columns[ci]; const clone = JSON.parse(JSON.stringify(col.widgets[wi])); clone.id = _id('w'); col.widgets.splice(wi + 1, 0, clone); _sel = { si, ci, wi: wi + 1 }; _afterMutate(); }
 function deleteWidget(si, ci, wi) { _sections[si].columns[ci].widgets.splice(wi, 1); _sel = { si, ci, wi: null }; _afterMutate(); }

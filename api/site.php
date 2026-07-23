@@ -97,6 +97,40 @@ function site_generate_theme_css($theme): string {
     return $out;
 }
 
+/** Structural gate for a page doc (twin of dev_server.py:_validate_page_doc).
+ * Returns null on success, or an error string. Mutates $data (schemaVersion +
+ * width clamp). Forward-compatible: unknown widget types are allowed. */
+function site_validate_page(array &$data): ?string {
+    $raw = json_encode($data);
+    if ($raw === false) return 'Malformed page document';
+    if (strlen($raw) > 2097152) return 'Page document too large';
+    $data['schemaVersion'] = 2;
+    foreach (['published', 'draft'] as $key) {
+        if (!isset($data[$key])) continue;
+        if (!is_array($data[$key])) return "Invalid '$key' block";
+        if (!isset($data[$key]['sections'])) continue;
+        $secs = $data[$key]['sections'];
+        if (!is_array($secs) || count($secs) > 300) return 'Invalid sections';
+        foreach ($data[$key]['sections'] as &$s) {
+            if (!is_array($s)) return 'Invalid section';
+            if (!isset($s['columns'])) continue;
+            if (!is_array($s['columns']) || count($s['columns']) > 12) return 'Invalid columns';
+            foreach ($s['columns'] as &$c) {
+                if (!is_array($c)) return 'Invalid column';
+                if (isset($c['width']) && is_numeric($c['width'])) $c['width'] = max(1, min(12, (int)$c['width']));
+                if (!isset($c['widgets'])) continue;
+                if (!is_array($c['widgets']) || count($c['widgets']) > 500) return 'Invalid widgets';
+                foreach ($c['widgets'] as $wd) {
+                    if (!is_array($wd) || !isset($wd['type']) || !is_string($wd['type'])) return 'Invalid widget';
+                }
+            }
+            unset($c);
+        }
+        unset($s);
+    }
+    return null;
+}
+
 function site_save_doc(string $doc, $data): bool {
     $res = site_doc_path($doc);
     if ($res === null || !is_array($data)) return false;
@@ -157,7 +191,14 @@ if (!admin_is_auth()) admin_json_out(['error' => 'Not authenticated'], 401);
 if (in_array($action, ['save', 'reset', 'publish', 'delete'], true)) {
     admin_require_write();  // POST + CSRF; exits on failure
     $doc = $_GET['doc'] ?? '';
-    if ($action === 'save')    admin_json_out(site_save_doc($doc, is_array($body) ? $body : []) ? ['ok' => true] : ['error' => 'Invalid doc'], site_doc_path($doc) === null ? 400 : 200);
+    if ($action === 'save') {
+        $payload = is_array($body) ? $body : [];
+        if (strncmp($doc, 'pages/', 6) === 0) {
+            $verr = site_validate_page($payload);
+            if ($verr !== null) admin_json_out(['error' => $verr], 400);
+        }
+        admin_json_out(site_save_doc($doc, $payload) ? ['ok' => true] : ['error' => 'Invalid doc'], site_doc_path($doc) === null ? 400 : 200);
+    }
     if ($action === 'reset')   admin_json_out(site_reset_doc($doc) ? ['ok' => true] : ['error' => 'Invalid doc'], site_doc_path($doc) === null ? 400 : 200);
     if ($action === 'publish') admin_json_out(site_publish_doc($doc) ? ['ok' => true] : ['error' => 'Invalid doc'], site_doc_path($doc) === null ? 400 : 200);
     if ($action === 'delete')  admin_json_out(site_delete_doc($doc) ? ['ok' => true] : ['error' => 'Invalid doc'], site_doc_path($doc) === null ? 400 : 200);

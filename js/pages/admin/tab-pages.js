@@ -902,6 +902,9 @@ function renderLauncher() {
 // ── Editor (full-screen: sidebar + iframe of the real page) ─────
 function renderEditor() {
   const root = el('pages-root');
+  const isBuiltin = SPECIAL.some((s) => s.slug === _slug);
+  const revertLabel = isBuiltin ? t('pages.revert', 'Défaut') : t('pages.discardDraft', 'Annuler brouillon');
+  const revertTitle = isBuiltin ? t('pages.revertTitle', 'Réinitialiser au modèle par défaut') : t('pages.discardDraftTitle', 'Annuler les modifications non publiées');
   root.style.cssText = 'position:fixed;inset:0;z-index:2000;background:var(--bg-base,#0d0d1a);display:flex;flex-direction:column';
   root.innerHTML = `
     <div style="display:flex;align-items:center;gap:8px;padding:8px 12px;border-bottom:1px solid var(--border-subtle,#2a2a3a);flex-wrap:wrap">
@@ -911,7 +914,7 @@ function renderEditor() {
       <label style="display:flex;gap:6px;align-items:center;font-size:13px">${escHtml(t('pages.lang', 'Langue'))}<select class="adm-field-input" id="pe-loc" style="width:auto">${_locOptions()}</select></label>
       <span style="flex:1"></span>
       <a class="adm-btn adm-btn-ghost adm-btn-sm" id="pe-open" target="_blank" rel="noopener" href="${escHtml(_viewUrl())}"><i data-lucide="external-link"></i> ${escHtml(t('pages.openTab', 'Ouvrir'))}</a>
-      <button class="adm-btn adm-btn-ghost adm-btn-sm" id="pe-revert"><i data-lucide="rotate-ccw"></i> ${escHtml(t('pages.revert', 'Défaut'))}</button>
+      <button class="adm-btn adm-btn-ghost adm-btn-sm" id="pe-revert" title="${escHtml(revertTitle)}"><i data-lucide="rotate-ccw"></i> ${escHtml(revertLabel)}</button>
       <button class="adm-btn adm-btn-ghost adm-btn-sm" id="pe-save" ${_dirty ? '' : 'disabled'}><i data-lucide="save"></i> ${escHtml(t('pages.saveDraft', 'Brouillon'))}</button>
       <button class="adm-btn adm-btn-accent adm-btn-sm" id="pe-publish"><i data-lucide="upload"></i> ${escHtml(t('pages.publish', 'Publier'))}</button>
     </div>
@@ -1511,8 +1514,13 @@ function addWidgetToSelection(type) {
   if (si == null || si < 0) { _sections.push(_newSection()); si = _sections.length - 1; }
   const ci = (_sel && _sel.ci != null) ? _sel.ci : 0;
   const col = _sections[si].columns[ci] || _sections[si].columns[0];
-  col.widgets.push(_newWidget(type));
-  _sel = { si, ci: _sections[si].columns.indexOf(col), wi: col.widgets.length - 1 };
+  const realCi = _sections[si].columns.indexOf(col);
+  // Insert just AFTER the selected widget (mirrors duplicateWidget + the drop
+  // index) rather than always appending at column end — click-add and drag-add
+  // now place widgets consistently.
+  const at = (_sel && _sel.wi != null && _sel.si === si && _sel.ci === realCi) ? _sel.wi + 1 : col.widgets.length;
+  col.widgets.splice(at, 0, _newWidget(type));
+  _sel = { si, ci: realCi, wi: at };
   _side = 'settings';
   _afterMutate();
 }
@@ -1567,23 +1575,52 @@ async function newPage() {
   if (_pages.some((p) => p.slug === slug)) { toast(t('pages.dupSlug', 'Cette page existe déjà.'), 'error'); return; }
   const label = prompt(t('pages.newLabel', 'Libellé dans le menu :'), slug) || slug;
   await apiFetchStatus(`${API_SITE}?action=save&doc=pages/${encodeURIComponent(slug)}`, { method: 'POST', body: JSON.stringify({ title: { [_editLoc]: label }, published: { sections: [] }, draft: { sections: [] } }) });
+  // Add to nav HIDDEN (show:false): an empty page must not leak into the public
+  // menu before it has published content — publish() reveals it. Read-reconcile
+  // first so a concurrent Identity edit isn't clobbered.
+  await _reconcileInstance();
   _instance.nav = _instance.nav || {};
   _instance.nav.customPages = Array.isArray(_instance.nav.customPages) ? _instance.nav.customPages : [];
-  _instance.nav.customPages.push({ slug, label: { [_editLoc]: label }, show: true });
+  _instance.nav.customPages.push({ slug, label: { [_editLoc]: label }, show: false });
   await apiFetchStatus(`${API_SITE}?action=save&doc=instance`, { method: 'POST', body: JSON.stringify(_instance) });
   try { if (typeof InstanceConfig !== 'undefined') await InstanceConfig.load(); } catch (_) {}
   _buildPageList();
-  toast(t('pages.created', 'Page créée.'), 'success');
+  toast(t('pages.created', 'Page créée. Elle apparaîtra dans le menu après publication.'), 'success');
   await selectPage(slug);
   enterEditor();
+}
+
+// First publish of a custom page flips its nav entry from hidden to visible.
+// No-op for built-ins (their visibility lives in Identity → Navigation) and for
+// pages already visible. Read-reconcile so a concurrent Identity edit survives.
+async function _revealPageInNav(slug) {
+  if (SPECIAL.some((s) => s.slug === slug)) return;
+  try {
+    await _reconcileInstance();
+    const list = (_instance.nav && Array.isArray(_instance.nav.customPages)) ? _instance.nav.customPages : null;
+    const pg = list ? list.find((p) => p.slug === slug) : null;
+    if (!pg || pg.show !== false) return;
+    pg.show = true;
+    await apiFetchStatus(`${API_SITE}?action=save&doc=instance`, { method: 'POST', body: JSON.stringify(_instance) });
+    try { if (typeof InstanceConfig !== 'undefined') await InstanceConfig.load(); } catch (_) {}
+    _buildPageList();
+  } catch (_) { /* non-fatal: the page is published, just not yet linked */ }
 }
 
 async function deletePage() {
   const page = _pages.find((p) => p.slug === _slug);
   if (!page || page.builtin) { toast(t('pages.cantDeleteBuiltin', 'Les pages intégrées ne peuvent pas être supprimées (réinitialisez-les).'), 'warning'); return; }
   if (!confirm(t('pages.deleteConfirm', 'Supprimer cette page ?'))) return;
-  await apiFetchStatus(`${API_SITE}?action=reset&doc=pages/${encodeURIComponent(_slug)}`, { method: 'POST', body: '{}' });
-  _instance.nav.customPages = (_instance.nav.customPages || []).filter((p) => p.slug !== _slug);
+  // Real delete: unlink config/pages/<slug>.json. The old action=reset only
+  // rewrote it to {}, leaving the page publicly reachable at page.html?slug=
+  // forever and accumulating orphan files invisible to the admin.
+  const d = await apiFetchStatus(`${API_SITE}?action=delete&doc=pages/${encodeURIComponent(_slug)}`, { method: 'POST', body: '{}' });
+  if (!d.ok) { toast(t('pages.saveError', "Échec de l'enregistrement."), 'error'); return; }
+  // Read-reconcile before rewriting instance.json so a concurrent branding/nav
+  // edit in another tab isn't clobbered by our stale snapshot.
+  await _reconcileInstance();
+  _instance.nav = _instance.nav || {};
+  _instance.nav.customPages = (Array.isArray(_instance.nav.customPages) ? _instance.nav.customPages : []).filter((p) => p.slug !== _slug);
   await apiFetchStatus(`${API_SITE}?action=save&doc=instance`, { method: 'POST', body: JSON.stringify(_instance) });
   try { if (typeof InstanceConfig !== 'undefined') await InstanceConfig.load(); } catch (_) {}
   _buildPageList();
@@ -1626,21 +1663,50 @@ async function publish() {
   const r = await apiFetchStatus(`${API_SITE}?action=publish&doc=pages/${encodeURIComponent(_slug)}`, { method: 'POST', body: '{}' });
   if (r.ok) {
     _mark(false); _doc.published = JSON.parse(JSON.stringify(_draftSource())); _seeded = false; renderSidebar();
+    await _revealPageInNav(_slug);   // first publish of a custom page → make it visible in the menu
     toast(t('pages.published', 'Page publiée ✓'), 'success');
     if (btn) { btn.disabled = false; btn.innerHTML = `<i data-lucide="check"></i> ${escHtml(t('pages.publishedBtn', 'Publié ✓'))}`; try { refreshIcons(btn.parentElement || document); } catch (_) {} setTimeout(() => _restorePublishBtn(btn), 2600); }
   } else { _restorePublishBtn(btn); toast(t('pages.saveError', "Échec de l'enregistrement."), 'error'); }
 }
 
 async function revert() {
-  if (!confirm(t('pages.revertConfirm', 'Réinitialiser cette page à son état par défaut ?'))) return;
+  const isBuiltin = SPECIAL.some((s) => s.slug === _slug);
   _cancelAutosave();   // a late autosave would re-write the draft we're about to reset
-  const r = await apiFetchStatus(`${API_SITE}?action=reset&doc=pages/${encodeURIComponent(_slug)}`, { method: 'POST', body: '{}' });
-  if (r.ok) { toast(t('pages.reverted', 'Réinitialisée.'), 'success'); await selectPage(_slug); }
+  if (isBuiltin) {
+    // Built-in home/about have a shipped default template to fall back to.
+    if (!confirm(t('pages.revertConfirm', 'Réinitialiser cette page à son état par défaut ?'))) return;
+    const r = await apiFetchStatus(`${API_SITE}?action=reset&doc=pages/${encodeURIComponent(_slug)}`, { method: 'POST', body: '{}' });
+    if (r.ok) { toast(t('pages.reverted', 'Réinitialisée.'), 'success'); await selectPage(_slug); }
+    else toast(t('pages.saveError', "Échec de l'enregistrement."), 'error');
+    return;
+  }
+  // Custom page: "revert" DISCARDS THE UNPUBLISHED DRAFT and returns to the
+  // published version. A custom page has NO default template, so the old
+  // action=reset wiped published content too (unrecoverable data loss). Restore
+  // from _doc.published purely client-side, then persist draft==published.
+  if (!confirm(t('pages.discardDraftConfirm', 'Annuler les modifications non publiées et revenir à la version publiée ?'))) return;
+  const pub = (_doc && _doc.published && typeof _doc.published === 'object') ? _doc.published : { sections: [] };
+  _sections = _sanitizeSections(_migrate(pub));
+  _background = (pub.background && typeof pub.background === 'object' && pub.background.preset) ? JSON.parse(JSON.stringify(pub.background)) : null;
+  _sel = null; _seeded = false;
+  if (!_doc || typeof _doc !== 'object' || Array.isArray(_doc)) _doc = _emptyDoc();
+  _doc.draft = JSON.parse(JSON.stringify(pub));
+  const r = await apiFetchStatus(`${API_SITE}?action=save&doc=pages/${encodeURIComponent(_slug)}`, { method: 'POST', body: JSON.stringify(_doc) });
+  _mark(false);
+  renderSidebar(); _syncFrame();
+  if (r.ok) toast(t('pages.draftDiscarded', 'Modifications annulées.'), 'success');
   else toast(t('pages.saveError', "Échec de l'enregistrement."), 'error');
 }
 
 async function load() {
   if (!_bound) { window.addEventListener('message', _onMessage); _bound = true; }
+  // Guard unsaved edits on reload/close/back for BOTH the dedicated editor tab
+  // AND the in-shell fallback editor (was previously bound only in the ?editor=
+  // tab branch, so a popup-blocked in-shell session lost work silently).
+  if (!_beforeUnloadBound) {
+    _beforeUnloadBound = true;
+    window.addEventListener('beforeunload', (e) => { if (_dirty) { e.preventDefault(); e.returnValue = ''; } });
+  }
   const inst = await apiFetch(`${API_SITE}?action=get&doc=instance`);
   _instance = (inst && typeof inst === 'object') ? inst : {};
   try { _editLoc = (I18n && I18n.getLanguage) ? I18n.getLanguage() : 'en'; } catch (_) { _editLoc = 'en'; }
@@ -1659,12 +1725,6 @@ async function load() {
     _editorOnly = true;
     _mode = 'editor';
     _slug = _pages.some((p) => p.slug === eslug) ? eslug : 'home';
-    // Dedicated editor tab owns the window → guard against losing unsaved work on
-    // close/reload (the in-shell editor kept it in SPA memory; a tab can't).
-    if (!_beforeUnloadBound) {
-      _beforeUnloadBound = true;
-      window.addEventListener('beforeunload', (e) => { if (_dirty) { e.preventDefault(); e.returnValue = ''; } });
-    }
   }
   await selectPage(_slug || 'home');
 }

@@ -12,13 +12,22 @@
    ============================================================ */
 
 .pr-hov-lift, .pr-hov-glow, .pr-hov-zoom { transition: transform .22s ease, box-shadow .22s ease, border-color .22s ease; }
-.pr-hov-lift:hover { transform: translateY(-4px); box-shadow: 0 14px 32px rgba(0,0,0,.30); }
-.pr-hov-glow:hover { box-shadow: 0 8px 28px var(--pr-glow, color-mix(in srgb, var(--color-primary,#00A654) 40%, transparent)); }
-.pr-hov-zoom:hover { transform: scale(1.03); }
+.pr-hov-lift:hover, .pr-hov-lift:focus-visible { transform: translateY(-4px); box-shadow: 0 14px 32px rgba(0,0,0,.30); }
+.pr-hov-glow:hover, .pr-hov-glow:focus-visible { box-shadow: 0 8px 28px var(--pr-glow, color-mix(in srgb, var(--color-primary,#00A654) 40%, transparent)); }
+.pr-hov-zoom:hover, .pr-hov-zoom:focus-visible { transform: scale(1.03); }
+
+/* Keyboard focus parity: a link-card whose :hover affordance is a transform/
+   shadow otherwise shows nothing when tabbed to. Give every interactive
+   hover-card a clear focus ring (CSP-safe static rule). */
+.pr-hov-lift:focus-visible, .pr-hov-glow:focus-visible, .pr-hov-zoom:focus-visible,
+.pr-hov-parent:focus-visible {
+  outline: 2px solid var(--color-primary, #00A654);
+  outline-offset: 2px;
+}
 
 /* gallery zoom-on-hover (widget props.zoom) */
 .pr-hov-parent .pr-gal-img { transition: transform .35s ease; }
-.pr-hov-parent:hover .pr-gal-img { transform: scale(1.06); }
+.pr-hov-parent:hover .pr-gal-img, .pr-hov-parent:focus-visible .pr-gal-img { transform: scale(1.06); }
 
 /* Responsive visibility (style.hideMobile/hideDesktop). Neutralized while
    editing (body[data-editing]) so hidden widgets stay selectable. */

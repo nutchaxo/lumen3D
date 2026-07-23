@@ -122,6 +122,18 @@ function site_reset_doc(string $doc): bool {
     return site_save_doc($doc, $content);
 }
 
+/** Delete a custom page doc (config/pages/<slug>.json). Refuses instance/theme/
+ * legal (those revert-to-default; never removed). Idempotent. */
+function site_delete_doc(string $doc): bool {
+    $doc = trim($doc);
+    if (strncmp($doc, 'pages/', 6) !== 0) return false;
+    $res = site_doc_path($doc);
+    if ($res === null) return false;
+    $active = $res[0];
+    if (is_file($active) && !@unlink($active)) return false;
+    return true;
+}
+
 function site_publish_doc(string $doc): bool {
     $data = site_load_doc($doc);
     if ($data === false) return false;
@@ -142,12 +154,13 @@ if ($action === 'get') {
 // ── Writes: admin session + CSRF ──────────────────────────────────────────────
 if (!admin_is_auth()) admin_json_out(['error' => 'Not authenticated'], 401);
 
-if (in_array($action, ['save', 'reset', 'publish'], true)) {
+if (in_array($action, ['save', 'reset', 'publish', 'delete'], true)) {
     admin_require_write();  // POST + CSRF; exits on failure
     $doc = $_GET['doc'] ?? '';
     if ($action === 'save')    admin_json_out(site_save_doc($doc, is_array($body) ? $body : []) ? ['ok' => true] : ['error' => 'Invalid doc'], site_doc_path($doc) === null ? 400 : 200);
     if ($action === 'reset')   admin_json_out(site_reset_doc($doc) ? ['ok' => true] : ['error' => 'Invalid doc'], site_doc_path($doc) === null ? 400 : 200);
     if ($action === 'publish') admin_json_out(site_publish_doc($doc) ? ['ok' => true] : ['error' => 'Invalid doc'], site_doc_path($doc) === null ? 400 : 200);
+    if ($action === 'delete')  admin_json_out(site_delete_doc($doc) ? ['ok' => true] : ['error' => 'Invalid doc'], site_doc_path($doc) === null ? 400 : 200);
 }
 
 admin_json_out(['error' => 'Unknown action'], 400);

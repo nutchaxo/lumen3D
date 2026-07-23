@@ -426,6 +426,25 @@ def _reset_site_doc(doc: str) -> bool:
     return _save_site_doc(doc, data)
 
 
+def _delete_site_doc(doc: str) -> bool:
+    """Delete a custom page doc (config/pages/<slug>.json) from disk. Refuses
+    instance/theme/legal (those revert-to-default via reset; they are never
+    removed). Idempotent: a missing file still returns True."""
+    doc = (doc or "").strip()
+    if not doc.startswith("pages/"):
+        return False
+    res = _site_doc_path(doc)
+    if not res:
+        return False
+    active, _default = res
+    try:
+        if active.exists():
+            active.unlink()
+        return True
+    except Exception:
+        return False
+
+
 def _publish_site_doc(doc: str) -> bool:
     """Promote a doc's draft to published (page builder). Copies the `draft` block over
     `published` in-place; no-op-safe for docs without a draft/published split."""
@@ -3149,7 +3168,7 @@ class AdminHandler(http.server.SimpleHTTPRequestHandler):
             if not session:
                 self._json(401, {"error": "Not authenticated"})
                 return
-            if action in ("save", "reset", "publish"):
+            if action in ("save", "reset", "publish", "delete"):
                 ok, status, payload = _authorize_write(
                     self.command, session, self.headers.get("X-CSRF-Token"))
                 if not ok:
@@ -3160,6 +3179,9 @@ class AdminHandler(http.server.SimpleHTTPRequestHandler):
                 self._json(200 if ok else 400, {"ok": True} if ok else {"error": "Invalid doc"})
             elif action == "reset":
                 ok = _reset_site_doc(params.get("doc", ""))
+                self._json(200 if ok else 400, {"ok": True} if ok else {"error": "Invalid doc"})
+            elif action == "delete":
+                ok = _delete_site_doc(params.get("doc", ""))
                 self._json(200 if ok else 400, {"ok": True} if ok else {"error": "Invalid doc"})
             elif action == "publish":
                 ok = _publish_site_doc(params.get("doc", ""))

@@ -32,7 +32,7 @@
    these fields; the edit frame (page-edit-frame.js) reuses sectionCss/
    columnCss/applyStyleExtras below so editor and live page can never drift.
 
-   20 widget types: heading, richtext, image, button, divider, spacer, hero,
+   21 widget types: heading, richtext, image, button, divider, spacer, hero,
    gallery, icon, stat-grid, latest-datasets, html, feature-card, quote,
    accordion, timeline, cta-banner + (v1.18.0) badge, icon-list, profile,
    cite-block.
@@ -108,6 +108,27 @@ const PageRenderer = (() => {
     } catch (_) {}
     return 'No datasets to show yet.';
   }
+  // Coalesce the per-widget Lucide passes into ONE document scan per frame: a
+  // content-rich page used to queue ~1 setTimeout+DOM-scan per icon-bearing
+  // widget. createIcons() is idempotent (a replaced <i> loses its data-lucide),
+  // so a single global pass after the tree is built covers every widget.
+  let _iconTimer = null;
+  function _scheduleIcons() {
+    if (_iconTimer) return;
+    _iconTimer = setTimeout(() => { _iconTimer = null; try { if (window.lucide && window.lucide.createIcons) lucide.createIcons(); } catch (_) {} }, 0);
+  }
+  // Are we rendering inside the visual editor? (page-edit-frame sets this.) A
+  // widget that throws should degrade to nothing on a LIVE page, but stay a
+  // visible, selectable, fixable placeholder while editing.
+  function _editMode() { try { return !!(document.body && document.body.dataset && document.body.dataset.editing); } catch (_) { return false; } }
+  function _errorBox(w, err) {
+    const box = _el('div', 'margin:0 0 10px');
+    const inner = _el('div', 'padding:12px 14px;border:1px dashed var(--color-danger,#e5484d);border-radius:8px;' +
+      'color:var(--color-danger,#e5484d);font-size:12px;background:color-mix(in srgb,var(--color-danger,#e5484d) 8%,transparent)');
+    inner.textContent = '⚠ ' + ((w && w.type) || 'widget') + ' — ' + (err ? String(err.message || err).slice(0, 90) : 'rendu impossible');
+    box.appendChild(inner);
+    return box;
+  }
   // One CSS *value* (color, gradient, …) — never a declaration: strip anything
   // that could close the property or smuggle extra ones in. 400 chars leaves
   // room for a 3-stop gradient whose stops are color-mix(...)-wrapped var()s.
@@ -133,6 +154,11 @@ const PageRenderer = (() => {
     if (!s || /^\s*(javascript|vbscript|data)\s*:/i.test(s)) return '';
     return s;
   }
+  // Same guard, but with a default for widgets that always render an anchor
+  // (button/hero-CTA/cta-banner/feature-card link): an empty or dangerous href
+  // collapses to '#' instead of reaching the DOM raw. Every authored href in the
+  // renderer must pass through _safeHref/_hrefOr — no exceptions.
+  function _hrefOr(u, dflt) { return _safeHref(u) || (dflt == null ? '#' : dflt); }
   const ALIGN = (a) => (a === 'center' || a === 'right' ? a : 'left');
   // Numeric style field: ''/null/undefined → unset (null); else clamped number.
   function _n(v, min, max) {
@@ -146,14 +172,21 @@ const PageRenderer = (() => {
     const tpl = document.createElement('template');
     tpl.innerHTML = String(html || '');
     const BAD = new Set(['SCRIPT', 'STYLE', 'IFRAME', 'OBJECT', 'EMBED', 'LINK', 'META', 'BASE', 'FORM']);
+    // Consistent with _safeHref: href/xlink:href/formaction reject
+    // javascript:/vbscript:/data: (data:text/html is an XSS vector); src keeps
+    // data: (legit inline images) but still drops the script schemes.
+    const HREFISH = new Set(['href', 'xlink:href', 'formaction']);
     const walk = (node) => {
       [...node.children].forEach((child) => {
         if (BAD.has(child.tagName)) { child.remove(); return; }
         [...child.attributes].forEach((a) => {
           const n = a.name.toLowerCase();
           if (n.startsWith('on')) child.removeAttribute(a.name);
-          else if ((n === 'href' || n === 'src') && /^\s*javascript:/i.test(a.value)) child.removeAttribute(a.name);
+          else if (HREFISH.has(n) && /^\s*(javascript|vbscript|data)\s*:/i.test(a.value)) child.removeAttribute(a.name);
+          else if (n === 'src' && /^\s*(javascript|vbscript)\s*:/i.test(a.value)) child.removeAttribute(a.name);
         });
+        // Any target=_blank link the author leaves in gets tab-nabbing protection.
+        if (child.hasAttribute('target')) child.setAttribute('rel', 'noopener noreferrer');
         walk(child);
       });
     };
@@ -378,7 +411,8 @@ const PageRenderer = (() => {
         `${(h || p.fit) ? `object-fit:${p.fit === 'contain' ? 'contain' : 'cover'};` : ''}` +
         `border-radius:var(--radius-md,10px);${p.width ? 'width:' + (parseInt(p.width) || 0) + 'px;' : ''}` +
         styleCss(st, ['surface', 'size']);
-      if (p.href) { const a = document.createElement('a'); a.href = p.href; a.appendChild(img); wrap.appendChild(a); }
+      const imgHref = _safeHref(p.href);
+      if (imgHref) { const a = document.createElement('a'); a.href = imgHref; a.appendChild(img); wrap.appendChild(a); }
       else wrap.appendChild(img);
       if (hasCaption) wrap.appendChild(_el('figcaption', 'font-size:.82rem;opacity:.65;margin-top:8px', _lv(p.caption)));
       return wrap;
@@ -393,7 +427,7 @@ const PageRenderer = (() => {
       const variant = p.variant || (typeof p.style === 'string' ? p.style : 'accent');
       const wrap = _el('div', `text-align:${ALIGN(p.align || 'left')};margin:6px 0;` + styleCss(st, ['spacing']));
       const a = document.createElement('a');
-      a.href = p.href || '#';
+      a.href = _hrefOr(p.href);
       // variant 'lg' is the legacy (pre-v1.18.0) value: 'accent' + the existing
       // btn-lg class, ignoring props.size (spec-mandated back-compat).
       let cls = 'btn ';
@@ -413,7 +447,7 @@ const PageRenderer = (() => {
         a.style.cssText += ';display:inline-flex;align-items:center;gap:8px;';
         if (p.iconPos === 'right') { a.appendChild(txt); a.appendChild(ic); }
         else { a.appendChild(ic); a.appendChild(txt); }
-        setTimeout(() => { try { if (window.lucide && window.lucide.createIcons) lucide.createIcons({ nodes: [a] }); } catch (_) {} }, 0);
+        _scheduleIcons();
       } else {
         a.textContent = label;
       }
@@ -475,7 +509,7 @@ const PageRenderer = (() => {
         }
         pill.appendChild(_el('span', '', _lv(p.badge.text)));
         inner.appendChild(pill);
-        setTimeout(() => { try { if (window.lucide && window.lucide.createIcons) lucide.createIcons({ nodes: [pill] }); } catch (_) {} }, 0);
+        _scheduleIcons();
       }
       const ts = _n(p.titleSize, 10, 200);
       // Style-panel text group is the shared base; the dedicated per-part fills
@@ -496,7 +530,7 @@ const PageRenderer = (() => {
       if (p.cta2 && _lv(p.cta2.text)) ctas.push(['btn btn-ghost btn-lg', p.cta2]);
       if (ctas.length) {
         const row = _el('div', `display:flex;gap:12px;flex-wrap:wrap;justify-content:${align === 'center' ? 'center' : align === 'right' ? 'flex-end' : 'flex-start'}`);
-        ctas.forEach(([cls, cta]) => { const a = document.createElement('a'); a.href = cta.href || '#'; a.className = cls; a.textContent = _lv(cta.text); row.appendChild(a); });
+        ctas.forEach(([cls, cta]) => { const a = document.createElement('a'); a.href = _hrefOr(cta.href); a.className = cls; a.textContent = _lv(cta.text); row.appendChild(a); });
         inner.appendChild(row);
       }
       sec.appendChild(inner);
@@ -541,7 +575,7 @@ const PageRenderer = (() => {
       wrap.appendChild(badge);
       // Lucide swaps <i data-lucide> for an inline <svg>; the node is attached
       // after this returns, so defer the scan one tick (container-scoped).
-      setTimeout(() => { try { if (window.lucide && window.lucide.createIcons) lucide.createIcons({ nodes: [wrap] }); } catch (_) {} }, 0);
+      _scheduleIcons();
       return wrap;
     },
     'stat-grid'(b) {
@@ -632,7 +666,7 @@ const PageRenderer = (() => {
         a.appendChild(body);
         wrap.appendChild(a);
       });
-      if (needIcons) setTimeout(() => { try { if (window.lucide && window.lucide.createIcons) lucide.createIcons({ nodes: [wrap] }); } catch (_) {} }, 0);
+      if (needIcons) _scheduleIcons();
       return wrap;
     },
     html(b) { const div = document.createElement('div'); div.innerHTML = _sanitizeHtml(_lv(b.props?.html)); return div; },
@@ -650,7 +684,7 @@ const PageRenderer = (() => {
       if (href) card.href = href;
 
       const mediaNode = _featureMedia(p, layout === 'h');
-      if (mediaNode) setTimeout(() => { try { if (window.lucide && window.lucide.createIcons) lucide.createIcons({ nodes: [card] }); } catch (_) {} }, 0);
+      if (mediaNode) _scheduleIcons();
 
       const textCol = layout === 'h' ? _el('div', 'flex:1 1 auto;min-width:0;text-align:' + align) : null;
       const target = textCol || card;
@@ -662,7 +696,7 @@ const PageRenderer = (() => {
         (p.descColor ? `;color:${_sanitizeCss(p.descColor)}` : ''), _lv(p.desc)));
       if (p.link && _lv(p.link.text)) {
         const a = document.createElement('a');
-        a.href = p.link.href || '#';
+        a.href = _hrefOr(p.link.href);
         a.style.cssText = `display:inline-flex;align-items:center;gap:6px;margin-top:14px;color:${p.linkColor ? _sanitizeCss(p.linkColor) : 'var(--color-primary,#00A654)'};text-decoration:none;font-weight:600;font-size:.92rem`;
         a.textContent = _lv(p.link.text) + (p.linkArrow === false ? '' : ' →');
         target.appendChild(a);
@@ -746,7 +780,7 @@ const PageRenderer = (() => {
         d.addEventListener('toggle', () => { chev.style.transform = d.open ? 'rotate(180deg)' : ''; });
         wrap.appendChild(d);
       });
-      setTimeout(() => { try { if (window.lucide && window.lucide.createIcons) lucide.createIcons({ nodes: [wrap] }); } catch (_) {} }, 0);
+      _scheduleIcons();
       return wrap;
     },
     timeline(b) {
@@ -779,7 +813,7 @@ const PageRenderer = (() => {
       root.appendChild(txt);
       const mkCta = (cta, ghost) => {
         const a = document.createElement('a');
-        a.href = cta.href || '#';
+        a.href = _hrefOr(cta.href);
         a.style.cssText = ghost
           ? 'flex:0 0 auto;display:inline-block;padding:12px 24px;border-radius:10px;background:transparent;border:1px solid rgba(255,255,255,.5);color:#fff;font-weight:700;text-decoration:none;white-space:nowrap'
           : 'flex:0 0 auto;display:inline-block;padding:12px 24px;border-radius:10px;background:#fff;color:#14141f;font-weight:700;text-decoration:none;white-space:nowrap;box-shadow:0 4px 14px rgba(0,0,0,.22)';
@@ -832,7 +866,7 @@ const PageRenderer = (() => {
         pill.appendChild(_el('span', '', _lv(it.text)));
         wrap.appendChild(pill);
       });
-      if (needIcons) setTimeout(() => { try { if (window.lucide && window.lucide.createIcons) lucide.createIcons({ nodes: [wrap] }); } catch (_) {} }, 0);
+      if (needIcons) _scheduleIcons();
       return wrap;
     },
     'icon-list'(b) {
@@ -866,7 +900,7 @@ const PageRenderer = (() => {
         }
         wrap.appendChild(row);
       });
-      if (needIcons) setTimeout(() => { try { if (window.lucide && window.lucide.createIcons) lucide.createIcons({ nodes: [wrap] }); } catch (_) {} }, 0);
+      if (needIcons) _scheduleIcons();
       return wrap;
     },
     profile(b) {
@@ -903,7 +937,7 @@ const PageRenderer = (() => {
         ic.style.cssText = `width:${iconPx}px;height:${iconPx}px`;
         box.appendChild(ic);
         mediaNode = box;
-        setTimeout(() => { try { if (window.lucide && window.lucide.createIcons) lucide.createIcons({ nodes: [box] }); } catch (_) {} }, 0);
+        _scheduleIcons();
       }
       if (mediaNode) {
         if (glowMedia) mediaNode.style.cssText += ';box-shadow:0 8px 24px color-mix(in srgb, var(--color-primary,#00A654) 35%, transparent)';
@@ -981,7 +1015,7 @@ const PageRenderer = (() => {
       }
 
       root.appendChild(body);
-      setTimeout(() => { try { if (window.lucide && window.lucide.createIcons) lucide.createIcons({ nodes: [root] }); } catch (_) {} }, 0);
+      _scheduleIcons();
       return root;
     },
   };
@@ -998,7 +1032,7 @@ const PageRenderer = (() => {
 
   function renderWidget(w) {
     const fn = RENDERERS[w && w.type];
-    if (!fn) return null;
+    if (!fn) return _editMode() ? _errorBox(w, new Error('type inconnu')) : null;
     try {
       const node = fn(w);
       if (!node) return null;
@@ -1017,7 +1051,10 @@ const PageRenderer = (() => {
       const box = _el('div', 'margin:0 0 10px');
       box.appendChild(node);
       return box;
-    } catch (_) { return null; }
+    } catch (e) {
+      if (_editMode()) { try { console.warn('[PageRenderer] widget render failed:', w && w.type, e); } catch (_) {} return _errorBox(w, e); }
+      return null;
+    }
   }
 
   // ── Normalization: accept sections / flat blocks / bare array ──────────────
@@ -1110,6 +1147,7 @@ const PageRenderer = (() => {
     container.textContent = '';
     const sections = _normalize(source);
     sections.forEach((s) => container.appendChild(renderSection(s)));
+    _scheduleIcons();
     return sections.length;
   }
 

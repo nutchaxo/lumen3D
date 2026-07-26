@@ -2,7 +2,7 @@
 finalized forward. Reproduces the reported scenario and asserts the fix."""
 import json, shutil, sys, hashlib
 from pathlib import Path
-sys.path.insert(0, r"D:\Coding\WebPlatform")
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import dev_server as ds
 
 BASE = Path(__file__).parent / ".recon-arena"

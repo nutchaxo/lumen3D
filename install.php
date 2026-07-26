@@ -286,9 +286,14 @@ function http_get_small(string $url, array $extraHeaders = []): array {
         }
         // Streams use OpenSSL's own defaults, which can still work when curl's are broken.
         if ($res['ok'] || !is_ca_error($res['error']) || !stream_capable()) return $res;
+        $caError = $res['error'];
     }
 
-    return stream_get_small($url, $headers);
+    $res = stream_get_small($url, $headers);
+    // Keep the CA diagnosis when the stream fallback also fails: its own error is a
+    // bare "network", which would send the operator hunting a firewall that is fine.
+    if (!$res['ok'] && isset($caError) && !is_ca_error($res['error'])) $res['error'] = $caError;
+    return $res;
 }
 
 /** curl branch of http_get_small. */
@@ -737,10 +742,20 @@ function fetch_release_info(): array {
 function requirements_list(?int $needBytes): array {
     $free = @disk_free_space(target_dir());
     $need = ($needBytes !== null ? $needBytes : 100 * 1024 * 1024) * 2;
+
+    // CA trust store: diagnostic only (never blocking) — OpenSSL can hold a default
+    // we cannot see from PHP, and open_basedir routinely hides /etc/ssl from is_readable().
+    [$caFile, $caDir] = ca_probe();
+    $caBroken = ca_ini_broken();
+    $caFound = $caFile !== null || $caDir !== null;
+    $caOk = (!$caBroken || $caFound) ? true : null;
+    $caValue = !$caBroken ? 'php.ini' : ($caFile ?? $caDir);
+
     return [
         ['id' => 'php',      'ok' => PHP_VERSION_ID >= 70400, 'value' => PHP_VERSION],
         ['id' => 'zip',      'ok' => class_exists('ZipArchive'), 'value' => class_exists('ZipArchive') ? 'ZipArchive' : null],
         ['id' => 'http',     'ok' => http_capable(), 'value' => extension_loaded('curl') ? 'curl' : (http_capable() ? 'allow_url_fopen' : null)],
+        ['id' => 'ca',       'ok' => $caOk, 'value' => $caValue, 'hintAlways' => $caOk === null],
         ['id' => 'crypto',   'ok' => function_exists('hash_pbkdf2') && function_exists('random_bytes') && function_exists('hash_file'), 'value' => 'PBKDF2-SHA256'],
         ['id' => 'writable', 'ok' => is_writable(target_dir()), 'value' => null],
         ['id' => 'disk',     'ok' => ($free === false) ? null : ($free >= $need),
@@ -1479,6 +1494,8 @@ const DICT = {
     req_checking: "Vérification en cours…",
     req_php: "PHP ≥ 7.4", req_zip: "Extension Zip (ZipArchive)", req_http: "Accès HTTPS sortant (curl ou allow_url_fopen)",
     req_crypto: "Fonctions cryptographiques (PBKDF2)", req_writable: "Dossier accessible en écriture", req_disk: "Espace disque libre",
+    req_ca: "Certificats CA (vérification HTTPS)",
+    hint_ca: "Introuvable : php.ini désigne un fichier CA absent et aucun magasin système n'est lisible (open_basedir ?). Téléversez cacert.pem (https://curl.se/ca/cacert.pem) à côté de install.php.",
     hint_php: "Mettez à jour PHP via le panneau de votre hébergeur.",
     hint_zip: "Activez l'extension « zip » dans la configuration PHP.",
     hint_http: "Activez l'extension curl ou allow_url_fopen dans php.ini.",
@@ -1587,6 +1604,8 @@ const DICT = {
     req_checking: "Checking…",
     req_php: "PHP ≥ 7.4", req_zip: "Zip extension (ZipArchive)", req_http: "Outbound HTTPS (curl or allow_url_fopen)",
     req_crypto: "Crypto functions (PBKDF2)", req_writable: "Directory writable", req_disk: "Free disk space",
+    req_ca: "CA certificates (HTTPS verification)",
+    hint_ca: "Not found: php.ini names a CA file that does not exist and no system store is readable (open_basedir?). Upload cacert.pem (https://curl.se/ca/cacert.pem) next to install.php.",
     hint_php: "Update PHP from your hosting control panel.",
     hint_zip: "Enable the \"zip\" extension in the PHP configuration.",
     hint_http: "Enable the curl extension or allow_url_fopen in php.ini.",
@@ -1824,7 +1843,8 @@ function renderWelcome(resume) {
 
 const REQ_META = {
   php: ['req_php', 'hint_php'], zip: ['req_zip', 'hint_zip'], http: ['req_http', 'hint_http'],
-  crypto: ['req_crypto', 'hint_crypto'], writable: ['req_writable', 'hint_writable'], disk: ['req_disk', 'hint_disk']
+  crypto: ['req_crypto', 'hint_crypto'], writable: ['req_writable', 'hint_writable'], disk: ['req_disk', 'hint_disk'],
+  ca: ['req_ca', 'hint_ca']
 };
 function reqRow(r) {
   const [nameKey, hintKey] = REQ_META[r.id] || [r.id, null];
@@ -1838,7 +1858,7 @@ function reqRow(r) {
     el('span', { class: 'req-ic', text: icon, 'aria-hidden': 'true' }),
     el('span', { class: 'req-name' }, [
       el('span', { text: t(nameKey) }),
-      r.ok === false && hintKey ? el('span', { class: 'req-hint', text: t(hintKey) }) : null
+      (r.ok === false || r.hintAlways) && hintKey ? el('span', { class: 'req-hint', text: t(hintKey) }) : null
     ]),
     el('span', { class: 'req-val', text: val })
   ]);

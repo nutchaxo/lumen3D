@@ -82,12 +82,16 @@ const PageEditFrame = (() => {
   // ── render ──────────────────────────────────────────────────────
   function render() {
     if (!_host) return;
+    // Preserve scroll: replacing every child (textContent='') resets the window
+    // scroll on tall pages, yanking the viewport on every keystroke-driven push.
+    const sx = window.scrollX, sy = window.scrollY;
     _host.textContent = '';
     if (_empty) _empty.style.display = 'none';
     if (!_sections.length) { _host.appendChild(_emptyState()); return; }
     _sections.forEach((sec, si) => _host.appendChild(_sectionNode(sec, si)));
     _host.appendChild(_addSectionBar());
     _icons(_host);
+    window.scrollTo(sx, sy);
   }
 
   function _emptyState() {
@@ -139,6 +143,7 @@ const PageEditFrame = (() => {
     outer.dataset.ebSi = si;
     outer.style.cssText = css.outer +
       `;outline:2px solid ${selected ? PRIMARY : 'transparent'};outline-offset:-2px;transition:outline-color .12s`;
+    PageRenderer.applyStyleExtras(outer, p.style);
     const ov = PageRenderer.overlayNode(p.style);
     if (ov) outer.appendChild(ov);
 
@@ -216,13 +221,16 @@ const PageEditFrame = (() => {
       // live visual resize (no round-trip) — parent commits on pointerup
       cols.forEach((cel) => { const cci = +cel.dataset.ebCi; if (cci === ci - 1) cel.style.flexBasis = `calc(${(finalLeft / 12) * 100}% - ${share}px)`; else if (cci === ci) cel.style.flexBasis = `calc(${((total - finalLeft) / 12) * 100}% - ${share}px)`; });
     };
-    const onUp = () => {
+    const teardown = () => {
       window.removeEventListener('pointermove', onMove);
       window.removeEventListener('pointerup', onUp);
-      _post({ type: 'LUMEN_EDIT_RESIZE', si, ci, leftWidth: finalLeft });
+      window.removeEventListener('pointercancel', onCancel);
     };
+    const onUp = () => { teardown(); _post({ type: 'LUMEN_EDIT_RESIZE', si, ci, leftWidth: finalLeft }); };
+    const onCancel = () => teardown();   // cancelled → keep the pre-drag layout
     window.addEventListener('pointermove', onMove);
     window.addEventListener('pointerup', onUp);
+    window.addEventListener('pointercancel', onCancel);
   }
 
   function _columnNode(sec, si, col, ci, gap) {
@@ -233,9 +241,22 @@ const PageEditFrame = (() => {
     // first so a column style radius (in columnCss) overrides it.
     c.style.cssText = 'position:relative;border-radius:8px;' + PageRenderer.columnCss(col, gap, sec.columns.length) +
       `;outline:1px dashed ${selected ? PRIMARY : 'transparent'};outline-offset:-1px;transition:outline-color .12s`;
-    c.addEventListener('mouseenter', () => { if (!selected) c.style.outlineColor = 'var(--border-subtle,#2a2a3a)'; });
-    c.addEventListener('mouseleave', () => { if (!selected) c.style.outlineColor = 'transparent'; });
+    PageRenderer.applyStyleExtras(c, (col.props || {}).style);
+
+    // Column chrome: a compact toolbar (move left/right, settings, duplicate,
+    // delete) so a column can be managed in-canvas like sections and widgets.
+    const cbar = _bar('right:4px'); cbar.style.top = '4px';
+    if (ci > 0) cbar.appendChild(_btn('chevron-left', _msg('moveLeft', 'Gauche'), () => _action('moveColumn', { si, ci }, -1)));
+    if (ci < (sec.columns.length - 1)) cbar.appendChild(_btn('chevron-right', _msg('moveRight', 'Droite'), () => _action('moveColumn', { si, ci }, 1)));
+    cbar.appendChild(_btn('settings-2', _msg('settings', 'Réglages'), () => _select({ si, ci, wi: null })));
+    cbar.appendChild(_btn('copy', _msg('duplicate', 'Dupliquer'), () => _action('dupColumn', { si, ci })));
+    if (sec.columns.length > 1) cbar.appendChild(_btn('trash-2', _msg('delete', 'Supprimer'), () => _action('delColumn', { si, ci })));
+    c.appendChild(cbar);
+
+    c.addEventListener('mouseenter', () => { if (!selected) c.style.outlineColor = 'var(--border-subtle,#2a2a3a)'; cbar.style.opacity = '1'; });
+    c.addEventListener('mouseleave', () => { if (!selected) c.style.outlineColor = 'transparent'; if (!selected) cbar.style.opacity = '0'; });
     c.addEventListener('click', (e) => { e.stopPropagation(); _select({ si, ci, wi: null }); });
+    if (selected) cbar.style.opacity = '1';
 
     const widgets = Array.isArray(col.widgets) ? col.widgets : [];
     widgets.forEach((w, wi) => c.appendChild(_widgetNode(w, si, ci, wi)));
@@ -283,7 +304,62 @@ const PageEditFrame = (() => {
       view.textContent = _lv(w.text) || (w.type || 'widget');
     }
     box.appendChild(view);
+
+    // Inline on-canvas text edit: double-click a plain-text title/label to edit
+    // it directly (contenteditable). Limited to widgets whose main text is a
+    // plain string (heading/button/hero/cta-banner/feature-card) — richtext keeps
+    // the sidebar because its markup would be lost by a textContent round-trip.
+    const inlineSel = _INLINE_TEXT[w.type];
+    if (inlineSel) {
+      box.addEventListener('dblclick', (e) => {
+        const target = view.querySelector(inlineSel);
+        if (!target) return;
+        e.preventDefault(); e.stopPropagation();
+        _inlineEdit(target, view, { si, ci, wi });
+      });
+    }
     return box;
+  }
+
+  // ── inline text editing (double-click a title/label) ───────────
+  // Map widget type → selector for its primary plain-text element inside the
+  // rendered view. Only widgets whose main text is a plain string.
+  const _INLINE_TEXT = {
+    heading: 'h1,h2,h3,h4,h5,h6',
+    button: 'a',
+    hero: 'h1,h2,h3',
+    'cta-banner': 'h3,h2',
+    'feature-card': 'h3',
+  };
+  function _inlineEdit(elm, view, sel) {
+    const original = elm.textContent;
+    const prevPE = view.style.pointerEvents;
+    view.style.pointerEvents = 'auto';          // the view is normally inert (clicks select)
+    elm.setAttribute('contenteditable', 'true');
+    elm.style.outline = '2px solid ' + PRIMARY;
+    elm.style.outlineOffset = '2px';
+    elm.focus();
+    try { const r = document.createRange(); r.selectNodeContents(elm); const s = window.getSelection(); s.removeAllRanges(); s.addRange(r); } catch (_) {}
+    let done = false;
+    const finish = (commit) => {
+      if (done) return; done = true;
+      elm.removeEventListener('blur', onBlur);
+      elm.removeEventListener('keydown', onKey);
+      elm.removeAttribute('contenteditable');
+      elm.style.outline = ''; elm.style.outlineOffset = '';
+      view.style.pointerEvents = prevPE || 'none';
+      const val = elm.textContent;
+      if (commit) { if (val !== original) _action('setText', sel, { value: val }); }
+      else elm.textContent = original;
+    };
+    const onBlur = () => finish(true);
+    const onKey = (ev) => {
+      ev.stopPropagation();
+      if (ev.key === 'Escape') { ev.preventDefault(); finish(false); }
+      else if (ev.key === 'Enter' && !ev.shiftKey) { ev.preventDefault(); finish(true); }
+    };
+    elm.addEventListener('blur', onBlur);
+    elm.addEventListener('keydown', onKey);
   }
 
   // ── reorder (drag within the frame) ─────────────────────────────
@@ -293,17 +369,24 @@ const PageEditFrame = (() => {
     try { e.currentTarget.setPointerCapture(e.pointerId); } catch (_) {}
     const from = { si, ci, wi };
     document.body.style.cursor = 'grabbing';
-    const onMove = (ev) => _paintIndicator(_slotAt(ev.clientX, ev.clientY));
-    const onUp = (ev) => {
+    const repaint = (x, y) => _paintIndicator(_slotAt(x, y));
+    const onMove = (ev) => { repaint(ev.clientX, ev.clientY); _autoFeed(ev.clientX, ev.clientY, repaint); };
+    // Shared teardown: also runs on pointercancel (right-click menu, touch
+    // interruption, focus loss) so the drag can never wedge the editor with a
+    // stuck cursor + leaked listeners + a phantom drop on the next click.
+    const teardown = () => {
       window.removeEventListener('pointermove', onMove);
       window.removeEventListener('pointerup', onUp);
+      window.removeEventListener('pointercancel', onCancel);
+      _autoStop();
       document.body.style.cursor = '';
       _clearIndicator();
-      const slot = _slotAt(ev.clientX, ev.clientY);
-      if (slot) _post({ type: 'LUMEN_EDIT_DROP', target: { si: slot.si, ci: slot.ci, index: slot.index }, payload: { kind: 'move', from } });
     };
+    const onUp = (ev) => { const slot = _slotAt(ev.clientX, ev.clientY); teardown(); if (slot) _post({ type: 'LUMEN_EDIT_DROP', target: { si: slot.si, ci: slot.ci, index: slot.index }, payload: { kind: 'move', from } }); };
+    const onCancel = () => teardown();   // cancelled → no drop
     window.addEventListener('pointermove', onMove);
     window.addEventListener('pointerup', onUp);
+    window.addEventListener('pointercancel', onCancel);
   }
 
   // ── drop-slot resolution (shared by reorder + palette drops) ────
@@ -335,6 +418,29 @@ const PageEditFrame = (() => {
   }
   function _clearIndicator() { if (_ind) _ind.style.display = 'none'; }
 
+  // ── Edge auto-scroll (shared by reorder + palette drops) ────────
+  // When the pointer nears the top/bottom of the iframe viewport during a drag,
+  // scroll the page so off-screen columns become reachable — otherwise a page
+  // taller than the viewport is un-droppable below the fold. rAF-driven; the
+  // repaint callback re-resolves the drop slot as content moves under a still
+  // pointer.
+  const _EDGE = 56, _EDGE_SPEED = 18;
+  let _autoRaf = 0, _autoDir = 0, _autoX = 0, _autoY = 0, _autoRepaint = null;
+  function _autoTick() {
+    _autoRaf = 0;
+    if (!_autoDir) return;
+    window.scrollBy(0, _autoDir * _EDGE_SPEED);
+    if (_autoRepaint) _autoRepaint(_autoX, _autoY);
+    _autoRaf = requestAnimationFrame(_autoTick);
+  }
+  function _autoFeed(x, y, repaint) {
+    _autoX = x; _autoY = y; _autoRepaint = repaint || null;
+    const h = window.innerHeight || document.documentElement.clientHeight;
+    _autoDir = (y < _EDGE) ? -1 : (y > h - _EDGE) ? 1 : 0;
+    if (_autoDir && !_autoRaf) _autoRaf = requestAnimationFrame(_autoTick);
+  }
+  function _autoStop() { _autoDir = 0; _autoRepaint = null; if (_autoRaf) { cancelAnimationFrame(_autoRaf); _autoRaf = 0; } }
+
   // ── parent messages ─────────────────────────────────────────────
   function _onMessage(e) {
     if (e.source !== window.parent) return;
@@ -353,14 +459,17 @@ const PageEditFrame = (() => {
         break;
       case 'LUMEN_EDIT_DRAGMOVE':
         _paintIndicator(_slotAt(m.x, m.y));
+        _autoFeed(m.x, m.y, (x, y) => _paintIndicator(_slotAt(x, y)));
         break;
       case 'LUMEN_EDIT_DROP_AT': {
         const slot = _slotAt(m.x, m.y);
+        _autoStop();
         _clearIndicator();
         if (slot) _post({ type: 'LUMEN_EDIT_DROP', target: { si: slot.si, ci: slot.ci, index: slot.index }, payload: m.payload });
         break;
       }
       case 'LUMEN_EDIT_DRAGCLEAR':
+        _autoStop();
         _clearIndicator();
         break;
     }

@@ -1763,3 +1763,70 @@ html, body {
 /* hidden must beat .pbc-pop{display:flex} — this is what makes re-click collapse work */
 .pbc-pop[hidden] { display: none; }
 .pbc-caret { display: inline-flex; flex: 0 0 auto; transition: transform 0.15s; }
+
+/* ══════════════════════════════════════════════════════════════
+   Pro settings panel (v1.18.0) — mode tabs, breadcrumbs, header,
+   grouped accordion, linked spacing grid. Reuses --adm-* tokens.
+   ══════════════════════════════════════════════════════════════ */
+
+/* Contenu / Style / Avancé mode tabs — full-width segmented, icon+label inline */
+.pbc-tabs {
+  display: flex; border: 1px solid var(--adm-border);
+  border-radius: var(--adm-radius-sm); overflow: hidden; background: var(--adm-card);
+}
+.pbc-tabs button {
+  flex: 1; display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  padding: 8px 6px; min-width: 0; font-size: 12px;
+  background: transparent; color: var(--adm-text-sec);
+  border: none; border-right: 1px solid var(--adm-border); cursor: pointer;
+  transition: background var(--adm-trans), color var(--adm-trans);
+}
+.pbc-tabs button:last-child { border-right: none; }
+.pbc-tabs button:hover { color: var(--adm-text); background: var(--adm-card-hover); }
+.pbc-tabs button.on { background: var(--adm-accent-subtle); color: var(--adm-accent); font-weight: 600; }
+.pbc-tabs button span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* Breadcrumb trail — "Section N › Colonne N › Widget" */
+.pbc-crumbs { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
+.pbc-crumbs button {
+  padding: 0; background: none; border: none; cursor: pointer;
+  font-size: 11px; color: var(--adm-text-sec);
+}
+.pbc-crumbs button:hover { color: var(--adm-accent); }
+.pbc-crumbs button:last-child { color: var(--adm-text); font-weight: 600; cursor: default; }
+.pbc-crumbs-sep { font-size: 11px; opacity: 0.4; }
+
+/* Settings-panel header: type-icon pastille + name + duplicate/delete actions */
+.pbc-head { display: flex; align-items: center; gap: 9px; }
+.pbc-head-icon {
+  display: inline-flex; align-items: center; justify-content: center; flex: 0 0 auto;
+  width: 28px; height: 28px; border-radius: 8px;
+  background: var(--adm-accent-subtle); color: var(--adm-accent);
+}
+.pbc-head-title { flex: 1; min-width: 0; font-size: 13px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pbc-head-actions { display: inline-flex; gap: 4px; flex: 0 0 auto; }
+.pbc-head-actions .pbc-mini { width: 26px; height: 26px; }
+
+/* Settings groups accordion (renderGroups) — one <details> per group, open
+   state remembered in pages-controls.js so it survives widget re-selection. */
+.pbc-group { border: 1px solid var(--adm-border); border-radius: 10px; margin-bottom: 8px; background: var(--adm-card); }
+.pbc-group summary {
+  display: flex; align-items: center; gap: 8px; padding: 9px 11px;
+  font-size: 12.5px; font-weight: 600; color: var(--adm-text);
+  cursor: pointer; list-style: none; user-select: none;
+}
+.pbc-group summary::-webkit-details-marker { display: none; }
+.pbc-group summary span:not(.pbc-group-caret) { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pbc-group-caret { margin-left: auto; flex: 0 0 auto; display: inline-flex; transition: transform 0.15s; }
+.pbc-group[open] .pbc-group-caret { transform: rotate(180deg); }
+.pbc-group-body { padding: 4px 11px 12px; display: flex; flex-direction: column; gap: 10px; }
+
+/* Linked 4-side spacing control (padding / margin) */
+.pbc-spacing { display: grid; grid-template-columns: repeat(4, 1fr) auto; gap: 6px; align-items: center; }
+.pbc-spacing-cell { display: flex; flex-direction: column; align-items: center; gap: 2px; }
+.pbc-spacing-cell .pbc-num { width: 100%; text-align: center; }
+.pbc-spacing-lbl { font-size: 9.5px; text-align: center; opacity: 0.6; }
+.pbc-spacing-link.on { background: var(--adm-accent-subtle); color: var(--adm-accent); border-color: var(--adm-accent); }
+
+/* "Récents" divider inside the ctlColor swatch grid (full-width row) */
+.pbc-recent-label { grid-column: 1 / -1; font-size: 10px; color: var(--adm-text-muted); margin: 2px 0 -1px; }

@@ -948,7 +948,11 @@
       "quote": "Cita",
       "accordion": "Acordeón / FAQ",
       "timeline": "Línea de tiempo",
-      "cta-banner": "Banner de acción"
+      "cta-banner": "Banner de acción",
+      "badge": "Insignias",
+      "icon-list": "Lista con iconos",
+      "profile": "Perfil",
+      "cite-block": "Cita copiable"
     },
     "addColumn": "Añadir una columna",
     "addSection": "Añadir una sección",
@@ -1056,7 +1060,26 @@
       "marginTop": "Margen superior",
       "marginBottom": "Margen inferior",
       "maxWidth": "Ancho máximo",
-      "minHeight": "Alto mínimo"
+      "minHeight": "Alto mínimo",
+      "hover": "Efecto al pasar el cursor",
+      "hovNone": "Ninguno",
+      "hovLift": "Elevación",
+      "hovGlow": "Halo",
+      "hovZoom": "Zoom",
+      "shadowColor": "Color de la sombra",
+      "shadowGlow": "Halo",
+      "hideMobile": "Ocultar en móvil",
+      "hideDesktop": "Ocultar en escritorio",
+      "customCss": "CSS en línea",
+      "customCssHint": "Declaraciones CSS aplicadas directamente al elemento.",
+      "padding": "Padding",
+      "margin": "Margen",
+      "linked": "Vincular lados",
+      "top": "Arriba",
+      "right": "Derecha",
+      "bottom": "Abajo",
+      "left": "Izquierda",
+      "unlinked": "Lados independientes"
     },
     "noDatasetsYet": "Aún no hay conjuntos de datos que mostrar.",
     "colsAuto": "Columnas (auto si vacío)",
@@ -1074,7 +1097,26 @@
       "iconShape": "Forma",
       "round": "Redondo",
       "square": "Cuadrado",
-      "linkText": "Enlace (etiqueta)"
+      "linkText": "Enlace (etiqueta)",
+      "media": "Medio",
+      "mediaIcon": "Icono",
+      "mediaImage": "Imagen",
+      "mediaMono": "Monograma",
+      "mediaNone": "Ninguno",
+      "img": "Imagen (URL)",
+      "imgH": "Alto de la imagen",
+      "plateBg": "Fondo de la placa",
+      "monogram": "Monograma",
+      "monoBg": "Fondo del monograma",
+      "monoColor": "Color del monograma",
+      "layoutH": "Horizontal",
+      "layoutV": "Vertical",
+      "titleColor": "Color del título",
+      "titleSize": "Tamaño del título",
+      "descColor": "Color del texto",
+      "linkColor": "Color del enlace",
+      "linkArrow": "Flecha del enlace",
+      "cardHref": "Enlace de la tarjeta"
     },
     "qt": {
       "text": "Cita",
@@ -1083,7 +1125,10 @@
       "avatar": "Foto (URL, opcional)",
       "bar": "Barra",
       "card": "Tarjeta",
-      "accent": "Color de acento"
+      "accent": "Color de acento",
+      "label": "Etiqueta (eyebrow)",
+      "linkText": "Enlace (etiqueta)",
+      "linkHref": "Enlace (URL)"
     },
     "ac": {
       "items": "Preguntas / secciones",
@@ -1092,7 +1137,9 @@
       "add": "Añadir una pregunta",
       "single": "Solo una abierta a la vez",
       "firstOpen": "Primera abierta por defecto",
-      "chevron": "Color del chevrón"
+      "chevron": "Color del chevrón",
+      "itemBg": "Fondo de los elementos",
+      "border": "Borde"
     },
     "tl": {
       "items": "Etapas",
@@ -1142,7 +1189,9 @@
       "colorSurface": "Superficie / tarjeta",
       "colorText": "Texto",
       "colorTextMuted": "Texto atenuado",
-      "colorBorder": "Borde"
+      "colorBorder": "Borde",
+      "recent": "Recientes",
+      "noIcon": "Ninguno"
     },
     "titleColor": "Color del título",
     "subColor": "Color del subtítulo",
@@ -1210,7 +1259,116 @@
       "frequency": "Frecuencia",
       "depth": "Profundidad",
       "thickness": "Grosor"
-    }
+    },
+    "tab": {
+      "content": "Contenido",
+      "style": "Estilo",
+      "advanced": "Avanzado"
+    },
+    "grp": {
+      "text": "Texto",
+      "surface": "Fondo y borde",
+      "spacing": "Espaciado",
+      "size": "Tamaño",
+      "effects": "Efectos",
+      "visibility": "Visibilidad",
+      "customCss": "CSS personalizado",
+      "content": "Contenido",
+      "media": "Medio",
+      "colors": "Colores",
+      "layout": "Diseño",
+      "items": "Elementos",
+      "links": "Enlaces",
+      "buttons": "Botones",
+      "icon": "Icono",
+      "badge": "Insignia",
+      "glow": "Halo decorativo",
+      "format": "Formato"
+    },
+    "w": {
+      "copy": "Copiar",
+      "copied": "Copiado ✓"
+    },
+    "bd": {
+      "items": "Insignias",
+      "dot": "Punto de color",
+      "mono": "Fuente monoespaciada",
+      "size": "Tamaño del texto",
+      "gap": "Espaciado",
+      "pillBg": "Fondo de las insignias",
+      "pillColor": "Texto de las insignias",
+      "border": "Borde",
+      "addItem": "Añadir una insignia"
+    },
+    "il": {
+      "items": "Elementos",
+      "layout": "Disposición",
+      "v": "Vertical",
+      "h": "Horizontal",
+      "iconColor": "Color de los iconos",
+      "iconSize": "Tamaño de los iconos",
+      "gap": "Espaciado",
+      "addItem": "Añadir un elemento"
+    },
+    "pf": {
+      "name": "Nombre",
+      "role": "Rol",
+      "desc": "Descripción",
+      "mediaKind": "Medio",
+      "monogram": "Monograma",
+      "image": "Imagen (URL)",
+      "mediaSize": "Tamaño del medio",
+      "mediaRadius": "Redondeo del medio",
+      "mediaBg": "Fondo del medio",
+      "mediaColor": "Color del medio",
+      "glow": "Sombra luminosa",
+      "roleColor": "Color del rol",
+      "nameSize": "Tamaño del nombre"
+    },
+    "cb": {
+      "title": "Título",
+      "text": "Texto de la cita",
+      "extraLabel": "Etiqueta del bloque plegable",
+      "extra": "Contenido plegable (BibTeX…)",
+      "mono": "Fuente monoespaciada",
+      "copyBtn": "Botón de copiar"
+    },
+    "hero": {
+      "badgeText": "Texto de la insignia",
+      "badgeIcon": "Icono de la insignia",
+      "badgeDot": "Punto",
+      "badgeColor": "Color de la insignia",
+      "glow": "Halo decorativo",
+      "glowC1": "Color del halo 1",
+      "glowC2": "Color del halo 2"
+    },
+    "btn": {
+      "icon": "Icono",
+      "iconPos": "Posición del icono",
+      "iconLeft": "Izquierda",
+      "iconRight": "Derecha",
+      "size": "Tamaño",
+      "outline": "Contorno"
+    },
+    "gal": {
+      "captions": "Leyendas",
+      "zoom": "Zoom al pasar el cursor"
+    },
+    "sg": {
+      "border": "Borde de las tarjetas",
+      "radius": "Redondeo de las tarjetas",
+      "pad": "Padding de las tarjetas"
+    },
+    "ld": {
+      "cardBg": "Fondo de las tarjetas",
+      "border": "Borde de las tarjetas",
+      "radius": "Redondeo",
+      "titleColor": "Color de los títulos",
+      "hover": "Elevación al pasar el cursor"
+    },
+    "richtextHint": "**negrita**, *cursiva*, [enlace](url)",
+    "imgCaption": "Leyenda",
+    "markup": "Formato enriquecido"
   },
   "wizard": {
     "title": "Instalación guiada",

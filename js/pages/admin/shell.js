@@ -250,8 +250,10 @@ function switchTab(id, force = false) {
   if (!_tabs.has(id)) id = 'datasets';
   if (!force && id === _activeTab) { closeMobileSidebar(); return; }
 
-  // Guard: leaving the datasets editor with unsaved changes.
-  if (!force && _activeTab === 'datasets' && id !== 'datasets' && isDirty()) {
+  // Guard: leaving ANY tab with unsaved changes (datasets CRUD, or the Pages
+  // editor). isDirty()/setUnsaved is a single shared flag, so the guard fires
+  // for whichever tab last marked itself dirty.
+  if (!force && _activeTab !== id && isDirty()) {
     const ok = confirm(t('admin.confirmDiscard', 'Modifications non sauvegardées. Continuer sans sauvegarder ?'));
     if (!ok) return;
   }

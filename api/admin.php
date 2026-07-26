@@ -160,9 +160,11 @@ switch ($action) {
 
     case 'update_check': {
         $current = admin_max_version(changelog_dir()) ?? '0.0.0';
-        $ctx = stream_context_create(['http' => ['header' => "User-Agent: lumen3d-admin\r\nAccept: application/vnd.github+json\r\n", 'timeout' => 10, 'ignore_errors' => true]]);
-        $raw = @file_get_contents("https://api.github.com/repos/" . GITHUB_REPO . "/releases/latest", false, $ctx);
-        if ($raw === false) admin_json_out(['current' => $current, 'latest' => null, 'available' => false, 'error' => 'unreachable']);
+        // Via mkt_fetch_bytes: cURL-first (works with allow_url_fopen OFF) and it
+        // repairs a php.ini CA path that points at a missing bundle — otherwise the
+        // check reports "unreachable" on a host that is perfectly online.
+        $raw = mkt_fetch_bytes('https://api.github.com/repos/' . GITHUB_REPO . '/releases/latest', 512 * 1024);
+        if ($raw === null) admin_json_out(['current' => $current, 'latest' => null, 'available' => false, 'error' => 'unreachable']);
         $rel = json_decode($raw, true);
         if (!is_array($rel) || !isset($rel['tag_name'])) admin_json_out(['current' => $current, 'latest' => null, 'available' => false, 'noReleases' => true]);
         $latest = ltrim((string)$rel['tag_name'], 'v');

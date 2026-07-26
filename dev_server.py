@@ -426,6 +426,82 @@ def _reset_site_doc(doc: str) -> bool:
     return _save_site_doc(doc, data)
 
 
+def _delete_site_doc(doc: str) -> bool:
+    """Delete a custom page doc (config/pages/<slug>.json) from disk. Refuses
+    instance/theme/legal (those revert-to-default via reset; they are never
+    removed). Idempotent: a missing file still returns True."""
+    doc = (doc or "").strip()
+    if not doc.startswith("pages/"):
+        return False
+    res = _site_doc_path(doc)
+    if not res:
+        return False
+    active, _default = res
+    try:
+        if active.exists():
+            active.unlink()
+        return True
+    except Exception:
+        return False
+
+
+_PAGE_MAX_BYTES = 2 * 1024 * 1024   # 2 MB per page doc
+_PAGE_SCHEMA_VERSION = 2
+
+
+def _validate_page_doc(data):
+    """Structural gate for a page doc before it is written (rule 1.4: reject a
+    malformed doc, don't half-write it). Enforces a size cap, the
+    {title?,draft?,published?} shape, bounded section/column/widget counts, and
+    width 1–12 (clamped). Forward-compatible: unknown widget TYPES are allowed
+    (the renderer degrades gracefully) — only gross structural violations are
+    rejected. Stamps schemaVersion. Returns (ok, error|None); mutates `data`
+    (schemaVersion + width clamp)."""
+    try:
+        raw = json.dumps(data)
+    except Exception:
+        return False, "Malformed page document"
+    if len(raw) > _PAGE_MAX_BYTES:
+        return False, "Page document too large"
+    if not isinstance(data, dict):
+        return False, "Page document must be an object"
+    data["schemaVersion"] = _PAGE_SCHEMA_VERSION
+    for key in ("published", "draft"):
+        src = data.get(key)
+        if src is None:
+            continue
+        if not isinstance(src, dict):
+            return False, f"Invalid '{key}' block"
+        secs = src.get("sections")
+        if secs is None:
+            continue   # legacy {blocks:[]} shape → left to the renderer's normalizer
+        if not isinstance(secs, list) or len(secs) > 300:
+            return False, "Invalid sections"
+        for s in secs:
+            if not isinstance(s, dict):
+                return False, "Invalid section"
+            cols = s.get("columns")
+            if cols is None:
+                continue
+            if not isinstance(cols, list) or len(cols) > 12:
+                return False, "Invalid columns"
+            for c in cols:
+                if not isinstance(c, dict):
+                    return False, "Invalid column"
+                w = c.get("width")
+                if isinstance(w, (int, float)):
+                    c["width"] = max(1, min(12, int(w)))
+                widgets = c.get("widgets")
+                if widgets is None:
+                    continue
+                if not isinstance(widgets, list) or len(widgets) > 500:
+                    return False, "Invalid widgets"
+                for wd in widgets:
+                    if not isinstance(wd, dict) or not isinstance(wd.get("type"), str):
+                        return False, "Invalid widget"
+    return True, None
+
+
 def _publish_site_doc(doc: str) -> bool:
     """Promote a doc's draft to published (page builder). Copies the `draft` block over
     `published` in-place; no-op-safe for docs without a draft/published split."""
@@ -437,6 +513,88 @@ def _publish_site_doc(doc: str) -> bool:
         data["published"] = data.get("draft")
         return _save_site_doc(doc, data)
     return True
+
+
+# ── Media library (operator image uploads → config/uploads/) ──────────────────
+MEDIA_DIR = CONFIG_DIR / "uploads"
+# Raster only: SVG is excluded on purpose (an uploaded SVG served from the config/
+# origin could carry inline script if opened directly).
+_MEDIA_EXT = {"png", "jpg", "jpeg", "webp", "gif", "avif"}
+_MEDIA_MAX = 8 * 1024 * 1024  # 8 MB decoded
+
+
+def _media_safe_name(name: str):
+    name = (name or "").strip().replace("\\", "/").split("/")[-1]
+    if "." not in name:
+        return None
+    stem, ext = name.rsplit(".", 1)
+    ext = ext.lower()
+    if ext not in _MEDIA_EXT:
+        return None
+    stem = re.sub(r"[^a-zA-Z0-9_-]+", "-", stem).strip("-").lower()[:60] or "image"
+    return f"{stem}.{ext}"
+
+
+def _media_list():
+    out = []
+    try:
+        if MEDIA_DIR.exists():
+            files = [p for p in MEDIA_DIR.iterdir()
+                     if p.is_file() and "." in p.name and p.name.rsplit(".", 1)[1].lower() in _MEDIA_EXT]
+            for p in sorted(files, key=lambda x: x.stat().st_mtime, reverse=True):
+                out.append({"name": p.name, "url": f"config/uploads/{p.name}", "size": p.stat().st_size})
+    except Exception:
+        pass
+    return out
+
+
+def _media_upload(body):
+    import base64
+    body = body or {}
+    name = _media_safe_name(body.get("filename") or body.get("name") or "")
+    if not name:
+        return {"ok": False, "error": "Type de fichier non supporté (png, jpg, webp, gif, avif)"}
+    data = body.get("data") or ""
+    if isinstance(data, str) and data.startswith("data:"):
+        comma = data.find(",")
+        if comma != -1:
+            data = data[comma + 1:]
+    try:
+        raw = base64.b64decode(data or "", validate=False)
+    except Exception:
+        return {"ok": False, "error": "Données invalides"}
+    if not raw or len(raw) > _MEDIA_MAX:
+        return {"ok": False, "error": "Fichier vide ou trop volumineux (max 8 Mo)"}
+    try:
+        MEDIA_DIR.mkdir(parents=True, exist_ok=True)
+        stem, ext = name.rsplit(".", 1)
+        target = MEDIA_DIR / name
+        i = 1
+        while target.exists():
+            name = f"{stem}-{i}.{ext}"
+            target = MEDIA_DIR / name
+            i += 1
+        target.write_bytes(raw)
+        try:
+            target.chmod(0o644)
+        except Exception:
+            pass
+        return {"ok": True, "url": f"config/uploads/{name}", "name": name}
+    except Exception:
+        return {"ok": False, "error": "Écriture impossible"}
+
+
+def _media_delete(name: str) -> bool:
+    name = _media_safe_name(name)
+    if not name:
+        return False
+    try:
+        p = MEDIA_DIR / name
+        if p.exists():
+            p.unlink()
+        return True
+    except Exception:
+        return False
 
 
 def _client_ip(handler) -> str:
@@ -3110,7 +3268,7 @@ class AdminHandler(http.server.SimpleHTTPRequestHandler):
 
     def do_POST(self):
         parsed = urllib.parse.urlparse(self.path)
-        if parsed.path in ("/api/auth.php", "/api/datasets.php", "/api/admin.php", "/api/telemetry.php", "/api/site.php"):
+        if parsed.path in ("/api/auth.php", "/api/datasets.php", "/api/admin.php", "/api/telemetry.php", "/api/site.php", "/api/media.php"):
             length = int(self.headers.get("Content-Length", 0))
             raw = self.rfile.read(length) if length else b"{}"
             try:
@@ -3149,21 +3307,54 @@ class AdminHandler(http.server.SimpleHTTPRequestHandler):
             if not session:
                 self._json(401, {"error": "Not authenticated"})
                 return
-            if action in ("save", "reset", "publish"):
+            if action in ("save", "reset", "publish", "delete"):
                 ok, status, payload = _authorize_write(
                     self.command, session, self.headers.get("X-CSRF-Token"))
                 if not ok:
                     self._json(status, payload)
                     return
             if action == "save":
-                ok = _save_site_doc(params.get("doc", ""), body or {})
+                _doc_name = params.get("doc", "")
+                if _doc_name.startswith("pages/"):
+                    _vok, _verr = _validate_page_doc(body if isinstance(body, dict) else {})
+                    if not _vok:
+                        self._json(400, {"error": _verr or "Invalid page"})
+                        return
+                ok = _save_site_doc(_doc_name, body or {})
                 self._json(200 if ok else 400, {"ok": True} if ok else {"error": "Invalid doc"})
             elif action == "reset":
                 ok = _reset_site_doc(params.get("doc", ""))
                 self._json(200 if ok else 400, {"ok": True} if ok else {"error": "Invalid doc"})
+            elif action == "delete":
+                ok = _delete_site_doc(params.get("doc", ""))
+                self._json(200 if ok else 400, {"ok": True} if ok else {"error": "Invalid doc"})
             elif action == "publish":
                 ok = _publish_site_doc(params.get("doc", ""))
                 self._json(200 if ok else 400, {"ok": True} if ok else {"error": "Invalid doc"})
+            else:
+                self._json(400, {"error": f"Unknown action: {action}"})
+            return
+
+        # ── Media library (operator image uploads) ────────────────────────────
+        if path == "/api/media.php":
+            session = _get_session(self._token())
+            if not session:
+                self._json(401, {"error": "Not authenticated"})
+                return
+            if action in ("upload", "delete"):
+                ok, status, payload = _authorize_write(
+                    self.command, session, self.headers.get("X-CSRF-Token"))
+                if not ok:
+                    self._json(status, payload)
+                    return
+            if action == "list":
+                self._json(200, {"files": _media_list()})
+            elif action == "upload":
+                res = _media_upload(body or {})
+                self._json(200 if res.get("ok") else 400, res)
+            elif action == "delete":
+                ok = _media_delete((body or {}).get("name", ""))
+                self._json(200 if ok else 400, {"ok": True} if ok else {"error": "Invalid file"})
             else:
                 self._json(400, {"error": f"Unknown action: {action}"})
             return

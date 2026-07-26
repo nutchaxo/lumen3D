@@ -10,19 +10,35 @@
  *   text | ltext | ltextarea      plain / localized inputs (ph, hint)
  *   select                        dropdown, opts: [[value, label]]
  *   check                         toggle switch
- *   seg                           segmented buttons, opts: [[value, label, icon?]]
+ *   seg                           segmented buttons, opts: [[value, label, icon?]];
+ *                                 refresh:true re-runs ctx.refresh() after commit
  *   slider                        range + fine number twin (min, max, step,
  *                                 unit, dv = visual default; ph ⇒ clearable "auto")
- *   color                         rich picker: theme tokens + palette + custom
- *                                 + opacity (color-mix); grad:true adds the
- *                                 GRADIENT tab (presets, stops, angle pad,
+ *   color                         rich picker: theme tokens + Récents + palette +
+ *                                 custom + opacity (color-mix); grad:true adds
+ *                                 the GRADIENT tab (presets, stops, angle pad,
  *                                 linear/radial, save-as-preset)
- *   icon                          searchable Lucide icon picker
+ *   icon                          searchable Lucide icon picker (first tile
+ *                                 clears the field to '' — "Aucune")
  *   items                         repeatable list editor (item: [subfields],
  *                                 mk: () => newItem, summary: (item,lv) => str;
  *                                 subfields support refresh:true + dis(item))
+ *   spacing                       4-side linked padding/margin control:
+ *                                 keys:{top,right,bottom,left} (dot-paths), min, max
+ *   shadow                        preset seg ('' | sm | md | lg | glow) at `k`,
+ *                                 with a conditional color picker at `colorKey`
  *
- * ctx = { loc, onChange(), gradients: { get: () => [css…], save: (list) => } }
+ * Any field descriptor may also carry:
+ *   showIf(obj) → false           skip rendering the field entirely
+ *
+ * ctx = { loc, onChange(), gradients: { get: () => [css…], save: (list) => },
+ *         refresh?, groupKey? }    refresh/groupKey are supplied by renderGroups.
+ *
+ * renderGroups(host, obj, groups, ctx) — groups: [{title, icon, fields, open?}].
+ * Renders each as a <details class="pbc-group"> (open-state remembered across
+ * re-renders, keyed by `${ctx.groupKey}|${title}`); passes each group's own
+ * fields through renderFields with a `refresh` that redraws just that group's
+ * body (used by seg fields declaring refresh:true, e.g. media-kind switches).
  *
  * The generated CSS strings stay 100% compatible with PageRenderer's
  * sanitizers (_sanitizeCss keeps parens, strips <>;{}) — colors compose to
@@ -32,12 +48,36 @@
 
 'use strict';
 
-import { t, refreshIcons } from './shared.js';
+import { t, refreshIcons, apiFetchStatus, API_MEDIA } from './shared.js';
 
 // ── Path + locale helpers ─────────────────────────────────────────
 export function pathGet(o, path) { let v = o; for (const s of path.split('.')) { if (v != null && typeof v === 'object') v = v[s]; else return undefined; } return v; }
 export function pathPut(o, path, val) { const s = path.split('.'); let c = o; for (let i = 0; i < s.length - 1; i++) { if (typeof c[s[i]] !== 'object' || c[s[i]] == null) c[s[i]] = {}; c = c[s[i]]; } c[s[s.length - 1]] = val; }
 function locVal(v, loc) { if (v == null) return ''; if (typeof v === 'string') return v; if (typeof v === 'object') return v[loc] || ''; return String(v); }
+
+// ── Shared popover dismissal (color + icon pickers) ───────────────
+// One document-level listener closes any OPEN sidebar popover on outside-click
+// or Escape, so pickers don't pile up open and clutter the 340px sidebar.
+// Popovers register {pop, trigger, close}; detached entries are pruned lazily.
+const _popovers = new Set();
+let _popDocBound = false;
+function _bindPopDismiss() {
+  if (_popDocBound) return;
+  _popDocBound = true;
+  document.addEventListener('pointerdown', (e) => {
+    _popovers.forEach((p) => {
+      if (!p.pop.isConnected) { _popovers.delete(p); return; }
+      if (p.pop.hidden) return;
+      if (p.pop.contains(e.target) || (p.trigger && p.trigger.contains(e.target))) return;
+      p.close();
+    });
+  }, true);
+  document.addEventListener('keydown', (e) => {
+    if (e.key !== 'Escape') return;
+    _popovers.forEach((p) => { if (p.pop.isConnected && !p.pop.hidden) p.close(); });
+  });
+}
+function registerPopover(pop, trigger, close) { _bindPopDismiss(); _popovers.add({ pop, trigger, close }); }
 
 // ── Design constants ──────────────────────────────────────────────
 // Theme tokens: previews use the public-site fallbacks (the admin page does
@@ -57,6 +97,16 @@ const PALETTE_COLORS = [
   '#14b8a6', '#06b6d4', '#0ea5e9', '#3b82f6', '#6366f1', '#8b5cf6', '#a855f7',
   '#d946ef', '#ec4899', '#f43f5e',
 ];
+// Session-only "recently used" solid colors (not persisted — resets on reload,
+// shared across every color field so a pick in one control shows up in others).
+const _recentColors = [];
+function _pushRecentColor(v) {
+  if (!v || isGradient(v)) return;
+  const i = _recentColors.indexOf(v);
+  if (i !== -1) _recentColors.splice(i, 1);
+  _recentColors.unshift(v);
+  if (_recentColors.length > 8) _recentColors.length = 8;
+}
 export const BUILTIN_GRADIENTS = [
   'linear-gradient(135deg, var(--color-primary,#00A654) 0%, var(--color-accent,#00D2FF) 100%)',
   'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
@@ -237,18 +287,24 @@ function ctlCheck(obj, f, ctx) {
 function ctlSeg(obj, f, ctx) {
   const w = fieldWrap(f.l);
   const seg = mk('div', 'pbc-seg');
+  seg.setAttribute('role', 'radiogroup');
+  if (f.l) seg.setAttribute('aria-label', f.l);
   const cur = String(pathGet(obj, f.k) ?? '');
   const btns = [];
   (f.opts || []).forEach(([v, lab, icon]) => {
     const b = mkBtn(null, lab || v);
+    b.setAttribute('role', 'radio');
+    b.setAttribute('aria-checked', cur === String(v) ? 'true' : 'false');
     if (icon) b.appendChild(mkIcon(icon, 14));
     if (lab) b.appendChild(mk('span', null, lab));
     if (cur === String(v)) b.classList.add('on');
     b.addEventListener('click', () => {
       pathPut(obj, f.k, v);
-      btns.forEach((x) => x.classList.remove('on'));
+      btns.forEach((x) => { x.classList.remove('on'); x.setAttribute('aria-checked', 'false'); });
       b.classList.add('on');
+      b.setAttribute('aria-checked', 'true');
       ctx.onChange();
+      if (f.refresh && ctx.refresh) ctx.refresh();
     });
     btns.push(b);
     seg.appendChild(b);
@@ -300,6 +356,126 @@ function ctlSlider(obj, f, ctx) {
   return w;
 }
 
+// ── Linked 4-side spacing control (Elementor-style padding/margin) ────────
+const _SPACING_SIDES = ['top', 'right', 'bottom', 'left'];
+const _SPACING_LBL = { top: 'T', right: 'R', bottom: 'B', left: 'L' };
+function ctlSpacing(obj, f, ctx) {
+  const min = f.min != null ? +f.min : 0;
+  const max = f.max != null ? +f.max : 300;
+  const w = mk('div', 'adm-field');
+  const head = mk('div', 'pbc-slider-head');
+  head.appendChild(mk('span', 'adm-field-label', f.l));
+  const linkBtn = mkBtn('pbc-mini pbc-spacing-link');
+  head.appendChild(linkBtn);
+  w.appendChild(head);
+
+  const grid = mk('div', 'pbc-spacing');
+  const inputs = {};
+  _SPACING_SIDES.forEach((side) => {
+    const cell = mk('div', 'pbc-spacing-cell');
+    const inp = mk('input', 'pbc-num');
+    inp.type = 'number';
+    inp.min = min; inp.max = max;
+    inp.placeholder = 'auto';
+    inputs[side] = inp;
+    cell.appendChild(inp);
+    cell.appendChild(mk('span', 'pbc-spacing-lbl', _SPACING_LBL[side]));
+    grid.appendChild(cell);
+  });
+  const reset = mkBtn('pbc-reset', t('pages.pc.reset', 'Réinitialiser (auto)'));
+  reset.textContent = '×';
+  grid.appendChild(reset);
+  w.appendChild(grid);
+
+  const getVal = (side) => {
+    const v = pathGet(obj, f.keys[side]);
+    return (v === '' || v == null || isNaN(+v)) ? '' : +v;
+  };
+  const allSame = () => {
+    const vals = _SPACING_SIDES.map(getVal);
+    return vals.every((v) => v === vals[0]);
+  };
+  let linked = allSame();
+
+  const syncLinkBtn = () => {
+    linkBtn.textContent = '';
+    linkBtn.appendChild(mkIcon(linked ? 'link' : 'unlink', 13));
+    linkBtn.classList.toggle('on', linked);
+    linkBtn.title = linked ? t('pages.st.linked', 'Lier les côtés') : t('pages.st.unlinked', 'Côtés indépendants');
+    refreshIcons(linkBtn);
+  };
+  const syncInputs = () => { _SPACING_SIDES.forEach((s) => { const v = getVal(s); inputs[s].value = v === '' ? '' : String(v); }); };
+  syncLinkBtn();
+  syncInputs();
+
+  const commitSide = (side, val) => pathPut(obj, f.keys[side], val);
+
+  _SPACING_SIDES.forEach((side) => {
+    inputs[side].addEventListener('input', () => {
+      const raw = inputs[side].value;
+      const val = raw === '' ? '' : Math.max(min, Math.min(max, +raw));
+      if (linked) {
+        _SPACING_SIDES.forEach((s) => { commitSide(s, val); if (s !== side) inputs[s].value = val === '' ? '' : String(val); });
+      } else {
+        commitSide(side, val);
+      }
+      ctx.onChange();
+    });
+  });
+
+  linkBtn.addEventListener('click', () => {
+    linked = !linked;
+    if (linked) {
+      const first = _SPACING_SIDES.map(getVal).find((v) => v !== '');
+      _SPACING_SIDES.forEach((s) => commitSide(s, first == null ? '' : first));
+      syncInputs();
+      ctx.onChange();
+    }
+    syncLinkBtn();
+  });
+
+  reset.addEventListener('click', () => {
+    _SPACING_SIDES.forEach((s) => commitSide(s, ''));
+    syncInputs();
+    ctx.onChange();
+  });
+
+  return w;
+}
+
+// ── Shadow preset + conditional color ──────────────────────────────
+function ctlShadow(obj, f, ctx) {
+  const w = mk('div', 'adm-field');
+  const colorHost = mk('div');
+  const drawColor = () => {
+    colorHost.textContent = '';
+    const v = String(pathGet(obj, f.k) || '');
+    if (v && f.colorKey) {
+      colorHost.appendChild(ctlColor(obj, {
+        k: f.colorKey,
+        l: t('pages.st.shadowColor', "Couleur de l'ombre"),
+        grad: false,
+      }, ctx));
+    }
+  };
+  const seg = ctlSeg(obj, {
+    k: f.k,
+    l: f.l,
+    refresh: true,
+    opts: [
+      ['', '—'],
+      ['sm', 'S'],
+      ['md', 'M'],
+      ['lg', 'L'],
+      ['glow', t('pages.st.shadowGlow', 'Halo')],
+    ],
+  }, Object.assign({}, ctx, { refresh: drawColor }));
+  w.appendChild(seg);
+  w.appendChild(colorHost);
+  drawColor();
+  return w;
+}
+
 // ── Rich color / gradient picker ──────────────────────────────────
 function ctlColor(obj, f, ctx) {
   const w = fieldWrap(f.l);
@@ -321,16 +497,21 @@ function ctlColor(obj, f, ctx) {
   pop.hidden = true;
   w.appendChild(pop);
 
-  const set = (v) => { pathPut(obj, f.k, v); sync(); ctx.onChange(); };
+  const set = (v) => { pathPut(obj, f.k, v); _pushRecentColor(v); sync(); ctx.onChange(); };
 
   let mode = null; // 'color' | 'grad'
+  btn.setAttribute('aria-haspopup', 'true');
+  btn.setAttribute('aria-expanded', 'false');
+  pop.setAttribute('role', 'dialog');
   const openPanel = () => {
     pop.hidden = false;
+    btn.setAttribute('aria-expanded', 'true');
     caret.style.transform = 'rotate(180deg)';
     buildPanel();
   };
-  const closePanel = () => { pop.hidden = true; caret.style.transform = ''; };
+  const closePanel = () => { pop.hidden = true; btn.setAttribute('aria-expanded', 'false'); caret.style.transform = ''; };
   btn.addEventListener('click', () => (pop.hidden ? openPanel() : closePanel()));
+  registerPopover(pop, btn, closePanel);
 
   function buildPanel() {
     pop.textContent = '';
@@ -370,6 +551,15 @@ function ctlColor(obj, f, ctx) {
       b.addEventListener('click', () => { state.base = tok; set(composeAlphaColor(state.base, state.alpha)); });
       grid.appendChild(b);
     });
+    if (_recentColors.length) {
+      grid.appendChild(mk('div', 'pbc-recent-label', t('pages.pc.recent', 'Récents')));
+      _recentColors.forEach((c) => {
+        const b = mkBtn('pbc-sw', c);
+        b.style.background = previewBg(c);
+        b.addEventListener('click', () => set(c));
+        grid.appendChild(b);
+      });
+    }
     PALETTE_COLORS.forEach((c) => {
       const b = mkBtn('pbc-sw', c);
       b.style.background = c;
@@ -602,6 +792,16 @@ function ctlIcon(obj, f, ctx) {
   const all = allLucideNames();
   const draw = () => {
     grid.textContent = '';
+    const none = mkBtn(null, t('pages.pc.noIcon', 'Aucune'));
+    none.appendChild(mkIcon('ban', 17));
+    none.addEventListener('click', () => {
+      pathPut(obj, f.k, '');
+      lbl.textContent = t('pages.pc.noIcon', 'Aucune');
+      prev.textContent = '';
+      pop.hidden = true; caret.style.transform = '';
+      ctx.onChange();
+    });
+    grid.appendChild(none);
     const q = search.value.trim().toLowerCase();
     const list = q ? all.filter((n) => n.includes(q)) : FAVORITE_ICONS.filter((n) => all.includes(n));
     const shown = list.slice(0, 96);
@@ -625,11 +825,17 @@ function ctlIcon(obj, f, ctx) {
     refreshIcons(grid);
   };
   search.addEventListener('input', draw);
+  btn.setAttribute('aria-haspopup', 'true');
+  btn.setAttribute('aria-expanded', 'false');
+  pop.setAttribute('role', 'dialog');
+  const iconClose = () => { pop.hidden = true; caret.style.transform = ''; btn.setAttribute('aria-expanded', 'false'); };
   btn.addEventListener('click', () => {
     pop.hidden = !pop.hidden;
     caret.style.transform = pop.hidden ? '' : 'rotate(180deg)';
+    btn.setAttribute('aria-expanded', pop.hidden ? 'false' : 'true');
     if (!pop.hidden) { draw(); search.focus(); }
   });
+  registerPopover(pop, btn, iconClose);
   return w;
 }
 
@@ -701,8 +907,101 @@ function ctlItems(obj, f, ctx) {
 // ══════════════════════════════════════════════════════════════════
 // Entry point
 // ══════════════════════════════════════════════════════════════════
+// Media picker: a URL field + preview thumb + a popover with an upload zone
+// (drag-drop or click), the operator's uploaded-image library, a paste-URL
+// field, and a clear button. Uploads go to config/uploads/ via /api/media.php
+// and the field stores the returned relative URL — so a non-technical operator
+// can place their own logo/photo without hosting it elsewhere.
+function ctlMedia(obj, f, ctx) {
+  const w = fieldWrap(f.l);
+  const row = mk('div');
+  row.style.cssText = 'display:flex;gap:8px;align-items:center';
+  const thumb = mk('div');
+  thumb.style.cssText = 'width:44px;height:44px;flex:0 0 44px;border-radius:8px;border:1px solid var(--adm-border,#2a2a3a);overflow:hidden;display:flex;align-items:center;justify-content:center;opacity:.85';
+  const inp = mk('input', 'adm-field-input');
+  inp.type = 'text'; inp.placeholder = f.ph || t('pages.media.urlPh', 'URL de l\'image'); inp.style.flex = '1';
+  const btn = mk('button', 'adm-btn adm-btn-ghost adm-btn-sm');
+  btn.type = 'button'; btn.title = t('pages.media.pick', 'Choisir une image');
+  btn.appendChild(mkIcon('image-plus', 15));
+  const cur = () => { const v = pathGet(obj, f.k); return typeof v === 'string' ? v : ''; };
+  const setThumb = (v) => {
+    thumb.textContent = '';
+    if (v) {
+      const im = mk('img'); im.src = v; im.style.cssText = 'width:100%;height:100%;object-fit:cover';
+      im.addEventListener('error', () => { thumb.textContent = ''; thumb.appendChild(mkIcon('image', 18)); refreshIcons(thumb); });
+      thumb.appendChild(im);
+    } else { thumb.appendChild(mkIcon('image', 18)); refreshIcons(thumb); }
+  };
+  const set = (v) => { pathPut(obj, f.k, v); inp.value = v; setThumb(v); ctx.onChange(); };
+  inp.value = cur(); setThumb(cur());
+  inp.addEventListener('input', () => { pathPut(obj, f.k, inp.value); setThumb(inp.value); ctx.onChange(); });
+  row.appendChild(thumb); row.appendChild(inp); row.appendChild(btn);
+  w.appendChild(row);
+
+  const pop = mk('div', 'pbc-pop'); pop.hidden = true; pop.setAttribute('role', 'dialog'); w.appendChild(pop);
+  btn.setAttribute('aria-haspopup', 'true'); btn.setAttribute('aria-expanded', 'false');
+  const close = () => { pop.hidden = true; btn.setAttribute('aria-expanded', 'false'); };
+  const open = () => { pop.hidden = false; btn.setAttribute('aria-expanded', 'true'); buildPop(); };
+  btn.addEventListener('click', () => (pop.hidden ? open() : close()));
+  registerPopover(pop, btn, close);
+
+  async function doUpload(file0) {
+    if (!file0 || !/^image\//.test(file0.type)) return;
+    const reader = new FileReader();
+    reader.onload = async () => {
+      const r = await apiFetchStatus(`${API_MEDIA}?action=upload`, { method: 'POST', body: JSON.stringify({ filename: file0.name, data: String(reader.result || '') }) });
+      if (r.ok && r.data && r.data.url) { set(r.data.url); close(); }
+      else { const m = mk('div', 'adm-page-sub', (r.data && r.data.error) || t('pages.media.uploadErr', 'Échec du téléversement.')); m.style.cssText = 'color:var(--color-danger,#e5484d);font-size:11px;margin-top:6px'; pop.appendChild(m); }
+    };
+    reader.readAsDataURL(file0);
+  }
+
+  async function buildPop() {
+    pop.textContent = '';
+    const up = mk('label');
+    up.style.cssText = 'display:block;border:1.5px dashed var(--adm-border,#3a3a4a);border-radius:8px;padding:14px;text-align:center;cursor:pointer;font-size:12px;margin-bottom:10px';
+    up.appendChild(mk('span', null, t('pages.media.upload', 'Cliquez ou déposez une image à téléverser')));
+    const file = mk('input'); file.type = 'file'; file.accept = 'image/png,image/jpeg,image/webp,image/gif,image/avif'; file.style.display = 'none';
+    up.appendChild(file);
+    file.addEventListener('change', () => { if (file.files && file.files[0]) doUpload(file.files[0]); });
+    up.addEventListener('dragover', (e) => { e.preventDefault(); up.style.borderColor = 'var(--color-primary,#2F6BFF)'; });
+    up.addEventListener('dragleave', () => { up.style.borderColor = 'var(--adm-border,#3a3a4a)'; });
+    up.addEventListener('drop', (e) => { e.preventDefault(); up.style.borderColor = 'var(--adm-border,#3a3a4a)'; if (e.dataTransfer.files && e.dataTransfer.files[0]) doUpload(e.dataTransfer.files[0]); });
+    pop.appendChild(up);
+
+    const grid = mk('div');
+    grid.style.cssText = 'display:grid;grid-template-columns:repeat(3,1fr);gap:6px;max-height:180px;overflow:auto';
+    grid.appendChild(mk('div', 'adm-page-sub', t('pages.media.loading', 'Chargement…')));
+    pop.appendChild(grid);
+    try {
+      const r = await apiFetchStatus(`${API_MEDIA}?action=list`, { method: 'POST', body: '{}' });
+      const files = (r.ok && r.data && Array.isArray(r.data.files)) ? r.data.files : [];
+      grid.textContent = '';
+      if (!files.length) { const e = mk('div', 'adm-page-sub', t('pages.media.empty', 'Aucune image téléversée.')); e.style.cssText = 'grid-column:1/-1;font-size:11px'; grid.appendChild(e); }
+      files.forEach((im) => {
+        const cell = mk('button'); cell.type = 'button'; cell.title = im.name;
+        cell.style.cssText = 'border:1px solid var(--adm-border,#2a2a3a);border-radius:6px;overflow:hidden;aspect-ratio:1;cursor:pointer;padding:0;background:transparent';
+        const g = mk('img'); g.src = im.url; g.loading = 'lazy'; g.style.cssText = 'width:100%;height:100%;object-fit:cover';
+        cell.appendChild(g);
+        cell.addEventListener('click', () => { set(im.url); close(); });
+        grid.appendChild(cell);
+      });
+    } catch (_) { grid.textContent = t('pages.media.listErr', 'Bibliothèque indisponible.'); }
+
+    const clr = mk('button', 'adm-btn adm-btn-ghost adm-btn-sm');
+    clr.type = 'button'; clr.style.marginTop = '8px';
+    clr.appendChild(mk('span', null, t('pages.media.clear', 'Retirer l\'image')));
+    clr.addEventListener('click', () => { set(''); close(); });
+    pop.appendChild(clr);
+    refreshIcons(pop);
+  }
+
+  return w;
+}
+
 export function renderFields(host, obj, fields, ctx) {
   (fields || []).forEach((f) => {
+    if (typeof f.showIf === 'function' && !f.showIf(obj)) return;
     let node = null;
     switch (f.t) {
       case 'ltext': node = ctlLText(obj, f, ctx, false); break;
@@ -713,7 +1012,10 @@ export function renderFields(host, obj, fields, ctx) {
       case 'slider': node = ctlSlider(obj, f, ctx); break;
       case 'color': node = ctlColor(obj, f, ctx); break;
       case 'icon': node = ctlIcon(obj, f, ctx); break;
+      case 'media': node = ctlMedia(obj, f, ctx); break;
       case 'items': node = ctlItems(obj, f, ctx); break;
+      case 'spacing': node = ctlSpacing(obj, f, ctx); break;
+      case 'shadow': node = ctlShadow(obj, f, ctx); break;
       case 'number': node = ctlSlider(obj, Object.assign({ min: 0, max: 500 }, f), ctx); break;
       default: node = ctlText(obj, f, ctx);
     }
@@ -721,6 +1023,39 @@ export function renderFields(host, obj, fields, ctx) {
       if (f.disabled) node.querySelectorAll('input,select,textarea,button').forEach((x) => (x.disabled = true));
       host.appendChild(node);
     }
+  });
+  refreshIcons(host);
+}
+
+// ── Grouped-fields accordion (Elementor-style settings panel) ─────
+// groups: [{ title, icon, fields, open? }]. Open/closed state per group
+// persists across re-renders (widget re-selection, tab switch) for the
+// session, keyed by `${ctx.groupKey}|${title}` so different widgets/tabs
+// don't fight over the same key.
+const _groupOpenState = new Map();
+export function renderGroups(host, obj, groups, ctx) {
+  (groups || []).forEach((g) => {
+    const key = (ctx && ctx.groupKey ? ctx.groupKey : '') + '|' + g.title;
+    const det = document.createElement('details');
+    det.className = 'pbc-group';
+    const remembered = _groupOpenState.get(key);
+    det.open = remembered != null ? remembered : (groups.length === 1 || !!g.open);
+    const sum = mk('summary');
+    if (g.icon) sum.appendChild(mkIcon(g.icon, 14));
+    sum.appendChild(mk('span', null, g.title));
+    const caret = mk('span', 'pbc-group-caret');
+    caret.appendChild(mkIcon('chevron-down', 14));
+    sum.appendChild(caret);
+    det.appendChild(sum);
+    const body = mk('div', 'pbc-group-body');
+    det.appendChild(body);
+    const redraw = () => {
+      body.textContent = '';
+      renderFields(body, obj, g.fields, Object.assign({}, ctx, { refresh: redraw }));
+    };
+    redraw();
+    det.addEventListener('toggle', () => { _groupOpenState.set(key, det.open); });
+    host.appendChild(det);
   });
   refreshIcons(host);
 }

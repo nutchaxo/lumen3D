@@ -164,7 +164,29 @@ Then open <http://localhost:8080>.
 
 `fast_server.py` and `start.bat` are static-only fallbacks (no admin API) useful for perf tests.
 
-### 2. First-Run Setup (no default password)
+### 2. Deploy on a Shared PHP Host (`install.php`)
+
+For hosting without Python, drop the single file [`install.php`](install.php) into an **empty web directory** and open it in a browser. The wizard checks the environment, downloads the latest release from GitHub, verifies it (sha256 + Ed25519 when a publisher key is pinned), extracts it safely, and creates the admin account — then self-locks. Nothing is written before the archive is verified, and every step is resumable.
+
+#### Troubleshooting — "Cannot reach the GitHub API" on a host that *is* online
+
+**Symptom.** The requirements screen passes every row but the last banner reads *"Cannot reach the GitHub API. Check the server's outbound connectivity."* The detail line underneath shows `error setting certificate file: /usr/share/php/cacert.pem` (or a bare `network`).
+
+**Cause.** The host's `php.ini` sets `curl.cainfo` (and/or `openssl.cafile`) to a CA bundle that was **never installed**. cURL then aborts *before opening the socket*, so every outbound HTTPS call from PHP fails — the network itself is fine. An `open_basedir` that hides `/etc/ssl` from PHP produces the same dead end, because the system bundle becomes unreadable too.
+
+**Automatic repair** (since web v1.22.1). The installer detects an unusable trust store and hands cURL/OpenSSL a real bundle it locates itself — `cacert.pem` next to `install.php` first, then the distribution locations (`/etc/ssl/certs/ca-certificates.crt`, `/etc/pki/tls/certs/ca-bundle.crt`, `/etc/ssl/ca-bundle.pem`, `/etc/ssl/cert.pem`, …), falling back to the stream wrapper. **Peer verification is never disabled.** The *CA certificates* row in the requirements list (v1.22.2+) reports what was found.
+
+**Manual fix** — when that row reads `?`, i.e. no store is reachable at all:
+
+1. Download the Mozilla CA bundle from <https://curl.se/ca/cacert.pem>.
+2. Upload it as `cacert.pem` **next to `install.php`** (the web root).
+3. Reload the installer and click *Retry*.
+
+> **Keep `cacert.pem` after the installation.** `api/_admin_lib.php` looks for it in the same place, so it is what keeps the **plugin marketplace** and **one-click updates** working on that host. Deleting it puts the admin panel back to "catalog unavailable / no updates found".
+
+*Same failure on the Python server?* It does not apply: `dev_server.py` uses the system trust store through Python, not `php.ini`.
+
+### 3. First-Run Setup (no default password)
 
 There is **no default admin password**. On a fresh install, open the admin panel (`/admpan.html`) — a **guided setup wizard** walks you through creating the admin account and configuring identity, theme, texts, and the initial plugin set. Credentials are stored as a one-way **salted PBKDF2-HMAC-SHA256** hash in `api/admin_credential.json` (gitignored, never served over HTTP).
 
@@ -174,7 +196,7 @@ Change the password later from the admin **Security** tab (requires the current 
 python dev_server.py --set-password
 ```
 
-### 3. Preprocess Raw Microscopy Datasets
+### 4. Preprocess Raw Microscopy Datasets
 
 The pipeline currently ingests **Imaris `.ims`** files (HDF5). On Windows, the self-contained launcher `preprocess/run_preprocess.bat` needs **nothing pre-installed** (it provisions a local Python + deps). For the CLI:
 

@@ -22,6 +22,9 @@
 
 > **Note d'exploitation** : `cacert.pem` déposé à la racine web sert aussi **après** l'installation — `api/_admin_lib.php` le cherche au même endroit (`admin_ca_probe`) pour le catalogue de plugins et les mises à jour. Le conserver sur ces hébergements.
 
+### Documentation ([README.md](../README.md))
+- Nouvelle section d'installation **« Deploy on a Shared PHP Host (`install.php`) »** (Quick Start §2, les suivantes sont renumérotées) : déroulé du wizard, puis un encart de dépannage complet du faux diagnostic « Cannot reach the GitHub API » — symptôme exact, cause (`curl.cainfo` cassé, `open_basedir` masquant `/etc/ssl`), réparation automatique v1.22.1, marche à suivre manuelle (`cacert.pem` à la racine web), et l'avertissement de **conserver le fichier après l'installation** pour le marketplace et les mises à jour.
+
 ### Vérifié
 - Hôte simulé sans aucun magasin (`php -d curl.cainfo=/usr/share/php/cacert.pem`, avec et sans `allow_url_fopen`) : l'installeur remonte `tls_ca_broken` et la ligne « Certificats CA » passe en « inconnu + indice ».
 - Le même hôte avec `cacert.pem` déposé : ligne ✓ (chemin affiché) et lecture réussie de la release GitHub v1.22.1 **avec `allow_url_fopen=0`**, donc purement via le cURL réparé.

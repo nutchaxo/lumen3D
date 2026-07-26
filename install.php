@@ -199,6 +199,77 @@ function http_capable(): bool {
     return extension_loaded('curl') || filter_var(ini_get('allow_url_fopen'), FILTER_VALIDATE_BOOLEAN);
 }
 
+function stream_capable(): bool {
+    return filter_var(ini_get('allow_url_fopen'), FILTER_VALIDATE_BOOLEAN);
+}
+
+// ── CA trust store repair ────────────────────────────────────────────────────
+// Some shared hosts ship a php.ini whose curl.cainfo / openssl.cafile names a
+// bundle that was never installed (e.g. /usr/share/php/cacert.pem). cURL then
+// aborts BEFORE opening the socket — "error setting certificate file: …" — and
+// the stream wrapper fails peer verification for the same reason, so the host
+// looks offline when it is not. We locate a real bundle and hand it to the
+// transport explicitly. Peer verification is NEVER disabled.
+
+/** @return array{0:?string,1:?string} [cafile, capath]; [null,null] = none found. */
+function ca_probe(): array {
+    static $cached = null;
+    if ($cached !== null) return $cached;
+    $files = [
+        __DIR__ . '/cacert.pem',                   // operator escape hatch (upload next to install.php)
+        '/etc/ssl/certs/ca-certificates.crt',      // Debian / Ubuntu
+        '/etc/pki/tls/certs/ca-bundle.crt',        // RHEL / CentOS / Fedora
+        '/etc/ssl/ca-bundle.pem',                  // SUSE
+        '/etc/pki/tls/cacert.pem',
+        '/etc/ssl/cert.pem',                       // Alpine / BSD / macOS
+        '/usr/local/share/certs/ca-root-nss.crt',  // FreeBSD
+        '/usr/local/etc/openssl/cert.pem',
+    ];
+    foreach ($files as $f) if (@is_readable($f)) return $cached = [$f, null];
+    foreach (['/etc/ssl/certs', '/etc/pki/tls/certs'] as $d) if (@is_dir($d)) return $cached = [null, $d];
+    return $cached = [null, null];
+}
+
+/** True when php.ini names a CA file that does not exist → default trust store unusable. */
+function ca_ini_broken(): bool {
+    foreach (['curl.cainfo', 'openssl.cafile'] as $k) {
+        $v = (string)ini_get($k);
+        if ($v !== '' && !@is_readable($v)) return true;
+    }
+    return false;
+}
+
+/** curl options repairing the trust store. Empty on a healthy host unless forced. */
+function ca_curl_opts(bool $force = false): array {
+    if (!$force && !ca_ini_broken()) return [];
+    [$file, $dir] = ca_probe();
+    $o = [];
+    if ($file !== null) $o[CURLOPT_CAINFO] = $file;
+    elseif ($dir !== null) $o[CURLOPT_CAPATH] = $dir;
+    return $o;
+}
+
+/** ssl:// stream-context options, same policy. */
+function ca_stream_opts(bool $force = false): array {
+    $ssl = ['verify_peer' => true, 'verify_peer_name' => true];
+    if (!$force && !ca_ini_broken()) return $ssl;
+    [$file, $dir] = ca_probe();
+    if ($file !== null) $ssl['cafile'] = $file;
+    elseif ($dir !== null) $ssl['capath'] = $dir;
+    return $ssl;
+}
+
+/** Distinguishes "trust store unusable" from "network down" in a curl/TLS error. */
+function is_ca_error(?string $err): bool {
+    if ($err === null || $err === '') return false;
+    $e = strtolower($err);
+    foreach (['certificate file', 'cacert', 'ca cert', 'trust anchor', 'local issuer', 'certificate verify failed',
+              'unable to get issuer', 'ssl ca', 'self signed certificate in certificate chain'] as $needle) {
+        if (strpos($e, $needle) !== false) return true;
+    }
+    return false;
+}
+
 /**
  * Small HTTPS GET for API JSON / checksum files (body buffered in memory).
  * Returns ['ok'=>bool,'status'=>int,'headers'=>array<lower,string>,'body'=>string,'error'=>?string].
@@ -208,42 +279,57 @@ function http_get_small(string $url, array $extraHeaders = []): array {
     $headers = array_merge(['User-Agent: ' . INSTALLER_UA, 'Accept: */*'], $extraHeaders);
 
     if (extension_loaded('curl')) {
-        $respHeaders = [];
-        $ch = curl_init($url);
-        curl_setopt_array($ch, [
-            CURLOPT_RETURNTRANSFER => true,
-            CURLOPT_FOLLOWLOCATION => true,
-            CURLOPT_MAXREDIRS      => MAX_REDIRECTS,
-            CURLOPT_PROTOCOLS      => CURLPROTO_HTTPS,
-            CURLOPT_REDIR_PROTOCOLS => CURLPROTO_HTTPS,
-            CURLOPT_CONNECTTIMEOUT => CONNECT_TIMEOUT,
-            CURLOPT_TIMEOUT        => 30,
-            CURLOPT_HTTPHEADER     => $headers,
-            CURLOPT_HEADERFUNCTION => function ($c, $line) use (&$respHeaders) {
-                if (stripos($line, 'HTTP/') === 0) { $respHeaders = []; }                 // new hop → reset
-                elseif (strpos($line, ':') !== false) {
-                    [$k, $v] = explode(':', $line, 2);
-                    $respHeaders[strtolower(trim($k))] = trim($v);
-                }
-                return strlen($line);
-            },
-        ]);
-        $body = curl_exec($ch);
-        $status = (int)curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
-        $err = curl_error($ch);
-        curl_close($ch);
-        if ($body === false) return ['ok' => false, 'status' => $status, 'headers' => $respHeaders, 'body' => '', 'error' => $err ?: 'network'];
-        return ['ok' => $status >= 200 && $status < 300, 'status' => $status, 'headers' => $respHeaders, 'body' => (string)$body, 'error' => null];
+        $res = curl_get_small($url, $headers, ca_curl_opts());
+        if (!$res['ok'] && is_ca_error($res['error'])) {
+            $forced = ca_curl_opts(true);                                     // probe even if the ini looked sane
+            if ($forced !== []) $res = curl_get_small($url, $headers, $forced);
+        }
+        // Streams use OpenSSL's own defaults, which can still work when curl's are broken.
+        if ($res['ok'] || !is_ca_error($res['error']) || !stream_capable()) return $res;
     }
 
-    // Stream fallback with a manual https-only redirect loop.
+    return stream_get_small($url, $headers);
+}
+
+/** curl branch of http_get_small. */
+function curl_get_small(string $url, array $headers, array $caOpts): array {
+    $respHeaders = [];
+    $ch = curl_init($url);
+    curl_setopt_array($ch, $caOpts + [
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_FOLLOWLOCATION => true,
+        CURLOPT_MAXREDIRS      => MAX_REDIRECTS,
+        CURLOPT_PROTOCOLS      => CURLPROTO_HTTPS,
+        CURLOPT_REDIR_PROTOCOLS => CURLPROTO_HTTPS,
+        CURLOPT_CONNECTTIMEOUT => CONNECT_TIMEOUT,
+        CURLOPT_TIMEOUT        => 30,
+        CURLOPT_HTTPHEADER     => $headers,
+        CURLOPT_HEADERFUNCTION => function ($c, $line) use (&$respHeaders) {
+            if (stripos($line, 'HTTP/') === 0) { $respHeaders = []; }                     // new hop → reset
+            elseif (strpos($line, ':') !== false) {
+                [$k, $v] = explode(':', $line, 2);
+                $respHeaders[strtolower(trim($k))] = trim($v);
+            }
+            return strlen($line);
+        },
+    ]);
+    $body = curl_exec($ch);
+    $status = (int)curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
+    $err = curl_error($ch);
+    curl_close($ch);
+    if ($body === false) return ['ok' => false, 'status' => $status, 'headers' => $respHeaders, 'body' => '', 'error' => $err ?: 'network'];
+    return ['ok' => $status >= 200 && $status < 300, 'status' => $status, 'headers' => $respHeaders, 'body' => (string)$body, 'error' => null];
+}
+
+/** Stream branch of http_get_small — manual https-only redirect loop. */
+function stream_get_small(string $url, array $headers): array {
     $redirects = 0;
     while (true) {
         if (!https_only($url)) return ['ok' => false, 'status' => 0, 'headers' => [], 'body' => '', 'error' => 'redirect_not_https'];
         $ctx = stream_context_create([
             'http' => ['method' => 'GET', 'header' => implode("\r\n", $headers),
                        'follow_location' => 0, 'timeout' => 30, 'ignore_errors' => true],
-            'ssl'  => ['verify_peer' => true, 'verify_peer_name' => true],
+            'ssl'  => ca_stream_opts(),
         ]);
         $body = @file_get_contents($url, false, $ctx);
         $meta = isset($http_response_header) && is_array($http_response_header) ? $http_response_header : [];
@@ -309,7 +395,14 @@ function download_tick(string $url, string $partPath, ?int $expectedTotal): arra
     if ($expectedTotal !== null && $rangeEnd >= $expectedTotal) $rangeEnd = $expectedTotal - 1;
 
     if (extension_loaded('curl')) {
-        $res = curl_download_tick($url, $fp, $offset, $rangeEnd, $expectedTotal);
+        $res = curl_download_tick($url, $fp, $offset, $rangeEnd, $expectedTotal, ca_curl_opts());
+        if (!$res['ok'] && is_ca_error($res['error'])) {                          // broken trust store, not the network
+            $forced = ca_curl_opts(true);
+            if ($forced !== []) $res = curl_download_tick($url, $fp, $offset, $rangeEnd, $expectedTotal, $forced);
+            if (!$res['ok'] && is_ca_error($res['error']) && stream_capable()) {
+                $res = stream_download_tick($url, $fp, $offset, $rangeEnd, $expectedTotal);
+            }
+        }
     } else {
         $res = stream_download_tick($url, $fp, $offset, $rangeEnd, $expectedTotal);
     }
@@ -328,14 +421,14 @@ function dl_err(string $code, int $status): array {
 }
 
 /** curl branch of download_tick. $fp positioned at $offset (append mode). */
-function curl_download_tick(string $url, $fp, int $offset, int $rangeEnd, ?int $expectedTotal): array {
+function curl_download_tick(string $url, $fp, int $offset, int $rangeEnd, ?int $expectedTotal, array $caOpts = []): array {
     $ctx = [
         'fp' => $fp, 'written' => 0, 'cap' => TICK_BYTES, 'deadline' => microtime(true) + TICK_SECONDS,
         'status' => 0, 'total' => null, 'bodyStarted' => false, 'capped' => false,
         'diskError' => false, 'httpError' => 0, 'noRange' => false, 'restarted' => false, 'offset' => $offset,
     ];
     $ch = curl_init($url);
-    curl_setopt_array($ch, [
+    curl_setopt_array($ch, $caOpts + [
         CURLOPT_FOLLOWLOCATION => true,
         CURLOPT_MAXREDIRS      => MAX_REDIRECTS,
         CURLOPT_PROTOCOLS      => CURLPROTO_HTTPS,
@@ -430,7 +523,7 @@ function stream_download_tick(string $url, $fp, int $offset, int $rangeEnd, ?int
                 ]),
                 'follow_location' => 0, 'timeout' => CONNECT_TIMEOUT + TICK_SECONDS, 'ignore_errors' => true,
             ],
-            'ssl' => ['verify_peer' => true, 'verify_peer_name' => true],
+            'ssl' => ca_stream_opts(),
         ]);
         $in = @fopen($url, 'rb', false, $ctxOpts);
         $meta = isset($http_response_header) && is_array($http_response_header) ? $http_response_header : [];
@@ -542,7 +635,12 @@ function fetch_release_info(): array {
         return ['ok' => false, 'error' => 'rate_limited', 'retryAfterMin' => $retryMin, 'release' => null];
     }
     if ($r['status'] === 404) return ['ok' => false, 'error' => 'no_release', 'retryAfterMin' => null, 'release' => null];
-    if (!$r['ok']) return ['ok' => false, 'error' => 'github_unreachable', 'retryAfterMin' => null, 'release' => null, 'detail' => $r['error'] ?? ('http_' . $r['status'])];
+    if (!$r['ok']) {
+        // A broken CA store (php.ini pointing at a missing cacert.pem) survived every
+        // repair attempt → tell the operator what to fix instead of "check the network".
+        $code = is_ca_error($r['error']) ? 'tls_ca_broken' : 'github_unreachable';
+        return ['ok' => false, 'error' => $code, 'retryAfterMin' => null, 'release' => null, 'detail' => $r['error'] ?? ('http_' . $r['status'])];
+    }
 
     $rel = json_decode($r['body'], true);
     if (!is_array($rel) || empty($rel['tag_name'])) return ['ok' => false, 'error' => 'github_bad_response', 'retryAfterMin' => null, 'release' => null];
@@ -657,7 +755,8 @@ function requirements_pass(array $reqs): bool {
 
 /** True when the target dir already holds files beyond the installer's own artifacts. */
 function target_dir_not_empty(): bool {
-    $ignore = ['.', '..', 'install.php', STATE_FILE, LOCK_FILE, PART_FILE, ZIP_FILE, STATE_FILE . '.tmp'];
+    // cacert.pem is the documented workaround for hosts with a broken CA store (ca_probe) — not user content.
+    $ignore = ['.', '..', 'install.php', 'cacert.pem', STATE_FILE, LOCK_FILE, PART_FILE, ZIP_FILE, STATE_FILE . '.tmp'];
     $ls = @scandir(target_dir());
     if ($ls === false) return false;
     foreach ($ls as $f) {
@@ -1439,6 +1538,7 @@ const DICT = {
     err_signature_invalid: "La signature de la release est invalide (clé épinglée). L'archive n'a pas été produite par la clé de signature du projet. Installation refusée.",
     err_signature_unsupported: "Une clé de signature est épinglée mais l'extension PHP « sodium » est absente : impossible de vérifier l'authenticité. Activez ext-sodium (incluse dans PHP ≥ 7.2).",
     err_github_unreachable: "Impossible de joindre l'API GitHub. Vérifiez la connectivité sortante du serveur.",
+    err_tls_ca_broken: "Le magasin de certificats de PHP est mal configuré sur cet hébergement : php.ini (curl.cainfo / openssl.cafile) désigne un fichier CA absent, donc toute connexion HTTPS échoue avant même de partir. Solution immédiate : téléversez un fichier cacert.pem (https://curl.se/ca/cacert.pem) à côté de install.php, puis réessayez. Sinon, demandez à l'hébergeur de corriger curl.cainfo.",
     err_github_bad_response: "Réponse inattendue de l'API GitHub.",
     err_no_http_capability: "Ni curl ni allow_url_fopen ne sont disponibles : le serveur ne peut rien télécharger.",
     err_network: "Erreur réseau pendant le téléchargement. La reprise continuera où elle s'est arrêtée.",
@@ -1546,6 +1646,7 @@ const DICT = {
     err_signature_invalid: "The release signature is invalid (pinned key). The archive was not produced by the project signing key. Installation refused.",
     err_signature_unsupported: "A signing key is pinned but the PHP \"sodium\" extension is missing: authenticity cannot be verified. Enable ext-sodium (bundled with PHP ≥ 7.2).",
     err_github_unreachable: "Cannot reach the GitHub API. Check the server's outbound connectivity.",
+    err_tls_ca_broken: "This host's PHP certificate store is misconfigured: php.ini (curl.cainfo / openssl.cafile) names a CA file that does not exist, so every HTTPS connection fails before it starts. Quick fix: upload a cacert.pem (https://curl.se/ca/cacert.pem) next to install.php and retry. Otherwise ask the hosting provider to fix curl.cainfo.",
     err_github_bad_response: "Unexpected response from the GitHub API.",
     err_no_http_capability: "Neither curl nor allow_url_fopen is available: the server cannot download anything.",
     err_network: "Network error during download. Resume will continue where it stopped.",

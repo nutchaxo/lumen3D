@@ -516,40 +516,119 @@ const MARKETPLACE_PUBKEY      = '7f5feaddd11dac38c836f556cd7d7b09fe9a7bda307c20e
 const MARKETPLACE_CATALOG_URL = 'https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/marketplace-catalog.json';
 const MARKETPLACE_MAX_ZIP     = 8388608;
 
+// ── CA trust store repair (twin of install.php's ca_* helpers) ────────────────
+// Shared hosts sometimes ship a php.ini whose curl.cainfo / openssl.cafile names
+// a bundle that was never installed (e.g. /usr/share/php/cacert.pem). cURL then
+// aborts BEFORE opening the socket ("error setting certificate file: …") and the
+// stream wrapper fails verification for the same reason — every marketplace and
+// update fetch looks like an outage. We hand the transport a real bundle instead.
+// Peer verification is NEVER disabled.
+
+/** @return array{0:?string,1:?string} [cafile, capath]; [null,null] = none found. */
+function admin_ca_probe(): array {
+    static $cached = null;
+    if ($cached !== null) return $cached;
+    $files = [
+        admin_root() . '/cacert.pem',              // operator escape hatch (web root)
+        '/etc/ssl/certs/ca-certificates.crt',      // Debian / Ubuntu
+        '/etc/pki/tls/certs/ca-bundle.crt',        // RHEL / CentOS / Fedora
+        '/etc/ssl/ca-bundle.pem',                  // SUSE
+        '/etc/pki/tls/cacert.pem',
+        '/etc/ssl/cert.pem',                       // Alpine / BSD / macOS
+        '/usr/local/share/certs/ca-root-nss.crt',  // FreeBSD
+        '/usr/local/etc/openssl/cert.pem',
+    ];
+    foreach ($files as $f) if (@is_readable($f)) return $cached = [$f, null];
+    foreach (['/etc/ssl/certs', '/etc/pki/tls/certs'] as $d) if (@is_dir($d)) return $cached = [null, $d];
+    return $cached = [null, null];
+}
+
+function admin_ca_ini_broken(): bool {
+    foreach (['curl.cainfo', 'openssl.cafile'] as $k) {
+        $v = (string)ini_get($k);
+        if ($v !== '' && !@is_readable($v)) return true;
+    }
+    return false;
+}
+
+function admin_ca_curl_opts(bool $force = false): array {
+    if (!$force && !admin_ca_ini_broken()) return [];
+    [$file, $dir] = admin_ca_probe();
+    $o = [];
+    if ($file !== null) $o[CURLOPT_CAINFO] = $file;
+    elseif ($dir !== null) $o[CURLOPT_CAPATH] = $dir;
+    return $o;
+}
+
+function admin_ca_stream_opts(bool $force = false): array {
+    $ssl = ['verify_peer' => true, 'verify_peer_name' => true];
+    if (!$force && !admin_ca_ini_broken()) return $ssl;
+    [$file, $dir] = admin_ca_probe();
+    if ($file !== null) $ssl['cafile'] = $file;
+    elseif ($dir !== null) $ssl['capath'] = $dir;
+    return $ssl;
+}
+
+function admin_is_ca_error(string $err): bool {
+    if ($err === '') return false;
+    $e = strtolower($err);
+    foreach (['certificate file', 'cacert', 'ca cert', 'trust anchor', 'local issuer', 'certificate verify failed',
+              'unable to get issuer', 'ssl ca', 'self signed certificate in certificate chain'] as $needle) {
+        if (strpos($e, $needle) !== false) return true;
+    }
+    return false;
+}
+
 function mkt_fetch_bytes(string $url, int $limit): ?string {
     // Prefer cURL (enabled on most shared hosts even when allow_url_fopen is OFF —
     // matching install.php's http_get_small); fall back to the stream wrapper only
     // when allow_url_fopen is available. A host with neither returns null. The write
     // callback caps the body at $limit+1 bytes so an oversized response can't balloon
     // memory (a truncated body then fails the signature check — fail-closed).
+    $caError = false;
     if (function_exists('curl_init')) {
-        $buf = '';
-        $ch = curl_init($url);
-        curl_setopt_array($ch, [
-            CURLOPT_FOLLOWLOCATION  => true,
-            CURLOPT_MAXREDIRS       => 5,
-            CURLOPT_PROTOCOLS       => CURLPROTO_HTTPS,
-            CURLOPT_REDIR_PROTOCOLS => CURLPROTO_HTTPS,
-            CURLOPT_CONNECTTIMEOUT  => 20,
-            CURLOPT_TIMEOUT         => 60,
-            CURLOPT_SSL_VERIFYPEER  => true,
-            CURLOPT_SSL_VERIFYHOST  => 2,
-            CURLOPT_USERAGENT       => 'lumen3d-admin',
-            CURLOPT_WRITEFUNCTION   => function ($c, $chunk) use (&$buf, $limit) {
-                $buf .= $chunk;
-                return strlen($buf) > $limit + 1 ? 0 : strlen($chunk);   // 0 aborts (over cap)
-            },
-        ]);
-        curl_exec($ch);
-        $code = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
-        curl_close($ch);
-        if ($buf !== '' && $code >= 200 && $code < 300) return substr($buf, 0, $limit);
+        $body = mkt_curl_fetch($url, $limit, admin_ca_curl_opts(), $caError);
+        if ($body === null && $caError) {                                    // broken trust store, not an outage
+            $forced = admin_ca_curl_opts(true);
+            if ($forced !== []) $body = mkt_curl_fetch($url, $limit, $forced, $caError);
+        }
+        if ($body !== null) return $body;
     }
     if (filter_var(ini_get('allow_url_fopen'), FILTER_VALIDATE_BOOLEAN)) {
-        $ctx = stream_context_create(['http' => ['timeout' => 60, 'header' => "User-Agent: lumen3d-admin\r\n"]]);
+        $ctx = stream_context_create([
+            'http' => ['timeout' => 60, 'header' => "User-Agent: lumen3d-admin\r\n"],
+            'ssl'  => admin_ca_stream_opts($caError),
+        ]);
         $d = @file_get_contents($url, false, $ctx, 0, $limit + 1);
         if ($d !== false) return substr($d, 0, $limit);
     }
+    return null;
+}
+
+/** One cURL attempt. Sets $caError when the failure is a trust-store problem. */
+function mkt_curl_fetch(string $url, int $limit, array $caOpts, bool &$caError): ?string {
+    $buf = '';
+    $ch = curl_init($url);
+    curl_setopt_array($ch, $caOpts + [
+        CURLOPT_FOLLOWLOCATION  => true,
+        CURLOPT_MAXREDIRS       => 5,
+        CURLOPT_PROTOCOLS       => CURLPROTO_HTTPS,
+        CURLOPT_REDIR_PROTOCOLS => CURLPROTO_HTTPS,
+        CURLOPT_CONNECTTIMEOUT  => 20,
+        CURLOPT_TIMEOUT         => 60,
+        CURLOPT_SSL_VERIFYPEER  => true,
+        CURLOPT_SSL_VERIFYHOST  => 2,
+        CURLOPT_USERAGENT       => 'lumen3d-admin',
+        CURLOPT_WRITEFUNCTION   => function ($c, $chunk) use (&$buf, $limit) {
+            $buf .= $chunk;
+            return strlen($buf) > $limit + 1 ? 0 : strlen($chunk);   // 0 aborts (over cap)
+        },
+    ]);
+    curl_exec($ch);
+    $code = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    $caError = admin_is_ca_error((string)curl_error($ch));
+    curl_close($ch);
+    if ($buf !== '' && $code >= 200 && $code < 300) return substr($buf, 0, $limit);
     return null;
 }
 

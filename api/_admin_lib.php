@@ -91,7 +91,8 @@ function mkt_modes_recursive(string $base): void {
     @chmod($base, admin_dir_mode());
     $it = new RecursiveIteratorIterator(
         new RecursiveDirectoryIterator($base, FilesystemIterator::SKIP_DOTS | FilesystemIterator::UNIX_PATHS),
-        RecursiveIteratorIterator::SELF_FIRST
+        RecursiveIteratorIterator::SELF_FIRST,
+        RecursiveIteratorIterator::CATCH_GET_CHILD
     );
     foreach ($it as $path => $info) {
         if ($info->isLink()) continue;
@@ -144,7 +145,8 @@ function admin_apply_tree_modes(int $maxEntries = 200000): array {
     $dirMode = admin_dir_mode(); $fileMode = admin_file_mode();
     $it = new RecursiveIteratorIterator(
         new RecursiveDirectoryIterator($root, FilesystemIterator::SKIP_DOTS | FilesystemIterator::UNIX_PATHS),
-        RecursiveIteratorIterator::SELF_FIRST
+        RecursiveIteratorIterator::SELF_FIRST,
+        RecursiveIteratorIterator::CATCH_GET_CHILD          // an unreadable dir must not abort the walk
     );
     foreach ($it as $path => $info) {
         if (++$out['scanned'] > $maxEntries) break;

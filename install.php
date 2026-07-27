@@ -270,7 +270,8 @@ function apply_tree_modes(): array {
     $done = 0; $failed = 0; $seen = 0;
     $it = new RecursiveIteratorIterator(
         new RecursiveDirectoryIterator($root, FilesystemIterator::SKIP_DOTS | FilesystemIterator::UNIX_PATHS),
-        RecursiveIteratorIterator::SELF_FIRST
+        RecursiveIteratorIterator::SELF_FIRST,
+        RecursiveIteratorIterator::CATCH_GET_CHILD          // an unreadable dir must not abort the walk
     );
     foreach ($it as $path => $info) {
         if (++$seen > MAX_ENTRIES) break;                                    // same cap as the zip walk

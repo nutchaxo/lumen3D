@@ -9,7 +9,7 @@
 
 'use strict';
 
-import { API_AUTH, API_ADMIN, t, escHtml, apiFetch, apiFetchStatus, toast, el, refreshIcons } from './shared.js';
+import { API_AUTH, API_ADMIN, t, escHtml, apiFetchStatus, toast, el, refreshIcons } from './shared.js';
 
 function render() {
   const root = el('security-root');
@@ -72,9 +72,15 @@ function render() {
 async function loadPermsState() {
   const box = el('perms-state');
   if (!box) return;
-  const r = await apiFetch(`${API_ADMIN}?action=permissions_status`);
-  const d = r?.data;
-  if (!d) { box.textContent = t('admin.permsUnknown', 'État des permissions indisponible.'); return; }
+  // apiFetchStatus (not apiFetch): the HTTP status is what tells an operator whether
+  // the endpoint is missing (old api/admin.php still cached) or the call blew up.
+  const r = await apiFetchStatus(`${API_ADMIN}?action=permissions_status`);
+  const d = r.data;
+  if (!d || d.error) {
+    box.textContent = t('admin.permsUnknown', 'État des permissions indisponible.')
+      + ` (HTTP ${r.status}${d && d.error ? ' — ' + d.error : ''})`;
+    return;
+  }
   if (!d.posix) { box.textContent = t('admin.permsWindows', 'Hôte Windows : les permissions POSIX ne s\'appliquent pas.'); return; }
   box.textContent = d.split
     ? t('admin.permsSplit', 'PHP ({php}) ≠ propriétaire du site ({owner}) — les fichiers créés utilisent {dir} / {file}.',
@@ -87,11 +93,15 @@ async function repairPerms() {
   const btn = el('perms-repair');
   btn.disabled = true;
   btn.innerHTML = `<span class="spinner spinner-sm"></span> ${escHtml(t('admin.permsRunning', 'Application…'))}`;
-  const r = await apiFetch(`${API_ADMIN}?action=repair_permissions`, { method: 'POST', body: '{}' });
+  const r = await apiFetchStatus(`${API_ADMIN}?action=repair_permissions`, { method: 'POST', body: '{}' });
   btn.disabled = false;
   btn.textContent = t('admin.permsRepair', 'Réparer les permissions');
-  const d = r?.data;
-  if (!d || d.error) { toast(t('admin.permsFailed', 'Échec de la réparation des permissions.'), 'error'); return; }
+  const d = r.data;
+  if (!d || d.error || typeof d.fixed !== 'number') {
+    toast(t('admin.permsFailed', 'Échec de la réparation des permissions.')
+      + ` (HTTP ${r.status}${d && d.error ? ' — ' + d.error : ''})`, 'error');
+    return;
+  }
   toast(t('admin.permsDone', '{n} entrées corrigées ({failed} échecs).', { n: d.fixed, failed: d.failed }));
   loadPermsState();
 }

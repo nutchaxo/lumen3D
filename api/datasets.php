@@ -204,6 +204,25 @@ function rebuild_catalog(): array {
             if (isset($meta['volumeSources'])) {
                 $entry['volumeSources'] = $meta['volumeSources'];
             }
+            // 4D / tracking. This builder writes a fixed key list, unlike the Python
+            // server which passes the whole metadata.json through — anything omitted
+            // here is silently absent from the public catalog on a PHP host, so the
+            // timeline, the stabilization and the tracking overlay would work in dev
+            // and quietly do nothing in production.
+            foreach ([
+                'timeline',                     // frame count, interval, acquisition clock
+                'registration',                 // per-timepoint rigid transform + QC
+                'tracking',                     // cell tracks: counts, regions, file paths
+                'acquisitionExtentUm',          // microscope stage frame the tracks live in
+                'optical_section_thickness_um', // exact physical depth
+                'intensityNormalization',       // shared window + per-frame signal levels
+                'linkedTrackingId',
+                'relatedIds',
+            ] as $k) {
+                if (isset($meta[$k])) {
+                    $entry[$k] = $meta[$k];
+                }
+            }
 
             // Fallbacks for older datasets that don't have them in metadata.json
             if (!isset($entry['qualities']) && file_exists($prev_manifest)) {

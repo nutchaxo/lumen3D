@@ -13,7 +13,7 @@ from pathlib import Path
 import numpy as np
 from PIL import Image
 
-__version__ = "0.14.1"
+__version__ = "0.15.0"
 
 # ── Paths ──────────────────────────────────────────────────────────────────────
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -225,19 +225,26 @@ def process_ims_file(ims_path: Path, output_root: Path, idx: int = 0, total: int
         shutil.rmtree(temp_dir)
     temp_dir.mkdir(parents=True, exist_ok=True)
     
-    # Target fixed dataset dir
-    dataset_output_dir = output_root / "fixed" / dataset_name
-    if dataset_output_dir.exists():
-        bricks_dir = dataset_output_dir / "bricks"
-        if bricks_dir.exists():
-            shutil.rmtree(bricks_dir)
-    dataset_output_dir.mkdir(parents=True, exist_ok=True)
-    
     try:
         # Step 1: Extraction of metadata
         temp_meta_json = temp_dir / "meta.json"
         run_step("1-ims_metadata.py", str(ims_path), str(temp_meta_json))
-        
+
+        # The dataset type follows the acquisition: a stack with more than one
+        # timepoint is a timelapse and belongs under live/, which is what drives the
+        # viewer's timeline. Resolved here because only step 1 knows the frame count.
+        with open(temp_meta_json, "r", encoding="utf-8") as fm:
+            n_timepoints = int(json.load(fm).get("n_timepoints", 1) or 1)
+        type_dir = "live" if n_timepoints > 1 else "fixed"
+        dataset_output_dir = output_root / type_dir / dataset_name
+        if dataset_output_dir.exists():
+            bricks_dir = dataset_output_dir / "bricks"
+            if bricks_dir.exists():
+                shutil.rmtree(bricks_dir)
+        dataset_output_dir.mkdir(parents=True, exist_ok=True)
+        if n_timepoints > 1:
+            print(_dim(f"   type   : live ({n_timepoints} timepoints)"))
+
         # Step 2: Normalization, Background subtraction, Downscaling
         run_step("2-image_processor.py", str(ims_path), str(temp_meta_json), str(temp_dir))
         

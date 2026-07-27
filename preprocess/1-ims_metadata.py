@@ -2,6 +2,7 @@
 import json
 import re
 import sys
+from datetime import datetime
 from pathlib import Path
 import h5py
 import numpy as np
@@ -56,6 +57,35 @@ def read_ims_metadata(file_path: Path) -> dict:
         )
         n_tp = len(timepoints) or 1
 
+        # Acquisition clock. Imaris stores one attribute per frame under
+        # DataSetInfo/TimeInfo as "TimePoint1".."TimePointN" (1-based), formatted
+        # "YYYY-MM-DD HH:MM:SS.mmm". A timelapse viewer needs the real wall-clock
+        # times, not just frame indices, and the median inter-frame gap is what the
+        # UI labels the acquisition interval with.
+        time_info = f.get("DataSetInfo", {}).get("TimeInfo", None)
+        timestamps = []
+        for i in range(1, n_tp + 1):
+            stamp = attr_str(time_info, f"TimePoint{i}", "") if time_info is not None else ""
+            timestamps.append(stamp or None)
+        interval_minutes = None
+        parsed = []
+        for stamp in timestamps:
+            if not stamp:
+                parsed.append(None)
+                continue
+            try:
+                parsed.append(datetime.strptime(stamp, "%Y-%m-%d %H:%M:%S.%f"))
+            except ValueError:
+                try:
+                    parsed.append(datetime.strptime(stamp, "%Y-%m-%d %H:%M:%S"))
+                except ValueError:
+                    parsed.append(None)
+        gaps = [(b - a).total_seconds() / 60.0
+                for a, b in zip(parsed, parsed[1:]) if a is not None and b is not None]
+        if gaps:
+            interval_minutes = round(float(np.median(gaps)), 4)
+        timestamps_iso = [p.isoformat() if p is not None else None for p in parsed]
+
         channels = []
         if timepoints:
             tp0 = res0[timepoints[0]]
@@ -85,6 +115,16 @@ def read_ims_metadata(file_path: Path) -> dict:
                 "y": round(vox_y, 6),
                 "z": round(vox_z, 6)
             },
+            # Microscope stage frame, in the acquisition unit (um). This is the frame
+            # Imaris-derived object coordinates (spots, surfaces, cell tracks) live in,
+            # so it is what an overlay has to be registered against.
+            "extent": {
+                "unit": attr_str(info, "Unit", "um") or "um",
+                "min": [ext_min_x, ext_min_y, ext_min_z],
+                "max": [ext_max_x, ext_max_y, ext_max_z]
+            },
+            "timestamps": timestamps_iso,
+            "time_interval_minutes": interval_minutes,
             "channel_names": channel_names
         }
 

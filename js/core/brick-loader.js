@@ -912,6 +912,12 @@ const BrickLoader = (() => {
       try {
         return await _decodeWebpBrickInWorkerPool(sliceCopy, signal, _manifest?.levels?.[0]?.brickSize || BRICK_SIZE, _manifest?.brickPacking || {});
       } catch (e) {
+        // A cancelled load is the NORMAL outcome of scrubbing away from a frame, not a
+        // failure: re-raise it so the caller drops the task instead of paying for a
+        // main-thread decode of a brick nobody is waiting for any more. Scrubbing a
+        // timelapse otherwise filled the console with AbortError and burnt CPU decoding
+        // frames that had already been replaced.
+        if (e?.name === 'AbortError' || signal?.aborted) throw e;
         console.error('[BrickLoader] Worker decode failed, falling back:', e);
       }
     }

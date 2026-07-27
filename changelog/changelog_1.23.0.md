@@ -26,6 +26,12 @@
 - Ligne de prérequis **« Permissions des fichiers créés »** affichant les modes retenus, avec l'explication quand le décalage de propriétaire est détecté.
 - Passe finale `apply_tree_modes()` à l'étape *Terminé* : filet de sécurité sur toute l'arborescence extraite, pour qu'un chemin d'écriture ajouté plus tard ne puisse pas enfermer l'opérateur hors de son propre site.
 
+### Le panneau dit POURQUOI GitHub est injoignable ([api/_admin_lib.php](../api/_admin_lib.php), [api/admin.php](../api/admin.php), [dev_server.py](../dev_server.py), [js/pages/admin/tab-updates.js](../js/pages/admin/tab-updates.js))
+- L'onglet **Mises à jour** affichait « Impossible de contacter GitHub — `unreachable` », un mot qui recouvrait trois causes très différentes : quota d'API atteint, magasin de certificats cassé, ou vraie panne réseau. `mkt_fetch_bytes` mémorise désormais le motif exact (statut HTTP, message cURL, en-têtes) et `mkt_error_payload()` le traduit en code + détail.
+- **Quota GitHub reconnu** : l'API non authentifiée autorise **60 requêtes/heure et par IP** — un campus entier derrière un même NAT l'épuise vite. Les en-têtes `x-ratelimit-*` / `retry-after` sont lus et le panneau affiche « Limite de l'API GitHub atteinte, réessayez dans N minutes » au lieu d'une fausse panne. Même détection côté serveur Python (HTTP 403/429).
+- **Priorité des diagnostics** : un statut HTTP reçu prime sur l'erreur TLS de la tentative cURL — sans quoi, sur un hôte au `curl.cainfo` cassé mais dont le repli par flux fonctionne, un simple 404 ou un quota dépassé était rapporté comme un problème de certificat. Vérifié sur les trois scénarios (404, DNS mort, magasin CA inutilisable, avec et sans `allow_url_fopen`).
+- Le catalogue du marketplace remonte lui aussi le motif au lieu d'un `catalog_fetch_failed` nu.
+
 ## [FIXED]
 
 - Tous les points d'écriture passent par les helpers : extraction de la release, `api/.htaccess`, `DATA_WEB/{fixed,live,tracking}` et `catalog.json` (installeur) ; `admin_write_json`, installation/désinstallation de plugins du marketplace, extraction et recopie de mise à jour, y compris la finalisation différée des fichiers `*.lumen-new` ([api/_admin_lib.php](../api/_admin_lib.php)) ; `config/*.json` + `theme.css` ([api/site.php](../api/site.php)) ; téléversements de la médiathèque ([api/media.php](../api/media.php)) ; `metadata.json` / `catalog.json` des jeux de données ([api/datasets.php](../api/datasets.php), [dev_server.py](../dev_server.py)).

@@ -164,7 +164,13 @@ switch ($action) {
         // repairs a php.ini CA path that points at a missing bundle — otherwise the
         // check reports "unreachable" on a host that is perfectly online.
         $raw = mkt_fetch_bytes('https://api.github.com/repos/' . GITHUB_REPO . '/releases/latest', 512 * 1024);
-        if ($raw === null) admin_json_out(['current' => $current, 'latest' => null, 'available' => false, 'error' => 'unreachable']);
+        if ($raw === null) {
+            // Carry WHY: an unauthenticated GitHub API allows 60 requests/hour per IP
+            // (a whole campus behind one NAT burns that fast), and a broken CA store
+            // looks identical from here — "unreachable" alone sends the operator
+            // hunting a firewall that is innocent.
+            admin_json_out(['current' => $current, 'latest' => null, 'available' => false] + mkt_error_payload());
+        }
         $rel = json_decode($raw, true);
         if (!is_array($rel) || !isset($rel['tag_name'])) admin_json_out(['current' => $current, 'latest' => null, 'available' => false, 'noReleases' => true]);
         $latest = ltrim((string)$rel['tag_name'], 'v');

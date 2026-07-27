@@ -708,6 +708,7 @@ function mkt_fetch_bytes(string $url, int $limit): ?string {
     // callback caps the body at $limit+1 bytes so an oversized response can't balloon
     // memory (a truncated body then fails the signature check — fail-closed).
     $caError = false;
+    mkt_last_error(['status' => 0, 'curl' => '', 'stream' => '', 'ca' => false, 'headers' => []]);
     if (function_exists('curl_init')) {
         $body = mkt_curl_fetch($url, $limit, admin_ca_curl_opts(), $caError);
         if ($body === null && $caError) {                                    // broken trust store, not an outage
@@ -722,16 +723,77 @@ function mkt_fetch_bytes(string $url, int $limit): ?string {
             'ssl'  => admin_ca_stream_opts($caError),
         ]);
         $d = @file_get_contents($url, false, $ctx, 0, $limit + 1);
+        // $http_response_header exists here whenever a response was actually received
+        // (even a 4xx). A status means the transport WORKED, so it outranks the cURL
+        // leg's diagnosis — otherwise a 403 rate limit on a host with a broken
+        // curl.cainfo would be reported as a certificate problem.
+        $status = 0; $hdrs = [];
+        if (isset($http_response_header) && is_array($http_response_header)) {
+            foreach ($http_response_header as $line) {
+                if (stripos($line, 'HTTP/') === 0) {
+                    if (preg_match('#^HTTP/\S+\s+(\d{3})#', $line, $m)) { $status = (int)$m[1]; $hdrs = []; }
+                } elseif (strpos($line, ':') !== false) {
+                    [$k, $v] = explode(':', $line, 2);
+                    $hdrs[strtolower(trim($k))] = trim($v);
+                }
+            }
+        }
         if ($d !== false) return substr($d, 0, $limit);
+        $prev = mkt_last_error();
+        if ($status > 0) {
+            mkt_last_error(['status' => $status, 'headers' => $hdrs]);
+        } elseif ($prev['status'] === 0 && $prev['curl'] === '') {
+            $e = error_get_last();
+            mkt_last_error(['stream' => $e['message'] ?? 'stream fetch failed']);
+        }
     }
     return null;
 }
 
+/**
+ * Why the last mkt_fetch_bytes() failed. Without this the admin UI could only say
+ * "unreachable", which sends the operator looking for a firewall when the real
+ * cause is a GitHub rate limit or a broken CA store.
+ * @return array{status:int,curl:string,stream:string,ca:bool,headers:array<string,string>}
+ */
+function mkt_last_error(?array $set = null): array {
+    static $last = ['status' => 0, 'curl' => '', 'stream' => '', 'ca' => false, 'headers' => []];
+    if ($set !== null) $last = $set + ['status' => 0, 'curl' => '', 'stream' => '', 'ca' => false, 'headers' => []];
+    return $last;
+}
+
+/** Map the recorded failure to an error code + detail for the admin UI. */
+function mkt_error_payload(): array {
+    $e = mkt_last_error();
+    $status = (int)$e['status'];
+    $h = $e['headers'];
+    $rateLimited = ($status === 403 || $status === 429)
+        && (($h['x-ratelimit-remaining'] ?? null) === '0' || isset($h['retry-after']));
+    if ($rateLimited) {
+        $min = null;
+        if (isset($h['x-ratelimit-reset'])) $min = max(1, (int)ceil(((int)$h['x-ratelimit-reset'] - time()) / 60));
+        elseif (isset($h['retry-after']))   $min = max(1, (int)ceil((int)$h['retry-after'] / 60));
+        return ['error' => 'rate_limited', 'retryAfterMin' => $min, 'detail' => 'HTTP ' . $status];
+    }
+    if ($e['ca'])          return ['error' => 'tls_ca_broken', 'detail' => $e['curl'] ?: 'CA store unusable'];
+    if ($status >= 400)    return ['error' => 'unreachable', 'detail' => 'HTTP ' . $status];
+    if ($e['curl'] !== '') return ['error' => 'unreachable', 'detail' => $e['curl']];
+    if ($e['stream'] !== '') return ['error' => 'unreachable', 'detail' => $e['stream']];
+    return ['error' => 'unreachable', 'detail' => 'no HTTP transport available'];
+}
+
 /** One cURL attempt. Sets $caError when the failure is a trust-store problem. */
 function mkt_curl_fetch(string $url, int $limit, array $caOpts, bool &$caError): ?string {
-    $buf = '';
+    $buf = ''; $headers = [];
     $ch = curl_init($url);
     curl_setopt_array($ch, $caOpts + [
+        CURLOPT_HEADERFUNCTION  => function ($c, $line) use (&$headers) {
+            if (strpos($line, ':') !== false) {
+                [$k, $v] = explode(':', $line, 2);
+                $headers[strtolower(trim($k))] = trim($v);                   // rate-limit headers live here
+            }
+            return strlen($line);
+        },
         CURLOPT_FOLLOWLOCATION  => true,
         CURLOPT_MAXREDIRS       => 5,
         CURLOPT_PROTOCOLS       => CURLPROTO_HTTPS,
@@ -748,9 +810,11 @@ function mkt_curl_fetch(string $url, int $limit, array $caOpts, bool &$caError):
     ]);
     curl_exec($ch);
     $code = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
-    $caError = admin_is_ca_error((string)curl_error($ch));
+    $err  = (string)curl_error($ch);
+    $caError = admin_is_ca_error($err);
     curl_close($ch);
     if ($buf !== '' && $code >= 200 && $code < 300) return substr($buf, 0, $limit);
+    mkt_last_error(['status' => $code, 'curl' => $err, 'ca' => $caError, 'headers' => $headers]);
     return null;
 }
 
@@ -773,7 +837,7 @@ function mkt_verify_signature(string $data, ?string $sigUrl): bool {
 function mkt_fetch_catalog(): array {
     if (MARKETPLACE_CATALOG_URL === '') return [false, 'marketplace_not_configured'];
     $raw = mkt_fetch_bytes(MARKETPLACE_CATALOG_URL, 1 << 20);
-    if ($raw === null) return [false, 'catalog_fetch_failed'];
+    if ($raw === null) return [false, 'catalog_fetch_failed: ' . (mkt_error_payload()['detail'] ?? '?')];
     if (!mkt_verify_signature($raw, MARKETPLACE_CATALOG_URL . '.sig')) return [false, 'catalog_signature_invalid'];
     $d = json_decode($raw, true);
     if (!is_array($d) || !isset($d['plugins']) || !is_array($d['plugins'])) return [false, 'invalid_catalog'];

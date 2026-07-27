@@ -41,7 +41,16 @@ function versionChip(labelKey, labelDef, value) {
 
 function updateBlock() {
   if (!_check) return `<div class="adm-update-state adm-checking"><span class="spinner spinner-sm"></span> ${escHtml(t('admin.checking', 'Recherche de mises à jour…'))}</div>`;
-  if (_check.error) return `<div class="adm-update-state adm-warn"><i data-lucide="wifi-off"></i> ${escHtml(t('admin.checkError', 'Impossible de contacter GitHub.'))} <span class="adm-muted">${escHtml(_check.error)}</span></div>`;
+  if (_check.error === 'rate_limited') {
+    const msg = _check.retryAfterMin
+      ? t('admin.rateLimited', "Limite de l'API GitHub atteinte. Réessayez dans {m} minute(s).", { m: _check.retryAfterMin })
+      : t('admin.rateLimitedNoMin', "Limite de l'API GitHub atteinte. Réessayez dans quelques minutes.");
+    return `<div class="adm-update-state adm-warn"><i data-lucide="hourglass"></i> ${escHtml(msg)}</div>`;
+  }
+  if (_check.error === 'tls_ca_broken') {
+    return `<div class="adm-update-state adm-warn"><i data-lucide="shield-off"></i> ${escHtml(t('admin.tlsCaBroken', 'Le magasin de certificats de PHP est inutilisable sur cet hébergement : téléversez cacert.pem (https://curl.se/ca/cacert.pem) à la racine du site.'))} <span class="adm-muted">${escHtml(_check.detail || '')}</span></div>`;
+  }
+  if (_check.error) return `<div class="adm-update-state adm-warn"><i data-lucide="wifi-off"></i> ${escHtml(t('admin.checkError', 'Impossible de contacter GitHub.'))} <span class="adm-muted">${escHtml(_check.detail || _check.error)}</span></div>`;
   if (_check.noReleases) return `<div class="adm-update-state adm-ok"><i data-lucide="check-circle-2"></i> ${escHtml(t('admin.noReleases', 'Aucune release publiée sur GitHub pour le moment.'))}</div>`;
   if (!_check.available) return `<div class="adm-update-state adm-ok"><i data-lucide="check-circle-2"></i> ${escHtml(t('admin.upToDate', 'Vous êtes à jour.'))} <span class="adm-muted">(${escHtml(_check.latest || _check.current)})</span></div>`;
 

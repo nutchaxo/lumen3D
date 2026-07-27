@@ -1560,9 +1560,28 @@ def _update_check() -> dict:
     except urllib.error.HTTPError as e:
         if e.code == 404:
             return {"current": current, "latest": None, "available": False, "noReleases": True}
-        return {"current": current, "latest": None, "available": False, "error": f"HTTP {e.code}"}
+        # Unauthenticated GitHub allows 60 requests/hour per IP — a shared campus NAT
+        # burns that quickly, and "HTTP 403" alone reads like a permission problem.
+        hdr = getattr(e, "headers", None) or {}
+        remaining = hdr.get("x-ratelimit-remaining")
+        retry_after = hdr.get("retry-after")
+        if e.code in (403, 429) and (remaining == "0" or retry_after):
+            minutes = None
+            reset = hdr.get("x-ratelimit-reset")
+            try:
+                if reset:
+                    minutes = max(1, -(-(int(reset) - int(time.time())) // 60))
+                elif retry_after:
+                    minutes = max(1, -(-int(retry_after) // 60))
+            except (TypeError, ValueError):
+                minutes = None
+            return {"current": current, "latest": None, "available": False,
+                    "error": "rate_limited", "retryAfterMin": minutes, "detail": f"HTTP {e.code}"}
+        return {"current": current, "latest": None, "available": False,
+                "error": "unreachable", "detail": f"HTTP {e.code}"}
     except Exception as e:
-        return {"current": current, "latest": None, "available": False, "error": str(e)}
+        return {"current": current, "latest": None, "available": False,
+                "error": "unreachable", "detail": str(e)}
     latest = (rel.get("tag_name") or "").lstrip("v") or None
     available = bool(latest) and _version_tuple(latest) > _version_tuple(current)
     # Prefer the curated runtime artifact (allowlist-built by tools/build_release.py,

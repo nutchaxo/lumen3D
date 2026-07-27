@@ -799,7 +799,10 @@
     "permsSplit": "PHP ({php}) ≠ site owner ({owner}) — created files use {dir} / {file}.",
     "permsSame": "PHP runs as the site owner ({owner}) — standard {dir} / {file} permissions.",
     "permsDone": "{n} entries fixed ({failed} failures).",
-    "permsFailed": "Permission repair failed."
+    "permsFailed": "Permission repair failed.",
+    "rateLimited": "GitHub API rate limit reached. Retry in {m} minute(s).",
+    "rateLimitedNoMin": "GitHub API rate limit reached. Retry in a few minutes.",
+    "tlsCaBroken": "This host's PHP certificate store is unusable: upload cacert.pem (https://curl.se/ca/cacert.pem) to the site root."
   },
   "appearance": {
     "title": "Appearance",

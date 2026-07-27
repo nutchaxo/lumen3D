@@ -799,7 +799,10 @@
     "permsSplit": "PHP ({php}) ≠ propriétaire du site ({owner}) — les fichiers créés utilisent {dir} / {file}.",
     "permsSame": "PHP tourne sous le propriétaire du site ({owner}) — permissions standard {dir} / {file}.",
     "permsDone": "{n} entrées corrigées ({failed} échecs).",
-    "permsFailed": "Échec de la réparation des permissions."
+    "permsFailed": "Échec de la réparation des permissions.",
+    "rateLimited": "Limite de l'API GitHub atteinte. Réessayez dans {m} minute(s).",
+    "rateLimitedNoMin": "Limite de l'API GitHub atteinte. Réessayez dans quelques minutes.",
+    "tlsCaBroken": "Le magasin de certificats de PHP est inutilisable sur cet hébergement : téléversez cacert.pem (https://curl.se/ca/cacert.pem) à la racine du site."
   },
   "appearance": {
     "title": "Apparence",

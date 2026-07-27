@@ -2108,7 +2108,7 @@ const ViewerApp = (() => {
       const ms = Math.round((performance.now?.() || Date.now()) - _tpLoadStart);
       console.log(`[ViewerApp] timepoint ${t + 1}/${datasetMeta.dimensions?.t} ready in ${ms} ms `
         + `(${primaryQuality}, ${_tpSeen.has(t) ? 'revisit' : 'first visit'}, `
-        + `${loadedTimepoints.size} resident)`);
+        + `${loadedTimepoints.size} visited so far)`);
       _tpSeen.add(t);
     }
     if (loader) loader.style.display = 'none';
@@ -2172,18 +2172,40 @@ const ViewerApp = (() => {
       .filter(frame => !_preloadedTimepoints.has(frame) && !loadedTimepoints.has(frame));
     if (!candidates.length) return;
 
-    const run = () => {
-      candidates.forEach(frame => {
-        _preloadedTimepoints.add(frame);
-        VolumeViewer.preloadVolume(basePath, datasetMeta, frame, { quality: '256x256' })
-          .then((result) => {
-            if (result.successfulLoads > 0) {
-              _setQualityStatus(`Nearby previews cached. ${_qualityLabel(_qualityMode)} remains the displayed target.`);
-            }
-          })
-          .catch(err => console.warn('[ViewerApp] Timepoint preload failed:', err));
-      });
-    };
+    // A bricked dataset has no slice stack. preloadVolume() only ever builds slice URLs,
+    // so on a 4D brick dataset this preloader fired hundreds of doomed requests per
+    // timepoint (preview/slices/tNNN_zNNN_c0.webp -> 404), burning the browser's
+    // connection budget on nothing and, on a shared host, inviting the 429 bursts the
+    // project .htaccess already documents. Warm the actual pack files instead: they are
+    // 45-125 KB per timepoint here, and the switch then costs a decode, not a round-trip.
+    const tpRows = _brickManifest?.timepoints;
+    const run = tpRows && typeof tpRows === 'object'
+      ? () => {
+        const brickDir = datasetMeta?.qualities?.native?.directory || 'bricks';
+        const levels = _brickManifest?.levels || [];
+        const lod = _lodForQuality(_qualityMode, levels.length, levels);
+        candidates.forEach(frame => {
+          const key = `t${String(frame).padStart(3, '0')}`;
+          const row = tpRows[key] || tpRows[String(frame)] || tpRows[frame];
+          if (!row?.brickTransport) return;
+          _preloadedTimepoints.add(frame);
+          BrickLoader.prefetchPacks?.(
+            `${basePath}/${brickDir}/${row.path || key}`, row.brickTransport, lod, 0
+          )?.catch?.(() => {});   // best effort: the foreground load retries properly
+        });
+      }
+      : () => {
+        candidates.forEach(frame => {
+          _preloadedTimepoints.add(frame);
+          VolumeViewer.preloadVolume(basePath, datasetMeta, frame, { quality: '256x256' })
+            .then((result) => {
+              if (result.successfulLoads > 0) {
+                _setQualityStatus(`Nearby previews cached. ${_qualityLabel(_qualityMode)} remains the displayed target.`);
+              }
+            })
+            .catch(err => console.warn('[ViewerApp] Timepoint preload failed:', err));
+        });
+      };
 
     _preloadTimer = window.requestIdleCallback
       ? requestIdleCallback(run, { timeout: 1800 })

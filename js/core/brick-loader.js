@@ -188,6 +188,43 @@ const BrickLoader = (() => {
     }
   }
 
+  /** Warm the HTTP + pack caches for a timepoint that is NOT currently mounted.
+   *
+   *  The loader mounts one timepoint at a time, so prefetching a neighbour cannot go
+   *  through loadBricks() without fighting the visible frame. This only pulls the pack
+   *  FILES into _packCache — keyed by absolute URL, so they survive the next mount and
+   *  the switch then costs a decode instead of a network round-trip. Packs are small
+   *  (45-125 KB per timepoint here), which is the whole point of prefetching them.
+   *
+   *  @param {string} baseDir  ".../bricks/t007" — the neighbour's mount path
+   *  @param {object} transport that timepoint's brickTransport
+   */
+  function prefetchPacks(baseDir, transport, lod = 0, channel = 0, maxPacks = 8) {
+    const b2p = transport?.brickToPack;
+    if (!b2p || typeof b2p !== 'object') return Promise.resolve(0);
+    const prefix = `lod${lod}/c${channel}/`;
+    const urls = new Set();
+    for (const [key, entry] of Object.entries(b2p)) {
+      if (!key.startsWith(prefix) || !entry?.url) continue;
+      if (!_isSafePackUrl(entry.url)) continue;
+      urls.add(`${String(baseDir).replace(/\/$/, '')}/${String(entry.url).replace(/^\/+/, '')}`);
+      if (urls.size >= maxPacks) break;
+    }
+    if (!urls.size) return Promise.resolve(0);
+    const signal = _packFetchController ? _packFetchController.signal : undefined;
+    return Promise.all([...urls].map(url => {
+      if (_packCache.has(url)) return true;
+      _trimPackCache(PACK_CACHE_LIMIT - 1);
+      const promise = fetch(url, { signal }).then(resp => {
+        if (!resp.ok) throw new Error(`HTTP ${resp.status} for ${url}`);
+        return resp.arrayBuffer();
+      }).catch(err => { _packCache.delete(url); throw err; });
+      _packCache.set(url, { promise, lastUsed: performance.now?.() || Date.now() });
+      // A failed prefetch is not an error: the foreground load will retry properly.
+      return promise.then(() => true, () => false);
+    })).then(rows => rows.filter(Boolean).length);
+  }
+
   function hasBrick(bx, by, bz, lod = 0) {
     return _activeBricksSet.has(`${lod}:${bx}_${by}_${bz}`);
   }
@@ -1070,6 +1107,7 @@ const BrickLoader = (() => {
     bricksForSlab,
     bricksForRegion,
     hasBrick,
+    prefetchPacks,
     activeBricks,
     loadBricks,
     loadBrickTasks,

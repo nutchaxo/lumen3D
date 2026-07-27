@@ -32,10 +32,14 @@
    these fields; the edit frame (page-edit-frame.js) reuses sectionCss/
    columnCss/applyStyleExtras below so editor and live page can never drift.
 
-   24 widget types: heading, richtext, image, button, divider, spacer, hero,
+   27 widget types: heading, richtext, image, button, divider, spacer, hero,
    gallery, icon, stat-grid, latest-datasets, html, feature-card, quote,
    accordion, timeline, cta-banner + (v1.18.0) badge, icon-list, profile,
-   cite-block + (v1.22.0) tabs, counter, video.
+   cite-block + (v1.22.0) tabs, counter, video + (v1.25.0) link-list,
+   spec-list, logo-strip — the editorial trio (hairline-ruled link rows,
+   label/value rows, contained logo row) that replaces "a grid of cards" as the
+   default way to present links, metadata and partners. counter also gained the
+   live catalog `source` that stat-grid already had (LIVE_STATS below).
 
    BACKWARD-COMPAT: a legacy flat source { blocks:[…] } (or a bare array) is
    normalized to a single full-width section with one 12-unit column whose
@@ -311,6 +315,21 @@ const PageRenderer = (() => {
     return _el('div', `position:absolute;inset:0;pointer-events:none;background:${_sanitizeCss(st.overlay)};${r != null ? `border-radius:${r}px;` : ''}`);
   }
 
+  // Live catalog counters, shared by stat-grid and counter: widget-facing source
+  // name → Catalog.getStats() field. Returns null when the source isn't live or
+  // the catalog isn't available, so callers fall back to their authored value.
+  const LIVE_STATS = { datasetCount: 'totalDatasets', specimenCount: 'totalEmbryos', cellCount: 'totalCells', regionCount: 'totalRegions' };
+  function _liveStat(source) {
+    if (!LIVE_STATS[source]) return null;
+    try {
+      if (typeof Catalog !== 'undefined' && Catalog.getStats) {
+        const s = Catalog.getStats();
+        if (s) return s[LIVE_STATS[source]] ?? 0;
+      }
+    } catch (_) {}
+    return null;
+  }
+
   // ── Shared widget-rendering helpers ─────────────────────────────────────────
   // richtext mini-markup — **bold**, *italic*, [text](url) — parsed and built
   // as DOM nodes (never innerHTML). Plain text with no markup produces exactly
@@ -385,7 +404,22 @@ const PageRenderer = (() => {
       return _el('h' + lvl, `text-align:${ALIGN(b.props?.align)};margin:0 0 12px;line-height:1.25`, _lv(b.text));
     },
     richtext(b) {
-      const wrap = _el('div', `text-align:${ALIGN(b.props?.align)}`);
+      const st = (b.props && b.props.style) || null;
+      const align = ALIGN(b.props?.align);
+      const wrap = _el('div', `text-align:${align}`);
+      // The text style group must land on the PARAGRAPHS, not just the wrapper:
+      // base.css pins `p { color; line-height }`, and an explicit rule beats an
+      // inherited value — so a style.color set on the widget never reached the
+      // text (same failure mode as the hero-title bug documented above). The raw
+      // `css` escape hatch is stripped from the copy so it isn't applied once
+      // per paragraph on top of the widget root.
+      let pText = '';
+      let gradFit = '';
+      if (st) {
+        const noRaw = Object.assign({}, st); delete noRaw.css;
+        pText = styleCss(noRaw, ['text']);
+        if (_isGradientFill(st.textGradient || st.color)) gradFit = _gradFitCss(ALIGN(st.align || align));
+      }
       // props.markup opts INTO the inline mini-markup. It defaults off because
       // stored text predating v1.18.0 may legitimately contain asterisks (a
       // figure legend like "* p<0.05, ** p<0.01" would silently lose them), so
@@ -393,7 +427,7 @@ const PageRenderer = (() => {
       // markup:true on newly created richtext widgets.
       const markup = !!(b.props && b.props.markup);
       _lv(b.text).split(/\n{2,}/).forEach((para) => {
-        const p = _el('p', 'line-height:1.7;margin:0 0 14px;white-space:pre-wrap');
+        const p = _el('p', 'line-height:1.7;margin:0 0 14px;white-space:pre-wrap;' + pText + gradFit);
         if (markup) _appendRichInline(p, para);
         else p.textContent = para;
         wrap.appendChild(p);
@@ -516,7 +550,10 @@ const PageRenderer = (() => {
       // (props.titleColor / props.subColor — color OR gradient) are appended
       // after it so each part is adjustable independently.
       const titleFill = p.titleColor || st.textGradient || st.color;
-      if (_lv(b.text)) inner.appendChild(_el('h1', 'margin:0 0 14px;' + (ts ? `font-size:${ts}px;line-height:1.15;` : '') + styleCss(st, ['text']) + _textFillCss(p.titleColor) +
+      // min(…px, 11vw): an authored display size (50–80px reads well on a
+      // desktop masthead) would otherwise overflow a phone. The px value wins
+      // above ~9× the size in viewport width, so desktop rendering is unchanged.
+      if (_lv(b.text)) inner.appendChild(_el('h1', 'margin:0 0 14px;' + (ts ? `font-size:min(${ts}px, 11vw);line-height:1.15;` : '') + styleCss(st, ['text']) + _textFillCss(p.titleColor) +
         (_isGradientFill(titleFill) ? _gradFitCss(align) : ''), _lv(b.text)));
       const ss = _n(p.subSize, 8, 80);
       // Subtitle follows the shared text style except size and the legacy
@@ -582,10 +619,6 @@ const PageRenderer = (() => {
       const p = b.props || {};
       const cols = _n(p.cols, 1, 8);
       const grid = _el('div', `display:grid;grid-template-columns:${cols ? `repeat(${cols},1fr)` : 'repeat(auto-fit,minmax(130px,1fr))'};gap:16px;text-align:center`);
-      // Live sources mirror the landing's counters (Catalog.getStats()).
-      const SRC = { datasetCount: 'totalDatasets', specimenCount: 'totalEmbryos', cellCount: 'totalCells', regionCount: 'totalRegions' };
-      let stats0 = null;
-      try { if (typeof Catalog !== 'undefined' && Catalog.getStats) stats0 = Catalog.getStats(); } catch (_) {}
       const vs = _n(p.valueSize, 10, 120);
       const padPx = _n(p.pad, 0, 120);
       const radiusPx = _n(p.radius, 0, 300);
@@ -598,7 +631,9 @@ const PageRenderer = (() => {
         const lFill = st0.labelColor || p.labelColor;
         const card = _el('div', `padding:${padPx != null ? padPx : 20}px;background:${cardBg ? _sanitizeCss(cardBg) : 'var(--bg-surface,#161622)'};border-radius:${radiusPx != null ? radiusPx + 'px' : 'var(--radius-md,10px)'};${borderCss}`);
         let value = st0.value;
-        if (SRC[st0.source]) value = stats0 ? (stats0[SRC[st0.source]] ?? 0) : (value || 0);
+        // Live sources mirror the landing's counters (Catalog.getStats()); with
+        // no catalog loaded the authored fixed value stands in.
+        if (LIVE_STATS[st0.source]) { const live = _liveStat(st0.source); value = live != null ? live : (value || 0); }
         card.appendChild(_el('div', `font-size:${vs ? vs + 'px' : 'var(--text-3xl,2.5rem)'};font-weight:700;` +
           (vFill ? _textFillCss(vFill) + (_isGradientFill(vFill) ? _gradFitCss('center') : '') : 'color:var(--color-primary,#00A654);'), String(value ?? 0)));
         card.appendChild(_el('div', `opacity:.75;margin-top:4px;` +
@@ -1045,7 +1080,11 @@ const PageRenderer = (() => {
     },
     counter(b) {
       const p = b.props || {};
-      const target = parseFloat(p.value);
+      // props.source (v1.25.0) counts a LIVE catalog figure instead of the fixed
+      // props.value — same source names as stat-grid.
+      const live = _liveStat(p.source);
+      const raw = live != null ? live : p.value;
+      const target = parseFloat(raw);
       const val = isNaN(target) ? 0 : target;
       const prefix = p.prefix != null ? String(p.prefix) : '';
       const suffix = p.suffix != null ? String(p.suffix) : '';
@@ -1055,7 +1094,7 @@ const PageRenderer = (() => {
       const num = _el('div', `font-size:${sizeN != null ? sizeN + 'px' : '3rem'};font-weight:800;line-height:1.1;` +
         (p.color ? '' : 'color:var(--color-primary,#00A654);'));
       if (p.color) { num.style.cssText += ';color:' + _sanitizeCss(p.color); if (_isGradientFill(p.color)) num.style.cssText += ';' + _textFillCss(p.color) + _gradFitCss(align); }
-      const decimals = ((String(p.value).split('.')[1]) || '').length;
+      const decimals = ((String(raw).split('.')[1]) || '').length;
       const fmt = (n) => prefix + (decimals ? n.toFixed(decimals) : Math.round(n).toLocaleString()) + suffix;
       num.textContent = fmt(0);
       wrap.appendChild(num);
@@ -1115,6 +1154,152 @@ const PageRenderer = (() => {
       } else {
         wrap.appendChild(_el('div', 'opacity:.5;font-size:13px;padding:20px;border:1px dashed var(--border-subtle,#2a2a3a);border-radius:8px', _lv(b.text) || 'Vidéo'));
       }
+      return wrap;
+    },
+    // Editorial navigation list: full-width rows separated by hairlines instead
+    // of a grid of cards — the same links, without the "wall of boxes" look.
+    // Hover affordances (title tint, arrow slide) need :hover → css/pages.css.
+    'link-list'(b) {
+      const p = b.props || {};
+      const items = Array.isArray(p.items) ? p.items : [];
+      // --border-default (10% in both themes), not --border-subtle (5–6%): the
+      // rules ARE the structure here, and 5% black is nearly invisible on white.
+      const line = p.lineColor ? _sanitizeCss(p.lineColor) : 'var(--border-default,#3a3a4a)';
+      const rule = p.dividers === false ? '' : `border-top:1px solid ${line};`;
+      const iconColor = p.iconColor ? _sanitizeCss(p.iconColor) : 'var(--color-primary,#00A654)';
+      const iconSize = _n(p.iconSize, 10, 80) || 20;
+      const titleSize = _n(p.titleSize, 10, 60);
+      const pv = _n(p.padY, 0, 80); const padY = pv != null ? pv : 20;
+      const showArrow = p.arrow !== false;
+      const wrap = _el('div', 'display:flex;flex-direction:column');
+      let needIcons = false;
+      items.forEach((it) => {
+        const href = _safeHref(it.href);
+        const row = document.createElement(href ? 'a' : 'div');
+        if (href) row.href = href;
+        row.className = 'pr-linkrow';
+        row.style.cssText = `display:flex;align-items:center;gap:18px;padding:${padY}px 2px;text-decoration:none;color:inherit;${rule}`;
+        const iconName = String(it.icon || '').replace(/[^a-z0-9-]/gi, '').slice(0, 60);
+        if (iconName) {
+          const ic = document.createElement('i');
+          ic.setAttribute('data-lucide', iconName);
+          ic.style.cssText = `width:${iconSize}px;height:${iconSize}px;flex:0 0 auto;color:${iconColor}`;
+          row.appendChild(ic);
+          needIcons = true;
+        }
+        const txt = _el('div', 'flex:1 1 auto;min-width:0');
+        if (_lv(it.title)) {
+          const ttl = _el('div', `font-weight:600;line-height:1.35;${titleSize != null ? `font-size:${titleSize}px;` : 'font-size:1.05rem;'}`, _lv(it.title));
+          ttl.className = 'pr-linkrow-t';
+          txt.appendChild(ttl);
+        }
+        if (_lv(it.desc)) txt.appendChild(_el('div', 'margin-top:4px;opacity:.65;line-height:1.55;font-size:.9rem', _lv(it.desc)));
+        row.appendChild(txt);
+        if (showArrow && href) {
+          const ar = document.createElement('i');
+          ar.setAttribute('data-lucide', 'arrow-right');
+          ar.className = 'pr-linkrow-a';
+          ar.style.cssText = 'width:18px;height:18px;flex:0 0 auto;opacity:.45';
+          row.appendChild(ar);
+          needIcons = true;
+        }
+        wrap.appendChild(row);
+      });
+      // Closing hairline so the list reads as a finished table, not a cut-off one.
+      if (items.length && p.dividers !== false) wrap.appendChild(_el('div', `border-top:1px solid ${line}`));
+      if (needIcons) _scheduleIcons();
+      return wrap;
+    },
+    // Label / value rows (affiliation, contact, licence…) — the typographic
+    // alternative to stuffing metadata into a paragraph or an icon list.
+    'spec-list'(b) {
+      const p = b.props || {};
+      const items = Array.isArray(p.items) ? p.items : [];
+      const line = p.lineColor ? _sanitizeCss(p.lineColor) : 'var(--border-default,#3a3a4a)';
+      const rule = p.dividers === false ? '' : `border-top:1px solid ${line};`;
+      const lw = _n(p.labelWidth, 60, 400) || 150;
+      const labelColor = p.labelColor ? _sanitizeCss(p.labelColor) : 'var(--text-muted,#8a8a9a)';
+      const valueColor = p.valueColor ? _sanitizeCss(p.valueColor) : '';
+      const pv = _n(p.padY, 0, 60); const padY = pv != null ? pv : 13;
+      const mono = !!p.mono;
+      const wrap = _el('div', 'display:flex;flex-direction:column');
+      items.forEach((it) => {
+        // flex-wrap (not a grid): on a narrow column the value drops under its
+        // label instead of being squeezed into a few characters per line.
+        const row = _el('div', `display:flex;flex-wrap:wrap;align-items:baseline;gap:4px 24px;padding:${padY}px 0;${rule}`);
+        row.appendChild(_el('div', `flex:0 0 ${lw}px;max-width:100%;font-size:.72rem;font-weight:600;text-transform:uppercase;letter-spacing:.11em;color:${labelColor}`, _lv(it.label)));
+        const val = _el('div', `flex:1 1 200px;min-width:0;line-height:1.6;${mono ? 'font-family:var(--font-mono,monospace);font-size:.9rem;' : ''}${valueColor ? `color:${valueColor};` : ''}`);
+        const href = _safeHref(it.href);
+        if (href) {
+          const a = document.createElement('a');
+          a.href = href; a.textContent = _lv(it.value);
+          a.style.cssText = 'color:var(--color-accent,#00D2FF);text-decoration:none';
+          val.appendChild(a);
+        } else {
+          val.textContent = _lv(it.value);
+        }
+        row.appendChild(val);
+        wrap.appendChild(row);
+      });
+      if (items.length && p.dividers !== false) wrap.appendChild(_el('div', `border-top:1px solid ${line}`));
+      return wrap;
+    },
+    // Partner / institution logo row: contained (never cropped) logos on one
+    // line, optionally on a light plate for dark themes. Desaturated by default
+    // and colorised on hover — the class rule lives in css/pages.css.
+    'logo-strip'(b) {
+      const p = b.props || {};
+      const items = Array.isArray(p.items) ? p.items : [];
+      const h = _n(p.height, 16, 300) || 46;
+      const gp = _n(p.gap, 0, 140); const gap = gp != null ? gp : 44;
+      const align = ALIGN(p.align || 'center');
+      const plate = !!p.plate;
+      const plateBg = p.plateBg ? _sanitizeCss(p.plateBg) : '#ffffff';
+      const desat = p.grayscale !== false;
+      const labels = p.labels !== false;
+      const wrap = _el('div', `display:flex;flex-wrap:wrap;align-items:center;gap:${gap}px;` +
+        `justify-content:${align === 'center' ? 'center' : align === 'right' ? 'flex-end' : 'flex-start'}`);
+      let needIcons = false;
+      items.forEach((it) => {
+        const href = _safeHref(it.href);
+        const cell = document.createElement(href ? 'a' : 'div');
+        if (href) { cell.href = href; cell.target = '_blank'; cell.rel = 'noopener noreferrer'; }
+        cell.style.cssText = 'display:flex;flex-direction:column;align-items:center;gap:10px;max-width:230px;text-decoration:none;color:inherit';
+        let media = null;
+        if (it.img) {
+          const img = document.createElement('img');
+          img.src = it.img; img.alt = _lv(it.label) || ''; img.loading = 'lazy';
+          img.style.cssText = `height:${h}px;max-width:190px;object-fit:contain;display:block`;
+          media = img;
+        } else if (it.monogram) {
+          media = _el('div', `width:${h}px;height:${h}px;border-radius:14px;display:flex;align-items:center;justify-content:center;` +
+            `font-weight:700;font-size:${Math.round(h * 0.34)}px;letter-spacing:.04em;` +
+            `background:${p.monoBg ? _sanitizeCss(p.monoBg) : 'linear-gradient(135deg, var(--color-primary,#00A654), var(--color-accent,#00D2FF))'};` +
+            `color:${p.monoColor ? _sanitizeCss(p.monoColor) : '#fff'}`, String(it.monogram).slice(0, 4));
+        } else if (it.icon) {
+          const box = _el('div', `height:${h}px;display:flex;align-items:center;justify-content:center`);
+          const ic = document.createElement('i');
+          ic.setAttribute('data-lucide', String(it.icon).replace(/[^a-z0-9-]/gi, '').slice(0, 60) || 'building-2');
+          ic.style.cssText = `width:${h}px;height:${h}px;color:var(--text-secondary,#b8b8c8)`;
+          box.appendChild(ic);
+          media = box;
+          needIcons = true;
+        }
+        if (media) {
+          let holder = media;
+          if (plate && it.img) {
+            holder = _el('div', `display:flex;align-items:center;justify-content:center;padding:14px 22px;border-radius:16px;background:${plateBg}`);
+            holder.appendChild(media);
+          }
+          if (desat && it.img) holder.classList.add('pr-logo-mono');
+          cell.appendChild(holder);
+        }
+        if (labels && _lv(it.label)) {
+          cell.appendChild(_el('div', 'font-size:.72rem;font-weight:600;text-transform:uppercase;letter-spacing:.1em;opacity:.6;text-align:center;line-height:1.4', _lv(it.label)));
+        }
+        wrap.appendChild(cell);
+      });
+      if (needIcons) _scheduleIcons();
       return wrap;
     },
   };

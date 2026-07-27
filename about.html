@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>{{SITE:pageTitles.about|About — IRIBHM Microscopy Platform}}</title>
-  <meta name="description" content="{{SITE:seo.description|Lumen3D — created by Morgan Climent at the IRIBHM (ULB), Migeotte lab. Scientific context, citation, institutions, and data access for the microscopy platform.}}">
+  <meta name="description" content="{{SITE:seo.description|Browser-based viewer for large 3D imaging volumes — scientific context, data provenance, citation, and contact.}}">
 
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -18,7 +18,6 @@
   <link rel="stylesheet" href="css/components.css">
   <link rel="stylesheet" href="css/layout.css">
   <link rel="stylesheet" href="css/tools.css">
-  <link rel="stylesheet" href="css/about.css?v=20260622">
   <link rel="stylesheet" href="css/pages.css?v=20260716">
 </head>
 <body data-page="about">
@@ -47,216 +46,11 @@
     </div>
   </nav>
 
-  <!-- White-label: operator-published About blocks render here, replacing the
-       default content below. Empty by default → default shows. -->
-  <div id="about-blocks" style="display:none"></div>
-  <div id="about-default">
-
-  <header class="about-hero">
-    <div class="container">
-      <div class="hero-badge">
-        <span class="dot"></span>
-        <span data-i18n="about.subtitle">Credits, scientific context, access, and citation</span>
-      </div>
-      <h1 data-i18n="about.title">About This Platform</h1>
-      <p class="hero-subtitle" data-i18n="about.description">
-        Lumen3D is a browser-based viewer for multi-gigabyte confocal microscopy volumes of mouse embryonic development, developed at the IRIBHM of the Université libre de Bruxelles (ULB).
-      </p>
-    </div>
-  </header>
-
-  <main>
-    <!-- ═══ Creator & scientific context ═══ -->
-    <section class="section">
-      <div class="container">
-        <div class="about-feature-grid">
-          <article class="about-feature-card creator-card">
-            <div class="creator-head">
-              <div class="creator-monogram" aria-hidden="true">MC</div>
-              <div class="creator-id">
-                <h2 class="creator-name">Morgan Climent</h2>
-                <p class="creator-role" data-i18n="about.creatorRole">Design & development</p>
-              </div>
-            </div>
-            <p data-i18n="about.creatorDesc">This platform was entirely designed and developed by Morgan Climent, with the assistance of AI tools.</p>
-            <div class="ai-tools">
-              <span class="ai-tools-label" data-i18n="about.aiAssisted">AI-assisted development</span>
-              <span class="ai-chip">Claude</span>
-              <span class="ai-chip">Gemini</span>
-              <span class="ai-chip">ChatGPT</span>
-            </div>
-            <a class="btn btn-primary about-github-btn" href="https://github.com/nutchaxo/lumen3D" target="_blank" rel="noopener">
-              <i data-lucide="github" style="width:18px;height:18px"></i>
-              <span data-i18n="about.githubBtn">View on GitHub</span>
-            </a>
-          </article>
-
-          <article class="about-feature-card context-card">
-            <h2 data-i18n="about.contextTitle">Scientific Context</h2>
-            <p data-i18n="about.contextDesc">The platform was built to support the doctoral research of Kristof Van Schoor, at the IRIBHM (ULB), in the team led by Isabelle Migeotte.</p>
-            <figure class="thesis-cite">
-              <span class="thesis-label" data-i18n="about.thesisLabel">Doctoral research</span>
-              <blockquote>Origin and flow-mediated remodeling of the murine and human extraembryonic circulation systems</blockquote>
-              <figcaption>
-                Kristof Van Schoor — IRIBHM, Université libre de Bruxelles
-                <a href="https://doi.org/10.3389/fphys.2024.1395006" target="_blank" rel="noopener" class="thesis-doi">Front. Physiol. 2024 · DOI 10.3389/fphys.2024.1395006</a>
-              </figcaption>
-            </figure>
-            <p class="data-provenance">
-              <strong data-i18n="about.dataLabel">Data provenance:</strong>
-              <span data-i18n="about.dataDesc">all datasets presented here originate from the experimental work of Kristof Van Schoor.</span>
-            </p>
-          </article>
-        </div>
-      </div>
-    </section>
-
-    <!-- ═══ Institutions ═══ -->
-    <section class="section" style="background: var(--bg-surface);">
-      <div class="container">
-        <div class="about-section-head">
-          <h2 data-i18n="about.institutionsTitle">Institutions</h2>
-          <p data-i18n="about.institutionsDesc">Developed within the Migeotte lab at the IRIBHM, Faculty of Medicine, Université libre de Bruxelles.</p>
-        </div>
-        <div class="institutions-row">
-          <a class="institution-card" href="https://www.ulb.be" target="_blank" rel="noopener">
-            <span class="logo-plate plate-ulb"><img src="assets/logos/ulb.svg" alt="Université libre de Bruxelles" width="74" height="74"></span>
-            <span>Université libre de Bruxelles</span>
-          </a>
-          <a class="institution-card" href="https://www.iribhm.org/" target="_blank" rel="noopener">
-            <span class="logo-plate"><img src="assets/logos/iribhm.webp" alt="IRIBHM — Jacques E. Dumont" width="261" height="60"></span>
-            <span>IRIBHM — Jacques E. Dumont</span>
-          </a>
-          <a class="institution-card" href="https://www.iribhm.org/research-labs/i-migeotte" target="_blank" rel="noopener">
-            <span class="institution-monogram" aria-hidden="true">IM</span>
-            <span>Migeotte Lab — I. Migeotte (PI)</span>
-          </a>
-        </div>
-      </div>
-    </section>
-
-    <!-- ═══ Catalog at a glance ═══ -->
-    <section class="section">
-      <div class="container">
-        <div class="about-section-head">
-          <h2 data-i18n="about.statsTitle">Catalog at a Glance</h2>
-        </div>
-        <div class="stat-strip" id="about-stats" hidden>
-          <div class="stat-card"><div class="stat-num" id="stat-datasets">—</div><div class="stat-label" data-i18n="landing.statsDatasets">Datasets</div></div>
-          <div class="stat-card"><div class="stat-num" id="stat-embryos">—</div><div class="stat-label" data-i18n="landing.statsEmbryos">Embryos</div></div>
-          <div class="stat-card"><div class="stat-num" id="stat-cells">—</div><div class="stat-label" data-i18n="landing.statsCells">Tracked Cells</div></div>
-          <div class="stat-card"><div class="stat-num" id="stat-regions">—</div><div class="stat-label" data-i18n="landing.statsRegions">Anatomical Regions</div></div>
-        </div>
-        <p class="stat-empty" id="about-stats-empty" data-i18n="about.catalogEmpty" hidden>Catalog data is not bundled in this build of the platform.</p>
-      </div>
-    </section>
-
-    <!-- ═══ Explore / quick access ═══ -->
-    <section class="section" style="background: var(--bg-surface);">
-      <div class="container">
-        <div class="about-section-head">
-          <h2 data-i18n="about.exploreTitle">Browse the Data</h2>
-          <p data-i18n="about.exploreDesc">Fixed, live, and tracking datasets can be explored independently, compared side by side, and downloaded.</p>
-        </div>
-        <div class="quick-grid">
-          <a class="quick-card" href="explorer.html">
-            <span class="qc-icon"><i data-lucide="layout-grid"></i></span>
-            <h3 data-i18n="about.linkExploreTitle">Data Explorer</h3>
-            <p data-i18n="about.linkExploreDesc">Filter and search the full catalog by type, embryonic stage, and markers.</p>
-            <span class="qc-go"><span data-i18n="about.open">Open</span><i data-lucide="arrow-right"></i></span>
-          </a>
-          <a class="quick-card" href="compare.html">
-            <span class="qc-icon"><i data-lucide="columns-2"></i></span>
-            <h3 data-i18n="about.linkCompareTitle">Compare</h3>
-            <p data-i18n="about.linkCompareDesc">Open several datasets in synchronized panels with linked camera and slicing.</p>
-            <span class="qc-go"><span data-i18n="about.open">Open</span><i data-lucide="arrow-right"></i></span>
-          </a>
-          <a class="quick-card" href="explorer.html">
-            <span class="qc-icon"><i data-lucide="download"></i></span>
-            <h3 data-i18n="about.linkDownloadTitle">Download Center</h3>
-            <p data-i18n="about.linkDownloadDesc">Per-dataset raw sources and web-ready assets, with size warnings for large files.</p>
-            <span class="qc-go"><span data-i18n="about.open">Open</span><i data-lucide="arrow-right"></i></span>
-          </a>
-        </div>
-      </div>
-    </section>
-
-    <!-- ═══ How to cite ═══ -->
-    <section class="section">
-      <div class="container">
-        <div class="about-section-head">
-          <h2 data-i18n="about.cite">How to Cite</h2>
-          <p data-i18n="about.citeIntro">Please cite both the platform and the source publication the data is drawn from.</p>
-        </div>
-        <div class="cite-grid">
-          <div class="cite-card">
-            <div class="cite-head">
-              <h3 data-i18n="about.citePlatform">Cite the platform</h3>
-              <button class="copy-btn" data-copy-target="cite-platform" type="button">
-                <i data-lucide="copy"></i><span data-i18n="about.copy">Copy</span>
-              </button>
-            </div>
-            <div class="cite-body">
-              <p class="cite-text" id="cite-platform">Climent, M. (2026). Lumen3D — IRIBHM Microscopy Platform [Computer software]. Institut de Recherche Interdisciplinaire en Biologie humaine et moléculaire (IRIBHM), Université libre de Bruxelles. https://github.com/nutchaxo/lumen3D</p>
-            </div>
-          </div>
-
-          <div class="cite-card">
-            <div class="cite-head">
-              <h3 data-i18n="about.citePublication">Cite the source publication</h3>
-              <button class="copy-btn" data-copy-target="cite-pub" type="button">
-                <i data-lucide="copy"></i><span data-i18n="about.copy">Copy</span>
-              </button>
-            </div>
-            <div class="cite-body">
-              <p class="cite-text" id="cite-pub">Van Schoor, K., Bruet, E., Vincent Jones, E. A., &amp; Migeotte, I. (2024). Origin and flow-mediated remodeling of the murine and human extraembryonic circulation systems. Frontiers in Physiology, 15, 1395006. https://doi.org/10.3389/fphys.2024.1395006</p>
-              <button class="bibtex-toggle" data-bibtex-toggle="bibtex-pub" type="button">
-                <i data-lucide="braces" style="width:14px;height:14px"></i><span data-i18n="about.bibtex">BibTeX</span>
-              </button>
-              <div class="bibtex-block" id="bibtex-pub">
-<pre>@article{vanschoor2024extraembryonic,
-  author  = {Van Schoor, Kristof and Bruet, Emmanuel and Vincent Jones, Elizabeth Anne and Migeotte, Isabelle},
-  title   = {Origin and flow-mediated remodeling of the murine and human extraembryonic circulation systems},
-  journal = {Frontiers in Physiology},
-  volume  = {15},
-  pages   = {1395006},
-  year    = {2024},
-  doi     = {10.3389/fphys.2024.1395006}
-}</pre>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-    </section>
-
-    <!-- ═══ Contact ═══ -->
-    <section class="section" style="background: var(--bg-surface);">
-      <div class="container">
-        <div class="about-section-head">
-          <h2 data-i18n="about.contact">Contact</h2>
-        </div>
-        <div class="about-contact">
-          <p data-i18n="about.contactDesc">For dataset corrections, metadata, or reuse questions, contact the Migeotte lab at the IRIBHM, Université libre de Bruxelles.</p>
-          <ul class="contact-list">
-            <li>
-              <i data-lucide="user" aria-hidden="true"></i>
-              <span>Isabelle Migeotte (PI) — <a href="mailto:isabelle.migeotte@ulb.be">isabelle.migeotte@ulb.be</a></span>
-            </li>
-            <li>
-              <i data-lucide="building-2" aria-hidden="true"></i>
-              <span>IRIBHM — <a href="mailto:iribhm@ulb.be">iribhm@ulb.be</a></span>
-            </li>
-            <li>
-              <i data-lucide="map-pin" aria-hidden="true"></i>
-              <span>Campus Erasme, Route de Lennik 808, 1070 Bruxelles, Belgique</span>
-            </li>
-          </ul>
-        </div>
-      </div>
-    </section>
-  </main>
-  </div><!-- /about-default -->
+  <!-- The About page IS a page-builder document since v1.25.0: the operator's
+       published page when there is one, otherwise the built-in default from
+       js/core/page-templates.js. No static fallback markup — editor and live
+       page render the exact same source. -->
+  <main id="about-blocks"></main>
 
   <footer class="footer">
     <div class="container">
@@ -282,6 +76,7 @@
   <script src="js/core/page-vars.js"></script>
   <script src="js/core/page-background.js"></script>
   <script src="js/core/page-renderer.js?v=20260712"></script>
+  <script src="js/core/page-templates.js"></script>
   <script src="js/pages/about.js?v=20260706"></script>
 </body>
 </html>

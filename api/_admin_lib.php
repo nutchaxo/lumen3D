@@ -66,8 +66,34 @@ function admin_mode_override(string $env): ?int {
     return (int)intval(trim((string)$v), 8);
 }
 
-function admin_dir_mode(): int  { return admin_mode_override('LUMEN_DIR_MODE')  ?? (admin_perms_owner_split() ? 0777 : 0755); }
-function admin_file_mode(): int { return admin_mode_override('LUMEN_FILE_MODE') ?? (admin_perms_owner_split() ? 0666 : 0644); }
+/**
+ * Modes are INHERITED FROM THE WEB ROOT, because that directory is what the hosting
+ * account was set up with and it already encodes how this host shares the site.
+ * The common shared-hosting layout is `web1945:client 0770`: PHP and the SFTP login
+ * are different users of the SAME GROUP, so files must be GROUP-writable (0770/0660)
+ * — creating them 0755/0644 locks the operator out just as effectively as an owner
+ * mismatch, and creating them 0777/0666 would grant far more than needed.
+ *
+ * Escalation stays for the one case inheritance cannot cover: the root grants write
+ * to nobody but its owner AND PHP is not that owner — then world-writable is the only
+ * way for the account to manage its own site.
+ * @return array{0:int,1:int} [dirMode, fileMode]
+ */
+function admin_base_modes(): array {
+    static $cached = null;
+    if ($cached !== null) return $cached;
+    if (DIRECTORY_SEPARATOR !== '/') return $cached = [0755, 0644];
+    $perms = @fileperms(admin_root());
+    if ($perms === false) return $cached = [0755, 0644];
+    $base = $perms & 0777;
+    if (admin_perms_owner_split() && ($base & 0022) === 0) $base |= 0022;    // owner-only root, PHP is not it
+    $dir  = $base | 0700;                          // the platform must always traverse/write its own tree
+    $file = ($base & 0666) | 0600;                 // data files are never executable
+    return $cached = [$dir, $file];
+}
+
+function admin_dir_mode(): int  { return admin_mode_override('LUMEN_DIR_MODE')  ?? admin_base_modes()[0]; }
+function admin_file_mode(): int { return admin_mode_override('LUMEN_FILE_MODE') ?? admin_base_modes()[1]; }
 
 /** mkdir + explicit chmod on every level created (mkdir's mode is umask-masked). */
 function admin_make_dir(string $path): bool {
@@ -91,7 +117,8 @@ function mkt_modes_recursive(string $base): void {
     @chmod($base, admin_dir_mode());
     $it = new RecursiveIteratorIterator(
         new RecursiveDirectoryIterator($base, FilesystemIterator::SKIP_DOTS | FilesystemIterator::UNIX_PATHS),
-        RecursiveIteratorIterator::SELF_FIRST
+        RecursiveIteratorIterator::SELF_FIRST,
+        RecursiveIteratorIterator::CATCH_GET_CHILD
     );
     foreach ($it as $path => $info) {
         if ($info->isLink()) continue;
@@ -114,14 +141,23 @@ function admin_permissions_report(): array {
         if (function_exists('posix_getpwuid')) { $p = @posix_getpwuid((int)$uid); if (is_array($p) && isset($p['name'])) return $p['name']; }
         return (string)$uid;
     };
+    $gname = function ($gid) {
+        if ($gid === false || $gid === null) return null;
+        if (function_exists('posix_getgrgid')) { $g = @posix_getgrgid((int)$gid); if (is_array($g) && isset($g['name'])) return $g['name']; }
+        return (string)$gid;
+    };
     return [
         'posix' => DIRECTORY_SEPARATOR === '/',
         'split' => admin_perms_owner_split(),
         'siteOwner' => $name($owner),
+        'siteGroup' => $gname(@filegroup($root)),
         'phpUser' => $name($php),
         'dirMode' => sprintf('%04o', admin_dir_mode()),
         'fileMode' => sprintf('%04o', admin_file_mode()),
         'rootMode' => sprintf('%04o', @fileperms($root) & 0777),
+        // How the site is shared decides the modes; surfacing it turns a support
+        // round-trip ("why 0770?") into something the operator can read off the card.
+        'groupWritable' => ((@fileperms($root) & 0020) !== 0),
     ];
 }
 
@@ -144,7 +180,8 @@ function admin_apply_tree_modes(int $maxEntries = 200000): array {
     $dirMode = admin_dir_mode(); $fileMode = admin_file_mode();
     $it = new RecursiveIteratorIterator(
         new RecursiveDirectoryIterator($root, FilesystemIterator::SKIP_DOTS | FilesystemIterator::UNIX_PATHS),
-        RecursiveIteratorIterator::SELF_FIRST
+        RecursiveIteratorIterator::SELF_FIRST,
+        RecursiveIteratorIterator::CATCH_GET_CHILD          // an unreadable dir must not abort the walk
     );
     foreach ($it as $path => $info) {
         if (++$out['scanned'] > $maxEntries) break;

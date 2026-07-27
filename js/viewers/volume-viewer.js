@@ -2243,10 +2243,13 @@ const VolumeViewer = (() => {
   function _volumeCacheLimit() {
     let bytes = 0;
     for (const entry of _volumeCache.values()) {
-      const v = (entry?.width || 0) * (entry?.height || 0) * (entry?.depth || 0);
-      if (v > bytes) bytes = v;
+      // Measure the entry's REAL footprint. Assuming 4 bytes per voxel here undercounts
+      // how many single-channel (RedFormat) timepoints fit by a factor of four, which
+      // kept evicting frames that had room to stay.
+      const size = entry?.data?.length
+        || (entry?.width || 0) * (entry?.height || 0) * (entry?.depth || 0) * RGBA_TEXTURE_BYTES_PER_VOXEL;
+      if (size > bytes) bytes = size;
     }
-    bytes *= 4;   // RGBA8
     if (!bytes) return VOLUME_CACHE_LIMIT;
     return Math.max(VOLUME_CACHE_LIMIT, Math.min(32, Math.floor(VOLUME_VRAM_BUDGET_BYTES / bytes)));
   }
@@ -4205,7 +4208,25 @@ const VolumeViewer = (() => {
       width = dims.x;
       height = dims.y;
       depth = dims.z;
-      const rgbaByteLength = width * height * depth * RGBA_TEXTURE_BYTES_PER_VOXEL;
+      // A single-channel dataset fills only the R component, so an RGBA8 texture is
+      // three quarters padding — 58 MiB instead of 15 MiB per timepoint on the reference
+      // 4D series, re-allocated on every frame switch and capping how many timepoints
+      // stay resident. Allocate one RedFormat texture instead.
+      //
+      // Everything downstream already handles a scalar texture: _writeBrick branches on
+      // _isRgbaTexture, _extractTextureRegionData computes stride = rgba ? 4 : 1,
+      // _compactScalarBrickData exists, and _computeChannelHistograms has a non-RGBA
+      // path. The shader needs no change either: sampling RedFormat yields
+      // vec4(r, 0, 0, 1), channel 0 reads val.r, and channels 1-3 are compiled OUT
+      // because _recompileShaderForActiveChannels gates ENABLE_CHANNEL_n on
+      // numChannels > n — without that the alpha of 1.0 would paint the volume white.
+      //
+      // Excluded when the bricks arrive RGBA-interleaved (raw-rgba-gzip): that transport
+      // writes four components at once through _writeRgbaBrick.
+      const rgbaTransport = BrickLoader.getTransportEncoding?.() === 'raw-rgba-gzip';
+      const scalarTexture = channels === 1 && !rgbaTransport;
+      const bytesPerVoxel = scalarTexture ? 1 : RGBA_TEXTURE_BYTES_PER_VOXEL;
+      const rgbaByteLength = width * height * depth * bytesPerVoxel;
       const useSVR = (
         dims.x > maxTextureSize ||
         dims.y > maxTextureSize ||
@@ -4277,7 +4298,7 @@ const VolumeViewer = (() => {
           const TextureClass = THREE.Data3DTexture || THREE.DataTexture3D;
           rgbaData = new Uint8Array(rgbaByteLength);
           texture3D = new TextureClass(rgbaData, width, height, depth);
-          texture3D.format = THREE.RGBAFormat;
+          texture3D.format = scalarTexture ? THREE.RedFormat : THREE.RGBAFormat;
           texture3D.type = THREE.UnsignedByteType;
           texture3D.minFilter = THREE.LinearFilter;
           texture3D.magFilter = THREE.LinearFilter;

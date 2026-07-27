@@ -9,13 +9,17 @@
  * built-in server's normal static/script handling.
  */
 
-$path = urldecode(parse_url($_SERVER['REQUEST_URI'], PHP_URL_PATH));
-
-// Collapse duplicate slashes and resolve './' | '../' BEFORE matching. The deny
-// rules below are anchored to '/api/…', but `php -S` normalises the path when it
-// resolves the file — so the raw '//api/admin_credential.json' slipped past an
-// un-normalised check and was served. Match what the server will actually open.
-$path = preg_replace('#/+#', '/', $path);
+// Derive the path WITHOUT parse_url(). A request beginning with two slashes makes
+// parse_url() read the first segment as an authority: for '//api/admin_credential.json'
+// it returns host='api', path='/admin_credential.json', which matches no deny rule —
+// while `php -S` collapses the slashes and serves the real file, so the credential
+// hash went out with a 200. Three slashes are worse still: parse_url() returns false
+// outright and every rule below sees an empty path.
+// Split the query off the RAW URI first (so an encoded '%3F' stays part of the path),
+// then decode, then normalise to exactly what the server will open.
+$path = explode('?', (string)($_SERVER['REQUEST_URI'] ?? ''), 2)[0];
+$path = urldecode($path);
+$path = preg_replace('#/+#', '/', $path);      // '//api' | '///api' → '/api'
 $_segs = [];
 foreach (explode('/', $path) as $_s) {
     if ($_s === '' || $_s === '.') continue;

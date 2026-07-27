@@ -69,3 +69,27 @@ minutes qui suivent l'installation, la fenêtre est jugée acceptable. À repren
 le modèle de déploiement change : jeton de configuration à usage unique écrit sur
 disque à l'installation et exigé par `action=setup` (`hash_equals`), plus arrêt de
 l'exposition publique de `needsSetup`.
+
+## [FIXED] — vérification PHP à l'exécution
+
+Les jumeaux PHP ont finalement été exercés (PHP 8.3.31 via `php -S router.php`, cf.
+`.claude/launch.json`), et non seulement relus. Cela a révélé que **`router.php`
+n'était pas corrigé** : la normalisation était appliquée *après* `parse_url()`, qui
+lit le premier segment d'un chemin commençant par deux barres obliques comme une
+**autorité**. `//api/admin_credential.json` renvoyait donc `host='api'`,
+`path='/admin_credential.json'` — aucune règle ne matchait, `php -S` recollait les
+barres et **servait le hachage PBKDF2 avec un 200**. Trois barres étaient pires
+encore : `parse_url()` retourne `false` et toutes les règles voyaient un chemin vide.
+
+Le chemin est désormais dérivé sans `parse_url()` : découpage de la requête brute sur
+`?` (pour qu'un `%3F` encodé reste dans le chemin), puis décodage, puis normalisation.
+Vérifié en direct : `//api/`, `///api/`, `////api/`, `/./api/`, `/x/../api/`,
+`/api%2f`, `//secrets/`, `//api/page-drafts/` → tous 403 ; routes d'API, pages,
+assets, `DATA_WEB/*/metadata.json` et pages publiées → 200. Verrouillé par
+`tests/test_router_deny.php` (25 cas).
+
+Le reste de la surface PHP a été confirmé à l'exécution : `datasets.php` refuse
+`list`, `get`, `set_visibility` et la traversée sans session (401/400) ; `auth.php`
+refuse un `login` en GET (405) ; `site.php?action=get` public ne rend pas de
+brouillon ; `_admin_lib.php`, `secrets/` et `.git/` sont refusés. Les 5 suites PHP et
+les 22 suites Python passent.

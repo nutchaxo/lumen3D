@@ -267,7 +267,14 @@ const ViewerApp = (() => {
           showSmooth: false,
           stepped: false
         }, (state) => {
-          _loadTimepoint(basePath, state.frame).catch(_showLoadingError);
+          // Playback ticks on every animation frame (timeline.js), so this fires ~60x/s
+          // while the frame index only changes a few times a second. Without this guard
+          // each tick re-entered the loader and bumped _activeLoadToken, cancelling the
+          // load that was still in flight — during playback a timepoint could never
+          // finish loading at all.
+          const frame = Math.round(state.frame);
+          if (frame === _currentTimepoint) return;
+          _loadTimepoint(basePath, frame).catch(_showLoadingError);
         });
         // Load first frame
         volumeP = _loadTimepoint(basePath, 0);
@@ -1981,7 +1988,11 @@ const ViewerApp = (() => {
     return _stabilizeVolume;
   }
 
+  const _tpSeen = new Set();
+  let _tpLoadStart = 0;
+
   async function _loadTimepoint(basePath, t, opts = {}) {
+    _tpLoadStart = performance.now?.() || Date.now();
     const perfId = _perf()?.start('viewer.timepoint.load', {
       timepoint: t,
       qualityMode: _qualityMode,
@@ -2091,6 +2102,15 @@ const ViewerApp = (() => {
     _loadedQualities.add(qualityKey);
     loadedTimepoints.add(t);
     _applyStabilization(t);
+    if (isLive) {
+      // Surfaced so the cost of a scrub step can be read off the console directly
+      // instead of inferred: first visit vs. revisit is the number that matters.
+      const ms = Math.round((performance.now?.() || Date.now()) - _tpLoadStart);
+      console.log(`[ViewerApp] timepoint ${t + 1}/${datasetMeta.dimensions?.t} ready in ${ms} ms `
+        + `(${primaryQuality}, ${_tpSeen.has(t) ? 'revisit' : 'first visit'}, `
+        + `${loadedTimepoints.size} resident)`);
+      _tpSeen.add(t);
+    }
     if (loader) loader.style.display = 'none';
     ChannelPanel.setHistograms(VolumeViewer.getChannelHistograms());
     _updateVolumeSourceStatus();

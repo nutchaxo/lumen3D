@@ -12,7 +12,12 @@ const BrickLoader = (() => {
   // The old value 128 was a legacy constant that never matched real data and made
   // every fallback wrong (mis-sized blank bricks, 8× cache-memory estimate).
   const BRICK_SIZE = 64;
-  const LRU_LIMIT = 200;
+  // A 4D dataset holds one brick set PER TIMEPOINT, and the cache key already separates
+  // them, so the LRU is what decides how much of a timelapse stays decoded. 200 bricks
+  // (52 MB) is less than three timepoints of the reference series and made scrubbing
+  // re-decode everything; 1024 bricks is ~268 MB of heap and only fills if that many
+  // distinct bricks are actually visited.
+  let LRU_LIMIT = 1024;
   const PACK_CACHE_LIMIT = 128;
   const DEFAULT_CONCURRENT_LOADS = 24;
 
@@ -129,21 +134,39 @@ const BrickLoader = (() => {
    * @param {string} basePath  e.g. "DATA_WEB/fixed/dataset-name/bricks"
    * @param {object} manifest  parsed manifest.json
    */
+  /** Dataset root = the mount path without its trailing per-timepoint segment.
+   *  ".../bricks/t007" and ".../bricks/t008" are the same dataset, one frame apart. */
+  function _datasetRoot(path) {
+    return String(path || '').replace(/\/$/, '').replace(/\/t\d+$/, '');
+  }
+
   function init(basePath, manifest) {
     _validateManifest(manifest);     // ELE-21 (Rule 1.4): rejet AVANT toute mutation d'état partagé
     cancelPending();                 // ELE-12: abort any prior in-flight load BEFORE mutating shared state
+
+    // Switching TIMEPOINT is not switching dataset. Both the decoded-brick keys
+    // (_cacheKey prefixes with _datasetTag == this path, which carries /tNNN) and the
+    // pack-cache keys (pack URLs, same) are already timepoint-unique, so nothing here
+    // can collide across frames. Wiping them per frame threw away valid work and, worse,
+    // terminated and respawned the whole decode-worker pool — with a cache-busting URL,
+    // so the worker script was re-downloaded — on every step of a scrub.
+    const next = String(basePath).replace(/\/$/, '');
+    const sameDataset = _basePath !== '' && _datasetRoot(next) === _datasetRoot(_basePath);
+
     _generation++;                   // ELE-12: invalidate tasks that captured the previous generation
-    _basePath = basePath.replace(/\/$/, '');
+    _basePath = next;
     _datasetTag = _basePath;         // ELE-12/13: dataset identity, part of the cache key
     _manifest = manifest;
-    _cache.clear();
-    _packCache.clear();
-    // ELE-17: a real dataset switch -> cancel orphaned pack fetches and renew the loader-owned controller
-    if (_packFetchController) { try { _packFetchController.abort(); } catch (e) {} }
-    _packFetchController = (typeof AbortController !== 'undefined') ? new AbortController() : null;
+    if (!sameDataset) {
+      _cache.clear();
+      _packCache.clear();
+      // ELE-17: a real dataset switch -> cancel orphaned pack fetches and renew the loader-owned controller
+      if (_packFetchController) { try { _packFetchController.abort(); } catch (e) {} }
+      _packFetchController = (typeof AbortController !== 'undefined') ? new AbortController() : null;
+    }
     _buildPackIndex();
-    _initWorker();
-    
+    if (!sameDataset || _workers.length === 0) _initWorker();
+
     _activeBricksSet.clear();
     if (manifest && Array.isArray(manifest.levels)) {
       manifest.levels.forEach(level => {
@@ -389,11 +412,20 @@ const BrickLoader = (() => {
           try {
             const url = _brickUrl(lod, channel, bx, by, bz);
             const data = await _fetchBrickImage(url, controller.signal, { bx, by, bz, lod });
-            if (generation !== _generation) { success = true; break; }  // ELE-12: switch during fetch -> don't write to the new dataset's cache
+            const stale = generation !== _generation;
+            // `key` was built before the switch, so it still carries the tag of the
+            // mount this brick belongs to and can never be read back by another one.
+            // Keeping it is therefore safe, and it is what makes scrubbing back over
+            // frames already fetched free instead of re-downloading them. (The original
+            // guard dropped the decoded brick because the cache used to be wiped on
+            // every switch — it no longer is for a timepoint change.)
             if (useDecodedCache) {
               _cache.set(key, { data, lod, channel, lastUsed: performance.now() });
               _trimCache();
             }
+            // ELE-12: but never DELIVER it — the caller has moved on, and handing these
+            // pixels to the current frame's atlas would upload another frame's data.
+            if (stale) { success = true; break; }
             if (!options.streamOnly) results.set(key, data);
             options.onBrickLoaded?.({
               bx,

@@ -2204,9 +2204,30 @@ const VolumeViewer = (() => {
     _trimVolumeCache();
   }
 
+  /** How many decoded timepoints may stay on the GPU.
+   *
+   *  A fixed 4 was written for single-volume datasets; on a 30-frame timelapse it means
+   *  the scrub evicts and re-uploads almost every step. Size it from what an entry
+   *  actually costs instead: a dense RGBA8 volume of the current dimensions (an upper
+   *  bound — a sparse SVR atlas only stores the non-empty bricks) against a VRAM budget.
+   *  At 256x256 that keeps a whole 30-frame series resident; at 512x512 it keeps ~12. */
+  const VOLUME_VRAM_BUDGET_BYTES = 768 * 1024 * 1024;
+
+  function _volumeCacheLimit() {
+    let bytes = 0;
+    for (const entry of _volumeCache.values()) {
+      const v = (entry?.width || 0) * (entry?.height || 0) * (entry?.depth || 0);
+      if (v > bytes) bytes = v;
+    }
+    bytes *= 4;   // RGBA8
+    if (!bytes) return VOLUME_CACHE_LIMIT;
+    return Math.max(VOLUME_CACHE_LIMIT, Math.min(32, Math.floor(VOLUME_VRAM_BUDGET_BYTES / bytes)));
+  }
+
   function _trimVolumeCache() {
+    const limit = _volumeCacheLimit();
     let guard = 0;
-    while (_volumeCache.size > VOLUME_CACHE_LIMIT && guard < VOLUME_CACHE_LIMIT + 8) {
+    while (_volumeCache.size > limit && guard < limit + 8) {
       guard++;
       const first = _volumeCache.entries().next().value;
       if (!first) break;
@@ -4096,19 +4117,9 @@ const VolumeViewer = (() => {
     }
     const loadId = ++_loadCounter;
     const brickDir = metadata?.qualities?.native?.directory || 'bricks';
-    const manifestUrl = `${basePath}/${brickDir}/manifest.json?t=${Date.now()}`;
     let manifest;
     try {
-      const resp = await fetch(manifestUrl, { cache: 'no-cache' });
-      if (!resp.ok) {
-        _perf()?.end(perfId, {
-          status: 'unavailable',
-          quality,
-          reason: `No brick manifest (${resp.status})`
-        });
-        return { available: false, reason: `No brick manifest (${resp.status})` };
-      }
-      manifest = await resp.json();
+      manifest = await _fetchBrickManifest(`${basePath}/${brickDir}`);
     } catch (err) {
       _perf()?.end(perfId, {
         status: 'unavailable',
@@ -5199,6 +5210,27 @@ const VolumeViewer = (() => {
         : Math.round((bin / Math.max(1, counts.length - 1)) * 255);
       return Math.max(6, Math.min(48, Math.round(estimated) + 2));
     });
+  }
+
+  // A 4D manifest indexes EVERY timepoint in one document (3.4 MB for the 30-frame
+  // reference series), and it was re-fetched on each timepoint switch with
+  // cache:'no-cache' plus a ?t= buster — so a full scrub pulled ~90 MB of manifest to
+  // deliver 3.8 MB of bricks. It cannot change while the page is open, so fetch it once
+  // per dataset. The in-flight promise is shared so concurrent switches never race two
+  // downloads of the same document.
+  const _manifestCache = new Map();   // "<basePath>/<brickDir>" -> Promise<manifest>
+
+  function _fetchBrickManifest(dir) {
+    const hit = _manifestCache.get(dir);
+    if (hit) return hit;
+    const p = fetch(`${dir}/manifest.json`, { cache: 'no-cache' })
+      .then(resp => {
+        if (!resp.ok) throw new Error(`No brick manifest (${resp.status})`);
+        return resp.json();
+      })
+      .catch(err => { _manifestCache.delete(dir); throw err; });
+    _manifestCache.set(dir, p);
+    return p;
   }
 
   function _selectBrickManifestForTimepoint(manifest, timepoint) {

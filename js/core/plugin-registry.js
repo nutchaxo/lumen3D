@@ -763,6 +763,12 @@ const PluginRegistry = (() => {
   // from discovery) — only the iframe lane supports live teardown.
 
   async function _revokeCheck() {
+    // Bail BEFORE the request, not after. Discovery is the only thing that ever sets
+    // _trustEpoch, and api/plugins.php does not emit one — so on a PHP host it stays
+    // null for the life of the page and every probe is dead weight by construction.
+    // Worse, api/health has no PHP twin, so each one is a 404 in the operator's console
+    // every interval, drowning real errors during a 4D playback.
+    if (_trustEpoch === null) return;
     let epoch;
     try {
       const h = await (await fetch('api/health', { cache: 'no-store' })).json();
@@ -793,6 +799,9 @@ const PluginRegistry = (() => {
   /** Start watching for live approve/revoke (poll + on tab focus). Idempotent. */
   function startTrustWatch(intervalMs = 8000) {
     if (_trustWatchTimer || typeof PluginSandbox === 'undefined') return;
+    // A host that vouched no epoch has no live revocation to watch for; polling it
+    // forever cannot ever change anything. Revocation still applies on the next reload.
+    if (_trustEpoch === null) return;
     _trustWatchTimer = setInterval(_revokeCheck, intervalMs);
     document.addEventListener('visibilitychange', () => { if (!document.hidden) _revokeCheck(); });
   }

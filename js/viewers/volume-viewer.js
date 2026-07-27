@@ -4448,6 +4448,14 @@ const VolumeViewer = (() => {
     if (deferActivation) {
       if (!_transitionMaterial) _beginTransitionVolume(null, channels);
       _bindTransitionEntry(streamEntry, channels);
+      // On a TIMEPOINT change the transition cube is what the user watches fill in,
+      // brick by brick, on top of the previous frame — that is the "chunks loading"
+      // they see, and during playback it is pure noise. Hidden, the finished frame
+      // swaps in atomically at the end (_storeVolumeCache → _activateVolumeEntry).
+      // The cube itself must still EXIST: on the SVR path its material is the atlas
+      // upload target (svrMaterial). A manual quality switch keeps it visible — there
+      // the progressive fill is the only feedback the operator gets.
+      if (options.hideTransition && _transitionCube) _transitionCube.visible = false;
     }
 
     if (Boolean(_activeVolumeEntry && _activeVolumeEntry.textures) && textures.length > 1) {

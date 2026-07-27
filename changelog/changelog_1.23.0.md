@@ -18,13 +18,20 @@
 - `mkdir()` appliquant l'umask du processus (022 en général, ce qui retirait silencieusement le bit d'écriture), le mode est désormais posé **explicitement après coup, sur chaque niveau créé**.
 
 ### Réparation depuis le panneau d'administration ([js/pages/admin/tab-security.js](../js/pages/admin/tab-security.js))
+- **Portée de la réparation** : tout dossier et tout fichier sous la racine web, récursivement (`DATA_WEB/` et ses jeux de données compris). Exceptions assumées : les liens symboliques sont ignorés (jamais suivis), les secrets `api/*.json` gardent `0600`, la racine web elle-même n'est pas touchée (elle appartient déjà au compte) et les entrées déjà au bon mode sont sautées — une seconde exécution est donc quasi instantanée. Limite de temps portée à 5 minutes et parcours borné à 200 000 entrées pour un gros `DATA_WEB`.
 - Nouvelle carte **« Permissions des fichiers »** dans l'onglet Sécurité : elle affiche l'utilisateur PHP, le propriétaire du site et les modes en vigueur, et propose **« Réparer les permissions »** — utile pour une installation créée avant cette version.
 - Nouvelles actions d'API `permissions_status` (lecture) et `repair_permissions` (POST + CSRF + session, comme toute action d'écriture), implémentées **des deux côtés** : `api/admin.php` + `dev_server.py`. Le parcours ignore les liens symboliques, ne sort jamais de la racine web et préserve les secrets `api/*.json`.
-- Traductions FR / EN / ES ajoutées (parité de clés vérifiée : 228 clés `admin` dans les trois fichiers).
+- Traductions FR / EN / ES ajoutées (parité de clés vérifiée : 231 clés `admin` dans les trois fichiers).
 
 ### Diagnostic dans l'installeur ([install.php](../install.php))
 - Ligne de prérequis **« Permissions des fichiers créés »** affichant les modes retenus, avec l'explication quand le décalage de propriétaire est détecté.
 - Passe finale `apply_tree_modes()` à l'étape *Terminé* : filet de sécurité sur toute l'arborescence extraite, pour qu'un chemin d'écriture ajouté plus tard ne puisse pas enfermer l'opérateur hors de son propre site.
+
+### Trousseau de certificats autonome — plus aucune manipulation ([install.php](../install.php), `api/ca-bundle.pem`)
+- **L'installeur embarque le trousseau Mozilla** et l'écrit lui-même (`.lumen-ca-seed.pem`) quand aucun magasin utilisable n'existe. Ordre de recherche : `cacert.pem` déposé par l'opérateur (override) → emplacements système → `api/ca-bundle.pem` livré par la release → trousseau intégré. Un hébergement dont `php.ini` désigne un fichier CA absent **et** dont `/etc/ssl` est masqué par `open_basedir` s'installe désormais sans aucune étape manuelle. La vérification du pair n'est jamais désactivée.
+- **La plateforme livre le même trousseau** (`api/ca-bundle.pem`, rafraîchi à chaque mise à jour) et l'utilise en dernier recours : supprimer `cacert.pem` ne casse plus le marketplace ni la vérification des mises à jour — c'était le cas en v1.22.x, où ce fichier était le seul magasin.
+- L'installeur retire son fichier de secours à l'étape *Terminé* quand la release en fournit un (les releases antérieures le conservent : c'est leur seul magasin).
+- Vérifié sur un hôte simulé sans magasin système, sans `cacert.pem` et **sans `allow_url_fopen`** : le trousseau est semé, l'API GitHub répond 200 et la release est résolue ; côté runtime, `api/ca-bundle.pem` suffit à joindre GitHub sans aucun fichier opérateur.
 
 ### Le panneau dit POURQUOI GitHub est injoignable ([api/_admin_lib.php](../api/_admin_lib.php), [api/admin.php](../api/admin.php), [dev_server.py](../dev_server.py), [js/pages/admin/tab-updates.js](../js/pages/admin/tab-updates.js))
 - L'onglet **Mises à jour** affichait « Impossible de contacter GitHub — `unreachable` », un mot qui recouvrait trois causes très différentes : quota d'API atteint, magasin de certificats cassé, ou vraie panne réseau. `mkt_fetch_bytes` mémorise désormais le motif exact (statut HTTP, message cURL, en-têtes) et `mkt_error_payload()` le traduit en code + détail.

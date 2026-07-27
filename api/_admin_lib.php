@@ -132,6 +132,10 @@ function admin_permissions_report(): array {
  * @return array{fixed:int,failed:int,scanned:int,dirMode:string,fileMode:string,split:bool}
  */
 function admin_apply_tree_modes(int $maxEntries = 200000): array {
+    // A DATA_WEB holding brick packs can reach tens of thousands of files; the walk
+    // must not die on the default 30 s limit halfway through. Re-runs are cheap:
+    // entries already at the target mode are skipped.
+    @set_time_limit(300);
     $root = rtrim(str_replace('\\', '/', admin_root()), '/');
     $out = ['fixed' => 0, 'failed' => 0, 'scanned' => 0,
             'dirMode' => sprintf('%04o', admin_dir_mode()), 'fileMode' => sprintf('%04o', admin_file_mode()),
@@ -651,7 +655,7 @@ function admin_ca_probe(): array {
     static $cached = null;
     if ($cached !== null) return $cached;
     $files = [
-        admin_root() . '/cacert.pem',              // operator escape hatch (web root)
+        admin_root() . '/cacert.pem',              // operator override (web root)
         '/etc/ssl/certs/ca-certificates.crt',      // Debian / Ubuntu
         '/etc/pki/tls/certs/ca-bundle.crt',        // RHEL / CentOS / Fedora
         '/etc/ssl/ca-bundle.pem',                  // SUSE
@@ -659,6 +663,11 @@ function admin_ca_probe(): array {
         '/etc/ssl/cert.pem',                       // Alpine / BSD / macOS
         '/usr/local/share/certs/ca-root-nss.crt',  // FreeBSD
         '/usr/local/etc/openssl/cert.pem',
+        // Last resort: the Mozilla bundle SHIPPED WITH THE RELEASE. It refreshes with
+        // every update and cannot be deleted by accident (unlike an operator-uploaded
+        // cacert.pem), so a host with no usable system store still works out of the box.
+        __DIR__ . '/ca-bundle.pem',
+        admin_root() . '/.lumen-ca-seed.pem',      // written by install.php on such a host
     ];
     foreach ($files as $f) if (@is_readable($f)) return $cached = [$f, null];
     foreach (['/etc/ssl/certs', '/etc/pki/tls/certs'] as $d) if (@is_dir($d)) return $cached = [null, $d];

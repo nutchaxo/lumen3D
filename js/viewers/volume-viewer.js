@@ -279,6 +279,33 @@ const VolumeViewer = (() => {
   const _imageCache = new Map();
   const _volumeCache = new Map();
 
+  // A 4D manifest indexes EVERY timepoint in one document (3.4 MB for the 30-frame
+  // reference series), and it used to be re-fetched on each timepoint switch with
+  // cache:'no-cache' plus a ?t= buster — so a full scrub pulled ~90 MB of manifest to
+  // deliver 3.8 MB of bricks. It cannot change while the page is open, so fetch it once
+  // per dataset. The in-flight promise is shared so concurrent switches never race two
+  // downloads of the same document.
+  //
+  // Declared HERE, with the other module state, and not next to the function that uses
+  // it: everything past this IIFE's `return` is only reachable as a hoisted function
+  // declaration. A `const` down there never executes, so the first call would throw
+  // "Cannot access '_manifestCache' before initialization" and silently drop the viewer
+  // onto the slice-stack fallback.
+  const _manifestCache = new Map();   // "<basePath>/<brickDir>" -> Promise<manifest>
+
+  function _fetchBrickManifest(dir) {
+    const hit = _manifestCache.get(dir);
+    if (hit) return hit;
+    const p = fetch(`${dir}/manifest.json`, { cache: 'no-cache' })
+      .then(resp => {
+        if (!resp.ok) throw new Error(`No brick manifest (${resp.status})`);
+        return resp.json();
+      })
+      .catch(err => { _manifestCache.delete(dir); throw err; });
+    _manifestCache.set(dir, p);
+    return p;
+  }
+
   function _perf() {
     return typeof PerfTelemetry !== 'undefined' ? PerfTelemetry : null;
   }
@@ -5210,27 +5237,6 @@ const VolumeViewer = (() => {
         : Math.round((bin / Math.max(1, counts.length - 1)) * 255);
       return Math.max(6, Math.min(48, Math.round(estimated) + 2));
     });
-  }
-
-  // A 4D manifest indexes EVERY timepoint in one document (3.4 MB for the 30-frame
-  // reference series), and it was re-fetched on each timepoint switch with
-  // cache:'no-cache' plus a ?t= buster — so a full scrub pulled ~90 MB of manifest to
-  // deliver 3.8 MB of bricks. It cannot change while the page is open, so fetch it once
-  // per dataset. The in-flight promise is shared so concurrent switches never race two
-  // downloads of the same document.
-  const _manifestCache = new Map();   // "<basePath>/<brickDir>" -> Promise<manifest>
-
-  function _fetchBrickManifest(dir) {
-    const hit = _manifestCache.get(dir);
-    if (hit) return hit;
-    const p = fetch(`${dir}/manifest.json`, { cache: 'no-cache' })
-      .then(resp => {
-        if (!resp.ok) throw new Error(`No brick manifest (${resp.status})`);
-        return resp.json();
-      })
-      .catch(err => { _manifestCache.delete(dir); throw err; });
-    _manifestCache.set(dir, p);
-    return p;
   }
 
   function _selectBrickManifestForTimepoint(manifest, timepoint) {

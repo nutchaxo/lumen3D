@@ -55,3 +55,17 @@ Sur le serveur Python réel, sondes rejouées avant/après :
 Non-régression exercée dans le navigateur, pas seulement lue : explorateur (16 datasets), viewer 4D sur le dataset réel (volume rendu, `isStabilized() === true`, timeline 000/029), **17 plugins chargés, 0 en quarantaine**, et plus aucun champ `trust` dans les métadonnées côté client. Rendu d'une page publiée conforme ; un `?preview=draft` anonyme retombe sur le contenu publié sans fuite. Suite de tests : 94 tests, seul subsiste l'échec d'isolation préexistant de `test_max_version_from_changelog` (identique sur l'arbre non patché).
 
 **Ce qui n'est pas vérifié à l'exécution** : les jumeaux PHP (`datasets.php`, `auth.php`, `telemetry.php`, `site.php`, `_admin_lib.php`, `router.php`) — aucun interpréteur PHP sur la machine de développement. Ils ont été relus ligne à ligne, les fonctions appelées existent, et les 17 dossiers de datasets réels passent la nouvelle validation d'`id` ; mais le panneau d'administration doit être ouvert une fois après déploiement pour confirmer.
+
+## [NOTE]
+
+Le premier démarrage (`api/admin_credential.json` absent) laisse toujours
+`?action=setup` accessible sans authentification : sur une instance déployée mais
+dont le compte n'a pas encore été créé, un tiers peut réclamer le compte
+administrateur, et l'opérateur se retrouve verrouillé dehors (la création est
+exclusive, sa propre tentative répondrait `409 already_configured`).
+
+Écart de sécurité connu et **délibérément conservé** — le compte est créé dans les
+minutes qui suivent l'installation, la fenêtre est jugée acceptable. À reprendre si
+le modèle de déploiement change : jeton de configuration à usage unique écrit sur
+disque à l'installation et exigé par `action=setup` (`hash_equals`), plus arrêt de
+l'exposition publique de `needsSetup`.

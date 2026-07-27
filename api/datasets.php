@@ -14,15 +14,24 @@
 
 declare(strict_types=1);
 
-header('Content-Type: application/json; charset=utf-8');
-header('X-Content-Type-Options: nosniff');
-header('Cache-Control: no-store');
+// catalog.php includes this file purely for rebuild_catalog(); in that mode it must
+// not emit JSON headers, must not start an admin session, and must not run the
+// router at the bottom. Everything outside these guards is pure library code.
+define('LUMEN_DATASETS_AS_LIB', defined('LUMEN_DATASETS_LIB'));
+
+if (!LUMEN_DATASETS_AS_LIB) {
+    header('Content-Type: application/json; charset=utf-8');
+    header('X-Content-Type-Options: nosniff');
+    header('Cache-Control: no-store');
+}
 
 require_once __DIR__ . '/_admin_lib.php';  // admin_check_csrf, admin_record_event, etc.
 
 // ── Session / Auth ───────────────────────────────────────────────────────────
-session_name('iribhm_admin');
-session_start();
+if (!LUMEN_DATASETS_AS_LIB) {
+    session_name('iribhm_admin');
+    session_start();
+}
 
 function require_auth(): void {
     if (empty($_SESSION['admin_authenticated'])) {
@@ -204,6 +213,25 @@ function rebuild_catalog(): array {
             if (isset($meta['volumeSources'])) {
                 $entry['volumeSources'] = $meta['volumeSources'];
             }
+            // 4D / tracking. This builder writes a fixed key list, unlike the Python
+            // server which passes the whole metadata.json through — anything omitted
+            // here is silently absent from the public catalog on a PHP host, so the
+            // timeline, the stabilization and the tracking overlay would work in dev
+            // and quietly do nothing in production.
+            foreach ([
+                'timeline',                     // frame count, interval, acquisition clock
+                'registration',                 // per-timepoint rigid transform + QC
+                'tracking',                     // cell tracks: counts, regions, file paths
+                'acquisitionExtentUm',          // microscope stage frame the tracks live in
+                'optical_section_thickness_um', // exact physical depth
+                'intensityNormalization',       // shared window + per-frame signal levels
+                'linkedTrackingId',
+                'relatedIds',
+            ] as $k) {
+                if (isset($meta[$k])) {
+                    $entry[$k] = $meta[$k];
+                }
+            }
 
             // Fallbacks for older datasets that don't have them in metadata.json
             if (!isset($entry['qualities']) && file_exists($prev_manifest)) {
@@ -251,6 +279,10 @@ function rebuild_catalog(): array {
 }
 
 // ── Router ───────────────────────────────────────────────────────────────────
+if (LUMEN_DATASETS_AS_LIB) {
+    return;   // library mode: the caller only wants rebuild_catalog()
+}
+
 $method = $_SERVER['REQUEST_METHOD'];
 $action = $_GET['action'] ?? '';
 $id     = trim($_GET['id'] ?? '', '/');

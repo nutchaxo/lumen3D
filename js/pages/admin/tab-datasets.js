@@ -4,8 +4,9 @@
  * The original 3-column editor (list · live preview iframe · metadata form),
  * ported intact, plus a per-dataset hide/show control. Preserves the proven
  * mechanics: dirty tracking, the RACE-006 selection-generation token, the
- * orientation calibration handshake, channel/exposure postMessage sync, and the
- * save → rebuild_catalog flow.
+ * orientation calibration handshake, and channel/exposure postMessage sync.
+ * Saving no longer regenerates a catalog: it is derived from the metadata.json
+ * files on every request (api/catalog.php).
  */
 
 'use strict';
@@ -51,8 +52,6 @@ function refDom() {
     topbarType: el('topbar-type'),
     btnSave: el('btn-save'),
     btnReset: el('btn-reset'),
-    btnRebuild: el('btn-rebuild-catalog'),
-    rebuildStatus: el('rebuild-status'),
     fName: el('f-name'),
     fStage: el('f-stage'),
     fEmbryo: el('f-embryo'),
@@ -407,8 +406,7 @@ async function saveDataset() {
     const idx = _datasets.findIndex((d) => d.id === _current.id);
     if (idx !== -1) _datasets[idx] = { ..._datasets[idx], name: _draft.name, stage: _draft.stage, embryo: _draft.embryo, configured: true };
     renderList();
-    const rb = await apiFetch(`${API_DATASETS}?action=rebuild_catalog`, { method: 'POST', body: '{}' });
-    if (!rb?.ok) toast(t('admin.toastSavedNoCatalog', 'Sauvegardé, mais catalogue non régénéré — relancez la reconstruction.'), 'warning');
+    // No catalog rebuild: it is derived from metadata.json on every request.
   } else {
     toast(t('admin.toastSaveError', 'Erreur lors de la sauvegarde.'), 'error');
   }
@@ -441,8 +439,7 @@ async function saveThumbnail(dataUrl) {
     const idx = _datasets.findIndex((d) => d.id === _current.id);
     if (idx !== -1) _datasets[idx].thumbnail = newThumbUrl;
     renderList();
-    const rb = await apiFetch(`${API_DATASETS}?action=rebuild_catalog`, { method: 'POST', body: '{}' });
-    if (!rb?.ok) toast(t('admin.toastPreviewNoCatalog', 'Vignette enregistrée, mais catalogue non régénéré.'), 'warning');
+    // No catalog rebuild: it is derived from metadata.json on every request.
   } else {
     const reason = data?.error || t('admin.unknownError', 'Inconnue');
     toast(t('admin.toastPreviewError', `Erreur lors de l'enregistrement de la preview : ${reason}`, { reason }), 'error');
@@ -454,29 +451,10 @@ function parseStageNumeric(stage) {
   return m ? parseFloat(m[1]) : null;
 }
 
-async function rebuildCatalog() {
-  DOM.btnRebuild.disabled = true;
-  const prev = DOM.btnRebuild.innerHTML;
-  DOM.btnRebuild.innerHTML = `<span class="spinner spinner-sm"></span> ${escHtml(t('admin.generating', 'Génération…'))}`;
-  const data = await apiFetch(`${API_DATASETS}?action=rebuild_catalog`, { method: 'POST', body: '{}' });
-  DOM.btnRebuild.disabled = false;
-  DOM.btnRebuild.innerHTML = prev;
-  if (data?.ok) {
-    const locale = (typeof I18n !== 'undefined' && I18n?.getLanguage) ? I18n.getLanguage() : 'fr-FR';
-    const time = new Date().toLocaleTimeString(locale);
-    DOM.rebuildStatus.textContent = t('admin.catalogStatusOk', `✅ ${data.count} datasets — ${time}`, { count: data.count, time });
-    toast(t('admin.toastCatalogRebuilt', `Catalogue régénéré : ${data.count} datasets.`, { count: data.count }));
-  } else {
-    DOM.rebuildStatus.textContent = t('admin.catalogStatusError', '❌ Erreur lors de la génération.');
-    toast(t('admin.toastCatalogError', 'Erreur lors de la génération du catalogue.'), 'error');
-  }
-}
-
 // ── Wiring ─────────────────────────────────────────────────────
 function wire() {
   DOM.btnSave.addEventListener('click', saveDataset);
   DOM.btnReset.addEventListener('click', resetDataset);
-  DOM.btnRebuild.addEventListener('click', rebuildCatalog);
 
   DOM.datasetSearch.addEventListener('input', (e) => {
     _searchQuery = e.target.value;

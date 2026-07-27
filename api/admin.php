@@ -30,12 +30,16 @@ switch ($action) {
 
     case 'stats': {
         $stats = admin_load_stats();
-        // Enrich per-dataset rows with display names from catalog.json (if present).
+        // Enrich per-dataset rows with display names. Built from the metadata.json files
+        // rather than read from DATA_WEB/catalog.json: that file is no longer the source
+        // of truth (api/catalog.php generates the catalog per request), so reading it
+        // would show stale names for any dataset added since the last admin rebuild.
         $names = [];
-        $cat = admin_read_json(data_web() . '/catalog.json');
-        if (is_array($cat)) {
-            $list = isset($cat['datasets']) && is_array($cat['datasets']) ? $cat['datasets'] : $cat;
-            foreach ($list as $ds) { if (isset($ds['path'])) $names[$ds['path']] = $ds['name'] ?? $ds['path']; }
+        if (!defined('LUMEN_DATASETS_LIB')) define('LUMEN_DATASETS_LIB', 1);
+        require_once __DIR__ . '/datasets.php';
+        $cat = rebuild_catalog();
+        foreach (($cat['datasets'] ?? []) as $ds) {
+            if (isset($ds['path'])) $names[$ds['path']] = $ds['name'] ?? $ds['path'];
         }
         $rows = [];
         foreach (($stats['datasets'] ?? []) as $id => $v) {

@@ -1,0 +1,1152 @@
+﻿<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Imaris 3D Cell Tracking Viewer (Three.js)</title>
+    <!-- Three.js Library -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+    <!-- Plotly.js Library -->
+    <script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
+    <style>
+        body { margin: 0; padding: 0; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #ffffff; overflow: hidden; }
+        #graph { width: 100vw; height: 100vh; display: block; }
+        #ui-container { 
+            position: absolute; bottom: 30px; left: 50%; transform: translateX(-50%);
+            background: rgba(255, 255, 255, 0.95); padding: 15px 30px; 
+            border-radius: 50px; box-shadow: 0 10px 30px rgba(0,0,0,0.15);
+            display: flex; align-items: center; gap: 20px; z-index: 10;
+            border: 1px solid #eee;
+        }
+        button { 
+            background: #3498db; color: white; border: none; padding: 10px 20px; 
+            border-radius: 20px; cursor: pointer; font-weight: bold; font-size: 14px;
+            transition: all 0.2s;
+        }
+        button:hover { background: #2980b9; transform: scale(1.05); }
+        input[type="range"] { width: 400px; cursor: pointer; }
+        .tp-label { font-weight: bold; font-size: 16px; color: #333; min-width: 80px; }
+        #title-overlay {
+            position: absolute; top: 20px; left: 20px; z-index: 10;
+            background: rgba(255, 255, 255, 0.9); padding: 15px 25px;
+            border-radius: 8px; box-shadow: 0 4px 15px rgba(0,0,0,0.05);
+        }
+        h1 { margin: 0 0 5px 0; font-size: 20px; color: #2c3e50; }
+        p { margin: 0; color: #7f8c8d; font-size: 14px; }
+        
+        #legend {
+            position: absolute; top: 20px; right: 20px; z-index: 10;
+            background: rgba(255, 255, 255, 0.9); padding: 15px;
+            border-radius: 8px; box-shadow: 0 4px 15px rgba(0,0,0,0.05);
+            max-height: 80vh; overflow-y: auto;
+        }
+        .legend-item { display: flex; align-items: center; margin-bottom: 5px; font-size: 14px; color: #333; }
+        .legend-color { width: 15px; height: 15px; border-radius: 50%; margin-right: 10px; border: 1px solid #ddd; }
+        .controls-divider { border-left: 1px solid #ccc; height: 30px; margin: 0 10px; }
+        .speed-control { display: flex; flex-direction: column; align-items: center; }
+        .speed-control span { font-size: 10px; color: #666; font-weight: bold; }
+        #speed-slider { width: 80px; }
+    </style>
+</head>
+<body>
+    <div id="title-overlay">
+        <h1>Imaris 3D Cell Tracking</h1>
+        <p>Interactive Data Viewer (Three.js 60fps)</p>
+    </div>
+    
+    <div id="legend">
+        <strong>Regions</strong><br><br>
+        <div id="legend-regions"></div>
+        <hr style="margin: 10px 0; border: none; border-top: 1px solid #ccc;">
+        <strong>Events Filter</strong><br>
+        <label style="display: flex; align-items: center; font-size: 13px; margin-top: 8px; cursor: pointer;">
+            <input type="checkbox" id="toggle-mitosis" checked style="margin-right: 8px;"> 
+            <div class="legend-color" style="background: #e74c3c;"></div> Mitosis
+        </label>
+        <label style="display: flex; align-items: center; font-size: 13px; margin-top: 5px; cursor: pointer;">
+            <input type="checkbox" id="toggle-fusion" checked style="margin-right: 8px;"> 
+            <div class="legend-color" style="background: #000000;"></div> Fusion
+        </label>
+        <hr style="margin: 10px 0; border: none; border-top: 1px solid #ccc;">
+        <strong>Layers</strong><br>
+        <label style="display: flex; align-items: center; font-size: 13px; margin-top: 8px; cursor: pointer;">
+            <input type="checkbox" id="toggle-stable-mask" checked style="margin-right: 8px;">
+            <div class="legend-color" style="background: rgba(52, 152, 219, 0.5); border: 1.5px solid #2980b9;"></div> Stable Mask
+        </label>
+    </div>
+    
+    <div id="graph"></div>
+    
+    <div id="ui-container">
+        <button id="play-btn">Play</button>
+        <input type="range" id="time-slider" min="0" max="100" value="0">
+        <div class="tp-label">t = <span id="tp-val">0.0</span></div>
+        <div class="controls-divider"></div>
+        <div class="speed-control" style="margin-right: 10px;">
+            <span>Speed</span>
+            <input type="range" id="speed-slider" min="1" max="10" value="5">
+        </div>
+        <div class="speed-control" style="margin-right: 15px;">
+            <span>Smoothing (0-9)</span>
+            <input type="range" id="interp-slider" min="0" max="9" value="0" style="width: 80px;">
+        </div>
+        <button id="record-btn" style="background: #9b59b6; margin-left: 10px;" title="Export current view as video">⏺ Record View</button>
+    </div>
+
+    <div id="stats-panel" style="position: absolute; bottom: 20px; right: 20px; z-index: 10; background: rgba(255, 255, 255, 0.95); padding: 10px; border-radius: 8px; box-shadow: 0 4px 15px rgba(0,0,0,0.1); width: 450px; height: 300px; border: 1px solid #ddd; resize: both; overflow: hidden; display: flex; flex-direction: column;">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 5px; flex-shrink: 0;">
+            <strong style="font-size: 14px; color: #333;">Population Tracking</strong>
+            <div style="display: flex; gap: 5px;">
+                <button id="mode-toggle-btn" style="padding: 4px 10px; font-size: 11px; background: #2c3e50;">View by Region</button>
+                <button id="fs-toggle-btn" style="padding: 4px 8px; font-size: 11px; background: #7f8c8d;" title="Toggle Fullscreen">⛶</button>
+            </div>
+        </div>
+        <div id="stats-graph" style="flex-grow: 1; width: 100%; height: 100%;"></div>
+    </div>
+
+    <!-- Hover Tooltip -->
+    <div id="tooltip" style="position: absolute; display: none; background: rgba(0,0,0,0.8); color: white; padding: 8px 12px; border-radius: 6px; pointer-events: none; z-index: 100; font-size: 14px; box-shadow: 0 4px 6px rgba(0,0,0,0.2);"></div>
+
+    <!-- Record Video Modal -->
+    <div id="record-modal" style="display: none; position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); background: rgba(255, 255, 255, 0.95); padding: 25px; border-radius: 12px; box-shadow: 0 10px 40px rgba(0,0,0,0.3); z-index: 2000; width: 320px; text-align: center; border: 1px solid #ccc;">
+        <h3 style="margin: 0 0 15px 0; color: #2c3e50;">Export Video</h3>
+        <div style="text-align: left; margin-bottom: 15px;">
+            <label style="font-size: 13px; font-weight: bold; color: #555;">Resolution / Aspect Ratio</label>
+            <select id="rec-res" style="width: 100%; padding: 8px; margin-top: 5px; border-radius: 4px; border: 1px solid #aaa;">
+                <option value="viewport">Current Viewport</option>
+                <option value="1920x1080">1080p HD (1920x1080)</option>
+                <option value="1280x720">720p HD (1280x720)</option>
+                <option value="1080x1080">Square 1:1 (1080x1080)</option>
+                <option value="1080x1920">Vertical 9:16 (1080x1920)</option>
+            </select>
+            <div style="font-size: 11px; color: #7f8c8d; margin-top: 5px;">(Preview adjusts to show cropped view area)</div>
+        </div>
+        <div style="text-align: left; margin-bottom: 25px;">
+            <label style="font-size: 13px; font-weight: bold; color: #555;">Video Format</label>
+            <select id="rec-fmt" style="width: 100%; padding: 8px; margin-top: 5px; border-radius: 4px; border: 1px solid #aaa;">
+                <option value="video/webm;codecs=vp9">WebM (VP9 - High Quality)</option>
+                <option value="video/webm;codecs=h264">WebM (H.264 - Best Compatibility)</option>
+            </select>
+        </div>
+        <div style="display: flex; gap: 10px; justify-content: center;">
+            <button id="btn-rec-cancel" style="background: #7f8c8d; flex: 1; padding: 12px;">Cancel</button>
+            <button id="btn-rec-start" style="background: #e74c3c; flex: 1; padding: 12px;">⏺ Start</button>
+        </div>
+    </div>
+
+    <!-- Startup Drag & Drop Overlay -->
+    <div id="startup-overlay" style="position: absolute; top: 0; left: 0; width: 100vw; height: 100vh; background: #2c3e50; z-index: 9999; display: flex; flex-direction: column; justify-content: center; align-items: center; color: white; font-family: 'Segoe UI', Arial, sans-serif;">
+        <h1 style="font-size: 3.5rem; margin-bottom: 10px;">Imaris 3D Tracker</h1>
+        <p style="font-size: 1.2rem; color: #bdc3c7; margin-bottom: 40px;">Universal Interactive Analytics Dashboard</p>
+        
+        <div id="drop-zone" style="width: 60%; max-width: 600px; height: 250px; border: 3px dashed #3498db; border-radius: 20px; display: flex; flex-direction: column; justify-content: center; align-items: center; background: rgba(52, 152, 219, 0.1); cursor: pointer; transition: all 0.3s ease;">
+            <div style="font-size: 4rem; margin-bottom: 15px;">📁</div>
+            <h2 style="margin: 0 0 10px 0;">Drag & Drop a Dataset</h2>
+            <p style="color: #95a5a6; margin: 0;">Supported format: .imaris_track</p>
+            <input type="file" id="file-input" accept=".imaris_track" style="display: none;">
+            <button id="browse-btn" style="margin-top: 20px; padding: 10px 25px; font-size: 1rem; background: #3498db; color: white; border: none; border-radius: 8px; cursor: pointer; font-weight: bold;">Or Browse Files</button>
+        </div>
+        
+        <div id="loading-msg" style="display: none; margin-top: 30px; font-size: 1.2rem; color: #f1c40f;">
+            <span class="spinner" style="display: inline-block; animation: spin 1s linear infinite;">⏳</span> Decompressing Universal File...
+        </div>
+        <style>@keyframes spin { 100% { transform: rotate(360deg); } }</style>
+    </div>
+
+    <script>
+        const dropZone = document.getElementById('drop-zone');
+        const fileInput = document.getElementById('file-input');
+        const browseBtn = document.getElementById('browse-btn');
+        const loadingMsg = document.getElementById('loading-msg');
+        
+        browseBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            fileInput.click();
+        });
+        
+        dropZone.addEventListener('click', () => fileInput.click());
+        
+        dropZone.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            dropZone.style.background = 'rgba(52, 152, 219, 0.3)';
+            dropZone.style.transform = 'scale(1.02)';
+        });
+        
+        dropZone.addEventListener('dragleave', (e) => {
+            e.preventDefault();
+            dropZone.style.background = 'rgba(52, 152, 219, 0.1)';
+            dropZone.style.transform = 'scale(1)';
+        });
+        
+        dropZone.addEventListener('drop', (e) => {
+            e.preventDefault();
+            dropZone.style.background = 'rgba(52, 152, 219, 0.1)';
+            dropZone.style.transform = 'scale(1)';
+            if (e.dataTransfer.files.length > 0) {
+                handleFile(e.dataTransfer.files[0]);
+            }
+        });
+        
+        fileInput.addEventListener('change', (e) => {
+            if (e.target.files.length > 0) {
+                handleFile(e.target.files[0]);
+            }
+        });
+        
+        async function handleFile(file) {
+            if (!file.name.endsWith('.imaris_track')) {
+                alert('Invalid file format. Please upload a .imaris_track compressed dataset.');
+                return;
+            }
+            
+            dropZone.style.display = 'none';
+            loadingMsg.style.display = 'block';
+            
+            try {
+                // Read local file through GZip native streaming API
+                const ds = new DecompressionStream('gzip');
+                const stream = file.stream().pipeThrough(ds);
+                const blob = await new Response(stream).blob();
+                const text = await blob.text();
+                const jsonPayload = JSON.parse(text);
+                
+                if (jsonPayload.signature !== "IMARIS_TRACKER_V1") {
+                    throw new Error("Missing or invalid standard signature header.");
+                }
+                
+                document.getElementById('startup-overlay').style.display = 'none';
+                initViewer(jsonPayload.data);
+                
+            } catch (error) {
+                console.error(error);
+                alert("Failed to initialize dataset: " + error.message);
+                dropZone.style.display = 'flex';
+                loadingMsg.style.display = 'none';
+            }
+        }
+    </script>
+    
+    <script>
+        function initViewer(TRACK_DATA) {
+            const slider = document.getElementById('time-slider');
+            const playBtn = document.getElementById('play-btn');
+            const tpVal = document.getElementById('tp-val');
+            const legendDiv = document.getElementById('legend-regions');
+            let showMitosis = true;
+            let showFusion = true;
+            
+            // Allow tracking global index across playheads safely
+            let currentTpIndex = 0;
+            let isPlaying = false;
+            let delayMs = 100;
+            let playTimerId = null;
+            let cellObjects = [];
+            
+            document.getElementById('toggle-mitosis').addEventListener('change', (e) => {
+                showMitosis = e.target.checked;
+                updateTimepoint(currentTpIndex);
+                if(typeof renderStatsChart === 'function') renderStatsChart();
+            });
+            
+            document.getElementById('toggle-fusion').addEventListener('change', (e) => {
+                showFusion = e.target.checked;
+                updateTimepoint(currentTpIndex);
+                if(typeof renderStatsChart === 'function') renderStatsChart();
+            });
+            
+            const rawTimepoints = TRACK_DATA.timepoints || [];
+            const rawCells = JSON.parse(JSON.stringify(TRACK_DATA.cells || []));
+            let timepoints = [...rawTimepoints];
+            let cells = JSON.parse(JSON.stringify(rawCells));
+            
+            if (timepoints.length > 0) {
+                slider.max = timepoints.length - 1;
+            }
+
+            // --- THREE.JS INITIALIZATION ---
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0xffffff);
+
+        // Normalize data to the center to make camera rotation easy
+        let minX = Infinity, maxX = -Infinity;
+        let minY = Infinity, maxY = -Infinity;
+        let minZ = Infinity, maxZ = -Infinity;
+        
+        cells.forEach(c => {
+            c.x.forEach(v => { minX = Math.min(minX, v); maxX = Math.max(maxX, v); });
+            c.y.forEach(v => { minY = Math.min(minY, v); maxY = Math.max(maxY, v); });
+            c.z.forEach(v => { minZ = Math.min(minZ, v); maxZ = Math.max(maxZ, v); });
+        });
+        
+        // Handle empty scenario
+        if (minX === Infinity) { minX = -10; maxX = 10; minY = -10; maxY = 10; minZ = -10; maxZ = 10; }
+        
+        const spanX = maxX - minX;
+        const spanY = maxY - minY;
+        const spanZ = maxZ - minZ;
+        const maxSpan = Math.max(spanX, spanY, spanZ, 1.0);
+        
+        // Center offset
+        const cx = (minX + maxX) / 2;
+        const cy = (minY + maxY) / 2;
+        const cz = (minZ + maxZ) / 2;
+
+        const camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, maxSpan * 20);
+        camera.position.set(maxSpan * 1.5, maxSpan * 1.5, maxSpan * 1.5);
+        camera.up.set(0, 0, 1); // Z is UP in Imaris/Biology Tracking usually
+
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.setPixelRatio(window.devicePixelRatio);
+        document.getElementById('graph').appendChild(renderer.domElement);
+
+        const controls = new THREE.OrbitControls(camera, renderer.domElement);
+        controls.enableDamping = true;
+        controls.dampingFactor = 0.05;
+
+        // Visual orientation axes
+        const axesHelper = new THREE.AxesHelper(maxSpan / 2); // Red=X, Green=Y (depth), Blue=Z (vertical)
+        // Position the axes at the minimum corner of the bounding box
+        axesHelper.position.set(minX - cx, minY - cy, minZ - cz);
+        scene.add(axesHelper);
+
+        function createTextTexture(message, color) {
+            const canvas = document.createElement('canvas');
+            canvas.width = 256;
+            canvas.height = 64;
+            const ctx = canvas.getContext('2d');
+            
+            // Draw a discrete elegant pill shape
+            ctx.fillStyle = color;
+            ctx.beginPath();
+            ctx.arc(32, 32, 20, Math.PI/2, Math.PI*1.5);
+            ctx.lineTo(224, 12);
+            ctx.arc(224, 32, 20, -Math.PI/2, Math.PI/2);
+            ctx.closePath();
+            ctx.fill();
+            
+            ctx.font = "bold 18px 'Segoe UI', Arial, sans-serif";
+            ctx.fillStyle = "rgba(255, 255, 255, 0.95)";
+            ctx.textAlign = "center";
+            ctx.textBaseline = "middle";
+            ctx.fillText(message, 128, 32);
+            return new THREE.CanvasTexture(canvas);
+        }
+        
+        const rawTex = createTextTexture("RAW DATA", "rgba(39, 174, 96, 0.65)");
+        const interpTex = createTextTexture("SMOOTHED", "rgba(230, 126, 34, 0.65)");
+        const indicatorMat = new THREE.SpriteMaterial({ 
+            map: rawTex, 
+            transparent: true,
+            depthTest: false,
+            depthWrite: false
+        });
+        const indicatorSprite = new THREE.Sprite(indicatorMat);
+        indicatorSprite.renderOrder = 999;
+        
+        // Pin to top-center of Camera Frustum, elegant tiny size
+        const hudDist = 10;
+        const hudTopY = hudDist * Math.tan( THREE.MathUtils.degToRad(camera.fov / 2) );
+        indicatorSprite.scale.set(1.2, 0.3, 1);
+        indicatorSprite.position.set(0, hudTopY - 0.25, -hudDist);
+        
+        scene.add(camera);
+        camera.add(indicatorSprite);
+
+        // Floor grid
+        // GridHelper draws on XZ plane by default. We need it on XY plane because our Z is UP.
+        const gridHelper = new THREE.GridHelper(maxSpan * 1.5, 20, 0xcccccc, 0xeeeeee);
+        gridHelper.rotation.x = Math.PI / 2; 
+        gridHelper.position.z = minZ - cz; // Place exactly below the data
+        scene.add(gridHelper);
+
+        // --- DATA BUFFERS ---
+        const pointMaterials = {};
+        const lineMaterials = {};
+        
+        // Special events
+        const redMat = new THREE.MeshBasicMaterial({color: 0xff0000});
+        const blackMat = new THREE.MeshBasicMaterial({color: 0x000000});
+        
+        // Cell radius based on bounding box
+        const normRadius = maxSpan / 150;
+        const sphereGeo = new THREE.SphereGeometry(normRadius, 16, 16);
+        const bigSphereGeo = new THREE.SphereGeometry(normRadius * 2, 16, 16);
+
+        // Pre-build legend visually
+        const regionsAdded = new Set();
+        
+        cellObjects = []; // Reset global array bound to initViewer scope
+        
+        cells.forEach(cell => {
+             // Legend UI
+             if (!regionsAdded.has(cell.region)) {
+                 regionsAdded.add(cell.region);
+                 const div = document.createElement('div');
+                 div.className = 'legend-item';
+                 div.innerHTML = `<div class="legend-color" style="background: ${cell.color};"></div> ${cell.region}`;
+                 legendDiv.appendChild(div);
+             }
+
+             if(!pointMaterials[cell.color]) {
+                 pointMaterials[cell.color] = new THREE.MeshBasicMaterial({color: new THREE.Color(cell.color)});
+                 lineMaterials[cell.color] = new THREE.LineBasicMaterial({color: new THREE.Color(cell.color), transparent: true, opacity: 0.6});
+             }
+             
+             const maxPts = cell.t.length;
+             
+             // TRAIL Line Geometry (Extremely fast buffer)
+             const geometry = new THREE.BufferGeometry();
+             const positions = new Float32Array(maxPts * 3);
+             
+             for (let i = 0; i < maxPts; i++) {
+                 positions[i*3]     = cell.x[i] - cx;
+                 positions[i*3 + 1] = cell.y[i] - cy;
+                 positions[i*3 + 2] = cell.z[i] - cz;
+             }
+             
+             geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+             geometry.setDrawRange(0, 0); // Hide initially
+             const line = new THREE.Line(geometry, lineMaterials[cell.color]);
+             scene.add(line);
+             
+             // CURRENT POSITION Point Mesh
+             const point = new THREE.Mesh(sphereGeo, pointMaterials[cell.color]);
+             point.visible = false;
+             scene.add(point);
+             
+             cellObjects.push({
+                 cellData: cell,
+                 lineObj: line,
+                 pointObj: point,
+                 markerCol: cell.marker_color || [],
+                 numPts: maxPts
+             });
+        });
+
+
+        // ─── STABLE MASK LAYER ───
+        // Holds the Three.js meshes for the stable volume, one per timepoint
+        const stableMaskData = TRACK_DATA.stable_masks || {};
+        const stableMaskMeshes = {}; // tp -> THREE.Mesh
+        let showStableMask = true;
+
+        // Material: translucent blue prism
+        const maskMat = new THREE.MeshBasicMaterial({
+            color: 0x3498db,
+            transparent: true,
+            opacity: 0.18,
+            side: THREE.DoubleSide,
+            depthWrite: false
+        });
+        const maskEdgeMat = new THREE.LineBasicMaterial({
+            color: 0x2980b9,
+            transparent: true,
+            opacity: 0.7
+        });
+
+        function buildExtrudedHull(vertices2d, zMin, zMax) {
+            // Build a prism: polygon at zMin and zMax, with side faces
+            const n = vertices2d.length;
+            const positions = [];
+            const indices = [];
+
+            // Bottom ring (z = zMin), Top ring (z = zMax)
+            for (let i = 0; i < n; i++) {
+                positions.push(vertices2d[i][0] - cx, vertices2d[i][1] - cy, zMin - cz); // bottom
+            }
+            for (let i = 0; i < n; i++) {
+                positions.push(vertices2d[i][0] - cx, vertices2d[i][1] - cy, zMax - cz); // top
+            }
+
+            // Side faces (quads as 2 triangles)
+            for (let i = 0; i < n; i++) {
+                const next = (i + 1) % n;
+                const b0 = i, b1 = next;
+                const t0 = n + i, t1 = n + next;
+                indices.push(b0, b1, t0);
+                indices.push(b1, t1, t0);
+            }
+
+            // Bottom cap (fan triangulation)
+            for (let i = 1; i < n - 1; i++) {
+                indices.push(0, i, i + 1);
+            }
+            // Top cap
+            for (let i = 1; i < n - 1; i++) {
+                indices.push(n, n + i + 1, n + i);
+            }
+
+            const geo = new THREE.BufferGeometry();
+            geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(positions), 3));
+            geo.setIndex(indices);
+            geo.computeVertexNormals();
+            return geo;
+        }
+
+        function buildHullEdges(vertices2d, zMin, zMax) {
+            const n = vertices2d.length;
+            const pts = [];
+            // Bottom loop
+            for (let i = 0; i <= n; i++) {
+                const v = vertices2d[i % n];
+                pts.push(v[0] - cx, v[1] - cy, zMin - cz);
+            }
+            // Top loop
+            for (let i = 0; i <= n; i++) {
+                const v = vertices2d[i % n];
+                pts.push(v[0] - cx, v[1] - cy, zMax - cz);
+            }
+            // Vertical edges
+            for (let i = 0; i < n; i++) {
+                const v = vertices2d[i];
+                pts.push(v[0] - cx, v[1] - cy, zMin - cz);
+                pts.push(v[0] - cx, v[1] - cy, zMax - cz);
+            }
+            const geo = new THREE.BufferGeometry();
+            geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(pts), 3));
+            return new THREE.LineSegments(geo, maskEdgeMat);
+        }
+
+        // Pre-build all mask meshes
+        Object.entries(stableMaskData).forEach(([tpStr, maskInfo]) => {
+            const verts = maskInfo.vertices;
+            const zMin = maskInfo.z_min;
+            const zMax = maskInfo.z_max;
+            if (!verts || verts.length < 3) return;
+
+            const geo = buildExtrudedHull(verts, zMin, zMax);
+            const mesh = new THREE.Mesh(geo, maskMat);
+            mesh.visible = false;
+            scene.add(mesh);
+
+            const edges = buildHullEdges(verts, zMin, zMax);
+            edges.visible = false;
+            scene.add(edges);
+
+            stableMaskMeshes[parseFloat(tpStr)] = { mesh, edges };
+        });
+
+        document.getElementById('toggle-stable-mask').addEventListener('change', (e) => {
+            showStableMask = e.target.checked;
+            updateTimepoint(currentTpIndex);
+        });
+
+        function updateStableMask(targetTp) {
+            // Find the closest timepoint in stableMaskMeshes <= targetTp
+            const available = Object.keys(stableMaskMeshes).map(Number).sort((a, b) => a - b);
+            let bestTp = null;
+            for (const tp of available) {
+                if (tp <= targetTp + 1e-4) bestTp = tp;
+            }
+            // Hide all
+            Object.values(stableMaskMeshes).forEach(({ mesh, edges }) => {
+                mesh.visible = false;
+                edges.visible = false;
+            });
+            // Show best match if mask is enabled
+            if (showStableMask && bestTp !== null && stableMaskMeshes[bestTp]) {
+                stableMaskMeshes[bestTp].mesh.visible = true;
+                stableMaskMeshes[bestTp].edges.visible = true;
+            }
+        }
+
+        // --- UPDATE LOOP ---
+        function updateTimepoint(idx) {
+             if(timepoints.length === 0) return;
+             const targetTp = timepoints[idx];
+             tpVal.innerText = targetTp.toFixed(1);
+
+             const isRaw = rawTimepoints.includes(targetTp);
+             indicatorSprite.material.map = isRaw ? rawTex : interpTex;
+             indicatorSprite.material.needsUpdate = true;
+             
+             cellObjects.forEach(obj => {
+                  let v = 0;
+                  for(let i=0; i<obj.numPts; i++) {
+                      if(obj.cellData.t[i] <= targetTp) v++;
+                      else break;
+                  }
+                  
+                  if (v === 0) {
+                      obj.lineObj.geometry.setDrawRange(0, 0);
+                      obj.pointObj.visible = false;
+                  } else {
+                      // Draw line from index 0 to index v
+                      obj.lineObj.geometry.setDrawRange(0, v);
+                      
+                      // Hide point body if cell timeline has ended
+                      if (targetTp > obj.cellData.t[obj.numPts - 1] + 1e-4) {
+                          obj.pointObj.visible = false;
+                      } else {
+                          obj.pointObj.visible = true;
+                          // Move mesh to the exact active coordinate
+                          const lastIdx = v - 1;
+                          const lastX = obj.cellData.x[lastIdx] - cx;
+                          const lastY = obj.cellData.y[lastIdx] - cy;
+                          const lastZ = obj.cellData.z[lastIdx] - cz;
+                          obj.pointObj.position.set(lastX, lastY, lastZ);
+                          
+                          // Apply special colors for fusion/mitosis
+                          const mc = obj.markerCol[lastIdx];
+                          if(showMitosis && mc === "red") {
+                              obj.pointObj.material = redMat;
+                              obj.pointObj.geometry = bigSphereGeo;
+                          } else if(showFusion && mc === "black") {
+                              obj.pointObj.material = blackMat;
+                              obj.pointObj.geometry = bigSphereGeo;
+                          } else {
+                              obj.pointObj.material = pointMaterials[obj.cellData.color];
+                              obj.pointObj.geometry = sphereGeo;
+                          }
+                      }
+                  }
+             });
+             
+             // Sync the playhead vertical line on the 2D stats graph
+             if (document.getElementById('stats-graph').data) {
+                 Plotly.relayout('stats-graph', {
+                     shapes: [{
+                         type: 'line', x0: targetTp, x1: targetTp, 
+                         y0: 0, y1: 1, yref: 'paper', 
+                         line: {color: 'rgba(231, 76, 60, 0.6)', width: 2, dash: 'dot'},
+                         layer: 'below'
+                     }]
+                 });
+             }
+             updateStableMask(targetTp);
+        }
+
+        // Controls (variables now hoisted globally on initViewer)
+        
+        document.getElementById('speed-slider').addEventListener('input', (e) => {
+            const val = parseInt(e.target.value);
+            delayMs = 50 + (10 - val) * 50; 
+        });
+
+        slider.addEventListener('input', (e) => {
+            currentTpIndex = parseInt(e.target.value);
+            updateTimepoint(currentTpIndex);
+        });
+
+        document.getElementById('interp-slider').addEventListener('input', (e) => {
+            if(isPlaying) playBtn.click();
+            
+            const currentT = timepoints.length > 0 ? timepoints[currentTpIndex] : 0;
+            const interp = parseInt(e.target.value);
+            const steps = interp + 1;
+            
+            let gaps = [];
+            for(let i=0; i<rawTimepoints.length-1; i++) gaps.push(rawTimepoints[i+1] - rawTimepoints[i]);
+            gaps.sort((a,b)=>a-b);
+            const medianGap = gaps.length > 0 ? gaps[Math.floor(gaps.length/2)] : 1;
+            
+            timepoints = [];
+            for(let i=0; i<rawTimepoints.length - 1; i++) {
+                const t0 = rawTimepoints[i];
+                const t1 = rawTimepoints[i+1];
+                timepoints.push(t0);
+                const diff = t1 - t0;
+                if (diff < medianGap * 1.5 && diff > medianGap * 0.5) {
+                    for(let s=1; s<steps; s++) {
+                        timepoints.push(t0 + (t1 - t0) * (s / steps));
+                    }
+                }
+            }
+            if(rawTimepoints.length > 0) timepoints.push(rawTimepoints[rawTimepoints.length - 1]);
+            
+            cells = rawCells.map(c => {
+                const newX=[], newY=[], newZ=[], newT=[], newMC=[];
+                for(let i=0; i<c.t.length - 1; i++) {
+                    const t0 = c.t[i], x0 = c.x[i], y0 = c.y[i], z0 = c.z[i];
+                    const t1 = c.t[i+1], x1 = c.x[i+1], y1 = c.y[i+1], z1 = c.z[i+1];
+                    const diff = t1 - t0;
+                    
+                    newX.push(x0); newY.push(y0); newZ.push(z0); newT.push(t0);
+                    newMC.push(c.marker_color ? c.marker_color[i] : "");
+                    
+                    if (diff < medianGap * 1.5 && diff > medianGap * 0.5 && interp > 0) {
+                        for(let j=0; j<timepoints.length; j++) {
+                            const ct = timepoints[j];
+                            if (ct > t0 && ct < t1 - 1e-5) {
+                                const f = (ct - t0) / diff;
+                                newX.push(x0 + (x1 - x0)*f);
+                                newY.push(y0 + (y1 - y0)*f);
+                                newZ.push(z0 + (z1 - z0)*f);
+                                newT.push(ct);
+                                newMC.push("");
+                            }
+                        }
+                    }
+                }
+                const last = c.t.length - 1;
+                if(last >= 0) {
+                    newX.push(c.x[last]); newY.push(c.y[last]); newZ.push(c.z[last]); newT.push(c.t[last]);
+                    newMC.push(c.marker_color ? c.marker_color[last] : "");
+                }
+                return { ...c, x: newX, y: newY, z: newZ, t: newT, marker_color: newMC };
+            });
+            
+            cellObjects.forEach(obj => {
+                 const newCell = cells.find(c => c.id === obj.cellData.id);
+                 obj.cellData = newCell;
+                 obj.numPts = newCell.t.length;
+                 obj.markerCol = newCell.marker_color;
+                 const positions = new Float32Array(obj.numPts * 3);
+                 for(let i=0; i<obj.numPts; i++) {
+                     positions[i*3] = newCell.x[i] - cx;
+                     positions[i*3+1] = newCell.y[i] - cy;
+                     positions[i*3+2] = newCell.z[i] - cz;
+                 }
+                 obj.lineObj.geometry.dispose();
+                 const geo = new THREE.BufferGeometry();
+                 geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+                 geo.setDrawRange(0, 0); // hidden initially
+                 obj.lineObj.geometry = geo;
+            });
+            
+            slider.max = Math.max(0, timepoints.length - 1);
+            let minDiff = Infinity; let closestIdx = 0;
+            for(let i=0; i<timepoints.length; i++) {
+                const diff = Math.abs(timepoints[i] - currentT);
+                if(diff < minDiff) { minDiff = diff; closestIdx = i; }
+            }
+            currentTpIndex = closestIdx;
+            slider.value = currentTpIndex;
+            
+            buildStats();
+            if(typeof renderStatsChart === 'function') {
+                const gr = document.getElementById('stats-graph');
+                Plotly.purge(gr);
+                renderStatsChart();
+            }
+            updateTimepoint(currentTpIndex);
+        });
+
+        function playStep() {
+            if (!isPlaying) return;
+            currentTpIndex++;
+            if (currentTpIndex >= timepoints.length) {
+                playBtn.innerText = 'Play';
+                playBtn.style.background = '#3498db';
+                isPlaying = false;
+                currentTpIndex = timepoints.length - 1;
+            } else {
+                slider.value = currentTpIndex;
+                updateTimepoint(currentTpIndex);
+                playTimerId = setTimeout(playStep, delayMs);
+            }
+        }
+
+        playBtn.addEventListener('click', () => {
+            if (isPlaying) {
+                isPlaying = false;
+                if(playTimerId) clearTimeout(playTimerId);
+                playBtn.innerText = 'Play';
+                playBtn.style.background = '#3498db';
+            } else {
+                if (currentTpIndex >= timepoints.length - 1) {
+                    currentTpIndex = 0; 
+                    slider.value = 0; 
+                    updateTimepoint(0);
+                }
+                playBtn.innerText = 'Pause';
+                playBtn.style.background = '#e74c3c';
+                isPlaying = true;
+                playStep();
+            }
+        });
+
+        // Video Recording Logic
+        const recordBtn = document.getElementById('record-btn');
+        let mediaRecorder = null;
+        let recordedChunks = [];
+        let isRecording = false;
+
+        function updateGraphPreview() {
+            const val = document.getElementById('rec-res').value;
+            const res = parseResolution(val);
+            const graphContainer = document.getElementById('graph');
+            
+            if (val === 'viewport') {
+                graphContainer.style.width = window.innerWidth + 'px';
+                graphContainer.style.height = window.innerHeight + 'px';
+                graphContainer.style.transform = 'none';
+                graphContainer.style.position = 'static';
+                camera.aspect = window.innerWidth / window.innerHeight;
+                camera.updateProjectionMatrix();
+                renderer.setSize(window.innerWidth, window.innerHeight);
+                return;
+            }
+            
+            let cssW = window.innerWidth;
+            let cssH = window.innerHeight;
+            const screenAspect = window.innerWidth / window.innerHeight;
+            
+            if (res.aspect > screenAspect) {
+                cssH = window.innerWidth / res.aspect;
+            } else {
+                cssW = window.innerHeight * res.aspect;
+            }
+            
+            graphContainer.style.width = cssW + 'px';
+            graphContainer.style.height = cssH + 'px';
+            graphContainer.style.position = 'absolute';
+            graphContainer.style.left = '50%';
+            graphContainer.style.top = '50%';
+            graphContainer.style.transform = 'translate(-50%, -50%)';
+            
+            camera.aspect = res.aspect;
+            camera.updateProjectionMatrix();
+            renderer.setSize(cssW, cssH);
+        }
+
+        const parseResolution = (val) => {
+            if (val === 'viewport') return { w: window.innerWidth, h: window.innerHeight, aspect: window.innerWidth / window.innerHeight };
+            let parts = val.split('x');
+            return { w: parseInt(parts[0]), h: parseInt(parts[1]), aspect: parseInt(parts[0]) / parseInt(parts[1]) };
+        };
+
+        document.getElementById('rec-res').addEventListener('change', updateGraphPreview);
+
+        document.getElementById('btn-rec-cancel').addEventListener('click', () => {
+            document.getElementById('record-modal').style.display = 'none';
+            document.getElementById('rec-res').value = 'viewport';
+            updateGraphPreview();
+        });
+
+        document.getElementById('btn-rec-start').addEventListener('click', () => {
+            document.getElementById('record-modal').style.display = 'none';
+            
+            const val = document.getElementById('rec-res').value;
+            const res = parseResolution(val);
+            
+            // Force exact buffer dimensions, keep CSS visual preview sizing correctly aspected
+            renderer.setSize(res.w, res.h, false); 
+            
+            startRecordingNative(res.w, res.h);
+        });
+
+        function startRecordingNative(targetW, targetH) {
+            if (isPlaying) playBtn.click(); // Pause normal play
+            
+            currentTpIndex = 0;
+            slider.value = 0;
+            updateTimepoint(0);
+            
+            const canvas = document.querySelector('#graph canvas');
+            if (!canvas) { alert("Canvas not ready."); return; }
+            
+            const stream = canvas.captureStream(60);
+            const reqFmt = document.getElementById('rec-fmt').value;
+            let options = { mimeType: reqFmt, videoBitsPerSecond: 25000000 };
+            
+            if (!MediaRecorder.isTypeSupported(options.mimeType)) {
+                console.warn(reqFmt + " not supported, falling back.");
+                options = { mimeType: 'video/webm', videoBitsPerSecond: 25000000 };
+            }
+            
+            mediaRecorder = new MediaRecorder(stream, options);
+            recordedChunks = [];
+            
+            mediaRecorder.ondataavailable = function(e) {
+                if (e.data.size > 0) recordedChunks.push(e.data);
+            };
+            
+            mediaRecorder.onstop = function() {
+                const blob = new Blob(recordedChunks, { type: options.mimeType.split(';')[0] });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.style.display = 'none';
+                a.href = url;
+                const ext = options.mimeType.includes("mp4") ? ".mp4" : ".webm";
+                a.download = `imaris_export_${targetW}x${targetH}${ext}`;
+                document.body.appendChild(a);
+                a.click();
+                setTimeout(() => { document.body.removeChild(a); URL.revokeObjectURL(url); }, 100);
+                
+                recordBtn.innerText = '⏺ Record View';
+                recordBtn.style.background = '#9b59b6';
+                isRecording = false;
+                
+                document.getElementById('rec-res').value = 'viewport';
+                updateGraphPreview();
+            };
+            
+            mediaRecorder.start();
+            isRecording = true;
+            recordBtn.innerText = '⏹ Recording...';
+            recordBtn.style.background = '#e74c3c';
+            
+            function recordStep() {
+                if (!isRecording) return; // aborted
+                currentTpIndex++;
+                if (currentTpIndex >= timepoints.length) {
+                    mediaRecorder.stop(); // This triggers onstop downloading
+                } else {
+                    slider.value = currentTpIndex;
+                    updateTimepoint(currentTpIndex);
+                    renderer.render(scene, camera); // sync render
+                    setTimeout(recordStep, delayMs);
+                }
+            }
+            setTimeout(recordStep, delayMs);
+        }
+
+        recordBtn.addEventListener('click', () => {
+            if (isRecording) {
+                isRecording = false; // abort flag
+                mediaRecorder.stop();
+            } else {
+                document.getElementById('record-modal').style.display = 'block';
+                updateGraphPreview();
+            }
+        });
+
+        // Graph UI Events
+        const statsPanel = document.getElementById('stats-panel');
+        const fsBtn = document.getElementById('fs-toggle-btn');
+        let isFullscreen = false;
+        let origStyle = { width: '450px', height: '300px', bottom: '20px', right: '20px' };
+
+        fsBtn.addEventListener('click', () => {
+            isFullscreen = !isFullscreen;
+            if (isFullscreen) {
+                origStyle.width = statsPanel.style.width;
+                origStyle.height = statsPanel.style.height;
+                origStyle.bottom = statsPanel.style.bottom;
+                origStyle.right = statsPanel.style.right;
+                
+                statsPanel.style.width = '90vw';
+                statsPanel.style.height = '90vh';
+                statsPanel.style.bottom = '5vh';
+                statsPanel.style.right = '5vw';
+            } else {
+                statsPanel.style.width = origStyle.width;
+                statsPanel.style.height = origStyle.height;
+                statsPanel.style.bottom = origStyle.bottom;
+                statsPanel.style.right = origStyle.right;
+            }
+        });
+
+        const resizeObserver = new ResizeObserver(() => {
+            if (document.getElementById('stats-graph').data) {
+                Plotly.Plots.resize('stats-graph');
+            }
+        });
+        resizeObserver.observe(statsPanel);
+
+        // --- RAYCASTER FOR TOOLTIPS ---
+        const raycaster = new THREE.Raycaster();
+        const mouse = new THREE.Vector2();
+        const tooltip = document.getElementById('tooltip');
+        
+        cellObjects.forEach(obj => {
+            obj.pointObj.userData = { cell: obj.cellData };
+        });
+
+        window.addEventListener('mousemove', (event) => {
+            mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
+            mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
+            
+            raycaster.setFromCamera(mouse, camera);
+            
+            const visibleMeshes = cellObjects.filter(obj => obj.pointObj.visible).map(obj => obj.pointObj);
+            const intersects = raycaster.intersectObjects(visibleMeshes);
+
+            if (intersects.length > 0) {
+                const hit = intersects[0];
+                const cell = hit.object.userData.cell;
+                const targetTp = timepoints[currentTpIndex];
+                
+                let v = 0;
+                for(let i=0; i<cell.t.length; i++) {
+                    if(cell.t[i] <= targetTp) v++;
+                    else break;
+                }
+                const lastIdx = Math.max(0, v-1);
+                
+                const px = cell.x[lastIdx].toFixed(1);
+                const py = cell.y[lastIdx].toFixed(1);
+                const pz = cell.z[lastIdx].toFixed(1);
+                
+                tooltip.style.display = 'block';
+                tooltip.style.left = (event.clientX + 15) + 'px';
+                tooltip.style.top = (event.clientY + 15) + 'px';
+                tooltip.innerHTML = `<strong>ID: ${cell.id}</strong><br>
+                                     Region: ${cell.region}<br>
+                                     Pos: (${px}, ${py}, ${pz})<br>
+                                     t: ${cell.t[lastIdx].toFixed(1)}`;
+                document.body.style.cursor = 'crosshair';
+            } else {
+                tooltip.style.display = 'none';
+                document.body.style.cursor = 'default';
+            }
+        });
+
+        // Resize handler
+        window.addEventListener('resize', onWindowResize, false);
+        function onWindowResize() {
+            if (document.getElementById('record-modal').style.display === 'block') {
+                updateGraphPreview();
+            } else {
+                const graphContainer = document.getElementById('graph');
+                graphContainer.style.width = window.innerWidth + 'px';
+                graphContainer.style.height = window.innerHeight + 'px';
+                graphContainer.style.transform = 'none';
+                graphContainer.style.position = 'static';
+                camera.aspect = window.innerWidth / window.innerHeight;
+                camera.updateProjectionMatrix();
+                renderer.setSize(window.innerWidth, window.innerHeight);
+            }
+        }
+
+        // Native 144Hz WebGL Anim Loop
+        function animate() {
+            requestAnimationFrame(animate);
+            controls.update(); // only required if controls.enableDamping or controls.autoRotate are set
+            renderer.render(scene, camera);
+        }
+        animate(); // kick off the rendering loop!
+
+        // Init frame
+        if (timepoints.length > 0) {
+            updateTimepoint(0);
+        }
+        
+        // --- 2D PLOTLY STATS RENDERING ---
+        let stats = {};
+        const regions = [...new Set(rawCells.map(c => c.region))];
+        const regionColors = {};
+        rawCells.forEach(c => { regionColors[c.region] = c.color; });
+        
+        function buildStats() {
+            stats = {
+                t: timepoints,
+                global_counts: new Array(timepoints.length).fill(0),
+                global_mitosis: new Array(timepoints.length).fill(0),
+                global_fusion: new Array(timepoints.length).fill(0),
+                region_counts: {}, region_mitosis: {}, region_fusion: {}
+            };
+            
+            regions.forEach(r => {
+                stats.region_counts[r] = new Array(timepoints.length).fill(0);
+                stats.region_mitosis[r] = new Array(timepoints.length).fill(0);
+                stats.region_fusion[r] = new Array(timepoints.length).fill(0);
+            });
+            
+            cells.forEach(cell => {
+                 const r = cell.region;
+                 for(let i=0; i<cell.t.length; i++) {
+                     const tp = cell.t[i];
+                     const tpIdx = timepoints.indexOf(tp);
+                     if(tpIdx !== -1) {
+                         stats.global_counts[tpIdx]++;
+                         stats.region_counts[r][tpIdx]++;
+                         if (cell.marker_color && cell.marker_color[i]) {
+                             if(cell.marker_color[i] === "red") {
+                                 stats.global_mitosis[tpIdx]++;
+                                 stats.region_mitosis[r][tpIdx]++;
+                             } else if (cell.marker_color[i] === "black") {
+                                 stats.global_fusion[tpIdx]++;
+                                 stats.region_fusion[r][tpIdx]++;
+                             }
+                         }
+                     }
+                 }
+            });
+        }
+        buildStats(); // Initial build
+
+        let isGlobalMode = true;
+        const modeBtn = document.getElementById('mode-toggle-btn');
+        
+        modeBtn.addEventListener('click', () => {
+            isGlobalMode = !isGlobalMode;
+            modeBtn.innerText = isGlobalMode ? "View by Region" : "View Global";
+            renderStatsChart();
+        });
+
+        function renderStatsChart() {
+            const traces = [];
+            const step = (stats.t.length > 1) ? (stats.t[1] - stats.t[0]) : 1;
+            const offset = step * 0.15;
+            const bw = step * 0.3;
+            
+            if (isGlobalMode) {
+                traces.push({
+                    x: stats.t, y: stats.global_counts,
+                    type: 'scatter', mode: 'lines', name: 'Total Cells',
+                    line: { color: '#2c3e50', width: 3 }, yaxis: 'y1'
+                });
+                
+                if (showMitosis) {
+                    const g_mit = stats.global_mitosis.map(v => v === 0 ? null : v);
+                    traces.push({
+                        x: stats.t, y: g_mit, type: 'bar', name: 'Mitosis',
+                        marker: { color: '#e74c3c' }, width: bw*2,
+                        hovertemplate: 'Mitosis: %{y}<extra></extra>', yaxis: 'y2'
+                    });
+                }
+                if (showFusion) {
+                    const g_fus = stats.global_fusion.map(v => v === 0 ? null : v);
+                    traces.push({
+                        x: stats.t, y: g_fus, type: 'bar', name: 'Fusion',
+                        marker: { color: '#000000' }, width: bw*2,
+                        hovertemplate: 'Fusion: %{y}<extra></extra>', yaxis: 'y2'
+                    });
+                }
+            } else {
+                const x_mit = stats.t.map(v => v - offset);
+                const x_fus = stats.t.map(v => v + offset);
+                
+                regions.forEach(r => {
+                    const c = regionColors[r];
+                    traces.push({
+                        x: stats.t, y: stats.region_counts[r],
+                        type: 'scatter', mode: 'lines', name: r + ' Cells',
+                        line: { color: c, width: 2 }, yaxis: 'y1', legendgroup: r
+                    });
+                    
+                    if (showMitosis) {
+                        const r_mit = stats.region_mitosis[r].map(v => v === 0 ? null : v);
+                        traces.push({
+                            x: x_mit, y: r_mit, type: 'bar', name: r + ' Mit.', legendgroup: r, showlegend: false,
+                            marker: { color: c, line: {color: '#e74c3c', width: 2} }, width: bw,
+                            hovertemplate: `<b>${r} Mitosis</b>: %{y}<extra></extra>`, yaxis: 'y2'
+                        });
+                    }
+                    if (showFusion) {
+                        const r_fus = stats.region_fusion[r].map(v => v === 0 ? null : v);
+                        traces.push({
+                            x: x_fus, y: r_fus, type: 'bar', name: r + ' Fus.', legendgroup: r, showlegend: false,
+                            marker: { color: c, line: {color: '#000000', width: 2} }, width: bw,
+                            hovertemplate: `<b>${r} Fusion</b>: %{y}<extra></extra>`, yaxis: 'y2'
+                        });
+                    }
+                });
+            }
+            
+            const layout = {
+                margin: { l: 40, r: 40, t: 10, b: 30 }, xaxis: { showgrid: false },
+                yaxis: { title: 'Cells', side: 'left', showgrid: true, gridcolor: '#f0f0f0', rangemode: 'tozero' },
+                yaxis2: { title: 'Events', side: 'right', overlaying: 'y', showgrid: false, rangemode: 'tozero', dtick: 1 },
+                barmode: 'stack', showlegend: true,
+                legend: { x: 0, y: 1.1, orientation: 'h', font: {size: 10} },
+                paper_bgcolor: 'transparent', plot_bgcolor: 'transparent'
+            };
+            
+            Plotly.newPlot('stats-graph', traces, layout, {displayModeBar: false});
+            updateTimepoint(currentTpIndex); // Draw playhead initially
+        }
+        
+        // Initial build
+        renderStatsChart();
+
+        // Start GPU loop
+        animate();
+        
+        } // End of initViewer Payload Function
+    </script>
+</body>
+</html>

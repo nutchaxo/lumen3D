@@ -427,18 +427,9 @@
                 </div>
               </div>
 
-              <!-- Section: Catalog -->
-              <div class="config-section">
-                <div class="config-section-title" data-i18n="admin.secCatalog">Catalogue</div>
-                <button class="adm-btn adm-btn-ghost" id="btn-rebuild-catalog"
-                        style="width:100%;justify-content:center;gap:8px" data-i18n="admin.regenCatalog">
-                  🔄 Régénérer catalog.json
-                </button>
-                <div id="rebuild-status" data-i18n="admin.catalogHint"
-                     style="font-size:11.5px;color:var(--adm-text-muted);text-align:center;margin-top:8px;line-height:1.4">
-                  Le catalogue est mis à jour après chaque sauvegarde.
-                </div>
-              </div>
+              <!-- The catalog used to be regenerated from here. It is now derived from
+                   the metadata.json files on every request (api/catalog.php), so there is
+                   nothing to regenerate and no state that can fall behind. -->
 
             </div><!-- /config-body -->
           </div><!-- /config-panel -->

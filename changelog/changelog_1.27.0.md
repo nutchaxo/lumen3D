@@ -19,5 +19,8 @@ Contre le serveur PHP réel, **`DATA_WEB/catalog.json` entièrement supprimé du
 * Le serveur Python sert toujours le même catalogue avec le fichier absent (16 entrées).
 * La branche d'enrichissement des noms de `admin.php` résout bien les 16 noms, dataset `live` compris.
 
-## [NOTE]
-Le bouton « 🔄 Régénérer catalog.json » du panneau d'admin est désormais sans objet sur un hôte PHP : il écrit un fichier que plus personne ne lit. Il est conservé pour l'instant (il reste utile au serveur Python et aux bundles d'export) mais peut être retiré.
+## [REMOVED]
+* **Le bouton « 🔄 Régénérer catalog.json » disparaît du panneau d'admin**, ainsi que la section « Catalogue » qui l'entourait. Il écrivait un fichier que plus personne ne lit — le garder aurait entretenu l'idée qu'une étape manuelle reste nécessaire, ce qui était précisément la source de confusion.
+* **La sauvegarde d'un dataset et la mise à jour d'une vignette ne déclenchent plus de reconstruction du catalogue.** Ces deux actions enchaînaient un `POST ?action=rebuild_catalog` et pouvaient afficher un avertissement « catalogue non régénéré » désormais dénué de sens. Une requête réseau de moins à chaque enregistrement.
+* Les 10 clés i18n devenues orphelines sont retirées des trois langues (parité vérifiée : 1378 clés, jeux identiques en `en`/`fr`/`es`).
+* L'endpoint `POST ?action=rebuild_catalog` est conservé : il écrit toujours un `catalog.json` sur disque, ce qui reste utile aux bundles d'export et à un hôte purement statique.

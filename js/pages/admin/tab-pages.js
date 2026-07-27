@@ -166,6 +166,9 @@ const PALETTE = [
   { type: 'tabs', icon: 'panels-top-left', def: 'Onglets', cat: 'lists' },
   { type: 'counter', icon: 'timer', def: 'Compteur animé', cat: 'content' },
   { type: 'video', icon: 'video', def: 'Vidéo', cat: 'content' },
+  { type: 'link-list', icon: 'list', def: 'Liste de liens', cat: 'lists' },
+  { type: 'spec-list', icon: 'table-2', def: 'Fiche d\'informations', cat: 'lists' },
+  { type: 'logo-strip', icon: 'building-2', def: 'Bandeau de logos', cat: 'content' },
 ];
 const PALETTE_CATS = [
   ['basics', 'Bases'],
@@ -199,8 +202,11 @@ function _newWidget(type) {
     case 'profile': return { id, type, props: { name: {}, role: {}, desc: {}, mediaKind: 'monogram', monogram: 'AB', img: '', icon: 'user', mediaBg: '', mediaColor: '', mediaSize: '', mediaRadius: '', roleColor: '', nameSize: '', layout: 'h', glowMedia: true } };
     case 'cite-block': return { id, type, props: { title: {}, text: {}, mono: true, copy: true, extraLabel: {}, extra: {} } };
     case 'tabs': return { id, type, props: { items: [{ label: {}, content: {} }, { label: {}, content: {} }], accent: '' } };
-    case 'counter': return { id, type, text: {}, props: { value: '100', prefix: '', suffix: '', size: '', color: '', align: 'center' } };
+    case 'counter': return { id, type, text: {}, props: { value: '100', source: 'custom', prefix: '', suffix: '', size: '', color: '', align: 'center' } };
     case 'video': return { id, type, text: {}, props: { src: '', poster: '', width: '', align: 'center', autoplay: false, loop: false } };
+    case 'link-list': return { id, type, props: { items: [{ icon: 'arrow-right', title: {}, desc: {}, href: '' }], dividers: true, arrow: true, iconColor: '', iconSize: '', titleSize: '', padY: '', lineColor: '' } };
+    case 'spec-list': return { id, type, props: { items: [{ label: {}, value: {}, href: '' }], labelWidth: '', dividers: true, mono: false, padY: '', labelColor: '', valueColor: '', lineColor: '' } };
+    case 'logo-strip': return { id, type, props: { items: [{ img: '', monogram: '', icon: '', label: {}, href: '' }], height: '', gap: '', align: 'center', plate: false, plateBg: '', grayscale: true, labels: true, monoBg: '', monoColor: '' } };
     default: return { id, type, props: {} };
   }
 }
@@ -257,15 +263,18 @@ function _sanitizeSections(list) {
   }));
 }
 
-// Starter layouts for the built-in pages (home/about) — their real default is
-// static HTML, so there are no blocks to load; this gives an editable start.
+// Starter layouts for the built-in pages (home/about) — nothing is published
+// for them yet, so this is what the editor opens on.
 //
-// The RICH template mirrors the actual landing/about page: it reuses the very
-// same localized strings (landing.* / about.*, with {specimen}/{brand} tokens
-// that PageRenderer interpolates) across every available locale, so opening the
-// editor shows content faithful to what visitors see (and publishing it makes
-// the live page render exactly that). Falls back to a minimal template if the
-// locale dictionaries aren't loaded yet.
+// Both mirror what a visitor actually sees:
+//   • about — IS the live default. js/core/page-templates.js holds the one
+//     document that about.html renders and this editor seeds, so the two can
+//     never drift (since v1.25.0 about.html has no static fallback markup).
+//   • home  — the landing is still static HTML, so the template rebuilds it
+//     from the very same landing.* strings ({specimen}/{brand} tokens included)
+//     across every available locale.
+// Falls back to a minimal template if the locale dictionaries aren't loaded yet
+// (home) or PageTemplates is missing (about).
 function _defaultTemplate(slug) {
   if (slug !== 'home' && slug !== 'about') return [];
   return _richTemplate(slug) || _minimalTemplate(slug);
@@ -281,18 +290,16 @@ function _tpl(key) {
   return Object.keys(out).length ? out : undefined;
 }
 
-// Merge two i18n keys into "**Label** Description" per locale (richtext mini-
-// markup bold) — used by the About template's "data provenance" line.
-function _tplBold(labelKey, descKey) {
-  const lab = _tpl(labelKey) || {};
-  const desc = _tpl(descKey) || {};
-  const codes = new Set([...Object.keys(lab), ...Object.keys(desc)]);
-  const out = {};
-  codes.forEach((c) => { out[c] = `**${lab[c] || lab.en || ''}** ${desc[c] || desc.en || ''}`; });
-  return Object.keys(out).length ? out : undefined;
-}
-
 function _richTemplate(slug) {
+  // "about" is the platform's built-in default page: it lives in
+  // js/core/page-templates.js so the live about.html and this editor seed the
+  // very same document (see that file's header). Its copy is embedded
+  // per-locale, so no dictionary preload is needed.
+  if (slug === 'about') {
+    if (typeof PageTemplates === 'undefined') return null;   // → minimal template
+    const secs = PageTemplates.build('about');
+    return secs.length ? _sanitizeSections(secs) : null;
+  }
   if (slug === 'home') {
     const hero = _tpl('landing.heroTitle');
     if (!hero) return null;   // dicts not loaded → caller uses the minimal template
@@ -325,112 +332,6 @@ function _richTemplate(slug) {
       { props: { fullWidth: false, padY: 40, maxWidth: 1080, gap: 24, vAlign: 'stretch', bg: '' }, columns: [{ width: 12, widgets: [
         { type: 'heading', text: _tpl('landing.featuredTitle'), props: { level: '2', align: 'center' } },
         { type: 'latest-datasets', props: { count: 3 } },
-      ] }] },
-    ]);
-  }
-  if (slug === 'about') {
-    const title = _tpl('about.title');
-    if (!title) return null;   // dicts not loaded → caller uses the minimal template
-    // Faithful 1:1 reproduction of about.html (SPEC §5.4) — instance-specific
-    // content (names, thesis, DOI, e-mails, address, citations) is hardcoded
-    // ({en:'…'}); every string with an i18n key uses _tpl so the editor mirrors
-    // the live page across every available locale.
-    // Fresh object per call — two columns must never share the same style
-    // reference (editing one column's padding would otherwise silently mutate
-    // the other's too).
-    const cardStyle = () => ({ bg: 'var(--bg-surface)', radius: 22, borderWidth: 1, borderColor: 'var(--border-subtle)', shadow: 'md', padTop: 32, padRight: 32, padBottom: 32, padLeft: 32, hover: 'lift' });
-    return _sanitizeSections([
-      // 1 — Hero (badge = subtitle eyebrow, transparent bg + radius 0 so it sits
-      // flush inside the surface section, exactly like .about-hero).
-      { props: { fullWidth: false, padY: 72, maxWidth: 1080, gap: 24, vAlign: 'stretch', bg: 'var(--bg-surface)' }, columns: [{ width: 12, widgets: [
-        { type: 'hero', text: title, props: {
-          badge: { text: _tpl('about.subtitle'), dot: true },
-          subtitle: _tpl('about.description'), align: 'left', glow: true, bg: '',
-          style: { radius: 0 },
-        } },
-      ] }] },
-      // 2 — Creator & scientific context, two card columns.
-      { props: { fullWidth: false, padY: 56, maxWidth: 1080, gap: 24, vAlign: 'stretch', bg: '' }, columns: [
-        { width: 6, props: { style: cardStyle() }, widgets: [
-          { type: 'profile', props: { name: { en: 'Morgan Climent' }, role: _tpl('about.creatorRole'), monogram: 'MC' } },
-          { type: 'richtext', text: _tpl('about.creatorDesc'), props: {} },
-          { type: 'richtext', text: _tpl('about.aiAssisted'), props: { style: { fontSize: 11, uppercase: true, letterSpacing: 1, color: 'var(--text-muted)' } } },
-          { type: 'badge', props: { items: [{ text: { en: 'Claude' } }, { text: { en: 'Gemini' } }, { text: { en: 'ChatGPT' } }], mono: true, dot: false } },
-          { type: 'button', text: _tpl('about.githubBtn'), props: { href: 'https://github.com/nutchaxo/lumen3D', icon: 'github', variant: 'accent' } },
-        ] },
-        { width: 6, props: { style: cardStyle() }, widgets: [
-          { type: 'heading', text: _tpl('about.contextTitle'), props: { level: '2', align: 'left' } },
-          { type: 'richtext', text: _tpl('about.contextDesc'), props: {} },
-          { type: 'quote', text: { en: 'Origin and flow-mediated remodeling of the murine and human extraembryonic circulation systems' }, props: {
-            label: _tpl('about.thesisLabel'),
-            author: { en: 'Kristof Van Schoor — IRIBHM, Université libre de Bruxelles' },
-            variant: 'bar',
-            link: { text: { en: 'Front. Physiol. 2024 · DOI 10.3389/fphys.2024.1395006' }, href: 'https://doi.org/10.3389/fphys.2024.1395006' },
-            style: { bg: 'color-mix(in srgb, var(--color-accent) 7%, var(--bg-base))', radius: 16, borderWidth: 1, borderColor: 'color-mix(in srgb, var(--color-accent) 28%, var(--border-subtle))', padTop: 20, padRight: 20, padBottom: 20, padLeft: 24 },
-          } },
-          { type: 'richtext', text: _tplBold('about.dataLabel', 'about.dataDesc'), props: { markup: true } },
-        ] },
-      ] },
-      // 3 — Institutions: heading + 3 logo/monogram cards.
-      { props: { fullWidth: false, padY: 56, maxWidth: 1080, gap: 24, vAlign: 'stretch', bg: 'var(--bg-surface)' }, columns: [{ width: 12, widgets: [
-        { type: 'heading', text: _tpl('about.institutionsTitle'), props: { level: '2', align: 'center' } },
-        { type: 'richtext', text: _tpl('about.institutionsDesc'), props: { align: 'center' } },
-      ] }] },
-      { props: { fullWidth: false, padY: 8, maxWidth: 1080, gap: 24, vAlign: 'stretch', bg: 'var(--bg-surface)' }, columns: [
-        { width: 4, widgets: [{ type: 'feature-card', text: { en: 'Université libre de Bruxelles' }, props: { media: 'image', img: 'assets/logos/ulb.svg', plateBg: '#FFFFFF', imgH: 74, align: 'center', href: 'https://www.ulb.be', style: { hover: 'lift' } } }] },
-        { width: 4, widgets: [{ type: 'feature-card', text: { en: 'IRIBHM — Jacques E. Dumont' }, props: { media: 'image', img: 'assets/logos/iribhm.webp', plateBg: '#FFFFFF', imgH: 60, align: 'center', href: 'https://www.iribhm.org/', style: { hover: 'lift' } } }] },
-        { width: 4, widgets: [{ type: 'feature-card', text: { en: 'Migeotte Lab — I. Migeotte (PI)' }, props: { media: 'monogram', monogram: 'IM', align: 'center', href: 'https://www.iribhm.org/research-labs/i-migeotte', style: { hover: 'lift' } } }] },
-      ] },
-      // 4 — Catalog stats.
-      { props: { fullWidth: false, padY: 56, maxWidth: 1080, gap: 24, vAlign: 'stretch', bg: '' }, columns: [{ width: 12, widgets: [
-        { type: 'heading', text: _tpl('about.statsTitle'), props: { level: '2', align: 'center' } },
-        { type: 'stat-grid', props: { cols: '', stats: [
-          { label: _tpl('landing.statsDatasets'), source: 'datasetCount', value: '' },
-          { label: _tpl('landing.statsEmbryos'), source: 'specimenCount', value: '' },
-          { label: _tpl('landing.statsCells'), source: 'cellCount', value: '' },
-          { label: _tpl('landing.statsRegions'), source: 'regionCount', value: '' },
-        ], borderColor: 'var(--border-subtle)', radius: 16, valueColor: 'linear-gradient(135deg, var(--color-primary) 0%, var(--color-accent) 100%)' } },
-      ] }] },
-      // 5 — Explore / quick access.
-      { props: { fullWidth: false, padY: 56, maxWidth: 1080, gap: 24, vAlign: 'stretch', bg: 'var(--bg-surface)' }, columns: [{ width: 12, widgets: [
-        { type: 'heading', text: _tpl('about.exploreTitle'), props: { level: '2', align: 'center' } },
-        { type: 'richtext', text: _tpl('about.exploreDesc'), props: { align: 'center' } },
-      ] }] },
-      { props: { fullWidth: false, padY: 8, maxWidth: 1080, gap: 24, vAlign: 'stretch', bg: 'var(--bg-surface)' }, columns: [
-        { width: 4, widgets: [{ type: 'feature-card', text: _tpl('about.linkExploreTitle'), props: { icon: 'layout-grid', desc: _tpl('about.linkExploreDesc'), link: { text: _tpl('about.open'), href: 'explorer.html' }, align: 'left', style: { hover: 'lift', radius: 18, borderWidth: 1, borderColor: 'var(--border-subtle)' } } }] },
-        { width: 4, widgets: [{ type: 'feature-card', text: _tpl('about.linkCompareTitle'), props: { icon: 'columns-2', desc: _tpl('about.linkCompareDesc'), link: { text: _tpl('about.open'), href: 'compare.html' }, align: 'left', style: { hover: 'lift', radius: 18, borderWidth: 1, borderColor: 'var(--border-subtle)' } } }] },
-        { width: 4, widgets: [{ type: 'feature-card', text: _tpl('about.linkDownloadTitle'), props: { icon: 'download', desc: _tpl('about.linkDownloadDesc'), link: { text: _tpl('about.open'), href: 'explorer.html' }, align: 'left', style: { hover: 'lift', radius: 18, borderWidth: 1, borderColor: 'var(--border-subtle)' } } }] },
-      ] },
-      // 6 — How to cite.
-      { props: { fullWidth: false, padY: 56, maxWidth: 1080, gap: 24, vAlign: 'stretch', bg: '' }, columns: [{ width: 12, widgets: [
-        { type: 'heading', text: _tpl('about.cite'), props: { level: '2', align: 'center' } },
-        { type: 'richtext', text: _tpl('about.citeIntro'), props: { align: 'center' } },
-      ] }] },
-      { props: { fullWidth: false, padY: 8, maxWidth: 1080, gap: 24, vAlign: 'stretch', bg: '' }, columns: [
-        { width: 6, widgets: [{ type: 'cite-block', props: {
-          title: _tpl('about.citePlatform'),
-          text: { en: 'Climent, M. (2026). Lumen3D — IRIBHM Microscopy Platform [Computer software]. Institut de Recherche Interdisciplinaire en Biologie humaine et moléculaire (IRIBHM), Université libre de Bruxelles. https://github.com/nutchaxo/lumen3D' },
-        } }] },
-        { width: 6, widgets: [{ type: 'cite-block', props: {
-          title: _tpl('about.citePublication'),
-          text: { en: 'Van Schoor, K., Bruet, E., Vincent Jones, E. A., & Migeotte, I. (2024). Origin and flow-mediated remodeling of the murine and human extraembryonic circulation systems. Frontiers in Physiology, 15, 1395006. https://doi.org/10.3389/fphys.2024.1395006' },
-          extraLabel: { en: 'BibTeX' },
-          extra: { en: '@article{vanschoor2024extraembryonic,\n  author  = {Van Schoor, Kristof and Bruet, Emmanuel and Vincent Jones, Elizabeth Anne and Migeotte, Isabelle},\n  title   = {Origin and flow-mediated remodeling of the murine and human extraembryonic circulation systems},\n  journal = {Frontiers in Physiology},\n  volume  = {15},\n  pages   = {1395006},\n  year    = {2024},\n  doi     = {10.3389/fphys.2024.1395006}\n}' },
-        } }] },
-      ] },
-      // 7 — Contact.
-      { props: { fullWidth: false, padY: 56, maxWidth: 1080, gap: 24, vAlign: 'stretch', bg: 'var(--bg-surface)' }, columns: [{ width: 12, widgets: [
-        { type: 'heading', text: _tpl('about.contact'), props: { level: '2', align: 'center' } },
-      ] }] },
-      { props: { fullWidth: false, padY: 8, maxWidth: 1080, gap: 24, vAlign: 'stretch', bg: 'var(--bg-surface)' }, columns: [{ width: 12, props: {
-        style: { bg: 'var(--bg-surface)', borderWidth: 1, borderColor: 'var(--border-subtle)', radius: 20, padTop: 24, padRight: 24, padBottom: 24, padLeft: 24, maxWidth: 640 },
-      }, widgets: [
-        { type: 'richtext', text: _tpl('about.contactDesc'), props: {} },
-        { type: 'icon-list', props: { items: [
-          { icon: 'user', text: { en: 'Isabelle Migeotte (PI) — isabelle.migeotte@ulb.be' }, href: 'mailto:isabelle.migeotte@ulb.be' },
-          { icon: 'building-2', text: { en: 'IRIBHM — iribhm@ulb.be' }, href: 'mailto:iribhm@ulb.be' },
-          { icon: 'map-pin', text: { en: 'Campus Erasme, Route de Lennik 808, 1070 Bruxelles, Belgique' }, href: '' },
-        ] } },
       ] }] },
     ]);
   }
@@ -483,6 +384,13 @@ function _selWidget() { if (!_sel || _sel.wi == null) return null; return _secti
 const ALIGN_OPTS = [['left', '', 'align-left'], ['center', '', 'align-center'], ['right', '', 'align-right']];
 function _alignField() { return { k: 'props.align', t: 'seg', l: t('pages.align', 'Alignement'), opts: ALIGN_OPTS }; }
 function _colsField(max) { return { k: 'props.cols', t: 'slider', l: t('pages.colsAuto', 'Colonnes (auto si vide)'), min: 1, max: max || 8, ph: 'auto', dv: 3 }; }
+// Live catalog figures — shared by stat-grid items and the counter widget
+// (PageRenderer.LIVE_STATS is the rendering-side twin of this list).
+const LIVE_SOURCES = ['datasetCount', 'specimenCount', 'cellCount', 'regionCount'];
+function _srcOpts() {
+  return [['datasetCount', t('pages.srcDatasets', 'Jeux de données')], ['specimenCount', t('pages.srcSpecimen', 'Spécimens')],
+    ['cellCount', t('pages.srcCells', 'Cellules')], ['regionCount', t('pages.srcRegions', 'Régions')], ['custom', t('pages.custom', 'Fixe')]];
+}
 
 function _contentGroups(type) {
   const content = t('pages.grp.content', 'Contenu');
@@ -536,8 +444,8 @@ function _contentGroups(type) {
       { k: 'props.zoom', t: 'check', l: t('pages.gal.zoom', 'Zoom au survol') },
     ] }];
     case 'stat-grid': {
-      const SRCOPTS = [['datasetCount', t('pages.srcDatasets', 'Jeux de données')], ['specimenCount', t('pages.srcSpecimen', 'Spécimens')], ['cellCount', t('pages.srcCells', 'Cellules')], ['regionCount', t('pages.srcRegions', 'Régions')], ['custom', t('pages.custom', 'Fixe')]];
-      const LIVE = ['datasetCount', 'specimenCount', 'cellCount', 'regionCount'];
+      const SRCOPTS = _srcOpts();
+      const LIVE = LIVE_SOURCES;
       return [{ title: t('pages.grp.items', 'Éléments'), icon: 'bar-chart-2', fields: [
         { k: 'props.stats', t: 'items', l: t('pages.stats', 'Statistiques'),
           item: [
@@ -654,7 +562,10 @@ function _contentGroups(type) {
         mk: () => ({ label: {}, content: {} }), addLabel: t('pages.tabs.add', 'Ajouter un onglet'),
         summary: (it, lv) => lv(it.label) }] }];
     case 'counter': return [{ title: content, icon: 'timer', fields: [
-      { k: 'props.value', t: 'text', l: t('pages.cnt.value', 'Valeur cible'), ph: '100' },
+      { k: 'props.source', t: 'select', l: t('pages.statSource', 'Source'), opts: _srcOpts(), refresh: true },
+      // Hidden (not just disabled) on a live source: top-level fields support
+      // showIf, only item sub-fields support dis.
+      { k: 'props.value', t: 'text', l: t('pages.cnt.value', 'Valeur cible'), ph: '100', showIf: (o) => !LIVE_SOURCES.includes((o.props || {}).source) },
       { k: 'props.prefix', t: 'text', l: t('pages.cnt.prefix', 'Préfixe'), ph: '' },
       { k: 'props.suffix', t: 'text', l: t('pages.cnt.suffix', 'Suffixe'), ph: '%, +, k…' },
       { k: 'text', t: 'ltext', l: t('pages.cnt.label', 'Libellé') },
@@ -662,6 +573,38 @@ function _contentGroups(type) {
     case 'video': return [{ title: content, icon: 'video', fields: [
       { k: 'props.src', t: 'text', l: t('pages.vid.src', 'Vidéo (fichier .mp4/.webm ou lien YouTube/Vimeo)') },
       { k: 'props.poster', t: 'media', l: t('pages.vid.poster', 'Image d\'aperçu (poster)') },
+    ] }];
+    case 'link-list': return [{ title: t('pages.grp.items', 'Éléments'), icon: 'list', fields: [
+      { k: 'props.items', t: 'items', l: t('pages.ll.items', 'Liens'),
+        item: [
+          { k: 'icon', t: 'icon', l: t('pages.iconName', 'Icône') },
+          { k: 'title', t: 'ltext', l: t('pages.heroTitle', 'Titre') },
+          { k: 'desc', t: 'ltext', l: t('pages.text', 'Texte') },
+          { k: 'href', t: 'text', l: t('pages.href', 'Lien') },
+        ],
+        mk: () => ({ icon: 'arrow-right', title: {}, desc: {}, href: '' }), addLabel: t('pages.ll.addItem', 'Ajouter un lien'),
+        summary: (it, lv) => lv(it.title) },
+    ] }];
+    case 'spec-list': return [{ title: t('pages.grp.items', 'Éléments'), icon: 'table-2', fields: [
+      { k: 'props.items', t: 'items', l: t('pages.sl.items', 'Informations'),
+        item: [
+          { k: 'label', t: 'ltext', l: t('pages.sl.label', 'Intitulé') },
+          { k: 'value', t: 'ltext', l: t('pages.sl.value', 'Valeur') },
+          { k: 'href', t: 'text', l: t('pages.linkOpt', 'Lien (option.)') },
+        ],
+        mk: () => ({ label: {}, value: {}, href: '' }), addLabel: t('pages.sl.addItem', 'Ajouter une ligne'),
+        summary: (it, lv) => lv(it.label) },
+    ] }];
+    case 'logo-strip': return [{ title: t('pages.grp.items', 'Éléments'), icon: 'building-2', fields: [
+      { k: 'props.items', t: 'items', l: t('pages.lg.items', 'Logos'),
+        item: [
+          { k: 'img', t: 'media', l: t('pages.image', 'Image') },
+          { k: 'monogram', t: 'text', l: t('pages.lg.monogram', 'Monogramme (si pas d\'image)') },
+          { k: 'label', t: 'ltext', l: t('pages.label', 'Libellé') },
+          { k: 'href', t: 'text', l: t('pages.href', 'Lien') },
+        ],
+        mk: () => ({ img: '', monogram: '', icon: '', label: {}, href: '' }), addLabel: t('pages.lg.addItem', 'Ajouter un logo'),
+        summary: (it, lv) => lv(it.label) || (it.img || '').split('/').pop() },
     ] }];
     default: return [];
   }
@@ -857,6 +800,38 @@ function _styleGroupsSpecific(type) {
         { k: 'props.width', t: 'slider', l: t('pages.width', 'Largeur'), min: 120, max: 1600, step: 10, ph: 'auto', dv: 640 },
         { k: 'props.autoplay', t: 'check', l: t('pages.vid.autoplay', 'Lecture auto (muet, fichier local)') },
         { k: 'props.loop', t: 'check', l: t('pages.vid.loop', 'Boucle') },
+        align,
+      ] }];
+    case 'link-list':
+      return [{ title: t('pages.grp.layout', 'Mise en page'), icon: 'layout-grid', fields: [
+        { k: 'props.dividers', t: 'check', l: t('pages.ll.dividers', 'Filets de séparation') },
+        { k: 'props.arrow', t: 'check', l: t('pages.ll.arrow', 'Flèche à droite') },
+        { k: 'props.padY', t: 'slider', l: t('pages.ll.padY', 'Hauteur des lignes'), min: 0, max: 60, ph: 'auto', dv: 20 },
+        { k: 'props.titleSize', t: 'slider', l: t('pages.fc.titleSize', 'Taille du titre'), min: 10, max: 48, ph: 'auto', dv: 17 },
+        { k: 'props.iconSize', t: 'slider', l: t('pages.il.iconSize', 'Taille des icônes'), min: 10, max: 60, ph: 'auto', dv: 20 },
+        { k: 'props.iconColor', t: 'color', l: t('pages.il.iconColor', 'Couleur des icônes') },
+        { k: 'props.lineColor', t: 'color', l: t('pages.lineColor', 'Couleur des filets') },
+      ] }];
+    case 'spec-list':
+      return [{ title: t('pages.grp.layout', 'Mise en page'), icon: 'layout-grid', fields: [
+        { k: 'props.labelWidth', t: 'slider', l: t('pages.sl.labelWidth', 'Largeur des intitulés'), min: 60, max: 360, step: 10, ph: 'auto', dv: 150 },
+        { k: 'props.padY', t: 'slider', l: t('pages.ll.padY', 'Hauteur des lignes'), min: 0, max: 44, ph: 'auto', dv: 13 },
+        { k: 'props.dividers', t: 'check', l: t('pages.ll.dividers', 'Filets de séparation') },
+        { k: 'props.mono', t: 'check', l: t('pages.bd.mono', 'Police mono') },
+        { k: 'props.labelColor', t: 'color', l: t('pages.sl.labelColor', 'Couleur des intitulés') },
+        { k: 'props.valueColor', t: 'color', l: t('pages.sl.valueColor', 'Couleur des valeurs') },
+        { k: 'props.lineColor', t: 'color', l: t('pages.lineColor', 'Couleur des filets') },
+      ] }];
+    case 'logo-strip':
+      return [{ title: t('pages.grp.layout', 'Mise en page'), icon: 'layout-grid', fields: [
+        { k: 'props.height', t: 'slider', l: t('pages.lg.height', 'Hauteur des logos'), min: 16, max: 160, ph: 'auto', dv: 46 },
+        { k: 'props.gap', t: 'slider', l: t('pages.hgap', 'Espacement'), min: 0, max: 140, ph: 'auto', dv: 44 },
+        { k: 'props.labels', t: 'check', l: t('pages.lg.labels', 'Afficher les libellés') },
+        { k: 'props.grayscale', t: 'check', l: t('pages.lg.grayscale', 'Désaturer (couleur au survol)') },
+        { k: 'props.plate', t: 'check', l: t('pages.lg.plate', 'Plaque claire derrière les logos'), refresh: true },
+        { k: 'props.plateBg', t: 'color', grad: true, l: t('pages.fc.plateBg', 'Fond de plaque'), showIf: (o) => !!(o.props || {}).plate },
+        { k: 'props.monoBg', t: 'color', grad: true, l: t('pages.fc.monoBg', 'Fond du monogramme') },
+        { k: 'props.monoColor', t: 'color', l: t('pages.fc.monoColor', 'Couleur du monogramme') },
         align,
       ] }];
     default:

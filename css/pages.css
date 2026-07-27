@@ -25,6 +25,18 @@
   outline-offset: 2px;
 }
 
+/* link-list rows (v1.25.0): the affordance is typographic — the title takes the
+   accent and the arrow slides — so the row never shifts the page layout. */
+.pr-linkrow-t { transition: color .18s ease; }
+.pr-linkrow-a { transition: transform .18s ease, opacity .18s ease; }
+.pr-linkrow:hover .pr-linkrow-t, .pr-linkrow:focus-visible .pr-linkrow-t { color: var(--color-primary, #00A654); }
+.pr-linkrow:hover .pr-linkrow-a, .pr-linkrow:focus-visible .pr-linkrow-a { transform: translateX(5px); opacity: 1; }
+.pr-linkrow:focus-visible { outline: 2px solid var(--color-primary, #00A654); outline-offset: 2px; }
+
+/* logo-strip: desaturated partner logos that colorise on hover (props.grayscale) */
+.pr-logo-mono { filter: grayscale(1); opacity: .72; transition: filter .25s ease, opacity .25s ease; }
+a:hover > .pr-logo-mono, a:focus-visible > .pr-logo-mono { filter: none; opacity: 1; }
+
 /* gallery zoom-on-hover (widget props.zoom) */
 .pr-hov-parent .pr-gal-img { transition: transform .35s ease; }
 .pr-hov-parent:hover .pr-gal-img, .pr-hov-parent:focus-visible .pr-gal-img { transform: scale(1.06); }

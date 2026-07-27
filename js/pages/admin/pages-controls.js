@@ -12,6 +12,7 @@
  *   check                         toggle switch
  *   seg                           segmented buttons, opts: [[value, label, icon?]];
  *                                 refresh:true re-runs ctx.refresh() after commit
+ *                                 (seg / select / check)
  *   slider                        range + fine number twin (min, max, step,
  *                                 unit, dv = visual default; ph ⇒ clearable "auto")
  *   color                         rich picker: theme tokens + Récents + palette +
@@ -279,7 +280,9 @@ function ctlCheck(obj, f, ctx) {
   inp.checked = !!pathGet(obj, f.k);
   sw.appendChild(inp);
   sw.appendChild(mk('span', 'pbc-switch-knob'));
-  inp.addEventListener('change', () => { pathPut(obj, f.k, inp.checked); ctx.onChange(); });
+  // refresh:true lets a toggle reveal/hide dependent fields (showIf) in the same
+  // group — ctlSeg/ctlSelect already did; ctlCheck was the missing one.
+  inp.addEventListener('change', () => { pathPut(obj, f.k, inp.checked); ctx.onChange(); if (f.refresh && ctx.refresh) ctx.refresh(); });
   w.appendChild(sw);
   return w;
 }

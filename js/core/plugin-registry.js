@@ -58,6 +58,20 @@ const PluginRegistry = (() => {
   // as before, so static/PHP hosts are unaffected (no v0.12.45-class regression).
   const _discoveredMeta = new Map();
 
+  // Trust vouches, kept SEPARATE from the metadata above and populated ONLY from an
+  // authoritative discovery endpoint (/api/plugins, api/plugins.php) — never from a
+  // static manifest and never from a plugin's own plugin.json.
+  //
+  // This separation is the security boundary. The vouch (tier/hash/mode/caps) is the
+  // server's verdict on whether a plugin may run in-page; a plugin.json is a file the
+  // plugin AUTHOR controls. Merging the two let a plugin approved as "sandboxed" grant
+  // itself `dev` tier: by omitting name/subtype/i18n it failed _isRichMeta(), which
+  // pushed loadModules() into fetching its own plugin.json — whose `trust` field was
+  // then read as if the server had said it. A vouch absent from this map means "no
+  // trust authority on this host", which PluginTrust already handles correctly (only
+  // release-manifest-verified `bundled` plugins may run).
+  const _discoveredVouch = new Map();
+
   // Quarantine ledger: every plugin rejected before/at load or failing init lands
   // here with an actionable reason, instead of silently vanishing from the UI.
   // Surfaced to the admin panel (and the console) via getQuarantined().
@@ -89,7 +103,7 @@ const PluginRegistry = (() => {
    * served statically, or wrong shape) so the caller can fall through. As a side
    * effect, captures any rich inline metadata into _discoveredMeta (see above).
    */
-  async function _fetchPluginList(url) {
+  async function _fetchPluginList(url, authoritative) {
     try {
       const resp = await fetch(url, { cache: 'no-store' });
       if (!resp.ok) return null;
@@ -102,7 +116,12 @@ const PluginRegistry = (() => {
       // Capture rich inline meta as a side effect (no array allocation here).
       for (const p of plugins) {
         const mp = typeof p === 'string' ? p : p?.path;
-        if (typeof mp === 'string' && mp.includes('/') && _isRichMeta(p)) _discoveredMeta.set(mp, p);
+        if (typeof mp !== 'string' || !mp.includes('/')) continue;
+        if (_isRichMeta(p)) _discoveredMeta.set(mp, p);
+        // The vouch is captured for EVERY entry, independently of _isRichMeta — a
+        // plugin must not be able to opt out of the trust channel by shipping a
+        // deliberately sparse plugin.json — and only from an authoritative source.
+        if (authoritative && p && typeof p === 'object' && p.trust) _discoveredVouch.set(mp, p.trust);
       }
       const paths = plugins
         .map(p => (typeof p === 'string' ? p : p?.path))
@@ -125,10 +144,18 @@ const PluginRegistry = (() => {
    */
   async function discover(basePath = 'js/modules') {
     _discoveredMeta.clear(); // drop any inline meta from a previous discover()
+    _discoveredVouch.clear();
     _quarantined.clear();
-    const candidates = ['api/plugins', 'api/plugins.php', `${basePath}/manifest.json`];
-    for (const url of candidates) {
-      const paths = await _fetchPluginList(url);
+    // `authoritative` marks the sources that speak for the SERVER's trust store. The
+    // static manifest is a generated file sitting in the web root — it can carry the
+    // plugin list, never the trust verdict.
+    const candidates = [
+      { url: 'api/plugins', authoritative: true },
+      { url: 'api/plugins.php', authoritative: true },
+      { url: `${basePath}/manifest.json`, authoritative: false },
+    ];
+    for (const { url, authoritative } of candidates) {
+      const paths = await _fetchPluginList(url, authoritative);
       if (paths) {
         console.log(`[PluginRegistry] Discovered ${paths.length} plugins via ${url}`);
         return paths;
@@ -184,6 +211,10 @@ const PluginRegistry = (() => {
             return;
           }
         }
+        // Whatever route the metadata arrived by, a `trust` field carried INSIDE it is
+        // plugin-authored data, not a server verdict. Drop it so nothing downstream can
+        // mistake the two; the real vouch is read from _discoveredVouch below.
+        if (meta && typeof meta === 'object' && 'trust' in meta) delete meta.trust;
 
         // Hard meta validation BEFORE anything executes or gets keyed: an id-less
         // or mis-labelled plugin.json must never register (Map key `undefined`
@@ -219,13 +250,15 @@ const PluginRegistry = (() => {
         meta._modPath = modPath;
 
         // ── Trust gate (Phase 2) — untrusted code must NOT run in-page ──────────
-        // The server vouches a tier + hash in meta.trust; PluginTrust re-hashes the
-        // EXACT bytes it will execute (anti-TOCTOU, INV-2) and returns the tier.
+        // The vouch (tier + hash) comes from _discoveredVouch — the authoritative
+        // discovery endpoint ONLY, never from the plugin's own plugin.json.
+        // PluginTrust re-hashes the EXACT bytes it will execute (anti-TOCTOU, INV-2).
         //   untrusted → never injected (quarantined for operator approval);
         //   sandboxed → runs in a null-origin iframe via PluginSandbox (no ctx/DOM);
         //   bundled/dev/approved-trusted → executed IN-PAGE from the hashed bytes.
         if (typeof PluginTrust !== 'undefined') {
-          const verdict = await PluginTrust.evaluate(meta, basePath, modPath, releaseManifest);
+          const vouch = _discoveredVouch.get(modPath) || null;
+          const verdict = await PluginTrust.evaluate(meta, vouch, basePath, modPath, releaseManifest);
           if (verdict.tier === 'untrusted') {
             _quarantine(modPath, 'untrusted', verdict.reason);
             return;

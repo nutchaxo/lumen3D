@@ -29,8 +29,9 @@ require_once __DIR__ . '/_admin_lib.php';  // admin_check_csrf, admin_record_eve
 
 // ── Session / Auth ───────────────────────────────────────────────────────────
 if (!LUMEN_DATASETS_AS_LIB) {
-    session_name('iribhm_admin');
-    session_start();
+    // admin_session_start() (not a bare session_start) so the hardened cookie
+    // params — HttpOnly, SameSite=Lax, Secure under HTTPS — apply here too.
+    admin_session_start();
 }
 
 function require_auth(): void {
@@ -287,10 +288,27 @@ $method = $_SERVER['REQUEST_METHOD'];
 $action = $_GET['action'] ?? '';
 $id     = trim($_GET['id'] ?? '', '/');
 
-// All write operations require auth + a valid CSRF token (mirrors dev_server.py)
-if ($method === 'POST') {
-    require_auth();
-    if (!admin_check_csrf()) json_out(['error' => 'Invalid or missing CSRF token'], 403);
+// Every action on this endpoint is admin-only — including the reads. `list`
+// enumerates HIDDEN datasets (list_datasets() reports them with their folder
+// names; only the public catalog filters them out) and `get` returns a raw
+// metadata.json. Mirrors dev_server.py, which gates the whole handler.
+require_auth();
+
+// CSRF is bound to the ACTION, never to the HTTP method. Gating on
+// `$method === 'POST'` meant a state-changing action reached as a top-level GET
+// skipped the token entirely, so a logged-in admin following a link could be made
+// to flip a dataset public (`?action=set_visibility&id=…` with an empty body).
+// admin_require_write() enforces POST *and* the token together.
+const DATASET_WRITE_ACTIONS = ['save', 'save_thumbnail', 'rebuild_catalog', 'set_visibility'];
+if (in_array($action, DATASET_WRITE_ACTIONS, true)) {
+    admin_require_write();   // POST + X-CSRF-Token; exits on failure
+}
+
+// One traversal gate for every action that takes an id, applied BEFORE any path
+// is built from it. `get` used to hand $id straight to dataset_dir(), which only
+// string-substitutes separators — `?id=../../../../api` walked out of DATA_WEB.
+if ($id !== '' && admin_safe_dataset($id) === null) {
+    json_out(['error' => 'Invalid id'], 400);
 }
 
 switch ($action) {

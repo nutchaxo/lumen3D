@@ -22,8 +22,14 @@ admin_update_finish_pending();   // no-op unless a prior update parked busy file
 header('X-Content-Type-Options: nosniff');
 admin_session_start();
 
-// ── Brute-force lockout (per server, file-based; mirrors the Python budget) ──
-$LOCKOUT_FILE = sys_get_temp_dir() . '/iribhm_admin_lockout_' . md5(__DIR__) . '.json';
+// ── Brute-force lockout (per CLIENT IP, file-based; mirrors the Python budget) ──
+// The counter used to be a single per-installation file, which made it a denial-of-
+// service lever rather than a defence: ten failed attempts from anyone locked the
+// operator (and `action=setup`) out for 15 minutes, indefinitely renewable. Keying
+// it on the client address confines a lockout to the address that earned it — the
+// same shape as dev_server.py's per-IP budget.
+$LOCKOUT_FILE = sys_get_temp_dir() . '/iribhm_admin_lockout_'
+              . md5(__DIR__ . '|' . ($_SERVER['REMOTE_ADDR'] ?? 'unknown')) . '.json';
 $MAX_ATTEMPTS = 10;
 $LOCKOUT_SECS = 900;
 function bf_load(): array { global $LOCKOUT_FILE; $raw = @file_get_contents($LOCKOUT_FILE); $d = $raw !== false ? json_decode($raw, true) : null; return is_array($d) ? $d : ['attempts' => 0, 'until' => 0]; }
@@ -46,6 +52,9 @@ switch ($action) {
         ]);
 
     case 'login':
+        // POST-only: a credential must never travel in a URL (proxy/access logs,
+        // Referer), and a GET could otherwise burn lockout budget with no body.
+        if ($method !== 'POST') admin_json_out(['error' => 'Method not allowed (use POST)'], 405);
         if (bf_locked()) admin_json_out(['error' => 'Trop de tentatives. Réessayez plus tard.'], 429);
         $u = trim($body['username'] ?? '');
         $p = $body['password'] ?? '';

@@ -1440,10 +1440,25 @@ const PageRenderer = (() => {
 
   // Fetch a page doc's published (or draft) SOURCE object ({sections} or {blocks}).
   async function fetchSource(slug, useDraft) {
+    // Drafts are NOT in the public config/ tree any more — they live under api/,
+    // behind the admin session. Ask the API for them; an anonymous visitor gets a
+    // published-only doc back and simply renders the published content.
+    if (useDraft) {
+      try {
+        const resp = await fetch(`api/site.php?action=get&doc=pages/${encodeURIComponent(slug)}`,
+                                 { cache: 'no-store', credentials: 'same-origin' });
+        if (resp.ok) {
+          const doc = await resp.json();
+          const src = (doc && doc.draft) || (doc && doc.published) || {};
+          if (src && typeof src === 'object') return src;
+        }
+      } catch (_) { /* fall through to the static published doc */ }
+    }
     try {
       const resp = await fetch(`./config/pages/${encodeURIComponent(slug)}.json`, { cache: 'no-store' });
       if (!resp.ok) return { sections: [] };
       const doc = await resp.json();
+      // `doc.draft` remains reachable here only for legacy pre-split documents.
       const src = (useDraft && doc && doc.draft) ? doc.draft : (doc && doc.published) || {};
       return src && typeof src === 'object' ? src : { sections: [] };
     } catch (_) { return { sections: [] }; }

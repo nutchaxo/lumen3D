@@ -42,7 +42,23 @@ function site_doc_path(string $doc): ?array {
     return null;
 }
 
-/** Read a doc: active → default → empty. false on invalid doc name. */
+/** Where a page's UNPUBLISHED draft lives — deliberately OUTSIDE the public config/
+ *  tree. config/pages/<slug>.json is served statically to every visitor, so a draft
+ *  block stored inline was world-readable: the editor autosaves roughly every second,
+ *  so polling that URL let anyone watch the operator write. api/ is denied by
+ *  api/.htaccess, router.php and the Python static filter alike. Null for docs that
+ *  have no draft concept (instance/theme/legal) or an unsafe slug. */
+function site_draft_path(string $doc): ?string {
+    $doc = trim($doc);
+    if (strncmp($doc, 'pages/', 6) !== 0) return null;
+    $slug = substr($doc, 6);
+    if (!preg_match('/^[a-z0-9][a-z0-9_-]{0,63}$/', $slug)) return null;
+    return __DIR__ . '/page-drafts/' . $slug . '.json';
+}
+
+/** Read a doc: active → default → empty. false on invalid doc name.
+ *  The result may still carry a legacy inline `draft` (pre-split documents); use
+ *  site_load_public() or site_load_admin() rather than calling this directly. */
 function site_load_doc(string $doc) {
     $res = site_doc_path($doc);
     if ($res === null) return false;
@@ -53,6 +69,47 @@ function site_load_doc(string $doc) {
         }
     }
     return [];
+}
+
+/** The doc as any visitor may see it: published content only, never the draft. */
+function site_load_public(string $doc) {
+    $data = site_load_doc($doc);
+    if ($data === false) return false;
+    unset($data['draft']);
+    return $data;
+}
+
+/** The doc as the operator sees it: published content + the private draft. */
+function site_load_admin(string $doc) {
+    $data = site_load_doc($doc);
+    if ($data === false) return false;
+    $draft = null;
+    $p = site_draft_path($doc);
+    if ($p !== null && is_file($p)) {
+        $d = json_decode((string)@file_get_contents($p), true);
+        if (is_array($d)) $draft = $d;
+    }
+    // Back-compat: documents written before the split kept the draft inline. Keep
+    // serving it so no work is lost — the next save relocates it — but it must never
+    // stay in a payload that could reach a non-admin.
+    if ($draft === null && isset($data['draft']) && is_array($data['draft'])) $draft = $data['draft'];
+    unset($data['draft']);
+    if ($draft !== null) $data['draft'] = $draft;
+    return $data;
+}
+
+/** Atomic write of a PRIVATE doc under api/ (0600, never web-readable). */
+function site_write_private(string $path, array $data): bool {
+    $dir = dirname($path);
+    if (!is_dir($dir)) admin_make_dir($dir);
+    $tmp = tempnam($dir, '.tmp-');
+    if ($tmp === false) return false;
+    if (@file_put_contents($tmp, json_encode($data, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT)) === false) {
+        @unlink($tmp); return false;
+    }
+    if (!@rename($tmp, $path)) { @unlink($tmp); return false; }
+    @chmod($path, 0600);
+    return true;
 }
 
 /** Atomic write of a PUBLIC config doc (0644, not 0600). */
@@ -134,6 +191,17 @@ function site_validate_page(array &$data): ?string {
 function site_save_doc(string $doc, $data): bool {
     $res = site_doc_path($doc);
     if ($res === null || !is_array($data)) return false;
+    // Split the draft out before ANYTHING reaches the public config/ tree.
+    $draftPath = site_draft_path($doc);
+    if ($draftPath !== null) {
+        $draft = (isset($data['draft']) && is_array($data['draft'])) ? $data['draft'] : null;
+        unset($data['draft']);
+        if ($draft === null) {
+            if (is_file($draftPath)) @unlink($draftPath);
+        } elseif (!site_write_private($draftPath, $draft)) {
+            return false;   // never publish the public half if the draft could not be kept
+        }
+    }
     if (!site_write_public($res[0], $data)) return false;
     if ($doc === 'theme') {
         $css = site_generate_theme_css($data);
@@ -165,11 +233,14 @@ function site_delete_doc(string $doc): bool {
     if ($res === null) return false;
     $active = $res[0];
     if (is_file($active) && !@unlink($active)) return false;
+    // The private draft is part of the page: deleting the page must not orphan it.
+    $draftPath = site_draft_path($doc);
+    if ($draftPath !== null && is_file($draftPath)) @unlink($draftPath);
     return true;
 }
 
 function site_publish_doc(string $doc): bool {
-    $data = site_load_doc($doc);
+    $data = site_load_admin($doc);   // needs the private draft to promote it
     if ($data === false) return false;
     if (is_array($data) && array_key_exists('draft', $data)) {
         $data['published'] = $data['draft'];
@@ -179,8 +250,10 @@ function site_publish_doc(string $doc): bool {
 }
 
 // ── Public read ───────────────────────────────────────────────────────────────
+// Only the operator gets the draft back; everyone else sees published content.
 if ($action === 'get') {
-    $data = site_load_doc($_GET['doc'] ?? '');
+    $doc  = $_GET['doc'] ?? '';
+    $data = admin_is_auth() ? site_load_admin($doc) : site_load_public($doc);
     if ($data === false) admin_json_out(['error' => 'Invalid doc'], 400);
     admin_json_out(is_array($data) ? $data : []);
 }

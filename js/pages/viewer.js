@@ -272,9 +272,7 @@ const ViewerApp = (() => {
           // each tick re-entered the loader and bumped _activeLoadToken, cancelling the
           // load that was still in flight — during playback a timepoint could never
           // finish loading at all.
-          const frame = Math.round(state.frame);
-          if (frame === _currentTimepoint) return;
-          _loadTimepoint(basePath, frame).catch(_showLoadingError);
+          _requestTimepoint(basePath, Math.round(state.frame));
         });
         // Load first frame
         volumeP = _loadTimepoint(basePath, 0);
@@ -1990,6 +1988,34 @@ const ViewerApp = (() => {
 
   const _tpSeen = new Set();
   let _tpLoadStart = 0;
+  let _tpInFlight = false;
+  let _tpPending = null;
+
+  /** Serialise timepoint loads, keeping only the LATEST request while one is running.
+   *
+   *  Playback asks for a new frame roughly every 100 ms; at full resolution a frame
+   *  costs more than that to fetch, decode and upload. Firing each request immediately
+   *  meant every frame cancelled the one still in flight, so nothing ever finished and
+   *  the console filled with AbortError. Following the loader's own pace plays slower
+   *  than requested but actually shows frames, and intermediate frames are dropped
+   *  rather than queued so playback never falls behind the scrubber. */
+  function _requestTimepoint(basePath, frame) {
+    if (!Number.isFinite(frame)) return;
+    if (_tpInFlight) {
+      _tpPending = (frame === _currentTimepoint) ? null : frame;
+      return;
+    }
+    if (frame === _currentTimepoint) return;
+    _tpInFlight = true;
+    _loadTimepoint(basePath, frame)
+      .catch(_showLoadingError)
+      .finally(() => {
+        _tpInFlight = false;
+        const next = _tpPending;
+        _tpPending = null;
+        if (next !== null) _requestTimepoint(basePath, next);
+      });
+  }
 
   async function _loadTimepoint(basePath, t, opts = {}) {
     _tpLoadStart = performance.now?.() || Date.now();

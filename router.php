@@ -24,6 +24,15 @@ if (preg_match('#^/api/[^/]+\.json$#i', $path)
     return true;
 }
 
+// The dataset catalog is derived from every DATA_WEB/<type>/<name>/metadata.json.
+// Mirrors the .htaccess rewrite so a dataset dropped in by SFTP shows up without a
+// manual "Régénérer catalog.json" — api/catalog.php rebuilds only when a metadata.json
+// is newer than the cached file.
+if ($path === '/DATA_WEB/catalog.json') {
+    require __DIR__ . '/api/catalog.php';
+    return true;
+}
+
 // HTML documents: inject a per-request CSP nonce + emit the enforcing nonce-CSP
 // (same policy as dev_server.py). Without this, `php -S` would serve the raw
 // {{CSP_NONCE}} placeholder with no CSP header, leaving the trust gate cosmetic.

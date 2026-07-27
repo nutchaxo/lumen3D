@@ -11,6 +11,13 @@
     # Every *.html document → _serve.php. Real files that are not .html (assets,
     # api/*.php) never match, so they are served directly by Apache.
     RewriteRule ^(.+)\.html$ _serve.php [L,QSA]
+    # The dataset catalog is DERIVED from every DATA_WEB/<type>/<name>/metadata.json.
+    # Routing it through PHP lets a dataset dropped in by SFTP appear without anyone
+    # clicking "Régénérer catalog.json" — the Python server already rebuilds it on GET.
+    # api/catalog.php only regenerates when a metadata.json is newer than the cached
+    # file. Without mod_rewrite this rule is absent and Apache serves the static
+    # catalog.json directly: stale, exactly as before, never worse.
+    RewriteRule ^DATA_WEB/catalog\.json$ api/catalog.php [L,QSA]
 </IfModule>
 
 # Never serve the PHP entry/handler sources as text (only execute them).

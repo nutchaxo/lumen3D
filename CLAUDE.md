@@ -83,7 +83,7 @@ Loaded as classic `<script>` (no ESM), each exposes a global IIFE.
 
 | Module | Role |
 |---|---|
-| [catalog.js](js/core/catalog.js) | Loads `DATA_WEB/catalog.json`, exposes `Catalog.getById`, `list`, filters |
+| [catalog.js](js/core/catalog.js) | Fetches `DATA_WEB/catalog.json`, exposes `Catalog.getById`, `list`, filters. **That URL is not a file** — it is generated per request by scanning `DATA_WEB/<type>/<name>/metadata.json` ([api/catalog.php](api/catalog.php) on PHP via an `.htaccess`/`router.php` rewrite, `dev_server.py:_build_catalog` on Python). The catalog holds no information of its own, so a dataset dropped in by SFTP appears immediately; there is nothing to regenerate. |
 | [theme.js](js/core/theme.js) | Theme toggle + `data-theme` attribute, `Theme.onChange` listener |
 | [i18n.js](js/core/i18n.js) | Loads `lang/{en,fr,es}.json`, exposes `I18n.t(key)`. Languages are **discovered dynamically** (`GET /api/languages` → `lang/manifest.json` → embedded default); plugin dictionaries (`js/modules/.../lang/<code>.json`) merge under `plugins.<id>` so per-plugin English fallback is automatic. `I18n.forPlugin(id)`→`ctx.i18n`; `getAvailableLanguages()` + `Utils.populateLanguageMenu()` drive the switcher. See [changelog_1.2.0.md](changelog/changelog_1.2.0.md). |
 | [utils.js](js/core/utils.js) | Date / stage formatting, math helpers |
@@ -214,7 +214,7 @@ Run end-to-end with [run_preprocess.py](preprocess/run_preprocess.py) — it orc
 | 2 | [2-image_processor.py](preprocess/2-image_processor.py) | Per-channel `.bin` LOD pyramids — corner-sampling percentile background subtraction (`bg_floor` = 99th percentile of the 8 volume corners, `sig_max` = 99.9th percentile of a subsampled volume; `binary_opening` + `binary_dilation` mask cleanup kills hot pixels while preserving signal fade-out — Otsu was tried and deliberately removed in v0.12.0, see `preprocess/changelog/changelog_0.12.0.md`), masked median filtering, window leveling, downscale, `uint16 → uint8`. **Heavy CPU step.** |
 | — | (inline) `build_thumbnail` in `run_preprocess.py` | `thumbnail.webp` — false-color MIP composite |
 | 3 | [3-chunk_packer.py](preprocess/3-chunk_packer.py) | `bricks/lodN/...` — splits to 64³ chunks, mosaics into 512² WebP tiles (8×8, `brickPacking.mode = "grid"`), packs into `.bin` packs + `manifest.json`. ESS (Empty Space Skipping) : drops bricks with occupancy < 0.0005. |
-| 4 | [4-catalog_generator.py](preprocess/4-catalog_generator.py) | `metadata.json` per dataset — pushed into root `DATA_WEB/catalog.json` |
+| 4 | [4-catalog_generator.py](preprocess/4-catalog_generator.py) | `metadata.json` per dataset — the only place dataset facts are stored; the catalog is derived from it at request time |
 
 **Stage parsing convention** — embryo names like `Egfl7eGFP-E8-5-…` encode stage `E8.5` (regex in `4-catalog_generator.py:_parse_stage`) and embryo id `Em<n>`.
 
@@ -224,7 +224,7 @@ Run end-to-end with [run_preprocess.py](preprocess/run_preprocess.py) — it orc
 
 ```
 DATA_WEB/
-├── catalog.json                # Aggregated dataset index (consumed by Catalog.load())
+│  (no catalog.json — the dataset index is GENERATED per request, see below)
 ├── fixed/<dataset>/            # Static volumes
 │   ├── metadata.json           # Per-dataset config: dims, voxels, channels, volumeSources
 │   ├── thumbnail.webp
@@ -308,6 +308,6 @@ DATA_WEB/
 * …re-introduce `// TODO` or mock data paths in the streaming pipeline (rule 1.1).
 * …allocate a `THREE.Texture` per brick — use `SVRManager` atlas slots.
 * …do CPU-heavy work on the main thread — push to a worker (see existing workers as templates).
-* …commit datasets in `DATA_WEB/fixed|live|tracking/` (large binary, gitignored — only `catalog.json` and `.gitkeep` are tracked).
+* …commit datasets in `DATA_WEB/fixed|live|tracking/` (large binary, gitignored — only `.gitkeep` is tracked; `catalog.json` is generated, not stored).
 * …skip the versioning + changelog routine after a substantive edit (rule 1.5).
 * …reorder `PluginRegistry.loadModules` to after UI build — channel/shader/tool lists will be empty (lesson from v0.12.45).

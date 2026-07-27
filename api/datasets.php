@@ -53,8 +53,10 @@ function read_json(string $path): ?array {
 
 function write_json(string $path, array $data): bool {
     $dir = dirname($path);
-    if (!is_dir($dir)) mkdir($dir, 0755, true);
-    return file_put_contents($path, json_encode($data, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE)) !== false;
+    if (!is_dir($dir)) admin_make_dir($dir);
+    if (file_put_contents($path, json_encode($data, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE)) === false) return false;
+    admin_fix_file_mode($path);
+    return true;
 }
 
 function dataset_id(string $type, string $name): string {

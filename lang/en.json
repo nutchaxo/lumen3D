@@ -788,7 +788,21 @@
     "pluginsGotoCatalog": "Open the catalog",
     "pluginsLoadError": "Could not load the plugin list.",
     "retry": "Retry",
-    "updateApplied": "Update applied (v{v}) — reloading…"
+    "updateApplied": "Update applied (v{v}) — reloading…",
+    "permsTitle": "File permissions",
+    "permsChecking": "Checking…",
+    "permsHelp": "When PHP runs as a different user than your FTP/SFTP account, what the platform creates does not belong to you: you can neither upload into those folders nor delete anything in them. This action re-applies permissions that give you back control.",
+    "permsRepair": "Repair permissions",
+    "permsRunning": "Applying…",
+    "permsUnknown": "Permission state unavailable.",
+    "permsWindows": "Windows host: POSIX permissions do not apply.",
+    "permsSplit": "PHP ({php}) ≠ site owner ({owner}) — created files use {dir} / {file}.",
+    "permsSame": "PHP runs as the site owner ({owner}) — standard {dir} / {file} permissions.",
+    "permsDone": "{n} entries fixed ({failed} failures).",
+    "permsFailed": "Permission repair failed.",
+    "rateLimited": "GitHub API rate limit reached. Retry in {m} minute(s).",
+    "rateLimitedNoMin": "GitHub API rate limit reached. Retry in a few minutes.",
+    "tlsCaBroken": "This host's PHP certificate store is unusable: upload cacert.pem (https://curl.se/ca/cacert.pem) to the site root."
   },
   "appearance": {
     "title": "Appearance",

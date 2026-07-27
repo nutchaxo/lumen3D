@@ -788,7 +788,21 @@
     "pluginsGotoCatalog": "Ouvrir le catalogue",
     "pluginsLoadError": "Impossible de charger la liste des plugins.",
     "retry": "Réessayer",
-    "updateApplied": "Mise à jour appliquée (v{v}) — rechargement…"
+    "updateApplied": "Mise à jour appliquée (v{v}) — rechargement…",
+    "permsTitle": "Permissions des fichiers",
+    "permsChecking": "Vérification…",
+    "permsHelp": "Si PHP tourne sous un utilisateur différent de votre compte FTP/SFTP, ce que la plateforme crée ne vous appartient pas : impossible d'uploader dans ces dossiers ni d'y supprimer un fichier. Cette action réapplique des permissions qui vous rendent la main.",
+    "permsRepair": "Réparer les permissions",
+    "permsRunning": "Application…",
+    "permsUnknown": "État des permissions indisponible.",
+    "permsWindows": "Hôte Windows : les permissions POSIX ne s'appliquent pas.",
+    "permsSplit": "PHP ({php}) ≠ propriétaire du site ({owner}) — les fichiers créés utilisent {dir} / {file}.",
+    "permsSame": "PHP tourne sous le propriétaire du site ({owner}) — permissions standard {dir} / {file}.",
+    "permsDone": "{n} entrées corrigées ({failed} échecs).",
+    "permsFailed": "Échec de la réparation des permissions.",
+    "rateLimited": "Limite de l'API GitHub atteinte. Réessayez dans {m} minute(s).",
+    "rateLimitedNoMin": "Limite de l'API GitHub atteinte. Réessayez dans quelques minutes.",
+    "tlsCaBroken": "Le magasin de certificats de PHP est inutilisable sur cet hébergement : téléversez cacert.pem (https://curl.se/ca/cacert.pem) à la racine du site."
   },
   "appearance": {
     "title": "Apparence",

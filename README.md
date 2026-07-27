@@ -164,7 +164,42 @@ Then open <http://localhost:8080>.
 
 `fast_server.py` and `start.bat` are static-only fallbacks (no admin API) useful for perf tests.
 
-### 2. First-Run Setup (no default password)
+### 2. Deploy on a Shared PHP Host (`install.php`)
+
+For hosting without Python, drop the single file [`install.php`](install.php) into an **empty web directory** and open it in a browser. The wizard checks the environment, downloads the latest release from GitHub, verifies it (sha256 + Ed25519 when a publisher key is pinned), extracts it safely, and creates the admin account — then self-locks. Nothing is written before the archive is verified, and every step is resumable.
+
+#### Troubleshooting — "Cannot reach the GitHub API" on a host that *is* online
+
+**Symptom.** The requirements screen passes every row but the last banner reads *"Cannot reach the GitHub API. Check the server's outbound connectivity."* The detail line underneath shows `error setting certificate file: /usr/share/php/cacert.pem` (or a bare `network`).
+
+**Cause.** The host's `php.ini` sets `curl.cainfo` (and/or `openssl.cafile`) to a CA bundle that was **never installed**. cURL then aborts *before opening the socket*, so every outbound HTTPS call from PHP fails — the network itself is fine. An `open_basedir` that hides `/etc/ssl` from PHP produces the same dead end, because the system bundle becomes unreadable too.
+
+**Automatic repair — nothing to do** (since web v1.23.0). The installer detects an unusable trust store and hands cURL/OpenSSL a real bundle, searched in this order:
+
+1. `cacert.pem` next to `install.php` — the operator override, if you want to pin your own;
+2. the distribution locations (`/etc/ssl/certs/ca-certificates.crt`, `/etc/pki/tls/certs/ca-bundle.crt`, `/etc/ssl/ca-bundle.pem`, `/etc/ssl/cert.pem`, …);
+3. **its own embedded copy of the Mozilla bundle**, written to `.lumen-ca-seed.pem` — so a host with nothing usable still installs, with no manual step.
+
+**Peer verification is never disabled** at any point. The *CA certificates* row in the requirements list shows which store was selected.
+
+The platform then carries the same bundle at **`api/ca-bundle.pem`**, shipped in every release and refreshed by every update, and uses it as the same last-resort fallback. So the **marketplace** and **one-click updates** keep working on such a host without the operator having to keep any file around — deleting `cacert.pem` is harmless from v1.23.0 on. (On v1.22.x it was not: `cacert.pem` was the only store, and removing it broke update checks.)
+
+If the *CA certificates* row still reads `?`, the installer could not write its bundle — the directory is read-only. Fix the write permission, or upload <https://curl.se/ca/cacert.pem> as `cacert.pem` next to `install.php`.
+
+*Same failure on the Python server?* It does not apply: `dev_server.py` uses the system trust store through Python, not `php.ini`.
+
+#### Files created by the platform must stay editable over FTP/SFTP
+
+On many shared hosts, PHP runs as a **different system user** (`www-data`, `apache`, a php-fpm pool) than the FTP/SFTP account. Everything the installer and the admin panel create then belongs to *that* user — and since POSIX takes the right to delete a file from its **parent directory**, the account can neither upload into those directories nor remove anything inside them. A freshly installed `DATA_WEB/fixed/` looks untouchable.
+
+Since web v1.23.0 the platform detects the split — it compares the owner of `install.php` (uploaded by the account, so it belongs to it) resp. of the web root against PHP's effective user — and only then creates directories `0777` and files `0666`, so the site stays under its owner's control. On a properly configured host nothing changes: `0755` / `0644` as before. Secrets (`api/*.json`) always keep `0600`; deleting them only needs the parent directory. Both modes can be forced with the `LUMEN_DIR_MODE` / `LUMEN_FILE_MODE` environment variables.
+
+- **Installed before v1.23.0?** Admin panel → **Security** → *File permissions* → **Repair permissions**. The card also shows which user PHP runs as, who owns the site, and the modes in effect.
+- **What the repair touches**: every directory and file under the web root, recursively — `DATA_WEB/` and its dataset trees included. Exceptions, by design: symbolic links are skipped (never followed), `api/*.json` secrets keep `0600` (deleting them only needs the parent directory), the web root itself is left alone (it already belongs to the account), and entries already at the target mode are skipped — which makes a second run nearly instant. A large `DATA_WEB` full of brick packs can take a while on the first pass; the time limit is raised to 5 minutes and the walk is capped at 200 000 entries, so re-run it if the report shows the cap was hit.
+- **Trade-off**: PHP cannot `chown`/`chgrp` (root only), so making a file editable by a *different* account means making it world-writable. On a multi-tenant machine that widens the attack surface, which is why it is applied only where the split actually exists. The clean fix remains asking the host to run PHP as the site account (suEXEC / dedicated pool).
+- Datasets go into `DATA_WEB/<type>/<name>/`; afterwards use admin → **Datasets** → *Rebuild catalog* rather than hand-editing `DATA_WEB/catalog.json`.
+
+### 3. First-Run Setup (no default password)
 
 There is **no default admin password**. On a fresh install, open the admin panel (`/admpan.html`) — a **guided setup wizard** walks you through creating the admin account and configuring identity, theme, texts, and the initial plugin set. Credentials are stored as a one-way **salted PBKDF2-HMAC-SHA256** hash in `api/admin_credential.json` (gitignored, never served over HTTP).
 
@@ -174,7 +209,7 @@ Change the password later from the admin **Security** tab (requires the current 
 python dev_server.py --set-password
 ```
 
-### 3. Preprocess Raw Microscopy Datasets
+### 4. Preprocess Raw Microscopy Datasets
 
 The pipeline currently ingests **Imaris `.ims`** files (HDF5). On Windows, the self-contained launcher `preprocess/run_preprocess.bat` needs **nothing pre-installed** (it provisions a local Python + deps). For the CLI:
 

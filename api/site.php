@@ -58,14 +58,14 @@ function site_load_doc(string $doc) {
 /** Atomic write of a PUBLIC config doc (0644, not 0600). */
 function site_write_public(string $path, array $data): bool {
     $dir = dirname($path);
-    if (!is_dir($dir)) @mkdir($dir, 0755, true);
+    if (!is_dir($dir)) admin_make_dir($dir);
     $tmp = tempnam($dir, '.tmp-');
     if ($tmp === false) return false;
     if (@file_put_contents($tmp, json_encode($data, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT)) === false) {
         @unlink($tmp); return false;
     }
     if (!@rename($tmp, $path)) { @unlink($tmp); return false; }
-    @chmod($path, 0644);
+    admin_fix_file_mode($path);
     return true;
 }
 
@@ -140,7 +140,7 @@ function site_save_doc(string $doc, $data): bool {
         $cssPath = site_config_dir() . '/theme.css';
         $tmp = tempnam(dirname($cssPath), '.tmp-');
         if ($tmp !== false && @file_put_contents($tmp, $css) !== false && @rename($tmp, $cssPath)) {
-            @chmod($cssPath, 0644);
+            admin_fix_file_mode($cssPath);
         } elseif ($tmp !== false) { @unlink($tmp); }
     }
     return true;

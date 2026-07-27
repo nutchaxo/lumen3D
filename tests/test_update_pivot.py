@@ -5,7 +5,7 @@ import shutil
 import sys
 from pathlib import Path
 
-sys.path.insert(0, r"D:\Coding\WebPlatform")
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import dev_server as ds
 
 BASE = Path(__file__).parent / ".pivot-arena"

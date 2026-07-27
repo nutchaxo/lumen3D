@@ -32,6 +32,132 @@ function data_web(): string { return admin_root() . '/DATA_WEB'; }
 function changelog_dir(): string { return admin_root() . '/changelog'; }
 function modules_dir(): string { return admin_root() . '/js/modules'; }
 
+// ── Filesystem permissions (keep the site editable over FTP/SFTP) ────────────
+// Twin of install.php's perms_* helpers. The web root belongs to the hosting
+// account (that is who uploaded the site); where PHP runs as a DIFFERENT system
+// user — www-data, apache, a shared php-fpm pool — everything the platform writes
+// would be owned by PHP in 0755/0644, and the account could then neither upload
+// into those directories nor delete what is inside them: POSIX takes the right to
+// delete a file from its PARENT DIRECTORY, not from the file.
+//
+// When that split is detected we create world-writable (0777/0666) so the site
+// stays under its owner's control; on a correctly configured host (suEXEC, per-user
+// pool) nothing changes. Secrets (api/*.json) keep 0600 — they are never meant to be
+// edited by hand, and deleting them only needs the parent directory.
+// Override with LUMEN_DIR_MODE / LUMEN_FILE_MODE.
+
+function admin_perms_owner_split(): bool {
+    static $split = null;
+    if ($split !== null) return $split;
+    if (DIRECTORY_SEPARATOR !== '/') return $split = false;
+    $owner = @fileowner(admin_root());
+    if ($owner === false) return $split = false;
+    if (function_exists('posix_geteuid')) return $split = ($owner !== posix_geteuid());
+    $probe = admin_root() . '/.lumen-perm-probe';
+    if (@file_put_contents($probe, '') === false) return $split = false;
+    $mine = @fileowner($probe);
+    @unlink($probe);
+    return $split = ($mine !== false && $mine !== $owner);
+}
+
+function admin_mode_override(string $env): ?int {
+    $v = getenv($env);
+    if ($v === false || !preg_match('/^0?[0-7]{3,4}$/', trim((string)$v))) return null;
+    return (int)intval(trim((string)$v), 8);
+}
+
+function admin_dir_mode(): int  { return admin_mode_override('LUMEN_DIR_MODE')  ?? (admin_perms_owner_split() ? 0777 : 0755); }
+function admin_file_mode(): int { return admin_mode_override('LUMEN_FILE_MODE') ?? (admin_perms_owner_split() ? 0666 : 0644); }
+
+/** mkdir + explicit chmod on every level created (mkdir's mode is umask-masked). */
+function admin_make_dir(string $path): bool {
+    if (is_dir($path)) return true;
+    if (!@mkdir($path, admin_dir_mode(), true) && !is_dir($path)) return false;
+    $mode = admin_dir_mode();
+    $cur  = rtrim(str_replace('\\', '/', $path), '/');
+    $root = rtrim(str_replace('\\', '/', admin_root()), '/');
+    while ($cur !== '' && strlen($cur) > strlen($root) && strncmp($cur, $root, strlen($root)) === 0) {
+        @chmod($cur, $mode);
+        $cur = dirname($cur);
+    }
+    return true;
+}
+
+function admin_fix_file_mode(string $path): void { @chmod($path, admin_file_mode()); }
+
+/** Apply the resolved modes to a freshly extracted subtree (zip extraction ignores them). */
+function mkt_modes_recursive(string $base): void {
+    if (DIRECTORY_SEPARATOR !== '/' || !is_dir($base)) return;
+    @chmod($base, admin_dir_mode());
+    $it = new RecursiveIteratorIterator(
+        new RecursiveDirectoryIterator($base, FilesystemIterator::SKIP_DOTS | FilesystemIterator::UNIX_PATHS),
+        RecursiveIteratorIterator::SELF_FIRST
+    );
+    foreach ($it as $path => $info) {
+        if ($info->isLink()) continue;
+        @chmod((string)$path, $info->isDir() ? admin_dir_mode() : admin_file_mode());
+    }
+}
+
+/** Secrets that keep 0600 whatever the site mode is. */
+function admin_is_secret_path(string $rel): bool {
+    return strncmp($rel, 'api/', 4) === 0 && substr($rel, -5) === '.json';
+}
+
+/** Read-only view of the permission situation, for the admin UI. */
+function admin_permissions_report(): array {
+    $root = admin_root();
+    $owner = @fileowner($root);
+    $php = function_exists('posix_geteuid') ? posix_geteuid() : null;
+    $name = function ($uid) {
+        if ($uid === null || $uid === false) return null;
+        if (function_exists('posix_getpwuid')) { $p = @posix_getpwuid((int)$uid); if (is_array($p) && isset($p['name'])) return $p['name']; }
+        return (string)$uid;
+    };
+    return [
+        'posix' => DIRECTORY_SEPARATOR === '/',
+        'split' => admin_perms_owner_split(),
+        'siteOwner' => $name($owner),
+        'phpUser' => $name($php),
+        'dirMode' => sprintf('%04o', admin_dir_mode()),
+        'fileMode' => sprintf('%04o', admin_file_mode()),
+        'rootMode' => sprintf('%04o', @fileperms($root) & 0777),
+    ];
+}
+
+/**
+ * Re-apply the resolved modes over the whole install — the repair path for a site
+ * created before this logic existed (or by another tool). Symlinks are never
+ * followed and nothing outside the web root is touched.
+ * @return array{fixed:int,failed:int,scanned:int,dirMode:string,fileMode:string,split:bool}
+ */
+function admin_apply_tree_modes(int $maxEntries = 200000): array {
+    // A DATA_WEB holding brick packs can reach tens of thousands of files; the walk
+    // must not die on the default 30 s limit halfway through. Re-runs are cheap:
+    // entries already at the target mode are skipped.
+    @set_time_limit(300);
+    $root = rtrim(str_replace('\\', '/', admin_root()), '/');
+    $out = ['fixed' => 0, 'failed' => 0, 'scanned' => 0,
+            'dirMode' => sprintf('%04o', admin_dir_mode()), 'fileMode' => sprintf('%04o', admin_file_mode()),
+            'split' => admin_perms_owner_split()];
+    if (DIRECTORY_SEPARATOR !== '/') return $out;
+    $dirMode = admin_dir_mode(); $fileMode = admin_file_mode();
+    $it = new RecursiveIteratorIterator(
+        new RecursiveDirectoryIterator($root, FilesystemIterator::SKIP_DOTS | FilesystemIterator::UNIX_PATHS),
+        RecursiveIteratorIterator::SELF_FIRST
+    );
+    foreach ($it as $path => $info) {
+        if (++$out['scanned'] > $maxEntries) break;
+        if ($info->isLink()) continue;
+        $rel = ltrim(substr(str_replace('\\', '/', (string)$path), strlen($root)), '/');
+        if ($rel === '' || admin_is_secret_path($rel)) continue;
+        $want = $info->isDir() ? $dirMode : $fileMode;
+        if ((@fileperms((string)$path) & 0777) === $want) continue;
+        if (@chmod((string)$path, $want)) $out['fixed']++; else $out['failed']++;
+    }
+    return $out;
+}
+
 // ── JSON I/O ────────────────────────────────────────────────────────────────
 // NOTE: no `: never` return type here — this file is require_once'd by the PUBLIC
 // plugins.php on the advertised PHP >= 7.4 floor, and `never` is 8.1+ syntax (a
@@ -55,7 +181,7 @@ function admin_read_json(string $path): ?array {
 /** Atomic-ish write: temp sibling + rename (atomic on the same filesystem). */
 function admin_write_json(string $path, array $data): bool {
     $dir = dirname($path);
-    if (!is_dir($dir)) @mkdir($dir, 0755, true);
+    if (!is_dir($dir)) admin_make_dir($dir);
     $tmp = tempnam($dir, '.tmp-');
     if ($tmp === false) return false;
     if (@file_put_contents($tmp, json_encode($data, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT)) === false) {
@@ -529,7 +655,7 @@ function admin_ca_probe(): array {
     static $cached = null;
     if ($cached !== null) return $cached;
     $files = [
-        admin_root() . '/cacert.pem',              // operator escape hatch (web root)
+        admin_root() . '/cacert.pem',              // operator override (web root)
         '/etc/ssl/certs/ca-certificates.crt',      // Debian / Ubuntu
         '/etc/pki/tls/certs/ca-bundle.crt',        // RHEL / CentOS / Fedora
         '/etc/ssl/ca-bundle.pem',                  // SUSE
@@ -537,6 +663,11 @@ function admin_ca_probe(): array {
         '/etc/ssl/cert.pem',                       // Alpine / BSD / macOS
         '/usr/local/share/certs/ca-root-nss.crt',  // FreeBSD
         '/usr/local/etc/openssl/cert.pem',
+        // Last resort: the Mozilla bundle SHIPPED WITH THE RELEASE. It refreshes with
+        // every update and cannot be deleted by accident (unlike an operator-uploaded
+        // cacert.pem), so a host with no usable system store still works out of the box.
+        __DIR__ . '/ca-bundle.pem',
+        admin_root() . '/.lumen-ca-seed.pem',      // written by install.php on such a host
     ];
     foreach ($files as $f) if (@is_readable($f)) return $cached = [$f, null];
     foreach (['/etc/ssl/certs', '/etc/pki/tls/certs'] as $d) if (@is_dir($d)) return $cached = [null, $d];
@@ -586,6 +717,7 @@ function mkt_fetch_bytes(string $url, int $limit): ?string {
     // callback caps the body at $limit+1 bytes so an oversized response can't balloon
     // memory (a truncated body then fails the signature check — fail-closed).
     $caError = false;
+    mkt_last_error(['status' => 0, 'curl' => '', 'stream' => '', 'ca' => false, 'headers' => []]);
     if (function_exists('curl_init')) {
         $body = mkt_curl_fetch($url, $limit, admin_ca_curl_opts(), $caError);
         if ($body === null && $caError) {                                    // broken trust store, not an outage
@@ -600,16 +732,77 @@ function mkt_fetch_bytes(string $url, int $limit): ?string {
             'ssl'  => admin_ca_stream_opts($caError),
         ]);
         $d = @file_get_contents($url, false, $ctx, 0, $limit + 1);
+        // $http_response_header exists here whenever a response was actually received
+        // (even a 4xx). A status means the transport WORKED, so it outranks the cURL
+        // leg's diagnosis — otherwise a 403 rate limit on a host with a broken
+        // curl.cainfo would be reported as a certificate problem.
+        $status = 0; $hdrs = [];
+        if (isset($http_response_header) && is_array($http_response_header)) {
+            foreach ($http_response_header as $line) {
+                if (stripos($line, 'HTTP/') === 0) {
+                    if (preg_match('#^HTTP/\S+\s+(\d{3})#', $line, $m)) { $status = (int)$m[1]; $hdrs = []; }
+                } elseif (strpos($line, ':') !== false) {
+                    [$k, $v] = explode(':', $line, 2);
+                    $hdrs[strtolower(trim($k))] = trim($v);
+                }
+            }
+        }
         if ($d !== false) return substr($d, 0, $limit);
+        $prev = mkt_last_error();
+        if ($status > 0) {
+            mkt_last_error(['status' => $status, 'headers' => $hdrs]);
+        } elseif ($prev['status'] === 0 && $prev['curl'] === '') {
+            $e = error_get_last();
+            mkt_last_error(['stream' => $e['message'] ?? 'stream fetch failed']);
+        }
     }
     return null;
 }
 
+/**
+ * Why the last mkt_fetch_bytes() failed. Without this the admin UI could only say
+ * "unreachable", which sends the operator looking for a firewall when the real
+ * cause is a GitHub rate limit or a broken CA store.
+ * @return array{status:int,curl:string,stream:string,ca:bool,headers:array<string,string>}
+ */
+function mkt_last_error(?array $set = null): array {
+    static $last = ['status' => 0, 'curl' => '', 'stream' => '', 'ca' => false, 'headers' => []];
+    if ($set !== null) $last = $set + ['status' => 0, 'curl' => '', 'stream' => '', 'ca' => false, 'headers' => []];
+    return $last;
+}
+
+/** Map the recorded failure to an error code + detail for the admin UI. */
+function mkt_error_payload(): array {
+    $e = mkt_last_error();
+    $status = (int)$e['status'];
+    $h = $e['headers'];
+    $rateLimited = ($status === 403 || $status === 429)
+        && (($h['x-ratelimit-remaining'] ?? null) === '0' || isset($h['retry-after']));
+    if ($rateLimited) {
+        $min = null;
+        if (isset($h['x-ratelimit-reset'])) $min = max(1, (int)ceil(((int)$h['x-ratelimit-reset'] - time()) / 60));
+        elseif (isset($h['retry-after']))   $min = max(1, (int)ceil((int)$h['retry-after'] / 60));
+        return ['error' => 'rate_limited', 'retryAfterMin' => $min, 'detail' => 'HTTP ' . $status];
+    }
+    if ($e['ca'])          return ['error' => 'tls_ca_broken', 'detail' => $e['curl'] ?: 'CA store unusable'];
+    if ($status >= 400)    return ['error' => 'unreachable', 'detail' => 'HTTP ' . $status];
+    if ($e['curl'] !== '') return ['error' => 'unreachable', 'detail' => $e['curl']];
+    if ($e['stream'] !== '') return ['error' => 'unreachable', 'detail' => $e['stream']];
+    return ['error' => 'unreachable', 'detail' => 'no HTTP transport available'];
+}
+
 /** One cURL attempt. Sets $caError when the failure is a trust-store problem. */
 function mkt_curl_fetch(string $url, int $limit, array $caOpts, bool &$caError): ?string {
-    $buf = '';
+    $buf = ''; $headers = [];
     $ch = curl_init($url);
     curl_setopt_array($ch, $caOpts + [
+        CURLOPT_HEADERFUNCTION  => function ($c, $line) use (&$headers) {
+            if (strpos($line, ':') !== false) {
+                [$k, $v] = explode(':', $line, 2);
+                $headers[strtolower(trim($k))] = trim($v);                   // rate-limit headers live here
+            }
+            return strlen($line);
+        },
         CURLOPT_FOLLOWLOCATION  => true,
         CURLOPT_MAXREDIRS       => 5,
         CURLOPT_PROTOCOLS       => CURLPROTO_HTTPS,
@@ -626,9 +819,11 @@ function mkt_curl_fetch(string $url, int $limit, array $caOpts, bool &$caError):
     ]);
     curl_exec($ch);
     $code = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
-    $caError = admin_is_ca_error((string)curl_error($ch));
+    $err  = (string)curl_error($ch);
+    $caError = admin_is_ca_error($err);
     curl_close($ch);
     if ($buf !== '' && $code >= 200 && $code < 300) return substr($buf, 0, $limit);
+    mkt_last_error(['status' => $code, 'curl' => $err, 'ca' => $caError, 'headers' => $headers]);
     return null;
 }
 
@@ -651,7 +846,7 @@ function mkt_verify_signature(string $data, ?string $sigUrl): bool {
 function mkt_fetch_catalog(): array {
     if (MARKETPLACE_CATALOG_URL === '') return [false, 'marketplace_not_configured'];
     $raw = mkt_fetch_bytes(MARKETPLACE_CATALOG_URL, 1 << 20);
-    if ($raw === null) return [false, 'catalog_fetch_failed'];
+    if ($raw === null) return [false, 'catalog_fetch_failed: ' . (mkt_error_payload()['detail'] ?? '?')];
     if (!mkt_verify_signature($raw, MARKETPLACE_CATALOG_URL . '.sig')) return [false, 'catalog_signature_invalid'];
     $d = json_decode($raw, true);
     if (!is_array($d) || !isset($d['plugins']) || !is_array($d['plugins'])) return [false, 'invalid_catalog'];
@@ -703,7 +898,7 @@ function mkt_extract_zip(string $zipPath, string $dest): ?string {
         $total += (int)$st['size'];
         if ($total > 24 * 1024 * 1024) { $zip->close(); return null; }
     }
-    @mkdir($dest, 0755, true);
+    admin_make_dir($dest);
     $zip->extractTo($dest);
     $zip->close();
     if (is_file("$dest/plugin.json")) return $dest;
@@ -737,9 +932,9 @@ function mkt_install(string $catalogId, string $password): array {
     // placement folder and no installed plugin. Keeping the temp on the same volume
     // makes the rename same-filesystem (matches the Python twin's tempfile.mkdtemp(dir=MODULES_DIR)).
     $modBase = modules_dir();
-    if (!is_dir($modBase) && !@mkdir($modBase, 0755, true) && !is_dir($modBase)) return [500, ['error' => 'install_failed', 'detail' => 'modules_dir']];
+    if (!admin_make_dir($modBase)) return [500, ['error' => 'install_failed', 'detail' => 'modules_dir']];
     $tmp = $modBase . '/.mkt-' . bin2hex(random_bytes(6));
-    @mkdir($tmp, 0755, true);
+    admin_make_dir($tmp);
     $zipData = mkt_fetch_bytes($assetUrl, MARKETPLACE_MAX_ZIP);
     if ($zipData === null) { mkt_rmrf($tmp); return [502, ['error' => 'download_failed']]; }
     $zipPath = "$tmp/plugin.zip"; file_put_contents($zipPath, $zipData);
@@ -766,8 +961,9 @@ function mkt_install(string $catalogId, string $password): array {
     if ($proot === null) { mkt_rmrf($tmp); return [502, ['error' => 'install_failed', 'detail' => 'extract']]; }
     $meta = admin_read_json("$proot/plugin.json");
     if (!is_array($meta) || (string)($meta['id'] ?? '') !== $pid || (isset($meta['placement']) && $meta['placement'] !== $placement)) { mkt_rmrf($tmp); return [502, ['error' => 'install_failed', 'detail' => 'metadata']]; }
-    @mkdir(dirname($targetDir), 0755, true);
+    admin_make_dir(dirname($targetDir));
     if (!@rename($proot, $targetDir)) { mkt_rmrf($tmp); return [502, ['error' => 'install_failed', 'detail' => 'move']]; }
+    mkt_modes_recursive($targetDir);                       // zip extraction ignores our modes
     mkt_rmrf($tmp);
     $serverHash = admin_plugin_hash(admin_plugin_file_hashes($targetDir));
     $declared = admin_plugin_declared_caps($targetDir);
@@ -883,7 +1079,7 @@ function admin_update_apply_php(): array {
     // 3. Staged extract under the web root (same filesystem → rename is cheap and
     //    same-volume; extracting under /tmp broke on shared hosts before — EXDEV).
     $staging = $root . '/.update-staging-' . bin2hex(random_bytes(4));
-    if (!@mkdir($staging, 0755, true)) return [500, ['error' => 'staging_mkdir_failed']];
+    if (!admin_make_dir($staging)) return [500, ['error' => 'staging_mkdir_failed']];
     $zipPath = $staging . '/release.zip';
     if (@file_put_contents($zipPath, $zipBytes) === false) { mkt_rmrf($staging); return [500, ['error' => 'staging_write_failed']]; }
     $zipBytes = null; // free the in-memory copy before extraction
@@ -911,7 +1107,7 @@ function admin_update_apply_php(): array {
         $names[] = $name;
     }
     $exDir = $staging . '/x';
-    @mkdir($exDir, 0755, true);
+    admin_make_dir($exDir);
     if (!$zip->extractTo($exDir)) { $zip->close(); mkt_rmrf($staging); return [500, ['error' => 'zip_extract_failed']]; }
     $zip->close();
 
@@ -940,7 +1136,7 @@ function admin_update_apply_php(): array {
         if (!is_file($srcF)) continue;
         $dstF = $root . '/' . $relPath;
         $dir = dirname($dstF);
-        if (!is_dir($dir) && !@mkdir($dir, 0755, true)) { mkt_rmrf($staging); return [500, ['error' => 'mkdir_failed', 'path' => $relPath, 'filesUpdated' => $updated]]; }
+        if (!admin_make_dir($dir)) { mkt_rmrf($staging); return [500, ['error' => 'mkdir_failed', 'path' => $relPath, 'filesUpdated' => $updated]]; }
         // Rename-aside FIRST: it frees the name atomically and works even on an
         // OPEN file (Windows allows rename, not delete-in-place; a plain unlink
         // there only marks delete-pending and the name stays blocked until the
@@ -956,6 +1152,7 @@ function admin_update_apply_php(): array {
             mkt_rmrf($staging);
             return [500, ['error' => 'write_failed', 'path' => $relPath, 'filesUpdated' => $updated]];
         }
+        admin_fix_file_mode($dstF);
         if (substr($relPath, -4) === '.php') $phpWritten[] = $dstF;
         $updated++;
     }
@@ -1001,6 +1198,7 @@ function admin_update_finish_pending(): void {
             if (!@rename($dst, $dst . '.lumen-old')) @unlink($dst);
         }
         if (!@rename($new, $dst) && !@copy($new, $dst)) { $left[] = $rel; continue; }
+        admin_fix_file_mode($dst);
         @unlink($new);
         @unlink($dst . '.lumen-old');
         if (substr($rel, -4) === '.php') $swapped[] = $dst;

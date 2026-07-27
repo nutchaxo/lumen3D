@@ -24,7 +24,7 @@ if (!admin_is_auth()) admin_json_out(['error' => 'Not authenticated'], 401);
 $action = $_GET['action'] ?? '';
 $body   = ($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST' ? (json_decode(file_get_contents('php://input'), true) ?: []) : [];
 
-if (in_array($action, ['set_plugin', 'update_apply', 'approve_plugin', 'revoke_plugin', 'install_plugin', 'uninstall_plugin'], true)) admin_require_write();
+if (in_array($action, ['set_plugin', 'update_apply', 'approve_plugin', 'revoke_plugin', 'install_plugin', 'uninstall_plugin', 'repair_permissions'], true)) admin_require_write();
 
 switch ($action) {
 
@@ -164,7 +164,13 @@ switch ($action) {
         // repairs a php.ini CA path that points at a missing bundle — otherwise the
         // check reports "unreachable" on a host that is perfectly online.
         $raw = mkt_fetch_bytes('https://api.github.com/repos/' . GITHUB_REPO . '/releases/latest', 512 * 1024);
-        if ($raw === null) admin_json_out(['current' => $current, 'latest' => null, 'available' => false, 'error' => 'unreachable']);
+        if ($raw === null) {
+            // Carry WHY: an unauthenticated GitHub API allows 60 requests/hour per IP
+            // (a whole campus behind one NAT burns that fast), and a broken CA store
+            // looks identical from here — "unreachable" alone sends the operator
+            // hunting a firewall that is innocent.
+            admin_json_out(['current' => $current, 'latest' => null, 'available' => false] + mkt_error_payload());
+        }
         $rel = json_decode($raw, true);
         if (!is_array($rel) || !isset($rel['tag_name'])) admin_json_out(['current' => $current, 'latest' => null, 'available' => false, 'noReleases' => true]);
         $latest = ltrim((string)$rel['tag_name'], 'v');
@@ -212,6 +218,16 @@ switch ($action) {
         // Python server's Blue-Green swap.
         [$code, $payload] = admin_update_apply_php();
         admin_json_out($payload, $code);
+    }
+
+    case 'permissions_status':
+        admin_json_out(admin_permissions_report());
+
+    case 'repair_permissions': {
+        // Re-applies the resolved modes across the install. Needed on hosts where PHP
+        // runs as another user than the FTP/SFTP account: without it, anything the
+        // platform created before this logic existed stays unwritable for the owner.
+        admin_json_out(admin_apply_tree_modes());
     }
 
     default:

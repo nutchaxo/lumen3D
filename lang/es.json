@@ -788,7 +788,18 @@
     "pluginsGotoCatalog": "Abrir el catálogo",
     "pluginsLoadError": "No se pudo cargar la lista de plugins.",
     "retry": "Reintentar",
-    "updateApplied": "Actualización aplicada (v{v}) — recargando…"
+    "updateApplied": "Actualización aplicada (v{v}) — recargando…",
+    "permsTitle": "Permisos de archivos",
+    "permsChecking": "Comprobando…",
+    "permsHelp": "Si PHP se ejecuta con un usuario distinto al de su cuenta FTP/SFTP, lo que crea la plataforma no le pertenece: no puede subir archivos a esas carpetas ni borrar nada en ellas. Esta acción vuelve a aplicar permisos que le devuelven el control.",
+    "permsRepair": "Reparar permisos",
+    "permsRunning": "Aplicando…",
+    "permsUnknown": "Estado de permisos no disponible.",
+    "permsWindows": "Host Windows: los permisos POSIX no se aplican.",
+    "permsSplit": "PHP ({php}) ≠ propietario del sitio ({owner}) — los archivos creados usan {dir} / {file}.",
+    "permsSame": "PHP se ejecuta como el propietario del sitio ({owner}) — permisos estándar {dir} / {file}.",
+    "permsDone": "{n} entradas corregidas ({failed} fallos).",
+    "permsFailed": "Error al reparar los permisos."
   },
   "appearance": {
     "title": "Apariencia",

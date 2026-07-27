@@ -191,6 +191,98 @@ function check_csrf(): bool {
         && hash_equals((string)$_SESSION['install_csrf'], $sent);
 }
 
+// ── Filesystem permissions (keep the site editable over FTP/SFTP) ────────────
+// install.php is uploaded by the operator's FTP/SFTP account, so ITS owner is that
+// account. Where PHP runs as a DIFFERENT system user (www-data, apache, a shared
+// php-fpm pool), everything created here would be owned by PHP in 0755/0644, and
+// the operator could then neither upload into those directories nor delete what is
+// inside them — POSIX takes the right to delete a file from its PARENT DIRECTORY,
+// not from the file itself. That is what makes a fresh install look "untouchable".
+//
+// So we detect the split and, only then, create world-writable (0777/0666) so the
+// site stays under its owner's control. On a correctly configured host (PHP running
+// as the account, suEXEC / per-user pool) nothing changes: 0755/0644 as before.
+// Secrets keep their restrictive mode — the operator can still delete them, since
+// that right comes from the parent directory. Override: LUMEN_DIR_MODE/LUMEN_FILE_MODE.
+
+function perms_owner_split(): bool {
+    static $split = null;
+    if ($split !== null) return $split;
+    if (DIRECTORY_SEPARATOR !== '/') return $split = false;                  // no POSIX modes on Windows
+    $self = @fileowner(__FILE__);
+    if ($self === false) return $split = false;
+    if (function_exists('posix_geteuid')) return $split = ($self !== posix_geteuid());
+    // No ext-posix: compare the owner of a file PHP creates with the owner of this file.
+    $probe = tpath('.install-probe');
+    if (@file_put_contents($probe, '') === false) return $split = false;
+    $mine = @fileowner($probe);
+    @unlink($probe);
+    return $split = ($mine !== false && $mine !== $self);
+}
+
+function mode_override(string $env): ?int {
+    $v = getenv($env);
+    if ($v === false || !preg_match('/^0?[0-7]{3,4}$/', trim((string)$v))) return null;
+    return (int)intval(trim((string)$v), 8);
+}
+
+function dir_mode(): int  { return mode_override('LUMEN_DIR_MODE')  ?? (perms_owner_split() ? 0777 : 0755); }
+function file_mode(): int { return mode_override('LUMEN_FILE_MODE') ?? (perms_owner_split() ? 0666 : 0644); }
+
+/**
+ * mkdir + explicit chmod. mkdir()'s mode argument is masked by the process umask
+ * (typically 022, which silently strips group/other write), so the mode has to be
+ * set afterwards — for EVERY level a recursive mkdir may have created.
+ */
+function make_dir(string $path): bool {
+    if (is_dir($path)) return true;
+    if (!@mkdir($path, dir_mode(), true) && !is_dir($path)) return false;
+    $mode = dir_mode();
+    $cur  = rtrim(str_replace('\\', '/', $path), '/');
+    $root = rtrim(str_replace('\\', '/', target_dir()), '/');
+    while ($cur !== '' && strlen($cur) > strlen($root) && strncmp($cur, $root, strlen($root)) === 0) {
+        @chmod($cur, $mode);
+        $cur = dirname($cur);
+    }
+    return true;
+}
+
+/** Apply the resolved file mode to something we just wrote (no-op on Windows). */
+function fix_file_mode(string $path): void { @chmod($path, file_mode()); }
+
+/** Secrets that keep a restrictive mode (deleting them only needs the parent dir). */
+function is_secret_path(string $rel): bool {
+    return (strncmp($rel, 'api/', 4) === 0 && substr($rel, -5) === '.json')
+        || $rel === STATE_FILE || $rel === STATE_FILE . '.tmp';
+}
+
+/**
+ * Safety net over the extracted tree: re-apply the resolved modes everywhere, so a
+ * write path added later cannot silently leave the operator locked out. No-op when
+ * PHP already runs as the site owner. Symlinks are never followed.
+ * @return array{0:int,1:int} [entries touched, failures]
+ */
+function apply_tree_modes(): array {
+    if (DIRECTORY_SEPARATOR !== '/') return [0, 0];
+    $root = target_dir();
+    $dirMode = dir_mode(); $fileMode = file_mode();
+    $done = 0; $failed = 0; $seen = 0;
+    $it = new RecursiveIteratorIterator(
+        new RecursiveDirectoryIterator($root, FilesystemIterator::SKIP_DOTS | FilesystemIterator::UNIX_PATHS),
+        RecursiveIteratorIterator::SELF_FIRST
+    );
+    foreach ($it as $path => $info) {
+        if (++$seen > MAX_ENTRIES) break;                                    // same cap as the zip walk
+        if ($info->isLink()) continue;
+        $rel = ltrim(substr(str_replace('\\', '/', (string)$path), strlen(rtrim(str_replace('\\', '/', $root), '/'))), '/');
+        if ($rel === '' || is_secret_path($rel) || $rel === basename(__FILE__)) continue;
+        $want = $info->isDir() ? $dirMode : $fileMode;
+        if ((@fileperms((string)$path) & 0777) === $want) continue;
+        if (@chmod((string)$path, $want)) $done++; else $failed++;
+    }
+    return [$done, $failed];
+}
+
 // ── HTTPS client (curl preferred, stream fallback; https-only, max 5 redirects) ──
 
 function https_only(string $url): bool { return strncasecmp($url, 'https://', 8) === 0; }
@@ -756,6 +848,8 @@ function requirements_list(?int $needBytes): array {
         ['id' => 'zip',      'ok' => class_exists('ZipArchive'), 'value' => class_exists('ZipArchive') ? 'ZipArchive' : null],
         ['id' => 'http',     'ok' => http_capable(), 'value' => extension_loaded('curl') ? 'curl' : (http_capable() ? 'allow_url_fopen' : null)],
         ['id' => 'ca',       'ok' => $caOk, 'value' => $caValue, 'hintAlways' => $caOk === null],
+        ['id' => 'perms',    'ok' => true, 'value' => sprintf('%04o / %04o', dir_mode(), file_mode()),
+         'hintAlways' => perms_owner_split()],
         ['id' => 'crypto',   'ok' => function_exists('hash_pbkdf2') && function_exists('random_bytes') && function_exists('hash_file'), 'value' => 'PBKDF2-SHA256'],
         ['id' => 'writable', 'ok' => is_writable(target_dir()), 'value' => null],
         ['id' => 'disk',     'ok' => ($free === false) ? null : ($free >= $need),
@@ -897,13 +991,13 @@ function extract_entry(ZipArchive $zip, int $index, string $stripPrefix, ?bool &
 
     $dest = tpath($rel);
     if (substr($name, -1) === '/') {                                         // directory entry
-        if (!is_dir($dest) && !@mkdir($dest, 0755, true) && !is_dir($dest)) throw new RuntimeException('mkdir_failed');
+        if (!make_dir($dest)) throw new RuntimeException('mkdir_failed');
         if (!within_target($dest)) throw new RuntimeException('zip_bad_entry:escape');
         return 0;
     }
 
     $dir = dirname($dest);
-    if (!is_dir($dir) && !@mkdir($dir, 0755, true) && !is_dir($dir)) throw new RuntimeException('mkdir_failed');
+    if (!make_dir($dir)) throw new RuntimeException('mkdir_failed');
     if (!within_target($dir)) throw new RuntimeException('zip_bad_entry:escape');
     // Never allow an entry to resolve onto this installer file itself.
     $selfReal = realpath(__FILE__);
@@ -927,6 +1021,7 @@ function extract_entry(ZipArchive $zip, int $index, string $stripPrefix, ?bool &
     }
     fclose($in);
     fclose($out);
+    fix_file_mode($dest);
     return $written;
 }
 
@@ -1171,7 +1266,7 @@ function handle_configure(): void {
     }
 
     $apiDir = tpath('api');
-    if (!is_dir($apiDir) && !@mkdir($apiDir, 0755, true) && !is_dir($apiDir)) json_fail('mkdir_failed', 500);
+    if (!make_dir($apiDir)) json_fail('mkdir_failed', 500);
 
     // api/.htaccess: only create when the release zip did not ship one.
     $ht = $apiDir . '/.htaccess';
@@ -1185,17 +1280,21 @@ function handle_configure(): void {
             . "    <IfModule !mod_authz_core.c>\n        Order allow,deny\n        Deny from all\n    </IfModule>\n"
             . "</FilesMatch>\n";
         if (file_put_contents($ht, $rules) === false) json_fail('htaccess_write_failed', 500);
+        fix_file_mode($ht);
     }
 
     // Data layout (only create what is absent — never touch existing data).
+    // These are the directories the operator uploads datasets into over SFTP, so
+    // getting their mode right matters more here than anywhere else.
     foreach (['DATA_WEB', 'DATA_WEB/fixed', 'DATA_WEB/live', 'DATA_WEB/tracking'] as $d) {
         $p = tpath($d);
-        if (!is_dir($p) && !@mkdir($p, 0755, true) && !is_dir($p)) json_fail('mkdir_failed', 500);
+        if (!make_dir($p)) json_fail('mkdir_failed', 500);
     }
     $catalog = tpath('DATA_WEB/catalog.json');
     if (!file_exists($catalog)) {
         if (file_put_contents($catalog, json_encode(['datasets' => []])) === false) json_fail('catalog_write_failed', 500);
     }
+    fix_file_mode($catalog);
 
     $s['phase'] = 'configured';
     if (!write_state($s)) json_fail('state_write_failed', 500);
@@ -1207,9 +1306,11 @@ function handle_finalize(): void {
     $s = require_state(['configured']);
     $lock = json_encode(['installedAt' => date('c'), 'version' => $s['release']['version'] ?? null]);
     if (file_put_contents(tpath(LOCK_FILE), $lock) === false) json_fail('lock_write_failed', 500);
+    fix_file_mode(tpath(LOCK_FILE));
+    [$fixed, $failed] = apply_tree_modes();                                  // last-mile guarantee
     clear_artifacts(true);
     $leftover = is_file(tpath(STATE_FILE));
-    json_out(['ok' => true, 'stateCleared' => !$leftover]);
+    json_out(['ok' => true, 'stateCleared' => !$leftover, 'permsFixed' => $fixed, 'permsFailed' => $failed]);
 }
 
 /** Wipe installer working files so the user can restart from zero. */
@@ -1496,6 +1597,8 @@ const DICT = {
     req_crypto: "Fonctions cryptographiques (PBKDF2)", req_writable: "Dossier accessible en écriture", req_disk: "Espace disque libre",
     req_ca: "Certificats CA (vérification HTTPS)",
     hint_ca: "Introuvable : php.ini désigne un fichier CA absent et aucun magasin système n'est lisible (open_basedir ?). Téléversez cacert.pem (https://curl.se/ca/cacert.pem) à côté de install.php.",
+    req_perms: "Permissions des fichiers créés (dossiers / fichiers)",
+    hint_perms: "PHP tourne sous un utilisateur différent du propriétaire du site : les fichiers créés sont rendus inscriptibles pour rester modifiables via FTP/SFTP.",
     hint_php: "Mettez à jour PHP via le panneau de votre hébergeur.",
     hint_zip: "Activez l'extension « zip » dans la configuration PHP.",
     hint_http: "Activez l'extension curl ou allow_url_fopen dans php.ini.",
@@ -1606,6 +1709,8 @@ const DICT = {
     req_crypto: "Crypto functions (PBKDF2)", req_writable: "Directory writable", req_disk: "Free disk space",
     req_ca: "CA certificates (HTTPS verification)",
     hint_ca: "Not found: php.ini names a CA file that does not exist and no system store is readable (open_basedir?). Upload cacert.pem (https://curl.se/ca/cacert.pem) next to install.php.",
+    req_perms: "Permissions of created files (dirs / files)",
+    hint_perms: "PHP runs as a different user than the site owner: created files are made writable so they stay editable over FTP/SFTP.",
     hint_php: "Update PHP from your hosting control panel.",
     hint_zip: "Enable the \"zip\" extension in the PHP configuration.",
     hint_http: "Enable the curl extension or allow_url_fopen in php.ini.",
@@ -1844,7 +1949,7 @@ function renderWelcome(resume) {
 const REQ_META = {
   php: ['req_php', 'hint_php'], zip: ['req_zip', 'hint_zip'], http: ['req_http', 'hint_http'],
   crypto: ['req_crypto', 'hint_crypto'], writable: ['req_writable', 'hint_writable'], disk: ['req_disk', 'hint_disk'],
-  ca: ['req_ca', 'hint_ca']
+  ca: ['req_ca', 'hint_ca'], perms: ['req_perms', 'hint_perms']
 };
 function reqRow(r) {
   const [nameKey, hintKey] = REQ_META[r.id] || [r.id, null];

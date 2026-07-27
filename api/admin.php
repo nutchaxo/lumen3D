@@ -24,7 +24,7 @@ if (!admin_is_auth()) admin_json_out(['error' => 'Not authenticated'], 401);
 $action = $_GET['action'] ?? '';
 $body   = ($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST' ? (json_decode(file_get_contents('php://input'), true) ?: []) : [];
 
-if (in_array($action, ['set_plugin', 'update_apply', 'approve_plugin', 'revoke_plugin', 'install_plugin', 'uninstall_plugin'], true)) admin_require_write();
+if (in_array($action, ['set_plugin', 'update_apply', 'approve_plugin', 'revoke_plugin', 'install_plugin', 'uninstall_plugin', 'repair_permissions'], true)) admin_require_write();
 
 switch ($action) {
 
@@ -212,6 +212,16 @@ switch ($action) {
         // Python server's Blue-Green swap.
         [$code, $payload] = admin_update_apply_php();
         admin_json_out($payload, $code);
+    }
+
+    case 'permissions_status':
+        admin_json_out(admin_permissions_report());
+
+    case 'repair_permissions': {
+        // Re-applies the resolved modes across the install. Needed on hosts where PHP
+        // runs as another user than the FTP/SFTP account: without it, anything the
+        // platform created before this logic existed stays unwritable for the owner.
+        admin_json_out(admin_apply_tree_modes());
     }
 
     default:

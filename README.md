@@ -186,6 +186,16 @@ For hosting without Python, drop the single file [`install.php`](install.php) in
 
 *Same failure on the Python server?* It does not apply: `dev_server.py` uses the system trust store through Python, not `php.ini`.
 
+#### Files created by the platform must stay editable over FTP/SFTP
+
+On many shared hosts, PHP runs as a **different system user** (`www-data`, `apache`, a php-fpm pool) than the FTP/SFTP account. Everything the installer and the admin panel create then belongs to *that* user — and since POSIX takes the right to delete a file from its **parent directory**, the account can neither upload into those directories nor remove anything inside them. A freshly installed `DATA_WEB/fixed/` looks untouchable.
+
+Since web v1.23.0 the platform detects the split — it compares the owner of `install.php` (uploaded by the account, so it belongs to it) resp. of the web root against PHP's effective user — and only then creates directories `0777` and files `0666`, so the site stays under its owner's control. On a properly configured host nothing changes: `0755` / `0644` as before. Secrets (`api/*.json`) always keep `0600`; deleting them only needs the parent directory. Both modes can be forced with the `LUMEN_DIR_MODE` / `LUMEN_FILE_MODE` environment variables.
+
+- **Installed before v1.23.0?** Admin panel → **Security** → *File permissions* → **Repair permissions**. The card also shows which user PHP runs as, who owns the site, and the modes in effect.
+- **Trade-off**: PHP cannot `chown`/`chgrp` (root only), so making a file editable by a *different* account means making it world-writable. On a multi-tenant machine that widens the attack surface, which is why it is applied only where the split actually exists. The clean fix remains asking the host to run PHP as the site account (suEXEC / dedicated pool).
+- Datasets go into `DATA_WEB/<type>/<name>/`; afterwards use admin → **Datasets** → *Rebuild catalog* rather than hand-editing `DATA_WEB/catalog.json`.
+
 ### 3. First-Run Setup (no default password)
 
 There is **no default admin password**. On a fresh install, open the admin panel (`/admpan.html`) — a **guided setup wizard** walks you through creating the admin account and configuring identity, theme, texts, and the initial plugin set. Credentials are stored as a one-way **salted PBKDF2-HMAC-SHA256** hash in `api/admin_credential.json` (gitignored, never served over HTTP).

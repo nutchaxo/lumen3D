@@ -230,6 +230,128 @@ def _csp_policy(nonce: str) -> str:
 _LOG_REQUESTS = False
 
 
+# ── Filesystem permissions (keep the site editable over FTP/SFTP) ────────────
+# Twin of install.php / api/_admin_lib.php. When this process runs as a different
+# system user than the one owning the web root, everything it creates would be
+# owned by the process in 0755/0644 and the site's owner could neither write into
+# those directories nor delete what is inside them (POSIX takes the delete right
+# from the PARENT directory). We detect that split and create world-writable so the
+# owner keeps control; run as the owner — the normal case here — and nothing changes.
+# api/ secrets keep their own restrictive mode. Override: LUMEN_DIR_MODE/LUMEN_FILE_MODE.
+
+def _perms_owner_split() -> bool:
+    if os.name != "posix":
+        return False
+    try:
+        return ROOT.stat().st_uid != os.geteuid()
+    except OSError:
+        return False
+
+
+def _mode_override(name: str) -> int | None:
+    v = (os.environ.get(name) or "").strip()
+    if not re.fullmatch(r"0?[0-7]{3,4}", v):
+        return None
+    try:
+        return int(v, 8)
+    except ValueError:
+        return None
+
+
+def _dir_mode() -> int:
+    return _mode_override("LUMEN_DIR_MODE") or (0o777 if _perms_owner_split() else 0o755)
+
+
+def _file_mode() -> int:
+    return _mode_override("LUMEN_FILE_MODE") or (0o666 if _perms_owner_split() else 0o644)
+
+
+def _make_dir(path: Path) -> None:
+    """mkdir -p, then set the mode on every level created (mkdir applies the umask)."""
+    if path.is_dir():
+        return
+    path.mkdir(parents=True, exist_ok=True)
+    if os.name != "posix":
+        return
+    mode, cur = _dir_mode(), path.resolve()
+    root = ROOT.resolve()
+    while cur != root and root in cur.parents:
+        try:
+            cur.chmod(mode)
+        except OSError:
+            pass
+        cur = cur.parent
+
+
+def _fix_file_mode(path: Path) -> None:
+    if os.name == "posix":
+        try:
+            path.chmod(_file_mode())
+        except OSError:
+            pass
+
+
+def _is_secret_rel(rel: str) -> bool:
+    return rel.startswith("api/") and rel.endswith(".json")
+
+
+def _permissions_report() -> dict:
+    def uname(uid):
+        if uid is None:
+            return None
+        try:
+            import pwd
+            return pwd.getpwuid(uid).pw_name
+        except Exception:
+            return str(uid)
+    owner = php_user = None
+    if os.name == "posix":
+        try:
+            owner = ROOT.stat().st_uid
+        except OSError:
+            owner = None
+        php_user = os.geteuid()
+    return {
+        "posix": os.name == "posix",
+        "split": _perms_owner_split(),
+        "siteOwner": uname(owner),
+        "phpUser": uname(php_user),
+        "dirMode": format(_dir_mode(), "04o"),
+        "fileMode": format(_file_mode(), "04o"),
+        "rootMode": format(ROOT.stat().st_mode & 0o777, "04o") if os.name == "posix" else None,
+    }
+
+
+def _apply_tree_modes(max_entries: int = 200_000) -> dict:
+    """Repair pass: re-apply the resolved modes across the install (symlinks skipped)."""
+    out = {"fixed": 0, "failed": 0, "scanned": 0,
+           "dirMode": format(_dir_mode(), "04o"), "fileMode": format(_file_mode(), "04o"),
+           "split": _perms_owner_split()}
+    if os.name != "posix":
+        return out
+    dir_mode, file_mode = _dir_mode(), _file_mode()
+    for dirpath, dirnames, filenames in os.walk(ROOT, followlinks=False):
+        for name, is_dir in [(d, True) for d in dirnames] + [(f, False) for f in filenames]:
+            p = Path(dirpath) / name
+            out["scanned"] += 1
+            if out["scanned"] > max_entries:
+                return out
+            if p.is_symlink():
+                continue
+            rel = p.relative_to(ROOT).as_posix()
+            if _is_secret_rel(rel):
+                continue
+            want = dir_mode if is_dir else file_mode
+            try:
+                if (p.stat().st_mode & 0o777) == want:
+                    continue
+                p.chmod(want)
+                out["fixed"] += 1
+            except OSError:
+                out["failed"] += 1
+    return out
+
+
 def _atomic_write(path: Path, data, *, binary: bool = False, mode: int | None = None) -> None:
     """RACE-020: write to a temp sibling then os.replace (atomic rename on the same
     filesystem), guarded by a process-wide lock — so two concurrent admin POSTs (or a
@@ -353,7 +475,7 @@ def _save_site_doc(doc: str, data) -> bool:
     if not res or not isinstance(data, (dict, list)):
         return False
     active, _default = res
-    _atomic_write(active, json.dumps(data, indent=2, ensure_ascii=False), mode=0o644)
+    _atomic_write(active, json.dumps(data, indent=2, ensure_ascii=False), mode=_file_mode())
     if doc == "instance":
         _INSTANCE_CACHE.update({"sig": None, "data": {}})
     elif doc == "theme":
@@ -406,7 +528,7 @@ def _generate_theme_css(theme: dict) -> str:
 def _regenerate_theme_css(theme: dict | None = None) -> None:
     if theme is None:
         theme = _load_site_doc("theme")
-    _atomic_write(THEME_CSS_FILE, _generate_theme_css(theme if isinstance(theme, dict) else {}), mode=0o644)
+    _atomic_write(THEME_CSS_FILE, _generate_theme_css(theme if isinstance(theme, dict) else {}), mode=_file_mode())
 
 
 def _reset_site_doc(doc: str) -> bool:
@@ -566,7 +688,7 @@ def _media_upload(body):
     if not raw or len(raw) > _MEDIA_MAX:
         return {"ok": False, "error": "Fichier vide ou trop volumineux (max 8 Mo)"}
     try:
-        MEDIA_DIR.mkdir(parents=True, exist_ok=True)
+        _make_dir(MEDIA_DIR)
         stem, ext = name.rsplit(".", 1)
         target = MEDIA_DIR / name
         i = 1
@@ -576,7 +698,7 @@ def _media_upload(body):
             i += 1
         target.write_bytes(raw)
         try:
-            target.chmod(0o644)
+            target.chmod(_file_mode())
         except Exception:
             pass
         return {"ok": True, "url": f"config/uploads/{name}", "name": name}
@@ -2762,7 +2884,7 @@ def _save_dataset(dataset_id: str, body: dict) -> bool:
     if safe is None:
         return False
     type_dir, folder, ds_dir = safe
-    ds_dir.mkdir(parents=True, exist_ok=True)
+    _make_dir(ds_dir)
     meta_path = ds_dir / "metadata.json"
 
     # Merge: keep existing fields, override with posted fields
@@ -2780,7 +2902,7 @@ def _save_dataset(dataset_id: str, body: dict) -> bool:
     existing["configured"]  = True
     existing["lastModified"] = datetime.now().isoformat()
 
-    _atomic_write(meta_path, json.dumps(existing, indent=2, ensure_ascii=False))  # RACE-020
+    _atomic_write(meta_path, json.dumps(existing, indent=2, ensure_ascii=False), mode=_file_mode())  # RACE-020
     _CATALOG_CACHE["sig"] = None  # PERF-035: force a recompute on the next catalog read
     return True
 
@@ -2801,7 +2923,7 @@ def _set_dataset_hidden(dataset_id: str, hidden: bool) -> bool:
         return False
     meta["hidden"] = bool(hidden)
     meta["lastModified"] = datetime.now().isoformat()
-    _atomic_write(meta_path, json.dumps(meta, indent=2, ensure_ascii=False))  # RACE-020
+    _atomic_write(meta_path, json.dumps(meta, indent=2, ensure_ascii=False), mode=_file_mode())  # RACE-020
     _CATALOG_CACHE["sig"] = None  # PERF-035
     return True
 
@@ -2830,8 +2952,8 @@ def _save_thumbnail_bytes(dataset_id: str, image_data: str):
         return 400, {"error": "Thumbnail too large"}
     if not _is_supported_image(img_bytes):
         return 400, {"error": "Not a valid image (expected WebP/PNG/JPEG/GIF)"}
-    ds_dir.mkdir(parents=True, exist_ok=True)
-    _atomic_write(ds_dir / "thumbnail.webp", img_bytes, binary=True)  # RACE-020
+    _make_dir(ds_dir)
+    _atomic_write(ds_dir / "thumbnail.webp", img_bytes, binary=True, mode=_file_mode())  # RACE-020
     _CATALOG_CACHE["sig"] = None  # PERF-035
     return 200, {"ok": True, "path": f"DATA_WEB/{type_dir}/{folder}/thumbnail.webp"}
 
@@ -2887,7 +3009,7 @@ def _build_catalog() -> list[dict]:
 def _rebuild_catalog() -> int:
     catalog = _build_catalog()
     catalog_path = DATA_WEB / "catalog.json"  # global (== ROOT/DATA_WEB in prod; lets tests redirect)
-    _atomic_write(catalog_path, json.dumps(catalog, indent=2, ensure_ascii=False))  # RACE-020
+    _atomic_write(catalog_path, json.dumps(catalog, indent=2, ensure_ascii=False), mode=_file_mode())  # RACE-020
     return len(catalog)
 
 
@@ -2997,7 +3119,7 @@ def _write_languages_manifest(codes: list[str]) -> None:
                 return
         except (OSError, ValueError):
             pass
-        _atomic_write(target, new_text)
+        _atomic_write(target, new_text, mode=_file_mode())
     except Exception:
         pass
 
@@ -3029,7 +3151,7 @@ def _write_plugins_manifest(plugins: list[dict]) -> None:
         # RACE-020: /api/plugins is a GET that rewrites this file, and the server is
         # ThreadingHTTPServer — concurrent loads could interleave a plain write and
         # truncate/corrupt manifest.json. Use the atomic (temp + os.replace, locked) helper.
-        _atomic_write(target, new_text)
+        _atomic_write(target, new_text, mode=_file_mode())
     except Exception:
         pass
 
@@ -3522,7 +3644,8 @@ class AdminHandler(http.server.SimpleHTTPRequestHandler):
                 return
             if action in ("set_plugin", "update_apply", "update_ack",
                           "approve_plugin", "revoke_plugin",
-                          "install_plugin", "uninstall_plugin"):
+                          "install_plugin", "uninstall_plugin",
+                          "repair_permissions"):
                 ok, status, payload = _authorize_write(
                     self.command, session, self.headers.get("X-CSRF-Token")
                 )
@@ -3562,6 +3685,10 @@ class AdminHandler(http.server.SimpleHTTPRequestHandler):
                 self._json(st2, pl2)
             elif action == "version":
                 self._json(200, _version_info())
+            elif action == "permissions_status":
+                self._json(200, _permissions_report())
+            elif action == "repair_permissions":
+                self._json(200, _apply_tree_modes())
             elif action == "update_check":
                 self._json(200, _update_check())
             elif action == "update_preflight":

@@ -64,14 +64,14 @@ function media_upload(array $body): array {
     $raw = base64_decode($data, false);
     if ($raw === false || $raw === '' || strlen($raw) > MEDIA_MAX) return ['ok' => false, 'error' => 'Fichier vide ou trop volumineux (max 8 Mo)'];
     $dir = media_dir();
-    if (!is_dir($dir) && !@mkdir($dir, 0755, true)) return ['ok' => false, 'error' => 'Écriture impossible'];
+    if (!admin_make_dir($dir)) return ['ok' => false, 'error' => 'Écriture impossible'];
     $dot  = strrpos($name, '.');
     $stem = substr($name, 0, $dot);
     $ext  = substr($name, $dot + 1);
     $i = 1;
     while (is_file("$dir/$name")) { $name = "$stem-$i.$ext"; $i++; }
     if (@file_put_contents("$dir/$name", $raw) === false) return ['ok' => false, 'error' => 'Écriture impossible'];
-    @chmod("$dir/$name", 0644);
+    admin_fix_file_mode("$dir/$name");
     return ['ok' => true, 'url' => 'config/uploads/' . $name, 'name' => $name];
 }
 

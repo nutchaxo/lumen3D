@@ -2,12 +2,14 @@
  * Admin SPA — Security tab
  * ========================
  * Change the admin password (requires the current one). Also explains the
- * hardened storage model so an operator understands the guarantees.
+ * hardened storage model so an operator understands the guarantees, and exposes
+ * the file-permission repair for hosts where PHP runs as another system user than
+ * the FTP/SFTP account (see api/_admin_lib.php admin_apply_tree_modes).
  */
 
 'use strict';
 
-import { API_AUTH, t, escHtml, apiFetchStatus, toast, el, refreshIcons } from './shared.js';
+import { API_AUTH, API_ADMIN, t, escHtml, apiFetch, apiFetchStatus, toast, el, refreshIcons } from './shared.js';
 
 function render() {
   const root = el('security-root');
@@ -50,10 +52,48 @@ function render() {
           </ul>
         </div>
       </div>
+
+      <div class="adm-card">
+        <div class="adm-card-head"><i data-lucide="folder-cog"></i><span>${escHtml(t('admin.permsTitle', 'Permissions des fichiers'))}</span></div>
+        <div class="adm-card-body">
+          <p class="adm-page-sub" id="perms-state">${escHtml(t('admin.permsChecking', 'Vérification…'))}</p>
+          <p class="adm-page-sub">${escHtml(t('admin.permsHelp', "Si PHP tourne sous un utilisateur différent de votre compte FTP/SFTP, ce que la plateforme crée ne vous appartient pas : impossible d'uploader dans ces dossiers ni d'y supprimer un fichier. Cette action réapplique des permissions qui vous rendent la main."))}</p>
+          <button class="adm-btn" id="perms-repair" style="margin-top:6px">${escHtml(t('admin.permsRepair', 'Réparer les permissions'))}</button>
+        </div>
+      </div>
     </div>`;
   el('sec-submit').addEventListener('click', submit);
   el('sec-new2').addEventListener('keydown', (e) => { if (e.key === 'Enter') submit(); });
+  el('perms-repair').addEventListener('click', repairPerms);
+  loadPermsState();
   refreshIcons(root);
+}
+
+async function loadPermsState() {
+  const box = el('perms-state');
+  if (!box) return;
+  const r = await apiFetch(`${API_ADMIN}?action=permissions_status`);
+  const d = r?.data;
+  if (!d) { box.textContent = t('admin.permsUnknown', 'État des permissions indisponible.'); return; }
+  if (!d.posix) { box.textContent = t('admin.permsWindows', 'Hôte Windows : les permissions POSIX ne s\'appliquent pas.'); return; }
+  box.textContent = d.split
+    ? t('admin.permsSplit', 'PHP ({php}) ≠ propriétaire du site ({owner}) — les fichiers créés utilisent {dir} / {file}.',
+        { php: d.phpUser || '?', owner: d.siteOwner || '?', dir: d.dirMode, file: d.fileMode })
+    : t('admin.permsSame', 'PHP tourne sous le propriétaire du site ({owner}) — permissions standard {dir} / {file}.',
+        { owner: d.siteOwner || '?', dir: d.dirMode, file: d.fileMode });
+}
+
+async function repairPerms() {
+  const btn = el('perms-repair');
+  btn.disabled = true;
+  btn.innerHTML = `<span class="spinner spinner-sm"></span> ${escHtml(t('admin.permsRunning', 'Application…'))}`;
+  const r = await apiFetch(`${API_ADMIN}?action=repair_permissions`, { method: 'POST', body: '{}' });
+  btn.disabled = false;
+  btn.textContent = t('admin.permsRepair', 'Réparer les permissions');
+  const d = r?.data;
+  if (!d || d.error) { toast(t('admin.permsFailed', 'Échec de la réparation des permissions.'), 'error'); return; }
+  toast(t('admin.permsDone', '{n} entrées corrigées ({failed} échecs).', { n: d.fixed, failed: d.failed }));
+  loadPermsState();
 }
 
 function err(msg) {

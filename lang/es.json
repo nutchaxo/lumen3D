@@ -791,13 +791,13 @@
     "updateApplied": "Actualización aplicada (v{v}) — recargando…",
     "permsTitle": "Permisos de archivos",
     "permsChecking": "Comprobando…",
-    "permsHelp": "Si PHP se ejecuta con un usuario distinto al de su cuenta FTP/SFTP, lo que crea la plataforma no le pertenece: no puede subir archivos a esas carpetas ni borrar nada en ellas. Esta acción vuelve a aplicar permisos que le devuelven el control.",
+    "permsHelp": "Los permisos de los archivos creados se heredan del directorio raíz del sitio, de modo que siguen siendo editables por la cuenta FTP/SFTP configurada por el alojamiento. Esta acción los vuelve a aplicar a todo lo existente.",
     "permsRepair": "Reparar permisos",
     "permsRunning": "Aplicando…",
     "permsUnknown": "Estado de permisos no disponible.",
     "permsWindows": "Host Windows: los permisos POSIX no se aplican.",
-    "permsSplit": "PHP ({php}) ≠ propietario del sitio ({owner}) — los archivos creados usan {dir} / {file}.",
-    "permsSame": "PHP se ejecuta como el propietario del sitio ({owner}) — permisos estándar {dir} / {file}.",
+    "permsSplit": "PHP ({php}) ≠ propietario del sitio ({owner}:{group}) — raíz en {root}, archivos creados con {dir} / {file}.",
+    "permsSame": "PHP se ejecuta como el propietario del sitio ({owner}:{group}) — raíz en {root}, archivos creados con {dir} / {file}.",
     "permsDone": "{n} entradas corregidas ({failed} fallos).",
     "permsFailed": "Error al reparar los permisos.",
     "rateLimited": "Límite de la API de GitHub alcanzado. Reinténtelo en {m} minuto(s).",
@@ -966,7 +966,13 @@
       "badge": "Insignias",
       "icon-list": "Lista con iconos",
       "profile": "Perfil",
-      "cite-block": "Cita copiable"
+      "cite-block": "Cita copiable",
+      "tabs": "Pestañas",
+      "counter": "Contador animado",
+      "video": "Vídeo",
+      "link-list": "Lista de enlaces",
+      "spec-list": "Ficha de información",
+      "logo-strip": "Franja de logotipos"
     },
     "addColumn": "Añadir una columna",
     "addSection": "Añadir una sección",
@@ -1382,7 +1388,55 @@
     },
     "richtextHint": "**negrita**, *cursiva*, [enlace](url)",
     "imgCaption": "Leyenda",
-    "markup": "Formato enriquecido"
+    "markup": "Formato enriquecido",
+    "image": "Imagen",
+    "lineColor": "Color de las líneas",
+    "ll": {
+      "items": "Enlaces",
+      "addItem": "Añadir un enlace",
+      "dividers": "Líneas de separación",
+      "arrow": "Flecha a la derecha",
+      "padY": "Altura de las filas"
+    },
+    "sl": {
+      "items": "Información",
+      "label": "Etiqueta",
+      "value": "Valor",
+      "addItem": "Añadir una fila",
+      "labelWidth": "Ancho de las etiquetas",
+      "labelColor": "Color de las etiquetas",
+      "valueColor": "Color de los valores"
+    },
+    "lg": {
+      "items": "Logotipos",
+      "addItem": "Añadir un logotipo",
+      "monogram": "Monograma (si no hay imagen)",
+      "height": "Altura de los logotipos",
+      "labels": "Mostrar los rótulos",
+      "grayscale": "Desaturar (color al pasar el cursor)",
+      "plate": "Placa clara detrás de los logotipos"
+    },
+    "cnt": {
+      "value": "Valor objetivo",
+      "prefix": "Prefijo",
+      "suffix": "Sufijo",
+      "label": "Rótulo",
+      "size": "Tamaño del número",
+      "color": "Color del número"
+    },
+    "vid": {
+      "src": "Vídeo (archivo .mp4/.webm o enlace de YouTube/Vimeo)",
+      "poster": "Imagen de vista previa (póster)",
+      "autoplay": "Reproducción automática (silenciada, archivo local)",
+      "loop": "Bucle"
+    },
+    "tabs": {
+      "items": "Pestañas",
+      "label": "Título de la pestaña",
+      "content": "Contenido",
+      "add": "Añadir una pestaña",
+      "accent": "Color de la pestaña activa"
+    }
   },
   "wizard": {
     "title": "Instalación guiada",

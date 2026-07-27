@@ -227,8 +227,29 @@ function mode_override(string $env): ?int {
     return (int)intval(trim((string)$v), 8);
 }
 
-function dir_mode(): int  { return mode_override('LUMEN_DIR_MODE')  ?? (perms_owner_split() ? 0777 : 0755); }
-function file_mode(): int { return mode_override('LUMEN_FILE_MODE') ?? (perms_owner_split() ? 0666 : 0644); }
+/**
+ * Modes are INHERITED FROM THE TARGET DIRECTORY: that is what the hosting account
+ * was set up with, and it already encodes how this host shares the site. The common
+ * shared-hosting layout is `user:client 0770` — PHP and the SFTP login are different
+ * users of the SAME GROUP, so files must be GROUP-writable (0770/0660). Creating
+ * 0755/0644 there locks the operator out of their own site; 0777/0666 would grant
+ * far more than needed. World-writable is kept only for the case inheritance cannot
+ * cover: a root writable by nobody but its owner, with PHP not being that owner.
+ * @return array{0:int,1:int} [dirMode, fileMode]
+ */
+function base_modes(): array {
+    static $cached = null;
+    if ($cached !== null) return $cached;
+    if (DIRECTORY_SEPARATOR !== '/') return $cached = [0755, 0644];
+    $perms = @fileperms(target_dir());
+    if ($perms === false) return $cached = [0755, 0644];
+    $base = $perms & 0777;
+    if (perms_owner_split() && ($base & 0022) === 0) $base |= 0022;
+    return $cached = [$base | 0700, ($base & 0666) | 0600];
+}
+
+function dir_mode(): int  { return mode_override('LUMEN_DIR_MODE')  ?? base_modes()[0]; }
+function file_mode(): int { return mode_override('LUMEN_FILE_MODE') ?? base_modes()[1]; }
 
 /**
  * mkdir + explicit chmod. mkdir()'s mode argument is masked by the process umask

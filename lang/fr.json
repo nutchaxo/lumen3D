@@ -791,13 +791,13 @@
     "updateApplied": "Mise à jour appliquée (v{v}) — rechargement…",
     "permsTitle": "Permissions des fichiers",
     "permsChecking": "Vérification…",
-    "permsHelp": "Si PHP tourne sous un utilisateur différent de votre compte FTP/SFTP, ce que la plateforme crée ne vous appartient pas : impossible d'uploader dans ces dossiers ni d'y supprimer un fichier. Cette action réapplique des permissions qui vous rendent la main.",
+    "permsHelp": "Les permissions des fichiers créés sont héritées du dossier racine du site : ils restent donc modifiables par le compte FTP/SFTP configuré par l'hébergeur. Cette action réapplique ces permissions à tout ce qui existe déjà.",
     "permsRepair": "Réparer les permissions",
     "permsRunning": "Application…",
     "permsUnknown": "État des permissions indisponible.",
     "permsWindows": "Hôte Windows : les permissions POSIX ne s'appliquent pas.",
-    "permsSplit": "PHP ({php}) ≠ propriétaire du site ({owner}) — les fichiers créés utilisent {dir} / {file}.",
-    "permsSame": "PHP tourne sous le propriétaire du site ({owner}) — permissions standard {dir} / {file}.",
+    "permsSplit": "PHP ({php}) ≠ propriétaire du site ({owner}:{group}) — racine en {root}, fichiers créés en {dir} / {file}.",
+    "permsSame": "PHP tourne sous le propriétaire du site ({owner}:{group}) — racine en {root}, fichiers créés en {dir} / {file}.",
     "permsDone": "{n} entrées corrigées ({failed} échecs).",
     "permsFailed": "Échec de la réparation des permissions.",
     "rateLimited": "Limite de l'API GitHub atteinte. Réessayez dans {m} minute(s).",
@@ -966,7 +966,13 @@
       "badge": "Badges",
       "icon-list": "Liste à icônes",
       "profile": "Profil",
-      "cite-block": "Citation copiable"
+      "cite-block": "Citation copiable",
+      "tabs": "Onglets",
+      "counter": "Compteur animé",
+      "video": "Vidéo",
+      "link-list": "Liste de liens",
+      "spec-list": "Fiche d'informations",
+      "logo-strip": "Bandeau de logos"
     },
     "addColumn": "Ajouter une colonne",
     "addSection": "Ajouter une section",
@@ -1382,7 +1388,55 @@
     },
     "richtextHint": "**gras**, *italique*, [lien](url)",
     "imgCaption": "Légende",
-    "markup": "Mise en forme"
+    "markup": "Mise en forme",
+    "image": "Image",
+    "lineColor": "Couleur des filets",
+    "ll": {
+      "items": "Liens",
+      "addItem": "Ajouter un lien",
+      "dividers": "Filets de séparation",
+      "arrow": "Flèche à droite",
+      "padY": "Hauteur des lignes"
+    },
+    "sl": {
+      "items": "Informations",
+      "label": "Intitulé",
+      "value": "Valeur",
+      "addItem": "Ajouter une ligne",
+      "labelWidth": "Largeur des intitulés",
+      "labelColor": "Couleur des intitulés",
+      "valueColor": "Couleur des valeurs"
+    },
+    "lg": {
+      "items": "Logos",
+      "addItem": "Ajouter un logo",
+      "monogram": "Monogramme (si pas d'image)",
+      "height": "Hauteur des logos",
+      "labels": "Afficher les libellés",
+      "grayscale": "Désaturer (couleur au survol)",
+      "plate": "Plaque claire derrière les logos"
+    },
+    "cnt": {
+      "value": "Valeur cible",
+      "prefix": "Préfixe",
+      "suffix": "Suffixe",
+      "label": "Libellé",
+      "size": "Taille du nombre",
+      "color": "Couleur du nombre"
+    },
+    "vid": {
+      "src": "Vidéo (fichier .mp4/.webm ou lien YouTube/Vimeo)",
+      "poster": "Image d'aperçu (poster)",
+      "autoplay": "Lecture auto (muet, fichier local)",
+      "loop": "Boucle"
+    },
+    "tabs": {
+      "items": "Onglets",
+      "label": "Titre de l'onglet",
+      "content": "Contenu",
+      "add": "Ajouter un onglet",
+      "accent": "Couleur de l'onglet actif"
+    }
   },
   "wizard": {
     "title": "Installation guidée",

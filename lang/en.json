@@ -791,13 +791,13 @@
     "updateApplied": "Update applied (v{v}) — reloading…",
     "permsTitle": "File permissions",
     "permsChecking": "Checking…",
-    "permsHelp": "When PHP runs as a different user than your FTP/SFTP account, what the platform creates does not belong to you: you can neither upload into those folders nor delete anything in them. This action re-applies permissions that give you back control.",
+    "permsHelp": "Permissions of created files are inherited from the site root directory, so they stay editable by the FTP/SFTP account the host set up. This action re-applies them to everything that already exists.",
     "permsRepair": "Repair permissions",
     "permsRunning": "Applying…",
     "permsUnknown": "Permission state unavailable.",
     "permsWindows": "Windows host: POSIX permissions do not apply.",
-    "permsSplit": "PHP ({php}) ≠ site owner ({owner}) — created files use {dir} / {file}.",
-    "permsSame": "PHP runs as the site owner ({owner}) — standard {dir} / {file} permissions.",
+    "permsSplit": "PHP ({php}) ≠ site owner ({owner}:{group}) — root is {root}, created files use {dir} / {file}.",
+    "permsSame": "PHP runs as the site owner ({owner}:{group}) — root is {root}, created files use {dir} / {file}.",
     "permsDone": "{n} entries fixed ({failed} failures).",
     "permsFailed": "Permission repair failed.",
     "rateLimited": "GitHub API rate limit reached. Retry in {m} minute(s).",
@@ -966,7 +966,13 @@
       "badge": "Badges",
       "icon-list": "Icon list",
       "profile": "Profile",
-      "cite-block": "Copyable citation"
+      "cite-block": "Copyable citation",
+      "tabs": "Tabs",
+      "counter": "Animated counter",
+      "video": "Video",
+      "link-list": "Link list",
+      "spec-list": "Info sheet",
+      "logo-strip": "Logo strip"
     },
     "addColumn": "Add a column",
     "addSection": "Add a section",
@@ -1382,7 +1388,55 @@
     },
     "richtextHint": "**bold**, *italic*, [link](url)",
     "imgCaption": "Caption",
-    "markup": "Rich formatting"
+    "markup": "Rich formatting",
+    "image": "Image",
+    "lineColor": "Rule colour",
+    "ll": {
+      "items": "Links",
+      "addItem": "Add a link",
+      "dividers": "Separator rules",
+      "arrow": "Arrow on the right",
+      "padY": "Row height"
+    },
+    "sl": {
+      "items": "Entries",
+      "label": "Label",
+      "value": "Value",
+      "addItem": "Add a row",
+      "labelWidth": "Label column width",
+      "labelColor": "Label colour",
+      "valueColor": "Value colour"
+    },
+    "lg": {
+      "items": "Logos",
+      "addItem": "Add a logo",
+      "monogram": "Monogram (when no image)",
+      "height": "Logo height",
+      "labels": "Show labels",
+      "grayscale": "Desaturate (colour on hover)",
+      "plate": "Light plate behind logos"
+    },
+    "cnt": {
+      "value": "Target value",
+      "prefix": "Prefix",
+      "suffix": "Suffix",
+      "label": "Label",
+      "size": "Number size",
+      "color": "Number colour"
+    },
+    "vid": {
+      "src": "Video (.mp4/.webm file or YouTube/Vimeo link)",
+      "poster": "Preview image (poster)",
+      "autoplay": "Autoplay (muted, local file)",
+      "loop": "Loop"
+    },
+    "tabs": {
+      "items": "Tabs",
+      "label": "Tab title",
+      "content": "Content",
+      "add": "Add a tab",
+      "accent": "Active tab colour"
+    }
   },
   "wizard": {
     "title": "Guided setup",

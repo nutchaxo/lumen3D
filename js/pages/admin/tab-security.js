@@ -57,7 +57,7 @@ function render() {
         <div class="adm-card-head"><i data-lucide="folder-cog"></i><span>${escHtml(t('admin.permsTitle', 'Permissions des fichiers'))}</span></div>
         <div class="adm-card-body">
           <p class="adm-page-sub" id="perms-state">${escHtml(t('admin.permsChecking', 'Vérification…'))}</p>
-          <p class="adm-page-sub">${escHtml(t('admin.permsHelp', "Si PHP tourne sous un utilisateur différent de votre compte FTP/SFTP, ce que la plateforme crée ne vous appartient pas : impossible d'uploader dans ces dossiers ni d'y supprimer un fichier. Cette action réapplique des permissions qui vous rendent la main."))}</p>
+          <p class="adm-page-sub">${escHtml(t('admin.permsHelp', "Les permissions des fichiers créés sont héritées du dossier racine du site : ils restent donc modifiables par le compte FTP/SFTP configuré par l'hébergeur. Cette action réapplique ces permissions à tout ce qui existe déjà."))}</p>
           <button class="adm-btn" id="perms-repair" style="margin-top:6px">${escHtml(t('admin.permsRepair', 'Réparer les permissions'))}</button>
         </div>
       </div>
@@ -82,11 +82,11 @@ async function loadPermsState() {
     return;
   }
   if (!d.posix) { box.textContent = t('admin.permsWindows', 'Hôte Windows : les permissions POSIX ne s\'appliquent pas.'); return; }
+  const vars = { php: d.phpUser || '?', owner: d.siteOwner || '?', group: d.siteGroup || '?',
+                 root: d.rootMode || '?', dir: d.dirMode, file: d.fileMode };
   box.textContent = d.split
-    ? t('admin.permsSplit', 'PHP ({php}) ≠ propriétaire du site ({owner}) — les fichiers créés utilisent {dir} / {file}.',
-        { php: d.phpUser || '?', owner: d.siteOwner || '?', dir: d.dirMode, file: d.fileMode })
-    : t('admin.permsSame', 'PHP tourne sous le propriétaire du site ({owner}) — permissions standard {dir} / {file}.',
-        { owner: d.siteOwner || '?', dir: d.dirMode, file: d.fileMode });
+    ? t('admin.permsSplit', 'PHP ({php}) ≠ propriétaire du site ({owner}:{group}) — racine en {root}, fichiers créés en {dir} / {file}.', vars)
+    : t('admin.permsSame', 'PHP tourne sous le propriétaire du site ({owner}:{group}) — racine en {root}, fichiers créés en {dir} / {file}.', vars);
 }
 
 async function repairPerms() {

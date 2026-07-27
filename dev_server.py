@@ -258,12 +258,30 @@ def _mode_override(name: str) -> int | None:
         return None
 
 
+def _base_modes() -> tuple[int, int]:
+    """Modes are INHERITED FROM THE WEB ROOT: it is what the hosting account was set
+    up with and already encodes how the site is shared. The common shared-hosting
+    layout is `user:client 0770` — the server process and the SFTP login are different
+    users of the SAME GROUP, so files must be GROUP-writable (0770/0660); 0755/0644
+    would lock the operator out and 0777/0666 would grant more than needed. World-
+    writable is kept only for a root writable by nobody but an owner we are not."""
+    if os.name != "posix":
+        return 0o755, 0o644
+    try:
+        base = ROOT.stat().st_mode & 0o777
+    except OSError:
+        return 0o755, 0o644
+    if _perms_owner_split() and not base & 0o022:
+        base |= 0o022
+    return base | 0o700, (base & 0o666) | 0o600
+
+
 def _dir_mode() -> int:
-    return _mode_override("LUMEN_DIR_MODE") or (0o777 if _perms_owner_split() else 0o755)
+    return _mode_override("LUMEN_DIR_MODE") or _base_modes()[0]
 
 
 def _file_mode() -> int:
-    return _mode_override("LUMEN_FILE_MODE") or (0o666 if _perms_owner_split() else 0o644)
+    return _mode_override("LUMEN_FILE_MODE") or _base_modes()[1]
 
 
 def _make_dir(path: Path) -> None:
@@ -311,14 +329,29 @@ def _permissions_report() -> dict:
         except OSError:
             owner = None
         php_user = os.geteuid()
+    def gname(gid):
+        if gid is None:
+            return None
+        try:
+            import grp
+            return grp.getgrgid(gid).gr_name
+        except Exception:
+            return str(gid)
+    root_mode = ROOT.stat().st_mode & 0o777 if os.name == "posix" else None
+    try:
+        group = ROOT.stat().st_gid if os.name == "posix" else None
+    except OSError:
+        group = None
     return {
         "posix": os.name == "posix",
         "split": _perms_owner_split(),
         "siteOwner": uname(owner),
+        "siteGroup": gname(group),
         "phpUser": uname(php_user),
         "dirMode": format(_dir_mode(), "04o"),
         "fileMode": format(_file_mode(), "04o"),
-        "rootMode": format(ROOT.stat().st_mode & 0o777, "04o") if os.name == "posix" else None,
+        "rootMode": format(root_mode, "04o") if root_mode is not None else None,
+        "groupWritable": bool(root_mode is not None and root_mode & 0o020),
     }
 
 

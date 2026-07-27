@@ -65,14 +65,22 @@ const PluginTrust = (() => {
   }
 
   /**
-   * Decide how a plugin may run. The server's discovery vouch (meta.trust) carries
-   * the authoritative tier; this verifies the on-disk bytes still match it.
+   * Decide how a plugin may run. The server's discovery vouch carries the
+   * authoritative tier; this verifies the on-disk bytes still match it.
+   *
+   * `vouch` is a SEPARATE argument on purpose. It used to be read off `meta.trust`,
+   * but `meta` may legitimately come from the plugin's own plugin.json — so a plugin
+   * could author its own trust tier and escape the sandbox it was approved under.
+   * The caller now sources the vouch exclusively from an authoritative discovery
+   * endpoint; a null vouch means "no trust authority here", handled below.
+   *
+   * @param {object} meta   plugin metadata (never a trust source)
+   * @param {object|null} vouch  server verdict {tier, hash, mode, caps, files}
    * @returns {Promise<{tier, hash?, mode?, caps?, reason}>}
    */
   const TRUSTED = ['bundled', 'dev', 'approved-trusted', 'sandboxed'];
 
-  async function evaluate(meta, basePath, modPath, releaseManifest) {
-    const vouch = meta && meta.trust;
+  async function evaluate(meta, vouch, basePath, modPath, releaseManifest) {
 
     // No server vouch = a static host with no trust authority. Only 'bundled' is
     // client-verifiable there, against version.json — and it needs WebCrypto.

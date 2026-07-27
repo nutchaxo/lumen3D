@@ -14,9 +14,9 @@
     # The dataset catalog is DERIVED from every DATA_WEB/<type>/<name>/metadata.json.
     # Routing it through PHP lets a dataset dropped in by SFTP appear without anyone
     # clicking "Régénérer catalog.json" — the Python server already rebuilds it on GET.
-    # api/catalog.php only regenerates when a metadata.json is newer than the cached
-    # file. Without mod_rewrite this rule is absent and Apache serves the static
-    # catalog.json directly: stale, exactly as before, never worse.
+    # api/catalog.php builds the response per request; there is no catalog file on
+    # disk any more. Without mod_rewrite this rule is absent and the request 404s —
+    # this deployment REQUIRES mod_rewrite (as it already does to get a CSP at all).
     RewriteRule ^DATA_WEB/catalog\.json$ api/catalog.php [L,QSA]
 </IfModule>
 
@@ -26,6 +26,20 @@
         Require all granted
     </IfModule>
 </FilesMatch>
+
+# ── Directories that must never be served ────────────────────────────────────
+# api/ carries its own .htaccess; these have none, and none of them ships in a
+# release — but an operator who rsyncs or SFTPs the whole working tree would
+# otherwise publish them. secrets/ is the worst case: it holds the Ed25519
+# SIGNING SEEDS, and leaking one lets an attacker sign a plugin or a release
+# that every installation trusts. Nginx equivalent:
+#   location ~ ^/(secrets|logs|backups|\.git)/ { deny all; }
+# Guarded like every other directive here: an unguarded directive from a module the
+# host hasn't loaded takes the WHOLE site down with a 500, and these directories
+# ship in no release — a 500 would be the worse failure.
+<IfModule mod_alias.c>
+    RedirectMatch 404 ^/(secrets|logs|backups|\.git)(/|$)
+</IfModule>
 
 # ── Caching ──────────────────────────────────────────────────────────────────
 # The platform ships as ~25 separate JS files + CSS + fonts (no bundler). Without

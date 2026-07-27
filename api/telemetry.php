@@ -18,7 +18,13 @@ if (!in_array($action, ['visit', 'view', 'download'], true)) admin_json_out(['er
 
 $id = $_GET['id'] ?? (json_decode(file_get_contents('php://input'), true)['id'] ?? null);
 if (in_array($action, ['view', 'download'], true)) {
-    if (!$id || admin_safe_dataset($id) === null) $id = null;  // still count globally
+    // The id must be well-formed AND name a dataset that exists. admin_safe_dataset()
+    // only proves the shape is safe — it deliberately accepts a not-yet-created folder
+    // so `save` can mint one. Without the is_dir() check this public, unauthenticated
+    // beacon let anyone append unlimited invented dataset keys to api/stats.json,
+    // growing the file without bound and flooding the admin stats table.
+    $safe = $id ? admin_safe_dataset($id) : null;
+    if ($safe === null || !is_dir($safe[2])) $id = null;   // still count globally
 } else {
     $id = null;
 }

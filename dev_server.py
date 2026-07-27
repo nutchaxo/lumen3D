@@ -83,6 +83,9 @@ _LANG_CODE_RE = re.compile(r"^[a-z]{2,3}(-[A-Za-z]{2,4})?$")
 # pages must fetch it. Secrets NEVER go here. Protected from the self-updater by
 # _UPDATE_PROTECT so an update never wipes operator customisation.
 CONFIG_DIR = ROOT / "config"
+# Unpublished page drafts — deliberately under api/ (never web-served) rather than
+# in the public config/ tree. Module-level so tests can redirect it like CONFIG_DIR.
+PAGE_DRAFTS_DIR = ROOT / "api" / "page-drafts"
 CONFIG_DEFAULTS_DIR = CONFIG_DIR / "defaults" / "neutral"
 INSTANCE_FILE = CONFIG_DIR / "instance.json"
 # Theme editor: config/theme.json (operator tokens) is compiled to a served
@@ -485,8 +488,27 @@ def _site_doc_path(doc: str):
     return None
 
 
+def _site_draft_path(doc: str):
+    """Where a page's UNPUBLISHED draft lives — deliberately OUTSIDE the public
+    config/ tree. config/pages/<slug>.json is served statically to every visitor, so
+    an inline draft was world-readable; since the editor autosaves roughly every
+    second, polling that URL let anyone watch the operator write. api/ is denied by
+    the static filter here, by api/.htaccess and by router.php alike. None for docs
+    with no draft concept (instance/theme/legal) or an unsafe slug."""
+    doc = (doc or "").strip()
+    if not doc.startswith("pages/"):
+        return None
+    slug = doc[len("pages/"):]
+    if not _SITE_SLUG_RE.match(slug):
+        return None
+    return PAGE_DRAFTS_DIR / f"{slug}.json"
+
+
 def _load_site_doc(doc: str):
-    """Read a site-config doc (active → default → empty). None on an invalid doc name."""
+    """Read a site-config doc (active → default → empty). None on an invalid doc name.
+
+    May still carry a legacy inline ``draft`` (pre-split documents) — call
+    _load_site_public() or _load_site_admin() rather than using this directly."""
     res = _site_doc_path(doc)
     if not res:
         return None
@@ -501,6 +523,89 @@ def _load_site_doc(doc: str):
     return {}
 
 
+def _migrate_inline_drafts() -> None:
+    """Relocate pre-split inline page drafts out of the public tree (runs at boot).
+
+    Documents written before the split kept ``draft`` inside config/pages/<slug>.json,
+    which is served statically to every visitor. Fixing them on the next save is not
+    enough — the stale public copy keeps leaking until someone edits that page — so
+    this sweeps them once, guarded by a marker. Twin: _admin_lib.php's
+    admin_migrate_inline_drafts()."""
+    marker = PAGE_DRAFTS_DIR / ".migrated"
+    if marker.exists():
+        return
+    complete = True
+    pages = CONFIG_DIR / "pages"
+    if pages.is_dir():
+        for f in sorted(pages.glob("*.json")):
+            try:
+                doc = json.loads(f.read_text(encoding="utf-8"))
+            except Exception:
+                continue
+            if not isinstance(doc, dict) or "draft" not in doc:
+                continue
+            slug = f.stem
+            if not _SITE_SLUG_RE.match(slug):
+                continue
+            draft = doc.pop("draft")
+            # Park FIRST, strip second, and never strip when parking failed: the
+            # public copy is the only remaining copy of that draft, so a read-only
+            # api/ would otherwise destroy the operator's unpublished work to fix a
+            # confidentiality bug. A non-dict draft carries nothing to lose.
+            try:
+                if isinstance(draft, dict):
+                    _atomic_write(PAGE_DRAFTS_DIR / f"{slug}.json",
+                                  json.dumps(draft, indent=2, ensure_ascii=False), mode=0o600)
+            except Exception:
+                complete = False
+                continue
+            try:
+                _atomic_write(f, json.dumps(doc, indent=2, ensure_ascii=False), mode=_file_mode())
+            except Exception:
+                complete = False
+    # Only claim the sweep is done when every page actually moved — otherwise the
+    # marker would freeze a half-migrated tree and the leak would never be retried.
+    if not complete:
+        return
+    try:
+        _atomic_write(marker, datetime.now().isoformat(), mode=0o600)
+    except Exception:
+        pass
+
+
+def _load_site_public(doc: str):
+    """The doc as any visitor may see it: published content only, never the draft."""
+    data = _load_site_doc(doc)
+    if isinstance(data, dict):
+        data.pop("draft", None)
+    return data
+
+
+def _load_site_admin(doc: str):
+    """The doc as the operator sees it: published content + the private draft."""
+    data = _load_site_doc(doc)
+    if not isinstance(data, dict):
+        return data
+    draft = None
+    p = _site_draft_path(doc)
+    if p is not None and p.exists():
+        try:
+            d = json.loads(p.read_text(encoding="utf-8"))
+            if isinstance(d, dict):
+                draft = d
+        except Exception:
+            pass
+    # Back-compat: documents written before the split kept the draft inline. Keep
+    # serving it so no work is lost — the next save relocates it — but it must never
+    # stay in a payload that could reach a non-admin.
+    if draft is None and isinstance(data.get("draft"), dict):
+        draft = data["draft"]
+    data.pop("draft", None)
+    if draft is not None:
+        data["draft"] = draft
+    return data
+
+
 def _save_site_doc(doc: str, data) -> bool:
     """Persist a site-config doc atomically (public, world-readable 0644). instance.json
     also drops the mtime cache so the next served page picks up the head change."""
@@ -508,6 +613,22 @@ def _save_site_doc(doc: str, data) -> bool:
     if not res or not isinstance(data, (dict, list)):
         return False
     active, _default = res
+    # Split the draft out before ANYTHING reaches the public config/ tree.
+    draft_path = _site_draft_path(doc)
+    if draft_path is not None and isinstance(data, dict):
+        data = dict(data)                      # never mutate the caller's payload
+        draft = data.pop("draft", None)
+        if isinstance(draft, dict):
+            try:
+                draft_path.parent.mkdir(parents=True, exist_ok=True)
+                _atomic_write(draft_path, json.dumps(draft, indent=2, ensure_ascii=False), mode=0o600)
+            except Exception:
+                return False                   # never publish the public half alone
+        elif draft_path.exists():
+            try:
+                draft_path.unlink()
+            except OSError:
+                pass
     _atomic_write(active, json.dumps(data, indent=2, ensure_ascii=False), mode=_file_mode())
     if doc == "instance":
         _INSTANCE_CACHE.update({"sig": None, "data": {}})
@@ -595,6 +716,10 @@ def _delete_site_doc(doc: str) -> bool:
     try:
         if active.exists():
             active.unlink()
+        # The private draft is part of the page: deleting must not orphan it.
+        draft_path = _site_draft_path(doc)
+        if draft_path is not None and draft_path.exists():
+            draft_path.unlink()
         return True
     except Exception:
         return False
@@ -663,7 +788,7 @@ def _publish_site_doc(doc: str) -> bool:
     res = _site_doc_path(doc)
     if not res:
         return False
-    data = _load_site_doc(doc)
+    data = _load_site_admin(doc)   # needs the private draft to promote it
     if isinstance(data, dict) and "draft" in data:
         data["published"] = data.get("draft")
         return _save_site_doc(doc, data)
@@ -1009,18 +1134,32 @@ def _authorize_write(method: str, session: dict | None, csrf_header: str | None)
     return True, 200, {}
 
 
-def _is_forbidden_static(request_path: str) -> bool:
-    """True for sensitive server-side files that must never be served statically.
+# Top-level directories that must never leave the machine over HTTP.
+#   api/      — credential hash, trust store, plugin toggles, shared PHP includes
+#   secrets/  — release + marketplace Ed25519 SIGNING SEEDS. Leaking one lets an
+#               attacker sign a plugin or release that every installation trusts,
+#               so it outranks the credential hash in blast radius.
+#   logs/, backups/ — operational traces and pre-update copies of the above
+#   .git/     — full history, including anything ever committed by mistake
+_FORBIDDEN_ROOTS = frozenset({"api", "secrets", "logs", "backups", ".git"})
 
-    Blocks the whole server-side ``api/`` directory (which holds ``config.json``
-    with the admin password hash). The path is normalised first so traversal
-    tricks like ``/x/../api/config.json`` or backslash/case variants are still
-    caught. The two real API routes are dispatched before this check, so they
-    are unaffected.
+
+def _is_forbidden_static(request_path: str) -> bool:
+    """True for sensitive server-side paths that must never be served statically.
+
+    The path is percent-DECODED before normalisation. This is load-bearing, not
+    cosmetic: ``SimpleHTTPRequestHandler.translate_path`` unquotes before opening
+    the file, so a check against the raw request path is bypassed by encoding any
+    single character — ``/%61pi/admin_credential.json`` reaches the same file that
+    ``/api/admin_credential.json`` does. Decoding first, then normalising, also
+    catches ``/x/../api/…``, ``api%2f…`` and backslash/case variants.
+
+    The real API routes are dispatched before this check, so they are unaffected.
     """
-    p = request_path.replace("\\", "/")
+    p = urllib.parse.unquote(request_path or "")
+    p = p.replace("\\", "/").split("?", 1)[0]
     p = posixpath.normpath("/" + p).lstrip("/").lower()
-    return p == "api" or p.startswith("api/")
+    return p.split("/", 1)[0] in _FORBIDDEN_ROOTS
 
 
 # ── Usage statistics ───────────────────────────────────────────────────────────
@@ -1657,6 +1796,8 @@ _UPDATE_PROTECT = (
     "DATA_WEB", "logs", "backups",
     "api/admin_credential.json", "api/config.json", "api/stats.json",
     "api/disabled-plugins.json", "api/quarantined-plugins.json", "api/plugin-trust.json",
+    "api/page-drafts",   # unpublished page drafts (private half of config/pages/*)
+    "secrets",           # Ed25519 signing seeds — never shipped, never overwritten
     # White-label operator config (public, editable from admin). NOT the whole
     # config/ dir — config/defaults/ ships in releases and MUST stay updatable.
     "config/instance.json", "config/theme.json", "config/theme.css",
@@ -3232,9 +3373,39 @@ class AdminHandler(http.server.SimpleHTTPRequestHandler):
 
     # ── Route dispatch ─────────────────────────────────────────────────────────
 
+    def translate_path(self, path):
+        """Last line of defence: no request may ever RESOLVE inside a forbidden root.
+
+        _is_forbidden_static guards the routing table; this guards the file system
+        itself, so it holds for any code path reaching the stdlib static handler
+        (HEAD, a future verb, a routing mistake). It compares the already-decoded,
+        already-resolved path, so no encoding trick survives it.
+        """
+        fs = super().translate_path(path)
+        try:
+            rel = Path(fs).resolve().relative_to(ROOT)
+        except (ValueError, OSError):
+            return fs   # outside ROOT: the stdlib already confines it there
+        if rel.parts and rel.parts[0].lower() in _FORBIDDEN_ROOTS:
+            return str(ROOT / "__forbidden__")   # never exists → 404
+        return fs
+
+    def do_HEAD(self):
+        """HEAD must traverse the SAME guard as GET.
+
+        Without an override the stdlib's do_HEAD bypasses the whole router: a HEAD
+        on the credential store answered 200 with its size and mtime (i.e. when the
+        admin password was last changed) while the GET answered 404.
+        """
+        parsed = urllib.parse.urlparse(self.path)
+        if _is_forbidden_static(parsed.path.strip("/")):
+            self.send_error(HTTPStatus.NOT_FOUND)   # body suppressed on HEAD
+            return
+        super().do_HEAD()
+
     def do_GET(self):
         parsed = urllib.parse.urlparse(self.path)
-        clean_path = parsed.path.strip("/")
+        clean_path = urllib.parse.unquote(parsed.path).strip("/")
         if clean_path in ("DATA_WEB/catalog.json", "DATA_WEB/catalog.json/"):
             self._serve_dynamic_catalog()
         elif parsed.path == "/api/health":
@@ -3471,7 +3642,10 @@ class AdminHandler(http.server.SimpleHTTPRequestHandler):
         # GET action exists so the admin editor can read a doc uniformly. Twin: api/site.php.
         if path == "/api/site.php":
             if action == "get":
-                data = _load_site_doc(params.get("doc", ""))
+                # Only the operator gets the draft back; everyone else sees published.
+                data = (_load_site_admin(params.get("doc", ""))
+                        if _get_session(self._token())
+                        else _load_site_public(params.get("doc", "")))
                 if data is None:
                     self._json(400, {"error": "Invalid doc"})
                 else:
@@ -3680,7 +3854,12 @@ class AdminHandler(http.server.SimpleHTTPRequestHandler):
                 return
             ds_id = params.get("id") or (body or {}).get("id")
             if kind in ("view", "download"):
-                if not ds_id or _safe_dataset_dir(ds_id) is None:
+                # Well-formed AND existing. _safe_dataset_dir only proves the shape is
+                # safe (it accepts a not-yet-created folder so `save` can mint one), so
+                # without the is_dir() check this public unauthenticated beacon let
+                # anyone append unlimited invented dataset keys to api/stats.json.
+                safe = _safe_dataset_dir(ds_id) if ds_id else None
+                if safe is None or not safe[2].is_dir():
                     ds_id = None  # still count globally if the id is missing/invalid
             else:
                 ds_id = None
@@ -3863,6 +4042,10 @@ def main():
     # until its health verdict; this child reconciling would race it (see _spawn_server).
     if not os.environ.get("LUMEN_SKIP_PIVOT_RECONCILE"):
         _reconcile_pivot()
+
+    # One-shot: move any pre-split inline page draft out of the public config/ tree
+    # before the first request can read it back.
+    _migrate_inline_drafts()
 
     rec = _load_credential()
     if rec:

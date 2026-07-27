@@ -59,15 +59,33 @@
     if (_edit && typeof PageEditFrame !== 'undefined') { PageEditFrame.init(); return; }
 
     let _found = false;
-    try {
-      const resp = await fetch(`./config/pages/${encodeURIComponent(_slug)}.json`, { cache: 'no-store' });
-      if (resp.ok) {
-        _doc = await resp.json();
-        // A `{}` doc is a not-found orphan (legacy reset-as-delete left these);
-        // a real page carries at least title/published/draft.
-        _found = _doc && typeof _doc === 'object' && !Array.isArray(_doc) && Object.keys(_doc).length > 0;
-      }
-    } catch (_) { /* missing page → not found */ }
+    // Draft preview: drafts live under api/, behind the admin session — the public
+    // config/ copy holds published content only. An anonymous visitor hitting
+    // ?preview=draft gets a doc with no draft back and falls through to published.
+    if (_preview) {
+      try {
+        const resp = await fetch(`api/site.php?action=get&doc=pages/${encodeURIComponent(_slug)}`,
+                                 { cache: 'no-store', credentials: 'same-origin' });
+        if (resp.ok) {
+          const d = await resp.json();
+          if (d && typeof d === 'object' && !Array.isArray(d) && Object.keys(d).length > 0) {
+            _doc = d;
+            _found = true;
+          }
+        }
+      } catch (_) { /* fall through to the static published doc */ }
+    }
+    if (!_found) {
+      try {
+        const resp = await fetch(`./config/pages/${encodeURIComponent(_slug)}.json`, { cache: 'no-store' });
+        if (resp.ok) {
+          _doc = await resp.json();
+          // A `{}` doc is a not-found orphan (legacy reset-as-delete left these);
+          // a real page carries at least title/published/draft.
+          _found = _doc && typeof _doc === 'object' && !Array.isArray(_doc) && Object.keys(_doc).length > 0;
+        }
+      } catch (_) { /* missing page → not found */ }
+    }
 
     // A missing/deleted page must not render a blank shell at a public URL.
     // Preview mode (admin live-preview iframe) receives its doc via postMessage,

@@ -1058,7 +1058,8 @@ function admin_update_protected(string $rel): bool {
                           'api/disabled-plugins.json', 'api/quarantined-plugins.json', 'api/plugin-trust.json',
                           'api/.update-pending.json'];
     if (in_array($rel, $stateFiles, true)) return true;
-    foreach (['config/pages/', 'DATA_WEB/', 'logs/', 'backups/', 'js/modules/'] as $prefix) {
+    foreach (['config/pages/', 'api/page-drafts/', 'secrets/',
+              'DATA_WEB/', 'logs/', 'backups/', 'js/modules/'] as $prefix) {
         if (strpos($rel, $prefix) === 0) return true;
     }
     return false;
@@ -1244,3 +1245,53 @@ function admin_update_finish_pending(): void {
     if ($left) @file_put_contents($marker, json_encode(array_values($left)));
     else @unlink($marker);
 }
+
+// ── One-shot migration: relocate inline page drafts out of the public tree ────
+// Documents written before the draft split kept `draft` inside
+// config/pages/<slug>.json, which is served statically to every visitor. Rewriting
+// them on the next save is not enough: the stale public copy keeps leaking until
+// someone happens to edit that page. This runs once per installation (guarded by a
+// marker) on the first api/*.php request after the update, so an upgraded host is
+// clean before anyone opens the admin panel.
+function admin_migrate_inline_drafts(): void {
+    $marker = __DIR__ . '/page-drafts/.migrated';
+    if (is_file($marker)) return;
+    $complete = true;
+    $dir = admin_root() . '/config/pages';
+    if (is_dir($dir)) {
+        foreach ((array)glob($dir . '/*.json') as $f) {
+            $doc = json_decode((string)@file_get_contents($f), true);
+            if (!is_array($doc) || !isset($doc['draft'])) continue;
+            $slug = basename($f, '.json');
+            if (!preg_match('/^[a-z0-9][a-z0-9_-]{0,63}$/', $slug)) continue;
+            $draft = $doc['draft'];
+            unset($doc['draft']);
+            $target = __DIR__ . '/page-drafts/' . $slug . '.json';
+            if (!is_dir(dirname($target))) admin_make_dir(dirname($target));
+            // Park FIRST, strip second, and never strip when parking failed: the
+            // public copy is the only remaining copy of that draft, so a read-only
+            // api/ would otherwise destroy the operator's unpublished work to fix a
+            // confidentiality bug. A non-array draft carries nothing to lose.
+            if (is_array($draft)) {
+                if (@file_put_contents($target, json_encode($draft, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT)) === false) {
+                    $complete = false;
+                    continue;
+                }
+                @chmod($target, 0600);
+            }
+            if (@file_put_contents($f, json_encode($doc, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT)) === false) {
+                $complete = false;
+                continue;
+            }
+            admin_fix_file_mode($f);
+        }
+    }
+    // Only claim the sweep is done when every page actually moved — otherwise the
+    // marker would freeze a half-migrated tree and the leak would never be retried.
+    if (!$complete) return;
+    if (!is_dir(dirname($marker))) admin_make_dir(dirname($marker));
+    @file_put_contents($marker, date('c'));
+    @chmod($marker, 0600);
+}
+
+admin_migrate_inline_drafts();

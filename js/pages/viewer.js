@@ -250,6 +250,8 @@ const ViewerApp = (() => {
     // the synchronous _bind*/ChannelPanel wiring below. The load is awaited just past
     // ChannelPanel.init, so channel state is established before any frame renders: the
     // synchronous wiring runs to completion long before the first brick fetch resolves.
+    _initStabilization();
+
     let volumeP;
     if (isLive) {
       // BUG-032 (Rule 1.4): a malformed live dataset may lack dimensions.t (or
@@ -1930,6 +1932,55 @@ const ViewerApp = (() => {
     return Math.sqrt(dx * dx + dy * dy + dz * dz);
   }
 
+  // ─── 4D stabilisation ────────────────────────────────────────────────────────
+  // metadata.registration carries, per timepoint, the rigid transform the tracking
+  // analysis used to cancel the specimen's global motion. Applying it to the volume
+  // puts images and tracks in the same frame. It is offered only when the transform
+  // was verified rigid at import time (qcSummary.rigid) — a non-rigid one would
+  // deform the images and is refused rather than approximated.
+  let _registration = null;
+  let _stabilizeVolume = false;
+
+  function _initStabilization() {
+    _registration = null;
+    _stabilizeVolume = false;
+    const reg = datasetMeta?.registration;
+    if (!reg || !Array.isArray(reg.transforms) || !reg.transforms.length) return;
+    if (!reg.appliedToVolume) {
+      console.info('[ViewerApp] registration present but not applicable to the volume:',
+        reg.qcSummary?.warnings || 'see qcSummary');
+      return;
+    }
+    const extent = datasetMeta.acquisitionExtentUm;
+    if (!extent?.min || !extent?.max) {
+      console.warn('[ViewerApp] registration ignored: dataset has no acquisitionExtentUm');
+      return;
+    }
+    _registration = reg;
+    VolumeViewer.setStabilizationSpace?.(extent, reg.imageBoxUnionUm || null);
+    _stabilizeVolume = true;
+  }
+
+  function _transformForTimepoint(t) {
+    if (!_registration) return null;
+    const frame = Number.isFinite(t) ? t : 0;
+    const row = _registration.transforms.find(r => r.index === frame);
+    return row?.matrix || null;
+  }
+
+  function _applyStabilization(t) {
+    if (!_registration) return;
+    VolumeViewer.setTimepointTransform?.(_stabilizeVolume ? _transformForTimepoint(t) : null);
+  }
+
+  /** Toggle between the stabilised frame and the raw acquisition frame. */
+  function setVolumeStabilized(enabled) {
+    if (!_registration) return false;
+    _stabilizeVolume = Boolean(enabled);
+    _applyStabilization(_currentTimepoint);
+    return _stabilizeVolume;
+  }
+
   async function _loadTimepoint(basePath, t, opts = {}) {
     const perfId = _perf()?.start('viewer.timepoint.load', {
       timepoint: t,
@@ -2039,6 +2090,7 @@ const ViewerApp = (() => {
     
     _loadedQualities.add(qualityKey);
     loadedTimepoints.add(t);
+    _applyStabilization(t);
     if (loader) loader.style.display = 'none';
     ChannelPanel.setHistograms(VolumeViewer.getChannelHistograms());
     _updateVolumeSourceStatus();

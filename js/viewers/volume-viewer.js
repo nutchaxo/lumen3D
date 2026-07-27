@@ -431,7 +431,23 @@ const VolumeViewer = (() => {
 
     uniform vec3 clipMin;
     uniform vec3 clipMax;
-    
+
+    #ifdef VOLUME_WARP
+    // 4D stabilisation. Object space stays in "acquisition-box units" (the acquisition
+    // box is [-0.5,0.5]^3) but the cube geometry may be larger, so that it covers the
+    // union of every frame's box once each has been carried into the stabilised frame.
+    //   volumeWarp : object space -> texture coordinate of THIS timepoint's volume.
+    //                It folds the inverse of the frame's rigid transform, so the
+    //                specimen stands still while the imaged box moves around it. No
+    //                voxel is resampled: only the sampling coordinate changes.
+    //   clipBox*   : object space -> normalised DISPLAY box, which is the space the
+    //                cut plane and the clip sliders act in (the user slices what they
+    //                see, not the acquisition frame).
+    uniform mat4 volumeWarp;
+    uniform vec3 clipBoxMin;
+    uniform vec3 clipBoxSize;
+    #endif
+
     out vec4 fragColor;
 
     vec2 hitBox(vec3 orig, vec3 dir) {
@@ -448,6 +464,27 @@ const VolumeViewer = (() => {
       return vec2(t0, t1);
     }
 
+    #ifdef VOLUME_WARP
+    // Entry/exit of the ray through the SOURCE volume, returned in the OBJECT-space ray
+    // parameter. Object and texture space are related by a single affine map, so the
+    // parameter is common to both and the slab test is done where the box is
+    // axis-aligned — texture space, where the acquisition box is exactly the unit cube.
+    // Clipping the march to the real data instead of to the enlarged geometry is what
+    // keeps the sampling density (and therefore the image) independent of how far the
+    // specimen drifted over the series.
+    vec2 hitBoxWarped(vec3 orig, vec3 dir) {
+      vec3 o = (volumeWarp * vec4(orig, 1.0)).xyz;
+      vec3 d = mat3(volumeWarp) * dir;
+      vec3 safe_dir = d + (1.0 - step(vec3(1e-8), abs(d))) * 1e-8;
+      vec3 inv_dir = 1.0 / safe_dir;
+      vec3 tmin_tmp = (vec3(0.0) - o) * inv_dir;
+      vec3 tmax_tmp = (vec3(1.0) - o) * inv_dir;
+      vec3 tmin = min(tmin_tmp, tmax_tmp);
+      vec3 tmax = max(tmin_tmp, tmax_tmp);
+      return vec2(max(tmin.x, max(tmin.y, tmin.z)), min(tmax.x, min(tmax.y, tmax.z)));
+    }
+    #endif
+
     float hash(vec2 p) {
       vec3 p3 = fract(vec3(p.xyx) * 0.1031);
       p3 += dot(p3, p3.yzx + 33.33);
@@ -461,7 +498,11 @@ const VolumeViewer = (() => {
 
     void main() {
       vec3 rayDir = normalize(vDirection);
+      #ifdef VOLUME_WARP
+      vec2 bounds = hitBoxWarped(vOrigin, rayDir);
+      #else
       vec2 bounds = hitBox(vOrigin, rayDir);
+      #endif
       if (bounds.x > bounds.y) discard;
 
       bounds.x = max(bounds.x, 0.0);
@@ -500,10 +541,16 @@ const VolumeViewer = (() => {
         if (t >= rayLength) break;
         if (renderMode == 0 && accumAlpha > 0.97) break;
 
+        #ifdef VOLUME_WARP
+        vec3 uvw = (volumeWarp * vec4(p, 1.0)).xyz;
+        vec3 clipCoord = (p - clipBoxMin) / clipBoxSize;
+        #else
         vec3 uvw = p + vec3(0.5);
-        if (uvw.x >= clipMin.x && uvw.x <= clipMax.x &&
-            uvw.y >= clipMin.y && uvw.y <= clipMax.y &&
-            uvw.z >= clipMin.z && uvw.z <= clipMax.z) {
+        vec3 clipCoord = uvw;
+        #endif
+        if (clipCoord.x >= clipMin.x && clipCoord.x <= clipMax.x &&
+            clipCoord.y >= clipMin.y && clipCoord.y <= clipMax.y &&
+            clipCoord.z >= clipMin.z && clipCoord.z <= clipMax.z) {
 
           #ifdef ENABLE_SVR
           vec4 atlasLookup = getAtlasLookup(uvw);
@@ -780,7 +827,14 @@ const VolumeViewer = (() => {
         colocGamma:   { value: 2.0 },
         clipMin: { value: new THREE.Vector3(0, 0, 0) },
         clipMax: { value: new THREE.Vector3(1, 1, 1) },
-        
+        // 4D stabilisation — inert until the VOLUME_WARP define is switched on by
+        // setTimepointTransform(). Identity here means "object space + 0.5", i.e. the
+        // exact mapping the un-warped shader hardcodes.
+        volumeWarp: { value: new THREE.Matrix4().makeTranslation(0.5, 0.5, 0.5) },
+        clipBoxMin: { value: new THREE.Vector3(-0.5, -0.5, -0.5) },
+        clipBoxSize: { value: new THREE.Vector3(1, 1, 1) },
+
+
         color0: { value: new THREE.Vector3(0,1,0) }, min0: { value: 0.0 }, max0: { value: 1.0 }, gamma0: { value: 1.0 }, opacity0: { value: 0.7 }, en0: { value: 1 },
         color1: { value: new THREE.Vector3(1,0,0) }, min1: { value: 0.0 }, max1: { value: 1.0 }, gamma1: { value: 1.0 }, opacity1: { value: 0.7 }, en1: { value: 1 },
         color2: { value: new THREE.Vector3(0,0,1) }, min2: { value: 0.0 }, max2: { value: 1.0 }, gamma2: { value: 1.0 }, opacity2: { value: 0.7 }, en2: { value: 1 },
@@ -1807,6 +1861,127 @@ const VolumeViewer = (() => {
     _updateCutPlaneMesh();
     _scheduleFrame();
   }
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // 4D stabilisation
+  //
+  // A timelapse is acquired while the specimen drifts and rotates. The cell tracking
+  // that accompanies it is stabilised — the analysis removes that global motion — and
+  // because the motion is a RIGID one, the same transform re-expresses the images in
+  // the stabilised frame. We apply it to the sampling coordinate in the shader rather
+  // than resampling voxels: exact, free, and reversible.
+  //
+  // It deliberately does NOT touch cube.position / cube.quaternion: those are the orbit
+  // controls, they are what getCameraState() serialises, and folding a per-frame matrix
+  // into them would fight the user's interaction and corrupt saved workspaces.
+  // ─────────────────────────────────────────────────────────────────────────────
+
+  // Acquisition box in um and the display box the geometry must cover, both resolved
+  // once per dataset by setStabilizationSpace().
+  let _acqExtent = null;      // { min: Vector3, max: Vector3, size: Vector3 }
+  let _displayBox = null;     // { min: Vector3, max: Vector3 } in um, stabilised frame
+  let _warpActive = false;
+
+  function _objectFromUm(v, out) {
+    // p_um = acqMin + (o + 0.5) * acqSize   =>   o = (p_um - acqMin) / acqSize - 0.5
+    return out.set(
+      (v.x - _acqExtent.min.x) / _acqExtent.size.x - 0.5,
+      (v.y - _acqExtent.min.y) / _acqExtent.size.y - 0.5,
+      (v.z - _acqExtent.min.z) / _acqExtent.size.z - 0.5
+    );
+  }
+
+  /** Declare the acquisition box and the (larger) box the stabilised series sweeps. */
+  function setStabilizationSpace(extentUm, displayBoxUm) {
+    if (!extentUm) { _acqExtent = null; _displayBox = null; return; }
+    const min = new THREE.Vector3().fromArray(extentUm.min);
+    const max = new THREE.Vector3().fromArray(extentUm.max);
+    const size = new THREE.Vector3().subVectors(max, min);
+    if (size.x <= 0 || size.y <= 0 || size.z <= 0) {
+      console.warn('[VolumeViewer] degenerate acquisition extent, stabilisation disabled');
+      _acqExtent = null; _displayBox = null; return;
+    }
+    _acqExtent = { min, max, size };
+    _displayBox = displayBoxUm
+      ? { min: new THREE.Vector3().fromArray(displayBoxUm.min),
+          max: new THREE.Vector3().fromArray(displayBoxUm.max) }
+      : { min: min.clone(), max: max.clone() };
+    _rebuildCubeGeometry();
+  }
+
+  /** Resize the cube so it encloses the display box, keeping cube.scale untouched.
+   *  The grid, the scale bar, the cut plane and the camera framing all mirror
+   *  cube.scale — growing the geometry instead leaves every one of them intact. */
+  function _rebuildCubeGeometry() {
+    if (!cube || !_acqExtent || !_displayBox) return;
+    const lo = _objectFromUm(_displayBox.min, new THREE.Vector3());
+    const hi = _objectFromUm(_displayBox.max, new THREE.Vector3());
+    const size = new THREE.Vector3().subVectors(hi, lo);
+    const center = new THREE.Vector3().addVectors(hi, lo).multiplyScalar(0.5);
+
+    const unit = Math.abs(size.x - 1) < 1e-6 && Math.abs(size.y - 1) < 1e-6 &&
+                 Math.abs(size.z - 1) < 1e-6 && center.lengthSq() < 1e-12;
+    const wanted = unit ? 'unit' : `${size.x},${size.y},${size.z},${center.x},${center.y},${center.z}`;
+    if (cube.userData.boxKey === wanted) return;
+
+    // A cross-fade clone shares this geometry — retire it before disposing.
+    _clearTransitionVolume();
+    const previous = cube.geometry;
+    const geom = new THREE.BoxGeometry(size.x, size.y, size.z);
+    if (!unit) geom.translate(center.x, center.y, center.z);
+    cube.geometry = geom;
+    cube.userData.boxKey = wanted;
+    previous?.dispose?.();
+
+    if (material?.uniforms?.clipBoxMin) {
+      material.uniforms.clipBoxMin.value.copy(lo);
+      material.uniforms.clipBoxSize.value.copy(size);
+    }
+    _scheduleFrame();
+  }
+
+  /** Apply one timepoint's rigid transform, or null to render the acquisition frame.
+   *  @param {number[]|null} matrix column-major 4x4 mapping raw um -> stabilised um. */
+  function setTimepointTransform(matrix) {
+    if (!material) return false;
+    const enable = Boolean(matrix) && Boolean(_acqExtent);
+    if (!enable) {
+      if (_warpActive) {
+        _warpActive = false;
+        delete material.defines.VOLUME_WARP;
+        material.needsUpdate = true;
+        if (typeof VolumeGrid !== 'undefined') VolumeGrid.rebuild?.();
+        _scheduleFrame();
+      }
+      return false;
+    }
+
+    const S = _acqExtent.size, A = _acqExtent.min;
+    // object -> display um
+    const toUm = new THREE.Matrix4().makeScale(S.x, S.y, S.z)
+      .premultiply(new THREE.Matrix4().makeTranslation(
+        A.x + 0.5 * S.x, A.y + 0.5 * S.y, A.z + 0.5 * S.z));
+    // stabilised um -> raw um (the inverse of what the tracking applied)
+    const toRaw = new THREE.Matrix4().fromArray(matrix).invert();
+    // raw um -> texture coordinate
+    const toTex = new THREE.Matrix4().makeTranslation(-A.x, -A.y, -A.z)
+      .premultiply(new THREE.Matrix4().makeScale(1 / S.x, 1 / S.y, 1 / S.z));
+
+    material.uniforms.volumeWarp.value.copy(toTex).multiply(toRaw).multiply(toUm);
+    if (!_warpActive) {
+      _warpActive = true;
+      material.defines.VOLUME_WARP = 1;
+      material.needsUpdate = true;
+      if (typeof VolumeGrid !== 'undefined') VolumeGrid.rebuild?.();
+    }
+    if (_transitionMaterial?.uniforms?.volumeWarp) {
+      _transitionMaterial.uniforms.volumeWarp.value.copy(material.uniforms.volumeWarp.value);
+    }
+    _scheduleFrame();
+    return true;
+  }
+
+  function isStabilized() { return _warpActive; }
 
   function _resolveQuality(metadata, quality) {
     const safeQuality = _normalizeQualityKey(quality);
@@ -3783,6 +3958,9 @@ const VolumeViewer = (() => {
     setClipRange,
     setRotationLocked: (locked) => { _rotationLocked = !!locked; },
     setView,
+    setStabilizationSpace,
+    setTimepointTransform,
+    isStabilized,
     setActiveTool,
     setCutPlane,
     setCutPlaneVisible,

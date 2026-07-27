@@ -292,22 +292,73 @@ def solve_registration(doc: dict, timepoint_offset: int):
     }
 
 
-def _image_box_union(registration: dict, extent: dict):
-    """Union, over every timepoint, of the acquisition box carried into stabilised space.
+def _occupied_boxes_um(dataset_dir: Path, extent: dict, dims: dict):
+    """Per-timepoint bounding box, in um, of the bricks that actually hold signal.
+
+    Read from bricks/manifest.json, which already records `nonEmpty` per brick after
+    empty-space skipping. Using the occupied region rather than the whole acquisition
+    box matters: the stabilised specimen barely moves, so its union stays tight, while
+    the union of the full imaged boxes is several times larger and would make the
+    renderer sweep mostly empty space.
+    """
+    manifest_path = dataset_dir / "bricks" / "manifest.json"
+    if not manifest_path.exists() or not extent or not dims:
+        return None
+    with open(manifest_path, "r", encoding="utf-8") as fh:
+        manifest = json.load(fh)
+
+    lo = np.array(extent["min"], float)
+    hi = np.array(extent["max"], float)
+    grid = np.array([dims.get("x", 1), dims.get("y", 1), dims.get("z", 1)], float)
+    voxel = (hi - lo) / np.maximum(grid, 1.0)
+
+    def box_from_levels(levels):
+        level = next((l for l in levels or [] if l.get("level") == 0), None)
+        if not level:
+            return None
+        mins, maxs = [], []
+        for chunk in level.get("chunks", []):
+            if chunk.get("nonEmpty") is False:
+                continue
+            mins.append(chunk["min"])
+            maxs.append(chunk["max"])
+        if not mins:
+            return None
+        return (lo + np.array(mins, float).min(0) * voxel,
+                lo + np.array(maxs, float).max(0) * voxel)
+
+    rows = manifest.get("timepoints")
+    if isinstance(rows, dict):
+        out = {}
+        for key, row in rows.items():
+            box = box_from_levels(row.get("levels") or manifest.get("levels"))
+            if box:
+                out[int(key[1:]) if key.startswith("t") else int(key)] = box
+        return out or None
+    box = box_from_levels(manifest.get("levels"))
+    return {0: box} if box else None
+
+
+def _image_box_union(registration: dict, extent: dict, occupied=None):
+    """Union, over every timepoint, of the imaged content carried into stabilised space.
 
     In stabilised mode the specimen stands still and the imaged box moves around it, so
     the box the renderer must cover is this union rather than the acquisition box.
+    Falls back to the full acquisition box when brick occupancy is unavailable.
     """
     if not registration or not extent:
         return None
-    lo = np.array(extent["min"], float)
-    hi = np.array(extent["max"], float)
-    corners = np.array([[x, y, z] for x in (lo[0], hi[0]) for y in (lo[1], hi[1]) for z in (lo[2], hi[2])])
+    default_lo = np.array(extent["min"], float)
+    default_hi = np.array(extent["max"], float)
     pts = []
     for row in registration["transforms"]:
         m = row.get("matrix")
         if not m:
             continue
+        box = (occupied or {}).get(row.get("index"))
+        blo, bhi = box if box else (default_lo, default_hi)
+        corners = np.array([[x, y, z] for x in (blo[0], bhi[0])
+                            for y in (blo[1], bhi[1]) for z in (blo[2], bhi[2])])
         M = np.array(m, float).reshape(4, 4).T
         pts.append(corners @ M[:3, :3].T + M[:3, 3])
     if not pts:
@@ -316,6 +367,7 @@ def _image_box_union(registration: dict, extent: dict):
     return {
         "min": [round(float(v), 4) for v in allp.min(0)],
         "max": [round(float(v), 4) for v in allp.max(0)],
+        "basis": "occupied-bricks" if occupied else "acquisition-box",
     }
 
 
@@ -397,9 +449,16 @@ def import_tracking(track_path: Path, dataset_dir: Path, glb_path: Path = None,
 
     if registration:
         extent = metadata.get("acquisitionExtentUm")
-        union = _image_box_union(registration, extent)
+        occupied = _occupied_boxes_um(dataset_dir, extent, metadata.get("dimensions"))
+        union = _image_box_union(registration, extent, occupied)
         if union:
             registration["imageBoxUnionUm"] = union
+            span = [union["max"][i] - union["min"][i] for i in range(3)]
+            acq = [extent["max"][i] - extent["min"][i] for i in range(3)]
+            ratio = (span[0] * span[1] * span[2]) / max(acq[0] * acq[1] * acq[2], 1e-9)
+            print(f"[TRACKING] display box ({union['basis']}): "
+                  f"{span[0]:.0f} x {span[1]:.0f} x {span[2]:.0f} um, "
+                  f"{ratio:.2f}x the acquisition volume")
         metadata["registration"] = registration
 
         qc = registration["qcSummary"]

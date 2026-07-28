@@ -1991,6 +1991,25 @@ const ViewerApp = (() => {
   let _tpInFlight = false;
   let _tpPending = null;
 
+  // Serialising the LOADER was only half of it: the playback clock still advanced on
+  // wall time, so a 600 ms native frame let the head run ~6 frames ahead and the loader
+  // was redirected before the frame it had just finished was ever shown. Holding the
+  // head closes that loop — playback runs at the speed frames actually arrive.
+  //
+  // Deliberately STATELESS, no in-flight counter. A load can legitimately never settle
+  // (background the tab mid-stream and requestAnimationFrame freezes, while the brick
+  // streamer awaits a paint), and a counter would then sit above zero for the rest of
+  // the session with the gate silently disabled — the failure is invisible, which is
+  // worse than the thing it guards against. Releasing on every completion can at most
+  // re-open the clock early during the rare overlap of two loads (a quality switch
+  // fired mid-stream), and the next tick re-arms it.
+  function _holdPlayback() {
+    if (typeof Timeline !== 'undefined') Timeline.setStalled?.(true);
+  }
+  function _releasePlayback() {
+    if (typeof Timeline !== 'undefined') Timeline.setStalled?.(false);
+  }
+
   /** Serialise timepoint loads, keeping only the LATEST request while one is running.
    *
    *  Playback asks for a new frame roughly every 100 ms; at full resolution a frame
@@ -2017,7 +2036,15 @@ const ViewerApp = (() => {
       });
   }
 
-  async function _loadTimepoint(basePath, t, opts = {}) {
+  /** Wrapper so EVERY caller holds the playhead — the quality select, the workspace
+   *  restore and the initial load all reach _loadTimepoint without going through
+   *  _requestTimepoint's serialisation. */
+  function _loadTimepoint(basePath, t, opts = {}) {
+    _holdPlayback();
+    return _loadTimepointInner(basePath, t, opts).finally(_releasePlayback);
+  }
+
+  async function _loadTimepointInner(basePath, t, opts = {}) {
     _tpLoadStart = performance.now?.() || Date.now();
     const perfId = _perf()?.start('viewer.timepoint.load', {
       timepoint: t,
@@ -2060,7 +2087,7 @@ const ViewerApp = (() => {
         if (loadToken === _activeLoadToken && useBlockingLoader && progressFill) {
           progressFill.style.width = `${progress * 100}%`;
         }
-      }, { deferActivation: isQualitySwitch });
+      }, { deferActivation: isQualitySwitch, hideTransition: !opts.force });
       if (_isStale()) { _bailStale(); return; }
       if ((!result || result.available === false) && primaryQuality === '512x512') {
         console.warn('[ViewerApp] 512x512 unavailable, falling back to 256x256:', result?.reason || 'unknown');
@@ -2073,7 +2100,7 @@ const ViewerApp = (() => {
           if (loadToken === _activeLoadToken && useBlockingLoader && progressFill) {
             progressFill.style.width = `${progress * 100}%`;
           }
-        }, { deferActivation: isQualitySwitch });
+        }, { deferActivation: isQualitySwitch, hideTransition: !opts.force });
         if (_isStale()) { _bailStale(); return; }
       }
       if (!_isStale() && result && result.manifest) {
@@ -2092,7 +2119,7 @@ const ViewerApp = (() => {
           if (loadToken === _activeLoadToken && useBlockingLoader && progressFill) {
             progressFill.style.width = `${progress * 100}%`;
           }
-        }, { deferActivation: isQualitySwitch });
+        }, { deferActivation: isQualitySwitch, hideTransition: !opts.force });
         if (_isStale()) { _bailStale(); return; }
       } else {
       _perf()?.end(perfId, {

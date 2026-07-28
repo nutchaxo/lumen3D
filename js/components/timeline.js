@@ -8,7 +8,20 @@ const Timeline = (() => {
   let _isPlaying = false;
   let _playTimer = null;
   let _lastTime = 0;
-  
+
+  // Playback holds still while the consumer is still fetching the frame it was last
+  // asked for. Without this the clock advances on wall time alone: a native-resolution
+  // timepoint costs ~600 ms to stream, so by the time it lands the head has already
+  // moved ~6 frames on and the loader is sent chasing a different one — the viewer
+  // then never presents two consecutive frames, and never a finished one.
+  let _stalled = false;
+  let _stalledSince = 0;
+  // A consumer that dies mid-load must not freeze the scrubber for good.
+  const MAX_STALL_MS = 15000;
+  // A single step must stay a single step. Any hitch — a load, a GC pause, a hidden
+  // tab — otherwise lands as one huge dt and skips a run of frames outright.
+  const MAX_STEP_MS = 250;
+
   let _onChangeCallback = null;
   let _options = {};
 
@@ -42,6 +55,7 @@ const Timeline = (() => {
     _onChangeCallback = onChange;
     _currentFrame = 0;
     _isPlaying = false;
+    _stalled = false;
     
     _renderDOM();
     _bindEvents();
@@ -158,7 +172,15 @@ const Timeline = (() => {
     const tick = () => {
       if (!_isPlaying) { _playTimer = null; return; }
       const now = performance.now();
-      const dt = now - _lastTime;
+      // Keep the clock ticking but stop it accumulating: the head stays put until the
+      // frame it already asked for is on screen. Bounded so a wedged consumer can't
+      // freeze playback for good.
+      if (_stalled && (now - _stalledSince) < MAX_STALL_MS) {
+        _lastTime = now;
+        _playTimer = requestAnimationFrame(tick);
+        return;
+      }
+      const dt = Math.min(now - _lastTime, MAX_STEP_MS);
       _lastTime = now;
 
       const speed = _options.showSpeed ? _options.speedValue : 5;
@@ -173,8 +195,19 @@ const Timeline = (() => {
     _playTimer = requestAnimationFrame(tick);
   }
 
+  /** Hold the playhead while the consumer streams the frame it was last handed.
+   *  A no-op when paused — `tick` is the only reader — so callers need not track
+   *  whether playback is running. */
+  function setStalled(v) {
+    const next = Boolean(v);
+    if (next === _stalled) return;
+    _stalled = next;
+    if (next) _stalledSince = performance.now();
+  }
+
   function pause() {
     _isPlaying = false;
+    setStalled(false);
     if (_playTimer) {
       cancelAnimationFrame(_playTimer);
       _playTimer = null;
@@ -246,5 +279,5 @@ const Timeline = (() => {
     return snapFrame(_currentFrame, false);
   }
 
-  return { init, updateBuffer, setFrame, play, pause, getFrame };
+  return { init, updateBuffer, setFrame, play, pause, getFrame, setStalled };
 })();

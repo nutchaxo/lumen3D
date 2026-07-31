@@ -64,12 +64,16 @@ const VolumeViewer = (() => {
   let _currentQualityMode = '512x512';
   let _dirtyRegions = [];
   let _isStreamingBricks = false;
+  // Number of DISPLAY streams in flight. A background prefetch refuses to start
+  // while this is non-zero — see the guard at the top of loadBrickedVolumeStream.
+  let _fgStreamActive = 0;
   let _transitionCube = null;
   let _transitionMaterial = null;
   let _transitionEntry = null;
   let _qualityState = { target: '512x512', active: null, mode: 'slice', progress: 0, message: '' };
   const _qualityListeners = new Set();
   let _brickStreamAbort = null;
+  let _preloadStreamAbort = null;
   // LEAK-023: handle for the LOD-seed rAF chunk loop so a mid-seed dataset/quality
   // switch can cancel the pending frame instead of leaking it.
   let _seedRafId = null;
@@ -4184,6 +4188,9 @@ const VolumeViewer = (() => {
     getBufferCapacity: (basePath, quality) => _bufferCapacity(basePath, quality),
     /** Tell eviction where playback is, so it keeps the frames coming up next. */
     setPlayheadHint,
+    /** Abort a background prefetch in flight (quality change, dataset change,
+     *  tab hidden). Cooperative: the batch stops at its next brick boundary. */
+    cancelPreload: () => { if (_preloadStreamAbort) _preloadStreamAbort.cancelled = true; },
     getVolumeObject: () => cube,
     /** Acquisition box in um, or null until setStabilizationSpace() has run. */
     getAcquisitionSpace: () => (_acqExtent
@@ -4224,21 +4231,45 @@ const VolumeViewer = (() => {
   };
 
   async function loadBrickedVolumeStream(basePath, metadata, timepoint = null, onProgress = null, options = {}) {
-    if (_brickStreamAbort) _brickStreamAbort.cancelled = true;
-    if (_seedRafId !== null) { cancelAnimationFrame(_seedRafId); _seedRafId = null; } // LEAK-023
-    _clearTransitionVolume();
-    window._loggedWriteBrick = 0;
-    _dirtyRegions = [];
-    if (options.qualityMode) {
-      _currentQualityMode = options.qualityMode;
-    } else if (options.quality) {
-      if (options.quality === '256x256' || options.quality === '512x512' || options.quality === '1024x1024' || options.quality === 'native') {
-        _currentQualityMode = options.quality;
+    // ── Background prefetch mode ────────────────────────────────────────────────
+    // Fills the cache for a timepoint that is NOT on screen. It must not touch a
+    // single piece of displayed state, and above all it must never run while a
+    // display load is in flight: BrickLoader is a single-mount singleton whose
+    // init() calls cancelPending() unconditionally, which aborts the foreground's
+    // fetches. The foreground's loadBrickTasks would then resolve NORMALLY
+    // (allSettled swallows it), its abortRef would still be false and its loadId
+    // still current — so it would cache and display a HALF-FILLED volume under the
+    // right key. Silent, persistent, and visually plausible: the worst kind.
+    //
+    // The guard lives here, not in viewer.js, because the application-level lock
+    // (_tpInFlight) is bypassed by four callers already (initial load, quality
+    // select, workspace restore) and any future one would bypass it too.
+    const preload = Boolean(options.preload);
+    if (preload && _fgStreamActive > 0) return { available: false, reason: 'busy' };
+    if (!preload) _fgStreamActive++;
+
+    if (!preload) {
+      if (_brickStreamAbort) _brickStreamAbort.cancelled = true;
+      if (_seedRafId !== null) { cancelAnimationFrame(_seedRafId); _seedRafId = null; } // LEAK-023
+      _clearTransitionVolume();
+      window._loggedWriteBrick = 0;
+      _dirtyRegions = [];
+      if (options.qualityMode) {
+        _currentQualityMode = options.qualityMode;
+      } else if (options.quality) {
+        if (options.quality === '256x256' || options.quality === '512x512' || options.quality === '1024x1024' || options.quality === 'native') {
+          _currentQualityMode = options.quality;
+        }
       }
+      _isStreamingBricks = true;
     }
-    _isStreamingBricks = true;
     try {
       const quality = _normalizeQualityKey(options.quality || '1024x1024');
+      // A prefetch is silent: _qualityState is a single merged singleton and the
+      // progress overlay's visibility keys off a regex on its message, so emitting
+      // from the background would flash the overlay once per prefetched frame.
+      const emitState = preload ? (() => {}) : _emitQualityState;
+      const scheduleFrame = preload ? (() => {}) : _scheduleFrame;
       const deferActivation = Boolean(options.deferActivation && _activeVolumeEntry && (_activeVolumeEntry.textures || _activeVolumeEntry.data));
       const perfId = _perf()?.start('volume.load.bricks', {
       quality,
@@ -4248,12 +4279,16 @@ const VolumeViewer = (() => {
       _perf()?.end(perfId, { status: 'unavailable', reason: 'BrickLoader unavailable' });
       return { available: false, reason: 'BrickLoader unavailable' };
     }
-    _qualityTarget = quality;
+    if (!preload) _qualityTarget = quality;
     const cacheKey = _volumeCacheKey(basePath, quality, timepoint);
     const cached = options.ignoreVolumeCache ? null : _getCachedVolume(cacheKey);
     if (cached) {
+      if (preload) {
+        _perf()?.end(perfId, { status: 'ok', fromCache: true, quality, preload: true });
+        return { stale: false, available: true, cached: true, quality, preload: true };
+      }
       _activateVolumeEntry(cached, metadata, cached.sourceDepth, cached.sourceWidth, cached.channels, options);
-      _emitQualityState({ active: quality, mode: 'bricks', progress: 1, message: `${quality} ready from cache` });
+      emitState({ active: quality, mode: 'bricks', progress: 1, message: `${quality} ready from cache` });
       onProgress?.(1, quality);
       _perf()?.end(perfId, {
         status: 'ok',
@@ -4282,7 +4317,10 @@ const VolumeViewer = (() => {
         manifest: cached.manifest
       };
     }
-    const loadId = ++_loadCounter;
+    // Read, not bump: the prefetch inherits the current id, so the moment a display
+    // load starts (and bumps it) every existing `loadId !== _loadCounter` guard
+    // aborts the prefetch. The foreground preempts the background for free.
+    const loadId = preload ? _loadCounter : ++_loadCounter;
     const brickDir = metadata?.qualities?.native?.directory || 'bricks';
     let manifest;
     try {
@@ -4318,8 +4356,11 @@ const VolumeViewer = (() => {
       _perf()?.event('volume.bricks.manifest_rejected', { quality, reason: err.message });
       return { available: false, reason: err.message };
     }
-    _brickStreamAbort = { cancelled: false, loadId };
-    const abortRef = _brickStreamAbort;
+    // Its OWN abort slot: a prefetch must never clear the foreground's.
+    const abortSlot = { cancelled: false, loadId };
+    if (!preload) _brickStreamAbort = abortSlot;
+    else _preloadStreamAbort = abortSlot;
+    const abortRef = abortSlot;
     const levelCount = tpSelection.manifest.levels ? (Array.isArray(tpSelection.manifest.levels) ? tpSelection.manifest.levels.length : Object.keys(tpSelection.manifest.levels).length) : 1;
     let lod = _lodForQuality(quality, levelCount, tpSelection.manifest.levels);
     // CAP-008: remember the LOD the requested quality maps to, so the caller can detect
@@ -4370,6 +4411,13 @@ const VolumeViewer = (() => {
         dims.z > maxTextureSize ||
         rgbaByteLength >= MONOLITHIC_RGBA_LIMIT_BYTES
       );
+      // A prefetch NEVER takes the SVR path: it would claim _svrManager and the
+      // material defines of the volume on screen, and _shouldCacheVolumeEntry would
+      // throw the entry away at native anyway — paid for, then discarded.
+      if (preload && useSVR) {
+        _perf()?.end(perfId, { status: 'unavailable', reason: 'svr', quality });
+        return { available: false, reason: 'svr' };
+      }
       const SVRClass = useSVR
         ? (window.SVRManager || (typeof SVRManager !== 'undefined' ? SVRManager : null))
         : null;
@@ -4551,7 +4599,7 @@ const VolumeViewer = (() => {
     const floors = _floorsFromManifest(tpSelection.manifest, channels, tpSelection.histograms);
     const floorLuts = _floorLuts(floors, channels);
     const manifestHistograms = _manifestHistograms(tpSelection.histograms, channels);
-    _emitQualityState({
+    emitState({
       target: _qualityTarget,
       active: quality,
       mode: 'bricks',
@@ -4604,8 +4652,8 @@ const VolumeViewer = (() => {
       if (options.hideTransition && _transitionCube) _transitionCube.visible = false;
     }
 
-    if (Boolean(_activeVolumeEntry && _activeVolumeEntry.textures) && textures.length > 1) {
-      _emitQualityState({
+    if (!preload && Boolean(_activeVolumeEntry && _activeVolumeEntry.textures) && textures.length > 1) {
+      emitState({
         target: _qualityTarget,
         active: quality,
         mode: 'bricks',
@@ -4617,7 +4665,7 @@ const VolumeViewer = (() => {
       });
     }
 
-    if (!deferActivation) {
+    if (!deferActivation && !preload) {
       _activateVolumeEntry(streamEntry, metadata, streamEntry.sourceDepth, streamEntry.sourceWidth, channels, { ...options, fitCamera: !_hasLoadedVolume });
     }
     const rgbaBrickTransport = BrickLoader.getTransportEncoding?.() === 'raw-rgba-gzip';
@@ -4664,7 +4712,7 @@ const VolumeViewer = (() => {
           _updateGPUTextureRegion(r.tex, r.dims, r.ox, r.oy, r.oz, r.bw, r.bh, r.bd, r.brickData);
         }
         _dirtyRegions = [];
-        _scheduleFrame();
+        scheduleFrame();
         lastTextureUploadAt = now;
         opsSinceTextureUpload = 0;
       }
@@ -4677,6 +4725,9 @@ const VolumeViewer = (() => {
         cancelPrevious: true,
         preserveOrder: true,
         streamOnly: true,
+        // Stops the batch the moment this stream is superseded, instead of paying
+        // for every remaining fetch and decode only to throw the result away.
+        shouldAbort: () => abortRef.cancelled || loadId !== _loadCounter,
         onBrickError: ({ bx, by, bz, channel, error } = {}) => {
           // BUG-011 (Rule 1.1): a dropped brick must surface as a degraded-quality
           // status, not vanish silently. The render still degrades gracefully (the
@@ -4684,7 +4735,7 @@ const VolumeViewer = (() => {
           if (abortRef.cancelled || loadId !== _loadCounter) return;
           failedBricks++;
           console.warn(`[VolumeViewer] brick load failed (${bx},${by},${bz}) ch=${channel}:`, error);
-          _emitQualityState({
+          emitState({
             message: `${quality} loaded with ${failedBricks} dropped brick${failedBricks > 1 ? 's' : ''}`
           });
         },
@@ -4741,20 +4792,20 @@ const VolumeViewer = (() => {
               streamStats.rgbaChunks++;
               pendingScalarBricks.delete(scalarKey);
               opsSinceTextureUpload++;
-              if (streamSvrManager) _scheduleFrame();
+              if (streamSvrManager) scheduleFrame();
               markTextureDirty(false);
             }
           }
           doneOps++;
           streamEntry.successfulLoads = doneOps;
           const progress = Math.max(0, Math.min(1, doneOps / effectiveTotalOps));
-          _emitQualityState({ progress });
+          emitState({ progress });
           onProgress?.(progress, quality);
           maybeLogStreamStats();
         },
         onProgress: (p) => {
           const progress = Math.max(0, Math.min(1, Math.max(doneOps / effectiveTotalOps, p)));
-          _emitQualityState({ progress });
+          emitState({ progress });
           onProgress?.(progress, quality);
         }
       });
@@ -4783,12 +4834,12 @@ const VolumeViewer = (() => {
             streamEntry.successfulLoads = doneOps;
             markTextureDirty(false);
             const progress = Math.max(0, Math.min(1, doneOps / totalOps));
-            _emitQualityState({ progress });
+            emitState({ progress });
             onProgress?.(progress, quality);
           },
           onProgress: (p) => {
             const progress = Math.max(0, Math.min(1, (c + p) / Math.max(1, channels)));
-            _emitQualityState({ progress });
+            emitState({ progress });
             onProgress?.(progress, quality);
           }
         });
@@ -4833,7 +4884,7 @@ const VolumeViewer = (() => {
         }
         streamStats.rgbaChunks++;
         opsSinceTextureUpload++;
-        if (streamSvrManager) _scheduleFrame();
+        if (streamSvrManager) scheduleFrame();
       }
       pendingScalarBricks.clear();
       markTextureDirty(true);
@@ -4846,14 +4897,14 @@ const VolumeViewer = (() => {
       // (52 MiB on the reference series) and the occupancy map stranded on the GPU for
       // every cancelled stream — and a prefetcher cancels a great many.
       _disposeAbandonedStream(textures, occTex, streamSvrManager);
-      _emitQualityState({ message: `${quality} streaming cancelled` });
+      emitState({ message: `${quality} streaming cancelled` });
       _perf()?.end(perfId, { status: 'stale', quality });
       return { stale: true };
     }
     if (streamTasks.length && doneOps === 0) {
       if (deferActivation) _clearTransitionVolume();
       _disposeAbandonedStream(textures, occTex, streamSvrManager);
-      _emitQualityState({
+      emitState({
         active: quality,
         mode: 'bricks',
         progress: 0,
@@ -4872,14 +4923,24 @@ const VolumeViewer = (() => {
       _updateGPUTextureRegion(r.tex, r.dims, r.ox, r.oy, r.oz, r.bw, r.bh, r.bd, r.brickData);
     }
     _dirtyRegions = [];
-    _scheduleFrame();
+    scheduleFrame();
     streamEntry.histograms = manifestHistograms.length
       ? manifestHistograms
       : (_channelHistograms?.length ? _channelHistograms : []);
+    // A degraded LOD must never be filed under the quality that was ASKED for: the
+    // cache key carries no lod, so a prefetch that fell back under memory pressure
+    // would store a low-res volume labelled `native`, the bar would paint it as
+    // loaded, and revisiting it would fire the downgrade modal and rewrite
+    // _qualityMode for the session — all from a background job the user never asked for.
+    if (preload && Number.isFinite(requestedLod) && lod !== requestedLod) {
+      _disposeAbandonedStream(textures, occTex, streamSvrManager);
+      _perf()?.end(perfId, { status: 'unavailable', reason: 'downgraded', quality });
+      return { available: false, reason: 'downgraded' };
+    }
     _storeVolumeCache(streamEntry.key, streamEntry);
-    _activateVolumeEntry(streamEntry, metadata, streamEntry.sourceDepth, streamEntry.sourceWidth, channels, options);
+    if (!preload) _activateVolumeEntry(streamEntry, metadata, streamEntry.sourceDepth, streamEntry.sourceWidth, channels, options);
     if (deferActivation) _clearTransitionVolume();
-    _emitQualityState({
+    emitState({
       active: quality,
       mode: 'bricks',
       progress: 1,
@@ -4916,8 +4977,13 @@ const VolumeViewer = (() => {
         manifest: tpSelection.manifest
       };
     } finally {
-      _isStreamingBricks = false;
-      _scheduleFrame();
+      // A prefetch set none of this on the way in, so it restores none of it on the
+      // way out — and it must not force a redraw: it has nothing new to show.
+      if (!preload) {
+        _fgStreamActive = Math.max(0, _fgStreamActive - 1);
+        _isStreamingBricks = false;
+        _scheduleFrame();
+      }
     }
   }
 

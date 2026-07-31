@@ -370,6 +370,11 @@ const BrickLoader = (() => {
     if (!_manifest) throw new Error('BrickLoader not initialized.');
     
     if (options.cancelPrevious !== false) cancelPending();
+    // Cooperative abort. cancelPending() is GLOBAL — calling it from the application
+    // would kill a concurrent display load — and a caller-side flag is invisible from
+    // here, so a cancelled batch used to keep fetching and decoding every remaining
+    // brick before its result was thrown away. This is the hook that actually stops it.
+    const shouldAbort = typeof options.shouldAbort === 'function' ? options.shouldAbort : null;
     const controller = new AbortController();
     _pendingAbort = controller;
     _loading = true;
@@ -442,10 +447,12 @@ const BrickLoader = (() => {
     let index = 0;
     const workers = Array.from({ length: concurrency }, async () => {
       while (index < queued.length && !controller.signal.aborted && generation === _generation) {
+        if (shouldAbort && shouldAbort()) break;
         const { bx, by, bz, channel, lod, key } = queued[index++];
         let success = false;
         let retries = 3;
         while (retries > 0 && !success && !controller.signal.aborted) {
+          if (shouldAbort && shouldAbort()) break;
           try {
             const url = _brickUrl(lod, channel, bx, by, bz);
             const data = await _fetchBrickImage(url, controller.signal, { bx, by, bz, lod });

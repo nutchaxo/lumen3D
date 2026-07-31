@@ -710,8 +710,13 @@ const ViewerApp = (() => {
       VolumeViewer.setQualityTarget?.(_qualityMode, _qualityMode);
       // Repaint the buffer for the quality we just switched TO. Stepping back down to
       // one already loaded shows its frames immediately instead of an empty bar.
+      _stopPrefetch();
       _refreshBuffer();
-      if (_basePath) _loadTimepoint(_basePath, _currentTimepoint, { force: true }).catch(_showLoadingError);
+      if (_basePath) {
+        _loadTimepoint(_basePath, _currentTimepoint, { force: true })
+          .then(() => _kickPrefetch(200))
+          .catch(_showLoadingError);
+      }
     });
   }
 
@@ -1950,6 +1955,88 @@ const ViewerApp = (() => {
   let _registration = null;
   let _stabilizeVolume = false;
 
+  // ── Background buffering ──────────────────────────────────────────────────────
+  // Fills the cache for frames that are NOT on screen, so switching quality no longer
+  // means playing the whole series once to make it smooth. Strictly cooperative: it
+  // never runs while a display load is in flight, it yields between frames, and it
+  // stops as soon as the resident window is full rather than churning its own work.
+  let _pfGeneration = 0;
+  let _pfRunning = false;
+  let _pfTimer = null;
+
+  function _stopPrefetch() {
+    _pfGeneration++;
+    if (_pfTimer) { clearTimeout(_pfTimer); _pfTimer = null; }
+    VolumeViewer.cancelPreload?.();
+  }
+
+  // Backgrounding the tab freezes requestAnimationFrame, and the brick streamer awaits
+  // a paint (_yieldToPaint) — a prefetch caught there never finishes. Abandon it on the
+  // way out and start again on the way back in, rather than leaving a job wedged.
+  if (typeof document !== 'undefined') {
+    document.addEventListener('visibilitychange', () => {
+      if (document.hidden) _stopPrefetch();
+      else _kickPrefetch(800);
+    });
+  }
+
+  /** Debounced kick — called after a frame lands and after a quality change, both of
+   *  which happen in bursts. */
+  function _kickPrefetch(delay = 400) {
+    if (_pfTimer) clearTimeout(_pfTimer);
+    _pfTimer = setTimeout(() => { _pfTimer = null; _runPrefetch(); }, delay);
+  }
+
+  async function _runPrefetch() {
+    if (_pfRunning) return;
+    // Never in a compare panel: compare mounts up to four iframes, each a full
+    // document with its own VolumeViewer, budget and WebGL context — four
+    // simultaneous prefetches of the same series would quadruple both.
+    if (!isLive || _isIframe || !_basePath || document.hidden) return;
+    // Bricked datasets only: the slice path has no way to load without displaying.
+    if (!_brickManifest) return;
+    const total = Number(datasetMeta?.dimensions?.t) || 0;
+    if (total < 2) return;
+
+    const gen = ++_pfGeneration;
+    _pfRunning = true;
+    try {
+      const quality = _qualityMode;
+      for (let step = 1; step <= total; step++) {
+        if (gen !== _pfGeneration || document.hidden || quality !== _qualityMode) break;
+        const t = ((_currentTimepoint || 0) + step) % total;
+        if (VolumeViewer.hasCachedVolume?.(_basePath, quality, t)) continue;
+
+        // Stop once the series fills the window it is allowed to occupy. Without this
+        // the prefetcher would keep going round evicting the frames it just loaded.
+        const capacity = VolumeViewer.getBufferCapacity?.(_basePath, quality) || 0;
+        const resident = VolumeViewer.getCachedTimepoints?.(_basePath, quality)?.size || 0;
+        if (capacity && resident >= capacity) break;
+
+        // Let the displayed frame through first, always.
+        let waited = 0;
+        while (_tpInFlight && gen === _pfGeneration && waited < 10000) {
+          await new Promise(r => setTimeout(r, 120));
+          waited += 120;
+        }
+        if (gen !== _pfGeneration || document.hidden || quality !== _qualityMode) break;
+
+        const res = await VolumeViewer.loadBrickedVolumeStream(
+          _basePath, datasetMeta, t, null, { quality, preload: true });
+        // 'busy' means a display load started underneath us: back off and let the
+        // next kick resume, rather than fighting it frame after frame.
+        if (res && res.available === false && res.reason === 'busy') break;
+        if (gen !== _pfGeneration) break;
+        _refreshBuffer();
+        await new Promise(r => setTimeout(r, 0));   // keep the main thread breathing
+      }
+    } catch (err) {
+      console.warn('[ViewerApp] prefetch stopped:', err?.message || err);
+    } finally {
+      _pfRunning = false;
+    }
+  }
+
   /** Paint the scrubber's buffer from what is ACTUALLY resident at the current
    *  quality, and tell the cache where playback is so eviction keeps the frames we
    *  are about to need. The old bar counted "timepoints ever visited", a set that is
@@ -2364,6 +2451,7 @@ const ViewerApp = (() => {
     
     if (isLive) {
       _refreshBuffer();
+      _kickPrefetch();
       if (_isIframe) {
         // SEC-012: restrict targetOrigin to this page's origin (no wildcard leak).
         window.parent.postMessage({ type: 'SYNC_TIME', value: t, sourceIndex: _panelIndex }, Utils.trustedTargetOrigin());

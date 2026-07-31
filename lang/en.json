@@ -549,7 +549,15 @@
     "closePanel": "Close",
     "changeColormap": "Click to change colormap",
     "open": "Open",
-    "compareWith": "Compare with"
+    "compareWith": "Compare with",
+    "trackingLayer": "Tracking points",
+    "trackingSize": "Size (µm)",
+    "trackingOpacity": "Opacity",
+    "trackingLoading": "Loading tracking…",
+    "trackingPreparing": "Preparing tracks…",
+    "trackingCells": "cells",
+    "trackingUnavailable": "Tracking unavailable",
+    "trackingNoRaw": "Raw coordinates missing: tracking hidden on an unstabilised volume"
   },
   "studio": {
     "selectMove": "Select/Move",

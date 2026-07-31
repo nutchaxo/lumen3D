@@ -9,6 +9,21 @@ window.createChannelPanel = function() {
   let _histograms = [];
   let _onChangeCallback = null;
 
+  // Extra sidebar entries that are NOT image channels — the tracking point cloud
+  // today, a surface mesh tomorrow. Kept in their own list so `_channels` stays
+  // strictly 1:1 with the real channels: getState/setState, the shader uniform
+  // writes in VolumeViewer.updateChannel and the workspace serialisation all index
+  // by channel number, and slipping a pseudo-channel into that array would shift
+  // every one of them. A layer never reaches _notify() — it has no uniforms.
+  //
+  // Layer contract: { id, title, swatch?, summary?, body(): html, bind(root),
+  //                   onVisibility(bool), visible, expanded }
+  // The panel owns the shell (visibility checkbox, disclosure); the layer owns its
+  // body and binds its own controls. No histogram is rendered here — the plugin
+  // loop that injects one runs only on the channel path, so the absence is
+  // structural rather than a filter someone can forget.
+  let _layers = [];
+
   const DEFAULT_COLORS = ['#00FF00', '#00AAFF', '#FF00FF', '#FF0000'];
   const OPACITY_LEVELS = [0.7, 0.42, 1];
 
@@ -153,12 +168,90 @@ window.createChannelPanel = function() {
 
   function _renderAll() {
     if (!_container) return;
-    _container.innerHTML = _channels.map(channel => _channelHtml(channel)).join('');
+    _container.innerHTML = _channels.map(channel => _channelHtml(channel)).join('')
+      + _layers.map(layer => _layerHtml(layer)).join('');
     _channels.forEach(channel => _bindChannel(channel.idx));
+    _layers.forEach(layer => _bindLayer(layer));
     if (window.lucide) lucide.createIcons({ nodes: [_container] });
     _channels.forEach((_, idx) => {
       _syncChannelUi(idx);
     });
+  }
+
+  function _esc(s) { return Utils.escapeHtml ? Utils.escapeHtml(String(s ?? '')) : String(s ?? ''); }
+
+  function _layerHtml(layer) {
+    // A deliberately clean shell rather than a copy of _channelHtml's: that one
+    // opens .channel-header-row and never closes it, so .channel-summary and
+    // .channel-advanced end up siblings of the grid instead of children of the
+    // item. Reusing it would import the bug.
+    return `
+      <section class="channel-item is-layer${layer.expanded ? ' expanded' : ''}" id="layer-item-${_esc(layer.id)}">
+        <div class="layer-head">
+          <label class="layer-toggle" title="${_esc(layer.title)}">
+            <input type="checkbox" id="layer-toggle-${_esc(layer.id)}" ${layer.visible ? 'checked' : ''}>
+            <span class="channel-swatch" style="background:${_esc(layer.swatch || '#8ab4f8')};margin-left:8px;"></span>
+          </label>
+          <span class="layer-title">${_esc(layer.title)}</span>
+          <button class="btn btn-ghost btn-sm channel-icon-btn channel-disclosure" type="button"
+                  data-layer-action="expand" data-layer-id="${_esc(layer.id)}" aria-expanded="${Boolean(layer.expanded)}">
+            <i data-lucide="${layer.expanded ? 'chevron-up' : 'chevron-down'}"></i>
+          </button>
+        </div>
+        <div class="layer-summary" id="layer-summary-${_esc(layer.id)}">${_esc(layer.summary || '')}</div>
+        <div class="layer-body" id="layer-body-${_esc(layer.id)}">${typeof layer.body === 'function' ? layer.body() : ''}</div>
+      </section>`;
+  }
+
+  function _bindLayer(layer) {
+    const root = _getEl(`layer-item-${layer.id}`);
+    if (!root) return;
+    const toggle = _getEl(`layer-toggle-${layer.id}`);
+    if (toggle) {
+      toggle.addEventListener('change', () => {
+        layer.visible = toggle.checked;
+        layer.onVisibility?.(layer.visible);
+      });
+    }
+    const disclosure = root.querySelector('[data-layer-action="expand"]');
+    if (disclosure) {
+      disclosure.addEventListener('click', () => {
+        layer.expanded = !layer.expanded;
+        root.classList.toggle('expanded', layer.expanded);
+        disclosure.setAttribute('aria-expanded', String(layer.expanded));
+        const icon = disclosure.querySelector('i');
+        if (icon) {
+          icon.setAttribute('data-lucide', layer.expanded ? 'chevron-up' : 'chevron-down');
+          if (window.lucide) lucide.createIcons({ nodes: [disclosure] });
+        }
+      });
+    }
+    layer.bind?.(root);
+  }
+
+  /** Register a non-channel entry. Returns a handle to update its status line. */
+  function registerLayer(def) {
+    if (!def || !def.id) return null;
+    const layer = Object.assign({ visible: true, expanded: false, summary: '' }, def);
+    _layers = _layers.filter(l => l.id !== layer.id).concat(layer);
+    _renderAll();
+    return {
+      setSummary(text) {
+        layer.summary = text;
+        const el = _getEl(`layer-summary-${layer.id}`);
+        if (el) el.textContent = text;
+      },
+      // Re-render the body only (a full _renderAll would tear down an open colour
+      // popup or an in-progress slider drag on the channels above).
+      refreshBody() {
+        const el = _getEl(`layer-body-${layer.id}`);
+        if (!el || typeof layer.body !== 'function') return;
+        el.innerHTML = layer.body();
+        if (window.lucide) lucide.createIcons({ nodes: [el] });
+        layer.bind?.(_getEl(`layer-item-${layer.id}`));
+      },
+      remove() { _layers = _layers.filter(l => l.id !== layer.id); _renderAll(); }
+    };
   }
 
   const PALETTE = [
@@ -428,6 +521,7 @@ window.createChannelPanel = function() {
     setHistograms,
     getState,
     setState,
+    registerLayer,
     dispose
   };
 };

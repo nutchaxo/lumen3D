@@ -549,7 +549,15 @@
     "closePanel": "Fermer",
     "changeColormap": "Changer la carte de couleurs",
     "open": "Ouvrir",
-    "compareWith": "Comparer avec"
+    "compareWith": "Comparer avec",
+    "trackingLayer": "Points de suivi",
+    "trackingSize": "Taille (µm)",
+    "trackingOpacity": "Opacité",
+    "trackingLoading": "Chargement du suivi…",
+    "trackingPreparing": "Préparation des pistes…",
+    "trackingCells": "cellules",
+    "trackingUnavailable": "Suivi indisponible",
+    "trackingNoRaw": "Coordonnées brutes absentes : suivi masqué sur un volume non stabilisé"
   },
   "studio": {
     "selectMove": "Sélectionner / Déplacer",

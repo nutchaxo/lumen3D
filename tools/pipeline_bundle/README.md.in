@@ -1,0 +1,181 @@
+# @@@BRAND@@@ — Pack de traitement des données
+
+Pack **v@@@BUNDLE_VERSION@@@** (édition *@@@FLAVOR@@@*) — pipeline de preprocessing v@@@PP_VERSION@@@ — généré le @@@BUILD_DATE@@@.
+
+Ce dossier contient tout ce qu'il faut pour transformer les sorties brutes du
+microscope en jeux de données exploitables par la plateforme web, sur un PC
+Windows qui n'a jamais vu ce projet.
+
+---
+
+## Démarrage
+
+Double-cliquez sur **`RUN.bat`**.
+
+Il enchaîne quatre étapes et s'arrête net à la première qui échoue :
+
+1. **Intégrité du pack** — chaque fichier est re-vérifié par empreinte SHA-256
+   contre `MANIFEST.sha256`. Un fichier manquant ou altéré interrompt le lancement.
+2. **Environnement Python** — utilise le Python embarqué s'il est fourni, sinon
+   détecte un Python 3.9 → 3.13 sur le poste, sinon propose de l'installer localement.
+3. **Dépendances** — vérifie que les bibliothèques scientifiques sont importables,
+   et les installe si nécessaire.
+4. **Traitement** — un menu propose les trois opérations décrites plus bas.
+
+> **Édition *complète*** : `.runtime\python` est déjà livré avec toutes les
+> dépendances. **Aucun accès réseau n'est nécessaire**, à aucun moment.
+>
+> **Édition *légère*** : Python et les dépendances sont récupérés au premier
+> lancement. Une connexion est donc requise **une seule fois**. Si le poste est
+> isolé du réseau, demandez l'édition complète.
+
+Options en ligne de commande : `RUN.bat --check` (prépare et vérifie
+l'environnement sans rien traiter) et `RUN.bat --no-verify` (saute le contrôle
+d'intégrité — déconseillé).
+
+---
+
+## Les deux pipelines
+
+### 1. Preprocessing de volumes Imaris (`.ims`)
+
+Déposez vos fichiers `.ims` dans **`input\`**, puis choisissez `[1]`.
+
+Le résultat est écrit dans **`output\`**, dans l'arborescence attendue par la
+plateforme :
+
+```
+output\
+  fixed\<nom-du-fichier>\        <- volume à un seul point temporel
+  live\<nom-du-fichier>\         <- série temporelle (2 points ou plus)
+      metadata.json
+      thumbnail.webp
+      bricks\manifest.json
+      bricks\...\pack_00.bin
+```
+
+Le nom du dossier produit est celui du fichier `.ims`, et il est *interprété* :
+
+| Motif dans le nom | Effet |
+|---|---|
+| `-E85-` ou `-E8-` | stade embryonnaire (`E8.5`, `E8`) |
+| `-Em1-` | identifiant d'embryon — **les deux tirets sont nécessaires** |
+
+Le choix `fixed` / `live` n'est pas un réglage : il découle du nombre de points
+temporels trouvés dans le fichier.
+
+Pour publier le dataset, copiez le dossier produit dans le `DATA_WEB\` du
+serveur. Il apparaît immédiatement dans le catalogue — rien à régénérer.
+
+**Mémoire vive** : c'est la vraie contrainte. L'étape de traitement d'image
+alloue simultanément plusieurs copies du volume ; comptez ~32 Go de RAM pour un
+volume de 3789 × 3789 × 178. Un poste à 16 Go échouera sur de gros volumes réels.
+
+### 2. Analyse de tracking Imaris (export Excel)
+
+Créez un dossier par échantillon sous **`tracking\DATA\`** et déposez-y l'export
+Excel produit par Imaris, puis choisissez `[2]`.
+
+```
+tracking\DATA\<NOM-ECHANTILLON>\<...>30min<...>.xlsx
+```
+
+> ⚠️ **Le nom du fichier doit contenir l'intervalle entre images**, sous la forme
+> `30min`, `15min`… C'est de là que l'analyse tire sa base de temps. Sans ce
+> motif, le script s'arrête et vous le demande de façon interactive.
+
+Le classeur doit être une **table simple**, une ligne par (cellule, temps), avec
+les en-têtes sur la première ligne. Les intitulés natifs d'Imaris sont reconnus :
+
+| Colonne | Rôle | Obligatoire |
+|---|---|---|
+| `ID` | identifiant de l'objet | **oui** |
+| `Time` | numéro de l'image | **oui** |
+| `Position X` / `Position Y` / `Position Z` | coordonnées en µm | **oui** |
+| `TrackID` | trajectoire persistante | non — à défaut, `ID` est utilisé |
+| `Region` | groupe / population | non — à défaut, `Unknown` |
+
+Les variantes usuelles (`x`, `x_um`, `Position_X`, `Frame`, `Spot ID`, `Group`…)
+sont acceptées, casse et espaces indifférents.
+
+Résultats dans **`tracking\OUTPUT\<date-heure>\<échantillon>\`** :
+
+| Fichier | Contenu |
+|---|---|
+| `<échantillon>_analysis.xlsx` | classeur d'analyse : trajectoires brutes et stabilisées, métriques, distances aux voisins, directionnalité, statistiques de population |
+| `<échantillon>.imaris_track` | conteneur consommé par la plateforme (choix `[3]`) |
+| `<échantillon>.glb` | surfaces de population pré-calculées |
+
+L'analyse **stabilise** les trajectoires : elle retire le mouvement d'ensemble du
+spécimen par recalage rigide successif, ce qui isole le déplacement propre des
+cellules. Les coordonnées brutes sont conservées à côté des coordonnées stabilisées.
+
+### 3. Rattacher un tracking à un dataset
+
+Choisissez `[3]`, puis indiquez le `.imaris_track` et le dossier du dataset déjà
+traité (celui qui contient `metadata.json`).
+
+Le tracking est converti au format du visualiseur et la transformation de
+recalage est inscrite dans `metadata.json`. Comme la stabilisation est un
+mouvement rigide, la même transformation replace le **volume** dans le repère
+stabilisé : le visualiseur superpose donc les trajectoires aux images en
+déformant les coordonnées d'échantillonnage, sans ré-échantillonner les voxels et
+sans perte.
+
+Le compte rendu affiche un résidu de recalage. S'il n'est pas quasi nul, la
+stabilisation n'était pas un mouvement rigide et ne doit pas être appliquée aux
+images — le message le signale explicitement.
+
+---
+
+## Exemple fourni
+
+Le pack contient un jeu de démonstration cohérent, utilisable tel quel :
+
+- `input\Demo-Lumen3D-E85-Em1-30min-2ch-4tp.ims` — 96 × 96 × 24, 2 canaux, 4 points temporels
+- `tracking\DATA\DEMO-E85-Em1\Live-Demo-...-30min-Positions-Analysis.xlsx` — 48 cellules, 4 points temporels, une mitose
+
+Les deux décrivent **le même embryon simulé** : les noyaux du volume se trouvent
+exactement là où le tableau de tracking place les cellules. Enchaîner `[1]`, `[2]`
+puis `[3]` sur ces fichiers exécute donc la chaîne complète et produit un dataset
+avec ses trajectoires attachées, sans aucune donnée réelle.
+
+Le mouvement simulé comporte une composante rigide d'ensemble : à l'étape `[3]`,
+le résidu de recalage doit ressortir à ~1e-14 µm, c'est-à-dire exact.
+
+---
+
+## Contenu du pack
+
+```
+RUN.bat                  lanceur (intégrité → Python → dépendances → menu)
+MANIFEST.sha256          empreintes SHA-256 vérifiées à chaque lancement
+VERSION.json             versions, édition, date de génération
+requirements.txt         dépendances Python des deux pipelines
+LISEZ-MOI.md             ce document
+
+pipeline\                pipeline volumes : orchestrateur + 5 étapes
+tracking\SCRIPTS\        pipeline tracking : analyse, export, surfaces
+tracking\DATA\           entrées tracking (un dossier par échantillon)
+tracking\OUTPUT\         sorties tracking
+input\                   entrées volumes (.ims)
+output\                  sorties volumes
+.runtime\                Python embarqué (édition complète uniquement)
+```
+
+## Dépendances
+
+@@@DEPS@@@
+
+En édition complète, elles sont déjà installées dans `.runtime\python`. Pour une
+installation manuelle : `pip install -r requirements.txt`.
+
+## Notes
+
+- Le pack est entièrement relatif : déplacez-le, renommez-le ou copiez-le sur une
+  clé USB sans rien reconfigurer.
+- `Ctrl+C` pendant un traitement demande confirmation avant d'interrompre.
+- Une erreur sur un fichier `.ims` n'arrête pas le lot : les suivants sont traités
+  et l'erreur est affichée. Vérifiez le compte rendu final.
+- `.runtime\` est régénérable : en cas de doute sur l'environnement, supprimez ce
+  dossier et relancez `RUN.bat`.

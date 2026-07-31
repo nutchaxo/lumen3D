@@ -132,6 +132,39 @@ def collect_files(root):
     return sorted(selected.items())
 
 
+def build_pipeline_pack(version):
+    """Regenerate assets/pipeline/ so the shipped processing pack matches this build.
+
+    Only the LIGHT edition goes into the web release — the complete one carries a
+    Python runtime (~70 MB) and is attached to the GitHub release separately (see
+    tools/build_pipeline_bundle.py --full). Stale packs for other versions are
+    dropped so a release never carries two.
+    """
+    import subprocess
+
+    out_dir = REPO_ROOT / "assets" / "pipeline"
+    if out_dir.is_dir():
+        for stale in out_dir.glob("lumen3d-pipeline-*.zip"):
+            stale.unlink()
+
+    builder = REPO_ROOT / "tools" / "build_pipeline_bundle.py"
+    proc = subprocess.run([sys.executable, str(builder), "--out", str(out_dir),
+                           "--version", version],
+                          capture_output=True, text=True, cwd=str(REPO_ROOT))
+    if proc.returncode != 0:
+        print("ERROR: pipeline pack build failed")
+        print(proc.stdout + proc.stderr)
+        return False
+
+    built = sorted(out_dir.glob(f"lumen3d-pipeline-leger-{version}.zip"))
+    if not built:
+        print(f"ERROR: pipeline pack build produced no lumen3d-pipeline-leger-{version}.zip")
+        return False
+    print(f"OK: {built[0].relative_to(REPO_ROOT).as_posix()} "
+          f"({built[0].stat().st_size} bytes)")
+    return True
+
+
 def sha256_hex(data):
     """sha256 hex digest of a bytes payload."""
     return hashlib.sha256(data).hexdigest()
@@ -312,6 +345,13 @@ def main():
     changelog = REPO_ROOT / "changelog" / f"changelog_{args.version}.md"
     if not changelog.is_file() or not changelog.read_text(encoding="utf-8").strip():
         print(f"ERROR: missing or empty changelog for {args.version}: {changelog}")
+        return 1
+
+    # The downloadable processing pack is a BUILT artifact, not repo content: it is
+    # regenerated here so a release can never ship one stale relative to the pipeline
+    # scripts it packages. It lands under assets/ (already allowlisted) and is picked
+    # up by the collect_files() walk below, so no allowlist entry is needed.
+    if not build_pipeline_pack(args.version):
         return 1
 
     files = collect_files(REPO_ROOT)

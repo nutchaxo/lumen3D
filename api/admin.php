@@ -162,6 +162,13 @@ switch ($action) {
             'repo' => GITHUB_REPO,
         ]);
 
+    case 'pipeline_info':
+        admin_json_out(admin_pipeline_info());
+
+    case 'pipeline_download':
+        // Emits the zip itself and exits — it must NOT fall through to admin_json_out.
+        admin_pipeline_send($_GET['edition'] ?? 'leger');
+
     case 'update_check': {
         $current = admin_max_version(changelog_dir()) ?? '0.0.0';
         // Via mkt_fetch_bytes: cURL-first (works with allow_url_fopen OFF) and it

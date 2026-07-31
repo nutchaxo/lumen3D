@@ -62,3 +62,8 @@ dist/
 
 # Operator-uploaded media (runtime, per-deployment — not source)
 config/uploads/
+
+# Downloadable processing pack — BUILT by tools/build_pipeline_bundle.py (which the
+# release build re-runs), never authored. Committing it would add a few MB of binary
+# to history on every version bump; a deployed host gets it from the release zip.
+assets/pipeline/

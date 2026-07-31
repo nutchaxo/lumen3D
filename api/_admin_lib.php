@@ -442,6 +442,102 @@ function admin_preprocess_version(): ?string {
     return admin_max_version(admin_root() . '/preprocess/changelog');
 }
 
+// ── Downloadable processing pipelines (twin of dev_server.py:_pipeline_*) ─────
+// The admin panel offers a self-contained pack (Imaris .ims volume pipeline +
+// Imaris-Excel tracking pipeline + worked examples + a self-verifying launcher).
+// The light edition ships inside the release under assets/pipeline/; the complete
+// edition carries a ~72 MB Python runtime and is fetched by the operator's browser
+// straight from the GitHub release, never proxied through this host — mkt_fetch_bytes
+// buffers whole bodies in memory and caps far below that size.
+const PIPELINE_EDITIONS = [
+    'leger'   => 'lumen3d-pipeline-leger-',
+    'complet' => 'lumen3d-pipeline-complet-',
+];
+
+function admin_pipeline_dir(): string { return admin_root() . '/assets/pipeline'; }
+
+function admin_pipeline_local(string $edition): ?string {
+    $prefix = PIPELINE_EDITIONS[$edition] ?? null;
+    if ($prefix === null) return null;
+    $dir = admin_pipeline_dir();
+    if (!is_dir($dir)) return null;
+    $found = glob($dir . '/' . $prefix . '*.zip') ?: [];
+    if (!$found) return null;
+    usort($found, function ($a, $b) {
+        return admin_version_tuple(basename($a, '.zip')) <=> admin_version_tuple(basename($b, '.zip'));
+    });
+    return end($found);
+}
+
+function admin_pipeline_github_asset(): array {
+    $raw = mkt_fetch_bytes('https://api.github.com/repos/' . GITHUB_REPO . '/releases/latest', 512 * 1024);
+    if ($raw === null) {
+        return ['available' => false, 'reason' => 'unreachable', 'detail' => mkt_last_error()];
+    }
+    $rel = json_decode($raw, true);
+    if (!is_array($rel)) return ['available' => false, 'reason' => 'unreachable'];
+    foreach (($rel['assets'] ?? []) as $asset) {
+        $name = $asset['name'] ?? '';
+        if (strncmp($name, PIPELINE_EDITIONS['complet'], strlen(PIPELINE_EDITIONS['complet'])) === 0
+            && substr($name, -4) === '.zip') {
+            return [
+                'available' => true,
+                'name'      => $name,
+                'size'      => $asset['size'] ?? null,
+                'url'       => $asset['browser_download_url'] ?? null,
+                'tag'       => $rel['tag_name'] ?? null,
+            ];
+        }
+    }
+    return ['available' => false, 'reason' => 'absent', 'tag' => $rel['tag_name'] ?? null];
+}
+
+function admin_pipeline_info(): array {
+    // No build-on-demand twin: a PHP host has neither preprocess/ nor SCRIPTS/ nor
+    // tools/ (none are in the release allowlist), so the shipped zip is all there is.
+    $lite = admin_pipeline_local('leger');
+    $full = admin_pipeline_local('complet');
+
+    $info = [
+        'versions' => [
+            'web'        => admin_max_version(changelog_dir()),
+            'preprocess' => admin_preprocess_version(),
+        ],
+        'leger'   => ['available' => false],
+        'complet' => ['available' => false],
+    ];
+    if ($lite !== null) {
+        $info['leger'] = ['available' => true, 'name' => basename($lite),
+                          'size' => filesize($lite), 'source' => 'local'];
+    }
+    if ($full !== null) {
+        $info['complet'] = ['available' => true, 'name' => basename($full),
+                            'size' => filesize($full), 'source' => 'local'];
+    } else {
+        $remote = admin_pipeline_github_asset();
+        $remote['source'] = 'github';
+        $info['complet'] = $remote;
+    }
+    return $info;
+}
+
+function admin_pipeline_send(string $edition) {
+    $path = admin_pipeline_local($edition);
+    if ($path === null || !is_file($path)) {
+        admin_json_out(['error' => 'pipeline_unavailable', 'edition' => $edition], 404);
+    }
+    // Any output buffering started upstream would be prepended to the zip bytes and
+    // corrupt the archive, so every layer is discarded before the body is emitted.
+    while (ob_get_level() > 0) { ob_end_clean(); }
+    header('Content-Type: application/zip');
+    header('Content-Length: ' . filesize($path));
+    header('Content-Disposition: attachment; filename="' . basename($path) . '"');
+    header('Cache-Control: no-store');
+    @set_time_limit(0);
+    readfile($path);
+    exit;
+}
+
 // ── Plugin trust (twin of dev_server.py trust module) ─────────────────────────
 // Canonical hash + classification, so a PHP host gates untrusted plugins like the
 // Python server. Hash MUST match (validated by tests/plugin-trust-vector.json).

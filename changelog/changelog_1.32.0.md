@@ -1,0 +1,27 @@
+# Changelog v1.32.0 (Plateforme Web)
+
+> Les deux pipelines de traitement existaient dans le dépôt, mais nulle part ailleurs : ni dans une release, ni derrière un bouton. Le panneau d'administration livre désormais un pack autonome qui contient les deux, un exemple pour chacun, et un lanceur qui se vérifie lui-même avant de démarrer.
+
+## [ADDED]
+
+* **Onglet « Pipeline » dans le panneau d'administration.** Il décrit ce que fait chaque pipeline, affiche la version du pack et celle du préprocessing, puis propose l'archive en deux éditions. Les deux boutons sont générés depuis l'état réel du serveur, pas depuis une constante : une édition absente est affichée comme telle, avec la raison.
+* **Pack de traitement autonome** (`tools/build_pipeline_bundle.py`). Une archive qui contient :
+  * le **pipeline volumes** — `run_preprocess.py` et ses cinq étapes, plus l'outil de génération des archives de téléchargement ;
+  * le **pipeline tracking** — les quatre scripts d'analyse des exports Excel Imaris, isolés du reste de `SCRIPTS/` : les utilitaires ponctuels qui y cohabitent portent des chemins absolus d'autres machines, et `patch1.py` ne compile même pas ;
+  * un **exemple d'entrée pour chacun**, et un **`RUN.bat`** qui vérifie l'intégrité du pack, contrôle Python et ses dépendances, puis propose les trois traitements.
+* **Jeu de démonstration cohérent** (`tools/gen_pipeline_examples.py`). Un `.ims` Imaris valide et un export Excel de tracking décrivent **le même embryon simulé** : les noyaux gravés dans le volume se trouvent exactement là où le tableau place les cellules, sur les mêmes quatre points temporels. Enchaîner les trois options du menu exécute donc la chaîne complète — volume, tracking, rattachement — sans aucune donnée réelle. Le mouvement simulé porte une composante rigide d'ensemble, si bien que le résidu de recalage rapporté à la fin doit ressortir à ~1e-14 µm : la démonstration vérifie la science, pas seulement la tuyauterie.
+* **Deux éditions, livrées différemment parce qu'elles ne peuvent pas l'être de la même façon.** L'édition **légère** (~3 Mo) est construite dans l'artefact de release et servie par l'hébergeur. L'édition **complète** (~70 Mo, runtime Python et dépendances pré-installés) est jointe à la release GitHub par la CI, et le navigateur va la chercher là-bas : l'hébergeur ne la relaie jamais. Le passer par PHP était exclu — `mkt_fetch_bytes` bufferise le corps entier en mémoire et plafonne bien en dessous.
+* **Nouvelles actions d'administration** `pipeline_info` et `pipeline_download`, en jumeaux Python et PHP. Aucun des deux serveurs ne savait émettre autre chose que du JSON : `_send_attachment` (Python) diffuse le fichier par blocs plutôt que de le charger en mémoire, `admin_pipeline_send` (PHP) purge toute bufferisation de sortie avant d'écrire — un seul octet parasite en tête corromprait l'archive.
+
+## [OPTIMIZED]
+
+* **Le pack embarque un runtime pré-installé plutôt que des roues à installer.** Mesuré : 72,8 Mo compressés contre 85,8 Mo pour « distribution embarquée + roues + pip + get-pip ». Pré-installer est donc à la fois plus petit et plus simple — pip, son amorçage et la réécriture du `._pth` disparaissent du premier lancement.
+* **L'édition légère n'installe plus rien dans le Python du poste.** Elle crée un environnement isolé sous `.runtime\venv` : les versions du pack ne peuvent plus casser les autres projets de l'utilisateur. Un Python du poste qui possède déjà tout est utilisé tel quel, sans rien créer.
+
+## [FIXED]
+
+* **Le `._pth` de la distribution Python embarquée était faux de deux façons.** La recette habituelle — décommenter `import site` — remet `%APPDATA%\Python\PythonXY\site-packages` sur `sys.path` **avant** celui du pack, si bien que ce qui traîne sur le poste gagne sur ce qu'on livre. Pire, la seule *présence* d'un `._pth` met Python en mode isolé : le dossier du script n'est plus sur `sys.path`, et `Analysis.py` meurt sur `ModuleNotFoundError: No module named 'export_html'`. Les chemins sont désormais écrits explicitement, `site` laissé désactivé.
+* **`preprocess/run_preprocess.bat` était périmé dans le dépôt** : il embarquait les octets v0.14.1 des cinq scripts alors que `run_preprocess.py` est en 0.15.0 — soit un pipeline distribué **sans le support 4D**, sans l'aiguillage `live/` et sans la normalisation globale. Régénéré, et la construction de release reconstruit maintenant le pack à chaque fois pour que la dérive ne puisse plus se réinstaller.
+* **`certutil -hashfile` échoue sur un fichier vide** (`ERROR_FILE_INVALID`), ce qui faisait rejeter par `RUN.bat` un pack pourtant intact à cause de deux marqueurs de dossier. Les marqueurs portent maintenant un texte utile, et la construction refuse d'emballer un fichier vide plutôt que de livrer une archive incapable de passer sa propre vérification.
+* **Le nom du pack ne pouvait pas contredire la release.** `build_pipeline_bundle.py` déduisait sa version du changelog le plus récent sur disque, qui n'est pas nécessairement la version publiée ; la construction de release lui transmet désormais la sienne.
+* **Le pipeline tracking n'avait aucune liste de dépendances déclarée.** `preprocess/requirements.txt` ne couvre que le pipeline volumes, et rien ne documentait que `SCRIPTS/` exige en plus `pandas`, `openpyxl` et `orjson` — ce dernier étant importé sans condition, son absence empêche le pipeline de démarrer. Le pack livre un `requirements.txt` couvrant réellement les deux.

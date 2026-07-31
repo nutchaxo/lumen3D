@@ -1725,6 +1725,105 @@ def _http_get_json(url: str, timeout: int = 10) -> dict:
         return json.loads(r.read().decode("utf-8"))
 
 
+# ── Downloadable processing pipelines ──────────────────────────────────────────
+# The admin panel hands operators a self-contained pack that turns raw microscope
+# output into datasets: the Imaris .ims volume pipeline plus the Imaris-Excel cell
+# tracking pipeline, with a worked example for each and a launcher that verifies
+# itself before running. Two editions, because they cannot be delivered the same way:
+#
+#   "leger"   ~3 MB, BUILT INTO THE RELEASE under assets/pipeline/. Always available,
+#             costs the host nothing to serve. Fetches Python at first run.
+#   "complet" ~72 MB with a full Python runtime pre-installed. Far too large for the
+#             web release artifact, so the release CI attaches it to the GitHub
+#             release and the browser downloads it from there directly. The host
+#             never proxies it: the PHP fetch helper buffers whole bodies in memory
+#             and caps well below that size.
+PIPELINE_DIR = ROOT / "assets" / "pipeline"
+_PIPELINE_EDITIONS = {"leger": "lumen3d-pipeline-leger-", "complet": "lumen3d-pipeline-complet-"}
+
+
+def _pipeline_local(edition: str) -> Path | None:
+    """Newest locally present pack for an edition, if any."""
+    prefix = _PIPELINE_EDITIONS.get(edition)
+    if not prefix or not PIPELINE_DIR.is_dir():
+        return None
+    found = sorted(PIPELINE_DIR.glob(f"{prefix}*.zip"), key=lambda p: _version_key(p.stem))
+    return found[-1] if found else None
+
+
+def _version_key(stem: str) -> tuple:
+    m = re.search(r"(\d+)\.(\d+)\.(\d+)$", stem)
+    return tuple(int(g) for g in m.groups()) if m else (0, 0, 0)
+
+
+def _pipeline_build_lite() -> Path | None:
+    """Build the light pack on demand — dev checkouts only.
+
+    A release ships the finished zip, so this never runs on a deployed host (which
+    has neither preprocess/ nor SCRIPTS/ nor tools/). In a dev checkout the sources
+    ARE present, and rebuilding keeps the offered pack in step with edited scripts
+    instead of serving a stale artifact.
+    """
+    import subprocess
+
+    builder = ROOT / "tools" / "build_pipeline_bundle.py"
+    if not builder.is_file() or not (ROOT / "preprocess").is_dir() or not (ROOT / "SCRIPTS").is_dir():
+        return None
+    try:
+        proc = subprocess.run([sys.executable, str(builder), "--out", str(PIPELINE_DIR)],
+                              capture_output=True, text=True, timeout=180, cwd=str(ROOT))
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if proc.returncode != 0:
+        print(f"[pipeline] construction du pack echouee: "
+              f"{(proc.stderr or proc.stdout or '').strip()[:300]}", flush=True)
+        return None
+    return _pipeline_local("leger")
+
+
+def _pipeline_github_asset() -> dict:
+    """Locate the complete pack among the latest GitHub release's assets.
+
+    Returns availability plus the browser download URL. Network failures are not
+    errors here — the light pack still works, so the UI just reports that the
+    complete edition could not be reached.
+    """
+    try:
+        rel = _http_get_json(f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest")
+    except Exception as exc:
+        return {"available": False, "reason": "unreachable", "detail": str(exc)[:200]}
+    for asset in rel.get("assets") or []:
+        name = asset.get("name") or ""
+        if name.startswith(_PIPELINE_EDITIONS["complet"]) and name.endswith(".zip"):
+            return {"available": True, "name": name, "size": asset.get("size"),
+                    "url": asset.get("browser_download_url"), "tag": rel.get("tag_name")}
+    return {"available": False, "reason": "absent", "tag": rel.get("tag_name")}
+
+
+def _pipeline_info() -> dict:
+    local_lite = _pipeline_local("leger") or _pipeline_build_lite()
+    local_full = _pipeline_local("complet")
+
+    info = {
+        "versions": {"web": _max_version(CHANGELOG_DIR), "preprocess": _preprocess_version()},
+        "leger": {"available": False},
+        "complet": {"available": False},
+    }
+    if local_lite:
+        info["leger"] = {"available": True, "name": local_lite.name,
+                         "size": local_lite.stat().st_size, "source": "local"}
+    if local_full:
+        # An operator can drop the complete pack next to the light one; serving it
+        # from the host then beats sending them to GitHub.
+        info["complet"] = {"available": True, "name": local_full.name,
+                           "size": local_full.stat().st_size, "source": "local"}
+    else:
+        remote = _pipeline_github_asset()
+        remote["source"] = "github"
+        info["complet"] = remote
+    return info
+
+
 def _update_check() -> dict:
     current = _max_version(CHANGELOG_DIR) or "0.0.0"
     try:
@@ -3560,6 +3659,36 @@ class AdminHandler(http.server.SimpleHTTPRequestHandler):
         entries = _list_download_entries(download_root, target, dataset_id, rel)
         self._json_nostore(200, {"dataset": dataset_id, "path": rel, "available": True, "entries": entries})
 
+    def _send_attachment(self, path: Path, filename: str):
+        """Stream a file back as a download.
+
+        Written by hand because neither _json nor _json_nostore can emit a binary
+        body, and both buffer whole. The pack is tens of megabytes, so it is copied
+        in chunks rather than read into memory. Do NOT add _cors_headers() here —
+        end_headers() already emits them, and duplicating headers was a real past bug.
+        """
+        try:
+            size = path.stat().st_size
+            fh = path.open("rb")
+        except OSError:
+            self._json(404, {"error": "Not found"})
+            return
+        with fh:
+            self.send_response(200)
+            self.send_header("Content-Type", "application/zip")
+            self.send_header("Content-Length", str(size))
+            # The filename is server-controlled (a glob match on our own directory),
+            # but quote it anyway so a future name with a space cannot split the header.
+            self.send_header("Content-Disposition",
+                             f'attachment; filename="{filename}"')
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            try:
+                shutil.copyfileobj(fh, self.wfile, 256 * 1024)
+            except (BrokenPipeError, ConnectionResetError):
+                # The operator cancelled the download; nothing to recover.
+                pass
+
     def end_headers(self):
         self._cors_headers()
         path_no_query = self.path.split('?')[0]
@@ -3916,6 +4045,17 @@ class AdminHandler(http.server.SimpleHTTPRequestHandler):
                 self._json(st2, pl2)
             elif action == "version":
                 self._json(200, _version_info())
+            elif action == "pipeline_info":
+                self._json(200, _pipeline_info())
+            elif action == "pipeline_download":
+                edition = params.get("edition", "leger")
+                local = _pipeline_local(edition)
+                if local is None and edition == "leger":
+                    local = _pipeline_build_lite()
+                if local is None:
+                    self._json(404, {"error": "pipeline_unavailable", "edition": edition})
+                else:
+                    self._send_attachment(local, local.name)
             elif action == "permissions_status":
                 self._json(200, _permissions_report())
             elif action == "repair_permissions":

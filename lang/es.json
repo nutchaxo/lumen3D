@@ -557,7 +557,9 @@
     "trackingPreparing": "Preparando las trayectorias…",
     "trackingCells": "células",
     "trackingUnavailable": "Seguimiento no disponible",
-    "trackingNoRaw": "Faltan las coordenadas brutas: seguimiento oculto en un volumen no estabilizado"
+    "trackingNoRaw": "Faltan las coordenadas brutas: seguimiento oculto en un volumen no estabilizado",
+    "bufferFull": "Búfer {n}/{total} · {q}",
+    "bufferPartial": "Búfer {n}/{total} · {q} — la serie completa no cabe en memoria ({cap} imágenes máx.)"
   },
   "studio": {
     "selectMove": "Seleccionar / Mover",

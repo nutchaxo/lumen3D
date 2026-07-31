@@ -74,7 +74,7 @@ const Timeline = (() => {
         </div>
         <div class="scrubber-container flex-1 mx-4">
           <div class="scrubber-track ${_options.stepped ? 'scrubber-stepped' : ''}" id="timeline-scrubber-track">
-            <div class="scrubber-buffer" id="timeline-scrubber-buffer" style="width:0%;"></div>
+            <div class="scrubber-buffer" id="timeline-scrubber-buffer"></div>
             <div class="scrubber-fill" id="timeline-scrubber-fill" style="width:0%;"></div>
             <div class="scrubber-handle" id="timeline-scrubber-handle" style="left:0%;"></div>
           </div>
@@ -269,15 +269,62 @@ const Timeline = (() => {
     }
   }
 
-  function updateBuffer(bufferedFrames) {
-    if (!scrubberBuffer) return;
-    const pct = (_totalFrames > 1) ? (bufferedFrames / _totalFrames) * 100 : 0;
-    scrubberBuffer.style.width = `${pct}%`;
+  // Buffered frames are NOT a prefix: a series fills around the playhead and loses
+  // frames again to eviction, so a single width can't describe it. Segments are
+  // reused from a pool and only their left/width are written — a style ATTRIBUTE,
+  // which the strict CSP allows (style-src-attr), unlike an injected <style>.
+  let _bufSegPool = [];
+
+  function _coalesce(sorted) {
+    const out = [];
+    for (const f of sorted) {
+      const last = out[out.length - 1];
+      if (last && f === last[1] + 1) last[1] = f;
+      else out.push([f, f]);
+    }
+    return out;
   }
+
+  function _paintSegments(ranges) {
+    if (!scrubberBuffer) return;
+    const denom = Math.max(1, _totalFrames - 1);
+    ranges.forEach((r, i) => {
+      let el = _bufSegPool[i];
+      if (!el) {
+        el = document.createElement('span');
+        el.className = 'scrubber-buffer-seg';
+        scrubberBuffer.appendChild(el);
+        _bufSegPool[i] = el;
+      }
+      // Frame i owns [i-0.5, i+0.5] so the playhead, which sits at i/(N-1), stays
+      // inside the segment that represents it.
+      const left = Math.max(0, (r[0] - 0.5) / denom) * 100;
+      const right = Math.min(1, (r[1] + 0.5) / denom) * 100;
+      el.style.left = `${left}%`;
+      el.style.width = `${Math.max(0, right - left)}%`;
+      el.style.display = '';
+    });
+    for (let i = ranges.length; i < _bufSegPool.length; i++) _bufSegPool[i].style.display = 'none';
+  }
+
+  /** Accepts a Set/Array of frame indices, or a count (legacy callers such as
+   *  widgets.html), which is drawn as the prefix [0, n-1] it used to mean. */
+  function updateBuffer(buffered) {
+    if (!scrubberBuffer) return;
+    if (typeof buffered === 'number') {
+      _paintSegments(buffered > 0 ? [[0, Math.max(0, buffered - 1)]] : []);
+      return;
+    }
+    if (!buffered) { _paintSegments([]); return; }
+    const frames = [...buffered].filter(Number.isFinite).sort((a, b) => a - b);
+    _paintSegments(_coalesce(frames));
+  }
+
+  function clearBuffer() { _paintSegments([]); }
   
   function getFrame() {
     return snapFrame(_currentFrame, false);
   }
 
-  return { init, updateBuffer, setFrame, play, pause, getFrame, setStalled };
+  return { init, updateBuffer, clearBuffer, setFrame, play, pause, getFrame, setStalled };
 })();

@@ -946,13 +946,28 @@ body.viewer-iframe .canvas-overlay {
   background-repeat: repeat-x;
 }
 
+/* Container for the buffered SEGMENTS. Buffered frames are not a prefix — a series
+   fills around the playhead and loses frames again to eviction — so this is a track
+   holding N spans rather than one growing bar. pointer-events:none because the drag
+   handlers live on #timeline-scrubber-track; without it the children swallow them. */
 .scrubber-buffer {
   position: absolute;
-  top: 0;
-  left: 0;
-  bottom: 0;
-  background: rgba(255, 255, 255, 0.1);
+  inset: 0;
   border-radius: var(--radius-sm);
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.scrubber-buffer-seg {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  background: rgba(255, 255, 255, 0.16);
+  transition: left 0.12s linear, width 0.12s linear;
+}
+
+[data-theme="light"] .scrubber-buffer-seg {
+  background: rgba(0, 0, 0, 0.14);
 }
 
 .scrubber-fill {

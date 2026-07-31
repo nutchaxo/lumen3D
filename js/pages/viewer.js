@@ -708,6 +708,9 @@ const ViewerApp = (() => {
       _qualityMode = _normalizeQualityParam(select.value) || '512x512';
       select.value = _qualityMode;
       VolumeViewer.setQualityTarget?.(_qualityMode, _qualityMode);
+      // Repaint the buffer for the quality we just switched TO. Stepping back down to
+      // one already loaded shows its frames immediately instead of an empty bar.
+      _refreshBuffer();
       if (_basePath) _loadTimepoint(_basePath, _currentTimepoint, { force: true }).catch(_showLoadingError);
     });
   }
@@ -1947,6 +1950,37 @@ const ViewerApp = (() => {
   let _registration = null;
   let _stabilizeVolume = false;
 
+  /** Paint the scrubber's buffer from what is ACTUALLY resident at the current
+   *  quality, and tell the cache where playback is so eviction keeps the frames we
+   *  are about to need. The old bar counted "timepoints ever visited", a set that is
+   *  never cleared and never shrinks — so it read full while half the series had been
+   *  evicted, and it never reset when the quality changed. */
+  function _refreshBuffer() {
+    if (!isLive || !_basePath) return;
+    const total = Number(datasetMeta?.dimensions?.t) || 0;
+    VolumeViewer.setPlayheadHint?.(_basePath, _qualityMode, _currentTimepoint || 0, total);
+    const resident = VolumeViewer.getCachedTimepoints?.(_basePath, _qualityMode);
+    if (!resident) return;
+    Timeline.updateBuffer(resident);
+    const capacity = VolumeViewer.getBufferCapacity?.(_basePath, _qualityMode) || 0;
+    _setBufferStatus(resident.size, total, capacity);
+  }
+
+  /** Its own element: _setQualityStatus is rewritten on every single frame load, so a
+   *  buffer count written there would be wiped several times a second during playback. */
+  function _setBufferStatus(resident, total, capacity) {
+    const el = document.getElementById('buffer-status');
+    if (!el || !total) return;
+    const label = _qualityLabel(_qualityMode);
+    if (capacity && capacity < total) {
+      el.textContent = _tt('js.bufferPartial', 'Tampon {n}/{total} · {q} — la série entière ne tient pas en mémoire ({cap} images max)')
+        .replace('{n}', resident).replace('{total}', total).replace('{q}', label).replace('{cap}', capacity);
+    } else {
+      el.textContent = _tt('js.bufferFull', 'Tampon {n}/{total} · {q}')
+        .replace('{n}', resident).replace('{total}', total).replace('{q}', label);
+    }
+  }
+
   let _trackingHandle = null;
 
   /** t() returns the KEY when a locale file lags behind; fall back to readable text
@@ -2329,7 +2363,7 @@ const ViewerApp = (() => {
 
     
     if (isLive) {
-      Timeline.updateBuffer(loadedTimepoints.size);
+      _refreshBuffer();
       if (_isIframe) {
         // SEC-012: restrict targetOrigin to this page's origin (no wildcard leak).
         window.parent.postMessage({ type: 'SYNC_TIME', value: t, sourceIndex: _panelIndex }, Utils.trustedTargetOrigin());

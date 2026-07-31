@@ -275,7 +275,6 @@ const VolumeViewer = (() => {
     high: 12, preview: 8, balanced: 12
   };
   const IMAGE_CACHE_LIMIT = 640;
-  const VOLUME_CACHE_LIMIT = 4;
   const _imageCache = new Map();
   const _volumeCache = new Map();
 
@@ -2213,20 +2212,50 @@ const VolumeViewer = (() => {
     return true;
   }
 
+  /** Free a stream's GPU resources when it is abandoned before ever being cached. */
+  function _disposeAbandonedStream(textures, occTex, streamSvrManager) {
+    if (Array.isArray(textures)) textures.forEach(t => t?.dispose?.());
+    occTex?.dispose?.();
+    if (streamSvrManager && streamSvrManager !== _svrManager && !_isSvrManagerCached(streamSvrManager)) {
+      streamSvrManager.dispose();
+    }
+  }
+
+  /** Release every GPU resource an entry owns. One helper, called from every path
+   *  that drops an entry — eviction, replacement, refusal, abandoned stream. They
+   *  used to each free a different subset: `occupancyMap` was freed by NONE of them,
+   *  so a texture leaked on every eviction, and the refusal branch dropped an entry
+   *  without freeing anything at all. */
+  function _disposeVolumeEntry(entry) {
+    if (!entry || entry === _activeVolumeEntry) return;
+    if (entry.svrManager && entry.svrManager !== _svrManager && !_isSvrManagerCached(entry.svrManager)) {
+      entry.svrManager.dispose();
+    }
+    if (Array.isArray(entry.textures)) entry.textures.forEach(t => t?.dispose?.());
+    entry.occupancyMap?.dispose?.();
+    entry.occupancyMap = null;
+  }
+
+  /** An entry's REAL footprint. `data` is the very ArrayBuffer backing the 3D texture,
+   *  so this counts VRAM and the CPU mirror at once — they are the same bytes twice
+   *  over, which is why the budget below is deliberately conservative. */
+  function _entryBytes(entry) {
+    if (!entry) return 0;
+    if (Number.isFinite(entry.byteLength)) return entry.byteLength;
+    return entry?.data?.length
+      || (entry?.width || 0) * (entry?.height || 0) * (entry?.depth || 0) * RGBA_TEXTURE_BYTES_PER_VOXEL;
+  }
+
   function _storeVolumeCache(key, entry) {
     if (!_shouldCacheVolumeEntry(entry)) {
+      const orphan = _volumeCache.get(key);
       _volumeCache.delete(key);
+      _disposeVolumeEntry(orphan);
       return;
     }
     const previous = _volumeCache.get(key);
-    if (previous && previous !== entry && previous !== _activeVolumeEntry) {
-      if (previous.svrManager && previous.svrManager !== _svrManager) {
-        previous.svrManager.dispose();
-      }
-      if (Array.isArray(previous.textures)) {
-        previous.textures.forEach(t => t?.dispose?.());
-      }
-    }
+    if (previous && previous !== entry) _disposeVolumeEntry(previous);
+    if (!Number.isFinite(entry.byteLength)) entry.byteLength = _entryBytes(entry);
     _volumeCache.set(key, entry);
     _trimVolumeCache();
   }
@@ -2240,41 +2269,101 @@ const VolumeViewer = (() => {
    *  At 256x256 that keeps a whole 30-frame series resident; at 512x512 it keeps ~12. */
   const VOLUME_VRAM_BUDGET_BYTES = 768 * 1024 * 1024;
 
-  function _volumeCacheLimit() {
-    let bytes = 0;
-    for (const entry of _volumeCache.values()) {
-      // Measure the entry's REAL footprint. Assuming 4 bytes per voxel here undercounts
-      // how many single-channel (RedFormat) timepoints fit by a factor of four, which
-      // kept evicting frames that had room to stay.
-      const size = entry?.data?.length
-        || (entry?.width || 0) * (entry?.height || 0) * (entry?.depth || 0) * RGBA_TEXTURE_BYTES_PER_VOXEL;
-      if (size > bytes) bytes = size;
+  // Where playback currently is, so eviction can keep the frames we are about to
+  // need instead of the ones we just left.
+  let _playhead = { basePath: null, quality: null, frame: 0, total: 0 };
+
+  function setPlayheadHint(basePath, quality, frame, total) {
+    _playhead = {
+      basePath: basePath || null,
+      quality: _normalizeQualityKey(quality || ''),
+      frame: Number.isFinite(frame) ? frame : 0,
+      total: Number.isFinite(total) && total > 0 ? total : 0
+    };
+  }
+
+  function _cachedBytes() {
+    let sum = 0;
+    for (const entry of _volumeCache.values()) sum += _entryBytes(entry);
+    return sum;
+  }
+
+  /** Pick what to drop when the budget is exceeded.
+   *
+   *  NOT least-recently-used. Playing a 30-frame series in a cache that holds 14 is
+   *  the textbook worst case for LRU on a cyclic scan: the frame you ask for next is
+   *  always the one just evicted, so the hit rate collapses to ~0 % and every single
+   *  frame is a fresh ~600 ms stream. That — not the cache key, which has been per
+   *  (dataset, timepoint, quality) all along — is why native "reloads on every frame".
+   *
+   *  Order: another quality first (biggest first, since a native entry frees 14x what
+   *  a 256 one does), then, within the quality being played, the frame we will reach
+   *  LAST — the greatest cyclic distance ahead of the playhead. That keeps a
+   *  contiguous window in front of the head, which is what a video buffer is. */
+  function _evictionVictim() {
+    let worst = null;
+    let worstRank = -Infinity;
+    for (const [key, entry] of _volumeCache) {
+      if (key === _activeTextureKey || entry === _activeVolumeEntry) continue;
+      const quality = _normalizeQualityKey(entry?.quality || '');
+      const sameSeries = entry?.basePath === _playhead.basePath && quality === _playhead.quality;
+      let rank;
+      if (!sameSeries) {
+        // Foreign quality/dataset: cheapest thing to lose, biggest first.
+        rank = 1e9 + _entryBytes(entry);
+      } else if (_playhead.total > 0 && Number.isFinite(entry?.timepoint)) {
+        rank = (entry.timepoint - _playhead.frame + _playhead.total) % _playhead.total;
+      } else {
+        rank = 0;
+      }
+      if (rank > worstRank) { worstRank = rank; worst = key; }
     }
-    if (!bytes) return VOLUME_CACHE_LIMIT;
-    return Math.max(VOLUME_CACHE_LIMIT, Math.min(32, Math.floor(VOLUME_VRAM_BUDGET_BYTES / bytes)));
+    return worst;
   }
 
   function _trimVolumeCache() {
-    const limit = _volumeCacheLimit();
     let guard = 0;
-    while (_volumeCache.size > limit && guard < limit + 8) {
-      guard++;
-      const first = _volumeCache.entries().next().value;
-      if (!first) break;
-      const [key, entry] = first;
-      if (key === _activeTextureKey) {
-        _volumeCache.delete(key);
-        _volumeCache.set(key, entry);
-        continue;
-      }
+    // Budget in BYTES, not in entries. The old limit derived one entry count from the
+    // LARGEST entry present, so a single native frame (52 MiB) dropped the ceiling to
+    // 14 for every quality at once and wiped the 256/512 sets — which is exactly why
+    // stepping back down to a resolution you had already loaded was never instant.
+    while (_cachedBytes() > VOLUME_VRAM_BUDGET_BYTES && guard++ < 4096) {
+      if (_volumeCache.size <= 1) break;
+      const key = _evictionVictim();
+      if (!key) break;
+      const entry = _volumeCache.get(key);
       _volumeCache.delete(key);
-      if (entry.svrManager && entry.svrManager !== _svrManager) {
-        entry.svrManager.dispose();
-      }
-      if (Array.isArray(entry.textures)) {
-        entry.textures.forEach(t => t?.dispose?.());
-      }
+      _disposeVolumeEntry(entry);
     }
+  }
+
+  /** Which timepoints of a series are ACTUALLY resident right now. The buffer bar is
+   *  painted from this rather than from a "already visited" set, so it also shrinks
+   *  when eviction takes frames back — a bar that only ever grows would read as full
+   *  while half the series had been dropped. */
+  function _cachedTimepoints(basePath, quality) {
+    const want = _normalizeQualityKey(quality || '');
+    const out = new Set();
+    for (const entry of _volumeCache.values()) {
+      if (entry?.basePath !== basePath) continue;
+      if (_normalizeQualityKey(entry?.quality || '') !== want) continue;
+      if (Number.isFinite(entry?.timepoint)) out.add(entry.timepoint);
+    }
+    return out;
+  }
+
+  /** How many frames of this series can be resident at once — the honest ceiling the
+   *  buffer can reach. */
+  function _bufferCapacity(basePath, quality) {
+    const want = _normalizeQualityKey(quality || '');
+    let per = 0;
+    for (const entry of _volumeCache.values()) {
+      if (entry?.basePath !== basePath) continue;
+      if (_normalizeQualityKey(entry?.quality || '') !== want) continue;
+      per = Math.max(per, _entryBytes(entry));
+    }
+    if (!per) return 0;   // nothing loaded yet at this quality: unknown, not zero
+    return Math.max(1, Math.floor(VOLUME_VRAM_BUDGET_BYTES / per));
   }
 
   function _computeChannelHistograms(textures, width, height, depth, channels, bins = 256) {
@@ -4084,6 +4173,17 @@ const VolumeViewer = (() => {
     // Parenting to `cube` (not to the scene) inherits the orbit, the pan, the
     // physical aspect scale and the operator's Z display scale for free — the grid
     // has to mirror all four by hand because it sits at the root.
+    // ── Buffer state, for a video-style progress bar ────────────────────────────
+    /** Timepoints of `basePath` actually resident at `quality`, right now. */
+    getCachedTimepoints: (basePath, quality) => _cachedTimepoints(basePath, quality),
+    // Built with the RAW quality string, exactly as the writers do (:1552, :4250) —
+    // normalising only here would miss every entry.
+    hasCachedVolume: (basePath, quality, timepoint) =>
+      _volumeCache.has(_volumeCacheKey(basePath, quality, timepoint)),
+    /** How many frames of this series fit in the budget (0 = not measurable yet). */
+    getBufferCapacity: (basePath, quality) => _bufferCapacity(basePath, quality),
+    /** Tell eviction where playback is, so it keeps the frames coming up next. */
+    setPlayheadHint,
     getVolumeObject: () => cube,
     /** Acquisition box in um, or null until setStabilizationSpace() has run. */
     getAcquisitionSpace: () => (_acqExtent
@@ -4357,6 +4457,10 @@ const VolumeViewer = (() => {
                   // so without this check __webglInit would be set on a storage-less texture
                   // and subsequent brick texSubImage3D uploads would write into uninitialised
                   // GPU memory (pink). Throw so the catch downgrades the LOD (rule 1.1).
+                  // Release THIS texture before unwinding: it is not in `textures` yet,
+                  // so the catch below cannot see it, and ANGLE may well have reserved
+                  // part of it. Leaking here is what turns one rejection into a spiral.
+                  texture3D.dispose();
                   throw new Error(`monolithic 3D texture allocation failed (glError=${_allocErr}, ${width}x${height}x${depth}, ${Math.round(rgbaByteLength / 1024 / 1024)} MiB)`);
               }
               const properties = renderer.properties.get(texture3D);
@@ -4372,7 +4476,12 @@ const VolumeViewer = (() => {
         _perf()?.end(texturePerfId, { status: 'ok' });
         allocated = true;
       } catch (err) {
-        textures = []; // Free whatever was allocated
+        // Dropping the array does NOT free the GPU side: three only releases a
+        // WebGLTexture on dispose(), so a texture that WAS allocated before ANGLE
+        // rejected the next one leaked its whole footprint (52 MiB here) for the life
+        // of the renderer — and each leak makes the next allocation likelier to fail.
+        textures.forEach(t => t?.dispose?.());
+        textures = [];
         if (streamSvrManager && streamSvrManager !== _svrManager) {
           streamSvrManager.dispose();
           streamSvrManager = null;
@@ -4732,14 +4841,18 @@ const VolumeViewer = (() => {
 
     if (abortRef.cancelled || loadId !== _loadCounter) {
       if (deferActivation) _clearTransitionVolume();
-      if (streamSvrManager && streamSvrManager !== _svrManager) streamSvrManager.dispose();
+      // This entry never reaches the cache, so nothing downstream will ever free it:
+      // only streamSvrManager was released here, leaving the monolithic volume texture
+      // (52 MiB on the reference series) and the occupancy map stranded on the GPU for
+      // every cancelled stream — and a prefetcher cancels a great many.
+      _disposeAbandonedStream(textures, occTex, streamSvrManager);
       _emitQualityState({ message: `${quality} streaming cancelled` });
       _perf()?.end(perfId, { status: 'stale', quality });
       return { stale: true };
     }
     if (streamTasks.length && doneOps === 0) {
       if (deferActivation) _clearTransitionVolume();
-      if (streamSvrManager && streamSvrManager !== _svrManager) streamSvrManager.dispose();
+      _disposeAbandonedStream(textures, occTex, streamSvrManager);
       _emitQualityState({
         active: quality,
         mode: 'bricks',

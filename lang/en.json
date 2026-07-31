@@ -557,7 +557,9 @@
     "trackingPreparing": "Preparing tracks…",
     "trackingCells": "cells",
     "trackingUnavailable": "Tracking unavailable",
-    "trackingNoRaw": "Raw coordinates missing: tracking hidden on an unstabilised volume"
+    "trackingNoRaw": "Raw coordinates missing: tracking hidden on an unstabilised volume",
+    "bufferFull": "Buffer {n}/{total} · {q}",
+    "bufferPartial": "Buffer {n}/{total} · {q} — the whole series does not fit in memory ({cap} frames max)"
   },
   "studio": {
     "selectMove": "Select/Move",

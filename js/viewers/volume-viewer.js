@@ -2774,7 +2774,14 @@ const VolumeViewer = (() => {
 
   function _fitCameraDistance(margin = 1.25) {
     if (!camera || !cube || !_container) return 2.5;
-    const box = new THREE.Box3().setFromObject(cube);
+    // Frame the VOLUME, not whatever is parented to it. Box3.setFromObject() walks
+    // every descendant — measurement sprites, the cut plane, the tracking overlay —
+    // so the framing drifted with the annotations, and worse, expandByObject caches
+    // each child's boundingBox: an overlay whose positions are rewritten per frame
+    // would pin the framing to whatever frame 0 happened to span, for the session.
+    cube.updateMatrixWorld(true);
+    if (!cube.geometry.boundingBox) cube.geometry.computeBoundingBox();
+    const box = cube.geometry.boundingBox.clone().applyMatrix4(cube.matrixWorld);
     const size = new THREE.Vector3();
     box.getSize(size);
     const verticalFov = THREE.MathUtils.degToRad(camera.fov);
@@ -4073,6 +4080,36 @@ const VolumeViewer = (() => {
     floorLutsFromManifest: (manifest, channels, histograms = null) => _floorLuts(_floorsFromManifest(manifest, channels, histograms), channels),
     getScene: () => scene,
     getCamera: () => camera,
+    // ── Hooks for overlays that must live in the volume's own frame ──────────────
+    // Parenting to `cube` (not to the scene) inherits the orbit, the pan, the
+    // physical aspect scale and the operator's Z display scale for free — the grid
+    // has to mirror all four by hand because it sits at the root.
+    getVolumeObject: () => cube,
+    /** Acquisition box in um, or null until setStabilizationSpace() has run. */
+    getAcquisitionSpace: () => (_acqExtent
+      ? { min: _acqExtent.min.clone(), max: _acqExtent.max.clone(), size: _acqExtent.size.clone() }
+      : null),
+    /** Acquisition um -> cube object space. Single source of the transform: copying
+     *  the formula into a consumer is how two implementations of one change of frame
+     *  start to drift. Returns null when no acquisition box is known. */
+    umToObject: (v, out) => (_acqExtent ? _objectFromUm(v, out || new THREE.Vector3()) : null),
+    /** True when an object-space point passes the SAME clip test the shader applies
+     *  (Z-stack slab, per-axis clip sliders). Kept here so the overlay cannot drift
+     *  from the volume: the shader reads clipCoord from clipBoxMin/Size under warp
+     *  and from p+0.5 without it — this mirrors both branches exactly. */
+    isInsideClip: (v) => {
+      const u = material?.uniforms;
+      if (!u) return true;
+      let cx, cy, cz;
+      if (_warpActive) {
+        const lo = u.clipBoxMin.value, sz = u.clipBoxSize.value;
+        cx = (v.x - lo.x) / sz.x; cy = (v.y - lo.y) / sz.y; cz = (v.z - lo.z) / sz.z;
+      } else {
+        cx = v.x + 0.5; cy = v.y + 0.5; cz = v.z + 0.5;
+      }
+      const lo = u.clipMin.value, hi = u.clipMax.value;
+      return cx >= lo.x && cx <= hi.x && cy >= lo.y && cy <= hi.y && cz >= lo.z && cz <= hi.z;
+    },
     triggerRender: _scheduleFrame,
     setOnPostRender: (cb) => {
       _onPostRender = cb;

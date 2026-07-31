@@ -305,6 +305,86 @@ body {
   display: block;
 }
 
+/* ── Sidebar layers (tracking points…) ───────────────────────────────────────
+   Same card as a channel, minus the histogram. Its own class names rather than
+   the channel ones: .channel-header-row is opened and never closed in the
+   channel markup, so reusing it would nest these rows inside the header grid. */
+.layer-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.layer-toggle {
+  display: flex;
+  align-items: center;
+  margin: 0;
+  cursor: pointer;
+}
+
+.layer-title {
+  flex: 1;
+  font-size: var(--text-sm);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.layer-summary {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-top: var(--space-1);
+}
+
+.layer-body {
+  display: none;
+  margin-top: var(--space-3);
+}
+
+.channel-item.is-layer.expanded .layer-body {
+  display: block;
+}
+
+.layer-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-bottom: var(--space-2);
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.layer-row input[type="range"] {
+  flex: 1;
+  min-width: 0;
+}
+
+.layer-row output {
+  font-family: var(--font-mono);
+  min-width: 34px;
+  text-align: right;
+}
+
+.layer-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1) var(--space-3);
+  font-size: 10px;
+  color: var(--text-muted);
+}
+
+.layer-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.layer-legend-count {
+  font-family: var(--font-mono);
+  opacity: 0.7;
+}
+
 .channel-icon-btn {
   width: 28px;
   height: 28px;

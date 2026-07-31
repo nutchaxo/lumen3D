@@ -310,6 +310,7 @@ const ViewerApp = (() => {
         window.parent.postMessage({ type: 'SYNC_CHANNELS', sourceIndex: _panelIndex, channelIndex: idx, value: params }, Utils.trustedTargetOrigin());
       }
     });
+    _initTrackingLayer();
 
     // Await the volume load kicked off above (channel state is now established).
     try {
@@ -1946,6 +1947,131 @@ const ViewerApp = (() => {
   let _registration = null;
   let _stabilizeVolume = false;
 
+  let _trackingHandle = null;
+
+  /** t() returns the KEY when a locale file lags behind; fall back to readable text
+   *  rather than showing "js.trackingSize" in the sidebar. */
+  function _tt(key, fallback) {
+    const v = (typeof I18n !== 'undefined') ? I18n.t(key) : key;
+    return (v && v !== key) ? v : fallback;
+  }
+
+  /** Tracked centroids as a sidebar LAYER — same shell as a channel (visibility,
+   *  disclosure, status line) minus the histogram, which would mean nothing for a
+   *  point cloud. Silent no-op for a dataset without tracking. */
+  function _initTrackingLayer() {
+    const meta = datasetMeta?.tracking;
+    if (!meta?.tracksPath || typeof TrackingOverlay === 'undefined') return;
+
+    // The overlay needs the acquisition box to place points. It is normally
+    // declared by _initStabilization, but that bails when the registration was
+    // rejected — and a rejected registration must not cost the operator the
+    // overlay. Re-declare it with a NULL display box: passing imageBoxUnionUm here
+    // would resize the cube to the stabilised sweep while the shader warp stays
+    // off, stretching the volume and pushing the camera back.
+    if (!VolumeViewer.getAcquisitionSpace?.() && datasetMeta?.acquisitionExtentUm?.min) {
+      VolumeViewer.setStabilizationSpace?.(datasetMeta.acquisitionExtentUm, null);
+    }
+    const space = VolumeViewer.getAcquisitionSpace?.();
+    if (!space) {
+      console.warn('[ViewerApp] tracking present but no acquisitionExtentUm — layer not shown');
+      return;
+    }
+
+    const ready = TrackingOverlay.init({
+      volumeObject: VolumeViewer.getVolumeObject?.(),
+      umToObject: VolumeViewer.umToObject,
+      isInsideClip: VolumeViewer.isInsideClip,
+      acqSize: space.size,
+      onDirty: VolumeViewer.triggerRender
+    });
+    if (!ready) return;
+
+    const style = TrackingOverlay.getStyle();
+    _trackingHandle = ChannelPanel.registerLayer({
+      id: 'tracking',
+      title: _tt('js.trackingLayer', 'Points de suivi'),
+      swatch: meta.regions?.[0]?.color || '#2ecc71',
+      summary: _tt('js.trackingLoading', 'Chargement du suivi…'),
+      expanded: true,
+      body: () => {
+        const regions = TrackingOverlay.isLoaded()
+          ? TrackingOverlay.getRegions()
+          : (Array.isArray(meta.regions) ? meta.regions : []);
+        const legend = regions.map(r => `
+          <span class="layer-legend-item">
+            <span class="channel-swatch" style="background:${Utils.escapeHtml(r.color || '#888')}"></span>
+            ${Utils.escapeHtml(r.name || '')}<span class="layer-legend-count">${Number(r.cells) || 0}</span>
+          </span>`).join('');
+        return `
+          <div class="layer-row">
+            <label for="tracking-size">${_tt('js.trackingSize', 'Taille (µm)')}</label>
+            <input type="range" id="tracking-size" min="2" max="40" step="1" value="${style.diameterUm}">
+            <output id="tracking-size-out">${style.diameterUm}</output>
+          </div>
+          <div class="layer-row">
+            <label for="tracking-opacity">${_tt('js.trackingOpacity', 'Opacité')}</label>
+            <input type="range" id="tracking-opacity" min="10" max="100" step="5" value="${Math.round(style.opacity * 100)}">
+            <output id="tracking-opacity-out">${Math.round(style.opacity * 100)}%</output>
+          </div>
+          <div class="layer-legend">${legend}</div>`;
+      },
+      bind: (root) => {
+        const size = root.querySelector('#tracking-size');
+        const sizeOut = root.querySelector('#tracking-size-out');
+        const op = root.querySelector('#tracking-opacity');
+        const opOut = root.querySelector('#tracking-opacity-out');
+        size?.addEventListener('input', () => {
+          const v = Number(size.value);
+          if (sizeOut) sizeOut.textContent = String(v);
+          TrackingOverlay.setStyle({ diameterUm: v });
+        });
+        op?.addEventListener('input', () => {
+          const v = Number(op.value);
+          if (opOut) opOut.textContent = `${v}%`;
+          TrackingOverlay.setStyle({ opacity: v / 100 });
+        });
+      },
+      onVisibility: (v) => TrackingOverlay.setStyle({ visible: v })
+    });
+
+    const onTimepoint = (ev) => {
+      const d = ev.detail || {};
+      // Read the stabilisation flag off the EVENT, never by asking the viewer
+      // again: the two can disagree for one frame while a load settles.
+      if (!TrackingOverlay.hasRawCoordinates() && !d.stabilized) {
+        TrackingOverlay.setStyle({ visible: false });
+        _trackingHandle?.setSummary(_tt('js.trackingNoRaw',
+          'Coordonnées brutes absentes : suivi masqué sur un volume non stabilisé'));
+        return;
+      }
+      TrackingOverlay.setFrame(d.frame, { stabilized: d.stabilized });
+      _trackingHandle?.setSummary(
+        `${TrackingOverlay.getCount()} / ${Number(meta.cellCount) || 0} ${_tt('js.trackingCells', 'cellules')}`);
+    };
+    window.addEventListener('viewer-timepoint-ready', onTimepoint);
+    window.addEventListener('pagehide', () => {
+      window.removeEventListener('viewer-timepoint-ready', onTimepoint);
+      TrackingOverlay.dispose();
+    });
+
+    TrackingOverlay.load(_basePath, meta, (p) => {
+      if (p.phase === 'download') {
+        _trackingHandle?.setSummary(`${_tt('js.trackingLoading', 'Chargement du suivi…')} ${Math.round(p.pct * 100)}%`);
+      } else if (p.phase === 'parse' || p.phase === 'bake') {
+        _trackingHandle?.setSummary(_tt('js.trackingPreparing', 'Préparation des pistes…'));
+      }
+    }).then(() => {
+      TrackingOverlay.setFrame(_currentTimepoint || 0, { stabilized: Boolean(VolumeViewer.isStabilized?.()) });
+      _trackingHandle?.refreshBody();
+      _trackingHandle?.setSummary(
+        `${TrackingOverlay.getCount()} / ${Number(meta.cellCount) || 0} ${_tt('js.trackingCells', 'cellules')}`);
+    }).catch(err => {
+      console.warn('[ViewerApp] tracking overlay failed:', err);
+      _trackingHandle?.setSummary(_tt('js.trackingUnavailable', 'Suivi indisponible'));
+    });
+  }
+
   function _initStabilization() {
     _registration = null;
     _stabilizeVolume = false;
@@ -2155,6 +2281,13 @@ const ViewerApp = (() => {
     _loadedQualities.add(qualityKey);
     loadedTimepoints.add(t);
     _applyStabilization(t);
+    // Overlays need to know which frame is ACTUALLY on screen, and in which frame
+    // of reference. Emitted here rather than from the Timeline callback: that one
+    // fires ~60x/s and, more importantly, fires BEFORE the volume is loaded — an
+    // overlay following it would lead the image it is meant to annotate.
+    window.dispatchEvent(new CustomEvent('viewer-timepoint-ready', {
+      detail: { frame: Number.isFinite(t) ? t : 0, stabilized: Boolean(VolumeViewer.isStabilized?.()) }
+    }));
     if (isLive) {
       // Surfaced so the cost of a scrub step can be read off the console directly
       // instead of inferred: first visit vs. revisit is the number that matters.

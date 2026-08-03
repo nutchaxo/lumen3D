@@ -9,11 +9,14 @@
 'use strict';
 
 import { API_ADMIN, t, escHtml, apiFetch, apiFetchStatus, toast, el, refreshIcons } from './shared.js';
+import { fetchPluginUpdates, runPluginUpdates } from './plugin-update.js';
 
 let _plugins = [];
 let _state = 'loading';   // 'loading' | 'loaded' | 'error' — distinguishes a genuine
                           // empty list from a still-loading / failed fetch (was an
                           // infinite spinner on a fresh install with 0 plugins).
+let _updates = {};        // '<placement>/<id>' → catalog entry; empty until the
+                          // catalog answers, and stays empty if it never does.
 
 const PLACEMENTS = [
   { key: 'tools',    icon: 'wrench',  labelKey: 'admin.placementTools',    labelDef: 'Outils (barre d\'outils)' },
@@ -59,12 +62,26 @@ function row(p, isProtected) {
   const meta = [p.version ? `v${escHtml(p.version)}` : '', p.creator ? escHtml(p.creator) : '', escHtml(p.path)]
     .filter(Boolean).join(' · ');
   const hashShort = p.trust && p.trust.hash ? p.trust.hash.slice(0, 12) : '';
+  // Catalog verdict for this plugin, when the catalog has answered. The server
+  // decides both halves (newer AND compatible); this tab only draws them.
+  const upd = _updates[p.path];
+  const updTag = upd && upd.updateAvailable
+    ? ` <span class="adm-tag adm-tag-ok">${escHtml(t('mkt.updateBadge', 'màj disponible'))}</span>` : '';
+  const updRow = upd && (upd.updateAvailable || upd.updateBlocked)
+    ? `<div class="adm-plugin-update">
+         <span class="adm-pupd-ver">v${escHtml(upd.installedVersion || p.version || '?')} <i data-lucide="arrow-right"></i> <b>v${escHtml(upd.latestVersion || '?')}</b></span>
+         ${upd.updateAvailable
+           ? `<button class="adm-btn adm-btn-accent adm-btn-sm pupd-one" data-id="${escHtml(upd.id)}"><i data-lucide="download"></i> ${escHtml(t('admin.pluginUpdateOne', 'Mettre à jour'))}</button>`
+           : `<span class="adm-badge adm-badge-warn" title="${escHtml(upd.compatReason || '')}">${escHtml(t('admin.pluginUpdateBlocked', 'Nécessite une plateforme plus récente'))}</span>`}
+       </div>`
+    : '';
   return `
     <div class="adm-plugin-row ${dis}" data-path="${escHtml(p.path)}">
       <span class="adm-plugin-ic"><i data-lucide="${escHtml(p.icon || 'puzzle')}"></i></span>
       <div class="adm-plugin-info">
-        <div class="adm-plugin-name">${escHtml(p.name || p.id)}${isProtected ? ` <span class="adm-tag">${escHtml(t('admin.protectedPlugin', 'protégé'))}</span>` : ''}${badgeTxt ? ` <span class="adm-tag ${badgeCls}" title="${escHtml((p.trust && p.trust.reason) || '')}">${escHtml(badgeTxt)}</span>` : ''}${incompatible ? ` <span class="adm-tag adm-tag-warn" title="${escHtml(p.compatReason || '')}">${escHtml(t('admin.compatIncompatible', 'incompatible'))}</span>` : ''}</div>
+        <div class="adm-plugin-name">${escHtml(p.name || p.id)}${isProtected ? ` <span class="adm-tag">${escHtml(t('admin.protectedPlugin', 'protégé'))}</span>` : ''}${badgeTxt ? ` <span class="adm-tag ${badgeCls}" title="${escHtml((p.trust && p.trust.reason) || '')}">${escHtml(badgeTxt)}</span>` : ''}${incompatible ? ` <span class="adm-tag adm-tag-warn" title="${escHtml(p.compatReason || '')}">${escHtml(t('admin.compatIncompatible', 'incompatible'))}</span>` : ''}${updTag}</div>
         <div class="adm-plugin-meta">${meta}${hashShort ? ` · <span class="adm-compat-reason" title="${escHtml(p.trust.hash)}">#${hashShort}</span>` : ''}</div>
+        ${updRow}
         ${untrusted ? trustControls(p) : ''}
       </div>
       ${untrusted ? '' : `<label class="adm-switch" title="${isProtected ? escHtml(t('admin.lastShaderWarn', 'Au moins un mode de rendu doit rester actif.')) : (incompatible ? escHtml(t('admin.compatIntro', 'Un plugin incompatible n\'est pas chargé par le viewer ; il redevient actif dès qu\'une mise à jour satisfait sa contrainte de version.')) : '')}">
@@ -131,13 +148,16 @@ function render() {
   }).join('');
 
   const incompatCount = _plugins.filter((p) => p.compat === false).length;
+  const updIds = _plugins.filter((p) => _updates[p.path]?.updateAvailable).map((p) => _updates[p.path].id);
   root.innerHTML = `
     <div class="adm-page-head">
       <div>
         <h2 class="adm-page-title">${escHtml(t('admin.pluginsTitle', 'Plugins'))}</h2>
         <p class="adm-page-sub">${escHtml(t('admin.pluginsIntro', 'Activez ou désactivez les modules. Les changements s\'appliquent au prochain chargement du viewer.'))} · ${enabled}/${_plugins.length}</p>
       </div>
+      ${updIds.length > 1 ? `<button class="adm-btn adm-btn-accent adm-btn-sm" id="plugins-upd-all"><i data-lucide="download-cloud"></i> ${escHtml(t('admin.pluginUpdateAll', 'Tout mettre à jour'))}</button>` : ''}
     </div>
+    ${updIds.length ? `<div class="adm-update-state adm-avail" style="margin-bottom:14px"><i data-lucide="sparkles"></i> ${escHtml(t('admin.pluginUpdatesFound', '{n} plugin(s) à mettre à jour', { n: updIds.length }).replace('{n}', updIds.length))}</div>` : ''}
     ${incompatCount ? `<div class="adm-update-state adm-warn" style="margin-bottom:14px"><i data-lucide="alert-triangle"></i> ${escHtml(t('admin.compatIntro', 'Un plugin incompatible n\'est pas chargé par le viewer ; il redevient actif dès qu\'une mise à jour satisfait sa contrainte de version.'))}</div>` : ''}
     ${groups}`;
 
@@ -147,7 +167,15 @@ function render() {
     b.addEventListener('click', () => onApprove(b.dataset.path, b.dataset.mode)));
   root.querySelectorAll('.adm-revoke').forEach((b) =>
     b.addEventListener('click', () => onRevoke(b.dataset.path)));
+  root.querySelectorAll('.pupd-one').forEach((b) =>
+    b.addEventListener('click', () => onUpdate([b.getAttribute('data-id')])));
+  el('plugins-upd-all')?.addEventListener('click', () => onUpdate(updIds));
   refreshIcons(root);
+}
+
+async function onUpdate(ids) {
+  const r = await runPluginUpdates(ids);
+  if (!r.cancelled) await load();
 }
 
 // Approve an untrusted plugin, PINNED to the exact content hash the server sees.
@@ -220,6 +248,17 @@ async function load() {
   if (data && Array.isArray(data.plugins)) { _plugins = data.plugins; _state = 'loaded'; }
   else { _state = 'error'; }
   render();
+  // The catalog lives on GitHub, so it can take a moment and can fail outright.
+  // Deliberately NOT awaited above: enabling and disabling plugins is this tab's
+  // job and must not wait on the network, nor break when it is unavailable — the
+  // update affordances simply appear once (and if) the catalog answers.
+  loadUpdates();
+}
+
+async function loadUpdates() {
+  const r = await fetchPluginUpdates();
+  _updates = r.error ? {} : r.byPath;
+  if (_state === 'loaded') render();
 }
 
 export const PluginsTab = {

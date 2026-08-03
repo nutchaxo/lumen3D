@@ -1530,6 +1530,8 @@
     "refresh": "Vernieuwen",
     "error": "Catalogus niet beschikbaar",
     "installed": "Geïnstalleerd",
+    "updatable": "Bij te werken",
+    "updateBadge": "update beschikbaar",
     "available": "Beschikbaar",
     "incompatible2": "Niet compatibel",
     "empty": "Geen plug-ins in de catalogus.",

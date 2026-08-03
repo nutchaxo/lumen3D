@@ -18,6 +18,7 @@
 'use strict';
 
 import { API_ADMIN, t, escHtml, apiFetch, apiFetchStatus, toast, el, refreshIcons } from './shared.js';
+import { fetchPluginUpdates, runPluginUpdates, updateAffordance } from './plugin-update.js';
 
 let _versions = null;
 let _check = null;
@@ -108,16 +109,10 @@ function preflightBlock() {
 // installed platform; updateBlocked = newer, but this platform is too old for it.
 
 function pluginRow(p) {
-  const from = p.installedVersion ? `v${p.installedVersion}` : '?';
-  const to = p.latestVersion ? `v${p.latestVersion}` : '?';
-  const blocked = p.updateAvailable !== true;
   return `<div class="adm-pupd-row">
       <i data-lucide="${escHtml(p.icon || 'puzzle')}"></i>
       <span class="adm-pupd-name">${escHtml(p.name || p.id)}</span>
-      <span class="adm-pupd-ver">${escHtml(from)} <i data-lucide="arrow-right"></i> <b>${escHtml(to)}</b></span>
-      ${blocked
-        ? `<span class="adm-badge adm-badge-warn" title="${escHtml(p.compatReason || '')}">${escHtml(t('admin.pluginUpdateBlocked', 'Nécessite une plateforme plus récente'))}</span>`
-        : `<button class="adm-btn adm-btn-accent adm-btn-sm pupd-one" data-id="${escHtml(p.id)}"><i data-lucide="download"></i> ${escHtml(t('admin.pluginUpdateOne', 'Mettre à jour'))}</button>`}
+      ${updateAffordance(p)}
     </div>`;
 }
 
@@ -163,63 +158,27 @@ function renderPluginUpdates() {
 }
 
 function bindPluginUpdates(scope) {
-  scope.querySelector('#btn-pupd-all')?.addEventListener('click', () => runPluginUpdates(
+  scope.querySelector('#btn-pupd-all')?.addEventListener('click', () => startUpdates(
     (_plugins?.plugins || []).filter((p) => p.updateAvailable).map((p) => p.id)));
   scope.querySelectorAll('.pupd-one').forEach((b) =>
-    b.addEventListener('click', () => runPluginUpdates([b.getAttribute('data-id')])));
+    b.addEventListener('click', () => startUpdates([b.getAttribute('data-id')])));
 }
 
 async function loadPluginUpdates() {
   _plugins = null;
   renderPluginUpdates();
-  // Same signed catalog as the Catalog tab — one source, so the two tabs can
-  // never disagree about what version a plugin is at.
-  _plugins = (await apiFetch(`${API_ADMIN}?action=marketplace_catalog`))
-    || { configured: true, error: 'no_response', plugins: [] };
+  // Same signed catalog as the Plugins and Catalogue tabs — one source, so the
+  // three can never disagree about what version a plugin is at.
+  const r = await fetchPluginUpdates();
+  _plugins = { configured: r.configured, error: r.error, plugins: r.list };
   renderPluginUpdates();
 }
 
-async function updateOnePlugin(id, password) {
-  const r = await apiFetchStatus(`${API_ADMIN}?action=update_plugin`, {
-    method: 'POST', body: JSON.stringify({ id, password }),
+async function startUpdates(ids) {
+  const r = await runPluginUpdates(ids, {
+    onBusy: (b) => { _pluginsBusy = b; renderPluginUpdates(); },
   });
-  return { ok: !!(r.ok && r.data?.ok), error: r.data?.error || 'error', version: r.data?.version };
-}
-
-function pluginErrorText(err) {
-  const map = {
-    bad_password: t('mkt.badPassword', 'Mot de passe incorrect.'),
-    not_installed: t('admin.pluginNotInstalled', "Ce plugin n'est plus installé."),
-    incompatible: t('admin.pluginUpdateBlocked', 'Nécessite une plateforme plus récente'),
-    install_failed: t('admin.pluginUpdateFailed', 'Échec de la mise à jour (vérification échouée).'),
-    catalog_fetch_failed: t('mkt.catalogFail', 'Catalogue inaccessible.'),
-  };
-  return map[err] || `${t('admin.pluginUpdateFailed', 'Échec de la mise à jour.')} (${err})`;
-}
-
-/** One password prompt covers the whole batch — the operator authorised the act,
- *  not each individual file swap. */
-async function runPluginUpdates(ids) {
-  if (_pluginsBusy || !ids.length) return;
-  const pw = prompt(t('admin.pluginUpdateConfirm', 'Mettre à jour ce(s) plugin(s) ? Confirmez avec votre mot de passe administrateur :'));
-  if (!pw) return;
-  _pluginsBusy = true;
-  renderPluginUpdates();
-  toast(t('admin.pluginUpdating', 'Mise à jour des plugins (téléchargement + vérification)…'), 'info');
-  let done = 0;
-  let lastError = null;
-  for (const id of ids) {
-    const r = await updateOnePlugin(id, pw);
-    if (r.ok) done += 1;
-    else {
-      lastError = r.error;
-      if (r.error === 'bad_password') break;   // the rest would fail identically
-    }
-  }
-  _pluginsBusy = false;
-  if (done) toast(t('admin.pluginUpdated', '{n} plugin(s) mis à jour ✓', { n: done }).replace('{n}', done), 'success');
-  if (lastError) toast(pluginErrorText(lastError), 'error');
-  await loadPluginUpdates();
+  if (!r.cancelled) await loadPluginUpdates();
 }
 
 // Persisted outcome of the previous run (survives the restart), if any.

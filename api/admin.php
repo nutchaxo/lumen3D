@@ -8,7 +8,8 @@
  *   GET  ?action=stats          → {global, daily, datasets:[...]}
  *   GET  ?action=plugins        → {plugins:[{...,enabled,protected}]}
  *   POST ?action=set_plugin     {id,enabled} → {ok}
- *   GET  ?action=version        → {web, devServer, preprocess, repo}
+ *   POST ?action=update_plugin  {id,password} → {ok,path,mode,version}
+ *   GET  ?action=version        → {web, preprocess, repo}
  *   GET  ?action=update_check   → {current, latest, available, ...}
  *   GET  ?action=update_status  → {phase,...}
  *   POST ?action=update_apply   → {supported:false}  (self-restart unsupported under PHP)
@@ -24,7 +25,7 @@ if (!admin_is_auth()) admin_json_out(['error' => 'Not authenticated'], 401);
 $action = $_GET['action'] ?? '';
 $body   = ($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST' ? (json_decode(file_get_contents('php://input'), true) ?: []) : [];
 
-if (in_array($action, ['set_plugin', 'update_apply', 'approve_plugin', 'revoke_plugin', 'install_plugin', 'uninstall_plugin', 'repair_permissions'], true)) admin_require_write();
+if (in_array($action, ['set_plugin', 'update_apply', 'approve_plugin', 'revoke_plugin', 'install_plugin', 'update_plugin', 'uninstall_plugin', 'repair_permissions'], true)) admin_require_write();
 
 switch ($action) {
 
@@ -127,6 +128,11 @@ switch ($action) {
         admin_json_out($pl, $st);
     }
 
+    case 'update_plugin': {
+        [$st, $pl] = mkt_install((string)($body['id'] ?? ''), (string)($body['password'] ?? ''), true);
+        admin_json_out($pl, $st);
+    }
+
     case 'uninstall_plugin': {
         [$st, $pl] = mkt_uninstall((string)($body['path'] ?? ''));
         admin_json_out($pl, $st);
@@ -155,12 +161,27 @@ switch ($action) {
     }
 
     case 'version':
+        // No dev-server version: it versions the serving tool, not the platform, and
+        // has no meaning on this host at all (twin of dev_server.py:_version_info).
         admin_json_out([
             'web' => admin_max_version(changelog_dir()),
-            'devServer' => null,                 // PHP host has no dev-server version
             'preprocess' => admin_preprocess_version(),
             'repo' => GITHUB_REPO,
         ]);
+
+    case 'docs_list':
+        admin_json_out(admin_docs_list(($_GET['refresh'] ?? '') === '1'));
+
+    case 'docs_download':
+        // Emits the document itself and exits — must NOT fall through to admin_json_out.
+        admin_doc_send((string)($_GET['file'] ?? ''), ($_GET['inline'] ?? '') === '1');
+
+    case 'pipeline_info':
+        admin_json_out(admin_pipeline_info());
+
+    case 'pipeline_download':
+        // Emits the zip itself and exits — it must NOT fall through to admin_json_out.
+        admin_pipeline_send($_GET['edition'] ?? 'leger');
 
     case 'update_check': {
         $current = admin_max_version(changelog_dir()) ?? '0.0.0';

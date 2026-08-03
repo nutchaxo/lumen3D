@@ -8,6 +8,11 @@
  * The tab keeps reporting through the server restart via the public /api/health
  * probe, then surfaces the persisted outcome (done / rolled_back) for
  * acknowledgement once the operator is signed in again.
+ *
+ * It also carries plugin updates, because "what needs updating here?" is one
+ * question, not two: the signed catalog (same source as the Catalog tab) is
+ * compared against what is installed, and only plugins that are both newer AND
+ * compatible with the platform in place can be updated from here.
  */
 
 'use strict';
@@ -18,6 +23,8 @@ let _versions = null;
 let _check = null;
 let _preflight = null;   // report shown between "Mettre à jour" and confirmation
 let _polling = false;
+let _plugins = null;     // marketplace catalog annotated with installed/update status
+let _pluginsBusy = false;
 
 // Server pipeline phases → i18n chip label (order = visual stepper order).
 const PHASES = [
@@ -32,10 +39,13 @@ const PHASES = [
   ['restart', 'admin.phaseRestart', 'Redémarrage du serveur'],
 ];
 
+// Only versions that exist are shown: a chip reading "—" invites the operator to
+// hunt for a number that was never going to be there.
 function versionChip(labelKey, labelDef, value) {
+  if (!value) return '';
   return `<div class="adm-vchip">
       <span class="adm-vchip-label">${escHtml(t(labelKey, labelDef))}</span>
-      <span class="adm-vchip-value">${escHtml(value || '—')}</span>
+      <span class="adm-vchip-value">${escHtml(value)}</span>
     </div>`;
 }
 
@@ -92,6 +102,126 @@ function preflightBlock() {
     </div>`;
 }
 
+// ── Plugin updates ────────────────────────────────────────────────────────────
+// The server (marketplace_catalog) already resolves both halves of the question:
+// updateAvailable = a newer version exists AND it declares compatibility with the
+// installed platform; updateBlocked = newer, but this platform is too old for it.
+
+function pluginRow(p) {
+  const from = p.installedVersion ? `v${p.installedVersion}` : '?';
+  const to = p.latestVersion ? `v${p.latestVersion}` : '?';
+  const blocked = p.updateAvailable !== true;
+  return `<div class="adm-pupd-row">
+      <i data-lucide="${escHtml(p.icon || 'puzzle')}"></i>
+      <span class="adm-pupd-name">${escHtml(p.name || p.id)}</span>
+      <span class="adm-pupd-ver">${escHtml(from)} <i data-lucide="arrow-right"></i> <b>${escHtml(to)}</b></span>
+      ${blocked
+        ? `<span class="adm-badge adm-badge-warn" title="${escHtml(p.compatReason || '')}">${escHtml(t('admin.pluginUpdateBlocked', 'Nécessite une plateforme plus récente'))}</span>`
+        : `<button class="adm-btn adm-btn-accent adm-btn-sm pupd-one" data-id="${escHtml(p.id)}"><i data-lucide="download"></i> ${escHtml(t('admin.pluginUpdateOne', 'Mettre à jour'))}</button>`}
+    </div>`;
+}
+
+function pluginUpdatesBlock() {
+  if (_pluginsBusy) {
+    return `<div class="adm-update-state adm-checking"><span class="spinner spinner-sm"></span> ${escHtml(t('admin.pluginUpdating', 'Mise à jour des plugins (téléchargement + vérification)…'))}</div>`;
+  }
+  if (!_plugins) {
+    return `<div class="adm-update-state adm-checking"><span class="spinner spinner-sm"></span> ${escHtml(t('admin.pluginUpdatesChecking', 'Recherche de mises à jour de plugins…'))}</div>`;
+  }
+  if (!_plugins.configured) {
+    return `<div class="adm-update-state adm-warn"><i data-lucide="plug"></i> ${escHtml(t('admin.pluginUpdatesNoCatalog', 'Aucune source de catalogue configurée : les plugins ne peuvent pas être mis à jour depuis ici.'))}</div>`;
+  }
+  if (_plugins.error) {
+    return `<div class="adm-update-state adm-warn"><i data-lucide="wifi-off"></i> ${escHtml(t('admin.pluginUpdatesError', 'Catalogue de plugins injoignable.'))} <span class="adm-muted">${escHtml(_plugins.error)}</span></div>`;
+  }
+  const list = Array.isArray(_plugins.plugins) ? _plugins.plugins : [];
+  const ready = list.filter((p) => p.updateAvailable);
+  const blocked = list.filter((p) => p.updateBlocked);
+  if (!ready.length && !blocked.length) {
+    return `<div class="adm-update-state adm-ok"><i data-lucide="check-circle-2"></i> ${escHtml(t('admin.pluginUpdatesNone', 'Tous les plugins installés sont à jour.'))}</div>`;
+  }
+  return `
+    ${ready.length ? `<div class="adm-update-state adm-avail"><i data-lucide="sparkles"></i> ${escHtml(t('admin.pluginUpdatesFound', '{n} plugin(s) à mettre à jour', { n: ready.length }).replace('{n}', ready.length))}</div>` : ''}
+    <div class="adm-pupd-list">${ready.map(pluginRow).join('')}</div>
+    ${ready.length > 1 ? `<div class="adm-update-actions">
+        <button class="adm-btn adm-btn-accent" id="btn-pupd-all"><i data-lucide="download-cloud"></i> ${escHtml(t('admin.pluginUpdateAll', 'Tout mettre à jour'))}</button>
+      </div>` : ''}
+    ${blocked.length ? `
+      <div class="adm-release-notes-head" style="margin-top:14px">${escHtml(t('admin.pluginUpdatesBlockedHead', 'Mises à jour qui attendent la plateforme'))}</div>
+      <div class="adm-pupd-list">${blocked.map(pluginRow).join('')}</div>
+      <div class="adm-muted" style="margin-top:6px">${escHtml(t('admin.pluginUpdatesBlockedNote', 'Ces versions demandent une plateforme plus récente : mettez à jour la plateforme ci-dessus, puis revenez ici.'))}</div>` : ''}`;
+}
+
+/** Repaints ONLY this card. A full render() would rebuild the progress card too,
+ *  hiding a platform update that is still running. */
+function renderPluginUpdates() {
+  const body = el('plugin-updates-body');
+  if (!body) return;
+  body.innerHTML = pluginUpdatesBlock();
+  bindPluginUpdates(body);
+  refreshIcons(body);
+}
+
+function bindPluginUpdates(scope) {
+  scope.querySelector('#btn-pupd-all')?.addEventListener('click', () => runPluginUpdates(
+    (_plugins?.plugins || []).filter((p) => p.updateAvailable).map((p) => p.id)));
+  scope.querySelectorAll('.pupd-one').forEach((b) =>
+    b.addEventListener('click', () => runPluginUpdates([b.getAttribute('data-id')])));
+}
+
+async function loadPluginUpdates() {
+  _plugins = null;
+  renderPluginUpdates();
+  // Same signed catalog as the Catalog tab — one source, so the two tabs can
+  // never disagree about what version a plugin is at.
+  _plugins = (await apiFetch(`${API_ADMIN}?action=marketplace_catalog`))
+    || { configured: true, error: 'no_response', plugins: [] };
+  renderPluginUpdates();
+}
+
+async function updateOnePlugin(id, password) {
+  const r = await apiFetchStatus(`${API_ADMIN}?action=update_plugin`, {
+    method: 'POST', body: JSON.stringify({ id, password }),
+  });
+  return { ok: !!(r.ok && r.data?.ok), error: r.data?.error || 'error', version: r.data?.version };
+}
+
+function pluginErrorText(err) {
+  const map = {
+    bad_password: t('mkt.badPassword', 'Mot de passe incorrect.'),
+    not_installed: t('admin.pluginNotInstalled', "Ce plugin n'est plus installé."),
+    incompatible: t('admin.pluginUpdateBlocked', 'Nécessite une plateforme plus récente'),
+    install_failed: t('admin.pluginUpdateFailed', 'Échec de la mise à jour (vérification échouée).'),
+    catalog_fetch_failed: t('mkt.catalogFail', 'Catalogue inaccessible.'),
+  };
+  return map[err] || `${t('admin.pluginUpdateFailed', 'Échec de la mise à jour.')} (${err})`;
+}
+
+/** One password prompt covers the whole batch — the operator authorised the act,
+ *  not each individual file swap. */
+async function runPluginUpdates(ids) {
+  if (_pluginsBusy || !ids.length) return;
+  const pw = prompt(t('admin.pluginUpdateConfirm', 'Mettre à jour ce(s) plugin(s) ? Confirmez avec votre mot de passe administrateur :'));
+  if (!pw) return;
+  _pluginsBusy = true;
+  renderPluginUpdates();
+  toast(t('admin.pluginUpdating', 'Mise à jour des plugins (téléchargement + vérification)…'), 'info');
+  let done = 0;
+  let lastError = null;
+  for (const id of ids) {
+    const r = await updateOnePlugin(id, pw);
+    if (r.ok) done += 1;
+    else {
+      lastError = r.error;
+      if (r.error === 'bad_password') break;   // the rest would fail identically
+    }
+  }
+  _pluginsBusy = false;
+  if (done) toast(t('admin.pluginUpdated', '{n} plugin(s) mis à jour ✓', { n: done }).replace('{n}', done), 'success');
+  if (lastError) toast(pluginErrorText(lastError), 'error');
+  await loadPluginUpdates();
+}
+
 // Persisted outcome of the previous run (survives the restart), if any.
 function lastOutcomeBlock(last) {
   if (!last) return '';
@@ -132,8 +262,7 @@ function render(lastOutcome) {
       <div class="adm-card-head"><i data-lucide="tag"></i><span>${escHtml(t('admin.currentVersion', 'Versions installées'))}</span></div>
       <div class="adm-card-body adm-vchips">
         ${versionChip('admin.webPlatform', 'Plateforme Web', v.web ? `v${v.web}` : null)}
-        ${versionChip('admin.devServer', 'Serveur de dev', v.devServer ? `v${v.devServer}` : null)}
-        ${versionChip('admin.preprocess', 'Préprocessing', v.preprocess ? `v${v.preprocess}` : null)}
+        ${versionChip('admin.preprocess', 'Pipeline de préprocessing', v.preprocess ? `v${v.preprocess}` : null)}
       </div>
     </div>
 
@@ -141,6 +270,11 @@ function render(lastOutcome) {
       <div class="adm-card-head"><i data-lucide="cloud-download"></i><span>${escHtml(t('admin.githubUpdate', 'Mise à jour GitHub'))}</span>
         <span class="adm-card-count adm-muted">${escHtml((v.repo) || '')}</span></div>
       <div class="adm-card-body" id="update-body">${updateBlock()}</div>
+    </div>
+
+    <div class="adm-card" style="margin-top:18px">
+      <div class="adm-card-head"><i data-lucide="puzzle"></i><span>${escHtml(t('admin.pluginUpdates', 'Mises à jour des plugins'))}</span></div>
+      <div class="adm-card-body" id="plugin-updates-body">${pluginUpdatesBlock()}</div>
     </div>
 
     <div class="adm-card adm-progress-card" id="progress-card" style="display:none;margin-top:18px">
@@ -158,6 +292,7 @@ function render(lastOutcome) {
   el('btn-confirm-update')?.addEventListener('click', confirmUpdate);
   el('btn-cancel-update')?.addEventListener('click', () => { _preflight = null; render(); });
   el('btn-ack-update')?.addEventListener('click', ackOutcome);
+  bindPluginUpdates(root);
   refreshIcons(root);
 }
 
@@ -179,7 +314,7 @@ async function loadCheck() {
   render(s?.phase === 'idle' ? s.last : null);
 }
 
-function recheck() { loadCheck(); }
+function recheck() { loadCheck(); loadPluginUpdates(); }
 
 async function ackOutcome() {
   await apiFetchStatus(`${API_ADMIN}?action=update_ack`, { method: 'POST', body: '{}' });
@@ -303,7 +438,7 @@ export const UpdatesTab = {
   titleKey: 'admin.navUpdates',
   titleDefault: 'Mises à jour',
   mounted: false,
-  mount() { render(); loadVersions().then(() => render()); loadCheck(); },
+  mount() { render(); loadVersions().then(() => render()); loadCheck(); loadPluginUpdates(); },
   activate() {},
   relabel() { render(); },
 };

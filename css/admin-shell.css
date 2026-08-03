@@ -285,6 +285,14 @@ body.adm-editor-only .adm-tab-inner { max-width: none; padding: 0; }
 .adm-phase-chip { font-size: 10.5px; font-weight: 600; padding: 3px 9px; border-radius: 999px; background: rgba(127, 127, 160, 0.12); color: var(--adm-text-muted); transition: background 0.25s, color 0.25s; }
 .adm-phase-chip.is-current { background: var(--adm-accent-subtle); color: var(--adm-accent); }
 .adm-phase-chip.is-done { background: rgba(52, 211, 153, 0.15); color: var(--adm-success); }
+/* Plugin updates: one row per installed plugin the catalog has a newer build for. */
+.adm-pupd-list { display: flex; flex-direction: column; gap: 8px; margin-top: 12px; }
+.adm-pupd-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 10px 12px; background: var(--adm-bg); border: 1px solid var(--adm-border); border-radius: 10px; }
+.adm-pupd-row > i { width: 17px; height: 17px; color: var(--adm-text-sec); flex-shrink: 0; }
+.adm-pupd-name { font-size: 13.5px; font-weight: 600; flex: 1; min-width: 120px; }
+.adm-pupd-ver { display: flex; align-items: center; gap: 6px; font-size: 12px; font-family: 'JetBrains Mono', monospace; color: var(--adm-text-sec); }
+.adm-pupd-ver b { color: var(--adm-accent); }
+.adm-pupd-ver i { width: 13px; height: 13px; }
 
 /* ── Dataset visibility (in the datasets editor) ───────────── */
 .vis-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 10px; }

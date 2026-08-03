@@ -64,12 +64,16 @@ const VolumeViewer = (() => {
   let _currentQualityMode = '512x512';
   let _dirtyRegions = [];
   let _isStreamingBricks = false;
+  // Number of DISPLAY streams in flight. A background prefetch refuses to start
+  // while this is non-zero — see the guard at the top of loadBrickedVolumeStream.
+  let _fgStreamActive = 0;
   let _transitionCube = null;
   let _transitionMaterial = null;
   let _transitionEntry = null;
   let _qualityState = { target: '512x512', active: null, mode: 'slice', progress: 0, message: '' };
   const _qualityListeners = new Set();
   let _brickStreamAbort = null;
+  let _preloadStreamAbort = null;
   // LEAK-023: handle for the LOD-seed rAF chunk loop so a mid-seed dataset/quality
   // switch can cancel the pending frame instead of leaking it.
   let _seedRafId = null;
@@ -275,7 +279,6 @@ const VolumeViewer = (() => {
     high: 12, preview: 8, balanced: 12
   };
   const IMAGE_CACHE_LIMIT = 640;
-  const VOLUME_CACHE_LIMIT = 4;
   const _imageCache = new Map();
   const _volumeCache = new Map();
 
@@ -919,10 +922,9 @@ const VolumeViewer = (() => {
     let startMousePosition = { x: 0, y: 0 };
     let _activePointerId = null; // primary pointer being tracked
 
-    // Pinch / two-finger state
+    // Two-finger navigation state: { startDist, startZ, midX, midY }, null when idle.
     _activePointers.clear();
-    let _pinchStartDist = null;
-    let _pinchStartCameraZ = null;
+    let _gesture = null;
 
     let _gridDragState = null;
     let _lastInteractionClickTime = 0;
@@ -940,17 +942,89 @@ const VolumeViewer = (() => {
       const rect = canvas.getBoundingClientRect();
       return { x: e.clientX - rect.left, y: e.clientY - rect.top };
     }
-    
+
+    // ── Two-finger navigation (touch) ─────────────────────────────────────────
+    // A two-finger drag is read as one rigid screen transform: the travel of the
+    // midpoint pans the volume, the ratio of the finger spacing dollies the camera.
+    // One finger stays free for orientation, so no modifier is needed on a tablet.
+    function _twoFingerFrame() {
+      const [a, b] = [..._activePointers.values()];
+      return {
+        dist: Math.max(1e-3, Math.hypot(b.x - a.x, b.y - a.y)),
+        midX: (a.x + b.x) / 2,
+        midY: (a.y + b.y) / 2
+      };
+    }
+
+    // Re-anchored on every change of finger count: the pair being measured changes
+    // when a finger is added or lifted, and carrying the old reference spacing over
+    // would teleport the volume.
+    function _seedGesture() {
+      const f = _twoFingerFrame();
+      _gesture = { startDist: f.dist, startZ: camera ? camera.position.z : 2.5, midX: f.midX, midY: f.midY };
+    }
+
+    // World units per CSS pixel on the plane through the volume centre: the
+    // perspective frustum is 2·tan(fov/2)·z tall at camera distance z.
+    function _worldPerPixel(z) {
+      return (2 * Math.tan((camera.fov * Math.PI / 180) / 2) * z) / Math.max(1, canvas.clientHeight);
+    }
+
+    // Hand an in-flight one-finger drag over to the gesture without leaving
+    // half-applied state behind — a label caught mid-drag must still be committed.
+    function _releaseSingleDrag() {
+      if (_draggedLabelSprite) {
+        _updateMeasurementLabelPositions(true, _draggedLabelSprite);
+        _draggedLabelSprite = null;
+        _activeDragSprite = null;
+      }
+      planeDragState = null;
+      _gridDragState = null;
+      isDragging = false;
+    }
+
+    // The finger left over when a pinch ends keeps navigating, instead of going
+    // dead until the user lifts it and touches down again.
+    function _resumeSingleFinger(pointerId) {
+      const pt = _activePointers.get(pointerId);
+      if (!pt) return;
+      const rect = canvas.getBoundingClientRect();
+      try { canvas.setPointerCapture(pointerId); } catch (_) { /* pointer already gone */ }
+      _activePointerId = pointerId;
+      dragMode = _rotationLocked ? 'pan' : 'rotate';
+      isDragging = true;
+      _isInteracting = true;
+      previousMousePosition = { x: pt.x - rect.left, y: pt.y - rect.top };
+      startMousePosition = { ...previousMousePosition };
+      _markInteraction();
+    }
+
+    function _endInteraction() {
+      isDragging = false;
+      _isInteracting = false;
+      _lastInteractionTime = 0;
+      if (_interactionTimeout) {
+        clearTimeout(_interactionTimeout);
+        _interactionTimeout = null;
+      }
+      planeDragState = null;
+      _scheduleFrame();
+    }
+
     canvas.addEventListener('pointerdown', (e) => {
       e.preventDefault();
       _activePointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
 
-      // Two-finger pinch: track but don't start regular drag
-      if (_activePointers.size === 2) {
-        const pts = [..._activePointers.values()];
-        _pinchStartDist = Math.hypot(pts[1].x - pts[0].x, pts[1].y - pts[0].y);
-        _pinchStartCameraZ = camera ? camera.position.z : 2.5;
-        isDragging = false;
+      // Two fingers or more → navigation gesture, whatever tool is active: the
+      // volume must stay reachable on a tablet even in measure or cut mode.
+      // A mouse never joins a gesture — one device, one pointer — so a stale touch
+      // entry left by a missed pointerup can't swallow a click on a hybrid machine.
+      if (e.pointerType !== 'mouse' && _activePointers.size >= 2) {
+        _releaseSingleDrag();
+        _seedGesture();
+        _isInteracting = true;
+        _markInteraction();
+        _scheduleFrame();
         return;
       }
 
@@ -1013,11 +1087,9 @@ const VolumeViewer = (() => {
       } else if (_activeTool === 'cut' && (e.shiftKey || e.button === 1 || e.button === 2)) {
         dragMode = 'pan';
       } else {
-        // Single touch finger → rotate; touch + shift or RMB → pan
-        const isTouch = e.pointerType === 'touch';
-        dragMode = (e.button === 1 || e.button === 2 || e.shiftKey || _rotationLocked) ? 'pan'
-                 : (isTouch && _activePointers.size === 1) ? 'rotate'
-                 : 'rotate';
+        // One finger (or the left button) orients the volume; panning needs shift,
+        // the middle/right button — or a second finger, handled above.
+        dragMode = (e.button === 1 || e.button === 2 || e.shiftKey || _rotationLocked) ? 'pan' : 'rotate';
       }
       previousMousePosition = { x: off.x, y: off.y };
       startMousePosition = { ...previousMousePosition };
@@ -1029,16 +1101,31 @@ const VolumeViewer = (() => {
         _activePointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
       }
 
-      // Two-finger pinch-to-zoom
-      if (_activePointers.size === 2 && _pinchStartDist !== null) {
-        const pts = [..._activePointers.values()];
-        const dist = Math.hypot(pts[1].x - pts[0].x, pts[1].y - pts[0].y);
-        if (dist > 0 && _pinchStartCameraZ !== null) {
-          camera.position.z = Math.max(0.2, Math.min(100, _pinchStartCameraZ * (_pinchStartDist / dist)));
-          _scheduleFrame();
-          _notifyCameraChange();
-        }
+      // Two-finger pan + pinch-to-zoom, applied in the same move
+      if (_gesture && _activePointers.size >= 2) {
+        const f = _twoFingerFrame();
+        const rect = canvas.getBoundingClientRect();
+        const zPrev = camera.position.z;
+        const zNext = Math.max(0.2, Math.min(100, _gesture.startZ * (_gesture.startDist / f.dist)));
+        const wppPrev = _worldPerPixel(zPrev);
+        const wppNext = _worldPerPixel(zNext);
+        // Pan and zoom are the same equation. What the fingers hold must stay under
+        // them: the volume point at the midpoint is invariant for the whole gesture.
+        // A point `a` pixels from the canvas centre sits at a·wpp(z) in world units,
+        // so holding (a·wpp(z) − cubePos) constant gives the update below — it pans
+        // when only the midpoint moves, anchors the zoom when only the spacing does,
+        // and stays exact when both change at once (which every real move does).
+        const prevAnchorX = _gesture.midX - rect.left - canvas.clientWidth / 2;
+        const prevAnchorY = _gesture.midY - rect.top - canvas.clientHeight / 2;
+        const anchorX = f.midX - rect.left - canvas.clientWidth / 2;
+        const anchorY = f.midY - rect.top - canvas.clientHeight / 2;
+        cube.position.x += anchorX * wppNext - prevAnchorX * wppPrev;
+        cube.position.y -= anchorY * wppNext - prevAnchorY * wppPrev;
+        camera.position.z = zNext;
+        _gesture.midX = f.midX;
+        _gesture.midY = f.midY;
         _markInteraction();
+        _notifyCameraChange();
         return;
       }
 
@@ -1283,7 +1370,16 @@ const VolumeViewer = (() => {
 
     canvas.addEventListener('pointerup', (e) => {
       _activePointers.delete(e.pointerId);
-      if (_activePointers.size < 2) { _pinchStartDist = null; _pinchStartCameraZ = null; }
+      if (_gesture) {
+        if (_activePointers.size >= 2) { _seedGesture(); return; }
+        _gesture = null;
+        _notifyCameraChange();
+        if (e.pointerId === _activePointerId) _activePointerId = null;
+        const [restId] = _activePointers.keys();
+        if (restId !== undefined) { _resumeSingleFinger(restId); return; }
+        _endInteraction();
+        return;
+      }
       if (e.pointerId !== _activePointerId) return;
       _activePointerId = null;
       const off = _offset(e);
@@ -1309,32 +1405,22 @@ const VolumeViewer = (() => {
       } else if (isDragging && dragMode !== 'cut-plane') {
         _notifyCameraChange();
       }
-      isDragging = false;
-      _isInteracting = false;
-      _lastInteractionTime = 0;
-      if (_interactionTimeout) {
-        clearTimeout(_interactionTimeout);
-        _interactionTimeout = null;
-      }
-      planeDragState = null;
-      _scheduleFrame();
+      _endInteraction();
     });
 
     canvas.addEventListener('pointercancel', (e) => {
       _activePointers.delete(e.pointerId);
+      if (_gesture) {
+        if (_activePointers.size >= 2) { _seedGesture(); return; }
+        _gesture = null;
+        _notifyCameraChange();
+      }
       if (e.pointerId === _activePointerId) {
         _activePointerId = null;
-        isDragging = false;
-        _isInteracting = false;
-        _lastInteractionTime = 0;
-        if (_interactionTimeout) {
-          clearTimeout(_interactionTimeout);
-          _interactionTimeout = null;
-        }
-        planeDragState = null;
-        _scheduleFrame();
+        _endInteraction();
+      } else if (_activePointers.size === 0) {
+        _endInteraction();
       }
-      _pinchStartDist = null; _pinchStartCameraZ = null;
     });
 
     canvas.addEventListener('wheel', (e) => {
@@ -1410,7 +1496,7 @@ const VolumeViewer = (() => {
   function _animate() {
     if (_contextLost) { animationId = null; return; }   // ELE-18: never draw on a lost context
     const now = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
-    const isInteractingNow = _isInteracting || (_activePointers.size === 2) || (Date.now() - _lastInteractionTime < 250);
+    const isInteractingNow = _isInteracting || (_activePointers.size >= 2) || (Date.now() - _lastInteractionTime < 250);
 
     // Cap frame rate during active interaction to reduce GPU workload and temperature.
     // At 40 FPS, the visual movement is still extremely fluid while saving significant GPU power.
@@ -2213,20 +2299,50 @@ const VolumeViewer = (() => {
     return true;
   }
 
+  /** Free a stream's GPU resources when it is abandoned before ever being cached. */
+  function _disposeAbandonedStream(textures, occTex, streamSvrManager) {
+    if (Array.isArray(textures)) textures.forEach(t => t?.dispose?.());
+    occTex?.dispose?.();
+    if (streamSvrManager && streamSvrManager !== _svrManager && !_isSvrManagerCached(streamSvrManager)) {
+      streamSvrManager.dispose();
+    }
+  }
+
+  /** Release every GPU resource an entry owns. One helper, called from every path
+   *  that drops an entry — eviction, replacement, refusal, abandoned stream. They
+   *  used to each free a different subset: `occupancyMap` was freed by NONE of them,
+   *  so a texture leaked on every eviction, and the refusal branch dropped an entry
+   *  without freeing anything at all. */
+  function _disposeVolumeEntry(entry) {
+    if (!entry || entry === _activeVolumeEntry) return;
+    if (entry.svrManager && entry.svrManager !== _svrManager && !_isSvrManagerCached(entry.svrManager)) {
+      entry.svrManager.dispose();
+    }
+    if (Array.isArray(entry.textures)) entry.textures.forEach(t => t?.dispose?.());
+    entry.occupancyMap?.dispose?.();
+    entry.occupancyMap = null;
+  }
+
+  /** An entry's REAL footprint. `data` is the very ArrayBuffer backing the 3D texture,
+   *  so this counts VRAM and the CPU mirror at once — they are the same bytes twice
+   *  over, which is why the budget below is deliberately conservative. */
+  function _entryBytes(entry) {
+    if (!entry) return 0;
+    if (Number.isFinite(entry.byteLength)) return entry.byteLength;
+    return entry?.data?.length
+      || (entry?.width || 0) * (entry?.height || 0) * (entry?.depth || 0) * RGBA_TEXTURE_BYTES_PER_VOXEL;
+  }
+
   function _storeVolumeCache(key, entry) {
     if (!_shouldCacheVolumeEntry(entry)) {
+      const orphan = _volumeCache.get(key);
       _volumeCache.delete(key);
+      _disposeVolumeEntry(orphan);
       return;
     }
     const previous = _volumeCache.get(key);
-    if (previous && previous !== entry && previous !== _activeVolumeEntry) {
-      if (previous.svrManager && previous.svrManager !== _svrManager) {
-        previous.svrManager.dispose();
-      }
-      if (Array.isArray(previous.textures)) {
-        previous.textures.forEach(t => t?.dispose?.());
-      }
-    }
+    if (previous && previous !== entry) _disposeVolumeEntry(previous);
+    if (!Number.isFinite(entry.byteLength)) entry.byteLength = _entryBytes(entry);
     _volumeCache.set(key, entry);
     _trimVolumeCache();
   }
@@ -2240,41 +2356,101 @@ const VolumeViewer = (() => {
    *  At 256x256 that keeps a whole 30-frame series resident; at 512x512 it keeps ~12. */
   const VOLUME_VRAM_BUDGET_BYTES = 768 * 1024 * 1024;
 
-  function _volumeCacheLimit() {
-    let bytes = 0;
-    for (const entry of _volumeCache.values()) {
-      // Measure the entry's REAL footprint. Assuming 4 bytes per voxel here undercounts
-      // how many single-channel (RedFormat) timepoints fit by a factor of four, which
-      // kept evicting frames that had room to stay.
-      const size = entry?.data?.length
-        || (entry?.width || 0) * (entry?.height || 0) * (entry?.depth || 0) * RGBA_TEXTURE_BYTES_PER_VOXEL;
-      if (size > bytes) bytes = size;
+  // Where playback currently is, so eviction can keep the frames we are about to
+  // need instead of the ones we just left.
+  let _playhead = { basePath: null, quality: null, frame: 0, total: 0 };
+
+  function setPlayheadHint(basePath, quality, frame, total) {
+    _playhead = {
+      basePath: basePath || null,
+      quality: _normalizeQualityKey(quality || ''),
+      frame: Number.isFinite(frame) ? frame : 0,
+      total: Number.isFinite(total) && total > 0 ? total : 0
+    };
+  }
+
+  function _cachedBytes() {
+    let sum = 0;
+    for (const entry of _volumeCache.values()) sum += _entryBytes(entry);
+    return sum;
+  }
+
+  /** Pick what to drop when the budget is exceeded.
+   *
+   *  NOT least-recently-used. Playing a 30-frame series in a cache that holds 14 is
+   *  the textbook worst case for LRU on a cyclic scan: the frame you ask for next is
+   *  always the one just evicted, so the hit rate collapses to ~0 % and every single
+   *  frame is a fresh ~600 ms stream. That — not the cache key, which has been per
+   *  (dataset, timepoint, quality) all along — is why native "reloads on every frame".
+   *
+   *  Order: another quality first (biggest first, since a native entry frees 14x what
+   *  a 256 one does), then, within the quality being played, the frame we will reach
+   *  LAST — the greatest cyclic distance ahead of the playhead. That keeps a
+   *  contiguous window in front of the head, which is what a video buffer is. */
+  function _evictionVictim() {
+    let worst = null;
+    let worstRank = -Infinity;
+    for (const [key, entry] of _volumeCache) {
+      if (key === _activeTextureKey || entry === _activeVolumeEntry) continue;
+      const quality = _normalizeQualityKey(entry?.quality || '');
+      const sameSeries = entry?.basePath === _playhead.basePath && quality === _playhead.quality;
+      let rank;
+      if (!sameSeries) {
+        // Foreign quality/dataset: cheapest thing to lose, biggest first.
+        rank = 1e9 + _entryBytes(entry);
+      } else if (_playhead.total > 0 && Number.isFinite(entry?.timepoint)) {
+        rank = (entry.timepoint - _playhead.frame + _playhead.total) % _playhead.total;
+      } else {
+        rank = 0;
+      }
+      if (rank > worstRank) { worstRank = rank; worst = key; }
     }
-    if (!bytes) return VOLUME_CACHE_LIMIT;
-    return Math.max(VOLUME_CACHE_LIMIT, Math.min(32, Math.floor(VOLUME_VRAM_BUDGET_BYTES / bytes)));
+    return worst;
   }
 
   function _trimVolumeCache() {
-    const limit = _volumeCacheLimit();
     let guard = 0;
-    while (_volumeCache.size > limit && guard < limit + 8) {
-      guard++;
-      const first = _volumeCache.entries().next().value;
-      if (!first) break;
-      const [key, entry] = first;
-      if (key === _activeTextureKey) {
-        _volumeCache.delete(key);
-        _volumeCache.set(key, entry);
-        continue;
-      }
+    // Budget in BYTES, not in entries. The old limit derived one entry count from the
+    // LARGEST entry present, so a single native frame (52 MiB) dropped the ceiling to
+    // 14 for every quality at once and wiped the 256/512 sets — which is exactly why
+    // stepping back down to a resolution you had already loaded was never instant.
+    while (_cachedBytes() > VOLUME_VRAM_BUDGET_BYTES && guard++ < 4096) {
+      if (_volumeCache.size <= 1) break;
+      const key = _evictionVictim();
+      if (!key) break;
+      const entry = _volumeCache.get(key);
       _volumeCache.delete(key);
-      if (entry.svrManager && entry.svrManager !== _svrManager) {
-        entry.svrManager.dispose();
-      }
-      if (Array.isArray(entry.textures)) {
-        entry.textures.forEach(t => t?.dispose?.());
-      }
+      _disposeVolumeEntry(entry);
     }
+  }
+
+  /** Which timepoints of a series are ACTUALLY resident right now. The buffer bar is
+   *  painted from this rather than from a "already visited" set, so it also shrinks
+   *  when eviction takes frames back — a bar that only ever grows would read as full
+   *  while half the series had been dropped. */
+  function _cachedTimepoints(basePath, quality) {
+    const want = _normalizeQualityKey(quality || '');
+    const out = new Set();
+    for (const entry of _volumeCache.values()) {
+      if (entry?.basePath !== basePath) continue;
+      if (_normalizeQualityKey(entry?.quality || '') !== want) continue;
+      if (Number.isFinite(entry?.timepoint)) out.add(entry.timepoint);
+    }
+    return out;
+  }
+
+  /** How many frames of this series can be resident at once — the honest ceiling the
+   *  buffer can reach. */
+  function _bufferCapacity(basePath, quality) {
+    const want = _normalizeQualityKey(quality || '');
+    let per = 0;
+    for (const entry of _volumeCache.values()) {
+      if (entry?.basePath !== basePath) continue;
+      if (_normalizeQualityKey(entry?.quality || '') !== want) continue;
+      per = Math.max(per, _entryBytes(entry));
+    }
+    if (!per) return 0;   // nothing loaded yet at this quality: unknown, not zero
+    return Math.max(1, Math.floor(VOLUME_VRAM_BUDGET_BYTES / per));
   }
 
   function _computeChannelHistograms(textures, width, height, depth, channels, bins = 256) {
@@ -4084,6 +4260,20 @@ const VolumeViewer = (() => {
     // Parenting to `cube` (not to the scene) inherits the orbit, the pan, the
     // physical aspect scale and the operator's Z display scale for free — the grid
     // has to mirror all four by hand because it sits at the root.
+    // ── Buffer state, for a video-style progress bar ────────────────────────────
+    /** Timepoints of `basePath` actually resident at `quality`, right now. */
+    getCachedTimepoints: (basePath, quality) => _cachedTimepoints(basePath, quality),
+    // Built with the RAW quality string, exactly as the writers do (:1552, :4250) —
+    // normalising only here would miss every entry.
+    hasCachedVolume: (basePath, quality, timepoint) =>
+      _volumeCache.has(_volumeCacheKey(basePath, quality, timepoint)),
+    /** How many frames of this series fit in the budget (0 = not measurable yet). */
+    getBufferCapacity: (basePath, quality) => _bufferCapacity(basePath, quality),
+    /** Tell eviction where playback is, so it keeps the frames coming up next. */
+    setPlayheadHint,
+    /** Abort a background prefetch in flight (quality change, dataset change,
+     *  tab hidden). Cooperative: the batch stops at its next brick boundary. */
+    cancelPreload: () => { if (_preloadStreamAbort) _preloadStreamAbort.cancelled = true; },
     getVolumeObject: () => cube,
     /** Acquisition box in um, or null until setStabilizationSpace() has run. */
     getAcquisitionSpace: () => (_acqExtent
@@ -4124,21 +4314,45 @@ const VolumeViewer = (() => {
   };
 
   async function loadBrickedVolumeStream(basePath, metadata, timepoint = null, onProgress = null, options = {}) {
-    if (_brickStreamAbort) _brickStreamAbort.cancelled = true;
-    if (_seedRafId !== null) { cancelAnimationFrame(_seedRafId); _seedRafId = null; } // LEAK-023
-    _clearTransitionVolume();
-    window._loggedWriteBrick = 0;
-    _dirtyRegions = [];
-    if (options.qualityMode) {
-      _currentQualityMode = options.qualityMode;
-    } else if (options.quality) {
-      if (options.quality === '256x256' || options.quality === '512x512' || options.quality === '1024x1024' || options.quality === 'native') {
-        _currentQualityMode = options.quality;
+    // ── Background prefetch mode ────────────────────────────────────────────────
+    // Fills the cache for a timepoint that is NOT on screen. It must not touch a
+    // single piece of displayed state, and above all it must never run while a
+    // display load is in flight: BrickLoader is a single-mount singleton whose
+    // init() calls cancelPending() unconditionally, which aborts the foreground's
+    // fetches. The foreground's loadBrickTasks would then resolve NORMALLY
+    // (allSettled swallows it), its abortRef would still be false and its loadId
+    // still current — so it would cache and display a HALF-FILLED volume under the
+    // right key. Silent, persistent, and visually plausible: the worst kind.
+    //
+    // The guard lives here, not in viewer.js, because the application-level lock
+    // (_tpInFlight) is bypassed by four callers already (initial load, quality
+    // select, workspace restore) and any future one would bypass it too.
+    const preload = Boolean(options.preload);
+    if (preload && _fgStreamActive > 0) return { available: false, reason: 'busy' };
+    if (!preload) _fgStreamActive++;
+
+    if (!preload) {
+      if (_brickStreamAbort) _brickStreamAbort.cancelled = true;
+      if (_seedRafId !== null) { cancelAnimationFrame(_seedRafId); _seedRafId = null; } // LEAK-023
+      _clearTransitionVolume();
+      window._loggedWriteBrick = 0;
+      _dirtyRegions = [];
+      if (options.qualityMode) {
+        _currentQualityMode = options.qualityMode;
+      } else if (options.quality) {
+        if (options.quality === '256x256' || options.quality === '512x512' || options.quality === '1024x1024' || options.quality === 'native') {
+          _currentQualityMode = options.quality;
+        }
       }
+      _isStreamingBricks = true;
     }
-    _isStreamingBricks = true;
     try {
       const quality = _normalizeQualityKey(options.quality || '1024x1024');
+      // A prefetch is silent: _qualityState is a single merged singleton and the
+      // progress overlay's visibility keys off a regex on its message, so emitting
+      // from the background would flash the overlay once per prefetched frame.
+      const emitState = preload ? (() => {}) : _emitQualityState;
+      const scheduleFrame = preload ? (() => {}) : _scheduleFrame;
       const deferActivation = Boolean(options.deferActivation && _activeVolumeEntry && (_activeVolumeEntry.textures || _activeVolumeEntry.data));
       const perfId = _perf()?.start('volume.load.bricks', {
       quality,
@@ -4148,12 +4362,16 @@ const VolumeViewer = (() => {
       _perf()?.end(perfId, { status: 'unavailable', reason: 'BrickLoader unavailable' });
       return { available: false, reason: 'BrickLoader unavailable' };
     }
-    _qualityTarget = quality;
+    if (!preload) _qualityTarget = quality;
     const cacheKey = _volumeCacheKey(basePath, quality, timepoint);
     const cached = options.ignoreVolumeCache ? null : _getCachedVolume(cacheKey);
     if (cached) {
+      if (preload) {
+        _perf()?.end(perfId, { status: 'ok', fromCache: true, quality, preload: true });
+        return { stale: false, available: true, cached: true, quality, preload: true };
+      }
       _activateVolumeEntry(cached, metadata, cached.sourceDepth, cached.sourceWidth, cached.channels, options);
-      _emitQualityState({ active: quality, mode: 'bricks', progress: 1, message: `${quality} ready from cache` });
+      emitState({ active: quality, mode: 'bricks', progress: 1, message: `${quality} ready from cache` });
       onProgress?.(1, quality);
       _perf()?.end(perfId, {
         status: 'ok',
@@ -4182,7 +4400,10 @@ const VolumeViewer = (() => {
         manifest: cached.manifest
       };
     }
-    const loadId = ++_loadCounter;
+    // Read, not bump: the prefetch inherits the current id, so the moment a display
+    // load starts (and bumps it) every existing `loadId !== _loadCounter` guard
+    // aborts the prefetch. The foreground preempts the background for free.
+    const loadId = preload ? _loadCounter : ++_loadCounter;
     const brickDir = metadata?.qualities?.native?.directory || 'bricks';
     let manifest;
     try {
@@ -4218,8 +4439,11 @@ const VolumeViewer = (() => {
       _perf()?.event('volume.bricks.manifest_rejected', { quality, reason: err.message });
       return { available: false, reason: err.message };
     }
-    _brickStreamAbort = { cancelled: false, loadId };
-    const abortRef = _brickStreamAbort;
+    // Its OWN abort slot: a prefetch must never clear the foreground's.
+    const abortSlot = { cancelled: false, loadId };
+    if (!preload) _brickStreamAbort = abortSlot;
+    else _preloadStreamAbort = abortSlot;
+    const abortRef = abortSlot;
     const levelCount = tpSelection.manifest.levels ? (Array.isArray(tpSelection.manifest.levels) ? tpSelection.manifest.levels.length : Object.keys(tpSelection.manifest.levels).length) : 1;
     let lod = _lodForQuality(quality, levelCount, tpSelection.manifest.levels);
     // CAP-008: remember the LOD the requested quality maps to, so the caller can detect
@@ -4270,6 +4494,13 @@ const VolumeViewer = (() => {
         dims.z > maxTextureSize ||
         rgbaByteLength >= MONOLITHIC_RGBA_LIMIT_BYTES
       );
+      // A prefetch NEVER takes the SVR path: it would claim _svrManager and the
+      // material defines of the volume on screen, and _shouldCacheVolumeEntry would
+      // throw the entry away at native anyway — paid for, then discarded.
+      if (preload && useSVR) {
+        _perf()?.end(perfId, { status: 'unavailable', reason: 'svr', quality });
+        return { available: false, reason: 'svr' };
+      }
       const SVRClass = useSVR
         ? (window.SVRManager || (typeof SVRManager !== 'undefined' ? SVRManager : null))
         : null;
@@ -4357,6 +4588,10 @@ const VolumeViewer = (() => {
                   // so without this check __webglInit would be set on a storage-less texture
                   // and subsequent brick texSubImage3D uploads would write into uninitialised
                   // GPU memory (pink). Throw so the catch downgrades the LOD (rule 1.1).
+                  // Release THIS texture before unwinding: it is not in `textures` yet,
+                  // so the catch below cannot see it, and ANGLE may well have reserved
+                  // part of it. Leaking here is what turns one rejection into a spiral.
+                  texture3D.dispose();
                   throw new Error(`monolithic 3D texture allocation failed (glError=${_allocErr}, ${width}x${height}x${depth}, ${Math.round(rgbaByteLength / 1024 / 1024)} MiB)`);
               }
               const properties = renderer.properties.get(texture3D);
@@ -4372,7 +4607,12 @@ const VolumeViewer = (() => {
         _perf()?.end(texturePerfId, { status: 'ok' });
         allocated = true;
       } catch (err) {
-        textures = []; // Free whatever was allocated
+        // Dropping the array does NOT free the GPU side: three only releases a
+        // WebGLTexture on dispose(), so a texture that WAS allocated before ANGLE
+        // rejected the next one leaked its whole footprint (52 MiB here) for the life
+        // of the renderer — and each leak makes the next allocation likelier to fail.
+        textures.forEach(t => t?.dispose?.());
+        textures = [];
         if (streamSvrManager && streamSvrManager !== _svrManager) {
           streamSvrManager.dispose();
           streamSvrManager = null;
@@ -4442,7 +4682,7 @@ const VolumeViewer = (() => {
     const floors = _floorsFromManifest(tpSelection.manifest, channels, tpSelection.histograms);
     const floorLuts = _floorLuts(floors, channels);
     const manifestHistograms = _manifestHistograms(tpSelection.histograms, channels);
-    _emitQualityState({
+    emitState({
       target: _qualityTarget,
       active: quality,
       mode: 'bricks',
@@ -4495,8 +4735,8 @@ const VolumeViewer = (() => {
       if (options.hideTransition && _transitionCube) _transitionCube.visible = false;
     }
 
-    if (Boolean(_activeVolumeEntry && _activeVolumeEntry.textures) && textures.length > 1) {
-      _emitQualityState({
+    if (!preload && Boolean(_activeVolumeEntry && _activeVolumeEntry.textures) && textures.length > 1) {
+      emitState({
         target: _qualityTarget,
         active: quality,
         mode: 'bricks',
@@ -4508,7 +4748,7 @@ const VolumeViewer = (() => {
       });
     }
 
-    if (!deferActivation) {
+    if (!deferActivation && !preload) {
       _activateVolumeEntry(streamEntry, metadata, streamEntry.sourceDepth, streamEntry.sourceWidth, channels, { ...options, fitCamera: !_hasLoadedVolume });
     }
     const rgbaBrickTransport = BrickLoader.getTransportEncoding?.() === 'raw-rgba-gzip';
@@ -4555,7 +4795,7 @@ const VolumeViewer = (() => {
           _updateGPUTextureRegion(r.tex, r.dims, r.ox, r.oy, r.oz, r.bw, r.bh, r.bd, r.brickData);
         }
         _dirtyRegions = [];
-        _scheduleFrame();
+        scheduleFrame();
         lastTextureUploadAt = now;
         opsSinceTextureUpload = 0;
       }
@@ -4568,6 +4808,9 @@ const VolumeViewer = (() => {
         cancelPrevious: true,
         preserveOrder: true,
         streamOnly: true,
+        // Stops the batch the moment this stream is superseded, instead of paying
+        // for every remaining fetch and decode only to throw the result away.
+        shouldAbort: () => abortRef.cancelled || loadId !== _loadCounter,
         onBrickError: ({ bx, by, bz, channel, error } = {}) => {
           // BUG-011 (Rule 1.1): a dropped brick must surface as a degraded-quality
           // status, not vanish silently. The render still degrades gracefully (the
@@ -4575,7 +4818,7 @@ const VolumeViewer = (() => {
           if (abortRef.cancelled || loadId !== _loadCounter) return;
           failedBricks++;
           console.warn(`[VolumeViewer] brick load failed (${bx},${by},${bz}) ch=${channel}:`, error);
-          _emitQualityState({
+          emitState({
             message: `${quality} loaded with ${failedBricks} dropped brick${failedBricks > 1 ? 's' : ''}`
           });
         },
@@ -4632,20 +4875,20 @@ const VolumeViewer = (() => {
               streamStats.rgbaChunks++;
               pendingScalarBricks.delete(scalarKey);
               opsSinceTextureUpload++;
-              if (streamSvrManager) _scheduleFrame();
+              if (streamSvrManager) scheduleFrame();
               markTextureDirty(false);
             }
           }
           doneOps++;
           streamEntry.successfulLoads = doneOps;
           const progress = Math.max(0, Math.min(1, doneOps / effectiveTotalOps));
-          _emitQualityState({ progress });
+          emitState({ progress });
           onProgress?.(progress, quality);
           maybeLogStreamStats();
         },
         onProgress: (p) => {
           const progress = Math.max(0, Math.min(1, Math.max(doneOps / effectiveTotalOps, p)));
-          _emitQualityState({ progress });
+          emitState({ progress });
           onProgress?.(progress, quality);
         }
       });
@@ -4674,12 +4917,12 @@ const VolumeViewer = (() => {
             streamEntry.successfulLoads = doneOps;
             markTextureDirty(false);
             const progress = Math.max(0, Math.min(1, doneOps / totalOps));
-            _emitQualityState({ progress });
+            emitState({ progress });
             onProgress?.(progress, quality);
           },
           onProgress: (p) => {
             const progress = Math.max(0, Math.min(1, (c + p) / Math.max(1, channels)));
-            _emitQualityState({ progress });
+            emitState({ progress });
             onProgress?.(progress, quality);
           }
         });
@@ -4724,7 +4967,7 @@ const VolumeViewer = (() => {
         }
         streamStats.rgbaChunks++;
         opsSinceTextureUpload++;
-        if (streamSvrManager) _scheduleFrame();
+        if (streamSvrManager) scheduleFrame();
       }
       pendingScalarBricks.clear();
       markTextureDirty(true);
@@ -4732,15 +4975,19 @@ const VolumeViewer = (() => {
 
     if (abortRef.cancelled || loadId !== _loadCounter) {
       if (deferActivation) _clearTransitionVolume();
-      if (streamSvrManager && streamSvrManager !== _svrManager) streamSvrManager.dispose();
-      _emitQualityState({ message: `${quality} streaming cancelled` });
+      // This entry never reaches the cache, so nothing downstream will ever free it:
+      // only streamSvrManager was released here, leaving the monolithic volume texture
+      // (52 MiB on the reference series) and the occupancy map stranded on the GPU for
+      // every cancelled stream — and a prefetcher cancels a great many.
+      _disposeAbandonedStream(textures, occTex, streamSvrManager);
+      emitState({ message: `${quality} streaming cancelled` });
       _perf()?.end(perfId, { status: 'stale', quality });
       return { stale: true };
     }
     if (streamTasks.length && doneOps === 0) {
       if (deferActivation) _clearTransitionVolume();
-      if (streamSvrManager && streamSvrManager !== _svrManager) streamSvrManager.dispose();
-      _emitQualityState({
+      _disposeAbandonedStream(textures, occTex, streamSvrManager);
+      emitState({
         active: quality,
         mode: 'bricks',
         progress: 0,
@@ -4759,14 +5006,24 @@ const VolumeViewer = (() => {
       _updateGPUTextureRegion(r.tex, r.dims, r.ox, r.oy, r.oz, r.bw, r.bh, r.bd, r.brickData);
     }
     _dirtyRegions = [];
-    _scheduleFrame();
+    scheduleFrame();
     streamEntry.histograms = manifestHistograms.length
       ? manifestHistograms
       : (_channelHistograms?.length ? _channelHistograms : []);
+    // A degraded LOD must never be filed under the quality that was ASKED for: the
+    // cache key carries no lod, so a prefetch that fell back under memory pressure
+    // would store a low-res volume labelled `native`, the bar would paint it as
+    // loaded, and revisiting it would fire the downgrade modal and rewrite
+    // _qualityMode for the session — all from a background job the user never asked for.
+    if (preload && Number.isFinite(requestedLod) && lod !== requestedLod) {
+      _disposeAbandonedStream(textures, occTex, streamSvrManager);
+      _perf()?.end(perfId, { status: 'unavailable', reason: 'downgraded', quality });
+      return { available: false, reason: 'downgraded' };
+    }
     _storeVolumeCache(streamEntry.key, streamEntry);
-    _activateVolumeEntry(streamEntry, metadata, streamEntry.sourceDepth, streamEntry.sourceWidth, channels, options);
+    if (!preload) _activateVolumeEntry(streamEntry, metadata, streamEntry.sourceDepth, streamEntry.sourceWidth, channels, options);
     if (deferActivation) _clearTransitionVolume();
-    _emitQualityState({
+    emitState({
       active: quality,
       mode: 'bricks',
       progress: 1,
@@ -4803,8 +5060,13 @@ const VolumeViewer = (() => {
         manifest: tpSelection.manifest
       };
     } finally {
-      _isStreamingBricks = false;
-      _scheduleFrame();
+      // A prefetch set none of this on the way in, so it restores none of it on the
+      // way out — and it must not force a redraw: it has nothing new to show.
+      if (!preload) {
+        _fgStreamActive = Math.max(0, _fgStreamActive - 1);
+        _isStreamingBricks = false;
+        _scheduleFrame();
+      }
     }
   }
 

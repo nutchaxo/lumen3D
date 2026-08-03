@@ -1383,11 +1383,14 @@ def _max_version(dir_path: Path):
 
 
 def _version_tuple(s: str) -> tuple:
+    """Always 3 components, like the PHP twin admin_version_tuple: an unpadded
+    ("1.4",) < ("1.4.0") would read a two-part version as OLDER than its own
+    three-part spelling and invent an update out of nothing."""
     try:
-        nums = re.findall(r"\d+", s or "")
-        return tuple(int(x) for x in nums[:3]) or (0, 0, 0)
+        nums = [int(x) for x in re.findall(r"\d+", s or "")[:3]]
     except Exception:
-        return (0, 0, 0)
+        nums = []
+    return tuple(nums + [0] * (3 - len(nums)))
 
 
 # ── Plugin/platform compatibility ──────────────────────────────────────────────
@@ -1695,6 +1698,17 @@ def _plugin_wants_sandbox(mod_dir: Path) -> bool:
 
 
 def _preprocess_version():
+    """Version of the Python preprocessing pipeline the operator can actually obtain.
+
+    The downloadable pack wins (_pipeline_pack_versions, defined with the rest of
+    the pipeline plumbing further down): it is the copy the admin panel hands out,
+    and on a deployed host it is the ONLY copy present — the release excludes
+    preprocess/. A dev checkout with no pack built yet falls back to the sources
+    the pack would be built from.
+    """
+    v = _pipeline_pack_versions().get("preprocess")
+    if v:
+        return v
     try:
         txt = (ROOT / "preprocess" / "run_preprocess.py").read_text(encoding="utf-8")
         m = re.search(r'__version__\s*=\s*["\']([\d.]+)["\']', txt)
@@ -1707,10 +1721,15 @@ def _preprocess_version():
 
 def _version_info() -> dict:
     """Web platform version = newest changelog/changelog_X.Y.Z.md (the convention's
-    single source of truth — no constant introduced)."""
+    single source of truth — no constant introduced).
+
+    The dev server's own __version__ is deliberately NOT reported: it versions the
+    serving tool, drifts from the platform on purpose, and has no counterpart on a
+    PHP host — an operator reading two unrelated numbers side by side can only
+    conclude one of them is wrong.
+    """
     return {
         "web": _max_version(CHANGELOG_DIR),
-        "devServer": __version__,
         "preprocess": _preprocess_version(),
         "repo": GITHUB_REPO,
     }
@@ -1723,6 +1742,275 @@ def _http_get_json(url: str, timeout: int = 10) -> dict:
     })
     with urllib.request.urlopen(req, timeout=timeout) as r:
         return json.loads(r.read().decode("utf-8"))
+
+
+# ── Document library ───────────────────────────────────────────────────────────
+# Operator-facing documents (guides, procedures) live in DOCS/ on GitHub rather
+# than inside the release, so a corrected guide reaches every install without
+# shipping a new version of the platform.
+#
+# The filename IS the metadata — no sidecar index to keep in sync:
+#
+#     260803 - GUIDE-ADMIN - FR.pdf
+#     ^date    ^stable id    ^language
+#
+# The date sorts and versions (newest wins, older ones stay reachable), the id is
+# what makes two files the same document across versions and languages, and the
+# language lets the panel serve the operator's own. A file that does not match is
+# ignored rather than guessed at.
+DOCS_DIR_REMOTE = "DOCS"
+# Documents are read from the published branch, not from wherever development
+# happens: an operator should only ever see a guide that has been released.
+DOCS_BRANCH = "main"
+_DOC_RE = re.compile(r"^(\d{6})\s*-\s*(.+?)\s*-\s*([A-Za-z]{2,6})\.([A-Za-z0-9]{1,5})$")
+_DOCS_CACHE: dict = {"at": 0.0, "payload": None}
+_DOCS_TTL = 600.0          # GitHub's unauthenticated API allows 60 calls/hour
+
+
+def _doc_parse(name: str) -> dict | None:
+    m = _DOC_RE.match(name)
+    if not m:
+        return None
+    yymmdd, doc_id, lang, ext = m.group(1), m.group(2).strip(), m.group(3).upper(), m.group(4).lower()
+    try:
+        y, mo, d = 2000 + int(yymmdd[:2]), int(yymmdd[2:4]), int(yymmdd[4:6])
+        date = datetime(y, mo, d).strftime("%Y-%m-%d")
+    except ValueError:
+        return None                      # 260899 is not a date; treat as unparseable
+    return {"file": name, "date": date, "stamp": yymmdd, "id": doc_id, "lang": lang, "ext": ext}
+
+
+def _docs_list(force: bool = False) -> dict:
+    """Group DOCS/ into one entry per document, newest version first."""
+    now = time.time()
+    if not force and _DOCS_CACHE["payload"] and now - _DOCS_CACHE["at"] < _DOCS_TTL:
+        return _DOCS_CACHE["payload"]
+
+    url = (f"https://api.github.com/repos/{GITHUB_REPO}/contents/{DOCS_DIR_REMOTE}"
+           f"?ref={DOCS_BRANCH}")
+    try:
+        entries = _http_get_json(url, timeout=12)
+    except urllib.error.HTTPError as e:
+        payload = {"docs": [], "error": "rate_limited" if e.code == 403 else "unreachable",
+                   "detail": f"HTTP {e.code}", "repo": GITHUB_REPO}
+        _DOCS_CACHE.update(at=now, payload=payload)
+        return payload
+    except Exception as e:
+        payload = {"docs": [], "error": "unreachable", "detail": str(e)[:160], "repo": GITHUB_REPO}
+        _DOCS_CACHE.update(at=now, payload=payload)
+        return payload
+
+    if not isinstance(entries, list):
+        payload = {"docs": [], "error": "no_folder", "repo": GITHUB_REPO}
+        _DOCS_CACHE.update(at=now, payload=payload)
+        return payload
+
+    groups: dict[str, dict] = {}
+    skipped = []
+    for e in entries:
+        if e.get("type") != "file":
+            continue
+        nm = e.get("name", "")
+        info = _doc_parse(nm)
+        if not info:
+            # README.md documents the naming rule and is expected to be here;
+            # reporting it as a malformed document every time is just noise.
+            if not nm.lower().startswith(("readme", ".")):
+                skipped.append(nm)
+            continue
+        info["size"] = e.get("size", 0)
+        g = groups.setdefault(info["id"], {"id": info["id"], "versions": []})
+        g["versions"].append(info)
+
+    docs = []
+    for g in groups.values():
+        # newest first; ties broken on language so the order is stable
+        g["versions"].sort(key=lambda v: (v["stamp"], v["lang"]), reverse=True)
+        g["languages"] = sorted({v["lang"] for v in g["versions"]})
+        g["latest"] = g["versions"][0]["stamp"]
+        g["latestDate"] = g["versions"][0]["date"]
+        docs.append(g)
+    docs.sort(key=lambda d: (d["latest"], d["id"]), reverse=True)
+
+    payload = {"docs": docs, "repo": GITHUB_REPO, "folder": DOCS_DIR_REMOTE,
+               "skipped": skipped[:10]}
+    _DOCS_CACHE.update(at=now, payload=payload)
+    return payload
+
+
+_DOC_MIME = {
+    "pdf": "application/pdf", "md": "text/plain; charset=utf-8",
+    "txt": "text/plain; charset=utf-8", "html": "text/html; charset=utf-8",
+    "png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg",
+    "svg": "image/svg+xml", "zip": "application/zip",
+    "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+}
+# Only these may be shown in a frame. HTML and SVG are deliberately absent: both
+# can carry script, and a document is fetched from a repository — displaying one
+# inline on this origin would run it beside the admin session. They download.
+DOC_INLINE_OK = {"pdf", "png", "jpg", "jpeg", "txt", "md"}
+
+
+def _doc_fetch(name: str) -> tuple[bytes, str] | None:
+    """Fetch one document from GitHub. Returns (bytes, content-type).
+
+    The name is validated against the naming rule AND against the live listing:
+    the proxy must never be usable to pull an arbitrary repo path through the
+    admin session.
+    """
+    info = _doc_parse(name)
+    if not info:
+        return None
+    listing = _docs_list()
+    known = {v["file"] for d in listing.get("docs", []) for v in d["versions"]}
+    if name not in known:
+        return None
+    url = (f"https://raw.githubusercontent.com/{GITHUB_REPO}/{DOCS_BRANCH}/"
+           f"{DOCS_DIR_REMOTE}/{urllib.parse.quote(name)}")
+    req = urllib.request.Request(url, headers={"User-Agent": "lumen3d-admin"})
+    with urllib.request.urlopen(req, timeout=60) as r:
+        data = r.read()
+    return data, _DOC_MIME.get(info["ext"], "application/octet-stream")
+
+
+# ── Downloadable processing pipelines ──────────────────────────────────────────
+# The admin panel hands operators a self-contained pack that turns raw microscope
+# output into datasets: the Imaris .ims volume pipeline plus the Imaris-Excel cell
+# tracking pipeline, with a worked example for each and a launcher that verifies
+# itself before running. Two editions, because they cannot be delivered the same way:
+#
+#   "leger"   ~3 MB, BUILT INTO THE RELEASE under assets/pipeline/. Always available,
+#             costs the host nothing to serve. Fetches Python at first run.
+#   "complet" ~72 MB with a full Python runtime pre-installed. Far too large for the
+#             web release artifact, so the release CI attaches it to the GitHub
+#             release and the browser downloads it from there directly. The host
+#             never proxies it: the PHP fetch helper buffers whole bodies in memory
+#             and caps well below that size.
+PIPELINE_DIR = ROOT / "assets" / "pipeline"
+_PIPELINE_EDITIONS = {"leger": "lumen3d-pipeline-leger-", "complet": "lumen3d-pipeline-complet-"}
+
+
+def _pipeline_local(edition: str) -> Path | None:
+    """Newest locally present pack for an edition, if any."""
+    prefix = _PIPELINE_EDITIONS.get(edition)
+    if not prefix or not PIPELINE_DIR.is_dir():
+        return None
+    found = sorted(PIPELINE_DIR.glob(f"{prefix}*.zip"), key=lambda p: _version_key(p.stem))
+    return found[-1] if found else None
+
+
+def _version_key(stem: str) -> tuple:
+    m = re.search(r"(\d+)\.(\d+)\.(\d+)$", stem)
+    return tuple(int(g) for g in m.groups()) if m else (0, 0, 0)
+
+
+_PIPELINE_VER_CACHE = None   # ((path, mtime_ns, size), versions) — see below
+
+
+def _pipeline_pack_versions() -> dict:
+    """Versions carried BY the downloadable pack, read from the VERSION.json that
+    tools/build_pipeline_bundle.py writes into it.
+
+    The pack filename only encodes the platform version, so the pipeline version it
+    actually contains has to come from inside. Cached on (path, mtime, size): the
+    admin panel asks for versions on every load, and the answer only changes when
+    the artifact on disk does.
+    """
+    global _PIPELINE_VER_CACHE
+    pack = _pipeline_local("leger") or _pipeline_local("complet")
+    if not pack:
+        return {}
+    try:
+        st = pack.stat()
+    except OSError:
+        return {}
+    key = (str(pack), st.st_mtime_ns, st.st_size)
+    if _PIPELINE_VER_CACHE and _PIPELINE_VER_CACHE[0] == key:
+        return _PIPELINE_VER_CACHE[1]
+    info = {}
+    try:
+        with zipfile.ZipFile(pack) as zf:
+            name = next((n for n in zf.namelist()
+                         if n == "VERSION.json" or n.endswith("/VERSION.json")), None)
+            if name:
+                with zf.open(name) as fh:
+                    doc = json.loads(fh.read(1 << 16).decode("utf-8"))
+                if isinstance(doc, dict):
+                    info = {"pack": doc.get("bundleVersion"),
+                            "preprocess": doc.get("preprocessVersion")}
+    except (OSError, ValueError, zipfile.BadZipFile):
+        info = {}
+    _PIPELINE_VER_CACHE = (key, info)
+    return info
+
+
+def _pipeline_build_lite() -> Path | None:
+    """Build the light pack on demand — dev checkouts only.
+
+    A release ships the finished zip, so this never runs on a deployed host (which
+    has neither preprocess/ nor SCRIPTS/ nor tools/). In a dev checkout the sources
+    ARE present, and rebuilding keeps the offered pack in step with edited scripts
+    instead of serving a stale artifact.
+    """
+    import subprocess
+
+    builder = ROOT / "tools" / "build_pipeline_bundle.py"
+    if not builder.is_file() or not (ROOT / "preprocess").is_dir() or not (ROOT / "SCRIPTS").is_dir():
+        return None
+    try:
+        proc = subprocess.run([sys.executable, str(builder), "--out", str(PIPELINE_DIR)],
+                              capture_output=True, text=True, timeout=180, cwd=str(ROOT))
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if proc.returncode != 0:
+        print(f"[pipeline] construction du pack echouee: "
+              f"{(proc.stderr or proc.stdout or '').strip()[:300]}", flush=True)
+        return None
+    return _pipeline_local("leger")
+
+
+def _pipeline_github_asset() -> dict:
+    """Locate the complete pack among the latest GitHub release's assets.
+
+    Returns availability plus the browser download URL. Network failures are not
+    errors here — the light pack still works, so the UI just reports that the
+    complete edition could not be reached.
+    """
+    try:
+        rel = _http_get_json(f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest")
+    except Exception as exc:
+        return {"available": False, "reason": "unreachable", "detail": str(exc)[:200]}
+    for asset in rel.get("assets") or []:
+        name = asset.get("name") or ""
+        if name.startswith(_PIPELINE_EDITIONS["complet"]) and name.endswith(".zip"):
+            return {"available": True, "name": name, "size": asset.get("size"),
+                    "url": asset.get("browser_download_url"), "tag": rel.get("tag_name")}
+    return {"available": False, "reason": "absent", "tag": rel.get("tag_name")}
+
+
+def _pipeline_info() -> dict:
+    local_lite = _pipeline_local("leger") or _pipeline_build_lite()
+    local_full = _pipeline_local("complet")
+
+    info = {
+        "versions": {"web": _max_version(CHANGELOG_DIR), "preprocess": _preprocess_version()},
+        "leger": {"available": False},
+        "complet": {"available": False},
+    }
+    if local_lite:
+        info["leger"] = {"available": True, "name": local_lite.name,
+                         "size": local_lite.stat().st_size, "source": "local"}
+    if local_full:
+        # An operator can drop the complete pack next to the light one; serving it
+        # from the host then beats sending them to GitHub.
+        info["complet"] = {"available": True, "name": local_full.name,
+                           "size": local_full.stat().st_size, "source": "local"}
+    else:
+        remote = _pipeline_github_asset()
+        remote["source"] = "github"
+        info["complet"] = remote
+    return info
 
 
 def _update_check() -> dict:
@@ -2084,8 +2372,15 @@ _MARKETPLACE_CARD_KEYS = ("id", "name", "placement", "subtype", "description",
 
 
 def _marketplace_list() -> dict:
-    """Catalog annotated with installed + compat status, for the admin Marketplace tab.
-    Fetch/verify failures are surfaced (never fatal to the panel)."""
+    """Catalog annotated with installed + compat + upgrade status, for the admin
+    Marketplace and Updates tabs. Fetch/verify failures are surfaced (never fatal
+    to the panel).
+
+    Upgradability is split in two on purpose: `updateAvailable` is what the Updates
+    tab may actually act on (newer AND compatible with the platform in place), while
+    `updateBlocked` marks a newer version the current platform cannot accept — the
+    operator has to see that one too, or the missing entry reads as "no update".
+    """
     base = {"configured": bool(_MARKETPLACE_CATALOG_URL), "signed": bool(_MARKETPLACE_PUBKEY_HEX)}
     if not _MARKETPLACE_CATALOG_URL:
         return {**base, "plugins": []}
@@ -2094,7 +2389,7 @@ def _marketplace_list() -> dict:
     except Exception as e:
         return {**base, "error": str(e), "plugins": []}
     ver = _max_version(CHANGELOG_DIR)
-    installed = {p["path"] for p in _list_plugins()}
+    installed = {p["path"]: p for p in _list_plugins()}
     out = []
     for e in entries:
         if not isinstance(e, dict):
@@ -2104,7 +2399,15 @@ def _marketplace_list() -> dict:
         path = f"{placement}/{pid}" if placement in PLUGIN_PLACEMENTS else None
         ok_c, reason_c = _compat_satisfies(ver, e.get("platformCompat"))
         card = {k: e.get(k) for k in _MARKETPLACE_CARD_KEYS}
-        card.update({"installed": (path in installed) if path else False,
+        local = installed.get(path) if path else None
+        cur = str(local.get("version")) if local and local.get("version") else None
+        latest = str(e.get("latestVersion")) if e.get("latestVersion") else None
+        # No version on either side ⇒ nothing to compare ⇒ no update offered.
+        newer = bool(cur and latest and _version_tuple(latest) > _version_tuple(cur))
+        card.update({"installed": local is not None,
+                     "installedVersion": cur,
+                     "updateAvailable": newer and ok_c,
+                     "updateBlocked": newer and not ok_c,
                      "compat": ok_c, "compatReason": reason_c})
         out.append(card)
     return {**base, "plugins": out}
@@ -2153,9 +2456,11 @@ def _extract_plugin_zip(zip_path: Path, dest: Path) -> Path:
     raise OSError("archive plugin invalide: plugin.json introuvable")
 
 
-def _install_marketplace_plugin(catalog_id: str, password: str):
-    """Install a first-party plugin from the signed catalog. Operator-initiated,
-    re-auth'd, verified fail-closed; on ANY failure js/modules is left untouched. The
+def _install_marketplace_plugin(catalog_id: str, password: str, upgrade: bool = False):
+    """Install — or with upgrade=True, replace in place — a first-party plugin from
+    the signed catalog. Operator-initiated, re-auth'd, verified fail-closed; on ANY
+    failure js/modules is left untouched, which for an upgrade means the working
+    version is put back rather than the operator being left with no plugin. The
     plugin lands as an operator-approved (server-recomputed hash) plugin the existing
     loadModules trust gate re-verifies. Returns (ok, status, payload)."""
     if not _MARKETPLACE_CATALOG_URL:
@@ -2174,8 +2479,10 @@ def _install_marketplace_plugin(catalog_id: str, password: str):
         return False, 400, {"error": "bad_plugin_id"}
     path = f"{placement}/{pid}"
     target_dir = MODULES_DIR / placement / pid
-    if target_dir.exists():
+    if target_dir.exists() and not upgrade:
         return False, 409, {"error": "already_installed"}
+    if upgrade and not target_dir.exists():
+        return False, 404, {"error": "not_installed"}
     ok_c, reason_c = _compat_satisfies(_max_version(CHANGELOG_DIR), entry.get("platformCompat"))
     if not ok_c:
         return False, 409, {"error": "incompatible", "detail": reason_c}
@@ -2184,7 +2491,21 @@ def _install_marketplace_plugin(catalog_id: str, password: str):
         return False, 400, {"error": "no_asset"}
     MODULES_DIR.mkdir(parents=True, exist_ok=True)   # fresh (un-bundled) install: js/modules may not exist yet
     tmp_root = Path(tempfile.mkdtemp(prefix=".mkt-", dir=str(MODULES_DIR)))
+    backup = None    # upgrade only: the working copy, parked until the new one is approved
     moved = False
+
+    def _abort(status, payload):
+        """Leave js/modules exactly as this call found it, then report."""
+        if moved:
+            shutil.rmtree(target_dir, ignore_errors=True)
+        if backup is not None and backup.exists():
+            try:
+                _rename_retry(backup, target_dir)
+            except OSError:
+                pass   # nothing left to try; the payload already says the call failed
+        shutil.rmtree(tmp_root, ignore_errors=True)
+        return False, status, payload
+
     try:
         zip_path = tmp_root / "plugin.zip"
         _download_capped(asset_url, zip_path, _MARKETPLACE_MAX_ZIP)
@@ -2217,14 +2538,16 @@ def _install_marketplace_plugin(catalog_id: str, password: str):
         if meta.get("placement") and meta["placement"] != placement:
             raise OSError("plugin.json placement ≠ catalogue")
         target_dir.parent.mkdir(parents=True, exist_ok=True)
+        if target_dir.exists():
+            # Park the working copy instead of deleting it: everything after this
+            # point can still fail, and an operator who asked for an upgrade must
+            # never end up with less than they had.
+            backup = tmp_root / "previous"
+            _rename_retry(target_dir, backup)
         _rename_retry(proot, target_dir)
         moved = True
     except Exception as e:
-        if moved:
-            shutil.rmtree(target_dir, ignore_errors=True)
-        return False, 502, {"error": "install_failed", "detail": str(e)}
-    finally:
-        shutil.rmtree(tmp_root, ignore_errors=True)
+        return _abort(502, {"error": "install_failed", "detail": str(e)})
     # Operator approval PINNED to the on-disk bytes (server recomputes the hash — INV-4).
     server_hash = _plugin_hash(_plugin_file_hashes(target_dir))
     declared = sorted(_plugin_declared_caps(target_dir))
@@ -2232,11 +2555,12 @@ def _install_marketplace_plugin(catalog_id: str, password: str):
     mode = "sandboxed" if wants_sandbox else "trusted"
     ok_a, st_a, pl_a = _approve_plugin(path, server_hash, mode, declared, password)
     if not ok_a:
-        shutil.rmtree(target_dir, ignore_errors=True)
-        return False, st_a, {**pl_a, "stage": "approve"}
+        return _abort(st_a, {**pl_a, "stage": "approve"})
+    shutil.rmtree(tmp_root, ignore_errors=True)   # takes the parked previous version with it
     global _TRUST_EPOCH
     _TRUST_EPOCH += 1
-    return True, 200, {"ok": True, "path": path, "mode": mode}
+    return True, 200, {"ok": True, "path": path, "mode": mode,
+                       "version": meta.get("version"), "upgraded": bool(upgrade)}
 
 
 def _uninstall_marketplace_plugin(path: str):
@@ -3560,6 +3884,57 @@ class AdminHandler(http.server.SimpleHTTPRequestHandler):
         entries = _list_download_entries(download_root, target, dataset_id, rel)
         self._json_nostore(200, {"dataset": dataset_id, "path": rel, "available": True, "entries": entries})
 
+    def _send_bytes(self, data: bytes, content_type: str, filename: str, inline: bool):
+        """Send an already-fetched body.
+
+        Documents are proxied rather than linked straight to GitHub: raw.github
+        serves them as octet-stream, so a browser would download instead of
+        display, and a cross-origin frame would be refused by the CSP anyway.
+        Coming back through our own origin, "inline" previews in an <iframe>.
+        """
+        self.send_response(200)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(data)))
+        safe = filename.replace('"', "")
+        self.send_header("Content-Disposition",
+                         f'{"inline" if inline else "attachment"}; filename="{safe}"')
+        self.send_header("Cache-Control", "private, max-age=300")
+        self.end_headers()
+        try:
+            self.wfile.write(data)
+        except (BrokenPipeError, ConnectionResetError):
+            pass
+
+    def _send_attachment(self, path: Path, filename: str):
+        """Stream a file back as a download.
+
+        Written by hand because neither _json nor _json_nostore can emit a binary
+        body, and both buffer whole. The pack is tens of megabytes, so it is copied
+        in chunks rather than read into memory. Do NOT add _cors_headers() here —
+        end_headers() already emits them, and duplicating headers was a real past bug.
+        """
+        try:
+            size = path.stat().st_size
+            fh = path.open("rb")
+        except OSError:
+            self._json(404, {"error": "Not found"})
+            return
+        with fh:
+            self.send_response(200)
+            self.send_header("Content-Type", "application/zip")
+            self.send_header("Content-Length", str(size))
+            # The filename is server-controlled (a glob match on our own directory),
+            # but quote it anyway so a future name with a space cannot split the header.
+            self.send_header("Content-Disposition",
+                             f'attachment; filename="{filename}"')
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            try:
+                shutil.copyfileobj(fh, self.wfile, 256 * 1024)
+            except (BrokenPipeError, ConnectionResetError):
+                # The operator cancelled the download; nothing to recover.
+                pass
+
     def end_headers(self):
         self._cors_headers()
         path_no_query = self.path.split('?')[0]
@@ -3875,7 +4250,7 @@ class AdminHandler(http.server.SimpleHTTPRequestHandler):
                 return
             if action in ("set_plugin", "update_apply", "update_ack",
                           "approve_plugin", "revoke_plugin",
-                          "install_plugin", "uninstall_plugin",
+                          "install_plugin", "update_plugin", "uninstall_plugin",
                           "repair_permissions"):
                 ok, status, payload = _authorize_write(
                     self.command, session, self.headers.get("X-CSRF-Token")
@@ -3911,11 +4286,44 @@ class AdminHandler(http.server.SimpleHTTPRequestHandler):
                 b = body or {}
                 ok2, st2, pl2 = _install_marketplace_plugin(b.get("id", ""), b.get("password", ""))
                 self._json(st2, pl2)
+            elif action == "update_plugin":
+                b = body or {}
+                ok2, st2, pl2 = _install_marketplace_plugin(b.get("id", ""), b.get("password", ""),
+                                                            upgrade=True)
+                self._json(st2, pl2)
             elif action == "uninstall_plugin":
                 ok2, st2, pl2 = _uninstall_marketplace_plugin((body or {}).get("path", ""))
                 self._json(st2, pl2)
             elif action == "version":
                 self._json(200, _version_info())
+            elif action == "pipeline_info":
+                self._json(200, _pipeline_info())
+            elif action == "pipeline_download":
+                edition = params.get("edition", "leger")
+                local = _pipeline_local(edition)
+                if local is None and edition == "leger":
+                    local = _pipeline_build_lite()
+                if local is None:
+                    self._json(404, {"error": "pipeline_unavailable", "edition": edition})
+                else:
+                    self._send_attachment(local, local.name)
+            elif action == "docs_list":
+                self._json_nostore(200, _docs_list(force=params.get("refresh") == "1"))
+            elif action == "docs_download":
+                name = params.get("file", "")
+                try:
+                    got = _doc_fetch(name)
+                except Exception as e:
+                    self._json(502, {"error": "fetch_failed", "detail": str(e)[:160]})
+                    return
+                if got is None:
+                    self._json(404, {"error": "unknown_document"})
+                else:
+                    body, ctype = got
+                    info = _doc_parse(name) or {}
+                    inline = (params.get("inline") == "1"
+                              and info.get("ext") in DOC_INLINE_OK)
+                    self._send_bytes(body, ctype, name, inline)
             elif action == "permissions_status":
                 self._json(200, _permissions_report())
             elif action == "repair_permissions":

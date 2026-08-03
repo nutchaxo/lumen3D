@@ -46,3 +46,9 @@ marketplace/**/*.sig -text
 # Vendored Mozilla CA bundle: keep the bytes exactly as published upstream
 # (no CRLF rewriting) so the shipped trust store is reproducible.
 api/ca-bundle.pem    -text
+
+# Demo inputs of the downloadable processing pack. They are hashed into the pack's
+# MANIFEST.sha256, which RUN.bat re-verifies on the technician's machine before it
+# will run anything — so a line-ending rewrite on any checkout would make a
+# perfectly good pack fail its own integrity check.
+preprocess/examples/** -text

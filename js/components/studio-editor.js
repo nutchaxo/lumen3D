@@ -56,6 +56,11 @@ const StudioEditor = (() => {
   let _spaceDown = false;
   let _pointerStart = null;
   let _rotationStart = null;
+  // Fingers currently on the canvas, and the two-finger navigation state they drive
+  // ({ startDist, startZoom, midX, midY }, null when idle). A mouse is never in here:
+  // one device, one pointer.
+  const _touchPointers = new Map();
+  let _viewGesture = null;
   let _draggedLayerId = null;
   let _history = [];
   let _future = [];
@@ -710,8 +715,56 @@ const StudioEditor = (() => {
     ctx.restore();
   }
 
+  // ── Two-finger navigation (touch) ───────────────────────────────────────────
+  // Here one finger DRAWS, so navigation belongs entirely to the second: two fingers
+  // move and zoom the figure, and no gesture ever produces a mark.
+  function _twoFingerFrame() {
+    const [a, b] = [..._touchPointers.values()];
+    const rect = _canvas.getBoundingClientRect();
+    return {
+      dist: Math.max(1e-3, Math.hypot(b.x - a.x, b.y - a.y)),
+      midX: (a.x + b.x) / 2 - rect.left,
+      midY: (a.y + b.y) / 2 - rect.top
+    };
+  }
+
+  // Re-anchored whenever the finger count changes: the measured pair changes with it,
+  // and a stale reference spacing would make the figure jump.
+  function _seedViewGesture() {
+    const f = _twoFingerFrame();
+    _viewGesture = { startDist: f.dist, startZoom: _doc.viewport.zoom, midX: f.midX, midY: f.midY };
+  }
+
+  // A second finger means navigation, not annotation, so whatever the first one had
+  // begun is closed out cleanly: a draft shape is dropped (it only becomes a layer on
+  // release anyway), while an edit already written into a layer is committed so it
+  // stays undoable instead of being silently reverted. A multi-click angle in progress
+  // is left alone — it already survives pointer releases by design.
+  function _abandonPointerAction() {
+    _isRotating = false;
+    _rotationStart = null;
+    _isPanning = false;
+    _pointerStart = null;
+    _canvas.style.cursor = 'default';
+    if (!_drawing || _drawing.type === 'angle') return;
+    const wasEditingLayer = _drawing.mode === 'move' || _drawing.mode === 'handle';
+    _drawing = null;
+    if (wasEditingLayer) {
+      _pushHistory('Edit layer');
+      _renderAll();
+    } else {
+      _draw();
+    }
+  }
+
   function _onPointerDown(event) {
     if (!_doc || !_sliceImage) return;
+    if (event.pointerType !== 'mouse') _touchPointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
+    if (_touchPointers.size >= 2) {
+      _abandonPointerAction();
+      _seedViewGesture();
+      return;
+    }
     try {
       _canvas.setPointerCapture?.(event.pointerId);
     } catch {
@@ -788,6 +841,28 @@ const StudioEditor = (() => {
 
   function _onPointerMove(event) {
     if (!_doc || !_sliceImage) return;
+    if (_touchPointers.has(event.pointerId)) _touchPointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
+    if (_viewGesture && _touchPointers.size >= 2) {
+      const f = _twoFingerFrame();
+      const v = _doc.viewport;
+      const zoom = Math.max(0.02, Math.min(32, _viewGesture.startZoom * (f.dist / _viewGesture.startDist)));
+      // The image point under the midpoint is invariant for the whole gesture — what
+      // the fingers hold stays under them. From screen = R(rot)·(image − centre)·zoom
+      // + pan, pinning that point gives pan' = mid' − (mid − pan)·(zoom'/zoom): pure
+      // travel when the spacing holds, anchored zoom when it changes, exact when both
+      // move at once. Rotation drops out of the equation, so a rotated figure is
+      // handled without a special case (and the gesture never rotates by itself —
+      // that stays on the slider, where a figure's framing belongs).
+      const k = zoom / v.zoom;
+      v.panX = f.midX - (_viewGesture.midX - v.panX) * k;
+      v.panY = f.midY - (_viewGesture.midY - v.panY) * k;
+      v.zoom = zoom;
+      _viewGesture.midX = f.midX;
+      _viewGesture.midY = f.midY;
+      _draw();
+      _renderCompareMenus();
+      return;
+    }
     if (_isRotating && _rotationStart) {
       const dx = event.clientX - _rotationStart.x;
       _doc.viewport.rotation = _rotationStart.rotation + (dx * 0.008);
@@ -843,7 +918,16 @@ const StudioEditor = (() => {
     _draw();
   }
 
-  function _onPointerUp() {
+  function _onPointerUp(event) {
+    if (event && event.pointerId !== undefined) _touchPointers.delete(event.pointerId);
+    if (_viewGesture) {
+      // Down to one finger ends the gesture, and that finger stays inert until it is
+      // lifted: handing it back to the active tool would draw something the user only
+      // meant as navigation. A third finger lifting just re-anchors on the pair left.
+      if (_touchPointers.size >= 2) { _seedViewGesture(); return; }
+      _viewGesture = null;
+      return;
+    }
     if (_isRotating) {
       _isRotating = false;
       _rotationStart = null;

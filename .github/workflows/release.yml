@@ -31,11 +31,23 @@ jobs:
           LUMEN_SIGNING_KEY: ${{ secrets.LUMEN_SIGNING_KEY }}
         run: python tools/build_release.py --version "${GITHUB_REF_NAME#v}" --out dist --commit "${GITHUB_SHA}"
 
+      - name: Build the complete processing pack (offline edition)
+        # ~70 MB with a full CPython runtime and every scientific dependency
+        # pre-installed — far too large for the web release zip (which carries the
+        # light edition), so it rides as a separate release asset and the admin
+        # panel links the operator's browser straight to it.
+        #
+        # The wheels are Windows/cp312 and are only DOWNLOADED here, never executed,
+        # so resolving them from this Linux runner is correct.
+        run: python tools/build_pipeline_bundle.py --full --out dist --version "${GITHUB_REF_NAME#v}"
+
       - name: Collect release assets (include SHA256SUMS.sig when present)
         run: |
           set -e
           ASSETS="dist/lumen3d-web-${GITHUB_REF_NAME#v}.zip dist/SHA256SUMS"
           if [ -f dist/SHA256SUMS.sig ]; then ASSETS="$ASSETS dist/SHA256SUMS.sig"; fi
+          PACK="dist/lumen3d-pipeline-complet-${GITHUB_REF_NAME#v}.zip"
+          if [ -f "$PACK" ]; then ASSETS="$ASSETS $PACK"; fi
           echo "RELEASE_ASSETS=$ASSETS" >> "$GITHUB_ENV"
 
       - name: Create GitHub release

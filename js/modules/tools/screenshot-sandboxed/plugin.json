@@ -11,7 +11,17 @@
   "order": 31,
   "description": "Reference sandboxed plugin: captures the viewer canvas and downloads it as PNG, running entirely inside a null-origin iframe via capability RPC — no DOM, ctx, or admin-API access.",
   "sandbox": true,
-  "sandboxCapabilities": ["toolbar.addButton", "viewer.getCanvasBlob", "viewer.getInfo", "ui.download", "ui.toast"],
+  "sandboxCapabilities": [
+    "toolbar.addButton",
+    "viewer.getCanvasBlob",
+    "viewer.getInfo",
+    "ui.download",
+    "ui.toast"
+  ],
   "i18nTitle": "title",
-  "i18nLanguages": ["en", "fr"]
+  "i18nLanguages": [
+    "en",
+    "fr",
+    "nl"
+  ]
 }

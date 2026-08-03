@@ -1,0 +1,525 @@
+@echo off
+chcp 65001 >nul
+setlocal EnableExtensions EnableDelayedExpansion
+title @@@BRAND@@@ - Pipelines de traitement
+
+rem #############################################################################
+rem #  LANCEUR DU PACK DE TRAITEMENT @@@BRAND@@@
+rem #
+rem #  Verifie l'integrite du pack, prepare un Python utilisable, installe les
+rem #  dependances au besoin, puis lance le pipeline choisi. Tout est relatif a
+rem #  ce .bat : le dossier peut etre deplace, renomme ou copie sur une cle USB.
+rem #
+rem #  Deux editions du pack existent :
+rem #    - COMPLETE : .runtime\python est deja livre, dependances incluses.
+rem #                 Aucun acces reseau n'est necessaire.
+rem #    - LEGERE   : Python est detecte sur le poste, ou telecharge au 1er lancement.
+rem #
+rem #  GENERE par tools/build_pipeline_bundle.py -- NE PAS editer a la main.
+rem #############################################################################
+
+set "BUNDLE_VERSION=@@@BUNDLE_VERSION@@@"
+set "PP_VERSION=@@@PP_VERSION@@@"
+set "FLAVOR=@@@FLAVOR@@@"
+set "PY_VERSION=@@@PY_VERSION@@@"
+set "REQUIRED_DEPS=@@@DEPS@@@"
+set "IMPORT_CHECK=@@@IMPORT_CHECK@@@"
+set "PY_URL=https://www.python.org/ftp/python/@@@PY_VERSION@@@/python-@@@PY_VERSION@@@-embed-amd64.zip"
+set "GETPIP_URL=https://bootstrap.pypa.io/get-pip.py"
+
+rem ===== Couleurs ANSI (capture du caractere ESC 0x1B) ========================
+for /f %%a in ('echo prompt $E ^| cmd') do set "E=%%a"
+set "R=!E![0m"
+set "TITLE=!E![1;96m"
+set "ACC=!E![96m"
+set "OK=!E![92m"
+set "ERR=!E![91m"
+set "WARN=!E![93m"
+set "DIM=!E![90m"
+set "BOLD=!E![1m"
+
+rem ===== Chemins (tous relatifs au .bat) ======================================
+set "BATDIR=%~dp0"
+if "!BATDIR:~-1!"=="\" set "BATDIR=!BATDIR:~0,-1!"
+set "RUNTIME=!BATDIR!\.runtime"
+set "PYDIR=!RUNTIME!\python"
+set "LOCALPY=!PYDIR!\python.exe"
+set "PIPELINE=!BATDIR!\pipeline"
+set "TRACKING=!BATDIR!\tracking"
+set "INPUT=!BATDIR!\input"
+set "OUTPUT=!BATDIR!\output"
+
+set "PY="
+set "PY_IS_LOCAL="
+set "MODE=run"
+set "SKIP_HASH="
+
+rem ===== Analyse des arguments ================================================
+:parse_args
+if "%~1"=="" goto :after_args
+if /i "%~1"=="--check"     set "MODE=check"  & shift & goto :parse_args
+if /i "%~1"=="--no-verify" set "SKIP_HASH=1" & shift & goto :parse_args
+if /i "%~1"=="--help" goto :show_help
+if /i "%~1"=="-h"     goto :show_help
+echo Argument inconnu : %~1
+goto :show_help
+:after_args
+
+call :banner
+
+rem ===== [1/4] Integrite du pack ==============================================
+call :step 1 4 "Integrite du pack"
+call :verify_manifest
+if errorlevel 1 goto :fatal
+
+rem ===== [2/4] Environnement Python ===========================================
+call :step 2 4 "Environnement Python"
+call :ensure_python
+if errorlevel 1 goto :fatal
+
+rem ===== [3/4] Dependances Python =============================================
+call :step 3 4 "Dependances Python"
+call :ensure_deps
+if errorlevel 1 goto :fatal
+
+if "!MODE!"=="check" (
+    echo.
+    echo    !OK!Environnement pret.!R! Python : !DIM!!PY!!R!
+    goto :end
+)
+
+rem ===== [4/4] Traitement =====================================================
+call :step 4 4 "Traitement"
+call :menu
+goto :end
+
+
+rem ############################################################################
+rem #  SOUS-ROUTINES
+rem ############################################################################
+
+:banner
+echo.
+echo !TITLE!================================================================================!R!
+echo !TITLE!   @@@BRAND@@@  ^|  Pipelines de traitement  ^|  pack v!BUNDLE_VERSION! (!FLAVOR!)!R!
+echo !TITLE!================================================================================!R!
+echo !DIM!   Preprocessing de volumes Imaris (.ims)  +  Analyse de tracking (Excel)!R!
+exit /b 0
+
+:step
+echo.
+echo !ACC![%~1/%~2]!R! !BOLD!%~3!R!
+echo !DIM!--------------------------------------------------------------------------------!R!
+exit /b 0
+
+:ok
+echo    !OK![OK]!R! %~1
+exit /b 0
+
+:info
+echo    !DIM!-!R!  %~1
+exit /b 0
+
+:warnmsg
+echo    !WARN![*]!R! %~1
+exit /b 0
+
+:errmsg
+echo    !ERR![X]!R! %~1
+exit /b 0
+
+
+rem ---- Verifie MANIFEST.sha256 : rien ne manque, rien n'a ete altere ---------
+rem  Le manifeste couvre les fichiers du pipeline (scripts, exemples, docs) mais
+rem  PAS .runtime\ : un runtime pre-installe compte des milliers de fichiers et
+rem  certutil les hacherait en plusieurs minutes. Son integrite est verifiee
+rem  fonctionnellement a l'etape 3 par le test d'import, qui est un controle plus
+rem  utile ici qu'une empreinte (une DLL correcte mais incompatible passerait le
+rem  hachage et echouerait a l'import).
+:verify_manifest
+set "_man=!BATDIR!\MANIFEST.sha256"
+if not exist "!_man!" (
+    call :errmsg "MANIFEST.sha256 introuvable : pack incomplet ou corrompu."
+    call :errmsg "Retelechargez l'archive depuis le panneau d'administration."
+    exit /b 1
+)
+if "!SKIP_HASH!"=="1" (
+    call :warnmsg "Verification des empreintes ignoree (--no-verify)."
+    exit /b 0
+)
+
+set "_miss=0"
+set "_bad=0"
+set "_n=0"
+for /f "usebackq tokens=1,* delims= " %%h in ("!_man!") do (
+    set "_hash=%%h"
+    set "_rel=%%i"
+    rem Le format coreutils prefixe le nom d'un '*' en mode binaire.
+    if "!_rel:~0,1!"=="*" set "_rel=!_rel:~1!"
+    set "_path=!BATDIR!\!_rel:/=\!"
+    set /a "_n+=1"
+    if not exist "!_path!" (
+        call :errmsg "MANQUANT : !_rel!"
+        set /a "_miss+=1"
+    ) else (
+        set "_got="
+        for /f "skip=1 tokens=*" %%c in ('certutil -hashfile "!_path!" SHA256 2^>nul') do (
+            if not defined _got set "_got=%%c"
+        )
+        rem certutil intercale des espaces selon la version de Windows.
+        set "_got=!_got: =!"
+        if /i not "!_got!"=="!_hash!" (
+            call :errmsg "ALTERE : !_rel!"
+            set /a "_bad+=1"
+        )
+    )
+)
+
+if !_miss! gtr 0 (
+    call :errmsg "!_miss! fichier(s) manquant(s) sur !_n!."
+    exit /b 1
+)
+if !_bad! gtr 0 (
+    call :errmsg "!_bad! fichier(s) altere(s) sur !_n!."
+    call :errmsg "Retelechargez l'archive : le pack n'est pas fiable en l'etat."
+    exit /b 1
+)
+call :ok "!_n! fichiers verifies (SHA-256), aucun manquant."
+exit /b 0
+
+
+rem ---- Prepare un interpreteur Python utilisable ----------------------------
+:ensure_python
+rem Edition COMPLETE : le runtime est livre pre-installe, rien a faire.
+if exist "!LOCALPY!" (
+    call :py_works "!LOCALPY!"
+    if not errorlevel 1 (
+        set "PY="!LOCALPY!""
+        set "PY_IS_LOCAL=1"
+        call :ok "Python embarque !DIM!(.runtime\python)!R!"
+        exit /b 0
+    )
+    call :warnmsg "Le Python embarque est present mais inutilisable."
+)
+
+rem Edition LEGERE : on accepte un Python systeme compatible.
+for %%C in ("py -3.12" "py -3.11" "py -3.13" "py -3.10" "py -3" "python" "python3") do (
+    if not defined PY (
+        call :py_works %%~C
+        if not errorlevel 1 (
+            set "PY=%%~C"
+            for /f "tokens=*" %%v in ('%%~C -c "import sys;print(sys.version.split()[0])" 2^>nul') do (
+                call :ok "Python systeme detecte !DIM!(%%~C, %%v)!R!"
+            )
+        )
+    )
+)
+if defined PY exit /b 0
+
+call :warnmsg "Aucun Python compatible (3.9 a 3.13) n'a ete trouve sur ce poste."
+echo.
+set "_ans="
+set /p "_ans=   Telecharger et installer un Python local (~11 Mo) ? [O/n] : "
+if /i "!_ans!"=="n" (
+    call :errmsg "Python est indispensable. Interruption."
+    exit /b 1
+)
+call :install_python_download
+if errorlevel 1 exit /b 1
+set "PY="!LOCALPY!""
+set "PY_IS_LOCAL=1"
+exit /b 0
+
+rem ---- Valide un interpreteur : Python 3.9 a 3.13 ---------------------------
+rem  Tester seulement la version MAJEURE laisserait passer un 3.7 ou un 3.14,
+rem  pour lesquels numpy/scipy/pandas n'ont pas de roue binaire disponible.
+:py_works
+%* -c "import sys; sys.exit(0 if (3,9) <= sys.version_info[:2] <= (3,13) else 1)" >nul 2>&1
+exit /b %errorlevel%
+
+rem ---- Telecharge le Python embarque depuis python.org (edition legere) -----
+:install_python_download
+if not exist "!RUNTIME!" mkdir "!RUNTIME!" >nul 2>&1
+if not exist "!PYDIR!" mkdir "!PYDIR!" >nul 2>&1
+call :info "Telechargement de Python !PY_VERSION!..."
+curl -L --fail -o "!RUNTIME!\python-embed.zip" "!PY_URL!"
+if errorlevel 1 (
+    call :errmsg "Telechargement impossible (pas d'acces reseau ?)."
+    call :errmsg "Demandez l'edition COMPLETE du pack, qui embarque deja Python."
+    exit /b 1
+)
+call :unzip "!RUNTIME!\python-embed.zip" "!PYDIR!"
+del "!RUNTIME!\python-embed.zip" >nul 2>&1
+if not exist "!LOCALPY!" (
+    call :errmsg "Extraction impossible."
+    exit /b 1
+)
+call :write_pth
+call :info "Installation de pip..."
+curl -L --fail -o "!RUNTIME!\get-pip.py" "!GETPIP_URL!"
+if errorlevel 1 (
+    call :errmsg "Telechargement de pip impossible."
+    exit /b 1
+)
+"!LOCALPY!" "!RUNTIME!\get-pip.py" --no-warn-script-location
+set "_rc=!errorlevel!"
+del "!RUNTIME!\get-pip.py" >nul 2>&1
+if not "!_rc!"=="0" (
+    call :errmsg "Installation de pip echouee."
+    exit /b 1
+)
+call :ok "Python !PY_VERSION! + pip installes"
+exit /b 0
+
+rem ---- Extraction d'un zip : tar si disponible, sinon PowerShell ------------
+rem  tar.exe n'existe que depuis Windows 10 1803 ; Expand-Archive couvre le reste.
+:unzip
+tar -xf "%~1" -C "%~2" >nul 2>&1
+if not errorlevel 1 exit /b 0
+powershell -NoProfile -ExecutionPolicy Bypass -Command "Expand-Archive -LiteralPath '%~1' -DestinationPath '%~2' -Force" >nul 2>&1
+exit /b %errorlevel%
+
+rem ---- Ecrit le ._pth de la distribution embarquee --------------------------
+rem  Deux pieges, tous deux corriges ici plutot que par le classique
+rem  "decommenter import site" :
+rem   1. Reactiver site ramene %APPDATA%\Python\PythonXY\site-packages AVANT le
+rem      site-packages du pack : les modules du poste gagnent sur les notres.
+rem   2. La seule PRESENCE d'un ._pth met Python en mode isole, et le dossier du
+rem      script n'est alors PAS ajoute a sys.path -- ce qui casse les imports
+rem      freres de Analysis.py (export_html, export_mesh, surface_reconstruction).
+rem  On ecrit donc explicitement les chemins voulus, et on laisse site desactive.
+:write_pth
+rem La distribution embarquee nomme son zip d'apres sa version (python312.zip) ;
+rem on releve le nom reel plutot que de le supposer, puis on remplace le ._pth
+rem livre par le notre.
+set "_pyzip=python312.zip"
+for %%Z in ("!PYDIR!\python3*.zip") do set "_pyzip=%%~nxZ"
+del "!PYDIR!\python3*._pth" >nul 2>&1
+> "!PYDIR!\python312._pth" (
+    echo !_pyzip!
+    echo .
+    echo Lib\site-packages
+    echo ..\..\tracking\SCRIPTS
+    echo #import site
+)
+exit /b 0
+
+
+rem ---- Installe / verifie les dependances ------------------------------------
+rem  Un environnement virtuel local est cree quand l'interpreteur retenu est
+rem  celui du POSTE : installer nos versions dans le Python de l'utilisateur
+rem  modifierait ses autres projets. Le Python embarque, lui, n'appartient qu'a
+rem  ce pack, donc on y installe directement.
+:ensure_deps
+set "VENVPY=!RUNTIME!\venv\Scripts\python.exe"
+if exist "!VENVPY!" (
+    "!VENVPY!" -c "!IMPORT_CHECK!" >nul 2>&1
+    if not errorlevel 1 (
+        set "PY="!VENVPY!""
+        call :ok "Dependances presentes !DIM!(environnement local .runtime\venv)!R!"
+        exit /b 0
+    )
+)
+
+!PY! -c "!IMPORT_CHECK!" >nul 2>&1
+if not errorlevel 1 (
+    call :ok "Dependances presentes !DIM!(!REQUIRED_DEPS!)!R!"
+    exit /b 0
+)
+
+if "!FLAVOR!"=="complete" (
+    call :errmsg "Le runtime embarque est incomplet : reinstallez le pack."
+    exit /b 1
+)
+
+rem Interpreteur du poste : on s'isole dans .runtime\venv avant d'installer.
+if not "!PY_IS_LOCAL!"=="1" if not exist "!VENVPY!" (
+    call :info "Creation d'un environnement local isole (.runtime\venv)..."
+    !PY! -m venv "!RUNTIME!\venv" >nul 2>&1
+    if exist "!VENVPY!" (
+        set "PY="!VENVPY!""
+        call :ok "Environnement local cree !DIM!(le Python du poste n'est pas modifie)!R!"
+    ) else (
+        call :warnmsg "Creation impossible : installation dans le Python detecte."
+    )
+)
+
+!PY! -m pip --version >nul 2>&1
+if errorlevel 1 !PY! -m ensurepip --default-pip >nul 2>&1
+!PY! -m pip --version >nul 2>&1
+if errorlevel 1 (
+    call :errmsg "pip est indisponible pour cet interpreteur."
+    exit /b 1
+)
+
+call :info "Installation des dependances depuis PyPI (connexion requise)..."
+!PY! -m pip install --no-warn-script-location !REQUIRED_DEPS!
+if errorlevel 1 (
+    call :errmsg "Installation des dependances echouee."
+    call :errmsg "Sans reseau, utilisez l'edition COMPLETE du pack."
+    exit /b 1
+)
+
+!PY! -c "!IMPORT_CHECK!" >nul 2>&1
+if errorlevel 1 (
+    call :errmsg "Les dependances restent inutilisables apres installation."
+    exit /b 1
+)
+call :ok "Dependances installees !DIM!(!REQUIRED_DEPS!)!R!"
+exit /b 0
+
+
+rem ---- Menu principal --------------------------------------------------------
+:menu
+echo.
+echo    !BOLD!Que voulez-vous faire ?!R!
+echo.
+echo      !ACC![1]!R! Preprocessing de volumes Imaris  !DIM!(.ims  ->  output\)!R!
+echo      !ACC![2]!R! Analyse de tracking Imaris       !DIM!(Excel ->  tracking\OUTPUT\)!R!
+echo      !ACC![3]!R! Attacher un tracking a un dataset deja traite
+echo      !ACC![4]!R! Verifier l'environnement seulement
+echo      !ACC![0]!R! Quitter
+echo.
+set "_choice="
+set /p "_choice=   Votre choix [1] : "
+if "!_choice!"=="" set "_choice=1"
+
+if "!_choice!"=="1" goto :run_preprocess
+if "!_choice!"=="2" goto :run_tracking
+if "!_choice!"=="3" goto :run_attach
+if "!_choice!"=="4" (
+    echo.
+    call :ok "Environnement pret. Python : !DIM!!PY!!R!"
+    exit /b 0
+)
+if "!_choice!"=="0" exit /b 0
+call :warnmsg "Choix invalide."
+goto :menu
+
+
+rem ---- [1] Preprocessing de volumes -----------------------------------------
+:run_preprocess
+echo.
+set "_in=!INPUT!"
+set "_out=!OUTPUT!"
+set "_ans="
+set /p "_ans=   Dossier des fichiers .ims [!_in!] : "
+if not "!_ans!"=="" set "_in=!_ans:"=!"
+set "_ans="
+set /p "_ans=   Dossier de sortie [!_out!] : "
+if not "!_ans!"=="" set "_out=!_ans:"=!"
+
+if not exist "!_in!" (
+    call :errmsg "Dossier introuvable : !_in!"
+    exit /b 1
+)
+set "_cnt=0"
+for %%F in ("!_in!\*.ims") do set /a "_cnt+=1"
+if "!_cnt!"=="0" (
+    call :warnmsg "Aucun fichier .ims dans !_in!"
+    set "_ans="
+    set /p "_ans=   Continuer quand meme ? [o/N] : "
+    if /i not "!_ans!"=="o" exit /b 0
+) else (
+    call :info "!_cnt! fichier(s) .ims detecte(s)."
+)
+
+set "_ans="
+set /p "_ans=   Generer aussi les archives de telechargement (plus long) ? [o/N] : "
+set "_extra="
+if /i "!_ans!"=="o" set "_extra=--with-downloads"
+
+echo.
+call :info "Lancement du preprocessing..."
+echo.
+set "PYTHONUNBUFFERED=1"
+set "PYTHONIOENCODING=utf-8"
+!PY! "!PIPELINE!\run_preprocess.py" --input "!_in!" --output "!_out!" !_extra!
+call :report %errorlevel% "!_out!"
+exit /b 0
+
+
+rem ---- [2] Analyse de tracking ----------------------------------------------
+rem  Analysis.py n'accepte aucun argument : il lit DATA\<echantillon>\*.xlsx a
+rem  cote de lui et ecrit dans OUTPUT\. Le repertoire courant doit donc etre
+rem  tracking\SCRIPTS.
+:run_tracking
+echo.
+set "_cnt=0"
+for /d %%D in ("!TRACKING!\DATA\*") do set /a "_cnt+=1"
+if "!_cnt!"=="0" (
+    call :errmsg "Aucun echantillon dans tracking\DATA\"
+    call :info  "Creez un dossier par echantillon et deposez-y l'export Excel Imaris."
+    exit /b 1
+)
+call :info "!_cnt! echantillon(s) detecte(s) dans tracking\DATA\"
+call :warnmsg "Le nom du .xlsx doit contenir l'intervalle, ex. 30min ; sinon le script le demandera."
+echo.
+set "PYTHONUNBUFFERED=1"
+set "PYTHONIOENCODING=utf-8"
+pushd "!TRACKING!\SCRIPTS"
+!PY! Analysis.py
+set "_rc=!errorlevel!"
+popd
+call :report !_rc! "!TRACKING!\OUTPUT"
+exit /b 0
+
+
+rem ---- [3] Rattachement d'un tracking a un dataset ---------------------------
+:run_attach
+echo.
+set "_trk="
+set /p "_trk=   Chemin du fichier .imaris_track : "
+set "_trk=!_trk:"=!"
+if not exist "!_trk!" (
+    call :errmsg "Fichier introuvable : !_trk!"
+    exit /b 1
+)
+set "_ds="
+set /p "_ds=   Dossier du dataset traite (contenant metadata.json) : "
+set "_ds=!_ds:"=!"
+if not exist "!_ds!\metadata.json" (
+    call :errmsg "metadata.json introuvable dans : !_ds!"
+    exit /b 1
+)
+echo.
+set "PYTHONIOENCODING=utf-8"
+!PY! "!PIPELINE!\5-tracking_importer.py" "!_trk!" "!_ds!"
+call :report %errorlevel% "!_ds!"
+exit /b 0
+
+
+rem ---- Compte rendu final ----------------------------------------------------
+:report
+echo.
+if "%~1"=="0" (
+    echo    !OK![TERMINE]!R! Resultats dans !BOLD!%~2!R!
+) else if "%~1"=="130" (
+    echo    !WARN![INTERROMPU]!R! Traitement arrete par l'utilisateur.
+) else (
+    echo    !ERR![ECHEC]!R! Code de sortie %~1. Lisez les messages ci-dessus.
+)
+exit /b 0
+
+
+:show_help
+echo.
+echo   RUN.bat [options]
+echo.
+echo     --check       Prepare et verifie l'environnement, sans rien traiter.
+echo     --no-verify   Saute le controle d'integrite SHA-256 (deconseille).
+echo     --help        Affiche cette aide.
+echo.
+goto :end
+
+:fatal
+echo.
+echo !ERR!================================================================================!R!
+echo !ERR!  Interruption : l'environnement n'est pas utilisable.!R!
+echo !ERR!================================================================================!R!
+
+:end
+echo.
+pause
+endlocal
+exit /b 0

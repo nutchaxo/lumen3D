@@ -10,6 +10,7 @@ import shutil
 import sys
 import tempfile
 import unittest
+import zipfile
 from pathlib import Path
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -100,8 +101,22 @@ class TestVersion(unittest.TestCase):
     def test_version_info_shape(self):
         info = dev_server._version_info()
         self.assertIn("web", info)
-        self.assertEqual(info["devServer"], dev_server.__version__)
+        self.assertIn("preprocess", info)
+        # The dev server's own version is deliberately not reported: it versions the
+        # serving tool, not the platform, and has no counterpart on a PHP host.
+        self.assertNotIn("devServer", info)
         self.assertEqual(info["repo"], dev_server.GITHUB_REPO)
+
+    def test_preprocess_version_comes_from_the_downloadable_pack(self):
+        """What the panel calls "Préprocessing" must be the version an operator can
+        actually download, which on a deployed host exists only inside the pack."""
+        pack = dev_server._pipeline_local("leger") or dev_server._pipeline_local("complet")
+        if pack is None:
+            self.skipTest("no pipeline pack built in this checkout")
+        with zipfile.ZipFile(pack) as zf:
+            name = next(n for n in zf.namelist() if n.endswith("VERSION.json"))
+            doc = json.loads(zf.read(name).decode("utf-8"))
+        self.assertEqual(dev_server._preprocess_version(), doc["preprocessVersion"])
 
 
 class TestHiddenCatalog(unittest.TestCase):

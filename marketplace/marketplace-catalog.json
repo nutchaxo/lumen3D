@@ -28,11 +28,11 @@
       "icon": null,
       "platformCompat": "1.x",
       "sandboxCapabilities": null,
-      "latestVersion": "1.0.0",
-      "assetUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/histogram/plugin-histogram-1.0.0.zip",
+      "latestVersion": "1.1.0",
+      "assetUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/histogram/plugin-histogram-1.1.0.zip",
       "sumsUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/histogram/SHA256SUMS",
       "sigUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/histogram/SHA256SUMS.sig",
-      "sha256": "ad62a7da238aa2ba41b5c3fff6d18c9923bd31fd909502345a7e9ae6db25fe06",
+      "sha256": "429d01ed41e711e3bf75a6c1e1abdfe0bc86abfc3344622095001d8fdd443005",
       "recommended": true
     },
     {

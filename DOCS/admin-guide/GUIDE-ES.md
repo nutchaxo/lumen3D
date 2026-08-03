@@ -43,7 +43,6 @@ Está escrito para alguien que **nunca ha visto este panel** y que **no sabe pro
 - [C. Pequeño glosario](#anexo-c--pequeño-glosario)
 
 ---
----
 
 # 1. Acceder al panel
 
@@ -1002,7 +1001,6 @@ Un editor sencillo, de maquetación fija, para el texto legal del sitio.
 > 1. la página permanece invisible mientras no marque **«Mostrar Aviso legal»** en **Identidad → Navegación**;
 > 2. el contenido jurídico depende de su país y de su institución — consulte al servicio competente en vez de copiar una plantilla encontrada en internet.
 
----
 ---
 
 # Anexo A — Primera instalación

@@ -43,7 +43,6 @@ It is written for someone who has **never seen this panel** and who **does not w
 - [C. Small glossary](#appendix-c--small-glossary)
 
 ---
----
 
 # 1. Signing in to the panel
 
@@ -1002,7 +1001,6 @@ A simple, fixed-layout editor for the site's legal text.
 > 1. the page stays invisible until you tick **"Show Legal"** under **Identity → Navigation**;
 > 2. legal content depends on your country and your institution — talk to the relevant department rather than copying a template found online.
 
----
 ---
 
 # Appendix A — First-time setup

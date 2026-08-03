@@ -43,7 +43,6 @@ Het is geschreven voor iemand die **dit paneel nog nooit heeft gezien** en die *
 - [C. Kleine woordenlijst](#bijlage-c--kleine-woordenlijst)
 
 ---
----
 
 # 1. Inloggen op het paneel
 
@@ -1002,7 +1001,6 @@ Een eenvoudige editor met vaste opmaak, voor de juridische tekst van de site.
 > 1. de pagina blijft onzichtbaar zolang u **"Juridisch tonen"** niet hebt aangevinkt onder **Identiteit → Navigatie**;
 > 2. juridische inhoud hangt af van uw land en uw instelling — overleg met de bevoegde dienst in plaats van een online gevonden sjabloon over te nemen.
 
----
 ---
 
 # Bijlage A — Eerste installatie

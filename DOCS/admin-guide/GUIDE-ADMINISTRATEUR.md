@@ -43,7 +43,6 @@ Il est écrit pour quelqu'un qui **n'a jamais vu ce panneau** et qui **ne sait p
 - [C. Petit glossaire](#annexe-c--petit-glossaire)
 
 ---
----
 
 # 1. Se connecter au panneau
 
@@ -1002,7 +1001,6 @@ Un éditeur simple, à mise en page fixe, pour le texte légal du site.
 > 1. la page reste invisible tant que vous n'avez pas coché **« Afficher Mentions légales »** dans **Identité → Navigation** ;
 > 2. le contenu juridique dépend de votre pays et de votre institution — rapprochez-vous du service compétent plutôt que de recopier un modèle trouvé en ligne.
 
----
 ---
 
 # Annexe A — Première installation

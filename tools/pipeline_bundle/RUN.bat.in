@@ -374,8 +374,11 @@ rem ---- Menu principal --------------------------------------------------------
 echo.
 echo    !BOLD!Que voulez-vous faire ?!R!
 echo.
-echo      !ACC![1]!R! Preprocessing de volumes Imaris  !DIM!(.ims  ->  output\)!R!
-echo      !ACC![2]!R! Analyse de tracking Imaris       !DIM!(Excel ->  tracking\OUTPUT\)!R!
+rem Le '>' doit etre echappe : cmd le lit comme une redirection AVANT l'expansion
+rem retardee, la cible devient "output\" et la ligne meurt en "syntaxe du nom de
+rem fichier incorrecte" au lieu de s'afficher.
+echo      !ACC![1]!R! Preprocessing de volumes Imaris  !DIM!(.ims  -^>  output\)!R!
+echo      !ACC![2]!R! Analyse de tracking Imaris       !DIM!(Excel -^>  tracking\OUTPUT\)!R!
 echo      !ACC![3]!R! Attacher un tracking a un dataset deja traite
 echo      !ACC![4]!R! Verifier l'environnement seulement
 echo      !ACC![0]!R! Quitter

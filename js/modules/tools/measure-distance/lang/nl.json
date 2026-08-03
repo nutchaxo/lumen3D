@@ -1,0 +1,15 @@
+{
+  "title": "Afstand meten",
+  "calibMissing": "De fysieke kalibratie ontbreekt voor deze dataset. Afstandsmeting vereist gekalibreerde voxelmetadata.",
+  "noPoint": "Er is geen gekalibreerd punt in het volume gevonden.",
+  "measureN": "Meting {n}",
+  "labelPlaceholder": "Label",
+  "hidden": "Verborgen",
+  "noMeasure": "Nog geen opgeslagen meting.",
+  "clickTwo": "Klik twee punten op het oppervlak van het embryo aan.",
+  "pointA": "Punt A",
+  "clickSecond": "Klik een tweede punt aan om de afstand te meten.",
+  "distance": "Afstand",
+  "deltaZ": "Delta Z",
+  "measuredBetween": "Gemeten tussen twee aangeklikte oppervlaktepunten in gekalibreerde fysieke coördinaten."
+}

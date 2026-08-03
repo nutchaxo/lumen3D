@@ -1,0 +1,17 @@
+{
+  "title": "Blokdiagnose (grenzen van de blokken)",
+  "aria": "Overlay voor blokdiagnose aan/uit",
+  "noBricks": "Deze dataset heeft geen blokgegevens om te bekijken.",
+  "noVolume": "Volume nog niet klaar — laad het voordat u de blokdiagnose inschakelt.",
+  "tipId": "Blok",
+  "tipSize": "Grootte",
+  "tipVox": "vox",
+  "tipStored": "Opgeslagen",
+  "tipFile": "Bestand",
+  "tipChannels": "kanalen",
+  "tipLod": "LOD",
+  "tipDepth": "overlap",
+  "copied": "Blokmetadata naar het klembord gekopieerd",
+  "hintCopy": "Klik om te kopiëren",
+  "hintCycle": "Ctrl + scrollen: diepte"
+}

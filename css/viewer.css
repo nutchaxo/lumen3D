@@ -397,6 +397,12 @@ body {
   padding: 10px 0 16px;
   border-radius: var(--radius-sm);
   overflow: visible;
+  /* Horizontal drags belong to the level handles, vertical ones still scroll the
+     sidebar. Left to its default the browser claims the gesture as a scroll as soon
+     as a finger wobbles off-axis, cancelling the drag mid-course. */
+  touch-action: pan-y;
+  user-select: none;
+  -webkit-user-select: none;
 }
 
 .histogram-band {
@@ -445,6 +451,18 @@ body {
   box-shadow: var(--shadow-sm);
   cursor: ew-resize;
   z-index: 3;
+  /* A grabbed handle owns the gesture on both axes — the wobble of a finger must
+     never hand it back to the scroller mid-drag. */
+  touch-action: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* Pressable area, deliberately larger than the pill it surrounds: the handle stays
+   visually thin while a fingertip still catches it. */
+.hist-handle::before {
+  content: "";
+  position: absolute;
+  inset: -10px -9px;
 }
 
 .hist-handle::after {
@@ -459,6 +477,25 @@ body {
   height: 54px;
   top: 3px;
   background: color-mix(in srgb, var(--color-primary) 26%, var(--bg-surface));
+}
+
+/* Touch-first devices: a wider handle, still centred on its value — the plugin
+   positions it with `left: calc(x% - 6px)`, half of the 12 px base width, so the
+   extra width is compensated by a negative margin rather than by a JS change (an
+   older marketplace build of the plugin must keep working against this stylesheet). */
+@media (pointer: coarse) {
+  .hist-handle {
+    width: 22px;
+    margin-left: -5px;
+  }
+
+  .hist-handle::before {
+    inset: -14px -12px;
+  }
+
+  .hist-handle::after {
+    inset: 14px 9px;
+  }
 }
 
 .channel-advanced-row {
@@ -931,6 +968,10 @@ body.viewer-iframe .canvas-overlay {
   border: 1px solid var(--border-subtle);
   position: relative;
   cursor: pointer;
+  /* Scrubbing is a drag, not a scroll: without this the browser steals the gesture
+     and cancels the pointer as soon as the finger drifts vertically. */
+  touch-action: none;
+  -webkit-tap-highlight-color: transparent;
 }
 
 .scrubber-track.scrubber-stepped {

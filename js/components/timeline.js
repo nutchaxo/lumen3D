@@ -227,31 +227,39 @@ const Timeline = (() => {
       togglePlay();
     });
     
-    let isDragging = false;
-    
+    let _dragPointerId = null;
+
+    const _scrubTo = (clientX) => {
+      const rect = scrubberTrack.getBoundingClientRect();
+      const pct = Math.max(0, Math.min(1, (clientX - rect.left) / Math.max(1, rect.width)));
+      setFrame(pct * (_totalFrames - 1), false, true);
+    };
+
     scrubberTrack.addEventListener('pointerdown', (e) => {
-      isDragging = true;
+      if (e.button > 0) return;
+      e.preventDefault();
+      _dragPointerId = e.pointerId;
       pause();
-      const rect = scrubberTrack.getBoundingClientRect();
-      const pct = Math.max(0, Math.min(1, (e.clientX - rect.left) / Math.max(1, rect.width)));
-      setFrame(pct * (_totalFrames - 1), false, true);
-      scrubberTrack.setPointerCapture(e.pointerId);
+      _scrubTo(e.clientX);
+      try { scrubberTrack.setPointerCapture(e.pointerId); } catch (_) { /* pointer already gone */ }
     });
-    
+
     scrubberTrack.addEventListener('pointermove', (e) => {
-      if (!isDragging) return;
-      const rect = scrubberTrack.getBoundingClientRect();
-      const pct = Math.max(0, Math.min(1, (e.clientX - rect.left) / Math.max(1, rect.width)));
-      setFrame(pct * (_totalFrames - 1), false, true);
+      if (e.pointerId !== _dragPointerId) return;
+      _scrubTo(e.clientX);
     });
-    
-    scrubberTrack.addEventListener('pointerup', (e) => {
-      if (isDragging) {
-        isDragging = false;
-        scrubberTrack.releasePointerCapture(e.pointerId);
-        setFrame(_currentFrame, true, true);
-      }
-    });
+
+    // pointercancel matters as much as pointerup on touch: the browser can claim the
+    // gesture (scroll, back-swipe) and then no pointerup ever comes — the scrubber
+    // would stay armed and keep following the next unrelated move.
+    const _endScrub = (e) => {
+      if (e.pointerId !== _dragPointerId) return;
+      _dragPointerId = null;
+      try { scrubberTrack.releasePointerCapture(e.pointerId); } catch (_) { /* already released */ }
+      setFrame(_currentFrame, true, true);
+    };
+    scrubberTrack.addEventListener('pointerup', _endScrub);
+    scrubberTrack.addEventListener('pointercancel', _endScrub);
 
     if (sliderSpeed) {
       sliderSpeed.addEventListener('input', () => {

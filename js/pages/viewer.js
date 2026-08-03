@@ -622,6 +622,12 @@ const ViewerApp = (() => {
 
     btnClose.addEventListener('click',  () => _collapse());
     btnReopen.addEventListener('click', () => _expand());
+
+    // On a phone the 320 px sidebar leaves the canvas about 55 px wide — no gesture
+    // can rescue a view that narrow, so the volume gets the screen first and the
+    // floating reopen button brings the controls back. Tablets are wide enough to
+    // show both and are left alone.
+    if (window.matchMedia('(max-width: 700px)').matches) _collapse();
   }
 
   // Rule 1.4 — un metadata.json présent doit être structurellement cohérent ; un

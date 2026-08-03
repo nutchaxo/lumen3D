@@ -50,7 +50,7 @@ PluginRegistry.implement('histogram', {
 
   bindChannelUI(idx, channel, container, callbacks) {
     const { onStateChange, getHistograms, getState } = callbacks;
-    
+
     // Binding the histogram drag events
     const editor = container.querySelector(`#ch-editor-${idx}`);
     if (!editor) return;
@@ -58,50 +58,97 @@ PluginRegistry.implement('histogram', {
     const clamp = (val, min, max) => Math.max(min, Math.min(max, val));
     const clamp01 = (val) => clamp(val, 0, 1);
 
-    ['min', 'mid', 'max'].forEach(kind => {
-      const handle = container.querySelector(`#ch-handle-${kind}-${idx}`);
-      if (!handle) return;
-      handle.addEventListener('pointerdown', (event) => {
-        event.preventDefault();
-        handle.setPointerCapture?.(event.pointerId);
-        
-        // PERF-012: onStateChange updates a shader uniform (and can trigger a recompile),
-        // so firing it on every pointermove thrashed. Coalesce drag updates to one per
-        // animation frame; the initial click applies immediately and pointerup flushes
-        // the final value so the last position always lands.
-        const apply = (clientX) => {
-          const rect = editor.getBoundingClientRect();
-          const raw = clamp01((clientX - rect.left) / Math.max(1, rect.width));
-          const state = getState(idx);
+    const KINDS = ['min', 'mid', 'max'];
+    const valueOf = (state, kind) => (kind === 'min' ? state.min : kind === 'max' ? state.max : state.midtone);
+    const pixelOf = (rect, value) => rect.left + clamp01(value) * rect.width;
 
-          if (kind === 'min') {
-            state.min = Math.min(raw, state.max - 0.01);
-          } else if (kind === 'max') {
-            state.max = Math.max(raw, state.min + 0.01);
-          } else {
-            state.midtone = clamp(raw, state.min + 0.01, state.max - 0.01);
-          }
+    // A press within this distance GRABS the handle and keeps the offset between
+    // finger and handle; further away the handle catches up under the pointer. A
+    // fingertip lands a few pixels off a 12 px handle, and jumping every time made
+    // each grab nudge the value before the drag even started.
+    const GRAB_SLOP_PX = 20;
+    // The enlarged touch targets overlap when two handles sit close together, and
+    // the one painted on top is not necessarily the one nearest the finger — so a
+    // direct hit only wins over the closest handle when it is within a near-tie.
+    const DIRECT_HIT_TIE_PX = 12;
 
-          onStateChange(idx, state);
-        };
-        let _latestX = null;
-        let _rafId = 0;
-        const move = (clientX) => {
-          _latestX = clientX;
-          if (_rafId) return;
-          _rafId = requestAnimationFrame(() => { _rafId = 0; apply(_latestX); });
-        };
-        apply(event.clientX);
-        const onMove = (e) => move(e.clientX);
-        const onUp = () => {
-          window.removeEventListener('pointermove', onMove);
-          window.removeEventListener('pointerup', onUp);
-          if (_rafId) { cancelAnimationFrame(_rafId); _rafId = 0; }
-          if (_latestX != null) apply(_latestX);
-        };
-        window.addEventListener('pointermove', onMove);
-        window.addEventListener('pointerup', onUp);
-      });
+    // The whole strip is a grab surface, not just the three thin handles: a press
+    // anywhere takes the closest handle. That is what makes the control usable with
+    // a finger, where hitting a 12 px target repeatedly is the whole difficulty.
+    function _pickHandle(event, rect) {
+      const state = getState(idx);
+      const ranked = KINDS
+        .map(kind => ({ kind, dist: Math.abs(event.clientX - pixelOf(rect, valueOf(state, kind))) }))
+        .sort((a, b) => a.dist - b.dist);
+      const hit = event.target?.closest?.('.hist-handle');
+      const direct = hit && KINDS.find(kind => hit.classList.contains(`handle-${kind}`));
+      const directRank = direct ? ranked.find(r => r.kind === direct) : null;
+      if (directRank && directRank.dist - ranked[0].dist <= DIRECT_HIT_TIE_PX) return directRank;
+      return ranked[0];
+    }
+
+    editor.addEventListener('pointerdown', (event) => {
+      if (event.button > 0) return; // middle / right button: not a drag
+      event.preventDefault();
+
+      const picked = _pickHandle(event, editor.getBoundingClientRect());
+      const kind = picked.kind;
+      const grabbed = picked.dist <= GRAB_SLOP_PX;
+      const offset = grabbed
+        ? pixelOf(editor.getBoundingClientRect(), valueOf(getState(idx), kind)) - event.clientX
+        : 0;
+
+      // PERF-012: onStateChange updates a shader uniform (and can trigger a recompile),
+      // so firing it on every pointermove thrashed. Coalesce drag updates to one per
+      // animation frame; the initial click applies immediately and the end of the drag
+      // flushes the final value so the last position always lands.
+      const apply = (clientX) => {
+        const rect = editor.getBoundingClientRect();
+        const raw = clamp01((clientX + offset - rect.left) / Math.max(1, rect.width));
+        const state = getState(idx);
+
+        if (kind === 'min') {
+          state.min = Math.min(raw, state.max - 0.01);
+        } else if (kind === 'max') {
+          state.max = Math.max(raw, state.min + 0.01);
+        } else {
+          state.midtone = clamp(raw, state.min + 0.01, state.max - 0.01);
+        }
+
+        onStateChange(idx, state);
+      };
+
+      let _latestX = null;
+      let _rafId = 0;
+      const onMove = (e) => {
+        _latestX = e.clientX;
+        if (_rafId) return;
+        _rafId = requestAnimationFrame(() => { _rafId = 0; apply(_latestX); });
+      };
+      // pointercancel is the one that used to lose the drag: the browser claims the
+      // gesture for a scroll, no pointerup ever comes, and the window listeners of the
+      // previous implementation stayed bound. Ending on it (and on lostpointercapture)
+      // flushes the last position and leaves nothing behind.
+      const end = () => {
+        editor.removeEventListener('pointermove', onMove);
+        editor.removeEventListener('pointerup', end);
+        editor.removeEventListener('pointercancel', end);
+        editor.removeEventListener('lostpointercapture', end);
+        if (_rafId) { cancelAnimationFrame(_rafId); _rafId = 0; }
+        if (_latestX != null) apply(_latestX);
+        try { editor.releasePointerCapture(event.pointerId); } catch (_) { /* already released */ }
+      };
+
+      // Captured on the editor rather than the handle: the pointer then reports to a
+      // single element for the whole drag, wherever the finger wanders — off the
+      // handle, off the strip, out of the sidebar.
+      try { editor.setPointerCapture(event.pointerId); } catch (_) { /* pointer already gone */ }
+      editor.addEventListener('pointermove', onMove);
+      editor.addEventListener('pointerup', end);
+      editor.addEventListener('pointercancel', end);
+      editor.addEventListener('lostpointercapture', end);
+
+      if (!grabbed) apply(event.clientX);
     });
 
     // Binding the action buttons

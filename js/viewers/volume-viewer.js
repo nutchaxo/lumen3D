@@ -922,10 +922,9 @@ const VolumeViewer = (() => {
     let startMousePosition = { x: 0, y: 0 };
     let _activePointerId = null; // primary pointer being tracked
 
-    // Pinch / two-finger state
+    // Two-finger navigation state: { startDist, startZ, midX, midY }, null when idle.
     _activePointers.clear();
-    let _pinchStartDist = null;
-    let _pinchStartCameraZ = null;
+    let _gesture = null;
 
     let _gridDragState = null;
     let _lastInteractionClickTime = 0;
@@ -943,17 +942,89 @@ const VolumeViewer = (() => {
       const rect = canvas.getBoundingClientRect();
       return { x: e.clientX - rect.left, y: e.clientY - rect.top };
     }
-    
+
+    // ── Two-finger navigation (touch) ─────────────────────────────────────────
+    // A two-finger drag is read as one rigid screen transform: the travel of the
+    // midpoint pans the volume, the ratio of the finger spacing dollies the camera.
+    // One finger stays free for orientation, so no modifier is needed on a tablet.
+    function _twoFingerFrame() {
+      const [a, b] = [..._activePointers.values()];
+      return {
+        dist: Math.max(1e-3, Math.hypot(b.x - a.x, b.y - a.y)),
+        midX: (a.x + b.x) / 2,
+        midY: (a.y + b.y) / 2
+      };
+    }
+
+    // Re-anchored on every change of finger count: the pair being measured changes
+    // when a finger is added or lifted, and carrying the old reference spacing over
+    // would teleport the volume.
+    function _seedGesture() {
+      const f = _twoFingerFrame();
+      _gesture = { startDist: f.dist, startZ: camera ? camera.position.z : 2.5, midX: f.midX, midY: f.midY };
+    }
+
+    // World units per CSS pixel on the plane through the volume centre: the
+    // perspective frustum is 2·tan(fov/2)·z tall at camera distance z.
+    function _worldPerPixel(z) {
+      return (2 * Math.tan((camera.fov * Math.PI / 180) / 2) * z) / Math.max(1, canvas.clientHeight);
+    }
+
+    // Hand an in-flight one-finger drag over to the gesture without leaving
+    // half-applied state behind — a label caught mid-drag must still be committed.
+    function _releaseSingleDrag() {
+      if (_draggedLabelSprite) {
+        _updateMeasurementLabelPositions(true, _draggedLabelSprite);
+        _draggedLabelSprite = null;
+        _activeDragSprite = null;
+      }
+      planeDragState = null;
+      _gridDragState = null;
+      isDragging = false;
+    }
+
+    // The finger left over when a pinch ends keeps navigating, instead of going
+    // dead until the user lifts it and touches down again.
+    function _resumeSingleFinger(pointerId) {
+      const pt = _activePointers.get(pointerId);
+      if (!pt) return;
+      const rect = canvas.getBoundingClientRect();
+      try { canvas.setPointerCapture(pointerId); } catch (_) { /* pointer already gone */ }
+      _activePointerId = pointerId;
+      dragMode = _rotationLocked ? 'pan' : 'rotate';
+      isDragging = true;
+      _isInteracting = true;
+      previousMousePosition = { x: pt.x - rect.left, y: pt.y - rect.top };
+      startMousePosition = { ...previousMousePosition };
+      _markInteraction();
+    }
+
+    function _endInteraction() {
+      isDragging = false;
+      _isInteracting = false;
+      _lastInteractionTime = 0;
+      if (_interactionTimeout) {
+        clearTimeout(_interactionTimeout);
+        _interactionTimeout = null;
+      }
+      planeDragState = null;
+      _scheduleFrame();
+    }
+
     canvas.addEventListener('pointerdown', (e) => {
       e.preventDefault();
       _activePointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
 
-      // Two-finger pinch: track but don't start regular drag
-      if (_activePointers.size === 2) {
-        const pts = [..._activePointers.values()];
-        _pinchStartDist = Math.hypot(pts[1].x - pts[0].x, pts[1].y - pts[0].y);
-        _pinchStartCameraZ = camera ? camera.position.z : 2.5;
-        isDragging = false;
+      // Two fingers or more → navigation gesture, whatever tool is active: the
+      // volume must stay reachable on a tablet even in measure or cut mode.
+      // A mouse never joins a gesture — one device, one pointer — so a stale touch
+      // entry left by a missed pointerup can't swallow a click on a hybrid machine.
+      if (e.pointerType !== 'mouse' && _activePointers.size >= 2) {
+        _releaseSingleDrag();
+        _seedGesture();
+        _isInteracting = true;
+        _markInteraction();
+        _scheduleFrame();
         return;
       }
 
@@ -1016,11 +1087,9 @@ const VolumeViewer = (() => {
       } else if (_activeTool === 'cut' && (e.shiftKey || e.button === 1 || e.button === 2)) {
         dragMode = 'pan';
       } else {
-        // Single touch finger → rotate; touch + shift or RMB → pan
-        const isTouch = e.pointerType === 'touch';
-        dragMode = (e.button === 1 || e.button === 2 || e.shiftKey || _rotationLocked) ? 'pan'
-                 : (isTouch && _activePointers.size === 1) ? 'rotate'
-                 : 'rotate';
+        // One finger (or the left button) orients the volume; panning needs shift,
+        // the middle/right button — or a second finger, handled above.
+        dragMode = (e.button === 1 || e.button === 2 || e.shiftKey || _rotationLocked) ? 'pan' : 'rotate';
       }
       previousMousePosition = { x: off.x, y: off.y };
       startMousePosition = { ...previousMousePosition };
@@ -1032,16 +1101,31 @@ const VolumeViewer = (() => {
         _activePointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
       }
 
-      // Two-finger pinch-to-zoom
-      if (_activePointers.size === 2 && _pinchStartDist !== null) {
-        const pts = [..._activePointers.values()];
-        const dist = Math.hypot(pts[1].x - pts[0].x, pts[1].y - pts[0].y);
-        if (dist > 0 && _pinchStartCameraZ !== null) {
-          camera.position.z = Math.max(0.2, Math.min(100, _pinchStartCameraZ * (_pinchStartDist / dist)));
-          _scheduleFrame();
-          _notifyCameraChange();
-        }
+      // Two-finger pan + pinch-to-zoom, applied in the same move
+      if (_gesture && _activePointers.size >= 2) {
+        const f = _twoFingerFrame();
+        const rect = canvas.getBoundingClientRect();
+        const zPrev = camera.position.z;
+        const zNext = Math.max(0.2, Math.min(100, _gesture.startZ * (_gesture.startDist / f.dist)));
+        const wppPrev = _worldPerPixel(zPrev);
+        const wppNext = _worldPerPixel(zNext);
+        // Pan and zoom are the same equation. What the fingers hold must stay under
+        // them: the volume point at the midpoint is invariant for the whole gesture.
+        // A point `a` pixels from the canvas centre sits at a·wpp(z) in world units,
+        // so holding (a·wpp(z) − cubePos) constant gives the update below — it pans
+        // when only the midpoint moves, anchors the zoom when only the spacing does,
+        // and stays exact when both change at once (which every real move does).
+        const prevAnchorX = _gesture.midX - rect.left - canvas.clientWidth / 2;
+        const prevAnchorY = _gesture.midY - rect.top - canvas.clientHeight / 2;
+        const anchorX = f.midX - rect.left - canvas.clientWidth / 2;
+        const anchorY = f.midY - rect.top - canvas.clientHeight / 2;
+        cube.position.x += anchorX * wppNext - prevAnchorX * wppPrev;
+        cube.position.y -= anchorY * wppNext - prevAnchorY * wppPrev;
+        camera.position.z = zNext;
+        _gesture.midX = f.midX;
+        _gesture.midY = f.midY;
         _markInteraction();
+        _notifyCameraChange();
         return;
       }
 
@@ -1286,7 +1370,16 @@ const VolumeViewer = (() => {
 
     canvas.addEventListener('pointerup', (e) => {
       _activePointers.delete(e.pointerId);
-      if (_activePointers.size < 2) { _pinchStartDist = null; _pinchStartCameraZ = null; }
+      if (_gesture) {
+        if (_activePointers.size >= 2) { _seedGesture(); return; }
+        _gesture = null;
+        _notifyCameraChange();
+        if (e.pointerId === _activePointerId) _activePointerId = null;
+        const [restId] = _activePointers.keys();
+        if (restId !== undefined) { _resumeSingleFinger(restId); return; }
+        _endInteraction();
+        return;
+      }
       if (e.pointerId !== _activePointerId) return;
       _activePointerId = null;
       const off = _offset(e);
@@ -1312,32 +1405,22 @@ const VolumeViewer = (() => {
       } else if (isDragging && dragMode !== 'cut-plane') {
         _notifyCameraChange();
       }
-      isDragging = false;
-      _isInteracting = false;
-      _lastInteractionTime = 0;
-      if (_interactionTimeout) {
-        clearTimeout(_interactionTimeout);
-        _interactionTimeout = null;
-      }
-      planeDragState = null;
-      _scheduleFrame();
+      _endInteraction();
     });
 
     canvas.addEventListener('pointercancel', (e) => {
       _activePointers.delete(e.pointerId);
+      if (_gesture) {
+        if (_activePointers.size >= 2) { _seedGesture(); return; }
+        _gesture = null;
+        _notifyCameraChange();
+      }
       if (e.pointerId === _activePointerId) {
         _activePointerId = null;
-        isDragging = false;
-        _isInteracting = false;
-        _lastInteractionTime = 0;
-        if (_interactionTimeout) {
-          clearTimeout(_interactionTimeout);
-          _interactionTimeout = null;
-        }
-        planeDragState = null;
-        _scheduleFrame();
+        _endInteraction();
+      } else if (_activePointers.size === 0) {
+        _endInteraction();
       }
-      _pinchStartDist = null; _pinchStartCameraZ = null;
     });
 
     canvas.addEventListener('wheel', (e) => {
@@ -1413,7 +1496,7 @@ const VolumeViewer = (() => {
   function _animate() {
     if (_contextLost) { animationId = null; return; }   // ELE-18: never draw on a lost context
     const now = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
-    const isInteractingNow = _isInteracting || (_activePointers.size === 2) || (Date.now() - _lastInteractionTime < 250);
+    const isInteractingNow = _isInteracting || (_activePointers.size >= 2) || (Date.now() - _lastInteractionTime < 250);
 
     // Cap frame rate during active interaction to reduce GPU workload and temperature.
     // At 40 FPS, the visual movement is still extremely fluid while saving significant GPU power.

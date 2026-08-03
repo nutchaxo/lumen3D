@@ -74,6 +74,8 @@ Remplacez `<adresse-du-site>` par l'adresse habituelle du site. Par exemple, si 
 >
 > *(À compléter. Ne diffusez ces informations qu'aux personnes qui doivent réellement administrer le site.)*
 
+Dans la version PDF de ce guide, ces deux emplacements sont de **vrais champs de saisie** : cliquez dedans, tapez, puis enregistrez le PDF (`Ctrl + S`) pour conserver ce que vous avez écrit.
+
 ## 1.3. L'écran de connexion
 
 ![Écran de connexion](img/login.png)
@@ -183,9 +185,19 @@ Sur chaque ligne, à droite du nom :
 
 Ce n'est pas une image fixe : c'est **le vrai visualiseur 3D**, chargé dans le panneau. Vous pouvez faire tourner le volume, changer les couleurs des canaux, régler le contraste — exactement comme un visiteur.
 
-> ⚠️ **Les réglages faits dans cet aperçu ne sont pas enregistrés.** C'est un bac à sable : il sert à vérifier à quoi ressemble le jeu de données. Les seuls réglages conservés sont ceux de la colonne de droite.
+> ### 📌 Cet aperçu n'est pas qu'un aperçu
+>
+> Certains réglages faits ici sont **récupérés par le panneau** et enregistrés avec le jeu de données quand vous cliquez sur **Sauvegarder** :
+>
+> - les **réglages de canaux** — nom, couleur, min / max / gamma, affiché ou masqué (voir §3.4) ;
+> - la **luminosité** (Exposure) ;
+> - l'**orientation** si vous êtes en train de la définir (voir §3.5).
+>
+> Tout le reste — position de la caméra, mode de rendu, qualité, fond, plan de coupe — sert uniquement à regarder et **n'est pas conservé**.
+>
+> C'est pour ça que la pastille **« Modifications non sauvegardées »** peut apparaître simplement parce que vous avez touché un curseur dans l'aperçu. Si vous ne vouliez rien changer, cliquez sur **↺ Reset** plutôt que sur Sauvegarder.
 
-Le bouton **📸 Redéfinir la preview** (en bas à droite) fait une exception utile : il **fige la vue actuelle** et l'utilise comme vignette du jeu de données dans l'explorateur public. Orientez le volume comme vous voulez qu'il apparaisse, puis cliquez.
+Le bouton **📸 Redéfinir la preview** (en bas à droite) **fige la vue actuelle** et l'utilise comme vignette du jeu de données dans l'explorateur public. Orientez le volume comme vous voulez qu'il apparaisse, puis cliquez.
 
 Le chargement d'un gros volume prend quelques secondes — c'est normal, les données font plusieurs gigaoctets et sont téléchargées morceau par morceau.
 
@@ -200,7 +212,7 @@ Le chargement d'un gros volume prend quelques secondes — c'est normal, les don
 | **3** | **Nom d'affichage** — le nom que verront les visiteurs. |
 | **4** | **Calibration physique** — la taille réelle d'un voxel en micromètres. |
 | **5** | **Visibilité (Exposure)** — la luminosité par défaut à l'ouverture. |
-| **6** | **Orientation 3D** — voir §3.4. |
+| **6** | **Orientation 3D** — voir §3.5. |
 
 ### Le détail de chaque champ
 
@@ -224,11 +236,43 @@ Notez que `Voxel Z` est souvent bien plus grand que X et Y (par exemple `0,52 / 
 **Paramètres d'affichage**
 Le curseur **Visibilité (Exposure)** règle la luminosité à l'ouverture. Si un jeu de données paraît trop sombre au premier coup d'œil, montez-le. Les visiteurs peuvent toujours l'ajuster ensuite de leur côté.
 
-## 3.4. Définir l'orientation anatomique
+## 3.4. Configurer les canaux
+
+Un jeu de données de microscopie contient plusieurs **canaux** — un par marquage fluorescent. C'est ici que vous décidez à quoi ils ressemblent **par défaut**, c'est-à-dire ce que verra un visiteur qui ouvre le jeu de données sans rien toucher.
+
+Ces réglages se font dans la **barre latérale de l'aperçu** (colonne du milieu), et sont enregistrés avec le reste de la fiche quand vous cliquez sur **💾 Sauvegarder**.
+
+![Réglages des canaux](img/datasets-channels.png)
+
+| | |
+|---|---|
+| **1** | **La case à cocher** — le canal est-il affiché ou masqué à l'ouverture ? |
+| **2** | **Le nom du canal** — cliquez dedans et tapez pour le renommer. |
+| **3** | **La couleur d'affichage** du canal. |
+| **4** | Le **résumé** des réglages appliqués (min–max, gamma, opacité). |
+| **5** | Le **panneau détaillé** : histogramme et curseurs. Ouvrez-le avec le chevron ⌄ à droite de la ligne. |
+
+### Ce que vous pouvez régler
+
+**Le nom.** Les canaux arrivent souvent nommés `Channel 1`, `Channel 2`… Remplacez-les par le marquage réel — `DAPI`, `GFP`, `Pecam1`. C'est ce nom que verront les visiteurs.
+
+**La couleur.** Le bouton coloré ouvre une palette. Choisissez des couleurs qui séparent bien les marquages.
+
+> 💡 Certaines couleurs sont attribuées automatiquement d'après le nom du canal : un canal nommé `DAPI` devient bleu, `GFP` vert, `Pecam1` magenta. Renommer un canal correctement suffit donc souvent à obtenir la bonne couleur.
+
+**Affiché ou masqué.** Décochez la case d'un canal peu informatif (un canal vide, un autofluorescence) : il reste disponible, mais le visiteur ne le voit pas au premier abord. C'est le réglage le plus utile pour une première impression propre.
+
+**Min / max / gamma.** Dans le panneau détaillé, l'histogramme montre la répartition des intensités et les trois poignées règlent le seuil bas, le seuil haut et le gamma. Les boutons **Auto**, **Soft**, **Contrast** proposent des réglages tout faits ; **Reset** revient au départ.
+
+> ⚠️ **Ces réglages sont cosmétiques, pas destructifs.** Ils changent la façon dont les données sont *affichées*, jamais les données elles-mêmes. Un visiteur peut tout ré-ajuster de son côté ; vous ne faites que définir le point de départ.
+
+**N'oubliez pas de cliquer sur 💾 Sauvegarder** dans la colonne de droite : sans ça, vos réglages de canaux sont perdus en changeant de jeu de données.
+
+## 3.5. Définir l'orientation anatomique
 
 Le bouton **🧭 Définir l'orientation** sert à indiquer où se trouvent l'avant, le haut et la droite du spécimen. Une fois défini, les visiteurs voient un repère à trois axes dans le visualiseur.
 
-![Outil d'orientation](img/datasets-orientation.png)
+![Outil d'orientation](img/datasets-orientation-zoom.png)
 
 Trois axes colorés apparaissent sur le volume :
 
@@ -246,7 +290,7 @@ Trois axes colorés apparaissent sur le volume :
 
 Le bouton devient **✕ Annuler l'orientation** pendant l'opération : il permet de sortir sans rien changer.
 
-## 3.5. Quand aucun jeu de données n'est sélectionné
+## 3.6. Quand aucun jeu de données n'est sélectionné
 
 ![Datasets, rien de sélectionné](img/tab-datasets-empty.png)
 
@@ -301,15 +345,21 @@ Chaque plugin occupe l'un des **trois emplacements** possibles :
 
 | | |
 |---|---|
-| **1** | Une carte par emplacement. |
+| **1** | Une carte par emplacement (Outils, Canaux, Modes de rendu). |
 | **2** | Le compteur `actifs / total` de cette catégorie. |
-| **3** | Le nom du plugin, suivi de son **niveau de confiance**. |
-| **4** | Version · auteur · dossier · **empreinte** du code. |
-| **5** | L'interrupteur qui active ou désactive le plugin. |
+| **3** | Une ligne par plugin. |
 
 Zoom sur une ligne :
 
 ![Une ligne de plugin](img/plugins-row.png)
+
+| | |
+|---|---|
+| **1** | Le **nom** du plugin. |
+| **2** | Son **niveau de confiance** (voir §5.4). |
+| **3** | Version · auteur · dossier · **empreinte** du code. |
+| **4** | L'interrupteur qui **active ou désactive** le plugin. |
+| **5** | **Révoquer** — retire l'autorisation d'exécution (voir §5.5). |
 
 ## 5.3. Activer ou désactiver un plugin
 
@@ -379,7 +429,7 @@ Vous verrez ce cas si quelqu'un dépose un plugin directement sur le serveur (pa
 | **Download Center** | Outil | Récupérer les fichiers, mesures, métadonnées et exports du jeu de données |
 | **Screenshot** | Outil | Capturer la vue 3D en image PNG |
 | **Presentation Mode** | Outil | Plein écran sans interface, pour projeter |
-| **Orientation Axes** | Outil | Le repère anatomique A/P · D/V · L/R (voir §3.4) |
+| **Orientation Axes** | Outil | Le repère anatomique A/P · D/V · L/R (voir §3.5) |
 | **Toggle Grid / Axes / Volume** | Outils | Afficher ou masquer la grille, les axes, le volume |
 | **Chunk Debug** | Outil | Outil de diagnostic technique. **Peut être désactivé sans risque** sur un site en production |
 
@@ -740,23 +790,40 @@ Le champ **Rechercher un élément** filtre la liste — pratique, il y en a 27.
 | **1** | Le **fil d'Ariane** : `Section 2 › Colonne 1 › Compteur animé`. Il vous dit exactement où vous êtes, et chaque niveau est cliquable. |
 | **2** | Les trois onglets de réglages : **Contenu**, **Style**, **Avancé**. |
 
-### La mini-barre d'outils
+### Les mini-barres d'outils
 
-Chaque élément sélectionné affiche une petite barre verte :
+Une petite barre verte apparaît sur le bloc survolé :
 
 ![Barre d'outils d'un élément](img/editor-widget-toolbar.png)
 
-De gauche à droite :
+**Une seule barre est visible à la fois** : celle du niveau le plus intérieur sous votre curseur. Passez la souris sur un élément, vous obtenez la barre de l'élément ; sortez de l'élément mais restez dans la colonne, vous obtenez celle de la colonne ; allez dans la marge de la section, vous obtenez celle de la section.
+
+**Barre d'un élément**
 
 | Icône | Action |
 |---|---|
-| **⠿** (points) | **Poignée de déplacement** — maintenez et glissez pour déplacer l'élément |
-| **›** (chevron) | **Sélectionner le parent** — passe à la colonne, puis à la section |
-| **⚙** (curseurs) | Ouvre les réglages |
-| **⧉** (carrés) | **Dupliquer** |
-| **🗑** (corbeille) | **Supprimer** |
+| **⠿** (points, à gauche) | **Poignée de déplacement** — maintenez et glissez pour déplacer l'élément |
+| **⧉** | **Dupliquer** |
+| **🗑** | **Supprimer** |
 
-La section qui contient l'élément affiche aussi sa propre barre en haut à droite : monter, descendre, **découper en colonnes**, réglages, dupliquer, supprimer.
+**Barre d'une colonne**
+
+| Icône | Action |
+|---|---|
+| **‹** **›** | Déplacer la colonne vers la gauche / la droite |
+| **⚙** | Réglages de la colonne |
+| **⧉** · **🗑** | Dupliquer · Supprimer |
+
+**Barre d'une section**
+
+| Icône | Action |
+|---|---|
+| **⌃** **⌄** | Monter / descendre la section dans la page |
+| **▥** | **Ajouter une colonne** |
+| **⚙** | Réglages de la section |
+| **⧉** · **🗑** | Dupliquer · Supprimer |
+
+> 💡 **Pour atteindre une colonne ou une section sans chercher la bonne zone de survol**, utilisez le **fil d'Ariane** de la barre latérale (repère 1 ci-dessus) : `Section 2 › Colonne 1 › Compteur animé`. Chaque niveau est cliquable et sélectionne directement le bloc voulu.
 
 ### Les trois onglets de réglages
 

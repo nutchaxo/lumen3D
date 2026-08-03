@@ -1120,4 +1120,4 @@ Faites un **rechargement forcé** : `Ctrl + Shift + R` (Windows) ou `Cmd + Shift
 
 ---
 
-*Document généré à partir de la version **1.34.0** de la plateforme. Les captures d'écran proviennent d'une instance réelle ; les couleurs peuvent différer si le thème a été modifié.*
+*Document généré à partir de la version **1.36.0** de la plateforme. Les captures d'écran proviennent d'une instance réelle ; les couleurs peuvent différer si le thème a été modifié.*

@@ -433,7 +433,13 @@ function admin_version_tuple(string $s): array {
     return array_pad($n, 3, 0);
 }
 
+/** Twin of dev_server.py:_preprocess_version — the version of the Python
+ *  preprocessing pipeline the operator can actually obtain. The downloadable pack
+ *  wins: on a PHP host it is the only copy present (the release ships no
+ *  preprocess/ sources), so its own VERSION.json is the truthful answer. */
 function admin_preprocess_version(): ?string {
+    $v = admin_pipeline_pack_versions()['preprocess'] ?? null;
+    if ($v) return (string)$v;
     $f = admin_root() . '/preprocess/run_preprocess.py';
     if (is_file($f)) {
         $txt = @file_get_contents($f);
@@ -467,6 +473,37 @@ function admin_pipeline_local(string $edition): ?string {
         return admin_version_tuple(basename($a, '.zip')) <=> admin_version_tuple(basename($b, '.zip'));
     });
     return end($found);
+}
+
+/** Versions carried BY the local pack, read from the VERSION.json inside it (twin
+ *  of dev_server.py:_pipeline_pack_versions). The filename only encodes the
+ *  platform version, so the pipeline version has to be read from the archive.
+ *  Static-cached: PHP is per-request, but the version is asked for more than once
+ *  within a single admin request. */
+function admin_pipeline_pack_versions(): array {
+    static $cache = null;
+    if ($cache !== null) return $cache;
+    $cache = [];
+    $pack = admin_pipeline_local('leger') ?? admin_pipeline_local('complet');
+    if ($pack === null || !class_exists('ZipArchive')) return $cache;
+    $zip = new ZipArchive();
+    if ($zip->open($pack) !== true) return $cache;
+    $raw = $zip->getFromName(basename($pack, '.zip') . '/VERSION.json');
+    if ($raw === false) {
+        for ($i = 0; $i < $zip->numFiles; $i++) {
+            $n = $zip->statIndex($i)['name'] ?? '';
+            if ($n === 'VERSION.json' || substr($n, -13) === '/VERSION.json') {
+                $raw = $zip->getFromIndex($i);
+                break;
+            }
+        }
+    }
+    $zip->close();
+    $doc = is_string($raw) ? json_decode($raw, true) : null;
+    if (is_array($doc)) {
+        $cache = ['pack' => $doc['bundleVersion'] ?? null, 'preprocess' => $doc['preprocessVersion'] ?? null];
+    }
+    return $cache;
 }
 
 function admin_pipeline_github_asset(): array {
@@ -1134,7 +1171,8 @@ function mkt_list(): array {
     [$ok, $res] = mkt_fetch_catalog();
     if (!$ok) return $base + ['error' => $res, 'plugins' => []];
     $ver = admin_max_version(changelog_dir());
-    $installed = array_map(fn($p) => $p['path'], admin_list_plugins());
+    $installed = [];
+    foreach (admin_list_plugins() as $p) $installed[$p['path']] = $p;
     $out = [];
     foreach ($res as $e) {
         if (!is_array($e)) continue;
@@ -1142,12 +1180,22 @@ function mkt_list(): array {
         $placement = $e['placement'] ?? null;
         $path = in_array($placement, ['tools', 'channels', 'shaders'], true) ? "$placement/$pid" : null;
         [$c, $cr] = admin_compat_satisfies($ver, $e['platformCompat'] ?? null);
+        $local = ($path !== null && isset($installed[$path])) ? $installed[$path] : null;
+        $cur = ($local && !empty($local['version'])) ? (string)$local['version'] : null;
+        $latest = !empty($e['latestVersion']) ? (string)$e['latestVersion'] : null;
+        // No version on either side ⇒ nothing to compare ⇒ no update offered.
+        $newer = ($cur !== null && $latest !== null
+                  && admin_version_tuple($latest) > admin_version_tuple($cur));
         $out[] = [
             'id' => $pid, 'name' => $e['name'] ?? $pid, 'placement' => $placement, 'subtype' => $e['subtype'] ?? null,
             'description' => $e['description'] ?? null, 'creator' => $e['creator'] ?? null, 'icon' => $e['icon'] ?? null,
             'platformCompat' => $e['platformCompat'] ?? null, 'sandboxCapabilities' => $e['sandboxCapabilities'] ?? null,
-            'latestVersion' => $e['latestVersion'] ?? null, 'recommended' => $e['recommended'] ?? false,
-            'installed' => $path ? in_array($path, $installed, true) : false, 'compat' => $c, 'compatReason' => $cr,
+            'latestVersion' => $latest, 'recommended' => $e['recommended'] ?? false,
+            'installed' => $local !== null, 'installedVersion' => $cur,
+            // Split in two: what the Updates tab may act on, and what it must still
+            // show with a reason (a newer version this platform cannot accept).
+            'updateAvailable' => $newer && $c, 'updateBlocked' => $newer && !$c,
+            'compat' => $c, 'compatReason' => $cr,
         ];
     }
     return $base + ['plugins' => $out];
@@ -1182,8 +1230,11 @@ function mkt_extract_zip(string $zipPath, string $dest): ?string {
     return null;
 }
 
-/** @return array{0:int,1:array} [httpStatus, payload] */
-function mkt_install(string $catalogId, string $password): array {
+/** Install — or with $upgrade, replace in place — a catalog plugin. On ANY failure
+ *  js/modules is left as it was found, which for an upgrade means the working
+ *  version is restored rather than the operator losing the plugin.
+ *  @return array{0:int,1:array} [httpStatus, payload] */
+function mkt_install(string $catalogId, string $password, bool $upgrade = false): array {
     if (MARKETPLACE_CATALOG_URL === '') return [400, ['error' => 'marketplace_not_configured']];
     $rec = admin_credential();
     if (!$rec || !admin_verify_password($password, $rec['password_pbkdf2'] ?? '')) return [401, ['error' => 'bad_password']];
@@ -1195,7 +1246,8 @@ function mkt_install(string $catalogId, string $password): array {
     $placement = $entry['placement'] ?? ''; $pid = (string)($entry['id'] ?? '');
     if (!in_array($placement, ['tools', 'channels', 'shaders'], true) || !preg_match('/^[A-Za-z0-9_][A-Za-z0-9._-]*$/', $pid)) return [400, ['error' => 'bad_plugin_id']];
     $path = "$placement/$pid"; $targetDir = modules_dir() . "/$placement/$pid";
-    if (is_dir($targetDir)) return [409, ['error' => 'already_installed']];
+    if (is_dir($targetDir) && !$upgrade) return [409, ['error' => 'already_installed']];
+    if ($upgrade && !is_dir($targetDir)) return [404, ['error' => 'not_installed']];
     [$c, $cr] = admin_compat_satisfies(admin_max_version(changelog_dir()), $entry['platformCompat'] ?? null);
     if (!$c) return [409, ['error' => 'incompatible', 'detail' => $cr]];
     $assetUrl = $entry['assetUrl'] ?? null; $sumsUrl = $entry['sumsUrl'] ?? null; $sigUrl = $entry['sigUrl'] ?? null;
@@ -1237,9 +1289,21 @@ function mkt_install(string $catalogId, string $password): array {
     $meta = admin_read_json("$proot/plugin.json");
     if (!is_array($meta) || (string)($meta['id'] ?? '') !== $pid || (isset($meta['placement']) && $meta['placement'] !== $placement)) { mkt_rmrf($tmp); return [502, ['error' => 'install_failed', 'detail' => 'metadata']]; }
     admin_make_dir(dirname($targetDir));
-    if (!@rename($proot, $targetDir)) { mkt_rmrf($tmp); return [502, ['error' => 'install_failed', 'detail' => 'move']]; }
+    // Park the working copy instead of deleting it: the rename below can still
+    // fail, and an operator who asked for an upgrade must never end up with less
+    // than they had.
+    $backup = null;
+    if (is_dir($targetDir)) {
+        $backup = "$tmp/previous";
+        if (!@rename($targetDir, $backup)) { mkt_rmrf($tmp); return [502, ['error' => 'install_failed', 'detail' => 'park']]; }
+    }
+    if (!@rename($proot, $targetDir)) {
+        if ($backup !== null) @rename($backup, $targetDir);
+        mkt_rmrf($tmp);
+        return [502, ['error' => 'install_failed', 'detail' => 'move']];
+    }
     mkt_modes_recursive($targetDir);                       // zip extraction ignores our modes
-    mkt_rmrf($tmp);
+    mkt_rmrf($tmp);                                        // takes the parked previous version with it
     $serverHash = admin_plugin_hash(admin_plugin_file_hashes($targetDir));
     $declared = admin_plugin_declared_caps($targetDir);
     $wantsSandbox = (($meta['sandbox'] ?? null) === true) || ($placement === 'tools' && !empty($declared));
@@ -1247,7 +1311,8 @@ function mkt_install(string $catalogId, string $password): array {
     $approvals = array_values(array_filter(admin_load_trust(), fn($a) => ($a['path'] ?? '') !== $path));
     $approvals[] = ['path' => $path, 'sha256' => $serverHash, 'mode' => $mode, 'caps' => array_values($declared), 'at' => date('c'), 'by' => $rec['username'] ?? 'admin'];
     admin_save_trust($approvals);
-    return [200, ['ok' => true, 'path' => $path, 'mode' => $mode]];
+    return [200, ['ok' => true, 'path' => $path, 'mode' => $mode,
+                  'version' => $meta['version'] ?? null, 'upgraded' => $upgrade]];
 }
 
 /** @return array{0:int,1:array} */

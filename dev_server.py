@@ -1383,11 +1383,14 @@ def _max_version(dir_path: Path):
 
 
 def _version_tuple(s: str) -> tuple:
+    """Always 3 components, like the PHP twin admin_version_tuple: an unpadded
+    ("1.4",) < ("1.4.0") would read a two-part version as OLDER than its own
+    three-part spelling and invent an update out of nothing."""
     try:
-        nums = re.findall(r"\d+", s or "")
-        return tuple(int(x) for x in nums[:3]) or (0, 0, 0)
+        nums = [int(x) for x in re.findall(r"\d+", s or "")[:3]]
     except Exception:
-        return (0, 0, 0)
+        nums = []
+    return tuple(nums + [0] * (3 - len(nums)))
 
 
 # ── Plugin/platform compatibility ──────────────────────────────────────────────
@@ -1695,6 +1698,17 @@ def _plugin_wants_sandbox(mod_dir: Path) -> bool:
 
 
 def _preprocess_version():
+    """Version of the Python preprocessing pipeline the operator can actually obtain.
+
+    The downloadable pack wins (_pipeline_pack_versions, defined with the rest of
+    the pipeline plumbing further down): it is the copy the admin panel hands out,
+    and on a deployed host it is the ONLY copy present — the release excludes
+    preprocess/. A dev checkout with no pack built yet falls back to the sources
+    the pack would be built from.
+    """
+    v = _pipeline_pack_versions().get("preprocess")
+    if v:
+        return v
     try:
         txt = (ROOT / "preprocess" / "run_preprocess.py").read_text(encoding="utf-8")
         m = re.search(r'__version__\s*=\s*["\']([\d.]+)["\']', txt)
@@ -1707,10 +1721,15 @@ def _preprocess_version():
 
 def _version_info() -> dict:
     """Web platform version = newest changelog/changelog_X.Y.Z.md (the convention's
-    single source of truth — no constant introduced)."""
+    single source of truth — no constant introduced).
+
+    The dev server's own __version__ is deliberately NOT reported: it versions the
+    serving tool, drifts from the platform on purpose, and has no counterpart on a
+    PHP host — an operator reading two unrelated numbers side by side can only
+    conclude one of them is wrong.
+    """
     return {
         "web": _max_version(CHANGELOG_DIR),
-        "devServer": __version__,
         "preprocess": _preprocess_version(),
         "repo": GITHUB_REPO,
     }
@@ -1884,6 +1903,46 @@ def _pipeline_local(edition: str) -> Path | None:
 def _version_key(stem: str) -> tuple:
     m = re.search(r"(\d+)\.(\d+)\.(\d+)$", stem)
     return tuple(int(g) for g in m.groups()) if m else (0, 0, 0)
+
+
+_PIPELINE_VER_CACHE = None   # ((path, mtime_ns, size), versions) — see below
+
+
+def _pipeline_pack_versions() -> dict:
+    """Versions carried BY the downloadable pack, read from the VERSION.json that
+    tools/build_pipeline_bundle.py writes into it.
+
+    The pack filename only encodes the platform version, so the pipeline version it
+    actually contains has to come from inside. Cached on (path, mtime, size): the
+    admin panel asks for versions on every load, and the answer only changes when
+    the artifact on disk does.
+    """
+    global _PIPELINE_VER_CACHE
+    pack = _pipeline_local("leger") or _pipeline_local("complet")
+    if not pack:
+        return {}
+    try:
+        st = pack.stat()
+    except OSError:
+        return {}
+    key = (str(pack), st.st_mtime_ns, st.st_size)
+    if _PIPELINE_VER_CACHE and _PIPELINE_VER_CACHE[0] == key:
+        return _PIPELINE_VER_CACHE[1]
+    info = {}
+    try:
+        with zipfile.ZipFile(pack) as zf:
+            name = next((n for n in zf.namelist()
+                         if n == "VERSION.json" or n.endswith("/VERSION.json")), None)
+            if name:
+                with zf.open(name) as fh:
+                    doc = json.loads(fh.read(1 << 16).decode("utf-8"))
+                if isinstance(doc, dict):
+                    info = {"pack": doc.get("bundleVersion"),
+                            "preprocess": doc.get("preprocessVersion")}
+    except (OSError, ValueError, zipfile.BadZipFile):
+        info = {}
+    _PIPELINE_VER_CACHE = (key, info)
+    return info
 
 
 def _pipeline_build_lite() -> Path | None:
@@ -2313,8 +2372,15 @@ _MARKETPLACE_CARD_KEYS = ("id", "name", "placement", "subtype", "description",
 
 
 def _marketplace_list() -> dict:
-    """Catalog annotated with installed + compat status, for the admin Marketplace tab.
-    Fetch/verify failures are surfaced (never fatal to the panel)."""
+    """Catalog annotated with installed + compat + upgrade status, for the admin
+    Marketplace and Updates tabs. Fetch/verify failures are surfaced (never fatal
+    to the panel).
+
+    Upgradability is split in two on purpose: `updateAvailable` is what the Updates
+    tab may actually act on (newer AND compatible with the platform in place), while
+    `updateBlocked` marks a newer version the current platform cannot accept — the
+    operator has to see that one too, or the missing entry reads as "no update".
+    """
     base = {"configured": bool(_MARKETPLACE_CATALOG_URL), "signed": bool(_MARKETPLACE_PUBKEY_HEX)}
     if not _MARKETPLACE_CATALOG_URL:
         return {**base, "plugins": []}
@@ -2323,7 +2389,7 @@ def _marketplace_list() -> dict:
     except Exception as e:
         return {**base, "error": str(e), "plugins": []}
     ver = _max_version(CHANGELOG_DIR)
-    installed = {p["path"] for p in _list_plugins()}
+    installed = {p["path"]: p for p in _list_plugins()}
     out = []
     for e in entries:
         if not isinstance(e, dict):
@@ -2333,7 +2399,15 @@ def _marketplace_list() -> dict:
         path = f"{placement}/{pid}" if placement in PLUGIN_PLACEMENTS else None
         ok_c, reason_c = _compat_satisfies(ver, e.get("platformCompat"))
         card = {k: e.get(k) for k in _MARKETPLACE_CARD_KEYS}
-        card.update({"installed": (path in installed) if path else False,
+        local = installed.get(path) if path else None
+        cur = str(local.get("version")) if local and local.get("version") else None
+        latest = str(e.get("latestVersion")) if e.get("latestVersion") else None
+        # No version on either side ⇒ nothing to compare ⇒ no update offered.
+        newer = bool(cur and latest and _version_tuple(latest) > _version_tuple(cur))
+        card.update({"installed": local is not None,
+                     "installedVersion": cur,
+                     "updateAvailable": newer and ok_c,
+                     "updateBlocked": newer and not ok_c,
                      "compat": ok_c, "compatReason": reason_c})
         out.append(card)
     return {**base, "plugins": out}
@@ -2382,9 +2456,11 @@ def _extract_plugin_zip(zip_path: Path, dest: Path) -> Path:
     raise OSError("archive plugin invalide: plugin.json introuvable")
 
 
-def _install_marketplace_plugin(catalog_id: str, password: str):
-    """Install a first-party plugin from the signed catalog. Operator-initiated,
-    re-auth'd, verified fail-closed; on ANY failure js/modules is left untouched. The
+def _install_marketplace_plugin(catalog_id: str, password: str, upgrade: bool = False):
+    """Install — or with upgrade=True, replace in place — a first-party plugin from
+    the signed catalog. Operator-initiated, re-auth'd, verified fail-closed; on ANY
+    failure js/modules is left untouched, which for an upgrade means the working
+    version is put back rather than the operator being left with no plugin. The
     plugin lands as an operator-approved (server-recomputed hash) plugin the existing
     loadModules trust gate re-verifies. Returns (ok, status, payload)."""
     if not _MARKETPLACE_CATALOG_URL:
@@ -2403,8 +2479,10 @@ def _install_marketplace_plugin(catalog_id: str, password: str):
         return False, 400, {"error": "bad_plugin_id"}
     path = f"{placement}/{pid}"
     target_dir = MODULES_DIR / placement / pid
-    if target_dir.exists():
+    if target_dir.exists() and not upgrade:
         return False, 409, {"error": "already_installed"}
+    if upgrade and not target_dir.exists():
+        return False, 404, {"error": "not_installed"}
     ok_c, reason_c = _compat_satisfies(_max_version(CHANGELOG_DIR), entry.get("platformCompat"))
     if not ok_c:
         return False, 409, {"error": "incompatible", "detail": reason_c}
@@ -2413,7 +2491,21 @@ def _install_marketplace_plugin(catalog_id: str, password: str):
         return False, 400, {"error": "no_asset"}
     MODULES_DIR.mkdir(parents=True, exist_ok=True)   # fresh (un-bundled) install: js/modules may not exist yet
     tmp_root = Path(tempfile.mkdtemp(prefix=".mkt-", dir=str(MODULES_DIR)))
+    backup = None    # upgrade only: the working copy, parked until the new one is approved
     moved = False
+
+    def _abort(status, payload):
+        """Leave js/modules exactly as this call found it, then report."""
+        if moved:
+            shutil.rmtree(target_dir, ignore_errors=True)
+        if backup is not None and backup.exists():
+            try:
+                _rename_retry(backup, target_dir)
+            except OSError:
+                pass   # nothing left to try; the payload already says the call failed
+        shutil.rmtree(tmp_root, ignore_errors=True)
+        return False, status, payload
+
     try:
         zip_path = tmp_root / "plugin.zip"
         _download_capped(asset_url, zip_path, _MARKETPLACE_MAX_ZIP)
@@ -2446,14 +2538,16 @@ def _install_marketplace_plugin(catalog_id: str, password: str):
         if meta.get("placement") and meta["placement"] != placement:
             raise OSError("plugin.json placement ≠ catalogue")
         target_dir.parent.mkdir(parents=True, exist_ok=True)
+        if target_dir.exists():
+            # Park the working copy instead of deleting it: everything after this
+            # point can still fail, and an operator who asked for an upgrade must
+            # never end up with less than they had.
+            backup = tmp_root / "previous"
+            _rename_retry(target_dir, backup)
         _rename_retry(proot, target_dir)
         moved = True
     except Exception as e:
-        if moved:
-            shutil.rmtree(target_dir, ignore_errors=True)
-        return False, 502, {"error": "install_failed", "detail": str(e)}
-    finally:
-        shutil.rmtree(tmp_root, ignore_errors=True)
+        return _abort(502, {"error": "install_failed", "detail": str(e)})
     # Operator approval PINNED to the on-disk bytes (server recomputes the hash — INV-4).
     server_hash = _plugin_hash(_plugin_file_hashes(target_dir))
     declared = sorted(_plugin_declared_caps(target_dir))
@@ -2461,11 +2555,12 @@ def _install_marketplace_plugin(catalog_id: str, password: str):
     mode = "sandboxed" if wants_sandbox else "trusted"
     ok_a, st_a, pl_a = _approve_plugin(path, server_hash, mode, declared, password)
     if not ok_a:
-        shutil.rmtree(target_dir, ignore_errors=True)
-        return False, st_a, {**pl_a, "stage": "approve"}
+        return _abort(st_a, {**pl_a, "stage": "approve"})
+    shutil.rmtree(tmp_root, ignore_errors=True)   # takes the parked previous version with it
     global _TRUST_EPOCH
     _TRUST_EPOCH += 1
-    return True, 200, {"ok": True, "path": path, "mode": mode}
+    return True, 200, {"ok": True, "path": path, "mode": mode,
+                       "version": meta.get("version"), "upgraded": bool(upgrade)}
 
 
 def _uninstall_marketplace_plugin(path: str):
@@ -4155,7 +4250,7 @@ class AdminHandler(http.server.SimpleHTTPRequestHandler):
                 return
             if action in ("set_plugin", "update_apply", "update_ack",
                           "approve_plugin", "revoke_plugin",
-                          "install_plugin", "uninstall_plugin",
+                          "install_plugin", "update_plugin", "uninstall_plugin",
                           "repair_permissions"):
                 ok, status, payload = _authorize_write(
                     self.command, session, self.headers.get("X-CSRF-Token")
@@ -4190,6 +4285,11 @@ class AdminHandler(http.server.SimpleHTTPRequestHandler):
             elif action == "install_plugin":
                 b = body or {}
                 ok2, st2, pl2 = _install_marketplace_plugin(b.get("id", ""), b.get("password", ""))
+                self._json(st2, pl2)
+            elif action == "update_plugin":
+                b = body or {}
+                ok2, st2, pl2 = _install_marketplace_plugin(b.get("id", ""), b.get("password", ""),
+                                                            upgrade=True)
                 self._json(st2, pl2)
             elif action == "uninstall_plugin":
                 ok2, st2, pl2 = _uninstall_marketplace_plugin((body or {}).get("path", ""))

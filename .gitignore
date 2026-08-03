@@ -23,6 +23,7 @@ DOCS/*
 !DOCS/plugins/
 !DOCS/update-system/
 !DOCS/plugin-sandbox/
+!DOCS/admin-guide/
 platform_data_inventory.xlsx
 platform_preselection_fixed_live.xlsx
 test_meta.html

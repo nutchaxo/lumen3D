@@ -834,7 +834,8 @@
     "permsFailed": "Permission repair failed.",
     "rateLimited": "GitHub API rate limit reached. Retry in {m} minute(s).",
     "rateLimitedNoMin": "GitHub API rate limit reached. Retry in a few minutes.",
-    "tlsCaBroken": "This host's PHP certificate store is unusable: upload cacert.pem (https://curl.se/ca/cacert.pem) to the site root."
+    "tlsCaBroken": "This host's PHP certificate store is unusable: upload cacert.pem (https://curl.se/ca/cacert.pem) to the site root.",
+    "navDocs": "Documentation"
   },
   "appearance": {
     "title": "Appearance",
@@ -1536,5 +1537,27 @@
     "uninstalled": "Plugin uninstalled.",
     "lastShader": "Cannot: last render mode.",
     "uninstallFailed": "Uninstall failed."
+  },
+  "docs": {
+    "title": "Documentation",
+    "sub": "The guides and procedures published for this platform. Always current: they are fetched from the repository, not from this install.",
+    "refresh": "Refresh",
+    "view": "Read",
+    "download": "Download",
+    "language": "Language",
+    "multi": "Multilingual",
+    "updated": "Updated on",
+    "older": "Previous versions",
+    "onlyVersion": "Only one version published.",
+    "newTab": "New tab",
+    "close": "Close",
+    "emptyTitle": "No document published",
+    "emptyHint": "Drop a file named \"260803 - GUIDE-ADMIN - EN.pdf\" into the repository's DOCS/ folder and it will show up here.",
+    "skipped": "Files ignored (name does not match)",
+    "loadError": "Could not load the document list.",
+    "errRate": "GitHub API rate limit reached. Retry in a few minutes.",
+    "errNet": "Could not reach GitHub to read the document list.",
+    "errTls": "This host's PHP certificate store is unusable: upload cacert.pem to the site root.",
+    "errFolder": "The DOCS/ folder does not exist in the repository yet."
   }
 }

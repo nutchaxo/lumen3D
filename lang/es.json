@@ -834,7 +834,8 @@
     "permsFailed": "Error al reparar los permisos.",
     "rateLimited": "Límite de la API de GitHub alcanzado. Reinténtelo en {m} minuto(s).",
     "rateLimitedNoMin": "Límite de la API de GitHub alcanzado. Reinténtelo en unos minutos.",
-    "tlsCaBroken": "El almacén de certificados de PHP no es utilizable en este alojamiento: suba cacert.pem (https://curl.se/ca/cacert.pem) a la raíz del sitio."
+    "tlsCaBroken": "El almacén de certificados de PHP no es utilizable en este alojamiento: suba cacert.pem (https://curl.se/ca/cacert.pem) a la raíz del sitio.",
+    "navDocs": "Documentación"
   },
   "appearance": {
     "title": "Apariencia",
@@ -1536,5 +1537,27 @@
     "uninstalled": "Plugin desinstalado.",
     "lastShader": "No se puede: último modo de render.",
     "uninstallFailed": "Error al desinstalar."
+  },
+  "docs": {
+    "title": "Documentación",
+    "sub": "Las guías y procedimientos publicados para esta plataforma. Siempre al día: se obtienen del repositorio, no de esta instalación.",
+    "refresh": "Actualizar",
+    "view": "Leer",
+    "download": "Descargar",
+    "language": "Idioma",
+    "multi": "Multilingüe",
+    "updated": "Actualizado el",
+    "older": "Versiones anteriores",
+    "onlyVersion": "Solo hay una versión publicada.",
+    "newTab": "Nueva pestaña",
+    "close": "Cerrar",
+    "emptyTitle": "Ningún documento publicado",
+    "emptyHint": "Coloque un archivo llamado «260803 - GUIDE-ADMIN - ES.pdf» en la carpeta DOCS/ del repositorio y aparecerá aquí.",
+    "skipped": "Archivos ignorados (nombre no válido)",
+    "loadError": "No se pudo cargar la lista de documentos.",
+    "errRate": "Límite de la API de GitHub alcanzado. Reinténtelo en unos minutos.",
+    "errNet": "No se puede contactar con GitHub para leer la lista de documentos.",
+    "errTls": "El almacén de certificados de PHP es inutilizable en este alojamiento: suba cacert.pem a la raíz del sitio.",
+    "errFolder": "La carpeta DOCS/ todavía no existe en el repositorio."
   }
 }

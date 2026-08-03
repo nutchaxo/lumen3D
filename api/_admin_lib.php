@@ -492,6 +492,148 @@ function admin_pipeline_github_asset(): array {
     return ['available' => false, 'reason' => 'absent', 'tag' => $rel['tag_name'] ?? null];
 }
 
+// ── Document library (twin of dev_server.py _docs_list / _doc_fetch) ──────────
+// Operator documents live in DOCS/ on GitHub, not in the release, so a corrected
+// guide reaches every install without shipping a new platform version. The
+// filename carries the metadata:
+//
+//     260803 - GUIDE-ADMIN - FR.pdf
+//     ^date    ^stable id    ^language
+//
+// Anything that does not match the rule is listed as skipped rather than guessed at.
+const DOCS_DIR_REMOTE = 'DOCS';
+// Read from the published branch, not from wherever development happens.
+const DOCS_BRANCH     = 'main';
+const DOCS_CACHE_TTL  = 600;              // GitHub allows 60 unauthenticated calls/hour
+
+function admin_doc_parse(string $name): ?array {
+    if (!preg_match('/^(\d{6})\s*-\s*(.+?)\s*-\s*([A-Za-z]{2,6})\.([A-Za-z0-9]{1,5})$/', $name, $m)) {
+        return null;
+    }
+    [$all, $stamp, $id, $lang, $ext] = $m;
+    $y = 2000 + (int)substr($stamp, 0, 2);
+    $mo = (int)substr($stamp, 2, 2);
+    $d  = (int)substr($stamp, 4, 2);
+    if (!checkdate($mo, $d, $y)) return null;   // 260899 is not a date
+    return [
+        'file' => $name, 'stamp' => $stamp,
+        'date' => sprintf('%04d-%02d-%02d', $y, $mo, $d),
+        'id' => trim($id), 'lang' => strtoupper($lang), 'ext' => strtolower($ext),
+    ];
+}
+
+function docs_cache_file(): string { return api_dir() . '/docs-cache.json'; }
+
+function admin_docs_list(bool $force = false): array {
+    $cf = docs_cache_file();
+    if (!$force && is_file($cf) && (time() - (int)@filemtime($cf)) < DOCS_CACHE_TTL) {
+        $c = json_decode((string)@file_get_contents($cf), true);
+        if (is_array($c)) return $c;
+    }
+
+    $raw = mkt_fetch_bytes('https://api.github.com/repos/' . GITHUB_REPO
+                           . '/contents/' . DOCS_DIR_REMOTE . '?ref=' . DOCS_BRANCH, 1024 * 1024);
+    if ($raw === null) {
+        $le = mkt_last_error();
+        $payload = ['docs' => [], 'repo' => GITHUB_REPO,
+                    'error' => (($le['status'] ?? 0) === 403) ? 'rate_limited'
+                             : (!empty($le['ca']) ? 'tls_ca_broken' : 'unreachable'),
+                    'detail' => (string)($le['curl'] ?: $le['stream'])];
+        @file_put_contents($cf, json_encode($payload));
+        return $payload;
+    }
+    $entries = json_decode($raw, true);
+    if (!is_array($entries) || !isset($entries[0])) {
+        $payload = ['docs' => [], 'repo' => GITHUB_REPO, 'error' => 'no_folder'];
+        @file_put_contents($cf, json_encode($payload));
+        return $payload;
+    }
+
+    $groups = []; $skipped = [];
+    foreach ($entries as $e) {
+        if (($e['type'] ?? '') !== 'file') continue;
+        $nm = (string)($e['name'] ?? '');
+        $info = admin_doc_parse($nm);
+        if ($info === null) {
+            // README.md documents the naming rule and belongs here; flagging it as
+            // malformed on every listing is just noise.
+            $low = strtolower($nm);
+            if (strpos($low, 'readme') !== 0 && strpos($low, '.') !== 0) $skipped[] = $nm;
+            continue;
+        }
+        $info['size'] = (int)($e['size'] ?? 0);
+        $groups[$info['id']]['id'] = $info['id'];
+        $groups[$info['id']]['versions'][] = $info;
+    }
+
+    $docs = [];
+    foreach ($groups as $g) {
+        usort($g['versions'], function ($a, $b) {
+            return [$b['stamp'], $b['lang']] <=> [$a['stamp'], $a['lang']];
+        });
+        $langs = array_values(array_unique(array_column($g['versions'], 'lang')));
+        sort($langs);
+        $g['languages']  = $langs;
+        $g['latest']     = $g['versions'][0]['stamp'];
+        $g['latestDate'] = $g['versions'][0]['date'];
+        $docs[] = $g;
+    }
+    usort($docs, function ($a, $b) { return [$b['latest'], $b['id']] <=> [$a['latest'], $a['id']]; });
+
+    $payload = ['docs' => $docs, 'repo' => GITHUB_REPO, 'folder' => DOCS_DIR_REMOTE,
+                'skipped' => array_slice($skipped, 0, 10)];
+    @file_put_contents($cf, json_encode($payload));
+    @chmod($cf, 0644);
+    return $payload;
+}
+
+function admin_doc_mime(string $ext): string {
+    static $m = [
+        'pdf' => 'application/pdf', 'md' => 'text/plain; charset=utf-8',
+        'txt' => 'text/plain; charset=utf-8', 'html' => 'text/html; charset=utf-8',
+        'png' => 'image/png', 'jpg' => 'image/jpeg', 'jpeg' => 'image/jpeg',
+        'svg' => 'image/svg+xml', 'zip' => 'application/zip',
+        'docx' => 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        'xlsx' => 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    ];
+    return $m[$ext] ?? 'application/octet-stream';
+}
+
+// Only these may be shown in a frame. HTML and SVG are deliberately absent: both
+// can carry script, and a document is fetched from a repository — displaying one
+// inline on this origin would run it beside the admin session. They download.
+const DOC_INLINE_OK = ['pdf', 'png', 'jpg', 'jpeg', 'txt', 'md'];
+
+function admin_doc_send(string $name, bool $inline): void {
+    // Validated against the naming rule AND the live listing: the proxy must never
+    // be usable to pull an arbitrary repo path through an admin session.
+    $info = admin_doc_parse($name);
+    $listing = admin_docs_list();
+    $known = [];
+    foreach ($listing['docs'] ?? [] as $d) {
+        foreach ($d['versions'] as $v) $known[$v['file']] = true;
+    }
+    if ($info === null || !isset($known[$name])) {
+        admin_json_out(['error' => 'unknown_document'], 404);
+    }
+    $url = 'https://raw.githubusercontent.com/' . GITHUB_REPO . '/' . DOCS_BRANCH . '/'
+         . DOCS_DIR_REMOTE . '/' . rawurlencode($name);
+    $body = mkt_fetch_bytes($url, 64 * 1024 * 1024);
+    if ($body === null) {
+        admin_json_out(['error' => 'fetch_failed'], 502);
+    }
+    // Proxied rather than linked: raw.github serves octet-stream (the browser would
+    // download instead of display) and a cross-origin frame is refused by the CSP.
+    header('Content-Type: ' . admin_doc_mime($info['ext']));
+    header('Content-Length: ' . strlen($body));
+    $inline = $inline && in_array($info['ext'], DOC_INLINE_OK, true);
+    header('Content-Disposition: ' . ($inline ? 'inline' : 'attachment')
+           . '; filename="' . str_replace('"', '', $name) . '"');
+    header('Cache-Control: private, max-age=300');
+    echo $body;
+    exit;
+}
+
 function admin_pipeline_info(): array {
     // No build-on-demand twin: a PHP host has neither preprocess/ nor SCRIPTS/ nor
     // tools/ (none are in the release allowlist), so the shipped zip is all there is.

@@ -1725,6 +1725,136 @@ def _http_get_json(url: str, timeout: int = 10) -> dict:
         return json.loads(r.read().decode("utf-8"))
 
 
+# ── Document library ───────────────────────────────────────────────────────────
+# Operator-facing documents (guides, procedures) live in DOCS/ on GitHub rather
+# than inside the release, so a corrected guide reaches every install without
+# shipping a new version of the platform.
+#
+# The filename IS the metadata — no sidecar index to keep in sync:
+#
+#     260803 - GUIDE-ADMIN - FR.pdf
+#     ^date    ^stable id    ^language
+#
+# The date sorts and versions (newest wins, older ones stay reachable), the id is
+# what makes two files the same document across versions and languages, and the
+# language lets the panel serve the operator's own. A file that does not match is
+# ignored rather than guessed at.
+DOCS_DIR_REMOTE = "DOCS"
+# Documents are read from the published branch, not from wherever development
+# happens: an operator should only ever see a guide that has been released.
+DOCS_BRANCH = "main"
+_DOC_RE = re.compile(r"^(\d{6})\s*-\s*(.+?)\s*-\s*([A-Za-z]{2,6})\.([A-Za-z0-9]{1,5})$")
+_DOCS_CACHE: dict = {"at": 0.0, "payload": None}
+_DOCS_TTL = 600.0          # GitHub's unauthenticated API allows 60 calls/hour
+
+
+def _doc_parse(name: str) -> dict | None:
+    m = _DOC_RE.match(name)
+    if not m:
+        return None
+    yymmdd, doc_id, lang, ext = m.group(1), m.group(2).strip(), m.group(3).upper(), m.group(4).lower()
+    try:
+        y, mo, d = 2000 + int(yymmdd[:2]), int(yymmdd[2:4]), int(yymmdd[4:6])
+        date = datetime(y, mo, d).strftime("%Y-%m-%d")
+    except ValueError:
+        return None                      # 260899 is not a date; treat as unparseable
+    return {"file": name, "date": date, "stamp": yymmdd, "id": doc_id, "lang": lang, "ext": ext}
+
+
+def _docs_list(force: bool = False) -> dict:
+    """Group DOCS/ into one entry per document, newest version first."""
+    now = time.time()
+    if not force and _DOCS_CACHE["payload"] and now - _DOCS_CACHE["at"] < _DOCS_TTL:
+        return _DOCS_CACHE["payload"]
+
+    url = (f"https://api.github.com/repos/{GITHUB_REPO}/contents/{DOCS_DIR_REMOTE}"
+           f"?ref={DOCS_BRANCH}")
+    try:
+        entries = _http_get_json(url, timeout=12)
+    except urllib.error.HTTPError as e:
+        payload = {"docs": [], "error": "rate_limited" if e.code == 403 else "unreachable",
+                   "detail": f"HTTP {e.code}", "repo": GITHUB_REPO}
+        _DOCS_CACHE.update(at=now, payload=payload)
+        return payload
+    except Exception as e:
+        payload = {"docs": [], "error": "unreachable", "detail": str(e)[:160], "repo": GITHUB_REPO}
+        _DOCS_CACHE.update(at=now, payload=payload)
+        return payload
+
+    if not isinstance(entries, list):
+        payload = {"docs": [], "error": "no_folder", "repo": GITHUB_REPO}
+        _DOCS_CACHE.update(at=now, payload=payload)
+        return payload
+
+    groups: dict[str, dict] = {}
+    skipped = []
+    for e in entries:
+        if e.get("type") != "file":
+            continue
+        nm = e.get("name", "")
+        info = _doc_parse(nm)
+        if not info:
+            # README.md documents the naming rule and is expected to be here;
+            # reporting it as a malformed document every time is just noise.
+            if not nm.lower().startswith(("readme", ".")):
+                skipped.append(nm)
+            continue
+        info["size"] = e.get("size", 0)
+        g = groups.setdefault(info["id"], {"id": info["id"], "versions": []})
+        g["versions"].append(info)
+
+    docs = []
+    for g in groups.values():
+        # newest first; ties broken on language so the order is stable
+        g["versions"].sort(key=lambda v: (v["stamp"], v["lang"]), reverse=True)
+        g["languages"] = sorted({v["lang"] for v in g["versions"]})
+        g["latest"] = g["versions"][0]["stamp"]
+        g["latestDate"] = g["versions"][0]["date"]
+        docs.append(g)
+    docs.sort(key=lambda d: (d["latest"], d["id"]), reverse=True)
+
+    payload = {"docs": docs, "repo": GITHUB_REPO, "folder": DOCS_DIR_REMOTE,
+               "skipped": skipped[:10]}
+    _DOCS_CACHE.update(at=now, payload=payload)
+    return payload
+
+
+_DOC_MIME = {
+    "pdf": "application/pdf", "md": "text/plain; charset=utf-8",
+    "txt": "text/plain; charset=utf-8", "html": "text/html; charset=utf-8",
+    "png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg",
+    "svg": "image/svg+xml", "zip": "application/zip",
+    "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+}
+# Only these may be shown in a frame. HTML and SVG are deliberately absent: both
+# can carry script, and a document is fetched from a repository — displaying one
+# inline on this origin would run it beside the admin session. They download.
+DOC_INLINE_OK = {"pdf", "png", "jpg", "jpeg", "txt", "md"}
+
+
+def _doc_fetch(name: str) -> tuple[bytes, str] | None:
+    """Fetch one document from GitHub. Returns (bytes, content-type).
+
+    The name is validated against the naming rule AND against the live listing:
+    the proxy must never be usable to pull an arbitrary repo path through the
+    admin session.
+    """
+    info = _doc_parse(name)
+    if not info:
+        return None
+    listing = _docs_list()
+    known = {v["file"] for d in listing.get("docs", []) for v in d["versions"]}
+    if name not in known:
+        return None
+    url = (f"https://raw.githubusercontent.com/{GITHUB_REPO}/{DOCS_BRANCH}/"
+           f"{DOCS_DIR_REMOTE}/{urllib.parse.quote(name)}")
+    req = urllib.request.Request(url, headers={"User-Agent": "lumen3d-admin"})
+    with urllib.request.urlopen(req, timeout=60) as r:
+        data = r.read()
+    return data, _DOC_MIME.get(info["ext"], "application/octet-stream")
+
+
 # ── Downloadable processing pipelines ──────────────────────────────────────────
 # The admin panel hands operators a self-contained pack that turns raw microscope
 # output into datasets: the Imaris .ims volume pipeline plus the Imaris-Excel cell
@@ -3659,6 +3789,27 @@ class AdminHandler(http.server.SimpleHTTPRequestHandler):
         entries = _list_download_entries(download_root, target, dataset_id, rel)
         self._json_nostore(200, {"dataset": dataset_id, "path": rel, "available": True, "entries": entries})
 
+    def _send_bytes(self, data: bytes, content_type: str, filename: str, inline: bool):
+        """Send an already-fetched body.
+
+        Documents are proxied rather than linked straight to GitHub: raw.github
+        serves them as octet-stream, so a browser would download instead of
+        display, and a cross-origin frame would be refused by the CSP anyway.
+        Coming back through our own origin, "inline" previews in an <iframe>.
+        """
+        self.send_response(200)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(data)))
+        safe = filename.replace('"', "")
+        self.send_header("Content-Disposition",
+                         f'{"inline" if inline else "attachment"}; filename="{safe}"')
+        self.send_header("Cache-Control", "private, max-age=300")
+        self.end_headers()
+        try:
+            self.wfile.write(data)
+        except (BrokenPipeError, ConnectionResetError):
+            pass
+
     def _send_attachment(self, path: Path, filename: str):
         """Stream a file back as a download.
 
@@ -4056,6 +4207,23 @@ class AdminHandler(http.server.SimpleHTTPRequestHandler):
                     self._json(404, {"error": "pipeline_unavailable", "edition": edition})
                 else:
                     self._send_attachment(local, local.name)
+            elif action == "docs_list":
+                self._json_nostore(200, _docs_list(force=params.get("refresh") == "1"))
+            elif action == "docs_download":
+                name = params.get("file", "")
+                try:
+                    got = _doc_fetch(name)
+                except Exception as e:
+                    self._json(502, {"error": "fetch_failed", "detail": str(e)[:160]})
+                    return
+                if got is None:
+                    self._json(404, {"error": "unknown_document"})
+                else:
+                    body, ctype = got
+                    info = _doc_parse(name) or {}
+                    inline = (params.get("inline") == "1"
+                              and info.get("ext") in DOC_INLINE_OK)
+                    self._send_bytes(body, ctype, name, inline)
             elif action == "permissions_status":
                 self._json(200, _permissions_report())
             elif action == "repair_permissions":

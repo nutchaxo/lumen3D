@@ -834,7 +834,8 @@
     "permsFailed": "Herstellen van de rechten mislukt.",
     "rateLimited": "Limiet van de GitHub-API bereikt. Probeer over {m} minuut/minuten opnieuw.",
     "rateLimitedNoMin": "Limiet van de GitHub-API bereikt. Probeer over enkele minuten opnieuw.",
-    "tlsCaBroken": "De certificaatopslag van PHP op deze host is onbruikbaar: upload cacert.pem (https://curl.se/ca/cacert.pem) naar de hoofdmap van de site."
+    "tlsCaBroken": "De certificaatopslag van PHP op deze host is onbruikbaar: upload cacert.pem (https://curl.se/ca/cacert.pem) naar de hoofdmap van de site.",
+    "navDocs": "Documentatie"
   },
   "appearance": {
     "title": "Vormgeving",
@@ -1536,5 +1537,27 @@
     "uninstalled": "Plug-in verwijderd.",
     "lastShader": "Niet mogelijk: laatste weergavemodus.",
     "uninstallFailed": "Verwijderen mislukt."
+  },
+  "docs": {
+    "title": "Documentatie",
+    "sub": "De gidsen en procedures die voor dit platform gepubliceerd zijn. Altijd actueel: ze worden uit de repository gehaald, niet uit deze installatie.",
+    "refresh": "Vernieuwen",
+    "view": "Lezen",
+    "download": "Downloaden",
+    "language": "Taal",
+    "multi": "Meertalig",
+    "updated": "Bijgewerkt op",
+    "older": "Vorige versies",
+    "onlyVersion": "Slechts één versie gepubliceerd.",
+    "newTab": "Nieuw tabblad",
+    "close": "Sluiten",
+    "emptyTitle": "Geen document gepubliceerd",
+    "emptyHint": "Zet een bestand met de naam \"260803 - GUIDE-ADMIN - NL.pdf\" in de map DOCS/ van de repository; het verschijnt hier.",
+    "skipped": "Genegeerde bestanden (naam voldoet niet)",
+    "loadError": "Kan de lijst met documenten niet laden.",
+    "errRate": "Limiet van de GitHub-API bereikt. Probeer over enkele minuten opnieuw.",
+    "errNet": "Kan GitHub niet bereiken om de lijst met documenten te lezen.",
+    "errTls": "De certificaatopslag van PHP op deze host is onbruikbaar: upload cacert.pem naar de hoofdmap van de site.",
+    "errFolder": "De map DOCS/ bestaat nog niet in de repository."
   }
 }

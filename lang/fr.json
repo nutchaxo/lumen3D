@@ -834,7 +834,8 @@
     "permsFailed": "Échec de la réparation des permissions.",
     "rateLimited": "Limite de l'API GitHub atteinte. Réessayez dans {m} minute(s).",
     "rateLimitedNoMin": "Limite de l'API GitHub atteinte. Réessayez dans quelques minutes.",
-    "tlsCaBroken": "Le magasin de certificats de PHP est inutilisable sur cet hébergement : téléversez cacert.pem (https://curl.se/ca/cacert.pem) à la racine du site."
+    "tlsCaBroken": "Le magasin de certificats de PHP est inutilisable sur cet hébergement : téléversez cacert.pem (https://curl.se/ca/cacert.pem) à la racine du site.",
+    "navDocs": "Documentation"
   },
   "appearance": {
     "title": "Apparence",
@@ -1536,5 +1537,27 @@
     "uninstalled": "Plugin désinstallé.",
     "lastShader": "Impossible : dernier mode de rendu.",
     "uninstallFailed": "Échec de la désinstallation."
+  },
+  "docs": {
+    "title": "Documentation",
+    "sub": "Les guides et procédures publiés pour cette plateforme. Toujours à jour : ils sont récupérés depuis le dépôt, pas depuis cette installation.",
+    "refresh": "Actualiser",
+    "view": "Lire",
+    "download": "Télécharger",
+    "language": "Langue",
+    "multi": "Multilingue",
+    "updated": "Mis à jour le",
+    "older": "Versions précédentes",
+    "onlyVersion": "Une seule version publiée.",
+    "newTab": "Nouvel onglet",
+    "close": "Fermer",
+    "emptyTitle": "Aucun document publié",
+    "emptyHint": "Déposez un fichier nommé « 260803 - GUIDE-ADMIN - FR.pdf » dans le dossier DOCS/ du dépôt : il apparaîtra ici.",
+    "skipped": "Fichiers ignorés (nom non conforme)",
+    "loadError": "Impossible de charger la liste des documents.",
+    "errRate": "Limite de l'API GitHub atteinte. Réessayez dans quelques minutes.",
+    "errNet": "Impossible de contacter GitHub pour lire la liste des documents.",
+    "errTls": "Le magasin de certificats de PHP est inutilisable sur cet hébergement : téléversez cacert.pem à la racine du site.",
+    "errFolder": "Le dossier DOCS/ n'existe pas encore dans le dépôt."
   }
 }

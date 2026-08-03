@@ -162,6 +162,13 @@ switch ($action) {
             'repo' => GITHUB_REPO,
         ]);
 
+    case 'docs_list':
+        admin_json_out(admin_docs_list(($_GET['refresh'] ?? '') === '1'));
+
+    case 'docs_download':
+        // Emits the document itself and exits — must NOT fall through to admin_json_out.
+        admin_doc_send((string)($_GET['file'] ?? ''), ($_GET['inline'] ?? '') === '1');
+
     case 'pipeline_info':
         admin_json_out(admin_pipeline_info());
 

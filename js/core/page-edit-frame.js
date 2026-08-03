@@ -79,18 +79,50 @@ const PageEditFrame = (() => {
     return c;
   }
 
+  // ── chrome arbitration — one toolbar at a time ──────────────────
+  // Section, column and widget toolbars are each pinned to their OWN element's
+  // top-right corner, and those corners coincide as soon as an element sits
+  // flush with its parent's top edge (a widget in a column — columns carry no
+  // padding by default — or a column in a section with padY:0). Two bars then
+  // paint in the same spot, and the one on top steals the clicks. Rule: the
+  // INNERMOST element under the pointer owns the corner; a selected element
+  // keeps its bar only while the pointer is off the editing surface. Resolving
+  // from the pointer position rather than per-element enter/leave pairs keeps
+  // the rule true whatever order the nested events fire in.
+  let _hover = null;      // { si, ci, wi } — deepest chrome owner under the cursor
+  let _syncers = [];      // bar visibility updaters, rebuilt on every render()
+
+  function _sameLoc(a, b) { return !!a && !!b && a.si === b.si && a.ci === b.ci && a.wi === b.wi; }
+  function _chromeOn(loc, selected) { return _hover ? _sameLoc(_hover, loc) : !!selected; }
+  function _syncChrome() { _syncers.forEach((f) => { try { f(); } catch (_) {} }); }
+  function _hoverAt(target) {
+    const t = target && target.closest ? target : null;
+    const n = t && (t.closest('[data-eb-wi]') || t.closest('[data-eb-col]') || t.closest('[data-eb-sec]'));
+    if (!n) return null;
+    const d = n.dataset;
+    return { si: +d.ebSi, ci: d.ebCi != null ? +d.ebCi : null, wi: d.ebWi != null ? +d.ebWi : null };
+  }
+  function _setHover(loc) {
+    if (_sameLoc(loc, _hover) || (!loc && !_hover)) return;
+    _hover = loc;
+    _syncChrome();
+  }
+
   // ── render ──────────────────────────────────────────────────────
   function render() {
     if (!_host) return;
     // Preserve scroll: replacing every child (textContent='') resets the window
     // scroll on tall pages, yanking the viewport on every keystroke-driven push.
     const sx = window.scrollX, sy = window.scrollY;
+    _syncers = [];
+    _hover = null;                    // the nodes it pointed at are about to go
     _host.textContent = '';
     if (_empty) _empty.style.display = 'none';
     if (!_sections.length) { _host.appendChild(_emptyState()); return; }
     _sections.forEach((sec, si) => _host.appendChild(_sectionNode(sec, si)));
     _host.appendChild(_addSectionBar());
     _icons(_host);
+    _syncChrome();
     window.scrollTo(sx, sy);
   }
 
@@ -141,6 +173,7 @@ const PageEditFrame = (() => {
     const gap = css.gap;
     const outer = document.createElement('section');
     outer.dataset.ebSi = si;
+    outer.dataset.ebSec = '1';
     outer.style.cssText = css.outer +
       `;outline:2px solid ${selected ? PRIMARY : 'transparent'};outline-offset:-2px;transition:outline-color .12s`;
     PageRenderer.applyStyleExtras(outer, p.style);
@@ -156,7 +189,8 @@ const PageEditFrame = (() => {
     bar.appendChild(_btn('copy', _msg('duplicate', 'Dupliquer'), () => _action('dupSection', { si })));
     bar.appendChild(_btn('trash-2', _msg('delete', 'Supprimer'), () => _action('delSection', { si })));
 
-    const showChrome = (on) => { chip.style.opacity = on || selected ? '1' : '0'; bar.style.opacity = on || selected ? '1' : '0'; if (!selected) outer.style.outlineColor = on ? 'color-mix(in srgb,' + 'var(--color-primary,#2F6BFF)' + ' 55%,transparent)' : 'transparent'; };
+    const showChrome = (on) => { chip.style.opacity = on || selected ? '1' : '0'; if (!selected) outer.style.outlineColor = on ? 'color-mix(in srgb,' + 'var(--color-primary,#2F6BFF)' + ' 55%,transparent)' : 'transparent'; };
+    _syncers.push(() => { bar.style.opacity = _chromeOn({ si, ci: null, wi: null }, selected) ? '1' : '0'; });
     outer.addEventListener('mouseenter', () => showChrome(true));
     outer.addEventListener('mouseleave', () => showChrome(false));
     outer.addEventListener('click', () => _select({ si, ci: null, wi: null }));
@@ -253,10 +287,10 @@ const PageEditFrame = (() => {
     if (sec.columns.length > 1) cbar.appendChild(_btn('trash-2', _msg('delete', 'Supprimer'), () => _action('delColumn', { si, ci })));
     c.appendChild(cbar);
 
-    c.addEventListener('mouseenter', () => { if (!selected) c.style.outlineColor = 'var(--border-subtle,#2a2a3a)'; cbar.style.opacity = '1'; });
-    c.addEventListener('mouseleave', () => { if (!selected) c.style.outlineColor = 'transparent'; if (!selected) cbar.style.opacity = '0'; });
+    c.addEventListener('mouseenter', () => { if (!selected) c.style.outlineColor = 'var(--border-subtle,#2a2a3a)'; });
+    c.addEventListener('mouseleave', () => { if (!selected) c.style.outlineColor = 'transparent'; });
     c.addEventListener('click', (e) => { e.stopPropagation(); _select({ si, ci, wi: null }); });
-    if (selected) cbar.style.opacity = '1';
+    _syncers.push(() => { cbar.style.opacity = _chromeOn({ si, ci, wi: null }, selected) ? '1' : '0'; });
 
     const widgets = Array.isArray(col.widgets) ? col.widgets : [];
     widgets.forEach((w, wi) => c.appendChild(_widgetNode(w, si, ci, wi)));
@@ -275,26 +309,29 @@ const PageEditFrame = (() => {
     box.dataset.ebWi = wi; box.dataset.ebSi = si; box.dataset.ebCi = ci;
     box.style.cssText = `position:relative;border-radius:8px;margin:0 0 4px;` +
       `outline:2px solid ${selected ? PRIMARY : 'transparent'};outline-offset:1px;transition:outline-color .12s`;
-    box.addEventListener('mouseenter', () => { if (!selected) box.style.outlineColor = 'color-mix(in srgb,var(--color-primary,#2F6BFF) 45%,transparent)'; hbar.style.opacity = '1'; handle.style.opacity = '1'; });
-    box.addEventListener('mouseleave', () => { if (!selected) box.style.outlineColor = 'transparent'; if (!selected) { hbar.style.opacity = '0'; handle.style.opacity = '0'; } });
+    box.addEventListener('mouseenter', () => { if (!selected) box.style.outlineColor = 'color-mix(in srgb,var(--color-primary,#2F6BFF) 45%,transparent)'; });
+    box.addEventListener('mouseleave', () => { if (!selected) box.style.outlineColor = 'transparent'; });
     box.addEventListener('click', (e) => { e.stopPropagation(); _select({ si, ci, wi }); });
 
     // drag handle (reorder / move between columns)
     const handle = document.createElement('div');
     handle.title = _msg('drag', 'Déplacer');
     handle.style.cssText = `position:absolute;top:6px;left:6px;z-index:6;width:26px;height:26px;border-radius:6px;background:${PRIMARY};` +
-      'color:#fff;display:flex;align-items:center;justify-content:center;cursor:grab;touch-action:none;opacity:' + (selected ? '1' : '0') + ';transition:opacity .12s';
+      'color:#fff;display:flex;align-items:center;justify-content:center;cursor:grab;touch-action:none;opacity:0;transition:opacity .12s';
     handle.innerHTML = '<i data-lucide="grip-vertical" style="width:15px;height:15px"></i>';
     handle.addEventListener('pointerdown', (e) => _beginMove(e, si, ci, wi));
     handle.addEventListener('click', (e) => e.stopPropagation());
 
     const hbar = _bar('right:6px');
-    hbar.style.opacity = selected ? '1' : '0';
     hbar.appendChild(_btn('copy', _msg('duplicate', 'Dupliquer'), () => _action('dupWidget', { si, ci, wi })));
     hbar.appendChild(_btn('trash-2', _msg('delete', 'Supprimer'), () => _action('delWidget', { si, ci, wi })));
 
     box.appendChild(handle);
     box.appendChild(hbar);
+    _syncers.push(() => {
+      const on = _chromeOn({ si, ci, wi }, selected) ? '1' : '0';
+      hbar.style.opacity = on; handle.style.opacity = on;
+    });
 
     const view = document.createElement('div');
     view.style.cssText = 'pointer-events:none';
@@ -493,6 +530,10 @@ const PageEditFrame = (() => {
       a.addEventListener('click', (e) => e.preventDefault());
       a.style.cursor = 'default';
     });
+    document.addEventListener('mousemove', (e) => _setHover(_hoverAt(e.target)));
+    // Pointer gone from the frame (moved into the admin panel around it): no
+    // element owns the corner any more, so the selected one takes its bar back.
+    document.addEventListener('mouseleave', () => _setHover(null));
     window.addEventListener('message', _onMessage);
     _post({ type: 'LUMEN_EDIT_READY' });
   }

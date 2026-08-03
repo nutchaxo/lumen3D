@@ -1316,6 +1316,10 @@ body.viewer-iframe .canvas-overlay {
   max-height: none;
   box-shadow: none;
   cursor: default;
+  /* The canvas owns every touch: one finger draws, two navigate. Left to the
+     browser, a drawing stroke reads as a scroll and is cancelled mid-line. */
+  touch-action: none;
+  -webkit-tap-highlight-color: transparent;
 }
 
 .studio-tools-grid {

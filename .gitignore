@@ -24,6 +24,10 @@ DOCS/*
 !DOCS/update-system/
 !DOCS/plugin-sandbox/
 !DOCS/admin-guide/
+# Published operator documents, served by the admin Documentation tab straight
+# from GitHub. The filename is the metadata: "260803 - GUIDE-ADMIN - FR.pdf".
+!DOCS/*.pdf
+!DOCS/*.md
 platform_data_inventory.xlsx
 platform_preselection_fixed_live.xlsx
 test_meta.html

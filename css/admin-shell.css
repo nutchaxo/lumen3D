@@ -293,6 +293,8 @@ body.adm-editor-only .adm-tab-inner { max-width: none; padding: 0; }
 .adm-pupd-ver { display: flex; align-items: center; gap: 6px; font-size: 12px; font-family: 'JetBrains Mono', monospace; color: var(--adm-text-sec); }
 .adm-pupd-ver b { color: var(--adm-accent); }
 .adm-pupd-ver i { width: 13px; height: 13px; }
+/* Same affordance inside a Plugins-tab row, which is denser than an update card. */
+.adm-plugin-update { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 8px; }
 
 /* ── Dataset visibility (in the datasets editor) ───────────── */
 .vis-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 10px; }

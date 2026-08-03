@@ -1530,6 +1530,8 @@
     "refresh": "Refresh",
     "error": "Catalog unavailable",
     "installed": "Installed",
+    "updatable": "To update",
+    "updateBadge": "update available",
     "available": "Available",
     "incompatible2": "Incompatible",
     "empty": "No plugins in the catalog.",

@@ -12,6 +12,7 @@
 'use strict';
 
 import { API_ADMIN, t, escHtml, apiFetch, apiFetchStatus, toast, el, refreshIcons } from './shared.js';
+import { runPluginUpdates } from './plugin-update.js';
 
 let _data = { configured: false, signed: false, plugins: [] };
 let _busy = false;
@@ -30,22 +31,43 @@ function _card(p) {
   const capHtml = caps.length
     ? `<div class="mkt-caps" style="margin-top:6px;font-size:11px;opacity:.7">${escHtml(t('mkt.caps', 'Capacités'))}: ${caps.map(escHtml).join(', ')}</div>`
     : '';
-  const compatBad = p.compat === false
+  // `compat` describes the catalog's LATEST build, not what is on disk. On an
+  // installed plugin that is running perfectly well, an "incompatible" badge would
+  // be a lie — there the blocked-update note below says the true thing instead.
+  const compatBad = (!p.installed && p.compat === false)
     ? `<span class="adm-badge adm-badge-err" title="${escHtml(p.compatReason || '')}">${escHtml(t('mkt.incompatible', 'incompatible'))}</span>` : '';
+  // An installed plugin the catalog has moved past leads with the update: that is
+  // the action the operator came for, and uninstall stays available beside it.
+  const updBadge = p.updateAvailable
+    ? `<span class="adm-badge adm-badge-ok">${escHtml(t('mkt.updateBadge', 'màj disponible'))}</span>` : '';
   let action;
-  if (p.installed) action = `<button class="adm-btn adm-btn-ghost adm-btn-sm mkt-uninstall" data-path="${escHtml(p.placement + '/' + p.id)}"><i data-lucide="trash-2"></i> ${escHtml(t('mkt.uninstall', 'Désinstaller'))}</button>`;
-  else if (p.compat === false) action = `<button class="adm-btn adm-btn-ghost adm-btn-sm" disabled>${escHtml(t('mkt.incompatible', 'incompatible'))}</button>`;
+  if (p.installed) {
+    const upd = p.updateAvailable
+      ? `<button class="adm-btn adm-btn-accent adm-btn-sm pupd-one" data-id="${escHtml(p.id)}"><i data-lucide="download"></i> ${escHtml(t('admin.pluginUpdateOne', 'Mettre à jour'))}</button>` : '';
+    action = `${upd}<button class="adm-btn adm-btn-ghost adm-btn-sm mkt-uninstall" data-path="${escHtml(p.placement + '/' + p.id)}"><i data-lucide="trash-2"></i> ${escHtml(t('mkt.uninstall', 'Désinstaller'))}</button>`;
+  } else if (p.compat === false) action = `<button class="adm-btn adm-btn-ghost adm-btn-sm" disabled>${escHtml(t('mkt.incompatible', 'incompatible'))}</button>`;
   else action = `<button class="adm-btn adm-btn-accent adm-btn-sm mkt-install" data-id="${escHtml(p.id)}"><i data-lucide="download"></i> ${escHtml(t('mkt.install', 'Installer'))}</button>`;
+
+  // Installed: show what is on disk, and where an update would take it.
+  let versionText = p.latestVersion ? ` · v${escHtml(p.latestVersion)}` : '';
+  if (p.installed && p.installedVersion) {
+    versionText = (p.updateAvailable || p.updateBlocked)
+      ? ` · v${escHtml(p.installedVersion)} → v${escHtml(p.latestVersion)}`
+      : ` · v${escHtml(p.installedVersion)}`;
+  }
+  const blockedNote = p.updateBlocked
+    ? `<div style="font-size:11.5px;margin-top:4px" class="adm-compat-reason" title="${escHtml(p.compatReason || '')}">${escHtml(t('admin.pluginUpdateBlocked', 'Nécessite une plateforme plus récente'))}</div>` : '';
+
   return `<div class="adm-card" style="padding:16px;display:flex;flex-direction:column;gap:6px">
       <div style="display:flex;align-items:center;gap:8px">
         <i data-lucide="${escHtml(p.icon || 'puzzle')}"></i>
         <b style="flex:1">${escHtml(p.name || p.id)}</b>
-        ${_trustBadge(p)} ${compatBad}
+        ${_trustBadge(p)} ${compatBad} ${updBadge}
       </div>
-      <div style="opacity:.65;font-size:12px">${escHtml(p.creator || '')} · ${escHtml(p.placement || '')}${p.latestVersion ? ' · v' + escHtml(p.latestVersion) : ''}</div>
+      <div style="opacity:.65;font-size:12px">${escHtml(p.creator || '')} · ${escHtml(p.placement || '')}${versionText}</div>
       <div style="font-size:13px;opacity:.85">${escHtml(p.description || '')}</div>
-      ${capHtml}
-      <div style="margin-top:8px">${action}</div>
+      ${capHtml}${blockedNote}
+      <div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap">${action}</div>
     </div>`;
 }
 
@@ -60,7 +82,10 @@ function render() {
   }
 
   const plugins = Array.isArray(_data.plugins) ? _data.plugins : [];
-  const installed = plugins.filter((p) => p.installed);
+  // Updatable ones lift out of "Installés" into their own section: an update is
+  // time-sensitive in a way that an already-installed plugin is not.
+  const updatable = plugins.filter((p) => p.installed && p.updateAvailable);
+  const installed = plugins.filter((p) => p.installed && !p.updateAvailable);
   const available = plugins.filter((p) => !p.installed && p.compat !== false);
   const incompatible = plugins.filter((p) => !p.installed && p.compat === false);
   const grid = (arr) => `<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:14px">${arr.map(_card).join('')}</div>`;
@@ -76,14 +101,20 @@ function render() {
       <button class="adm-btn adm-btn-ghost adm-btn-sm" id="mkt-refresh"><i data-lucide="refresh-cw"></i> ${escHtml(t('mkt.refresh', 'Actualiser'))}</button>
     </div>
     ${_data.error ? `<div class="adm-gate-error" style="display:flex">${escHtml(t('mkt.error', 'Catalogue indisponible'))}: ${escHtml(_data.error)}</div>` : ''}
+    ${updatable.length ? `<div class="adm-update-actions" style="margin-top:14px">
+        <button class="adm-btn adm-btn-accent" id="mkt-update-all"><i data-lucide="download-cloud"></i> ${escHtml(t('admin.pluginUpdateAll', 'Tout mettre à jour'))}</button>
+      </div>` : ''}
+    ${section('mkt.updatable', 'À mettre à jour', updatable)}
     ${section('mkt.installed', 'Installés', installed)}
     ${section('mkt.available', 'Disponibles', available)}
     ${section('mkt.incompatible2', 'Incompatibles', incompatible)}
-    ${(!installed.length && !available.length && !incompatible.length && !_data.error) ? `<p class="adm-page-sub">${escHtml(t('mkt.empty', 'Aucun plugin dans le catalogue.'))}</p>` : ''}`;
+    ${(!updatable.length && !installed.length && !available.length && !incompatible.length && !_data.error) ? `<p class="adm-page-sub">${escHtml(t('mkt.empty', 'Aucun plugin dans le catalogue.'))}</p>` : ''}`;
 
   el('mkt-refresh')?.addEventListener('click', load);
   root.querySelectorAll('.mkt-install').forEach((b) => b.addEventListener('click', () => install(b.getAttribute('data-id'))));
   root.querySelectorAll('.mkt-uninstall').forEach((b) => b.addEventListener('click', () => uninstall(b.getAttribute('data-path'))));
+  root.querySelectorAll('.pupd-one').forEach((b) => b.addEventListener('click', () => update([b.getAttribute('data-id')])));
+  el('mkt-update-all')?.addEventListener('click', () => update(updatable.map((p) => p.id)));
   refreshIcons(root);
 }
 
@@ -107,6 +138,14 @@ async function install(id) {
     const map = { bad_password: t('mkt.badPassword', 'Mot de passe incorrect.'), already_installed: t('mkt.alreadyInstalled', 'Déjà installé.'), incompatible: t('mkt.incompatible', 'incompatible'), install_failed: t('mkt.installFailed', "Échec de l'installation (vérification échouée)."), catalog_fetch_failed: t('mkt.catalogFail', 'Catalogue inaccessible.') };
     toast(map[err] || (t('mkt.installFailed', "Échec de l'installation.") + ' (' + err + ')'), 'error');
   }
+}
+
+async function update(ids) {
+  if (_busy) return;
+  _busy = true;
+  const r = await runPluginUpdates(ids);
+  _busy = false;
+  if (!r.cancelled) await load();
 }
 
 async function uninstall(path) {

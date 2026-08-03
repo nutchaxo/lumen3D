@@ -18,10 +18,12 @@ Il est écrit pour quelqu'un qui **n'a jamais vu ce panneau** et qui **ne sait p
 ## Sommaire
 
 **Prise en main**
+
 - [1. Se connecter au panneau](#1-se-connecter-au-panneau)
 - [2. Le tour du propriétaire](#2-le-tour-du-propriétaire)
 
 **Les onglets, un par un**
+
 - [3. Datasets — les jeux de données](#3-datasets--les-jeux-de-données)
 - [4. Statistiques — qui consulte quoi](#4-statistiques--qui-consulte-quoi)
 - [5. Plugins — les fonctions du visualiseur](#5-plugins--les-fonctions-du-visualiseur)
@@ -35,6 +37,7 @@ Il est écrit pour quelqu'un qui **n'a jamais vu ce panneau** et qui **ne sait p
 - [13. Mentions légales](#13-mentions-légales)
 
 **Annexes**
+
 - [A. Première installation (assistant de démarrage)](#annexe-a--première-installation)
 - [B. En cas de problème](#annexe-b--en-cas-de-problème)
 - [C. Petit glossaire](#annexe-c--petit-glossaire)
@@ -205,6 +208,7 @@ Le chargement d'un gros volume prend quelques secondes — c'est normal, les don
 L'interrupteur en haut. `Visible` = tout le monde y a accès depuis l'explorateur. Masqué = il reste sur le serveur, reste accessible si on connaît son adresse exacte, mais n'apparaît plus dans les listes. Utile pour un jeu de données en cours de vérification, ou lié à un article pas encore publié.
 
 **Identification**
+
 - **Nom d'affichage** — remplacez le nom technique du dossier par quelque chose de lisible. C'est ce nom qui apparaît partout sur le site public.
 - **Stade** et **Embryon** — les deux étiquettes qui servent à filtrer dans l'explorateur. Elles sont pré-remplies automatiquement à partir du nom du dossier ; corrigez-les si la détection s'est trompée.
 - **Description** — texte libre affiché sur la fiche publique. Indiquez ce qui aide un collègue : marquages utilisés, conditions, particularités.
@@ -927,6 +931,7 @@ Un éditeur simple, à mise en page fixe, pour le texte légal du site.
 **Sections habituelles :** éditeur du site, hébergeur, propriété intellectuelle, données personnelles, contact.
 
 > ⚠️ **Deux choses à ne pas oublier :**
+> 
 > 1. la page reste invisible tant que vous n'avez pas coché **« Afficher Mentions légales »** dans **Identité → Navigation** ;
 > 2. le contenu juridique dépend de votre pays et de votre institution — rapprochez-vous du service compétent plutôt que de recopier un modèle trouvé en ligne.
 

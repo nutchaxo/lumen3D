@@ -58,6 +58,22 @@
     <FilesMatch "\.json$">
         Header set Cache-Control "no-cache"
     </FilesMatch>
+    # Brick packs ARE the volume: a native dataset is ~650 MB spread over ~70 of them.
+    # They carried no cache header at all, which does NOT mean "not cached" — it hands
+    # the decision to the browser's HEURISTIC cache, which reuses a response without
+    # revalidating for ~10% of its age (a day or so here). That is the worst of both:
+    # non-deterministic, and silently stale after a dataset is re-preprocessed.
+    # A long max-age is not the fix either — pack URLs carry no ?v= (the loader derives
+    # .../bricks/lodN/cM/pack_KK.bin from the manifest), so re-processing a dataset
+    # under the same name would serve the OLD voxels for a week. Half-updated volume =
+    # silently wrong science (rule 1.1).
+    # "no-cache" is the correct middle: the body is kept on disk and reused, but only
+    # after an If-None-Match the server answers with a 304. Revisiting a dataset costs
+    # one round-trip per pack instead of ~11 MB, and a re-processed dataset is picked
+    # up on the very next load (the ETag changes).
+    <FilesMatch "\.(bin|rgba|gz)$">
+        Header set Cache-Control "no-cache"
+    </FilesMatch>
 </IfModule>
 <IfModule mod_expires.c>
     ExpiresActive On

@@ -534,27 +534,98 @@ function admin_pipeline_pack_versions(): array {
     ];
 }
 
-function admin_pipeline_github_asset(): array {
+/** The pipeline packs attached to the latest release, per edition (twin of
+ *  dev_server.py:_pipeline_remote_assets).
+ *
+ *  A pack is named after the PIPELINE version it contains, so the filename alone
+ *  dates it — nothing has to be downloaded to tell whether this host's copy is
+ *  behind. Static-cached: PHP is per-request, but one admin request asks twice
+ *  (the download card and the update check) and GitHub allows 60 calls an hour. */
+function admin_pipeline_remote_assets(): array {
+    static $cache = null;
+    if ($cache !== null) return $cache;
+
     $raw = mkt_fetch_bytes('https://api.github.com/repos/' . GITHUB_REPO . '/releases/latest', 512 * 1024);
     if ($raw === null) {
-        return ['available' => false, 'reason' => 'unreachable', 'detail' => mkt_last_error()];
+        return $cache = ['reason' => 'unreachable', 'detail' => mkt_last_error(), 'editions' => []];
     }
     $rel = json_decode($raw, true);
-    if (!is_array($rel)) return ['available' => false, 'reason' => 'unreachable'];
+    if (!is_array($rel)) return $cache = ['reason' => 'unreachable', 'editions' => []];
+
+    $out = ['tag' => $rel['tag_name'] ?? null, 'editions' => []];
     foreach (($rel['assets'] ?? []) as $asset) {
         $name = $asset['name'] ?? '';
-        if (strncmp($name, PIPELINE_EDITIONS['complet'], strlen(PIPELINE_EDITIONS['complet'])) === 0
-            && substr($name, -4) === '.zip') {
-            return [
+        if (substr($name, -4) !== '.zip') continue;
+        foreach (PIPELINE_EDITIONS as $edition => $prefix) {
+            if (strncmp($name, $prefix, strlen($prefix)) !== 0) continue;
+            $out['editions'][$edition] = [
                 'available' => true,
                 'name'      => $name,
                 'size'      => $asset['size'] ?? null,
                 'url'       => $asset['browser_download_url'] ?? null,
                 'tag'       => $rel['tag_name'] ?? null,
+                'version'   => admin_version_name($name),
             ];
         }
     }
-    return ['available' => false, 'reason' => 'absent', 'tag' => $rel['tag_name'] ?? null];
+    return $cache = $out;
+}
+
+function admin_version_name(string $stem): ?string {
+    return preg_match('/(\d+\.\d+\.\d+)/', $stem, $m) ? $m[1] : null;
+}
+
+function admin_pipeline_github_asset(): array {
+    $remote = admin_pipeline_remote_assets();
+    if (isset($remote['editions']['complet'])) return $remote['editions']['complet'];
+    if (isset($remote['reason'])) {
+        return ['available' => false, 'reason' => $remote['reason'],
+                'detail' => $remote['detail'] ?? null];
+    }
+    return ['available' => false, 'reason' => 'absent', 'tag' => $remote['tag'] ?? null];
+}
+
+/** Pipeline version a local pack contains — declared inside, filename as fallback. */
+function admin_pipeline_local_version(string $pack): ?string {
+    return admin_pipeline_pack_doc($pack)['bundleVersion'] ?? admin_version_name(basename($pack, '.zip'));
+}
+
+/** Whether a newer pipeline pack than this host's has been published (twin of
+ *  dev_server.py:_pipeline_update_state).
+ *
+ *  The pack has its own release cadence — the preprocessing tool moves on its own
+ *  numbers, and a platform update is not what should carry it. So the host's copy
+ *  is compared against what the latest release attaches, and each edition that is
+ *  behind gets the newer pack offered next to the one already here. */
+function admin_pipeline_update_state(array &$info, ?array $remote = null): array {
+    $remote = $remote ?? admin_pipeline_remote_assets();
+    $editions = $remote['editions'] ?? [];
+    if (!$editions) {
+        return ['available' => false, 'reason' => $remote['reason'] ?? 'absent',
+                'detail' => $remote['detail'] ?? null, 'tag' => $remote['tag'] ?? null];
+    }
+
+    $newestLocal = null; $newestRemote = null;
+    foreach (array_keys(PIPELINE_EDITIONS) as $edition) {
+        $here = $info[$edition] ?? [];
+        $there = $editions[$edition] ?? null;
+        // Only a LOCAL pack can be behind: an edition served straight from GitHub is
+        // by construction the published one.
+        if (($here['source'] ?? null) !== 'local' || $there === null) continue;
+        $localV = $here['version'] ?? null; $remoteV = $there['version'] ?? null;
+        if (!$localV || !$remoteV) continue;
+        if (admin_version_tuple($remoteV) <= admin_version_tuple($localV)) continue;
+        $info[$edition]['newer'] = $there;
+        if ($newestLocal === null || admin_version_tuple($localV) < admin_version_tuple($newestLocal)) {
+            $newestLocal = $localV;
+        }
+        if ($newestRemote === null || admin_version_tuple($remoteV) > admin_version_tuple($newestRemote)) {
+            $newestRemote = $remoteV;
+        }
+    }
+
+    return ['available' => $newestRemote !== null, 'local' => $newestLocal,
+            'remote' => $newestRemote, 'tag' => $remote['tag'] ?? null];
 }
 
 // ── Document library (twin of dev_server.py _docs_list / _doc_fetch) ──────────
@@ -719,16 +790,20 @@ function admin_pipeline_info(): array {
     ];
     if ($lite !== null) {
         $info['leger'] = ['available' => true, 'name' => basename($lite),
-                          'size' => filesize($lite), 'source' => 'local'];
+                          'size' => filesize($lite), 'source' => 'local',
+                          'version' => admin_pipeline_local_version($lite)];
     }
     if ($full !== null) {
         $info['complet'] = ['available' => true, 'name' => basename($full),
-                            'size' => filesize($full), 'source' => 'local'];
+                            'size' => filesize($full), 'source' => 'local',
+                            'version' => admin_pipeline_local_version($full)];
     } else {
         $remote = admin_pipeline_github_asset();
         $remote['source'] = 'github';
         $info['complet'] = $remote;
     }
+
+    $info['update'] = admin_pipeline_update_state($info);
     return $info;
 }
 

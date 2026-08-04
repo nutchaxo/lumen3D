@@ -58,6 +58,18 @@ function editionCard(key, opts) {
     action = `<button class="adm-btn adm-btn-ghost adm-pl-dl" disabled>
                 <span class="spinner spinner-sm"></span> ${escHtml(t('admin.pipelineChecking', 'Vérification…'))}
               </button>`;
+  } else if (info.newer && info.newer.url) {
+    // A newer pack than this host's has been published. Offer it as the primary
+    // action and keep the installed one reachable — an offline processing station
+    // may well be why the operator came here.
+    action = `<a class="adm-btn adm-btn-accent adm-pl-dl" href="${escHtml(info.newer.url)}" target="_blank" rel="noopener">
+                <i data-lucide="download-cloud"></i> ${escHtml(t('admin.pipelineDownloadNew', 'Télécharger la v{v}', { v: info.newer.version || '—' }))}
+              </a>
+              ${info.source === 'local' ? `
+              <a class="adm-btn adm-btn-ghost adm-pl-dl2" href="${escHtml(API_ADMIN)}?action=pipeline_download&amp;edition=${escHtml(key)}" download>
+                <i data-lucide="download"></i> ${escHtml(t('admin.pipelineDownloadInstalled', 'Version installée (v{v})', { v: info.version || '—' }))}
+              </a>` : ''}`;
+    note = t('admin.pipelineNewerNote', 'Une version plus récente du pack est publiée ({tag}).', { tag: info.newer.tag || '—' });
   } else if (info.available && info.source === 'local') {
     // A plain navigation, not fetch(): the session cookie is SameSite=Lax so it
     // rides along, and the browser streams the file straight to disk instead of
@@ -117,6 +129,17 @@ function render() {
   // Only packs built from web v1.42.0 on record which release they shipped with;
   // for an older one the line is dropped rather than guessed from this install.
   const platformVer = versions.platform || null;
+  const upd = (_info && _info.update) || {};
+
+  // The pack moves on the preprocessing tool's own numbers, so a newer one can be
+  // published without any platform release — which is exactly the case this banner
+  // exists to make visible.
+  const updateBanner = upd.available ? `
+    <div class="adm-choice adm-choice-accent" style="margin-bottom:16px">
+      <i data-lucide="sparkles"></i>
+      <span><b>${escHtml(t('admin.pipelineUpdateTitle', 'Nouvelle version du pack : v{remote}', { remote: upd.remote || '—' }))}</b>
+        ${escHtml(t('admin.pipelineUpdateHint', 'Ce serveur propose la v{local}. Téléchargez la nouvelle ci-dessous — la plateforme n\'a pas besoin d\'être mise à jour pour ça.', { local: upd.local || '—' }))}</span>
+    </div>` : '';
 
   root.innerHTML = `
     <div class="adm-page-head">
@@ -125,6 +148,8 @@ function render() {
         <p class="adm-page-sub">${escHtml(t('admin.pipelinePageSub', "Le pack qui transforme les sorties du microscope en jeux de données publiables. Il s'exécute sur un poste Windows, hors de ce serveur."))}</p>
       </div>
     </div>
+
+    ${updateBanner}
 
     <div class="adm-card" style="margin-bottom:16px">
       <div class="adm-card-head">

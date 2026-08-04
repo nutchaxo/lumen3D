@@ -83,8 +83,11 @@ git push origin v1.7.1
 La CI (`.github/workflows/release.yml`) enchaîne automatiquement :
 1. garde de version (`check_version.py`),
 2. test de démarrage (`dev_server.py --check`),
-3. build de l'artefact curé (`tools/build_release.py`) → `lumen3d-web-1.7.1.zip` + `version.json` + `SHA256SUMS` (+ `SHA256SUMS.sig` **si** `LUMEN_SIGNING_KEY` est posé),
-4. `gh release create` publie les assets.
+3. build du **pack de traitement complet** (`build_pipeline_bundle.py --full`) — avant l'étape suivante, pour être couvert par la signature,
+4. build de l'artefact curé (`tools/build_release.py`) → `lumen3d-web-1.7.1.zip` + `version.json` + `SHA256SUMS` (+ `SHA256SUMS.sig` **si** `LUMEN_SIGNING_KEY` est posé). Il copie aussi le **pack léger** dans `dist/` et fait entrer les **deux packs** dans `SHA256SUMS`,
+5. `gh release create` publie les assets : le zip web, `SHA256SUMS`(`.sig`), et les deux packs `lumen3d-pipeline-{leger,complet}-<version pipeline>.zip`.
+
+> **Les packs sont nommés d'après la version du PIPELINE**, pas celle de la plateforme. C'est ce qui permet au panneau admin de comparer le pack installé sur l'hôte à celui publié, sans rien télécharger — et donc de proposer une mise à jour du pipeline **sans** mise à jour de la plateforme (onglets *Pipeline* et *Mises à jour*, depuis la web v1.44.0). Un pack qui n'est pas joint à la release n'est pas détectable : ne retire pas ces assets.
 
 ### A.5 — Appliquer (côté opérateur)
 

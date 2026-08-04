@@ -44,8 +44,12 @@ META = {
         "manifestPath": "DATA_WEB/fixed/DS/bricks/manifest.json",
     }],
 }
+# Shaped like what preprocess/3-chunk_packer.py writes. The per-level dimensions
+# are load-bearing: the brick loader refuses a manifest without them, so the
+# import refuses it too (a dataset the viewer cannot mount is not a valid import).
 MANIFEST = {
-    "version": 2, "levels": [{"level": 0}],
+    "version": 2, "brickSize": 64,
+    "levels": [{"level": 0, "dimensions": {"x": 64, "y": 64, "z": 64}}],
     "brickTransport": {"brickToPack": {
         "b": {"url": "lod0/c0/pack_00.bin", "offset": 0, "length": 10}}},
 }

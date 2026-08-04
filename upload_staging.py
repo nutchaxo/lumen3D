@@ -432,7 +432,14 @@ def _bitmap_decode(b64: str, nbits: int) -> bytearray:
         raw = bytearray()
     if len(raw) < nbytes:
         raw.extend(b"\x00" * (nbytes - len(raw)))
-    return raw[:nbytes] if nbytes else bytearray()
+    bits = raw[:nbytes] if nbytes else bytearray()
+    # Mask the padding bits of the last byte. Nothing we write ever sets them, but
+    # a hand-edited or truncated journal could, and the popcount in received_bytes
+    # would then report MORE bytes received than were ever sent.
+    extra = nbits & 7
+    if extra and bits:
+        bits[-1] &= (1 << extra) - 1
+    return bits
 
 
 def _bitmap_encode(bits: bytearray) -> str:
@@ -450,12 +457,12 @@ def _bit_set(bits: bytearray, i: int) -> None:
         bits[byte] |= 1 << (i & 7)
 
 
-def _bit_count(bits: bytearray, nbits: int) -> int:
-    total = 0
-    for i in range(nbits):
-        if _bit_get(bits, i):
-            total += 1
-    return total
+def _bit_count(bits: bytearray, nbits: int = 0) -> int:
+    """Set bits in the map. O(1) in the bit count — the padding is already masked
+    off by _bitmap_decode, so the whole buffer can be popcounted in one go rather
+    than walked bit by bit (a 22 GB original is 2 816 bits, and this runs on every
+    chunk acknowledgement)."""
+    return int.from_bytes(bytes(bits), "little").bit_count()
 
 
 def received_bytes(entry: dict) -> int:
@@ -466,11 +473,12 @@ def received_bytes(entry: dict) -> int:
     if nbits == 0:
         return 0
     bits = _bitmap_decode(entry.get("bits", ""), nbits)
-    total = 0
-    for i in range(nbits):
-        if _bit_get(bits, i):
-            total += min(chunk, size - i * chunk)
-    return total
+    count = _bit_count(bits)
+    # Every chunk is `chunk` bytes except the last, which is whatever remains.
+    last = nbits - 1
+    if _bit_get(bits, last):
+        return (count - 1) * chunk + (size - last * chunk)
+    return count * chunk
 
 
 def missing_chunks(entry: dict) -> list[int]:
@@ -557,13 +565,22 @@ def _plan_one(type_dir: str, folder: str, files, chunk_size: int) -> dict:
         for item in accepted:
             rel = item["path"]
             entry = jfiles.get(rel)
+            # Tiering is a property of the SET, so a second drop that adds coarser
+            # levels re-ranks files planned earlier. Refresh it on every branch —
+            # a stale tier on a finished file skews dataset_state's "is this
+            # openable yet" test.
+            if entry is not None:
+                entry["tier"] = item["tier"]
+                entry["kind"] = item["kind"]
             # The operator's edits win over a re-dropped pipeline file. metadata.json
             # is the one file the admin editor rewrites in place while the rest of the
             # dataset is still streaming in; re-sending the original would silently
             # revert their work (their explicit requirement).
             if rel == "metadata.json" and journal.get("metaLocked") and entry and entry.get("done"):
                 item["skip"] = "locked"
-                item["received"] = entry.get("size", 0)
+                # Report the LOCAL size, not the edited file's: totalBytes is summed
+                # from local sizes, and mixing the two made receivedBytes overshoot.
+                item["received"] = item["size"]
                 item["done"] = True
                 continue
             if entry and int(entry.get("size", -1)) == item["size"] and entry.get("done"):
@@ -573,8 +590,6 @@ def _plan_one(type_dir: str, folder: str, files, chunk_size: int) -> dict:
                 continue
             if entry and int(entry.get("size", -1)) == item["size"]:
                 # Same file, partially received — resume against the stored bitmap.
-                entry["tier"] = item["tier"]
-                entry["kind"] = item["kind"]
                 item["received"] = received_bytes(entry)
                 item["chunkSize"] = int(entry.get("chunkSize", chunk_size))
                 item["missing"] = missing_chunks(entry)
@@ -593,8 +608,24 @@ def _plan_one(type_dir: str, folder: str, files, chunk_size: int) -> dict:
             item["done"] = item["size"] == 0
 
         journal["rejected"] = rejected[:200]
-        # Files staged earlier but absent from this drop stay in the journal: a
-        # partial re-drop (one dataset out of a batch) must not discard progress.
+        # Drop UNFINISHED entries this drop no longer contains, and their partial
+        # bytes with them. The client always sends the complete recursive listing
+        # for a dataset it recognised (it needs metadata.json to recognise it at
+        # all), so absence here means the file is genuinely gone — a re-run of the
+        # pipeline that emits fewer LOD levels, say. Left in place they were never
+        # completable, and validate_dataset's "incomplete_files" check then blocked
+        # the publish forever, naming a file the operator no longer has.
+        # FINISHED entries are kept: their bytes are real, and an extra pack that
+        # the manifest simply never references is harmless.
+        present = {i["path"] for i in accepted}
+        for rel in [r for r, e in jfiles.items() if r not in present and not e.get("done")]:
+            jfiles.pop(rel, None)
+            orphan = staged_file_path(type_dir, folder, rel)
+            if orphan is not None and orphan.is_file():
+                try:
+                    orphan.unlink()
+                except OSError:
+                    pass
         save_journal(journal)
 
     total = sum(i["size"] for i in accepted)
@@ -765,9 +796,7 @@ def _validate_file_content(type_dir: str, rel: str, path: Path, kind: str | None
             man = _read_json(path)
             if man is None:
                 return False, "manifest_not_json"
-            if not isinstance(man.get("levels"), list) or not man["levels"]:
-                return False, "manifest_no_levels"
-            return True, None
+            return _validate_manifest(man)
         if kind == "thumbnail":
             with path.open("rb") as fh:
                 head = fh.read(16)
@@ -797,6 +826,38 @@ def _read_json(path: Path):
     except Exception:
         return None
     return data if isinstance(data, dict) else None
+
+
+def _validate_manifest(man: dict):
+    """Mirror of js/core/brick-loader.js `_validateManifest`, minus the parts that
+    only matter once decoding starts.
+
+    Checking merely that ``levels`` is non-empty was too weak: a manifest missing
+    per-level dimensions passed the import, reported "integrity verified", and
+    then made the viewer reject it at mount time. A dataset the platform cannot
+    open is not a valid dataset — catch it while it is still in staging, where
+    the operator can still fix and re-drop it.
+    """
+    levels = man.get("levels")
+    if not isinstance(levels, list) or not levels:
+        return False, "manifest_no_levels"
+    for i, level in enumerate(levels):
+        if not isinstance(level, dict):
+            return False, f"manifest_level_{i}_not_object"
+        lvl = level.get("level")
+        if not isinstance(lvl, int) or isinstance(lvl, bool) or lvl < 0:
+            return False, f"manifest_level_{i}_bad_index"
+        dims = level.get("dimensions")
+        if not isinstance(dims, dict):
+            return False, f"manifest_level_{i}_no_dimensions"
+        for axis in ("x", "y", "z"):
+            v = dims.get(axis)
+            if not isinstance(v, (int, float)) or isinstance(v, bool) or v <= 0:
+                return False, f"manifest_level_{i}_bad_{axis}"
+    packing = man.get("brickPacking")
+    if isinstance(packing, dict) and packing.get("mode") not in (None, "grid", "vertical"):
+        return False, "manifest_bad_packing_mode"
+    return True, None
 
 
 def _validate_metadata(meta: dict, type_dir: str):
@@ -861,6 +922,9 @@ def validate_dataset(type_dir: str, folder: str) -> dict:
         if man is None:
             errors.append("manifest_not_json")
         else:
+            ok, reason = _validate_manifest(man)
+            if not ok:
+                errors.append(reason or "manifest_invalid")
             errors.extend(_cross_check_packs(ds_dir, man))
 
     # Anything planned but not finished blocks the publish — a dataset is published
@@ -997,10 +1061,11 @@ def describe(type_dir: str, folder: str) -> dict | None:
     if meta:
         name = meta.get("name") or folder
     last = journal.get("lastChunkAt") or journal.get("updatedAt") or journal.get("createdAt")
+    state = dataset_state(type_dir, folder, journal)
     return {
         "key": dataset_key(type_dir, folder), "type": type_dir, "folder": folder,
         "name": name,
-        "state": dataset_state(type_dir, folder, journal),
+        "state": state,
         "totalBytes": total, "receivedBytes": got,
         "fileCount": len(files),
         "doneCount": sum(1 for e in files.values() if e.get("done")),
@@ -1008,7 +1073,10 @@ def describe(type_dir: str, folder: str) -> dict | None:
         "rejected": journal.get("rejected") or [],
         "publishedExists": (DATA_WEB / type_dir / folder / "metadata.json").exists(),
         "updatedAt": journal.get("updatedAt"),
-        "expiresInS": max(0, int(STALE_AFTER_S - _age_seconds(last))) if last else None,
+        # Only an INCOMPLETE import is on the clock (see gc()) — showing a
+        # countdown on a finished one would promise a deletion that never comes.
+        "expiresInS": (max(0, int(STALE_AFTER_S - _age_seconds(last)))
+                       if last and state != STATE_STAGED else None),
         "hasThumbnail": bool(ds_dir and (ds_dir / "thumbnail.webp").exists()),
     }
 
@@ -1223,15 +1291,22 @@ def _prune_empty(path: Path) -> None:
 
 
 def gc(max_age_s: int = STALE_AFTER_S) -> dict:
-    """Delete staged datasets untouched for longer than the grace period.
+    """Reclaim INCOMPLETE imports untouched for longer than the grace period.
 
-    Called opportunistically on every ``list`` so a forgotten upload cannot pin
+    Called opportunistically on every ``list`` so an abandoned transfer cannot pin
     disk forever, and exposed as an explicit action for the admin UI.
+
+    A dataset in STATE_STAGED is deliberately exempt. It is complete, it passed
+    validation, and the only thing left is a human clicking Publish — reclaiming
+    that after a week away would delete tens of gigabytes of finished work to save
+    the operator a re-upload they never asked for. The grace period covers uploads
+    that DIED, which is what it was asked to cover.
     """
     removed, kept = [], 0
     for info in list_staged():
         last = info.get("updatedAt")
-        if last and _age_seconds(last) > max_age_s:
+        expired = last and _age_seconds(last) > max_age_s
+        if expired and info.get("state") != STATE_STAGED:
             discard_dataset(info["type"], info["folder"])
             removed.append(info["key"])
         else:

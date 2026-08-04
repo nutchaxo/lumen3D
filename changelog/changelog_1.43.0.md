@@ -62,6 +62,35 @@ L'intégrité est vérifiée à trois profondeurs : chaque bloc porte une emprei
 
 Un dernier défaut a été pris avant d'atteindre l'exécution : l'éditeur renvoie tel quel ce que le serveur lui a donné, champs calculés compris (`staging`, `stagingState`, …). Sans filtrage ils étaient écrits dans `metadata.json` et **survivaient à la publication**, laissant un dataset publié marqué « en cours d'import » à vie.
 
+### Relecture complète : dix défauts de plus
+
+Une seconde passe sur l'ensemble du code, méthodique, a sorti dix problèmes que la première n'avait pas vus. Aucun n'est théorique.
+
+**Ce qui aurait fait perdre du travail**
+
+* **Le ramasse-miettes effaçait des datasets terminés.** La règle des sept jours visait les transferts *interrompus*; elle s'appliquait aussi à un dataset complet, validé, n'attendant qu'un clic sur Publier. Une semaine d'absence et des dizaines de gigaoctets de travail achevé disparaissaient. Un dataset à l'état *Envoyé — à publier* est désormais exempté, et il n'affiche plus de compte à rebours qu'il n'aurait pas honoré.
+* **Un fichier en échec ne pouvait plus jamais repartir.** Après quatre tentatives infructueuses, il restait enregistré dans le worker; reglisser le dossier pour le relancer — la promesse même de la reprise sur échec — ne faisait plus rien du tout. Idem après une expiration de session.
+* **Un fichier disparu du dossier bloquait la publication à vie.** Si le pipeline était relancé et n'émettait plus un niveau de résolution, son entrée inachevée restait au journal et « fichiers incomplets » refusait la publication en nommant un fichier que l'opérateur n'avait plus. Les entrées inachevées absentes du nouveau dépôt sont maintenant retirées, avec leurs octets partiels; les entrées **terminées** sont conservées.
+
+**Ce qui affichait faux**
+
+* Un **manifest sans dimensions par niveau** passait l'import, annonçait « intégrité vérifiée », puis était refusé par le viewer au montage. La validation serveur reprend maintenant les règles du chargeur de bricks : un dataset que la plateforme ne sait pas ouvrir n'est pas un dataset valide.
+* Les **paliers n'étaient pas recalculés** sur un second dépôt : un fichier déjà terminé gardait son ancien rang, ce qui faussait le test « est-ce ouvrable ? ».
+* Un `metadata.json` **édité puis reglissé** faisait dépasser 100 % (la taille éditée comptée face aux tailles locales).
+* Les **bits de bourrage** du dernier octet de la carte de réception pouvaient gonfler le total; ils sont masqués à la lecture.
+
+**Ce qui gênait l'usage**
+
+* **Les deux vues reconstruisaient tout leur DOM six fois par seconde**, pendant des heures. Lucide recréait chaque icône à chaque fois, la liste dépliée des fichiers ignorés se refermait toute seule, une sélection de texte était détruite en continu. Les reconstructions sont désormais réservées aux vrais changements de structure — mesuré : **6 au lieu de plusieurs centaines** sur un transfert de 80 Mo en dix-huit fichiers — le reste étant écrit directement dans les nœuds existants.
+* **Un dossier lâché à côté de la zone de dépôt** faisait ouvrir le fichier par le navigateur : la page d'administration disparaissait, transfert en cours compris. Les dépôts hors zone sont maintenant absorbés.
+* **Les notifications se superposaient au panneau de suivi** (même coin bas-droit). Elles s'écartent tant qu'il est visible.
+* Le bouton **Éditer** menait à l'onglet Datasets sans y ouvrir le dataset. Il l'ouvre, et lève le filtre s'il masquait la ligne.
+* Deux **doublons d'écouteurs** : un changement de langue rebranchait le gestionnaire de l'onglet Import (un clic sur Publier publiait deux fois), et une reconnexion rebranchait celui du panneau (un repli n'avait plus d'effet).
+* Le panneau flottant se montrait **par-dessus l'écran de connexion** en cas d'expiration de session, et passait au-dessus du tiroir mobile.
+* Un **worker en échec n'était jamais remplacé** : toute tentative ultérieure réutilisait l'instance morte, sans issue autre que recharger la page.
+* La zone de dépôt était un `role="button"` **contenant un bouton** — imbrication invalide, inutilisable au lecteur d'écran.
+* Déposer le *contenu* d'un dataset au lieu de son dossier échouait sans explication; le message dit maintenant précisément quoi faire.
+
 ### Couverture
 
-`tests/test_upload_staging.py` (30 cas), `tests/test_upload_api.py` (16 cas de bout en bout sur un vrai serveur HTTP : authentification, CSRF, corps binaire brut, proxy de lecture, garde statique) et `tests/test_upload_php.php` pour le jumeau. Le format du journal est commun aux deux serveurs et un test croisé le fixe : un import commencé sous Python reprend tel quel sous PHP, et réciproquement.
+`tests/test_upload_staging.py` (39 cas), `tests/test_upload_api.py` (16 cas de bout en bout sur un vrai serveur HTTP : authentification, CSRF, corps binaire brut, proxy de lecture, garde statique) et `tests/test_upload_php.php` pour le jumeau. Chaque défaut ci-dessus a son test de non-régression. Le format du journal est commun aux deux serveurs et un test croisé le fixe : un import commencé sous Python reprend tel quel sous PHP, et réciproquement.

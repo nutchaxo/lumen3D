@@ -30,6 +30,7 @@ let _previewTimer = null;
 let _selectGen = 0;
 let _isCalibratingOrientation = false;
 let _loaded = false;
+let _pendingSelect = null;
 
 let DOM = {};
 
@@ -90,6 +91,31 @@ async function loadDatasets() {
   if (DOM.listLoading) DOM.listLoading.remove();
   renderList();
   _loaded = true;
+  if (_pendingSelect) {
+    const id = _pendingSelect;
+    _pendingSelect = null;
+    if (_datasets.some((d) => d.id === id)) selectDataset(id);
+  }
+}
+
+/**
+ * Open a dataset from another tab (the import views' "Éditer" button).
+ *
+ * The list may not have loaded yet — switchTab mounts this tab lazily and
+ * loadDatasets is async — so the request is parked and consumed as soon as the
+ * rows exist. Also drops the type filter if it would hide the row, otherwise the
+ * dataset opens into a list it is not visible in.
+ */
+export function openDataset(id) {
+  if (!_loaded || !_datasets.some((d) => d.id === id)) { _pendingSelect = id; loadDatasets(); return; }
+  const ds = _datasets.find((d) => d.id === id);
+  if (ds && _typeFilter !== 'all' && !getFilteredDatasets().some((d) => d.id === id)) {
+    _typeFilter = ds.staging ? 'staging' : 'all';
+    document.querySelectorAll('#tab-datasets .filter-tab').forEach((x) =>
+      x.classList.toggle('active', x.dataset.type === _typeFilter));
+    renderList();
+  }
+  selectDataset(id);
 }
 
 function getFilteredDatasets() {

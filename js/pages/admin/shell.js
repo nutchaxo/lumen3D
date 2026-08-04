@@ -32,6 +32,9 @@ function showGate(which) {
   el('setup-screen').style.display = which === 'setup' ? 'flex' : 'none';
   el('login-screen').style.display = which === 'login' ? 'flex' : 'none';
   el('admin-app').style.display    = which === 'app'   ? 'flex' : 'none';
+  // The import dock is a fixed overlay: without this it would float over the
+  // login card when a session expires mid-transfer.
+  try { UploadDock.setGateActive(which !== 'app'); } catch (_) { /* pre-mount */ }
   if (which === 'login') setTimeout(() => el('login-username')?.focus(), 50);
   if (which === 'setup') { initWizard(); setTimeout(() => el('setup-password')?.focus(), 50); }
 }
@@ -306,8 +309,24 @@ function switchTab(id, force = false) {
 // re-dropping the same folder resumes from the exact missing-chunk list.
 
 let _exitTarget = null;
+let _guardBound = false;
 
 function bindUploadGuard() {
+  // enterApp() runs again after a logout/login round trip; binding twice would
+  // fire the leave handler (and doLogout) twice per click.
+  if (_guardBound) return;
+  _guardBound = true;
+
+  // A folder dropped slightly OFF the dropzone would otherwise be opened by the
+  // browser as a navigation — replacing the admin panel with a raw file listing
+  // and killing any transfer in flight. Swallow drops everywhere except the
+  // import dropzone, which stops the event before it reaches the document.
+  ['dragover', 'drop'].forEach((ev) => document.addEventListener(ev, (e) => {
+    if (e.target.closest?.('#upl-drop')) return;
+    e.preventDefault();
+    if (ev === 'drop') e.dataTransfer.dropEffect = 'none';
+  }));
+
   window.addEventListener('beforeunload', (e) => {
     if (!Upload.hasUnfinishedWork()) return;
     Upload.pause();
@@ -332,8 +351,11 @@ function bindUploadGuard() {
     closeExitOverlay();
     if (typeof go === 'function') go();
   });
-  el('upload-exit-overlay')?.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape') closeExitOverlay();
+  // On the document, not the overlay: focus can legitimately sit outside it
+  // (the browser may keep it on the element that was clicked), and Escape must
+  // still dismiss.
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && !el('upload-exit-overlay')?.hidden) closeExitOverlay();
   });
 }
 

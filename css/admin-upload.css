@@ -155,12 +155,25 @@
 
 .upload-dock {
   position: fixed; right: 20px; bottom: 20px;
-  z-index: 70;                     /* over the panel, under the modal gates (z 50+) */
+  /* Above the page and the mobile sidebar OVERLAY (60), below the mobile drawer
+     itself (70) so an open drawer covers the dock rather than the reverse, and
+     far below the exit dialog (90). */
+  z-index: 65;
   font-size: 13px; color: var(--adm-text);
   /* No width/height on the container: each size renders its own box, so switching
      between them never leaves an empty rectangle intercepting clicks. */
 }
 .upload-dock[hidden] { display: none; }
+/* A gate (login / first-run setup) owns the screen — a fixed overlay would
+   otherwise float over the login card if a session expired mid-transfer. */
+.upload-dock.is-gated { display: none; }
+
+/* Toasts live in the same bottom-right corner (#toast-container, z 9999). They
+   are pointer-events:none so they never block the dock, but they would sit on
+   top of it. Lift them clear by the dock's height while it is showing — using
+   :has() where available, which every browser that runs the viewer supports. */
+body:has(.upload-dock:not([hidden]):not(.is-gated)) #toast-container { bottom: 100px; }
+body:has(.upload-dock[data-size="panel"]:not([hidden]):not(.is-gated)) #toast-container { bottom: 20px; right: 460px; }
 
 .dock-icon-btn {
   display: inline-flex; align-items: center; justify-content: center;
@@ -346,4 +359,8 @@
   .upload-dock[data-size="bubble"] { left: auto; }
   .upl-cards { grid-template-columns: 1fr; }
   .upl-global-actions { margin-left: 0; width: 100%; }
+  /* No room to sit beside the panel on a phone — stack the toasts above it. */
+  body:has(.upload-dock[data-size="panel"]:not([hidden]):not(.is-gated)) #toast-container {
+    bottom: 12px; right: 12px;
+  }
 }

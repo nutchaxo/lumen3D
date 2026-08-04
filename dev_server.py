@@ -4352,7 +4352,9 @@ class AdminHandler(http.server.SimpleHTTPRequestHandler):
         elif action == "gc":
             self._json(200, {"ok": True, **upload_staging.gc()})
         else:
-            self._json(400, {"error": f"Unknown action: {action}"})
+            # Deliberately does not echo `action` back — no reason to reflect
+            # attacker-controlled input, even JSON-encoded (twin: api/upload.php).
+            self._json(400, {"error": "Unknown action"})
 
     def _serve_staged_blob(self, type_dir: str, folder: str, rel: str):
         """Stream one staged file to an authenticated admin.

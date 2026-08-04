@@ -39,8 +39,12 @@ META = {
     "dimensions": {"x": 64, "y": 64, "z": 64, "c": 1},
     "channels": [{"name": "c0"}],
 }
+# Shaped like what preprocess/3-chunk_packer.py writes. The per-level dimensions
+# are load-bearing: the brick loader refuses a manifest without them, so the
+# import refuses it too (a dataset the viewer cannot mount is not a valid import).
 MANIFEST = {
-    "version": 2, "levels": [{"level": 0}],
+    "version": 2, "brickSize": 64,
+    "levels": [{"level": 0, "dimensions": {"x": 64, "y": 64, "z": 64}}],
     "brickTransport": {"brickToPack": {
         "b": {"url": "lod0/c0/pack_00.bin", "offset": 0, "length": 10}}},
 }
@@ -250,6 +254,29 @@ class TestContentValidation(StagingCase):
         self.assertEqual(st, 422)
         self.assertEqual(pl["reason"], "thumbnail_not_image")
 
+    def test_a_manifest_the_viewer_could_not_mount_is_refused(self):
+        """Checking only that `levels` is non-empty let a manifest with no
+        per-level dimensions through: the import reported "integrity verified"
+        and the viewer then rejected it at mount time. Catch it in staging, where
+        the operator can still fix and re-drop."""
+        bad = json.dumps({"version": 2, "levels": [{"level": 0}]}).encode()
+        us.plan([{"type": "fixed", "folder": "DS", "files": [
+            {"path": "bricks/manifest.json", "size": len(bad)}]}])
+        us.write_chunk("fixed", "DS", "bricks/manifest.json", 0, bad, sha(bad))
+        st, pl = us.finalize_file("fixed", "DS", "bricks/manifest.json", None)
+        self.assertEqual(st, 422)
+        self.assertEqual(pl["reason"], "manifest_level_0_no_dimensions")
+
+    def test_a_manifest_with_a_zero_axis_is_refused(self):
+        bad = json.dumps({"version": 2, "levels": [
+            {"level": 0, "dimensions": {"x": 64, "y": 0, "z": 64}}]}).encode()
+        us.plan([{"type": "fixed", "folder": "DS", "files": [
+            {"path": "bricks/manifest.json", "size": len(bad)}]}])
+        us.write_chunk("fixed", "DS", "bricks/manifest.json", 0, bad, sha(bad))
+        st, pl = us.finalize_file("fixed", "DS", "bricks/manifest.json", None)
+        self.assertEqual(st, 422)
+        self.assertEqual(pl["reason"], "manifest_level_0_bad_y")
+
     def test_truncated_pack_blocks_the_publish(self):
         mb = json.dumps(META).encode()
         nb = json.dumps(MANIFEST).encode()
@@ -307,22 +334,142 @@ class TestStateMachine(StagingCase):
         us.save_journal(j)
         self.assertEqual(us.dataset_state("fixed", "DS"), us.STATE_STALLED)
 
-    def test_gc_reclaims_only_expired_imports(self):
-        self.stage_complete("FRESH")
-        self.stage_complete("OLD")
-        j = us.load_journal("fixed", "OLD")
-        j["updatedAt"] = "2020-01-01T00:00:00+00:00"
-        us.save_journal(j)
-        # save_journal stamps updatedAt itself, so write the stale value directly.
-        p = us.journal_path("fixed", "OLD")
+    def age_out(self, folder):
+        """Backdate a journal past the grace period. save_journal re-stamps
+        updatedAt, so the stale value is written straight to the file."""
+        p = us.journal_path("fixed", folder)
         doc = json.loads(p.read_text())
         doc["updatedAt"] = "2020-01-01T00:00:00+00:00"
+        doc["lastChunkAt"] = "2020-01-01T00:00:00+00:00"
         p.write_text(json.dumps(doc))
 
+    def test_gc_reclaims_an_expired_unfinished_import(self):
+        self.stage_complete("FRESH")
+        self.stage_complete("DEAD")
+        # Make DEAD incomplete, then age it out: an upload that died mid-transfer.
+        j = us.load_journal("fixed", "DEAD")
+        j["files"]["bricks/lod0/c0/pack_00.bin"]["done"] = False
+        us.save_journal(j)
+        self.age_out("DEAD")
+
         result = us.gc()
-        self.assertEqual(result["removed"], ["fixed/OLD"])
-        self.assertFalse((us.STAGING_DIR / "fixed/OLD").exists())
+        self.assertEqual(result["removed"], ["fixed/DEAD"])
+        self.assertFalse((us.STAGING_DIR / "fixed/DEAD").exists())
         self.assertTrue((us.STAGING_DIR / "fixed/FRESH").exists())
+
+    def test_gc_never_reclaims_a_finished_dataset_awaiting_publish(self):
+        """The grace period covers uploads that DIED. A dataset that is complete
+        and validated is finished work waiting on a human click — deleting tens of
+        gigabytes of it because the operator was away a week is not what the
+        7-day rule was for."""
+        self.stage_complete("READY")
+        self.age_out("READY")
+        self.assertEqual(us.dataset_state("fixed", "READY"), us.STATE_STAGED)
+
+        result = us.gc()
+        self.assertEqual(result["removed"], [])
+        self.assertTrue((us.STAGING_DIR / "fixed/READY").exists())
+        # And it must not advertise a countdown it will never honour.
+        self.assertIsNone(us.describe("fixed", "READY")["expiresInS"])
+
+
+class TestReplan(StagingCase):
+    """A second drop of the same folder is the resume path, and it has to leave the
+    journal in a state the dataset can actually reach publication from."""
+
+    def test_an_unfinished_file_the_drop_no_longer_has_is_dropped(self):
+        mb = json.dumps(META).encode()
+        nb = json.dumps(MANIFEST).encode()
+        pack = b"X" * 10
+        full = [{"path": "metadata.json", "size": len(mb)},
+                {"path": "bricks/manifest.json", "size": len(nb)},
+                {"path": "bricks/lod0/c0/pack_00.bin", "size": len(pack)},
+                {"path": "bricks/lod9/c0/pack_00.bin", "size": 4096}]
+        us.plan([{"type": "fixed", "folder": "DS", "files": full}])
+        for rel, blob in (("metadata.json", mb), ("bricks/manifest.json", nb),
+                          ("bricks/lod0/c0/pack_00.bin", pack)):
+            self.send("DS", rel, blob)
+        # lod9 never arrives, and a re-run of the pipeline stops emitting it.
+        self.assertEqual(us.dataset_state("fixed", "DS"), us.STATE_UPLOADING)
+        us.plan([{"type": "fixed", "folder": "DS", "files": full[:3]}])
+
+        journal = us.load_journal("fixed", "DS")
+        self.assertNotIn("bricks/lod9/c0/pack_00.bin", journal["files"],
+                         "an unfinished file absent from the drop must not block publish forever")
+        v = us.validate_dataset("fixed", "DS")
+        self.assertTrue(v["ok"], v)
+        self.assertEqual(us.publish_dataset("fixed", "DS")[0], 200)
+
+    def test_a_finished_file_absent_from_the_drop_is_kept(self):
+        self.stage_complete()
+        us.plan([{"type": "fixed", "folder": "DS", "files": [
+            {"path": "metadata.json", "size": len(json.dumps(META).encode())}]}])
+        journal = us.load_journal("fixed", "DS")
+        self.assertIn("bricks/lod0/c0/pack_00.bin", journal["files"],
+                      "bytes already on disk are real — never discard them")
+        self.assertTrue((us.STAGING_DIR / "fixed/DS/bricks/lod0/c0/pack_00.bin").exists())
+
+    def test_tiers_are_refreshed_when_a_later_drop_adds_a_coarser_level(self):
+        mb = json.dumps(META).encode()
+        nb = json.dumps(MANIFEST).encode()
+        native = b"N" * 10
+        us.plan([{"type": "fixed", "folder": "DS", "files": [
+            {"path": "metadata.json", "size": len(mb)},
+            {"path": "bricks/manifest.json", "size": len(nb)},
+            {"path": "bricks/lod0/c0/pack_00.bin", "size": len(native)}]}])
+        for rel, blob in (("metadata.json", mb), ("bricks/manifest.json", nb),
+                          ("bricks/lod0/c0/pack_00.bin", native)):
+            self.send("DS", rel, blob)
+        # lod0 was the only level, so it WAS the preview tier.
+        self.assertEqual(us.load_journal("fixed", "DS")["files"]["bricks/lod0/c0/pack_00.bin"]["tier"],
+                         us.TIER_PREVIEW)
+        # A fuller drop adds lod4; lod0 is no longer what makes the dataset openable.
+        us.plan([{"type": "fixed", "folder": "DS", "files": [
+            {"path": "metadata.json", "size": len(mb)},
+            {"path": "bricks/manifest.json", "size": len(nb)},
+            {"path": "bricks/lod0/c0/pack_00.bin", "size": len(native)},
+            {"path": "bricks/lod4/c0/pack_00.bin", "size": 4096}]}])
+        files = us.load_journal("fixed", "DS")["files"]
+        self.assertEqual(files["bricks/lod0/c0/pack_00.bin"]["tier"], us.TIER_FULL)
+        self.assertEqual(files["bricks/lod4/c0/pack_00.bin"]["tier"], us.TIER_PREVIEW)
+
+    def test_a_locked_metadata_never_makes_received_exceed_total(self):
+        """totalBytes is summed from LOCAL sizes; reporting the edited file's size
+        as `received` let the dataset read past 100%."""
+        self.stage_complete()
+        us.write_staged_metadata("fixed", "DS", {"name": "A very much longer name than the original"})
+        replan = us.plan([{"type": "fixed", "folder": "DS", "files": [
+            {"path": "metadata.json", "size": len(json.dumps(META).encode())}]}])
+        d = replan["datasets"][0]
+        self.assertEqual(d["files"][0].get("skip"), "locked")
+        self.assertLessEqual(d["receivedBytes"], d["totalBytes"])
+
+
+class TestBitmap(StagingCase):
+    def test_received_bytes_is_exact_for_a_partial_tail(self):
+        chunk = us.MIN_CHUNK_SIZE
+        size = chunk * 3 + 17                     # a very short last chunk
+        entry = {"size": size, "chunkSize": chunk,
+                 "bits": us._bitmap_encode(bytearray(1))}
+        bits = us._bitmap_decode(entry["bits"], us._bits_len(size, chunk))
+        for i in (0, 3):                          # first chunk + the 17-byte tail
+            us._bit_set(bits, i)
+        entry["bits"] = us._bitmap_encode(bits)
+        self.assertEqual(us.received_bytes(entry), chunk + 17)
+        self.assertEqual(us.missing_chunks(entry), [1, 2])
+
+    def test_padding_bits_cannot_inflate_the_count(self):
+        """A hand-edited journal with the last byte's unused bits set must not make
+        the file look more complete than it is."""
+        chunk = us.MIN_CHUNK_SIZE
+        size = chunk * 2                          # 2 bits used, 6 padding
+        entry = {"size": size, "chunkSize": chunk, "bits": us._bitmap_encode(bytearray([0xFF]))}
+        self.assertEqual(us.received_bytes(entry), size)
+        self.assertEqual(us.missing_chunks(entry), [])
+        # …and one genuinely-missing chunk still reads as missing.
+        entry["bits"] = us._bitmap_encode(bytearray([0xFE]))
+        self.assertEqual(us.received_bytes(entry), chunk)
+        self.assertEqual(us.missing_chunks(entry), [0])
 
 
 class TestOperatorEdits(StagingCase):

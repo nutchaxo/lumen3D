@@ -163,6 +163,7 @@ export async function groupIntoDatasets(entries) {
 
   const datasets = [];
   const claimed = new Set();
+  let flatDrop = false;
   for (const root of roots) {
     const prefix = root ? `${root}/` : '';
     const files = entries.filter((e) => e.path.startsWith(prefix) && !claimed.has(e.path));
@@ -171,6 +172,11 @@ export async function groupIntoDatasets(entries) {
     const segments = root.split('/').filter(Boolean);
     const folder = segments[segments.length - 1] || '';
     const parentDir = segments.length >= 2 ? segments[segments.length - 2] : '';
+    // A metadata.json at the very top of the drop means we got a flat file list
+    // rather than a folder — the operator selected files instead of a directory,
+    // or the browser gave no directory entry. There is no folder name to file the
+    // dataset under, so say so plainly instead of failing later on an empty id.
+    if (!folder) { flatDrop = true; continue; }
 
     let type = TYPES.includes(parentDir) ? parentDir : null;
     const metaEntry = byPath.get(`${prefix}metadata.json`);
@@ -188,7 +194,7 @@ export async function groupIntoDatasets(entries) {
   }
 
   const orphans = entries.filter((e) => !claimed.has(e.path)).map((e) => e.path);
-  return { datasets, orphans };
+  return { datasets, orphans, flatDrop };
 }
 
 async function readJsonFile(file) {
@@ -242,10 +248,12 @@ export async function startImport(entries, options = {}) {
     _state.staleAfterS = limits.staleAfterS || _state.staleAfterS;
   }
 
-  const { datasets, orphans } = await groupIntoDatasets(entries);
+  const { datasets, orphans, flatDrop } = await groupIntoDatasets(entries);
   if (!datasets.length) {
     _state.phase = PHASE_IDLE;
-    _state.error = t('upl.errNoDataset', 'Aucun dataset trouvé : le dossier doit contenir un metadata.json.');
+    _state.error = flatDrop
+      ? t('upl.errFlatDrop', 'Déposez le DOSSIER du dataset, pas son contenu : le nom du dossier est l\'identifiant du dataset.')
+      : t('upl.errNoDataset', 'Aucun dataset trouvé : le dossier doit contenir un metadata.json.');
     emit();
     return { ok: false };
   }
@@ -365,7 +373,14 @@ function ensureWorker() {
   _worker = new Worker(WORKER_URL);
   _worker.onmessage = onWorkerMessage;
   _worker.onerror = (e) => {
-    _state.error = `worker: ${e.message || 'error'}`;
+    // Drop the reference: a worker that failed to load or died is unusable, and
+    // keeping it meant ensureWorker() handed the same dead instance to every
+    // later attempt — the operator could not recover without reloading the page.
+    // Nulling it makes the next drop spawn a fresh one.
+    try { _worker?.terminate(); } catch (_) { /* already gone */ }
+    _worker = null;
+    _state.error = t('upl.errWorker', 'Le moteur de transfert n\'a pas pu démarrer. Reglissez le dossier pour réessayer.')
+      + (e.message ? ` (${e.message})` : '');
     _state.phase = PHASE_IDLE;
     emit();
   };
@@ -457,6 +472,9 @@ export function resume() {
   if (!_worker || _state.phase !== PHASE_PAUSED) return;
   _worker.postMessage({ type: 'resume' });
   _state.phase = PHASE_UPLOADING;
+  // A transient failure banner from before the pause would otherwise stay red
+  // for the rest of the transfer, long after the retry succeeded.
+  _state.error = null;
   _speed.reset(_state.sentBytes);
   emit();
 }

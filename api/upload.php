@@ -20,6 +20,12 @@ declare(strict_types=1);
 
 require_once __DIR__ . '/_upload_lib.php';
 
+// Twin of the header block at the top of datasets.php. admin_json_out sets the
+// content type and no-store, but not nosniff — and this endpoint also streams
+// operator-supplied bytes (?action=blob), so refusing content sniffing outright
+// is worth stating once here rather than per response.
+header('X-Content-Type-Options: nosniff');
+
 admin_session_start();
 $authed = admin_is_auth();
 $csrfOk = admin_check_csrf();
@@ -148,7 +154,9 @@ case 'gc':
     admin_json_out(array_merge(['ok' => true], lumen_up_gc()));
 }
 
-admin_json_out(['error' => "Unknown action: $action"], 400);
+// Deliberately does not echo $action back: reflecting attacker-controlled input
+// is safe here (JSON-encoded, nosniff) but there is no reason to do it at all.
+admin_json_out(['error' => 'Unknown action'], 400);
 
 /**
  * Stream one staged file to an authenticated admin.

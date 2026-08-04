@@ -323,7 +323,13 @@ function lumen_up_bitmap_decode(?string $b64, int $nbits): string {
     $nbytes = intdiv($nbits + 7, 8);
     $raw = $b64 ? (base64_decode($b64, true) ?: '') : '';
     if (strlen($raw) < $nbytes) $raw .= str_repeat("\0", $nbytes - strlen($raw));
-    return $nbytes > 0 ? substr($raw, 0, $nbytes) : '';
+    $bits = $nbytes > 0 ? substr($raw, 0, $nbytes) : '';
+    // Mask the padding bits of the last byte. Nothing we write ever sets them, but
+    // a hand-edited or truncated journal could, and the popcount in
+    // lumen_up_received would then report MORE bytes received than were ever sent.
+    $extra = $nbits & 7;
+    if ($extra && $bits !== '') $bits[$nbytes - 1] = chr(ord($bits[$nbytes - 1]) & ((1 << $extra) - 1));
+    return $bits;
 }
 
 function lumen_up_bitmap_encode(string $bits): string { return base64_encode($bits); }
@@ -339,10 +345,23 @@ function lumen_up_bit_set(string $bits, int $i): string {
     return $bits;
 }
 
-function lumen_up_bit_count(string $bits, int $nbits): int {
-    $n = 0;
-    for ($i = 0; $i < $nbits; $i++) if (lumen_up_bit_get($bits, $i)) $n++;
-    return $n;
+/** Set bits in the map. Counts a BYTE at a time off a lookup table rather than
+ *  walking bit by bit — the padding is already masked off by
+ *  lumen_up_bitmap_decode, and this runs on every chunk acknowledgement. */
+function lumen_up_bit_count(string $bits, int $nbits = 0): int {
+    static $table = null;
+    if ($table === null) {
+        $table = [];
+        for ($b = 0; $b < 256; $b++) {
+            $n = 0;
+            for ($k = 0; $k < 8; $k++) if ($b & (1 << $k)) $n++;
+            $table[$b] = $n;
+        }
+    }
+    $total = 0;
+    $len = strlen($bits);
+    for ($i = 0; $i < $len; $i++) $total += $table[ord($bits[$i])];
+    return $total;
 }
 
 function lumen_up_received(array $entry): int {
@@ -350,12 +369,12 @@ function lumen_up_received(array $entry): int {
     $chunk = (int)($entry['chunkSize'] ?? LUMEN_UP_DEFAULT_CHUNK) ?: LUMEN_UP_DEFAULT_CHUNK;
     $nbits = lumen_up_bits_len($size, $chunk);
     if ($nbits === 0) return 0;
-    $bits = lumen_up_bitmap_decode($entry['bits'] ?? '', $nbits);
-    $total = 0;
-    for ($i = 0; $i < $nbits; $i++) {
-        if (lumen_up_bit_get($bits, $i)) $total += min($chunk, $size - $i * $chunk);
-    }
-    return $total;
+    $bits  = lumen_up_bitmap_decode($entry['bits'] ?? '', $nbits);
+    $count = lumen_up_bit_count($bits);
+    // Every chunk is `chunk` bytes except the last, which is whatever remains.
+    $last = $nbits - 1;
+    if (lumen_up_bit_get($bits, $last)) return ($count - 1) * $chunk + ($size - $last * $chunk);
+    return $count * $chunk;
 }
 
 function lumen_up_missing(array $entry): array {
@@ -415,11 +434,22 @@ function lumen_up_plan_one(string $type, string $folder, $files, int $chunkSize)
         foreach ($accepted as &$item) {
             $rel = $item['path'];
             $entry = $journal['files'][$rel] ?? null;
+            // Tiering is a property of the SET, so a second drop that adds coarser
+            // levels re-ranks files planned earlier. Refresh it on every branch — a
+            // stale tier on a finished file skews lumen_up_state_of's "is this
+            // openable yet" test.
+            if ($entry !== null) {
+                $entry['tier'] = $item['tier'];
+                $entry['kind'] = $item['kind'];
+                $journal['files'][$rel] = $entry;
+            }
             // The operator's edits win over a re-dropped pipeline file (see the
             // Python twin: metadata.json is rewritten in place by the editor while
             // the rest of the dataset is still streaming in).
             if ($rel === 'metadata.json' && !empty($journal['metaLocked']) && $entry && !empty($entry['done'])) {
-                $item['skip'] = 'locked'; $item['received'] = (int)($entry['size'] ?? 0); $item['done'] = true;
+                // Report the LOCAL size, not the edited file's: totalBytes is summed
+                // from local sizes, and mixing the two made receivedBytes overshoot.
+                $item['skip'] = 'locked'; $item['received'] = $item['size']; $item['done'] = true;
                 continue;
             }
             if ($entry && (int)($entry['size'] ?? -1) === $item['size'] && !empty($entry['done'])) {
@@ -427,8 +457,6 @@ function lumen_up_plan_one(string $type, string $folder, $files, int $chunkSize)
                 continue;
             }
             if ($entry && (int)($entry['size'] ?? -1) === $item['size']) {
-                $entry['tier'] = $item['tier']; $entry['kind'] = $item['kind'];
-                $journal['files'][$rel] = $entry;
                 $item['received']  = lumen_up_received($entry);
                 $item['chunkSize'] = (int)($entry['chunkSize'] ?? $chunkSize);
                 $item['missing']   = lumen_up_missing($entry);
@@ -448,6 +476,18 @@ function lumen_up_plan_one(string $type, string $folder, $files, int $chunkSize)
         }
         unset($item);
         $journal['rejected'] = array_slice($rejected, 0, 200);
+        // Drop UNFINISHED entries this drop no longer contains, and their partial
+        // bytes with them — see the Python twin for why absence is authoritative.
+        // Left in place they were never completable, and the "incomplete_files"
+        // check then blocked the publish forever.
+        $present = [];
+        foreach ($accepted as $i) $present[$i['path']] = true;
+        foreach (array_keys($journal['files']) as $rel) {
+            if (isset($present[$rel]) || !empty($journal['files'][$rel]['done'])) continue;
+            unset($journal['files'][$rel]);
+            $orphan = lumen_up_file_path($type, $folder, $rel);
+            if ($orphan !== null && is_file($orphan)) @unlink($orphan);
+        }
         lumen_up_save_journal($journal);
         return $journal;
     });
@@ -607,8 +647,7 @@ function lumen_up_validate_file(string $type, string $rel, string $path, ?string
     if ($kind === 'manifest') {
         $man = lumen_up_read_json($path);
         if ($man === null) return [false, 'manifest_not_json'];
-        if (!isset($man['levels']) || !is_array($man['levels']) || !$man['levels']) return [false, 'manifest_no_levels'];
-        return [true, null];
+        return lumen_up_validate_manifest($man);
     }
     if ($kind === 'thumbnail') {
         $head = lumen_up_head($path, 16);
@@ -622,6 +661,36 @@ function lumen_up_validate_file(string $type, string $rel, string $path, ?string
     if ($kind === 'extra' && strncmp($rel, 'tracks.json', 11) === 0 && substr($rel, -3) !== '.gz') {
         if (lumen_up_read_json($path) === null) return [false, 'tracks_not_json'];
         return [true, null];
+    }
+    return [true, null];
+}
+
+/**
+ * Mirror of js/core/brick-loader.js `_validateManifest`, minus the parts that
+ * only matter once decoding starts.
+ *
+ * Checking merely that `levels` is non-empty was too weak: a manifest missing
+ * per-level dimensions passed the import, reported "integrity verified", and then
+ * made the viewer reject it at mount time. Catch it while it is still in staging.
+ */
+function lumen_up_validate_manifest(array $man): array {
+    $levels = $man['levels'] ?? null;
+    if (!is_array($levels) || !$levels) return [false, 'manifest_no_levels'];
+    foreach ($levels as $i => $level) {
+        if (!is_array($level)) return [false, "manifest_level_{$i}_not_object"];
+        $lvl = $level['level'] ?? null;
+        if (!is_int($lvl) || $lvl < 0) return [false, "manifest_level_{$i}_bad_index"];
+        $dims = $level['dimensions'] ?? null;
+        if (!is_array($dims)) return [false, "manifest_level_{$i}_no_dimensions"];
+        foreach (['x', 'y', 'z'] as $axis) {
+            $v = $dims[$axis] ?? null;
+            if ((!is_int($v) && !is_float($v)) || $v <= 0) return [false, "manifest_level_{$i}_bad_{$axis}"];
+        }
+    }
+    $packing = $man['brickPacking'] ?? null;
+    if (is_array($packing) && isset($packing['mode'])
+        && !in_array($packing['mode'], ['grid', 'vertical'], true)) {
+        return [false, 'manifest_bad_packing_mode'];
     }
     return [true, null];
 }
@@ -659,8 +728,13 @@ function lumen_up_validate_dataset($type, $folder): array {
         $errors[] = 'missing_manifest';
     } else {
         $man = lumen_up_read_json("$dir/bricks/manifest.json");
-        if ($man === null) $errors[] = 'manifest_not_json';
-        else $errors = array_merge($errors, lumen_up_cross_check_packs($dir, $man));
+        if ($man === null) {
+            $errors[] = 'manifest_not_json';
+        } else {
+            [$mok, $mreason] = lumen_up_validate_manifest($man);
+            if (!$mok) $errors[] = $mreason ?: 'manifest_invalid';
+            $errors = array_merge($errors, lumen_up_cross_check_packs($dir, $man));
+        }
     }
 
     $incomplete = [];
@@ -763,17 +837,21 @@ function lumen_up_describe($type, $folder): ?array {
     $dir = lumen_up_dataset_dir($type, $folder);
     $meta = $dir ? lumen_up_read_json("$dir/metadata.json") : null;
     $last = $journal['lastChunkAt'] ?? ($journal['updatedAt'] ?? ($journal['createdAt'] ?? null));
+    $state = lumen_up_state_of($type, $folder, $journal);
     return [
         'key' => "$type/$folder", 'type' => $type, 'folder' => $folder,
         'name' => ($meta['name'] ?? null) ?: $folder,
-        'state' => lumen_up_state_of($type, $folder, $journal),
+        'state' => $state,
         'totalBytes' => $total, 'receivedBytes' => $got,
         'fileCount' => count($files), 'doneCount' => $done,
         'metaLocked' => !empty($journal['metaLocked']),
         'rejected' => $journal['rejected'] ?? [],
         'publishedExists' => is_file(data_web() . "/$type/$folder/metadata.json"),
         'updatedAt' => $journal['updatedAt'] ?? null,
-        'expiresInS' => $last ? max(0, (int)(LUMEN_UP_STALE_AFTER - lumen_up_age($last))) : null,
+        // Only an INCOMPLETE import is on the clock (see lumen_up_gc) — showing a
+        // countdown on a finished one would promise a deletion that never comes.
+        'expiresInS' => ($last && $state !== LUMEN_UP_STATE_STAGED)
+            ? max(0, (int)(LUMEN_UP_STALE_AFTER - lumen_up_age($last))) : null,
         'hasThumbnail' => $dir ? is_file("$dir/thumbnail.webp") : false,
     ];
 }
@@ -937,6 +1015,9 @@ function lumen_up_publish($type, $folder, bool $overwrite, bool $hidden): array 
         if ($replaced !== null) lumen_up_rrmdir($replaced);
         $jp = lumen_up_journal_path($type, $folder);
         if ($jp && is_file($jp)) @unlink($jp);
+        // The flock sidecar too, or uploads/state/ slowly fills with dead
+        // .lock files for datasets that no longer exist.
+        if ($jp && is_file($jp . '.lock')) @unlink($jp . '.lock');
         @rmdir(lumen_up_staging() . "/$type");
         return [200, ['ok' => true, 'id' => "$type/$folder", 'hidden' => $hidden]];
     });
@@ -951,6 +1032,9 @@ function lumen_up_discard($type, $folder): array {
         if ($dir !== null) lumen_up_rrmdir($dir);
         $jp = lumen_up_journal_path($type, $folder);
         if ($jp && is_file($jp)) @unlink($jp);
+        // The flock sidecar too, or uploads/state/ slowly fills with dead
+        // .lock files for datasets that no longer exist.
+        if ($jp && is_file($jp . '.lock')) @unlink($jp . '.lock');
         @rmdir(lumen_up_staging() . "/$type");
         return [200, ['ok' => true]];
     });
@@ -1035,10 +1119,19 @@ function lumen_staged_dataset(string $type, string $folder): ?array {
     return $meta;
 }
 
+/**
+ * Reclaim INCOMPLETE imports untouched for longer than the grace period.
+ *
+ * A dataset in LUMEN_UP_STATE_STAGED is deliberately exempt: it is complete, it
+ * passed validation, and the only thing left is a human clicking Publish.
+ * Reclaiming that after a week away would delete tens of gigabytes of finished
+ * work. The grace period covers uploads that DIED — see the Python twin.
+ */
 function lumen_up_gc(int $maxAge = LUMEN_UP_STALE_AFTER): array {
     $removed = []; $kept = 0;
     foreach (lumen_up_list() as $info) {
-        if (!empty($info['updatedAt']) && lumen_up_age($info['updatedAt']) > $maxAge) {
+        $expired = !empty($info['updatedAt']) && lumen_up_age($info['updatedAt']) > $maxAge;
+        if ($expired && ($info['state'] ?? '') !== LUMEN_UP_STATE_STAGED) {
             lumen_up_discard($info['type'], $info['folder']);
             $removed[] = $info['key'];
         } else {

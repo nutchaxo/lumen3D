@@ -85,7 +85,10 @@ $meta = ['id' => 'DS', 'name' => 'DS', 'type' => 'fixed',
          'dimensions' => ['x' => 64, 'y' => 64, 'z' => 64, 'c' => 1],
          'channels' => [['name' => 'c0']]];
 $mb = json_encode($meta);
-$manifest = ['version' => 2, 'levels' => [['level' => 0]],
+// Per-level dimensions are load-bearing: the brick loader refuses a manifest
+// without them, so the import refuses it too.
+$manifest = ['version' => 2, 'brickSize' => 64,
+             'levels' => [['level' => 0, 'dimensions' => ['x' => 64, 'y' => 64, 'z' => 64]]],
              'brickTransport' => ['brickToPack' => ['b' => ['url' => 'lod0/c0/pack_00.bin', 'offset' => 0, 'length' => 10]]]];
 $nb = json_encode($manifest);
 $pack  = str_repeat('X', 10);
@@ -189,6 +192,59 @@ check('staging dir cleared', !is_dir(lumen_up_staging() . '/fixed/DS'));
 check('journal cleared', !is_file(lumen_up_journal_path('fixed', 'DS')));
 [$st, $pl] = lumen_up_publish('fixed', 'DS2', false, true);
 check('publish refuses an unvalidated dataset', $st === 409 && $pl['error'] === 'validation_failed');
+
+// A manifest the viewer could not mount must be refused at import time, not
+// discovered later as a black viewport.
+check('manifest without per-level dimensions refused',
+    lumen_up_validate_manifest(['levels' => [['level' => 0]]])[1] === 'manifest_level_0_no_dimensions');
+check('manifest with a zero axis refused',
+    lumen_up_validate_manifest(['levels' => [['level' => 0, 'dimensions' => ['x' => 64, 'y' => 0, 'z' => 64]]]])[1] === 'manifest_level_0_bad_y');
+check('a real manifest still passes', lumen_up_validate_manifest($manifest)[0] === true);
+
+// ── 6b. Re-plan semantics + bitmap arithmetic (twins of TestReplan/TestBitmap) ─
+echo "re-plan + bitmap\n";
+$CS2 = LUMEN_UP_MIN_CHUNK;
+
+// received_bytes must be exact for a short final chunk…
+$e = ['size' => $CS2 * 3 + 17, 'chunkSize' => $CS2, 'bits' => lumen_up_bitmap_encode(chr(0b1001))];
+check('received exact for a partial tail', lumen_up_received($e) === $CS2 + 17);
+check('missing chunks correct', lumen_up_missing($e) === [1, 2]);
+
+// …and unused padding bits must not inflate it.
+$e2 = ['size' => $CS2 * 2, 'chunkSize' => $CS2, 'bits' => lumen_up_bitmap_encode(chr(0xFF))];
+check('padding bits cannot inflate the count', lumen_up_received($e2) === $CS2 * 2 && lumen_up_missing($e2) === []);
+$e3 = ['size' => $CS2 * 2, 'chunkSize' => $CS2, 'bits' => lumen_up_bitmap_encode(chr(0xFE))];
+check('a genuinely missing chunk still reads missing', lumen_up_received($e3) === $CS2 && lumen_up_missing($e3) === [0]);
+
+// An unfinished file the drop no longer contains must not block publish forever.
+$rp = [['type' => 'fixed', 'folder' => 'RP', 'files' => [
+    ['path' => 'metadata.json', 'size' => strlen($mb)],
+    ['path' => 'bricks/manifest.json', 'size' => strlen($nb)],
+    ['path' => 'bricks/lod0/c0/pack_00.bin', 'size' => strlen($pack)],
+    ['path' => 'bricks/lod9/c0/pack_00.bin', 'size' => 4096],
+]]];
+lumen_up_plan($rp, LUMEN_UP_DEFAULT_CHUNK);
+foreach (['metadata.json' => $mb, 'bricks/manifest.json' => $nb, 'bricks/lod0/c0/pack_00.bin' => $pack] as $rel => $data) {
+    lumen_up_write_chunk('fixed', 'RP', $rel, 0, $data, hash('sha256', $data));
+    lumen_up_finalize('fixed', 'RP', $rel, null);
+}
+$rp2 = $rp; array_pop($rp2[0]['files']);
+lumen_up_plan($rp2, LUMEN_UP_DEFAULT_CHUNK);
+$j = lumen_up_load_journal('fixed', 'RP');
+check('unfinished + absent file pruned on re-plan', !isset($j['files']['bricks/lod9/c0/pack_00.bin']));
+check('RP now validates', !empty(lumen_up_validate_dataset('fixed', 'RP')['ok']));
+check('finished files survive a partial re-plan', isset($j['files']['bricks/lod0/c0/pack_00.bin']));
+
+// GC exempts a finished dataset awaiting publication.
+$jp = lumen_up_journal_path('fixed', 'RP');
+$doc = json_decode((string)file_get_contents($jp), true);
+$doc['updatedAt'] = '2020-01-01T00:00:00+00:00';
+$doc['lastChunkAt'] = '2020-01-01T00:00:00+00:00';
+file_put_contents($jp, json_encode($doc));
+check('state is staged', lumen_up_state_of('fixed', 'RP') === LUMEN_UP_STATE_STAGED);
+$g = lumen_up_gc();
+check('gc spares a finished dataset', !in_array('fixed/RP', $g['removed'], true) && is_dir(lumen_up_dataset_dir('fixed', 'RP')));
+check('no expiry countdown on a finished dataset', lumen_up_describe('fixed', 'RP')['expiresInS'] === null);
 
 // ── 7. datasets.php must load the staging symbols for EVERY action ───────────
 // ?action=list calls lumen_staged_rows() and the id branch needs the

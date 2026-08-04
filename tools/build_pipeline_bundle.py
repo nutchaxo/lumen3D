@@ -27,6 +27,16 @@ runtime is ~72 MB zipped against ~86 MB for embeddable + wheels + pip + get-pip,
 and it removes pip, the bootstrap and the ``._pth`` rewrite from the technician's
 first run entirely.
 
+VERSIONING — the pack carries the PIPELINE's version, not the web platform's.
+Naming it after the platform (as it was until web v1.42.0) produced a pack called
+``…-1.41.0.zip`` while every version readout in the admin panel said ``0.15.0``:
+two numbers for one thing, one of them necessarily wrong. The pack IS the
+"Outil de Preprocessing" component of CLAUDE.md §1.5, so its version is
+``preprocess/run_preprocess.py:__version__`` — which covers everything shipped
+inside, tracking scripts and launcher included. Bump it when the pack's contents
+change. The platform version it was built alongside is kept in VERSION.json for
+traceability only.
+
 Usage:
     python tools/build_pipeline_bundle.py                     # lite -> assets/pipeline/
     python tools/build_pipeline_bundle.py --full --out dist   # complete edition
@@ -386,13 +396,15 @@ def write_zip(stage: Path, zip_path: Path):
 
 # ---------------------------------------------------------------------------
 
-def build(full: bool, out_dir: Path, version: str | None = None) -> Path:
-    # The release build passes its own --version: deriving it from the changelog
-    # here would name the pack after the newest changelog on disk, which is NOT
+def build(full: bool, out_dir: Path, platform_version: str | None = None) -> Path:
+    # The pack's own version (see the module docstring). Everything the operator
+    # sees — the filename, the launcher banner, the admin panel — reads this one.
+    pack_version = _script_version(REPO_ROOT / "preprocess" / "run_preprocess.py")
+    # Traceability only. The release build passes its own: deriving it from the
+    # changelog here would record the newest changelog on disk, which is NOT
     # necessarily the version being released (rebuilding an older tag, or a bump
-    # landing mid-build, both produce a pack whose name contradicts the release).
-    web_version = version or _changelog_version(REPO_ROOT / "changelog")
-    pp_version = _script_version(REPO_ROOT / "preprocess" / "run_preprocess.py")
+    # landing mid-build, both misreport it).
+    web_version = platform_version or _changelog_version(REPO_ROOT / "changelog")
     flavor = "complete" if full else "legere"
 
     brand = "Lumen3D"
@@ -415,8 +427,8 @@ def build(full: bool, out_dir: Path, version: str | None = None) -> Path:
 
         mapping = {
             "BRAND": brand,
-            "BUNDLE_VERSION": web_version,
-            "PP_VERSION": pp_version,
+            "BUNDLE_VERSION": pack_version,
+            "PLATFORM_VERSION": web_version,
             "FLAVOR": flavor,
             "PY_VERSION": PY_VERSION,
             "DEPS": " ".join(pip for _, pip in DEPENDENCIES),
@@ -433,8 +445,13 @@ def build(full: bool, out_dir: Path, version: str | None = None) -> Path:
                     _render(TEMPLATES / "README.md.in", mapping))
 
         _write_text(stage / "VERSION.json", json.dumps({
-            "bundleVersion": web_version,
-            "preprocessVersion": pp_version,
+            "bundleVersion": pack_version,
+            "preprocessVersion": pack_version,
+            # Which web release this pack was built alongside. The servers use it to
+            # tell a freshly-installed pack from one left behind by a previous
+            # release (see dev_server.py:_pipeline_local) — the pack's own version
+            # line is not monotonic with the platform's, so it cannot arbitrate.
+            "platformVersion": web_version,
             "flavor": flavor,
             "pythonVersion": PY_VERSION if full else None,
             "dependencies": [pip for _, pip in DEPENDENCIES],
@@ -449,9 +466,12 @@ def build(full: bool, out_dir: Path, version: str | None = None) -> Path:
         n_hashed = write_manifest(stage)
 
         suffix = "complet" if full else "leger"
-        zip_path = out_dir / f"lumen3d-pipeline-{suffix}-{web_version}.zip"
-        if zip_path.exists():
-            zip_path.unlink()
+        zip_path = out_dir / f"lumen3d-pipeline-{suffix}-{pack_version}.zip"
+        # Leave exactly one pack per edition behind: a server picking among several
+        # has to guess which one is current, and a dev checkout would otherwise
+        # accumulate one per version ever built.
+        for stale in out_dir.glob(f"lumen3d-pipeline-{suffix}-*.zip"):
+            stale.unlink()
         n_files = write_zip(stage, zip_path)
 
     size_mb = zip_path.stat().st_size / 1024 / 1024
@@ -467,18 +487,20 @@ def main():
                         help="embarque un runtime Python complet (~70 Mo, hors-ligne)")
     parser.add_argument("--out", default=None,
                         help="dossier de sortie (defaut: assets/pipeline pour --lite, dist/ pour --full)")
-    parser.add_argument("--version", default=None,
-                        help="version du pack (defaut: le changelog le plus recent)")
+    parser.add_argument("--platform-version", default=None,
+                        help="version de la plateforme web associee, pour tracabilite "
+                             "(defaut: le changelog le plus recent). Ne nomme PAS le pack : "
+                             "celui-ci porte la version du pipeline.")
     args = parser.parse_args()
 
-    if args.version and not re.fullmatch(r"\d+\.\d+\.\d+", args.version):
-        sys.exit(f"[FATAL] version malformee : {args.version!r} (attendu X.Y.Z)")
+    if args.platform_version and not re.fullmatch(r"\d+\.\d+\.\d+", args.platform_version):
+        sys.exit(f"[FATAL] version malformee : {args.platform_version!r} (attendu X.Y.Z)")
 
     out_dir = Path(args.out).resolve() if args.out else (
         REPO_ROOT / "dist" if args.full else REPO_ROOT / "assets" / "pipeline")
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    build(args.full, out_dir, args.version)
+    build(args.full, out_dir, args.platform_version)
     return 0
 
 

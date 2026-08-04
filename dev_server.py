@@ -1891,58 +1891,88 @@ PIPELINE_DIR = ROOT / "assets" / "pipeline"
 _PIPELINE_EDITIONS = {"leger": "lumen3d-pipeline-leger-", "complet": "lumen3d-pipeline-complet-"}
 
 
-def _pipeline_local(edition: str) -> Path | None:
-    """Newest locally present pack for an edition, if any."""
-    prefix = _PIPELINE_EDITIONS.get(edition)
-    if not prefix or not PIPELINE_DIR.is_dir():
-        return None
-    found = sorted(PIPELINE_DIR.glob(f"{prefix}*.zip"), key=lambda p: _version_key(p.stem))
-    return found[-1] if found else None
-
-
 def _version_key(stem: str) -> tuple:
     m = re.search(r"(\d+)\.(\d+)\.(\d+)$", stem)
     return tuple(int(g) for g in m.groups()) if m else (0, 0, 0)
 
 
-_PIPELINE_VER_CACHE = None   # ((path, mtime_ns, size), versions) — see below
+_PACK_DOC_CACHE: dict = {}   # str(path) -> ((mtime_ns, size), VERSION.json dict)
 
 
-def _pipeline_pack_versions() -> dict:
-    """Versions carried BY the downloadable pack, read from the VERSION.json that
-    tools/build_pipeline_bundle.py writes into it.
+def _pipeline_pack_doc(pack: Path) -> dict:
+    """The VERSION.json a pack carries, written by tools/build_pipeline_bundle.py.
 
-    The pack filename only encodes the platform version, so the pipeline version it
-    actually contains has to come from inside. Cached on (path, mtime, size): the
-    admin panel asks for versions on every load, and the answer only changes when
-    the artifact on disk does.
+    Cached on (mtime, size): the admin panel asks on every load, and the answer
+    only changes when the artifact on disk does.
     """
-    global _PIPELINE_VER_CACHE
-    pack = _pipeline_local("leger") or _pipeline_local("complet")
-    if not pack:
-        return {}
     try:
         st = pack.stat()
     except OSError:
         return {}
-    key = (str(pack), st.st_mtime_ns, st.st_size)
-    if _PIPELINE_VER_CACHE and _PIPELINE_VER_CACHE[0] == key:
-        return _PIPELINE_VER_CACHE[1]
-    info = {}
+    key = (st.st_mtime_ns, st.st_size)
+    hit = _PACK_DOC_CACHE.get(str(pack))
+    if hit and hit[0] == key:
+        return hit[1]
+    doc = {}
     try:
         with zipfile.ZipFile(pack) as zf:
             name = next((n for n in zf.namelist()
                          if n == "VERSION.json" or n.endswith("/VERSION.json")), None)
             if name:
                 with zf.open(name) as fh:
-                    doc = json.loads(fh.read(1 << 16).decode("utf-8"))
-                if isinstance(doc, dict):
-                    info = {"pack": doc.get("bundleVersion"),
-                            "preprocess": doc.get("preprocessVersion")}
+                    parsed = json.loads(fh.read(1 << 16).decode("utf-8"))
+                if isinstance(parsed, dict):
+                    doc = parsed
     except (OSError, ValueError, zipfile.BadZipFile):
-        info = {}
-    _PIPELINE_VER_CACHE = (key, info)
-    return info
+        doc = {}
+    _PACK_DOC_CACHE[str(pack)] = (key, doc)
+    return doc
+
+
+def _pipeline_local(edition: str) -> Path | None:
+    """The pack to serve for an edition — the current one when several coexist.
+
+    They do coexist: a copy-over update (PHP hosts, api/_admin_lib.php) writes the
+    new release's files over the tree without removing what the previous one left.
+    The filename cannot arbitrate, because since web v1.42.0 a pack is named after
+    the PIPELINE version it contains, which does not move in step with the platform
+    version — a pack named 0.15.0 supersedes one named 1.41.0. So the pack that
+    declares THIS install's platform version wins; failing that, the most recently
+    written one, and only then the highest version in the name.
+    """
+    prefix = _PIPELINE_EDITIONS.get(edition)
+    if not prefix or not PIPELINE_DIR.is_dir():
+        return None
+    found = sorted(PIPELINE_DIR.glob(f"{prefix}*.zip"))
+    if len(found) <= 1:
+        return found[0] if found else None
+    here = _max_version(CHANGELOG_DIR)
+
+    def rank(p: Path) -> tuple:
+        try:
+            mtime = p.stat().st_mtime_ns
+        except OSError:
+            mtime = 0
+        matches_install = bool(here) and _pipeline_pack_doc(p).get("platformVersion") == here
+        return (1 if matches_install else 0, mtime, _version_key(p.stem))
+
+    return max(found, key=rank)
+
+
+def _pipeline_pack_versions() -> dict:
+    """Versions carried BY the downloadable pack.
+
+    The pack's own version is the pipeline's; the platform version it shipped with
+    is recorded beside it, which is what lets _pipeline_local tell a current pack
+    from one a previous release left behind.
+    """
+    pack = _pipeline_local("leger") or _pipeline_local("complet")
+    if not pack:
+        return {}
+    doc = _pipeline_pack_doc(pack)
+    return {"pack": doc.get("bundleVersion"),
+            "preprocess": doc.get("preprocessVersion"),
+            "platform": doc.get("platformVersion")}
 
 
 def _pipeline_build_lite() -> Path | None:
@@ -1989,12 +2019,35 @@ def _pipeline_github_asset() -> dict:
     return {"available": False, "reason": "absent", "tag": rel.get("tag_name")}
 
 
+def _pipeline_outdated(pack: Path) -> bool:
+    """Whether a locally built pack no longer matches the pipeline sources.
+
+    Dev checkouts only: a deployed host has no preprocess/ to compare against, so
+    this is always False there and the pack shipped in the release is served as-is.
+    In a checkout, a pack whose version differs from run_preprocess.py's is stale
+    and would hand out yesterday's scripts under yesterday's number.
+    """
+    src = ROOT / "preprocess" / "run_preprocess.py"
+    try:
+        m = re.search(r'__version__\s*=\s*["\']([\d.]+)["\']', src.read_text(encoding="utf-8"))
+    except OSError:
+        return False
+    return bool(m) and _pipeline_pack_doc(pack).get("bundleVersion") != m.group(1)
+
+
 def _pipeline_info() -> dict:
-    local_lite = _pipeline_local("leger") or _pipeline_build_lite()
+    local_lite = _pipeline_local("leger")
+    if local_lite is None or _pipeline_outdated(local_lite):
+        local_lite = _pipeline_build_lite() or local_lite
     local_full = _pipeline_local("complet")
 
     info = {
-        "versions": {"web": _max_version(CHANGELOG_DIR), "preprocess": _preprocess_version()},
+        # "preprocess" IS the pack's version (CLAUDE.md §1.5: the pack is the
+        # preprocessing tool) and is what its filename now carries; "platform" is
+        # the web release it was built alongside, absent from packs predating that.
+        "versions": {"web": _max_version(CHANGELOG_DIR),
+                     "preprocess": _preprocess_version(),
+                     "platform": _pipeline_pack_versions().get("platform")},
         "leger": {"available": False},
         "complet": {"available": False},
     }

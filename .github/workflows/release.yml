@@ -39,15 +39,20 @@ jobs:
         #
         # The wheels are Windows/cp312 and are only DOWNLOADED here, never executed,
         # so resolving them from this Linux runner is correct.
-        run: python tools/build_pipeline_bundle.py --full --out dist --version "${GITHUB_REF_NAME#v}"
+        #
+        # --platform-version only RECORDS the release this pack ships with: the
+        # pack is named after the pipeline version it actually contains, so the
+        # asset name below has to be globbed rather than composed from the tag.
+        run: python tools/build_pipeline_bundle.py --full --out dist --platform-version "${GITHUB_REF_NAME#v}"
 
       - name: Collect release assets (include SHA256SUMS.sig when present)
         run: |
           set -e
           ASSETS="dist/lumen3d-web-${GITHUB_REF_NAME#v}.zip dist/SHA256SUMS"
           if [ -f dist/SHA256SUMS.sig ]; then ASSETS="$ASSETS dist/SHA256SUMS.sig"; fi
-          PACK="dist/lumen3d-pipeline-complet-${GITHUB_REF_NAME#v}.zip"
-          if [ -f "$PACK" ]; then ASSETS="$ASSETS $PACK"; fi
+          for PACK in dist/lumen3d-pipeline-complet-*.zip; do
+            if [ -f "$PACK" ]; then ASSETS="$ASSETS $PACK"; fi
+          done
           echo "RELEASE_ASSETS=$ASSETS" >> "$GITHUB_ENV"
 
       - name: Create GitHub release

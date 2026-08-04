@@ -296,6 +296,100 @@ body.adm-editor-only .adm-tab-inner { max-width: none; padding: 0; }
 /* Same affordance inside a Plugins-tab row, which is denser than an update card. */
 .adm-plugin-update { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 8px; }
 
+/* ── Pipeline tab: schematic flow, edition spec sheet, steps ──
+   This page exists to get one decision made (which edition) and three moves
+   right, so it is built out of diagram primitives rather than paragraphs.
+
+   Every icon rule below names BOTH `i` and `svg`: lucide REPLACES each
+   <i data-lucide> with an <svg> when it renders, so an `i`-only selector stops
+   matching at that instant — leaving the icon at lucide's default 24px and, worse,
+   without the flex-shrink:0 that keeps it from being squashed next to text. */
+.adm-flow { list-style: none; display: flex; align-items: stretch; flex-wrap: wrap; gap: 8px; }
+.adm-flow-step {
+  flex: 1 1 150px; min-width: 0; display: flex; flex-direction: column; gap: 3px;
+  padding: 13px 14px; border-radius: 12px;
+  background: rgba(127, 127, 160, 0.07); border: 1px solid var(--adm-border);
+}
+.adm-flow-ic {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 28px; height: 28px; margin-bottom: 4px; border-radius: 8px;
+  background: var(--adm-accent-subtle); color: var(--adm-accent);
+}
+.adm-flow-ic i, .adm-flow-ic svg { width: 15px; height: 15px; }
+.adm-flow-step b { font-size: 13px; font-weight: 600; }
+.adm-flow-step em { font-size: 11.5px; font-style: normal; color: var(--adm-text-muted); }
+.adm-flow-arrow { display: flex; align-items: center; color: var(--adm-text-muted); flex: 0 0 auto; }
+.adm-flow-arrow i, .adm-flow-arrow svg { width: 16px; height: 16px; }
+
+.adm-featchips { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
+.adm-featchips span {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-size: 11.5px; color: var(--adm-text-sec);
+  padding: 4px 10px; border-radius: 999px; background: rgba(127, 127, 160, 0.1);
+}
+.adm-featchips i, .adm-featchips svg { width: 13px; height: 13px; color: var(--adm-accent); flex-shrink: 0; }
+.adm-pl-ver { font-size: 11.5px; color: var(--adm-text-muted); margin-top: 14px; font-family: 'JetBrains Mono', monospace; }
+
+.adm-choice {
+  display: flex; align-items: flex-start; gap: 9px; margin-bottom: 12px;
+  padding: 11px 13px; border-radius: 10px; background: var(--adm-accent-subtle);
+  font-size: 12.5px; color: var(--adm-text-sec); line-height: 1.5;
+}
+.adm-choice > i, .adm-choice > svg { width: 16px; height: 16px; color: var(--adm-accent); flex-shrink: 0; margin-top: 1px; }
+.adm-choice b { color: var(--adm-text); }
+
+.adm-ed { display: flex; flex-direction: column; }
+.adm-ed.is-reco { border-color: var(--adm-border-active); }
+.adm-ed-badge { margin-left: auto; }
+.adm-ed .adm-card-body { flex: 1; display: flex; flex-direction: column; }
+.adm-ed-for { display: flex; align-items: center; gap: 7px; font-size: 12.5px; color: var(--adm-text); font-weight: 500; }
+.adm-ed-for i, .adm-ed-for svg { width: 15px; height: 15px; color: var(--adm-accent); flex-shrink: 0; }
+.adm-ed-note { font-size: 11.5px; color: var(--adm-text-muted); line-height: 1.5; margin: 12px 0 16px; }
+
+.adm-specs { margin: 12px 0 16px; display: flex; flex-direction: column; }
+.adm-specs > div {
+  display: flex; align-items: baseline; gap: 12px;
+  padding: 8px 0; border-top: 1px solid var(--adm-border);
+}
+.adm-specs dt {
+  display: flex; align-items: center; gap: 7px; flex: 0 0 88px;
+  font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.03em;
+  color: var(--adm-text-muted);
+}
+.adm-specs dt i, .adm-specs dt svg { width: 13px; height: 13px; flex-shrink: 0; }
+.adm-specs dd { font-size: 12.5px; color: var(--adm-text); flex: 1; min-width: 0; }
+/* Pinned to the bottom of the card so the two editions' buttons line up even when
+   one of them carries an extra note about where its download comes from. */
+.adm-pl-dl { margin-top: auto; width: 100%; height: 38px; }
+
+.adm-steps { list-style: none; display: flex; flex-direction: column; gap: 11px; }
+.adm-steps li { display: flex; gap: 11px; font-size: 12.5px; color: var(--adm-text-sec); line-height: 1.55; }
+.adm-step-n {
+  display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0;
+  width: 21px; height: 21px; border-radius: 50%;
+  background: var(--adm-accent-subtle); color: var(--adm-accent);
+  font-size: 11px; font-weight: 700;
+}
+.adm-note {
+  display: flex; gap: 9px; align-items: flex-start; margin-top: 16px;
+  padding: 11px 13px; border-radius: 10px;
+  background: rgba(251, 191, 36, 0.08); border: 1px solid rgba(251, 191, 36, 0.2);
+  font-size: 11.5px; color: var(--adm-text-sec); line-height: 1.55;
+}
+.adm-note i, .adm-note svg { width: 15px; height: 15px; color: var(--adm-warning); flex-shrink: 0; margin-top: 1px; }
+
+/* Below ~620px the four boxes stop reading as a row: stack them and turn the
+   connectors a quarter turn so the flow still points somewhere. */
+@media (max-width: 620px) {
+  .adm-flow { flex-direction: column; }
+  /* flex-basis is the HEIGHT once the axis flips — without this the boxes inflate
+     to 150px of mostly empty space each. */
+  .adm-flow-step { flex: 0 0 auto; }
+  .adm-flow-arrow { justify-content: center; }
+  .adm-flow-arrow i, .adm-flow-arrow svg { transform: rotate(90deg); }
+  .adm-specs dt { flex-basis: 76px; }
+}
+
 /* ── Dataset visibility (in the datasets editor) ───────────── */
 .vis-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 10px; }
 .vis-state { min-width: 0; }

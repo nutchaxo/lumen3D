@@ -26,6 +26,7 @@ let _preflight = null;   // report shown between "Mettre à jour" and confirmati
 let _polling = false;
 let _plugins = null;     // marketplace catalog annotated with installed/update status
 let _pluginsBusy = false;
+let _pipeline = null;    // downloadable processing pack: what is here vs what is published
 
 // Server pipeline phases → i18n chip label (order = visual stepper order).
 const PHASES = [
@@ -202,6 +203,39 @@ function lastOutcomeBlock(last) {
     </div>`;
 }
 
+/**
+ * The processing pack's own update state.
+ *
+ * The pack is not part of the platform: it runs on the operator's Windows station
+ * and carries the preprocessing tool's version, which moves on its own cadence. So
+ * a new pack can be published with no platform release behind it, and updating it
+ * means downloading it again on that station — nothing happens on this server.
+ */
+function pipelinePackBlock() {
+  if (_pipeline === null) {
+    return `<div class="adm-update-state"><span class="spinner spinner-sm"></span> ${escHtml(t('admin.pipelineChecking', 'Vérification…'))}</div>`;
+  }
+  const upd = _pipeline.update || {};
+  const local = (_pipeline.leger && _pipeline.leger.version) || (_pipeline.versions || {}).preprocess;
+
+  if (upd.reason === 'unreachable') {
+    return `<div class="adm-update-state"><i data-lucide="cloud-off"></i> ${escHtml(t('admin.pipelinePackUnreachable', 'Impossible de joindre GitHub pour vérifier le pack de traitement.'))}</div>`;
+  }
+  if (!upd.available) {
+    return `<div class="adm-update-state adm-ok"><i data-lucide="check-circle-2"></i> ${escHtml(t('admin.pipelinePackUpToDate', 'Le pack de traitement est à jour.'))} <span class="adm-muted">(v${escHtml(local || '—')})</span></div>`;
+  }
+
+  const asset = (_pipeline.leger && _pipeline.leger.newer) || (_pipeline.complet && _pipeline.complet.newer);
+  const link = asset && asset.url
+    ? `<a class="adm-btn adm-btn-accent adm-btn-sm" href="${escHtml(asset.url)}" target="_blank" rel="noopener">
+         <i data-lucide="download-cloud"></i> ${escHtml(t('admin.pipelinePackGet', 'Télécharger le pack'))}</a>`
+    : '';
+  return `
+    <div class="adm-update-state adm-avail"><i data-lucide="sparkles"></i> ${escHtml(t('admin.pipelinePackAvailable', 'Nouveau pack de traitement'))} : <b>v${escHtml(upd.remote)}</b> <span class="adm-muted">(${escHtml(t('admin.pipelinePackInstalled', 'ici : v{v}', { v: upd.local || local || '—' }))})</span></div>
+    <p class="adm-muted" style="margin:8px 0 12px">${escHtml(t('admin.pipelinePackHint', "Il s'installe sur le poste de traitement, pas sur ce serveur : téléchargez-le et remplacez le dossier utilisé là-bas."))}</p>
+    ${link}`;
+}
+
 function render(lastOutcome) {
   const root = el('updates-root');
   if (!root) return;
@@ -234,6 +268,11 @@ function render(lastOutcome) {
     <div class="adm-card" style="margin-top:18px">
       <div class="adm-card-head"><i data-lucide="puzzle"></i><span>${escHtml(t('admin.pluginUpdates', 'Mises à jour des plugins'))}</span></div>
       <div class="adm-card-body" id="plugin-updates-body">${pluginUpdatesBlock()}</div>
+    </div>
+
+    <div class="adm-card" style="margin-top:18px">
+      <div class="adm-card-head"><i data-lucide="workflow"></i><span>${escHtml(t('admin.pipelinePackUpdates', 'Pack de traitement'))}</span></div>
+      <div class="adm-card-body" id="pipeline-pack-body">${pipelinePackBlock()}</div>
     </div>
 
     <div class="adm-card adm-progress-card" id="progress-card" style="display:none;margin-top:18px">
@@ -273,7 +312,18 @@ async function loadCheck() {
   render(s?.phase === 'idle' ? s.last : null);
 }
 
-function recheck() { loadCheck(); loadPluginUpdates(); }
+async function loadPipelinePack() {
+  _pipeline = null;
+  const p = await apiFetch(`${API_ADMIN}?action=pipeline_info`);
+  _pipeline = p || { update: { reason: 'unreachable' } };
+  const body = el('pipeline-pack-body');
+  if (body) {
+    body.innerHTML = pipelinePackBlock();
+    refreshIcons(body);
+  }
+}
+
+function recheck() { loadCheck(); loadPluginUpdates(); loadPipelinePack(); }
 
 async function ackOutcome() {
   await apiFetchStatus(`${API_ADMIN}?action=update_ack`, { method: 'POST', body: '{}' });
@@ -397,7 +447,7 @@ export const UpdatesTab = {
   titleKey: 'admin.navUpdates',
   titleDefault: 'Mises à jour',
   mounted: false,
-  mount() { render(); loadVersions().then(() => render()); loadCheck(); loadPluginUpdates(); },
+  mount() { render(); loadVersions().then(() => render()); loadCheck(); loadPluginUpdates(); loadPipelinePack(); },
   activate() {},
   relabel() { render(); },
 };

@@ -16,6 +16,7 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import sys
 import zipfile
 from datetime import datetime, timezone
@@ -390,7 +391,22 @@ def main():
     write_zip(zip_path, entries)
 
     zip_digest = sha256_hex(zip_path.read_bytes())
-    sums_bytes = f"{zip_digest}  {zip_name}\n".encode("utf-8")
+
+    # The processing packs ride as their own release assets so the admin panel can
+    # offer a newer pipeline without a platform update. They are covered by the same
+    # SHA256SUMS the signature protects — an asset nobody can verify is one nobody
+    # should download. The light pack is copied out of the release tree; a complete
+    # pack, built beforehand, is picked up wherever it already sits in out_dir.
+    for built in sorted((REPO_ROOT / "assets" / "pipeline").glob("lumen3d-pipeline-leger-*.zip")):
+        shutil.copy2(built, out_dir / built.name)
+    packs = sorted(out_dir.glob("lumen3d-pipeline-*.zip"), key=lambda p: p.name)
+
+    lines = [f"{zip_digest}  {zip_name}\n"]
+    for pack in packs:
+        digest = sha256_hex(pack.read_bytes())
+        lines.append(f"{digest}  {pack.name}\n")
+        print(f"    asset {pack.name} ({pack.stat().st_size} bytes)")
+    sums_bytes = "".join(lines).encode("utf-8")
     sums_path = out_dir / "SHA256SUMS"
     sums_path.write_bytes(sums_bytes)
 

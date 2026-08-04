@@ -2017,23 +2017,66 @@ def _pipeline_build_lite() -> Path | None:
     return _pipeline_local("leger")
 
 
-def _pipeline_github_asset() -> dict:
-    """Locate the complete pack among the latest GitHub release's assets.
+_RELEASE_CACHE: dict = {}      # "latest" -> (fetched_at, release dict)
+_RELEASE_TTL = 300.0
 
-    Returns availability plus the browser download URL. Network failures are not
-    errors here — the light pack still works, so the UI just reports that the
-    complete edition could not be reached.
+
+def _github_latest_release() -> dict:
+    """The latest release, cached briefly.
+
+    Both admin tabs ask on load and each asks for its own reason, while GitHub
+    allows 60 unauthenticated requests an hour per IP — a shared campus NAT burns
+    that fast. One answer serves every caller for five minutes.
+    """
+    hit = _RELEASE_CACHE.get("latest")
+    if hit and (time.time() - hit[0]) < _RELEASE_TTL:
+        return hit[1]
+    rel = _http_get_json(f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest")
+    _RELEASE_CACHE["latest"] = (time.time(), rel)
+    return rel
+
+
+def _pipeline_remote_assets() -> dict:
+    """The pipeline packs attached to the latest release, per edition.
+
+    A pack is named after the PIPELINE version it contains, so the filename alone
+    dates it — no download needed to tell whether the host's copy is behind.
+    Network failures are not errors: the local pack still works, so the caller
+    reports what could not be reached and carries on.
     """
     try:
-        rel = _http_get_json(f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest")
+        rel = _github_latest_release()
     except Exception as exc:
-        return {"available": False, "reason": "unreachable", "detail": str(exc)[:200]}
+        return {"reason": "unreachable", "detail": str(exc)[:200], "editions": {}}
+    out = {"tag": rel.get("tag_name"), "editions": {}}
     for asset in rel.get("assets") or []:
         name = asset.get("name") or ""
-        if name.startswith(_PIPELINE_EDITIONS["complet"]) and name.endswith(".zip"):
-            return {"available": True, "name": name, "size": asset.get("size"),
-                    "url": asset.get("browser_download_url"), "tag": rel.get("tag_name")}
-    return {"available": False, "reason": "absent", "tag": rel.get("tag_name")}
+        if not name.endswith(".zip"):
+            continue
+        for edition, prefix in _PIPELINE_EDITIONS.items():
+            if name.startswith(prefix):
+                out["editions"][edition] = {
+                    "available": True, "name": name, "size": asset.get("size"),
+                    "url": asset.get("browser_download_url"), "tag": rel.get("tag_name"),
+                    "version": _version_name(name),
+                }
+    return out
+
+
+def _version_name(stem: str) -> str | None:
+    m = re.search(r"(\d+\.\d+\.\d+)", stem)
+    return m.group(1) if m else None
+
+
+def _pipeline_github_asset() -> dict:
+    """The complete pack among the latest release's assets, for the download card."""
+    remote = _pipeline_remote_assets()
+    got = remote.get("editions", {}).get("complet")
+    if got:
+        return dict(got)
+    if remote.get("reason"):
+        return {"available": False, "reason": remote["reason"], "detail": remote.get("detail")}
+    return {"available": False, "reason": "absent", "tag": remote.get("tag")}
 
 
 def _pipeline_outdated(pack: Path) -> bool:
@@ -2050,6 +2093,11 @@ def _pipeline_outdated(pack: Path) -> bool:
     except OSError:
         return False
     return bool(m) and _pipeline_pack_doc(pack).get("bundleVersion") != m.group(1)
+
+
+def _pipeline_local_version(pack: Path) -> str | None:
+    """Pipeline version a local pack contains — declared inside, filename as fallback."""
+    return _pipeline_pack_doc(pack).get("bundleVersion") or _version_name(pack.stem)
 
 
 def _pipeline_info() -> dict:
@@ -2070,17 +2118,57 @@ def _pipeline_info() -> dict:
     }
     if local_lite:
         info["leger"] = {"available": True, "name": local_lite.name,
-                         "size": local_lite.stat().st_size, "source": "local"}
+                         "size": local_lite.stat().st_size, "source": "local",
+                         "version": _pipeline_local_version(local_lite)}
     if local_full:
         # An operator can drop the complete pack next to the light one; serving it
         # from the host then beats sending them to GitHub.
         info["complet"] = {"available": True, "name": local_full.name,
-                           "size": local_full.stat().st_size, "source": "local"}
+                           "size": local_full.stat().st_size, "source": "local",
+                           "version": _pipeline_local_version(local_full)}
     else:
         remote = _pipeline_github_asset()
         remote["source"] = "github"
         info["complet"] = remote
+
+    info["update"] = _pipeline_update_state(info)
     return info
+
+
+def _pipeline_update_state(info: dict, remote: dict | None = None) -> dict:
+    """Whether a newer pipeline pack than this host's has been published.
+
+    The pack has its own release cadence: the preprocessing tool moves on its own
+    numbers and a platform update is not what should carry it. So the host's copy
+    is compared against what the latest release actually attaches, and each edition
+    that is behind gets the newer pack offered next to the one already here.
+    """
+    remote = remote if remote is not None else _pipeline_remote_assets()
+    editions = remote.get("editions") or {}
+    if not editions:
+        return {"available": False, "reason": remote.get("reason", "absent"),
+                "detail": remote.get("detail"), "tag": remote.get("tag")}
+
+    newest_local = newest_remote = None
+    for edition in _PIPELINE_EDITIONS:
+        here = info.get(edition) or {}
+        there = editions.get(edition)
+        # Only a LOCAL pack can be behind: an edition served straight from GitHub is
+        # by construction the published one.
+        if here.get("source") != "local" or not there:
+            continue
+        local_v, remote_v = here.get("version"), there.get("version")
+        if not local_v or not remote_v or _version_key(remote_v) <= _version_key(local_v):
+            continue
+        here["newer"] = dict(there)
+        if newest_local is None or _version_key(local_v) < _version_key(newest_local):
+            newest_local = local_v
+        if newest_remote is None or _version_key(remote_v) > _version_key(newest_remote):
+            newest_remote = remote_v
+
+    return {"available": newest_remote is not None,
+            "local": newest_local, "remote": newest_remote,
+            "tag": remote.get("tag")}
 
 
 def _update_check() -> dict:

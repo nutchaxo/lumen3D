@@ -23,14 +23,6 @@ jobs:
       - name: Server self-check
         run: python dev_server.py --check
 
-      - name: Build release artifact (signs SHA256SUMS if a key is configured)
-        env:
-          # Ed25519 private seed (64 hex). Optional: if the secret is unset the
-          # release is built unsigned. Once the public key is pinned in
-          # dev_server.py/install.php, the updater REQUIRES this signature.
-          LUMEN_SIGNING_KEY: ${{ secrets.LUMEN_SIGNING_KEY }}
-        run: python tools/build_release.py --version "${GITHUB_REF_NAME#v}" --out dist --commit "${GITHUB_SHA}"
-
       - name: Build the complete processing pack (offline edition)
         # ~70 MB with a full CPython runtime and every scientific dependency
         # pre-installed — far too large for the web release zip (which carries the
@@ -43,14 +35,28 @@ jobs:
         # --platform-version only RECORDS the release this pack ships with: the
         # pack is named after the pipeline version it actually contains, so the
         # asset name below has to be globbed rather than composed from the tag.
+        #
+        # Built BEFORE the release artifact so build_release.py can cover it in the
+        # SHA256SUMS it then signs.
         run: python tools/build_pipeline_bundle.py --full --out dist --platform-version "${GITHUB_REF_NAME#v}"
 
+      - name: Build release artifact (signs SHA256SUMS if a key is configured)
+        env:
+          # Ed25519 private seed (64 hex). Optional: if the secret is unset the
+          # release is built unsigned. Once the public key is pinned in
+          # dev_server.py/install.php, the updater REQUIRES this signature.
+          LUMEN_SIGNING_KEY: ${{ secrets.LUMEN_SIGNING_KEY }}
+        run: python tools/build_release.py --version "${GITHUB_REF_NAME#v}" --out dist --commit "${GITHUB_SHA}"
+
       - name: Collect release assets (include SHA256SUMS.sig when present)
+        # Both processing packs are attached, not just the complete one: the admin
+        # panel compares the host's light pack against the published one, and can
+        # only offer an update if that pack exists as an asset.
         run: |
           set -e
           ASSETS="dist/lumen3d-web-${GITHUB_REF_NAME#v}.zip dist/SHA256SUMS"
           if [ -f dist/SHA256SUMS.sig ]; then ASSETS="$ASSETS dist/SHA256SUMS.sig"; fi
-          for PACK in dist/lumen3d-pipeline-complet-*.zip; do
+          for PACK in dist/lumen3d-pipeline-*.zip; do
             if [ -f "$PACK" ]; then ASSETS="$ASSETS $PACK"; fi
           done
           echo "RELEASE_ASSETS=$ASSETS" >> "$GITHUB_ENV"

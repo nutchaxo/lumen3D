@@ -6,6 +6,17 @@ scipy>=1.10.0
 Pillow>=10.0.0
 tqdm>=4.65.0
 
+# Optional — cell tracking (step 5, on by default for timelapses). Without these the
+# volume still processes: tracking_sources.py reports what is missing and the dataset
+# is published without its trajectories. pandas drives the lab's analysis code, xlrd
+# reads the legacy .xls Imaris writes, openpyxl the .xlsx, orjson is imported
+# unconditionally by SCRIPTS/export_html.py. A .imaris_track container needs none of
+# them — only extracting from a .ims or a workbook does.
+# pandas>=2.0.0
+# openpyxl>=3.1.0
+# xlrd>=2.0.1
+# orjson>=3.9.0
+
 # Optional — only needed for the download/ bundle (--with-downloads): OME-TIFF export.
 # The .bat launcher installs it on demand; uncomment for a manual `pip install -r`.
 # tifffile>=2024.1.0

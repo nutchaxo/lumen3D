@@ -95,7 +95,9 @@ graph TD
         D -->|64³ bricks + manifest.json| F["bricks/lodN — or bricks/tNNN, one tree per timepoint"]
         D --> G(4-catalog_generator.py)
         G -->|per-dataset| H[metadata.json]
-        T[.imaris_track] --> U(5-tracking_importer.py)
+        A -.->|Scene8 Spots/Tracks| S(tracking_sources.py)
+        T[".imaris_track — or .xls/.xlsx beside the volume"] --> S
+        S --> U(5-tracking_importer.py)
         U -->|tracks.json + registration| H
     end
 
@@ -162,10 +164,11 @@ graph TD
 │   │                          #   series-global intensity window on 4D
 │   ├── 3-chunk_packer.py      # 64³ bricks, WebP mosaic 512² (8×8), pack into .bin; one tree per timepoint
 │   ├── 4-catalog_generator.py # metadata.json (+ per-timepoint histograms on 4D)
-│   ├── 5-tracking_importer.py # .imaris_track → tracks.json + model.glb + registration block
+│   ├── 5-tracking_importer.py # tracking → tracks.json + model.glb + registration block
+│   ├── tracking_sources.py    # Finds the tracking: .imaris_track, the .ims Scene8 objects, or .xls/.xlsx
 │   ├── run_preprocess.py      # Unified runner (orchestrates 1 → 5, routes 4D to live/, download bundles)
 │   ├── requirements.txt       # Python dependencies (h5py, numpy, scipy, Pillow, tqdm)
-│   └── changelog/             # Preprocessing tool versions (0.11.x → 0.15.x)
+│   └── changelog/             # Preprocessing tool versions (0.11.x → 0.16.x)
 ├── SCRIPTS/                   # Imaris tracking-analysis scripts (shipped in the Pipeline pack)
 ├── tools/                     # build_release.py, build_pipeline_bundle.py, gen_pipeline_examples.py,
 │                              #   publish_plugin.py, gen_signing_key.py, check_version.py, ...

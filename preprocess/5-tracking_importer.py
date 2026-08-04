@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
 """Attach an Imaris cell-tracking analysis to a preprocessed volume dataset.
 
-Reads a `.imaris_track` container (gzip + JSON, signature IMARIS_TRACKER_V1) produced
-by the lab's Imaris analysis scripts and writes, into the dataset directory:
+Accepts the analysis in any of the three shapes it exists in — a `.imaris_track` container
+(gzip + JSON, signature IMARIS_TRACKER_V1) produced by the lab's Imaris analysis scripts,
+the `.ims` volume itself (its Scene8 Spots/Tracks objects), or the `.xls`/`.xlsx` statistics
+workbook exported from Imaris; the last two are normalised by `tracking_sources.py`. Writes,
+into the dataset directory:
 
     tracks.json[.gz]   trajectories in the schema the viewer consumes
     model.glb          the pre-baked population surfaces, if one was exported
@@ -36,7 +39,7 @@ from pathlib import Path
 
 import numpy as np
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 SIGNATURE = "IMARIS_TRACKER_V1"
 # A Procrustes fit residual under this is machine noise: the stabilisation is rigid and
@@ -51,6 +54,23 @@ def _sig(value, digits=4):
     if value is None:
         return None
     return float(f"{float(value):.{digits}g}")
+
+
+def _load_source(path: Path) -> dict:
+    """Read the tracking, whatever shape the operator pointed us at.
+
+    A ``.imaris_track`` is parsed here so the common path stays dependency-free; the raw
+    Imaris shapes (.ims objects, exported .xls/.xlsx) are normalised by tracking_sources,
+    which needs pandas and the tracking pipeline's own analysis code.
+    """
+    if path.suffix.lower() == ".imaris_track":
+        return _read_container(path)
+    try:
+        import tracking_sources
+    except ImportError as exc:
+        raise RuntimeError(
+            f"{path.name}: la lecture de ce format demande tracking_sources.py ({exc})") from exc
+    return tracking_sources.load_document(path)
 
 
 def _read_container(path: Path) -> dict:
@@ -381,7 +401,7 @@ def _bounds(points):
 
 def import_tracking(track_path: Path, dataset_dir: Path, glb_path: Path = None,
                     timepoint_offset: int = -1, write_gzip: bool = True):
-    doc = _read_container(track_path)
+    doc = _load_source(track_path)
     tracks, has_raw = build_tracks_document(doc)
 
     metadata_path = dataset_dir / "metadata.json"
@@ -446,6 +466,11 @@ def import_tracking(track_path: Path, dataset_dir: Path, glb_path: Path = None,
                     for name, n in region_counts.most_common()],
         "boundsUm": {"stabilized": _bounds(stab_pts), "raw": _bounds(raw_pts)},
     }
+    # Which of the three shapes the tracking actually came from, and how its classification
+    # was resolved — the answer is not recoverable from tracks.json afterwards.
+    provenance = (doc.get("data") or {}).get("provenance")
+    if isinstance(provenance, dict):
+        metadata["tracking"]["provenance"] = provenance
 
     if registration:
         extent = metadata.get("acquisitionExtentUm")
@@ -477,8 +502,10 @@ def import_tracking(track_path: Path, dataset_dir: Path, glb_path: Path = None,
 
 def main():
     ap = argparse.ArgumentParser(
-        description="Attach an Imaris .imaris_track analysis to a preprocessed volume dataset.")
-    ap.add_argument("track", help="path to the .imaris_track container")
+        description="Attach an Imaris cell-tracking analysis to a preprocessed volume dataset.")
+    ap.add_argument("track", help="path to the analysis: a .imaris_track container, the .ims "
+                                  "itself (Imaris objects are read from Scene8), or the "
+                                  ".xls/.xlsx statistics workbook exported from Imaris")
     ap.add_argument("dataset", help="dataset directory, e.g. DATA_WEB/live/<name>")
     ap.add_argument("--glb", default=None,
                     help="surface GLB to attach (default: <track>.glb next to the container)")

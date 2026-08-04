@@ -37,8 +37,12 @@
 # Guarded like every other directive here: an unguarded directive from a module the
 # host hasn't loaded takes the WHOLE site down with a 500, and these directories
 # ship in no release — a 500 would be the worse failure.
+# uploads/ is the dataset import staging root: bytes that arrived from a browser
+# and have NOT passed validate_dataset() yet. It carries its own deny-all
+# .htaccess too, but this rule holds even if that file is lost — the admin
+# preview reads staged bytes through api/upload.php?action=blob, never a URL.
 <IfModule mod_alias.c>
-    RedirectMatch 404 ^/(secrets|logs|backups|\.git)(/|$)
+    RedirectMatch 404 ^/(secrets|logs|backups|uploads|\.git)(/|$)
 </IfModule>
 
 # ── Caching ──────────────────────────────────────────────────────────────────

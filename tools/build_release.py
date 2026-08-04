@@ -38,6 +38,8 @@ ROOT_FILES = (
     "dev_server.py",
     "fast_server.py",
     "ed25519_pure.py",  # vendored release-signature verifier (updater authenticity)
+    "upload_staging.py",  # dataset import staging engine (admin Import tab)
+    "DATA_WEB/.htaccess",  # execution ban for the published tree (see the file's header)
     "router.php",
     "_serve.php",     # Apache HTML entry (nonce-CSP) — rewritten to by the root .htaccess
     ".htaccess",      # routes *.html → _serve.php on Apache

@@ -29,6 +29,7 @@ export const API_ADMIN     = 'api/admin.php';
 export const API_TELEMETRY = 'api/telemetry.php';
 export const API_SITE      = 'api/site.php';   // white-label config (instance/theme/pages/legal)
 export const API_MEDIA     = 'api/media.php';  // media library (operator image uploads)
+export const API_UPLOAD    = 'api/upload.php'; // dataset import (staging, chunked + resumable)
 
 // Translated string for `k`, or `def` (the original French) on miss / no I18n.
 export function t(k, def, params) {

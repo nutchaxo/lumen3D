@@ -15,6 +15,7 @@ import {
   API_DATASETS, t, escHtml, apiFetch, toast, el, deepClone, refreshIcons,
 } from './shared.js';
 import { setUnsaved, setDirtyGuard } from './bus.js';
+import * as Upload from './upload-manager.js';
 
 const PREVIEW_DEBOUNCE = 150;
 
@@ -95,8 +96,9 @@ function getFilteredDatasets() {
   return _datasets.filter((ds) => {
     let typeOk;
     if (_typeFilter === 'all') typeOk = true;
-    else if (_typeFilter === 'hidden') typeOk = !!ds.hidden;
-    else typeOk = ds.type === _typeFilter;
+    else if (_typeFilter === 'hidden') typeOk = !!ds.hidden && !ds.staging;
+    else if (_typeFilter === 'staging') typeOk = !!ds.staging;
+    else typeOk = ds.type === _typeFilter && !ds.staging;
     const q = _searchQuery.toLowerCase();
     const textOk = !q || (ds.name || '').toLowerCase().includes(q) ||
       (ds.stage || '').toLowerCase().includes(q) ||
@@ -125,25 +127,33 @@ function renderList() {
 
   filtered.forEach((ds) => {
     const item = document.createElement('div');
-    item.className = 'dataset-item' + (_current?.id === ds.id ? ' selected' : '') + (ds.hidden ? ' is-hidden' : '');
+    item.className = 'dataset-item' + (_current?.id === ds.id ? ' selected' : '')
+      + (ds.hidden ? ' is-hidden' : '') + (ds.staging ? ' is-staging' : '');
     item.dataset.id = ds.id;
     const thumbHtml = ds.thumbnail
       ? `<img class="item-thumb" src="${escHtml(ds.thumbnail)}" alt="" loading="lazy">`
       : `<div class="item-thumb-placeholder">🧬</div>`;
     const stageBadge = ds.stage ? `<span class="item-stage">${escHtml(ds.stage)}</span>` : '';
     const embryoText = ds.embryo ? `<span class="item-embryo">${escHtml(ds.embryo)}</span>` : '';
-    const hiddenBadge = ds.hidden ? `<span class="item-hidden-badge" title="${escHtml(t('admin.hidden', 'Masqué'))}">${escHtml(t('admin.hiddenShort', 'masqué'))}</span>` : '';
+    // A staged dataset is never in the public catalog, so the generic "masqué"
+    // badge would be noise; its import state is the useful signal instead.
+    const hiddenBadge = (ds.hidden && !ds.staging)
+      ? `<span class="item-hidden-badge" title="${escHtml(t('admin.hidden', 'Masqué'))}">${escHtml(t('admin.hiddenShort', 'masqué'))}</span>` : '';
+    const stagingBadge = ds.staging ? stagingChip(ds.stagingState) : '';
     const statusClass = ds.configured ? 'configured' : 'unconfigured';
     // Per-item visibility toggle. Icon reflects current state (eye = visible,
     // eye-off = hidden); the title spells out the action. No delete control —
     // dataset removal is a filesystem operation by design.
     const visTitle = ds.hidden ? t('admin.showDataset', 'Afficher dans l\'explorer') : t('admin.hideDataset', 'Masquer de l\'explorer');
-    const visBtn = `<button type="button" class="item-vis-btn${ds.hidden ? ' is-off' : ''}" data-vis-btn title="${escHtml(visTitle)}" aria-label="${escHtml(visTitle)}"><i data-lucide="${ds.hidden ? 'eye-off' : 'eye'}"></i></button>`;
+    // Visibility is a property of PUBLICATION: a staged dataset has none to
+    // toggle, so the control is omitted rather than shown broken.
+    const visBtn = ds.staging ? '' :
+      `<button type="button" class="item-vis-btn${ds.hidden ? ' is-off' : ''}" data-vis-btn title="${escHtml(visTitle)}" aria-label="${escHtml(visTitle)}"><i data-lucide="${ds.hidden ? 'eye-off' : 'eye'}"></i></button>`;
     item.innerHTML = `
       ${thumbHtml}
       <div class="item-info">
         <div class="item-name">${escHtml(ds.name)}</div>
-        <div class="item-meta">${stageBadge}${embryoText}${hiddenBadge}</div>
+        <div class="item-meta">${stageBadge}${embryoText}${hiddenBadge}${stagingBadge}</div>
       </div>
       ${visBtn}
       <span class="item-status ${statusClass}" title="${escHtml(ds.configured ? t('admin.configured', 'Configuré') : t('admin.unconfigured', 'Non configuré'))}"></span>`;
@@ -160,6 +170,91 @@ function renderList() {
     DOM.datasetList.appendChild(item);
   });
   refreshIcons(DOM.datasetList);
+}
+
+// ── Datasets still being imported ──────────────────────────────
+// A staged dataset (id "staging:<type>/<folder>") is listed here alongside the
+// published ones so the operator edits ONE list. What changes is what they can
+// do with it, which is exactly what the state says:
+//   uploading — mount prerequisites still missing: visible, not editable
+//   editable  — coarse LOD in: openable at low resolution, fully editable while
+//               the rest streams in (the point of the whole tiering scheme)
+//   staged    — complete and verified, awaiting publication
+//   stalled   — interrupted; re-drop the folder in the Import tab to resume
+
+const STAGING_LABELS = () => ({
+  uploading: { label: t('upl.stUploading', 'Envoi — non éditable'), icon: 'loader',
+               hint: t('upl.hintUploading', 'Les fichiers indispensables à l\'ouverture ne sont pas encore tous arrivés.') },
+  editable:  { label: t('upl.stEditable', 'Envoi — éditable'), icon: 'pencil',
+               hint: t('upl.hintEditable', 'Ouvrable en basse résolution : vous pouvez déjà le renommer, régler les canaux et définir la preview pendant que le reste arrive.') },
+  staged:    { label: t('upl.stStaged', 'Envoyé — à publier'), icon: 'package-check',
+               hint: t('upl.hintStaged', 'Transfert complet et intégrité vérifiée. Publiez-le pour le déplacer vers les datasets publiés.') },
+  stalled:   { label: t('upl.stStalled', 'Interrompu'), icon: 'alert-triangle',
+               hint: t('upl.hintStalled', 'Reglissez le même dossier pour reprendre là où le transfert s\'est arrêté.') },
+});
+
+let _importSig = '';
+
+function onImportChange(s) {
+  if (!_loaded) return;
+  const sig = [...s.datasets, ...(s.staged || [])]
+    .map((d) => `${d.key}:${d.state}`).sort().join('|');
+  if (sig === _importSig) return;
+  _importSig = sig;
+  loadDatasets().then(() => {
+    // Keep an open editor honest: a dataset that just became editable must
+    // unlock its form, and one that finished must drop the "not editable" banner.
+    if (!_current?.id?.startsWith('staging:')) return;
+    const fresh = _datasets.find((d) => d.id === _current.id);
+    if (!fresh || !_draft) return;
+    if (_draft.stagingState === fresh.stagingState) return;
+    _draft.stagingState = fresh.stagingState;
+    if (_original) _original.stagingState = fresh.stagingState;
+    applyStagingChrome(_draft);
+    if (isStagingEditable(_draft) && !DOM.previewFrame.getAttribute('src')) loadPreview(_current);
+  });
+}
+
+function stagingChip(state) {
+  const info = STAGING_LABELS()[state];
+  if (!info) return '';
+  return `<span class="ds-staging-badge is-${escHtml(state)}">${escHtml(info.label)}</span>`;
+}
+
+function isStagingEditable(meta) {
+  if (!meta?.staging) return true;
+  return meta.stagingState === 'editable' || meta.stagingState === 'staged';
+}
+
+/** Banner + form gating for the dataset currently open in the editor. */
+function applyStagingChrome(meta) {
+  const panel = DOM.configPanel;
+  if (!panel) return;
+  let banner = panel.querySelector('.ds-staging-banner');
+
+  if (!meta?.staging) {
+    if (banner) banner.remove();
+    setFormEnabled(true);
+    return;
+  }
+  const info = STAGING_LABELS()[meta.stagingState] || STAGING_LABELS().uploading;
+  if (!banner) {
+    banner = document.createElement('div');
+    banner.className = 'ds-staging-banner';
+    panel.insertBefore(banner, panel.firstChild);
+  }
+  banner.className = `ds-staging-banner is-${meta.stagingState}`;
+  banner.innerHTML = `<i data-lucide="${info.icon}"></i><div><strong>${escHtml(info.label)}</strong><br>${escHtml(info.hint)}</div>`;
+  refreshIcons(banner);
+  setFormEnabled(isStagingEditable(meta));
+}
+
+function setFormEnabled(on) {
+  [DOM.fName, DOM.fStage, DOM.fEmbryo, DOM.fDescription, DOM.fVoxX, DOM.fVoxY, DOM.fVoxZ,
+   DOM.fExposure, DOM.btnSave, DOM.btnReset, DOM.btnSetPreview, DOM.btnDefineOrientation]
+    .forEach((e) => { if (e) e.disabled = !on; });
+  // Visibility belongs to publication — never offered for a staged dataset.
+  if (DOM.fVisible) DOM.fVisible.disabled = !on || !!_draft?.staging;
 }
 
 // ── Validation (Rule 1.4) ──────────────────────────────────────
@@ -198,10 +293,23 @@ async function selectDataset(id) {
   _draft = deepClone(meta);
   _original = deepClone(meta);
   clearDirty();
-  loadPreview(_current);
+  // A dataset whose coarse LOD has not landed yet cannot be mounted: pointing the
+  // preview iframe at it would only produce a failed manifest fetch and an error
+  // banner inside the frame. Show the placeholder until it becomes openable.
+  if (isStagingEditable(meta)) loadPreview(_current);
+  else showPreviewPending();
   populateForm();
   DOM.configEmpty.style.display = 'none';
   DOM.configPanel.style.display = 'flex';
+  applyStagingChrome(meta);
+}
+
+function showPreviewPending() {
+  DOM.previewFrame.removeAttribute('src');
+  DOM.previewLoading.style.display = 'none';
+  DOM.previewFrameWrap.style.display = 'none';
+  DOM.previewLabelBar.style.display = 'none';
+  DOM.previewPlaceholder.style.display = 'flex';
 }
 
 function normaliseChannels(channels, count) {
@@ -434,7 +542,10 @@ async function saveThumbnail(dataUrl) {
   }
   if (data?.ok) {
     toast(t('admin.toastPreviewUpdated', 'Preview mise à jour ✓'));
-    const newThumbUrl = `${data.path}?v=${Date.now()}`;
+    // A staged dataset's thumbnail comes back as a proxy URL that already carries
+    // a query string, so the cache-buster must extend it, not start a new one.
+    const sep = String(data.path).includes('?') ? '&' : '?';
+    const newThumbUrl = `${data.path}${sep}v=${Date.now()}`;
     _current.thumbnail = newThumbUrl;
     const idx = _datasets.findIndex((d) => d.id === _current.id);
     if (idx !== -1) _datasets[idx].thumbnail = newThumbUrl;
@@ -573,7 +684,13 @@ export const DatasetsTab = {
     setDirtyGuard(() => _dirty);
     wire();
     loadDatasets();
+    // An import promotes a dataset from "not editable" to "editable" the instant
+    // its coarse LOD lands, and that must show up here without a reload. The
+    // manager emits on every progress tick (a few times a second), so re-list only
+    // when the STATE SET actually changed — otherwise this would fire an API
+    // request per tick for the whole duration of a multi-hour transfer.
+    Upload.subscribe(onImportChange);
   },
-  activate() { if (_loaded) renderList(); },
-  relabel() { renderList(); if (_draft) populateForm(); },
+  activate() { if (_loaded) loadDatasets(); },
+  relabel() { renderList(); if (_draft) { populateForm(); applyStagingChrome(_draft); } },
 };

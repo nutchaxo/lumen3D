@@ -13,6 +13,8 @@ import {
   setUnauthorizedHandler, toast, refreshIcons, el,
 } from './shared.js';
 import { isDirty, setNavigator } from './bus.js';
+import * as UploadDock from './upload-dock.js';
+import * as Upload from './upload-manager.js';
 
 const _tabs = new Map();   // id -> { id, mount, activate, relabel?, titleKey, titleDefault }
 let _activeTab = null;
@@ -47,6 +49,10 @@ function enterApp(username) {
   _appReady = true;
   if (Utils) Utils.populateLanguageMenu?.(switchLanguage);
   refreshIcons();
+  // The import dock is shell-level, not tab-level: a transfer must stay visible
+  // and running while the operator works in any other tab.
+  try { UploadDock.mount(); } catch (e) { console.error(e); }
+  bindUploadGuard();
   if (_editorOnly) {
     document.body.classList.add('adm-editor-only');
     switchTab('pages', true);
@@ -284,6 +290,74 @@ function switchTab(id, force = false) {
   refreshIcons();
 }
 
+// ── Import guard: don't let a navigation silently kill a transfer ─────────────
+// Two different mechanisms, because the browser only lets us own one of them:
+//
+//   * an IN-APP navigation (the Explorer link in the sidebar, logging out, any
+//     other link out of the panel) is ours to intercept — we show the real
+//     overlay, pause the transfer, and only then leave;
+//   * a real close/reload/URL change is NOT ours: `beforeunload` may only ask the
+//     browser to show ITS OWN generic prompt. A custom overlay cannot be rendered
+//     there, and no API can pause the worker after the decision is made. So we
+//     flag the prompt and pause pre-emptively — worst case the operator stays and
+//     clicks Resume, which costs nothing because the server holds the progress.
+//
+// Either way nothing is lost: every acknowledged chunk is already on disk, and
+// re-dropping the same folder resumes from the exact missing-chunk list.
+
+let _exitTarget = null;
+
+function bindUploadGuard() {
+  window.addEventListener('beforeunload', (e) => {
+    if (!Upload.hasUnfinishedWork()) return;
+    Upload.pause();
+    e.preventDefault();
+    e.returnValue = '';
+  });
+
+  // Intercept in-app links that leave the panel while a transfer is running.
+  document.addEventListener('click', (e) => {
+    const link = e.target.closest('a[href]');
+    if (!link || !Upload.hasUnfinishedWork()) return;
+    const href = link.getAttribute('href') || '';
+    if (href.startsWith('#') || link.target === '_blank') return;
+    e.preventDefault();
+    openExitOverlay(() => { window.location.href = link.href; });
+  }, true);
+
+  el('upl-exit-stay')?.addEventListener('click', closeExitOverlay);
+  el('upl-exit-leave')?.addEventListener('click', () => {
+    Upload.pause();
+    const go = _exitTarget;
+    closeExitOverlay();
+    if (typeof go === 'function') go();
+  });
+  el('upload-exit-overlay')?.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') closeExitOverlay();
+  });
+}
+
+function openExitOverlay(onLeave) {
+  const overlay = el('upload-exit-overlay');
+  if (!overlay) { onLeave?.(); return; }
+  _exitTarget = onLeave;
+  overlay.hidden = false;
+  refreshIcons(overlay);
+  setTimeout(() => el('upl-exit-stay')?.focus(), 30);
+}
+
+function closeExitOverlay() {
+  const overlay = el('upload-exit-overlay');
+  if (overlay) overlay.hidden = true;
+  _exitTarget = null;
+}
+
+/** Logout must not orphan a transfer — the session it authenticates is its own. */
+function guardedLogout() {
+  if (!Upload.hasUnfinishedWork()) { doLogout(); return; }
+  openExitOverlay(() => doLogout());
+}
+
 // ── Sidebar collapse + mobile drawer ───────────────────────────
 
 function loadCollapsed() { return localStorage.getItem('adm-sidebar-collapsed') === '1'; }
@@ -359,7 +433,7 @@ function bindChrome() {
 
   // Topbar
   el('btn-theme')?.addEventListener('click', toggleTheme);
-  el('btn-logout')?.addEventListener('click', doLogout);
+  el('btn-logout')?.addEventListener('click', guardedLogout);
 
   // Language dropdown open/close
   const dd = el('lang-dropdown');

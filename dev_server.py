@@ -50,11 +50,20 @@ from datetime import datetime
 from http import HTTPStatus
 from pathlib import Path
 
-__version__ = "0.15.0"
+# Dataset import staging (the admin Import page). Kept in its own module because
+# the chunk/journal/validation logic is self-contained and unit-testable without
+# an HTTP server; this file only routes to it. See upload_staging.py.
+import upload_staging
+
+__version__ = "0.16.0"
 
 # ── Paths ──────────────────────────────────────────────────────────────────────
 ROOT       = Path(__file__).resolve().parent
 DATA_WEB   = ROOT / "DATA_WEB"
+# Dataset import staging root. FORBIDDEN as a static path (see _FORBIDDEN_ROOTS):
+# it holds browser-supplied bytes that have not passed validate_dataset() yet.
+UPLOADS_DIR = ROOT / "uploads"
+upload_staging.configure(ROOT)
 CONFIG_FILE = ROOT / "api" / "config.json"
 # Admin credential store (separate, single source of truth for the password).
 # Lives under api/ → never served over HTTP (see _is_forbidden_static).
@@ -121,6 +130,10 @@ LOCKOUT_S    = 900  # 15 min
 TRUSTED_PROXIES: set[str] = set()
 # EDGE-021 / EDGE-049: ceiling for an admin-uploaded thumbnail (reject before write).
 MAX_THUMB_BYTES = 5 * 1024 * 1024
+# Ceiling on ANY import request body. A chunk is capped far lower by
+# upload_staging.MAX_CHUNK_SIZE; this is the outer guard so an oversized
+# Content-Length is refused before a byte is read off the socket.
+_MAX_UPLOAD_BODY = upload_staging.MAX_CHUNK_SIZE + (1 << 20)
 # RACE-020: serialize JSON writers (ThreadingHTTPServer runs handlers concurrently).
 _WRITE_LOCK = threading.Lock()
 # Serialize the read-modify-write of stats.json so concurrent beacons can't lose
@@ -1141,7 +1154,11 @@ def _authorize_write(method: str, session: dict | None, csrf_header: str | None)
 #               so it outranks the credential hash in blast radius.
 #   logs/, backups/ — operational traces and pre-update copies of the above
 #   .git/     — full history, including anything ever committed by mistake
-_FORBIDDEN_ROOTS = frozenset({"api", "secrets", "logs", "backups", ".git"})
+#   uploads/  — dataset bytes that arrived from a browser and have NOT been
+#               structurally validated yet. DATA_WEB is web-served by design, so
+#               an import must land somewhere unreachable first; the admin preview
+#               reads it back through api/upload.php?action=blob (session-gated).
+_FORBIDDEN_ROOTS = frozenset({"api", "secrets", "logs", "backups", "uploads", ".git"})
 
 
 def _is_forbidden_static(request_path: str) -> bool:
@@ -2135,6 +2152,7 @@ def _update_check() -> dict:
 _UPDATE_PROTECT = (
     # User / runtime state
     "DATA_WEB", "logs", "backups",
+    "uploads",           # in-flight dataset imports — an update must not wipe them
     "api/admin_credential.json", "api/config.json", "api/stats.json",
     "api/disabled-plugins.json", "api/quarantined-plugins.json", "api/plugin-trust.json",
     "api/page-drafts",   # unpublished page drafts (private half of config/pages/*)
@@ -3449,6 +3467,112 @@ def _get_dataset(dataset_id: str) -> dict | None:
         return None
 
 
+# ── Staged (still-importing) datasets, surfaced in the admin editor ────────────
+# A staged dataset is addressed as "staging:<type>/<folder>". The prefix is the
+# whole routing decision: it tells the editor to read/write the staging store
+# instead of DATA_WEB, and it tells the viewer to stream bytes through the
+# authenticated blob proxy instead of a static DATA_WEB URL (js/pages/viewer.js
+# _datasetBase). Published datasets keep their bare "<type>/<folder>" id, so
+# nothing about the existing flow changes.
+_STAGING_PREFIX = "staging:"
+
+
+def _is_staged_id(dataset_id) -> bool:
+    return isinstance(dataset_id, str) and dataset_id.startswith(_STAGING_PREFIX)
+
+
+def _split_staged_id(dataset_id: str):
+    body = dataset_id[len(_STAGING_PREFIX):]
+    type_dir, _, folder = body.partition("/")
+    return type_dir, folder
+
+
+def _staged_blob_url(type_dir: str, folder: str, rel: str) -> str:
+    ds = urllib.parse.quote(f"{type_dir}/{folder}", safe="")
+    return f"api/upload.php?action=blob&ds={ds}&path={rel}"
+
+
+def _staged_dataset_rows() -> list[dict]:
+    """Admin-list rows for every dataset currently in the staging store."""
+    rows = []
+    for info in upload_staging.list_staged():
+        type_dir, folder = info["type"], info["folder"]
+        meta = upload_staging.read_staged_metadata(type_dir, folder) or {}
+        editable = info["state"] in (upload_staging.STATE_EDITABLE, upload_staging.STATE_STAGED)
+        rows.append({
+            "id": f"{_STAGING_PREFIX}{type_dir}/{folder}",
+            "path": f"{_STAGING_PREFIX}{type_dir}/{folder}",
+            "name": meta.get("name") or info.get("name") or folder,
+            "folderName": folder,
+            "type": type_dir,
+            "stage": meta.get("stage"),
+            "stageNumeric": meta.get("stageNumeric"),
+            "embryo": meta.get("embryo"),
+            "configured": bool(meta.get("configured")),
+            "hidden": True,                      # never in the public catalog
+            "thumbnail": _staged_blob_url(type_dir, folder, "thumbnail.webp") if info.get("hasThumbnail") else None,
+            "staging": True,
+            "stagingState": info["state"],
+            "stagingEditable": editable,
+            "totalBytes": info["totalBytes"],
+            "receivedBytes": info["receivedBytes"],
+            "publishedExists": info["publishedExists"],
+            "expiresInS": info.get("expiresInS"),
+        })
+    return rows
+
+
+def _get_staged_dataset(dataset_id: str) -> dict | None:
+    type_dir, folder = _split_staged_id(dataset_id)
+    info = upload_staging.describe(type_dir, folder)
+    if info is None:
+        return None
+    meta = upload_staging.read_staged_metadata(type_dir, folder)
+    if meta is None:
+        return None
+    meta = dict(meta)
+    meta["id"] = dataset_id
+    meta["path"] = dataset_id
+    meta["folderName"] = folder
+    meta["type"] = type_dir
+    meta["staging"] = True
+    meta["stagingState"] = info["state"]
+    meta["stagingEditable"] = info["state"] in (upload_staging.STATE_EDITABLE, upload_staging.STATE_STAGED)
+    meta["hidden"] = True
+    # Rewrite the pipeline's DATA_WEB-relative source paths onto the proxy so the
+    # admin preview can mount a dataset that is not web-served yet.
+    sources = meta.get("volumeSources")
+    if isinstance(sources, list):
+        rewritten = []
+        for src in sources:
+            if not isinstance(src, dict):
+                continue
+            s = dict(src)
+            s["path"] = _staged_blob_url(type_dir, folder, "")
+            if s.get("manifestPath"):
+                s["manifestPath"] = _staged_blob_url(type_dir, folder, "bricks/manifest.json")
+            rewritten.append(s)
+        meta["volumeSources"] = rewritten
+    return meta
+
+
+def _save_staged_thumbnail(dataset_id: str, image_data: str):
+    if not isinstance(image_data, str) or not image_data.startswith("data:image/"):
+        return 400, {"error": "Invalid image format"}
+    try:
+        import base64
+        img_bytes = base64.b64decode(image_data.split(",", 1)[1])
+    except Exception:
+        return 400, {"error": "Invalid image data"}
+    if len(img_bytes) > MAX_THUMB_BYTES or not _is_supported_image(img_bytes):
+        return 400, {"error": "Not a valid image"}
+    type_dir, folder = _split_staged_id(dataset_id)
+    status, payload = upload_staging.save_staged_thumbnail(type_dir, folder, img_bytes)
+    if status == 200:
+        payload = {"ok": True, "path": _staged_blob_url(type_dir, folder, "thumbnail.webp")}
+    return status, payload
+
+
 def _save_dataset(dataset_id: str, body: dict) -> bool:
     safe = _safe_dataset_dir(dataset_id)
     if safe is None:
@@ -3803,6 +3927,8 @@ class AdminHandler(http.server.SimpleHTTPRequestHandler):
             self._serve_languages()
         elif parsed.path in ("/api/downloads", "/api/downloads.php"):
             self._serve_downloads(parsed)
+        elif parsed.path == "/api/upload.php":
+            self._handle_upload(parsed, body=None, raw=None)
         elif parsed.path in ("/api/auth.php", "/api/datasets.php", "/api/admin.php", "/api/telemetry.php", "/api/site.php"):
             self._handle_api(parsed, body=None)
         elif _is_forbidden_static(clean_path):
@@ -3999,7 +4125,7 @@ class AdminHandler(http.server.SimpleHTTPRequestHandler):
             # Brick payloads (twin of the .htaccess rule). NOT the no-store trio above:
             # these must be STORED and revalidated, not refused. Sending nothing left it
             # to the browser's heuristic cache, which reuses a response without asking
-            # for ~10% of its age -- so re-running the preprocessing on a dataset kept
+            # for ~10% of its age — so re-running the preprocessing on a dataset kept
             # showing the previous voxels. 'no-cache' keeps the body on disk but forces
             # the If-Modified-Since, so a re-processed brick is picked up immediately.
             self.send_header('Cache-Control', 'no-cache')
@@ -4049,7 +4175,9 @@ class AdminHandler(http.server.SimpleHTTPRequestHandler):
 
     def do_POST(self):
         parsed = urllib.parse.urlparse(self.path)
-        if parsed.path in ("/api/auth.php", "/api/datasets.php", "/api/admin.php", "/api/telemetry.php", "/api/site.php", "/api/media.php"):
+        if parsed.path == "/api/upload.php":
+            self._read_upload_post(parsed)
+        elif parsed.path in ("/api/auth.php", "/api/datasets.php", "/api/admin.php", "/api/telemetry.php", "/api/site.php", "/api/media.php"):
             length = int(self.headers.get("Content-Length", 0))
             raw = self.rfile.read(length) if length else b"{}"
             try:
@@ -4060,9 +4188,230 @@ class AdminHandler(http.server.SimpleHTTPRequestHandler):
         else:
             self._json(405, {"error": "Method not allowed"})
 
+    def _read_upload_post(self, parsed):
+        """Read an import POST — raw octets for `chunk`, JSON for everything else.
+
+        `chunk` carries the payload as the RAW request body, not base64 inside
+        JSON. That is the single biggest throughput decision in the import path:
+        base64 costs +33% on the wire and forces a multi-megabyte string through
+        json.loads on both ends. All chunk parameters travel in the query string,
+        so nothing here has to parse the body at all.
+        """
+        params = dict(urllib.parse.parse_qsl(parsed.query))
+        try:
+            length = int(self.headers.get("Content-Length", 0))
+        except ValueError:
+            self._json(400, {"error": "bad_length"})
+            return
+        if length < 0 or length > _MAX_UPLOAD_BODY:
+            self._json(413, {"error": "body_too_large"})
+            return
+        if params.get("action") == "chunk":
+            raw = self._read_exact(length)
+            if raw is None:
+                self._json(400, {"error": "short_body"})
+                return
+            self._handle_upload(parsed, body=None, raw=raw)
+            return
+        raw = self._read_exact(length) if length else b"{}"
+        if raw is None:
+            self._json(400, {"error": "short_body"})
+            return
+        try:
+            body = json.loads(raw.decode("utf-8"))
+        except Exception:
+            body = {}
+        self._handle_upload(parsed, body=body, raw=None)
+
+    def _read_exact(self, length: int):
+        """Read exactly `length` bytes, or None if the peer hung up early.
+
+        rfile.read(n) on a socket-backed buffered reader can return short on a
+        connection reset. A short read must FAIL the chunk — silently storing a
+        truncated body would defeat the per-chunk hash check downstream.
+        """
+        if length <= 0:
+            return b""
+        chunks, remaining = [], length
+        while remaining > 0:
+            block = self.rfile.read(min(remaining, 1 << 20))
+            if not block:
+                return None
+            chunks.append(block)
+            remaining -= len(block)
+        return b"".join(chunks)
+
     def do_OPTIONS(self):
         self.send_response(204)
         self.end_headers()
+
+    # ── Dataset import (staging) ───────────────────────────────────────────────
+
+    def _handle_upload(self, parsed, body, raw):
+        """api/upload.php — the resumable dataset import endpoint.
+
+        EVERY action requires an authenticated admin session, including the reads:
+        the staging store holds unvalidated bytes and its very existence must not
+        be probeable anonymously. Writes additionally require the CSRF header via
+        _authorize_write, exactly like the other admin POST routes.
+        """
+        params = dict(urllib.parse.parse_qsl(parsed.query))
+        action = params.get("action", "")
+
+        session = _get_session(self._token())
+        if not session:
+            self._json(401, {"error": "Not authenticated"})
+            return
+
+        _WRITE_ACTIONS = ("plan", "chunk", "file_done", "publish", "discard",
+                          "save_metadata", "save_thumbnail", "gc")
+        if action in _WRITE_ACTIONS:
+            ok, status, payload = _authorize_write(
+                self.command, session, self.headers.get("X-CSRF-Token"))
+            if not ok:
+                self._json(status, payload)
+                return
+            upload_staging.ensure_dirs()
+
+        ds = params.get("ds", "")
+        type_dir, _, folder = ds.partition("/")
+
+        if action == "limits":
+            # The client negotiates its chunk size from this. Python has no
+            # post_max_size equivalent, so it simply advertises the ceiling.
+            self._json_nostore(200, {
+                "ok": True,
+                "chunkSize": upload_staging.DEFAULT_CHUNK_SIZE,
+                "maxChunkSize": upload_staging.MAX_CHUNK_SIZE,
+                "parallel": 4,
+                "staleAfterS": upload_staging.STALE_AFTER_S,
+                "backend": "python",
+            })
+        elif action == "list":
+            upload_staging.gc()
+            self._json_nostore(200, {"ok": True, "datasets": upload_staging.list_staged()})
+        elif action == "state":
+            info = upload_staging.describe(type_dir, folder)
+            self._json_nostore(200 if info else 404,
+                               {"ok": True, **info} if info else {"error": "not_staged"})
+        elif action == "validate":
+            self._json_nostore(200, upload_staging.validate_dataset(type_dir, folder))
+        elif action == "blob":
+            self._serve_staged_blob(type_dir, folder, params.get("path", ""))
+        elif action == "metadata":
+            meta = upload_staging.read_staged_metadata(type_dir, folder)
+            self._json_nostore(200 if meta else 404, meta or {"error": "not_staged"})
+        elif action == "plan":
+            result = upload_staging.plan((body or {}).get("datasets"),
+                                         (body or {}).get("chunkSize", upload_staging.DEFAULT_CHUNK_SIZE))
+            self._json(200 if result.get("ok") else 400, result)
+        elif action == "chunk":
+            try:
+                index = int(params.get("index", "-1"))
+            except ValueError:
+                index = -1
+            status, payload = upload_staging.write_chunk(
+                type_dir, folder, params.get("path", ""), index,
+                raw if raw is not None else b"", params.get("sha256"))
+            self._json(status, payload)
+        elif action == "file_done":
+            status, payload = upload_staging.finalize_file(
+                type_dir, folder, (body or {}).get("path", ""), (body or {}).get("root"))
+            self._json(status, payload)
+        elif action == "save_metadata":
+            status, payload = upload_staging.write_staged_metadata(
+                type_dir, folder, (body or {}).get("metadata"))
+            self._json(status, payload)
+        elif action == "save_thumbnail":
+            image = (body or {}).get("image", "")
+            if not isinstance(image, str) or not image.startswith("data:image/"):
+                self._json(400, {"error": "Invalid image format"})
+                return
+            try:
+                import base64 as _b64
+                img_bytes = _b64.b64decode(image.split(",", 1)[1])
+            except Exception:
+                self._json(400, {"error": "Invalid image data"})
+                return
+            if len(img_bytes) > MAX_THUMB_BYTES or not _is_supported_image(img_bytes):
+                self._json(400, {"error": "Invalid image"})
+                return
+            status, payload = upload_staging.save_staged_thumbnail(type_dir, folder, img_bytes)
+            self._json(status, payload)
+        elif action == "publish":
+            status, payload = upload_staging.publish_dataset(
+                type_dir, folder,
+                overwrite=bool((body or {}).get("overwrite")),
+                hidden=bool((body or {}).get("hidden", True)))
+            if status == 200:
+                _CATALOG_CACHE["sig"] = None
+            self._json(status, payload)
+        elif action == "discard":
+            status, payload = upload_staging.discard_dataset(type_dir, folder)
+            self._json(status, payload)
+        elif action == "gc":
+            self._json(200, {"ok": True, **upload_staging.gc()})
+        else:
+            self._json(400, {"error": f"Unknown action: {action}"})
+
+    def _serve_staged_blob(self, type_dir: str, folder: str, rel: str):
+        """Stream one staged file to an authenticated admin.
+
+        This is the ONLY way bytes leave the staging store before publication, and
+        it is what lets the operator preview and edit a dataset while the rest of
+        it is still arriving. Served as opaque octets with nosniff, so even a file
+        that somehow carried markup can never be interpreted as a document by the
+        browser. Range is honoured because the brick loader fetches whole packs but
+        the viewer may retry partially.
+        """
+        path = upload_staging.staged_file_path(type_dir, folder, rel)
+        if path is None or not path.is_file():
+            self._json_nostore(404, {"error": "Not found"})
+            return
+        try:
+            size = path.stat().st_size
+        except OSError:
+            self._json_nostore(404, {"error": "Not found"})
+            return
+
+        start, end = 0, size - 1
+        status = 200
+        rng = self.headers.get("Range")
+        if rng and rng.startswith("bytes="):
+            try:
+                lo, _, hi = rng[6:].partition("-")
+                start = int(lo) if lo else 0
+                end = int(hi) if hi else size - 1
+                if start < 0 or start > end or end >= size:
+                    raise ValueError
+                status = 206
+            except ValueError:
+                start, end, status = 0, size - 1, 200
+
+        length = end - start + 1
+        self.send_response(status)
+        self.send_header("Content-Type", "application/octet-stream")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("Content-Length", str(length))
+        self.send_header("Accept-Ranges", "bytes")
+        self.send_header("Cache-Control", "no-store")
+        if status == 206:
+            self.send_header("Content-Range", f"bytes {start}-{end}/{size}")
+        self.end_headers()
+        if self.command == "HEAD":
+            return
+        with open(path, "rb") as fh:
+            fh.seek(start)
+            remaining = length
+            while remaining > 0:
+                block = fh.read(min(remaining, 1 << 20))
+                if not block:
+                    break
+                try:
+                    self.wfile.write(block)
+                except (BrokenPipeError, ConnectionResetError):
+                    return
+                remaining -= len(block)
 
     # ── API router ─────────────────────────────────────────────────────────────
 
@@ -4241,11 +4590,16 @@ class AdminHandler(http.server.SimpleHTTPRequestHandler):
                     return
 
             if action == "list":
-                self._json(200, {"datasets": _list_datasets()})
+                # Staged imports are listed alongside published datasets so the
+                # editor is ONE list: an import becomes editable the moment its
+                # coarse LOD lands, long before it is published (Rule 1.3 — the
+                # operator should never have to watch a progress bar to start work).
+                self._json(200, {"datasets": _list_datasets() + _staged_dataset_rows()})
 
             elif action == "get":
                 ds_id = params.get("id", "")
-                meta = _get_dataset(ds_id)
+                meta = (_get_staged_dataset(ds_id) if _is_staged_id(ds_id)
+                        else _get_dataset(ds_id))
                 if meta is None:
                     self._json(404, {"error": "Dataset not found"})
                 else:
@@ -4253,17 +4607,22 @@ class AdminHandler(http.server.SimpleHTTPRequestHandler):
 
             elif action == "save":
                 ds_id = params.get("id", "")
-                ok = _save_dataset(ds_id, body or {})
-                if ok:
+                if _is_staged_id(ds_id):
+                    t, f = _split_staged_id(ds_id)
+                    status, payload = upload_staging.write_staged_metadata(t, f, body or {})
+                    self._json(status, payload)
+                elif _save_dataset(ds_id, body or {}):
                     self._json(200, {"ok": True})
                 else:
                     self._json(400, {"error": "Invalid dataset ID"})
 
             elif action == "save_thumbnail":
-                status, payload = _save_thumbnail_bytes(
-                    params.get("id", ""), (body or {}).get("image", "")
-                )
-                self._json(status, payload)
+                ds_id = params.get("id", "")
+                if _is_staged_id(ds_id):
+                    self._json(*_save_staged_thumbnail(ds_id, (body or {}).get("image", "")))
+                else:
+                    status, payload = _save_thumbnail_bytes(ds_id, (body or {}).get("image", ""))
+                    self._json(status, payload)
 
             elif action == "rebuild_catalog":
                 count = _rebuild_catalog()

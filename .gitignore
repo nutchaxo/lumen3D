@@ -10,6 +10,13 @@ __pycache__/
 # Datasets / Large files
 DATA_WEB/*
 !DATA_WEB/.gitkeep
+# The published tree IS web-served, so its execution ban must ship with the code
+# (a dataset can also arrive by SFTP, bypassing the import allowlist entirely).
+!DATA_WEB/.htaccess
+
+# Dataset import staging — browser-supplied bytes awaiting validation. Never
+# served (see _FORBIDDEN_ROOTS / root .htaccess / router.php), never committed.
+uploads/
 *.nii
 *.nii.gz
 *.ome.tif

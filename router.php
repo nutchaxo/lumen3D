@@ -33,11 +33,13 @@ $path = '/' . implode('/', $_segs);
 // `\.json$` catch-all so this php -S twin can't drift as new state files are added.
 // The real API routes are .php (auth/datasets/admin/plugins), unaffected.
 // The directory deny mirrors the root .htaccess: secrets/ holds the Ed25519
-// signing seeds, logs/ and backups/ hold operational traces and copies of them.
+// signing seeds, logs/ and backups/ hold operational traces and copies of them,
+// and uploads/ holds dataset bytes that have not been validated yet (the admin
+// preview reads those through api/upload.php?action=blob, never a static URL).
 if (preg_match('#^/api/.*\.json$#i', $path)
     || preg_match('#^/api/_[A-Za-z0-9_]+\.php$#i', $path)
     || preg_match('#^/api/config\.php$#i', $path)
-    || preg_match('#^/(secrets|logs|backups|\.git)(/|$)#i', $path)) {
+    || preg_match('#^/(secrets|logs|backups|uploads|\.git)(/|$)#i', $path)) {
     http_response_code(403);
     header('Content-Type: text/plain');
     echo 'Forbidden';

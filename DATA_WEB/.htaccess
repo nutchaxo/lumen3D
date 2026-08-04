@@ -1,0 +1,51 @@
+# Lumen3D — published dataset tree
+# ================================
+# DATA_WEB is web-served by construction: the viewer streams bricks, manifests and
+# thumbnails straight out of it over HTTP. That makes it the one directory where
+# operator-supplied files are both writable and reachable, so it gets an explicit
+# execution ban rather than relying on the import allowlist alone.
+#
+# Defence in depth. The import path (upload_staging.py / api/_upload_lib.php)
+# already refuses every path that is not a file the preprocessing pipeline emits,
+# so no .php/.js/.html can reach a dataset folder in the first place — but a
+# dataset can also arrive by SFTP, rsync or a hand-copy, and none of those go
+# through the allowlist. These rules make such a file inert instead of executable.
+#
+# Nginx equivalent:
+#   location ^~ /DATA_WEB/ { location ~ \.(php|phtml|phar|cgi|pl|py|sh)$ { return 403; } autoindex off; }
+
+# No script engine, whichever handler the host uses.
+<IfModule mod_php.c>
+    php_flag engine off
+</IfModule>
+<IfModule mod_php7.c>
+    php_flag engine off
+</IfModule>
+<IfModule mod_php5.c>
+    php_flag engine off
+</IfModule>
+
+# Belt and braces for hosts running PHP through FPM/CGI, where php_flag is not
+# available (an unguarded php_flag there is a 500, hence the module guards above).
+<FilesMatch "\.(php|php[0-9]|phtml|phps|phar|cgi|pl|py|sh|htaccess)$">
+    <IfModule mod_authz_core.c>
+        Require all denied
+    </IfModule>
+    <IfModule !mod_authz_core.c>
+        Order allow,deny
+        Deny from all
+    </IfModule>
+</FilesMatch>
+
+# Never hand a browser something it would render as a document from this tree.
+<IfModule mod_mime.c>
+    RemoveHandler .php .phtml .phar .cgi .pl .py .sh
+    RemoveType .php .phtml .phar
+</IfModule>
+
+Options -Indexes -ExecCGI -Includes
+
+# Brick packs are opaque binary; nosniff stops any content-type guessing.
+<IfModule mod_headers.c>
+    Header set X-Content-Type-Options "nosniff"
+</IfModule>

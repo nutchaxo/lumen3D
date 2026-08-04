@@ -16,6 +16,7 @@ is never overwritten by the rest of the transfer.
 
 Run: py tests/test_upload_staging.py
 """
+import copy
 import hashlib
 import json
 import os
@@ -224,6 +225,78 @@ class TestIntegrity(StagingCase):
             self.assertEqual(st, 200)
         entry = us.load_journal("fixed", "DS")["files"]["bricks/lod0/c0/pack_00.bin"]
         self.assertEqual(us.received_bytes(entry), self.cs)
+
+
+class TestTimelapsePacks(StagingCase):
+    """A timelapse packs each frame under bricks/tNNN/, and every brickToPack url
+    is relative to ITS OWN frame — the brick loader resolves them against
+    `.../bricks/t007`. Resolving them against `bricks/` instead reported every pack
+    of a fully transferred timelapse as missing and blocked the publish."""
+
+    LIVE_META = {**META, "type": "live",
+                 "dimensions": {"x": 64, "y": 64, "z": 64, "c": 1, "t": 2}}
+    # Two frames, each indexing its own pack at its own offsets.
+    LIVE_MANIFEST = {
+        "version": 2, "brickSize": 64,
+        "levels": [{"level": 0, "dimensions": {"x": 64, "y": 64, "z": 64}}],
+        "brickTransport": {"brickToPack": {
+            "b": {"url": "lod0/c0/pack_00.bin", "offset": 0, "length": 10}}},
+        "timepoints": {
+            "t000": {"path": "t000", "brickTransport": {"brickToPack": {
+                "b": {"url": "lod0/c0/pack_00.bin", "offset": 0, "length": 10}}}},
+            "t001": {"path": "t001", "brickTransport": {"brickToPack": {
+                "b": {"url": "lod0/c0/pack_00.bin", "offset": 0, "length": 4}}}},
+        },
+    }
+
+    def stage_live(self, frames=("t000", "t001"), pack=b"X" * 10):
+        mb = json.dumps(self.LIVE_META).encode()
+        nb = json.dumps(self.LIVE_MANIFEST).encode()
+        files = [{"path": "metadata.json", "size": len(mb)},
+                 {"path": "bricks/manifest.json", "size": len(nb)}]
+        blobs = [("metadata.json", mb), ("bricks/manifest.json", nb)]
+        for f in frames:
+            rel = f"bricks/{f}/lod0/c0/pack_00.bin"
+            files.append({"path": rel, "size": len(pack)})
+            blobs.append((rel, pack))
+        us.plan([{"type": "live", "folder": "DS", "files": files}])
+        for rel, blob in blobs:
+            self.send("DS", rel, blob, type_dir="live")
+
+    def test_a_complete_timelapse_validates(self):
+        self.stage_live()
+        v = us.validate_dataset("live", "DS")
+        self.assertTrue(v["ok"], v["errors"])
+
+    def test_a_missing_frame_is_still_caught(self):
+        self.stage_live(frames=("t000",))
+        v = us.validate_dataset("live", "DS")
+        self.assertFalse(v["ok"])
+        self.assertIn("missing_pack:t001/lod0/c0/pack_00.bin", v["errors"])
+        self.assertNotIn("missing_pack:t000/lod0/c0/pack_00.bin", v["errors"])
+
+    def test_a_truncated_frame_pack_is_still_caught(self):
+        self.stage_live()
+        victim = us.STAGING_DIR / "live/DS/bricks/t000/lod0/c0/pack_00.bin"
+        victim.write_bytes(b"X" * 4)
+        v = us.validate_dataset("live", "DS")
+        self.assertFalse(v["ok"])
+        self.assertIn("truncated_pack:t000/lod0/c0/pack_00.bin", v["errors"])
+
+    def test_a_frame_path_cannot_escape_the_bricks_tree(self):
+        man = copy.deepcopy(self.LIVE_MANIFEST)
+        man["timepoints"]["t000"]["path"] = "../../../etc"
+        self.assertEqual(us._cross_check_packs(Path(self.tmp), man),
+                         ["manifest_unsafe_pack_url"])
+
+    def test_a_frame_that_indexes_nothing_invents_no_error(self):
+        """The root index is the FIRST frame's; reusing it for another frame would
+        report truncations that do not exist, since each frame has its own offsets."""
+        self.stage_live()
+        man = copy.deepcopy(self.LIVE_MANIFEST)
+        man["timepoints"]["t001"].pop("brickTransport")
+        ds_dir = us.staging_dataset_dir("live", "DS")
+        self.assertEqual(us._cross_check_packs(ds_dir, man), [])
 
 
 class TestContentValidation(StagingCase):

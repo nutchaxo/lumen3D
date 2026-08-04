@@ -945,29 +945,40 @@ def validate_dataset(type_dir: str, folder: str) -> dict:
 
 
 def _cross_check_packs(ds_dir: Path, manifest: dict) -> list[str]:
-    transport = manifest.get("brickTransport")
-    if not isinstance(transport, dict):
-        return []
-    index = transport.get("brickToPack")
-    if not isinstance(index, dict):
-        return []
+    """Every pack the manifest references must exist and be long enough for the
+    slice claimed of it.
+
+    A ``brickToPack`` url is relative to the folder its OWN timepoint is mounted
+    from — `js/core/brick-loader.js` resolves it against `.../bricks/t007`, not
+    against `bricks/`. A timelapse therefore has to be walked frame by frame,
+    prefixing each index with that frame's `path`; checking the root index bare
+    would hunt for a fixed dataset's layout inside a timelapse and report every
+    pack missing. The root index is a copy of the first frame's, so it is only
+    consulted when the manifest declares no timepoints at all.
+    """
     bricks_dir = ds_dir / "bricks"
+    timepoints = manifest.get("timepoints")
     needed: dict[str, int] = {}
-    for entry in index.values():
-        if not isinstance(entry, dict):
-            continue
-        url = entry.get("url")
-        if not isinstance(url, str):
-            continue
-        rel = _safe_rel(url)
-        if rel is None:
-            return ["manifest_unsafe_pack_url"]
-        try:
-            end = int(entry.get("offset", 0)) + int(entry.get("length", 0))
-        except Exception:
-            continue
-        if end > needed.get(rel, 0):
-            needed[rel] = end
+
+    if isinstance(timepoints, dict) and timepoints:
+        for key, row in timepoints.items():
+            if not isinstance(row, dict):
+                continue
+            path = row.get("path")
+            prefix = path if isinstance(path, str) and path else key
+            # No fallback to the root index: it is the FIRST frame's, and every
+            # frame packs its own bricks at its own offsets, so reusing it would
+            # invent truncations. A frame that indexes nothing is asserted nothing
+            # about — its files are still covered by their own hashes and by the
+            # incomplete-files check.
+            unsafe = _collect_pack_extents(row.get("brickTransport"), needed, prefix)
+            if unsafe:
+                return unsafe
+    else:
+        unsafe = _collect_pack_extents(manifest.get("brickTransport"), needed, None)
+        if unsafe:
+            return unsafe
+
     errors = []
     for rel, end in needed.items():
         pack = (bricks_dir / Path(*rel.split("/"))).resolve()
@@ -983,6 +994,35 @@ def _cross_check_packs(ds_dir: Path, manifest: dict) -> list[str]:
         if len(errors) >= 20:
             break
     return errors
+
+
+def _collect_pack_extents(transport, needed: dict, prefix: str | None) -> list[str]:
+    """Fold one brickToPack index into {pack path: highest byte claimed of it}.
+
+    Returns a non-empty list only to abort on an unsafe url; the extents it
+    gathered are accumulated into ``needed`` in place.
+    """
+    if not isinstance(transport, dict):
+        return []
+    index = transport.get("brickToPack")
+    if not isinstance(index, dict):
+        return []
+    for entry in index.values():
+        if not isinstance(entry, dict):
+            continue
+        url = entry.get("url")
+        if not isinstance(url, str):
+            continue
+        rel = _safe_rel(f"{prefix}/{url}" if prefix else url)
+        if rel is None:
+            return ["manifest_unsafe_pack_url"]
+        try:
+            end = int(entry.get("offset", 0)) + int(entry.get("length", 0))
+        except Exception:
+            continue
+        if end > needed.get(rel, 0):
+            needed[rel] = end
+    return []
 
 
 def _find_stray(ds_dir: Path, type_dir: str) -> list[str]:

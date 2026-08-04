@@ -31,10 +31,11 @@ Il est écrit pour quelqu'un qui **n'a jamais vu ce panneau** et qui **ne sait p
 - [7. Sécurité — mot de passe et permissions](#7-sécurité--mot-de-passe-et-permissions)
 - [8. Mises à jour — faire évoluer le site](#8-mises-à-jour--faire-évoluer-le-site)
 - [9. Pipeline — préparer de nouvelles données](#9-pipeline--préparer-de-nouvelles-données)
-- [10. Identité — le nom et le vocabulaire du site](#10-identité--le-nom-et-le-vocabulaire-du-site)
-- [11. Pages — l'éditeur visuel](#11-pages--léditeur-visuel)
-- [12. Apparence — les couleurs du site](#12-apparence--les-couleurs-du-site)
-- [13. Mentions légales](#13-mentions-légales)
+- [10. Documentation — les guides de la plateforme](#10-documentation--les-guides-de-la-plateforme)
+- [11. Identité — le nom et le vocabulaire du site](#11-identité--le-nom-et-le-vocabulaire-du-site)
+- [12. Pages — l'éditeur visuel](#12-pages--léditeur-visuel)
+- [13. Apparence — les couleurs du site](#13-apparence--les-couleurs-du-site)
+- [14. Mentions légales](#14-mentions-légales)
 
 **Annexes**
 
@@ -101,7 +102,7 @@ Une fois connecté, l'écran se divise en trois zones qui ne changent jamais.
 
 | | |
 |---|---|
-| **1** | **Le menu de gauche** — les 11 rubriques du panneau. C'est la colonne vertébrale : chaque chapitre de ce guide correspond à une de ces entrées. |
+| **1** | **Le menu de gauche** — les 12 rubriques du panneau. C'est la colonne vertébrale : chaque chapitre de ce guide correspond à une de ces entrées. |
 | **2** | **Le titre** rappelle la rubrique ouverte. |
 | **3** | **Thème clair / sombre** — ne change que *votre* affichage du panneau, pas le site public. |
 | **4** | **Langue** du panneau (français, anglais, espagnol). |
@@ -128,11 +129,12 @@ C'est un **rappel**, pas une erreur. Tant qu'elle est là, vos changements ne so
 |---|---|---|
 | **Datasets** | Nommer, décrire, afficher ou masquer chaque jeu de données | Courant |
 | **Statistiques** | Voir la fréquentation du site | Occasionnel |
-| **Plugins** | Activer / désactiver les fonctions du visualiseur 3D | Rare |
-| **Catalogue** | Installer de nouvelles fonctions | Rare |
+| **Plugins** | Activer, désactiver et mettre à jour les fonctions du visualiseur 3D | Rare |
+| **Catalogue** | Installer, mettre à jour ou désinstaller des fonctions | Rare |
 | **Sécurité** | Changer le mot de passe | Rare |
-| **Mises à jour** | Installer une nouvelle version du site | Occasionnel |
+| **Mises à jour** | Installer une nouvelle version du site, et mettre à jour les plugins | Occasionnel |
 | **Pipeline** | Télécharger l'outil qui prépare les nouvelles données | Rare |
+| **Documentation** | Lire et télécharger les guides publiés pour la plateforme | Occasionnel |
 | **Identité** | Nom du site, vocabulaire, pied de page, menu | Rare |
 | **Pages** | Modifier le contenu des pages (accueil, à propos…) | Courant |
 | **Apparence** | Couleurs et police du site public | Rare |
@@ -358,13 +360,15 @@ Zoom sur une ligne :
 | **2** | Son **niveau de confiance** (voir §5.4). |
 | **3** | Version · auteur · dossier · **empreinte** du code. |
 | **4** | L'interrupteur qui **active ou désactive** le plugin. |
-| **5** | **Révoquer** — retire l'autorisation d'exécution (voir §5.5). |
+| **5** | **Révoquer** — retire l'autorisation d'exécution (voir §5.5). N'apparaît que sur un plugin que **vous** avez approuvé (étiquette `approuvé` ou `sandbox`) : un plugin `intégré` n'a pas ce bouton. |
 
 ## 5.3. Activer ou désactiver un plugin
 
 Basculez simplement l'interrupteur. Le changement est enregistré immédiatement (un petit message de confirmation apparaît en bas) et prend effet **au prochain chargement du visualiseur** — demandez à un visiteur de recharger sa page, ou rechargez l'aperçu de l'onglet Datasets.
 
 Désactiver un plugin ne le supprime pas : il reste sur le serveur et vous pouvez le réactiver à tout moment.
+
+> ⚠️ **L'interrupteur n'est pas toujours là.** Un plugin **non fiable** n'en a pas du tout — il faut d'abord l'approuver (§5.5). Un plugin **protégé** (le dernier mode de rendu actif) ou **incompatible** en a un, mais grisé.
 
 > 🔒 **Une seule protection existe : il doit toujours rester au moins un mode de rendu actif.** Si vous essayez de désactiver le dernier, le panneau refuse et affiche « Au moins un mode de rendu doit rester actif ». Sans mode de rendu, le visualiseur n'aurait plus rien pour dessiner le volume.
 
@@ -413,7 +417,27 @@ Vous verrez ce cas si quelqu'un dépose un plugin directement sur le serveur (pa
 
 **Retirer une autorisation :** le bouton **Révoquer** sur la ligne du plugin. Il redevient immédiatement non fiable et cesse d'être chargé.
 
-## 5.6. Les plugins livrés d'origine
+## 5.6. Mettre à jour un plugin
+
+Depuis cet onglet, sans passer par le Catalogue.
+
+![Mise à jour depuis l'onglet Plugins](img/plugins-update.png)
+
+| | |
+|---|---|
+| **1** | Le **bandeau** compte les plugins concernés. Il n'apparaît que s'il y en a au moins un. |
+| **2** | **Tout mettre à jour** — n'apparaît qu'à partir de deux plugins. Un seul mot de passe couvre le lot. |
+| **3** | Sur la ligne du plugin : l'étiquette **màj disponible**, le trajet `v1.0.0 → v1.1.0`, et le bouton. |
+
+> 📌 **Le bouton n'apparaît que si les deux conditions sont réunies** : une version plus récente existe, **et** elle se déclare compatible avec votre version du site. Si la nouvelle version exige une plateforme plus récente, vous voyez la raison à la place du bouton — mettez d'abord le site à jour (§8).
+
+Comme pour une installation, le panneau vous demande votre mot de passe, télécharge, vérifie et remplace. **La copie qui fonctionne est mise de côté, pas supprimée** : si quoi que ce soit échoue après ce point, elle est remise en place. Une mise à jour ratée ne vous laisse jamais avec moins qu'avant.
+
+> 💡 Le même bouton existe dans le **Catalogue** (§6.2) et dans **Mises à jour** (§8.4). Les trois onglets lisent la même source et ne peuvent donc pas se contredire.
+
+## 5.7. Les plugins proposés par le Catalogue
+
+Ces plugins ne sont **pas** livrés avec le site : ils s'installent à la demande, depuis l'assistant de première installation (étape 5) ou plus tard depuis le Catalogue (§6). Une installation neuve dont on aurait tout décoché n'en aurait aucun.
 
 | Plugin | Emplacement | Ce que ça fait pour le visiteur |
 |---|---|---|
@@ -430,6 +454,7 @@ Vous verrez ce cas si quelqu'un dépose un plugin directement sur le serveur (pa
 | **Presentation Mode** | Outil | Plein écran sans interface, pour projeter |
 | **Orientation Axes** | Outil | Le repère anatomique A/P · D/V · L/R (voir §3.5) |
 | **Toggle Grid / Axes / Volume** | Outils | Afficher ou masquer la grille, les axes, le volume |
+| **Screenshot (sandboxed)** | Outil | La même capture d'écran, mais exécutée en bac à sable — l'exemple de référence d'un plugin isolé |
 | **Chunk Debug** | Outil | Outil de diagnostic technique. **Peut être désactivé sans risque** sur un site en production |
 
 ---
@@ -440,7 +465,7 @@ Vous verrez ce cas si quelqu'un dépose un plugin directement sur le serveur (pa
 
 Le Catalogue fonctionne comme un magasin d'applications : il liste les plugins officiels disponibles, et vous les installez d'un clic.
 
-Les plugins sont répartis en trois sections : **Installés**, **Disponibles**, et éventuellement **Incompatibles**.
+Les plugins sont répartis en quatre sections. **À mettre à jour** vient en premier quand il y en a — une mise à jour est datée, un plugin déjà installé ne l'est pas — puis **Installés**, **Disponibles**, et éventuellement **Incompatibles**.
 
 ## 6.1. Installer un plugin
 
@@ -451,21 +476,30 @@ Les plugins sont répartis en trois sections : **Installés**, **Disponibles**, 
 
 Pendant l'installation, le serveur contrôle que le fichier téléchargé correspond bien, au bit près, à ce que le catalogue annonce. Si le moindre écart est détecté, **l'installation est annulée** plutôt que d'installer quelque chose de douteux.
 
-La mention **« signature vérifiée »** en haut de page confirme que le catalogue lui-même est authentique.
+En haut de page, une mention indique l'état du catalogue : **« signature vérifiée »** (le catalogue est authentifié) ou **« non signé »** (aucune clé de signature n'est configurée sur ce serveur — seule l'empreinte sha256 est contrôlée).
 
-## 6.2. Désinstaller
+## 6.2. Mettre à jour
 
-Le bouton **🗑 Désinstaller** sur la carte du plugin, puis confirmation. Les fichiers sont retirés du serveur. Vous pouvez toujours réinstaller ensuite depuis le Catalogue.
+Un plugin installé dont une version plus récente existe **et** compatible sort de « Installés » et passe dans **À mettre à jour**, en haut de page. Sa carte affiche alors `v1.0.0 → v1.1.0` au lieu de la seule version du catalogue, et un bouton **Mettre à jour** vient se placer à côté de **Désinstaller**.
+
+Le bouton **Tout mettre à jour**, en haut, traite le lot avec un seul mot de passe.
+
+C'est la même action que dans les onglets **Plugins** (§5.6) et **Mises à jour** (§8.4) — faites-la d'où vous êtes.
+
+## 6.3. Désinstaller
+
+Le bouton **🗑 Désinstaller** sur la carte du plugin, puis confirmation. Sur un plugin qui a une mise à jour en attente, ce bouton est précédé de **Mettre à jour** : vérifiez sur lequel des deux vous cliquez. Les fichiers sont retirés du serveur. Vous pouvez toujours réinstaller ensuite depuis le Catalogue.
 
 Un refus est possible dans un seul cas : si c'est le **dernier mode de rendu** installé (même raison qu'en §5.3).
 
-## 6.3. Les étiquettes des cartes
+## 6.4. Les étiquettes des cartes
 
 | Étiquette | Signification |
 |---|---|
 | **`bac à sable`** | Ce plugin s'exécutera isolé. C'est le cas des plugins de la barre d'outils. |
 | **`confiance totale`** | Ce plugin s'exécutera avec les pleins droits de la page. Inévitable pour les modes de rendu et les réglages de canaux, qui pilotent directement la carte graphique. |
-| **`incompatible`** | Ce plugin demande une version du site plus récente (ou plus ancienne) que la vôtre. Le bouton d'installation est grisé. Faites une mise à jour (voir §8) et il redeviendra installable. |
+| **`màj disponible`** | Une version plus récente existe **et** elle est compatible avec votre site. La carte affiche `v1.0.0 → v1.1.0` et un bouton **Mettre à jour**. |
+| **`incompatible`** | N'apparaît que sur un plugin **non installé** : il demande une version du site plus récente (ou plus ancienne) que la vôtre, et le bouton d'installation est grisé. Faites une mise à jour (voir §8) et il redeviendra installable. Un plugin **déjà installé** ne porte jamais cette étiquette — celui qui tourne chez vous fonctionne ; c'est seulement sa version suivante qui peut attendre. |
 
 ---
 
@@ -519,11 +553,12 @@ Sur un serveur Windows, la carte affiche simplement que les permissions POSIX ne
 | **2** | L'état : *à jour*, ou *mise à jour disponible*. |
 | **3** | **Vérifier** — refait la recherche immédiatement. |
 
-Trois numéros de version sont affichés — c'est normal, ce sont trois composants indépendants :
+Deux numéros de version sont affichés — ce sont deux composants indépendants :
 
 - **Plateforme Web** — le site lui-même. **C'est celui qui compte.**
-- **Serveur de dev** — l'outil de développement local.
-- **Préprocessing** — l'outil de préparation des données (voir §9).
+- **Pipeline de préprocessing** — l'outil de préparation des données (voir §9). Il évolue à son propre rythme : un numéro plus petit que celui du site n'a rien d'anormal.
+
+Une ligne dont la valeur est inconnue n'est pas affichée du tout, plutôt que montrée vide.
 
 ## 8.1. Lancer une mise à jour
 
@@ -563,34 +598,61 @@ La mise à jour est conçue pour qu'une panne ne puisse pas casser le site :
 | **Aucune release publiée** | Aucune version n'est encore publiée publiquement. |
 | **Le magasin de certificats est inutilisable** | Configuration de l'hébergeur. À signaler à la personne qui gère le serveur. |
 
+## 8.4. Mettre à jour les plugins
+
+Sous la mise à jour du site, une carte **Mises à jour des plugins** répond à la même question pour les modules : « qu'est-ce qui a besoin d'être mis à jour ici ? »
+
+![Mises à jour des plugins](img/updates-plugins.png)
+
+| | |
+|---|---|
+| **1** | Le nombre de plugins concernés. |
+| **2** | Pour chacun : la version installée et celle vers laquelle on irait. |
+| **3** | **Tout mettre à jour** — un seul mot de passe pour le lot. |
+
+Un plugin dont la nouvelle version exige une plateforme plus récente apparaît dans une seconde liste, **« Mises à jour qui attendent la plateforme »**, avec la raison. Il n'est pas escamoté : le faire disparaître se lirait comme « rien à mettre à jour », et vous chercheriez longtemps pourquoi votre plugin reste en retard.
+
+La même action existe dans **Plugins** (§5.6) et **Catalogue** (§6.2).
+
 ---
 
 # 9. Pipeline — préparer de nouvelles données
 
 ![Onglet Pipeline](img/tab-pipeline.png)
 
-Cet onglet ne traite **rien** sur le serveur. Il vous fait **télécharger un outil** que vous exécuterez sur un ordinateur puissant, typiquement le poste d'analyse du laboratoire.
+Cet onglet ne traite **rien** sur le serveur. Il vous fait **télécharger un pack** que vous exécuterez sur un ordinateur puissant, typiquement le poste d'analyse du laboratoire.
 
 **Pourquoi séparer ?** Convertir un volume de microscopie demande énormément de mémoire vive — comptez environ **32 Go de RAM** pour un volume de 3789 × 3789 × 178. Aucun serveur web mutualisé ne peut faire ça.
 
-## 9.1. Ce que contient le pack
+## 9.1. Le principe
 
-- **Pipeline volumes** — convertit les piles Imaris `.ims` en jeux de données découpés en briques, avec pyramide de niveaux de détail, vignette et métadonnées.
-- **Pipeline tracking** — lit l'export Excel produit par Imaris, reconstitue les lignées cellulaires (mitoses comprises), stabilise les trajectoires et calcule les métriques.
-- **Rattachement** — associe un tracking analysé à un jeu de données déjà traité, pour superposer les trajectoires aux images.
-- **Un exemple d'entrée pour chaque pipeline** — le pack est utilisable immédiatement, sans donnée réelle, pour se faire la main.
-- **Un lanceur `RUN.bat`** qui vérifie l'intégrité des fichiers, contrôle l'installation de Python et lance le traitement choisi.
+La première carte résume le trajet des données en quatre étapes :
+
+| | |
+|---|---|
+| **Fichiers bruts** | ce qui sort du microscope : `.ims` pour les volumes, un export Excel pour le tracking |
+| **`RUN.bat`** | le lanceur, sur un poste Windows |
+| **Jeu de données** | ce que le pack produit : volumes découpés + trajectoires |
+| **`DATA_WEB\`** | le dossier du serveur où vous le copiez — il apparaît aussitôt dans le catalogue |
+
+Le pack contient **deux pipelines** (volumes et tracking), **un exemple d'entrée pour chacun** — il est donc utilisable immédiatement, sans donnée réelle, pour se faire la main — et un lanceur qui **vérifie sa propre intégrité** (SHA-256) avant de lancer quoi que ce soit.
+
+> 📌 **Deux numéros, et c'est normal.** L'en-tête de cette carte affiche `pipeline v0.15.0` : c'est la version **du pack**, pas celle du site. Sous les caractéristiques, une ligne rappelle avec quelle version de la plateforme il a été livré. Le pack suit sa propre numérotation parce qu'il *est* l'outil de préprocessing — ne cherchez pas à faire correspondre les deux.
 
 ## 9.2. Quelle édition choisir
 
-| | **Édition complète** | **Édition légère** |
+Une seule question tranche : **le poste de traitement a-t-il accès à internet ?**
+
+| | **Édition légère** *(recommandée)* | **Édition complète** *(hors-ligne)* |
 |---|---|---|
-| Taille | ~70 Mo (200 Mo décompressé) | quelques Mo |
-| Internet | **Jamais nécessaire** | Requis **une seule fois**, au premier lancement |
-| Python | Embarqué, versions figées | Récupéré au premier lancement, dans un environnement isolé |
-| Pour qui | Poste hors ligne, ou pour garantir des résultats identiques d'une installation à l'autre | Poste connecté, usage courant |
+| Pour qui | Poste connecté à internet | Poste isolé du réseau, ou environnement à figer |
+| Taille | quelques mégaoctets | ~70 Mo (200 Mo décompressé) |
+| Internet | **une seule fois**, au premier lancement | **jamais** |
+| Python | installé par le pack, à part du système | embarqué, versions figées |
 
 L'édition légère ne modifie **jamais** le Python déjà installé sur le poste : elle travaille dans son propre coin.
+
+> ⚠️ L'édition complète est jointe à la version publiée sur GitHub, pas au site. Si elle est indisponible, le panneau vous le dit et l'édition légère reste téléchargeable.
 
 ## 9.3. Comment s'en servir
 
@@ -603,7 +665,73 @@ L'édition légère ne modifie **jamais** le Python déjà installé sur le post
 
 ---
 
-# 10. Identité — le nom et le vocabulaire du site
+# 10. Documentation — les guides de la plateforme
+
+C'est ici que vous trouverez ce document, et tous ceux qui seront publiés ensuite.
+
+![Onglet Documentation](img/tab-docs.png)
+
+| | |
+|---|---|
+| **1** | **Actualiser** — relit la liste depuis le dépôt. |
+| **2** | Une carte par document, toutes langues et versions confondues. |
+| **3** | La date de la version proposée, et sa taille. |
+| **4** | Les langues disponibles. **La vôtre est choisie d'office.** |
+| **5** | **Lire** — ouvre le document dans le panneau. À côté, **Télécharger**. |
+
+## 10.1. D'où viennent ces documents
+
+**Pas de cette installation.** Ils sont publiés dans le dépôt du projet et récupérés à l'affichage. Conséquence utile : un guide corrigé arrive chez vous **sans mise à jour du site**.
+
+Conséquence à connaître aussi : si le serveur ne peut pas joindre GitHub, la liste ne s'affiche pas — un bandeau vous dit pourquoi. Ce n'est pas une panne du site, seulement de cette liste.
+
+> 💡 La liste est mise en mémoire pendant dix minutes. Un document publié à l'instant peut donc mettre un moment à apparaître : **Actualiser** force la relecture.
+
+## 10.2. Choisir la langue
+
+Les langues disponibles s'affichent en boutons. Celui qui est mis en avant est celui que vous obtiendrez si vous ne touchez à rien.
+
+Le choix se fait dans cet ordre : **votre langue d'interface**, sinon **l'anglais**, sinon la version **multilingue**, sinon la première disponible. Vous n'aurez donc jamais une carte vide parce qu'une traduction manque.
+
+Cliquer sur une autre langue change le document proposé, et l'historique des versions suit : chaque langue a le sien.
+
+## 10.3. Les versions précédentes
+
+Un document corrigé ne remplace pas l'ancien : il s'ajoute. La carte propose toujours **la plus récente**, et un bouton **Versions précédentes** déplie les autres, avec leur date.
+
+C'est utile quand une procédure a changé et que vous voulez retrouver ce qui était écrit à l'époque.
+
+## 10.4. Lire dans le panneau
+
+![Lecture d'un document](img/docs-preview.png)
+
+**Lire** affiche le document dans le panneau. **Nouvel onglet** l'ouvre en grand, **Fermer** referme l'aperçu.
+
+> 📌 **Tous les formats ne s'affichent pas.** PDF, images et texte se lisent dans le panneau. Les autres formats — un document Word, un classeur, une archive — n'ont pas de bouton **Lire** : ils se téléchargent. Ce n'est pas une limite d'affichage mais un choix de sécurité, expliqué à l'opérateur par l'absence du bouton plutôt que par un message d'erreur.
+
+## 10.5. Publier un document
+
+Réservé à la personne qui gère le dépôt, mais bon à savoir pour demander la bonne chose.
+
+Un document se publie en déposant un fichier dans le dossier `DOCS/` du dépôt, nommé selon une règle stricte :
+
+```
+260803 - GUIDE-ADMIN - FR.pdf
+└─┬──┘   └────┬────┘   └┬┘
+  │           │         └── la langue
+  │           └──────────── l'identifiant du document, le même d'une version à l'autre
+  └──────────────────────── la date, au format AAMMJJ : c'est le numéro de version
+```
+
+- **La date** classe les versions. La plus récente est proposée, les autres restent accessibles.
+- **L'identifiant** doit rester **identique** d'une version à l'autre : c'est lui qui fait que deux fichiers sont le même document. S'il change, le panneau y voit deux documents différents.
+- **La langue** décide de ce que verra chaque opérateur.
+
+Un fichier qui ne suit pas cette règle n'est pas publié : il est **signalé comme ignoré** en bas de l'onglet. Une faute de frappe se voit donc, au lieu de faire disparaître un document en silence.
+
+---
+
+# 11. Identité — le nom et le vocabulaire du site
 
 Cet onglet permet de renommer entièrement le site, sans toucher au code. C'est ce qui permet à la même plateforme de servir un laboratoire d'embryologie ou un institut de neurosciences.
 
@@ -618,13 +746,13 @@ Cet onglet permet de renommer entièrement le site, sans toucher au code. C'est 
 
 ![Pied de page et navigation](img/tab-branding-nav.png)
 
-## 10.1. Les champs multilingues
+## 11.1. Les champs multilingues
 
 Les champs marqués **(MULTILINGUE)** affichent une ligne par langue : `EN`, `ES`, `FR`.
 
 **Remplissez toujours `EN` au minimum.** C'est la version de secours : si un visiteur consulte le site en espagnol et que le champ `ES` est vide, c'est le texte anglais qui s'affiche — jamais un blanc.
 
-## 10.2. Carte « Identité »
+## 11.2. Carte « Identité »
 
 | Champ | À quoi ça sert | Exemple |
 |---|---|---|
@@ -636,38 +764,38 @@ Les champs marqués **(MULTILINGUE)** affichent une ligne par langue : `EN`, `ES
 | **Organisation** | Votre laboratoire ou institution | `IRIBHM — ULB` |
 | **Lien de l'organisation** | L'adresse de son site | `https://…` |
 
-## 10.3. Carte « Terminologie » — la plus utile
+## 11.3. Carte « Terminologie » — la plus utile
 
 C'est ici que le site s'adapte à votre domaine. Vous définissez **le mot qui désigne ce que vous imagez**, au singulier et au pluriel, dans chaque langue.
 
 Ce mot est ensuite **repris automatiquement dans toute l'interface publique** : titres, filtres, statistiques, descriptions. Si vous écrivez `embryon / embryons`, le site parlera d'embryons. Si vous écrivez `échantillon / échantillons`, il parlera d'échantillons — partout, sans autre modification.
 
-## 10.4. Carte « Accroche & SEO »
+## 11.4. Carte « Accroche & SEO »
 
 - **Accroche** — le sous-titre affiché sous le nom du site.
 - **Description (SEO)** — le résumé qu'affichent Google et les réseaux sociaux. Deux phrases claires suffisent.
 - **Mots-clés (SEO)** — quelques termes séparés par des virgules.
 
-## 10.5. Carte « Pied de page »
+## 11.5. Carte « Pied de page »
 
 - **Mention de copyright** — le texte en bas de chaque page.
 - **Liens** — les liens du pied de page. **+ Ajouter un lien** pour en créer un (libellé + adresse), la croix pour en retirer un.
 
-## 10.6. Carte « Navigation »
+## 11.6. Carte « Navigation »
 
 Les cases décident quelles entrées apparaissent dans le menu du site public : *Explorer*, *Comparer*, *Suivi*, *À propos*, *Mentions légales*.
 
 Décocher une entrée la retire du menu sans supprimer la page.
 
-> ⚠️ **Attention à « Mentions légales ».** Cette case est décochée par défaut. Si vous rédigez vos mentions légales (§13), pensez à revenir ici pour les rendre accessibles.
+> ⚠️ **Attention à « Mentions légales ».** Cette case est décochée par défaut. Si vous rédigez vos mentions légales (§14), pensez à revenir ici pour les rendre accessibles.
 
 ---
 
-# 11. Pages — l'éditeur visuel
+# 12. Pages — l'éditeur visuel
 
 C'est la fonction la plus riche du panneau. Elle permet de **modifier le contenu des pages du site comme dans un logiciel de mise en page**, sans écrire une ligne de code.
 
-## 11.1. Choisir une page
+## 12.1. Choisir une page
 
 ![Onglet Pages](img/tab-pages.png)
 
@@ -682,7 +810,7 @@ Le bouton **🗑 Supprimer** efface une page que vous avez créée. Il reste gri
 
 Deux pages existent d'origine : **`home`** (l'accueil) et **`about`** (À propos). La mention *(intégrée)* signifie qu'elles utilisent encore le modèle fourni : dès votre première publication, votre version prend le relais.
 
-## 11.2. L'éditeur
+## 12.2. L'éditeur
 
 L'éditeur s'ouvre **dans son propre onglet de navigateur** pour disposer de tout l'écran.
 
@@ -699,7 +827,7 @@ L'éditeur s'ouvre **dans son propre onglet de navigateur** pour disposer de tou
 | **7** | La **barre latérale** : éléments à insérer, et réglages de ce qui est sélectionné. |
 | **8** | **La vraie page.** Ce n'est pas une maquette : c'est votre page réelle, avec son vrai menu, son vrai pied de page et son vrai thème. Ce que vous voyez est exactement ce que verront les visiteurs. |
 
-## 11.3. La barre du haut en détail
+## 12.3. La barre du haut en détail
 
 ![Barre de l'éditeur](img/editor-topbar.png)
 
@@ -714,7 +842,7 @@ L'éditeur s'ouvre **dans son propre onglet de navigateur** pour disposer de tou
 > 📌 **La différence à retenir : Brouillon ≠ Publier.**
 > Tant que vous n'avez pas cliqué sur **Publier**, les visiteurs continuent de voir l'ancienne version. Vous pouvez donc travailler plusieurs jours en enregistrant des brouillons, sans rien casser.
 
-## 11.4. Ajouter un élément
+## 12.4. Ajouter un élément
 
 L'onglet **Éléments** de la barre latérale contient tout ce qui peut être posé dans une page.
 
@@ -778,7 +906,7 @@ Le champ **Rechercher un élément** filtre la liste — pratique, il y en a 27.
 
 > 💡 **Les éléments qui se remplissent seuls.** *Derniers datasets* et *Statistiques* peuvent puiser directement dans les données du site : nombre de jeux de données, de spécimens, de cellules suivies, de régions annotées. Le chiffre se met à jour tout seul quand vous ajoutez des données — vous n'aurez jamais à revenir corriger la page.
 
-## 11.5. Modifier un élément existant
+## 12.5. Modifier un élément existant
 
 **Cliquez dessus dans la page.** Il se cerne de vert et la barre latérale bascule sur ses réglages.
 
@@ -852,7 +980,7 @@ Une petite barre verte apparaît sur le bloc survolé :
 
 *(Sur Mac, remplacez `Ctrl` par `Cmd`.)* Ces raccourcis sont désactivés pendant que vous tapez dans un champ de texte — vous pouvez donc écrire normalement.
 
-## 11.6. Organiser la page : sections et colonnes
+## 12.6. Organiser la page : sections et colonnes
 
 Une page est construite en trois niveaux :
 
@@ -876,13 +1004,13 @@ Pour découper une section en colonnes, sélectionnez-la (cliquez sur sa zone, o
 
 Sur un téléphone, les colonnes **se remettent automatiquement les unes sous les autres**. Vous n'avez rien à faire pour ça.
 
-## 11.7. Vérifier sur mobile
+## 12.7. Vérifier sur mobile
 
 ![Aperçu mobile](img/editor-mobile.png)
 
 Les trois icônes (ordinateur / tablette / mobile) redimensionnent l'aperçu. **Prenez l'habitude de vérifier en mobile avant de publier** : une bonne partie des visiteurs consultent le site depuis un téléphone.
 
-## 11.8. Le fond animé
+## 12.8. Le fond animé
 
 ![Onglet Fond](img/editor-side-background.png)
 
@@ -894,7 +1022,7 @@ L'onglet **Fond** ajoute un décor animé discret derrière toute la page.
 
 Le réglage respecte automatiquement la préférence système « réduire les animations » des personnes sensibles au mouvement.
 
-## 11.9. Traduire une page
+## 12.9. Traduire une page
 
 ![Onglet Traduire](img/editor-side-translate.png)
 
@@ -904,7 +1032,7 @@ C'est un vrai gain de temps : au lieu de rouvrir chaque élément un par un pour
 
 **Méthode conseillée :** rédigez toute la page dans une langue, puis passez sur cet onglet pour la traduire d'un bloc.
 
-## 11.10. Les variables
+## 12.10. Les variables
 
 ![Onglet Variables](img/editor-side-variables.png)
 
@@ -922,7 +1050,7 @@ Règles de nommage : commencez par une lettre, puis lettres, chiffres ou `_`, 32
 
 Des variables existent déjà pour les informations de l'onglet Identité : `{brand}` (le nom du site), `{specimen}` (votre objet d'étude), `{org}` (l'organisation), `{year}` (l'année). Elles se mettent à jour toutes seules.
 
-## 11.11. Créer une nouvelle page
+## 12.11. Créer une nouvelle page
 
 1. dans l'onglet **Pages**, cliquez sur **+ Nouvelle page** ;
 2. donnez-lui un titre et une adresse courte (le *slug*, par exemple `protocoles`) ;
@@ -932,7 +1060,7 @@ Des variables existent déjà pour les informations de l'onglet Identité : `{br
 
 La page est alors accessible à l'adresse `https://<votre-site>/page.html?slug=protocoles`.
 
-## 11.12. Marche à suivre recommandée
+## 12.12. Marche à suivre recommandée
 
 1. **Modifier avec l'éditeur**
 2. Faire ses modifications
@@ -944,7 +1072,7 @@ La page est alors accessible à l'adresse `https://<votre-site>/page.html?slug=p
 
 ---
 
-# 12. Apparence — les couleurs du site
+# 13. Apparence — les couleurs du site
 
 ![Onglet Apparence](img/tab-appearance.png)
 
@@ -954,7 +1082,7 @@ La page est alors accessible à l'adresse `https://<votre-site>/page.html?slug=p
 | **2** | **Aperçu en direct** — ce que vous voyez **n'est pas encore publié**. |
 | **3** | **Enregistrer** — applique le thème au site public. |
 
-## 12.1. Les couleurs
+## 13.1. Les couleurs
 
 | Couleur | Où elle apparaît |
 |---|---|
@@ -968,12 +1096,12 @@ Cliquez sur un carré de couleur pour ouvrir le sélecteur. **L'aperçu de droit
 
 > 💡 **Gardez les couleurs Succès / Erreur / Avertissement proches du vert / rouge / orange.** Ce sont des repères universels : un message d'erreur en vert désoriente les visiteurs.
 
-## 12.2. Typographie et formes
+## 13.2. Typographie et formes
 
 - **Police** — la police de caractères du site public.
 - **Arrondi des coins** — de anguleux à très arrondi, sur les boutons et les cartes.
 
-## 12.3. Publier le thème
+## 13.3. Publier le thème
 
 Rien n'est appliqué au site public tant que vous n'avez pas cliqué sur **Enregistrer**. Le bouton **Réinitialiser** revient au thème d'origine.
 
@@ -981,7 +1109,7 @@ Rien n'est appliqué au site public tant que vous n'avez pas cliqué sur **Enreg
 
 ---
 
-# 13. Mentions légales
+# 14. Mentions légales
 
 ![Onglet Mentions légales](img/tab-legal.png)
 
@@ -1023,19 +1151,19 @@ Le mot de passe doit faire **8 caractères minimum**.
 
 ![Assistant, étape 2](img/wizard-2-identity.png)
 
-Le nom de l'instance, l'organisation, et le mot qui désigne vos objets d'étude. Modifiable ensuite dans **Identité** (§10).
+Le nom de l'instance, l'organisation, et le mot qui désigne vos objets d'étude. Modifiable ensuite dans **Identité** (§11).
 
 ## Étape 3 — Thème
 
 ![Assistant, étape 3](img/wizard-3-theme.png)
 
-Une couleur dominante parmi six propositions. Affinable ensuite dans **Apparence** (§12).
+Une couleur dominante parmi six propositions. Affinable ensuite dans **Apparence** (§13).
 
 ## Étape 4 — Textes
 
 ![Assistant, étape 4](img/wizard-4-texts.png)
 
-L'accroche et la mention de pied de page. Modifiables ensuite dans **Identité** (§10).
+L'accroche et la mention de pied de page. Modifiables ensuite dans **Identité** (§11).
 
 ## Étape 5 — Plugins
 
@@ -1112,10 +1240,10 @@ Faites un **rechargement forcé** : `Ctrl + Shift + R` (Windows) ou `Cmd + Shift
 | **Bac à sable** | Un mode d'exécution isolé : le plugin fonctionne, mais ne peut pas accéder au reste de la page. |
 | **Empreinte** | Une signature du contenu exact d'un fichier. Si le fichier change d'un seul caractère, l'empreinte change. |
 | **Slug** | L'adresse courte d'une page (`protocoles` dans `page.html?slug=protocoles`). |
-| **Section / Colonne / Élément** | Les trois niveaux de construction d'une page (§11.6). |
+| **Section / Colonne / Élément** | Les trois niveaux de construction d'une page (§12.6). |
 | **Brouillon** | Une version enregistrée mais **pas encore visible** du public. |
 | **SEO** | Les textes qu'affichent les moteurs de recherche et les réseaux sociaux. |
 
 ---
 
-*Document généré à partir de la version **1.36.0** de la plateforme. Les captures d'écran proviennent d'une instance réelle ; les couleurs peuvent différer si le thème a été modifié.*
+*Document généré à partir de la version **1.42.0** de la plateforme. Les captures d'écran proviennent d'une instance réelle ; les couleurs peuvent différer si le thème a été modifié.*

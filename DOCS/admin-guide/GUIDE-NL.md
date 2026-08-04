@@ -31,10 +31,11 @@ Het is geschreven voor iemand die **dit paneel nog nooit heeft gezien** en die *
 - [7. Beveiliging — wachtwoord en rechten](#7-beveiliging--wachtwoord-en-rechten)
 - [8. Updates — de site laten meegroeien](#8-updates--de-site-laten-meegroeien)
 - [9. Verwerkingsketen — nieuwe data voorbereiden](#9-verwerkingsketen--nieuwe-data-voorbereiden)
-- [10. Identiteit — de naam en het vocabulaire van de site](#10-identiteit--de-naam-en-het-vocabulaire-van-de-site)
-- [11. Pagina's — de visuele editor](#11-paginas--de-visuele-editor)
-- [12. Vormgeving — de kleuren van de site](#12-vormgeving--de-kleuren-van-de-site)
-- [13. Juridische informatie](#13-juridische-informatie)
+- [10. Documentatie — de gidsen van het platform](#10-documentatie--de-gidsen-van-het-platform)
+- [11. Identiteit — de naam en het vocabulaire van de site](#11-identiteit--de-naam-en-het-vocabulaire-van-de-site)
+- [12. Pagina's — de visuele editor](#12-paginas--de-visuele-editor)
+- [13. Vormgeving — de kleuren van de site](#13-vormgeving--de-kleuren-van-de-site)
+- [14. Juridische informatie](#14-juridische-informatie)
 
 **Bijlagen**
 
@@ -101,7 +102,7 @@ Zodra u bent ingelogd, valt het scherm uiteen in drie zones die nooit veranderen
 
 | | |
 |---|---|
-| **1** | **Het linkermenu** — de 11 rubrieken van het paneel. Dit is de ruggengraat: elk hoofdstuk van deze handleiding hoort bij één van deze items. |
+| **1** | **Het linkermenu** — de 12 rubrieken van het paneel. Dit is de ruggengraat: elk hoofdstuk van deze handleiding hoort bij één van deze items. |
 | **2** | **De titel** herinnert u eraan welke rubriek open staat. |
 | **3** | **Licht / donker thema** — verandert alleen *uw* beeld van het paneel, niet de publieke site. |
 | **4** | **Taal** van het paneel (Nederlands, Engels, Frans, Spaans). |
@@ -128,11 +129,12 @@ Dat is een **herinnering**, geen fout. Zolang het er staat, zijn uw wijzigingen 
 |---|---|---|
 | **Datasets** | Elke dataset een naam geven, beschrijven, tonen of verbergen | Vaak |
 | **Statistieken** | Zien hoeveel de site gebruikt wordt | Af en toe |
-| **Plug-ins** | De functies van de 3D-viewer in- of uitschakelen | Zelden |
-| **Catalogus** | Nieuwe functies installeren | Zelden |
+| **Plug-ins** | De functies van de 3D-viewer in- en uitschakelen en bijwerken | Zelden |
+| **Catalogus** | Functies installeren, bijwerken of verwijderen | Zelden |
 | **Beveiliging** | Het wachtwoord wijzigen | Zelden |
-| **Updates** | Een nieuwe versie van de site installeren | Af en toe |
+| **Updates** | Een nieuwe versie van de site installeren, en de plug-ins bijwerken | Af en toe |
 | **Verwerkingsketen** | Het gereedschap downloaden dat nieuwe data voorbereidt | Zelden |
+| **Documentatie** | De voor het platform gepubliceerde gidsen lezen en downloaden | Af en toe |
 | **Identiteit** | Naam van de site, vocabulaire, voettekst, menu | Zelden |
 | **Pagina's** | De inhoud van pagina's bewerken (start, over…) | Vaak |
 | **Vormgeving** | Kleuren en lettertype van de publieke site | Zelden |
@@ -358,13 +360,15 @@ Ingezoomd op één regel:
 | **2** | Het **vertrouwensniveau** (zie §5.4). |
 | **3** | Versie · auteur · map · **vingerafdruk** van de code. |
 | **4** | De schakelaar die de plug-in **in- of uitschakelt**. |
-| **5** | **Intrekken** — neemt de toestemming om te draaien weg (zie §5.5). |
+| **5** | **Intrekken** — neemt de toestemming om te draaien weg (zie §5.5). Verschijnt alleen bij een plug-in die **u** hebt goedgekeurd (label `goedgekeurd` of `sandbox`): een `ingebouwde` plug-in heeft die knop niet. |
 
 ## 5.3. Een plug-in in- of uitschakelen
 
 Zet gewoon de schakelaar om. De wijziging wordt meteen bewaard (onderaan verschijnt een korte bevestiging) en geldt **vanaf het volgende laden van de viewer** — vraag een bezoeker zijn pagina te herladen, of herlaad de weergave in het tabblad Datasets.
 
 Een plug-in uitschakelen verwijdert hem niet: hij blijft op de server staan en u kunt hem op elk moment weer inschakelen.
+
+> ⚠️ **De schakelaar staat er niet altijd.** Een **niet-vertrouwde** plug-in heeft er helemaal geen — die moet u eerst goedkeuren (§5.5). Een **beschermde** plug-in (de laatste actieve weergavemodus) of een **niet compatibele** heeft er wel een, maar grijs.
 
 > 🔒 **Er is precies één vangnet: er moet altijd minstens één weergavemodus actief blijven.** Probeert u de laatste uit te schakelen, dan weigert het paneel en toont het "Er moet minstens één weergavemodus actief blijven." Zonder weergavemodus zou de viewer niets meer hebben om het volume mee te tekenen.
 
@@ -413,7 +417,27 @@ U komt dit tegen als iemand een plug-in rechtstreeks op de server zet (via FTP b
 
 **Een goedkeuring intrekken:** de knop **Intrekken** op de regel van de plug-in. Hij wordt meteen weer niet vertrouwd en wordt niet meer geladen.
 
-## 5.6. De standaard meegeleverde plug-ins
+## 5.6. Een plug-in bijwerken
+
+Vanuit dit tabblad, zonder langs de Catalogus te gaan.
+
+![Bijwerken vanuit het tabblad Plug-ins](img-nl/plugins-update.png)
+
+| | |
+|---|---|
+| **1** | De **banner** telt de betrokken plug-ins. Hij verschijnt alleen als er minstens één is. |
+| **2** | **Alles bijwerken** — verschijnt pas vanaf twee plug-ins. Eén wachtwoord dekt de hele reeks. |
+| **3** | Op de regel van de plug-in: het label **update beschikbaar**, het traject `v1.0.0 → v1.1.0`, en de knop. |
+
+> 📌 **De knop verschijnt alleen als aan beide voorwaarden voldaan is**: er bestaat een nieuwere versie, **en** die verklaart zich compatibel met uw versie van de site. Vraagt de nieuwe versie een nieuwer platform, dan ziet u de reden in plaats van de knop — werk dan eerst de site bij (§8).
+
+Net als bij een installatie vraagt het paneel uw wachtwoord, downloadt, controleert en vervangt. **De werkende kopie wordt opzijgezet, niet verwijderd**: mislukt er na dat punt om het even wat, dan wordt ze teruggeplaatst. Een mislukte update laat u dus nooit met minder achter dan u had.
+
+> 💡 Dezelfde knop staat in de **Catalogus** (§6.2) en in **Updates** (§8.4). De drie tabbladen lezen dezelfde bron en kunnen elkaar dus niet tegenspreken.
+
+## 5.7. De plug-ins die de Catalogus aanbiedt
+
+Deze plug-ins worden **niet** met de site meegeleverd: ze worden op aanvraag geïnstalleerd, vanuit de wizard voor de eerste installatie (stap 5) of later vanuit de Catalogus (§6). Een verse installatie waarbij alles uitgevinkt werd, heeft er geen enkele.
 
 | Plug-in | Plaats | Wat het de bezoeker biedt |
 |---|---|---|
@@ -430,6 +454,7 @@ U komt dit tegen als iemand een plug-in rechtstreeks op de server zet (via FTP b
 | **Presentation Mode** | Gereedschap | Volledig scherm zonder interface, om te projecteren |
 | **Orientation Axes** | Gereedschap | Het anatomische assenstelsel A/P · D/V · L/R (zie §3.5) |
 | **Toggle Grid / Axes / Volume** | Gereedschap | Het raster, de assen of het volume tonen of verbergen |
+| **Screenshot (sandboxed)** | Gereedschap | Dezelfde schermafbeelding, maar in een sandbox uitgevoerd — het referentievoorbeeld van een geïsoleerde plug-in |
 | **Chunk Debug** | Gereedschap | Technisch diagnosegereedschap. **Kan zonder risico uitgeschakeld worden** op een productiesite |
 
 ---
@@ -440,7 +465,7 @@ U komt dit tegen als iemand een plug-in rechtstreeks op de server zet (via FTP b
 
 De Catalogus werkt als een appwinkel: hij toont de beschikbare officiële plug-ins, en u installeert ze met één klik.
 
-De plug-ins staan in drie secties: **Geïnstalleerd**, **Beschikbaar**, en eventueel **Niet compatibel**.
+De plug-ins staan in vier secties. **Bij te werken** komt eerst wanneer er zijn — een update is tijdgevoelig, een al geïnstalleerde plug-in niet — daarna **Geïnstalleerd**, **Beschikbaar**, en eventueel **Niet compatibel**.
 
 ## 6.1. Een plug-in installeren
 
@@ -451,21 +476,30 @@ De plug-ins staan in drie secties: **Geïnstalleerd**, **Beschikbaar**, en event
 
 Tijdens de installatie controleert de server dat het gedownloade bestand tot op de bit overeenkomt met wat de catalogus aankondigt. Is er het minste verschil, dan **wordt de installatie afgebroken** in plaats van iets twijfelachtigs te installeren.
 
-De vermelding **"handtekening geverifieerd"** bovenaan bevestigt dat de catalogus zelf authentiek is.
+Bovenaan geeft een vermelding de staat van de catalogus aan: **"handtekening geverifieerd"** (de catalogus is authentiek) of **"niet ondertekend"** (er is op deze server geen ondertekeningssleutel ingesteld — alleen de sha256-vingerafdruk wordt gecontroleerd).
 
-## 6.2. Verwijderen
+## 6.2. Bijwerken
 
-De knop **🗑 Verwijderen** op de kaart van de plug-in, daarna bevestigen. De bestanden worden van de server gehaald. U kunt later altijd opnieuw installeren vanuit de Catalogus.
+Een geïnstalleerde plug-in waarvoor een nieuwere **en** compatibele versie bestaat, verlaat "Geïnstalleerd" en verhuist naar **Bij te werken**, bovenaan de pagina. Haar kaart toont dan `v1.0.0 → v1.1.0` in plaats van alleen de catalogusversie, en naast **Verwijderen** komt een knop **Bijwerken** te staan.
+
+De knop **Alles bijwerken** bovenaan verwerkt de hele reeks met één wachtwoord.
+
+Het is dezelfde handeling als in de tabbladen **Plug-ins** (§5.6) en **Updates** (§8.4) — doe ze waar u zich bevindt.
+
+## 6.3. Verwijderen
+
+De knop **🗑 Verwijderen** op de kaart van de plug-in, daarna bevestigen. Bij een plug-in met een wachtende update staat vóór deze knop nog **Bijwerken**: kijk goed op welke van de twee u klikt. De bestanden worden van de server gehaald. U kunt later altijd opnieuw installeren vanuit de Catalogus.
 
 Er is precies één geval waarin dit geweigerd wordt: als het de **laatste geïnstalleerde weergavemodus** is (zelfde reden als in §5.3).
 
-## 6.3. De labels op de kaarten
+## 6.4. De labels op de kaarten
 
 | Label | Betekenis |
 |---|---|
 | **`sandbox`** | Deze plug-in draait geïsoleerd. Dat geldt voor de plug-ins van de werkbalk. |
 | **`volledig vertrouwen`** | Deze plug-in draait met de volledige rechten van de pagina. Onvermijdelijk voor weergavemodi en kanaalregelaars, die de grafische kaart rechtstreeks aansturen. |
-| **`niet compatibel`** | Deze plug-in vraagt een nieuwere (of oudere) versie van de site dan de uwe. De installatieknop is grijs. Voer een update uit (zie §8) en hij wordt weer installeerbaar. |
+| **`update beschikbaar`** | Er bestaat een nieuwere versie **en** ze is compatibel met uw site. De kaart toont `v1.0.0 → v1.1.0` en een knop **Bijwerken**. |
+| **`niet compatibel`** | Verschijnt alleen bij een **niet-geïnstalleerde** plug-in: hij vraagt een nieuwere (of oudere) versie van de site dan de uwe, en de installatieknop is grijs. Voer een update uit (zie §8) en hij wordt weer installeerbaar. Een **al geïnstalleerde** plug-in draagt dit label nooit — wat bij u draait, werkt; alleen zijn volgende versie kan moeten wachten. |
 
 ---
 
@@ -519,11 +553,12 @@ Op een Windows-server meldt de kaart gewoon dat POSIX-rechten niet van toepassin
 | **2** | De status: *bij*, of *update beschikbaar*. |
 | **3** | **Controleren** — voert de zoekopdracht meteen opnieuw uit. |
 
-Er staan drie versienummers — dat is normaal, het zijn drie onafhankelijke onderdelen:
+Er staan twee versienummers — het zijn twee onafhankelijke onderdelen:
 
 - **Webplatform** — de site zelf. **Dit is het nummer dat telt.**
-- **Ontwikkelserver** — het lokale ontwikkelgereedschap.
-- **Voorbewerking** — het gereedschap dat de data voorbereidt (zie §9).
+- **Voorbewerkingspijplijn** — het gereedschap dat de data voorbereidt (zie §9). Het evolueert in zijn eigen tempo: een lager nummer dan dat van de site is niets abnormaals.
+
+Een regel waarvan de waarde onbekend is, wordt helemaal niet getoond, liever dan leeg weergegeven.
 
 ## 8.1. Een update uitvoeren
 
@@ -563,34 +598,61 @@ De update is zo ontworpen dat een storing de site niet kan breken:
 | **Nog geen versie gepubliceerd** | Er is nog geen versie publiek gepubliceerd. |
 | **De certificaatopslag is onbruikbaar** | Een instelling van de hoster. Meld dit aan wie de server beheert. |
 
+## 8.4. De plug-ins bijwerken
+
+Onder de update van de site beantwoordt een kaart **Plug-in-updates** dezelfde vraag voor de modules: "wat moet hier bijgewerkt worden?"
+
+![Plug-in-updates](img-nl/updates-plugins.png)
+
+| | |
+|---|---|
+| **1** | Het aantal betrokken plug-ins. |
+| **2** | Voor elk: de geïnstalleerde versie en die waarnaar het zou gaan. |
+| **3** | **Alles bijwerken** — één wachtwoord voor de hele reeks. |
+
+Een plug-in waarvan de nieuwe versie een nieuwer platform vereist, verschijnt in een tweede lijst, **"Updates die op het platform wachten"**, met de reden erbij. Hij wordt niet weggemoffeld: hem laten verdwijnen zou gelezen worden als "niets bij te werken", en u zou lang zoeken waarom uw plug-in achterloopt.
+
+Dezelfde handeling bestaat in **Plug-ins** (§5.6) en **Catalogus** (§6.2).
+
 ---
 
 # 9. Verwerkingsketen — nieuwe data voorbereiden
 
 ![Tabblad Verwerkingsketen](img-nl/tab-pipeline.png)
 
-Dit tabblad verwerkt **niets** op de server. Het geeft u **gereedschap om te downloaden** en uit te voeren op een krachtige computer, doorgaans het analysewerkstation van het labo.
+Dit tabblad verwerkt **niets** op de server. Het laat u **een pakket downloaden** dat u op een krachtige computer uitvoert, doorgaans het analysewerkstation van het labo.
 
 **Waarom gescheiden?** Een microscopievolume omzetten vraagt enorm veel werkgeheugen — reken op ongeveer **32 GB RAM** voor een volume van 3789 × 3789 × 178. Geen enkele gedeelde webserver kan dat aan.
 
-## 9.1. Wat het pakket bevat
+## 9.1. Het principe
 
-- **Volumeketen** — zet Imaris `.ims`-stapels om in datasets die in blokken zijn opgedeeld, met een detailniveaupiramide, miniatuur en metadata.
-- **Trackingketen** — leest de Excel-export van Imaris, reconstrueert de celafstamming (mitosen inbegrepen), stabiliseert de trajecten en berekent de metingen.
-- **Koppeling** — verbindt een geanalyseerde trackingreeks met een reeds verwerkte dataset, zodat de trajecten over de beelden liggen.
-- **Eén voorbeeldinvoer per keten** — het pakket is meteen bruikbaar, zonder echte data, om het onder de knie te krijgen.
-- **Een starter `RUN.bat`** die de integriteit van de bestanden nakijkt, de Python-installatie controleert en de gekozen keten uitvoert.
+De eerste kaart vat het traject van de data samen in vier stappen:
+
+| | |
+|---|---|
+| **Ruwe bestanden** | wat uit de microscoop komt: `.ims` voor de volumes, een Excel-export voor de tracking |
+| **`RUN.bat`** | de starter, op een Windows-werkstation |
+| **Dataset** | wat het pakket oplevert: opgedeelde volumes + trajecten |
+| **`DATA_WEB\`** | de map op de server waar u het naartoe kopieert — hij verschijnt meteen in de catalogus |
+
+Het pakket bevat **twee pipelines** (volumes en tracking), **één voorbeeldinvoer per pipeline** — het is dus meteen bruikbaar, zonder echte data, om het onder de knie te krijgen — en een starter die **zijn eigen integriteit nakijkt** (SHA-256) voordat hij ook maar iets uitvoert.
+
+> 📌 **Twee nummers, en dat is normaal.** De kop van deze kaart toont `pipeline v0.15.0`: dat is de versie **van het pakket**, niet die van de site. Onder de kenmerken herinnert een regel eraan met welke versie van het platform het geleverd werd. Het pakket volgt zijn eigen nummering omdat het *de* voorbewerkingspijplijn ís — probeer de twee niet op elkaar af te stemmen.
 
 ## 9.2. Welke editie kiezen
 
-| | **Volledige editie** | **Lichte editie** |
+Eén vraag beslist: **heeft het verwerkingswerkstation internettoegang?**
+
+| | **Lichte editie** *(aanbevolen)* | **Volledige editie** *(offline)* |
 |---|---|---|
-| Grootte | ~70 MB (200 MB uitgepakt) | enkele MB |
-| Internet | **Nooit nodig** | **Eenmalig** nodig, bij de eerste start |
-| Python | Ingebouwd, versies vastgezet | Bij de eerste start opgehaald, in een geïsoleerde omgeving |
-| Voor wie | Een werkstation zonder internet, of om identieke resultaten over installaties heen te garanderen | Een verbonden werkstation, dagelijks gebruik |
+| Voor wie | Werkstation met internettoegang | Werkstation zonder netwerk, of een vast te leggen omgeving |
+| Grootte | enkele MB | ~70 MB (200 MB uitgepakt) |
+| Internet | **eenmalig**, bij de eerste start | **nooit** |
+| Python | door het pakket geïnstalleerd, los van het systeem | meegeleverd, versies vastgezet |
 
 De lichte editie wijzigt **nooit** de Python die al op het werkstation staat: ze werkt in haar eigen hoekje.
+
+> ⚠️ De volledige editie hangt aan de op GitHub gepubliceerde versie, niet aan de site. Is ze niet beschikbaar, dan zegt het paneel dat, en de lichte editie blijft te downloaden.
 
 ## 9.3. Hoe het te gebruiken
 
@@ -603,7 +665,73 @@ De lichte editie wijzigt **nooit** de Python die al op het werkstation staat: ze
 
 ---
 
-# 10. Identiteit — de naam en het vocabulaire van de site
+# 10. Documentatie — de gidsen van het platform
+
+Hier vindt u dit document, en alle documenten die later gepubliceerd worden.
+
+![Tabblad Documentatie](img-nl/tab-docs.png)
+
+| | |
+|---|---|
+| **1** | **Vernieuwen** — leest de lijst opnieuw uit de repository. |
+| **2** | Eén kaart per document, alle talen en versies samen. |
+| **3** | De datum van de aangeboden versie, en haar grootte. |
+| **4** | De beschikbare talen. **De uwe is al gekozen.** |
+| **5** | **Lezen** — opent het document in het paneel. Daarnaast: **Downloaden**. |
+
+## 10.1. Waar deze documenten vandaan komen
+
+**Niet van deze installatie.** Ze worden in de repository van het project gepubliceerd en bij het tonen opgehaald. Handig gevolg: een verbeterde gids bereikt u **zonder update van de site**.
+
+Een gevolg om ook te kennen: kan de server GitHub niet bereiken, dan verschijnt de lijst niet — een banner vertelt u waarom. Dat is geen storing van de site, alleen van deze lijst.
+
+> 💡 De lijst wordt tien minuten in het geheugen gehouden. Een document dat zonet gepubliceerd is, kan er dus even over doen om te verschijnen: **Vernieuwen** dwingt het opnieuw uitlezen af.
+
+## 10.2. De taal kiezen
+
+De beschikbare talen verschijnen als knoppen. Die welke uitgelicht is, is de taal die u krijgt als u niets aanraakt.
+
+De keuze verloopt in deze volgorde: **uw interfacetaal**, anders **het Engels**, anders de **meertalige** versie, anders de eerste beschikbare. U krijgt dus nooit een lege kaart omdat er een vertaling ontbreekt.
+
+Klikt u op een andere taal, dan verandert het aangeboden document, en de versiegeschiedenis volgt: elke taal heeft de hare.
+
+## 10.3. De vorige versies
+
+Een verbeterd document vervangt het oude niet: het komt erbij. De kaart biedt altijd **de recentste** aan, en een knop **Vorige versies** klapt de andere open, met hun datum.
+
+Dat is handig wanneer een procedure gewijzigd is en u wilt terugvinden wat er destijds stond.
+
+## 10.4. Lezen in het paneel
+
+![Een document lezen](img-nl/docs-preview.png)
+
+**Lezen** toont het document in het paneel. **Nieuw tabblad** opent het groot, **Sluiten** klapt de weergave dicht.
+
+> 📌 **Niet alle formaten worden getoond.** PDF, afbeeldingen en tekst zijn in het paneel te lezen. De andere formaten — een Word-document, een rekenblad, een archief — hebben geen knop **Lezen**: die worden gedownload. Dat is geen weergavebeperking maar een veiligheidskeuze, aan de beheerder duidelijk gemaakt door het ontbreken van de knop in plaats van door een foutmelding.
+
+## 10.5. Een document publiceren
+
+Voorbehouden aan wie de repository beheert, maar goed om te weten zodat u het juiste kunt vragen.
+
+Een document publiceert u door een bestand in de map `DOCS/` van de repository te zetten, benoemd volgens een strikte regel:
+
+```
+260803 - GUIDE-ADMIN - NL.pdf
+└─┬──┘   └────┬────┘   └┬┘
+  │           │         └── de taal
+  │           └──────────── de identificatie van het document, dezelfde van versie tot versie
+  └──────────────────────── de datum, in het formaat JJMMDD: dat is het versienummer
+```
+
+- **De datum** ordent de versies. De recentste wordt aangeboden, de andere blijven bereikbaar.
+- **De identificatie** moet **identiek** blijven van versie tot versie: zij maakt dat twee bestanden hetzelfde document zijn. Verandert ze, dan ziet het paneel er twee verschillende documenten in.
+- **De taal** bepaalt wat elke beheerder te zien krijgt.
+
+Een bestand dat deze regel niet volgt, wordt niet gepubliceerd: het staat onderaan het tabblad onder **Genegeerde bestanden (naam voldoet niet)**. Een tikfout is dus zichtbaar, in plaats van dat een document stilzwijgend verdwijnt.
+
+---
+
+# 11. Identiteit — de naam en het vocabulaire van de site
 
 Met dit tabblad hernoemt u de site volledig, zonder aan code te raken. Daardoor kan hetzelfde platform een embryologisch labo of een neurowetenschappelijk instituut bedienen.
 
@@ -618,13 +746,13 @@ Met dit tabblad hernoemt u de site volledig, zonder aan code te raken. Daardoor 
 
 ![Voettekst en navigatie](img-nl/tab-branding-nav.png)
 
-## 10.1. De meertalige velden
+## 11.1. De meertalige velden
 
 Velden met de vermelding **(MEERTALIG)** tonen één regel per taal: `EN`, `ES`, `FR`, `NL`.
 
 **Vul minstens altijd `EN` in.** Dat is de terugvalversie: bekijkt een bezoeker de site in het Spaans en is het veld `ES` leeg, dan wordt de Engelse tekst getoond — nooit een leegte.
 
-## 10.2. Kaart "Identiteit"
+## 11.2. Kaart "Identiteit"
 
 | Veld | Waarvoor het dient | Voorbeeld |
 |---|---|---|
@@ -636,38 +764,38 @@ Velden met de vermelding **(MEERTALIG)** tonen één regel per taal: `EN`, `ES`,
 | **Organisatie** | Uw labo of instelling | `IRIBHM — ULB` |
 | **Link van de organisatie** | Het adres van haar website | `https://…` |
 
-## 10.3. Kaart "Terminologie" — de nuttigste
+## 11.3. Kaart "Terminologie" — de nuttigste
 
 Hier past de site zich aan uw vakgebied aan. U bepaalt **het woord voor wat u in beeld brengt**, in enkelvoud en meervoud, in elke taal.
 
 Dat woord wordt daarna **automatisch overgenomen in de hele publieke interface**: titels, filters, statistieken, beschrijvingen. Schrijft u `embryo / embryo's`, dan spreekt de site over embryo's. Schrijft u `monster / monsters`, dan spreekt ze over monsters — overal, zonder verdere wijziging.
 
-## 10.4. Kaart "Slogan en SEO"
+## 11.4. Kaart "Slogan en SEO"
 
 - **Slogan** — de ondertitel onder de naam van de site.
 - **Beschrijving (SEO)** — de samenvatting die Google en de sociale netwerken tonen. Twee heldere zinnen volstaan.
 - **Trefwoorden (SEO)** — enkele termen, gescheiden door komma's.
 
-## 10.5. Kaart "Voettekst"
+## 11.5. Kaart "Voettekst"
 
 - **Copyrightvermelding** — de tekst onderaan elke pagina.
 - **Links** — de links in de voettekst. **+ Link toevoegen** maakt er een aan (label + adres), het kruisje haalt er een weg.
 
-## 10.6. Kaart "Navigatie"
+## 11.6. Kaart "Navigatie"
 
 De vakjes bepalen welke items in het menu van de publieke site verschijnen: *Verkenner*, *Vergelijken*, *Tracking*, *Over*, *Juridisch*.
 
 Een vakje uitvinken haalt het item uit het menu zonder de pagina te verwijderen.
 
-> ⚠️ **Let op bij "Juridisch".** Dat vakje staat standaard uit. Schrijft u uw juridische informatie (§13), kom dan hier terug om ze bereikbaar te maken.
+> ⚠️ **Let op bij "Juridisch".** Dat vakje staat standaard uit. Schrijft u uw juridische informatie (§14), kom dan hier terug om ze bereikbaar te maken.
 
 ---
 
-# 11. Pagina's — de visuele editor
+# 12. Pagina's — de visuele editor
 
 Dit is de rijkste functie van het paneel. Ermee **bewerkt u de inhoud van de pagina's zoals in een opmaakprogramma**, zonder één regel code te schrijven.
 
-## 11.1. Een pagina kiezen
+## 12.1. Een pagina kiezen
 
 ![Tabblad Pagina's](img-nl/tab-pages.png)
 
@@ -682,7 +810,7 @@ De knop **🗑 Verwijderen** wist een pagina die u zelf hebt aangemaakt. Hij bli
 
 Er bestaan van bij de start twee pagina's: **`home`** en **`about`**. De vermelding *(ingebouwd)* betekent dat ze nog het meegeleverde sjabloon gebruiken: vanaf uw eerste publicatie neemt uw versie het over.
 
-## 11.2. De editor
+## 12.2. De editor
 
 De editor opent **in een eigen browsertabblad**, zodat hij het hele scherm heeft.
 
@@ -699,7 +827,7 @@ De editor opent **in een eigen browsertabblad**, zodat hij het hele scherm heeft
 | **7** | De **zijbalk**: elementen om in te voegen, en de instellingen van wat geselecteerd is. |
 | **8** | **De echte pagina.** Dit is geen maquette: het is uw werkelijke pagina, met haar echte menu, echte voettekst en echte thema. Wat u ziet, is exact wat bezoekers zullen zien. |
 
-## 11.3. De bovenbalk in detail
+## 12.3. De bovenbalk in detail
 
 ![Bovenbalk van de editor](img-nl/editor-topbar.png)
 
@@ -714,7 +842,7 @@ De editor opent **in een eigen browsertabblad**, zodat hij het hele scherm heeft
 > 📌 **Het verschil om te onthouden: Concept ≠ Publiceren.**
 > Zolang u niet op **Publiceren** hebt geklikt, blijven bezoekers de oude versie zien. U kunt dus dagenlang werken en concepten bewaren, zonder iets te breken.
 
-## 11.4. Een element toevoegen
+## 12.4. Een element toevoegen
 
 Het tabblad **Elementen** van de zijbalk bevat alles wat u in een pagina kunt zetten.
 
@@ -778,7 +906,7 @@ Het veld **Een element zoeken** filtert de lijst — handig, want er zijn er 27.
 
 > 💡 **De elementen die zichzelf vullen.** *Recentste datasets* en *Cijfers* kunnen rechtstreeks uit de gegevens van de site putten: aantal datasets, specimens, gevolgde cellen, geannoteerde regio's. Het cijfer werkt zichzelf bij wanneer u data toevoegt — u hoeft de pagina nooit te komen corrigeren.
 
-## 11.5. Een bestaand element bewerken
+## 12.5. Een bestaand element bewerken
 
 **Klik erop in de pagina.** Het krijgt een groene omlijning en de zijbalk schakelt over op zijn instellingen.
 
@@ -852,7 +980,7 @@ Op het blok onder uw muisaanwijzer verschijnt een groen balkje:
 
 *(Op een Mac vervangt u `Ctrl` door `Cmd`.)* Deze sneltoetsen staan uit terwijl u in een tekstveld typt, zodat u gewoon kunt schrijven.
 
-## 11.6. De pagina ordenen: secties en kolommen
+## 12.6. De pagina ordenen: secties en kolommen
 
 Een pagina is op drie niveaus opgebouwd:
 
@@ -876,13 +1004,13 @@ Om een sectie in kolommen te verdelen, selecteert u ze (klik op haar zone, of ge
 
 Op een telefoon komen de kolommen **automatisch onder elkaar te staan**. Daar hoeft u niets voor te doen.
 
-## 11.7. Controleren op mobiel
+## 12.7. Controleren op mobiel
 
 ![Mobiel voorbeeld](img-nl/editor-mobile.png)
 
 De drie pictogrammen (desktop / tablet / mobiel) passen de grootte van het voorbeeld aan. **Maak er een gewoonte van om vóór het publiceren op mobiel te kijken**: een groot deel van de bezoekers gebruikt een telefoon.
 
-## 11.8. De geanimeerde achtergrond
+## 12.8. De geanimeerde achtergrond
 
 ![Tabblad Achtergrond](img-nl/editor-side-background.png)
 
@@ -894,7 +1022,7 @@ Het tabblad **Achtergrond** zet een discreet geanimeerd decor achter de hele pag
 
 De instelling houdt automatisch rekening met de systeemvoorkeur "beweging verminderen" van mensen die gevoelig zijn voor beweging.
 
-## 11.9. Een pagina vertalen
+## 12.9. Een pagina vertalen
 
 ![Tabblad Vertalen](img-nl/editor-side-translate.png)
 
@@ -904,7 +1032,7 @@ Dat scheelt echt tijd: in plaats van elk element één voor één te heropenen o
 
 **Aanbevolen werkwijze:** schrijf de hele pagina in één taal en ga daarna naar dit tabblad om ze in één beweging te vertalen.
 
-## 11.10. De variabelen
+## 12.10. De variabelen
 
 ![Tabblad Variabelen](img-nl/editor-side-variables.png)
 
@@ -922,7 +1050,7 @@ Naamregels: begin met een letter, daarna letters, cijfers of `_`, maximaal 32 te
 
 Er bestaan al variabelen voor de gegevens uit het tabblad Identiteit: `{brand}` (de naam van de site), `{specimen}` (uw studieobject), `{org}` (de organisatie), `{year}` (het jaar). Die werken zichzelf bij.
 
-## 11.11. Een nieuwe pagina aanmaken
+## 12.11. Een nieuwe pagina aanmaken
 
 1. klik in het tabblad **Pagina's** op **+ Nieuwe pagina**;
 2. geef ze een titel en een kort adres (de *slug*, bijvoorbeeld `protocollen`);
@@ -932,7 +1060,7 @@ Er bestaan al variabelen voor de gegevens uit het tabblad Identiteit: `{brand}` 
 
 De pagina is dan bereikbaar op `https://<uw-site>/page.html?slug=protocollen`.
 
-## 11.12. Aanbevolen werkwijze
+## 12.12. Aanbevolen werkwijze
 
 1. **Bewerken met de editor**
 2. Uw wijzigingen aanbrengen
@@ -944,7 +1072,7 @@ De pagina is dan bereikbaar op `https://<uw-site>/page.html?slug=protocollen`.
 
 ---
 
-# 12. Vormgeving — de kleuren van de site
+# 13. Vormgeving — de kleuren van de site
 
 ![Tabblad Vormgeving](img-nl/tab-appearance.png)
 
@@ -954,7 +1082,7 @@ De pagina is dan bereikbaar op `https://<uw-site>/page.html?slug=protocollen`.
 | **2** | **Live voorbeeld** — wat u ziet is **nog niet gepubliceerd**. |
 | **3** | **Opslaan** — past het thema toe op de publieke site. |
 
-## 12.1. De kleuren
+## 13.1. De kleuren
 
 | Kleur | Waar ze verschijnt |
 |---|---|
@@ -968,12 +1096,12 @@ Klik op een kleurvakje om de kiezer te openen. **Het voorbeeld rechts werkt zich
 
 > 💡 **Houd de kleuren Geslaagd / Fout / Waarschuwing dicht bij groen / rood / oranje.** Dat zijn universele signalen: een foutmelding in het groen brengt bezoekers in de war.
 
-## 12.2. Typografie en vormen
+## 13.2. Typografie en vormen
 
 - **Lettertype** — het lettertype van de publieke site.
 - **Hoekafronding** — van scherp tot sterk afgerond, op knoppen en kaarten.
 
-## 12.3. Het thema publiceren
+## 13.3. Het thema publiceren
 
 Er wordt niets op de publieke site toegepast zolang u niet op **Opslaan** hebt geklikt. De knop **Herstellen** keert terug naar het oorspronkelijke thema.
 
@@ -981,7 +1109,7 @@ Er wordt niets op de publieke site toegepast zolang u niet op **Opslaan** hebt g
 
 ---
 
-# 13. Juridische informatie
+# 14. Juridische informatie
 
 ![Tabblad Juridisch](img-nl/tab-legal.png)
 
@@ -1023,19 +1151,19 @@ Het wachtwoord moet **minstens 8 tekens** lang zijn.
 
 ![Wizard, stap 2](img-nl/wizard-2-identity.png)
 
-De naam van de instantie, de organisatie, en het woord voor uw studieobjecten. Nadien aanpasbaar onder **Identiteit** (§10).
+De naam van de instantie, de organisatie, en het woord voor uw studieobjecten. Nadien aanpasbaar onder **Identiteit** (§11).
 
 ## Stap 3 — Thema
 
 ![Wizard, stap 3](img-nl/wizard-3-theme.png)
 
-Eén hoofdkleur uit zes voorstellen. Nadien te verfijnen onder **Vormgeving** (§12).
+Eén hoofdkleur uit zes voorstellen. Nadien te verfijnen onder **Vormgeving** (§13).
 
 ## Stap 4 — Teksten
 
 ![Wizard, stap 4](img-nl/wizard-4-texts.png)
 
-De slogan en de voettekst. Nadien aanpasbaar onder **Identiteit** (§10).
+De slogan en de voettekst. Nadien aanpasbaar onder **Identiteit** (§11).
 
 ## Stap 5 — Plug-ins
 
@@ -1112,10 +1240,10 @@ Doe een **geforceerde herlaadbeurt**: `Ctrl + Shift + R` (Windows) of `Cmd + Shi
 | **Sandbox** | Een geïsoleerde uitvoeringsmodus: de plug-in werkt, maar kan niet aan de rest van de pagina. |
 | **Vingerafdruk** | Een handtekening van de exacte inhoud van een bestand. Verandert het bestand met één teken, dan verandert de vingerafdruk. |
 | **Slug** | Het korte adres van een pagina (`protocollen` in `page.html?slug=protocollen`). |
-| **Sectie / Kolom / Element** | De drie niveaus waaruit een pagina is opgebouwd (§11.6). |
+| **Sectie / Kolom / Element** | De drie niveaus waaruit een pagina is opgebouwd (§12.6). |
 | **Concept** | Een versie die bewaard is maar **nog niet zichtbaar** voor het publiek. |
 | **SEO** | De teksten die zoekmachines en sociale netwerken tonen. |
 
 ---
 
-*Document gegenereerd op basis van versie **1.36.0** van het platform. De schermafbeeldingen komen van een echte installatie; de kleuren kunnen afwijken als het thema gewijzigd is.*
+*Document gegenereerd op basis van versie **1.42.0** van het platform. De schermafbeeldingen komen van een echte installatie; de kleuren kunnen afwijken als het thema gewijzigd is.*

@@ -31,10 +31,11 @@ Está escrito para alguien que **nunca ha visto este panel** y que **no sabe pro
 - [7. Seguridad — contraseña y permisos](#7-seguridad--contraseña-y-permisos)
 - [8. Actualizaciones — hacer evolucionar el sitio](#8-actualizaciones--hacer-evolucionar-el-sitio)
 - [9. Pipeline — preparar nuevos datos](#9-pipeline--preparar-nuevos-datos)
-- [10. Identidad — el nombre y el vocabulario del sitio](#10-identidad--el-nombre-y-el-vocabulario-del-sitio)
-- [11. Páginas — el editor visual](#11-páginas--el-editor-visual)
-- [12. Apariencia — los colores del sitio](#12-apariencia--los-colores-del-sitio)
-- [13. Aviso legal](#13-aviso-legal)
+- [10. Documentación — las guías de la plataforma](#10-documentación--las-guías-de-la-plataforma)
+- [11. Identidad — el nombre y el vocabulario del sitio](#11-identidad--el-nombre-y-el-vocabulario-del-sitio)
+- [12. Páginas — el editor visual](#12-páginas--el-editor-visual)
+- [13. Apariencia — los colores del sitio](#13-apariencia--los-colores-del-sitio)
+- [14. Aviso legal](#14-aviso-legal)
 
 **Anexos**
 
@@ -101,7 +102,7 @@ Una vez dentro, la pantalla se divide en tres zonas que nunca cambian.
 
 | | |
 |---|---|
-| **1** | **El menú de la izquierda** — las 11 secciones del panel. Es la columna vertebral: cada capítulo de esta guía corresponde a una de estas entradas. |
+| **1** | **El menú de la izquierda** — las 12 secciones del panel. Es la columna vertebral: cada capítulo de esta guía corresponde a una de estas entradas. |
 | **2** | **El título** recuerda qué sección está abierta. |
 | **3** | **Tema claro / oscuro** — cambia solo *su* vista del panel, no el sitio público. |
 | **4** | **Idioma** del panel (español, inglés, francés, neerlandés). |
@@ -128,11 +129,12 @@ Es un **recordatorio**, no un error. Mientras esté ahí, sus cambios solo los v
 |---|---|---|
 | **Datasets** | Nombrar, describir, mostrar u ocultar cada conjunto de datos | Habitual |
 | **Estadísticas** | Ver el uso del sitio | Ocasional |
-| **Plugins** | Activar / desactivar las funciones del visor 3D | Raro |
-| **Catálogo** | Instalar nuevas funciones | Raro |
+| **Plugins** | Activar, desactivar y actualizar las funciones del visor 3D | Raro |
+| **Catálogo** | Instalar, actualizar o desinstalar funciones | Raro |
 | **Seguridad** | Cambiar la contraseña | Raro |
-| **Actualizaciones** | Instalar una nueva versión del sitio | Ocasional |
+| **Actualizaciones** | Instalar una nueva versión del sitio, y actualizar los plugins | Ocasional |
 | **Pipeline** | Descargar la herramienta que prepara los nuevos datos | Raro |
+| **Documentación** | Leer y descargar las guías publicadas para la plataforma | Ocasional |
 | **Identidad** | Nombre del sitio, vocabulario, pie de página, menú | Raro |
 | **Páginas** | Modificar el contenido de las páginas (inicio, acerca de…) | Habitual |
 | **Apariencia** | Colores y tipografía del sitio público | Raro |
@@ -358,13 +360,15 @@ Ampliación de una fila:
 | **2** | Su **nivel de confianza** (véase §5.4). |
 | **3** | Versión · autor · carpeta · **huella** del código. |
 | **4** | El interruptor que **activa o desactiva** el plugin. |
-| **5** | **Revocar** — retira la autorización de ejecución (véase §5.5). |
+| **5** | **Revocar** — retira la autorización de ejecución (véase §5.5). Solo aparece en un plugin que **usted** ha aprobado (etiqueta `aprobado` o `aislado`): un plugin `integrado` no tiene ese botón. |
 
 ## 5.3. Activar o desactivar un plugin
 
 Basta con mover el interruptor. El cambio se guarda de inmediato (aparece una confirmación breve abajo) y surte efecto **la próxima vez que se cargue el visor** — pida a un visitante que recargue su página, o recargue la vista previa de la pestaña Datasets.
 
 Desactivar un plugin no lo borra: permanece en el servidor y puede volver a activarlo en cualquier momento.
+
+> ⚠️ **El interruptor no siempre está.** Un plugin **no fiable** no lo tiene en absoluto — antes hay que aprobarlo (§5.5). Un plugin **protegido** (el último modo de renderizado activo) o **incompatible** sí lo tiene, pero atenuado.
 
 > 🔒 **Existe una única protección: siempre debe quedar al menos un modo de renderizado activo.** Si intenta desactivar el último, el panel se niega y muestra «Debe permanecer activo al menos un modo de renderizado». Sin modo de renderizado, el visor no tendría con qué dibujar el volumen.
 
@@ -413,7 +417,27 @@ Verá este caso si alguien deja un plugin directamente en el servidor (por FTP, 
 
 **Retirar una autorización:** el botón **Revocar** en la fila del plugin. Vuelve a ser no fiable de inmediato y deja de cargarse.
 
-## 5.6. Los plugins incluidos de serie
+## 5.6. Actualizar un plugin
+
+Desde esta misma pestaña, sin pasar por el Catálogo.
+
+![Actualización desde la pestaña Plugins](img-es/plugins-update.png)
+
+| | |
+|---|---|
+| **1** | El **aviso** cuenta los plugins afectados. Solo aparece si hay al menos uno. |
+| **2** | **Actualizar todo** — solo aparece a partir de dos plugins. Una sola contraseña cubre el lote. |
+| **3** | En la fila del plugin: la etiqueta **actualización disponible**, el trayecto `v1.0.0 → v1.1.0` y el botón. |
+
+> 📌 **El botón solo aparece si se cumplen las dos condiciones**: existe una versión más reciente **y** esta se declara compatible con su versión del sitio. Si la nueva versión exige una plataforma más reciente, verá la razón en lugar del botón — actualice antes el sitio (§8).
+
+Como en una instalación, el panel le pide su contraseña, descarga, verifica y sustituye. **La copia que funciona se aparta, no se borra**: si algo falla después de ese punto, se vuelve a poner en su sitio. Una actualización fallida nunca le deja con menos de lo que tenía.
+
+> 💡 El mismo botón existe en el **Catálogo** (§6.2) y en **Actualizaciones** (§8.4). Las tres pestañas leen la misma fuente, así que no pueden contradecirse.
+
+## 5.7. Los plugins que ofrece el Catálogo
+
+Estos plugins **no** vienen con el sitio: se instalan bajo demanda, desde el asistente de primera instalación (paso 5) o más tarde desde el Catálogo (§6). Una instalación nueva en la que se hubiera desmarcado todo no tendría ninguno.
 
 | Plugin | Ubicación | Qué aporta al visitante |
 |---|---|---|
@@ -430,6 +454,7 @@ Verá este caso si alguien deja un plugin directamente en el servidor (por FTP, 
 | **Presentation Mode** | Herramienta | Pantalla completa sin interfaz, para proyectar |
 | **Orientation Axes** | Herramienta | El marcador anatómico A/P · D/V · L/R (véase §3.5) |
 | **Toggle Grid / Axes / Volume** | Herramientas | Mostrar u ocultar la rejilla, los ejes, el volumen |
+| **Screenshot (sandboxed)** | Herramienta | La misma captura de pantalla, pero ejecutada en un entorno aislado — el ejemplo de referencia de un plugin aislado |
 | **Chunk Debug** | Herramienta | Herramienta de diagnóstico técnico. **Se puede desactivar sin riesgo** en un sitio en producción |
 
 ---
@@ -440,7 +465,7 @@ Verá este caso si alguien deja un plugin directamente en el servidor (por FTP, 
 
 El Catálogo funciona como una tienda de aplicaciones: enumera los plugins oficiales disponibles y usted los instala con un clic.
 
-Los plugins se reparten en tres secciones: **Instalados**, **Disponibles** y, en su caso, **Incompatibles**.
+Los plugins se reparten en cuatro secciones. **Para actualizar** aparece primero cuando hay alguno — una actualización urge, un plugin ya instalado no — y luego **Instalados**, **Disponibles** y, en su caso, **Incompatibles**.
 
 ## 6.1. Instalar un plugin
 
@@ -451,21 +476,30 @@ Los plugins se reparten en tres secciones: **Instalados**, **Disponibles** y, en
 
 Durante la instalación, el servidor comprueba que el archivo descargado coincide, bit a bit, con lo que anuncia el catálogo. Si detecta la menor diferencia, **la instalación se cancela** en vez de instalar algo dudoso.
 
-La mención **«firma verificada»** en la parte superior confirma que el propio catálogo es auténtico.
+En la parte superior, una mención indica el estado del catálogo: **«firma verificada»** (el catálogo está autenticado) o **«sin firmar»** (no hay ninguna clave de firma configurada en este servidor — solo se comprueba la huella sha256).
 
-## 6.2. Desinstalar
+## 6.2. Actualizar
 
-El botón **🗑 Desinstalar** en la tarjeta del plugin, y luego confirmar. Los archivos se retiran del servidor. Siempre puede reinstalarlo después desde el Catálogo.
+Un plugin instalado del que existe una versión más reciente **y** compatible sale de «Instalados» y pasa a **Para actualizar**, en la parte superior. Su tarjeta muestra entonces `v1.0.0 → v1.1.0` en lugar de la sola versión del catálogo, y un botón **Actualizar** se coloca junto a **Desinstalar**.
+
+El botón **Actualizar todo**, arriba, trata el lote con una sola contraseña.
+
+Es la misma acción que en las pestañas **Plugins** (§5.6) y **Actualizaciones** (§8.4) — hágala desde donde esté.
+
+## 6.3. Desinstalar
+
+El botón **🗑 Desinstalar** en la tarjeta del plugin, y luego confirmar. En un plugin que tiene una actualización pendiente, este botón va precedido de **Actualizar**: compruebe en cuál de los dos hace clic. Los archivos se retiran del servidor. Siempre puede reinstalarlo después desde el Catálogo.
 
 Solo hay un caso en que se deniegue: si es el **último modo de renderizado** instalado (misma razón que en §5.3).
 
-## 6.3. Las etiquetas de las tarjetas
+## 6.4. Las etiquetas de las tarjetas
 
 | Etiqueta | Significado |
 |---|---|
 | **`aislado`** | Este plugin se ejecutará aislado. Es el caso de los plugins de la barra de herramientas. |
 | **`confianza total`** | Este plugin se ejecutará con todos los derechos de la página. Inevitable para los modos de renderizado y los controles de canal, que gobiernan directamente la tarjeta gráfica. |
-| **`incompatible`** | Este plugin requiere una versión del sitio más reciente (o más antigua) que la suya. El botón de instalación está atenuado. Haga una actualización (véase §8) y volverá a poder instalarse. |
+| **`actualización disponible`** | Existe una versión más reciente **y** es compatible con su sitio. La tarjeta muestra `v1.0.0 → v1.1.0` y un botón **Actualizar**. |
+| **`incompatible`** | Solo aparece en un plugin **no instalado**: requiere una versión del sitio más reciente (o más antigua) que la suya, y el botón de instalación está atenuado. Haga una actualización (véase §8) y volverá a poder instalarse. Un plugin **ya instalado** nunca lleva esta etiqueta — el que funciona en su sitio funciona; solo su versión siguiente puede tener que esperar. |
 
 ---
 
@@ -519,11 +553,12 @@ En un servidor Windows, la tarjeta indica simplemente que los permisos POSIX no 
 | **2** | El estado: *al día*, o *actualización disponible*. |
 | **3** | **Comprobar** — repite la búsqueda de inmediato. |
 
-Se muestran tres números de versión — es normal, son tres componentes independientes:
+Se muestran dos números de versión — son dos componentes independientes:
 
 - **Plataforma Web** — el sitio en sí. **Es el que cuenta.**
-- **Servidor de desarrollo** — la herramienta de desarrollo local.
-- **Preprocesamiento** — la herramienta de preparación de datos (véase §9).
+- **Pipeline de preprocesamiento** — la herramienta de preparación de datos (véase §9). Evoluciona a su propio ritmo: un número menor que el del sitio no tiene nada de anormal.
+
+Una línea cuyo valor se desconoce no se muestra en absoluto, en vez de mostrarse vacía.
 
 ## 8.1. Lanzar una actualización
 
@@ -563,34 +598,61 @@ La actualización está diseñada para que un fallo no pueda romper el sitio:
 | **Ninguna versión publicada** | Todavía no se ha publicado ninguna versión públicamente. |
 | **El almacén de certificados es inutilizable** | Configuración del alojamiento. Comuníqueselo a quien gestione el servidor. |
 
+## 8.4. Actualizar los plugins
+
+Bajo la actualización del sitio, una tarjeta **Actualizaciones de complementos** responde a la misma pregunta para los módulos: «¿qué necesita actualizarse aquí?»
+
+![Actualizaciones de plugins](img-es/updates-plugins.png)
+
+| | |
+|---|---|
+| **1** | El número de plugins afectados. |
+| **2** | Para cada uno: la versión instalada y aquella a la que se pasaría. |
+| **3** | **Actualizar todo** — una sola contraseña para el lote. |
+
+Un plugin cuya nueva versión exige una plataforma más reciente aparece en una segunda lista, **«Actualizaciones a la espera de la plataforma»**, con la razón. No se escamotea: hacerlo desaparecer se leería como «nada que actualizar», y buscaría durante mucho tiempo por qué su plugin se queda atrás.
+
+La misma acción existe en **Plugins** (§5.6) y **Catálogo** (§6.2).
+
 ---
 
 # 9. Pipeline — preparar nuevos datos
 
 ![Pestaña Pipeline](img-es/tab-pipeline.png)
 
-Esta pestaña **no procesa nada** en el servidor. Le hace **descargar una herramienta** que ejecutará en un ordenador potente, normalmente la estación de análisis del laboratorio.
+Esta pestaña **no procesa nada** en el servidor. Le hace **descargar un paquete** que ejecutará en un ordenador potente, normalmente la estación de análisis del laboratorio.
 
 **¿Por qué separarlo?** Convertir un volumen de microscopía exige muchísima memoria — cuente con unos **32 GB de RAM** para un volumen de 3789 × 3789 × 178. Ningún servidor web compartido puede con eso.
 
-## 9.1. Qué contiene el paquete
+## 9.1. El principio
 
-- **Pipeline de volúmenes** — convierte las pilas Imaris `.ims` en conjuntos troceados en bloques, con pirámide de niveles de detalle, miniatura y metadatos.
-- **Pipeline de tracking** — lee la exportación Excel producida por Imaris, reconstruye los linajes celulares (mitosis incluidas), estabiliza las trayectorias y calcula las métricas.
-- **Vinculación** — asocia un tracking analizado a un conjunto ya procesado, para superponer las trayectorias a las imágenes.
-- **Un ejemplo de entrada por pipeline** — el paquete se puede usar de inmediato, sin datos reales, para practicar.
-- **Un lanzador `RUN.bat`** que verifica la integridad de los archivos, comprueba la instalación de Python y ejecuta el procesamiento elegido.
+La primera tarjeta resume el trayecto de los datos en cuatro etapas:
+
+| | |
+|---|---|
+| **Archivos brutos** | lo que sale del microscopio: `.ims` para los volúmenes, una exportación Excel para el tracking |
+| **`RUN.bat`** | el lanzador, en un equipo Windows |
+| **Conjunto de datos** | lo que produce el paquete: volúmenes troceados + trayectorias |
+| **`DATA_WEB\`** | la carpeta del servidor donde lo copia — aparece de inmediato en el catálogo |
+
+El paquete contiene **dos pipelines** (volúmenes y tracking), **un ejemplo de entrada para cada uno** — así que se puede usar de inmediato, sin datos reales, para practicar — y un lanzador que **verifica su propia integridad** (SHA-256) antes de ejecutar nada.
+
+> 📌 **Dos números, y es normal.** La cabecera de esta tarjeta muestra `pipeline v0.15.0`: es la versión **del paquete**, no la del sitio. Bajo las características, una línea recuerda con qué versión de la plataforma se entregó. El paquete sigue su propia numeración porque *es* la herramienta de preprocesamiento — no intente hacer coincidir ambas.
 
 ## 9.2. Qué edición elegir
 
-| | **Edición completa** | **Edición ligera** |
+Una sola pregunta lo decide: **¿tiene el equipo de procesamiento acceso a internet?**
+
+| | **Edición ligera** *(recomendada)* | **Edición completa** *(sin conexión)* |
 |---|---|---|
-| Tamaño | ~70 MB (200 MB descomprimido) | unos pocos MB |
-| Internet | **Nunca necesario** | Necesario **una sola vez**, en el primer arranque |
-| Python | Incorporado, versiones fijadas | Se obtiene en el primer arranque, en un entorno aislado |
-| Para quién | Estación sin conexión, o para garantizar resultados idénticos entre instalaciones | Estación conectada, uso corriente |
+| Para quién | Equipo con acceso a internet | Equipo aislado de la red, o entorno que hay que fijar |
+| Tamaño | unos pocos megabytes | ~70 MB (200 MB descomprimido) |
+| Internet | **una sola vez**, en el primer arranque | **nunca** |
+| Python | instalado por el paquete, aparte del sistema | incluido, versiones fijadas |
 
 La edición ligera **nunca** modifica el Python ya instalado en el equipo: trabaja en su propio rincón.
+
+> ⚠️ La edición completa va adjunta a la versión publicada en GitHub, no al sitio. Si no está disponible, el panel se lo indica y la edición ligera sigue descargable.
 
 ## 9.3. Cómo usarlo
 
@@ -603,7 +665,73 @@ La edición ligera **nunca** modifica el Python ya instalado en el equipo: traba
 
 ---
 
-# 10. Identidad — el nombre y el vocabulario del sitio
+# 10. Documentación — las guías de la plataforma
+
+Aquí es donde encontrará este documento, y todos los que se publiquen después.
+
+![Pestaña Documentación](img-es/tab-docs.png)
+
+| | |
+|---|---|
+| **1** | **Actualizar** — vuelve a leer la lista desde el repositorio. |
+| **2** | Una tarjeta por documento, con todos sus idiomas y versiones juntos. |
+| **3** | La fecha de la versión propuesta, y su tamaño. |
+| **4** | Los idiomas disponibles. **El suyo se elige de oficio.** |
+| **5** | **Leer** — abre el documento en el panel. Al lado, **Descargar**. |
+
+## 10.1. De dónde vienen estos documentos
+
+**No de esta instalación.** Se publican en el repositorio del proyecto y se recuperan al mostrarlos. Consecuencia útil: una guía corregida le llega **sin actualizar el sitio**.
+
+Consecuencia que también conviene conocer: si el servidor no puede contactar con GitHub, la lista no se muestra — un aviso le dice por qué. No es una avería del sitio, solo de esta lista.
+
+> 💡 La lista se guarda en memoria durante diez minutos. Un documento publicado hace un instante puede por tanto tardar un momento en aparecer: **Actualizar** fuerza la relectura.
+
+## 10.2. Elegir el idioma
+
+Los idiomas disponibles se muestran como botones. El que aparece destacado es el que obtendrá si no toca nada.
+
+La elección se hace en este orden: **su idioma de interfaz**, si no **el inglés**, si no la versión **Multilingüe**, si no el primero disponible. Así nunca tendrá una tarjeta vacía porque falte una traducción.
+
+Hacer clic en otro idioma cambia el documento propuesto, y el historial de versiones lo sigue: cada idioma tiene el suyo.
+
+## 10.3. Las versiones anteriores
+
+Un documento corregido no sustituye al antiguo: se añade. La tarjeta propone siempre **la más reciente**, y un botón **Versiones anteriores** despliega las demás, con su fecha.
+
+Es útil cuando un procedimiento ha cambiado y quiere recuperar lo que estaba escrito entonces.
+
+## 10.4. Leer en el panel
+
+![Lectura de un documento](img-es/docs-preview.png)
+
+**Leer** muestra el documento en el panel. **Nueva pestaña** lo abre a pantalla completa, **Cerrar** cierra la vista previa.
+
+> 📌 **No todos los formatos se muestran.** Los PDF, las imágenes y el texto se leen en el panel. Los demás formatos — un documento Word, una hoja de cálculo, un archivo comprimido — no tienen botón **Leer**: se descargan. No es un límite de visualización sino una decisión de seguridad, explicada al operador por la ausencia del botón en vez de por un mensaje de error.
+
+## 10.5. Publicar un documento
+
+Reservado a quien gestiona el repositorio, pero conviene saberlo para pedir lo correcto.
+
+Un documento se publica dejando un archivo en la carpeta `DOCS/` del repositorio, con un nombre que sigue una regla estricta:
+
+```
+260803 - GUIDE-ADMIN - ES.pdf
+└─┬──┘   └────┬────┘   └┬┘
+  │           │         └── el idioma
+  │           └──────────── el identificador del documento, el mismo de una versión a otra
+  └──────────────────────── la fecha, en formato AAMMDD: es el número de versión
+```
+
+- **La fecha** ordena las versiones. Se propone la más reciente, las demás siguen accesibles.
+- **El identificador** debe seguir siendo **idéntico** de una versión a otra: es lo que hace que dos archivos sean el mismo documento. Si cambia, el panel ve en ellos dos documentos distintos.
+- **El idioma** decide lo que verá cada operador.
+
+Un archivo que no siga esta regla no se publica: se **señala como ignorado** al final de la pestaña. Una errata se ve, por tanto, en vez de hacer desaparecer un documento en silencio.
+
+---
+
+# 11. Identidad — el nombre y el vocabulario del sitio
 
 Esta pestaña permite renombrar por completo el sitio, sin tocar código. Es lo que permite que la misma plataforma sirva a un laboratorio de embriología o a un instituto de neurociencias.
 
@@ -618,13 +746,13 @@ Esta pestaña permite renombrar por completo el sitio, sin tocar código. Es lo 
 
 ![Pie de página y navegación](img-es/tab-branding-nav.png)
 
-## 10.1. Los campos multilingües
+## 11.1. Los campos multilingües
 
 Los campos marcados **(MULTILINGÜE)** muestran una fila por idioma: `EN`, `ES`, `FR`, `NL`.
 
 **Rellene siempre `EN` como mínimo.** Es la versión de respaldo: si un visitante consulta el sitio en español y el campo `ES` está vacío, se muestra el texto en inglés — nunca un hueco.
 
-## 10.2. Tarjeta «Identidad»
+## 11.2. Tarjeta «Identidad»
 
 | Campo | Para qué sirve | Ejemplo |
 |---|---|---|
@@ -636,38 +764,38 @@ Los campos marcados **(MULTILINGÜE)** muestran una fila por idioma: `EN`, `ES`,
 | **Organización** | Su laboratorio o institución | `IRIBHM — ULB` |
 | **Enlace de la organización** | La dirección de su web | `https://…` |
 
-## 10.3. Tarjeta «Terminología» — la más útil
+## 11.3. Tarjeta «Terminología» — la más útil
 
 Aquí es donde el sitio se adapta a su campo. Define **la palabra que designa lo que usted captura**, en singular y en plural, en cada idioma.
 
 Esa palabra se **retoma automáticamente en toda la interfaz pública**: títulos, filtros, estadísticas, descripciones. Si escribe `embrión / embriones`, el sitio hablará de embriones. Si escribe `muestra / muestras`, hablará de muestras — en todas partes, sin ningún otro cambio.
 
-## 10.4. Tarjeta «Lema y SEO»
+## 11.4. Tarjeta «Lema y SEO»
 
 - **Lema** — el subtítulo mostrado bajo el nombre del sitio.
 - **Descripción (SEO)** — el resumen que muestran Google y las redes sociales. Dos frases claras bastan.
 - **Palabras clave (SEO)** — unos cuantos términos separados por comas.
 
-## 10.5. Tarjeta «Pie de página»
+## 11.5. Tarjeta «Pie de página»
 
 - **Aviso de copyright** — el texto al final de cada página.
 - **Enlaces** — los enlaces del pie. **+ Añadir enlace** crea uno (etiqueta + dirección), la cruz retira uno.
 
-## 10.6. Tarjeta «Navegación»
+## 11.6. Tarjeta «Navegación»
 
 Las casillas deciden qué entradas aparecen en el menú del sitio público: *Explorador*, *Comparar*, *Tracking*, *Acerca de*, *Aviso legal*.
 
 Desmarcar una entrada la retira del menú sin borrar la página.
 
-> ⚠️ **Atención con «Aviso legal».** Esa casilla está desmarcada por defecto. Si redacta su aviso legal (§13), acuérdese de volver aquí para hacerlo accesible.
+> ⚠️ **Atención con «Aviso legal».** Esa casilla está desmarcada por defecto. Si redacta su aviso legal (§14), acuérdese de volver aquí para hacerlo accesible.
 
 ---
 
-# 11. Páginas — el editor visual
+# 12. Páginas — el editor visual
 
 Es la función más rica del panel. Permite **modificar el contenido de las páginas como en un programa de maquetación**, sin escribir una línea de código.
 
-## 11.1. Elegir una página
+## 12.1. Elegir una página
 
 ![Pestaña Páginas](img-es/tab-pages.png)
 
@@ -682,7 +810,7 @@ El botón **🗑 Eliminar** borra una página creada por usted. Permanece atenua
 
 Existen dos páginas de origen: **`home`** y **`about`**. La mención *(integrada)* significa que aún usan la plantilla suministrada: desde su primera publicación, su versión toma el relevo.
 
-## 11.2. El editor
+## 12.2. El editor
 
 El editor se abre **en su propia pestaña del navegador** para disponer de toda la pantalla.
 
@@ -699,7 +827,7 @@ El editor se abre **en su propia pestaña del navegador** para disponer de toda 
 | **7** | La **barra lateral**: elementos que insertar y ajustes de lo que esté seleccionado. |
 | **8** | **La página real.** No es una maqueta: es su página real, con su menú real, su pie real y su tema real. Lo que ve es exactamente lo que verán los visitantes. |
 
-## 11.3. La barra superior en detalle
+## 12.3. La barra superior en detalle
 
 ![Barra del editor](img-es/editor-topbar.png)
 
@@ -714,7 +842,7 @@ El editor se abre **en su propia pestaña del navegador** para disponer de toda 
 > 📌 **La diferencia que hay que recordar: Borrador ≠ Publicar.**
 > Mientras no haga clic en **Publicar**, los visitantes siguen viendo la versión anterior. Puede por tanto trabajar durante días guardando borradores, sin romper nada.
 
-## 11.4. Añadir un elemento
+## 12.4. Añadir un elemento
 
 La pestaña **Elementos** de la barra lateral contiene todo lo que se puede colocar en una página.
 
@@ -778,7 +906,7 @@ El campo **Buscar un elemento** filtra la lista — práctico, porque hay 27.
 
 > 💡 **Los elementos que se rellenan solos.** *Últimos datasets* y *Estadísticas* pueden tomar los datos directamente del sitio: número de conjuntos, de especímenes, de células seguidas, de regiones anotadas. La cifra se actualiza sola cuando añade datos — nunca tendrá que volver a corregir la página.
 
-## 11.5. Modificar un elemento existente
+## 12.5. Modificar un elemento existente
 
 **Haga clic en él dentro de la página.** Se rodea de verde y la barra lateral pasa a sus ajustes.
 
@@ -852,7 +980,7 @@ Sobre el bloque bajo el cursor aparece una pequeña barra verde:
 
 *(En Mac, sustituya `Ctrl` por `Cmd`.)* Estos atajos se desactivan mientras escribe en un campo de texto, así que puede escribir con normalidad.
 
-## 11.6. Organizar la página: secciones y columnas
+## 12.6. Organizar la página: secciones y columnas
 
 Una página se construye en tres niveles:
 
@@ -876,13 +1004,13 @@ Para dividir una sección en columnas, selecciónela (haga clic en su zona, o us
 
 En un teléfono, las columnas **se colocan automáticamente una debajo de otra**. No hay que hacer nada para eso.
 
-## 11.7. Comprobar en móvil
+## 12.7. Comprobar en móvil
 
 ![Vista previa móvil](img-es/editor-mobile.png)
 
 Los tres iconos (escritorio / tableta / móvil) redimensionan la vista previa. **Acostúmbrese a comprobar en móvil antes de publicar**: buena parte de los visitantes consultan el sitio desde un teléfono.
 
-## 11.8. El fondo animado
+## 12.8. El fondo animado
 
 ![Pestaña Fondo](img-es/editor-side-background.png)
 
@@ -894,7 +1022,7 @@ La pestaña **Fondo** añade un decorado animado discreto detrás de toda la pá
 
 El ajuste respeta automáticamente la preferencia del sistema «reducir el movimiento» de las personas sensibles al movimiento.
 
-## 11.9. Traducir una página
+## 12.9. Traducir una página
 
 ![Pestaña Traducir](img-es/editor-side-translate.png)
 
@@ -904,7 +1032,7 @@ Ahorra tiempo de verdad: en lugar de volver a abrir cada elemento uno por uno bu
 
 **Método recomendado:** redacte toda la página en un idioma y luego pase a esta pestaña para traducirla de una vez.
 
-## 11.10. Las variables
+## 12.10. Las variables
 
 ![Pestaña Variables](img-es/editor-side-variables.png)
 
@@ -922,7 +1050,7 @@ Reglas de nombre: empiece por una letra, luego letras, cifras o `_`, 32 caracter
 
 Ya existen variables para los datos de la pestaña Identidad: `{brand}` (el nombre del sitio), `{specimen}` (su objeto de estudio), `{org}` (la organización), `{year}` (el año). Se actualizan solas.
 
-## 11.11. Crear una nueva página
+## 12.11. Crear una nueva página
 
 1. en la pestaña **Páginas**, haga clic en **+ Nueva página**;
 2. dele un título y una dirección corta (el *slug*, por ejemplo `protocolos`);
@@ -932,7 +1060,7 @@ Ya existen variables para los datos de la pestaña Identidad: `{brand}` (el nomb
 
 La página queda entonces accesible en `https://<su-sitio>/page.html?slug=protocolos`.
 
-## 11.12. Procedimiento recomendado
+## 12.12. Procedimiento recomendado
 
 1. **Editar con el editor**
 2. Hacer sus modificaciones
@@ -944,7 +1072,7 @@ La página queda entonces accesible en `https://<su-sitio>/page.html?slug=protoc
 
 ---
 
-# 12. Apariencia — los colores del sitio
+# 13. Apariencia — los colores del sitio
 
 ![Pestaña Apariencia](img-es/tab-appearance.png)
 
@@ -954,7 +1082,7 @@ La página queda entonces accesible en `https://<su-sitio>/page.html?slug=protoc
 | **2** | **Vista previa en vivo** — lo que ve **aún no está publicado**. |
 | **3** | **Guardar** — aplica el tema al sitio público. |
 
-## 12.1. Los colores
+## 13.1. Los colores
 
 | Color | Dónde aparece |
 |---|---|
@@ -968,12 +1096,12 @@ Haga clic en un cuadrado de color para abrir el selector. **La vista previa de l
 
 > 💡 **Mantenga los colores Éxito / Error / Advertencia cerca del verde / rojo / naranja.** Son señales universales: un mensaje de error en verde desorienta a los visitantes.
 
-## 12.2. Tipografía y formas
+## 13.2. Tipografía y formas
 
 - **Tipografía** — la fuente del sitio público.
 - **Redondeo de esquinas** — de anguloso a muy redondeado, en botones y tarjetas.
 
-## 12.3. Publicar el tema
+## 13.3. Publicar el tema
 
 No se aplica nada al sitio público mientras no haga clic en **Guardar**. El botón **Restablecer** vuelve al tema original.
 
@@ -981,7 +1109,7 @@ No se aplica nada al sitio público mientras no haga clic en **Guardar**. El bot
 
 ---
 
-# 13. Aviso legal
+# 14. Aviso legal
 
 ![Pestaña Aviso legal](img-es/tab-legal.png)
 
@@ -1023,19 +1151,19 @@ La contraseña debe tener **8 caracteres como mínimo**.
 
 ![Asistente, paso 2](img-es/wizard-2-identity.png)
 
-El nombre de la instancia, la organización y la palabra que designa sus objetos de estudio. Modificable después en **Identidad** (§10).
+El nombre de la instancia, la organización y la palabra que designa sus objetos de estudio. Modificable después en **Identidad** (§11).
 
 ## Paso 3 — Tema
 
 ![Asistente, paso 3](img-es/wizard-3-theme.png)
 
-Un color dominante entre seis propuestas. Refinable después en **Apariencia** (§12).
+Un color dominante entre seis propuestas. Refinable después en **Apariencia** (§13).
 
 ## Paso 4 — Textos
 
 ![Asistente, paso 4](img-es/wizard-4-texts.png)
 
-El lema y la mención del pie de página. Modificables después en **Identidad** (§10).
+El lema y la mención del pie de página. Modificables después en **Identidad** (§11).
 
 ## Paso 5 — Plugins
 
@@ -1112,10 +1240,10 @@ Haga una **recarga forzada**: `Ctrl + Shift + R` (Windows) o `Cmd + Shift + R` (
 | **Entorno aislado** | Un modo de ejecución aislado: el plugin funciona, pero no puede acceder al resto de la página. |
 | **Huella** | Una firma del contenido exacto de un archivo. Si el archivo cambia en un solo carácter, la huella cambia. |
 | **Slug** | La dirección corta de una página (`protocolos` en `page.html?slug=protocolos`). |
-| **Sección / Columna / Elemento** | Los tres niveles de construcción de una página (§11.6). |
+| **Sección / Columna / Elemento** | Los tres niveles de construcción de una página (§12.6). |
 | **Borrador** | Una versión guardada pero **aún no visible** para el público. |
 | **SEO** | Los textos que muestran los buscadores y las redes sociales. |
 
 ---
 
-*Documento generado a partir de la versión **1.36.0** de la plataforma. Las capturas provienen de una instancia real; los colores pueden diferir si se ha modificado el tema.*
+*Documento generado a partir de la versión **1.42.0** de la plataforma. Las capturas provienen de una instancia real; los colores pueden diferir si se ha modificado el tema.*

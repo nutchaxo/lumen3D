@@ -58,6 +58,11 @@ N_CELLS = 48
 REGIONS = ("Anterior", "Posterior", "Lateral")
 SEED = 20260512
 
+# Imaris allocates track ids far above object ids so the two id spaces never collide —
+# a real export shows spot 489179 inside track 1000489179. Scene8 label sets address
+# objects by bare id, so reproducing that separation is what keeps the fixture honest.
+TRACK_ID_BASE = 1_000_000_000
+
 
 def _extent_um():
     """Physical bounds of the volume, in micrometres (the Imaris stage frame)."""
@@ -76,9 +81,10 @@ def simulate_cells(rng):
     recover and remove the rigid part, leaving only the local component. A tracking
     demo where every cell is static would exercise none of that.
 
-    One track divides mid-sequence: the parent's track ends and two fresh tracks
-    appear beside its last position, which is exactly how a division surfaces in an
-    Imaris export and what Analysis.py's mitosis detection keys on.
+    One track divides mid-sequence. Imaris does not start new tracks for the daughters:
+    the track branches, so from the division onwards it holds two spots per timepoint —
+    that shape, and not a change of TrackID, is what Analysis.py's mitosis detection
+    keys on (verified against the lab's own exports).
     """
     ext_x, ext_y, ext_z = _extent_um()
     margin = 12.0
@@ -110,11 +116,6 @@ def simulate_cells(rng):
     division_t = N_TIMEPOINTS // 2
 
     records = []
-    next_track_id = N_CELLS + 1
-
-    # Track ids for the two daughters, allocated once so they persist after the split.
-    daughter_ids = (next_track_id, next_track_id + 1)
-    next_track_id += 2
 
     for t in range(N_TIMEPOINTS):
         # Global rigid motion of the whole specimen: a small yaw about Z plus a
@@ -139,13 +140,13 @@ def simulate_cells(rng):
             z = float(np.clip(z, 0.0, ext_z))
 
             if i == dividing_cell and t >= division_t:
-                # After the split the parent no longer exists; two daughters do,
-                # offset symmetrically along the division axis.
-                for d, tid in enumerate(daughter_ids):
+                # The two daughters, offset symmetrically along the division axis, both
+                # inside the mother's track.
+                for d in range(2):
                     off = 3.5 * (1 if d == 0 else -1)
                     records.append({
                         "ID": len(records) + 1,
-                        "TrackID": tid,
+                        "TrackID": TRACK_ID_BASE + i + 1,
                         "Time": t + 1,          # Imaris timepoints are 1-based
                         "Position X": round(x + off, 4),
                         "Position Y": round(y + off * 0.4, 4),
@@ -156,7 +157,7 @@ def simulate_cells(rng):
 
             records.append({
                 "ID": len(records) + 1,
-                "TrackID": i + 1,
+                "TrackID": TRACK_ID_BASE + i + 1,
                 "Time": t + 1,
                 "Position X": round(x, 4),
                 "Position Y": round(y, 4),
@@ -266,12 +267,103 @@ def _render_volume(records, t_index, rng):
     return to_u16(dapi), to_u16(gfp)
 
 
+def _write_scene8(f, records):
+    """Write the same tracking a second time, as the Imaris objects Surpass would save.
+
+    A real Imaris file carries its Spots and Tracks inside the volume, under Scene8, and
+    the preprocessing pipeline reads them from there when no analysis sits beside the file.
+    Reproducing that layout is what lets the shipped demo exercise the embedded-tracking
+    path, not just the spreadsheet one.
+
+    The layout is index-based throughout: SpotTimeOffset and Track0 hold half-open ranges
+    of ROW POSITIONS into the Spot and TrackObject0 tables, never object ids — so the Spot
+    table below is written grouped by timepoint, and TrackObject0 grouped by track.
+    """
+    import h5py
+
+    times = sorted({int(r["Time"]) for r in records})
+    by_time = {t: [r for r in records if int(r["Time"]) == t] for t in times}
+
+    spot_rows, time_offsets, position = [], [], 0
+    for frame, t in enumerate(times):
+        for rec in by_time[t]:
+            spot_rows.append((int(rec["ID"]), float(rec["Position X"]),
+                              float(rec["Position Y"]), float(rec["Position Z"]), 3.0))
+        # Imaris counts Scene8 frames from 0 while every statistics export counts from 1.
+        time_offsets.append((frame, position, position + len(by_time[t])))
+        position += len(by_time[t])
+
+    time_of_spot = {int(r["ID"]): int(r["Time"]) for r in records}
+    tracks = {}
+    for rec in records:
+        tracks.setdefault(int(rec["TrackID"]), []).append(int(rec["ID"]))
+
+    track_rows, track_objects, track_edges = [], [], []
+    for tid in sorted(tracks):
+        members = sorted(tracks[tid], key=lambda sid: time_of_spot[sid])
+        obj_begin, edge_begin = len(track_objects), len(track_edges)
+        track_objects.extend((sid,) for sid in members)
+        track_edges.extend((a, b) for a, b in zip(members, members[1:]))
+        track_rows.append((tid, obj_begin, len(track_objects), edge_begin, len(track_edges)))
+
+    region_of_spot = {int(r["ID"]): str(r["Region"]) for r in records}
+    region_of_track = {tid: region_of_spot[sorted(m, key=lambda s: time_of_spot[s])[0]]
+                       for tid, m in tracks.items()}
+
+    # Both classification levels, as the lab's files carry them: one painting the spots,
+    # one painting whole tracks. Labels of every group live in one flat LabelValues table
+    # that LabelGroupNames closes with cumulative end offsets.
+    groups = (("Point Locations", region_of_spot), ("Tracks Location", region_of_track))
+    label_values, group_names, label_sets, set_label_ids, set_object_ids = [], [], [], [], []
+    for gname, mapping in groups:
+        for region in REGIONS:
+            objects = sorted(obj for obj, value in mapping.items() if value == region)
+            if not objects:
+                continue
+            set_label_ids.append((len(label_values),))
+            set_object_ids.extend((obj,) for obj in objects)
+            label_sets.append((len(set_label_ids), len(set_object_ids)))
+            label_values.append((region.encode("ascii"),))
+        group_names.append((gname.encode("ascii"), len(label_values)))
+
+    points = f.create_group("Scene8/Content/Points0")
+    f["Scene8/Content"].attrs["NumberOfPoints"] = np.int64(1)
+    points.attrs["Name"] = _imaris_attr("Spots 1")
+    points.attrs["CreatorName"] = _imaris_attr("Surpass")
+    points.attrs["Unit"] = _imaris_attr("um")
+    points.attrs["Id"] = np.int64(200001)
+
+    def table(name, rows, dtype):
+        points.create_dataset(name, data=np.array(rows, dtype=dtype))
+
+    table("Spot", spot_rows, [("ID", "<i8"), ("PositionX", "<f4"), ("PositionY", "<f4"),
+                              ("PositionZ", "<f4"), ("Radius", "<f4")])
+    table("SpotTimeOffset", time_offsets,
+          [("ID", "<i8"), ("IndexBegin", "<i8"), ("IndexEnd", "<i8")])
+    table("Track0", track_rows,
+          [("ID", "<i8"), ("IndexTrackObjectBegin", "<i8"), ("IndexTrackObjectEnd", "<i8"),
+           ("IndexTrackEdgeBegin", "<i8"), ("IndexTrackEdgeEnd", "<i8")])
+    table("TrackObject0", track_objects, [("ID_Object", "<i8")])
+    table("TrackEdge0", track_edges, [("ID_ObjectA", "<i8"), ("ID_ObjectB", "<i8")])
+    table("MainTrackTable", [(b"0", b"Track0", b"TrackObject0", b"TrackEdge0")],
+          [("ObjectsName", "S256"), ("TrackName", "S256"),
+           ("TrackObjectName", "S256"), ("TrackEdgeName", "S256")])
+    table("LabelValues", label_values, [("LabelValue", "S256")])
+    table("LabelGroupNames", group_names,
+          [("LabelGroupName", "S256"), ("EndLabelValue", "<i8")])
+    table("LabelSets", label_sets, [("EndLabelIDs", "<i8"), ("EndObjectIDs", "<i8")])
+    table("LabelSetLabelIDs", set_label_ids, [("IDLabel", "<i8")])
+    table("LabelSetObjectIDs", set_object_ids, [("IDObject", "<i8")])
+
+    return len(spot_rows), len(track_rows)
+
+
 def write_ims(records, path: Path):
     """Write the Imaris HDF5 container the preprocessing pipeline consumes.
 
-    Only the subset 1-ims_metadata.py and 2-image_processor.py actually read is
-    populated — DataSetInfo/{Image,Channel i,TimeInfo} and a single
-    ResolutionLevel 0. Imaris's own multi-resolution pyramid is ignored by the
+    Only the subset the pipeline actually reads is populated — DataSetInfo/{Image,
+    Channel i,TimeInfo}, a single ResolutionLevel 0, and the Scene8 objects the
+    tracking step looks for. Imaris's own multi-resolution pyramid is ignored by the
     pipeline (it builds its own LODs), so synthesising it would be dead weight.
     """
     import h5py
@@ -318,6 +410,8 @@ def write_ims(records, path: Path):
                 # every release artifact; synthetic data compresses ~10x.
                 ch.create_dataset("Data", data=data, chunks=(min(16, DEPTH), 32, 32),
                                   compression="gzip", compression_opts=6)
+
+        _write_scene8(f, records)
     return path
 
 

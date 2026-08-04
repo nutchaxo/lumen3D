@@ -13,7 +13,7 @@ from pathlib import Path
 import numpy as np
 from PIL import Image
 
-__version__ = "0.15.0"
+__version__ = "0.16.0"
 
 # ── Paths ──────────────────────────────────────────────────────────────────────
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -199,6 +199,55 @@ def run_step(script_name: str, *args) -> None:
     run_script(SCRIPT_DIR / script_name, *args)
 
 
+def attach_tracking(ims_path: Path, dataset_output_dir: Path, temp_dir: Path,
+                    dataset_name: str, mode: str) -> None:
+    """Find this volume's cell-tracking analysis and attach it to the dataset.
+
+    The analysis reaches us in one of three shapes — a .imaris_track container, the Imaris
+    objects still inside the .ims, or the statistics workbook exported beside it — so the
+    volume is not the operator's problem: whichever exists is found and normalised. A
+    synthesised container is written to the temp directory, never to the dataset, so the
+    published tree only ever receives what the importer puts there.
+
+    A failure here never fails the volume: the dataset is already complete and usable, the
+    tracking is an overlay on top of it.
+    """
+    if mode == "off":
+        return
+    # The standalone .bat launcher embeds the volume steps only; saying nothing there is
+    # correct, while a missing module in a build that does ship it is worth reporting.
+    if not (SCRIPT_DIR / "tracking_sources.py").exists():
+        return
+    try:
+        import tracking_sources
+    except ImportError as exc:
+        print(_warn(f"   [!] tracking ignore : {exc}"))
+        return
+
+    try:
+        if mode == "auto":
+            resolved = tracking_sources.resolve(ims_path, temp_dir, dataset_name)
+            if resolved is None:
+                return
+            container, _source, _glb = resolved
+        else:
+            source_path = Path(mode)
+            if not source_path.is_file():
+                print(_warn(f"   [!] tracking introuvable : {source_path}"))
+                return
+            print(_dim(f"   [TRACKING] source imposee : {source_path.name}"))
+            container = tracking_sources.materialize(source_path, temp_dir, dataset_name)
+    except Exception as exc:
+        print(_warn(f"   [!] tracking non exploitable : {exc}"))
+        return
+
+    try:
+        run_step("5-tracking_importer.py", str(container), str(dataset_output_dir))
+    except subprocess.CalledProcessError as exc:
+        print(_warn(f"   [!] rattachement du tracking echoue (code {exc.returncode}) — "
+                    f"le volume reste utilisable"))
+
+
 DOWNLOAD_SCRIPT_NAME = "build_download_bundles.py"
 
 def _resolve_download_script():
@@ -211,7 +260,7 @@ def _resolve_download_script():
     return None
 
 def process_ims_file(ims_path: Path, output_root: Path, idx: int = 0, total: int = 0,
-                     with_downloads: bool = False) -> None:
+                     with_downloads: bool = False, tracking: str = "auto") -> None:
     dataset_name = ims_path.stem
     counter = f"[{idx}/{total}] " if total else ""
     print()
@@ -259,7 +308,12 @@ def process_ims_file(ims_path: Path, output_root: Path, idx: int = 0, total: int
         # Step 5: Catalog metadata (dataset.json / metadata.json)
         run_step("4-catalog_generator.py", str(temp_dir), str(dataset_output_dir))
 
-        # Step 6 (optional): download/ bundle — archive, original .ims, OME-TIFF,
+        # Step 6: cell tracking, when the acquisition has one. Only a timelapse can carry
+        # trajectories, and the step needs the metadata.json step 4 just wrote.
+        if n_timepoints > 1:
+            attach_tracking(ims_path, dataset_output_dir, temp_dir, dataset_name, tracking)
+
+        # Step 7 (optional): download/ bundle — archive, original .ims, OME-TIFF,
         # per-channel MIPs, README. Runs after step 4 so metadata.json exists. The
         # source .ims is the one being processed, so point the tool at its folder.
         if with_downloads:
@@ -293,6 +347,11 @@ def main():
     parser.add_argument("--with-downloads", action="store_true",
                         help="After each dataset, also build its download/ bundle "
                              "(web archive, original .ims, OME-TIFF, per-channel MIP, README).")
+    parser.add_argument("--tracking", default="auto", metavar="auto|off|FILE",
+                        help="Cell tracking for timelapse datasets. 'auto' (default) looks for "
+                             "a .imaris_track beside the volume, then the Imaris objects inside "
+                             "the .ims itself, then the exported .xls/.xlsx statistics. 'off' "
+                             "skips it. A path forces that file for every dataset processed.")
     args = parser.parse_args()
 
     input_dir = Path(args.input)
@@ -318,6 +377,7 @@ def main():
     print(_dim(f"  destination : {output_dir}"))
     print(_dim(f"  datasets    : {len(ims_files)}   (filtre: {args.only or '*'})"))
     print(_dim(f"  download/   : {'oui' if args.with_downloads else 'non'}"))
+    print(_dim(f"  tracking    : {args.tracking}"))
 
     # Graceful Ctrl+C: confirm with the user, then tear the running step down cleanly.
     _install_sigint_handler()
@@ -327,7 +387,7 @@ def main():
     for i, ims_file in enumerate(ims_files):
         try:
             process_ims_file(ims_file, output_dir, i + 1, len(ims_files),
-                             with_downloads=args.with_downloads)
+                             with_downloads=args.with_downloads, tracking=args.tracking)
         except KeyboardInterrupt:
             interrupted = True
             break

@@ -70,6 +70,7 @@ PIPELINE_SCRIPTS = (
     "3-chunk_packer.py",
     "4-catalog_generator.py",
     "5-tracking_importer.py",
+    "tracking_sources.py",
 )
 
 # Optional extra invoked by --with-downloads. run_preprocess.py accepts it either
@@ -87,9 +88,10 @@ TRACKING_SCRIPTS = (
     "surface_reconstruction.py",
 )
 
-# Import name -> pip requirement, for BOTH pipelines. openpyxl and orjson are the
-# ones missing from preprocess/requirements.txt: pandas needs openpyxl to read the
-# Imaris .xlsx, and export_html.py imports orjson unconditionally.
+# Import name -> pip requirement, for BOTH pipelines. Four of these are absent from
+# preprocess/requirements.txt because only the tracking side needs them: pandas (the
+# analysis dataframes), openpyxl and xlrd (the .xlsx and the legacy .xls Imaris writes
+# when you export statistics), and orjson (export_html.py imports it unconditionally).
 DEPENDENCIES = (
     ("numpy", "numpy"),
     ("PIL", "Pillow"),
@@ -98,6 +100,7 @@ DEPENDENCIES = (
     ("tqdm", "tqdm"),
     ("pandas", "pandas"),
     ("openpyxl", "openpyxl"),
+    ("xlrd", "xlrd"),
     ("orjson", "orjson"),
     ("tifffile", "tifffile"),
 )

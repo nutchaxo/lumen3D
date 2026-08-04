@@ -38,6 +38,7 @@ Cinq scripts s'enchaînent. Chacun fait une chose et la passe au suivant :
 | — | `build_thumbnail()` | **Fabrique la vignette** (une projection colorée pour l'aperçu dans le catalogue). |
 | 3 | `3-chunk_packer.py` | **Découpe en briques 64³**, jette les briques vides, compresse en WebP, et regroupe tout en gros paquets. |
 | 4 | `4-catalog_generator.py` | **Écrit les fiches finales** (`metadata.json`, histogrammes) que la plateforme lit pour afficher et calibrer le dataset. |
+| 5 | `tracking_sources.py` + `5-tracking_importer.py` | **Rattache le suivi cellulaire** d'un timelapse, s'il existe : trajectoires, lignage (mitoses/fusions) et transformation de stabilisation. Automatique — voir [§2.4](#24-le-suivi-cellulaire-tracking--rattachement-automatique). |
 
 ```
   <dataset>.ims  (Imaris HDF5, uint16, multi-Go)
@@ -64,6 +65,13 @@ Cinq scripts s'enchaînent. Chacun fait une chose et la passe au suivant :
  │ 4-catalog_generator. │  histogrammes (injectés dans manifest) + metadata.json
  └──────────┬───────────┘
             ▼  fixed/<nom>/metadata.json   (+ histogrammes dans bricks/manifest.json)
+            │
+            │  (timelapses uniquement, si une analyse de tracking existe)
+ ┌──────────────────────┐
+ │ tracking_sources.py  │  .imaris_track  |  objets Imaris du .ims  |  .xls/.xlsx
+ │ 5-tracking_importer  │  -> trajectoires + lignage + stabilisation
+ └──────────┬───────────┘
+            ▼  live/<nom>/{tracks.json(.gz), model.glb} + blocs "tracking"/"registration"
 
   Le dossier temp/ (.temp_preprocess_<nom>) est supprimé en fin de traitement.
   catalog.json racine est ensuite régénéré dynamiquement par dev_server.py (scan des metadata.json).
@@ -179,7 +187,7 @@ run_preprocess.bat --help
 Pour scripter, automatiser, ou tourner sous Linux/macOS. C'est exactement ce que le `.bat` appelle en interne :
 
 ```bash
-python run_preprocess.py --input <dossier_des_ims> --output <DATA_WEB> [--only "<glob>"] [--with-downloads]
+python run_preprocess.py --input <dossier_des_ims> --output <DATA_WEB> [--only "<glob>"] [--with-downloads] [--tracking auto|off|FICHIER]
 ```
 
 | Argument | Obligatoire | Rôle |
@@ -188,6 +196,7 @@ python run_preprocess.py --input <dossier_des_ims> --output <DATA_WEB> [--only "
 | `--output` | oui | Racine `DATA_WEB` de la plateforme. La sortie ira dans `<output>/fixed/<nom_du_ims_sans_extension>/`. |
 | `--only`   | non | Filtre `fnmatch` sur le **nom de fichier** (ex. `"*Em7*"` ou le nom exact). Sans lui : tous les `.ims`. |
 | `--with-downloads` | non | Après chaque dataset, construit aussi son dossier `download/` via `tools/build_download_bundles.py` (archive `_web.zip`, `.ims` original en hardlink, OME‑TIFF calibré, MIP PNG par canal, `README.txt`). Étape lourde : relit le `.ims`. Nécessite `tifffile`. |
+| `--tracking` | non | `auto` (défaut) cherche l'analyse de suivi cellulaire des timelapses, `off` la saute, un **chemin** impose ce fichier. Voir [§2.4](#24-le-suivi-cellulaire-tracking--rattachement-automatique). |
 
 Exemple réel (1 dataset) :
 
@@ -205,7 +214,7 @@ python run_preprocess.py \
 * Le **nom du dataset** = `Path(ims).stem` (nom du fichier sans `.ims`).
 * `temp_dir = <output>/.temp_preprocess_<nom>` : recréé à neuf à chaque run, **supprimé en fin de traitement** (même en cas d'erreur).
 * `dataset_output_dir = <output>/fixed/<nom>` : si un `bricks/` existe déjà, il est supprimé avant de régénérer.
-* Ordre des étapes : **1 → 2 → vignette → 3 → 4**, puis — **uniquement si `--with-downloads`** — `build_download_bundles.py` **après l'étape 4** (pour que `metadata.json` existe déjà). Chaque étape tourne dans un **sous‑processus isolé** (`subprocess.Popen`, nouveau groupe de processus : `CREATE_NEW_PROCESS_GROUP` Windows / `start_new_session` POSIX).
+* Ordre des étapes : **1 → 2 → vignette → 3 → 4**, puis le **tracking** (uniquement si `n_timepoints > 1`, [§2.4](#24-le-suivi-cellulaire-tracking--rattachement-automatique)), puis — **uniquement si `--with-downloads`** — `build_download_bundles.py`. Les deux dernières viennent **après l'étape 4** (pour que `metadata.json` existe déjà). Chaque étape tourne dans un **sous‑processus isolé** (`subprocess.Popen`, nouveau groupe de processus : `CREATE_NEW_PROCESS_GROUP` Windows / `start_new_session` POSIX).
 * **Arrêt propre sur `Ctrl+C`** : l'orchestrateur intercepte `SIGINT` et **demande confirmation**. *Refus* → le traitement **reprend** sans perte (l'étape en cours n'a pas reçu le signal) ; *confirmation* → l'étape **et tout son pool de workers** sont arrêtés (`taskkill /F /T` / `killpg`), les `.temp_preprocess_*` nettoyés, sortie en code **130**.
 
 ### 2.3. Régénérer le lanceur (`build_launcher.py`)
@@ -219,6 +228,38 @@ python build_launcher.py
 * [`build_launcher.py`](build_launcher.py) lit le template [`launcher_template.bat.in`](launcher_template.bat.in), y injecte la configuration (la version est lue dans `run_preprocess.py:__version__`, la version de Python embarquable, la liste des scripts) et **ré‑embarque** les **6 scripts** en base64 (blocs `#<index>#…`, 76 caractères/ligne).
 * L'**ordre d'embarquement est figé** (`run_preprocess.py` = index 0, puis `1-`→`4-` en index 1‑4, et `build_download_bundles.py` en **index 5**, tiré de `../tools/`) : le `.bat` extrait le bloc *N* pour le *N*ᵉ nom de sa liste interne.
 * Sortie en **ASCII + CRLF** (ce que `cmd.exe` préfère).
+* Ce lanceur autonome n'embarque **que la chaîne volume** : le rattachement du tracking ([§2.4](#24-le-suivi-cellulaire-tracking--rattachement-automatique)) n'y est pas disponible et est silencieusement ignoré. Utiliser le pack téléchargeable (`RUN.bat`) pour l'avoir.
+
+### 2.4. Le suivi cellulaire (tracking) — rattachement automatique
+
+Un `.ims` de timelapse s'accompagne presque toujours d'une analyse de suivi cellulaire faite dans Imaris. Elle arrive sous **trois formes** selon ce que l'opérateur a exporté, et le pipeline prend celle qui est là — dans cet ordre de préférence :
+
+| # | Source | D'où elle vient |
+|---|---|---|
+| 1 | `<nom>.imaris_track` **à côté du `.ims`** (ou dans un dossier `<nom>/`) | Sortie du pipeline de tracking (`tracking/SCRIPTS/Analysis.py`). La plus riche : analyse finie, surfaces `<nom>.glb` comprises. |
+| 2 | **le `.ims` lui‑même** | Imaris range ses objets Spots/Tracks dans `Scene8/Content`. Rien à poser à côté du volume, rien à ne pas perdre. |
+| 3 | `<nom>.xls` / `<nom>.xlsx` **à côté du `.ims`** | Le classeur « export statistics on all tabs » d'Imaris. Sa feuille `Position` porte une ligne par spot et par timepoint. |
+
+Les sources 2 et 3 sont des **observations brutes** : positions, appartenance aux pistes et classification, mais ni identité cellulaire à travers une division, ni lignage, ni stabilisation. [`tracking_sources.py`](tracking_sources.py) les normalise en une table plate puis appelle **le code d'analyse du labo lui‑même** (`Analysis.py` : `CellIDAssigner`, `stabilize_coordinates`) — un dataset doit donner le même résultat qu'il passe par le pipeline de tracking ou par ce raccourci. Le conteneur reconstitué est écrit dans le dossier temporaire, jamais dans `DATA_WEB`.
+
+Détails qui comptent :
+
+* **Base de temps** — Imaris numérote les frames à partir de **1** dans tous ses exports, mais à partir de **0** dans `Scene8`. La lecture de `Scene8` ajoute 1, ce qui aligne les trois sources sur la convention attendue par `5-tracking_importer.py --timepoint-offset -1`.
+* **Classification** — le nom de la colonne (ou du groupe de labels) est choisi par le biologiste : `Region`, `Set 1`, `Point Locations`, `Endothelial cells`… On prend donc, dans le classeur, la **seule colonne que ce n'est pas Imaris qui a écrite**, et dans `Scene8`, le groupe de labels qui couvre le plus d'objets — en préférant celui appliqué aux spots à celui appliqué aux pistes. Si `Scene8` n'a **aucune** classification mais qu'un classeur voisin en a une, elle est reprise en appariant les **identifiants d'objets** (les ids Imaris désignent les mêmes spots dans les deux fichiers).
+* **Un échec ne fait jamais échouer le volume** : le dataset est déjà complet et exploitable, le tracking est une surcouche. Le message dit ce qui manque.
+* **Dépendances** : `pandas`, plus `xlrd` (`.xls`) ou `openpyxl` (`.xlsx`), plus `orjson`. Le pack téléchargeable les installe ; un `pip install -r requirements.txt` **non**, elles y sont commentées. Un `.imaris_track` déjà prêt n'en demande aucune.
+
+Rattacher à la main (dataset déjà traité, ou pour imposer une analyse précise) — les trois formes sont acceptées :
+
+```bash
+python 5-tracking_importer.py <fichier.imaris_track|fichier.ims|fichier.xls> DATA_WEB/live/<nom>
+```
+
+Voir ce qui serait détecté, sans rien écrire :
+
+```bash
+python tracking_sources.py <fichier.ims> --list
+```
 
 ---
 
@@ -262,12 +303,14 @@ Détails importants :
 | [`run_preprocess.bat`](run_preprocess.bat) | **Lanceur autonome** Windows (scripts embarqués, Python local au besoin, install deps, saisie guidée). **Généré — ne pas éditer.** | double‑clic | extrait + appelle `run_preprocess.py` |
 | [`build_launcher.py`](build_launcher.py) | **Générateur** du `.bat` (ré‑embarque les scripts en base64, injecte la version). | les 5 `.py` + `../tools/build_download_bundles.py` + le template | `run_preprocess.bat` |
 | [`launcher_template.bat.in`](launcher_template.bat.in) | Template du lanceur (logique batch + emplacements `@@@…@@@`). | — | — |
-| [`run_preprocess.py`](run_preprocess.py) | Orchestrateur + vignette. `__version__` du pipeline. | `--input`, `--output`, `--only`, `--with-downloads` | appelle 1→4 (+ download optionnel) ; écrit `thumbnail.webp` |
+| [`run_preprocess.py`](run_preprocess.py) | Orchestrateur + vignette. `__version__` du pipeline. | `--input`, `--output`, `--only`, `--with-downloads`, `--tracking` | appelle 1→4 (+ tracking et download optionnels) ; écrit `thumbnail.webp` |
 | [`requirements.txt`](requirements.txt) | Dépendances Python épinglées (pour `pip install -r`, usage manuel). | — | — |
 | [`1-ims_metadata.py`](1-ims_metadata.py) | Lit les attributs HDF5. | `<ims>`, `<out.json>` | `meta.json` |
 | [`2-image_processor.py`](2-image_processor.py) | Débruitage + normalisation 8‑bits + pyramide LOD. | `<ims>`, `<meta.json>`, `<temp>` | `temp/t*_c*_lod*.bin`, `temp/processing_meta.json` |
 | [`3-chunk_packer.py`](3-chunk_packer.py) | Découpe 64³, mosaïque, WebP lossless, packs. | `<temp>`, `<out_dir>` | `out/bricks/manifest.json`, `out/bricks/lod*/c*/pack_*.bin` |
 | [`4-catalog_generator.py`](4-catalog_generator.py) | Histogrammes + `metadata.json`. | `<temp>`, `<out_dir>` | `out/metadata.json` (+ histogrammes injectés dans `manifest.json`) |
+| [`tracking_sources.py`](tracking_sources.py) | Détecte et normalise l'analyse de tracking d'un volume ([§2.4](#24-le-suivi-cellulaire-tracking--rattachement-automatique)). Bibliothèque, plus CLI de diagnostic. | `<ims\|xls\|imaris_track>`, `--list`, `--out` | un conteneur `.imaris_track` (dans `temp/`) |
+| [`5-tracking_importer.py`](5-tracking_importer.py) | Écrit le tracking dans le dataset et y injecte la transformation de stabilisation. | `<source>`, `<dataset_dir>`, `--glb`, `--timepoint-offset` | `out/tracks.json(.gz)`, `out/model.glb`, blocs `tracking`/`registration` dans `metadata.json` |
 | [`../tools/build_download_bundles.py`](../tools/build_download_bundles.py) | **Optionnel** (`--with-downloads`) — construit le dossier `download/` d'un dataset. Embarqué à l'**index 5** du lanceur ; résolu par `run_preprocess.py` dans `../tools/` ou à côté de lui. | `--data-web`, `--raw-dir`, `--datasets` | `fixed/<nom>/download/` (`_web.zip`, `.ims`, OME‑TIFF, MIP, `README.txt`) |
 | [`changelog/`](changelog/) | Historique versionné de l'outil. | — | — |
 

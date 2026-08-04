@@ -377,7 +377,7 @@ echo.
 rem Le '>' doit etre echappe : cmd le lit comme une redirection AVANT l'expansion
 rem retardee, la cible devient "output\" et la ligne meurt en "syntaxe du nom de
 rem fichier incorrecte" au lieu de s'afficher.
-echo      !ACC![1]!R! Preprocessing de volumes Imaris  !DIM!(.ims  -^>  output\)!R!
+echo      !ACC![1]!R! Preprocessing de volumes Imaris  !DIM!(.ims  -^>  output\, tracking inclus)!R!
 echo      !ACC![2]!R! Analyse de tracking Imaris       !DIM!(Excel -^>  tracking\OUTPUT\)!R!
 echo      !ACC![3]!R! Attacher un tracking a un dataset deja traite
 echo      !ACC![4]!R! Verifier l'environnement seulement
@@ -426,6 +426,7 @@ if "!_cnt!"=="0" (
 ) else (
     call :info "!_cnt! fichier(s) .ims detecte(s)."
 )
+call :info "Le tracking des timelapses est rattache automatiquement (.imaris_track, objets Imaris du .ims, ou .xls/.xlsx a cote)."
 
 set "_ans="
 set /p "_ans=   Generer aussi les archives de telechargement (plus long) ? [o/N] : "
@@ -469,10 +470,13 @@ exit /b 0
 
 
 rem ---- [3] Rattachement d'un tracking a un dataset ---------------------------
+rem  Utile pour un dataset deja traite, ou pour imposer une analyse precise :
+rem  l'option [1] fait ce rattachement toute seule pour les nouveaux volumes.
 :run_attach
 echo.
+call :info "Accepte un .imaris_track, un .ims (objets Imaris embarques) ou un .xls/.xlsx de statistiques."
 set "_trk="
-set /p "_trk=   Chemin du fichier .imaris_track : "
+set /p "_trk=   Chemin du fichier de tracking : "
 set "_trk=!_trk:"=!"
 if not exist "!_trk!" (
     call :errmsg "Fichier introuvable : !_trk!"

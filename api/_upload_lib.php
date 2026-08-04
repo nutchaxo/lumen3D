@@ -748,20 +748,36 @@ function lumen_up_validate_dataset($type, $folder): array {
 }
 
 /** The manifest's brickToPack index is the authority: every pack it references
- *  must exist and be long enough to contain the slice claimed of it. */
+ *  must exist and be long enough to contain the slice claimed of it.
+ *
+ *  A brickToPack url is relative to the folder its OWN timepoint is mounted from
+ *  — js/core/brick-loader.js resolves it against `.../bricks/t007`, not against
+ *  `bricks/`. A timelapse is therefore walked frame by frame, prefixing each index
+ *  with that frame's `path`; checking the root index bare would hunt for a fixed
+ *  dataset's layout inside a timelapse and report every pack missing. The root
+ *  index is a copy of the first frame's, so it only serves a manifest that
+ *  declares no timepoints at all. Twin of upload_staging.py:_cross_check_packs. */
 function lumen_up_cross_check_packs(string $dir, array $manifest): array {
-    $index = $manifest['brickTransport']['brickToPack'] ?? null;
-    if (!is_array($index)) return [];
     $needed = [];
-    foreach ($index as $entry) {
-        if (!is_array($entry)) continue;
-        $url = $entry['url'] ?? null;
-        if (!is_string($url)) continue;
-        $rel = lumen_up_safe_rel($url);
-        if ($rel === null) return ['manifest_unsafe_pack_url'];
-        $end = (int)($entry['offset'] ?? 0) + (int)($entry['length'] ?? 0);
-        if ($end > ($needed[$rel] ?? 0)) $needed[$rel] = $end;
+    $timepoints = $manifest['timepoints'] ?? null;
+
+    if (is_array($timepoints) && $timepoints) {
+        foreach ($timepoints as $key => $row) {
+            if (!is_array($row)) continue;
+            $path = $row['path'] ?? null;
+            $prefix = (is_string($path) && $path !== '') ? $path : (string)$key;
+            // No fallback to the root index: it is the FIRST frame's, and every
+            // frame packs its own bricks at its own offsets, so reusing it would
+            // invent truncations. A frame that indexes nothing is asserted nothing
+            // about — its files are still covered by their own hashes.
+            $unsafe = lumen_up_collect_pack_extents($row['brickTransport'] ?? null, $needed, $prefix);
+            if ($unsafe) return $unsafe;
+        }
+    } else {
+        $unsafe = lumen_up_collect_pack_extents($manifest['brickTransport'] ?? null, $needed, null);
+        if ($unsafe) return $unsafe;
     }
+
     $errors = [];
     foreach ($needed as $rel => $end) {
         $pack = "$dir/bricks/$rel";
@@ -770,6 +786,25 @@ function lumen_up_cross_check_packs(string $dir, array $manifest): array {
         if (count($errors) >= 20) break;
     }
     return $errors;
+}
+
+/** Fold one brickToPack index into {pack path: highest byte claimed of it}.
+ *  Returns a non-empty array only to abort on an unsafe url; the extents it
+ *  gathers are accumulated into $needed by reference. */
+function lumen_up_collect_pack_extents($transport, array &$needed, ?string $prefix): array {
+    if (!is_array($transport)) return [];
+    $index = $transport['brickToPack'] ?? null;
+    if (!is_array($index)) return [];
+    foreach ($index as $entry) {
+        if (!is_array($entry)) continue;
+        $url = $entry['url'] ?? null;
+        if (!is_string($url)) continue;
+        $rel = lumen_up_safe_rel($prefix !== null ? "$prefix/$url" : $url);
+        if ($rel === null) return ['manifest_unsafe_pack_url'];
+        $end = (int)($entry['offset'] ?? 0) + (int)($entry['length'] ?? 0);
+        if ($end > ($needed[$rel] ?? 0)) $needed[$rel] = $end;
+    }
+    return [];
 }
 
 /** Every file physically present that the allowlist would refuse. */

@@ -19,7 +19,7 @@ rem #  GENERE par tools/build_pipeline_bundle.py -- NE PAS editer a la main.
 rem #############################################################################
 
 set "BUNDLE_VERSION=@@@BUNDLE_VERSION@@@"
-set "PP_VERSION=@@@PP_VERSION@@@"
+set "PLATFORM_VERSION=@@@PLATFORM_VERSION@@@"
 set "FLAVOR=@@@FLAVOR@@@"
 set "PY_VERSION=@@@PY_VERSION@@@"
 set "REQUIRED_DEPS=@@@DEPS@@@"

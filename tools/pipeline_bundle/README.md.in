@@ -1,6 +1,6 @@
 # @@@BRAND@@@ — Pack de traitement des données
 
-Pack **v@@@BUNDLE_VERSION@@@** (édition *@@@FLAVOR@@@*) — pipeline de preprocessing v@@@PP_VERSION@@@ — généré le @@@BUILD_DATE@@@.
+Pack **v@@@BUNDLE_VERSION@@@** (édition *@@@FLAVOR@@@*) — livré avec la plateforme web v@@@PLATFORM_VERSION@@@ — généré le @@@BUILD_DATE@@@.
 
 Ce dossier contient tout ce qu'il faut pour transformer les sorties brutes du
 microscope en jeux de données exploitables par la plateforme web, sur un PC

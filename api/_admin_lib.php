@@ -462,6 +462,44 @@ const PIPELINE_EDITIONS = [
 
 function admin_pipeline_dir(): string { return admin_root() . '/assets/pipeline'; }
 
+/** The VERSION.json a pack carries (twin of dev_server.py:_pipeline_pack_doc).
+ *  Static-cached on (path, mtime, size): PHP is per-request, but a single admin
+ *  request opens the same archive more than once. */
+function admin_pipeline_pack_doc(string $pack): array {
+    static $cache = [];
+    $key = $pack . '|' . (int)@filemtime($pack) . '|' . (int)@filesize($pack);
+    if (isset($cache[$key])) return $cache[$key];
+    $doc = [];
+    if (class_exists('ZipArchive')) {
+        $zip = new ZipArchive();
+        if ($zip->open($pack) === true) {
+            $raw = false;
+            for ($i = 0; $i < $zip->numFiles; $i++) {
+                $n = $zip->statIndex($i)['name'] ?? '';
+                if ($n === 'VERSION.json' || substr($n, -13) === '/VERSION.json') {
+                    $raw = $zip->getFromIndex($i);
+                    break;
+                }
+            }
+            $zip->close();
+            $parsed = is_string($raw) ? json_decode($raw, true) : null;
+            if (is_array($parsed)) $doc = $parsed;
+        }
+    }
+    $cache[$key] = $doc;
+    return $doc;
+}
+
+/** The pack to serve for an edition — the current one when several coexist (twin
+ *  of dev_server.py:_pipeline_local).
+ *
+ *  They do coexist precisely HERE: admin_update_apply_php copies a release over
+ *  the tree without removing what the previous one left behind. The filename
+ *  cannot arbitrate, because since web v1.42.0 a pack is named after the PIPELINE
+ *  version it contains, which does not move in step with the platform version — a
+ *  pack named 0.15.0 supersedes one named 1.41.0. So the pack declaring THIS
+ *  install's platform version wins, then the most recently written one, then the
+ *  highest version in the name. */
 function admin_pipeline_local(string $edition): ?string {
     $prefix = PIPELINE_EDITIONS[$edition] ?? null;
     if ($prefix === null) return null;
@@ -469,41 +507,31 @@ function admin_pipeline_local(string $edition): ?string {
     if (!is_dir($dir)) return null;
     $found = glob($dir . '/' . $prefix . '*.zip') ?: [];
     if (!$found) return null;
-    usort($found, function ($a, $b) {
-        return admin_version_tuple(basename($a, '.zip')) <=> admin_version_tuple(basename($b, '.zip'));
-    });
-    return end($found);
+    if (count($found) === 1) return $found[0];
+
+    $here = admin_max_version(changelog_dir());
+    $best = null; $bestRank = null;
+    foreach ($found as $path) {
+        $declared = admin_pipeline_pack_doc($path)['platformVersion'] ?? null;
+        $matches = $here !== null && $declared === $here;
+        $rank = [$matches ? 1 : 0, (int)@filemtime($path), admin_version_tuple(basename($path, '.zip'))];
+        if ($bestRank === null || $rank > $bestRank) { $bestRank = $rank; $best = $path; }
+    }
+    return $best;
 }
 
-/** Versions carried BY the local pack, read from the VERSION.json inside it (twin
- *  of dev_server.py:_pipeline_pack_versions). The filename only encodes the
- *  platform version, so the pipeline version has to be read from the archive.
- *  Static-cached: PHP is per-request, but the version is asked for more than once
- *  within a single admin request. */
+/** Versions carried BY the local pack (twin of dev_server.py:_pipeline_pack_versions).
+ *  The pack's own version is the pipeline's; the platform version recorded beside
+ *  it is what lets admin_pipeline_local tell a current pack from a leftover. */
 function admin_pipeline_pack_versions(): array {
-    static $cache = null;
-    if ($cache !== null) return $cache;
-    $cache = [];
     $pack = admin_pipeline_local('leger') ?? admin_pipeline_local('complet');
-    if ($pack === null || !class_exists('ZipArchive')) return $cache;
-    $zip = new ZipArchive();
-    if ($zip->open($pack) !== true) return $cache;
-    $raw = $zip->getFromName(basename($pack, '.zip') . '/VERSION.json');
-    if ($raw === false) {
-        for ($i = 0; $i < $zip->numFiles; $i++) {
-            $n = $zip->statIndex($i)['name'] ?? '';
-            if ($n === 'VERSION.json' || substr($n, -13) === '/VERSION.json') {
-                $raw = $zip->getFromIndex($i);
-                break;
-            }
-        }
-    }
-    $zip->close();
-    $doc = is_string($raw) ? json_decode($raw, true) : null;
-    if (is_array($doc)) {
-        $cache = ['pack' => $doc['bundleVersion'] ?? null, 'preprocess' => $doc['preprocessVersion'] ?? null];
-    }
-    return $cache;
+    if ($pack === null) return [];
+    $doc = admin_pipeline_pack_doc($pack);
+    return [
+        'pack'       => $doc['bundleVersion'] ?? null,
+        'preprocess' => $doc['preprocessVersion'] ?? null,
+        'platform'   => $doc['platformVersion'] ?? null,
+    ];
 }
 
 function admin_pipeline_github_asset(): array {
@@ -677,10 +705,14 @@ function admin_pipeline_info(): array {
     $lite = admin_pipeline_local('leger');
     $full = admin_pipeline_local('complet');
 
+    // "preprocess" IS the pack's version (CLAUDE.md §1.5: the pack is the
+    // preprocessing tool) and is what its filename now carries; "platform" is the
+    // web release it was built alongside, absent from packs predating that.
     $info = [
         'versions' => [
             'web'        => admin_max_version(changelog_dir()),
             'preprocess' => admin_preprocess_version(),
+            'platform'   => admin_pipeline_pack_versions()['platform'] ?? null,
         ],
         'leger'   => ['available' => false],
         'complet' => ['available' => false],

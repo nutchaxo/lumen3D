@@ -45,6 +45,10 @@ jobs:
           node tests/test_plugin_sandbox.js
           python tests/test_update_pivot.py
           PYTHONUTF8=1 python tests/test_update_reconcile.py
+      - name: Pipeline pack selection (py + php parity)
+        run: |
+          python tests/test_pipeline_pack.py
+          php tests/test_pipeline_pack.php
 
       # ── Security invariants (fail the build on regression) ──
       - name: Sandbox must never grant allow-same-origin (INV-6)

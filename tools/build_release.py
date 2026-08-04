@@ -139,6 +139,9 @@ def build_pipeline_pack(version):
     Python runtime (~70 MB) and is attached to the GitHub release separately (see
     tools/build_pipeline_bundle.py --full). Stale packs for other versions are
     dropped so a release never carries two.
+
+    The pack is named after the PIPELINE version, not `version` (the platform's) —
+    that is passed only so the pack records which release it shipped with.
     """
     import subprocess
 
@@ -149,16 +152,17 @@ def build_pipeline_pack(version):
 
     builder = REPO_ROOT / "tools" / "build_pipeline_bundle.py"
     proc = subprocess.run([sys.executable, str(builder), "--out", str(out_dir),
-                           "--version", version],
+                           "--platform-version", version],
                           capture_output=True, text=True, cwd=str(REPO_ROOT))
     if proc.returncode != 0:
         print("ERROR: pipeline pack build failed")
         print(proc.stdout + proc.stderr)
         return False
 
-    built = sorted(out_dir.glob(f"lumen3d-pipeline-leger-{version}.zip"))
-    if not built:
-        print(f"ERROR: pipeline pack build produced no lumen3d-pipeline-leger-{version}.zip")
+    built = sorted(out_dir.glob("lumen3d-pipeline-leger-*.zip"))
+    if len(built) != 1:
+        print(f"ERROR: pipeline pack build left {len(built)} light pack(s) in "
+              f"assets/pipeline/, expected exactly 1")
         return False
     print(f"OK: {built[0].relative_to(REPO_ROOT).as_posix()} "
           f"({built[0].stat().st_size} bytes)")

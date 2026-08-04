@@ -210,7 +210,7 @@ Cargar un volumen grande tarda unos segundos — es normal, los datos ocupan var
 |---|---|
 | **1** | **Guardar** — registra sus cambios. Atajo: **Ctrl + S**. El botón **↺ Restablecer** descarta los cambios sin guardar. |
 | **2** | **Visibilidad** — el interruptor decide si el conjunto aparece en el explorador público. |
-| **3** | **Nombre de visualización** — el nombre que verán los visitantes. |
+| **3** | **Nombre para mostrar** — el nombre que verán los visitantes. |
 | **4** | **Calibración física** — el tamaño real de un vóxel en micrómetros. |
 | **5** | **Visibilidad (Exposición)** — la luminosidad por defecto al abrir. |
 | **6** | **Orientación 3D** — véase §3.5. |
@@ -222,7 +222,7 @@ El interruptor de arriba. `Visible` = todo el mundo puede acceder desde el explo
 
 **Identificación**
 
-- **Nombre de visualización** — sustituya el nombre técnico de la carpeta por algo legible. Es el nombre que aparece en todo el sitio público.
+- **Nombre para mostrar** — sustituya el nombre técnico de la carpeta por algo legible. Es el nombre que aparece en todo el sitio público.
 - **Estadio** y **Espécimen** — las dos etiquetas que sirven para filtrar en el explorador. Se rellenan automáticamente a partir del nombre de la carpeta; corríjalas si la detección se ha equivocado.
 - **Descripción** — texto libre mostrado en la ficha pública. Escriba lo que ayudaría a un colega: marcadores usados, condiciones, particularidades.
 - **Carpeta de origen** y **Dimensiones** — en gris, **no modificables**. Se leen de los archivos.
@@ -360,7 +360,7 @@ Ampliación de una fila:
 | **2** | Su **nivel de confianza** (véase §5.4). |
 | **3** | Versión · autor · carpeta · **huella** del código. |
 | **4** | El interruptor que **activa o desactiva** el plugin. |
-| **5** | **Revocar** — retira la autorización de ejecución (véase §5.5). Solo aparece en un plugin que **usted** ha aprobado (etiqueta `aprobado` o `aislado`): un plugin `integrado` no tiene ese botón. |
+| **5** | **Revocar** — retira la autorización de ejecución (véase §5.5). Solo aparece en un plugin que **usted** ha aprobado (etiqueta `aprobado` o `sandbox`): un plugin `integrado` no tiene ese botón. |
 
 ## 5.3. Activar o desactivar un plugin
 
@@ -370,7 +370,7 @@ Desactivar un plugin no lo borra: permanece en el servidor y puede volver a acti
 
 > ⚠️ **El interruptor no siempre está.** Un plugin **no fiable** no lo tiene en absoluto — antes hay que aprobarlo (§5.5). Un plugin **protegido** (el último modo de renderizado activo) o **incompatible** sí lo tiene, pero atenuado.
 
-> 🔒 **Existe una única protección: siempre debe quedar al menos un modo de renderizado activo.** Si intenta desactivar el último, el panel se niega y muestra «Debe permanecer activo al menos un modo de renderizado». Sin modo de renderizado, el visor no tendría con qué dibujar el volumen.
+> 🔒 **Existe una única protección: siempre debe quedar al menos un modo de renderizado activo.** Si intenta desactivar el último, el panel se niega y muestra «Al menos un modo de renderizado debe permanecer activo». Sin modo de renderizado, el visor no tendría con qué dibujar el volumen.
 
 ## 5.4. Los niveles de confianza — por qué existen
 
@@ -384,7 +384,7 @@ Cada plugin lleva por tanto una etiqueta:
 |---|---|---|
 | **`integrado`** | Viene con la versión oficial del sitio, y su código coincide exactamente con lo publicado | De confianza. Nada que hacer. |
 | **`aprobado`** | Usted lo ha autorizado a ejecutarse normalmente en la página | De confianza porque **usted** lo ha decidido. |
-| **`aislado`** | Autorizado, pero **encerrado en un entorno aislado**: se ejecuta sin acceso al resto de la página ni al panel | El modo más seguro. |
+| **`sandbox`** | Autorizado, pero **encerrado en un entorno aislado**: se ejecuta sin acceso al resto de la página ni al panel | El modo más seguro. |
 | **`dev`** | Solo máquina de desarrollo | No aparece nunca en un sitio en producción. |
 | **`no fiable`** | **Rechazado.** El plugin no se carga en absoluto | Véase §5.5. |
 
@@ -496,7 +496,7 @@ Solo hay un caso en que se deniegue: si es el **último modo de renderizado** in
 
 | Etiqueta | Significado |
 |---|---|
-| **`aislado`** | Este plugin se ejecutará aislado. Es el caso de los plugins de la barra de herramientas. |
+| **`sandbox`** | Este plugin se ejecutará aislado. Es el caso de los plugins de la barra de herramientas. |
 | **`confianza total`** | Este plugin se ejecutará con todos los derechos de la página. Inevitable para los modos de renderizado y los controles de canal, que gobiernan directamente la tarjeta gráfica. |
 | **`actualización disponible`** | Existe una versión más reciente **y** es compatible con su sitio. La tarjeta muestra `v1.0.0 → v1.1.0` y un botón **Actualizar**. |
 | **`incompatible`** | Solo aparece en un plugin **no instalado**: requiere una versión del sitio más reciente (o más antigua) que la suya, y el botón de instalación está atenuado. Haga una actualización (véase §8) y volverá a poder instalarse. Un plugin **ya instalado** nunca lleva esta etiqueta — el que funciona en su sitio funciona; solo su versión siguiente puede tener que esperar. |
@@ -566,7 +566,7 @@ Cuando existe una nueva versión, se muestran las **notas de la versión**: léa
 
 1. haga clic en **⬇ Actualizar ahora**;
 2. **aparece un informe de comprobación** — un paso importante, detallado abajo;
-3. haga clic en **✓ Confirmar la actualización**;
+3. haga clic en **✓ Confirmar actualización**;
 4. deje que trabaje: va pasando una serie de etapas.
 
 **El informe de comprobación** le indica, antes de instalar nada:
@@ -592,10 +592,10 @@ La actualización está diseñada para que un fallo no pueda romper el sitio:
 
 | Mensaje | Qué significa |
 |---|---|
-| **Está al día** | Nada que hacer. |
+| **Está actualizado** | Nada que hacer. |
 | **Límite de la API de GitHub alcanzado** | Demasiadas comprobaciones en poco tiempo. Reinténtelo en unos minutos. Sin gravedad. |
-| **No se puede contactar con GitHub** | Un problema de red del lado del servidor. Reinténtelo más tarde. |
-| **Ninguna versión publicada** | Todavía no se ha publicado ninguna versión públicamente. |
+| **No se pudo contactar con GitHub** | Un problema de red del lado del servidor. Reinténtelo más tarde. |
+| **Aún no hay ninguna versión publicada** | Todavía no se ha publicado ninguna versión públicamente. |
 | **El almacén de certificados es inutilizable** | Configuración del alojamiento. Comuníqueselo a quien gestione el servidor. |
 
 ## 8.4. Actualizar los plugins
@@ -760,7 +760,7 @@ Los campos marcados **(MULTILINGÜE)** muestran una fila por idioma: `EN`, `ES`,
 | **Nombre corto** | Usado donde falta espacio | `Lumen3D` |
 | **Nombre del producto** | El nombre del software en los textos | `Lumen3D` |
 | **Monograma** | 2–3 letras para el distintivo del logotipo | `IR` |
-| **Emoji del logotipo** | El emoji mostrado junto al nombre | 🔬 |
+| **Emoji del logo** | El emoji mostrado junto al nombre | 🔬 |
 | **Organización** | Su laboratorio o institución | `IRIBHM — ULB` |
 | **Enlace de la organización** | La dirección de su web | `https://…` |
 
@@ -783,7 +783,7 @@ Esa palabra se **retoma automáticamente en toda la interfaz pública**: título
 
 ## 11.6. Tarjeta «Navegación»
 
-Las casillas deciden qué entradas aparecen en el menú del sitio público: *Explorador*, *Comparar*, *Tracking*, *Acerca de*, *Aviso legal*.
+Las casillas deciden qué entradas aparecen en el menú del sitio público: *Explorar*, *Comparar*, *Seguimiento*, *Acerca de*, *Aviso legal*.
 
 Desmarcar una entrada la retira del menú sin borrar la página.
 
@@ -866,14 +866,14 @@ El campo **Buscar un elemento** filtra la lista — práctico, porque hay 27.
 | **Imagen** | Una imagen |
 | **Icono** | Un pictograma |
 | **Botón** | Un botón en el que se puede hacer clic |
-| **Distintivos** | Pequeñas etiquetas de color |
+| **Insignias** | Pequeñas etiquetas de color |
 
 **Contenido** — los bloques de presentación
 
 | Elemento | Qué es |
 |---|---|
-| **Héroe** | La gran banda de introducción en la parte superior |
-| **Llamada a la acción** | Un recuadro que invita a hacer clic |
+| **Portada** | La gran banda de introducción en la parte superior |
+| **Banner de acción** | Un recuadro que invita a hacer clic |
 | **Tarjeta con icono** | Una tarjeta: icono + título + texto |
 | **Cita** | Una cita destacada |
 | **Galería** | Varias imágenes en cuadrícula |
@@ -881,14 +881,14 @@ El campo **Buscar un elemento** filtra la lista — práctico, porque hay 27.
 | **Cita copiable** | Una referencia bibliográfica con botón «copiar» |
 | **Contador animado** | Una cifra que avanza al mostrarse |
 | **Vídeo** | Un vídeo integrado |
-| **Banda de logotipos** | Una fila de logotipos de socios |
+| **Franja de logotipos** | Una fila de logotipos de socios |
 
 **Listas y datos**
 
 | Elemento | Qué es |
 |---|---|
 | **Acordeón / FAQ** | Preguntas que se despliegan |
-| **Cronología** | Una sucesión de etapas fechadas |
+| **Línea de tiempo** | Una sucesión de etapas fechadas |
 | **Estadísticas** | Una fila de cifras clave |
 | **Últimos datasets** | **Se rellena solo** con sus conjuntos recientes |
 | **Lista con iconos** | Una lista de puntos ilustrada |
@@ -1098,8 +1098,8 @@ Haga clic en un cuadrado de color para abrir el selector. **La vista previa de l
 
 ## 13.2. Tipografía y formas
 
-- **Tipografía** — la fuente del sitio público.
-- **Redondeo de esquinas** — de anguloso a muy redondeado, en botones y tarjetas.
+- **Fuente** — la tipografía del sitio público.
+- **Radio de esquinas** — de anguloso a muy redondeado, en botones y tarjetas.
 
 ## 13.3. Publicar el tema
 
@@ -1237,7 +1237,7 @@ Haga una **recarga forzada**: `Ctrl + Shift + R` (Windows) o `Cmd + Shift + R` (
 | **LOD** | *Level of Detail*. Varias resoluciones del mismo volumen: el sitio muestra primero una versión basta y luego afina. |
 | **Fixed / Live / Tracking** | Los tres tipos de conjuntos: volumen fijo, serie temporal 4D, trayectorias celulares. |
 | **Plugin** | Un módulo que añade una función al visor (§5.1). |
-| **Entorno aislado** | Un modo de ejecución aislado: el plugin funciona, pero no puede acceder al resto de la página. |
+| **Sandbox (entorno aislado)** | Un modo de ejecución aislado: el plugin funciona, pero no puede acceder al resto de la página. |
 | **Huella** | Una firma del contenido exacto de un archivo. Si el archivo cambia en un solo carácter, la huella cambia. |
 | **Slug** | La dirección corta de una página (`protocolos` en `page.html?slug=protocolos`). |
 | **Sección / Columna / Elemento** | Los tres niveles de construcción de una página (§12.6). |

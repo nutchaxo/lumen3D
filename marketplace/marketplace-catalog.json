@@ -93,14 +93,14 @@
       "subtype": "toggle",
       "description": "Open side-by-side channel decomposition view.",
       "creator": "IRIBHM",
-      "icon": "layers",
+      "icon": "layout-grid",
       "platformCompat": "1.x",
       "sandboxCapabilities": null,
-      "latestVersion": "1.0.0",
-      "assetUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/decompose-channels/plugin-decompose-channels-1.0.0.zip",
+      "latestVersion": "1.0.1",
+      "assetUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/decompose-channels/plugin-decompose-channels-1.0.1.zip",
       "sumsUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/decompose-channels/SHA256SUMS",
       "sigUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/decompose-channels/SHA256SUMS.sig",
-      "sha256": "a27f5767c169000b32b4aa8bd8594c25812a04e06164f0e41f96e863d3c5a6f5",
+      "sha256": "994df5d87a6ac21a392ca3457b0ac39cee43d6101583bd94e2a79de8ce51e29f",
       "recommended": true
     },
     {

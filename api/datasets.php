@@ -25,7 +25,13 @@ if (!LUMEN_DATASETS_AS_LIB) {
     header('Cache-Control: no-store');
 }
 
-require_once __DIR__ . '/_admin_lib.php';  // admin_check_csrf, admin_record_event, etc.
+require_once __DIR__ . '/_admin_lib.php';   // admin_check_csrf, admin_record_event, etc.
+// Datasets still being imported are listed and edited through this same API, so
+// the staging library must be loaded for EVERY action — `list` needs
+// lumen_staged_rows() just as much as the staging-id branch below needs the
+// LUMEN_STAGING_PREFIX constant. Requiring it only inside that branch made a
+// plain ?action=list fatal on PHP hosts.
+require_once __DIR__ . '/_upload_lib.php';
 
 // ── Session / Auth ───────────────────────────────────────────────────────────
 if (!LUMEN_DATASETS_AS_LIB) {
@@ -304,6 +310,41 @@ if (in_array($action, DATASET_WRITE_ACTIONS, true)) {
     admin_require_write();   // POST + X-CSRF-Token; exits on failure
 }
 
+// ── Datasets still being imported ────────────────────────────────────────────
+// A staged dataset is addressed as "staging:<type>/<folder>" and lives in the
+// uploads/ store, not DATA_WEB. Routed here, BEFORE the DATA_WEB traversal gate
+// below (which would reject the prefixed id): the staging library applies its own
+// equivalent gate. Twin of dev_server.py _is_staged_id / _get_staged_dataset.
+if (strncmp($id, LUMEN_STAGING_PREFIX, strlen(LUMEN_STAGING_PREFIX)) === 0) {
+    [$sType, $sFolder] = lumen_split_staged_id($id);
+    switch ($action) {
+        case 'get':
+            $meta = lumen_staged_dataset($sType, $sFolder);
+            json_out($meta ?: ['error' => 'Not found'], $meta ? 200 : 404);
+        case 'save':
+            $body = json_decode(file_get_contents('php://input'), true);
+            if (!is_array($body)) json_out(['error' => 'Invalid JSON body'], 400);
+            [$st, $pl] = lumen_up_write_metadata($sType, $sFolder, $body);
+            json_out($pl, $st);
+        case 'save_thumbnail':
+            $body = json_decode(file_get_contents('php://input'), true) ?: [];
+            $img = (string)($body['image'] ?? '');
+            if (strncmp($img, 'data:image/', 11) !== 0) json_out(['error' => 'Invalid image format'], 400);
+            $comma = strpos($img, ',');
+            $bytes = $comma === false ? false : base64_decode(substr($img, $comma + 1), true);
+            if ($bytes === false || $bytes === '') json_out(['error' => 'Base64 decode failed'], 400);
+            [$st, $pl] = lumen_up_write_thumbnail($sType, $sFolder, $bytes);
+            if ($st === 200) $pl['path'] = lumen_staged_blob_url($sType, $sFolder, 'thumbnail.webp');
+            json_out($pl, $st);
+        case 'set_visibility':
+            // A staged dataset is never in the public catalog — visibility is a
+            // property of publication, decided when it is published.
+            json_out(['error' => 'not_published'], 409);
+        default:
+            json_out(['error' => 'Unknown action'], 400);
+    }
+}
+
 // One traversal gate for every action that takes an id, applied BEFORE any path
 // is built from it. `get` used to hand $id straight to dataset_dir(), which only
 // string-substitutes separators — `?id=../../../../api` walked out of DATA_WEB.
@@ -314,7 +355,10 @@ if ($id !== '' && admin_safe_dataset($id) === null) {
 switch ($action) {
 
     case 'list':
-        json_out(['datasets' => list_datasets()]);
+        // Staged imports are listed alongside published datasets so the editor is
+        // ONE list: an import becomes editable the moment its coarse LOD lands,
+        // long before it is published.
+        json_out(['datasets' => array_merge(list_datasets(), lumen_staged_rows())]);
 
     case 'get':
         if (!$id) json_out(['error' => 'Missing id'], 400);

@@ -40,6 +40,28 @@ const ViewerApp = (() => {
     return typeof PerfTelemetry !== 'undefined' ? PerfTelemetry : null;
   }
 
+  // ── Dataset byte source ──────────────────────────────────────────────────────
+  // A published dataset is read straight from the web-served DATA_WEB tree. A
+  // dataset still being imported ("staging:<type>/<folder>", admin preview only)
+  // lives in the uploads/ staging root, which is deliberately NOT reachable at a
+  // URL — its bytes come back through the session-gated blob proxy instead. Both
+  // forms answer the same shape, `<base>/<relative path>`, so every downstream
+  // URL composition (metadata fetch, brick manifest, pack files, slice stacks)
+  // works unchanged: the proxy's `path` query parameter simply absorbs the tail.
+  const _STAGING_PREFIX = 'staging:';
+
+  function _datasetBase(datasetPath) {
+    const p = String(datasetPath || '');
+    if (!p.startsWith(_STAGING_PREFIX)) return `DATA_WEB/${p}`;
+    return `api/upload.php?action=blob&ds=${encodeURIComponent(p.slice(_STAGING_PREFIX.length))}&path=`;
+  }
+
+  function _datasetTypeOf(datasetPath) {
+    const p = String(datasetPath || '');
+    const bare = p.startsWith(_STAGING_PREFIX) ? p.slice(_STAGING_PREFIX.length) : p;
+    return bare.split('/')[0] || 'fixed';
+  }
+
   async function init() {
     const initPerfId = _perf()?.start('viewer.init');
     // 1. Init core
@@ -99,7 +121,7 @@ const ViewerApp = (() => {
         id: datasetId,
         path: fallbackPath,
         name: datasetId,
-        type: fallbackPath.split('/')[0] || 'fixed',
+        type: _datasetTypeOf(fallbackPath),
         volumeSources: []
       };
     }
@@ -231,7 +253,7 @@ const ViewerApp = (() => {
     
     // ── Resolve paths + camera-restore pre-set, then KICK OFF the volume load ──
     const datasetPath = datasetMeta.path || datasetMeta.id;
-    const basePath = `DATA_WEB/${datasetPath}`;
+    const basePath = _datasetBase(datasetPath);
     _basePath = basePath;
 
     // Si un état caméra sera restauré après le chargement (URL hash ou iframe pending),
@@ -680,7 +702,7 @@ const ViewerApp = (() => {
       return;
     }
     try {
-      const resp = await fetch(`DATA_WEB/${datasetPath}/metadata.json`);
+      const resp = await fetch(`${_datasetBase(datasetPath)}/metadata.json`);
       if (!resp.ok) {
         if (!_hasCatalogDims) throw new Error(`metadata.json inaccessible (HTTP ${resp.status}) et dimensions absentes du catalogue`);
         return;

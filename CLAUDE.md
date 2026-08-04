@@ -6,6 +6,8 @@
 
 **Current versions** : Plateforme Web `1.14.6` (latest changelog `changelog/changelog_1.14.6.md`; v1.5.0 is the first published GitHub release), Preprocessing `0.14.1` (`preprocess/run_preprocess.py:__version__`). ⚠️ Note: `dev_server.py:__version__` is `0.15.0` and **drifts from the web platform version** — it tracks the server tool itself, not the platform. The Web platform version lives **only** in the `changelog/` filenames; bump by adding a new `changelog_X.Y.Z.md`. Older 0.x → 1.2.x changelogs are archived under `changelog/archive/` (excluded from version computation — it globs the flat level only).
 
+> **v1.43.0 — browser dataset import.** An operator drags the folder the preprocessing pipeline produced into the admin **Import** tab and it streams up, resumable and hash-verified, with no SFTP. Engine: `upload_staging.py` + PHP twin `api/_upload_lib.php` (one shared journal format — an import started under one backend resumes under the other). Bytes land in a NEVER-SERVED `uploads/` staging root (`_FORBIDDEN_ROOTS` + root `.htaccess` + `router.php` + its own deny-all), pass a **closed path allowlist** (only what the pipeline emits; `.php`/`.js`/dotfiles/traversal refused before a byte is written), and only reach `DATA_WEB/` on an explicit *publish* once `validate_dataset` proves the manifest's `brickToPack` index resolves inside the packs that actually arrived. Files are uploaded in **priority tiers** (metadata+manifest+coarsest LOD first) so a dataset is openable and editable minutes into a multi-hour transfer; an edit then LOCKS `metadata.json` so the rest of the transfer cannot overwrite it. Transfer runs entirely in `js/workers/upload-worker.js` (raw 8 MiB octet bodies, never base64; parallelism is per-CHUNK). Admin preview of a staged dataset goes through the session-gated `api/upload.php?action=blob` proxy — see `js/pages/viewer.js:_datasetBase` and the `staging:<type>/<folder>` id form.
+>
 > **Since v1.5.0/v1.6.0 the platform gained three major subsystems** (details in §2/§7, `DOCS/update-system/`, `DOCS/plugin-sandbox/`): **(1) robust self-updater** — Blue-Green staging swap + health-gated restart + auto-rollback in `dev_server.py`; a **release CI** (`.github/workflows/`, `tools/build_release.py` → curated `lumen3d-web-X.Y.Z.zip` + `version.json` + `SHA256SUMS`); a one-file `install.php`. **(2) plugin↔platform compatibility** — `platformCompat` (list/range) in `plugin.json`, resolver twins `js/core/compat.js` + `dev_server.py:_compat_satisfies` + `api/_admin_lib.php`. **(3) third-party plugin isolation** — default-deny **trust gate** (`js/core/plugin-trust.js`; operator approval pinned to a content hash) + **iframe sandbox** (`js/core/plugin-sandbox.js`) + **enforced strict CSP** (per-request nonce injected by `dev_server.py:_serve_html`; libs self-hosted in `js/vendor/`; inline handlers → `js/core/ui-actions.js` `data-action` delegation).
 >
 > **v1.7.0 hardening** (closes the v1.6.0 deferred list): **(a) release authenticity** — vendored pure-Python Ed25519 verifier (`ed25519_pure.py`, RFC 8032, stdlib-only) + a **pinned publisher key** (`dev_server.py:_RELEASE_PUBKEY_HEX`, `install.php:$PINNED_PUBKEY`, both empty until keyed); CI signs `SHA256SUMS`→`SHA256SUMS.sig` from the `LUMEN_SIGNING_KEY` secret; updater verifies fail-closed before applying, installer via PHP libsodium (`tools/gen_signing_key.py` bootstraps the pair). **(b) CSP on PHP/static hosts** — `api/_html_server.php` + `_serve.php` + root `.htaccess` + `router.php` + `fast_server.py` all inject the per-request nonce + enforcing CSP (no longer Python-only). **(c) `style-src` element lockdown** — `style-src-elem 'self' 'nonce-…'` (no `unsafe-inline`; injected `<style>` blocked), `style-src-attr` keeps inline for data-driven `style=""`. **(d) nonce hardening** — the world-readable `<meta name="csp-nonce">` is gone; consumers read `document.currentScript.nonce` (nonce-hiding protected) and their `<script>` tags carry the nonce. **(e) sandbox completion** — `trustEpoch` hot-revocation, host→frame `events.subscribe` emission, workspace-state bridge, event-driven toggle. Shaders are in-page-trust-only by design; sandboxed channels deferred (see `DOCS/plugin-sandbox/SPEC.md` §Placement).
@@ -65,7 +67,7 @@ Each `*.html` at the repo root is a standalone page; its JS controller lives in 
 | Viewer | `viewer.html` | [viewer.js](js/pages/viewer.js) | **Main 3D/2D viewer** — heart of the app |
 | Compare | `compare.html` | [compare.js](js/pages/compare.js) | Side-by-side panels via iframes of `viewer.html` |
 | Tracking | `tracking.html` | [tracking.js](js/pages/tracking.js) | Cell tracking timelapse viewer |
-| Admin | `admpan.html` | [admpan.js](js/pages/admpan.js) | Multi-tab admin SPA — datasets CRUD, stats, plugins, marketplace/**Catalog**, security/password, GitHub updates, **Identity/Pages/Appearance/Legal** (white-label editors). Auth via `api/`. See note below. |
+| Admin | `admpan.html` | [admpan.js](js/pages/admpan.js) | Multi-tab admin SPA — datasets CRUD, **dataset import (drag-drop, resumable)**, stats, plugins, marketplace/**Catalog**, security/password, GitHub updates, **Identity/Pages/Appearance/Legal** (white-label editors). Auth via `api/`. See note below. |
 | About | `about.html` | [about.js](js/pages/about.js) | Lab info |
 | Widgets | `widgets.html` | — | Standalone widget demo |
 
@@ -225,6 +227,7 @@ Run end-to-end with [run_preprocess.py](preprocess/run_preprocess.py) — it orc
 ```
 DATA_WEB/
 │  (no catalog.json — the dataset index is GENERATED per request, see below)
+│  .htaccess                  # execution ban: this tree is web-served AND operator-writable
 ├── fixed/<dataset>/            # Static volumes
 │   ├── metadata.json           # Per-dataset config: dims, voxels, channels, volumeSources
 │   ├── thumbnail.webp
@@ -237,6 +240,13 @@ DATA_WEB/
 ```
 
 **Dataset types** drive UI (filters, viewer behavior) : `fixed`, `live`, `tracking`. Set by the directory `<type>/` under `DATA_WEB`.
+
+```
+uploads/                        # NEVER web-served (see §7). gitignored, _UPDATE_PROTECTed.
+├── .htaccess                   # deny-all, written at runtime by ensure_dirs()
+├── staging/<type>/<folder>/     # mirrors the final DATA_WEB layout, so publish = a rename
+└── state/<type>__<folder>.json  # per-dataset journal: sizes, chunk size, received-bitmap
+```
 
 ---
 
@@ -267,7 +277,10 @@ DATA_WEB/
 | Per-channel gaussian blur | [js/modules/channels/gaussian-filter/index.js](js/modules/channels/gaussian-filter/index.js) + [js/workers/gaussian-blur-worker.js](js/workers/gaussian-blur-worker.js) |
 | Workspace save / restore | [js/core/workspace-state.js](js/core/workspace-state.js) + [js/core/export-manager.js](js/core/export-manager.js) (wired into `tools/download-center`; also direct buttons on Tracking/Compare pages) |
 | Multi-panel compare sync | `compare.js` (parent) + `viewer.js` `postMessage` handlers |
-| Dataset CRUD (admin) | [js/pages/admin/tab-datasets.js](js/pages/admin/tab-datasets.js) (registered by [admpan.js](js/pages/admpan.js)) + `api/datasets.php` (or Python equivalent in `dev_server.py`) |
+| Dataset CRUD (admin) | [js/pages/admin/tab-datasets.js](js/pages/admin/tab-datasets.js) (registered by [admpan.js](js/pages/admpan.js)) + `api/datasets.php` (or Python equivalent in `dev_server.py`). Datasets still importing appear here too, addressed as `staging:<type>/<folder>` — the editor gates them on `stagingState` (`uploading` = read-only, `editable`/`staged` = full edit). |
+| **Import a dataset from the browser** (drag-drop, resumable) | Engine: [upload_staging.py](upload_staging.py) + twin [api/_upload_lib.php](api/_upload_lib.php) (shared journal format — cross-backend resume). HTTP: `dev_server.py:_handle_upload` + [api/upload.php](api/upload.php). UI: [tab-upload.js](js/pages/admin/tab-upload.js) (console) + [upload-manager.js](js/pages/admin/upload-manager.js) (orchestrator, survives tab switches) + [upload-dock.js](js/pages/admin/upload-dock.js) (floating overlay) + [js/workers/upload-worker.js](js/workers/upload-worker.js) (every byte). Styles: `css/admin-upload.css`. Tests: `tests/test_upload_{staging.py,api.py,php.php}`. |
+| What files an import accepts / rejects | `upload_staging.classify_path` + twin `_upload_lib.php:lumen_up_classify` — a CLOSED allowlist. Add a pipeline output here (both twins) or it is refused. Tiering (`assign_tiers`) decides upload ORDER, which is what makes a dataset editable early. |
+| Staging is unreachable by URL | `uploads/` in `dev_server.py:_FORBIDDEN_ROOTS`, root `.htaccess`, `router.php`, plus a deny-all `uploads/.htaccess` written at runtime by `ensure_dirs()`. Reads go through `api/upload.php?action=blob` (admin session required). `DATA_WEB/.htaccess` separately kills script execution in the PUBLISHED tree (also rewritten at runtime — `DATA_WEB` is in `_UPDATE_PROTECT`, so an update never delivers it). |
 | Translations (platform) | `lang/{en,fr,es}.json` — full key parity required. Add a language by dropping `lang/<code>.json` (auto-discovered); display name/flag/RTL come from `LANG_META` in [i18n.js](js/core/i18n.js). |
 | Translations (a plugin's own strings) | `js/modules/<placement>/<id>/lang/<code>.json` — call `ctx.i18n.t('key')` in `index.js`. List shipped locales in `plugin.json#i18nLanguages`. `en.json` is the mandatory fallback. |
 | Add a new tool | Create `js/modules/tools/<id>/{plugin.json, index.js, lang/}` — auto-discovered, no manifest to edit. `plugin.json` drives the button (`group`, `subtype`, `icon`, `order`, `i18nTitle`→a key in the plugin's `lang/`, optional `tool`/`shortcut`/`requires`/`i18nLanguages`). Toolbar generation: [plugin-registry.js](js/core/plugin-registry.js) `buildToolbarButtons` |

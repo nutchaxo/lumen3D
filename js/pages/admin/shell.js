@@ -13,6 +13,8 @@ import {
   setUnauthorizedHandler, toast, refreshIcons, el,
 } from './shared.js';
 import { isDirty, setNavigator } from './bus.js';
+import * as UploadDock from './upload-dock.js';
+import * as Upload from './upload-manager.js';
 
 const _tabs = new Map();   // id -> { id, mount, activate, relabel?, titleKey, titleDefault }
 let _activeTab = null;
@@ -30,6 +32,9 @@ function showGate(which) {
   el('setup-screen').style.display = which === 'setup' ? 'flex' : 'none';
   el('login-screen').style.display = which === 'login' ? 'flex' : 'none';
   el('admin-app').style.display    = which === 'app'   ? 'flex' : 'none';
+  // The import dock is a fixed overlay: without this it would float over the
+  // login card when a session expires mid-transfer.
+  try { UploadDock.setGateActive(which !== 'app'); } catch (_) { /* pre-mount */ }
   if (which === 'login') setTimeout(() => el('login-username')?.focus(), 50);
   if (which === 'setup') { initWizard(); setTimeout(() => el('setup-password')?.focus(), 50); }
 }
@@ -47,6 +52,10 @@ function enterApp(username) {
   _appReady = true;
   if (Utils) Utils.populateLanguageMenu?.(switchLanguage);
   refreshIcons();
+  // The import dock is shell-level, not tab-level: a transfer must stay visible
+  // and running while the operator works in any other tab.
+  try { UploadDock.mount(); } catch (e) { console.error(e); }
+  bindUploadGuard();
   if (_editorOnly) {
     document.body.classList.add('adm-editor-only');
     switchTab('pages', true);
@@ -284,6 +293,93 @@ function switchTab(id, force = false) {
   refreshIcons();
 }
 
+// ── Import guard: don't let a navigation silently kill a transfer ─────────────
+// Two different mechanisms, because the browser only lets us own one of them:
+//
+//   * an IN-APP navigation (the Explorer link in the sidebar, logging out, any
+//     other link out of the panel) is ours to intercept — we show the real
+//     overlay, pause the transfer, and only then leave;
+//   * a real close/reload/URL change is NOT ours: `beforeunload` may only ask the
+//     browser to show ITS OWN generic prompt. A custom overlay cannot be rendered
+//     there, and no API can pause the worker after the decision is made. So we
+//     flag the prompt and pause pre-emptively — worst case the operator stays and
+//     clicks Resume, which costs nothing because the server holds the progress.
+//
+// Either way nothing is lost: every acknowledged chunk is already on disk, and
+// re-dropping the same folder resumes from the exact missing-chunk list.
+
+let _exitTarget = null;
+let _guardBound = false;
+
+function bindUploadGuard() {
+  // enterApp() runs again after a logout/login round trip; binding twice would
+  // fire the leave handler (and doLogout) twice per click.
+  if (_guardBound) return;
+  _guardBound = true;
+
+  // A folder dropped slightly OFF the dropzone would otherwise be opened by the
+  // browser as a navigation — replacing the admin panel with a raw file listing
+  // and killing any transfer in flight. Swallow drops everywhere except the
+  // import dropzone, which stops the event before it reaches the document.
+  ['dragover', 'drop'].forEach((ev) => document.addEventListener(ev, (e) => {
+    if (e.target.closest?.('#upl-drop')) return;
+    e.preventDefault();
+    if (ev === 'drop') e.dataTransfer.dropEffect = 'none';
+  }));
+
+  window.addEventListener('beforeunload', (e) => {
+    if (!Upload.hasUnfinishedWork()) return;
+    Upload.pause();
+    e.preventDefault();
+    e.returnValue = '';
+  });
+
+  // Intercept in-app links that leave the panel while a transfer is running.
+  document.addEventListener('click', (e) => {
+    const link = e.target.closest('a[href]');
+    if (!link || !Upload.hasUnfinishedWork()) return;
+    const href = link.getAttribute('href') || '';
+    if (href.startsWith('#') || link.target === '_blank') return;
+    e.preventDefault();
+    openExitOverlay(() => { window.location.href = link.href; });
+  }, true);
+
+  el('upl-exit-stay')?.addEventListener('click', closeExitOverlay);
+  el('upl-exit-leave')?.addEventListener('click', () => {
+    Upload.pause();
+    const go = _exitTarget;
+    closeExitOverlay();
+    if (typeof go === 'function') go();
+  });
+  // On the document, not the overlay: focus can legitimately sit outside it
+  // (the browser may keep it on the element that was clicked), and Escape must
+  // still dismiss.
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && !el('upload-exit-overlay')?.hidden) closeExitOverlay();
+  });
+}
+
+function openExitOverlay(onLeave) {
+  const overlay = el('upload-exit-overlay');
+  if (!overlay) { onLeave?.(); return; }
+  _exitTarget = onLeave;
+  overlay.hidden = false;
+  refreshIcons(overlay);
+  setTimeout(() => el('upl-exit-stay')?.focus(), 30);
+}
+
+function closeExitOverlay() {
+  const overlay = el('upload-exit-overlay');
+  if (overlay) overlay.hidden = true;
+  _exitTarget = null;
+}
+
+/** Logout must not orphan a transfer — the session it authenticates is its own. */
+function guardedLogout() {
+  if (!Upload.hasUnfinishedWork()) { doLogout(); return; }
+  openExitOverlay(() => doLogout());
+}
+
 // ── Sidebar collapse + mobile drawer ───────────────────────────
 
 function loadCollapsed() { return localStorage.getItem('adm-sidebar-collapsed') === '1'; }
@@ -359,7 +455,7 @@ function bindChrome() {
 
   // Topbar
   el('btn-theme')?.addEventListener('click', toggleTheme);
-  el('btn-logout')?.addEventListener('click', doLogout);
+  el('btn-logout')?.addEventListener('click', guardedLogout);
 
   // Language dropdown open/close
   const dd = el('lang-dropdown');

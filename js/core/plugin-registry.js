@@ -149,9 +149,15 @@ const PluginRegistry = (() => {
     // `authoritative` marks the sources that speak for the SERVER's trust store. The
     // static manifest is a generated file sitting in the web root — it can carry the
     // plugin list, never the trust verdict.
+    // The .php route comes FIRST: the Python dev server routes /api/plugins.php as
+    // well as the extensionless form, so it is the one URL that resolves on BOTH
+    // host types. Probing the extensionless one first cost every Apache/PHP
+    // deployment a 404 in the operator's console on every page load, before falling
+    // through to the route that was always going to answer. Same rationale (and same
+    // ordering) as I18n.discoverLanguages().
     const candidates = [
-      { url: 'api/plugins', authoritative: true },
       { url: 'api/plugins.php', authoritative: true },
+      { url: 'api/plugins', authoritative: true },
       { url: `${basePath}/manifest.json`, authoritative: false },
     ];
     for (const { url, authoritative } of candidates) {

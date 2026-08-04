@@ -10,6 +10,7 @@
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap">
   <link rel="stylesheet" href="css/admpan.css">
   <link rel="stylesheet" href="css/admin-shell.css">
+  <link rel="stylesheet" href="css/admin-upload.css">
 </head>
 <body data-page="admin">
 
@@ -154,6 +155,11 @@
         <i data-lucide="database"></i>
         <span class="adm-nav-label" data-i18n="admin.navDatasets">Datasets</span>
       </button>
+      <button class="adm-nav-item" data-tab="upload">
+        <i data-lucide="upload-cloud"></i>
+        <span class="adm-nav-label" data-i18n="admin.navUpload">Import</span>
+        <span class="adm-nav-dot" id="nav-upload-dot" style="display:none"></span>
+      </button>
       <button class="adm-nav-item" data-tab="stats">
         <i data-lucide="bar-chart-3"></i>
         <span class="adm-nav-label" data-i18n="admin.navStats">Statistiques</span>
@@ -275,6 +281,7 @@
               <button class="filter-tab" data-type="fixed" data-i18n="admin.filterFixed">Fixed</button>
               <button class="filter-tab" data-type="live" data-i18n="admin.filterLive">Live</button>
               <button class="filter-tab" data-type="hidden" data-i18n="admin.filterHidden">Masqués</button>
+              <button class="filter-tab" data-type="staging" data-i18n="admin.filterStaging">Import</button>
             </div>
           </div>
 
@@ -501,8 +508,34 @@
       <div class="adm-tab-inner" id="legal-root"></div>
     </section>
 
+    <!-- ───────── TAB: UPLOAD (dataset import / staging) ───────── -->
+    <section class="adm-tabpanel" id="tab-upload" data-tab="upload">
+      <div class="adm-tab-inner" id="upload-root"></div>
+    </section>
+
   </div><!-- /adm-content -->
 </div><!-- /admin-app -->
+
+<!-- Floating import dock. Deliberately OUTSIDE #adm-content: it is an overlay,
+     not a layout participant, so showing or collapsing it never reflows the tab
+     underneath. Rendered by js/pages/admin/upload-dock.js; hidden whenever there
+     is no import to report. -->
+<div id="upload-dock" class="upload-dock" data-size="bar" hidden
+     role="region" aria-live="polite" aria-label="Import de datasets"></div>
+
+<!-- Exit guard: shown when an in-app navigation would kill a running transfer. -->
+<div id="upload-exit-overlay" class="upl-exit" hidden role="alertdialog"
+     aria-modal="true" aria-labelledby="upl-exit-title">
+  <div class="upl-exit-card">
+    <i data-lucide="alert-triangle" class="upl-exit-icon"></i>
+    <h3 class="upl-exit-title" id="upl-exit-title" data-i18n="upl.exitTitle">Un transfert est en cours</h3>
+    <p class="upl-exit-body" data-i18n="upl.exitBody">Quitter cette page mettra le transfert en pause. Les fichiers déjà envoyés sont conservés : il reprendra là où il s'est arrêté quand vous reglisserez le même dossier.</p>
+    <div class="upl-exit-actions">
+      <button type="button" class="adm-btn adm-btn-ghost" id="upl-exit-stay" data-i18n="upl.exitStay">Rester sur la page</button>
+      <button type="button" class="adm-btn adm-btn-accent" id="upl-exit-leave" data-i18n="upl.exitLeave">Mettre en pause et quitter</button>
+    </div>
+  </div>
+</div>
 
 <!-- Toast container -->
 <div id="toast-container"></div>

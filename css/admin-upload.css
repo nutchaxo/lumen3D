@@ -1,0 +1,366 @@
+/* ============================================================
+   Lumen3D — admin dataset import (tab + floating dock)
+   ============================================================
+   Reuses the --adm-* tokens from admpan.css; defines nothing global.
+
+   The dock is an OVERLAY on purpose: position:fixed, its own stacking context,
+   zero layout footprint. Collapsing or expanding it must never reflow the tab
+   underneath — an operator filling in a dataset form should not have the field
+   they are typing in jump because a transfer ticked over.
+   ============================================================ */
+
+/* ── Import tab: dropzone ─────────────────────────────────── */
+
+.upl-drop {
+  display: flex; flex-direction: column; align-items: center; gap: 10px;
+  padding: 44px 24px;
+  border: 2px dashed var(--adm-border);
+  border-radius: var(--adm-radius);
+  background: var(--adm-card);
+  text-align: center; cursor: pointer;
+  transition: border-color var(--adm-trans), background var(--adm-trans), transform var(--adm-trans);
+}
+.upl-drop:hover, .upl-drop:focus-visible {
+  border-color: var(--adm-border-active);
+  background: var(--adm-card-hover);
+  outline: none;
+}
+.upl-drop.is-over {
+  border-color: var(--adm-accent);
+  background: var(--adm-accent-subtle);
+  transform: scale(1.005);
+}
+.upl-drop-icon { width: 40px; height: 40px; color: var(--adm-accent); }
+.upl-drop-title { font-size: 16px; font-weight: 600; }
+.upl-drop-sub { font-size: 12.5px; color: var(--adm-text-sec); max-width: 620px; line-height: 1.55; }
+
+.upl-note {
+  display: flex; align-items: flex-start; gap: 9px;
+  margin: 14px 0 22px; padding: 11px 14px;
+  border: 1px solid var(--adm-border); border-radius: var(--adm-radius-sm);
+  background: var(--adm-card);
+  font-size: 12.5px; color: var(--adm-text-sec); line-height: 1.55;
+}
+.upl-note i { width: 16px; height: 16px; flex-shrink: 0; margin-top: 1px; color: var(--adm-success); }
+
+/* ── Import tab: global progress ──────────────────────────── */
+
+.upl-global {
+  padding: 16px 18px; margin-bottom: 22px;
+  border: 1px solid var(--adm-border); border-radius: var(--adm-radius);
+  background: var(--adm-card);
+}
+.upl-global-row { display: flex; align-items: center; gap: 26px; flex-wrap: wrap; margin-bottom: 12px; }
+.upl-global-stat { display: flex; flex-direction: column; gap: 2px; }
+.upl-stat-label {
+  font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.04em;
+  color: var(--adm-text-muted);
+}
+.upl-stat-value { font-size: 17px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.upl-stat-value small { font-size: 12px; font-weight: 400; color: var(--adm-text-sec); }
+.upl-global-actions { display: flex; gap: 8px; margin-left: auto; }
+
+.upl-progress {
+  height: 8px; border-radius: 4px; overflow: hidden;
+  background: var(--adm-bg); border: 1px solid var(--adm-border);
+}
+.upl-progress-sm { height: 5px; }
+.upl-progress-fill {
+  height: 100%;
+  background: linear-gradient(90deg, var(--adm-accent), var(--adm-accent-hover));
+  transition: width 300ms ease;
+}
+
+.upl-error, .upl-card-err {
+  display: flex; align-items: center; gap: 8px; margin-top: 10px;
+  padding: 9px 12px; border-radius: var(--adm-radius-sm);
+  background: rgba(248, 113, 113, 0.1); color: var(--adm-danger);
+  font-size: 12.5px;
+}
+.upl-error i, .upl-card-err i { width: 15px; height: 15px; flex-shrink: 0; }
+
+/* ── Import tab: dataset cards ────────────────────────────── */
+
+.upl-section { margin-bottom: 26px; }
+.upl-section-title { font-size: 14px; font-weight: 650; margin-bottom: 10px; }
+.upl-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(330px, 1fr)); gap: 12px; }
+
+.upl-card {
+  display: flex; flex-direction: column; gap: 8px;
+  padding: 14px 16px;
+  border: 1px solid var(--adm-border); border-radius: var(--adm-radius);
+  background: var(--adm-card);
+}
+.upl-card.has-error { border-color: rgba(248, 113, 113, 0.5); }
+.upl-card-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
+.upl-card-id { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.upl-card-name {
+  font-size: 13.5px; font-weight: 600;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.upl-card-type {
+  font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.04em;
+  color: var(--adm-text-muted);
+}
+.upl-card-meta {
+  display: flex; gap: 12px; flex-wrap: wrap;
+  font-size: 11.5px; color: var(--adm-text-sec); font-variant-numeric: tabular-nums;
+}
+.upl-card-hint { font-size: 11.5px; color: var(--adm-text-muted); line-height: 1.5; }
+.upl-warn { color: var(--adm-warning); }
+.upl-card-actions { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 2px; }
+.upl-btn-danger:hover { color: var(--adm-danger); border-color: var(--adm-danger); }
+
+.upl-card-rejected { font-size: 11.5px; color: var(--adm-text-sec); }
+.upl-card-rejected summary { cursor: pointer; color: var(--adm-warning); }
+.upl-card-rejected ul, .upl-rejected { list-style: none; margin: 6px 0 0; padding: 0; }
+.upl-card-rejected li, .upl-rejected li {
+  padding: 3px 0; border-bottom: 1px solid var(--adm-border);
+  font-size: 11.5px; color: var(--adm-text-sec);
+  overflow-wrap: anywhere;
+}
+.upl-rejected code, .upl-card-rejected code { color: var(--adm-text); font-size: 11px; }
+
+.upl-empty {
+  display: flex; flex-direction: column; align-items: center; gap: 10px;
+  padding: 42px 20px; color: var(--adm-text-muted); text-align: center;
+}
+.upl-empty i { width: 30px; height: 30px; }
+
+/* ── Dataset state chips (shared by the tab, the dock and the editor) ── */
+
+.upl-state, .dock-state, .ds-staging-badge {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 2px 8px; border-radius: 999px;
+  font-size: 10.5px; font-weight: 600; white-space: nowrap;
+  border: 1px solid transparent;
+}
+.upl-state-uploading, .dock-state-uploading, .ds-staging-badge.is-uploading {
+  background: rgba(148, 163, 184, 0.14); color: #94a3b8; border-color: rgba(148, 163, 184, 0.3);
+}
+.upl-state-editable, .dock-state-editable, .ds-staging-badge.is-editable {
+  background: rgba(251, 191, 36, 0.14); color: var(--adm-warning); border-color: rgba(251, 191, 36, 0.35);
+}
+.upl-state-staged, .dock-state-staged, .ds-staging-badge.is-staged {
+  background: rgba(108, 99, 255, 0.14); color: var(--adm-accent); border-color: rgba(108, 99, 255, 0.35);
+}
+.upl-state-stalled, .dock-state-stalled, .ds-staging-badge.is-stalled {
+  background: rgba(248, 113, 113, 0.14); color: var(--adm-danger); border-color: rgba(248, 113, 113, 0.35);
+}
+.upl-state-published, .dock-state-published, .ds-staging-badge.is-published {
+  background: rgba(52, 211, 153, 0.14); color: var(--adm-success); border-color: rgba(52, 211, 153, 0.35);
+}
+
+/* ── Floating dock ────────────────────────────────────────── */
+
+.upload-dock {
+  position: fixed; right: 20px; bottom: 20px;
+  /* Above the page and the mobile sidebar OVERLAY (60), below the mobile drawer
+     itself (70) so an open drawer covers the dock rather than the reverse, and
+     far below the exit dialog (90). */
+  z-index: 65;
+  font-size: 13px; color: var(--adm-text);
+  /* No width/height on the container: each size renders its own box, so switching
+     between them never leaves an empty rectangle intercepting clicks. */
+}
+.upload-dock[hidden] { display: none; }
+/* A gate (login / first-run setup) owns the screen — a fixed overlay would
+   otherwise float over the login card if a session expired mid-transfer. */
+.upload-dock.is-gated { display: none; }
+
+/* Toasts live in the same bottom-right corner (#toast-container, z 9999). They
+   are pointer-events:none so they never block the dock, but they would sit on
+   top of it. Lift them clear by the dock's height while it is showing — using
+   :has() where available, which every browser that runs the viewer supports. */
+body:has(.upload-dock:not([hidden]):not(.is-gated)) #toast-container { bottom: 100px; }
+body:has(.upload-dock[data-size="panel"]:not([hidden]):not(.is-gated)) #toast-container { bottom: 20px; right: 460px; }
+
+.dock-icon-btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 28px; height: 28px; flex-shrink: 0;
+  border: 1px solid transparent; border-radius: var(--adm-radius-xs);
+  background: transparent; color: var(--adm-text-sec);
+  cursor: pointer; transition: background var(--adm-trans), color var(--adm-trans);
+}
+.dock-icon-btn:hover { background: var(--adm-card-hover); color: var(--adm-text); }
+.dock-icon-btn i { width: 15px; height: 15px; }
+
+/* Bubble — a progress ring, like a support widget */
+.dock-bubble {
+  position: relative;
+  display: flex; align-items: center; justify-content: center;
+  width: 56px; height: 56px; padding: 0;
+  border: none; border-radius: 50%;
+  background: var(--adm-surface);
+  box-shadow: 0 8px 26px rgba(0, 0, 0, 0.35);
+  cursor: pointer; transition: transform var(--adm-trans);
+}
+.dock-bubble:hover { transform: scale(1.06); }
+.dock-ring { position: absolute; inset: 0; width: 56px; height: 56px; transform: rotate(-90deg); }
+.dock-ring-bg { fill: none; stroke: var(--adm-border); stroke-width: 4; }
+.dock-ring-fg {
+  fill: none; stroke: var(--adm-accent); stroke-width: 4; stroke-linecap: round;
+  transition: stroke-dashoffset 400ms ease;
+}
+.dock-bubble-pct { font-size: 13px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.dock-bubble-pct i { font-size: 9px; font-style: normal; opacity: 0.7; }
+.dock-bubble-badge {
+  position: absolute; right: -2px; bottom: -2px;
+  display: flex; align-items: center; justify-content: center;
+  width: 20px; height: 20px; border-radius: 50%;
+  background: var(--adm-warning); color: #1a1a2e;
+}
+.dock-bubble-badge i { width: 12px; height: 12px; }
+/* A slow halo, so a working transfer is legible at a glance without motion noise. */
+.dock-pulse {
+  position: absolute; inset: -4px; border-radius: 50%;
+  border: 2px solid var(--adm-accent);
+  animation: dock-pulse 2.4s ease-out infinite;
+  pointer-events: none;
+}
+@keyframes dock-pulse {
+  0%   { transform: scale(0.92); opacity: 0.55; }
+  70%  { transform: scale(1.12); opacity: 0; }
+  100% { transform: scale(1.12); opacity: 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .dock-pulse { animation: none; opacity: 0.35; }
+  .upl-progress-fill, .dock-progress-fill, .dock-ring-fg { transition: none; }
+}
+
+/* Bar — one line: percentage, speed, ETA */
+.dock-bar {
+  display: flex; align-items: center; gap: 10px;
+  width: min(400px, calc(100vw - 40px));
+  padding: 10px 12px;
+  border: 1px solid var(--adm-border); border-radius: var(--adm-radius);
+  background: var(--adm-surface);
+  box-shadow: 0 8px 26px rgba(0, 0, 0, 0.32);
+}
+.dock-bar-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+.dock-bar-top { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.dock-bar-title {
+  font-size: 12.5px; font-weight: 600;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.dock-bar-pct { font-size: 12px; font-weight: 700; font-variant-numeric: tabular-nums; color: var(--adm-accent); }
+.dock-bar-sub { font-size: 11px; color: var(--adm-text-sec); font-variant-numeric: tabular-nums; }
+.dock-bar-actions { display: flex; gap: 2px; flex-shrink: 0; }
+
+.dock-progress {
+  height: 5px; border-radius: 3px; overflow: hidden;
+  background: var(--adm-bg); border: 1px solid var(--adm-border);
+}
+.dock-progress-sm { height: 4px; }
+.dock-progress-fill {
+  height: 100%;
+  background: linear-gradient(90deg, var(--adm-accent), var(--adm-accent-hover));
+  transition: width 300ms ease;
+}
+
+/* Panel — the full list */
+.dock-panel {
+  display: flex; flex-direction: column;
+  width: min(420px, calc(100vw - 40px));
+  max-height: min(560px, calc(100vh - 120px));
+  border: 1px solid var(--adm-border); border-radius: var(--adm-radius);
+  background: var(--adm-surface);
+  box-shadow: 0 14px 44px rgba(0, 0, 0, 0.42);
+  overflow: hidden;
+}
+.dock-head {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  padding: 10px 12px; border-bottom: 1px solid var(--adm-border);
+}
+.dock-head-title { display: flex; align-items: center; gap: 7px; font-size: 13px; font-weight: 650; }
+.dock-head-title i { width: 16px; height: 16px; color: var(--adm-accent); }
+.dock-head-actions { display: flex; gap: 2px; }
+.dock-global { padding: 10px 12px; border-bottom: 1px solid var(--adm-border); display: flex; flex-direction: column; gap: 5px; }
+.dock-error {
+  display: flex; align-items: center; gap: 7px; padding: 8px 12px;
+  background: rgba(248, 113, 113, 0.1); color: var(--adm-danger); font-size: 11.5px;
+}
+.dock-error i { width: 14px; height: 14px; flex-shrink: 0; }
+
+.dock-list { list-style: none; margin: 0; padding: 0; overflow-y: auto; }
+.dock-row {
+  display: flex; flex-direction: column; gap: 5px;
+  padding: 10px 12px; border-bottom: 1px solid var(--adm-border);
+}
+.dock-row:last-child { border-bottom: none; }
+.dock-row.has-error { background: rgba(248, 113, 113, 0.06); }
+.dock-row-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.dock-row-name {
+  font-size: 12.5px; font-weight: 600; min-width: 0;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.dock-row-sub { font-size: 11px; color: var(--adm-text-sec); font-variant-numeric: tabular-nums; }
+.dock-row-err { font-size: 11px; color: var(--adm-danger); overflow-wrap: anywhere; }
+.dock-expiry { color: var(--adm-warning); }
+.dock-row-actions { display: flex; gap: 5px; flex-wrap: wrap; margin-top: 2px; }
+
+.dock-mini {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 3px 8px;
+  border: 1px solid var(--adm-border); border-radius: var(--adm-radius-xs);
+  background: transparent; color: var(--adm-text-sec);
+  font-family: inherit; font-size: 11px; cursor: pointer;
+  transition: background var(--adm-trans), color var(--adm-trans), border-color var(--adm-trans);
+}
+.dock-mini i { width: 12px; height: 12px; }
+.dock-mini:hover { background: var(--adm-card-hover); color: var(--adm-text); }
+.dock-mini-accent { color: var(--adm-accent); border-color: rgba(108, 99, 255, 0.4); }
+.dock-mini-accent:hover { background: var(--adm-accent); color: #fff; }
+.dock-mini-danger:hover { color: var(--adm-danger); border-color: var(--adm-danger); }
+
+/* ── Exit guard overlay ───────────────────────────────────── */
+
+.upl-exit {
+  position: fixed; inset: 0; z-index: 90;
+  display: flex; align-items: center; justify-content: center;
+  padding: 20px; background: rgba(0, 0, 0, 0.6);
+}
+.upl-exit[hidden] { display: none; }
+.upl-exit-card {
+  width: 100%; max-width: 440px; padding: 26px;
+  border: 1px solid var(--adm-border); border-radius: 18px;
+  background: var(--adm-surface); text-align: center;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+}
+.upl-exit-icon { width: 34px; height: 34px; color: var(--adm-warning); }
+.upl-exit-title { font-size: 17px; font-weight: 700; margin: 10px 0 8px; }
+.upl-exit-body { font-size: 13px; color: var(--adm-text-sec); line-height: 1.6; }
+.upl-exit-actions { display: flex; gap: 9px; justify-content: center; margin-top: 20px; flex-wrap: wrap; }
+
+/* ── Dataset editor: staging markers ──────────────────────── */
+
+.dataset-item.is-staging { border-left: 2px solid var(--adm-warning); }
+.ds-staging-banner {
+  display: flex; align-items: flex-start; gap: 9px;
+  padding: 10px 12px; margin-bottom: 12px;
+  border: 1px solid var(--adm-border); border-radius: var(--adm-radius-sm);
+  background: var(--adm-card); font-size: 12.5px; line-height: 1.55;
+}
+.ds-staging-banner i { width: 16px; height: 16px; flex-shrink: 0; margin-top: 1px; }
+.ds-staging-banner.is-uploading { border-color: rgba(148, 163, 184, 0.4); }
+.ds-staging-banner.is-uploading i { color: #94a3b8; }
+.ds-staging-banner.is-editable  { border-color: rgba(251, 191, 36, 0.4); }
+.ds-staging-banner.is-editable i { color: var(--adm-warning); }
+.ds-staging-banner.is-staged    { border-color: rgba(108, 99, 255, 0.4); }
+.ds-staging-banner.is-staged i { color: var(--adm-accent); }
+.ds-staging-banner.is-stalled   { border-color: rgba(248, 113, 113, 0.4); }
+.ds-staging-banner.is-stalled i { color: var(--adm-danger); }
+
+/* ── Small screens ────────────────────────────────────────── */
+
+@media (max-width: 720px) {
+  .upload-dock { right: 12px; bottom: 12px; left: 12px; }
+  .dock-bar, .dock-panel { width: auto; }
+  .upload-dock[data-size="bubble"] { left: auto; }
+  .upl-cards { grid-template-columns: 1fr; }
+  .upl-global-actions { margin-left: 0; width: 100%; }
+  /* No room to sit beside the panel on a phone — stack the toasts above it. */
+  body:has(.upload-dock[data-size="panel"]:not([hidden]):not(.is-gated)) #toast-container {
+    bottom: 12px; right: 12px;
+  }
+}

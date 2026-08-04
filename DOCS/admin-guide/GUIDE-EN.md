@@ -31,10 +31,11 @@ It is written for someone who has **never seen this panel** and who **does not w
 - [7. Security — password and permissions](#7-security--password-and-permissions)
 - [8. Updates — moving the site forward](#8-updates--moving-the-site-forward)
 - [9. Pipeline — preparing new data](#9-pipeline--preparing-new-data)
-- [10. Identity — the site's name and vocabulary](#10-identity--the-sites-name-and-vocabulary)
-- [11. Pages — the visual editor](#11-pages--the-visual-editor)
-- [12. Appearance — the site's colours](#12-appearance--the-sites-colours)
-- [13. Legal](#13-legal)
+- [10. Documentation — the platform's guides](#10-documentation--the-platforms-guides)
+- [11. Identity — the site's name and vocabulary](#11-identity--the-sites-name-and-vocabulary)
+- [12. Pages — the visual editor](#12-pages--the-visual-editor)
+- [13. Appearance — the site's colours](#13-appearance--the-sites-colours)
+- [14. Legal](#14-legal)
 
 **Appendices**
 
@@ -101,7 +102,7 @@ Once you are signed in, the screen splits into three areas that never change.
 
 | | |
 |---|---|
-| **1** | **The left menu** — the panel's 11 sections. It is the backbone: each chapter of this guide matches one of these entries. |
+| **1** | **The left menu** — the panel's 12 sections. It is the backbone: each chapter of this guide matches one of these entries. |
 | **2** | **The title** reminds you which section is open. |
 | **3** | **Light / dark theme** — changes only *your* view of the panel, not the public site. |
 | **4** | **Language** of the panel (English, French, Spanish, Dutch). |
@@ -128,11 +129,12 @@ It is a **reminder**, not an error. While it is there, your changes are visible 
 |---|---|---|
 | **Datasets** | Name, describe, show or hide each dataset | Often |
 | **Statistics** | See how much the site is used | Occasionally |
-| **Plugins** | Enable / disable the 3D viewer's features | Rarely |
-| **Catalog** | Install new features | Rarely |
+| **Plugins** | Enable, disable and update the 3D viewer's features | Rarely |
+| **Catalog** | Install, update or uninstall features | Rarely |
 | **Security** | Change the password | Rarely |
-| **Updates** | Install a new version of the site | Occasionally |
+| **Updates** | Install a new version of the site, and update the plugins | Occasionally |
 | **Pipeline** | Download the tool that prepares new data | Rarely |
+| **Documentation** | Read and download the guides published for the platform | Occasionally |
 | **Identity** | Site name, vocabulary, footer, menu | Rarely |
 | **Pages** | Edit page content (home, about…) | Often |
 | **Appearance** | Colours and font of the public site | Rarely |
@@ -358,13 +360,15 @@ A closer look at one row:
 | **2** | Its **trust level** (see §5.4). |
 | **3** | Version · author · folder · code **fingerprint**. |
 | **4** | The switch that **enables or disables** the plugin. |
-| **5** | **Revoke** — withdraws permission to run (see §5.5). |
+| **5** | **Revoke** — withdraws permission to run (see §5.5). Only appears on a plugin **you** approved (the `approved` or `sandbox` label): a `bundled` plugin has no such button. |
 
 ## 5.3. Enabling or disabling a plugin
 
 Just flip the switch. The change is saved immediately (a small confirmation appears at the bottom) and takes effect **the next time the viewer loads** — ask a visitor to reload their page, or reload the preview in the Datasets tab.
 
 Disabling a plugin does not delete it: it stays on the server and you can re-enable it at any time.
+
+> ⚠️ **The switch is not always there.** An **untrusted** plugin has none at all — it has to be approved first (§5.5). A **protected** plugin (the last active render mode) or an **incompatible** one does have a switch, but greyed out.
 
 > 🔒 **There is exactly one guard rail: at least one render mode must stay active.** If you try to disable the last one, the panel refuses and shows "At least one render mode must stay active." Without a render mode, the viewer would have nothing left to draw the volume with.
 
@@ -413,7 +417,27 @@ You will meet this case if someone drops a plugin straight onto the server (over
 
 **Withdrawing an approval:** the **Revoke** button on the plugin's row. It immediately becomes untrusted again and stops being loaded.
 
-## 5.6. The plugins shipped by default
+## 5.6. Updating a plugin
+
+From this tab, without going through the Catalog.
+
+![Updating from the Plugins tab](img-en/plugins-update.png)
+
+| | |
+|---|---|
+| **1** | The **banner** counts the plugins concerned. It only appears if there is at least one. |
+| **2** | **Update all** — only appears from two plugins onwards. A single password covers the batch. |
+| **3** | On the plugin's row: the **update available** label, the `v1.0.0 → v1.1.0` path, and the button. |
+
+> 📌 **The button only appears if both conditions are met**: a newer version exists, **and** it declares itself compatible with your version of the site. If the new version requires a newer platform, you see the reason instead of the button — update the site first (§8).
+
+As with an install, the panel asks for your password, downloads, verifies and replaces. **The copy that works is set aside, not deleted**: if anything fails after that point, it is put back. A failed update never leaves you with less than you had.
+
+> 💡 The same button exists in the **Catalog** (§6.2) and in **Updates** (§8.4). All three tabs read the same source, so they cannot contradict each other.
+
+## 5.7. The plugins offered by the Catalog
+
+These plugins are **not** shipped with the site: they install on demand, from the first-time setup wizard (step 5) or later from the Catalog (§6). A fresh install with everything unticked would have none of them.
 
 | Plugin | Placement | What it does for the visitor |
 |---|---|---|
@@ -430,6 +454,7 @@ You will meet this case if someone drops a plugin straight onto the server (over
 | **Presentation Mode** | Tool | Full screen with no interface, for projecting |
 | **Orientation Axes** | Tool | The A/P · D/V · L/R anatomical marker (see §3.5) |
 | **Toggle Grid / Axes / Volume** | Tools | Show or hide the grid, the axes, the volume |
+| **Screenshot (sandboxed)** | Tool | The same screen capture, but run in a sandbox — the reference example of an isolated plugin |
 | **Chunk Debug** | Tool | A technical diagnostic tool. **Safe to disable** on a production site |
 
 ---
@@ -440,7 +465,7 @@ You will meet this case if someone drops a plugin straight onto the server (over
 
 The Catalog works like an app store: it lists the official plugins available, and you install them in one click.
 
-Plugins are split into three sections: **Installed**, **Available**, and possibly **Incompatible**.
+Plugins are split into four sections. **To update** comes first whenever there is anything in it — an update is time-sensitive, an already-installed plugin is not — then **Installed**, **Available**, and possibly **Incompatible**.
 
 ## 6.1. Installing a plugin
 
@@ -451,21 +476,30 @@ Plugins are split into three sections: **Installed**, **Available**, and possibl
 
 During installation the server checks that the downloaded file matches, bit for bit, what the catalog announced. If there is the slightest discrepancy, **the installation is cancelled** rather than installing something questionable.
 
-The **"signature verified"** note at the top of the page confirms that the catalog itself is authentic.
+At the top of the page, a note gives the catalog's state: **"signature verified"** (the catalog is authentic) or **"unsigned"** (no signing key is configured on this server — only the sha256 fingerprint is checked).
 
-## 6.2. Uninstalling
+## 6.2. Updating
 
-The **🗑 Uninstall** button on the plugin's card, then confirm. The files are removed from the server. You can always reinstall later from the Catalog.
+An installed plugin for which a newer **and** compatible version exists leaves "Installed" and moves into **To update**, at the top of the page. Its card then shows `v1.0.0 → v1.1.0` instead of the catalog version alone, and an **Update** button appears next to **Uninstall**.
+
+The **Update all** button at the top handles the batch with a single password.
+
+It is the same action as in the **Plugins** (§5.6) and **Updates** (§8.4) tabs — do it from wherever you are.
+
+## 6.3. Uninstalling
+
+The **🗑 Uninstall** button on the plugin's card, then confirm. On a plugin with an update pending, that button is preceded by **Update**: check which of the two you are clicking. The files are removed from the server. You can always reinstall later from the Catalog.
 
 A refusal is possible in exactly one case: if it is the **last render mode** installed (same reason as in §5.3).
 
-## 6.3. The labels on the cards
+## 6.4. The labels on the cards
 
 | Label | Meaning |
 |---|---|
 | **`sandbox`** | This plugin will run isolated. That is the case for toolbar plugins. |
 | **`full trust`** | This plugin will run with the page's full rights. Unavoidable for render modes and channel controls, which drive the graphics card directly. |
-| **`incompatible`** | This plugin needs a newer (or older) version of the site than yours. The install button is greyed out. Run an update (see §8) and it becomes installable again. |
+| **`update available`** | A newer version exists **and** it is compatible with your site. The card shows `v1.0.0 → v1.1.0` and an **Update** button. |
+| **`incompatible`** | Only appears on a plugin that is **not installed**: it needs a newer (or older) version of the site than yours, and the install button is greyed out. Run an update (see §8) and it becomes installable again. A plugin that is **already installed** never carries this label — the one running on your site works; it is only its next version that may have to wait. |
 
 ---
 
@@ -519,11 +553,12 @@ On a Windows server the card simply states that POSIX permissions do not apply �
 | **2** | The state: *up to date*, or *update available*. |
 | **3** | **Check** — runs the search again immediately. |
 
-Three version numbers are shown — that is normal, they are three independent components:
+Two version numbers are shown — they are two independent components:
 
 - **Web Platform** — the site itself. **This is the one that matters.**
-- **Dev server** — the local development tool.
-- **Preprocessing** — the data preparation tool (see §9).
+- **Preprocessing pipeline** — the data preparation tool (see §9). It moves at its own pace: a number lower than the site's is nothing unusual.
+
+A line whose value is unknown is not shown at all, rather than shown empty.
 
 ## 8.1. Running an update
 
@@ -563,34 +598,61 @@ The update is designed so that a failure cannot break the site:
 | **No release published** | No version has been published publicly yet. |
 | **The certificate store is unusable** | A host configuration issue. Report it to whoever runs the server. |
 
+## 8.4. Updating the plugins
+
+Below the site update, a **Plugin updates** card answers the same question for the modules: "what needs updating here?"
+
+![Plugin updates](img-en/updates-plugins.png)
+
+| | |
+|---|---|
+| **1** | The number of plugins concerned. |
+| **2** | For each of them: the installed version and the one it would move to. |
+| **3** | **Update all** — a single password for the batch. |
+
+A plugin whose new version requires a newer platform appears in a second list, **"Updates waiting on the platform"**, with the reason. It is not hidden away: making it disappear would read as "nothing to update", and you would spend a long time wondering why your plugin stays behind.
+
+The same action exists in **Plugins** (§5.6) and **Catalog** (§6.2).
+
 ---
 
 # 9. Pipeline — preparing new data
 
 ![Pipeline tab](img-en/tab-pipeline.png)
 
-This tab processes **nothing** on the server. It gives you **a tool to download** and run on a powerful computer, typically the lab's analysis workstation.
+This tab processes **nothing** on the server. It gives you **a pack to download** and run on a powerful computer, typically the lab's analysis workstation.
 
 **Why separate them?** Converting a microscopy volume needs an enormous amount of RAM — reckon on about **32 GB** for a 3789 × 3789 × 178 volume. No shared web server can do that.
 
-## 9.1. What the pack contains
+## 9.1. The principle
 
-- **Volume pipeline** — converts Imaris `.ims` stacks into brick-chunked datasets, with a level-of-detail pyramid, thumbnail and metadata.
-- **Tracking pipeline** — reads the Excel export produced by Imaris, reconstructs cell lineages (mitoses included), stabilises the trajectories and computes the metrics.
-- **Attachment** — links an analysed tracking run to an already-processed dataset, so the trajectories overlay the images.
-- **One example input per pipeline** — the pack is usable straight away, with no real data, to get the hang of it.
-- **A `RUN.bat` launcher** that checks file integrity, verifies the Python installation and runs the chosen pipeline.
+The first card sums up the data's journey in four steps:
+
+| | |
+|---|---|
+| **Raw files** | what comes out of the microscope: `.ims` for the volumes, an Excel export for the tracking |
+| **`RUN.bat`** | the launcher, on a Windows workstation |
+| **Dataset** | what the pack produces: chunked volumes + trajectories |
+| **`DATA_WEB\`** | the server folder you copy it into — it shows up in the catalog straight away |
+
+The pack holds **two pipelines** (volumes and tracking), **one example input for each** — so it is usable straight away, with no real data, to get the hang of it — and a launcher that **checks its own integrity** (SHA-256) before running anything.
+
+> 📌 **Two numbers, and that is normal.** This card's header shows `pipeline v0.15.0`: that is the version **of the pack**, not of the site. Under the specifications, a line recalls which platform version it shipped with. The pack follows its own numbering because it *is* the preprocessing tool — do not try to line the two up.
 
 ## 9.2. Which edition to choose
 
-| | **Complete edition** | **Light edition** |
+One question settles it: **does the processing workstation have internet access?**
+
+| | **Light edition** *(recommended)* | **Complete edition** *(offline)* |
 |---|---|---|
-| Size | ~70 MB (200 MB extracted) | a few MB |
-| Internet | **Never needed** | Needed **once**, on first launch |
-| Python | Embedded, versions pinned | Fetched on first launch, into an isolated environment |
-| For whom | An offline workstation, or to guarantee identical results across installations | A connected workstation, everyday use |
+| For whom | A workstation with internet access | A workstation off the network, or a frozen environment |
+| Size | a few megabytes | ~70 MB (200 MB extracted) |
+| Internet | **once**, on first launch | **never** |
+| Python | installed by the pack, apart from the system | embedded, versions pinned |
 
 The light edition **never** modifies the Python already installed on the workstation: it works in its own corner.
+
+> ⚠️ The complete edition is attached to the version published on GitHub, not to the site. If it is unavailable, the panel tells you so and the light edition stays downloadable.
 
 ## 9.3. How to use it
 
@@ -603,7 +665,73 @@ The light edition **never** modifies the Python already installed on the worksta
 
 ---
 
-# 10. Identity — the site's name and vocabulary
+# 10. Documentation — the platform's guides
+
+This is where you will find this document, and every one published after it.
+
+![Documentation tab](img-en/tab-docs.png)
+
+| | |
+|---|---|
+| **1** | **Refresh** — reads the list again from the repository. |
+| **2** | One card per document, all languages and versions taken together. |
+| **3** | The date of the version on offer, and its size. |
+| **4** | The languages available. **Yours is picked for you.** |
+| **5** | **Read** — opens the document inside the panel. Next to it, **Download**. |
+
+## 10.1. Where these documents come from
+
+**Not from this install.** They are published in the project's repository and fetched when the list is displayed. A useful consequence: a corrected guide reaches you **without updating the site**.
+
+A consequence worth knowing too: if the server cannot reach GitHub, the list does not appear — a banner tells you why. That is not the site failing, only this list.
+
+> 💡 The list is held in memory for ten minutes. A document published a moment ago may therefore take a while to show up: **Refresh** forces the list to be read again.
+
+## 10.2. Choosing the language
+
+The available languages are shown as buttons. The one highlighted is the one you get if you touch nothing.
+
+The choice is made in this order: **your interface language**, failing that **English**, failing that the **Multilingual** version, failing that the first one available. So you will never get an empty card because a translation is missing.
+
+Clicking another language changes the document on offer, and the version history follows: each language has its own.
+
+## 10.3. Previous versions
+
+A corrected document does not replace the old one: it is added alongside it. The card always offers **the most recent one**, and a **Previous versions** button unfolds the others, with their dates.
+
+That is useful when a procedure has changed and you want to find what it said at the time.
+
+## 10.4. Reading inside the panel
+
+![Reading a document](img-en/docs-preview.png)
+
+**Read** shows the document inside the panel. **New tab** opens it full size, **Close** shuts the preview.
+
+> 📌 **Not every format can be displayed.** PDFs, images and text are read inside the panel. The other formats — a Word document, a spreadsheet, an archive — have no **Read** button: they are downloaded. That is not a display limitation but a security choice, explained to the operator by the absence of the button rather than by an error message.
+
+## 10.5. Publishing a document
+
+Reserved for whoever runs the repository, but worth knowing so you can ask for the right thing.
+
+A document is published by dropping a file into the repository's `DOCS/` folder, named to a strict rule:
+
+```
+260803 - GUIDE-ADMIN - EN.pdf
+└─┬──┘   └────┬────┘   └┬┘
+  │           │         └── the language
+  │           └──────────── the document's identifier, the same from one version to the next
+  └──────────────────────── the date, in YYMMDD form: this is the version number
+```
+
+- **The date** orders the versions. The most recent one is offered, the others stay reachable.
+- **The identifier** must stay **identical** from one version to the next: it is what makes two files the same document. If it changes, the panel sees two different documents.
+- **The language** decides what each operator will see.
+
+A file that does not follow this rule is not published: it is **reported as ignored** at the bottom of the tab. A typo is therefore visible, instead of making a document disappear silently.
+
+---
+
+# 11. Identity — the site's name and vocabulary
 
 This tab lets you rename the site entirely, without touching any code. It is what lets the same platform serve an embryology lab or a neuroscience institute.
 
@@ -618,13 +746,13 @@ This tab lets you rename the site entirely, without touching any code. It is wha
 
 ![Footer and navigation](img-en/tab-branding-nav.png)
 
-## 10.1. The multilingual fields
+## 11.1. The multilingual fields
 
 Fields marked **(MULTILINGUAL)** show one row per language: `EN`, `ES`, `FR`, `NL`.
 
 **Always fill in `EN` at the very least.** It is the fallback: if a visitor browses the site in Spanish and the `ES` field is empty, the English text is shown — never a blank.
 
-## 10.2. The "Identity" card
+## 11.2. The "Identity" card
 
 | Field | What it is for | Example |
 |---|---|---|
@@ -636,38 +764,38 @@ Fields marked **(MULTILINGUAL)** show one row per language: `EN`, `ES`, `FR`, `N
 | **Organization** | Your lab or institution | `IRIBHM — ULB` |
 | **Organization link** | The address of its website | `https://…` |
 
-## 10.3. The "Terminology" card — the most useful one
+## 11.3. The "Terminology" card — the most useful one
 
 This is where the site adapts to your field. You define **the word for what you image**, singular and plural, in each language.
 
 That word is then **picked up automatically throughout the public interface**: titles, filters, statistics, descriptions. Write `embryo / embryos` and the site talks about embryos. Write `sample / samples` and it talks about samples — everywhere, with no other change.
 
-## 10.4. The "Tagline & SEO" card
+## 11.4. The "Tagline & SEO" card
 
 - **Tagline** — the subtitle shown under the site's name.
 - **Description (SEO)** — the summary Google and social networks display. Two clear sentences are enough.
 - **Keywords (SEO)** — a few comma-separated terms.
 
-## 10.5. The "Footer" card
+## 11.5. The "Footer" card
 
 - **Copyright notice** — the text at the bottom of every page.
 - **Links** — the footer links. **+ Add link** creates one (label + address), the cross removes one.
 
-## 10.6. The "Navigation" card
+## 11.6. The "Navigation" card
 
 The checkboxes decide which entries appear in the public site's menu: *Explorer*, *Compare*, *Tracking*, *About*, *Legal*.
 
 Unticking an entry removes it from the menu without deleting the page.
 
-> ⚠️ **Watch out for "Legal".** That box is unticked by default. If you write your legal notice (§13), remember to come back here to make it reachable.
+> ⚠️ **Watch out for "Legal".** That box is unticked by default. If you write your legal notice (§14), remember to come back here to make it reachable.
 
 ---
 
-# 11. Pages — the visual editor
+# 12. Pages — the visual editor
 
 This is the panel's richest feature. It lets you **edit the site's page content as you would in a page-layout program**, without writing a line of code.
 
-## 11.1. Picking a page
+## 12.1. Picking a page
 
 ![Pages tab](img-en/tab-pages.png)
 
@@ -682,7 +810,7 @@ The **🗑 Delete** button erases a page you created. It stays greyed out on `ho
 
 Two pages exist out of the box: **`home`** and **`about`**. The *(built-in)* note means they still use the supplied template: from your first publish onwards, your version takes over.
 
-## 11.2. The editor
+## 12.2. The editor
 
 The editor opens **in its own browser tab** so it has the whole screen.
 
@@ -699,7 +827,7 @@ The editor opens **in its own browser tab** so it has the whole screen.
 | **7** | The **sidebar**: elements to insert, and the settings of whatever is selected. |
 | **8** | **The real page.** This is not a mock-up: it is your actual page, with its real menu, real footer and real theme. What you see is exactly what visitors will see. |
 
-## 11.3. The top bar in detail
+## 12.3. The top bar in detail
 
 ![Editor top bar](img-en/editor-topbar.png)
 
@@ -714,7 +842,7 @@ The editor opens **in its own browser tab** so it has the whole screen.
 > 📌 **The distinction to remember: Draft ≠ Publish.**
 > Until you click **Publish**, visitors keep seeing the old version. You can therefore work for days saving drafts, without breaking anything.
 
-## 11.4. Adding an element
+## 12.4. Adding an element
 
 The sidebar's **Elements** tab holds everything that can be placed in a page.
 
@@ -778,7 +906,7 @@ The **Search an element** field filters the list — handy, since there are 27.
 
 > 💡 **The elements that fill themselves.** *Latest datasets* and *Stats* can draw straight from the site's data: number of datasets, of specimens, of tracked cells, of annotated regions. The figure updates by itself when you add data — you will never have to come back and correct the page.
 
-## 11.5. Editing an existing element
+## 12.5. Editing an existing element
 
 **Click it in the page.** It gets a green outline and the sidebar switches to its settings.
 
@@ -852,7 +980,7 @@ A small green bar appears on the block under your cursor:
 
 *(On a Mac, replace `Ctrl` with `Cmd`.)* These shortcuts are disabled while you are typing in a text field, so you can write normally.
 
-## 11.6. Organising the page: sections and columns
+## 12.6. Organising the page: sections and columns
 
 A page is built on three levels:
 
@@ -876,13 +1004,13 @@ To split a section into columns, select it (click its area, or use the **›** c
 
 On a phone, columns **automatically stack one under the other**. You do not have to do anything for that.
 
-## 11.7. Checking on mobile
+## 12.7. Checking on mobile
 
 ![Mobile preview](img-en/editor-mobile.png)
 
 The three icons (desktop / tablet / mobile) resize the preview. **Get into the habit of checking on mobile before publishing**: a good share of visitors browse the site from a phone.
 
-## 11.8. The animated background
+## 12.8. The animated background
 
 ![Background tab](img-en/editor-side-background.png)
 
@@ -894,7 +1022,7 @@ The **Background** tab adds a discreet animated backdrop behind the whole page.
 
 The setting automatically honours the system "reduce motion" preference of people sensitive to movement.
 
-## 11.9. Translating a page
+## 12.9. Translating a page
 
 ![Translate tab](img-en/editor-side-translate.png)
 
@@ -904,7 +1032,7 @@ It is a real time-saver: instead of reopening each element one by one hunting fo
 
 **Suggested method:** write the whole page in one language, then switch to this tab and translate it in one pass.
 
-## 11.10. Variables
+## 12.10. Variables
 
 ![Variables tab](img-en/editor-side-variables.png)
 
@@ -922,7 +1050,7 @@ Naming rules: start with a letter, then letters, digits or `_`, 32 characters ma
 
 Variables already exist for the Identity tab's information: `{brand}` (the site's name), `{specimen}` (your object of study), `{org}` (the organisation), `{year}` (the year). They update by themselves.
 
-## 11.11. Creating a new page
+## 12.11. Creating a new page
 
 1. in the **Pages** tab, click **+ New page**;
 2. give it a title and a short address (the *slug*, e.g. `protocols`);
@@ -932,7 +1060,7 @@ Variables already exist for the Identity tab's information: `{brand}` (the site'
 
 The page is then reachable at `https://<your-site>/page.html?slug=protocols`.
 
-## 11.12. Recommended workflow
+## 12.12. Recommended workflow
 
 1. **Edit with the editor**
 2. Make your changes
@@ -944,7 +1072,7 @@ The page is then reachable at `https://<your-site>/page.html?slug=protocols`.
 
 ---
 
-# 12. Appearance — the site's colours
+# 13. Appearance — the site's colours
 
 ![Appearance tab](img-en/tab-appearance.png)
 
@@ -954,7 +1082,7 @@ The page is then reachable at `https://<your-site>/page.html?slug=protocols`.
 | **2** | **Live preview** — what you see is **not published yet**. |
 | **3** | **Save** — applies the theme to the public site. |
 
-## 12.1. The colours
+## 13.1. The colours
 
 | Colour | Where it appears |
 |---|---|
@@ -968,12 +1096,12 @@ Click a colour square to open the picker. **The preview on the right updates ins
 
 > 💡 **Keep the Success / Error / Warning colours close to green / red / orange.** Those are universal cues: an error message in green disorients visitors.
 
-## 12.2. Typography and shapes
+## 13.2. Typography and shapes
 
 - **Font** — the typeface of the public site.
 - **Corner radius** — from sharp to very rounded, on buttons and cards.
 
-## 12.3. Publishing the theme
+## 13.3. Publishing the theme
 
 Nothing is applied to the public site until you click **Save**. The **Reset** button returns to the original theme.
 
@@ -981,7 +1109,7 @@ Nothing is applied to the public site until you click **Save**. The **Reset** bu
 
 ---
 
-# 13. Legal
+# 14. Legal
 
 ![Legal tab](img-en/tab-legal.png)
 
@@ -1023,19 +1151,19 @@ The password must be **at least 8 characters**.
 
 ![Wizard, step 2](img-en/wizard-2-identity.png)
 
-The instance name, the organisation, and the word for the objects you study. Editable afterwards under **Identity** (§10).
+The instance name, the organisation, and the word for the objects you study. Editable afterwards under **Identity** (§11).
 
 ## Step 3 — Theme
 
 ![Wizard, step 3](img-en/wizard-3-theme.png)
 
-One dominant colour out of six suggestions. Refinable afterwards under **Appearance** (§12).
+One dominant colour out of six suggestions. Refinable afterwards under **Appearance** (§13).
 
 ## Step 4 — Texts
 
 ![Wizard, step 4](img-en/wizard-4-texts.png)
 
-The tagline and the footer line. Editable afterwards under **Identity** (§10).
+The tagline and the footer line. Editable afterwards under **Identity** (§11).
 
 ## Step 5 — Plugins
 
@@ -1112,10 +1240,10 @@ Do a **hard reload**: `Ctrl + Shift + R` (Windows) or `Cmd + Shift + R` (Mac). T
 | **Sandbox** | An isolated execution mode: the plugin works, but cannot reach the rest of the page. |
 | **Fingerprint** | A signature of a file's exact contents. If the file changes by a single character, the fingerprint changes. |
 | **Slug** | A page's short address (`protocols` in `page.html?slug=protocols`). |
-| **Section / Column / Element** | The three levels a page is built from (§11.6). |
+| **Section / Column / Element** | The three levels a page is built from (§12.6). |
 | **Draft** | A version that is saved but **not yet visible** to the public. |
 | **SEO** | The texts that search engines and social networks display. |
 
 ---
 
-*Document generated from version **1.36.0** of the platform. The screenshots come from a real instance; colours may differ if the theme has been changed.*
+*Document generated from version **1.42.0** of the platform. The screenshots come from a real instance; colours may differ if the theme has been changed.*

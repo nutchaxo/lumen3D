@@ -24,12 +24,13 @@ const PLACEMENTS = [
   { key: 'shaders',  icon: 'layers',  labelKey: 'admin.placementShaders',  labelDef: 'Modes de rendu (shaders)' },
 ];
 
+// tier → [css class, i18n key, French default]
 const TRUST_BADGE = {
-  bundled: ['adm-tag-ok', 'intégré'],
-  dev: ['adm-tag-ok', 'dev'],
-  'approved-trusted': ['adm-tag-ok', 'approuvé'],
-  sandboxed: ['adm-tag-ok', 'sandbox'],
-  untrusted: ['adm-tag-danger', 'non fiable'],
+  bundled: ['adm-tag-ok', 'admin.trustBundled', 'intégré'],
+  dev: ['adm-tag-ok', 'admin.trustDev', 'dev'],
+  'approved-trusted': ['adm-tag-ok', 'admin.trustApproved', 'approuvé'],
+  sandboxed: ['adm-tag-ok', 'admin.trustSandbox', 'sandbox'],
+  untrusted: ['adm-tag-danger', 'admin.trustUntrusted', 'non fiable'],
 };
 
 function trustControls(p) {
@@ -58,7 +59,8 @@ function row(p, isProtected) {
   const untrusted = tier === 'untrusted';
   const dis = (p.enabled && !incompatible && !untrusted) ? '' : 'is-off';
   const lock = (isProtected || incompatible) ? 'disabled' : '';
-  const [badgeCls, badgeTxt] = TRUST_BADGE[tier] || ['', ''];
+  const [badgeCls, badgeKey, badgeDef] = TRUST_BADGE[tier] || ['', '', ''];
+  const badgeTxt = badgeKey ? t(badgeKey, badgeDef) : '';
   const meta = [p.version ? `v${escHtml(p.version)}` : '', p.creator ? escHtml(p.creator) : '', escHtml(p.path)]
     .filter(Boolean).join(' · ');
   const hashShort = p.trust && p.trust.hash ? p.trust.hash.slice(0, 12) : '';

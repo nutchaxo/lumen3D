@@ -13,7 +13,7 @@ from pathlib import Path
 import numpy as np
 from PIL import Image
 
-__version__ = "0.16.1"
+__version__ = "0.16.3"
 
 # ── Paths ──────────────────────────────────────────────────────────────────────
 SCRIPT_DIR = Path(__file__).resolve().parent

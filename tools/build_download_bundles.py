@@ -65,9 +65,11 @@ DATASET_TYPES = ("fixed", "live", "tracking")
 TARGET_PX = 2048               # desired long XY side of the generated TIFF
 # Hard ceiling on the in-flight volume (C·Z·Y·X·itemsize); if the level closest to
 # TARGET_PX exceeds this, step down the pyramid so we never blow up disk/RAM.
-# Held under 4 GiB because the ImageJ flavour is classic TIFF (32-bit offsets):
-# past that tifffile drops every IFD but the first and the file stops opening.
-MAX_TIFF_BYTES = 3 * 1024**3
+# This is NOT the classic-TIFF 4 GiB offset limit: that one applies to the
+# COMPRESSED file (~45% of the raw volume here), so capping the raw volume at 4
+# GiB would cost real resolution — it halved 4 of the lab's 16 datasets when
+# tried. An overflowing write is caught and retried one level coarser instead.
+MAX_TIFF_BYTES = 6 * 1024**3
 
 # False-colour fallbacks (mirror run_preprocess.THUMB_COLORS) when a channel has
 # no display colour in metadata.json.
@@ -303,6 +305,10 @@ def tiff_info(folder, level, ch_names, vox, dtype):
     ])
 
 
+class TiffTooLarge(RuntimeError):
+    """The written stack overflowed the ImageJ flavour's 32-bit offsets."""
+
+
 def write_imagej_tiff(path, vol, vox, metadata):
     """Write the composite hyperstack, refusing a silently truncated file: the
     ImageJ flavour is classic TIFF (32-bit offsets), and past ~4 GiB tifffile
@@ -319,8 +325,7 @@ def write_imagej_tiff(path, vol, vox, metadata):
     for w in caught:
         if "truncat" in str(w.message).lower():
             path.unlink(missing_ok=True)
-            raise RuntimeError(f"volume too large for an ImageJ TIFF ({w.message}); "
-                               "rerun with a smaller --tiff-px")
+            raise TiffTooLarge(str(w.message))
 
 
 def build_tiff_and_mips(ims_src, ds_dir, folder, channels_meta, tiff_path,
@@ -355,51 +360,57 @@ def build_tiff_and_mips(ims_src, ds_dir, folder, channels_meta, tiff_path,
         # to uint16 leaves every value in the bottom 0.4% of the range, which any
         # reader that trusts the declared depth renders as black.
         dtype = np.dtype(tp0[ch_keys[0]]["Data"].dtype)
-        L, Xr, Yr, Zr = choose_level(levels, n_ch, TARGET_PX, MAX_TIFF_BYTES,
-                                     dtype.itemsize)
 
-        # Physical extent is level-independent → voxel size = extent / level dims.
-        ext = lambda lo, hi: (attr_float(info, hi, 1.0) - attr_float(info, lo, 0.0))
-        vox = (
-            ext("ExtMin0", "ExtMax0") / max(Xr, 1),
-            ext("ExtMin1", "ExtMax1") / max(Yr, 1),
-            ext("ExtMin2", "ExtMax2") / max(Zr, 1),
-        )
-
-        base = f["DataSet"][f"ResolutionLevel {L}"]["TimePoint 0"]
         need_vol = want_tiff and not tiff_done
         if not need_vol and not want_mip:
             return "tiff skip (exists)" if want_tiff else "nothing to do"
 
+        # Physical extent is level-independent → voxel size = extent / level dims.
+        ext = lambda lo, hi: (attr_float(info, hi, 1.0) - attr_float(info, lo, 0.0))
+
+        # Best level first, then every coarser one. Whether the compressed stack
+        # clears the classic-TIFF offset limit is only knowable after writing it,
+        # so an overflow steps down instead of leaving the dataset with no TIFF.
+        best = choose_level(levels, n_ch, TARGET_PX, MAX_TIFF_BYTES, dtype.itemsize)
+        candidates = [lv for lv in levels if lv[0] >= best[0]]
+
         # Exact per-channel histogram → display range. Only the integer types get
         # one; ImageJ already auto-scales float images when it opens them.
         nbins = (1 << (8 * dtype.itemsize)) if dtype.kind == "u" and dtype.itemsize <= 2 else 0
-        hists = ([np.zeros(nbins, dtype=np.int64) for _ in range(n_ch)]
-                 if need_vol and nbins else None)
 
-        tmp_dir = Path(tempfile.mkdtemp(prefix="lumen_bundle_"))
-        arr, mips = None, []
-        try:
-            if need_vol:
-                # ImageJ hyperstack axis order is TZCYX → (Z, C, Y, X) at T=1.
-                arr = np.memmap(tmp_dir / f"{folder}.vol.dat", dtype=dtype, mode="w+",
-                                shape=(Zr, n_ch, Yr, Xr))
-            for ci, ck in enumerate(ch_keys):
-                data = base[ck]["Data"]
-                mip = np.zeros((Yr, Xr), dtype=dtype)
-                for z in range(Zr):                     # plane-by-plane → low RAM
-                    plane = data[z, :Yr, :Xr]
-                    if arr is not None:
-                        arr[z, ci] = plane
-                    np.maximum(mip, plane, out=mip)     # MIP accrues in the same pass
-                    if hists is not None:
-                        hists[ci] += np.bincount(plane.ravel(), minlength=nbins)
-                mips.append(mip)
-            if arr is not None:
+        status, mips = [], []
+        for attempt, (L, Xr, Yr, Zr) in enumerate(candidates):
+            vox = (
+                ext("ExtMin0", "ExtMax0") / max(Xr, 1),
+                ext("ExtMin1", "ExtMax1") / max(Yr, 1),
+                ext("ExtMin2", "ExtMax2") / max(Zr, 1),
+            )
+            base = f["DataSet"][f"ResolutionLevel {L}"]["TimePoint 0"]
+            hists = ([np.zeros(nbins, dtype=np.int64) for _ in range(n_ch)]
+                     if need_vol and nbins else None)
+            tmp_dir = Path(tempfile.mkdtemp(prefix="lumen_bundle_"))
+            arr, mips = None, []
+            try:
+                if need_vol:
+                    # ImageJ hyperstack axis order is TZCYX → (Z, C, Y, X) at T=1.
+                    arr = np.memmap(tmp_dir / f"{folder}.vol.dat", dtype=dtype,
+                                    mode="w+", shape=(Zr, n_ch, Yr, Xr))
+                for ci, ck in enumerate(ch_keys):
+                    data = base[ck]["Data"]
+                    mip = np.zeros((Yr, Xr), dtype=dtype)
+                    for z in range(Zr):                 # plane-by-plane → low RAM
+                        plane = data[z, :Yr, :Xr]
+                        if arr is not None:
+                            arr[z, ci] = plane
+                        np.maximum(mip, plane, out=mip)  # MIP accrues in the same pass
+                        if hists is not None:
+                            hists[ci] += np.bincount(plane.ravel(), minlength=nbins)
+                    mips.append(mip)
+
+                if not need_vol:
+                    break                               # MIP-only: nothing to write
                 arr.flush()
 
-            status = []
-            if need_vol:
                 ranges, luts = [], []
                 for ci in range(n_ch):
                     luts.append(ramp_lut(hex_to_rgb(cat[ci].get("color"),
@@ -415,32 +426,51 @@ def build_tiff_and_mips(ims_src, ds_dir, folder, channels_meta, tiff_path,
                 if ranges:
                     meta["Ranges"] = tuple(ranges)
                 tmp_tif = tiff_path.with_suffix(".tif.tmp")
-                write_imagej_tiff(tmp_tif, np.asarray(arr), vox, meta)
+                try:
+                    write_imagej_tiff(tmp_tif, np.asarray(arr), vox, meta)
+                except TiffTooLarge as exc:
+                    if attempt + 1 >= len(candidates):
+                        raise RuntimeError(
+                            f"no pyramid level fits an ImageJ TIFF ({exc})") from exc
+                    print(f"  [tiff] L{L} {Xr}x{Yr}x{Zr} overflows the ImageJ TIFF "
+                          f"offset limit — retrying one level coarser")
+                    continue
                 os.replace(tmp_tif, tiff_path)
                 status.append(f"tiff L{L} {Xr}x{Yr}x{Zr} {dtype} "
                               f"{fmt_size(tiff_path.stat().st_size)}")
-            elif want_tiff:
-                status.append("tiff skip (exists)")
+                break
+            finally:
+                # Windows refuses to unlink a file that is still mapped, and a
+                # raised exception keeps the np.asarray() view alive in its
+                # traceback — so drop the mapping explicitly or the multi-GiB
+                # scratch file survives the run.
+                if arr is not None:
+                    try:
+                        arr._mmap.close()
+                    except Exception:
+                        pass
+                del arr
+                shutil.rmtree(tmp_dir, ignore_errors=True)
 
-            if want_mip:
-                from PIL import Image
-                made = 0
-                for ci, mip in enumerate(mips):
-                    out = mip_paths_for(ci, ch_names[ci])
-                    if out.exists() and not force:
-                        continue
-                    rgb = hex_to_rgb(cat[ci].get("color"), THUMB_COLORS[ci % len(THUMB_COLORS)])
-                    norm = _autoscale(mip)              # 0..1 float
-                    img = np.zeros((mip.shape[0], mip.shape[1], 3), dtype=np.uint8)
-                    for k in range(3):
-                        img[:, :, k] = np.clip(norm * rgb[k], 0, 255).astype(np.uint8)
-                    Image.fromarray(img, "RGB").save(str(out))
-                    made += 1
-                status.append(f"{made} MIP png")
-            return "; ".join(status) or "nothing to do"
-        finally:
-            del arr
-            shutil.rmtree(tmp_dir, ignore_errors=True)
+        if want_tiff and not need_vol:
+            status.append("tiff skip (exists)")
+
+        if want_mip:
+            from PIL import Image
+            made = 0
+            for ci, mip in enumerate(mips):
+                out = mip_paths_for(ci, ch_names[ci])
+                if out.exists() and not force:
+                    continue
+                rgb = hex_to_rgb(cat[ci].get("color"), THUMB_COLORS[ci % len(THUMB_COLORS)])
+                norm = _autoscale(mip)                  # 0..1 float
+                img = np.zeros((mip.shape[0], mip.shape[1], 3), dtype=np.uint8)
+                for k in range(3):
+                    img[:, :, k] = np.clip(norm * rgb[k], 0, 255).astype(np.uint8)
+                Image.fromarray(img, "RGB").save(str(out))
+                made += 1
+            status.append(f"{made} MIP png")
+        return "; ".join(status) or "nothing to do"
 
 
 def _pad(channels_meta, n):

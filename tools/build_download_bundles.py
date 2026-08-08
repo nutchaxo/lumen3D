@@ -12,9 +12,15 @@ Download Center's file explorer (api/downloads) will expose, in this order:
   2. <folder>.ims       — the original Imaris file, placed by HARD LINK (no byte
                           duplication; RAW_DATA and DATA_WEB live on the same
                           volume). Falls back to a copy across volumes.
-  3. <folder>.ome.tif   — a multi-channel OME-TIFF (uint16, voxel-calibrated in
-                          µm, channel names) reconstructed from the .ims internal
+  3. <folder>.tif       — a multi-channel ImageJ/Fiji composite hyperstack
+                          (native bit depth, µm-calibrated, per-channel display
+                          range + LUT) reconstructed from the .ims internal
                           resolution pyramid at ~TARGET_PX on the long XY side.
+                          ImageJ flavour rather than OME because OME-XML has no
+                          display-range field: Bio-Formats then opens the stack
+                          across the full 0..65535 sweep and every channel reads
+                          black until the user hits Reset in Brightness/Contrast.
+                          The .ims beside it stays the interoperable master.
   4. <folder>_C{n}_<name>_MIP.png — per-channel maximum-intensity projection.
   5. README.txt         — provenance, dimensions, voxel size, channels, citation.
 
@@ -41,6 +47,7 @@ import shutil
 import sys
 import tempfile
 import time
+import warnings
 import zipfile
 from pathlib import Path
 
@@ -55,10 +62,12 @@ RAW_DATA_DIRS = [
 ]
 DATASET_TYPES = ("fixed", "live", "tracking")
 
-TARGET_PX = 2048               # desired long XY side of the generated OME-TIFF
-# Hard ceiling on the in-flight volume (C·Z·Y·X·2 bytes); if the level closest to
+TARGET_PX = 2048               # desired long XY side of the generated TIFF
+# Hard ceiling on the in-flight volume (C·Z·Y·X·itemsize); if the level closest to
 # TARGET_PX exceeds this, step down the pyramid so we never blow up disk/RAM.
-MAX_TIFF_BYTES = 6 * 1024**3
+# Held under 4 GiB because the ImageJ flavour is classic TIFF (32-bit offsets):
+# past that tifffile drops every IFD but the first and the file stops opening.
+MAX_TIFF_BYTES = 3 * 1024**3
 
 # False-colour fallbacks (mirror run_preprocess.THUMB_COLORS) when a channel has
 # no display colour in metadata.json.
@@ -203,7 +212,7 @@ def place_ims(ims_src, out_path, force, dry):
         return f"copy {fmt_size(out_path.stat().st_size)}"
 
 
-# ── Step 3/4 — OME-TIFF (+ per-channel MIP) from the .ims pyramid ───────────
+# ── Step 3/4 — ImageJ TIFF (+ per-channel MIP) from the .ims pyramid ────────
 def list_levels(f):
     """[(L, Xr, Yr, Zr)] from the Imaris ResolutionLevel groups (real sizes)."""
     dataset = f["DataSet"]
@@ -244,11 +253,11 @@ def ims_channel_names(f, n_ch):
     return names
 
 
-def choose_level(levels, n_ch, target_px, max_bytes):
+def choose_level(levels, n_ch, target_px, max_bytes, itemsize=2):
     """Level whose long XY side is closest to target_px, stepping smaller if the
     in-flight volume would exceed max_bytes."""
     chosen = min(levels, key=lambda lv: abs(max(lv[1], lv[2]) - target_px))
-    while chosen[1] * chosen[2] * chosen[3] * n_ch * 2 > max_bytes:
+    while chosen[1] * chosen[2] * chosen[3] * n_ch * itemsize > max_bytes:
         smaller = [lv for lv in levels if lv[0] > chosen[0]]
         if not smaller:
             break
@@ -256,11 +265,70 @@ def choose_level(levels, n_ch, target_px, max_bytes):
     return chosen
 
 
+def ramp_lut(rgb):
+    """Black→colour 8-bit ramp. ImageJ applies one per channel in composite mode,
+    so the download opens in the same colours the platform shows."""
+    lut = np.zeros((3, 256), dtype=np.uint8)
+    for k in range(3):
+        lut[k] = np.linspace(0, rgb[k], 256, dtype=np.uint8)
+    return lut
+
+
+def range_from_hist(hist, lo_pct=1.0, hi_pct=99.9):
+    """Display range from an exact intensity histogram — the same 1st–99.9th
+    percentile window _autoscale gives the MIP PNGs, so the stack opens looking
+    like them instead of at the detector's full theoretical sweep."""
+    total = int(hist.sum())
+    if total <= 0:
+        return 0.0, 1.0
+    cdf = np.cumsum(hist)
+    lo = float(np.searchsorted(cdf, total * lo_pct / 100.0))
+    hi = float(np.searchsorted(cdf, total * hi_pct / 100.0))
+    if hi <= lo:
+        nz = np.nonzero(hist)[0]
+        lo, hi = 0.0, (float(nz[-1]) if len(nz) else 1.0)
+    return lo, max(hi, lo + 1.0)
+
+
+def tiff_info(folder, level, ch_names, vox, dtype):
+    """Free-text block surfaced by Fiji's Image ▸ Show Info."""
+    return "\n".join([
+        f"Dataset: {folder}",
+        f"Source: Imaris .ims ResolutionLevel {level}, native {dtype}",
+        f"Voxel size (um): X={vox[0]:.6g} Y={vox[1]:.6g} Z={vox[2]:.6g}",
+        "Channels: " + ", ".join(f"C{i + 1}={n}" for i, n in enumerate(ch_names)),
+        "Voxel values are the raw acquisition intensities; only the stored "
+        "display range is scaled (Image > Adjust > Brightness/Contrast).",
+        "Lumen3D / IRIBHM Microscopy Platform",
+    ])
+
+
+def write_imagej_tiff(path, vol, vox, metadata):
+    """Write the composite hyperstack, refusing a silently truncated file: the
+    ImageJ flavour is classic TIFF (32-bit offsets), and past ~4 GiB tifffile
+    warns and keeps only the first IFD, which no reader can open."""
+    import tifffile
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        tifffile.imwrite(
+            str(path), vol, imagej=True, photometric="minisblack",
+            compression="zlib",
+            resolution=(1.0 / (vox[0] or 1.0), 1.0 / (vox[1] or 1.0)),
+            resolutionunit="NONE", metadata=metadata,
+        )
+    for w in caught:
+        if "truncat" in str(w.message).lower():
+            path.unlink(missing_ok=True)
+            raise RuntimeError(f"volume too large for an ImageJ TIFF ({w.message}); "
+                               "rerun with a smaller --tiff-px")
+
+
 def build_tiff_and_mips(ims_src, ds_dir, folder, channels_meta, tiff_path,
                         mip_paths_for, want_tiff, want_mip, force, dry):
     """Returns a status string. Reads ONE pyramid level (≈TARGET_PX), streams it
     into a disk-backed memmap in the system temp dir (low RAM, never litters
-    download/), writes a calibrated OME-TIFF, and emits per-channel MIP PNGs."""
+    download/), writes a calibrated ImageJ composite hyperstack, and emits
+    per-channel MIP PNGs."""
     import h5py
 
     tiff_done = tiff_path.exists() and not force
@@ -283,7 +351,12 @@ def build_tiff_and_mips(ims_src, ds_dir, folder, channels_meta, tiff_path,
         ims_names = ims_channel_names(f, n_ch)
         ch_names = [(cat[i].get("name") or ims_names[i] or f"Channel {i+1}") for i in range(n_ch)]
 
-        L, Xr, Yr, Zr = choose_level(levels, n_ch, TARGET_PX, MAX_TIFF_BYTES)
+        # The acquisition's bit depth is preserved. Promoting an 8-bit acquisition
+        # to uint16 leaves every value in the bottom 0.4% of the range, which any
+        # reader that trusts the declared depth renders as black.
+        dtype = np.dtype(tp0[ch_keys[0]]["Data"].dtype)
+        L, Xr, Yr, Zr = choose_level(levels, n_ch, TARGET_PX, MAX_TIFF_BYTES,
+                                     dtype.itemsize)
 
         # Physical extent is level-independent → voxel size = extent / level dims.
         ext = lambda lo, hi: (attr_float(info, hi, 1.0) - attr_float(info, lo, 0.0))
@@ -294,35 +367,58 @@ def build_tiff_and_mips(ims_src, ds_dir, folder, channels_meta, tiff_path,
         )
 
         base = f["DataSet"][f"ResolutionLevel {L}"]["TimePoint 0"]
+        need_vol = want_tiff and not tiff_done
+        if not need_vol and not want_mip:
+            return "tiff skip (exists)" if want_tiff else "nothing to do"
+
+        # Exact per-channel histogram → display range. Only the integer types get
+        # one; ImageJ already auto-scales float images when it opens them.
+        nbins = (1 << (8 * dtype.itemsize)) if dtype.kind == "u" and dtype.itemsize <= 2 else 0
+        hists = ([np.zeros(nbins, dtype=np.int64) for _ in range(n_ch)]
+                 if need_vol and nbins else None)
+
         tmp_dir = Path(tempfile.mkdtemp(prefix="lumen_bundle_"))
-        memmap_path = tmp_dir / f"{folder}.vol.dat"
-        arr = np.memmap(memmap_path, dtype=np.uint16, mode="w+", shape=(n_ch, Zr, Yr, Xr))
-        mips = []
+        arr, mips = None, []
         try:
+            if need_vol:
+                # ImageJ hyperstack axis order is TZCYX → (Z, C, Y, X) at T=1.
+                arr = np.memmap(tmp_dir / f"{folder}.vol.dat", dtype=dtype, mode="w+",
+                                shape=(Zr, n_ch, Yr, Xr))
             for ci, ck in enumerate(ch_keys):
                 data = base[ck]["Data"]
+                mip = np.zeros((Yr, Xr), dtype=dtype)
                 for z in range(Zr):                     # plane-by-plane → low RAM
-                    arr[ci, z] = data[z, :Yr, :Xr]
-                mips.append(np.asarray(arr[ci]).max(axis=0))  # uint16 (Yr,Xr)
-            arr.flush()
+                    plane = data[z, :Yr, :Xr]
+                    if arr is not None:
+                        arr[z, ci] = plane
+                    np.maximum(mip, plane, out=mip)     # MIP accrues in the same pass
+                    if hists is not None:
+                        hists[ci] += np.bincount(plane.ravel(), minlength=nbins)
+                mips.append(mip)
+            if arr is not None:
+                arr.flush()
 
             status = []
-            if want_tiff and not tiff_done:
-                import tifffile
+            if need_vol:
+                ranges, luts = [], []
+                for ci in range(n_ch):
+                    luts.append(ramp_lut(hex_to_rgb(cat[ci].get("color"),
+                                                    THUMB_COLORS[ci % len(THUMB_COLORS)])))
+                    if hists is not None:
+                        ranges.extend(range_from_hist(hists[ci]))
+                meta = {
+                    "axes": "ZCYX", "spacing": vox[2], "unit": "um",
+                    "mode": "composite", "LUTs": luts,
+                    "Labels": [ch_names[c] for _ in range(Zr) for c in range(n_ch)],
+                    "Info": tiff_info(folder, L, ch_names, vox, dtype),
+                }
+                if ranges:
+                    meta["Ranges"] = tuple(ranges)
                 tmp_tif = tiff_path.with_suffix(".tif.tmp")
-                tifffile.imwrite(
-                    str(tmp_tif), np.asarray(arr), bigtiff=True, ome=True,
-                    photometric="minisblack", compression="zlib",
-                    metadata={
-                        "axes": "CZYX",
-                        "PhysicalSizeX": vox[0], "PhysicalSizeXUnit": "µm",
-                        "PhysicalSizeY": vox[1], "PhysicalSizeYUnit": "µm",
-                        "PhysicalSizeZ": vox[2], "PhysicalSizeZUnit": "µm",
-                        "Channel": {"Name": ch_names},
-                    },
-                )
+                write_imagej_tiff(tmp_tif, np.asarray(arr), vox, meta)
                 os.replace(tmp_tif, tiff_path)
-                status.append(f"tiff L{L} {Xr}x{Yr}x{Zr} {fmt_size(tiff_path.stat().st_size)}")
+                status.append(f"tiff L{L} {Xr}x{Yr}x{Zr} {dtype} "
+                              f"{fmt_size(tiff_path.stat().st_size)}")
             elif want_tiff:
                 status.append("tiff skip (exists)")
 
@@ -355,7 +451,7 @@ def _pad(channels_meta, n):
 
 
 def _autoscale(plane):
-    """Robust 0..1 normalisation (1st–99.9th percentile) for a uint16 MIP."""
+    """Robust 0..1 normalisation (1st–99.9th percentile) for a MIP of any depth."""
     p = plane.astype(np.float32)
     lo = float(np.percentile(p, 1.0))
     hi = float(np.percentile(p, 99.9))
@@ -398,8 +494,8 @@ def write_readme(out_path, ds, ims_src, force, dry):
         "(bricks + metadata + thumbnail)",
         f"  {ds['folder']}.ims       original Imaris acquisition"
         + (f"  ({fmt_size(ims_src.stat().st_size)})" if ims_src and ims_src.exists() else " (not available)"),
-        f"  {ds['folder']}.ome.tif   multi-channel OME-TIFF (µm-calibrated, ~{TARGET_PX}px), "
-        "from the .ims pyramid",
+        f"  {ds['folder']}.tif       multi-channel ImageJ/Fiji composite hyperstack "
+        f"(native bit depth, µm-calibrated, ~{TARGET_PX}px), from the .ims pyramid",
         f"  {ds['folder']}_C*_*_MIP.png   per-channel maximum-intensity projection",
         "",
         "Citation: cite the IRIBHM Microscopy Platform (Lumen3D, IRIBHM @ ULB) and "
@@ -445,16 +541,23 @@ def process(ds, args):
         except Exception as exc:
             print(f"  [.ims] FAILED: {exc}")
 
-    # 3/4. OME-TIFF + per-channel MIP
+    # 3/4. ImageJ composite TIFF + per-channel MIP
     if (not args.no_tiff or not args.no_mip) and ims_src is not None:
         channels_meta = ds["meta"].get("channels", [])
+        tiff_out = dl / f"{folder}.tif"
         def mip_path(ci, name):
             safe = re.sub(r"[^A-Za-z0-9._-]+", "_", str(name)).strip("_") or f"C{ci+1}"
             return dl / f"{folder}_C{ci+1}_{safe}_MIP.png"
         try:
-            print(f"  [tiff/mip] {build_tiff_and_mips(ims_src, ds['dir'], folder, channels_meta, dl / f'{folder}.ome.tif', mip_path, not args.no_tiff, not args.no_mip, args.force, args.dry_run)}")
+            print(f"  [tiff/mip] {build_tiff_and_mips(ims_src, ds['dir'], folder, channels_meta, tiff_out, mip_path, not args.no_tiff, not args.no_mip, args.force, args.dry_run)}")
         except Exception as exc:
             print(f"  [tiff/mip] FAILED: {exc}")
+        # Drop the superseded OME-TIFF only once its replacement is on disk —
+        # left in place it stays the file operators download, and it opens black.
+        legacy = dl / f"{folder}.ome.tif"
+        if legacy.exists() and tiff_out.exists() and not args.dry_run:
+            legacy.unlink()
+            print(f"  [tiff] removed superseded {legacy.name}")
 
     # 5. README
     try:
@@ -470,7 +573,7 @@ def main():
     ap.add_argument("--types", default=",".join(DATASET_TYPES), help="comma list: fixed,live,tracking")
     ap.add_argument("--data-web", help="override the DATA_WEB directory (default: <repo>/DATA_WEB)")
     ap.add_argument("--raw-dir", help="directory to search first for the source .ims (prepended to RAW_DATA_DIRS)")
-    ap.add_argument("--tiff-px", type=int, default=TARGET_PX, help="target long XY side of the OME-TIFF")
+    ap.add_argument("--tiff-px", type=int, default=TARGET_PX, help="target long XY side of the TIFF")
     ap.add_argument("--no-archive", action="store_true")
     ap.add_argument("--no-ims", action="store_true")
     ap.add_argument("--no-tiff", action="store_true")

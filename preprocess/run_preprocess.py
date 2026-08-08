@@ -13,7 +13,7 @@ from pathlib import Path
 import numpy as np
 from PIL import Image
 
-__version__ = "0.16.0"
+__version__ = "0.16.1"
 
 # ── Paths ──────────────────────────────────────────────────────────────────────
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -313,7 +313,7 @@ def process_ims_file(ims_path: Path, output_root: Path, idx: int = 0, total: int
         if n_timepoints > 1:
             attach_tracking(ims_path, dataset_output_dir, temp_dir, dataset_name, tracking)
 
-        # Step 7 (optional): download/ bundle — archive, original .ims, OME-TIFF,
+        # Step 7 (optional): download/ bundle — archive, original .ims, ImageJ TIFF,
         # per-channel MIPs, README. Runs after step 4 so metadata.json exists. The
         # source .ims is the one being processed, so point the tool at its folder.
         if with_downloads:
@@ -325,7 +325,7 @@ def process_ims_file(ims_path: Path, output_root: Path, idx: int = 0, total: int
                            "--data-web", str(output_root),
                            "--raw-dir", str(ims_path.parent),
                            "--datasets", dataset_name,
-                           label="download/ (archive, OME-TIFF, MIP)")
+                           label="download/ (archive, ImageJ TIFF, MIP)")
 
         elapsed = (datetime.now() - t0).total_seconds()
         print(_ok(f"   [OK] {dataset_name} termine en {elapsed:.0f}s"))
@@ -346,7 +346,7 @@ def main():
     parser.add_argument("--only", default=None, help="Glob pattern to filter files to process (e.g. '*E8*').")
     parser.add_argument("--with-downloads", action="store_true",
                         help="After each dataset, also build its download/ bundle "
-                             "(web archive, original .ims, OME-TIFF, per-channel MIP, README).")
+                             "(web archive, original .ims, ImageJ TIFF, per-channel MIP, README).")
     parser.add_argument("--tracking", default="auto", metavar="auto|off|FILE",
                         help="Cell tracking for timelapse datasets. 'auto' (default) looks for "
                              "a .imaris_track beside the volume, then the Imaris objects inside "

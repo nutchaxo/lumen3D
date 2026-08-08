@@ -17,6 +17,6 @@ tqdm>=4.65.0
 # xlrd>=2.0.1
 # orjson>=3.9.0
 
-# Optional — only needed for the download/ bundle (--with-downloads): OME-TIFF export.
+# Optional — only needed for the download/ bundle (--with-downloads): ImageJ TIFF export.
 # The .bat launcher installs it on demand; uncomment for a manual `pip install -r`.
 # tifffile>=2024.1.0

@@ -20,8 +20,11 @@ PluginRegistry.implement('toggle-axes', {
     if (typeof s?.axesVisible === 'boolean') {
       this._visible = s.axesVisible;
       if (typeof VolumeViewer !== 'undefined') VolumeViewer.setAxesVisible(this._visible);
+      PluginRegistry.syncToolbarButton('toggle-axes', { active: this._visible });
     }
   },
+
+  reset() { this.setState({ axesVisible: false }); },
 
   dispose() { this._visible = false; }
 });

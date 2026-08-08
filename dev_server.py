@@ -17,6 +17,7 @@ API routes handled:
     POST /api/auth.php?action=change_password
     GET  /api/datasets.php?action=list | get
     POST /api/datasets.php?action=save | save_thumbnail | rebuild_catalog | set_visibility
+                                       | gallery_add | gallery_delete
     POST /api/telemetry.php?action=visit | view | download   (public usage beacons)
     GET  /api/admin.php?action=stats | plugins | version | update_check | update_status
     POST /api/admin.php?action=set_plugin | update_apply
@@ -1120,7 +1121,8 @@ def _get_cookie_token(cookie_header: str | None) -> str | None:
     return None
 
 
-WRITE_ACTIONS = ("save", "save_thumbnail", "rebuild_catalog", "set_visibility")
+WRITE_ACTIONS = ("save", "save_thumbnail", "rebuild_catalog", "set_visibility",
+                 "gallery_add", "gallery_delete")
 
 
 def _is_write_action(action: str) -> bool:
@@ -3677,12 +3679,21 @@ def _save_dataset(dataset_id: str, body: dict) -> bool:
         except Exception:
             pass
 
+    stored_gallery = existing.get("gallery")
     existing.update(body)
     existing["id"]          = folder          # canonical id = just folder name (no type/ prefix)
     existing["type"]        = type_dir
     existing["folderName"]  = folder
     existing["configured"]  = True
     existing["lastModified"] = datetime.now().isoformat()
+    # The posted `gallery` decides ORDER and CAPTIONS only; which files exist is decided
+    # by the folder. Keeps a stale draft from resurrecting a deleted image or dropping
+    # one that was uploaded while the form was open.
+    gallery = _gallery_reconcile(existing, ds_dir, fallback=stored_gallery)
+    if gallery:
+        existing["gallery"] = gallery
+    else:
+        existing.pop("gallery", None)
 
     _atomic_write(meta_path, json.dumps(existing, indent=2, ensure_ascii=False), mode=_file_mode())  # RACE-020
     _CATALOG_CACHE["sig"] = None  # PERF-035: force a recompute on the next catalog read
@@ -3738,6 +3749,221 @@ def _save_thumbnail_bytes(dataset_id: str, image_data: str):
     _atomic_write(ds_dir / "thumbnail.webp", img_bytes, binary=True, mode=_file_mode())  # RACE-020
     _CATALOG_CACHE["sig"] = None  # PERF-035
     return 200, {"ok": True, "path": f"DATA_WEB/{type_dir}/{folder}/thumbnail.webp"}
+
+
+# ── Dataset gallery (operator-attached images, e.g. annotated captures) ────────
+# Images live INSIDE the dataset folder (DATA_WEB/<type>/<folder>/gallery/), not in
+# the shared media library: an annotated figure is a fact about that dataset, so it
+# travels with it on a copy/SFTP move and disappears with it on delete. metadata.json
+# stays the single source of truth (Rule 1.1) — it holds the order and the captions,
+# the folder holds the bytes, and _gallery_reconcile keeps the two honest.
+GALLERY_DIRNAME = "gallery"
+MAX_GALLERY_BYTES = 8 * 1024 * 1024
+MAX_GALLERY_ITEMS = 40
+_GALLERY_CAPTION_MAX = 400
+# Extension is derived from the MAGIC BYTES, never from the client-supplied filename:
+# the four formats _is_supported_image can actually prove. An .png that is really a
+# script therefore lands as neither.
+_GALLERY_MAGIC_EXT = (
+    (lambda b: b[0:4] == b"RIFF" and b[8:12] == b"WEBP", "webp"),
+    (lambda b: b[0:8] == b"\x89PNG\r\n\x1a\n", "png"),
+    (lambda b: b[0:3] == b"\xff\xd8\xff", "jpg"),
+    (lambda b: b[0:6] in (b"GIF87a", b"GIF89a"), "gif"),
+)
+_GALLERY_FILE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,80}\.(webp|png|jpg|jpeg|gif)$")
+
+
+def _gallery_ext(raw: bytes):
+    for probe, ext in _GALLERY_MAGIC_EXT:
+        if probe(raw):
+            return ext
+    return None
+
+
+def _gallery_stem(name: str) -> str:
+    """Slug for the on-disk name: keeps the operator's filename recognisable in the
+    folder without letting it decide the path."""
+    stem = (name or "").replace("\\", "/").split("/")[-1]
+    stem = stem.rsplit(".", 1)[0] if "." in stem else stem
+    stem = re.sub(r"[^A-Za-z0-9_-]+", "-", stem).strip("-").lower()[:60]
+    return stem or "image"
+
+
+def _gallery_rel(file_name: str):
+    """Validate a gallery entry's `file` and return it normalised, or None.
+
+    The value is echoed into a URL by the viewer, so it must be a bare file name in
+    the gallery folder — never a path, never a traversal.
+    """
+    if not isinstance(file_name, str):
+        return None
+    name = file_name.replace("\\", "/").strip("/")
+    if name.startswith(GALLERY_DIRNAME + "/"):
+        name = name[len(GALLERY_DIRNAME) + 1:]
+    if "/" in name or not _GALLERY_FILE_RE.match(name):
+        return None
+    return name
+
+
+def _gallery_clean_text(value, limit: int = _GALLERY_CAPTION_MAX) -> str:
+    if not isinstance(value, str):
+        return ""
+    return value.replace("\r", " ").replace("\n", " ").strip()[:limit]
+
+
+def _gallery_reconcile(meta: dict, ds_dir: Path, fallback=None) -> list:
+    """Make metadata.json's `gallery` agree with what is actually on disk.
+
+    Two directions, both required:
+      · entries whose file is missing (or whose `file` is malformed) are DROPPED, so a
+        hand-edited or stale client draft can never point the viewer at a bogus URL;
+      · files present in gallery/ but absent from the incoming list are APPENDED, so a
+        concurrent upload is not silently erased by a Save carrying an older draft.
+
+    ``fallback`` is the gallery as it stood BEFORE the incoming edit: a re-appended file
+    recovers its stored caption from it instead of coming back bare.
+    """
+    gdir = ds_dir / GALLERY_DIRNAME
+    on_disk = []
+    try:
+        if gdir.is_dir():
+            on_disk = sorted(
+                (p.name for p in gdir.iterdir() if p.is_file() and _GALLERY_FILE_RE.match(p.name)),
+                key=lambda n: ((gdir / n).stat().st_mtime, n),
+            )
+    except OSError:
+        on_disk = []
+    disk_set = set(on_disk)
+
+    prior = {}
+    for entry in (fallback if isinstance(fallback, list) else []):
+        if isinstance(entry, dict):
+            key = _gallery_rel(entry.get("file"))
+            if key:
+                prior[key] = entry
+
+    def _entry(name: str, src: dict) -> dict:
+        item = {"file": name}
+        title = _gallery_clean_text(src.get("title"), 120)
+        caption = _gallery_clean_text(src.get("caption"))
+        if title:
+            item["title"] = title
+        if caption:
+            item["caption"] = caption
+        if isinstance(src.get("added"), str):
+            item["added"] = src["added"][:40]
+        return item
+
+    out, seen = [], set()
+    for entry in (meta.get("gallery") if isinstance(meta.get("gallery"), list) else []):
+        if not isinstance(entry, dict):
+            continue
+        name = _gallery_rel(entry.get("file"))
+        if not name or name in seen or name not in disk_set:
+            continue
+        seen.add(name)
+        out.append(_entry(name, entry))
+
+    for name in on_disk:
+        if name not in seen:
+            out.append(_entry(name, prior.get(name, {})))
+
+    return out[:MAX_GALLERY_ITEMS]
+
+
+def _gallery_add(dataset_id: str, body: dict):
+    """Decode a data: URL and store it as a new gallery image. Returns (status, payload)."""
+    safe = _safe_dataset_dir(dataset_id)
+    if safe is None:
+        return 400, {"error": "Invalid dataset ID"}
+    type_dir, folder, ds_dir = safe
+    if not ds_dir.is_dir():
+        return 404, {"error": "Dataset not found"}
+
+    image = (body or {}).get("image", "")
+    if not isinstance(image, str) or not image.startswith("data:image/"):
+        return 400, {"error": "Invalid image format"}
+    try:
+        import base64
+        raw = base64.b64decode(image.split(",", 1)[1])
+    except Exception:
+        return 400, {"error": "Invalid image data"}
+    if not raw:
+        return 400, {"error": "Empty image"}
+    if len(raw) > MAX_GALLERY_BYTES:
+        return 400, {"error": "Image too large"}
+    ext = _gallery_ext(raw)
+    if ext is None:
+        return 400, {"error": "Not a valid image (expected WebP/PNG/JPEG/GIF)"}
+
+    meta_path = ds_dir / "metadata.json"
+    meta = {}
+    if meta_path.exists():
+        try:
+            meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        except Exception:
+            meta = {}
+    if not isinstance(meta, dict):
+        meta = {}
+    current = _gallery_reconcile(meta, ds_dir)
+    if len(current) >= MAX_GALLERY_ITEMS:
+        return 409, {"error": f"Gallery full (max {MAX_GALLERY_ITEMS} images)"}
+
+    gdir = ds_dir / GALLERY_DIRNAME
+    _make_dir(gdir)
+    stem = _gallery_stem(body.get("filename") or body.get("name") or "")
+    name = f"{stem}.{ext}"
+    i = 1
+    while (gdir / name).exists():
+        name = f"{stem}-{i}.{ext}"
+        i += 1
+    _atomic_write(gdir / name, raw, binary=True, mode=_file_mode())  # RACE-020
+
+    entry = {"file": name, "added": datetime.now().isoformat()}
+    title = _gallery_clean_text(body.get("title"), 120)
+    caption = _gallery_clean_text(body.get("caption"))
+    if title:
+        entry["title"] = title
+    if caption:
+        entry["caption"] = caption
+    current.append(entry)
+    meta["gallery"] = current
+    meta["lastModified"] = datetime.now().isoformat()
+    _atomic_write(meta_path, json.dumps(meta, indent=2, ensure_ascii=False), mode=_file_mode())
+    _CATALOG_CACHE["sig"] = None  # PERF-035
+    return 200, {"ok": True, "item": entry, "gallery": current,
+                 "url": f"DATA_WEB/{type_dir}/{folder}/{GALLERY_DIRNAME}/{name}"}
+
+
+def _gallery_delete(dataset_id: str, file_name: str):
+    safe = _safe_dataset_dir(dataset_id)
+    if safe is None:
+        return 400, {"error": "Invalid dataset ID"}
+    _type_dir, _folder, ds_dir = safe
+    name = _gallery_rel(file_name)
+    if not name:
+        return 400, {"error": "Invalid file"}
+    target = ds_dir / GALLERY_DIRNAME / name
+    try:
+        if target.is_file():
+            target.unlink()
+    except OSError:
+        return 500, {"error": "Delete failed"}
+
+    meta_path = ds_dir / "metadata.json"
+    meta = {}
+    if meta_path.exists():
+        try:
+            meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        except Exception:
+            meta = {}
+    if not isinstance(meta, dict):
+        meta = {}
+    meta["gallery"] = _gallery_reconcile(meta, ds_dir)
+    meta["lastModified"] = datetime.now().isoformat()
+    _atomic_write(meta_path, json.dumps(meta, indent=2, ensure_ascii=False), mode=_file_mode())
+    _CATALOG_CACHE["sig"] = None  # PERF-035
+    return 200, {"ok": True, "gallery": meta["gallery"]}
 
 
 def _catalog_mtime_sig() -> float:
@@ -4713,6 +4939,18 @@ class AdminHandler(http.server.SimpleHTTPRequestHandler):
                 else:
                     status, payload = _save_thumbnail_bytes(ds_id, (body or {}).get("image", ""))
                     self._json(status, payload)
+
+            elif action in ("gallery_add", "gallery_delete"):
+                ds_id = params.get("id", "")
+                if _is_staged_id(ds_id):
+                    # The staging store accepts only what the preprocessing pipeline
+                    # emits (upload_staging.classify_path); a gallery is attached once
+                    # the import is published.
+                    self._json(409, {"error": "not_published"})
+                elif action == "gallery_add":
+                    self._json(*_gallery_add(ds_id, body or {}))
+                else:
+                    self._json(*_gallery_delete(ds_id, (body or {}).get("file", "")))
 
             elif action == "rebuild_catalog":
                 count = _rebuild_catalog()

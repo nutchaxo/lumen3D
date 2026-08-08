@@ -11,15 +11,52 @@ import io
 from concurrent.futures import ProcessPoolExecutor
 import os
 
+# Empty-space skipping counts the voxels the RENDERER can draw, not the voxels that
+# are merely non-zero.
+#
+# Window leveling in 2-image_processor.py maps [bg_floor, sig_max] onto [0, 255], so a
+# voxel sitting one step above the noise floor lands on 1. Background noise straddling
+# bg_floor therefore always leaves a speckle of 1s — that is arithmetic, not a defect.
+# Counting those as content made a brick that is 97-99 % zero pass the test: measured on
+# the published Decidua bricks, the eight corner bricks are 96.9 %, 98.5 % and 98.9 %
+# zero (99th percentile = 1) and were all kept, which is why that dataset reports 7200
+# non-empty bricks out of 7200 and downloads ~4x what a comparable one does.
+#
+# The viewer never shows those voxels. volume-viewer.js:_floorsFromManifest derives a
+# per-channel background floor and clamps it to [6, 48] (it reaches the low end of that
+# clamp whenever the manifest carries no explicit backgroundFloor, which is every
+# dataset published so far). Anything under 6 is crushed to zero by the LUT before the
+# ray marcher ever sees it. Counting from 5 is thus strictly below the smallest floor
+# the viewer can choose: no brick that could contribute a pixel is ever dropped, and the
+# stored voxels are untouched — only the index changes.
+# The test is the INTERSECTION of the historic ratio and a drawability check, so it can
+# only ever keep a subset of what it kept before, and everything it newly drops is
+# provably invisible: zero voxels at or above the floor. Replaying it over every
+# published brick of a LOD: Decidua lod2 goes from 1836 kept to 1434 (-21.9 %), and the
+# healthy Em10 lod2 from 932 to 930 (-0.2 %) — the correction lands on the pathological
+# dataset and leaves the sound ones alone.
+#
+# Dropping the ratio and keeping only `drawable > 0` would take Decidua lod2 down a
+# further 291 bricks, but each of those still holds up to 131 voxels the viewer WOULD
+# draw. Discarding measured signal to save bandwidth is not a call this script gets to
+# make silently (rule 1.1), so the ratio stays.
+DISPLAY_FLOOR = 5           # the viewer's LUT crushes everything below 6 to zero
+ESS_MIN_OCCUPANCY = 0.0005  # unchanged historic tolerance, still measured on non-zero
+
+
 def process_chunk(args):
     chunk_data, ch_meta, BRICK_SIZE = args
     non_zero = np.count_nonzero(chunk_data)
     valid_voxels = max(1, ch_meta["validVoxelCount"])
     occ = float(non_zero) / float(valid_voxels)
 
-    is_non_empty = occ > 0.0005
+    # A brick holding nothing at or above the display floor cannot contribute a single
+    # pixel: it is empty however many quantization-noise 1s it carries.
+    has_drawable = bool(np.any(chunk_data > DISPLAY_FLOOR))
+
+    is_non_empty = occ > ESS_MIN_OCCUPANCY and has_drawable
     if not is_non_empty:
-        return (ch_meta["idx"], occ, False, None)
+        return (ch_meta["idx"], 0.0 if not has_drawable else occ, False, None)
 
     padded = np.zeros((BRICK_SIZE, BRICK_SIZE, BRICK_SIZE), dtype=np.uint8)
     d, h, w = chunk_data.shape
@@ -220,7 +257,7 @@ def _pack_timepoint(temp_dir: Path, bricks_dir: Path, t_idx: int, lod_levels, n_
         manifest_chunks = []
         non_empty_count = 0
         for i, ch in enumerate(active_chunks_grid):
-            is_non_empty = occupancy_union[i] > 0.0005
+            is_non_empty = occupancy_union[i] > ESS_MIN_OCCUPANCY
             if is_non_empty:
                 non_empty_count += 1
             manifest_chunks.append({

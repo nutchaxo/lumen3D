@@ -19,6 +19,36 @@ __version__ = "0.14.0"
 GLOBAL_NORM_SAMPLES = 8
 
 
+def _worker_count() -> int:
+    """Size of the median-filter pool.
+
+    One worker per logical core saturates the CPU, but each one also allocates its own
+    float32 copies of a Z-block plus the scipy median temporaries — roughly a gigabyte
+    apiece on a large field. Added to the three whole-volume shared blocks (float32 +
+    bool mask + uint8 output), a 22-core machine asks for ~33 GiB of Windows *commit*
+    at once, and commit is bounded by RAM + page file, not by free RAM.
+
+    Measured failure: 3789x3789x125x4ch on a 63.5 GiB machine whose commit limit was
+    89.6 GiB but which had only 36.3 GiB of it free (other services running). The pool
+    died at block 4 of 32 with WinError 1455 "the paging file is too small", after the
+    orchestrator had already cleared the dataset's bricks -- a published dataset lost to
+    a transient resource shortage.
+
+    LUMEN_PREPROCESS_WORKERS caps the pool so a busy or smaller machine can still finish.
+    Unset, the behaviour is exactly as before: one worker per logical core.
+    """
+    raw = os.environ.get("LUMEN_PREPROCESS_WORKERS", "").strip()
+    if raw:
+        try:
+            n = int(raw)
+            if n >= 1:
+                return min(n, os.cpu_count() or 1)
+            print(f"[PROCESS] LUMEN_PREPROCESS_WORKERS={raw!r} ignore (doit etre >= 1)", flush=True)
+        except ValueError:
+            print(f"[PROCESS] LUMEN_PREPROCESS_WORKERS={raw!r} ignore (entier attendu)", flush=True)
+    return os.cpu_count() or 1
+
+
 def _corner_samples(vol, W, H, D):
     """The 8 corner cubes — pure camera background, no specimen there."""
     corner_size = max(1, min(32, W // 4, H // 4, D // 4))
@@ -226,7 +256,7 @@ def process_image(input_ims: Path, metadata_json: Path, temp_dir: Path):
                 stack.callback(shm.unlink)
             for shm in (vol_shm, mask_shm, out_shm):
                 stack.callback(shm.close)
-            executor = stack.enter_context(ProcessPoolExecutor(max_workers=os.cpu_count()))
+            executor = stack.enter_context(ProcessPoolExecutor(max_workers=_worker_count()))
 
             vol = np.ndarray(shape, dtype=np.float32, buffer=vol_shm.buf)
             mask = np.ndarray(shape, dtype=bool, buffer=mask_shm.buf)

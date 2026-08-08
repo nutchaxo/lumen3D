@@ -8,6 +8,9 @@ window.createChannelPanel = function() {
   let _channels = [];
   let _histograms = [];
   let _onChangeCallback = null;
+  // The dataset metadata init() was given — the source the channel defaults are
+  // re-derived from when the workspace is reset.
+  let _metadata = null;
 
   // Extra sidebar entries that are NOT image channels — the tracking point cloud
   // today, a surface mesh tomorrow. Kept in their own list so `_channels` stays
@@ -24,6 +27,15 @@ window.createChannelPanel = function() {
   // structural rather than a filter someone can forget.
   let _layers = [];
 
+  // Solo is a toggle. Pressing it isolates a channel; pressing the SAME channel's
+  // button again restores the visibility that was in place just before — so a
+  // channel the operator had deliberately switched off (a noisy one) does not come
+  // back on. If nothing at all was visible then, everything is re-enabled instead
+  // of restoring an all-black screen. Any manual visibility edit while solo is on
+  // makes the snapshot stale, so it clears the solo (next press re-isolates).
+  let _soloIdx = null;      // channel currently isolated, null when solo is off
+  let _soloRestore = null;  // enabled flags captured when solo was engaged
+
   const DEFAULT_COLORS = ['#00FF00', '#00AAFF', '#FF00FF', '#FF0000'];
   const OPACITY_LEVELS = [0.7, 0.42, 1];
 
@@ -31,13 +43,35 @@ window.createChannelPanel = function() {
     _container = document.getElementById(containerId);
     if (!_container) return;
     _onChangeCallback = onChange;
+    _metadata = metadata || null;
 
+    _buildChannels(metadata);
+    _renderAll();
+    _channels.forEach((_, idx) => _notify(idx));
+  }
+
+  /**
+   * Every channel back to the dataset's own display defaults (Reset workspace).
+   * Rebuilds from the metadata `init` was handed rather than from a captured
+   * snapshot, so what the operator gets is exactly what a fresh open gives.
+   * Registered layers (the tracking point cloud) survive: they are not channels.
+   */
+  function reset() {
+    if (!_container || !_metadata) return;
+    _buildChannels(_metadata);
+    _renderAll();
+    _channels.forEach((_, idx) => _notify(idx));
+  }
+
+  function _buildChannels(metadata) {
     const numChannels = Math.max(1, Number(metadata?.dimensions?.c) || 1);
     const metaChannels = Array.isArray(metadata?.channels) ? metadata.channels : [];
     const metaColors = Array.isArray(metadata?.colors) ? metadata.colors : [];
     const displayDefaults = Array.isArray(metadata?.display_defaults) ? metadata.display_defaults : [];
     const prepApplied = Boolean(metadata?.preprocessing_applied);
     _channels = [];
+    _soloIdx = null;
+    _soloRestore = null;
     // BUG-070: no clear here — _renderAll() below replaces the container's innerHTML
     // wholesale, so this write was immediately overwritten (dead DOM churn).
 
@@ -99,9 +133,6 @@ window.createChannelPanel = function() {
         denoise_sigma: dd?.denoise_sigma ?? 0
       });
     }
-
-    _renderAll();
-    _channels.forEach((_, idx) => _notify(idx));
   }
 
   function setHistograms(histograms = []) {
@@ -162,6 +193,10 @@ window.createChannelPanel = function() {
       };
       _clampMidtone(idx);
     });
+    // Restoring a workspace rewrites every visibility flag, so the solo snapshot
+    // no longer describes anything on screen.
+    _soloIdx = null;
+    _soloRestore = null;
     _renderAll();
     if (options.notify !== false) _channels.forEach((_, idx) => _notify(idx));
   }
@@ -175,6 +210,31 @@ window.createChannelPanel = function() {
     if (window.lucide) lucide.createIcons({ nodes: [_container] });
     _channels.forEach((_, idx) => {
       _syncChannelUi(idx);
+    });
+    // A re-render (a layer registering, say) rebuilds the buttons from scratch —
+    // re-stamp the pressed state so an active solo keeps showing as active.
+    _applySoloUi();
+  }
+
+  function _clearSolo() {
+    if (_soloIdx === null && _soloRestore === null) return;
+    _soloIdx = null;
+    _soloRestore = null;
+    _applySoloUi();
+  }
+
+  function _applySoloUi() {
+    if (!_container) return;
+    _container.querySelectorAll('[data-channel-action="solo"]').forEach(button => {
+      const on = _soloIdx !== null && Number(button.dataset.channelIdx) === _soloIdx;
+      const key = on ? 'js.showAllChannels' : 'js.soloChannel';
+      const translated = typeof I18n !== 'undefined' ? I18n.t(key) : key;
+      button.classList.toggle('is-active', on);
+      button.setAttribute('aria-pressed', String(on));
+      // Swap the i18n key too, not just the rendered title: a language switch
+      // re-reads data-i18n-title, so leaving it stale would flip the label back.
+      button.setAttribute('data-i18n-title', key);
+      button.setAttribute('title', translated === key ? (on ? 'Show all channels' : 'Solo channel') : translated);
     });
   }
 
@@ -309,7 +369,7 @@ window.createChannelPanel = function() {
                 <input type="text" id="ch-name-input-${channel.idx}" value="${safeName}" spellcheck="false" style="background:transparent;border:none;border-bottom:1px solid transparent;color:inherit;font-size:inherit;font-family:inherit;font-weight:inherit;outline:none;width:100%;transition:border-color 0.2s;" onfocus="this.style.borderColor='rgba(255,255,255,0.2)'" onblur="this.style.borderColor='transparent'">
               </div>
               <div class="channel-quick">
-              <button class="btn btn-ghost btn-sm channel-icon-btn" type="button" data-channel-action="solo" data-channel-idx="${channel.idx}" title="Solo channel" data-i18n-title="js.soloChannel">
+              <button class="btn btn-ghost btn-sm channel-icon-btn" type="button" data-channel-action="solo" data-channel-idx="${channel.idx}" aria-pressed="false" title="Solo channel" data-i18n-title="js.soloChannel">
                 <i data-lucide="focus"></i>
               </button>
               <button class="btn btn-ghost btn-sm channel-icon-btn" type="button" data-channel-action="opacity" data-channel-idx="${channel.idx}" title="Cycle opacity" data-i18n-title="js.cycleOpacity">
@@ -342,6 +402,7 @@ window.createChannelPanel = function() {
       item.querySelector(`#ch-toggle-${idx}`)?.addEventListener('change', (e) => {
         _channels[idx].enabled = e.target.checked;
         item.classList.toggle('is-disabled', !_channels[idx].enabled);
+        _clearSolo();
         _notify(idx);
       });
       const nameInput = item.querySelector(`#ch-name-input-${idx}`);
@@ -384,14 +445,26 @@ window.createChannelPanel = function() {
         return;
       }
       if (action === 'solo') {
+        const unsolo = _soloIdx === idx;
+        const restore = unsolo
+          && Array.isArray(_soloRestore)
+          && _soloRestore.length === _channels.length
+          && _soloRestore.some(Boolean)
+          ? _soloRestore : null;
+        // Only the FIRST solo snapshots: soloing straight from another solo must not
+        // record that isolated state, or leaving solo would strand the operator on a
+        // single channel instead of the view they started from.
+        if (_soloIdx === null) _soloRestore = _channels.map(channel => channel.enabled);
         _channels.forEach((channel, channelIdx) => {
-          channel.enabled = channelIdx === idx;
-          _getEl(`ch-toggle-${channelIdx}`)?.toggleAttribute('checked', channel.enabled);
+          channel.enabled = unsolo ? (restore ? restore[channelIdx] : true) : channelIdx === idx;
           const toggle = _getEl(`ch-toggle-${channelIdx}`);
           if (toggle) toggle.checked = channel.enabled;
           _getEl(`channel-item-${channelIdx}`)?.classList.toggle('is-disabled', !channel.enabled);
           _notify(channelIdx);
         });
+        _soloIdx = unsolo ? null : idx;
+        if (unsolo) _soloRestore = null;
+        _applySoloUi();
         return;
       }
       if (action === 'opacity') {
@@ -518,6 +591,7 @@ window.createChannelPanel = function() {
 
   return {
     init,
+    reset,
     setHistograms,
     getState,
     setState,

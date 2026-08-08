@@ -21,9 +21,12 @@ PluginRegistry.implement('presentation-mode', {
     if (typeof s?.presentationMode === 'boolean') {
       this._active = s.presentationMode;
       document.body.classList.toggle('presentation-mode', this._active);
+      PluginRegistry.syncToolbarButton('presentation-mode', { active: this._active });
       if (this._ctx?.ui?.scheduleResize) this._ctx.ui.scheduleResize();
     }
   },
+
+  reset() { this.setState({ presentationMode: false }); },
 
   dispose() { this._active = false; }
 });

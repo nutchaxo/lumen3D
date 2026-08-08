@@ -10,6 +10,9 @@ const StudioEditor = (() => {
     signalThreshold: 6
   };
   const SCALEBAR_STEP = 10;
+  // Single source for the slice backdrop: the editing surface and the exported PNG
+  // must agree, otherwise the figure changes the moment it leaves the Studio.
+  const EXPORT_BACKGROUND = '#000000';
   const TOOL_KEYS = {
     v: 'select',
     r: 'rectangle',
@@ -66,6 +69,8 @@ const StudioEditor = (() => {
   let _future = [];
   let _studioHistograms = [];
   let _activeStudioPanelIndex = 0;
+  let _progressEl = null;
+  let _progressOnCancel = null;
 
   function init() {
     _container = document.getElementById('studio-layout');
@@ -129,9 +134,60 @@ const StudioEditor = (() => {
     _renderAll();
   }
 
+  /**
+   * Progress of a slice still streaming in behind the open document (the native-
+   * resolution upgrade). `null` clears the bar. `onCancel` is invoked if the operator
+   * cancels or closes the Studio, so the transfer stops instead of running on unseen.
+   */
+  function setLoadProgress(state) {
+    if (!state) {
+      _progressOnCancel = null;
+      _progressEl?.remove();
+      _progressEl = null;
+      return;
+    }
+    const el = _ensureProgressEl();
+    if (!el) return;
+    _progressOnCancel = typeof state.onCancel === 'function' ? state.onCancel : null;
+    const pct = Math.max(0, Math.min(100, Math.round(Number(state.percent) || 0)));
+    el.querySelector('.studio-progress-label').textContent = state.label || '';
+    el.querySelector('.studio-progress-pct').textContent = `${pct}%`;
+    el.querySelector('.studio-progress-fill').style.width = `${pct}%`;
+    el.querySelector('.studio-progress-cancel').hidden = !_progressOnCancel;
+  }
+
+  function _ensureProgressEl() {
+    if (_progressEl?.isConnected) return _progressEl;
+    const host = _workspace || _container;
+    if (!host) return null;
+    const el = document.createElement('div');
+    el.className = 'studio-progress';
+    el.innerHTML = `
+      <div class="studio-progress-head">
+        <span class="studio-progress-label"></span>
+        <span class="studio-progress-pct"></span>
+      </div>
+      <div class="studio-progress-track"><div class="studio-progress-fill"></div></div>
+      <button type="button" class="studio-progress-cancel"></button>`;
+    const cancel = el.querySelector('.studio-progress-cancel');
+    cancel.textContent = _t('studio.cancelLoad', 'Cancel');
+    cancel.addEventListener('click', () => {
+      const cb = _progressOnCancel;
+      setLoadProgress(null);
+      cb?.();
+    });
+    host.appendChild(el);
+    _progressEl = el;
+    return el;
+  }
+
   function close() {
     if (!_isOpen) return;
     _isOpen = false;
+    // A native slice may still be streaming for a document nobody is looking at.
+    const pendingCancel = _progressOnCancel;
+    setLoadProgress(null);
+    pendingCancel?.();
     _container.classList.add('hidden');
     // If we're in the standalone viewer, we need to show the viewer elements again
     document.getElementById('webgl-canvas')?.classList.remove('hidden');
@@ -259,7 +315,7 @@ const StudioEditor = (() => {
       </button>
     `).join('');
 
-    if (window.I18n && window.I18n.translateDOM) window.I18n.translateDOM();
+    if (typeof I18n !== 'undefined' && I18n.translateDOM) I18n.translateDOM();
     const header = document.querySelector('.studio-header-right');
     if (header && !document.getElementById('studio-undo')) {
       header.insertAdjacentHTML('afterbegin', `
@@ -415,6 +471,12 @@ const StudioEditor = (() => {
     _drawWorkspaceGrid();
     _ctx.save();
     _applyImageTransform(_ctx, viewport);
+    // The slicer discards empty voxels, so the slice canvas is transparent outside
+    // the specimen and the workspace grid used to show through it. Lay down the same
+    // opaque backdrop the exporter composites on (_composeExportCanvas), so what is
+    // edited matches what is exported.
+    _ctx.fillStyle = EXPORT_BACKGROUND;
+    _ctx.fillRect(0, 0, _sliceImage.width, _sliceImage.height);
     _ctx.drawImage(_sliceImage, 0, 0);
     _doc.guides.forEach(guide => _drawGuide(_ctx, guide));
     _doc.layers.forEach(layer => {
@@ -1113,7 +1175,7 @@ const StudioEditor = (() => {
           <button class="btn btn-outline btn-sm ${hasY ? 'active' : ''}" data-studio-command="add-guide-y" data-i18n="studio.guideY">Guide Y</button>
         </div>
       `;
-      if (window.I18n && window.I18n.translateDOM) window.I18n.translateDOM();
+      if (typeof I18n !== 'undefined' && I18n.translateDOM) I18n.translateDOM();
       _propsContainer.querySelectorAll('[data-studio-command]').forEach(btn => btn.addEventListener('click', () => _runCommand(btn.dataset.studioCommand)));
       return;
     }
@@ -2043,7 +2105,7 @@ const StudioEditor = (() => {
     canvas.width = source.width || source.canvas.width;
     canvas.height = source.height || source.canvas.height;
     const ctx = canvas.getContext('2d');
-    const background = options.background || '#000000';
+    const background = options.background || EXPORT_BACKGROUND;
     if (background && background !== 'transparent') {
       ctx.fillStyle = background;
       ctx.fillRect(0, 0, canvas.width, canvas.height);
@@ -2244,7 +2306,10 @@ const StudioEditor = (() => {
 
   // i18n helper: resolve key (with optional {params}), else the literal default.
   const _t = (k, def, params) => {
-    const v = (window.I18n && I18n.t) ? I18n.t(k, params) : k;
+    // `const I18n = (…)()` is a lexical global, never a window property — the old
+    // `window.I18n` guard was always false, so every Studio string fell back to its
+    // English literal regardless of the selected language.
+    const v = (typeof I18n !== 'undefined' && I18n.t) ? I18n.t(k, params) : k;
     return v === k ? def : v;
   };
 
@@ -2256,6 +2321,8 @@ const StudioEditor = (() => {
     init,
     open,
     setSliceResult,
+    setLoadProgress,
+    isOpen: () => _isOpen,
     close,
     getDocument
   };

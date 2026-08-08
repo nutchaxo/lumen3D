@@ -110,6 +110,10 @@ const VolumeViewer = (() => {
   let _lastCubePos = new THREE.Vector3();
   let _lastCubeQuat = new THREE.Quaternion();
   let _rotationLocked = false;
+  // The dataset's "home" pose — null unless something set one (the orientation-axes
+  // plugin does, from the dataset's saved default view). resetView() returns HERE
+  // rather than to the raw voxel axes, so "reset" lands where the dataset opened.
+  let _homeQuaternion = null;
   let _isInteracting = false;
   let _activePointers = new Map();
   let _targetSteps = 100;
@@ -403,14 +407,23 @@ const VolumeViewer = (() => {
     uniform vec3 ptDim;
     uniform vec3 ptScale;
     uniform float brickSize;
-    
+    // How many atlas pages are actually live. A sampler3D bound to nothing is an
+    // INCOMPLETE texture, and WebGL defines a fetch from one as (0,0,0,1) -- alpha 1.
+    // Read as a page index that is 255 - 1 = 254, i.e. "brick present, page 254",
+    // so the empty-space test below passed for every voxel of the volume and the ray
+    // marcher sampled an unbound atlas, itself returning (0,0,0,1): channel 3 full
+    // scale everywhere (a solid box in that channel's colour) and channels 0-2 at
+    // exactly zero. Bounding the index against the live page count turns any such
+    // inconsistent state back into "no brick" -- an empty view, never wrong voxels.
+    uniform int svrPageCount;
+
     vec4 getAtlasLookup(vec3 logicalPos) {
         vec3 logicalPixels = clamp(logicalPos * volumeDim, vec3(0.0), volumeDim - vec3(1.0));
         vec3 brickCoord = floor(logicalPixels / brickSize);
         vec3 ptCoord = (brickCoord + vec3(0.5)) / ptDim;
         vec4 page = texture(pageTable, ptCoord);
         float atlasPage = floor(page.a * 255.0 + 0.5) - 1.0;
-        if (atlasPage < 0.0) return vec4(-1.0);
+        if (atlasPage < 0.0 || atlasPage > float(svrPageCount - 1)) return vec4(-1.0);
         vec3 slotIndex = floor(page.rgb * 255.0 + 0.5);
         vec3 brickOrigin = brickCoord * brickSize;
         vec3 brickExtent = min(vec3(brickSize), volumeDim - brickOrigin);
@@ -844,6 +857,9 @@ const VolumeViewer = (() => {
         ptDim: { value: new THREE.Vector3(1, 1, 1) },
         ptScale: { value: new THREE.Vector3(1, 1, 1) },
         brickSize: { value: 64.0 },
+        // 0 until an SVR manager publishes its live page count: an unpublished atlas
+        // must read as "no brick", not as page 254 (see getAtlasLookup).
+        svrPageCount: { value: 0 },
         numChannels: { value: 0 },
         steps: { value: 100 },
         renderMode: { value: 2 },  // 2 = Natural Fluorescence by default
@@ -2124,6 +2140,17 @@ const VolumeViewer = (() => {
   }
 
   function _activateVolumeEntry(entry, metadata, sourceDepth, sourceWidth, channels, options = {}) {
+    // SVR-014: an entry whose manager has already been released cannot be shown —
+    // its atlases have no GPU texture left. Refuse it here rather than half-binding
+    // the material, and say so, instead of rendering a saturated box that reads as
+    // a real (and wrong) signal. Rule 1.1: never mount data we cannot vouch for.
+    if (entry.svrManager
+        && typeof entry.svrManager.isUsable === 'function'
+        && !entry.svrManager.isUsable()) {
+      console.error('[VolumeViewer] Refusing to activate a volume whose SVR atlas was already released; keeping the previous volume on screen.');
+      _emitQualityState({ message: `${entry.quality || 'volume'} dropped (GPU atlas released before display)` });
+      return false;
+    }
     if (entry.svrManager) {
       if (_svrManager && _svrManager !== entry.svrManager) {
         if (!_isSvrManagerCached(_svrManager)) _svrManager.dispose();
@@ -2155,10 +2182,19 @@ const VolumeViewer = (() => {
     const textures = entry.textures || [];
     _applyDisplayScale();
 
-    material.uniforms.svrAtlas0.value = entry.texture || textures[0] || null;
-    material.uniforms.svrAtlas1.value = textures[1] || textures[0] || entry.texture || null;
-    material.uniforms.svrAtlas2.value = textures[2] || textures[0] || entry.texture || null;
-    material.uniforms.svrAtlas3.value = textures[3] || textures[0] || entry.texture || null;
+    // On the SVR path updateUniforms() above is authoritative: it binds all EIGHT
+    // atlas pages plus the page table as one consistent set. Re-assigning 0..3 here
+    // from entry.textures overwrote half of that set and left 4..7 untouched, so a
+    // partial publish could not be recovered — the page table stayed unbound while
+    // the first four samplers pointed at released textures. Only the monolithic path
+    // needs these, and there entry.texture IS the single dense volume.
+    if (!entry.svrManager) {
+      material.uniforms.svrAtlas0.value = entry.texture || textures[0] || null;
+      material.uniforms.svrAtlas1.value = textures[1] || textures[0] || entry.texture || null;
+      material.uniforms.svrAtlas2.value = textures[2] || textures[0] || entry.texture || null;
+      material.uniforms.svrAtlas3.value = textures[3] || textures[0] || entry.texture || null;
+      if (material.uniforms.svrPageCount) material.uniforms.svrPageCount.value = 0;
+    }
     if (entry.occupancyMap) {
       material.defines.HAS_OCCUPANCY = 1;
       material.uniforms.mapOccupancy.value = entry.occupancyMap;
@@ -2344,7 +2380,7 @@ const VolumeViewer = (() => {
     if (previous && previous !== entry) _disposeVolumeEntry(previous);
     if (!Number.isFinite(entry.byteLength)) entry.byteLength = _entryBytes(entry);
     _volumeCache.set(key, entry);
-    _trimVolumeCache();
+    _trimVolumeCache(entry);
   }
 
   /** How many decoded timepoints may stay on the GPU.
@@ -2387,11 +2423,18 @@ const VolumeViewer = (() => {
    *  a 256 one does), then, within the quality being played, the frame we will reach
    *  LAST — the greatest cyclic distance ahead of the playhead. That keeps a
    *  contiguous window in front of the head, which is what a video buffer is. */
-  function _evictionVictim() {
+  function _evictionVictim(protectedEntry = null) {
     let worst = null;
     let worstRank = -Infinity;
     for (const [key, entry] of _volumeCache) {
       if (key === _activeTextureKey || entry === _activeVolumeEntry) continue;
+      // SVR-014: the entry that was JUST stored and is about to be activated is not
+      // yet _activeVolumeEntry (activation is the statement after _storeVolumeCache),
+      // so without this it was a legal victim — and _entryBytes() prices an SVR entry
+      // at its DENSE size (1024x1024x226x4 = 904 MiB against a 768 MiB budget), which
+      // made it the entry evicted to make room for itself. Freeing an entry one line
+      // before showing it is never right, whatever the budget says.
+      if (protectedEntry && entry === protectedEntry) continue;
       const quality = _normalizeQualityKey(entry?.quality || '');
       const sameSeries = entry?.basePath === _playhead.basePath && quality === _playhead.quality;
       let rank;
@@ -2408,7 +2451,7 @@ const VolumeViewer = (() => {
     return worst;
   }
 
-  function _trimVolumeCache() {
+  function _trimVolumeCache(protectedEntry = null) {
     let guard = 0;
     // Budget in BYTES, not in entries. The old limit derived one entry count from the
     // LARGEST entry present, so a single native frame (52 MiB) dropped the ceiling to
@@ -2416,7 +2459,7 @@ const VolumeViewer = (() => {
     // stepping back down to a resolution you had already loaded was never instant.
     while (_cachedBytes() > VOLUME_VRAM_BUDGET_BYTES && guard++ < 4096) {
       if (_volumeCache.size <= 1) break;
-      const key = _evictionVictim();
+      const key = _evictionVictim(protectedEntry);
       if (!key) break;
       const entry = _volumeCache.get(key);
       _volumeCache.delete(key);
@@ -2906,11 +2949,35 @@ const VolumeViewer = (() => {
     _notifyCameraChange();
   }
 
+  /**
+   * Register the pose "reset view" returns to, and optionally adopt it right now.
+   * Called before the volume streams (PluginRegistry.prepareAll) so the very first
+   * rendered brick is already oriented — never after, which would snap a visible
+   * specimen. Pass null to clear.
+   * @param {THREE.Quaternion|number[]|null} q
+   * @param {{apply?: boolean}} [options]  apply:true also poses the cube now
+   */
+  function setHomeQuaternion(q, options = {}) {
+    if (q === null || q === undefined) { _homeQuaternion = null; return; }
+    const next = Array.isArray(q)
+      ? new THREE.Quaternion().fromArray(q)
+      : new THREE.Quaternion(q.x, q.y, q.z, q.w);
+    if (![next.x, next.y, next.z, next.w].every(Number.isFinite) || next.lengthSq() < 1e-8) return;
+    _homeQuaternion = next.normalize();
+    if (options.apply && cube) {
+      cube.quaternion.copy(_homeQuaternion);
+      _scheduleFrame();
+    }
+  }
+
   function resetView(options = {}) {
     if (!cube) return;
     cube.position.set(0, 0, 0);
     // BUG-027: preserve orientation while rotation is locked; still allow position/clip reset.
-    if (!_rotationLocked) cube.quaternion.identity();
+    if (!_rotationLocked) {
+      if (_homeQuaternion) cube.quaternion.copy(_homeQuaternion);
+      else cube.quaternion.identity();
+    }
     if (options.resetClipping) {
       resetClipping();
     }
@@ -4207,6 +4274,7 @@ const VolumeViewer = (() => {
     placePlaneAtPoint,
     onMeasurePoint,
     centerSample,
+    setHomeQuaternion,
     resetView,
     resetClipping,
     fitCameraToVolume,

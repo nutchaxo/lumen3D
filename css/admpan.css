@@ -118,6 +118,57 @@ html, body {
   font-family: 'Courier New', monospace;
 }
 
+/* ── Orientation axes editor (Datasets tab) ─────────────────── */
+.ori-axes { display: flex; flex-direction: column; gap: 5px; margin-bottom: 6px; }
+.ori-axis { display: grid; grid-template-columns: 1fr 92px; align-items: center; gap: 8px; }
+.ori-axis-show {
+  display: flex; align-items: center; gap: 7px; min-width: 0;
+  font-size: 12px; color: var(--adm-text-sec); cursor: pointer;
+}
+.ori-axis-show input { accent-color: var(--adm-accent); flex: none; margin: 0; }
+.ori-axis-dot { width: 9px; height: 9px; border-radius: 50%; flex: none; }
+.ori-axis-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* A hidden arm stays legible but visibly inert. */
+.ori-axis-show input:not(:checked) ~ .ori-axis-dot,
+.ori-axis-show input:not(:checked) ~ .ori-axis-name { opacity: 0.4; }
+.ori-axis-label { padding: 5px 7px; font-size: 12px; text-align: center; }
+
+/* ── Dataset gallery (operator-attached images) ───────────────── */
+.gal-file { display: none; }
+.gal-drop {
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 5px; margin-top: 10px; padding: 16px 12px;
+  border: 1px dashed var(--adm-border); border-radius: var(--adm-radius-sm);
+  background: var(--adm-card); color: var(--adm-text-sec);
+  font-size: 12px; text-align: center; cursor: pointer;
+  transition: border-color 0.15s, background 0.15s, color 0.15s;
+}
+.gal-drop:hover:not(.is-disabled), .gal-drop:focus-visible {
+  border-color: var(--adm-accent); background: var(--adm-accent-subtle); color: var(--adm-text);
+}
+.gal-drop.is-over { border-color: var(--adm-accent); background: var(--adm-accent-subtle); border-style: solid; }
+.gal-drop.is-busy { opacity: 0.6; pointer-events: none; }
+.gal-drop.is-disabled { opacity: 0.45; cursor: not-allowed; }
+.gal-drop i { width: 20px; height: 20px; }
+.gal-formats { font-size: 10.5px; color: var(--adm-text-muted); }
+
+.gal-grid { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; }
+.gal-item {
+  display: grid; grid-template-columns: 72px 1fr; gap: 9px; align-items: start;
+  padding: 8px; border: 1px solid var(--adm-border);
+  border-radius: var(--adm-radius-sm); background: var(--adm-card);
+}
+.gal-thumb {
+  width: 72px; height: 72px; object-fit: cover;
+  border-radius: var(--adm-radius-xs); background: #0a0a12; display: block;
+}
+.gal-meta { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.gal-caption { padding: 5px 7px; font-size: 12px; }
+.gal-actions { display: flex; gap: 5px; }
+.gal-actions .adm-btn { padding: 3px 8px; line-height: 1.4; }
+.gal-del:hover:not(:disabled) { color: var(--adm-danger); border-color: var(--adm-danger); }
+.gal-empty { margin-top: 10px; font-size: 11.5px; color: var(--adm-text-muted); text-align: center; }
+
 
 
 /* ── Spinner ───────────────────────────────────────────────── */

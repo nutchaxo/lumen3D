@@ -17,7 +17,13 @@
      1. viewer.js calls PluginRegistry.loadModules(basePath, listOfPaths)
      2. For each path, the registry fetches plugin.json → validates → injects <script> for index.js
      3. index.js calls PluginRegistry.implement(id, { init, activate, … })
-     4. viewer.js calls PluginRegistry.initAll(ctx) after all modules are loaded
+        Optional hooks a module may also declare:
+          getState()/setState(s) — workspace serialization
+          reset()                — return to the freshly-opened-dataset state
+                                   (PluginRegistry.resetAll, viewer "Reset workspace")
+     4. viewer.js calls PluginRegistry.prepareAll(ctx) once the renderer exists but
+        BEFORE the volume streams, for modules that set the scene's initial state
+     5. viewer.js calls PluginRegistry.initAll(ctx) after the volume has loaded
 
    ============================================================ */
 
@@ -407,6 +413,48 @@ const PluginRegistry = (() => {
   // ─── Lifecycle ────────────────────────────────────────────
 
   /**
+   * Each plugin gets its own ctx whose `i18n` is bound to the plugin id
+   * (ctx.i18n.t('key') → plugins.<id>.key). The shared ctx is the prototype, so
+   * every other façade (viewer/dataset/ui/…) is inherited. Built once per plugin:
+   * prepare() and init() must see the same object.
+   */
+  function _pluginCtx(entry, ctx, id) {
+    if (entry.ctx) return entry.ctx;
+    const pctx = Object.create(ctx);
+    pctx.i18n = (typeof I18n !== 'undefined' && I18n.forPlugin)
+      ? I18n.forPlugin(id)
+      : { t: (k) => k, getLanguage: () => 'en', onLanguageChange: () => {} };
+    entry.ctx = pctx;
+    return pctx;
+  }
+
+  /**
+   * Pre-load lane — dispatched by viewer.js between VolumeViewer.init() and the
+   * first brick fetch, while the canvas is still empty.
+   *
+   * A module that must set the scene's INITIAL state (orientation-axes applies the
+   * dataset's saved default view) cannot wait for init(), which runs once the
+   * volume is already on screen: the specimen would appear in one pose and snap to
+   * another mid-load. Everything else stays in init(), where ChannelPanel, the
+   * volume and the tool mux exist.
+   *
+   * Deliberately synchronous — it sits on the boot critical path, so a prepare()
+   * that returns a promise is NOT awaited.
+   */
+  function prepareAll(ctx) {
+    _ctx = ctx;
+    for (const [id, entry] of _modules) {
+      if (!entry.impl || typeof entry.impl.prepare !== 'function') continue;
+      try {
+        entry.impl.prepare.call(entry.instance || entry.impl, _pluginCtx(entry, ctx, id));
+      } catch (err) {
+        // Same isolation rule as initAll: one plugin must never cost the boot.
+        console.warn(`[PluginRegistry] prepare failed for "${id}":`, err);
+      }
+    }
+  }
+
+  /**
    * Provide the ViewerContext and initialize all loaded modules.
    */
   async function initAll(ctx) {
@@ -420,15 +468,7 @@ const PluginRegistry = (() => {
       }
       try {
         if (typeof entry.impl.init === 'function') {
-          // Each plugin gets its own ctx whose `i18n` is bound to the plugin
-          // id (ctx.i18n.t('key') → plugins.<id>.key). The shared ctx is the
-          // prototype, so every other façade (viewer/dataset/ui/…) is inherited.
-          const pctx = Object.create(ctx);
-          pctx.i18n = (typeof I18n !== 'undefined' && I18n.forPlugin)
-            ? I18n.forPlugin(id)
-            : { t: (k) => k, getLanguage: () => 'en', onLanguageChange: () => {} };
-          entry.ctx = pctx;
-          entry.instance = await entry.impl.init(pctx);
+          entry.instance = await entry.impl.init(_pluginCtx(entry, ctx, id));
         }
         entry.state = 'initialized';
       } catch (err) {
@@ -564,6 +604,54 @@ const PluginRegistry = (() => {
       }
     }
     return state;
+  }
+
+  /**
+   * Put every module back to the state a freshly opened dataset has.
+   *
+   * A module opts in with a `reset()` hook. One without it is left exactly as it
+   * is: a third-party plugin holds state this registry cannot know the default of,
+   * and forcing it through a guessed one is worse than leaving it alone.
+   */
+  function resetAll() {
+    for (const [id, entry] of _modules) {
+      if (entry.state === 'disposed' || entry.state === 'registered' || !entry.impl) continue;
+      if (typeof entry.impl.reset !== 'function') continue;
+      try {
+        entry.impl.reset.call(entry.instance || entry.impl);
+      } catch (err) {
+        console.warn(`[PluginRegistry] reset failed for "${id}":`, err);
+      }
+    }
+    _emit('modules-reset');
+  }
+
+  /**
+   * Reflect a toggle's state on its generated toolbar button.
+   *
+   * A click gets this for free (bindToolbarButtons applies whatever activate()
+   * returned); a state change nobody clicked — a workspace restore, a reset — has
+   * to ask for it, or the button keeps advertising the state it used to be in.
+   * @param {string} id
+   * @param {{active?: boolean, icon?: string}} result
+   */
+  function syncToolbarButton(id, result = {}) {
+    const selector = window.CSS && CSS.escape ? CSS.escape(id) : id;
+    const btn = document.querySelector(`[data-plugin-id="${selector}"]`);
+    if (!btn) return;
+    if (typeof result.active === 'boolean') {
+      btn.classList.toggle('btn-solid', result.active);
+      btn.classList.toggle('btn-ghost', !result.active);
+    }
+    if (result.icon) {
+      const iconEl = btn.querySelector('i[data-lucide], svg');
+      if (iconEl) {
+        const glyph = document.createElement('i');
+        glyph.setAttribute('data-lucide', result.icon);
+        iconEl.replaceWith(glyph);
+        if (window.lucide) lucide.createIcons({ nodes: [btn] });
+      }
+    }
   }
 
   /**
@@ -818,6 +906,7 @@ const PluginRegistry = (() => {
     discover,
     loadModules,
     implement,
+    prepareAll,
     initAll,
     activate,
     deactivate,
@@ -828,6 +917,8 @@ const PluginRegistry = (() => {
     buildToolbarButtons,
     getWorkspaceState,
     setWorkspaceState,
+    resetAll,
+    syncToolbarButton,
     bindToolbarButtons,
     disposeAll,
     startTrustWatch,

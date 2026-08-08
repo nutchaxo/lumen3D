@@ -20,6 +20,7 @@ const ViewerApp = (() => {
   let _qualityMode = '512x512';
   let _activeLoadToken = 0;
   let _zDisplayScale = 1.0;
+  let _playbackFps = 10;
   let _preloadTimer = null;
   let _preloadedTimepoints = new Set();
   let _qualityProgressUnsub = null;
@@ -35,6 +36,7 @@ const ViewerApp = (() => {
   let _nativeSliceAbort = null;
   let _displayState = { backgroundPreset: 'dark', backgroundColor: '#000000' };
   let _volumeSourcePreference = 'webstack';
+  let _urlStatePrompt = null; // in-flight "restore this shared view?" question
 
   function _perf() {
     return typeof PerfTelemetry !== 'undefined' ? PerfTelemetry : null;
@@ -182,6 +184,15 @@ const ViewerApp = (() => {
       `${I18n.t(`explorer.${datasetMeta.type}`)} - ${Utils.formatStage(datasetMeta.stage)} - ${Utils.formatDate(datasetMeta.date)}`;
     if (typeof AnnotationManager !== 'undefined') AnnotationManager.init({ items: [] });
 
+    // A #state= link is somebody's *saved view*, not the dataset: it reopens their
+    // camera, channel curves, measurements and tool layout on top of it. Ask which
+    // one is wanted. Started here and only awaited once the volume and the plugins
+    // are up, so the question is answered while the bricks stream rather than after.
+    _urlStatePrompt = _promptUrlState().catch(err => {
+      console.warn('[ViewerApp] Shared-view prompt failed; opening the dataset as it is.', err);
+      return null;
+    });
+
     if (isLive) {
       document.getElementById('timeline-panel').classList.remove('hidden');
     }
@@ -228,7 +239,10 @@ const ViewerApp = (() => {
       VolumeViewer.onCameraChange((state) => {
         // Never broadcast camera changes when z-stack is active:
         // _zstackShow() forces setView('xy') which would corrupt other panels' cameras.
-        if (_isIframe && !_zstackActive) {
+        // _isInitialized gates the boot-time chatter: fitCameraToVolume fires during
+        // init(), and in Compare that framing would be pushed onto every panel already
+        // on screen — see the SYNC_CHANNELS emitter for the full rationale.
+        if (_isIframe && _isInitialized && !_zstackActive) {
           // SEC-012: restrict targetOrigin to this page's origin (no wildcard leak).
           window.parent.postMessage({ type: 'SYNC_CAMERA', value: state, sourceIndex: _panelIndex }, Utils.trustedTargetOrigin());
         }
@@ -241,7 +255,7 @@ const ViewerApp = (() => {
       // Broadcast full slicer plane spec to sibling decompose panels on every change.
       // Uses onPlaneSpecChange which fires for all plane mutations (position, yaw, pitch, roll, slab, mode).
       VolumeViewer.onPlaneSpecChange?.((spec) => {
-        if (_suppressSlicerSync || _zstackActive) return;
+        if (_suppressSlicerSync || _zstackActive || !_isInitialized) return;
         // SEC-012: restrict targetOrigin to this page's origin (no wildcard leak).
         window.parent.postMessage({
           type: 'SYNC_SLICER_SPEC',
@@ -268,6 +282,101 @@ const ViewerApp = (() => {
       console.log('[ViewerApp] Pre-set _hasLoadedVolume=true to skip fitCameraToVolume (state will be restored)');
     }
 
+    // Build the ViewerContext façade for module implementations. Every member is a
+    // lazy accessor, so it is safe to build HERE — before the volume exists — which
+    // is what lets prepareAll() run on the real context below.
+    const moduleCtx = {
+      dataset: {
+        getMeta: () => datasetMeta,
+        getId: () => datasetId,
+        getBasePath: () => _basePath
+      },
+      viewer: {
+        getRenderer: () => VolumeViewer.getRenderer(),
+        getMaterial: () => VolumeViewer.getMaterial(),
+        getScene: () => VolumeViewer.getScene(),
+        getCamera: () => VolumeViewer.getCamera(),
+        setRenderMode: (m) => VolumeViewer.setRenderMode(m),
+        setClipRange: (...args) => VolumeViewer.setClipRange(...args),
+        setClipRange_z: (lo, hi) => VolumeViewer.setClipRange('z', lo, hi),
+        resetClipping: () => VolumeViewer.resetClipping(),
+        setGridMode: (m) => VolumeViewer.setGridMode(m),
+        setAxesVisible: (v) => VolumeViewer.setAxesVisible(v),
+        setVolumeVisible: (v) => VolumeViewer.setVolumeVisible(v),
+        setView: (v) => VolumeViewer.setView(v),
+        setRotationLocked: (v) => VolumeViewer.setRotationLocked(v),
+        resize: () => VolumeViewer.resize(),
+        setCutPlaneVisible: (v) => VolumeViewer.setCutPlaneVisible(v),
+        setMeasurements: (m) => VolumeViewer.setMeasurements(m),
+        onMeasurePoint: (cb) => VolumeViewer.onMeasurePoint(cb),
+        onPlaneSpecChange: (cb) => VolumeViewer.onPlaneSpecChange(cb),
+        getPhysicalCalibration: () => VolumeViewer.getPhysicalCalibration?.()
+      },
+      slicer: {
+        init: (opts) => typeof VolumeSlicer !== 'undefined' ? VolumeSlicer.init(opts) : null,
+        setVisible: (v) => typeof VolumeSlicer !== 'undefined' ? VolumeSlicer.setVisible(v) : null,
+        isVisible: () => typeof VolumeSlicer !== 'undefined' ? VolumeSlicer.isVisible() : false,
+        setPlaneSpec: (s) => typeof VolumeSlicer !== 'undefined' ? VolumeSlicer.setPlaneSpec(s) : null,
+        getPlaneSpec: () => typeof VolumeSlicer !== 'undefined' ? VolumeSlicer.getPlaneSpec() : {},
+        getPreviewCanvas: () => typeof VolumeSlicer !== 'undefined' ? VolumeSlicer.getPreviewCanvas() : null,
+        updateMaterial: (m) => typeof VolumeSlicer !== 'undefined' ? VolumeSlicer.updateMaterial(m) : null
+      },
+      channels: {
+        getState: () => ChannelPanel.getState?.() || _channelState,
+        setState: (s, opts) => ChannelPanel.setState?.(s, opts)
+      },
+      measurements: {
+        list: (scope) => MeasurementStore.list(datasetId, scope || 'viewer'),
+        add: (scope, data) => MeasurementStore.add(datasetId, scope || 'viewer', data),
+        update: (scope, id, patch) => MeasurementStore.update(datasetId, scope || 'viewer', id, patch),
+        remove: (scope, id) => MeasurementStore.remove(datasetId, scope || 'viewer', id),
+        clear: (scope) => MeasurementStore.clear(datasetId, scope || 'viewer'),
+        setAll: (scope, arr) => MeasurementStore.setAll(datasetId, scope || 'viewer', arr)
+      },
+      ui: {
+        toast: (msg) => { if (typeof ExportManager !== 'undefined') ExportManager.toast(msg); },
+        scheduleResize: () => _scheduleViewerResize(),
+        escapeHtml: (s) => typeof Utils !== 'undefined' ? Utils.escapeHtml(s) : s,
+        createIcons: (opts) => { if (window.lucide) lucide.createIcons(opts); },
+        openStudio: () => openStudio(),
+        perf: () => _perf()
+      },
+      iframe: {
+        isIframe: () => _isIframe,
+        panelIndex: () => _panelIndex,
+        // SEC-012: restrict targetOrigin to this page's origin (no wildcard leak).
+        postMessage: (data) => window.parent.postMessage(data, Utils.trustedTargetOrigin())
+      },
+      workspace: {
+        getState: _getWorkspaceState,
+        applyState: _applyWorkspaceState
+      },
+      getCanvasBlob: _getFigureBlob,
+      getCustomExports: _getSliceExports,
+      // Shared mutable state (modules write via setters, not direct assignment)
+      _state: {
+        get zstackActive() { return _zstackActive; },
+        set zstackActive(v) { _zstackActive = v; },
+        get zstackCurrentSlice() { return _zstackCurrentSlice; },
+        set zstackCurrentSlice(v) { _zstackCurrentSlice = v; },
+        get suppressZstackSync() { return _suppressZstackSync; },
+        set suppressZstackSync(v) { _suppressZstackSync = v; },
+        get suppressSlicerSync() { return _suppressSlicerSync; },
+        set suppressSlicerSync(v) { _suppressSlicerSync = v; },
+        get currentTimepoint() { return _currentTimepoint; }
+      }
+    };
+
+    // Pre-load plugin lane. A module that sets the scene's INITIAL state — the
+    // orientation plugin applying the dataset's saved default view — has to do it
+    // now, on an empty canvas: initAll() runs after the volume is on screen, so the
+    // same rotation there would show the specimen in one pose and snap it to
+    // another while the bricks stream in. A pending workspace/URL state still wins,
+    // it is restored further down.
+    if (typeof PluginRegistry !== 'undefined' && PluginRegistry.prepareAll) {
+      PluginRegistry.prepareAll(moduleCtx);
+    }
+
     // PERF: start brick streaming + GPU upload NOW (without awaiting) so it overlaps
     // the synchronous _bind*/ChannelPanel wiring below. The load is awaited just past
     // ChannelPanel.init, so channel state is established before any frame renders: the
@@ -283,12 +392,19 @@ const ViewerApp = (() => {
       if (!Number.isFinite(totalFrames) || totalFrames <= 0) {
         volumeP = Promise.reject(new Error('dataset live sans dimensions.t'));
       } else {
+        _playbackFps = _loadPlaybackFps();
         Timeline.init('timeline-panel', {
           totalFrames: totalFrames,
           showSpeed: false,
           showSmooth: false,
-          stepped: false
+          stepped: false,
+          speedToggle: true,
+          speedFps: _playbackFps
         }, (state) => {
+          if (Number.isFinite(state.fps) && state.fps !== _playbackFps) {
+            _playbackFps = state.fps;
+            _savePlaybackFps();
+          }
           // Playback ticks on every animation frame (timeline.js), so this fires ~60x/s
           // while the frame index only changes a few times a second. Without this guard
           // each tick re-entered the loader and bumped _activeLoadToken, cancelling the
@@ -327,12 +443,29 @@ const ViewerApp = (() => {
       VolumeViewer.updateChannel(idx, params);
       window.dispatchEvent(new CustomEvent('channels-updated'));
       if (typeof PluginSandbox !== 'undefined') PluginSandbox.emit('channels-updated');
-      if (_isIframe) {
+      // ChannelPanel.init() pushes every channel through this callback to seed the
+      // shader uniforms. That is not an operator edit, so it must not go out on the
+      // wire: in Compare the parent relays it to the panels already open, which match
+      // by channel NAME and adopt the newcomer's gamma/min/max/enabled wholesale.
+      // Adding a dataset whose DAPI is gamma 5.5 next to one at 1.04 turned the first
+      // panel black. _isInitialized is false until init() returns.
+      if (_isIframe && _isInitialized) {
         // SEC-012: restrict targetOrigin to this page's origin (no wildcard leak).
         window.parent.postMessage({ type: 'SYNC_CHANNELS', sourceIndex: _panelIndex, channelIndex: idx, value: params }, Utils.trustedTargetOrigin());
       }
     });
     _initTrackingLayer();
+
+    // Operator-attached images (annotated captures, figures). datasetMeta is already
+    // merged with metadata.json at this point, so the array is the authoritative one.
+    if (typeof DatasetGallery !== 'undefined') {
+      DatasetGallery.init({
+        sectionId: 'gallery-section',
+        containerId: 'gallery-container',
+        basePath: _basePath,
+        items: datasetMeta.gallery,
+      });
+    }
 
     // Await the volume load kicked off above (channel state is now established).
     try {
@@ -352,88 +485,6 @@ const ViewerApp = (() => {
 
     // ── Module System Integration ──────────────────────────────
     if (typeof PluginRegistry !== 'undefined') {
-      // Build the ViewerContext façade for module implementations
-      const moduleCtx = {
-        dataset: {
-          getMeta: () => datasetMeta,
-          getId: () => datasetId,
-          getBasePath: () => _basePath
-        },
-        viewer: {
-          getRenderer: () => VolumeViewer.getRenderer(),
-          getMaterial: () => VolumeViewer.getMaterial(),
-          getScene: () => VolumeViewer.getScene(),
-          getCamera: () => VolumeViewer.getCamera(),
-          setRenderMode: (m) => VolumeViewer.setRenderMode(m),
-          setClipRange: (...args) => VolumeViewer.setClipRange(...args),
-          setClipRange_z: (lo, hi) => VolumeViewer.setClipRange('z', lo, hi),
-          resetClipping: () => VolumeViewer.resetClipping(),
-          setGridMode: (m) => VolumeViewer.setGridMode(m),
-          setAxesVisible: (v) => VolumeViewer.setAxesVisible(v),
-          setVolumeVisible: (v) => VolumeViewer.setVolumeVisible(v),
-          setView: (v) => VolumeViewer.setView(v),
-          setRotationLocked: (v) => VolumeViewer.setRotationLocked(v),
-          resize: () => VolumeViewer.resize(),
-          setCutPlaneVisible: (v) => VolumeViewer.setCutPlaneVisible(v),
-          setMeasurements: (m) => VolumeViewer.setMeasurements(m),
-          onMeasurePoint: (cb) => VolumeViewer.onMeasurePoint(cb),
-          onPlaneSpecChange: (cb) => VolumeViewer.onPlaneSpecChange(cb),
-          getPhysicalCalibration: () => VolumeViewer.getPhysicalCalibration?.()
-        },
-        slicer: {
-          init: (opts) => typeof VolumeSlicer !== 'undefined' ? VolumeSlicer.init(opts) : null,
-          setVisible: (v) => typeof VolumeSlicer !== 'undefined' ? VolumeSlicer.setVisible(v) : null,
-          isVisible: () => typeof VolumeSlicer !== 'undefined' ? VolumeSlicer.isVisible() : false,
-          setPlaneSpec: (s) => typeof VolumeSlicer !== 'undefined' ? VolumeSlicer.setPlaneSpec(s) : null,
-          getPlaneSpec: () => typeof VolumeSlicer !== 'undefined' ? VolumeSlicer.getPlaneSpec() : {},
-          getPreviewCanvas: () => typeof VolumeSlicer !== 'undefined' ? VolumeSlicer.getPreviewCanvas() : null,
-          updateMaterial: (m) => typeof VolumeSlicer !== 'undefined' ? VolumeSlicer.updateMaterial(m) : null
-        },
-        channels: {
-          getState: () => ChannelPanel.getState?.() || _channelState,
-          setState: (s, opts) => ChannelPanel.setState?.(s, opts)
-        },
-        measurements: {
-          list: (scope) => MeasurementStore.list(datasetId, scope || 'viewer'),
-          add: (scope, data) => MeasurementStore.add(datasetId, scope || 'viewer', data),
-          update: (scope, id, patch) => MeasurementStore.update(datasetId, scope || 'viewer', id, patch),
-          remove: (scope, id) => MeasurementStore.remove(datasetId, scope || 'viewer', id),
-          clear: (scope) => MeasurementStore.clear(datasetId, scope || 'viewer'),
-          setAll: (scope, arr) => MeasurementStore.setAll(datasetId, scope || 'viewer', arr)
-        },
-        ui: {
-          toast: (msg) => { if (typeof ExportManager !== 'undefined') ExportManager.toast(msg); },
-          scheduleResize: () => _scheduleViewerResize(),
-          escapeHtml: (s) => typeof Utils !== 'undefined' ? Utils.escapeHtml(s) : s,
-          createIcons: (opts) => { if (window.lucide) lucide.createIcons(opts); },
-          openStudio: () => openStudio(),
-          perf: () => _perf()
-        },
-        iframe: {
-          isIframe: () => _isIframe,
-          panelIndex: () => _panelIndex,
-          // SEC-012: restrict targetOrigin to this page's origin (no wildcard leak).
-          postMessage: (data) => window.parent.postMessage(data, Utils.trustedTargetOrigin())
-        },
-        workspace: {
-          getState: _getWorkspaceState,
-          applyState: _applyWorkspaceState
-        },
-        getCanvasBlob: _getFigureBlob,
-        getCustomExports: _getSliceExports,
-        // Shared mutable state (modules write via setters, not direct assignment)
-        _state: {
-          get zstackActive() { return _zstackActive; },
-          set zstackActive(v) { _zstackActive = v; },
-          get zstackCurrentSlice() { return _zstackCurrentSlice; },
-          set zstackCurrentSlice(v) { _zstackCurrentSlice = v; },
-          get suppressZstackSync() { return _suppressZstackSync; },
-          set suppressZstackSync(v) { _suppressZstackSync = v; },
-          get suppressSlicerSync() { return _suppressSlicerSync; },
-          set suppressSlicerSync(v) { _suppressSlicerSync = v; },
-          get currentTimepoint() { return _currentTimepoint; }
-        }
-      };
 
       // Initialize all loaded modules with the context. Same isolation barrier as
       // the load phase: per-plugin init failures are quarantined by the registry;
@@ -483,18 +534,34 @@ const ViewerApp = (() => {
 
     // ELE-26: apply saved workspace + buffered z-stack state AFTER initAll, so plugin
     // setState()/applyState() run on fully-initialised plugin instances (_ctx + fields set).
-    if (window.location.hash && window.location.hash.startsWith('#state=')) {
-      if (typeof UrlState !== 'undefined') {
-        const urlState = await UrlState.decodeState(window.location.hash);
-        if (urlState) {
-          _applyWorkspaceStateNow(urlState.state || urlState);
-        }
-      }
+    // The URL state is applied only if the operator asked for it (_promptUrlState).
+    let restoredFromUrl = false;
+    const urlChoice = await _urlStatePrompt;
+    _urlStatePrompt = null;
+    if (urlChoice?.choice === 'restore' && urlChoice.state) {
+      _applyWorkspaceStateNow(urlChoice.state);
+      restoredFromUrl = true;
+    } else if (urlChoice?.choice === 'fresh') {
+      UrlState.clearHash();
+      // hasPendingCameraState suppressed the initial fitCameraToVolume on the
+      // assumption a saved camera was coming; it is not — frame the volume now.
+      VolumeViewer.resetView({ resetClipping: true });
     }
     if (_pendingWorkspaceState) {
       console.log('[ViewerApp] Applying pending workspace state after init, camera:', _pendingWorkspaceState?.viewer?.camera?.cameraZ, 'measurements:', _pendingWorkspaceState?.viewer?.measurements?.length);
       _applyWorkspaceStateNow(_pendingWorkspaceState);
       _pendingWorkspaceState = null;
+    }
+
+    // The two restores above ran while _isInitialized was still false, so the plugin
+    // slice of what they carried was BUFFERED by the pre-initAll guard rather than
+    // applied — and the flush inside the plugin block ran before them. Left here, a
+    // restored view silently lost every plugin toggle it had recorded (grid, axes,
+    // orientation gizmo, chunk overlay). initAll and bindToolbarButtons are long
+    // done by now, so this is the point where that buffer must be drained.
+    if (_pendingPluginState && typeof PluginRegistry !== 'undefined') {
+      PluginRegistry.setWorkspaceState(_pendingPluginState);
+      _pendingPluginState = null;
     }
 
     // Apply buffered TOGGLE_ZSTACK that arrived before init() completed
@@ -506,7 +573,10 @@ const ViewerApp = (() => {
     _isInitialized = true;
     
     if (!_isIframe && typeof UrlState !== 'undefined') {
-      UrlState.startSync(_getWorkspaceState, 1000);
+      // pristine: nothing was restored, so the workspace on screen IS the dataset —
+      // no #state= is written until the operator actually changes something, and a
+      // reset can therefore hand the URL back clean.
+      UrlState.startSync(_getWorkspaceState, 1000, { pristine: !restoredFromUrl });
     }
   }
   
@@ -752,7 +822,6 @@ const ViewerApp = (() => {
     const select = document.getElementById('select-quality');
     if (!select) return;
     const current = _normalizeQualityParam(_qualityMode || select.value) || '512x512';
-    const _t = (k, def) => { const res = window.I18n ? window.I18n.t(k) : k; return res === k ? def : res; };
 
     const levels = Array.isArray(_brickManifest?.levels) ? _brickManifest.levels : null;
     
@@ -901,6 +970,13 @@ const ViewerApp = (() => {
         _resetClipSliders();
       });
     }
+
+    const resetWorkspaceBtn = document.getElementById('btn-reset-workspace');
+    if (resetWorkspaceBtn) {
+      resetWorkspaceBtn.addEventListener('click', () => {
+        _confirmResetWorkspace().catch(err => console.warn('[ViewerApp] Reset dialog failed:', err));
+      });
+    }
   }
 
   function _bindZScaleControls() {
@@ -922,15 +998,19 @@ const ViewerApp = (() => {
     });
 
     if (resetBtn) {
-      resetBtn.addEventListener('click', () => {
-        _zDisplayScale = 1.0;
-        slider.value = 100;
-        VolumeViewer.setZDisplayScale(_zDisplayScale);
-        _saveZDisplayScale();
-        _updateZScaleLabel();
-        _updatePhysicalStatus();
-      });
+      resetBtn.addEventListener('click', _resetZDisplayScale);
     }
+  }
+
+  /** Display Z override back to 1:1 (the sidebar's 1:1 button and the reset both). */
+  function _resetZDisplayScale() {
+    _zDisplayScale = 1.0;
+    const slider = document.getElementById('slider-z-scale');
+    if (slider) slider.value = 100;
+    VolumeViewer.setZDisplayScale(_zDisplayScale);
+    _saveZDisplayScale();
+    _updateZScaleLabel();
+    _updatePhysicalStatus();
   }
 
   function _bindDisplayControls() {
@@ -948,7 +1028,7 @@ const ViewerApp = (() => {
           // the render-mode label translates and re-translates on switch;
           // fall back to the plugin.json name.
           const nsKey = `plugins.${s.id}.title`;
-          const label = (window.I18n && I18n.t) ? I18n.t(nsKey) : nsKey;
+          const label = _t(nsKey, nsKey);
           if (label !== nsKey) {
             opt.textContent = label;
             opt.setAttribute('data-i18n', nsKey);
@@ -959,7 +1039,7 @@ const ViewerApp = (() => {
           renderModeSelect.appendChild(opt);
         });
         if (shaders.length > 0) {
-          if (!defaultId) defaultId = shaders[0].id;
+          if (!defaultId) defaultId = _defaultRenderModeId();
           renderModeSelect.value = defaultId;
           PluginRegistry.activate(defaultId);
         }
@@ -975,40 +1055,71 @@ const ViewerApp = (() => {
 
     // --- Exposure slider ---
     const exposureSlider = document.getElementById('slider-exposure');
-    const exposureLabel = document.getElementById('val-exposure');
     if (exposureSlider) {
-      if (datasetMeta && Number.isFinite(datasetMeta.exposure)) {
-        exposureSlider.value = Math.max(20, Math.min(500, Math.round(datasetMeta.exposure * 100)));
-      }
-      const syncExposure = () => {
-        const val = parseInt(exposureSlider.value, 10) / 100;
-        if (exposureLabel) exposureLabel.textContent = `${val.toFixed(2)}×`;
-        VolumeViewer.setExposure(val);
-        if (_isIframe) {
-          // DEAD-021: include sourceIndex so compare.js's routing guard can attribute the
-          // message; SEC-012: restrict targetOrigin to this page's origin (no wildcard leak).
-          window.parent.postMessage({ type: 'SYNC_EXPOSURE', value: val, sourceIndex: _panelIndex }, Utils.trustedTargetOrigin());
-        }
-      };
-      exposureSlider.addEventListener('input', syncExposure);
-      syncExposure();
+      exposureSlider.value = _defaultExposureSliderValue();
+      exposureSlider.addEventListener('input', _syncExposureFromUi);
+      _syncExposureFromUi();
     }
 
     // --- Background preset ---
     const select = document.getElementById('select-background-preset');
-    const customWrap = document.getElementById('label-background-custom');
     const input = document.getElementById('input-background-color');
     if (!select) return;
-    const sync = () => {
-      customWrap?.classList.toggle('hidden', select.value !== 'custom');
-      _displayState.backgroundPreset = select.value;
-      if (input) _displayState.backgroundColor = input.value || _displayState.backgroundColor;
-      VolumeViewer.setBackgroundPreset(_displayState.backgroundPreset, _displayState.backgroundColor);
-    };
-    select.addEventListener('change', sync);
-    input?.addEventListener('input', sync);
-    sync();
+    select.addEventListener('change', _syncBackgroundFromUi);
+    input?.addEventListener('input', _syncBackgroundFromUi);
+    _syncBackgroundFromUi();
     _updateVolumeSourceStatus();
+  }
+
+  // The display controls read their own widgets rather than taking a value, so the
+  // binding above and the workspace reset below drive the volume through the exact
+  // same path — one place decides what a slider position means.
+
+  /** Render mode a freshly opened dataset uses: the shader flagged default. */
+  function _defaultRenderModeId() {
+    if (typeof PluginRegistry === 'undefined') return null;
+    const shaders = PluginRegistry.listByPlacement('shaders');
+    if (!shaders.length) return null;
+    return (shaders.find(s => s.default) || shaders[0]).id;
+  }
+
+  /** Exposure slider position the dataset opens at (metadata override, else 1.00×). */
+  function _defaultExposureSliderValue() {
+    if (datasetMeta && Number.isFinite(datasetMeta.exposure)) {
+      return Math.max(20, Math.min(500, Math.round(datasetMeta.exposure * 100)));
+    }
+    return 100;
+  }
+
+  /** Exposure currently applied, read from the slider that owns it. */
+  function _currentExposure() {
+    const slider = document.getElementById('slider-exposure');
+    const val = slider ? parseInt(slider.value, 10) / 100 : 1;
+    return Number.isFinite(val) ? val : 1;
+  }
+
+  function _syncExposureFromUi() {
+    const slider = document.getElementById('slider-exposure');
+    if (!slider) return;
+    const label = document.getElementById('val-exposure');
+    const val = parseInt(slider.value, 10) / 100;
+    if (label) label.textContent = `${val.toFixed(2)}×`;
+    VolumeViewer.setExposure(val);
+    if (_isIframe) {
+      // DEAD-021: include sourceIndex so compare.js's routing guard can attribute the
+      // message; SEC-012: restrict targetOrigin to this page's origin (no wildcard leak).
+      window.parent.postMessage({ type: 'SYNC_EXPOSURE', value: val, sourceIndex: _panelIndex }, Utils.trustedTargetOrigin());
+    }
+  }
+
+  function _syncBackgroundFromUi() {
+    const select = document.getElementById('select-background-preset');
+    if (!select) return;
+    const input = document.getElementById('input-background-color');
+    document.getElementById('label-background-custom')?.classList.toggle('hidden', select.value !== 'custom');
+    _displayState.backgroundPreset = select.value;
+    if (input) _displayState.backgroundColor = input.value || _displayState.backgroundColor;
+    VolumeViewer.setBackgroundPreset(_displayState.backgroundPreset, _displayState.backgroundColor);
   }
 
   function _bindVisualControls() {
@@ -1093,20 +1204,76 @@ const ViewerApp = (() => {
       return;
     }
 
-    let sr = null;
-    if (typeof VolumeSlicer !== 'undefined' && VolumeSlicer.isVisible?.()) {
-      try {
-        sr = await _renderNativeSliceForStudio();
-      } catch (err) {
-        if (err?.name !== 'AbortError') {
-          console.warn('[ViewerApp] Native Studio slice failed; falling back to active GPU slice:', err);
-          _setSliceStatus('Native HD unavailable; using active volume resolution.');
+    // The Studio used to open only once the native LOD0 slice had arrived. That is
+    // hundreds of MB of packs for one plane (a 3789² dataset streams ~330 MB / 3160
+    // bricks for a single XY cut), so the button did nothing for minutes. Open on the
+    // plane the GPU already holds — costs one render, no network — and upgrade in
+    // place once the native pass lands.
+    const preview = _renderStudioPreviewSlice();
+    const opening = preview || getCurrentSliceResult();
+    if (!opening) return;
+    StudioEditor.open(opening);
+
+    if (preview) await _upgradeStudioSliceToNative(preview);
+  }
+
+  /**
+   * The Studio's opening image: the current plane rendered from the atlas already
+   * resident on the GPU, framed exactly as the native pass will frame it so the
+   * upgrade is a pixel swap and every annotation keeps its coordinates.
+   */
+  function _renderStudioPreviewSlice() {
+    if (typeof VolumeSlicer === 'undefined' || !VolumeSlicer.isVisible?.() || !VolumeSlicer.renderHighRes) return null;
+    const dims = (typeof BrickLoader !== 'undefined' && BrickLoader.isReady?.()) ? BrickLoader.getDimensions(0) : null;
+    if (!dims) return null;
+    const spec = VolumeSlicer.getPlaneSpec();
+    const renderRes = _nativeStudioRenderSize(spec, dims);
+    const rendered = VolumeSlicer.renderHighRes(renderRes);
+    if (!rendered) return null;
+    const cropRect = _sliceContentRect(rendered);
+    const canvas = _cropEmptySliceSpace(rendered, cropRect);
+    return {
+      canvas,
+      width: canvas.width,
+      height: canvas.height,
+      renderRes,
+      cropRect,
+      // Not 'gpu-slicer': that source makes the Studio re-render the slice through
+      // VolumeSlicer.recompose at the cropped width, which reframes the image and
+      // would break the geometry contract with the native pass.
+      source: 'studio-preview',
+      quality: 'preview',
+      planeSpec: spec,
+      pixelSizeUm: _slicePixelSizeUm(spec, renderRes),
+      physicalSizeUm: VolumeViewer.getPhysicalSize?.(),
+      channelState: _currentChannelState(),
+      timepoint: _currentTimepoint
+    };
+  }
+
+  async function _upgradeStudioSliceToNative(preview) {
+    const onCancel = () => _cancelNativeSlice();
+    const label = (chunks, total) => {
+      const key = 'studio.loadingNative';
+      const res = (typeof I18n !== 'undefined' && I18n.t) ? I18n.t(key, { chunks, total }) : key;
+      return res === key ? `Native resolution: ${chunks}/${total} chunks` : res;
+    };
+    StudioEditor.setLoadProgress?.({ percent: 0, label: label(0, 0), onCancel });
+    try {
+      const sr = await _renderNativeSliceForStudio({
+        cropRect: preview.cropRect,
+        onProgress: ({ percent, chunks, totalChunks }) => {
+          StudioEditor.setLoadProgress?.({ percent, label: label(chunks, totalChunks), onCancel });
         }
+      });
+      if (sr && StudioEditor.isOpen?.()) StudioEditor.setSliceResult(sr);
+    } catch (err) {
+      if (err?.name !== 'AbortError') {
+        console.warn('[ViewerApp] Native Studio slice failed; keeping the active volume resolution:', err);
+        _setSliceStatus('Native HD unavailable; using active volume resolution.');
       }
-    }
-    if (!sr) sr = getCurrentSliceResult();
-    if (sr && typeof StudioEditor !== 'undefined') {
-      StudioEditor.open(sr);
+    } finally {
+      StudioEditor.setLoadProgress?.(null);
     }
   }
 
@@ -1335,8 +1502,17 @@ const ViewerApp = (() => {
     };
   }
 
-  function _cropEmptySliceSpace(canvas) {
-    if (!canvas) return canvas;
+  function _copyCanvas(canvas) {
+    const out = document.createElement('canvas');
+    out.width = canvas.width;
+    out.height = canvas.height;
+    out.getContext('2d').drawImage(canvas, 0, 0);
+    return out;
+  }
+
+  /** Bounding box of the non-transparent pixels, padded — null when fully empty. */
+  function _sliceContentRect(canvas) {
+    if (!canvas) return null;
     const ctx = canvas.getContext('2d');
     const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
     const data = imgData.data;
@@ -1356,13 +1532,42 @@ const ViewerApp = (() => {
         }
       }
     }
-    if (minX > maxX || minY > maxY) return canvas;
+    if (minX > maxX || minY > maxY) return null;
 
     const padding = 10;
-    minX = Math.max(0, minX - padding);
-    minY = Math.max(0, minY - padding);
-    maxX = Math.min(canvas.width - 1, maxX + padding);
-    maxY = Math.min(canvas.height - 1, maxY + padding);
+    return {
+      x: Math.max(0, minX - padding),
+      y: Math.max(0, minY - padding),
+      x2: Math.min(canvas.width - 1, maxX + padding),
+      y2: Math.min(canvas.height - 1, maxY + padding),
+      renderRes: canvas.width
+    };
+  }
+
+  /**
+   * Crop to `rect` when one is supplied, else to the canvas's own content box.
+   * The Studio hands the preview's rect back for the native pass so both images
+   * frame the exact same region: annotation coordinates then survive the swap
+   * untouched (the native pass resolves faint signal the preview LOD misses, so
+   * recomputing the box would shift every layer by a few pixels).
+   */
+  function _cropEmptySliceSpace(canvas, rect = null) {
+    if (!canvas) return canvas;
+    let box = rect && Number.isFinite(rect.x) ? rect : null;
+    if (box && box.renderRes && box.renderRes !== canvas.width) {
+      const s = canvas.width / box.renderRes;
+      box = { x: box.x * s, y: box.y * s, x2: box.x2 * s, y2: box.y2 * s };
+    }
+    if (!box) box = _sliceContentRect(canvas);
+    // Nothing to crop to (empty plane). Still copy: `canvas` is VolumeSlicer's shared
+    // _hiCanvas, which the next high-res render overwrites in place.
+    if (!box) return _copyCanvas(canvas);
+
+    const minX = Math.max(0, Math.round(box.x));
+    const minY = Math.max(0, Math.round(box.y));
+    const maxX = Math.min(canvas.width - 1, Math.round(box.x2));
+    const maxY = Math.min(canvas.height - 1, Math.round(box.y2));
+    if (minX > maxX || minY > maxY) return canvas;
 
     const cropped = document.createElement('canvas');
     cropped.width = maxX - minX + 1;
@@ -1371,7 +1576,22 @@ const ViewerApp = (() => {
     return cropped;
   }
 
-  async function _renderNativeSliceForStudio() {
+  /**
+   * Channels the native slice has to download. A channel the operator has switched
+   * off contributes nothing to the rendered plane, and each one is a full quarter of
+   * the LOD0 traffic (one WebP pack set per channel) — on a 3789² dataset that is
+   * ~80 MB of packs fetched and ~800 bricks decoded for pixels the shader discards.
+   */
+  function _nativeSliceChannels(channelCount) {
+    const state = _currentChannelState();
+    const wanted = [];
+    for (let c = 0; c < channelCount; c++) {
+      if (!Array.isArray(state) || !state[c] || state[c].enabled !== false) wanted.push(c);
+    }
+    return wanted.length ? wanted : Array.from({ length: channelCount }, (_, c) => c);
+  }
+
+  async function _renderNativeSliceForStudio(options = {}) {
     if (typeof BrickLoader === 'undefined' || typeof SVRManager === 'undefined' || typeof VolumeSlicer === 'undefined') return null;
     if (!BrickLoader.isReady?.() || !VolumeSlicer.renderWithMaterial || !VolumeViewer.getRenderer?.() || !VolumeViewer.getMaterial?.()) return null;
 
@@ -1383,6 +1603,7 @@ const ViewerApp = (() => {
     const bricks = _nativeSliceBricksForSpec(spec, dims);
     if (!bricks.length) return null;
 
+    const onProgress = typeof options.onProgress === 'function' ? options.onProgress : null;
     const controller = new AbortController();
     _nativeSliceAbort = controller;
 
@@ -1398,11 +1619,16 @@ const ViewerApp = (() => {
     let lastStatusAt = 0;
     const rgbaTransport = BrickLoader.getTransportEncoding?.() === 'raw-rgba-gzip';
     const floorLuts = VolumeViewer.floorLutsFromManifest?.(BrickLoader.getManifest?.(), channels) || [];
+    // Scalar transport stores one pack set per channel, so a disabled channel is a
+    // whole quarter of the traffic that never reaches a pixel. RGBA transport packs
+    // all four together — there is nothing to skip there.
+    const wantedChannels = rgbaTransport ? null : _nativeSliceChannels(channels);
+    const perBrickTasks = rgbaTransport ? 1 : wantedChannels.length;
     const tasks = [];
     for (const brick of bricks) {
       if (rgbaTransport) tasks.push({ ...brick, channel: -1, lod: 0 });
       else {
-        for (let c = 0; c < channels; c++) tasks.push({ ...brick, channel: c, lod: 0 });
+        for (const c of wantedChannels) tasks.push({ ...brick, channel: c, lod: 0 });
       }
     }
 
@@ -1412,10 +1638,12 @@ const ViewerApp = (() => {
       lastStatusAt = now;
       const pct = Math.round((doneTasks / Math.max(1, tasks.length)) * 100);
       _setSliceStatus(`Rendering native HD slice: ${writtenBricks}/${bricks.length} chunks, ${pct}%`);
+      onProgress?.({ percent: pct, chunks: writtenBricks, totalChunks: bricks.length });
     };
 
     try {
       _setSliceStatus(`Preparing native HD slice (${bricks.length} LOD0 chunks)...`);
+      onProgress?.({ percent: 0, chunks: 0, totalChunks: bricks.length });
       tempSvr.init(channels, dims, renderer, tempMaterial, { targetSlots: bricks.length });
       const pendingScalar = new Map();
       const bs = dims.brickSize || 64;
@@ -1426,6 +1654,13 @@ const ViewerApp = (() => {
         preserveOrder: true,
         streamOnly: true,
         cacheResults: false,
+        // Bricks the viewer already decoded are free; writing this batch back would
+        // evict its working set (a slice is thousands of bricks), so read only.
+        readCache: true,
+        // The loader runs its own AbortController, so aborting ours is invisible to
+        // it: without this hook, closing the Studio left the whole LOD0 transfer
+        // running to completion in the background.
+        shouldAbort: () => controller.signal.aborted,
         onBrickLoaded: ({ bx, by, bz, channel, data }) => {
           if (controller.signal.aborted) return;
           if (channel === -1) {
@@ -1447,7 +1682,7 @@ const ViewerApp = (() => {
             }
             if (!pending.data[channel]) pending.count++;
             pending.data[channel] = data;
-            if (pending.count >= channels) {
+            if (pending.count >= perBrickTasks) {
               const ox = bx * bs;
               const oy = by * bs;
               const oz = bz * bs;
@@ -1473,13 +1708,15 @@ const ViewerApp = (() => {
       const renderRes = _nativeStudioRenderSize(spec, dims);
       const rendered = VolumeSlicer.renderWithMaterial(tempMaterial, spec, renderRes, _currentChannelState());
       if (!rendered) return null;
-      const canvas = _cropEmptySliceSpace(rendered);
+      const cropRect = options.cropRect || _sliceContentRect(rendered);
+      const canvas = _cropEmptySliceSpace(rendered, cropRect);
       _setSliceStatus(`Native HD slice ready (${writtenBricks} chunks).`);
       return {
         canvas,
         width: canvas.width,
         height: canvas.height,
         renderRes,
+        cropRect,
         source: 'native-slicer',
         quality: 'native',
         planeSpec: spec,
@@ -1551,6 +1788,170 @@ const ViewerApp = (() => {
     ExportManager.downloadBlob(blob, `${_safeExportName()}_measurements.${format}`);
   }
 
+  // ── Shared views & workspace reset ────────────────────────────────────────────
+
+  /**
+   * Translate with an English fallback for keys a locale may not carry yet.
+   * `I18n` is a top-level `const` in its own classic script: a global LEXICAL
+   * binding, reachable by bare name but NEVER as `window.I18n` (CLAUDE.md §8).
+   * The `window.I18n &&` guards this file used to carry were therefore always
+   * false, and every string behind one silently stayed English.
+   */
+  function _t(key, fallback, params) {
+    if (typeof I18n === 'undefined' || !I18n.t) return fallback;
+    const value = I18n.t(key, params);
+    return value === key ? fallback : value;
+  }
+
+  /**
+   * Decide what to do with a #state= carried by the URL.
+   *
+   * Returns `{choice, state}` — 'restore' adopts the saved view, 'fresh' opens the
+   * dataset as it ships — or null when there is nothing to decide (no hash, a
+   * compare panel, an undecodable payload). Escape and the backdrop resolve to
+   * 'restore': that is what such a link did before this dialog existed, so a
+   * dismissed question never silently discards a colleague's shared view.
+   */
+  async function _promptUrlState() {
+    if (_isIframe || typeof UrlState === 'undefined' || !UrlState.hasState()) return null;
+
+    const decoded = await UrlState.decodeState(window.location.hash);
+    const state = decoded ? (decoded.state || decoded) : null;
+    if (!state || typeof state !== 'object') {
+      UrlState.clearHash();  // a corrupt payload is not worth asking about
+      return null;
+    }
+    if (typeof Dialog === 'undefined') return { choice: 'restore', state };
+
+    const choice = await Dialog.ask({
+      icon: 'link',
+      title: _t('viewer.urlState.title', 'This link carries a saved view'),
+      message: _t('viewer.urlState.message', 'The address you opened stores a workspace: camera, channel settings, tools and measurements. Open that view, or start from the dataset as it is?'),
+      note: _t('viewer.urlState.note', 'Starting fresh only clears the view stored in the link — nothing in the dataset changes.'),
+      dismissId: 'restore',
+      options: [
+        {
+          id: 'restore',
+          primary: true,
+          variant: 'primary',
+          icon: 'history',
+          label: _t('viewer.urlState.restore', 'Open the saved view'),
+          hint: _t('viewer.urlState.restoreHint', 'Restores the camera, channels, tools and measurements stored in the link.')
+        },
+        {
+          id: 'fresh',
+          icon: 'sparkles',
+          label: _t('viewer.urlState.fresh', 'Open the dataset as new'),
+          hint: _t('viewer.urlState.freshHint', 'Ignores the saved view and removes it from the address bar.')
+        }
+      ]
+    });
+    return { choice: choice || 'restore', state };
+  }
+
+  async function _confirmResetWorkspace() {
+    const hasMeasurements = MeasurementStore.list(datasetId, 'viewer').length > 0;
+    const answer = typeof Dialog === 'undefined' ? 'reset' : await Dialog.ask({
+      icon: 'eraser',
+      tone: 'danger',
+      layout: 'row',
+      title: _t('viewer.reset.title', 'Reset the workspace?'),
+      message: _t('viewer.reset.message', 'View, tools, channels and display settings go back to how this dataset opens.'),
+      note: hasMeasurements
+        ? _t('viewer.reset.noteMeasurements', 'Measurements and annotations of this session are deleted. Render quality is left as it is.')
+        : _t('viewer.reset.note', 'Render quality is left as it is.'),
+      dismissId: 'cancel',
+      options: [
+        { id: 'cancel', label: _t('app.cancel', 'Cancel') },
+        { id: 'reset', variant: 'danger', primary: true, label: _t('viewer.reset.confirm', 'Reset') }
+      ]
+    });
+    if (answer !== 'reset') return;
+    resetWorkspace();
+  }
+
+  /**
+   * Put the viewer back to the state a freshly opened dataset has, in place — no
+   * reload, and the URL loses its #state= instead of having to be edited by hand.
+   *
+   * Deliberately NOT reset: the render quality and the volume source. Those are
+   * device/bandwidth preferences, and dropping a native-resolution session back to
+   * 512³ would silently start a multi-minute re-stream. The saved workspace
+   * snapshot (Download Center → "Save state") is likewise untouched: it is an
+   * explicit save, not session state.
+   */
+  function resetWorkspace() {
+    // 1. Plugins first: they own the panels and toolbar toggles, and several of
+    //    them touch clipping on the way down. The viewer-level reset then wins.
+    if (typeof PluginRegistry !== 'undefined' && PluginRegistry.resetAll) PluginRegistry.resetAll();
+    if (typeof ToolManager !== 'undefined') ToolManager.activate('navigate');
+
+    // 2. Camera, cube pose (back to the dataset's own default view when it has
+    //    one — resetView returns to the home quaternion), clipping and cut plane.
+    VolumeViewer.resetView({ resetClipping: true });
+    VolumeViewer.setCutPlaneVisible(false);
+    _resetClipSliders();
+
+    // 3. Measurements + annotations.
+    MeasurementStore.clear(datasetId, 'viewer');
+    _volumeMeasurements = [];
+    _volumeMeasureDraft = [];
+    VolumeViewer.setMeasurements([]);
+    _renderVolumeMeasurement();
+    if (typeof AnnotationManager !== 'undefined') AnnotationManager.clear();
+
+    // 4. Channels back to the dataset's display defaults (colour, gamma, min/max,
+    //    denoise σ, visibility) — re-derived from metadata, not from a snapshot.
+    ChannelPanel.reset?.();
+    _channelState = ChannelPanel.getState?.() || [];
+
+    // 5. Display: render mode, exposure, background, Z override.
+    const renderModeSelect = document.getElementById('select-render-mode');
+    const defaultRenderMode = _defaultRenderModeId();
+    if (renderModeSelect && defaultRenderMode) {
+      renderModeSelect.value = defaultRenderMode;
+      PluginRegistry.activate(defaultRenderMode);
+    }
+    const exposureSlider = document.getElementById('slider-exposure');
+    if (exposureSlider) {
+      exposureSlider.value = _defaultExposureSliderValue();
+      _syncExposureFromUi();
+    }
+    const backgroundSelect = document.getElementById('select-background-preset');
+    const backgroundInput = document.getElementById('input-background-color');
+    if (backgroundSelect) backgroundSelect.value = 'dark';
+    if (backgroundInput) backgroundInput.value = '#000000';
+    _syncBackgroundFromUi();
+    _resetZDisplayScale();
+
+    // 6. Chrome: sidebar back out (with its floating reopen button), presentation
+    //    mode already dropped by its plugin.
+    if (!_isIframe) {
+      document.querySelector('.viewer-sidebar')?.classList.remove('sidebar-hidden');
+      const reopenBtn = document.getElementById('btn-reopen-sidebar');
+      if (reopenBtn) reopenBtn.style.display = 'none';
+      _scheduleViewerResize();
+    }
+
+    // 7. Timelapses reopen on their first timepoint.
+    if (isLive && typeof Timeline !== 'undefined' && _currentTimepoint) {
+      Timeline.setFrame(0);
+    }
+
+    // 8. The URL goes back to the bare dataset link — rebaseline() drops the hash
+    //    at once, then waits out the asynchronous tail of the steps above (channel
+    //    notifies, a timepoint load) before deciding what "unchanged" now means, so
+    //    the sync cannot re-stamp a #state= describing the reset itself.
+    if (typeof UrlState !== 'undefined') UrlState.rebaseline({ settleMs: 1200 });
+
+    if (typeof PluginSandbox !== 'undefined') PluginSandbox.emit('channels-updated');
+    window.dispatchEvent(new CustomEvent('channels-updated'));
+    if (typeof ExportManager !== 'undefined') {
+      ExportManager.toast(_t('viewer.reset.done', 'Workspace reset'));
+    }
+    _perf()?.event('viewer.workspace.reset', { datasetId });
+  }
+
   function _getWorkspaceState() {
     const state = {
       ui: {
@@ -1565,6 +1966,9 @@ const ViewerApp = (() => {
         planeSpec: VolumeViewer.getPlaneSpec(),
         measurements: MeasurementStore.list(datasetId, 'viewer'),
         channels: ChannelPanel.getState?.() || _channelState,
+        // _applyWorkspaceStateNow has always restored an exposure — nothing ever
+        // WROTE one, so a shared view or a saved workspace silently dropped it.
+        exposure: _currentExposure(),
         gridMode: typeof VolumeGrid !== 'undefined' ? VolumeGrid.getGridMode() : 0,
         gridSizes: typeof VolumeGrid !== 'undefined' ? VolumeGrid.getGridSizes() : null,
         axesVisible: typeof VolumeGrid !== 'undefined' ? VolumeGrid.isAxesVisible() : false,
@@ -1580,6 +1984,9 @@ const ViewerApp = (() => {
         cache: VolumeViewer.getCacheStats()
       }
     };
+    // Only a timelapse has a playback rate; on a fixed dataset the key would be
+    // noise in the saved workspace.
+    if (isLive) state.viewer.playbackFps = _playbackFps;
     // Merge plugin states
     if (typeof PluginRegistry !== 'undefined') {
       state.plugins = PluginRegistry.getWorkspaceState();
@@ -1729,6 +2136,11 @@ const ViewerApp = (() => {
       _renderVolumeMeasurement();
     }
 
+    if (isLive && Number.isFinite(viewerState.playbackFps)) {
+      // The onChange callback wired at init() picks the new rate up and persists it.
+      Timeline.setSpeed?.(viewerState.playbackFps);
+    }
+
     if (isLive && Number.isFinite(viewerState.timepoint)) {
       Timeline.setFrame(viewerState.timepoint);
     } else if (_basePath && viewerState.qualityMode) {
@@ -1850,7 +2262,7 @@ const ViewerApp = (() => {
             <button class="btn btn-ghost btn-sm measure-color-btn" type="button" data-volume-measure-action="toggle-color" data-measurement-id="${Utils.escapeHtml(item.id)}" style="padding: 0; width: 24px; height: 24px; border: none; flex-shrink: 0;">
               <span style="background:${item.color}; width:16px; height:16px; display:inline-block; border-radius:3px; border:1px solid rgba(255,255,255,0.2); vertical-align:middle;"></span>
             </button>
-            <input type="text" value="${Utils.escapeHtml(item.label || '')}" placeholder="${window.I18n ? I18n.t('plugins.measure-distance.labelPlaceholder') : 'Label'}" class="form-input text-xs" style="flex: 1; min-width: 0; width: 50px; padding: 2px 4px; background: rgba(0,0,0,0.2); border: 1px solid var(--border-light); color: var(--text-primary); border-radius: 4px;" data-volume-measure-action="rename" data-measurement-id="${Utils.escapeHtml(item.id)}">
+            <input type="text" value="${Utils.escapeHtml(item.label || '')}" placeholder="${Utils.escapeHtml(_t('plugins.measure-distance.labelPlaceholder', 'Label'))}" class="form-input text-xs" style="flex: 1; min-width: 0; width: 50px; padding: 2px 4px; background: rgba(0,0,0,0.2); border: 1px solid var(--border-light); color: var(--text-primary); border-radius: 4px;" data-volume-measure-action="rename" data-measurement-id="${Utils.escapeHtml(item.id)}">
             <span style="white-space: nowrap; font-size: 11px; color: var(--text-muted);">
               ${item.visible === false ? 'Hidden' : `${_fmtUm(item.distance)} µm`}
             </span>
@@ -2559,7 +2971,7 @@ const ViewerApp = (() => {
   }
 
   function _qualityLabel(quality) {
-    if (quality === 'native') return window.I18n ? window.I18n.t('viewer.native', 'Native') : 'Native';
+    if (quality === 'native') return _t('viewer.native', 'Native');
     return quality; // returns resolution key directly (e.g. '256x256')
   }
 
@@ -2615,10 +3027,6 @@ const ViewerApp = (() => {
   // CAP-008: dismissible notice shown when the requested resolution could not fit in GPU
   // memory and a lower LOD was rendered instead. Requires an explicit OK to acknowledge.
   function _showResolutionDowngradeNotice(requestedLabel, actualLabel) {
-    const _t = (k, def, params) => {
-      const res = window.I18n ? window.I18n.t(k, params) : k;
-      return res === k ? def : res;
-    };
     document.querySelector('.res-downgrade-notice')?.remove();
     const notice = document.createElement('div');
     notice.className = 'res-downgrade-notice';
@@ -2664,6 +3072,28 @@ const ViewerApp = (() => {
 
   function _zScaleStorageKey() {
     return `iribhm.viewer.zScale.${datasetId || 'unknown'}`;
+  }
+
+  // Unlike the Z scale, the playback rate says nothing about the specimen — it is
+  // how fast this operator likes to watch a timelapse — so it is stored once for
+  // the viewer rather than per dataset.
+  const _PLAYBACK_FPS_KEY = 'iribhm.viewer.playbackFps';
+
+  function _loadPlaybackFps() {
+    try {
+      const stored = parseFloat(localStorage.getItem(_PLAYBACK_FPS_KEY));
+      return (Number.isFinite(stored) && stored > 0 && stored <= 60) ? stored : 10;
+    } catch {
+      return 10;
+    }
+  }
+
+  function _savePlaybackFps() {
+    try {
+      localStorage.setItem(_PLAYBACK_FPS_KEY, String(_playbackFps));
+    } catch {
+      // localStorage can be unavailable in restrictive contexts.
+    }
   }
 
   function _updateZScaleLabel() {
@@ -2780,14 +3210,20 @@ const ViewerApp = (() => {
         //   1. Activate VolumeSlicer (links GPU texture, renders 2D slice)
         //   2. Show its output as a fullscreen overlay over the WebGL canvas
         // This matches exactly what the user sees in the slice inspector sidebar.
+        // The spec carries its own `visible` flag and it is authoritative: forcing the
+        // overlay on for every spec meant a sibling whose plane was OFF still replaced
+        // this panel's 3D volume with a flat slice. Track the position either way, so
+        // the plane is already aligned when it is switched back on.
+        const specVisible = data.spec?.visible !== false;
         _suppressSlicerSync = true;
         if (typeof VolumeSlicer !== 'undefined') {
           const mat = VolumeViewer.getMaterial?.();
           if (mat) VolumeSlicer.updateMaterial(mat);
-          VolumeSlicer.setVisible(true);
+          VolumeSlicer.setVisible(specVisible);
           VolumeSlicer.setPlaneSpec(data.spec);
         }
-        _slicerOverlayStart();
+        if (specVisible) _slicerOverlayStart();
+        else _slicerOverlayStop();
         _suppressSlicerSync = false;
       } else if (data.type === 'SYNC_TIME' && isLive) {
         Timeline.setFrame(data.value, false);
@@ -3551,6 +3987,7 @@ const ViewerApp = (() => {
     getChannelState,
     getWorkspaceState: _getWorkspaceState,
     applyWorkspaceState: _applyWorkspaceState,
+    resetWorkspace,
     // Exposed for early module-level TOGGLE_ZSTACK listener:
     _applyZstackState,
     _setPendingZstack: (v) => { _pendingZstackState = v; }, // v = {desired, slice}

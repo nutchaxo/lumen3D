@@ -19,6 +19,30 @@ import * as Upload from './upload-manager.js';
 
 const PREVIEW_DEBOUNCE = 150;
 
+// Gizmo arms, mirroring js/modules/tools/orientation-axes. The panel owns the axis
+// LABELS and VISIBILITY; it never computes an orientation quaternion — it asks the
+// plugin running in the preview iframe and stores the answer, so the geometry has
+// exactly one implementation and the operator saves the pose they were shown.
+const AXIS_CODES = ['A', 'P', 'V', 'D', 'R', 'L'];
+const AXIS_COLORS = { A: '#00ff00', P: '#00ff00', V: '#0088ff', D: '#0088ff', R: '#ff0000', L: '#ff0000' };
+const AXIS_NAMES = () => ({
+  A: t('admin.axisAnterior', 'Antérieur'),
+  P: t('admin.axisPosterior', 'Postérieur'),
+  V: t('admin.axisVentral', 'Ventral'),
+  D: t('admin.axisDorsal', 'Dorsal'),
+  R: t('admin.axisRight', 'Droite'),
+  L: t('admin.axisLeft', 'Gauche'),
+});
+const VIEW_PRESETS = () => [
+  ['ventral', t('admin.viewVentral', 'Face ventrale (antérieur en haut)')],
+  ['dorsal', t('admin.viewDorsal', 'Face dorsale (antérieur en haut)')],
+  ['left', t('admin.viewLeft', 'Profil gauche')],
+  ['right', t('admin.viewRight', 'Profil droit')],
+  ['anterior', t('admin.viewAnterior', 'Vue antérieure (dorsal en haut)')],
+  ['posterior', t('admin.viewPosterior', 'Vue postérieure (dorsal en haut)')],
+];
+const ORIENTATION_REPLY_TIMEOUT = 2000;
+
 let _datasets = [];
 let _current = null;
 let _draft = null;
@@ -31,6 +55,7 @@ let _selectGen = 0;
 let _isCalibratingOrientation = false;
 let _loaded = false;
 let _pendingSelect = null;
+let _axesPushTimer = null;
 
 let DOM = {};
 
@@ -71,6 +96,14 @@ function refDom() {
     btnSetPreview: el('btn-set-preview'),
     btnDefineOrientation: el('btn-define-orientation'),
     orientationStatus: el('orientation-status'),
+    orientationAxesList: el('orientation-axes-list'),
+    fDefaultView: el('f-default-view'),
+    btnCaptureView: el('btn-capture-view'),
+    defaultViewHint: el('default-view-hint'),
+    galleryDrop: el('gallery-drop'),
+    galleryFile: el('gallery-file'),
+    galleryGrid: el('gallery-grid'),
+    galleryEmpty: el('gallery-empty'),
   };
 }
 
@@ -277,10 +310,13 @@ function applyStagingChrome(meta) {
 
 function setFormEnabled(on) {
   [DOM.fName, DOM.fStage, DOM.fEmbryo, DOM.fDescription, DOM.fVoxX, DOM.fVoxY, DOM.fVoxZ,
-   DOM.fExposure, DOM.btnSave, DOM.btnReset, DOM.btnSetPreview, DOM.btnDefineOrientation]
+   DOM.fExposure, DOM.btnSave, DOM.btnReset, DOM.btnSetPreview, DOM.btnDefineOrientation,
+   DOM.fDefaultView, DOM.btnCaptureView]
     .forEach((e) => { if (e) e.disabled = !on; });
+  DOM.orientationAxesList?.querySelectorAll('input').forEach((e) => { e.disabled = !on; });
   // Visibility belongs to publication — never offered for a staged dataset.
   if (DOM.fVisible) DOM.fVisible.disabled = !on || !!_draft?.staging;
+  renderGallery();   // the drop zone follows the same gate
 }
 
 // ── Validation (Rule 1.4) ──────────────────────────────────────
@@ -415,6 +451,127 @@ function populateForm() {
       ? t('admin.orientationSet', 'Orientation définie ✓')
       : t('admin.noOrientation', '(Aucune orientation définie)');
   }
+  renderOrientationAxes();
+  renderDefaultView();
+  renderGallery();
+}
+
+// ── Orientation editor ─────────────────────────────────────────
+// Shape stored in metadata.json:
+//   orientationAxes: { labels:{A:"…"}, hidden:["D"], defaultView:{preset, quaternion} }
+// `quaternion` is the anatomical-frame pose (see the plugin header) — the viewer
+// composes it with the calibration on load, so refining the calibration later
+// leaves the default view meaning the same thing.
+function readOrientationCfg() {
+  const c = (_draft && _draft.orientationAxes) || {};
+  return {
+    labels: (c.labels && typeof c.labels === 'object' && !Array.isArray(c.labels)) ? c.labels : {},
+    hidden: Array.isArray(c.hidden) ? c.hidden.filter((x) => AXIS_CODES.includes(x)) : [],
+    defaultView: (c.defaultView && typeof c.defaultView === 'object') ? c.defaultView : null,
+  };
+}
+
+function writeOrientationCfg(patch) {
+  if (!_draft) return;
+  const next = { ...readOrientationCfg(), ...patch };
+  const clean = {};
+  const labels = {};
+  for (const code of AXIS_CODES) {
+    const v = typeof next.labels[code] === 'string' ? next.labels[code].trim() : '';
+    if (v) labels[code] = v;                       // an empty rename means "keep the glyph"
+  }
+  if (Object.keys(labels).length) clean.labels = labels;
+  const hidden = AXIS_CODES.filter((c) => next.hidden.includes(c));
+  if (hidden.length) clean.hidden = hidden;
+  if (next.defaultView && Array.isArray(next.defaultView.quaternion)) clean.defaultView = next.defaultView;
+  // Written even when empty (as null rather than dropped): the Python backend MERGES
+  // the posted metadata into the existing file, so clearing a setting has to be an
+  // explicit erasure — an absent key would leave the old value in place.
+  _draft.orientationAxes = Object.keys(clean).length ? clean : null;
+  markDirty();
+}
+
+function renderOrientationAxes() {
+  if (!DOM.orientationAxesList) return;
+  const cfg = readOrientationCfg();
+  const names = AXIS_NAMES();
+  DOM.orientationAxesList.innerHTML = AXIS_CODES.map((code) => {
+    const shown = !cfg.hidden.includes(code);
+    const label = typeof cfg.labels[code] === 'string' ? cfg.labels[code] : '';
+    return `<div class="ori-axis">
+      <label class="ori-axis-show">
+        <input type="checkbox" data-axis-show="${code}"${shown ? ' checked' : ''}>
+        <span class="ori-axis-dot" style="background:${AXIS_COLORS[code]}"></span>
+        <span class="ori-axis-name">${escHtml(names[code])} (${code})</span>
+      </label>
+      <input class="config-input ori-axis-label" type="text" maxlength="12"
+             data-axis-label="${code}" value="${escHtml(label)}" placeholder="${code}">
+    </div>`;
+  }).join('');
+}
+
+function renderDefaultView() {
+  const cfg = readOrientationCfg();
+  if (DOM.fDefaultView) {
+    const current = cfg.defaultView ? (cfg.defaultView.preset || 'custom') : 'none';
+    DOM.fDefaultView.innerHTML =
+      `<option value="none">${escHtml(t('admin.viewNone', 'Aucune — orientation brute du volume'))}</option>`
+      + VIEW_PRESETS().map(([id, label]) => `<option value="${id}">${escHtml(label)}</option>`).join('')
+      + `<option value="custom">${escHtml(t('admin.viewCustom', 'Personnalisée (vue capturée)'))}</option>`;
+    DOM.fDefaultView.value = current;
+  }
+  if (DOM.defaultViewHint) {
+    DOM.defaultViewHint.textContent = cfg.defaultView
+      ? t('admin.defaultViewSet', 'Le dataset s\'ouvrira directement dans cette vue, sans afficher les axes.')
+      : t('admin.defaultViewNone', 'Le dataset s\'ouvre dans l\'orientation brute du volume.');
+  }
+}
+
+function pushOrientationAxes() {
+  const cfg = readOrientationCfg();
+  try {
+    DOM.previewFrame?.contentWindow?.postMessage(
+      { type: 'SET_ORIENTATION_AXES', value: { labels: cfg.labels, hidden: cfg.hidden } },
+      window.location.origin);
+  } catch (_) { /* cross-origin guard */ }
+}
+
+/**
+ * Ask the plugin in the preview iframe to resolve a default view, then store what
+ * it hands back. `message` is either APPLY_ORIENTATION_VIEW (pose the volume in a
+ * named preset) or GET_ORIENTATION_VIEW (capture the pose the operator built).
+ */
+function requestOrientationView(message) {
+  const win = DOM.previewFrame?.contentWindow;
+  if (!win) return;
+  const settle = () => { window.removeEventListener('message', onReply); clearTimeout(timer); };
+  const onReply = (e) => {
+    if (e.origin !== window.location.origin || e.data?.type !== 'ORIENTATION_VIEW_RESULT') return;
+    settle();
+    const q = e.data.quaternion;
+    if (!Array.isArray(q) || q.length !== 4 || !q.every(Number.isFinite)) {
+      toast(t('admin.viewCaptureFailed', 'Vue par défaut non définie : le volume n\'est pas encore prêt.'), 'error');
+      renderDefaultView();
+      return;
+    }
+    writeOrientationCfg({ defaultView: { preset: e.data.preset || 'custom', quaternion: q } });
+    renderDefaultView();
+    toast(t('admin.viewCaptured', 'Vue par défaut définie — sauvegardez pour l\'appliquer.'));
+  };
+  // No reply means the plugin isn't running in the preview (uninstalled, revoked or
+  // incompatible). Say so instead of leaving a dropdown that silently does nothing.
+  const timer = setTimeout(() => {
+    settle();
+    toast(t('admin.orientationPluginMissing',
+      'Le plugin « Orientation Axes » ne répond pas — installez-le pour définir la vue par défaut.'), 'error');
+    renderDefaultView();
+  }, ORIENTATION_REPLY_TIMEOUT);
+  window.addEventListener('message', onReply);
+  try {
+    win.postMessage(message, window.location.origin);
+  } catch (_) {
+    settle();
+  }
 }
 
 function updateVisibilityUI() {
@@ -474,6 +631,187 @@ async function toggleItemVisibility(id, btn) {
   if (btn) btn.disabled = true;
   const ok = await applyVisibility(id, !ds.hidden);
   if (!ok && btn) btn.disabled = false;  // on success the list re-renders
+}
+
+// ── Gallery ────────────────────────────────────────────────────
+// Images attached to the dataset (annotated captures, figures). The BYTES are
+// committed the moment they are dropped — a separate gallery_add call, not the
+// Save button — because a half-uploaded image has no meaning to keep in a draft.
+// Order and captions, on the other hand, are ordinary form state: they ride along
+// in _draft and land with Save. Uploading therefore also advances _original, so a
+// fresh image never registers as an unsaved change.
+const GALLERY_MAX_BYTES = 8 * 1024 * 1024;
+const GALLERY_MAX_ITEMS = 40;
+const GALLERY_TYPES = ['image/png', 'image/jpeg', 'image/webp', 'image/gif'];
+
+function galleryItems() {
+  return Array.isArray(_draft?.gallery) ? _draft.gallery : [];
+}
+
+function galleryUrl(file) {
+  // Cache-busted on the added timestamp: a re-upload under a recycled name must not
+  // show the previous bytes.
+  return `DATA_WEB/${_current.id}/gallery/${encodeURIComponent(file)}`;
+}
+
+function renderGallery() {
+  if (!DOM.galleryGrid) return;
+  const items = galleryItems();
+  const editable = isStagingEditable(_draft) && !_draft?.staging;
+
+  if (DOM.galleryEmpty) {
+    DOM.galleryEmpty.style.display = items.length ? 'none' : 'block';
+    DOM.galleryEmpty.textContent = _draft?.staging
+      ? t('admin.galleryStaging', 'Publiez l\'import pour pouvoir lui attacher des images.')
+      : t('admin.galleryEmpty', 'Aucune image attachée pour l\'instant.');
+  }
+  if (DOM.galleryDrop) {
+    DOM.galleryDrop.classList.toggle('is-disabled', !editable);
+    DOM.galleryDrop.setAttribute('aria-disabled', String(!editable));
+  }
+
+  DOM.galleryGrid.innerHTML = items.map((it, i) => `
+    <div class="gal-item" data-gal-index="${i}">
+      <img class="gal-thumb" src="${escHtml(galleryUrl(it.file))}" alt="${escHtml(it.caption || it.file)}" loading="lazy">
+      <div class="gal-meta">
+        <input class="config-input gal-caption" type="text" maxlength="400"
+               data-gal-caption="${i}" value="${escHtml(it.caption || '')}"
+               placeholder="${escHtml(t('admin.galleryCaptionPlaceholder', 'Légende (optionnelle)'))}"
+               ${editable ? '' : 'disabled'}>
+        <div class="gal-actions">
+          <button class="adm-btn adm-btn-ghost adm-btn-sm" data-gal-move="-1" data-gal-index="${i}"
+                  title="${escHtml(t('admin.galleryMoveUp', 'Déplacer vers le haut'))}"
+                  ${i === 0 || !editable ? 'disabled' : ''}>↑</button>
+          <button class="adm-btn adm-btn-ghost adm-btn-sm" data-gal-move="1" data-gal-index="${i}"
+                  title="${escHtml(t('admin.galleryMoveDown', 'Déplacer vers le bas'))}"
+                  ${i === items.length - 1 || !editable ? 'disabled' : ''}>↓</button>
+          <button class="adm-btn adm-btn-ghost adm-btn-sm gal-del" data-gal-delete="${escHtml(it.file)}"
+                  title="${escHtml(t('admin.galleryDelete', 'Supprimer l\'image'))}"
+                  ${editable ? '' : 'disabled'}>🗑</button>
+        </div>
+      </div>
+    </div>`).join('');
+}
+
+/** Mirror a server-confirmed gallery into BOTH draft and baseline (never dirty). */
+function commitGallery(gallery) {
+  const list = Array.isArray(gallery) ? gallery : [];
+  if (_draft) _draft.gallery = deepClone(list);
+  if (_original) _original.gallery = deepClone(list);
+  renderGallery();
+}
+
+function readFileAsDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const fr = new FileReader();
+    fr.onload = () => resolve(String(fr.result || ''));
+    fr.onerror = () => reject(new Error('read failed'));
+    fr.readAsDataURL(file);
+  });
+}
+
+async function uploadGalleryFiles(files) {
+  if (!_current || !_draft) return;
+  if (_draft.staging) { toast(t('admin.galleryStaging', 'Publiez l\'import pour pouvoir lui attacher des images.'), 'error'); return; }
+  const list = Array.from(files || []);
+  if (!list.length) return;
+
+  DOM.galleryDrop?.classList.add('is-busy');
+  for (const file of list) {
+    if (galleryItems().length >= GALLERY_MAX_ITEMS) {
+      toast(t('admin.galleryFull', `Maximum ${GALLERY_MAX_ITEMS} images par dataset.`, { max: GALLERY_MAX_ITEMS }), 'error');
+      break;
+    }
+    if (!GALLERY_TYPES.includes(file.type)) {
+      toast(t('admin.galleryBadType', `« ${file.name} » : format non supporté (PNG, JPEG, WebP, GIF).`, { name: file.name }), 'error');
+      continue;
+    }
+    if (file.size > GALLERY_MAX_BYTES) {
+      toast(t('admin.galleryTooLarge', `« ${file.name} » dépasse 8 Mo.`, { name: file.name }), 'error');
+      continue;
+    }
+    let dataUrl;
+    try {
+      dataUrl = await readFileAsDataUrl(file);
+    } catch (_) {
+      toast(t('admin.galleryReadFailed', `« ${file.name} » illisible.`, { name: file.name }), 'error');
+      continue;
+    }
+    const data = await apiFetch(`${API_DATASETS}?action=gallery_add&id=${encodeURIComponent(_current.id)}`,
+      { method: 'POST', body: JSON.stringify({ image: dataUrl, filename: file.name }) });
+    if (data?.ok) {
+      commitGallery(data.gallery);
+    } else {
+      const reason = data?.error || t('admin.unknownError', 'Inconnue');
+      toast(t('admin.galleryUploadError', `Envoi de « ${file.name} » impossible : ${reason}`, { name: file.name, reason }), 'error');
+    }
+  }
+  DOM.galleryDrop?.classList.remove('is-busy');
+  if (DOM.galleryFile) DOM.galleryFile.value = '';
+}
+
+async function deleteGalleryImage(fileName) {
+  if (!_current || !fileName) return;
+  if (!confirm(t('admin.galleryConfirmDelete', 'Supprimer cette image ? Le fichier est effacé du dossier du dataset.'))) return;
+  const data = await apiFetch(`${API_DATASETS}?action=gallery_delete&id=${encodeURIComponent(_current.id)}`,
+    { method: 'POST', body: JSON.stringify({ file: fileName }) });
+  if (data?.ok) {
+    commitGallery(data.gallery);
+    toast(t('admin.galleryDeleted', 'Image supprimée ✓'));
+  } else {
+    toast(t('admin.galleryDeleteError', 'Suppression impossible.'), 'error');
+  }
+}
+
+function moveGalleryImage(index, delta) {
+  const items = galleryItems();
+  const to = index + delta;
+  if (!items[index] || to < 0 || to >= items.length) return;
+  const next = items.slice();
+  [next[index], next[to]] = [next[to], next[index]];
+  _draft.gallery = next;
+  markDirty();
+  renderGallery();
+  // Keep focus on the button the operator is repeatedly clicking.
+  DOM.galleryGrid?.querySelector(`[data-gal-move="${delta}"][data-gal-index="${to}"]`)?.focus();
+}
+
+function wireGallery() {
+  if (!DOM.galleryDrop) return;
+
+  const pick = () => { if (!DOM.galleryDrop.classList.contains('is-disabled')) DOM.galleryFile?.click(); };
+  DOM.galleryDrop.addEventListener('click', pick);
+  DOM.galleryDrop.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); pick(); }
+  });
+  ['dragenter', 'dragover'].forEach((ev) => DOM.galleryDrop.addEventListener(ev, (e) => {
+    e.preventDefault();
+    if (!DOM.galleryDrop.classList.contains('is-disabled')) DOM.galleryDrop.classList.add('is-over');
+  }));
+  ['dragleave', 'drop'].forEach((ev) => DOM.galleryDrop.addEventListener(ev, (e) => {
+    e.preventDefault();
+    DOM.galleryDrop.classList.remove('is-over');
+  }));
+  DOM.galleryDrop.addEventListener('drop', (e) => {
+    if (DOM.galleryDrop.classList.contains('is-disabled')) return;
+    uploadGalleryFiles(e.dataTransfer?.files);
+  });
+  DOM.galleryFile?.addEventListener('change', (e) => uploadGalleryFiles(e.target.files));
+
+  DOM.galleryGrid?.addEventListener('click', (e) => {
+    const del = e.target.closest('[data-gal-delete]');
+    if (del) { deleteGalleryImage(del.getAttribute('data-gal-delete')); return; }
+    const mv = e.target.closest('[data-gal-move]');
+    if (mv) moveGalleryImage(Number(mv.getAttribute('data-gal-index')), Number(mv.getAttribute('data-gal-move')));
+  });
+  DOM.galleryGrid?.addEventListener('input', (e) => {
+    const cap = e.target.closest('[data-gal-caption]');
+    if (!cap) return;
+    const item = galleryItems()[Number(cap.getAttribute('data-gal-caption'))];
+    if (!item) return;
+    item.caption = cap.value;
+    markDirty();
+  });
 }
 
 // ── Save / Reset ───────────────────────────────────────────────
@@ -552,6 +890,7 @@ function resetDataset() {
   clearDirty();
   populateForm();
   schedulePreviewUpdate();
+  pushOrientationAxes();
 }
 
 async function saveThumbnail(dataUrl) {
@@ -592,6 +931,7 @@ function parseStageNumeric(stage) {
 function wire() {
   DOM.btnSave.addEventListener('click', saveDataset);
   DOM.btnReset.addEventListener('click', resetDataset);
+  wireGallery();
 
   DOM.datasetSearch.addEventListener('input', (e) => {
     _searchQuery = e.target.value;
@@ -620,6 +960,37 @@ function wire() {
     const val = parseFloat(e.target.value) / 100;
     if (DOM.fExposureVal) DOM.fExposureVal.textContent = `${val.toFixed(2)}×`;
     if (_draft) { _draft.exposure = val; markDirty(); schedulePreviewUpdate(); }
+  });
+
+  if (DOM.orientationAxesList) {
+    DOM.orientationAxesList.addEventListener('change', (e) => {
+      const code = e.target?.dataset?.axisShow;
+      if (!code) return;
+      const hidden = new Set(readOrientationCfg().hidden);
+      if (e.target.checked) hidden.delete(code); else hidden.add(code);
+      writeOrientationCfg({ hidden: [...hidden] });
+      pushOrientationAxes();
+    });
+    DOM.orientationAxesList.addEventListener('input', (e) => {
+      const code = e.target?.dataset?.axisLabel;
+      if (!code) return;
+      writeOrientationCfg({ labels: { ...readOrientationCfg().labels, [code]: e.target.value } });
+      // The gizmo is rebuilt from scratch on every push — debounce so typing a name
+      // doesn't discard and re-upload six sprite textures per keystroke.
+      clearTimeout(_axesPushTimer);
+      _axesPushTimer = setTimeout(pushOrientationAxes, PREVIEW_DEBOUNCE * 2);
+    });
+  }
+
+  if (DOM.fDefaultView) DOM.fDefaultView.addEventListener('change', () => {
+    const value = DOM.fDefaultView.value;
+    if (value === 'none') { writeOrientationCfg({ defaultView: null }); renderDefaultView(); return; }
+    if (value === 'custom') { requestOrientationView({ type: 'GET_ORIENTATION_VIEW' }); return; }
+    requestOrientationView({ type: 'APPLY_ORIENTATION_VIEW', value: { preset: value } });
+  });
+
+  if (DOM.btnCaptureView) DOM.btnCaptureView.addEventListener('click', () => {
+    requestOrientationView({ type: 'GET_ORIENTATION_VIEW' });
   });
 
   if (DOM.btnDefineOrientation) DOM.btnDefineOrientation.addEventListener('click', () => {
@@ -659,6 +1030,9 @@ function wire() {
       DOM.previewLabelBar.style.display = 'flex';
     }
     schedulePreviewUpdate();
+    // The plugin booted from the SAVED metadata; mirror any unsaved axis edits so
+    // the preview shows the draft, not the file.
+    pushOrientationAxes();
   });
 
   // Ctrl+S

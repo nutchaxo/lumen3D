@@ -13,7 +13,7 @@ from pathlib import Path
 import numpy as np
 from PIL import Image
 
-__version__ = "0.16.0"
+__version__ = "0.16.3"
 
 # ── Paths ──────────────────────────────────────────────────────────────────────
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -273,7 +273,12 @@ def process_ims_file(ims_path: Path, output_root: Path, idx: int = 0, total: int
     if temp_dir.exists():
         shutil.rmtree(temp_dir)
     temp_dir.mkdir(parents=True, exist_ok=True)
-    
+
+    # Bound before the try: step 1 can fail, and the rollback handler must not turn a
+    # step-1 error into a NameError that hides it.
+    bricks_dir = None
+    bricks_rollback = None
+
     try:
         # Step 1: Extraction of metadata
         temp_meta_json = temp_dir / "meta.json"
@@ -286,10 +291,18 @@ def process_ims_file(ims_path: Path, output_root: Path, idx: int = 0, total: int
             n_timepoints = int(json.load(fm).get("n_timepoints", 1) or 1)
         type_dir = "live" if n_timepoints > 1 else "fixed"
         dataset_output_dir = output_root / type_dir / dataset_name
-        if dataset_output_dir.exists():
-            bricks_dir = dataset_output_dir / "bricks"
-            if bricks_dir.exists():
-                shutil.rmtree(bricks_dir)
+        # The previous bricks used to be DELETED here, before the heavy step even ran.
+        # Any failure after this point — and step 2 can fail for reasons that have
+        # nothing to do with the data, such as exhausting the Windows commit limit on a
+        # busy machine — left an already published dataset with no bricks at all and no
+        # way back. They are now moved aside and only dropped once the run has succeeded;
+        # on failure they are put back (see the except/finally below).
+        bricks_dir = dataset_output_dir / "bricks"
+        bricks_rollback = dataset_output_dir / "bricks.rollback"
+        if bricks_dir.exists():
+            if bricks_rollback.exists():
+                shutil.rmtree(bricks_rollback, ignore_errors=True)
+            bricks_dir.rename(bricks_rollback)
         dataset_output_dir.mkdir(parents=True, exist_ok=True)
         if n_timepoints > 1:
             print(_dim(f"   type   : live ({n_timepoints} timepoints)"))
@@ -313,7 +326,7 @@ def process_ims_file(ims_path: Path, output_root: Path, idx: int = 0, total: int
         if n_timepoints > 1:
             attach_tracking(ims_path, dataset_output_dir, temp_dir, dataset_name, tracking)
 
-        # Step 7 (optional): download/ bundle — archive, original .ims, OME-TIFF,
+        # Step 7 (optional): download/ bundle — archive, original .ims, ImageJ TIFF,
         # per-channel MIPs, README. Runs after step 4 so metadata.json exists. The
         # source .ims is the one being processed, so point the tool at its folder.
         if with_downloads:
@@ -325,13 +338,28 @@ def process_ims_file(ims_path: Path, output_root: Path, idx: int = 0, total: int
                            "--data-web", str(output_root),
                            "--raw-dir", str(ims_path.parent),
                            "--datasets", dataset_name,
-                           label="download/ (archive, OME-TIFF, MIP)")
+                           label="download/ (archive, ImageJ TIFF, MIP)")
+
+        # The run produced a complete brick set: the previous one can go.
+        if bricks_rollback is not None and bricks_rollback.exists():
+            shutil.rmtree(bricks_rollback, ignore_errors=True)
 
         elapsed = (datetime.now() - t0).total_seconds()
         print(_ok(f"   [OK] {dataset_name} termine en {elapsed:.0f}s"))
     except Exception as e:
         print(_err(f"   [X] {dataset_name} : {e}"), file=sys.stderr)
         traceback.print_exc()
+        # Put the previous bricks back: a dataset that was serving before this run must
+        # still be serving after it failed. A partial set left by an interrupted step 3
+        # is worse than the old one — it is discarded.
+        try:
+            if bricks_rollback is not None and bricks_rollback.exists():
+                if bricks_dir.exists():
+                    shutil.rmtree(bricks_dir, ignore_errors=True)
+                bricks_rollback.rename(bricks_dir)
+                print(_warn(f"   [<] bricks/ precedent restaure pour {dataset_name}"), file=sys.stderr)
+        except Exception as restore_err:
+            print(_err(f"   [!] restauration de bricks/ impossible : {restore_err}"), file=sys.stderr)
     finally:
         # Clean up temporary processing binary files to free space.
         # ignore_errors: on a Ctrl+C teardown a just-killed worker may still hold a
@@ -346,7 +374,7 @@ def main():
     parser.add_argument("--only", default=None, help="Glob pattern to filter files to process (e.g. '*E8*').")
     parser.add_argument("--with-downloads", action="store_true",
                         help="After each dataset, also build its download/ bundle "
-                             "(web archive, original .ims, OME-TIFF, per-channel MIP, README).")
+                             "(web archive, original .ims, ImageJ TIFF, per-channel MIP, README).")
     parser.add_argument("--tracking", default="auto", metavar="auto|off|FILE",
                         help="Cell tracking for timelapse datasets. 'auto' (default) looks for "
                              "a .imaris_track beside the volume, then the Imaris objects inside "

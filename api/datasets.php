@@ -70,13 +70,187 @@ function read_json(string $path): ?array {
 function write_json(string $path, array $data): bool {
     $dir = dirname($path);
     if (!is_dir($dir)) admin_make_dir($dir);
-    if (file_put_contents($path, json_encode($data, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE)) === false) return false;
+    // json_encode returns false on malformed UTF-8. Writing that would truncate the
+    // file to nothing — refuse instead of destroying the document (Rule 1.1).
+    $json = json_encode($data, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE);
+    if ($json === false) return false;
+    if (file_put_contents($path, $json) === false) return false;
     admin_fix_file_mode($path);
     return true;
 }
 
 function dataset_id(string $type, string $name): string {
     return $type . '/' . $name;
+}
+
+// ── Dataset gallery (operator-attached images) ───────────────────────────────
+// Twin of dev_server.py _gallery_* : same folder (DATA_WEB/<type>/<folder>/gallery/),
+// same metadata.json shape, same reconciliation rules — an operator can move a host
+// between the two backends without the galleries changing meaning.
+const GALLERY_DIRNAME    = 'gallery';
+const MAX_GALLERY_BYTES  = 8388608;
+const MAX_GALLERY_ITEMS  = 40;
+const GALLERY_CAPTION_MAX = 400;
+
+/** Extension from the MAGIC BYTES, never from the client-supplied filename. */
+function gallery_ext(string $raw): ?string {
+    if (substr($raw, 0, 4) === 'RIFF' && substr($raw, 8, 4) === 'WEBP') return 'webp';
+    if (substr($raw, 0, 8) === "\x89PNG\r\n\x1a\n")                     return 'png';
+    if (substr($raw, 0, 3) === "\xff\xd8\xff")                          return 'jpg';
+    if (substr($raw, 0, 6) === 'GIF87a' || substr($raw, 0, 6) === 'GIF89a') return 'gif';
+    return null;
+}
+
+function gallery_stem(string $name): string {
+    $name = str_replace('\\', '/', $name);
+    $parts = explode('/', $name);
+    $name = (string)end($parts);
+    $dot = strrpos($name, '.');
+    if ($dot !== false) $name = substr($name, 0, $dot);
+    $stem = strtolower((string)preg_replace('/[^A-Za-z0-9_-]+/', '-', $name));
+    $stem = trim($stem, '-');
+    return $stem === '' ? 'image' : substr($stem, 0, 60);
+}
+
+/** Validate an entry's `file`: a bare name in gallery/, never a path (it becomes a URL). */
+function gallery_rel($file): ?string {
+    if (!is_string($file)) return null;
+    $name = trim(str_replace('\\', '/', $file), '/');
+    if (strncmp($name, GALLERY_DIRNAME . '/', strlen(GALLERY_DIRNAME) + 1) === 0) {
+        $name = substr($name, strlen(GALLERY_DIRNAME) + 1);
+    }
+    if (strpos($name, '/') !== false) return null;
+    return preg_match('/^[A-Za-z0-9][A-Za-z0-9._-]{0,80}\.(webp|png|jpg|jpeg|gif)$/', $name) ? $name : null;
+}
+
+/**
+ * Clamp to $limit CHARACTERS, never bytes. A byte-wise cut of an accented caption
+ * would leave a half-written UTF-8 sequence, json_encode would then return false and
+ * write_json would blank metadata.json — the dataset's only source of truth. mbstring
+ * is not guaranteed on a shared host, hence the codepoint-wise fallback.
+ */
+function gallery_clean_text($value, int $limit = GALLERY_CAPTION_MAX): string {
+    if (!is_string($value)) return '';
+    $v = trim(str_replace(["\r", "\n"], ' ', $value));
+    if (function_exists('mb_substr')) return mb_substr($v, 0, $limit, 'UTF-8');
+    $chars = preg_split('//u', $v, -1, PREG_SPLIT_NO_EMPTY);
+    if (is_array($chars)) return implode('', array_slice($chars, 0, $limit));
+    // Input was not valid UTF-8: cut on bytes, then drop any dangling partial sequence.
+    return (string)preg_replace('/[\x80-\xFF]*$/', '', substr($v, 0, $limit));
+}
+
+function gallery_entry(string $name, array $src): array {
+    $item = ['file' => $name];
+    $title   = gallery_clean_text($src['title'] ?? '', 120);
+    $caption = gallery_clean_text($src['caption'] ?? '');
+    if ($title !== '')   $item['title'] = $title;
+    if ($caption !== '') $item['caption'] = $caption;
+    if (isset($src['added']) && is_string($src['added'])) $item['added'] = substr($src['added'], 0, 40);
+    return $item;
+}
+
+/**
+ * Make metadata.json's `gallery` agree with what is on disk: drop entries whose file is
+ * missing or malformed, append files the incoming list does not know about (so a Save
+ * carrying an older draft cannot erase a concurrent upload). $fallback is the gallery as
+ * it stood before the edit — a re-appended file recovers its caption from it.
+ */
+function gallery_reconcile(array $meta, string $ds_dir, $fallback = null): array {
+    $gdir = $ds_dir . DIRECTORY_SEPARATOR . GALLERY_DIRNAME;
+    $rows = [];
+    if (is_dir($gdir)) {
+        foreach (scandir($gdir) ?: [] as $f) {
+            $p = $gdir . DIRECTORY_SEPARATOR . $f;
+            if (!is_file($p) || gallery_rel($f) === null) continue;
+            $rows[] = [$f, (int)@filemtime($p)];
+        }
+        usort($rows, fn($a, $b) => $a[1] === $b[1] ? strcmp($a[0], $b[0]) : $a[1] <=> $b[1]);
+    }
+    $on_disk = array_map(fn($r) => $r[0], $rows);
+    $disk_set = array_flip($on_disk);
+
+    $prior = [];
+    foreach ((is_array($fallback) ? $fallback : []) as $entry) {
+        if (!is_array($entry)) continue;
+        $key = gallery_rel($entry['file'] ?? null);
+        if ($key !== null) $prior[$key] = $entry;
+    }
+
+    $out = [];
+    $seen = [];
+    $incoming = isset($meta['gallery']) && is_array($meta['gallery']) ? $meta['gallery'] : [];
+    foreach ($incoming as $entry) {
+        if (!is_array($entry)) continue;
+        $name = gallery_rel($entry['file'] ?? null);
+        if ($name === null || isset($seen[$name]) || !isset($disk_set[$name])) continue;
+        $seen[$name] = true;
+        $out[] = gallery_entry($name, $entry);
+    }
+    foreach ($on_disk as $name) {
+        if (isset($seen[$name])) continue;
+        $out[] = gallery_entry($name, $prior[$name] ?? []);
+    }
+    return array_slice($out, 0, MAX_GALLERY_ITEMS);
+}
+
+/** @return array{0:int,1:array} (http status, payload) */
+function gallery_add(string $id, string $ds_dir, array $body): array {
+    if (!is_dir($ds_dir)) return [404, ['error' => 'Dataset not found']];
+    $image = (string)($body['image'] ?? '');
+    if (strncmp($image, 'data:image/', 11) !== 0) return [400, ['error' => 'Invalid image format']];
+    $comma = strpos($image, ',');
+    $raw = $comma === false ? false : base64_decode(substr($image, $comma + 1), false);
+    if ($raw === false || $raw === '') return [400, ['error' => 'Invalid image data']];
+    if (strlen($raw) > MAX_GALLERY_BYTES) return [400, ['error' => 'Image too large']];
+    $ext = gallery_ext($raw);
+    if ($ext === null) return [400, ['error' => 'Not a valid image (expected WebP/PNG/JPEG/GIF)']];
+
+    $meta_path = $ds_dir . DIRECTORY_SEPARATOR . 'metadata.json';
+    $meta = read_json($meta_path) ?: [];
+    $current = gallery_reconcile($meta, $ds_dir);
+    if (count($current) >= MAX_GALLERY_ITEMS) {
+        return [409, ['error' => 'Gallery full (max ' . MAX_GALLERY_ITEMS . ' images)']];
+    }
+
+    $gdir = $ds_dir . DIRECTORY_SEPARATOR . GALLERY_DIRNAME;
+    if (!is_dir($gdir) && !admin_make_dir($gdir)) return [500, ['error' => 'Write failed']];
+    $stem = gallery_stem((string)($body['filename'] ?? $body['name'] ?? ''));
+    $name = "$stem.$ext";
+    $i = 1;
+    while (is_file($gdir . DIRECTORY_SEPARATOR . $name)) { $name = "$stem-$i.$ext"; $i++; }
+    if (@file_put_contents($gdir . DIRECTORY_SEPARATOR . $name, $raw) === false) {
+        return [500, ['error' => 'Write failed']];
+    }
+    admin_fix_file_mode($gdir . DIRECTORY_SEPARATOR . $name);
+
+    $entry = gallery_entry($name, [
+        'title'   => $body['title'] ?? '',
+        'caption' => $body['caption'] ?? '',
+        'added'   => date('c'),
+    ]);
+    $current[] = $entry;
+    $meta['gallery'] = $current;
+    $meta['_lastModified'] = date('c');
+    if (!write_json($meta_path, $meta)) return [500, ['error' => 'Write failed']];
+    return [200, [
+        'ok' => true, 'item' => $entry, 'gallery' => $current,
+        'url' => 'DATA_WEB/' . $id . '/' . GALLERY_DIRNAME . '/' . $name,
+    ]];
+}
+
+/** @return array{0:int,1:array} */
+function gallery_delete(string $ds_dir, $file): array {
+    $name = gallery_rel($file);
+    if ($name === null) return [400, ['error' => 'Invalid file']];
+    $target = $ds_dir . DIRECTORY_SEPARATOR . GALLERY_DIRNAME . DIRECTORY_SEPARATOR . $name;
+    if (is_file($target) && !@unlink($target)) return [500, ['error' => 'Delete failed']];
+
+    $meta_path = $ds_dir . DIRECTORY_SEPARATOR . 'metadata.json';
+    $meta = read_json($meta_path) ?: [];
+    $meta['gallery'] = gallery_reconcile($meta, $ds_dir);
+    $meta['_lastModified'] = date('c');
+    if (!write_json($meta_path, $meta)) return [500, ['error' => 'Write failed']];
+    return [200, ['ok' => true, 'gallery' => $meta['gallery']]];
 }
 
 function dataset_dir(string $id): string {
@@ -305,7 +479,8 @@ require_auth();
 // skipped the token entirely, so a logged-in admin following a link could be made
 // to flip a dataset public (`?action=set_visibility&id=…` with an empty body).
 // admin_require_write() enforces POST *and* the token together.
-const DATASET_WRITE_ACTIONS = ['save', 'save_thumbnail', 'rebuild_catalog', 'set_visibility'];
+const DATASET_WRITE_ACTIONS = ['save', 'save_thumbnail', 'rebuild_catalog', 'set_visibility',
+                               'gallery_add', 'gallery_delete'];
 if (in_array($action, DATASET_WRITE_ACTIONS, true)) {
     admin_require_write();   // POST + X-CSRF-Token; exits on failure
 }
@@ -339,6 +514,11 @@ if (strncmp($id, LUMEN_STAGING_PREFIX, strlen(LUMEN_STAGING_PREFIX)) === 0) {
         case 'set_visibility':
             // A staged dataset is never in the public catalog — visibility is a
             // property of publication, decided when it is published.
+            json_out(['error' => 'not_published'], 409);
+        case 'gallery_add':
+        case 'gallery_delete':
+            // The staging store accepts only what the preprocessing pipeline emits
+            // (lumen_up_classify); a gallery is attached once the import is published.
             json_out(['error' => 'not_published'], 409);
         default:
             json_out(['error' => 'Unknown action'], 400);
@@ -380,7 +560,16 @@ switch ($action) {
         $body['_adminConfigured'] = true;
         $body['_lastModified']    = date('c');
 
-        $path = dataset_dir($id) . DIRECTORY_SEPARATOR . 'metadata.json';
+        $ds_dir = dataset_dir($id);
+        $path   = $ds_dir . DIRECTORY_SEPARATOR . 'metadata.json';
+
+        // The posted `gallery` decides ORDER and CAPTIONS only; which files exist is
+        // decided by the folder. Keeps a stale draft from resurrecting a deleted image
+        // or dropping one uploaded while the form was open.
+        $stored  = read_json($path);
+        $gallery = gallery_reconcile($body, $ds_dir, is_array($stored) ? ($stored['gallery'] ?? null) : null);
+        if ($gallery) $body['gallery'] = $gallery; else unset($body['gallery']);
+
         if (!write_json($path, $body)) json_out(['error' => 'Write failed'], 500);
 
         json_out(['ok' => true, 'path' => $path]);
@@ -417,6 +606,21 @@ switch ($action) {
         }
 
         json_out(['ok' => true, 'path' => 'DATA_WEB/' . $id . '/thumbnail.webp']);
+
+    case 'gallery_add':
+        require_auth();
+        if (!$id) json_out(['error' => 'Missing id'], 400);
+        $body = json_decode(file_get_contents('php://input'), true);
+        if (!is_array($body)) json_out(['error' => 'Invalid JSON body'], 400);
+        [$st, $pl] = gallery_add($id, dataset_dir($id), $body);
+        json_out($pl, $st);
+
+    case 'gallery_delete':
+        require_auth();
+        if (!$id) json_out(['error' => 'Missing id'], 400);
+        $body = json_decode(file_get_contents('php://input'), true) ?: [];
+        [$st, $pl] = gallery_delete(dataset_dir($id), $body['file'] ?? null);
+        json_out($pl, $st);
 
     case 'rebuild_catalog':
         require_auth();

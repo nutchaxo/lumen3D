@@ -14,6 +14,18 @@
       "port": 8090
     },
     {
+      "name": "verify2",
+      "runtimeExecutable": "py",
+      "runtimeArgs": ["dev_server.py", "--port", "8091"],
+      "port": 8091
+    },
+    {
+      "name": "verify3",
+      "runtimeExecutable": "py",
+      "runtimeArgs": ["dev_server.py", "--port", "8094"],
+      "port": 8094
+    },
+    {
       "name": "php",
       "runtimeExecutable": "C:\\php-portable\\php.exe",
       "runtimeArgs": ["-S", "127.0.0.1:8082", "-t", "D:\\Coding\\WebPlatform", "router.php"],

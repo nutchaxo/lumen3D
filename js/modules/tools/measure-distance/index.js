@@ -53,8 +53,16 @@ PluginRegistry.implement('measure-distance', {
 
   // ── Workspace state ───────────────────────────────────────
 
+  /**
+   * Read from the STORE, not from this._measurements. The store is the single
+   * source of truth — the viewer writes it directly when it restores a workspace
+   * (MeasurementStore.setAll), without going through this module, so the local
+   * array is only a render cache and can be a restore behind. Reporting that cache
+   * as workspace state saved an empty list over measurements that were on screen.
+   */
   getState() {
-    return { measurements: this._measurements };
+    const items = this._ctx ? this._ctx.measurements.list('viewer') : this._measurements;
+    return { measurements: items };
   },
 
   setState(s) {
@@ -63,6 +71,8 @@ PluginRegistry.implement('measure-distance', {
     this._ctx.viewer.setMeasurements(this._measurements);
     this._render();
   },
+
+  reset() { this._clear(); },
 
   // ── Private ───────────────────────────────────────────────
 

@@ -76,6 +76,8 @@ PluginRegistry.implement('zstack-browser', {
     }
   },
 
+  reset() { this.applyState(false, 0); },
+
   // ── Private helpers ───────────────────────────────────────
 
   _bindControls() {

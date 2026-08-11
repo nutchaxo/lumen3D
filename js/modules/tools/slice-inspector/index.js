@@ -36,6 +36,10 @@ PluginRegistry.implement('slice-inspector', {
 
   getState() { return null; }, // Plane spec is stored in viewer.js workspace state
 
+  // The plane spec itself is reset by the viewer (VolumeViewer.resetClipping);
+  // what belongs to this module is the panel and the slicer render loop.
+  reset() { this._show(false); },
+
   // ── Private ───────────────────────────────────────────────
 
   _initSlicer() {

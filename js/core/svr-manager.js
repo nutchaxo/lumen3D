@@ -325,11 +325,32 @@ class SVRManager {
     };
   }
   
+  /** Does this manager still own the GPU resources the shader needs? False once
+   *  dispose()/_releaseGpuResources() has run — the atlases and the page table are
+   *  gone, and publishing that state would switch ENABLE_SVR on with nothing bound. */
+  isUsable() {
+    return Boolean(this.pageTable) && this.atlases.length > 0;
+  }
+
   updateUniforms() {
-    if (!this.material) return;
+    if (!this.material) return false;
+    // SVR-014: a released manager must never publish. It used to write `null` into
+    // pageTable and svrAtlas0..7 while still setting ENABLE_SVR=1, and an unbound
+    // sampler3D reads as (0,0,0,1) — page index 254, "brick present" for every voxel.
+    // The result was a fully saturated box in the channel packed into alpha (channel
+    // 3, magenta for Pecam1) with channels 0-2 reading exactly zero, or an entirely
+    // empty view on datasets that have no channel 3. Refusing to publish leaves the
+    // material on whatever was correctly bound before, which the caller can detect.
+    if (!this.isUsable()) {
+      console.warn('[SVRManager] updateUniforms() on a released manager — refusing to publish (atlases/page table are gone).');
+      return false;
+    }
     this.material.defines.ENABLE_SVR = 1;
     this.material.needsUpdate = true;
-    
+
+    if (this.material.uniforms.svrPageCount) {
+      this.material.uniforms.svrPageCount.value = this.atlases.length;
+    }
     this.material.uniforms.pageTable.value = this.pageTable;
     this.material.uniforms.atlasDim.value = new THREE.Vector3(this.atlasDim, this.atlasDim, this.atlasDepth);
     this.material.uniforms.volumeDim.value = new THREE.Vector3(this.volumeDim.x, this.volumeDim.y, this.volumeDim.z);
@@ -350,6 +371,7 @@ class SVRManager {
     if (this.material.uniforms.svrAtlas5) this.material.uniforms.svrAtlas5.value = this.atlases[5] || this.atlases[0] || null;
     if (this.material.uniforms.svrAtlas6) this.material.uniforms.svrAtlas6.value = this.atlases[6] || this.atlases[0] || null;
     if (this.material.uniforms.svrAtlas7) this.material.uniforms.svrAtlas7.value = this.atlases[7] || this.atlases[0] || null;
+    return true;
   }
 
   getSlot(bx, by, bz) {

@@ -22,8 +22,11 @@ PluginRegistry.implement('toggle-grid', {
     if (typeof s?.gridMode === 'number') {
       this._mode = s.gridMode;
       if (typeof VolumeViewer !== 'undefined') VolumeViewer.setGridMode(this._mode);
+      PluginRegistry.syncToolbarButton('toggle-grid', { active: this._mode > 0 });
     }
   },
+
+  reset() { this.setState({ gridMode: 0 }); },
 
   dispose() { this._mode = 0; }
 });

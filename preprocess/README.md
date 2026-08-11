@@ -498,7 +498,8 @@ DATA_WEB/fixed/<nom>/
 │   ├── lod0/c1/…  …  (un sous-dossier par canal)
 │   └── lod1/…  lod2/…  lod3/…  lod4/…
 └── download/              # OPTIONNEL (--with-downloads) : _web.zip, .ims original,
-                           #   OME-TIFF calibré, MIP PNG par canal, README.txt
+                           #   TIFF composite ImageJ/Fiji calibré, MIP PNG par canal,
+                           #   README.txt
 ```
 
 ### 10.1. `metadata.json`

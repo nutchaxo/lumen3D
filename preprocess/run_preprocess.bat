@@ -323,14 +323,14 @@ if errorlevel 1 (
 call :ok "Dependances installees."
 exit /b 0
 
-rem ---- Dependance optionnelle pour download/ : tifffile (OME-TIFF) ----------
+rem ---- Dependance optionnelle pour download/ : tifffile (TIFF ImageJ) -------
 :ensure_tifffile
 %PY% -c "import tifffile" >nul 2>&1
 if not errorlevel 1 exit /b 0
 call :info "Dependance download/ manquante : tifffile (installation)..."
 %PY% -m pip install --no-warn-script-location tifffile >nul 2>&1
 %PY% -c "import tifffile" >nul 2>&1
-if errorlevel 1 call :warnmsg "tifffile indisponible : l'OME-TIFF pourrait echouer."
+if errorlevel 1 call :warnmsg "tifffile indisponible : le TIFF pourrait echouer."
 exit /b 0
 
 
@@ -370,10 +370,10 @@ set "FILTER="
 set /p "FILTER=   Filtre optionnel (glob, ex: *E8*) [Entree = tous] : "
 if defined FILTER set FILTER=!FILTER:"=!
 
-rem Option : generer aussi le contenu de download/ (lourd : relit le .ims, OME-TIFF, zip)
+rem Option : generer aussi le contenu de download/ (lourd : relit le .ims, TIFF, zip)
 set "WITH_DOWNLOADS="
 set "_ans="
-set /p "_ans=   Generer aussi les fichiers download/ (archive, OME-TIFF, MIP) ? [o/N] "
+set /p "_ans=   Generer aussi les fichiers download/ (archive, TIFF ImageJ, MIP) ? [o/N] "
 if /i "!_ans!"=="o" set "WITH_DOWNLOADS=1"
 
 echo.

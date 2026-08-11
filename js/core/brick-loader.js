@@ -386,7 +386,11 @@ const BrickLoader = (() => {
     let loaded = 0;
     const total = list.length;
     let cacheHits = 0;
-    const useDecodedCache = options.cacheResults === true || (!options.streamOnly && options.cacheResults !== false);
+    const writeDecodedCache = options.cacheResults === true || (!options.streamOnly && options.cacheResults !== false);
+    // A streaming batch (the Studio's native LOD0 slice) must not WRITE the LRU — its
+    // few thousand bricks would evict the viewer's whole working set — but re-decoding
+    // bricks the viewer already holds is pure waste. `readCache` separates the two.
+    const readDecodedCache = writeDecodedCache || options.readCache === true;
     // PERF-022: yield on a ~8ms time budget instead of a hard per-brick setTimeout(1).
     // The old per-brick yield was clamped to >=1ms (often 4ms+ in throttled tabs) and
     // capped each worker's throughput regardless of fetch/decode speed.
@@ -406,7 +410,7 @@ const BrickLoader = (() => {
       const channel = Number.isFinite(Number(task.channel)) ? Number(task.channel) : 0;
       const { bx, by, bz } = task;
       const key = _cacheKey(lod, channel, bx, by, bz);
-      const cached = useDecodedCache ? _cache.get(key) : null;
+      const cached = readDecodedCache ? _cache.get(key) : null;
       if (cached) {
         cached.lastUsed = performance.now();
         if (!options.streamOnly) results.set(key, cached.data);
@@ -463,7 +467,7 @@ const BrickLoader = (() => {
             // frames already fetched free instead of re-downloading them. (The original
             // guard dropped the decoded brick because the cache used to be wiped on
             // every switch — it no longer is for a timepoint change.)
-            if (useDecodedCache) {
+            if (writeDecodedCache) {
               _cache.set(key, { data, lod, channel, lastUsed: performance.now() });
               _trimCache();
             }

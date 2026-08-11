@@ -91,6 +91,8 @@ PluginRegistry.implement('chunk-debug', {
     this._syncButton();
   },
 
+  reset() { this.setState({ active: false }); },
+
   dispose() { this._disable(); this._ctx = null; },
 
   // ── helpers ──────────────────────────────────────────────────────────────

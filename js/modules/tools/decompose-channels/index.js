@@ -26,5 +26,11 @@ PluginRegistry.implement('decompose-channels', {
     return null;
   },
 
+  reset() {
+    if (typeof DecompositionPanel === 'undefined' || !DecompositionPanel.isOpen?.()) return;
+    DecompositionPanel.toggle();
+    PluginRegistry.syncToolbarButton('decompose-channels', { active: false });
+  },
+
   dispose() {}
 });

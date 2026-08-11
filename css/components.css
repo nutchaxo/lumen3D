@@ -543,3 +543,189 @@
   color: var(--color-primary);
   font-weight: 600;
 }
+
+/* ── Modal Dialog (js/core/dialog.js) ────────────────────── */
+.lumen-dialog-overlay {
+  position: fixed;
+  inset: 0;
+  /* Above the viewer loader and the Download Center: a dialog that asks a question
+     the boot sequence is waiting on must never end up behind either of them. */
+  z-index: var(--z-viewer-modal-top);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-4);
+  background: rgba(0, 0, 0, 0.66);
+  backdrop-filter: blur(2px);
+  /* Opaque from the first frame: nothing about whether this dialog can be SEEN may
+     depend on animation timing. A document that is not compositing (a background
+     tab, a hidden preview pane) advances neither transitions nor keyframes, and the
+     viewer's boot can be waiting on an answer to this dialog. The entrance is
+     therefore a transform-only flourish on the box below — stalled, it costs 8px. */
+  opacity: 1;
+}
+
+.lumen-dialog-overlay.is-closing {
+  opacity: 0;
+  transition: opacity var(--transition-fast);
+}
+
+@keyframes lumen-dialog-in {
+  from { transform: translateY(8px) scale(0.98); }
+  to   { transform: none; }
+}
+
+.lumen-dialog {
+  width: min(520px, 96vw);
+  max-height: 90vh;
+  overflow-y: auto;
+  padding: var(--space-6);
+  text-align: center;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-xl);
+  animation: lumen-dialog-in var(--transition-base) ease-out;
+}
+
+.lumen-dialog-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 48px;
+  height: 48px;
+  margin: 0 auto var(--space-4);
+  color: var(--color-primary);
+  background: var(--bg-active);
+  border-radius: var(--radius-full);
+}
+
+.lumen-dialog-icon svg {
+  width: 24px;
+  height: 24px;
+}
+
+.lumen-dialog-icon.is-danger {
+  color: var(--color-error);
+  background: var(--color-error-subtle);
+}
+
+.lumen-dialog-icon.is-warning {
+  color: var(--color-warning);
+  background: var(--color-warning-subtle);
+}
+
+.lumen-dialog-title {
+  margin: 0 0 var(--space-2);
+  font-size: var(--text-xl);
+  color: var(--text-primary);
+}
+
+.lumen-dialog-message {
+  margin: 0;
+  color: var(--text-secondary);
+  line-height: 1.55;
+}
+
+.lumen-dialog-note {
+  margin: var(--space-3) 0 0;
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+  line-height: 1.5;
+}
+
+.lumen-dialog-actions {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin-top: var(--space-5);
+}
+
+.lumen-dialog-actions.is-row {
+  flex-direction: row;
+  justify-content: center;
+}
+
+.lumen-dialog-actions.is-row .lumen-dialog-option {
+  flex: 1;
+  justify-content: center;
+}
+
+.lumen-dialog-option {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  text-align: left;
+  color: var(--text-primary);
+  background: var(--bg-base);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  transition: border-color var(--transition-fast), background var(--transition-fast);
+}
+
+.lumen-dialog-option:hover,
+.lumen-dialog-option:focus-visible {
+  border-color: var(--color-primary);
+  background: var(--bg-hover);
+  outline: none;
+}
+
+.lumen-dialog-option svg {
+  flex-shrink: 0;
+  width: 18px;
+  height: 18px;
+  color: var(--text-muted);
+}
+
+.lumen-dialog-option-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.lumen-dialog-option-text strong {
+  font-weight: 600;
+}
+
+.lumen-dialog-option-text small {
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+  line-height: 1.45;
+  white-space: normal;
+}
+
+.lumen-dialog-option.is-primary {
+  color: #fff;
+  background: var(--color-primary);
+  border-color: var(--color-primary);
+}
+
+.lumen-dialog-option.is-primary svg,
+.lumen-dialog-option.is-primary .lumen-dialog-option-text small {
+  color: rgba(255, 255, 255, 0.78);
+}
+
+.lumen-dialog-option.is-primary:hover,
+.lumen-dialog-option.is-primary:focus-visible {
+  background: var(--color-primary-hover, var(--color-primary));
+  filter: brightness(1.08);
+}
+
+.lumen-dialog-option.is-danger {
+  color: var(--color-error);
+  border-color: color-mix(in srgb, var(--color-error) 45%, var(--border-subtle));
+  background: var(--color-error-subtle);
+}
+
+.lumen-dialog-option.is-danger svg {
+  color: var(--color-error);
+}
+
+.lumen-dialog-option.is-danger:hover,
+.lumen-dialog-option.is-danger:focus-visible {
+  border-color: var(--color-error);
+  background: color-mix(in srgb, var(--color-error) 22%, transparent);
+}

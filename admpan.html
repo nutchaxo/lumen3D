@@ -398,6 +398,24 @@
                 </div>
               </div>
 
+              <!-- Section: Gallery -->
+              <div class="config-section">
+                <div class="config-section-title" data-i18n="admin.secGallery">Galerie d'images</div>
+                <div class="config-field">
+                  <span class="vis-hint" data-i18n="admin.galleryHint">Images attachées au dataset (captures annotées, schémas, figures). Elles apparaissent dans le panneau latéral du viewer.</span>
+                  <div class="gal-drop" id="gallery-drop" role="button" tabindex="0"
+                       data-i18n-aria="admin.galleryAdd" aria-label="Ajouter des images">
+                    <i data-lucide="image-plus"></i>
+                    <span data-i18n="admin.galleryDropHint">Glissez des images ici, ou cliquez pour parcourir</span>
+                    <span class="gal-formats">PNG · JPEG · WebP · GIF — 8 Mo max</span>
+                  </div>
+                  <input type="file" id="gallery-file" class="gal-file"
+                         accept="image/png,image/jpeg,image/webp,image/gif" multiple>
+                  <div class="gal-grid" id="gallery-grid"></div>
+                  <div class="gal-empty" id="gallery-empty" data-i18n="admin.galleryEmpty">Aucune image attachée pour l'instant.</div>
+                </div>
+              </div>
+
               <!-- Section: Calibration -->
               <div class="config-section">
                 <div class="config-section-title" data-i18n="admin.secCalibration">Calibration physique</div>
@@ -432,13 +450,30 @@
               <!-- Section: Orientation -->
               <div class="config-section">
                 <div class="config-section-title" data-i18n="admin.secOrientation">Orientation 3D</div>
+
                 <div class="config-field" style="margin-top:12px;">
+                  <label class="config-label" data-i18n="admin.orientationFrame">Repère anatomique</label>
                   <button class="adm-btn adm-btn-ghost" id="btn-define-orientation" style="width:100%;justify-content:center;gap:8px" data-i18n="admin.defineOrientation">
                     🧭 Définir l'orientation
                   </button>
                   <div id="orientation-status" data-i18n="admin.noOrientation" style="font-size:11.5px;color:var(--adm-text-muted);text-align:center;margin-top:8px;line-height:1.4">
                     (Aucune orientation définie)
                   </div>
+                </div>
+
+                <div class="config-field">
+                  <label class="config-label" data-i18n="admin.orientationAxesLabel">Axes affichés</label>
+                  <div class="ori-axes" id="orientation-axes-list"></div>
+                  <span class="vis-hint" data-i18n="admin.orientationAxesHint">Décochez un axe pour le masquer, renommez-le pour votre nomenclature.</span>
+                </div>
+
+                <div class="config-field">
+                  <label class="config-label" for="f-default-view" data-i18n="admin.defaultView">Vue par défaut</label>
+                  <select class="config-input" id="f-default-view"></select>
+                  <button class="adm-btn adm-btn-ghost adm-btn-sm" id="btn-capture-view" style="width:100%;justify-content:center;gap:6px;margin-top:8px" data-i18n="admin.captureView">
+                    📌 Utiliser la vue actuelle
+                  </button>
+                  <span class="vis-hint" id="default-view-hint" data-i18n="admin.defaultViewNone">Le dataset s'ouvre dans l'orientation brute du volume.</span>
                 </div>
               </div>
 

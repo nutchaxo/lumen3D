@@ -57,7 +57,7 @@ function json_out(array $data, int $code = 200) {
 // ── Paths ────────────────────────────────────────────────────────────────────
 $ROOT      = dirname(__DIR__);                  // WebPlatform root
 $DATA_WEB  = $ROOT . DIRECTORY_SEPARATOR . 'DATA_WEB';
-$TYPES     = ['fixed', 'live', 'tracking'];
+$TYPES     = ['fixed', 'live', 'tracking', 'wholemount'];
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -382,7 +382,8 @@ function rebuild_catalog(): array {
                 'channels'      => $channels_out,
                 'dimensions'    => $dims,
                 'voxel_size'    => $vs,
-                'physicalSizeUm'=> $physical,
+                // A wholemount's extent comes from its pixel pitch, not from voxels.
+                'physicalSizeUm'=> ($type === 'wholemount' && isset($meta['physicalSizeUm'])) ? $meta['physicalSizeUm'] : $physical,
             ];
 
             if (file_exists($thumb_path)) {
@@ -408,6 +409,13 @@ function rebuild_catalog(): array {
                 'intensityNormalization',       // shared window + per-frame signal levels
                 'linkedTrackingId',
                 'relatedIds',
+                'image',                        // wholemount: native + preview display copies
+                'pixelSizeUm',                  // wholemount: calibrated pixel pitch (scale bar, measures)
+                'acquisition',                  // wholemount: microscope, zoom, exposure, dissection date
+                'staining',                     // wholemount: what was stained
+                'line',                         // wholemount: reporter / strain line
+                'calibrationStatus',
+                'calibrationNote',
             ] as $k) {
                 if (isset($meta[$k])) {
                     $entry[$k] = $meta[$k];

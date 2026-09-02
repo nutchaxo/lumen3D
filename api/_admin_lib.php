@@ -337,7 +337,7 @@ function admin_safe_dataset(string $id): ?array {
     $parts = explode('/', $id, 2);
     if (count($parts) !== 2) return null;
     [$type, $folder] = [trim($parts[0]), trim($parts[1])];
-    if (!in_array($type, ['fixed', 'live', 'tracking'], true)) return null;
+    if (!in_array($type, ['fixed', 'live', 'tracking', 'wholemount'], true)) return null;
     if ($folder === '.' || $folder === '..' || !preg_match('/^[A-Za-z0-9_][A-Za-z0-9._-]*$/', $folder)) return null;
     $base = realpath(data_web() . '/' . $type);
     $dir  = $base ? realpath($base . '/' . $folder) : false;

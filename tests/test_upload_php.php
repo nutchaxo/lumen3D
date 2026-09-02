@@ -47,6 +47,8 @@ $allowed = [
     ['fixed', 'bricks/lod0/c0/pack_00.bin'], ['fixed', 'bricks/lod3/rgba/pack_12.bin'],
     ['fixed', 'download/orig.ims'], ['live', 'bricks/t000/lod2/c0/pack_00.bin'],
     ['live', 'model.glb'], ['live', 'tracks.json.gz'],
+    ['wholemount', 'metadata.json'], ['wholemount', 'preview.webp'], ['wholemount', 'image.webp'],
+    ['wholemount', 'download/photo.tif'],
 ];
 foreach ($allowed as [$t, $p]) check("allow  $t/$p", lumen_up_classify($t, $p) !== null);
 
@@ -57,6 +59,9 @@ $refused = [
     ['fixed', 'bricks/t000/lod0/c0/pack_00.bin'],       // timepoints are live/tracking only
     ['fixed', 'bricks/lod0/c0/pack_00.bin.php'], ['fixed', 'bricks/lod0/../../../x.php'],
     ['fixed', '/etc/passwd'], ['fixed', 'bricks/lod0/c0/.hidden.bin'],
+    ['fixed', 'image.webp'],                              // display copies: wholemount only
+    ['wholemount', 'bricks/manifest.json'], ['wholemount', 'bricks/lod0/c0/pack_00.bin'],
+    ['wholemount', 'model.glb'],
 ];
 foreach ($refused as [$t, $p]) check("refuse $t/$p", lumen_up_classify($t, $p) === null);
 

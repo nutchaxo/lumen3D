@@ -107,7 +107,9 @@
     "trackingTitle": "Rastreo celular",
     "trackingDesc": "Análisis cuantitativo de trayectorias celulares individuales, velocidades, árboles de linaje y relaciones de vecindad a lo largo del tiempo.",
     "browseAll": "Explorar todo",
-    "viewCollection": "Ver colección"
+    "viewCollection": "Ver colección",
+    "wholemountTitle": "Fotografía whole-mount",
+    "wholemountDesc": "Fotografías calibradas de {specimenPlural} enteros al estereomicroscopio: marcajes, barra de escala y medidas de un vistazo."
   },
   "explorer": {
     "title": "Explorador de datos",
@@ -135,7 +137,8 @@
     "fileType": "Tipo",
     "fileSize": "Tamaño",
     "failed": "Error al cargar los datos",
-    "failedDesc": "Conjunto de datos no encontrado o error al cargar."
+    "failedDesc": "Conjunto de datos no encontrado o error al cargar.",
+    "wholemount": "Wholemount"
   },
   "viewer": {
     "controls": "Controles",
@@ -951,7 +954,9 @@
     "galleryBadType": "«{name}»: formato no admitido (PNG, JPEG, WebP, GIF).",
     "galleryTooLarge": "«{name}» supera los 8 MB.",
     "galleryReadFailed": "«{name}» ilegible.",
-    "galleryUploadError": "No se pudo enviar «{name}»: {reason}"
+    "galleryUploadError": "No se pudo enviar «{name}»: {reason}",
+    "reasonNoImage": "falta el bloque de imagen",
+    "reasonBadImage": "bloque de imagen no válido"
   },
   "upl": {
     "title": "Importar datasets",
@@ -1759,5 +1764,46 @@
     "errNet": "No se puede contactar con GitHub para leer la lista de documentos.",
     "errTls": "El almacén de certificados de PHP es inutilizable en este alojamiento: suba cacert.pem a la raíz del sitio.",
     "errFolder": "La carpeta DOCS/ todavía no existe en el repositorio."
+  },
+  "wholemount": {
+    "specimen": "Espécimen",
+    "stage": "Estadio",
+    "line": "Línea",
+    "staining": "Tinción",
+    "dissection": "Disección",
+    "zoom": "Zoom",
+    "pixelSize": "Tamaño de píxel",
+    "imageSize": "Tamaño de imagen",
+    "field": "Campo de visión",
+    "microscope": "Microscopio",
+    "camera": "Cámara",
+    "exposure": "Exposición",
+    "gain": "Ganancia",
+    "source": "Archivo de origen",
+    "uncalibrated": "Sin calibrar",
+    "measurements": "Medidas",
+    "clearMeasures": "Borrar medidas",
+    "related": "Conjuntos relacionados",
+    "browse": "Explorar la colección",
+    "browseHint": "Haga clic en una fotografía para abrirla. ← / → para cambiar, B muestra u oculta esta lámina, Esc la cierra.",
+    "filterStage": "Estadio",
+    "filterLine": "Línea",
+    "search": "Buscar…",
+    "all": "Todos",
+    "count": "{count} fotografías",
+    "noPhotos": "Ninguna fotografía coincide con los filtros.",
+    "prev": "Fotografía anterior",
+    "next": "Fotografía siguiente",
+    "fit": "Ajustar a la pantalla (F)",
+    "native": "Resolución nativa 1:1",
+    "isolate": "Aislar la tinción",
+    "loading": "Cargando la fotografía…",
+    "loadingPreview": "Vista previa…",
+    "loadingNative": "Cargando resolución completa…",
+    "nativeReady": "Resolución nativa",
+    "loadError": "No se pudo cargar la fotografía.",
+    "showSidebar": "Mostrar el panel",
+    "hideSidebar": "Ocultar el panel",
+    "errorTitle": "Error"
   }
 }

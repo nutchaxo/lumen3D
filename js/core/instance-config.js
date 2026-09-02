@@ -47,6 +47,7 @@ const InstanceConfig = (() => {
       home: 'Lumen3D — 3D Imaging Data Viewer',
       explorer: 'Data Explorer — Lumen3D', viewer: 'Viewer — Lumen3D',
       compare: 'Compare — Lumen3D', tracking: 'Tracking — Lumen3D',
+      wholemount: 'Wholemount — Lumen3D',
       about: 'About — Lumen3D', admin: 'Admin — Lumen3D', legal: 'Legal — Lumen3D'
     },
     footer: { copyright: '© Lumen3D', links: [] },

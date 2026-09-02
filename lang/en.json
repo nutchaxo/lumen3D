@@ -107,7 +107,9 @@
     "trackingTitle": "Cell Tracking",
     "trackingDesc": "Quantitative analysis of individual cell trajectories, velocities, lineage trees, and neighbor relationships over time.",
     "browseAll": "Browse All",
-    "viewCollection": "View Collection"
+    "viewCollection": "View Collection",
+    "wholemountTitle": "Wholemount Photography",
+    "wholemountDesc": "Calibrated stereomicroscope photographs of whole {specimenPlural}: stained patterns, scale bar and measurements at a glance."
   },
   "explorer": {
     "title": "Data Explorer",
@@ -135,7 +137,8 @@
     "fileType": "Type",
     "fileSize": "Size",
     "failed": "Data Loading Failed",
-    "failedDesc": "Dataset not found or failed to load. Please try again."
+    "failedDesc": "Dataset not found or failed to load. Please try again.",
+    "wholemount": "Wholemount"
   },
   "viewer": {
     "controls": "Controls",
@@ -951,7 +954,9 @@
     "galleryBadType": "“{name}”: unsupported format (PNG, JPEG, WebP, GIF).",
     "galleryTooLarge": "“{name}” exceeds 8 MB.",
     "galleryReadFailed": "“{name}” could not be read.",
-    "galleryUploadError": "Could not upload “{name}”: {reason}"
+    "galleryUploadError": "Could not upload “{name}”: {reason}",
+    "reasonNoImage": "image block missing",
+    "reasonBadImage": "invalid image block"
   },
   "upl": {
     "title": "Import datasets",
@@ -1759,5 +1764,46 @@
     "errNet": "Could not reach GitHub to read the document list.",
     "errTls": "This host's PHP certificate store is unusable: upload cacert.pem to the site root.",
     "errFolder": "The DOCS/ folder does not exist in the repository yet."
+  },
+  "wholemount": {
+    "specimen": "Specimen",
+    "stage": "Stage",
+    "line": "Line",
+    "staining": "Staining",
+    "dissection": "Dissection",
+    "zoom": "Zoom",
+    "pixelSize": "Pixel size",
+    "imageSize": "Image size",
+    "field": "Field of view",
+    "microscope": "Microscope",
+    "camera": "Camera",
+    "exposure": "Exposure",
+    "gain": "Gain",
+    "source": "Source file",
+    "uncalibrated": "Uncalibrated",
+    "measurements": "Measurements",
+    "clearMeasures": "Clear measurements",
+    "related": "Related datasets",
+    "browse": "Browse the collection",
+    "browseHint": "Click a photograph to open it. ← / → step through, B toggles this sheet, Esc closes it.",
+    "filterStage": "Stage",
+    "filterLine": "Line",
+    "search": "Search…",
+    "all": "All",
+    "count": "{count} photographs",
+    "noPhotos": "No photograph matches the filters.",
+    "prev": "Previous photograph",
+    "next": "Next photograph",
+    "fit": "Fit to screen (F)",
+    "native": "Native resolution 1:1",
+    "isolate": "Isolate the staining",
+    "loading": "Loading photograph…",
+    "loadingPreview": "Preview…",
+    "loadingNative": "Full resolution loading…",
+    "nativeReady": "Native resolution",
+    "loadError": "The photograph could not be loaded.",
+    "showSidebar": "Show the panel",
+    "hideSidebar": "Hide the panel",
+    "errorTitle": "Error"
   }
 }

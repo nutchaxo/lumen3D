@@ -934,6 +934,11 @@ body.viewer-iframe .canvas-overlay {
   color: var(--badge-track-text);
 }
 
+.related-type.wholemount {
+  background: var(--badge-wm-bg);
+  color: var(--badge-wm-text);
+}
+
 .axis-helper {
   position: absolute;
   bottom: var(--space-4);

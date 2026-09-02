@@ -158,6 +158,8 @@ function populateStats() {
   if (countFixed) countFixed.textContent = `${stats.byType.fixed} datasets`;
   if (countLive) countLive.textContent = `${stats.byType.live} datasets`;
   if (countTracking) countTracking.textContent = `${stats.byType.tracking} datasets`;
+  const countWholemount = document.getElementById('count-wholemount');
+  if (countWholemount) countWholemount.textContent = `${stats.byType.wholemount} datasets`;
 }
 
 /* ── Featured Datasets ───────────────────────────────────── */
@@ -199,17 +201,20 @@ function createDatasetCard(dataset, index = 0) {
   const typeLabels = {
     fixed: I18n.t('explorer.fixed'),
     live: I18n.t('explorer.live'),
-    tracking: I18n.t('explorer.tracking')
+    tracking: I18n.t('explorer.tracking'),
+    wholemount: I18n.t('explorer.wholemount')
   };
   const typeClass = {
     fixed: 'badge-fixed',
     live: 'badge-live',
-    tracking: 'badge-tracking'
+    tracking: 'badge-tracking',
+    wholemount: 'badge-wholemount'
   };
   const typeIcons = {
     fixed: 'layers',
     live: 'video',
-    tracking: 'git-branch'
+    tracking: 'git-branch',
+    wholemount: 'camera'
   };
 
   const stageDisplay = Utils.formatStage(dataset.stage);
@@ -230,7 +235,8 @@ function createDatasetCard(dataset, index = 0) {
   const gradients = {
     fixed: 'linear-gradient(135deg, #00D2FF22, #0F346044)',
     live: 'linear-gradient(135deg, #FFA72622, #16213E44)',
-    tracking: 'linear-gradient(135deg, #00A65422, #1A1A2E44)'
+    tracking: 'linear-gradient(135deg, #00A65422, #1A1A2E44)',
+    wholemount: 'linear-gradient(135deg, #8B7CFF22, #1A1A2E44)'
   };
 
   // SEC-015: dataset fields are catalog data — escape before innerHTML (mirrors explorer.js).
@@ -258,8 +264,7 @@ function createDatasetCard(dataset, index = 0) {
 }
 
 function getDatasetUrl(dataset) {
-  const page = dataset.type === 'tracking' ? 'tracking.html' : 'viewer.html';
-  return `${page}?id=${encodeURIComponent(dataset.id)}`;
+  return Utils.datasetUrl(dataset);
 }
 
 /* ── Scroll Animations ───────────────────────────────────── */

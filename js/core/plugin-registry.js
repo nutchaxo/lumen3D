@@ -94,6 +94,10 @@ const PluginRegistry = (() => {
     return Array.from(_quarantined.values());
   }
 
+  function _declaresDataType(meta, dataType) {
+    return Array.isArray(meta.dataTypes) && meta.dataTypes.includes(dataType);
+  }
+
   // A discovery entry is "rich" — a full plugin.json safe to use without a
   // separate fetch — only when it carries fields the {path,placement,id} manifest
   // triple never has. `name` is mandatory in every plugin.json; never trust the
@@ -195,7 +199,7 @@ const PluginRegistry = (() => {
     } catch (_) { return null; }
   }
 
-  async function loadModules(basePath, modulePaths) {
+  async function loadModules(basePath, modulePaths, opts = {}) {
     // Resolved once for the whole batch: version.json (release installs) →
     // /api/health (dev server) → null (gate inert — see js/core/compat.js).
     const platformVer = (typeof Compat !== 'undefined' && Compat.platformVersion)
@@ -255,6 +259,15 @@ const PluginRegistry = (() => {
             _quarantine(modPath, 'incompatible', compat.reason);
             return;
           }
+        }
+
+        // Data-type gate — opt-in. A page hosting one dataset type asks for the
+        // plugins that DECLARE it in plugin.json `dataTypes`; a plugin that says
+        // nothing was written for the volume viewer and stays off that page. Not
+        // a fault, so not a quarantine. A page passing no dataType is unchanged.
+        if (opts.dataType && !_declaresDataType(meta, opts.dataType)) {
+          console.info(`[PluginRegistry] "${modPath}" left out: no dataTypes entry for "${opts.dataType}"`);
+          return;
         }
 
         meta.placement = meta.placement || expectedPlacement;

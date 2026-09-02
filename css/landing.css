@@ -133,7 +133,7 @@
 /* ── Data Type Cards ─────────────────────────────────────── */
 .type-cards {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
   gap: var(--space-6);
 }
 
@@ -200,6 +200,11 @@
 .type-card--tracking .type-card-icon {
   background: var(--badge-track-bg);
   color: var(--badge-track-text);
+}
+
+.type-card--wholemount .type-card-icon {
+  background: var(--badge-wm-bg);
+  color: var(--badge-wm-text);
 }
 
 .type-card h3 {

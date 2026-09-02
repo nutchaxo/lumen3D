@@ -323,13 +323,23 @@ function setFormEnabled(on) {
 function validateDatasetMeta(meta) {
   if (!meta || typeof meta !== 'object') return t('admin.reasonEmpty', 'réponse vide');
   if (typeof meta.id !== 'string' || !meta.id) return t('admin.reasonNoId', 'identifiant manquant');
-  if (!['fixed', 'live', 'tracking'].includes(meta.type)) return t('admin.reasonBadType', 'type invalide');
+  if (!['fixed', 'live', 'tracking', 'wholemount'].includes(meta.type)) return t('admin.reasonBadType', 'type invalide');
   const d = meta.dimensions;
   if (!d || typeof d !== 'object') return t('admin.reasonNoDims', 'dimensions manquantes');
   const dimOk = ['x', 'y', 'z', 'c'].every((k) => Number.isFinite(d[k]) && d[k] > 0);
   if (!dimOk) return t('admin.reasonBadDims', 'dimensions invalides');
+  if (meta.type === 'wholemount') return validateWholemountMeta(meta);
   if (!Array.isArray(meta.channels) || meta.channels.length === 0) return t('admin.reasonNoChannels', 'canaux manquants');
   return null;
+}
+
+// A wholemount is one photograph: it mounts from its `image` block, not from channels.
+function validateWholemountMeta(meta) {
+  const img = meta.image;
+  if (!img || typeof img !== 'object') return t('admin.reasonNoImage', 'bloc image manquant');
+  const sizeOk = ['width', 'height'].every((k) => Number.isFinite(img[k]) && img[k] > 0);
+  const filesOk = img.native === 'image.webp' && img.preview === 'preview.webp';
+  return sizeOk && filesOk ? null : t('admin.reasonBadImage', 'bloc image invalide');
 }
 
 async function selectDataset(id) {

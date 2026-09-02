@@ -107,7 +107,9 @@
     "trackingTitle": "Celtracking",
     "trackingDesc": "Kwantitatieve analyse van individuele celtrajecten, snelheden, afstammingsbomen en buurrelaties in de tijd.",
     "browseAll": "Alles bekijken",
-    "viewCollection": "Collectie bekijken"
+    "viewCollection": "Collectie bekijken",
+    "wholemountTitle": "Wholemount-fotografie",
+    "wholemountDesc": "Gekalibreerde stereomicroscoopfoto's van hele {specimenPlural}: kleuringen, schaalbalk en metingen in één oogopslag."
   },
   "explorer": {
     "title": "Dataverkenner",
@@ -135,7 +137,8 @@
     "fileType": "Type",
     "fileSize": "Grootte",
     "failed": "Laden van data mislukt",
-    "failedDesc": "Dataset niet gevonden of laden mislukt. Probeer het opnieuw."
+    "failedDesc": "Dataset niet gevonden of laden mislukt. Probeer het opnieuw.",
+    "wholemount": "Wholemount"
   },
   "viewer": {
     "controls": "Bediening",
@@ -939,7 +942,9 @@
     "galleryBadType": "“{name}”: niet-ondersteund formaat (PNG, JPEG, WebP, GIF).",
     "galleryTooLarge": "“{name}” is groter dan 8 MB.",
     "galleryReadFailed": "“{name}” kan niet worden gelezen.",
-    "galleryUploadError": "Kan “{name}” niet uploaden: {reason}"
+    "galleryUploadError": "Kan “{name}” niet uploaden: {reason}",
+    "reasonNoImage": "afbeeldingsblok ontbreekt",
+    "reasonBadImage": "ongeldig afbeeldingsblok"
   },
   "upl": {
     "title": "Datasets importeren",
@@ -1747,5 +1752,46 @@
     "errNet": "Kan GitHub niet bereiken om de lijst met documenten te lezen.",
     "errTls": "De certificaatopslag van PHP op deze host is onbruikbaar: upload cacert.pem naar de hoofdmap van de site.",
     "errFolder": "De map DOCS/ bestaat nog niet in de repository."
+  },
+  "wholemount": {
+    "specimen": "Specimen",
+    "stage": "Stadium",
+    "line": "Lijn",
+    "staining": "Kleuring",
+    "dissection": "Dissectie",
+    "zoom": "Zoom",
+    "pixelSize": "Pixelgrootte",
+    "imageSize": "Beeldgrootte",
+    "field": "Beeldveld",
+    "microscope": "Microscoop",
+    "camera": "Camera",
+    "exposure": "Belichting",
+    "gain": "Versterking",
+    "source": "Bronbestand",
+    "uncalibrated": "Niet gekalibreerd",
+    "measurements": "Metingen",
+    "clearMeasures": "Metingen wissen",
+    "related": "Gerelateerde datasets",
+    "browse": "Collectie doorbladeren",
+    "browseHint": "Klik op een foto om die te openen. ← / → bladert, B toont of verbergt dit vel, Esc sluit het.",
+    "filterStage": "Stadium",
+    "filterLine": "Lijn",
+    "search": "Zoeken…",
+    "all": "Alle",
+    "count": "{count} foto's",
+    "noPhotos": "Geen foto voldoet aan de filters.",
+    "prev": "Vorige foto",
+    "next": "Volgende foto",
+    "fit": "Passend maken (F)",
+    "native": "Native resolutie 1:1",
+    "isolate": "Kleuring isoleren",
+    "loading": "Foto laden…",
+    "loadingPreview": "Voorbeeld…",
+    "loadingNative": "Volledige resolutie laden…",
+    "nativeReady": "Native resolutie",
+    "loadError": "De foto kon niet worden geladen.",
+    "showSidebar": "Paneel tonen",
+    "hideSidebar": "Paneel verbergen",
+    "errorTitle": "Fout"
   }
 }

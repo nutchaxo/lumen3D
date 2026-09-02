@@ -71,6 +71,7 @@ PIPELINE_SCRIPTS = (
     "4-catalog_generator.py",
     "5-tracking_importer.py",
     "tracking_sources.py",
+    "wholemount_importer.py",
 )
 
 # Optional extra invoked by --with-downloads. run_preprocess.py accepts it either

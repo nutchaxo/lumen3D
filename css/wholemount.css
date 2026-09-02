@@ -1,0 +1,214 @@
+/* ============================================================
+   Lumen3D — Wholemount page
+   One calibrated photograph on a 2D canvas, and the whole collection
+   as a contact sheet laid over the canvas.
+   ============================================================ */
+
+/* The page toggles visibility with the `hidden` attribute; a display rule on a
+   class would otherwise outrank the user-agent's [hidden]. */
+[hidden] { display: none !important; }
+
+/* ── Stage ─────────────────────────────────────────────────────────────── */
+.wm-stage {
+  position: relative;
+  background: #000;
+  overflow: hidden;
+}
+
+.wm-canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  cursor: grab;
+  touch-action: none;
+}
+
+.wm-canvas:active { cursor: grabbing; }
+
+body[data-active-tool="measure"] .wm-canvas { cursor: crosshair; }
+
+.wm-load-state {
+  position: absolute;
+  right: 12px;
+  bottom: 12px;
+  padding: 4px 10px;
+  border-radius: var(--radius-full);
+  font-size: 11px;
+  font-weight: 500;
+  color: #fff;
+  background: rgba(0, 0, 0, 0.6);
+  pointer-events: none;
+}
+
+.wm-load-state.is-error { background: #C62828; }
+
+/* ── Sidebar ───────────────────────────────────────────────────────────── */
+.wm-info {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 4px 10px;
+  margin: 0;
+  font-size: 12px;
+}
+
+.wm-info dt { color: var(--text-muted); }
+
+.wm-info dd {
+  margin: 0;
+  color: var(--text-primary);
+  overflow-wrap: anywhere;
+}
+
+.wm-measure-status {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-bottom: 8px;
+}
+
+/* ── Contact-sheet browser ─────────────────────────────────────────────── */
+.wm-browser {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px 16px;
+  background: color-mix(in srgb, var(--bg-body) 94%, transparent);
+  backdrop-filter: blur(6px);
+  overflow: auto;
+}
+
+.wm-browser-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.wm-browser-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.wm-count {
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--text-muted);
+}
+
+.wm-search {
+  margin-left: auto;
+  max-width: 260px;
+}
+
+.wm-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 20px;
+}
+
+.wm-filter {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.wm-filter-label {
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.wm-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.wm-chip {
+  padding: 3px 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-full);
+  background: var(--bg-surface);
+  color: var(--text-primary);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.wm-chip:hover { border-color: var(--border-strong); }
+
+.wm-chip.is-active {
+  background: var(--badge-wm-bg);
+  color: var(--badge-wm-text);
+  border-color: currentColor;
+}
+
+.wm-hint {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.wm-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+  gap: 12px;
+}
+
+.wm-card {
+  padding: 0;
+  overflow: hidden;
+  text-align: left;
+  border: 2px solid transparent;
+  border-radius: var(--radius-md);
+  background: var(--bg-surface);
+  color: inherit;
+  cursor: pointer;
+}
+
+.wm-card img {
+  display: block;
+  width: 100%;
+  aspect-ratio: 4 / 3;
+  object-fit: cover;
+  background: #000;
+}
+
+.wm-card:hover,
+.wm-card:focus-visible {
+  border-color: var(--border-strong);
+  outline: none;
+}
+
+.wm-card.is-active { border-color: var(--badge-wm-text); }
+
+.wm-card-body {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 10px;
+}
+
+.wm-card-body .badge { align-self: flex-start; }
+
+.wm-card-name {
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.wm-card-meta {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.wm-empty {
+  grid-column: 1 / -1;
+  padding: 40px;
+  text-align: center;
+  color: var(--text-muted);
+}

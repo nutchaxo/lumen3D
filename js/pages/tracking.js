@@ -916,7 +916,7 @@ const TrackingApp = (() => {
   }
 
   function _relatedLinkHtml(dataset) {
-    const page = dataset.type === 'tracking' ? 'tracking.html' : 'viewer.html';
+    const page = Utils.datasetPage(dataset);
     const href = _relatedHref(page, dataset.id);
     const type = Utils.escapeHtml(dataset.type || 'data');
     const stage = Utils.escapeHtml(Utils.formatStage(dataset.stage));
@@ -935,7 +935,7 @@ const TrackingApp = (() => {
   }
 
   function _relatedLinkHtmlV2(dataset) {
-    const page = dataset.type === 'tracking' ? 'tracking.html' : 'viewer.html';
+    const page = Utils.datasetPage(dataset);
     const href = _relatedHref(page, dataset.id);
     const compareHref = `compare.html?add=${encodeURIComponent(_datasetId)}&add=${encodeURIComponent(dataset.id)}`;
     const type = Utils.escapeHtml(dataset.type || 'data');

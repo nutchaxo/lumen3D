@@ -134,7 +134,7 @@ export function readFileInput(fileList) {
 
 // ── Grouping ───────────────────────────────────────────────────────────────────
 
-const TYPES = ['fixed', 'live', 'tracking'];
+const TYPES = ['fixed', 'live', 'tracking', 'wholemount'];
 
 /**
  * Split a flat file listing into datasets.

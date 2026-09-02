@@ -101,6 +101,11 @@
   color: var(--badge-track-text);
 }
 
+.badge-wholemount {
+  background: var(--badge-wm-bg);
+  color: var(--badge-wm-text);
+}
+
 .badge-dot::before {
   content: '';
   width: 6px;

@@ -51,6 +51,7 @@ class TestSafeDatasetDir(unittest.TestCase):
         self.assertIsNotNone(dev_server._safe_dataset_dir(f"fixed/{name}"))
         self.assertIsNotNone(dev_server._safe_dataset_dir(f"live/{name}"))
         self.assertIsNotNone(dev_server._safe_dataset_dir(f"tracking/{name}"))
+        self.assertIsNotNone(dev_server._safe_dataset_dir(f"wholemount/{name}"))
 
     def test_rejects_traversal_and_malformed(self):
         for bid in BAD_IDS:

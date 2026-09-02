@@ -44,6 +44,8 @@
   --badge-live-text:  #FFA726;
   --badge-track-bg:   rgba(0, 166, 84, 0.15);
   --badge-track-text: #00A654;
+  --badge-wm-bg:      rgba(139, 124, 255, 0.15);
+  --badge-wm-text:    #8B7CFF;
 }
 
 /* ── Light Theme ─────────────────────────────────────────── */
@@ -88,4 +90,6 @@
   --badge-live-text:  #D48500;
   --badge-track-bg:   rgba(0, 140, 70, 0.10);
   --badge-track-text: #008A45;
+  --badge-wm-bg:      rgba(91, 75, 214, 0.10);
+  --badge-wm-text:    #5B4BD6;
 }

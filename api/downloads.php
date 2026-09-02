@@ -28,7 +28,7 @@ header('Access-Control-Allow-Origin: *');
 
 $ROOT          = dirname(__DIR__);                                   // WebPlatform root
 $DATA_WEB      = $ROOT . DIRECTORY_SEPARATOR . 'DATA_WEB';
-$ALLOWED_TYPES = ['fixed', 'live', 'tracking'];
+$ALLOWED_TYPES = ['fixed', 'live', 'tracking', 'wholemount'];
 // Same guard as dev_server.py _SAFE_FOLDER_RE: one safe path component, no traversal.
 $SAFE_FOLDER   = '/^[A-Za-z0-9_][A-Za-z0-9._-]*$/';
 

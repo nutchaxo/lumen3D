@@ -137,7 +137,7 @@ PluginRegistry.implement('measure-distance', {
               class="form-input text-xs" data-volume-measure-action="rename" data-measurement-id="${esc(item.id)}"
               style="flex:1;min-width:0;width:50px;padding:2px 4px;background:rgba(0,0,0,0.2);border:1px solid var(--border-light);color:var(--text-primary);border-radius:4px;">
             <span style="white-space:nowrap;font-size:11px;color:var(--text-muted);">
-              ${item.visible === false ? esc(this._t('hidden')) : `${this._fmtUm(item.distance)} µm`}
+              ${item.visible === false ? esc(this._t('hidden')) : this._fmtUm(item.distance)}
             </span>
             <span class="related-actions" style="display:flex;gap:2px;">
               <button class="btn btn-ghost btn-sm" type="button"
@@ -163,7 +163,7 @@ PluginRegistry.implement('measure-distance', {
     if (this._draft.length === 1) {
       const p = this._draft[0].physicalUm;
       this._setStatus(`
-        <div class="metric-tile"><small>${esc(this._t('pointA'))}</small><strong>${this._fmtUm(p.x)}, ${this._fmtUm(p.y)}, ${this._fmtUm(p.z)} um</strong></div>
+        <div class="metric-tile"><small>${esc(this._t('pointA'))}</small><strong>${this._fmtUm(p.x)}, ${this._fmtUm(p.y)}, ${this._fmtUm(p.z)}</strong></div>
         <div class="text-xs text-muted">${esc(this._t('clickSecond'))}</div>
       `);
       return;
@@ -172,8 +172,8 @@ PluginRegistry.implement('measure-distance', {
     const dist   = this._dist3d(a, b);
     this._setStatus(`
       <div class="metric-grid">
-        <div class="metric-tile"><small>${esc(this._t('distance'))}</small><strong>${this._fmtUm(dist)} um</strong></div>
-        <div class="metric-tile"><small>${esc(this._t('deltaZ'))}</small><strong>${this._fmtUm(Math.abs(a.z - b.z))} um</strong></div>
+        <div class="metric-tile"><small>${esc(this._t('distance'))}</small><strong>${this._fmtUm(dist)}</strong></div>
+        <div class="metric-tile"><small>${esc(this._t('deltaZ'))}</small><strong>${this._fmtUm(Math.abs(a.z - b.z))}</strong></div>
       </div>
       <div class="text-xs text-muted">${esc(this._t('measuredBetween'))}</div>
     `);

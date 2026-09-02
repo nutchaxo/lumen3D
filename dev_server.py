@@ -3371,7 +3371,7 @@ def _check_main(root_arg) -> int:
 # ── Dataset helpers ────────────────────────────────────────────────────────────
 
 # Path-traversal guard for the `id` query param (= "<type>/<folder>").
-ALLOWED_TYPE_DIRS = ("fixed", "live", "tracking")
+ALLOWED_TYPE_DIRS = ("fixed", "live", "tracking", "wholemount")
 _SAFE_FOLDER_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9._-]*$")
 
 
@@ -3483,7 +3483,7 @@ def _list_download_entries(download_root: Path, target: Path, dataset_id: str, r
 
 def _list_datasets() -> list[dict]:
     datasets = []
-    for type_dir in ["fixed", "live", "tracking"]:
+    for type_dir in ALLOWED_TYPE_DIRS:
         base = DATA_WEB / type_dir
         if not base.is_dir():
             continue
@@ -3523,6 +3523,9 @@ def _list_datasets() -> list[dict]:
                 "thumbnail":   thumb_url,
             })
             
+            # A wholemount is a photograph: nothing for the volume renderer to mount.
+            if "volumeSources" not in ds_entry and type_dir == "wholemount":
+                ds_entry["volumeSources"] = []
             if "volumeSources" not in ds_entry:
                 ds_entry["volumeSources"] = [
                     {
@@ -3968,9 +3971,9 @@ def _gallery_delete(dataset_id: str, file_name: str):
 
 def _catalog_mtime_sig() -> float:
     """PERF-035: cheap change signature — the newest metadata.json mtime across the
-    three dataset roots (plus each root dir mtime to catch added/removed datasets)."""
+    dataset roots (plus each root dir mtime to catch added/removed datasets)."""
     sig = 0.0
-    for t in ("fixed", "live", "tracking"):
+    for t in ALLOWED_TYPE_DIRS:
         base = DATA_WEB / t
         if not base.is_dir():
             continue
@@ -4167,7 +4170,7 @@ def _write_plugins_manifest(plugins: list[dict]) -> None:
 # ── HTTP handler ───────────────────────────────────────────────────────────────
 
 # A served file under a dataset's download/ folder (used to count downloads).
-_DOWNLOAD_RE = re.compile(r"^DATA_WEB/(fixed|live|tracking)/([^/]+)/download/.+", re.IGNORECASE)
+_DOWNLOAD_RE = re.compile(r"^DATA_WEB/(fixed|live|tracking|wholemount)/([^/]+)/download/.+", re.IGNORECASE)
 
 
 class AdminHandler(http.server.SimpleHTTPRequestHandler):

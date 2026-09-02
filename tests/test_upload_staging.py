@@ -100,6 +100,10 @@ class TestAllowlist(StagingCase):
             ("live", "bricks/t000/lod2/c0/pack_00.bin"),
             ("live", "model.glb"),
             ("live", "tracks.json.gz"),
+            ("wholemount", "metadata.json"),
+            ("wholemount", "preview.webp"),
+            ("wholemount", "image.webp"),
+            ("wholemount", "download/photo.tif"),
         ):
             self.assertIsNotNone(us.classify_path(type_dir, rel), f"should allow: {rel}")
 
@@ -119,6 +123,10 @@ class TestAllowlist(StagingCase):
             ("fixed", "config/instance.json"),
             ("fixed", "a/b/c/d/e/f/g/h/i/j/k/l/m/deep.bin"),
             ("bogus", "metadata.json"),
+            ("fixed", "image.webp"),                        # display copies: wholemount only
+            ("wholemount", "bricks/manifest.json"),         # a photograph has no bricks
+            ("wholemount", "bricks/lod0/c0/pack_00.bin"),
+            ("wholemount", "model.glb"),
         ):
             self.assertIsNone(us.classify_path(type_dir, rel), f"should refuse: {rel}")
 
@@ -644,6 +652,73 @@ class TestPublish(StagingCase):
         us.discard_dataset("fixed", "DS")
         self.assertFalse((us.STAGING_DIR / "fixed/DS").exists())
         self.assertIsNone(us.load_journal("fixed", "DS"))
+
+
+WHOLEMOUNT_META = {
+    "id": "WM", "name": "WM", "type": "wholemount",
+    "dimensions": {"x": 1920, "y": 1440, "z": 1, "c": 3},
+    "image": {"native": "image.webp", "preview": "preview.webp", "width": 1920, "height": 1440},
+    "channels": [],
+}
+
+
+class TestWholemount(StagingCase):
+    """One photograph per dataset: no bricks, the display copies are the mount."""
+
+    BLOBS = {"metadata.json": json.dumps(WHOLEMOUNT_META).encode(),
+             "preview.webp": b"RIFF" + b"0" * 20, "image.webp": b"RIFF" + b"1" * 40,
+             "thumbnail.webp": b"RIFF" + b"2" * 20}
+
+    def stage(self, files=("metadata.json", "preview.webp", "image.webp", "thumbnail.webp")):
+        us.plan([{"type": "wholemount", "folder": "WM", "files": [
+            {"path": rel, "size": len(blob)} for rel, blob in self.BLOBS.items()]}])
+        for rel in files:
+            self.send("WM", rel, self.BLOBS[rel], type_dir="wholemount")
+
+    def test_complete_wholemount_validates_and_publishes(self):
+        self.stage()
+        v = us.validate_dataset("wholemount", "WM")
+        self.assertTrue(v["ok"], v["errors"])
+        st, pl = us.publish_dataset("wholemount", "WM")
+        self.assertEqual(st, 200, pl)
+        self.assertTrue((us.DATA_WEB / "wholemount" / "WM" / "image.webp").is_file())
+
+    def test_missing_native_image_blocks_publish(self):
+        self.stage(files=("metadata.json", "preview.webp", "thumbnail.webp"))
+        v = us.validate_dataset("wholemount", "WM")
+        self.assertIn("missing_image", v["errors"])
+        self.assertNotIn("missing_manifest", v["errors"])
+        st, _ = us.publish_dataset("wholemount", "WM")
+        self.assertEqual(st, 409)
+
+    def test_metadata_without_image_block_is_refused(self):
+        bad = json.dumps({k: v for k, v in WHOLEMOUNT_META.items() if k != "image"}).encode()
+        us.plan([{"type": "wholemount", "folder": "WM", "files": [
+            {"path": "metadata.json", "size": len(bad)}]}])
+        us.write_chunk("wholemount", "WM", "metadata.json", 0, bad, sha(bad))
+        st, pl = us.finalize_file("wholemount", "WM", "metadata.json", None)
+        self.assertEqual(st, 422)
+        self.assertEqual(pl["reason"], "metadata_no_image")
+
+    def test_native_image_must_be_a_real_image(self):
+        blob = b"<?php system($_GET[0]); ?>"
+        us.plan([{"type": "wholemount", "folder": "WM", "files": [
+            {"path": "image.webp", "size": len(blob)}]}])
+        us.write_chunk("wholemount", "WM", "image.webp", 0, blob, sha(blob))
+        st, pl = us.finalize_file("wholemount", "WM", "image.webp", None)
+        self.assertEqual(st, 422)
+        self.assertEqual(pl["reason"], "image_not_image")
+
+    def test_openable_once_the_preview_landed(self):
+        self.stage(files=("metadata.json", "thumbnail.webp", "preview.webp"))
+        self.assertEqual(us.dataset_state("wholemount", "WM"), us.STATE_EDITABLE)
+
+    def test_a_volume_still_waits_for_its_manifest(self):
+        mb = json.dumps(META).encode()
+        us.plan([{"type": "fixed", "folder": "DS", "files": [
+            {"path": "metadata.json", "size": len(mb)}, {"path": "bricks/manifest.json", "size": 5}]}])
+        self.send("DS", "metadata.json", mb)
+        self.assertEqual(us.dataset_state("fixed", "DS"), us.STATE_UPLOADING)
 
 
 class TestServerWiring(unittest.TestCase):

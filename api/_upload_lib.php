@@ -80,6 +80,15 @@ function lumen_up_ini_bytes(string $v): int {
 const LUMEN_UP_DOWNLOAD_EXT = ['ims','tif','tiff','png','jpg','jpeg','webp','gif',
                                'zip','txt','md','csv','json','pdf','xml','gz','h5','hdf5'];
 
+// Dataset roots. Only the volume types carry a brick pyramid; a wholemount is one
+// photograph whose display copies sit at the dataset root — the preview travels
+// with the mount prerequisites, the native image follows (twin of
+// upload_staging.ALLOWED_TYPE_DIRS / VOLUME_TYPE_DIRS / _WHOLEMOUNT_FILES).
+const LUMEN_UP_TYPES        = ['fixed', 'live', 'tracking', 'wholemount'];
+const LUMEN_UP_VOLUME_TYPES = ['fixed', 'live', 'tracking'];
+const LUMEN_UP_WHOLEMOUNT_FILES = ['preview.webp' => [LUMEN_UP_TIER_PREVIEW, 'preview'],
+                                   'image.webp'   => [LUMEN_UP_TIER_MID, 'image']];
+
 /** Twin of upload_staging._safe_rel. Returns the normalised path or null. */
 function lumen_up_safe_rel($rel): ?string {
     if (!is_string($rel) || strpos($rel, "\0") !== false) return null;
@@ -102,13 +111,14 @@ function lumen_up_classify(string $type, $rel): ?array {
     // An unknown dataset root has no allowlist of its own, so nothing under it can
     // be allowed. lumen_up_safe_dataset re-checks this on every path that touches
     // disk; rejecting here too keeps lumen_up_classify usable as a standalone verdict.
-    if (!in_array($type, ['fixed', 'live', 'tracking'], true)) return null;
+    if (!in_array($type, LUMEN_UP_TYPES, true)) return null;
 
     if ($rel === 'metadata.json')  return [LUMEN_UP_TIER_CORE, 'metadata'];
     if ($rel === 'thumbnail.webp') return [LUMEN_UP_TIER_CORE, 'thumbnail'];
     $rootExtra = ['model.glb' => LUMEN_UP_TIER_FULL, 'tracks.json' => LUMEN_UP_TIER_PREVIEW,
                   'tracks.json.gz' => LUMEN_UP_TIER_PREVIEW, 'meta.json' => LUMEN_UP_TIER_CORE];
-    if (isset($rootExtra[$rel])) return [$rootExtra[$rel], 'extra'];
+    if (isset($rootExtra[$rel])) return in_array($type, LUMEN_UP_VOLUME_TYPES, true) ? [$rootExtra[$rel], 'extra'] : null;
+    if (isset(LUMEN_UP_WHOLEMOUNT_FILES[$rel])) return $type === 'wholemount' ? LUMEN_UP_WHOLEMOUNT_FILES[$rel] : null;
 
     if (strncmp($rel, 'download/', 9) === 0) {
         $name = substr($rel, 9);
@@ -120,7 +130,7 @@ function lumen_up_classify(string $type, $rel): ?array {
         return [LUMEN_UP_TIER_EXTRA, 'download'];
     }
 
-    if (strncmp($rel, 'bricks/', 7) !== 0) return null;
+    if (strncmp($rel, 'bricks/', 7) !== 0 || !in_array($type, LUMEN_UP_VOLUME_TYPES, true)) return null;
     $inner = substr($rel, 7);
     if ($inner === 'manifest.json') return [LUMEN_UP_TIER_CORE, 'manifest'];
 
@@ -175,7 +185,7 @@ function lumen_up_assign_tiers(array &$files): void {
 function lumen_up_safe_dataset($type, $folder): ?array {
     if (!is_string($type) || !is_string($folder)) return null;
     $type = trim($type); $folder = trim($folder);
-    if (!in_array($type, ['fixed', 'live', 'tracking'], true)) return null;
+    if (!in_array($type, LUMEN_UP_TYPES, true)) return null;
     if ($folder === '.' || $folder === '..' || strlen($folder) > 180) return null;
     if (!preg_match('/^[A-Za-z0-9_][A-Za-z0-9._-]*$/', $folder)) return null;
     return [$type, $folder];
@@ -649,9 +659,9 @@ function lumen_up_validate_file(string $type, string $rel, string $path, ?string
         if ($man === null) return [false, 'manifest_not_json'];
         return lumen_up_validate_manifest($man);
     }
-    if ($kind === 'thumbnail') {
+    if (in_array($kind, ['thumbnail', 'preview', 'image'], true)) {
         $head = lumen_up_head($path, 16);
-        if (strncmp($head, 'RIFF', 4) !== 0 && strncmp($head, "\x89PNG\r\n\x1a\n", 8) !== 0) return [false, 'thumbnail_not_image'];
+        if (strncmp($head, 'RIFF', 4) !== 0 && strncmp($head, "\x89PNG\r\n\x1a\n", 8) !== 0) return [false, $kind . '_not_image'];
         return [true, null];
     }
     if ($kind === 'extra' && substr($rel, -4) === '.glb') {
@@ -696,7 +706,7 @@ function lumen_up_validate_manifest(array $man): array {
 }
 
 function lumen_up_validate_metadata(array $meta, string $type): array {
-    if (!isset($meta['type']) || !in_array($meta['type'], ['fixed', 'live', 'tracking'], true)) return [false, 'metadata_bad_type'];
+    if (!isset($meta['type']) || !in_array($meta['type'], LUMEN_UP_TYPES, true)) return [false, 'metadata_bad_type'];
     if ($meta['type'] !== $type) return [false, 'metadata_type_mismatch'];
     if (!isset($meta['dimensions']) || !is_array($meta['dimensions'])) return [false, 'metadata_no_dimensions'];
     foreach (['x', 'y', 'z', 'c'] as $axis) {
@@ -704,8 +714,41 @@ function lumen_up_validate_metadata(array $meta, string $type): array {
         if (!is_int($v) && !is_float($v)) return [false, 'metadata_bad_dimensions'];
         if ($v <= 0) return [false, 'metadata_bad_dimensions'];
     }
+    if ($meta['type'] === 'wholemount') return lumen_up_validate_wholemount_meta($meta);
     if (!isset($meta['channels']) || !is_array($meta['channels']) || !$meta['channels']) return [false, 'metadata_no_channels'];
     return [true, null];
+}
+
+/** A wholemount mounts from its `image` block, not from channels; the file names
+ *  are pinned to the allowlist so metadata cannot point elsewhere. */
+function lumen_up_validate_wholemount_meta(array $meta): array {
+    $image = $meta['image'] ?? null;
+    if (!is_array($image)) return [false, 'metadata_no_image'];
+    if (($image['native'] ?? null) !== 'image.webp' || ($image['preview'] ?? null) !== 'preview.webp') return [false, 'metadata_bad_image'];
+    foreach (['width', 'height'] as $k) {
+        $v = $image[$k] ?? null;
+        if ((!is_int($v) && !is_float($v)) || $v <= 0) return [false, 'metadata_bad_image'];
+    }
+    return [true, null];
+}
+
+function lumen_up_check_bricks(string $dir): array {
+    if (!is_file("$dir/bricks/manifest.json")) return ['missing_manifest'];
+    $man = lumen_up_read_json("$dir/bricks/manifest.json");
+    if ($man === null) return ['manifest_not_json'];
+    [$ok, $reason] = lumen_up_validate_manifest($man);
+    $errors = $ok ? [] : [$reason ?: 'manifest_invalid'];
+    return array_merge($errors, lumen_up_cross_check_packs($dir, $man));
+}
+
+/** Both display copies must have arrived: the page paints the preview at once
+ *  and swaps in the native image, so neither may be missing or empty. */
+function lumen_up_check_wholemount_files(string $dir): array {
+    $errors = [];
+    foreach (LUMEN_UP_WHOLEMOUNT_FILES as $rel => [$tier, $kind]) {
+        if (!is_file("$dir/$rel") || filesize("$dir/$rel") === 0) $errors[] = "missing_$kind";
+    }
+    return $errors;
 }
 
 function lumen_up_validate_dataset($type, $folder): array {
@@ -724,18 +767,8 @@ function lumen_up_validate_dataset($type, $folder): array {
         if ($meta === null) $errors[] = 'metadata_not_json';
         else { [$ok, $r] = lumen_up_validate_metadata($meta, $type); if (!$ok) $errors[] = $r ?: 'metadata_invalid'; }
     }
-    if (!is_file("$dir/bricks/manifest.json")) {
-        $errors[] = 'missing_manifest';
-    } else {
-        $man = lumen_up_read_json("$dir/bricks/manifest.json");
-        if ($man === null) {
-            $errors[] = 'manifest_not_json';
-        } else {
-            [$mok, $mreason] = lumen_up_validate_manifest($man);
-            if (!$mok) $errors[] = $mreason ?: 'manifest_invalid';
-            $errors = array_merge($errors, lumen_up_cross_check_packs($dir, $man));
-        }
-    }
+    $errors = array_merge($errors, in_array($type, LUMEN_UP_VOLUME_TYPES, true)
+        ? lumen_up_check_bricks($dir) : lumen_up_check_wholemount_files($dir));
 
     $incomplete = [];
     foreach (($journal['files'] ?? []) as $rel => $e) if (empty($e['done'])) $incomplete[] = $rel;
@@ -843,13 +876,14 @@ function lumen_up_state_of($type, $folder, ?array $journal = null): string {
     foreach ($files as $e) if (empty($e['done'])) { $pending = true; break; }
     if (!$pending) return LUMEN_UP_STATE_STAGED;
 
-    $coreOk = true; $hasManifest = false;
+    // Openable once metadata plus a mount (brick manifest, or a wholemount's preview) landed.
+    $coreOk = true; $hasMount = false;
     foreach ($files as $e) {
         if ((int)($e['tier'] ?? 9) <= LUMEN_UP_TIER_PREVIEW && empty($e['done'])) $coreOk = false;
-        if (($e['kind'] ?? '') === 'manifest' && !empty($e['done'])) $hasManifest = true;
+        if (in_array($e['kind'] ?? '', ['manifest', 'preview'], true) && !empty($e['done'])) $hasMount = true;
     }
     $hasMeta = !empty($files['metadata.json']['done']);
-    $state = ($coreOk && $hasMeta && $hasManifest) ? LUMEN_UP_STATE_EDITABLE : LUMEN_UP_STATE_UPLOADING;
+    $state = ($coreOk && $hasMeta && $hasMount) ? LUMEN_UP_STATE_EDITABLE : LUMEN_UP_STATE_UPLOADING;
 
     $last = $journal['lastChunkAt'] ?? ($journal['updatedAt'] ?? null);
     if ($last && lumen_up_age($last) > LUMEN_UP_STALE_AFTER) return LUMEN_UP_STATE_STALLED;

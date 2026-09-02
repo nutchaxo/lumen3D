@@ -172,7 +172,8 @@ const Catalog = (() => {
       byType: {
         fixed: _datasets.filter(d => d.type === 'fixed').length,
         live: _datasets.filter(d => d.type === 'live').length,
-        tracking: tracking.length
+        tracking: tracking.length,
+        wholemount: _datasets.filter(d => d.type === 'wholemount').length
       }
     };
   }

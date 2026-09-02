@@ -671,7 +671,8 @@ const PageRenderer = (() => {
       let needIcons = false;
       list.forEach((ds) => {
         const a = document.createElement('a');
-        a.href = `viewer.html?id=${encodeURIComponent(ds.id)}`;
+        a.href = (typeof Utils !== 'undefined' && Utils.datasetUrl)
+          ? Utils.datasetUrl(ds) : `viewer.html?id=${encodeURIComponent(ds.id)}`;
         a.style.cssText = `display:block;overflow:hidden;background:${cardBg};border-radius:${radiusCss};text-decoration:none;color:inherit;border:1px solid ${borderColor}`;
         if (p.hover) a.classList.add('pr-hov-lift');
         const thumb = _el('div', `height:${th}px;display:flex;align-items:center;justify-content:center;background:color-mix(in srgb, var(--color-primary,#00A654) 7%, transparent)`);

@@ -37,7 +37,7 @@ const Explorer = (() => {
     const params = new URLSearchParams(window.location.search);
     if (params.has('type')) {
       const type = params.get('type');
-      if (['fixed', 'live', 'tracking'].includes(type)) {
+      if (Utils.DATASET_TYPES.includes(type)) {
         _filters.type = type;
         const radio = document.querySelector(`input[name="filter-type"][value="${type}"]`);
         if (radio) radio.checked = true;
@@ -197,9 +197,9 @@ const Explorer = (() => {
   }
 
   function _createGridCard(dataset) {
-    const typeLabels = { fixed: I18n.t('explorer.fixed'), live: I18n.t('explorer.live'), tracking: I18n.t('explorer.tracking') };
-    const typeClass = { fixed: 'badge-fixed', live: 'badge-live', tracking: 'badge-tracking' };
-    const typeIcons = { fixed: 'layers', live: 'video', tracking: 'git-branch' };
+    const typeLabels = { fixed: I18n.t('explorer.fixed'), live: I18n.t('explorer.live'), tracking: I18n.t('explorer.tracking'), wholemount: I18n.t('explorer.wholemount') };
+    const typeClass = { fixed: 'badge-fixed', live: 'badge-live', tracking: 'badge-tracking', wholemount: 'badge-wholemount' };
+    const typeIcons = { fixed: 'layers', live: 'video', tracking: 'git-branch', wholemount: 'camera' };
 
     const stageDisplay = Utils.formatStage(dataset.stage);
     const dateDisplay = Utils.formatDate(dataset.date);
@@ -212,7 +212,8 @@ const Explorer = (() => {
     const gradients = {
       fixed: 'linear-gradient(135deg, #00D2FF22, #0F346044)',
       live: 'linear-gradient(135deg, #FFA72622, #16213E44)',
-      tracking: 'linear-gradient(135deg, #00A65422, #1A1A2E44)'
+      tracking: 'linear-gradient(135deg, #00A65422, #1A1A2E44)',
+      wholemount: 'linear-gradient(135deg, #8B7CFF22, #1A1A2E44)'
     };
 
     return `
@@ -231,7 +232,7 @@ const Explorer = (() => {
         </div>
         <div class="card-actions dataset-card-actions">
           <span class="btn btn-primary btn-sm"><i data-lucide="eye"></i> View</span>
-          <span class="btn btn-outline btn-sm" role="button" tabindex="0" data-compare-id="${Utils.escapeHtml(dataset.id)}"><i data-lucide="columns-3"></i> Compare</span>
+          ${_compareButton(dataset, '<i data-lucide="columns-3"></i> Compare')}
           <span class="btn btn-outline btn-sm" role="button" tabindex="0" data-download-id="${Utils.escapeHtml(dataset.id)}"><i data-lucide="download"></i> Download</span>
         </div>
       </a>
@@ -239,9 +240,9 @@ const Explorer = (() => {
   }
 
   function _createListCard(dataset) {
-    const typeLabels = { fixed: I18n.t('explorer.fixed'), live: I18n.t('explorer.live'), tracking: I18n.t('explorer.tracking') };
-    const typeClass = { fixed: 'badge-fixed', live: 'badge-live', tracking: 'badge-tracking' };
-    const typeIcons = { fixed: 'layers', live: 'video', tracking: 'git-branch' };
+    const typeLabels = { fixed: I18n.t('explorer.fixed'), live: I18n.t('explorer.live'), tracking: I18n.t('explorer.tracking'), wholemount: I18n.t('explorer.wholemount') };
+    const typeClass = { fixed: 'badge-fixed', live: 'badge-live', tracking: 'badge-tracking', wholemount: 'badge-wholemount' };
+    const typeIcons = { fixed: 'layers', live: 'video', tracking: 'git-branch', wholemount: 'camera' };
 
     const stageDisplay = Utils.formatStage(dataset.stage);
     const dateDisplay = Utils.formatDate(dataset.date);
@@ -249,7 +250,8 @@ const Explorer = (() => {
     const gradients = {
       fixed: 'linear-gradient(135deg, #00D2FF22, #0F346044)',
       live: 'linear-gradient(135deg, #FFA72622, #16213E44)',
-      tracking: 'linear-gradient(135deg, #00A65422, #1A1A2E44)'
+      tracking: 'linear-gradient(135deg, #00A65422, #1A1A2E44)',
+      wholemount: 'linear-gradient(135deg, #8B7CFF22, #1A1A2E44)'
     };
 
     return `
@@ -268,16 +270,21 @@ const Explorer = (() => {
         </div>
         <div style="display:flex;align-items:center;padding:0 var(--space-4);">
           <span class="btn btn-primary btn-sm">View</span>
-          <span class="btn btn-outline btn-sm" role="button" tabindex="0" data-compare-id="${Utils.escapeHtml(dataset.id)}">Compare</span>
+          ${_compareButton(dataset, 'Compare')}
           <span class="btn btn-outline btn-sm" role="button" tabindex="0" data-download-id="${Utils.escapeHtml(dataset.id)}">Download</span>
         </div>
       </a>
     `;
   }
 
+  // Compare mounts viewer.html panels; a photograph has nothing to mount there.
+  function _compareButton(dataset, label) {
+    if (dataset.type === 'wholemount') return '';
+    return `<span class="btn btn-outline btn-sm" role="button" tabindex="0" data-compare-id="${Utils.escapeHtml(dataset.id)}">${label}</span>`;
+  }
+
   function _datasetUrl(dataset) {
-    const page = dataset.type === 'tracking' ? 'tracking.html' : 'viewer.html';
-    return `${page}?id=${encodeURIComponent(dataset.id)}`;
+    return Utils.datasetUrl(dataset);
   }
 
   function _datasetPreview(dataset, typeIcons) {

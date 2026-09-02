@@ -303,7 +303,7 @@ function _richTemplate(slug) {
   if (slug === 'home') {
     const hero = _tpl('landing.heroTitle');
     if (!hero) return null;   // dicts not loaded → caller uses the minimal template
-    const typeCol = (titleKey, descKey, type) => ({ width: 4, widgets: [
+    const typeCol = (titleKey, descKey, type) => ({ width: 3, widgets: [
       { type: 'heading', text: _tpl(titleKey), props: { level: '3', align: 'left' } },
       { type: 'richtext', text: _tpl(descKey), props: { align: 'left' } },
       { type: 'button', text: _tpl('landing.viewCollection'), props: { href: 'explorer.html?type=' + type, style: 'ghost', align: 'left' } },
@@ -328,6 +328,7 @@ function _richTemplate(slug) {
         typeCol('landing.fixedTitle', 'landing.fixedDesc', 'fixed'),
         typeCol('landing.liveTitle', 'landing.liveDesc', 'live'),
         typeCol('landing.trackingTitle', 'landing.trackingDesc', 'tracking'),
+        typeCol('landing.wholemountTitle', 'landing.wholemountDesc', 'wholemount'),
       ] },
       { props: { fullWidth: false, padY: 40, maxWidth: 1080, gap: 24, vAlign: 'stretch', bg: '' }, columns: [{ width: 12, widgets: [
         { type: 'heading', text: _tpl('landing.featuredTitle'), props: { level: '2', align: 'center' } },

@@ -339,6 +339,21 @@ const Utils = (() => {
    * any parent that framed the page). Falls back to '*' only outside a browser.
    * @returns {string}
    */
+  // ── Dataset types ──────────────────────────────────────────────────────────
+  const DATASET_TYPES = ['fixed', 'live', 'tracking', 'wholemount'];
+
+  /** The page that opens a dataset of this type. */
+  function datasetPage(dataset) {
+    const type = dataset && dataset.type;
+    if (type === 'tracking') return 'tracking.html';
+    if (type === 'wholemount') return 'wholemount.html';
+    return 'viewer.html';
+  }
+
+  function datasetUrl(dataset) {
+    return `${datasetPage(dataset)}?id=${encodeURIComponent(dataset.id)}`;
+  }
+
   function trustedTargetOrigin() {
     return (typeof window !== 'undefined' && window.location && window.location.origin)
       ? window.location.origin
@@ -365,6 +380,9 @@ const Utils = (() => {
     uid,
     escapeHtml,
     isTrustedMessageOrigin,
-    trustedTargetOrigin
+    trustedTargetOrigin,
+    DATASET_TYPES,
+    datasetPage,
+    datasetUrl
   };
 })();

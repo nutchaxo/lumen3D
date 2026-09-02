@@ -107,7 +107,9 @@
     "trackingTitle": "Suivi cellulaire",
     "trackingDesc": "Analyse quantitative des trajectoires individuelles des cellules, des vitesses, des arbres de lignage et des relations de voisinage au cours du temps.",
     "browseAll": "Tout parcourir",
-    "viewCollection": "Voir la collection"
+    "viewCollection": "Voir la collection",
+    "wholemountTitle": "Photographies whole-mount",
+    "wholemountDesc": "Photographies calibrées de {specimenPlural} entiers au stéréomicroscope : marquages, barre d'échelle et mesures en un coup d'œil."
   },
   "explorer": {
     "title": "Explorateur de donnees",
@@ -135,7 +137,8 @@
     "fileType": "Type",
     "fileSize": "Taille",
     "failed": "Échec du chargement des données",
-    "failedDesc": "Jeu de données introuvable ou erreur de chargement."
+    "failedDesc": "Jeu de données introuvable ou erreur de chargement.",
+    "wholemount": "Wholemount"
   },
   "viewer": {
     "controls": "Contrôles",
@@ -951,7 +954,9 @@
     "galleryBadType": "« {name} » : format non supporté (PNG, JPEG, WebP, GIF).",
     "galleryTooLarge": "« {name} » dépasse 8 Mo.",
     "galleryReadFailed": "« {name} » illisible.",
-    "galleryUploadError": "Envoi de « {name} » impossible : {reason}"
+    "galleryUploadError": "Envoi de « {name} » impossible : {reason}",
+    "reasonNoImage": "bloc image manquant",
+    "reasonBadImage": "bloc image invalide"
   },
   "upl": {
     "title": "Importer des datasets",
@@ -1759,5 +1764,46 @@
     "errNet": "Impossible de contacter GitHub pour lire la liste des documents.",
     "errTls": "Le magasin de certificats de PHP est inutilisable sur cet hébergement : téléversez cacert.pem à la racine du site.",
     "errFolder": "Le dossier DOCS/ n'existe pas encore dans le dépôt."
+  },
+  "wholemount": {
+    "specimen": "Spécimen",
+    "stage": "Stade",
+    "line": "Lignée",
+    "staining": "Coloration",
+    "dissection": "Dissection",
+    "zoom": "Zoom",
+    "pixelSize": "Taille de pixel",
+    "imageSize": "Taille de l'image",
+    "field": "Champ",
+    "microscope": "Microscope",
+    "camera": "Caméra",
+    "exposure": "Exposition",
+    "gain": "Gain",
+    "source": "Fichier source",
+    "uncalibrated": "Non calibré",
+    "measurements": "Mesures",
+    "clearMeasures": "Effacer les mesures",
+    "related": "Jeux de données liés",
+    "browse": "Parcourir la collection",
+    "browseHint": "Cliquez une photographie pour l'ouvrir. ← / → pour passer à la suivante, B affiche ou masque cette planche, Échap la ferme.",
+    "filterStage": "Stade",
+    "filterLine": "Lignée",
+    "search": "Rechercher…",
+    "all": "Tous",
+    "count": "{count} photographies",
+    "noPhotos": "Aucune photographie ne correspond aux filtres.",
+    "prev": "Photographie précédente",
+    "next": "Photographie suivante",
+    "fit": "Ajuster à l'écran (F)",
+    "native": "Résolution native 1:1",
+    "isolate": "Isoler le marquage",
+    "loading": "Chargement de la photographie…",
+    "loadingPreview": "Aperçu…",
+    "loadingNative": "Résolution native en cours…",
+    "nativeReady": "Résolution native",
+    "loadError": "La photographie n'a pas pu être chargée.",
+    "showSidebar": "Afficher le panneau",
+    "hideSidebar": "Masquer le panneau",
+    "errorTitle": "Erreur"
   }
 }

@@ -9,7 +9,7 @@ PluginRegistry.implement('download-center', {
     ExportManager.openDownloadCenter({
       dataset: this._ctx.dataset.getMeta(),
       scope: 'viewer',
-      getCanvas: () => document.getElementById('webgl-canvas'),
+      getCanvas: () => this._ctx.ui.getCanvas?.() || document.getElementById('webgl-canvas'),
       getCanvasBlob: this._ctx.getCanvasBlob,
       getCustomExports: this._ctx.getCustomExports,
       getWorkspaceState: this._ctx.workspace.getState,

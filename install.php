@@ -1328,7 +1328,7 @@ function handle_configure(): void {
     // Data layout (only create what is absent — never touch existing data).
     // These are the directories the operator uploads datasets into over SFTP, so
     // getting their mode right matters more here than anywhere else.
-    foreach (['DATA_WEB', 'DATA_WEB/fixed', 'DATA_WEB/live', 'DATA_WEB/tracking'] as $d) {
+    foreach (['DATA_WEB', 'DATA_WEB/fixed', 'DATA_WEB/live', 'DATA_WEB/tracking', 'DATA_WEB/wholemount'] as $d) {
         $p = tpath($d);
         if (!make_dir($p)) json_fail('mkdir_failed', 500);
     }

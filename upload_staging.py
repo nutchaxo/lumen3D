@@ -75,7 +75,10 @@ STAGING_DIR = UPLOADS_DIR / "staging"
 STATE_DIR = UPLOADS_DIR / "state"
 DATA_WEB = ROOT / "DATA_WEB"
 
-ALLOWED_TYPE_DIRS = ("fixed", "live", "tracking")
+ALLOWED_TYPE_DIRS = ("fixed", "live", "tracking", "wholemount")
+# The types whose data is a brick pyramid. A wholemount is one photograph: no
+# bricks/, its display copies sit at the dataset root (see _WHOLEMOUNT_FILES).
+VOLUME_TYPE_DIRS = ("fixed", "live", "tracking")
 
 # A dataset folder name: the same shape dev_server._safe_dataset_dir accepts, so a
 # staged dataset can always be published without a rename.
@@ -169,6 +172,16 @@ _ROOT_EXTRA = {
     "meta.json": TIER_CORE,
 }
 
+# A wholemount's display copies. The preview is what the page paints first, so
+# it travels with the mount prerequisites; the native image follows.
+_WHOLEMOUNT_FILES = {
+    "preview.webp": (TIER_PREVIEW, "preview"),
+    "image.webp": (TIER_MID, "image"),
+}
+
+# A dataset is openable once metadata plus one of these has landed.
+_MOUNT_KINDS = frozenset({"manifest", "preview"})
+
 
 def _safe_rel(rel) -> str | None:
     """Normalise a client-supplied relative path, or None if it is unusable.
@@ -214,7 +227,9 @@ def classify_path(type_dir: str, rel: str):
     if rel == "thumbnail.webp":
         return TIER_CORE, "thumbnail"
     if rel in _ROOT_EXTRA:
-        return _ROOT_EXTRA[rel], "extra"
+        return (_ROOT_EXTRA[rel], "extra") if type_dir in VOLUME_TYPE_DIRS else None
+    if rel in _WHOLEMOUNT_FILES:
+        return _WHOLEMOUNT_FILES[rel] if type_dir == "wholemount" else None
 
     if rel.startswith("download/"):
         name = rel[len("download/"):]
@@ -227,7 +242,7 @@ def classify_path(type_dir: str, rel: str):
             return None
         return TIER_EXTRA, "download"
 
-    if not rel.startswith("bricks/"):
+    if not rel.startswith("bricks/") or type_dir not in VOLUME_TYPE_DIRS:
         return None
     inner = rel[len("bricks/"):]
 
@@ -797,11 +812,11 @@ def _validate_file_content(type_dir: str, rel: str, path: Path, kind: str | None
             if man is None:
                 return False, "manifest_not_json"
             return _validate_manifest(man)
-        if kind == "thumbnail":
+        if kind in ("thumbnail", "preview", "image"):
             with path.open("rb") as fh:
                 head = fh.read(16)
             if not head.startswith(_MAGIC["webp"][0]) and not head.startswith(_MAGIC["png"][0]):
-                return False, "thumbnail_not_image"
+                return False, f"{kind}_not_image"
             return True, None
         if kind == "extra" and rel.endswith(".glb"):
             with path.open("rb") as fh:
@@ -875,8 +890,25 @@ def _validate_metadata(meta: dict, type_dir: str):
         v = dims.get(axis)
         if not isinstance(v, (int, float)) or isinstance(v, bool) or v <= 0:
             return False, "metadata_bad_dimensions"
+    if meta.get("type") == "wholemount":
+        return _validate_wholemount_meta(meta)
     if not isinstance(meta.get("channels"), list) or not meta["channels"]:
         return False, "metadata_no_channels"
+    return True, None
+
+
+def _validate_wholemount_meta(meta: dict):
+    """A wholemount mounts from its `image` block, not from channels. The file
+    names are pinned to the allowlist so metadata cannot point elsewhere."""
+    image = meta.get("image")
+    if not isinstance(image, dict):
+        return False, "metadata_no_image"
+    if image.get("native") != "image.webp" or image.get("preview") != "preview.webp":
+        return False, "metadata_bad_image"
+    for key in ("width", "height"):
+        v = image.get(key)
+        if not isinstance(v, (int, float)) or isinstance(v, bool) or v <= 0:
+            return False, "metadata_bad_image"
     return True, None
 
 
@@ -914,18 +946,10 @@ def validate_dataset(type_dir: str, folder: str) -> dict:
             if not ok:
                 errors.append(reason or "metadata_invalid")
 
-    man_path = ds_dir / "bricks" / "manifest.json"
-    if not man_path.exists():
-        errors.append("missing_manifest")
+    if type_dir in VOLUME_TYPE_DIRS:
+        errors.extend(_check_bricks(ds_dir))
     else:
-        man = _read_json(man_path)
-        if man is None:
-            errors.append("manifest_not_json")
-        else:
-            ok, reason = _validate_manifest(man)
-            if not ok:
-                errors.append(reason or "manifest_invalid")
-            errors.extend(_cross_check_packs(ds_dir, man))
+        errors.extend(_check_wholemount_files(ds_dir))
 
     # Anything planned but not finished blocks the publish — a dataset is published
     # whole or not at all.
@@ -1045,6 +1069,30 @@ def _find_stray(ds_dir: Path, type_dir: str) -> list[str]:
 
 # ── Dataset state ──────────────────────────────────────────────────────────────
 
+def _check_bricks(ds_dir: Path) -> list[str]:
+    man_path = ds_dir / "bricks" / "manifest.json"
+    if not man_path.exists():
+        return ["missing_manifest"]
+    man = _read_json(man_path)
+    if man is None:
+        return ["manifest_not_json"]
+    ok, reason = _validate_manifest(man)
+    errors = [] if ok else [reason or "manifest_invalid"]
+    errors.extend(_cross_check_packs(ds_dir, man))
+    return errors
+
+
+def _check_wholemount_files(ds_dir: Path) -> list[str]:
+    """Both display copies must have arrived: the page paints the preview at once
+    and swaps in the native image, so neither may be missing or empty."""
+    errors = []
+    for rel, (_, kind) in _WHOLEMOUNT_FILES.items():
+        path = ds_dir / rel
+        if not path.is_file() or path.stat().st_size == 0:
+            errors.append(f"missing_{kind}")
+    return errors
+
+
 def dataset_state(type_dir: str, folder: str, journal: dict | None = None) -> str:
     if journal is None:
         journal = load_journal(type_dir, folder)
@@ -1061,8 +1109,8 @@ def dataset_state(type_dir: str, folder: str, journal: dict | None = None) -> st
     # Openable as soon as the mount prerequisites AND the coarsest LOD are in.
     core_ok = all(e.get("done") for e in files.values() if int(e.get("tier", 9)) <= TIER_PREVIEW)
     has_meta = files.get("metadata.json", {}).get("done")
-    has_manifest = any(e.get("done") for rel, e in files.items() if e.get("kind") == "manifest")
-    if core_ok and has_meta and has_manifest:
+    has_mount = any(e.get("done") for e in files.values() if e.get("kind") in _MOUNT_KINDS)
+    if core_ok and has_meta and has_mount:
         state = STATE_EDITABLE
     else:
         state = STATE_UPLOADING

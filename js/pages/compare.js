@@ -198,7 +198,7 @@ const CompareApp = (() => {
     panel.id = `panel-${panelIndex}`;
     panel.dataset.datasetType = d.type;
     
-    const page = d.type === 'tracking' ? 'tracking.html' : 'viewer.html';
+    const page = Utils.datasetPage(d);
     const activePanelsCount = Math.max(1, _activePanels.length);
     const src = `${page}?v=20260604-v7&id=${encodeURIComponent(datasetId)}&hideHeader=true&panelIndex=${panelIndex}&quality=auto&deferHighQuality=1&panelPriority=${Math.max(0, _activePanels.length - 1)}&activePanels=${activePanelsCount}`;
     

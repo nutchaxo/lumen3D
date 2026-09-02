@@ -71,6 +71,19 @@ serveur. Il apparaît immédiatement dans le catalogue — rien à régénérer.
 alloue simultanément plusieurs copies du volume ; comptez ~32 Go de RAM pour un
 volume de 3789 × 3789 × 178. Un poste à 16 Go échouera sur de gros volumes réels.
 
+### 1b. Photographies whole-mount (TIFF ImageJ / Leica)
+
+Une photographie couleur d'embryon entier (stéréomicroscope, export TIFF depuis
+un `.lif`) devient un dataset `wholemount` — un par fichier :
+
+```
+pipeline\python.exe pipeline\wholemount_importer.py --input <dossier TIFF> --output output --staining X-gal --with-downloads
+```
+
+Le stade, le zoom et la date de dissection sont lus dans le nom du fichier
+(`<lif> - E8.0 x3.2 241008 2.tif`), la taille de pixel dans les tags ImageJ.
+Un repassage (`--force`) conserve ce que le labo a édité dans `metadata.json`.
+
 ### 2. Analyse de tracking Imaris (export Excel)
 
 Créez un dossier par échantillon sous **`tracking\DATA\`** et déposez-y l'export
@@ -154,7 +167,7 @@ VERSION.json             versions, édition, date de génération
 requirements.txt         dépendances Python des deux pipelines
 LISEZ-MOI.md             ce document
 
-pipeline\                pipeline volumes : orchestrateur + 5 étapes
+pipeline\                pipeline volumes : orchestrateur + 5 étapes + importeur whole-mount
 tracking\SCRIPTS\        pipeline tracking : analyse, export, surfaces
 tracking\DATA\           entrées tracking (un dossier par échantillon)
 tracking\OUTPUT\         sorties tracking

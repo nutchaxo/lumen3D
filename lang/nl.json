@@ -944,7 +944,8 @@
     "galleryReadFailed": "“{name}” kan niet worden gelezen.",
     "galleryUploadError": "Kan “{name}” niet uploaden: {reason}",
     "reasonNoImage": "afbeeldingsblok ontbreekt",
-    "reasonBadImage": "ongeldig afbeeldingsblok"
+    "reasonBadImage": "ongeldig afbeeldingsblok",
+    "secOrientation2d": "Oriëntatie"
   },
   "upl": {
     "title": "Datasets importeren",

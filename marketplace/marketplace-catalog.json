@@ -70,6 +70,23 @@
       "recommended": true
     },
     {
+      "id": "calibrated-grid",
+      "name": "Calibrated Grid",
+      "placement": "tools",
+      "subtype": "toggle",
+      "description": "Overlay a physical grid (1-2-5 steps in µm or mm) on a wholemount photograph: none → coarse → fine.",
+      "creator": "IRIBHM",
+      "icon": "grid-3x3",
+      "platformCompat": ">=1.49.0",
+      "sandboxCapabilities": null,
+      "latestVersion": "1.0.0",
+      "assetUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/calibrated-grid/plugin-calibrated-grid-1.0.0.zip",
+      "sumsUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/calibrated-grid/SHA256SUMS",
+      "sigUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/calibrated-grid/SHA256SUMS.sig",
+      "sha256": "a53a12bb0587fdf2e85b659b158c8070ac652a9e4666349bae674cb5116e0017",
+      "recommended": false
+    },
+    {
       "id": "chunk-debug",
       "name": "Chunk Debug",
       "placement": "tools",
@@ -104,6 +121,23 @@
       "recommended": true
     },
     {
+      "id": "display-adjust",
+      "name": "Display Adjustments",
+      "placement": "tools",
+      "subtype": "toggle",
+      "description": "Non-destructive brightness, contrast, gamma, white balance and background flattening for a wholemount photograph.",
+      "creator": "IRIBHM",
+      "icon": "sliders-horizontal",
+      "platformCompat": ">=1.49.0",
+      "sandboxCapabilities": null,
+      "latestVersion": "1.0.0",
+      "assetUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/display-adjust/plugin-display-adjust-1.0.0.zip",
+      "sumsUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/display-adjust/SHA256SUMS",
+      "sigUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/display-adjust/SHA256SUMS.sig",
+      "sha256": "d19392c76dd8042f562771651c4d69a3f40344f1f3dde581c113a103933cc23f",
+      "recommended": false
+    },
+    {
       "id": "download-center",
       "name": "Download Center",
       "placement": "tools",
@@ -121,6 +155,23 @@
       "recommended": true
     },
     {
+      "id": "figure-panel",
+      "name": "Figure Panel Builder",
+      "placement": "tools",
+      "subtype": "action",
+      "description": "Compose several wholemount photographs into one figure at a common physical scale, with stage labels and a shared scale bar; export PNG or open in the Studio.",
+      "creator": "IRIBHM",
+      "icon": "layout-template",
+      "platformCompat": ">=1.49.0",
+      "sandboxCapabilities": null,
+      "latestVersion": "1.0.0",
+      "assetUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/figure-panel/plugin-figure-panel-1.0.0.zip",
+      "sumsUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/figure-panel/SHA256SUMS",
+      "sigUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/figure-panel/SHA256SUMS.sig",
+      "sha256": "d74050ee5dfea71e44ca5e09888979e3f4d59414211e80cd87aeec52d21d9970",
+      "recommended": false
+    },
+    {
       "id": "measure-distance",
       "name": "Measure Distance",
       "placement": "tools",
@@ -136,6 +187,23 @@
       "sigUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/measure-distance/SHA256SUMS.sig",
       "sha256": "1d36289dbc7a509b81678f8b239911fd1c027131afa5046301960fa1b16a2261",
       "recommended": true
+    },
+    {
+      "id": "orientation-2d",
+      "name": "Orientation 2D",
+      "placement": "tools",
+      "subtype": "toggle",
+      "description": "Rotate and mirror a wholemount photograph so the anterior points up; the pose is saved with the dataset from the admin panel and remembered in the workspace.",
+      "creator": "IRIBHM",
+      "icon": "compass",
+      "platformCompat": ">=1.49.0",
+      "sandboxCapabilities": null,
+      "latestVersion": "1.0.0",
+      "assetUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/orientation-2d/plugin-orientation-2d-1.0.0.zip",
+      "sumsUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/orientation-2d/SHA256SUMS",
+      "sigUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/orientation-2d/SHA256SUMS.sig",
+      "sha256": "4b08e9988713d2131cfe80415a80d04eca6c8357ab8ecbb3b8d74c6054aa7512",
+      "recommended": false
     },
     {
       "id": "orientation-axes",
@@ -227,6 +295,23 @@
       "sigUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/slice-inspector/SHA256SUMS.sig",
       "sha256": "ffd371b62b21a7366f49b18badffc977876a6f5b7416c21632aab3ffacd0804a",
       "recommended": true
+    },
+    {
+      "id": "split-view",
+      "name": "Split View",
+      "placement": "tools",
+      "subtype": "toggle",
+      "description": "Open a second wholemount photograph beside the current one, with pan and zoom linked at physical scale.",
+      "creator": "IRIBHM",
+      "icon": "columns-2",
+      "platformCompat": ">=1.49.0",
+      "sandboxCapabilities": null,
+      "latestVersion": "1.0.0",
+      "assetUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/split-view/plugin-split-view-1.0.0.zip",
+      "sumsUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/split-view/SHA256SUMS",
+      "sigUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/split-view/SHA256SUMS.sig",
+      "sha256": "4e69b52d90b8596dacaba6195bd2699a137096d231c1e57d2146e4e89baac67a",
+      "recommended": false
     },
     {
       "id": "toggle-axes",

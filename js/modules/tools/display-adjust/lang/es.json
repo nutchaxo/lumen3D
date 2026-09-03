@@ -1,0 +1,13 @@
+{
+  "title": "Ajustes de visualización",
+  "aria": "Ajustes de visualización",
+  "panel": "Visualización",
+  "brightness": "Brillo",
+  "contrast": "Contraste",
+  "gamma": "Gamma",
+  "wbRed": "Rojo",
+  "wbBlue": "Azul",
+  "flatten": "Aplanar el fondo (viñeteado)",
+  "reset": "Restablecer",
+  "hint": "Solo visualización: las medidas y el aislamiento de la tinción leen la fotografía intacta."
+}

@@ -1,0 +1,12 @@
+{
+  "title": "Vista dividida (comparar dos fotografías)",
+  "aria": "Vista dividida",
+  "panel": "Vista dividida",
+  "paneTitle": "Segunda fotografía",
+  "compareWith": "Comparar con",
+  "link": "Vincular zoom y desplazamiento a escala física",
+  "swap": "Intercambiar",
+  "fitBoth": "Ajustar",
+  "close": "Cerrar",
+  "hint": "Ambos lados muestran el mismo campo con el mismo aumento, sea cual sea el zoom de adquisición."
+}

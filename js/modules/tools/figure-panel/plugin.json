@@ -1,0 +1,25 @@
+{
+  "id": "figure-panel",
+  "version": "1.0.0",
+  "platformCompat": ">=1.49.0",
+  "creator": "IRIBHM",
+  "placement": "tools",
+  "dataTypes": [
+    "wholemount"
+  ],
+  "i18nTitle": "title",
+  "i18nAria": "aria",
+  "i18nLanguages": [
+    "en",
+    "fr",
+    "es",
+    "nl"
+  ],
+  "name": "Figure Panel Builder",
+  "group": "export",
+  "subtype": "action",
+  "icon": "layout-template",
+  "order": 30,
+  "buttonId": "btn-figure-panel",
+  "description": "Compose several wholemount photographs into one figure at a common physical scale, with stage labels and a shared scale bar; export PNG or open in the Studio."
+}

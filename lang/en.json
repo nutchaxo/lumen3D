@@ -956,7 +956,8 @@
     "galleryReadFailed": "“{name}” could not be read.",
     "galleryUploadError": "Could not upload “{name}”: {reason}",
     "reasonNoImage": "image block missing",
-    "reasonBadImage": "invalid image block"
+    "reasonBadImage": "invalid image block",
+    "secOrientation2d": "Orientation"
   },
   "upl": {
     "title": "Import datasets",

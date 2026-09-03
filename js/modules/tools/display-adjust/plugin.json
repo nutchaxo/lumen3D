@@ -1,0 +1,25 @@
+{
+  "id": "display-adjust",
+  "version": "1.0.0",
+  "platformCompat": ">=1.49.0",
+  "creator": "IRIBHM",
+  "placement": "tools",
+  "dataTypes": [
+    "wholemount"
+  ],
+  "i18nTitle": "title",
+  "i18nAria": "aria",
+  "i18nLanguages": [
+    "en",
+    "fr",
+    "es",
+    "nl"
+  ],
+  "name": "Display Adjustments",
+  "group": "visuals",
+  "subtype": "toggle",
+  "icon": "sliders-horizontal",
+  "order": 15,
+  "buttonId": "btn-display-adjust",
+  "description": "Non-destructive brightness, contrast, gamma, white balance and background flattening for a wholemount photograph."
+}

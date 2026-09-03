@@ -1,0 +1,13 @@
+{
+  "title": "Orientation (rotation / miroir)",
+  "aria": "Orientation",
+  "panel": "Orientation",
+  "rotation": "Rotation",
+  "rotateLeft": "Tourner de 90° vers la gauche",
+  "rotateRight": "Tourner de 90° vers la droite",
+  "mirror": "Miroir",
+  "reset": "Réinitialiser",
+  "hint": "Tournez la photographie jusqu'à placer l'antérieur en haut. Le panneau admin enregistre cette pose avec le dataset.",
+  "anterior": "A",
+  "posterior": "P"
+}

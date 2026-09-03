@@ -1,0 +1,12 @@
+{
+  "title": "Split view (compare two photographs)",
+  "aria": "Split view",
+  "panel": "Split view",
+  "paneTitle": "Second photograph",
+  "compareWith": "Compare with",
+  "link": "Link zoom and pan at physical scale",
+  "swap": "Swap",
+  "fitBoth": "Fit",
+  "close": "Close",
+  "hint": "Both sides show the same field at the same magnification whatever their zoom at acquisition."
+}

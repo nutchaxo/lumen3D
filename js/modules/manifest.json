@@ -1,6 +1,11 @@
 {
   "plugins": [
     {
+      "path": "tools/calibrated-grid",
+      "placement": "tools",
+      "id": "calibrated-grid"
+    },
+    {
       "path": "tools/chunk-debug",
       "placement": "tools",
       "id": "chunk-debug"
@@ -11,14 +16,29 @@
       "id": "decompose-channels"
     },
     {
+      "path": "tools/display-adjust",
+      "placement": "tools",
+      "id": "display-adjust"
+    },
+    {
       "path": "tools/download-center",
       "placement": "tools",
       "id": "download-center"
     },
     {
+      "path": "tools/figure-panel",
+      "placement": "tools",
+      "id": "figure-panel"
+    },
+    {
       "path": "tools/measure-distance",
       "placement": "tools",
       "id": "measure-distance"
+    },
+    {
+      "path": "tools/orientation-2d",
+      "placement": "tools",
+      "id": "orientation-2d"
     },
     {
       "path": "tools/orientation-axes",
@@ -44,6 +64,11 @@
       "path": "tools/slice-inspector",
       "placement": "tools",
       "id": "slice-inspector"
+    },
+    {
+      "path": "tools/split-view",
+      "placement": "tools",
+      "id": "split-view"
     },
     {
       "path": "tools/toggle-axes",

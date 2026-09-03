@@ -1,0 +1,12 @@
+{
+  "title": "Vue divisée (comparer deux photographies)",
+  "aria": "Vue divisée",
+  "panel": "Vue divisée",
+  "paneTitle": "Seconde photographie",
+  "compareWith": "Comparer avec",
+  "link": "Lier zoom et déplacement à l'échelle physique",
+  "swap": "Échanger",
+  "fitBoth": "Ajuster",
+  "close": "Fermer",
+  "hint": "Les deux côtés montrent le même champ au même grossissement, quel que soit le zoom d'acquisition."
+}

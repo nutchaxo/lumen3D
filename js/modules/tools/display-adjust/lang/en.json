@@ -1,0 +1,13 @@
+{
+  "title": "Display adjustments",
+  "aria": "Display adjustments",
+  "panel": "Display",
+  "brightness": "Brightness",
+  "contrast": "Contrast",
+  "gamma": "Gamma",
+  "wbRed": "Red",
+  "wbBlue": "Blue",
+  "flatten": "Flatten the background (vignetting)",
+  "reset": "Reset",
+  "hint": "Display only: measurements and stain isolation read the untouched photograph."
+}

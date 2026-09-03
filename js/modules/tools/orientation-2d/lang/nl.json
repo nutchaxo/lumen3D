@@ -1,0 +1,13 @@
+{
+  "title": "Oriëntatie (draaien / spiegelen)",
+  "aria": "Oriëntatie",
+  "panel": "Oriëntatie",
+  "rotation": "Rotatie",
+  "rotateLeft": "90° linksom draaien",
+  "rotateRight": "90° rechtsom draaien",
+  "mirror": "Spiegelen",
+  "reset": "Herstellen",
+  "hint": "Draai de foto tot de anterieure kant naar boven wijst. Het beheerpaneel bewaart deze stand bij de dataset.",
+  "anterior": "A",
+  "posterior": "P"
+}

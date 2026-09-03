@@ -1,0 +1,13 @@
+{
+  "title": "Orientation (rotate / mirror)",
+  "aria": "Orientation",
+  "panel": "Orientation",
+  "rotation": "Rotation",
+  "rotateLeft": "Rotate 90° counter-clockwise",
+  "rotateRight": "Rotate 90° clockwise",
+  "mirror": "Mirror",
+  "reset": "Reset",
+  "hint": "Turn the photograph until the anterior end points up. The admin panel saves this pose with the dataset.",
+  "anterior": "A",
+  "posterior": "P"
+}

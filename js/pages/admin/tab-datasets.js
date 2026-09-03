@@ -337,24 +337,6 @@ function toggleVolumeSections(on) {
   });
 }
 
-function dimsLabel(m) {
-  const d = m.dimensions || {};
-  if (!d.x) return '—';
-  if (m.type === 'wholemount') {
-    const px = m.pixelSizeUm?.x;
-    return `${d.x} × ${d.y} px · ${px ? `${px.toFixed(3)} µm/px` : t('wholemount.uncalibrated', 'non calibré')}`;
-  }
-  return `${d.x} × ${d.y} × ${d.z} px · ${t('admin.dimsChannels', `${d.c} canal(ux)`, { count: d.c })}`;
-}
-
-// Calibration, exposure and 3D orientation only mean something for a volume.
-function toggleVolumeSections(on) {
-  [DOM.fVoxX, DOM.fExposure, DOM.btnDefineOrientation].forEach((el) => {
-    const section = el?.closest('.config-section');
-    if (section) section.style.display = on ? '' : 'none';
-  });
-}
-
 // ── Validation (Rule 1.4) ──────────────────────────────────────
 function validateDatasetMeta(meta) {
   if (!meta || typeof meta !== 'object') return t('admin.reasonEmpty', 'réponse vide');

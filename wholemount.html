@@ -55,7 +55,11 @@
         </div>
         <div class="toolbar-cluster">
           <span class="toolbar-label" data-i18n="viewer.export">Export</span>
-          <div class="toolbar-actions" data-tool-group="export"></div>
+          <div class="toolbar-actions" data-tool-group="export">
+            <button class="btn btn-icon btn-ghost" id="btn-studio" data-i18n-title="wholemount.studio" aria-label="Open in Studio" data-i18n-aria="wholemount.studio">
+              <i data-lucide="pen-tool"></i>
+            </button>
+          </div>
         </div>
         <div class="toolbar-cluster">
           <span class="toolbar-label" data-i18n="viewer.visuals">Visuals</span>
@@ -122,6 +126,10 @@
         <div class="panel-section" id="measure-section" hidden>
           <div class="panel-title"><span data-i18n="wholemount.measurements">Measurements</span></div>
           <div id="volume-measure-status" class="wm-measure-status"></div>
+          <div class="wm-measure-controls">
+            <label class="wm-check"><input type="checkbox" id="toggle-measure-labels" checked> <span data-i18n="wholemount.labels">Labels</span></label>
+            <input type="range" id="measure-text-size" min="10" max="40" value="14" data-i18n-title="wholemount.textSize" title="Label size">
+          </div>
           <div class="tracking-science-box" id="volume-measure-list"></div>
           <div class="channel-actions">
             <button class="btn btn-outline btn-sm" id="btn-measure-clear">
@@ -144,6 +152,7 @@
       <div class="viewer-canvas-container wm-stage">
         <canvas id="wholemount-canvas" class="wm-canvas"></canvas>
         <div id="wm-load-state" class="wm-load-state" hidden></div>
+        <div id="wm-zoom" class="wm-zoom" title="Displayed resolution" data-i18n-title="wholemount.zoomInfo"></div>
 
         <!-- Contact-sheet browser over every wholemount of the catalog -->
         <section id="wm-browser" class="wm-browser" aria-label="Browse the collection" data-i18n-aria="wholemount.browse" hidden>
@@ -180,6 +189,64 @@
     </div>
   </div>
 
+  <!-- Studio: annotate the photograph at native resolution (js/components/studio-editor.js) -->
+  <div class="studio-layout hidden" id="studio-layout">
+    <div class="studio-header">
+      <div class="studio-header-left">
+        <h2 data-i18n="wholemount.studioTitle">Studio</h2>
+        <span class="text-xs text-muted" id="studio-subtitle" data-i18n="wholemount.studioSubtitle">Annotate the photograph</span>
+      </div>
+      <div class="studio-header-right">
+        <input type="file" id="studio-import-file" accept=".json" class="hidden">
+        <button class="btn btn-outline btn-sm" id="btn-studio-import"><i data-lucide="upload"></i><span data-i18n="viewer.importJson">Import JSON</span></button>
+        <button class="btn btn-outline btn-sm" id="btn-studio-export-json"><i data-lucide="file-json"></i><span data-i18n="viewer.saveJson">Save JSON</span></button>
+        <button class="btn btn-primary btn-sm" id="btn-studio-export-png"><i data-lucide="download"></i><span data-i18n="viewer.exportPng">Export PNG</span></button>
+        <button class="btn btn-outline btn-sm" id="btn-studio-reset-view" title="Reset View" data-i18n-title="tips.resetView"><i data-lucide="refresh-ccw"></i></button>
+        <div class="divider-vertical"></div>
+        <button class="btn btn-icon btn-ghost" id="btn-close-studio" title="Close" data-i18n-title="app.close"><i data-lucide="x"></i></button>
+      </div>
+    </div>
+    <div class="studio-body">
+      <div class="studio-sidebar-left">
+        <div class="panel-section">
+          <div class="panel-title" data-i18n="viewer.tools">Tools</div>
+          <div class="studio-tools-grid">
+            <button class="btn btn-ghost btn-sm active" data-studio-tool="select" title="Select/Move" data-i18n-title="tips.selectMove"><i data-lucide="mouse-pointer-2"></i></button>
+            <button class="btn btn-ghost btn-sm" data-studio-tool="rectangle" title="Rectangle" data-i18n-title="tips.rect"><i data-lucide="square"></i></button>
+            <button class="btn btn-ghost btn-sm" data-studio-tool="ellipse" title="Ellipse" data-i18n-title="tips.ellipse"><i data-lucide="circle"></i></button>
+            <button class="btn btn-ghost btn-sm" data-studio-tool="arrow" title="Arrow" data-i18n-title="tips.arrow"><i data-lucide="move-right"></i></button>
+            <button class="btn btn-ghost btn-sm" data-studio-tool="line" title="Line" data-i18n-title="tips.line"><i data-lucide="minus"></i></button>
+            <button class="btn btn-ghost btn-sm" data-studio-tool="text" title="Text" data-i18n-title="tips.text"><i data-lucide="type"></i></button>
+            <button class="btn btn-ghost btn-sm" data-studio-tool="scalebar" title="Scale Bar" data-i18n-title="tips.scaleBar"><i data-lucide="ruler"></i></button>
+          </div>
+        </div>
+        <div class="panel-section flex-1" style="display:flex; flex-direction:column; min-height:0;">
+          <div class="panel-title" data-i18n="viewer.layers">Layers</div>
+          <div class="studio-layers-list" id="studio-layers-list"></div>
+        </div>
+      </div>
+      <div class="studio-workspace" id="studio-workspace">
+        <canvas id="studio-canvas"></canvas>
+      </div>
+      <div class="studio-sidebar-right">
+        <div class="panel-section">
+          <div class="panel-title" data-i18n="viewer.properties">Properties</div>
+          <div class="studio-properties" id="studio-properties">
+            <p class="text-xs text-muted" data-i18n="studio.selectObject">Select an object to edit properties.</p>
+            <div class="studio-property-row">
+              <button class="btn btn-outline btn-sm" data-studio-command="add-guide-x" data-i18n="studio.guideX">Guide X</button>
+              <button class="btn btn-outline btn-sm" data-studio-command="add-guide-y" data-i18n="studio.guideY">Guide Y</button>
+            </div>
+          </div>
+        </div>
+        <div class="panel-section">
+          <div class="panel-title" data-i18n="viewer.channels">Channels</div>
+          <div id="studio-channels" class="studio-channels-list"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <script src="js/core/utils.js"></script>
   <script src="js/core/ui-actions.js"></script>
   <script src="js/core/instance-config.js"></script>
@@ -195,6 +262,7 @@
   <script src="js/core/plugin-trust.js"></script>
   <script src="js/core/plugin-registry.js" nonce="{{CSP_NONCE}}"></script>
   <script src="js/components/dataset-gallery.js"></script>
+  <script src="js/components/studio-editor.js"></script>
   <script src="js/viewers/wholemount-viewer.js"></script>
   <script src="js/pages/wholemount.js"></script>
   <!-- Plugins declaring dataTypes:["wholemount"] are loaded by PluginRegistry.loadModules() in wholemount.js -->

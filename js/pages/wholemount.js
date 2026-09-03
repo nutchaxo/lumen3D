@@ -17,6 +17,7 @@
 const WholemountApp = (() => {
   const TYPE = 'wholemount';
   const LOAD_STATE_LINGER_MS = 900;
+  const STAGING_PREFIX = 'staging:';
 
   let _collection = [];
   let _meta = null;
@@ -25,6 +26,7 @@ const WholemountApp = (() => {
   let _filters = { stage: 'all', line: 'all', search: '' };
   let _moduleCtx = null;
   let _stateTimer = 0;
+  let _isAdmin = false;
 
   const $ = (id) => document.getElementById(id);
   const t = (key, params) => I18n.t(key, params);
@@ -43,9 +45,12 @@ const WholemountApp = (() => {
     Theme.onChange(_updateThemeIcon);
 
     _collection = _sortedCollection();
-    const requested = new URLSearchParams(window.location.search).get('id');
-    const first = requested ? Catalog.getById(requested) : null;
-    if (!first || first.type !== TYPE) {
+    const params = new URLSearchParams(window.location.search);
+    _isAdmin = params.get('mode') === 'admin';
+    if (params.get('hideHeader') === 'true') document.body.classList.add('wm-headless');
+    const requested = params.get('id');
+    const first = await _resolveDataset(requested, params.get('path'));
+    if (!first) {
       _showError(t(requested ? 'viewer.errNotFound' : 'viewer.errNoDataset'));
       return;
     }
@@ -53,6 +58,8 @@ const WholemountApp = (() => {
     await _loadPlugins(first);
     WholemountViewer.init($('wholemount-canvas'));
     WholemountViewer.onLoadState(_renderLoadState);
+    WholemountViewer.onViewChange(_renderZoom);
+    WholemountViewer.onLabelMove((id, offset) => MeasurementStore.update(_id, 'viewer', id, { labelOffset: offset }));
     _moduleCtx = _buildModuleCtx();
     if (typeof PluginRegistry !== 'undefined') {
       await PluginRegistry.initAll(_moduleCtx);
@@ -113,7 +120,8 @@ const WholemountApp = (() => {
         scheduleResize: () => requestAnimationFrame(() => WholemountViewer.resize()),
         escapeHtml: (s) => Utils.escapeHtml(s),
         createIcons: (opts) => { if (window.lucide) lucide.createIcons(opts); },
-        getCanvas: () => WholemountViewer.getCanvas()
+        getCanvas: () => WholemountViewer.getCanvas(),
+        openStudio: () => _openStudio()
       },
       iframe: {
         isIframe: () => false,
@@ -130,12 +138,47 @@ const WholemountApp = (() => {
     };
   }
 
+  // ── Dataset resolution ─────────────────────────────────────────────────────
+  async function _resolveDataset(id, path) {
+    // The admin panel passes the bare folder as id and the type/folder as path;
+    // a published dataset is in the catalog under the latter.
+    const listed = (id ? Catalog.getById(id) : null) || (path ? Catalog.getById(path) : null);
+    if (listed && listed.type === TYPE) return listed;
+    if (!_isAdmin || !path) return null;
+    return _fetchAdminMeta(path);
+  }
+
+  // The admin panel previews datasets the public catalog does not list — a staged
+  // import, a hidden dataset — through the session-gated datasets API.
+  async function _fetchAdminMeta(path) {
+    try {
+      const resp = await fetch(`api/datasets.php?action=get&id=${encodeURIComponent(path)}`, { credentials: 'same-origin' });
+      if (!resp.ok) return null;
+      const meta = await resp.json();
+      return meta && meta.type === TYPE ? { ...meta, id: path, path } : null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  // Published bytes live under DATA_WEB/; a staged import is read through the
+  // admin blob proxy, whose `path` query parameter takes the file name.
+  function _datasetBase(path) {
+    const p = String(path || '');
+    if (!p.startsWith(STAGING_PREFIX)) return `DATA_WEB/${p}`;
+    return `api/upload.php?action=blob&ds=${encodeURIComponent(p.slice(STAGING_PREFIX.length))}&path=`;
+  }
+
+  function _fileUrl(base, file) {
+    return base.endsWith('=') ? base + encodeURIComponent(file) : `${base}/${file}`;
+  }
+
   // ── Dataset switching ──────────────────────────────────────────────────────
   function _openDataset(meta, opts = {}) {
     _meta = meta;
     _id = meta.id;
-    _basePath = `DATA_WEB/${meta.path}`;
-    _syncUrl(opts.history);
+    _basePath = _datasetBase(meta.path);
+    if (!_isAdmin) _syncUrl(opts.history);
     _renderHeader();
     _renderInfo();
     _renderGallery();
@@ -144,8 +187,8 @@ const WholemountApp = (() => {
 
     const image = meta.image || {};
     WholemountViewer.load({
-      previewUrl: `${_basePath}/${image.preview || 'preview.webp'}`,
-      nativeUrl: `${_basePath}/${image.native || 'image.webp'}`,
+      previewUrl: _fileUrl(_basePath, image.preview || 'preview.webp'),
+      nativeUrl: _fileUrl(_basePath, image.native || 'image.webp'),
       width: image.width || meta.dimensions?.x || 1,
       height: image.height || meta.dimensions?.y || 1,
       pixelSizeUm: meta.pixelSizeUm?.x
@@ -283,6 +326,15 @@ const WholemountApp = (() => {
     pill.textContent = t({ loading: 'wholemount.loadingPreview', preview: 'wholemount.loadingNative', error: 'wholemount.loadError' }[state]);
   }
 
+  // Zoom as a percentage of native (one image pixel per device pixel) and the
+  // physical size of one screen pixel at that zoom.
+  function _renderZoom(view) {
+    const px = _meta?.pixelSizeUm?.x;
+    const pct = Math.round(view.scale * (window.devicePixelRatio || 1) * 100);
+    const perScreenPx = px ? ` · ${(px / view.scale).toFixed(2)} µm/px` : '';
+    $('wm-zoom').textContent = `${pct} %${perScreenPx}`;
+  }
+
   // ── Contact-sheet browser ──────────────────────────────────────────────────
   function _sortedCollection() {
     return Catalog.getAll()
@@ -373,6 +425,9 @@ const WholemountApp = (() => {
     $('btn-prev').addEventListener('click', () => _step(-1));
     $('btn-next').addEventListener('click', () => _step(1));
     $('btn-collapse-sidebar').addEventListener('click', () => _setSidebarHidden(true));
+    $('btn-studio').addEventListener('click', _openStudio);
+    $('measure-text-size').addEventListener('input', (e) => WholemountViewer.setMeasurementTextSize(Number(e.target.value)));
+    $('toggle-measure-labels').addEventListener('change', (e) => WholemountViewer.setShowMeasurementLabels(e.target.checked));
     $('btn-hamburger').addEventListener('click', () => _setSidebarHidden(false));
 
     $('wm-search').addEventListener('input', (e) => { _filters.search = e.target.value; _renderBrowserGrid(); });
@@ -418,6 +473,21 @@ const WholemountApp = (() => {
     if (ds && ds.type === TYPE && ds.id !== _id) _openDataset(ds);
   }
 
+  // The Studio annotates the photograph at native resolution; what it gets is
+  // exactly what is on screen (plain or stain-isolated), calibrated in µm/px.
+  function _openStudio() {
+    if (typeof StudioEditor === 'undefined' || !_meta) return;
+    const canvas = WholemountViewer.getNativeCanvas();
+    if (!canvas) return;
+    const px = _meta.pixelSizeUm?.x || 1;
+    StudioEditor.open({
+      canvas, width: canvas.width, height: canvas.height,
+      source: 'wholemount', quality: 'native', timepoint: 0,
+      pixelSizeUm: { x: px, y: _meta.pixelSizeUm?.y || px },
+      dataset: _meta, channelState: []
+    });
+  }
+
   function _setIsolate(on) {
     WholemountViewer.setIsolateStain(on);
     $('btn-isolate').classList.toggle('btn-solid', on);
@@ -436,6 +506,8 @@ const WholemountApp = (() => {
       viewer: {
         view: WholemountViewer.getView(),
         isolate: WholemountViewer.isIsolateStain(),
+        measureTextSize: WholemountViewer.getMeasurementTextSize(),
+        showLabels: $('toggle-measure-labels').checked,
         plugins: typeof PluginRegistry !== 'undefined' ? PluginRegistry.getWorkspaceState() : {}
       }
     };
@@ -445,6 +517,14 @@ const WholemountApp = (() => {
     const v = state?.viewer || {};
     if (v.view) WholemountViewer.setView(v.view);
     if (typeof v.isolate === 'boolean') _setIsolate(v.isolate);
+    if (Number.isFinite(v.measureTextSize)) {
+      $('measure-text-size').value = v.measureTextSize;
+      WholemountViewer.setMeasurementTextSize(v.measureTextSize);
+    }
+    if (typeof v.showLabels === 'boolean') {
+      $('toggle-measure-labels').checked = v.showLabels;
+      WholemountViewer.setShowMeasurementLabels(v.showLabels);
+    }
     if (v.plugins && typeof PluginRegistry !== 'undefined') PluginRegistry.setWorkspaceState(v.plugins);
     if (typeof state?.ui?.sidebarHidden === 'boolean') _setSidebarHidden(state.ui.sidebarHidden);
   }

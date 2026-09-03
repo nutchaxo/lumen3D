@@ -319,6 +319,42 @@ function setFormEnabled(on) {
   renderGallery();   // the drop zone follows the same gate
 }
 
+function dimsLabel(m) {
+  const d = m.dimensions || {};
+  if (!d.x) return '—';
+  if (m.type === 'wholemount') {
+    const px = m.pixelSizeUm?.x;
+    return `${d.x} × ${d.y} px · ${px ? `${px.toFixed(3)} µm/px` : t('wholemount.uncalibrated', 'non calibré')}`;
+  }
+  return `${d.x} × ${d.y} × ${d.z} px · ${t('admin.dimsChannels', `${d.c} canal(ux)`, { count: d.c })}`;
+}
+
+// Calibration, exposure and 3D orientation only mean something for a volume.
+function toggleVolumeSections(on) {
+  [DOM.fVoxX, DOM.fExposure, DOM.btnDefineOrientation].forEach((el) => {
+    const section = el?.closest('.config-section');
+    if (section) section.style.display = on ? '' : 'none';
+  });
+}
+
+function dimsLabel(m) {
+  const d = m.dimensions || {};
+  if (!d.x) return '—';
+  if (m.type === 'wholemount') {
+    const px = m.pixelSizeUm?.x;
+    return `${d.x} × ${d.y} px · ${px ? `${px.toFixed(3)} µm/px` : t('wholemount.uncalibrated', 'non calibré')}`;
+  }
+  return `${d.x} × ${d.y} × ${d.z} px · ${t('admin.dimsChannels', `${d.c} canal(ux)`, { count: d.c })}`;
+}
+
+// Calibration, exposure and 3D orientation only mean something for a volume.
+function toggleVolumeSections(on) {
+  [DOM.fVoxX, DOM.fExposure, DOM.btnDefineOrientation].forEach((el) => {
+    const section = el?.closest('.config-section');
+    if (section) section.style.display = on ? '' : 'none';
+  });
+}
+
 // ── Validation (Rule 1.4) ──────────────────────────────────────
 function validateDatasetMeta(meta) {
   if (!meta || typeof meta !== 'object') return t('admin.reasonEmpty', 'réponse vide');
@@ -359,7 +395,9 @@ async function selectDataset(id) {
   const invalid = validateDatasetMeta(meta);
   if (invalid) { toast(t('admin.malformedRejected', `Dataset malformé, montage refusé (${invalid}).`, { reason: invalid }), 'error'); return; }
 
-  meta.channels = normaliseChannels(meta.channels, meta.dimensions?.c || 0);
+  // A photograph carries no channels: fabricating three from dimensions.c would
+  // be written back on save and turn it into something the page cannot read.
+  meta.channels = meta.type === 'wholemount' ? [] : normaliseChannels(meta.channels, meta.dimensions?.c || 0);
   // Preserve the list-level hidden flag if the metadata doesn't carry it yet.
   if (meta.hidden === undefined) meta.hidden = !!_current.hidden;
   _draft = deepClone(meta);
@@ -408,7 +446,8 @@ function loadPreview(ds) {
   DOM.previewFrameWrap.style.display = 'none';
   DOM.previewLoading.style.display = 'flex';
   const viewerId = ds.id.includes('/') ? ds.id.split('/').pop() : ds.id;
-  DOM.previewFrame.src = `viewer.html?id=${encodeURIComponent(viewerId)}&path=${encodeURIComponent(ds.id)}&mode=admin&hideHeader=true`;
+  const page = ds.type === 'wholemount' ? 'wholemount.html' : 'viewer.html';
+  DOM.previewFrame.src = `${page}?id=${encodeURIComponent(viewerId)}&path=${encodeURIComponent(ds.id)}&mode=admin&hideHeader=true`;
 }
 
 function schedulePreviewUpdate() {
@@ -439,7 +478,8 @@ function populateForm() {
   DOM.fDescription.value = m.description || '';
   DOM.fFolder.textContent = ds.folderName || ds.id;
   const d = m.dimensions || {};
-  DOM.fDims.textContent = d.x ? `${d.x} × ${d.y} × ${d.z} px · ${t('admin.dimsChannels', `${d.c} canal(ux)`, { count: d.c })}` : '—';
+  DOM.fDims.textContent = dimsLabel(m);
+  toggleVolumeSections(m.type !== 'wholemount');
   const vs = m.voxel_size || {};
   DOM.fVoxX.value = vs.x ?? '';
   DOM.fVoxY.value = vs.y ?? '';
@@ -865,12 +905,14 @@ async function saveDataset() {
   _draft.stage = (DOM.fStage.value || '').trim();
   _draft.embryo = (DOM.fEmbryo.value || '').trim() || null;
   _draft.description = (DOM.fDescription.value || '').trim() || null;
-  _draft.voxel_size = {
-    x: parseFloat(DOM.fVoxX.value) || _draft.voxel_size?.x || 1,
-    y: parseFloat(DOM.fVoxY.value) || _draft.voxel_size?.y || 1,
-    z: parseFloat(DOM.fVoxZ.value) || _draft.voxel_size?.z || 1,
-  };
-  if (DOM.fExposure) _draft.exposure = parseFloat(DOM.fExposure.value) / 100;
+  if (_draft.type !== 'wholemount') {   // a photograph is calibrated by pixelSizeUm, not voxels
+    _draft.voxel_size = {
+      x: parseFloat(DOM.fVoxX.value) || _draft.voxel_size?.x || 1,
+      y: parseFloat(DOM.fVoxY.value) || _draft.voxel_size?.y || 1,
+      z: parseFloat(DOM.fVoxZ.value) || _draft.voxel_size?.z || 1,
+    };
+    if (DOM.fExposure) _draft.exposure = parseFloat(DOM.fExposure.value) / 100;
+  }
   const sn = parseStageNumeric(_draft.stage);
   if (sn !== null) _draft.stageNumeric = sn;
 
@@ -1036,7 +1078,7 @@ function wire() {
     if (_current) {
       DOM.previewLabelName.textContent = _draft?.name || _current.id;
       const d = _draft?.dimensions || {};
-      DOM.previewLabelDim.textContent = d.x ? `${d.x}×${d.y}×${d.z} · ${d.c}ch` : '';
+      DOM.previewLabelDim.textContent = !d.x ? '' : (d.z > 1 ? `${d.x}×${d.y}×${d.z} · ${d.c}ch` : `${d.x}×${d.y} px`);
       DOM.previewLabelBar.style.display = 'flex';
     }
     schedulePreviewUpdate();

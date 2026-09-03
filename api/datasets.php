@@ -38,6 +38,7 @@ if (!LUMEN_DATASETS_AS_LIB) {
     // admin_session_start() (not a bare session_start) so the hardened cookie
     // params — HttpOnly, SameSite=Lax, Secure under HTTPS — apply here too.
     admin_session_start();
+    admin_update_finish_pending();   // no-op unless a prior update parked busy files
 }
 
 function require_auth(): void {
@@ -50,7 +51,9 @@ function require_auth(): void {
 // advertised PHP >= 7.4 floor. It exits anyway.
 function json_out(array $data, int $code = 200) {
     http_response_code($code);
-    echo json_encode($data, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT);
+    [$status, $json] = admin_json_body($data, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT);
+    if ($status) http_response_code($status);
+    echo $json;
     exit;
 }
 
@@ -295,7 +298,7 @@ function list_datasets(): array {
     }
     // Sort by stageNumeric then name
     usort($result, fn($a, $b) =>
-        ($a['stageNumeric'] <=> $b['stageNumeric']) ?: strcmp($a['name'], $b['name'])
+        ((float)$a['stageNumeric'] <=> (float)$b['stageNumeric']) ?: strcmp((string)$a['name'], (string)$b['name'])
     );
     return $result;
 }
@@ -546,7 +549,13 @@ switch ($action) {
         // Staged imports are listed alongside published datasets so the editor is
         // ONE list: an import becomes editable the moment its coarse LOD lands,
         // long before it is published.
-        json_out(['datasets' => array_merge(list_datasets(), lumen_staged_rows())]);
+        try {
+            $staged = lumen_staged_rows();
+        } catch (Throwable $e) {
+            error_log('datasets.php list: staged rows unavailable: ' . $e->getMessage());
+            $staged = [];
+        }
+        json_out(['datasets' => array_merge(list_datasets(), $staged)]);
 
     case 'get':
         if (!$id) json_out(['error' => 'Missing id'], 400);

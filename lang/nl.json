@@ -1792,6 +1792,12 @@
     "loadError": "De foto kon niet worden geladen.",
     "showSidebar": "Paneel tonen",
     "hideSidebar": "Paneel verbergen",
-    "errorTitle": "Fout"
+    "errorTitle": "Fout",
+    "zoomInfo": "Weergegeven resolutie: zoom t.o.v. native en de grootte van één schermpixel",
+    "studio": "Openen in Studio (annoteren)",
+    "studioTitle": "Studio",
+    "studioSubtitle": "De foto annoteren",
+    "labels": "Labels",
+    "textSize": "Labelgrootte"
   }
 }

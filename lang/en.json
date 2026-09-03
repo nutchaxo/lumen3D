@@ -1804,6 +1804,12 @@
     "loadError": "The photograph could not be loaded.",
     "showSidebar": "Show the panel",
     "hideSidebar": "Hide the panel",
-    "errorTitle": "Error"
+    "errorTitle": "Error",
+    "zoomInfo": "Displayed resolution: zoom relative to native, and the size of one screen pixel",
+    "studio": "Open in Studio (annotate)",
+    "studioTitle": "Studio",
+    "studioSubtitle": "Annotate the photograph",
+    "labels": "Labels",
+    "textSize": "Label size"
   }
 }

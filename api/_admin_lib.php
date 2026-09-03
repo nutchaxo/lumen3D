@@ -203,8 +203,22 @@ function admin_json_out(array $data, int $code = 200) {
     http_response_code($code);
     header('Content-Type: application/json; charset=utf-8');
     header('Cache-Control: no-store, no-cache');
-    echo json_encode($data, JSON_UNESCAPED_UNICODE);
+    [$status, $json] = admin_json_body($data, JSON_UNESCAPED_UNICODE);
+    if ($status) http_response_code($status);
+    echo $json;
     exit;
+}
+
+/** JSON for an API answer that is never an empty body: [status override or 0, json]. */
+function admin_json_body(array $data, int $flags): array {
+    $json = json_encode($data, $flags);
+    if ($json === false) {
+        // One non-UTF-8 byte (a folder name from an old SFTP client) must not turn
+        // the whole answer into an empty 200 the client cannot tell from a crash.
+        $json = json_encode($data, $flags | JSON_INVALID_UTF8_SUBSTITUTE | JSON_PARTIAL_OUTPUT_ON_ERROR);
+    }
+    if ($json !== false) return [0, $json];
+    return [500, (string)json_encode(['error' => 'encode_failed', 'detail' => json_last_error_msg()])];
 }
 
 function admin_read_json(string $path): ?array {

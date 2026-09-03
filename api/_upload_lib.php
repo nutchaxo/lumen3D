@@ -869,16 +869,17 @@ function lumen_up_age(?string $iso): float {
 function lumen_up_state_of($type, $folder, ?array $journal = null): string {
     if ($journal === null) $journal = lumen_up_load_journal($type, $folder);
     if ($journal === null) return LUMEN_UP_STATE_UPLOADING;
-    $files = $journal['files'] ?? [];
+    $files = is_array($journal['files'] ?? null) ? $journal['files'] : [];
     if (!$files) return LUMEN_UP_STATE_UPLOADING;
 
     $pending = false;
-    foreach ($files as $e) if (empty($e['done'])) { $pending = true; break; }
+    foreach ($files as $e) if (!is_array($e) || empty($e['done'])) { $pending = true; break; }
     if (!$pending) return LUMEN_UP_STATE_STAGED;
 
     // Openable once metadata plus a mount (brick manifest, or a wholemount's preview) landed.
     $coreOk = true; $hasMount = false;
     foreach ($files as $e) {
+        if (!is_array($e)) { $coreOk = false; continue; }
         if ((int)($e['tier'] ?? 9) <= LUMEN_UP_TIER_PREVIEW && empty($e['done'])) $coreOk = false;
         if (in_array($e['kind'] ?? '', ['manifest', 'preview'], true) && !empty($e['done'])) $hasMount = true;
     }
@@ -896,9 +897,10 @@ function lumen_up_describe($type, $folder): ?array {
     [$type, $folder] = $safe;
     $journal = lumen_up_load_journal($type, $folder);
     if ($journal === null) return null;
-    $files = $journal['files'] ?? [];
+    $files = is_array($journal['files'] ?? null) ? $journal['files'] : [];
     $total = 0; $got = 0; $done = 0;
     foreach ($files as $e) {
+        if (!is_array($e)) continue;
         $total += (int)($e['size'] ?? 0);
         $got   += !empty($e['done']) ? (int)($e['size'] ?? 0) : lumen_up_received($e);
         if (!empty($e['done'])) $done++;
@@ -936,7 +938,12 @@ function lumen_up_list(): array {
         $stem = substr($f, 0, -5);
         $sep = strpos($stem, '__');
         if ($sep === false) continue;
-        $info = lumen_up_describe(substr($stem, 0, $sep), substr($stem, $sep + 2));
+        try {
+            $info = lumen_up_describe(substr($stem, 0, $sep), substr($stem, $sep + 2));
+        } catch (Throwable $e) {
+            error_log("upload journal $f unreadable: " . $e->getMessage());
+            continue;
+        }
         if ($info) $out[] = $info;
     }
     return $out;

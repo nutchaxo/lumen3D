@@ -68,7 +68,15 @@ export async function apiFetch(url, options = {}) {
       return null;
     }
     const text = await res.text();
-    try { return JSON.parse(text); } catch { return null; }
+    if (!res.ok) console.warn('API: HTTP', res.status, url);
+    try {
+      return JSON.parse(text);
+    } catch {
+      // A non-JSON body (PHP warning, HTML error page, empty 200) used to vanish
+      // here, leaving only "impossible de charger" and nothing to diagnose.
+      console.error('API: non-JSON response', res.status, url, text.slice(0, 300));
+      return null;
+    }
   } catch (err) {
     console.error('API error:', url, err);
     return null;

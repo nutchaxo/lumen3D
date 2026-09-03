@@ -74,7 +74,9 @@ volume de 3789 × 3789 × 178. Un poste à 16 Go échouera sur de gros volumes r
 ### 1b. Photographies whole-mount (TIFF ImageJ / Leica)
 
 Une photographie couleur d'embryon entier (stéréomicroscope, export TIFF depuis
-un `.lif`) devient un dataset `wholemount` — un par fichier :
+un `.lif`) devient un dataset `wholemount` — un par fichier. Déposez les TIFF
+dans un dossier et choisissez `[3]` (le lanceur demande la coloration, la lignée
+et s'il faut joindre l'original). En ligne de commande :
 
 ```
 pipeline\python.exe pipeline\wholemount_importer.py --input <dossier TIFF> --output output --staining X-gal --with-downloads
@@ -116,7 +118,7 @@ Résultats dans **`tracking\OUTPUT\<date-heure>\<échantillon>\`** :
 | Fichier | Contenu |
 |---|---|
 | `<échantillon>_analysis.xlsx` | classeur d'analyse : trajectoires brutes et stabilisées, métriques, distances aux voisins, directionnalité, statistiques de population |
-| `<échantillon>.imaris_track` | conteneur consommé par la plateforme (choix `[3]`) |
+| `<échantillon>.imaris_track` | conteneur consommé par la plateforme (choix `[4]`) |
 | `<échantillon>.glb` | surfaces de population pré-calculées |
 
 L'analyse **stabilise** les trajectoires : elle retire le mouvement d'ensemble du
@@ -125,7 +127,7 @@ cellules. Les coordonnées brutes sont conservées à côté des coordonnées st
 
 ### 3. Rattacher un tracking à un dataset
 
-Choisissez `[3]`, puis indiquez le `.imaris_track` et le dossier du dataset déjà
+Choisissez `[4]`, puis indiquez le `.imaris_track` et le dossier du dataset déjà
 traité (celui qui contient `metadata.json`).
 
 Le tracking est converti au format du visualiseur et la transformation de
@@ -150,10 +152,10 @@ Le pack contient un jeu de démonstration cohérent, utilisable tel quel :
 
 Les deux décrivent **le même embryon simulé** : les noyaux du volume se trouvent
 exactement là où le tableau de tracking place les cellules. Enchaîner `[1]`, `[2]`
-puis `[3]` sur ces fichiers exécute donc la chaîne complète et produit un dataset
+puis `[4]` sur ces fichiers exécute donc la chaîne complète et produit un dataset
 avec ses trajectoires attachées, sans aucune donnée réelle.
 
-Le mouvement simulé comporte une composante rigide d'ensemble : à l'étape `[3]`,
+Le mouvement simulé comporte une composante rigide d'ensemble : à l'étape `[4]`,
 le résidu de recalage doit ressortir à ~1e-14 µm, c'est-à-dire exact.
 
 ---

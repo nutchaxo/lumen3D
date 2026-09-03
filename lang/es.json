@@ -1804,6 +1804,12 @@
     "loadError": "No se pudo cargar la fotografía.",
     "showSidebar": "Mostrar el panel",
     "hideSidebar": "Ocultar el panel",
-    "errorTitle": "Error"
+    "errorTitle": "Error",
+    "zoomInfo": "Resolución mostrada: zoom respecto al nativo y tamaño de un píxel de pantalla",
+    "studio": "Abrir en el Studio (anotar)",
+    "studioTitle": "Studio",
+    "studioSubtitle": "Anotar la fotografía",
+    "labels": "Etiquetas",
+    "textSize": "Tamaño de las etiquetas"
   }
 }

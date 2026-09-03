@@ -103,7 +103,7 @@ echo.
 echo !TITLE!================================================================================!R!
 echo !TITLE!   @@@BRAND@@@  ^|  Pipelines de traitement  ^|  pack v!BUNDLE_VERSION! (!FLAVOR!)!R!
 echo !TITLE!================================================================================!R!
-echo !DIM!   Preprocessing de volumes Imaris (.ims)  +  Analyse de tracking (Excel)!R!
+echo !DIM!   Volumes Imaris (.ims)  +  Photos whole-mount (.tif)  +  Tracking (Excel)!R!
 exit /b 0
 
 :step
@@ -379,8 +379,9 @@ rem retardee, la cible devient "output\" et la ligne meurt en "syntaxe du nom de
 rem fichier incorrecte" au lieu de s'afficher.
 echo      !ACC![1]!R! Preprocessing de volumes Imaris  !DIM!(.ims  -^>  output\, tracking inclus)!R!
 echo      !ACC![2]!R! Analyse de tracking Imaris       !DIM!(Excel -^>  tracking\OUTPUT\)!R!
-echo      !ACC![3]!R! Attacher un tracking a un dataset deja traite
-echo      !ACC![4]!R! Verifier l'environnement seulement
+echo      !ACC![3]!R! Import de photographies whole-mount !DIM!(.tif  -^>  output\wholemount\)!R!
+echo      !ACC![4]!R! Attacher un tracking a un dataset deja traite
+echo      !ACC![5]!R! Verifier l'environnement seulement
 echo      !ACC![0]!R! Quitter
 echo.
 set "_choice="
@@ -389,8 +390,9 @@ if "!_choice!"=="" set "_choice=1"
 
 if "!_choice!"=="1" goto :run_preprocess
 if "!_choice!"=="2" goto :run_tracking
-if "!_choice!"=="3" goto :run_attach
-if "!_choice!"=="4" (
+if "!_choice!"=="3" goto :run_wholemount
+if "!_choice!"=="4" goto :run_attach
+if "!_choice!"=="5" (
     echo.
     call :ok "Environnement pret. Python : !DIM!!PY!!R!"
     exit /b 0
@@ -443,6 +445,108 @@ call :report %errorlevel% "!_out!"
 exit /b 0
 
 
+rem ---- [3] Import de photographies whole-mount --------------------------------
+rem  Une photographie couleur (export TIFF ImageJ depuis un .lif Leica) devient
+rem  un dataset wholemount, un par fichier, sous output\wholemount\.
+:run_wholemount
+echo.
+set "_in=!INPUT!"
+set "_out=!OUTPUT!"
+set "_ans="
+set /p "_ans=   Dossier des fichiers .tif [!_in!] : "
+if not "!_ans!"=="" set "_in=!_ans:"=!"
+set "_ans="
+set /p "_ans=   Dossier de sortie [!_out!] : "
+if not "!_ans!"=="" set "_out=!_ans:"=!"
+
+if not exist "!_in!" (
+    call :errmsg "Dossier introuvable : !_in!"
+    exit /b 1
+)
+set "_cnt=0"
+for %%F in ("!_in!\*.tif" "!_in!\*.tiff") do set /a "_cnt+=1"
+if "!_cnt!"=="0" (
+    call :warnmsg "Aucun fichier .tif dans !_in!"
+    exit /b 0
+)
+call :info "!_cnt! fichier(s) .tif detecte(s)."
+
+set "_stain=X-gal"
+set "_ans="
+set /p "_ans=   Coloration [!_stain!] : "
+if not "!_ans!"=="" set "_stain=!_ans!"
+set "_line="
+set /p "_line=   Lignee (Entree = lue dans le nom du .lif) : "
+set "_extra="
+set "_ans="
+set /p "_ans=   Copier aussi le TIFF d'origine dans download\ ? [o/N] : "
+if /i "!_ans!"=="o" set "_extra=--with-downloads"
+set "_ans="
+set /p "_ans=   Reimporter les datasets deja presents (la curation est conservee) ? [o/N] : "
+if /i "!_ans!"=="o" set "_extra=!_extra! --force"
+if not "!_line!"=="" set _extra=!_extra! --line "!_line!"
+
+echo.
+call :info "Lancement de l'import..."
+echo.
+set "PYTHONUNBUFFERED=1"
+set "PYTHONIOENCODING=utf-8"
+!PY! "!PIPELINE!\wholemount_importer.py" --input "!_in!" --output "!_out!" --staining "!_stain!" !_extra!
+call :report %errorlevel% "!_out!\wholemount"
+exit /b 0
+
+
+rem ---- [3] Import de photographies whole-mount --------------------------------
+rem  Une photographie couleur (export TIFF ImageJ depuis un .lif Leica) devient
+rem  un dataset wholemount, un par fichier, sous output\wholemount\.
+:run_wholemount
+echo.
+set "_in=!INPUT!"
+set "_out=!OUTPUT!"
+set "_ans="
+set /p "_ans=   Dossier des fichiers .tif [!_in!] : "
+if not "!_ans!"=="" set "_in=!_ans:"=!"
+set "_ans="
+set /p "_ans=   Dossier de sortie [!_out!] : "
+if not "!_ans!"=="" set "_out=!_ans:"=!"
+
+if not exist "!_in!" (
+    call :errmsg "Dossier introuvable : !_in!"
+    exit /b 1
+)
+set "_cnt=0"
+for %%F in ("!_in!\*.tif" "!_in!\*.tiff") do set /a "_cnt+=1"
+if "!_cnt!"=="0" (
+    call :warnmsg "Aucun fichier .tif dans !_in!"
+    exit /b 0
+)
+call :info "!_cnt! fichier(s) .tif detecte(s)."
+
+set "_stain=X-gal"
+set "_ans="
+set /p "_ans=   Coloration [!_stain!] : "
+if not "!_ans!"=="" set "_stain=!_ans!"
+set "_line="
+set /p "_line=   Lignee (Entree = lue dans le nom du .lif) : "
+set "_extra="
+set "_ans="
+set /p "_ans=   Copier aussi le TIFF d'origine dans download\ ? [o/N] : "
+if /i "!_ans!"=="o" set "_extra=--with-downloads"
+set "_ans="
+set /p "_ans=   Reimporter les datasets deja presents (la curation est conservee) ? [o/N] : "
+if /i "!_ans!"=="o" set "_extra=!_extra! --force"
+if not "!_line!"=="" set _extra=!_extra! --line "!_line!"
+
+echo.
+call :info "Lancement de l'import..."
+echo.
+set "PYTHONUNBUFFERED=1"
+set "PYTHONIOENCODING=utf-8"
+!PY! "!PIPELINE!\wholemount_importer.py" --input "!_in!" --output "!_out!" --staining "!_stain!" !_extra!
+call :report %errorlevel% "!_out!\wholemount"
+exit /b 0
+
+
 rem ---- [2] Analyse de tracking ----------------------------------------------
 rem  Analysis.py n'accepte aucun argument : il lit DATA\<echantillon>\*.xlsx a
 rem  cote de lui et ecrit dans OUTPUT\. Le repertoire courant doit donc etre
@@ -469,7 +573,7 @@ call :report !_rc! "!TRACKING!\OUTPUT"
 exit /b 0
 
 
-rem ---- [3] Rattachement d'un tracking a un dataset ---------------------------
+rem ---- [4] Rattachement d'un tracking a un dataset ---------------------------
 rem  Utile pour un dataset deja traite, ou pour imposer une analyse precise :
 rem  l'option [1] fait ce rattachement toute seule pour les nouveaux volumes.
 :run_attach

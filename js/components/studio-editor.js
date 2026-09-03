@@ -204,9 +204,8 @@ const StudioEditor = (() => {
   }
 
   function _createDocument(sliceResult) {
-    const dataset = typeof ViewerApp !== 'undefined' && ViewerApp.getDatasetMeta
-      ? ViewerApp.getDatasetMeta()
-      : null;
+    const dataset = sliceResult.dataset
+      || (typeof ViewerApp !== 'undefined' && ViewerApp.getDatasetMeta ? ViewerApp.getDatasetMeta() : null);
     const channelState = sliceResult.channelState
       || (typeof ViewerApp !== 'undefined' && ViewerApp.getChannelState ? ViewerApp.getChannelState() : []);
     const pixelSizeUm = sliceResult.pixelSizeUm || { x: 1, y: 1 };

@@ -42,6 +42,21 @@ body[data-active-tool="measure"] .wm-canvas { cursor: crosshair; }
 
 .wm-load-state.is-error { background: #C62828; }
 
+/* Displayed resolution: zoom as % of native (1 image px = 1 device px) and the
+   physical size of one screen pixel at that zoom. */
+.wm-zoom {
+  position: absolute;
+  right: 12px;
+  top: 12px;
+  padding: 4px 10px;
+  border-radius: var(--radius-full);
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  color: #fff;
+  background: rgba(0, 0, 0, 0.55);
+  pointer-events: none;
+}
+
 /* ── Sidebar ───────────────────────────────────────────────────────────── */
 .wm-info {
   display: grid;
@@ -64,6 +79,28 @@ body[data-active-tool="measure"] .wm-canvas { cursor: crosshair; }
   color: var(--text-muted);
   margin-bottom: 8px;
 }
+
+.wm-measure-controls {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 8px;
+  font-size: 12px;
+}
+
+.wm-measure-controls input[type="range"] { flex: 1; min-width: 0; }
+
+.wm-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-primary);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+/* Admin preview iframe: the panel supplies its own chrome. */
+body.wm-headless .viewer-header { display: none; }
 
 /* ── Contact-sheet browser ─────────────────────────────────────────────── */
 .wm-browser {

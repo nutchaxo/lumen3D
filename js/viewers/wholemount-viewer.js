@@ -37,6 +37,9 @@ const WholemountViewer = (() => {
   let _fitScale = 1;
   let _isolate = false;
   let _measurements = [];
+  let _labelRects = [];             // canvas-space hit boxes of the labels drawn last frame
+  let _textSize = 14;               // label font size, CSS px
+  let _showLabels = true;
 
   let _pointers = new Map();
   let _gesture = null;
@@ -45,6 +48,7 @@ const WholemountViewer = (() => {
   let _onMeasurePoint = null;
   let _onLoadState = null;
   let _onViewChange = null;
+  let _onLabelMove = null;
 
   // ── Lifecycle ──────────────────────────────────────────────────────────────
   function init(canvasEl) {
@@ -212,7 +216,8 @@ const WholemountViewer = (() => {
     _canvas.setPointerCapture(e.pointerId);
     _pointers.set(e.pointerId, _local(e));
     const p = _local(e);
-    _gesture = { startX: p.x, startY: p.y, lastX: p.x, lastY: p.y, moved: false, pinch: null };
+    const label = _showLabels && _pointers.size === 1 ? _labelAt(p) : null;
+    _gesture = { startX: p.x, startY: p.y, lastX: p.x, lastY: p.y, moved: false, pinch: null, label };
     if (_pointers.size === 2) _gesture.pinch = _pinchState();
   }
 
@@ -223,13 +228,16 @@ const WholemountViewer = (() => {
     if (_pointers.size >= 2) { _applyPinch(); return; }
     if (!_gesture.moved && Math.hypot(p.x - _gesture.startX, p.y - _gesture.startY) < DRAG_THRESHOLD_PX) return;
     _gesture.moved = true;
-    _pan(p.x - _gesture.lastX, p.y - _gesture.lastY);
+    const dx = p.x - _gesture.lastX, dy = p.y - _gesture.lastY;
+    if (_gesture.label) _moveLabel(_gesture.label, dx / _view.scale, dy / _view.scale);
+    else _pan(dx, dy);
     _gesture.lastX = p.x;
     _gesture.lastY = p.y;
   }
 
   function _onPointerUp(e) {
     const wasTap = _gesture && !_gesture.moved && !_gesture.pinch && _pointers.size === 1;
+    if (_gesture?.label && _gesture.moved) _commitLabel(_gesture.label);
     _pointers.delete(e.pointerId);
     if (_pointers.size === 0) {
       if (wasTap && e.type === 'pointerup') _pick(_local(e));
@@ -278,6 +286,47 @@ const WholemountViewer = (() => {
   function setMeasurements(list) {
     _measurements = Array.isArray(list) ? list : [];
     _scheduleDraw();
+  }
+
+  function setMeasurementTextSize(size) {
+    if (Number.isFinite(size) && size > 0) { _textSize = size; _scheduleDraw(); }
+  }
+
+  function setShowMeasurementLabels(on) {
+    _showLabels = Boolean(on);
+    _scheduleDraw();
+  }
+
+  function getMeasurementTextSize() { return _textSize; }
+  function getPixelSizeUm() { return _pixelSizeUm; }
+
+  /**
+   * Label placement. `labelOffset` is {x, y} in IMAGE pixels from the default
+   * anchor (the segment's midpoint), so a placed label stays glued to the
+   * same spot of the photograph at every zoom. The drop is reported through
+   * onLabelMove so the page can persist it with the measurement.
+   */
+  function onLabelMove(cb) { _onLabelMove = cb; }
+
+  function _labelAt(p) {
+    for (let i = _labelRects.length - 1; i >= 0; i--) {
+      const r = _labelRects[i];
+      if (p.x >= r.x && p.x <= r.x + r.w && p.y >= r.y && p.y <= r.y + r.h) return r.id;
+    }
+    return null;
+  }
+
+  function _moveLabel(id, dx, dy) {
+    const m = _measurements.find(item => item.id === id);
+    if (!m) return;
+    const o = m.labelOffset || { x: 0, y: 0 };
+    m.labelOffset = { x: (o.x || 0) + dx, y: (o.y || 0) + dy };
+    _scheduleDraw();
+  }
+
+  function _commitLabel(id) {
+    const m = _measurements.find(item => item.id === id);
+    if (m && m.labelOffset) _onLabelMove?.(id, { ...m.labelOffset });
   }
 
   function getPhysicalCalibration() {
@@ -407,6 +456,7 @@ const WholemountViewer = (() => {
   }
 
   function _drawMeasurements() {
+    _labelRects = [];
     for (const m of _measurements) {
       if (m.visible === false || !Array.isArray(m.points) || m.points.length < 2) continue;
       const a = _toCanvas(m.points[0].normalized.x * _imgW, m.points[0].normalized.y * _imgH);
@@ -423,7 +473,12 @@ const WholemountViewer = (() => {
         _ctx.arc(p.x, p.y, 4, 0, Math.PI * 2);
         _ctx.fill();
       }
-      _label(_formatUm(m.distance), (a.x + b.x) / 2, (a.y + b.y) / 2 - 10, m.color || '#00FFFF');
+      if (!_showLabels) continue;
+      const o = m.labelOffset || { x: 0, y: 0 };
+      const cx = (a.x + b.x) / 2 + (o.x || 0) * _view.scale;
+      const cy = (a.y + b.y) / 2 - _textSize + (o.y || 0) * _view.scale;
+      const text = m.label ? `${m.label}: ${_formatUm(m.distance)}` : _formatUm(m.distance);
+      _labelRects.push({ id: m.id, ..._label(text, cx, cy, m.color || '#00FFFF', _textSize) });
     }
   }
 
@@ -449,15 +504,18 @@ const WholemountViewer = (() => {
     return (m >= 5 ? 5 : m >= 2 ? 2 : 1) * exp;
   }
 
-  function _label(text, cx, cy, color) {
-    _ctx.font = '600 12px Inter, system-ui, sans-serif';
+  /** Draws a boxed label centred on (cx, cy); returns its canvas-space box. */
+  function _label(text, cx, cy, color, size = 12) {
+    _ctx.font = `600 ${size}px Inter, system-ui, sans-serif`;
     _ctx.textAlign = 'center';
     _ctx.textBaseline = 'middle';
-    const w = _ctx.measureText(text).width + 10;
+    const w = _ctx.measureText(text).width + size * 0.8;
+    const h = size * 1.5;
     _ctx.fillStyle = 'rgba(0,0,0,0.65)';
-    _ctx.fillRect(cx - w / 2, cy - 9, w, 18);
+    _ctx.fillRect(cx - w / 2, cy - h / 2, w, h);
     _ctx.fillStyle = color;
     _ctx.fillText(text, cx, cy);
+    return { x: cx - w / 2, y: cy - h / 2, w, h };
   }
 
   function _formatUm(v) {
@@ -474,13 +532,25 @@ const WholemountViewer = (() => {
 
   function getCanvas() { return _canvas; }
 
+  /** The current rendering (plain or isolated) at native resolution — the Studio's input. */
+  function getNativeCanvas() {
+    if (!_image) return null;
+    const src = _isolate ? _isolation() : _image;
+    const out = document.createElement('canvas');
+    out.width = _imgW;
+    out.height = _imgH;
+    out.getContext('2d').drawImage(src, 0, 0, _imgW, _imgH);
+    return out;
+  }
+
   function _emitState(state) { _onLoadState?.(state); }
 
   return {
     init, dispose, load, prefetch, resize,
     fit, zoomNative, getView, setView, onViewChange,
     onMeasurePoint, onLoadState, setMeasurements, getPhysicalCalibration,
+    setMeasurementTextSize, getMeasurementTextSize, setShowMeasurementLabels, onLabelMove, getPixelSizeUm,
     setIsolateStain, isIsolateStain,
-    toBlob, getCanvas
+    toBlob, getCanvas, getNativeCanvas
   };
 })();

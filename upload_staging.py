@@ -1140,7 +1140,7 @@ def describe(type_dir: str, folder: str) -> dict | None:
     journal = load_journal(type_dir, folder)
     if journal is None:
         return None
-    files = journal.get("files") or {}
+    files = {k: v for k, v in (journal.get("files") or {}).items() if isinstance(v, dict)}
     total = sum(int(e.get("size", 0)) for e in files.values())
     got = sum(int(e.get("size", 0)) if e.get("done") else received_bytes(e) for e in files.values())
     ds_dir = staging_dataset_dir(type_dir, folder)
@@ -1178,7 +1178,11 @@ def list_staged() -> list[dict]:
         if "__" not in stem:
             continue
         type_dir, folder = stem.split("__", 1)
-        info = describe(type_dir, folder)
+        try:
+            info = describe(type_dir, folder)
+        except Exception as exc:  # one corrupt journal must not hide every other dataset
+            print(f"[upload] journal {jp.name} unreadable: {exc}")
+            continue
         if info:
             out.append(info)
     return out

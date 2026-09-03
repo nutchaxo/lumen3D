@@ -1,0 +1,13 @@
+{
+  "title": "Weergave-instellingen",
+  "aria": "Weergave-instellingen",
+  "panel": "Weergave",
+  "brightness": "Helderheid",
+  "contrast": "Contrast",
+  "gamma": "Gamma",
+  "wbRed": "Rood",
+  "wbBlue": "Blauw",
+  "flatten": "Achtergrond egaliseren (vignettering)",
+  "reset": "Herstellen",
+  "hint": "Alleen weergave: metingen en kleuringsisolatie lezen de onbewerkte foto."
+}

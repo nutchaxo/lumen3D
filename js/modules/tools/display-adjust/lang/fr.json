@@ -1,0 +1,13 @@
+{
+  "title": "Réglages d'affichage",
+  "aria": "Réglages d'affichage",
+  "panel": "Affichage",
+  "brightness": "Luminosité",
+  "contrast": "Contraste",
+  "gamma": "Gamma",
+  "wbRed": "Rouge",
+  "wbBlue": "Bleu",
+  "flatten": "Aplatir le fond (vignettage)",
+  "reset": "Réinitialiser",
+  "hint": "Affichage seulement : les mesures et l'isolation du marquage lisent la photographie intacte."
+}

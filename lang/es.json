@@ -956,7 +956,8 @@
     "galleryReadFailed": "«{name}» ilegible.",
     "galleryUploadError": "No se pudo enviar «{name}»: {reason}",
     "reasonNoImage": "falta el bloque de imagen",
-    "reasonBadImage": "bloque de imagen no válido"
+    "reasonBadImage": "bloque de imagen no válido",
+    "secOrientation2d": "Orientación"
   },
   "upl": {
     "title": "Importar datasets",

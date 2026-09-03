@@ -1,0 +1,12 @@
+{
+  "title": "Gesplitste weergave (twee foto's vergelijken)",
+  "aria": "Gesplitste weergave",
+  "panel": "Gesplitste weergave",
+  "paneTitle": "Tweede foto",
+  "compareWith": "Vergelijken met",
+  "link": "Zoom en verschuiving koppelen op fysieke schaal",
+  "swap": "Wisselen",
+  "fitBoth": "Passend",
+  "close": "Sluiten",
+  "hint": "Beide kanten tonen hetzelfde veld bij dezelfde vergroting, ongeacht de opnamezoom."
+}

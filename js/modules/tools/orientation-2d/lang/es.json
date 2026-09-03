@@ -1,0 +1,13 @@
+{
+  "title": "Orientación (rotar / espejo)",
+  "aria": "Orientación",
+  "panel": "Orientación",
+  "rotation": "Rotación",
+  "rotateLeft": "Girar 90° a la izquierda",
+  "rotateRight": "Girar 90° a la derecha",
+  "mirror": "Espejo",
+  "reset": "Restablecer",
+  "hint": "Gire la fotografía hasta que el extremo anterior apunte hacia arriba. El panel de administración guarda esta pose con el dataset.",
+  "anterior": "A",
+  "posterior": "P"
+}

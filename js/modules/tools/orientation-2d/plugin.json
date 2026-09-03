@@ -1,0 +1,25 @@
+{
+  "id": "orientation-2d",
+  "version": "1.0.0",
+  "platformCompat": ">=1.49.0",
+  "creator": "IRIBHM",
+  "placement": "tools",
+  "dataTypes": [
+    "wholemount"
+  ],
+  "i18nTitle": "title",
+  "i18nAria": "aria",
+  "i18nLanguages": [
+    "en",
+    "fr",
+    "es",
+    "nl"
+  ],
+  "name": "Orientation 2D",
+  "group": "visuals",
+  "subtype": "toggle",
+  "icon": "compass",
+  "order": 26,
+  "buttonId": "btn-orientation-2d",
+  "description": "Rotate and mirror a wholemount photograph so the anterior points up; the pose is saved with the dataset from the admin panel and remembered in the workspace."
+}

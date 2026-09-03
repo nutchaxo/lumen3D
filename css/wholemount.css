@@ -102,6 +102,59 @@ body[data-active-tool="measure"] .wm-canvas { cursor: crosshair; }
 /* Admin preview iframe: the panel supplies its own chrome. */
 body.wm-headless .viewer-header { display: none; }
 
+/* ── Plugin panels (sidebar sections added through ui.addSidebarSection) ─── */
+.wm-plugin-body { display: flex; flex-direction: column; gap: 8px; font-size: 12px; }
+.wm-plugin-row { display: flex; align-items: center; gap: 8px; }
+.wm-plugin-row > label { flex: 0 0 76px; color: var(--text-muted); font-size: 11px; }
+.wm-plugin-row > input[type="range"] { flex: 1; min-width: 0; }
+.wm-plugin-row > .wm-plugin-value { flex: 0 0 48px; text-align: right; font-family: 'JetBrains Mono', monospace; font-size: 11px; }
+.wm-plugin-row > select { flex: 1; min-width: 0; }
+.wm-plugin-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.wm-plugin-hint { font-size: 11px; color: var(--text-muted); line-height: 1.4; }
+
+/* ── Split view: a second wholemount page beside the stage ─────────────── */
+.wm-split-pane {
+  flex: 1;
+  min-width: 0;
+  position: relative;
+  border-left: 2px solid var(--border-color);
+  background: #000;
+}
+.wm-split-pane iframe { display: block; width: 100%; height: 100%; border: 0; }
+.wm-split-pane .wm-split-tag {
+  position: absolute; left: 12px; top: 12px; padding: 3px 8px; font-size: 11px; color: #fff;
+  background: rgba(0, 0, 0, 0.55); border-radius: var(--radius-full); pointer-events: none;
+}
+
+/* ── Modal (figure builder) ────────────────────────────────────────────── */
+.wm-modal {
+  position: fixed; inset: 0; z-index: var(--z-viewer-modal);
+  display: flex; align-items: center; justify-content: center;
+  background: rgba(0, 0, 0, 0.6);
+}
+.wm-modal-card {
+  width: min(1100px, 94vw); height: min(760px, 92vh);
+  display: flex; flex-direction: column;
+  background: var(--bg-surface); color: var(--text-primary);
+  border: 1px solid var(--border-color); border-radius: var(--radius-lg);
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+}
+.wm-modal-head { display: flex; align-items: center; gap: 12px; padding: 12px 16px; border-bottom: 1px solid var(--border-color); }
+.wm-modal-head h2 { flex: 1; margin: 0; font-size: 15px; }
+.wm-modal-body { flex: 1; min-height: 0; display: grid; grid-template-columns: 280px 1fr; }
+.wm-modal-list { overflow: auto; border-right: 1px solid var(--border-color); padding: 8px; display: flex; flex-direction: column; gap: 4px; }
+.wm-pick { display: flex; align-items: center; gap: 8px; padding: 4px 6px; border-radius: var(--radius-md); cursor: pointer; font-size: 12px; }
+.wm-pick:hover { background: var(--bg-hover, rgba(255, 255, 255, 0.05)); }
+.wm-pick img { width: 48px; height: 36px; object-fit: cover; border-radius: 4px; background: #000; }
+.wm-pick .wm-pick-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wm-modal-main { display: flex; flex-direction: column; min-width: 0; }
+.wm-modal-options { display: flex; flex-wrap: wrap; gap: 12px; padding: 10px 14px; border-bottom: 1px solid var(--border-color); font-size: 12px; }
+.wm-modal-options label { display: inline-flex; align-items: center; gap: 6px; color: var(--text-muted); }
+.wm-modal-preview { flex: 1; min-height: 0; display: flex; align-items: center; justify-content: center; background: #111; overflow: hidden; }
+.wm-modal-preview canvas { max-width: 100%; max-height: 100%; }
+.wm-modal-foot { display: flex; align-items: center; gap: 8px; padding: 10px 16px; border-top: 1px solid var(--border-color); }
+.wm-modal-foot .wm-modal-status { flex: 1; font-size: 12px; color: var(--text-muted); }
+
 /* ── Contact-sheet browser ─────────────────────────────────────────────── */
 .wm-browser {
   position: absolute;

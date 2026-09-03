@@ -27,6 +27,9 @@ const WholemountApp = (() => {
   let _moduleCtx = null;
   let _stateTimer = 0;
   let _isAdmin = false;
+  let _panelIndex = null;           // set when this page is one pane of a split view
+  let _suppressSync = false;        // a view pushed by the parent must not echo back
+  let _datasetListeners = [];
 
   const $ = (id) => document.getElementById(id);
   const t = (key, params) => I18n.t(key, params);
@@ -47,7 +50,9 @@ const WholemountApp = (() => {
     _collection = _sortedCollection();
     const params = new URLSearchParams(window.location.search);
     _isAdmin = params.get('mode') === 'admin';
+    _panelIndex = params.get('panelIndex');
     if (params.get('hideHeader') === 'true') document.body.classList.add('wm-headless');
+    if (_panelIndex !== null) _bindPanelSync();
     const requested = params.get('id');
     const first = await _resolveDataset(requested, params.get('path'));
     if (!first) {
@@ -68,6 +73,7 @@ const WholemountApp = (() => {
     }
     ToolManager.init({ defaultTool: 'navigate' });
     _bindControls();
+    if (_panelIndex !== null) _setSidebarHidden(true);
     _renderBrowserFilters();
     _openDataset(first, { history: 'replace' });
     $('viewer-loader')?.classList.add('hidden');
@@ -99,13 +105,33 @@ const WholemountApp = (() => {
       dataset: {
         getMeta: () => _meta,
         getId: () => _id,
-        getBasePath: () => _basePath
+        getBasePath: () => _basePath,
+        getCollection: () => _collection.slice(),
+        fileUrl: (ds, file) => _fileUrl(_datasetBase(ds.path), file),
+        open: (id) => { const ds = Catalog.getById(id); if (ds && ds.type === TYPE) _openDataset(ds, { history: 'push' }); },
+        onChange: (cb) => { _datasetListeners.push(cb); return () => { _datasetListeners = _datasetListeners.filter(f => f !== cb); }; }
       },
       viewer: {
         setMeasurements: (m) => WholemountViewer.setMeasurements(m),
         onMeasurePoint: (cb) => WholemountViewer.onMeasurePoint(cb),
         getPhysicalCalibration: () => WholemountViewer.getPhysicalCalibration(),
-        resize: () => WholemountViewer.resize()
+        resize: () => WholemountViewer.resize(),
+        fit: () => WholemountViewer.fit(),
+        getView: () => WholemountViewer.getView(),
+        setView: (v) => WholemountViewer.setView(v),
+        onViewChange: (cb) => WholemountViewer.onViewChange(cb),
+        getViewport: () => WholemountViewer.getViewport(),
+        getImageSize: () => WholemountViewer.getImageSize(),
+        getPixelSizeUm: () => WholemountViewer.getPixelSizeUm(),
+        addOverlay: (fn) => WholemountViewer.addOverlay(fn),
+        redraw: () => WholemountViewer.redraw(),
+        setOrientation: (o) => WholemountViewer.setOrientation(o),
+        getOrientation: () => WholemountViewer.getOrientation(),
+        setAdjustments: (a) => WholemountViewer.setAdjustments(a),
+        getAdjustments: () => WholemountViewer.getAdjustments(),
+        getPhysicalView: () => WholemountViewer.getPhysicalView(),
+        setPhysicalView: (pv) => WholemountViewer.setPhysicalView(pv),
+        getNativeCanvas: () => WholemountViewer.getNativeCanvas()
       },
       measurements: {
         list: (scope) => MeasurementStore.list(_id, scope || 'viewer'),
@@ -121,12 +147,15 @@ const WholemountApp = (() => {
         escapeHtml: (s) => Utils.escapeHtml(s),
         createIcons: (opts) => { if (window.lucide) lucide.createIcons(opts); },
         getCanvas: () => WholemountViewer.getCanvas(),
-        openStudio: () => _openStudio()
+        openStudio: () => _openStudio(),
+        openStudioWith: (sliceResult) => { if (typeof StudioEditor !== 'undefined') StudioEditor.open(sliceResult); },
+        addSidebarSection: _addSidebarSection,
+        getStage: () => $('wholemount-canvas').parentElement
       },
       iframe: {
-        isIframe: () => false,
-        panelIndex: () => null,
-        postMessage: () => {}
+        isIframe: () => _panelIndex !== null,
+        panelIndex: () => _panelIndex,
+        postMessage: (data) => { if (_panelIndex !== null) window.parent.postMessage(data, Utils.trustedTargetOrigin()); }
       },
       workspace: {
         getState: _getWorkspaceState,
@@ -178,13 +207,14 @@ const WholemountApp = (() => {
     _meta = meta;
     _id = meta.id;
     _basePath = _datasetBase(meta.path);
-    if (!_isAdmin) _syncUrl(opts.history);
+    if (!_isAdmin && _panelIndex === null) _syncUrl(opts.history);
     _renderHeader();
     _renderInfo();
     _renderGallery();
     _renderRelated();
     _initExportManager();
 
+    WholemountViewer.setOrientation(meta.orientation2d || null);
     const image = meta.image || {};
     WholemountViewer.load({
       previewUrl: _fileUrl(_basePath, image.preview || 'preview.webp'),
@@ -197,6 +227,40 @@ const WholemountApp = (() => {
     _restoreMeasurements();
     _markActiveCard();
     _prefetchNeighbours();
+    for (const cb of _datasetListeners) cb(meta);
+  }
+
+  // ── Split-view pane: this page inside another wholemount page ─────────────
+  // The parent shares its PHYSICAL view (µm per screen pixel + physical centre);
+  // both photographs then show the same field at the same magnification
+  // whatever their pixel sizes. Each side suppresses the echo of a view it was
+  // given, so the two never chase each other.
+  function _bindPanelSync() {
+    window.addEventListener('message', (e) => {
+      if (!Utils.isTrustedMessageOrigin(e)) return;
+      const type = e.data?.type;
+      if (type === 'WM_SET_PHYSICAL_VIEW') {
+        _suppressSync = true;
+        WholemountViewer.setPhysicalView(e.data.view);
+        _suppressSync = false;
+      } else if (type === 'WM_OPEN_DATASET') {
+        const ds = Catalog.getById(e.data.id);
+        if (ds && ds.type === TYPE && ds.id !== _id) _openDataset(ds);
+      }
+    });
+    WholemountViewer.onViewChange(() => {
+      if (_suppressSync) return;
+      window.parent.postMessage({ type: 'WM_PHYSICAL_VIEW', panelIndex: _panelIndex, id: _id, view: WholemountViewer.getPhysicalView() }, Utils.trustedTargetOrigin());
+    });
+  }
+
+  /** A plugin panel in the sidebar, placed after the measurements. */
+  function _addSidebarSection({ id, title }) {
+    const body = Utils.el('div', { class: 'wm-plugin-body' });
+    const section = Utils.el('div', { class: 'panel-section', id },
+      Utils.el('div', { class: 'panel-title' }, Utils.el('span', {}, title)), body);
+    $('viewer-sidebar').insertBefore(section, $('gallery-section'));
+    return { section, body };
   }
 
   function _syncUrl(mode) {

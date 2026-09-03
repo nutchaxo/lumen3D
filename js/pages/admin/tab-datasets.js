@@ -329,12 +329,19 @@ function dimsLabel(m) {
   return `${d.x} × ${d.y} × ${d.z} px · ${t('admin.dimsChannels', `${d.c} canal(ux)`, { count: d.c })}`;
 }
 
-// Calibration, exposure and 3D orientation only mean something for a volume.
+// Calibration and exposure only mean something for a volume. Orientation is
+// kept for a photograph — as a rotation + mirror, without the 3D axes editor.
 function toggleVolumeSections(on) {
-  [DOM.fVoxX, DOM.fExposure, DOM.btnDefineOrientation].forEach((el) => {
+  [DOM.fVoxX, DOM.fExposure].forEach((el) => {
     const section = el?.closest('.config-section');
     if (section) section.style.display = on ? '' : 'none';
   });
+  [DOM.orientationAxesList, DOM.fDefaultView].forEach((el) => {
+    const field = el?.closest('.config-field');
+    if (field) field.style.display = on ? '' : 'none';
+  });
+  const title = DOM.btnDefineOrientation?.closest('.config-section')?.querySelector('.config-section-title');
+  if (title) title.textContent = on ? t('admin.secOrientation', 'Orientation 3D') : t('admin.secOrientation2d', 'Orientation');
 }
 
 // ── Validation (Rule 1.4) ──────────────────────────────────────
@@ -479,7 +486,7 @@ function populateForm() {
     DOM.btnDefineOrientation.innerHTML = t('admin.defineOrientation', '🧭 Définir l\'orientation');
   }
   if (DOM.orientationStatus) {
-    DOM.orientationStatus.textContent = m.orientation
+    DOM.orientationStatus.textContent = (m.orientation || m.orientation2d)
       ? t('admin.orientationSet', 'Orientation définie ✓')
       : t('admin.noOrientation', '(Aucune orientation définie)');
   }
@@ -857,6 +864,10 @@ async function saveDataset() {
     await new Promise((resolve) => {
       const handler = (e) => {
         if (e.data?.type === 'ORIENTATION_RESULT') {
+          if (e.data.orientation2d && typeof e.data.orientation2d === 'object') {
+            const o = e.data.orientation2d;
+            _draft.orientation2d = { rotationDeg: Number(o.rotationDeg) || 0, flipH: Boolean(o.flipH) };
+          }
           const q = e.data.quaternion;
           const a = Array.isArray(q) ? q.slice() : (q && typeof q === 'object' ? [q.x, q.y, q.z, q.w] : null);
           if (a && a.length === 4 && a.every(Number.isFinite)) {

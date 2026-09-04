@@ -153,6 +153,13 @@
         <canvas id="wholemount-canvas" class="wm-canvas"></canvas>
         <div id="wm-load-state" class="wm-load-state" hidden></div>
         <div id="wm-zoom" class="wm-zoom" title="Displayed resolution" data-i18n-title="wholemount.zoomInfo"></div>
+        <!-- Shown only when this page is one pane of a split view or of the Compare page -->
+        <div id="wm-pane-nav" class="wm-pane-nav" hidden>
+          <button type="button" class="btn btn-icon btn-ghost btn-sm" id="pane-prev" data-i18n-title="wholemount.prev" aria-label="Previous"><i data-lucide="chevron-left"></i></button>
+          <button type="button" class="btn btn-icon btn-ghost btn-sm" id="pane-browse" data-i18n-title="wholemount.browse" aria-label="Browse"><i data-lucide="layout-grid"></i></button>
+          <button type="button" class="btn btn-icon btn-ghost btn-sm" id="pane-next" data-i18n-title="wholemount.next" aria-label="Next"><i data-lucide="chevron-right"></i></button>
+          <button type="button" class="btn btn-icon btn-ghost btn-sm" id="pane-fit" data-i18n-title="wholemount.fit" aria-label="Fit"><i data-lucide="maximize"></i></button>
+        </div>
 
         <!-- Contact-sheet browser over every wholemount of the catalog -->
         <section id="wm-browser" class="wm-browser" aria-label="Browse the collection" data-i18n-aria="wholemount.browse" hidden>

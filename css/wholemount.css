@@ -104,6 +104,24 @@ body[data-active-tool="measure"] .wm-canvas { cursor: crosshair; }
    iframe may never finish it, leaving a 320 px ghost beside the photograph). */
 body.wm-headless .viewer-header { display: none; }
 body.wm-headless .viewer-sidebar { transition: none; }
+/* A hosting page draws its own panel header over the top edge of the pane. */
+body.wm-headless .wm-zoom,
+body.wm-headless .wm-pane-nav { top: 44px; }
+
+/* Pane navigation: the header (and its toolbar) is hidden inside a pane, so the
+   photograph keeps its own previous / browse / next / fit controls. */
+.wm-pane-nav {
+  position: absolute;
+  left: 50%;
+  top: 10px;
+  transform: translateX(-50%);
+  display: flex;
+  gap: 2px;
+  padding: 3px;
+  border-radius: var(--radius-full);
+  background: rgba(0, 0, 0, 0.55);
+}
+.wm-pane-nav .btn { color: #fff; }
 
 /* ── Plugin panels (sidebar sections added through ui.addSidebarSection) ─── */
 .wm-plugin-body { display: flex; flex-direction: column; gap: 8px; font-size: 12px; }

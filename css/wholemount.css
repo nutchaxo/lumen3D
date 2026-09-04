@@ -99,8 +99,11 @@ body[data-active-tool="measure"] .wm-canvas { cursor: crosshair; }
   white-space: nowrap;
 }
 
-/* Admin preview iframe: the panel supplies its own chrome. */
+/* Admin preview iframe / split-view pane: the host supplies its own chrome, and the
+   sidebar starts collapsed without the width transition (a hidden or throttled
+   iframe may never finish it, leaving a 320 px ghost beside the photograph). */
 body.wm-headless .viewer-header { display: none; }
+body.wm-headless .viewer-sidebar { transition: none; }
 
 /* ── Plugin panels (sidebar sections added through ui.addSidebarSection) ─── */
 .wm-plugin-body { display: flex; flex-direction: column; gap: 8px; font-size: 12px; }

@@ -567,6 +567,134 @@ const WholemountViewer = (() => {
     return m.map((row, i) => row[n] / row[i]);
   }
 
+  /**
+   * Label placement. `labelOffset` is {x, y} in IMAGE pixels from the default
+   * anchor (the segment's midpoint), so a placed label stays glued to the
+   * same spot of the photograph at every zoom. The drop is reported through
+   * onLabelMove so the page can persist it with the measurement.
+   */
+  function onLabelMove(cb) { _onLabelMove = cb; }
+
+  function _labelAt(p) {
+    for (let i = _labelRects.length - 1; i >= 0; i--) {
+      const r = _labelRects[i];
+      if (p.x >= r.x && p.x <= r.x + r.w && p.y >= r.y && p.y <= r.y + r.h) return r.id;
+    }
+    return null;
+  }
+
+  function _moveLabel(id, dx, dy) {
+    const m = _measurements.find(item => item.id === id);
+    if (!m) return;
+    const o = m.labelOffset || { x: 0, y: 0 };
+    m.labelOffset = { x: (o.x || 0) + dx, y: (o.y || 0) + dy };
+    _scheduleDraw();
+  }
+
+  function _commitLabel(id) {
+    const m = _measurements.find(item => item.id === id);
+    if (m && m.labelOffset) _onLabelMove?.(id, { ...m.labelOffset });
+  }
+
+  function getPhysicalCalibration() {
+    const exact = _pixelSizeUm !== null;
+    return {
+      xUm: exact ? _imgW * _pixelSizeUm : null,
+      yUm: exact ? _imgH * _pixelSizeUm : null,
+      zUm: 0,
+      voxelXUm: _pixelSizeUm, voxelYUm: _pixelSizeUm, voxelZUm: 0,
+      calibrationStatus: exact ? 'exact' : 'metadata-missing',
+      calibrationNote: exact ? 'Pixel size read from the acquisition metadata.' : 'No pixel size in the metadata.'
+    };
+  }
+
+  // ── Stain isolation ────────────────────────────────────────────────────────
+  function setIsolateStain(on) {
+    _isolate = Boolean(on);
+    _scheduleDraw();
+  }
+
+  function isIsolateStain() { return _isolate; }
+
+  /**
+   * Stain isolation — a display aid, nothing measured reads it.
+   *
+   * X-gal lowers red and green far more than blue, so a stained pixel has
+   * B/R well above 1 (measured 2 to 4 in the densest cores) while unstained
+   * tissue sits near 0.6. The term is gated by a TISSUE CONTEXT — the local
+   * mean of "yellowness" (R+G)/2 − B over a ~40 px window — because the
+   * matte background carries blue speckles that would otherwise light up: a
+   * stain is something blue INSIDE yellow tissue. The gate is low (5) on
+   * purpose: a wide stained trunk drags the local mean down to 6–9 while
+   * the background never exceeds 2–6. The specimen is painted in dimmed grey
+   * and the stain in cyan.
+   */
+  const ISO_RATIO_LO = 1.0, ISO_RATIO_HI = 1.8;   // B/R mapped to 0..1
+  const ISO_CTX_SCALE = 4, ISO_CTX_RADIUS = 5;    // context map: ¼ res, 5-cell box ≈ 40 px
+  const ISO_CTX_MIN = 5;                          // tissue-context gate
+
+  function _isolation() {
+    if (_isolated) return _isolated;
+    const w = _image.naturalWidth, h = _image.naturalHeight;
+    const off = document.createElement('canvas');
+    off.width = w;
+    off.height = h;
+    const octx = off.getContext('2d', { willReadFrequently: true });
+    octx.drawImage(_image, 0, 0);
+    const frame = octx.getImageData(0, 0, w, h);
+    const ctxMap = _tissueContext(w, h);
+    const d = frame.data;
+    for (let y = 0, i = 0; y < h; y++) {
+      const row = (y / ISO_CTX_SCALE | 0) * ctxMap.w;
+      for (let x = 0; x < w; x++, i += 4) {
+        const r = d[i], g = d[i + 1], b = d[i + 2];
+        const lum = 0.299 * r + 0.587 * g + 0.114 * b;
+        const tissue = ctxMap.data[row + (x / ISO_CTX_SCALE | 0)];
+        const v = tissue > ISO_CTX_MIN ? _unit((b / (r + 1) - ISO_RATIO_LO) / (ISO_RATIO_HI - ISO_RATIO_LO)) : 0;
+        const grey = lum * 0.35 * (1 - v);
+        d[i] = grey + v * 90;
+        d[i + 1] = grey + v * 160;
+        d[i + 2] = grey + v * 255;
+      }
+    }
+    octx.putImageData(frame, 0, 0);
+    _isolated = off;
+    return off;
+  }
+
+  function _unit(v) { return v < 0 ? 0 : v > 1 ? 1 : v; }
+
+  /** Box-blurred yellowness at 1/ISO_CTX_SCALE resolution (summed-area table). */
+  function _tissueContext(w, h) {
+    const cw = Math.ceil(w / ISO_CTX_SCALE), ch = Math.ceil(h / ISO_CTX_SCALE);
+    const small = document.createElement('canvas');
+    small.width = cw;
+    small.height = ch;
+    const sctx = small.getContext('2d', { willReadFrequently: true });
+    sctx.drawImage(_image, 0, 0, cw, ch);
+    const px = sctx.getImageData(0, 0, cw, ch).data;
+    const sat = new Float32Array((cw + 1) * (ch + 1));
+    for (let y = 1; y <= ch; y++) {
+      let run = 0;
+      for (let x = 1; x <= cw; x++) {
+        const i = ((y - 1) * cw + (x - 1)) * 4;
+        run += Math.max(0, (px[i] + px[i + 1]) / 2 - px[i + 2]);
+        sat[y * (cw + 1) + x] = sat[(y - 1) * (cw + 1) + x] + run;
+      }
+    }
+    const data = new Float32Array(cw * ch);
+    const r = ISO_CTX_RADIUS, stride = cw + 1;
+    for (let y = 0; y < ch; y++) {
+      const y0 = Math.max(0, y - r), y1 = Math.min(ch, y + r + 1);
+      for (let x = 0; x < cw; x++) {
+        const x0 = Math.max(0, x - r), x1 = Math.min(cw, x + r + 1);
+        const sum = sat[y1 * stride + x1] - sat[y0 * stride + x1] - sat[y1 * stride + x0] + sat[y0 * stride + x0];
+        data[y * cw + x] = sum / ((y1 - y0) * (x1 - x0));
+      }
+    }
+    return { data, w: cw, h: ch };
+  }
+
   // ── Drawing ────────────────────────────────────────────────────────────────
   function _scheduleDraw() {
     if (_raf) return;

@@ -841,3 +841,6 @@ const WholemountViewer = (() => {
     toBlob, getCanvas, getNativeCanvas
   };
 })();
+
+// A top-level const is not a window property; the Compare page and the split-view host read this pane's viewer through iframe.contentWindow.
+window.WholemountViewer = WholemountViewer;

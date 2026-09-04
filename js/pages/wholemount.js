@@ -73,7 +73,10 @@ const WholemountApp = (() => {
     }
     ToolManager.init({ defaultTool: 'navigate' });
     _bindControls();
-    if (_panelIndex !== null) _setSidebarHidden(true);
+    if (_panelIndex !== null) {
+      _setSidebarHidden(true);
+      _bindPaneNav();
+    }
     _renderBrowserFilters();
     _openDataset(first, { history: 'replace' });
     $('viewer-loader')?.classList.add('hidden');
@@ -246,12 +249,22 @@ const WholemountApp = (() => {
       } else if (type === 'WM_OPEN_DATASET') {
         const ds = Catalog.getById(e.data.id);
         if (ds && ds.type === TYPE && ds.id !== _id) _openDataset(ds);
+      } else if (type === 'TOGGLE_SIDEBAR') {   // the Compare page's per-panel settings button
+        _setSidebarHidden(!e.data.value);
       }
     });
     WholemountViewer.onViewChange(() => {
       if (_suppressSync) return;
-      window.parent.postMessage({ type: 'WM_PHYSICAL_VIEW', panelIndex: _panelIndex, id: _id, view: WholemountViewer.getPhysicalView() }, Utils.trustedTargetOrigin());
+      window.parent.postMessage({ type: 'WM_PHYSICAL_VIEW', sourceIndex: _panelIndex, panelIndex: _panelIndex, id: _id, view: WholemountViewer.getPhysicalView() }, Utils.trustedTargetOrigin());
     });
+  }
+
+  function _bindPaneNav() {
+    $('wm-pane-nav').hidden = false;
+    $('pane-prev').addEventListener('click', () => _step(-1));
+    $('pane-next').addEventListener('click', () => _step(1));
+    $('pane-browse').addEventListener('click', () => _setBrowserOpen($('wm-browser').hidden));
+    $('pane-fit').addEventListener('click', () => WholemountViewer.fit());
   }
 
   /** A plugin panel in the sidebar, placed after the measurements. */
@@ -618,3 +631,6 @@ const WholemountApp = (() => {
 })();
 
 document.addEventListener('DOMContentLoaded', WholemountApp.init);
+
+// Reachable from a hosting page (Compare, split view) through iframe.contentWindow, like ViewerApp.
+window.WholemountApp = WholemountApp;

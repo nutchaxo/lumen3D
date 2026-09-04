@@ -145,7 +145,7 @@ const CompareApp = (() => {
 
     const list = document.getElementById('modal-dataset-list');
     list.innerHTML = _datasets.map(d => {
-      const color = d.type === 'fixed' ? '#00D2FF' : (d.type === 'live' ? '#FFA726' : '#00A654');
+      const color = { fixed: '#00D2FF', live: '#FFA726', wholemount: '#B388FF' }[d.type] || '#00A654';
       // SEC-014: dataset fields (id/thumbnail/name/type) are catalog data — escape
       // before innerHTML interpolation (cf. _addPanel which already uses escapeHtml).
       return `
@@ -230,6 +230,9 @@ const CompareApp = (() => {
       </div>
     `;
     
+    // A photograph has no z-stack / grid / axes: the block stays in the DOM (the
+    // bindings below expect it) but is never shown.
+    if (d.type === 'wholemount') panel.querySelector('.panel-visual-tools').style.display = 'none';
     grid.appendChild(panel);
     if (window.lucide) lucide.createIcons({nodes: [panel]});
     
@@ -343,7 +346,7 @@ const CompareApp = (() => {
     const ready = await _waitForPanelReady(panelIndex, 180000);
     if (ready) {
       const panel = document.getElementById(`panel-${panelIndex}`);
-      if (panel?.dataset.datasetType !== 'tracking') {
+      if (!['tracking', 'wholemount'].includes(panel?.dataset.datasetType)) {
         _queueHighDetailLoad(panelIndex);
       }
     }
@@ -692,6 +695,11 @@ const CompareApp = (() => {
     else if (data.type === 'SYNC_TIME' && _syncOptions.time) _broadcast(data, data.sourceIndex);
     else if (data.type === 'SYNC_CAMERA' && _syncOptions.camera) _broadcast(data, data.sourceIndex);
     else if (data.type === 'SYNC_CHANNELS' && _syncOptions.channels) _broadcast(data, data.sourceIndex);
+    else if (data.type === 'WM_PHYSICAL_VIEW') {
+      // Photographs share a PHYSICAL view (µm per screen pixel + physical centre):
+      // the same field at the same magnification whatever their pixel sizes.
+      if (_syncOptions.camera) _broadcast({ type: 'WM_SET_PHYSICAL_VIEW', view: data.view }, data.sourceIndex);
+    }
     else if (data.type === 'SYNC_ZSTACK_SLICE') {
       // Z-stack slice navigation from a decompose panel — broadcast to all sibling panels.
       // Each sibling will open its own z-stack browser and navigate to the same slice.
@@ -838,7 +846,14 @@ const CompareApp = (() => {
 
     panels.forEach(panel => {
       const iframe = panel.querySelector('iframe.viewer-frame');
-      if (iframe?.contentWindow && iframe.contentWindow.VolumeViewer) {
+      const photo = _wholemountSliceResult(iframe);
+      if (photo) {
+        const rect = panel.getBoundingClientRect();
+        sliceEntries.push({
+          sr: photo, datasetName: panel.querySelector('.panel-title-badge')?.textContent?.trim() || 'Dataset',
+          cx: rect.left + rect.width / 2 - gridRect.left, cy: rect.top + rect.height / 2 - gridRect.top
+        });
+      } else if (iframe?.contentWindow && iframe.contentWindow.VolumeViewer) {
         try {
           const sr = iframe.contentWindow.ViewerApp.getCurrentSliceResult();
           if (sr && sr.canvas) {
@@ -1005,6 +1020,22 @@ const CompareApp = (() => {
       layoutMaps,
       channelState: combinedChannelState
     });
+  }
+
+  /** A wholemount pane as a slice result: its native rendering, µm/px isotropic. */
+  function _wholemountSliceResult(iframe) {
+    const win = iframe?.contentWindow;
+    if (!win || !win.WholemountViewer) return null;
+    try {
+      const canvas = win.WholemountViewer.getNativeCanvas();
+      if (!canvas) return null;
+      const px = win.WholemountViewer.getPixelSizeUm() || 1;
+      return { canvas, width: canvas.width, height: canvas.height, source: 'wholemount', quality: 'native',
+        pixelSizeUm: { x: px, y: px }, channelState: [] };
+    } catch (err) {
+      console.warn('[Compare] wholemount pane unavailable for the Studio', err);
+      return null;
+    }
   }
 
   async function _exportCompareFigure(format = 'png') {

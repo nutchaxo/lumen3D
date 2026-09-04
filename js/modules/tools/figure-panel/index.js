@@ -1,16 +1,20 @@
 /* Figure Panel Builder — index.js
  *
- * Picks photographs of the collection and lays them out in a grid at ONE
- * physical scale: every panel is resampled to the coarsest pixel size of the
- * selection (never upsampled), so a single scale bar is true for all of them.
+ * Picks photographs of the collection and lays them out in a grid, two ways:
+ *   physical — every panel is resampled to the coarsest pixel size of the
+ *              selection (never upsampled), so ONE scale bar is true for all;
+ *   sameSize — every panel fills the same cell, so each keeps its own pixel
+ *              size and gets its own bar.
+ * Either way the Studio receives one calibration rectangle per panel
+ * (`layoutMaps`): a scale bar or a distance placed on a panel reads that
+ * panel's µm/px, and follows it when moved onto another one.
  * Each photograph is drawn in its saved orientation (metadata.orientation2d).
- * The result goes out as a PNG or into the Studio, calibrated in µm/px.
  */
 PluginRegistry.implement('figure-panel', {
   _ctx: null,
   _modal: null,
   _selected: new Set(),
-  _options: { columns: 'auto', scale: 'common', label: 'stage', background: 'dark', bar: 'auto' },
+  _options: { columns: 'auto', scale: 'physical', label: 'stage', background: 'dark', bar: 'auto' },
   _result: null,
   _images: new Map(),
 
@@ -55,8 +59,8 @@ PluginRegistry.implement('figure-panel', {
                 </select></label>
               <label>${esc(this._t('scale'))}
                 <select class="form-input" data-fp-opt="scale">
-                  <option value="common">${esc(this._t('scaleCommon'))}</option>
-                  <option value="fit">${esc(this._t('scaleFit'))}</option>
+                  <option value="physical">${esc(this._t('scaleCommon'))}</option>
+                  <option value="sameSize">${esc(this._t('scaleFit'))}</option>
                 </select></label>
               <label>${esc(this._t('labelOpt'))}
                 <select class="form-input" data-fp-opt="label">
@@ -157,22 +161,36 @@ PluginRegistry.implement('figure-panel', {
     return { w: img.naturalWidth * c + img.naturalHeight * s, h: img.naturalWidth * s + img.naturalHeight * c };
   },
 
-  _compose(datasets, images) {
-    const common = this._options.scale === 'common';
+  /**
+   * Cell size and per-panel magnification for the chosen layout.
+   *   physical: factor_i = px_i / px_max  (the coarsest photograph stays 1:1)
+   *   sameSize: factor_i = fit of the oriented box into the largest box
+   */
+  _layout(datasets, boxes) {
     const pxs = datasets.map(d => d.pixelSizeUm?.x || 1);
-    const pxOut = common ? Math.max(...pxs) : null;          // coarsest: nothing is upsampled
+    if (this._options.scale === 'sameSize') {
+      const cellW = Math.max(...boxes.map(b => b.w)), cellH = Math.max(...boxes.map(b => b.h));
+      return { cellW, cellH, factors: boxes.map(b => Math.min(cellW / b.w, cellH / b.h)), pxs, shared: false };
+    }
+    const pxOut = Math.max(...pxs);
+    const factors = pxs.map(px => px / pxOut);
+    return {
+      cellW: Math.max(...boxes.map((b, i) => b.w * factors[i])),
+      cellH: Math.max(...boxes.map((b, i) => b.h * factors[i])),
+      factors, pxs, shared: true
+    };
+  },
+
+  _compose(datasets, images) {
     const boxes = datasets.map((d, i) => this._orientedBox(d, images[i]));
-    const factors = datasets.map((d, i) => common ? pxs[i] / pxOut : 1);
-    let cellW = Math.max(...boxes.map((b, i) => b.w * factors[i]));
-    let cellH = Math.max(...boxes.map((b, i) => b.h * factors[i]));
+    const lay = this._layout(datasets, boxes);
     const cols = this._options.columns === 'auto' ? Math.ceil(Math.sqrt(datasets.length)) : Number(this._options.columns);
     const rows = Math.ceil(datasets.length / cols);
-    let shrink = 1;
-    const gap = Math.round(cellW * this.GAP_RATIO);
-    const fullW = cols * cellW + (cols + 1) * gap;
-    if (fullW > this.MAX_WIDTH) shrink = this.MAX_WIDTH / fullW;
-    cellW = Math.round(cellW * shrink); cellH = Math.round(cellH * shrink);
-    const g = Math.round(gap * shrink);
+    const gap0 = lay.cellW * this.GAP_RATIO;
+    const fullW = cols * lay.cellW + (cols + 1) * gap0;
+    const shrink = fullW > this.MAX_WIDTH ? this.MAX_WIDTH / fullW : 1;
+    const cellW = Math.round(lay.cellW * shrink), cellH = Math.round(lay.cellH * shrink), g = Math.round(gap0 * shrink);
+
     const canvas = document.createElement('canvas');
     canvas.width = cols * cellW + (cols + 1) * g;
     canvas.height = rows * cellH + (rows + 1) * g;
@@ -180,13 +198,20 @@ PluginRegistry.implement('figure-panel', {
     const light = this._options.background === 'light';
     c.fillStyle = light ? '#ffffff' : '#000000';
     c.fillRect(0, 0, canvas.width, canvas.height);
-    datasets.forEach((ds, i) => {
+
+    const withBars = this._options.bar !== 'none';
+    const layoutMaps = datasets.map((ds, i) => {
+      const f = lay.factors[i] * shrink;
       const x = g + (i % cols) * (cellW + g), y = g + Math.floor(i / cols) * (cellH + g);
-      this._drawPanel(c, ds, images[i], x, y, cellW, cellH, factors[i] * shrink, light);
+      this._drawPanel(c, ds, images[i], x, y, cellW, cellH, f, light);
+      const w = boxes[i].w * f, h = boxes[i].h * f;
+      const map = { x: x + (cellW - w) / 2, y: y + (cellH - h) / 2, w, h, pixelSizeUm: { x: lay.pxs[i] / f, y: lay.pxs[i] / f }, channelState: [] };
+      if (withBars && !lay.shared) this._drawScaleBar(c, map, map.pixelSizeUm.x, light);
+      return map;
     });
-    const pxFigure = pxOut ? pxOut / shrink : null;
-    if (pxFigure && this._options.bar !== 'none') this._drawScaleBar(c, canvas, pxFigure, light);
-    return { canvas, pixelSizeUm: pxFigure, count: datasets.length };
+    const sharedPx = lay.shared ? Math.max(...lay.pxs) / shrink : null;
+    if (withBars && lay.shared) this._drawScaleBar(c, { x: 0, y: 0, w: canvas.width, h: canvas.height }, sharedPx, light);
+    return { canvas, pixelSizeUm: sharedPx || layoutMaps[0].pixelSizeUm.x, layoutMaps, count: datasets.length };
   },
 
   _drawPanel(c, ds, img, x, y, w, h, factor, light) {
@@ -220,15 +245,15 @@ PluginRegistry.implement('figure-panel', {
     return Utils.formatStage(ds.stage);
   },
 
-  /** One 1-2-5 bar about a fifth of a panel wide, bottom-right of the figure. */
-  _drawScaleBar(c, canvas, pxUm, light) {
-    const targetUm = (canvas.width / 5) * pxUm;
+  /** One 1-2-5 bar about a fifth of the rectangle wide, at its bottom-right. */
+  _drawScaleBar(c, rect, pxUm, light) {
+    const targetUm = (rect.w / 5) * pxUm;
     const exp = Math.pow(10, Math.floor(Math.log10(targetUm)));
     const m = targetUm / exp;
     const lengthUm = (m >= 5 ? 5 : m >= 2 ? 2 : 1) * exp;
     const px = lengthUm / pxUm;
-    const size = Math.max(14, Math.round(canvas.height / 40));
-    const x1 = canvas.width - size, y = canvas.height - size, x0 = x1 - px;
+    const size = Math.max(12, Math.round(rect.h / 40));
+    const x1 = rect.x + rect.w - size, y = rect.y + rect.h - size, x0 = x1 - px;
     c.lineWidth = Math.max(3, size / 4);
     c.strokeStyle = light ? '#111' : '#fff';
     c.beginPath(); c.moveTo(x0, y); c.lineTo(x1, y); c.stroke();
@@ -257,11 +282,12 @@ PluginRegistry.implement('figure-panel', {
 
   _openStudio() {
     if (!this._result) return;
-    const px = this._result.pixelSizeUm || 1;
+    const px = this._result.pixelSizeUm;
     this._ctx.ui.openStudioWith({
       canvas: this._result.canvas, width: this._result.canvas.width, height: this._result.canvas.height,
       source: 'wholemount-figure', quality: 'native', timepoint: 0,
-      pixelSizeUm: { x: px, y: px }, dataset: { name: `wholemount_figure_${this._result.count}` }, channelState: []
+      pixelSizeUm: { x: px, y: px }, layoutMaps: this._result.layoutMaps,
+      dataset: { name: `wholemount_figure_${this._result.count}` }, channelState: []
     });
     this._modal.hidden = true;
   }

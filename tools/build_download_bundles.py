@@ -60,7 +60,7 @@ DATA_WEB = ROOT / "DATA_WEB"
 RAW_DATA_DIRS = [
     Path(r"C:\Users\Administrator\Desktop\Fixed images for database\RAW_DATA"),
 ]
-DATASET_TYPES = ("fixed", "live", "tracking")
+DATASET_TYPES = ("fixed", "live", "tracking", "wholemount")
 
 TARGET_PX = 2048               # desired long XY side of the generated TIFF
 # Hard ceiling on the in-flight volume (C·Z·Y·X·itemsize); if the level closest to
@@ -497,6 +497,44 @@ def write_readme(out_path, ds, ims_src, force, dry):
         return "skip (exists)"
     if dry:
         return "would write"
+    lines = _readme_photo(ds) if ds["type"] == "wholemount" else _readme_volume(ds, ims_src)
+    lines += [
+        "",
+        "Citation: cite the IRIBHM Microscopy Platform (Lumen3D, IRIBHM @ ULB) and "
+        "the original experiment/publication when available.",
+        f"Generated: {time.strftime('%Y-%m-%d %H:%M:%S')}",
+    ]
+    out_path.write_text("\n".join(lines), encoding="utf-8")
+    return "ok"
+
+
+def _readme_photo(ds):
+    """A wholemount is one calibrated photograph: no voxels, no channels, and no
+    .ims to re-read — the original TIFF beside it comes from the importer."""
+    meta = ds["meta"]
+    dims = meta.get("dimensions", {})
+    px = (meta.get("pixelSizeUm") or {}).get("x")
+    acq = meta.get("acquisition", {})
+    return [
+        f"Dataset : {ds['folder']}",
+        f"Type    : {ds['type']} (whole-mount photograph)",
+        f"Stage   : {meta.get('stage', '?')}    Line: {meta.get('line') or '?'}"
+        f"    Staining: {meta.get('staining') or '?'}",
+        "",
+        f"Image      : {dims.get('x','?')} x {dims.get('y','?')} px, RGB 8-bit",
+        "Pixel size : " + (f"{px:.4f} um/px" if isinstance(px, (int, float)) else "unknown"),
+        f"Microscope : {acq.get('microscope') or '-'}    camera {acq.get('camera') or '-'}",
+        f"Source     : {acq.get('sourceFile') or '-'}",
+        "",
+        "Files in this folder:",
+        f"  {ds['folder']}_web.zip   archive of the web dataset "
+        "(image.webp + preview.webp + thumbnail + metadata)",
+        "  <original>.tif           untouched ImageJ/Leica export, present when the "
+        "import ran with --with-downloads",
+    ]
+
+
+def _readme_volume(ds, ims_src):
     meta = ds["meta"]
     dims = meta.get("dimensions", {})
     vox = meta.get("voxel_size", {})
@@ -527,13 +565,8 @@ def write_readme(out_path, ds, ims_src, force, dry):
         f"  {ds['folder']}.tif       multi-channel ImageJ/Fiji composite hyperstack "
         f"(native bit depth, µm-calibrated, ~{TARGET_PX}px), from the .ims pyramid",
         f"  {ds['folder']}_C*_*_MIP.png   per-channel maximum-intensity projection",
-        "",
-        "Citation: cite the IRIBHM Microscopy Platform (Lumen3D, IRIBHM @ ULB) and "
-        "the original experiment/publication when available.",
-        f"Generated: {time.strftime('%Y-%m-%d %H:%M:%S')}",
     ]
-    out_path.write_text("\n".join(lines), encoding="utf-8")
-    return "ok"
+    return lines
 
 
 # ── helpers ─────────────────────────────────────────────────────────────────
@@ -559,6 +592,16 @@ def process(ds, args):
             print(f"  [archive] {build_archive(ds['dir'], folder, dl / f'{folder}_web.zip', args.force, args.dry_run)}")
         except Exception as exc:
             print(f"  [archive] FAILED: {exc}")
+
+    # A photograph has no .ims to re-read: steps 2-4 are meaningless, and its
+    # original TIFF + README are placed by preprocess/wholemount_importer.py.
+    # The README is never forced here, so the importer's richer one always wins.
+    if ds["type"] == "wholemount":
+        try:
+            print(f"  [readme] {write_readme(dl / 'README.txt', ds, None, False, args.dry_run)}")
+        except Exception as exc:
+            print(f"  [readme] FAILED: {exc}")
+        return
 
     ims_src = find_ims(folder)
     if ims_src is None and not (args.no_ims and args.no_tiff):
@@ -600,7 +643,9 @@ def main():
     global TARGET_PX, DATA_WEB, RAW_DATA_DIRS
     ap = argparse.ArgumentParser(description="Populate each dataset's download/ folder.")
     ap.add_argument("--datasets", help="case-insensitive substring filter on folder name")
-    ap.add_argument("--types", default=",".join(DATASET_TYPES), help="comma list: fixed,live,tracking")
+    ap.add_argument("--types", default=",".join(DATASET_TYPES),
+                    help="comma list: fixed,live,tracking,wholemount (a wholemount gets the "
+                         "web archive only — its original TIFF and README come from the importer)")
     ap.add_argument("--data-web", help="override the DATA_WEB directory (default: <repo>/DATA_WEB)")
     ap.add_argument("--raw-dir", help="directory to search first for the source .ims (prepended to RAW_DATA_DIRS)")
     ap.add_argument("--tiff-px", type=int, default=TARGET_PX, help="target long XY side of the TIFF")

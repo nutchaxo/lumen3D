@@ -148,19 +148,19 @@ Deux façons de lancer le pipeline : le **lanceur autonome `.bat`** (zéro insta
 
 ### 2.1. Lanceur autonome `run_preprocess.bat` *(recommandé)*
 
-> **Un seul fichier suffit.** Le `.bat` est **auto‑suffisant** : on peut le copier **seul** sur n'importe quel PC Windows — même **sans Python et sans le dépôt** — et il met tout en place. Les **6 scripts** — les 5 du pipeline (`run_preprocess.py` + `1-`→`4-`) plus l'outil optionnel de bundles `download/` (`build_download_bundles.py`) — y sont **embarqués** (encodés en base64) ; s'il n'y a pas de Python, il en **télécharge et installe un, en local**.
+> **Un seul fichier suffit.** Le `.bat` est **auto‑suffisant** : on peut le copier **seul** sur n'importe quel PC Windows — même **sans Python et sans le dépôt** — et il met tout en place. Les **7 scripts** — les 5 du pipeline (`run_preprocess.py` + `1-`→`4-`), l'importeur de photographies whole-mount (`wholemount_importer.py`) et l'outil optionnel de bundles `download/` (`build_download_bundles.py`) — y sont **embarqués** (encodés en base64) ; s'il n'y a pas de Python, il en **télécharge et installe un, en local**.
 
 **Utilisation : double‑cliquer sur [`run_preprocess.bat`](run_preprocess.bat).** Il déroule **5 étapes** automatiques :
 
 | Étape | Ce qu'il fait |
 |---|---|
-| **[1/5]** Scripts | Extrait les **6 scripts** embarqués (les 5 du pipeline + `build_download_bundles.py`, décodage `certutil`, intégrité vérifiée par **SHA‑256**). S'ils sont **déjà présents** à côté du `.bat`, ils sont **conservés** (on peut donc exécuter une version modifiée). |
+| **[1/5]** Scripts | Extrait les **7 scripts** embarqués (les 5 du pipeline + `wholemount_importer.py` + `build_download_bundles.py`, décodage `certutil`, intégrité vérifiée par **SHA‑256**). S'ils sont **déjà présents** à côté du `.bat`, ils sont **conservés** (on peut donc exécuter une version modifiée). |
 | **[2/5]** Python | Détection en cascade : runtime local `.runtime\python` → Python **système** (`py -3`/`python`/`python3`) → sinon **propose d'installer** un **Python 3.12.8 embarquable** (téléchargé depuis python.org dans `.runtime\python`, avec `pip`). Isolé, **sans droits admin**, supprimable. |
 | **[3/5]** Dépendances | Vérifie `numpy`/`Pillow`/`h5py`/`scipy`/`tqdm` (par import) et **propose de les installer** via `pip`. |
-| **[4/5]** Paramètres | Pose **4 questions** (voir ci‑dessous), affiche un **récapitulatif**, demande confirmation. |
+| **[4/5]** Paramètres | Demande d'abord le **type de données** — `[1]` volumes Imaris `.ims`, `[2]` photographies whole-mount `.tif` — puis les questions de la chaîne choisie (voir ci‑dessous), affiche un **récapitulatif**, demande confirmation. |
 | **[5/5]** Exécution | Lance le pipeline avec une **interface colorée** et la **progression en temps réel**. `Ctrl+C` demande une **confirmation** avant d'arrêter (arrêt propre — voir « Orchestration interne » plus bas). |
 
-Les **4 questions** de l'étape [4/5] :
+Les **4 questions** de l'étape [4/5], chaîne `[1]` **volumes Imaris** :
 
 | Question | Quoi saisir |
 |---|---|
@@ -168,6 +168,17 @@ Les **4 questions** de l'étape [4/5] :
 | Dossier de sortie `DATA_WEB` | **Entrée** ⏎ = valeur par défaut `..\DATA_WEB`. Ou un autre chemin. |
 | Filtre optionnel *(glob)* | Ex. `*E8*` pour ne traiter que certains embryons. **Entrée** ⏎ = tous les fichiers. |
 | Générer aussi `download/` ? | `o` / **N** (défaut : non). Si `o`, `tifffile` est installé au besoin et `--with-downloads` est passé au pipeline (archive `_web.zip`, `.ims` original, OME‑TIFF, MIP par canal, `README.txt`). **Lourd** : relit le `.ims`. |
+
+Chaîne `[2]` **photographies whole-mount** (appelle `wholemount_importer.py`, une image = un dataset, aucune brique) :
+
+| Question | Quoi saisir |
+|---|---|
+| Dossier des `.tif` | Le chemin du dossier d'entrée. Validé : il doit exister, et le **nombre de `.tif`** trouvés est affiché. |
+| Dossier de sortie `DATA_WEB` | **Entrée** ⏎ = valeur par défaut `..\DATA_WEB`. Les datasets atterrissent dans `DATA_WEB\wholemount\`. |
+| Coloration | **Entrée** ⏎ = `X-gal`. Écrit tel quel dans `metadata.json`. |
+| Lignée | **Entrée** ⏎ = lue dans le nom du `.lif` (ex. `DLL4xCD1`). |
+| Copier le TIFF d'origine dans `download/` ? | `o` / **N**. Si `o`, l'original est **lié** (hardlink, 0 octet de plus) dans `download/` avec un `README.txt` de provenance. |
+| Réimporter les datasets déjà présents ? | `o` / **N**. Passe `--force` : les mesures sont rafraîchies, la **curation du labo est conservée** (nom, stade, description, galerie…). |
 
 **Modes en ligne de commande** (optionnels) :
 
@@ -225,7 +236,7 @@ Le `.bat` est **généré**, jamais écrit à la main. Après toute modification
 python build_launcher.py
 ```
 
-* [`build_launcher.py`](build_launcher.py) lit le template [`launcher_template.bat.in`](launcher_template.bat.in), y injecte la configuration (la version est lue dans `run_preprocess.py:__version__`, la version de Python embarquable, la liste des scripts) et **ré‑embarque** les **6 scripts** en base64 (blocs `#<index>#…`, 76 caractères/ligne).
+* [`build_launcher.py`](build_launcher.py) lit le template [`launcher_template.bat.in`](launcher_template.bat.in), y injecte la configuration (la version est lue dans `run_preprocess.py:__version__`, la version de Python embarquable, la liste des scripts) et **ré‑embarque** les **7 scripts** en base64 (blocs `#<index>#…`, 76 caractères/ligne).
 * L'**ordre d'embarquement est figé** (`run_preprocess.py` = index 0, puis `1-`→`4-` en index 1‑4, et `build_download_bundles.py` en **index 5**, tiré de `../tools/`) : le `.bat` extrait le bloc *N* pour le *N*ᵉ nom de sa liste interne.
 * Sortie en **ASCII + CRLF** (ce que `cmd.exe` préfère).
 * Ce lanceur autonome n'embarque **que la chaîne volume** : le rattachement du tracking ([§2.4](#24-le-suivi-cellulaire-tracking--rattachement-automatique)) n'y est pas disponible et est silencieusement ignoré. Utiliser le pack téléchargeable (`RUN.bat`) pour l'avoir.

@@ -1,4 +1,17 @@
 {
   "title": "Z-stapelverkenner",
-  "sliceDepth": "Doorsnede {n} van {total} — diepte {depth} µm"
+  "sliceDepth": "Doorsnede {n} van {total} — diepte {depth} µm",
+  "slabDepth": "Doorsneden {a}–{b} van {total} — van {from} tot {to} µm",
+  "info3d": "3D — {n} van {total} doorsneden getoond ({lo}–{hi}), {depth} µm",
+  "notch": "3D",
+  "notchTitle": "3D-weergave van alle behouden doorsneden. Sleep de cursor omlaag in de baan om doorsnede per doorsnede te bladeren.",
+  "trackTitle": "Sleep om door de doorsneden te bladeren. Sleep de cursor omhoog in de 3D-inkeping om ze allemaal te tonen.",
+  "cursorTitle": "Sleep om te verplaatsen. Trek aan een rand om het aantal getoonde doorsneden te wijzigen.",
+  "trimAboveTitle": "Doorsneden erboven wegsnijden",
+  "trimBelowTitle": "Doorsneden eronder wegsnijden",
+  "thickness": "Dikte",
+  "thicknessTitle": "Doorsneden tegelijk getoond",
+  "kept": "Behouden {lo}–{hi} · {n} van {total} doorsneden",
+  "keptAll": "Alle {total} doorsneden behouden",
+  "resetTrim": "Alle doorsneden herstellen"
 }

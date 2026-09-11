@@ -1,4 +1,17 @@
 {
   "title": "Explorateur Z-Stack",
-  "sliceDepth": "Coupe {n} sur {total} — profondeur {depth} µm"
+  "sliceDepth": "Coupe {n} sur {total} — profondeur {depth} µm",
+  "slabDepth": "Coupes {a}–{b} sur {total} — de {from} à {to} µm",
+  "info3d": "3D — {n} coupes sur {total} affichées ({lo}–{hi}), {depth} µm",
+  "notch": "3D",
+  "notchTitle": "Vue 3D de toutes les coupes conservées. Faites glisser le curseur vers le bas dans la piste pour parcourir coupe par coupe.",
+  "trackTitle": "Faites glisser pour parcourir les coupes. Remontez le curseur dans le cran 3D pour toutes les afficher.",
+  "cursorTitle": "Faites glisser pour déplacer. Tirez un bord pour changer le nombre de coupes affichées.",
+  "trimAboveTitle": "Rogner les coupes du dessus",
+  "trimBelowTitle": "Rogner les coupes du dessous",
+  "thickness": "Épaisseur",
+  "thicknessTitle": "Coupes affichées à la fois",
+  "kept": "Conservées {lo}–{hi} · {n} coupes sur {total}",
+  "keptAll": "Les {total} coupes sont conservées",
+  "resetTrim": "Rétablir toutes les coupes"
 }

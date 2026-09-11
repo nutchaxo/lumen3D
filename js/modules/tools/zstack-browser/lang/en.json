@@ -1,4 +1,17 @@
 {
   "title": "Z-Stack Browser",
-  "sliceDepth": "Slice {n} of {total} — depth {depth} µm"
+  "sliceDepth": "Slice {n} of {total} — depth {depth} µm",
+  "slabDepth": "Slices {a}–{b} of {total} — {from} to {to} µm",
+  "info3d": "3D — {n} of {total} slices shown ({lo}–{hi}), {depth} µm",
+  "notch": "3D",
+  "notchTitle": "3D view of every kept slice. Drag the cursor down into the track to browse slice by slice.",
+  "trackTitle": "Drag to browse the slices. Drag the cursor up into the 3D notch to show them all.",
+  "cursorTitle": "Drag to move. Drag an edge to change how many slices are shown.",
+  "trimAboveTitle": "Trim the slices above",
+  "trimBelowTitle": "Trim the slices below",
+  "thickness": "Thickness",
+  "thicknessTitle": "Slices shown at once",
+  "kept": "Kept {lo}–{hi} · {n} of {total} slices",
+  "keptAll": "All {total} slices kept",
+  "resetTrim": "Restore every slice"
 }

@@ -1,15 +1,15 @@
 {
   "id": "zstack-browser",
   "name": "Z-Stack Browser",
-  "version": "1.0.0",
-  "platformCompat": "1.x",
+  "version": "1.1.0",
+  "platformCompat": ">=1.52.0",
   "creator": "IRIBHM",
   "placement": "tools",
   "group": "layouts",
   "subtype": "toggle",
   "icon": "layers-3",
   "order": 40,
-  "description": "Browse the Z-stack slice by slice with synchronized multi-panel support.",
+  "description": "Browse the Z-stack: a 3D notch shows every kept slice, the cursor shows one slice or a slab of adjustable thickness, and two trim handles mask the slices above and below. Synchronized across compare panels.",
   "buttonId": "btn-toggle-zstack",
   "i18nTitle": "title",
   "i18nLanguages": [

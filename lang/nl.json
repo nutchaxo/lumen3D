@@ -16,14 +16,14 @@
   },
   "types": {
     "3d": {
-      "label": "Vast",
-      "title": "Vaste beeldvorming",
-      "desc": "3D-beeldstapels met hoge resolutie van gefixeerde {specimenPlural}. Meerkanaalsdata, klaar om te verkennen."
+      "label": "3D",
+      "title": "3D-beeldvorming",
+      "desc": "3D-beeldstapels met hoge resolutie van {specimenPlural}. Meerkanaalsdata, klaar om te verkennen."
     },
     "2d": {
-      "label": "Wholemount",
-      "title": "Wholemount-fotografie",
-      "desc": "Gekalibreerde stereomicroscoopfoto's van hele {specimenPlural}: kleuringen, schaalbalk en metingen in één oogopslag."
+      "label": "2D",
+      "title": "2D-beeldvorming",
+      "desc": "Gekalibreerde 2D-foto's van {specimenPlural}: kleuringen, schaalbalk en metingen in één oogopslag."
     },
     "live": {
       "label": "Live",

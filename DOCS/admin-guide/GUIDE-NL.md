@@ -803,7 +803,7 @@ Dit is een **eigen tabblad**, vlak naast *Identiteit*. Het zet hetzelfde idee vo
 Elke categorie heeft twee velden, **meertalig** net als die van het tabblad Identiteit:
 
 - **Korte naam** — wat op labels, filters en lijsten verschijnt (`Volumes`, `Foto's`…).
-- **Titel** — de lange vorm, gebruikt op de grote kaarten van de startpagina (`3D-beeldvorming`, `Wholemount-fotografie`…).
+- **Titel** — de lange vorm, gebruikt op de grote kaarten van de startpagina (`3D-beeldvorming`, `Live beeldvorming`…).
 
 **Laat een veld leeg om de standaardnaam te behouden.** Een leeg veld is geen lege naam: het platform valt dan terug op zijn eigen vertaling, in de taal van de bezoeker. Dat doet ook de knop **Herstellen** — die wist uw namen in plaats van ze door vaste tekst te vervangen.
 

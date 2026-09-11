@@ -16,18 +16,18 @@
   },
   "types": {
     "3d": {
-      "label": "Fixed",
-      "title": "Fixed Imaging",
-      "desc": "High-resolution 3D image stacks of fixed {specimenPlural}. Multi-channel imaging data ready to explore."
+      "label": "3D",
+      "title": "3D imaging",
+      "desc": "High-resolution 3D image stacks of {specimenPlural}. Multi-channel imaging data ready to explore."
     },
     "2d": {
-      "label": "Wholemount",
-      "title": "Wholemount Photography",
-      "desc": "Calibrated stereomicroscope photographs of whole {specimenPlural}: stained patterns, scale bar and measurements at a glance."
+      "label": "2D",
+      "title": "2D imaging",
+      "desc": "Calibrated 2D photographs of {specimenPlural}: stained patterns, scale bar and measurements at a glance."
     },
     "live": {
       "label": "Live",
-      "title": "Live Imaging",
+      "title": "Live imaging",
       "desc": "Time-lapse 4D recordings of {specimenPlural} over time. Watch development unfold in real time."
     }
   },

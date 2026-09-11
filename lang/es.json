@@ -16,17 +16,17 @@
   },
   "types": {
     "3d": {
-      "label": "Fijo",
-      "title": "Imagen fija",
-      "desc": "Pilas de imagen 3D de alta resolución de {specimenPlural} fijos. Datos de imagen multicanal listos para explorar."
+      "label": "3D",
+      "title": "Imagen 3D",
+      "desc": "Pilas de imagen 3D de alta resolución de {specimenPlural}. Datos de imagen multicanal listos para explorar."
     },
     "2d": {
-      "label": "Wholemount",
-      "title": "Fotografía whole-mount",
-      "desc": "Fotografías calibradas de {specimenPlural} enteros al estereomicroscopio: marcajes, barra de escala y medidas de un vistazo."
+      "label": "2D",
+      "title": "Imagen 2D",
+      "desc": "Fotografías 2D calibradas de {specimenPlural}: marcajes, barra de escala y medidas de un vistazo."
     },
     "live": {
-      "label": "En vivo",
+      "label": "Live",
       "title": "Imagen en vivo",
       "desc": "Grabaciones 4D en time-lapse de {specimenPlural} a lo largo del tiempo. Observa el desarrollo en tiempo real."
     }

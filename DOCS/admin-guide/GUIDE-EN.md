@@ -803,7 +803,7 @@ This is a **tab of its own**, right next to *Identity*. It carries the same idea
 Each category has two fields, **multilingual** like the ones in the Identity tab:
 
 - **Short name** — what appears on badges, filters and lists (`Volumes`, `Photographs`…).
-- **Title** — the long form, used on the large cards of the home page (`3D Imaging`, `Wholemount Photography`…).
+- **Title** — the long form, used on the large cards of the home page (`3D imaging`, `Live imaging`…).
 
 **Leave a field empty to keep the default name.** An empty field is not an empty name: the platform then falls back to its own translation, in the visitor's language. That is also what the **Reset** button does — it clears your names instead of replacing them with frozen text.
 

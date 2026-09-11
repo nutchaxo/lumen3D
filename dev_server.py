@@ -3370,8 +3370,11 @@ def _check_main(root_arg) -> int:
 
 # ── Dataset helpers ────────────────────────────────────────────────────────────
 
+# The dataset vocabulary, single table for the whole server: it is at once the
+# directory under DATA_WEB/ (and under uploads/staging/), the first segment of a
+# dataset id, the `type` field of metadata.json and the ?type= filter value.
 # Path-traversal guard for the `id` query param (= "<type>/<folder>").
-ALLOWED_TYPE_DIRS = ("fixed", "live", "tracking", "wholemount")
+ALLOWED_TYPE_DIRS = ("3d", "2d", "live", "tracking")
 _SAFE_FOLDER_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9._-]*$")
 
 
@@ -3492,9 +3495,12 @@ def _list_datasets() -> list[dict]:
                 continue
             meta_path = ds_dir / "metadata.json"
             if not meta_path.exists():
-                # Folder exists but no metadata yet (still preprocessing)
+                # Folder exists but no metadata yet (still preprocessing). `path` is
+                # emitted even here: it is the byte base every client builds URLs
+                # from, and a row without one has no way back to its folder.
                 datasets.append({
                     "id": f"{type_dir}/{ds_dir.name}",
+                    "path": f"{type_dir}/{ds_dir.name}",
                     "name": ds_dir.name,
                     "folderName": ds_dir.name,
                     "type": type_dir,
@@ -3523,8 +3529,8 @@ def _list_datasets() -> list[dict]:
                 "thumbnail":   thumb_url,
             })
             
-            # A wholemount is a photograph: nothing for the volume renderer to mount.
-            if "volumeSources" not in ds_entry and type_dir == "wholemount":
+            # A 2d dataset is a photograph: nothing for the volume renderer to mount.
+            if "volumeSources" not in ds_entry and type_dir == "2d":
                 ds_entry["volumeSources"] = []
             if "volumeSources" not in ds_entry:
                 ds_entry["volumeSources"] = [
@@ -3543,7 +3549,7 @@ def _list_datasets() -> list[dict]:
 
 
 def _get_dataset(dataset_id: str) -> dict | None:
-    """dataset_id = 'fixed/FolderName' """
+    """dataset_id = '<type>/FolderName' (e.g. '3d/FolderName')"""
     safe = _safe_dataset_dir(dataset_id)
     if safe is None:
         return None
@@ -3684,7 +3690,7 @@ def _save_dataset(dataset_id: str, body: dict) -> bool:
 
     stored_gallery = existing.get("gallery")
     existing.update(body)
-    existing["id"]          = folder          # canonical id = just folder name (no type/ prefix)
+    existing["id"]          = f"{type_dir}/{folder}"   # one id shape everywhere: '<type>/<folder>'
     existing["type"]        = type_dir
     existing["folderName"]  = folder
     existing["configured"]  = True
@@ -4024,6 +4030,319 @@ def _rebuild_catalog() -> int:
     return len(catalog)
 
 
+# ── One-shot migration: the pre-rename dataset vocabulary ──────────────────────
+# The four dataset types used to be spelled 'fixed' / 'wholemount' / 'live' /
+# 'tracking'. They are now '3d' / '2d' / 'live' / 'tracking' EVERYWHERE: the
+# directory under DATA_WEB/ and uploads/staging/, the first segment of a dataset
+# id, metadata.json's `type`, the import journal name and its `type` field, the
+# api/stats.json key and the ?type= filter value. Nothing anywhere reads the old
+# spelling any more — there is no alias layer, by design — so a deployment that
+# already holds bytes is converted once, here, at boot.
+#
+# Idempotent, and it costs a handful of is_dir()/glob() calls on a tree with
+# nothing left to convert. Renames go through os.replace() inside try/except so
+# two servers starting at the same moment cannot fight over the same directory.
+_LEGACY_TYPE_DIRS = {"fixed": "3d", "wholemount": "2d"}
+# An explorer filter link as the page builder serialises it into config/pages/.
+_LEGACY_TYPE_HREF_RE = re.compile(
+    r"(explorer\.html\?type=)(" + "|".join(_LEGACY_TYPE_DIRS) + r")(?![A-Za-z0-9_-])")
+
+
+def _migrate_rel(path: Path) -> str:
+    try:
+        return path.resolve().relative_to(ROOT).as_posix()
+    except (ValueError, OSError):
+        return str(path)
+
+
+def _migrate_legacy_id(value):
+    """'fixed/Foo' → '3d/Foo'. Returns (value, changed); anything that is not a
+    legacy-prefixed id comes back untouched."""
+    if not isinstance(value, str):
+        return value, False
+    head, sep, rest = value.partition("/")
+    canon = _LEGACY_TYPE_DIRS.get(head)
+    if not sep or canon is None:
+        return value, False
+    return f"{canon}/{rest}", True
+
+
+def _contains_bytes(path: Path, needles) -> bool:
+    """Substring probe on a small JSON file. Cheaper than parsing it, and this runs
+    on every boot of a tree that has nothing left to migrate."""
+    try:
+        raw = path.read_bytes()
+    except OSError:
+        return False
+    return any(n in raw for n in needles)
+
+
+def _legacy_types_present() -> bool:
+    """The boot guard: is there any artefact left in the old vocabulary?"""
+    staging = UPLOADS_DIR / "staging"
+    state = UPLOADS_DIR / "state"
+    for legacy in _LEGACY_TYPE_DIRS:
+        if (DATA_WEB / legacy).is_dir() or (staging / legacy).is_dir():
+            return True
+        if state.is_dir() and next(state.glob(f"{legacy}__*.json"), None) is not None:
+            return True
+    if _contains_bytes(STATS_FILE, (b'"fixed/', b'"wholemount/')):
+        return True
+    if _contains_bytes(INSTANCE_FILE, (b'"wholemount":',)):
+        return True
+    pages = CONFIG_DIR / "pages"
+    if pages.is_dir():
+        for page in pages.glob("*.json"):
+            # The full href pattern, not a substring: a page that merely mentions
+            # "type=fixedish" must not keep this guard hot on every boot.
+            try:
+                text = page.read_text(encoding="utf-8")
+            except OSError:
+                continue
+            if _LEGACY_TYPE_HREF_RE.search(text):
+                return True
+    return False
+
+
+def _migrate_move_dir(src: Path, dest: Path, log: list) -> None:
+    """Move a whole type directory onto its canonical name.
+
+    A plain rename when the target does not exist; otherwise (a half-migrated tree,
+    or an operator who created the new folder by hand) the datasets are moved one
+    by one and a name that exists on BOTH sides is left alone and reported — never
+    silently overwritten, the bytes are irreplaceable."""
+    if not src.is_dir():
+        return
+    if not dest.exists():
+        try:
+            os.replace(src, dest)
+            log.append(f"{_migrate_rel(src)} -> {_migrate_rel(dest)}")
+            return
+        except OSError:
+            # Cross-device, or another process created the target between the two
+            # calls. The per-child merge below handles both.
+            pass
+    try:
+        dest.mkdir(parents=True, exist_ok=True)
+        children = sorted(src.iterdir())
+    except OSError as exc:
+        log.append(f"FAILED {_migrate_rel(src)}: {exc}")
+        return
+    for child in children:
+        target = dest / child.name
+        if target.exists():
+            log.append(f"SKIPPED {_migrate_rel(child)}: {_migrate_rel(target)} already exists")
+            continue
+        try:
+            os.replace(child, target)
+            log.append(f"{_migrate_rel(child)} -> {_migrate_rel(target)}")
+        except OSError as exc:
+            log.append(f"FAILED {_migrate_rel(child)}: {exc}")
+    try:
+        if not any(src.iterdir()):
+            src.rmdir()
+            log.append(f"removed empty {_migrate_rel(src)}")
+    except OSError:
+        pass
+
+
+def _migrate_journals(state_dir: Path, log: list) -> None:
+    """uploads/state/<type>__<folder>.json — the resumable-import journal.
+
+    The type lives in the file NAME (list_staged splits the stem) and again in the
+    document's `type` field, and the format is shared byte-for-byte with the PHP
+    twin so an import started on one backend resumes on the other. Both halves
+    therefore move together."""
+    if not state_dir.is_dir():
+        return
+    for legacy, canon in _LEGACY_TYPE_DIRS.items():
+        for jp in sorted(state_dir.glob(f"{legacy}__*.json")):
+            target = state_dir / f"{canon}__{jp.name[len(legacy) + 2:]}"
+            if target.exists():
+                log.append(f"SKIPPED {jp.name}: {target.name} already exists")
+                continue
+            try:
+                doc = json.loads(jp.read_text(encoding="utf-8"))
+            except Exception:
+                doc = None
+            try:
+                if isinstance(doc, dict):
+                    doc["type"] = canon
+                    _atomic_write(target, json.dumps(doc, ensure_ascii=False), mode=_file_mode())
+                    jp.unlink()
+                else:
+                    # Unreadable journal: move it as-is rather than drop it. Worst
+                    # case the operator re-drops the folder and it re-plans.
+                    os.replace(jp, target)
+                log.append(f"journal {jp.name} -> {target.name}")
+            except OSError as exc:
+                log.append(f"FAILED journal {jp.name}: {exc}")
+
+
+def _migrate_metadata(log: list) -> None:
+    """Make every published metadata.json agree with its folder: `type` is the
+    directory it sits in, `id` is '<type>/<folder>', and any dataset relation the
+    operator recorded is re-pointed at the new id."""
+    for type_dir in ALLOWED_TYPE_DIRS:
+        base = DATA_WEB / type_dir
+        if not base.is_dir():
+            continue
+        for ds_dir in sorted(base.iterdir()):
+            meta_path = ds_dir / "metadata.json"
+            if not ds_dir.is_dir() or not meta_path.is_file():
+                continue
+            try:
+                meta = json.loads(meta_path.read_text(encoding="utf-8"))
+            except Exception:
+                continue
+            if not isinstance(meta, dict):
+                continue
+            ds_id = f"{type_dir}/{ds_dir.name}"
+            changed = False
+            if meta.get("type") != type_dir:
+                meta["type"] = type_dir          # the folder is the authority
+                changed = True
+            if meta.get("id") != ds_id:
+                meta["id"] = ds_id
+                changed = True
+            linked, moved = _migrate_legacy_id(meta.get("linkedTrackingId"))
+            if moved:
+                meta["linkedTrackingId"] = linked
+                changed = True
+            related = meta.get("relatedIds")
+            if isinstance(related, list):
+                rebuilt = []
+                for item in related:
+                    value, moved = _migrate_legacy_id(item)
+                    changed = changed or moved
+                    rebuilt.append(value)
+                if rebuilt != related:
+                    meta["relatedIds"] = rebuilt
+            if not changed:
+                continue
+            try:
+                _atomic_write(meta_path, json.dumps(meta, indent=2, ensure_ascii=False),
+                              mode=_file_mode())
+                log.append(f"metadata {ds_id}")
+            except OSError as exc:
+                log.append(f"FAILED metadata {ds_id}: {exc}")
+
+
+def _migrate_merge_counters(a, b):
+    """Two stats rows for one dataset (a legacy-keyed one and an already-canonical
+    one): numeric counters add up, the most recent ISO timestamp wins."""
+    if not isinstance(a, dict):
+        return b
+    if not isinstance(b, dict):
+        return a
+    merged = dict(a)
+    for key, value in b.items():
+        current = merged.get(key)
+        if isinstance(value, bool) or isinstance(current, bool):
+            merged[key] = value
+        elif isinstance(value, (int, float)) and isinstance(current, (int, float)):
+            merged[key] = current + value
+        elif isinstance(value, str) and isinstance(current, str):
+            merged[key] = max(current, value)   # ISO timestamps sort lexicographically
+        else:
+            merged.setdefault(key, value)
+    return merged
+
+
+def _migrate_stats(log: list) -> None:
+    """api/stats.json is indexed by dataset id and is _UPDATE_PROTECTed, so a
+    deployment's whole view/download history is keyed in the old vocabulary."""
+    if not STATS_FILE.exists():
+        return
+    try:
+        stats = json.loads(STATS_FILE.read_text(encoding="utf-8"))
+    except Exception:
+        return
+    if not isinstance(stats, dict) or not isinstance(stats.get("datasets"), dict):
+        return
+    rekeyed: dict = {}
+    changed = False
+    for key, value in stats["datasets"].items():
+        new_key, moved = _migrate_legacy_id(key)
+        changed = changed or moved
+        if new_key in rekeyed:
+            rekeyed[new_key] = _migrate_merge_counters(rekeyed[new_key], value)
+        else:
+            rekeyed[new_key] = value
+    if not changed:
+        return
+    stats["datasets"] = rekeyed
+    try:
+        _atomic_write(STATS_FILE, json.dumps(stats, indent=2, ensure_ascii=False))
+        log.append(f"api/stats.json: {len(rekeyed)} dataset row(s) re-keyed")
+    except OSError as exc:
+        log.append(f"FAILED api/stats.json: {exc}")
+
+
+def _migrate_instance(log: list) -> None:
+    """config/instance.json — pageTitles is keyed by <body data-page>, and the
+    photograph page is served as 2d.html (data-page="2d")."""
+    if not INSTANCE_FILE.exists():
+        return
+    try:
+        doc = json.loads(INSTANCE_FILE.read_text(encoding="utf-8"))
+    except Exception:
+        return
+    titles = doc.get("pageTitles") if isinstance(doc, dict) else None
+    if not isinstance(titles, dict) or "wholemount" not in titles:
+        return
+    value = titles.pop("wholemount")
+    titles.setdefault("2d", value)   # never clobber a title the operator already set
+    try:
+        _atomic_write(INSTANCE_FILE, json.dumps(doc, indent=2, ensure_ascii=False),
+                      mode=_file_mode())
+        log.append("config/instance.json: pageTitles.wholemount -> pageTitles.2d")
+    except OSError as exc:
+        log.append(f"FAILED config/instance.json: {exc}")
+
+
+def _migrate_pages(log: list) -> None:
+    """config/pages/<slug>.json holds operator-authored layouts whose buttons link
+    to explorer.html?type=<type>. Those hrefs are content, so nothing else will
+    ever fix them."""
+    pages = CONFIG_DIR / "pages"
+    if not pages.is_dir():
+        return
+    for page in sorted(pages.glob("*.json")):
+        try:
+            text = page.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        rewritten = _LEGACY_TYPE_HREF_RE.sub(
+            lambda m: m.group(1) + _LEGACY_TYPE_DIRS[m.group(2)], text)
+        if rewritten == text:
+            continue
+        try:
+            _atomic_write(page, rewritten, mode=_file_mode())
+            log.append(f"config/pages/{page.name}: explorer ?type= links re-pointed")
+        except OSError as exc:
+            log.append(f"FAILED config/pages/{page.name}: {exc}")
+
+
+def _migrate_dataset_types() -> list[str]:
+    """Convert a deployment to the canonical dataset vocabulary. Returns one line
+    per change (empty list = nothing to do). Safe to call on every boot."""
+    if not _legacy_types_present():
+        return []
+    log: list[str] = []
+    staging = UPLOADS_DIR / "staging"
+    for legacy, canon in _LEGACY_TYPE_DIRS.items():
+        _migrate_move_dir(DATA_WEB / legacy, DATA_WEB / canon, log)
+        _migrate_move_dir(staging / legacy, staging / canon, log)
+    _migrate_journals(UPLOADS_DIR / "state", log)
+    _migrate_metadata(log)
+    _migrate_stats(log)
+    _migrate_instance(log)
+    _migrate_pages(log)
+    _CATALOG_CACHE["sig"] = None
+    return log
+
+
 # ── Plugin discovery helpers ─────────────────────────────────────────────────────
 
 def _list_plugins() -> list[dict]:
@@ -4169,8 +4488,11 @@ def _write_plugins_manifest(plugins: list[dict]) -> None:
 
 # ── HTTP handler ───────────────────────────────────────────────────────────────
 
-# A served file under a dataset's download/ folder (used to count downloads).
-_DOWNLOAD_RE = re.compile(r"^DATA_WEB/(fixed|live|tracking|wholemount)/([^/]+)/download/.+", re.IGNORECASE)
+# A served file under a dataset's download/ folder (used to count downloads). The
+# type alternation is BUILT from the one type table, so the two can never drift.
+_DOWNLOAD_RE = re.compile(
+    r"^DATA_WEB/(" + "|".join(re.escape(t) for t in ALLOWED_TYPE_DIRS) + r")/([^/]+)/download/.+",
+    re.IGNORECASE)
 
 
 class AdminHandler(http.server.SimpleHTTPRequestHandler):
@@ -4267,7 +4589,10 @@ class AdminHandler(http.server.SimpleHTTPRequestHandler):
         m = _DOWNLOAD_RE.match(clean_path.replace("\\", "/"))
         if not m:
             return
-        ds_id = f"{m.group(1)}/{m.group(2)}"
+        # The regex is case-insensitive (a URL may spell the type dir in any case on
+        # a case-insensitive filesystem); the stats key must not be. Lower-casing it
+        # keeps this counter and the telemetry beacon writing the SAME key.
+        ds_id = f"{m.group(1).lower()}/{m.group(2)}"
         if _safe_dataset_dir(ds_id):
             try:
                 _record_event("download", ds_id)
@@ -4987,6 +5312,11 @@ class AdminHandler(http.server.SimpleHTTPRequestHandler):
                 safe = _safe_dataset_dir(ds_id) if ds_id else None
                 if safe is None or not safe[2].is_dir():
                     ds_id = None  # still count globally if the id is missing/invalid
+                else:
+                    # Key on the RESOLVED pair, never on the raw client string: the
+                    # download counter (_maybe_count_download) writes that same
+                    # '<type>/<folder>', so one dataset can never grow two rows.
+                    ds_id = f"{safe[0]}/{safe[1]}"
             else:
                 ds_id = None
             _record_event(kind, ds_id)
@@ -5150,6 +5480,8 @@ def main():
     parser.add_argument("--port", type=int, default=8080)
     parser.add_argument("--set-password", action="store_true",
                         help="Interactively set a new admin password")
+    parser.add_argument("--migrate-types", action="store_true",
+                        help="Convert an existing tree to the 3d/2d dataset vocabulary, report, and exit")
     parser.add_argument("--verbose", action="store_true",
                         help="Log every request to the console (off by default for speed)")
     parser.add_argument("--check", action="store_true",
@@ -5176,6 +5508,17 @@ def main():
         sys.exit(_check_main(args.root))
     if args.pivot:
         sys.exit(_pivot_main(args.pivot))
+
+    if args.migrate_types:
+        changes = _migrate_dataset_types()
+        for line in changes:
+            print(f"  {line}")
+        # Plain ASCII on purpose: this runs on a Windows console whose default
+        # encoding (cp1252) cannot encode an emoji, and a crash here would look
+        # like a failed migration.
+        print(f"[types] {len(changes)} change(s) applied." if changes
+              else "[types] Nothing to migrate - the tree already uses 3d/2d/live/tracking.")
+        sys.exit(0)
 
     if args.set_password:
         import getpass
@@ -5205,6 +5548,16 @@ def main():
     # One-shot: move any pre-split inline page draft out of the public config/ tree
     # before the first request can read it back.
     _migrate_inline_drafts()
+
+    # One-shot: a deployment created before the type rename still stores its bytes
+    # under DATA_WEB/fixed and DATA_WEB/wholemount, which nothing reads any more.
+    # Must run before the first request so no handler ever sees the old tree.
+    try:
+        upload_staging.ensure_dirs()   # also (re)asserts the uploads/ + DATA_WEB guards
+    except OSError as exc:
+        print(f"  [types] staging root unavailable: {exc}")
+    for line in _migrate_dataset_types():
+        print(f"  [types] {line}")
 
     rec = _load_credential()
     if rec:

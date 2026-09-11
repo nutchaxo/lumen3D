@@ -47,9 +47,14 @@ const InstanceConfig = (() => {
       home: 'Lumen3D — 3D Imaging Data Viewer',
       explorer: 'Data Explorer — Lumen3D', viewer: 'Viewer — Lumen3D',
       compare: 'Compare — Lumen3D', tracking: 'Tracking — Lumen3D',
-      wholemount: 'Wholemount — Lumen3D',
+      '2d': '2D — Lumen3D',
       about: 'About — Lumen3D', admin: 'Admin — Lumen3D', legal: 'Legal — Lumen3D'
     },
+    // Operator-chosen display names for the four dataset types ('3d', '2d',
+    // 'live', 'tracking'): { "<type>": { label, title } }, each localizable like
+    // `specimen`. Empty by default — an unset entry falls back to the translated
+    // `types.<type>.*` string in lang/<code>.json (see Utils.datasetTypeLabel).
+    datasetTypes: {},
     footer: { copyright: '© Lumen3D', links: [] },
     nav: {
       showExplorer: true, showCompare: true, showTracking: true,
@@ -151,8 +156,23 @@ const InstanceConfig = (() => {
       specimen: sing,
       specimenPlural: plur,
       Specimen: _cap(sing),
-      SpecimenPlural: _cap(plur)
+      SpecimenPlural: _cap(plur),
+      // Dataset-type display names, so a locale string can say "{type3d} datasets"
+      // instead of baking a type noun in. Resolved through Utils.datasetTypeLabel
+      // (operator override → translated default), which reads the default with
+      // I18n.raw() — NOT I18n.t() — because t() is what calls this function.
+      type3d: _typeToken('3d'),
+      type2d: _typeToken('2d'),
+      typeLive: _typeToken('live'),
+      typeTracking: _typeToken('tracking')
     };
+  }
+
+  function _typeToken(type) {
+    try {
+      if (typeof Utils !== 'undefined' && Utils.datasetTypeLabel) return Utils.datasetTypeLabel(type);
+    } catch (_) { /* fall through */ }
+    return type;
   }
 
   // ─── DOM application ──────────────────────────────────────
@@ -183,6 +203,12 @@ const InstanceConfig = (() => {
       });
     });
     try { applyNav(root); } catch (_) {}
+    // The operator's own type names live in this config, so a reload of it (the
+    // admin preview, a save) must refresh them too — the other trigger is the
+    // language switch, handled by I18n's translation pass.
+    try {
+      if (typeof Utils !== 'undefined' && Utils.applyDatasetTypeLabels) Utils.applyDatasetTypeLabels(root);
+    } catch (_) {}
   }
 
   /**
@@ -274,5 +300,5 @@ const InstanceConfig = (() => {
     _listeners.forEach(fn => { try { fn(_config); } catch (_) {} });
   }
 
-  return { load, boot, get, all, tokens, applyDom, applyHead, applyNav, onChange, isLoaded };
+  return { load, boot, get, all, localized: _localized, tokens, applyDom, applyHead, applyNav, onChange, isLoaded };
 })();

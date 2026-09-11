@@ -25,9 +25,9 @@ const tick = () => new Promise((r) => setTimeout(r, 5));
 // ---- ELE-13: dataset-tagged cache key ----
 {
   const BL = makeLoader({ getContextTruthy: false });
-  BL.init('DATA_WEB/fixed/A/bricks', { levels: [{ level: 0, dimensions: { x: 128, y: 128, z: 128 }, brickSize: 128 }], channels: 1 });
+  BL.init('DATA_WEB/3d/A/bricks', { levels: [{ level: 0, dimensions: { x: 128, y: 128, z: 128 }, brickSize: 128 }], channels: 1 });
   const kA = BL._cacheKey(0, 0, 1, 2, 3);
-  BL.init('DATA_WEB/fixed/B/bricks', { levels: [{ level: 0, dimensions: { x: 128, y: 128, z: 128 }, brickSize: 128 }], channels: 1 });
+  BL.init('DATA_WEB/3d/B/bricks', { levels: [{ level: 0, dimensions: { x: 128, y: 128, z: 128 }, brickSize: 128 }], channels: 1 });
   const kB = BL._cacheKey(0, 0, 1, 2, 3);
   assert.notEqual(kA, kB, 'cache keys must differ between datasets for the same coord');
   assert.ok(kA.includes('A'), 'key A carries its dataset tag');
@@ -42,7 +42,7 @@ const tick = () => new Promise((r) => setTimeout(r, 5));
   let fetchCalls = 0;
   const fetchImpl = (url, opts) => { fetchCalls++; return Promise.resolve({ ok: true, arrayBuffer: () => sharedAB }); };
   const BL = makeLoader({ fetchImpl });
-  BL.init('DATA_WEB/fixed/A/bricks', { levels: [{ level: 0, dimensions: { x: 128, y: 128, z: 128 }, brickSize: 128 }], channels: 1 });
+  BL.init('DATA_WEB/3d/A/bricks', { levels: [{ level: 0, dimensions: { x: 128, y: 128, z: 128 }, brickSize: 128 }], channels: 1 });
 
   const cA = new globalThis.AbortController();
   const p1 = BL._fetchPackBuffer('pack0.bin', cA.signal);
@@ -68,10 +68,10 @@ const tick = () => new Promise((r) => setTimeout(r, 5));
     levels: [{ level: 0, dimensions: { x: 128, y: 128, z: 128 }, brickSize: 128, chunks: [{ id: '0_0_0', nonEmpty: true }] }],
   };
   const BL = makeLoader({ fetchImpl, getContextTruthy: true });
-  BL.init('DATA_WEB/fixed/A/bricks', manifest);
+  BL.init('DATA_WEB/3d/A/bricks', manifest);
   const loadP = BL.loadBrickTasks([{ lod: 0, channel: 0, bx: 0, by: 0, bz: 0 }], { cacheResults: true });
   await tick();
-  BL.init('DATA_WEB/fixed/B/bricks', manifest); // bumps generation + cancels A
+  BL.init('DATA_WEB/3d/B/bricks', manifest); // bumps generation + cancels A
   resolveFetch(new ArrayBuffer(128 * 128 * 128)); // stale A fetch completes after the switch
   await loadP.catch(() => {});
   await tick();

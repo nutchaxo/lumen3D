@@ -1,5 +1,5 @@
 /* ============================================================
-   Lumen3D — Wholemount page
+   Lumen3D — 2D page (dataset type '2d', DATA_WEB/2d/)
    One calibrated photograph on a 2D canvas, and the whole collection
    as a contact sheet laid over the canvas.
    ============================================================ */
@@ -9,13 +9,13 @@
 [hidden] { display: none !important; }
 
 /* ── Stage ─────────────────────────────────────────────────────────────── */
-.wm-stage {
+.p2d-stage {
   position: relative;
   background: #000;
   overflow: hidden;
 }
 
-.wm-canvas {
+.p2d-canvas {
   display: block;
   width: 100%;
   height: 100%;
@@ -23,11 +23,11 @@
   touch-action: none;
 }
 
-.wm-canvas:active { cursor: grabbing; }
+.p2d-canvas:active { cursor: grabbing; }
 
-body[data-active-tool="measure"] .wm-canvas { cursor: crosshair; }
+body[data-active-tool="measure"] .p2d-canvas { cursor: crosshair; }
 
-.wm-load-state {
+.p2d-load-state {
   position: absolute;
   right: 12px;
   bottom: 12px;
@@ -40,11 +40,11 @@ body[data-active-tool="measure"] .wm-canvas { cursor: crosshair; }
   pointer-events: none;
 }
 
-.wm-load-state.is-error { background: #C62828; }
+.p2d-load-state.is-error { background: #C62828; }
 
 /* Displayed resolution: zoom as % of native (1 image px = 1 device px) and the
    physical size of one screen pixel at that zoom. */
-.wm-zoom {
+.p2d-zoom {
   position: absolute;
   right: 12px;
   top: 12px;
@@ -58,7 +58,7 @@ body[data-active-tool="measure"] .wm-canvas { cursor: crosshair; }
 }
 
 /* ── Sidebar ───────────────────────────────────────────────────────────── */
-.wm-info {
+.p2d-info {
   display: grid;
   grid-template-columns: auto 1fr;
   gap: 4px 10px;
@@ -66,21 +66,21 @@ body[data-active-tool="measure"] .wm-canvas { cursor: crosshair; }
   font-size: 12px;
 }
 
-.wm-info dt { color: var(--text-muted); }
+.p2d-info dt { color: var(--text-muted); }
 
-.wm-info dd {
+.p2d-info dd {
   margin: 0;
   color: var(--text-primary);
   overflow-wrap: anywhere;
 }
 
-.wm-measure-status {
+.p2d-measure-status {
   font-size: 12px;
   color: var(--text-muted);
   margin-bottom: 8px;
 }
 
-.wm-measure-controls {
+.p2d-measure-controls {
   display: flex;
   align-items: center;
   gap: 10px;
@@ -88,9 +88,9 @@ body[data-active-tool="measure"] .wm-canvas { cursor: crosshair; }
   font-size: 12px;
 }
 
-.wm-measure-controls input[type="range"] { flex: 1; min-width: 0; }
+.p2d-measure-controls input[type="range"] { flex: 1; min-width: 0; }
 
-.wm-check {
+.p2d-check {
   display: inline-flex;
   align-items: center;
   gap: 6px;
@@ -102,15 +102,15 @@ body[data-active-tool="measure"] .wm-canvas { cursor: crosshair; }
 /* Admin preview iframe / split-view pane: the host supplies its own chrome, and the
    sidebar starts collapsed without the width transition (a hidden or throttled
    iframe may never finish it, leaving a 320 px ghost beside the photograph). */
-body.wm-headless .viewer-header { display: none; }
-body.wm-headless .viewer-sidebar { transition: none; }
+body.p2d-headless .viewer-header { display: none; }
+body.p2d-headless .viewer-sidebar { transition: none; }
 /* A hosting page draws its own panel header over the top edge of the pane. */
-body.wm-headless .wm-zoom,
-body.wm-headless .wm-pane-nav { top: 44px; }
+body.p2d-headless .p2d-zoom,
+body.p2d-headless .p2d-pane-nav { top: 44px; }
 
 /* Pane navigation: the header (and its toolbar) is hidden inside a pane, so the
    photograph keeps its own previous / browse / next / fit controls. */
-.wm-pane-nav {
+.p2d-pane-nav {
   position: absolute;
   left: 50%;
   top: 10px;
@@ -121,63 +121,63 @@ body.wm-headless .wm-pane-nav { top: 44px; }
   border-radius: var(--radius-full);
   background: rgba(0, 0, 0, 0.55);
 }
-.wm-pane-nav .btn { color: #fff; }
+.p2d-pane-nav .btn { color: #fff; }
 
 /* ── Plugin panels (sidebar sections added through ui.addSidebarSection) ─── */
-.wm-plugin-body { display: flex; flex-direction: column; gap: 8px; font-size: 12px; }
-.wm-plugin-row { display: flex; align-items: center; gap: 8px; }
-.wm-plugin-row > label { flex: 0 0 76px; color: var(--text-muted); font-size: 11px; }
-.wm-plugin-row > input[type="range"] { flex: 1; min-width: 0; }
-.wm-plugin-row > .wm-plugin-value { flex: 0 0 48px; text-align: right; font-family: 'JetBrains Mono', monospace; font-size: 11px; }
-.wm-plugin-row > select { flex: 1; min-width: 0; }
-.wm-plugin-actions { display: flex; flex-wrap: wrap; gap: 6px; }
-.wm-plugin-hint { font-size: 11px; color: var(--text-muted); line-height: 1.4; }
+.p2d-plugin-body { display: flex; flex-direction: column; gap: 8px; font-size: 12px; }
+.p2d-plugin-row { display: flex; align-items: center; gap: 8px; }
+.p2d-plugin-row > label { flex: 0 0 76px; color: var(--text-muted); font-size: 11px; }
+.p2d-plugin-row > input[type="range"] { flex: 1; min-width: 0; }
+.p2d-plugin-row > .p2d-plugin-value { flex: 0 0 48px; text-align: right; font-family: 'JetBrains Mono', monospace; font-size: 11px; }
+.p2d-plugin-row > select { flex: 1; min-width: 0; }
+.p2d-plugin-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.p2d-plugin-hint { font-size: 11px; color: var(--text-muted); line-height: 1.4; }
 
-/* ── Split view: a second wholemount page beside the stage ─────────────── */
-.wm-split-pane {
+/* ── Split view: a second 2D page beside the stage ─────────────────────── */
+.p2d-split-pane {
   flex: 1;
   min-width: 0;
   position: relative;
   border-left: 2px solid var(--border-color);
   background: #000;
 }
-.wm-split-pane iframe { display: block; width: 100%; height: 100%; border: 0; }
-.wm-split-pane .wm-split-tag {
+.p2d-split-pane iframe { display: block; width: 100%; height: 100%; border: 0; }
+.p2d-split-pane .p2d-split-tag {
   position: absolute; left: 12px; top: 12px; padding: 3px 8px; font-size: 11px; color: #fff;
   background: rgba(0, 0, 0, 0.55); border-radius: var(--radius-full); pointer-events: none;
 }
 
 /* ── Modal (figure builder) ────────────────────────────────────────────── */
-.wm-modal {
+.p2d-modal {
   position: fixed; inset: 0; z-index: var(--z-viewer-modal);
   display: flex; align-items: center; justify-content: center;
   background: rgba(0, 0, 0, 0.6);
 }
-.wm-modal-card {
+.p2d-modal-card {
   width: min(1100px, 94vw); height: min(760px, 92vh);
   display: flex; flex-direction: column;
   background: var(--bg-surface); color: var(--text-primary);
   border: 1px solid var(--border-color); border-radius: var(--radius-lg);
   box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
 }
-.wm-modal-head { display: flex; align-items: center; gap: 12px; padding: 12px 16px; border-bottom: 1px solid var(--border-color); }
-.wm-modal-head h2 { flex: 1; margin: 0; font-size: 15px; }
-.wm-modal-body { flex: 1; min-height: 0; display: grid; grid-template-columns: 280px 1fr; }
-.wm-modal-list { overflow: auto; border-right: 1px solid var(--border-color); padding: 8px; display: flex; flex-direction: column; gap: 4px; }
-.wm-pick { display: flex; align-items: center; gap: 8px; padding: 4px 6px; border-radius: var(--radius-md); cursor: pointer; font-size: 12px; }
-.wm-pick:hover { background: var(--bg-hover, rgba(255, 255, 255, 0.05)); }
-.wm-pick img { width: 48px; height: 36px; object-fit: cover; border-radius: 4px; background: #000; }
-.wm-pick .wm-pick-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.wm-modal-main { display: flex; flex-direction: column; min-width: 0; }
-.wm-modal-options { display: flex; flex-wrap: wrap; gap: 12px; padding: 10px 14px; border-bottom: 1px solid var(--border-color); font-size: 12px; }
-.wm-modal-options label { display: inline-flex; align-items: center; gap: 6px; color: var(--text-muted); }
-.wm-modal-preview { flex: 1; min-height: 0; display: flex; align-items: center; justify-content: center; background: #111; overflow: hidden; }
-.wm-modal-preview canvas { max-width: 100%; max-height: 100%; }
-.wm-modal-foot { display: flex; align-items: center; gap: 8px; padding: 10px 16px; border-top: 1px solid var(--border-color); }
-.wm-modal-foot .wm-modal-status { flex: 1; font-size: 12px; color: var(--text-muted); }
+.p2d-modal-head { display: flex; align-items: center; gap: 12px; padding: 12px 16px; border-bottom: 1px solid var(--border-color); }
+.p2d-modal-head h2 { flex: 1; margin: 0; font-size: 15px; }
+.p2d-modal-body { flex: 1; min-height: 0; display: grid; grid-template-columns: 280px 1fr; }
+.p2d-modal-list { overflow: auto; border-right: 1px solid var(--border-color); padding: 8px; display: flex; flex-direction: column; gap: 4px; }
+.p2d-pick { display: flex; align-items: center; gap: 8px; padding: 4px 6px; border-radius: var(--radius-md); cursor: pointer; font-size: 12px; }
+.p2d-pick:hover { background: var(--bg-hover, rgba(255, 255, 255, 0.05)); }
+.p2d-pick img { width: 48px; height: 36px; object-fit: cover; border-radius: 4px; background: #000; }
+.p2d-pick .p2d-pick-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.p2d-modal-main { display: flex; flex-direction: column; min-width: 0; }
+.p2d-modal-options { display: flex; flex-wrap: wrap; gap: 12px; padding: 10px 14px; border-bottom: 1px solid var(--border-color); font-size: 12px; }
+.p2d-modal-options label { display: inline-flex; align-items: center; gap: 6px; color: var(--text-muted); }
+.p2d-modal-preview { flex: 1; min-height: 0; display: flex; align-items: center; justify-content: center; background: #111; overflow: hidden; }
+.p2d-modal-preview canvas { max-width: 100%; max-height: 100%; }
+.p2d-modal-foot { display: flex; align-items: center; gap: 8px; padding: 10px 16px; border-top: 1px solid var(--border-color); }
+.p2d-modal-foot .p2d-modal-status { flex: 1; font-size: 12px; color: var(--text-muted); }
 
 /* ── Contact-sheet browser ─────────────────────────────────────────────── */
-.wm-browser {
+.p2d-browser {
   position: absolute;
   inset: 0;
   display: flex;
@@ -189,13 +189,13 @@ body.wm-headless .wm-pane-nav { top: 44px; }
   overflow: auto;
 }
 
-.wm-browser-head {
+.p2d-browser-head {
   display: flex;
   align-items: center;
   gap: 12px;
 }
 
-.wm-browser-title {
+.p2d-browser-title {
   display: flex;
   align-items: center;
   gap: 8px;
@@ -203,43 +203,43 @@ body.wm-headless .wm-pane-nav { top: 44px; }
   color: var(--text-primary);
 }
 
-.wm-count {
+.p2d-count {
   font-size: 12px;
   font-weight: 400;
   color: var(--text-muted);
 }
 
-.wm-search {
+.p2d-search {
   margin-left: auto;
   max-width: 260px;
 }
 
-.wm-filters {
+.p2d-filters {
   display: flex;
   flex-wrap: wrap;
   gap: 8px 20px;
 }
 
-.wm-filter {
+.p2d-filter {
   display: flex;
   align-items: center;
   gap: 8px;
 }
 
-.wm-filter-label {
+.p2d-filter-label {
   font-size: 11px;
   letter-spacing: 0.04em;
   text-transform: uppercase;
   color: var(--text-muted);
 }
 
-.wm-chips {
+.p2d-chips {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
 }
 
-.wm-chip {
+.p2d-chip {
   padding: 3px 10px;
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-full);
@@ -249,26 +249,26 @@ body.wm-headless .wm-pane-nav { top: 44px; }
   cursor: pointer;
 }
 
-.wm-chip:hover { border-color: var(--border-strong); }
+.p2d-chip:hover { border-color: var(--border-strong); }
 
-.wm-chip.is-active {
-  background: var(--badge-wm-bg);
-  color: var(--badge-wm-text);
+.p2d-chip.is-active {
+  background: var(--badge-2d-bg);
+  color: var(--badge-2d-text);
   border-color: currentColor;
 }
 
-.wm-hint {
+.p2d-hint {
   font-size: 11px;
   color: var(--text-muted);
 }
 
-.wm-grid {
+.p2d-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
   gap: 12px;
 }
 
-.wm-card {
+.p2d-card {
   padding: 0;
   overflow: hidden;
   text-align: left;
@@ -279,7 +279,7 @@ body.wm-headless .wm-pane-nav { top: 44px; }
   cursor: pointer;
 }
 
-.wm-card img {
+.p2d-card img {
   display: block;
   width: 100%;
   aspect-ratio: 4 / 3;
@@ -287,24 +287,24 @@ body.wm-headless .wm-pane-nav { top: 44px; }
   background: #000;
 }
 
-.wm-card:hover,
-.wm-card:focus-visible {
+.p2d-card:hover,
+.p2d-card:focus-visible {
   border-color: var(--border-strong);
   outline: none;
 }
 
-.wm-card.is-active { border-color: var(--badge-wm-text); }
+.p2d-card.is-active { border-color: var(--badge-2d-text); }
 
-.wm-card-body {
+.p2d-card-body {
   display: flex;
   flex-direction: column;
   gap: 4px;
   padding: 8px 10px;
 }
 
-.wm-card-body .badge { align-self: flex-start; }
+.p2d-card-body .badge { align-self: flex-start; }
 
-.wm-card-name {
+.p2d-card-name {
   font-size: 12px;
   font-weight: 600;
   white-space: nowrap;
@@ -312,12 +312,12 @@ body.wm-headless .wm-pane-nav { top: 44px; }
   text-overflow: ellipsis;
 }
 
-.wm-card-meta {
+.p2d-card-meta {
   font-size: 11px;
   color: var(--text-muted);
 }
 
-.wm-empty {
+.p2d-empty {
   grid-column: 1 / -1;
   padding: 40px;
   text-align: center;

@@ -44,11 +44,13 @@ const Catalog = (() => {
 
   /**
    * Get a dataset by ID
-   * @param {string} id
+   * @param {string} id  '<type>/<folder>', e.g. '3d/Egfl7eGFP-E8-5'
    * @returns {object|null}
    */
   function getById(id) {
-    return _datasets.find(d => d.id === id) || null;
+    const wanted = String(id || '');
+    if (!wanted) return null;
+    return _datasets.find(d => d.id === wanted) || null;
   }
 
   /**
@@ -169,13 +171,24 @@ const Catalog = (() => {
       totalEmbryos: embryos.size,
       totalCells: tracking.reduce((sum, d) => sum + (d.nCells || 0), 0),
       totalRegions: regions.size,
-      byType: {
-        fixed: _datasets.filter(d => d.type === 'fixed').length,
-        live: _datasets.filter(d => d.type === 'live').length,
-        tracking: tracking.length,
-        wholemount: _datasets.filter(d => d.type === 'wholemount').length
-      }
+      byType: _countByType()
     };
+  }
+
+  /** Counters keyed by dataset type ('3d', '2d', 'live', 'tracking'). Every known
+   *  type is seeded at 0 so a caller can read a counter without an existence test;
+   *  a type the catalog carries but Utils does not know still gets a key rather
+   *  than disappearing from the totals. */
+  function _countByType() {
+    const counts = {};
+    const known = (typeof Utils !== 'undefined' && Array.isArray(Utils.DATASET_TYPES))
+      ? Utils.DATASET_TYPES : [];
+    known.forEach(type => { counts[type] = 0; });
+    _datasets.forEach(d => {
+      if (!d.type) return;
+      counts[d.type] = (counts[d.type] || 0) + 1;
+    });
+    return counts;
   }
 
   /**
@@ -199,7 +212,9 @@ const Catalog = (() => {
           cmp = _stageNumber(a.stage || a.stageNumeric) - _stageNumber(b.stage || b.stageNumeric);
           break;
         case 'type':
-          cmp = (a.type || '').localeCompare(b.type || '');
+          // Ordering by the raw type id would read '2d' < '3d' < 'live' < 'tracking',
+          // an order the operator never sees; sort on the name that is displayed.
+          cmp = _typeLabel(a.type).localeCompare(_typeLabel(b.type));
           break;
         default:
           cmp = 0;
@@ -215,15 +230,31 @@ const Catalog = (() => {
   function _specimenNoun() {
     try {
       if (typeof InstanceConfig !== 'undefined' && InstanceConfig.get) {
-        return InstanceConfig.get('specimen.singular', 'sample');
+        // `specimen.singular` is localizable: the stored value is a flat string OR
+        // a per-locale object, so a bare get() can hand back an object that the
+        // template literals below would render as '[object Object]'.
+        const v = InstanceConfig.localized
+          ? InstanceConfig.localized(InstanceConfig.get('specimen.singular'))
+          : InstanceConfig.get('specimen.singular');
+        if (typeof v === 'string' && v) return v;
       }
     } catch (_) { /* fall through */ }
     return 'sample';
   }
 
+  /** The displayed name of a dataset type — never the raw id, which is an
+   *  internal token the operator can rename in config/instance.json. */
+  function _typeLabel(type) {
+    if (!type) return '';
+    if (typeof Utils !== 'undefined' && Utils.datasetTypeLabel) return Utils.datasetTypeLabel(type);
+    return String(type);
+  }
+
   function _relationLabel(type) {
     return {
-      'tracking-link': 'Linked tracking',
+      // 'tracking-link' is an internal relation enum; the word shown to the
+      // operator is the label of the 'tracking' DATASET TYPE.
+      'tracking-link': `Linked ${_typeLabel('tracking')}`,
       registered: 'Registered',
       related: 'Related dataset',
       'same-embryo': `Same ${_specimenNoun()}/stage`,
@@ -237,7 +268,7 @@ const Catalog = (() => {
       const median = Number.isFinite(qc?.medianRmsAfter) ? `, median RMS ${qc.medianRmsAfter.toFixed(3)}` : '';
       return `${method}${median}`;
     }
-    if (type === 'tracking-link') return 'Tracking dataset linked to this acquisition.';
+    if (type === 'tracking-link') return `${_typeLabel('tracking')} dataset linked to this acquisition.`;
     if (type === 'same-embryo') return `Matched by ${_specimenNoun()} and stage metadata.`;
     if (type === 'related') return 'Explicitly linked by dataset metadata.';
     return 'Related by experimental context.';

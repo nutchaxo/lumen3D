@@ -340,14 +340,100 @@ const Utils = (() => {
    * @returns {string}
    */
   // ── Dataset types ──────────────────────────────────────────────────────────
-  const DATASET_TYPES = ['fixed', 'live', 'tracking', 'wholemount'];
+  // ONE vocabulary, everywhere: the directory under DATA_WEB/, the first segment
+  // of a dataset id, metadata.json "type", plugin.json "dataTypes", the staging
+  // id and the admin filters all spell a type the same way.
+  //   '3d'        volumes of fixed specimens   DATA_WEB/3d/        viewer.html
+  //   '2d'        calibrated photographs       DATA_WEB/2d/        2d.html
+  //   'live'      4D timelapse volumes         DATA_WEB/live/      viewer.html
+  //   'tracking'  cell-tracking trajectories   DATA_WEB/tracking/  tracking.html
+  // What the operator SEES is never hardcoded — see datasetTypeLabel().
+  const DATASET_TYPES = ['3d', '2d', 'live', 'tracking'];
 
-  /** The page that opens a dataset of this type. */
+  // Types whose bytes stream as 64³ bricks. A '2d' dataset is one photograph:
+  // no bricks, no LOD pyramid, no channels.
+  const VOLUME_DATASET_TYPES = ['3d', 'live', 'tracking'];
+
+  const _TYPE_PAGE = { '3d': 'viewer.html', '2d': '2d.html', live: 'viewer.html', tracking: 'tracking.html' };
+  const _TYPE_ICON = { '3d': 'layers', '2d': 'camera', live: 'video', tracking: 'git-branch' };
+  const _TYPE_GRADIENT = {
+    '3d': 'linear-gradient(135deg, #00D2FF22, #0F346044)',
+    '2d': 'linear-gradient(135deg, #8B7CFF22, #1A1A2E44)',
+    live: 'linear-gradient(135deg, #FFA72622, #16213E44)',
+    tracking: 'linear-gradient(135deg, #00A65422, #1A1A2E44)'
+  };
+
+  function isDatasetType(type) { return DATASET_TYPES.indexOf(type) !== -1; }
+
+  /** The type segment of a dataset id ('3d/Foo' → '3d'); null if not a type. */
+  function datasetTypeOfId(id) {
+    const seg = String(id || '').split('/')[0];
+    return isDatasetType(seg) ? seg : null;
+  }
+
+  /**
+   * Short display name of a type — badges, filter chips, selects, stats.
+   * Resolution order:
+   *   1. the operator's own name, config/instance.json datasetTypes.<type>.label
+   *      (a flat string, or a per-locale object like `specimen`);
+   *   2. the translated default types.<type>.label in lang/<code>.json;
+   *   3. the type id, so a page that loaded neither InstanceConfig nor I18n
+   *      still renders a name instead of an empty badge.
+   */
+  function datasetTypeLabel(type) { return _typeText(type, 'label'); }
+
+  /** Long display name of a type — the landing page's type cards. */
+  function datasetTypeTitle(type) { return _typeText(type, 'title') || _typeText(type, 'label'); }
+
+  function _typeText(type, field) {
+    if (!type) return '';
+    try {
+      if (typeof InstanceConfig !== 'undefined' && InstanceConfig.localized) {
+        const v = InstanceConfig.localized(InstanceConfig.get(`datasetTypes.${type}.${field}`));
+        if (v) return v;
+      }
+    } catch (_) { /* fall through to the translated default */ }
+    try {
+      // I18n.raw, never I18n.t: t() interpolates {type3d}… through
+      // InstanceConfig.tokens(), which resolves them right back through here.
+      if (typeof I18n !== 'undefined' && I18n.raw) {
+        const v = I18n.raw(`types.${type}.${field}`);
+        if (v) return v;
+      }
+    } catch (_) { /* fall through */ }
+    return field === 'label' ? type : '';
+  }
+
+  /**
+   * Fill every [data-dataset-type] (short label) and [data-dataset-type-title]
+   * (long title) from the resolved type name — the twin of I18n's [data-i18n]
+   * sweep and of InstanceConfig's [data-instance] sweep, for text that is NEITHER
+   * a fixed translation NOR a plain config value but the combination of the two.
+   * The inline markup stays the pre-script fallback. Called by both triggers
+   * (a language switch and a config reload), so a page needs no wiring of its own.
+   * @param {ParentNode} [root=document]
+   */
+  function applyDatasetTypeLabels(root) {
+    root = root || (typeof document !== 'undefined' ? document : null);
+    if (!root || !root.querySelectorAll) return;
+    root.querySelectorAll('[data-dataset-type]').forEach(el => {
+      const v = datasetTypeLabel(el.getAttribute('data-dataset-type'));
+      if (v) el.textContent = v;
+    });
+    root.querySelectorAll('[data-dataset-type-title]').forEach(el => {
+      const v = datasetTypeTitle(el.getAttribute('data-dataset-type-title'));
+      if (v) el.textContent = v;
+    });
+  }
+
+  function datasetTypeIcon(type) { return _TYPE_ICON[type] || 'box'; }
+  function datasetTypeBadgeClass(type) { return isDatasetType(type) ? `badge-${type}` : 'badge-3d'; }
+  function datasetTypeGradient(type) { return _TYPE_GRADIENT[type] || _TYPE_GRADIENT['3d']; }
+
+  /** The page that opens a dataset — takes a dataset record or a bare type. */
   function datasetPage(dataset) {
-    const type = dataset && dataset.type;
-    if (type === 'tracking') return 'tracking.html';
-    if (type === 'wholemount') return 'wholemount.html';
-    return 'viewer.html';
+    const type = (dataset && typeof dataset === 'object') ? dataset.type : dataset;
+    return _TYPE_PAGE[type] || 'viewer.html';
   }
 
   function datasetUrl(dataset) {
@@ -382,6 +468,15 @@ const Utils = (() => {
     isTrustedMessageOrigin,
     trustedTargetOrigin,
     DATASET_TYPES,
+    VOLUME_DATASET_TYPES,
+    isDatasetType,
+    datasetTypeOfId,
+    datasetTypeLabel,
+    datasetTypeTitle,
+    applyDatasetTypeLabels,
+    datasetTypeIcon,
+    datasetTypeBadgeClass,
+    datasetTypeGradient,
     datasetPage,
     datasetUrl
   };

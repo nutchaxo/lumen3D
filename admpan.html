@@ -155,6 +155,10 @@
         <i data-lucide="database"></i>
         <span class="adm-nav-label" data-i18n="admin.navDatasets">Datasets</span>
       </button>
+      <button class="adm-nav-item" data-tab="dataset-types">
+        <i data-lucide="shapes"></i>
+        <span class="adm-nav-label" data-i18n="dtypes.nav">Types de données</span>
+      </button>
       <button class="adm-nav-item" data-tab="upload">
         <i data-lucide="upload-cloud"></i>
         <span class="adm-nav-label" data-i18n="admin.navUpload">Import</span>
@@ -276,13 +280,11 @@
                      placeholder="Rechercher…" data-i18n-placeholder="admin.search" autocomplete="off">
               <button class="list-search-clear" id="search-clear" style="display:none">✕</button>
             </div>
-            <div class="list-filter-tabs">
-              <button class="filter-tab active" data-type="all" data-i18n="admin.filterAll">Tous</button>
-              <button class="filter-tab" data-type="fixed" data-i18n="admin.filterFixed">Fixed</button>
-              <button class="filter-tab" data-type="live" data-i18n="admin.filterLive">Live</button>
-              <button class="filter-tab" data-type="hidden" data-i18n="admin.filterHidden">Masqués</button>
-              <button class="filter-tab" data-type="staging" data-i18n="admin.filterStaging">Import</button>
-            </div>
+            <!-- Filled by js/pages/admin/tab-datasets.js: one chip per dataset
+                 type (Utils.DATASET_TYPES, operator-editable labels) plus the
+                 all / hidden / staging pseudo-filters. Hardcoding the chips here
+                 leaves a type unreachable the day one is added. -->
+            <div class="list-filter-tabs" id="ds-filter-tabs"></div>
           </div>
 
           <div class="dataset-list" id="dataset-list">
@@ -486,6 +488,11 @@
         </aside>
 
       </div><!-- /admin-body -->
+    </section>
+
+    <!-- ───────── TAB: DATASET TYPES (operator-editable type names) ───────── -->
+    <section class="adm-tabpanel" id="tab-dataset-types" data-tab="dataset-types">
+      <div class="adm-tab-inner" id="dataset-types-root"></div>
     </section>
 
     <!-- ───────── TAB: STATISTICS ───────── -->

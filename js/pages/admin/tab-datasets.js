@@ -12,7 +12,7 @@
 'use strict';
 
 import {
-  API_DATASETS, t, escHtml, apiFetch, toast, el, deepClone, refreshIcons,
+  API_DATASETS, Utils, t, escHtml, apiFetch, toast, el, deepClone, refreshIcons,
 } from './shared.js';
 import { setUnsaved, setDirtyGuard } from './bus.js';
 import * as Upload from './upload-manager.js';
@@ -62,6 +62,7 @@ let DOM = {};
 function refDom() {
   DOM = {
     datasetList: el('dataset-list'),
+    filterTabs: el('ds-filter-tabs'),
     listLoading: el('list-loading'),
     datasetCount: el('dataset-count'),
     datasetSearch: el('dataset-search'),
@@ -144,11 +145,38 @@ export function openDataset(id) {
   const ds = _datasets.find((d) => d.id === id);
   if (ds && _typeFilter !== 'all' && !getFilteredDatasets().some((d) => d.id === id)) {
     _typeFilter = ds.staging ? 'staging' : 'all';
-    document.querySelectorAll('#tab-datasets .filter-tab').forEach((x) =>
-      x.classList.toggle('active', x.dataset.type === _typeFilter));
+    syncFilterTabs();
     renderList();
   }
   selectDataset(id);
+}
+
+/**
+ * The filter strip, generated from the canonical type list.
+ *
+ * A hardcoded row of chips left two of the four dataset types reachable only
+ * through "Tous". Building it from Utils.DATASET_TYPES means a type can never go
+ * missing again, and the chip text is the operator's own name for that type
+ * (Utils.datasetTypeLabel), not a frozen i18n key. 'all', 'hidden' and 'staging'
+ * are not types — they are pseudo-filters over publication and import state —
+ * so they are appended after them.
+ */
+function renderFilterTabs() {
+  if (!DOM.filterTabs) return;
+  const chips = [
+    { type: 'all', label: t('admin.filterAll', 'Tous') },
+    ...(Utils ? Utils.DATASET_TYPES : []).map((ty) => ({ type: ty, label: Utils.datasetTypeLabel(ty) })),
+    { type: 'hidden', label: t('admin.filterHidden', 'Masqués') },
+    { type: 'staging', label: t('admin.filterStaging', 'Import') },
+  ];
+  DOM.filterTabs.innerHTML = chips.map((c) =>
+    `<button class="filter-tab${c.type === _typeFilter ? ' active' : ''}" data-type="${escHtml(c.type)}" title="${escHtml(c.label)}">${escHtml(c.label)}</button>`
+  ).join('');
+}
+
+function syncFilterTabs() {
+  DOM.filterTabs?.querySelectorAll('.filter-tab').forEach((x) =>
+    x.classList.toggle('active', x.dataset.type === _typeFilter));
 }
 
 function getFilteredDatasets() {
@@ -322,9 +350,9 @@ function setFormEnabled(on) {
 function dimsLabel(m) {
   const d = m.dimensions || {};
   if (!d.x) return '—';
-  if (m.type === 'wholemount') {
+  if (m.type === '2d') {
     const px = m.pixelSizeUm?.x;
-    return `${d.x} × ${d.y} px · ${px ? `${px.toFixed(3)} µm/px` : t('wholemount.uncalibrated', 'non calibré')}`;
+    return `${d.x} × ${d.y} px · ${px ? `${px.toFixed(3)} µm/px` : t('2d.uncalibrated', 'non calibré')}`;
   }
   return `${d.x} × ${d.y} × ${d.z} px · ${t('admin.dimsChannels', `${d.c} canal(ux)`, { count: d.c })}`;
 }
@@ -348,18 +376,18 @@ function toggleVolumeSections(on) {
 function validateDatasetMeta(meta) {
   if (!meta || typeof meta !== 'object') return t('admin.reasonEmpty', 'réponse vide');
   if (typeof meta.id !== 'string' || !meta.id) return t('admin.reasonNoId', 'identifiant manquant');
-  if (!['fixed', 'live', 'tracking', 'wholemount'].includes(meta.type)) return t('admin.reasonBadType', 'type invalide');
+  if (!Utils?.isDatasetType(meta.type)) return t('admin.reasonBadType', 'type invalide');
   const d = meta.dimensions;
   if (!d || typeof d !== 'object') return t('admin.reasonNoDims', 'dimensions manquantes');
   const dimOk = ['x', 'y', 'z', 'c'].every((k) => Number.isFinite(d[k]) && d[k] > 0);
   if (!dimOk) return t('admin.reasonBadDims', 'dimensions invalides');
-  if (meta.type === 'wholemount') return validateWholemountMeta(meta);
+  if (meta.type === '2d') return validate2dMeta(meta);
   if (!Array.isArray(meta.channels) || meta.channels.length === 0) return t('admin.reasonNoChannels', 'canaux manquants');
   return null;
 }
 
-// A wholemount is one photograph: it mounts from its `image` block, not from channels.
-function validateWholemountMeta(meta) {
+// A '2d' dataset is one photograph: it mounts from its `image` block, not from channels.
+function validate2dMeta(meta) {
   const img = meta.image;
   if (!img || typeof img !== 'object') return t('admin.reasonNoImage', 'bloc image manquant');
   const sizeOk = ['width', 'height'].every((k) => Number.isFinite(img[k]) && img[k] > 0);
@@ -386,7 +414,7 @@ async function selectDataset(id) {
 
   // A photograph carries no channels: fabricating three from dimensions.c would
   // be written back on save and turn it into something the page cannot read.
-  meta.channels = meta.type === 'wholemount' ? [] : normaliseChannels(meta.channels, meta.dimensions?.c || 0);
+  meta.channels = meta.type === '2d' ? [] : normaliseChannels(meta.channels, meta.dimensions?.c || 0);
   // Preserve the list-level hidden flag if the metadata doesn't carry it yet.
   if (meta.hidden === undefined) meta.hidden = !!_current.hidden;
   _draft = deepClone(meta);
@@ -434,9 +462,12 @@ function loadPreview(ds) {
   DOM.previewLabelBar.style.display = 'none';
   DOM.previewFrameWrap.style.display = 'none';
   DOM.previewLoading.style.display = 'flex';
-  const viewerId = ds.id.includes('/') ? ds.id.split('/').pop() : ds.id;
-  const page = ds.type === 'wholemount' ? 'wholemount.html' : 'viewer.html';
-  DOM.previewFrame.src = `${page}?id=${encodeURIComponent(viewerId)}&path=${encodeURIComponent(ds.id)}&mode=admin&hideHeader=true`;
+  const viewerId = ds.folderName || (ds.id.includes('/') ? ds.id.split('/').pop() : ds.id);
+  // `path` is what the viewer turns into DATA_WEB/<path> (or a staging blob
+  // proxy) for every byte it fetches; `id` is the record. They carry the same
+  // string, so say which meaning is wanted here.
+  const page = Utils ? Utils.datasetPage(ds) : 'viewer.html';
+  DOM.previewFrame.src = `${page}?id=${encodeURIComponent(viewerId)}&path=${encodeURIComponent(ds.path || ds.id)}&mode=admin&hideHeader=true`;
 }
 
 function schedulePreviewUpdate() {
@@ -460,7 +491,9 @@ function pushPreviewUpdate() {
 function populateForm() {
   const m = _draft, ds = _current;
   DOM.topbarName.textContent = m.name || ds.folderName || ds.id;
-  DOM.topbarType.textContent = `${m.type || 'fixed'} · ${ds.id}`;
+  // The operator's own name for the type, never the raw id — the id is already
+  // the first segment of the dataset id printed right next to it.
+  DOM.topbarType.textContent = `${(Utils ? Utils.datasetTypeLabel(m.type) : m.type) || ''} · ${ds.id}`;
   DOM.fName.value = m.name || '';
   DOM.fStage.value = m.stage || '';
   DOM.fEmbryo.value = m.embryo || '';
@@ -468,7 +501,7 @@ function populateForm() {
   DOM.fFolder.textContent = ds.folderName || ds.id;
   const d = m.dimensions || {};
   DOM.fDims.textContent = dimsLabel(m);
-  toggleVolumeSections(m.type !== 'wholemount');
+  toggleVolumeSections(m.type !== '2d');
   const vs = m.voxel_size || {};
   DOM.fVoxX.value = vs.x ?? '';
   DOM.fVoxY.value = vs.y ?? '';
@@ -688,9 +721,11 @@ function galleryItems() {
 }
 
 function galleryUrl(file) {
-  // Cache-busted on the added timestamp: a re-upload under a recycled name must not
-  // show the previous bytes.
-  return `DATA_WEB/${_current.id}/gallery/${encodeURIComponent(file)}`;
+  // A byte URL: built from `path` (where the dataset lives on disk), not from
+  // `id` (what addresses the record in the API). The two carry the same string;
+  // naming the right one is what keeps it that way. The server never recycles a
+  // file name (it suffixes -1, -2…), so the previous bytes can't be shown.
+  return `DATA_WEB/${_current.path || _current.id}/gallery/${encodeURIComponent(file)}`;
 }
 
 function renderGallery() {
@@ -898,7 +933,7 @@ async function saveDataset() {
   _draft.stage = (DOM.fStage.value || '').trim();
   _draft.embryo = (DOM.fEmbryo.value || '').trim() || null;
   _draft.description = (DOM.fDescription.value || '').trim() || null;
-  if (_draft.type !== 'wholemount') {   // a photograph is calibrated by pixelSizeUm, not voxels
+  if (_draft.type !== '2d') {   // a photograph is calibrated by pixelSizeUm, not voxels
     _draft.voxel_size = {
       x: parseFloat(DOM.fVoxX.value) || _draft.voxel_size?.x || 1,
       y: parseFloat(DOM.fVoxY.value) || _draft.voxel_size?.y || 1,
@@ -909,8 +944,13 @@ async function saveDataset() {
   const sn = parseStageNumeric(_draft.stage);
   if (sn !== null) _draft.stageNumeric = sn;
 
+  // The backend MERGES this body into metadata.json, and the type is not the
+  // editor's to set: it is derived from the directory the dataset lives in and
+  // re-asserted server-side on every write. Posting it back could only ever
+  // persist a stale or inconsistent value, so it is left out of the payload.
+  const { type: _serverOwnedType, ...payload } = _draft;
   const data = await apiFetch(`${API_DATASETS}?action=save&id=${encodeURIComponent(_current.id)}`,
-    { method: 'POST', body: JSON.stringify(_draft) });
+    { method: 'POST', body: JSON.stringify(payload) });
 
   DOM.btnSave.disabled = false;
   DOM.btnSave.innerHTML = t('admin.save', '💾 Sauvegarder');
@@ -987,13 +1027,14 @@ function wire() {
     _searchQuery = ''; DOM.datasetSearch.value = '';
     DOM.searchClear.style.display = 'none'; renderList();
   });
-  document.querySelectorAll('#tab-datasets .filter-tab').forEach((tab) => {
-    tab.addEventListener('click', () => {
-      document.querySelectorAll('#tab-datasets .filter-tab').forEach((x) => x.classList.remove('active'));
-      tab.classList.add('active');
-      _typeFilter = tab.dataset.type;
-      renderList();
-    });
+  // Delegated: the strip is re-generated on every language switch and after a
+  // type is renamed, so a per-button listener would be lost (or stacked).
+  DOM.filterTabs?.addEventListener('click', (e) => {
+    const tab = e.target.closest('.filter-tab');
+    if (!tab) return;
+    _typeFilter = tab.dataset.type;
+    syncFilterTabs();
+    renderList();
   });
 
   [DOM.fName, DOM.fStage, DOM.fEmbryo, DOM.fDescription, DOM.fVoxX, DOM.fVoxY, DOM.fVoxZ]
@@ -1127,6 +1168,7 @@ export const DatasetsTab = {
   mount() {
     refDom();
     setDirtyGuard(() => _dirty);
+    renderFilterTabs();
     wire();
     loadDatasets();
     // An import promotes a dataset from "not editable" to "editable" the instant
@@ -1136,6 +1178,8 @@ export const DatasetsTab = {
     // request per tick for the whole duration of a multi-hour transfer.
     Upload.subscribe(onImportChange);
   },
-  activate() { if (_loaded) loadDatasets(); },
-  relabel() { renderList(); if (_draft) { populateForm(); applyStagingChrome(_draft); } },
+  // A type renamed in the Dataset types tab must show up on the chips here the
+  // next time this tab is opened, not only after a reload.
+  activate() { renderFilterTabs(); if (_loaded) loadDatasets(); },
+  relabel() { renderFilterTabs(); renderList(); if (_draft) { populateForm(); applyStagingChrome(_draft); } },
 };

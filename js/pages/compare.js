@@ -145,13 +145,14 @@ const CompareApp = (() => {
 
     const list = document.getElementById('modal-dataset-list');
     list.innerHTML = _datasets.map(d => {
-      const color = { fixed: '#00D2FF', live: '#FFA726', wholemount: '#B388FF' }[d.type] || '#00A654';
       // SEC-014: dataset fields (id/thumbnail/name/type) are catalog data — escape
       // before innerHTML interpolation (cf. _addPanel which already uses escapeHtml).
+      // The type pill takes its colour from the shared badge class and its name
+      // from the operator's own wording, like every other type badge.
       return `
         <div class="dataset-mini-card" data-id="${Utils.escapeHtml(d.id)}">
           ${d.thumbnail ? `<img src="${Utils.escapeHtml(d.thumbnail)}" alt="" style="width:100%;aspect-ratio:16/9;object-fit:cover;border-radius:var(--radius-sm);margin-bottom:8px;">` : ''}
-          <span class="card-type" style="background: ${color}22; color: ${color}; border: 1px solid ${color}55">${Utils.escapeHtml(String(d.type).toUpperCase())}</span>
+          <span class="card-type ${Utils.datasetTypeBadgeClass(d.type)}">${Utils.escapeHtml(Utils.datasetTypeLabel(d.type))}</span>
           <div class="font-bold text-sm mt-1">${Utils.escapeHtml(d.name)}</div>
           <div class="text-xs text-muted mt-1">${Utils.formatStage(d.stage)}</div>
         </div>
@@ -232,7 +233,7 @@ const CompareApp = (() => {
     
     // A photograph has no z-stack / grid / axes: the block stays in the DOM (the
     // bindings below expect it) but is never shown.
-    if (d.type === 'wholemount') panel.querySelector('.panel-visual-tools').style.display = 'none';
+    if (d.type === '2d') panel.querySelector('.panel-visual-tools').style.display = 'none';
     grid.appendChild(panel);
     if (window.lucide) lucide.createIcons({nodes: [panel]});
     
@@ -346,7 +347,7 @@ const CompareApp = (() => {
     const ready = await _waitForPanelReady(panelIndex, 180000);
     if (ready) {
       const panel = document.getElementById(`panel-${panelIndex}`);
-      if (!['tracking', 'wholemount'].includes(panel?.dataset.datasetType)) {
+      if (!['tracking', '2d'].includes(panel?.dataset.datasetType)) {
         _queueHighDetailLoad(panelIndex);
       }
     }
@@ -846,7 +847,7 @@ const CompareApp = (() => {
 
     panels.forEach(panel => {
       const iframe = panel.querySelector('iframe.viewer-frame');
-      const photo = _wholemountSliceResult(iframe);
+      const photo = _photoSliceResult(iframe);
       if (photo) {
         const rect = panel.getBoundingClientRect();
         sliceEntries.push({
@@ -1022,18 +1023,18 @@ const CompareApp = (() => {
     });
   }
 
-  /** A wholemount pane as a slice result: its native rendering, µm/px isotropic. */
-  function _wholemountSliceResult(iframe) {
+  /** A photograph pane as a slice result: its native rendering, µm/px isotropic. */
+  function _photoSliceResult(iframe) {
     const win = iframe?.contentWindow;
-    if (!win || !win.WholemountViewer) return null;
+    if (!win || !win.Viewer2D) return null;
     try {
-      const canvas = win.WholemountViewer.getNativeCanvas();
+      const canvas = win.Viewer2D.getNativeCanvas();
       if (!canvas) return null;
-      const px = win.WholemountViewer.getPixelSizeUm() || 1;
-      return { canvas, width: canvas.width, height: canvas.height, source: 'wholemount', quality: 'native',
+      const px = win.Viewer2D.getPixelSizeUm() || 1;
+      return { canvas, width: canvas.width, height: canvas.height, source: '2d', quality: 'native',
         pixelSizeUm: { x: px, y: px }, channelState: [] };
     } catch (err) {
-      console.warn('[Compare] wholemount pane unavailable for the Studio', err);
+      console.warn('[Compare] 2D pane unavailable for the Studio', err);
       return null;
     }
   }

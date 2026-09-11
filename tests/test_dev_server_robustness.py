@@ -36,7 +36,7 @@ class TestThumbnailValidation(unittest.TestCase):
         self.tmp = tempfile.mkdtemp()
         self._o = dev_server.DATA_WEB
         dev_server.DATA_WEB = Path(self.tmp) / "DATA_WEB"
-        (dev_server.DATA_WEB / "fixed").mkdir(parents=True)
+        (dev_server.DATA_WEB / "3d").mkdir(parents=True)
         _reset_cache()
 
     def tearDown(self):
@@ -46,7 +46,7 @@ class TestThumbnailValidation(unittest.TestCase):
 
     def _send(self, raw_bytes, mime="image/webp"):
         b64 = base64.b64encode(raw_bytes).decode()
-        return dev_server._save_thumbnail_bytes("fixed/Demo", f"data:{mime};base64,{b64}")
+        return dev_server._save_thumbnail_bytes("3d/Demo", f"data:{mime};base64,{b64}")
 
     def test_webp_accepted(self):
         status, _ = self._send(WEBP)
@@ -72,7 +72,7 @@ class TestCatalogSortAndConsistency(unittest.TestCase):
         self.tmp = tempfile.mkdtemp()
         self._o = dev_server.DATA_WEB
         dev_server.DATA_WEB = Path(self.tmp) / "DATA_WEB"
-        for t in ("fixed", "live", "tracking"):
+        for t in ("3d", "2d", "live", "tracking"):
             (dev_server.DATA_WEB / t).mkdir(parents=True)
         _reset_cache()
 
@@ -82,7 +82,7 @@ class TestCatalogSortAndConsistency(unittest.TestCase):
         _reset_cache()
 
     def _ds(self, folder, **kw):
-        d = dev_server.DATA_WEB / "fixed" / folder
+        d = dev_server.DATA_WEB / "3d" / folder
         d.mkdir(parents=True, exist_ok=True)
         (d / "metadata.json").write_text(json.dumps({"id": folder, "configured": True, **kw}), encoding="utf-8")
 
@@ -108,8 +108,8 @@ class TestCatalogCache(unittest.TestCase):
         self.tmp = tempfile.mkdtemp()
         self._o = dev_server.DATA_WEB
         dev_server.DATA_WEB = Path(self.tmp) / "DATA_WEB"
-        (dev_server.DATA_WEB / "fixed" / "A").mkdir(parents=True)
-        (dev_server.DATA_WEB / "fixed" / "A" / "metadata.json").write_text('{"id":"A","configured":true}', encoding="utf-8")
+        (dev_server.DATA_WEB / "3d" / "A").mkdir(parents=True)
+        (dev_server.DATA_WEB / "3d" / "A" / "metadata.json").write_text('{"id":"A","configured":true}', encoding="utf-8")
         _reset_cache()
 
     def tearDown(self):

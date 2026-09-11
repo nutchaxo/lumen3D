@@ -40,6 +40,12 @@ $method = $_SERVER['REQUEST_METHOD'] ?? 'GET';
 
 if (!$authed) admin_json_out(['error' => 'Not authenticated'], 401);
 
+// Legacy staging trees and journals (uploads/staging/fixed, uploads/state/fixed__*)
+// are renamed to the unified vocabulary before any path is resolved from ?ds=.
+// Cheap enough for the parallel chunk POSTs: a handful of is_dir/glob calls, then a
+// static short-circuit for the rest of the request.
+lumen_migrate_dataset_types();
+
 const LUMEN_UP_WRITE_ACTIONS = ['plan', 'chunk', 'file_done', 'publish', 'discard',
                                 'save_metadata', 'save_thumbnail', 'gc'];
 

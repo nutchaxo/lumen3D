@@ -37,7 +37,7 @@ const Explorer = (() => {
     const params = new URLSearchParams(window.location.search);
     if (params.has('type')) {
       const type = params.get('type');
-      if (Utils.DATASET_TYPES.includes(type)) {
+      if (Utils.isDatasetType(type)) {
         _filters.type = type;
         const radio = document.querySelector(`input[name="filter-type"][value="${type}"]`);
         if (radio) radio.checked = true;
@@ -197,10 +197,6 @@ const Explorer = (() => {
   }
 
   function _createGridCard(dataset) {
-    const typeLabels = { fixed: I18n.t('explorer.fixed'), live: I18n.t('explorer.live'), tracking: I18n.t('explorer.tracking'), wholemount: I18n.t('explorer.wholemount') };
-    const typeClass = { fixed: 'badge-fixed', live: 'badge-live', tracking: 'badge-tracking', wholemount: 'badge-wholemount' };
-    const typeIcons = { fixed: 'layers', live: 'video', tracking: 'git-branch', wholemount: 'camera' };
-
     const stageDisplay = Utils.formatStage(dataset.stage);
     const dateDisplay = Utils.formatDate(dataset.date);
 
@@ -209,21 +205,14 @@ const Explorer = (() => {
     if (dateDisplay !== '—') metaItems.push(`<span>${dateDisplay}</span>`);
     if (dataset.nCells) metaItems.push(`<span>${dataset.nCells} ${I18n.t('tracking.cells').toLowerCase()}</span>`);
 
-    const gradients = {
-      fixed: 'linear-gradient(135deg, #00D2FF22, #0F346044)',
-      live: 'linear-gradient(135deg, #FFA72622, #16213E44)',
-      tracking: 'linear-gradient(135deg, #00A65422, #1A1A2E44)',
-      wholemount: 'linear-gradient(135deg, #8B7CFF22, #1A1A2E44)'
-    };
-
     return `
       <a href="${_datasetUrl(dataset)}" class="card animate-fade-in-up" style="text-decoration:none;color:inherit;animation-duration:0.3s;">
-        <div class="card-image" style="background: ${gradients[dataset.type] || gradients.fixed}; display:flex; align-items:center; justify-content:center;">
-          ${_datasetPreview(dataset, typeIcons)}
+        <div class="card-image" style="background: ${Utils.datasetTypeGradient(dataset.type)}; display:flex; align-items:center; justify-content:center;">
+          ${_datasetPreview(dataset)}
         </div>
         <div class="card-body">
           <div style="display:flex;align-items:center;gap:var(--space-2);margin-bottom:var(--space-2)">
-            <span class="badge badge-dot ${typeClass[dataset.type]}">${typeLabels[dataset.type]}</span>
+            ${_typeBadge(dataset)}
             ${_availabilityBadges(dataset)}
           </div>
           <div class="card-title">${Utils.escapeHtml(dataset.name)}</div>
@@ -240,28 +229,17 @@ const Explorer = (() => {
   }
 
   function _createListCard(dataset) {
-    const typeLabels = { fixed: I18n.t('explorer.fixed'), live: I18n.t('explorer.live'), tracking: I18n.t('explorer.tracking'), wholemount: I18n.t('explorer.wholemount') };
-    const typeClass = { fixed: 'badge-fixed', live: 'badge-live', tracking: 'badge-tracking', wholemount: 'badge-wholemount' };
-    const typeIcons = { fixed: 'layers', live: 'video', tracking: 'git-branch', wholemount: 'camera' };
-
     const stageDisplay = Utils.formatStage(dataset.stage);
     const dateDisplay = Utils.formatDate(dataset.date);
 
-    const gradients = {
-      fixed: 'linear-gradient(135deg, #00D2FF22, #0F346044)',
-      live: 'linear-gradient(135deg, #FFA72622, #16213E44)',
-      tracking: 'linear-gradient(135deg, #00A65422, #1A1A2E44)',
-      wholemount: 'linear-gradient(135deg, #8B7CFF22, #1A1A2E44)'
-    };
-
     return `
       <a href="${_datasetUrl(dataset)}" class="dataset-list-item animate-fade-in" style="animation-duration:0.3s;">
-        <div class="dataset-list-icon" style="background: ${gradients[dataset.type] || gradients.fixed};">
-          ${dataset.thumbnail ? `<img src="${dataset.thumbnail}" alt="" style="width:100%;height:100%;object-fit:cover;border-radius:inherit">` : `<i data-lucide="${typeIcons[dataset.type]}" style="color:var(--text-muted);opacity:0.6"></i>`}
+        <div class="dataset-list-icon" style="background: ${Utils.datasetTypeGradient(dataset.type)};">
+          ${dataset.thumbnail ? `<img src="${dataset.thumbnail}" alt="" style="width:100%;height:100%;object-fit:cover;border-radius:inherit">` : `<i data-lucide="${Utils.datasetTypeIcon(dataset.type)}" style="color:var(--text-muted);opacity:0.6"></i>`}
         </div>
         <div class="dataset-list-content">
           <div style="display:flex;align-items:center;gap:var(--space-2);margin-bottom:var(--space-1)">
-            <span class="badge badge-dot ${typeClass[dataset.type]}" style="font-size:10px;padding:2px 6px;">${typeLabels[dataset.type]}</span>
+            ${_typeBadge(dataset, 'font-size:10px;padding:2px 6px;')}
             <span style="font-size:var(--text-sm);color:var(--text-secondary);">${stageDisplay !== '—' ? stageDisplay + ' &middot; ' : ''}${dateDisplay}</span>
             ${_availabilityBadges(dataset)}
           </div>
@@ -277,21 +255,27 @@ const Explorer = (() => {
     `;
   }
 
-  // Compare mounts viewer.html panels; a photograph has nothing to mount there.
   function _compareButton(dataset, label) {
-    if (dataset.type === 'wholemount') return '';
     return `<span class="btn btn-outline btn-sm" role="button" tabindex="0" data-compare-id="${Utils.escapeHtml(dataset.id)}">${label}</span>`;
+  }
+
+  // The colour class and the name both come from Utils: the name may be the
+  // operator's own (config/instance.json), so it is escaped like catalog data.
+  function _typeBadge(dataset, style = '') {
+    const cls = Utils.datasetTypeBadgeClass(dataset.type);
+    const label = Utils.escapeHtml(Utils.datasetTypeLabel(dataset.type));
+    return `<span class="badge badge-dot ${cls}"${style ? ` style="${style}"` : ''}>${label}</span>`;
   }
 
   function _datasetUrl(dataset) {
     return Utils.datasetUrl(dataset);
   }
 
-  function _datasetPreview(dataset, typeIcons) {
+  function _datasetPreview(dataset) {
     if (dataset.thumbnail) {
       return `<img src="${dataset.thumbnail}" alt="">`;
     }
-    return `<i data-lucide="${typeIcons[dataset.type]}" style="width:48px;height:48px;color:var(--text-muted);opacity:0.4"></i>`;
+    return `<i data-lucide="${Utils.datasetTypeIcon(dataset.type)}" style="width:48px;height:48px;color:var(--text-muted);opacity:0.4"></i>`;
   }
 
   function _availabilityBadges(dataset) {
@@ -303,7 +287,7 @@ const Explorer = (() => {
     if (hasLinked) badges.push('<span class="availability-badge">Linked</span>');
     if (hasRaw) badges.push('<span class="availability-badge">Raw</span>');
     if (dataset.path) badges.push('<span class="availability-badge">Web</span>');
-    if (hasTracking) badges.push('<span class="availability-badge">Tracking</span>');
+    if (hasTracking) badges.push(`<span class="availability-badge">${Utils.escapeHtml(Utils.datasetTypeLabel('tracking'))}</span>`);
     return badges.join('');
   }
 

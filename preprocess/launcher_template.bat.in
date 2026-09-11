@@ -336,18 +336,18 @@ exit /b 0
 
 rem ---- Saisie des parametres -------------------------------------------------
 rem  Deux chaines distinctes : les volumes passent par run_preprocess.py (briques,
-rem  LOD, tracking), les photographies whole-mount par wholemount_importer.py --
-rem  une image, rien a decouper. Les deux scripts sont embarques dans ce .bat.
+rem  LOD, tracking), les photographies par 2d_importer.py -- une image, rien a
+rem  decouper. Les deux scripts sont embarques dans ce .bat.
 :ask_params
 echo.
-echo      !ACC![1]!R! Volumes Imaris             !DIM!(.ims, dossier fixed\)!R!
-echo      !ACC![2]!R! Photographies whole-mount  !DIM!(.tif, dossier wholemount\)!R!
+echo      !ACC![1]!R! Volumes Imaris    !DIM!(.ims, dossier 3d\ ou live\)!R!
+echo      !ACC![2]!R! Photographies 2D  !DIM!(.tif, dossier 2d\)!R!
 echo.
 set "MODE=volumes"
 set "_ans="
 set /p "_ans=   Type de donnees [1] : "
-if "!_ans!"=="2" set "MODE=wholemount"
-if "!MODE!"=="wholemount" goto :ask_wholemount
+if "!_ans!"=="2" set "MODE=2d"
+if "!MODE!"=="2d" goto :ask_2d
 
 :ask_input
 echo.
@@ -407,20 +407,20 @@ if /i "!_ans!"=="n" (
 exit /b 0
 
 
-rem ---- Saisie des parametres : photographies whole-mount ---------------------
-:ask_wholemount
-:ask_wm_input
+rem ---- Saisie des parametres : photographies 2D ------------------------------
+:ask_2d
+:ask_2d_input
 echo.
 set "INPUT="
 set /p "INPUT=   Dossier des fichiers .tif : "
 if not defined INPUT (
     call :warnmsg "Veuillez saisir un dossier."
-    goto :ask_wm_input
+    goto :ask_2d_input
 )
 set INPUT=!INPUT:"=!
 if not exist "!INPUT!\" (
     call :warnmsg "Dossier introuvable : !INPUT!"
-    goto :ask_wm_input
+    goto :ask_2d_input
 )
 set "TIFCOUNT=0"
 for %%F in ("!INPUT!\*.tif" "!INPUT!\*.tiff") do set /a TIFCOUNT+=1
@@ -428,7 +428,7 @@ if "!TIFCOUNT!"=="0" (
     call :warnmsg "Aucun fichier .tif detecte dans ce dossier."
     set "_ans="
     set /p "_ans=   Continuer quand meme ? [o/N] "
-    if /i not "!_ans!"=="o" goto :ask_wm_input
+    if /i not "!_ans!"=="o" goto :ask_2d_input
 ) else (
     call :ok "!TIFCOUNT! fichier(s) .tif detecte(s)."
 )
@@ -464,7 +464,7 @@ echo !DIM!----------------------------------------------------------------------
 echo    !BOLD!Recapitulatif!R!
 echo      Python     : !PY!
 echo      Entree     : !INPUT!
-echo      Sortie     : !OUTPUT!\wholemount
+echo      Sortie     : !OUTPUT!\2d
 echo      Coloration : !STAINING!
 if defined LINE (echo      Lignee     : !LINE!) else (echo      Lignee     : lue dans le nom du fichier)
 if defined WITH_DOWNLOADS (echo      Download/  : oui) else (echo      Download/  : non)
@@ -486,7 +486,7 @@ echo.
 set "PYTHONUNBUFFERED=1"
 set "PYTHONIOENCODING=utf-8"
 set "EXTRA="
-if "!MODE!"=="wholemount" goto :run_wholemount
+if "!MODE!"=="2d" goto :run_2d
 if defined WITH_DOWNLOADS (
     call :ensure_tifffile
     set "EXTRA=--with-downloads"
@@ -499,11 +499,11 @@ if defined FILTER (
 goto :run_report
 
 rem  L'importeur n'ecrit que des .webp : tifffile n'est pas requis ici.
-:run_wholemount
+:run_2d
 if defined WITH_DOWNLOADS set "EXTRA=--with-downloads"
 if defined FORCE set EXTRA=!EXTRA! --force
 if defined LINE set EXTRA=!EXTRA! --line "!LINE!"
-%PY% "!WORK!\wholemount_importer.py" --input "!INPUT!" --output "!OUTPUT!" --staining "!STAINING!" !EXTRA!
+%PY% "!WORK!\2d_importer.py" --input "!INPUT!" --output "!OUTPUT!" --staining "!STAINING!" !EXTRA!
 
 :run_report
 set "RC=!errorlevel!"

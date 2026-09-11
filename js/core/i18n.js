@@ -347,6 +347,25 @@ const I18n = (() => {
   }
 
   /**
+   * Resolve a key WITHOUT white-label token interpolation.
+   *
+   * t() interpolates {brand}/{specimen}/{type3d}… from InstanceConfig.tokens(),
+   * and tokens() asks Utils.datasetTypeLabel() for the default type names, which
+   * live in this very dictionary under `types.*`. Reading them through t() would
+   * make t() re-enter itself for every translated string, so that one path reads
+   * the string raw. Same resolution order as t() (current locale → fallback).
+   * @param {string} key
+   * @returns {string|undefined} undefined when the key is missing or not a leaf
+   */
+  function raw(key) {
+    let value = _resolve(key, _translations);
+    if (value === undefined && _loaded[_fallbackLang]) {
+      value = _resolve(key, _loaded[_fallbackLang]);
+    }
+    return typeof value === 'string' ? value : undefined;
+  }
+
+  /**
    * Brand/specimen tokens from the instance config (white-label). Guarded so
    * i18n keeps working if InstanceConfig is absent (e.g. a page that does not
    * load it) — tokens then simply resolve to nothing and any {token} stays literal.
@@ -440,6 +459,14 @@ const I18n = (() => {
         el.innerHTML = translated;
       }
     });
+
+    // Dataset-type names are half translation, half operator setting, so they
+    // have no [data-i18n] key — but they DO change with the language (the
+    // translated default, and a per-locale custom name). Refresh them here so a
+    // language switch never leaves a stale type name behind.
+    try {
+      if (typeof Utils !== 'undefined' && Utils.applyDatasetTypeLabels) Utils.applyDatasetTypeLabels(document);
+    } catch (_) { /* type labels are cosmetic: never break the translation pass */ }
   }
 
   /**
@@ -459,6 +486,7 @@ const I18n = (() => {
   return {
     init,
     t,
+    raw,
     tp,
     forPlugin,
     setLanguage,

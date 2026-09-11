@@ -61,7 +61,7 @@ const TrackingApp = (() => {
     document.getElementById('dataset-title').textContent = _datasetMeta.name || _datasetId;
     // DEAD-036: single assignment (the first '·'-separated write was immediately overwritten).
     document.getElementById('dataset-subtitle').textContent =
-      `${Utils.formatStage(_datasetMeta.stage)} - ${Utils.formatDate(_datasetMeta.date)} - Tracking`;
+      `${Utils.formatStage(_datasetMeta.stage)} - ${Utils.formatDate(_datasetMeta.date)} - ${Utils.datasetTypeLabel('tracking')}`;
     _renderRelatedDatasets();
 
     // 5. Initialize 3D Tracking Viewer
@@ -918,13 +918,17 @@ const TrackingApp = (() => {
   function _relatedLinkHtml(dataset) {
     const page = Utils.datasetPage(dataset);
     const href = _relatedHref(page, dataset.id);
-    const type = Utils.escapeHtml(dataset.type || 'data');
+    // Two different things: the colour class (a type id can start with a digit,
+    // so it is never a bare CSS class — see .related-type--<type> in viewer.css)
+    // and the name the operator chose.
+    const typeClass = Utils.isDatasetType(dataset.type) ? `related-type--${dataset.type}` : '';
+    const typeLabel = Utils.escapeHtml(Utils.datasetTypeLabel(dataset.type));
     const stage = Utils.escapeHtml(Utils.formatStage(dataset.stage));
     const date = Utils.escapeHtml(Utils.formatDate(dataset.date));
     const name = Utils.escapeHtml(dataset.name || dataset.id);
     return `
       <a class="related-link" href="${href}" title="${window.I18n ? window.I18n.t('js.open') : 'Open'} ${name}">
-        <span class="related-type ${type}">${type}</span>
+        <span class="related-type ${typeClass}">${typeLabel}</span>
         <span class="related-link-title">
           <span class="related-link-name">${name}</span>
           <span class="related-link-meta">${stage} · ${date}</span>
@@ -938,7 +942,8 @@ const TrackingApp = (() => {
     const page = Utils.datasetPage(dataset);
     const href = _relatedHref(page, dataset.id);
     const compareHref = `compare.html?add=${encodeURIComponent(_datasetId)}&add=${encodeURIComponent(dataset.id)}`;
-    const type = Utils.escapeHtml(dataset.type || 'data');
+    const typeClass = Utils.isDatasetType(dataset.type) ? `related-type--${dataset.type}` : '';
+    const typeLabel = Utils.escapeHtml(Utils.datasetTypeLabel(dataset.type));
     const stage = Utils.escapeHtml(Utils.formatStage(dataset.stage));
     const date = Utils.escapeHtml(Utils.formatDate(dataset.date));
     const name = Utils.escapeHtml(dataset.name || dataset.id);
@@ -951,7 +956,7 @@ const TrackingApp = (() => {
       : (relation?.calibrationAvailable ? 'Calibration available' : 'Calibration metadata not available');
     return `
       <div class="related-link">
-        <span class="related-type ${type}">${type}</span>
+        <span class="related-type ${typeClass}">${typeLabel}</span>
         <span class="related-link-title">
           <span class="related-link-name">${name}</span>
           <span class="related-link-meta">${stage} · ${date}</span>

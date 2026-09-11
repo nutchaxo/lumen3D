@@ -103,6 +103,23 @@ const PluginRegistry = (() => {
     return meta.dataTypes.includes(dataType);
   }
 
+  const _warnedDataTypes = new Set();
+
+  /** A dataTypes entry that names no known type can never match a host, so the
+   *  plugin would vanish from every page with nothing but a silent exclusion to
+   *  show for it. Say so once per plugin+value, at load time. */
+  function _warnUnknownDataTypes(meta, modPath) {
+    if (!Array.isArray(meta.dataTypes)) return;
+    if (typeof Utils === 'undefined' || !Utils.isDatasetType) return;
+    meta.dataTypes.forEach(declared => {
+      if (Utils.isDatasetType(declared)) return;
+      const seen = `${modPath}|${declared}`;
+      if (_warnedDataTypes.has(seen)) return;
+      _warnedDataTypes.add(seen);
+      console.warn(`[PluginRegistry] "${modPath}" declares dataTypes "${declared}", which is not a dataset type (${Utils.DATASET_TYPES.join(', ')}); it will never match a page.`);
+    });
+  }
+
   // A discovery entry is "rich" — a full plugin.json safe to use without a
   // separate fetch — only when it carries fields the {path,placement,id} manifest
   // triple never has. `name` is mandatory in every plugin.json; never trust the
@@ -272,6 +289,7 @@ const PluginRegistry = (() => {
         // A plugin that names other types only is left out, which is what keeps a
         // photograph-only tool off the volume viewer. Not a fault, so not a
         // quarantine. A page passing no dataType is unchanged.
+        _warnUnknownDataTypes(meta, modPath);
         if (opts.dataType && !_acceptsDataType(meta, opts.dataType, opts.allowUndeclaredDataTypes)) {
           console.info(`[PluginRegistry] "${modPath}" left out: its dataTypes do not cover "${opts.dataType}"`);
           return;

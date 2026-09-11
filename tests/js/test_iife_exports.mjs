@@ -3,12 +3,13 @@
    function. `node --check` only parses: a helper deleted by a bad edit leaves
    the file syntactically valid, and the ReferenceError only fires when the
    IIFE runs in the browser — at which point the whole page is dead
-   (wholemount-viewer.js, v1.49.0). Run: node tests/js/test_iife_exports.mjs */
+   (the 2D viewer, v1.49.0). Run: node tests/js/test_iife_exports.mjs */
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 
 const FILES = [
-  ['js/viewers/wholemount-viewer.js', 'WholemountViewer'],
+  ['js/viewers/2d-viewer.js', 'Viewer2D'],
+  ['js/pages/2d.js', 'App2D'],
   ['js/core/measurement-store.js', 'MeasurementStore'],
   ['js/core/compat.js', 'Compat'],
 ];

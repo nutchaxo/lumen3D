@@ -75,10 +75,13 @@ STAGING_DIR = UPLOADS_DIR / "staging"
 STATE_DIR = UPLOADS_DIR / "state"
 DATA_WEB = ROOT / "DATA_WEB"
 
-ALLOWED_TYPE_DIRS = ("fixed", "live", "tracking", "wholemount")
-# The types whose data is a brick pyramid. A wholemount is one photograph: no
-# bricks/, its display copies sit at the dataset root (see _WHOLEMOUNT_FILES).
-VOLUME_TYPE_DIRS = ("fixed", "live", "tracking")
+# The dataset vocabulary. One table: it is the directory under uploads/staging/,
+# the directory under DATA_WEB/ a publish renames into, the type segment of the
+# journal name, and metadata.json's `type` field.
+ALLOWED_TYPE_DIRS = ("3d", "2d", "live", "tracking")
+# The types whose data is a brick pyramid. A 2d dataset is one photograph: no
+# bricks/, its display copies sit at the dataset root (see _IMAGE_2D_FILES).
+VOLUME_TYPE_DIRS = ("3d", "live", "tracking")
 
 # A dataset folder name: the same shape dev_server._safe_dataset_dir accepts, so a
 # staged dataset can always be published without a rename.
@@ -172,9 +175,9 @@ _ROOT_EXTRA = {
     "meta.json": TIER_CORE,
 }
 
-# A wholemount's display copies. The preview is what the page paints first, so
+# A 2d dataset's display copies. The preview is what the page paints first, so
 # it travels with the mount prerequisites; the native image follows.
-_WHOLEMOUNT_FILES = {
+_IMAGE_2D_FILES = {
     "preview.webp": (TIER_PREVIEW, "preview"),
     "image.webp": (TIER_MID, "image"),
 }
@@ -228,8 +231,8 @@ def classify_path(type_dir: str, rel: str):
         return TIER_CORE, "thumbnail"
     if rel in _ROOT_EXTRA:
         return (_ROOT_EXTRA[rel], "extra") if type_dir in VOLUME_TYPE_DIRS else None
-    if rel in _WHOLEMOUNT_FILES:
-        return _WHOLEMOUNT_FILES[rel] if type_dir == "wholemount" else None
+    if rel in _IMAGE_2D_FILES:
+        return _IMAGE_2D_FILES[rel] if type_dir == "2d" else None
 
     if rel.startswith("download/"):
         name = rel[len("download/"):]
@@ -878,11 +881,20 @@ def _validate_manifest(man: dict):
 def _validate_metadata(meta: dict, type_dir: str):
     """Same contract the admin editor enforces client-side (tab-datasets.js
     validateDatasetMeta), applied server-side so a hand-crafted POST cannot mount
-    a malformed dataset (Rule 1.4)."""
-    if meta.get("type") not in ALLOWED_TYPE_DIRS:
-        return False, "metadata_bad_type"
-    if meta.get("type") != type_dir:
+    a malformed dataset (Rule 1.4).
+
+    `type` is one vocabulary end to end — the pipeline writes it, the staging
+    directory is named after it and the publish renames into DATA_WEB/<type>/ —
+    so the two checks below are plain equalities, with nothing to translate."""
+    declared = meta.get("type")
+    # The mismatch is reported first because it is the actionable one: a word that
+    # is no longer a type (a dataset from a pre-rename pipeline) is exactly as
+    # wrong, in exactly the same way, as declaring another valid type.
+    if declared != type_dir:
         return False, "metadata_type_mismatch"
+    # Only reachable for a caller that did not go through _safe_dataset first.
+    if declared not in ALLOWED_TYPE_DIRS:
+        return False, "metadata_bad_type"
     dims = meta.get("dimensions")
     if not isinstance(dims, dict):
         return False, "metadata_no_dimensions"
@@ -890,15 +902,15 @@ def _validate_metadata(meta: dict, type_dir: str):
         v = dims.get(axis)
         if not isinstance(v, (int, float)) or isinstance(v, bool) or v <= 0:
             return False, "metadata_bad_dimensions"
-    if meta.get("type") == "wholemount":
-        return _validate_wholemount_meta(meta)
+    if meta.get("type") == "2d":
+        return _validate_2d_meta(meta)
     if not isinstance(meta.get("channels"), list) or not meta["channels"]:
         return False, "metadata_no_channels"
     return True, None
 
 
-def _validate_wholemount_meta(meta: dict):
-    """A wholemount mounts from its `image` block, not from channels. The file
+def _validate_2d_meta(meta: dict):
+    """A 2d dataset mounts from its `image` block, not from channels. The file
     names are pinned to the allowlist so metadata cannot point elsewhere."""
     image = meta.get("image")
     if not isinstance(image, dict):
@@ -949,7 +961,7 @@ def validate_dataset(type_dir: str, folder: str) -> dict:
     if type_dir in VOLUME_TYPE_DIRS:
         errors.extend(_check_bricks(ds_dir))
     else:
-        errors.extend(_check_wholemount_files(ds_dir))
+        errors.extend(_check_2d_files(ds_dir))
 
     # Anything planned but not finished blocks the publish — a dataset is published
     # whole or not at all.
@@ -976,7 +988,7 @@ def _cross_check_packs(ds_dir: Path, manifest: dict) -> list[str]:
     from — `js/core/brick-loader.js` resolves it against `.../bricks/t007`, not
     against `bricks/`. A timelapse therefore has to be walked frame by frame,
     prefixing each index with that frame's `path`; checking the root index bare
-    would hunt for a fixed dataset's layout inside a timelapse and report every
+    would hunt for a 3d dataset's layout inside a timelapse and report every
     pack missing. The root index is a copy of the first frame's, so it is only
     consulted when the manifest declares no timepoints at all.
     """
@@ -1082,11 +1094,11 @@ def _check_bricks(ds_dir: Path) -> list[str]:
     return errors
 
 
-def _check_wholemount_files(ds_dir: Path) -> list[str]:
+def _check_2d_files(ds_dir: Path) -> list[str]:
     """Both display copies must have arrived: the page paints the preview at once
     and swaps in the native image, so neither may be missing or empty."""
     errors = []
-    for rel, (_, kind) in _WHOLEMOUNT_FILES.items():
+    for rel, (_, kind) in _IMAGE_2D_FILES.items():
         path = ds_dir / rel
         if not path.is_file() or path.stat().st_size == 0:
             errors.append(f"missing_{kind}")
@@ -1230,7 +1242,7 @@ def write_staged_metadata(type_dir: str, folder: str, meta: dict) -> tuple[int, 
     merged.update({k: v for k, v in meta.items() if k not in _COMPUTED_META_KEYS})
     merged["type"] = type_dir
     merged["folderName"] = folder
-    merged["id"] = folder
+    merged["id"] = dataset_key(type_dir, folder)   # one id shape everywhere: '<type>/<folder>'
     merged["configured"] = True
     merged["lastModified"] = datetime.now().isoformat()
     ok, reason = _validate_metadata(merged, type_dir)

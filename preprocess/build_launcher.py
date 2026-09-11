@@ -25,7 +25,7 @@ SCRIPTS = [
     "2-image_processor.py",
     "3-chunk_packer.py",
     "4-catalog_generator.py",
-    "wholemount_importer.py",
+    "2d_importer.py",
 ]
 ENTRY = "run_preprocess.py"
 # The download-bundle tool lives in ../tools/ but is embedded too (index 5) so the

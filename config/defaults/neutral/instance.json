@@ -13,6 +13,7 @@
     "singular": "sample",
     "plural": "samples"
   },
+  "datasetTypes": {},
   "org": {
     "name": "",
     "url": ""
@@ -29,7 +30,8 @@
     "tracking": "Tracking — Lumen3D",
     "about": "About — Lumen3D",
     "admin": "Admin — Lumen3D",
-    "legal": "Legal — Lumen3D"
+    "legal": "Legal — Lumen3D",
+    "2d": "2D — Lumen3D"
   },
   "footer": {
     "copyright": "© Lumen3D",

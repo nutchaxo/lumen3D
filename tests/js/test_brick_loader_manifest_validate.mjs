@@ -26,7 +26,7 @@ const VALID = {
 // valid manifest mounts cleanly
 {
   const BL = makeLoader();
-  BL.init('DATA_WEB/fixed/A/bricks', VALID);
+  BL.init('DATA_WEB/3d/A/bricks', VALID);
   assert.ok(BL.isReady(), 'valid manifest mounts');
   assert.equal(typeof BL._validateManifest, 'function', '_validateManifest exposed');
 }
@@ -50,9 +50,9 @@ const VALID = {
 // reject BEFORE mutation: a bad init() must not corrupt a mounted valid dataset
 {
   const BL = makeLoader();
-  BL.init('DATA_WEB/fixed/A/bricks', VALID);
+  BL.init('DATA_WEB/3d/A/bricks', VALID);
   const kA = BL._cacheKey(0, 0, 1, 2, 3);
-  assert.throws(() => BL.init('DATA_WEB/fixed/B/bricks', { levels: [] }), 'malformed init throws');
+  assert.throws(() => BL.init('DATA_WEB/3d/B/bricks', { levels: [] }), 'malformed init throws');
   assert.ok(BL.isReady(), 'previous valid dataset still mounted after rejected init');
   assert.equal(BL._cacheKey(0, 0, 1, 2, 3), kA, 'cache key tag unchanged (no partial mutation on reject)');
 }

@@ -1,13 +1,13 @@
 {
   "id": "download-center",
   "name": "Download Center",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "platformCompat": "1.x",
   "dataTypes": [
-    "fixed",
+    "3d",
     "live",
     "tracking",
-    "wholemount"
+    "2d"
   ],
   "creator": "IRIBHM",
   "placement": "tools",

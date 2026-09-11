@@ -86,9 +86,16 @@
   text-transform: uppercase;
 }
 
-.badge-fixed {
-  background: var(--badge-fixed-bg);
-  color: var(--badge-fixed-text);
+/* Dataset-type badges. The modifier suffix is the type id, which is what
+   Utils.datasetTypeBadgeClass() emits — never add one without a type. */
+.badge-3d {
+  background: var(--badge-3d-bg);
+  color: var(--badge-3d-text);
+}
+
+.badge-2d {
+  background: var(--badge-2d-bg);
+  color: var(--badge-2d-text);
 }
 
 .badge-live {
@@ -97,13 +104,8 @@
 }
 
 .badge-tracking {
-  background: var(--badge-track-bg);
-  color: var(--badge-track-text);
-}
-
-.badge-wholemount {
-  background: var(--badge-wm-bg);
-  color: var(--badge-wm-text);
+  background: var(--badge-tracking-bg);
+  color: var(--badge-tracking-text);
 }
 
 .badge-dot::before {

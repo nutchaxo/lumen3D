@@ -172,8 +172,9 @@
   opacity: 0.15;
 }
 
-.type-card--fixed .type-card-glow   { background: var(--color-accent); }
-.type-card--live .type-card-glow    { background: #FFA726; }
+.type-card--3d .type-card-glow       { background: var(--color-accent); }
+.type-card--2d .type-card-glow       { background: var(--badge-2d-text); }
+.type-card--live .type-card-glow     { background: #FFA726; }
 .type-card--tracking .type-card-glow { background: var(--color-primary); }
 
 .type-card-icon {
@@ -187,9 +188,14 @@
   font-size: 24px;
 }
 
-.type-card--fixed .type-card-icon {
-  background: var(--badge-fixed-bg);
-  color: var(--badge-fixed-text);
+.type-card--3d .type-card-icon {
+  background: var(--badge-3d-bg);
+  color: var(--badge-3d-text);
+}
+
+.type-card--2d .type-card-icon {
+  background: var(--badge-2d-bg);
+  color: var(--badge-2d-text);
 }
 
 .type-card--live .type-card-icon {
@@ -198,13 +204,8 @@
 }
 
 .type-card--tracking .type-card-icon {
-  background: var(--badge-track-bg);
-  color: var(--badge-track-text);
-}
-
-.type-card--wholemount .type-card-icon {
-  background: var(--badge-wm-bg);
-  color: var(--badge-wm-text);
+  background: var(--badge-tracking-bg);
+  color: var(--badge-tracking-text);
 }
 
 .type-card h3 {

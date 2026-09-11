@@ -31,6 +31,21 @@ function trust_file(): string { return __DIR__ . '/plugin-trust.json'; }
 function data_web(): string { return admin_root() . '/DATA_WEB'; }
 function changelog_dir(): string { return admin_root() . '/changelog'; }
 function modules_dir(): string { return admin_root() . '/js/modules'; }
+function uploads_root(): string { return admin_root() . '/uploads'; }
+function config_dir(): string { return admin_root() . '/config'; }
+
+// ── Dataset types ────────────────────────────────────────────────────────────
+// ONE vocabulary, used simultaneously as: the directory under DATA_WEB/ and
+// uploads/staging/, the first segment of a dataset id, metadata.json's "type",
+// what plugin.json#dataTypes declares, the ?type= filter value and the badge-<type>
+// CSS suffix. Every PHP type list must derive from these two constants — they were
+// three independent literals before, and they drifted.
+// Twins: dev_server.py ALLOWED_TYPE_DIRS / upload_staging.py ALLOWED_TYPE_DIRS /
+// js/core/utils.js Utils.DATASET_TYPES.
+const LUMEN_DATASET_TYPES = ['3d', '2d', 'live', 'tracking'];
+// Types whose data is a brick pyramid. '2d' is a single photograph, so it has no
+// bricks/ tree (twin of VOLUME_TYPE_DIRS / Utils.VOLUME_DATASET_TYPES).
+const LUMEN_VOLUME_DATASET_TYPES = ['3d', 'live', 'tracking'];
 
 // ── Filesystem permissions (keep the site editable over FTP/SFTP) ────────────
 // Twin of install.php's perms_* helpers. The web root belongs to the hosting
@@ -351,13 +366,309 @@ function admin_safe_dataset(string $id): ?array {
     $parts = explode('/', $id, 2);
     if (count($parts) !== 2) return null;
     [$type, $folder] = [trim($parts[0]), trim($parts[1])];
-    if (!in_array($type, ['fixed', 'live', 'tracking', 'wholemount'], true)) return null;
+    if (!in_array($type, LUMEN_DATASET_TYPES, true)) return null;
     if ($folder === '.' || $folder === '..' || !preg_match('/^[A-Za-z0-9_][A-Za-z0-9._-]*$/', $folder)) return null;
     $base = realpath(data_web() . '/' . $type);
     $dir  = $base ? realpath($base . '/' . $folder) : false;
     if ($base && $dir && strpos($dir, $base) === 0) return [$type, $folder, $dir];
     // dir may not exist yet on realpath; fall back to a non-resolved but validated path
     return [$type, $folder, data_web() . '/' . $type . '/' . $folder];
+}
+
+// ── One-shot migration of the dataset-type vocabulary ────────────────────────
+//
+// Releases before this one persisted two type words that no longer exist: 'fixed'
+// (now '3d') and 'wholemount' (now '2d'). They went into the DATA_WEB and
+// uploads/staging directory names, into the import journal file names AND their
+// bodies, into every published metadata.json, into the per-dataset keys of
+// api/stats.json, and into the operator's own documents under config/. Nothing
+// reads the old words any more and there is no alias layer, so a deployment that
+// already holds bytes is converted once, here.
+//
+// Idempotent, and it costs a handful of is_dir()/glob() calls plus two small file
+// probes on a tree with nothing left to convert — which is what makes it
+// affordable at the top of catalog.php, datasets.php and upload.php. There is no
+// marker file: the guard below asks the tree itself, one question per artefact
+// class, so a pass killed halfway (fatal, timeout, redeploy) is retried for
+// exactly what is left rather than skipped forever.
+//
+// Renames go through a single @rename() whose failure is tolerated, so two requests
+// arriving together cannot fight over the same directory: the loser simply finds
+// the work already done.
+//
+// Step-for-step twin of dev_server.py:_migrate_dataset_types — SAME order, same
+// guard, same collision rule. A deployment must convert identically whichever
+// backend serves the first request after the update.
+
+const LUMEN_LEGACY_TYPE_DIRS = ['fixed' => '3d', 'wholemount' => '2d'];
+
+/** An explorer filter link as the page builder serialises it into config/pages/. */
+const LUMEN_LEGACY_TYPE_HREF_RE = '/(explorer\.html\?type=)(fixed|wholemount)(?![A-Za-z0-9_-])/';
+
+/**
+ * Substring probe on a small JSON file — cheaper than parsing it, and this runs on
+ * a tree that usually has nothing left to migrate.
+ *
+ * Both slash spellings are tested because the two backends encode differently:
+ * PHP's json_encode escapes '/' ("fixed\/Foo"), Python's json.dumps does not.
+ */
+function lumen_migration_file_has(string $path, array $needles): bool {
+    if (!is_file($path)) return false;
+    $raw = @file_get_contents($path);
+    if (!is_string($raw) || $raw === '') return false;
+    foreach ($needles as $n) if (strpos($raw, $n) !== false) return true;
+    return false;
+}
+
+/** The guard: is there any artefact left in the old vocabulary? */
+function lumen_migration_pending(): bool {
+    $dw      = data_web();
+    $staging = uploads_root() . '/staging';
+    $state   = uploads_root() . '/state';
+    foreach (LUMEN_LEGACY_TYPE_DIRS as $old => $canon) {
+        if (is_dir("$dw/$old") || is_dir("$staging/$old")) return true;
+        $journals = @glob("$state/{$old}__*.json");
+        if (is_array($journals) && $journals) return true;
+    }
+    if (lumen_migration_file_has(stats_file(), ['"fixed/', '"fixed\/', '"wholemount/', '"wholemount\/'])) return true;
+    if (lumen_migration_file_has(config_dir() . '/instance.json', ['"wholemount":'])) return true;
+    foreach ((array)@glob(config_dir() . '/pages/*.json') as $page) {
+        // The full href pattern, not a bare substring: a page that merely mentions
+        // "type=fixedish" must not keep this guard hot on every request.
+        $raw = @file_get_contents($page);
+        if (is_string($raw) && preg_match(LUMEN_LEGACY_TYPE_HREF_RE, $raw)) return true;
+    }
+    return false;
+}
+
+/** '<legacyType>/<folder>' → '<canonicalType>/<folder>'. Anything else comes back untouched. */
+function lumen_migrate_legacy_id($value) {
+    if (!is_string($value)) return $value;
+    $slash = strpos($value, '/');
+    if ($slash === false) return $value;
+    $head = substr($value, 0, $slash);
+    if (!isset(LUMEN_LEGACY_TYPE_DIRS[$head])) return $value;
+    return LUMEN_LEGACY_TYPE_DIRS[$head] . substr($value, $slash);
+}
+
+function lumen_migration_write_text(string $path, string $body): bool {
+    $tmp = @tempnam(dirname($path), '.mig-');
+    if ($tmp === false) return false;
+    if (@file_put_contents($tmp, $body) === false) { @unlink($tmp); return false; }
+    if (!@rename($tmp, $path)) { @unlink($tmp); return false; }
+    admin_fix_file_mode($path);
+    return true;
+}
+
+/**
+ * Write a PUBLIC json document (metadata.json, config/*.json) through a temp sibling.
+ * admin_write_json() is unusable here: it chmods 0600, which is right for api/ secrets
+ * and would make a dataset's metadata unreadable by the web server.
+ */
+function lumen_migration_write_json(string $path, array $doc): bool {
+    return lumen_migration_write_text($path, (string)json_encode($doc, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE));
+}
+
+/**
+ * Move a whole type directory onto its canonical name.
+ *
+ * A plain rename when the target does not exist; otherwise (a half-migrated tree, or
+ * an operator who created the new folder by hand) the datasets are moved one by one
+ * and a name that exists on BOTH sides is left alone and reported — never silently
+ * overwritten, the bytes are irreplaceable.
+ */
+function lumen_migration_move_dir(string $src, string $dst): void {
+    if (!is_dir($src)) return;
+    if (!file_exists($dst) && @rename($src, $dst)) return;
+    // Cross-device, or another process created the target between the two calls —
+    // the per-child merge below handles both.
+    if (!is_dir($dst) && !admin_make_dir($dst)) {
+        error_log("dataset-type migration: cannot create $dst");
+        return;
+    }
+    $names = @scandir($src);
+    if (!is_array($names)) return;
+    foreach ($names as $name) {
+        if ($name === '.' || $name === '..') continue;
+        if (file_exists("$dst/$name")) {
+            error_log("dataset-type migration: SKIPPED $src/$name — $dst/$name already exists");
+            continue;
+        }
+        if (!@rename("$src/$name", "$dst/$name")) {
+            error_log("dataset-type migration: FAILED to move $src/$name");
+        }
+    }
+    @rmdir($src);   // succeeds only once the directory is empty
+}
+
+/**
+ * uploads/state/<type>__<folder>.json — the resumable-import journal.
+ *
+ * The type lives in the file NAME (lumen_up_list splits the stem) and again in the
+ * document's `type` field, and the format is shared byte-for-byte with
+ * upload_staging.py so an import started on one backend resumes on the other. Both
+ * halves therefore move together.
+ */
+function lumen_migration_journals(): void {
+    $state = uploads_root() . '/state';
+    if (!is_dir($state)) return;
+    foreach (LUMEN_LEGACY_TYPE_DIRS as $old => $canon) {
+        foreach ((array)@glob("$state/{$old}__*.json") as $journal) {
+            $target = $state . '/' . $canon . substr(basename($journal), strlen($old));
+            if (file_exists($target)) {
+                error_log("dataset-type migration: SKIPPED " . basename($journal) . " — " . basename($target) . " already exists");
+                continue;
+            }
+            $doc = admin_read_json($journal);
+            if (is_array($doc)) {
+                $doc['type'] = $canon;
+                // `files` is a MAP keyed by relative path in the shared format; an
+                // empty PHP array would re-encode as `[]`, and upload_staging.py
+                // resumes by iterating it as a dict.
+                if (isset($doc['files']) && is_array($doc['files']) && !$doc['files']) $doc['files'] = new stdClass();
+                if (!lumen_migration_write_text($target, (string)json_encode($doc, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT))) {
+                    error_log("dataset-type migration: FAILED journal " . basename($journal));
+                    continue;
+                }
+                @unlink($journal);
+            } elseif (!@rename($journal, $target)) {
+                // Unreadable journal: moved as-is rather than dropped. Worst case the
+                // operator re-drops the folder and the import re-plans.
+                error_log("dataset-type migration: FAILED journal " . basename($journal));
+                continue;
+            }
+            // The flock sidecar holds no state and is recreated on demand; an
+            // in-flight writer keeps its own descriptor.
+            @unlink($journal . '.lock');
+        }
+    }
+}
+
+/**
+ * Make every published metadata.json agree with its folder: `type` is the directory
+ * it sits in, `id` is '<type>/<folder>', and any dataset relation the operator
+ * recorded is re-pointed at the new id.
+ */
+function lumen_migration_metadata(): void {
+    foreach (LUMEN_DATASET_TYPES as $type) {
+        $base = data_web() . '/' . $type;
+        $names = @scandir($base);
+        if (!is_array($names)) continue;
+        foreach ($names as $folder) {
+            if ($folder === '.' || $folder === '..' || $folder === '' || $folder[0] === '.') continue;
+            $path = "$base/$folder/metadata.json";
+            if (!is_file($path)) continue;
+            $meta = admin_read_json($path);
+            if ($meta === null) continue;
+            $before = $meta;
+            $meta['type'] = $type;                  // the folder is the authority
+            $meta['id']   = "$type/$folder";
+            if (isset($meta['linkedTrackingId'])) $meta['linkedTrackingId'] = lumen_migrate_legacy_id($meta['linkedTrackingId']);
+            if (isset($meta['relatedIds']) && is_array($meta['relatedIds'])) {
+                $meta['relatedIds'] = array_map('lumen_migrate_legacy_id', $meta['relatedIds']);
+            }
+            if ($meta === $before) continue;
+            if (!lumen_migration_write_json($path, $meta)) error_log("dataset-type migration: FAILED metadata $type/$folder");
+        }
+    }
+}
+
+/** Two stats rows for one dataset (a legacy-keyed one and an already-canonical one):
+ *  numeric counters add up, the most recent ISO timestamp wins. */
+function lumen_migration_merge_counters($a, $b) {
+    if (!is_array($a)) return $b;
+    if (!is_array($b)) return $a;
+    foreach ($b as $key => $value) {
+        $current = $a[$key] ?? null;
+        if (is_bool($value) || is_bool($current)) $a[$key] = $value;
+        elseif ((is_int($value) || is_float($value)) && (is_int($current) || is_float($current))) $a[$key] = $current + $value;
+        elseif (is_string($value) && is_string($current)) $a[$key] = max($current, $value);   // ISO sorts lexicographically
+        elseif (!isset($a[$key])) $a[$key] = $value;
+    }
+    return $a;
+}
+
+/** api/stats.json is indexed by dataset id and is protected from updates, so a
+ *  deployment's whole view/download history is keyed in the old vocabulary. */
+function lumen_migration_stats(): void {
+    $file = stats_file();
+    if (!is_file($file)) return;
+    $fp = @fopen($file, 'c+');
+    if ($fp === false) return;
+    @flock($fp, LOCK_EX);
+    $raw = stream_get_contents($fp);
+    $d = $raw ? (json_decode($raw, true) ?: []) : [];
+    if (isset($d['datasets']) && is_array($d['datasets'])) {
+        $rekeyed = []; $changed = false;
+        foreach ($d['datasets'] as $key => $value) {
+            $new = lumen_migrate_legacy_id((string)$key);
+            if ($new !== (string)$key) $changed = true;
+            $rekeyed[$new] = isset($rekeyed[$new]) ? lumen_migration_merge_counters($rekeyed[$new], $value) : $value;
+        }
+        if ($changed) {
+            $d['datasets'] = $rekeyed;
+            // json_encode writes an empty PHP array as `[]`, and dev_server.py indexes
+            // these three as maps. Re-object them so a host that migrates while its
+            // stats are empty does not hand the Python twin a list.
+            foreach (['global', 'daily', 'datasets'] as $k) {
+                if (isset($d[$k]) && is_array($d[$k]) && !$d[$k]) $d[$k] = new stdClass();
+            }
+            rewind($fp);
+            ftruncate($fp, 0);
+            fwrite($fp, (string)json_encode($d, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT));
+        }
+    }
+    @flock($fp, LOCK_UN);
+    fclose($fp);
+}
+
+/** config/instance.json — pageTitles is keyed by <body data-page>, and the photograph
+ *  page is served as 2d.html (data-page="2d"). */
+function lumen_migration_instance(): void {
+    $file = config_dir() . '/instance.json';
+    if (!is_file($file)) return;
+    $doc = admin_read_json($file);
+    $titles = (is_array($doc) && isset($doc['pageTitles']) && is_array($doc['pageTitles'])) ? $doc['pageTitles'] : null;
+    if ($titles === null || !array_key_exists('wholemount', $titles)) return;
+    // Never clobber a title the operator already set under the new key.
+    if (!array_key_exists('2d', $titles)) $titles['2d'] = $titles['wholemount'];
+    unset($titles['wholemount']);
+    $doc['pageTitles'] = $titles;
+    if (!lumen_migration_write_json($file, $doc)) error_log('dataset-type migration: FAILED config/instance.json');
+}
+
+/** config/pages/<slug>.json holds operator-authored layouts whose buttons link to
+ *  explorer.html?type=<type>. Those hrefs are content, so nothing else will ever fix
+ *  them. Rewritten on the raw text so the operator's own formatting survives. */
+function lumen_migration_pages(): void {
+    foreach ((array)@glob(config_dir() . '/pages/*.json') as $page) {
+        $raw = @file_get_contents($page);
+        if (!is_string($raw) || $raw === '') continue;
+        $next = preg_replace_callback(LUMEN_LEGACY_TYPE_HREF_RE,
+            fn($m) => $m[1] . LUMEN_LEGACY_TYPE_DIRS[$m[2]], $raw);
+        if (!is_string($next) || $next === $raw) continue;
+        if (!lumen_migration_write_text($page, $next)) error_log("dataset-type migration: FAILED " . basename($page));
+    }
+}
+
+/** Convert a deployment to the canonical dataset vocabulary. At most once per
+ *  request; a no-op on a host that has nothing left in the old words. */
+function lumen_migrate_dataset_types(): void {
+    static $ran = false;
+    if ($ran) return;
+    $ran = true;
+    if (!lumen_migration_pending()) return;
+
+    $staging = uploads_root() . '/staging';
+    foreach (LUMEN_LEGACY_TYPE_DIRS as $old => $canon) {
+        lumen_migration_move_dir(data_web() . "/$old", data_web() . "/$canon");
+        lumen_migration_move_dir("$staging/$old", "$staging/$canon");
+    }
+    lumen_migration_journals();
+    lumen_migration_metadata();
+    lumen_migration_stats();
+    lumen_migration_instance();
+    lumen_migration_pages();
 }
 
 // ── Usage stats ─────────────────────────────────────────────────────────────

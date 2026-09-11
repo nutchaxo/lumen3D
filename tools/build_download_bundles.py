@@ -60,7 +60,7 @@ DATA_WEB = ROOT / "DATA_WEB"
 RAW_DATA_DIRS = [
     Path(r"C:\Users\Administrator\Desktop\Fixed images for database\RAW_DATA"),
 ]
-DATASET_TYPES = ("fixed", "live", "tracking", "wholemount")
+DATASET_TYPES = ("3d", "2d", "live", "tracking")
 
 TARGET_PX = 2048               # desired long XY side of the generated TIFF
 # Hard ceiling on the in-flight volume (C·Z·Y·X·itemsize); if the level closest to
@@ -142,6 +142,8 @@ def load_datasets(filter_substr=None, types=DATASET_TYPES):
         except Exception as exc:
             print(f"[warn] catalog.json unreadable ({exc}); falling back to dir scan")
     for e in entries:
+        # A catalog entry's `id` and `path` are the same '<type>/<folder>' string;
+        # the type segment is the directory under DATA_WEB.
         path = e.get("path") or e.get("id") or ""
         parts = path.split("/", 1)
         if len(parts) != 2:
@@ -497,7 +499,7 @@ def write_readme(out_path, ds, ims_src, force, dry):
         return "skip (exists)"
     if dry:
         return "would write"
-    lines = _readme_photo(ds) if ds["type"] == "wholemount" else _readme_volume(ds, ims_src)
+    lines = _readme_photo(ds) if ds["type"] == "2d" else _readme_volume(ds, ims_src)
     lines += [
         "",
         "Citation: cite the IRIBHM Microscopy Platform (Lumen3D, IRIBHM @ ULB) and "
@@ -509,7 +511,7 @@ def write_readme(out_path, ds, ims_src, force, dry):
 
 
 def _readme_photo(ds):
-    """A wholemount is one calibrated photograph: no voxels, no channels, and no
+    """A '2d' dataset is one calibrated photograph: no voxels, no channels, and no
     .ims to re-read — the original TIFF beside it comes from the importer."""
     meta = ds["meta"]
     dims = meta.get("dimensions", {})
@@ -517,7 +519,7 @@ def _readme_photo(ds):
     acq = meta.get("acquisition", {})
     return [
         f"Dataset : {ds['folder']}",
-        f"Type    : {ds['type']} (whole-mount photograph)",
+        f"Type    : {ds['type']} (calibrated photograph)",
         f"Stage   : {meta.get('stage', '?')}    Line: {meta.get('line') or '?'}"
         f"    Staining: {meta.get('staining') or '?'}",
         "",
@@ -594,9 +596,9 @@ def process(ds, args):
             print(f"  [archive] FAILED: {exc}")
 
     # A photograph has no .ims to re-read: steps 2-4 are meaningless, and its
-    # original TIFF + README are placed by preprocess/wholemount_importer.py.
+    # original TIFF + README are placed by preprocess/2d_importer.py.
     # The README is never forced here, so the importer's richer one always wins.
-    if ds["type"] == "wholemount":
+    if ds["type"] == "2d":
         try:
             print(f"  [readme] {write_readme(dl / 'README.txt', ds, None, False, args.dry_run)}")
         except Exception as exc:
@@ -644,7 +646,7 @@ def main():
     ap = argparse.ArgumentParser(description="Populate each dataset's download/ folder.")
     ap.add_argument("--datasets", help="case-insensitive substring filter on folder name")
     ap.add_argument("--types", default=",".join(DATASET_TYPES),
-                    help="comma list: fixed,live,tracking,wholemount (a wholemount gets the "
+                    help="comma list: 3d,2d,live,tracking (a 2d dataset gets the "
                          "web archive only — its original TIFF and README come from the importer)")
     ap.add_argument("--data-web", help="override the DATA_WEB directory (default: <repo>/DATA_WEB)")
     ap.add_argument("--raw-dir", help="directory to search first for the source .ims (prepended to RAW_DATA_DIRS)")

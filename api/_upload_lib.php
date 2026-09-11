@@ -80,14 +80,16 @@ function lumen_up_ini_bytes(string $v): int {
 const LUMEN_UP_DOWNLOAD_EXT = ['ims','tif','tiff','png','jpg','jpeg','webp','gif',
                                'zip','txt','md','csv','json','pdf','xml','gz','h5','hdf5'];
 
-// Dataset roots. Only the volume types carry a brick pyramid; a wholemount is one
-// photograph whose display copies sit at the dataset root — the preview travels
-// with the mount prerequisites, the native image follows (twin of
-// upload_staging.ALLOWED_TYPE_DIRS / VOLUME_TYPE_DIRS / _WHOLEMOUNT_FILES).
-const LUMEN_UP_TYPES        = ['fixed', 'live', 'tracking', 'wholemount'];
-const LUMEN_UP_VOLUME_TYPES = ['fixed', 'live', 'tracking'];
-const LUMEN_UP_WHOLEMOUNT_FILES = ['preview.webp' => [LUMEN_UP_TIER_PREVIEW, 'preview'],
-                                   'image.webp'   => [LUMEN_UP_TIER_MID, 'image']];
+// Dataset roots — derived from the platform-wide vocabulary so this file cannot
+// drift from datasets.php / downloads.php / admin_safe_dataset(). Only the volume
+// types carry a brick pyramid; a '2d' dataset is one photograph whose display
+// copies sit at the dataset root — the preview travels with the mount
+// prerequisites, the native image follows (twin of upload_staging.ALLOWED_TYPE_DIRS
+// / VOLUME_TYPE_DIRS / _IMAGE_2D_FILES).
+const LUMEN_UP_TYPES        = LUMEN_DATASET_TYPES;
+const LUMEN_UP_VOLUME_TYPES = LUMEN_VOLUME_DATASET_TYPES;
+const LUMEN_UP_2D_FILES = ['preview.webp' => [LUMEN_UP_TIER_PREVIEW, 'preview'],
+                           'image.webp'   => [LUMEN_UP_TIER_MID, 'image']];
 
 /** Twin of upload_staging._safe_rel. Returns the normalised path or null. */
 function lumen_up_safe_rel($rel): ?string {
@@ -118,7 +120,7 @@ function lumen_up_classify(string $type, $rel): ?array {
     $rootExtra = ['model.glb' => LUMEN_UP_TIER_FULL, 'tracks.json' => LUMEN_UP_TIER_PREVIEW,
                   'tracks.json.gz' => LUMEN_UP_TIER_PREVIEW, 'meta.json' => LUMEN_UP_TIER_CORE];
     if (isset($rootExtra[$rel])) return in_array($type, LUMEN_UP_VOLUME_TYPES, true) ? [$rootExtra[$rel], 'extra'] : null;
-    if (isset(LUMEN_UP_WHOLEMOUNT_FILES[$rel])) return $type === 'wholemount' ? LUMEN_UP_WHOLEMOUNT_FILES[$rel] : null;
+    if (isset(LUMEN_UP_2D_FILES[$rel])) return $type === '2d' ? LUMEN_UP_2D_FILES[$rel] : null;
 
     if (strncmp($rel, 'download/', 9) === 0) {
         $name = substr($rel, 9);
@@ -714,14 +716,14 @@ function lumen_up_validate_metadata(array $meta, string $type): array {
         if (!is_int($v) && !is_float($v)) return [false, 'metadata_bad_dimensions'];
         if ($v <= 0) return [false, 'metadata_bad_dimensions'];
     }
-    if ($meta['type'] === 'wholemount') return lumen_up_validate_wholemount_meta($meta);
+    if ($meta['type'] === '2d') return lumen_up_validate_2d_meta($meta);
     if (!isset($meta['channels']) || !is_array($meta['channels']) || !$meta['channels']) return [false, 'metadata_no_channels'];
     return [true, null];
 }
 
-/** A wholemount mounts from its `image` block, not from channels; the file names
+/** A '2d' dataset mounts from its `image` block, not from channels; the file names
  *  are pinned to the allowlist so metadata cannot point elsewhere. */
-function lumen_up_validate_wholemount_meta(array $meta): array {
+function lumen_up_validate_2d_meta(array $meta): array {
     $image = $meta['image'] ?? null;
     if (!is_array($image)) return [false, 'metadata_no_image'];
     if (($image['native'] ?? null) !== 'image.webp' || ($image['preview'] ?? null) !== 'preview.webp') return [false, 'metadata_bad_image'];
@@ -743,9 +745,9 @@ function lumen_up_check_bricks(string $dir): array {
 
 /** Both display copies must have arrived: the page paints the preview at once
  *  and swaps in the native image, so neither may be missing or empty. */
-function lumen_up_check_wholemount_files(string $dir): array {
+function lumen_up_check_2d_files(string $dir): array {
     $errors = [];
-    foreach (LUMEN_UP_WHOLEMOUNT_FILES as $rel => [$tier, $kind]) {
+    foreach (LUMEN_UP_2D_FILES as $rel => [$tier, $kind]) {
         if (!is_file("$dir/$rel") || filesize("$dir/$rel") === 0) $errors[] = "missing_$kind";
     }
     return $errors;
@@ -768,7 +770,7 @@ function lumen_up_validate_dataset($type, $folder): array {
         else { [$ok, $r] = lumen_up_validate_metadata($meta, $type); if (!$ok) $errors[] = $r ?: 'metadata_invalid'; }
     }
     $errors = array_merge($errors, in_array($type, LUMEN_UP_VOLUME_TYPES, true)
-        ? lumen_up_check_bricks($dir) : lumen_up_check_wholemount_files($dir));
+        ? lumen_up_check_bricks($dir) : lumen_up_check_2d_files($dir));
 
     $incomplete = [];
     foreach (($journal['files'] ?? []) as $rel => $e) if (empty($e['done'])) $incomplete[] = $rel;
@@ -786,8 +788,8 @@ function lumen_up_validate_dataset($type, $folder): array {
  *  A brickToPack url is relative to the folder its OWN timepoint is mounted from
  *  — js/core/brick-loader.js resolves it against `.../bricks/t007`, not against
  *  `bricks/`. A timelapse is therefore walked frame by frame, prefixing each index
- *  with that frame's `path`; checking the root index bare would hunt for a fixed
- *  dataset's layout inside a timelapse and report every pack missing. The root
+ *  with that frame's `path`; checking the root index bare would hunt for a
+ *  single-timepoint layout inside a timelapse and report every pack missing. The root
  *  index is a copy of the first frame's, so it only serves a manifest that
  *  declares no timepoints at all. Twin of upload_staging.py:_cross_check_packs. */
 function lumen_up_cross_check_packs(string $dir, array $manifest): array {
@@ -876,7 +878,7 @@ function lumen_up_state_of($type, $folder, ?array $journal = null): string {
     foreach ($files as $e) if (!is_array($e) || empty($e['done'])) { $pending = true; break; }
     if (!$pending) return LUMEN_UP_STATE_STAGED;
 
-    // Openable once metadata plus a mount (brick manifest, or a wholemount's preview) landed.
+    // Openable once metadata plus a mount (brick manifest, or a '2d' preview) landed.
     $coreOk = true; $hasMount = false;
     foreach ($files as $e) {
         if (!is_array($e)) { $coreOk = false; continue; }
@@ -975,7 +977,9 @@ function lumen_up_write_metadata($type, $folder, $meta): array {
     $merged = array_merge($existing, array_diff_key($meta, array_flip(LUMEN_UP_COMPUTED)));
     $merged['type'] = $type;
     $merged['folderName'] = $folder;
-    $merged['id'] = $folder;
+    // One id shape everywhere: '<type>/<folder>'. It is what the catalog publishes
+    // once this dataset is, and what every link the platform builds addresses.
+    $merged['id'] = "$type/$folder";
     $merged['configured'] = true;
     $merged['lastModified'] = date('c');
     [$ok, $reason] = lumen_up_validate_metadata($merged, $type);

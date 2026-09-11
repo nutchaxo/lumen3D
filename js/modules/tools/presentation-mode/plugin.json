@@ -1,13 +1,13 @@
 {
   "id": "presentation-mode",
   "name": "Presentation Mode",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "platformCompat": "1.x",
   "dataTypes": [
-    "fixed",
+    "3d",
     "live",
     "tracking",
-    "wholemount"
+    "2d"
   ],
   "creator": "IRIBHM",
   "placement": "tools",

@@ -2,7 +2,7 @@
  *
  * A photograph is taken in whatever pose the embryo settled in. This panel
  * rotates and mirrors it into the lab's convention (anterior up); the viewer
- * does the geometry (see WholemountViewer.setOrientation), this plugin owns
+ * does the geometry (see Viewer2D.setOrientation), this plugin owns
  * the controls, the compass overlay and the admin handshake — the same
  * CALIBRATE_ORIENTATION_START / GET_ORIENTATION / ORIENTATION_RESULT messages
  * the 3D orientation plugin answers, with an `orientation2d` payload.
@@ -60,18 +60,18 @@ PluginRegistry.implement('orientation-2d', {
   _render(ui) {
     const esc = s => this._ctx.ui.escapeHtml(s);
     ui.body.innerHTML = `
-      <div class="wm-plugin-row">
+      <div class="p2d-plugin-row">
         <label for="o2d-rotation">${esc(this._t('rotation'))}</label>
         <input type="range" id="o2d-rotation" min="-180" max="180" step="1" value="0">
-        <span class="wm-plugin-value" id="o2d-rotation-value">0°</span>
+        <span class="p2d-plugin-value" id="o2d-rotation-value">0°</span>
       </div>
-      <div class="wm-plugin-actions">
+      <div class="p2d-plugin-actions">
         <button type="button" class="btn btn-outline btn-sm" data-o2d="left" title="${esc(this._t('rotateLeft'))}"><i data-lucide="rotate-ccw"></i> 90°</button>
         <button type="button" class="btn btn-outline btn-sm" data-o2d="right" title="${esc(this._t('rotateRight'))}"><i data-lucide="rotate-cw"></i> 90°</button>
         <button type="button" class="btn btn-outline btn-sm" data-o2d="flip" id="o2d-flip"><i data-lucide="flip-horizontal"></i> ${esc(this._t('mirror'))}</button>
         <button type="button" class="btn btn-ghost btn-sm" data-o2d="reset"><i data-lucide="undo-2"></i> ${esc(this._t('reset'))}</button>
       </div>
-      <div class="wm-plugin-hint">${esc(this._t('hint'))}</div>`;
+      <div class="p2d-plugin-hint">${esc(this._t('hint'))}</div>`;
     this._ctx.ui.createIcons({ nodes: [ui.body] });
     ui.slider = ui.body.querySelector('#o2d-rotation');
     ui.value = ui.body.querySelector('#o2d-rotation-value');

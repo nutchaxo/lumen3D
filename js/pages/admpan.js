@@ -11,6 +11,7 @@
 
 import { registerTab, boot } from './admin/shell.js';
 import { DatasetsTab } from './admin/tab-datasets.js';
+import { DatasetTypesTab } from './admin/tab-dataset-types.js';
 import { UploadTab } from './admin/tab-upload.js';
 import { StatsTab } from './admin/tab-stats.js';
 import { PluginsTab } from './admin/tab-plugins.js';
@@ -25,6 +26,7 @@ import { MarketplaceTab } from './admin/tab-marketplace.js';
 import { DocsTab } from './admin/tab-docs.js';
 
 registerTab(DatasetsTab);
+registerTab(DatasetTypesTab);
 registerTab(UploadTab);
 registerTab(StatsTab);
 registerTab(PluginsTab);

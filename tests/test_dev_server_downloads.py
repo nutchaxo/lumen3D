@@ -76,7 +76,7 @@ class ListEntriesTests(unittest.TestCase):
         (sub / ".dot").write_text("z")
 
     def test_listing_shape_and_sort(self):
-        entries = dev_server._list_download_entries(self.root, self.root, "fixed/Foo", "")
+        entries = dev_server._list_download_entries(self.root, self.root, "3d/Foo", "")
         names = [e["name"] for e in entries]
         self.assertNotIn(".hidden", names)                    # dotfiles skipped
         self.assertEqual(names, ["images", "notes.txt", "raw.ims"])  # dirs first, then files A→Z
@@ -90,18 +90,18 @@ class ListEntriesTests(unittest.TestCase):
         self.assertEqual(f["ext"], "IMS")
         self.assertEqual(f["sizeBytes"], 10)
         self.assertEqual(f["path"], "raw.ims")
-        self.assertEqual(f["href"], "DATA_WEB/fixed/Foo/download/raw.ims")
+        self.assertEqual(f["href"], "DATA_WEB/3d/Foo/download/raw.ims")
 
     def test_nested_rel_and_href(self):
         sub = self.root / "images"
-        entries = dev_server._list_download_entries(self.root, sub, "fixed/Foo", "images")
+        entries = dev_server._list_download_entries(self.root, sub, "3d/Foo", "images")
         f = next(e for e in entries if e["name"] == "a.png")
         self.assertEqual(f["path"], "images/a.png")
-        self.assertEqual(f["href"], "DATA_WEB/fixed/Foo/download/images/a.png")
+        self.assertEqual(f["href"], "DATA_WEB/3d/Foo/download/images/a.png")
 
     def test_missing_target_is_empty(self):
         ghost = self.root / "does-not-exist"
-        self.assertEqual(dev_server._list_download_entries(self.root, ghost, "fixed/Foo", "x"), [])
+        self.assertEqual(dev_server._list_download_entries(self.root, ghost, "3d/Foo", "x"), [])
 
 
 if __name__ == "__main__":

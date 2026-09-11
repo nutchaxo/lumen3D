@@ -4,7 +4,7 @@
 
 **De l'image brute du microscope `.ims` à un volume 3D fluide dans le navigateur.**
 
-`version 0.14.1` · `Imaris HDF5 → briques 64³ WebP` · Python (h5py · numpy · scipy · Pillow)
+`version 0.18.0` · `Imaris HDF5 → briques 64³ WebP` · Python (h5py · numpy · scipy · Pillow)
 
 </div>
 
@@ -60,11 +60,11 @@ Cinq scripts s'enchaînent. Chacun fait une chose et la passe au suivant :
  ┌──────────────────────┐
  │ 3-chunk_packer.py    │  64³ → mosaïque 512² → WebP lossless → packs .bin + manifest.json
  └──────────┬───────────┘
-            ▼  fixed/<nom>/bricks/{manifest.json, lod{N}/c{C}/pack_{NN}.bin}
+            ▼  3d/<nom>/bricks/{manifest.json, lod{N}/c{C}/pack_{NN}.bin}
  ┌──────────────────────┐
  │ 4-catalog_generator. │  histogrammes (injectés dans manifest) + metadata.json
  └──────────┬───────────┘
-            ▼  fixed/<nom>/metadata.json   (+ histogrammes dans bricks/manifest.json)
+            ▼  3d/<nom>/metadata.json   (+ histogrammes dans bricks/manifest.json)
             │
             │  (timelapses uniquement, si une analyse de tracking existe)
  ┌──────────────────────┐
@@ -148,16 +148,16 @@ Deux façons de lancer le pipeline : le **lanceur autonome `.bat`** (zéro insta
 
 ### 2.1. Lanceur autonome `run_preprocess.bat` *(recommandé)*
 
-> **Un seul fichier suffit.** Le `.bat` est **auto‑suffisant** : on peut le copier **seul** sur n'importe quel PC Windows — même **sans Python et sans le dépôt** — et il met tout en place. Les **7 scripts** — les 5 du pipeline (`run_preprocess.py` + `1-`→`4-`), l'importeur de photographies whole-mount (`wholemount_importer.py`) et l'outil optionnel de bundles `download/` (`build_download_bundles.py`) — y sont **embarqués** (encodés en base64) ; s'il n'y a pas de Python, il en **télécharge et installe un, en local**.
+> **Un seul fichier suffit.** Le `.bat` est **auto‑suffisant** : on peut le copier **seul** sur n'importe quel PC Windows — même **sans Python et sans le dépôt** — et il met tout en place. Les **7 scripts** — les 5 du pipeline (`run_preprocess.py` + `1-`→`4-`), l'importeur de photographies 2D (`2d_importer.py`) et l'outil optionnel de bundles `download/` (`build_download_bundles.py`) — y sont **embarqués** (encodés en base64) ; s'il n'y a pas de Python, il en **télécharge et installe un, en local**.
 
 **Utilisation : double‑cliquer sur [`run_preprocess.bat`](run_preprocess.bat).** Il déroule **5 étapes** automatiques :
 
 | Étape | Ce qu'il fait |
 |---|---|
-| **[1/5]** Scripts | Extrait les **7 scripts** embarqués (les 5 du pipeline + `wholemount_importer.py` + `build_download_bundles.py`, décodage `certutil`, intégrité vérifiée par **SHA‑256**). S'ils sont **déjà présents** à côté du `.bat`, ils sont **conservés** (on peut donc exécuter une version modifiée). |
+| **[1/5]** Scripts | Extrait les **7 scripts** embarqués (les 5 du pipeline + `2d_importer.py` + `build_download_bundles.py`, décodage `certutil`, intégrité vérifiée par **SHA‑256**). S'ils sont **déjà présents** à côté du `.bat`, ils sont **conservés** (on peut donc exécuter une version modifiée). |
 | **[2/5]** Python | Détection en cascade : runtime local `.runtime\python` → Python **système** (`py -3`/`python`/`python3`) → sinon **propose d'installer** un **Python 3.12.8 embarquable** (téléchargé depuis python.org dans `.runtime\python`, avec `pip`). Isolé, **sans droits admin**, supprimable. |
 | **[3/5]** Dépendances | Vérifie `numpy`/`Pillow`/`h5py`/`scipy`/`tqdm` (par import) et **propose de les installer** via `pip`. |
-| **[4/5]** Paramètres | Demande d'abord le **type de données** — `[1]` volumes Imaris `.ims`, `[2]` photographies whole-mount `.tif` — puis les questions de la chaîne choisie (voir ci‑dessous), affiche un **récapitulatif**, demande confirmation. |
+| **[4/5]** Paramètres | Demande d'abord le **type de données** — `[1]` volumes Imaris `.ims`, `[2]` photographies 2D `.tif` — puis les questions de la chaîne choisie (voir ci‑dessous), affiche un **récapitulatif**, demande confirmation. |
 | **[5/5]** Exécution | Lance le pipeline avec une **interface colorée** et la **progression en temps réel**. `Ctrl+C` demande une **confirmation** avant d'arrêter (arrêt propre — voir « Orchestration interne » plus bas). |
 
 Les **4 questions** de l'étape [4/5], chaîne `[1]` **volumes Imaris** :
@@ -169,12 +169,12 @@ Les **4 questions** de l'étape [4/5], chaîne `[1]` **volumes Imaris** :
 | Filtre optionnel *(glob)* | Ex. `*E8*` pour ne traiter que certains embryons. **Entrée** ⏎ = tous les fichiers. |
 | Générer aussi `download/` ? | `o` / **N** (défaut : non). Si `o`, `tifffile` est installé au besoin et `--with-downloads` est passé au pipeline (archive `_web.zip`, `.ims` original, OME‑TIFF, MIP par canal, `README.txt`). **Lourd** : relit le `.ims`. |
 
-Chaîne `[2]` **photographies whole-mount** (appelle `wholemount_importer.py`, une image = un dataset, aucune brique) :
+Chaîne `[2]` **photographies 2D** (appelle `2d_importer.py`, une image = un dataset, aucune brique) :
 
 | Question | Quoi saisir |
 |---|---|
 | Dossier des `.tif` | Le chemin du dossier d'entrée. Validé : il doit exister, et le **nombre de `.tif`** trouvés est affiché. |
-| Dossier de sortie `DATA_WEB` | **Entrée** ⏎ = valeur par défaut `..\DATA_WEB`. Les datasets atterrissent dans `DATA_WEB\wholemount\`. |
+| Dossier de sortie `DATA_WEB` | **Entrée** ⏎ = valeur par défaut `..\DATA_WEB`. Les datasets atterrissent dans `DATA_WEB\2d\` (type `2d`). |
 | Coloration | **Entrée** ⏎ = `X-gal`. Écrit tel quel dans `metadata.json`. |
 | Lignée | **Entrée** ⏎ = lue dans le nom du `.lif` (ex. `DLL4xCD1`). |
 | Copier le TIFF d'origine dans `download/` ? | `o` / **N**. Si `o`, l'original est **lié** (hardlink, 0 octet de plus) dans `download/` avec un `README.txt` de provenance. |
@@ -204,7 +204,7 @@ python run_preprocess.py --input <dossier_des_ims> --output <DATA_WEB> [--only "
 | Argument | Obligatoire | Rôle |
 |---|---|---|
 | `--input`  | oui | Dossier contenant un ou plusieurs `.ims` (recherche **non récursive** : `input_dir.glob("*.ims")`). |
-| `--output` | oui | Racine `DATA_WEB` de la plateforme. La sortie ira dans `<output>/fixed/<nom_du_ims_sans_extension>/`. |
+| `--output` | oui | Racine `DATA_WEB` de la plateforme. La sortie ira dans `<output>/3d/<nom_du_ims_sans_extension>/` (ou `live/` si le stack a plusieurs timepoints). |
 | `--only`   | non | Filtre `fnmatch` sur le **nom de fichier** (ex. `"*Em7*"` ou le nom exact). Sans lui : tous les `.ims`. |
 | `--with-downloads` | non | Après chaque dataset, construit aussi son dossier `download/` via `tools/build_download_bundles.py` (archive `_web.zip`, `.ims` original en hardlink, OME‑TIFF calibré, MIP PNG par canal, `README.txt`). Étape lourde : relit le `.ims`. Nécessite `tifffile`. |
 | `--tracking` | non | `auto` (défaut) cherche l'analyse de suivi cellulaire des timelapses, `off` la saute, un **chemin** impose ce fichier. Voir [§2.4](#24-le-suivi-cellulaire-tracking--rattachement-automatique). |
@@ -224,7 +224,7 @@ python run_preprocess.py \
 * **Un dataset à la fois**, en boucle séquentielle sur le thread principal (pour économiser la RAM ; le parallélisme est *intra*‑dataset — voir [§11](#11-pourquoi-ces-choix-de-conception-)).
 * Le **nom du dataset** = `Path(ims).stem` (nom du fichier sans `.ims`).
 * `temp_dir = <output>/.temp_preprocess_<nom>` : recréé à neuf à chaque run, **supprimé en fin de traitement** (même en cas d'erreur).
-* `dataset_output_dir = <output>/fixed/<nom>` : si un `bricks/` existe déjà, il est supprimé avant de régénérer.
+* `dataset_output_dir = <output>/3d/<nom>` : si un `bricks/` existe déjà, il est supprimé avant de régénérer.
 * Ordre des étapes : **1 → 2 → vignette → 3 → 4**, puis le **tracking** (uniquement si `n_timepoints > 1`, [§2.4](#24-le-suivi-cellulaire-tracking--rattachement-automatique)), puis — **uniquement si `--with-downloads`** — `build_download_bundles.py`. Les deux dernières viennent **après l'étape 4** (pour que `metadata.json` existe déjà). Chaque étape tourne dans un **sous‑processus isolé** (`subprocess.Popen`, nouveau groupe de processus : `CREATE_NEW_PROCESS_GROUP` Windows / `start_new_session` POSIX).
 * **Arrêt propre sur `Ctrl+C`** : l'orchestrateur intercepte `SIGINT` et **demande confirmation**. *Refus* → le traitement **reprend** sans perte (l'étape en cours n'a pas reçu le signal) ; *confirmation* → l'étape **et tout son pool de workers** sont arrêtés (`taskkill /F /T` / `killpg`), les `.temp_preprocess_*` nettoyés, sortie en code **130**.
 
@@ -289,7 +289,7 @@ Un `.ims` est un conteneur **HDF5** (un format de fichier scientifique hiérarch
         Name                     → nom du canal (ex. "DAPI"), nettoyé (voir §5)
 /DataSet/
     ResolutionLevel 0/           (on n'utilise QUE le niveau 0, pleine résolution)
-        TimePoint 0/             (datasets "fixed" : 1 seul timepoint)
+        TimePoint 0/             (datasets "3d" : 1 seul timepoint)
             Channel 0/Data       → tableau 3D uint16, shape (Zpad, Ypad, Xpad)
             Channel 1/Data       …
         TimePoint 1/ …           (si timelapse)
@@ -322,7 +322,8 @@ Détails importants :
 | [`4-catalog_generator.py`](4-catalog_generator.py) | Histogrammes + `metadata.json`. | `<temp>`, `<out_dir>` | `out/metadata.json` (+ histogrammes injectés dans `manifest.json`) |
 | [`tracking_sources.py`](tracking_sources.py) | Détecte et normalise l'analyse de tracking d'un volume ([§2.4](#24-le-suivi-cellulaire-tracking--rattachement-automatique)). Bibliothèque, plus CLI de diagnostic. | `<ims\|xls\|imaris_track>`, `--list`, `--out` | un conteneur `.imaris_track` (dans `temp/`) |
 | [`5-tracking_importer.py`](5-tracking_importer.py) | Écrit le tracking dans le dataset et y injecte la transformation de stabilisation. | `<source>`, `<dataset_dir>`, `--glb`, `--timepoint-offset` | `out/tracks.json(.gz)`, `out/model.glb`, blocs `tracking`/`registration` dans `metadata.json` |
-| [`../tools/build_download_bundles.py`](../tools/build_download_bundles.py) | **Optionnel** (`--with-downloads`) — construit le dossier `download/` d'un dataset. Embarqué à l'**index 5** du lanceur ; résolu par `run_preprocess.py` dans `../tools/` ou à côté de lui. | `--data-web`, `--raw-dir`, `--datasets` | `fixed/<nom>/download/` (`_web.zip`, `.ims`, OME‑TIFF, MIP, `README.txt`) |
+| [`2d_importer.py`](2d_importer.py) | Chaîne indépendante : un TIFF de photographie → un dataset de type `2d` (aucune brique). | `--input`, `--output`, `--only`, `--line`, `--staining`, `--with-downloads`, `--force` | `DATA_WEB/2d/<nom>/{image,preview,thumbnail}.webp` + `metadata.json` |
+| [`../tools/build_download_bundles.py`](../tools/build_download_bundles.py) | **Optionnel** (`--with-downloads`) — construit le dossier `download/` d'un dataset. Embarqué à l'**index 5** du lanceur ; résolu par `run_preprocess.py` dans `../tools/` ou à côté de lui. | `--data-web`, `--raw-dir`, `--datasets` | `3d/<nom>/download/` (`_web.zip`, `.ims`, OME‑TIFF, MIP, `README.txt`) |
 | [`changelog/`](changelog/) | Historique versionné de l'outil. | — | — |
 
 ---
@@ -439,7 +440,7 @@ Fonction `build_thumbnail()` **dans `run_preprocess.py`** (pas un script sépar�
 * Composite **fausses couleurs additif** : pour le canal *i*, `composite += (mip/255) × THUMB_COLORS[i % 7]` (RGB), puis `clip(0,255) → uint8`.
 * `THUMB_COLORS` = `[(0,255,102),(255,61,255),(47,107,255),(255,48,48),(255,255,0),(255,0,255),(0,255,255)]`.
 * Redimensionne pour tenir dans **512×512** (LANCZOS, ratio préservé), centre sur un fond carré `(8,10,18)` (`#080A12`).
-* Enregistre `fixed/<nom>/thumbnail.webp` en `WEBP quality=88 method=6`.
+* Enregistre `3d/<nom>/thumbnail.webp` en `WEBP quality=88 method=6`.
 
 ---
 
@@ -500,7 +501,7 @@ Constantes : `BRICK_SIZE = 64`, `CHUNKS_PER_PACK = 128`, mosaïque `8×8` (= 512
 Arborescence finale d'un dataset :
 
 ```
-DATA_WEB/fixed/<nom>/
+DATA_WEB/3d/<nom>/
 ├── metadata.json          # config dataset (dims, voxels, canaux, volumeSources)
 ├── thumbnail.webp         # vignette MIP fausses couleurs 512²
 ├── bricks/
@@ -516,7 +517,7 @@ DATA_WEB/fixed/<nom>/
 ### 10.1. `metadata.json`
 ```json
 {
-  "id": "fixed/<nom>", "name": "<nom>", "type": "fixed",
+  "id": "3d/<nom>", "name": "<nom>", "type": "3d",
   "stage": "E8", "stageNumeric": 8.0, "embryo": "Em7",
   "dimensions": { "x": 3789, "y": 3789, "z": 178, "c": 4, "t": 1 },
   "voxel_size": { "x": 0.430366, "y": 0.430366, "z": 2.057107 },
@@ -527,12 +528,12 @@ DATA_WEB/fixed/<nom>/
   "created": "<ISO>", "lastModified": "<ISO>", "configured": true,
   "folderName": "<nom>",
   "description": "Confocal imaging stack: E8 fixed embryo, 178 slices, 4 channels.",
-  "thumbnail": "DATA_WEB/fixed/<nom>/thumbnail.webp",
+  "thumbnail": "DATA_WEB/3d/<nom>/thumbnail.webp",
   "volumeSources": [ {
     "kind": "bricks", "label": "Chunked bricks (64³)", "priority": -1,
     "available": true, "multiscale": true,
-    "path": "DATA_WEB/fixed/<nom>",
-    "manifestPath": "DATA_WEB/fixed/<nom>/bricks/manifest.json"
+    "path": "DATA_WEB/3d/<nom>",
+    "manifestPath": "DATA_WEB/3d/<nom>/bricks/manifest.json"
   } ]
 }
 ```
@@ -541,7 +542,7 @@ DATA_WEB/fixed/<nom>/
 ```json
 {
   "version": 2, "schema": "iribhm-bricks-v2",
-  "dataset": "<nom>", "datasetType": "fixed",
+  "dataset": "<nom>", "datasetType": "3d",
   "channels": 4, "brickSize": 64,
   "brickPacking": { "mode": "grid", "cols": 8, "rows": 8 },
   "voxelSize": { "x": …, "y": …, "z": … },

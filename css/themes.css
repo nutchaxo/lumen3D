@@ -38,14 +38,17 @@
 
   --overlay:          rgba(0, 0, 0, 0.6);
 
-  --badge-fixed-bg:   rgba(0, 210, 255, 0.15);
-  --badge-fixed-text: #00D2FF;
-  --badge-live-bg:    rgba(255, 167, 38, 0.15);
-  --badge-live-text:  #FFA726;
-  --badge-track-bg:   rgba(0, 166, 84, 0.15);
-  --badge-track-text: #00A654;
-  --badge-wm-bg:      rgba(139, 124, 255, 0.15);
-  --badge-wm-text:    #8B7CFF;
+  /* One colour pair per dataset type; the token name IS the type id
+     ('3d', '2d', 'live', 'tracking') so badges, type cards and related-dataset
+     chips can be derived from the type without a lookup table. */
+  --badge-3d-bg:         rgba(0, 210, 255, 0.15);
+  --badge-3d-text:       #00D2FF;
+  --badge-2d-bg:         rgba(139, 124, 255, 0.15);
+  --badge-2d-text:       #8B7CFF;
+  --badge-live-bg:       rgba(255, 167, 38, 0.15);
+  --badge-live-text:     #FFA726;
+  --badge-tracking-bg:   rgba(0, 166, 84, 0.15);
+  --badge-tracking-text: #00A654;
 }
 
 /* ── Light Theme ─────────────────────────────────────────── */
@@ -84,12 +87,12 @@
   --glass-bg:       rgba(255, 255, 255, 0.8);
   --glass-border:   rgba(0, 0, 0, 0.06);
 
-  --badge-fixed-bg:   rgba(0, 180, 224, 0.10);
-  --badge-fixed-text: #0090B8;
-  --badge-live-bg:    rgba(230, 140, 20, 0.10);
-  --badge-live-text:  #D48500;
-  --badge-track-bg:   rgba(0, 140, 70, 0.10);
-  --badge-track-text: #008A45;
-  --badge-wm-bg:      rgba(91, 75, 214, 0.10);
-  --badge-wm-text:    #5B4BD6;
+  --badge-3d-bg:         rgba(0, 180, 224, 0.10);
+  --badge-3d-text:       #0090B8;
+  --badge-2d-bg:         rgba(91, 75, 214, 0.10);
+  --badge-2d-text:       #5B4BD6;
+  --badge-live-bg:       rgba(230, 140, 20, 0.10);
+  --badge-live-text:     #D48500;
+  --badge-tracking-bg:   rgba(0, 140, 70, 0.10);
+  --badge-tracking-text: #008A45;
 }

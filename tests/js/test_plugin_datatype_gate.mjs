@@ -11,10 +11,11 @@
 import assert from 'node:assert/strict';
 import { loadModule } from './harness.mjs';
 
-// Three plugins standing for the three cases above.
+// Three plugins standing for the three cases above. One vocabulary: the type ids
+// here are the ones DATA_WEB/, metadata.json and the dataset ids use.
 const PLUGINS = {
-  'tools/photo-only':   { id: 'photo-only',   name: 'Photo only',   placement: 'tools', dataTypes: ['wholemount'] },
-  'tools/cross-type':   { id: 'cross-type',   name: 'Cross type',   placement: 'tools', dataTypes: ['fixed', 'live', 'wholemount'] },
+  'tools/photo-only':   { id: 'photo-only',   name: 'Photo only',   placement: 'tools', dataTypes: ['2d'] },
+  'tools/cross-type':   { id: 'cross-type',   name: 'Cross type',   placement: 'tools', dataTypes: ['3d', 'live', '2d'] },
   'tools/undeclared':   { id: 'undeclared',   name: 'Undeclared',   placement: 'tools' },
 };
 const ALL = Object.keys(PLUGINS);
@@ -58,13 +59,13 @@ assert.deepEqual(await loadedIds(undefined),
   ['cross-type', 'photo-only', 'undeclared'], 'no dataType → unfiltered');
 
 // Strict host (the 2D photograph page): only plugins that name the type.
-assert.deepEqual(await loadedIds({ dataType: 'wholemount' }),
+assert.deepEqual(await loadedIds({ dataType: '2d' }),
   ['cross-type', 'photo-only'], 'strict host keeps only the declaring plugins');
 
 // Volume viewer: keeps its legacy (undeclared) plugins AND the cross-type ones,
 // but must NOT pick up a plugin that declares another type only. This is the
 // regression that put Split View on the 3D/Live toolbar.
-assert.deepEqual(await loadedIds({ dataType: 'fixed', allowUndeclaredDataTypes: true }),
+assert.deepEqual(await loadedIds({ dataType: '3d', allowUndeclaredDataTypes: true }),
   ['cross-type', 'undeclared'], 'volume viewer drops the photograph-only plugin');
 assert.deepEqual(await loadedIds({ dataType: 'live', allowUndeclaredDataTypes: true }),
   ['cross-type', 'undeclared'], 'same on live datasets');
@@ -72,8 +73,15 @@ assert.deepEqual(await loadedIds({ dataType: 'live', allowUndeclaredDataTypes: t
 // A declared-but-unmatched type is not a fault: nothing gets quarantined for it.
 {
   const PR = freshRegistry();
-  await PR.loadModules('js/modules', ALL, { dataType: 'fixed', allowUndeclaredDataTypes: true });
+  await PR.loadModules('js/modules', ALL, { dataType: '3d', allowUndeclaredDataTypes: true });
   assert.equal(PR.getQuarantined().length, 0, 'left-out plugins are not quarantined');
 }
 
-console.log('OK  data-type gate: %d assertions', 6);
+// The former spellings are not types any more, and nothing translates them: a host
+// asking for one gets only the plugins that declare nothing (and only if it opts in).
+assert.deepEqual(await loadedIds({ dataType: 'fixed', allowUndeclaredDataTypes: true }),
+  ['undeclared'], 'a retired type id matches no declaration');
+assert.deepEqual(await loadedIds({ dataType: 'wholemount' }),
+  [], 'a retired type id matches no declaration, strict host');
+
+console.log('OK  data-type gate: %d assertions', 8);

@@ -1,11 +1,11 @@
 {
   "id": "display-adjust",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "platformCompat": ">=1.49.0",
   "creator": "IRIBHM",
   "placement": "tools",
   "dataTypes": [
-    "wholemount"
+    "2d"
   ],
   "i18nTitle": "title",
   "i18nAria": "aria",
@@ -21,5 +21,5 @@
   "icon": "sliders-horizontal",
   "order": 15,
   "buttonId": "btn-display-adjust",
-  "description": "Non-destructive brightness, contrast, gamma, white balance and background flattening for a wholemount photograph."
+  "description": "Non-destructive brightness, contrast, gamma, white balance and background flattening for a 2D photograph."
 }

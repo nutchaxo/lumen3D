@@ -693,7 +693,10 @@ const PageRenderer = (() => {
         body.appendChild(_el('div', 'font-weight:600;line-height:1.35' + titleColorCss, ds.name || ds.id));
         if (showMeta) {
           const meta = _el('div', 'display:flex;gap:10px;align-items:baseline;margin-top:5px;font-size:var(--text-sm,.8rem)');
-          if (ds.type) meta.appendChild(_el('span', 'color:var(--color-primary,#00A654);font-weight:600;text-transform:uppercase;font-size:.7rem;letter-spacing:.05em', ds.type));
+          // The badge shows the operator-editable name of the type, never its id.
+          const typeLabel = (typeof Utils !== 'undefined' && Utils.datasetTypeLabel)
+            ? Utils.datasetTypeLabel(ds.type) : ds.type;
+          if (typeLabel) meta.appendChild(_el('span', 'color:var(--color-primary,#00A654);font-weight:600;text-transform:uppercase;font-size:.7rem;letter-spacing:.05em', typeLabel));
           let dateStr = '';
           try { dateStr = (typeof Utils !== 'undefined' && Utils.formatDate) ? Utils.formatDate(ds.date) : String(ds.date || ''); } catch (_) { dateStr = String(ds.date || ''); }
           if (dateStr) meta.appendChild(_el('span', 'opacity:.55', dateStr));

@@ -72,7 +72,7 @@ check('/api/plugins.php',                  false, 'plugins route');
 check('/api/catalog.php',                  false, 'catalog route');
 check('/index.html',                       false, 'page');
 check('/js/core/utils.js',                 false, 'asset');
-check('/DATA_WEB/fixed/x/metadata.json',   false, 'dataset metadata is public');
+check('/DATA_WEB/3d/x/metadata.json',   false, 'dataset metadata is public');
 check('/config/pages/home.json',           false, 'published page doc is public');
 check('/apiclient.js',                     false, 'not under api/ despite the prefix');
 

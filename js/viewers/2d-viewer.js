@@ -1,5 +1,5 @@
 /* ============================================================
-   Lumen3D — Wholemount Viewer
+   Lumen3D — 2D Viewer
    ============================================================
    2D canvas renderer for one calibrated photograph. Owns the view
    transform (pan / zoom), the two-step image load (the small preview
@@ -17,7 +17,7 @@
    bar, the grid, the picks and the linked views.
    ============================================================ */
 
-const WholemountViewer = (() => {
+const Viewer2D = (() => {
   const FIT_MARGIN = 0.96;          // fitted view leaves a 2 % border on each side
   const MIN_ZOOM_OUT = 0.25;        // never smaller than a quarter of the fitted view
   const MAX_SCALE = 32;             // CSS pixels per image pixel
@@ -398,7 +398,7 @@ const WholemountViewer = (() => {
     const helpers = _overlayHelpers();
     for (const fn of _overlays) {
       _ctx.save();
-      try { fn(_ctx, helpers); } catch (err) { console.warn('[WholemountViewer] overlay failed', err); }
+      try { fn(_ctx, helpers); } catch (err) { console.warn('[Viewer2D] overlay failed', err); }
       _ctx.restore();
     }
   }
@@ -843,4 +843,4 @@ const WholemountViewer = (() => {
 })();
 
 // A top-level const is not a window property; the Compare page and the split-view host read this pane's viewer through iframe.contentWindow.
-window.WholemountViewer = WholemountViewer;
+window.Viewer2D = Viewer2D;

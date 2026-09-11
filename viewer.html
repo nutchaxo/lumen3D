@@ -249,13 +249,42 @@
               <canvas id="zstack-diagram-canvas" width="200" height="280"></canvas>
             </div>
             <div class="zstack-vslider-wrap">
-              <input type="range" id="zstack-slice-slider" class="zstack-vslider" min="0" max="0" value="0" step="1">
+              <!-- Custom vertical slider (zstack-browser plugin): a "3D" notch above the
+                   track shows every kept slice; the cursor bar shows one slice or a slab;
+                   the two triangular handles trim the slices above / below. -->
+              <div class="zstack-vslider" id="zstack-vslider" tabindex="0" role="slider" aria-orientation="vertical" aria-valuemin="-1" aria-valuemax="0" aria-valuenow="-1">
+                <button type="button" class="zs-notch" id="zstack-notch"><i data-lucide="box"></i><span>3D</span></button>
+                <div class="zs-detent" aria-hidden="true"></div>
+                <div class="zs-track" id="zstack-track">
+                  <div class="zs-mask zs-mask-top" id="zstack-mask-top"></div>
+                  <div class="zs-mask zs-mask-bottom" id="zstack-mask-bottom"></div>
+                  <div class="zs-cursor" id="zstack-cursor">
+                    <span class="zs-grip zs-grip-top"></span>
+                    <span class="zs-grip zs-grip-bottom"></span>
+                  </div>
+                  <div class="zs-handle zs-handle-top" id="zstack-handle-top"></div>
+                  <div class="zs-handle zs-handle-bottom" id="zstack-handle-bottom"></div>
+                </div>
+              </div>
             </div>
           </div>
           <div class="zstack-nav-row">
             <button class="btn btn-outline btn-sm" id="btn-zstack-prev" title="Previous slice" data-i18n-title="tips.prevSlice"><i data-lucide="chevron-up"></i></button>
-            <span class="zstack-slice-readout" id="zstack-slice-label">1 / 1</span>
+            <span class="zstack-slice-readout" id="zstack-slice-label">3D</span>
             <button class="btn btn-outline btn-sm" id="btn-zstack-next" title="Next slice" data-i18n-title="tips.nextSlice"><i data-lucide="chevron-down"></i></button>
+          </div>
+          <div class="zstack-thickness-row">
+            <span class="zstack-thickness-label" id="zstack-thickness-label">Thickness</span>
+            <div class="zstack-stepper">
+              <button type="button" class="btn btn-ghost btn-icon btn-sm zstack-stepper-btn" id="btn-zstack-thk-minus" aria-label="−"><i data-lucide="minus"></i></button>
+              <input type="number" class="zstack-thickness-input" id="zstack-thickness-input" min="1" max="1" value="1" step="1">
+              <button type="button" class="btn btn-ghost btn-icon btn-sm zstack-stepper-btn" id="btn-zstack-thk-plus" aria-label="+"><i data-lucide="plus"></i></button>
+            </div>
+            <span class="zstack-thickness-um" id="zstack-thickness-um">—</span>
+          </div>
+          <div class="zstack-crop-row zs-full" id="zstack-crop-row">
+            <span class="zstack-crop-label" id="zstack-crop-label">—</span>
+            <button type="button" class="btn btn-ghost btn-icon btn-sm zstack-crop-reset" id="btn-zstack-crop-reset"><i data-lucide="rotate-ccw"></i></button>
           </div>
         </div>
         <div class="panel-section">

@@ -493,18 +493,33 @@ const VolumeViewer = (() => {
 
     out vec4 fragColor;
 
-    vec2 hitBox(vec3 orig, vec3 dir) {
-      vec3 box_min = vec3(-0.5);
-      vec3 box_max = vec3(0.5);
+    // Ray ∩ axis-aligned box [bmin, bmax], both in the ray's own space: entry/exit ray
+    // parameters (t0 > t1 ⇔ miss). Shared by the data box and the clip box.
+    vec2 hitAABB(vec3 orig, vec3 dir, vec3 bmin, vec3 bmax) {
       vec3 safe_dir = dir + (1.0 - step(vec3(1e-8), abs(dir))) * 1e-8;
       vec3 inv_dir = 1.0 / safe_dir;
-      vec3 tmin_tmp = (box_min - orig) * inv_dir;
-      vec3 tmax_tmp = (box_max - orig) * inv_dir;
+      vec3 tmin_tmp = (bmin - orig) * inv_dir;
+      vec3 tmax_tmp = (bmax - orig) * inv_dir;
       vec3 tmin = min(tmin_tmp, tmax_tmp);
       vec3 tmax = max(tmin_tmp, tmax_tmp);
       float t0 = max(tmin.x, max(tmin.y, tmin.z));
       float t1 = min(tmax.x, min(tmax.y, tmax.z));
       return vec2(t0, t1);
+    }
+
+    vec2 hitBox(vec3 orig, vec3 dir) {
+      return hitAABB(orig, dir, vec3(-0.5), vec3(0.5));
+    }
+
+    // The clip box (clipMin..clipMax, normalised) in OBJECT space, so the march can be
+    // confined to it. Inverse of the per-sample clipCoord below: unwarped, uvw = p + 0.5;
+    // warped, the sliders act in the display box (clipBoxMin + clipCoord * clipBoxSize).
+    vec2 hitClipBox(vec3 orig, vec3 dir) {
+      #ifdef VOLUME_WARP
+      return hitAABB(orig, dir, clipBoxMin + clipMin * clipBoxSize, clipBoxMin + clipMax * clipBoxSize);
+      #else
+      return hitAABB(orig, dir, clipMin - 0.5, clipMax - 0.5);
+      #endif
     }
 
     #ifdef VOLUME_WARP
@@ -549,11 +564,38 @@ const VolumeViewer = (() => {
       if (bounds.x > bounds.y) discard;
 
       bounds.x = max(bounds.x, 0.0);
+      // Full traversal of the data box — the reference the slab normalisation below
+      // measures the clipped segment against.
+      float fullLength = max(bounds.y - bounds.x, 1e-6);
+
+      // Confine the march to the clip box so every one of the 'steps' samples lands in
+      // what is displayed. Marching the whole box and rejecting samples per clipCoord
+      // gave a thin z-slab (the Z-stack browser shows ONE slice) a fraction of a sample
+      // per ray, and none at all at the 24–48 steps used while interacting.
+      vec2 clipT = hitClipBox(vOrigin, rayDir);
+      bounds.x = max(bounds.x, clipT.x);
+      bounds.y = min(bounds.y, clipT.y);
+      if (bounds.x >= bounds.y) discard;
+
       float rayLength = bounds.y - bounds.x;
       float delta = rayLength / max(float(steps), 1.0);
       float jitter = hash(gl_FragCoord.xy) * delta;
       vec3 p = vOrigin + (bounds.x + jitter) * rayDir;
       float t = jitter;
+
+      // Slab normalisation. A clipped segment is displayed as if it were optically
+      // thick: its emission is scaled so its integral matches a column one attenuation
+      // length long (1/absorption), or the full traversal when the medium is thinner
+      // than that. A bright voxel in a one-slice slab then reads at the level a bright
+      // column reads in the full 3D view, and that level no longer depends on how many
+      // slices the slab holds. An unclipped ray is left exactly as it was (gain 1):
+      //   slabGain = max(1, min(fullLength / rayLength, 1 / (absorption · rayLength)))
+      float slabGain = max(1.0, 1.0 / (rayLength * max(absorption, 1.0 / fullLength)));
+      // Structure DVR (mode 0) adds a fixed 0.05 per sample, i.e. reaches opacity after
+      // 20 samples. Weight each sample so an unclipped ray is unchanged (w = 1) while a
+      // thin slab still fills that 20-sample budget instead of the ~0 it used to get:
+      //   w = max(rayLength / fullLength, min(1, 20 / steps))
+      float dvrW = max(rayLength / fullLength, min(1.0, 20.0 / max(float(steps), 1.0)));
 
       // ── Per-channel MIP accumulators (mode 1 - Fluorescence) ──
       float mip0 = 0.0;
@@ -576,7 +618,7 @@ const VolumeViewer = (() => {
       // Beer-Lambert transmittance prod(1-aStep)=prod(exp(-clebK*d))=exp(-absorption*int d ds)
       // is then EXACT regardless of step count; exposure is folded into the emission scale.
       float clebK    = absorption * delta;
-      float clebEmit = emissionGain * exposure * delta;
+      float clebEmit = emissionGain * exposure * delta * slabGain;
 
       int maxSteps = steps;
       for (int i = 0; i < 768; i++) {
@@ -725,8 +767,8 @@ const VolumeViewer = (() => {
             float localAlpha = max(max(v0, v1), max(v2, v3));
             if (localAlpha > 0.01) {
               vec3 localColor = v0 * color0 + v1 * color1 + v2 * color2 + v3 * color3;
-              accumDVR   += localColor * localAlpha * 0.05;
-              accumAlpha += localAlpha * 0.05;
+              accumDVR   += localColor * localAlpha * 0.05 * dvrW;
+              accumAlpha += localAlpha * 0.05 * dvrW;
             }
           }
         }

@@ -136,6 +136,7 @@ It is a **reminder**, not an error. While it is there, your changes are visible 
 | **Pipeline** | Download the tool that prepares new data | Rarely |
 | **Documentation** | Read and download the guides published for the platform | Occasionally |
 | **Identity** | Site name, vocabulary, footer, menu | Rarely |
+| **Dataset types** | The public name of each of the four dataset categories | Rarely |
 | **Pages** | Edit page content (home, about…) | Often |
 | **Appearance** | Colours and font of the public site | Rarely |
 | **Legal** | Legal text | Rarely |
@@ -172,7 +173,7 @@ The screen is split into **three columns**:
 |---|---|
 | **1** | The total number of datasets on the server. |
 | **2** | **Search** — type part of a name and the list filters as you type. |
-| **3** | **Filters** — `All`, `Fixed` (still volumes), `Live` (4D time series), `Hidden` (the ones that are not public). |
+| **3** | **Filters** — `All`, then **one filter per dataset type** (still volumes, 2D photographs, 4D time series, cell trajectories), then `Hidden` (the ones that are not public) and `Import` (the ones still being transferred). The names on those filters are the ones you choose in the **Dataset types** tab (§11.7). |
 | **4** | **Click a thumbnail** to open its record. |
 
 On each row, to the right of the name:
@@ -789,6 +790,30 @@ Unticking an entry removes it from the menu without deleting the page.
 
 > ⚠️ **Watch out for "Legal".** That box is unticked by default. If you write your legal notice (§14), remember to come back here to make it reachable.
 
+## 11.7. The "Dataset types" tab — the public name of each category
+
+This is a **tab of its own**, right next to *Identity*. It carries the same idea further: the platform files every dataset into one of **four categories**, and you decide what the public calls them.
+
+| Category | What it holds | Page that opens it |
+|---|---|---|
+| **3D** | A still volume: a multi-channel 3D image stack | the 3D viewer |
+| **2D** | A calibrated stereomicroscope photograph | the 2D viewer |
+| **Live** | A 4D time series (the same volume over time) | the 3D viewer, with a timeline |
+| **Tracking** | The trajectories of cells followed through a time series | the tracking viewer |
+
+Each category has two fields, **multilingual** like the ones in the Identity tab:
+
+- **Short name** — what appears on badges, filters and lists (`Volumes`, `Photographs`…).
+- **Title** — the long form, used on the large cards of the home page (`3D Imaging`, `Wholemount Photography`…).
+
+**Leave a field empty to keep the default name.** An empty field is not an empty name: the platform then falls back to its own translation, in the visitor's language. That is also what the **Reset** button does — it clears your names instead of replacing them with frozen text.
+
+> ### 📌 What this tab does **not** change
+>
+> Display names only. Not the folders on the server (`DATA_WEB/3d/`, `DATA_WEB/2d/`, `DATA_WEB/live/`, `DATA_WEB/tracking/`), not the page addresses, not the links your visitors may have bookmarked, and nothing inside the datasets themselves. So rename as often as you like — there is no risk.
+>
+> And it does not create categories: the four types are the ones the software knows how to display.
+
 ---
 
 # 12. Pages — the visual editor
@@ -1048,7 +1073,7 @@ A **variable** is a piece of text you define once and reuse everywhere.
 
 Naming rules: start with a letter, then letters, digits or `_`, 32 characters maximum.
 
-Variables already exist for the Identity tab's information: `{brand}` (the site's name), `{specimen}` (your object of study), `{org}` (the organisation), `{year}` (the year). They update by themselves.
+Variables already exist for the Identity tab's information: `{brand}` (the site's name), `{specimen}` (your object of study), `{org}` (the organisation), `{year}` (the year). The four dataset categories have their own too: `{type3d}`, `{type2d}`, `{typeLive}`, `{typeTracking}` — they carry the names from the **Dataset types** tab (§11.7). All of them update by themselves.
 
 ## 12.11. Creating a new page
 
@@ -1203,7 +1228,7 @@ The fix needs access to the server's files (FTP, SFTP, or the host's file manage
 
 ### "A dataset does not appear in the list"
 
-1. check that it really is in `DATA_WEB/fixed/`, `DATA_WEB/live/` or `DATA_WEB/tracking/`;
+1. check that it really is in `DATA_WEB/3d/`, `DATA_WEB/2d/`, `DATA_WEB/live/` or `DATA_WEB/tracking/` — those four folder names are fixed, do not rename them (renaming a **type** in the *Dataset types* tab only changes what is displayed, never the folder);
 2. check that its folder contains a `metadata.json` file;
 3. reload the panel page.
 
@@ -1235,7 +1260,7 @@ Do a **hard reload**: `Ctrl + Shift + R` (Windows) or `Cmd + Shift + R` (Mac). T
 | **Voxel** | The three-dimensional equivalent of a pixel. Its real size is given by the calibration (§3.3). |
 | **Brick** | A small cube of volume (64×64×64 voxels). The site loads them on demand, which is how it can show volumes of several gigabytes without downloading everything. |
 | **LOD** | *Level of Detail*. Several resolutions of the same volume: the site shows a coarse version first, then refines. |
-| **Fixed / Live / Tracking** | The three kinds of dataset: still volume, 4D time series, cell trajectories. |
+| **Dataset type** | One of the four categories — `3d` (still volume), `2d` (calibrated photograph), `live` (4D time series), `tracking` (cell trajectories). Those four words are technical: they are the server's folders and the start of every dataset's identifier. The name the public sees is set in the **Dataset types** tab (§11.7). |
 | **Plugin** | A module that adds a feature to the viewer (§5.1). |
 | **Sandbox** | An isolated execution mode: the plugin works, but cannot reach the rest of the page. |
 | **Fingerprint** | A signature of a file's exact contents. If the file changes by a single character, the fingerprint changes. |

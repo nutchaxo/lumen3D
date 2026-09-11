@@ -41,6 +41,9 @@ document.addEventListener('DOMContentLoaded', async () => {
   // Populate stats
   populateStats();
 
+  // Populate the dataset-type cards (name, description, count)
+  populateTypeCards();
+
   // Populate featured datasets
   populateFeatured();
 
@@ -111,7 +114,9 @@ async function switchLanguage(lang) {
   await I18n.setLanguage(lang);
   Utils.closeDropdowns(); // DEAD-035: shared dropdown-close step
   Utils.populateLanguageMenu(switchLanguage); // refresh active-item highlight
-  // Page-specific: re-render the featured grid in the new language
+  // Page-specific: re-render what JS wrote (the type cards carry no data-i18n
+  // key _applyTranslations could refresh) in the new language.
+  populateTypeCards();
   populateFeatured();
 }
 
@@ -150,16 +155,21 @@ function populateStats() {
 
   const statsBar = document.getElementById('stats-bar');
   if (statsBar) observer.observe(statsBar);
+}
 
-  // Update type card counts
-  const countFixed = document.getElementById('count-fixed');
-  const countLive = document.getElementById('count-live');
-  const countTracking = document.getElementById('count-tracking');
-  if (countFixed) countFixed.textContent = `${stats.byType.fixed} datasets`;
-  if (countLive) countLive.textContent = `${stats.byType.live} datasets`;
-  if (countTracking) countTracking.textContent = `${stats.byType.tracking} datasets`;
-  const countWholemount = document.getElementById('count-wholemount');
-  if (countWholemount) countWholemount.textContent = `${stats.byType.wholemount} datasets`;
+/* ── Type Cards ──────────────────────────────────────────── */
+// A type card names itself: its heading is the operator's own wording for the
+// type (config/instance.json datasetTypes.<id>.title) falling back to the
+// translated types.<id>.title, and its counter comes from the catalog. Only the
+// description is a plain translation key, so [data-i18n] handles it alone.
+function populateTypeCards() {
+  Utils.applyDatasetTypeLabels(document);
+
+  const byType = Catalog.getStats().byType;
+  Utils.DATASET_TYPES.forEach(type => {
+    const countEl = document.getElementById(`count-${type}`);
+    if (countEl) countEl.textContent = I18n.t('explorer.resultsCount', { count: byType[type] || 0 });
+  });
 }
 
 /* ── Featured Datasets ───────────────────────────────────── */
@@ -171,7 +181,7 @@ function populateFeatured() {
   const newest = [...all].sort((a, b) => (b.date || '').localeCompare(a.date || ''));
   const preferred = [
     [...all].filter(d => d.type === 'tracking').sort((a, b) => (b.nCells || 0) - (a.nCells || 0))[0],
-    [...all].filter(d => d.type === 'fixed').sort((a, b) => (b.dimensions?.z || 0) - (a.dimensions?.z || 0))[0],
+    [...all].filter(d => d.type === '3d').sort((a, b) => (b.dimensions?.z || 0) - (a.dimensions?.z || 0))[0],
     [...all].filter(d => d.type === 'live').sort((a, b) => (b.dimensions?.c || 0) - (a.dimensions?.c || 0))[0],
   ].filter(Boolean);
 
@@ -198,25 +208,6 @@ function populateFeatured() {
  * @returns {string} HTML
  */
 function createDatasetCard(dataset, index = 0) {
-  const typeLabels = {
-    fixed: I18n.t('explorer.fixed'),
-    live: I18n.t('explorer.live'),
-    tracking: I18n.t('explorer.tracking'),
-    wholemount: I18n.t('explorer.wholemount')
-  };
-  const typeClass = {
-    fixed: 'badge-fixed',
-    live: 'badge-live',
-    tracking: 'badge-tracking',
-    wholemount: 'badge-wholemount'
-  };
-  const typeIcons = {
-    fixed: 'layers',
-    live: 'video',
-    tracking: 'git-branch',
-    wholemount: 'camera'
-  };
-
   const stageDisplay = Utils.formatStage(dataset.stage);
   const dateDisplay = Utils.formatDate(dataset.date);
   const sizeDisplay = dataset.fileSize ? Utils.formatFileSize(dataset.fileSize) : '';
@@ -231,27 +222,19 @@ function createDatasetCard(dataset, index = 0) {
     metaItems.push(`<span>${d.x}&times;${d.y}&times;${d.z}</span>`);
   }
 
-  // Thumbnail placeholder with gradient
-  const gradients = {
-    fixed: 'linear-gradient(135deg, #00D2FF22, #0F346044)',
-    live: 'linear-gradient(135deg, #FFA72622, #16213E44)',
-    tracking: 'linear-gradient(135deg, #00A65422, #1A1A2E44)',
-    wholemount: 'linear-gradient(135deg, #8B7CFF22, #1A1A2E44)'
-  };
-
   // SEC-015: dataset fields are catalog data — escape before innerHTML (mirrors explorer.js).
   const image = dataset.thumbnail
     ? `<img src="${Utils.escapeHtml(dataset.thumbnail)}" alt="">`
-    : `<i data-lucide="${typeIcons[dataset.type]}" style="width:48px;height:48px;color:var(--text-muted);opacity:0.4"></i>`;
+    : `<i data-lucide="${Utils.datasetTypeIcon(dataset.type)}" style="width:48px;height:48px;color:var(--text-muted);opacity:0.4"></i>`;
 
   return `
     <a href="${getDatasetUrl(dataset)}" class="card animate-fade-in-up delay-${index + 1}" style="text-decoration:none;color:inherit">
-      <div class="card-image" style="background: ${gradients[dataset.type] || gradients.fixed}; display:flex; align-items:center; justify-content:center;">
+      <div class="card-image" style="background: ${Utils.datasetTypeGradient(dataset.type)}; display:flex; align-items:center; justify-content:center;">
         ${image}
       </div>
       <div class="card-body">
         <div style="display:flex;align-items:center;gap:var(--space-2);margin-bottom:var(--space-2)">
-          <span class="badge badge-dot ${typeClass[dataset.type]}">${typeLabels[dataset.type]}</span>
+          <span class="badge badge-dot ${Utils.datasetTypeBadgeClass(dataset.type)}">${Utils.escapeHtml(Utils.datasetTypeLabel(dataset.type))}</span>
         </div>
         <div class="card-title">${Utils.escapeHtml(dataset.name)}</div>
         <div class="card-subtitle">${Utils.escapeHtml(dataset.description || '')}</div>

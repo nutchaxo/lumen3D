@@ -62,7 +62,7 @@ class TestForbiddenStatic(unittest.TestCase):
             "index.html",
             "js/core/utils.js",
             "css/base.css",
-            "DATA_WEB/fixed/x/metadata.json",
+            "DATA_WEB/3d/x/metadata.json",
             "DATA_WEB/catalog.json",
             "viewer.html",
             "lang/en.json",

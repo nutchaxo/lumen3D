@@ -13,7 +13,7 @@ from pathlib import Path
 import numpy as np
 from PIL import Image
 
-__version__ = "0.17.1"
+__version__ = "0.18.0"
 
 # ── Paths ──────────────────────────────────────────────────────────────────────
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -287,10 +287,11 @@ def process_ims_file(ims_path: Path, output_root: Path, idx: int = 0, total: int
         # The dataset type follows the acquisition: a stack with more than one
         # timepoint is a timelapse and belongs under live/, which is what drives the
         # viewer's timeline. Resolved here because only step 1 knows the frame count.
+        # The directory name IS the dataset type — step 4 reads it back off disk.
         with open(temp_meta_json, "r", encoding="utf-8") as fm:
             n_timepoints = int(json.load(fm).get("n_timepoints", 1) or 1)
-        type_dir = "live" if n_timepoints > 1 else "fixed"
-        dataset_output_dir = output_root / type_dir / dataset_name
+        dataset_type = "live" if n_timepoints > 1 else "3d"
+        dataset_output_dir = output_root / dataset_type / dataset_name
         # The previous bricks used to be DELETED here, before the heavy step even ran.
         # Any failure after this point — and step 2 can fail for reasons that have
         # nothing to do with the data, such as exhausting the Windows commit limit on a
@@ -304,8 +305,8 @@ def process_ims_file(ims_path: Path, output_root: Path, idx: int = 0, total: int
                 shutil.rmtree(bricks_rollback, ignore_errors=True)
             bricks_dir.rename(bricks_rollback)
         dataset_output_dir.mkdir(parents=True, exist_ok=True)
-        if n_timepoints > 1:
-            print(_dim(f"   type   : live ({n_timepoints} timepoints)"))
+        print(_dim(f"   type   : {dataset_type}"
+                   + (f" ({n_timepoints} timepoints)" if n_timepoints > 1 else "")))
 
         # Step 2: Normalization, Background subtraction, Downscaling
         run_step("2-image_processor.py", str(ims_path), str(temp_meta_json), str(temp_dir))

@@ -55,6 +55,11 @@ const PR = loadModule('js/core/plugin-registry.js', 'PluginRegistry', {
   I18n: { t: k => k, translateDOM() {} },
   fetch: (...a) => currentFetch(...a),
   queueMicrotask,
+  // loadModules fails CLOSED without PluginTrust (it refuses to inject unverified
+  // code), so a dev-tier stub is what lets these tests reach the registry itself.
+  PluginTrust: { evaluate: async () => ({ tier: 'dev', hash: 'stub', bytes: '' }) },
+  URL: { createObjectURL: () => 'blob:stub', revokeObjectURL() {} },
+  Blob: class { constructor() {} },
 });
 
 const btns = g => containers[`[data-tool-group="${g}"]`].children;

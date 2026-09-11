@@ -14,6 +14,47 @@
     "noResults": "No results found",
     "backToHome": "Back to home"
   },
+  "types": {
+    "3d": {
+      "label": "Fixed",
+      "title": "Fixed Imaging",
+      "desc": "High-resolution 3D image stacks of fixed {specimenPlural}. Multi-channel imaging data ready to explore."
+    },
+    "2d": {
+      "label": "Wholemount",
+      "title": "Wholemount Photography",
+      "desc": "Calibrated stereomicroscope photographs of whole {specimenPlural}: stained patterns, scale bar and measurements at a glance."
+    },
+    "live": {
+      "label": "Live",
+      "title": "Live Imaging",
+      "desc": "Time-lapse 4D recordings of {specimenPlural} over time. Watch development unfold in real time."
+    },
+    "tracking": {
+      "label": "Tracking",
+      "title": "Cell Tracking",
+      "desc": "Quantitative analysis of individual cell trajectories, velocities, lineage trees, and neighbor relationships over time."
+    }
+  },
+  "dtypes": {
+    "nav": "Data types",
+    "title": "Data types",
+    "sub": "Rename what your visitors read. The technical id of each type never changes.",
+    "short": "Short name",
+    "shortHint": "Badges, filters, lists. Leave empty to keep the translated default.",
+    "long": "Long title (home page)",
+    "longLabel": "Long title",
+    "longHint": "Heading of the type cards on the home page.",
+    "idHint": "Technical id — folder, dataset id, filters and plugins. Not editable.",
+    "perLocale": "multilingual",
+    "count": "{n} dataset(s)",
+    "none": "No dataset type declared.",
+    "save": "Save",
+    "saved": "Type names saved.",
+    "saveError": "Could not save.",
+    "reset": "Default names",
+    "resetConfirm": "Restore the default translated names for every type?"
+  },
   "toast": {
     "figureUnavailable": "Figure export is not available on this page",
     "graphUnavailable": "Graph export is not available on this page",
@@ -100,16 +141,8 @@
     "featuredSubtitle": "Recent highlights from our imaging collection",
     "typesTitle": "Data Types",
     "typesSubtitle": "Navigate across our dataset collection",
-    "fixedTitle": "Fixed Imaging",
-    "fixedDesc": "High-resolution 3D image stacks of fixed {specimenPlural}. Multi-channel imaging data ready to explore.",
-    "liveTitle": "Live Imaging",
-    "liveDesc": "Time-lapse 4D recordings of {specimenPlural} over time. Watch development unfold in real time.",
-    "trackingTitle": "Cell Tracking",
-    "trackingDesc": "Quantitative analysis of individual cell trajectories, velocities, lineage trees, and neighbor relationships over time.",
     "browseAll": "Browse All",
-    "viewCollection": "View Collection",
-    "wholemountTitle": "Wholemount Photography",
-    "wholemountDesc": "Calibrated stereomicroscope photographs of whole {specimenPlural}: stained patterns, scale bar and measurements at a glance."
+    "viewCollection": "View Collection"
   },
   "explorer": {
     "title": "Data Explorer",
@@ -119,9 +152,6 @@
     "filterDate": "Date",
     "filterMarkers": "Markers",
     "allTypes": "All Types",
-    "fixed": "Fixed",
-    "live": "Live Imaging",
-    "tracking": "Tracking",
     "sortBy": "Sort by",
     "sortName": "Name",
     "sortDate": "Date",
@@ -137,8 +167,7 @@
     "fileType": "Type",
     "fileSize": "Size",
     "failed": "Data Loading Failed",
-    "failedDesc": "Dataset not found or failed to load. Please try again.",
-    "wholemount": "Wholemount"
+    "failedDesc": "Dataset not found or failed to load. Please try again."
   },
   "viewer": {
     "controls": "Controls",
@@ -626,8 +655,6 @@
     "datasets": "Datasets",
     "search": "Search…",
     "filterAll": "All",
-    "filterFixed": "Fixed",
-    "filterLive": "Live",
     "noDatasetSelected": "No dataset selected",
     "clickDatasetHint": "Click a dataset in the list to preview it here.",
     "loadingViewer": "Loading viewer…",
@@ -1766,7 +1793,7 @@
     "errTls": "This host's PHP certificate store is unusable: upload cacert.pem to the site root.",
     "errFolder": "The DOCS/ folder does not exist in the repository yet."
   },
-  "wholemount": {
+  "2d": {
     "specimen": "Specimen",
     "stage": "Stage",
     "line": "Line",

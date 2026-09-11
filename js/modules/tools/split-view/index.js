@@ -75,17 +75,17 @@ PluginRegistry.implement('split-view', {
       this._frame.title = this._t('paneTitle');
       this._frame.addEventListener('load', () => this._pushView(true));
       const tag = document.createElement('span');
-      tag.className = 'wm-split-tag';
+      tag.className = 'p2d-split-tag';
       this._pane = document.createElement('div');
-      this._pane.className = 'wm-split-pane';
+      this._pane.className = 'p2d-split-pane';
       this._pane.append(this._frame, tag);
       const stage = this._ctx.ui.getStage();
       stage.parentElement.insertBefore(this._pane, stage.nextSibling);
-      this._frame.src = `wholemount.html?id=${encodeURIComponent(target.id)}&hideHeader=true&panelIndex=1`;
+      this._frame.src = `${Utils.datasetPage('2d')}?id=${encodeURIComponent(target.id)}&hideHeader=true&panelIndex=1`;
     } else {
       this._frame.contentWindow?.postMessage({ type: 'WM_OPEN_DATASET', id: target.id }, Utils.trustedTargetOrigin());
     }
-    this._pane.querySelector('.wm-split-tag').textContent = target.name;
+    this._pane.querySelector('.p2d-split-tag').textContent = target.name;
     this._ui.section.hidden = false;
     this._ctx.ui.scheduleResize();
     this._render();
@@ -129,17 +129,17 @@ PluginRegistry.implement('split-view', {
     const options = this._ctx.dataset.getCollection().filter(d => d.id !== mine).map(d =>
       `<option value="${esc(d.id)}"${d.id === this._targetId ? ' selected' : ''}>${esc(Utils.formatStage(d.stage))} · ${esc(d.name)}</option>`).join('');
     this._ui.body.innerHTML = `
-      <div class="wm-plugin-row">
+      <div class="p2d-plugin-row">
         <label for="split-target">${esc(this._t('compareWith'))}</label>
         <select class="form-input" id="split-target">${options}</select>
       </div>
-      <label class="wm-check"><input type="checkbox" id="split-link"${this._link ? ' checked' : ''}> ${esc(this._t('link'))}</label>
-      <div class="wm-plugin-actions">
+      <label class="p2d-check"><input type="checkbox" id="split-link"${this._link ? ' checked' : ''}> ${esc(this._t('link'))}</label>
+      <div class="p2d-plugin-actions">
         <button type="button" class="btn btn-outline btn-sm" id="split-swap"><i data-lucide="arrow-left-right"></i> ${esc(this._t('swap'))}</button>
         <button type="button" class="btn btn-outline btn-sm" id="split-fit"><i data-lucide="maximize"></i> ${esc(this._t('fitBoth'))}</button>
         <button type="button" class="btn btn-ghost btn-sm" id="split-close"><i data-lucide="x"></i> ${esc(this._t('close'))}</button>
       </div>
-      <div class="wm-plugin-hint">${esc(this._t('hint'))}</div>`;
+      <div class="p2d-plugin-hint">${esc(this._t('hint'))}</div>`;
     this._ctx.ui.createIcons({ nodes: [this._ui.body] });
     this._ui.body.querySelector('#split-target').addEventListener('change', (e) => this._openPane(e.target.value));
     this._ui.body.querySelector('#split-link').addEventListener('change', (e) => { this._link = e.target.checked; this._pushView(); });

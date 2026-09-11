@@ -24,7 +24,7 @@ function makeLoader(fetchImpl) {
 // T1: an EXPECTED brick that 404s -> dropped + onBrickError, never cached as zeros
 {
   const BL = makeLoader(async () => ({ ok: false, status: 404, arrayBuffer: async () => new ArrayBuffer(0) }));
-  BL.init('DATA_WEB/fixed/A/bricks', {
+  BL.init('DATA_WEB/3d/A/bricks', {
     levels: [{ level: 0, dimensions: { x: 128, y: 128, z: 128 }, brickSize: 128, chunks: [{ id: '0_0_0' }] }],
     channels: 1, brickTransport: { encoding: 'raw-u8', mode: 'direct' },
   });
@@ -38,7 +38,7 @@ function makeLoader(fetchImpl) {
 // T2: a NOT-expected brick (ESS-empty, absent from the pack index) -> silent zeros, no error
 {
   const BL = makeLoader(async () => ({ ok: true, arrayBuffer: async () => new ArrayBuffer(0) }));
-  BL.init('DATA_WEB/fixed/B/bricks', {
+  BL.init('DATA_WEB/3d/B/bricks', {
     levels: [{ level: 0, dimensions: { x: 128, y: 128, z: 128 }, brickSize: 128 }],  // no chunks => nothing "expected"
     channels: 1,
     brickTransport: { mode: 'packs', encoding: 'raw-u8', brickToPack: { 'lod0/other.bin': { url: 'p.bin', offset: 0, length: 10 } } },
@@ -55,7 +55,7 @@ function makeLoader(fetchImpl) {
 // per-channel pack index -> silent zeros, no error (per-channel ESS, not a failure).
 {
   const BL = makeLoader(async () => ({ ok: true, arrayBuffer: async () => new ArrayBuffer(0) }));
-  BL.init('DATA_WEB/fixed/C/bricks', {
+  BL.init('DATA_WEB/3d/C/bricks', {
     // chunk id is z_y_x => '9_9_9' marks brick (bx=9,by=9,bz=9) non-empty by union.
     levels: [{ level: 0, dimensions: { x: 640, y: 640, z: 640 }, brickSize: 64, chunks: [{ id: '9_9_9', nonEmpty: true }] }],
     channels: 3,

@@ -63,7 +63,7 @@ assert.ok(body.innerHTML.includes('data-export-action="compare-figure-png"'),
 // ── viewer scope with a dataset shows the file explorer, not custom exports ──
 EM.openDownloadCenter({
   scope: 'viewer',
-  dataset: { name: 'DS', path: 'fixed/DS' },
+  dataset: { name: 'DS', path: '3d/DS' },
   getCustomExports: () => [{ action: 'should-not-render', label: 'x', handler() {} }],
 });
 assert.ok(body.innerHTML.includes('id="download-explorer"'),

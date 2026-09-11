@@ -41,7 +41,7 @@ servi en statique comme `lang/` et `DATA_WEB/catalog.json`.
 
 | Fichier | Contenu | Édité par |
 |---|---|---|
-| `config/instance.json` | Identité (nom produit, nom instance, organisation), terminologie (`specimen` sing/plur, `org`, `productName`), SEO (`description`, `keywords`), pied de page (copyright, liens), navigation (pages activées + ordre), facettes de métadonnées, presets couleur de canaux, définitions de statistiques, chemins des logos | `tab-branding` + wizard |
+| `config/instance.json` | Identité (nom produit, nom instance, organisation), terminologie (`specimen` sing/plur, `org`, `productName`), **noms publics des types de données (`datasetTypes`)**, SEO (`description`, `keywords`), pied de page (copyright, liens), navigation (pages activées + ordre), facettes de métadonnées, presets couleur de canaux, définitions de statistiques, chemins des logos | `tab-branding` + `tab-dataset-types` + wizard |
 | `config/theme.json` | Tokens de thème : palette (`--color-primary`, `--color-accent`, …), police, échelle d'espacement, variantes clair/sombre des surfaces | `tab-appearance` + wizard |
 | `config/theme.css` | **Généré** par le serveur à partir de `theme.json` : un seul bloc `:root{ --token:val; }` (+ `[data-theme=…]` pour les surfaces). Chargé par `<link>` après `themes.css` | (auto) |
 | `config/pages/<page>.json` | Layout par blocs de chaque page éditable (`home`, `about`, pages custom), au format `{ draft:{blocks:[…]}, published:{blocks:[…]}, updatedAt }`, textes **inline multi‑locale** | `tab-pages` (constructeur de blocs) |
@@ -59,7 +59,9 @@ chargé **tôt**, avant i18n et avant tout rendu de page — modèle `catalog.js
 ```
 InstanceConfig.load()      // fetch config/instance.json cache-busté, tolérant (fallback défaut neutre embarqué)
 InstanceConfig.get(path,d) // accès pointé
-InstanceConfig.tokens()    // { brand, productName, specimen, specimenPlural, org, … } pour l'i18n
+InstanceConfig.tokens()    // { brand, productName, specimen, specimenPlural, org,
+                           //   type3d, type2d, typeLive, typeTracking, … } pour l'i18n
+InstanceConfig.localized(v)// déplie une valeur localisable : chaîne plate OU { en, fr, es, nl }
 InstanceConfig.applyDom(root)  // remplit les [data-instance="brand.name"] (jumeau de data-i18n)
 ```
 
@@ -140,7 +142,7 @@ Problème : les clés métier sont mêlées à l'UI et **dupliquées en/fr/es**.
 | `getStats()` → `totalEmbryos/totalRegions` + ids DOM `stat-embryos` | `catalog.js:156‑177`, `index.html`, `about.html` | Statistiques **définies en config** : `stats:[{id,i18nKey,source:'count'|'distinct'|'sum',field}]`. `getStats()` calcule génériquement ; cartes rendues depuis la config (plus d'ids fixes) |
 | Parsing/format « stage » `E8.5` + id `Em<n>` | `utils.js:74‑108`, `catalog.js:_stageNumber/getStages` | **Facettes de métadonnées configurables** : `facets:[{id,label,type:'ordinal|nominal',pattern,format}]`. L'explorer génère ses filtres depuis les facettes. Aucune facette configurée ⇒ le filtre disparaît proprement |
 | `_colorForChannel` gfp/dapi/pecam/… → couleurs | `channel-panel.js:380‑387` | Table `channelColorPresets` (sous‑chaîne→couleur) en config ; fallback `DEFAULT_COLORS`. Défaut neutre générique ; config IRIBHM reproduit l'aspect actuel |
-| Types `fixed/live/tracking` | explorer/catalog/URL | On garde l'**identité** de type (elle pilote le comportement viewer + l'arborescence `DATA_WEB/`), mais **titre/description/icône deviennent config** (`datasetTypes:[{id,i18nKey,icon}]`) |
+| Types de données | explorer/catalog/URL | **Livré en v1.51.0.** L'**identité** de type reste technique et unique — `3d` / `2d` / `live` / `tracking` (elle pilote le comportement viewer, l'arborescence `DATA_WEB/`, l'id du dataset, `plugin.json#dataTypes`) ; le **nom affiché** devient config : bloc **objet** `datasetTypes: { "3d": { label, title }, … }` dans `instance.json`, chaque valeur localisable (chaîne plate ou `{en,fr,es,nl}`), vide ⇒ repli sur `types.<id>` de `lang/<code>.json`. Icône et dégradé restent des tables techniques dans `utils.js`. Éditeur : onglet **Types de données**. |
 | Formulaire admin Stage/Embryo en dur | `admpan.html:290‑309`, `tab-datasets.js` | Champs de métadonnées **générés depuis un schéma config** (`metadataFields:[{id,label,placeholder,type}]`) ; Stage/Embryo deviennent des champs déclaratifs optionnels |
 
 ### 2.4. Défaut neutre vs préservation IRIBHM
@@ -253,7 +255,7 @@ alors les défauts neutres embarqués, l'opérateur personnalise ensuite via les
    police. Écrit `config/theme.json` (+ génère `theme.css`).
 4. **Textes essentiels** — tagline/hero, pied de page/copyright, intro About optionnelle.
 5. **Terminer** — écrit `config/instance.json`, seed `config/pages/*` et `config/legal.json` depuis
-   `config/defaults/neutral`, s'assure de l'arborescence `DATA_WEB/{fixed,live,tracking}` +
+   `config/defaults/neutral`, s'assure de l'arborescence `DATA_WEB/{3d,2d,live,tracking}` +
    `catalog.json` vide (ce que fait déjà `install.php` mais pas un `dev_server.py` neuf).
 
 **Jumeaux** : logique `needsSetup`/configure triplée (`dev_server.py`, `api/auth.php`, `install.php`) →

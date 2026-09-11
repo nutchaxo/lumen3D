@@ -1,21 +1,21 @@
 /* ============================================================
-   Lumen3D — Wholemount page controller
+   Lumen3D — 2D page controller
    ============================================================
    One calibrated photograph per dataset, with the whole collection a
-   keystroke away: a contact-sheet browser over every `wholemount`
-   dataset of the catalog, filterable by stage / line / text, opens any
-   of them in place — no page reload, the preview paints from the
-   browser's own cache and the native image follows.
+   keystroke away: a contact-sheet browser over every `2d` dataset of
+   the catalog, filterable by stage / line / text, opens any of them in
+   place — no page reload, the preview paints from the browser's own
+   cache and the native image follows.
 
    Plugins are opt-in here. PluginRegistry.loadModules() is asked for
-   dataType 'wholemount', so only a plugin whose plugin.json declares it
-   in `dataTypes` is injected. The context they receive mirrors the
-   volume viewer's (dataset / viewer / measurements / ui / workspace), so
-   a plugin written for both pages needs no branching.
+   dataType '2d', so only a plugin whose plugin.json declares it in
+   `dataTypes` is injected. The context they receive mirrors the volume
+   viewer's (dataset / viewer / measurements / ui / workspace), so a
+   plugin written for both pages needs no branching.
    ============================================================ */
 
-const WholemountApp = (() => {
-  const TYPE = 'wholemount';
+const App2D = (() => {
+  const TYPE = '2d';
   const LOAD_STATE_LINGER_MS = 900;
   const STAGING_PREFIX = 'staging:';
 
@@ -51,7 +51,7 @@ const WholemountApp = (() => {
     const params = new URLSearchParams(window.location.search);
     _isAdmin = params.get('mode') === 'admin';
     _panelIndex = params.get('panelIndex');
-    if (params.get('hideHeader') === 'true') document.body.classList.add('wm-headless');
+    if (params.get('hideHeader') === 'true') document.body.classList.add('p2d-headless');
     if (_panelIndex !== null) _bindPanelSync();
     const requested = params.get('id');
     const first = await _resolveDataset(requested, params.get('path'));
@@ -61,10 +61,10 @@ const WholemountApp = (() => {
     }
 
     await _loadPlugins(first);
-    WholemountViewer.init($('wholemount-canvas'));
-    WholemountViewer.onLoadState(_renderLoadState);
-    WholemountViewer.onViewChange(_renderZoom);
-    WholemountViewer.onLabelMove((id, offset) => MeasurementStore.update(_id, 'viewer', id, { labelOffset: offset }));
+    Viewer2D.init($('p2d-canvas'));
+    Viewer2D.onLoadState(_renderLoadState);
+    Viewer2D.onViewChange(_renderZoom);
+    Viewer2D.onLabelMove((id, offset) => MeasurementStore.update(_id, 'viewer', id, { labelOffset: offset }));
     _moduleCtx = _buildModuleCtx();
     if (typeof PluginRegistry !== 'undefined') {
       await PluginRegistry.initAll(_moduleCtx);
@@ -97,7 +97,7 @@ const WholemountApp = (() => {
         ]
       });
     } catch (err) {
-      console.error('[WholemountApp] Plugin subsystem failed — the page boots without plugins.', err);
+      console.error('[App2D] Plugin subsystem failed — the page boots without plugins.', err);
     }
   }
 
@@ -115,26 +115,26 @@ const WholemountApp = (() => {
         onChange: (cb) => { _datasetListeners.push(cb); return () => { _datasetListeners = _datasetListeners.filter(f => f !== cb); }; }
       },
       viewer: {
-        setMeasurements: (m) => WholemountViewer.setMeasurements(m),
-        onMeasurePoint: (cb) => WholemountViewer.onMeasurePoint(cb),
-        getPhysicalCalibration: () => WholemountViewer.getPhysicalCalibration(),
-        resize: () => WholemountViewer.resize(),
-        fit: () => WholemountViewer.fit(),
-        getView: () => WholemountViewer.getView(),
-        setView: (v) => WholemountViewer.setView(v),
-        onViewChange: (cb) => WholemountViewer.onViewChange(cb),
-        getViewport: () => WholemountViewer.getViewport(),
-        getImageSize: () => WholemountViewer.getImageSize(),
-        getPixelSizeUm: () => WholemountViewer.getPixelSizeUm(),
-        addOverlay: (fn) => WholemountViewer.addOverlay(fn),
-        redraw: () => WholemountViewer.redraw(),
-        setOrientation: (o) => WholemountViewer.setOrientation(o),
-        getOrientation: () => WholemountViewer.getOrientation(),
-        setAdjustments: (a) => WholemountViewer.setAdjustments(a),
-        getAdjustments: () => WholemountViewer.getAdjustments(),
-        getPhysicalView: () => WholemountViewer.getPhysicalView(),
-        setPhysicalView: (pv) => WholemountViewer.setPhysicalView(pv),
-        getNativeCanvas: () => WholemountViewer.getNativeCanvas()
+        setMeasurements: (m) => Viewer2D.setMeasurements(m),
+        onMeasurePoint: (cb) => Viewer2D.onMeasurePoint(cb),
+        getPhysicalCalibration: () => Viewer2D.getPhysicalCalibration(),
+        resize: () => Viewer2D.resize(),
+        fit: () => Viewer2D.fit(),
+        getView: () => Viewer2D.getView(),
+        setView: (v) => Viewer2D.setView(v),
+        onViewChange: (cb) => Viewer2D.onViewChange(cb),
+        getViewport: () => Viewer2D.getViewport(),
+        getImageSize: () => Viewer2D.getImageSize(),
+        getPixelSizeUm: () => Viewer2D.getPixelSizeUm(),
+        addOverlay: (fn) => Viewer2D.addOverlay(fn),
+        redraw: () => Viewer2D.redraw(),
+        setOrientation: (o) => Viewer2D.setOrientation(o),
+        getOrientation: () => Viewer2D.getOrientation(),
+        setAdjustments: (a) => Viewer2D.setAdjustments(a),
+        getAdjustments: () => Viewer2D.getAdjustments(),
+        getPhysicalView: () => Viewer2D.getPhysicalView(),
+        setPhysicalView: (pv) => Viewer2D.setPhysicalView(pv),
+        getNativeCanvas: () => Viewer2D.getNativeCanvas()
       },
       measurements: {
         list: (scope) => MeasurementStore.list(_id, scope || 'viewer'),
@@ -146,14 +146,14 @@ const WholemountApp = (() => {
       },
       ui: {
         toast: (msg) => { if (typeof ExportManager !== 'undefined') ExportManager.toast(msg); },
-        scheduleResize: () => requestAnimationFrame(() => WholemountViewer.resize()),
+        scheduleResize: () => requestAnimationFrame(() => Viewer2D.resize()),
         escapeHtml: (s) => Utils.escapeHtml(s),
         createIcons: (opts) => { if (window.lucide) lucide.createIcons(opts); },
-        getCanvas: () => WholemountViewer.getCanvas(),
+        getCanvas: () => Viewer2D.getCanvas(),
         openStudio: () => _openStudio(),
         openStudioWith: (sliceResult) => { if (typeof StudioEditor !== 'undefined') StudioEditor.open(sliceResult); },
         addSidebarSection: _addSidebarSection,
-        getStage: () => $('wholemount-canvas').parentElement
+        getStage: () => $('p2d-canvas').parentElement
       },
       iframe: {
         isIframe: () => _panelIndex !== null,
@@ -164,7 +164,7 @@ const WholemountApp = (() => {
         getState: _getWorkspaceState,
         applyState: _applyWorkspaceState
       },
-      getCanvasBlob: (opts) => WholemountViewer.toBlob(opts),
+      getCanvasBlob: (opts) => Viewer2D.toBlob(opts),
       getCustomExports: () => [],
       _state: { get currentTimepoint() { return 0; } }
     };
@@ -172,8 +172,9 @@ const WholemountApp = (() => {
 
   // ── Dataset resolution ─────────────────────────────────────────────────────
   async function _resolveDataset(id, path) {
-    // The admin panel passes the bare folder as id and the type/folder as path;
-    // a published dataset is in the catalog under the latter.
+    // A published dataset is in the catalog under '<type>/<folder>', which is
+    // both its id and its path. The admin preview passes only ?path= (it can
+    // name a dataset the catalog does not list), so try that too.
     const listed = (id ? Catalog.getById(id) : null) || (path ? Catalog.getById(path) : null);
     if (listed && listed.type === TYPE) return listed;
     if (!_isAdmin || !path) return null;
@@ -217,9 +218,9 @@ const WholemountApp = (() => {
     _renderRelated();
     _initExportManager();
 
-    WholemountViewer.setOrientation(meta.orientation2d || null);
+    Viewer2D.setOrientation(meta.orientation2d || null);
     const image = meta.image || {};
-    WholemountViewer.load({
+    Viewer2D.load({
       previewUrl: _fileUrl(_basePath, image.preview || 'preview.webp'),
       nativeUrl: _fileUrl(_basePath, image.native || 'image.webp'),
       width: image.width || meta.dimensions?.x || 1,
@@ -233,7 +234,7 @@ const WholemountApp = (() => {
     for (const cb of _datasetListeners) cb(meta);
   }
 
-  // ── Split-view pane: this page inside another wholemount page ─────────────
+  // ── Split-view pane: this page inside another 2D page ─────────────────────
   // The parent shares its PHYSICAL view (µm per screen pixel + physical centre);
   // both photographs then show the same field at the same magnification
   // whatever their pixel sizes. Each side suppresses the echo of a view it was
@@ -244,7 +245,7 @@ const WholemountApp = (() => {
       const type = e.data?.type;
       if (type === 'WM_SET_PHYSICAL_VIEW') {
         _suppressSync = true;
-        WholemountViewer.setPhysicalView(e.data.view);
+        Viewer2D.setPhysicalView(e.data.view);
         _suppressSync = false;
       } else if (type === 'WM_OPEN_DATASET') {
         const ds = Catalog.getById(e.data.id);
@@ -253,23 +254,23 @@ const WholemountApp = (() => {
         _setSidebarHidden(!e.data.value);
       }
     });
-    WholemountViewer.onViewChange(() => {
+    Viewer2D.onViewChange(() => {
       if (_suppressSync) return;
-      window.parent.postMessage({ type: 'WM_PHYSICAL_VIEW', sourceIndex: _panelIndex, panelIndex: _panelIndex, id: _id, view: WholemountViewer.getPhysicalView() }, Utils.trustedTargetOrigin());
+      window.parent.postMessage({ type: 'WM_PHYSICAL_VIEW', sourceIndex: _panelIndex, panelIndex: _panelIndex, id: _id, view: Viewer2D.getPhysicalView() }, Utils.trustedTargetOrigin());
     });
   }
 
   function _bindPaneNav() {
-    $('wm-pane-nav').hidden = false;
+    $('p2d-pane-nav').hidden = false;
     $('pane-prev').addEventListener('click', () => _step(-1));
     $('pane-next').addEventListener('click', () => _step(1));
-    $('pane-browse').addEventListener('click', () => _setBrowserOpen($('wm-browser').hidden));
-    $('pane-fit').addEventListener('click', () => WholemountViewer.fit());
+    $('pane-browse').addEventListener('click', () => _setBrowserOpen($('p2d-browser').hidden));
+    $('pane-fit').addEventListener('click', () => Viewer2D.fit());
   }
 
   /** A plugin panel in the sidebar, placed after the measurements. */
   function _addSidebarSection({ id, title }) {
-    const body = Utils.el('div', { class: 'wm-plugin-body' });
+    const body = Utils.el('div', { class: 'p2d-plugin-body' });
     const section = Utils.el('div', { class: 'panel-section', id },
       Utils.el('div', { class: 'panel-title' }, Utils.el('span', {}, title)), body);
     $('viewer-sidebar').insertBefore(section, $('gallery-section'));
@@ -278,7 +279,7 @@ const WholemountApp = (() => {
 
   function _syncUrl(mode) {
     if (!mode) return;
-    const url = `wholemount.html?id=${encodeURIComponent(_id)}`;
+    const url = `2d.html?id=${encodeURIComponent(_id)}`;
     if (mode === 'push') history.pushState({ id: _id }, '', url);
     else history.replaceState({ id: _id }, '', url);
   }
@@ -287,7 +288,7 @@ const WholemountApp = (() => {
   // setState so its list and the canvas show the same items.
   function _restoreMeasurements() {
     const items = MeasurementStore.list(_id, 'viewer');
-    WholemountViewer.setMeasurements(items);
+    Viewer2D.setMeasurements(items);
     if (typeof PluginRegistry !== 'undefined') {
       PluginRegistry.setWorkspaceState({ 'measure-distance': { measurements: items } });
     }
@@ -297,8 +298,8 @@ const WholemountApp = (() => {
     for (const ds of [_neighbour(-1), _neighbour(1)]) {
       if (!ds || ds.id === _id) continue;
       const image = ds.image || {};
-      WholemountViewer.prefetch(`DATA_WEB/${ds.path}/${image.preview || 'preview.webp'}`);
-      WholemountViewer.prefetch(`DATA_WEB/${ds.path}/${image.native || 'image.webp'}`);
+      Viewer2D.prefetch(`DATA_WEB/${ds.path}/${image.preview || 'preview.webp'}`);
+      Viewer2D.prefetch(`DATA_WEB/${ds.path}/${image.native || 'image.webp'}`);
     }
   }
 
@@ -319,8 +320,8 @@ const WholemountApp = (() => {
     ExportManager.init({
       dataset: _meta,
       scope: 'viewer',
-      getCanvas: () => WholemountViewer.getCanvas(),
-      getCanvasBlob: (opts) => WholemountViewer.toBlob(opts),
+      getCanvas: () => Viewer2D.getCanvas(),
+      getCanvasBlob: (opts) => Viewer2D.toBlob(opts),
       getMeasurements: () => MeasurementStore.list(_id, 'viewer'),
       getWorkspaceState: _getWorkspaceState,
       applyWorkspaceState: _applyWorkspaceState
@@ -339,7 +340,7 @@ const WholemountApp = (() => {
   }
 
   function _renderInfo() {
-    const box = $('wm-info');
+    const box = $('p2d-info');
     box.replaceChildren();
     for (const [label, value] of _infoRows()) {
       if (value == null || value === '') continue;
@@ -353,19 +354,19 @@ const WholemountApp = (() => {
     const field = _meta.physicalSizeUm;
     const zoom = acq.zoom ?? acq.zoomNominal;
     return [
-      [t('wholemount.stage'), Utils.formatStage(_meta.stage)],
-      [t('wholemount.line'), _meta.line],
-      [t('wholemount.staining'), _meta.staining],
-      [t('wholemount.dissection'), acq.dissectionDate ? Utils.formatDate(acq.dissectionDate) : null],
-      [t('wholemount.zoom'), Number.isFinite(zoom) ? `×${zoom.toFixed(2)}` : null],
-      [t('wholemount.pixelSize'), px ? `${px.toFixed(3)} µm/px` : t('wholemount.uncalibrated')],
-      [t('wholemount.imageSize'), `${_meta.image?.width ?? _meta.dimensions?.x} × ${_meta.image?.height ?? _meta.dimensions?.y} px`],
-      [t('wholemount.field'), field?.x ? `${(field.x / 1000).toFixed(2)} × ${(field.y / 1000).toFixed(2)} mm` : null],
-      [t('wholemount.microscope'), acq.microscope],
-      [t('wholemount.camera'), acq.camera],
-      [t('wholemount.exposure'), Number.isFinite(acq.exposureMs) ? `${acq.exposureMs.toFixed(1)} ms` : null],
-      [t('wholemount.gain'), Number.isFinite(acq.gain) ? acq.gain.toFixed(1) : null],
-      [t('wholemount.source'), acq.sourceFile]
+      [t('2d.stage'), Utils.formatStage(_meta.stage)],
+      [t('2d.line'), _meta.line],
+      [t('2d.staining'), _meta.staining],
+      [t('2d.dissection'), acq.dissectionDate ? Utils.formatDate(acq.dissectionDate) : null],
+      [t('2d.zoom'), Number.isFinite(zoom) ? `×${zoom.toFixed(2)}` : null],
+      [t('2d.pixelSize'), px ? `${px.toFixed(3)} µm/px` : t('2d.uncalibrated')],
+      [t('2d.imageSize'), `${_meta.image?.width ?? _meta.dimensions?.x} × ${_meta.image?.height ?? _meta.dimensions?.y} px`],
+      [t('2d.field'), field?.x ? `${(field.x / 1000).toFixed(2)} × ${(field.y / 1000).toFixed(2)} mm` : null],
+      [t('2d.microscope'), acq.microscope],
+      [t('2d.camera'), acq.camera],
+      [t('2d.exposure'), Number.isFinite(acq.exposureMs) ? `${acq.exposureMs.toFixed(1)} ms` : null],
+      [t('2d.gain'), Number.isFinite(acq.gain) ? acq.gain.toFixed(1) : null],
+      [t('2d.source'), acq.sourceFile]
     ];
   }
 
@@ -386,21 +387,21 @@ const WholemountApp = (() => {
     panel.hidden = related.length === 0;
     list.replaceChildren(...related.map(ds => Utils.el('a', { class: 'related-link', href: Utils.datasetUrl(ds) },
       Utils.el('div', { class: 'related-link-title' }, ds.name || ds.id),
-      Utils.el('div', { class: 'related-link-meta' }, `${t(`explorer.${ds.type}`)} · ${Utils.formatStage(ds.stage)}`)
+      Utils.el('div', { class: 'related-link-meta' }, `${Utils.datasetTypeLabel(ds.type)} · ${Utils.formatStage(ds.stage)}`)
     )));
   }
 
   function _renderLoadState(state) {
-    const pill = $('wm-load-state');
+    const pill = $('p2d-load-state');
     clearTimeout(_stateTimer);
     pill.hidden = false;
     pill.classList.toggle('is-error', state === 'error');
     if (state === 'native') {
-      pill.textContent = t('wholemount.nativeReady');
+      pill.textContent = t('2d.nativeReady');
       _stateTimer = setTimeout(() => { pill.hidden = true; }, LOAD_STATE_LINGER_MS);
       return;
     }
-    pill.textContent = t({ loading: 'wholemount.loadingPreview', preview: 'wholemount.loadingNative', error: 'wholemount.loadError' }[state]);
+    pill.textContent = t({ loading: '2d.loadingPreview', preview: '2d.loadingNative', error: '2d.loadError' }[state]);
   }
 
   // Zoom as a percentage of native (one image pixel per device pixel) and the
@@ -409,7 +410,7 @@ const WholemountApp = (() => {
     const px = _meta?.pixelSizeUm?.x;
     const pct = Math.round(view.scale * (window.devicePixelRatio || 1) * 100);
     const perScreenPx = px ? ` · ${(px / view.scale).toFixed(2)} µm/px` : '';
-    $('wm-zoom').textContent = `${pct} %${perScreenPx}`;
+    $('p2d-zoom').textContent = `${pct} %${perScreenPx}`;
   }
 
   // ── Contact-sheet browser ──────────────────────────────────────────────────
@@ -432,9 +433,9 @@ const WholemountApp = (() => {
   }
 
   function _renderBrowserFilters() {
-    _renderChips($('wm-filter-stage'), 'stage', [...new Set(_collection.map(d => d.stage).filter(Boolean))]
+    _renderChips($('p2d-filter-stage'), 'stage', [...new Set(_collection.map(d => d.stage).filter(Boolean))]
       .sort((a, b) => _stageOf(a) - _stageOf(b)), Utils.formatStage);
-    _renderChips($('wm-filter-line'), 'line', [...new Set(_collection.map(d => d.line).filter(Boolean))].sort(), s => s);
+    _renderChips($('p2d-filter-line'), 'line', [...new Set(_collection.map(d => d.line).filter(Boolean))].sort(), s => s);
     _renderBrowserGrid();
   }
 
@@ -444,19 +445,19 @@ const WholemountApp = (() => {
 
   function _renderChips(container, key, values, format) {
     const chip = (value, label) => Utils.el('button', {
-      type: 'button', class: `wm-chip${_filters[key] === value ? ' is-active' : ''}`,
+      type: 'button', class: `p2d-chip${_filters[key] === value ? ' is-active' : ''}`,
       'data-filter': key, 'data-value': value
     }, label);
-    container.replaceChildren(chip('all', t('wholemount.all')), ...values.map(v => chip(v, format(v))));
+    container.replaceChildren(chip('all', t('2d.all')), ...values.map(v => chip(v, format(v))));
     container.parentElement.hidden = values.length < 2;
   }
 
   function _renderBrowserGrid() {
-    const grid = $('wm-grid');
+    const grid = $('p2d-grid');
     const visible = _visibleCollection();
-    $('wm-count').textContent = t('wholemount.count', { count: visible.length });
+    $('p2d-count').textContent = t('2d.count', { count: visible.length });
     grid.replaceChildren(...visible.map(_browserCard));
-    if (!visible.length) grid.append(Utils.el('div', { class: 'wm-empty' }, t('wholemount.noPhotos')));
+    if (!visible.length) grid.append(Utils.el('div', { class: 'p2d-empty' }, t('2d.noPhotos')));
     _markActiveCard();
   }
 
@@ -468,47 +469,47 @@ const WholemountApp = (() => {
       Number.isFinite(zoom) ? `×${zoom.toFixed(1)}` : null,
       ds.line
     ].filter(Boolean).join(' · ');
-    return Utils.el('button', { type: 'button', class: 'wm-card', 'data-id': ds.id, title: ds.name },
+    return Utils.el('button', { type: 'button', class: 'p2d-card', 'data-id': ds.id, title: ds.name },
       Utils.el('img', { src: `DATA_WEB/${ds.path}/${image.preview || 'preview.webp'}`, alt: ds.name, decoding: 'async' }),
-      Utils.el('div', { class: 'wm-card-body' },
-        Utils.el('span', { class: 'badge badge-wholemount' }, Utils.formatStage(ds.stage)),
-        Utils.el('div', { class: 'wm-card-name' }, ds.name),
-        Utils.el('div', { class: 'wm-card-meta' }, meta)
+      Utils.el('div', { class: 'p2d-card-body' },
+        Utils.el('span', { class: `badge ${Utils.datasetTypeBadgeClass(TYPE)}` }, Utils.formatStage(ds.stage)),
+        Utils.el('div', { class: 'p2d-card-name' }, ds.name),
+        Utils.el('div', { class: 'p2d-card-meta' }, meta)
       ));
   }
 
   function _markActiveCard() {
-    document.querySelectorAll('.wm-card').forEach(card => {
+    document.querySelectorAll('.p2d-card').forEach(card => {
       const active = card.dataset.id === _id;
       card.classList.toggle('is-active', active);
-      if (active && !$('wm-browser').hidden) card.scrollIntoView({ block: 'nearest' });
+      if (active && !$('p2d-browser').hidden) card.scrollIntoView({ block: 'nearest' });
     });
   }
 
   function _setBrowserOpen(open) {
-    $('wm-browser').hidden = !open;
+    $('p2d-browser').hidden = !open;
     $('btn-browse').classList.toggle('btn-solid', open);
     $('btn-browse').classList.toggle('btn-ghost', !open);
-    if (open) { _markActiveCard(); $('wm-search').focus(); }
+    if (open) { _markActiveCard(); $('p2d-search').focus(); }
   }
 
   // ── Controls ───────────────────────────────────────────────────────────────
   function _bindControls() {
-    $('btn-fit').addEventListener('click', () => WholemountViewer.fit());
-    $('btn-native').addEventListener('click', () => WholemountViewer.zoomNative());
-    $('btn-isolate').addEventListener('click', () => _setIsolate(!WholemountViewer.isIsolateStain()));
-    $('btn-browse').addEventListener('click', () => _setBrowserOpen($('wm-browser').hidden));
+    $('btn-fit').addEventListener('click', () => Viewer2D.fit());
+    $('btn-native').addEventListener('click', () => Viewer2D.zoomNative());
+    $('btn-isolate').addEventListener('click', () => _setIsolate(!Viewer2D.isIsolateStain()));
+    $('btn-browse').addEventListener('click', () => _setBrowserOpen($('p2d-browser').hidden));
     $('btn-browse-close').addEventListener('click', () => _setBrowserOpen(false));
     $('btn-prev').addEventListener('click', () => _step(-1));
     $('btn-next').addEventListener('click', () => _step(1));
     $('btn-collapse-sidebar').addEventListener('click', () => _setSidebarHidden(true));
     $('btn-studio').addEventListener('click', _openStudio);
-    $('measure-text-size').addEventListener('input', (e) => WholemountViewer.setMeasurementTextSize(Number(e.target.value)));
-    $('toggle-measure-labels').addEventListener('change', (e) => WholemountViewer.setShowMeasurementLabels(e.target.checked));
+    $('measure-text-size').addEventListener('input', (e) => Viewer2D.setMeasurementTextSize(Number(e.target.value)));
+    $('toggle-measure-labels').addEventListener('change', (e) => Viewer2D.setShowMeasurementLabels(e.target.checked));
     $('btn-hamburger').addEventListener('click', () => _setSidebarHidden(false));
 
-    $('wm-search').addEventListener('input', (e) => { _filters.search = e.target.value; _renderBrowserGrid(); });
-    $('wm-browser').addEventListener('click', _onBrowserClick);
+    $('p2d-search').addEventListener('input', (e) => { _filters.search = e.target.value; _renderBrowserGrid(); });
+    $('p2d-browser').addEventListener('click', _onBrowserClick);
     document.addEventListener('keydown', _onKey);
     window.addEventListener('popstate', _onPopState);
   }
@@ -520,7 +521,7 @@ const WholemountApp = (() => {
       _renderBrowserFilters();
       return;
     }
-    const card = e.target.closest('.wm-card');
+    const card = e.target.closest('.p2d-card');
     if (!card) return;
     const ds = Catalog.getById(card.dataset.id);
     if (ds && ds.id !== _id) _openDataset(ds, { history: 'push' });
@@ -536,8 +537,8 @@ const WholemountApp = (() => {
       ArrowLeft: () => _step(-1),
       ArrowRight: () => _step(1),
       Escape: () => _setBrowserOpen(false),
-      b: () => _setBrowserOpen($('wm-browser').hidden),
-      f: () => WholemountViewer.fit()
+      b: () => _setBrowserOpen($('p2d-browser').hidden),
+      f: () => Viewer2D.fit()
     }[e.key.length === 1 ? e.key.toLowerCase() : e.key];
     if (!action) return;
     e.preventDefault();   // the search box takes focus on open; the key must not land in it
@@ -554,19 +555,19 @@ const WholemountApp = (() => {
   // exactly what is on screen (plain or stain-isolated), calibrated in µm/px.
   function _openStudio() {
     if (typeof StudioEditor === 'undefined' || !_meta) return;
-    const canvas = WholemountViewer.getNativeCanvas();
+    const canvas = Viewer2D.getNativeCanvas();
     if (!canvas) return;
     const px = _meta.pixelSizeUm?.x || 1;
     StudioEditor.open({
       canvas, width: canvas.width, height: canvas.height,
-      source: 'wholemount', quality: 'native', timepoint: 0,
+      source: '2d', quality: 'native', timepoint: 0,
       pixelSizeUm: { x: px, y: _meta.pixelSizeUm?.y || px },
       dataset: _meta, channelState: []
     });
   }
 
   function _setIsolate(on) {
-    WholemountViewer.setIsolateStain(on);
+    Viewer2D.setIsolateStain(on);
     $('btn-isolate').classList.toggle('btn-solid', on);
     $('btn-isolate').classList.toggle('btn-ghost', !on);
   }
@@ -581,9 +582,9 @@ const WholemountApp = (() => {
     return {
       ui: { sidebarHidden: $('viewer-sidebar').classList.contains('sidebar-hidden') },
       viewer: {
-        view: WholemountViewer.getView(),
-        isolate: WholemountViewer.isIsolateStain(),
-        measureTextSize: WholemountViewer.getMeasurementTextSize(),
+        view: Viewer2D.getView(),
+        isolate: Viewer2D.isIsolateStain(),
+        measureTextSize: Viewer2D.getMeasurementTextSize(),
         showLabels: $('toggle-measure-labels').checked,
         plugins: typeof PluginRegistry !== 'undefined' ? PluginRegistry.getWorkspaceState() : {}
       }
@@ -592,15 +593,15 @@ const WholemountApp = (() => {
 
   function _applyWorkspaceState(state) {
     const v = state?.viewer || {};
-    if (v.view) WholemountViewer.setView(v.view);
+    if (v.view) Viewer2D.setView(v.view);
     if (typeof v.isolate === 'boolean') _setIsolate(v.isolate);
     if (Number.isFinite(v.measureTextSize)) {
       $('measure-text-size').value = v.measureTextSize;
-      WholemountViewer.setMeasurementTextSize(v.measureTextSize);
+      Viewer2D.setMeasurementTextSize(v.measureTextSize);
     }
     if (typeof v.showLabels === 'boolean') {
       $('toggle-measure-labels').checked = v.showLabels;
-      WholemountViewer.setShowMeasurementLabels(v.showLabels);
+      Viewer2D.setShowMeasurementLabels(v.showLabels);
     }
     if (v.plugins && typeof PluginRegistry !== 'undefined') PluginRegistry.setWorkspaceState(v.plugins);
     if (typeof state?.ui?.sidebarHidden === 'boolean') _setSidebarHidden(state.ui.sidebarHidden);
@@ -620,7 +621,7 @@ const WholemountApp = (() => {
     loader.classList.remove('hidden');
     loader.replaceChildren(
       Utils.el('i', { 'data-lucide': 'alert-triangle', style: 'width:48px;height:48px;color:var(--color-danger)' }),
-      Utils.el('h3', {}, t('wholemount.errorTitle')),
+      Utils.el('h3', {}, t('2d.errorTitle')),
       Utils.el('p', { class: 'text-muted' }, message),
       Utils.el('a', { href: 'explorer.html', class: 'btn btn-primary' }, t('nav.back'))
     );
@@ -630,7 +631,7 @@ const WholemountApp = (() => {
   return { init };
 })();
 
-document.addEventListener('DOMContentLoaded', WholemountApp.init);
+document.addEventListener('DOMContentLoaded', App2D.init);
 
 // Reachable from a hosting page (Compare, split view) through iframe.contentWindow, like ViewerApp.
-window.WholemountApp = WholemountApp;
+window.App2D = App2D;

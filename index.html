@@ -152,34 +152,36 @@
         <p data-i18n="landing.typesSubtitle">Navigate across our comprehensive dataset collection</p>
       </div>
 
+      <!-- One card per dataset type. The heading is the operator-editable type name
+           (config/instance.json datasetTypes.<id>.title), so landing.js fills every
+           [data-dataset-type-title] with Utils.datasetTypeTitle(); the inline text is
+           the pre-script fallback. The paragraph stays a plain translation key. -->
       <div class="type-cards">
-        <!-- Fixed Imaging -->
-        <a href="explorer.html?type=fixed" class="type-card type-card--fixed animate-fade-in-up delay-1">
+        <!-- 3D volumes -->
+        <a href="explorer.html?type=3d" class="type-card type-card--3d animate-fade-in-up delay-1">
           <div class="type-card-glow"></div>
           <div class="type-card-icon">
             <i data-lucide="layers" style="width:28px;height:28px"></i>
           </div>
-          <h3 data-i18n="landing.fixedTitle">Fixed Imaging</h3>
-          <p data-i18n="landing.fixedDesc">
-            High-resolution 3D confocal stacks of fixed embryos with immunofluorescence labeling.
-            Multi-channel imaging with DAPI, GFP, Pecam1, and more.
+          <h3 data-dataset-type-title="3d">3D Imaging</h3>
+          <p data-i18n="types.3d.desc">
+            High-resolution 3D image stacks. Multi-channel imaging data ready to explore.
           </p>
-          <div class="type-card-count" id="count-fixed">4 datasets</div>
+          <div class="type-card-count" id="count-3d">4 datasets</div>
           <div class="type-card-arrow">
             <i data-lucide="arrow-right" style="width:16px;height:16px"></i>
           </div>
         </a>
 
-        <!-- Live Imaging -->
+        <!-- Live (4D timelapse) volumes -->
         <a href="explorer.html?type=live" class="type-card type-card--live animate-fade-in-up delay-2">
           <div class="type-card-glow"></div>
           <div class="type-card-icon">
             <i data-lucide="video" style="width:28px;height:28px"></i>
           </div>
-          <h3 data-i18n="landing.liveTitle">Live Imaging</h3>
-          <p data-i18n="landing.liveDesc">
-            Time-lapse 4D confocal recordings of developing embryos.
-            Watch vascular development unfold in real time.
+          <h3 data-dataset-type-title="live">Live Imaging</h3>
+          <p data-i18n="types.live.desc">
+            Time-lapse 4D recordings over time. Watch development unfold in real time.
           </p>
           <div class="type-card-count" id="count-live">2 datasets</div>
           <div class="type-card-arrow">
@@ -187,14 +189,14 @@
           </div>
         </a>
 
-        <!-- Cell Tracking -->
+        <!-- Cell tracking -->
         <a href="explorer.html?type=tracking" class="type-card type-card--tracking animate-fade-in-up delay-3">
           <div class="type-card-glow"></div>
           <div class="type-card-icon">
             <i data-lucide="git-branch" style="width:28px;height:28px"></i>
           </div>
-          <h3 data-i18n="landing.trackingTitle">Cell Tracking</h3>
-          <p data-i18n="landing.trackingDesc">
+          <h3 data-dataset-type-title="tracking">Cell Tracking</h3>
+          <p data-i18n="types.tracking.desc">
             Quantitative analysis of individual cell trajectories, velocities,
             lineage trees, and neighbor relationships over time.
           </p>
@@ -204,18 +206,18 @@
           </div>
         </a>
 
-        <!-- Wholemount photography -->
-        <a href="explorer.html?type=wholemount" class="type-card type-card--wholemount animate-fade-in-up delay-3">
+        <!-- 2D photographs -->
+        <a href="explorer.html?type=2d" class="type-card type-card--2d animate-fade-in-up delay-3">
           <div class="type-card-glow"></div>
           <div class="type-card-icon">
             <i data-lucide="camera" style="width:28px;height:28px"></i>
           </div>
-          <h3 data-i18n="landing.wholemountTitle">Wholemount Photography</h3>
-          <p data-i18n="landing.wholemountDesc">
-            Calibrated stereomicroscope photographs of whole embryos: stained patterns,
+          <h3 data-dataset-type-title="2d">2D Photography</h3>
+          <p data-i18n="types.2d.desc">
+            Calibrated stereomicroscope photographs: stained patterns,
             scale bar and measurements at a glance.
           </p>
-          <div class="type-card-count" id="count-wholemount">0 datasets</div>
+          <div class="type-card-count" id="count-2d">0 datasets</div>
           <div class="type-card-arrow">
             <i data-lucide="arrow-right" style="width:16px;height:16px"></i>
           </div>

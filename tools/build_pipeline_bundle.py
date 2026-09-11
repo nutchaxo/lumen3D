@@ -71,7 +71,7 @@ PIPELINE_SCRIPTS = (
     "4-catalog_generator.py",
     "5-tracking_importer.py",
     "tracking_sources.py",
-    "wholemount_importer.py",
+    "2d_importer.py",
 )
 
 # Optional extra invoked by --with-downloads. run_preprocess.py accepts it either
@@ -234,7 +234,7 @@ def stage_sources(stage: Path):
     # what the folder is for, and `certutil -hashfile` — which RUN.bat uses to check
     # the manifest — FAILS on a zero-byte file with ERROR_FILE_INVALID.
     placeholders = {
-        "output": "Les jeux de donnees traites apparaissent ici, dans fixed\\ ou live\\.\n"
+        "output": "Les jeux de donnees traites apparaissent ici, dans 3d\\, 2d\\ ou live\\.\n"
                   "Copiez le dossier produit dans le DATA_WEB\\ du serveur pour le publier.\n",
         "tracking/OUTPUT": "Les resultats d'analyse de tracking apparaissent ici,\n"
                            "dans un sous-dossier horodate par execution.\n",

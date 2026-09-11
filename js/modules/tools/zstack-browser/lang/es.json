@@ -1,4 +1,17 @@
 {
   "title": "Explorador Z-Stack",
-  "sliceDepth": "Corte {n} de {total} — profundidad {depth} µm"
+  "sliceDepth": "Corte {n} de {total} — profundidad {depth} µm",
+  "slabDepth": "Cortes {a}–{b} de {total} — de {from} a {to} µm",
+  "info3d": "3D — {n} de {total} cortes mostrados ({lo}–{hi}), {depth} µm",
+  "notch": "3D",
+  "notchTitle": "Vista 3D de todos los cortes conservados. Arrastre el cursor hacia abajo, a la pista, para recorrer corte a corte.",
+  "trackTitle": "Arrastre para recorrer los cortes. Suba el cursor a la muesca 3D para mostrarlos todos.",
+  "cursorTitle": "Arrastre para mover. Tire de un borde para cambiar cuántos cortes se muestran.",
+  "trimAboveTitle": "Recortar los cortes de arriba",
+  "trimBelowTitle": "Recortar los cortes de abajo",
+  "thickness": "Grosor",
+  "thicknessTitle": "Cortes mostrados a la vez",
+  "kept": "Conservados {lo}–{hi} · {n} de {total} cortes",
+  "keptAll": "Se conservan los {total} cortes",
+  "resetTrim": "Restablecer todos los cortes"
 }

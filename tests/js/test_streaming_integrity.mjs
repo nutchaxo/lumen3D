@@ -66,7 +66,7 @@ const LEVELS = [{ level: 0, dimensions: { x: 128, y: 128, z: 128 }, brickSize: 6
 // ── EDGE-055 + BUG-034: bricksForRegion clamps indices to [0, n-1] ──
 {
   const BL = makeLoader();
-  BL.init('DATA_WEB/fixed/R/bricks', { levels: LEVELS, channels: 1, brickTransport: { encoding: 'raw-u8' } });
+  BL.init('DATA_WEB/3d/R/bricks', { levels: LEVELS, channels: 1, brickTransport: { encoding: 'raw-u8' } });
   // nx=ny=nz=ceil(128/64)=2 -> valid indices 0..1
   const full = BL.bricksForRegion({ x: 0, y: 0, z: 0 }, { x: 1, y: 1, z: 1 }, 0);
   assert.ok(full.length > 0, 'region returns bricks');

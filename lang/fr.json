@@ -14,6 +14,47 @@
     "noResults": "Aucun resultat trouve",
     "backToHome": "Retour a l'accueil"
   },
+  "types": {
+    "3d": {
+      "label": "Fixe",
+      "title": "Imagerie fixee",
+      "desc": "Piles d'imagerie 3D haute resolution de {specimenPlural} fixes. Donnees d'imagerie multi-canaux pretes a explorer."
+    },
+    "2d": {
+      "label": "Wholemount",
+      "title": "Photographies whole-mount",
+      "desc": "Photographies calibrées de {specimenPlural} entiers au stéréomicroscope : marquages, barre d'échelle et mesures en un coup d'œil."
+    },
+    "live": {
+      "label": "Direct",
+      "title": "Imagerie en direct",
+      "desc": "Enregistrements 4D en time-lapse de {specimenPlural} au cours du temps. Observez le developpement en temps reel."
+    },
+    "tracking": {
+      "label": "Suivi",
+      "title": "Suivi cellulaire",
+      "desc": "Analyse quantitative des trajectoires individuelles des cellules, des vitesses, des arbres de lignage et des relations de voisinage au cours du temps."
+    }
+  },
+  "dtypes": {
+    "nav": "Types de données",
+    "title": "Types de données",
+    "sub": "Renommez ce que lisent vos visiteurs. L'identifiant technique de chaque type ne change jamais.",
+    "short": "Nom court",
+    "shortHint": "Badges, filtres, listes. Laissez vide pour garder le nom traduit par défaut.",
+    "long": "Titre long (page d'accueil)",
+    "longLabel": "Titre long",
+    "longHint": "Titre des cartes de type sur la page d'accueil.",
+    "idHint": "Identifiant technique — dossier, id de dataset, filtres et plugins. Non modifiable.",
+    "perLocale": "multilingue",
+    "count": "{n} jeu(x) de données",
+    "none": "Aucun type de dataset déclaré.",
+    "save": "Enregistrer",
+    "saved": "Noms des types enregistrés.",
+    "saveError": "Échec de l'enregistrement.",
+    "reset": "Noms par défaut",
+    "resetConfirm": "Rétablir les noms traduits par défaut pour tous les types ?"
+  },
   "toast": {
     "figureUnavailable": "L'export de figure n'est pas disponible sur cette page",
     "graphUnavailable": "L'export de graphique n'est pas disponible sur cette page",
@@ -100,16 +141,8 @@
     "featuredSubtitle": "Selection recente de notre collection d'imagerie",
     "typesTitle": "Types de donnees",
     "typesSubtitle": "Naviguez dans notre collection de jeux de donnees",
-    "fixedTitle": "Imagerie fixee",
-    "fixedDesc": "Piles d'imagerie 3D haute resolution de {specimenPlural} fixes. Donnees d'imagerie multi-canaux pretes a explorer.",
-    "liveTitle": "Imagerie en direct",
-    "liveDesc": "Enregistrements 4D en time-lapse de {specimenPlural} au cours du temps. Observez le developpement en temps reel.",
-    "trackingTitle": "Suivi cellulaire",
-    "trackingDesc": "Analyse quantitative des trajectoires individuelles des cellules, des vitesses, des arbres de lignage et des relations de voisinage au cours du temps.",
     "browseAll": "Tout parcourir",
-    "viewCollection": "Voir la collection",
-    "wholemountTitle": "Photographies whole-mount",
-    "wholemountDesc": "Photographies calibrées de {specimenPlural} entiers au stéréomicroscope : marquages, barre d'échelle et mesures en un coup d'œil."
+    "viewCollection": "Voir la collection"
   },
   "explorer": {
     "title": "Explorateur de donnees",
@@ -119,9 +152,6 @@
     "filterDate": "Date",
     "filterMarkers": "Marqueurs",
     "allTypes": "Tous les types",
-    "fixed": "Fixe",
-    "live": "Imagerie en direct",
-    "tracking": "Suivi cellulaire",
     "sortBy": "Trier par",
     "sortName": "Nom",
     "sortDate": "Date",
@@ -137,8 +167,7 @@
     "fileType": "Type",
     "fileSize": "Taille",
     "failed": "Échec du chargement des données",
-    "failedDesc": "Jeu de données introuvable ou erreur de chargement.",
-    "wholemount": "Wholemount"
+    "failedDesc": "Jeu de données introuvable ou erreur de chargement."
   },
   "viewer": {
     "controls": "Contrôles",
@@ -626,8 +655,6 @@
     "datasets": "Datasets",
     "search": "Rechercher…",
     "filterAll": "Tous",
-    "filterFixed": "Fixed",
-    "filterLive": "Live",
     "noDatasetSelected": "Aucun dataset sélectionné",
     "clickDatasetHint": "Cliquez sur un dataset dans la liste pour le prévisualiser ici.",
     "loadingViewer": "Chargement du viewer…",
@@ -1766,7 +1793,7 @@
     "errTls": "Le magasin de certificats de PHP est inutilisable sur cet hébergement : téléversez cacert.pem à la racine du site.",
     "errFolder": "Le dossier DOCS/ n'existe pas encore dans le dépôt."
   },
-  "wholemount": {
+  "2d": {
     "specimen": "Spécimen",
     "stage": "Stade",
     "line": "Lignée",

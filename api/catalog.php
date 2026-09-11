@@ -40,6 +40,13 @@ declare(strict_types=1);
 define('LUMEN_DATASETS_LIB', 1);
 require_once __DIR__ . '/datasets.php';   // library mode: rebuild_catalog() only
 
+// One-shot rename of the legacy type directories (fixed→3d, wholemount→2d) on a host
+// that predates the unified vocabulary. Stated here as well as inside datasets.php
+// because this endpoint is the one a visitor hits first: the catalog scans
+// DATA_WEB/<type>/ by the canonical names, and a host that had not migrated yet would
+// answer with an empty catalog. A no-op (a few is_dir calls) once migrated.
+lumen_migrate_dataset_types();
+
 header('Content-Type: application/json; charset=utf-8');
 header('X-Content-Type-Options: nosniff');
 header('Cache-Control: no-store');

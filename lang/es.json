@@ -14,6 +14,47 @@
     "noResults": "No se encontraron resultados",
     "backToHome": "Volver al inicio"
   },
+  "types": {
+    "3d": {
+      "label": "Fijo",
+      "title": "Imagen fija",
+      "desc": "Pilas de imagen 3D de alta resolución de {specimenPlural} fijos. Datos de imagen multicanal listos para explorar."
+    },
+    "2d": {
+      "label": "Wholemount",
+      "title": "Fotografía whole-mount",
+      "desc": "Fotografías calibradas de {specimenPlural} enteros al estereomicroscopio: marcajes, barra de escala y medidas de un vistazo."
+    },
+    "live": {
+      "label": "En vivo",
+      "title": "Imagen en vivo",
+      "desc": "Grabaciones 4D en time-lapse de {specimenPlural} a lo largo del tiempo. Observa el desarrollo en tiempo real."
+    },
+    "tracking": {
+      "label": "Rastreo",
+      "title": "Rastreo celular",
+      "desc": "Análisis cuantitativo de trayectorias celulares individuales, velocidades, árboles de linaje y relaciones de vecindad a lo largo del tiempo."
+    }
+  },
+  "dtypes": {
+    "nav": "Tipos de datos",
+    "title": "Tipos de datos",
+    "sub": "Cambie el nombre que leen sus visitantes. El identificador técnico de cada tipo nunca cambia.",
+    "short": "Nombre corto",
+    "shortHint": "Distintivos, filtros, listas. Déjelo vacío para conservar el nombre traducido por defecto.",
+    "long": "Título largo (página de inicio)",
+    "longLabel": "Título largo",
+    "longHint": "Título de las tarjetas de tipo en la página de inicio.",
+    "idHint": "Identificador técnico — carpeta, id de conjunto, filtros y complementos. No editable.",
+    "perLocale": "multilingüe",
+    "count": "{n} conjunto(s) de datos",
+    "none": "Ningún tipo de conjunto declarado.",
+    "save": "Guardar",
+    "saved": "Nombres de los tipos guardados.",
+    "saveError": "No se pudo guardar.",
+    "reset": "Nombres por defecto",
+    "resetConfirm": "¿Restaurar los nombres traducidos por defecto para todos los tipos?"
+  },
   "toast": {
     "figureUnavailable": "La exportación de figura no está disponible en esta página",
     "graphUnavailable": "La exportación de gráfico no está disponible en esta página",
@@ -100,16 +141,8 @@
     "featuredSubtitle": "Selección reciente de nuestra colección de imágenes",
     "typesTitle": "Tipos de datos",
     "typesSubtitle": "Navega por nuestra colección de datos",
-    "fixedTitle": "Imagen fija",
-    "fixedDesc": "Pilas de imagen 3D de alta resolución de {specimenPlural} fijos. Datos de imagen multicanal listos para explorar.",
-    "liveTitle": "Imagen en vivo",
-    "liveDesc": "Grabaciones 4D en time-lapse de {specimenPlural} a lo largo del tiempo. Observa el desarrollo en tiempo real.",
-    "trackingTitle": "Rastreo celular",
-    "trackingDesc": "Análisis cuantitativo de trayectorias celulares individuales, velocidades, árboles de linaje y relaciones de vecindad a lo largo del tiempo.",
     "browseAll": "Explorar todo",
-    "viewCollection": "Ver colección",
-    "wholemountTitle": "Fotografía whole-mount",
-    "wholemountDesc": "Fotografías calibradas de {specimenPlural} enteros al estereomicroscopio: marcajes, barra de escala y medidas de un vistazo."
+    "viewCollection": "Ver colección"
   },
   "explorer": {
     "title": "Explorador de datos",
@@ -119,9 +152,6 @@
     "filterDate": "Fecha",
     "filterMarkers": "Marcadores",
     "allTypes": "Todos los tipos",
-    "fixed": "Fijo",
-    "live": "En vivo",
-    "tracking": "Rastreo",
     "sortBy": "Ordenar por",
     "sortName": "Nombre",
     "sortDate": "Fecha",
@@ -137,8 +167,7 @@
     "fileType": "Tipo",
     "fileSize": "Tamaño",
     "failed": "Error al cargar los datos",
-    "failedDesc": "Conjunto de datos no encontrado o error al cargar.",
-    "wholemount": "Wholemount"
+    "failedDesc": "Conjunto de datos no encontrado o error al cargar."
   },
   "viewer": {
     "controls": "Controles",
@@ -626,8 +655,6 @@
     "datasets": "Datasets",
     "search": "Buscar…",
     "filterAll": "Todos",
-    "filterFixed": "Fixed",
-    "filterLive": "Live",
     "noDatasetSelected": "Ningún dataset seleccionado",
     "clickDatasetHint": "Haga clic en un dataset de la lista para previsualizarlo aquí.",
     "loadingViewer": "Cargando el visor…",
@@ -1766,7 +1793,7 @@
     "errTls": "El almacén de certificados de PHP es inutilizable en este alojamiento: suba cacert.pem a la raíz del sitio.",
     "errFolder": "La carpeta DOCS/ todavía no existe en el repositorio."
   },
-  "wholemount": {
+  "2d": {
     "specimen": "Espécimen",
     "stage": "Estadio",
     "line": "Línea",

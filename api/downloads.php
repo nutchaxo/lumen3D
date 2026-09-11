@@ -21,6 +21,8 @@
 
 declare(strict_types=1);
 
+require_once __DIR__ . '/_admin_lib.php';   // LUMEN_DATASET_TYPES (no session, no auth)
+
 header('Content-Type: application/json; charset=utf-8');
 header('X-Content-Type-Options: nosniff');
 header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
@@ -28,7 +30,7 @@ header('Access-Control-Allow-Origin: *');
 
 $ROOT          = dirname(__DIR__);                                   // WebPlatform root
 $DATA_WEB      = $ROOT . DIRECTORY_SEPARATOR . 'DATA_WEB';
-$ALLOWED_TYPES = ['fixed', 'live', 'tracking', 'wholemount'];
+$ALLOWED_TYPES = LUMEN_DATASET_TYPES;   // one shared vocabulary — see api/_admin_lib.php
 // Same guard as dev_server.py _SAFE_FOLDER_RE: one safe path component, no traversal.
 $SAFE_FOLDER   = '/^[A-Za-z0-9_][A-Za-z0-9._-]*$/';
 

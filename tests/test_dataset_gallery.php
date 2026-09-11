@@ -17,7 +17,7 @@ define('LUMEN_DATASETS_LIB', true);
 require_once __DIR__ . '/../api/datasets.php';
 
 $root = sys_get_temp_dir() . '/lumen-gallery-' . bin2hex(random_bytes(4));
-$ds   = $root . '/DATA_WEB/fixed/demo';
+$ds   = $root . '/DATA_WEB/3d/demo';
 @mkdir($ds, 0777, true);
 
 function rrm(string $d): void {
@@ -58,57 +58,57 @@ $files = function () use ($ds) {
 };
 $reset = function () use ($ds, $writeMeta) {
     rrm($ds . '/gallery');
-    $writeMeta(['name' => 'Demo', 'type' => 'fixed']);
+    $writeMeta(['name' => 'Demo', 'type' => '3d']);
 };
 
 // ── Upload ───────────────────────────────────────────────────────────────────
 section('Upload');
 $reset();
-[$st, $pl] = gallery_add('fixed/demo', $ds, ['image' => $durl($PNG), 'filename' => 'shot.png', 'caption' => 'Vue sagittale']);
+[$st, $pl] = gallery_add('3d/demo', $ds, ['image' => $durl($PNG), 'filename' => 'shot.png', 'caption' => 'Vue sagittale']);
 check('writes the file', $st === 200 && $files() === ['shot.png']);
 check('records the entry', ($meta()['gallery'][0]['file'] ?? '') === 'shot.png');
 check('keeps the caption', ($meta()['gallery'][0]['caption'] ?? '') === 'Vue sagittale');
-check('returns a public url', ($pl['url'] ?? '') === 'DATA_WEB/fixed/demo/gallery/shot.png');
+check('returns a public url', ($pl['url'] ?? '') === 'DATA_WEB/3d/demo/gallery/shot.png');
 
 $reset();
 $okAll = true;
 foreach ([[$PNG, 'png'], [$JPEG, 'jpg'], [$GIF, 'gif'], [$WEBP, 'webp']] as [$raw, $ext]) {
-    [$s, ] = gallery_add('fixed/demo', $ds, ['image' => $durl($raw), 'filename' => "f-$ext.bin"]);
+    [$s, ] = gallery_add('3d/demo', $ds, ['image' => $durl($raw), 'filename' => "f-$ext.bin"]);
     if ($s !== 200) $okAll = false;
 }
 check('accepts png/jpeg/gif/webp', $okAll && count($files()) === 4);
 
 $reset();
-[$st, $pl] = gallery_add('fixed/demo', $ds, ['image' => $durl($JPEG), 'filename' => 'liar.png']);
+[$st, $pl] = gallery_add('3d/demo', $ds, ['image' => $durl($JPEG), 'filename' => 'liar.png']);
 check('magic bytes decide the extension, not the name', ($pl['item']['file'] ?? '') === 'liar.jpg');
 
 $reset();
-[$st, ] = gallery_add('fixed/demo', $ds, ['image' => $durl('<?php system($_GET["c"]); ?>'), 'filename' => 'evil.png']);
+[$st, ] = gallery_add('3d/demo', $ds, ['image' => $durl('<?php system($_GET["c"]); ?>'), 'filename' => 'evil.png']);
 check('non-image refused before any write', $st === 400 && $files() === [] && !isset($meta()['gallery']));
 
 $reset();
-[$st, ] = gallery_add('fixed/demo', $ds, ['image' => $durl($PNG . str_repeat("\x00", MAX_GALLERY_BYTES))]);
+[$st, ] = gallery_add('3d/demo', $ds, ['image' => $durl($PNG . str_repeat("\x00", MAX_GALLERY_BYTES))]);
 check('oversized payload refused', $st === 400 && $files() === []);
 
 $reset();
-[$st, ] = gallery_add('fixed/demo', $ds, ['image' => 'https://evil.example/x.png']);
+[$st, ] = gallery_add('3d/demo', $ds, ['image' => 'https://evil.example/x.png']);
 check('non-data URL refused', $st === 400);
 
 $reset();
-gallery_add('fixed/demo', $ds, ['image' => $durl($PNG), 'filename' => 'Coupe Annotée !.png']);
-gallery_add('fixed/demo', $ds, ['image' => $durl($PNG), 'filename' => 'Coupe Annotée !.png']);
+gallery_add('3d/demo', $ds, ['image' => $durl($PNG), 'filename' => 'Coupe Annotée !.png']);
+gallery_add('3d/demo', $ds, ['image' => $durl($PNG), 'filename' => 'Coupe Annotée !.png']);
 check('name slugged and de-duplicated (same slug as Python)',
       $files() === ['coupe-annot-e-1.png', 'coupe-annot-e.png']);
 
 $reset();
-[$st, $pl] = gallery_add('fixed/demo', $ds, ['image' => $durl($PNG), 'filename' => '../../../../evil.png']);
+[$st, $pl] = gallery_add('3d/demo', $ds, ['image' => $durl($PNG), 'filename' => '../../../../evil.png']);
 check('traversal in the name cannot escape gallery/',
       $st === 200 && ($pl['item']['file'] ?? '') === 'evil.png'
       && $files() === ['evil.png'] && !is_file($root . '/evil.png'));
 
 $reset();
-for ($i = 0; $i < MAX_GALLERY_ITEMS; $i++) gallery_add('fixed/demo', $ds, ['image' => $durl($PNG), 'filename' => "i$i.png"]);
-[$st, ] = gallery_add('fixed/demo', $ds, ['image' => $durl($PNG), 'filename' => 'overflow.png']);
+for ($i = 0; $i < MAX_GALLERY_ITEMS; $i++) gallery_add('3d/demo', $ds, ['image' => $durl($PNG), 'filename' => "i$i.png"]);
+[$st, ] = gallery_add('3d/demo', $ds, ['image' => $durl($PNG), 'filename' => 'overflow.png']);
 check('count capped at ' . MAX_GALLERY_ITEMS, $st === 409 && count($files()) === MAX_GALLERY_ITEMS);
 
 // Character count without relying on mbstring — this suite must run on a host that
@@ -116,14 +116,14 @@ check('count capped at ' . MAX_GALLERY_ITEMS, $st === 409 && count($files()) ===
 $ulen = fn(string $s) => count(preg_split('//u', $s, -1, PREG_SPLIT_NO_EMPTY) ?: []);
 
 $reset();
-[, $pl] = gallery_add('fixed/demo', $ds, ['image' => $durl($PNG), 'caption' => "ligne 1\nligne 2\r\n" . str_repeat('x', 900)]);
+[, $pl] = gallery_add('3d/demo', $ds, ['image' => $durl($PNG), 'caption' => "ligne 1\nligne 2\r\n" . str_repeat('x', 900)]);
 $cap = $pl['item']['caption'] ?? '';
 check('caption flattened and clamped to 400', strpos($cap, "\n") === false && $ulen($cap) === 400);
 
 $reset();
 // An accented caption cut on BYTES would produce invalid UTF-8 and json_encode would
 // return false, blanking metadata.json. Clamp on characters, and prove the file survives.
-[, $pl] = gallery_add('fixed/demo', $ds, ['image' => $durl($PNG), 'caption' => str_repeat('é', 900)]);
+[, $pl] = gallery_add('3d/demo', $ds, ['image' => $durl($PNG), 'caption' => str_repeat('é', 900)]);
 $cap = $pl['item']['caption'] ?? '';
 check('accented caption clamped on characters, not bytes', $ulen($cap) === 400);
 check('clamped caption is valid UTF-8', $cap === (string)@iconv('UTF-8', 'UTF-8//IGNORE', $cap));
@@ -133,29 +133,29 @@ check('metadata.json survives an accented caption',
 // ── Delete ───────────────────────────────────────────────────────────────────
 section('Delete');
 $reset();
-gallery_add('fixed/demo', $ds, ['image' => $durl($PNG), 'filename' => 'a.png']);
-gallery_add('fixed/demo', $ds, ['image' => $durl($PNG), 'filename' => 'b.png']);
+gallery_add('3d/demo', $ds, ['image' => $durl($PNG), 'filename' => 'a.png']);
+gallery_add('3d/demo', $ds, ['image' => $durl($PNG), 'filename' => 'b.png']);
 [$st, $pl] = gallery_delete($ds, 'a.png');
 check('removes file and entry', $st === 200 && $files() === ['b.png']
       && array_column($pl['gallery'], 'file') === ['b.png']);
 
 $bad = true;
-foreach (['../metadata.json', '../../fixed/demo/metadata.json', 'sub/a.png', 'a.php'] as $t) {
+foreach (['../metadata.json', '../../3d/demo/metadata.json', 'sub/a.png', 'a.php'] as $t) {
     [$s, ] = gallery_delete($ds, $t);
     if ($s !== 400) $bad = false;
 }
 check('traversal targets refused', $bad && is_file($ds . '/metadata.json'));
 
 $reset();
-gallery_add('fixed/demo', $ds, ['image' => $durl($PNG), 'filename' => 'a.png']);
+gallery_add('3d/demo', $ds, ['image' => $durl($PNG), 'filename' => 'a.png']);
 [$st, ] = gallery_delete($ds, 'gallery/a.png');
 check('"gallery/x.png" form accepted', $st === 200 && $files() === []);
 
 // ── Reconciliation on save ───────────────────────────────────────────────────
 section('Reconciliation on save');
 $reset();
-gallery_add('fixed/demo', $ds, ['image' => $durl($PNG), 'filename' => 'a.png', 'caption' => 'Vue A']);
-gallery_add('fixed/demo', $ds, ['image' => $durl($PNG), 'filename' => 'b.png', 'caption' => 'Vue B']);
+gallery_add('3d/demo', $ds, ['image' => $durl($PNG), 'filename' => 'a.png', 'caption' => 'Vue A']);
+gallery_add('3d/demo', $ds, ['image' => $durl($PNG), 'filename' => 'b.png', 'caption' => 'Vue B']);
 $stored = $meta()['gallery'];
 $g = gallery_reconcile(['gallery' => [['file' => 'a.png', 'caption' => 'Vue A']]], $ds, $stored);
 check('stale draft cannot drop a concurrent upload', array_column($g, 'file') === ['a.png', 'b.png']);

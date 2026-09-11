@@ -131,7 +131,7 @@ const BrickLoader = (() => {
 
   /**
    * Initialize from a brick manifest JSON.
-   * @param {string} basePath  e.g. "DATA_WEB/fixed/dataset-name/bricks"
+   * @param {string} basePath  e.g. "DATA_WEB/3d/dataset-name/bricks"
    * @param {object} manifest  parsed manifest.json
    */
   /** Dataset root = the mount path without its trailing per-timepoint segment.

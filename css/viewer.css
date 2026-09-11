@@ -919,24 +919,27 @@ body.viewer-iframe .canvas-overlay {
   text-align: center;
 }
 
-.related-type.fixed {
-  background: var(--badge-fixed-bg);
-  color: var(--badge-fixed-text);
+/* The modifier carries the type id, which cannot be a class on its own:
+   '.3d' is not a valid selector (an identifier may not start with a digit),
+   so the type is always prefixed — `related-type--${type}`. */
+.related-type--3d {
+  background: var(--badge-3d-bg);
+  color: var(--badge-3d-text);
 }
 
-.related-type.live {
+.related-type--2d {
+  background: var(--badge-2d-bg);
+  color: var(--badge-2d-text);
+}
+
+.related-type--live {
   background: var(--badge-live-bg);
   color: var(--badge-live-text);
 }
 
-.related-type.tracking {
-  background: var(--badge-track-bg);
-  color: var(--badge-track-text);
-}
-
-.related-type.wholemount {
-  background: var(--badge-wm-bg);
-  color: var(--badge-wm-text);
+.related-type--tracking {
+  background: var(--badge-tracking-bg);
+  color: var(--badge-tracking-text);
 }
 
 .axis-helper {
@@ -1716,23 +1719,187 @@ body.viewer-iframe .canvas-overlay {
 }
 
 .zstack-vslider-wrap {
-  width: 36px;
+  width: 44px;
   flex-shrink: 0;
   position: relative;
 }
 
+/* ── Z-stack vertical slider (zstack-browser plugin) ──────
+   A "3D" notch on top (every kept slice, free rotation), a detent gap, then the
+   slice track — slice 0 at the top like the diagram beside it. The cursor is a
+   rounded bar whose height is the number of slices shown; two triangles beside
+   the track trim the slices above / below (masked with a hatch). */
 .zstack-vslider {
   position: absolute;
-  top: 50%;
-  left: 50%;
-  transform: translate(-50%, -50%) rotate(90deg);
-  width: 280px !important;
-  max-width: none !important;
-  height: 24px;
-  margin: 0;
-  cursor: pointer;
-  accent-color: var(--color-primary);
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  outline: none;
+  user-select: none;
+  touch-action: none;
 }
+.zstack-vslider:focus-visible .zs-track {
+  box-shadow: 0 0 0 2px var(--color-primary-subtle);
+}
+
+.zs-notch {
+  width: 40px;
+  height: 32px;
+  flex-shrink: 0;
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 1px;
+  padding: 0;
+  border-radius: var(--radius-sm);
+  border: 1px dashed var(--border-strong);
+  background: var(--bg-input);
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 9px;
+  font-weight: var(--weight-semibold);
+  line-height: 1;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+}
+.zs-notch svg { width: 13px; height: 13px; }
+.zs-notch:hover { color: var(--text-primary); border-color: var(--color-primary); }
+.zstack-vslider.zs-mode-3d .zs-notch {
+  background: var(--color-primary);
+  border: 1px solid var(--color-primary);
+  color: #FFFFFF;
+  box-shadow: var(--shadow-glow);
+}
+
+/* The gap that makes the notch read as a separate click stop. */
+.zs-detent {
+  width: 2px;
+  height: 10px;
+  flex-shrink: 0;
+  background: repeating-linear-gradient(180deg, var(--border-strong) 0 2px, transparent 2px 4px);
+}
+
+.zs-track {
+  position: relative;
+  flex: 1;
+  width: 14px;
+  min-height: 0;
+  border-radius: var(--radius-full);
+  background: var(--bg-input);
+  border: 1px solid var(--border-default);
+  cursor: pointer;
+}
+
+.zs-mask {
+  position: absolute;
+  left: 0;
+  right: 0;
+  border-radius: var(--radius-full);
+  background: repeating-linear-gradient(135deg, var(--color-error-subtle) 0 3px, transparent 3px 6px);
+  pointer-events: none;
+}
+.zs-mask-top { top: 0; }
+.zs-mask-bottom { bottom: 0; }
+
+.zs-cursor {
+  position: absolute;
+  left: -4px;
+  right: -4px;
+  min-height: 12px;
+  border-radius: var(--radius-full);
+  background: var(--color-primary);
+  border: 1px solid rgba(255, 255, 255, 0.4);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.4);
+  cursor: grab;
+}
+.zstack-vslider.zs-dragging .zs-cursor { cursor: grabbing; }
+.zstack-vslider.zs-mode-3d .zs-cursor { display: none; } /* parked in the notch */
+
+.zs-grip {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 7px;
+  cursor: ns-resize;
+}
+.zs-grip-top { top: -3px; }
+.zs-grip-bottom { bottom: -3px; }
+
+/* Trim handles: a triangle beside the track pointing at the boundary it moves. */
+.zs-handle {
+  position: absolute;
+  left: 100%;
+  margin-left: 2px;
+  width: 14px;
+  height: 14px;
+  transform: translateY(-50%);
+  cursor: ns-resize;
+}
+.zs-handle::before {
+  content: '';
+  position: absolute;
+  left: 2px;
+  top: 1px;
+  width: 0;
+  height: 0;
+  border-top: 6px solid transparent;
+  border-bottom: 6px solid transparent;
+  border-right: 8px solid var(--color-error);
+  filter: drop-shadow(0 0 1px rgba(0, 0, 0, 0.5));
+}
+.zs-handle:hover::before { border-right-color: var(--text-primary); }
+
+.zstack-thickness-row,
+.zstack-crop-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+}
+.zstack-stepper {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  margin-left: auto;
+}
+.zstack-stepper-btn,
+.zstack-crop-reset {
+  width: 26px;
+  height: 26px;
+}
+.zstack-stepper-btn svg,
+.zstack-crop-reset svg { width: 13px; height: 13px; }
+.zstack-thickness-input {
+  width: 44px;
+  height: 26px;
+  text-align: center;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-primary);
+  background: var(--bg-input);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-sm);
+  -moz-appearance: textfield;
+  appearance: textfield;
+}
+.zstack-thickness-input::-webkit-inner-spin-button,
+.zstack-thickness-input::-webkit-outer-spin-button { appearance: none; margin: 0; }
+.zstack-thickness-um {
+  font-family: var(--font-mono);
+  color: var(--text-secondary);
+  min-width: 54px;
+  text-align: right;
+}
+.zstack-crop-label {
+  font-family: var(--font-mono);
+  color: var(--text-secondary);
+}
+.zstack-crop-reset { margin-left: auto; }
+.zstack-crop-row.zs-full .zstack-crop-reset { display: none; }
 
 .zstack-nav-row {
   display: flex;

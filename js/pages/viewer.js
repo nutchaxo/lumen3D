@@ -58,10 +58,13 @@ const ViewerApp = (() => {
     return `api/upload.php?action=blob&ds=${encodeURIComponent(p.slice(_STAGING_PREFIX.length))}&path=`;
   }
 
+  // The directory a dataset lives in IS its type, published or staged. A path
+  // naming no known type belongs to none — guessing one would gate the plugins
+  // and the header label on a lie.
   function _datasetTypeOf(datasetPath) {
     const p = String(datasetPath || '');
     const bare = p.startsWith(_STAGING_PREFIX) ? p.slice(_STAGING_PREFIX.length) : p;
-    return bare.split('/')[0] || 'fixed';
+    return Utils.datasetTypeOfId(bare);
   }
 
   async function init() {
@@ -181,7 +184,7 @@ const ViewerApp = (() => {
     // Update UI Header
     document.getElementById('dataset-title').textContent = datasetMeta.name;
     document.getElementById('dataset-subtitle').textContent =
-      `${I18n.t(`explorer.${datasetMeta.type}`)} - ${Utils.formatStage(datasetMeta.stage)} - ${Utils.formatDate(datasetMeta.date)}`;
+      `${Utils.datasetTypeLabel(datasetMeta.type)} - ${Utils.formatStage(datasetMeta.stage)} - ${Utils.formatDate(datasetMeta.date)}`;
     if (typeof AnnotationManager !== 'undefined') AnnotationManager.init({ items: [] });
 
     // A #state= link is somebody's *saved view*, not the dataset: it reopens their
@@ -208,7 +211,14 @@ const ViewerApp = (() => {
       // failures are already quarantined inside the registry; this catches the rest.
       try {
         const modulePaths = await PluginRegistry.discover('js/modules');
-        await PluginRegistry.loadModules('js/modules', modulePaths);
+        // Only the plugins that cover the type being shown: a plugin naming its
+        // `dataTypes` is taken at its word, so the photograph-only tools stay off
+        // the volume viewer. Plugins declaring nothing predate the field and were
+        // written for this page, hence allowUndeclaredDataTypes.
+        await PluginRegistry.loadModules('js/modules', modulePaths, {
+          dataType: datasetMeta.type,
+          allowUndeclaredDataTypes: true
+        });
         // Generate toolbar buttons from the loaded plugins' metadata. Runs before
         // ToolManager.init (_bindTooling) so the data-tool chips exist to be wired,
         // and before bindToolbarButtons() (after initAll) wires the data-plugin-id ones.
@@ -237,12 +247,13 @@ const ViewerApp = (() => {
     VolumeViewer.setMeasurements(_volumeMeasurements);
     if (_isIframe || true) { // Always bind onCameraChange now
       VolumeViewer.onCameraChange((state) => {
-        // Never broadcast camera changes when z-stack is active:
-        // _zstackShow() forces setView('xy') which would corrupt other panels' cameras.
+        // Never broadcast camera changes while the z-stack browser holds the view
+        // top-down (slice mode): that forced XY framing would corrupt other panels'
+        // cameras. Its 3D notch rotates freely and syncs like any other view.
         // _isInitialized gates the boot-time chatter: fitCameraToVolume fires during
         // init(), and in Compare that framing would be pushed onto every panel already
         // on screen — see the SYNC_CHANNELS emitter for the full rationale.
-        if (_isIframe && _isInitialized && !_zstackActive) {
+        if (_isIframe && _isInitialized && !_zstackLocksCamera()) {
           // SEC-012: restrict targetOrigin to this page's origin (no wildcard leak).
           window.parent.postMessage({ type: 'SYNC_CAMERA', value: state, sourceIndex: _panelIndex }, Utils.trustedTargetOrigin());
         }
@@ -784,6 +795,14 @@ const ViewerApp = (() => {
       datasetMeta = {
         ...datasetMeta,
         ...meta,
+        // Identity, byte location and type are resolved before this fetch (the
+        // catalog, or the admin ?path=) and the directory is what decides them.
+        // metadata.json is read for what it describes, never to re-name the
+        // dataset: a staged import's file still carries the folder it was
+        // packed under, which is not where the viewer is reading from.
+        id: datasetMeta.id,
+        path: datasetMeta.path,
+        type: datasetMeta.type || meta.type,
         dimensions: meta.dimensions || datasetMeta.dimensions,
         voxel_size: meta.voxel_size || datasetMeta.voxel_size,
         channels: datasetMeta.channels || meta.channels,
@@ -1984,7 +2003,7 @@ const ViewerApp = (() => {
         cache: VolumeViewer.getCacheStats()
       }
     };
-    // Only a timelapse has a playback rate; on a fixed dataset the key would be
+    // Only a timelapse has a playback rate; on a still volume the key would be
     // noise in the saved workspace.
     if (isLive) state.viewer.playbackFps = _playbackFps;
     // Merge plugin states
@@ -2086,33 +2105,22 @@ const ViewerApp = (() => {
       }
     }
 
-    // Z-stack browser: restore open/closed state and current slice
-    // In iframe mode (compare), the parent compare.js controls z-stack via TOGGLE_ZSTACK.
-    // Only apply here in standalone viewer mode to avoid the two iframes getting each other's state.
+    // Z-stack browser: the zstack-browser plugin owns the panel and restores itself
+    // from state.plugins (mode, cursor, thickness, trim). A workspace saved before the
+    // plugin wrote that entry only carries the viewer-level pair; it is lifted into the
+    // plugin state so a single path restores both. In iframe mode (compare), the parent
+    // compare.js drives the browser via TOGGLE_ZSTACK instead.
     if (!_isIframe && typeof viewerState.zstackActive === 'boolean') {
-      _zstackActive = viewerState.zstackActive;
-      const btn = document.getElementById('btn-toggle-zstack');
-      if (btn) {
-        btn.classList.toggle('btn-solid', _zstackActive);
-        btn.classList.toggle('btn-ghost', !_zstackActive);
-      }
-      if (_zstackActive) {
-        // Z-stack was open: restore panel + go to saved slice
-        _zstackShow(true);
-        // Override the _zstackGoToSlice(0) already called by _zstackShow(true)
-        // with the actual saved slice (with a small delay so the DOM is ready)
-        if (Number.isFinite(viewerState.zstackSlice) && viewerState.zstackSlice > 0) {
-          setTimeout(() => _zstackGoToSlice(viewerState.zstackSlice), 80);
+      const mod = _zstackModule();
+      if (mod?.impl?.setState) {
+        if (!state.plugins?.['zstack-browser']) {
+          state.plugins = {
+            ...(state.plugins || {}),
+            'zstack-browser': { zstackActive: viewerState.zstackActive, zstackSlice: viewerState.zstackSlice }
+          };
         }
       } else {
-        // Z-stack was closed: ensure panel is hidden, rotation unlocked and clipping is full.
-        // Do NOT call _zstackShow(false) here — it calls _zstackGoToSlice(0) indirectly
-        // through the normal show path which then sets a narrow clip range on the volume.
-        const panel = document.getElementById('zstack-browser');
-        if (panel) panel.classList.add('zstack-hidden');
-        VolumeViewer.setRotationLocked(false);
-        VolumeViewer.resetClipping();
-        _zstackCurrentSlice = 0;
+        _applyZstackState(false, null);
       }
     }
 
@@ -2966,8 +2974,11 @@ const ViewerApp = (() => {
     return `; ${result.failedLoads} ${label}`;
   }
 
+  // Key of the in-memory "already loaded" set. `t` is a timepoint index, or null
+  // when the dataset has no time axis — the sentinel below names that case, it
+  // is not a dataset type.
   function _qualityKey(t, quality) {
-    return `${t === null ? 'fixed' : t}:${quality}`;
+    return `${t === null ? 'still' : t}:${quality}`;
   }
 
   function _qualityLabel(quality) {
@@ -3194,15 +3205,16 @@ const ViewerApp = (() => {
           VolumeViewer.updateChannel(idx, ch);
         });
       } else if (data.type === 'SYNC_ZSTACK_SLICE') {
-        // A sibling decompose panel navigated to a different Z slice.
-        // Open z-stack browser if not already active, then go to the same slice.
+        // A sibling panel moved its z-stack browser: open ours if needed and mirror
+        // its mode, cursor, thickness and trim. The guard keeps the mirror silent.
         _suppressZstackSync = true;
-        if (!_zstackActive) {
-          _applyZstackState(true, data.sliceIndex);
-        } else {
-          _zstackGoToSlice(data.sliceIndex);
+        try {
+          if (!_zstackActive) _applyZstackState(true, null);
+          const mod = _zstackModule();
+          if (mod?.impl?.applySync) mod.impl.applySync(data);
+        } finally {
+          _suppressZstackSync = false;
         }
-        _suppressZstackSync = false;
       } else if (data.type === 'SYNC_SLICER_SPEC') {
         // A sibling decompose panel moved the slice-through-volume plane.
         // The 3D raymarcher has no cut-plane shader uniform, so we cannot
@@ -3229,10 +3241,10 @@ const ViewerApp = (() => {
         Timeline.setFrame(data.value, false);
       }
       if (data.type === 'SYNC_CAMERA') {
-        // When z-stack browser is active, block camera orientation sync (rotation/pan)
-        // to prevent the fixed top-down projection from being rotated by another panel.
-        // Zoom (cameraZ) is allowed to stay consistent with the other view's scale.
-        if (_zstackActive) {
+        // While the z-stack browser holds the view top-down (slice mode), block camera
+        // orientation sync (rotation/pan) so another panel cannot rotate the fixed
+        // projection. Zoom (cameraZ) is allowed to stay consistent with the other view's scale.
+        if (_zstackLocksCamera()) {
           if (Number.isFinite(data.value?.cameraZ)) {
             VolumeViewer.setCameraState({ kind: 'volume', cameraZ: data.value.cameraZ });
           }
@@ -3433,7 +3445,12 @@ const ViewerApp = (() => {
       const { z, vz } = _zstackGetDims();
       if (z >= 1) {
         const oldSpec = VolumeSlicer.getPlaneSpec();
-        const value = _zstackCurrentSlice / Math.max(1, z - 1);
+        // Cursor centre in slice mode, middle of the kept range in 3D.
+        const mod = _zstackModule();
+        const sliceIndex = typeof mod?.impl?.getStudioSliceIndex === 'function'
+          ? mod.impl.getStudioSliceIndex()
+          : Math.max(0, _zstackCurrentSlice);
+        const value = sliceIndex / Math.max(1, z - 1);
         const spec = { mode: 'xy', axis: 'z', value: value, yaw: 0, pitch: 0, roll: 0 };
         VolumeSlicer.setPlaneSpec(spec);
 
@@ -3705,9 +3722,12 @@ const ViewerApp = (() => {
   }
 
   // ── Z-Stack Browser ──────────────────────────────────────
+  // The panel itself is the zstack-browser plugin; these are the viewer-level facts it
+  // publishes through ctx._state (workspace save, Studio export, camera sync).
   let _zstackActive = false;
+  // Centre of the cursor in slice mode, -1 while the browser shows the kept stack in 3D.
   let _zstackCurrentSlice = 0;
-  // Prevents echo loops when SYNC_ZSTACK_SLICE triggers _zstackGoToSlice in a receiving panel
+  // Prevents echo loops when a SYNC_ZSTACK_SLICE is applied in a receiving panel
   let _suppressZstackSync = false;
   // Prevents echo loops when SYNC_SLICER_SPEC triggers setPlaneSpec in a receiving panel
   let _suppressSlicerSync = false;
@@ -3773,59 +3793,31 @@ const ViewerApp = (() => {
     if (overlay) overlay.style.display = 'none';
   }
 
+  function _zstackModule() {
+    return typeof PluginRegistry !== 'undefined' ? PluginRegistry.getModule('zstack-browser') : null;
+  }
+
+  /** True while the browser holds the view top-down (its 3D notch rotates freely). */
+  function _zstackLocksCamera() {
+    if (!_zstackActive) return false;
+    const mod = _zstackModule();
+    return typeof mod?.impl?.isSliceMode === 'function' ? mod.impl.isSliceMode() : true;
+  }
+
   function _applyZstackState(desired, slice = null) {
-    // Delegate to zstack-browser module when loaded
-    const mod = typeof PluginRegistry !== 'undefined' ? PluginRegistry.getModule('zstack-browser') : null;
+    const mod = _zstackModule();
     if (mod?.impl?.applyState) {
       mod.impl.applyState(desired, slice);
       return;
     }
-    // Fallback: direct DOM manipulation before module loads
-    _zstackActive = desired;
-    const btn = document.getElementById('btn-toggle-zstack');
-    if (btn) {
-      btn.classList.toggle('btn-solid', _zstackActive);
-      btn.classList.toggle('btn-ghost', !_zstackActive);
-    }
-    _zstackShow(_zstackActive);
-    if (desired && Number.isFinite(slice) && slice > 0) {
-      // ELE-14 (RACE-005): re-arm the echo guard INSIDE the deferred callback. The
-      // receiver clears _suppressZstackSync synchronously (well before this 80ms
-      // timer), so without this the deferred _zstackGoToSlice would re-broadcast
-      // SYNC_ZSTACK_SLICE and ping-pong with the sibling panel. Restore prev to
-      // keep nesting safe.
-      setTimeout(() => {
-        const prev = _suppressZstackSync;
-        _suppressZstackSync = true;
-        try { _zstackGoToSlice(slice); } finally { _suppressZstackSync = prev; }
-      }, 80);
-    }
-  }
-
-  // _bindZStackBrowser is now handled by the zstack-browser module.
-  // This stub is kept for backward compatibility with code that may call it directly.
-  function _bindZStackBrowser() {
-    // Delegated to js/modules/tools/zstack-browser/index.js
-  }
-
-  function _zstackShow(visible) {
-    const panel = document.getElementById('zstack-browser');
-    if (!panel) return;
-    panel.classList.toggle('zstack-hidden', !visible);
-    if (visible) {
-      // Force top-down XY view and lock rotation
-      VolumeViewer.setView('xy');
-      VolumeViewer.setRotationLocked(true);
-      _zstackPopulateInfo();
-      _zstackGoToSlice(0);
-      _zstackDrawDiagram();
-    } else {
-      // Unlock rotation and reset clipping
-      VolumeViewer.setRotationLocked(false);
-      VolumeViewer.resetClipping();
-      _zstackCurrentSlice = 0;
-    }
-    _scheduleViewerResize();
+    // Without the plugin nothing can drive the panel: keep it closed and the volume
+    // unclipped rather than half-open a dead control.
+    if (desired) console.warn('[Viewer] Z-stack browser requested but the zstack-browser plugin is not installed');
+    _zstackActive = false;
+    _zstackCurrentSlice = 0;
+    document.getElementById('zstack-browser')?.classList.add('zstack-hidden');
+    VolumeViewer.setRotationLocked(false);
+    VolumeViewer.resetClipping();
   }
 
   function _zstackGetDims() {
@@ -3837,144 +3829,6 @@ const ViewerApp = (() => {
     const totalRange = z > 1 ? (z - 1) * vz : vz;
     const interval = z > 1 ? vz : 0;
     return { z, c, vz, totalRange, interval };
-  }
-
-  function _zstackPopulateInfo() {
-    const { z, c, vz, totalRange, interval } = _zstackGetDims();
-
-    const set = (id, text) => { const el = document.getElementById(id); if (el) el.textContent = text; };
-    set('zstack-total-slices', String(z));
-    set('zstack-range', `${totalRange.toFixed(2)} µm`);
-    set('zstack-interval', interval > 0 ? `${interval.toFixed(2)} µm` : '—');
-    set('zstack-voxel-z', `${vz.toFixed(4)} µm`);
-    set('zstack-channels', String(c));
-
-    const slider = document.getElementById('zstack-slice-slider');
-    if (slider) {
-      slider.min = 0;
-      slider.max = z - 1;
-      slider.value = 0;
-    }
-  }
-
-  function _zstackGoToSlice(index) {
-    const { z, vz } = _zstackGetDims();
-    const safeIndex = Math.max(0, Math.min(z - 1, index));
-    _zstackCurrentSlice = safeIndex;
-
-    const slider = document.getElementById('zstack-slice-slider');
-    if (slider) slider.value = safeIndex;
-
-    const label = document.getElementById('zstack-slice-label');
-    const posLabel = document.getElementById('zstack-position-label');
-    const posInfo = document.getElementById('zstack-position-info');
-
-    if (label) label.textContent = `${safeIndex + 1} / ${z}`;
-    const pos = safeIndex * vz;
-    if (posLabel) posLabel.textContent = `${pos.toFixed(2)} µm`;
-    if (posInfo) posInfo.textContent = `Slice ${safeIndex + 1} of ${z} — depth ${pos.toFixed(2)} µm`;
-
-    // Show a slab of ~5 slices centered on this one so the raymarcher
-    // accumulates enough color for bright, visible rendering
-    const pad = 2; // 2 slices on each side = 5 total
-    const loIdx = Math.max(0, safeIndex - pad);
-    const hiIdx = Math.min(z, safeIndex + pad + 1);
-    const lo = loIdx / z;
-    const hi = hiIdx / z;
-    VolumeViewer.setClipRange('z', lo, hi);
-
-    _zstackDrawDiagram();
-
-    // Broadcast to sibling decompose panels in compare mode.
-    // _suppressZstackSync prevents echo when WE are the receiver of a SYNC_ZSTACK_SLICE.
-    if (_isIframe && !_suppressZstackSync) {
-      // SEC-012: restrict targetOrigin to this page's origin (no wildcard leak).
-      window.parent.postMessage({
-        type: 'SYNC_ZSTACK_SLICE',
-        sliceIndex: safeIndex,
-        sliceTotal: z,
-        lo, hi,
-        sourceIndex: _panelIndex
-      }, Utils.trustedTargetOrigin());
-    }
-  }
-
-  function _zstackNudge(delta) {
-    const { z } = _zstackGetDims();
-    let next = _zstackCurrentSlice + delta;
-    next = Math.max(0, Math.min(z - 1, next));
-    _zstackGoToSlice(next);
-  }
-
-  function _zstackDrawDiagram() {
-    const canvas = document.getElementById('zstack-diagram-canvas');
-    if (!canvas) return;
-    const ctx = canvas.getContext('2d');
-    const W = canvas.width;
-    const H = canvas.height;
-    ctx.clearRect(0, 0, W, H);
-
-    const { z } = _zstackGetDims();
-    if (z < 1) return;
-
-    // Draw a straight isometric stack of planes (constant skew, no rotation)
-    const maxVisible = Math.min(z, 40);
-    const step = z > maxVisible ? z / maxVisible : 1;
-    const planeCount = Math.min(z, maxVisible);
-
-    const planeW = 130;
-    const planeDepth = 14;
-    const skewX = 20;
-    const stackTop = 20;
-    const stackBottom = H - 30;
-    const stackRange = stackBottom - stackTop;
-
-    // Find which visual plane is closest to _zstackCurrentSlice (exactly one)
-    let closestPlane = 0;
-    let closestDist = Infinity;
-    for (let i = 0; i < planeCount; i++) {
-      const ri = Math.round(i * step);
-      const d = Math.abs(ri - _zstackCurrentSlice);
-      if (d < closestDist) { closestDist = d; closestPlane = i; }
-    }
-
-    for (let i = 0; i < planeCount; i++) {
-      const t = i / Math.max(1, planeCount - 1);
-      const y = stackTop + t * stackRange;
-      const cx = (W - planeW) / 2;
-      const isSelected = (i === closestPlane);
-
-      ctx.save();
-      ctx.globalAlpha = isSelected ? 1.0 : 0.1;
-
-      ctx.beginPath();
-      ctx.moveTo(cx + skewX, y);
-      ctx.lineTo(cx + planeW + skewX, y);
-      ctx.lineTo(cx + planeW, y + planeDepth);
-      ctx.lineTo(cx, y + planeDepth);
-      ctx.closePath();
-
-      if (isSelected) {
-        ctx.fillStyle = 'rgba(80, 180, 255, 0.55)';
-        ctx.strokeStyle = 'rgba(80, 200, 255, 0.95)';
-        ctx.lineWidth = 2;
-      } else {
-        ctx.fillStyle = 'rgba(50, 90, 160, 0.3)';
-        ctx.strokeStyle = 'rgba(100, 160, 220, 0.25)';
-        ctx.lineWidth = 1;
-      }
-      ctx.fill();
-      ctx.stroke();
-      ctx.restore();
-    }
-
-    // Label
-    ctx.save();
-    ctx.font = 'bold 11px Inter, sans-serif';
-    ctx.fillStyle = 'rgba(255,255,255,0.7)';
-    ctx.textAlign = 'center';
-    ctx.fillText(`Z ${_zstackCurrentSlice + 1} / ${z}`, W / 2, H - 6);
-    ctx.restore();
   }
 
   return { 

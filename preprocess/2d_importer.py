@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
 """
-Wholemount importer — one colour photograph → one `wholemount` dataset.
+2D importer — one colour photograph → one `2d` dataset.
 
 Input : 2D TIFFs as exported by ImageJ/Fiji from a Leica .lif (a composite of
         three 8-bit planes with Red/Green/Blue LUTs), plain RGB TIFFs, or single
-        greyscale TIFFs. No Z, no T: a wholemount is a picture, not a volume.
-Output: DATA_WEB/wholemount/<dataset>/
+        greyscale TIFFs. No Z, no T: a 2D dataset is a picture, not a volume.
+Output: DATA_WEB/2d/<dataset>/
           image.webp      native resolution, what the viewer shows once loaded
           preview.webp    long side 640 px, painted first so the page never waits
           thumbnail.webp  512² padded square, the explorer/catalog convention
-          metadata.json   type "wholemount" — stage, pixel size, acquisition
+          metadata.json   type "2d" — stage, pixel size, acquisition
           download/       (--with-downloads) the original TIFF + README.txt
 
 Everything measurable is read from the file, never guessed: the pixel size comes
@@ -18,7 +18,7 @@ fields from the Leica block ImageJ embeds. What the file cannot tell — the
 reporter line, the staining — is taken from the command line and preserved on
 re-import so lab curation is never overwritten (see `merge_curated`).
 
-    python wholemount_importer.py --input <dir|file.tif> --output DATA_WEB \
+    python 2d_importer.py --input <dir|file.tif> --output DATA_WEB \
         [--line DLL4xCD1] [--staining X-gal] [--only "*E8.0*"] [--with-downloads] [--force]
 """
 import argparse
@@ -35,9 +35,10 @@ from pathlib import Path
 import numpy as np
 from PIL import Image
 
-__version__ = "0.17.0"
+__version__ = "0.18.0"
 
-TYPE_DIR = "wholemount"
+# The directory a dataset sits in IS its type: DATA_WEB/2d/<folder> is dataset '2d/<folder>'.
+DATASET_TYPE = "2d"
 PREVIEW_LONG_SIDE = 640
 THUMB_SIZE = 512
 THUMB_BACKGROUND = (8, 10, 18)
@@ -243,7 +244,7 @@ def dataset_folder_name(parsed: dict) -> str:
              parsed.get("index")]
     if not (parsed.get("zoom") or parsed.get("dissectionDate")):
         parts.append(parsed.get("series"))
-    return slugify("-".join(p for p in parts if p)) or "wholemount"
+    return slugify("-".join(p for p in parts if p)) or "photograph"
 
 
 def slugify(text: str) -> str:
@@ -280,7 +281,7 @@ def build_metadata(folder: str, parsed: dict, image: dict, px_um, cal_status: st
     physical = ({"x": round(w * px_um, 3), "y": round(h * px_um, 3)} if px_um else None)
     stage_txt = parsed["stage"] or "Unknown"
     return {
-        "id": folder, "name": folder, "type": "wholemount",
+        "id": f"{DATASET_TYPE}/{folder}", "name": folder, "type": DATASET_TYPE,
         "stage": stage_txt, "stageNumeric": parsed["stageNumeric"] or 0.0,
         "embryo": None, "line": parsed.get("line"), "staining": staining or "",
         "date": parsed.get("dissectionDate"),
@@ -300,13 +301,13 @@ def build_metadata(folder: str, parsed: dict, image: dict, px_um, cal_status: st
         "description": _description(stage_txt, parsed, acquisition),
         "created": now, "lastModified": now, "configured": True,
         "folderName": folder,
-        "thumbnail": f"DATA_WEB/{TYPE_DIR}/{folder}/thumbnail.webp",
+        "thumbnail": f"DATA_WEB/{DATASET_TYPE}/{folder}/thumbnail.webp",
         "hidden": False,
     }
 
 
 def _description(stage: str, parsed: dict, acq: dict) -> str:
-    bits = [f"Whole-mount colour photograph, {stage} embryo"]
+    bits = [f"Colour photograph, {stage} embryo"]
     if parsed.get("line"):
         bits.append(parsed["line"])
     if acq.get("microscope"):
@@ -346,7 +347,7 @@ def _readme(source: Path, meta: dict) -> str:
         f"{meta['name']}",
         "=" * len(meta["name"]),
         "",
-        f"Type        : wholemount photograph ({acq.get('modality')})",
+        f"Type        : 2D photograph ({acq.get('modality')})",
         f"Stage       : {meta['stage']}",
         f"Line        : {meta.get('line') or '-'}",
         f"Staining    : {meta.get('staining') or '-'}",
@@ -375,7 +376,7 @@ def import_tiff(source: Path, output_root: Path, args) -> Path:
 
     parsed = parse_filename(source.stem, args.line)
     folder = dataset_folder_name(parsed)
-    out_dir = output_root / TYPE_DIR / folder
+    out_dir = output_root / DATASET_TYPE / folder
     meta_path = out_dir / "metadata.json"
     if meta_path.exists() and not args.force:
         print(f"  [skip] {folder} exists (use --force to re-import)")
@@ -425,7 +426,7 @@ def collect_inputs(input_path: Path, only: str) -> list:
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description="Wholemount photograph importer (one TIFF → one dataset)")
+    ap = argparse.ArgumentParser(description="2D photograph importer (one TIFF → one dataset)")
     ap.add_argument("--input", required=True, help="Directory of TIFFs, or one TIFF.")
     ap.add_argument("--output", required=True, help="DATA_WEB directory of the web platform.")
     ap.add_argument("--only", default=None, help="Glob on the file name (e.g. '*E8.0*').")
@@ -437,9 +438,9 @@ def main() -> int:
 
     files = collect_inputs(Path(args.input), args.only)
     if not files:
-        print("[wholemount] no TIFF matched.")
+        print("[2d] no TIFF matched.")
         return 1
-    print(f"[wholemount] importer v{__version__} - {len(files)} file(s) -> {Path(args.output) / TYPE_DIR}")
+    print(f"[2d] importer v{__version__} - {len(files)} file(s) -> {Path(args.output) / DATASET_TYPE}")
     failures = 0
     for source in files:
         try:
@@ -447,7 +448,7 @@ def main() -> int:
         except Exception as exc:  # one bad export must not stop the batch
             failures += 1
             print(f"  [fail] {source.name}: {exc}")
-    print(f"[wholemount] done - {len(files) - failures} imported, {failures} failed.")
+    print(f"[2d] done - {len(files) - failures} imported, {failures} failed.")
     return 1 if failures else 0
 
 

@@ -34,9 +34,9 @@ class GalleryCase(unittest.TestCase):
         self.tmp = Path(tempfile.mkdtemp())
         self._orig_root = dev_server.DATA_WEB
         dev_server.DATA_WEB = self.tmp
-        self.ds_dir = self.tmp / "fixed" / "demo"
+        self.ds_dir = self.tmp / "3d" / "demo"
         self.ds_dir.mkdir(parents=True)
-        self._write_meta({"name": "Demo", "type": "fixed"})
+        self._write_meta({"name": "Demo", "type": "3d"})
 
     def tearDown(self):
         dev_server.DATA_WEB = self._orig_root
@@ -52,7 +52,7 @@ class GalleryCase(unittest.TestCase):
     def _add(self, raw=PNG, name="shot.png", **kw):
         body = {"image": durl(raw), "filename": name}
         body.update(kw)
-        return dev_server._gallery_add("fixed/demo", body)
+        return dev_server._gallery_add("3d/demo", body)
 
     def _files(self):
         gdir = self.ds_dir / "gallery"
@@ -67,7 +67,7 @@ class TestUpload(GalleryCase):
         entry = self._meta()["gallery"][0]
         self.assertEqual(entry["file"], "shot.png")
         self.assertEqual(entry["caption"], "Vue sagittale")
-        self.assertEqual(payload["url"], "DATA_WEB/fixed/demo/gallery/shot.png")
+        self.assertEqual(payload["url"], "DATA_WEB/3d/demo/gallery/shot.png")
 
     def test_every_supported_format_is_accepted(self):
         for raw, ext in ((PNG, "png"), (JPEG, "jpg"), (GIF, "gif"), (WEBP, "webp")):
@@ -93,7 +93,7 @@ class TestUpload(GalleryCase):
         self.assertEqual(self._files(), [])
 
     def test_non_data_url_is_refused(self):
-        status, _ = dev_server._gallery_add("fixed/demo", {"image": "https://evil.example/x.png"})
+        status, _ = dev_server._gallery_add("3d/demo", {"image": "https://evil.example/x.png"})
         self.assertEqual(status, 400)
 
     def test_filename_is_slugged_and_deduplicated(self):
@@ -109,7 +109,7 @@ class TestUpload(GalleryCase):
         self.assertFalse((self.tmp / "evil.png").exists())
 
     def test_bad_dataset_id_is_refused(self):
-        for bad in ("../../api", "fixed", "secrets/keys", "fixed/../../api"):
+        for bad in ("../../api", "3d", "2d", "secrets/keys", "3d/../../api", "fixed/demo"):
             status, _ = dev_server._gallery_add(bad, {"image": durl(PNG)})
             self.assertEqual(status, 400, bad)
 
@@ -131,22 +131,22 @@ class TestDelete(GalleryCase):
     def test_removes_file_and_entry(self):
         self._add(name="a.png")
         self._add(name="b.png")
-        status, payload = dev_server._gallery_delete("fixed/demo", "a.png")
+        status, payload = dev_server._gallery_delete("3d/demo", "a.png")
         self.assertEqual(status, 200)
         self.assertEqual(self._files(), ["b.png"])
         self.assertEqual([e["file"] for e in payload["gallery"]], ["b.png"])
 
     def test_traversal_target_is_refused(self):
         self._add(name="a.png")
-        for bad in ("../metadata.json", "../../fixed/demo/metadata.json", "sub/a.png", "a.php"):
-            status, _ = dev_server._gallery_delete("fixed/demo", bad)
+        for bad in ("../metadata.json", "../../3d/demo/metadata.json", "sub/a.png", "a.php"):
+            status, _ = dev_server._gallery_delete("3d/demo", bad)
             self.assertEqual(status, 400, bad)
         self.assertTrue((self.ds_dir / "metadata.json").exists())
 
     def test_gallery_prefix_form_is_accepted(self):
         # The viewer stores bare names, but a hand-written "gallery/x.png" still resolves.
         self._add(name="a.png")
-        status, _ = dev_server._gallery_delete("fixed/demo", "gallery/a.png")
+        status, _ = dev_server._gallery_delete("3d/demo", "gallery/a.png")
         self.assertEqual(status, 200)
         self.assertEqual(self._files(), [])
 
@@ -158,7 +158,7 @@ class TestReconcileOnSave(GalleryCase):
         self._add(name="a.png", caption="Vue A")
         self._add(name="b.png", caption="Vue B")
         # A form opened before b.png existed saves back only a.png.
-        dev_server._save_dataset("fixed/demo", {"name": "Demo", "gallery": [{"file": "a.png", "caption": "Vue A"}]})
+        dev_server._save_dataset("3d/demo", {"name": "Demo", "gallery": [{"file": "a.png", "caption": "Vue A"}]})
         gallery = self._meta()["gallery"]
         self.assertEqual([e["file"] for e in gallery], ["a.png", "b.png"])
         # …and b.png keeps the caption it was uploaded with.
@@ -166,7 +166,7 @@ class TestReconcileOnSave(GalleryCase):
 
     def test_entries_without_a_file_on_disk_are_dropped(self):
         self._add(name="a.png")
-        dev_server._save_dataset("fixed/demo", {"gallery": [
+        dev_server._save_dataset("3d/demo", {"gallery": [
             {"file": "a.png"},
             {"file": "ghost.png"},
             {"file": "../../../etc/passwd"},
@@ -178,7 +178,7 @@ class TestReconcileOnSave(GalleryCase):
     def test_order_and_captions_from_the_draft_are_kept(self):
         self._add(name="a.png")
         self._add(name="b.png")
-        dev_server._save_dataset("fixed/demo", {"gallery": [
+        dev_server._save_dataset("3d/demo", {"gallery": [
             {"file": "b.png", "caption": "second devient premier"},
             {"file": "a.png"},
         ]})
@@ -188,28 +188,28 @@ class TestReconcileOnSave(GalleryCase):
 
     def test_duplicate_entries_collapse(self):
         self._add(name="a.png")
-        dev_server._save_dataset("fixed/demo", {"gallery": [{"file": "a.png"}, {"file": "a.png"}]})
+        dev_server._save_dataset("3d/demo", {"gallery": [{"file": "a.png"}, {"file": "a.png"}]})
         self.assertEqual(len(self._meta()["gallery"]), 1)
 
     def test_key_is_removed_when_no_image_remains(self):
         self._add(name="a.png")
-        dev_server._gallery_delete("fixed/demo", "a.png")
-        dev_server._save_dataset("fixed/demo", {"name": "Demo"})
+        dev_server._gallery_delete("3d/demo", "a.png")
+        dev_server._save_dataset("3d/demo", {"name": "Demo"})
         self.assertNotIn("gallery", self._meta())
 
     def test_a_dataset_without_a_gallery_folder_is_unaffected(self):
-        dev_server._save_dataset("fixed/demo", {"name": "Demo"})
+        dev_server._save_dataset("3d/demo", {"name": "Demo"})
         self.assertNotIn("gallery", self._meta())
 
 
 class TestCatalogExposure(GalleryCase):
     def test_gallery_reaches_the_public_catalog(self):
-        self._write_meta({"name": "Demo", "type": "fixed", "configured": True,
+        self._write_meta({"name": "Demo", "type": "3d", "configured": True,
                           "dimensions": {"x": 4, "y": 4, "z": 4, "c": 1},
                           "channels": [{"name": "c0"}]})
         self._add(name="a.png", caption="Vue A")
         dev_server._CATALOG_CACHE["sig"] = None
-        entry = next(d for d in dev_server._build_catalog() if d["id"] == "fixed/demo")
+        entry = next(d for d in dev_server._build_catalog() if d["id"] == "3d/demo")
         self.assertEqual([e["file"] for e in entry["gallery"]], ["a.png"])
         self.assertEqual(entry["gallery"][0]["caption"], "Vue A")
 

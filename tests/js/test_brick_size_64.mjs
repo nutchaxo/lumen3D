@@ -31,7 +31,7 @@ function makeLoader() {
   const BL = makeLoader();
   // valid manifest, level[0] OMITS brickSize (and no top-level brickSize) ->
   // getDimensions must use the BRICK_SIZE fallback.
-  BL.init('DATA_WEB/fixed/A/bricks', {
+  BL.init('DATA_WEB/3d/A/bricks', {
     levels: [{ level: 0, dimensions: { x: 256, y: 256, z: 256 } }],
     channels: 1, brickTransport: { encoding: 'raw-u8' },
   });
@@ -43,7 +43,7 @@ function makeLoader() {
 // fires when absent). ──
 {
   const BL = makeLoader();
-  BL.init('DATA_WEB/fixed/B/bricks', {
+  BL.init('DATA_WEB/3d/B/bricks', {
     levels: [{ level: 0, dimensions: { x: 256, y: 256, z: 256 }, brickSize: 32 }],
     channels: 1, brickTransport: { encoding: 'raw-u8' },
   });

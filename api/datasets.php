@@ -39,6 +39,14 @@ if (!LUMEN_DATASETS_AS_LIB) {
     // params — HttpOnly, SameSite=Lax, Secure under HTTPS — apply here too.
     admin_session_start();
     admin_update_finish_pending();   // no-op unless a prior update parked busy files
+    // A host installed before the type vocabulary was unified still has its bytes
+    // under DATA_WEB/fixed and DATA_WEB/wholemount, and nothing reads those words any
+    // more. The rename happens once, here, before the first scandir — silent and
+    // immediate when there is nothing to migrate. Deliberately NOT at include time:
+    // library mode is the shape catalog.php and admin.php pull this file in, and a
+    // library include must not move directories as a side effect. Every entry point
+    // that needs the conversion states it itself.
+    lumen_migrate_dataset_types();
 }
 
 function require_auth(): void {
@@ -60,7 +68,7 @@ function json_out(array $data, int $code = 200) {
 // ── Paths ────────────────────────────────────────────────────────────────────
 $ROOT      = dirname(__DIR__);                  // WebPlatform root
 $DATA_WEB  = $ROOT . DIRECTORY_SEPARATOR . 'DATA_WEB';
-$TYPES     = ['fixed', 'live', 'tracking', 'wholemount'];
+$TYPES     = LUMEN_DATASET_TYPES;   // one shared vocabulary — see api/_admin_lib.php
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -80,10 +88,6 @@ function write_json(string $path, array $data): bool {
     if (file_put_contents($path, $json) === false) return false;
     admin_fix_file_mode($path);
     return true;
-}
-
-function dataset_id(string $type, string $name): string {
-    return $type . '/' . $name;
 }
 
 // ── Dataset gallery (operator-attached images) ───────────────────────────────
@@ -256,14 +260,26 @@ function gallery_delete(string $ds_dir, $file): array {
     return [200, ['ok' => true, 'gallery' => $meta['gallery']]];
 }
 
+/**
+ * Disk directory of a dataset id ('<type>/<folder>').
+ *
+ * Resolved THROUGH the traversal gate, not by substituting separators: it is
+ * admin_safe_dataset() that proves the type is one of the four and the folder is a
+ * single safe component, and every write action on this endpoint ends up here. Any
+ * id the gate refuses must never reach the filesystem — a `save` on an unresolvable
+ * id would otherwise mint a parallel tree beside the real dataset instead of failing.
+ */
 function dataset_dir(string $id): string {
-    global $DATA_WEB;
-    return $DATA_WEB . DIRECTORY_SEPARATOR . str_replace('/', DIRECTORY_SEPARATOR, $id);
+    $safe = admin_safe_dataset($id);
+    if ($safe === null) json_out(['error' => 'Invalid id'], 400);
+    return $safe[2];
 }
 
-function thumbnail_url(string $id): ?string {
-    $path = dataset_dir($id) . DIRECTORY_SEPARATOR . 'thumbnail.webp';
-    return file_exists($path) ? 'DATA_WEB/' . $id . '/thumbnail.webp' : null;
+/** $ds_dir is passed in: the caller has already walked the directory, and a folder
+ *  name the id gate would refuse must not abort the whole listing. */
+function thumbnail_url(string $id, string $ds_dir): ?string {
+    return file_exists($ds_dir . DIRECTORY_SEPARATOR . 'thumbnail.webp')
+        ? 'DATA_WEB/' . $id . '/thumbnail.webp' : null;
 }
 
 function list_datasets(): array {
@@ -281,6 +297,11 @@ function list_datasets(): array {
             $hasBricks = file_exists($ds_dir . DIRECTORY_SEPARATOR . 'bricks' . DIRECTORY_SEPARATOR . 'manifest.json');
             $result[] = [
                 'id'          => $id,
+                // Same string as the id on purpose: some callers address a dataset by
+                // identity and some build DATA_WEB byte URLs out of it, and the staged
+                // rows below already carry both keys. A published row without `path`
+                // left the admin editor with nothing to build a byte URL from.
+                'path'        => $id,
                 'name'        => $meta['name'] ?? $name,
                 'folderName'  => $name,
                 'type'        => $type,
@@ -289,7 +310,7 @@ function list_datasets(): array {
                 'embryo'      => $meta['embryo'] ?? null,
                 'channels'    => $meta['channels'] ?? [],
                 'dimensions'  => $meta['dimensions'] ?? [],
-                'thumbnail'   => thumbnail_url($id),
+                'thumbnail'   => thumbnail_url($id, $ds_dir),
                 'configured'  => isset($meta['_adminConfigured']) && $meta['_adminConfigured'],
                 'hidden'      => !empty($meta['hidden']),
                 'hasBricks'   => $hasBricks,
@@ -373,7 +394,11 @@ function rebuild_catalog(): array {
             $prev_manifest = $ds_dir . DIRECTORY_SEPARATOR . 'preview' . DIRECTORY_SEPARATOR . 'manifest.json';
 
             $entry = [
-                'id'            => $meta['id'] ?? $name,
+                // The DIRECTORY is the authority, never metadata.json's own `id`: the
+                // preprocessing pipelines wrote two different shapes into that field
+                // (type-prefixed for volumes, a bare folder name for photographs), and a
+                // dataset moved between type trees would keep the id of where it was.
+                'id'            => $id,
                 'name'          => $meta['name'] ?? $name,
                 'type'          => $type,
                 'stage'         => $meta['stage'] ?? 'Unknown',
@@ -385,8 +410,8 @@ function rebuild_catalog(): array {
                 'channels'      => $channels_out,
                 'dimensions'    => $dims,
                 'voxel_size'    => $vs,
-                // A wholemount's extent comes from its pixel pitch, not from voxels.
-                'physicalSizeUm'=> ($type === 'wholemount' && isset($meta['physicalSizeUm'])) ? $meta['physicalSizeUm'] : $physical,
+                // A photograph's extent comes from its pixel pitch, not from voxels.
+                'physicalSizeUm'=> ($type === '2d' && isset($meta['physicalSizeUm'])) ? $meta['physicalSizeUm'] : $physical,
             ];
 
             if (file_exists($thumb_path)) {
@@ -412,11 +437,11 @@ function rebuild_catalog(): array {
                 'intensityNormalization',       // shared window + per-frame signal levels
                 'linkedTrackingId',
                 'relatedIds',
-                'image',                        // wholemount: native + preview display copies
-                'pixelSizeUm',                  // wholemount: calibrated pixel pitch (scale bar, measures)
-                'acquisition',                  // wholemount: microscope, zoom, exposure, dissection date
-                'staining',                     // wholemount: what was stained
-                'line',                         // wholemount: reporter / strain line
+                'image',                        // 2d: native + preview display copies
+                'pixelSizeUm',                  // 2d: calibrated pixel pitch (scale bar, measures)
+                'acquisition',                  // 2d: microscope, zoom, exposure, dissection date
+                'staining',                     // 2d: what was stained
+                'line',                         // 2d: reporter / strain line
                 'calibrationStatus',
                 'calibrationNote',
             ] as $k) {

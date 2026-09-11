@@ -4,12 +4,63 @@
 
 const WorkspaceState = (() => {
   const VERSION = 2;
+  const PREFIX = 'iribhm.workspace.';
+
+  // The dataset id is baked into the storage key, so renaming the dataset types
+  // would orphan every workspace an operator saved before the rename. These are
+  // the two type ids that changed; the migration below rewrites the keys in place
+  // and is a no-op on a browser that holds none of them.
+  const LEGACY_TYPE_RENAMES = { fixed: '3d', wholemount: '2d' };
+  let _migrated = false;
 
   function key(datasetId, scope = 'viewer') {
-    return `iribhm.workspace.${scope}.${datasetId || 'unknown'}`;
+    return `${PREFIX}${scope}.${datasetId || 'unknown'}`;
+  }
+
+  /** Rewrite `iribhm.workspace.<scope>.<legacyType>/<folder>` keys onto the current
+   *  type vocabulary. Runs at most once per page; never throws — localStorage is
+   *  absent in a worker and can throw outright when site data is blocked. */
+  function _migrateLegacyKeys() {
+    if (_migrated) return;
+    _migrated = true;
+    try {
+      if (typeof localStorage === 'undefined' || !localStorage) return;
+      // Collect first: removing entries while walking by index shifts the indices.
+      const moves = [];
+      for (let i = 0; i < localStorage.length; i++) {
+        const from = localStorage.key(i);
+        if (!from || from.indexOf(PREFIX) !== 0) continue;
+        const rest = from.slice(PREFIX.length);          // '<scope>.<type>/<folder>'
+        const dot = rest.indexOf('.');
+        const slash = rest.indexOf('/');
+        if (dot < 0 || slash < dot) continue;
+        const scope = rest.slice(0, dot);
+        const legacyType = rest.slice(dot + 1, slash);
+        const canonical = LEGACY_TYPE_RENAMES[legacyType];
+        if (!canonical) continue;
+        const datasetId = canonical + rest.slice(slash);
+        moves.push({ from, to: key(datasetId, scope), datasetId });
+      }
+      moves.forEach(move => {
+        const raw = localStorage.getItem(move.from);
+        localStorage.removeItem(move.from);
+        // A workspace already saved under the current id wins: it is the newer one.
+        if (raw === null || localStorage.getItem(move.to) !== null) return;
+        let value = raw;
+        try {
+          const payload = JSON.parse(raw);
+          if (payload && typeof payload === 'object') {
+            payload.datasetId = move.datasetId;
+            value = JSON.stringify(payload);
+          }
+        } catch (_) { /* unparseable: carry the stored text over verbatim */ }
+        localStorage.setItem(move.to, value);
+      });
+    } catch (_) { /* storage unavailable — nothing to migrate */ }
   }
 
   function save(datasetId, scope, state) {
+    _migrateLegacyKeys();
     const payload = {
       version: VERSION,
       scope,
@@ -22,6 +73,7 @@ const WorkspaceState = (() => {
   }
 
   function load(datasetId, scope) {
+    _migrateLegacyKeys();
     const raw = localStorage.getItem(key(datasetId, scope));
     if (!raw) return null;
     try {
@@ -39,6 +91,7 @@ const WorkspaceState = (() => {
   }
 
   function clear(datasetId, scope) {
+    _migrateLegacyKeys();
     localStorage.removeItem(key(datasetId, scope));
   }
 

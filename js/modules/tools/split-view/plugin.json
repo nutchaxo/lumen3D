@@ -1,11 +1,11 @@
 {
   "id": "split-view",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "platformCompat": ">=1.49.0",
   "creator": "IRIBHM",
   "placement": "tools",
   "dataTypes": [
-    "wholemount"
+    "2d"
   ],
   "i18nTitle": "title",
   "i18nAria": "aria",
@@ -21,5 +21,5 @@
   "icon": "columns-2",
   "order": 20,
   "buttonId": "btn-split-view",
-  "description": "Open a second wholemount photograph beside the current one, with pan and zoom linked at physical scale."
+  "description": "Open a second 2D photograph beside the current one, with pan and zoom linked at physical scale."
 }

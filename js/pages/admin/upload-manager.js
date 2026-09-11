@@ -24,7 +24,7 @@
 
 'use strict';
 
-import { API_UPLOAD, apiFetch, apiFetchStatus, getCsrf, t } from './shared.js';
+import { API_UPLOAD, Utils, apiFetch, apiFetchStatus, getCsrf, t } from './shared.js';
 
 // ── Model ──────────────────────────────────────────────────────────────────────
 
@@ -134,7 +134,11 @@ export function readFileInput(fileList) {
 
 // ── Grouping ───────────────────────────────────────────────────────────────────
 
-const TYPES = ['fixed', 'live', 'tracking', 'wholemount'];
+// The canonical type vocabulary, read from the single client-side source
+// (js/core/utils.js) rather than copied: a type is simultaneously the directory
+// under uploads/staging/ and DATA_WEB/, the journal key and the dataset id, so a
+// second list here could only ever drift out of agreement with the server.
+const knownTypes = () => (Utils && Array.isArray(Utils.DATASET_TYPES)) ? Utils.DATASET_TYPES : [];
 
 /**
  * Split a flat file listing into datasets.
@@ -142,12 +146,18 @@ const TYPES = ['fixed', 'live', 'tracking', 'wholemount'];
  * Every `metadata.json` marks a dataset root, wherever it sits in the tree. That
  * single rule covers all three shapes an operator may drop, which is what makes
  * the import forgiving of how they organise their disk:
- *   DATA_WEB/                 → many datasets across fixed/live/tracking
- *   fixed/                    → many datasets of one type
+ *   DATA_WEB/                 → many datasets across every type
+ *   3d/                       → many datasets of one type
  *   <dataset>/                → exactly one
  * The dataset TYPE comes from metadata.json itself (parsed here), so a dataset
- * dropped on its own — with no `fixed/` ancestor to name it — is still filed
+ * dropped on its own — with no type folder above it to name it — is still filed
  * correctly. The parent directory name is only a fallback.
+ *
+ * A dataset whose type is neither declared nor implied by its parent folder is
+ * REFUSED, never defaulted: the type decides the staging directory, the journal
+ * key, the published directory and the page the dataset opens in, so a guess
+ * would file it somewhere the operator never asked for and only surface hours
+ * into the transfer.
  */
 export async function groupIntoDatasets(entries) {
   const byPath = new Map(entries.map((e) => [e.path, e]));
@@ -162,6 +172,7 @@ export async function groupIntoDatasets(entries) {
   roots.sort((a, b) => b.split('/').length - a.split('/').length);
 
   const datasets = [];
+  const untyped = [];
   const claimed = new Set();
   let flatDrop = false;
   for (const root of roots) {
@@ -178,13 +189,19 @@ export async function groupIntoDatasets(entries) {
     // dataset under, so say so plainly instead of failing later on an empty id.
     if (!folder) { flatDrop = true; continue; }
 
-    let type = TYPES.includes(parentDir) ? parentDir : null;
+    const known = knownTypes();
+    let type = known.includes(parentDir) ? parentDir : null;
     const metaEntry = byPath.get(`${prefix}metadata.json`);
     const meta = metaEntry ? await readJsonFile(metaEntry.file) : null;
-    if (meta && TYPES.includes(meta.type)) type = meta.type;
-    if (!type) type = 'fixed';   // a single dataset with no type recorded anywhere
+    if (meta && known.includes(meta.type)) type = meta.type;
 
     files.forEach((e) => claimed.add(e.path));
+    if (!type) {
+      // Claimed above so these files are reported once, as a dataset with an
+      // unusable type — not a second time as loose files outside a dataset.
+      untyped.push({ folder, declared: (meta && typeof meta.type === 'string') ? meta.type : '' });
+      continue;
+    }
     datasets.push({
       type, folder,
       name: (meta && meta.name) || folder,
@@ -194,7 +211,7 @@ export async function groupIntoDatasets(entries) {
   }
 
   const orphans = entries.filter((e) => !claimed.has(e.path)).map((e) => e.path);
-  return { datasets, orphans, flatDrop };
+  return { datasets, orphans, flatDrop, untyped };
 }
 
 async function readJsonFile(file) {
@@ -248,12 +265,27 @@ export async function startImport(entries, options = {}) {
     _state.staleAfterS = limits.staleAfterS || _state.staleAfterS;
   }
 
-  const { datasets, orphans, flatDrop } = await groupIntoDatasets(entries);
+  const { datasets, orphans, flatDrop, untyped } = await groupIntoDatasets(entries);
+  // Set here rather than after the plan so a drop that yields nothing still
+  // tells the operator exactly which folders were refused and why.
+  _state.rejected = [
+    ...orphans.map((p) => ({ path: p, reason: 'outside_dataset' })),
+    ...untyped.map((u) => ({ path: u.folder, reason: 'unknown_type' })),
+  ];
   if (!datasets.length) {
     _state.phase = PHASE_IDLE;
-    _state.error = flatDrop
-      ? t('upl.errFlatDrop', 'Déposez le DOSSIER du dataset, pas son contenu : le nom du dossier est l\'identifiant du dataset.')
-      : t('upl.errNoDataset', 'Aucun dataset trouvé : le dossier doit contenir un metadata.json.');
+    if (untyped.length) {
+      const u = untyped[0];
+      _state.error = u.declared
+        ? t('upl.errBadType', `Type de dataset inconnu : « ${u.folder} » déclare "${u.declared}" (attendu : ${knownTypes().join(', ')}).`,
+            { folder: u.folder, declared: u.declared, types: knownTypes().join(', ') })
+        : t('upl.errNoType', `Type de dataset introuvable pour « ${u.folder} » : son metadata.json doit déclarer "type" (${knownTypes().join(', ')}), ou le dossier doit être déposé dans son dossier de type.`,
+            { folder: u.folder, types: knownTypes().join(', ') });
+    } else {
+      _state.error = flatDrop
+        ? t('upl.errFlatDrop', 'Déposez le DOSSIER du dataset, pas son contenu : le nom du dossier est l\'identifiant du dataset.')
+        : t('upl.errNoDataset', 'Aucun dataset trouvé : le dossier doit contenir un metadata.json.');
+    }
     emit();
     return { ok: false };
   }
@@ -281,7 +313,6 @@ export async function startImport(entries, options = {}) {
 
   // Merge the server's verdict with the local File handles.
   const jobs = [];
-  _state.rejected = orphans.map((p) => ({ path: p, reason: 'outside_dataset' }));
 
   plan.data.datasets.forEach((pd, dsIndex) => {
     const local = datasets.find((d) => d.type === pd.type && d.folder === pd.folder);

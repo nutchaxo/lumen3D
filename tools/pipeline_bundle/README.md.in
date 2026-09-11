@@ -46,7 +46,7 @@ plateforme :
 
 ```
 output\
-  fixed\<nom-du-fichier>\        <- volume à un seul point temporel
+  3d\<nom-du-fichier>\           <- volume à un seul point temporel
   live\<nom-du-fichier>\         <- série temporelle (2 points ou plus)
       metadata.json
       thumbnail.webp
@@ -61,7 +61,7 @@ Le nom du dossier produit est celui du fichier `.ims`, et il est *interprété* 
 | `-E85-` ou `-E8-` | stade embryonnaire (`E8.5`, `E8`) |
 | `-Em1-` | identifiant d'embryon — **les deux tirets sont nécessaires** |
 
-Le choix `fixed` / `live` n'est pas un réglage : il découle du nombre de points
+Le choix `3d` / `live` n'est pas un réglage : il découle du nombre de points
 temporels trouvés dans le fichier.
 
 Pour publier le dataset, copiez le dossier produit dans le `DATA_WEB\` du
@@ -71,15 +71,15 @@ serveur. Il apparaît immédiatement dans le catalogue — rien à régénérer.
 alloue simultanément plusieurs copies du volume ; comptez ~32 Go de RAM pour un
 volume de 3789 × 3789 × 178. Un poste à 16 Go échouera sur de gros volumes réels.
 
-### 1b. Photographies whole-mount (TIFF ImageJ / Leica)
+### 1b. Photographies 2D (TIFF ImageJ / Leica)
 
 Une photographie couleur d'embryon entier (stéréomicroscope, export TIFF depuis
-un `.lif`) devient un dataset `wholemount` — un par fichier. Déposez les TIFF
+un `.lif`) devient un dataset `2d` — un par fichier. Déposez les TIFF
 dans un dossier et choisissez `[3]` (le lanceur demande la coloration, la lignée
 et s'il faut joindre l'original). En ligne de commande :
 
 ```
-pipeline\python.exe pipeline\wholemount_importer.py --input <dossier TIFF> --output output --staining X-gal --with-downloads
+pipeline\python.exe pipeline\2d_importer.py --input <dossier TIFF> --output output --staining X-gal --with-downloads
 ```
 
 Le stade, le zoom et la date de dissection sont lus dans le nom du fichier
@@ -169,7 +169,7 @@ VERSION.json             versions, édition, date de génération
 requirements.txt         dépendances Python des deux pipelines
 LISEZ-MOI.md             ce document
 
-pipeline\                pipeline volumes : orchestrateur + 5 étapes + importeur whole-mount
+pipeline\                pipeline volumes : orchestrateur + 5 étapes + importeur 2D
 tracking\SCRIPTS\        pipeline tracking : analyse, export, surfaces
 tracking\DATA\           entrées tracking (un dossier par échantillon)
 tracking\OUTPUT\         sorties tracking

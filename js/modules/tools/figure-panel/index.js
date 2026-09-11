@@ -39,20 +39,20 @@ PluginRegistry.implement('figure-panel', {
   _buildModal() {
     const esc = s => this._ctx.ui.escapeHtml(s);
     const modal = document.createElement('div');
-    modal.className = 'wm-modal';
+    modal.className = 'p2d-modal';
     modal.hidden = true;
     modal.innerHTML = `
-      <div class="wm-modal-card" role="dialog" aria-label="${esc(this._t('title'))}">
-        <div class="wm-modal-head">
+      <div class="p2d-modal-card" role="dialog" aria-label="${esc(this._t('title'))}">
+        <div class="p2d-modal-head">
           <h2>${esc(this._t('title'))}</h2>
           <button type="button" class="btn btn-ghost btn-sm" data-fp="all">${esc(this._t('selectAll'))}</button>
           <button type="button" class="btn btn-ghost btn-sm" data-fp="none">${esc(this._t('selectNone'))}</button>
           <button type="button" class="btn btn-icon btn-ghost" data-fp="close" aria-label="${esc(this._t('close'))}"><i data-lucide="x"></i></button>
         </div>
-        <div class="wm-modal-body">
-          <div class="wm-modal-list" id="fp-list"></div>
-          <div class="wm-modal-main">
-            <div class="wm-modal-options">
+        <div class="p2d-modal-body">
+          <div class="p2d-modal-list" id="fp-list"></div>
+          <div class="p2d-modal-main">
+            <div class="p2d-modal-options">
               <label>${esc(this._t('columns'))}
                 <select class="form-input" data-fp-opt="columns">
                   <option value="auto">${esc(this._t('auto'))}</option><option>1</option><option>2</option><option>3</option><option>4</option><option>5</option>
@@ -80,11 +80,11 @@ PluginRegistry.implement('figure-panel', {
                   <option value="none">${esc(this._t('labelNone'))}</option>
                 </select></label>
             </div>
-            <div class="wm-modal-preview"><canvas id="fp-preview"></canvas></div>
+            <div class="p2d-modal-preview"><canvas id="fp-preview"></canvas></div>
           </div>
         </div>
-        <div class="wm-modal-foot">
-          <span class="wm-modal-status" id="fp-status"></span>
+        <div class="p2d-modal-foot">
+          <span class="p2d-modal-status" id="fp-status"></span>
           <button type="button" class="btn btn-outline btn-sm" data-fp="png"><i data-lucide="download"></i> ${esc(this._t('exportPng'))}</button>
           <button type="button" class="btn btn-primary btn-sm" data-fp="studio"><i data-lucide="pen-tool"></i> ${esc(this._t('openStudio'))}</button>
         </div>
@@ -101,9 +101,9 @@ PluginRegistry.implement('figure-panel', {
     list.replaceChildren(...this._ctx.dataset.getCollection().map(ds => {
       const input = Utils.el('input', { type: 'checkbox', 'data-fp-pick': ds.id });
       input.checked = this._selected.has(ds.id);
-      return Utils.el('label', { class: 'wm-pick' }, input,
+      return Utils.el('label', { class: 'p2d-pick' }, input,
         Utils.el('img', { src: this._ctx.dataset.fileUrl(ds, ds.image?.preview || 'preview.webp'), alt: '', loading: 'lazy' }),
-        Utils.el('span', { class: 'wm-pick-name' }, `${Utils.formatStage(ds.stage)} · ${ds.name}`));
+        Utils.el('span', { class: 'p2d-pick-name' }, `${Utils.formatStage(ds.stage)} · ${ds.name}`));
     }));
   },
 
@@ -277,7 +277,7 @@ PluginRegistry.implement('figure-panel', {
   // ── Output ────────────────────────────────────────────────────────────────
   _exportPng() {
     if (!this._result || typeof ExportManager === 'undefined') return;
-    this._result.canvas.toBlob(blob => { if (blob) ExportManager.downloadBlob(blob, `wholemount_figure_${this._result.count}.png`); }, 'image/png');
+    this._result.canvas.toBlob(blob => { if (blob) ExportManager.downloadBlob(blob, `figure_panel_${this._result.count}.png`); }, 'image/png');
   },
 
   _openStudio() {
@@ -285,9 +285,9 @@ PluginRegistry.implement('figure-panel', {
     const px = this._result.pixelSizeUm;
     this._ctx.ui.openStudioWith({
       canvas: this._result.canvas, width: this._result.canvas.width, height: this._result.canvas.height,
-      source: 'wholemount-figure', quality: 'native', timepoint: 0,
+      source: '2d-figure', quality: 'native', timepoint: 0,
       pixelSizeUm: { x: px, y: px }, layoutMaps: this._result.layoutMaps,
-      dataset: { name: `wholemount_figure_${this._result.count}` }, channelState: []
+      dataset: { name: `figure_panel_${this._result.count}` }, channelState: []
     });
     this._modal.hidden = true;
   }

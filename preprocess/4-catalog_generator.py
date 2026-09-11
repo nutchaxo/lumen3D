@@ -39,10 +39,10 @@ def generate_catalog_metadata(temp_dir: Path, output_dir: Path):
     stage, stage_num = _parse_stage(dataset_name)
     embryo = _parse_embryo(dataset_name)
     
-    # Path relative to DATA_WEB root
-    # e.g., "fixed/Egfl7..."
-    type_dir = output_dir.parent.name
-    rel_path_str = f"DATA_WEB/{type_dir}/{dataset_name}"
+    # The directory a dataset sits in IS its type ('3d', 'live', 'tracking'), so the
+    # type, the id and the byte path all derive from the same string.
+    dataset_type = output_dir.parent.name
+    rel_path_str = f"DATA_WEB/{dataset_type}/{dataset_name}"
     
     # 1. Compute Histograms on the highest LOD level to save time and RAM
     highest_lod = lod_levels[-1]["lod"]
@@ -153,9 +153,9 @@ def generate_catalog_metadata(temp_dir: Path, output_dir: Path):
 
     # Build metadata.json
     metadata = {
-        "id": f"{type_dir}/{dataset_name}",
+        "id": f"{dataset_type}/{dataset_name}",
         "name": dataset_name,
-        "type": type_dir,
+        "type": dataset_type,
         "stage": stage,
         "stageNumeric": stage_num,
         "embryo": embryo,

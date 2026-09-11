@@ -607,13 +607,20 @@ html, body {
 .list-search-clear:hover { color: var(--adm-text); }
 
 /* Filter tabs */
+/* One chip per dataset type + all/hidden/staging: seven chips do not fit on one
+   row of a 280 px panel, and an operator-chosen type name can be long. */
 .list-filter-tabs {
   display: flex;
+  flex-wrap: wrap;
   gap: 2px;
 }
 
 .filter-tab {
-  flex: 1;
+  flex: 1 1 auto;
+  max-width: 100%;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
   background: transparent;
   border: 1px solid transparent;
   border-radius: var(--adm-radius-xs);
@@ -1881,3 +1888,52 @@ html, body {
 
 /* "Récents" divider inside the ctlColor swatch grid (full-width row) */
 .pbc-recent-label { grid-column: 1 / -1; font-size: 10px; color: var(--adm-text-muted); margin: 2px 0 -1px; }
+
+/* ══════════════════════════════════════════════════════════════════
+   DATASET TYPES TAB — operator-editable names for 3d / 2d / live / tracking
+   ══════════════════════════════════════════════════════════════════ */
+
+.dtype-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 18px;
+  align-items: start;
+}
+
+.dtype-card-head { display: flex; align-items: center; gap: 9px; }
+.dtype-card-head i { width: 16px; height: 16px; color: var(--adm-accent); }
+
+/* The canonical id is read-only on purpose: it is the directory under DATA_WEB/,
+   the first segment of every dataset id and what plugin.json declares. */
+.dtype-id {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 7px;
+  border-radius: var(--adm-radius-xs);
+  background: var(--adm-accent-subtle);
+  color: var(--adm-accent);
+  border: 1px solid rgba(108, 99, 255, 0.2);
+}
+
+.dtype-count {
+  margin-left: auto;
+  font-size: 11.5px;
+  color: var(--adm-text-muted);
+  font-family: 'JetBrains Mono', monospace;
+}
+
+.dtype-body { padding: 16px; display: flex; flex-direction: column; gap: 12px; }
+
+.dtype-more { border-top: 1px solid var(--adm-border); padding-top: 10px; }
+.dtype-more > summary {
+  cursor: pointer;
+  list-style: none;
+  font-size: 12px;
+  color: var(--adm-text-sec);
+  user-select: none;
+}
+.dtype-more > summary::-webkit-details-marker { display: none; }
+.dtype-more > summary::before { content: '▸ '; opacity: 0.6; }
+.dtype-more[open] > summary::before { content: '▾ '; }
+.dtype-more-body { padding-top: 10px; }

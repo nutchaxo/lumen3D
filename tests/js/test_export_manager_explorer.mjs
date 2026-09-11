@@ -48,10 +48,10 @@ assert.equal(EM._catForExt('unknownext'), 'default'); // fallback
 // ── file row ────────────────────────────────────────────────────────────────
 const fileRow = EM._explorerRow({
   name: 'raw.ims', kind: 'file', ext: 'IMS', sizeBytes: 1024,
-  path: 'raw.ims', href: 'DATA_WEB/fixed/Foo/download/raw.ims'
+  path: 'raw.ims', href: 'DATA_WEB/3d/Foo/download/raw.ims'
 });
 assert.ok(fileRow.includes('download>'), 'file row is a download anchor');
-assert.ok(fileRow.includes('href="DATA_WEB/fixed/Foo/download/raw.ims"'), 'file row points at href');
+assert.ok(fileRow.includes('href="DATA_WEB/3d/Foo/download/raw.ims"'), 'file row points at href');
 assert.ok(fileRow.includes('IMS'), 'file row shows the extension badge');
 assert.ok(fileRow.includes('1024 B'), 'file row shows the formatted size');
 assert.ok(!fileRow.includes('data-explorer-nav'), 'file row does not navigate');

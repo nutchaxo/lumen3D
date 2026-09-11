@@ -7,13 +7,13 @@
 [![License](https://img.shields.io/badge/License-PolyForm%20Noncommercial-green?style=for-the-badge)](LICENCE)
 [![Languages](https://img.shields.io/badge/i18n-en%20%7C%20fr%20%7C%20es%20%7C%20nl-brightgreen?style=for-the-badge)](#-internationalization-i18n)
 
-**lumen3D** is a high-performance, **white-label** web platform for interactive exploration of multi-gigabyte 3D and 4D biological microscopy datasets. It streams and renders massive confocal volumes (fixed embryos, immunofluorescence, live imaging, cell tracking) directly in the browser at **60 FPS** — no desktop software, no high-end local workstation required.
+**lumen3D** is a high-performance, **white-label** web platform for interactive exploration of multi-gigabyte 3D and 4D biological microscopy datasets. It streams and renders massive confocal volumes directly in the browser at **60 FPS** — no desktop software, no high-end local workstation required. A dataset is one of four kinds: `3d` (a still volume), `2d` (a calibrated stereomicroscope photograph), `live` (a 4D timelapse) or `tracking` (cell trajectories over a timelapse).
 
 It was originally built for the **IRIBHM** (Institut de Recherche Interdisciplinaire en Biologie Humaine et Moléculaire) at the **Université Libre de Bruxelles (ULB)** — the reference deployment, imaging mouse embryos — and has since been **decoupled from that domain** into a reusable product: brand, texts, theme, pages, legal notices, navigation, and the installed plugin set are all configured **no-code** from an admin panel, with neutral defaults out of the box.
 
 The platform bridges raw scientific data and seamless web exploration through a **Python preprocessing pipeline** (Imaris `.ims` → brick-packed LOD pyramids, 3D **and 4D**) and a **vanilla-JS / Three.js client** with a custom WebGL2 ray-marcher and sparse 3D atlas streaming. It is **offline-capable** (all JS libraries self-hosted, no CDN) and ships with a **signed self-updater** and a **signed plugin marketplace**.
 
-> **Current versions** — Web platform `1.42.0` · Preprocessing tool `0.15.0`.
+> **Current versions** — Web platform `1.52.0` · Preprocessing tool `0.17.2`.
 > The web version is defined solely by the newest `changelog/changelog_X.Y.Z.md` (there is **no** source `__version__` constant for the platform); the preprocessing tool tracks its own `__version__` in `preprocess/run_preprocess.py`.
 
 ---
@@ -44,13 +44,14 @@ The platform bridges raw scientific data and seamless web exploration through a 
 *   **Calibrated Measurements**: Pick two 3D surface points; the platform converts to physical µm using the dataset's voxel size metadata (`measure-distance` plugin, `js/core/measurement-store.js`).
 *   **Annotation Layer**: Vector primitives stored per-dataset in browser LocalStorage (`js/core/annotation-manager.js`).
 *   **Production Slice Studio**: In-viewer figure export (rectangle / line / arrow / distance / scale-bar / text layers) for publication-ready slice captures (`js/components/studio-editor.js`), with two-finger navigation on the figure surface (one finger keeps drawing).
-*   **Multi-Panel Compare**: Side-by-side dataset comparison with camera + slicer-plane sync across iframes via `postMessage` (`compare.html`).
+*   **Calibrated 2D photographs** (`2d` datasets, `2d.html`): one stereomicroscope picture per dataset — pan/zoom canvas, an exact 1-2-5 scale bar derived from `pixelSizeUm`, µm distance picks sharing the 3D viewer's measurement contract, stain isolation, and a contact-sheet browser over the whole collection. Its plugins (orientation, calibrated grid, display adjustments, split view, figure panel) opt in through `plugin.json#dataTypes`.
+*   **Multi-Panel Compare**: Side-by-side dataset comparison with camera + slicer-plane sync across iframes via `postMessage` (`compare.html`) — volumes and photographs in the same board, photographs linked by physical view (µm per screen pixel).
 *   **Workspace Persistence**: Save and restore the full viewer state (camera, channels, tools) per dataset (`js/core/workspace-state.js`, `js/core/export-manager.js`).
 
 ### 5. Python Preprocessing Pipeline
 *   **Imaris (`.ims`) input**: Reads HDF5-based Imaris files via `h5py` and extracts metadata, dimensions, per-channel calibration, the acquisition clock (real per-frame timestamps, median interval) and the stage-frame physical extent — the frame in which Imaris-derived objects (spots, surfaces, tracks) live, and without which no registration is verifiable.
 *   **Scientific Image Processing**: **Corner-sampling percentile background subtraction** (`bg_floor` = 99th percentile of the 8 volume corners, `sig_max` = 99.9th percentile of a subsampled volume), `binary_opening` + `binary_dilation` mask cleanup to kill sensor hot-pixels while preserving the fluorescent fade-out, masked median filtering, window leveling, and per-LOD downscaling (`scipy.ndimage`, `PIL`). *(Otsu thresholding was tried and deliberately removed in v0.12.0.)*
-*   **Series-global intensity normalization (4D)**: leveling each frame on its own percentiles makes a series flicker — as the specimen bleaches, a per-frame window re-stretches a dying signal, so apparent brightness stays constant while the real one collapses. Percentiles are pooled over 8 sampled timepoints into a **single window**, so frames darken exactly as much as the specimen does. Photobleaching is *measured and published* (`intensityNormalization.signalLevels`), never baked into the voxels. The single-timepoint path is unchanged, so already-published `fixed` datasets reproduce byte-for-byte.
+*   **Series-global intensity normalization (4D)**: leveling each frame on its own percentiles makes a series flicker — as the specimen bleaches, a per-frame window re-stretches a dying signal, so apparent brightness stays constant while the real one collapses. Percentiles are pooled over 8 sampled timepoints into a **single window**, so frames darken exactly as much as the specimen does. Photobleaching is *measured and published* (`intensityNormalization.signalLevels`), never baked into the voxels. The single-timepoint path is unchanged, so already-published `3d` datasets reproduce byte-for-byte.
 *   **Web-Optimized Brick Format**: 64³ chunks mosaicked 8×8 into 512² WebP-lossless tiles and packed into binary `.bin` pack files with a `manifest.json` index (packs fetched whole, decoded off-thread). For 4D, one pack tree per timepoint plus a `timepoints` table in the manifest.
 *   **Tracking import (step 5)**: `5-tracking_importer.py` attaches an Imaris tracking analysis (`.imaris_track`) to a volume — writes `tracks.json` (+ `.gz`), `model.glb`, and a `registration` block in `metadata.json`. The stabilization transform is read as declared or **recovered by orthogonal Procrustes** on raw/stabilized pairs; the fit residual is measured and published (`qcSummary.maxResidualUm` — 1.2 × 10⁻¹² µm on the reference set). A non-rigid fit sets `appliedToVolume: false` and is refused rather than approximated.
 *   **False-Color Thumbnails & optional download bundles**: MIP composite WebP thumbnails per dataset; with `--with-downloads`, a per-dataset `download/` folder (`_web.zip`, original `.ims`, calibrated ImageJ/Fiji composite TIFF, per-channel MIP PNGs). See [`preprocess/README.md`](preprocess/README.md).
@@ -63,7 +64,7 @@ The platform bridges raw scientific data and seamless web exploration through a 
 
 ### 7. White-Label & No-Code Administration
 *   **Instance configuration** (`config/`): brand, specimen noun, SEO, footer, and navigation live in a public `config/` store (`instance.json`, `theme.json` → compiled `theme.css`, `pages/<slug>.json`, `legal.json`; neutral defaults under `config/defaults/neutral/`), read by `js/core/instance-config.js`. The document `<head>` / brand is injected server-side via `{{SITE:path|fallback}}` placeholders; i18n interpolates `{brand}` / `{specimen}` tokens.
-*   **Twelve admin tabs** (`admpan.html`): **Identity** (branding), **Appearance** (theme editor → live palette/font/radius), **Pages**, **Legal** (→ `legal.html`), **Datasets**, **Stats**, **Plugins**, **Catalog** (marketplace), **Security**, **Updates**, **Pipeline**, **Documentation**.
+*   **Thirteen admin tabs** (`admpan.html`): **Identity** (branding), **Dataset types** (the public name of each of the four types), **Appearance** (theme editor → live palette/font/radius), **Pages**, **Legal** (→ `legal.html`), **Datasets**, **Stats**, **Plugins**, **Catalog** (marketplace), **Security**, **Updates**, **Pipeline**, **Documentation**.
 *   **Full-page visual editor**: the **Pages** tab opens the *real* page in an iframe as a WYSIWYG surface (real nav, footer and theme) — model *section → column → widget*, **27 widget types**, Content / Style / Advanced panels per widget, draft vs. publish, per-language text, variables, keyboard shortcuts, undo/redo and autosave (`js/core/page-renderer.js`, `js/core/page-edit-frame.js`, `js/pages/admin/tab-pages.js`). The default **About** page is itself an editor document (`js/core/page-templates.js`), so what visitors see and what the operator opens in the editor cannot drift apart.
 *   **Pipeline tab**: ships both processing pipelines as a **self-contained downloadable pack** — the volume pipeline, the Imaris tracking pipeline, a coherent demo dataset for each, and a `RUN.bat` that verifies the pack's own integrity and checks Python + dependencies before starting. Two editions, chosen on one question (does that machine have internet access?): *light* (~3 MB, served by the host, creates an isolated `.runtime\venv` rather than installing into the user's Python) and *complete* (~70 MB with a pre-installed runtime, attached to the GitHub release and fetched from there). **The pack carries the preprocessing version, not the platform's** (`lumen3d-pipeline-leger-0.15.0.zip`) — it *is* that component; the platform it shipped with stays recorded in its `VERSION.json` for traceability, and the server picks the pack matching the installed platform rather than trusting the filename (v1.32.0, v1.42.0).
 *   **Documentation tab**: the document library published in the repository's `DOCS/` folder, readable in-panel and downloadable. Documents are **not** bundled in a release — fixing a guide means dropping a file in `DOCS/`, and every installation sees it on the next load. The filename *is* the metadata: `YYMMDD - IDENTIFIER - LANG.pdf`, where the date versions and sorts, the identifier makes two files the same document, and the language decides what opens (UI language → English → `MULTI` → first available). A file that breaks the rule is reported as ignored rather than silently absorbed (v1.39.0).
@@ -151,11 +152,13 @@ graph TD
 │   │                          #   i18n, instance-config, page-renderer, compat, plugin-trust, plugin-sandbox, ...)
 │   ├── modules/               # Plugin tree: tools/ | channels/ | shaders/ (each: plugin.json + index.js)
 │   ├── pages/                 # Per-page controllers (viewer.js is the main one)
-│   │   └── admin/             # Admin SPA — 12 ESM tabs (datasets, stats, plugins, security, updates,
-│   │                          #   branding, pages, appearance, legal, marketplace, pipeline, docs)
+│   │   └── admin/             # Admin SPA — 13 ESM tabs (datasets, dataset-types, stats, plugins,
+│   │                          #   security, updates, branding, pages, appearance, legal,
+│   │                          #   marketplace, pipeline, docs)
 │   │                          #   + shell.js wizard + plugin-update.js (shared update mechanics)
 │   ├── vendor/                # SELF-HOSTED libs w/ SRI (Three.js, Lucide, OpenSeadragon, Plotly) — no CDN
-│   ├── viewers/               # Three.js renderers (volume-viewer, volume-slicer, volume-grid, tracking-viewer)
+│   ├── viewers/               # Renderers (volume-viewer, volume-slicer, volume-grid, tracking-viewer
+│   │                          #   — Three.js; 2d-viewer — plain canvas)
 │   └── workers/               # Web Workers (gaussian-blur-worker, tracks-load-worker)
 ├── lang/                      # Translation bundles (en/fr/es/nl.json) — drop-in discoverable
 ├── preprocess/                # Python pipeline (see preprocess/README.md)
@@ -166,6 +169,7 @@ graph TD
 │   ├── 4-catalog_generator.py # metadata.json (+ per-timepoint histograms on 4D)
 │   ├── 5-tracking_importer.py # tracking → tracks.json + model.glb + registration block
 │   ├── tracking_sources.py    # Finds the tracking: .imaris_track, the .ims Scene8 objects, or .xls/.xlsx
+│   ├── 2d_importer.py         # Standalone: one ImageJ/Leica TIFF → one DATA_WEB/2d/<name>/ dataset
 │   ├── run_preprocess.py      # Unified runner (orchestrates 1 → 5, routes 4D to live/, download bundles)
 │   ├── requirements.txt       # Python dependencies (h5py, numpy, scipy, Pillow, tqdm)
 │   └── changelog/             # Preprocessing tool versions (0.11.x → 0.16.x)
@@ -176,7 +180,8 @@ graph TD
 │   ├── admin-guide/           # Illustrated admin guide — FR/EN/NL/ES + 4 screenshot sets + PDFs
 │   └── update-system/ plugin-sandbox/ whitelabel/ plugins/    # Design specs
 ├── DATA_WEB/                  # Generated dataset bundles (gitignored) — NO stored catalog.json
-│   ├── fixed/<dataset>/{metadata.json, thumbnail.webp, bricks/, download/(optional)}
+│   ├── 3d/<dataset>/{metadata.json, thumbnail.webp, bricks/, download/(optional)}
+│   ├── 2d/<dataset>/          # ONE calibrated photograph — image.webp + preview.webp, no bricks/
 │   ├── live/<dataset>/        # 4D timelapse — bricks/tNNN/ per timepoint (+ tracks.json when tracked)
 │   └── tracking/<dataset>/    # Cell-tracking trajectories
 ├── page.html / legal.html     # White-label custom pages + legal notices renderer
@@ -231,7 +236,7 @@ If the *CA certificates* row still reads `?`, the installer could not write its 
 
 #### Files created by the platform must stay editable over FTP/SFTP
 
-On many shared hosts, PHP runs as a **different system user** (`www-data`, `apache`, a php-fpm pool) than the FTP/SFTP account. Everything the installer and the admin panel create then belongs to *that* user — and since POSIX takes the right to delete a file from its **parent directory**, the account can neither upload into those directories nor remove anything inside them. A freshly installed `DATA_WEB/fixed/` looks untouchable.
+On many shared hosts, PHP runs as a **different system user** (`www-data`, `apache`, a php-fpm pool) than the FTP/SFTP account. Everything the installer and the admin panel create then belongs to *that* user — and since POSIX takes the right to delete a file from its **parent directory**, the account can neither upload into those directories nor remove anything inside them. A freshly installed `DATA_WEB/3d/` looks untouchable.
 
 Since web v1.24.0 the platform **inherits the mode of the web root** for everything it creates: directories get the root's mode (with `u+rwx` guaranteed), files get the same minus the execute bits. The root is what the hosting account was set up with, so it already encodes how the site is shared — `0770` (PHP and the SFTP login being different users of the same group, the common shared-hosting layout) yields `0770` / `0660`, `0755` stays `0755` / `0644`. World-writable `0777` / `0666` is used only in the one case inheritance cannot cover: a root writable by nobody but its owner while PHP is not that owner. Secrets (`api/*.json`) always keep `0600`; deleting them only needs the parent directory. Both modes can be forced with the `LUMEN_DIR_MODE` / `LUMEN_FILE_MODE` environment variables.
 
@@ -265,7 +270,7 @@ python preprocess/run_preprocess.py --input /path/to/raw_ims_directory --output 
 python preprocess/run_preprocess.py --input /path/to/raw --output ./DATA_WEB --only "*E8*" --with-downloads
 ```
 
-The unified runner executes: metadata extraction → background subtraction + downscaling → MIP thumbnail → 64³ brick packing → catalog entry (→ optional download bundle). An acquisition with more than one timepoint is routed to `DATA_WEB/live/` instead of `fixed/`, which is what turns on the viewer's timeline. Attaching an Imaris tracking analysis is a fifth step:
+The unified runner executes: metadata extraction → background subtraction + downscaling → MIP thumbnail → 64³ brick packing → catalog entry (→ optional download bundle). An acquisition with more than one timepoint is routed to `DATA_WEB/live/` instead of `3d/`, which is what turns on the viewer's timeline. Attaching an Imaris tracking analysis is a fifth step:
 
 ```bash
 python preprocess/5-tracking_importer.py /path/to/analysis.imaris_track ./DATA_WEB/live/<name>
@@ -282,6 +287,7 @@ Everything user-facing is configured **without touching code**, from the admin p
 | What | Admin tab | Stored in | Rendered by |
 |---|---|---|---|
 | Brand, specimen noun, SEO, footer, nav | **Identity** | `config/instance.json` | `js/core/instance-config.js` + server `{{SITE:…}}` injection |
+| Public name of each dataset type (`3d` / `2d` / `live` / `tracking`) | **Dataset types** | `config/instance.json` → `datasetTypes` | `Utils.datasetTypeLabel()` / `datasetTypeTitle()`, falling back to `types.<id>` in `lang/<code>.json` |
 | Palette, font, corner radius | **Appearance** | `config/theme.json` → `config/theme.css` | linked after `themes.css` on every public page |
 | Custom pages (full-page visual editor, 27 widgets) | **Pages** | `config/pages/<slug>.json` (drafts in `api/page-drafts/`) | `js/core/page-renderer.js` + `page.html?slug=` |
 | Legal notices | **Legal** | `config/legal.json` | `legal.html` |

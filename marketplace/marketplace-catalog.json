@@ -369,16 +369,16 @@
       "name": "Z-Stack Browser",
       "placement": "tools",
       "subtype": "toggle",
-      "description": "Browse the Z-stack slice by slice with synchronized multi-panel support.",
+      "description": "Browse the Z-stack: a 3D notch shows every kept slice, the cursor shows one slice or a slab of adjustable thickness, and two trim handles mask the slices above and below. Synchronized across compare panels.",
       "creator": "IRIBHM",
       "icon": "layers-3",
-      "platformCompat": "1.x",
+      "platformCompat": ">=1.52.0",
       "sandboxCapabilities": null,
-      "latestVersion": "1.0.0",
-      "assetUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/zstack-browser/plugin-zstack-browser-1.0.0.zip",
+      "latestVersion": "1.1.0",
+      "assetUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/zstack-browser/plugin-zstack-browser-1.1.0.zip",
       "sumsUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/zstack-browser/SHA256SUMS",
       "sigUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/zstack-browser/SHA256SUMS.sig",
-      "sha256": "5d6dec5e202ed3f5da6a1f36a2771ae18c76150de79970c47c500e11c4c0071d",
+      "sha256": "2524b1b35a2261dc1e1f46a5e50c70d78be14bf3287cadcca727f785e03b1702",
       "recommended": true
     }
   ]

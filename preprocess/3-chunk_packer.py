@@ -78,7 +78,7 @@ def _pack_timepoint(temp_dir: Path, bricks_dir: Path, t_idx: int, lod_levels, n_
                     executor, tp_subdir: str):
     """Brick, compress and pack every LOD of a single timepoint.
 
-    tp_subdir is '' for a single-timepoint (fixed) dataset — the packs then land
+    tp_subdir is '' for a single-timepoint ('3d') dataset — the packs then land
     directly under bricks/ and the output is byte-identical to the pre-4D pipeline.
     For a timelapse it is 't000', 't001', … and each timepoint owns a self-contained
     pack tree whose brickToPack urls stay relative to that sub-directory, which is
@@ -343,7 +343,7 @@ def build_packs(temp_dir: Path, output_dir: Path):
         "version": 2,
         "schema": "iribhm-bricks-v2",
         "dataset": output_dir.name,
-        "datasetType": "live" if is_timelapse else "fixed",
+        "datasetType": "live" if is_timelapse else "3d",
         "channels": n_ch,
         "brickSize": BRICK_SIZE,
         "brickPacking": {"mode": "grid", "cols": 8, "rows": 8},

@@ -18,8 +18,8 @@ declare(strict_types=1);
 
 $root = sys_get_temp_dir() . '/lumen-list-' . bin2hex(random_bytes(4));
 @mkdir("$root/api", 0777, true);
-@mkdir("$root/DATA_WEB/fixed", 0777, true);
-@mkdir("$root/DATA_WEB/wholemount", 0777, true);
+@mkdir("$root/DATA_WEB/3d", 0777, true);
+@mkdir("$root/DATA_WEB/2d", 0777, true);
 @mkdir("$root/uploads/state", 0777, true);
 foreach (['_admin_lib.php', '_upload_lib.php', 'datasets.php'] as $f) copy(__DIR__ . "/../api/$f", "$root/api/$f");
 define('LUMEN_DATASETS_LIB', true);
@@ -50,32 +50,35 @@ function put(string $dir, array $meta): void {
 $DATA_WEB = "$root/DATA_WEB";   // what the copied library computed for itself
 
 echo "published datasets\n";
-put("$DATA_WEB/fixed/Alpha", ['name' => 'Alpha', 'type' => 'fixed', 'stageNumeric' => 8]);
-put("$DATA_WEB/fixed/Numeric", ['name' => 240822, 'type' => 'fixed', 'stageNumeric' => 8]);
-put("$DATA_WEB/wholemount/Photo", ['name' => 'Photo', 'type' => 'wholemount', 'stageNumeric' => 7.75,
+put("$DATA_WEB/3d/Alpha", ['name' => 'Alpha', 'type' => '3d', 'stageNumeric' => 8]);
+put("$DATA_WEB/3d/Numeric", ['name' => 240822, 'type' => '3d', 'stageNumeric' => 8]);
+put("$DATA_WEB/2d/Photo", ['name' => 'Photo', 'type' => '2d', 'stageNumeric' => 7.75,
     'image' => ['native' => 'image.webp', 'preview' => 'preview.webp', 'width' => 4, 'height' => 3]]);
 $latin1 = "Embryon_R\xE9";
-@mkdir("$DATA_WEB/fixed/$latin1", 0777, true);
+@mkdir("$DATA_WEB/3d/$latin1", 0777, true);
 
 $rows = null; $err = null;
 try { $rows = list_datasets(); } catch (Throwable $e) { $err = $e->getMessage(); }
 check('a numeric "name" does not throw the sort', $err === null);
-check('every folder is listed (numeric name, latin-1 folder, wholemount)', is_array($rows) && count($rows) === 4);
-check('the wholemount row carries its type', is_array($rows) && in_array('wholemount', array_column($rows, 'type'), true));
+check('every folder is listed (numeric name, latin-1 folder, photograph)', is_array($rows) && count($rows) === 4);
+check('the photograph row carries the 2d type', is_array($rows) && in_array('2d', array_column($rows, 'type'), true));
+check('id and path are both <type>/<folder>', is_array($rows)
+    && in_array('2d/Photo', array_column($rows, 'id'), true)
+    && in_array('2d/Photo', array_column($rows, 'path'), true));
 
 echo "\nstaged imports\n";
-file_put_contents("$root/uploads/state/fixed__Broken.json", json_encode([
-    'type' => 'fixed', 'folder' => 'Broken', 'files' => ['metadata.json' => 'not-an-object', 'x.bin' => null],
+file_put_contents("$root/uploads/state/3d__Broken.json", json_encode([
+    'type' => '3d', 'folder' => 'Broken', 'files' => ['metadata.json' => 'not-an-object', 'x.bin' => null],
 ]));
-file_put_contents("$root/uploads/state/fixed__Scalar.json", json_encode(['type' => 'fixed', 'folder' => 'Scalar', 'files' => 'oops']));
-file_put_contents("$root/uploads/state/fixed__Good.json", json_encode([
-    'type' => 'fixed', 'folder' => 'Good', 'updatedAt' => date('c'),
+file_put_contents("$root/uploads/state/3d__Scalar.json", json_encode(['type' => '3d', 'folder' => 'Scalar', 'files' => 'oops']));
+file_put_contents("$root/uploads/state/3d__Good.json", json_encode([
+    'type' => '3d', 'folder' => 'Good', 'updatedAt' => date('c'),
     'files' => ['metadata.json' => ['size' => 10, 'tier' => 0, 'kind' => 'metadata', 'done' => true]],
 ]));
 $staged = null; $err = null;
 try { $staged = lumen_staged_rows(); } catch (Throwable $e) { $err = $e->getMessage(); }
 check('corrupt journals do not throw', $err === null);
-check('the well-formed journal is still listed', is_array($staged) && in_array('staging:fixed/Good', array_column($staged, 'id'), true));
+check('the well-formed journal is still listed', is_array($staged) && in_array('staging:3d/Good', array_column($staged, 'id'), true));
 
 echo "\nthe answer as the tab receives it\n";
 $payload = ['datasets' => array_merge($rows ?? [], $staged ?? [])];

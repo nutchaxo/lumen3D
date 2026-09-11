@@ -14,6 +14,47 @@
     "noResults": "Geen resultaten gevonden",
     "backToHome": "Terug naar de startpagina"
   },
+  "types": {
+    "3d": {
+      "label": "Vast",
+      "title": "Vaste beeldvorming",
+      "desc": "3D-beeldstapels met hoge resolutie van gefixeerde {specimenPlural}. Meerkanaalsdata, klaar om te verkennen."
+    },
+    "2d": {
+      "label": "Wholemount",
+      "title": "Wholemount-fotografie",
+      "desc": "Gekalibreerde stereomicroscoopfoto's van hele {specimenPlural}: kleuringen, schaalbalk en metingen in één oogopslag."
+    },
+    "live": {
+      "label": "Live",
+      "title": "Live beeldvorming",
+      "desc": "4D-timelapseopnamen van {specimenPlural} in de tijd. Zie de ontwikkeling zich live ontvouwen."
+    },
+    "tracking": {
+      "label": "Tracking",
+      "title": "Celtracking",
+      "desc": "Kwantitatieve analyse van individuele celtrajecten, snelheden, afstammingsbomen en buurrelaties in de tijd."
+    }
+  },
+  "dtypes": {
+    "nav": "Soorten data",
+    "title": "Soorten data",
+    "sub": "Hernoem wat uw bezoekers lezen. De technische id van elk soort verandert nooit.",
+    "short": "Korte naam",
+    "shortHint": "Badges, filters, lijsten. Laat leeg om de vertaalde standaardnaam te behouden.",
+    "long": "Lange titel (startpagina)",
+    "longLabel": "Lange titel",
+    "longHint": "Kop van de soortkaarten op de startpagina.",
+    "idHint": "Technische id — map, dataset-id, filters en plugins. Niet bewerkbaar.",
+    "perLocale": "meertalig",
+    "count": "{n} dataset(s)",
+    "none": "Geen datasoort gedeclareerd.",
+    "save": "Opslaan",
+    "saved": "Namen van de soorten opgeslagen.",
+    "saveError": "Opslaan mislukt.",
+    "reset": "Standaardnamen",
+    "resetConfirm": "De vertaalde standaardnamen voor alle soorten herstellen?"
+  },
   "toast": {
     "figureUnavailable": "Figuren exporteren kan niet op deze pagina",
     "graphUnavailable": "Grafieken exporteren kan niet op deze pagina",
@@ -100,16 +141,8 @@
     "featuredSubtitle": "Recente hoogtepunten uit onze beeldcollectie",
     "typesTitle": "Soorten data",
     "typesSubtitle": "Navigeer door onze datasetcollectie",
-    "fixedTitle": "Vaste beeldvorming",
-    "fixedDesc": "3D-beeldstapels met hoge resolutie van gefixeerde {specimenPlural}. Meerkanaalsdata, klaar om te verkennen.",
-    "liveTitle": "Live beeldvorming",
-    "liveDesc": "4D-timelapseopnamen van {specimenPlural} in de tijd. Zie de ontwikkeling zich live ontvouwen.",
-    "trackingTitle": "Celtracking",
-    "trackingDesc": "Kwantitatieve analyse van individuele celtrajecten, snelheden, afstammingsbomen en buurrelaties in de tijd.",
     "browseAll": "Alles bekijken",
-    "viewCollection": "Collectie bekijken",
-    "wholemountTitle": "Wholemount-fotografie",
-    "wholemountDesc": "Gekalibreerde stereomicroscoopfoto's van hele {specimenPlural}: kleuringen, schaalbalk en metingen in één oogopslag."
+    "viewCollection": "Collectie bekijken"
   },
   "explorer": {
     "title": "Dataverkenner",
@@ -119,9 +152,6 @@
     "filterDate": "Datum",
     "filterMarkers": "Markers",
     "allTypes": "Alle soorten",
-    "fixed": "Vast",
-    "live": "Live beeldvorming",
-    "tracking": "Tracking",
     "sortBy": "Sorteren op",
     "sortName": "Naam",
     "sortDate": "Datum",
@@ -137,8 +167,7 @@
     "fileType": "Type",
     "fileSize": "Grootte",
     "failed": "Laden van data mislukt",
-    "failedDesc": "Dataset niet gevonden of laden mislukt. Probeer het opnieuw.",
-    "wholemount": "Wholemount"
+    "failedDesc": "Dataset niet gevonden of laden mislukt. Probeer het opnieuw."
   },
   "viewer": {
     "controls": "Bediening",
@@ -626,8 +655,6 @@
     "datasets": "Datasets",
     "search": "Zoeken…",
     "filterAll": "Alle",
-    "filterFixed": "Vast",
-    "filterLive": "Live",
     "noDatasetSelected": "Geen dataset geselecteerd",
     "clickDatasetHint": "Klik op een dataset in de lijst om die hier te bekijken.",
     "loadingViewer": "Viewer laden…",
@@ -1754,7 +1781,7 @@
     "errTls": "De certificaatopslag van PHP op deze host is onbruikbaar: upload cacert.pem naar de hoofdmap van de site.",
     "errFolder": "De map DOCS/ bestaat nog niet in de repository."
   },
-  "wholemount": {
+  "2d": {
     "specimen": "Specimen",
     "stage": "Stadium",
     "line": "Lijn",

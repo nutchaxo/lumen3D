@@ -19,7 +19,7 @@
 
 'use strict';
 
-import { t, escHtml, refreshIcons, toast, el } from './shared.js';
+import { Utils, t, escHtml, refreshIcons, toast, el } from './shared.js';
 import { navigateTo } from './bus.js';
 import { openDataset } from './tab-datasets.js';
 import * as Upload from './upload-manager.js';
@@ -49,7 +49,7 @@ function build() {
     <div class="upl-drop" id="upl-drop" aria-label="${escHtml(t('upl.dropAria', 'Déposer un dossier de datasets'))}">
       <i data-lucide="folder-up" class="upl-drop-icon" aria-hidden="true"></i>
       <div class="upl-drop-title">${escHtml(t('upl.dropTitle', 'Glissez un dossier ici'))}</div>
-      <div class="upl-drop-sub">${escHtml(t('upl.dropSub', 'DATA_WEB entier, un dossier fixed / live / tracking, ou un seul dataset — le type est détecté automatiquement.'))}</div>
+      <div class="upl-drop-sub">${escHtml(t('upl.dropSub', `DATA_WEB entier, un dossier de type (${(Utils ? Utils.DATASET_TYPES : []).join(' / ')}), ou un seul dataset — le type est lu dans metadata.json.`, { types: (Utils ? Utils.DATASET_TYPES : []).join(' / ') }))}</div>
       <button type="button" class="adm-btn adm-btn-accent" id="upl-pick">
         <i data-lucide="folder"></i> ${escHtml(t('upl.pick', 'Choisir un dossier'))}
       </button>
@@ -334,7 +334,7 @@ function card(d) {
       <div class="upl-card-head">
         <div class="upl-card-id">
           <span class="upl-card-name" title="${escHtml(d.key)}">${escHtml(d.name || d.folder)}</span>
-          <span class="upl-card-type">${escHtml(d.type)}</span>
+          <span class="upl-card-type" title="${escHtml(d.type || '')}">${escHtml((Utils ? Utils.datasetTypeLabel(d.type) : d.type) || '')}</span>
         </div>
         <span class="upl-state upl-state-${info.cls}" title="${escHtml(info.hint)}">${escHtml(info.label)}</span>
       </div>
@@ -379,6 +379,8 @@ function rejectReason(reason) {
     bad_size: t('upl.rjSize', 'taille invalide'),
     outside_dataset: t('upl.rjOutside', 'hors d\'un dossier de dataset (pas de metadata.json)'),
     invalid_dataset: t('upl.rjDataset', 'nom ou type de dataset invalide'),
+    unknown_type: t('upl.rjUnknownType', `type de dataset inconnu — metadata.json doit déclarer "type" (${(Utils ? Utils.DATASET_TYPES : []).join(', ')})`,
+      { types: (Utils ? Utils.DATASET_TYPES : []).join(', ') }),
   };
   return map[reason] || reason;
 }

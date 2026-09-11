@@ -1,6 +1,6 @@
 /* Display Adjustments — index.js
  *
- * Display-only curves applied by WholemountViewer.setAdjustments: nothing here
+ * Display-only curves applied by Viewer2D.setAdjustments: nothing here
  * changes the photograph, the measurements or the stain isolation (which reads
  * the raw pixels). The panel is the single place the values are edited; the
  * viewer keeps the cache.
@@ -57,15 +57,15 @@ PluginRegistry.implement('display-adjust', {
   _render() {
     const esc = s => this._ctx.ui.escapeHtml(s);
     const rows = this.CONTROLS.map(c => `
-      <div class="wm-plugin-row">
+      <div class="p2d-plugin-row">
         <label for="adj-${c.key}">${esc(this._t(c.key))}</label>
         <input type="range" id="adj-${c.key}" data-adj="${c.key}" min="${c.min}" max="${c.max}" step="${c.step}">
-        <span class="wm-plugin-value" data-adj-value="${c.key}"></span>
+        <span class="p2d-plugin-value" data-adj-value="${c.key}"></span>
       </div>`).join('');
     this._ui.body.innerHTML = `${rows}
-      <label class="wm-check"><input type="checkbox" id="adj-flatten"> ${esc(this._t('flatten'))}</label>
-      <div class="wm-plugin-hint">${esc(this._t('hint'))}</div>
-      <div class="wm-plugin-actions">
+      <label class="p2d-check"><input type="checkbox" id="adj-flatten"> ${esc(this._t('flatten'))}</label>
+      <div class="p2d-plugin-hint">${esc(this._t('hint'))}</div>
+      <div class="p2d-plugin-actions">
         <button type="button" class="btn btn-ghost btn-sm" id="adj-reset"><i data-lucide="undo-2"></i> ${esc(this._t('reset'))}</button>
       </div>`;
     this._ctx.ui.createIcons({ nodes: [this._ui.body] });

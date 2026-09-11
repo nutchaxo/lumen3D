@@ -32,7 +32,7 @@
 
 'use strict';
 
-import { API_SITE, I18n, t, escHtml, apiFetch, apiFetchStatus, toast, el, refreshIcons } from './shared.js';
+import { API_SITE, I18n, Utils, t, escHtml, apiFetch, apiFetchStatus, toast, el, refreshIcons } from './shared.js';
 import { setUnsaved } from './bus.js';
 import { renderFields, renderGroups } from './pages-controls.js';
 import { renderTranslatePanel } from './pages-translate.js';
@@ -303,9 +303,14 @@ function _richTemplate(slug) {
   if (slug === 'home') {
     const hero = _tpl('landing.heroTitle');
     if (!hero) return null;   // dicts not loaded → caller uses the minimal template
-    const typeCol = (titleKey, descKey, type) => ({ width: 3, widgets: [
-      { type: 'heading', text: _tpl(titleKey), props: { level: '3', align: 'left' } },
-      { type: 'richtext', text: _tpl(descKey), props: { align: 'left' } },
+    // One column per dataset type, seeded from the translated defaults
+    // (types.<id>.* in lang/<code>.json). The page is a document from then on:
+    // the operator edits the words here, not in the dictionaries.
+    const typeIds = (Utils && Utils.DATASET_TYPES.length) ? Utils.DATASET_TYPES : [];
+    const typeWidth = typeIds.length ? Math.max(1, Math.floor(12 / typeIds.length)) : 12;
+    const typeCol = (type) => ({ width: typeWidth, widgets: [
+      { type: 'heading', text: _tpl(`types.${type}.title`), props: { level: '3', align: 'left' } },
+      { type: 'richtext', text: _tpl(`types.${type}.desc`), props: { align: 'left' } },
       { type: 'button', text: _tpl('landing.viewCollection'), props: { href: 'explorer.html?type=' + type, style: 'ghost', align: 'left' } },
     ] });
     return _sanitizeSections([
@@ -324,12 +329,7 @@ function _richTemplate(slug) {
         { type: 'heading', text: _tpl('landing.typesTitle'), props: { level: '2', align: 'center' } },
         { type: 'richtext', text: _tpl('landing.typesSubtitle'), props: { align: 'center' } },
       ] }] },
-      { props: { fullWidth: false, padY: 8, maxWidth: 1080, gap: 24, vAlign: 'stretch', bg: '' }, columns: [
-        typeCol('landing.fixedTitle', 'landing.fixedDesc', 'fixed'),
-        typeCol('landing.liveTitle', 'landing.liveDesc', 'live'),
-        typeCol('landing.trackingTitle', 'landing.trackingDesc', 'tracking'),
-        typeCol('landing.wholemountTitle', 'landing.wholemountDesc', 'wholemount'),
-      ] },
+      { props: { fullWidth: false, padY: 8, maxWidth: 1080, gap: 24, vAlign: 'stretch', bg: '' }, columns: typeIds.map(typeCol) },
       { props: { fullWidth: false, padY: 40, maxWidth: 1080, gap: 24, vAlign: 'stretch', bg: '' }, columns: [{ width: 12, widgets: [
         { type: 'heading', text: _tpl('landing.featuredTitle'), props: { level: '2', align: 'center' } },
         { type: 'latest-datasets', props: { count: 3 } },

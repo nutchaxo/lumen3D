@@ -1,11 +1,11 @@
 {
   "id": "calibrated-grid",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "platformCompat": ">=1.49.0",
   "creator": "IRIBHM",
   "placement": "tools",
   "dataTypes": [
-    "wholemount"
+    "2d"
   ],
   "i18nTitle": "title",
   "i18nAria": "aria",
@@ -21,5 +21,5 @@
   "icon": "grid-3x3",
   "order": 12,
   "buttonId": "btn-calibrated-grid",
-  "description": "Overlay a physical grid (1-2-5 steps in µm or mm) on a wholemount photograph: none → coarse → fine."
+  "description": "Overlay a physical grid (1-2-5 steps in µm or mm) on a 2D photograph: none → coarse → fine."
 }

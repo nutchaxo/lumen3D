@@ -23,7 +23,9 @@ const read = (rel) => readFileSync(path.join(ROOT, rel), 'utf8');
   for (const f of ['d.id', 'd.thumbnail', 'd.name']) {
     assert.ok(s.includes(`Utils.escapeHtml(${f})`), `SEC-014: ${f} escaped in _bindModal`);
   }
-  assert.ok(s.includes('Utils.escapeHtml(String(d.type).toUpperCase())'), 'SEC-014: d.type escaped');
+  // The badge shows the type's display NAME (operator-editable), so the string
+  // interpolated here is untrusted twice over and must still go through escapeHtml.
+  assert.ok(s.includes('Utils.escapeHtml(Utils.datasetTypeLabel(d.type))'), 'SEC-014: d.type escaped');
   assert.ok(!/src="\$\{d\.thumbnail\}"/.test(s), 'SEC-014: raw d.thumbnail src removed');
   assert.ok(!/>\$\{d\.name\}</.test(s), 'SEC-014: raw d.name removed');
 }

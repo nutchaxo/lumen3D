@@ -82,21 +82,25 @@
             <input type="radio" name="filter-type" value="all" checked>
             <span data-i18n="explorer.allTypes">All Types</span>
           </label>
+          <!-- Type names are operator-editable (config/instance.json datasetTypes),
+               so they cannot be static i18n keys: explorer.js fills every
+               [data-dataset-type] with Utils.datasetTypeLabel() and refreshes it
+               on a language change. The inline text is the pre-script fallback. -->
           <label class="filter-option">
-            <input type="radio" name="filter-type" value="fixed">
-            <span data-i18n="explorer.fixed">Fixed</span>
+            <input type="radio" name="filter-type" value="3d">
+            <span data-dataset-type="3d">3D</span>
           </label>
           <label class="filter-option">
             <input type="radio" name="filter-type" value="live">
-            <span data-i18n="explorer.live">Live Imaging</span>
+            <span data-dataset-type="live">Live</span>
           </label>
           <label class="filter-option">
             <input type="radio" name="filter-type" value="tracking">
-            <span data-i18n="explorer.tracking">Tracking</span>
+            <span data-dataset-type="tracking">Tracking</span>
           </label>
           <label class="filter-option">
-            <input type="radio" name="filter-type" value="wholemount">
-            <span data-i18n="explorer.wholemount">Wholemount</span>
+            <input type="radio" name="filter-type" value="2d">
+            <span data-dataset-type="2d">2D</span>
           </label>
         </div>
 

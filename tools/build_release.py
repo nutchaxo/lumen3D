@@ -31,7 +31,7 @@ ROOT_FILES = (
     "viewer.html",
     "compare.html",
     "tracking.html",
-    "wholemount.html",
+    "2d.html",
     "admpan.html",
     "about.html",
     "widgets.html",
@@ -216,7 +216,7 @@ def write_zip(zip_path, entries):
 # admpan.html is EXCLUDED (its ESM module graph cannot be concatenated).
 BUNDLE_PAGES = (
     "index.html", "explorer.html", "viewer.html", "compare.html",
-    "tracking.html", "wholemount.html", "about.html", "legal.html", "page.html", "widgets.html",
+    "tracking.html", "2d.html", "about.html", "legal.html", "page.html", "widgets.html",
 )
 _SCRIPT_TAG_RE = re.compile(
     r'[ \t]*<script\b(?P<attrs>[^>]*?)\bsrc="(?P<src>[^"]+)"(?P<rest>[^>]*)>\s*</script>[ \t]*\n?',

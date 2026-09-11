@@ -34,14 +34,14 @@ PASSWORD = "test-password-1234"
 # the DATA_WEB-relative volumeSources the staged `get` has to rewrite onto the
 # blob proxy (a staged dataset has no DATA_WEB path yet).
 META = {
-    "id": "DS", "name": "DS", "type": "fixed",
+    "id": "3d/DS", "name": "DS", "type": "3d",
     "dimensions": {"x": 64, "y": 64, "z": 64, "c": 1},
     "channels": [{"name": "c0"}],
     "volumeSources": [{
         "kind": "bricks", "label": "Chunked bricks (64³)", "priority": -1,
         "available": True, "multiscale": True,
-        "path": "DATA_WEB/fixed/DS",
-        "manifestPath": "DATA_WEB/fixed/DS/bricks/manifest.json",
+        "path": "DATA_WEB/3d/DS",
+        "manifestPath": "DATA_WEB/3d/DS/bricks/manifest.json",
     }],
 }
 # Shaped like what preprocess/3-chunk_packer.py writes. The per-level dimensions
@@ -62,7 +62,7 @@ class UploadApiCase(unittest.TestCase):
     def setUpClass(cls):
         cls.tmp = Path(tempfile.mkdtemp(prefix="lumen-api-"))
         (cls.tmp / "api").mkdir(parents=True, exist_ok=True)
-        (cls.tmp / "DATA_WEB" / "fixed").mkdir(parents=True, exist_ok=True)
+        (cls.tmp / "DATA_WEB" / "3d").mkdir(parents=True, exist_ok=True)
         (cls.tmp / "changelog").mkdir(exist_ok=True)
         (cls.tmp / "changelog" / "changelog_1.43.0.md").write_text("x", encoding="utf-8")
 
@@ -98,9 +98,9 @@ class UploadApiCase(unittest.TestCase):
         self.csrf = None
         shutil.rmtree(us.STAGING_DIR, ignore_errors=True)
         shutil.rmtree(us.STATE_DIR, ignore_errors=True)
-        shutil.rmtree(dev_server.DATA_WEB / "fixed", ignore_errors=True)
+        shutil.rmtree(dev_server.DATA_WEB / "3d", ignore_errors=True)
         us.ensure_dirs()
-        (dev_server.DATA_WEB / "fixed").mkdir(parents=True, exist_ok=True)
+        (dev_server.DATA_WEB / "3d").mkdir(parents=True, exist_ok=True)
 
     # ── HTTP helpers ───────────────────────────────────────────────────────────
 
@@ -140,13 +140,13 @@ class UploadApiCase(unittest.TestCase):
 
     # ── Upload helpers ─────────────────────────────────────────────────────────
 
-    def plan(self, files, folder="DS", type_dir="fixed"):
+    def plan(self, files, folder="DS", type_dir="3d"):
         return self.json_request("POST", "/api/upload.php?action=plan", {
             "datasets": [{"type": type_dir, "folder": folder,
                           "files": [{"path": p, "size": len(b)} for p, b in files.items()]}],
         })
 
-    def send(self, rel, blob, folder="DS", type_dir="fixed", index=0, sha=None):
+    def send(self, rel, blob, folder="DS", type_dir="3d", index=0, sha=None):
         digest = sha if sha is not None else hashlib.sha256(blob).hexdigest()
         ds = f"{type_dir}/{folder}"
         status, _, data = self.request(
@@ -155,7 +155,7 @@ class UploadApiCase(unittest.TestCase):
             blob, {"Content-Type": "application/octet-stream"}, raw=True)
         return status, json.loads(data.decode() or "{}")
 
-    def finish(self, rel, folder="DS", type_dir="fixed"):
+    def finish(self, rel, folder="DS", type_dir="3d"):
         return self.json_request(
             "POST", f"/api/upload.php?action=file_done&ds={type_dir}/{folder}",
             {"path": rel, "root": None})
@@ -182,8 +182,8 @@ class TestAuthGate(UploadApiCase):
         for method, path in (
             ("GET", "/api/upload.php?action=list"),
             ("GET", "/api/upload.php?action=limits"),
-            ("GET", "/api/upload.php?action=blob&ds=fixed/DS&path=metadata.json"),
-            ("GET", "/api/upload.php?action=state&ds=fixed/DS"),
+            ("GET", "/api/upload.php?action=blob&ds=3d/DS&path=metadata.json"),
+            ("GET", "/api/upload.php?action=state&ds=3d/DS"),
             ("POST", "/api/upload.php?action=plan"),
         ):
             status, _ = self.json_request(method, path, {} if method == "POST" else None)
@@ -192,19 +192,19 @@ class TestAuthGate(UploadApiCase):
     def test_writes_require_the_csrf_header(self):
         self.login()
         saved, self.csrf = self.csrf, None
-        for path in ("?action=plan", "?action=publish&ds=fixed/DS", "?action=discard&ds=fixed/DS"):
+        for path in ("?action=plan", "?action=publish&ds=3d/DS", "?action=discard&ds=3d/DS"):
             status, _ = self.json_request("POST", f"/api/upload.php{path}", {})
             self.assertEqual(status, 403, f"{path} must require CSRF")
         # A chunk POST is a write too, despite carrying a raw body.
         status, _, _ = self.request(
-            "POST", "/api/upload.php?action=chunk&ds=fixed/DS&path=metadata.json&index=0",
+            "POST", "/api/upload.php?action=chunk&ds=3d/DS&path=metadata.json&index=0",
             b"x", {"Content-Type": "application/octet-stream"}, raw=True)
         self.assertEqual(status, 403)
         self.csrf = saved
 
     def test_a_write_action_is_refused_over_GET(self):
         self.login()
-        status, _ = self.json_request("GET", "/api/upload.php?action=publish&ds=fixed/DS")
+        status, _ = self.json_request("GET", "/api/upload.php?action=publish&ds=3d/DS")
         self.assertEqual(status, 405)
 
 
@@ -213,11 +213,11 @@ class TestStaticGuard(UploadApiCase):
         self.login()
         self.full_dataset()
         # Authenticated or not, the staging tree has no static URL.
-        for path in ("/uploads/staging/fixed/DS/metadata.json",
-                     "/uploads/state/fixed__DS.json",
+        for path in ("/uploads/staging/3d/DS/metadata.json",
+                     "/uploads/state/3d__DS.json",
                      "/uploads/",
-                     "/%75ploads/staging/fixed/DS/metadata.json",
-                     "/x/../uploads/staging/fixed/DS/metadata.json"):
+                     "/%75ploads/staging/3d/DS/metadata.json",
+                     "/x/../uploads/staging/3d/DS/metadata.json"):
             status, _, _ = self.request("GET", path)
             self.assertIn(status, (403, 404), f"{path} leaked with status {status}")
             status, _, _ = self.request("HEAD", path)
@@ -227,7 +227,7 @@ class TestStaticGuard(UploadApiCase):
         self.login()
         blobs = self.full_dataset()
         status, hdrs, data = self.request(
-            "GET", "/api/upload.php?action=blob&ds=fixed/DS&path=bricks/lod0/c0/pack_00.bin")
+            "GET", "/api/upload.php?action=blob&ds=3d/DS&path=bricks/lod0/c0/pack_00.bin")
         self.assertEqual(status, 200)
         self.assertEqual(data, blobs["bricks/lod0/c0/pack_00.bin"])
         # Opaque octets, never a document: no sniffing, no caching.
@@ -239,9 +239,9 @@ class TestStaticGuard(UploadApiCase):
         self.login()
         self.full_dataset()
         for bad in ("../../../api/admin_credential.json", "/etc/passwd",
-                    "bricks/../../../../api/admin_credential.json", "../state/fixed__DS.json"):
+                    "bricks/../../../../api/admin_credential.json", "../state/3d__DS.json"):
             status, _ = self.json_request(
-                "GET", f"/api/upload.php?action=blob&ds=fixed/DS&path={bad}")
+                "GET", f"/api/upload.php?action=blob&ds=3d/DS&path={bad}")
             self.assertEqual(status, 404, f"{bad} must not resolve")
 
     def test_range_requests_work(self):
@@ -249,7 +249,7 @@ class TestStaticGuard(UploadApiCase):
         self.login()
         blobs = self.full_dataset()
         status, hdrs, data = self.request(
-            "GET", "/api/upload.php?action=blob&ds=fixed/DS&path=bricks/lod0/c0/pack_00.bin",
+            "GET", "/api/upload.php?action=blob&ds=3d/DS&path=bricks/lod0/c0/pack_00.bin",
             headers={"Range": "bytes=2-5"})
         self.assertEqual(status, 206)
         self.assertEqual(data, blobs["bricks/lod0/c0/pack_00.bin"][2:6])
@@ -269,7 +269,7 @@ class TestChunkWire(UploadApiCase):
         status, payload = self.finish("bricks/lod0/c0/pack_00.bin")
         self.assertEqual(status, 200, payload)
         self.assertEqual(
-            (us.STAGING_DIR / "fixed/DS/bricks/lod0/c0/pack_00.bin").read_bytes(), blob)
+            (us.STAGING_DIR / "3d/DS/bricks/lod0/c0/pack_00.bin").read_bytes(), blob)
 
     def test_a_tampered_chunk_is_refused_over_the_wire(self):
         self.login()
@@ -278,12 +278,12 @@ class TestChunkWire(UploadApiCase):
         status, payload = self.send("bricks/lod0/c0/pack_00.bin", blob, sha="0" * 64)
         self.assertEqual(status, 422)
         self.assertEqual(payload["error"], "checksum_mismatch")
-        self.assertFalse((us.STAGING_DIR / "fixed/DS/bricks/lod0/c0/pack_00.bin").exists())
+        self.assertFalse((us.STAGING_DIR / "3d/DS/bricks/lod0/c0/pack_00.bin").exists())
 
     def test_an_oversized_body_is_refused_before_it_is_read(self):
         self.login()
         status, _, _ = self.request(
-            "POST", "/api/upload.php?action=chunk&ds=fixed/DS&path=metadata.json&index=0",
+            "POST", "/api/upload.php?action=chunk&ds=3d/DS&path=metadata.json&index=0",
             b"", {"Content-Type": "application/octet-stream",
                   "Content-Length": str(dev_server._MAX_UPLOAD_BODY + 1)}, raw=True)
         self.assertEqual(status, 413)
@@ -299,17 +299,17 @@ class TestLifecycle(UploadApiCase):
     def test_state_progresses_and_publish_moves_the_dataset(self):
         self.login()
         self.full_dataset()
-        status, info = self.json_request("GET", "/api/upload.php?action=state&ds=fixed/DS")
+        status, info = self.json_request("GET", "/api/upload.php?action=state&ds=3d/DS")
         self.assertEqual(status, 200)
         self.assertEqual(info["state"], us.STATE_STAGED)
 
-        status, v = self.json_request("POST", "/api/upload.php?action=validate&ds=fixed/DS")
+        status, v = self.json_request("POST", "/api/upload.php?action=validate&ds=3d/DS")
         self.assertTrue(v["ok"], v)
 
-        status, r = self.json_request("POST", "/api/upload.php?action=publish&ds=fixed/DS",
+        status, r = self.json_request("POST", "/api/upload.php?action=publish&ds=3d/DS",
                                       {"hidden": True})
         self.assertEqual(status, 200, r)
-        published = dev_server.DATA_WEB / "fixed" / "DS" / "metadata.json"
+        published = dev_server.DATA_WEB / "3d" / "DS" / "metadata.json"
         self.assertTrue(published.exists())
         self.assertTrue(json.loads(published.read_text())["hidden"])
 
@@ -318,7 +318,7 @@ class TestLifecycle(UploadApiCase):
         self.full_dataset()
         status, listing = self.json_request("GET", "/api/datasets.php?action=list")
         self.assertEqual(status, 200)
-        row = next((d for d in listing["datasets"] if d["id"] == "staging:fixed/DS"), None)
+        row = next((d for d in listing["datasets"] if d["id"] == "staging:3d/DS"), None)
         self.assertIsNotNone(row, "a staged dataset must appear in the editor list")
         self.assertTrue(row["staging"])
         self.assertTrue(row["stagingEditable"])
@@ -326,9 +326,13 @@ class TestLifecycle(UploadApiCase):
 
         # The editor reads it, edits it, and the edit sticks.
         status, meta = self.json_request(
-            "GET", "/api/datasets.php?action=get&id=staging%3Afixed%2FDS")
+            "GET", "/api/datasets.php?action=get&id=staging%3A3d%2FDS")
         self.assertEqual(status, 200, meta)
-        self.assertEqual(meta["path"], "staging:fixed/DS")
+        # id and path are one string for a staged dataset: both address the
+        # staging tree, which is also what the blob proxy is keyed on.
+        self.assertEqual(meta["id"], "staging:3d/DS")
+        self.assertEqual(meta["path"], "staging:3d/DS")
+        self.assertEqual(meta["type"], "3d")
         # The pipeline's DATA_WEB paths must be rewritten onto the proxy: the
         # dataset has no DATA_WEB location yet, and must not appear to have one.
         src = meta["volumeSources"][0]
@@ -337,10 +341,10 @@ class TestLifecycle(UploadApiCase):
         self.assertNotIn("DATA_WEB/", src["path"])
 
         status, r = self.json_request(
-            "POST", "/api/datasets.php?action=save&id=staging%3Afixed%2FDS",
+            "POST", "/api/datasets.php?action=save&id=staging%3A3d%2FDS",
             {**META, "name": "Renamed while uploading"})
         self.assertEqual(status, 200, r)
-        self.assertEqual(us.read_staged_metadata("fixed", "DS")["name"], "Renamed while uploading")
+        self.assertEqual(us.read_staged_metadata("3d", "DS")["name"], "Renamed while uploading")
 
         # And re-sending the pipeline's original metadata does NOT clobber it.
         original = json.dumps(META).encode()
@@ -348,25 +352,25 @@ class TestLifecycle(UploadApiCase):
         status, payload = self.send("metadata.json", original)
         self.assertEqual(status, 200)
         self.assertEqual(payload.get("skipped"), "locked")
-        self.assertEqual(us.read_staged_metadata("fixed", "DS")["name"], "Renamed while uploading")
+        self.assertEqual(us.read_staged_metadata("3d", "DS")["name"], "Renamed while uploading")
 
     def test_a_published_dataset_leaves_the_staging_list(self):
         self.login()
         self.full_dataset()
-        self.json_request("POST", "/api/upload.php?action=publish&ds=fixed/DS", {})
+        self.json_request("POST", "/api/upload.php?action=publish&ds=3d/DS", {})
         status, listing = self.json_request("GET", "/api/upload.php?action=list")
         self.assertEqual([d["key"] for d in listing["datasets"]], [])
         status, listing = self.json_request("GET", "/api/datasets.php?action=list")
         ids = [d["id"] for d in listing["datasets"]]
-        self.assertIn("fixed/DS", ids)
-        self.assertNotIn("staging:fixed/DS", ids)
+        self.assertIn("3d/DS", ids)
+        self.assertNotIn("staging:3d/DS", ids)
 
     def test_discard_removes_everything(self):
         self.login()
         self.full_dataset()
-        status, r = self.json_request("POST", "/api/upload.php?action=discard&ds=fixed/DS", {})
+        status, r = self.json_request("POST", "/api/upload.php?action=discard&ds=3d/DS", {})
         self.assertEqual(status, 200, r)
-        self.assertFalse((us.STAGING_DIR / "fixed/DS").exists())
+        self.assertFalse((us.STAGING_DIR / "3d/DS").exists())
 
     def test_limits_advertises_a_usable_chunk_size(self):
         self.login()

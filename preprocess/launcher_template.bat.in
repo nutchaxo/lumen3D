@@ -335,7 +335,20 @@ exit /b 0
 
 
 rem ---- Saisie des parametres -------------------------------------------------
+rem  Deux chaines distinctes : les volumes passent par run_preprocess.py (briques,
+rem  LOD, tracking), les photographies par 2d_importer.py -- une image, rien a
+rem  decouper. Les deux scripts sont embarques dans ce .bat.
 :ask_params
+echo.
+echo      !ACC![1]!R! Volumes Imaris    !DIM!(.ims, dossier 3d\ ou live\)!R!
+echo      !ACC![2]!R! Photographies 2D  !DIM!(.tif, dossier 2d\)!R!
+echo.
+set "MODE=volumes"
+set "_ans="
+set /p "_ans=   Type de donnees [1] : "
+if "!_ans!"=="2" set "MODE=2d"
+if "!MODE!"=="2d" goto :ask_2d
+
 :ask_input
 echo.
 set "INPUT="
@@ -394,6 +407,77 @@ if /i "!_ans!"=="n" (
 exit /b 0
 
 
+rem ---- Saisie des parametres : photographies 2D ------------------------------
+:ask_2d
+:ask_2d_input
+echo.
+set "INPUT="
+set /p "INPUT=   Dossier des fichiers .tif : "
+if not defined INPUT (
+    call :warnmsg "Veuillez saisir un dossier."
+    goto :ask_2d_input
+)
+set INPUT=!INPUT:"=!
+if not exist "!INPUT!\" (
+    call :warnmsg "Dossier introuvable : !INPUT!"
+    goto :ask_2d_input
+)
+set "TIFCOUNT=0"
+for %%F in ("!INPUT!\*.tif" "!INPUT!\*.tiff") do set /a TIFCOUNT+=1
+if "!TIFCOUNT!"=="0" (
+    call :warnmsg "Aucun fichier .tif detecte dans ce dossier."
+    set "_ans="
+    set /p "_ans=   Continuer quand meme ? [o/N] "
+    if /i not "!_ans!"=="o" goto :ask_2d_input
+) else (
+    call :ok "!TIFCOUNT! fichier(s) .tif detecte(s)."
+)
+
+for %%I in ("!BATDIR!\..\DATA_WEB") do set "DEFAULT_OUT=%%~fI"
+set "OUTPUT="
+set /p "OUTPUT=   Dossier de sortie DATA_WEB [Entree = !DEFAULT_OUT!] : "
+if defined OUTPUT set OUTPUT=!OUTPUT:"=!
+if not defined OUTPUT set "OUTPUT=!DEFAULT_OUT!"
+
+set "STAINING=X-gal"
+set "_ans="
+set /p "_ans=   Coloration [!STAINING!] : "
+if not "!_ans!"=="" set "STAINING=!_ans!"
+
+set "LINE="
+set /p "LINE=   Lignee (Entree = lue dans le nom du .lif) : "
+if defined LINE set LINE=!LINE:"=!
+
+rem Le TIFF d'origine est simplement lie (hardlink) dans download/ : aucun cout disque.
+set "WITH_DOWNLOADS="
+set "_ans="
+set /p "_ans=   Copier le TIFF d'origine dans download/ ? [o/N] "
+if /i "!_ans!"=="o" set "WITH_DOWNLOADS=1"
+
+set "FORCE="
+set "_ans="
+set /p "_ans=   Reimporter les datasets deja presents (curation conservee) ? [o/N] "
+if /i "!_ans!"=="o" set "FORCE=1"
+
+echo.
+echo !DIM!--------------------------------------------------------------------------------!R!
+echo    !BOLD!Recapitulatif!R!
+echo      Python     : !PY!
+echo      Entree     : !INPUT!
+echo      Sortie     : !OUTPUT!\2d
+echo      Coloration : !STAINING!
+if defined LINE (echo      Lignee     : !LINE!) else (echo      Lignee     : lue dans le nom du fichier)
+if defined WITH_DOWNLOADS (echo      Download/  : oui) else (echo      Download/  : non)
+echo !DIM!--------------------------------------------------------------------------------!R!
+set "_ans="
+set /p "_ans=   Lancer l'import ? [O/n] "
+if /i "!_ans!"=="n" (
+    call :info "Abandon a la demande de l'utilisateur."
+    exit /b 2
+)
+exit /b 0
+
+
 rem ---- Execution du pipeline -------------------------------------------------
 :run_pipeline
 echo.
@@ -402,6 +486,7 @@ echo.
 set "PYTHONUNBUFFERED=1"
 set "PYTHONIOENCODING=utf-8"
 set "EXTRA="
+if "!MODE!"=="2d" goto :run_2d
 if defined WITH_DOWNLOADS (
     call :ensure_tifffile
     set "EXTRA=--with-downloads"
@@ -411,6 +496,16 @@ if defined FILTER (
 ) else (
     %PY% "!WORK!\!ENTRY!" --input "!INPUT!" --output "!OUTPUT!" !EXTRA!
 )
+goto :run_report
+
+rem  L'importeur n'ecrit que des .webp : tifffile n'est pas requis ici.
+:run_2d
+if defined WITH_DOWNLOADS set "EXTRA=--with-downloads"
+if defined FORCE set EXTRA=!EXTRA! --force
+if defined LINE set EXTRA=!EXTRA! --line "!LINE!"
+%PY% "!WORK!\2d_importer.py" --input "!INPUT!" --output "!OUTPUT!" --staining "!STAINING!" !EXTRA!
+
+:run_report
 set "RC=!errorlevel!"
 echo.
 if "!RC!"=="0" (

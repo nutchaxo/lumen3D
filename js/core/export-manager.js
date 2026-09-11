@@ -485,8 +485,13 @@ const ExportManager = (() => {
   }
 
   function _datasetIntro(dataset) {
+    // The Download Center header is read by the operator, so it carries the
+    // displayed name of the type, not the internal id ('3d', '2d', …).
+    const typeLabel = (dataset.type && typeof Utils !== 'undefined' && Utils.datasetTypeLabel)
+      ? Utils.datasetTypeLabel(dataset.type)
+      : (dataset.type || null);
     const bits = [
-      dataset.type || null,
+      typeLabel || null,
       dataset.stage || null,
       dataset.date || null
     ].filter(Boolean);

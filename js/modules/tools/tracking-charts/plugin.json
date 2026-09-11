@@ -1,0 +1,27 @@
+{
+  "id": "tracking-charts",
+  "name": "Tracking Charts",
+  "version": "1.0.0",
+  "platformCompat": ">=1.53.0",
+  "dataTypes": [
+    "live"
+  ],
+  "requires": [
+    "tracking"
+  ],
+  "creator": "IRIBHM",
+  "placement": "tools",
+  "group": "tools",
+  "subtype": "toggle",
+  "icon": "bar-chart-2",
+  "order": 60,
+  "description": "Population statistics of the tracked cells per region over time — cell count, mean velocity, neighbour count, mitoses — on a linear or log scale, exportable through the Download Center.",
+  "buttonId": "btn-tracking-charts",
+  "i18nTitle": "title",
+  "i18nLanguages": [
+    "en",
+    "fr",
+    "es",
+    "nl"
+  ]
+}

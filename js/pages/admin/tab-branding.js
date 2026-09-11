@@ -143,7 +143,6 @@ function render() {
         <div class="adm-card-head"><i data-lucide="menu"></i><span>${escHtml(t('branding.nav', 'Navigation'))}</span></div>
         ${_toggle('nav.showExplorer', t('branding.navExplorer', 'Afficher « Explorer »'))}
         ${_toggle('nav.showCompare', t('branding.navCompare', 'Afficher « Comparer »'))}
-        ${_toggle('nav.showTracking', t('branding.navTracking', 'Afficher « Suivi »'))}
         ${_toggle('nav.showAbout', t('branding.navAbout', 'Afficher « À propos »'))}
         ${_toggle('nav.showLegal', t('branding.navLegal', 'Afficher « Mentions légales »'))}
       </div>

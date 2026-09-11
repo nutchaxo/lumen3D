@@ -1,0 +1,28 @@
+{
+  "id": "tracking-measure",
+  "name": "Cell Distance",
+  "version": "1.0.0",
+  "platformCompat": ">=1.53.0",
+  "dataTypes": [
+    "live"
+  ],
+  "requires": [
+    "tracking"
+  ],
+  "creator": "IRIBHM",
+  "placement": "tools",
+  "group": "tools",
+  "subtype": "tool",
+  "icon": "move-horizontal",
+  "order": 35,
+  "description": "Measure the distance between two tracked cells in micrometres: a snapshot at one frame, or a measurement that follows both cells through the timelapse. Saved in the workspace and exportable as CSV/JSON.",
+  "tool": "cell-measure",
+  "shortcut": "d",
+  "i18nTitle": "title",
+  "i18nLanguages": [
+    "en",
+    "fr",
+    "es",
+    "nl"
+  ]
+}

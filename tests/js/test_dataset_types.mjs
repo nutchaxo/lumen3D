@@ -1,12 +1,17 @@
-/* Contract test for the ONE dataset-type vocabulary ('3d', '2d', 'live',
-   'tracking'). The type id is simultaneously the directory under DATA_WEB/, the
-   first segment of a dataset id, metadata.json "type", plugin.json "dataTypes",
-   the staging id and the admin filter value — so a single source has to decide
+/* Contract test for the ONE dataset-type vocabulary ('3d', '2d', 'live').
+   The type id is simultaneously the directory under DATA_WEB/, the first
+   segment of a dataset id, metadata.json "type", plugin.json "dataTypes", the
+   staging id and the admin filter value — so a single source has to decide
    what a type is called and what it is called IN FRONT OF THE OPERATOR.
+
+   Cell tracking is deliberately NOT a type: a tracked timelapse is a `live`
+   dataset whose metadata carries a `tracking` block, and the viewer draws it as
+   a layer of that dataset. The retired spellings ('fixed', 'wholemount',
+   'tracking') must never come back as an alias.
 
    What is locked here:
      (a) the canonical list and its order;
-     (b) the type → page routing (2d.html / tracking.html / viewer.html);
+     (b) the type → page routing (2d.html / viewer.html);
      (c) the display name: operator override (config/instance.json) first,
          translated default (lang/<code>.json types.*) second;
      (d) that resolving a display name does NOT re-enter I18n.t() — t() asks
@@ -28,7 +33,8 @@ import vm from 'node:vm';
 import { ROOT } from './harness.mjs';
 
 const LOCALES = ['en', 'fr', 'es', 'nl'];
-const TYPES = ['3d', '2d', 'live', 'tracking'];
+const TYPES = ['3d', '2d', 'live'];
+const RETIRED = ['fixed', 'wholemount', 'tracking'];
 
 const langDoc = code => JSON.parse(readFileSync(path.join(ROOT, 'lang', `${code}.json`), 'utf8'));
 const EN = langDoc('en');
@@ -104,17 +110,17 @@ const ok = (label, fn) => {
   const ctx = await boot();
   const types = vm.runInContext('JSON.stringify(Utils.DATASET_TYPES)', ctx);
   ok('canonical list', () => assert.deepEqual(JSON.parse(types), TYPES,
-    "Utils.DATASET_TYPES must be exactly ['3d','2d','live','tracking']"));
+    "Utils.DATASET_TYPES must be exactly ['3d','2d','live']"));
 
   ok('volume types', () => assert.deepEqual(
     JSON.parse(vm.runInContext('JSON.stringify(Utils.VOLUME_DATASET_TYPES)', ctx)),
-    ['3d', 'live', 'tracking'], 'a 2D photograph carries no bricks'));
+    ['3d', 'live'], 'a 2D photograph carries no bricks'));
 
   ok('membership', () => {
     const isType = s => vm.runInContext(`Utils.isDatasetType(${JSON.stringify(s)})`, ctx);
     for (const t of TYPES) assert.equal(isType(t), true, t);
     // The retired spellings are not types any more: no alias, no double reading.
-    for (const t of ['fixed', 'wholemount', 'FIXED', '', null]) {
+    for (const t of [...RETIRED, 'FIXED', '', null]) {
       assert.equal(isType(t), false, `retired/unknown: ${t}`);
     }
   });
@@ -122,16 +128,19 @@ const ok = (label, fn) => {
   ok('type of an id', () => {
     assert.equal(vm.runInContext("Utils.datasetTypeOfId('3d/Egfl7-E8-5')", ctx), '3d');
     assert.equal(vm.runInContext("Utils.datasetTypeOfId('2d/Photo_01')", ctx), '2d');
+    assert.equal(vm.runInContext("Utils.datasetTypeOfId('live/Series_01')", ctx), 'live');
     assert.equal(vm.runInContext("Utils.datasetTypeOfId('fixed/Egfl7-E8-5')", ctx), null);
+    assert.equal(vm.runInContext("Utils.datasetTypeOfId('tracking/Series_01')", ctx), null,
+      'cell tracking is a layer of a live dataset, not a type');
   });
 
   // ── (b) routing ───────────────────────────────────────────────────────────
   ok('routing', () => {
     const page = v => vm.runInContext(`Utils.datasetPage(${JSON.stringify(v)})`, ctx);
     assert.equal(page('2d'), '2d.html');
-    assert.equal(page('tracking'), 'tracking.html');
     assert.equal(page('3d'), 'viewer.html');
     assert.equal(page('live'), 'viewer.html');
+    assert.equal(page('tracking'), 'viewer.html', 'no page is dedicated to tracking any more');
     assert.equal(page('nonsense'), 'viewer.html', 'an unknown type still opens something');
     // A dataset record routes exactly like its bare type.
     assert.equal(page({ type: '2d', id: '2d/Photo' }), '2d.html');
@@ -143,7 +152,9 @@ const ok = (label, fn) => {
   // selector, so the class is prefixed).
   ok('badge class', () => {
     assert.equal(vm.runInContext("Utils.datasetTypeBadgeClass('2d')", ctx), 'badge-2d');
-    assert.equal(vm.runInContext("Utils.datasetTypeBadgeClass('tracking')", ctx), 'badge-tracking');
+    assert.equal(vm.runInContext("Utils.datasetTypeBadgeClass('live')", ctx), 'badge-live');
+    assert.equal(vm.runInContext("Utils.datasetTypeBadgeClass('tracking')", ctx), 'badge-3d',
+      'an unknown type falls back to the default badge class');
   });
 
   // ── (c1) default labels come from lang/<code>.json ────────────────────────
@@ -161,19 +172,23 @@ const ok = (label, fn) => {
   ok('a plain translated string resolves', () => {
     assert.equal(vm.runInContext("I18n.t('types.3d.label')", ctx), EN.types['3d'].label);
   });
+
+  ok('no token for the retired type', () => {
+    assert.equal(vm.runInContext("'typeTracking' in InstanceConfig.tokens()", ctx), false,
+      '{typeTracking} is gone with the type');
+  });
 }
 
 // ── (d) no recursion when a string interpolates a type token ─────────────────
 // The probe key is injected rather than shipped: t() is the function that would
-// recurse, so it is called on a string carrying all four type tokens. An infinite
+// recurse, so it is called on a string carrying all three type tokens. An infinite
 // t() → tokens() → datasetTypeLabel() → t() cycle blows the stack instead of
 // returning, so this assertion is the guard.
 {
-  const ctx = await boot({}, { zzTypeTokenProbe: '{type3d}/{type2d}/{typeLive}/{typeTracking}' });
+  const ctx = await boot({}, { zzTypeTokenProbe: '{type3d}/{type2d}/{typeLive}' });
   ok('no recursion through the type tokens', () => {
     const out = vm.runInContext("I18n.t('zzTypeTokenProbe')", ctx);
-    assert.equal(out, `${EN.types['3d'].label}/${EN.types['2d'].label}/`
-      + `${EN.types.live.label}/${EN.types.tracking.label}`,
+    assert.equal(out, `${EN.types['3d'].label}/${EN.types['2d'].label}/${EN.types.live.label}`,
       'I18n.t must interpolate {type3d}… exactly once, without re-entering itself');
   });
 }
@@ -204,13 +219,14 @@ ok('locale parity', () => {
     const doc = langDoc(code);
     assert.ok(doc.types && typeof doc.types === 'object', `lang/${code}.json has a types namespace`);
     assert.deepEqual(Object.keys(doc.types).sort(), [...TYPES].sort(),
-      `lang/${code}.json types.* covers exactly the four types`);
+      `lang/${code}.json types.* covers exactly the three types`);
     for (const t of TYPES) {
       for (const field of ['label', 'title', 'desc']) {
         const v = doc.types[t][field];
         assert.ok(typeof v === 'string' && v.trim(), `lang/${code}.json types.${t}.${field}`);
       }
     }
+    assert.equal(doc.tracking, undefined, `lang/${code}.json no longer carries the tracking page namespace`);
   }
 });
 
@@ -237,6 +253,20 @@ ok('plugin manifests', () => {
         `${id}: plugin.json declares "${t}", which is not a dataset type`);
     }
   }
+});
+
+// ── the server-side twins spell the same list ────────────────────────────────
+ok('server type lists', () => {
+  const py = readFileSync(path.join(ROOT, 'dev_server.py'), 'utf8');
+  assert.ok(py.includes('ALLOWED_TYPE_DIRS = ("3d", "2d", "live")'), 'dev_server.py ALLOWED_TYPE_DIRS');
+  const up = readFileSync(path.join(ROOT, 'upload_staging.py'), 'utf8');
+  assert.ok(up.includes('ALLOWED_TYPE_DIRS = ("3d", "2d", "live")'), 'upload_staging.py ALLOWED_TYPE_DIRS');
+  assert.ok(up.includes('VOLUME_TYPE_DIRS = ("3d", "live")'), 'upload_staging.py VOLUME_TYPE_DIRS');
+  const php = readFileSync(path.join(ROOT, 'api', '_admin_lib.php'), 'utf8');
+  assert.ok(php.includes("const LUMEN_DATASET_TYPES = ['3d', '2d', 'live'];"), 'api/_admin_lib.php LUMEN_DATASET_TYPES');
+  assert.ok(php.includes("const LUMEN_VOLUME_DATASET_TYPES = ['3d', 'live'];"), 'api/_admin_lib.php LUMEN_VOLUME_DATASET_TYPES');
+  const install = readFileSync(path.join(ROOT, 'install.php'), 'utf8');
+  assert.ok(!install.includes("'DATA_WEB/tracking'"), 'install.php no longer seeds DATA_WEB/tracking');
 });
 
 console.log('OK  dataset-type vocabulary: %d checks', checks);

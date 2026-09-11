@@ -56,7 +56,7 @@ $refused = [
     ['3d', 'evil.php'], ['3d', '.htaccess'], ['3d', 'index.html'],
     ['3d', '../../api/admin_credential.json'], ['3d', 'bricks/../../evil.js'],
     ['3d', 'download/evil.php'], ['3d', 'download/sub/dir.ims'],
-    ['3d', 'bricks/t000/lod0/c0/pack_00.bin'],       // timepoints are live/tracking only
+    ['3d', 'bricks/t000/lod0/c0/pack_00.bin'],       // timepoints are live only
     ['3d', 'bricks/lod0/c0/pack_00.bin.php'], ['3d', 'bricks/lod0/../../../x.php'],
     ['3d', '/etc/passwd'], ['3d', 'bricks/lod0/c0/.hidden.bin'],
     ['3d', 'image.webp'],                              // display copies: 2D only

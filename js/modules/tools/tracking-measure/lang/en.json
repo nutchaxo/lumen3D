@@ -1,0 +1,15 @@
+{
+  "title": "Cell distance",
+  "close": "Close",
+  "snapshot": "Snapshot",
+  "followCells": "Follow cells",
+  "measureDesc": "Click two tracked cells to measure their distance.",
+  "noMeasure": "No saved measurement yet.",
+  "clear": "Clear measurements",
+  "measureN": "Cells {n}",
+  "outOfFrame": "Out of frame",
+  "cellA": "Cell A",
+  "clickSecond": "Click a second cell.",
+  "exportCsv": "Cell distances CSV",
+  "exportJson": "Cell distances JSON"
+}

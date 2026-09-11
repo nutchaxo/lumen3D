@@ -435,7 +435,6 @@ function rebuild_catalog(): array {
                 'acquisitionExtentUm',          // microscope stage frame the tracks live in
                 'optical_section_thickness_um', // exact physical depth
                 'intensityNormalization',       // shared window + per-frame signal levels
-                'linkedTrackingId',
                 'relatedIds',
                 'image',                        // 2d: native + preview display copies
                 'pixelSizeUm',                  // 2d: calibrated pixel pitch (scale bar, measures)

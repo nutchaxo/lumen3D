@@ -1,0 +1,6 @@
+# Changelog v1.53.1 (Plateforme Web)
+
+## [FIXED]
+
+* **Les noms par défaut des types de données disaient encore « Fixed » et « Wholemount ».** Le renommage des identifiants en v1.51.0 (`fixed` → `3d`, `wholemount` → `2d`) avait laissé les *noms traduits par défaut* de `lang/*.json` (`types.<id>.{label,title,desc}`) à l'ancien vocabulaire : c'est ce qui remplissait les badges, les filtres de l'explorateur, les cartes de l'accueil et les champs grisés de l'onglet admin *Types de données* (« Fixed / Fijo / Fixe / Vast », « Wholemount » partout). Les défauts sont désormais neutres et identiques dans les quatre langues pour le nom court — **3D**, **2D**, **Live** — avec un titre long tout aussi neutre (*3D imaging* / *Imagerie 3D* / *Imagen 3D* / *3D-beeldvorming*, de même pour 2D et Live) et des descriptions qui ne présument plus d'une préparation « fixée » ni d'une photographie « whole-mount ». L'onglet *Types de données* reste l'endroit où l'opérateur donne, langue par langue, le nom qu'il veut voir affiché ; laisser un champ vide garde ces nouveaux défauts.
+* Les textes de secours des cartes de l'accueil (`index.html`), le titre d'onglet de la page 2D dans la configuration du dépôt (`config/instance.json`) et l'exemple de titre long des guides administrateur suivent le même vocabulaire.

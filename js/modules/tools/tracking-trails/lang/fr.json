@@ -1,0 +1,11 @@
+{
+  "title": "Trajectoires",
+  "length": "Longueur de la trace",
+  "allFrames": "toutes les images",
+  "frames": "{n} images",
+  "future": "Afficher le chemin à venir",
+  "opacity": "Opacité",
+  "colorBy": "Couleur selon",
+  "colorRegion": "Région",
+  "colorSpeed": "Vitesse"
+}

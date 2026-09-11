@@ -179,8 +179,10 @@ function populateFeatured() {
 
   const all = Catalog.getAll();
   const newest = [...all].sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+  // The most-tracked timelapse first (cell tracking rides on a `live` dataset),
+  // then the deepest still volume, then the richest timelapse.
   const preferred = [
-    [...all].filter(d => d.type === 'tracking').sort((a, b) => (b.nCells || 0) - (a.nCells || 0))[0],
+    [...all].filter(d => d.tracking).sort((a, b) => (Number(b.tracking?.cellCount) || 0) - (Number(a.tracking?.cellCount) || 0))[0],
     [...all].filter(d => d.type === '3d').sort((a, b) => (b.dimensions?.z || 0) - (a.dimensions?.z || 0))[0],
     [...all].filter(d => d.type === 'live').sort((a, b) => (b.dimensions?.c || 0) - (a.dimensions?.c || 0))[0],
   ].filter(Boolean);
@@ -216,7 +218,8 @@ function createDatasetCard(dataset, index = 0) {
   const metaItems = [];
   if (stageDisplay !== '—') metaItems.push(`<span>${stageDisplay}</span>`);
   if (dateDisplay !== '—') metaItems.push(`<span>${dateDisplay}</span>`);
-  if (dataset.nCells) metaItems.push(`<span>${dataset.nCells} ${I18n.t('tracking.cells').toLowerCase()}</span>`);
+  const cellCount = Number(dataset.tracking?.cellCount) || 0;
+  if (cellCount) metaItems.push(`<span>${cellCount} ${I18n.t('js.trackingCells').toLowerCase()}</span>`);
   if (dataset.dimensions?.x && dataset.dimensions?.y && dataset.dimensions?.z) {
     const d = dataset.dimensions;
     metaItems.push(`<span>${d.x}&times;${d.y}&times;${d.z}</span>`);

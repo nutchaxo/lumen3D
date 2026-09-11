@@ -2,8 +2,8 @@
 //
 // Guards the scope-aware Download Center render (regression caught in review):
 //   - viewer / explorer scope  → the file explorer (download/ folder)
-//   - tracking / compare scope → the export-buttons modal, INCLUDING the
-//     page-supplied custom exports (tracking measurements, compare composites)
+//   - compare scope → the export-buttons modal, INCLUDING the
+//     page-supplied custom exports (compare composites, plugin exports)
 // A previous redesign dropped the custom-export path wholesale, silently
 // breaking the Tracking and Compare Download Centers. This locks it down.
 import assert from 'node:assert/strict';
@@ -34,20 +34,20 @@ const EM = loadModule('js/core/export-manager.js', 'ExportManager', {
   URL: { createObjectURL: () => '', revokeObjectURL() {} }, Blob: function () {},
 });
 
-// ── tracking scope keeps its custom exports + the generated-export section ──
+// ── compare scope keeps its custom exports + the generated-export section ──
 EM.openDownloadCenter({
-  scope: 'tracking',
+  scope: 'compare',
   getGraph: () => null,
   getCustomExports: () => [
-    { action: 'tracking-measure-csv', label: 'Tracking measurements (CSV)', handler() {} },
+    { action: 'compare-composite-png', label: 'Composite figure (PNG)', handler() {} },
   ],
 });
 assert.ok(body.innerHTML.includes('export-quick-actions'),
-  'tracking scope renders the generated-export buttons, not the file explorer');
-assert.ok(body.innerHTML.includes('data-export-action="tracking-measure-csv"'),
-  'tracking scope surfaces page-supplied custom exports (regression guard)');
+  'compare scope renders the generated-export buttons, not the file explorer');
+assert.ok(body.innerHTML.includes('data-export-action="compare-composite-png"'),
+  'compare scope surfaces page-supplied custom exports (regression guard)');
 assert.ok(!body.innerHTML.includes('id="download-explorer"'),
-  'tracking scope does not show the file explorer');
+  'compare scope does not show the file explorer');
 
 // ── compare scope (no dataset) still surfaces its custom figure exports ──
 EM.openDownloadCenter({

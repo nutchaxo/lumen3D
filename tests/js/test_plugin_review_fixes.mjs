@@ -1,6 +1,6 @@
 // Regression tests for bugs found reviewing PR #55 (plugin system autonomy, v1.1.0):
 //   #1 (tool-manager) 'c'/'m' shortcuts went dead on pages that don't load
-//      PluginRegistry (tracking.html) — the shortcut table became PluginRegistry-seeded.
+//      PluginRegistry — the shortcut table became PluginRegistry-seeded.
 //   #6 (viewer.js) btn-export was double-wired (manual handler + download-center plugin).
 //
 // Run: node tests/js/test_plugin_review_fixes.mjs
@@ -13,7 +13,7 @@ import { loadModule } from './harness.mjs';
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const read = (rel) => readFileSync(path.join(ROOT, rel), 'utf8');
 
-// ── #1: ToolManager shortcuts work WITHOUT PluginRegistry (tracking.html scenario) ──
+// ── #1: ToolManager shortcuts work WITHOUT PluginRegistry (statically wired page) ──
 {
   const mkBtn = (tool) => ({ dataset: { tool }, disabled: false, addEventListener() {}, classList: { toggle() {}, add() {}, remove() {} } });
   const btns = ['navigate', 'cut', 'measure'].map(mkBtn);
@@ -27,7 +27,7 @@ const read = (rel) => readFileSync(path.join(ROOT, rel), 'utf8');
       return m ? (btns.find(b => b.dataset.tool === m[1]) || null) : null;
     },
   };
-  // PluginRegistry intentionally absent from the sandbox (tracking.html does not load it).
+  // PluginRegistry intentionally absent from the sandbox (a page that does not load it).
   const TM = loadModule('js/core/tool-manager.js', 'ToolManager', { document: doc });
   const activated = [];
   TM.init({ onChange: (t) => activated.push(t), defaultTool: 'navigate' });

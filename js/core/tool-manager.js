@@ -7,9 +7,9 @@ const ToolManager = (() => {
   let _callbacks = {};
   // Keyboard shortcuts → tool name. Viewer-page tools declare their own shortcut
   // in plugin.json (subtype:'tool') and override these defaults via registerTool()
-  // in init(). The non-plugin built-ins are seeded here so pages that DON'T load
-  // PluginRegistry (tracking.html: 'cut'/'measure' tools wired statically) keep
-  // their keyboard accelerators — activate() is still gated by _isToolAvailable(),
+  // in init(). The non-plugin built-ins are seeded here so a page that does NOT
+  // load PluginRegistry (statically wired 'cut'/'measure' chips) keeps its
+  // keyboard accelerators — activate() is still gated by _isToolAvailable(),
   // so a default for a tool absent on the current page is a harmless no-op.
   let _shortcuts = { v: 'navigate', escape: 'navigate', c: 'cut', m: 'measure' };
 

@@ -46,18 +46,18 @@ const InstanceConfig = (() => {
     pageTitles: {
       home: 'Lumen3D — 3D Imaging Data Viewer',
       explorer: 'Data Explorer — Lumen3D', viewer: 'Viewer — Lumen3D',
-      compare: 'Compare — Lumen3D', tracking: 'Tracking — Lumen3D',
+      compare: 'Compare — Lumen3D',
       '2d': '2D — Lumen3D',
       about: 'About — Lumen3D', admin: 'Admin — Lumen3D', legal: 'Legal — Lumen3D'
     },
-    // Operator-chosen display names for the four dataset types ('3d', '2d',
-    // 'live', 'tracking'): { "<type>": { label, title } }, each localizable like
-    // `specimen`. Empty by default — an unset entry falls back to the translated
+    // Operator-chosen display names for the three dataset types ('3d', '2d',
+    // 'live'): { "<type>": { label, title } }, each localizable like `specimen`.
+    // Empty by default — an unset entry falls back to the translated
     // `types.<type>.*` string in lang/<code>.json (see Utils.datasetTypeLabel).
     datasetTypes: {},
     footer: { copyright: '© Lumen3D', links: [] },
     nav: {
-      showExplorer: true, showCompare: true, showTracking: true,
+      showExplorer: true, showCompare: true,
       showAbout: true, showLegal: true, customPages: []
     }
   };
@@ -163,8 +163,7 @@ const InstanceConfig = (() => {
       // I18n.raw() — NOT I18n.t() — because t() is what calls this function.
       type3d: _typeToken('3d'),
       type2d: _typeToken('2d'),
-      typeLive: _typeToken('live'),
-      typeTracking: _typeToken('tracking')
+      typeLive: _typeToken('live')
     };
   }
 
@@ -223,7 +222,6 @@ const InstanceConfig = (() => {
     const stdMap = {
       'explorer.html': nav.showExplorer,
       'compare.html': nav.showCompare,
-      'tracking.html': nav.showTracking,
       'about.html': nav.showAbout
     };
     root.querySelectorAll('.navbar-links').forEach(container => {

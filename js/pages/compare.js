@@ -347,7 +347,7 @@ const CompareApp = (() => {
     const ready = await _waitForPanelReady(panelIndex, 180000);
     if (ready) {
       const panel = document.getElementById(`panel-${panelIndex}`);
-      if (!['tracking', '2d'].includes(panel?.dataset.datasetType)) {
+      if (panel?.dataset.datasetType !== '2d') {
         _queueHighDetailLoad(panelIndex);
       }
     }
@@ -426,7 +426,6 @@ const CompareApp = (() => {
   function _frameVisualState(iframe) {
     if (!iframe?.contentDocument) return { renderable: false, nonzero: 0 };
     const source = iframe.contentDocument.querySelector('#webgl-canvas')
-      || iframe.contentDocument.querySelector('#tracking-canvas canvas')
       || iframe.contentDocument.querySelector('canvas');
     if (!source || !source.width || !source.height) return { renderable: false, nonzero: 0 };
     return {
@@ -1108,7 +1107,6 @@ const CompareApp = (() => {
   function _drawIframeCanvas(ctx, iframe, x, y, w, h) {
     if (!iframe?.contentDocument) return false;
     const source = iframe.contentDocument.querySelector('#webgl-canvas')
-      || iframe.contentDocument.querySelector('#tracking-canvas canvas')
       || iframe.contentDocument.querySelector('canvas');
     if (!source || !source.width || !source.height) return false;
     if (_sampleCanvasNonzero(source) <= 16) return false;

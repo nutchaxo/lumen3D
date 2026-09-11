@@ -1328,9 +1328,10 @@ function handle_configure(): void {
     // Data layout (only create what is absent — never touch existing data).
     // These are the directories the operator uploads datasets into over SFTP, so
     // getting their mode right matters more here than anywhere else.
-    // One directory per dataset type ('3d' volumes, '2d' photographs, live, tracking):
-    // the folder name IS the type everywhere else in the platform.
-    foreach (['DATA_WEB', 'DATA_WEB/3d', 'DATA_WEB/2d', 'DATA_WEB/live', 'DATA_WEB/tracking'] as $d) {
+    // One directory per dataset type ('3d' volumes, '2d' photographs, 'live'
+    // timelapses — a tracked timelapse is a live dataset): the folder name IS the
+    // type everywhere else in the platform.
+    foreach (['DATA_WEB', 'DATA_WEB/3d', 'DATA_WEB/2d', 'DATA_WEB/live'] as $d) {
         $p = tpath($d);
         if (!make_dir($p)) json_fail('mkdir_failed', 500);
     }

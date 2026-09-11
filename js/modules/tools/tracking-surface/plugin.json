@@ -1,0 +1,27 @@
+{
+  "id": "tracking-surface",
+  "name": "Tracking Surface",
+  "version": "1.0.0",
+  "platformCompat": ">=1.53.0",
+  "dataTypes": [
+    "live"
+  ],
+  "requires": [
+    "tracking"
+  ],
+  "creator": "IRIBHM",
+  "placement": "tools",
+  "group": "visuals",
+  "subtype": "toggle",
+  "icon": "shell",
+  "order": 46,
+  "description": "Shows the specimen surface exported with the cell tracking (model.glb) inside the volume, per timepoint and in the frame of reference on screen: uniform, local cell density or region colouring, the volume's own clipping, and an oblique cut plane with a filled cap.",
+  "buttonId": "btn-tracking-surface",
+  "i18nTitle": "title",
+  "i18nLanguages": [
+    "en",
+    "fr",
+    "es",
+    "nl"
+  ]
+}

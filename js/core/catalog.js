@@ -112,8 +112,6 @@ const Catalog = (() => {
     // Find datasets with matching embryo/stage/date or explicit relations.
     return _datasets.filter(d =>
       d.id !== id && (
-        (ds.linkedTrackingId && d.id === ds.linkedTrackingId) ||
-        (d.linkedTrackingId && d.linkedTrackingId === ds.id) ||
         (ds.embryo && d.embryo === ds.embryo && d.stage === ds.stage) ||
         (ds.date && ds.date !== 'Unknown' && d.date === ds.date && d.stage === ds.stage) ||
         (ds.relatedIds && ds.relatedIds.includes(d.id)) ||
@@ -127,7 +125,6 @@ const Catalog = (() => {
     const target = getById(targetId);
     if (!source || !target) return null;
 
-    const explicitTrackingLink = source.linkedTrackingId === target.id || target.linkedTrackingId === source.id;
     const explicitRelated = Array.isArray(source.relatedIds) && source.relatedIds.includes(target.id)
       || Array.isArray(target.relatedIds) && target.relatedIds.includes(source.id);
     const sameEmbryoStage = Boolean(source.embryo && target.embryo && source.embryo === target.embryo && source.stage === target.stage);
@@ -135,8 +132,7 @@ const Catalog = (() => {
     const qc = registration?.qcSummary || null;
 
     let type = 'context';
-    if (explicitTrackingLink) type = 'tracking-link';
-    else if (registration) type = 'registered';
+    if (registration) type = 'registered';
     else if (explicitRelated) type = 'related';
     else if (sameEmbryoStage) type = 'same-embryo';
 
@@ -156,26 +152,31 @@ const Catalog = (() => {
    * @returns {object}
    */
   function getStats() {
-    const tracking = _datasets.filter(d => d.type === 'tracking');
+    // Cell tracking rides on a timelapse: the counts come from the `tracking`
+    // block a tracked `live` dataset carries in its metadata.
+    const tracked = _datasets.filter(d => d.tracking && typeof d.tracking === 'object');
     const embryos = new Set();
     _datasets.forEach(d => {
       if (d.embryo) embryos.add(`${d.stage || 'unknown'}-${d.embryo}-${d.date || ''}`);
     });
     const regions = new Set();
-    tracking.forEach(d => {
-      if (d.regions) d.regions.forEach(r => regions.add(r));
+    tracked.forEach(d => {
+      (Array.isArray(d.tracking.regions) ? d.tracking.regions : []).forEach(r => {
+        const name = typeof r === 'string' ? r : r?.name;
+        if (name) regions.add(name);
+      });
     });
 
     return {
       totalDatasets: _datasets.length,
       totalEmbryos: embryos.size,
-      totalCells: tracking.reduce((sum, d) => sum + (d.nCells || 0), 0),
+      totalCells: tracked.reduce((sum, d) => sum + (Number(d.tracking.cellCount) || 0), 0),
       totalRegions: regions.size,
       byType: _countByType()
     };
   }
 
-  /** Counters keyed by dataset type ('3d', '2d', 'live', 'tracking'). Every known
+  /** Counters keyed by dataset type ('3d', '2d', 'live'). Every known
    *  type is seeded at 0 so a caller can read a counter without an existence test;
    *  a type the catalog carries but Utils does not know still gets a key rather
    *  than disappearing from the totals. */
@@ -252,9 +253,6 @@ const Catalog = (() => {
 
   function _relationLabel(type) {
     return {
-      // 'tracking-link' is an internal relation enum; the word shown to the
-      // operator is the label of the 'tracking' DATASET TYPE.
-      'tracking-link': `Linked ${_typeLabel('tracking')}`,
       registered: 'Registered',
       related: 'Related dataset',
       'same-embryo': `Same ${_specimenNoun()}/stage`,
@@ -268,7 +266,6 @@ const Catalog = (() => {
       const median = Number.isFinite(qc?.medianRmsAfter) ? `, median RMS ${qc.medianRmsAfter.toFixed(3)}` : '';
       return `${method}${median}`;
     }
-    if (type === 'tracking-link') return `${_typeLabel('tracking')} dataset linked to this acquisition.`;
     if (type === 'same-embryo') return `Matched by ${_specimenNoun()} and stage metadata.`;
     if (type === 'related') return 'Explicitly linked by dataset metadata.';
     return 'Related by experimental context.';

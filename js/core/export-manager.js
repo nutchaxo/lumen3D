@@ -462,7 +462,11 @@ const ExportManager = (() => {
       markers: dataset.markers || [],
       dimensions: dataset.dimensions || null,
       voxelSize: dataset.voxel_size || null,
-      linkedTrackingId: dataset.linkedTrackingId || null,
+      tracking: dataset.tracking ? {
+        cellCount: Number(dataset.tracking.cellCount) || 0,
+        timepointCount: Number(dataset.tracking.timepointCount) || 0,
+        source: dataset.tracking.source || null
+      } : null,
       registration: dataset.registration ? {
         method: dataset.registration.method || null,
         appliedToVolume: Boolean(dataset.registration.appliedToVolume),

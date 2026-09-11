@@ -42,10 +42,10 @@ function config_dir(): string { return admin_root() . '/config'; }
 // three independent literals before, and they drifted.
 // Twins: dev_server.py ALLOWED_TYPE_DIRS / upload_staging.py ALLOWED_TYPE_DIRS /
 // js/core/utils.js Utils.DATASET_TYPES.
-const LUMEN_DATASET_TYPES = ['3d', '2d', 'live', 'tracking'];
+const LUMEN_DATASET_TYPES = ['3d', '2d', 'live'];
 // Types whose data is a brick pyramid. '2d' is a single photograph, so it has no
 // bricks/ tree (twin of VOLUME_TYPE_DIRS / Utils.VOLUME_DATASET_TYPES).
-const LUMEN_VOLUME_DATASET_TYPES = ['3d', 'live', 'tracking'];
+const LUMEN_VOLUME_DATASET_TYPES = ['3d', 'live'];
 
 // ── Filesystem permissions (keep the site editable over FTP/SFTP) ────────────
 // Twin of install.php's perms_* helpers. The web root belongs to the hosting
@@ -402,8 +402,16 @@ function admin_safe_dataset(string $id): ?array {
 
 const LUMEN_LEGACY_TYPE_DIRS = ['fixed' => '3d', 'wholemount' => '2d'];
 
+/** The former fifth type. A tracked timelapse was always written to DATA_WEB/live/ with
+ *  tracks.json beside its bricks, so DATA_WEB/tracking/ only ever held what install.php
+ *  seeded (an empty folder) or a hand-made dataset: removed when empty, reported when
+ *  not — its bytes are never touched. Twin of dev_server._RETIRED_TYPE_DIR. */
+const LUMEN_RETIRED_TYPE_DIR = 'tracking';
+
 /** An explorer filter link as the page builder serialises it into config/pages/. */
 const LUMEN_LEGACY_TYPE_HREF_RE = '/(explorer\.html\?type=)(fixed|wholemount)(?![A-Za-z0-9_-])/';
+/** A link to the retired type's filter now opens the timelapses. */
+const LUMEN_RETIRED_TYPE_HREF_RE = '/(explorer\.html\?type=)tracking(?![A-Za-z0-9_-])/';
 
 /**
  * Substring probe on a small JSON file — cheaper than parsing it, and this runs on
@@ -430,15 +438,34 @@ function lumen_migration_pending(): bool {
         $journals = @glob("$state/{$old}__*.json");
         if (is_array($journals) && $journals) return true;
     }
+    if (is_dir("$dw/" . LUMEN_RETIRED_TYPE_DIR) || is_dir("$staging/" . LUMEN_RETIRED_TYPE_DIR)) return true;
     if (lumen_migration_file_has(stats_file(), ['"fixed/', '"fixed\/', '"wholemount/', '"wholemount\/'])) return true;
-    if (lumen_migration_file_has(config_dir() . '/instance.json', ['"wholemount":'])) return true;
+    // "tracking": covers pageTitles.tracking and datasetTypes.tracking alike.
+    if (lumen_migration_file_has(config_dir() . '/instance.json', ['"wholemount":', '"showTracking"', '"tracking":'])) return true;
     foreach ((array)@glob(config_dir() . '/pages/*.json') as $page) {
         // The full href pattern, not a bare substring: a page that merely mentions
         // "type=fixedish" must not keep this guard hot on every request.
         $raw = @file_get_contents($page);
-        if (is_string($raw) && preg_match(LUMEN_LEGACY_TYPE_HREF_RE, $raw)) return true;
+        if (is_string($raw) && (preg_match(LUMEN_LEGACY_TYPE_HREF_RE, $raw) || preg_match(LUMEN_RETIRED_TYPE_HREF_RE, $raw))) return true;
     }
     return false;
+}
+
+/** Retire DATA_WEB/tracking and uploads/staging/tracking: gone when empty, reported —
+ *  never moved, never deleted — when something is in them. */
+function lumen_migration_retire_tracking(): void {
+    foreach ([data_web() . '/' . LUMEN_RETIRED_TYPE_DIR, uploads_root() . '/staging/' . LUMEN_RETIRED_TYPE_DIR] as $root) {
+        if (!is_dir($root)) continue;
+        $names = @scandir($root);
+        if (!is_array($names)) { error_log("dataset-type migration: FAILED to read $root"); continue; }
+        $entries = array_values(array_filter($names, fn($n) => $n !== '.' && $n !== '..' && $n !== '.gitkeep'));
+        if ($entries) {
+            error_log("dataset-type migration: LEFT $root (" . count($entries) . " item(s)) - cell tracking is no longer a dataset type; a tracked timelapse belongs under DATA_WEB/live/");
+            continue;
+        }
+        @unlink("$root/.gitkeep");
+        if (!@rmdir($root)) error_log("dataset-type migration: FAILED to remove $root");
+    }
 }
 
 /** '<legacyType>/<folder>' → '<canonicalType>/<folder>'. Anything else comes back untouched. */
@@ -563,7 +590,6 @@ function lumen_migration_metadata(): void {
             $before = $meta;
             $meta['type'] = $type;                  // the folder is the authority
             $meta['id']   = "$type/$folder";
-            if (isset($meta['linkedTrackingId'])) $meta['linkedTrackingId'] = lumen_migrate_legacy_id($meta['linkedTrackingId']);
             if (isset($meta['relatedIds']) && is_array($meta['relatedIds'])) {
                 $meta['relatedIds'] = array_map('lumen_migrate_legacy_id', $meta['relatedIds']);
             }
@@ -623,17 +649,36 @@ function lumen_migration_stats(): void {
 }
 
 /** config/instance.json — pageTitles is keyed by <body data-page>, and the photograph
- *  page is served as 2d.html (data-page="2d"). */
+ *  page is served as 2d.html (data-page="2d"). The retired tracking page and type leave
+ *  their title, their nav toggle and their display names. */
 function lumen_migration_instance(): void {
     $file = config_dir() . '/instance.json';
     if (!is_file($file)) return;
     $doc = admin_read_json($file);
-    $titles = (is_array($doc) && isset($doc['pageTitles']) && is_array($doc['pageTitles'])) ? $doc['pageTitles'] : null;
-    if ($titles === null || !array_key_exists('wholemount', $titles)) return;
-    // Never clobber a title the operator already set under the new key.
-    if (!array_key_exists('2d', $titles)) $titles['2d'] = $titles['wholemount'];
-    unset($titles['wholemount']);
-    $doc['pageTitles'] = $titles;
+    if (!is_array($doc)) return;
+    $changed = false;
+    if (isset($doc['pageTitles']) && is_array($doc['pageTitles'])) {
+        $titles = $doc['pageTitles'];
+        if (array_key_exists('wholemount', $titles)) {
+            // Never clobber a title the operator already set under the new key.
+            if (!array_key_exists('2d', $titles)) $titles['2d'] = $titles['wholemount'];
+            unset($titles['wholemount']);
+            $changed = true;
+        }
+        if (array_key_exists('tracking', $titles)) { unset($titles['tracking']); $changed = true; }
+        $doc['pageTitles'] = $titles;
+    }
+    if (isset($doc['nav']) && is_array($doc['nav']) && array_key_exists('showTracking', $doc['nav'])) {
+        unset($doc['nav']['showTracking']);
+        $changed = true;
+    }
+    if (isset($doc['datasetTypes']) && is_array($doc['datasetTypes']) && array_key_exists('tracking', $doc['datasetTypes'])) {
+        unset($doc['datasetTypes']['tracking']);
+        // json_encode writes an empty PHP array as `[]`; the client reads a map.
+        if (!$doc['datasetTypes']) $doc['datasetTypes'] = new stdClass();
+        $changed = true;
+    }
+    if (!$changed) return;
     if (!lumen_migration_write_json($file, $doc)) error_log('dataset-type migration: FAILED config/instance.json');
 }
 
@@ -646,6 +691,7 @@ function lumen_migration_pages(): void {
         if (!is_string($raw) || $raw === '') continue;
         $next = preg_replace_callback(LUMEN_LEGACY_TYPE_HREF_RE,
             fn($m) => $m[1] . LUMEN_LEGACY_TYPE_DIRS[$m[2]], $raw);
+        if (is_string($next)) $next = preg_replace(LUMEN_RETIRED_TYPE_HREF_RE, '${1}live', $next);
         if (!is_string($next) || $next === $raw) continue;
         if (!lumen_migration_write_text($page, $next)) error_log("dataset-type migration: FAILED " . basename($page));
     }
@@ -664,6 +710,7 @@ function lumen_migrate_dataset_types(): void {
         lumen_migration_move_dir(data_web() . "/$old", data_web() . "/$canon");
         lumen_migration_move_dir("$staging/$old", "$staging/$canon");
     }
+    lumen_migration_retire_tracking();
     lumen_migration_journals();
     lumen_migration_metadata();
     lumen_migration_stats();

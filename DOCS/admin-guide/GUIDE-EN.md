@@ -784,7 +784,7 @@ That word is then **picked up automatically throughout the public interface**: t
 
 ## 11.6. The "Navigation" card
 
-The checkboxes decide which entries appear in the public site's menu: *Explorer*, *Compare*, *Tracking*, *About*, *Legal*.
+The checkboxes decide which entries appear in the public site's menu: *Explorer*, *Compare*, *About*, *Legal*.
 
 Unticking an entry removes it from the menu without deleting the page.
 
@@ -799,18 +799,17 @@ This is a **tab of its own**, right next to *Identity*. It carries the same idea
 | **3D** | A still volume: a multi-channel 3D image stack | the 3D viewer |
 | **2D** | A calibrated stereomicroscope photograph | the 2D viewer |
 | **Live** | A 4D time series (the same volume over time) | the 3D viewer, with a timeline |
-| **Tracking** | The trajectories of cells followed through a time series | the tracking viewer |
 
 Each category has two fields, **multilingual** like the ones in the Identity tab:
 
 - **Short name** — what appears on badges, filters and lists (`Volumes`, `Photographs`…).
-- **Title** — the long form, used on the large cards of the home page (`3D Imaging`, `Wholemount Photography`…).
+- **Title** — the long form, used on the large cards of the home page (`3D imaging`, `Live imaging`…).
 
 **Leave a field empty to keep the default name.** An empty field is not an empty name: the platform then falls back to its own translation, in the visitor's language. That is also what the **Reset** button does — it clears your names instead of replacing them with frozen text.
 
 > ### 📌 What this tab does **not** change
 >
-> Display names only. Not the folders on the server (`DATA_WEB/3d/`, `DATA_WEB/2d/`, `DATA_WEB/live/`, `DATA_WEB/tracking/`), not the page addresses, not the links your visitors may have bookmarked, and nothing inside the datasets themselves. So rename as often as you like — there is no risk.
+> Display names only. Not the folders on the server (`DATA_WEB/3d/`, `DATA_WEB/2d/`, `DATA_WEB/live/`), not the page addresses, not the links your visitors may have bookmarked, and nothing inside the datasets themselves. So rename as often as you like — there is no risk.
 >
 > And it does not create categories: the four types are the ones the software knows how to display.
 
@@ -1073,7 +1072,7 @@ A **variable** is a piece of text you define once and reuse everywhere.
 
 Naming rules: start with a letter, then letters, digits or `_`, 32 characters maximum.
 
-Variables already exist for the Identity tab's information: `{brand}` (the site's name), `{specimen}` (your object of study), `{org}` (the organisation), `{year}` (the year). The four dataset categories have their own too: `{type3d}`, `{type2d}`, `{typeLive}`, `{typeTracking}` — they carry the names from the **Dataset types** tab (§11.7). All of them update by themselves.
+Variables already exist for the Identity tab's information: `{brand}` (the site's name), `{specimen}` (your object of study), `{org}` (the organisation), `{year}` (the year). The three dataset categories have their own too: `{type3d}`, `{type2d}`, `{typeLive}` — they carry the names from the **Dataset types** tab (§11.7). All of them update by themselves.
 
 ## 12.11. Creating a new page
 
@@ -1228,7 +1227,7 @@ The fix needs access to the server's files (FTP, SFTP, or the host's file manage
 
 ### "A dataset does not appear in the list"
 
-1. check that it really is in `DATA_WEB/3d/`, `DATA_WEB/2d/`, `DATA_WEB/live/` or `DATA_WEB/tracking/` — those four folder names are fixed, do not rename them (renaming a **type** in the *Dataset types* tab only changes what is displayed, never the folder);
+1. check that it really is in `DATA_WEB/3d/`, `DATA_WEB/2d/` or `DATA_WEB/live/` — those three folder names are fixed, do not rename them (renaming a **type** in the *Dataset types* tab only changes what is displayed, never the folder);
 2. check that its folder contains a `metadata.json` file;
 3. reload the panel page.
 
@@ -1260,7 +1259,7 @@ Do a **hard reload**: `Ctrl + Shift + R` (Windows) or `Cmd + Shift + R` (Mac). T
 | **Voxel** | The three-dimensional equivalent of a pixel. Its real size is given by the calibration (§3.3). |
 | **Brick** | A small cube of volume (64×64×64 voxels). The site loads them on demand, which is how it can show volumes of several gigabytes without downloading everything. |
 | **LOD** | *Level of Detail*. Several resolutions of the same volume: the site shows a coarse version first, then refines. |
-| **Dataset type** | One of the four categories — `3d` (still volume), `2d` (calibrated photograph), `live` (4D time series), `tracking` (cell trajectories). Those four words are technical: they are the server's folders and the start of every dataset's identifier. The name the public sees is set in the **Dataset types** tab (§11.7). |
+| **Dataset type** | One of the three categories — `3d` (still volume), `2d` (calibrated photograph), `live` (4D time series, optionally with the tracking of its cells). Those three words are technical: they are the server's folders and the start of every dataset's identifier. The name the public sees is set in the **Dataset types** tab (§11.7). |
 | **Plugin** | A module that adds a feature to the viewer (§5.1). |
 | **Sandbox** | An isolated execution mode: the plugin works, but cannot reach the rest of the page. |
 | **Fingerprint** | A signature of a file's exact contents. If the file changes by a single character, the fingerprint changes. |

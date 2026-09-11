@@ -1,0 +1,23 @@
+{
+  "title": "Tracking surface",
+  "opacity": "Opacity",
+  "colorMode": "Colour mode",
+  "uniform": "Uniform",
+  "density": "Cell density",
+  "region": "Region",
+  "colormap": "Colour map",
+  "followClip": "Follow the volume's clipping",
+  "clipTitle": "Cut plane",
+  "clipEnable": "Cut the surface",
+  "oblique": "Oblique",
+  "planePos": "Plane position",
+  "yaw": "Yaw",
+  "pitch": "Pitch",
+  "resetClip": "Reset cut",
+  "legendDensity": "Local cell density",
+  "legendRegion": "Region colours",
+  "relative": "(relative)",
+  "changeColormap": "Click to change the colour map",
+  "selectColormap": "Select a colour map",
+  "loadFailed": "The surface model could not be loaded."
+}

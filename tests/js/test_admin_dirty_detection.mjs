@@ -47,7 +47,7 @@ function loadTab() {
     console, setTimeout, clearTimeout, JSON, Math, Number, Array, Object, String, Boolean, Date,
     // ── stubs for what the module imports ──
     API_DATASETS: 'api/datasets.php',
-    Utils: { DATASET_TYPES: ['3d', '2d', 'live', 'tracking'], datasetTypeLabel: (x) => x, datasetPage: () => 'viewer.html' },
+    Utils: { DATASET_TYPES: ['3d', '2d', 'live'], datasetTypeLabel: (x) => x, datasetPage: () => 'viewer.html' },
     t: (_k, d) => d ?? '',
     escHtml: (v) => String(v ?? ''),
     apiFetch: async () => null,

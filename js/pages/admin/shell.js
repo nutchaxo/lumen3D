@@ -12,7 +12,7 @@ import {
   I18n, Utils, API_AUTH, API_SITE, API_ADMIN, t, escHtml, apiFetch, apiFetchStatus, setCsrf,
   setUnauthorizedHandler, toast, refreshIcons, el,
 } from './shared.js';
-import { isDirty, setNavigator } from './bus.js';
+import { isDirty, discardDirty, setNavigator } from './bus.js';
 import * as UploadDock from './upload-dock.js';
 import * as Upload from './upload-manager.js';
 
@@ -265,6 +265,9 @@ function switchTab(id, force = false) {
   if (!force && _activeTab !== id && isDirty()) {
     const ok = confirm(t('admin.confirmDiscard', 'Modifications non sauvegardées. Continuer sans sauvegarder ?'));
     if (!ok) return;
+    // Answering yes THROWS the edits away — asking again on the next tab click
+    // would mean the answer was never honoured.
+    discardDirty();
   }
 
   _activeTab = id;

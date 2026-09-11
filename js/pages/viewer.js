@@ -460,7 +460,7 @@ const ViewerApp = (() => {
       // by channel NAME and adopt the newcomer's gamma/min/max/enabled wholesale.
       // Adding a dataset whose DAPI is gamma 5.5 next to one at 1.04 turned the first
       // panel black. _isInitialized is false until init() returns.
-      if (_isIframe && _isInitialized) {
+      if (_isIframe && _isInitialized && !_suppressChannelSync) {
         // SEC-012: restrict targetOrigin to this page's origin (no wildcard leak).
         window.parent.postMessage({ type: 'SYNC_CHANNELS', sourceIndex: _panelIndex, channelIndex: idx, value: params }, Utils.trustedTargetOrigin());
       }
@@ -1124,7 +1124,10 @@ const ViewerApp = (() => {
     const val = parseInt(slider.value, 10) / 100;
     if (label) label.textContent = `${val.toFixed(2)}×`;
     VolumeViewer.setExposure(val);
-    if (_isIframe) {
+    // _isInitialized gates the boot-time chatter, like the SYNC_CHANNELS emitter:
+    // seeding the slider from the dataset's own metadata is not an operator edit, and
+    // the admin preview counted every mount as an unsaved change because of it.
+    if (_isIframe && _isInitialized) {
       // DEAD-021: include sourceIndex so compare.js's routing guard can attribute the
       // message; SEC-012: restrict targetOrigin to this page's origin (no wildcard leak).
       window.parent.postMessage({ type: 'SYNC_EXPOSURE', value: val, sourceIndex: _panelIndex }, Utils.trustedTargetOrigin());
@@ -1228,7 +1231,11 @@ const ViewerApp = (() => {
     // bricks for a single XY cut), so the button did nothing for minutes. Open on the
     // plane the GPU already holds — costs one render, no network — and upgrade in
     // place once the native pass lands.
-    const preview = _renderStudioPreviewSlice();
+    // The Z-stack browser is not the slice inspector: its plane comes from the
+    // browser's cursor and trim, not from the (hidden) inspector plane.
+    const preview = _zstackActive
+      ? _renderStudioPreviewSlice(_zstackStudioSpec())
+      : _renderStudioPreviewSlice();
     const opening = preview || getCurrentSliceResult();
     if (!opening) return;
     StudioEditor.open(opening);
@@ -1237,17 +1244,52 @@ const ViewerApp = (() => {
   }
 
   /**
+   * What the Z-stack browser shows, as a slicer plane: the cursor's slices (every
+   * kept slice in 3D mode) sampled one voxel per step and MIP-projected when the slab
+   * is thicker than one slice — the calibrated 2D counterpart of the slab on screen.
+   */
+  function _zstackStudioSpec() {
+    const { z } = _zstackGetDims();
+    const mod = _zstackModule();
+    const range = typeof mod?.impl?.getStudioSliceRange === 'function' ? mod.impl.getStudioSliceRange() : null;
+    const clampZ = (v) => Math.max(0, Math.min(z - 1, Math.round(Number(v) || 0)));
+    const lo = clampZ(range ? range.lo : Math.max(0, _zstackCurrentSlice));
+    const hi = Math.max(lo, clampZ(range ? range.hi : lo));
+    const n = hi - lo + 1;
+    return {
+      mode: 'xy',
+      axis: 'z',
+      // Slice i spans [i/z, (i+1)/z] of the normalised depth; the plane sits at the
+      // slab's centre and the samples land on the voxel centres (lo + 0.5 + k) / z.
+      value: (lo + n / 2) / z,
+      yaw: 0,
+      pitch: 0,
+      roll: 0,
+      slabThickness: n,
+      slabStepNorm: 1 / z,
+      projection: n > 1 ? 'mip' : 'single'
+    };
+  }
+
+  /**
    * The Studio's opening image: the current plane rendered from the atlas already
    * resident on the GPU, framed exactly as the native pass will frame it so the
    * upgrade is a pixel swap and every annotation keeps its coordinates.
+   * With an explicit `spec` the inspector plane is left untouched (it need not even
+   * be shown): the render goes through a throwaway slicer material.
    */
-  function _renderStudioPreviewSlice() {
-    if (typeof VolumeSlicer === 'undefined' || !VolumeSlicer.isVisible?.() || !VolumeSlicer.renderHighRes) return null;
+  function _renderStudioPreviewSlice(spec = null) {
+    if (typeof VolumeSlicer === 'undefined' || !VolumeSlicer.renderHighRes) return null;
+    if (!spec && !VolumeSlicer.isVisible?.()) return null;
+    if (spec && (!VolumeSlicer.renderWithMaterial || !VolumeViewer.getMaterial?.())) return null;
     const dims = (typeof BrickLoader !== 'undefined' && BrickLoader.isReady?.()) ? BrickLoader.getDimensions(0) : null;
     if (!dims) return null;
-    const spec = VolumeSlicer.getPlaneSpec();
+    const explicitPlane = !!spec;
+    if (!spec) spec = VolumeSlicer.getPlaneSpec();
     const renderRes = _nativeStudioRenderSize(spec, dims);
-    const rendered = VolumeSlicer.renderHighRes(renderRes);
+    const rendered = explicitPlane
+      ? VolumeSlicer.renderWithMaterial(VolumeViewer.getMaterial(), spec, renderRes, _currentChannelState())
+      : VolumeSlicer.renderHighRes(renderRes);
     if (!rendered) return null;
     const cropRect = _sliceContentRect(rendered);
     const canvas = _cropEmptySliceSpace(rendered, cropRect);
@@ -1280,6 +1322,7 @@ const ViewerApp = (() => {
     StudioEditor.setLoadProgress?.({ percent: 0, label: label(0, 0), onCancel });
     try {
       const sr = await _renderNativeSliceForStudio({
+        spec: preview.planeSpec,
         cropRect: preview.cropRect,
         onProgress: ({ percent, chunks, totalChunks }) => {
           StudioEditor.setLoadProgress?.({ percent, label: label(chunks, totalChunks), onCancel });
@@ -1470,15 +1513,39 @@ const ViewerApp = (() => {
     return dist - radius <= margin && dist + radius >= -margin;
   }
 
+  /**
+   * Spacing of the slicer's slab samples along `axis`, in normalised texture units —
+   * the spec's own step when it names one, otherwise the slicer's historical 1/256 of
+   * the longest physical axis converted onto that axis.
+   */
+  function _slabStepNorm(spec, axis) {
+    const requested = Number(spec.slabStepNorm);
+    if (Number.isFinite(requested) && requested > 0) return requested;
+    const physical = VolumeViewer.getPhysicalSize?.();
+    const p = physical && physical[axis] > 0 ? physical[axis] : 0;
+    const maxP = physical ? Math.max(physical.x || 0, physical.y || 0, physical.z || 0) : 0;
+    return p > 0 && maxP > 0 ? (1 / 256) * (maxP / p) : 1 / 256;
+  }
+
   function _nativeSliceBricksForSpec(spec, dims) {
     if (typeof BrickLoader === 'undefined' || !BrickLoader.getDimensions) return [];
+    const slabSteps = Math.max(1, Math.min(1024, Number(spec.slabThickness) || 1));
+    const projected = slabSteps > 1 && spec.projection && spec.projection !== 'single';
+    const axis = spec.mode === 'xz' ? 'y' : spec.mode === 'yz' ? 'x' : (!spec.mode || spec.mode === 'xy') ? 'z' : null;
     let bricks = null;
-    if (spec.mode === 'xz') {
-      bricks = BrickLoader.bricksForSlab('y', spec.value ?? 0.5, 0);
-    } else if (spec.mode === 'yz') {
-      bricks = BrickLoader.bricksForSlab('x', spec.value ?? 0.5, 0);
-    } else if (!spec.mode || spec.mode === 'xy') {
-      bricks = BrickLoader.bricksForSlab('z', spec.value ?? 0.5, 0);
+    if (axis && !projected) {
+      bricks = BrickLoader.bricksForSlab(axis, spec.value ?? 0.5, 0);
+    } else if (axis) {
+      // A projected slab samples (steps - 1) / 2 steps either side of the plane; every
+      // brick in that depth range has to be resident at LOD0, not just the plane's own.
+      // One voxel of margin each way covers the sample footprint at the ends.
+      const value = Number.isFinite(+spec.value) ? +spec.value : 0.5;
+      const half = (slabSteps - 1) * _slabStepNorm(spec, axis) * 0.5 + 1 / Math.max(1, dims[axis] || 1);
+      const min = { x: 0, y: 0, z: 0 };
+      const max = { x: 0.9999, y: 0.9999, z: 0.9999 };
+      min[axis] = Math.max(0, value - half);
+      max[axis] = Math.min(0.9999, value + half);
+      bricks = BrickLoader.bricksForRegion(min, max, 0);
     }
 
     if (bricks) {
@@ -1492,10 +1559,7 @@ const ViewerApp = (() => {
       { x: 0.9999, y: 0.9999, z: 0.9999 },
       0
     );
-    const slabSteps = Math.max(1, Math.min(64, Number(spec.slabThickness) || 1));
-    const shaderSlab = (spec.projection && spec.projection !== 'single')
-      ? ((slabSteps - 1) * (1 / 256) * 0.5)
-      : 0;
+    const shaderSlab = projected ? ((slabSteps - 1) * _slabStepNorm(spec, 'z') * 0.5) : 0;
     const voxelMargin = Math.max(1 / Math.max(1, dims.x), 1 / Math.max(1, dims.y), 1 / Math.max(1, dims.z)) * 2;
     return allActive.filter(b => _brickIntersectsSlicePlane(b, dims, plane, shaderSlab + voxelMargin));
   }
@@ -1618,7 +1682,9 @@ const ViewerApp = (() => {
     const dims = BrickLoader.getDimensions(0);
     if (!dims) return null;
     const channels = Math.max(1, Math.min(4, Number(dims.channels) || Number(datasetMeta?.dimensions?.c) || 1));
-    const spec = VolumeSlicer.getPlaneSpec();
+    // The plane the preview was framed on: the inspector's, or the one handed in
+    // (the Z-stack browser's slab), so the native pass swaps pixels under the same frame.
+    const spec = options.spec || VolumeSlicer.getPlaneSpec();
     const bricks = _nativeSliceBricksForSpec(spec, dims);
     if (!bricks.length) return null;
 
@@ -2084,7 +2150,14 @@ const ViewerApp = (() => {
       }
     }
     if (Array.isArray(viewerState.channels)) {
-      ChannelPanel.setState?.(viewerState.channels, { notify: true });
+      // Same reason the boot seeding stays silent (see the SYNC_CHANNELS emitter):
+      // restoring a whole state is not a per-channel operator edit. It usually IS the
+      // parent's own state coming back down — the admin preview mounts with the draft
+      // channels — and echoing it made the panel read its own push as an unsaved edit.
+      // The callback still runs, so the shader uniforms follow; only the wire is quiet.
+      _suppressChannelSync = true;
+      try { ChannelPanel.setState?.(viewerState.channels, { notify: true }); }
+      finally { _suppressChannelSync = false; }
     }
     
     if (typeof viewerState.gridMode === 'number' && typeof VolumeViewer.setGridMode === 'function') {
@@ -3441,33 +3514,19 @@ const ViewerApp = (() => {
       return croppedCanvas;
     }
 
-    if (_zstackActive && typeof VolumeSlicer !== 'undefined') {
-      const { z, vz } = _zstackGetDims();
+    if (_zstackActive && typeof VolumeSlicer !== 'undefined' && VolumeSlicer.renderWithMaterial && VolumeViewer.getMaterial?.()) {
+      const { z } = _zstackGetDims();
       if (z >= 1) {
-        const oldSpec = VolumeSlicer.getPlaneSpec();
-        // Cursor centre in slice mode, middle of the kept range in 3D.
-        const mod = _zstackModule();
-        const sliceIndex = typeof mod?.impl?.getStudioSliceIndex === 'function'
-          ? mod.impl.getStudioSliceIndex()
-          : Math.max(0, _zstackCurrentSlice);
-        const value = sliceIndex / Math.max(1, z - 1);
-        const spec = { mode: 'xy', axis: 'z', value: value, yaw: 0, pitch: 0, roll: 0 };
-        VolumeSlicer.setPlaneSpec(spec);
-
+        // The browser's slab (or its whole kept range in 3D), rendered through a
+        // throwaway slicer material so the inspector plane is never disturbed.
+        const spec = _zstackStudioSpec();
         const dim = datasetMeta?.dimensions || {};
         const maxRes = Math.max(Number(dim.original_x) || Number(dim.x) || 1024, Number(dim.original_y) || Number(dim.y) || 1024);
         const renderRes = Math.ceil(maxRes * 1.5);
-        let canvas = VolumeSlicer.renderHighRes(renderRes);
-        VolumeSlicer.setPlaneSpec(oldSpec);
+        let canvas = VolumeSlicer.renderWithMaterial(VolumeViewer.getMaterial(), spec, renderRes, _currentChannelState());
 
         if (canvas) {
           canvas = cropEmptySpace(canvas);
-          const physical = VolumeViewer.getPhysicalSize?.() || {x: 1, y: 1, z: 1};
-          const pRight = new THREE.Vector3(1 * physical.x, 0, 0);
-          const pUp = new THREE.Vector3(0, 1 * physical.y, 0);
-          const pixelSizeX = (1.5 * pRight.length()) / renderRes;
-          const pixelSizeY = (1.5 * pUp.length()) / renderRes;
-
           return {
             canvas,
             width: canvas.width,
@@ -3476,8 +3535,10 @@ const ViewerApp = (() => {
             source: 'zstack',
             quality: 'high',
             planeSpec: spec,
-            pixelSizeUm: { x: pixelSizeX, y: pixelSizeY },
-            channelState: _currentChannelState()
+            pixelSizeUm: _slicePixelSizeUm(spec, renderRes),
+            physicalSizeUm: VolumeViewer.getPhysicalSize?.(),
+            channelState: _currentChannelState(),
+            timepoint: _currentTimepoint
           };
         }
       }
@@ -3731,6 +3792,9 @@ const ViewerApp = (() => {
   let _suppressZstackSync = false;
   // Prevents echo loops when SYNC_SLICER_SPEC triggers setPlaneSpec in a receiving panel
   let _suppressSlicerSync = false;
+  // A channel state applied FROM a parent frame (or restored in bulk) must not be
+  // broadcast back out of this panel.
+  let _suppressChannelSync = false;
 
   // ── Slicer Sync Overlay ──────────────────────────────────
   // When a decompose-panel sibling receives SYNC_SLICER_SPEC, it can't cut

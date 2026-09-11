@@ -1,7 +1,7 @@
 {
   "id": "figure-panel",
   "version": "1.1.1",
-  "platformCompat": ">=1.49.0",
+  "platformCompat": ">=1.51.0",
   "creator": "IRIBHM",
   "placement": "tools",
   "dataTypes": [

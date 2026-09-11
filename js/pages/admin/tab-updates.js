@@ -17,12 +17,14 @@
 
 'use strict';
 
-import { API_ADMIN, t, escHtml, apiFetch, apiFetchStatus, toast, el, refreshIcons } from './shared.js';
+import { API_ADMIN, Utils, t, escHtml, apiFetch, apiFetchStatus, toast, el, refreshIcons } from './shared.js';
 import { fetchPluginUpdates, runPluginUpdates, updateAffordance } from './plugin-update.js';
+import { renderMarkdown } from './markdown.js';
 
 let _versions = null;
 let _check = null;
 let _preflight = null;   // report shown between "Mettre à jour" and confirmation
+let _notesOpen = false;  // release notes expanded past the collapsed box (survives re-renders)
 let _polling = false;
 let _plugins = null;     // marketplace catalog annotated with installed/update status
 let _pluginsBusy = false;
@@ -68,14 +70,47 @@ function updateBlock() {
 
   return `
     <div class="adm-update-state adm-avail"><i data-lucide="sparkles"></i> ${escHtml(t('admin.updateAvailable', 'Mise à jour disponible'))} : <b>v${escHtml(_check.latest)}</b></div>
-    ${_check.notes ? `<div class="adm-release-notes-head">${escHtml(t('admin.releaseNotes', 'Notes de version'))}</div>
-      <pre class="adm-release-notes">${escHtml(_check.notes)}</pre>` : ''}
+    ${_check.notes ? `<div class="adm-release-notes-head">${escHtml(t('admin.releaseNotes', 'Notes de version'))}${publishedOn(_check.publishedAt)}</div>
+      <div class="adm-md adm-release-notes${_notesOpen ? ' is-open' : ''}" id="release-notes">${renderMarkdown(_check.notes, { dropLeadingH1: true })}</div>
+      <button class="adm-btn adm-btn-ghost adm-btn-sm adm-release-notes-toggle" id="btn-notes-toggle" style="display:none">${notesToggleLabel()}</button>` : ''}
     ${_preflight ? preflightBlock() : `
     <div class="adm-update-actions">
       <button class="adm-btn adm-btn-accent" id="btn-update"><i data-lucide="download-cloud"></i> ${escHtml(t('admin.updateNow', 'Mettre à jour maintenant'))}</button>
       ${_check.htmlUrl ? `<a class="adm-btn adm-btn-ghost" href="${escHtml(_check.htmlUrl)}" target="_blank" rel="noopener"><i data-lucide="external-link"></i> GitHub</a>` : ''}
     </div>
     <div class="adm-update-warn"><i data-lucide="shield"></i> ${escHtml(t('admin.updateWarn', 'Une sauvegarde est créée avant la mise à jour. Vos données (DATA_WEB), identifiants et statistiques sont préservés. Le serveur redémarre à la fin.'))}</div>`}`;
+}
+
+// "· publiée le 11 sept. 2026" beside the notes heading, when GitHub dates the release.
+function publishedOn(iso) {
+  if (!iso) return '';
+  const date = Utils && typeof Utils.formatDate === 'function' ? Utils.formatDate(iso) : String(iso).slice(0, 10);
+  return ` <span class="adm-release-notes-date">${escHtml(t('admin.publishedOn', 'publiée le {d}', { d: date }).replace('{d}', date))}</span>`;
+}
+
+function notesToggleLabel() {
+  return _notesOpen
+    ? `<i data-lucide="chevron-up"></i> ${escHtml(t('admin.releaseNotesLess', 'Réduire'))}`
+    : `<i data-lucide="chevron-down"></i> ${escHtml(t('admin.releaseNotesMore', 'Tout afficher'))}`;
+}
+
+// The notes open collapsed with a fade at the bottom. The button appears only
+// when they actually overflow the box — a control that expands nothing is noise.
+function syncNotesToggle() {
+  const box = el('release-notes');
+  const btn = el('btn-notes-toggle');
+  if (!box || !btn) return;
+  const overflow = _notesOpen || box.scrollHeight > box.clientHeight + 4;
+  btn.style.display = overflow ? '' : 'none';
+  box.classList.toggle('is-overflow', overflow && !_notesOpen);
+}
+
+function toggleNotes() {
+  _notesOpen = !_notesOpen;
+  el('release-notes')?.classList.toggle('is-open', _notesOpen);
+  const btn = el('btn-notes-toggle');
+  if (btn) { btn.innerHTML = notesToggleLabel(); refreshIcons(btn); }
+  syncNotesToggle();
 }
 
 // Compat report against the TARGET version, shown before the operator confirms.
@@ -290,8 +325,10 @@ function render(lastOutcome) {
   el('btn-confirm-update')?.addEventListener('click', confirmUpdate);
   el('btn-cancel-update')?.addEventListener('click', () => { _preflight = null; render(); });
   el('btn-ack-update')?.addEventListener('click', ackOutcome);
+  el('btn-notes-toggle')?.addEventListener('click', toggleNotes);
   bindPluginUpdates(root);
   refreshIcons(root);
+  syncNotesToggle();
 }
 
 async function loadVersions() {

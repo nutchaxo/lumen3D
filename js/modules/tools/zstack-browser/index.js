@@ -134,6 +134,12 @@ PluginRegistry.implement('zstack-browser', {
     return Math.floor((this._cropLo + this._cropHi) / 2);
   },
 
+  /** The slices on screen, inclusive: the cursor's bar, or the whole kept range in 3D. */
+  getStudioSliceRange() {
+    if (this._mode === 'slice') return { lo: this._lo, hi: this._lo + this._thickness - 1 };
+    return { lo: this._cropLo, hi: this._cropHi };
+  },
+
   // ── Private: state ────────────────────────────────────────
 
   _resetFields() {

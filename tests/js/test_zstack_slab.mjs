@@ -245,4 +245,25 @@ assert.ok(/float slabGain = max\(1\.0, 1\.0 \/ \(rayLength \* max\(absorption, 1
 assert.ok(/emissionGain \* exposure \* delta \* slabGain/.test(shader), 'natural-fluorescence emission uses the slab gain');
 assert.ok(/accumAlpha \+= localAlpha \* 0\.05 \* dvrW;/.test(shader), 'structure DVR uses the per-sample weight');
 
-console.log('zstack-browser slab/notch/trim model + clip-box ray march: OK');
+// ── 10. the Studio gets the slab on screen, not a single plane ───────────────
+meta = { dimensions: { z: 100, c: 2 }, voxel_size: { z: 2 } };
+plugin.reset(); plugin.activate();
+plugin.applySync({ sliceTotal: 100, mode: 'slice', cursor: 40, thickness: 5, crop: [10, 89] });
+assert.deepEqual(plain(plugin.getStudioSliceRange()), { lo: 40, hi: 44 }, 'slice mode: the cursor bar');
+assert.equal(plugin.getStudioSliceIndex(), 42, 'and its centre');
+plugin._enter3d();
+assert.deepEqual(plain(plugin.getStudioSliceRange()), { lo: 10, hi: 89 }, '3D mode: the whole kept range');
+const viewerSrc = readFileSync(path.join(ROOT, 'js/pages/viewer.js'), 'utf8');
+assert.ok(/function _zstackStudioSpec\(\)/.test(viewerSrc), 'viewer builds the Studio plane from the browser');
+assert.ok(/getStudioSliceRange/.test(viewerSrc), 'viewer asks the browser for the slice range');
+assert.ok(/value: \(lo \+ n \/ 2\) \/ z,/.test(viewerSrc), 'plane centred on the slab');
+assert.ok(/slabThickness: n,\s*slabStepNorm: 1 \/ z,\s*projection: n > 1 \? 'mip' : 'single'/.test(viewerSrc), 'one sample per slice, MIP when thicker than one slice');
+assert.ok(/_renderStudioPreviewSlice\(_zstackStudioSpec\(\)\)/.test(viewerSrc), 'Studio opens on that plane (then upgrades to native)');
+assert.ok(/const spec = options\.spec \|\| VolumeSlicer\.getPlaneSpec\(\);/.test(viewerSrc), 'native pass renders the same plane');
+assert.ok(/bricks = BrickLoader\.bricksForRegion\(min, max, 0\);/.test(viewerSrc), 'native pass loads every brick of a projected slab');
+const slicerSrc = readFileSync(path.join(ROOT, 'js/viewers/volume-slicer.js'), 'utf8');
+assert.ok(/const MAX_SLAB_STEPS = 1024;/.test(slicerSrc) && /for \(int i = 0; i < 1024; i\+\+\)/.test(slicerSrc), 'slicer slab can span a whole stack');
+assert.ok(/delta = stepNorm \/ \(normal\.length\(\) \|\| 1\);/.test(slicerSrc), 'slicer honours a requested sample spacing');
+assert.ok(!/Math\.min\(64, /.test(slicerSrc), 'no stale 64-step cap left in the slicer');
+
+console.log('zstack-browser slab/notch/trim model + clip-box ray march + Studio slab: OK');

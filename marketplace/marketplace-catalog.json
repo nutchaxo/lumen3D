@@ -374,11 +374,11 @@
       "icon": "layers-3",
       "platformCompat": ">=1.52.0",
       "sandboxCapabilities": null,
-      "latestVersion": "1.1.0",
-      "assetUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/zstack-browser/plugin-zstack-browser-1.1.0.zip",
+      "latestVersion": "1.1.1",
+      "assetUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/zstack-browser/plugin-zstack-browser-1.1.1.zip",
       "sumsUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/zstack-browser/SHA256SUMS",
       "sigUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/zstack-browser/SHA256SUMS.sig",
-      "sha256": "2524b1b35a2261dc1e1f46a5e50c70d78be14bf3287cadcca727f785e03b1702",
+      "sha256": "bb4a7e6af9ac8a84626b765042d8fb6b092fe4824da51a332325d6d18eb67535",
       "recommended": true
     }
   ]

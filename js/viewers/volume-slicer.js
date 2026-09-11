@@ -29,9 +29,14 @@ const VolumeSlicer = (() => {
   let _spec = {
     mode: 'xy', value: 0.5,
     yaw: 0, pitch: 0, roll: 0,
-    slabThickness: 1,
+    slabThickness: 1,          // samples across the slab (1 = a single plane)
+    // Distance between two samples along the plane normal, in normalised texture
+    // units (1/dims.z samples a Z-stack one slice per step). null = the historical
+    // 1/256 of the longest physical axis, which the slice inspector's slider assumes.
+    slabStepNorm: null,
     projection: 'single' // 'single' | 'mip' | 'average'
   };
+  const MAX_SLAB_STEPS = 1024; // must match the loop bound in FRAG
 
   let _visible = false;
   let _rafId = null;
@@ -159,7 +164,7 @@ const VolumeSlicer = (() => {
       vec3 acc = vec3(0.0);
       int hits = 0;
       float halfSlab = float(slabSteps - 1) * slabDelta * 0.5;
-      for (int i = 0; i < 64; i++) {
+      for (int i = 0; i < 1024; i++) {
         if (i >= slabSteps) break;
         vec3 uvw = base + (-halfSlab + float(i) * slabDelta) * sliceNormal + 0.5;
         if (!inBox(uvw)) continue;
@@ -368,9 +373,18 @@ const VolumeSlicer = (() => {
 
     const proj = _spec.projection || 'single';
     u.projMode.value = proj === 'mip' ? 1 : proj === 'average' ? 2 : 0;
-    const steps = Math.max(1, Math.min(64, _spec.slabThickness || 1));
+    const steps = Math.max(1, Math.min(MAX_SLAB_STEPS, _spec.slabThickness || 1));
     u.slabSteps.value = steps;
-    u.slabDelta.value = steps > 1 ? (1.0 / 256) : 0;
+    // slabDelta is measured along `normal`, which the anisotropy scaling above has
+    // stretched to maxP / p_axis: a step of slabStepNorm texture units along that axis
+    // is slabStepNorm / |normal| delta units. Without a requested step the historical
+    // spacing (1/256 of the longest physical axis) applies.
+    let delta = steps > 1 ? (1.0 / 256) : 0;
+    const stepNorm = +_spec.slabStepNorm;
+    if (steps > 1 && Number.isFinite(stepNorm) && stepNorm > 0) {
+      delta = stepNorm / (normal.length() || 1);
+    }
+    u.slabDelta.value = delta;
   }
 
   // ── Rendering ────────────────────────────────────────────
@@ -598,7 +612,11 @@ const VolumeSlicer = (() => {
       merged.value = Math.min(1, Math.max(0, Number.isFinite(+merged.value) ? +merged.value : 0.5));
     }
     if (merged.slabThickness != null) {
-      merged.slabThickness = Math.min(64, Math.max(1, Math.round(+merged.slabThickness) || 1));
+      merged.slabThickness = Math.min(MAX_SLAB_STEPS, Math.max(1, Math.round(+merged.slabThickness) || 1));
+    }
+    if ('slabStepNorm' in merged) {
+      const step = +merged.slabStepNorm;
+      merged.slabStepNorm = Number.isFinite(step) && step > 0 ? Math.min(1, step) : null;
     }
     Object.assign(_spec, merged);
     if (_visible) _scheduleRender();

@@ -267,6 +267,10 @@
     "galleryPrev": "Imagen anterior",
     "galleryNext": "Imagen siguiente",
     "galleryClose": "Cerrar",
+    "galleryHide": "Ocultar la galería",
+    "galleryShow": "Mostrar la galería",
+    "galleryExpand": "Ampliar la galería",
+    "galleryReduce": "Reducir la galería",
     "urlState": {
       "title": "Este enlace contiene una vista guardada",
       "message": "La dirección que has abierto guarda un espacio de trabajo: cámara, ajustes de canales, herramientas y medidas. ¿Abrir esa vista o partir del conjunto de datos tal cual?",

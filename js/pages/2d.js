@@ -373,8 +373,6 @@ const App2D = (() => {
   function _renderGallery() {
     if (typeof DatasetGallery === 'undefined') return;
     DatasetGallery.init({
-      sectionId: 'gallery-section',
-      containerId: 'gallery-container',
       basePath: _basePath,
       items: _meta.gallery
     });

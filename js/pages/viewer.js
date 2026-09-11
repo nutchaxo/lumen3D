@@ -494,8 +494,6 @@ const ViewerApp = (() => {
     // merged with metadata.json at this point, so the array is the authoritative one.
     if (typeof DatasetGallery !== 'undefined') {
       DatasetGallery.init({
-        sectionId: 'gallery-section',
-        containerId: 'gallery-container',
         basePath: _basePath,
         items: datasetMeta.gallery,
       });

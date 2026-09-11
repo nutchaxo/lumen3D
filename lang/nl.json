@@ -267,6 +267,10 @@
     "galleryPrev": "Vorige afbeelding",
     "galleryNext": "Volgende afbeelding",
     "galleryClose": "Sluiten",
+    "galleryHide": "Galerij verbergen",
+    "galleryShow": "Galerij tonen",
+    "galleryExpand": "Galerij vergroten",
+    "galleryReduce": "Galerij verkleinen",
     "urlState": {
       "title": "Deze link bevat een opgeslagen weergave",
       "message": "Het geopende adres bevat een werkomgeving: camera, kanaalinstellingen, gereedschappen en metingen. Die weergave openen, of beginnen bij de dataset zoals die is?",

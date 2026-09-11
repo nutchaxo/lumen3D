@@ -267,6 +267,10 @@
     "galleryPrev": "Image précédente",
     "galleryNext": "Image suivante",
     "galleryClose": "Fermer",
+    "galleryHide": "Masquer la galerie",
+    "galleryShow": "Afficher la galerie",
+    "galleryExpand": "Agrandir la galerie",
+    "galleryReduce": "Réduire la galerie",
     "urlState": {
       "title": "Ce lien contient une vue enregistrée",
       "message": "L'adresse ouverte contient un espace de travail : caméra, réglages des canaux, outils et mesures. Ouvrir cette vue, ou partir du jeu de données tel quel ?",

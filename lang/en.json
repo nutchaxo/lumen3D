@@ -267,6 +267,10 @@
     "galleryPrev": "Previous image",
     "galleryNext": "Next image",
     "galleryClose": "Close",
+    "galleryHide": "Hide the gallery",
+    "galleryShow": "Show the gallery",
+    "galleryExpand": "Enlarge the gallery",
+    "galleryReduce": "Reduce the gallery",
     "urlState": {
       "title": "This link carries a saved view",
       "message": "The address you opened stores a workspace: camera, channel settings, tools and measurements. Open that view, or start from the dataset as it is?",

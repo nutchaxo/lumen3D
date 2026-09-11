@@ -10,8 +10,17 @@
 'use strict';
 
 let _dirtyGuard = () => false;
-export function setDirtyGuard(fn) { _dirtyGuard = (typeof fn === 'function') ? fn : (() => false); }
+let _dirtyDiscard = null;
+export function setDirtyGuard(fn, discard) {
+  _dirtyGuard = (typeof fn === 'function') ? fn : (() => false);
+  _dirtyDiscard = (typeof discard === 'function') ? discard : null;
+}
 export function isDirty() { try { return !!_dirtyGuard(); } catch { return false; } }
+
+// The operator answered "continue without saving": the pending edits have to be
+// dropped for real. Without this the owning tab keeps its dirty flag, so the very
+// next navigation asks the same question again — forever.
+export function discardDirty() { try { _dirtyDiscard?.(); } catch (e) { console.error(e); } }
 
 let _unsavedEl = null;
 export function setUnsaved(on) {

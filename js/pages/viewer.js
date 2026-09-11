@@ -460,7 +460,7 @@ const ViewerApp = (() => {
       // by channel NAME and adopt the newcomer's gamma/min/max/enabled wholesale.
       // Adding a dataset whose DAPI is gamma 5.5 next to one at 1.04 turned the first
       // panel black. _isInitialized is false until init() returns.
-      if (_isIframe && _isInitialized) {
+      if (_isIframe && _isInitialized && !_suppressChannelSync) {
         // SEC-012: restrict targetOrigin to this page's origin (no wildcard leak).
         window.parent.postMessage({ type: 'SYNC_CHANNELS', sourceIndex: _panelIndex, channelIndex: idx, value: params }, Utils.trustedTargetOrigin());
       }
@@ -1124,7 +1124,10 @@ const ViewerApp = (() => {
     const val = parseInt(slider.value, 10) / 100;
     if (label) label.textContent = `${val.toFixed(2)}×`;
     VolumeViewer.setExposure(val);
-    if (_isIframe) {
+    // _isInitialized gates the boot-time chatter, like the SYNC_CHANNELS emitter:
+    // seeding the slider from the dataset's own metadata is not an operator edit, and
+    // the admin preview counted every mount as an unsaved change because of it.
+    if (_isIframe && _isInitialized) {
       // DEAD-021: include sourceIndex so compare.js's routing guard can attribute the
       // message; SEC-012: restrict targetOrigin to this page's origin (no wildcard leak).
       window.parent.postMessage({ type: 'SYNC_EXPOSURE', value: val, sourceIndex: _panelIndex }, Utils.trustedTargetOrigin());
@@ -2084,7 +2087,14 @@ const ViewerApp = (() => {
       }
     }
     if (Array.isArray(viewerState.channels)) {
-      ChannelPanel.setState?.(viewerState.channels, { notify: true });
+      // Same reason the boot seeding stays silent (see the SYNC_CHANNELS emitter):
+      // restoring a whole state is not a per-channel operator edit. It usually IS the
+      // parent's own state coming back down — the admin preview mounts with the draft
+      // channels — and echoing it made the panel read its own push as an unsaved edit.
+      // The callback still runs, so the shader uniforms follow; only the wire is quiet.
+      _suppressChannelSync = true;
+      try { ChannelPanel.setState?.(viewerState.channels, { notify: true }); }
+      finally { _suppressChannelSync = false; }
     }
     
     if (typeof viewerState.gridMode === 'number' && typeof VolumeViewer.setGridMode === 'function') {
@@ -3731,6 +3741,9 @@ const ViewerApp = (() => {
   let _suppressZstackSync = false;
   // Prevents echo loops when SYNC_SLICER_SPEC triggers setPlaneSpec in a receiving panel
   let _suppressSlicerSync = false;
+  // A channel state applied FROM a parent frame (or restored in bulk) must not be
+  // broadcast back out of this panel.
+  let _suppressChannelSync = false;
 
   // ── Slicer Sync Overlay ──────────────────────────────────
   // When a decompose-panel sibling receives SYNC_SLICER_SPEC, it can't cut

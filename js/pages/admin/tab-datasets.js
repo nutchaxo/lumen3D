@@ -56,6 +56,7 @@ let _isCalibratingOrientation = false;
 let _loaded = false;
 let _pendingSelect = null;
 let _axesPushTimer = null;
+let _formBound = false;   // the form fields currently mirror _draft (see collectForm)
 
 let DOM = {};
 
@@ -109,8 +110,122 @@ function refDom() {
 }
 
 // ── Dirty tracking ─────────────────────────────────────────────
-function markDirty() { if (_dirty) return; _dirty = true; setUnsaved(true); }
+// "Is there something to save?" is a question about VALUES, not about which events
+// fired. The draft — form fields included — is compared against the metadata the
+// editor was opened with, so anything that merely mirrors state back into this
+// panel (the preview iframe echoes the channels and the exposure we pushed it the
+// moment it mounts) lands as a no-op instead of a phantom unsaved change on a
+// dataset nobody touched.
+
+const num4 = (v, d = 0) => { const n = Number(v); return Number.isFinite(n) ? Math.round(n * 1e4) / 1e4 : d; };
+const trimmed = (v) => (v === null || v === undefined) ? '' : String(v).trim();
+// Exposure round-trips through a 20..500 integer slider: compare what that slider
+// can represent, or a value outside its range would read as an edit forever.
+const sliderExposure = (v) => Math.max(20, Math.min(500, Math.round(num4(v, 1) * 100))) / 100;
+const quatOf = (q) => {
+  const a = Array.isArray(q) ? q : (q && typeof q === 'object' ? [q.x, q.y, q.z, q.w] : null);
+  return (a && a.length === 4 && a.every((v) => Number.isFinite(Number(v)))) ? a.map((v) => num4(v)) : null;
+};
+
+/** The editable state of a dataset, reduced to something two versions compare by. */
+function fingerprint(meta) {
+  if (!meta) return '';
+  const is2d = meta.type === '2d';
+  const axes = orientationCfgOf(meta);
+  const view = axes.defaultView;
+  return JSON.stringify({
+    name: trimmed(meta.name),
+    stage: trimmed(meta.stage),
+    embryo: trimmed(meta.embryo),
+    description: trimmed(meta.description),
+    hidden: !!meta.hidden,
+    voxel: is2d ? null : ['x', 'y', 'z'].map((k) => num4(meta.voxel_size?.[k], 1) || 1),
+    exposure: is2d ? null : sliderExposure(meta.exposure),
+    channels: (Array.isArray(meta.channels) ? meta.channels : []).map((ch) => [
+      trimmed(ch?.name), trimmed(ch?.color).toLowerCase(),
+      num4(ch?.min, 0), num4(ch?.max, 1), num4(ch?.gamma, 1), ch?.active !== false,
+    ]),
+    orientation: quatOf(meta.orientation),
+    orientation2d: meta.orientation2d
+      ? [num4(meta.orientation2d.rotationDeg), !!meta.orientation2d.flipH] : null,
+    // Fixed axis order on both sides: the stored object keeps whatever key order the
+    // file had, the rebuilt one is canonical, and that difference is not an edit.
+    axisLabels: AXIS_CODES.map((c) => trimmed(axes.labels[c])),
+    axisHidden: AXIS_CODES.map((c) => axes.hidden.includes(c)),
+    defaultView: view ? [trimmed(view.preset), quatOf(view.quaternion)] : null,
+    gallery: (Array.isArray(meta.gallery) ? meta.gallery : []).map((g) => [trimmed(g?.file), trimmed(g?.caption)]),
+  });
+}
+
+function setDirty(on) {
+  const next = !!on;
+  if (next === _dirty) return;
+  _dirty = next;
+  setUnsaved(next);
+}
+
+/** Re-evaluate against the baseline. Every edit path ends here. */
+function syncDirty() {
+  collectForm();
+  // A calibration in progress has nothing in the draft yet — the pose is read back
+  // from the gizmo on save — so the intent itself counts as an unsaved change.
+  setDirty(!!_draft && !!_original
+    && (_isCalibratingOrientation || fingerprint(_draft) !== fingerprint(_original)));
+}
+
+/** Baseline reset (load / save / discard): there is nothing pending, full stop. */
 function clearDirty() { _dirty = false; setUnsaved(false); }
+
+/**
+ * DOM → draft for the fields the form owns. Called before every comparison AND on
+ * save, so what is compared is exactly what would be written.
+ */
+function collectForm() {
+  if (!_formBound || !_draft) return;
+  _draft.name = (DOM.fName.value || '').trim() || _draft.name;
+  _draft.stage = (DOM.fStage.value || '').trim();
+  _draft.embryo = (DOM.fEmbryo.value || '').trim() || null;
+  _draft.description = (DOM.fDescription.value || '').trim() || null;
+  if (_draft.type !== '2d') {   // a photograph is calibrated by pixelSizeUm, not voxels
+    _draft.voxel_size = {
+      x: parseFloat(DOM.fVoxX.value) || _draft.voxel_size?.x || 1,
+      y: parseFloat(DOM.fVoxY.value) || _draft.voxel_size?.y || 1,
+      z: parseFloat(DOM.fVoxZ.value) || _draft.voxel_size?.z || 1,
+    };
+    if (DOM.fExposure) _draft.exposure = parseFloat(DOM.fExposure.value) / 100;
+  }
+  const sn = parseStageNumeric(_draft.stage);
+  if (sn !== null) _draft.stageNumeric = sn;
+}
+
+/**
+ * Drop the pending edits: the baseline metadata becomes the draft again. Used by
+ * the Reset button, by the "continue without saving" answers, and by the shell when
+ * the operator leaves the tab — an abandoned edit must not follow them around.
+ */
+function discardChanges({ repaint = true } = {}) {
+  if (!_original) { clearDirty(); return; }
+  if (_isCalibratingOrientation) {
+    _isCalibratingOrientation = false;
+    try {
+      DOM.previewFrame?.contentWindow?.postMessage({ type: 'CALIBRATE_ORIENTATION_STOP' }, window.location.origin);
+    } catch (_) { /* frame not mounted yet */ }
+  }
+  _draft = deepClone(_original);
+  clearDirty();
+  if (!repaint) {
+    // Another dataset is being opened right now. The form still shows the abandoned
+    // text, so it must not be read back into the draft until populateForm repaints
+    // it — and a queued push would land in the freshly mounted preview carrying the
+    // draft that was just thrown away.
+    _formBound = false;
+    clearTimeout(_previewTimer);
+    return;
+  }
+  populateForm();
+  schedulePreviewUpdate();
+  pushOrientationAxes();
+}
 
 // ── List ───────────────────────────────────────────────────────
 async function loadDatasets() {
@@ -398,19 +513,30 @@ function validate2dMeta(meta) {
 async function selectDataset(id) {
   if (_dirty) {
     if (!confirm(t('admin.confirmDiscard', 'Modifications non sauvegardées. Continuer sans sauvegarder ?'))) return;
-    clearDirty();
+    discardChanges({ repaint: false });
   }
+  // The form still shows the dataset being left: stop reading it into the draft
+  // until populateForm has repainted it for the one being opened.
+  _formBound = false;
   const myGen = ++_selectGen;   // RACE-006
+  const previous = _current;
   _current = _datasets.find((ds) => ds.id === id) || null;
-  if (!_current) return;
-  DOM.datasetList.querySelectorAll('.dataset-item').forEach((e) =>
-    e.classList.toggle('selected', e.dataset.id === id));
+  if (!_current) { _current = previous; _formBound = !!_draft; return; }
+  highlightSelected(id);
 
   const meta = await apiFetch(`${API_DATASETS}?action=get&id=${encodeURIComponent(id)}`);
   if (myGen !== _selectGen) return;
-  if (!meta) { toast(t('admin.loadDatasetFailed', 'Impossible de charger le dataset.'), 'error'); return; }
+  if (!meta) {
+    toast(t('admin.loadDatasetFailed', 'Impossible de charger le dataset.'), 'error');
+    abortSelection(previous);
+    return;
+  }
   const invalid = validateDatasetMeta(meta);
-  if (invalid) { toast(t('admin.malformedRejected', `Dataset malformé, montage refusé (${invalid}).`, { reason: invalid }), 'error'); return; }
+  if (invalid) {
+    toast(t('admin.malformedRejected', `Dataset malformé, montage refusé (${invalid}).`, { reason: invalid }), 'error');
+    abortSelection(previous);
+    return;
+  }
 
   // A photograph carries no channels: fabricating three from dimensions.c would
   // be written back on save and turn it into something the page cannot read.
@@ -429,6 +555,22 @@ async function selectDataset(id) {
   DOM.configEmpty.style.display = 'none';
   DOM.configPanel.style.display = 'flex';
   applyStagingChrome(meta);
+}
+
+/**
+ * Nothing was mounted: fall back to the dataset still on screen rather than leaving
+ * the editor — and therefore a save — pointed at one that could not be opened.
+ */
+function abortSelection(previous) {
+  _current = previous;
+  if (!previous) return;
+  highlightSelected(previous.id);
+  _formBound = !!_draft;
+}
+
+function highlightSelected(id) {
+  DOM.datasetList?.querySelectorAll('.dataset-item').forEach((e) =>
+    e.classList.toggle('selected', e.dataset.id === id));
 }
 
 function showPreviewPending() {
@@ -526,6 +668,7 @@ function populateForm() {
   renderOrientationAxes();
   renderDefaultView();
   renderGallery();
+  _formBound = true;
 }
 
 // ── Orientation editor ─────────────────────────────────────────
@@ -534,14 +677,16 @@ function populateForm() {
 // `quaternion` is the anatomical-frame pose (see the plugin header) — the viewer
 // composes it with the calibration on load, so refining the calibration later
 // leaves the default view meaning the same thing.
-function readOrientationCfg() {
-  const c = (_draft && _draft.orientationAxes) || {};
+function orientationCfgOf(meta) {
+  const c = (meta && meta.orientationAxes) || {};
   return {
     labels: (c.labels && typeof c.labels === 'object' && !Array.isArray(c.labels)) ? c.labels : {},
     hidden: Array.isArray(c.hidden) ? c.hidden.filter((x) => AXIS_CODES.includes(x)) : [],
     defaultView: (c.defaultView && typeof c.defaultView === 'object') ? c.defaultView : null,
   };
 }
+
+function readOrientationCfg() { return orientationCfgOf(_draft); }
 
 function writeOrientationCfg(patch) {
   if (!_draft) return;
@@ -560,7 +705,7 @@ function writeOrientationCfg(patch) {
   // the posted metadata into the existing file, so clearing a setting has to be an
   // explicit erasure — an absent key would leave the old value in place.
   _draft.orientationAxes = Object.keys(clean).length ? clean : null;
-  markDirty();
+  syncDirty();
 }
 
 function renderOrientationAxes() {
@@ -844,7 +989,7 @@ function moveGalleryImage(index, delta) {
   const next = items.slice();
   [next[index], next[to]] = [next[to], next[index]];
   _draft.gallery = next;
-  markDirty();
+  syncDirty();
   renderGallery();
   // Keep focus on the button the operator is repeatedly clicking.
   DOM.galleryGrid?.querySelector(`[data-gal-move="${delta}"][data-gal-index="${to}"]`)?.focus();
@@ -884,7 +1029,7 @@ function wireGallery() {
     const item = galleryItems()[Number(cap.getAttribute('data-gal-caption'))];
     if (!item) return;
     item.caption = cap.value;
-    markDirty();
+    syncDirty();
   });
 }
 
@@ -929,20 +1074,7 @@ async function saveDataset() {
     DOM.previewFrame.contentWindow.postMessage({ type: 'CALIBRATE_ORIENTATION_STOP' }, '*');
   }
 
-  _draft.name = (DOM.fName.value || '').trim() || _draft.name;
-  _draft.stage = (DOM.fStage.value || '').trim();
-  _draft.embryo = (DOM.fEmbryo.value || '').trim() || null;
-  _draft.description = (DOM.fDescription.value || '').trim() || null;
-  if (_draft.type !== '2d') {   // a photograph is calibrated by pixelSizeUm, not voxels
-    _draft.voxel_size = {
-      x: parseFloat(DOM.fVoxX.value) || _draft.voxel_size?.x || 1,
-      y: parseFloat(DOM.fVoxY.value) || _draft.voxel_size?.y || 1,
-      z: parseFloat(DOM.fVoxZ.value) || _draft.voxel_size?.z || 1,
-    };
-    if (DOM.fExposure) _draft.exposure = parseFloat(DOM.fExposure.value) / 100;
-  }
-  const sn = parseStageNumeric(_draft.stage);
-  if (sn !== null) _draft.stageNumeric = sn;
+  collectForm();
 
   // The backend MERGES this body into metadata.json, and the type is not the
   // editor's to set: it is derived from the directory the dataset lives in and
@@ -969,14 +1101,7 @@ async function saveDataset() {
   }
 }
 
-function resetDataset() {
-  if (!_original) return;
-  _draft = deepClone(_original);
-  clearDirty();
-  populateForm();
-  schedulePreviewUpdate();
-  pushOrientationAxes();
-}
+function resetDataset() { discardChanges(); }
 
 async function saveThumbnail(dataUrl) {
   if (!_current) return;
@@ -1038,14 +1163,14 @@ function wire() {
   });
 
   [DOM.fName, DOM.fStage, DOM.fEmbryo, DOM.fDescription, DOM.fVoxX, DOM.fVoxY, DOM.fVoxZ]
-    .forEach((e) => e && e.addEventListener('input', markDirty));
+    .forEach((e) => e && e.addEventListener('input', () => syncDirty()));
 
   if (DOM.fVisible) DOM.fVisible.addEventListener('change', toggleVisibility);
 
   if (DOM.fExposure) DOM.fExposure.addEventListener('input', (e) => {
     const val = parseFloat(e.target.value) / 100;
     if (DOM.fExposureVal) DOM.fExposureVal.textContent = `${val.toFixed(2)}×`;
-    if (_draft) { _draft.exposure = val; markDirty(); schedulePreviewUpdate(); }
+    if (_draft) { _draft.exposure = val; syncDirty(); schedulePreviewUpdate(); }
   });
 
   if (DOM.orientationAxesList) {
@@ -1088,7 +1213,7 @@ function wire() {
       DOM.btnDefineOrientation.innerHTML = t('admin.cancelOrientation', '❌ Annuler l\'orientation');
       if (DOM.orientationStatus) DOM.orientationStatus.textContent = t('admin.orientationAdjustHint', 'Ajustez l\'embryon sur les axes (puis sauvegardez)…');
       DOM.previewFrame.contentWindow?.postMessage({ type: 'CALIBRATE_ORIENTATION_START' }, '*');
-      markDirty();
+      syncDirty();
     } else {
       DOM.btnDefineOrientation.classList.remove('adm-btn-accent');
       DOM.btnDefineOrientation.classList.add('adm-btn-ghost');
@@ -1096,6 +1221,7 @@ function wire() {
       if (DOM.orientationStatus) DOM.orientationStatus.textContent = _draft?.orientation
         ? t('admin.orientationSet', 'Orientation définie ✓') : t('admin.noOrientation', '(Aucune orientation définie)');
       DOM.previewFrame.contentWindow?.postMessage({ type: 'CALIBRATE_ORIENTATION_STOP' }, '*');
+      syncDirty();
     }
   });
 
@@ -1140,14 +1266,14 @@ function wire() {
         _draft.channels[idx].max = e.data.value.max;
         _draft.channels[idx].gamma = e.data.value.gamma;
         _draft.channels[idx].name = e.data.value.name;
-        markDirty();
+        syncDirty();
       }
     }
     if (e.data?.type === 'SYNC_EXPOSURE' && e.data.value !== undefined && _draft) {
       _draft.exposure = e.data.value;
       if (DOM.fExposure) DOM.fExposure.value = Math.max(20, Math.min(500, Math.round(e.data.value * 100)));
       if (DOM.fExposureVal) DOM.fExposureVal.textContent = `${e.data.value.toFixed(2)}×`;
-      markDirty();
+      syncDirty();
     }
     if (e.data?.type === 'SCREENSHOT_RESPONSE') {
       if (DOM.btnSetPreview) {
@@ -1167,7 +1293,7 @@ export const DatasetsTab = {
   mounted: false,
   mount() {
     refDom();
-    setDirtyGuard(() => _dirty);
+    setDirtyGuard(() => _dirty, () => discardChanges());
     renderFilterTabs();
     wire();
     loadDatasets();

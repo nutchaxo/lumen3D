@@ -2,7 +2,7 @@
   "id": "download-center",
   "name": "Download Center",
   "version": "1.2.1",
-  "platformCompat": "1.x",
+  "platformCompat": ">=1.51.0",
   "dataTypes": [
     "3d",
     "live",

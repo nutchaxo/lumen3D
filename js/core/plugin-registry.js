@@ -94,8 +94,13 @@ const PluginRegistry = (() => {
     return Array.from(_quarantined.values());
   }
 
-  function _declaresDataType(meta, dataType) {
-    return Array.isArray(meta.dataTypes) && meta.dataTypes.includes(dataType);
+  // `dataTypes` in plugin.json is authoritative BOTH ways when present: the plugin
+  // runs on the dataset types it names and on no other. Absent, the plugin predates
+  // the field and was written against the volume viewer, so only a host that opts
+  // those in (allowUndeclared) takes it. No dataset-type name is hardcoded here.
+  function _acceptsDataType(meta, dataType, allowUndeclared) {
+    if (!Array.isArray(meta.dataTypes)) return !!allowUndeclared;
+    return meta.dataTypes.includes(dataType);
   }
 
   // A discovery entry is "rich" — a full plugin.json safe to use without a
@@ -261,12 +266,14 @@ const PluginRegistry = (() => {
           }
         }
 
-        // Data-type gate — opt-in. A page hosting one dataset type asks for the
-        // plugins that DECLARE it in plugin.json `dataTypes`; a plugin that says
-        // nothing was written for the volume viewer and stays off that page. Not
-        // a fault, so not a quarantine. A page passing no dataType is unchanged.
-        if (opts.dataType && !_declaresDataType(meta, opts.dataType)) {
-          console.info(`[PluginRegistry] "${modPath}" left out: no dataTypes entry for "${opts.dataType}"`);
+        // Data-type gate. A page hosting one dataset type keeps only the plugins
+        // that cover it: those DECLARING it in plugin.json `dataTypes`, plus — when
+        // the host opts in — those declaring nothing (legacy volume-viewer plugins).
+        // A plugin that names other types only is left out, which is what keeps a
+        // photograph-only tool off the volume viewer. Not a fault, so not a
+        // quarantine. A page passing no dataType is unchanged.
+        if (opts.dataType && !_acceptsDataType(meta, opts.dataType, opts.allowUndeclaredDataTypes)) {
+          console.info(`[PluginRegistry] "${modPath}" left out: its dataTypes do not cover "${opts.dataType}"`);
           return;
         }
 

@@ -208,7 +208,14 @@ const ViewerApp = (() => {
       // failures are already quarantined inside the registry; this catches the rest.
       try {
         const modulePaths = await PluginRegistry.discover('js/modules');
-        await PluginRegistry.loadModules('js/modules', modulePaths);
+        // Only the plugins that cover the type being shown: a plugin naming its
+        // `dataTypes` is taken at its word, so the photograph-only tools stay off
+        // the volume viewer. Plugins declaring nothing predate the field and were
+        // written for this page, hence allowUndeclaredDataTypes.
+        await PluginRegistry.loadModules('js/modules', modulePaths, {
+          dataType: datasetMeta.type,
+          allowUndeclaredDataTypes: true
+        });
         // Generate toolbar buttons from the loaded plugins' metadata. Runs before
         // ToolManager.init (_bindTooling) so the data-tool chips exist to be wired,
         // and before bindToolbarButtons() (after initAll) wires the data-plugin-id ones.

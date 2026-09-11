@@ -39,6 +39,11 @@ const PR = loadModule('js/core/plugin-registry.js', 'PluginRegistry', {
     return { ok: false, status: 404 };
   },
   queueMicrotask,
+  // loadModules fails CLOSED without PluginTrust (it refuses to inject unverified
+  // code), so a dev-tier stub is what lets this test reach the registry itself.
+  PluginTrust: { evaluate: async () => ({ tier: 'dev', hash: 'stub', bytes: '' }) },
+  URL: { createObjectURL: () => 'blob:stub', revokeObjectURL() {} },
+  Blob: class { constructor() {} },
 });
 
 await PR.loadModules('js/modules', ['tools/zstack-browser', 'tools/measure-distance']);

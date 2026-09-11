@@ -6,6 +6,7 @@
   "dataTypes": [
     "fixed",
     "live",
+    "tracking",
     "wholemount"
   ],
   "creator": "IRIBHM",

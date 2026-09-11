@@ -175,7 +175,6 @@
 .type-card--3d .type-card-glow       { background: var(--color-accent); }
 .type-card--2d .type-card-glow       { background: var(--badge-2d-text); }
 .type-card--live .type-card-glow     { background: #FFA726; }
-.type-card--tracking .type-card-glow { background: var(--color-primary); }
 
 .type-card-icon {
   width: 56px;
@@ -201,11 +200,6 @@
 .type-card--live .type-card-icon {
   background: var(--badge-live-bg);
   color: var(--badge-live-text);
-}
-
-.type-card--tracking .type-card-icon {
-  background: var(--badge-tracking-bg);
-  color: var(--badge-tracking-text);
 }
 
 .type-card h3 {

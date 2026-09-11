@@ -72,7 +72,7 @@ class TestCatalogSortAndConsistency(unittest.TestCase):
         self.tmp = tempfile.mkdtemp()
         self._o = dev_server.DATA_WEB
         dev_server.DATA_WEB = Path(self.tmp) / "DATA_WEB"
-        for t in ("3d", "2d", "live", "tracking"):
+        for t in ("3d", "2d", "live"):
             (dev_server.DATA_WEB / t).mkdir(parents=True)
         _reset_cache()
 

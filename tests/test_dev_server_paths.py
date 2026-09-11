@@ -55,7 +55,6 @@ class TestSafeDatasetDir(unittest.TestCase):
         name = "Egfl7eGFP-Em3-Decidua-7hCulture-TS11c-10x-2x2-16062026-DeconvolvedTypeAutomatic"
         self.assertIsNotNone(dev_server._safe_dataset_dir(f"3d/{name}"))
         self.assertIsNotNone(dev_server._safe_dataset_dir(f"live/{name}"))
-        self.assertIsNotNone(dev_server._safe_dataset_dir(f"tracking/{name}"))
         self.assertIsNotNone(dev_server._safe_dataset_dir(f"2d/{name}"))
 
     def test_rejects_traversal_and_malformed(self):

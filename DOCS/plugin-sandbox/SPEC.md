@@ -34,7 +34,7 @@ Ces deux principes sont **baked-in** dans tout ce qui suit.
 | `api/.htaccess` | MODIFIÉ | Deny `plugin-trust.json` (déjà couvert par le deny global `api/`, mais explicité). |
 | `js/pages/admin/tab-plugins.js` | MODIFIÉ | UI d'approbation : liste tier+hash+caps, prévisualisation du source, bouton approve/revoke avec re-auth. |
 | `version.json` (généré par `tools/build_release.py`) | INCHANGÉ de forme | Source de vérité `bundled` (déjà content-addressed via `files` map + `_verify_tree_manifest`). |
-| CSP : `viewer.html`, `compare.html`, `tracking.html`, `explorer.html`, `index.html`, `about.html` (`<meta http-equiv>`) + `dev_server.py`/PHP (header) | MODIFIÉ | Confinement d'exécution (voir 1.6). |
+| CSP : `viewer.html`, `compare.html`, `explorer.html`, `index.html`, `about.html` (`<meta http-equiv>`) + `dev_server.py`/PHP (header) | MODIFIÉ | Confinement d'exécution (voir 1.6). |
 
 ### 1.2. Hash canonique (résout RT-H4 — mismatch client/serveur)
 
@@ -200,7 +200,7 @@ connect-src 'self';
 ### 2.0. Périmètre (frontière critique)
 
 - **Seuls** les plugins `placement:'tools'` de `subtype ∈ {'action','toggle'}` sont sandbox-éligibles. Les `channels` (`getChannelUI` renvoie du HTML injecté synchrone, `bindChannelUI` câble des handlers sur des nœuds DOM vivants) et `shaders` (objet GLSL/material synchrone) ne peuvent pas franchir une frontière postMessage async ⇒ un tel plugin qui résout en tier `sandboxed` est **quarantiné** `sandbox-unsupported-placement` (jamais chargé in-page silencieusement).
-- **Nouveau fichier** : `js/core/plugin-sandbox.js` — IIFE `PluginSandbox` (classic script), chargé **juste après** `plugin-registry.js` dans `viewer.html`, `compare.html`, `tracking.html` (pas dans `admpan.html`).
+- **Nouveau fichier** : `js/core/plugin-sandbox.js` — IIFE `PluginSandbox` (classic script), chargé **juste après** `plugin-registry.js` dans `viewer.html`, `compare.html` (pas dans `admpan.html`).
 
 ### 2.1. Topologie & iframe
 

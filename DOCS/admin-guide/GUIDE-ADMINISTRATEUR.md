@@ -784,7 +784,7 @@ Ce mot est ensuite **repris automatiquement dans toute l'interface publique** : 
 
 ## 11.6. Carte « Navigation »
 
-Les cases décident quelles entrées apparaissent dans le menu du site public : *Explorer*, *Comparer*, *Suivi*, *À propos*, *Mentions légales*.
+Les cases décident quelles entrées apparaissent dans le menu du site public : *Explorer*, *Comparer*, *À propos*, *Mentions légales*.
 
 Décocher une entrée la retire du menu sans supprimer la page.
 
@@ -799,7 +799,6 @@ C'est un **onglet à part entière**, juste à côté d'*Identité*. Il prolonge
 | **3D** | Un volume figé : une pile d'images 3D multi-canaux | le visualiseur 3D |
 | **2D** | Une photographie calibrée prise au stéréomicroscope | le visualiseur 2D |
 | **Live** | Une série temporelle 4D (le même volume dans le temps) | le visualiseur 3D, avec une frise chronologique |
-| **Suivi** | Les trajectoires de cellules suivies dans une série temporelle | le visualiseur de suivi |
 
 Pour chaque catégorie, deux champs, **multilingues** comme ceux de l'onglet Identité :
 
@@ -810,7 +809,7 @@ Pour chaque catégorie, deux champs, **multilingues** comme ceux de l'onglet Ide
 
 > ### 📌 Ce que cet onglet ne change **pas**
 >
-> Uniquement des **noms affichés**. Ni les dossiers sur le serveur (`DATA_WEB/3d/`, `DATA_WEB/2d/`, `DATA_WEB/live/`, `DATA_WEB/tracking/`), ni les adresses des pages, ni les liens que vos visiteurs ont pu enregistrer, ni quoi que ce soit à l'intérieur des jeux de données. Vous pouvez donc renommer autant de fois que vous voulez, sans aucun risque.
+> Uniquement des **noms affichés**. Ni les dossiers sur le serveur (`DATA_WEB/3d/`, `DATA_WEB/2d/`, `DATA_WEB/live/`), ni les adresses des pages, ni les liens que vos visiteurs ont pu enregistrer, ni quoi que ce soit à l'intérieur des jeux de données. Vous pouvez donc renommer autant de fois que vous voulez, sans aucun risque.
 >
 > Et il ne crée pas de catégorie : les quatre types sont ceux que le logiciel sait afficher.
 
@@ -1073,7 +1072,7 @@ Une **variable** est un texte que vous définissez une fois et réutilisez parto
 
 Règles de nommage : commencez par une lettre, puis lettres, chiffres ou `_`, 32 caractères maximum.
 
-Des variables existent déjà pour les informations de l'onglet Identité : `{brand}` (le nom du site), `{specimen}` (votre objet d'étude), `{org}` (l'organisation), `{year}` (l'année). Les quatre catégories de jeux de données en ont aussi : `{type3d}`, `{type2d}`, `{typeLive}`, `{typeTracking}` — elles reprennent les noms de l'onglet **Types de données** (§11.7). Toutes se mettent à jour toutes seules.
+Des variables existent déjà pour les informations de l'onglet Identité : `{brand}` (le nom du site), `{specimen}` (votre objet d'étude), `{org}` (l'organisation), `{year}` (l'année). Les trois catégories de jeux de données en ont aussi : `{type3d}`, `{type2d}`, `{typeLive}` — elles reprennent les noms de l'onglet **Types de données** (§11.7). Toutes se mettent à jour toutes seules.
 
 ## 12.11. Créer une nouvelle page
 
@@ -1228,7 +1227,7 @@ La solution demande un accès aux fichiers du serveur (FTP, SFTP, ou le gestionn
 
 ### « Un jeu de données n'apparaît pas dans la liste »
 
-1. vérifiez qu'il est bien dans `DATA_WEB/3d/`, `DATA_WEB/2d/`, `DATA_WEB/live/` ou `DATA_WEB/tracking/` — ces quatre noms de dossiers sont imposés, ne les renommez pas (renommer un **type** dans l'onglet *Types de données* ne change que l'affichage, jamais le dossier) ;
+1. vérifiez qu'il est bien dans `DATA_WEB/3d/`, `DATA_WEB/2d/` ou `DATA_WEB/live/` — ces trois noms de dossiers sont imposés, ne les renommez pas (renommer un **type** dans l'onglet *Types de données* ne change que l'affichage, jamais le dossier) ;
 2. vérifiez que son dossier contient bien un fichier `metadata.json` ;
 3. rechargez la page du panneau.
 
@@ -1260,7 +1259,7 @@ Faites un **rechargement forcé** : `Ctrl + Shift + R` (Windows) ou `Cmd + Shift
 | **Voxel** | L'équivalent d'un pixel, en trois dimensions. Sa taille réelle est donnée par la calibration (§3.3). |
 | **Brique** | Un petit cube de volume (64×64×64 voxels). Le site les charge à la demande, ce qui lui permet d'afficher des volumes de plusieurs gigaoctets sans tout télécharger. |
 | **LOD** | *Level of Detail*. Plusieurs résolutions du même volume : le site affiche d'abord une version grossière, puis affine. |
-| **Type de jeu de données** | L'une des quatre catégories — `3d` (volume figé), `2d` (photographie calibrée), `live` (série temporelle 4D), `tracking` (trajectoires cellulaires). Ces quatre mots sont techniques : ce sont les dossiers du serveur et le début de l'identifiant de chaque jeu de données. Le nom que le public voit se règle dans l'onglet **Types de données** (§11.7). |
+| **Type de jeu de données** | L'une des trois catégories — `3d` (volume figé), `2d` (photographie calibrée), `live` (série temporelle 4D, avec éventuellement le suivi de ses cellules). Ces trois mots sont techniques : ce sont les dossiers du serveur et le début de l'identifiant de chaque jeu de données. Le nom que le public voit se règle dans l'onglet **Types de données** (§11.7). |
 | **Plugin** | Un module qui ajoute une fonction au visualiseur (§5.1). |
 | **Bac à sable** | Un mode d'exécution isolé : le plugin fonctionne, mais ne peut pas accéder au reste de la page. |
 | **Empreinte** | Une signature du contenu exact d'un fichier. Si le fichier change d'un seul caractère, l'empreinte change. |

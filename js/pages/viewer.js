@@ -244,6 +244,7 @@ const ViewerApp = (() => {
     VolumeViewer.onContextLost?.(() => _setQualityStatus('Contexte GPU perdu — rendu en pause. Rechargez la page si l\'image ne revient pas.'));
     VolumeViewer.onContextRestored?.(() => _setQualityStatus('Contexte GPU restauré — rechargez le volume pour réafficher.'));
     VolumeViewer.setZDisplayScale(_zDisplayScale, { notify: false });
+    _refreshTrackingVisuals();
     VolumeViewer.setMeasurements(_volumeMeasurements);
     if (_isIframe || true) { // Always bind onCameraChange now
       VolumeViewer.onCameraChange((state) => {
@@ -308,9 +309,9 @@ const ViewerApp = (() => {
         getScene: () => VolumeViewer.getScene(),
         getCamera: () => VolumeViewer.getCamera(),
         setRenderMode: (m) => VolumeViewer.setRenderMode(m),
-        setClipRange: (...args) => VolumeViewer.setClipRange(...args),
-        setClipRange_z: (lo, hi) => VolumeViewer.setClipRange('z', lo, hi),
-        resetClipping: () => VolumeViewer.resetClipping(),
+        setClipRange: (...args) => { VolumeViewer.setClipRange(...args); _refreshTrackingVisuals(); },
+        setClipRange_z: (lo, hi) => { VolumeViewer.setClipRange('z', lo, hi); _refreshTrackingVisuals(); },
+        resetClipping: () => { VolumeViewer.resetClipping(); _refreshTrackingVisuals(); },
         setGridMode: (m) => VolumeViewer.setGridMode(m),
         setAxesVisible: (v) => VolumeViewer.setAxesVisible(v),
         setVolumeVisible: (v) => VolumeViewer.setVolumeVisible(v),
@@ -350,8 +351,29 @@ const ViewerApp = (() => {
         escapeHtml: (s) => typeof Utils !== 'undefined' ? Utils.escapeHtml(s) : s,
         createIcons: (opts) => { if (window.lucide) lucide.createIcons(opts); },
         openStudio: () => openStudio(),
-        perf: () => _perf()
+        perf: () => _perf(),
+        getCanvas: () => document.getElementById('webgl-canvas'),
+        getCanvasContainer: () => document.querySelector('.viewer-canvas-container'),
+        addSidebarSection: (def) => _addPluginSidebarSection(def),
+        addCanvasPanel: (def) => _addPluginCanvasPanel(def),
+        downloadText: (text, filename, mime) => _downloadText(text, filename, mime)
       },
+      // The exclusive tool mux (navigate / measure / cut / slice / a plugin's own
+      // tool). A plugin declaring subtype 'tool' gets its chip from the toolbar
+      // builder; it learns it became current (or stopped being) through onChange.
+      tools: {
+        current: () => (typeof ToolManager !== 'undefined' ? ToolManager.current() : 'navigate'),
+        activate: (tool) => { if (typeof ToolManager !== 'undefined') ToolManager.activate(tool); },
+        onChange: (cb) => {
+          if (typeof cb !== 'function') return () => {};
+          _toolListeners.push(cb);
+          return () => { _toolListeners = _toolListeners.filter(fn => fn !== cb); };
+        }
+      },
+      // Cell tracking of a timelapse — the ONE copy of the packed tracks lives in
+      // the overlay; plugins read positions, pick cells, share a selection and a
+      // few analysis options through this façade, and follow it by events.
+      tracking: _trackingFacade(),
       iframe: {
         isIframe: () => _isIframe,
         panelIndex: () => _panelIndex,
@@ -363,7 +385,8 @@ const ViewerApp = (() => {
         applyState: _applyWorkspaceState
       },
       getCanvasBlob: _getFigureBlob,
-      getCustomExports: _getSliceExports,
+      getCustomExports: _getAllCustomExports,
+      getGraph: _getPluginGraph,
       // Shared mutable state (modules write via setters, not direct assignment)
       _state: {
         get zstackActive() { return _zstackActive; },
@@ -1011,6 +1034,7 @@ const ViewerApp = (() => {
       _zDisplayScale = _clampZDisplayScale(parseInt(e.target.value, 10) / 100);
       slider.value = Math.round(_zDisplayScale * 100);
       VolumeViewer.setZDisplayScale(_zDisplayScale);
+      _refreshTrackingVisuals();
       _saveZDisplayScale();
       _updateZScaleLabel();
       _updatePhysicalStatus();
@@ -1027,6 +1051,7 @@ const ViewerApp = (() => {
     const slider = document.getElementById('slider-z-scale');
     if (slider) slider.value = 100;
     VolumeViewer.setZDisplayScale(_zDisplayScale);
+    _refreshTrackingVisuals();
     _saveZDisplayScale();
     _updateZScaleLabel();
     _updatePhysicalStatus();
@@ -1168,6 +1193,7 @@ const ViewerApp = (() => {
         VolumeViewer.setActiveTool(viewerTool);
         measurePanel?.classList.toggle('visible', tool === 'measure');
         _slicerShow(tool === 'slice');
+        _toolListeners.forEach(fn => { try { fn(tool); } catch (err) { console.warn('[ViewerApp] tool listener failed:', err); } });
       }
     });
     VolumeViewer.setActiveTool('navigate');
@@ -1384,7 +1410,8 @@ const ViewerApp = (() => {
       scope: 'viewer',
       getCanvas: () => document.getElementById('webgl-canvas'),
       getCanvasBlob: _getFigureBlob,
-      getCustomExports: _getSliceExports,
+      getCustomExports: _getAllCustomExports,
+      getGraph: _getPluginGraph,
       getWorkspaceState: _getWorkspaceState,
       applyWorkspaceState: _applyWorkspaceState,
       getMeasurements: () => MeasurementStore.list(datasetId, 'viewer'),
@@ -1857,6 +1884,101 @@ const ViewerApp = (() => {
     ];
   }
 
+  /** The viewer's own exports followed by whatever the plugins offer through their
+   *  `getExports()` hook (cell-distance measurements, neighbour tables, …). */
+  function _getAllCustomExports() {
+    const own = _getSliceExports();
+    if (typeof PluginRegistry === 'undefined' || !PluginRegistry.collect) return own;
+    const extra = PluginRegistry.collect('getExports')
+      .flatMap(list => (Array.isArray(list) ? list : []))
+      .filter(item => item && typeof item === 'object' && item.action && typeof item.handler === 'function');
+    return own.concat(extra);
+  }
+
+  /** A plugin's on-screen chart (Plotly node) for the Download Center's graph
+   *  exports; null when no plugin shows one. */
+  function _getPluginGraph() {
+    if (typeof PluginRegistry === 'undefined' || !PluginRegistry.collect) return null;
+    return PluginRegistry.collect('getGraph')[0] || null;
+  }
+
+  function _downloadText(text, filename, mime) {
+    const blob = new Blob([String(text ?? '')], { type: mime || 'text/plain' });
+    if (typeof ExportManager !== 'undefined' && ExportManager.downloadBlob) {
+      ExportManager.downloadBlob(blob, filename);
+      return;
+    }
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 500);
+  }
+
+  // ── Plugin-mounted UI ──────────────────────────────────────────────────────────
+  // A marketplace plugin cannot rely on markup in viewer.html (it is not shipped
+  // with the page), so it asks for its surface here: a section in the sidebar, or
+  // a floating panel over the canvas. Both return a handle that owns the node.
+
+  function _addPluginSidebarSection(def = {}) {
+    const sidebar = document.getElementById('viewer-sidebar');
+    if (!sidebar || !def.id) return null;
+    const safeId = String(def.id).replace(/[^A-Za-z0-9_-]/g, '');
+    document.getElementById(`plugin-section-${safeId}`)?.remove();
+    const root = document.createElement('div');
+    root.className = 'panel-section plugin-section';
+    root.id = `plugin-section-${safeId}`;
+    const title = document.createElement('div');
+    title.className = 'panel-title';
+    const label = document.createElement('span');
+    label.textContent = def.title || '';
+    title.appendChild(label);
+    const body = document.createElement('div');
+    body.className = 'plugin-section-body';
+    body.innerHTML = def.html || '';
+    root.appendChild(title);
+    root.appendChild(body);
+    if (def.hidden) root.hidden = true;
+    sidebar.appendChild(root);
+    if (window.lucide) lucide.createIcons({ nodes: [root] });
+    const handle = {
+      root, body,
+      setTitle(text) { label.textContent = text; },
+      setHtml(html) { body.innerHTML = html; if (window.lucide) lucide.createIcons({ nodes: [body] }); },
+      show() { root.hidden = false; },
+      hide() { root.hidden = true; },
+      remove() { root.remove(); }
+    };
+    if (typeof def.bind === 'function') def.bind(body, handle);
+    return handle;
+  }
+
+  function _addPluginCanvasPanel(def = {}) {
+    const container = document.querySelector('.viewer-canvas-container');
+    if (!container || !def.id) return null;
+    const safeId = String(def.id).replace(/[^A-Za-z0-9_-]/g, '');
+    document.getElementById(`plugin-panel-${safeId}`)?.remove();
+    const root = document.createElement('div');
+    root.className = `scientific-panel ${def.className || ''}`.trim();
+    root.id = `plugin-panel-${safeId}`;
+    if (def.style) root.style.cssText = def.style;
+    root.innerHTML = def.html || '';
+    container.appendChild(root);
+    if (window.lucide) lucide.createIcons({ nodes: [root] });
+    const handle = {
+      root,
+      setHtml(html) { root.innerHTML = html; if (window.lucide) lucide.createIcons({ nodes: [root] }); },
+      show() { root.classList.add('visible'); },
+      hide() { root.classList.remove('visible'); },
+      toggle(force) { return root.classList.toggle('visible', force); },
+      isVisible() { return root.classList.contains('visible'); },
+      remove() { root.remove(); }
+    };
+    if (typeof def.bind === 'function') def.bind(root, handle);
+    return handle;
+  }
+
   function _safeExportName() {
     return String(datasetMeta?.name || datasetMeta?.id || 'viewer').replace(/[^a-z0-9._-]+/gi, '_').replace(/^_+|_+$/g, '');
   }
@@ -2130,6 +2252,7 @@ const ViewerApp = (() => {
       const slider = document.getElementById('slider-z-scale');
       if (slider) slider.value = Math.round(_zDisplayScale * 100);
       VolumeViewer.setZDisplayScale(_zDisplayScale);
+      _refreshTrackingVisuals();
       _saveZDisplayScale();
       _updateZScaleLabel();
       _updatePhysicalStatus();
@@ -2249,6 +2372,7 @@ const ViewerApp = (() => {
       if (slider) slider.value = 100;
       if (label) label.textContent = '100%';
       VolumeViewer.setClip(axis, 1.0);
+      _refreshTrackingVisuals();
     });
   }
 
@@ -2590,6 +2714,87 @@ const ViewerApp = (() => {
   }
 
   let _trackingHandle = null;
+  let _toolListeners = [];
+
+  // Shared with the tracking plugins through ctx.tracking: ONE selection (the
+  // overlay highlights it, the inspector describes it, the trails brighten it),
+  // ONE set of analysis options (the neighbour radius feeds the inspector, the
+  // charts and the surface density alike), and one "loaded" promise.
+  let _trackingSelected = -1;
+  let _trackingOptions = { neighborThresholdUm: 55 };
+  let _trackingReadyResolve = null;
+  const _trackingReady = new Promise(resolve => { _trackingReadyResolve = resolve; });
+
+  function _trackingEmit(name, detail) {
+    window.dispatchEvent(new CustomEvent(`tracking-${name}`, { detail: detail || {} }));
+  }
+
+  /** Re-place the tracked points after a change that moves them without a frame
+   *  change (clip sliders, Z display scale, Z-stack slab) and tell the plugins. */
+  function _refreshTrackingVisuals() {
+    if (typeof TrackingOverlay === 'undefined' || !TrackingOverlay.isLoaded()) return;
+    TrackingOverlay.refresh();
+    _trackingEmit('refresh', { frame: TrackingOverlay.getFrame(), stabilized: TrackingOverlay.isStabilizedFrame() });
+  }
+
+  function _trackingFacade() {
+    const ov = () => (typeof TrackingOverlay !== 'undefined' ? TrackingOverlay : null);
+    return {
+      isAvailable: () => Boolean(datasetMeta?.tracking?.tracksPath),
+      getMeta: () => datasetMeta?.tracking || null,
+      isLoaded: () => Boolean(ov()?.isLoaded()),
+      /** Resolves with the packed tables once tracks.json is in, null when the
+       *  dataset has no tracking or it failed to load. */
+      whenLoaded: () => _trackingReady,
+      getData: () => ov()?.getData() || null,
+      getFrame: () => (ov()?.getFrame() ?? (_currentTimepoint || 0)),
+      isStabilized: () => Boolean(ov()?.isStabilizedFrame()),
+      positionUm: (c, f, opts, out) => ov()?.positionUm(c, f, opts, out) ?? null,
+      positionObject: (c, f, out, opts) => ov()?.positionObject(c, f, out, opts) ?? null,
+      cellsAt: (f) => ov()?.cellsAt(f) || [],
+      umToObject: (v, out) => VolumeViewer.umToObject?.(v, out) || null,
+      getAcquisitionSpace: () => VolumeViewer.getAcquisitionSpace?.() || null,
+      isInsideClip: (o) => (VolumeViewer.isInsideClip ? VolumeViewer.isInsideClip(o) : true),
+      getVolumeObject: () => VolumeViewer.getVolumeObject?.() || null,
+      getCamera: () => VolumeViewer.getCamera?.() || null,
+      getRenderer: () => VolumeViewer.getRenderer?.() || null,
+      triggerRender: () => VolumeViewer.triggerRender?.(),
+      pick: (clientX, clientY) => {
+        const o = ov();
+        if (!o) return -1;
+        return o.pick(clientX, clientY, VolumeViewer.getCamera?.(), VolumeViewer.getRenderer?.()?.domElement);
+      },
+      getSelected: () => _trackingSelected,
+      select: (c) => {
+        const next = (Number.isInteger(c) && c >= 0) ? c : -1;
+        if (next === _trackingSelected) return _trackingSelected;
+        _trackingSelected = ov()?.setSelected(next) ?? next;
+        _trackingEmit('selection', { cell: _trackingSelected });
+        return _trackingSelected;
+      },
+      getOptions: () => ({ ..._trackingOptions }),
+      setOptions: (patch = {}) => {
+        const next = { ..._trackingOptions };
+        if (Number.isFinite(patch.neighborThresholdUm)) {
+          next.neighborThresholdUm = Math.max(5, Math.min(500, Number(patch.neighborThresholdUm)));
+        }
+        _trackingOptions = next;
+        _trackingEmit('options', { ..._trackingOptions });
+        return { ..._trackingOptions };
+      },
+      getStyle: () => ov()?.getStyle() || null,
+      setStyle: (patch) => { ov()?.setStyle(patch); _trackingEmit('style', ov()?.getStyle() || {}); },
+      /** Subscribe to 'loaded' | 'frame' | 'refresh' | 'selection' | 'options' |
+       *  'style'; returns the unsubscribe function. */
+      on: (name, cb) => {
+        if (typeof cb !== 'function') return () => {};
+        const type = `tracking-${name}`;
+        const fn = (ev) => cb(ev.detail || {});
+        window.addEventListener(type, fn);
+        return () => window.removeEventListener(type, fn);
+      }
+    };
+  }
 
   /** t() returns the KEY when a locale file lags behind; fall back to readable text
    *  rather than showing "js.trackingSize" in the sidebar. */
@@ -2603,7 +2808,7 @@ const ViewerApp = (() => {
    *  point cloud. Silent no-op for a dataset without tracking. */
   function _initTrackingLayer() {
     const meta = datasetMeta?.tracking;
-    if (!meta?.tracksPath || typeof TrackingOverlay === 'undefined') return;
+    if (!meta?.tracksPath || typeof TrackingOverlay === 'undefined') { _trackingReadyResolve(null); return; }
 
     // The overlay needs the acquisition box to place points. It is normally
     // declared by _initStabilization, but that bails when the registration was
@@ -2617,6 +2822,7 @@ const ViewerApp = (() => {
     const space = VolumeViewer.getAcquisitionSpace?.();
     if (!space) {
       console.warn('[ViewerApp] tracking present but no acquisitionExtentUm — layer not shown');
+      _trackingReadyResolve(null);
       return;
     }
 
@@ -2627,7 +2833,7 @@ const ViewerApp = (() => {
       acqSize: space.size,
       onDirty: VolumeViewer.triggerRender
     });
-    if (!ready) return;
+    if (!ready) { _trackingReadyResolve(null); return; }
 
     const style = TrackingOverlay.getStyle();
     _trackingHandle = ChannelPanel.registerLayer({
@@ -2656,6 +2862,10 @@ const ViewerApp = (() => {
             <input type="range" id="tracking-opacity" min="10" max="100" step="5" value="${Math.round(style.opacity * 100)}">
             <output id="tracking-opacity-out">${Math.round(style.opacity * 100)}%</output>
           </div>
+          <div class="layer-row layer-row-toggles">
+            <label class="layer-toggle"><input type="checkbox" id="tracking-show-mitosis" ${style.showMitosis ? 'checked' : ''}> ${_tt('js.trackingMitoses', 'Mitoses')}</label>
+            <label class="layer-toggle"><input type="checkbox" id="tracking-show-fusion" ${style.showFusion ? 'checked' : ''}> ${_tt('js.trackingFusions', 'Fusions')}</label>
+          </div>
           <div class="layer-legend">${legend}</div>`;
       },
       bind: (root) => {
@@ -2663,18 +2873,32 @@ const ViewerApp = (() => {
         const sizeOut = root.querySelector('#tracking-size-out');
         const op = root.querySelector('#tracking-opacity');
         const opOut = root.querySelector('#tracking-opacity-out');
+        const mitosis = root.querySelector('#tracking-show-mitosis');
+        const fusion = root.querySelector('#tracking-show-fusion');
         size?.addEventListener('input', () => {
           const v = Number(size.value);
           if (sizeOut) sizeOut.textContent = String(v);
           TrackingOverlay.setStyle({ diameterUm: v });
+          _trackingEmit('style', TrackingOverlay.getStyle());
         });
         op?.addEventListener('input', () => {
           const v = Number(op.value);
           if (opOut) opOut.textContent = `${v}%`;
           TrackingOverlay.setStyle({ opacity: v / 100 });
+          _trackingEmit('style', TrackingOverlay.getStyle());
+        });
+        // The event flags hide a whole class of cells: the plugins drawing trails
+        // or arrows for them follow the same switch through the style event.
+        mitosis?.addEventListener('change', () => {
+          TrackingOverlay.setStyle({ showMitosis: mitosis.checked });
+          _trackingEmit('style', TrackingOverlay.getStyle());
+        });
+        fusion?.addEventListener('change', () => {
+          TrackingOverlay.setStyle({ showFusion: fusion.checked });
+          _trackingEmit('style', TrackingOverlay.getStyle());
         });
       },
-      onVisibility: (v) => TrackingOverlay.setStyle({ visible: v })
+      onVisibility: (v) => { TrackingOverlay.setStyle({ visible: v }); _trackingEmit('style', TrackingOverlay.getStyle()); }
     });
 
     const onTimepoint = (ev) => {
@@ -2690,6 +2914,9 @@ const ViewerApp = (() => {
       TrackingOverlay.setFrame(d.frame, { stabilized: d.stabilized });
       _trackingHandle?.setSummary(
         `${TrackingOverlay.getCount()} / ${Number(meta.cellCount) || 0} ${_tt('js.trackingCells', 'cellules')}`);
+      // Emitted AFTER the overlay moved: a plugin drawing on top of the points
+      // must never lead them by a frame.
+      if (TrackingOverlay.isLoaded()) _trackingEmit('frame', { frame: d.frame, stabilized: Boolean(d.stabilized) });
     };
     window.addEventListener('viewer-timepoint-ready', onTimepoint);
     window.addEventListener('pagehide', () => {
@@ -2703,14 +2930,20 @@ const ViewerApp = (() => {
       } else if (p.phase === 'parse' || p.phase === 'bake') {
         _trackingHandle?.setSummary(_tt('js.trackingPreparing', 'Préparation des pistes…'));
       }
-    }).then(() => {
-      TrackingOverlay.setFrame(_currentTimepoint || 0, { stabilized: Boolean(VolumeViewer.isStabilized?.()) });
+    }).then((data) => {
+      const stabilized = Boolean(VolumeViewer.isStabilized?.());
+      TrackingOverlay.setFrame(_currentTimepoint || 0, { stabilized });
+      if (_trackingSelected >= 0) TrackingOverlay.setSelected(_trackingSelected);
       _trackingHandle?.refreshBody();
       _trackingHandle?.setSummary(
         `${TrackingOverlay.getCount()} / ${Number(meta.cellCount) || 0} ${_tt('js.trackingCells', 'cellules')}`);
+      _trackingReadyResolve(data);
+      _trackingEmit('loaded', { cellTotal: data.cellTotal, frameCount: data.frameCount });
+      _trackingEmit('frame', { frame: _currentTimepoint || 0, stabilized });
     }).catch(err => {
       console.warn('[ViewerApp] tracking overlay failed:', err);
       _trackingHandle?.setSummary(_tt('js.trackingUnavailable', 'Suivi indisponible'));
+      _trackingReadyResolve(null);
     });
   }
 

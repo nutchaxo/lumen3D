@@ -1,0 +1,15 @@
+{
+  "title": "Distance entre cellules",
+  "close": "Fermer",
+  "snapshot": "Instantané",
+  "followCells": "Suivre les cellules",
+  "measureDesc": "Cliquez deux cellules suivies pour mesurer leur distance.",
+  "noMeasure": "Aucune mesure enregistrée.",
+  "clear": "Effacer les mesures",
+  "measureN": "Cellules {n}",
+  "outOfFrame": "Hors image",
+  "cellA": "Cellule A",
+  "clickSecond": "Cliquez une seconde cellule.",
+  "exportCsv": "CSV des distances",
+  "exportJson": "JSON des distances"
+}

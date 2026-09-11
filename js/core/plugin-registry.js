@@ -427,6 +427,26 @@ const PluginRegistry = (() => {
     } catch (_) { return null; }
   })();
 
+  /**
+   * Make sure a `<style id="…">` exists in <head> that style-src-elem admits.
+   * A library that writes its CSS at runtime (Plotly's `plotly.js-style-global`)
+   * creates that element itself and then finds `sheet` null under the nonce-locked
+   * CSP; created HERE with the page nonce beforehand, the library reuses it. The
+   * nonce never leaves this closure — plugins ask for the element, not the token.
+   * @param {string} id
+   * @returns {boolean} true when the element exists (created now or already)
+   */
+  function ensureNoncedStyle(id) {
+    if (!id || typeof document === 'undefined') return false;
+    if (document.getElementById(id)) return true;
+    const style = document.createElement('style');
+    style.id = id;
+    if (_pageNonce) style.setAttribute('nonce', _pageNonce);
+    style.appendChild(document.createTextNode(''));
+    document.head.appendChild(style);
+    return Boolean(style.sheet);
+  }
+
   // ─── Implementation Binding ───────────────────────────────
 
   /**
@@ -645,6 +665,31 @@ const PluginRegistry = (() => {
   }
 
   /**
+   * Ask every initialised module for an optional hook value — `getExports()`
+   * (Download Center entries), `getGraph()` (a chart to export), … — and return
+   * the non-empty answers in module order. A module without the hook, or one
+   * that throws, contributes nothing: the host must never lose its own exports
+   * to a plugin's bug.
+   * @param {string} hook
+   * @returns {Array}
+   */
+  function collect(hook) {
+    const out = [];
+    for (const [id, entry] of _modules) {
+      if (!entry.impl || entry.state === 'disposed' || entry.state === 'quarantined'
+          || entry.state === 'registered') continue;
+      if (typeof entry.impl[hook] !== 'function') continue;
+      try {
+        const v = entry.impl[hook].call(entry.instance || entry.impl);
+        if (v !== undefined && v !== null) out.push(v);
+      } catch (err) {
+        console.warn(`[PluginRegistry] ${hook} failed for "${id}":`, err);
+      }
+    }
+    return out;
+  }
+
+  /**
    * Put every module back to the state a freshly opened dataset has.
    *
    * A module opts in with a `reset()` hook. One without it is left exactly as it
@@ -738,7 +783,12 @@ const PluginRegistry = (() => {
   function buildToolbarButtons(opts = {}) {
     const groups = Array.isArray(opts.groups) ? opts.groups : [];
     const sources = Array.isArray(opts.dataset?.volumeSources) ? opts.dataset.volumeSources : [];
-    const hasSource = (kind) => sources.some(s => s && s.kind === kind && s.available !== false);
+    // `requires` names a volume source kind ('bricks', 'webstack', …) — or
+    // 'tracking', satisfied when the dataset carries a cell-tracking block, so a
+    // tracking tool hides itself on a timelapse that was never tracked.
+    const hasSource = (kind) => (kind === 'tracking')
+      ? Boolean(opts.dataset?.tracking && opts.dataset.tracking.tracksPath)
+      : sources.some(s => s && s.kind === kind && s.available !== false);
 
     const containerFor = {};
     const touched = [];
@@ -956,6 +1006,8 @@ const PluginRegistry = (() => {
     getWorkspaceState,
     setWorkspaceState,
     resetAll,
+    collect,
+    ensureNoncedStyle,
     syncToolbarButton,
     bindToolbarButtons,
     disposeAll,

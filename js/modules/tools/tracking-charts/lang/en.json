@@ -1,0 +1,17 @@
+{
+  "title": "Tracking charts",
+  "close": "Close",
+  "linear": "Linear",
+  "log": "Log",
+  "loading": "Loading the tracks…",
+  "plotFailed": "The chart library could not be loaded.",
+  "axisTime": "Timepoint",
+  "axis_population": "Cells",
+  "axis_velocity": "Mean speed (µm/frame)",
+  "axis_neighbors": "Neighbours per cell",
+  "axis_mitoses": "Mitoses",
+  "metric_population": "Population",
+  "metric_velocity": "Velocity",
+  "metric_neighbors": "Neighbours",
+  "metric_mitoses": "Mitoses"
+}

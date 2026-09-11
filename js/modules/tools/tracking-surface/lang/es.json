@@ -1,0 +1,23 @@
+{
+  "title": "Superficie de seguimiento",
+  "opacity": "Opacidad",
+  "colorMode": "Modo de color",
+  "uniform": "Uniforme",
+  "density": "Densidad celular",
+  "region": "Región",
+  "colormap": "Paleta",
+  "followClip": "Seguir el recorte del volumen",
+  "clipTitle": "Plano de corte",
+  "clipEnable": "Cortar la superficie",
+  "oblique": "Oblicuo",
+  "planePos": "Posición del plano",
+  "yaw": "Guiñada",
+  "pitch": "Cabeceo",
+  "resetClip": "Restablecer el corte",
+  "legendDensity": "Densidad celular local",
+  "legendRegion": "Colores de las regiones",
+  "relative": "(relativo)",
+  "changeColormap": "Haga clic para cambiar la paleta",
+  "selectColormap": "Elegir una paleta",
+  "loadFailed": "No se pudo cargar el modelo de superficie."
+}

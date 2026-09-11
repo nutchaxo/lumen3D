@@ -1,0 +1,11 @@
+{
+  "title": "Trajectories",
+  "length": "Trail length",
+  "allFrames": "all frames",
+  "frames": "{n} frames",
+  "future": "Show the path ahead",
+  "opacity": "Opacity",
+  "colorBy": "Colour by",
+  "colorRegion": "Region",
+  "colorSpeed": "Speed"
+}

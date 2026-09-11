@@ -1,0 +1,11 @@
+{
+  "title": "Trayectorias",
+  "length": "Longitud de la estela",
+  "allFrames": "todas las imágenes",
+  "frames": "{n} imágenes",
+  "future": "Mostrar el camino por venir",
+  "opacity": "Opacidad",
+  "colorBy": "Color según",
+  "colorRegion": "Región",
+  "colorSpeed": "Velocidad"
+}

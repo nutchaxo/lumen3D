@@ -1,0 +1,23 @@
+{
+  "title": "Trackingoppervlak",
+  "opacity": "Dekking",
+  "colorMode": "Kleurmodus",
+  "uniform": "Uniform",
+  "density": "Celdichtheid",
+  "region": "Regio",
+  "colormap": "Kleurenschaal",
+  "followClip": "Volg de uitsnede van het volume",
+  "clipTitle": "Snijvlak",
+  "clipEnable": "Het oppervlak doorsnijden",
+  "oblique": "Schuin",
+  "planePos": "Positie van het vlak",
+  "yaw": "Gier",
+  "pitch": "Helling",
+  "resetClip": "Snede herstellen",
+  "legendDensity": "Lokale celdichtheid",
+  "legendRegion": "Regiokleuren",
+  "relative": "(relatief)",
+  "changeColormap": "Klik om de kleurenschaal te wijzigen",
+  "selectColormap": "Kies een kleurenschaal",
+  "loadFailed": "Het oppervlaktemodel kon niet worden geladen."
+}

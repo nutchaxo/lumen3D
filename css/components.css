@@ -103,11 +103,6 @@
   color: var(--badge-live-text);
 }
 
-.badge-tracking {
-  background: var(--badge-tracking-bg);
-  color: var(--badge-tracking-text);
-}
-
 .badge-dot::before {
   content: '';
   width: 6px;

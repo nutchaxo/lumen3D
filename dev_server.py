@@ -3373,8 +3373,10 @@ def _check_main(root_arg) -> int:
 # The dataset vocabulary, single table for the whole server: it is at once the
 # directory under DATA_WEB/ (and under uploads/staging/), the first segment of a
 # dataset id, the `type` field of metadata.json and the ?type= filter value.
+# Cell tracking is not a type: a tracked timelapse is a `live` dataset whose
+# metadata.json carries a `tracking` block (tracks.json beside the bricks).
 # Path-traversal guard for the `id` query param (= "<type>/<folder>").
-ALLOWED_TYPE_DIRS = ("3d", "2d", "live", "tracking")
+ALLOWED_TYPE_DIRS = ("3d", "2d", "live")
 _SAFE_FOLDER_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9._-]*$")
 
 
@@ -4031,10 +4033,10 @@ def _rebuild_catalog() -> int:
 
 
 # ── One-shot migration: the pre-rename dataset vocabulary ──────────────────────
-# The four dataset types used to be spelled 'fixed' / 'wholemount' / 'live' /
-# 'tracking'. They are now '3d' / '2d' / 'live' / 'tracking' EVERYWHERE: the
-# directory under DATA_WEB/ and uploads/staging/, the first segment of a dataset
-# id, metadata.json's `type`, the import journal name and its `type` field, the
+# The dataset types used to be spelled 'fixed' / 'wholemount' / 'live' /
+# 'tracking'. They are now '3d' / '2d' / 'live' EVERYWHERE: the directory under
+# DATA_WEB/ and uploads/staging/, the first segment of a dataset id,
+# metadata.json's `type`, the import journal name and its `type` field, the
 # api/stats.json key and the ?type= filter value. Nothing anywhere reads the old
 # spelling any more — there is no alias layer, by design — so a deployment that
 # already holds bytes is converted once, here, at boot.
@@ -4043,9 +4045,17 @@ def _rebuild_catalog() -> int:
 # nothing left to convert. Renames go through os.replace() inside try/except so
 # two servers starting at the same moment cannot fight over the same directory.
 _LEGACY_TYPE_DIRS = {"fixed": "3d", "wholemount": "2d"}
+# The former fifth type. A tracked timelapse was always written to DATA_WEB/live/
+# with tracks.json beside its bricks (the viewer draws the tracking as a layer of
+# that dataset), so DATA_WEB/tracking/ only ever held what install.php seeded —
+# an empty folder — or a hand-made dataset. The folder is removed when empty and
+# reported when not; its bytes are never touched.
+_RETIRED_TYPE_DIR = "tracking"
 # An explorer filter link as the page builder serialises it into config/pages/.
 _LEGACY_TYPE_HREF_RE = re.compile(
     r"(explorer\.html\?type=)(" + "|".join(_LEGACY_TYPE_DIRS) + r")(?![A-Za-z0-9_-])")
+# A link to the retired type's filter now opens the timelapses.
+_RETIRED_TYPE_HREF_RE = re.compile(r"(explorer\.html\?type=)tracking(?![A-Za-z0-9_-])")
 
 
 def _migrate_rel(path: Path) -> str:
@@ -4086,9 +4096,12 @@ def _legacy_types_present() -> bool:
             return True
         if state.is_dir() and next(state.glob(f"{legacy}__*.json"), None) is not None:
             return True
+    if (DATA_WEB / _RETIRED_TYPE_DIR).is_dir() or (staging / _RETIRED_TYPE_DIR).is_dir():
+        return True
     if _contains_bytes(STATS_FILE, (b'"fixed/', b'"wholemount/')):
         return True
-    if _contains_bytes(INSTANCE_FILE, (b'"wholemount":',)):
+    # "tracking": covers pageTitles.tracking and datasetTypes.tracking alike.
+    if _contains_bytes(INSTANCE_FILE, (b'"wholemount":', b'"showTracking"', b'"tracking":')):
         return True
     pages = CONFIG_DIR / "pages"
     if pages.is_dir():
@@ -4099,9 +4112,33 @@ def _legacy_types_present() -> bool:
                 text = page.read_text(encoding="utf-8")
             except OSError:
                 continue
-            if _LEGACY_TYPE_HREF_RE.search(text):
+            if _LEGACY_TYPE_HREF_RE.search(text) or _RETIRED_TYPE_HREF_RE.search(text):
                 return True
     return False
+
+
+def _migrate_retire_tracking(log: list) -> None:
+    """Retire DATA_WEB/tracking and uploads/staging/tracking: gone when empty,
+    reported — never moved, never deleted — when something is in them."""
+    for root in (DATA_WEB / _RETIRED_TYPE_DIR, UPLOADS_DIR / "staging" / _RETIRED_TYPE_DIR):
+        if not root.is_dir():
+            continue
+        try:
+            entries = [p for p in root.iterdir() if p.name != ".gitkeep"]
+        except OSError as exc:
+            log.append(f"FAILED {_migrate_rel(root)}: {exc}")
+            continue
+        if entries:
+            log.append(f"LEFT {_migrate_rel(root)}: {len(entries)} item(s) — cell tracking is no "
+                       f"longer a dataset type; a tracked timelapse belongs under DATA_WEB/live/")
+            continue
+        try:
+            for p in root.iterdir():
+                p.unlink()
+            root.rmdir()
+            log.append(f"removed empty {_migrate_rel(root)}")
+        except OSError as exc:
+            log.append(f"FAILED {_migrate_rel(root)}: {exc}")
 
 
 def _migrate_move_dir(src: Path, dest: Path, log: list) -> None:
@@ -4205,10 +4242,6 @@ def _migrate_metadata(log: list) -> None:
             if meta.get("id") != ds_id:
                 meta["id"] = ds_id
                 changed = True
-            linked, moved = _migrate_legacy_id(meta.get("linkedTrackingId"))
-            if moved:
-                meta["linkedTrackingId"] = linked
-                changed = True
             related = meta.get("relatedIds")
             if isinstance(related, list):
                 rebuilt = []
@@ -4281,22 +4314,39 @@ def _migrate_stats(log: list) -> None:
 
 def _migrate_instance(log: list) -> None:
     """config/instance.json — pageTitles is keyed by <body data-page>, and the
-    photograph page is served as 2d.html (data-page="2d")."""
+    photograph page is served as 2d.html (data-page="2d"). The retired tracking
+    page and type leave their title, their nav toggle and their display names."""
     if not INSTANCE_FILE.exists():
         return
     try:
         doc = json.loads(INSTANCE_FILE.read_text(encoding="utf-8"))
     except Exception:
         return
-    titles = doc.get("pageTitles") if isinstance(doc, dict) else None
-    if not isinstance(titles, dict) or "wholemount" not in titles:
+    if not isinstance(doc, dict):
         return
-    value = titles.pop("wholemount")
-    titles.setdefault("2d", value)   # never clobber a title the operator already set
+    changes = []
+    titles = doc.get("pageTitles")
+    if isinstance(titles, dict) and "wholemount" in titles:
+        value = titles.pop("wholemount")
+        titles.setdefault("2d", value)   # never clobber a title the operator already set
+        changes.append("pageTitles.wholemount -> pageTitles.2d")
+    if isinstance(titles, dict) and "tracking" in titles:
+        titles.pop("tracking")
+        changes.append("pageTitles.tracking dropped")
+    nav = doc.get("nav")
+    if isinstance(nav, dict) and "showTracking" in nav:
+        nav.pop("showTracking")
+        changes.append("nav.showTracking dropped")
+    dtypes = doc.get("datasetTypes")
+    if isinstance(dtypes, dict) and "tracking" in dtypes:
+        dtypes.pop("tracking")
+        changes.append("datasetTypes.tracking dropped")
+    if not changes:
+        return
     try:
         _atomic_write(INSTANCE_FILE, json.dumps(doc, indent=2, ensure_ascii=False),
                       mode=_file_mode())
-        log.append("config/instance.json: pageTitles.wholemount -> pageTitles.2d")
+        log.append("config/instance.json: " + ", ".join(changes))
     except OSError as exc:
         log.append(f"FAILED config/instance.json: {exc}")
 
@@ -4315,6 +4365,7 @@ def _migrate_pages(log: list) -> None:
             continue
         rewritten = _LEGACY_TYPE_HREF_RE.sub(
             lambda m: m.group(1) + _LEGACY_TYPE_DIRS[m.group(2)], text)
+        rewritten = _RETIRED_TYPE_HREF_RE.sub(lambda m: m.group(1) + "live", rewritten)
         if rewritten == text:
             continue
         try:
@@ -4334,6 +4385,7 @@ def _migrate_dataset_types() -> list[str]:
     for legacy, canon in _LEGACY_TYPE_DIRS.items():
         _migrate_move_dir(DATA_WEB / legacy, DATA_WEB / canon, log)
         _migrate_move_dir(staging / legacy, staging / canon, log)
+    _migrate_retire_tracking(log)
     _migrate_journals(UPLOADS_DIR / "state", log)
     _migrate_metadata(log)
     _migrate_stats(log)
@@ -5517,7 +5569,7 @@ def main():
         # encoding (cp1252) cannot encode an emoji, and a crash here would look
         # like a failed migration.
         print(f"[types] {len(changes)} change(s) applied." if changes
-              else "[types] Nothing to migrate - the tree already uses 3d/2d/live/tracking.")
+              else "[types] Nothing to migrate - the tree already uses 3d/2d/live.")
         sys.exit(0)
 
     if args.set_password:

@@ -784,7 +784,7 @@ Dat woord wordt daarna **automatisch overgenomen in de hele publieke interface**
 
 ## 11.6. Kaart "Navigatie"
 
-De vakjes bepalen welke items in het menu van de publieke site verschijnen: *Verkenner*, *Vergelijken*, *Tracking*, *Over*, *Juridisch*.
+De vakjes bepalen welke items in het menu van de publieke site verschijnen: *Verkenner*, *Vergelijken*, *Over*, *Juridisch*.
 
 Een vakje uitvinken haalt het item uit het menu zonder de pagina te verwijderen.
 
@@ -799,7 +799,6 @@ Dit is een **eigen tabblad**, vlak naast *Identiteit*. Het zet hetzelfde idee vo
 | **3D** | Een stilstaand volume: een 3D-beeldstapel met meerdere kanalen | de 3D-viewer |
 | **2D** | Een gekalibreerde foto van de stereomicroscoop | de 2D-viewer |
 | **Live** | Een 4D-tijdreeks (hetzelfde volume door de tijd) | de 3D-viewer, met een tijdbalk |
-| **Tracking** | De trajecten van cellen gevolgd in een tijdreeks | de trackingviewer |
 
 Elke categorie heeft twee velden, **meertalig** net als die van het tabblad Identiteit:
 
@@ -810,7 +809,7 @@ Elke categorie heeft twee velden, **meertalig** net als die van het tabblad Iden
 
 > ### 📌 Wat dit tabblad **niet** verandert
 >
-> Alleen **getoonde namen**. Niet de mappen op de server (`DATA_WEB/3d/`, `DATA_WEB/2d/`, `DATA_WEB/live/`, `DATA_WEB/tracking/`), niet de adressen van de pagina's, niet de links die uw bezoekers bewaard hebben, en niets in de datasets zelf. Hernoem dus zo vaak u wilt, zonder enig risico.
+> Alleen **getoonde namen**. Niet de mappen op de server (`DATA_WEB/3d/`, `DATA_WEB/2d/`, `DATA_WEB/live/`), niet de adressen van de pagina's, niet de links die uw bezoekers bewaard hebben, en niets in de datasets zelf. Hernoem dus zo vaak u wilt, zonder enig risico.
 >
 > En het maakt geen categorieën aan: de vier types zijn die welke het programma kan tonen.
 
@@ -1073,7 +1072,7 @@ Een **variabele** is een stukje tekst dat u één keer vastlegt en overal hergeb
 
 Naamregels: begin met een letter, daarna letters, cijfers of `_`, maximaal 32 tekens.
 
-Er bestaan al variabelen voor de gegevens uit het tabblad Identiteit: `{brand}` (de naam van de site), `{specimen}` (uw studieobject), `{org}` (de organisatie), `{year}` (het jaar). De vier datasetcategorieën hebben er ook: `{type3d}`, `{type2d}`, `{typeLive}`, `{typeTracking}` — ze nemen de namen over uit het tabblad **Datasettypes** (§11.7). Ze werken zichzelf allemaal bij.
+Er bestaan al variabelen voor de gegevens uit het tabblad Identiteit: `{brand}` (de naam van de site), `{specimen}` (uw studieobject), `{org}` (de organisatie), `{year}` (het jaar). De drie datasetcategorieën hebben er ook: `{type3d}`, `{type2d}`, `{typeLive}` — ze nemen de namen over uit het tabblad **Datasettypes** (§11.7). Ze werken zichzelf allemaal bij.
 
 ## 12.11. Een nieuwe pagina aanmaken
 
@@ -1228,7 +1227,7 @@ De oplossing vraagt toegang tot de bestanden van de server (FTP, SFTP, of de bes
 
 ### "Een dataset verschijnt niet in de lijst"
 
-1. controleer dat hij echt in `DATA_WEB/3d/`, `DATA_WEB/2d/`, `DATA_WEB/live/` of `DATA_WEB/tracking/` staat — die vier mapnamen liggen vast, hernoem ze niet (een **type** hernoemen in het tabblad *Datasettypes* verandert alleen wat getoond wordt, nooit de map);
+1. controleer dat hij echt in `DATA_WEB/3d/`, `DATA_WEB/2d/` of `DATA_WEB/live/` staat — die drie mapnamen liggen vast, hernoem ze niet (een **type** hernoemen in het tabblad *Datasettypes* verandert alleen wat getoond wordt, nooit de map);
 2. controleer dat zijn map een bestand `metadata.json` bevat;
 3. herlaad de pagina van het paneel.
 
@@ -1260,7 +1259,7 @@ Doe een **geforceerde herlaadbeurt**: `Ctrl + Shift + R` (Windows) of `Cmd + Shi
 | **Voxel** | Het driedimensionale equivalent van een pixel. De werkelijke grootte komt uit de kalibratie (§3.3). |
 | **Blok** | Een klein volumekubusje (64×64×64 voxels). De site laadt ze op aanvraag, en kan zo volumes van meerdere gigabytes tonen zonder alles te downloaden. |
 | **LOD** | *Level of Detail*. Meerdere resoluties van hetzelfde volume: de site toont eerst een grove versie en verfijnt daarna. |
-| **Datasettype** | Een van de vier categorieën — `3d` (stilstaand volume), `2d` (gekalibreerde foto), `live` (4D-tijdreeks), `tracking` (celtrajecten). Die vier woorden zijn technisch: het zijn de mappen op de server en het begin van de identificatie van elke dataset. De naam die het publiek ziet, stelt u in via het tabblad **Datasettypes** (§11.7). |
+| **Datasettype** | Een van de drie categorieën — `3d` (stilstaand volume), `2d` (gekalibreerde foto), `live` (4D-tijdreeks, eventueel met de tracking van haar cellen). Die drie woorden zijn technisch: het zijn de mappen op de server en het begin van de identificatie van elke dataset. De naam die het publiek ziet, stelt u in via het tabblad **Datasettypes** (§11.7). |
 | **Plug-in** | Een module die een functie aan de viewer toevoegt (§5.1). |
 | **Sandbox** | Een geïsoleerde uitvoeringsmodus: de plug-in werkt, maar kan niet aan de rest van de pagina. |
 | **Vingerafdruk** | Een handtekening van de exacte inhoud van een bestand. Verandert het bestand met één teken, dan verandert de vingerafdruk. |

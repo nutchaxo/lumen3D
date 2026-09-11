@@ -1,0 +1,27 @@
+{
+  "id": "tracking-trails",
+  "name": "Tracking Trails",
+  "version": "1.0.0",
+  "platformCompat": ">=1.53.0",
+  "dataTypes": [
+    "live"
+  ],
+  "requires": [
+    "tracking"
+  ],
+  "creator": "IRIBHM",
+  "placement": "tools",
+  "group": "visuals",
+  "subtype": "toggle",
+  "icon": "route",
+  "order": 45,
+  "description": "Draws the trajectory of every tracked cell over the volume: the path already travelled up to the current frame (optionally the path ahead), coloured by region or by speed, following the volume's clipping and stabilisation.",
+  "buttonId": "btn-tracking-trails",
+  "i18nTitle": "title",
+  "i18nLanguages": [
+    "en",
+    "fr",
+    "es",
+    "nl"
+  ]
+}

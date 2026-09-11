@@ -1,0 +1,17 @@
+{
+  "title": "Graphiques de suivi",
+  "close": "Fermer",
+  "linear": "Linéaire",
+  "log": "Log",
+  "loading": "Chargement des pistes…",
+  "plotFailed": "La bibliothèque de graphiques n'a pas pu être chargée.",
+  "axisTime": "Point temporel",
+  "axis_population": "Cellules",
+  "axis_velocity": "Vitesse moyenne (µm/image)",
+  "axis_neighbors": "Voisines par cellule",
+  "axis_mitoses": "Mitoses",
+  "metric_population": "Population",
+  "metric_velocity": "Vitesse",
+  "metric_neighbors": "Voisines",
+  "metric_mitoses": "Mitoses"
+}

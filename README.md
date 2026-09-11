@@ -7,7 +7,7 @@
 [![License](https://img.shields.io/badge/License-PolyForm%20Noncommercial-green?style=for-the-badge)](LICENCE)
 [![Languages](https://img.shields.io/badge/i18n-en%20%7C%20fr%20%7C%20es%20%7C%20nl-brightgreen?style=for-the-badge)](#-internationalization-i18n)
 
-**lumen3D** is a high-performance, **white-label** web platform for interactive exploration of multi-gigabyte 3D and 4D biological microscopy datasets. It streams and renders massive confocal volumes directly in the browser at **60 FPS** — no desktop software, no high-end local workstation required. A dataset is one of four kinds: `3d` (a still volume), `2d` (a calibrated stereomicroscope photograph), `live` (a 4D timelapse) or `tracking` (cell trajectories over a timelapse).
+**lumen3D** is a high-performance, **white-label** web platform for interactive exploration of multi-gigabyte 3D and 4D biological microscopy datasets. It streams and renders massive confocal volumes directly in the browser at **60 FPS** — no desktop software, no high-end local workstation required. A dataset is one of three kinds: `3d` (a still volume), `2d` (a calibrated stereomicroscope photograph) or `live` (a 4D timelapse — optionally carrying the cell tracking of its cells, drawn and analysed inside the same viewer).
 
 It was originally built for the **IRIBHM** (Institut de Recherche Interdisciplinaire en Biologie Humaine et Moléculaire) at the **Université Libre de Bruxelles (ULB)** — the reference deployment, imaging mouse embryos — and has since been **decoupled from that domain** into a reusable product: brand, texts, theme, pages, legal notices, navigation, and the installed plugin set are all configured **no-code** from an admin panel, with neutral defaults out of the box.
 
@@ -157,7 +157,7 @@ graph TD
 │   │                          #   marketplace, pipeline, docs)
 │   │                          #   + shell.js wizard + plugin-update.js (shared update mechanics)
 │   ├── vendor/                # SELF-HOSTED libs w/ SRI (Three.js, Lucide, OpenSeadragon, Plotly) — no CDN
-│   ├── viewers/               # Renderers (volume-viewer, volume-slicer, volume-grid, tracking-viewer
+│   ├── viewers/               # Renderers (volume-viewer, volume-slicer, volume-grid, tracking-overlay
 │   │                          #   — Three.js; 2d-viewer — plain canvas)
 │   └── workers/               # Web Workers (gaussian-blur-worker, tracks-load-worker)
 ├── lang/                      # Translation bundles (en/fr/es/nl.json) — drop-in discoverable
@@ -183,7 +183,6 @@ graph TD
 │   ├── 3d/<dataset>/{metadata.json, thumbnail.webp, bricks/, download/(optional)}
 │   ├── 2d/<dataset>/          # ONE calibrated photograph — image.webp + preview.webp, no bricks/
 │   ├── live/<dataset>/        # 4D timelapse — bricks/tNNN/ per timepoint (+ tracks.json when tracked)
-│   └── tracking/<dataset>/    # Cell-tracking trajectories
 ├── page.html / legal.html     # White-label custom pages + legal notices renderer
 ├── admpan.html                # Admin panel (ESM entry — the one carve-out from the no-ESM rule)
 ├── install.php                # One-file installer (signature-verified)
@@ -287,7 +286,7 @@ Everything user-facing is configured **without touching code**, from the admin p
 | What | Admin tab | Stored in | Rendered by |
 |---|---|---|---|
 | Brand, specimen noun, SEO, footer, nav | **Identity** | `config/instance.json` | `js/core/instance-config.js` + server `{{SITE:…}}` injection |
-| Public name of each dataset type (`3d` / `2d` / `live` / `tracking`) | **Dataset types** | `config/instance.json` → `datasetTypes` | `Utils.datasetTypeLabel()` / `datasetTypeTitle()`, falling back to `types.<id>` in `lang/<code>.json` |
+| Public name of each dataset type (`3d` / `2d` / `live`) | **Dataset types** | `config/instance.json` → `datasetTypes` | `Utils.datasetTypeLabel()` / `datasetTypeTitle()`, falling back to `types.<id>` in `lang/<code>.json` |
 | Palette, font, corner radius | **Appearance** | `config/theme.json` → `config/theme.css` | linked after `themes.css` on every public page |
 | Custom pages (full-page visual editor, 27 widgets) | **Pages** | `config/pages/<slug>.json` (drafts in `api/page-drafts/`) | `js/core/page-renderer.js` + `page.html?slug=` |
 | Legal notices | **Legal** | `config/legal.json` | `legal.html` |

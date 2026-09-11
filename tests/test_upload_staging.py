@@ -119,7 +119,7 @@ class TestAllowlist(StagingCase):
             ("3d", "download/evil.php"),
             ("3d", "download/nested/dir.ims"),
             ("3d", "bricks/lod0/c0/.hidden.bin"),
-            ("3d", "bricks/t000/lod0/c0/pack_00.bin"),   # timepoints: live/tracking only
+            ("3d", "bricks/t000/lod0/c0/pack_00.bin"),   # timepoints: live only
             ("3d", "config/instance.json"),
             ("3d", "a/b/c/d/e/f/g/h/i/j/k/l/m/deep.bin"),
             ("bogus", "metadata.json"),

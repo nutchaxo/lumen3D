@@ -203,7 +203,8 @@ const Explorer = (() => {
     const metaItems = [];
     if (stageDisplay !== '—') metaItems.push(`<span>${stageDisplay}</span>`);
     if (dateDisplay !== '—') metaItems.push(`<span>${dateDisplay}</span>`);
-    if (dataset.nCells) metaItems.push(`<span>${dataset.nCells} ${I18n.t('tracking.cells').toLowerCase()}</span>`);
+    const cellCount = Number(dataset.tracking?.cellCount) || 0;
+    if (cellCount) metaItems.push(`<span>${cellCount} ${I18n.t('js.trackingCells').toLowerCase()}</span>`);
 
     return `
       <a href="${_datasetUrl(dataset)}" class="card animate-fade-in-up" style="text-decoration:none;color:inherit;animation-duration:0.3s;">
@@ -281,13 +282,15 @@ const Explorer = (() => {
   function _availabilityBadges(dataset) {
     const downloads = dataset.downloads || [];
     const hasRaw = downloads.some(item => item.category === 'raw');
-    const hasTracking = dataset.type === 'tracking' || Boolean(dataset.tracksPath || dataset.modelPath);
+    // A tracked timelapse: its metadata carries a `tracking` block (cell tracks
+    // drawn as a layer of the viewer).
+    const hasTracking = Boolean(dataset.tracking && dataset.tracking.tracksPath);
     const hasLinked = (Catalog.getRelated?.(dataset.id) || []).length > 0;
     const badges = [];
     if (hasLinked) badges.push('<span class="availability-badge">Linked</span>');
     if (hasRaw) badges.push('<span class="availability-badge">Raw</span>');
     if (dataset.path) badges.push('<span class="availability-badge">Web</span>');
-    if (hasTracking) badges.push(`<span class="availability-badge">${Utils.escapeHtml(Utils.datasetTypeLabel('tracking'))}</span>`);
+    if (hasTracking) badges.push(`<span class="availability-badge">${Utils.escapeHtml(I18n.t('explorer.tracked'))}</span>`);
     return badges.join('');
   }
 

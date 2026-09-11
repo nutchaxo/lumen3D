@@ -78,10 +78,12 @@ DATA_WEB = ROOT / "DATA_WEB"
 # The dataset vocabulary. One table: it is the directory under uploads/staging/,
 # the directory under DATA_WEB/ a publish renames into, the type segment of the
 # journal name, and metadata.json's `type` field.
-ALLOWED_TYPE_DIRS = ("3d", "2d", "live", "tracking")
+ALLOWED_TYPE_DIRS = ("3d", "2d", "live")
 # The types whose data is a brick pyramid. A 2d dataset is one photograph: no
 # bricks/, its display copies sit at the dataset root (see _IMAGE_2D_FILES).
-VOLUME_TYPE_DIRS = ("3d", "live", "tracking")
+# Cell tracking is not a type: a tracked timelapse is a `live` dataset carrying
+# tracks.json / model.glb beside its bricks (see _ROOT_EXTRA).
+VOLUME_TYPE_DIRS = ("3d", "live")
 
 # A dataset folder name: the same shape dev_server._safe_dataset_dir accepts, so a
 # staged dataset can always be published without a rename.
@@ -258,7 +260,7 @@ def classify_path(type_dir: str, rel: str):
     tp = _RE_TIMEPOINT.match(inner)
     timepoint = None
     if tp:
-        if type_dir not in ("live", "tracking"):
+        if type_dir != "live":
             return None
         timepoint = int(tp.group(1))
         inner = tp.group(2)

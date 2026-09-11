@@ -52,17 +52,14 @@ const DownloadManifest = (() => {
     if (dataset.path) {
       items.push({ category: 'web', kind: 'file', label: 'Dataset metadata', path: `DATA_WEB/${dataset.path}/metadata.json`, format: 'JSON' });
     }
-    if (dataset.tracksPath) {
-      items.push({ category: 'web', kind: 'file', label: 'Tracking table', path: dataset.tracksPath, format: 'JSON' });
+    // A tracked timelapse carries its cell tracks and surface model beside the
+    // bricks; metadata.tracking names them relative to the dataset folder.
+    const tracking = dataset.tracking && typeof dataset.tracking === 'object' ? dataset.tracking : null;
+    if (tracking && dataset.path && tracking.tracksPath) {
+      items.push({ category: 'web', kind: 'file', label: 'Cell tracks', path: `DATA_WEB/${dataset.path}/${tracking.tracksPath}`, format: 'JSON' });
     }
-    if (dataset.tracksGzipPath) {
-      items.push({ category: 'web', kind: 'file', label: 'Compressed tracking table', path: dataset.tracksGzipPath, format: 'JSON.GZ' });
-    }
-    if (dataset.modelPath) {
-      items.push({ category: 'web', kind: 'file', label: 'Embryo model', path: dataset.modelPath, format: 'GLB' });
-    }
-    if (dataset.modelGzipPath) {
-      items.push({ category: 'web', kind: 'file', label: 'Compressed embryo model', path: dataset.modelGzipPath, format: 'GLB.GZ' });
+    if (tracking && dataset.path && tracking.surfacePath) {
+      items.push({ category: 'web', kind: 'file', label: 'Surface model', path: `DATA_WEB/${dataset.path}/${tracking.surfacePath}`, format: 'GLB' });
     }
     (dataset.mips || []).forEach((path, idx) => {
       items.push({ category: 'web', kind: 'file', label: `Maximum projection C${idx + 1}`, path, format: 'WEBP' });

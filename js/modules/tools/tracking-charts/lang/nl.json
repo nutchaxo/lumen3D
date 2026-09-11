@@ -1,0 +1,17 @@
+{
+  "title": "Trackinggrafieken",
+  "close": "Sluiten",
+  "linear": "Lineair",
+  "log": "Log",
+  "loading": "Sporen laden…",
+  "plotFailed": "De grafiekbibliotheek kon niet worden geladen.",
+  "axisTime": "Tijdstip",
+  "axis_population": "Cellen",
+  "axis_velocity": "Gemiddelde snelheid (µm/beeld)",
+  "axis_neighbors": "Buren per cel",
+  "axis_mitoses": "Mitosen",
+  "metric_population": "Populatie",
+  "metric_velocity": "Snelheid",
+  "metric_neighbors": "Buren",
+  "metric_mitoses": "Mitosen"
+}

@@ -35,7 +35,6 @@
     "explorer": "Data Explorer — IRIBHM Microscopy",
     "viewer": "Viewer — IRIBHM Microscopy",
     "compare": "Compare — IRIBHM Microscopy",
-    "tracking": "Cell Tracking — IRIBHM Microscopy",
     "2d": "Wholemount — IRIBHM Microscopy",
     "about": "About — IRIBHM Microscopy Platform",
     "admin": "Admin — IRIBHM Microscopy Platform",
@@ -57,7 +56,6 @@
   "nav": {
     "showExplorer": true,
     "showCompare": true,
-    "showTracking": true,
     "showAbout": true,
     "showLegal": false,
     "customPages": []

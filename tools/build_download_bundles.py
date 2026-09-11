@@ -60,7 +60,7 @@ DATA_WEB = ROOT / "DATA_WEB"
 RAW_DATA_DIRS = [
     Path(r"C:\Users\Administrator\Desktop\Fixed images for database\RAW_DATA"),
 ]
-DATASET_TYPES = ("3d", "2d", "live", "tracking")
+DATASET_TYPES = ("3d", "2d", "live")
 
 TARGET_PX = 2048               # desired long XY side of the generated TIFF
 # Hard ceiling on the in-flight volume (C·Z·Y·X·itemsize); if the level closest to
@@ -646,7 +646,7 @@ def main():
     ap = argparse.ArgumentParser(description="Populate each dataset's download/ folder.")
     ap.add_argument("--datasets", help="case-insensitive substring filter on folder name")
     ap.add_argument("--types", default=",".join(DATASET_TYPES),
-                    help="comma list: 3d,2d,live,tracking (a 2d dataset gets the "
+                    help="comma list: 3d,2d,live (a 2d dataset gets the "
                          "web archive only — its original TIFF and README come from the importer)")
     ap.add_argument("--data-web", help="override the DATA_WEB directory (default: <repo>/DATA_WEB)")
     ap.add_argument("--raw-dir", help="directory to search first for the source .ims (prepended to RAW_DATA_DIRS)")

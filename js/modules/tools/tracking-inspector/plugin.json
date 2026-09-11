@@ -1,0 +1,28 @@
+{
+  "id": "tracking-inspector",
+  "name": "Cell Inspector",
+  "version": "1.0.0",
+  "platformCompat": ">=1.53.0",
+  "dataTypes": [
+    "live"
+  ],
+  "requires": [
+    "tracking"
+  ],
+  "creator": "IRIBHM",
+  "placement": "tools",
+  "group": "tools",
+  "subtype": "tool",
+  "icon": "scan-search",
+  "order": 30,
+  "description": "Click a tracked cell (or find it by id) to read its track, region, life span, path length, displacement, straightness and mean speed, walk its lineage, list its neighbours, and draw the neighbour network and the velocity field over the volume.",
+  "tool": "inspect",
+  "shortcut": "i",
+  "i18nTitle": "title",
+  "i18nLanguages": [
+    "en",
+    "fr",
+    "es",
+    "nl"
+  ]
+}

@@ -346,21 +346,21 @@ const Utils = (() => {
   //   '3d'        volumes of fixed specimens   DATA_WEB/3d/        viewer.html
   //   '2d'        calibrated photographs       DATA_WEB/2d/        2d.html
   //   'live'      4D timelapse volumes         DATA_WEB/live/      viewer.html
-  //   'tracking'  cell-tracking trajectories   DATA_WEB/tracking/  tracking.html
+  // Cell tracking is not a type: a tracked timelapse is a 'live' dataset whose
+  // metadata carries a `tracking` block, drawn as a layer of the same viewer.
   // What the operator SEES is never hardcoded — see datasetTypeLabel().
-  const DATASET_TYPES = ['3d', '2d', 'live', 'tracking'];
+  const DATASET_TYPES = ['3d', '2d', 'live'];
 
   // Types whose bytes stream as 64³ bricks. A '2d' dataset is one photograph:
   // no bricks, no LOD pyramid, no channels.
-  const VOLUME_DATASET_TYPES = ['3d', 'live', 'tracking'];
+  const VOLUME_DATASET_TYPES = ['3d', 'live'];
 
-  const _TYPE_PAGE = { '3d': 'viewer.html', '2d': '2d.html', live: 'viewer.html', tracking: 'tracking.html' };
-  const _TYPE_ICON = { '3d': 'layers', '2d': 'camera', live: 'video', tracking: 'git-branch' };
+  const _TYPE_PAGE = { '3d': 'viewer.html', '2d': '2d.html', live: 'viewer.html' };
+  const _TYPE_ICON = { '3d': 'layers', '2d': 'camera', live: 'video' };
   const _TYPE_GRADIENT = {
     '3d': 'linear-gradient(135deg, #00D2FF22, #0F346044)',
     '2d': 'linear-gradient(135deg, #8B7CFF22, #1A1A2E44)',
-    live: 'linear-gradient(135deg, #FFA72622, #16213E44)',
-    tracking: 'linear-gradient(135deg, #00A65422, #1A1A2E44)'
+    live: 'linear-gradient(135deg, #FFA72622, #16213E44)'
   };
 
   function isDatasetType(type) { return DATASET_TYPES.indexOf(type) !== -1; }

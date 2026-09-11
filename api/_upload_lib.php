@@ -138,7 +138,7 @@ function lumen_up_classify(string $type, $rel): ?array {
 
     $timepoint = null;
     if (preg_match('#^t(\d{1,6})/(.+)$#', $inner, $m)) {
-        if ($type !== 'live' && $type !== 'tracking') return null;
+        if ($type !== 'live') return null;
         $timepoint = (int)$m[1];
         $inner = $m[2];
         if ($inner === 'manifest.json') return [LUMEN_UP_TIER_CORE, 'manifest'];

@@ -1,0 +1,11 @@
+{
+  "title": "Trajecten",
+  "length": "Spoorlengte",
+  "allFrames": "alle beelden",
+  "frames": "{n} beelden",
+  "future": "Toon het pad vooruit",
+  "opacity": "Dekking",
+  "colorBy": "Kleur volgens",
+  "colorRegion": "Regio",
+  "colorSpeed": "Snelheid"
+}

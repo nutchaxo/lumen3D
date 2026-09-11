@@ -784,7 +784,7 @@ Esa palabra se **retoma automáticamente en toda la interfaz pública**: título
 
 ## 11.6. Tarjeta «Navegación»
 
-Las casillas deciden qué entradas aparecen en el menú del sitio público: *Explorar*, *Comparar*, *Seguimiento*, *Acerca de*, *Aviso legal*.
+Las casillas deciden qué entradas aparecen en el menú del sitio público: *Explorar*, *Comparar*, *Acerca de*, *Aviso legal*.
 
 Desmarcar una entrada la retira del menú sin borrar la página.
 
@@ -799,7 +799,6 @@ Es una **pestaña propia**, justo al lado de *Identidad*. Prolonga la misma idea
 | **3D** | Un volumen fijo: una pila de imágenes 3D multicanal | el visor 3D |
 | **2D** | Una fotografía calibrada tomada con estereomicroscopio | el visor 2D |
 | **Live** | Una serie temporal 4D (el mismo volumen a lo largo del tiempo) | el visor 3D, con una línea de tiempo |
-| **Seguimiento** | Las trayectorias de células seguidas en una serie temporal | el visor de seguimiento |
 
 Cada categoría tiene dos campos, **multilingües** como los de la pestaña Identidad:
 
@@ -810,7 +809,7 @@ Cada categoría tiene dos campos, **multilingües** como los de la pestaña Iden
 
 > ### 📌 Lo que esta pestaña **no** cambia
 >
-> Solo **nombres mostrados**. Ni las carpetas del servidor (`DATA_WEB/3d/`, `DATA_WEB/2d/`, `DATA_WEB/live/`, `DATA_WEB/tracking/`), ni las direcciones de las páginas, ni los enlaces que sus visitantes hayan guardado, ni nada dentro de los conjuntos de datos. Así que renombre cuantas veces quiera, sin ningún riesgo.
+> Solo **nombres mostrados**. Ni las carpetas del servidor (`DATA_WEB/3d/`, `DATA_WEB/2d/`, `DATA_WEB/live/`), ni las direcciones de las páginas, ni los enlaces que sus visitantes hayan guardado, ni nada dentro de los conjuntos de datos. Así que renombre cuantas veces quiera, sin ningún riesgo.
 >
 > Y no crea categorías: los cuatro tipos son los que el programa sabe mostrar.
 
@@ -1073,7 +1072,7 @@ Una **variable** es un texto que define una vez y reutiliza en todas partes.
 
 Reglas de nombre: empiece por una letra, luego letras, cifras o `_`, 32 caracteres como máximo.
 
-Ya existen variables para los datos de la pestaña Identidad: `{brand}` (el nombre del sitio), `{specimen}` (su objeto de estudio), `{org}` (la organización), `{year}` (el año). Las cuatro categorías de conjuntos de datos también tienen las suyas: `{type3d}`, `{type2d}`, `{typeLive}`, `{typeTracking}` — recogen los nombres de la pestaña **Tipos de datos** (§11.7). Todas se actualizan solas.
+Ya existen variables para los datos de la pestaña Identidad: `{brand}` (el nombre del sitio), `{specimen}` (su objeto de estudio), `{org}` (la organización), `{year}` (el año). Las tres categorías de conjuntos de datos también tienen las suyas: `{type3d}`, `{type2d}`, `{typeLive}` — recogen los nombres de la pestaña **Tipos de datos** (§11.7). Todas se actualizan solas.
 
 ## 12.11. Crear una nueva página
 
@@ -1228,7 +1227,7 @@ La solución requiere acceso a los archivos del servidor (FTP, SFTP, o el gestor
 
 ### «Un conjunto de datos no aparece en la lista»
 
-1. compruebe que está realmente en `DATA_WEB/3d/`, `DATA_WEB/2d/`, `DATA_WEB/live/` o `DATA_WEB/tracking/` — esos cuatro nombres de carpeta son obligatorios, no los renombre (cambiar el nombre de un **tipo** en la pestaña *Tipos de datos* solo afecta a lo que se muestra, nunca a la carpeta);
+1. compruebe que está realmente en `DATA_WEB/3d/`, `DATA_WEB/2d/` o `DATA_WEB/live/` — esos tres nombres de carpeta son obligatorios, no los renombre (cambiar el nombre de un **tipo** en la pestaña *Tipos de datos* solo afecta a lo que se muestra, nunca a la carpeta);
 2. compruebe que su carpeta contiene un archivo `metadata.json`;
 3. recargue la página del panel.
 
@@ -1260,7 +1259,7 @@ Haga una **recarga forzada**: `Ctrl + Shift + R` (Windows) o `Cmd + Shift + R` (
 | **Vóxel** | El equivalente de un píxel, en tres dimensiones. Su tamaño real lo da la calibración (§3.3). |
 | **Bloque** | Un pequeño cubo de volumen (64×64×64 vóxeles). El sitio los carga bajo demanda, lo que le permite mostrar volúmenes de varios gigabytes sin descargarlo todo. |
 | **LOD** | *Level of Detail*. Varias resoluciones del mismo volumen: el sitio muestra primero una versión basta y luego afina. |
-| **Tipo de conjunto de datos** | Una de las cuatro categorías — `3d` (volumen fijo), `2d` (fotografía calibrada), `live` (serie temporal 4D), `tracking` (trayectorias celulares). Esas cuatro palabras son técnicas: son las carpetas del servidor y el comienzo del identificador de cada conjunto. El nombre que ve el público se ajusta en la pestaña **Tipos de datos** (§11.7). |
+| **Tipo de conjunto de datos** | Una de las tres categorías — `3d` (volumen fijo), `2d` (fotografía calibrada), `live` (serie temporal 4D, opcionalmente con el seguimiento de sus células). Esas tres palabras son técnicas: son las carpetas del servidor y el comienzo del identificador de cada conjunto. El nombre que ve el público se ajusta en la pestaña **Tipos de datos** (§11.7). |
 | **Plugin** | Un módulo que añade una función al visor (§5.1). |
 | **Sandbox (entorno aislado)** | Un modo de ejecución aislado: el plugin funciona, pero no puede acceder al resto de la página. |
 | **Huella** | Una firma del contenido exacto de un archivo. Si el archivo cambia en un solo carácter, la huella cambia. |

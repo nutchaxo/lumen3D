@@ -1,0 +1,15 @@
+{
+  "title": "Celafstand",
+  "close": "Sluiten",
+  "snapshot": "Momentopname",
+  "followCells": "Cellen volgen",
+  "measureDesc": "Klik op twee gevolgde cellen om hun afstand te meten.",
+  "noMeasure": "Nog geen opgeslagen meting.",
+  "clear": "Metingen wissen",
+  "measureN": "Cellen {n}",
+  "outOfFrame": "Buiten beeld",
+  "cellA": "Cel A",
+  "clickSecond": "Klik op een tweede cel.",
+  "exportCsv": "CSV van de afstanden",
+  "exportJson": "JSON van de afstanden"
+}

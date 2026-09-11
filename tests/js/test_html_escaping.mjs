@@ -56,11 +56,11 @@ const read = (rel) => readFileSync(path.join(ROOT, rel), 'utf8');
   assert.ok((s.match(/\$\{safeColor\}/g) || []).length >= 2, 'SEC-019: both swatches use safeColor');
 }
 
-// ── SEC-021 tracking.js + viewer.css ──
+// ── SEC-021 the colour-map menu (tracking-surface plugin) + viewer.css ──
 {
-  const s = read('js/pages/tracking.js');
-  assert.ok(s.includes('Utils.escapeHtml(n)'), 'SEC-021: colormap name escaped');
-  assert.ok(s.includes('Utils.escapeHtml(c)'), 'SEC-021: colormap stop color escaped');
+  const s = read('js/modules/tools/tracking-surface/index.js');
+  assert.ok(s.includes('data-map="${esc(n)}"'), 'SEC-021: colormap name escaped');
+  assert.ok(s.includes('background:${esc(c)};'), 'SEC-021: colormap stop color escaped');
   const menu = s.slice(s.indexOf('colormap-option'), s.indexOf('colormap-option') + 600);
   assert.ok(!/onmouseover=/.test(menu) && !/onmouseout=/.test(menu), 'SEC-021: inline onmouseover/onmouseout removed from colormap option');
   assert.ok(/colormap-option\$\{isSel \? ' selected'/.test(s), 'SEC-021: selection via CSS .selected class');

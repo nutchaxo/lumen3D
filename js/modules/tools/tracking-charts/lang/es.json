@@ -1,0 +1,17 @@
+{
+  "title": "Gráficos de seguimiento",
+  "close": "Cerrar",
+  "linear": "Lineal",
+  "log": "Log",
+  "loading": "Cargando las pistas…",
+  "plotFailed": "No se pudo cargar la biblioteca de gráficos.",
+  "axisTime": "Punto temporal",
+  "axis_population": "Células",
+  "axis_velocity": "Velocidad media (µm/imagen)",
+  "axis_neighbors": "Vecinas por célula",
+  "axis_mitoses": "Mitosis",
+  "metric_population": "Población",
+  "metric_velocity": "Velocidad",
+  "metric_neighbors": "Vecinas",
+  "metric_mitoses": "Mitosis"
+}

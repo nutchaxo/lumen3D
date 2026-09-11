@@ -27,7 +27,6 @@
     "explorer": "Data Explorer — Lumen3D",
     "viewer": "Viewer — Lumen3D",
     "compare": "Compare — Lumen3D",
-    "tracking": "Tracking — Lumen3D",
     "about": "About — Lumen3D",
     "admin": "Admin — Lumen3D",
     "legal": "Legal — Lumen3D",
@@ -40,7 +39,6 @@
   "nav": {
     "showExplorer": true,
     "showCompare": true,
-    "showTracking": true,
     "showAbout": true,
     "showLegal": true,
     "customPages": []

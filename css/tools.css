@@ -489,6 +489,36 @@ body.presentation-mode .viewer-layout {
   font-family: var(--font-mono);
 }
 
+/* Tracking charts (tracking-charts plugin): a floating chart over the canvas,
+   top-left so it never covers the measurement panels at the bottom-right. */
+.tracking-chart-panel {
+  right: auto;
+  bottom: auto;
+  top: var(--space-4);
+  left: var(--space-4);
+  width: min(440px, calc(100vw - 32px));
+  height: 320px;
+  flex-direction: column;
+}
+
+.tracking-chart-panel.visible {
+  display: flex;
+}
+
+.tracking-chart-metrics {
+  padding: var(--space-2) var(--space-3) 0;
+}
+
+.tracking-chart-panel > .text-xs {
+  padding: 0 var(--space-3);
+}
+
+.tracking-chart-graph {
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+}
+
 .export-modal-overlay {
   position: fixed;
   inset: 0;

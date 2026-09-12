@@ -1,11 +1,15 @@
 {
   "id": "calibrated-grid",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "platformCompat": ">=1.51.0",
   "creator": "IRIBHM",
   "placement": "tools",
   "dataTypes": [
     "2d"
+  ],
+  "contexts": [
+    "page",
+    "panel"
   ],
   "i18nTitle": "title",
   "i18nAria": "aria",

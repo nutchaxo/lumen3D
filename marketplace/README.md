@@ -66,6 +66,8 @@ Voir les plugins existants sous `js/modules/<placement>/<id>/` comme modèles.
   "group": "view",                    // cluster de la barre d'outils
   "icon": "info",                     // icône Lucide
   "order": 60,
+  "dataTypes": ["3d", "live", "2d"],  // types de données couverts (3d | 2d | live) ; absent = visualiseur de volumes seulement
+  "contexts": ["page", "panel"],      // "page" = page autonome ; "panel" = embarqué (page Comparer, vue divisée, aperçu admin) ; absent = ["page"]
   "description": "Ce que fait le plugin (affiché sur la carte du catalogue).",
   "sandbox": true,                    // true = exécuté isolé (iframe) ; voir ci-dessous
   "sandboxCapabilities": ["toolbar.addButton", "viewer.getInfo", "ui.toast"],

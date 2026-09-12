@@ -4118,7 +4118,6 @@ const VolumeViewer = (() => {
     if (state.kind && state.kind !== 'volume') return;
     if (!Number.isFinite(state.cameraZ) && !Array.isArray(state.quaternion) && !Array.isArray(state.position)) return;
     
-    console.log('[VolumeViewer] setCameraState called', { cameraZ: state.cameraZ, quaternion: state.quaternion, position: state.position, _hasLoadedVolume });
     // Prevent default fitCameraToVolume from overwriting this restored state
     _hasLoadedVolume = true;
     if (Number.isFinite(state.cameraZ)) camera.position.z = state.cameraZ;

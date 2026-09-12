@@ -256,7 +256,8 @@ const { T } = loadTab();
 
   const exposure = viewer.slice(viewer.indexOf('function _syncExposureFromUi'),
     viewer.indexOf('function _syncExposureFromUi') + 800);
-  assert.ok(/if \(_isIframe && _isInitialized\)/.test(exposure),
+  // The guard may carry the host-applied suppression too (`&& !_suppressChannelSync`).
+  assert.ok(/if \(_isIframe && _isInitialized(?: && !_suppressChannelSync)?\)/.test(exposure),
     'seeding the exposure slider at boot is not broadcast as an edit');
 }
 

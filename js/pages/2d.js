@@ -27,8 +27,12 @@ const App2D = (() => {
   let _moduleCtx = null;
   let _stateTimer = 0;
   let _isAdmin = false;
-  let _panelIndex = null;           // set when this page is one pane of a split view
+  let _panelIndex = null;           // set when this page is one pane of a split view or a Compare panel
+  let _headless = false;            // hideHeader=true: embedded chrome-less by a host page
   let _suppressSync = false;        // a view pushed by the parent must not echo back
+  let _suppressToolSync = false;    // a tool pushed by the host must not echo back
+  let _suppressSidebarSync = false; // a sidebar closed on the host's order must not echo back
+  let _pendingWorkspaceState = null; // APPLY_WORKSPACE_STATE that arrived before the photograph
   let _datasetListeners = [];
 
   const $ = (id) => document.getElementById(id);
@@ -51,7 +55,8 @@ const App2D = (() => {
     const params = new URLSearchParams(window.location.search);
     _isAdmin = params.get('mode') === 'admin';
     _panelIndex = params.get('panelIndex');
-    if (params.get('hideHeader') === 'true') document.body.classList.add('p2d-headless');
+    _headless = params.get('hideHeader') === 'true';
+    if (_headless) document.body.classList.add('p2d-headless');
     if (_panelIndex !== null) _bindPanelSync();
     const requested = params.get('id');
     const first = await _resolveDataset(requested, params.get('path'));
@@ -71,22 +76,44 @@ const App2D = (() => {
       PluginRegistry.bindToolbarButtons();
       $('measure-section').hidden = !PluginRegistry.getModule('measure-distance');
     }
-    ToolManager.init({ defaultTool: 'navigate' });
+    ToolManager.init({
+      defaultTool: 'navigate',
+      onChange: (tool) => {
+        // A tool picked here (keyboard shortcut) becomes the host's tool for every
+        // panel; one the host pushed down (SET_TOOL) is not echoed back.
+        if (_panelIndex !== null && _meta && !_suppressToolSync) _postToHost({ type: 'TOOL_CHANGED', tool });
+      }
+    });
     _bindControls();
     if (_panelIndex !== null) {
+      _suppressSidebarSync = true;    // the pane simply opens collapsed; nothing was closed
       _setSidebarHidden(true);
+      _suppressSidebarSync = false;
       _bindPaneNav();
     }
     _renderBrowserFilters();
-    _openDataset(first, { history: 'replace' });
+    // A host must not be told the panel is ready before the photograph is on
+    // screen, or its Studio would capture the upscaled preview. A photograph
+    // that never decodes still has to bring the panel up.
+    try { await _openDataset(first, { history: 'replace' }); }
+    catch (_) { /* the load-state pill already shows the failure */ }
     $('viewer-loader')?.classList.add('hidden');
+    if (_pendingWorkspaceState) {
+      const pending = _pendingWorkspaceState;
+      _pendingWorkspaceState = null;
+      _applyWorkspaceState(pending);
+    }
+    _bindHost();
   }
 
   async function _loadPlugins(meta) {
     if (typeof PluginRegistry === 'undefined') return;
     try {
       const paths = await PluginRegistry.discover('js/modules');
-      await PluginRegistry.loadModules('js/modules', paths, { dataType: TYPE });
+      // Embedded chrome-less (a Compare panel, a split-view pane, the admin
+      // preview), the page keeps only the plugins that declared they can be
+      // driven from outside — no nested split view inside a panel.
+      await PluginRegistry.loadModules('js/modules', paths, { dataType: TYPE, context: _headless ? 'panel' : 'page' });
       PluginRegistry.buildToolbarButtons({
         dataset: meta,
         groups: [
@@ -207,6 +234,7 @@ const App2D = (() => {
   }
 
   // ── Dataset switching ──────────────────────────────────────────────────────
+  /** @returns {Promise<void>} resolves when the native photograph is on screen (never rejects) */
   function _openDataset(meta, opts = {}) {
     _meta = meta;
     _id = meta.id;
@@ -220,7 +248,7 @@ const App2D = (() => {
 
     Viewer2D.setOrientation(meta.orientation2d || null);
     const image = meta.image || {};
-    Viewer2D.load({
+    const loaded = Viewer2D.load({
       previewUrl: _fileUrl(_basePath, image.preview || 'preview.webp'),
       nativeUrl: _fileUrl(_basePath, image.native || 'image.webp'),
       width: image.width || meta.dimensions?.x || 1,
@@ -232,6 +260,10 @@ const App2D = (() => {
     _markActiveCard();
     _prefetchNeighbours();
     for (const cb of _datasetListeners) cb(meta);
+    // The host keeps a title and an id per panel; a photograph switched from the
+    // pane's own previous / next / browse controls must reach it.
+    if (_panelIndex !== null && opts.history) _postToHost({ type: 'PANEL_DATASET', id: _id, name: meta.name || _id, datasetType: TYPE });
+    return loaded;
   }
 
   // ── Split-view pane: this page inside another 2D page ─────────────────────
@@ -251,11 +283,21 @@ const App2D = (() => {
         const ds = Catalog.getById(e.data.id);
         if (ds && ds.type === TYPE && ds.id !== _id) _openDataset(ds);
       } else if (type === 'TOGGLE_SIDEBAR') {   // the Compare page's per-panel settings button
-        _setSidebarHidden(!e.data.value);
+        _suppressSidebarSync = true;
+        try { _setSidebarHidden(!e.data.value); }
+        finally { _suppressSidebarSync = false; }
+      } else if (type === 'SET_TOOL') {          // the Compare page's tool chips
+        _applyHostTool(e.data.tool);
+      } else if (type === 'PLUGIN_ACTIVATE') {   // a per-panel toggle drawn by the host
+        _activateHostPlugin(e.data.id);
+      } else if (type === 'PANEL_HELLO') {
+        if (_meta) _postPanelReady();
       }
     });
-    Viewer2D.onViewChange(() => {
-      if (_suppressSync) return;
+    // Only a gesture made inside this pane travels: a fit, a layout resize or a
+    // view the parent itself pushed would otherwise cancel the other panes' zoom.
+    Viewer2D.onViewChange((view, reason) => {
+      if (_suppressSync || reason !== 'user') return;
       window.parent.postMessage({ type: 'WM_PHYSICAL_VIEW', sourceIndex: _panelIndex, panelIndex: _panelIndex, id: _id, view: Viewer2D.getPhysicalView() }, Utils.trustedTargetOrigin());
     });
   }
@@ -268,13 +310,32 @@ const App2D = (() => {
     $('pane-fit').addEventListener('click', () => Viewer2D.fit());
   }
 
-  /** A plugin panel in the sidebar, placed after the measurements. */
-  function _addSidebarSection({ id, title }) {
+  /**
+   * A plugin panel in the sidebar, placed after the measurements. Same contract
+   * as the volume viewer's `_addPluginSidebarSection` — {id, title, html,
+   * hidden, bind} in, {root, body, setTitle, setHtml, show, hide, remove} out —
+   * so a plugin written for both pages needs no branching. `section` is kept as
+   * an alias of `root` for the plugins that destructure it.
+   */
+  function _addSidebarSection(def = {}) {
+    const label = Utils.el('span', {}, def.title || '');
     const body = Utils.el('div', { class: 'p2d-plugin-body' });
-    const section = Utils.el('div', { class: 'panel-section', id },
-      Utils.el('div', { class: 'panel-title' }, Utils.el('span', {}, title)), body);
-    $('viewer-sidebar').insertBefore(section, $('gallery-section'));
-    return { section, body };
+    const root = Utils.el('div', def.id ? { class: 'panel-section', id: def.id } : { class: 'panel-section' },
+      Utils.el('div', { class: 'panel-title' }, label), body);
+    body.innerHTML = def.html || '';
+    if (def.hidden) root.hidden = true;
+    $('viewer-sidebar').insertBefore(root, $('gallery-section'));
+    if (window.lucide) lucide.createIcons({ nodes: [root] });
+    const handle = {
+      root, body, section: root,
+      setTitle(text) { label.textContent = text == null ? '' : String(text); },
+      setHtml(html) { body.innerHTML = html || ''; if (window.lucide) lucide.createIcons({ nodes: [body] }); },
+      show() { root.hidden = false; },
+      hide() { root.hidden = true; },
+      remove() { root.remove(); }
+    };
+    if (typeof def.bind === 'function') def.bind(body, handle);
+    return handle;
   }
 
   function _syncUrl(mode) {
@@ -373,8 +434,6 @@ const App2D = (() => {
   function _renderGallery() {
     if (typeof DatasetGallery === 'undefined') return;
     DatasetGallery.init({
-      sectionId: 'gallery-section',
-      containerId: 'gallery-container',
       basePath: _basePath,
       items: _meta.gallery
     });
@@ -554,16 +613,9 @@ const App2D = (() => {
   // The Studio annotates the photograph at native resolution; what it gets is
   // exactly what is on screen (plain or stain-isolated), calibrated in µm/px.
   function _openStudio() {
-    if (typeof StudioEditor === 'undefined' || !_meta) return;
-    const canvas = Viewer2D.getNativeCanvas();
-    if (!canvas) return;
-    const px = _meta.pixelSizeUm?.x || 1;
-    StudioEditor.open({
-      canvas, width: canvas.width, height: canvas.height,
-      source: '2d', quality: 'native', timepoint: 0,
-      pixelSizeUm: { x: px, y: _meta.pixelSizeUm?.y || px },
-      dataset: _meta, channelState: []
-    });
+    if (typeof StudioEditor === 'undefined') return;
+    const sr = _studioSliceResult();
+    if (sr) StudioEditor.open(sr);
   }
 
   function _setIsolate(on) {
@@ -575,6 +627,10 @@ const App2D = (() => {
   function _setSidebarHidden(hidden) {
     $('viewer-sidebar').classList.toggle('sidebar-hidden', hidden);
     $('btn-hamburger').hidden = !hidden;
+    // The host keeps a highlighted settings button per panel: a close made from
+    // inside the pane (its own collapse button) has to reach it. One the host
+    // asked for (TOGGLE_SIDEBAR), or the boot-time collapse, is not news to it.
+    if (hidden && _panelIndex !== null && _meta && !_suppressSidebarSync) _postToHost({ type: 'SIDEBAR_CLOSED' });
   }
 
   // ── Workspace state ────────────────────────────────────────────────────────
@@ -607,6 +663,84 @@ const App2D = (() => {
     if (typeof state?.ui?.sidebarHidden === 'boolean') _setSidebarHidden(state.ui.sidebarHidden);
   }
 
+  // ── Hosted panel (Compare page, split view) ────────────────────────────────
+  // The host cannot see this page's toolbar (the header is hidden): it is told
+  // what the toolbar offers (PANEL_READY), drives the toggles (PLUGIN_ACTIVATE)
+  // and the tool (SET_TOOL), and hears every state change back (PLUGIN_STATE,
+  // TOOL_CHANGED, PANEL_DATASET). Same wire as the volume viewer's.
+  function _postToHost(msg) {
+    if (_panelIndex === null) return;
+    window.parent.postMessage({ ...msg, sourceIndex: _panelIndex }, Utils.trustedTargetOrigin());
+  }
+
+  function _postPanelReady() {
+    if (_panelIndex === null || !_meta) return;
+    const toolbar = (typeof PluginRegistry !== 'undefined' && PluginRegistry.describeToolbar)
+      ? PluginRegistry.describeToolbar()
+      : { tools: [], toggles: [] };
+    _postToHost({
+      type: 'PANEL_READY',
+      id: _id,
+      name: _meta.name || _id,
+      datasetType: TYPE,
+      toolbar,
+      features: { volume: false, timeline: false, channels: 0, tracking: false, photo: true },
+      quality: 'native',
+      tool: typeof ToolManager !== 'undefined' ? ToolManager.current() : 'navigate'
+    });
+  }
+
+  function _bindHost() {
+    if (_panelIndex === null) return;
+    if (typeof PluginRegistry !== 'undefined' && PluginRegistry.onToolbarState) {
+      PluginRegistry.onToolbarState(({ id, active, icon }) => _postToHost({ type: 'PLUGIN_STATE', id, active, icon }));
+    }
+    _postPanelReady();
+  }
+
+  /** The host's tool for every panel; one this page does not offer falls back to navigate. */
+  function _applyHostTool(tool) {
+    if (typeof ToolManager === 'undefined') return;
+    const wanted = String(tool || 'navigate');
+    const sel = window.CSS && CSS.escape ? CSS.escape(wanted) : wanted;
+    const available = wanted === 'navigate' || Boolean(document.querySelector(`[data-tool="${sel}"]`));
+    _suppressToolSync = true;
+    try { ToolManager.activate(available ? wanted : 'navigate'); }
+    finally { _suppressToolSync = false; }
+  }
+
+  function _activateHostPlugin(id) {
+    if (typeof PluginRegistry === 'undefined' || !id) return;
+    const entry = PluginRegistry.getModule(id);
+    if (!entry) return;
+    const result = PluginRegistry.activate(id);
+    if (entry.meta?.subtype === 'toggle' && result) {
+      PluginRegistry.syncToolbarButton(id, { active: !!result.active, icon: result.icon });
+    }
+  }
+
+  /** The photograph as the Studio takes it: native pixels, calibrated in µm/px. */
+  function _studioSliceResult() {
+    if (!_meta) return null;
+    const canvas = Viewer2D.getNativeCanvas();
+    if (!canvas) return null;
+    const px = _meta.pixelSizeUm?.x || 1;
+    return {
+      canvas, width: canvas.width, height: canvas.height,
+      // Before the native image has decoded, the capture is the 640 px preview
+      // upscaled — say so rather than pass it off as the photograph's own pixels.
+      source: '2d', quality: Viewer2D.hasNative?.() ? 'native' : 'preview', timepoint: 0,
+      pixelSizeUm: { x: px, y: _meta.pixelSizeUm?.y || px },
+      dataset: _meta, channelState: []
+    };
+  }
+
+  /** Public entry: buffered until the photograph is mounted (a host restores early). */
+  function applyWorkspaceState(state) {
+    if (!_meta) { _pendingWorkspaceState = state || null; return; }
+    _applyWorkspaceState(state || {});
+  }
+
   // ── Chrome ─────────────────────────────────────────────────────────────────
   function _updateThemeIcon() {
     const btn = $('theme-toggle');
@@ -616,6 +750,7 @@ const App2D = (() => {
   }
 
   function _showError(message) {
+    _postToHost({ type: 'PANEL_ERROR', message: String(message || '') });
     const loader = $('viewer-loader');
     if (!loader) return;
     loader.classList.remove('hidden');
@@ -628,8 +763,24 @@ const App2D = (() => {
     if (window.lucide) lucide.createIcons({ nodes: [loader] });
   }
 
-  return { init };
+  return {
+    init,
+    getDatasetMeta: () => (_meta ? JSON.parse(JSON.stringify(_meta)) : null),
+    getWorkspaceState: () => (_meta ? _getWorkspaceState() : null),
+    applyWorkspaceState,
+    getStudioSliceResult: _studioSliceResult,
+    _isReady: () => Boolean(_meta)
+  };
 })();
+
+// A host restores a workspace as soon as the frame has loaded (before init() is
+// through its awaits), like the volume viewer: catch it here, App2D buffers it.
+if (typeof window.addEventListener === 'function') window.addEventListener('message', (e) => {
+  if (!Utils.isTrustedMessageOrigin(e)) return;
+  const data = e.data;
+  if (!data || data.type !== 'APPLY_WORKSPACE_STATE' || !data.state) return;
+  App2D.applyWorkspaceState(data.state);
+});
 
 document.addEventListener('DOMContentLoaded', App2D.init);
 

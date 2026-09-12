@@ -98,17 +98,10 @@ const ViewerApp = (() => {
     if (_isIframe) {
       document.body.classList.add('viewer-iframe');
       document.querySelector('.viewer-header').style.display = 'none';
-      if (!isAdmin) {
-        document.querySelector('.viewer-sidebar').classList.add('sidebar-hidden');
-        document.addEventListener('click', (e) => {
-          const sidebar = document.querySelector('.viewer-sidebar');
-          if (sidebar && !sidebar.classList.contains('sidebar-hidden') && !e.target.closest('.viewer-sidebar')) {
-            sidebar.classList.add('sidebar-hidden');
-            // SEC-012: restrict targetOrigin to this page's origin (no wildcard leak).
-            window.parent.postMessage({ type: 'SIDEBAR_CLOSED', sourceIndex: _panelIndex }, Utils.trustedTargetOrigin());
-          }
-        });
-      }
+      // The host's settings button opens and closes the sidebar. No click-outside
+      // close: a tool mounted in the sidebar (the cell inspector) needs the very
+      // canvas clicks that used to shut it.
+      if (!isAdmin) document.querySelector('.viewer-sidebar').classList.add('sidebar-hidden');
     }
     
     if (!datasetId) {
@@ -215,9 +208,12 @@ const ViewerApp = (() => {
         // `dataTypes` is taken at its word, so the photograph-only tools stay off
         // the volume viewer. Plugins declaring nothing predate the field and were
         // written for this page, hence allowUndeclaredDataTypes.
+        // Embedded chrome-less (a Compare panel, the admin preview), the page keeps
+        // only the plugins that declared they can be driven from outside.
         await PluginRegistry.loadModules('js/modules', modulePaths, {
           dataType: datasetMeta.type,
-          allowUndeclaredDataTypes: true
+          allowUndeclaredDataTypes: true,
+          context: _isIframe ? 'panel' : 'page'
         });
         // Generate toolbar buttons from the loaded plugins' metadata. Runs before
         // ToolManager.init (_bindTooling) so the data-tool chips exist to be wired,
@@ -255,8 +251,7 @@ const ViewerApp = (() => {
         // init(), and in Compare that framing would be pushed onto every panel already
         // on screen — see the SYNC_CHANNELS emitter for the full rationale.
         if (_isIframe && _isInitialized && !_zstackLocksCamera()) {
-          // SEC-012: restrict targetOrigin to this page's origin (no wildcard leak).
-          window.parent.postMessage({ type: 'SYNC_CAMERA', value: state, sourceIndex: _panelIndex }, Utils.trustedTargetOrigin());
+          _postToHost({ type: 'SYNC_CAMERA', value: _cameraStateForSiblings(state) });
         }
         // Fan out to subscribed sandboxed plugins (projected payload; the view moved).
         if (typeof PluginSandbox !== 'undefined') {
@@ -494,8 +489,6 @@ const ViewerApp = (() => {
     // merged with metadata.json at this point, so the array is the authoritative one.
     if (typeof DatasetGallery !== 'undefined') {
       DatasetGallery.init({
-        sectionId: 'gallery-section',
-        containerId: 'gallery-container',
         basePath: _basePath,
         items: datasetMeta.gallery,
       });
@@ -605,7 +598,8 @@ const ViewerApp = (() => {
     }
     
     _isInitialized = true;
-    
+    _bindHost();
+
     if (!_isIframe && typeof UrlState !== 'undefined') {
       // pristine: nothing was restored, so the workspace on screen IS the dataset —
       // no #state= is written until the operator actually changes something, and a
@@ -734,6 +728,8 @@ const ViewerApp = (() => {
       btnReopen.style.display = 'flex';
       // Refresh lucide icon in the reopen button after display change
       if (window.lucide) lucide.createIcons();
+      // The host keeps a highlighted settings button per panel: tell it.
+      _postToHost({ type: 'SIDEBAR_CLOSED' });
     }
 
     /**
@@ -844,20 +840,38 @@ const ViewerApp = (() => {
   function _bindQualityControls() {
     const select = document.getElementById('select-quality');
     if (!select) return;
-    select.addEventListener('change', () => {
-      _qualityMode = _normalizeQualityParam(select.value) || '512x512';
-      select.value = _qualityMode;
-      VolumeViewer.setQualityTarget?.(_qualityMode, _qualityMode);
-      // Repaint the buffer for the quality we just switched TO. Stepping back down to
-      // one already loaded shows its frames immediately instead of an empty bar.
-      _stopPrefetch();
-      _refreshBuffer();
-      if (_basePath) {
-        _loadTimepoint(_basePath, _currentTimepoint, { force: true })
-          .then(() => _kickPrefetch(200))
-          .catch(_showLoadingError);
-      }
-    });
+    select.addEventListener('change', () => { _setQualityMode(select.value); });
+  }
+
+  /**
+   * Switch the displayed quality and reload the current timepoint at it — the
+   * sidebar select and a hosting page (SET_QUALITY) share this one door.
+   * @returns {Promise<void>} settles once the volume is on screen at that quality
+   */
+  function _setQualityMode(value) {
+    const select = document.getElementById('select-quality');
+    const previous = _qualityMode;
+    _qualityMode = _normalizeQualityParam(value) || '512x512';
+    if (select) select.value = _qualityMode;
+    VolumeViewer.setQualityTarget?.(_qualityMode, _qualityMode);
+    // Repaint the buffer for the quality we just switched TO. Stepping back down to
+    // one already loaded shows its frames immediately instead of an empty bar.
+    _stopPrefetch();
+    _refreshBuffer();
+    if (!_basePath) return Promise.resolve();
+    return _loadTimepoint(_basePath, _currentTimepoint, { force: true })
+      .then(() => { _kickPrefetch(200); })
+      .catch(err => {
+        // The volume already on screen is intact: say so in the status line and
+        // fall back to the quality it is at, rather than covering it with the
+        // fatal-error card meant for a dataset that never mounted.
+        console.warn('[ViewerApp] Quality switch failed:', err);
+        _qualityMode = previous;
+        if (select) select.value = previous;
+        VolumeViewer.setQualityTarget?.(previous, previous);
+        _setQualityStatus(`${_qualityLabel(previous)} — ${String(err?.message || err)}`);
+        throw err;
+      });
   }
 
   function _updateQualityOptionLabels() {
@@ -1152,7 +1166,7 @@ const ViewerApp = (() => {
     // _isInitialized gates the boot-time chatter, like the SYNC_CHANNELS emitter:
     // seeding the slider from the dataset's own metadata is not an operator edit, and
     // the admin preview counted every mount as an unsaved change because of it.
-    if (_isIframe && _isInitialized) {
+    if (_isIframe && _isInitialized && !_suppressChannelSync) {
       // DEAD-021: include sourceIndex so compare.js's routing guard can attribute the
       // message; SEC-012: restrict targetOrigin to this page's origin (no wildcard leak).
       window.parent.postMessage({ type: 'SYNC_EXPOSURE', value: val, sourceIndex: _panelIndex }, Utils.trustedTargetOrigin());
@@ -1194,6 +1208,9 @@ const ViewerApp = (() => {
         measurePanel?.classList.toggle('visible', tool === 'measure');
         _slicerShow(tool === 'slice');
         _toolListeners.forEach(fn => { try { fn(tool); } catch (err) { console.warn('[ViewerApp] tool listener failed:', err); } });
+        // A tool picked here (keyboard shortcut) becomes the host's tool for every
+        // panel; one the host pushed down (SET_TOOL) is not echoed back.
+        if (_isIframe && _isInitialized && !_suppressToolSync) _postToHost({ type: 'TOOL_CHANGED', tool });
       }
     });
     VolumeViewer.setActiveTool('navigate');
@@ -1437,14 +1454,6 @@ const ViewerApp = (() => {
     if (label) label.textContent = `${Math.round(state.value * 100)}%`;
     const oblique = document.getElementById('slice-oblique-controls');
     oblique?.classList.add('visible');
-  }
-
-  function _setClipUi(axis, value) {
-    const pct = Math.round(value * 100);
-    const slider = document.getElementById(`slider-${axis}`);
-    const label = document.getElementById(`val-${axis}`);
-    if (slider) slider.value = pct;
-    if (label) label.textContent = `${pct}%`;
   }
 
   function _handlePlaneSpecChange(spec) {
@@ -3206,9 +3215,11 @@ const ViewerApp = (() => {
     if (isLive) {
       _refreshBuffer();
       _kickPrefetch();
-      if (_isIframe) {
-        // SEC-012: restrict targetOrigin to this page's origin (no wildcard leak).
-        window.parent.postMessage({ type: 'SYNC_TIME', value: t, sourceIndex: _panelIndex }, Utils.trustedTargetOrigin());
+      // The boot frame is not an operator action (same rule as the camera and the
+      // channels): a panel added late must not drag its siblings back to frame 0.
+      if (_isIframe && _isInitialized) {
+        const total = Number(datasetMeta?.dimensions?.t) || 0;
+        _postToHost({ type: 'SYNC_TIME', value: t, total, fraction: total > 1 ? t / (total - 1) : 0 });
       }
     }
 
@@ -3226,7 +3237,7 @@ const ViewerApp = (() => {
   }
 
   function _scheduleAdjacentPreload(basePath, t) {
-    if (!isLive || !Number.isFinite(t)) return;
+    if (!isLive || _isIframe || !Number.isFinite(t)) return;
     if (_preloadTimer) clearTimeout(_preloadTimer);
     const total = datasetMeta.dimensions?.t || 0;
     const candidates = [t + 1, t - 1, t + 2]
@@ -3488,7 +3499,6 @@ const ViewerApp = (() => {
         if (slider) {
           const pct = Math.round(parseFloat(data.value) * 100);
           slider.value = pct;
-          _setClipUi('z', data.value);
           VolumeViewer.setPlaneSpec({ value: data.value, notify: false });
         }
       } else if (data.type === 'SYNC_CHANNELS') {
@@ -3501,23 +3511,40 @@ const ViewerApp = (() => {
           _channelState[matchingIdx] = { ...newState[matchingIdx] };
           VolumeViewer.updateChannel(matchingIdx, params);
         }
+      } else if (data.type === 'SYNC_EXPOSURE') {
+        // A sibling panel moved its exposure: follow it, silently.
+        const slider = document.getElementById('slider-exposure');
+        if (slider && Number.isFinite(Number(data.value))) {
+          slider.value = Math.max(20, Math.min(500, Math.round(Number(data.value) * 100)));
+          _suppressChannelSync = true;
+          try { _syncExposureFromUi(); } finally { _suppressChannelSync = false; }
+        }
       } else if (data.type === 'SET_CHANNEL_ACTIVE') {
         // Support both key names: channelIndex (sent by _decomposeChannels) and value (legacy)
-        const targetIdx = data.channelIndex ?? data.value;
-        const newState = _channelState.map((ch, idx) => ({ ...ch, active: idx === targetIdx }));
+        // The panel's visibility flag is `enabled` (ChannelPanel); `active` is the
+        // legacy metadata spelling it only falls back to, so writing it here left
+        // every decomposed panel showing every channel.
+        const targetIdx = Number(data.channelIndex ?? data.value);
+        const newState = _channelState.map((ch, idx) => ({ ...ch, enabled: idx === targetIdx }));
         ChannelPanel.setState(newState, { notify: false });
         newState.forEach((ch, idx) => {
           _channelState[idx] = { ...ch };
           VolumeViewer.updateChannel(idx, ch);
         });
+        window.dispatchEvent(new CustomEvent('channels-updated'));
       } else if (data.type === 'SYNC_ZSTACK_SLICE') {
         // A sibling panel moved its z-stack browser: open ours if needed and mirror
-        // its mode, cursor, thickness and trim. The guard keeps the mirror silent.
+        // its mode, cursor, thickness and trim — or close ours when it closed. The
+        // guard keeps the mirror silent.
         _suppressZstackSync = true;
         try {
-          if (!_zstackActive) _applyZstackState(true, null);
-          const mod = _zstackModule();
-          if (mod?.impl?.applySync) mod.impl.applySync(data);
+          if (data.mode === 'off') {
+            if (_zstackActive) _applyZstackState(false, null);
+          } else {
+            if (!_zstackActive) _applyZstackState(true, null);
+            const mod = _zstackModule();
+            if (mod?.impl?.applySync) mod.impl.applySync(data);
+          }
         } finally {
           _suppressZstackSync = false;
         }
@@ -3544,7 +3571,13 @@ const ViewerApp = (() => {
         else _slicerOverlayStop();
         _suppressSlicerSync = false;
       } else if (data.type === 'SYNC_TIME' && isLive) {
-        Timeline.setFrame(data.value, false);
+        // Timelapses of different lengths align by elapsed fraction, not by index.
+        const mine = Number(datasetMeta?.dimensions?.t) || 0;
+        const theirs = Number(data.total) || 0;
+        const frame = (mine > 1 && theirs > 1 && theirs !== mine && Number.isFinite(Number(data.fraction)))
+          ? Math.round(Number(data.fraction) * (mine - 1))
+          : Number(data.value);
+        if (Number.isFinite(frame)) Timeline.setFrame(frame, false);
       }
       if (data.type === 'SYNC_CAMERA') {
         // While the z-stack browser holds the view top-down (slice mode), block camera
@@ -3555,15 +3588,16 @@ const ViewerApp = (() => {
             VolumeViewer.setCameraState({ kind: 'volume', cameraZ: data.value.cameraZ });
           }
         } else {
-          VolumeViewer.setCameraState(data.value);
+          VolumeViewer.setCameraState(_cameraStateFromSibling(data.value));
         }
         if (Number.isFinite(data.value?.zDisplayScale)) {
+          // Mirrored for the session only: persisting it would stamp a sibling's
+          // anisotropy correction onto THIS dataset for every future visit.
           _zDisplayScale = _clampZDisplayScale(data.value.zDisplayScale);
           const slider = document.getElementById('slider-z-scale');
           if (slider) slider.value = Math.round(_zDisplayScale * 100);
           _updateZScaleLabel();
           _updatePhysicalStatus();
-          _saveZDisplayScale();
         }
       }
       if (data.type === 'TOGGLE_SIDEBAR') {
@@ -3575,8 +3609,18 @@ const ViewerApp = (() => {
         }
         _scheduleViewerResize();
       } else if (data.type === 'SET_TOOL') {
-        if (typeof ToolManager !== 'undefined') {
-          ToolManager.activate(data.tool);
+        _applyHostTool(data.tool);
+      } else if (data.type === 'PANEL_HELLO') {
+        // The host asks for the panel's description (again): answer once ready.
+        if (_isInitialized) _postPanelReady();
+      } else if (data.type === 'PLUGIN_ACTIVATE') {
+        _activateHostPlugin(data.id);
+      } else if (data.type === 'SET_QUALITY') {
+        const quality = _normalizeQualityParam(data.quality);
+        if (quality) {
+          Promise.resolve(_setQualityMode(quality))
+            .then(() => _postToHost({ type: 'QUALITY_STATUS', quality: _qualityMode, phase: 'ready' }))
+            .catch(() => _postToHost({ type: 'QUALITY_STATUS', quality, phase: 'error' }));
         }
       } else if (data.type === 'TOGGLE_VISUAL') {
         if (data.visual === 'grid') {
@@ -3617,7 +3661,7 @@ const ViewerApp = (() => {
 
           if (!canvas) {
             // SEC-012: restrict targetOrigin to this page's origin (no wildcard leak).
-            window.parent.postMessage({ type: 'SCREENSHOT_RESPONSE', success: false, error: 'No active canvas found' }, Utils.trustedTargetOrigin());
+            window.parent.postMessage({ type: 'SCREENSHOT_RESPONSE', sourceIndex: _panelIndex, success: false, error: 'No active canvas found' }, Utils.trustedTargetOrigin());
             return;
           }
           const size = 512;
@@ -3639,13 +3683,118 @@ const ViewerApp = (() => {
           ctx.drawImage(canvas, dx, dy, dWidth, dHeight);
           const dataUrl = thumbCanvas.toDataURL('image/webp', 0.9);
           // SEC-012: restrict targetOrigin to this page's origin (no wildcard leak).
-          window.parent.postMessage({ type: 'SCREENSHOT_RESPONSE', success: true, dataUrl }, Utils.trustedTargetOrigin());
+          window.parent.postMessage({ type: 'SCREENSHOT_RESPONSE', sourceIndex: _panelIndex, success: true, dataUrl }, Utils.trustedTargetOrigin());
         } catch (err) {
           // SEC-012: restrict targetOrigin to this page's origin (no wildcard leak).
-          window.parent.postMessage({ type: 'SCREENSHOT_RESPONSE', success: false, error: err.message }, Utils.trustedTargetOrigin());
+          window.parent.postMessage({ type: 'SCREENSHOT_RESPONSE', sourceIndex: _panelIndex, success: false, error: err.message }, Utils.trustedTargetOrigin());
         }
       }
     });
+  }
+
+  // ── Anatomical camera sync ────────────────────────────────
+  // Each dataset carries its own calibration Q_base (metadata.orientation): the
+  // cube pose at which the specimen sits in the lab's anatomical frame. Two
+  // embryos calibrated differently therefore hold DIFFERENT raw cube quaternions
+  // for the same anatomical view. A panel shares its pose in the anatomical
+  // frame, Q_anat = Q_cube · Q_base⁻¹, and a sibling re-expresses it in its own
+  // frame, Q_cube' = Q_anat · Q_base'. Same dataset twice (Decompose) ⇒ Q_base
+  // equal ⇒ the raw pose round-trips unchanged. Uncalibrated ⇒ identity.
+  function _baseQuaternion() {
+    const v = datasetMeta?.orientation;
+    if (typeof THREE === 'undefined' || !v) return null;
+    const a = Array.isArray(v) ? v : (typeof v === 'object' ? [v.x, v.y, v.z, v.w !== undefined ? v.w : 1] : null);
+    if (!a || a.length !== 4 || !a.every(Number.isFinite)) return null;
+    const q = new THREE.Quaternion(a[0], a[1], a[2], a[3]);
+    return q.lengthSq() < 1e-8 ? null : q.normalize();
+  }
+
+  function _cameraStateForSiblings(state) {
+    if (!state || !Array.isArray(state.quaternion) || typeof THREE === 'undefined') return state;
+    const base = _baseQuaternion() || new THREE.Quaternion();
+    const anat = new THREE.Quaternion().fromArray(state.quaternion).multiply(base.clone().invert());
+    return { ...state, anatQuaternion: anat.toArray() };
+  }
+
+  function _cameraStateFromSibling(value) {
+    if (!value || !Array.isArray(value.anatQuaternion) || typeof THREE === 'undefined') return value;
+    const base = _baseQuaternion() || new THREE.Quaternion();
+    const q = new THREE.Quaternion().fromArray(value.anatQuaternion).multiply(base);
+    return { ...value, quaternion: q.toArray() };
+  }
+
+  // ── Hosted panel (Compare page) ────────────────────────────
+  // The host cannot see this page's toolbar (the header is hidden), so it is
+  // told what the toolbar offers (PANEL_READY / describeToolbar), drives the
+  // toggles (PLUGIN_ACTIVATE) and tools (SET_TOOL), and hears every state change
+  // back (PLUGIN_STATE / TOOL_CHANGED). Only a page with a panel index has a host.
+  let _suppressToolSync = false;
+
+  function _postToHost(msg) {
+    if (!_isIframe || _panelIndex === null) return;
+    // SEC-012: restrict targetOrigin to this page's origin (no wildcard leak).
+    window.parent.postMessage({ ...msg, sourceIndex: _panelIndex }, Utils.trustedTargetOrigin());
+  }
+
+  function _postPanelReady() {
+    if (!_isIframe || _panelIndex === null) return;
+    const toolbar = (typeof PluginRegistry !== 'undefined' && PluginRegistry.describeToolbar)
+      ? PluginRegistry.describeToolbar()
+      : { tools: [], toggles: [] };
+    _postToHost({
+      type: 'PANEL_READY',
+      id: datasetId,
+      name: datasetMeta?.name || datasetId,
+      datasetType: datasetMeta?.type || null,
+      toolbar,
+      features: {
+        volume: true,
+        timeline: Boolean(isLive),
+        channels: _channelState.length,
+        tracking: Boolean(datasetMeta?.tracking?.tracksPath)
+      },
+      quality: _qualityMode,
+      tool: typeof ToolManager !== 'undefined' ? ToolManager.current() : 'navigate'
+    });
+  }
+
+  function _bindHost() {
+    if (!_isIframe || _panelIndex === null) return;
+    if (typeof PluginRegistry !== 'undefined' && PluginRegistry.onToolbarState) {
+      PluginRegistry.onToolbarState(({ id, active, icon }) => _postToHost({ type: 'PLUGIN_STATE', id, active, icon }));
+    }
+    // Button titles travel in the panel's language: re-describe on a switch.
+    if (typeof I18n !== 'undefined' && I18n.onLanguageChange) I18n.onLanguageChange(() => _postPanelReady());
+    _postPanelReady();
+  }
+
+  /** The host's tool for every panel; one this page does not offer falls back to navigate. */
+  function _applyHostTool(tool) {
+    if (typeof ToolManager === 'undefined') return;
+    const wanted = String(tool || 'navigate');
+    const sel = window.CSS && CSS.escape ? CSS.escape(wanted) : wanted;
+    const available = wanted === 'navigate' || Boolean(document.querySelector(`[data-tool="${sel}"]`));
+    _suppressToolSync = true;
+    try { ToolManager.activate(available ? wanted : 'navigate'); }
+    finally { _suppressToolSync = false; }
+  }
+
+  /** A toggle/action of the panel's toolbar, pressed from the host. */
+  function _activateHostPlugin(id) {
+    if (typeof PluginRegistry === 'undefined' || !id) return;
+    if (id === 'zstack-browser') {
+      // The browser has page-level side effects (slicer overlay off, camera lock)
+      // that TOGGLE_ZSTACK already sequences: same door, same order.
+      if (!_zstackActive) _slicerOverlayStop();
+      _applyZstackState(!_zstackActive, null);
+      return;
+    }
+    const entry = PluginRegistry.getModule(id);
+    if (!entry) return;
+    const result = PluginRegistry.activate(id);
+    if (entry.meta?.subtype === 'toggle' && result) {
+      PluginRegistry.syncToolbarButton(id, { active: !!result.active, icon: result.icon });
+    }
   }
 
   function _clampZDisplayScale(value) {
@@ -3654,6 +3803,7 @@ const ViewerApp = (() => {
 
   function _showLoadingError(err) {
     console.error('[ViewerApp] Loading failed:', err);
+    _postToHost({ type: 'PANEL_ERROR', message: String(err?.message || err || 'Unknown loading error') });
     const loader = document.getElementById('viewer-loader');
     if (!loader) return;
     const message = Utils.escapeHtml(err?.message || err || 'Unknown loading error');
@@ -4138,6 +4288,7 @@ const ViewerApp = (() => {
     getChannelState,
     getWorkspaceState: _getWorkspaceState,
     applyWorkspaceState: _applyWorkspaceState,
+    getChannelHistograms: () => (typeof VolumeViewer !== 'undefined' && VolumeViewer.getChannelHistograms ? VolumeViewer.getChannelHistograms() : null),
     resetWorkspace,
     // Exposed for early module-level TOGGLE_ZSTACK listener:
     _applyZstackState,
@@ -4173,12 +4324,10 @@ window.addEventListener('message', (e) => {
   const desired = !!data.state;
   const slice = data.slice ?? null;
   const payload = { desired, slice };
-  // Always buffer first (safe even if init already ran)
-  ViewerApp._setPendingZstack?.(payload);
-  // If viewer already initialized, apply immediately; otherwise init() will consume the buffer
-  if (ViewerApp._isReady?.()) {
-    ViewerApp._applyZstackState?.(desired, slice);
-  }
+  // Before init() is through, buffer for it to consume; afterwards the message
+  // handler of _bindIframeSync applies it (with the slicer-overlay teardown), so
+  // it must not be applied twice from here.
+  if (!ViewerApp._isReady?.()) ViewerApp._setPendingZstack?.(payload);
 });
 
 // Boot-level safety net (defense in depth): init() is async — if any UI-build step

@@ -49,6 +49,25 @@
 .gap-2            { gap: var(--space-2); }
 .gap-3            { gap: var(--space-3); }
 .gap-4            { gap: var(--space-4); }
+
+/* Text / size utilities the page markup relies on (viewer, 2d, compare). */
+.text-xs          { font-size: var(--text-xs); }
+.text-sm          { font-size: var(--text-sm); }
+.text-lg          { font-size: var(--text-lg); }
+.text-xl          { font-size: var(--text-xl); }
+.font-semibold    { font-weight: var(--weight-semibold); }
+.font-bold        { font-weight: var(--weight-bold); }
+.text-muted       { color: var(--text-muted); }
+.w-4              { width: 16px; }
+.h-4              { height: 16px; }
+.w-8              { width: 32px; }
+.h-8              { height: 32px; }
+.w-16             { width: 64px; }
+.h-16             { height: 64px; }
+.p-0              { padding: 0; }
+.p-1              { padding: var(--space-1); }
+.opacity-20       { opacity: 0.2; }
+.cursor-pointer   { cursor: pointer; }
 .gap-5            { gap: var(--space-5); }
 .gap-6            { gap: var(--space-6); }
 .gap-8            { gap: var(--space-8); }

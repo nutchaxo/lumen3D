@@ -1,8 +1,12 @@
 {
   "id": "gaussian-filter",
   "name": "Gaussian Filter",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "platformCompat": "1.x",
+  "contexts": [
+    "page",
+    "panel"
+  ],
   "creator": "IRIBHM",
   "placement": "channels",
   "subtype": "per-channel",

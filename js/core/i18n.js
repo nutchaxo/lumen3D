@@ -271,7 +271,19 @@ const I18n = (() => {
     _translations = _loaded[lang] || _loaded[_fallbackLang] || {};
     _applyDocumentLang();
     _applyTranslations();
+
+    // A language picked in another document of this origin (the Compare page over
+    // its panels, a split-view host over its pane) reaches this one as a `storage`
+    // event; follow it so every embedded page speaks the language of its host.
+    if (!_storageBound && typeof window !== 'undefined' && window.addEventListener) {
+      _storageBound = true;
+      window.addEventListener('storage', e => {
+        if (e.key !== 'iribhm-lang' || !e.newValue || e.newValue === _currentLang) return;
+        setLanguage(e.newValue).catch(err => console.warn('[i18n] cross-document language switch failed:', err));
+      });
+    }
   }
+  let _storageBound = false;
 
   /**
    * Switch language. Loads the platform file AND every registered

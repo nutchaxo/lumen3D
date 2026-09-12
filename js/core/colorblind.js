@@ -120,6 +120,16 @@ const ColorBlind = (() => {
     
     _apply();
     injectModalStyles();
+
+    // The filter chosen in another document of this origin (the Compare page over
+    // its panels) arrives as a `storage` event; apply it here too.
+    if (typeof window.addEventListener === 'function') window.addEventListener('storage', e => {
+      if (e.key !== 'iribhm-colorblind') return;
+      const next = e.newValue && _filters[e.newValue] !== undefined ? e.newValue : 'none';
+      if (next === _current) return;
+      _current = next;
+      _apply();
+    });
   }
 
   function set(type) {

@@ -11,11 +11,11 @@
       "icon": null,
       "platformCompat": "1.x",
       "sandboxCapabilities": null,
-      "latestVersion": "1.0.0",
-      "assetUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/gaussian-filter/plugin-gaussian-filter-1.0.0.zip",
+      "latestVersion": "1.0.1",
+      "assetUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/gaussian-filter/plugin-gaussian-filter-1.0.1.zip",
       "sumsUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/gaussian-filter/SHA256SUMS",
       "sigUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/gaussian-filter/SHA256SUMS.sig",
-      "sha256": "19fc6c13018025f23c37b46e233f08a9bd6185b0ef6d04dec05bfc90235b2e14",
+      "sha256": "1a6942a6ae37f7381a164f23a6d3bc6ba92ccb783433dc623a206a143332d1b9",
       "recommended": true
     },
     {
@@ -28,11 +28,11 @@
       "icon": null,
       "platformCompat": "1.x",
       "sandboxCapabilities": null,
-      "latestVersion": "1.1.0",
-      "assetUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/histogram/plugin-histogram-1.1.0.zip",
+      "latestVersion": "1.1.1",
+      "assetUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/histogram/plugin-histogram-1.1.1.zip",
       "sumsUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/histogram/SHA256SUMS",
       "sigUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/histogram/SHA256SUMS.sig",
-      "sha256": "429d01ed41e711e3bf75a6c1e1abdfe0bc86abfc3344622095001d8fdd443005",
+      "sha256": "1e55c05a6977f72a4982a5adb31ce451603a3b06c420a7c575def93b747ea481",
       "recommended": true
     },
     {
@@ -45,11 +45,11 @@
       "icon": null,
       "platformCompat": "1.x",
       "sandboxCapabilities": null,
-      "latestVersion": "1.0.0",
-      "assetUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/fluorescence/plugin-fluorescence-1.0.0.zip",
+      "latestVersion": "1.0.1",
+      "assetUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/fluorescence/plugin-fluorescence-1.0.1.zip",
       "sumsUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/fluorescence/SHA256SUMS",
       "sigUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/fluorescence/SHA256SUMS.sig",
-      "sha256": "31e44ebed067aff1a67e6ee9d32d3623b708f97ed2c8d7f07578981e1ac05831",
+      "sha256": "394ae20b892d108bce4511dc42054dfc09f21375ec44e984b98e393991bf3d90",
       "recommended": true
     },
     {
@@ -62,11 +62,11 @@
       "icon": null,
       "platformCompat": "1.x",
       "sandboxCapabilities": null,
-      "latestVersion": "1.0.0",
-      "assetUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/structure-dvr/plugin-structure-dvr-1.0.0.zip",
+      "latestVersion": "1.0.1",
+      "assetUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/structure-dvr/plugin-structure-dvr-1.0.1.zip",
       "sumsUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/structure-dvr/SHA256SUMS",
       "sigUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/structure-dvr/SHA256SUMS.sig",
-      "sha256": "49ad58127c763575ef3f4583f247594fc47d86854abdb6ebfd799a77f9c9b561",
+      "sha256": "9ee5777bceda19ef10b59d9369adcf2a1f83e34f2e151bd8582f5ec3ceabdb19",
       "recommended": true
     },
     {
@@ -79,11 +79,11 @@
       "icon": "grid-3x3",
       "platformCompat": ">=1.51.0",
       "sandboxCapabilities": null,
-      "latestVersion": "1.0.1",
-      "assetUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/calibrated-grid/plugin-calibrated-grid-1.0.1.zip",
+      "latestVersion": "1.0.2",
+      "assetUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/calibrated-grid/plugin-calibrated-grid-1.0.2.zip",
       "sumsUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/calibrated-grid/SHA256SUMS",
       "sigUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/calibrated-grid/SHA256SUMS.sig",
-      "sha256": "18e12e1fac7dc759d2d46300507963539a7728bccbb7afeaddf06e42d15ed7d1",
+      "sha256": "6873924b35fc5ee7e709b65c60f880aa58c233be2f45d72ca880ad4633094944",
       "recommended": false
     },
     {
@@ -96,11 +96,11 @@
       "icon": "bug",
       "platformCompat": "1.x",
       "sandboxCapabilities": null,
-      "latestVersion": "1.0.0",
-      "assetUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/chunk-debug/plugin-chunk-debug-1.0.0.zip",
+      "latestVersion": "1.0.1",
+      "assetUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/chunk-debug/plugin-chunk-debug-1.0.1.zip",
       "sumsUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/chunk-debug/SHA256SUMS",
       "sigUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/chunk-debug/SHA256SUMS.sig",
-      "sha256": "15159946769923055f0a69cb5fe16f10a9cd3be81f6e677316b1afce5e511f8b",
+      "sha256": "d7fa7e8c12a54d2ea3a3fabb55a168ce3e5977a8b01bba6008f840d59fb7c97d",
       "recommended": false
     },
     {
@@ -113,11 +113,11 @@
       "icon": "layout-grid",
       "platformCompat": "1.x",
       "sandboxCapabilities": null,
-      "latestVersion": "1.0.1",
-      "assetUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/decompose-channels/plugin-decompose-channels-1.0.1.zip",
+      "latestVersion": "1.0.2",
+      "assetUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/decompose-channels/plugin-decompose-channels-1.0.2.zip",
       "sumsUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/decompose-channels/SHA256SUMS",
       "sigUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/decompose-channels/SHA256SUMS.sig",
-      "sha256": "994df5d87a6ac21a392ca3457b0ac39cee43d6101583bd94e2a79de8ce51e29f",
+      "sha256": "e2b454c3e051aedc6cd98bb01b6d0eacfd9242a8fc9bb30173cf8a6bb86ddcc2",
       "recommended": true
     },
     {
@@ -130,11 +130,11 @@
       "icon": "sliders-horizontal",
       "platformCompat": ">=1.51.0",
       "sandboxCapabilities": null,
-      "latestVersion": "1.0.1",
-      "assetUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/display-adjust/plugin-display-adjust-1.0.1.zip",
+      "latestVersion": "1.0.2",
+      "assetUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/display-adjust/plugin-display-adjust-1.0.2.zip",
       "sumsUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/display-adjust/SHA256SUMS",
       "sigUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/display-adjust/SHA256SUMS.sig",
-      "sha256": "549a2f64cbc907e5479cfb08dc9ab54dbb523c50a5f2c74fe073a0fef33b8338",
+      "sha256": "fe9e06a1461cda909cae49de123a996e0f61f9a38c751a3067c7985706c2981c",
       "recommended": false
     },
     {
@@ -147,11 +147,11 @@
       "icon": "download",
       "platformCompat": ">=1.53.0",
       "sandboxCapabilities": null,
-      "latestVersion": "1.3.0",
-      "assetUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/download-center/plugin-download-center-1.3.0.zip",
+      "latestVersion": "1.3.1",
+      "assetUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/download-center/plugin-download-center-1.3.1.zip",
       "sumsUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/download-center/SHA256SUMS",
       "sigUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/download-center/SHA256SUMS.sig",
-      "sha256": "5b4fcb2fefa60b3455dcae4cf46ad8c473633f5675cd90a6f979f9a434cc7ba4",
+      "sha256": "10a438b51616b6e25351c031e6568179451a651a4f35a560a69b65f9d2747ee6",
       "recommended": true
     },
     {
@@ -164,11 +164,11 @@
       "icon": "layout-template",
       "platformCompat": ">=1.51.0",
       "sandboxCapabilities": null,
-      "latestVersion": "1.1.1",
-      "assetUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/figure-panel/plugin-figure-panel-1.1.1.zip",
+      "latestVersion": "1.1.2",
+      "assetUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/figure-panel/plugin-figure-panel-1.1.2.zip",
       "sumsUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/figure-panel/SHA256SUMS",
       "sigUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/figure-panel/SHA256SUMS.sig",
-      "sha256": "18121164c10a90efb94e05e2cab1e69dfc4060cfaff0f56ad5c14c5ac0ad6a96",
+      "sha256": "babe236dee0a43a229dd20d5f87ca6584e12375b3e760a3776b9717bb6e220f7",
       "recommended": false
     },
     {
@@ -181,11 +181,11 @@
       "icon": "ruler",
       "platformCompat": ">=1.53.0",
       "sandboxCapabilities": null,
-      "latestVersion": "1.1.2",
-      "assetUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/measure-distance/plugin-measure-distance-1.1.2.zip",
+      "latestVersion": "1.1.3",
+      "assetUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/measure-distance/plugin-measure-distance-1.1.3.zip",
       "sumsUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/measure-distance/SHA256SUMS",
       "sigUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/measure-distance/SHA256SUMS.sig",
-      "sha256": "7c07df6be9af5f255b863babdbb4c35bc78de4033fbf2232531163e1293220fb",
+      "sha256": "367b6661b38d84f20b5d32b70ac9f9377f10c6dc2ef42c6700298da36456bcbb",
       "recommended": true
     },
     {
@@ -198,11 +198,11 @@
       "icon": "compass",
       "platformCompat": ">=1.51.0",
       "sandboxCapabilities": null,
-      "latestVersion": "1.0.1",
-      "assetUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/orientation-2d/plugin-orientation-2d-1.0.1.zip",
+      "latestVersion": "1.0.2",
+      "assetUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/orientation-2d/plugin-orientation-2d-1.0.2.zip",
       "sumsUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/orientation-2d/SHA256SUMS",
       "sigUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/orientation-2d/SHA256SUMS.sig",
-      "sha256": "f0a149bb2fe73ec304a51538f63aeebb38cd41bfad55c7161c388a72baf8bff8",
+      "sha256": "5b752fa66a2b3279cc8dd8cf81ff8cef94ae37843a13854eba09fc9d354f342a",
       "recommended": false
     },
     {
@@ -215,11 +215,11 @@
       "icon": "compass",
       "platformCompat": "1.x",
       "sandboxCapabilities": null,
-      "latestVersion": "1.1.0",
-      "assetUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/orientation-axes/plugin-orientation-axes-1.1.0.zip",
+      "latestVersion": "1.1.1",
+      "assetUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/orientation-axes/plugin-orientation-axes-1.1.1.zip",
       "sumsUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/orientation-axes/SHA256SUMS",
       "sigUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/orientation-axes/SHA256SUMS.sig",
-      "sha256": "e059c50cdae982541c58c86ed92e397369c4220257632aa2c8b12e65445d68c1",
+      "sha256": "852724b21a09089fe88c1980dff1325f17d45d554c29783499dd764771d82535",
       "recommended": true
     },
     {
@@ -232,11 +232,11 @@
       "icon": "presentation",
       "platformCompat": ">=1.53.0",
       "sandboxCapabilities": null,
-      "latestVersion": "1.1.2",
-      "assetUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/presentation-mode/plugin-presentation-mode-1.1.2.zip",
+      "latestVersion": "1.1.3",
+      "assetUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/presentation-mode/plugin-presentation-mode-1.1.3.zip",
       "sumsUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/presentation-mode/SHA256SUMS",
       "sigUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/presentation-mode/SHA256SUMS.sig",
-      "sha256": "1ee0c9a04bed187718e42320dbb789f476a543d85c2c0b476698dad0440e0ee0",
+      "sha256": "8157ee9d7d1a8de7e6e333802a18b65c9b6afdcbaca28cde1fc4ec2ec0ce00a3",
       "recommended": true
     },
     {
@@ -249,11 +249,11 @@
       "icon": "camera",
       "platformCompat": ">=1.53.0",
       "sandboxCapabilities": null,
-      "latestVersion": "1.1.2",
-      "assetUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/screenshot/plugin-screenshot-1.1.2.zip",
+      "latestVersion": "1.1.3",
+      "assetUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/screenshot/plugin-screenshot-1.1.3.zip",
       "sumsUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/screenshot/SHA256SUMS",
       "sigUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/screenshot/SHA256SUMS.sig",
-      "sha256": "f79604dd0fb647de747a5de30a09af548db303999a7e5e42a1ccf8c5a2b949ee",
+      "sha256": "0d71380fa522b41b7508ded72a69d080a58fbe9cbea15ff7536e5c285483cf37",
       "recommended": true
     },
     {
@@ -272,11 +272,11 @@
         "ui.download",
         "ui.toast"
       ],
-      "latestVersion": "1.0.0",
-      "assetUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/screenshot-sandboxed/plugin-screenshot-sandboxed-1.0.0.zip",
+      "latestVersion": "1.0.1",
+      "assetUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/screenshot-sandboxed/plugin-screenshot-sandboxed-1.0.1.zip",
       "sumsUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/screenshot-sandboxed/SHA256SUMS",
       "sigUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/screenshot-sandboxed/SHA256SUMS.sig",
-      "sha256": "0220e2329049c569262ed8238fef018578f31b8f46b39ea4b877b005c429df58",
+      "sha256": "e8898b9c4483d0b8bb3bc3b6c694e441cd2602870570d6331858238d871f6fd3",
       "recommended": false
     },
     {
@@ -289,11 +289,11 @@
       "icon": "scissors",
       "platformCompat": "1.x",
       "sandboxCapabilities": null,
-      "latestVersion": "1.0.0",
-      "assetUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/slice-inspector/plugin-slice-inspector-1.0.0.zip",
+      "latestVersion": "1.0.1",
+      "assetUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/slice-inspector/plugin-slice-inspector-1.0.1.zip",
       "sumsUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/slice-inspector/SHA256SUMS",
       "sigUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/slice-inspector/SHA256SUMS.sig",
-      "sha256": "ffd371b62b21a7366f49b18badffc977876a6f5b7416c21632aab3ffacd0804a",
+      "sha256": "b91804325e3d72112e6d33d1ca13885e8f4d230e9ee87ca7f24494b0c2de70f6",
       "recommended": true
     },
     {
@@ -306,11 +306,11 @@
       "icon": "columns-2",
       "platformCompat": ">=1.51.0",
       "sandboxCapabilities": null,
-      "latestVersion": "1.0.1",
-      "assetUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/split-view/plugin-split-view-1.0.1.zip",
+      "latestVersion": "1.0.2",
+      "assetUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/split-view/plugin-split-view-1.0.2.zip",
       "sumsUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/split-view/SHA256SUMS",
       "sigUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/split-view/SHA256SUMS.sig",
-      "sha256": "eea4955b47e2629da5009661eafa2c61b55053f37497f7c8baed4c7276c343f4",
+      "sha256": "6f9aa62518a7d3a015eb02e19db34aa658d8ddb5b377a8aabb24f8aeba601bd7",
       "recommended": false
     },
     {
@@ -323,11 +323,11 @@
       "icon": "corner-down-right",
       "platformCompat": "1.x",
       "sandboxCapabilities": null,
-      "latestVersion": "1.0.0",
-      "assetUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/toggle-axes/plugin-toggle-axes-1.0.0.zip",
+      "latestVersion": "1.0.1",
+      "assetUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/toggle-axes/plugin-toggle-axes-1.0.1.zip",
       "sumsUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/toggle-axes/SHA256SUMS",
       "sigUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/toggle-axes/SHA256SUMS.sig",
-      "sha256": "448646955a834359f007ab4dce126cb888b5cddcaf6df605472848fd1ccfe864",
+      "sha256": "9023e0f9fb55bcfdaed1fd1ff349db9a9e45677d18a7c561ec9d3dc7db6bb01a",
       "recommended": true
     },
     {
@@ -340,11 +340,11 @@
       "icon": "grid",
       "platformCompat": "1.x",
       "sandboxCapabilities": null,
-      "latestVersion": "1.0.0",
-      "assetUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/toggle-grid/plugin-toggle-grid-1.0.0.zip",
+      "latestVersion": "1.0.1",
+      "assetUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/toggle-grid/plugin-toggle-grid-1.0.1.zip",
       "sumsUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/toggle-grid/SHA256SUMS",
       "sigUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/toggle-grid/SHA256SUMS.sig",
-      "sha256": "e1eb1dff94a0c9d718e8cfea4e6e9199efa4942d2d66a315d8570b6d277b6aa3",
+      "sha256": "54e60aa70754ca285c19b8bdf357ac9b4539a889e737f4785ce5cdd9597c5dc0",
       "recommended": true
     },
     {
@@ -357,11 +357,11 @@
       "icon": "eye-off",
       "platformCompat": "1.x",
       "sandboxCapabilities": null,
-      "latestVersion": "1.0.0",
-      "assetUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/toggle-volume/plugin-toggle-volume-1.0.0.zip",
+      "latestVersion": "1.0.1",
+      "assetUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/toggle-volume/plugin-toggle-volume-1.0.1.zip",
       "sumsUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/toggle-volume/SHA256SUMS",
       "sigUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/toggle-volume/SHA256SUMS.sig",
-      "sha256": "833eb0bff2e35ae86197b4bfe8ba55c83c27e327663d8ab86817bdc6caaa1be4",
+      "sha256": "aaa4379d50edd7855a18483612ebd7438f69bcebd3b1d4625e0b9801df0ed290",
       "recommended": true
     },
     {
@@ -374,11 +374,11 @@
       "icon": "bar-chart-2",
       "platformCompat": ">=1.53.0",
       "sandboxCapabilities": null,
-      "latestVersion": "1.0.0",
-      "assetUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/tracking-charts/plugin-tracking-charts-1.0.0.zip",
+      "latestVersion": "1.0.1",
+      "assetUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/tracking-charts/plugin-tracking-charts-1.0.1.zip",
       "sumsUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/tracking-charts/SHA256SUMS",
       "sigUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/tracking-charts/SHA256SUMS.sig",
-      "sha256": "a8f18e36275d9c9fe37b46b25fff51ef6c7cef09907881a0a51f27c4b8e8bed3",
+      "sha256": "1b686ec7ea9c1c1e69a0170113b9d93eab107ef6e244f8ed2c67c99b8baef3be",
       "recommended": true
     },
     {
@@ -391,11 +391,11 @@
       "icon": "scan-search",
       "platformCompat": ">=1.53.0",
       "sandboxCapabilities": null,
-      "latestVersion": "1.0.0",
-      "assetUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/tracking-inspector/plugin-tracking-inspector-1.0.0.zip",
+      "latestVersion": "1.0.1",
+      "assetUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/tracking-inspector/plugin-tracking-inspector-1.0.1.zip",
       "sumsUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/tracking-inspector/SHA256SUMS",
       "sigUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/tracking-inspector/SHA256SUMS.sig",
-      "sha256": "5541d6081e3f416f966d68425a56670dda1ae082a2de73b7b0dde74b83991483",
+      "sha256": "4e18d1551243942d29b763a5a428d2249b6e0caf5e47f7c02de3557f54241947",
       "recommended": true
     },
     {
@@ -408,11 +408,11 @@
       "icon": "move-horizontal",
       "platformCompat": ">=1.53.0",
       "sandboxCapabilities": null,
-      "latestVersion": "1.0.0",
-      "assetUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/tracking-measure/plugin-tracking-measure-1.0.0.zip",
+      "latestVersion": "1.0.1",
+      "assetUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/tracking-measure/plugin-tracking-measure-1.0.1.zip",
       "sumsUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/tracking-measure/SHA256SUMS",
       "sigUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/tracking-measure/SHA256SUMS.sig",
-      "sha256": "5e5bd4f3d22ab62f97181a92cee1a0aa99e8127730a9ce69508612dcf34da25f",
+      "sha256": "f1735240bc9a520f07ce9632a7890f0574fe75eae5c0da7b459685ca7e99f1ff",
       "recommended": true
     },
     {
@@ -425,11 +425,11 @@
       "icon": "shell",
       "platformCompat": ">=1.53.0",
       "sandboxCapabilities": null,
-      "latestVersion": "1.0.0",
-      "assetUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/tracking-surface/plugin-tracking-surface-1.0.0.zip",
+      "latestVersion": "1.0.1",
+      "assetUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/tracking-surface/plugin-tracking-surface-1.0.1.zip",
       "sumsUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/tracking-surface/SHA256SUMS",
       "sigUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/tracking-surface/SHA256SUMS.sig",
-      "sha256": "88d46f7340302233bbb6967500592cab05158cbe0df61093bbbd3d9c1b33991e",
+      "sha256": "497ce478f43849de5cb88340b99a900cd65917ece066af7b069cc31cf6ccb3c9",
       "recommended": true
     },
     {
@@ -442,11 +442,11 @@
       "icon": "route",
       "platformCompat": ">=1.53.0",
       "sandboxCapabilities": null,
-      "latestVersion": "1.0.0",
-      "assetUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/tracking-trails/plugin-tracking-trails-1.0.0.zip",
+      "latestVersion": "1.0.1",
+      "assetUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/tracking-trails/plugin-tracking-trails-1.0.1.zip",
       "sumsUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/tracking-trails/SHA256SUMS",
       "sigUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/tracking-trails/SHA256SUMS.sig",
-      "sha256": "830d36f60140ffb4bf0e9003c51b12ffa57aeda02edf15e7f0d86a19fcf0ef34",
+      "sha256": "925d1995e818b552f20e2e60b63ea83d1089bdd9d8a759f3349ef795f4bd9a85",
       "recommended": true
     },
     {
@@ -459,11 +459,11 @@
       "icon": "layers-3",
       "platformCompat": ">=1.52.0",
       "sandboxCapabilities": null,
-      "latestVersion": "1.1.1",
-      "assetUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/zstack-browser/plugin-zstack-browser-1.1.1.zip",
+      "latestVersion": "1.1.2",
+      "assetUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/zstack-browser/plugin-zstack-browser-1.1.2.zip",
       "sumsUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/zstack-browser/SHA256SUMS",
       "sigUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/zstack-browser/SHA256SUMS.sig",
-      "sha256": "bb4a7e6af9ac8a84626b765042d8fb6b092fe4824da51a332325d6d18eb67535",
+      "sha256": "ebf1e48b8f071ea217f579c6898c29378830f3d854bc8cb2193b4e930650ff8e",
       "recommended": true
     }
   ]

@@ -91,7 +91,8 @@ body.presentation-mode .viewer-layout {
   right: 56px;
   bottom: var(--space-4);
   z-index: 15;
-  width: min(360px, calc(100vw - 32px));
+  width: min(360px, calc(100% - 16px));
+  max-width: calc(100% - 16px);
   background: color-mix(in srgb, var(--bg-surface) 92%, transparent);
   border: 1px solid var(--border-light);
   border-radius: var(--radius-md);

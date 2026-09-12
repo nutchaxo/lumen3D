@@ -1,20 +1,41 @@
-﻿/* ============================================================
-   IRIBHM Microscopy Platform — Comparison Page Controller
+/* ============================================================
+   Lumen3D — Comparison page controller
+   ============================================================
+   Up to four datasets side by side, each one the real viewer page
+   (viewer.html for volumes and timelapses, 2d.html for photographs)
+   embedded chrome-less in an iframe and driven from here.
+
+   The wire, all same-origin postMessage:
+     panel → host   PANEL_READY   the page is mounted; carries what its toolbar
+                                  offers (tools / toggles the plugins declared
+                                  `contexts: ["panel"]`), its features and quality
+                    PANEL_ERROR   the page could not mount its dataset
+                    PANEL_DATASET the photograph changed from the pane's own nav
+                    PLUGIN_STATE  a toggle lit up / went off (its own button too)
+                    TOOL_CHANGED  a tool picked in the page (keyboard shortcut)
+                    QUALITY_STATUS a SET_QUALITY settled
+                    SYNC_*        camera / channels / exposure / z / time / slicer
+                                  plane / z-stack, relayed to the siblings
+                    WM_PHYSICAL_VIEW a photograph's physical view (µm per px)
+                    SIDEBAR_CLOSED, REQUEST_COMPARE_STUDIO
+     host → panel   PANEL_HELLO, SET_TOOL, PLUGIN_ACTIVATE, SET_QUALITY,
+                    TOGGLE_SIDEBAR, TOGGLE_ZSTACK, ZSTACK_HOVER_STATE,
+                    SET_CHANNEL_ACTIVE, APPLY_WORKSPACE_STATE, the SYNC_* relays,
+                    WM_SET_PHYSICAL_VIEW
    ============================================================ */
 
 const CompareApp = (() => {
-  let _datasets = [];
-  let _activePanels = []; // Array of dataset IDs
   const MAX_PANELS = 4;
+  const MAX_PARALLEL_PANEL_LOADS = 2;
+  const PANEL_READY_TIMEOUT_MS = 180000;
+  const QUALITY_TIMEOUT_MS = 180000;
+  const INITIAL_PANEL_QUALITY = '512x512';
+  const QUALITY_RANK = { '256x256': 0, '512x512': 1, '1024x1024': 2, '2048x2048': 3, '4096x4096': 4, native: 5 };
+
+  let _datasets = [];
+  let _panels = [];                // [{ index, id, type, name, el, iframe, ready, … }] in grid order
   let _panelIdCounter = 0;
   let _layoutMode = 'auto';
-  const MAX_PARALLEL_PANEL_LOADS = 2;
-  const MAX_PARALLEL_HIGH_DETAIL = 1;
-  let _panelLoadQueue = [];
-  let _activePanelLoads = 0;
-  let _highDetailQueue = [];
-  let _activeHighDetailLoads = 0;
-  let _panelQualityState = new Map();
   let _layoutWeights = {
     columns: [1, 1, 1, 1],
     rows: [1, 1, 1, 1],
@@ -22,12 +43,25 @@ const CompareApp = (() => {
     gridRows: [1, 1]
   };
   let _resizeNotifyTimer = null;
-  
   let _syncOptions = { z: true, time: true, camera: true, channels: true };
-  // Track z-stack active state per panelIndex (for compare-level save/restore)
-  const _panelZstackActive = new Map();
-  // Track decompose-by-channel solo assignment per panelIndex (null = not decomposed)
-  const _panelSoloChannel = new Map();
+  let _tool = 'navigate';
+  let _qualityMode = 'auto';
+  // The last relayed view of each kind, replayed to a panel that joins later so
+  // it opens where the others are rather than where its own default view sits.
+  const _lastSync = {};
+
+  let _loadQueue = [];
+  let _activeLoads = 0;
+  let _qualityQueue = [];
+  let _qualityBusy = null;         // { panel, timer } while one panel reloads
+
+  const _modalFilter = { search: '', type: 'all' };
+  // Panels opened from the URL (?add=) are the page's untouched state: the
+  // #state= hash is only worth writing once the operator changes something.
+  let _initialPending = 0;
+  let _restoredFromUrl = false;
+
+  // ── Boot ──────────────────────────────────────────────────
 
   async function init() {
     Theme.init();
@@ -40,90 +74,115 @@ const CompareApp = (() => {
     _datasets = Catalog.getAll();
     _updateThemeIcon();
     Theme.onChange(_updateThemeIcon);
+    Utils.populateLanguageMenu(window.switchLanguage);
+    I18n.onLanguageChange(() => {
+      _renderModalList();
+      _renderModalTypeChips();
+      // The panels follow the language on their own (storage event) and re-describe
+      // their toolbar; ask once more a little later for any that were still busy.
+      setTimeout(() => _broadcast({ type: 'PANEL_HELLO' }, null), 600);
+    });
 
     _bindToolbar();
     _bindModal();
     _updateLayout();
     _bindExport();
-
-    const params = new URLSearchParams(window.location.search);
-    const adds = params.getAll('add');
-    if (adds.length) adds.forEach(id => _addPanel(id));
+    // Panels answer the host in messages: listen before the first one is added.
+    window.addEventListener('message', _handleIframeMessage);
 
     if (window.lucide) lucide.createIcons();
     if (typeof StudioEditor !== 'undefined') StudioEditor.init();
 
-    if (window.location.hash && window.location.hash.startsWith('#state=')) {
-      if (typeof UrlState !== 'undefined') {
+    let restored = false;
+    if (window.location.hash && window.location.hash.startsWith('#state=') && typeof UrlState !== 'undefined') {
+      try {
         const urlState = await UrlState.decodeState(window.location.hash);
         if (urlState) {
           _applyWorkspaceState(urlState.state || urlState);
+          restored = true;
         }
+      } catch (err) {
+        // A shared link that no longer applies must not take the page down with it.
+        console.warn('[Compare] Shared state could not be restored:', err);
       }
     }
+    _restoredFromUrl = restored;
+    if (!restored) {
+      const params = new URLSearchParams(window.location.search);
+      const added = params.getAll('add').slice(0, MAX_PANELS).map(id => _addPanel(id)).filter(Boolean);
+      _initialPending = added.length;
+    }
+    document.addEventListener('keydown', _onKeydown);
 
     if (typeof UrlState !== 'undefined') {
-      UrlState.startSync(_getWorkspaceState, 1000);
+      UrlState.startSync(_getWorkspaceState, 1000, { pristine: !restored });
     }
+  }
 
-    // Listen for messages from iframes for synchronization
-    window.addEventListener('message', _handleIframeMessage);
+  // The chips advertise the panels' shortcuts; honour them here too, so a key
+  // pressed on the host's own chrome (a select, a checkbox) reaches every panel.
+  function _onKeydown(e) {
+    if (e.defaultPrevented || e.ctrlKey || e.metaKey || e.altKey) return;
+    if (e.target && ['INPUT', 'TEXTAREA', 'SELECT'].includes(e.target.tagName)) return;
+    if (document.getElementById('modal-select')?.classList.contains('active')) return;
+    if (!document.getElementById('studio-layout')?.classList.contains('hidden')) return;
+    const key = e.key.toLowerCase();
+    if (key === 'escape' || key === 'v') { _setTool('navigate', null); return; }
+    const chip = [...document.querySelectorAll('#compare-tool-chips [data-tool][data-shortcut]')]
+      .find(b => b.dataset.shortcut === key);
+    if (chip) { e.preventDefault(); _setTool(chip.dataset.tool, null); }
   }
 
   function _bindToolbar() {
-    // Sync options
     ['z', 'time', 'camera', 'channels'].forEach(key => {
       const cb = document.getElementById(`sync-${key}`);
-      if (cb) {
-        cb.addEventListener('change', (e) => {
-          _syncOptions[key] = e.target.checked;
-        });
-      }
+      if (cb) cb.addEventListener('change', (e) => { _syncOptions[key] = e.target.checked; });
     });
 
-    document.querySelectorAll('.tool-chip').forEach(btn => {
-      btn.addEventListener('click', (e) => {
-        const tool = e.currentTarget.dataset.tool;
-        if (!tool) return;
-        document.querySelectorAll('.tool-chip').forEach(b => b.classList.remove('active'));
-        e.currentTarget.classList.add('active');
-        _broadcast({ type: 'SET_TOOL', tool }, null);
-      });
+    // Tool chips: navigate is static, the others come and go with the panels.
+    document.getElementById('compare-tool-chips')?.addEventListener('click', (e) => {
+      const chip = e.target.closest('[data-tool]');
+      if (!chip || !chip.dataset.tool) return;
+      _setTool(chip.dataset.tool, null);
     });
 
     document.getElementById('studio-scale-mode')?.addEventListener('change', () => {
       const layout = document.getElementById('studio-layout');
-      if (layout && !layout.classList.contains('hidden')) {
-        _openCompareStudio();
-      }
+      if (!layout || layout.classList.contains('hidden')) return;
+      // The composition is measured on the visible grid: close first (which shows
+      // the grid again), then compose anew. The figure starts over; annotations
+      // belong to a composition and do not survive a change of scale mode.
+      StudioEditor.close();
+      _openCompareStudio();
     });
 
     document.getElementById('btn-decompose')?.addEventListener('click', _decomposeChannels);
-
+    document.getElementById('btn-compare-studio')?.addEventListener('click', () => _openCompareStudio());
     document.getElementById('btn-add-dataset').addEventListener('click', _openModal);
     document.getElementById('compare-layout-mode')?.addEventListener('change', (e) => {
       _layoutMode = e.target.value;
       _updateLayout();
     });
+    document.getElementById('compare-quality')?.addEventListener('change', (e) => {
+      _qualityMode = e.target.value;
+      _scheduleQuality();
+    });
   }
 
   function _bindExport() {
     if (typeof ExportManager === 'undefined') return;
-    ExportManager.init({
+    const ctx = {
       scope: 'compare',
       getWorkspaceState: _getWorkspaceState,
       applyWorkspaceState: _applyWorkspaceState,
       getCustomExports: _getCompareExports
+    };
+    ExportManager.init(ctx);
+    document.getElementById('btn-export-compare')?.addEventListener('click', () => ExportManager.openDownloadCenter(ctx));
+    document.getElementById('btn-save-compare-workspace')?.addEventListener('click', () => {
+      if (!_getWorkspaceState()) { _toast(_t('compare.notAllReady', 'Wait for every panel to finish loading.')); return; }
+      ExportManager.saveWorkspace('compare');
     });
-    document.getElementById('btn-export-compare')?.addEventListener('click', () => {
-      ExportManager.openDownloadCenter({
-        scope: 'compare',
-        getWorkspaceState: _getWorkspaceState,
-        applyWorkspaceState: _applyWorkspaceState,
-        getCustomExports: _getCompareExports
-      });
-    });
-    document.getElementById('btn-save-compare-workspace')?.addEventListener('click', () => ExportManager.saveWorkspace('compare'));
     document.getElementById('btn-restore-compare-workspace')?.addEventListener('click', () => ExportManager.restoreWorkspace('compare'));
   }
 
@@ -135,385 +194,527 @@ const CompareApp = (() => {
     if (window.lucide) lucide.createIcons({ nodes: [btn] });
   }
 
-  // --- Modal Logic ---
+  // ── Dataset picker ────────────────────────────────────────
 
   function _bindModal() {
     document.getElementById('btn-close-modal').addEventListener('click', _closeModal);
     document.getElementById('modal-select').addEventListener('click', (e) => {
       if (e.target.id === 'modal-select') _closeModal();
     });
-
-    const list = document.getElementById('modal-dataset-list');
-    list.innerHTML = _datasets.map(d => {
-      // SEC-014: dataset fields (id/thumbnail/name/type) are catalog data — escape
-      // before innerHTML interpolation (cf. _addPanel which already uses escapeHtml).
-      // The type pill takes its colour from the shared badge class and its name
-      // from the operator's own wording, like every other type badge.
-      return `
-        <div class="dataset-mini-card" data-id="${Utils.escapeHtml(d.id)}">
-          ${d.thumbnail ? `<img src="${Utils.escapeHtml(d.thumbnail)}" alt="" style="width:100%;aspect-ratio:16/9;object-fit:cover;border-radius:var(--radius-sm);margin-bottom:8px;">` : ''}
-          <span class="card-type ${Utils.datasetTypeBadgeClass(d.type)}">${Utils.escapeHtml(Utils.datasetTypeLabel(d.type))}</span>
-          <div class="font-bold text-sm mt-1">${Utils.escapeHtml(d.name)}</div>
-          <div class="text-xs text-muted mt-1">${Utils.formatStage(d.stage)}</div>
-        </div>
-      `;
-    }).join('');
-
-    list.querySelectorAll('.dataset-mini-card').forEach(card => {
-      card.addEventListener('click', () => {
-        _addPanel(card.dataset.id);
-        _closeModal();
-      });
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape' && document.getElementById('modal-select')?.classList.contains('active')) _closeModal();
     });
+    document.getElementById('modal-search')?.addEventListener('input', (e) => {
+      _modalFilter.search = e.target.value.trim().toLowerCase();
+      _renderModalList();
+    });
+    document.getElementById('modal-type-chips')?.addEventListener('click', (e) => {
+      const chip = e.target.closest('[data-type]');
+      if (!chip) return;
+      _modalFilter.type = chip.dataset.type;
+      _renderModalTypeChips();
+      _renderModalList();
+    });
+    document.getElementById('modal-dataset-list').addEventListener('click', (e) => {
+      const card = e.target.closest('.dataset-mini-card');
+      if (!card) return;
+      _addPanel(card.dataset.id);
+      _closeModal();
+    });
+    document.getElementById('modal-dataset-list').addEventListener('keydown', (e) => {
+      if (e.key !== 'Enter' && e.key !== ' ') return;
+      const card = e.target.closest('.dataset-mini-card');
+      if (!card) return;
+      e.preventDefault();
+      card.click();
+    });
+    _renderModalTypeChips();
+    _renderModalList();
+  }
+
+  function _renderModalTypeChips() {
+    const host = document.getElementById('modal-type-chips');
+    if (!host) return;
+    const present = new Set(_datasets.map(d => d.type));
+    const chip = (type, label) => `<button type="button" class="modal-type-chip${_modalFilter.type === type ? ' is-active' : ''}" data-type="${Utils.escapeHtml(type)}">${Utils.escapeHtml(label)}</button>`;
+    host.innerHTML = chip('all', _t('compare.allTypes', 'All'))
+      + Utils.DATASET_TYPES.filter(t => present.has(t)).map(t => chip(t, Utils.datasetTypeLabel(t))).join('');
+  }
+
+  function _modalMatches(d) {
+    if (_modalFilter.type !== 'all' && d.type !== _modalFilter.type) return false;
+    if (!_modalFilter.search) return true;
+    const hay = [d.name, d.id, d.stage, d.line, d.description, ...(d.markers || [])].filter(Boolean).join(' ').toLowerCase();
+    return hay.includes(_modalFilter.search);
+  }
+
+  function _renderModalList() {
+    const list = document.getElementById('modal-dataset-list');
+    if (!list) return;
+    const shown = _datasets.filter(_modalMatches);
+    if (!shown.length) {
+      list.innerHTML = `<div class="modal-empty">${Utils.escapeHtml(_t('compare.noMatch', 'No dataset matches.'))}</div>`;
+      return;
+    }
+    // SEC-014: dataset fields are catalog data — escaped before innerHTML. The
+    // type pill takes the shared badge class and the operator's own type name.
+    list.innerHTML = shown.map(d => `
+      <div class="dataset-mini-card" data-id="${Utils.escapeHtml(d.id)}" role="button" tabindex="0">
+        ${d.thumbnail ? `<img src="${Utils.escapeHtml(d.thumbnail)}" alt="" loading="lazy" decoding="async">` : ''}
+        <span class="card-type ${Utils.datasetTypeBadgeClass(d.type)}">${Utils.escapeHtml(Utils.datasetTypeLabel(d.type))}</span>
+        <div class="font-bold text-sm mt-1">${Utils.escapeHtml(d.name)}</div>
+        <div class="text-xs text-muted mt-1">${Utils.escapeHtml(Utils.formatStage(d.stage))}</div>
+      </div>
+    `).join('');
   }
 
   function _openModal() {
-    if (_activePanels.length >= MAX_PANELS) {
+    if (_panels.length >= MAX_PANELS) {
       _toast(_t('toast.maxPanels', `Maximum of ${MAX_PANELS} panels reached.`, { count: MAX_PANELS }));
       return;
     }
     document.getElementById('modal-select').classList.add('active');
+    document.getElementById('modal-search')?.focus();
   }
 
   function _closeModal() {
     document.getElementById('modal-select').classList.remove('active');
   }
 
-  // --- Panel Management ---
+  // ── Panels ────────────────────────────────────────────────
 
-  function _addPanel(datasetId) {
-    if (_activePanels.length >= MAX_PANELS) return;
-    
-    const panelIndex = _panelIdCounter++;
-    _activePanels.push({ index: panelIndex, id: datasetId });
-    
+  function _panelByIndex(index) {
+    const wanted = String(index);
+    return _panels.find(p => String(p.index) === wanted) || null;
+  }
+
+  function _panelSrc(dataset, index) {
+    const page = Utils.datasetPage(dataset);
+    const params = new URLSearchParams({ id: dataset.id, hideHeader: 'true', panelIndex: String(index) });
+    if (dataset.type !== '2d') params.set('quality', INITIAL_PANEL_QUALITY);
+    return `${page}?${params.toString()}`;
+  }
+
+  /**
+   * @param {string} datasetId
+   * @param {Object} [restore]  state to hand the panel once it loads (workspace restore)
+   */
+  function _addPanel(datasetId, restore = null) {
+    if (_panels.length >= MAX_PANELS) return null;
     const d = Catalog.getById(datasetId);
     if (!d) {
-      _activePanels = _activePanels.filter(p => p.index !== panelIndex);
-      return;
+      console.warn('[Compare] Unknown dataset, panel not added:', datasetId);
+      _toast(_t('compare.unknownDataset', 'Dataset "{id}" is not in the catalog.', { id: datasetId }));
+      return null;
     }
-    const grid = document.getElementById('compare-grid');
-    
-    const panel = document.createElement('div');
-    panel.className = 'compare-panel animate-scale-in';
-    panel.id = `panel-${panelIndex}`;
-    panel.dataset.datasetType = d.type;
-    
-    const page = Utils.datasetPage(d);
-    const activePanelsCount = Math.max(1, _activePanels.length);
-    const src = `${page}?v=20260604-v7&id=${encodeURIComponent(datasetId)}&hideHeader=true&panelIndex=${panelIndex}&quality=auto&deferHighQuality=1&panelPriority=${Math.max(0, _activePanels.length - 1)}&activePanels=${activePanelsCount}`;
-    
-    panel.innerHTML = `
+    const index = _panelIdCounter++;
+    const panel = {
+      index, id: d.id, type: d.type, name: d.name || d.id,
+      el: null, iframe: null,
+      ready: false, failed: false, readyResolve: null,
+      toolbar: { tools: [], toggles: [] }, features: {}, quality: null,
+      pendingState: restore?.state || null,
+      pendingZstack: restore?.zstack || null,
+      soloChannel: Number.isInteger(restore?.soloChannel) ? restore.soloChannel : null,
+      zstackActive: false,
+      timers: new Set()
+    };
+    _panels.push(panel);
+
+    const el = document.createElement('div');
+    el.className = 'compare-panel animate-scale-in';
+    el.id = `panel-${index}`;
+    // data-panel-type, not data-dataset-type: InstanceConfig.applyDom binds the latter
+    // to the type's display name and would overwrite the whole panel on a language switch.
+    el.dataset.panelType = d.type;
+    el.innerHTML = `
       <div class="panel-header">
-          <div class="panel-title-badge">${Utils.escapeHtml(d.name)}</div>
+        <div class="panel-title-badge" title="${Utils.escapeHtml(panel.name)}">${Utils.escapeHtml(panel.name)}</div>
         <div class="panel-actions">
-          <button class="btn btn-outline btn-sm bg-surface p-1 btn-settings" data-index="${panelIndex}" title="Toggle Settings" data-i18n-title="js.toggleSettings">
+          <div class="panel-toggles" data-index="${index}"></div>
+          <button class="btn btn-outline btn-sm bg-surface p-1 btn-settings" data-index="${index}" title="${Utils.escapeHtml(_t('js.toggleSettings', 'Toggle Settings'))}" data-i18n-title="js.toggleSettings">
             <i data-lucide="settings" class="w-4 h-4"></i>
           </button>
-          <button class="btn btn-outline btn-sm bg-surface p-1 btn-close-panel" data-index="${panelIndex}" title="Close" data-i18n-title="js.closePanel">
+          <button class="btn btn-outline btn-sm bg-surface p-1 btn-close-panel" data-index="${index}" title="${Utils.escapeHtml(_t('js.closePanel', 'Close'))}" data-i18n-title="js.closePanel">
             <i data-lucide="x" class="w-4 h-4"></i>
           </button>
         </div>
       </div>
-      <div class="panel-visual-tools" data-index="${panelIndex}">
-        <button class="btn btn-ghost btn-xs panel-tool-btn btn-toggle-zstack" data-index="${panelIndex}" title="Toggle Z-Stack Browser">
-          <i data-lucide="layers" class="w-3.5 h-3.5"></i>
-        </button>
-        <button class="btn btn-ghost btn-xs panel-tool-btn btn-toggle-grid" data-index="${panelIndex}" title="Toggle Grid">
-          <i data-lucide="grid-3x3" class="w-3.5 h-3.5"></i>
-        </button>
-        <button class="btn btn-ghost btn-xs panel-tool-btn btn-toggle-axes" data-index="${panelIndex}" title="Toggle Axes">
-          <i data-lucide="axis-3d" class="w-3.5 h-3.5"></i>
-        </button>
-      </div>
       <div class="panel-content">
-        <iframe src="about:blank" data-src="${src}" class="viewer-frame" id="iframe-${panelIndex}" data-index="${panelIndex}"></iframe>
+        <iframe src="about:blank" class="viewer-frame" id="iframe-${index}" data-index="${index}" title="${Utils.escapeHtml(panel.name)}"></iframe>
+        <div class="panel-load-state" data-index="${index}"><i data-lucide="loader-2" class="animate-spin"></i><span>${Utils.escapeHtml(_t('compare.panelQueued', 'Waiting for a load slot…'))}</span></div>
       </div>
     `;
-    
-    // A photograph has no z-stack / grid / axes: the block stays in the DOM (the
-    // bindings below expect it) but is never shown.
-    if (d.type === '2d') panel.querySelector('.panel-visual-tools').style.display = 'none';
-    grid.appendChild(panel);
-    if (window.lucide) lucide.createIcons({nodes: [panel]});
-    
-    // Bind buttons
-    panel.querySelector('.btn-close-panel').addEventListener('click', () => _removePanel(panelIndex));
-    panel.querySelector('.btn-settings').addEventListener('click', () => _toggleSidebar(panelIndex));
+    document.getElementById('compare-grid').appendChild(el);
+    if (window.lucide) lucide.createIcons({ nodes: [el] });
 
-    // Z-Stack toggle
-    const zstackBtn = panel.querySelector('.btn-toggle-zstack');
-    zstackBtn.addEventListener('click', () => {
-      const current = _panelZstackActive.get(panelIndex) || false;
-      const next = !current;
-      _panelZstackActive.set(panelIndex, next);
-      zstackBtn.classList.toggle('btn-solid', next);
-      zstackBtn.classList.toggle('btn-ghost', !next);
-      const iframe = document.getElementById(`iframe-${panelIndex}`);
-      if (iframe?.contentWindow) {
-        iframe.contentWindow.postMessage({ type: 'TOGGLE_ZSTACK', state: next }, '*');
-      }
-    });
+    panel.el = el;
+    panel.iframe = el.querySelector('iframe.viewer-frame');
+    panel.iframe.dataset.src = _panelSrc(d, index);
 
-    // Auto-hide Z-Stack UI on hover out to save space
-    panel.addEventListener('mouseenter', () => {
-      if (_panelZstackActive.get(panelIndex)) {
-        const iframe = document.getElementById(`iframe-${panelIndex}`);
-        if (iframe?.contentWindow) {
-          iframe.contentWindow.postMessage({ type: 'ZSTACK_HOVER_STATE', state: true }, '*');
-        }
-      }
+    el.querySelector('.btn-close-panel').addEventListener('click', () => _removePanel(index));
+    el.querySelector('.btn-settings').addEventListener('click', () => _toggleSidebar(index));
+    el.querySelector('.panel-toggles').addEventListener('click', (e) => {
+      const btn = e.target.closest('[data-plugin]');
+      if (!btn) return;
+      _postTo(panel, { type: 'PLUGIN_ACTIVATE', id: btn.dataset.plugin });
     });
-    panel.addEventListener('mouseleave', () => {
-      if (_panelZstackActive.get(panelIndex)) {
-        const iframe = document.getElementById(`iframe-${panelIndex}`);
-        if (iframe?.contentWindow) {
-          iframe.contentWindow.postMessage({ type: 'ZSTACK_HOVER_STATE', state: false }, '*');
-        }
-      }
-    });
-
-    // Grid toggle (cycles: off → grid → fine grid → off)
-    const gridBtn = panel.querySelector('.btn-toggle-grid');
-    let gridMode = 0;
-    gridBtn.addEventListener('click', () => {
-      gridMode = (gridMode + 1) % 3;
-      gridBtn.classList.toggle('btn-solid', gridMode > 0);
-      gridBtn.classList.toggle('btn-ghost', gridMode === 0);
-      const iframe = document.getElementById(`iframe-${panelIndex}`);
-      if (iframe?.contentWindow?.VolumeViewer) {
-        iframe.contentWindow.VolumeViewer.setGridMode(gridMode);
-      }
-    });
-
-    // Axes toggle
-    const axesBtn = panel.querySelector('.btn-toggle-axes');
-    let axesVisible = false;
-    axesBtn.addEventListener('click', () => {
-      axesVisible = !axesVisible;
-      axesBtn.classList.toggle('btn-solid', axesVisible);
-      axesBtn.classList.toggle('btn-ghost', !axesVisible);
-      const iframe = document.getElementById(`iframe-${panelIndex}`);
-      if (iframe?.contentWindow?.VolumeViewer) {
-        iframe.contentWindow.VolumeViewer.setAxesVisible(axesVisible);
-      }
-    });
+    // The z-stack browser folds away while the pointer is elsewhere.
+    el.addEventListener('mouseenter', () => { if (panel.zstackActive) _postTo(panel, { type: 'ZSTACK_HOVER_STATE', state: true }); });
+    el.addEventListener('mouseleave', () => { if (panel.zstackActive) _postTo(panel, { type: 'ZSTACK_HOVER_STATE', state: false }); });
 
     _updateLayout();
-    _queuePanelLoad(panelIndex);
+    _queuePanelLoad(panel);
+    return panel;
   }
 
-  function _removePanel(panelIndex) {
-    _activePanels = _activePanels.filter(p => p.index !== panelIndex);
-    _panelLoadQueue = _panelLoadQueue.filter(index => index !== panelIndex);
-    _highDetailQueue = _highDetailQueue.filter(index => index !== panelIndex);
-    _panelQualityState.delete(panelIndex);
-    _panelZstackActive.delete(panelIndex);
-    _panelSoloChannel.delete(panelIndex);
-    const panel = document.getElementById(`panel-${panelIndex}`);
-    if (panel) panel.remove();
+  function _removePanel(index) {
+    const panel = _panelByIndex(index);
+    if (!panel) return;
+    panel.timers.forEach(t => clearTimeout(t));
+    panel.timers.clear();
+    panel.readyResolve?.(false);
+    _panels = _panels.filter(p => p !== panel);
+    _loadQueue = _loadQueue.filter(p => p !== panel);
+    _qualityQueue = _qualityQueue.filter(p => p !== panel);
+    if (_qualityBusy?.panel === panel) _finishQuality();
+    // Navigating the frame away tears its document down at once (WebGL context,
+    // decode workers, in-flight pack fetches); a detached iframe only goes when
+    // the browser gets round to collecting it.
+    try { if (panel.iframe) panel.iframe.src = 'about:blank'; } catch (_) { /* frame already gone */ }
+    panel.el?.remove();
+    if (!_panels.some(p => p.ready && p.toolbar.tools.some(t => t.tool === _tool))) _setTool('navigate', null);
+    _renderToolChips();
+    _updateActionButtons();
     _updateLayout();
+    _scheduleQuality();
   }
 
-  function _queuePanelLoad(panelIndex) {
-    if (_panelLoadQueue.includes(panelIndex)) return;
-    _panelLoadQueue.push(panelIndex);
-    _drainPanelLoadQueue();
+  function _setTimer(panel, fn, ms) {
+    const t = setTimeout(() => { panel.timers.delete(t); fn(); }, ms);
+    panel.timers.add(t);
+    return t;
   }
 
-  function _drainPanelLoadQueue() {
-    while (_activePanelLoads < MAX_PARALLEL_PANEL_LOADS && _panelLoadQueue.length) {
-      const panelIndex = _panelLoadQueue.shift();
-      const panel = document.getElementById(`panel-${panelIndex}`);
-      const iframe = document.getElementById(`iframe-${panelIndex}`);
-      if (!panel || !iframe || !iframe.dataset.src) continue;
+  // ── Loading ───────────────────────────────────────────────
 
-      _activePanelLoads++;
-    _loadPanelFrame(panelIndex)
+  function _queuePanelLoad(panel) {
+    if (_loadQueue.includes(panel)) return;
+    _loadQueue.push(panel);
+    _drainLoadQueue();
+  }
+
+  function _drainLoadQueue() {
+    while (_activeLoads < MAX_PARALLEL_PANEL_LOADS && _loadQueue.length) {
+      const panel = _loadQueue.shift();
+      if (!panel.iframe?.dataset.src) continue;
+      _activeLoads++;
+      _loadPanelFrame(panel)
         .catch(err => console.warn('[Compare] Panel load did not finish cleanly:', err))
         .finally(() => {
-          _activePanelLoads = Math.max(0, _activePanelLoads - 1);
-          _drainPanelLoadQueue();
+          _activeLoads = Math.max(0, _activeLoads - 1);
+          _drainLoadQueue();
         });
     }
   }
 
-  async function _loadPanelFrame(panelIndex) {
-    const iframe = document.getElementById(`iframe-${panelIndex}`);
+  async function _loadPanelFrame(panel) {
+    const iframe = panel.iframe;
     if (!iframe?.dataset.src) return;
-    _panelQualityState.set(panelIndex, { previewReady: false, highReady: false });
-    iframe.src = iframe.dataset.src;
+    const src = iframe.dataset.src;
     delete iframe.dataset.src;
-    const ready = await _waitForPanelReady(panelIndex, 180000);
-    if (ready) {
-      const panel = document.getElementById(`panel-${panelIndex}`);
-      if (panel?.dataset.datasetType !== '2d') {
-        _queueHighDetailLoad(panelIndex);
+    // A restored workspace goes down as soon as the document exists: the viewer
+    // buffers it and skips its initial camera fit, so the saved camera is not
+    // fought over by the first frame (both pages keep a module-level listener).
+    iframe.addEventListener('load', () => {
+      if (panel.pendingState && iframe.contentWindow) {
+        _postTo(panel, { type: 'APPLY_WORKSPACE_STATE', state: panel.pendingState });
+        panel.restored = true;
+        panel.pendingState = null;
       }
-    }
+    }, { once: true });
+    _showPanelLoadState(panel, _t('compare.panelLoading', 'Loading…'));
+    iframe.src = src;
+    await _waitForPanelReady(panel);
     _notifyFramesResize();
   }
 
-  function _queueHighDetailLoad(panelIndex) {
-    if (_highDetailQueue.includes(panelIndex)) return;
-    const state = _panelQualityState.get(panelIndex) || {};
-    if (state.highReady) return;
-    _highDetailQueue.push(panelIndex);
-    _drainHighDetailQueue();
+  function _showPanelLoadState(panel, text) {
+    const node = panel.el?.querySelector('.panel-load-state');
+    if (!node) return;
+    if (!text) { node.hidden = true; return; }
+    node.hidden = false;
+    const span = node.querySelector('span');
+    if (span) span.textContent = text;
   }
 
-  function _drainHighDetailQueue() {
-    while (_activeHighDetailLoads < MAX_PARALLEL_HIGH_DETAIL && _highDetailQueue.length) {
-      const panelIndex = _highDetailQueue.shift();
-      const iframe = document.getElementById(`iframe-${panelIndex}`);
-      if (!iframe?.contentWindow) continue;
-      _activeHighDetailLoads++;
-      iframe.contentWindow.postMessage({ type: 'START_HIGH_DETAIL', sourceIndex: 'parent' }, '*');
-      
-      // Fallback timeout: if the iframe hangs and never sends high-ready or high-error
-      const capturedPanelIndex = panelIndex;
-      setTimeout(() => {
-        const state = _panelQualityState.get(capturedPanelIndex) || {};
-        if (!state.highReady) {
-          console.warn(`[Compare] Panel ${capturedPanelIndex} high detail load timed out. Unblocking queue.`);
-          _activeHighDetailLoads = Math.max(0, _activeHighDetailLoads - 1);
-          _drainHighDetailQueue();
-        }
-      }, 60000);
-    }
-  }
-
-  function _waitForPanelReady(panelIndex, timeoutMs) {
-    const started = Date.now();
+  function _waitForPanelReady(panel) {
+    if (panel.ready || panel.failed) return Promise.resolve(panel.ready);
     return new Promise(resolve => {
-      const tick = () => {
-        const panel = document.getElementById(`panel-${panelIndex}`);
-        const iframe = document.getElementById(`iframe-${panelIndex}`);
-        if (!panel || !iframe) {
-          resolve(true);
-          return;
-        }
-
-        let ready = false;
-        try {
-          const doc = iframe.contentDocument;
-          const loader = doc?.getElementById('viewer-loader');
-          const visual = _frameVisualState(iframe);
-          ready = Boolean(
-            doc
-            && doc.readyState === 'complete'
-            && (!loader || getComputedStyle(loader).display === 'none')
-            && (!visual.renderable || visual.nonzero > 16)
-          );
-        } catch (err) {
-          ready = false;
-        }
-
-        if (ready) {
-          resolve(true);
-          return;
-        }
-        if (Date.now() - started > timeoutMs) {
+      panel.readyResolve = resolve;
+      _setTimer(panel, () => {
+        if (!panel.ready && !panel.failed) {
+          console.warn(`[Compare] Panel ${panel.index} gave no PANEL_READY within ${PANEL_READY_TIMEOUT_MS / 1000} s.`);
           resolve(false);
-          return;
         }
-        setTimeout(tick, 350);
-      };
-      tick();
+      }, PANEL_READY_TIMEOUT_MS);
     });
   }
 
-  function _frameVisualState(iframe) {
-    if (!iframe?.contentDocument) return { renderable: false, nonzero: 0 };
-    const source = iframe.contentDocument.querySelector('#webgl-canvas')
-      || iframe.contentDocument.querySelector('canvas');
-    if (!source || !source.width || !source.height) return { renderable: false, nonzero: 0 };
-    return {
-      renderable: true,
-      nonzero: _sampleCanvasNonzero(source)
+  function _onPanelReady(panel, data) {
+    const first = !panel.ready;
+    panel.ready = true;
+    panel.failed = false;
+    panel.toolbar = {
+      tools: Array.isArray(data.toolbar?.tools) ? data.toolbar.tools : [],
+      toggles: Array.isArray(data.toolbar?.toggles) ? data.toolbar.toggles : []
     };
-  }
+    panel.features = data.features || {};
+    panel.quality = data.quality || panel.quality;
+    if (data.name) _setPanelTitle(panel, data.name);
+    if (data.datasetType) { panel.type = data.datasetType; panel.el.dataset.panelType = data.datasetType; }
+    _renderPanelToggles(panel);
+    _renderToolChips();
+    _updateActionButtons();
+    _showPanelLoadState(panel, null);
+    if (!first) return;
 
-  function _sampleCanvasNonzero(source) {
-    try {
-      const probe = document.createElement('canvas');
-      probe.width = 48;
-      probe.height = 48;
-      const ctx = probe.getContext('2d', { willReadFrequently: true });
-      if (!ctx) return 0;
-      ctx.clearRect(0, 0, probe.width, probe.height);
-      ctx.drawImage(source, 0, 0, probe.width, probe.height);
-      const data = ctx.getImageData(0, 0, probe.width, probe.height).data;
-      let nonzero = 0;
-      for (let i = 0; i < data.length; i += 4) {
-        const rgb = data[i] + data[i + 1] + data[i + 2];
-        if (rgb > 12 || data[i + 3] > 12) nonzero++;
-      }
-      return nonzero;
-    } catch (err) {
-      return 0;
+    // The host's state, now that the page listens: tool, then whatever a restore
+    // or a decomposition had reserved for it, then the view the others share.
+    _postTo(panel, { type: 'SET_TOOL', tool: _tool });
+    if (panel.pendingZstack) {
+      _postTo(panel, { type: 'TOGGLE_ZSTACK', state: true, slice: panel.pendingZstack.slice ?? null });
+      panel.pendingZstack = null;
+    }
+    if (panel.soloChannel !== null) _postTo(panel, { type: 'SET_CHANNEL_ACTIVE', channelIndex: panel.soloChannel });
+    if (!panel.restored) _replayLastSync(panel);
+    panel.readyResolve?.(true);
+    panel.readyResolve = null;
+    _scheduleQuality();
+    // The panels the URL asked for are the page's untouched state.
+    if (_initialPending > 0 && --_initialPending === 0 && !_restoredFromUrl && typeof UrlState !== 'undefined') {
+      UrlState.rebaseline({ settleMs: 800 });
     }
   }
 
-  function _toggleSidebar(panelIndex) {
-    // Send TOGGLE_SIDEBAR: true to target panel, false to all others
-    document.querySelectorAll('.viewer-frame').forEach(iframe => {
-      const idx = iframe.dataset.index;
-      const isTarget = (idx === panelIndex.toString());
-      
-      // We don't know the current state easily from the parent without round-trip, 
-      // so if they click the button, we assume they want to open it (or we can just send a generic toggle)
-      // Actually, let's track state in parent.
-      
-      if (!iframe.contentWindow) return;
-      
-      if (isTarget) {
-        const btn = document.querySelector(`.btn-settings[data-index="${idx}"]`);
-        const isActive = btn.classList.contains('bg-primary');
-        const nextState = !isActive;
-        
-        if (nextState) btn.classList.add('bg-primary', 'text-white');
-        else btn.classList.remove('bg-primary', 'text-white');
-        
-        iframe.contentWindow.postMessage({ type: 'TOGGLE_SIDEBAR', value: nextState, sourceIndex: 'parent' }, '*');
-      } else {
-        const btn = document.querySelector(`.btn-settings[data-index="${idx}"]`);
-        if (btn) btn.classList.remove('bg-primary', 'text-white');
-        iframe.contentWindow.postMessage({ type: 'TOGGLE_SIDEBAR', value: false, sourceIndex: 'parent' }, '*');
+  /** What the siblings currently share, pushed to a panel that joins late. */
+  function _replayLastSync(panel) {
+    const volume = Boolean(panel.features.volume);
+    if (_syncOptions.camera) {
+      if (volume && _lastSync.SYNC_CAMERA) _postTo(panel, _lastSync.SYNC_CAMERA);
+      if (panel.features.photo && _lastSync.WM_PHYSICAL_VIEW) _postTo(panel, { type: 'WM_SET_PHYSICAL_VIEW', view: _lastSync.WM_PHYSICAL_VIEW.view });
+    }
+    if (_syncOptions.time && panel.features.timeline && _lastSync.SYNC_TIME) _postTo(panel, _lastSync.SYNC_TIME);
+    if (!volume) return;
+    if (_syncOptions.channels) {
+      Object.values(_lastSync.channels || {}).forEach(msg => _postTo(panel, msg));
+      if (_lastSync.SYNC_EXPOSURE) _postTo(panel, _lastSync.SYNC_EXPOSURE);
+    }
+    if (_syncOptions.z) {
+      if (_lastSync.SYNC_SLICER_SPEC) _postTo(panel, _lastSync.SYNC_SLICER_SPEC);
+      if (_lastSync.SYNC_Z) _postTo(panel, _lastSync.SYNC_Z);
+      if (_lastSync.SYNC_ZSTACK_SLICE && _lastSync.SYNC_ZSTACK_SLICE.mode !== 'off') {
+        _postTo(panel, _lastSync.SYNC_ZSTACK_SLICE);
+        panel.zstackActive = true;
       }
+    }
+  }
+
+  function _onPanelError(panel, message) {
+    console.warn(`[Compare] Panel ${panel.index} (${panel.id}) reported an error: ${message}`);
+    if (panel.ready) return;   // the volume already on screen is intact
+    panel.failed = true;
+    _showPanelLoadState(panel, _t('compare.panelFailed', 'Could not load this dataset.'));
+    panel.readyResolve?.(false);
+    panel.readyResolve = null;
+    _updateActionButtons();
+  }
+
+  function _setPanelTitle(panel, name) {
+    panel.name = name;
+    const badge = panel.el?.querySelector('.panel-title-badge');
+    if (badge) { badge.textContent = name; badge.title = name; }
+    if (panel.iframe) panel.iframe.title = name;
+  }
+
+  // ── Per-panel toggles (the panel's own toolbar, drawn here) ──
+
+  function _renderPanelToggles(panel) {
+    const host = panel.el?.querySelector('.panel-toggles');
+    if (!host) return;
+    const toggles = [...panel.toolbar.toggles].sort((a, b) => (a.order - b.order) || String(a.id).localeCompare(String(b.id)));
+    host.innerHTML = toggles.map(t => `
+      <button type="button" class="panel-tool-btn ${t.active ? 'btn-solid' : 'btn-ghost'}" data-plugin="${Utils.escapeHtml(t.id)}" title="${Utils.escapeHtml(t.title || t.id)}" aria-label="${Utils.escapeHtml(t.title || t.id)}" aria-pressed="${t.active ? 'true' : 'false'}">
+        <i data-lucide="${Utils.escapeHtml(t.icon || 'square')}"></i>
+      </button>`).join('');
+    if (window.lucide) lucide.createIcons({ nodes: [host] });
+    panel.zstackActive = toggles.some(t => t.id === 'zstack-browser' && t.active);
+  }
+
+  function _onPluginState(panel, data) {
+    const toggle = panel.toolbar.toggles.find(t => t.id === data.id);
+    if (toggle) {
+      if (typeof data.active === 'boolean') toggle.active = data.active;
+      if (data.icon) toggle.icon = data.icon;
+    }
+    if (data.id === 'zstack-browser' && typeof data.active === 'boolean') panel.zstackActive = data.active;
+    const sel = window.CSS && CSS.escape ? CSS.escape(String(data.id)) : String(data.id);
+    const btn = panel.el?.querySelector(`.panel-toggles [data-plugin="${sel}"]`);
+    if (!btn) return;
+    if (typeof data.active === 'boolean') {
+      btn.classList.toggle('btn-solid', data.active);
+      btn.classList.toggle('btn-ghost', !data.active);
+      btn.setAttribute('aria-pressed', data.active ? 'true' : 'false');
+    }
+    if (data.icon) {
+      btn.innerHTML = `<i data-lucide="${Utils.escapeHtml(data.icon)}"></i>`;
+      if (window.lucide) lucide.createIcons({ nodes: [btn] });
+    }
+  }
+
+  // ── Tools (one for every panel) ───────────────────────────
+
+  function _renderToolChips() {
+    const host = document.getElementById('compare-tool-chips');
+    if (!host) return;
+    host.querySelectorAll('[data-plugin-generated]').forEach(n => n.remove());
+    const byTool = new Map();
+    _panels.filter(p => p.ready).forEach(p => p.toolbar.tools.forEach(t => {
+      if (!t?.tool || byTool.has(t.tool)) return;
+      byTool.set(t.tool, t);
+    }));
+    [...byTool.values()].sort((a, b) => (a.order - b.order) || String(a.tool).localeCompare(String(b.tool))).forEach(t => {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'btn btn-icon btn-ghost tool-chip';
+      btn.dataset.tool = t.tool;
+      btn.dataset.pluginGenerated = '1';
+      if (t.shortcut) btn.dataset.shortcut = String(t.shortcut).toLowerCase();
+      const title = t.shortcut ? `${t.title} (${String(t.shortcut).toUpperCase()})` : t.title;
+      btn.title = title;
+      btn.setAttribute('aria-label', t.title);
+      const icon = document.createElement('i');
+      icon.setAttribute('data-lucide', t.icon || 'square');
+      btn.appendChild(icon);
+      host.appendChild(btn);
+    });
+    if (window.lucide) lucide.createIcons({ nodes: [host] });
+    _syncToolChips();
+  }
+
+  function _syncToolChips() {
+    document.querySelectorAll('#compare-tool-chips [data-tool]').forEach(btn => {
+      btn.classList.toggle('active', btn.dataset.tool === _tool);
     });
   }
+
+  /** @param {number|null} fromIndex  the panel that picked it itself, spared the echo */
+  function _setTool(tool, fromIndex) {
+    _tool = tool || 'navigate';
+    _syncToolChips();
+    _broadcast({ type: 'SET_TOOL', tool: _tool }, fromIndex);
+  }
+
+  function _updateActionButtons() {
+    const ready = _panels.filter(p => p.ready);
+    const decompose = document.getElementById('btn-decompose');
+    if (decompose) {
+      const only = _panels.length === 1 ? _panels[0] : null;
+      decompose.hidden = !(only && only.ready && only.features.volume && Number(only.features.channels) > 1);
+    }
+    const studio = document.getElementById('btn-compare-studio');
+    if (studio) studio.disabled = ready.length === 0;
+  }
+
+  // ── Quality (volume panels) ───────────────────────────────
+
+  function _qualityTarget() {
+    if (_qualityMode !== 'auto') return _qualityMode;
+    // Every volume panel counts, ready or not: four bricked volumes at 1024 would
+    // not fit the GPU budget, so a burst of additions (Decompose) settles at 512
+    // from the first panel instead of raising the early ones and not the late ones.
+    const volumes = _panels.filter(p => p.type !== '2d').length;
+    return volumes <= 2 ? '1024x1024' : '512x512';
+  }
+
+  /** Reload the volume panels one at a time towards the target quality; in auto
+   *  mode a panel is only ever raised, never brought back down. */
+  function _scheduleQuality() {
+    const target = _qualityTarget();
+    const rank = (q) => (q in QUALITY_RANK ? QUALITY_RANK[q] : -1);
+    _panels.forEach(panel => {
+      if (!panel.ready || !panel.features.volume || !panel.quality) return;
+      const wanted = _qualityMode === 'auto' ? rank(panel.quality) < rank(target) : panel.quality !== target;
+      if (!wanted) { _qualityQueue = _qualityQueue.filter(p => p !== panel); return; }
+      if (_qualityBusy?.panel === panel || _qualityQueue.includes(panel)) return;
+      _qualityQueue.push(panel);
+    });
+    _drainQualityQueue();
+  }
+
+  function _drainQualityQueue() {
+    if (_qualityBusy || !_qualityQueue.length) return;
+    const panel = _qualityQueue.shift();
+    const target = _qualityTarget();
+    _qualityBusy = { panel, target, timer: null };
+    _qualityBusy.timer = _setTimer(panel, () => {
+      console.warn(`[Compare] Panel ${panel.index} did not settle at ${target} within ${QUALITY_TIMEOUT_MS / 1000} s.`);
+      _finishQuality();
+    }, QUALITY_TIMEOUT_MS);
+    _postTo(panel, { type: 'SET_QUALITY', quality: target });
+  }
+
+  function _finishQuality() {
+    if (_qualityBusy) {
+      const { panel, timer } = _qualityBusy;
+      if (timer) { clearTimeout(timer); panel.timers.delete(timer); }
+    }
+    _qualityBusy = null;
+    _drainQualityQueue();
+  }
+
+  function _onQualityStatus(panel, data) {
+    // On an error the page reverted to what it had; the recorded quality stays.
+    if (data.phase === 'ready' && data.quality) panel.quality = data.quality;
+    if (_qualityBusy?.panel === panel) _finishQuality();
+  }
+
+  // ── Sidebar ───────────────────────────────────────────────
+
+  function _toggleSidebar(index) {
+    _panels.forEach(panel => {
+      const btn = panel.el?.querySelector('.btn-settings');
+      const isTarget = String(panel.index) === String(index);
+      const next = isTarget && btn ? !btn.classList.contains('active') : false;
+      if (btn) btn.classList.toggle('active', next);
+      _postTo(panel, { type: 'TOGGLE_SIDEBAR', value: next });
+    });
+  }
+
+  // ── Layout ────────────────────────────────────────────────
 
   function _updateLayout() {
     const grid = document.getElementById('compare-grid');
     const emptyState = document.getElementById('empty-state');
-    const count = _activePanels.length;
-    
-    const btnDecompose = document.getElementById('btn-decompose');
-    if (btnDecompose) {
-      if (count === 1) btnDecompose.style.display = '';
-      else btnDecompose.style.display = 'none';
-    }
-    
-    // Update layout classes
+    const count = _panels.length;
+
     grid.className = `compare-grid layout-${count}`;
     grid.classList.toggle('layout-custom', _layoutMode !== 'auto');
+    // The empty-state node is the grid's first child, so CSS cannot see which
+    // panel is first: mark it.
+    _panels.forEach((panel, i) => { if (panel.el) panel.el.toggleAttribute('data-first', i === 0); });
     _applyGridTemplates();
-    
-    if (count === 0) {
-      emptyState.style.display = 'flex';
-      document.getElementById('btn-add-dataset').disabled = false;
-    } else {
-      emptyState.style.display = 'none';
-      document.getElementById('btn-add-dataset').disabled = (count >= MAX_PANELS);
-    }
+
+    emptyState.style.display = count === 0 ? 'flex' : 'none';
+    document.getElementById('btn-add-dataset').disabled = count >= MAX_PANELS;
+    _updateActionButtons();
 
     _renderSplitHandles();
     _notifyFramesResize();
   }
 
   function _getLayoutAxes() {
-    const count = _activePanels.length;
+    const count = _panels.length;
     if (count <= 1 || _layoutMode === 'auto') return null;
     if (_layoutMode === 'columns') return { columns: count, rows: 1, columnKey: 'columns', rowKey: null };
     if (_layoutMode === 'rows') return { columns: 1, rows: count, columnKey: null, rowKey: 'rows' };
@@ -524,28 +725,19 @@ const CompareApp = (() => {
 
   function _applyGridTemplates() {
     const grid = document.getElementById('compare-grid');
-    const count = _activePanels.length;
+    const count = _panels.length;
     grid.style.gridTemplateColumns = '';
     grid.style.gridTemplateRows = '';
 
     const axes = _getLayoutAxes();
     if (!axes) return;
 
-    if (axes.columns > 1 && axes.columnKey) {
-      grid.style.gridTemplateColumns = _weightsTemplate(axes.columnKey, axes.columns);
-    } else {
-      grid.style.gridTemplateColumns = 'minmax(0, 1fr)';
-    }
+    grid.style.gridTemplateColumns = axes.columns > 1 && axes.columnKey
+      ? _weightsTemplate(axes.columnKey, axes.columns) : 'minmax(0, 1fr)';
+    grid.style.gridTemplateRows = axes.rows > 1 && axes.rowKey
+      ? _weightsTemplate(axes.rowKey, axes.rows) : 'minmax(0, 1fr)';
 
-    if (axes.rows > 1 && axes.rowKey) {
-      grid.style.gridTemplateRows = _weightsTemplate(axes.rowKey, axes.rows);
-    } else {
-      grid.style.gridTemplateRows = 'minmax(0, 1fr)';
-    }
-
-    if (count > 1 && _layoutMode === 'grid') {
-      grid.classList.add('layout-custom');
-    }
+    if (count > 1 && _layoutMode === 'grid') grid.classList.add('layout-custom');
   }
 
   function _weightsTemplate(key, count) {
@@ -569,19 +761,11 @@ const CompareApp = (() => {
     if (!axes) return;
 
     if (axes.columns > 1 && axes.columnKey) {
-      for (let i = 0; i < axes.columns - 1; i++) {
-        const handle = _createSplitHandle('vertical', axes.columnKey, i);
-        grid.appendChild(handle);
-      }
+      for (let i = 0; i < axes.columns - 1; i++) grid.appendChild(_createSplitHandle('vertical', axes.columnKey, i));
     }
-
     if (axes.rows > 1 && axes.rowKey) {
-      for (let i = 0; i < axes.rows - 1; i++) {
-        const handle = _createSplitHandle('horizontal', axes.rowKey, i);
-        grid.appendChild(handle);
-      }
+      for (let i = 0; i < axes.rows - 1; i++) grid.appendChild(_createSplitHandle('horizontal', axes.rowKey, i));
     }
-
     _positionSplitHandles();
   }
 
@@ -590,7 +774,9 @@ const CompareApp = (() => {
     handle.className = `compare-split-handle ${orientation}`;
     handle.dataset.weightKey = key;
     handle.dataset.index = String(index);
-    handle.title = orientation === 'vertical' ? 'Drag to resize columns' : 'Drag to resize rows';
+    handle.title = orientation === 'vertical'
+      ? _t('compare.resizeCols', 'Drag to resize columns')
+      : _t('compare.resizeRows', 'Drag to resize rows');
     handle.addEventListener('pointerdown', _beginSplitDrag);
     return handle;
   }
@@ -598,7 +784,6 @@ const CompareApp = (() => {
   function _positionSplitHandles() {
     const axes = _getLayoutAxes();
     if (!axes) return;
-
     if (axes.columnKey) _positionAxisHandles(axes.columnKey, axes.columns, true);
     if (axes.rowKey) _positionAxisHandles(axes.rowKey, axes.rows, false);
   }
@@ -674,9 +859,9 @@ const CompareApp = (() => {
   function _notifyFramesResize() {
     clearTimeout(_resizeNotifyTimer);
     _resizeNotifyTimer = setTimeout(() => {
-      document.querySelectorAll('.viewer-frame').forEach(iframe => {
+      _panels.forEach(panel => {
         try {
-          iframe.contentWindow?.dispatchEvent(new Event('resize'));
+          panel.iframe?.contentWindow?.dispatchEvent(new Event('resize'));
         } catch (err) {
           // Same-origin iframes should be reachable; ignore a browser edge case.
         }
@@ -684,243 +869,211 @@ const CompareApp = (() => {
     }, 80);
   }
 
-  // --- Synchronization ---
+  // ── Messages ──────────────────────────────────────────────
+
+  function _postTo(panel, message) {
+    const win = panel?.iframe?.contentWindow;
+    if (!win) return;
+    // SEC-012: the panels are this page's own same-origin frames — never '*'.
+    try { win.postMessage(message, Utils.trustedTargetOrigin()); } catch (_) { /* frame mid-navigation */ }
+  }
+
+  function _broadcast(message, skipIndex) {
+    _panels.forEach(panel => {
+      if (skipIndex != null && String(panel.index) === String(skipIndex)) return;
+      _postTo(panel, message);
+    });
+  }
 
   function _handleIframeMessage(event) {
     if (!Utils.isTrustedMessageOrigin(event)) return;
     const data = event.data;
-    if (!data || !data.type || !data.sourceIndex) return;
+    if (!data || typeof data.type !== 'string' || data.sourceIndex == null) return;
+    const panel = _panelByIndex(data.sourceIndex);
+    if (!panel) return;
+    // Only the frame we mounted at that index speaks for it — not a frame nested
+    // inside another panel that happens to carry the same index.
+    if (event.source && panel.iframe?.contentWindow && event.source !== panel.iframe.contentWindow) return;
 
-    if (data.type === 'SYNC_Z' && _syncOptions.z) _broadcast(data, data.sourceIndex);
-    else if (data.type === 'SYNC_TIME' && _syncOptions.time) _broadcast(data, data.sourceIndex);
-    else if (data.type === 'SYNC_CAMERA' && _syncOptions.camera) _broadcast(data, data.sourceIndex);
-    else if (data.type === 'SYNC_CHANNELS' && _syncOptions.channels) _broadcast(data, data.sourceIndex);
-    else if (data.type === 'WM_PHYSICAL_VIEW') {
-      // Photographs share a PHYSICAL view (µm per screen pixel + physical centre):
-      // the same field at the same magnification whatever their pixel sizes.
-      if (_syncOptions.camera) _broadcast({ type: 'WM_SET_PHYSICAL_VIEW', view: data.view }, data.sourceIndex);
-    }
-    else if (data.type === 'SYNC_ZSTACK_SLICE') {
-      // Z-stack slice navigation from a decompose panel — broadcast to all sibling panels.
-      // Each sibling will open its own z-stack browser and navigate to the same slice.
-      _broadcast(data, data.sourceIndex);
-    }
-    else if (data.type === 'SYNC_SLICER_SPEC') {
-      // Slice-through-volume plane spec from a decompose panel — broadcast to all siblings.
-      // Siblings will apply the full spec (position + angles + slab) and enable the cut plane.
-      _broadcast(data, data.sourceIndex);
-    }
-    else if (data.type === 'SIDEBAR_CLOSED') {
-      const btn = document.querySelector(`.btn-settings[data-index="${data.sourceIndex}"]`);
-      if (btn) btn.classList.remove('bg-primary', 'text-white');
-    }
-    else if (data.type === 'REQUEST_COMPARE_STUDIO') {
-      _openCompareStudio();
-    }
-    else if (data.type === 'QUALITY_STATUS') _handlePanelQuality(data.sourceIndex, data.value || {});
-  }
-
-  function _handlePanelQuality(panelIndex, value) {
-    const idx = Number(panelIndex);
-    const state = { ...(_panelQualityState.get(idx) || {}) };
-    if (value.phase === 'preview-ready') {
-      state.previewReady = true;
-      _panelQualityState.set(idx, state);
-      return;
-    }
-
-    // The viewer is ready and waiting for us to trigger the high-detail load.
-    // This handles the race condition where our earlier START_HIGH_DETAIL was sent
-    // before the viewer's message listener was registered during its async init().
-    if (value.phase === 'high-waiting') {
-      state.previewReady = true;
-      _panelQualityState.set(idx, state);
-      const iframe = document.getElementById(`iframe-${idx}`);
-      if (iframe?.contentWindow) {
-        // Only send if we haven't already received a high-loading or high-ready for this panel
-        if (!state.highReady && !state.highLoading) {
-          if (!_highDetailQueue.includes(idx) && _activeHighDetailLoads < MAX_PARALLEL_HIGH_DETAIL) {
-            _activeHighDetailLoads++;
-          }
-          iframe.contentWindow.postMessage({ type: 'START_HIGH_DETAIL', sourceIndex: 'parent' }, '*');
-        }
+    switch (data.type) {
+      case 'PANEL_READY': _onPanelReady(panel, data); break;
+      case 'PANEL_ERROR': _onPanelError(panel, data.message); break;
+      case 'PANEL_DATASET':
+        if (data.id) panel.id = data.id;
+        if (data.datasetType) panel.type = data.datasetType;
+        if (data.name) _setPanelTitle(panel, data.name);
+        break;
+      case 'PLUGIN_STATE': _onPluginState(panel, data); break;
+      case 'TOOL_CHANGED': if (data.tool && data.tool !== _tool) _setTool(data.tool, panel.index); break;
+      case 'QUALITY_STATUS': _onQualityStatus(panel, data); break;
+      case 'SYNC_CAMERA':
+        if (!_syncOptions.camera) break;
+        _lastSync.SYNC_CAMERA = data;
+        _broadcast(data, panel.index);
+        break;
+      case 'WM_PHYSICAL_VIEW':
+        // Photographs share a PHYSICAL view (µm per screen pixel + physical centre):
+        // the same field at the same magnification whatever their pixel sizes.
+        if (!_syncOptions.camera) break;
+        _lastSync.WM_PHYSICAL_VIEW = data;
+        _broadcast({ type: 'WM_SET_PHYSICAL_VIEW', view: data.view }, panel.index);
+        break;
+      case 'SYNC_TIME':
+        if (!_syncOptions.time) break;
+        _lastSync.SYNC_TIME = data;
+        _broadcast(data, panel.index);
+        break;
+      case 'SYNC_CHANNELS':
+        if (!_syncOptions.channels) break;
+        _lastSync.channels = _lastSync.channels || {};
+        if (data.value?.name) _lastSync.channels[data.value.name] = data;
+        _broadcast(data, panel.index);
+        break;
+      case 'SYNC_EXPOSURE':
+        if (!_syncOptions.channels) break;
+        _lastSync.SYNC_EXPOSURE = data;
+        _broadcast(data, panel.index);
+        break;
+      case 'SYNC_Z':
+      case 'SYNC_ZSTACK_SLICE':
+      case 'SYNC_SLICER_SPEC':
+        if (!_syncOptions.z) break;
+        _lastSync[data.type] = data;
+        _broadcast(data, panel.index);
+        break;
+      case 'SIDEBAR_CLOSED': {
+        const btn = panel.el?.querySelector('.btn-settings');
+        if (btn) btn.classList.remove('active');
+        break;
       }
-      return;
-    }
-
-    if (value.phase === 'high-loading') {
-      state.highLoading = true;
-      _panelQualityState.set(idx, state);
-      return;
-    }
-
-    if (value.phase === 'high-ready' || value.phase === 'high-error') {
-      state.highReady = value.phase === 'high-ready';
-      state.highLoading = false;
-      _panelQualityState.set(idx, state);
-      _activeHighDetailLoads = Math.max(0, _activeHighDetailLoads - 1);
-      _drainHighDetailQueue();
+      case 'REQUEST_COMPARE_STUDIO': _openCompareStudio(); break;
+      default: break;
     }
   }
 
-  function _broadcast(messageData, skipIndex) {
-    document.querySelectorAll('.viewer-frame').forEach(iframe => {
-      const idx = iframe.dataset.index;
-      if ((skipIndex == null || idx !== skipIndex.toString()) && iframe.contentWindow) {
-        iframe.contentWindow.postMessage(messageData, '*');
-      }
-    });
-  }
-
-  // --- Figure Export ---
-
-  function _getCompareExports() {
-    const hasPanels = _activePanels.length > 0;
-    return [
-      {
-        action: 'compare-figure-png',
-        icon: 'layout-grid',
-        label: 'Compare PNG',
-        enabled: hasPanels,
-        disabledTitle: 'Add at least one panel first',
-        handler: () => _exportCompareFigure('png')
-      },
-      {
-        action: 'compare-figure-webp',
-        icon: 'layout-grid',
-        label: 'Compare WEBP',
-        enabled: hasPanels,
-        disabledTitle: 'Add at least one panel first',
-        handler: () => _exportCompareFigure('webp')
-      }
-    ];
-  }
+  // ── Decompose by channel ──────────────────────────────────
 
   function _decomposeChannels() {
-    if (_activePanels.length !== 1) return;
-    const panel = _activePanels[0];
-    const iframe = document.querySelector(`iframe[data-index="${panel.index}"]`);
-    if (!iframe?.contentWindow?.VolumeViewer) return;
-    
-    const sr = iframe.contentWindow.ViewerApp.getCurrentSliceResult();
-    if (!sr || !sr.channelState || sr.channelState.length <= 1) {
+    if (_panels.length !== 1) return;
+    const panel = _panels[0];
+    const app = panel.iframe?.contentWindow?.ViewerApp;
+    let channels = [];
+    try { channels = app?.getChannelState?.() || []; } catch (_) { channels = []; }
+    if (channels.length <= 1) {
       _toast(_t('toast.noMultiChannel', 'Dataset does not have multiple channels to decompose.'));
       return;
     }
-    
-    // Disable channel sync (each panel shows a different channel)
+
+    // Each panel shows a different channel: the channel sync would undo that.
     const syncCb = document.getElementById('sync-channels');
     if (syncCb) { syncCb.checked = false; _syncOptions.channels = false; }
 
-    // Assign channel 0 to the source panel
-    _panelSoloChannel.set(panel.index, 0);
-    iframe.contentWindow.postMessage({ type: 'SET_CHANNEL_ACTIVE', channelIndex: 0 }, '*');
-    
-    const maxNew = Math.min(MAX_PANELS - 1, sr.channelState.length - 1);
-    for (let i = 0; i < maxNew; i++) {
-      _addPanel(panel.id);
-      const newPanelInfo = _activePanels[_activePanels.length - 1];
-      const channelIdx = i + 1;
-      // Register solo channel immediately so state is saved correctly
-      _panelSoloChannel.set(newPanelInfo.index, channelIdx);
-      // Send SET_CHANNEL_ACTIVE when the iframe is ready
-      const newIframe = document.querySelector(`iframe[data-index="${newPanelInfo.index}"]`);
-      if (newIframe) {
-        newIframe.addEventListener('load', () => {
-          newIframe.contentWindow?.postMessage({ type: 'SET_CHANNEL_ACTIVE', channelIndex: channelIdx }, '*');
-        });
-      }
+    panel.soloChannel = 0;
+    _postTo(panel, { type: 'SET_CHANNEL_ACTIVE', channelIndex: 0 });
+
+    const extra = Math.min(MAX_PANELS - 1, channels.length - 1);
+    for (let i = 0; i < extra; i++) _addPanel(panel.id, { soloChannel: i + 1 });
+    if (channels.length - 1 > extra) {
+      _toast(_t('compare.channelsDropped', '{count} channel(s) left out: at most {max} panels.', { count: channels.length - 1 - extra, max: MAX_PANELS }));
     }
+  }
+
+  // ── Studio ────────────────────────────────────────────────
+
+  function _panelSliceResult(panel) {
+    const win = panel.iframe?.contentWindow;
+    if (!win) return null;
+    try {
+      if (win.App2D?.getStudioSliceResult) return win.App2D.getStudioSliceResult();
+      if (win.ViewerApp?.getCurrentSliceResult) return win.ViewerApp.getCurrentSliceResult();
+    } catch (err) {
+      console.warn('[Compare] Panel unavailable for the Studio', panel.index, err);
+    }
+    return null;
   }
 
   async function _openCompareStudio() {
     const grid = document.getElementById('compare-grid');
-    const panels = [...document.querySelectorAll('.compare-panel')];
-    if (!grid || !panels.length || typeof StudioEditor === 'undefined') return;
+    if (!grid || typeof StudioEditor === 'undefined') return;
+    const physical = document.getElementById('studio-scale-mode')?.value === 'physical';
 
     await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
 
-    // ── 1. Collect slice data + dataset names WHILE layout is still visible ──
+    // ── 1. Collect slice data + names WHILE the layout is still visible ──
     const gridRect = grid.getBoundingClientRect();
-    const sliceEntries = [];
-
-    panels.forEach(panel => {
-      const iframe = panel.querySelector('iframe.viewer-frame');
-      const photo = _photoSliceResult(iframe);
-      if (photo) {
-        const rect = panel.getBoundingClientRect();
-        sliceEntries.push({
-          sr: photo, datasetName: panel.querySelector('.panel-title-badge')?.textContent?.trim() || 'Dataset',
-          cx: rect.left + rect.width / 2 - gridRect.left, cy: rect.top + rect.height / 2 - gridRect.top
-        });
-      } else if (iframe?.contentWindow && iframe.contentWindow.VolumeViewer) {
-        try {
-          const sr = iframe.contentWindow.ViewerApp.getCurrentSliceResult();
-          if (sr && sr.canvas) {
-            const rect = panel.getBoundingClientRect();
-            const datasetName = panel.querySelector('.panel-title-badge')?.textContent?.trim() || 'Dataset';
-            sliceEntries.push({
-              sr, datasetName,
-              cx: rect.left + rect.width / 2 - gridRect.left,
-              cy: rect.top + rect.height / 2 - gridRect.top
-            });
-          }
-        } catch (e) {
-          console.error('[Compare] Error getting slice result', e);
-        }
-      }
+    const entries = [];
+    _panels.forEach(panel => {
+      if (!panel.ready) return;
+      const sr = _panelSliceResult(panel);
+      if (!sr?.canvas) return;
+      const rect = panel.el.getBoundingClientRect();
+      entries.push({
+        sr, panel, datasetName: panel.name,
+        cx: rect.left + rect.width / 2 - gridRect.left,
+        cy: rect.top + rect.height / 2 - gridRect.top
+      });
     });
+    if (!entries.length) {
+      _toast(_t('compare.figureNotReady', 'No panel is ready for the Studio yet.'));
+      return;
+    }
 
-    if (!sliceEntries.length) return;
-
-    // ── 2. Hide compare layout ──
+    // ── 2. Hide the compare layout ──
     document.querySelector('.compare-layout')?.classList.add('hidden');
 
-    // ── 3. Determine grid structure (cols × rows) from panel positions ──
+    // ── 3. Grid structure (cols × rows) from the panel positions ──
     const GAP = 6;
-    const LABEL_H = 32; // height for dataset name label above each cell
     const tolerance = gridRect.height * 0.15;
-
-    const sorted = [...sliceEntries].sort((a, b) => a.cy - b.cy);
+    const sorted = [...entries].sort((a, b) => a.cy - b.cy);
     const rows = [];
     sorted.forEach(entry => {
       const lastRow = rows[rows.length - 1];
-      if (lastRow && Math.abs(entry.cy - lastRow[0].cy) < tolerance) {
-        lastRow.push(entry);
-      } else {
-        rows.push([entry]);
-      }
+      if (lastRow && Math.abs(entry.cy - lastRow[0].cy) < tolerance) lastRow.push(entry);
+      else rows.push([entry]);
     });
     rows.forEach(row => row.sort((a, b) => a.cx - b.cx));
-
     const nRows = rows.length;
     const nCols = Math.max(...rows.map(r => r.length));
 
-    // ── 4. Determine cell size ──
+    // ── 4. Cell size ──
+    // Visual size: every slice fits the same cell. Physical scale: every slice is
+    // drawn at ONE µm per canvas pixel — the coarsest of the set, so nothing is
+    // upsampled — and the cell is the largest physical footprint; a scale bar is
+    // then true for every panel at once.
+    // A photograph without a calibration cannot take part in the physical scale:
+    // it is drawn at its visual size and its cell says so.
+    const calibrated = (e) => Number.isFinite(Number(e.sr.pixelSizeUm?.x)) && Number(e.sr.pixelSizeUm.x) > 0;
+    const pxOf = (e) => Math.max(1e-9, Number(e.sr.pixelSizeUm?.x) || 1);
+    const calibratedEntries = entries.filter(calibrated);
+    const targetUmPerPx = physical && calibratedEntries.length ? Math.max(...calibratedEntries.map(pxOf)) : null;
+    const drawSize = (e) => {
+      const srcW = e.sr.canvas.width, srcH = e.sr.canvas.height;
+      if (!physical || !targetUmPerPx || !calibrated(e)) return { w: srcW, h: srcH };
+      const k = pxOf(e) / targetUmPerPx;
+      return { w: Math.max(1, Math.round(srcW * k)), h: Math.max(1, Math.round(srcH * k)) };
+    };
     let maxSliceW = 0, maxSliceH = 0;
-    sliceEntries.forEach(e => {
-      maxSliceW = Math.max(maxSliceW, e.sr.canvas.width);
-      maxSliceH = Math.max(maxSliceH, e.sr.canvas.height);
+    entries.forEach(e => {
+      const s = drawSize(e);
+      maxSliceW = Math.max(maxSliceW, s.w);
+      maxSliceH = Math.max(maxSliceH, s.h);
     });
 
     const MAX_CANVAS = 8192;
     const baseLabelH = Math.max(48, Math.round(maxSliceH * 0.04));
     const baseResLabelH = Math.max(28, Math.round(maxSliceH * 0.035));
-    
-    let neededW = nCols * maxSliceW + (nCols - 1) * GAP;
-    let neededH = nRows * (maxSliceH + baseLabelH + baseResLabelH) + (nRows - 1) * GAP;
-    
+    const neededW = nCols * maxSliceW + (nCols - 1) * GAP;
+    const neededH = nRows * (maxSliceH + baseLabelH + baseResLabelH) + (nRows - 1) * GAP;
     const canvasScale = Math.min(1, MAX_CANVAS / Math.max(neededW, neededH));
-    
+
     const cellW = Math.round(maxSliceW * canvasScale);
     const cellH = Math.round(maxSliceH * canvasScale);
     const labelH = Math.round(baseLabelH * canvasScale);
     const resLabelH = Math.round(baseResLabelH * canvasScale);
 
-    // ── 5. Compose canvas ──
+    // ── 5. Compose ──
     const canvasW = nCols * cellW + (nCols - 1) * GAP;
     const canvasH = nRows * (cellH + labelH + resLabelH) + (nRows - 1) * GAP;
-
     const canvas = document.createElement('canvas');
     canvas.width = canvasW;
     canvas.height = canvasH;
@@ -930,47 +1083,41 @@ const CompareApp = (() => {
     ctx.fillRect(0, 0, canvasW, canvasH);
 
     const layoutMaps = [];
-    let combinedChannelState = [];
+    const combinedChannelState = [];
     let firstPixelSizeUm = { x: 1, y: 1 };
 
     rows.forEach((row, ri) => {
       row.forEach((entry, ci) => {
         const srcW = entry.sr.canvas.width;
         const srcH = entry.sr.canvas.height;
-
         const cellX = ci * (cellW + GAP);
         const cellTopY = ri * (cellH + labelH + resLabelH + GAP);
 
-        // ── Draw label header ──
+        // Label header: dataset name, left-aligned, truncated to the cell
         const fontSize = Math.max(12, Math.round(labelH * 0.45));
         ctx.save();
         ctx.fillStyle = dark ? 'rgba(255,255,255,0.85)' : 'rgba(15,23,42,0.85)';
         ctx.font = `600 ${fontSize}px Inter, Arial, sans-serif`;
         ctx.textBaseline = 'middle';
-
-        // Dataset name (left-aligned)
-        // Truncate based on how much width we actually have
         const charWidthEst = fontSize * 0.6;
         const maxChars = Math.max(10, Math.floor((cellW - 100) / charWidthEst));
-        const nameText = entry.datasetName.length > maxChars
-          ? entry.datasetName.slice(0, maxChars - 3) + '...' : entry.datasetName;
+        const fullName = calibrated(entry) ? entry.datasetName : `${entry.datasetName} — ${_t('compare.uncalibrated', 'uncalibrated')}`;
+        const nameText = fullName.length > maxChars ? fullName.slice(0, maxChars - 3) + '...' : fullName;
         ctx.textAlign = 'left';
         ctx.fillText(nameText, cellX + 4, cellTopY + labelH / 2);
-
         ctx.restore();
 
-        // ── Draw slice (preserve aspect ratio, center in cell) ──
+        // The slice, aspect preserved, centred in its cell
         const drawY = cellTopY + labelH;
-        
-        const scaleToFit = Math.min(cellW / srcW, cellH / srcH);
-        const drawW = Math.round(srcW * scaleToFit);
-        const drawH = Math.round(srcH * scaleToFit);
+        const size = drawSize(entry);
+        const scaleToFit = Math.min(cellW / size.w, cellH / size.h, physical ? canvasScale : Infinity);
+        const drawW = Math.max(1, Math.round(size.w * scaleToFit));
+        const drawH = Math.max(1, Math.round(size.h * scaleToFit));
         const offsetX = Math.round((cellW - drawW) / 2);
         const offsetY = Math.round((cellH - drawH) / 2);
-
         ctx.drawImage(entry.sr.canvas, cellX + offsetX, drawY + offsetY, drawW, drawH);
 
-        // Resolution (bottom-left, below slice cell area)
+        // Resolution, below the cell
         if (srcW && srcH) {
           const resFontSize = Math.max(14, Math.round(cellH * 0.032));
           ctx.save();
@@ -982,84 +1129,71 @@ const CompareApp = (() => {
           ctx.restore();
         }
 
-        const pxScaleX = srcW / drawW;
-        const pxScaleY = srcH / drawH;
+        // The calibration of THIS rectangle of the composite: source µm/px scaled
+        // by how much the source was shrunk to fit — what a scale bar dropped on
+        // this panel reads.
         const pxUm = entry.sr.pixelSizeUm || { x: 1, y: 1 };
-        const scaledPixelSizeUm = { x: pxUm.x * pxScaleX, y: pxUm.y * pxScaleY };
-
+        const scaledPixelSizeUm = { x: (pxUm.x || 1) * (srcW / drawW), y: (pxUm.y || pxUm.x || 1) * (srcH / drawH) };
         if (layoutMaps.length === 0) firstPixelSizeUm = scaledPixelSizeUm;
-
-        // Find the panel/iframe for this entry to pass VolumeSlicer if needed
-        const panelEl = Array.from(panels).find(p => {
-          return (p.querySelector('.panel-title-badge')?.textContent?.trim() || 'Dataset') === entry.datasetName;
-        });
-        const iframe = panelEl ? panelEl.querySelector('iframe.viewer-frame') : null;
 
         layoutMaps.push({
           x: cellX + offsetX, y: drawY + offsetY, w: drawW, h: drawH,
           pixelSizeUm: scaledPixelSizeUm,
+          calibrated: calibrated(entry),
           channelState: entry.sr.channelState || [],
           raw: entry.sr.raw || null,
           sourceWidth: srcW,
           sourceHeight: srcH,
-          iframe: iframe,
+          iframe: entry.panel.iframe,
           sliceResult: entry.sr
         });
-
-        if (entry.sr.channelState) {
-          combinedChannelState.push(...entry.sr.channelState);
-        }
+        if (entry.sr.channelState) combinedChannelState.push(...entry.sr.channelState);
       });
     });
 
-    // ── 6. Open Studio ──
+    // ── 6. Open ──
     StudioEditor.open({
       canvas, width: canvasW, height: canvasH,
       source: 'compare',
       pixelSizeUm: firstPixelSizeUm,
       layoutMaps,
-      channelState: combinedChannelState
+      channelState: combinedChannelState,
+      dataset: { name: entries.map(e => e.datasetName).join(' vs ') }
     });
   }
 
-  /** A photograph pane as a slice result: its native rendering, µm/px isotropic. */
-  function _photoSliceResult(iframe) {
-    const win = iframe?.contentWindow;
-    if (!win || !win.Viewer2D) return null;
-    try {
-      const canvas = win.Viewer2D.getNativeCanvas();
-      if (!canvas) return null;
-      const px = win.Viewer2D.getPixelSizeUm() || 1;
-      return { canvas, width: canvas.width, height: canvas.height, source: '2d', quality: 'native',
-        pixelSizeUm: { x: px, y: px }, channelState: [] };
-    } catch (err) {
-      console.warn('[Compare] 2D pane unavailable for the Studio', err);
-      return null;
-    }
+  // ── Figure export (what is on screen, as one image) ───────
+
+  function _getCompareExports() {
+    const hasPanels = _panels.some(p => p.ready);
+    const disabledTitle = _t('compare.needPanel', 'Add at least one panel first');
+    return [
+      { action: 'compare-figure-png', icon: 'layout-grid', label: _t('compare.figurePng', 'Compare PNG'), enabled: hasPanels, disabledTitle, handler: () => _exportCompareFigure('png') },
+      { action: 'compare-figure-webp', icon: 'layout-grid', label: _t('compare.figureWebp', 'Compare WEBP'), enabled: hasPanels, disabledTitle, handler: () => _exportCompareFigure('webp') }
+    ];
   }
 
   async function _exportCompareFigure(format = 'png') {
     try {
       const result = await _composeCompareFigure(format);
       if (!result?.blob) {
-        ExportManager?.toast?.('Compare figure export is not ready yet');
+        _toast(_t('compare.figureNotReady', 'No panel is ready for the Studio yet.'));
         return null;
       }
       const suffix = format === 'webp' ? 'webp' : 'png';
       ExportManager.downloadBlob(result.blob, `${_safeName(_figureName())}_compare.${suffix}`);
-      ExportManager?.toast?.('Compare figure exported');
+      _toast(_t('compare.figureExported', 'Compare figure exported'));
       return result;
     } catch (err) {
       console.error('[Compare] Figure export failed', err);
-      ExportManager?.toast?.('Compare figure export failed');
+      _toast(_t('compare.figureFailed', 'Compare figure export failed'));
       return null;
     }
   }
 
   async function _composeCompareFigure(format = 'png') {
     const grid = document.getElementById('compare-grid');
-    const panels = [...document.querySelectorAll('.compare-panel')];
-    if (!grid || !panels.length) return null;
+    if (!grid || !_panels.length) return null;
 
     await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
 
@@ -1079,42 +1213,77 @@ const CompareApp = (() => {
     ctx.fillStyle = dark ? '#05070b' : '#ffffff';
     ctx.fillRect(0, 0, width, height);
 
-    panels.forEach(panel => {
-      const rect = panel.getBoundingClientRect();
+    _panels.forEach(panel => {
+      const rect = panel.el.getBoundingClientRect();
       const x = Math.round((rect.left - gridRect.left) * scale);
       const y = Math.round((rect.top - gridRect.top) * scale);
       const w = Math.round(rect.width * scale);
       const h = Math.round(rect.height * scale);
-      const iframe = panel.querySelector('iframe.viewer-frame');
-      const title = panel.querySelector('.panel-title-badge')?.textContent?.trim() || 'Panel';
+      const title = panel.name || _t('compare.panel', 'Panel');
 
       ctx.fillStyle = dark ? '#111827' : '#f8fafc';
       ctx.fillRect(x, y, w, h);
-      const drewCanvas = _drawIframeCanvas(ctx, iframe, x, y, w, h);
-      if (!drewCanvas) {
+      if (!_drawPanelCanvas(ctx, panel, x, y, w, h)) {
         fallbackPanels++;
         _drawPanelFallback(ctx, title, x, y, w, h, scale, dark);
       }
-      _drawPanelLabel(ctx, title, x, y, w, scale);
+      _drawPanelLabel(ctx, title, x, y, w, scale, dark);
     });
 
     _drawFigureStamp(ctx, width, height, scale, dark);
     const mime = format === 'webp' ? 'image/webp' : 'image/png';
     const blob = await new Promise(resolve => canvas.toBlob(resolve, mime, 0.95));
-    return { blob, width, height, panelCount: panels.length, fallbackPanels, mime };
+    return { blob, width, height, panelCount: _panels.length, fallbackPanels, mime };
   }
 
-  function _drawIframeCanvas(ctx, iframe, x, y, w, h) {
-    if (!iframe?.contentDocument) return false;
-    const source = iframe.contentDocument.querySelector('#webgl-canvas')
-      || iframe.contentDocument.querySelector('canvas');
+  /** The canvas a panel is showing: the slice overlay when a sibling's cut plane
+   *  is mirrored, the WebGL canvas of a volume, the 2D canvas of a photograph. */
+  function _visiblePanelCanvas(panel) {
+    const doc = panel.iframe?.contentDocument;
+    if (!doc) return null;
+    const overlay = doc.getElementById('slicer-sync-overlay');
+    if (overlay && overlay.style.display !== 'none') {
+      const c = doc.getElementById('slicer-sync-canvas');
+      if (c?.width && c?.height) return c;
+    }
+    return doc.getElementById('webgl-canvas') || doc.getElementById('p2d-canvas') || doc.querySelector('canvas');
+  }
+
+  function _drawPanelCanvas(ctx, panel, x, y, w, h) {
+    const source = _visiblePanelCanvas(panel);
     if (!source || !source.width || !source.height) return false;
     if (_sampleCanvasNonzero(source) <= 16) return false;
     try {
-      ctx.drawImage(source, x, y, w, h);
+      // Letterbox: the panel and its canvas share an aspect ratio, but a frame
+      // mid-resize may not — never stretch the science.
+      const k = Math.min(w / source.width, h / source.height);
+      const dw = Math.max(1, Math.round(source.width * k));
+      const dh = Math.max(1, Math.round(source.height * k));
+      ctx.drawImage(source, x + Math.round((w - dw) / 2), y + Math.round((h - dh) / 2), dw, dh);
       return true;
     } catch (err) {
       return false;
+    }
+  }
+
+  function _sampleCanvasNonzero(source) {
+    try {
+      const probe = document.createElement('canvas');
+      probe.width = 48;
+      probe.height = 48;
+      const ctx = probe.getContext('2d', { willReadFrequently: true });
+      if (!ctx) return 0;
+      ctx.clearRect(0, 0, probe.width, probe.height);
+      ctx.drawImage(source, 0, 0, probe.width, probe.height);
+      const data = ctx.getImageData(0, 0, probe.width, probe.height).data;
+      let nonzero = 0;
+      for (let i = 0; i < data.length; i += 4) {
+        const rgb = data[i] + data[i + 1] + data[i + 2];
+        if (rgb > 12 || data[i + 3] > 12) nonzero++;
+      }
+      return nonzero;
+    } catch (err) {
+      return 0;
     }
   }
 
@@ -1126,27 +1295,26 @@ const CompareApp = (() => {
     ctx.fillStyle = dark ? 'rgba(255,255,255,0.72)' : 'rgba(15,23,42,0.72)';
     ctx.font = `${Math.round(13 * scale)}px Inter, Arial, sans-serif`;
     ctx.textAlign = 'center';
-    ctx.fillText(`${title} not ready`, x + w / 2, y + h / 2);
+    ctx.fillText(_t('compare.notReady', '{name} not ready', { name: title }), x + w / 2, y + h / 2);
     ctx.restore();
   }
 
-  function _drawPanelLabel(ctx, title, x, y, w, scale) {
+  function _drawPanelLabel(ctx, title, x, y, w, scale, dark = true) {
     const label = title.length > 72 ? `${title.slice(0, 69)}...` : title;
     ctx.save();
     ctx.font = `${Math.round(12 * scale)}px Inter, Arial, sans-serif`;
     const padX = 10 * scale;
-    const padY = 6 * scale;
     const textW = Math.min(ctx.measureText(label).width, Math.max(1, w - 24 * scale));
     const boxW = textW + padX * 2;
     const boxH = 26 * scale;
     const bx = x + 12 * scale;
     const by = y + 12 * scale;
     _roundRect(ctx, bx, by, Math.min(boxW, Math.max(1, w - 24 * scale)), boxH, 8 * scale);
-    ctx.fillStyle = 'rgba(5, 8, 12, 0.78)';
+    ctx.fillStyle = dark ? 'rgba(5, 8, 12, 0.78)' : 'rgba(255, 255, 255, 0.85)';
     ctx.fill();
-    ctx.strokeStyle = 'rgba(255, 255, 255, 0.18)';
+    ctx.strokeStyle = dark ? 'rgba(255, 255, 255, 0.18)' : 'rgba(15, 23, 42, 0.18)';
     ctx.stroke();
-    ctx.fillStyle = '#ffffff';
+    ctx.fillStyle = dark ? '#ffffff' : '#0f172a';
     ctx.textBaseline = 'middle';
     ctx.fillText(label, bx + padX, by + boxH / 2, Math.max(1, w - 44 * scale));
     ctx.restore();
@@ -1158,7 +1326,9 @@ const CompareApp = (() => {
     ctx.font = `${Math.round(10 * scale)}px Inter, Arial, sans-serif`;
     ctx.textAlign = 'right';
     ctx.textBaseline = 'bottom';
-    const stamp = `IRIBHM compare | ${new Date().toISOString().slice(0, 19).replace('T', ' ')}`;
+    // The instance's own name (white-label), never a hardcoded brand.
+    const brand = (typeof InstanceConfig !== 'undefined' && InstanceConfig.get) ? InstanceConfig.get('brand.name', 'Lumen3D') : 'Lumen3D';
+    const stamp = `${brand} · ${_t('compare.title', 'Comparison Mode')} · ${new Date().toISOString().slice(0, 19).replace('T', ' ')}`;
     ctx.fillText(stamp, width - 12 * scale, height - 10 * scale);
     ctx.restore();
   }
@@ -1183,7 +1353,7 @@ const CompareApp = (() => {
   }
 
   function _figureName() {
-    const ids = _activePanels.map(panel => panel.id).slice(0, 4);
+    const ids = _panels.map(panel => panel.id).slice(0, 4);
     return ids.length ? ids.join('_vs_') : 'compare';
   }
 
@@ -1191,11 +1361,16 @@ const CompareApp = (() => {
     return String(value || 'compare').replace(/[^a-z0-9._-]+/gi, '_').replace(/^_+|_+$/g, '').slice(0, 140);
   }
 
-  // i18n helper: resolve key (with optional {params}), else the literal default.
-  const _t = (k, def, params) => {
-    const v = (window.I18n && I18n.t) ? I18n.t(k, params) : k;
-    return v === k ? def : v;
-  };
+  // ── Helpers ───────────────────────────────────────────────
+
+  // Resolve a key (with optional {params}), else the literal default with the
+  // same params applied, so a page without a dictionary still reads well.
+  function _t(key, def, params) {
+    let v = (typeof I18n !== 'undefined' && I18n.t) ? I18n.t(key, params) : key;
+    if (v === key || v == null) v = def != null ? def : key;
+    if (params && typeof v === 'string') v = v.replace(/\{(\w+)\}/g, (m, k) => (params[k] != null ? String(params[k]) : m));
+    return v;
+  }
 
   function _toast(text) {
     if (typeof ExportManager !== 'undefined' && typeof ExportManager.toast === 'function') {
@@ -1205,138 +1380,72 @@ const CompareApp = (() => {
     console.warn(`[Compare] ${text}`);
   }
 
-  function _getWorkspaceState() {
-    let allReady = true;
-    const iframeStates = _activePanels.map(panel => {
-      const iframe = document.querySelector(`iframe[data-index="${panel.index}"]`);
-      if (iframe && iframe.contentWindow && iframe.contentWindow.ViewerApp?.getWorkspaceState) {
-        const st = iframe.contentWindow.ViewerApp.getWorkspaceState();
-        console.log('[Compare] iframe', panel.index, 'getWorkspaceState result:', {
-          hasViewer: !!st?.viewer,
-          cameraZ: st?.viewer?.camera?.cameraZ,
-          measureCount: st?.viewer?.measurements?.length
-        });
-        return st;
-      }
-      allReady = false;
-      return null;
-    });
+  // ── Workspace ─────────────────────────────────────────────
 
-    if (!allReady) {
-      console.log('[Compare] _getWorkspaceState: not all iframes ready, returning null');
-      return null;
+  function _panelState(panel) {
+    if (!panel.ready) return null;
+    const win = panel.iframe?.contentWindow;
+    if (!win) return null;
+    try {
+      const state = win.ViewerApp?.getWorkspaceState ? win.ViewerApp.getWorkspaceState()
+        : (win.App2D?.getWorkspaceState ? win.App2D.getWorkspaceState() : null);
+      if (state?.viewer && 'cache' in state.viewer) {
+        // The brick cache fills on its own while a volume streams; left in, it
+        // would re-stamp the URL every second. It is telemetry, not workspace.
+        const { cache, ...viewer } = state.viewer;
+        return { ...state, viewer };
+      }
+      return state;
+    } catch (err) {
+      console.warn('[Compare] Panel state unavailable', panel.index, err);
     }
+    return null;
+  }
+
+  function _getWorkspaceState() {
+    if (!_panels.length) {
+      return { ui: { panelCount: 0 }, compare: { panels: [], layoutMode: _layoutMode, sync: { ..._syncOptions }, tool: _tool, quality: _qualityMode } };
+    }
+    const iframeStates = _panels.map(_panelState);
+    // Half a comparison is not a workspace: wait for every panel.
+    if (iframeStates.some(s => s === null)) return null;
 
     return {
-      ui: {
-        panelCount: _activePanels.length
-      },
+      ui: { panelCount: _panels.length },
       compare: {
-        panels: _activePanels.map(panel => panel.id),
+        panels: _panels.map(panel => panel.id),
+        panelTypes: _panels.map(panel => panel.type),
         layoutMode: _layoutMode,
         layoutWeights: JSON.parse(JSON.stringify(_layoutWeights)),
         sync: { ..._syncOptions },
-        // Save z-stack state per panel at compare level (not from iframe state)
-        // to avoid cross-contamination between panels on restore.
-        // Include slice so the exact z-stack position is restored.
-        panelZstackStates: _activePanels.map((panel, i) => ({
-          active: _panelZstackActive.get(panel.index) || false,
-          slice:  iframeStates[i]?.viewer?.zstackSlice || 0
+        tool: _tool,
+        quality: _qualityMode,
+        // The z-stack browser is driven from here, so its open state is recorded
+        // here too; the cursor comes from the panel (−1 in the 3D notch).
+        panelZstackStates: _panels.map((panel, i) => ({
+          active: panel.zstackActive,
+          slice: Number.isFinite(iframeStates[i]?.viewer?.zstackSlice) ? iframeStates[i].viewer.zstackSlice : 0
         })),
-        // Solo channel per panel for decompose-by-channel mode (null = not decomposed)
-        panelSoloChannels: _activePanels.map(panel => _panelSoloChannel.get(panel.index) ?? null),
-        iframeStates: iframeStates
+        panelSoloChannels: _panels.map(panel => panel.soloChannel),
+        iframeStates
       }
     };
   }
 
   function _applyWorkspaceState(state = {}) {
     const compareState = state.compare && Object.keys(state.compare).length ? state.compare : state;
-    document.querySelectorAll('.compare-panel').forEach(panel => panel.remove());
-    _activePanels = [];
-    _panelLoadQueue = [];
-    _highDetailQueue = [];
-    _panelQualityState = new Map();
-    _activePanelLoads = 0;
-    _activeHighDetailLoads = 0;
-    
-    const iframeStates = compareState.iframeStates || [];
-    console.log('[Compare] _applyWorkspaceState: panels=', compareState.panels, 'iframeStates count=', iframeStates.length, 'first has camera?', !!iframeStates[0]?.viewer?.camera);
-    (compareState.panels || []).slice(0, MAX_PANELS).forEach((id, i) => {
-      _addPanel(id);
-      const panelInfo = _activePanels[_activePanels.length - 1];
-      const iframe = document.querySelector(`iframe[data-index="${panelInfo.index}"]`);
+    [..._panels].forEach(panel => _removePanel(panel.index));
+    _loadQueue = [];
+    _qualityQueue = [];
+    _qualityBusy = null;
 
-      // Restore z-stack state via TOGGLE_ZSTACK (keeps compare.js _panelZstackActive in sync)
-      const zstackEntry = Array.isArray(compareState.panelZstackStates)
-        ? compareState.panelZstackStates[i]
-        : null;
-      // Support both legacy boolean format and new {active, slice} format
-      const savedZstackActive = typeof zstackEntry === 'boolean' ? zstackEntry
-        : (zstackEntry?.active || false);
-      const savedZstackSlice  = typeof zstackEntry === 'object' ? (zstackEntry?.slice || 0) : 0;
-      if (savedZstackActive) {
-        _panelZstackActive.set(panelInfo.index, true);
-        // Update button styling
-        const zBtn = document.querySelector(`.btn-toggle-zstack[data-index="${panelInfo.index}"]`);
-        if (zBtn) { zBtn.classList.add('btn-solid'); zBtn.classList.remove('btn-ghost'); }
-      }
-
-      // Restore decompose-by-channel solo assignment
-      const savedSoloChannel = Array.isArray(compareState.panelSoloChannels)
-        ? (compareState.panelSoloChannels[i] ?? null)
-        : null;
-      if (savedSoloChannel !== null) {
-        _panelSoloChannel.set(panelInfo.index, savedSoloChannel);
-      }
-
-      if (iframe && iframeStates[i]) {
-        const stateToSend = iframeStates[i];
-        let sent = false;
-        const trySend = () => {
-          if (sent) return;
-          if (iframe.contentWindow) {
-            console.log('[Compare] Sending APPLY_WORKSPACE_STATE to iframe', panelInfo.index, 'camera:', stateToSend?.viewer?.camera?.cameraZ, 'measures:', stateToSend?.viewer?.measurements?.length);
-            iframe.contentWindow.postMessage({ type: 'APPLY_WORKSPACE_STATE', state: stateToSend }, '*');
-            // Restore z-stack state — compare.js is the authority for this
-            if (savedZstackActive) {
-              iframe.contentWindow.postMessage({ type: 'TOGGLE_ZSTACK', state: true, slice: savedZstackSlice }, '*');
-            }
-            // Restore solo channel for decompose panels
-            if (savedSoloChannel !== null) {
-              iframe.contentWindow.postMessage({ type: 'SET_CHANNEL_ACTIVE', channelIndex: savedSoloChannel }, '*');
-            }
-            sent = true;
-          }
-        };
-        // Primary: listen for load event
-        iframe.addEventListener('load', trySend);
-        // Fallback: poll every 500ms in case load already fired
-        const pollId = setInterval(() => {
-          if (sent) { clearInterval(pollId); return; }
-          // Check if iframe has ViewerApp loaded (meaning scripts ran)
-          try {
-            if (iframe.contentWindow && iframe.contentWindow.ViewerApp) {
-              console.log('[Compare] Fallback poll detected ViewerApp ready in iframe', panelInfo.index);
-              trySend();
-              clearInterval(pollId);
-            }
-          } catch (e) { /* cross-origin, ignore */ }
-        }, 500);
-        // Safety: stop polling after 30s
-        setTimeout(() => clearInterval(pollId), 30000);
-      }
-    });
     if (compareState.layoutMode) {
       _layoutMode = compareState.layoutMode;
       const select = document.getElementById('compare-layout-mode');
       if (select) select.value = _layoutMode;
     }
     if (compareState.layoutWeights) {
-      _layoutWeights = {
-        ..._layoutWeights,
-        ...JSON.parse(JSON.stringify(compareState.layoutWeights))
-      };
+      _layoutWeights = { ..._layoutWeights, ...JSON.parse(JSON.stringify(compareState.layoutWeights)) };
     }
     if (compareState.sync) {
       _syncOptions = { ..._syncOptions, ...compareState.sync };
@@ -1345,6 +1454,27 @@ const CompareApp = (() => {
         if (cb) cb.checked = Boolean(value);
       });
     }
+    if (compareState.quality) {
+      _qualityMode = compareState.quality;
+      const select = document.getElementById('compare-quality');
+      if (select) select.value = _qualityMode;
+    }
+    _tool = compareState.tool || 'navigate';
+    _syncToolChips();
+
+    const iframeStates = Array.isArray(compareState.iframeStates) ? compareState.iframeStates : [];
+    (compareState.panels || []).slice(0, MAX_PANELS).forEach((id, i) => {
+      const zEntry = Array.isArray(compareState.panelZstackStates) ? compareState.panelZstackStates[i] : null;
+      // Both the legacy boolean and the {active, slice} shape restore.
+      const zActive = typeof zEntry === 'boolean' ? zEntry : Boolean(zEntry?.active);
+      const zSlice = zEntry && typeof zEntry === 'object' && Number.isFinite(zEntry.slice) ? zEntry.slice : 0;
+      const solo = Array.isArray(compareState.panelSoloChannels) ? compareState.panelSoloChannels[i] : null;
+      _addPanel(id, {
+        state: iframeStates[i] || null,
+        zstack: zActive ? { slice: zSlice } : null,
+        soloChannel: Number.isInteger(solo) ? solo : null
+      });
+    });
     _updateLayout();
   }
 
@@ -1359,12 +1489,11 @@ const CompareApp = (() => {
   };
 })();
 
+// The language menu is generated from the discovered locales (Utils.populateLanguageMenu).
+window.switchLanguage = window.switchLanguage || async function switchLanguage(lang) {
+  await I18n.setLanguage(lang);
+  Utils.closeDropdowns();
+  Utils.populateLanguageMenu(window.switchLanguage);
+};
+
 document.addEventListener('DOMContentLoaded', CompareApp.init);
-
-
-
-
-
-
-
-

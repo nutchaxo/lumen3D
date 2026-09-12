@@ -120,6 +120,35 @@ const PluginRegistry = (() => {
     });
   }
 
+  // ─── Hosting contexts ─────────────────────────────────────
+  // A page hosts a plugin in one of two contexts, and `contexts` in plugin.json
+  // says which the plugin was written for:
+  //   'page'  — the standalone viewer / 2D page, with its own header and toolbar;
+  //   'panel' — that same page embedded chrome-less by a host (a Compare panel,
+  //             a split-view pane, the admin preview): no toolbar of its own, the
+  //             host drives it by postMessage and shows the buttons it asks for.
+  // A plugin declaring nothing predates the field and is taken on a page only:
+  // an embedded page never runs a plugin that did not say it copes with being
+  // driven from outside (a nested split view, a fullscreen request, a modal in a
+  // 300 px panel). The vocabulary is closed and is the one plugin.json uses.
+  const CONTEXTS = ['page', 'panel'];
+
+  function _acceptsContext(meta, context) {
+    if (!context) return true;
+    const declared = Array.isArray(meta.contexts) ? meta.contexts : null;
+    if (context === 'page') return !declared || declared.includes('page');
+    return Boolean(declared && declared.includes(context));
+  }
+
+  function _warnUnknownContexts(meta, modPath) {
+    if (!Array.isArray(meta.contexts)) return;
+    meta.contexts.forEach(declared => {
+      if (!CONTEXTS.includes(declared)) {
+        console.warn(`[PluginRegistry] "${modPath}" declares contexts "${declared}", which is not a hosting context (${CONTEXTS.join(', ')}); it will never match a page.`);
+      }
+    });
+  }
+
   // A discovery entry is "rich" — a full plugin.json safe to use without a
   // separate fetch — only when it carries fields the {path,placement,id} manifest
   // triple never has. `name` is mandatory in every plugin.json; never trust the
@@ -292,6 +321,13 @@ const PluginRegistry = (() => {
         _warnUnknownDataTypes(meta, modPath);
         if (opts.dataType && !_acceptsDataType(meta, opts.dataType, opts.allowUndeclaredDataTypes)) {
           console.info(`[PluginRegistry] "${modPath}" left out: its dataTypes do not cover "${opts.dataType}"`);
+          return;
+        }
+        // Context gate, same shape: an embedded page (opts.context 'panel') keeps
+        // only the plugins that declared they can be driven from outside.
+        _warnUnknownContexts(meta, modPath);
+        if (opts.context && !_acceptsContext(meta, opts.context)) {
+          console.info(`[PluginRegistry] "${modPath}" left out: its contexts do not cover "${opts.context}"`);
           return;
         }
 
@@ -721,20 +757,76 @@ const PluginRegistry = (() => {
   function syncToolbarButton(id, result = {}) {
     const selector = window.CSS && CSS.escape ? CSS.escape(id) : id;
     const btn = document.querySelector(`[data-plugin-id="${selector}"]`);
-    if (!btn) return;
-    if (typeof result.active === 'boolean') {
-      btn.classList.toggle('btn-solid', result.active);
-      btn.classList.toggle('btn-ghost', !result.active);
-    }
-    if (result.icon) {
-      const iconEl = btn.querySelector('i[data-lucide], svg');
-      if (iconEl) {
-        const glyph = document.createElement('i');
-        glyph.setAttribute('data-lucide', result.icon);
-        iconEl.replaceWith(glyph);
-        if (window.lucide) lucide.createIcons({ nodes: [btn] });
+    if (btn) {
+      if (typeof result.active === 'boolean') {
+        btn.classList.toggle('btn-solid', result.active);
+        btn.classList.toggle('btn-ghost', !result.active);
+      }
+      if (result.icon) {
+        const iconEl = btn.querySelector('i[data-lucide], svg');
+        if (iconEl) {
+          const glyph = document.createElement('i');
+          glyph.setAttribute('data-lucide', result.icon);
+          iconEl.replaceWith(glyph);
+          if (window.lucide) lucide.createIcons({ nodes: [btn] });
+        }
       }
     }
+    if (typeof result.active === 'boolean' || result.icon) {
+      _toolbarStateListeners.forEach(fn => {
+        try { fn({ id, active: result.active, icon: result.icon || null }); }
+        catch (err) { console.warn('[PluginRegistry] toolbar-state listener failed:', err); }
+      });
+    }
+  }
+
+  // A host page embedding this one (Compare) draws the buttons of the plugins that
+  // accepted the 'panel' context itself; it needs to know when one lights up.
+  let _toolbarStateListeners = [];
+  function onToolbarState(fn) {
+    if (typeof fn !== 'function') return () => {};
+    _toolbarStateListeners.push(fn);
+    return () => { _toolbarStateListeners = _toolbarStateListeners.filter(f => f !== fn); };
+  }
+
+  /**
+   * What the generated toolbar offers, for a host that cannot see it: the
+   * exclusive tools (chips the ToolManager multiplexes) and the toggles, in
+   * toolbar order, with the `requires` visibility already decided and the
+   * on/off state read back from the button itself. Actions (an export, a modal)
+   * are left out on purpose — the host has its own.
+   * @returns {{tools: Array, toggles: Array}}
+   */
+  function describeToolbar() {
+    const tools = [];
+    const toggles = [];
+    const esc = (v) => (window.CSS && CSS.escape ? CSS.escape(v) : v);
+    for (const meta of listByPlacement('tools')) {
+      const entry = _modules.get(meta.id);
+      if (!entry || !entry.impl || entry.state === 'quarantined' || entry.state === 'disposed') continue;
+      const btn = meta.subtype === 'tool'
+        ? document.querySelector(`[data-plugin-generated][data-tool="${esc(meta.tool || meta.id)}"]`)
+        : document.querySelector(`[data-plugin-id="${esc(meta.id)}"]`);
+      if (!btn || btn.style.display === 'none') continue;
+      const base = {
+        id: meta.id,
+        icon: meta.icon || 'square',
+        title: btn.title || meta.name || meta.id,
+        group: meta.group || '',
+        order: Number.isFinite(meta.order) ? meta.order : 999
+      };
+      if (meta.subtype === 'tool') {
+        tools.push({ ...base, tool: meta.tool || meta.id, shortcut: meta.shortcut || null });
+      } else if (meta.subtype === 'toggle') {
+        const glyph = btn.querySelector('i[data-lucide]');
+        toggles.push({
+          ...base,
+          active: btn.classList.contains('btn-solid'),
+          icon: (glyph && glyph.getAttribute('data-lucide')) || base.icon
+        });
+      }
+    }
+    return { tools, toggles };
   }
 
   /**
@@ -883,17 +975,10 @@ const PluginRegistry = (() => {
 
       btn.addEventListener('click', () => {
         const result = activate(pluginId);
-        // Update visual state for toggles
+        // Update visual state for toggles (one path with syncToolbarButton, so a
+        // host page embedding this one hears about it the same way).
         if (meta.subtype === 'toggle' && result) {
-          btn.classList.toggle('btn-solid', !!result.active);
-          btn.classList.toggle('btn-ghost', !result.active);
-          if (result.icon) {
-            const iconEl = btn.querySelector('i[data-lucide]');
-            if (iconEl) {
-              iconEl.setAttribute('data-lucide', result.icon);
-              if (window.lucide) lucide.createIcons({ nodes: [btn] });
-            }
-          }
+          syncToolbarButton(pluginId, { active: !!result.active, icon: result.icon });
         }
       });
     });
@@ -1009,6 +1094,9 @@ const PluginRegistry = (() => {
     collect,
     ensureNoncedStyle,
     syncToolbarButton,
+    onToolbarState,
+    describeToolbar,
+    CONTEXTS,
     bindToolbarButtons,
     disposeAll,
     startTrustWatch,

@@ -37,7 +37,10 @@ const count = (s, re) => (s.match(re) || []).length;
   const v = read('js/pages/viewer.js');
   // SEC-012: no wildcard targetOrigin remains; outbound posts use the helper
   assert.equal(count(v, /window\.parent\.postMessage\([^;]*, '\*'\)/g), 0, 'SEC-012: no wildcard window.parent.postMessage');
-  assert.ok(count(v, /Utils\.trustedTargetOrigin\(\)/g) >= 12, 'SEC-012: outbound posts use trustedTargetOrigin');
+  // Most panel→host posts now go through _postToHost, which is the one place the
+  // origin is written; the direct posts that remain must still use the helper.
+  assert.ok(/function _postToHost[^]*?Utils\.trustedTargetOrigin\(\)/.test(v), 'SEC-012: _postToHost posts to the page origin');
+  assert.ok(count(v, /Utils\.trustedTargetOrigin\(\)/g) >= 8, 'SEC-012: outbound posts use trustedTargetOrigin');
 
   // DEAD-001: each function defined exactly once
   for (const fn of ['_lodForQuality', '_qualityDimsLabel', '_qualityDims', '_bindVolumeControls', '_bindZScaleControls']) {

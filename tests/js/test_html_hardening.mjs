@@ -32,13 +32,13 @@ const read = (rel) => readFileSync(path.join(ROOT, rel), 'utf8');
   assert.ok(!/<script[^>]*three\.module\.js/.test(s), 'DEAD-008: unused three.module.js <script> removed');
 }
 
-// BUG-059
+// BUG-059 (then v1.6.0 CSP): the inline Theme/ColorBlind handlers are gone for
+// good — the header controls bind through data-action (js/core/ui-actions.js).
 for (const f of ['about.html', 'compare.html', 'explorer.html']) {
   const s = read(f);
-  assert.ok(!/onclick="Theme\.toggle\(\)"/.test(s) && !/onclick="ColorBlind\.openModal\(\)"/.test(s),
-    `BUG-059: ${f} has no unguarded inline Theme/ColorBlind handler`);
-  assert.ok(/onclick="window\.Theme && Theme\.toggle\(\)"/.test(s) && /onclick="window\.ColorBlind && ColorBlind\.openModal\(\)"/.test(s),
-    `BUG-059: ${f} guards the inline handlers with a window presence check`);
+  assert.ok(!/onclick=/.test(s), `BUG-059/CSP: ${f} has no inline handler`);
+  assert.ok(/data-action="theme-toggle"/.test(s) && /data-action="colorblind"/.test(s),
+    `BUG-059/CSP: ${f} binds theme and colorblind through data-action`);
 }
 
 console.log('HTML hardening (SEC-022, DEAD-024/008, BUG-059): OK');

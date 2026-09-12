@@ -268,10 +268,9 @@ PluginRegistry.implement('zstack-browser', {
   // ── Private: DOM ──────────────────────────────────────────
 
   _syncButton(active) {
-    const btn = document.getElementById('btn-toggle-zstack');
-    if (!btn) return;
-    btn.classList.toggle('btn-solid', active);
-    btn.classList.toggle('btn-ghost', !active);
+    // Through the registry, so a host page drawing this button itself (Compare)
+    // hears the change like any other toggle.
+    PluginRegistry.syncToolbarButton?.('zstack-browser', { active: Boolean(active) });
   },
 
   _bindControls() {
@@ -480,6 +479,10 @@ PluginRegistry.implement('zstack-browser', {
       if (this._viewLocked) { v.setRotationLocked(false); this._viewLocked = false; }
       v.resetClipping();
       this._ctx._state.zstackCurrentSlice = 0;
+      // The siblings that followed us into the stack follow us out of it.
+      if (this._ctx.iframe.isIframe() && !this._ctx._state.suppressZstackSync) {
+        this._ctx.iframe.postMessage({ type: 'SYNC_ZSTACK_SLICE', mode: 'off', sourceIndex: this._ctx.iframe.panelIndex() });
+      }
     }
     this._ctx.ui.scheduleResize();
   },

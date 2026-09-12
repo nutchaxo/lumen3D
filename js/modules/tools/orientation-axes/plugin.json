@@ -1,8 +1,12 @@
 {
   "id": "orientation-axes",
   "name": "Orientation Axes",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "platformCompat": "1.x",
+  "contexts": [
+    "page",
+    "panel"
+  ],
   "creator": "IRIBHM",
   "placement": "tools",
   "group": "visuals",

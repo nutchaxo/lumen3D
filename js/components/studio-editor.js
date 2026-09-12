@@ -69,6 +69,9 @@ const StudioEditor = (() => {
   let _future = [];
   let _studioHistograms = [];
   let _activeStudioPanelIndex = 0;
+  // The channel widget replays every channel through its change callback while it
+  // seeds itself. Those notifications are not operator edits and must not write back.
+  let _channelsSeeding = false;
   let _progressEl = null;
   let _progressOnCancel = null;
 
@@ -103,6 +106,8 @@ const StudioEditor = (() => {
     _future = [];
     _selectedId = null;
     _activeTool = 'select';
+    // A previous session may have left the index on a cell this document has not got.
+    _activeStudioPanelIndex = 0;
     _isOpen = true;
     _container.classList.remove('hidden');
     _resizeCanvas();
@@ -266,7 +271,7 @@ const StudioEditor = (() => {
     });
     document.getElementById('btn-studio-reset-view')?.addEventListener('click', () => {
       _fitImageToViewport();
-      _draw();
+      _viewportChanged();
     });
     document.getElementById('btn-studio-export-png')?.addEventListener('click', _exportPng);
     document.getElementById('btn-studio-export-json')?.addEventListener('click', _exportJson);
@@ -338,13 +343,13 @@ const StudioEditor = (() => {
         const slider = document.getElementById('studio-rotation-slider');
         if (slider) slider.value = 0;
         document.getElementById('studio-rotation-val').textContent = '0 deg';
-        _draw();
+        _viewportChanged();
       });
       document.getElementById('studio-rotation-slider')?.addEventListener('input', (event) => {
         if (!_doc) return;
         _doc.viewport.rotation = (Number(event.target.value) || 0) * Math.PI / 180;
         document.getElementById('studio-rotation-val').textContent = `${event.target.value} deg`;
-        _draw();
+        _viewportChanged();
       });
     }
     if (window.lucide) lucide.createIcons();
@@ -388,7 +393,7 @@ const StudioEditor = (() => {
     const rect = parent?.getBoundingClientRect();
     _canvas.width = Math.max(1, Math.floor(rect?.width || window.innerWidth));
     _canvas.height = Math.max(1, Math.floor(rect?.height || window.innerHeight));
-    _draw();
+    _viewportChanged();
   }
 
   function _fitImageToViewport() {
@@ -418,10 +423,23 @@ const StudioEditor = (() => {
     if (window.lucide) lucide.createIcons();
   }
 
+  function _activePanelIndex() {
+    return Math.max(0, Math.min(_activeStudioPanelIndex, (_doc?.layoutMaps?.length || 1) - 1));
+  }
+
+  // The per-cell buttons are absolutely positioned from the viewport transform, so
+  // every change of that transform has to move them. Kept out of _draw(): this
+  // rebuilds DOM, _draw() runs per pointer move.
+  function _viewportChanged() {
+    _draw();
+    if (_doc?.layoutMaps?.length > 1) _renderCompareMenus();
+  }
+
   function _renderCompareMenus() {
     document.querySelectorAll('.studio-compare-menu').forEach(el => el.remove());
 
     if (!_doc || !_doc.layoutMaps || _doc.layoutMaps.length <= 1) return;
+    const activeIndex = _activePanelIndex();
 
     const workspace = document.getElementById('studio-workspace');
     if (!workspace) return;
@@ -440,15 +458,15 @@ const StudioEditor = (() => {
       btn.style.left = `${offsetX + screenPt.x - 36}px`;
       btn.style.top = `${offsetY + screenPt.y - 36}px`;
       btn.style.zIndex = '100';
-      btn.style.background = index === _activeStudioPanelIndex
+      btn.style.background = index === activeIndex
         ? 'var(--color-primary, #3b82f6)' : 'var(--bg-surface, #1e1e2e)';
-      btn.style.color = index === _activeStudioPanelIndex
+      btn.style.color = index === activeIndex
         ? '#fff' : 'var(--text-muted, #888)';
       btn.style.border = '1px solid rgba(255,255,255,0.15)';
       btn.style.borderRadius = '6px';
-      
+
       btn.innerHTML = '<i data-lucide="sliders-horizontal"></i>';
-      btn.title = `Panel ${index + 1} channels`;
+      btn.title = _t('studio.panelChannels', `Panel ${index + 1} channels`, { n: index + 1 });
       
       btn.addEventListener('click', (e) => {
         e.stopPropagation();
@@ -920,8 +938,7 @@ const StudioEditor = (() => {
       v.zoom = zoom;
       _viewGesture.midX = f.midX;
       _viewGesture.midY = f.midY;
-      _draw();
-      _renderCompareMenus();
+      _viewportChanged();
       return;
     }
     if (_isRotating && _rotationStart) {
@@ -932,14 +949,13 @@ const StudioEditor = (() => {
       if (slider) slider.value = String(((deg + 540) % 360) - 180);
       const label = document.getElementById('studio-rotation-val');
       if (label) label.textContent = `${Math.round(_doc.viewport.rotation * 180 / Math.PI)} deg`;
-      _draw();
+      _viewportChanged();
       return;
     }
     if (_isPanning && _pointerStart) {
       _doc.viewport.panX = _pointerStart.panX + (event.clientX - _pointerStart.x);
       _doc.viewport.panY = _pointerStart.panY + (event.clientY - _pointerStart.y);
-      _draw();
-      _renderCompareMenus();
+      _viewportChanged();
       return;
     }
     const imagePoint = _screenToImage(_eventCanvasPoint(event));
@@ -1043,9 +1059,8 @@ const StudioEditor = (() => {
     const cy = dy / _doc.viewport.zoom;
     _doc.viewport.panX += cx * (_doc.viewport.zoom - zoom);
     _doc.viewport.panY += cy * (_doc.viewport.zoom - zoom);
-    
-    _draw();
-    _renderCompareMenus();
+
+    _viewportChanged();
   }
 
   function _onDblClick(event) {
@@ -1228,61 +1243,76 @@ const StudioEditor = (() => {
 
   function _renderChannels() {
     if (!_channelsContainer || !_doc) return;
-    
-    let channels = [];
-    if (_doc.layoutMaps?.length > 0) {
-      const map = _doc.layoutMaps[_activeStudioPanelIndex];
-      channels = map?.channelState || [];
-    } else {
-      channels = Array.isArray(_doc.channelState) ? _doc.channelState : [];
-    }
+
+    const isCompare = _doc.layoutMaps?.length > 0;
+    const activeMap = isCompare ? _doc.layoutMaps[_activePanelIndex()] : null;
+    const channels = isCompare
+      ? (activeMap?.channelState || [])
+      : (Array.isArray(_doc.channelState) ? _doc.channelState : []);
 
     if (!channels.length) {
-      _channelsContainer.innerHTML = '<div class="studio-empty">No channel metadata.</div>';
+      _channelsContainer.innerHTML = `<div class="studio-empty">${_escape(_t('studio.noChannelMeta', 'No channel metadata.'))}</div>`;
       return;
     }
-    
+
     let raw = _sliceResult?.raw;
     let w = _sliceResult?.width;
     let h = _sliceResult?.height;
-    if (_doc.layoutMaps?.length > 0) {
-       const map = _doc.layoutMaps[_activeStudioPanelIndex];
-       if (map?.raw) {
-          raw = map.raw;
-          w = map.sourceWidth;
-          h = map.sourceHeight;
-       }
+    if (activeMap?.raw) {
+      raw = activeMap.raw;
+      w = activeMap.sourceWidth;
+      h = activeMap.sourceHeight;
     }
-    _studioHistograms = _computeStudioHistograms(raw, w, h);
-    
+    _studioHistograms = _computeStudioHistograms(raw, w, h, activeMap);
+
     if (typeof createChannelPanel !== 'undefined') {
       if (!window._studioChannelPanel) {
         window._studioChannelPanel = createChannelPanel();
       }
       let _recomposeRaf = null;
-      window._studioChannelPanel.init('studio-channels', { dimensions: { c: channels.length }, channels }, (idx, state) => {
-        if (_doc.layoutMaps?.length > 0) {
-            _doc.layoutMaps[_activeStudioPanelIndex].channelState[idx] = state;
-        } else {
+      _channelsSeeding = true;
+      try {
+        window._studioChannelPanel.init('studio-channels', { dimensions: { c: channels.length }, channels }, (idx, state) => {
+          if (_channelsSeeding) return;
+          const panelIdx = _doc.layoutMaps?.length > 0 ? _activePanelIndex() : -1;
+          if (panelIdx >= 0) {
+            const target = _doc.layoutMaps[panelIdx];
+            if (!target) return;
+            if (!Array.isArray(target.channelState)) target.channelState = [];
+            target.channelState[idx] = state;
+          } else {
             _doc.channelState[idx] = state;
-        }
-        
-        const panelToUpdate = (_doc.layoutMaps?.length > 0) ? _activeStudioPanelIndex : undefined;
-        if (!_recomposeRaf) {
-          _recomposeRaf = requestAnimationFrame(() => {
-            _recomposeRaf = null;
-            _rerenderSliceFromChannels(panelToUpdate);
-          });
-        }
-      });
+          }
+
+          const panelToUpdate = panelIdx >= 0 ? panelIdx : undefined;
+          if (!_recomposeRaf) {
+            _recomposeRaf = requestAnimationFrame(() => {
+              _recomposeRaf = null;
+              _rerenderSliceFromChannels(panelToUpdate);
+            });
+          }
+        });
+      } finally {
+        _channelsSeeding = false;
+      }
       window._studioChannelPanel.setState(channels, { notify: false });
       window._studioChannelPanel.setHistograms(_studioHistograms);
     } else {
-      _channelsContainer.innerHTML = '<div class="studio-empty">ChannelPanel not loaded.</div>';
+      _channelsContainer.innerHTML = `<div class="studio-empty">${_escape(_t('studio.channelPanelMissing', 'ChannelPanel not loaded.'))}</div>`;
     }
   }
 
-  function _computeStudioHistograms(raw, w, h) {
+  function _computeStudioHistograms(raw, w, h, map) {
+    // compare.html loads neither VolumeViewer nor VolumeSlicer, so the only histograms
+    // of that panel's volume live inside the panel's own (same-origin) frame.
+    if (map?.iframe) {
+      try {
+        const fromFrame = map.iframe.contentWindow?.ViewerApp?.getChannelHistograms?.();
+        if (fromFrame?.length) return fromFrame;
+      } catch (err) {
+        console.warn('[StudioEditor] Panel frame histograms unavailable:', err);
+      }
+    }
     if (typeof VolumeSlicer !== 'undefined' && raw) {
       return VolumeSlicer.computeChannelHistograms({raw, width: w, height: h}, 64) || [];
     }
@@ -1350,7 +1380,7 @@ const StudioEditor = (() => {
 
       // Determine which panels to recompose
       const indicesToUpdate = (activePanelOnly !== undefined && activePanelOnly >= 0)
-        ? [activePanelOnly]
+        ? [Math.min(activePanelOnly, _doc.layoutMaps.length - 1)]
         : _doc.layoutMaps.map((_, i) => i);
 
       indicesToUpdate.forEach(mapIdx => {
@@ -1371,11 +1401,14 @@ const StudioEditor = (() => {
              recomposedCanvas = recomposed.canvas;
            }
         } else if (map.sliceResult) {
-           // Use a lower resolution for interactive speed (50% of original)
+           // While editing, render the cell at the size it actually occupies in the
+           // composite: anything more is thrown away by the drawImage below, anything
+           // less comes back softer than the cell the operator started from.
            const fullRes = map.sliceResult.renderRes || map.sliceResult.width || 1024;
-           const interactiveRes = (activePanelOnly !== undefined) ? Math.round(fullRes * 0.5) : fullRes;
+           const cellRes = Math.max(1, Math.round(Math.max(map.w, map.h)));
+           const renderRes = (activePanelOnly !== undefined) ? cellRes : fullRes;
            const recomposed = targetSlicer.recompose(
-             { ...map.sliceResult, width: interactiveRes },
+             { ...map.sliceResult, width: renderRes },
              map.channelState, 
              STUDIO_SLICE_SUPPRESSION
            );
@@ -2094,9 +2127,15 @@ const StudioEditor = (() => {
     const canvas = _composeExportCanvas(source, { metadataStamp: true });
     canvas.toBlob(blob => {
       if (!blob) return;
-      const name = `${_safeName(_doc.dataset?.name || 'slice')}_studio.png`;
-      ExportManager?.downloadBlob?.(blob, name);
+      ExportManager?.downloadBlob?.(blob, `${_exportBaseName()}_studio.png`);
     }, 'image/png', 1);
+  }
+
+  // A composite of several panels is not "the slice" of any single dataset: it is
+  // named after the figure the compare page handed over.
+  function _exportBaseName() {
+    const fallback = _doc?.layoutMaps?.length > 1 ? 'compare_figure' : 'slice';
+    return _safeName(_doc?.dataset?.name || fallback);
   }
 
   function _composeExportCanvas(source, options = {}) {
@@ -2124,12 +2163,19 @@ const StudioEditor = (() => {
   }
 
   function _drawExportStamp(ctx, width, height, source) {
-    const bits = [
-      _doc.dataset?.name || 'Slice Studio',
-      `${(_doc.planeSpec?.mode || 'xy').toUpperCase()} ${_doc.planeSpec?.projection || 'single'}`,
-      `${source.width}x${source.height}`,
-      `px ${(_doc.calibration.pixelSizeUm.x || 1).toFixed(4)} um`
-    ];
+    // Each cell of a composite has its own plane and its own µm/px: stamping the
+    // document's would caption the whole figure with a fact true of one cell.
+    const bits = _doc.layoutMaps?.length > 1
+      ? [
+        _doc.dataset?.name || 'Slice Studio',
+        `${source.width}x${source.height}`
+      ]
+      : [
+        _doc.dataset?.name || 'Slice Studio',
+        `${(_doc.planeSpec?.mode || 'xy').toUpperCase()} ${_doc.planeSpec?.projection || 'single'}`,
+        `${source.width}x${source.height}`,
+        `px ${(_doc.calibration.pixelSizeUm.x || 1).toFixed(4)} um`
+      ];
     const text = bits.join(' | ');
     ctx.save();
     ctx.font = `${Math.max(12, Math.round(width / 100))}px Inter, Arial, sans-serif`;

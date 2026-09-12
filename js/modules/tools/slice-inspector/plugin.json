@@ -1,8 +1,12 @@
 {
   "id": "slice-inspector",
   "name": "Slice through Volume",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "platformCompat": "1.x",
+  "contexts": [
+    "page",
+    "panel"
+  ],
   "creator": "IRIBHM",
   "placement": "tools",
   "group": "tools",

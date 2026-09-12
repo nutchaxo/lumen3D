@@ -218,6 +218,11 @@ const ExportManager = (() => {
   function _renderGeneratedExports(body, dataset) {
     const hasCanvas = Boolean(_ctx.getCanvas?.());
     const hasGraph = Boolean(_ctx.getGraph?.() && window.Plotly);
+    // A page that cannot produce a canvas or a graph at all (Compare) gets no
+    // permanently greyed-out buttons for them; a page that can but has none right
+    // now keeps them disabled with the reason.
+    const offersCanvas = typeof _ctx.getCanvas === 'function' || typeof _ctx.getCanvasBlob === 'function';
+    const offersGraph = typeof _ctx.getGraph === 'function';
     const measures = _safeList(_ctx.getMeasurements);
     _customExports = Array.isArray(_ctx.getCustomExports?.()) ? _ctx.getCustomExports() : [];
     body.innerHTML = `
@@ -225,11 +230,11 @@ const ExportManager = (() => {
       <section class="dl-section">
         <div class="dl-section-head"><h3>${_t('download.generatedTitle', 'Generated exports')}</h3></div>
         <div class="export-quick-actions">
-          ${_quickAction('canvas-png', 'image', _t('download.figurePng', 'Figure PNG'), hasCanvas, _t('download.noCanvas', 'No visible canvas here'))}
-          ${_quickAction('canvas-webp', 'image-down', _t('download.figureWebp', 'Figure WebP'), hasCanvas, _t('download.noCanvas', 'No visible canvas here'))}
-          ${_quickAction('graph-png', 'bar-chart-2', _t('download.graphPng', 'Graph PNG'), hasGraph, _t('download.noGraph', 'No visible graph here'))}
-          ${_quickAction('graph-svg', 'line-chart', _t('download.graphSvg', 'Graph SVG'), hasGraph, _t('download.noGraph', 'No visible graph here'))}
-          ${_quickAction('graph-csv', 'table', _t('download.graphCsv', 'Graph CSV'), hasGraph, _t('download.noGraph', 'No visible graph here'))}
+          ${offersCanvas ? _quickAction('canvas-png', 'image', _t('download.figurePng', 'Figure PNG'), hasCanvas, _t('download.noCanvas', 'No visible canvas here')) : ''}
+          ${offersCanvas ? _quickAction('canvas-webp', 'image-down', _t('download.figureWebp', 'Figure WebP'), hasCanvas, _t('download.noCanvas', 'No visible canvas here')) : ''}
+          ${offersGraph ? _quickAction('graph-png', 'bar-chart-2', _t('download.graphPng', 'Graph PNG'), hasGraph, _t('download.noGraph', 'No visible graph here')) : ''}
+          ${offersGraph ? _quickAction('graph-svg', 'line-chart', _t('download.graphSvg', 'Graph SVG'), hasGraph, _t('download.noGraph', 'No visible graph here')) : ''}
+          ${offersGraph ? _quickAction('graph-csv', 'table', _t('download.graphCsv', 'Graph CSV'), hasGraph, _t('download.noGraph', 'No visible graph here')) : ''}
           ${measures.length ? _quickAction('measures-csv', 'file-spreadsheet', _t('download.measuresCsv', 'Measurements CSV'), true, '') : ''}
           <button class="btn btn-outline btn-sm" data-export-action="workspace-json"><i data-lucide="braces"></i> ${_t('download.workspaceJson', 'Workspace JSON')}</button>
           <button class="btn btn-outline btn-sm" data-export-action="save-workspace"><i data-lucide="save"></i> ${_t('download.saveState', 'Save state')}</button>

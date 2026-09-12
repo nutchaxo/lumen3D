@@ -861,6 +861,13 @@ body.viewer-iframe .canvas-overlay {
   top: calc(var(--space-4) + 44px);
 }
 
+/* A Compare panel is a few hundred pixels wide: a plugin panel (measure,
+   tracking) must fit inside it rather than hang off its left edge. */
+body.viewer-iframe .scientific-panel {
+  right: 8px;
+  width: min(360px, calc(100% - 16px));
+}
+
 .quality-status {
   margin-top: var(--space-2);
   min-height: 16px;

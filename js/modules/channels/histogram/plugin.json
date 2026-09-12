@@ -1,8 +1,12 @@
 {
   "id": "histogram",
   "name": "Histogram Controls",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "platformCompat": "1.x",
+  "contexts": [
+    "page",
+    "panel"
+  ],
   "creator": "IRIBHM",
   "placement": "channels",
   "subtype": "per-channel",

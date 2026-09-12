@@ -32,6 +32,18 @@ const Theme = (() => {
         _notify();
       }
     });
+
+    // Another document of this origin toggled the theme (the Compare page above
+    // its panels, a split-view pane beside its host): the browser raises `storage`
+    // in every OTHER document, so each one follows without a page-specific wire.
+    if (typeof window.addEventListener === 'function') window.addEventListener('storage', e => {
+      if (e.key !== 'iribhm-theme') return;
+      const next = e.newValue === 'light' ? 'light' : 'dark';
+      if (next === _current) return;
+      _current = next;
+      _apply();
+      _notify();
+    });
   }
 
   /**

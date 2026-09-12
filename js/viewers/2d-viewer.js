@@ -31,6 +31,7 @@ const Viewer2D = (() => {
   let _resizeObserver = null;
 
   let _image = null;                // what is drawable now: preview, then native
+  let _hasNative = false;           // the native image.webp has decoded and is what _image holds
   let _isolated = null;             // cached stain-isolation rendering of _image
   let _imgW = 0;                    // declared native size — known before any byte
   let _imgH = 0;
@@ -76,6 +77,7 @@ const Viewer2D = (() => {
     _loadToken++;
     _resizeObserver?.disconnect();
     _image = null;
+    _hasNative = false;
     _isolated = null;
     _measurements = [];
   }
@@ -92,6 +94,7 @@ const Viewer2D = (() => {
     _imgH = spec.height;
     _pixelSizeUm = Number.isFinite(spec.pixelSizeUm) && spec.pixelSizeUm > 0 ? spec.pixelSizeUm : null;
     _image = null;
+    _hasNative = false;
     _isolated = null;
     _adjusted = null;
     _flatMap = null;
@@ -103,7 +106,7 @@ const Viewer2D = (() => {
       .then(img => { if (_swap(token, img)) _emitState('preview'); })
       .catch(() => {});
     return _decode(spec.nativeUrl)
-      .then(img => { if (_swap(token, img)) _emitState('native'); })
+      .then(img => { if (_swap(token, img)) { _hasNative = true; _emitState('native'); } })
       .catch(err => {
         if (token === _loadToken && !_image) _emitState('error');
         throw err;
@@ -140,8 +143,12 @@ const Viewer2D = (() => {
     return true;
   }
 
+  /** True once the native image is what is drawn — a capture taken before that
+   *  holds the 640 px preview upscaled, not the photograph's own pixels. */
+  function hasNative() { return _hasNative; }
+
   // ── View transform ─────────────────────────────────────────────────────────
-  function fit() {
+  function fit(reason) {
     const w = _cssWidth(), h = _cssHeight();
     if (!_imgW || !_imgH || !w || !h) return;
     const o = _orientedSize();
@@ -151,7 +158,7 @@ const Viewer2D = (() => {
       tx: (w - o.w * _fitScale) / 2,
       ty: (h - o.h * _fitScale) / 2
     };
-    _viewChanged();
+    _viewChanged(reason || 'fit');
   }
 
   /** One image pixel per device pixel. */
@@ -168,26 +175,32 @@ const Viewer2D = (() => {
       tx: cx - (cx - _view.tx) * k,
       ty: cy - (cy - _view.ty) * k
     };
-    _viewChanged();
+    _viewChanged('user');
   }
 
   function _pan(dx, dy) {
     _view = { scale: _view.scale, tx: _view.tx + dx, ty: _view.ty + dy };
-    _viewChanged();
+    _viewChanged('user');
   }
 
   function getView() { return { ..._view }; }
 
-  function setView(view) {
+  function setView(view, reason) {
     if (!view || !Number.isFinite(view.scale) || view.scale <= 0) return;
     _view = { scale: view.scale, tx: Number(view.tx) || 0, ty: Number(view.ty) || 0 };
-    _viewChanged();
+    _viewChanged(reason || 'set');
   }
 
-  function _viewChanged() {
+  /**
+   * `reason` tells a listener WHO moved the view: 'user' (pointer, wheel,
+   * pinch, the native-zoom button), 'fit', 'resize', 'set', 'physical',
+   * 'orientation'. A linked panel forwards only 'user', so a pane fitting
+   * itself on load or on a layout change does not re-frame the others.
+   */
+  function _viewChanged(reason) {
     _scheduleDraw();
     const view = getView();
-    for (const cb of _viewListeners) cb(view);
+    for (const cb of _viewListeners) cb(view, reason);
   }
 
   function getViewport() { return { width: _cssWidth(), height: _cssHeight() }; }
@@ -200,7 +213,7 @@ const Viewer2D = (() => {
     const wasFitted = Math.abs(_view.scale - _fitScale) < 1e-9;
     _canvas.width = Math.round(w * dpr);
     _canvas.height = Math.round(h * dpr);
-    if (wasFitted || !_image) fit();
+    if (wasFitted || !_image) fit('resize');
     else _scheduleDraw();
   }
 
@@ -259,8 +272,8 @@ const Viewer2D = (() => {
     const next = { rotationDeg: ((deg + 180) % 360 + 360) % 360 - 180, flipH: Boolean(o?.flipH) };
     const wasFitted = Math.abs(_view.scale - _fitScale) < 1e-9;
     _orient = next;
-    if (wasFitted) fit();
-    else _viewChanged();
+    if (wasFitted) fit('orientation');
+    else _viewChanged('orientation');
   }
 
   function getOrientation() { return { ..._orient }; }
@@ -348,7 +361,7 @@ const Viewer2D = (() => {
   // ── Measurements & calibration (same contract as VolumeViewer) ─────────────
   function onMeasurePoint(cb) { _onMeasurePoint = cb; }
   function onLoadState(cb) { _onLoadState = cb; }
-  /** @returns {Function} unsubscribe */
+  /** @param {(view:{scale:number,tx:number,ty:number}, reason:string)=>void} cb @returns {Function} unsubscribe */
   function onViewChange(cb) {
     _viewListeners.push(cb);
     return () => { _viewListeners = _viewListeners.filter(f => f !== cb); };
@@ -423,7 +436,7 @@ const Viewer2D = (() => {
     const scale = px / pv.umPerCss;
     const ox = o.w / 2 + (pv.centerUm?.x || 0) / px;
     const oy = o.h / 2 + (pv.centerUm?.y || 0) / px;
-    setView({ scale, tx: _cssWidth() / 2 - ox * scale, ty: _cssHeight() / 2 - oy * scale });
+    setView({ scale, tx: _cssWidth() / 2 - ox * scale, ty: _cssHeight() / 2 - oy * scale }, 'physical');
   }
 
   // ── Display adjustments (non-destructive, display only) ────────────────────
@@ -831,7 +844,7 @@ const Viewer2D = (() => {
   function _emitState(state) { _onLoadState?.(state); }
 
   return {
-    init, dispose, load, prefetch, resize,
+    init, dispose, load, prefetch, resize, hasNative,
     fit, zoomNative, getView, setView, onViewChange, getViewport, getImageSize,
     setOrientation, getOrientation, setAdjustments, getAdjustments,
     addOverlay, redraw, getPhysicalView, setPhysicalView,

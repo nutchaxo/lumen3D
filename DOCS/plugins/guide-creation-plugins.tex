@@ -184,15 +184,22 @@ doit être libérée dans \code{dispose()}.
 \code{description}   & tous & Description courte (informatif). \\
 \code{order}         & tous & Entier de tri (croissant) dans son groupe / sa liste. \\
 \code{dataTypes}     & tous & Types de données sur lesquels le plugin se charge, parmi les
-                              quatre identifiants canoniques \code{"3d"} (volume figé),
-                              \code{"2d"} (photographie calibrée), \code{"live"} (série 4D),
-                              \code{"tracking"} (trajectoires cellulaires). Ex.
-                              \code{["3d", "live", "tracking"]} pour un outil de volume,
+                              trois identifiants canoniques \code{"3d"} (volume figé),
+                              \code{"2d"} (photographie calibrée), \code{"live"} (série 4D,
+                              avec ou sans suivi cellulaire). Ex.
+                              \code{["3d", "live"]} pour un outil de volume,
                               \code{["2d"]} pour un outil de photographie. Le filtre coupe
                               \textbf{dans les deux sens} : un plugin qui déclare ce champ est
                               chargé sur ces types \emph{et sur aucun autre}. Champ absent =
                               plugin antérieur à ce mécanisme, chargé uniquement par le
                               visualiseur de volumes. \\
+\code{contexts}      & tous & Contextes d'hébergement acceptés : \code{"page"} (la page
+                              autonome, avec sa propre barre d'outils) et/ou \code{"panel"}
+                              (la même page \emph{embarquée} sans chrome par une page hôte :
+                              panneau de la page Comparer, volet de la vue divisée, aperçu
+                              admin). Champ absent = \code{["page"]} : un plugin qui n'a pas
+                              dit qu'il supporte d'être piloté de l'extérieur n'est jamais
+                              chargé dans un panneau. Voir §\ref{sec:contexts}. \\
 \code{platformCompat} & tous & Versions de plateforme acceptées : liste
                               (\code{["1.50.0","1.51.0"]}) ou intervalle
                               (\code{"\textasciicircum{}1.51.0"}, \code{"\textasciitilde{}1.51.0"},
@@ -446,8 +453,8 @@ deepzoom :
 \subsection{Restreindre un plugin à certains types de données}
 
 \code{requires} regarde \emph{le contenu} du dataset ; \code{dataTypes} regarde
-\emph{sa nature}. Les quatre identifiants sont \code{"3d"}, \code{"2d"},
-\code{"live"} et \code{"tracking"} --- les mêmes mots que le dossier sous
+\emph{sa nature}. Les trois identifiants sont \code{"3d"}, \code{"2d"} et
+\code{"live"} --- les mêmes mots que le dossier sous
 \filepath{DATA\_WEB/}, que le champ \code{"type"} du \filepath{metadata.json} et
 que le premier segment de l'identifiant du dataset. Ils ne sont jamais montrés à
 l'utilisateur : le nom affiché appartient à l'administrateur (onglet
@@ -458,11 +465,46 @@ l'utilisateur : le nom affiché appartient à l'administrateur (onglet
   "subtype": "toggle", "dataTypes": ["2d"], "...": "..." }
 \end{lstlisting}
 
-Un outil de mesure utilisable partout déclare les quatre
-(\code{["3d","2d","live","tracking"]}). Attention, le filtre coupe des deux
+Un outil de mesure utilisable partout déclare les trois
+(\code{["3d","2d","live"]}). Attention, le filtre coupe des deux
 côtés : dès que le champ est présent, le plugin \textbf{n'est chargé que} sur les
 types listés. Une faute de frappe dans un identifiant ne provoque pas d'erreur,
 elle fait simplement disparaître le plugin de la page.
+
+\subsection{Fonctionner dans un panneau (\code{contexts})}
+\label{sec:contexts}
+
+La page Comparer, la vue divisée d'une photographie et l'aperçu du panneau
+d'administration n'ouvrent pas un plugin dans une page ordinaire : ils
+\emph{embarquent} la page du visualiseur dans une iframe sans en-tête ni barre
+d'outils, et la pilotent par \code{postMessage}. Un plugin y vit donc sans son
+bouton : c'est l'hôte qui dessine les boutons des bascules (\code{subtype:
+"toggle"}) dans l'en-tête de chaque panneau et les puces des outils
+(\code{subtype: "tool"}) dans sa propre barre, à partir de ce que la page lui
+décrit (\code{PluginRegistry.describeToolbar()}). Le champ \code{contexts} dit
+dans quel contexte le plugin a été écrit :
+
+\begin{lstlisting}[language=json]
+{ "id": "toggle-grid", "placement": "tools", "subtype": "toggle",
+  "contexts": ["page", "panel"], "...": "..." }
+\end{lstlisting}
+
+\begin{itemize}
+  \item \code{"page"} : la page autonome (\filepath{viewer.html},
+        \filepath{2d.html}) avec sa barre d'outils.
+  \item \code{"panel"} : la page embarquée. Un plugin qui le déclare doit se
+        contenter de son \code{activate()}, de \code{getState}/\code{setState}
+        et des surfaces \code{ctx.ui.addSidebarSection} / \code{addCanvasPanel}
+        --- pas de plein écran, pas de fenêtre modale, pas d'iframe imbriquée
+        (la vue divisée \emph{est} déjà une vue multiple).
+\end{itemize}
+
+Le champ est \textbf{fermé par défaut} : sans \code{contexts}, le plugin n'est
+chargé que sur la page autonome. Les actions (\code{subtype: "action"}) ne sont
+jamais listées par l'hôte, qui a ses propres exports ; un plugin \code{"panel"}
+dont l'état change (\code{PluginRegistry.syncToolbarButton}) voit son bouton
+suivre dans l'en-tête du panneau, et une bascule pressée depuis l'hôte arrive
+par \code{activate()} comme un clic sur la barre d'outils.
 
 \subsection{Internationalisation}
 \label{sec:i18n}

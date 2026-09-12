@@ -1,8 +1,11 @@
 {
   "id": "decompose-channels",
   "name": "Decompose by Channel",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "platformCompat": "1.x",
+  "contexts": [
+    "page"
+  ],
   "creator": "IRIBHM",
   "placement": "tools",
   "group": "layouts",

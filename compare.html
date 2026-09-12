@@ -1,9 +1,9 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="en" data-theme="dark">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>{{SITE:pageTitles.compare|Compare - IRIBHM Microscopy}}</title>
+  <title>{{SITE:pageTitles.compare|Compare - Lumen3D}}</title>
 
   <!-- Fonts -->
   <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -21,9 +21,13 @@
   <link rel="stylesheet" href="css/components.css">
   <link rel="stylesheet" href="css/layout.css">
   <link rel="stylesheet" href="css/tools.css">
-  <link rel="stylesheet" href="css/viewer.css?v=20260528">
-  
+  <link rel="stylesheet" href="css/viewer.css">
+
   <style nonce="{{CSP_NONCE}}">
+    /* The page toggles visibility with the `hidden` attribute; a display rule on
+       a class (.btn is inline-flex) would otherwise outrank the user-agent's. */
+    [hidden] { display: none !important; }
+
     .compare-layout {
       display: flex;
       flex-direction: column;
@@ -31,7 +35,7 @@
       overflow: hidden;
       background: var(--bg-surface);
     }
-    
+
     .compare-header {
       display: flex;
       align-items: center;
@@ -46,10 +50,43 @@
       display: flex;
       align-items: center;
       justify-content: space-between;
+      flex-wrap: wrap;
+      gap: var(--space-2) var(--space-4);
       padding: var(--space-2) var(--space-6);
       background: var(--bg-surface-2);
       border-bottom: 1px solid var(--border-light);
       z-index: 9;
+    }
+
+    .compare-toolbar-left,
+    .compare-toolbar-right {
+      display: flex;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: var(--space-2);
+    }
+
+    .compare-tool-chips {
+      display: flex;
+      gap: 4px;
+      padding-left: 12px;
+      border-left: 1px solid var(--border-light);
+    }
+
+    .compare-toolbar .btn-sm i { width: 16px; height: 16px; }
+
+    .compare-sync {
+      display: flex;
+      align-items: center;
+      gap: var(--space-3);
+    }
+
+    .compare-sync label {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      cursor: pointer;
+      font-size: var(--text-sm);
     }
 
     .compare-grid {
@@ -69,9 +106,14 @@
     .compare-grid.layout-3 { grid-template-columns: 1fr 1fr; grid-template-rows: 1fr 1fr; }
     .compare-grid.layout-4 { grid-template-columns: 1fr 1fr; grid-template-rows: 1fr 1fr; }
 
-    /* For layout-3, make the first child span 2 columns */
-    .compare-grid.layout-3 > .compare-panel:first-child { grid-column: span 2; }
-    .compare-grid.layout-custom > .compare-panel:first-child { grid-column: auto; }
+    /* Three panels: the first one takes the whole top row (the empty-state node
+       is the grid's first child, so the first PANEL is marked, not :first-child). */
+    .compare-grid.layout-3 > .compare-panel[data-first] { grid-column: span 2; }
+    .compare-grid.layout-custom > .compare-panel[data-first] { grid-column: auto; }
+
+    .compare-header h1 { font-size: var(--text-xl); margin: 0; }
+    .modal-header h2 { font-size: var(--text-lg); margin: 0; }
+    #empty-state i { width: 64px; height: 64px; opacity: 0.2; }
 
     .compare-panel {
       position: relative;
@@ -79,18 +121,26 @@
       display: flex;
       flex-direction: column;
       overflow: hidden;
+      min-width: 0;
+      min-height: 0;
     }
 
     .panel-header {
       position: absolute;
       top: 0; left: 0; right: 0;
       padding: 8px 12px;
-      background: linear-gradient(180deg, rgba(0,0,0,0.8) 0%, rgba(0,0,0,0) 100%);
+      /* The page's own ground, faded: legible on a black volume and on a white
+         photograph alike, in both themes. */
+      background: linear-gradient(180deg, color-mix(in srgb, var(--bg-body) 82%, transparent) 0%, transparent 100%);
       z-index: 10;
       display: flex;
       justify-content: space-between;
       align-items: center;
+      gap: 8px;
+      pointer-events: none;
     }
+
+    .panel-header > * { pointer-events: auto; }
 
     .panel-title-badge {
       background: var(--bg-surface-3);
@@ -101,26 +151,37 @@
       font-size: var(--text-sm);
       font-weight: 500;
       backdrop-filter: blur(4px);
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
     }
 
     .panel-actions {
       display: flex;
+      align-items: center;
       gap: 8px;
+      flex-shrink: 0;
     }
+
+    .panel-actions .btn-settings.active {
+      background: var(--color-primary);
+      border-color: var(--color-primary);
+      color: #fff;
+    }
+
+    /* The toggles the panel's own toolbar would show, drawn here by the host. */
+    .panel-toggles {
+      display: flex;
+      gap: 4px;
+    }
+
+    .panel-toggles:empty { display: none; }
 
     .panel-content {
       flex: 1;
       position: relative;
-    }
-
-    .panel-visual-tools {
-      position: absolute;
-      bottom: 10px;
-      right: 10px;
-      z-index: 15;
-      display: flex;
-      flex-direction: column;
-      gap: 4px;
+      min-height: 0;
     }
 
     .panel-tool-btn {
@@ -138,6 +199,8 @@
       transition: all 0.15s ease;
       padding: 0;
     }
+
+    .panel-tool-btn i { width: 15px; height: 15px; }
 
     .panel-tool-btn:hover {
       background: color-mix(in srgb, var(--bg-surface) 95%, transparent);
@@ -174,14 +237,13 @@
       pointer-events: none;
     }
 
-    .panel-load-state.hidden {
-      display: none;
-    }
+    .panel-load-state i { width: 14px; height: 14px; }
 
     iframe.viewer-frame {
       width: 100%;
       height: 100%;
       border: none;
+      display: block;
     }
 
     .compare-split-handle {
@@ -198,9 +260,9 @@
       content: "";
       display: block;
       border-radius: var(--radius-full);
-      background: rgba(255, 255, 255, 0.55);
-      box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.35);
-      opacity: 0.35;
+      background: var(--text-secondary);
+      box-shadow: 0 0 0 1px var(--bg-body);
+      opacity: 0.5;
       transition: opacity var(--transition-fast), background var(--transition-fast), transform var(--transition-fast);
     }
 
@@ -256,13 +318,13 @@
       display: none; align-items: center; justify-content: center;
     }
     .modal-overlay.active { display: flex; }
-    
+
     .modal-content {
       background: var(--bg-surface);
       border: 1px solid var(--border-light);
       border-radius: var(--radius-lg);
-      width: 800px; max-width: 90vw;
-      height: 600px; max-height: 90vh;
+      width: 860px; max-width: 92vw;
+      height: 640px; max-height: 90vh;
       display: flex; flex-direction: column;
       box-shadow: var(--shadow-xl);
     }
@@ -271,6 +333,30 @@
       border-bottom: 1px solid var(--border-light);
       display: flex; justify-content: space-between; align-items: center;
     }
+    .modal-filters {
+      display: flex;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: var(--space-2);
+      padding: var(--space-3) var(--space-4);
+      border-bottom: 1px solid var(--border-light);
+    }
+    .modal-filters .form-input { flex: 1; min-width: 160px; }
+    .modal-type-chips { display: flex; gap: 4px; flex-wrap: wrap; }
+    .modal-type-chip {
+      border: 1px solid var(--border-light);
+      background: transparent;
+      color: var(--text-secondary);
+      border-radius: var(--radius-full);
+      padding: 4px 10px;
+      font-size: var(--text-xs);
+      cursor: pointer;
+    }
+    .modal-type-chip.is-active {
+      background: var(--color-primary);
+      border-color: var(--color-primary);
+      color: #fff;
+    }
     .modal-body {
       padding: var(--space-4);
       overflow-y: auto;
@@ -278,8 +364,15 @@
       display: grid;
       grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
       gap: var(--space-4);
+      align-content: start;
     }
-    
+    .modal-empty {
+      grid-column: 1 / -1;
+      text-align: center;
+      color: var(--text-muted);
+      padding: var(--space-8);
+    }
+
     .dataset-mini-card {
       background: var(--bg-surface-2);
       border: 1px solid var(--border-light);
@@ -288,9 +381,18 @@
       cursor: pointer;
       transition: all var(--transition-fast);
     }
-    .dataset-mini-card:hover {
+    .dataset-mini-card:hover,
+    .dataset-mini-card:focus-visible {
       border-color: var(--color-primary);
       transform: translateY(-2px);
+      outline: none;
+    }
+    .dataset-mini-card img {
+      width: 100%;
+      aspect-ratio: 16 / 9;
+      object-fit: cover;
+      border-radius: var(--radius-sm);
+      margin-bottom: 8px;
     }
     .dataset-mini-card .card-type {
       font-size: 10px; padding: 2px 6px; border-radius: 10px; margin-bottom: 4px; display: inline-block;
@@ -300,24 +402,30 @@
 <body data-page="compare">
 
   <div class="compare-layout">
-    
+
     <!-- Header -->
     <header class="compare-header">
       <div class="flex items-center gap-4">
-        <a href="explorer.html" class="btn btn-icon btn-ghost" data-i18n-title="nav.back">
+        <a href="explorer.html" class="btn btn-icon btn-ghost" data-i18n-title="nav.back" aria-label="Back" data-i18n-aria="nav.back">
           <i data-lucide="arrow-left"></i>
         </a>
-        <h1 class="text-xl font-bold" data-i18n="compare.title">Multi-Panel Comparison</h1>
+        <h1 class="text-xl font-bold" data-i18n="compare.title">Comparison Mode</h1>
       </div>
       <div class="flex items-center gap-2">
+        <!-- Language Switcher (items generated by Utils.populateLanguageMenu) -->
+        <div class="dropdown" id="lang-dropdown">
+          <button class="btn btn-icon btn-ghost" data-action="lang-dropdown" data-i18n-title="lang.switch">
+            <i data-lucide="languages" style="width:20px;height:20px"></i>
+          </button>
+          <div class="dropdown-menu"></div>
+        </div>
         <a class="btn btn-icon btn-ghost" href="about.html" title="Help and methods" data-i18n-title="tips.help" aria-label="Help and methods" data-i18n-aria="tips.help">
           <i data-lucide="help-circle"></i>
         </a>
-              <!-- Color Blindness Toggle -->
-      <button class="btn btn-icon btn-ghost" data-action="colorblind" data-i18n-title="colorblind.toggle">
-        <i data-lucide="eye" style="width:20px;height:20px"></i>
-      </button>
-      <button class="btn btn-icon btn-ghost" data-action="theme-toggle" data-i18n-title="theme.toggle" id="theme-toggle">
+        <button class="btn btn-icon btn-ghost" data-action="colorblind" data-i18n-title="colorblind.toggle">
+          <i data-lucide="eye" style="width:20px;height:20px"></i>
+        </button>
+        <button class="btn btn-icon btn-ghost" data-action="theme-toggle" data-i18n-title="theme.toggle" id="theme-toggle">
           <i data-lucide="moon" data-theme-icon></i>
         </button>
       </div>
@@ -325,56 +433,53 @@
 
     <!-- Toolbar -->
     <div class="compare-toolbar">
-      <div class="flex items-center gap-4">
+      <div class="compare-toolbar-left">
         <button class="btn btn-primary btn-sm flex items-center gap-2" id="btn-add-dataset">
-          <i data-lucide="plus"></i> Add Dataset
+          <i data-lucide="plus"></i> <span data-i18n="compare.addDataset">Add Dataset</span>
         </button>
-        <div class="toolbar-cluster" style="display: flex; gap: 4px; padding-left: 12px; border-left: 1px solid var(--border-light);">
+        <!-- Tool chips: navigate is static; the others are the union of the tools the
+             open panels offer (their own measure / slice / … plugins), added by JS. -->
+        <div class="compare-tool-chips" id="compare-tool-chips">
           <button class="btn btn-icon btn-ghost tool-chip active" data-tool="navigate" title="Navigate" data-i18n-title="tips.navigate" aria-label="Navigate" data-i18n-aria="tips.navigate">
             <i data-lucide="mouse-pointer-2"></i>
           </button>
-          <button class="btn btn-icon btn-ghost tool-chip" data-tool="slice" title="Slice through volume" data-i18n-title="tips.sliceVol" aria-label="Slice tool" data-i18n-aria="tips.sliceTool">
-            <i data-lucide="scissors"></i>
-          </button>
-          <button class="btn btn-icon btn-ghost tool-chip" data-tool="measure" title="Measure distance" data-i18n-title="tips.measureDist" aria-label="Measure distance" data-i18n-aria="tips.measureDist">
-            <i data-lucide="ruler"></i>
-          </button>
         </div>
 
-        <button class="btn btn-outline btn-sm flex items-center gap-2" id="btn-decompose" title="Decompose channels into separate panels" data-i18n-title="tips.decompPanels" style="display: none; margin-left: 12px;">
-          <i data-lucide="split-square-horizontal"></i> Decompose
+        <button class="btn btn-outline btn-sm flex items-center gap-2" id="btn-decompose" data-i18n-title="tips.decompPanels" hidden>
+          <i data-lucide="split-square-horizontal"></i> <span data-i18n="compare.decompose">Decompose</span>
+        </button>
+        <button class="btn btn-outline btn-sm flex items-center gap-2" id="btn-compare-studio" data-i18n-title="compare.studioHint" disabled>
+          <i data-lucide="pen-tool"></i> <span data-i18n="compare.studio">Studio</span>
         </button>
         <button class="btn btn-outline btn-sm flex items-center gap-2" id="btn-export-compare">
-          <i data-lucide="download"></i> Export
+          <i data-lucide="download"></i> <span data-i18n="compare.export">Export</span>
         </button>
         <button class="btn btn-outline btn-sm flex items-center gap-2" id="btn-save-compare-workspace">
-          <i data-lucide="save"></i> Save
+          <i data-lucide="save"></i> <span data-i18n="compare.save">Save</span>
         </button>
         <button class="btn btn-outline btn-sm flex items-center gap-2" id="btn-restore-compare-workspace">
-          <i data-lucide="folder-open"></i> Restore
+          <i data-lucide="folder-open"></i> <span data-i18n="compare.restore">Restore</span>
         </button>
-        <select class="btn btn-outline btn-sm" id="compare-layout-mode" title="Panel layout" data-i18n-title="tips.panelLayout">
+        <select class="btn btn-outline btn-sm" id="compare-layout-mode" data-i18n-title="tips.panelLayout">
           <option value="auto" selected data-i18n="compare.layoutAuto">Auto layout</option>
           <option value="columns" data-i18n="compare.layoutCols">Columns</option>
           <option value="rows" data-i18n="compare.layoutRows">Rows</option>
           <option value="grid" data-i18n="compare.layoutGrid">Grid</option>
         </select>
+        <select class="btn btn-outline btn-sm" id="compare-quality" data-i18n-title="compare.qualityHint">
+          <option value="auto" selected data-i18n="compare.qualityAuto">Auto quality</option>
+          <option value="512x512">512x512</option>
+          <option value="1024x1024">1024x1024</option>
+          <option value="native" data-i18n="viewer.native">Native</option>
+        </select>
       </div>
 
-      <div class="flex items-center gap-4">
-        <label class="text-sm text-muted font-semibold" data-i18n="compare.syncTitle">SYNC</label>
-        <label class="flex items-center gap-2 cursor-pointer text-sm">
-          <input type="checkbox" id="sync-z" checked> Z-Stack
-        </label>
-        <label class="flex items-center gap-2 cursor-pointer text-sm">
-          <input type="checkbox" id="sync-time" checked> Time
-        </label>
-        <label class="flex items-center gap-2 cursor-pointer text-sm">
-          <input type="checkbox" id="sync-camera" checked> Camera (3D)
-        </label>
-        <label class="flex items-center gap-2 cursor-pointer text-sm">
-          <input type="checkbox" id="sync-channels" checked> Channels
-        </label>
+      <div class="compare-toolbar-right compare-sync">
+        <span class="text-sm text-muted font-semibold" data-i18n="compare.syncTitle">SYNC</span>
+        <label><input type="checkbox" id="sync-z" checked> <span data-i18n="compare.syncZ">Z-Stack</span></label>
+        <label><input type="checkbox" id="sync-time" checked> <span data-i18n="compare.syncTime">Time</span></label>
+        <label><input type="checkbox" id="sync-camera" checked> <span data-i18n="compare.syncCamera">Camera / view</span></label>
+        <label><input type="checkbox" id="sync-channels" checked> <span data-i18n="compare.syncChannels">Channels</span></label>
       </div>
     </div>
 
@@ -391,11 +496,15 @@
   </div>
 
   <!-- Modal Dataset Selector -->
-  <div class="modal-overlay" id="modal-select">
+  <div class="modal-overlay" id="modal-select" role="dialog" aria-modal="true" aria-labelledby="modal-select-title">
     <div class="modal-content animate-scale-in">
       <div class="modal-header">
-        <h2 class="text-lg font-bold" data-i18n="compare.modalTitle">Select Dataset to Add</h2>
-        <button class="btn btn-icon btn-ghost w-8 h-8 p-0" id="btn-close-modal"><i data-lucide="x"></i></button>
+        <h2 class="text-lg font-bold" id="modal-select-title" data-i18n="compare.modalTitle">Select Dataset to Add</h2>
+        <button class="btn btn-icon btn-ghost w-8 h-8 p-0" id="btn-close-modal" aria-label="Close" data-i18n-aria="app.close"><i data-lucide="x"></i></button>
+      </div>
+      <div class="modal-filters">
+        <input type="search" class="form-input" id="modal-search" placeholder="Search…" data-i18n-placeholder="compare.search" autocomplete="off">
+        <div class="modal-type-chips" id="modal-type-chips"></div>
       </div>
       <div class="modal-body" id="modal-dataset-list">
         <!-- JS populates cards here -->
@@ -411,7 +520,7 @@
         <span class="text-xs text-muted" id="studio-subtitle" data-i18n="compare.studioSubtitle">Edit and Annotate</span>
       </div>
       <div class="studio-header-right">
-        <select class="form-select form-select-sm bg-surface" id="studio-scale-mode" title="Scale Mode" data-i18n-title="tips.scaleMode">
+        <select class="form-select form-select-sm bg-surface" id="studio-scale-mode" data-i18n-title="tips.scaleMode">
           <option value="visual" data-i18n="compare.scaleVisual">Visual Size</option>
           <option value="physical" data-i18n="compare.scalePhysical">Physical Scale</option>
         </select>
@@ -422,7 +531,7 @@
         <button class="btn btn-primary btn-sm" id="btn-studio-export-png"><i data-lucide="download"></i> <span data-i18n="compare.exportPng">Export PNG</span></button>
         <button class="btn btn-outline btn-sm" id="btn-studio-reset-view" title="Reset View" data-i18n-title="tips.resetView"><i data-lucide="refresh-ccw"></i></button>
         <div class="divider-vertical"></div>
-        <button class="btn btn-icon btn-ghost" id="btn-close-studio" title="Back to 3D Viewer" data-i18n-title="tips.back3d"><i data-lucide="x"></i></button>
+        <button class="btn btn-icon btn-ghost" id="btn-close-studio" title="Back to panels" data-i18n-title="compare.backToPanels"><i data-lucide="x"></i></button>
       </div>
     </div>
     <div class="studio-body">
@@ -471,29 +580,21 @@
     </div>
   </div>
 
-  <script src="js/core/utils.js?v=20260504"></script>
+  <script src="js/core/utils.js"></script>
   <script src="js/core/ui-actions.js"></script>
-  <script src="js/core/instance-config.js?v=20260706"></script>
-  <script src="js/core/i18n.js?v=20260504"></script>
-    <script src="js/core/theme.js?v=20260504"></script>
-  <script src="js/core/colorblind.js?v=20260528" nonce="{{CSP_NONCE}}"></script>
-  <script src="js/core/catalog.js?v=20260504"></script>
-  <script src="js/core/download-manifest.js?v=20260504"></script>
-  <script src="js/core/workspace-state.js?v=20260504"></script>
-  <script src="js/core/url-state.js?v=20260601-v5"></script>
-  <script src="js/core/export-manager.js?v=20260529-v2"></script>
-  <script src="js/core/annotation-manager.js?v=20260504"></script>
-  <script src="js/components/channel-panel.js?v=20260529-v16"></script>
-  <script src="js/components/annotation-layer.js?v=20260529-v16"></script>
-  <script src="js/components/studio-editor.js?v=20260529-v16"></script>
-  <script src="js/pages/compare.js?v=20260604-v7"></script>
+  <script src="js/core/instance-config.js"></script>
+  <script src="js/core/i18n.js"></script>
+  <script src="js/core/theme.js"></script>
+  <script src="js/core/colorblind.js" nonce="{{CSP_NONCE}}"></script>
+  <script src="js/core/catalog.js"></script>
+  <script src="js/core/download-manifest.js"></script>
+  <script src="js/core/workspace-state.js"></script>
+  <script src="js/core/url-state.js"></script>
+  <script src="js/core/export-manager.js"></script>
+  <script src="js/core/annotation-manager.js"></script>
+  <script src="js/components/channel-panel.js"></script>
+  <script src="js/components/annotation-layer.js"></script>
+  <script src="js/components/studio-editor.js"></script>
+  <script src="js/pages/compare.js"></script>
 </body>
 </html>
-
-
-
-
-
-
-
-

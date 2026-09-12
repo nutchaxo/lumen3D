@@ -1,8 +1,12 @@
 {
   "id": "zstack-browser",
   "name": "Z-Stack Browser",
-  "version": "1.1.1",
+  "version": "1.1.2",
   "platformCompat": ">=1.52.0",
+  "contexts": [
+    "page",
+    "panel"
+  ],
   "creator": "IRIBHM",
   "placement": "tools",
   "group": "layouts",

@@ -813,6 +813,84 @@ function admin_version_tuple(string $s): array {
     return array_pad($n, 3, 0);
 }
 
+// ── Release notes ────────────────────────────────────────────────────────────
+// The notes of every version ship as ONE asset of each release
+// (tools/build_release.py → lumen3d-release-notes.json): a host that skipped
+// releases shows the notes of every version it is about to absorb without one
+// GitHub call per version — and a version that was never tagged has no release
+// body anywhere else. Twins of dev_server.py _select_changelogs /
+// _release_notes_bundle / _local_changelogs.
+const RELEASE_NOTES_ASSET = 'lumen3d-release-notes.json';
+const RELEASE_NOTES_MAX_BYTES = 4 * 1024 * 1024;
+
+/** The notes of every version the host will absorb — current < v <= latest —
+ *  oldest first, so the operator reads them in the order they were released. */
+function admin_select_changelogs(array $versions, string $current, string $latest): array {
+    $lo = admin_version_tuple($current !== '' ? $current : '0.0.0');
+    $hi = admin_version_tuple($latest !== '' ? $latest : '0.0.0');
+    $picked = [];
+    foreach ($versions as $v => $md) {
+        if (!is_string($v) || !is_string($md) || trim($md) === '' || !preg_match('/^\d+\.\d+\.\d+$/', $v)) continue;
+        $tv = admin_version_tuple($v);
+        if ($tv > $lo && $tv <= $hi) $picked[] = ['t' => $tv, 'version' => $v, 'markdown' => $md];
+    }
+    usort($picked, fn($a, $b) => $a['t'] <=> $b['t']);
+    return array_map(fn($p) => ['version' => $p['version'], 'markdown' => $p['markdown']], $picked);
+}
+
+function admin_parse_release_notes_bundle(string $raw): array {
+    $doc = json_decode($raw, true);
+    $out = [];
+    foreach ((is_array($doc) ? ($doc['versions'] ?? []) : []) as $e) {
+        if (is_array($e) && is_string($e['version'] ?? null) && is_string($e['markdown'] ?? null)) {
+            $out[$e['version']] = $e['markdown'];
+        }
+    }
+    return $out;
+}
+
+/** {version: markdown} from the release's notes asset, or null when the release
+ *  predates the asset (its body then stands for the latest version alone). PHP has
+ *  no process to remember the download in, so it is cached in a file under api/
+ *  (never served), keyed by tag — the asset of a tag never changes. */
+function admin_release_notes_bundle(array $rel): ?array {
+    $tag = (string)($rel['tag_name'] ?? '');
+    $url = null; $size = null;
+    foreach (($rel['assets'] ?? []) as $a) {
+        if (($a['name'] ?? '') === RELEASE_NOTES_ASSET) {
+            $url = (string)($a['browser_download_url'] ?? '');
+            $size = $a['size'] ?? null;
+            break;
+        }
+    }
+    if (!$url || $tag === '') return null;
+    if (is_int($size) && $size > RELEASE_NOTES_MAX_BYTES) return null;
+    $cachePath = __DIR__ . '/release-notes-cache.json';
+    $cached = admin_read_json($cachePath);
+    if (is_array($cached) && ($cached['tag'] ?? null) === $tag && is_array($cached['versions'] ?? null)) {
+        return $cached['versions'];
+    }
+    $raw = mkt_fetch_bytes($url, RELEASE_NOTES_MAX_BYTES);
+    if ($raw === null) return null;
+    $bundle = admin_parse_release_notes_bundle($raw);
+    if ($bundle) admin_write_json($cachePath, ['tag' => $tag, 'fetchedAt' => date('c'), 'versions' => $bundle]);
+    return $bundle ?: null;
+}
+
+/** The notes of every installed version, newest first — what the changelog page
+ *  lists under the pending ones. */
+function admin_local_changelogs(): array {
+    $out = [];
+    foreach ((array)@glob(changelog_dir() . '/changelog_*.md') as $p) {
+        if (!preg_match('/changelog_(\d+\.\d+\.\d+)\.md$/', basename((string)$p), $m)) continue;
+        $md = @file_get_contents((string)$p);
+        if (!is_string($md) || trim($md) === '') continue;
+        $out[] = ['t' => admin_version_tuple($m[1]), 'version' => $m[1], 'markdown' => $md];
+    }
+    usort($out, fn($a, $b) => $b['t'] <=> $a['t']);
+    return array_map(fn($p) => ['version' => $p['version'], 'markdown' => $p['markdown']], $out);
+}
+
 /** Twin of dev_server.py:_preprocess_version — the version of the Python
  *  preprocessing pipeline the operator can actually obtain. The downloadable pack
  *  wins: on a PHP host it is the only copy present (the release ships no

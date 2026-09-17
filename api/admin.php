@@ -199,13 +199,30 @@ switch ($action) {
         $rel = json_decode($raw, true);
         if (!is_array($rel) || !isset($rel['tag_name'])) admin_json_out(['current' => $current, 'latest' => null, 'available' => false, 'noReleases' => true]);
         $latest = ltrim((string)$rel['tag_name'], 'v');
+        $available = admin_version_tuple($latest) > admin_version_tuple($current);
+        // One entry per version the update brings, oldest first. The release body is
+        // only the newest changelog, so a host several releases behind reads the
+        // others from the notes asset; a release older than that asset gets its body.
+        $changelogs = []; $source = null;
+        if ($available) {
+            $bundle = admin_release_notes_bundle($rel);
+            if ($bundle) { $changelogs = admin_select_changelogs($bundle, $current, $latest); $source = 'asset'; }
+            $body = $rel['body'] ?? null;
+            if (!$changelogs && is_string($body) && trim($body) !== '') {
+                $changelogs = [['version' => $latest, 'markdown' => $body]]; $source = 'body';
+            }
+        }
         admin_json_out([
             'current' => $current, 'latest' => $latest,
-            'available' => admin_version_tuple($latest) > admin_version_tuple($current),
+            'available' => $available,
             'notes' => $rel['body'] ?? null, 'publishedAt' => $rel['published_at'] ?? null,
+            'changelogs' => $changelogs, 'changelogsSource' => $source,
             'zipUrl' => $rel['zipball_url'] ?? null, 'htmlUrl' => $rel['html_url'] ?? null,
         ]);
     }
+
+    case 'changelog_history':
+        admin_json_out(['current' => admin_max_version(changelog_dir()), 'versions' => admin_local_changelogs()]);
 
     case 'update_preflight': {
         // Compat report against the target version (mirrors dev_server.py). PHP

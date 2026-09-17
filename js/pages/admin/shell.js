@@ -23,6 +23,9 @@ let _appReady = false;
 // chrome (sidebar/topbar) and boots straight into the Pages tab, whose editor
 // then owns the whole window — the Elementor model (edit in its own tab).
 const _editorOnly = /^[a-z0-9][a-z0-9_-]{0,63}$/.test(new URLSearchParams(location.search).get('editor') || '');
+// Dedicated release-notes page (admpan.html?changelog=1): the same chrome-less
+// shell, booting into the changelog tab — which has no sidebar entry of its own.
+const _changelogOnly = new URLSearchParams(location.search).get('changelog') === '1';
 
 export function registerTab(tab) { _tabs.set(tab.id, tab); }
 
@@ -56,6 +59,11 @@ function enterApp(username) {
   // and running while the operator works in any other tab.
   try { UploadDock.mount(); } catch (e) { console.error(e); }
   bindUploadGuard();
+  if (_changelogOnly) {
+    document.body.classList.add('adm-editor-only', 'adm-changelog-only');
+    switchTab('changelog', true);
+    return;
+  }
   if (_editorOnly) {
     document.body.classList.add('adm-editor-only');
     switchTab('pages', true);

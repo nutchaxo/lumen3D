@@ -268,10 +268,54 @@ body.adm-editor-only .adm-tab-inner { max-width: none; padding: 0; }
 .adm-release-notes-date::before { content: '·'; margin-right: 6px; }
 /* Release notes: the GitHub release body rendered from Markdown (js/pages/admin/markdown.js).
    Collapsed to a fixed height with a fade; "Tout afficher" lifts the cap. */
-.adm-release-notes { position: relative; max-height: 340px; overflow: hidden; background: var(--adm-bg); border: 1px solid var(--adm-border); border-radius: 10px; padding: 14px 18px; margin-top: 8px; color: var(--adm-text); font-size: 13px; line-height: 1.6; word-break: break-word; }
-.adm-release-notes.is-open { max-height: none; }
-.adm-release-notes.is-overflow::after { content: ''; position: absolute; left: 0; right: 0; bottom: 0; height: 64px; background: linear-gradient(to bottom, transparent, var(--adm-bg)); pointer-events: none; }
-.adm-release-notes-toggle { margin-top: 8px; }
+/* The notes box scrolls whether the entries are folded or not: a long changelog
+   never pushes the update button below the fold. */
+.adm-release-notes { max-height: min(60vh, 560px); overflow: auto; background: var(--adm-bg); border: 1px solid var(--adm-border); border-radius: 10px; padding: 12px 16px; margin-top: 8px; color: var(--adm-text); font-size: 13px; line-height: 1.6; word-break: break-word; }
+.adm-release-notes-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
+/* One pill per version the update brings; the last one is the target. */
+.adm-vpills { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
+.adm-vpill { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border-radius: 999px; border: 1px solid var(--adm-border); background: var(--adm-surface); color: var(--adm-text-sec); font: inherit; font-size: 12px; font-family: 'JetBrains Mono', monospace; cursor: pointer; }
+.adm-vpill:hover { border-color: var(--adm-border-active); color: var(--adm-text); }
+.adm-vpill.is-active { background: var(--adm-accent-subtle); border-color: var(--adm-border-active); color: var(--adm-accent); }
+.adm-vpill-tag { font-family: 'Inter', sans-serif; font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; padding: 1px 6px; border-radius: 999px; background: rgba(52, 211, 153, 0.15); color: var(--adm-success); }
+
+/* ── Release notes as a foldable tree: sections → entries → details ─────────
+   A closed entry shows its title alone; the disclosure triangle is the bullet. */
+.adm-cl details > summary, .adm-cl-version > summary { list-style: none; cursor: pointer; display: flex; align-items: center; gap: 8px; }
+.adm-cl details > summary::-webkit-details-marker, .adm-cl-version > summary::-webkit-details-marker { display: none; }
+.adm-cl details > summary::before, .adm-cl-version > summary::before { content: ''; flex: none; width: 6px; height: 6px; margin: 0 4px 2px 2px; border-right: 1.5px solid currentColor; border-bottom: 1.5px solid currentColor; transform: rotate(-45deg); transition: transform 0.15s; opacity: 0.75; }
+.adm-cl details[open] > summary::before, .adm-cl-version[open] > summary::before { transform: rotate(45deg); margin-bottom: 4px; }
+.adm-cl-sec { margin-top: 12px; }
+.adm-cl-sec:first-child { margin-top: 2px; }
+.adm-cl-sec-head { padding: 6px 0; border-bottom: 1px solid var(--adm-border); font-weight: 700; color: var(--adm-text); }
+.adm-cl-sec-title { font-size: 13.5px; }
+.adm-cl-count { margin-left: auto; font-size: 11px; font-weight: 600; color: var(--adm-text-muted); background: rgba(127, 127, 160, 0.14); padding: 1px 7px; border-radius: 999px; }
+.adm-cl-sec-body { padding: 2px 0; }
+.adm-cl-items { display: flex; flex-direction: column; }
+.adm-cl-item { border-bottom: 1px dashed var(--adm-border); }
+.adm-cl-item:last-child { border-bottom: none; }
+.adm-cl-item--flat { display: flex; align-items: center; gap: 8px; padding: 0 0 0 2px; }
+.adm-cl-item--flat::before { content: '•'; color: var(--adm-accent); margin-right: 2px; }
+.adm-cl-title { font-weight: 600; color: var(--adm-text); padding: 6px 0; line-height: 1.45; }
+.adm-cl-title code { font-weight: 500; }
+.adm-cl-body { padding: 0 0 10px 20px; color: var(--adm-text-sec); }
+.adm-cl-body > :last-child, .adm-cl-prose > :last-child { margin-bottom: 0; }
+.adm-cl-prose { padding: 4px 0; }
+.adm-cl-intro { margin-bottom: 6px; }
+
+/* ── The release-notes page (admpan.html?changelog=1): one block per version ── */
+body.adm-changelog-only .adm-tab-inner { max-width: 980px; margin: 0 auto; padding: 28px 24px 60px; }
+.adm-cl-group-head { font-size: 12px; font-weight: 600; color: var(--adm-text-sec); margin: 22px 0 8px; text-transform: uppercase; letter-spacing: 0.03em; }
+.adm-cl-version { background: var(--adm-card); border: 1px solid var(--adm-border); border-radius: 12px; margin-top: 10px; }
+.adm-cl-version.is-pending { border-color: var(--adm-border-active); }
+.adm-cl-version > summary { padding: 12px 16px; font-weight: 700; font-size: 14px; color: var(--adm-text); }
+.adm-cl-version-name { font-family: 'JetBrains Mono', monospace; }
+.adm-cl-version-body { padding: 4px 16px 14px; border-top: 1px solid var(--adm-border); font-size: 13px; line-height: 1.6; }
+.adm-cl-tag { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; padding: 2px 8px; border-radius: 999px; }
+.adm-cl-tag--pending { background: rgba(52, 211, 153, 0.15); color: var(--adm-success); }
+.adm-cl-tag--current { background: var(--adm-accent-subtle); color: var(--adm-accent); }
+.adm-cl-tag--target { background: rgba(251, 191, 36, 0.15); color: var(--adm-warning); }
+.adm-cl-toolbar { display: flex; gap: 8px; flex-wrap: wrap; }
 /* ── Markdown (release notes) ── */
 .adm-md > :first-child { margin-top: 0; }
 .adm-md > :last-child { margin-bottom: 0; }

@@ -19,12 +19,13 @@
 
 import { API_ADMIN, Utils, t, escHtml, apiFetch, apiFetchStatus, toast, el, refreshIcons } from './shared.js';
 import { fetchPluginUpdates, runPluginUpdates, updateAffordance } from './plugin-update.js';
-import { renderMarkdown } from './markdown.js';
+import { renderReleaseNotesTree } from './markdown.js';
 
 let _versions = null;
 let _check = null;
 let _preflight = null;   // report shown between "Mettre à jour" and confirmation
-let _notesOpen = false;  // release notes expanded past the collapsed box (survives re-renders)
+let _notesOpen = false;  // release-note entries unfolded (titles only when false; survives re-renders)
+let _notesVersion = null; // the version whose notes are shown — one pill per version the update brings
 let _polling = false;
 let _plugins = null;     // marketplace catalog annotated with installed/update status
 let _pluginsBusy = false;
@@ -70,9 +71,7 @@ function updateBlock() {
 
   return `
     <div class="adm-update-state adm-avail"><i data-lucide="sparkles"></i> ${escHtml(t('admin.updateAvailable', 'Mise à jour disponible'))} : <b>v${escHtml(_check.latest)}</b></div>
-    ${_check.notes ? `<div class="adm-release-notes-head">${escHtml(t('admin.releaseNotes', 'Notes de version'))}${publishedOn(_check.publishedAt)}</div>
-      <div class="adm-md adm-release-notes${_notesOpen ? ' is-open' : ''}" id="release-notes">${renderMarkdown(_check.notes, { dropLeadingH1: true })}</div>
-      <button class="adm-btn adm-btn-ghost adm-btn-sm adm-release-notes-toggle" id="btn-notes-toggle" style="display:none">${notesToggleLabel()}</button>` : ''}
+    ${notesBlock()}
     ${_preflight ? preflightBlock() : `
     <div class="adm-update-actions">
       <button class="adm-btn adm-btn-accent" id="btn-update"><i data-lucide="download-cloud"></i> ${escHtml(t('admin.updateNow', 'Mettre à jour maintenant'))}</button>
@@ -88,29 +87,75 @@ function publishedOn(iso) {
   return ` <span class="adm-release-notes-date">${escHtml(t('admin.publishedOn', 'publiée le {d}', { d: date }).replace('{d}', date))}</span>`;
 }
 
+/**
+ * The notes of every version the update brings, oldest first — the last one is
+ * the version that will be installed. A host that skipped releases reads each of
+ * them, not just the newest body. A server older than the notes asset answers
+ * with the body alone; it is shown as the latest version.
+ */
+function pendingChangelogs() {
+  const list = Array.isArray(_check?.changelogs)
+    ? _check.changelogs.filter((c) => c && typeof c.version === 'string' && typeof c.markdown === 'string' && c.markdown.trim())
+    : [];
+  if (!list.length && typeof _check?.notes === 'string' && _check.notes.trim() && _check.latest) {
+    return [{ version: _check.latest, markdown: _check.notes }];
+  }
+  return list;
+}
+
+function notesBlock() {
+  const list = pendingChangelogs();
+  if (!list.length) return '';
+  const target = list[list.length - 1].version;
+  if (!list.some((c) => c.version === _notesVersion)) _notesVersion = target;
+  const shown = list.find((c) => c.version === _notesVersion);
+  const pills = list.length > 1 ? `<div class="adm-vpills" id="notes-versions">${list.map((c) =>
+    `<button type="button" class="adm-vpill${c.version === _notesVersion ? ' is-active' : ''}" data-version="${escHtml(c.version)}">v${escHtml(c.version)}${
+      c.version === target ? `<span class="adm-vpill-tag">${escHtml(t('admin.releaseNotesTarget', 'sera installée'))}</span>` : ''}</button>`).join('')}</div>` : '';
+  const sub = list.length > 1
+    ? ` <span class="adm-release-notes-date">${escHtml(t('admin.releaseNotesCount', '{n} nouvelles versions', { n: list.length }).replace('{n}', String(list.length)))}</span>`
+    : publishedOn(_check.publishedAt);
+  return `
+    <div class="adm-release-notes-head">${escHtml(t('admin.releaseNotes', 'Notes de version'))}${sub}</div>
+    ${pills}
+    <div class="adm-release-notes" id="release-notes">${renderReleaseNotesTree(shown.markdown, { itemsOpen: _notesOpen })}</div>
+    <div class="adm-release-notes-actions">
+      <button type="button" class="adm-btn adm-btn-ghost adm-btn-sm" id="btn-notes-toggle">${notesToggleLabel()}</button>
+      <a class="adm-btn adm-btn-ghost adm-btn-sm" href="admpan.html?changelog=1" target="_blank" rel="noopener"><i data-lucide="external-link"></i> ${escHtml(t('admin.releaseNotesOpenPage', 'Ouvrir dans une page'))}</a>
+    </div>`;
+}
+
 function notesToggleLabel() {
   return _notesOpen
-    ? `<i data-lucide="chevron-up"></i> ${escHtml(t('admin.releaseNotesLess', 'Réduire'))}`
-    : `<i data-lucide="chevron-down"></i> ${escHtml(t('admin.releaseNotesMore', 'Tout afficher'))}`;
+    ? `<i data-lucide="chevron-up"></i> ${escHtml(t('admin.releaseNotesLess', 'Titres seulement'))}`
+    : `<i data-lucide="chevron-down"></i> ${escHtml(t('admin.releaseNotesMore', 'Afficher les détails'))}`;
 }
 
-// The notes open collapsed with a fade at the bottom. The button appears only
-// when they actually overflow the box — a control that expands nothing is noise.
-function syncNotesToggle() {
-  const box = el('release-notes');
-  const btn = el('btn-notes-toggle');
-  if (!box || !btn) return;
-  const overflow = _notesOpen || box.scrollHeight > box.clientHeight + 4;
-  btn.style.display = overflow ? '' : 'none';
-  box.classList.toggle('is-overflow', overflow && !_notesOpen);
-}
-
+// Titles only ⇄ every entry unfolded. The box scrolls in both states.
 function toggleNotes() {
   _notesOpen = !_notesOpen;
-  el('release-notes')?.classList.toggle('is-open', _notesOpen);
+  el('release-notes')?.querySelectorAll('details.adm-cl-item').forEach((d) => { d.open = _notesOpen; });
   const btn = el('btn-notes-toggle');
   if (btn) { btn.innerHTML = notesToggleLabel(); refreshIcons(btn); }
-  syncNotesToggle();
+}
+
+function bindUpdateBody(root) {
+  root.querySelector('#btn-update')?.addEventListener('click', startPreflight);
+  root.querySelector('#btn-confirm-update')?.addEventListener('click', confirmUpdate);
+  root.querySelector('#btn-cancel-update')?.addEventListener('click', () => { _preflight = null; render(); });
+  root.querySelector('#btn-notes-toggle')?.addEventListener('click', toggleNotes);
+  root.querySelectorAll('#notes-versions .adm-vpill').forEach((b) => b.addEventListener('click', () => {
+    _notesVersion = b.getAttribute('data-version');
+    renderUpdateBody();
+  }));
+}
+
+function renderUpdateBody() {
+  const body = el('update-body');
+  if (!body) return;
+  body.innerHTML = updateBlock();
+  bindUpdateBody(body);
+  refreshIcons(body);
 }
 
 // Compat report against the TARGET version, shown before the operator confirms.
@@ -321,14 +366,10 @@ function render(lastOutcome) {
     </div>`;
 
   el('btn-recheck')?.addEventListener('click', recheck);
-  el('btn-update')?.addEventListener('click', startPreflight);
-  el('btn-confirm-update')?.addEventListener('click', confirmUpdate);
-  el('btn-cancel-update')?.addEventListener('click', () => { _preflight = null; render(); });
   el('btn-ack-update')?.addEventListener('click', ackOutcome);
-  el('btn-notes-toggle')?.addEventListener('click', toggleNotes);
+  bindUpdateBody(root);
   bindPluginUpdates(root);
   refreshIcons(root);
-  syncNotesToggle();
 }
 
 async function loadVersions() {

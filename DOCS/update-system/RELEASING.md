@@ -53,6 +53,8 @@ Format (voir `changelog_1.7.0.md` comme gabarit) :
 [Versioning] Plateforme Web → v1.7.1. changelog_1.7.1.md généré.
 ```
 
+> **Depuis la v1.55.0, le changelog est écrit en anglais**, une entrée par puce sous la forme `- **Short title**: what changed and why`. Le panneau admin replie les notes sur le titre en gras seul (*Titles only*), et chaque release embarque **tous** les changelogs du niveau `changelog/` dans l'asset `lumen3d-release-notes.json` : un hôte qui a sauté des versions lit ainsi les notes de chacune d'elles, une pastille par version, jusqu'à celle qui sera installée.
+
 Si un **plugin bundled** (livré dans le dépôt, sous `js/modules/`) a changé, bumpe aussi son `plugin.json#version` — il part avec cette release.
 
 ### A.2 — Commit
@@ -85,7 +87,7 @@ La CI (`.github/workflows/release.yml`) enchaîne automatiquement :
 2. test de démarrage (`dev_server.py --check`),
 3. build du **pack de traitement complet** (`build_pipeline_bundle.py --full`) — avant l'étape suivante, pour être couvert par la signature,
 4. build de l'artefact curé (`tools/build_release.py`) → `lumen3d-web-1.7.1.zip` + `version.json` + `SHA256SUMS` (+ `SHA256SUMS.sig` **si** `LUMEN_SIGNING_KEY` est posé). Il copie aussi le **pack léger** dans `dist/` et fait entrer les **deux packs** dans `SHA256SUMS`,
-5. `gh release create` publie les assets : le zip web, `SHA256SUMS`(`.sig`), et les deux packs `lumen3d-pipeline-{leger,complet}-<version pipeline>.zip`.
+5. `gh release create` publie les assets : le zip web, `SHA256SUMS`(`.sig`), `lumen3d-release-notes.json` (tous les changelogs, pour les notes de version du panneau admin) et les deux packs `lumen3d-pipeline-{leger,complet}-<version pipeline>.zip`.
 
 > **Les packs sont nommés d'après la version du PIPELINE**, pas celle de la plateforme. C'est ce qui permet au panneau admin de comparer le pack installé sur l'hôte à celui publié, sans rien télécharger — et donc de proposer une mise à jour du pipeline **sans** mise à jour de la plateforme (onglets *Pipeline* et *Mises à jour*, depuis la web v1.44.0). Un pack qui n'est pas joint à la release n'est pas détectable : ne retire pas ces assets.
 

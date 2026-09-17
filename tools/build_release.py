@@ -50,6 +50,35 @@ ROOT_FILES = (
 
 ROOT_DIRS = ("css", "js", "lang", "assets", "changelog", "api", "config")
 
+# The notes of every version, as ONE release asset. A host that skipped releases
+# shows the notes of each version it is about to absorb from this file — one
+# download, no GitHub API call per version (the release body only carries the
+# newest changelog, and a version that was never tagged has no body at all).
+RELEASE_NOTES_ASSET = "lumen3d-release-notes.json"
+CHANGELOG_NAME_RE = re.compile(r"^changelog_(\d+\.\d+\.\d+)\.md$")
+
+
+def build_release_notes(version: str) -> bytes:
+    """Every changelog at the flat level (changelog/archive is history that predates
+    the release pipeline), newest first, as the JSON the admin panel reads."""
+    versions = []
+    for path in (REPO_ROOT / "changelog").iterdir():
+        m = CHANGELOG_NAME_RE.match(path.name)
+        if not m or not path.is_file():
+            continue
+        text = path.read_text(encoding="utf-8").replace("\r\n", "\n")
+        if not text.strip():
+            continue
+        versions.append((tuple(int(x) for x in m.group(1).split(".")), m.group(1), text))
+    versions.sort(reverse=True)
+    doc = {
+        "schema": 1,
+        "product": "lumen3d-web",
+        "latest": version,
+        "versions": [{"version": v, "markdown": text} for _, v, text in versions],
+    }
+    return (json.dumps(doc, ensure_ascii=False, indent=0) + "\n").encode("utf-8")
+
 # Runtime state written by the admin API on the deployed host — shipping it
 # would overwrite live credentials/config on update.
 API_RUNTIME_STATE = frozenset(
@@ -401,11 +430,18 @@ def main():
         shutil.copy2(built, out_dir / built.name)
     packs = sorted(out_dir.glob("lumen3d-pipeline-*.zip"), key=lambda p: p.name)
 
+    # The release notes ride beside the packs and are covered by the same signed
+    # SHA256SUMS: display-only, but nothing an updater fetches goes unverified.
+    notes_bytes = build_release_notes(args.version)
+    (out_dir / RELEASE_NOTES_ASSET).write_bytes(notes_bytes)
+
     lines = [f"{zip_digest}  {zip_name}\n"]
     for pack in packs:
         digest = sha256_hex(pack.read_bytes())
         lines.append(f"{digest}  {pack.name}\n")
         print(f"    asset {pack.name} ({pack.stat().st_size} bytes)")
+    lines.append(f"{sha256_hex(notes_bytes)}  {RELEASE_NOTES_ASSET}\n")
+    print(f"    asset {RELEASE_NOTES_ASSET} ({len(notes_bytes)} bytes)")
     sums_bytes = "".join(lines).encode("utf-8")
     sums_path = out_dir / "SHA256SUMS"
     sums_path.write_bytes(sums_bytes)

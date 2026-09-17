@@ -54,7 +54,7 @@ jobs:
         # only offer an update if that pack exists as an asset.
         run: |
           set -e
-          ASSETS="dist/lumen3d-web-${GITHUB_REF_NAME#v}.zip dist/SHA256SUMS"
+          ASSETS="dist/lumen3d-web-${GITHUB_REF_NAME#v}.zip dist/SHA256SUMS dist/lumen3d-release-notes.json"
           if [ -f dist/SHA256SUMS.sig ]; then ASSETS="$ASSETS dist/SHA256SUMS.sig"; fi
           for PACK in dist/lumen3d-pipeline-*.zip; do
             if [ -f "$PACK" ]; then ASSETS="$ASSETS $PACK"; fi

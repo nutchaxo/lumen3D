@@ -245,14 +245,80 @@ assert.equal(md('x'.repeat(70 * 1024)).length, 64 * 1024 + 7, 'input capped at 6
 // ── 5. the tab uses it ───────────────────────────────────────────────────────
 {
   const s = read('js/pages/admin/tab-updates.js');
-  assert.ok(/import \{[^}]*\brenderMarkdown\b[^}]*\} from '\.\/markdown\.js'/.test(s), 'tab-updates imports renderMarkdown');
-  assert.ok(/renderMarkdown\(_check\.notes,\s*\{[^}]*dropLeadingH1:\s*true/.test(s), 'notes rendered via renderMarkdown (document title dropped)');
-  assert.ok(!/<pre class="adm-release-notes">\$\{escHtml\(_check\.notes\)\}/.test(s), 'the plain-text <pre> is gone');
-  assert.ok(!/\$\{_check\.notes\}/.test(s), 'notes never interpolated raw');
+  assert.ok(/import \{[^}]*\brenderReleaseNotesTree\b[^}]*\} from '\.\/markdown\.js'/.test(s), 'tab-updates imports renderReleaseNotesTree');
+  const page = read('js/pages/admin/tab-changelog.js');
+  assert.ok(/import \{[^}]*\brenderReleaseNotesTree\b[^}]*\} from '\.\/markdown\.js'/.test(page), 'the changelog page imports renderReleaseNotesTree');
+}
+
+// ── 6. release notes as a foldable tree ──────────────────────────────────────
+// A closed entry must still say what changed: the title is the bold opening
+// (`- **Title**: details`, the convention since v1.55.0; the older files put a
+// sentence in bold), else the text before the first colon, else the first
+// sentence. Sections keep their badge and count their entries.
+{
+  const { splitEntryTitle, renderReleaseNotesTree } = await import('../../js/pages/admin/markdown.js');
+  const count = (html, re) => (html.match(re) || []).length;
+  assert.deepEqual(splitEntryTitle('**Slice mode looked at the stack from the wrong side**: the +Z face was mirrored.'),
+    { title: 'Slice mode looked at the stack from the wrong side', rest: 'the +Z face was mirrored.' }, 'bold title, colon outside');
+  assert.deepEqual(splitEntryTitle('**Le mode coupe regardait la pile du mauvais côté.** Les coupes ne laissent que deux points de vue.'),
+    { title: 'Le mode coupe regardait la pile du mauvais côté.', rest: 'Les coupes ne laissent que deux points de vue.' }, 'bold sentence of the older files');
+  assert.deepEqual(splitEntryTitle('**Title only**'), { title: 'Title only', rest: '' }, 'nothing after the bold');
+  assert.deepEqual(splitEntryTitle('Admin preview: the dataset opens again.'),
+    { title: 'Admin preview', rest: 'the dataset opens again.' }, 'no bold: the text before the first colon');
+  assert.deepEqual(splitEntryTitle('`tests/js/test_x.mjs` renders every changelog. It is run by CI.'),
+    { title: '`tests/js/test_x.mjs` renders every changelog.', rest: 'It is run by CI.' }, 'no bold, no colon: the first sentence');
+  assert.deepEqual(splitEntryTitle('See https://x.y/z: the docs'), { title: 'See https://x.y/z', rest: 'the docs' });
+  assert.deepEqual(splitEntryTitle(''), { title: '', rest: '' });
+
+  const src = [
+    '# Changelog v9.9.9 (Plateforme Web)', '', 'Intro paragraph.', '',
+    '## [FIXED]', '', '- **Alpha**: details of alpha', '- **Beta.** More about beta', '  continued line', '- Gamma alone', '',
+    '## [ADDED]', '', '* `tests/x.mjs` — one test. And a second sentence.', '',
+    'Trailing note.', '',
+  ].join('\n');
+  const tree = renderReleaseNotesTree(src);
+  assert.ok(tree.startsWith('<div class="adm-cl">'), 'wrapped in .adm-cl');
+  assert.ok(!/Changelog v9\.9\.9/.test(tree), 'the document title is dropped');
+  assert.ok(/<div class="adm-cl-intro adm-md"><p>Intro paragraph\.<\/p><\/div>/.test(tree), 'intro rendered as prose');
+  assert.equal(count(tree, /<details class="adm-cl-sec" open>/g), 2, 'one open <details> per section');
+  assert.ok(/adm-md-badge-fixed">Fixed<\/span><span class="adm-cl-count">3<\/span>/.test(tree), 'FIXED badge + 3 entries');
+  assert.ok(/adm-md-badge-added">Added<\/span><span class="adm-cl-count">1<\/span>/.test(tree), 'ADDED badge + 1 entry');
+  assert.ok(/<details class="adm-cl-item"><summary class="adm-cl-title">Alpha<\/summary><div class="adm-cl-body adm-md">details of alpha<\/div><\/details>/.test(tree), 'entry = title + body');
+  assert.ok(/<summary class="adm-cl-title">Beta\.<\/summary><div class="adm-cl-body adm-md">More about beta continued line<\/div>/.test(tree), 'continuation lines join the body');
+  assert.ok(/<div class="adm-cl-item adm-cl-item--flat"><span class="adm-cl-title">Gamma alone<\/span><\/div>/.test(tree), 'an entry without details is a plain row');
+  assert.ok(/<summary class="adm-cl-title"><code>tests\/x\.mjs<\/code> — one test\.<\/summary>/.test(tree), 'inline code survives in a title');
+  assert.ok(/<div class="adm-cl-prose adm-md"><p>Trailing note\.<\/p><\/div>/.test(tree), 'prose after a list stays in the section');
+  assert.equal(count(tree, /<details class="adm-cl-item" open>/g), 0, 'entries are folded by default');
+  assert.equal(count(renderReleaseNotesTree(src, { itemsOpen: true }), /<details class="adm-cl-item" open>/g), 3, 'itemsOpen unfolds every entry with a body (Alpha, Beta, the test line — not Gamma)');
+  assert.equal(count(renderReleaseNotesTree(src, { sectionsOpen: false }), /<details class="adm-cl-sec">/g), 2, 'sectionsOpen:false folds the sections');
+  assert.equal(renderReleaseNotesTree('   '), '', 'blank input renders nothing');
+  const hostile = renderReleaseNotesTree('## [FIXED]\n- **<script>x</script>**: <img src=x onerror=1> [j](javascript:alert(1))');
+  assert.ok(!/<script|<img|javascript:/i.test(hostile) && !/<[^>]*onerror/i.test(hostile) && /&lt;script&gt;x&lt;\/script&gt;/.test(hostile),
+    'the tree is as innerHTML-safe as the flat renderer (raw HTML shown as text, no javascript: link)');
+
+  // Every changelog ever shipped folds into a balanced tree with a badge per section.
+  const files = ['changelog', 'changelog/archive'].flatMap((d) =>
+    readdirSync(path.join(ROOT, d)).filter((f) => /^changelog_\d+\.\d+\.\d+\.md$/.test(f)).map((f) => path.join(d, f)));
+  let entries = 0;
+  for (const f of files) {
+    const html = renderReleaseNotesTree(read(f));
+    for (const tag of ['details', 'summary', 'div', 'ul', 'ol', 'li', 'p', 'strong', 'em', 'code', 'a', 'span']) {
+      assert.equal(count(html, new RegExp(`<${tag}[\\s>]`, 'g')), count(html, new RegExp(`</${tag}>`, 'g')), `${f}: <${tag}> balanced in the tree`);
+    }
+    entries += count(html, /class="adm-cl-title"/g);
+    assert.ok(!/<summary class="adm-cl-title"><\/summary>/.test(html), `${f}: no empty entry title`);
+  }
+  assert.ok(entries > 500, `${entries} entries across the changelogs`);
+  const s = read('js/pages/admin/tab-updates.js');
+  assert.ok(/renderReleaseNotesTree\(shown\.markdown,\s*\{[^}]*itemsOpen:\s*_notesOpen/.test(s), 'the tab renders the selected version as a tree, folded unless asked');
+  assert.ok(!/renderMarkdown\(/.test(s), 'the flat renderer is no longer used by the tab');
+  assert.ok(!/\$\{_check\.notes\}/.test(s) && !/\$\{shown\.markdown\}/.test(s), 'notes never interpolated raw');
   const css = read('css/admin-shell.css');
-  for (const cls of ['.adm-md-badge-added', '.adm-md-badge-optimized', '.adm-md-badge-fixed', '.adm-md-quote', '.adm-md-table', '.adm-md-pre', '.adm-release-notes.is-open']) {
+  for (const cls of ['.adm-md-badge-added', '.adm-md-badge-optimized', '.adm-md-badge-fixed', '.adm-md-quote', '.adm-md-table', '.adm-md-pre',
+    '.adm-release-notes {', '.adm-cl-item', '.adm-cl-sec-head', '.adm-cl-count', '.adm-vpill', '.adm-cl-version', 'body.adm-changelog-only']) {
     assert.ok(css.includes(cls), `admin-shell.css styles ${cls}`);
   }
+  assert.ok(/overflow:\s*auto/.test((css.match(/\.adm-release-notes \{[^}]*\}/) || [''])[0]), 'the notes box scrolls');
 }
 
 console.log('admin markdown renderer: OK');

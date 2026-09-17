@@ -2022,6 +2022,87 @@ def _pipeline_build_lite() -> Path | None:
 _RELEASE_CACHE: dict = {}      # "latest" -> (fetched_at, release dict)
 _RELEASE_TTL = 300.0
 
+# The notes of every version ship as ONE asset of each release
+# (tools/build_release.py → lumen3d-release-notes.json): a host that skipped
+# releases shows the notes of every version it is about to absorb without one
+# GitHub call per version — and a version that was never tagged has no release
+# body anywhere else. Cached per tag: the asset of a tag never changes.
+RELEASE_NOTES_ASSET = "lumen3d-release-notes.json"
+_RELEASE_NOTES_MAX_BYTES = 4 * 1024 * 1024
+_RELEASE_NOTES_CACHE: dict = {}   # tag -> {version: markdown}
+_CHANGELOG_NAME_RE = re.compile(r"^changelog_(\d+\.\d+\.\d+)\.md$")
+
+
+def _select_changelogs(versions: dict, current: str, latest: str) -> list:
+    """The notes of every version the host will absorb — current < v <= latest —
+    oldest first, so the operator reads them in the order they were released."""
+    lo, hi = _version_tuple(current or "0.0.0"), _version_tuple(latest or "0.0.0")
+    picked = []
+    for v, md in (versions or {}).items():
+        if not isinstance(v, str) or not isinstance(md, str) or not md.strip():
+            continue
+        if not re.fullmatch(r"\d+\.\d+\.\d+", v):
+            continue
+        tv = _version_tuple(v)
+        if lo < tv <= hi:
+            picked.append((tv, v, md))
+    picked.sort()
+    return [{"version": v, "markdown": md} for _, v, md in picked]
+
+
+def _parse_release_notes_bundle(raw: bytes) -> dict:
+    doc = json.loads(raw.decode("utf-8"))
+    out = {}
+    entries = doc.get("versions") if isinstance(doc, dict) else None
+    for entry in entries or []:
+        if (isinstance(entry, dict) and isinstance(entry.get("version"), str)
+                and isinstance(entry.get("markdown"), str)):
+            out[entry["version"]] = entry["markdown"]
+    return out
+
+
+def _release_notes_bundle(rel: dict) -> dict | None:
+    """{version: markdown} read from the release's notes asset, or None when the
+    release predates the asset (its body then stands for the latest version alone)."""
+    tag = rel.get("tag_name") or ""
+    url, size = None, None
+    for a in rel.get("assets") or []:
+        if a.get("name") == RELEASE_NOTES_ASSET:
+            url, size = a.get("browser_download_url"), a.get("size")
+            break
+    if not url or not tag:
+        return None
+    if tag in _RELEASE_NOTES_CACHE:
+        return _RELEASE_NOTES_CACHE[tag]
+    if isinstance(size, int) and size > _RELEASE_NOTES_MAX_BYTES:
+        return None
+    req = urllib.request.Request(url, headers={"User-Agent": "lumen3d-admin"})
+    with urllib.request.urlopen(req, timeout=20) as r:
+        raw = r.read(_RELEASE_NOTES_MAX_BYTES + 1)
+    if len(raw) > _RELEASE_NOTES_MAX_BYTES:
+        return None
+    bundle = _parse_release_notes_bundle(raw)
+    _RELEASE_NOTES_CACHE[tag] = bundle
+    return bundle
+
+
+def _local_changelogs() -> list:
+    """The notes of every installed version, newest first — what the changelog page
+    lists under the pending ones."""
+    out = []
+    for path in CHANGELOG_DIR.glob("changelog_*.md"):
+        m = _CHANGELOG_NAME_RE.match(path.name)
+        if not m:
+            continue
+        try:
+            md = path.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        if md.strip():
+            out.append((_version_tuple(m.group(1)), m.group(1), md))
+    out.sort(reverse=True)
+    return [{"version": v, "markdown": md} for _, v, md in out]
+
 
 def _github_latest_release() -> dict:
     """The latest release, cached briefly.
@@ -2217,11 +2298,27 @@ def _update_check() -> dict:
             sums_url = a.get("browser_download_url")
         elif name == "SHA256SUMS.sig":
             sig_url = a.get("browser_download_url")
+    # One entry per version the update brings, oldest first. The release body is
+    # only the newest changelog, so a host several releases behind reads the
+    # others from the notes asset; a release older than that asset gets its body.
+    changelogs, source = [], None
+    if available:
+        try:
+            bundle = _release_notes_bundle(rel)
+        except Exception:
+            bundle = None
+        if bundle:
+            changelogs, source = _select_changelogs(bundle, current, latest), "asset"
+        body = rel.get("body")
+        if not changelogs and isinstance(body, str) and body.strip():
+            changelogs, source = [{"version": latest, "markdown": body}], "body"
     return {
         "current": current,
         "latest": latest,
         "available": available,
         "notes": rel.get("body"),
+        "changelogs": changelogs,
+        "changelogsSource": source,
         "publishedAt": rel.get("published_at"),
         "zipUrl": rel.get("zipball_url"),
         "htmlUrl": rel.get("html_url"),
@@ -5472,6 +5569,8 @@ class AdminHandler(http.server.SimpleHTTPRequestHandler):
                 self._json(200, _apply_tree_modes())
             elif action == "update_check":
                 self._json(200, _update_check())
+            elif action == "changelog_history":
+                self._json(200, {"current": _max_version(CHANGELOG_DIR), "versions": _local_changelogs()})
             elif action == "update_preflight":
                 self._json(200, _update_preflight_report(params.get("target")))
             elif action == "update_apply":

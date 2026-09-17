@@ -280,9 +280,11 @@ Aparecen tres ejes de color sobre el volumen:
 
 | Eje | Color | Significado |
 |---|---|---|
-| **A / P** | verde | Anterior ↔ Posterior (delante / detrás) |
-| **D / V** | azul | Dorsal ↔ Ventral (espalda / vientre) |
-| **L / R** | rojo | Izquierda ↔ Derecha |
+| **Rojo 1 / Rojo 2** | rojo | los dos extremos del primer eje (mostrados R1 / R2) |
+| **Verde 1 / Verde 2** | verde | los dos extremos del segundo eje (G1 / G2) |
+| **Azul 1 / Azul 2** | azul | los dos extremos del tercer eje (B1 / B2) |
+
+Los ejes no imponen ninguna nomenclatura: renómbrelos en la lista **Ejes mostrados** (anterior / posterior, dorsal / ventral, cabeza / cola…) y las opciones de **Vista predeterminada** usan los nombres que haya dado.
 
 **Cómo hacerlo:**
 
@@ -453,7 +455,7 @@ Estos plugins **no** vienen con el sitio: se instalan bajo demanda, desde el asi
 | **Download Center** | Herramienta | Recuperar los archivos, mediciones, metadatos y exportaciones del conjunto |
 | **Screenshot** | Herramienta | Capturar la vista 3D como imagen PNG |
 | **Presentation Mode** | Herramienta | Pantalla completa sin interfaz, para proyectar |
-| **Orientation Axes** | Herramienta | El marcador anatómico A/P · D/V · L/R (véase §3.5) |
+| **Orientation Axes** | Herramienta | El marcador de tres ejes rojo / verde / azul 1-2, renombrables (véase §3.5) |
 | **Toggle Grid / Axes / Volume** | Herramientas | Mostrar u ocultar la rejilla, los ejes, el volumen |
 | **Screenshot (sandboxed)** | Herramienta | La misma captura de pantalla, pero ejecutada en un entorno aislado — el ejemplo de referencia de un plugin aislado |
 | **Chunk Debug** | Herramienta | Herramienta de diagnóstico técnico. **Se puede desactivar sin riesgo** en un sitio en producción |

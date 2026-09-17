@@ -20,6 +20,11 @@
  * toward the camera, anterior up"), not about this dataset's raw voxel axes — so
  * refining the calibration later leaves it meaning the same thing.
  *
+ * Arms are keyed R/L (±X, red), A/P (±Y, green), V/D (±Z, blue). The keys are
+ * storage identifiers, not a nomenclature: an un-renamed arm is drawn as R1/R2,
+ * G1/G2, B1/B2 (lang/*.json) and the admin panel lists it as "Red 1"… — the
+ * operator names the arms after their own convention (anterior, dorsal, …).
+ *
  * `metadata.orientationAxes` = {
  *     labels:      { A: "Rostral", … }        per-arm rename, missing ⇒ the glyph
  *     hidden:      ["D", "V"]                 arms not drawn

@@ -3562,6 +3562,7 @@ def _get_dataset(dataset_id: str) -> dict | None:
     try:
         meta = json.loads(meta_path.read_text(encoding="utf-8"))
         meta["id"]         = dataset_id
+        meta["type"]       = type_dir      # the folder is the authority, as in the catalog
         meta["folderName"] = folder
         return meta
     except Exception:

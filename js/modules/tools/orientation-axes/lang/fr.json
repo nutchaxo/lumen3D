@@ -1,9 +1,9 @@
 {
   "title": "Basculer les axes d'orientation",
-  "axisA": "A",
-  "axisP": "P",
-  "axisV": "V",
-  "axisD": "D",
-  "axisR": "R",
-  "axisL": "L"
+  "axisR": "R1",
+  "axisL": "R2",
+  "axisA": "G1",
+  "axisP": "G2",
+  "axisV": "B1",
+  "axisD": "B2"
 }

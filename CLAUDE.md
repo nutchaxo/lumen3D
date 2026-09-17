@@ -150,7 +150,7 @@ Plugin pattern : each module has `plugin.json` (metadata) + `index.js` (calls `P
 | Path | Purpose |
 |---|---|
 | `tools/toggle-grid` `toggle-axes` `toggle-volume` | Scene visibility toggles |
-| `tools/orientation-axes` | **Interactive embryo orientation gizmo** (A/P green, D/V blue, L/R red). Drag to recalibrate; quaternion persisted to `metadata.json`. Hooks into admin panel via `postMessage` (no coupling to `VolumeViewer` internals — see [changelog_1.0.2.md](changelog/changelog_1.0.2.md)). |
+| `tools/orientation-axes` | **Interactive orientation gizmo** — three coloured axes, each arm shown as *Red 1/2* (±X), *Green 1/2* (±Y), *Blue 1/2* (±Z) (glyphs R1/R2, G1/G2, B1/B2) unless the operator renames it; the storage keys under `orientationAxes.labels/hidden` and the `defaultView.preset` ids stay `R/L`, `A/P`, `V/D` / `right,left,anterior,posterior,ventral,dorsal` (never shown — the admin builds the preset labels from the arm names). Drag to recalibrate; quaternion persisted to `metadata.json` (`orientation` = Q_base). The core registers Q_base with `VolumeViewer.setFrameQuaternion` so the axis-aligned views (`setView('xy')` = the z-stack browser's track mode) spin the acquisition planes into the defined frame (nearest rotation about the viewing axis) instead of the raw file orientation (v1.54.1). Hooks into admin panel via `postMessage` (no coupling to `VolumeViewer` internals — see [changelog_1.0.2.md](changelog/changelog_1.0.2.md)). |
 | `tools/screenshot` | PNG capture |
 | `tools/presentation-mode` | Fullscreen / kiosk mode |
 | `tools/download-center` | Export bundles (PNG, slice stacks, metadata) + workspace save/restore ("Save state" / "Restore state" buttons, via [export-manager.js](js/core/export-manager.js)) |

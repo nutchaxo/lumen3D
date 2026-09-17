@@ -573,6 +573,7 @@
     "propFontSize": "Font Size",
     "loadingNative": "Native resolution: {chunks}/{total} chunks",
     "cancelLoad": "Cancel",
+    "nativeMissing": "Native resolution: {missing} chunks could not be loaded and stay at preview resolution.",
     "panelChannels": "Panel {n} channels",
     "noChannelMeta": "No channel metadata.",
     "channelPanelMissing": "Channel panel not loaded."

@@ -460,6 +460,43 @@ class SVRManager {
     }
   }
 
+  /**
+   * Upload only the sub-box [rx, rx+rw) x [ry, ry+rh) x [rz, rz+rd) of a brick's slot.
+   * `data` holds that box alone (tightly packed RGBA, z-major). The page table points
+   * at the slot exactly as for a whole brick, so the caller guarantees that nothing
+   * outside the box is ever sampled: a slice through the volume reads one voxel plane
+   * of each brick it crosses, and shipping the other sixty-three was what made the
+   * Studio's native pass crawl. The rest of the slot keeps whatever it held (undefined
+   * on a fresh atlas) — this is for a throwaway atlas, never the ray-marcher's own.
+   */
+  writeRgbaBrickRegion(bx, by, bz, data, rx, ry, rz, rw, rh, rd) {
+    const bs = this.brickSize;
+    if (!data || !(rw > 0 && rh > 0 && rd > 0)) return false;
+    if (rx < 0 || ry < 0 || rz < 0 || rx + rw > bs || ry + rh > bs || rz + rd > bs) return false;
+    const needed = rw * rh * rd * 4;
+    if (data.length < needed) return false;
+    const slotIndex = this.getSlot(bx, by, bz);
+    const coord = this._slotCoord(slotIndex);
+    const ptIdx = (bz * this.ptNx * this.ptNy + by * this.ptNx + bx) * 4;
+    this.pageData[ptIdx + 0] = coord.x;
+    this.pageData[ptIdx + 1] = coord.y;
+    this.pageData[ptIdx + 2] = coord.z;
+    this.pageData[ptIdx + 3] = coord.atlas + 1;
+    this.pageTable.needsUpdate = true;
+    const upload = data.length === needed ? data : data.subarray(0, needed);
+    const ok = this._uploadRgbaRegion(
+      coord.atlas,
+      coord.x * bs + rx, coord.y * bs + ry, coord.z * bs + rz,
+      rw, rh, rd, upload
+    );
+    if (ok === false) {
+      this.pageData[ptIdx + 3] = 0;
+      this.pageTable.needsUpdate = true;
+      return false;
+    }
+    return true;
+  }
+
   _compactRgbaBrickData(brickData, bw, bh, bd) {
     if (!brickData) return null;
     const bs = this.brickSize;

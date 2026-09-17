@@ -573,6 +573,7 @@
     "propFontSize": "Tekengrootte",
     "loadingNative": "Oorspronkelijke resolutie: {chunks}/{total} chunks",
     "cancelLoad": "Annuleren",
+    "nativeMissing": "Oorspronkelijke resolutie: {missing} chunks konden niet worden geladen en blijven op voorbeeldresolutie.",
     "panelChannels": "Kanalen van paneel {n}",
     "noChannelMeta": "Geen kanaalmetadata.",
     "channelPanelMissing": "Kanaalpaneel niet geladen."

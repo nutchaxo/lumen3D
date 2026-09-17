@@ -50,14 +50,22 @@ async function processDecode(msg, epoch) {
       ctx.globalCompositeOperation = 'copy';
     }
     ctx.drawImage(bmp, 0, 0);
-    const imgData = ctx.getImageData(0, 0, bmp.width, bmp.height);
-    const t2 = performance.now();
 
-    
+    // An optional sub-box of the brick, voxel ranges [x0,x1) x [y0,y1) x [z0,z1).
+    // A slice through the volume needs one or a few voxel planes of every brick it
+    // crosses, and un-mosaicking, shipping and uploading the other sixty is what made
+    // the Studio's native pass crawl. The result is then the compact region alone
+    // (z-major, then y, then x); a caller tells it from a full brick by its length.
+    // Only the grid layout knows how to cut: every other path returns the full brick.
+    const region = packing.mode === 'grid' ? normalizeRegion(msg.region, bs) : null;
+    const rx0 = region ? region.x0 : 0, rx1 = region ? region.x1 : bs;
+    const ry0 = region ? region.y0 : 0, ry1 = region ? region.y1 : bs;
+    const rz0 = region ? region.z0 : 0, rz1 = region ? region.z1 : bs;
+    const rw = rx1 - rx0, rh = ry1 - ry0, rd = rz1 - rz0;
     const totalVoxels = bs * bs * bs;
-    const bytes = new Uint8Array(totalVoxels);
-    const srcData = imgData.data;
-    
+    const bytes = new Uint8Array(rw * rh * rd);
+    let t2 = t1;
+
     if (packing.mode === 'grid') {
       // ELE-25 (BUG-004): la mosaïque réelle (3-chunk_packer.py) est invariablement 8x8
       // pour bs=64. Le défaut historique 16 ne correspondait à AUCUN format produit et
@@ -68,56 +76,43 @@ async function processDecode(msg, epoch) {
         ? _gridCols
         : Math.ceil(bs / Math.ceil(Math.sqrt(bs)));
       const bmpWidth = bmp.width;
-      const srcDataLocal = srcData;
-      const bytesLocal = bytes;
       const bsLocal = bs;
-      
-      const maxTileX = (bsLocal - 1) % cols;
-      const maxTileY = Math.floor((bsLocal - 1) / cols);
-      const maxPX = maxTileX * bsLocal + bsLocal - 1;
-      const maxPY = maxTileY * bsLocal + bsLocal - 1;
-      const isSafe = (bmpWidth > maxPX) && (bmp.height > maxPY) && ((maxPY * bmpWidth + maxPX) * 4 < srcDataLocal.length);
-      
-      if (isSafe) {
-        for (let z = 0; z < bsLocal; z++) {
-          const tileX = z % cols;
-          const tileY = Math.floor(z / cols);
-          const tileX_bs = tileX * bsLocal;
-          const tileY_bs = tileY * bsLocal;
-          const z_bs_bs = z * bsLocal * bsLocal;
-          
-          for (let y = 0; y < bsLocal; y++) {
-            const py = tileY_bs + y;
-            const py_width = py * bmpWidth;
-            const z_bs_bs_y_bs = z_bs_bs + y * bsLocal;
-            
-            let srcIdx = (py_width + tileX_bs) * 4;
-            let dstIdx = z_bs_bs_y_bs;
-            
-            for (let x = 0; x < bsLocal; x++) {
+
+      // Read back only the mosaic rows that hold the wanted tiles: for a single
+      // slice that is one tile row (an eighth of the image) instead of the whole
+      // 512x512 readback.
+      const tileY0 = Math.floor(rz0 / cols);
+      const tileY1 = Math.floor((rz1 - 1) / cols);
+      const rowOrigin = tileY0 * bsLocal;
+      const readH = Math.max(1, Math.min(bmp.height - rowOrigin, (tileY1 - tileY0 + 1) * bsLocal));
+      const imgData = ctx.getImageData(0, rowOrigin, bmpWidth, readH);
+      t2 = performance.now();
+      const srcDataLocal = imgData.data;
+      const bytesLocal = bytes;
+
+      let maxTileX = 0;
+      for (let z = rz0; z < rz1; z++) maxTileX = Math.max(maxTileX, z % cols);
+      const maxPX = maxTileX * bsLocal + rx1 - 1;
+      const maxPY = (tileY1 - tileY0) * bsLocal + ry1 - 1;
+      const isSafe = (bmpWidth > maxPX) && (readH > maxPY) && ((maxPY * bmpWidth + maxPX) * 4 < srcDataLocal.length);
+      const srcLen = srcDataLocal.length;
+
+      for (let z = rz0; z < rz1; z++) {
+        const tileX_bs = (z % cols) * bsLocal;
+        const tileY_bs = (Math.floor(z / cols) - tileY0) * bsLocal;
+        const zOff = (z - rz0) * rh * rw;
+
+        for (let y = ry0; y < ry1; y++) {
+          let srcIdx = ((tileY_bs + y) * bmpWidth + tileX_bs + rx0) * 4;
+          let dstIdx = zOff + (y - ry0) * rw;
+
+          if (isSafe) {
+            for (let x = rx0; x < rx1; x++) {
               bytesLocal[dstIdx++] = srcDataLocal[srcIdx];
               srcIdx += 4;
             }
-          }
-        }
-      } else {
-        const srcLen = srcDataLocal.length;
-        for (let z = 0; z < bsLocal; z++) {
-          const tileX = z % cols;
-          const tileY = Math.floor(z / cols);
-          const tileX_bs = tileX * bsLocal;
-          const tileY_bs = tileY * bsLocal;
-          const z_bs_bs = z * bsLocal * bsLocal;
-          
-          for (let y = 0; y < bsLocal; y++) {
-            const py = tileY_bs + y;
-            const py_width = py * bmpWidth;
-            const z_bs_bs_y_bs = z_bs_bs + y * bsLocal;
-            
-            let srcIdx = (py_width + tileX_bs) * 4;
-            let dstIdx = z_bs_bs_y_bs;
-            
-            for (let x = 0; x < bsLocal; x++) {
+          } else {
+            for (let x = rx0; x < rx1; x++) {
               bytesLocal[dstIdx++] = srcIdx < srcLen ? srcDataLocal[srcIdx] : 0;
               srcIdx += 4;
             }
@@ -127,6 +122,9 @@ async function processDecode(msg, epoch) {
     } else if (packing.mode === 'vertical') {
       // Explicit legacy vertical layout (width=bs, height=bs*bs). No current dataset
       // produces this; kept only for an explicitly-tagged manifest, never as a default.
+      const imgData = ctx.getImageData(0, 0, bmp.width, bmp.height);
+      t2 = performance.now();
+      const srcData = imgData.data;
       const len = Math.min(totalVoxels, srcData.length >> 2);
       const srcDataLocal = srcData;
       const bytesLocal = bytes;
@@ -153,6 +151,7 @@ async function processDecode(msg, epoch) {
       id,
       ok: true,
       buffer: bytes.buffer,
+      region,
       perf: { bmp: t1-t0, img: t2-t1, loop: t3-t2, total: t3-t0 }
     }, [bytes.buffer]);
   } catch (err) {
@@ -163,4 +162,24 @@ async function processDecode(msg, epoch) {
     // path (success, cancel-suppress, error) — otherwise one bitmap leaks per brick.
     if (bmp && typeof bmp.close === 'function') bmp.close();
   }
+}
+
+/**
+ * A requested sub-box of a brick, or null for the whole brick. Bounds are integers
+ * clamped to [0, bs]; an empty or malformed box, and a box covering everything, both
+ * mean "the full brick" so the caller's length test stays the only contract.
+ */
+function normalizeRegion(raw, bs) {
+  if (!raw || typeof raw !== 'object') return null;
+  const clampInt = (v, lo, hi) => Math.max(lo, Math.min(hi, Math.floor(Number(v))));
+  const box = {
+    x0: clampInt(raw.x0 ?? 0, 0, bs), x1: clampInt(raw.x1 ?? bs, 0, bs),
+    y0: clampInt(raw.y0 ?? 0, 0, bs), y1: clampInt(raw.y1 ?? bs, 0, bs),
+    z0: clampInt(raw.z0 ?? 0, 0, bs), z1: clampInt(raw.z1 ?? bs, 0, bs)
+  };
+  for (const k of ['x', 'y', 'z']) {
+    if (!Number.isFinite(box[k + '0']) || !Number.isFinite(box[k + '1']) || box[k + '1'] <= box[k + '0']) return null;
+  }
+  if (box.x0 === 0 && box.y0 === 0 && box.z0 === 0 && box.x1 === bs && box.y1 === bs && box.z1 === bs) return null;
+  return box;
 }

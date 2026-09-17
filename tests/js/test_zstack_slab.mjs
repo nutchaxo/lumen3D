@@ -69,7 +69,7 @@ const ctx = {
   iframe: { isIframe: () => true, postMessage: (m) => broadcasts.push(m), panelIndex: () => 0 },
   viewer: {
     setClipRange_z: (lo, hi) => calls.push(['clip', lo, hi]),
-    setView: (v) => calls.push(['view', v]),
+    setView: (v, o) => calls.push(['view', v, o?.side || 'front']),
     setRotationLocked: (v) => calls.push(['lock', v]),
     resetClipping: () => calls.push(['resetClip']),
   },
@@ -100,7 +100,8 @@ plugin._goToSlice(12);
 assert.equal(plugin._mode, 'slice');
 assert.equal(ctx._state.zstackCurrentSlice, 12);
 near(lastClip()[1], 12 / 100, 'slice clip lo'); near(lastClip()[2], 13 / 100, 'slice clip hi (one slice)');
-assert.deepEqual(calls.filter((c) => c[0] === 'view'), [['view', 'xy']], 'entering slice mode sets the XY view');
+assert.deepEqual(calls.filter((c) => c[0] === 'view'), [['view', 'xy', 'back']],
+  'entering slice mode sets the XY view, looked at from the −Z side (the +Z side showed the specimens mirrored)');
 assert.equal(count('lock'), 1);
 assert.equal($('zstack-cursor').style.top, '12.0000%');
 assert.equal($('zstack-cursor').style.height, '1.0000%');

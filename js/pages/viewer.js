@@ -234,6 +234,11 @@ const ViewerApp = (() => {
 
     // Initialize WebGL Viewer
     VolumeViewer.init('webgl-canvas');
+    // The calibration is a dataset fact the core owns (_baseQuaternion): the
+    // axis-aligned views — the z-stack browser locking the view top-down — spin
+    // the acquisition planes into the frame the operator defined instead of the
+    // raw orientation of the file.
+    VolumeViewer.setFrameQuaternion?.(_baseQuaternion());
     _qualityProgressUnsub?.();
     _qualityProgressUnsub = VolumeViewer.onQualityProgress?.(_handleQualityProgress) || null;
     // ELE-18 (EDGE-001): surface a visible status on GPU context loss/restore (Rule 1.1).
@@ -310,7 +315,7 @@ const ViewerApp = (() => {
         setGridMode: (m) => VolumeViewer.setGridMode(m),
         setAxesVisible: (v) => VolumeViewer.setAxesVisible(v),
         setVolumeVisible: (v) => VolumeViewer.setVolumeVisible(v),
-        setView: (v) => VolumeViewer.setView(v),
+        setView: (v, o) => VolumeViewer.setView(v, o),
         setRotationLocked: (v) => VolumeViewer.setRotationLocked(v),
         resize: () => VolumeViewer.resize(),
         setCutPlaneVisible: (v) => VolumeViewer.setCutPlaneVisible(v),

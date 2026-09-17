@@ -275,6 +275,53 @@ function dataset_dir(string $id): string {
     return $safe[2];
 }
 
+/**
+ * metadata.json of a published dataset, its identity re-asserted from the directory
+ * it was read from. Twin of dev_server.py _get_dataset(): the folder is the
+ * authority for `id`, `type` and `folderName`, so a file that lost one of them
+ * (an earlier save wrote the posted body verbatim, and the editor deliberately
+ * leaves `type` out of what it posts) still mounts in the editor.
+ */
+function get_dataset_meta(string $id, string $ds_dir): ?array {
+    $meta = read_json($ds_dir . DIRECTORY_SEPARATOR . 'metadata.json');
+    if (!$meta) return null;
+    [$type, $folder] = explode('/', $id, 2);
+    $meta['id']         = $id;
+    $meta['type']       = $type;
+    $meta['folderName'] = $folder;
+    return $meta;
+}
+
+/**
+ * Merge a posted metadata body into the stored file. Twin of dev_server.py
+ * _save_dataset(): a stored key survives unless the body carries it (an explicit
+ * null erases it), and the identity fields are re-asserted from the directory on
+ * every write. Writing the body verbatim dropped `type` — the editor never posts
+ * it — after which the admin refused to mount the dataset ("invalid type") while
+ * the public pages, which derive the type from the directory, kept working.
+ * @return array [status, payload]
+ */
+function save_dataset_meta(string $id, string $ds_dir, array $body): array {
+    if (!is_dir($ds_dir) && !@mkdir($ds_dir, 0775, true)) return [500, ['error' => 'Write failed']];
+    $path   = $ds_dir . DIRECTORY_SEPARATOR . 'metadata.json';
+    $stored = read_json($path);
+    $meta   = is_array($stored) ? $stored : [];
+    foreach ($body as $k => $v) $meta[$k] = $v;
+    [$type, $folder] = explode('/', $id, 2);
+    $meta['id']           = $id;
+    $meta['type']         = $type;
+    $meta['folderName']   = $folder;
+    $meta['configured']   = true;
+    $meta['lastModified'] = date('c');
+    // The posted `gallery` decides ORDER and CAPTIONS only; which files exist is
+    // decided by the folder. Keeps a stale draft from resurrecting a deleted image
+    // or dropping one uploaded while the form was open.
+    $gallery = gallery_reconcile($meta, $ds_dir, is_array($stored) ? ($stored['gallery'] ?? null) : null);
+    if ($gallery) $meta['gallery'] = $gallery; else unset($meta['gallery']);
+    if (!write_json($path, $meta)) return [500, ['error' => 'Write failed']];
+    return [200, ['ok' => true, 'path' => $path]];
+}
+
 /** $ds_dir is passed in: the caller has already walked the directory, and a folder
  *  name the id gate would refuse must not abort the whole listing. */
 function thumbnail_url(string $id, string $ds_dir): ?string {
@@ -311,7 +358,7 @@ function list_datasets(): array {
                 'channels'    => $meta['channels'] ?? [],
                 'dimensions'  => $meta['dimensions'] ?? [],
                 'thumbnail'   => thumbnail_url($id, $ds_dir),
-                'configured'  => isset($meta['_adminConfigured']) && $meta['_adminConfigured'],
+                'configured'  => !empty($meta['configured']) || !empty($meta['_adminConfigured']),
                 'hidden'      => !empty($meta['hidden']),
                 'hasBricks'   => $hasBricks,
             ];
@@ -583,37 +630,17 @@ switch ($action) {
 
     case 'get':
         if (!$id) json_out(['error' => 'Missing id'], 400);
-        $meta = read_json(dataset_dir($id) . DIRECTORY_SEPARATOR . 'metadata.json');
+        $meta = get_dataset_meta($id, dataset_dir($id));
         if (!$meta) json_out(['error' => 'Not found'], 404);
         json_out($meta);
 
     case 'save':
         require_auth();
         if (!$id) json_out(['error' => 'Missing id'], 400);
-
         $body = json_decode(file_get_contents('php://input'), true);
         if (!is_array($body)) json_out(['error' => 'Invalid JSON body'], 400);
-
-        // Security: only allow safe keys, never allow path traversal
-        if (strpos($id, '..') !== false) json_out(['error' => 'Invalid id'], 400);
-
-        // Mark as admin-configured
-        $body['_adminConfigured'] = true;
-        $body['_lastModified']    = date('c');
-
-        $ds_dir = dataset_dir($id);
-        $path   = $ds_dir . DIRECTORY_SEPARATOR . 'metadata.json';
-
-        // The posted `gallery` decides ORDER and CAPTIONS only; which files exist is
-        // decided by the folder. Keeps a stale draft from resurrecting a deleted image
-        // or dropping one uploaded while the form was open.
-        $stored  = read_json($path);
-        $gallery = gallery_reconcile($body, $ds_dir, is_array($stored) ? ($stored['gallery'] ?? null) : null);
-        if ($gallery) $body['gallery'] = $gallery; else unset($body['gallery']);
-
-        if (!write_json($path, $body)) json_out(['error' => 'Write failed'], 500);
-
-        json_out(['ok' => true, 'path' => $path]);
+        [$st, $pl] = save_dataset_meta($id, dataset_dir($id), $body);
+        json_out($pl, $st);
 
     case 'save_thumbnail':
         require_auth();

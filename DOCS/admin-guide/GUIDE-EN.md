@@ -280,9 +280,11 @@ Three coloured axes appear on the volume:
 
 | Axis | Colour | Meaning |
 |---|---|---|
-| **A / P** | green | Anterior ↔ Posterior (front / back) |
-| **D / V** | blue | Dorsal ↔ Ventral (back / belly) |
-| **L / R** | red | Left ↔ Right |
+| **Red 1 / Red 2** | red | the two ends of the first axis (drawn R1 / R2) |
+| **Green 1 / Green 2** | green | the two ends of the second axis (G1 / G2) |
+| **Blue 1 / Blue 2** | blue | the two ends of the third axis (B1 / B2) |
+
+The arms carry no nomenclature of their own: rename them in the **Displayed axes** list (anterior / posterior, dorsal / ventral, head / tail…) and the **Default view** options quote the names you gave.
 
 **How to do it:**
 
@@ -453,7 +455,7 @@ These plugins are **not** shipped with the site: they install on demand, from th
 | **Download Center** | Tool | Fetch the dataset's files, measurements, metadata and exports |
 | **Screenshot** | Tool | Capture the 3D view as a PNG |
 | **Presentation Mode** | Tool | Full screen with no interface, for projecting |
-| **Orientation Axes** | Tool | The A/P · D/V · L/R anatomical marker (see §3.5) |
+| **Orientation Axes** | Tool | The three-axis marker, red / green / blue 1-2, renamable (see §3.5) |
 | **Toggle Grid / Axes / Volume** | Tools | Show or hide the grid, the axes, the volume |
 | **Screenshot (sandboxed)** | Tool | The same screen capture, but run in a sandbox — the reference example of an isolated plugin |
 | **Chunk Debug** | Tool | A technical diagnostic tool. **Safe to disable** on a production site |

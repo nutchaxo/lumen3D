@@ -280,9 +280,11 @@ Trois axes colorés apparaissent sur le volume :
 
 | Axe | Couleur | Signification |
 |---|---|---|
-| **A / P** | vert | Antérieur ↔ Postérieur (avant / arrière) |
-| **D / V** | bleu | Dorsal ↔ Ventral (dos / ventre) |
-| **L / R** | rouge | Gauche ↔ Droite |
+| **Rouge 1 / Rouge 2** | rouge | les deux extrémités du premier axe (affichées R1 / R2) |
+| **Vert 1 / Vert 2** | vert | les deux extrémités du deuxième axe (G1 / G2) |
+| **Bleu 1 / Bleu 2** | bleu | les deux extrémités du troisième axe (B1 / B2) |
+
+Les axes n'imposent aucune nomenclature : renommez-les dans la liste **Axes affichés** (antérieur / postérieur, dorsal / ventral, tête / queue…) et les options de **Vue par défaut** reprennent les noms que vous avez donnés.
 
 **Comment faire :**
 
@@ -453,7 +455,7 @@ Ces plugins ne sont **pas** livrés avec le site : ils s'installent à la demand
 | **Download Center** | Outil | Récupérer les fichiers, mesures, métadonnées et exports du jeu de données |
 | **Screenshot** | Outil | Capturer la vue 3D en image PNG |
 | **Presentation Mode** | Outil | Plein écran sans interface, pour projeter |
-| **Orientation Axes** | Outil | Le repère anatomique A/P · D/V · L/R (voir §3.5) |
+| **Orientation Axes** | Outil | Le repère à trois axes rouge / vert / bleu 1-2, renommables (voir §3.5) |
 | **Toggle Grid / Axes / Volume** | Outils | Afficher ou masquer la grille, les axes, le volume |
 | **Screenshot (sandboxed)** | Outil | La même capture d'écran, mais exécutée en bac à sable — l'exemple de référence d'un plugin isolé |
 | **Chunk Debug** | Outil | Outil de diagnostic technique. **Peut être désactivé sans risque** sur un site en production |

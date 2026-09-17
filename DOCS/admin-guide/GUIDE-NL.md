@@ -280,9 +280,11 @@ Er verschijnen drie gekleurde assen op het volume:
 
 | As | Kleur | Betekenis |
 |---|---|---|
-| **A / P** | groen | Anterior ↔ Posterior (voor / achter) |
-| **D / V** | blauw | Dorsaal ↔ Ventraal (rug / buik) |
-| **L / R** | rood | Links ↔ Rechts |
+| **Rood 1 / Rood 2** | rood | de twee uiteinden van de eerste as (getoond als R1 / R2) |
+| **Groen 1 / Groen 2** | groen | de twee uiteinden van de tweede as (G1 / G2) |
+| **Blauw 1 / Blauw 2** | blauw | de twee uiteinden van de derde as (B1 / B2) |
+
+De assen leggen geen nomenclatuur op: hernoem ze in de lijst **Getoonde assen** (anterior / posterior, dorsaal / ventraal, kop / staart…) en de opties van **Standaardweergave** nemen de namen over die u gaf.
 
 **Zo gaat u te werk:**
 
@@ -453,7 +455,7 @@ Deze plug-ins worden **niet** met de site meegeleverd: ze worden op aanvraag ge�
 | **Download Center** | Gereedschap | De bestanden, metingen, metadata en exports van de dataset ophalen |
 | **Screenshot** | Gereedschap | De 3D-weergave als PNG vastleggen |
 | **Presentation Mode** | Gereedschap | Volledig scherm zonder interface, om te projecteren |
-| **Orientation Axes** | Gereedschap | Het anatomische assenstelsel A/P · D/V · L/R (zie §3.5) |
+| **Orientation Axes** | Gereedschap | Het assenstelsel met drie assen rood / groen / blauw 1-2, hernoembaar (zie §3.5) |
 | **Toggle Grid / Axes / Volume** | Gereedschap | Het raster, de assen of het volume tonen of verbergen |
 | **Screenshot (sandboxed)** | Gereedschap | Dezelfde schermafbeelding, maar in een sandbox uitgevoerd — het referentievoorbeeld van een geïsoleerde plug-in |
 | **Chunk Debug** | Gereedschap | Technisch diagnosegereedschap. **Kan zonder risico uitgeschakeld worden** op een productiesite |

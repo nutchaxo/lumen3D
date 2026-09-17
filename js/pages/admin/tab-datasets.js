@@ -19,27 +19,28 @@ import * as Upload from './upload-manager.js';
 
 const PREVIEW_DEBOUNCE = 150;
 
-// Gizmo arms, mirroring js/modules/tools/orientation-axes. The panel owns the axis
+// Gizmo arms, mirroring js/modules/tools/orientation-axes. The codes (R/L = ±X,
+// A/P = ±Y, V/D = ±Z) are the storage keys of `orientationAxes.labels/hidden` and
+// are never shown: an arm is presented by its colour and a 1/2 suffix — Red 1,
+// Red 2, Green 1… — unless the operator renamed it. The panel owns the axis
 // LABELS and VISIBILITY; it never computes an orientation quaternion — it asks the
 // plugin running in the preview iframe and stores the answer, so the geometry has
 // exactly one implementation and the operator saves the pose they were shown.
-const AXIS_CODES = ['A', 'P', 'V', 'D', 'R', 'L'];
-const AXIS_COLORS = { A: '#00ff00', P: '#00ff00', V: '#0088ff', D: '#0088ff', R: '#ff0000', L: '#ff0000' };
-const AXIS_NAMES = () => ({
-  A: t('admin.axisAnterior', 'Antérieur'),
-  P: t('admin.axisPosterior', 'Postérieur'),
-  V: t('admin.axisVentral', 'Ventral'),
-  D: t('admin.axisDorsal', 'Dorsal'),
-  R: t('admin.axisRight', 'Droite'),
-  L: t('admin.axisLeft', 'Gauche'),
-});
-const VIEW_PRESETS = () => [
-  ['ventral', t('admin.viewVentral', 'Face ventrale (antérieur en haut)')],
-  ['dorsal', t('admin.viewDorsal', 'Face dorsale (antérieur en haut)')],
-  ['left', t('admin.viewLeft', 'Profil gauche')],
-  ['right', t('admin.viewRight', 'Profil droit')],
-  ['anterior', t('admin.viewAnterior', 'Vue antérieure (dorsal en haut)')],
-  ['posterior', t('admin.viewPosterior', 'Vue postérieure (dorsal en haut)')],
+const AXIS_CODES = ['R', 'L', 'A', 'P', 'V', 'D'];
+const AXIS_COLORS = { R: '#ff0000', L: '#ff0000', A: '#00ff00', P: '#00ff00', V: '#0088ff', D: '#0088ff' };
+// The glyph the gizmo draws for an un-renamed arm (the plugin's lang/*.json).
+const AXIS_GLYPHS = { R: 'R1', L: 'R2', A: 'G1', P: 'G2', V: 'B1', D: 'B2' };
+const AXIS_NAMES = () => {
+  const red = t('admin.axisRed', 'Rouge'), green = t('admin.axisGreen', 'Vert'), blue = t('admin.axisBlue', 'Bleu');
+  return { R: `${red} 1`, L: `${red} 2`, A: `${green} 1`, P: `${green} 2`, V: `${blue} 1`, D: `${blue} 2` };
+};
+// A view preset is the arm facing the camera and the arm pointing up. The ids are
+// what metadata.json stores and what the plugin resolves into a quaternion; the
+// pairs mirror its ORI_VIEW_PRESETS so the option text describes the same pose.
+const VIEW_PRESETS = [
+  ['right', 'R', 'A'], ['left', 'L', 'A'],
+  ['anterior', 'A', 'D'], ['posterior', 'P', 'D'],
+  ['ventral', 'V', 'A'], ['dorsal', 'D', 'A'],
 ];
 const ORIENTATION_REPLY_TIMEOUT = 2000;
 
@@ -708,6 +709,12 @@ function writeOrientationCfg(patch) {
   syncDirty();
 }
 
+/** What the operator calls an arm: their rename, else the colour + suffix default. */
+function axisDisplayName(code, cfg = readOrientationCfg()) {
+  const custom = typeof cfg.labels[code] === 'string' ? cfg.labels[code].trim() : '';
+  return custom || AXIS_NAMES()[code];
+}
+
 function renderOrientationAxes() {
   if (!DOM.orientationAxesList) return;
   const cfg = readOrientationCfg();
@@ -719,10 +726,10 @@ function renderOrientationAxes() {
       <label class="ori-axis-show">
         <input type="checkbox" data-axis-show="${code}"${shown ? ' checked' : ''}>
         <span class="ori-axis-dot" style="background:${AXIS_COLORS[code]}"></span>
-        <span class="ori-axis-name">${escHtml(names[code])} (${code})</span>
+        <span class="ori-axis-name">${escHtml(names[code])} (${AXIS_GLYPHS[code]})</span>
       </label>
       <input class="config-input ori-axis-label" type="text" maxlength="12"
-             data-axis-label="${code}" value="${escHtml(label)}" placeholder="${code}">
+             data-axis-label="${code}" value="${escHtml(label)}" placeholder="${AXIS_GLYPHS[code]}">
     </div>`;
   }).join('');
 }
@@ -731,9 +738,15 @@ function renderDefaultView() {
   const cfg = readOrientationCfg();
   if (DOM.fDefaultView) {
     const current = cfg.defaultView ? (cfg.defaultView.preset || 'custom') : 'none';
+    // The presets quote the arms by the names the operator sees in the list above,
+    // renames included, so the two controls always speak the same nomenclature.
+    const presetLabel = (face, up) => {
+      const names = { face: axisDisplayName(face, cfg), up: axisDisplayName(up, cfg) };
+      return t('admin.viewPreset', `${names.face} face à la caméra, ${names.up} en haut`, names);
+    };
     DOM.fDefaultView.innerHTML =
       `<option value="none">${escHtml(t('admin.viewNone', 'Aucune — orientation brute du volume'))}</option>`
-      + VIEW_PRESETS().map(([id, label]) => `<option value="${id}">${escHtml(label)}</option>`).join('')
+      + VIEW_PRESETS.map(([id, face, up]) => `<option value="${id}">${escHtml(presetLabel(face, up))}</option>`).join('')
       + `<option value="custom">${escHtml(t('admin.viewCustom', 'Personnalisée (vue capturée)'))}</option>`;
     DOM.fDefaultView.value = current;
   }
@@ -1186,6 +1199,7 @@ function wire() {
       const code = e.target?.dataset?.axisLabel;
       if (!code) return;
       writeOrientationCfg({ labels: { ...readOrientationCfg().labels, [code]: e.target.value } });
+      renderDefaultView();   // the preset options quote the arm names
       // The gizmo is rebuilt from scratch on every push — debounce so typing a name
       // doesn't discard and re-upload six sprite textures per keystroke.
       clearTimeout(_axesPushTimer);

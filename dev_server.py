@@ -3562,6 +3562,7 @@ def _get_dataset(dataset_id: str) -> dict | None:
     try:
         meta = json.loads(meta_path.read_text(encoding="utf-8"))
         meta["id"]         = dataset_id
+        meta["type"]       = type_dir      # the folder is the authority, as in the catalog
         meta["folderName"] = folder
         return meta
     except Exception:
@@ -4377,21 +4378,29 @@ def _migrate_pages(log: list) -> None:
 
 def _migrate_dataset_types() -> list[str]:
     """Convert a deployment to the canonical dataset vocabulary. Returns one line
-    per change (empty list = nothing to do). Safe to call on every boot."""
-    if not _legacy_types_present():
-        return []
+    per change (empty list = nothing to do). Safe to call on every boot.
+
+    The metadata pass is NOT gated on the legacy guard: every published
+    metadata.json must agree with its folder on `type` / `id` at every boot. A file
+    that lost them — a PHP host wrote the editor's payload verbatim, and the editor
+    never posts `type` — is put right here, once, without anyone having to re-save
+    it. Reading one small file per dataset is what the catalog does per request."""
     log: list[str] = []
-    staging = UPLOADS_DIR / "staging"
-    for legacy, canon in _LEGACY_TYPE_DIRS.items():
-        _migrate_move_dir(DATA_WEB / legacy, DATA_WEB / canon, log)
-        _migrate_move_dir(staging / legacy, staging / canon, log)
-    _migrate_retire_tracking(log)
-    _migrate_journals(UPLOADS_DIR / "state", log)
+    legacy = _legacy_types_present()
+    if legacy:
+        staging = UPLOADS_DIR / "staging"
+        for old, canon in _LEGACY_TYPE_DIRS.items():
+            _migrate_move_dir(DATA_WEB / old, DATA_WEB / canon, log)
+            _migrate_move_dir(staging / old, staging / canon, log)
+        _migrate_retire_tracking(log)
+        _migrate_journals(UPLOADS_DIR / "state", log)
     _migrate_metadata(log)
-    _migrate_stats(log)
-    _migrate_instance(log)
-    _migrate_pages(log)
-    _CATALOG_CACHE["sig"] = None
+    if legacy:
+        _migrate_stats(log)
+        _migrate_instance(log)
+        _migrate_pages(log)
+    if log:
+        _CATALOG_CACHE["sig"] = None
     return log
 
 

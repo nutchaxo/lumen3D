@@ -235,6 +235,7 @@
     "noMeasure": "Aucune mesure.",
     "clearMeasure": "Effacer",
     "sliceInspector": "Inspecteur de Coupe",
+    "sliceInset3d": "Vue 3D — déplacez le plan ici",
     "xy": "XY",
     "xz": "XZ",
     "yz": "YZ",

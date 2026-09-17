@@ -1,12 +1,13 @@
 /* Slice Inspector — index.js
  *
- * Migrates _initSlicer, _slicerSetSpec, _slicerBindSlider,
- * _slicerSyncSlidersFromSpec, _slicerSyncPresetButtons, _slicerShow
- * from viewer.js.
- *
- * The ToolManager-based 'cut' tool activation (btn-cut) stays in viewer.js
- * because it belongs to the ToolManager framework. This module manages the
- * slice-inspector sidebar panel and its controls independently.
+ * Owns the inspector panel (#slice-inspector): preset buttons, position / angle /
+ * slab sliders, projection select and the Studio button, bound to the VolumeSlicer
+ * through ctx.slicer. The tool itself is the ToolManager's 'slice' (its chip comes
+ * from plugin.json#tool): viewer.js opens and closes the panel on the tool change,
+ * and while the tool is open the two renders trade places — the slice fills the
+ * canvas area, the 3D view sits in this panel's square, where the plane is still
+ * dragged (viewer.js _setSliceStage). The tool and the Z-stack browser exclude
+ * each other: each side closes the other when it opens.
  */
 PluginRegistry.implement('slice-inspector', {
   _ctx: null,
@@ -17,28 +18,23 @@ PluginRegistry.implement('slice-inspector', {
     return this;
   },
 
-  // ── Toolbar toggle (ToolManager activates 'cut', then shows panel) ──
+  // ── Programmatic door (the chip itself is wired by ToolManager) ──
 
   activate() {
-    // The 'cut' tool in ToolManager handles 3D interaction.
-    // This module toggles the sidebar panel visibility.
-    if (typeof ToolManager !== 'undefined') {
-      const active = ToolManager.current() === 'cut';
-      if (active) {
-        ToolManager.activate('navigate');
-        this._show(false);
-      } else {
-        ToolManager.activate('cut');
-        this._show(true);
-      }
-    }
+    const tools = this._ctx?.tools;
+    if (!tools) return;
+    tools.activate(tools.current() === 'slice' ? 'navigate' : 'slice');
   },
 
   getState() { return null; }, // Plane spec is stored in viewer.js workspace state
 
   // The plane spec itself is reset by the viewer (VolumeViewer.resetClipping);
   // what belongs to this module is the panel and the slicer render loop.
-  reset() { this._show(false); },
+  reset() {
+    const tools = this._ctx?.tools;
+    if (tools?.current() === 'slice') tools.activate('navigate');
+    else this._hide();
+  },
 
   // ── Private ───────────────────────────────────────────────
 
@@ -118,9 +114,8 @@ PluginRegistry.implement('slice-inspector', {
     delete next.orientation;
     delete next.normal;
     ctx.slicer.setPlaneSpec(next);
-    ctx.viewer.setClipRange('z', next); // setPlaneSpec on VolumeViewer side
-    // Also update the 3D plane mesh via the viewer API
-    if (typeof VolumeViewer !== 'undefined') VolumeViewer.setPlaneSpec(next, { notify: false });
+    // The 3D plane mesh follows, silently: the slicer already has the spec.
+    ctx.viewer.setPlaneSpec?.(next, { notify: false });
   },
 
   _bindSlider(sliderId, labelId, onChange, format) {
@@ -157,25 +152,15 @@ PluginRegistry.implement('slice-inspector', {
     });
   },
 
-  _show(visible) {
-    const panel = document.getElementById('slice-inspector');
-    if (!panel) return;
-    panel.classList.toggle('hidden', !visible);
-    this._ctx.slicer.setVisible(visible);
-    if (visible) {
-      const mat = this._ctx.viewer.getMaterial();
-      if (mat) this._ctx.slicer.updateMaterial(mat);
-      const spec = this._ctx.slicer.getPlaneSpec();
-      if (spec.value >= 0.99 || spec.value <= 0.01) {
-        this._setSpec({ value: 0.5 });
-        this._syncSlidersFromSpec();
-      }
-    }
-    this._ctx.viewer.setCutPlaneVisible(visible);
+  // Panel and slice off (the slicer's visibility takes the stage down with it).
+  _hide() {
+    document.getElementById('slice-inspector')?.classList.add('hidden');
+    this._ctx.slicer.setVisible(false);
+    this._ctx.viewer.setCutPlaneVisible(false);
     this._ctx.ui.scheduleResize();
   },
 
   dispose() {
-    this._show(false);
+    this._hide();
   }
 });

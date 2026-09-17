@@ -235,6 +235,7 @@
     "noMeasure": "No saved measurement yet.",
     "clearMeasure": "Clear measurements",
     "sliceInspector": "Slice Inspector",
+    "sliceInset3d": "3D view — drag the plane here",
     "xy": "XY",
     "xz": "XZ",
     "yz": "YZ",

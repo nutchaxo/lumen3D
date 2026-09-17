@@ -633,6 +633,53 @@ input[type="range"]::-moz-range-thumb {
   display: block;
 }
 
+/* ── Slice stage ─────────────────────────────────────────── */
+/* While the slice tool is open the slicer's canvas fills the canvas area and the
+   WebGL canvas sits in the inspector's square (viewer.js _setSliceStage). The stage
+   comes right after the WebGL canvas in the DOM so every overlay (buttons, progress,
+   gallery dock) keeps painting above it. */
+.slice-stage {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #000;
+  overflow: hidden;
+}
+
+.slice-stage canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  image-rendering: auto;
+}
+
+/* Exact scale of the slice (viewer.js _updateSliceStageScale); the 3D bar, which
+   describes the camera now in the inset, is hidden meanwhile. */
+.slice-stage-scale {
+  position: absolute;
+  right: 20px;
+  bottom: 20px;
+  z-index: 1;
+  min-width: 40px;
+  padding-bottom: 4px;
+  border-bottom: 2px solid #fff;
+  box-sizing: border-box;
+  color: #fff;
+  font-size: 12px;
+  font-weight: 600;
+  text-align: center;
+  text-shadow: 1px 1px 2px #000;
+  pointer-events: none;
+}
+
+body.slice-staged #viewer-scale-bar {
+  display: none !important;
+}
+
 .canvas-overlay {
   position: absolute;
   top: var(--space-4);
@@ -1959,6 +2006,22 @@ body.viewer-iframe .scientific-panel {
   height: 100%;
   object-fit: cover;
   image-rendering: auto;
+}
+
+/* The 3D view lives here while the slice tool is open: the plane is dragged in it. */
+.slicer-preview-mount #webgl-canvas {
+  cursor: grab;
+}
+
+.slicer-preview-mount #webgl-canvas:active {
+  cursor: grabbing;
+}
+
+.slicer-inset-caption {
+  margin-top: var(--space-2);
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+  text-align: center;
 }
 
 .slicer-presets {

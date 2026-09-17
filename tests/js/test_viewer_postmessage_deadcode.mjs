@@ -8,7 +8,7 @@
 //   DEAD-015 redundant duplicate assignments
 //   DEAD-021 SYNC_EXPOSURE emitted without sourceIndex (admpan handles it; compare couldn't route)
 //   DEAD-020 compare.js _setPanelLoadState no-op called from 7 sites
-//   LEAK-002 _slicerOverlayStop never called -> overlay rAF leak
+//   LEAK-002 slicer overlay rAF leak (the overlay itself is gone since v1.55.2)
 //   BUG-032  live dataset read dimensions.t without guard
 //   BUG-033  _mergeDatasetMetadata mounted incomplete metadata silently
 //
@@ -55,8 +55,10 @@ const count = (s, re) => (s.match(re) || []).length;
   // DEAD-021: SYNC_EXPOSURE now carries sourceIndex (admpan.js consumes it)
   assert.ok(/SYNC_EXPOSURE'[^]*sourceIndex/.test(v.replace(/\r/g, '')), 'DEAD-021: SYNC_EXPOSURE includes sourceIndex');
 
-  // LEAK-002
-  assert.ok(count(v, /_slicerOverlayStop\(\)/g) >= 2, 'LEAK-002: _slicerOverlayStop now called');
+  // LEAK-002: the slicer-sync overlay and its per-frame copy loop are gone (v1.55.2) —
+  // the staged slice IS the slicer's canvas, shown and hidden with the slicer's visibility.
+  assert.equal(count(v, /_slicerOverlay/g), 0, 'LEAK-002: no overlay rAF loop left');
+  assert.ok(/VolumeSlicer\.onVisibleChange\(_setSliceStage\)/.test(v), 'LEAK-002: the stage follows the slicer visibility');
 
   // BUG-032 / BUG-033
   assert.ok(/Number\.isFinite\(totalFrames\)/.test(v), 'BUG-032: live dimensions.t guarded');

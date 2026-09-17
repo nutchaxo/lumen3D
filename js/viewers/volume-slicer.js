@@ -18,8 +18,6 @@ const VolumeSlicer = (() => {
   let _scene = null;
   let _camera = null;
   let _mat = null;
-  let _target = null;        // WebGLRenderTarget for preview
-  let _pixelBuf = null;      // Uint8Array for readRenderTargetPixels
   let _previewCanvas = null;
   let _previewCtx = null;
   let _initialized = false;
@@ -41,7 +39,20 @@ const VolumeSlicer = (() => {
   let _visible = false;
   let _rafId = null;
   let _listeners = new Set();
+  let _visibleListeners = new Set();
+  // The sidebar preview renders at PREVIEW_SIZE. On the slice stage (the canvas
+  // area, viewer.js _setSliceStage) the interactive resolution follows the
+  // displayed size up to 1024 px, and a sharper pass up to MAX_PREVIEW_SIZE runs
+  // once the plane has settled for REFINE_DELAY_MS — a drag never pays the big
+  // readback. One render pass (target + readback buffer + ImageData) per size.
   const PREVIEW_SIZE = 320;
+  const MAX_PREVIEW_SIZE = 2048;
+  const REFINE_DELAY_MS = 160;
+  let _previewSize = PREVIEW_SIZE;
+  let _refineSize = 0;
+  let _refineTimer = null;
+  const _passes = new Map();
+  const PLANE_KEYS = ['mode', 'value', 'yaw', 'pitch', 'roll', 'slabThickness', 'slabStepNorm', 'projection'];
   const EXTENT = 0.75; // half-size in cube units (covers oblique diagonals)
 
   // ── Shaders ──────────────────────────────────────────────
@@ -194,10 +205,7 @@ const VolumeSlicer = (() => {
     _previewCanvas.className = 'slicer-preview-canvas';
     _previewCtx = _previewCanvas.getContext('2d');
     try {
-      _target = new THREE.WebGLRenderTarget(PREVIEW_SIZE, PREVIEW_SIZE, {
-        format: THREE.RGBAFormat, type: THREE.UnsignedByteType
-      });
-      _pixelBuf = new Uint8Array(PREVIEW_SIZE * PREVIEW_SIZE * 4);
+      _acquirePass(PREVIEW_SIZE);
 
       _scene = new THREE.Scene();
       _camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
@@ -208,9 +216,7 @@ const VolumeSlicer = (() => {
       return true;
     } catch (err) {
       _disabled = true;
-      _target?.dispose?.();
-      _target = null;
-      _pixelBuf = null;
+      _releasePasses();
       _scene = null;
       _camera = null;
       _mat?.dispose?.();
@@ -395,8 +401,37 @@ const VolumeSlicer = (() => {
     return Boolean(_mat?.uniforms?.svrAtlas0?.value);
   }
 
-  function _doPreview() {
-    if (_disabled || !_target || !_pixelBuf || !_visible || !_renderer || !_hasRenderableVolume()) return;
+  function _acquirePass(size) {
+    let pass = _passes.get(size);
+    if (pass) return pass;
+    const target = new THREE.WebGLRenderTarget(size, size, {
+      format: THREE.RGBAFormat, type: THREE.UnsignedByteType
+    });
+    pass = { target, buf: new Uint8Array(size * size * 4), img: null };
+    _passes.set(size, pass);
+    return pass;
+  }
+
+  function _releasePasses(keep = []) {
+    for (const [size, pass] of _passes) {
+      if (keep.includes(size)) continue;
+      pass.target?.dispose?.();
+      _passes.delete(size);
+    }
+  }
+
+  /** Renders the plane at `size` px into the preview canvas. */
+  function _doPreview(size = _previewSize) {
+    if (_disabled || !_visible || !_renderer || !_hasRenderableVolume()) return false;
+    let pass;
+    try {
+      pass = _acquirePass(size);
+    } catch (err) {
+      // The big pass is a refinement: losing it leaves the interactive one.
+      if (size === _refineSize) _refineSize = 0;
+      console.warn(`[VolumeSlicer] ${size}px preview allocation failed; keeping ${_previewSize}px.`, err);
+      return false;
+    }
     _syncUniforms();
 
     // Save full renderer state
@@ -407,17 +442,17 @@ const VolumeSlicer = (() => {
 
     // The viewport size must be in CSS/logical pixels (Three.js multiplies by
     // pixelRatio internally). Dividing by pixelRatio makes the GL call land
-    // exactly at PREVIEW_SIZE × PREVIEW_SIZE — matching the render target.
+    // exactly at size × size — matching the render target.
     const pr = _renderer.getPixelRatio();
-    const vpSize = PREVIEW_SIZE / pr;
+    const vpSize = size / pr;
 
     _renderer.autoClear = true;
-    _renderer.setRenderTarget(_target);
+    _renderer.setRenderTarget(pass.target);
     _renderer.setViewport(0, 0, vpSize, vpSize);
     _renderer.clear();
     _renderer.render(_scene, _camera);
 
-    _renderer.readRenderTargetPixels(_target, 0, 0, PREVIEW_SIZE, PREVIEW_SIZE, _pixelBuf);
+    _renderer.readRenderTargetPixels(pass.target, 0, 0, size, size, pass.buf);
 
     // ── CRITICAL: restore ALL renderer state ───────────────
     _renderer.setRenderTarget(prevTarget);
@@ -425,13 +460,20 @@ const VolumeSlicer = (() => {
     _renderer.autoClear = prevAutoClear;
 
     // Flip Y (WebGL origin = bottom-left, Canvas2D origin = top-left)
-    const imgData = _previewCtx.createImageData(PREVIEW_SIZE, PREVIEW_SIZE);
-    for (let y = 0; y < PREVIEW_SIZE; y++) {
-      const src = (PREVIEW_SIZE - 1 - y) * PREVIEW_SIZE * 4;
-      const dst = y * PREVIEW_SIZE * 4;
-      imgData.data.set(_pixelBuf.subarray(src, src + PREVIEW_SIZE * 4), dst);
+    if (!pass.img) pass.img = _previewCtx.createImageData(size, size);
+    const px = pass.img.data;
+    for (let y = 0; y < size; y++) {
+      const src = (size - 1 - y) * size * 4;
+      const dst = y * size * 4;
+      px.set(pass.buf.subarray(src, src + size * 4), dst);
     }
-    _previewCtx.putImageData(imgData, 0, 0);
+    // Resizing the bitmap clears it; putImageData refills it in the same task.
+    if (_previewCanvas.width !== size || _previewCanvas.height !== size) {
+      _previewCanvas.width = size;
+      _previewCanvas.height = size;
+    }
+    _previewCtx.putImageData(pass.img, 0, 0);
+    return true;
   }
 
   let _hiTarget = null;
@@ -569,11 +611,57 @@ const VolumeSlicer = (() => {
 
   function _scheduleRender() {
     if (_disabled) return;
+    _cancelRefine();
     if (_rafId) return;
     _rafId = requestAnimationFrame(() => {
       _rafId = null;
-      _doPreview();
+      _doPreview(_previewSize);
+      _armRefine();
     });
+  }
+
+  function _armRefine() {
+    if (!_visible || !(_refineSize > _previewSize)) return;
+    _refineTimer = setTimeout(() => {
+      _refineTimer = null;
+      _doPreview(_refineSize);
+    }, REFINE_DELAY_MS);
+  }
+
+  function _cancelRefine() {
+    if (_refineTimer) { clearTimeout(_refineTimer); _refineTimer = null; }
+  }
+
+  /** The sharpest render available, now — for a capture of what is on screen. */
+  function flushPreview() {
+    if (_rafId) { cancelAnimationFrame(_rafId); _rafId = null; }
+    _cancelRefine();
+    return _doPreview(_refineSize > _previewSize ? _refineSize : _previewSize);
+  }
+
+  /**
+   * Resolution of the preview canvas: `size` for every interactive render, and
+   * an optional sharper `refineSize` drawn once the plane settles. Sizes are
+   * clamped to [64, MAX_PREVIEW_SIZE] and rounded to a multiple of 8.
+   */
+  function setPreviewResolution(size = PREVIEW_SIZE, refineSize = 0) {
+    const snap = (v) => {
+      const n = Math.round(Number(v) / 8) * 8;
+      return Number.isFinite(n) && n > 0 ? Math.max(64, Math.min(MAX_PREVIEW_SIZE, n)) : 0;
+    };
+    const next = snap(size) || PREVIEW_SIZE;
+    const refine = snap(refineSize);
+    const nextRefine = refine > next ? refine : 0;
+    if (next === _previewSize && nextRefine === _refineSize) return;
+    _previewSize = next;
+    _refineSize = nextRefine;
+    _cancelRefine();
+    _releasePasses([_previewSize, _refineSize]);
+    if (_visible) _scheduleRender();
+  }
+
+  function getPreviewResolution() {
+    return { size: _previewSize, refineSize: _refineSize };
   }
 
   function recompose(sliceResult, channelState) {
@@ -618,6 +706,10 @@ const VolumeSlicer = (() => {
       const step = +merged.slabStepNorm;
       merged.slabStepNorm = Number.isFinite(step) && step > 0 ? Math.min(1, step) : null;
     }
+    // Only the plane's own keys reach the spec: a sibling panel's spec also carries
+    // `visible`, `normal`, `orientation`, `axis`, which must not ride back into
+    // VolumeViewer.setPlaneSpec through the next slider move.
+    for (const k of Object.keys(merged)) { if (!PLANE_KEYS.includes(k)) delete merged[k]; }
     Object.assign(_spec, merged);
     if (_visible) _scheduleRender();
     _listeners.forEach(cb => cb({ ..._spec }));
@@ -626,12 +718,23 @@ const VolumeSlicer = (() => {
   function getPlaneSpec() { return { ..._spec }; }
 
   function setVisible(v) {
-    if (_disabled) {
-      _visible = false;
-      return;
+    const next = _disabled ? false : Boolean(v);
+    const changed = next !== _visible;
+    _visible = next;
+    if (next) _scheduleRender();
+    else _cancelRefine();
+    if (changed) {
+      _visibleListeners.forEach(cb => {
+        try { cb(next); } catch (err) { console.warn('[VolumeSlicer] visibility listener failed:', err); }
+      });
     }
-    _visible = v;
-    if (v) _scheduleRender();
+  }
+
+  /** Fires with true/false when the slice goes on or off screen (not on a repeat). */
+  function onVisibleChange(cb) {
+    if (typeof cb !== 'function') return () => {};
+    _visibleListeners.add(cb);
+    return () => _visibleListeners.delete(cb);
   }
 
   function isVisible() { return _visible; }
@@ -645,12 +748,12 @@ const VolumeSlicer = (() => {
 
   function dispose() {
     if (_rafId) cancelAnimationFrame(_rafId);
-    _target?.dispose();
+    _rafId = null;
+    _cancelRefine();
+    _releasePasses();
     _hiTarget?.dispose();
     _mat?.dispose();
     _scene = null;
-    _target = null;
-    _pixelBuf = null;
     _hiTarget = null;
     _hiBuf = null;
     _initialized = false;
@@ -666,6 +769,12 @@ const VolumeSlicer = (() => {
     isVisible,
     isAvailable: () => !_disabled,
     getPreviewCanvas,
+    setPreviewResolution,
+    getPreviewResolution,
+    flushPreview,
+    onVisibleChange,
+    /** Cube units drawn across the preview's width (= height): 2 × EXTENT. */
+    getPlaneExtentUnits: () => 2 * EXTENT,
     renderHighRes,
     renderWithMaterial,
     recompose,

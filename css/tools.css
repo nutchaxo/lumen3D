@@ -1002,11 +1002,11 @@ body.presentation-mode .viewer-layout {
 
 /* ── Direct Touch Gizmo (Volume Viewer) ──────────────────── */
 
-body[data-active-tool="cut"] #webgl-canvas {
+body[data-active-tool="slice"] #webgl-canvas {
   cursor: grab;
 }
 
-body[data-active-tool="cut"] #webgl-canvas:active {
+body[data-active-tool="slice"] #webgl-canvas:active {
   cursor: grabbing;
 }
 

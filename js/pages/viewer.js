@@ -234,6 +234,9 @@ const ViewerApp = (() => {
 
     // Initialize WebGL Viewer
     VolumeViewer.init('webgl-canvas');
+    // The slice on screen ⇔ the two renders swapped (_setSliceStage): one listener
+    // serves the tool, a sibling's SYNC_SLICER_SPEC and the Z-stack browser alike.
+    if (typeof VolumeSlicer !== 'undefined' && VolumeSlicer.onVisibleChange) VolumeSlicer.onVisibleChange(_setSliceStage);
     // The calibration is a dataset fact the core owns (_baseQuaternion): the
     // axis-aligned views — the z-stack browser locking the view top-down — spin
     // the acquisition planes into the frame the operator defined instead of the
@@ -319,6 +322,8 @@ const ViewerApp = (() => {
         setRotationLocked: (v) => VolumeViewer.setRotationLocked(v),
         resize: () => VolumeViewer.resize(),
         setCutPlaneVisible: (v) => VolumeViewer.setCutPlaneVisible(v),
+        setPlaneSpec: (s, o) => VolumeViewer.setPlaneSpec(s, o),
+        getPlaneSpec: () => VolumeViewer.getPlaneSpec(),
         setMeasurements: (m) => VolumeViewer.setMeasurements(m),
         onMeasurePoint: (cb) => VolumeViewer.onMeasurePoint(cb),
         onPlaneSpecChange: (cb) => VolumeViewer.onPlaneSpecChange(cb),
@@ -1207,6 +1212,10 @@ const ViewerApp = (() => {
     ToolManager.init({
       defaultTool: 'navigate',
       onChange: (tool) => {
+        // The slice tool and the Z-stack browser both own the clip box and the
+        // main view: opening one closes the other (the browser's side lives in its
+        // plugin). Closed first, so its resetClipping cannot undo the plane below.
+        if (tool === 'slice' && _zstackActive) _applyZstackState(false, null);
         // For the 3D viewer, 'slice' maps to 'cut' tool (plane interaction)
         const viewerTool = tool === 'slice' ? 'cut' : tool;
         VolumeViewer.setActiveTool(viewerTool);
@@ -2338,14 +2347,22 @@ const ViewerApp = (() => {
       _volumeSourcePreference = viewerState.volumeSourcePreference;
     }
 
+    // 'slice' is the ToolManager name of the cut tool (the chip is data-tool="slice";
+    // 'cut' is only what VolumeViewer calls it): a saved open plane reopens the tool,
+    // and with it the stage. Silent in a panel — the host owns the shared tool.
+    const reopenSliceTool = () => {
+      if (typeof ToolManager === 'undefined') return;
+      _suppressToolSync = true;
+      try { ToolManager.activate('slice'); } finally { _suppressToolSync = false; }
+    };
     if (viewerState.cutPlane) {
       VolumeViewer.setCutPlane(viewerState.cutPlane.axis, viewerState.cutPlane.value, { visible: Boolean(viewerState.cutPlane.visible) });
-      if (viewerState.cutPlane.visible && typeof ToolManager !== 'undefined') ToolManager.activate('cut');
+      if (viewerState.cutPlane.visible) reopenSliceTool();
     }
 
     if (viewerState.planeSpec) {
       VolumeViewer.setPlaneSpec(viewerState.planeSpec, { visible: Boolean(viewerState.planeSpec.visible) });
-      if (viewerState.planeSpec.visible && typeof ToolManager !== 'undefined') ToolManager.activate('cut');
+      if (viewerState.planeSpec.visible) reopenSliceTool();
     }
 
     if (Array.isArray(viewerState.measurements)) {
@@ -3214,6 +3231,7 @@ const ViewerApp = (() => {
     if (typeof VolumeSlicer !== 'undefined') {
       const mat = VolumeViewer.getMaterial();
       if (mat) VolumeSlicer.updateMaterial(mat);
+      if (_sliceStaged) _updateSliceStageResolution();
     }
 
     
@@ -3500,11 +3518,22 @@ const ViewerApp = (() => {
       if (data.sourceIndex === _panelIndex) return;
 
       if (data.type === 'SYNC_Z') {
-        const slider = document.getElementById('slicer-position');
-        if (slider) {
-          const pct = Math.round(parseFloat(data.value) * 100);
-          slider.value = pct;
-          VolumeViewer.setPlaneSpec({ value: data.value, notify: false });
+        const value = parseFloat(data.value);
+        if (Number.isFinite(value)) {
+          _suppressSlicerSync = true;
+          try {
+            VolumeViewer.setPlaneSpec({ value }, { notify: false });
+            // The staged slice follows the sibling's slider, not only the 3D plane.
+            if (typeof VolumeSlicer !== 'undefined' && VolumeSlicer.isVisible()) {
+              VolumeSlicer.setPlaneSpec({ value });
+              _slicerSyncSlidersFromSpec();
+            } else {
+              const slider = document.getElementById('slicer-position');
+              if (slider) slider.value = Math.round(value * 100);
+            }
+          } finally {
+            _suppressSlicerSync = false;
+          }
         }
       } else if (data.type === 'SYNC_CHANNELS') {
         const params = data.value;
@@ -3554,27 +3583,35 @@ const ViewerApp = (() => {
           _suppressZstackSync = false;
         }
       } else if (data.type === 'SYNC_SLICER_SPEC') {
-        // A sibling decompose panel moved the slice-through-volume plane.
-        // The 3D raymarcher has no cut-plane shader uniform, so we cannot
-        // cut the volume in the main WebGL canvas. Instead:
-        //   1. Activate VolumeSlicer (links GPU texture, renders 2D slice)
-        //   2. Show its output as a fullscreen overlay over the WebGL canvas
-        // This matches exactly what the user sees in the slice inspector sidebar.
-        // The spec carries its own `visible` flag and it is authoritative: forcing the
-        // overlay on for every spec meant a sibling whose plane was OFF still replaced
-        // this panel's 3D volume with a flat slice. Track the position either way, so
-        // the plane is already aligned when it is switched back on.
-        const specVisible = data.spec?.visible !== false;
+        // A sibling panel moved the slice-through-volume plane. The 3D plane mesh
+        // follows it and the slice goes on the stage (VolumeSlicer visibility →
+        // _setSliceStage), exactly as when this panel's own tool is open — the
+        // raymarcher has no cut-plane uniform, the slicer is the only way to show
+        // the cut. The spec's `visible` flag is authoritative: a sibling whose plane
+        // is OFF must not replace this panel's volume with a flat slice, but the
+        // position is tracked either way so the plane is aligned when it comes
+        // back. While this panel's own tool is open it decides for itself. The
+        // stage and the Z-stack browser exclude each other.
+        const spec = data.spec && typeof data.spec === 'object' ? data.spec : {};
+        const specVisible = spec.visible !== false;
+        const ownTool = typeof ToolManager !== 'undefined' && ToolManager.current() === 'slice';
+        if (specVisible && _zstackActive) _applyZstackState(false, null);
         _suppressSlicerSync = true;
-        if (typeof VolumeSlicer !== 'undefined') {
-          const mat = VolumeViewer.getMaterial?.();
-          if (mat) VolumeSlicer.updateMaterial(mat);
-          VolumeSlicer.setVisible(specVisible);
-          VolumeSlicer.setPlaneSpec(data.spec);
+        try {
+          VolumeViewer.setPlaneSpec(spec, { notify: false, visible: specVisible || ownTool });
+          if (typeof VolumeSlicer !== 'undefined') {
+            const mat = VolumeViewer.getMaterial?.();
+            if (mat) VolumeSlicer.updateMaterial(mat);
+            VolumeSlicer.setPlaneSpec(spec);
+            if (!ownTool) VolumeSlicer.setVisible(specVisible);
+            if (VolumeSlicer.isVisible()) {
+              _slicerSyncSlidersFromSpec();
+              _slicerSyncPresetButtons(VolumeSlicer.getPlaneSpec().mode);
+            }
+          }
+        } finally {
+          _suppressSlicerSync = false;
         }
-        if (specVisible) _slicerOverlayStart();
-        else _slicerOverlayStop();
-        _suppressSlicerSync = false;
       } else if (data.type === 'SYNC_TIME' && isLive) {
         // Timelapses of different lengths align by elapsed fraction, not by index.
         const mine = Number(datasetMeta?.dimensions?.t) || 0;
@@ -3636,8 +3673,7 @@ const ViewerApp = (() => {
       } else if (data.type === 'TOGGLE_ZSTACK') {
         // Handled by the early module-level listener (_applyZstackState).
         // This path runs only if the message arrives AFTER _bindIframeSync (i.e. late messages).
-        // LEAK-002: z-stack mode supersedes the slicer overlay — stop its rAF loop.
-        if (data.state) _slicerOverlayStop();
+        // The browser closes the slice tool itself (mutual exclusion, in its plugin).
         _applyZstackState(!!data.state, data.slice ?? null);
       } else if (data.type === 'ZSTACK_HOVER_STATE') {
         if (_zstackActive) {
@@ -3788,9 +3824,8 @@ const ViewerApp = (() => {
   function _activateHostPlugin(id) {
     if (typeof PluginRegistry === 'undefined' || !id) return;
     if (id === 'zstack-browser') {
-      // The browser has page-level side effects (slicer overlay off, camera lock)
+      // The browser has page-level side effects (slice tool closed, camera lock)
       // that TOGGLE_ZSTACK already sequences: same door, same order.
-      if (!_zstackActive) _slicerOverlayStop();
       _applyZstackState(!_zstackActive, null);
       return;
     }
@@ -3823,7 +3858,13 @@ const ViewerApp = (() => {
   }
 
   async function _getFigureBlob(options = {}) {
-    const canvas = document.getElementById('webgl-canvas');
+    // On the stage the slice is what the screen shows: capture it, at its sharpest.
+    let canvas = null;
+    if (_sliceStaged && typeof VolumeSlicer !== 'undefined') {
+      VolumeSlicer.flushPreview?.();
+      canvas = VolumeSlicer.getPreviewCanvas();
+    }
+    canvas = canvas || document.getElementById('webgl-canvas');
     if (!canvas) return null;
     const resolved = typeof DisplayPresets !== 'undefined'
       ? DisplayPresets.resolve(_displayState.backgroundPreset, _displayState.backgroundColor)
@@ -4022,7 +4063,7 @@ const ViewerApp = (() => {
   // ── Slice Inspector ─────────────────────────────────────
 
   // _initSlicer is now handled by the slice-inspector module.
-  // This stub remains so workspace-restore code that calls ToolManager.activate('cut')
+  // This stub remains so workspace-restore code that calls ToolManager.activate('slice')
   // still has a valid _initSlicer reference if called before modules load.
   function _initSlicer() {
     if (typeof VolumeSlicer === 'undefined') return;
@@ -4148,21 +4189,27 @@ const ViewerApp = (() => {
     if (!panel) return;
     panel.classList.toggle('hidden', !visible);
     if (typeof VolumeSlicer !== 'undefined') {
+      // Visibility drives the stage: the slicer's canvas takes the canvas area and
+      // the WebGL canvas moves into the inspector's square (_setSliceStage).
       VolumeSlicer.setVisible(visible);
       if (visible) {
         // Link material in case a volume has loaded since init
         const mat = VolumeViewer.getMaterial();
         if (mat) VolumeSlicer.updateMaterial(mat);
-        // Default to center slice on first open
-        const spec = VolumeSlicer.getPlaneSpec();
-        if (spec.value >= 0.99 || spec.value <= 0.01) {
-          _slicerSetSpec({ value: 0.5 });
-          _slicerSyncSlidersFromSpec();
-        }
-      } else {
-        // LEAK-002: tear down the slicer-sync overlay rAF loop when the slice
-        // tool is turned off, otherwise the loop runs forever in the background.
-        _slicerOverlayStop();
+        // The 3D plane is the plane of record (a restored workspace, a sibling's
+        // SYNC_Z, the browser's reset all wrote it while the tool was off): the
+        // slicer adopts it, with a plane parked on a face brought back to the middle.
+        const spec = VolumeViewer.getPlaneSpec();
+        const parked = !(spec.value > 0.01 && spec.value < 0.99);
+        _slicerSetSpec({
+          mode: spec.mode,
+          value: parked ? 0.5 : spec.value,
+          yaw: spec.yaw, pitch: spec.pitch, roll: spec.roll,
+          slabThickness: spec.slabThickness,
+          projection: spec.projection
+        });
+        _slicerSyncSlidersFromSpec();
+        _slicerSyncPresetButtons(spec.mode);
       }
     }
     // Show plane mesh in 3D
@@ -4184,65 +4231,91 @@ const ViewerApp = (() => {
   // broadcast back out of this panel.
   let _suppressChannelSync = false;
 
-  // ── Slicer Sync Overlay ──────────────────────────────────
-  // When a decompose-panel sibling receives SYNC_SLICER_SPEC, it can't cut
-  // the 3D volume (the raymarcher shader has no cut-plane uniform). Instead
-  // we overlay the VolumeSlicer's GPU-rendered 2D canvas on top of the WebGL
-  // canvas — the same output as the slice inspector sidebar, fullscreen.
-  let _slicerOverlayActive = false;
-  let _slicerOverlayRafId  = null;
+  // ── Slice stage ──────────────────────────────────────────
+  // While the slice is on screen the two renders trade places: the slicer's
+  // canvas fills the canvas area (the "stage") and the WebGL canvas moves into
+  // the inspector's square, where the plane is still dragged in 3D. A canvas
+  // re-parented inside one document keeps its context; VolumeViewer.resize()
+  // follows the new parent. Driven by VolumeSlicer's visibility, which every
+  // door shares: the tool, a sibling's SYNC_SLICER_SPEC, the Z-stack browser.
+  let _sliceStaged = false;
+  let _sliceStageObserver = null;
+  // Camera distance before the swap: resize() may push the camera back so the
+  // volume fits the square; a distance the user did not touch comes back.
+  let _sliceStageCamera = null;
 
-  function _ensureSlicerOverlay() {
-    let overlay = document.getElementById('slicer-sync-overlay');
-    if (overlay) return overlay;
-    const container = document.querySelector('.viewer-canvas-container');
-    if (!container) return null;
-    overlay = document.createElement('div');
-    overlay.id = 'slicer-sync-overlay';
-    // Cover the canvas area, dark background (no data = black like the main canvas)
-    overlay.style.cssText = [
-      'position:absolute', 'inset:0', 'z-index:5', 'background:#000',
-      'display:none', 'align-items:center', 'justify-content:center',
-      'overflow:hidden'
-    ].join(';');
-    const canvas = document.createElement('canvas');
-    canvas.id = 'slicer-sync-canvas';
-    // Scale to fill the overlay while keeping the slice square
-    canvas.style.cssText = 'width:100%;height:100%;object-fit:contain;image-rendering:auto;';
-    overlay.appendChild(canvas);
-    container.appendChild(overlay);
-    return overlay;
-  }
-
-  function _slicerOverlayStart() {
-    _slicerOverlayActive = true;
-    const overlay = _ensureSlicerOverlay();
-    if (!overlay) return;
-    overlay.style.display = 'flex';
-    // Cancel any previous loop
-    if (_slicerOverlayRafId) { cancelAnimationFrame(_slicerOverlayRafId); _slicerOverlayRafId = null; }
-    const loop = () => {
-      if (!_slicerOverlayActive) return;
-      if (typeof VolumeSlicer !== 'undefined') {
-        const preview = VolumeSlicer.getPreviewCanvas();
-        const dst = document.getElementById('slicer-sync-canvas');
-        if (preview && dst) {
-          // Sync canvas dimensions once (preview is 320×320)
-          if (dst.width !== preview.width)  dst.width  = preview.width;
-          if (dst.height !== preview.height) dst.height = preview.height;
-          dst.getContext('2d')?.drawImage(preview, 0, 0);
-        }
+  function _setSliceStage(on) {
+    on = Boolean(on);
+    if (on === _sliceStaged) return;
+    const stage = document.getElementById('slice-stage');
+    const mount = document.getElementById('slicer-preview-mount');
+    const gl = document.getElementById('webgl-canvas');
+    const slice = typeof VolumeSlicer !== 'undefined' ? VolumeSlicer.getPreviewCanvas() : null;
+    if (!stage || !mount || !gl || !slice) return;
+    _sliceStaged = on;
+    document.body.classList.toggle('slice-staged', on);
+    if (on) {
+      const cam = { z: VolumeViewer.getCameraState?.()?.cameraZ, touched: false, unsub: null };
+      cam.unsub = VolumeViewer.onCameraChange?.(() => { cam.touched = true; }) || null;
+      _sliceStageCamera = cam;
+      stage.appendChild(slice);
+      stage.classList.remove('hidden');
+      mount.appendChild(gl);
+      if (window.ResizeObserver) {
+        _sliceStageObserver = new ResizeObserver(() => _updateSliceStageResolution());
+        _sliceStageObserver.observe(stage);
       }
-      _slicerOverlayRafId = requestAnimationFrame(loop);
-    };
-    loop();
+      _updateSliceStageResolution();
+    } else {
+      _sliceStageObserver?.disconnect();
+      _sliceStageObserver = null;
+      stage.classList.add('hidden');
+      stage.parentElement?.insertBefore(gl, stage);
+      mount.appendChild(slice);
+      VolumeSlicer.setPreviewResolution();
+      const cam = _sliceStageCamera;
+      _sliceStageCamera = null;
+      cam?.unsub?.();
+      if (cam && !cam.touched && Number.isFinite(cam.z)) VolumeViewer.setCameraState({ kind: 'volume', cameraZ: cam.z });
+    }
+    _scheduleViewerResize();
   }
 
-  function _slicerOverlayStop() {
-    _slicerOverlayActive = false;
-    if (_slicerOverlayRafId) { cancelAnimationFrame(_slicerOverlayRafId); _slicerOverlayRafId = null; }
-    const overlay = document.getElementById('slicer-sync-overlay');
-    if (overlay) overlay.style.display = 'none';
+  /** The stage renders at its displayed size in device pixels (1024 while dragging). */
+  function _updateSliceStageResolution() {
+    if (!_sliceStaged || typeof VolumeSlicer === 'undefined') return;
+    const stage = document.getElementById('slice-stage');
+    if (!stage) return;
+    const side = Math.min(stage.clientWidth, stage.clientHeight);
+    if (!(side > 0)) return;
+    const device = Math.round(side * Math.min(window.devicePixelRatio || 1, 2));
+    VolumeSlicer.setPreviewResolution(Math.min(device, 1024), device > 1024 ? device : 0);
+    _updateSliceStageScale(side);
+  }
+
+  /**
+   * Scale bar of the staged slice. The slicer draws 2·EXTENT cube units across its
+   * square and, after its anisotropy scaling, one cube unit is the longest physical
+   * axis: the square spans getPlaneExtentUnits() × max(x, y, z) µm whatever the
+   * plane's orientation, so the bar is exact — unlike the 3D bar, which depends on
+   * the perspective depth and is hidden meanwhile. Hidden when the size is unknown.
+   */
+  function _updateSliceStageScale(sideCss) {
+    const bar = document.getElementById('slice-stage-scale');
+    if (!bar) return;
+    const phys = VolumeViewer.getPhysicalSize?.();
+    const maxUm = phys ? Math.max(Number(phys.x) || 0, Number(phys.y) || 0, Number(phys.z) || 0) : 0;
+    const units = typeof VolumeSlicer !== 'undefined' && VolumeSlicer.getPlaneExtentUnits ? VolumeSlicer.getPlaneExtentUnits() : 0;
+    if (!(maxUm > 0) || !(units > 0) || !(sideCss > 0)) { bar.classList.add('hidden'); return; }
+    const umPerPx = (units * maxUm) / sideCss;
+    // Nearest 1-2-5 × 10ⁿ at or below a fifth of the slice.
+    const target = sideCss * 0.2 * umPerPx;
+    const exp = Math.pow(10, Math.floor(Math.log10(target)));
+    const m = target / exp;
+    const lengthUm = Number(((m >= 5 ? 5 : m >= 2 ? 2 : 1) * exp).toPrecision(3));
+    bar.style.width = `${Math.max(20, Math.round(lengthUm / umPerPx))}px`;
+    bar.textContent = lengthUm >= 1000 ? `${lengthUm / 1000} mm` : `${lengthUm} µm`;
+    bar.classList.remove('hidden');
   }
 
   function _zstackModule() {

@@ -294,6 +294,26 @@ const Utils = (() => {
   }
 
   /**
+   * Nearest 1-2-5 × 10ⁿ at or below `target` — a scale-bar length that reads as a
+   * round number (1, 2, 5, 10, 20, 50 …). 0 for a target that is not positive.
+   */
+  function niceScaleLength(target) {
+    if (!Number.isFinite(target) || !(target > 0)) return 0;
+    const exp = Math.pow(10, Math.floor(Math.log10(target)));
+    const m = target / exp;
+    return Number(((m >= 5 ? 5 : m >= 2 ? 2 : 1) * exp).toPrecision(3));
+  }
+
+  /**
+   * A length in µm as a label: "500 µm", "2 mm", "1.5 mm", "0.5 µm" (no trailing zeros).
+   */
+  function formatMicrons(um) {
+    if (!Number.isFinite(um)) return '—';
+    const trim = (v) => String(Number(v.toFixed(3)));
+    return um >= 1000 ? `${trim(um / 1000)} mm` : `${trim(um)} µm`;
+  }
+
+  /**
    * Map a value from one range to another
    */
   function mapRange(value, inMin, inMax, outMin, outMax) {
@@ -462,6 +482,8 @@ const Utils = (() => {
     sleep,
     clamp,
     lerp,
+    niceScaleLength,
+    formatMicrons,
     mapRange,
     uid,
     escapeHtml,

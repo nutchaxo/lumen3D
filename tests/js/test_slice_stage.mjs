@@ -22,19 +22,11 @@ const read = (rel) => readFileSync(path.join(ROOT, rel), 'utf8').replace(/\r/g, 
 {
   const allocations = [];
   const disposed = [];
-  class Vec3 {
-    constructor(x = 0, y = 0, z = 0) { this.x = x; this.y = y; this.z = z; }
-    clone() { return new Vec3(this.x, this.y, this.z); }
-    multiplyScalar(s) { this.x *= s; this.y *= s; this.z *= s; return this; }
-    length() { return Math.hypot(this.x, this.y, this.z); }
-    normalize() { const l = this.length() || 1; this.x /= l; this.y /= l; this.z /= l; return this; }
-    copy(v) { this.x = v.x; this.y = v.y; this.z = v.z; return this; }
-    applyQuaternion() { return this; }
-    set(x, y, z) { this.x = x; this.y = y; this.z = z; return this; }
-  }
+  // Real vector / quaternion math (the plane geometry evolves with the Studio's
+  // native slice); only the GPU objects are stubbed.
+  const REAL = createRequire(import.meta.url)('../../js/vendor/three.min.js');
   const THREE = {
-    Vector3: Vec3,
-    Vector4: class {},
+    ...REAL,
     Scene: class { constructor() { this.children = []; } add(o) { this.children.push(o); } },
     OrthographicCamera: class {},
     PlaneGeometry: class {},
@@ -44,11 +36,6 @@ const read = (rel) => readFileSync(path.join(ROOT, rel), 'utf8').replace(/\r/g, 
       constructor(w) { this.width = w; allocations.push(w); }
       dispose() { disposed.push(this.width); }
     },
-    Quaternion: class { setFromEuler() { return this; } },
-    Euler: class {},
-    Color: class {},
-    MathUtils: { degToRad: (d) => d * Math.PI / 180 },
-    GLSL3: 'glsl3', RGBAFormat: 1, UnsignedByteType: 2,
   };
   const renders = [];
   const renderer = {

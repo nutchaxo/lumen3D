@@ -4278,7 +4278,8 @@ const VolumeViewer = (() => {
       material,
       projVertexShader,
       fragmentShader,
-      onDirty: _scheduleFrame
+      onDirty: _scheduleFrame,
+      getPhysicalSize
     });
     // LEAK-001/ELE-30 (Rule 1.2): VolumeGrid.dispose() releases the grid/axes
     // groups' GPU resources (geometries, materials, sprite CanvasTextures). In a

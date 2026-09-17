@@ -4486,8 +4486,14 @@ const ViewerApp = (() => {
       VolumeSlicer.setPreviewResolution();
       const cam = _sliceStageCamera;
       _sliceStageCamera = null;
-      cam?.unsub?.();
-      if (cam && !cam.touched && Number.isFinite(cam.z)) VolumeViewer.setCameraState({ kind: 'volume', cameraZ: cam.z });
+      const restore = () => {
+        if (cam && !cam.touched && Number.isFinite(cam.z)) VolumeViewer.setCameraState({ kind: 'volume', cameraZ: cam.z });
+      };
+      restore();
+      // The inspector panel closes with a 250 ms width transition; resize() fits the
+      // volume to that interim, narrower layout and can push the camera back again.
+      // Restore once more after it, still only if the user has not taken the camera.
+      setTimeout(() => { restore(); cam?.unsub?.(); }, 320);
     }
     _scheduleViewerResize();
   }
@@ -4515,17 +4521,17 @@ const ViewerApp = (() => {
     const bar = document.getElementById('slice-stage-scale');
     if (!bar) return;
     const phys = VolumeViewer.getPhysicalSize?.();
-    const maxUm = phys ? Math.max(Number(phys.x) || 0, Number(phys.y) || 0, Number(phys.z) || 0) : 0;
+    // Without calibration the "physical" size is a voxel count: no bar rather than a lie.
+    const calibrated = phys && phys.calibrationStatus !== 'metadata-missing' && phys.mode !== 'metadata-missing';
+    const maxUm = calibrated ? Math.max(Number(phys.x) || 0, Number(phys.y) || 0, Number(phys.z) || 0) : 0;
     const units = typeof VolumeSlicer !== 'undefined' && VolumeSlicer.getPlaneExtentUnits ? VolumeSlicer.getPlaneExtentUnits() : 0;
     if (!(maxUm > 0) || !(units > 0) || !(sideCss > 0)) { bar.classList.add('hidden'); return; }
     const umPerPx = (units * maxUm) / sideCss;
     // Nearest 1-2-5 × 10ⁿ at or below a fifth of the slice.
-    const target = sideCss * 0.2 * umPerPx;
-    const exp = Math.pow(10, Math.floor(Math.log10(target)));
-    const m = target / exp;
-    const lengthUm = Number(((m >= 5 ? 5 : m >= 2 ? 2 : 1) * exp).toPrecision(3));
+    const lengthUm = Utils.niceScaleLength(sideCss * 0.2 * umPerPx);
+    if (!(lengthUm > 0)) { bar.classList.add('hidden'); return; }
     bar.style.width = `${Math.max(20, Math.round(lengthUm / umPerPx))}px`;
-    bar.textContent = lengthUm >= 1000 ? `${lengthUm / 1000} mm` : `${lengthUm} µm`;
+    bar.textContent = Utils.formatMicrons(lengthUm);
     bar.classList.remove('hidden');
   }
 

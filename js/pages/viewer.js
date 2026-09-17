@@ -234,6 +234,9 @@ const ViewerApp = (() => {
 
     // Initialize WebGL Viewer
     VolumeViewer.init('webgl-canvas');
+    // The slice on screen ⇔ the two renders swapped (_setSliceStage): one listener
+    // serves the tool, a sibling's SYNC_SLICER_SPEC and the Z-stack browser alike.
+    if (typeof VolumeSlicer !== 'undefined' && VolumeSlicer.onVisibleChange) VolumeSlicer.onVisibleChange(_setSliceStage);
     // The calibration is a dataset fact the core owns (_baseQuaternion): the
     // axis-aligned views — the z-stack browser locking the view top-down — spin
     // the acquisition planes into the frame the operator defined instead of the
@@ -319,6 +322,8 @@ const ViewerApp = (() => {
         setRotationLocked: (v) => VolumeViewer.setRotationLocked(v),
         resize: () => VolumeViewer.resize(),
         setCutPlaneVisible: (v) => VolumeViewer.setCutPlaneVisible(v),
+        setPlaneSpec: (s, o) => VolumeViewer.setPlaneSpec(s, o),
+        getPlaneSpec: () => VolumeViewer.getPlaneSpec(),
         setMeasurements: (m) => VolumeViewer.setMeasurements(m),
         onMeasurePoint: (cb) => VolumeViewer.onMeasurePoint(cb),
         onPlaneSpecChange: (cb) => VolumeViewer.onPlaneSpecChange(cb),
@@ -1207,6 +1212,10 @@ const ViewerApp = (() => {
     ToolManager.init({
       defaultTool: 'navigate',
       onChange: (tool) => {
+        // The slice tool and the Z-stack browser both own the clip box and the
+        // main view: opening one closes the other (the browser's side lives in its
+        // plugin). Closed first, so its resetClipping cannot undo the plane below.
+        if (tool === 'slice' && _zstackActive) _applyZstackState(false, null);
         // For the 3D viewer, 'slice' maps to 'cut' tool (plane interaction)
         const viewerTool = tool === 'slice' ? 'cut' : tool;
         VolumeViewer.setActiveTool(viewerTool);
@@ -1368,15 +1377,25 @@ const ViewerApp = (() => {
       return res === key ? `Native resolution: ${chunks}/${total} chunks` : res;
     };
     StudioEditor.setLoadProgress?.({ percent: 0, label: label(0, 0), onCancel });
+    let missing = 0;
     try {
       const sr = await _renderNativeSliceForStudio({
         spec: preview.planeSpec,
         cropRect: preview.cropRect,
+        fallback: { canvas: preview.canvas },
         onProgress: ({ percent, chunks, totalChunks }) => {
           StudioEditor.setLoadProgress?.({ percent, label: label(chunks, totalChunks), onCancel });
+        },
+        // Chunks land one after the other, as they do in the 3D view: every partial
+        // picture is the same frame with more of it native and the preview elsewhere.
+        onPartial: (partial) => {
+          if (StudioEditor.isOpen?.()) StudioEditor.setSliceResult(partial, { imageOnly: true });
         }
       });
-      if (sr && StudioEditor.isOpen?.()) StudioEditor.setSliceResult(sr);
+      if (sr && StudioEditor.isOpen?.()) {
+        StudioEditor.setSliceResult(sr);
+        missing = Number(sr.missingChunks) || 0;
+      }
     } catch (err) {
       if (err?.name !== 'AbortError') {
         console.warn('[ViewerApp] Native Studio slice failed; keeping the active volume resolution:', err);
@@ -1384,6 +1403,17 @@ const ViewerApp = (() => {
       }
     } finally {
       StudioEditor.setLoadProgress?.(null);
+    }
+    if (missing > 0 && StudioEditor.isOpen?.()) {
+      const key = 'studio.nativeMissing';
+      const text = (typeof I18n !== 'undefined' && I18n.t) ? I18n.t(key, { missing }) : key;
+      StudioEditor.setLoadProgress?.({
+        percent: 100,
+        label: text === key ? `Native resolution: ${missing} chunks could not be loaded and stay at preview resolution.` : text
+      });
+      setTimeout(() => {
+        if (!_nativeSliceAbort && StudioEditor.isOpen?.()) StudioEditor.setLoadProgress?.(null);
+      }, 8000);
     }
   }
 
@@ -1535,74 +1565,123 @@ const ViewerApp = (() => {
     return { origin, normal, right, up };
   }
 
-  function _brickIntersectsSlicePlane(brick, dims, plane, margin) {
-    const bs = dims.brickSize || 64;
-    const ox = brick.bx * bs;
-    const oy = brick.by * bs;
-    const oz = brick.bz * bs;
-    const bw = Math.min(bs, dims.x - ox);
-    const bh = Math.min(bs, dims.y - oy);
-    const bd = Math.min(bs, dims.z - oz);
-    if (bw <= 0 || bh <= 0 || bd <= 0) return false;
+  /**
+   * The compact voxel box `region` of a brick delivered whole (bs³ voxels of
+   * `bytesPerVoxel` bytes each); bytes that already are that box, or a whole brick
+   * asked whole, come back as they are. null when the bytes are neither shape (a
+   * brick the loader could not decode), so the caller drops it rather than upload it.
+   */
+  function _brickRegionData(data, bs, region, bytesPerVoxel = 1) {
+    if (!data) return null;
+    const wholeBytes = bs * bs * bs * bytesPerVoxel;
+    if (!region) return data.length === wholeBytes ? data : null;
+    const rw = region.x1 - region.x0;
+    const rh = region.y1 - region.y0;
+    const rd = region.z1 - region.z0;
+    const boxBytes = rw * rh * rd * bytesPerVoxel;
+    if (data.length === boxBytes) return data;
+    if (data.length !== wholeBytes) return null;
+    const out = new Uint8Array(boxBytes);
+    const rowBytes = rw * bytesPerVoxel;
+    let dst = 0;
+    for (let z = region.z0; z < region.z1; z++) {
+      for (let y = region.y0; y < region.y1; y++) {
+        const src = ((z * bs + y) * bs + region.x0) * bytesPerVoxel;
+        out.set(data.subarray(src, src + rowBytes), dst);
+        dst += rowBytes;
+      }
+    }
+    return out;
+  }
 
-    const min = new THREE.Vector3(ox / dims.x - 0.5, oy / dims.y - 0.5, oz / dims.z - 0.5);
-    const max = new THREE.Vector3((ox + bw) / dims.x - 0.5, (oy + bh) / dims.y - 0.5, (oz + bd) / dims.z - 0.5);
-    const center = min.clone().add(max).multiplyScalar(0.5);
-    const extent = max.clone().sub(min).multiplyScalar(0.5);
-    const dist = plane.normal.dot(center.sub(plane.origin));
-    const radius = Math.abs(plane.normal.x) * extent.x + Math.abs(plane.normal.y) * extent.y + Math.abs(plane.normal.z) * extent.z;
-    return dist - radius <= margin && dist + radius >= -margin;
+  /** Interleaves per-channel voxel boxes into RGBA, one byte per channel, floor LUT applied. */
+  function _composeRgbaRegion(channelData, floorLuts, channels, voxelCount) {
+    const out = new Uint8Array(voxelCount * 4);
+    const active = Math.max(0, Math.min(4, Number(channels) || 4));
+    for (let c = 0; c < active; c++) {
+      const src = channelData?.[c];
+      if (!src) continue;
+      const lut = floorLuts?.[c] || null;
+      const n = Math.min(voxelCount, src.length);
+      for (let i = 0, dst = c; i < n; i++, dst += 4) {
+        const value = src[i] || 0;
+        out[dst] = lut ? lut[value] : value;
+      }
+    }
+    return out;
   }
 
   /**
-   * Spacing of the slicer's slab samples along `axis`, in normalised texture units —
-   * the spec's own step when it names one, otherwise the slicer's historical 1/256 of
-   * the longest physical axis converted onto that axis.
+   * The LOD0 bricks the Studio's native pass has to load for `spec`, each with the
+   * voxel box of it the shader can sample (`region`; null = the whole brick).
+   *
+   * The test runs in texture space against the very plane the slicer samples
+   * (VolumeSlicer.planeGeometry). The physical anisotropy tilts an oblique plane
+   * away from its yaw/pitch/roll normal, and testing bricks against that untilted
+   * normal left out the bricks the far ends of the cut actually cross — the black
+   * bands of an oblique native slice. A brick is kept when its box comes within the
+   * slab's half-thickness of the plane, plus one voxel along the normal for the
+   * shader's floor() to a voxel index. Along an axis-aligned plane the sampled
+   * voxels of a brick are a short run of planes, so only those (one voxel of slack
+   * each side) are decoded and uploaded: a single cut costs three planes of every
+   * brick instead of sixty-four.
    */
-  function _slabStepNorm(spec, axis) {
-    const requested = Number(spec.slabStepNorm);
-    if (Number.isFinite(requested) && requested > 0) return requested;
-    const physical = VolumeViewer.getPhysicalSize?.();
-    const p = physical && physical[axis] > 0 ? physical[axis] : 0;
-    const maxP = physical ? Math.max(physical.x || 0, physical.y || 0, physical.z || 0) : 0;
-    return p > 0 && maxP > 0 ? (1 / 256) * (maxP / p) : 1 / 256;
-  }
-
   function _nativeSliceBricksForSpec(spec, dims) {
-    if (typeof BrickLoader === 'undefined' || !BrickLoader.getDimensions) return [];
-    const slabSteps = Math.max(1, Math.min(1024, Number(spec.slabThickness) || 1));
-    const projected = slabSteps > 1 && spec.projection && spec.projection !== 'single';
-    const axis = spec.mode === 'xz' ? 'y' : spec.mode === 'yz' ? 'x' : (!spec.mode || spec.mode === 'xy') ? 'z' : null;
-    let bricks = null;
-    if (axis && !projected) {
-      bricks = BrickLoader.bricksForSlab(axis, spec.value ?? 0.5, 0);
-    } else if (axis) {
-      // A projected slab samples (steps - 1) / 2 steps either side of the plane; every
-      // brick in that depth range has to be resident at LOD0, not just the plane's own.
-      // One voxel of margin each way covers the sample footprint at the ends.
-      const value = Number.isFinite(+spec.value) ? +spec.value : 0.5;
-      const half = (slabSteps - 1) * _slabStepNorm(spec, axis) * 0.5 + 1 / Math.max(1, dims[axis] || 1);
-      const min = { x: 0, y: 0, z: 0 };
-      const max = { x: 0.9999, y: 0.9999, z: 0.9999 };
-      min[axis] = Math.max(0, value - half);
-      max[axis] = Math.min(0.9999, value + half);
-      bricks = BrickLoader.bricksForRegion(min, max, 0);
+    if (typeof BrickLoader === 'undefined' || !BrickLoader.activeBricks) return [];
+    if (typeof VolumeSlicer === 'undefined' || !VolumeSlicer.planeGeometry) return [];
+    const geom = VolumeSlicer.planeGeometry(spec, VolumeViewer.getPhysicalSize?.());
+    const n = geom.normal;
+    const bs = dims.brickSize || 64;
+    const dx = Math.max(1, dims.x || 1);
+    const dy = Math.max(1, dims.y || 1);
+    const dz = Math.max(1, dims.z || 1);
+    const tolerance = geom.halfThickness + Math.abs(n.x) / dx + Math.abs(n.y) / dy + Math.abs(n.z) / dz;
+
+    const axis = Math.abs(n.x) > 0.999999 ? 'x' : Math.abs(n.y) > 0.999999 ? 'y' : Math.abs(n.z) > 0.999999 ? 'z' : null;
+    let axisRange = null;
+    if (axis) {
+      const dim = axis === 'x' ? dx : axis === 'y' ? dy : dz;
+      const c = geom.center[axis];
+      const h = geom.halfThickness;
+      // The shader reads voxel floor(uvw * dim) (clamped to the volume); one voxel of
+      // slack each way covers how the GPU rounds that product.
+      const v0 = Math.max(0, Math.floor((c - h) * dim) - 1);
+      const v1 = Math.min(dim - 1, Math.floor((c + h) * dim) + 1);
+      if (v1 < v0) return [];
+      axisRange = { v0, v1 };
     }
 
-    if (bricks) {
-      return bricks.filter(b => !BrickLoader.hasBrick || BrickLoader.hasBrick(b.bx, b.by, b.bz, 0));
+    const bricks = [];
+    for (const b of BrickLoader.activeBricks(0)) {
+      const ox = b.bx * bs;
+      const oy = b.by * bs;
+      const oz = b.bz * bs;
+      const bw = Math.min(bs, dims.x - ox);
+      const bh = Math.min(bs, dims.y - oy);
+      const bd = Math.min(bs, dims.z - oz);
+      if (bw <= 0 || bh <= 0 || bd <= 0) continue;
+      let region = null;
+      if (axisRange) {
+        const o = axis === 'x' ? ox : axis === 'y' ? oy : oz;
+        const extent = axis === 'x' ? bw : axis === 'y' ? bh : bd;
+        const lo = Math.max(0, axisRange.v0 - o);
+        const hi = Math.min(extent - 1, axisRange.v1 - o);
+        if (hi < lo) continue;
+        region = { x0: 0, x1: bw, y0: 0, y1: bh, z0: 0, z1: bd };
+        region[axis + '0'] = lo;
+        region[axis + '1'] = hi + 1;
+      } else {
+        const min = new THREE.Vector3(ox / dx, oy / dy, oz / dz);
+        const max = new THREE.Vector3((ox + bw) / dx, (oy + bh) / dy, (oz + bd) / dz);
+        const center = min.clone().add(max).multiplyScalar(0.5);
+        const extent = max.clone().sub(min).multiplyScalar(0.5);
+        const dist = Math.abs(n.dot(center.sub(geom.center)));
+        const radius = Math.abs(n.x) * extent.x + Math.abs(n.y) * extent.y + Math.abs(n.z) * extent.z;
+        if (dist > radius + tolerance) continue;
+      }
+      bricks.push({ bx: b.bx, by: b.by, bz: b.bz, region });
     }
-
-    const plane = _slicePlaneVectors(spec);
-    if (!plane) return [];
-    const allActive = BrickLoader.activeBricks?.(0) || BrickLoader.bricksForRegion(
-      { x: 0, y: 0, z: 0 },
-      { x: 0.9999, y: 0.9999, z: 0.9999 },
-      0
-    );
-    const shaderSlab = projected ? ((slabSteps - 1) * _slabStepNorm(spec, 'z') * 0.5) : 0;
-    const voxelMargin = Math.max(1 / Math.max(1, dims.x), 1 / Math.max(1, dims.y), 1 / Math.max(1, dims.z)) * 2;
-    return allActive.filter(b => _brickIntersectsSlicePlane(b, dims, plane, shaderSlab + voxelMargin));
+    return bricks;
   }
 
   function _nativeStudioRenderSize(spec, dims) {
@@ -1701,6 +1780,21 @@ const ViewerApp = (() => {
   }
 
   /**
+   * The frame window {x, y, w, h} that _cropEmptySliceSpace would cut for `rect` out
+   * of a `size` px render — null when the rect is unusable or drawn at another size.
+   */
+  function _sliceWindowForRect(rect, size) {
+    if (!rect || !Number.isFinite(rect.x) || !Number.isFinite(rect.x2)) return null;
+    if (rect.renderRes && rect.renderRes !== size) return null;
+    const minX = Math.max(0, Math.round(rect.x));
+    const minY = Math.max(0, Math.round(rect.y));
+    const maxX = Math.min(size - 1, Math.round(rect.x2));
+    const maxY = Math.min(size - 1, Math.round(rect.y2));
+    if (minX > maxX || minY > maxY) return null;
+    return { x: minX, y: minY, w: maxX - minX + 1, h: maxY - minY + 1 };
+  }
+
+  /**
    * Channels the native slice has to download. A channel the operator has switched
    * off contributes nothing to the rendered plane, and each one is a full quarter of
    * the LOD0 traffic (one WebP pack set per channel) — on a 3789² dataset that is
@@ -1715,6 +1809,16 @@ const ViewerApp = (() => {
     return wanted.length ? wanted : Array.from({ length: channelCount }, (_, c) => c);
   }
 
+  /**
+   * Renders `options.spec` (the inspector plane by default) at native resolution:
+   * the LOD0 bricks the plane crosses stream into a throwaway atlas — only the voxel
+   * planes each brick contributes — and the slicer renders the plane through it.
+   * `options.onPartial` receives a picture of the same frame every few hundred
+   * milliseconds while chunks land, `options.fallback.canvas` (the preview, cropped
+   * to `options.cropRect`) standing in wherever a chunk is still missing. A chunk
+   * that fails for good keeps those preview pixels in the final picture and is
+   * counted in `missingChunks`.
+   */
   async function _renderNativeSliceForStudio(options = {}) {
     if (typeof BrickLoader === 'undefined' || typeof SVRManager === 'undefined' || typeof VolumeSlicer === 'undefined') return null;
     if (!BrickLoader.isReady?.() || !VolumeSlicer.renderWithMaterial || !VolumeViewer.getRenderer?.() || !VolumeViewer.getMaterial?.()) return null;
@@ -1730,6 +1834,7 @@ const ViewerApp = (() => {
     if (!bricks.length) return null;
 
     const onProgress = typeof options.onProgress === 'function' ? options.onProgress : null;
+    const onPartial = typeof options.onPartial === 'function' ? options.onPartial : null;
     const controller = new AbortController();
     _nativeSliceAbort = controller;
 
@@ -1740,9 +1845,8 @@ const ViewerApp = (() => {
     if (THREE.UniformsUtils) tempMaterial.uniforms = THREE.UniformsUtils.clone(sourceMaterial.uniforms);
 
     const tempSvr = new SVRManager();
-    let doneTasks = 0;
-    let writtenBricks = 0;
-    let lastStatusAt = 0;
+    const bs = dims.brickSize || 64;
+    const now = () => performance.now?.() || Date.now();
     const rgbaTransport = BrickLoader.getTransportEncoding?.() === 'raw-rgba-gzip';
     const floorLuts = VolumeViewer.floorLutsFromManifest?.(BrickLoader.getManifest?.(), channels) || [];
     // Scalar transport stores one pack set per channel, so a disabled channel is a
@@ -1750,109 +1854,225 @@ const ViewerApp = (() => {
     // all four together — there is nothing to skip there.
     const wantedChannels = rgbaTransport ? null : _nativeSliceChannels(channels);
     const perBrickTasks = rgbaTransport ? 1 : wantedChannels.length;
-    const tasks = [];
-    for (const brick of bricks) {
-      if (rgbaTransport) tasks.push({ ...brick, channel: -1, lod: 0 });
-      else {
-        for (const c of wantedChannels) tasks.push({ ...brick, channel: c, lod: 0 });
+    const channelState = _currentChannelState();
+    const renderRes = _nativeStudioRenderSize(spec, dims);
+    const cropRect = options.cropRect || null;
+    const fallback = options.fallback?.canvas && cropRect ? { canvas: options.fallback.canvas, rect: cropRect } : null;
+    // With the preview's frame known, only that window of the frame is rendered and
+    // read back — the same pixels _cropEmptySliceSpace would cut out of the full frame.
+    const sliceWindow = _sliceWindowForRect(cropRect, renderRes);
+
+    const brickByKey = new Map(bricks.map(b => [`${b.bx}_${b.by}_${b.bz}`, b]));
+    const pendingScalar = new Map();
+    const failed = new Set();
+    let totalTasks = 0;
+    let doneTasks = 0;
+    let writtenBricks = 0;
+    let lastStatusAt = 0;
+
+    const tasksFor = (list) => {
+      const tasks = [];
+      for (const brick of list) {
+        const base = { bx: brick.bx, by: brick.by, bz: brick.bz, lod: 0, region: brick.region || null };
+        if (rgbaTransport) tasks.push({ ...base, channel: -1 });
+        else for (const c of wantedChannels) tasks.push({ ...base, channel: c });
       }
-    }
+      return tasks;
+    };
+    const voxelsOf = (brick) => {
+      const r = brick.region;
+      return r ? (r.x1 - r.x0) * (r.y1 - r.y0) * (r.z1 - r.z0) : bs * bs * bs;
+    };
 
     const status = (force = false) => {
-      const now = performance.now?.() || Date.now();
-      if (!force && now - lastStatusAt < 250) return;
-      lastStatusAt = now;
-      const pct = Math.round((doneTasks / Math.max(1, tasks.length)) * 100);
+      const t = now();
+      if (!force && t - lastStatusAt < 250) return;
+      lastStatusAt = t;
+      const pct = Math.round((doneTasks / Math.max(1, totalTasks)) * 100);
       _setSliceStatus(`Rendering native HD slice: ${writtenBricks}/${bricks.length} chunks, ${pct}%`);
       onProgress?.({ percent: pct, chunks: writtenBricks, totalChunks: bricks.length });
+    };
+
+    // Always through the fallback variant of the slice shader (one program for the
+    // whole pass): with every brick present it is never sampled.
+    const renderSlice = () => {
+      const rendered = VolumeSlicer.renderWithMaterial(
+        tempMaterial, spec, renderRes, channelState, { fallback, window: sliceWindow }
+      );
+      if (!rendered) return null;
+      // The slicer's canvas is overwritten by its next render: keep a copy.
+      return sliceWindow ? _copyCanvas(rendered) : _cropEmptySliceSpace(rendered, cropRect || _sliceContentRect(rendered));
+    };
+    const sliceResult = (canvas, rect, extra) => ({
+      canvas,
+      width: canvas.width,
+      height: canvas.height,
+      renderRes,
+      cropRect: rect,
+      source: 'native-slicer',
+      quality: 'native',
+      planeSpec: spec,
+      pixelSizeUm: _slicePixelSizeUm(spec, renderRes),
+      physicalSizeUm: VolumeViewer.getPhysicalSize?.(),
+      channelState,
+      timepoint: _currentTimepoint,
+      nativeChunks: writtenBricks,
+      totalChunks: bricks.length,
+      ...extra
+    });
+
+    // The progressive picture is re-rendered from the growing atlas at most every
+    // PARTIAL_MIN_MS, and never more often than a few times the previous render's own
+    // cost (reading back a 5684² frame is a good part of a second on a large dataset).
+    const PARTIAL_MIN_MS = 500;
+    // A refresh is worth its render once a couple of percent of the chunks are new,
+    // or after two seconds regardless (the first pack of a slow host).
+    const PARTIAL_MIN_CHUNKS = Math.max(1, Math.ceil(bricks.length / 50));
+    let partialTimer = null;
+    let lastPartialAt = now();
+    let lastPartialCost = 0;
+    let writtenSinceRender = 0;
+    const renderPartial = () => {
+      if (!onPartial || controller.signal.aborted || !writtenSinceRender) return;
+      const t0 = now();
+      const canvas = renderSlice();
+      if (!canvas) return;
+      lastPartialCost = now() - t0;
+      lastPartialAt = now();
+      writtenSinceRender = 0;
+      onPartial(sliceResult(canvas, cropRect, { partial: true }));
+    };
+    const partialTick = () => {
+      partialTimer = null;
+      if (controller.signal.aborted || !writtenSinceRender) return;
+      if (writtenSinceRender >= PARTIAL_MIN_CHUNKS || now() - lastPartialAt >= 2000) renderPartial();
+      else partialTimer = setTimeout(partialTick, 250);
+    };
+    const schedulePartial = () => {
+      if (!onPartial || partialTimer || controller.signal.aborted) return;
+      const interval = Math.max(PARTIAL_MIN_MS, lastPartialCost * 4);
+      const wait = Math.max(0, interval - (now() - lastPartialAt));
+      partialTimer = setTimeout(partialTick, wait);
+    };
+    const cancelPartial = () => {
+      if (partialTimer) { clearTimeout(partialTimer); partialTimer = null; }
+    };
+
+    const upload = (brick, key, rgba) => {
+      const r = brick.region;
+      let ok = true;
+      if (r) {
+        ok = tempSvr.writeRgbaBrickRegion(brick.bx, brick.by, brick.bz, rgba, r.x0, r.y0, r.z0, r.x1 - r.x0, r.y1 - r.y0, r.z1 - r.z0);
+      } else {
+        const bw = Math.min(bs, dims.x - brick.bx * bs);
+        const bh = Math.min(bs, dims.y - brick.by * bs);
+        const bd = Math.min(bs, dims.z - brick.bz * bs);
+        tempSvr.writeRgbaBrick(brick.bx, brick.by, brick.bz, rgba, bw, bh, bd);
+      }
+      if (ok === false) {
+        failed.add(key);
+        return;
+      }
+      writtenBricks++;
+      writtenSinceRender++;
+      schedulePartial();
+    };
+
+    const onBrickLoaded = ({ bx, by, bz, channel, data }) => {
+      if (controller.signal.aborted) return;
+      const key = `${bx}_${by}_${bz}`;
+      const brick = brickByKey.get(key);
+      if (!brick) return;
+      if (channel === -1) {
+        const box = _brickRegionData(data, bs, brick.region, 4);
+        if (!box) failed.add(key);
+        else upload(brick, key, VolumeViewer.applyRgbaBrickLuts?.(box, floorLuts, channels) || box);
+      } else {
+        const box = _brickRegionData(data, bs, brick.region, 1);
+        if (!box) {
+          failed.add(key);
+          pendingScalar.delete(key);
+        } else {
+          let pending = pendingScalar.get(key);
+          if (!pending) {
+            pending = { count: 0, data: new Array(channels) };
+            pendingScalar.set(key, pending);
+          }
+          if (!pending.data[channel]) pending.count++;
+          pending.data[channel] = box;
+          if (pending.count >= perBrickTasks) {
+            pendingScalar.delete(key);
+            upload(brick, key, _composeRgbaRegion(pending.data, floorLuts, channels, voxelsOf(brick)));
+          }
+        }
+      }
+      doneTasks++;
+      status(false);
+    };
+    const loadOptions = {
+      concurrency: Math.min(32, Math.max(4, Number(navigator.hardwareConcurrency) || 8)),
+      cancelPrevious: false,
+      preserveOrder: true,
+      streamOnly: true,
+      cacheResults: false,
+      // Bricks the viewer already decoded are free; writing this batch back would
+      // evict its working set (a slice is thousands of bricks), so read only.
+      readCache: true,
+      // The loader runs its own AbortController, so aborting ours is invisible to
+      // it: without this hook, closing the Studio left the whole LOD0 transfer
+      // running to completion in the background.
+      shouldAbort: () => controller.signal.aborted,
+      onBrickLoaded,
+      onBrickError: ({ bx, by, bz }) => {
+        failed.add(`${bx}_${by}_${bz}`);
+        doneTasks++;
+        status(false);
+      },
+      onProgress: () => status(false)
+    };
+    const throwIfAborted = () => {
+      if (controller.signal.aborted) throw new DOMException('Native slice render cancelled', 'AbortError');
     };
 
     try {
       _setSliceStatus(`Preparing native HD slice (${bricks.length} LOD0 chunks)...`);
       onProgress?.({ percent: 0, chunks: 0, totalChunks: bricks.length });
       tempSvr.init(channels, dims, renderer, tempMaterial, { targetSlots: bricks.length });
-      const pendingScalar = new Map();
-      const bs = dims.brickSize || 64;
 
-      await BrickLoader.loadBrickTasks(tasks, {
-        concurrency: Math.min(32, Math.max(4, Number(navigator.hardwareConcurrency) || 8)),
-        cancelPrevious: false,
-        preserveOrder: true,
-        streamOnly: true,
-        cacheResults: false,
-        // Bricks the viewer already decoded are free; writing this batch back would
-        // evict its working set (a slice is thousands of bricks), so read only.
-        readCache: true,
-        // The loader runs its own AbortController, so aborting ours is invisible to
-        // it: without this hook, closing the Studio left the whole LOD0 transfer
-        // running to completion in the background.
-        shouldAbort: () => controller.signal.aborted,
-        onBrickLoaded: ({ bx, by, bz, channel, data }) => {
-          if (controller.signal.aborted) return;
-          if (channel === -1) {
-            const ox = bx * bs;
-            const oy = by * bs;
-            const oz = bz * bs;
-            const bw = Math.min(bs, dims.x - ox);
-            const bh = Math.min(bs, dims.y - oy);
-            const bd = Math.min(bs, dims.z - oz);
-            const rgba = VolumeViewer.applyRgbaBrickLuts?.(data, floorLuts, channels) || data;
-            tempSvr.writeRgbaBrick(bx, by, bz, rgba, bw, bh, bd);
-            writtenBricks++;
-          } else {
-            const key = `${bx}_${by}_${bz}`;
-            let pending = pendingScalar.get(key);
-            if (!pending) {
-              pending = { bx, by, bz, count: 0, data: new Array(channels) };
-              pendingScalar.set(key, pending);
-            }
-            if (!pending.data[channel]) pending.count++;
-            pending.data[channel] = data;
-            if (pending.count >= perBrickTasks) {
-              const ox = bx * bs;
-              const oy = by * bs;
-              const oz = bz * bs;
-              const bw = Math.min(bs, dims.x - ox);
-              const bh = Math.min(bs, dims.y - oy);
-              const bd = Math.min(bs, dims.z - oz);
-              const rgba = VolumeViewer.makeRgbaBrickFromScalarChannels?.(pending.data, floorLuts, channels, bs);
-              if (rgba) tempSvr.writeRgbaBrick(bx, by, bz, rgba, bw, bh, bd);
-              pendingScalar.delete(key);
-              writtenBricks++;
-            }
-          }
-          doneTasks++;
-          status(false);
-        },
-        onProgress: () => status(false)
-      });
+      const tasks = tasksFor(bricks);
+      totalTasks = tasks.length;
+      await BrickLoader.loadBrickTasks(tasks, loadOptions);
+      throwIfAborted();
 
-      if (controller.signal.aborted) throw new DOMException('Native slice render cancelled', 'AbortError');
+      // A fetch or decode that failed for good (the loader already retried each one)
+      // left holes: one calm pass for those bricks once the rush is over, before
+      // deciding they are missing.
+      if (failed.size) {
+        const retry = [...failed].map(key => brickByKey.get(key)).filter(Boolean);
+        for (const key of failed) pendingScalar.delete(key);
+        failed.clear();
+        const retryTasks = tasksFor(retry);
+        totalTasks += retryTasks.length;
+        await BrickLoader.loadBrickTasks(retryTasks, loadOptions);
+        throwIfAborted();
+      }
+      cancelPartial();
       if (!writtenBricks) return null;
 
       status(true);
-      const renderRes = _nativeStudioRenderSize(spec, dims);
-      const rendered = VolumeSlicer.renderWithMaterial(tempMaterial, spec, renderRes, _currentChannelState());
-      if (!rendered) return null;
-      const cropRect = options.cropRect || _sliceContentRect(rendered);
-      const canvas = _cropEmptySliceSpace(rendered, cropRect);
-      _setSliceStatus(`Native HD slice ready (${writtenBricks} chunks).`);
-      return {
-        canvas,
-        width: canvas.width,
-        height: canvas.height,
-        renderRes,
-        cropRect,
-        source: 'native-slicer',
-        quality: 'native',
-        planeSpec: spec,
-        pixelSizeUm: _slicePixelSizeUm(spec, renderRes),
-        physicalSizeUm: VolumeViewer.getPhysicalSize?.(),
-        channelState: _currentChannelState(),
-        timepoint: _currentTimepoint,
-        nativeChunks: writtenBricks
-      };
+      // A brick that never made it whole keeps the preview's pixels in the final
+      // picture (a softer patch beats a hole) and is reported.
+      const missing = new Set([...failed, ...pendingScalar.keys()]).size;
+      const canvas = renderSlice();
+      if (!canvas) return null;
+      const rect = cropRect || _sliceContentRect(canvas);
+      _setSliceStatus(missing > 0
+        ? `Native HD slice ready (${writtenBricks} chunks; ${missing} kept at preview resolution).`
+        : `Native HD slice ready (${writtenBricks} chunks).`);
+      return sliceResult(canvas, rect, { missingChunks: missing });
     } finally {
+      cancelPartial();
+      VolumeSlicer.releaseForeign?.();
       tempSvr.dispose?.();
       tempMaterial.dispose?.();
       if (_nativeSliceAbort === controller) _nativeSliceAbort = null;
@@ -2338,14 +2558,22 @@ const ViewerApp = (() => {
       _volumeSourcePreference = viewerState.volumeSourcePreference;
     }
 
+    // 'slice' is the ToolManager name of the cut tool (the chip is data-tool="slice";
+    // 'cut' is only what VolumeViewer calls it): a saved open plane reopens the tool,
+    // and with it the stage. Silent in a panel — the host owns the shared tool.
+    const reopenSliceTool = () => {
+      if (typeof ToolManager === 'undefined') return;
+      _suppressToolSync = true;
+      try { ToolManager.activate('slice'); } finally { _suppressToolSync = false; }
+    };
     if (viewerState.cutPlane) {
       VolumeViewer.setCutPlane(viewerState.cutPlane.axis, viewerState.cutPlane.value, { visible: Boolean(viewerState.cutPlane.visible) });
-      if (viewerState.cutPlane.visible && typeof ToolManager !== 'undefined') ToolManager.activate('cut');
+      if (viewerState.cutPlane.visible) reopenSliceTool();
     }
 
     if (viewerState.planeSpec) {
       VolumeViewer.setPlaneSpec(viewerState.planeSpec, { visible: Boolean(viewerState.planeSpec.visible) });
-      if (viewerState.planeSpec.visible && typeof ToolManager !== 'undefined') ToolManager.activate('cut');
+      if (viewerState.planeSpec.visible) reopenSliceTool();
     }
 
     if (Array.isArray(viewerState.measurements)) {
@@ -3214,6 +3442,7 @@ const ViewerApp = (() => {
     if (typeof VolumeSlicer !== 'undefined') {
       const mat = VolumeViewer.getMaterial();
       if (mat) VolumeSlicer.updateMaterial(mat);
+      if (_sliceStaged) _updateSliceStageResolution();
     }
 
     
@@ -3500,11 +3729,22 @@ const ViewerApp = (() => {
       if (data.sourceIndex === _panelIndex) return;
 
       if (data.type === 'SYNC_Z') {
-        const slider = document.getElementById('slicer-position');
-        if (slider) {
-          const pct = Math.round(parseFloat(data.value) * 100);
-          slider.value = pct;
-          VolumeViewer.setPlaneSpec({ value: data.value, notify: false });
+        const value = parseFloat(data.value);
+        if (Number.isFinite(value)) {
+          _suppressSlicerSync = true;
+          try {
+            VolumeViewer.setPlaneSpec({ value }, { notify: false });
+            // The staged slice follows the sibling's slider, not only the 3D plane.
+            if (typeof VolumeSlicer !== 'undefined' && VolumeSlicer.isVisible()) {
+              VolumeSlicer.setPlaneSpec({ value });
+              _slicerSyncSlidersFromSpec();
+            } else {
+              const slider = document.getElementById('slicer-position');
+              if (slider) slider.value = Math.round(value * 100);
+            }
+          } finally {
+            _suppressSlicerSync = false;
+          }
         }
       } else if (data.type === 'SYNC_CHANNELS') {
         const params = data.value;
@@ -3554,27 +3794,35 @@ const ViewerApp = (() => {
           _suppressZstackSync = false;
         }
       } else if (data.type === 'SYNC_SLICER_SPEC') {
-        // A sibling decompose panel moved the slice-through-volume plane.
-        // The 3D raymarcher has no cut-plane shader uniform, so we cannot
-        // cut the volume in the main WebGL canvas. Instead:
-        //   1. Activate VolumeSlicer (links GPU texture, renders 2D slice)
-        //   2. Show its output as a fullscreen overlay over the WebGL canvas
-        // This matches exactly what the user sees in the slice inspector sidebar.
-        // The spec carries its own `visible` flag and it is authoritative: forcing the
-        // overlay on for every spec meant a sibling whose plane was OFF still replaced
-        // this panel's 3D volume with a flat slice. Track the position either way, so
-        // the plane is already aligned when it is switched back on.
-        const specVisible = data.spec?.visible !== false;
+        // A sibling panel moved the slice-through-volume plane. The 3D plane mesh
+        // follows it and the slice goes on the stage (VolumeSlicer visibility →
+        // _setSliceStage), exactly as when this panel's own tool is open — the
+        // raymarcher has no cut-plane uniform, the slicer is the only way to show
+        // the cut. The spec's `visible` flag is authoritative: a sibling whose plane
+        // is OFF must not replace this panel's volume with a flat slice, but the
+        // position is tracked either way so the plane is aligned when it comes
+        // back. While this panel's own tool is open it decides for itself. The
+        // stage and the Z-stack browser exclude each other.
+        const spec = data.spec && typeof data.spec === 'object' ? data.spec : {};
+        const specVisible = spec.visible !== false;
+        const ownTool = typeof ToolManager !== 'undefined' && ToolManager.current() === 'slice';
+        if (specVisible && _zstackActive) _applyZstackState(false, null);
         _suppressSlicerSync = true;
-        if (typeof VolumeSlicer !== 'undefined') {
-          const mat = VolumeViewer.getMaterial?.();
-          if (mat) VolumeSlicer.updateMaterial(mat);
-          VolumeSlicer.setVisible(specVisible);
-          VolumeSlicer.setPlaneSpec(data.spec);
+        try {
+          VolumeViewer.setPlaneSpec(spec, { notify: false, visible: specVisible || ownTool });
+          if (typeof VolumeSlicer !== 'undefined') {
+            const mat = VolumeViewer.getMaterial?.();
+            if (mat) VolumeSlicer.updateMaterial(mat);
+            VolumeSlicer.setPlaneSpec(spec);
+            if (!ownTool) VolumeSlicer.setVisible(specVisible);
+            if (VolumeSlicer.isVisible()) {
+              _slicerSyncSlidersFromSpec();
+              _slicerSyncPresetButtons(VolumeSlicer.getPlaneSpec().mode);
+            }
+          }
+        } finally {
+          _suppressSlicerSync = false;
         }
-        if (specVisible) _slicerOverlayStart();
-        else _slicerOverlayStop();
-        _suppressSlicerSync = false;
       } else if (data.type === 'SYNC_TIME' && isLive) {
         // Timelapses of different lengths align by elapsed fraction, not by index.
         const mine = Number(datasetMeta?.dimensions?.t) || 0;
@@ -3636,8 +3884,7 @@ const ViewerApp = (() => {
       } else if (data.type === 'TOGGLE_ZSTACK') {
         // Handled by the early module-level listener (_applyZstackState).
         // This path runs only if the message arrives AFTER _bindIframeSync (i.e. late messages).
-        // LEAK-002: z-stack mode supersedes the slicer overlay — stop its rAF loop.
-        if (data.state) _slicerOverlayStop();
+        // The browser closes the slice tool itself (mutual exclusion, in its plugin).
         _applyZstackState(!!data.state, data.slice ?? null);
       } else if (data.type === 'ZSTACK_HOVER_STATE') {
         if (_zstackActive) {
@@ -3788,9 +4035,8 @@ const ViewerApp = (() => {
   function _activateHostPlugin(id) {
     if (typeof PluginRegistry === 'undefined' || !id) return;
     if (id === 'zstack-browser') {
-      // The browser has page-level side effects (slicer overlay off, camera lock)
+      // The browser has page-level side effects (slice tool closed, camera lock)
       // that TOGGLE_ZSTACK already sequences: same door, same order.
-      if (!_zstackActive) _slicerOverlayStop();
       _applyZstackState(!_zstackActive, null);
       return;
     }
@@ -3823,7 +4069,13 @@ const ViewerApp = (() => {
   }
 
   async function _getFigureBlob(options = {}) {
-    const canvas = document.getElementById('webgl-canvas');
+    // On the stage the slice is what the screen shows: capture it, at its sharpest.
+    let canvas = null;
+    if (_sliceStaged && typeof VolumeSlicer !== 'undefined') {
+      VolumeSlicer.flushPreview?.();
+      canvas = VolumeSlicer.getPreviewCanvas();
+    }
+    canvas = canvas || document.getElementById('webgl-canvas');
     if (!canvas) return null;
     const resolved = typeof DisplayPresets !== 'undefined'
       ? DisplayPresets.resolve(_displayState.backgroundPreset, _displayState.backgroundColor)
@@ -4022,7 +4274,7 @@ const ViewerApp = (() => {
   // ── Slice Inspector ─────────────────────────────────────
 
   // _initSlicer is now handled by the slice-inspector module.
-  // This stub remains so workspace-restore code that calls ToolManager.activate('cut')
+  // This stub remains so workspace-restore code that calls ToolManager.activate('slice')
   // still has a valid _initSlicer reference if called before modules load.
   function _initSlicer() {
     if (typeof VolumeSlicer === 'undefined') return;
@@ -4148,21 +4400,27 @@ const ViewerApp = (() => {
     if (!panel) return;
     panel.classList.toggle('hidden', !visible);
     if (typeof VolumeSlicer !== 'undefined') {
+      // Visibility drives the stage: the slicer's canvas takes the canvas area and
+      // the WebGL canvas moves into the inspector's square (_setSliceStage).
       VolumeSlicer.setVisible(visible);
       if (visible) {
         // Link material in case a volume has loaded since init
         const mat = VolumeViewer.getMaterial();
         if (mat) VolumeSlicer.updateMaterial(mat);
-        // Default to center slice on first open
-        const spec = VolumeSlicer.getPlaneSpec();
-        if (spec.value >= 0.99 || spec.value <= 0.01) {
-          _slicerSetSpec({ value: 0.5 });
-          _slicerSyncSlidersFromSpec();
-        }
-      } else {
-        // LEAK-002: tear down the slicer-sync overlay rAF loop when the slice
-        // tool is turned off, otherwise the loop runs forever in the background.
-        _slicerOverlayStop();
+        // The 3D plane is the plane of record (a restored workspace, a sibling's
+        // SYNC_Z, the browser's reset all wrote it while the tool was off): the
+        // slicer adopts it, with a plane parked on a face brought back to the middle.
+        const spec = VolumeViewer.getPlaneSpec();
+        const parked = !(spec.value > 0.01 && spec.value < 0.99);
+        _slicerSetSpec({
+          mode: spec.mode,
+          value: parked ? 0.5 : spec.value,
+          yaw: spec.yaw, pitch: spec.pitch, roll: spec.roll,
+          slabThickness: spec.slabThickness,
+          projection: spec.projection
+        });
+        _slicerSyncSlidersFromSpec();
+        _slicerSyncPresetButtons(spec.mode);
       }
     }
     // Show plane mesh in 3D
@@ -4184,65 +4442,97 @@ const ViewerApp = (() => {
   // broadcast back out of this panel.
   let _suppressChannelSync = false;
 
-  // ── Slicer Sync Overlay ──────────────────────────────────
-  // When a decompose-panel sibling receives SYNC_SLICER_SPEC, it can't cut
-  // the 3D volume (the raymarcher shader has no cut-plane uniform). Instead
-  // we overlay the VolumeSlicer's GPU-rendered 2D canvas on top of the WebGL
-  // canvas — the same output as the slice inspector sidebar, fullscreen.
-  let _slicerOverlayActive = false;
-  let _slicerOverlayRafId  = null;
+  // ── Slice stage ──────────────────────────────────────────
+  // While the slice is on screen the two renders trade places: the slicer's
+  // canvas fills the canvas area (the "stage") and the WebGL canvas moves into
+  // the inspector's square, where the plane is still dragged in 3D. A canvas
+  // re-parented inside one document keeps its context; VolumeViewer.resize()
+  // follows the new parent. Driven by VolumeSlicer's visibility, which every
+  // door shares: the tool, a sibling's SYNC_SLICER_SPEC, the Z-stack browser.
+  let _sliceStaged = false;
+  let _sliceStageObserver = null;
+  // Camera distance before the swap: resize() may push the camera back so the
+  // volume fits the square; a distance the user did not touch comes back.
+  let _sliceStageCamera = null;
 
-  function _ensureSlicerOverlay() {
-    let overlay = document.getElementById('slicer-sync-overlay');
-    if (overlay) return overlay;
-    const container = document.querySelector('.viewer-canvas-container');
-    if (!container) return null;
-    overlay = document.createElement('div');
-    overlay.id = 'slicer-sync-overlay';
-    // Cover the canvas area, dark background (no data = black like the main canvas)
-    overlay.style.cssText = [
-      'position:absolute', 'inset:0', 'z-index:5', 'background:#000',
-      'display:none', 'align-items:center', 'justify-content:center',
-      'overflow:hidden'
-    ].join(';');
-    const canvas = document.createElement('canvas');
-    canvas.id = 'slicer-sync-canvas';
-    // Scale to fill the overlay while keeping the slice square
-    canvas.style.cssText = 'width:100%;height:100%;object-fit:contain;image-rendering:auto;';
-    overlay.appendChild(canvas);
-    container.appendChild(overlay);
-    return overlay;
-  }
-
-  function _slicerOverlayStart() {
-    _slicerOverlayActive = true;
-    const overlay = _ensureSlicerOverlay();
-    if (!overlay) return;
-    overlay.style.display = 'flex';
-    // Cancel any previous loop
-    if (_slicerOverlayRafId) { cancelAnimationFrame(_slicerOverlayRafId); _slicerOverlayRafId = null; }
-    const loop = () => {
-      if (!_slicerOverlayActive) return;
-      if (typeof VolumeSlicer !== 'undefined') {
-        const preview = VolumeSlicer.getPreviewCanvas();
-        const dst = document.getElementById('slicer-sync-canvas');
-        if (preview && dst) {
-          // Sync canvas dimensions once (preview is 320×320)
-          if (dst.width !== preview.width)  dst.width  = preview.width;
-          if (dst.height !== preview.height) dst.height = preview.height;
-          dst.getContext('2d')?.drawImage(preview, 0, 0);
-        }
+  function _setSliceStage(on) {
+    on = Boolean(on);
+    if (on === _sliceStaged) return;
+    const stage = document.getElementById('slice-stage');
+    const mount = document.getElementById('slicer-preview-mount');
+    const gl = document.getElementById('webgl-canvas');
+    const slice = typeof VolumeSlicer !== 'undefined' ? VolumeSlicer.getPreviewCanvas() : null;
+    if (!stage || !mount || !gl || !slice) return;
+    _sliceStaged = on;
+    document.body.classList.toggle('slice-staged', on);
+    if (on) {
+      const cam = { z: VolumeViewer.getCameraState?.()?.cameraZ, touched: false, unsub: null };
+      cam.unsub = VolumeViewer.onCameraChange?.(() => { cam.touched = true; }) || null;
+      _sliceStageCamera = cam;
+      stage.appendChild(slice);
+      stage.classList.remove('hidden');
+      mount.appendChild(gl);
+      if (window.ResizeObserver) {
+        _sliceStageObserver = new ResizeObserver(() => _updateSliceStageResolution());
+        _sliceStageObserver.observe(stage);
       }
-      _slicerOverlayRafId = requestAnimationFrame(loop);
-    };
-    loop();
+      _updateSliceStageResolution();
+    } else {
+      _sliceStageObserver?.disconnect();
+      _sliceStageObserver = null;
+      stage.classList.add('hidden');
+      stage.parentElement?.insertBefore(gl, stage);
+      mount.appendChild(slice);
+      VolumeSlicer.setPreviewResolution();
+      const cam = _sliceStageCamera;
+      _sliceStageCamera = null;
+      const restore = () => {
+        if (cam && !cam.touched && Number.isFinite(cam.z)) VolumeViewer.setCameraState({ kind: 'volume', cameraZ: cam.z });
+      };
+      restore();
+      // The inspector panel closes with a 250 ms width transition; resize() fits the
+      // volume to that interim, narrower layout and can push the camera back again.
+      // Restore once more after it, still only if the user has not taken the camera.
+      setTimeout(() => { restore(); cam?.unsub?.(); }, 320);
+    }
+    _scheduleViewerResize();
   }
 
-  function _slicerOverlayStop() {
-    _slicerOverlayActive = false;
-    if (_slicerOverlayRafId) { cancelAnimationFrame(_slicerOverlayRafId); _slicerOverlayRafId = null; }
-    const overlay = document.getElementById('slicer-sync-overlay');
-    if (overlay) overlay.style.display = 'none';
+  /** The stage renders at its displayed size in device pixels (1024 while dragging). */
+  function _updateSliceStageResolution() {
+    if (!_sliceStaged || typeof VolumeSlicer === 'undefined') return;
+    const stage = document.getElementById('slice-stage');
+    if (!stage) return;
+    const side = Math.min(stage.clientWidth, stage.clientHeight);
+    if (!(side > 0)) return;
+    const device = Math.round(side * Math.min(window.devicePixelRatio || 1, 2));
+    VolumeSlicer.setPreviewResolution(Math.min(device, 1024), device > 1024 ? device : 0);
+    _updateSliceStageScale(side);
+  }
+
+  /**
+   * Scale bar of the staged slice. The slicer draws 2·EXTENT cube units across its
+   * square and, after its anisotropy scaling, one cube unit is the longest physical
+   * axis: the square spans getPlaneExtentUnits() × max(x, y, z) µm whatever the
+   * plane's orientation, so the bar is exact — unlike the 3D bar, which depends on
+   * the perspective depth and is hidden meanwhile. Hidden when the size is unknown.
+   */
+  function _updateSliceStageScale(sideCss) {
+    const bar = document.getElementById('slice-stage-scale');
+    if (!bar) return;
+    const phys = VolumeViewer.getPhysicalSize?.();
+    // Without calibration the "physical" size is a voxel count: no bar rather than a lie.
+    const calibrated = phys && phys.calibrationStatus !== 'metadata-missing' && phys.mode !== 'metadata-missing';
+    const maxUm = calibrated ? Math.max(Number(phys.x) || 0, Number(phys.y) || 0, Number(phys.z) || 0) : 0;
+    const units = typeof VolumeSlicer !== 'undefined' && VolumeSlicer.getPlaneExtentUnits ? VolumeSlicer.getPlaneExtentUnits() : 0;
+    if (!(maxUm > 0) || !(units > 0) || !(sideCss > 0)) { bar.classList.add('hidden'); return; }
+    const umPerPx = (units * maxUm) / sideCss;
+    // Nearest 1-2-5 × 10ⁿ at or below a fifth of the slice.
+    const lengthUm = Utils.niceScaleLength(sideCss * 0.2 * umPerPx);
+    if (!(lengthUm > 0)) { bar.classList.add('hidden'); return; }
+    bar.style.width = `${Math.max(20, Math.round(lengthUm / umPerPx))}px`;
+    bar.textContent = Utils.formatMicrons(lengthUm);
+    bar.classList.remove('hidden');
   }
 
   function _zstackModule() {

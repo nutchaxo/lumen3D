@@ -364,7 +364,9 @@ const BrickLoader = (() => {
 
   /**
    * Load an interleaved list of brick/channel tasks with a single queue.
-   * Task shape: { bx, by, bz, channel, lod }.
+   * Task shape: { bx, by, bz, channel, lod, region? } — `region` is an optional voxel
+   * box {x0,x1,y0,y1,z0,z1} of the brick; a worker decode then delivers that box
+   * alone (length < brickSize³), anything else still delivers the whole brick.
    */
   async function loadBrickTasks(tasks, options = {}) {
     if (!_manifest) throw new Error('BrickLoader not initialized.');
@@ -421,6 +423,7 @@ const BrickLoader = (() => {
           channel,
           lod,
           data: cached.data,
+          region: task.region || null,
           fromCache: true
         });
         loaded++;
@@ -431,7 +434,7 @@ const BrickLoader = (() => {
         // of cached bricks — gated on the time budget instead of every 4th hit.
         await _yieldIfBudgetSpent();
       } else {
-        toLoad.push({ bx, by, bz, channel, lod, key });
+        toLoad.push({ bx, by, bz, channel, lod, key, region: task.region || null });
       }
     }
 
@@ -452,14 +455,14 @@ const BrickLoader = (() => {
     const workers = Array.from({ length: concurrency }, async () => {
       while (index < queued.length && !controller.signal.aborted && generation === _generation) {
         if (shouldAbort && shouldAbort()) break;
-        const { bx, by, bz, channel, lod, key } = queued[index++];
+        const { bx, by, bz, channel, lod, key, region } = queued[index++];
         let success = false;
         let retries = 3;
         while (retries > 0 && !success && !controller.signal.aborted) {
           if (shouldAbort && shouldAbort()) break;
           try {
             const url = _brickUrl(lod, channel, bx, by, bz);
-            const data = await _fetchBrickImage(url, controller.signal, { bx, by, bz, lod });
+            const data = await _fetchBrickImage(url, controller.signal, { bx, by, bz, lod, region });
             const stale = generation !== _generation;
             // `key` was built before the switch, so it still carries the tag of the
             // mount this brick belongs to and can never be read back by another one.
@@ -467,7 +470,10 @@ const BrickLoader = (() => {
             // frames already fetched free instead of re-downloading them. (The original
             // guard dropped the decoded brick because the cache used to be wiped on
             // every switch — it no longer is for a timepoint change.)
-            if (writeDecodedCache) {
+            // A task that asked for a sub-box of the brick (`region`) may have got just
+            // that box back: never let a partial brick into the LRU, where the viewer
+            // would read it as a whole one.
+            if (writeDecodedCache && !region) {
               _cache.set(key, { data, lod, channel, lastUsed: performance.now() });
               _trimCache();
             }
@@ -481,7 +487,8 @@ const BrickLoader = (() => {
               bz,
               channel,
               lod,
-              data
+              data,
+              region: region || null
             });
             success = true;
           } catch (err) {
@@ -889,7 +896,7 @@ const BrickLoader = (() => {
             }
             const buffer = await resp.arrayBuffer();
             try {
-              return await _decodeWebpBrickInWorkerPool(buffer, signal, _manifest?.levels?.[0]?.brickSize || BRICK_SIZE, _manifest?.brickPacking || {});
+              return await _decodeWebpBrickInWorkerPool(buffer, signal, _manifest?.levels?.[0]?.brickSize || BRICK_SIZE, _manifest?.brickPacking || {}, coord?.region || null);
             } catch (e) {
               console.error('[BrickLoader] Worker decode failed, falling back:', e);
             }
@@ -921,7 +928,7 @@ const BrickLoader = (() => {
     if (isWebp && _workers.length > 0 && _workerReady) {
       const sliceCopy = compressedSlice.slice(0); // Copy to avoid detached buffer fallback error
       try {
-        return await _decodeWebpBrickInWorkerPool(sliceCopy, signal, _manifest?.levels?.[0]?.brickSize || BRICK_SIZE, _manifest?.brickPacking || {});
+        return await _decodeWebpBrickInWorkerPool(sliceCopy, signal, _manifest?.levels?.[0]?.brickSize || BRICK_SIZE, _manifest?.brickPacking || {}, coord?.region || null);
       } catch (e) {
         // A cancelled load is the NORMAL outcome of scrubbing away from a frame, not a
         // failure: re-raise it so the caller drops the task instead of paying for a
@@ -946,7 +953,11 @@ const BrickLoader = (() => {
     throw new Error('DecompressionStream is unavailable.');
   }
 
-  function _decodeWebpBrickInWorkerPool(buffer, signal, brickSize, packing) {
+  // `region` (optional {x0,x1,y0,y1,z0,z1} voxel box) asks the worker for that box of
+  // the brick alone; whether the bytes that come back are the box or the whole brick
+  // is the caller's to tell by their length (a cache hit, a raw transport or a
+  // main-thread decode still deliver the full brick).
+  function _decodeWebpBrickInWorkerPool(buffer, signal, brickSize, packing, region = null) {
     const id = ++_workerSeq;
     return new Promise((resolve, reject) => {
       if (signal?.aborted) {
@@ -973,7 +984,7 @@ const BrickLoader = (() => {
       });
       const worker = _workers[_workerNextIdx];
       _workerNextIdx = (_workerNextIdx + 1) % _workers.length;
-      worker.__idx = _workerNextIdx; worker.postMessage({ type: 'DECODE', id, buffer, brickSize, packing }, [buffer]);
+      worker.__idx = _workerNextIdx; worker.postMessage({ type: 'DECODE', id, buffer, brickSize, packing, region }, [buffer]);
     });
   }
 

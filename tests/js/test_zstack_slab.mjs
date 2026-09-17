@@ -261,10 +261,14 @@ assert.ok(/value: \(lo \+ n \/ 2\) \/ z,/.test(viewerSrc), 'plane centred on the
 assert.ok(/slabThickness: n,\s*slabStepNorm: 1 \/ z,\s*projection: n > 1 \? 'mip' : 'single'/.test(viewerSrc), 'one sample per slice, MIP when thicker than one slice');
 assert.ok(/_renderStudioPreviewSlice\(_zstackStudioSpec\(\)\)/.test(viewerSrc), 'Studio opens on that plane (then upgrades to native)');
 assert.ok(/const spec = options\.spec \|\| VolumeSlicer\.getPlaneSpec\(\);/.test(viewerSrc), 'native pass renders the same plane');
-assert.ok(/bricks = BrickLoader\.bricksForRegion\(min, max, 0\);/.test(viewerSrc), 'native pass loads every brick of a projected slab');
+// The bricks of a projected slab come from the slicer's own slab geometry (every
+// layer within halfThickness of the plane) — tests/js/test_native_slice_geometry.mjs
+// checks the selection itself.
+assert.ok(/VolumeSlicer\.planeGeometry\(spec, VolumeViewer\.getPhysicalSize\?\.\(\)\)/.test(viewerSrc), 'native pass reads the slab geometry from the slicer');
+assert.ok(/const tolerance = geom\.halfThickness \+/.test(viewerSrc), 'native pass loads every brick within the slab half-thickness');
 const slicerSrc = readFileSync(path.join(ROOT, 'js/viewers/volume-slicer.js'), 'utf8');
 assert.ok(/const MAX_SLAB_STEPS = 1024;/.test(slicerSrc) && /for \(int i = 0; i < 1024; i\+\+\)/.test(slicerSrc), 'slicer slab can span a whole stack');
-assert.ok(/delta = stepNorm \/ \(normal\.length\(\) \|\| 1\);/.test(slicerSrc), 'slicer honours a requested sample spacing');
+assert.ok(/delta = stepNorm \/ \(step\.length\(\) \|\| 1\);/.test(slicerSrc), 'slicer honours a requested sample spacing');
 assert.ok(!/Math\.min\(64, /.test(slicerSrc), 'no stale 64-step cap left in the slicer');
 
 console.log('zstack-browser slab/notch/trim model + clip-box ray march + Studio slab: OK');

@@ -235,6 +235,7 @@
     "noMeasure": "Aucune mesure.",
     "clearMeasure": "Effacer",
     "sliceInspector": "Inspecteur de Coupe",
+    "sliceInset3d": "Vue 3D — déplacez le plan ici",
     "xy": "XY",
     "xz": "XZ",
     "yz": "YZ",
@@ -572,6 +573,7 @@
     "propFontSize": "Taille Police",
     "loadingNative": "Résolution native : {chunks}/{total} chunks",
     "cancelLoad": "Annuler",
+    "nativeMissing": "Résolution native : {missing} chunks n'ont pas pu être chargés et restent à la résolution de l'aperçu.",
     "panelChannels": "Canaux du panneau {n}",
     "noChannelMeta": "Aucune métadonnée de canal.",
     "channelPanelMissing": "Panneau des canaux non chargé."

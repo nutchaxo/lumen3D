@@ -11,6 +11,7 @@ const VolumeViewer = (() => {
   let _onContextLost = null;    // ELE-18: visible-status hooks (wired by viewer.js)
   let _onContextRestored = null;
   let _resizeObserver = null;
+  let _observedParent = null;
   const _cameraListeners = new Set();
   let _loadCounter = 0;
   let _baseScale = new THREE.Vector3(1, 1, 1);
@@ -949,6 +950,7 @@ const VolumeViewer = (() => {
     if (window.ResizeObserver && container.parentElement) {
       _resizeObserver = new ResizeObserver(resize);
       _resizeObserver.observe(container.parentElement);
+      _observedParent = container.parentElement;
     }
 
     _initVolumeGrid();
@@ -958,6 +960,13 @@ const VolumeViewer = (() => {
   function resize() {
     if (!_container || !camera || !renderer) return;
     const parent = _container.parentElement || _container;
+    // The canvas can be re-parented (the slice stage moves it into the inspector's
+    // square): keep watching the box it actually fills.
+    if (_resizeObserver && parent !== _observedParent) {
+      _resizeObserver.disconnect();
+      _resizeObserver.observe(parent);
+      _observedParent = parent;
+    }
     const width = Math.max(1, parent.clientWidth);
     const height = Math.max(1, parent.clientHeight);
     camera.aspect = width / height;
@@ -3755,7 +3764,12 @@ const VolumeViewer = (() => {
 
   function setPlaneSpec(spec = {}, options = {}) {
     const next = { ..._planeSpec, ...spec };
-    if (Array.isArray(spec.orientation) && spec.orientation.length === 4) {
+    // A quaternion only carries information for an oblique plane: a named mode
+    // (xy / xz / yz) defines its own orientation, and re-deriving it from the
+    // quaternion a saved or synced spec carries would turn the plane oblique with
+    // its pitch clamped to +/-89 deg - one degree off the plane that was saved.
+    const namedMode = ['xy', 'xz', 'yz'].includes(spec.mode);
+    if (!namedMode && Array.isArray(spec.orientation) && spec.orientation.length === 4) {
       _applyOrientationToSpec(next, spec.orientation);
     }
     if (spec.axis && !spec.mode) next.mode = _modeForAxis(spec.axis);
@@ -3839,13 +3853,15 @@ const VolumeViewer = (() => {
     ));
   }
 
+  // Inverse of _orientationForPlaneSpec for an oblique plane: the quaternion is
+  // Euler(-pitch, -yaw, roll, 'YXZ'), so the same decomposition gives the angles
+  // back with their signs (the normal alone loses the sign of the yaw: n.x = -cos p sin y).
   function _applyOrientationToSpec(spec, orientation) {
     const q = new THREE.Quaternion().fromArray(orientation).normalize();
     const euler = new THREE.Euler().setFromQuaternion(q, 'YXZ');
-    const normal = new THREE.Vector3(0, 0, 1).applyQuaternion(q).normalize();
     spec.mode = 'oblique';
-    spec.yaw = THREE.MathUtils.radToDeg(Math.atan2(normal.x, normal.z));
-    spec.pitch = THREE.MathUtils.radToDeg(Math.asin(THREE.MathUtils.clamp(normal.y, -1, 1)));
+    spec.yaw = -THREE.MathUtils.radToDeg(euler.y);
+    spec.pitch = -THREE.MathUtils.radToDeg(euler.x);
     spec.roll = THREE.MathUtils.radToDeg(euler.z);
     spec.orientation = q.toArray();
   }
@@ -4262,7 +4278,8 @@ const VolumeViewer = (() => {
       material,
       projVertexShader,
       fragmentShader,
-      onDirty: _scheduleFrame
+      onDirty: _scheduleFrame,
+      getPhysicalSize
     });
     // LEAK-001/ELE-30 (Rule 1.2): VolumeGrid.dispose() releases the grid/axes
     // groups' GPU resources (geometries, materials, sprite CanvasTextures). In a

@@ -117,6 +117,11 @@ const StudioEditor = (() => {
     _renderAll();
   }
 
+  /**
+   * Swaps the slice behind the open document. `options.imageOnly` is the progressive
+   * refresh of the native pass: the same frame with more chunks native, so only the
+   * picture is redrawn — layers, panels and calibration are left exactly as they are.
+   */
   function setSliceResult(sliceResult, options = {}) {
     if (!sliceResult?.canvas) return;
     if (!_doc || !_isOpen || options.reopen) {
@@ -126,6 +131,10 @@ const StudioEditor = (() => {
     const preparedSlice = _prepareSliceForStudio(sliceResult);
     _sliceResult = preparedSlice;
     _sliceImage = preparedSlice.canvas;
+    if (options.imageOnly && preparedSlice.width === _doc.sourceSlice.width && preparedSlice.height === _doc.sourceSlice.height) {
+      _draw();
+      return;
+    }
     _doc.sourceSlice.width = preparedSlice.width;
     _doc.sourceSlice.height = preparedSlice.height;
     _doc.sourceSlice.source = preparedSlice.source || _doc.sourceSlice.source;

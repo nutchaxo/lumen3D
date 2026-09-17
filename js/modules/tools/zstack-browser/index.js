@@ -57,9 +57,13 @@ PluginRegistry.implement('zstack-browser', {
 
   applyState(desired, slice = null) {
     const st = this._ctx._state;
+    const wasActive = Boolean(st.zstackActive);
     st.zstackActive = desired;
     this._syncButton(desired);
-    this._show(desired);
+    // Closing a browser that is not open must leave the volume alone: its
+    // resetClipping would erase the cut plane a workspace has just restored,
+    // and the siblings would be told to leave a stack they are not in.
+    if (desired || wasActive) this._show(desired);
     if (desired && Number.isFinite(slice) && slice > 0) {
       // Applied synchronously, while the SYNC_ZSTACK_SLICE receiver's echo guard is
       // still raised; re-arm it anyway so a caller without one cannot ping-pong with
@@ -475,6 +479,13 @@ PluginRegistry.implement('zstack-browser', {
     panel.classList.toggle('zstack-hidden', !visible);
     const v = this._ctx.viewer;
     if (visible) {
+      // One clip box, one main view: the slice tool leaves when the browser opens
+      // (and a slice a sibling panel put on the stage goes with it). viewer.js
+      // closes the browser the other way round, when the slice tool is picked.
+      const tools = this._ctx.tools;
+      if (tools?.current?.() === 'slice') tools.activate('navigate');
+      this._ctx.slicer?.setVisible?.(false);
+      v.setCutPlaneVisible?.(false);
       this._populateInfo();
       this._clampFields();
       this._apply();

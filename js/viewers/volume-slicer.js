@@ -18,8 +18,6 @@ const VolumeSlicer = (() => {
   let _scene = null;
   let _camera = null;
   let _mat = null;
-  let _target = null;        // WebGLRenderTarget for preview
-  let _pixelBuf = null;      // Uint8Array for readRenderTargetPixels
   let _previewCanvas = null;
   let _previewCtx = null;
   let _initialized = false;
@@ -41,7 +39,28 @@ const VolumeSlicer = (() => {
   let _visible = false;
   let _rafId = null;
   let _listeners = new Set();
+  // Set while _buildMaterial() runs for a renderWithMaterial() call that was handed
+  // a fallback picture (uniform + FALLBACK_TEX define).
+  let _fallback = null;
+  // The slicer material built for the last renderWithMaterial() source, kept until
+  // the source or the fallback presence changes: disposing it after every render
+  // released its program, and three.js then recompiled the slice shader — a few
+  // hundred milliseconds on ANGLE — for every progressive refresh of a native pass.
+  let _foreign = null;
+  let _visibleListeners = new Set();
+  // The sidebar preview renders at PREVIEW_SIZE. On the slice stage (the canvas
+  // area, viewer.js _setSliceStage) the interactive resolution follows the
+  // displayed size up to 1024 px, and a sharper pass up to MAX_PREVIEW_SIZE runs
+  // once the plane has settled for REFINE_DELAY_MS — a drag never pays the big
+  // readback. One render pass (target + readback buffer + ImageData) per size.
   const PREVIEW_SIZE = 320;
+  const MAX_PREVIEW_SIZE = 2048;
+  const REFINE_DELAY_MS = 160;
+  let _previewSize = PREVIEW_SIZE;
+  let _refineSize = 0;
+  let _refineTimer = null;
+  const _passes = new Map();
+  const PLANE_KEYS = ['mode', 'value', 'yaw', 'pitch', 'roll', 'slabThickness', 'slabStepNorm', 'projection'];
   const EXTENT = 0.75; // half-size in cube units (covers oblique diagonals)
 
   // ── Shaders ──────────────────────────────────────────────
@@ -90,6 +109,19 @@ const VolumeSlicer = (() => {
     uniform int   slabSteps;
     uniform float slabDelta;
     uniform int   projMode;   // 0 single, 1 MIP, 2 average
+    // The part of the frame this render covers (x, y, w, h in 0..1, GL orientation):
+    // (0, 0, 1, 1) is the whole frame; a window renders the same pixels of that part
+    // alone, so a caller that only keeps a crop pays only that crop's readback.
+    uniform vec4  uvWindow;
+
+    #ifdef FALLBACK_TEX
+    // The picture shown wherever a brick the plane crosses is not in the atlas: the
+    // Studio's preview of the same plane at the same render size, so the chunks of
+    // the native pass replace it one by one instead of opening a black hole.
+    // fallbackRect places that (cropped) picture in the render frame, GL orientation.
+    uniform sampler2D fallbackTex;
+    uniform vec4 fallbackRect;
+    #endif
 
     in vec2 vUv;
     out vec4 fragColor;
@@ -128,10 +160,12 @@ const VolumeSlicer = (() => {
       return v * opacity;
     }
 
-    vec3 colorAt(vec3 uvw) {
+    // rgb: the composed channel colour at uvw; a: 1 when a brick backs the voxel,
+    // 0 when the atlas has none there (black in rgb).
+    vec4 colorAt(vec3 uvw) {
       #ifdef ENABLE_SVR
       vec4 atlasLookup = getAtlasLookup(uvw);
-      if (atlasLookup.w < 0.0) return vec3(0.0);
+      if (atlasLookup.w < 0.0) return vec4(0.0);
       vec4 v = sampleSVRAtlas(atlasLookup.xyz, atlasLookup.w);
       #else
       vec4 v = texture(svrAtlas0, uvw);
@@ -141,39 +175,68 @@ const VolumeSlicer = (() => {
       if (en1==1 && numChannels>1) c += channelValue(v.g, min1, max1, gamma1, opacity1) * color1;
       if (en2==1 && numChannels>2) c += channelValue(v.b, min2, max2, gamma2, opacity2) * color2;
       if (en3==1 && numChannels>3) c += channelValue(v.a, min3, max3, gamma3, opacity3) * color3;
-      return c;
+      return vec4(c, 1.0);
     }
 
     bool inBox(vec3 p) {
       return all(greaterThanEqual(p, vec3(0.0))) && all(lessThanEqual(p, vec3(1.0)));
     }
 
+    #ifdef FALLBACK_TEX
+    // false when the fragment lies outside the fallback picture (nothing to show there).
+    bool fallbackColor(vec2 uv, out vec4 color) {
+      vec2 fuv = (uv - fallbackRect.xy) / fallbackRect.zw;
+      if (any(lessThan(fuv, vec2(0.0))) || any(greaterThan(fuv, vec2(1.0)))) return false;
+      color = texture(fallbackTex, fuv);
+      return true;
+    }
+    #endif
+
     void main() {
-      vec2 pc = (vUv - 0.5) * 2.0 * sliceExtent;
+      vec2 uv = uvWindow.xy + vUv * uvWindow.zw;
+      vec2 pc = (uv - 0.5) * 2.0 * sliceExtent;
       vec3 base = sliceOrigin + pc.x * sliceRight + pc.y * sliceUp;
 
       if (projMode == 0 || slabSteps <= 1) {
         vec3 uvw = base + 0.5;
         if (!inBox(uvw)) discard;
-        vec3 c = colorAt(uvw);
-        if (length(c) < 0.005) discard;
-        fragColor = vec4(c, 1.0);
+        vec4 s = colorAt(uvw);
+        #ifdef FALLBACK_TEX
+        if (s.a < 0.5) {
+          vec4 f;
+          if (fallbackColor(uv, f)) { fragColor = f; return; }
+          discard;
+        }
+        #endif
+        if (length(s.rgb) < 0.005) discard;
+        fragColor = vec4(s.rgb, 1.0);
         return;
       }
 
       vec3 acc = vec3(0.0);
       int hits = 0;
+      bool missing = false;
       float halfSlab = float(slabSteps - 1) * slabDelta * 0.5;
       for (int i = 0; i < 1024; i++) {
         if (i >= slabSteps) break;
         vec3 uvw = base + (-halfSlab + float(i) * slabDelta) * sliceNormal + 0.5;
         if (!inBox(uvw)) continue;
-        vec3 c = colorAt(uvw);
-        if (projMode == 1) acc = max(acc, c);
-        else acc += c;
+        vec4 s = colorAt(uvw);
+        if (s.a < 0.5) missing = true;
+        if (projMode == 1) acc = max(acc, s.rgb);
+        else acc += s.rgb;
         hits++;
       }
       if (hits == 0) discard;
+      #ifdef FALLBACK_TEX
+      // A slab is only as complete as every brick it crosses: keep the preview until
+      // the last of them has landed.
+      if (missing) {
+        vec4 f;
+        if (fallbackColor(uv, f)) { fragColor = f; return; }
+        discard;
+      }
+      #endif
       if (projMode == 2) acc /= float(hits);
       fragColor = vec4(acc, 1.0);
     }
@@ -194,10 +257,7 @@ const VolumeSlicer = (() => {
     _previewCanvas.className = 'slicer-preview-canvas';
     _previewCtx = _previewCanvas.getContext('2d');
     try {
-      _target = new THREE.WebGLRenderTarget(PREVIEW_SIZE, PREVIEW_SIZE, {
-        format: THREE.RGBAFormat, type: THREE.UnsignedByteType
-      });
-      _pixelBuf = new Uint8Array(PREVIEW_SIZE * PREVIEW_SIZE * 4);
+      _acquirePass(PREVIEW_SIZE);
 
       _scene = new THREE.Scene();
       _camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
@@ -208,9 +268,7 @@ const VolumeSlicer = (() => {
       return true;
     } catch (err) {
       _disabled = true;
-      _target?.dispose?.();
-      _target = null;
-      _pixelBuf = null;
+      _releasePasses();
       _scene = null;
       _camera = null;
       _mat?.dispose?.();
@@ -286,9 +344,13 @@ const VolumeSlicer = (() => {
     u.slabSteps   = { value: 1 };
     u.slabDelta   = { value: 0.005 };
     u.projMode    = { value: 0 };
+    u.uvWindow     = { value: new THREE.Vector4(0, 0, 1, 1) };
+    u.fallbackTex  = { value: _fallback ? _fallback.texture : null };
+    u.fallbackRect = { value: _fallback ? _fallback.rect.clone() : new THREE.Vector4(0, 0, 1, 1) };
 
     const defines = {};
     if (_volumeMaterial?.defines?.ENABLE_SVR) defines.ENABLE_SVR = 1;
+    if (_fallback) defines.FALLBACK_TEX = 1;
 
     _mat = new THREE.ShaderMaterial({
       glslVersion: THREE.GLSL3,
@@ -336,55 +398,86 @@ const VolumeSlicer = (() => {
     return { origin, right, up, normal };
   }
 
+  /**
+   * The slab the shader samples for `spec`, in normalised texture units ([0,1]³ is
+   * the volume). The plane is posed in physical space (yaw/pitch/roll, a position
+   * along its normal) and drawn with maxP/p_axis anisotropy so that one unit of the
+   * quad is the longest physical axis. In texture space that scaling tilts an
+   * oblique plane's normal away from its physical one — n_tex ∝ S⁻¹·n with
+   * S = diag(maxP/p_x, maxP/p_y, maxP/p_z) — and a sample at parameter t along the
+   * scaled normal S·n sits at t·(S·n)·n_tex = t/|S⁻¹n| from the plane, so a slab of
+   * `steps` samples spaced `delta` spans (steps − 1)·delta / (2·|S⁻¹n|) either side.
+   * Everything that has to agree with the shader (the Studio's native pass choosing
+   * its bricks) reads the geometry here instead of re-deriving it.
+   *
+   * @param {object} spec  plane spec (mode, value, yaw, pitch, roll, slabThickness,
+   *                       slabStepNorm, projection)
+   * @param {{x:number,y:number,z:number}|null} physical  physical extent per axis
+   *        (µm); a missing or non-positive axis counts as 1 (EDGE-035)
+   * @returns {{ origin: THREE.Vector3, center: THREE.Vector3, right: THREE.Vector3,
+   *   up: THREE.Vector3, step: THREE.Vector3, normal: THREE.Vector3, steps: number,
+   *   delta: number, projMode: number, projected: boolean, halfThickness: number }}
+   *   origin/right/up/step are the shader's sliceOrigin/sliceRight/sliceUp/
+   *   sliceNormal (cube space, centre at 0); center = origin + 0.5 (texture space);
+   *   normal is the unit normal of the sampled plane in texture space;
+   *   halfThickness is half the slab's extent along that normal (0 for one plane).
+   */
+  function planeGeometry(spec, physical = null) {
+    const { origin, right, up, normal } = _computePlaneVectors(spec || {});
+    const px = physical && physical.x > 0 ? physical.x : 1;
+    const py = physical && physical.y > 0 ? physical.y : 1;
+    const pz = physical && physical.z > 0 ? physical.z : 1;
+    const maxP = Math.max(px, py, pz) || 1;
+    const scale = new THREE.Vector3(maxP / px, maxP / py, maxP / pz);
+    right.multiply(scale);
+    up.multiply(scale);
+    const step = normal.clone().multiply(scale);
+    const texNormal = new THREE.Vector3(normal.x / scale.x, normal.y / scale.y, normal.z / scale.z);
+    const texNormalLength = texNormal.length() || 1;
+    texNormal.divideScalar(texNormalLength);
+
+    const proj = (spec && spec.projection) || 'single';
+    const projMode = proj === 'mip' ? 1 : proj === 'average' ? 2 : 0;
+    const steps = Math.max(1, Math.min(MAX_SLAB_STEPS, Math.round(+(spec && spec.slabThickness)) || 1));
+    // slabDelta is measured along `step`: a spacing of slabStepNorm texture units
+    // along the normal axis is slabStepNorm / |step| delta units. Without a requested
+    // spacing the historical 1/256 of the longest physical axis applies.
+    let delta = steps > 1 ? (1.0 / 256) : 0;
+    const stepNorm = +(spec && spec.slabStepNorm);
+    if (steps > 1 && Number.isFinite(stepNorm) && stepNorm > 0) {
+      delta = stepNorm / (step.length() || 1);
+    }
+    const projected = steps > 1 && projMode !== 0;
+    const halfThickness = projected ? ((steps - 1) * delta * 0.5) / texNormalLength : 0;
+    return {
+      origin,
+      center: origin.clone().addScalar(0.5),
+      right,
+      up,
+      step,
+      normal: texNormal,
+      steps,
+      delta,
+      projMode,
+      projected,
+      halfThickness
+    };
+  }
+
   function _syncUniforms() {
     if (!_mat) return;
     const u = _mat.uniforms;
-    const { origin, right, up, normal } = _computePlaneVectors(_spec);
-    
-    // Convert right and up from physical direction to uvw space 
-    // so that 1.0 in pc corresponds to maxP physical microns.
-    if (typeof VolumeViewer !== 'undefined' && VolumeViewer.getPhysicalSize) {
-      const physical = VolumeViewer.getPhysicalSize() || {x: 1, y: 1, z: 1};
-      // EDGE-035: the `|| {1,1,1}` guard only catches a null return, not an object
-      // with a 0 dimension (malformed metadata scaleInfo) — which gave maxP/0 = ∞
-      // (or 0/0 = NaN) uniforms. Replace any non-positive physical dim with 1.
-      const px = physical.x > 0 ? physical.x : 1;
-      const py = physical.y > 0 ? physical.y : 1;
-      const pz = physical.z > 0 ? physical.z : 1;
-      const maxP = Math.max(px, py, pz) || 1;
-      right.x *= maxP / px;
-      right.y *= maxP / py;
-      right.z *= maxP / pz;
-
-      up.x *= maxP / px;
-      up.y *= maxP / py;
-      up.z *= maxP / pz;
-
-      // Slab delta also needs to be in uvw space for normal
-      normal.x *= maxP / px;
-      normal.y *= maxP / py;
-      normal.z *= maxP / pz;
-    }
-
-    u.sliceOrigin.value.copy(origin);
-    u.sliceRight.value.copy(right);
-    u.sliceUp.value.copy(up);
-    u.sliceNormal.value.copy(normal);
-
-    const proj = _spec.projection || 'single';
-    u.projMode.value = proj === 'mip' ? 1 : proj === 'average' ? 2 : 0;
-    const steps = Math.max(1, Math.min(MAX_SLAB_STEPS, _spec.slabThickness || 1));
-    u.slabSteps.value = steps;
-    // slabDelta is measured along `normal`, which the anisotropy scaling above has
-    // stretched to maxP / p_axis: a step of slabStepNorm texture units along that axis
-    // is slabStepNorm / |normal| delta units. Without a requested step the historical
-    // spacing (1/256 of the longest physical axis) applies.
-    let delta = steps > 1 ? (1.0 / 256) : 0;
-    const stepNorm = +_spec.slabStepNorm;
-    if (steps > 1 && Number.isFinite(stepNorm) && stepNorm > 0) {
-      delta = stepNorm / (normal.length() || 1);
-    }
-    u.slabDelta.value = delta;
+    const physical = (typeof VolumeViewer !== 'undefined' && VolumeViewer.getPhysicalSize)
+      ? VolumeViewer.getPhysicalSize()
+      : null;
+    const g = planeGeometry(_spec, physical);
+    u.sliceOrigin.value.copy(g.origin);
+    u.sliceRight.value.copy(g.right);
+    u.sliceUp.value.copy(g.up);
+    u.sliceNormal.value.copy(g.step);
+    u.projMode.value = g.projMode;
+    u.slabSteps.value = g.steps;
+    u.slabDelta.value = g.delta;
   }
 
   // ── Rendering ────────────────────────────────────────────
@@ -395,8 +488,37 @@ const VolumeSlicer = (() => {
     return Boolean(_mat?.uniforms?.svrAtlas0?.value);
   }
 
-  function _doPreview() {
-    if (_disabled || !_target || !_pixelBuf || !_visible || !_renderer || !_hasRenderableVolume()) return;
+  function _acquirePass(size) {
+    let pass = _passes.get(size);
+    if (pass) return pass;
+    const target = new THREE.WebGLRenderTarget(size, size, {
+      format: THREE.RGBAFormat, type: THREE.UnsignedByteType
+    });
+    pass = { target, buf: new Uint8Array(size * size * 4), img: null };
+    _passes.set(size, pass);
+    return pass;
+  }
+
+  function _releasePasses(keep = []) {
+    for (const [size, pass] of _passes) {
+      if (keep.includes(size)) continue;
+      pass.target?.dispose?.();
+      _passes.delete(size);
+    }
+  }
+
+  /** Renders the plane at `size` px into the preview canvas. */
+  function _doPreview(size = _previewSize) {
+    if (_disabled || !_visible || !_renderer || !_hasRenderableVolume()) return false;
+    let pass;
+    try {
+      pass = _acquirePass(size);
+    } catch (err) {
+      // The big pass is a refinement: losing it leaves the interactive one.
+      if (size === _refineSize) _refineSize = 0;
+      console.warn(`[VolumeSlicer] ${size}px preview allocation failed; keeping ${_previewSize}px.`, err);
+      return false;
+    }
     _syncUniforms();
 
     // Save full renderer state
@@ -407,17 +529,17 @@ const VolumeSlicer = (() => {
 
     // The viewport size must be in CSS/logical pixels (Three.js multiplies by
     // pixelRatio internally). Dividing by pixelRatio makes the GL call land
-    // exactly at PREVIEW_SIZE × PREVIEW_SIZE — matching the render target.
+    // exactly at size × size — matching the render target.
     const pr = _renderer.getPixelRatio();
-    const vpSize = PREVIEW_SIZE / pr;
+    const vpSize = size / pr;
 
     _renderer.autoClear = true;
-    _renderer.setRenderTarget(_target);
+    _renderer.setRenderTarget(pass.target);
     _renderer.setViewport(0, 0, vpSize, vpSize);
     _renderer.clear();
     _renderer.render(_scene, _camera);
 
-    _renderer.readRenderTargetPixels(_target, 0, 0, PREVIEW_SIZE, PREVIEW_SIZE, _pixelBuf);
+    _renderer.readRenderTargetPixels(pass.target, 0, 0, size, size, pass.buf);
 
     // ── CRITICAL: restore ALL renderer state ───────────────
     _renderer.setRenderTarget(prevTarget);
@@ -425,13 +547,20 @@ const VolumeSlicer = (() => {
     _renderer.autoClear = prevAutoClear;
 
     // Flip Y (WebGL origin = bottom-left, Canvas2D origin = top-left)
-    const imgData = _previewCtx.createImageData(PREVIEW_SIZE, PREVIEW_SIZE);
-    for (let y = 0; y < PREVIEW_SIZE; y++) {
-      const src = (PREVIEW_SIZE - 1 - y) * PREVIEW_SIZE * 4;
-      const dst = y * PREVIEW_SIZE * 4;
-      imgData.data.set(_pixelBuf.subarray(src, src + PREVIEW_SIZE * 4), dst);
+    if (!pass.img) pass.img = _previewCtx.createImageData(size, size);
+    const px = pass.img.data;
+    for (let y = 0; y < size; y++) {
+      const src = (size - 1 - y) * size * 4;
+      const dst = y * size * 4;
+      px.set(pass.buf.subarray(src, src + size * 4), dst);
     }
-    _previewCtx.putImageData(imgData, 0, 0);
+    // Resizing the bitmap clears it; putImageData refills it in the same task.
+    if (_previewCanvas.width !== size || _previewCanvas.height !== size) {
+      _previewCanvas.width = size;
+      _previewCanvas.height = size;
+    }
+    _previewCtx.putImageData(pass.img, 0, 0);
+    return true;
   }
 
   let _hiTarget = null;
@@ -440,8 +569,76 @@ const VolumeSlicer = (() => {
   let _hiCtx = null;
   let _hiImgData = null;
   let _hiSize = 0;
+  // The pass of a windowed render (target, readback buffer, canvas of the window's
+  // size), kept between renders of the same window — a native pass refreshes the
+  // Studio's crop many times.
+  let _hiWindow = null;
 
-  function renderHighRes(size = 1024, channelOverrides = null) {
+  function _acquireHiPass(size) {
+    if (size === _hiSize && _hiTarget) return { target: _hiTarget, buf: _hiBuf, canvas: _hiCanvas, ctx: _hiCtx, img: _hiImgData, w: size, h: size };
+    if (_hiTarget) _hiTarget.dispose();
+    try {
+      _hiTarget = new THREE.WebGLRenderTarget(size, size, {
+        format: THREE.RGBAFormat, type: THREE.UnsignedByteType
+      });
+      _hiBuf = new Uint8Array(size * size * 4);
+      _hiCanvas = document.createElement('canvas');
+      _hiCanvas.width = size;
+      _hiCanvas.height = size;
+      _hiCtx = _hiCanvas.getContext('2d');
+      _hiImgData = _hiCtx.createImageData(size, size);
+      _hiSize = size;
+    } catch (err) {
+      _hiTarget?.dispose?.();
+      _hiTarget = null;
+      _hiBuf = null;
+      _hiCanvas = null;
+      _hiCtx = null;
+      _hiImgData = null;
+      _hiSize = 0;
+      throw err;
+    }
+    return { target: _hiTarget, buf: _hiBuf, canvas: _hiCanvas, ctx: _hiCtx, img: _hiImgData, w: size, h: size };
+  }
+
+  function _acquireWindowPass(w, h) {
+    if (_hiWindow && _hiWindow.w === w && _hiWindow.h === h) return _hiWindow;
+    _hiWindow?.target?.dispose?.();
+    _hiWindow = null;
+    const target = new THREE.WebGLRenderTarget(w, h, { format: THREE.RGBAFormat, type: THREE.UnsignedByteType });
+    try {
+      const canvas = document.createElement('canvas');
+      canvas.width = w;
+      canvas.height = h;
+      const ctx = canvas.getContext('2d');
+      _hiWindow = { target, buf: new Uint8Array(w * h * 4), canvas, ctx, img: ctx.createImageData(w, h), w, h };
+    } catch (err) {
+      target.dispose?.();
+      throw err;
+    }
+    return _hiWindow;
+  }
+
+  /** `window` as integer frame pixels, or null when empty, malformed or the whole frame. */
+  function _normalizeWindow(window, size) {
+    if (!window) return null;
+    const x = Math.max(0, Math.floor(Number(window.x) || 0));
+    const y = Math.max(0, Math.floor(Number(window.y) || 0));
+    const w = Math.min(size - x, Math.floor(Number(window.w) || 0));
+    const h = Math.min(size - y, Math.floor(Number(window.h) || 0));
+    if (!(w > 0 && h > 0)) return null;
+    if (x === 0 && y === 0 && w === size && h === size) return null;
+    return { x, y, w, h };
+  }
+
+  /**
+   * Renders the plane at `size` px (a square frame, 2·EXTENT cube units across it) and
+   * returns the canvas — module-owned, overwritten by the next render, so a caller
+   * copies what it keeps. `window` = {x, y, w, h} (pixels of that frame, y down)
+   * renders and reads back that rectangle alone, at the same scale: the same pixels
+   * as that part of the full frame, for a fraction of the readback.
+   */
+  function renderHighRes(size = 1024, channelOverrides = null, window = null) {
     if (_disabled || !_renderer || !_hasRenderableVolume()) return null;
     _syncUniforms();
 
@@ -474,32 +671,29 @@ const VolumeSlicer = (() => {
         if (typeof cState.enabled === 'boolean') _mat.uniforms[`en${i}`].value = cState.enabled ? 1 : 0;
       }
     }
-
-    if (size !== _hiSize) {
-      if (_hiTarget) _hiTarget.dispose();
-      try {
-        _hiTarget = new THREE.WebGLRenderTarget(size, size, {
-          format: THREE.RGBAFormat, type: THREE.UnsignedByteType
-        });
-        _hiBuf = new Uint8Array(size * size * 4);
-        _hiCanvas = document.createElement('canvas');
-        _hiCanvas.width = size;
-        _hiCanvas.height = size;
-        _hiCtx = _hiCanvas.getContext('2d');
-        _hiImgData = _hiCtx.createImageData(size, size);
-        _hiSize = size;
-      } catch (err) {
-        _hiTarget?.dispose?.();
-        _hiTarget = null;
-        _hiBuf = null;
-        _hiCanvas = null;
-        _hiCtx = null;
-        _hiImgData = null;
-        _hiSize = 0;
-        console.warn('[VolumeSlicer] High-res render allocation failed.', err);
-        return null;
+    const restoreOverrides = () => {
+      if (!originals) return;
+      for (const k in originals) {
+        if (typeof originals[k] === 'object') {
+          _mat.uniforms[k].value.copy(originals[k]);
+        } else {
+          _mat.uniforms[k].value = originals[k];
+        }
       }
+    };
+
+    const win = _normalizeWindow(window, size);
+    let pass;
+    try {
+      pass = win ? _acquireWindowPass(win.w, win.h) : _acquireHiPass(size);
+    } catch (err) {
+      console.warn('[VolumeSlicer] High-res render allocation failed.', err);
+      restoreOverrides();
+      return null;
     }
+    // The window's lowest row in the GL frame is size - (y + h).
+    if (win) _mat.uniforms.uvWindow.value.set(win.x / size, (size - win.y - win.h) / size, win.w / size, win.h / size);
+    else _mat.uniforms.uvWindow.value.set(0, 0, 1, 1);
 
     const prevTarget   = _renderer.getRenderTarget();
     const prevViewport = new THREE.Vector4();
@@ -507,59 +701,95 @@ const VolumeSlicer = (() => {
     const prevAutoClear = _renderer.autoClear;
 
     const pr = _renderer.getPixelRatio();
-    const vpSize = size / pr;
 
     _renderer.autoClear = true;
-    _renderer.setRenderTarget(_hiTarget);
-    _renderer.setViewport(0, 0, vpSize, vpSize);
+    _renderer.setRenderTarget(pass.target);
+    _renderer.setViewport(0, 0, pass.w / pr, pass.h / pr);
     _renderer.clear();
     _renderer.render(_scene, _camera);
-    _renderer.readRenderTargetPixels(_hiTarget, 0, 0, size, size, _hiBuf);
+    _renderer.readRenderTargetPixels(pass.target, 0, 0, pass.w, pass.h, pass.buf);
 
-    // Restore overrides
-    if (originals) {
-      for (const k in originals) {
-        if (typeof originals[k] === 'object') {
-           _mat.uniforms[k].value.copy(originals[k]);
-        } else {
-           _mat.uniforms[k].value = originals[k];
-        }
-      }
-    }
-    
+    restoreOverrides();
+
     // Restore renderer
     _renderer.setRenderTarget(prevTarget);
     _renderer.setViewport(prevViewport);
     _renderer.autoClear = prevAutoClear;
 
-    for (let y = 0; y < size; y++) {
-      const src = (size - 1 - y) * size * 4;
-      const dst = y * size * 4;
-      _hiImgData.data.set(_hiBuf.subarray(src, src + size * 4), dst);
+    for (let y = 0; y < pass.h; y++) {
+      const src = (pass.h - 1 - y) * pass.w * 4;
+      const dst = y * pass.w * 4;
+      pass.img.data.set(pass.buf.subarray(src, src + pass.w * 4), dst);
     }
-    _hiCtx.putImageData(_hiImgData, 0, 0);
-    return _hiCanvas;
+    pass.ctx.putImageData(pass.img, 0, 0);
+    return pass.canvas;
   }
 
-  function renderWithMaterial(material, spec, size = 1024, channelOverrides = null) {
+  /**
+   * One render of `spec` through `material` (its atlas, page table and channel
+   * uniforms) at `size` px, the module's own material and plane left untouched.
+   * `options.fallback = { canvas, rect }` paints `canvas` — a picture of the same
+   * plane at the same render size, cropped to `rect` ({x, y, x2, y2, renderRes} as
+   * _sliceContentRect gives it) — wherever a brick the plane crosses is missing from
+   * `material`'s atlas, so a partial atlas renders as "native where landed, preview
+   * elsewhere" instead of black holes. `options.window` = {x, y, w, h} renders that
+   * part of the frame alone (see renderHighRes). The slicer material built for
+   * `material` is kept for the next call with the same source (releaseForeign()
+   * drops it), so a pass of many renders compiles the slice shader once.
+   */
+  function renderWithMaterial(material, spec, size = 1024, channelOverrides = null, options = null) {
     if (_disabled || !_renderer || !material) return null;
 
     const previousVolumeMaterial = _volumeMaterial;
     const previousMaterial = _mat;
     const previousSpec = { ..._spec };
-    let temporaryMaterial = null;
 
     try {
+      const fb = options?.fallback;
+      const rect = fb?.rect;
+      const hasFallback = Boolean(fb?.canvas && rect && Number.isFinite(rect.renderRes) && rect.renderRes > 0);
+      if (_foreign && (_foreign.source !== material || _foreign.hasFallback !== hasFallback)) releaseForeign();
+      if (hasFallback) {
+        if (!_foreign?.texture || _foreign.canvas !== fb.canvas) {
+          _foreign?.texture?.dispose?.();
+          const texture = new THREE.CanvasTexture(fb.canvas);
+          // A non-power-of-two picture sampled 1:1: no mipmaps.
+          texture.generateMipmaps = false;
+          texture.minFilter = THREE.LinearFilter;
+          texture.magFilter = THREE.LinearFilter;
+          texture.wrapS = THREE.ClampToEdgeWrapping;
+          texture.wrapT = THREE.ClampToEdgeWrapping;
+          _foreign = { ..._foreign, texture, canvas: fb.canvas };
+        }
+        // The crop covers canvas columns [x, x2] and rows [y, y2] (top-down); in the
+        // GL frame the picture's lowest row is renderRes - 1 - y2. flipY (the
+        // CanvasTexture default) puts the canvas's last row at v = 0 to match.
+        const res = rect.renderRes;
+        const x = Math.max(0, Math.round(rect.x));
+        const y = Math.max(0, Math.round(rect.y));
+        const x2 = Math.min(res - 1, Math.round(rect.x2));
+        const y2 = Math.min(res - 1, Math.round(rect.y2));
+        _fallback = {
+          texture: _foreign.texture,
+          rect: new THREE.Vector4(x / res, (res - 1 - y2) / res, (x2 - x + 1) / res, (y2 - y + 1) / res)
+        };
+      }
       _volumeMaterial = material;
-      _buildMaterial();
-      temporaryMaterial = _mat;
+      if (_foreign?.mat) {
+        _mat = _foreign.mat;
+        if (_fallback) {
+          _mat.uniforms.fallbackTex.value = _fallback.texture;
+          _mat.uniforms.fallbackRect.value.copy(_fallback.rect);
+        }
+      } else {
+        _buildMaterial();
+        _foreign = { ..._foreign, source: material, hasFallback, mat: _mat };
+      }
       if (_scene?.children?.[0]) _scene.children[0].material = _mat;
       if (spec) _spec = { ..._spec, ...spec };
-      return renderHighRes(size, channelOverrides);
+      return renderHighRes(size, channelOverrides, options?.window || null);
     } finally {
-      if (temporaryMaterial && temporaryMaterial !== previousMaterial) {
-        temporaryMaterial.dispose?.();
-      }
+      _fallback = null;
       _volumeMaterial = previousVolumeMaterial;
       _mat = previousMaterial;
       _spec = previousSpec;
@@ -567,13 +797,67 @@ const VolumeSlicer = (() => {
     }
   }
 
+  /** Drops the material and picture kept for renderWithMaterial() (end of a native pass). */
+  function releaseForeign() {
+    if (!_foreign) return;
+    _foreign.mat?.dispose?.();
+    _foreign.texture?.dispose?.();
+    _foreign = null;
+  }
+
   function _scheduleRender() {
     if (_disabled) return;
+    _cancelRefine();
     if (_rafId) return;
     _rafId = requestAnimationFrame(() => {
       _rafId = null;
-      _doPreview();
+      _doPreview(_previewSize);
+      _armRefine();
     });
+  }
+
+  function _armRefine() {
+    if (!_visible || !(_refineSize > _previewSize)) return;
+    _refineTimer = setTimeout(() => {
+      _refineTimer = null;
+      _doPreview(_refineSize);
+    }, REFINE_DELAY_MS);
+  }
+
+  function _cancelRefine() {
+    if (_refineTimer) { clearTimeout(_refineTimer); _refineTimer = null; }
+  }
+
+  /** The sharpest render available, now — for a capture of what is on screen. */
+  function flushPreview() {
+    if (_rafId) { cancelAnimationFrame(_rafId); _rafId = null; }
+    _cancelRefine();
+    return _doPreview(_refineSize > _previewSize ? _refineSize : _previewSize);
+  }
+
+  /**
+   * Resolution of the preview canvas: `size` for every interactive render, and
+   * an optional sharper `refineSize` drawn once the plane settles. Sizes are
+   * clamped to [64, MAX_PREVIEW_SIZE] and rounded to a multiple of 8.
+   */
+  function setPreviewResolution(size = PREVIEW_SIZE, refineSize = 0) {
+    const snap = (v) => {
+      const n = Math.round(Number(v) / 8) * 8;
+      return Number.isFinite(n) && n > 0 ? Math.max(64, Math.min(MAX_PREVIEW_SIZE, n)) : 0;
+    };
+    const next = snap(size) || PREVIEW_SIZE;
+    const refine = snap(refineSize);
+    const nextRefine = refine > next ? refine : 0;
+    if (next === _previewSize && nextRefine === _refineSize) return;
+    _previewSize = next;
+    _refineSize = nextRefine;
+    _cancelRefine();
+    _releasePasses([_previewSize, _refineSize]);
+    if (_visible) _scheduleRender();
+  }
+
+  function getPreviewResolution() {
+    return { size: _previewSize, refineSize: _refineSize };
   }
 
   function recompose(sliceResult, channelState) {
@@ -618,6 +902,10 @@ const VolumeSlicer = (() => {
       const step = +merged.slabStepNorm;
       merged.slabStepNorm = Number.isFinite(step) && step > 0 ? Math.min(1, step) : null;
     }
+    // Only the plane's own keys reach the spec: a sibling panel's spec also carries
+    // `visible`, `normal`, `orientation`, `axis`, which must not ride back into
+    // VolumeViewer.setPlaneSpec through the next slider move.
+    for (const k of Object.keys(merged)) { if (!PLANE_KEYS.includes(k)) delete merged[k]; }
     Object.assign(_spec, merged);
     if (_visible) _scheduleRender();
     _listeners.forEach(cb => cb({ ..._spec }));
@@ -626,12 +914,23 @@ const VolumeSlicer = (() => {
   function getPlaneSpec() { return { ..._spec }; }
 
   function setVisible(v) {
-    if (_disabled) {
-      _visible = false;
-      return;
+    const next = _disabled ? false : Boolean(v);
+    const changed = next !== _visible;
+    _visible = next;
+    if (next) _scheduleRender();
+    else _cancelRefine();
+    if (changed) {
+      _visibleListeners.forEach(cb => {
+        try { cb(next); } catch (err) { console.warn('[VolumeSlicer] visibility listener failed:', err); }
+      });
     }
-    _visible = v;
-    if (v) _scheduleRender();
+  }
+
+  /** Fires with true/false when the slice goes on or off screen (not on a repeat). */
+  function onVisibleChange(cb) {
+    if (typeof cb !== 'function') return () => {};
+    _visibleListeners.add(cb);
+    return () => _visibleListeners.delete(cb);
   }
 
   function isVisible() { return _visible; }
@@ -645,12 +944,15 @@ const VolumeSlicer = (() => {
 
   function dispose() {
     if (_rafId) cancelAnimationFrame(_rafId);
-    _target?.dispose();
+    _rafId = null;
+    _cancelRefine();
+    _releasePasses();
     _hiTarget?.dispose();
+    _hiWindow?.target?.dispose?.();
+    _hiWindow = null;
+    releaseForeign();
     _mat?.dispose();
     _scene = null;
-    _target = null;
-    _pixelBuf = null;
     _hiTarget = null;
     _hiBuf = null;
     _initialized = false;
@@ -666,8 +968,16 @@ const VolumeSlicer = (() => {
     isVisible,
     isAvailable: () => !_disabled,
     getPreviewCanvas,
+    setPreviewResolution,
+    getPreviewResolution,
+    flushPreview,
+    onVisibleChange,
+    /** Cube units drawn across the preview's width (= height): 2 × EXTENT. */
+    getPlaneExtentUnits: () => 2 * EXTENT,
+    planeGeometry,
     renderHighRes,
     renderWithMaterial,
+    releaseForeign,
     recompose,
     onChange,
     dispose,

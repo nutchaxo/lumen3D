@@ -1236,14 +1236,15 @@ const CompareApp = (() => {
     return { blob, width, height, panelCount: _panels.length, fallbackPanels, mime };
   }
 
-  /** The canvas a panel is showing: the slice overlay when a sibling's cut plane
-   *  is mirrored, the WebGL canvas of a volume, the 2D canvas of a photograph. */
+  /** The canvas a panel is showing: the staged slice while the slice tool is open
+   *  (its own, or a sibling's cut plane mirrored), the WebGL canvas of a volume,
+   *  the 2D canvas of a photograph. */
   function _visiblePanelCanvas(panel) {
     const doc = panel.iframe?.contentDocument;
     if (!doc) return null;
-    const overlay = doc.getElementById('slicer-sync-overlay');
-    if (overlay && overlay.style.display !== 'none') {
-      const c = doc.getElementById('slicer-sync-canvas');
+    const stage = doc.getElementById('slice-stage');
+    if (stage && !stage.classList.contains('hidden')) {
+      const c = stage.querySelector('canvas');
       if (c?.width && c?.height) return c;
     }
     return doc.getElementById('webgl-canvas') || doc.getElementById('p2d-canvas') || doc.querySelector('canvas');

@@ -16,6 +16,7 @@ const VolumeGrid = (() => {
   let _projVertexShader = '';
   let _fragmentShader = '';
   let _onDirty = null; // callback to wake the render loop
+  let _getPhysicalSize = null; // () => VolumeViewer.getPhysicalSize() (µm + calibration status)
 
   // Internal state
   let _gridGroup = null;
@@ -24,6 +25,9 @@ const VolumeGrid = (() => {
   let _axesVisible = false;
   let _gridSizes = { xy: 1.5, xz: 1.5, yz: 1.5 };
   let _axesLocalPos = new THREE.Vector3(-0.75, -0.75, -0.75);
+  // Scratch vectors of _updateScaleBar (it runs every frame).
+  const _scaleDir = new THREE.Vector3();
+  const _scaleRel = new THREE.Vector3();
 
   /**
    * Initialize with references to shared scene objects.
@@ -38,6 +42,7 @@ const VolumeGrid = (() => {
     _projVertexShader = deps.projVertexShader || '';
     _fragmentShader = deps.fragmentShader || '';
     _onDirty = deps.onDirty || (() => {});
+    _getPhysicalSize = typeof deps.getPhysicalSize === 'function' ? deps.getPhysicalSize : null;
   }
 
   /** Update live references when cube/camera change (e.g. after reload) */
@@ -343,25 +348,42 @@ const VolumeGrid = (() => {
       });
     }
 
-    // Update scale bar
+    _updateScaleBar();
+  }
+
+  // ─── Scale bar ───
+
+  /**
+   * The bar reads at the depth of the specimen centre: a perspective camera shows a
+   * length L lying in the view plane at depth d (measured along the view axis, so a
+   * panned specimen keeps its scale) as L / (2·tan(fov/2)·d) of the viewport height.
+   * One world unit is physical.x / cube.scale.x µm — computePhysicalScale normalises
+   * the cube to the longer of X and Y, and the X axis carries no display override.
+   * The bar is the nearest 1-2-5 length at or below a fifth of the viewport width,
+   * labelled with its true value; a dataset without calibration gets no bar rather
+   * than a number in µm that would be voxels. Shown with the grid, as before.
+   */
+  function _updateScaleBar() {
     const scaleBar = document.getElementById('viewer-scale-bar');
-    if (scaleBar && _camera && _renderer) {
-      if (_gridMode === 0) {
-        scaleBar.classList.add('hidden');
-      } else {
-        scaleBar.classList.remove('hidden');
-        const center = _cube ? _cube.position.clone() : new THREE.Vector3();
-        const dist = _camera.position.distanceTo(center);
-        const vFOV = THREE.MathUtils.degToRad(_camera.fov);
-        const heightAtCenter = 2 * Math.tan(vFOV / 2) * dist;
-        const rect = _renderer.domElement.getBoundingClientRect();
-        const pixelsPerUnit = rect.height / Math.max(0.001, heightAtCenter);
-        const stepSize = 1.5 / 10;
-        const pixelLength = stepSize * pixelsPerUnit;
-        scaleBar.style.width = `${Math.max(20, pixelLength)}px`;
-        scaleBar.innerText = '200 µm';
-      }
-    }
+    if (!scaleBar || !_camera || !_renderer) return;
+    const hide = () => scaleBar.classList.add('hidden');
+    if (_gridMode === 0 || !_cube) { hide(); return; }
+    const physical = _getPhysicalSize ? _getPhysicalSize() : null;
+    const calibrated = physical && physical.calibrationStatus !== 'metadata-missing' && physical.mode !== 'metadata-missing';
+    const umPerUnit = calibrated && _cube.scale.x > 0 ? Number(physical.x) / _cube.scale.x : 0;
+    const rect = _renderer.domElement.getBoundingClientRect();
+    if (!(umPerUnit > 0) || !(rect.height > 0)) { hide(); return; }
+    _camera.getWorldDirection(_scaleDir);
+    const depth = _scaleRel.copy(_cube.position).sub(_camera.position).dot(_scaleDir);
+    if (!(depth > 0)) { hide(); return; }
+    const heightAtDepth = 2 * Math.tan(THREE.MathUtils.degToRad(_camera.fov) / 2) * depth;
+    const pxPerUm = rect.height / heightAtDepth / umPerUnit;
+    const targetPx = Math.min(200, Math.max(60, rect.width * 0.2));
+    const lengthUm = Utils.niceScaleLength(targetPx / pxPerUm);
+    if (!(lengthUm > 0)) { hide(); return; }
+    scaleBar.classList.remove('hidden');
+    scaleBar.style.width = `${Math.max(20, Math.round(lengthUm * pxPerUm))}px`;
+    scaleBar.textContent = Utils.formatMicrons(lengthUm);
   }
 
   /** Move axes to a world-space point projected from screen click */

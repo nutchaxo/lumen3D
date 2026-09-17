@@ -1,8 +1,8 @@
 {
   "id": "slice-inspector",
   "name": "Slice through Volume",
-  "version": "1.0.1",
-  "platformCompat": "1.x",
+  "version": "1.1.0",
+  "platformCompat": ">=1.55.2",
   "contexts": [
     "page",
     "panel"
@@ -13,7 +13,7 @@
   "subtype": "tool",
   "icon": "scissors",
   "order": 10,
-  "description": "Interactive oblique cross-section inspector with real-time GPU slice rendering.",
+  "description": "Interactive oblique cross-section inspector: the GPU-rendered slice takes the main view while the tool is open, the 3D view moves into the panel to drag the plane. Excludes the Z-stack browser.",
   "tool": "slice",
   "i18nTitle": "title",
   "i18nAria": "aria",

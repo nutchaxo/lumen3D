@@ -185,7 +185,10 @@
       <aside class="slice-inspector hidden" id="slice-inspector">
         <div class="panel-section">
           <div class="panel-title" data-i18n="viewer.sliceInspector">Slice Inspector</div>
+          <!-- Holds the slicer's preview until the tool opens; then the WebGL canvas
+               moves in here while the slice takes the canvas area (viewer.js _setSliceStage). -->
           <div id="slicer-preview-mount" class="slicer-preview-mount"></div>
+          <div class="slicer-inset-caption" data-i18n="viewer.sliceInset3d">3D view — drag the plane here</div>
         </div>
         <div class="panel-section">
           <div class="panel-title" style="margin-bottom:8px;" data-i18n="viewer.presets">Presets</div>
@@ -303,6 +306,11 @@
           <i data-lucide="panel-left-open"></i>
         </button>
         <canvas id="webgl-canvas"></canvas>
+        <!-- Slice stage: while the slice tool is open the slicer's canvas fills this
+             area and the WebGL canvas sits in the inspector's square (viewer.js _setSliceStage). -->
+        <div id="slice-stage" class="slice-stage hidden">
+          <div id="slice-stage-scale" class="slice-stage-scale hidden">200 µm</div>
+        </div>
         <div id="viewer-scale-bar" class="hidden" style="position:absolute; bottom:20px; right:20px; border-bottom:2px solid #fff; color:#fff; text-align:center; font-size:12px; font-weight:600; padding-bottom:4px; text-shadow:1px 1px 2px #000; z-index:10; pointer-events:none; min-width:40px; box-sizing: border-box;">200 µm</div>
         <!-- Controls Overlay (center-left) -->
         <div class="canvas-overlay">

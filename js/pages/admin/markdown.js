@@ -276,6 +276,25 @@ function renderTable(lines, i) {
 // actually nest); a blank line keeps the item open only if what follows is
 // indented too, and a blank line between two items makes the list loose.
 function renderList(lines, i, shift) {
+  const { items, next, ordered, start, tight } = collectListItems(lines, i);
+  const lis = items.map((itemLines) => {
+    let prefix = '';
+    const task = TASK_RE.exec(itemLines[0]);
+    if (task) {
+      prefix = `<span class="adm-md-task" aria-hidden="true">${task[1] === ' ' ? '☐' : '☑'}</span>`;
+      itemLines[0] = itemLines[0].slice(task[0].length);
+    }
+    return `<li>${prefix}${parseBlocks(itemLines, shift, tight)}</li>`;
+  }).join('');
+  const tag = ordered ? 'ol' : 'ul';
+  const startAttr = ordered && start !== 1 ? ` start="${start}"` : '';
+  return { html: `<${tag} class="adm-md-list"${startAttr}>${lis}</${tag}>`, next };
+}
+
+// The items of the list starting at lines[i], each as its own lines (content
+// indent stripped), plus where the list ends. Shared by the flat renderer and
+// the release-notes tree, so both agree on what one entry is.
+function collectListItems(lines, i) {
   const first = LIST_RE.exec(lines[i]);
   const baseIndent = first[1].length;
   const ordered = /\d/.test(first[2]);
@@ -314,19 +333,7 @@ function renderList(lines, i, shift) {
     }
     items.push(itemLines);
   }
-
-  const lis = items.map((itemLines) => {
-    let prefix = '';
-    const task = TASK_RE.exec(itemLines[0]);
-    if (task) {
-      prefix = `<span class="adm-md-task" aria-hidden="true">${task[1] === ' ' ? '☐' : '☑'}</span>`;
-      itemLines[0] = itemLines[0].slice(task[0].length);
-    }
-    return `<li>${prefix}${parseBlocks(itemLines, shift, tight)}</li>`;
-  }).join('');
-  const tag = ordered ? 'ol' : 'ul';
-  const startAttr = ordered && start !== 1 ? ` start="${start}"` : '';
-  return { html: `<${tag} class="adm-md-list"${startAttr}>${lis}</${tag}>`, next: i };
+  return { items, next: i, ordered, start, tight };
 }
 
 // `tight` = paragraphs of a tight list item are emitted without <p>.
@@ -430,4 +437,132 @@ export function renderMarkdown(text, opts = {}) {
     if (k < lines.length && /^ {0,3}#(?:[ \t]|$)/.test(lines[k])) lines.splice(0, k + 1);
   }
   return parseBlocks(lines, shift);
+}
+
+// ── Release notes as a tree ──────────────────────────────────────────────────
+// A changelog is `## [TAG]` sections of entries, and an entry opens with its
+// title: `- **Title**: details` (the convention since v1.55.0), the bold sentence
+// the older files start with, or the text before the first colon. The tree keeps
+// that split, so a folded entry still names what changed.
+
+const ENTRY_BOLD_RE = /^\*\*(.+?)\*\*[ \t]*[:.]?[ \t]*([\s\S]*)$/;
+
+/**
+ * @param {string} firstLine  the first line of a list item (Markdown)
+ * @returns {{title: string, rest: string}}  Markdown on both sides
+ */
+export function splitEntryTitle(firstLine) {
+  const line = String(firstLine == null ? '' : firstLine).trim();
+  const bold = ENTRY_BOLD_RE.exec(line);
+  if (bold) return { title: bold[1].trim().replace(/:$/, ''), rest: bold[2].trim() };
+  const colon = line.indexOf(': ');
+  if (colon > 0 && colon <= 140) return { title: line.slice(0, colon).trim(), rest: line.slice(colon + 1).trim() };
+  // The first sentence, when the line goes on after it.
+  const stop = /[.!?](?=\s)/.exec(line);
+  if (stop && stop.index > 0 && stop.index <= 160) {
+    return { title: line.slice(0, stop.index + 1).trim(), rest: line.slice(stop.index + 1).trim() };
+  }
+  return { title: line, rest: '' };
+}
+
+function sectionHead(text) {
+  const m = SECTION_TAG_RE.exec(text.trim());
+  if (m) {
+    const label = m[1].trim();
+    const pretty = label[0].toUpperCase() + label.slice(1).toLowerCase();
+    const badge = `<span class="adm-md-badge adm-md-badge-${slug(label)}">${escapeHtml(pretty)}</span>`;
+    return badge + (m[2] ? `<span class="adm-cl-sec-title">${renderInline(m[2])}</span>` : '');
+  }
+  return `<span class="adm-cl-sec-title">${renderInline(text)}</span>`;
+}
+
+/**
+ * The same Markdown as renderMarkdown, shaped as a tree the operator can fold:
+ * `## …` sections (a `[TAG]` heading keeps its badge) → entries → details. A
+ * document title is dropped (the caller names the version). Blocks that are not
+ * list items are rendered as they are, in place. Sections open by default;
+ * entries open only with opts.itemsOpen; an entry without details is a plain
+ * row, since there is nothing to fold.
+ * @param {string} text
+ * @param {{itemsOpen?: boolean, sectionsOpen?: boolean, headingShift?: number}} [opts]
+ * @returns {string} HTML, safe for innerHTML.
+ */
+export function renderReleaseNotesTree(text, opts = {}) {
+  const shift = Number.isInteger(opts.headingShift) ? opts.headingShift : 2;
+  let src = String(text == null ? '' : text);
+  if (!src.trim()) return '';
+  src = src.slice(0, MAX_CHARS).replace(/ /g, '�').replace(/\r\n?/g, '\n').replace(/\t/g, '    ');
+  const lines = src.split('\n');
+  let k = 0;
+  while (k < lines.length && isBlank(lines[k])) k++;
+  if (k < lines.length && /^ {0,3}#(?:[ \t]|$)/.test(lines[k])) lines.splice(0, k + 1);
+
+  // Split at the level-2 headings, leaving a fenced block whole.
+  const intro = [];
+  const sections = [];
+  let cur = null;
+  let fence = null;
+  for (const line of lines) {
+    const f = FENCE_RE.exec(line);
+    if (fence) {
+      if (f && f[1][0] === fence[0] && f[1].length >= fence.length) fence = null;
+      (cur ? cur.lines : intro).push(line);
+      continue;
+    }
+    if (f) { fence = f[1]; (cur ? cur.lines : intro).push(line); continue; }
+    const atx = ATX_RE.exec(line);
+    if (atx && atx[1].length === 2) {
+      cur = { heading: (atx[2] || '').replace(/[ \t]+#+$/, ''), lines: [] };
+      sections.push(cur);
+      continue;
+    }
+    (cur ? cur.lines : intro).push(line);
+  }
+
+  const out = [];
+  const introHtml = parseBlocks(intro, shift);
+  if (introHtml) out.push(`<div class="adm-cl-intro adm-md">${introHtml}</div>`);
+
+  for (const sec of sections) {
+    let body = '';
+    let count = 0;
+    let prose = [];
+    const flushProse = () => {
+      if (!prose.length) return;
+      const html = parseBlocks(prose, shift);
+      if (html) body += `<div class="adm-cl-prose adm-md">${html}</div>`;
+      prose = [];
+    };
+    let i = 0;
+    while (i < sec.lines.length) {
+      const line = sec.lines[i];
+      if (LIST_RE.test(line) && indentOf(line) < 4) {
+        flushProse();
+        const { items, next, tight } = collectListItems(sec.lines, i);
+        const rows = items.map((itemLines) => {
+          const at = itemLines.findIndex((l) => !isBlank(l));
+          const { title, rest } = splitEntryTitle(at >= 0 ? itemLines[at] : '');
+          const detailLines = (rest ? [rest] : []).concat(at >= 0 ? itemLines.slice(at + 1) : []);
+          const details = parseBlocks(detailLines, shift, tight);
+          const titleHtml = renderInline(title);
+          if (!details) return `<div class="adm-cl-item adm-cl-item--flat"><span class="adm-cl-title">${titleHtml}</span></div>`;
+          return `<details class="adm-cl-item"${opts.itemsOpen ? ' open' : ''}>`
+            + `<summary class="adm-cl-title">${titleHtml}</summary>`
+            + `<div class="adm-cl-body adm-md">${details}</div></details>`;
+        });
+        count += rows.length;
+        body += `<div class="adm-cl-items">${rows.join('')}</div>`;
+        i = next;
+        continue;
+      }
+      prose.push(line);
+      i++;
+    }
+    flushProse();
+    const countHtml = count ? `<span class="adm-cl-count">${count}</span>` : '';
+    out.push(`<details class="adm-cl-sec"${opts.sectionsOpen === false ? '' : ' open'}>`
+      + `<summary class="adm-cl-sec-head">${sectionHead(sec.heading)}${countHtml}</summary>`
+      + `<div class="adm-cl-sec-body">${body}</div></details>`);
+  }
+  return `<div class="adm-cl">${out.join('')}</div>`;
 }

@@ -17,6 +17,7 @@ import { StatsTab } from './admin/tab-stats.js';
 import { PluginsTab } from './admin/tab-plugins.js';
 import { SecurityTab } from './admin/tab-security.js';
 import { UpdatesTab } from './admin/tab-updates.js';
+import { ChangelogTab } from './admin/tab-changelog.js';
 import { PipelineTab } from './admin/tab-pipeline.js';
 import { AppearanceTab } from './admin/tab-appearance.js';
 import { BrandingTab } from './admin/tab-branding.js';
@@ -32,6 +33,7 @@ registerTab(StatsTab);
 registerTab(PluginsTab);
 registerTab(SecurityTab);
 registerTab(UpdatesTab);
+registerTab(ChangelogTab);   // no sidebar entry: admpan.html?changelog=1, opened from the Updates tab
 registerTab(PipelineTab);
 registerTab(BrandingTab);
 registerTab(PagesTab);

@@ -572,8 +572,11 @@
     "propText": "Tekst",
     "propFontSize": "Tekengrootte",
     "loadingNative": "Oorspronkelijke resolutie: {chunks}/{total} chunks",
-    "cancelLoad": "Annuleren",
+    "cancelLoad": "Hier stoppen",
     "nativeMissing": "Oorspronkelijke resolutie: {missing} chunks konden niet worden geladen en blijven op voorbeeldresolutie.",
+    "loadingStage": "{res}: {chunks}/{total} chunks · {done}/{size} MB · {eta}",
+    "etaSeconds": "nog ~{s} s",
+    "etaMinutes": "nog ~{m} min",
     "panelChannels": "Kanalen van paneel {n}",
     "noChannelMeta": "Geen kanaalmetadata.",
     "channelPanelMissing": "Kanaalpaneel niet geladen."

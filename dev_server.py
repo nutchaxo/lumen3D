@@ -4736,6 +4736,8 @@ class AdminHandler(http.server.SimpleHTTPRequestHandler):
             self._serve_html(clean_path or "index.html")
         else:
             self._maybe_count_download(clean_path)
+            if "Range" in self.headers and self._serve_static_range():
+                return
             super().do_GET()
 
     def _maybe_count_download(self, clean_path: str):
@@ -4756,6 +4758,59 @@ class AdminHandler(http.server.SimpleHTTPRequestHandler):
                 _record_event("download", ds_id)
             except Exception:
                 pass
+
+    def _serve_static_range(self):
+        """Answer a single-range GET for a static file with a 206.
+
+        The brick loader asks for the byte runs of a cut through the volume instead of
+        whole packs (a cut across the stack needs a few bricks of many packs), and the
+        base handler would send the entire file back to a Range request. A malformed,
+        multi-part or unsatisfiable range falls through to the ordinary 200 answer,
+        which the loader takes as the whole pack.
+        """
+        rng = self.headers.get("Range", "")
+        if not rng.startswith("bytes=") or "," in rng:
+            return False
+        path = self.translate_path(self.path)
+        if not os.path.isfile(path):
+            return False
+        try:
+            size = os.path.getsize(path)
+            lo, _, hi = rng[6:].partition("-")
+            if lo:
+                start = int(lo)
+                end = int(hi) if hi else size - 1
+            elif hi:
+                start = max(0, size - int(hi))
+                end = size - 1
+            else:
+                return False
+            if start < 0 or start > end or end >= size:
+                return False
+        except (ValueError, OSError):
+            return False
+        length = end - start + 1
+        self.send_response(206)
+        self.send_header("Content-Type", self.guess_type(path))
+        self.send_header("Content-Length", str(length))
+        self.send_header("Content-Range", f"bytes {start}-{end}/{size}")
+        self.send_header("Accept-Ranges", "bytes")
+        self.end_headers()
+        if self.command == "HEAD":
+            return True
+        with open(path, "rb") as fh:
+            fh.seek(start)
+            remaining = length
+            while remaining > 0:
+                block = fh.read(min(remaining, 1 << 20))
+                if not block:
+                    break
+                try:
+                    self.wfile.write(block)
+                except (BrokenPipeError, ConnectionResetError):
+                    return True
+                remaining -= len(block)
+        return True
 
     def _serve_dynamic_catalog(self):
         # BUG-062/PERF-035: same filter+sort as the static rebuild, off the mtime cache.

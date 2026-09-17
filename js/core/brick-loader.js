@@ -20,12 +20,25 @@ const BrickLoader = (() => {
   let LRU_LIMIT = 1024;
   const PACK_CACHE_LIMIT = 128;
   const DEFAULT_CONCURRENT_LOADS = 24;
+  // Byte-range fetching (loadBrickTasks `byteRanges`): a cut through the volume needs
+  // a few bricks of many packs — on the reference dataset an XZ cut needs 21 MB of
+  // tiles spread over 157 MB of packs, a YZ cut 24 MB over 572 MB — so the runs the
+  // batch really needs are asked with a Range header instead of whole packs. Runs
+  // closer than RANGE_GAP_BYTES are merged (the gap is cheaper than a request); a
+  // pack whose runs would still cover most of it, or need too many requests, is
+  // fetched whole (an XY cut needs 93 % of its packs and stays as it was).
+  const RANGE_GAP_BYTES = 512 * 1024;
+  const RANGE_MAX_RUNS_PER_PACK = 48;
+  const RANGE_WHOLE_PACK_FRACTION = 0.6;
+  const RANGE_CACHE_LIMIT = 256;
 
   let _manifest = null;
   let _basePath = '';
   let _cache = new Map();     // key -> { data: Uint8Array, lod, channel, lastUsed }
   let _packIndex = new Map(); // brick relative path -> { url, offset, length }
   let _packCache = new Map(); // pack URL -> { promise: Promise<ArrayBuffer>, lastUsed: number }
+  let _packSizes = new Map(); // pack relative url -> bytes (the end of its last brick)
+  let _rangeCache = new Map(); // "url#start-end" -> { promise: Promise<{buffer, base}>, lastUsed }
   let _activeBricksSet = new Set(); // set of "lod:bx_by_bz" for fast lookup
   let _workerSeq = 0;
   let _workers = [];
@@ -160,6 +173,7 @@ const BrickLoader = (() => {
     if (!sameDataset) {
       _cache.clear();
       _packCache.clear();
+      _rangeCache.clear();
       // ELE-17: a real dataset switch -> cancel orphaned pack fetches and renew the loader-owned controller
       if (_packFetchController) { try { _packFetchController.abort(); } catch (e) {} }
       _packFetchController = (typeof AbortController !== 'undefined') ? new AbortController() : null;
@@ -367,6 +381,8 @@ const BrickLoader = (() => {
    * Task shape: { bx, by, bz, channel, lod, region? } — `region` is an optional voxel
    * box {x0,x1,y0,y1,z0,z1} of the brick; a worker decode then delivers that box
    * alone (length < brickSize³), anything else still delivers the whole brick.
+   * `options.byteRanges` fetches, for the packs this batch needs only part of, the
+   * byte runs of its bricks (Range requests) instead of the whole packs.
    */
   async function loadBrickTasks(tasks, options = {}) {
     if (!_manifest) throw new Error('BrickLoader not initialized.');
@@ -440,6 +456,7 @@ const BrickLoader = (() => {
 
     // Load remaining in batches
     const queued = options.preserveOrder ? toLoad : _interleaveByTransport(toLoad);
+    const rangePlan = options.byteRanges ? _planRanges(queued) : null;
     if (!queued.length && loaded === total) {
       options.onProgress?.(1);
       _loading = false;
@@ -462,7 +479,7 @@ const BrickLoader = (() => {
           if (shouldAbort && shouldAbort()) break;
           try {
             const url = _brickUrl(lod, channel, bx, by, bz);
-            const data = await _fetchBrickImage(url, controller.signal, { bx, by, bz, lod, region });
+            const data = await _fetchBrickImage(url, controller.signal, { bx, by, bz, lod, region, rangePlan });
             const stale = generation !== _generation;
             // `key` was built before the switch, so it still carries the tag of the
             // mount this brick belongs to and can never be read back by another one.
@@ -617,6 +634,7 @@ const BrickLoader = (() => {
   function clearCache() {
     _cache.clear();
     _packCache.clear();
+    _rangeCache.clear();
     // ELE-17: teardown of the pack cache -> abort orphaned pack fetches, renew controller
     if (_packFetchController) { try { _packFetchController.abort(); } catch (e) {} }
     _packFetchController = (typeof AbortController !== 'undefined') ? new AbortController() : null;
@@ -920,10 +938,7 @@ const BrickLoader = (() => {
       return new Uint8Array(0);
     }
     
-    const buffer = await _fetchPackBuffer(packed.url, signal);
-    const start = Math.max(0, Number(packed.offset) || 0);
-    const end = start + Math.max(0, Number(packed.length) || 0);
-    const compressedSlice = buffer.slice(start, end);
+    const compressedSlice = await _fetchPackSlice(packed, signal, coord?.rangePlan || null);
     
     if (isWebp && _workers.length > 0 && _workerReady) {
       const sliceCopy = compressedSlice.slice(0); // Copy to avoid detached buffer fallback error
@@ -992,10 +1007,7 @@ const BrickLoader = (() => {
     const rel = _hashKeyFromUrl(url);
     const packed = _packIndex.get(rel);
     if (packed) {
-      const buffer = await _fetchPackBuffer(packed.url, signal);
-      const start = Math.max(0, Number(packed.offset) || 0);
-      const end = start + Math.max(0, Number(packed.length) || 0);
-      return new Blob([buffer.slice(start, end)], { type: 'image/webp' });
+      return new Blob([await _fetchPackSlice(packed, signal, null)], { type: 'image/webp' });
     }
     const resp = await fetch(url, { signal });
     if (!resp.ok) throw new Error(`HTTP ${resp.status} for ${url}`);
@@ -1055,17 +1067,139 @@ const BrickLoader = (() => {
 
   function _buildPackIndex() {
     _packIndex = new Map();
+    _packSizes = new Map();
     const index = _manifest?.brickTransport?.brickToPack;
     if (!index || typeof index !== 'object') return;
     for (const [brickPath, entry] of Object.entries(index)) {
       if (!entry?.url || !Number.isFinite(Number(entry.offset)) || !Number.isFinite(Number(entry.length))) continue;
       if (!_isSafePackUrl(entry.url)) continue;  // SEC-017: defense-in-depth (manifest already validated upfront)
-      _packIndex.set(String(brickPath).replace(/^\/+/, ''), {
-        url: String(entry.url).replace(/^\/+/, ''),
-        offset: Number(entry.offset),
-        length: Number(entry.length)
-      });
+      const url = String(entry.url).replace(/^\/+/, '');
+      const offset = Number(entry.offset);
+      const length = Number(entry.length);
+      _packIndex.set(String(brickPath).replace(/^\/+/, ''), { url, offset, length });
+      // A pack is the concatenation of its bricks: its size is the end of the last one.
+      if (offset + length > (_packSizes.get(url) || 0)) _packSizes.set(url, offset + length);
     }
+  }
+
+  /** Compressed bytes of one brick task in its pack (0 when the pack index has no entry). */
+  function taskBytes(task) {
+    if (!task || !_packIndex.size) return 0;
+    const rel = _hashKeyFromUrl(_brickUrl(task.lod ?? 0, task.channel ?? 0, task.bx, task.by, task.bz));
+    return _packIndex.get(rel)?.length || 0;
+  }
+
+  /** Compressed bytes a batch of tasks has to bring in, pack index permitting. */
+  function estimateTaskBytes(tasks) {
+    let total = 0;
+    for (const task of Array.isArray(tasks) ? tasks : []) total += taskBytes(task);
+    return total;
+  }
+
+  /**
+   * For a batch that needs only part of some packs, the byte runs to fetch instead of
+   * whole packs: per pack, the bricks' [offset, end) intervals sorted and merged across
+   * gaps up to RANGE_GAP_BYTES; a pack whose runs would still cover most of it, or
+   * need too many requests, is left to be fetched whole. Map<url, runs> or null.
+   */
+  function _planRanges(tasks) {
+    if (!_packIndex.size) return null;
+    const perPack = new Map();
+    for (const task of Array.isArray(tasks) ? tasks : []) {
+      const rel = _hashKeyFromUrl(_brickUrl(task.lod ?? 0, task.channel ?? 0, task.bx, task.by, task.bz));
+      const packed = _packIndex.get(rel);
+      if (!packed) continue;
+      let list = perPack.get(packed.url);
+      if (!list) perPack.set(packed.url, list = []);
+      list.push([packed.offset, packed.offset + packed.length]);
+    }
+    const plan = new Map();
+    for (const [url, intervals] of perPack) {
+      const size = _packSizes.get(url) || 0;
+      if (!size) continue;
+      intervals.sort((a, b) => a[0] - b[0]);
+      const runs = [];
+      let current = [intervals[0][0], intervals[0][1]];
+      for (let i = 1; i < intervals.length; i++) {
+        const [start, end] = intervals[i];
+        if (start - current[1] <= RANGE_GAP_BYTES) current[1] = Math.max(current[1], end);
+        else { runs.push(current); current = [start, end]; }
+      }
+      runs.push(current);
+      const bytes = runs.reduce((sum, r) => sum + (r[1] - r[0]), 0);
+      if (runs.length > RANGE_MAX_RUNS_PER_PACK || bytes >= RANGE_WHOLE_PACK_FRACTION * size) continue;
+      plan.set(url, runs.map(([start, end]) => ({ start, end })));
+    }
+    return plan.size ? plan : null;
+  }
+
+  function _trimRangeCache(limit = RANGE_CACHE_LIMIT) {
+    if (_rangeCache.size <= limit) return;
+    const entries = [..._rangeCache.entries()].sort((a, b) => (a[1].lastUsed || 0) - (b[1].lastUsed || 0));
+    const removeCount = Math.max(0, _rangeCache.size - Math.max(0, limit));
+    for (let i = 0; i < removeCount; i++) _rangeCache.delete(entries[i][0]);
+  }
+
+  /**
+   * The bytes of one brick out of its pack: from the whole pack when it is cached or
+   * not planned for ranges, otherwise from the planned byte run that holds the brick,
+   * asked with a Range header — one request per run, shared by every brick in it. A
+   * server that answers 200 to the Range has sent the whole pack, which is kept as
+   * such; any other answer drops the plan for that pack and fetches it whole.
+   */
+  async function _fetchPackSlice(packed, signal, rangePlan) {
+    const start = Math.max(0, Number(packed.offset) || 0);
+    const end = start + Math.max(0, Number(packed.length) || 0);
+    const url = `${_basePath}/${String(packed.url).replace(/^\/+/, '')}`;
+    const stamp = () => performance.now?.() || Date.now();
+    const whole = _packCache.get(url);
+    if (whole) {
+      whole.lastUsed = stamp();
+      const buffer = await _awaitWithSignal(whole.promise, signal);
+      return buffer.slice(start, end);
+    }
+    const runs = rangePlan?.get(packed.url);
+    const run = runs?.find(r => r.start <= start && end <= r.end);
+    if (run) {
+      const key = `${url}#${run.start}-${run.end}`;
+      let entry = _rangeCache.get(key);
+      if (!entry) {
+        _trimRangeCache(RANGE_CACHE_LIMIT - 1);
+        const fetchSignal = _packFetchController ? _packFetchController.signal : signal;
+        const promise = fetch(url, { signal: fetchSignal, headers: { Range: `bytes=${run.start}-${run.end - 1}` } }).then(async resp => {
+          if (resp.status === 206) {
+            const buffer = await resp.arrayBuffer();
+            if (buffer.byteLength !== run.end - run.start) {
+              throw new Error(`Range ${run.start}-${run.end - 1} of ${url} answered ${buffer.byteLength} bytes`);
+            }
+            return { buffer, base: run.start };
+          }
+          if (resp.status === 200) {
+            const buffer = await resp.arrayBuffer();
+            _trimPackCache(PACK_CACHE_LIMIT - 1);
+            _packCache.set(url, { promise: Promise.resolve(buffer), lastUsed: stamp() });
+            return { buffer, base: 0 };
+          }
+          throw new Error(`HTTP ${resp.status} for ${url} (range ${run.start}-${run.end - 1})`);
+        }).catch(err => {
+          _rangeCache.delete(key);
+          throw err;
+        });
+        entry = { promise, lastUsed: stamp() };
+        _rangeCache.set(key, entry);
+      } else {
+        entry.lastUsed = stamp();
+      }
+      try {
+        const got = await _awaitWithSignal(entry.promise, signal);
+        return got.buffer.slice(start - got.base, end - got.base);
+      } catch (err) {
+        if (err?.name === 'AbortError' || signal?.aborted) throw err;
+        rangePlan.delete(packed.url);
+      }
+    }
+    const buffer = await _fetchPackBuffer(packed.url, signal);
+    return buffer.slice(start, end);
   }
 
   async function _verifyBrickHash(url, blob) {
@@ -1144,6 +1278,9 @@ const BrickLoader = (() => {
     isLoading,
     getCacheStats,
     clearCache,
+    taskBytes,
+    estimateTaskBytes,
+    _planRanges,       // exposed for unit testing
     _cacheKey,         // exposed for unit testing (ELE-13)
     _fetchPackBuffer,  // exposed for unit testing (ELE-17)
     _validateManifest  // exposed for unit testing (ELE-21)

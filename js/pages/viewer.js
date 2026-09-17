@@ -1369,37 +1369,124 @@ const ViewerApp = (() => {
     };
   }
 
-  async function _upgradeStudioSliceToNative(preview) {
-    const onCancel = () => _cancelNativeSlice();
-    const label = (chunks, total) => {
-      const key = 'studio.loadingNative';
-      const res = (typeof I18n !== 'undefined' && I18n.t) ? I18n.t(key, { chunks, total }) : key;
-      return res === key ? `Native resolution: ${chunks}/${total} chunks` : res;
+  // A coarser stage of the Studio's upgrade is worth its download only when it costs
+  // no more than this share of the next finer stage: a 2048² picture worth a fifth of
+  // the native bytes comes first (and can be kept), and the whole ladder never costs
+  // more than about a fifth more than the native pass alone.
+  const STUDIO_STAGE_BYTES_RATIO = 0.3;
+  // Once the rate measured on the stages already done says the native picture is
+  // closer than this, the remaining intermediate stages only delay it: skip them.
+  const STUDIO_STAGE_MIN_NATIVE_MS = 15000;
+
+  /**
+   * The stages of the Studio's upgrade for `spec`: every brick level finer than the
+   * one the preview was rendered from, coarse to fine, ending at LOD0 (always there:
+   * the viewer's atlas may hold only part of a level). Each stage carries the bricks
+   * the plane crosses at that level and the compressed bytes they cost.
+   */
+  function _studioStages(spec, previewLod, levels) {
+    if (typeof BrickLoader === 'undefined' || !BrickLoader.getDimensions) return [];
+    const count = Array.isArray(levels) ? levels.length : 1;
+    const dims0 = BrickLoader.getDimensions(0);
+    const channels = Math.max(1, Math.min(4, Number(dims0?.channels) || Number(datasetMeta?.dimensions?.c) || 1));
+    const rgbaTransport = BrickLoader.getTransportEncoding?.() === 'raw-rgba-gzip';
+    const wantedChannels = rgbaTransport ? [-1] : _nativeSliceChannels(channels);
+    const stages = [];
+    for (let lod = 0; lod < count && (lod === 0 || lod < previewLod); lod++) {
+      const dims = BrickLoader.getDimensions(lod);
+      if (!dims) continue;
+      const bricks = _nativeSliceBricksForSpec(spec, dims, lod);
+      let bytes = 0;
+      for (const b of bricks) {
+        for (const channel of wantedChannels) bytes += BrickLoader.taskBytes?.({ lod, channel, bx: b.bx, by: b.by, bz: b.bz }) || 0;
+      }
+      stages.push({ lod, dims, bricks: bricks.length, bytes });
+    }
+    const kept = [];
+    for (const stage of stages) {
+      if (stage.lod === 0) { kept.push(stage); continue; }
+      const finer = kept[kept.length - 1];
+      if (stage.bricks > 0 && stage.bytes > 0 && stage.bytes <= STUDIO_STAGE_BYTES_RATIO * finer.bytes) kept.push(stage);
+    }
+    return kept.reverse();
+  }
+
+  function _stageLabel(stage, progress = {}) {
+    const dims = stage.dims || {};
+    const native = _t('viewer.native', 'Native');
+    const res = stage.lod === 0 ? `${native} ${dims.x} × ${dims.y}` : `${dims.x} × ${dims.y}`;
+    const mb = (bytes) => {
+      const v = Math.max(0, Number(bytes) || 0) / 1e6;
+      return v < 10 ? v.toFixed(1) : String(Math.round(v));
     };
-    StudioEditor.setLoadProgress?.({ percent: 0, label: label(0, 0), onCancel });
+    let eta = '';
+    const seconds = Number(progress.etaSeconds);
+    if (Number.isFinite(seconds) && seconds > 0) {
+      eta = seconds >= 90
+        ? _t('studio.etaMinutes', '~{m} min left', { m: Math.round(seconds / 60) })
+        : _t('studio.etaSeconds', '~{s} s left', { s: Math.max(1, Math.round(seconds)) });
+    }
+    const text = _t('studio.loadingStage', '{res}: {chunks}/{total} chunks · {done}/{size} MB · {eta}', {
+      res,
+      chunks: progress.chunks || 0,
+      total: progress.totalChunks || stage.bricks || 0,
+      done: mb(progress.bytesDone || 0),
+      size: mb(progress.bytesTotal || stage.bytes || 0),
+      eta
+    });
+    return text.replace(/\s*·\s*$/, '');
+  }
+
+  /**
+   * Upgrades the Studio's picture in stages (see _studioStages): each stage is a
+   * complete picture of the same frame, the previous stage standing in wherever a
+   * chunk is still on its way, so *Stop here* keeps the best complete picture so far.
+   */
+  async function _upgradeStudioSliceToNative(preview) {
+    if (typeof BrickLoader === 'undefined' || !BrickLoader.isReady?.()) return;
+    const onCancel = () => _cancelNativeSlice();
+    const manifest = BrickLoader.getManifest?.();
+    const levels = Array.isArray(manifest?.levels) ? manifest.levels : [];
+    const previewLod = levels.length ? _lodForQuality(_qualityMode, levels.length, levels) : 0;
+    const stages = _studioStages(preview.planeSpec, previewLod, levels);
+    if (!stages.length) return;
+    const dims0 = BrickLoader.getDimensions(0);
+    const renderRes = Number(preview.renderRes) > 0 ? preview.renderRes : _nativeStudioRenderSize(preview.planeSpec, dims0);
+    StudioEditor.setLoadProgress?.({ percent: 0, label: _stageLabel(stages[0]), onCancel });
+    let fallbackCanvas = preview.canvas;
     let missing = 0;
+    let bytesPerMs = 0;
+    const finalStage = stages[stages.length - 1];
     try {
-      const sr = await _renderNativeSliceForStudio({
-        spec: preview.planeSpec,
-        cropRect: preview.cropRect,
-        fallback: { canvas: preview.canvas },
-        onProgress: ({ percent, chunks, totalChunks }) => {
-          StudioEditor.setLoadProgress?.({ percent, label: label(chunks, totalChunks), onCancel });
-        },
-        // Chunks land one after the other, as they do in the 3D view: every partial
-        // picture is the same frame with more of it native and the preview elsewhere.
-        onPartial: (partial) => {
-          if (StudioEditor.isOpen?.()) StudioEditor.setSliceResult(partial, { imageOnly: true });
-        }
-      });
-      if (sr && StudioEditor.isOpen?.()) {
-        StudioEditor.setSliceResult(sr);
+      for (let i = 0; i < stages.length; i++) {
+        const stage = stages[i];
+        if (stage.lod !== 0 && i > 0 && bytesPerMs > 0 && finalStage.bytes / bytesPerMs < STUDIO_STAGE_MIN_NATIVE_MS) continue;
+        const sr = await _renderNativeSliceForStudio({
+          spec: preview.planeSpec,
+          cropRect: preview.cropRect,
+          renderRes,
+          lod: stage.lod,
+          fallback: { canvas: fallbackCanvas },
+          onProgress: (progress) => {
+            StudioEditor.setLoadProgress?.({ percent: progress.percent, label: _stageLabel(stage, progress), onCancel });
+          },
+          // Chunks land one after the other, as they do in the 3D view: every partial
+          // picture is the same frame with more of it at this stage's resolution.
+          onPartial: (partial) => {
+            if (StudioEditor.isOpen?.()) StudioEditor.setSliceResult(partial, { imageOnly: true });
+          }
+        });
+        if (!sr) continue;
+        if (sr.bytesTotal > 0 && (sr.netMs > 0 || sr.elapsedMs > 0)) bytesPerMs = sr.bytesTotal / (sr.netMs || sr.elapsedMs);
+        if (!StudioEditor.isOpen?.()) break;
+        StudioEditor.setSliceResult(sr, { imageOnly: stage.lod !== 0 });
+        fallbackCanvas = sr.canvas;
         missing = Number(sr.missingChunks) || 0;
       }
     } catch (err) {
       if (err?.name !== 'AbortError') {
-        console.warn('[ViewerApp] Native Studio slice failed; keeping the active volume resolution:', err);
-        _setSliceStatus('Native HD unavailable; using active volume resolution.');
+        console.warn('[ViewerApp] Native Studio slice failed; keeping the best picture so far:', err);
+        _setSliceStatus('Native HD unavailable; keeping the best picture so far.');
       }
     } finally {
       StudioEditor.setLoadProgress?.(null);
@@ -1626,7 +1713,7 @@ const ViewerApp = (() => {
    * each side) are decoded and uploaded: a single cut costs three planes of every
    * brick instead of sixty-four.
    */
-  function _nativeSliceBricksForSpec(spec, dims) {
+  function _nativeSliceBricksForSpec(spec, dims, lod = 0) {
     if (typeof BrickLoader === 'undefined' || !BrickLoader.activeBricks) return [];
     if (typeof VolumeSlicer === 'undefined' || !VolumeSlicer.planeGeometry) return [];
     const geom = VolumeSlicer.planeGeometry(spec, VolumeViewer.getPhysicalSize?.());
@@ -1652,7 +1739,7 @@ const ViewerApp = (() => {
     }
 
     const bricks = [];
-    for (const b of BrickLoader.activeBricks(0)) {
+    for (const b of BrickLoader.activeBricks(lod)) {
       const ox = b.bx * bs;
       const oy = b.by * bs;
       const oz = b.bz * bs;
@@ -1810,9 +1897,11 @@ const ViewerApp = (() => {
   }
 
   /**
-   * Renders `options.spec` (the inspector plane by default) at native resolution:
-   * the LOD0 bricks the plane crosses stream into a throwaway atlas — only the voxel
-   * planes each brick contributes — and the slicer renders the plane through it.
+   * Renders `options.spec` (the inspector plane by default) at the resolution of
+   * brick level `options.lod` (LOD0 = native): the bricks the plane crosses stream
+   * into a throwaway atlas — only the voxel planes each brick contributes — and the
+   * slicer renders the plane through it, in a frame of `options.renderRes` px (the
+   * native frame by default, so every stage of an upgrade shares the same picture).
    * `options.onPartial` receives a picture of the same frame every few hundred
    * milliseconds while chunks land, `options.fallback.canvas` (the preview, cropped
    * to `options.cropRect`) standing in wherever a chunk is still missing. A chunk
@@ -1824,13 +1913,15 @@ const ViewerApp = (() => {
     if (!BrickLoader.isReady?.() || !VolumeSlicer.renderWithMaterial || !VolumeViewer.getRenderer?.() || !VolumeViewer.getMaterial?.()) return null;
 
     _cancelNativeSlice(false);
-    const dims = BrickLoader.getDimensions(0);
+    const lod = Math.max(0, Math.floor(Number(options.lod) || 0));
+    const dims = BrickLoader.getDimensions(lod);
     if (!dims) return null;
+    const stageName = lod === 0 ? 'native HD' : `${dims.x}x${dims.y}`;
     const channels = Math.max(1, Math.min(4, Number(dims.channels) || Number(datasetMeta?.dimensions?.c) || 1));
     // The plane the preview was framed on: the inspector's, or the one handed in
     // (the Z-stack browser's slab), so the native pass swaps pixels under the same frame.
     const spec = options.spec || VolumeSlicer.getPlaneSpec();
-    const bricks = _nativeSliceBricksForSpec(spec, dims);
+    const bricks = _nativeSliceBricksForSpec(spec, dims, lod);
     if (!bricks.length) return null;
 
     const onProgress = typeof options.onProgress === 'function' ? options.onProgress : null;
@@ -1855,7 +1946,7 @@ const ViewerApp = (() => {
     const wantedChannels = rgbaTransport ? null : _nativeSliceChannels(channels);
     const perBrickTasks = rgbaTransport ? 1 : wantedChannels.length;
     const channelState = _currentChannelState();
-    const renderRes = _nativeStudioRenderSize(spec, dims);
+    const renderRes = Number(options.renderRes) > 0 ? Math.round(options.renderRes) : _nativeStudioRenderSize(spec, dims);
     const cropRect = options.cropRect || null;
     const fallback = options.fallback?.canvas && cropRect ? { canvas: options.fallback.canvas, rect: cropRect } : null;
     // With the preview's frame known, only that window of the frame is rendered and
@@ -1869,11 +1960,15 @@ const ViewerApp = (() => {
     let doneTasks = 0;
     let writtenBricks = 0;
     let lastStatusAt = 0;
+    let bytesTotal = 0;
+    let bytesDone = 0;
+    let startedAt = now();
+    let lastBrickAt = 0;
 
     const tasksFor = (list) => {
       const tasks = [];
       for (const brick of list) {
-        const base = { bx: brick.bx, by: brick.by, bz: brick.bz, lod: 0, region: brick.region || null };
+        const base = { bx: brick.bx, by: brick.by, bz: brick.bz, lod, region: brick.region || null };
         if (rgbaTransport) tasks.push({ ...base, channel: -1 });
         else for (const c of wantedChannels) tasks.push({ ...base, channel: c });
       }
@@ -1889,8 +1984,14 @@ const ViewerApp = (() => {
       if (!force && t - lastStatusAt < 250) return;
       lastStatusAt = t;
       const pct = Math.round((doneTasks / Math.max(1, totalTasks)) * 100);
-      _setSliceStatus(`Rendering native HD slice: ${writtenBricks}/${bricks.length} chunks, ${pct}%`);
-      onProgress?.({ percent: pct, chunks: writtenBricks, totalChunks: bricks.length });
+      // An estimate once a few seconds and a few percent of the bytes are in.
+      const elapsed = t - startedAt;
+      let etaSeconds = null;
+      if (elapsed > 2000 && bytesTotal > 0 && bytesDone > 0.03 * bytesTotal && bytesDone < bytesTotal) {
+        etaSeconds = ((bytesTotal - bytesDone) * elapsed) / bytesDone / 1000;
+      }
+      _setSliceStatus(`Rendering ${stageName} slice: ${writtenBricks}/${bricks.length} chunks, ${pct}%`);
+      onProgress?.({ percent: pct, chunks: writtenBricks, totalChunks: bricks.length, bytesDone, bytesTotal, etaSeconds, lod, dims });
     };
 
     // Always through the fallback variant of the slice shader (one program for the
@@ -1910,7 +2011,8 @@ const ViewerApp = (() => {
       renderRes,
       cropRect: rect,
       source: 'native-slicer',
-      quality: 'native',
+      quality: lod === 0 ? 'native' : `lod${lod}`,
+      lod,
       planeSpec: spec,
       pixelSizeUm: _slicePixelSizeUm(spec, renderRes),
       physicalSizeUm: VolumeViewer.getPhysicalSize?.(),
@@ -1983,6 +2085,8 @@ const ViewerApp = (() => {
       const key = `${bx}_${by}_${bz}`;
       const brick = brickByKey.get(key);
       if (!brick) return;
+      bytesDone = Math.min(bytesTotal, bytesDone + (BrickLoader.taskBytes?.({ lod, channel, bx, by, bz }) || 0));
+      lastBrickAt = now();
       if (channel === -1) {
         const box = _brickRegionData(data, bs, brick.region, 4);
         if (!box) failed.add(key);
@@ -2013,6 +2117,9 @@ const ViewerApp = (() => {
       concurrency: Math.min(32, Math.max(4, Number(navigator.hardwareConcurrency) || 8)),
       cancelPrevious: false,
       preserveOrder: true,
+      // The runs of a pack this plane needs, not the whole pack (a cut across the
+      // stack needs a few bricks of many packs).
+      byteRanges: true,
       streamOnly: true,
       cacheResults: false,
       // Bricks the viewer already decoded are free; writing this batch back would
@@ -2035,12 +2142,14 @@ const ViewerApp = (() => {
     };
 
     try {
-      _setSliceStatus(`Preparing native HD slice (${bricks.length} LOD0 chunks)...`);
-      onProgress?.({ percent: 0, chunks: 0, totalChunks: bricks.length });
+      _setSliceStatus(`Preparing ${stageName} slice (${bricks.length} LOD${lod} chunks)...`);
       tempSvr.init(channels, dims, renderer, tempMaterial, { targetSlots: bricks.length });
 
       const tasks = tasksFor(bricks);
       totalTasks = tasks.length;
+      bytesTotal = BrickLoader.estimateTaskBytes?.(tasks) || 0;
+      startedAt = now();
+      onProgress?.({ percent: 0, chunks: 0, totalChunks: bricks.length, bytesDone: 0, bytesTotal, etaSeconds: null, lod, dims });
       await BrickLoader.loadBrickTasks(tasks, loadOptions);
       throwIfAborted();
 
@@ -2067,9 +2176,10 @@ const ViewerApp = (() => {
       if (!canvas) return null;
       const rect = cropRect || _sliceContentRect(canvas);
       _setSliceStatus(missing > 0
-        ? `Native HD slice ready (${writtenBricks} chunks; ${missing} kept at preview resolution).`
-        : `Native HD slice ready (${writtenBricks} chunks).`);
-      return sliceResult(canvas, rect, { missingChunks: missing });
+        ? `${stageName} slice ready (${writtenBricks} chunks; ${missing} kept at the previous resolution).`
+        : `${stageName} slice ready (${writtenBricks} chunks).`);
+      // netMs: the transfer alone (first request to last brick), the measure of the link.
+      return sliceResult(canvas, rect, { missingChunks: missing, bytesTotal, elapsedMs: now() - startedAt, netMs: lastBrickAt ? Math.max(1, lastBrickAt - startedAt) : 0 });
     } finally {
       cancelPartial();
       VolumeSlicer.releaseForeign?.();

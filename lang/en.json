@@ -572,8 +572,11 @@
     "propText": "Text",
     "propFontSize": "Font Size",
     "loadingNative": "Native resolution: {chunks}/{total} chunks",
-    "cancelLoad": "Cancel",
+    "cancelLoad": "Stop here",
     "nativeMissing": "Native resolution: {missing} chunks could not be loaded and stay at preview resolution.",
+    "loadingStage": "{res}: {chunks}/{total} chunks · {done}/{size} MB · {eta}",
+    "etaSeconds": "~{s} s left",
+    "etaMinutes": "~{m} min left",
     "panelChannels": "Panel {n} channels",
     "noChannelMeta": "No channel metadata.",
     "channelPanelMissing": "Channel panel not loaded."

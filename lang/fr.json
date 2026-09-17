@@ -572,8 +572,11 @@
     "propText": "Texte",
     "propFontSize": "Taille Police",
     "loadingNative": "Résolution native : {chunks}/{total} chunks",
-    "cancelLoad": "Annuler",
+    "cancelLoad": "S'arrêter ici",
     "nativeMissing": "Résolution native : {missing} chunks n'ont pas pu être chargés et restent à la résolution de l'aperçu.",
+    "loadingStage": "{res} : {chunks}/{total} chunks · {done}/{size} Mo · {eta}",
+    "etaSeconds": "~{s} s restantes",
+    "etaMinutes": "~{m} min restantes",
     "panelChannels": "Canaux du panneau {n}",
     "noChannelMeta": "Aucune métadonnée de canal.",
     "channelPanelMissing": "Panneau des canaux non chargé."

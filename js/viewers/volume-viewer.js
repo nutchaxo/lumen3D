@@ -3003,7 +3003,16 @@ const VolumeViewer = (() => {
     _frameQuaternion = next.normalize();
   }
 
-  function setView(view) {
+  /**
+   * Pose the volume for an axis-aligned view.
+   * @param {'xy'|'xz'|'yz'|'3d'} view
+   * @param {{side?: 'front'|'back'}} [options]  which face of the stack looks at the
+   *   camera: 'front' (default) puts the +axis toward it; 'back' is the front pose
+   *   turned over about the vertical — the same in-plane spin seen from the other
+   *   side, so screen-up is kept and the image is the mirror of the front view,
+   *   exactly what turning the sample over does.
+   */
+  function setView(view, options = {}) {
     if (!cube) return;
     // BUG-027: honor the rotation lock — don't snap orientation back to a preset axis when locked.
     if (_rotationLocked) { _notifyCameraChange(); return; }
@@ -3018,10 +3027,15 @@ const VolumeViewer = (() => {
       return;
     }
     // B brings the requested voxel axis onto the viewing axis (world Z): looking
-    // down Z for xy, down the voxel Y for xz, down the voxel X for yz. The pose is
-    // S·B with S a spin about world Z; among those, the one nearest the frame F
-    // maximises ⟨S·B, F⟩ = ⟨S, F·B⁻¹⟩, hence S = nearestZSpin(F·B⁻¹). No frame ⇒
-    // S = identity ⇒ the raw voxel axes.
+    // down Z for xy, down the voxel Y for xz, down the voxel X for yz. The front
+    // pose is S·B with S a spin about world Z; among those, the one nearest the
+    // frame F maximises ⟨S·B, F⟩ = ⟨S, F·B⁻¹⟩, hence S = nearestZSpin(F·B⁻¹). No
+    // frame ⇒ S = identity ⇒ the raw voxel axes.
+    // The back side is Ry(π)·(S·B): the front pose turned over about world Y. The
+    // spin is NOT re-chosen against the frame from behind — a half-turn about an
+    // in-plane axis has no Z component, so every back pose would be equally far
+    // from a front-facing frame and the choice would fall on the tilt, not on the
+    // in-plane orientation the operator defined.
     const B = new THREE.Quaternion();
     if (view === 'xz') B.setFromAxisAngle(new THREE.Vector3(1, 0, 0), Math.PI / 2);
     else if (view === 'yz') B.setFromAxisAngle(new THREE.Vector3(0, 1, 0), -Math.PI / 2);
@@ -3029,6 +3043,9 @@ const VolumeViewer = (() => {
       ? _nearestZSpin(_frameQuaternion.clone().multiply(B.clone().invert()))
       : new THREE.Quaternion();
     cube.quaternion.copy(S).multiply(B);
+    if (options.side === 'back') {
+      cube.quaternion.premultiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.PI));
+    }
     _notifyCameraChange();
   }
 

@@ -77,6 +77,36 @@ class DatasetMetaIdentity(unittest.TestCase):
         self.assertTrue(dev_server._save_dataset("3d/demo", {"type": "volume"}))
         self.assertEqual(self._stored()["type"], "3d")
 
+    # ── Files already damaged are repaired on disk at boot, nobody re-saves them ──
+    def _boot_env(self):
+        # The boot pass also looks at uploads/, stats and config: point them at the
+        # sandbox so a clean, non-legacy tree is what it sees.
+        saved = {k: getattr(dev_server, k) for k in ("UPLOADS_DIR", "STATS_FILE", "CONFIG_DIR", "INSTANCE_FILE")}
+        dev_server.UPLOADS_DIR = self.tmp / "uploads"
+        dev_server.STATS_FILE = self.tmp / "api" / "stats.json"
+        dev_server.CONFIG_DIR = self.tmp / "config"
+        dev_server.INSTANCE_FILE = dev_server.CONFIG_DIR / "instance.json"
+        self.addCleanup(lambda: [setattr(dev_server, k, v) for k, v in saved.items()])
+
+    def test_boot_repairs_a_file_that_lost_its_type(self):
+        self._boot_env()
+        damaged = {k: v for k, v in self.pipeline.items() if k not in ("type", "id")}
+        self._write(damaged)
+        log = dev_server._migrate_dataset_types()
+        self.assertEqual(log, ["metadata 3d/demo"], "the repair is reported, nothing else is touched")
+        m = self._stored()
+        self.assertEqual(m["type"], "3d")
+        self.assertEqual(m["id"], "3d/demo")
+        self.assertEqual(m["name"], "Demo", "the rest of the file is untouched")
+        self.assertEqual(dev_server._migrate_dataset_types(), [], "idempotent: a second boot has nothing to do")
+
+    def test_boot_leaves_a_sound_file_alone(self):
+        self._boot_env()
+        self._write(self.pipeline)
+        before = (self.ds_dir / "metadata.json").read_bytes()
+        self.assertEqual(dev_server._migrate_dataset_types(), [])
+        self.assertEqual((self.ds_dir / "metadata.json").read_bytes(), before, "not rewritten, not even reformatted")
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=1)

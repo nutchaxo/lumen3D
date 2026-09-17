@@ -1,7 +1,7 @@
 {
   "id": "zstack-browser",
   "name": "Z-Stack Browser",
-  "version": "1.1.2",
+  "version": "1.1.3",
   "platformCompat": ">=1.52.0",
   "contexts": [
     "page",

@@ -132,7 +132,53 @@ for (const view of ['xy', 'xz', 'yz']) assertNearestSpin(view, tilted);
   harness.lock(false);
 }
 
-// ── 6. The 3D view is the home pose when one is registered ───────────────────
+// ── 6. The back side: same voxel axis, looked at from the opposite face ──────
+// The z-stack browser asks for it: seen from +Z the specimens were mirrored with
+// respect to the acquisition. Screen-up must survive (a half-turn about the vertical,
+// not about the horizontal), and with a frame the nearest-spin rule still applies.
+{
+  setFrameQuaternion(null);
+  cube.quaternion.set(0.3, 0.4, 0.5, 0.7).normalize();
+  setView('xy', { side: 'back' });
+  same(cube.quaternion, Ry(Math.PI), 'xy from the back without a frame is a half-turn about Y');
+  const z = new THREE.Vector3(0, 0, 1).applyQuaternion(cube.quaternion);
+  const y = new THREE.Vector3(0, 1, 0).applyQuaternion(cube.quaternion);
+  const x = new THREE.Vector3(1, 0, 0).applyQuaternion(cube.quaternion);
+  assert.ok(Math.abs(z.z + 1) < 1e-9, 'the −Z face looks at the camera');
+  assert.ok(Math.abs(y.y - 1) < 1e-9, 'screen-up is kept');
+  assert.ok(Math.abs(x.x + 1) < 1e-9, 'left and right are mirrored, as when turning the sample over');
+
+  // With a frame: the back pose is the front pose turned over about the vertical —
+  // same in-plane spin, seen from behind. (Re-choosing the spin against the frame
+  // from behind would be meaningless: a half-turn about an in-plane axis has no Z
+  // component, so every back pose is equally far from a front-facing frame.)
+  for (const view of ['xy', 'xz', 'yz']) {
+    setFrameQuaternion(tilted);
+    setView(view);
+    const front = cube.quaternion.clone();
+    setView(view, { side: 'back' });
+    const back = cube.quaternion.clone();
+    same(back, Ry(Math.PI).multiply(front), `${view}: back = front turned over about world Y`);
+    const axis = LOOKS_ALONG[view].clone().applyQuaternion(back);
+    const frontAxis = LOOKS_ALONG[view].clone().applyQuaternion(front);
+    assert.ok(Math.abs(axis.z + frontAxis.z) < 1e-9 && Math.abs(Math.abs(axis.z) - 1) < 1e-9,
+      `${view}: the opposite face looks at the camera`);
+    // Screen-up names the same voxel direction from both sides.
+    const upFront = new THREE.Vector3(0, 1, 0).applyQuaternion(front.clone().invert());
+    const upBack = new THREE.Vector3(0, 1, 0).applyQuaternion(back.clone().invert());
+    assert.ok(upFront.distanceTo(upBack) < 1e-9, `${view}: screen-up is the same voxel direction from both sides`);
+  }
+  // A pure Z calibration seen from behind: anterior still up, mirrored.
+  setFrameQuaternion(Rz(0.7));
+  setView('xy', { side: 'back' });
+  same(cube.quaternion, Ry(Math.PI).multiply(Rz(0.7)), 'back view keeps the in-plane calibration');
+  // An unknown side is the front.
+  setView('xy', { side: 'sideways' });
+  same(cube.quaternion, Rz(0.7), 'an unknown side means the front');
+  setFrameQuaternion(null);
+}
+
+// ── 7. The 3D view is the home pose when one is registered ───────────────────
 {
   const home = Rz(0.3).multiply(Rx(-0.5));
   harness.home(home);

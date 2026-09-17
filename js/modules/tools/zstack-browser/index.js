@@ -191,7 +191,10 @@ PluginRegistry.implement('zstack-browser', {
       lo = this._cropLo;
       hi = this._cropHi;
     } else {
-      if (!this._viewLocked) { v.setView('xy'); v.setRotationLocked(true); this._viewLocked = true; }
+      // The stack is looked at from its −Z side: seen from +Z (the historical view)
+      // the specimens appeared mirrored with respect to the acquisition. The spin
+      // in the plane still follows the calibrated frame (VolumeViewer.setView).
+      if (!this._viewLocked) { v.setView('xy', { side: 'back' }); v.setRotationLocked(true); this._viewLocked = true; }
       lo = this._lo;
       hi = this._lo + this._thickness - 1;
       st.zstackCurrentSlice = lo + Math.floor((this._thickness - 1) / 2);

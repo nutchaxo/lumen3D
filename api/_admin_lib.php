@@ -703,19 +703,27 @@ function lumen_migrate_dataset_types(): void {
     static $ran = false;
     if ($ran) return;
     $ran = true;
-    if (!lumen_migration_pending()) return;
-
-    $staging = uploads_root() . '/staging';
-    foreach (LUMEN_LEGACY_TYPE_DIRS as $old => $canon) {
-        lumen_migration_move_dir(data_web() . "/$old", data_web() . "/$canon");
-        lumen_migration_move_dir("$staging/$old", "$staging/$canon");
+    // The metadata pass is NOT gated on the legacy guard: every published
+    // metadata.json must agree with its folder on `type` / `id`. A file that lost
+    // them — this host wrote the editor's payload verbatim until v1.54.1, and the
+    // editor never posts `type` — is put right on the first request that gets here,
+    // without anyone re-saving it. One small read per dataset, as the catalog does.
+    $pending = lumen_migration_pending();
+    if ($pending) {
+        $staging = uploads_root() . '/staging';
+        foreach (LUMEN_LEGACY_TYPE_DIRS as $old => $canon) {
+            lumen_migration_move_dir(data_web() . "/$old", data_web() . "/$canon");
+            lumen_migration_move_dir("$staging/$old", "$staging/$canon");
+        }
+        lumen_migration_retire_tracking();
+        lumen_migration_journals();
     }
-    lumen_migration_retire_tracking();
-    lumen_migration_journals();
     lumen_migration_metadata();
-    lumen_migration_stats();
-    lumen_migration_instance();
-    lumen_migration_pages();
+    if ($pending) {
+        lumen_migration_stats();
+        lumen_migration_instance();
+        lumen_migration_pages();
+    }
 }
 
 // ── Usage stats ─────────────────────────────────────────────────────────────

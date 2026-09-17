@@ -315,7 +315,7 @@ const ViewerApp = (() => {
         setGridMode: (m) => VolumeViewer.setGridMode(m),
         setAxesVisible: (v) => VolumeViewer.setAxesVisible(v),
         setVolumeVisible: (v) => VolumeViewer.setVolumeVisible(v),
-        setView: (v) => VolumeViewer.setView(v),
+        setView: (v, o) => VolumeViewer.setView(v, o),
         setRotationLocked: (v) => VolumeViewer.setRotationLocked(v),
         resize: () => VolumeViewer.resize(),
         setCutPlaneVisible: (v) => VolumeViewer.setCutPlaneVisible(v),

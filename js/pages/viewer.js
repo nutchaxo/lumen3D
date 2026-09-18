@@ -1369,52 +1369,11 @@ const ViewerApp = (() => {
     };
   }
 
-  // A coarser stage of the Studio's upgrade is worth its download only when it costs
-  // no more than this share of the next finer stage: a 2048² picture worth a fifth of
-  // the native bytes comes first (and can be kept), and the whole ladder never costs
-  // more than about a fifth more than the native pass alone.
-  const STUDIO_STAGE_BYTES_RATIO = 0.3;
-  // Once the rate measured on the stages already done says the native picture is
-  // closer than this, the remaining intermediate stages only delay it: skip them.
-  const STUDIO_STAGE_MIN_NATIVE_MS = 15000;
-
-  /**
-   * The stages of the Studio's upgrade for `spec`: every brick level finer than the
-   * one the preview was rendered from, coarse to fine, ending at LOD0 (always there:
-   * the viewer's atlas may hold only part of a level). Each stage carries the bricks
-   * the plane crosses at that level and the compressed bytes they cost.
-   */
-  function _studioStages(spec, previewLod, levels) {
-    if (typeof BrickLoader === 'undefined' || !BrickLoader.getDimensions) return [];
-    const count = Array.isArray(levels) ? levels.length : 1;
-    const dims0 = BrickLoader.getDimensions(0);
-    const channels = Math.max(1, Math.min(4, Number(dims0?.channels) || Number(datasetMeta?.dimensions?.c) || 1));
-    const rgbaTransport = BrickLoader.getTransportEncoding?.() === 'raw-rgba-gzip';
-    const wantedChannels = rgbaTransport ? [-1] : _nativeSliceChannels(channels);
-    const stages = [];
-    for (let lod = 0; lod < count && (lod === 0 || lod < previewLod); lod++) {
-      const dims = BrickLoader.getDimensions(lod);
-      if (!dims) continue;
-      const bricks = _nativeSliceBricksForSpec(spec, dims, lod);
-      let bytes = 0;
-      for (const b of bricks) {
-        for (const channel of wantedChannels) bytes += BrickLoader.taskBytes?.({ lod, channel, bx: b.bx, by: b.by, bz: b.bz }) || 0;
-      }
-      stages.push({ lod, dims, bricks: bricks.length, bytes });
-    }
-    const kept = [];
-    for (const stage of stages) {
-      if (stage.lod === 0) { kept.push(stage); continue; }
-      const finer = kept[kept.length - 1];
-      if (stage.bricks > 0 && stage.bytes > 0 && stage.bytes <= STUDIO_STAGE_BYTES_RATIO * finer.bytes) kept.push(stage);
-    }
-    return kept.reverse();
-  }
-
-  function _stageLabel(stage, progress = {}) {
-    const dims = stage.dims || {};
+  function _nativeLabel(dims, progress = {}) {
     const native = _t('viewer.native', 'Native');
-    const res = stage.lod === 0 ? `${native} ${dims.x} × ${dims.y}` : `${dims.x} × ${dims.y}`;
+    const res = `${native} ${dims.x} × ${dims.y}`;
+    // Before the pass has counted its chunks there is nothing to count down.
+    if (!(progress.totalChunks > 0)) return res;
     const mb = (bytes) => {
       const v = Math.max(0, Number(bytes) || 0) / 1e6;
       return v < 10 ? v.toFixed(1) : String(Math.round(v));
@@ -1429,64 +1388,50 @@ const ViewerApp = (() => {
     const text = _t('studio.loadingStage', '{res}: {chunks}/{total} chunks · {done}/{size} MB · {eta}', {
       res,
       chunks: progress.chunks || 0,
-      total: progress.totalChunks || stage.bricks || 0,
+      total: progress.totalChunks || 0,
       done: mb(progress.bytesDone || 0),
-      size: mb(progress.bytesTotal || stage.bytes || 0),
+      size: mb(progress.bytesTotal || 0),
       eta
     });
     return text.replace(/\s*·\s*$/, '');
   }
 
   /**
-   * Upgrades the Studio's picture in stages (see _studioStages): each stage is a
-   * complete picture of the same frame, the previous stage standing in wherever a
-   * chunk is still on its way, so *Stop here* keeps the best complete picture so far.
+   * Upgrades the Studio's picture to native in one pass: the preview stands in
+   * wherever a chunk is still on its way, so *Stop here* keeps the picture as it is.
    */
   async function _upgradeStudioSliceToNative(preview) {
     if (typeof BrickLoader === 'undefined' || !BrickLoader.isReady?.()) return;
-    const onCancel = () => _cancelNativeSlice();
-    const manifest = BrickLoader.getManifest?.();
-    const levels = Array.isArray(manifest?.levels) ? manifest.levels : [];
-    const previewLod = levels.length ? _lodForQuality(_qualityMode, levels.length, levels) : 0;
-    const stages = _studioStages(preview.planeSpec, previewLod, levels);
-    if (!stages.length) return;
     const dims0 = BrickLoader.getDimensions(0);
+    if (!dims0) return;
+    const onCancel = () => _cancelNativeSlice();
     const renderRes = Number(preview.renderRes) > 0 ? preview.renderRes : _nativeStudioRenderSize(preview.planeSpec, dims0);
-    StudioEditor.setLoadProgress?.({ percent: 0, label: _stageLabel(stages[0]), onCancel });
-    let fallbackCanvas = preview.canvas;
+    StudioEditor.setLoadProgress?.({ percent: 0, label: _nativeLabel(dims0), onCancel });
     let missing = 0;
-    let bytesPerMs = 0;
-    const finalStage = stages[stages.length - 1];
     try {
-      for (let i = 0; i < stages.length; i++) {
-        const stage = stages[i];
-        if (stage.lod !== 0 && i > 0 && bytesPerMs > 0 && finalStage.bytes / bytesPerMs < STUDIO_STAGE_MIN_NATIVE_MS) continue;
-        const sr = await _renderNativeSliceForStudio({
-          spec: preview.planeSpec,
-          cropRect: preview.cropRect,
-          renderRes,
-          lod: stage.lod,
-          fallback: { canvas: fallbackCanvas },
-          onProgress: (progress) => {
-            StudioEditor.setLoadProgress?.({ percent: progress.percent, label: _stageLabel(stage, progress), onCancel });
-          },
-          // Chunks land one after the other, as they do in the 3D view: every partial
-          // picture is the same frame with more of it at this stage's resolution.
-          onPartial: (partial) => {
-            if (StudioEditor.isOpen?.()) StudioEditor.setSliceResult(partial, { imageOnly: true });
-          }
-        });
-        if (!sr) continue;
-        if (sr.bytesTotal > 0 && (sr.netMs > 0 || sr.elapsedMs > 0)) bytesPerMs = sr.bytesTotal / (sr.netMs || sr.elapsedMs);
-        if (!StudioEditor.isOpen?.()) break;
-        StudioEditor.setSliceResult(sr, { imageOnly: stage.lod !== 0 });
-        fallbackCanvas = sr.canvas;
+      const sr = await _renderNativeSliceForStudio({
+        spec: preview.planeSpec,
+        cropRect: preview.cropRect,
+        renderRes,
+        lod: 0,
+        fallback: { canvas: preview.canvas },
+        onProgress: (progress) => {
+          StudioEditor.setLoadProgress?.({ percent: progress.percent, label: _nativeLabel(dims0, progress), onCancel });
+        },
+        // Chunks land one after the other, as they do in the 3D view: every partial
+        // picture is the same frame with more of it native and the preview elsewhere.
+        onPartial: (partial) => {
+          if (StudioEditor.isOpen?.()) StudioEditor.setSliceResult(partial, { imageOnly: true });
+        }
+      });
+      if (sr && StudioEditor.isOpen?.()) {
+        StudioEditor.setSliceResult(sr);
         missing = Number(sr.missingChunks) || 0;
       }
     } catch (err) {
       if (err?.name !== 'AbortError') {
-        console.warn('[ViewerApp] Native Studio slice failed; keeping the best picture so far:', err);
-        _setSliceStatus('Native HD unavailable; keeping the best picture so far.');
+        console.warn('[ViewerApp] Native Studio slice failed; keeping the picture so far:', err);
+        _setSliceStatus('Native HD unavailable; keeping the picture so far.');
       }
     } finally {
       StudioEditor.setLoadProgress?.(null);

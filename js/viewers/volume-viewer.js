@@ -3044,30 +3044,23 @@ const VolumeViewer = (() => {
   /**
    * Which way up the raw file shows the sample. `upsideDown`: its +Z face is the
    * underside (a confocal stack, imaged from the objective under an inverted
-   * microscope), so the sample is shown turned over — a half-turn about the
-   * screen's vertical — and its top, the face seen from above the microscope, is
-   * the −Z face, which setView's side 'top' resolves to. Before anything has posed
-   * the volume the raw pose is applied at once. With `turnOver` (the admin
-   * preview's switch) a change turns the volume over on the spot, home pose
-   * included, so "reset view" agrees with what is shown. The calibration frame is
-   * NOT touched: it maps file axes to anatomy, a fact of the file that does not
-   * depend on which side is looked at — a gizmo drawn from it turns with the
-   * volume by itself.
+   * microscope), so its top — the face seen from above the microscope — is the −Z
+   * face, which setView's side 'top' resolves to, and the raw pose (an
+   * uncalibrated dataset, "reset view" without a default view) is turned over by a
+   * half-turn about the screen's vertical. Before anything has posed the volume the
+   * raw pose is applied at once. With `preview` (the admin editor's switch) the
+   * volume is laid flat with that top face toward the camera — exactly what the
+   * z-stack browser will show — so the operator picks the side by looking at the
+   * face itself. Neither the calibration frame (file axes → anatomy) nor a default
+   * view (a pose of the anatomy) depends on which side is up: both are left alone.
    * @param {boolean} flag
-   * @param {{turnOver?: boolean}} [options]
+   * @param {{preview?: boolean}} [options]
    */
   function setSampleUpsideDown(flag, options = {}) {
-    const next = Boolean(flag);
-    const changed = next !== _upsideDown;
-    _upsideDown = next;
+    _upsideDown = Boolean(flag);
     if (!cube) return;
-    if (options.turnOver) {
-      if (!changed) return;
-      const half = _halfTurn();
-      _poseAnim = null;
-      cube.quaternion.premultiply(half);
-      if (_homeQuaternion) _homeQuaternion.premultiply(half);
-      _notifyCameraChange();
+    if (options.preview) {
+      setView('xy', { side: 'top', spin: 'tilt', animate: 1000, force: true });
     } else if (!_homeQuaternion && !_hasLoadedVolume) {
       cube.quaternion.copy(_rawPoseQuaternion());
       _scheduleFrame();
@@ -3086,11 +3079,50 @@ const VolumeViewer = (() => {
   }
 
   /**
-   * Take the volume to `target`: at once, or along the shortest arc over
-   * `animateMs` — stepped by _animate, eased at both ends, one camera notification
-   * at the end so the siblings of a Compare panel see the pose it settles on.
+   * The rotations about the screen axes that bring the world direction `d` (unit)
+   * onto the viewing axis +Z. Two of them, applied in world space one after the
+   * other: first about the screen axis `d` leans on most — its lean measured by
+   * the perpendicular component, so |dy| > |dx| means the horizontal axis X, and
+   * the vertical Y otherwise, ties included (turning over a sample that points
+   * straight away is a half-turn about the vertical) — then a correction about
+   * the other axis, which is never more than a quarter turn.
+   *   about X first: Rx(α) zeroes y  (α = atan2(dy, dz)),  then Ry(β) zeroes x
+   *                  (β = atan2(−dx, √(dy²+dz²)));
+   *   about Y first: Ry(β) zeroes x  (β = atan2(−dx, dz)),  then Rx(α) zeroes y
+   *                  (α = atan2(dy, √(dx²+dz²))).
+   * Rx(a): (x, y, z) → (x, y·cos a − z·sin a, y·sin a + z·cos a);
+   * Ry(b): (x, y, z) → (x·cos b + z·sin b, y, −x·sin b + z·cos b).
+   * @returns {{first: {axis: THREE.Vector3, angle: number}, second: {axis: THREE.Vector3, angle: number}}}
    */
-  function _poseTo(target, animateMs) {
+  function _tiltToViewAxis(d) {
+    const X = new THREE.Vector3(1, 0, 0);
+    const Y = new THREE.Vector3(0, 1, 0);
+    if (Math.abs(d.y) > Math.abs(d.x)) {
+      const alpha = Math.atan2(d.y, d.z);
+      const beta = Math.atan2(-d.x, Math.hypot(d.y, d.z));
+      return { first: { axis: X, angle: alpha }, second: { axis: Y, angle: beta } };
+    }
+    const beta = Math.atan2(-d.x, d.z);
+    const alpha = Math.atan2(d.y, Math.hypot(d.x, d.z));
+    return { first: { axis: Y, angle: beta }, second: { axis: X, angle: alpha } };
+  }
+
+  /** The pose `path` (two screen-axis rotations, both scaled by `k`) reaches from `from`. */
+  function _tiltPose(from, path, k) {
+    const r1 = new THREE.Quaternion().setFromAxisAngle(path.first.axis, k * path.first.angle);
+    const r2 = new THREE.Quaternion().setFromAxisAngle(path.second.axis, k * path.second.angle);
+    return r2.multiply(r1).multiply(from);
+  }
+
+  /**
+   * Take the volume to `target`: at once, or over `animateMs` — stepped by
+   * _animate, eased at both ends, one camera notification at the end so the
+   * siblings of a Compare panel see the pose it settles on. Along the shortest
+   * arc (a slerp), or, with `path` (the two screen-axis rotations of
+   * _tiltToViewAxis), with both rotations growing together, so the motion reads
+   * as a turn about one screen axis with a slight correction about the other.
+   */
+  function _poseTo(target, animateMs, path = null) {
     const ms = Number(animateMs) || 0;
     if (ms <= 0 || cube.quaternion.angleTo(target) < 1e-4) {
       _poseAnim = null;
@@ -3099,7 +3131,7 @@ const VolumeViewer = (() => {
       return;
     }
     const now = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
-    _poseAnim = { from: cube.quaternion.clone(), to: target.clone(), start: now, duration: ms };
+    _poseAnim = { from: cube.quaternion.clone(), to: target.clone(), start: now, duration: ms, path };
     _scheduleFrame();
   }
 
@@ -3107,9 +3139,14 @@ const VolumeViewer = (() => {
   function _stepPoseAnimation(now) {
     const a = _poseAnim;
     if (!a) return false;
-    const t = Math.min(1, Math.max(0, (now - a.start) / a.duration));
+    // Half a millisecond of slack: timestamps are floating-point sums, and a flight
+    // asked to end at start + duration must end there, not one frame later.
+    const elapsed = now - a.start;
+    const done = elapsed >= a.duration - 0.5;
+    const t = done ? 1 : Math.max(0, elapsed / a.duration);
     const eased = t * t * (3 - 2 * t);
-    cube.quaternion.slerpQuaternions(a.from, a.to, eased);
+    if (a.path) cube.quaternion.copy(_tiltPose(a.from, a.path, eased));
+    else cube.quaternion.slerpQuaternions(a.from, a.to, eased);
     if (t >= 1) {
       cube.quaternion.copy(a.to);
       _poseAnim = null;
@@ -3128,7 +3165,12 @@ const VolumeViewer = (() => {
    *           front view, exactly what turning the sample over does; 'top' /
    *           'bottom': the sample's upper / lower face (see setSampleUpsideDown).
    *   spin    'frame' (default): the in-plane spin nearest the calibrated frame;
-   *           'nearest': nearest the pose the volume has NOW — the smallest move;
+   *           'nearest': nearest the pose the volume has NOW — the smallest move,
+   *           along the shortest arc, whose axis is in general oblique;
+   *           'tilt': the spin the volume lands on when its looked-along axis is
+   *           brought onto the viewing axis by a rotation about the screen axis
+   *           it leans on most (vertical on a tie) plus a correction about the
+   *           other — no in-plane turn, the motion reads as a turn about one axis;
    *           a number: degrees of in-plane spin counted from the frame spin.
    *   animate ms: travel there over that time instead of snapping (0: snap).
    *   force   apply even while rotation is locked (the browser's own re-pose).
@@ -3169,7 +3211,18 @@ const VolumeViewer = (() => {
       Q0.premultiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.PI));
     }
     let spinRad = 0;
-    if (options.spin === 'nearest') {
+    let path = null;
+    if (options.spin === 'tilt') {
+      // The file direction Q0 looks along, where the volume holds it now; the two
+      // screen-axis rotations that bring it onto +Z land in the family by
+      // construction — read the spin off the pose they reach.
+      const along = new THREE.Vector3(0, 0, 1).applyQuaternion(Q0.clone().invert());
+      const d = along.applyQuaternion(cube.quaternion).normalize();
+      path = _tiltToViewAxis(d);
+      const landed = _tiltPose(cube.quaternion, path, 1);
+      const spin = _nearestZSpin(landed.multiply(Q0.clone().invert()));
+      spinRad = 2 * Math.atan2(spin.z, spin.w);
+    } else if (options.spin === 'nearest') {
       // The Rz(θ)·Q0 nearest the current pose Q maximises ⟨Rz(θ)·Q0, Q⟩ = ⟨Rz(θ), Q·Q0⁻¹⟩:
       // the smallest rotation that lays the slices flat on the screen.
       const nearest = _nearestZSpin(cube.quaternion.clone().multiply(Q0.clone().invert()));
@@ -3178,7 +3231,7 @@ const VolumeViewer = (() => {
       spinRad = THREE.MathUtils.degToRad(Number(options.spin));
     }
     const target = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), spinRad).multiply(Q0);
-    _poseTo(target, options.animate);
+    _poseTo(target, options.animate, path);
     return { spinDeg: ((THREE.MathUtils.radToDeg(spinRad) % 360) + 360) % 360 };
   }
 

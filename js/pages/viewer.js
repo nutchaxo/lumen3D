@@ -3935,10 +3935,10 @@ const ViewerApp = (() => {
             .catch(() => _postToHost({ type: 'QUALITY_STATUS', quality, phase: 'error' }));
         }
       } else if (data.type === 'SET_SAMPLE_UPSIDE_DOWN') {
-        // The admin editor's sample-side switch, on its preview: turn the volume
-        // over on the spot so the operator sees which way up is right. The
-        // orientation plugin turns its calibration over on the same message.
-        VolumeViewer.setSampleUpsideDown?.(data.value === true, { turnOver: true });
+        // The admin editor's sample-side switch, on its preview: lay the volume
+        // flat with the face the flag names as the top toward the camera — what the
+        // z-stack browser will show — so the operator picks the side by looking.
+        VolumeViewer.setSampleUpsideDown?.(data.value === true, { preview: true });
       } else if (data.type === 'TOGGLE_VISUAL') {
         if (data.visual === 'grid') {
           VolumeViewer.setGridMode?.(data.state ? 1 : 0);

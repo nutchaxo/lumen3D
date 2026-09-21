@@ -453,9 +453,9 @@
               <div class="config-section">
                 <div class="config-section-title" data-i18n="admin.secOrientation">Orientation 3D</div>
 
-                <!-- Which way up the raw file shows the sample. The preview turns over on
-                     the spot (SET_SAMPLE_UPSIDE_DOWN → VolumeViewer.setSampleUpsideDown),
-                     so the operator picks the side by looking, before calibrating. -->
+                <!-- Which way up the raw file shows the sample. The preview lays the volume
+                     flat with the chosen top face toward the camera (SET_SAMPLE_UPSIDE_DOWN →
+                     VolumeViewer.setSampleUpsideDown), so the operator picks by looking. -->
                 <div class="config-field" style="margin-top:12px;">
                   <label class="config-label" data-i18n="admin.sampleSide">Sens de l'échantillon</label>
                   <div class="ori-side" id="f-sample-side">
@@ -468,7 +468,7 @@
                       <span data-i18n="admin.sampleSideDown">À l'envers — le fichier le montre vu de dessous (retourné à l'affichage)</span>
                     </label>
                   </div>
-                  <span class="vis-hint" data-i18n="admin.sampleSideHint">L'aperçu se retourne aussitôt : choisissez le sens qui montre l'échantillon comme sous le microscope. Un stack confocal exporté d'Imaris est en général à l'envers.</span>
+                  <span class="vis-hint" data-i18n="admin.sampleSideHint">L'aperçu pose l'échantillon à plat, la face choisie comme dessus vers vous — ce que montrera le Z-stack browser : choisissez le sens qui ressemble à l'échantillon vu du dessus du microscope. Un stack confocal exporté d'Imaris est en général à l'envers.</span>
                 </div>
 
                 <div class="config-field" style="margin-top:12px;">

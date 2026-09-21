@@ -213,13 +213,13 @@
       "description": "Axes d'orientation (rouge 1/2, vert 1/2, bleu 1/2) : gizmo calibrable, axes masquables/renommables, et vue par défaut appliquée à l'ouverture du dataset.",
       "creator": "IRIBHM",
       "icon": "compass",
-      "platformCompat": ">=1.55.7",
+      "platformCompat": ">=1.55.8",
       "sandboxCapabilities": null,
-      "latestVersion": "1.3.1",
-      "assetUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/orientation-axes/plugin-orientation-axes-1.3.1.zip",
+      "latestVersion": "1.3.2",
+      "assetUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/orientation-axes/plugin-orientation-axes-1.3.2.zip",
       "sumsUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/orientation-axes/SHA256SUMS",
       "sigUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/orientation-axes/SHA256SUMS.sig",
-      "sha256": "570da362d9c12c08000066d7fc38231d1978360eb113b9f035b3e93bccbdf588",
+      "sha256": "23714e9eeeb5fb117e1e21858bdee4c9a6022d20c0fba5385a67198a2472f659",
       "recommended": true
     },
     {
@@ -457,13 +457,13 @@
       "description": "Browse the Z-stack: opening lays it flat on the screen as seen from above the microscope (animated, smallest turn), a 3D notch shows every kept slice, the cursor shows one slice or a slab of adjustable thickness, two trim handles mask the slices above and below, and a slider turns the slices on screen. Synchronized across compare panels.",
       "creator": "IRIBHM",
       "icon": "layers-3",
-      "platformCompat": ">=1.55.7",
+      "platformCompat": ">=1.55.9",
       "sandboxCapabilities": null,
-      "latestVersion": "1.2.0",
-      "assetUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/zstack-browser/plugin-zstack-browser-1.2.0.zip",
+      "latestVersion": "1.2.1",
+      "assetUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/zstack-browser/plugin-zstack-browser-1.2.1.zip",
       "sumsUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/zstack-browser/SHA256SUMS",
       "sigUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/zstack-browser/SHA256SUMS.sig",
-      "sha256": "d1e83c7ffb2eb6bbeab5e7fb30c5a6cd8da3afa7fc7ec0325449ce40d82955a9",
+      "sha256": "63ec9e132de58570a7d30f54aad1b18e9de35563199df98162c7c5cb9b7dd4f3",
       "recommended": true
     }
   ]

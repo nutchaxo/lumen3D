@@ -2,10 +2,9 @@
 // `metadata.upsideDown` says the raw file shows the sample from below: the core shows
 // it turned over about its X axis, the z-stack browser looks at its top face, and on
 // the admin preview the orientation plugin's calibration turns over with the volume.
-//   • orientation-axes: SET_SAMPLE_UPSIDE_DOWN leaves Q_base alone (file → anatomy),
-//     turns a default view to the opposite side (a preset to its opposite) and replies
-//     with what the panel must store; an uncalibrated dataset starts on the raw pose the
-//     core shows; the turned default view still lands the promised anatomy (behavioural);
+//   • orientation-axes: SET_SAMPLE_UPSIDE_DOWN leaves Q_base and the default view alone
+//     (file → anatomy, a pose of the anatomy: neither depends on the side); an
+//     uncalibrated dataset's arms start on the raw pose the core shows (behavioural);
 //   • zstack-browser: opening poses the stack top-down with the nearest spin (animated),
 //     the track re-poses and locks, the slider, the sync payload, a restored workspace
 //     keeps its pose (behavioural);
@@ -47,63 +46,33 @@ const Rz = (t) => new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0
     return reply;
   };
 
-  // Calibrated, right side up, no default view: the switch leaves Q_base alone.
+  // Calibrated, with a default view: the switch changes neither.
   const Q = Rz(0.6).multiply(Rx(0.2));
-  plugin._ctx = { dataset: { getMeta: () => ({ orientation: Q.toArray(), upsideDown: false }) } };
+  plugin._ctx = { dataset: { getMeta: () => ({ orientation: Q.toArray(), upsideDown: false, orientationAxes: { defaultView: { preset: 'left' } } }) } };
   plugin._readConfig();
   assert.equal(plugin._calibrated, true);
   same(plugin._baseQuaternion, Q, 'Q_base is the saved calibration');
+  const dv = plugin._defaultView.clone();
   let r = send({ type: 'SET_SAMPLE_UPSIDE_DOWN', value: true });
   assert.equal(r.type, 'SAMPLE_SIDE_RESULT');
   assert.equal(r.upsideDown, true);
-  assert.equal(r.defaultView, null, 'nothing to store: no default view');
+  assert.equal(r.defaultView, undefined, 'nothing to store');
   same(plugin._baseQuaternion, Q, 'the calibration maps file axes to anatomy: untouched by the side');
+  same(plugin._defaultView, dv, 'the default view is a pose of the anatomy: untouched by the side');
   r = send({ type: 'SET_SAMPLE_UPSIDE_DOWN', value: false });
   same(plugin._baseQuaternion, Q);
+  same(plugin._defaultView, dv);
 
-  // A preset default view turns to the opposite side: its opposite preset, exactly.
-  const pairs = { ventral: 'dorsal', dorsal: 'ventral', left: 'right', right: 'left', anterior: 'posterior', posterior: 'anterior' };
-  for (const [preset, opposite] of Object.entries(pairs)) {
-    plugin._ctx = { dataset: { getMeta: () => ({ orientation: Q.toArray(), upsideDown: false, orientationAxes: { defaultView: { preset } } }) } };
-    plugin._readConfig();
-    const before = plugin._defaultView.clone();
-    r = send({ type: 'SET_SAMPLE_UPSIDE_DOWN', value: true });
-    assert.equal(r.defaultView.preset, opposite, `${preset} looked at from the other side is ${opposite}`);
-    const turned = new THREE.Quaternion().fromArray(r.defaultView.quaternion);
-    same(turned, Ry(Math.PI).multiply(before), `${preset}: a half-turn about the vertical`);
-    plugin._ctx = { dataset: { getMeta: () => ({ orientation: Q.toArray(), upsideDown: false, orientationAxes: { defaultView: { preset: opposite } } }) } };
-    plugin._readConfig();
-    same(turned, plugin._defaultView, `${preset}: which is the ${opposite} preset's own pose`);
-    // The cube pose it yields shows the opposite anatomy to the camera, the same one up.
-    const cubePose = turned.clone().multiply(Q);
-    const anat = cubePose.clone().multiply(Q.clone().invert());
-    const face = new THREE.Vector3(0, 0, 1).applyQuaternion(anat.clone().invert());
-    const up = new THREE.Vector3(0, 1, 0).applyQuaternion(anat.clone().invert());
-    const dirs = { ventral: [0, 0, 1], dorsal: [0, 0, -1], left: [-1, 0, 0], right: [1, 0, 0], anterior: [0, 1, 0], posterior: [0, -1, 0] };
-    assert.ok(face.distanceTo(new THREE.Vector3(...dirs[opposite])) < 1e-9, `${preset}: the ${opposite} side faces the camera`);
-    const upName = ['anterior', 'posterior'].includes(preset) ? 'dorsal' : 'anterior';
-    assert.ok(up.distanceTo(new THREE.Vector3(...dirs[upName])) < 1e-9, `${preset}: ${upName} stays up`);
-  }
-  // A custom default view turns too and stays custom; the same side again changes nothing.
-  plugin._ctx = { dataset: { getMeta: () => ({ orientation: Q.toArray(), upsideDown: false, orientationAxes: { defaultView: { preset: 'custom', quaternion: Rz(0.4).toArray() } } }) } };
-  plugin._readConfig();
-  r = send({ type: 'SET_SAMPLE_UPSIDE_DOWN', value: true });
-  assert.equal(r.defaultView.preset, 'custom');
-  same(new THREE.Quaternion().fromArray(r.defaultView.quaternion), Ry(Math.PI).multiply(Rz(0.4)));
-  r = send({ type: 'SET_SAMPLE_UPSIDE_DOWN', value: true });
-  same(new THREE.Quaternion().fromArray(r.defaultView.quaternion), Ry(Math.PI).multiply(Rz(0.4)), 'the same side again changes nothing');
-  r = send({ type: 'SET_SAMPLE_UPSIDE_DOWN', value: false });
-  same(new THREE.Quaternion().fromArray(r.defaultView.quaternion), Rz(0.4), 'and back');
-
-  // Uncalibrated, upside down: Q_base is the raw pose the core shows, nothing to store.
+  // Uncalibrated, upside down: the arms start on the raw pose the core shows.
   rawPose = Ry(Math.PI);
   plugin._ctx = { dataset: { getMeta: () => ({ upsideDown: true }) } };
   plugin._readConfig();
   assert.equal(plugin._calibrated, false);
   same(plugin._baseQuaternion, Ry(Math.PI), 'an uncalibrated upside-down file starts on the turned-over raw pose');
   r = send({ type: 'SET_SAMPLE_UPSIDE_DOWN', value: false });
-  assert.equal(r.defaultView, null, 'no default view to hand back');
   same(plugin._baseQuaternion, new THREE.Quaternion(), 'the raw pose turned back');
+  r = send({ type: 'SET_SAMPLE_UPSIDE_DOWN', value: true });
+  same(plugin._baseQuaternion, Ry(Math.PI), 'and over again');
 }
 
 // ── zstack-browser ───────────────────────────────────────────────────────────
@@ -150,14 +119,14 @@ const Rz = (t) => new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0
   plugin.init(ctx);
 
   plugin.activate();
-  assert.deepEqual(views, [{ view: 'xy', side: 'top', spin: 'nearest', animate: 1500, force: true }],
-    'opening: top face toward the camera, the smallest spin from where the volume was, over 1.5 s');
+  assert.deepEqual(views, [{ view: 'xy', side: 'top', spin: 'tilt', animate: 1500, force: true }],
+    'opening: top face toward the camera, a turn about one screen axis, over 1.5 s');
   assert.equal(plugin._spin, 123, 'the spin landed on is remembered');
   assert.equal($('zstack-spin').value, '123', 'and shown on the slider');
 
   plugin._goToSlice(10);
-  assert.deepEqual(views.at(-1), { view: 'xy', side: 'top', spin: 'nearest', animate: 1200, force: true },
-    'entering the track: nearest spin again, animated, before the lock');
+  assert.deepEqual(views.at(-1), { view: 'xy', side: 'top', spin: 'tilt', animate: 1200, force: true },
+    'entering the track: the same turn, animated, before the lock');
   assert.equal(posts.at(-1).spin, 123, 'the sync payload carries the spin');
 
   plugin._setSpin(30);
@@ -189,15 +158,15 @@ const Rz = (t) => new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0
 
   const v = read('js/pages/viewer.js');
   assert.ok(/VolumeViewer\.setSampleUpsideDown\?\.\(datasetMeta\?\.upsideDown === true\);/.test(v), 'the flag reaches the core at init');
-  assert.ok(/data\.type === 'SET_SAMPLE_UPSIDE_DOWN'[\s\S]*?setSampleUpsideDown\?\.\(data\.value === true, \{ turnOver: true \}\)/.test(v), 'the admin preview turns the volume over');
+  assert.ok(/data\.type === 'SET_SAMPLE_UPSIDE_DOWN'[\s\S]*?setSampleUpsideDown\?\.\(data\.value === true, \{ preview: true \}\)/.test(v), 'the admin preview shows the top face');
+  assert.ok(/if \(options\.preview\) \{\s*setView\('xy', \{ side: 'top', spin: 'tilt', animate: 1000, force: true \}\);/.test(vv), 'the preview lays the volume flat on its top face, as the z-stack browser does');
 
   const tab = read('js/pages/admin/tab-datasets.js');
   assert.ok(/fSampleSide: el\('f-sample-side'\)/.test(tab), 'the editor knows the switch');
   assert.ok(/upsideDown: !!meta\.upsideDown,/.test(tab), 'the flag is part of the dirty fingerprint');
   assert.ok(/meta\.upsideDown = meta\.upsideDown === true;/.test(tab), 'always posted as a boolean (merge backends)');
   assert.ok(/type: 'SET_SAMPLE_UPSIDE_DOWN', value: !!_draft\.upsideDown/.test(tab), 'the switch reaches the preview');
-  assert.ok(/e\.data\?\.type !== 'SAMPLE_SIDE_RESULT'/.test(tab) && /writeOrientationCfg\(\{ defaultView: \{ preset: dv\.preset \|\| 'custom', quaternion: q \} \}\)/.test(tab), 'the turned default view is stored, the calibration is not touched');
-  assert.ok(!/_draft\.orientation = Array\.isArray\(_draft\.orientation\)/.test(tab), 'no calibration rewrite on the switch');
+  assert.ok(!/SAMPLE_SIDE_RESULT/.test(tab), 'the editor stores nothing on the switch: neither calibration nor default view depends on the side');
   const html = read('admpan.html');
   assert.ok(/id="f-sample-side"/.test(html) && /name="f-sample-side" value="1"/.test(html), 'two radios');
   assert.ok(/data-i18n="admin\.sampleSideUp"/.test(html) && /data-i18n="admin\.sampleSideDown"/.test(html));
@@ -209,11 +178,11 @@ const Rz = (t) => new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0
   }
   assert.ok(/id="zstack-spin"[^>]*min="0" max="360"/.test(read('viewer.html')), 'the spin slider spans a full turn');
   const zs = JSON.parse(read('js/modules/tools/zstack-browser/plugin.json'));
-  assert.equal(zs.version, '1.2.0');
-  assert.equal(zs.platformCompat, '>=1.55.7', 'the browser needs the core that resolves side top and animates');
+  assert.equal(zs.version, '1.2.1');
+  assert.equal(zs.platformCompat, '>=1.55.9', 'the browser needs the core that knows spin tilt');
   const ori = JSON.parse(read('js/modules/tools/orientation-axes/plugin.json'));
-  assert.equal(ori.version, '1.3.1');
-  assert.equal(ori.platformCompat, '>=1.55.7');
+  assert.equal(ori.version, '1.3.2');
+  assert.equal(ori.platformCompat, '>=1.55.8', 'getRawPoseQuaternion(flag) exists since 1.55.8');
 }
 
 console.log('sample side (upside-down flag, turned-over calibration, z-stack opening pose + spin slider): OK');

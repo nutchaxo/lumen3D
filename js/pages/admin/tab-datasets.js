@@ -686,34 +686,18 @@ function renderSampleSide() {
 }
 
 /**
- * The sample-side switch, live on the preview: the core turns the volume over on
- * the spot (SET_SAMPLE_UPSIDE_DOWN, a half-turn about the screen's vertical). The
- * calibration is not touched — it maps file axes to anatomy — but a default view is
- * a pose of the anatomy on screen: the orientation plugin turns it to the opposite
- * side (a preset becomes its opposite) and hands it back, so what is saved is the
- * view the operator now sees.
+ * The sample-side switch, live on the preview: the core lays the volume flat with
+ * the face the switch names as the top toward the camera — what the z-stack
+ * browser will show — so the operator picks the side by looking at that face.
+ * Nothing comes back to store: the calibration maps file axes to anatomy and a
+ * default view is a pose of the anatomy, and neither depends on which side is up.
  */
 function pushSampleSide() {
   const win = DOM.previewFrame?.contentWindow;
   if (!win || !_draft) return;
-  const settle = () => { window.removeEventListener('message', onReply); clearTimeout(timer); };
-  const onReply = (e) => {
-    if (e.origin !== window.location.origin || e.data?.type !== 'SAMPLE_SIDE_RESULT') return;
-    settle();
-    const dv = e.data.defaultView;
-    const q = dv && dv.quaternion;
-    if (Array.isArray(q) && q.length === 4 && q.every(Number.isFinite)) {
-      writeOrientationCfg({ defaultView: { preset: dv.preset || 'custom', quaternion: q } });
-      renderDefaultView();
-    }
-  };
-  const timer = setTimeout(settle, ORIENTATION_REPLY_TIMEOUT);
-  window.addEventListener('message', onReply);
   try {
     win.postMessage({ type: 'SET_SAMPLE_UPSIDE_DOWN', value: !!_draft.upsideDown }, window.location.origin);
-  } catch (_) {
-    settle();
-  }
+  } catch (_) { /* cross-origin guard */ }
 }
 
 // ── Orientation editor ─────────────────────────────────────────

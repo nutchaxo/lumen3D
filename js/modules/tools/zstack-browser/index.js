@@ -18,9 +18,10 @@
  * Pose: opening the browser lays the stack flat on the screen at once — its upper
  * face toward the camera, the sample as seen from above the microscope (the core
  * resolves 'top' from the dataset's upside-down flag) — travelling there over a
- * second and a half, spun in-plane by the smallest amount from wherever the volume
- * was. The 3D notch then leaves the rotation free; the track lays it flat again
- * (nearest spin, animated) and locks it. A slider turns the slices on screen; it
+ * second and a half by a turn about the screen axis the stack leans on most (the
+ * vertical on a tie) with a slight correction about the other, no in-plane turn
+ * (setView spin 'tilt'). The 3D notch then leaves the rotation free; the track lays
+ * it flat again the same way and locks it. A slider turns the slices on screen; it
  * starts on the spin the pose landed on, not on 0.
  *
  * Slice indices are 0-based internally and 1-based in every readout.
@@ -215,9 +216,9 @@ PluginRegistry.implement('zstack-browser', {
       hi = this._cropHi;
     } else {
       // The track holds the stack flat on the screen, its upper face toward the
-      // camera (the sample as seen from above the microscope), spun the least from
-      // where the volume was, and locks the rotation there.
-      if (!this._viewLocked) { this._poseTopDown('nearest', 1200); v.setRotationLocked(true); this._viewLocked = true; }
+      // camera (the sample as seen from above the microscope), reached by a turn
+      // about one screen axis, and locks the rotation there.
+      if (!this._viewLocked) { this._poseTopDown('tilt', 1200); v.setRotationLocked(true); this._viewLocked = true; }
       lo = this._lo;
       hi = this._lo + this._thickness - 1;
       st.zstackCurrentSlice = lo + Math.floor((this._thickness - 1) / 2);
@@ -254,12 +255,14 @@ PluginRegistry.implement('zstack-browser', {
   /**
    * Lay the stack flat on the screen, its upper face toward the camera — the sample
    * as seen from above the microscope (side 'top': the core resolves it from the
-   * dataset's upside-down flag) — turned in-plane by `spin`: 'nearest' is the
-   * smallest move from wherever the volume is (what opening and entering the track
-   * do), a number is the slider's angle. The core travels there over `animate` ms
-   * instead of snapping; the slider shows the spin the pose landed on.
+   * dataset's upside-down flag). `spin` 'tilt' (what opening and entering the track
+   * do) brings the stack's axis onto the viewing axis by a turn about the screen
+   * axis it leans on most plus a slight correction about the other, no in-plane
+   * turn — the smallest-angle move rotated about an oblique axis and read as a
+   * diagonal tumble; a number is the slider's angle. The core travels there over
+   * `animate` ms instead of snapping; the slider shows the spin the pose landed on.
    */
-  _poseTopDown(spin = 'nearest', animate = 1200) {
+  _poseTopDown(spin = 'tilt', animate = 1200) {
     const r = this._ctx.viewer.setView?.('xy', { side: 'top', spin, animate, force: true });
     if (r && Number.isFinite(Number(r.spinDeg))) this._spin = ((Number(r.spinDeg) % 360) + 360) % 360;
     this._renderSpin();
@@ -557,7 +560,7 @@ PluginRegistry.implement('zstack-browser', {
       // least from where it was — so the cursor's first step into the track does
       // not move a specimen the user is already looking at. Not for a restored
       // workspace, whose pose is the saved one.
-      if (options.pose !== false && this._mode === '3d') this._poseTopDown('nearest', 1500);
+      if (options.pose !== false && this._mode === '3d') this._poseTopDown('tilt', 1500);
     } else {
       if (this._viewLocked) { v.setRotationLocked(false); this._viewLocked = false; }
       v.resetClipping();

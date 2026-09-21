@@ -56,6 +56,8 @@ const harness = new Function('THREE', `
   ${lift('setSampleUpsideDown')}
   ${lift('isSampleUpsideDown')}
   ${lift('_resolveViewSide')}
+  ${lift('_tiltToViewAxis')}
+  ${lift('_tiltPose')}
   ${lift('_poseTo')}
   ${lift('_stepPoseAnimation')}
   ${lift('setView')}
@@ -305,33 +307,38 @@ for (const view of ['xy', 'xz', 'yz']) assertNearestSpin(view, tilted);
   same(cube.quaternion, Rz(Math.PI / 2));
 }
 
-// ── 12. Turning the sample over on the spot ─────────────────────────────────
+// ── 12. The sample side: raw pose, and the preview shows the top face ───────
 {
   setFrameQuaternion(Rz(0.7));
   const home = Rz(0.3).multiply(Rx(0.4));
   harness.home(home.clone());
   const pose = Rz(1.1).multiply(Rx(0.5));
   cube.quaternion.copy(pose);
-  harness.setSampleUpsideDown(true, { turnOver: true });
-  same(cube.quaternion, Ry(Math.PI).multiply(pose), 'the volume turns over about the SCREEN vertical, whatever its pose');
+  harness.setSampleUpsideDown(true, { preview: true });
   {
-    // Left and right swap, up stays up: the world image of the file's Y axis is unchanged.
-    const upBefore = new THREE.Vector3(0, 1, 0).applyQuaternion(pose);
-    const upAfter = new THREE.Vector3(0, 1, 0).applyQuaternion(cube.quaternion);
-    assert.ok(Math.abs(upBefore.y - upAfter.y) < 1e-9 && Math.abs(upBefore.x + upAfter.x) < 1e-9, 'screen-up kept, left/right mirrored');
+    const a = harness.anim();
+    assert.ok(a && a.path, 'the preview travels there (a second, along the two-axis path)');
+    harness.step(a.start + 1000);
+    const z = new THREE.Vector3(0, 0, 1).applyQuaternion(cube.quaternion);
+    assert.ok(Math.abs(z.z + 1) < 1e-9, 'preview, upside down: the −Z face (the top) looks at the camera');
   }
   same(harness.frame(), Rz(0.7), 'the calibration frame is NOT touched: it maps file axes to anatomy');
-  harness.setSampleUpsideDown(true, { turnOver: true });
-  same(cube.quaternion, Ry(Math.PI).multiply(pose), 'the same side again changes nothing');
-  harness.setSampleUpsideDown(false, { turnOver: true });
-  same(cube.quaternion, pose, 'and back');
+  setView('3d');
+  same(cube.quaternion, home, 'nor the home pose: a default view is a pose of the anatomy');
+  harness.setSampleUpsideDown(false, { preview: true });
+  {
+    const a = harness.anim();
+    if (a) harness.step(a.start + 1000);
+    const z = new THREE.Vector3(0, 0, 1).applyQuaternion(cube.quaternion);
+    assert.ok(Math.abs(z.z - 1) < 1e-9, 'preview, right side up: the +Z face looks at the camera');
+  }
   same(harness.frame(), Rz(0.7));
   harness.home(null);
   // Before anything posed the volume: the raw pose is applied at once.
   harness.loaded(false);
   cube.quaternion.identity();
   harness.setSampleUpsideDown(true);
-  same(cube.quaternion, Ry(Math.PI), 'an upside-down file starts turned over');
+  same(cube.quaternion, Ry(Math.PI), 'an upside-down file starts turned over (a half-turn about the vertical)');
   harness.setSampleUpsideDown(false);
   same(cube.quaternion, new THREE.Quaternion());
   setView('3d');
@@ -344,4 +351,58 @@ for (const view of ['xy', 'xz', 'yz']) assertNearestSpin(view, tilted);
   setFrameQuaternion(null);
 }
 
-console.log('VolumeViewer.setView in a calibrated frame (raw · in-plane · nearest spin · degenerate · lock · home · sample side · nearest-to-current · animation): OK');
+// ── 13. spin 'tilt': a turn about one screen axis, a slight correction about the other ──
+{
+  setFrameQuaternion(tilted);
+  const flat = (q) => Math.abs(Math.abs(LOOKS_ALONG.xy.clone().applyQuaternion(q).z) - 1) < 1e-9;
+  const angleAbout = (q, axis) => {
+    // The rotation about `axis` a pose change carries: 2·atan2(|projection of the vector part|, w).
+    const v = new THREE.Vector3(q.x, q.y, q.z);
+    return 2 * Math.atan2(Math.abs(v.dot(axis)), Math.abs(q.w));
+  };
+  const X = new THREE.Vector3(1, 0, 0), Y = new THREE.Vector3(0, 1, 0);
+  for (const side of ['front', 'back']) {
+    setView('xy', { side, spin: 'frame' });
+    const Q0 = cube.quaternion.clone();
+    // Leaning mostly about the vertical (the stack axis tilted sideways): the turn is
+    // about Y, the X correction stays small, no in-plane turn is added.
+    for (const [start, primary, secondary, label] of [
+      [Ry(1.2).multiply(Rx(0.15)).multiply(Q0), Y, X, 'leans sideways → about the vertical'],
+      [Rx(1.2).multiply(Ry(0.15)).multiply(Q0), X, Y, 'leans up/down → about the horizontal'],
+      [Ry(Math.PI).multiply(Q0), Y, X, 'points straight away → a half-turn about the vertical'],
+    ]) {
+      cube.quaternion.copy(start);
+      const r = setView('xy', { side, spin: 'tilt' });
+      const landed = cube.quaternion.clone();
+      assert.ok(flat(landed), `${side} / ${label}: lands flat`);
+      const move = landed.clone().multiply(start.clone().invert());
+      const p = angleAbout(move, primary), sec = angleAbout(move, secondary);
+      assert.ok(p > sec, `${side} / ${label}: the turn is mostly about the primary axis (${p.toFixed(2)} vs ${sec.toFixed(2)})`);
+      assert.ok(sec < 0.2 + 1e-9, `${side} / ${label}: the correction is slight (${sec.toFixed(3)})`);
+      assert.ok(r && Number.isFinite(r.spinDeg), 'reports the spin landed on');
+      same(landed, Rz(THREE.MathUtils.degToRad(r.spinDeg)).multiply(Q0), `${side} / ${label}: the reported spin reproduces the pose`);
+    }
+    // Already flat: nothing moves, whatever the in-plane spin.
+    cube.quaternion.copy(Rz(1.9).multiply(Q0));
+    setView('xy', { side, spin: 'tilt' });
+    same(cube.quaternion, Rz(1.9).multiply(Q0), `${side}: a flat stack is left where it is`);
+  }
+  // The animated path: both rotations grow together, the end is the target exactly.
+  setFrameQuaternion(null);
+  const start = Ry(1.0).multiply(Rx(0.2));
+  cube.quaternion.copy(start);
+  setView('xy', { spin: 'tilt', animate: 1000 });
+  const a = harness.anim();
+  assert.ok(a && a.path, 'the flight follows the two-axis path');
+  harness.step(a.start + 500);
+  const half = cube.quaternion.clone();
+  const expectHalf = new THREE.Quaternion().setFromAxisAngle(a.path.second.axis, 0.5 * a.path.second.angle)
+    .multiply(new THREE.Quaternion().setFromAxisAngle(a.path.first.axis, 0.5 * a.path.first.angle)).multiply(start);
+  same(half, expectHalf, 'half-way: both screen-axis rotations at half their angle');
+  harness.step(a.start + 1000);
+  assert.ok(flat(cube.quaternion), 'settles flat');
+  assert.equal(harness.anim(), null);
+  setFrameQuaternion(null);
+}
+
+console.log('VolumeViewer.setView in a calibrated frame (raw · in-plane · nearest spin · degenerate · lock · home · sample side · nearest-to-current · animation · tilt): OK');

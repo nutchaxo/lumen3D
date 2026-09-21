@@ -629,7 +629,7 @@
     "sampleSide": "Zijde van het monster",
     "sampleSideUp": "Rechtop — het bestand toont het monster van bovenaf",
     "sampleSideDown": "Ondersteboven — het bestand toont het van onderaf (omgekeerd weergegeven)",
-    "sampleSideHint": "Het voorbeeld draait meteen om: kies de zijde die het monster toont zoals onder de microscoop. Een confocale stapel uit Imaris staat meestal ondersteboven.",
+    "sampleSideHint": "Het voorbeeld legt het monster plat, met de gekozen bovenzijde naar u toe — wat de Z-stapelverkenner zal tonen: kies de zijde die lijkt op het monster gezien van boven de microscoop. Een confocale stapel uit Imaris staat meestal ondersteboven.",
     "orientationAxesLabel": "Getoonde assen",
     "orientationAxesHint": "Vink een as uit om die te verbergen, hernoem die volgens uw nomenclatuur.",
     "defaultView": "Standaardweergave",

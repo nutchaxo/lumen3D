@@ -35,14 +35,11 @@
  * exactly one implementation.
  *
  * `metadata.upsideDown` (the admin's sample-side switch) says the raw file shows
- * the sample from below; the core shows it turned over — a half-turn about the
- * screen's vertical (VolumeViewer.setSampleUpsideDown). Q_base maps file axes to
- * anatomy, a fact of the file that does not depend on which side is looked at, so
- * the switch leaves it alone and the gizmo (Q_cube · Q_base⁻¹) turns with the
- * volume by itself. A default view is a world pose of the anatomy: when the switch
- * flips on the preview it turns to the opposite side (a preset becomes its
- * opposite — ventral ↔ dorsal, left ↔ right, anterior ↔ posterior) and the panel
- * stores what comes back.
+ * the sample from below: the core names its −Z face the top and shows the raw,
+ * uncalibrated pose turned over (VolumeViewer.setSampleUpsideDown). Neither the
+ * calibration (file axes → anatomy) nor a default view (a pose of the anatomy)
+ * depends on which side is up, so the switch changes nothing here beyond the raw
+ * pose an uncalibrated dataset's arms start on.
  */
 
 // Gizmo arms, expressed in the anatomical frame.
@@ -65,13 +62,6 @@ const ORI_VIEW_PRESETS = {
   right:     { face: 'R', up: 'A' },
   anterior:  { face: 'A', up: 'D' },
   posterior: { face: 'P', up: 'D' }
-};
-// A preset looked at from the other side (a half-turn about the vertical keeps `up`
-// and negates `face`): exactly the preset with the opposite face.
-const ORI_OPPOSITE_PRESET = {
-  ventral: 'dorsal', dorsal: 'ventral',
-  left: 'right', right: 'left',
-  anterior: 'posterior', posterior: 'anterior'
 };
 
 /** Quaternion from {x,y,z,w} or [x,y,z,w]; null when absent or degenerate. */
@@ -127,7 +117,6 @@ PluginRegistry.implement('orientation-axes', {
   _calibrated: false,      // metadata.orientation exists (Q_base is not the raw pose)
   _upsideDown: false,      // metadata.upsideDown — the raw file shows the sample from below
   _defaultView: null,      // Q_anat — the dataset's default view, null when unset
-  _defaultViewPreset: null, // its preset name, 'custom' or null
   _labels: {},
   _hidden: null,           // Set of hidden axis codes
   _isDragging: false,
@@ -181,7 +170,6 @@ PluginRegistry.implement('orientation-axes', {
     this._labels = (cfg.labels && typeof cfg.labels === 'object') ? cfg.labels : {};
     this._hidden = new Set(Array.isArray(cfg.hidden) ? cfg.hidden.filter((c) => ORI_AXIS_DEF[c]) : []);
     this._defaultView = _oriViewQuat(cfg.defaultView);
-    this._defaultViewPreset = this._defaultView ? (cfg.defaultView.preset || 'custom') : null;
   },
 
   /** The core's raw pose for a sample side (a half-turn about the vertical when upside down). */
@@ -296,26 +284,13 @@ PluginRegistry.implement('orientation-axes', {
         e.source.postMessage({ type: 'ORIENTATION_RESULT', quaternion: { x: q.x, y: q.y, z: q.z, w: q.w } }, e.origin);
       }
     } else if (e.data?.type === 'SET_SAMPLE_UPSIDE_DOWN') {
-      // The admin's sample-side switch. The core turns the volume (and its home
-      // pose) over on this message; the calibration stays — it maps file axes to
-      // anatomy — so the gizmo follows the volume by itself. A default view turns
-      // to the opposite side and goes back to the panel, which stores it.
+      // The admin's sample-side switch. The core previews the face it names as the
+      // top; here only the raw pose an uncalibrated dataset's arms start on follows.
+      // The calibration and a default view are left alone: neither depends on it.
       const next = e.data.value === true;
-      if (next !== this._upsideDown) {
-        this._upsideDown = next;
-        if (!this._calibrated) this._baseQuaternion = this._rawPose(next);
-        if (this._defaultView) {
-          this._defaultView.premultiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.PI));
-          this._defaultViewPreset = ORI_OPPOSITE_PRESET[this._defaultViewPreset] || 'custom';
-        }
-      }
-      e.source?.postMessage({
-        type: 'SAMPLE_SIDE_RESULT',
-        upsideDown: next,
-        defaultView: this._defaultView
-          ? { preset: this._defaultViewPreset || 'custom', quaternion: this._defaultView.toArray() }
-          : null
-      }, e.origin);
+      this._upsideDown = next;
+      if (!this._calibrated) this._baseQuaternion = this._rawPose(next);
+      e.source?.postMessage({ type: 'SAMPLE_SIDE_RESULT', upsideDown: next }, e.origin);
     } else if (e.data?.type === 'SET_ORIENTATION_AXES') {
       // Live preview of the admin panel's axes editor (labels + visibility).
       const cfg = e.data.value || {};

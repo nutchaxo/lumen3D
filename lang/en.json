@@ -629,7 +629,7 @@
     "sampleSide": "Sample side",
     "sampleSideUp": "Right side up — the file shows the sample from above",
     "sampleSideDown": "Upside down — the file shows it from below (turned over on display)",
-    "sampleSideHint": "The preview turns over at once: pick the side that shows the sample as under the microscope. A confocal stack exported from Imaris is usually upside down.",
+    "sampleSideHint": "The preview lays the sample flat, the chosen top face toward you — what the Z-stack browser will show: pick the side that looks like the sample seen from above the microscope. A confocal stack exported from Imaris is usually upside down.",
     "orientationAxesLabel": "Displayed axes",
     "orientationAxesHint": "Uncheck an axis to hide it, rename it to match your nomenclature.",
     "defaultView": "Default view",

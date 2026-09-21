@@ -27,6 +27,13 @@ $body   = ($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST' ? (json_decode(file_g
 
 if (in_array($action, ['set_plugin', 'update_apply', 'approve_plugin', 'revoke_plugin', 'install_plugin', 'update_plugin', 'uninstall_plugin', 'repair_permissions'], true)) admin_require_write();
 
+// The session was read at the door (auth, CSRF) and nothing below writes to it, so
+// its lock is released here. PHP serialises every request of one session on that
+// lock: an action that waits on GitHub (update_check, marketplace_catalog,
+// pipeline_info, docs_list) used to hold every other admin call — the Datasets
+// list, the click on a dataset — for as long as GitHub took to answer.
+if (session_status() === PHP_SESSION_ACTIVE) session_write_close();
+
 switch ($action) {
 
     case 'stats': {

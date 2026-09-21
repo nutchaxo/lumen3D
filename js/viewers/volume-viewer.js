@@ -3097,7 +3097,19 @@ const VolumeViewer = (() => {
   function _tiltToViewAxis(d) {
     const X = new THREE.Vector3(1, 0, 0);
     const Y = new THREE.Vector3(0, 1, 0);
-    if (Math.abs(d.y) > Math.abs(d.x)) {
+    const ax = Math.min(1, Math.abs(d.x));
+    const ay = Math.min(1, Math.abs(d.y));
+    // Both components noise: the axis points straight along the viewing axis, one way
+    // or the other. Turned over about the vertical, never by whichever noise is larger
+    // (the sample-side switch flips a flat stack, which is exactly this pose).
+    if (ax < 1e-6 && ay < 1e-6) {
+      return { first: { axis: Y, angle: d.z < 0 ? Math.PI : 0 }, second: { axis: X, angle: 0 } };
+    }
+    // What the second rotation still has to correct is asin|dx| when the horizontal
+    // turns first and asin|dy| when the vertical does: the smaller correction wins,
+    // and the vertical wins whenever the two are within a few degrees of each other.
+    const tie = 5 * Math.PI / 180;
+    if (Math.asin(ax) + tie < Math.asin(ay)) {
       const alpha = Math.atan2(d.y, d.z);
       const beta = Math.atan2(-d.x, Math.hypot(d.y, d.z));
       return { first: { axis: X, angle: alpha }, second: { axis: Y, angle: beta } };

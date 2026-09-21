@@ -47,6 +47,10 @@ if (!LUMEN_DATASETS_AS_LIB) {
     // library include must not move directories as a side effect. Every entry point
     // that needs the conversion states it itself.
     lumen_migrate_dataset_types();
+    // Auth and CSRF are read from $_SESSION below, never written: the session lock is
+    // released now, so this request neither waits behind a slow one of admin.php nor
+    // holds a save's disk work over every other admin call (see api/admin.php).
+    if (session_status() === PHP_SESSION_ACTIVE) session_write_close();
 }
 
 function require_auth(): void {

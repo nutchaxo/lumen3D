@@ -69,6 +69,14 @@ check('the posted edit landed', ($m['name'] ?? null) === 'Demo (oriented)'
 check('configured + lastModified are the Python names', ($m['configured'] ?? false) === true
     && is_string($m['lastModified'] ?? null));
 
+section('save: the sample-side flag round-trips as a boolean, false included');
+[$st] = save_dataset_meta('3d/demo', $ds, ['upsideDown' => true]);
+check('upside down is stored', (stored($ds)['upsideDown'] ?? null) === true);
+[$st] = save_dataset_meta('3d/demo', $ds, ['upsideDown' => false]);
+$m = stored($ds);
+check('right side up is an explicit false, not an absent key (the editor always posts it)',
+    array_key_exists('upsideDown', $m) && $m['upsideDown'] === false);
+
 section('save: it is a MERGE, as on the Python dev server');
 [$st] = save_dataset_meta('3d/demo', $ds, ['stage' => 'E9.0']);
 $m = stored($ds);

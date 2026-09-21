@@ -1,8 +1,8 @@
 {
   "id": "zstack-browser",
   "name": "Z-Stack Browser",
-  "version": "1.1.5",
-  "platformCompat": ">=1.54.2",
+  "version": "1.2.0",
+  "platformCompat": ">=1.55.7",
   "contexts": [
     "page",
     "panel"
@@ -13,7 +13,7 @@
   "subtype": "toggle",
   "icon": "layers-3",
   "order": 40,
-  "description": "Browse the Z-stack: a 3D notch shows every kept slice, the cursor shows one slice or a slab of adjustable thickness, and two trim handles mask the slices above and below. Synchronized across compare panels.",
+  "description": "Browse the Z-stack: opening lays it flat on the screen as seen from above the microscope (animated, smallest turn), a 3D notch shows every kept slice, the cursor shows one slice or a slab of adjustable thickness, two trim handles mask the slices above and below, and a slider turns the slices on screen. Synchronized across compare panels.",
   "buttonId": "btn-toggle-zstack",
   "i18nTitle": "title",
   "i18nLanguages": [

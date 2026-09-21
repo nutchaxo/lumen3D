@@ -13,5 +13,7 @@
   "thicknessTitle": "Cortes mostrados a la vez",
   "kept": "Conservados {lo}–{hi} · {n} de {total} cortes",
   "keptAll": "Se conservan los {total} cortes",
-  "resetTrim": "Restablecer todos los cortes"
+  "resetTrim": "Restablecer todos los cortes",
+  "spin": "Rotación",
+  "spinTitle": "Girar los cortes en pantalla"
 }

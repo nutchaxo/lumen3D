@@ -13,5 +13,7 @@
   "thicknessTitle": "Slices shown at once",
   "kept": "Kept {lo}–{hi} · {n} of {total} slices",
   "keptAll": "All {total} slices kept",
-  "resetTrim": "Restore every slice"
+  "resetTrim": "Restore every slice",
+  "spin": "Rotation",
+  "spinTitle": "Turn the slices on screen"
 }

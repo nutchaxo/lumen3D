@@ -15,6 +15,14 @@
  * receiver (SYNC_ZSTACK_SLICE → applySync) and the early TOGGLE_ZSTACK listener,
  * which need ViewerApp's internal scope.
  *
+ * Pose: opening the browser lays the stack flat on the screen at once — its upper
+ * face toward the camera, the sample as seen from above the microscope (the core
+ * resolves 'top' from the dataset's upside-down flag) — travelling there over a
+ * second and a half, spun in-plane by the smallest amount from wherever the volume
+ * was. The 3D notch then leaves the rotation free; the track lays it flat again
+ * (nearest spin, animated) and locks it. A slider turns the slices on screen; it
+ * starts on the spin the pose landed on, not on 0.
+ *
  * Slice indices are 0-based internally and 1-based in every readout.
  */
 PluginRegistry.implement('zstack-browser', {
@@ -32,6 +40,9 @@ PluginRegistry.implement('zstack-browser', {
   _cropHi: Infinity,
   // Whether WE locked the view top-down (slice mode) — released on 3D and on close.
   _viewLocked: false,
+  // In-plane spin of the top-down pose, degrees from the calibrated frame's spin.
+  _spin: 0,
+  _lastRange: null,
   _drag: null,
 
   init(ctx) {
@@ -55,7 +66,7 @@ PluginRegistry.implement('zstack-browser', {
 
   // ── Programmatic state (viewer.js _applyZstackState, compare TOGGLE_ZSTACK) ──
 
-  applyState(desired, slice = null) {
+  applyState(desired, slice = null, options = {}) {
     const st = this._ctx._state;
     const wasActive = Boolean(st.zstackActive);
     st.zstackActive = desired;
@@ -63,7 +74,7 @@ PluginRegistry.implement('zstack-browser', {
     // Closing a browser that is not open must leave the volume alone: its
     // resetClipping would erase the cut plane a workspace has just restored,
     // and the siblings would be told to leave a stack they are not in.
-    if (desired || wasActive) this._show(desired);
+    if (desired || wasActive) this._show(desired, options);
     if (desired && Number.isFinite(slice) && slice > 0) {
       // Applied synchronously, while the SYNC_ZSTACK_SLICE receiver's echo guard is
       // still raised; re-arm it anyway so a caller without one cannot ping-pong with
@@ -88,6 +99,7 @@ PluginRegistry.implement('zstack-browser', {
       this._cropHi = m(data.crop[1]);
     }
     if (Number.isFinite(Number(data.thickness))) this._thickness = Math.max(1, m(data.thickness));
+    const spin = Number.isFinite(Number(data.spin)) ? ((Number(data.spin) % 360) + 360) % 360 : null;
     if (data.mode === '3d') {
       this._mode = '3d';
     } else {
@@ -98,6 +110,9 @@ PluginRegistry.implement('zstack-browser', {
     }
     this._clampFields();
     this._apply();
+    // Camera sync is blocked while the track holds the view: the sibling's spin
+    // travels here instead, so both panels show the slices turned the same way.
+    if (spin !== null && this._mode === 'slice' && spin !== this._spin) this._poseTopDown(spin, 400);
   },
 
   // ── Workspace state ───────────────────────────────────────
@@ -110,14 +125,16 @@ PluginRegistry.implement('zstack-browser', {
       mode: this._mode,
       cursor: this._lo,
       thickness: this._thickness,
-      crop: [this._cropLo, this._cropHi]
+      crop: [this._cropLo, this._cropHi],
+      spin: this._spin
     };
   },
 
   setState(s) {
     if (!s || typeof s.zstackActive !== 'boolean') return;
     this._restoreFields(s);
-    this.applyState(s.zstackActive, null);
+    // The workspace restored the camera already: no opening move on top of it.
+    this.applyState(s.zstackActive, null, { pose: false });
   },
 
   reset() {
@@ -152,6 +169,7 @@ PluginRegistry.implement('zstack-browser', {
     this._thickness = 1;
     this._cropLo = 0;
     this._cropHi = Infinity;
+    this._spin = 0;
     this._clampFields();
   },
 
@@ -161,6 +179,7 @@ PluginRegistry.implement('zstack-browser', {
     this._cropLo = int(crop[0], 0);
     this._cropHi = Number(crop[1]) === Infinity ? Infinity : int(crop[1], Infinity);
     this._thickness = Math.max(1, int(s.thickness, 1));
+    this._spin = Number.isFinite(Number(s.spin)) ? ((Number(s.spin) % 360) + 360) % 360 : 0;
     if (s.mode === '3d' || s.mode === 'slice') {
       this._mode = s.mode;
       this._lo = int(s.cursor, int(s.zstackSlice, 0));
@@ -195,34 +214,73 @@ PluginRegistry.implement('zstack-browser', {
       lo = this._cropLo;
       hi = this._cropHi;
     } else {
-      // The stack is looked at from its −Z side: seen from +Z (the historical view)
-      // the specimens appeared mirrored with respect to the acquisition. The spin
-      // in the plane still follows the calibrated frame (VolumeViewer.setView).
-      if (!this._viewLocked) { v.setView('xy', { side: 'back' }); v.setRotationLocked(true); this._viewLocked = true; }
+      // The track holds the stack flat on the screen, its upper face toward the
+      // camera (the sample as seen from above the microscope), spun the least from
+      // where the volume was, and locks the rotation there.
+      if (!this._viewLocked) { this._poseTopDown('nearest', 1200); v.setRotationLocked(true); this._viewLocked = true; }
       lo = this._lo;
       hi = this._lo + this._thickness - 1;
       st.zstackCurrentSlice = lo + Math.floor((this._thickness - 1) / 2);
     }
     // Slice i occupies [i/z, (i+1)/z] of the normalised depth.
     v.setClipRange_z(lo / z, (hi + 1) / z);
+    this._lastRange = { lo, hi, z };
 
     this._render();
     this._drawDiagram();
+    this._broadcast();
+  },
 
-    if (this._ctx.iframe.isIframe() && !st.suppressZstackSync) {
-      this._ctx.iframe.postMessage({
-        type: 'SYNC_ZSTACK_SLICE',
-        sliceIndex: Math.max(0, st.zstackCurrentSlice),
-        sliceTotal: z,
-        lo: lo / z,
-        hi: (hi + 1) / z,
-        mode: this._mode,
-        cursor: this._lo,
-        thickness: this._thickness,
-        crop: [this._cropLo, this._cropHi],
-        sourceIndex: this._ctx.iframe.panelIndex()
-      });
-    }
+  /** Tell the sibling panels (Compare) where the browser stands. */
+  _broadcast() {
+    const st = this._ctx._state;
+    const r = this._lastRange;
+    if (!r || !this._ctx.iframe.isIframe() || st.suppressZstackSync) return;
+    this._ctx.iframe.postMessage({
+      type: 'SYNC_ZSTACK_SLICE',
+      sliceIndex: Math.max(0, st.zstackCurrentSlice),
+      sliceTotal: r.z,
+      lo: r.lo / r.z,
+      hi: (r.hi + 1) / r.z,
+      mode: this._mode,
+      cursor: this._lo,
+      thickness: this._thickness,
+      crop: [this._cropLo, this._cropHi],
+      spin: this._spin,
+      sourceIndex: this._ctx.iframe.panelIndex()
+    });
+  },
+
+  /**
+   * Lay the stack flat on the screen, its upper face toward the camera — the sample
+   * as seen from above the microscope (side 'top': the core resolves it from the
+   * dataset's upside-down flag) — turned in-plane by `spin`: 'nearest' is the
+   * smallest move from wherever the volume is (what opening and entering the track
+   * do), a number is the slider's angle. The core travels there over `animate` ms
+   * instead of snapping; the slider shows the spin the pose landed on.
+   */
+  _poseTopDown(spin = 'nearest', animate = 1200) {
+    const r = this._ctx.viewer.setView?.('xy', { side: 'top', spin, animate, force: true });
+    if (r && Number.isFinite(Number(r.spinDeg))) this._spin = ((Number(r.spinDeg) % 360) + 360) % 360;
+    this._renderSpin();
+  },
+
+  /** The slider: the slices turned on screen, at once. */
+  _setSpin(deg) {
+    const n = Number(deg);
+    if (!Number.isFinite(n)) return;
+    this._spin = ((n % 360) + 360) % 360;
+    this._ctx.viewer.setView?.('xy', { side: 'top', spin: this._spin, animate: 0, force: true });
+    this._renderSpin();
+    this._broadcast();
+  },
+
+  _renderSpin() {
+    const E = this._els;
+    if (!E) return;
+    const deg = Math.round(this._spin) % 360;
+    if (E.spin) E.spin.value = String(deg);
+    if (E.spinDeg) E.spinDeg.textContent = `${deg}°`;
   },
 
   _enter3d() {
@@ -302,6 +360,7 @@ PluginRegistry.implement('zstack-browser', {
     on($('zstack-thickness-input'), 'change', (e) => this._setThickness(Number(e.target.value) || 1));
     on($('btn-zstack-crop-reset'), 'click', () => this._resetCrop());
     on($('btn-zstack-studio'), 'click', () => this._ctx.ui.openStudio());
+    on($('zstack-spin'), 'input', (e) => this._setSpin(e.target.value));
 
     // Click on the diagram → slice mode on that plane.
     const diagCanvas = $('zstack-diagram-canvas');
@@ -341,7 +400,10 @@ PluginRegistry.implement('zstack-browser', {
       thkUm: $('zstack-thickness-um'),
       cropRow: $('zstack-crop-row'),
       cropLabel: $('zstack-crop-label'),
-      cropReset: $('btn-zstack-crop-reset')
+      cropReset: $('btn-zstack-crop-reset'),
+      spin: $('zstack-spin'),
+      spinDeg: $('zstack-spin-deg'),
+      spinLabel: $('zstack-spin-label')
     };
 
     on(root, 'pointerdown', (e) => this._startDrag(e));
@@ -369,6 +431,8 @@ PluginRegistry.implement('zstack-browser', {
     title(E.cropReset, 'resetTrim');
     if (E.thkLabel) E.thkLabel.textContent = t('thickness');
     if (E.thkInput) E.thkInput.title = t('thicknessTitle');
+    if (E.spinLabel) E.spinLabel.textContent = t('spin');
+    if (E.spin) { E.spin.title = t('spinTitle'); E.spin.setAttribute('aria-label', t('spin')); }
     if (E.root) E.root.setAttribute('aria-label', t('title'));
     const notchText = E.notch?.querySelector?.('span');
     if (notchText) notchText.textContent = t('notch');
@@ -473,7 +537,7 @@ PluginRegistry.implement('zstack-browser', {
     e.preventDefault();
   },
 
-  _show(visible) {
+  _show(visible, options = {}) {
     const panel = document.getElementById('zstack-browser');
     if (!panel) return;
     panel.classList.toggle('zstack-hidden', !visible);
@@ -489,6 +553,11 @@ PluginRegistry.implement('zstack-browser', {
       this._populateInfo();
       this._clampFields();
       this._apply();
+      // Opening lays the stack flat at once — the sample seen from above, spun the
+      // least from where it was — so the cursor's first step into the track does
+      // not move a specimen the user is already looking at. Not for a restored
+      // workspace, whose pose is the saved one.
+      if (options.pose !== false && this._mode === '3d') this._poseTopDown('nearest', 1500);
     } else {
       if (this._viewLocked) { v.setRotationLocked(false); this._viewLocked = false; }
       v.resetClipping();
@@ -579,6 +648,7 @@ PluginRegistry.implement('zstack-browser', {
 
     E.root.setAttribute('aria-valuenow', String(is3d ? -1 : this._ctx._state.zstackCurrentSlice));
     E.root.setAttribute('aria-valuetext', info);
+    this._renderSpin();
   },
 
   _drawDiagram() {

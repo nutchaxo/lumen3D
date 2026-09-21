@@ -43,12 +43,30 @@ const harness = new Function('THREE', `
   let _rotationLocked = false;
   let _homeQuaternion = null;
   let _frameQuaternion = null;
-  const _notifyCameraChange = () => {};
+  let _upsideDown = false;
+  let _poseAnim = null;
+  let _hasLoadedVolume = false;
+  let notified = 0;
+  const _notifyCameraChange = () => { notified++; };
+  const _scheduleFrame = () => {};
   ${lift('_nearestZSpin')}
   ${lift('setFrameQuaternion')}
+  ${lift('_halfTurnX')}
+  ${lift('_rawPoseQuaternion')}
+  ${lift('setSampleUpsideDown')}
+  ${lift('isSampleUpsideDown')}
+  ${lift('_resolveViewSide')}
+  ${lift('_poseTo')}
+  ${lift('_stepPoseAnimation')}
   ${lift('setView')}
   return {
-    cube, setView, setFrameQuaternion,
+    cube, setView, setFrameQuaternion, setSampleUpsideDown, isSampleUpsideDown,
+    rawPose: () => _rawPoseQuaternion(),
+    step: (now) => _stepPoseAnimation(now),
+    anim: () => _poseAnim,
+    notified: () => notified,
+    frame: () => _frameQuaternion,
+    loaded: (v) => { _hasLoadedVolume = v; },
     lock: (v) => { _rotationLocked = v; },
     home: (q) => { _homeQuaternion = q; },
   };
@@ -190,4 +208,132 @@ for (const view of ['xy', 'xz', 'yz']) assertNearestSpin(view, tilted);
   same(cube.quaternion, legacy, '3d view without a home is the historical tilt');
 }
 
-console.log('VolumeViewer.setView in a calibrated frame (raw · in-plane · nearest spin · degenerate · lock · home): OK');
+// ── 8. Sample side: 'top' / 'bottom' follow the upside-down flag ─────────────
+{
+  setFrameQuaternion(null);
+  harness.setSampleUpsideDown(false);
+  cube.quaternion.set(0.3, 0.4, 0.5, 0.7).normalize();
+  setView('xy', { side: 'top' });
+  same(cube.quaternion, RAW.xy, 'right side up: the top face is +Z, the front pose');
+  setView('xy', { side: 'bottom' });
+  same(cube.quaternion, Ry(Math.PI), 'right side up: the bottom face is the back pose');
+  harness.setSampleUpsideDown(true);
+  setView('xy', { side: 'top' });
+  same(cube.quaternion, Ry(Math.PI), 'upside down: the top face is −Z, the back pose');
+  setView('xy', { side: 'bottom' });
+  same(cube.quaternion, RAW.xy, 'upside down: the bottom face is the front pose');
+  assert.equal(harness.isSampleUpsideDown(), true);
+  same(harness.rawPose(), Rx(Math.PI), 'the raw pose of an upside-down file is a half-turn about X');
+  harness.setSampleUpsideDown(false);
+  same(harness.rawPose(), new THREE.Quaternion(), 'and the identity otherwise');
+}
+
+// ── 9. spin 'nearest': the smallest move from the current pose ───────────────
+{
+  setFrameQuaternion(tilted);
+  for (const side of ['front', 'back']) {
+    setView('xy', { side, spin: 'frame' });
+    const Q0 = cube.quaternion.clone();
+    // Start somewhere: the top-down pose spun by 100°, then tilted a little.
+    const start = Rz(THREE.MathUtils.degToRad(100)).multiply(Q0).premultiply(Rx(0.3));
+    cube.quaternion.copy(start);
+    const r = setView('xy', { side, spin: 'nearest' });
+    const q = cube.quaternion.clone();
+    const axis = LOOKS_ALONG.xy.clone().applyQuaternion(q);
+    assert.ok(Math.abs(Math.abs(axis.z) - 1) < 1e-9, `${side}: still top-down`);
+    // No other Rz(θ)·Q0 sits closer to where the volume was.
+    const best = Math.abs(q.dot(start));
+    for (let t = 0; t < 2 * Math.PI; t += 0.01) {
+      const cand = Rz(t).multiply(Q0);
+      assert.ok(Math.abs(cand.dot(start)) <= best + 1e-9, `${side}: spin ${t.toFixed(2)} would be a smaller move`);
+    }
+    assert.ok(r && Math.abs(r.spinDeg - 100) < 1e-6, `${side}: the pose reports the spin it landed on (got ${r && r.spinDeg})`);
+    same(q, Rz(THREE.MathUtils.degToRad(r.spinDeg)).multiply(Q0), `${side}: the reported spin reproduces the pose`);
+  }
+  setFrameQuaternion(null);
+}
+
+// ── 10. A numeric spin is honoured and reported in [0, 360) ─────────────────
+{
+  setFrameQuaternion(Rz(0.7));
+  const r1 = setView('xy', { spin: 45 });
+  same(cube.quaternion, Rz(THREE.MathUtils.degToRad(45)).multiply(Rz(0.7)), 'a spin counts from the frame spin');
+  assert.equal(r1.spinDeg, 45);
+  const r2 = setView('xy', { spin: -90 });
+  assert.equal(r2.spinDeg, 270, 'negative degrees wrap');
+  same(cube.quaternion, Rz(-Math.PI / 2).multiply(Rz(0.7)));
+  const r3 = setView('xy', { spin: 'frame' });
+  assert.equal(r3.spinDeg, 0);
+  same(cube.quaternion, Rz(0.7));
+  setFrameQuaternion(null);
+}
+
+// ── 11. Animated poses: shortest arc, eased, settled exactly, cancellable ─────
+{
+  setFrameQuaternion(null);
+  cube.quaternion.copy(Rz(2.0));
+  const before = harness.notified();
+  setView('xy', { animate: 1000 });
+  const a = harness.anim();
+  assert.ok(a, 'a pose in flight');
+  same(cube.quaternion, Rz(2.0), 'nothing moved yet');
+  harness.step(a.start + 500);
+  const mid = cube.quaternion.clone();
+  const total = Rz(2.0).angleTo(RAW.xy);
+  const gone = Rz(2.0).angleTo(mid);
+  const left = mid.angleTo(RAW.xy);
+  assert.ok(Math.abs(gone + left - total) < 1e-9, 'the half-way pose lies on the shortest arc');
+  assert.ok(Math.abs(gone - total / 2) < 1e-9, 'smoothstep is at its midpoint half-way through');
+  assert.equal(harness.notified(), before, 'no camera notification while in flight');
+  harness.step(a.start + 1000);
+  same(cube.quaternion, RAW.xy, 'settles exactly on the target');
+  assert.equal(harness.anim(), null, 'and the flight is over');
+  assert.equal(harness.notified(), before + 1, 'one notification when it settles');
+
+  harness.lock(true);
+  cube.quaternion.copy(Rz(1.0));
+  assert.equal(setView('xy', { spin: 'nearest' }), null, 'refused while locked');
+  same(cube.quaternion, Rz(1.0));
+  const forced = setView('xy', { spin: 'nearest', force: true });
+  assert.ok(forced && Math.abs(forced.spinDeg - THREE.MathUtils.radToDeg(1.0)) < 1e-6, 'forced through the lock: nearest spin from the current pose');
+  harness.lock(false);
+
+  cube.quaternion.copy(Rz(2.0));
+  setView('xy', { animate: 1000 });
+  setView('xy', { spin: 90, animate: 0 });
+  assert.equal(harness.anim(), null, 'a snap replaces a flight');
+  same(cube.quaternion, Rz(Math.PI / 2));
+}
+
+// ── 12. Turning the sample over on the spot ─────────────────────────────────
+{
+  setFrameQuaternion(Rz(0.7));
+  harness.home(Rz(0.3));
+  cube.quaternion.copy(Rz(1.1));
+  harness.setSampleUpsideDown(true, { turnOver: true });
+  same(cube.quaternion, Rz(1.1).multiply(Rx(Math.PI)), 'the volume turns over about its own X axis');
+  same(harness.frame(), Rz(0.7).multiply(Rx(Math.PI)), 'the calibration frame turns over with it');
+  harness.setSampleUpsideDown(true, { turnOver: true });
+  same(cube.quaternion, Rz(1.1).multiply(Rx(Math.PI)), 'the same side again changes nothing');
+  harness.setSampleUpsideDown(false, { turnOver: true });
+  same(cube.quaternion, Rz(1.1), 'and back');
+  same(harness.frame(), Rz(0.7));
+  harness.home(null);
+  // Before anything posed the volume: the raw pose is applied at once.
+  harness.loaded(false);
+  cube.quaternion.identity();
+  harness.setSampleUpsideDown(true);
+  same(cube.quaternion, Rx(Math.PI), 'an upside-down file starts turned over');
+  harness.setSampleUpsideDown(false);
+  same(cube.quaternion, new THREE.Quaternion());
+  setView('3d');
+  const legacy = new THREE.Quaternion().multiply(Rx(-Math.PI / 6)).multiply(Ry(Math.PI / 5));
+  same(cube.quaternion, legacy, 'the 3d tilt starts from the raw pose');
+  harness.setSampleUpsideDown(true);
+  setView('3d');
+  same(cube.quaternion, Rx(Math.PI).multiply(Rx(-Math.PI / 6)).multiply(Ry(Math.PI / 5)), 'turned over when the file is upside down');
+  harness.setSampleUpsideDown(false);
+  setFrameQuaternion(null);
+}
+
+console.log('VolumeViewer.setView in a calibrated frame (raw · in-plane · nearest spin · degenerate · lock · home · sample side · nearest-to-current · animation): OK');

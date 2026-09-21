@@ -150,6 +150,19 @@ class TestHiddenCatalog(unittest.TestCase):
         dev_server._set_dataset_hidden("3d/Demo", False)
         self.assertIn("Demo", [d.get("name") for d in dev_server._build_catalog()])
 
+    def test_save_dataset_keeps_the_sample_side_flag(self):
+        # The editor always posts the boolean: false must survive the merge as an
+        # explicit false, so a dataset switched back to "right side up" stays so.
+        meta_path = dev_server.DATA_WEB / "3d" / "Demo" / "metadata.json"
+        self.assertTrue(dev_server._save_dataset("3d/Demo", {"upsideDown": True}))
+        meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        self.assertIs(meta.get("upsideDown"), True)
+        self.assertEqual(meta.get("type"), "3d")
+        self.assertTrue(dev_server._save_dataset("3d/Demo", {"upsideDown": False}))
+        meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        self.assertIn("upsideDown", meta)
+        self.assertIs(meta["upsideDown"], False)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

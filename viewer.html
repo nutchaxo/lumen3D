@@ -275,6 +275,13 @@
             </div>
             <span class="zstack-thickness-um" id="zstack-thickness-um">—</span>
           </div>
+          <!-- Spin of the slices on screen (zstack-browser plugin): starts on the angle the
+               opening pose landed on — the smallest turn from where the volume was. -->
+          <div class="zstack-spin-row">
+            <span class="zstack-spin-label" id="zstack-spin-label">Rotation</span>
+            <input type="range" class="zstack-spin" id="zstack-spin" min="0" max="360" step="1" value="0" aria-label="Rotation">
+            <span class="zstack-spin-deg" id="zstack-spin-deg">0°</span>
+          </div>
           <div class="zstack-crop-row zs-full" id="zstack-crop-row">
             <span class="zstack-crop-label" id="zstack-crop-label">—</span>
             <button type="button" class="btn btn-ghost btn-icon btn-sm zstack-crop-reset" id="btn-zstack-crop-reset"><i data-lucide="rotate-ccw"></i></button>

@@ -13,5 +13,7 @@
   "thicknessTitle": "Coupes affichées à la fois",
   "kept": "Conservées {lo}–{hi} · {n} coupes sur {total}",
   "keptAll": "Les {total} coupes sont conservées",
-  "resetTrim": "Rétablir toutes les coupes"
+  "resetTrim": "Rétablir toutes les coupes",
+  "spin": "Rotation",
+  "spinTitle": "Tourner les coupes à l'écran"
 }

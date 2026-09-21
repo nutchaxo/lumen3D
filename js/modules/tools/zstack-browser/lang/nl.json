@@ -13,5 +13,7 @@
   "thicknessTitle": "Doorsneden tegelijk getoond",
   "kept": "Behouden {lo}–{hi} · {n} van {total} doorsneden",
   "keptAll": "Alle {total} doorsneden behouden",
-  "resetTrim": "Alle doorsneden herstellen"
+  "resetTrim": "Alle doorsneden herstellen",
+  "spin": "Rotatie",
+  "spinTitle": "De doorsneden op het scherm draaien"
 }

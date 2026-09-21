@@ -132,6 +132,9 @@ html, body {
 .ori-axis-show input:not(:checked) ~ .ori-axis-dot,
 .ori-axis-show input:not(:checked) ~ .ori-axis-name { opacity: 0.4; }
 .ori-axis-label { padding: 5px 7px; font-size: 12px; text-align: center; }
+.ori-side { display: flex; flex-direction: column; gap: 6px; margin-bottom: 6px; }
+.ori-side-option { display: flex; align-items: flex-start; gap: 8px; font-size: 12px; line-height: 1.35; cursor: pointer; }
+.ori-side-option input { accent-color: var(--adm-accent); flex: none; margin: 2px 0 0; }
 
 /* ── Dataset gallery (operator-attached images) ───────────────── */
 .gal-file { display: none; }

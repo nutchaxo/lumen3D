@@ -98,6 +98,7 @@ function refDom() {
     visHint: el('vis-hint'),
     btnSetPreview: el('btn-set-preview'),
     btnDefineOrientation: el('btn-define-orientation'),
+    fSampleSide: el('f-sample-side'),
     orientationStatus: el('orientation-status'),
     orientationAxesList: el('orientation-axes-list'),
     fDefaultView: el('f-default-view'),
@@ -147,6 +148,7 @@ function fingerprint(meta) {
       num4(ch?.min, 0), num4(ch?.max, 1), num4(ch?.gamma, 1), ch?.active !== false,
     ]),
     orientation: quatOf(meta.orientation),
+    upsideDown: !!meta.upsideDown,
     orientation2d: meta.orientation2d
       ? [num4(meta.orientation2d.rotationDeg), !!meta.orientation2d.flipH] : null,
     // Fixed axis order on both sides: the stored object keeps whatever key order the
@@ -458,6 +460,7 @@ function setFormEnabled(on) {
    DOM.fDefaultView, DOM.btnCaptureView]
     .forEach((e) => { if (e) e.disabled = !on; });
   DOM.orientationAxesList?.querySelectorAll('input').forEach((e) => { e.disabled = !on; });
+  DOM.fSampleSide?.querySelectorAll('input').forEach((e) => { e.disabled = !on; });
   // Visibility belongs to publication — never offered for a staged dataset.
   if (DOM.fVisible) DOM.fVisible.disabled = !on || !!_draft?.staging;
   renderGallery();   // the drop zone follows the same gate
@@ -544,6 +547,9 @@ async function selectDataset(id) {
   meta.channels = meta.type === '2d' ? [] : normaliseChannels(meta.channels, meta.dimensions?.c || 0);
   // Preserve the list-level hidden flag if the metadata doesn't carry it yet.
   if (meta.hidden === undefined) meta.hidden = !!_current.hidden;
+  // Always posted as a boolean: the backends MERGE the payload, so switching the
+  // sample back to "right side up" must be an explicit false, not an absent key.
+  meta.upsideDown = meta.upsideDown === true;
   _draft = deepClone(meta);
   _original = deepClone(meta);
   clearDirty();
@@ -666,10 +672,46 @@ function populateForm() {
       ? t('admin.orientationSet', 'Orientation définie ✓')
       : t('admin.noOrientation', '(Aucune orientation définie)');
   }
+  renderSampleSide();
   renderOrientationAxes();
   renderDefaultView();
   renderGallery();
   _formBound = true;
+}
+
+// ── Sample side ────────────────────────────────────────────────
+function renderSampleSide() {
+  const on = !!_draft?.upsideDown;
+  DOM.fSampleSide?.querySelectorAll('input').forEach((r) => { r.checked = (r.value === '1') === on; });
+}
+
+/**
+ * The sample-side switch, live on the preview: the core turns the volume over on
+ * the spot (SET_SAMPLE_UPSIDE_DOWN), and the orientation plugin turns the saved
+ * calibration over with it and hands it back, so what is saved is the frame the
+ * operator now sees. An uncalibrated dataset gets no quaternion back — the core
+ * derives its raw pose from the flag alone.
+ */
+function pushSampleSide() {
+  const win = DOM.previewFrame?.contentWindow;
+  if (!win || !_draft) return;
+  const settle = () => { window.removeEventListener('message', onReply); clearTimeout(timer); };
+  const onReply = (e) => {
+    if (e.origin !== window.location.origin || e.data?.type !== 'SAMPLE_SIDE_RESULT') return;
+    settle();
+    const q = e.data.orientation;
+    if (Array.isArray(q) && q.length === 4 && q.every(Number.isFinite)) {
+      _draft.orientation = Array.isArray(_draft.orientation) ? q.slice() : { x: q[0], y: q[1], z: q[2], w: q[3] };
+      syncDirty();
+    }
+  };
+  const timer = setTimeout(settle, ORIENTATION_REPLY_TIMEOUT);
+  window.addEventListener('message', onReply);
+  try {
+    win.postMessage({ type: 'SET_SAMPLE_UPSIDE_DOWN', value: !!_draft.upsideDown }, window.location.origin);
+  } catch (_) {
+    settle();
+  }
 }
 
 // ── Orientation editor ─────────────────────────────────────────
@@ -1206,6 +1248,14 @@ function wire() {
       _axesPushTimer = setTimeout(pushOrientationAxes, PREVIEW_DEBOUNCE * 2);
     });
   }
+
+  if (DOM.fSampleSide) DOM.fSampleSide.addEventListener('change', (e) => {
+    const input = e.target;
+    if (!_draft || !input || input.type !== 'radio') return;
+    _draft.upsideDown = input.value === '1';
+    syncDirty();
+    pushSampleSide();
+  });
 
   if (DOM.fDefaultView) DOM.fDefaultView.addEventListener('change', () => {
     const value = DOM.fDefaultView.value;

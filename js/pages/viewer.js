@@ -242,6 +242,10 @@ const ViewerApp = (() => {
     // the acquisition planes into the frame the operator defined instead of the
     // raw orientation of the file.
     VolumeViewer.setFrameQuaternion?.(_baseQuaternion());
+    // Which way up the raw file shows the sample (metadata.upsideDown): the raw pose
+    // and the face the z-stack browser looks at follow it. Before prepareAll, so a
+    // default view still wins.
+    VolumeViewer.setSampleUpsideDown?.(datasetMeta?.upsideDown === true);
     _qualityProgressUnsub?.();
     _qualityProgressUnsub = VolumeViewer.onQualityProgress?.(_handleQualityProgress) || null;
     // ELE-18 (EDGE-001): surface a visible status on GPU context loss/restore (Rule 1.1).
@@ -3930,6 +3934,11 @@ const ViewerApp = (() => {
             .then(() => _postToHost({ type: 'QUALITY_STATUS', quality: _qualityMode, phase: 'ready' }))
             .catch(() => _postToHost({ type: 'QUALITY_STATUS', quality, phase: 'error' }));
         }
+      } else if (data.type === 'SET_SAMPLE_UPSIDE_DOWN') {
+        // The admin editor's sample-side switch, on its preview: turn the volume
+        // over on the spot so the operator sees which way up is right. The
+        // orientation plugin turns its calibration over on the same message.
+        VolumeViewer.setSampleUpsideDown?.(data.value === true, { turnOver: true });
       } else if (data.type === 'TOGGLE_VISUAL') {
         if (data.visual === 'grid') {
           VolumeViewer.setGridMode?.(data.state ? 1 : 0);

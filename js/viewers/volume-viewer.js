@@ -111,6 +111,11 @@ const VolumeViewer = (() => {
   let _lastCubePos = new THREE.Vector3();
   let _lastCubeQuat = new THREE.Quaternion();
   let _rotationLocked = false;
+  // The raw file shows the sample from below (its +Z face is the underside): it is
+  // shown turned over about its X axis and its top face is −Z. setSampleUpsideDown.
+  let _upsideDown = false;
+  // A pose in flight, { from, to, start, duration }: stepped by _animate.
+  let _poseAnim = null;
   // The dataset's "home" pose — null unless something set one (the orientation-axes
   // plugin does, from the dataset's saved default view). resetView() returns HERE
   // rather than to the raw voxel axes, so "reset" lands where the dataset opened.
@@ -1405,6 +1410,7 @@ const VolumeViewer = (() => {
         } else if (dragMode === 'measure') {
           // Allow rotation in measure mode — unless rotation is locked (e.g. Z-stack browser)
           if (!_rotationLocked) {
+            _poseAnim = null;   // the user took the volume: a pose in flight yields
             const deltaRotationQuaternion = new THREE.Quaternion()
               .setFromEuler(new THREE.Euler(
                   (deltaMove.y * 1) * (Math.PI / 180),
@@ -1417,6 +1423,7 @@ const VolumeViewer = (() => {
         } else {
           // Default: rotate — blocked when rotation is locked
           if (!_rotationLocked) {
+            _poseAnim = null;   // the user took the volume: a pose in flight yields
             const deltaRotationQuaternion = new THREE.Quaternion()
               .setFromEuler(new THREE.Euler(
                   (deltaMove.y * 1) * (Math.PI / 180),
@@ -1577,6 +1584,7 @@ const VolumeViewer = (() => {
     }
     _lastFrameRenderTime = now;
 
+    if (_stepPoseAnimation(now)) _needsRender = true;
     _syncRotGizmoTransform();
     _syncGridRotation();
 
@@ -3012,28 +3020,121 @@ const VolumeViewer = (() => {
     _frameQuaternion = next.normalize();
   }
 
+  /** A half-turn about the volume's own X axis: turning the sample over. */
+  function _halfTurnX() {
+    return new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), Math.PI);
+  }
+
+  /**
+   * The pose of the raw file before any calibration: the acquisition axes on the
+   * world axes, turned over when the file shows the sample from below.
+   */
+  function _rawPoseQuaternion() {
+    return _upsideDown ? _halfTurnX() : new THREE.Quaternion();
+  }
+
+  /**
+   * Which way up the raw file shows the sample. `upsideDown`: its +Z face is the
+   * underside (a confocal stack, imaged from the objective under an inverted
+   * microscope), so the sample is shown turned over about its X axis and its top —
+   * the face seen from above the microscope — is the −Z face, which setView's side
+   * 'top' resolves to. Before anything has posed the volume the raw pose is applied
+   * at once. With `turnOver` (the admin preview's switch) a change turns the volume
+   * over on the spot, home pose and calibration frame included, so a gizmo drawn
+   * from the frame stays attached to the specimen.
+   * @param {boolean} flag
+   * @param {{turnOver?: boolean}} [options]
+   */
+  function setSampleUpsideDown(flag, options = {}) {
+    const next = Boolean(flag);
+    const changed = next !== _upsideDown;
+    _upsideDown = next;
+    if (!cube) return;
+    if (options.turnOver) {
+      if (!changed) return;
+      const half = _halfTurnX();
+      _poseAnim = null;
+      cube.quaternion.multiply(half);
+      if (_homeQuaternion) _homeQuaternion.multiply(half);
+      if (_frameQuaternion) _frameQuaternion.multiply(half);
+      _notifyCameraChange();
+    } else if (!_homeQuaternion && !_hasLoadedVolume) {
+      cube.quaternion.copy(_rawPoseQuaternion());
+      _scheduleFrame();
+    }
+  }
+
+  function isSampleUpsideDown() {
+    return _upsideDown;
+  }
+
+  /** 'top' / 'bottom' are the faces the upside-down flag says; anything but 'back' is 'front'. */
+  function _resolveViewSide(side) {
+    if (side === 'top') return _upsideDown ? 'back' : 'front';
+    if (side === 'bottom') return _upsideDown ? 'front' : 'back';
+    return side === 'back' ? 'back' : 'front';
+  }
+
+  /**
+   * Take the volume to `target`: at once, or along the shortest arc over
+   * `animateMs` — stepped by _animate, eased at both ends, one camera notification
+   * at the end so the siblings of a Compare panel see the pose it settles on.
+   */
+  function _poseTo(target, animateMs) {
+    const ms = Number(animateMs) || 0;
+    if (ms <= 0 || cube.quaternion.angleTo(target) < 1e-4) {
+      _poseAnim = null;
+      cube.quaternion.copy(target);
+      _notifyCameraChange();
+      return;
+    }
+    const now = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+    _poseAnim = { from: cube.quaternion.clone(), to: target.clone(), start: now, duration: ms };
+    _scheduleFrame();
+  }
+
+  /** One frame of the pose in flight; true while there is one. */
+  function _stepPoseAnimation(now) {
+    const a = _poseAnim;
+    if (!a) return false;
+    const t = Math.min(1, Math.max(0, (now - a.start) / a.duration));
+    const eased = t * t * (3 - 2 * t);
+    cube.quaternion.slerpQuaternions(a.from, a.to, eased);
+    if (t >= 1) {
+      cube.quaternion.copy(a.to);
+      _poseAnim = null;
+      _notifyCameraChange();
+    }
+    return true;
+  }
+
   /**
    * Pose the volume for an axis-aligned view.
    * @param {'xy'|'xz'|'yz'|'3d'} view
-   * @param {{side?: 'front'|'back'}} [options]  which face of the stack looks at the
-   *   camera: 'front' (default) puts the +axis toward it; 'back' is the front pose
-   *   turned over about the vertical — the same in-plane spin seen from the other
-   *   side, so screen-up is kept and the image is the mirror of the front view,
-   *   exactly what turning the sample over does.
+   * @param {object} [options]
+   *   side    'front' (default): the +axis toward the camera; 'back': the front
+   *           pose turned over about the vertical — the same in-plane spin seen
+   *           from the other side, screen-up kept, the image the mirror of the
+   *           front view, exactly what turning the sample over does; 'top' /
+   *           'bottom': the sample's upper / lower face (see setSampleUpsideDown).
+   *   spin    'frame' (default): the in-plane spin nearest the calibrated frame;
+   *           'nearest': nearest the pose the volume has NOW — the smallest move;
+   *           a number: degrees of in-plane spin counted from the frame spin.
+   *   animate ms: travel there over that time instead of snapping (0: snap).
+   *   force   apply even while rotation is locked (the browser's own re-pose).
+   * @returns {{spinDeg: number}|null} the in-plane spin the pose landed on, counted
+   *   from the frame spin in [0, 360) — what a spin slider shows; null when refused.
    */
   function setView(view, options = {}) {
-    if (!cube) return;
+    if (!cube) return null;
     // BUG-027: honor the rotation lock — don't snap orientation back to a preset axis when locked.
-    if (_rotationLocked) { _notifyCameraChange(); return; }
+    if (_rotationLocked && !options.force) { _notifyCameraChange(); return null; }
     if (view === '3d') {
-      if (_homeQuaternion) cube.quaternion.copy(_homeQuaternion);
-      else {
-        cube.quaternion.identity();
-        cube.rotateX(-Math.PI / 6);
-        cube.rotateY(Math.PI / 5);
-      }
-      _notifyCameraChange();
-      return;
+      const target = _homeQuaternion ? _homeQuaternion.clone() : _rawPoseQuaternion()
+        .multiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), -Math.PI / 6))
+        .multiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.PI / 5));
+      _poseTo(target, options.animate);
+      return null;
     }
     // B brings the requested voxel axis onto the viewing axis (world Z): looking
     // down Z for xy, down the voxel Y for xz, down the voxel X for yz. The front
@@ -3051,11 +3152,24 @@ const VolumeViewer = (() => {
     const S = _frameQuaternion
       ? _nearestZSpin(_frameQuaternion.clone().multiply(B.clone().invert()))
       : new THREE.Quaternion();
-    cube.quaternion.copy(S).multiply(B);
-    if (options.side === 'back') {
-      cube.quaternion.premultiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.PI));
+    // Q0 is the frame pose of the view, spin 0; every pose of the family is Rz(θ)·Q0
+    // — the same face, the slices turned on screen.
+    const Q0 = S.clone().multiply(B);
+    if (_resolveViewSide(options.side) === 'back') {
+      Q0.premultiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.PI));
     }
-    _notifyCameraChange();
+    let spinRad = 0;
+    if (options.spin === 'nearest') {
+      // The Rz(θ)·Q0 nearest the current pose Q maximises ⟨Rz(θ)·Q0, Q⟩ = ⟨Rz(θ), Q·Q0⁻¹⟩:
+      // the smallest rotation that lays the slices flat on the screen.
+      const nearest = _nearestZSpin(cube.quaternion.clone().multiply(Q0.clone().invert()));
+      spinRad = 2 * Math.atan2(nearest.z, nearest.w);
+    } else if (Number.isFinite(Number(options.spin))) {
+      spinRad = THREE.MathUtils.degToRad(Number(options.spin));
+    }
+    const target = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), spinRad).multiply(Q0);
+    _poseTo(target, options.animate);
+    return { spinDeg: ((THREE.MathUtils.radToDeg(spinRad) % 360) + 360) % 360 };
   }
 
   function centerSample() {
@@ -3080,6 +3194,7 @@ const VolumeViewer = (() => {
     if (![next.x, next.y, next.z, next.w].every(Number.isFinite) || next.lengthSq() < 1e-8) return;
     _homeQuaternion = next.normalize();
     if (options.apply && cube) {
+      _poseAnim = null;
       cube.quaternion.copy(_homeQuaternion);
       _scheduleFrame();
     }
@@ -3090,8 +3205,9 @@ const VolumeViewer = (() => {
     cube.position.set(0, 0, 0);
     // BUG-027: preserve orientation while rotation is locked; still allow position/clip reset.
     if (!_rotationLocked) {
+      _poseAnim = null;
       if (_homeQuaternion) cube.quaternion.copy(_homeQuaternion);
-      else cube.quaternion.identity();
+      else cube.quaternion.copy(_rawPoseQuaternion());
     }
     if (options.resetClipping) {
       resetClipping();
@@ -4207,7 +4323,7 @@ const VolumeViewer = (() => {
     // BUG-029: validate restored transform — reject non-finite / degenerate quaternions and normalize before copy.
     if (Array.isArray(state.quaternion) && state.quaternion.length === 4 && state.quaternion.every(Number.isFinite)) {
       const q = new THREE.Quaternion().fromArray(state.quaternion);
-      if (q.lengthSq() > 1e-8) cube.quaternion.copy(q.normalize());
+      if (q.lengthSq() > 1e-8) { _poseAnim = null; cube.quaternion.copy(q.normalize()); }
     }
     if (Array.isArray(state.position) && state.position.length === 3 && state.position.every(Number.isFinite)) {
       cube.position.fromArray(state.position);
@@ -4398,6 +4514,10 @@ const VolumeViewer = (() => {
     centerSample,
     setHomeQuaternion,
     setFrameQuaternion,
+    setSampleUpsideDown,
+    isSampleUpsideDown,
+    getRawPoseQuaternion: () => _rawPoseQuaternion(),
+    isPoseAnimating: () => _poseAnim !== null,
     resetView,
     resetClipping,
     fitCameraToVolume,

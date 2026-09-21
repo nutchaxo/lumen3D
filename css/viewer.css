@@ -1967,6 +1967,25 @@ body.viewer-iframe .scientific-panel {
   min-width: 54px;
   text-align: right;
 }
+.zstack-spin-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+}
+.zstack-spin {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+}
+.zstack-spin-deg {
+  font-family: var(--font-mono);
+  color: var(--text-secondary);
+  min-width: 36px;
+  text-align: right;
+}
 .zstack-crop-label {
   font-family: var(--font-mono);
   color: var(--text-secondary);

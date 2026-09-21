@@ -69,7 +69,7 @@ const ctx = {
   iframe: { isIframe: () => true, postMessage: (m) => broadcasts.push(m), panelIndex: () => 0 },
   viewer: {
     setClipRange_z: (lo, hi) => calls.push(['clip', lo, hi]),
-    setView: (v, o) => calls.push(['view', v, o?.side || 'front']),
+    setView: (v, o) => { calls.push(['view', v, o?.side || 'front']); return { spinDeg: 37 }; },
     setRotationLocked: (v) => calls.push(['lock', v]),
     resetClipping: () => calls.push(['resetClip']),
   },
@@ -88,7 +88,10 @@ assert.equal(ctx._state.zstackActive, true);
 assert.equal(plugin._mode, '3d', 'opens in 3D mode');
 assert.equal(ctx._state.zstackCurrentSlice, -1, 'no slice index in 3D mode');
 near(lastClip()[1], 0, '3D clip lo'); near(lastClip()[2], 1, '3D clip hi');
-assert.equal(count('view'), 0, '3D mode does not force the XY view');
+assert.deepEqual(calls.filter((c) => c[0] === 'view'), [['view', 'xy', 'top']],
+  'opening lays the stack flat at once, its top face toward the camera');
+assert.equal($('zstack-spin').value, '37', 'the spin slider starts on the angle the opening pose landed on');
+assert.equal($('zstack-spin-deg').textContent, '37°');
 assert.equal(count('lock'), 0, '3D mode leaves rotation free');
 assert.ok($('zstack-vslider').classList.contains('zs-mode-3d'), 'slider carries the 3D class');
 assert.equal($('zstack-slice-label').textContent, 'notch', 'readout shows the notch label');
@@ -100,14 +103,15 @@ plugin._goToSlice(12);
 assert.equal(plugin._mode, 'slice');
 assert.equal(ctx._state.zstackCurrentSlice, 12);
 near(lastClip()[1], 12 / 100, 'slice clip lo'); near(lastClip()[2], 13 / 100, 'slice clip hi (one slice)');
-assert.deepEqual(calls.filter((c) => c[0] === 'view'), [['view', 'xy', 'back']],
-  'entering slice mode sets the XY view, looked at from the −Z side (the +Z side showed the specimens mirrored)');
+assert.deepEqual(calls.filter((c) => c[0] === 'view'), [['view', 'xy', 'top'], ['view', 'xy', 'top']],
+  'entering the track lays the stack flat again (its top face toward the camera) and locks it');
+assert.equal(broadcasts.at(-1).spin, 37, 'the broadcast carries the spin the pose landed on');
 assert.equal(count('lock'), 1);
 assert.equal($('zstack-cursor').style.top, '12.0000%');
 assert.equal($('zstack-cursor').style.height, '1.0000%');
 assert.equal($('zstack-slice-label').textContent, '13 / 100', '1-based readout');
 plugin._goToSlice(13);
-assert.equal(count('view'), 1, 'moving the cursor does not re-snap the view');
+assert.equal(count('view'), 2, 'moving the cursor does not re-snap the view');
 
 plugin._setThickness(5);
 assert.equal(plugin._lo, 13, 'thickness grows from the cursor top edge');
@@ -117,6 +121,14 @@ assert.equal($('zstack-slice-label').textContent, '14–18 / 100');
 assert.equal($('zstack-thickness-um').textContent, '10.00 µm');
 plugin._goToSlice(15);
 assert.equal(plugin._lo, 13, 'goToSlice centres the slab: round trip is stable');
+
+// The slider turns the slices on screen, through the lock, and tells the siblings.
+plugin._setSpin(400);
+assert.equal(plugin._spin, 40, 'the slider wraps into [0, 360)');
+assert.equal($('zstack-spin-deg').textContent, '40°');
+assert.equal(count('view'), 3, 'the slider re-poses the stack');
+assert.equal(broadcasts.at(-1).spin, 40, 'and the spin travels to the siblings');
+assert.equal(count('lock'), 1, 'without touching the lock');
 
 // ── 3. the trim handles bound the 3D view and the cursor ──────────────────────
 plugin.applySync({ sliceTotal: 100, mode: '3d', crop: [10, 49], thickness: 5 });
@@ -185,7 +197,8 @@ assert.equal(ctx._state.zstackCurrentSlice, 40, 'a pre-1.51 payload (slice only)
 plugin.applySync({ sliceTotal: 100, mode: 'slice', cursor: 33, thickness: 3, crop: [5, 80] });
 const saved = plugin.getState();
 const plain = (s) => JSON.parse(JSON.stringify(s));
-assert.deepEqual(plain(saved), { zstackActive: true, zstackSlice: 34, mode: 'slice', cursor: 33, thickness: 3, crop: [5, 80] });
+assert.deepEqual(plain(saved), { zstackActive: true, zstackSlice: 34, mode: 'slice', cursor: 33, thickness: 3, crop: [5, 80], spin: 37 },
+  'the workspace carries the spin the track landed on');
 plugin.reset();
 assert.equal(ctx._state.zstackActive, false);
 assert.equal(plugin._mode, '3d'); assert.equal(plugin._thickness, 1);

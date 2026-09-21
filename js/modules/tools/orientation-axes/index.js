@@ -33,6 +33,12 @@
  * The admin panel edits labels/hidden itself but never computes a quaternion: it
  * asks this plugin (postMessage) and stores what comes back, so the geometry has
  * exactly one implementation.
+ *
+ * `metadata.upsideDown` (the admin's sample-side switch) says the raw file shows
+ * the sample from below; the core shows it turned over about its X axis
+ * (VolumeViewer.setSampleUpsideDown). Q_base is a cube pose, so it carries that
+ * half-turn like any other rotation: when the switch flips on the preview the
+ * calibration turns over with the volume and the panel stores what comes back.
  */
 
 // Gizmo arms, expressed in the anatomical frame.
@@ -107,6 +113,8 @@ PluginRegistry.implement('orientation-axes', {
   _calibrationMode: false,
   _rafId: null,
   _baseQuaternion: null,   // Q_base — the dataset's anatomical calibration
+  _calibrated: false,      // metadata.orientation exists (Q_base is not the raw pose)
+  _upsideDown: false,      // metadata.upsideDown — the raw file shows the sample from below
   _defaultView: null,      // Q_anat — the dataset's default view, null when unset
   _labels: {},
   _hidden: null,           // Set of hidden axis codes
@@ -151,7 +159,14 @@ PluginRegistry.implement('orientation-axes', {
   /** Re-read everything this plugin draws from the dataset metadata. */
   _readConfig() {
     const meta = this._ctx?.dataset?.getMeta?.() || null;
-    this._baseQuaternion = _oriQuat(meta && meta.orientation) || new THREE.Quaternion();
+    const saved = _oriQuat(meta && meta.orientation);
+    this._calibrated = !!saved;
+    this._upsideDown = !!(meta && meta.upsideDown === true);
+    // Uncalibrated: the raw pose the core shows the file in — turned over when the
+    // file is upside down — so the arms start on the volume as it is displayed.
+    this._baseQuaternion = saved
+      || ((typeof VolumeViewer !== 'undefined' && VolumeViewer.getRawPoseQuaternion)
+        ? VolumeViewer.getRawPoseQuaternion() : new THREE.Quaternion());
     const cfg = (meta && meta.orientationAxes) || {};
     this._labels = (cfg.labels && typeof cfg.labels === 'object') ? cfg.labels : {};
     this._hidden = new Set(Array.isArray(cfg.hidden) ? cfg.hidden.filter((c) => ORI_AXIS_DEF[c]) : []);
@@ -259,6 +274,20 @@ PluginRegistry.implement('orientation-axes', {
         const q = cube.quaternion;
         e.source.postMessage({ type: 'ORIENTATION_RESULT', quaternion: { x: q.x, y: q.y, z: q.z, w: q.w } }, e.origin);
       }
+    } else if (e.data?.type === 'SET_SAMPLE_UPSIDE_DOWN') {
+      // The admin's sample-side switch. The core turns the volume over on this
+      // message; the calibration turns over with it, so the gizmo stays attached to
+      // the specimen, and the panel stores what comes back — the frame it now sees.
+      const next = e.data.value === true;
+      if (next !== this._upsideDown) {
+        this._upsideDown = next;
+        this._baseQuaternion.multiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), Math.PI));
+      }
+      e.source?.postMessage({
+        type: 'SAMPLE_SIDE_RESULT',
+        upsideDown: next,
+        orientation: this._calibrated ? this._baseQuaternion.toArray() : null
+      }, e.origin);
     } else if (e.data?.type === 'SET_ORIENTATION_AXES') {
       // Live preview of the admin panel's axes editor (labels + visibility).
       const cfg = e.data.value || {};

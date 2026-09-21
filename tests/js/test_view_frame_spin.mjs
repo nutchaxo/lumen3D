@@ -51,7 +51,7 @@ const harness = new Function('THREE', `
   const _scheduleFrame = () => {};
   ${lift('_nearestZSpin')}
   ${lift('setFrameQuaternion')}
-  ${lift('_halfTurnX')}
+  ${lift('_halfTurn')}
   ${lift('_rawPoseQuaternion')}
   ${lift('setSampleUpsideDown')}
   ${lift('isSampleUpsideDown')}
@@ -223,7 +223,7 @@ for (const view of ['xy', 'xz', 'yz']) assertNearestSpin(view, tilted);
   setView('xy', { side: 'bottom' });
   same(cube.quaternion, RAW.xy, 'upside down: the bottom face is the front pose');
   assert.equal(harness.isSampleUpsideDown(), true);
-  same(harness.rawPose(), Rx(Math.PI), 'the raw pose of an upside-down file is a half-turn about X');
+  same(harness.rawPose(), Ry(Math.PI), 'the raw pose of an upside-down file is a half-turn about the vertical (the back side)');
   harness.setSampleUpsideDown(false);
   same(harness.rawPose(), new THREE.Quaternion(), 'and the identity otherwise');
 }
@@ -308,22 +308,30 @@ for (const view of ['xy', 'xz', 'yz']) assertNearestSpin(view, tilted);
 // ── 12. Turning the sample over on the spot ─────────────────────────────────
 {
   setFrameQuaternion(Rz(0.7));
-  harness.home(Rz(0.3));
-  cube.quaternion.copy(Rz(1.1));
+  const home = Rz(0.3).multiply(Rx(0.4));
+  harness.home(home.clone());
+  const pose = Rz(1.1).multiply(Rx(0.5));
+  cube.quaternion.copy(pose);
   harness.setSampleUpsideDown(true, { turnOver: true });
-  same(cube.quaternion, Rz(1.1).multiply(Rx(Math.PI)), 'the volume turns over about its own X axis');
-  same(harness.frame(), Rz(0.7).multiply(Rx(Math.PI)), 'the calibration frame turns over with it');
+  same(cube.quaternion, Ry(Math.PI).multiply(pose), 'the volume turns over about the SCREEN vertical, whatever its pose');
+  {
+    // Left and right swap, up stays up: the world image of the file's Y axis is unchanged.
+    const upBefore = new THREE.Vector3(0, 1, 0).applyQuaternion(pose);
+    const upAfter = new THREE.Vector3(0, 1, 0).applyQuaternion(cube.quaternion);
+    assert.ok(Math.abs(upBefore.y - upAfter.y) < 1e-9 && Math.abs(upBefore.x + upAfter.x) < 1e-9, 'screen-up kept, left/right mirrored');
+  }
+  same(harness.frame(), Rz(0.7), 'the calibration frame is NOT touched: it maps file axes to anatomy');
   harness.setSampleUpsideDown(true, { turnOver: true });
-  same(cube.quaternion, Rz(1.1).multiply(Rx(Math.PI)), 'the same side again changes nothing');
+  same(cube.quaternion, Ry(Math.PI).multiply(pose), 'the same side again changes nothing');
   harness.setSampleUpsideDown(false, { turnOver: true });
-  same(cube.quaternion, Rz(1.1), 'and back');
+  same(cube.quaternion, pose, 'and back');
   same(harness.frame(), Rz(0.7));
   harness.home(null);
   // Before anything posed the volume: the raw pose is applied at once.
   harness.loaded(false);
   cube.quaternion.identity();
   harness.setSampleUpsideDown(true);
-  same(cube.quaternion, Rx(Math.PI), 'an upside-down file starts turned over');
+  same(cube.quaternion, Ry(Math.PI), 'an upside-down file starts turned over');
   harness.setSampleUpsideDown(false);
   same(cube.quaternion, new THREE.Quaternion());
   setView('3d');
@@ -331,7 +339,7 @@ for (const view of ['xy', 'xz', 'yz']) assertNearestSpin(view, tilted);
   same(cube.quaternion, legacy, 'the 3d tilt starts from the raw pose');
   harness.setSampleUpsideDown(true);
   setView('3d');
-  same(cube.quaternion, Rx(Math.PI).multiply(Rx(-Math.PI / 6)).multiply(Ry(Math.PI / 5)), 'turned over when the file is upside down');
+  same(cube.quaternion, Ry(Math.PI).multiply(Rx(-Math.PI / 6)).multiply(Ry(Math.PI / 5)), 'turned over when the file is upside down');
   harness.setSampleUpsideDown(false);
   setFrameQuaternion(null);
 }

@@ -112,7 +112,8 @@ const VolumeViewer = (() => {
   let _lastCubeQuat = new THREE.Quaternion();
   let _rotationLocked = false;
   // The raw file shows the sample from below (its +Z face is the underside): it is
-  // shown turned over about its X axis and its top face is −Z. setSampleUpsideDown.
+  // shown turned over about the screen's vertical axis and its top face is −Z.
+  // setSampleUpsideDown.
   let _upsideDown = false;
   // A pose in flight, { from, to, start, duration }: stepped by _animate.
   let _poseAnim = null;
@@ -3020,28 +3021,38 @@ const VolumeViewer = (() => {
     _frameQuaternion = next.normalize();
   }
 
-  /** A half-turn about the volume's own X axis: turning the sample over. */
-  function _halfTurnX() {
-    return new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), Math.PI);
+  /**
+   * Turning the sample over: a half-turn about the SCREEN's vertical axis (world Y),
+   * so left and right swap and up stays up, whatever the pose — the same half-turn
+   * setView's back side uses. Applied in world space (premultiplied): a half-turn
+   * about the volume's own X axis looked like a diagonal tumble as soon as a
+   * calibration had tilted the file axes on screen.
+   */
+  function _halfTurn() {
+    return new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.PI);
   }
 
   /**
    * The pose of the raw file before any calibration: the acquisition axes on the
    * world axes, turned over when the file shows the sample from below.
+   * @param {boolean} [upsideDown] defaults to the dataset's own flag
    */
-  function _rawPoseQuaternion() {
-    return _upsideDown ? _halfTurnX() : new THREE.Quaternion();
+  function _rawPoseQuaternion(upsideDown = _upsideDown) {
+    return upsideDown ? _halfTurn() : new THREE.Quaternion();
   }
 
   /**
    * Which way up the raw file shows the sample. `upsideDown`: its +Z face is the
    * underside (a confocal stack, imaged from the objective under an inverted
-   * microscope), so the sample is shown turned over about its X axis and its top —
-   * the face seen from above the microscope — is the −Z face, which setView's side
-   * 'top' resolves to. Before anything has posed the volume the raw pose is applied
-   * at once. With `turnOver` (the admin preview's switch) a change turns the volume
-   * over on the spot, home pose and calibration frame included, so a gizmo drawn
-   * from the frame stays attached to the specimen.
+   * microscope), so the sample is shown turned over — a half-turn about the
+   * screen's vertical — and its top, the face seen from above the microscope, is
+   * the −Z face, which setView's side 'top' resolves to. Before anything has posed
+   * the volume the raw pose is applied at once. With `turnOver` (the admin
+   * preview's switch) a change turns the volume over on the spot, home pose
+   * included, so "reset view" agrees with what is shown. The calibration frame is
+   * NOT touched: it maps file axes to anatomy, a fact of the file that does not
+   * depend on which side is looked at — a gizmo drawn from it turns with the
+   * volume by itself.
    * @param {boolean} flag
    * @param {{turnOver?: boolean}} [options]
    */
@@ -3052,11 +3063,10 @@ const VolumeViewer = (() => {
     if (!cube) return;
     if (options.turnOver) {
       if (!changed) return;
-      const half = _halfTurnX();
+      const half = _halfTurn();
       _poseAnim = null;
-      cube.quaternion.multiply(half);
-      if (_homeQuaternion) _homeQuaternion.multiply(half);
-      if (_frameQuaternion) _frameQuaternion.multiply(half);
+      cube.quaternion.premultiply(half);
+      if (_homeQuaternion) _homeQuaternion.premultiply(half);
       _notifyCameraChange();
     } else if (!_homeQuaternion && !_hasLoadedVolume) {
       cube.quaternion.copy(_rawPoseQuaternion());
@@ -4516,7 +4526,7 @@ const VolumeViewer = (() => {
     setFrameQuaternion,
     setSampleUpsideDown,
     isSampleUpsideDown,
-    getRawPoseQuaternion: () => _rawPoseQuaternion(),
+    getRawPoseQuaternion: (flag) => _rawPoseQuaternion(flag === undefined ? _upsideDown : Boolean(flag)),
     isPoseAnimating: () => _poseAnim !== null,
     resetView,
     resetClipping,

@@ -687,10 +687,11 @@ function renderSampleSide() {
 
 /**
  * The sample-side switch, live on the preview: the core turns the volume over on
- * the spot (SET_SAMPLE_UPSIDE_DOWN), and the orientation plugin turns the saved
- * calibration over with it and hands it back, so what is saved is the frame the
- * operator now sees. An uncalibrated dataset gets no quaternion back — the core
- * derives its raw pose from the flag alone.
+ * the spot (SET_SAMPLE_UPSIDE_DOWN, a half-turn about the screen's vertical). The
+ * calibration is not touched — it maps file axes to anatomy — but a default view is
+ * a pose of the anatomy on screen: the orientation plugin turns it to the opposite
+ * side (a preset becomes its opposite) and hands it back, so what is saved is the
+ * view the operator now sees.
  */
 function pushSampleSide() {
   const win = DOM.previewFrame?.contentWindow;
@@ -699,10 +700,11 @@ function pushSampleSide() {
   const onReply = (e) => {
     if (e.origin !== window.location.origin || e.data?.type !== 'SAMPLE_SIDE_RESULT') return;
     settle();
-    const q = e.data.orientation;
+    const dv = e.data.defaultView;
+    const q = dv && dv.quaternion;
     if (Array.isArray(q) && q.length === 4 && q.every(Number.isFinite)) {
-      _draft.orientation = Array.isArray(_draft.orientation) ? q.slice() : { x: q[0], y: q[1], z: q[2], w: q[3] };
-      syncDirty();
+      writeOrientationCfg({ defaultView: { preset: dv.preset || 'custom', quaternion: q } });
+      renderDefaultView();
     }
   };
   const timer = setTimeout(settle, ORIENTATION_REPLY_TIMEOUT);

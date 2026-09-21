@@ -2,10 +2,10 @@
 // `metadata.upsideDown` says the raw file shows the sample from below: the core shows
 // it turned over about its X axis, the z-stack browser looks at its top face, and on
 // the admin preview the orientation plugin's calibration turns over with the volume.
-//   • orientation-axes: SET_SAMPLE_UPSIDE_DOWN turns Q_base over once per change and
-//     replies with what the panel must store; an uncalibrated dataset starts on the raw
-//     pose the core shows; a default view still lands the promised anatomy on the camera
-//     (behavioural, real three.js);
+//   • orientation-axes: SET_SAMPLE_UPSIDE_DOWN leaves Q_base alone (file → anatomy),
+//     turns a default view to the opposite side (a preset to its opposite) and replies
+//     with what the panel must store; an uncalibrated dataset starts on the raw pose the
+//     core shows; the turned default view still lands the promised anatomy (behavioural);
 //   • zstack-browser: opening poses the stack top-down with the nearest spin (animated),
 //     the track re-poses and locks, the slider, the sync payload, a restored workspace
 //     keeps its pose (behavioural);
@@ -24,6 +24,7 @@ const THREE = require('../../js/vendor/three.min.js');
 const read = (rel) => readFileSync(path.join(ROOT, rel), 'utf8').replace(/\r/g, '');
 const same = (a, b, msg) => assert.ok(Math.abs(Math.abs(a.dot(b)) - 1) < 1e-9, `${msg} (got ${a.toArray().map((v) => v.toFixed(4))})`);
 const Rx = (t) => new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), t);
+const Ry = (t) => new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), t);
 const Rz = (t) => new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), t);
 
 // ── orientation-axes ─────────────────────────────────────────────────────────
@@ -37,7 +38,7 @@ const Rz = (t) => new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0
     { addEventListener() {} },
     { createElement: () => ({ getContext: () => ({ fillText() {} }), width: 0, height: 0 }) },
     { isTrustedMessageOrigin: () => true },
-    { getRawPoseQuaternion: () => rawPose.clone(), setHomeQuaternion() {}, triggerRender() {} },
+    { getRawPoseQuaternion: (flag) => (flag === undefined ? rawPose.clone() : (flag ? Ry(Math.PI) : new THREE.Quaternion())), setHomeQuaternion() {}, triggerRender() {} },
   );
   assert.ok(plugin, 'plugin implementation must register');
   const send = (message) => {
@@ -46,7 +47,7 @@ const Rz = (t) => new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0
     return reply;
   };
 
-  // Calibrated, right side up: switching turns Q_base over once, and back.
+  // Calibrated, right side up, no default view: the switch leaves Q_base alone.
   const Q = Rz(0.6).multiply(Rx(0.2));
   plugin._ctx = { dataset: { getMeta: () => ({ orientation: Q.toArray(), upsideDown: false }) } };
   plugin._readConfig();
@@ -55,33 +56,54 @@ const Rz = (t) => new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0
   let r = send({ type: 'SET_SAMPLE_UPSIDE_DOWN', value: true });
   assert.equal(r.type, 'SAMPLE_SIDE_RESULT');
   assert.equal(r.upsideDown, true);
-  same(new THREE.Quaternion().fromArray(r.orientation), Q.clone().multiply(Rx(Math.PI)), 'the calibration turned over with the volume');
-  r = send({ type: 'SET_SAMPLE_UPSIDE_DOWN', value: true });
-  same(new THREE.Quaternion().fromArray(r.orientation), Q.clone().multiply(Rx(Math.PI)), 'the same side again changes nothing');
+  assert.equal(r.defaultView, null, 'nothing to store: no default view');
+  same(plugin._baseQuaternion, Q, 'the calibration maps file axes to anatomy: untouched by the side');
   r = send({ type: 'SET_SAMPLE_UPSIDE_DOWN', value: false });
-  same(new THREE.Quaternion().fromArray(r.orientation), Q, 'and back');
+  same(plugin._baseQuaternion, Q);
+
+  // A preset default view turns to the opposite side: its opposite preset, exactly.
+  const pairs = { ventral: 'dorsal', dorsal: 'ventral', left: 'right', right: 'left', anterior: 'posterior', posterior: 'anterior' };
+  for (const [preset, opposite] of Object.entries(pairs)) {
+    plugin._ctx = { dataset: { getMeta: () => ({ orientation: Q.toArray(), upsideDown: false, orientationAxes: { defaultView: { preset } } }) } };
+    plugin._readConfig();
+    const before = plugin._defaultView.clone();
+    r = send({ type: 'SET_SAMPLE_UPSIDE_DOWN', value: true });
+    assert.equal(r.defaultView.preset, opposite, `${preset} looked at from the other side is ${opposite}`);
+    const turned = new THREE.Quaternion().fromArray(r.defaultView.quaternion);
+    same(turned, Ry(Math.PI).multiply(before), `${preset}: a half-turn about the vertical`);
+    plugin._ctx = { dataset: { getMeta: () => ({ orientation: Q.toArray(), upsideDown: false, orientationAxes: { defaultView: { preset: opposite } } }) } };
+    plugin._readConfig();
+    same(turned, plugin._defaultView, `${preset}: which is the ${opposite} preset's own pose`);
+    // The cube pose it yields shows the opposite anatomy to the camera, the same one up.
+    const cubePose = turned.clone().multiply(Q);
+    const anat = cubePose.clone().multiply(Q.clone().invert());
+    const face = new THREE.Vector3(0, 0, 1).applyQuaternion(anat.clone().invert());
+    const up = new THREE.Vector3(0, 1, 0).applyQuaternion(anat.clone().invert());
+    const dirs = { ventral: [0, 0, 1], dorsal: [0, 0, -1], left: [-1, 0, 0], right: [1, 0, 0], anterior: [0, 1, 0], posterior: [0, -1, 0] };
+    assert.ok(face.distanceTo(new THREE.Vector3(...dirs[opposite])) < 1e-9, `${preset}: the ${opposite} side faces the camera`);
+    const upName = ['anterior', 'posterior'].includes(preset) ? 'dorsal' : 'anterior';
+    assert.ok(up.distanceTo(new THREE.Vector3(...dirs[upName])) < 1e-9, `${preset}: ${upName} stays up`);
+  }
+  // A custom default view turns too and stays custom; the same side again changes nothing.
+  plugin._ctx = { dataset: { getMeta: () => ({ orientation: Q.toArray(), upsideDown: false, orientationAxes: { defaultView: { preset: 'custom', quaternion: Rz(0.4).toArray() } } }) } };
+  plugin._readConfig();
+  r = send({ type: 'SET_SAMPLE_UPSIDE_DOWN', value: true });
+  assert.equal(r.defaultView.preset, 'custom');
+  same(new THREE.Quaternion().fromArray(r.defaultView.quaternion), Ry(Math.PI).multiply(Rz(0.4)));
+  r = send({ type: 'SET_SAMPLE_UPSIDE_DOWN', value: true });
+  same(new THREE.Quaternion().fromArray(r.defaultView.quaternion), Ry(Math.PI).multiply(Rz(0.4)), 'the same side again changes nothing');
+  r = send({ type: 'SET_SAMPLE_UPSIDE_DOWN', value: false });
+  same(new THREE.Quaternion().fromArray(r.defaultView.quaternion), Rz(0.4), 'and back');
 
   // Uncalibrated, upside down: Q_base is the raw pose the core shows, nothing to store.
-  rawPose = Rx(Math.PI);
+  rawPose = Ry(Math.PI);
   plugin._ctx = { dataset: { getMeta: () => ({ upsideDown: true }) } };
   plugin._readConfig();
   assert.equal(plugin._calibrated, false);
-  same(plugin._baseQuaternion, Rx(Math.PI), 'an uncalibrated upside-down file starts on the turned-over raw pose');
+  same(plugin._baseQuaternion, Ry(Math.PI), 'an uncalibrated upside-down file starts on the turned-over raw pose');
   r = send({ type: 'SET_SAMPLE_UPSIDE_DOWN', value: false });
-  assert.equal(r.orientation, null, 'no calibration to hand back');
+  assert.equal(r.defaultView, null, 'no default view to hand back');
   same(plugin._baseQuaternion, new THREE.Quaternion(), 'the raw pose turned back');
-
-  // A default view after the flip still lands the promised anatomy on the camera.
-  rawPose = new THREE.Quaternion();
-  plugin._ctx = { dataset: { getMeta: () => ({ orientation: Q.toArray(), upsideDown: false }) } };
-  plugin._readConfig();
-  send({ type: 'SET_SAMPLE_UPSIDE_DOWN', value: true });
-  const cube = { quaternion: new THREE.Quaternion() };
-  plugin._getCube = () => cube;
-  send({ type: 'APPLY_ORIENTATION_VIEW', value: { preset: 'ventral' } });
-  const anat = cube.quaternion.clone().multiply(plugin._baseQuaternion.clone().invert());
-  const v = new THREE.Vector3(0, 0, 1).applyQuaternion(anat);
-  assert.ok(v.distanceTo(new THREE.Vector3(0, 0, 1)) < 1e-9, 'ventral faces the camera on the turned-over calibration');
 }
 
 // ── zstack-browser ───────────────────────────────────────────────────────────
@@ -174,7 +196,8 @@ const Rz = (t) => new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0
   assert.ok(/upsideDown: !!meta\.upsideDown,/.test(tab), 'the flag is part of the dirty fingerprint');
   assert.ok(/meta\.upsideDown = meta\.upsideDown === true;/.test(tab), 'always posted as a boolean (merge backends)');
   assert.ok(/type: 'SET_SAMPLE_UPSIDE_DOWN', value: !!_draft\.upsideDown/.test(tab), 'the switch reaches the preview');
-  assert.ok(/e\.data\?\.type !== 'SAMPLE_SIDE_RESULT'/.test(tab) && /_draft\.orientation = Array\.isArray\(_draft\.orientation\)/.test(tab), 'the turned-over calibration is stored');
+  assert.ok(/e\.data\?\.type !== 'SAMPLE_SIDE_RESULT'/.test(tab) && /writeOrientationCfg\(\{ defaultView: \{ preset: dv\.preset \|\| 'custom', quaternion: q \} \}\)/.test(tab), 'the turned default view is stored, the calibration is not touched');
+  assert.ok(!/_draft\.orientation = Array\.isArray\(_draft\.orientation\)/.test(tab), 'no calibration rewrite on the switch');
   const html = read('admpan.html');
   assert.ok(/id="f-sample-side"/.test(html) && /name="f-sample-side" value="1"/.test(html), 'two radios');
   assert.ok(/data-i18n="admin\.sampleSideUp"/.test(html) && /data-i18n="admin\.sampleSideDown"/.test(html));
@@ -189,7 +212,7 @@ const Rz = (t) => new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0
   assert.equal(zs.version, '1.2.0');
   assert.equal(zs.platformCompat, '>=1.55.7', 'the browser needs the core that resolves side top and animates');
   const ori = JSON.parse(read('js/modules/tools/orientation-axes/plugin.json'));
-  assert.equal(ori.version, '1.3.0');
+  assert.equal(ori.version, '1.3.1');
   assert.equal(ori.platformCompat, '>=1.55.7');
 }
 

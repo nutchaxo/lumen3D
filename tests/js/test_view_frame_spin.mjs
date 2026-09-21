@@ -333,6 +333,19 @@ for (const view of ['xy', 'xz', 'yz']) assertNearestSpin(view, tilted);
     assert.ok(Math.abs(z.z - 1) < 1e-9, 'preview, right side up: the +Z face looks at the camera');
   }
   same(harness.frame(), Rz(0.7));
+  // Flat on +Z now. From a flat stack each flip of the switch is a half-turn about the
+  // vertical — never a tumble about the horizontal picked by the noise of the pose.
+  for (const [flag, face] of [[true, -1], [false, 1]]) {
+    harness.setSampleUpsideDown(flag, { preview: true });
+    const a = harness.anim();
+    assert.ok(a && a.path, `flip to ${flag}: the flat stack flies over`);
+    assert.equal(a.path.first.axis.y, 1, `flip to ${flag}: about the vertical`);
+    assert.ok(Math.abs(Math.abs(a.path.first.angle) - Math.PI) < 1e-9, `flip to ${flag}: a half-turn`);
+    assert.ok(Math.abs(a.path.second.angle) < 1e-9, `flip to ${flag}: nothing about the horizontal`);
+    harness.step(a.start + 1000);
+    const z = new THREE.Vector3(0, 0, 1).applyQuaternion(cube.quaternion);
+    assert.ok(Math.abs(z.z - face) < 1e-9, `flip to ${flag}: lands on the ${face > 0 ? '+' : '-'}Z face`);
+  }
   harness.home(null);
   // Before anything posed the volume: the raw pose is applied at once.
   harness.loaded(false);
@@ -370,13 +383,22 @@ for (const view of ['xy', 'xz', 'yz']) assertNearestSpin(view, tilted);
       [Ry(1.2).multiply(Rx(0.15)).multiply(Q0), Y, X, 'leans sideways → about the vertical'],
       [Rx(1.2).multiply(Ry(0.15)).multiply(Q0), X, Y, 'leans up/down → about the horizontal'],
       [Ry(Math.PI).multiply(Q0), Y, X, 'points straight away → a half-turn about the vertical'],
+      [Rx(1e-9).multiply(Ry(Math.PI)).multiply(Q0), Y, X, 'points straight away, up by noise → still the vertical'],
+      [Rx(-3e-10).multiply(Ry(1e-10)).multiply(Ry(Math.PI)).multiply(Q0), Y, X, 'points straight away, noise both ways → still the vertical'],
+      [Rx(0.03).multiply(Ry(Math.PI)).multiply(Q0), Y, X, 'points away, leaning up by under two degrees → the vertical, then the small correction'],
     ]) {
       cube.quaternion.copy(start);
       const r = setView('xy', { side, spin: 'tilt' });
       const landed = cube.quaternion.clone();
       assert.ok(flat(landed), `${side} / ${label}: lands flat`);
       const move = landed.clone().multiply(start.clone().invert());
-      const p = angleAbout(move, primary), sec = angleAbout(move, secondary);
+      // The secondary angle read exactly: the first rotation leaves the primary axis
+      // where it is, the second alone displaces it, by 2·sin(secondary/2). (The twist
+      // formula is ill-conditioned for a half-turn — w ≈ 0 — where a turn about Y is
+      // also Rx(π)·Rz(π), so "how much about X" has no answer there.)
+      const p = angleAbout(move, primary);
+      const sec = 2 * Math.asin(Math.min(1, primary.clone().applyQuaternion(move).distanceTo(primary) / 2));
+      assert.ok(secondary.dot(primary) === 0, 'the two screen axes are orthogonal');
       assert.ok(p > sec, `${side} / ${label}: the turn is mostly about the primary axis (${p.toFixed(2)} vs ${sec.toFixed(2)})`);
       assert.ok(sec < 0.2 + 1e-9, `${side} / ${label}: the correction is slight (${sec.toFixed(3)})`);
       assert.ok(r && Number.isFinite(r.spinDeg), 'reports the spin landed on');

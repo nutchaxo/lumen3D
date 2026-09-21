@@ -20,6 +20,13 @@ const BrickLoader = (() => {
   let LRU_LIMIT = 1024;
   const PACK_CACHE_LIMIT = 128;
   const DEFAULT_CONCURRENT_LOADS = 24;
+  // Pack bodies in flight at once. A browser opens at most six HTTP/1.1 connections
+  // to a host and queues the rest in arrival order, the page's own calls included:
+  // with every socket busy on a pack body, the admin panel's next request (the list,
+  // the metadata of the dataset just clicked) waited for whole packs to land. Four
+  // slots leave two sockets free; a bandwidth-bound link gains nothing from more
+  // parallel bodies, and decoding — not the fetch — is what the 24 loads above run.
+  const DEFAULT_PACK_FETCH_SLOTS = 4;
   // Byte-range fetching (loadBrickTasks `byteRanges`): a cut through the volume needs
   // a few bricks of many packs — on the reference dataset an XZ cut needs 21 MB of
   // tiles spread over 157 MB of packs, a YZ cut 24 MB over 572 MB — so the runs the
@@ -60,8 +67,45 @@ const BrickLoader = (() => {
   })();
   const _settings = {
     concurrentLoads: DEFAULT_CONCURRENT_LOADS,
+    packFetchSlots: DEFAULT_PACK_FETCH_SLOTS,
     verifyHashes: false
   };
+  let _fetchSlotsBusy = 0;
+  const _fetchSlotWaiters = [];   // { start(): void }, in order of arrival
+
+  function _releaseFetchSlot() {
+    _fetchSlotsBusy = Math.max(0, _fetchSlotsBusy - 1);
+    while (_fetchSlotWaiters.length && _fetchSlotsBusy < _settings.packFetchSlots) {
+      _fetchSlotsBusy++;
+      _fetchSlotWaiters.shift().start();
+    }
+  }
+
+  /**
+   * Runs `request` (it returns the promise of a fetched body) once a pack-fetch slot
+   * is free, in order of arrival; the slot is held until the body has landed. An
+   * abort of `signal` while still waiting rejects at once and leaves the queue.
+   */
+  function _withFetchSlot(request, signal) {
+    if (signal?.aborted) return Promise.reject(new DOMException('Aborted', 'AbortError'));
+    let acquired;
+    if (_fetchSlotsBusy < _settings.packFetchSlots) {
+      _fetchSlotsBusy++;
+      acquired = Promise.resolve();
+    } else {
+      acquired = new Promise((resolve, reject) => {
+        const waiter = { start: () => { signal?.removeEventListener('abort', onAbort); resolve(); } };
+        const onAbort = () => {
+          const i = _fetchSlotWaiters.indexOf(waiter);
+          if (i >= 0) _fetchSlotWaiters.splice(i, 1);
+          reject(new DOMException('Aborted', 'AbortError'));
+        };
+        signal?.addEventListener('abort', onAbort, { once: true });
+        _fetchSlotWaiters.push(waiter);
+      });
+    }
+    return acquired.then(() => Promise.resolve().then(request).finally(_releaseFetchSlot));
+  }
 
   // ELE-21 (Rule 1.4): encodages que le décodeur sait traiter (cf. _fetchPackedRawBrick).
   const _KNOWN_ENCODINGS = new Set(['raw-u8', 'raw-u8-gzip', 'raw-rgba-gzip', 'webp-lossless']);
@@ -258,6 +302,9 @@ const BrickLoader = (() => {
   function configure(options = {}) {
     if (Number.isFinite(Number(options.concurrentLoads))) {
       _settings.concurrentLoads = Math.max(2, Math.min(96, Math.round(Number(options.concurrentLoads))));
+    }
+    if (Number.isFinite(Number(options.packFetchSlots))) {
+      _settings.packFetchSlots = Math.max(1, Math.min(16, Math.round(Number(options.packFetchSlots))));
     }
     if (options.verifyHashes !== undefined) {
       _settings.verifyHashes = Boolean(options.verifyHashes);
@@ -1026,10 +1073,10 @@ const BrickLoader = (() => {
     if (!entry) {
       _trimPackCache(PACK_CACHE_LIMIT - 1);
       const fetchSignal = _packFetchController ? _packFetchController.signal : signal;
-      const promise = fetch(url, { signal: fetchSignal }).then(async resp => {
+      const promise = _withFetchSlot(() => fetch(url, { signal: fetchSignal }).then(async resp => {
         if (!resp.ok) throw new Error(`HTTP ${resp.status} for ${url}`);
         return resp.arrayBuffer();
-      }).catch(err => {
+      }), fetchSignal).catch(err => {
         _packCache.delete(url);
         throw err;
       });
@@ -1166,7 +1213,7 @@ const BrickLoader = (() => {
       if (!entry) {
         _trimRangeCache(RANGE_CACHE_LIMIT - 1);
         const fetchSignal = _packFetchController ? _packFetchController.signal : signal;
-        const promise = fetch(url, { signal: fetchSignal, headers: { Range: `bytes=${run.start}-${run.end - 1}` } }).then(async resp => {
+        const promise = _withFetchSlot(() => fetch(url, { signal: fetchSignal, headers: { Range: `bytes=${run.start}-${run.end - 1}` } }).then(async resp => {
           if (resp.status === 206) {
             const buffer = await resp.arrayBuffer();
             if (buffer.byteLength !== run.end - run.start) {
@@ -1181,7 +1228,7 @@ const BrickLoader = (() => {
             return { buffer, base: 0 };
           }
           throw new Error(`HTTP ${resp.status} for ${url} (range ${run.start}-${run.end - 1})`);
-        }).catch(err => {
+        }), fetchSignal).catch(err => {
           _rangeCache.delete(key);
           throw err;
         });

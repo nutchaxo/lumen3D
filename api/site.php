@@ -17,6 +17,9 @@
 declare(strict_types=1);
 require_once __DIR__ . '/_admin_lib.php';
 admin_session_start();
+// Read-only use of the session from here on (auth, CSRF): release its lock so this
+// request never serialises with the rest of the admin (see api/admin.php).
+if (session_status() === PHP_SESSION_ACTIVE) session_write_close();
 
 $action = $_GET['action'] ?? '';
 $method = $_SERVER['REQUEST_METHOD'] ?? 'GET';

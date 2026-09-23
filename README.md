@@ -9,7 +9,7 @@
 
 **lumen3D** is a high-performance, **white-label** web platform for interactive exploration of multi-gigabyte 3D and 4D biological microscopy datasets. It streams and renders massive confocal volumes directly in the browser at **60 FPS** — no desktop software, no high-end local workstation required. A dataset is one of three kinds: `3d` (a still volume), `2d` (a calibrated stereomicroscope photograph) or `live` (a 4D timelapse — optionally carrying the cell tracking of its cells, drawn and analysed inside the same viewer).
 
-It was originally built for the **IRIBHM** (Institut de Recherche Interdisciplinaire en Biologie Humaine et Moléculaire) at the **Université Libre de Bruxelles (ULB)** — the reference deployment, imaging mouse embryos — and has since been **decoupled from that domain** into a reusable product: brand, texts, theme, pages, legal notices, navigation, and the installed plugin set are all configured **no-code** from an admin panel, with neutral defaults out of the box.
+It was designed and built by **Morgan CLIMENT**, originally for the **IRIBHM** (Institut de Recherche Interdisciplinaire en Biologie Humaine et Moléculaire) at the **Université Libre de Bruxelles (ULB)** — the reference deployment, imaging mouse embryos — and has since been **decoupled from that domain** into a reusable product: brand, texts, theme, pages, legal notices, navigation, and the installed plugin set are all configured **no-code** from an admin panel, with neutral defaults out of the box.
 
 The platform bridges raw scientific data and seamless web exploration through a **Python preprocessing pipeline** (Imaris `.ims` → brick-packed LOD pyramids, 3D **and 4D**) and a **vanilla-JS / Three.js client** with a custom WebGL2 ray-marcher and sparse 3D atlas streaming. It is **offline-capable** (all JS libraries self-hosted, no CDN) and ships with a **signed self-updater** and a **signed plugin marketplace**.
 
@@ -371,4 +371,4 @@ Follow the **autonomous versioning** routine described in [CLAUDE.md](CLAUDE.md)
 This project is licensed under the **PolyForm Noncommercial License 1.0.0** (see [LICENCE](LICENCE)).
 
 * **Permitted**: non-commercial research, personal study, evaluation, testing, and education.
-* For commercial use: contact **IRIBHM** / **Université Libre de Bruxelles**.
+* For commercial use: contact **Morgan CLIMENT** — [morgan.climent@agroparistech.com](mailto:morgan.climent@agroparistech.com).

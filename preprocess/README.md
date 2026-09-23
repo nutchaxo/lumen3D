@@ -668,5 +668,5 @@ Pour réimplémenter et obtenir le **même résultat** :
 ---
 
 <div align="center">
-<sub>IRIBHM · ULB — Lumen3D Microscopy Platform · pipeline de preprocessing v0.14.1</sub>
+<sub>Morgan CLIMENT — Lumen3D Microscopy Platform (développé pour l'IRIBHM · ULB) · pipeline de preprocessing v0.14.1</sub>
 </div>

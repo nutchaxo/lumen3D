@@ -1047,6 +1047,405 @@ const ViewerApp = (() => {
         _confirmResetWorkspace().catch(err => console.warn('[ViewerApp] Reset dialog failed:', err));
       });
     }
+
+    _bindViewExport();
+  }
+
+  // ── 3D view export (PNG) ─────────────────────────────────────────────────────────
+  // A core feature, always there (the screenshot plugin is installed on demand): the
+  // current 3D view rendered off screen by VolumeViewer.renderViewImage at the screen's
+  // size or larger, over a chosen background, with a scale bar drawn for the exported
+  // pixel size. Not offered in an embedded page (a Compare panel, the admin preview):
+  // the Compare page has its own figure export.
+
+  // What a 2D canvas reliably holds in current browsers: 16384 px a side, 2^28 px.
+  const VIEW_EXPORT_LIMITS = { maxSide: 16384, maxArea: 268435456 };
+  let _viewExportAbort = null; // AbortController of the export in flight
+
+  function _bindViewExport() {
+    const btn = document.getElementById('btn-export-view');
+    const pop = document.getElementById('view-export-popover');
+    if (!btn || !pop) return;
+    if (_isIframe) {
+      btn.classList.add('hidden');
+      btn.setAttribute('aria-hidden', 'true');
+      pop.remove();
+      return;
+    }
+    const widthInput = document.getElementById('view-export-width');
+    const goBtn = document.getElementById('btn-view-export-go');
+    const cancelBtn = document.getElementById('btn-view-export-cancel');
+    const closeBtn = document.getElementById('btn-view-export-close');
+    const isOpen = () => !pop.classList.contains('hidden');
+
+    // Open, the popover closes on Escape and on a press outside it — except while an
+    // export runs, when only Escape (which cancels it) or Cancel end it.
+    const onOutside = (e) => {
+      if (_viewExportAbort) return;
+      if (pop.contains(e.target) || btn.contains(e.target)) return;
+      close(false);
+    };
+    const onKey = (e) => {
+      if (e.key !== 'Escape') return;
+      e.preventDefault();
+      e.stopPropagation();
+      _viewExportAbort?.abort();
+      close(true);
+    };
+    const onResize = () => _refreshViewExport();
+
+    function open() {
+      pop.classList.remove('hidden');
+      btn.setAttribute('aria-expanded', 'true');
+      btn.classList.add('active');
+      if (!_viewExportAbort) _setViewExportStatus('');
+      _refreshViewExport();
+      document.addEventListener('pointerdown', onOutside, true);
+      document.addEventListener('keydown', onKey, true);
+      window.addEventListener('resize', onResize);
+      (pop.querySelector('input[name="view-export-size"]:checked') || goBtn)?.focus();
+    }
+
+    function close(restoreFocus) {
+      if (!isOpen()) return;
+      pop.classList.add('hidden');
+      btn.setAttribute('aria-expanded', 'false');
+      btn.classList.remove('active');
+      document.removeEventListener('pointerdown', onOutside, true);
+      document.removeEventListener('keydown', onKey, true);
+      window.removeEventListener('resize', onResize);
+      if (restoreFocus) btn.focus();
+    }
+
+    // While an export runs the button leaves the popover open: its progress stays visible.
+    btn.addEventListener('click', () => {
+      if (!isOpen()) open();
+      else if (!_viewExportAbort) close(true);
+    });
+    closeBtn?.addEventListener('click', () => {
+      _viewExportAbort?.abort();
+      close(true);
+    });
+    pop.addEventListener('change', (e) => {
+      if (e.target?.name === 'view-export-size' && e.target.value === 'custom') widthInput?.focus();
+      _refreshViewExport();
+    });
+    widthInput?.addEventListener('input', () => {
+      const custom = pop.querySelector('input[name="view-export-size"][value="custom"]');
+      if (custom) custom.checked = true;
+      _refreshViewExport();
+    });
+    goBtn?.addEventListener('click', () => { _runViewExport(); });
+    cancelBtn?.addEventListener('click', () => { _viewExportAbort?.abort(); });
+    if (typeof I18n !== 'undefined' && I18n.onLanguageChange) {
+      I18n.onLanguageChange(() => { if (isOpen()) _refreshViewExport(); });
+    }
+  }
+
+  /** _t, with the params also filled into the English fallback. */
+  function _viewExportText(key, fallback, params) {
+    let text = _t(key, fallback, params);
+    if (params) Object.keys(params).forEach((p) => { text = text.split(`{${p}}`).join(String(params[p])); });
+    return text;
+  }
+
+  function _viewExportChoice(name) {
+    return document.querySelector(`#view-export-popover input[name="${name}"]:checked`)?.value || '';
+  }
+
+  /**
+   * The size asked for: the view's drawing buffer in device pixels ('screen'), a
+   * multiple of it, or a width (16 px at least) whose height follows the view's aspect.
+   */
+  function _viewExportRequestedSize(choice, base, customWidth) {
+    const bw = Math.max(1, Math.round(Number(base?.width) || 1));
+    const bh = Math.max(1, Math.round(Number(base?.height) || 1));
+    if (choice === 'custom') {
+      const w = Math.max(16, Math.round(Number(customWidth) || bw));
+      return { width: w, height: Math.max(1, Math.round(w * bh / bw)) };
+    }
+    const k = choice === '4' ? 4 : choice === '2' ? 2 : 1;
+    return { width: bw * k, height: bh * k };
+  }
+
+  /**
+   * The largest image of the requested aspect a 2D canvas holds: one factor
+   * s = min(1, maxSide/w, maxSide/h, √(maxArea/(w·h))) on both sides, floored so no
+   * limit is exceeded. `clamped` tells the dialog to say so.
+   */
+  function _clampExportSize(width, height, limits) {
+    const lim = limits || VIEW_EXPORT_LIMITS;
+    const w = Math.max(1, Math.round(Number(width) || 1));
+    const h = Math.max(1, Math.round(Number(height) || 1));
+    const s = Math.min(1, lim.maxSide / w, lim.maxSide / h, Math.sqrt(lim.maxArea / (w * h)));
+    if (s >= 1) return { width: w, height: h, clamped: false };
+    let cw = Math.min(lim.maxSide, Math.max(1, Math.floor(w * s + 1e-9)));
+    let ch = Math.min(lim.maxSide, Math.max(1, Math.floor(h * s + 1e-9)));
+    while (cw * ch > lim.maxArea) {
+      if (cw >= ch) cw -= 1; else ch -= 1;
+    }
+    return { width: cw, height: ch, clamped: true };
+  }
+
+  /** '#rrggbb' to composite under the render, or null for a transparent PNG. 'display'
+   *  follows the sidebar's background preset exactly as _getFigureBlob resolves it. */
+  function _viewExportBackground(choice) {
+    if (choice === 'transparent') return null;
+    if (choice === 'black') return '#000000';
+    if (choice === 'white') return '#ffffff';
+    const resolved = typeof DisplayPresets !== 'undefined'
+      ? DisplayPresets.resolve(_displayState.backgroundPreset, _displayState.backgroundColor)
+      : { transparent: false, color: '#000000' };
+    return resolved.transparent ? null : resolved.color;
+  }
+
+  /**
+   * The exported scale bar, laid out as the on-screen one (#viewer-scale-bar,
+   * VolumeGrid._updateScaleBar) would be on a screen k = height / cssHeight times
+   * denser: its target length is the screen's — a fifth of the view width, within
+   * 60–200 CSS px — times k, snapped to 1-2-5 µm, and its margin (20 px), text (12 px),
+   * rule (2 px) and gap (4 px) scale by k too, so the bar keeps its place and
+   * proportion in the picture whatever the export size.
+   * umPerPx is µm per OUTPUT pixel, VolumeViewer.micronsPerPixel(height): the same
+   * camera spans the same world height at the specimen depth over H pixels instead of
+   * cssHeight, i.e. the on-screen µm per CSS px divided by k. The bar is then
+   * lengthUm / umPerPx output pixels long. null without a calibration.
+   */
+  function _exportScaleBarLayout(opts) {
+    const { width, height, cssWidth, cssHeight, umPerPx } = opts || {};
+    if (!(umPerPx > 0) || !(width > 0) || !(height > 0)) return null;
+    const k = cssHeight > 0 ? height / cssHeight : 1;
+    const viewCssWidth = cssWidth > 0 ? cssWidth : width / k;
+    const targetPx = k * Math.min(200, Math.max(60, viewCssWidth * 0.2));
+    const lengthUm = Utils.niceScaleLength(targetPx * umPerPx);
+    if (!(lengthUm > 0)) return null;
+    const barPx = lengthUm / umPerPx;
+    const margin = 20 * k;
+    const thickness = Math.max(1, 2 * k);
+    return {
+      lengthUm,
+      label: Utils.formatMicrons(lengthUm),
+      barPx,
+      x: width - margin - barPx,
+      y: height - margin - thickness,
+      thickness,
+      gap: 4 * k,
+      fontPx: Math.max(8, 12 * k),
+      margin,
+      scale: k
+    };
+  }
+
+  /** Bar colours for the export background: white with a dark halo (the screen's own)
+   *  on a dark or transparent background, black with a light halo on a light one —
+   *  Rec. 709 luma of the sRGB value above one half counts as light. */
+  function _exportScaleBarColors(background) {
+    const m = /^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(String(background || ''));
+    const luma = m
+      ? (0.2126 * parseInt(m[1], 16) + 0.7152 * parseInt(m[2], 16) + 0.0722 * parseInt(m[3], 16)) / 255
+      : 0;
+    return luma > 0.5
+      ? { fill: '#000000', shadow: 'rgba(255, 255, 255, 0.85)' }
+      : { fill: '#ffffff', shadow: 'rgba(0, 0, 0, 1)' };
+  }
+
+  function _drawExportScaleBar(canvas, layout, background) {
+    const ctx = canvas?.getContext('2d');
+    if (!ctx || !layout) return;
+    const colors = _exportScaleBarColors(background);
+    const k = layout.scale;
+    ctx.save();
+    // The on-screen bar's text-shadow (1px 1px 2px), scaled with the picture.
+    ctx.shadowColor = colors.shadow;
+    ctx.shadowOffsetX = k;
+    ctx.shadowOffsetY = k;
+    ctx.shadowBlur = 2 * k;
+    ctx.fillStyle = colors.fill;
+    ctx.fillRect(layout.x, layout.y, layout.barPx, layout.thickness);
+    ctx.font = `600 ${layout.fontPx}px Inter, system-ui, sans-serif`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'bottom';
+    // Centred on the bar, but kept inside the picture when the label outgrows the bar.
+    const textWidth = ctx.measureText(layout.label).width;
+    const cx = Math.min(layout.x + layout.barPx / 2, canvas.width - layout.margin / 2 - textWidth / 2);
+    ctx.fillText(layout.label, cx, layout.y - layout.gap);
+    ctx.restore();
+  }
+
+  function _viewExportFileName(name, width, height) {
+    const safe = String(name || '').replace(/[^a-z0-9._-]+/gi, '_').replace(/^_+|_+$/g, '') || 'view';
+    return `${safe}_3d_${width}x${height}.png`;
+  }
+
+  /** What the dialog asks for right now. null before the 3D view exists. */
+  function _viewExportPlan() {
+    const base = VolumeViewer.getViewSize?.();
+    if (!base) return null;
+    const widthInput = document.getElementById('view-export-width');
+    const choice = _viewExportChoice('view-export-size');
+    const requested = _viewExportRequestedSize(choice, base, widthInput?.value);
+    const size = _clampExportSize(requested.width, requested.height, VIEW_EXPORT_LIMITS);
+    const calibrated = (VolumeViewer.micronsPerPixel?.(size.height) || 0) > 0;
+    return {
+      base,
+      choice,
+      size,
+      background: _viewExportBackground(_viewExportChoice('view-export-bg')),
+      calibrated,
+      scaleBar: calibrated && Boolean(document.getElementById('view-export-scalebar')?.checked)
+    };
+  }
+
+  function _refreshViewExport() {
+    const plan = _viewExportPlan();
+    const dims = document.getElementById('view-export-dims');
+    const widthInput = document.getElementById('view-export-width');
+    if (!plan) {
+      if (dims) dims.textContent = '—';
+      return;
+    }
+    if (dims) {
+      dims.textContent = _viewExportText('exportView.dims', '{width} × {height} px', {
+        width: plan.size.width, height: plan.size.height
+      });
+    }
+    // Off the custom choice the field shows the width the choice gives, so picking
+    // "Custom" starts from the size on display.
+    if (widthInput && plan.choice !== 'custom') widthInput.value = String(plan.size.width);
+    document.getElementById('view-export-clamp')?.classList.toggle('hidden', !plan.size.clamped);
+    const scaleBarInput = document.getElementById('view-export-scalebar');
+    if (scaleBarInput) scaleBarInput.disabled = !plan.calibrated;
+    document.getElementById('view-export-scalebar-note')?.classList.toggle('hidden', plan.calibrated);
+  }
+
+  function _setViewExportStatus(text, options = {}) {
+    const box = document.getElementById('view-export-status');
+    const label = document.getElementById('view-export-status-text');
+    const fill = document.getElementById('view-export-fill');
+    if (!box || !label) return;
+    const fraction = Number.isFinite(options.fraction) ? Math.max(0, Math.min(1, options.fraction)) : null;
+    box.classList.toggle('hidden', !text);
+    box.classList.toggle('is-error', options.tone === 'error');
+    label.textContent = text || '';
+    fill?.parentElement?.classList.toggle('hidden', fraction === null);
+    if (fill && fraction !== null) fill.style.width = `${Math.round(fraction * 100)}%`;
+  }
+
+  function _setViewExportBusy(busy) {
+    const pop = document.getElementById('view-export-popover');
+    if (!pop) return;
+    pop.classList.toggle('is-busy', busy);
+    pop.querySelectorAll('fieldset').forEach((fieldset) => { fieldset.disabled = busy; });
+    const goBtn = document.getElementById('btn-view-export-go');
+    const cancelBtn = document.getElementById('btn-view-export-cancel');
+    goBtn?.classList.toggle('hidden', busy);
+    cancelBtn?.classList.toggle('hidden', !busy);
+    // The pose is snapshotted for the tiles; a drag meanwhile would only confuse.
+    document.querySelector('.viewer-canvas-container')?.classList.toggle('view-exporting', busy);
+    if (!pop.classList.contains('hidden')) (busy ? cancelBtn : goBtn)?.focus();
+  }
+
+  function _viewExportErrorText(err, width, height) {
+    switch (err?.code) {
+      case 'busy':
+        return _viewExportText('exportView.errBusy', 'An export is already running.');
+      case 'no-view':
+      case 'size':
+        return _viewExportText('exportView.errNoView', 'The 3D view is not ready yet.');
+      case 'canvas':
+        return _viewExportText('exportView.errCanvas', 'The browser could not allocate a {width} × {height} image. Choose a smaller size.', { width, height });
+      case 'gpu-memory':
+        return _viewExportText('exportView.errGpu', 'Not enough GPU memory to render the image, even in small tiles. Choose a smaller size or close other tabs.');
+      case 'context-lost':
+        return _viewExportText('exportView.errContext', 'The GPU context was lost during the export. Reload the page and try again.');
+      case 'unstable':
+        return _viewExportText('exportView.errUnstable', 'The volume kept changing during the export. Try again once it has finished loading.');
+      case 'display-changed':
+        return _viewExportText('exportView.errDisplayChanged', 'The display settings changed during every attempt. Leave the channel and view controls alone until the export finishes.');
+      case 'encode':
+        return _viewExportText('exportView.errEncode', 'The browser could not encode a PNG this large. Choose a smaller size.');
+      default:
+        return _viewExportText('exportView.errGeneric', 'Export failed: {message}', { message: err?.message || String(err) });
+    }
+  }
+
+  async function _runViewExport() {
+    if (_viewExportAbort) return;
+    const plan = _viewExportPlan();
+    if (!plan || typeof VolumeViewer.renderViewImage !== 'function') {
+      _setViewExportStatus(_viewExportText('exportView.errNoView', 'The 3D view is not ready yet.'), { tone: 'error' });
+      return;
+    }
+    const { width, height } = plan.size;
+    const controller = new AbortController();
+    _viewExportAbort = controller;
+    _setViewExportBusy(true);
+    // One frame of a timelapse: playback would swap the volume under the tiles.
+    if (isLive && typeof Timeline !== 'undefined' && Timeline.pause) Timeline.pause();
+    let canvas = null;
+    try {
+      canvas = await VolumeViewer.renderViewImage({
+        width,
+        height,
+        background: plan.background,
+        signal: controller.signal,
+        onProgress: (p) => {
+          if (p.phase === 'waiting') {
+            _setViewExportStatus(_viewExportText('exportView.waiting', 'Waiting for the volume to finish loading… {percent}%', {
+              percent: Math.round((p.progress || 0) * 100)
+            }), { fraction: p.progress || 0 });
+          } else if (p.phase === 'render') {
+            _setViewExportStatus(_viewExportText('exportView.progressTile', 'Rendering tile {tile}/{tiles}…', {
+              tile: p.tile, tiles: p.tiles
+            }), { fraction: (p.tile - 1) / p.tiles });
+          }
+        }
+      });
+      if (plan.scaleBar) {
+        _drawExportScaleBar(canvas, _exportScaleBarLayout({
+          width,
+          height,
+          cssWidth: plan.base.cssWidth,
+          cssHeight: plan.base.cssHeight,
+          umPerPx: canvas.exportInfo?.micronsPerPixel || 0
+        }), plan.background);
+      }
+      _setViewExportStatus(_viewExportText('exportView.encoding', 'Encoding PNG ({width} × {height} px)…', { width, height }), { fraction: 1 });
+      const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/png'));
+      if (controller.signal.aborted) {
+        const aborted = new Error('View export cancelled');
+        aborted.name = 'AbortError';
+        throw aborted;
+      }
+      if (!blob) {
+        const failed = new Error('PNG encoding failed');
+        failed.code = 'encode';
+        throw failed;
+      }
+      const fileName = _viewExportFileName(datasetMeta?.name || datasetMeta?.id, width, height);
+      if (typeof ExportManager !== 'undefined' && ExportManager.downloadBlob) {
+        ExportManager.downloadBlob(blob, fileName);
+      } else {
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = fileName;
+        a.click();
+        setTimeout(() => URL.revokeObjectURL(url), 500);
+      }
+      _setViewExportStatus(_viewExportText('exportView.saved', 'Saved {file}', { file: fileName }));
+    } catch (err) {
+      if (err?.name === 'AbortError') {
+        _setViewExportStatus(_viewExportText('exportView.cancelled', 'Export cancelled.'));
+      } else {
+        console.error('[ViewerApp] 3D view export failed:', err);
+        _setViewExportStatus(_viewExportErrorText(err, width, height), { tone: 'error' });
+      }
+    } finally {
+      if (canvas) { canvas.width = 0; canvas.height = 0; }
+      _viewExportAbort = null;
+      _setViewExportBusy(false);
+    }
   }
 
   function _bindZScaleControls() {
@@ -1307,7 +1706,8 @@ const ViewerApp = (() => {
   /**
    * What the Z-stack browser shows, as a slicer plane: the cursor's slices (every
    * kept slice in 3D mode) sampled one voxel per step and MIP-projected when the slab
-   * is thicker than one slice — the calibrated 2D counterpart of the slab on screen.
+   * is thicker than one slice — the calibrated 2D counterpart of the slab on screen,
+   * turned and faced the way the screen shows it (see _zstackFlatPose).
    */
   function _zstackStudioSpec() {
     const { z } = _zstackGetDims();
@@ -1317,19 +1717,64 @@ const ViewerApp = (() => {
     const lo = clampZ(range ? range.lo : Math.max(0, _zstackCurrentSlice));
     const hi = Math.max(lo, clampZ(range ? range.hi : lo));
     const n = hi - lo + 1;
+    // Slice i spans [i/z, (i+1)/z] of the normalised depth; the plane sits at the
+    // slab's centre and the samples land on the voxel centres (lo + 0.5 + k) / z.
+    const c = (lo + n / 2) / z;
+    const pose = _zstackFlatPose(VolumeViewer.getScreenFrameInVolume?.());
     return {
-      mode: 'xy',
+      mode: 'oblique',
       axis: 'z',
-      // Slice i spans [i/z, (i+1)/z] of the normalised depth; the plane sits at the
-      // slab's centre and the samples land on the voxel centres (lo + 0.5 + k) / z.
-      value: (lo + n / 2) / z,
-      yaw: 0,
+      // The slicer puts the plane at texture depth ½ + normal.z·(value − ½): c on the
+      // +Z normal, 1 − value on the −Z one. The slab's samples sit symmetrically about
+      // the plane, so both faces read the same slices.
+      value: pose.back ? 1 - c : c,
+      yaw: pose.back ? 180 : 0,
       pitch: 0,
-      roll: 0,
+      roll: pose.roll,
       slabThickness: n,
       slabStepNorm: 1 / z,
       projection: n > 1 ? 'mip' : 'single'
     };
+  }
+
+  /**
+   * The flat pose of a Z-stack figure nearest what the screen shows: the +Z face
+   * (yaw 0) or the −Z face (yaw 180, the mirror image), pitch 0, and an in-plane
+   * roll, in VolumeSlicer's oblique convention.
+   *   The slicer's plane is R = Ry(−yaw)·Rx(−pitch)·Rz(roll) (Euler (−pitch, −yaw,
+   *   roll, 'YXZ')) with canvas right = R·X, canvas up = R·Y, normal = R·Z, in the
+   *   physically proportioned volume frame (VolumeViewer.getScreenFrameInVolume).
+   *   front: right = ( cos r, sin r, 0), up = (−sin r, cos r, 0), normal = +Z;
+   *   back:  Ry(π)(x, y, z) = (−x, y, −z), so right = (−cos r, sin r, 0),
+   *          up = (sin r, cos r, 0), normal = −Z.
+   *   The one nearest the screen frame M = [r̂ û n̂] (n̂ = r̂ × û, normalised)
+   *   maximises tr(Rᵀ·M) — for unit quaternions tr(R₁ᵀR₂) = 4⟨q₁, q₂⟩² − 1, the
+   *   nearness setView's spin 'nearest' uses:
+   *   front: (r̂x + ûy)·cos r + (r̂y − ûx)·sin r + n̂z, largest at r = atan2(r̂y − ûx, r̂x + ûy);
+   *   back:  (ûy − r̂x)·cos r + (r̂y + ûx)·sin r − n̂z, largest at r = atan2(r̂y + ûx, ûy − r̂x);
+   *   the face with the larger maximum wins, the front on a tie.
+   * With the stack laid flat (the browser's slice mode, Rz(θ)·[Ry(π)] in the
+   * frame), M is one of these rotations and the figure is exactly the screen — e.g.
+   * the pose Rz(φ) puts the screen's right on (cos φ, −sin φ, 0) and gives r = −φ.
+   * A free 3D pose (the browser's 3D mode) gets the flat pose nearest it.
+   * @param {{right: {x,y,z}, up: {x,y,z}}|null} frame
+   * @returns {{back: boolean, roll: number}} roll in degrees; no frame ⇒ the raw
+   *   voxel frame (front, roll 0)
+   */
+  function _zstackFlatPose(frame) {
+    const r = frame?.right;
+    const u = frame?.up;
+    const finite = (v) => v && [v.x, v.y, v.z].every(Number.isFinite);
+    if (!finite(r) || !finite(u)) return { back: false, roll: 0 };
+    const nx = r.y * u.z - r.z * u.y;
+    const ny = r.z * u.x - r.x * u.z;
+    const nz = r.x * u.y - r.y * u.x;
+    const nzUnit = nz / (Math.hypot(nx, ny, nz) || 1);
+    const frontScore = Math.hypot(r.x + u.y, r.y - u.x) + nzUnit;
+    const backScore = Math.hypot(u.y - r.x, r.y + u.x) - nzUnit;
+    const back = backScore > frontScore;
+    const roll = back ? Math.atan2(r.y + u.x, u.y - r.x) : Math.atan2(r.y - u.x, r.x + u.y);
+    return { back, roll: (roll * 180) / Math.PI };
   }
 
   /**
@@ -1360,6 +1805,9 @@ const ViewerApp = (() => {
       height: canvas.height,
       renderRes,
       cropRect,
+      // The same pixels as raw channel values: the Studio colours those with its own
+      // channel state, and the native pass reads them wherever a chunk is missing.
+      raw: _studioRawFor(spec, renderRes, cropRect),
       // Not 'gpu-slicer': that source makes the Studio re-render the slice through
       // VolumeSlicer.recompose at the cropped width, which reframes the image and
       // would break the geometry contract with the native pass.
@@ -1418,7 +1866,7 @@ const ViewerApp = (() => {
         cropRect: preview.cropRect,
         renderRes,
         lod: 0,
-        fallback: { canvas: preview.canvas },
+        fallback: { canvas: preview.canvas, raw: preview.raw || null },
         onProgress: (progress) => {
           StudioEditor.setLoadProgress?.({ percent: progress.percent, label: _nativeLabel(dims0, progress), onCancel });
         },
@@ -1569,38 +2017,6 @@ const ViewerApp = (() => {
     }
   }
 
-  function _slicePlaneVectors(spec = {}) {
-    if (typeof THREE === 'undefined') return null;
-    const yaw = THREE.MathUtils.degToRad(spec.yaw || 0);
-    const pitch = THREE.MathUtils.degToRad(spec.pitch || 0);
-    const roll = THREE.MathUtils.degToRad(spec.roll || 0);
-    let normal;
-    let right;
-    let up;
-
-    if (spec.mode === 'xz') {
-      normal = new THREE.Vector3(0, 1, 0);
-      right = new THREE.Vector3(1, 0, 0);
-      up = new THREE.Vector3(0, 0, 1);
-    } else if (spec.mode === 'yz') {
-      normal = new THREE.Vector3(1, 0, 0);
-      right = new THREE.Vector3(0, 1, 0);
-      up = new THREE.Vector3(0, 0, 1);
-    } else if (spec.mode === 'oblique') {
-      const q = new THREE.Quaternion().setFromEuler(new THREE.Euler(-pitch, -yaw, roll, 'YXZ'));
-      normal = new THREE.Vector3(0, 0, 1).applyQuaternion(q).normalize();
-      right = new THREE.Vector3(1, 0, 0).applyQuaternion(q).normalize();
-      up = new THREE.Vector3(0, 1, 0).applyQuaternion(q).normalize();
-    } else {
-      normal = new THREE.Vector3(0, 0, 1);
-      right = new THREE.Vector3(1, 0, 0);
-      up = new THREE.Vector3(0, 1, 0);
-    }
-
-    const origin = normal.clone().multiplyScalar((spec.value ?? 0.5) - 0.5);
-    return { origin, normal, right, up };
-  }
-
   /**
    * The compact voxel box `region` of a brick delivered whole (bs³ voxels of
    * `bytesPerVoxel` bytes each); bytes that already are that box, or a whole brick
@@ -1727,18 +2143,26 @@ const ViewerApp = (() => {
     return Math.max(512, Math.min(8192, Math.ceil(maxDim * 1.5)));
   }
 
-  function _slicePixelSizeUm(spec, renderRes) {
-    const physical = VolumeViewer.getPhysicalSize?.() || { x: 1, y: 1, z: 1 };
-    const plane = _slicePlaneVectors(spec) || {
-      right: new THREE.Vector3(1, 0, 0),
-      up: new THREE.Vector3(0, 1, 0)
-    };
-    const pRight = new THREE.Vector3(plane.right.x * physical.x, plane.right.y * physical.y, plane.right.z * physical.z);
-    const pUp = new THREE.Vector3(plane.up.x * physical.x, plane.up.y * physical.y, plane.up.z * physical.z);
-    return {
-      x: (1.5 * pRight.length()) / Math.max(1, renderRes),
-      y: (1.5 * pUp.length()) / Math.max(1, renderRes)
-    };
+  /**
+   * µm per pixel of a slicer render at `renderRes` px — the same for every plane
+   * and along both axes. The slicer draws 2·EXTENT quad units across the frame and
+   * a quad unit along the unit in-plane direction v is the texture step v ⊙ maxP/p
+   * (VolumeSlicer.planeGeometry), i.e. the physical length |v ⊙ maxP/p ⊙ p| = maxP:
+   * the pixel is 2·EXTENT·maxP / renderRes, square, whatever the plane — the length
+   * the slice stage's scale bar uses. (Weighting v by p instead only equals that
+   * along the longest axis: an XZ cut's vertical and a non-square XY cut's short
+   * axis came out short by p_axis / maxP.) A missing axis counts as 1, as in
+   * planeGeometry.
+   */
+  function _slicePixelSizeUm(_spec, renderRes) {
+    const physical = VolumeViewer.getPhysicalSize?.() || null;
+    const axis = (v) => (Number(v) > 0 ? Number(v) : 1);
+    const maxP = Math.max(axis(physical?.x), axis(physical?.y), axis(physical?.z));
+    const units = typeof VolumeSlicer !== 'undefined' && VolumeSlicer.getPlaneExtentUnits
+      ? VolumeSlicer.getPlaneExtentUnits()
+      : 1.5;
+    const um = (units * maxP) / Math.max(1, renderRes);
+    return { x: um, y: um };
   }
 
   function _copyCanvas(canvas) {
@@ -1831,6 +2255,30 @@ const ViewerApp = (() => {
   }
 
   /**
+   * The raw channel values (VolumeSlicer.renderRawWithMaterial) of `spec` at
+   * `renderRes`, cut to exactly the pixels _cropEmptySliceSpace(…, cropRect) keeps of
+   * the colour render (null cropRect: the whole frame). The Studio colours them with
+   * its own channel state (SliceCompositor). null when they cannot be rendered: the
+   * picture then keeps the colours it was rendered with. A slab's raw (the z-stack
+   * browser's MIP, an inspector MIP / average) carries `projected` (and `coverage`)
+   * from the slicer itself — the one place every raw of this page is rendered, the
+   * native pass included — so the Studio draws it opaque like the colour picture.
+   */
+  function _studioRawFor(spec, renderRes, cropRect) {
+    if (typeof SliceCompositor === 'undefined' || typeof VolumeSlicer === 'undefined' || !VolumeSlicer.renderRawWithMaterial) return null;
+    const material = VolumeViewer.getMaterial?.();
+    if (!material || !spec) return null;
+    const win = cropRect ? _sliceWindowForRect(cropRect, renderRes) : null;
+    if (cropRect && !win) return null;
+    try {
+      return VolumeSlicer.renderRawWithMaterial(material, spec, renderRes, { window: win });
+    } catch (err) {
+      console.warn('[ViewerApp] Raw slice values unavailable; the Studio keeps the rendered colours.', err);
+      return null;
+    }
+  }
+
+  /**
    * Channels the native slice has to download. A channel the operator has switched
    * off contributes nothing to the rendered plane, and each one is a full quarter of
    * the LOD0 traffic (one WebP pack set per channel) — on a 3789² dataset that is
@@ -1855,7 +2303,9 @@ const ViewerApp = (() => {
    * milliseconds while chunks land, `options.fallback.canvas` (the preview, cropped
    * to `options.cropRect`) standing in wherever a chunk is still missing. A chunk
    * that fails for good keeps those preview pixels in the final picture and is
-   * counted in `missingChunks`.
+   * counted in `missingChunks`. In raw mode (a known frame, and `options.fallback.raw`
+   * — the preview's raw values — whenever a fallback is given) every picture is raw
+   * channel values alone (`raw`, `canvas` null).
    */
   async function _renderNativeSliceForStudio(options = {}) {
     if (typeof BrickLoader === 'undefined' || typeof SVRManager === 'undefined' || typeof VolumeSlicer === 'undefined') return null;
@@ -1901,6 +2351,21 @@ const ViewerApp = (() => {
     // With the preview's frame known, only that window of the frame is rendered and
     // read back — the same pixels _cropEmptySliceSpace would cut out of the full frame.
     const sliceWindow = _sliceWindowForRect(cropRect, renderRes);
+    // Raw mode: the pass reads back the sampled channel values, not colours
+    // (VolumeSlicer.renderRawWithMaterial), and the Studio colours them with its own
+    // channel state (SliceCompositor) — an edit made in the Studio survives every
+    // refresh, and re-colouring needs no atlas once this throwaway one is gone. It
+    // takes the preview's frame (the window) and, with a fallback, the preview's raw
+    // values of that same crop for the chunks still missing. Channels the pass does
+    // not download (off in the viewer) are read from the preview raw as well: switched
+    // on in the Studio they show at preview resolution instead of black.
+    const previewRaw = options.fallback?.raw || null;
+    const rawMode = Boolean(sliceWindow && typeof SliceCompositor !== 'undefined' && VolumeSlicer.renderRawWithMaterial
+      && (!fallback || (SliceCompositor.isRaw(previewRaw) && previewRaw.width === sliceWindow.w && previewRaw.height === sliceWindow.h)));
+    const rawFallback = rawMode && fallback ? { raw: previewRaw, rect: cropRect } : null;
+    const previewOnlyChannels = wantedChannels
+      ? Array.from({ length: channels }, (_, c) => c).filter(c => !wantedChannels.includes(c))
+      : [];
 
     const brickByKey = new Map(bricks.map(b => [`${b.bx}_${b.by}_${b.bz}`, b]));
     const pendingScalar = new Map();
@@ -1945,18 +2410,30 @@ const ViewerApp = (() => {
 
     // Always through the fallback variant of the slice shader (one program for the
     // whole pass): with every brick present it is never sampled.
+    // → { canvas, raw }: raw alone in raw mode (the Studio colours it; one render and
+    // one readback per refresh, as the colour path), a canvas otherwise.
     const renderSlice = () => {
+      if (rawMode) {
+        const raw = VolumeSlicer.renderRawWithMaterial(tempMaterial, spec, renderRes, {
+          window: sliceWindow, fallbackRaw: rawFallback, fallbackChannels: previewOnlyChannels, keepTarget: true
+        });
+        if (raw) return { canvas: null, raw };
+      }
       const rendered = VolumeSlicer.renderWithMaterial(
         tempMaterial, spec, renderRes, channelState, { fallback, window: sliceWindow }
       );
       if (!rendered) return null;
       // The slicer's canvas is overwritten by its next render: keep a copy.
-      return sliceWindow ? _copyCanvas(rendered) : _cropEmptySliceSpace(rendered, cropRect || _sliceContentRect(rendered));
+      return {
+        canvas: sliceWindow ? _copyCanvas(rendered) : _cropEmptySliceSpace(rendered, cropRect || _sliceContentRect(rendered)),
+        raw: null
+      };
     };
-    const sliceResult = (canvas, rect, extra) => ({
-      canvas,
-      width: canvas.width,
-      height: canvas.height,
+    const sliceResult = (picture, rect, extra) => ({
+      canvas: picture.canvas,
+      raw: picture.raw,
+      width: picture.canvas ? picture.canvas.width : picture.raw.width,
+      height: picture.canvas ? picture.canvas.height : picture.raw.height,
       renderRes,
       cropRect: rect,
       source: 'native-slicer',
@@ -1986,12 +2463,12 @@ const ViewerApp = (() => {
     const renderPartial = () => {
       if (!onPartial || controller.signal.aborted || !writtenSinceRender) return;
       const t0 = now();
-      const canvas = renderSlice();
-      if (!canvas) return;
+      const picture = renderSlice();
+      if (!picture) return;
       lastPartialCost = now() - t0;
       lastPartialAt = now();
       writtenSinceRender = 0;
-      onPartial(sliceResult(canvas, cropRect, { partial: true }));
+      onPartial(sliceResult(picture, cropRect, { partial: true }));
     };
     const partialTick = () => {
       partialTimer = null;
@@ -2121,14 +2598,14 @@ const ViewerApp = (() => {
       // A brick that never made it whole keeps the preview's pixels in the final
       // picture (a softer patch beats a hole) and is reported.
       const missing = new Set([...failed, ...pendingScalar.keys()]).size;
-      const canvas = renderSlice();
-      if (!canvas) return null;
-      const rect = cropRect || _sliceContentRect(canvas);
+      const picture = renderSlice();
+      if (!picture) return null;
+      const rect = cropRect || (picture.canvas ? _sliceContentRect(picture.canvas) : null);
       _setSliceStatus(missing > 0
         ? `${stageName} slice ready (${writtenBricks} chunks; ${missing} kept at the previous resolution).`
         : `${stageName} slice ready (${writtenBricks} chunks).`);
       // netMs: the transfer alone (first request to last brick), the measure of the link.
-      return sliceResult(canvas, rect, { missingChunks: missing, bytesTotal, elapsedMs: now() - startedAt, netMs: lastBrickAt ? Math.max(1, lastBrickAt - startedAt) : 0 });
+      return sliceResult(picture, rect, { missingChunks: missing, bytesTotal, elapsedMs: now() - startedAt, netMs: lastBrickAt ? Math.max(1, lastBrickAt - startedAt) : 0 });
     } finally {
       cancelPartial();
       VolumeSlicer.releaseForeign?.();
@@ -3961,7 +4438,7 @@ const ViewerApp = (() => {
         try {
           let canvas = null;
           if (_zstackActive || (typeof VolumeSlicer !== 'undefined' && VolumeSlicer.isVisible())) {
-            const sr = getCurrentSliceResult();
+            const sr = getCurrentSliceResult({ raw: false });
             canvas = sr?.canvas;
           }
           
@@ -4177,46 +4654,15 @@ const ViewerApp = (() => {
     [0, 80, 200].forEach(delay => setTimeout(() => VolumeViewer.resize(), delay));
   }
 
-  function getCurrentSliceResult() {
+  /**
+   * The slice on screen for the Studio (the Compare page's, the fallback of
+   * openStudio) or a thumbnail. `options.raw === false` skips the raw channel values
+   * (one more render) that let the Studio re-colour the picture — a thumbnail
+   * (REQUEST_SCREENSHOT) needs the colours alone.
+   */
+  function getCurrentSliceResult(options = {}) {
     let result = null;
-
-    function cropEmptySpace(canvas) {
-      const ctx = canvas.getContext('2d');
-      const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-      const data = imgData.data;
-      let minX = canvas.width, minY = canvas.height, maxX = 0, maxY = 0;
-
-      for (let y = 0; y < canvas.height; y++) {
-        for (let x = 0; x < canvas.width; x++) {
-          const alpha = data[(y * canvas.width + x) * 4 + 3];
-          if (alpha > 5) {
-            if (x < minX) minX = x;
-            if (x > maxX) maxX = x;
-            if (y < minY) minY = y;
-            if (y > maxY) maxY = y;
-          }
-        }
-      }
-
-      if (minX > maxX || minY > maxY) return canvas;
-
-      const padding = 10;
-      minX = Math.max(0, minX - padding);
-      minY = Math.max(0, minY - padding);
-      maxX = Math.min(canvas.width - 1, maxX + padding);
-      maxY = Math.min(canvas.height - 1, maxY + padding);
-
-      const croppedWidth = maxX - minX + 1;
-      const croppedHeight = maxY - minY + 1;
-
-      const croppedCanvas = document.createElement('canvas');
-      croppedCanvas.width = croppedWidth;
-      croppedCanvas.height = croppedHeight;
-      const croppedCtx = croppedCanvas.getContext('2d');
-      croppedCtx.drawImage(canvas, minX, minY, croppedWidth, croppedHeight, 0, 0, croppedWidth, croppedHeight);
-      
-      return croppedCanvas;
-    }
+    const withRaw = options?.raw !== false;
 
     if (_zstackActive && typeof VolumeSlicer !== 'undefined' && VolumeSlicer.renderWithMaterial && VolumeViewer.getMaterial?.()) {
       const { z } = _zstackGetDims();
@@ -4230,12 +4676,14 @@ const ViewerApp = (() => {
         let canvas = VolumeSlicer.renderWithMaterial(VolumeViewer.getMaterial(), spec, renderRes, _currentChannelState());
 
         if (canvas) {
-          canvas = cropEmptySpace(canvas);
+          const cropRect = _sliceContentRect(canvas);
+          canvas = _cropEmptySliceSpace(canvas, cropRect);
           return {
             canvas,
             width: canvas.width,
             height: canvas.height,
             renderRes: renderRes,
+            raw: withRaw ? _studioRawFor(spec, renderRes, cropRect) : null,
             source: 'zstack',
             quality: 'high',
             planeSpec: spec,
@@ -4254,40 +4702,20 @@ const ViewerApp = (() => {
       const renderRes = Math.ceil(maxRes * 1.5);
       let canvas = VolumeSlicer.renderHighRes(renderRes);
       if (canvas) {
-        canvas = cropEmptySpace(canvas);
+        const cropRect = _sliceContentRect(canvas);
+        canvas = _cropEmptySliceSpace(canvas, cropRect);
         const spec = VolumeSlicer.getPlaneSpec();
-        const physical = VolumeViewer.getPhysicalSize?.() || {x: 1, y: 1, z: 1};
-        let right = new THREE.Vector3(1, 0, 0);
-        let up = new THREE.Vector3(0, 1, 0);
-        if (spec.mode === 'xz') {
-          right = new THREE.Vector3(1, 0, 0);
-          up = new THREE.Vector3(0, 0, 1);
-        } else if (spec.mode === 'yz') {
-          right = new THREE.Vector3(0, 1, 0);
-          up = new THREE.Vector3(0, 0, 1);
-        } else if (spec.mode === 'oblique') {
-          const yaw = THREE.MathUtils.degToRad(spec.yaw || 0);
-          const pitch = THREE.MathUtils.degToRad(spec.pitch || 0);
-          const roll = THREE.MathUtils.degToRad(spec.roll || 0);
-          const q = new THREE.Quaternion().setFromEuler(new THREE.Euler(-pitch, -yaw, roll, 'YXZ'));
-          right = new THREE.Vector3(1, 0, 0).applyQuaternion(q).normalize();
-          up = new THREE.Vector3(0, 1, 0).applyQuaternion(q).normalize();
-        }
-
-        const pRight = new THREE.Vector3(right.x * physical.x, right.y * physical.y, right.z * physical.z);
-        const pUp = new THREE.Vector3(up.x * physical.x, up.y * physical.y, up.z * physical.z);
-        const pixelSizeX = (1.5 * pRight.length()) / renderRes;
-        const pixelSizeY = (1.5 * pUp.length()) / renderRes;
 
         return {
           canvas,
           width: canvas.width,
           height: canvas.height,
           renderRes: renderRes,
+          raw: withRaw ? _studioRawFor(spec, renderRes, cropRect) : null,
           source: 'gpu-slicer',
           quality: 'high',
           planeSpec: spec,
-          pixelSizeUm: { x: pixelSizeX, y: pixelSizeY },
+          pixelSizeUm: _slicePixelSizeUm(spec, renderRes),
           channelState: _currentChannelState()
         };
       }

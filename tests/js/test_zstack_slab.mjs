@@ -270,7 +270,10 @@ assert.deepEqual(plain(plugin.getStudioSliceRange()), { lo: 10, hi: 89 }, '3D mo
 const viewerSrc = readFileSync(path.join(ROOT, 'js/pages/viewer.js'), 'utf8');
 assert.ok(/function _zstackStudioSpec\(\)/.test(viewerSrc), 'viewer builds the Studio plane from the browser');
 assert.ok(/getStudioSliceRange/.test(viewerSrc), 'viewer asks the browser for the slice range');
-assert.ok(/value: \(lo \+ n \/ 2\) \/ z,/.test(viewerSrc), 'plane centred on the slab');
+// The plane is oblique now (faced and turned like the screen, see
+// test_zstack_studio_orientation.mjs): its value is the slab centre c on the +Z face
+// and 1 − c on the −Z one, which puts it at texture depth c either way.
+assert.ok(/const c = \(lo \+ n \/ 2\) \/ z;/.test(viewerSrc) && /value: pose\.back \? 1 - c : c,/.test(viewerSrc), 'plane centred on the slab');
 assert.ok(/slabThickness: n,\s*slabStepNorm: 1 \/ z,\s*projection: n > 1 \? 'mip' : 'single'/.test(viewerSrc), 'one sample per slice, MIP when thicker than one slice');
 assert.ok(/_renderStudioPreviewSlice\(_zstackStudioSpec\(\)\)/.test(viewerSrc), 'Studio opens on that plane (then upgrades to native)');
 assert.ok(/const spec = options\.spec \|\| VolumeSlicer\.getPlaneSpec\(\);/.test(viewerSrc), 'native pass renders the same plane');

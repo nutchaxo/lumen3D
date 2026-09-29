@@ -47,6 +47,11 @@ const VolumeSlicer = (() => {
   // released its program, and three.js then recompiled the slice shader — a few
   // hundred milliseconds on ANGLE — for every progressive refresh of a native pass.
   let _foreign = null;
+  // The same cache for renderRawWithMaterial() (its own slot: a native pass may
+  // render both kinds without evicting one program for the other), and the target
+  // + readback buffer of the raw renders, kept while a pass asks for it.
+  let _foreignRaw = null;
+  let _rawPass = null;
   let _visibleListeners = new Set();
   // The sidebar preview renders at PREVIEW_SIZE. On the slice stage (the canvas
   // area, viewer.js _setSliceStage) the interactive resolution follows the
@@ -76,6 +81,8 @@ const VolumeSlicer = (() => {
   const FRAG = `
     precision highp float;
     precision highp sampler3D;
+    // The raw fallback is read as exact bytes: not at the default lowp.
+    precision highp sampler2D;
 
     uniform sampler3D svrAtlas0;
     uniform sampler3D svrAtlas1;
@@ -160,26 +167,72 @@ const VolumeSlicer = (() => {
       return v * opacity;
     }
 
-    // rgb: the composed channel colour at uvw; a: 1 when a brick backs the voxel,
-    // 0 when the atlas has none there (black in rgb).
-    vec4 colorAt(vec3 uvw) {
+    // The atlas texel at uvw: channels 0..3 in r, g, b, a. present is false where no
+    // brick backs the voxel (every channel reads 0 there).
+    vec4 rawAt(vec3 uvw, out bool present) {
       #ifdef ENABLE_SVR
       vec4 atlasLookup = getAtlasLookup(uvw);
-      if (atlasLookup.w < 0.0) return vec4(0.0);
-      vec4 v = sampleSVRAtlas(atlasLookup.xyz, atlasLookup.w);
+      present = atlasLookup.w >= 0.0;
+      if (!present) return vec4(0.0);
+      return sampleSVRAtlas(atlasLookup.xyz, atlasLookup.w);
       #else
-      vec4 v = texture(svrAtlas0, uvw);
+      present = true;
+      return texture(svrAtlas0, uvw);
       #endif
+    }
+
+    // The colour of raw channel values v: Σ channelValue(v_i)·colour_i over the
+    // enabled channels i < numChannels.
+    vec3 composeRaw(vec4 v) {
       vec3 c = vec3(0.0);
       if (en0==1 && numChannels>0) c += channelValue(v.r, min0, max0, gamma0, opacity0) * color0;
       if (en1==1 && numChannels>1) c += channelValue(v.g, min1, max1, gamma1, opacity1) * color1;
       if (en2==1 && numChannels>2) c += channelValue(v.b, min2, max2, gamma2, opacity2) * color2;
       if (en3==1 && numChannels>3) c += channelValue(v.a, min3, max3, gamma3, opacity3) * color3;
-      return vec4(c, 1.0);
+      return c;
+    }
+
+    // rgb: the composed channel colour at uvw; a: 1 when a brick backs the voxel,
+    // 0 when the atlas has none there (black in rgb).
+    vec4 colorAt(vec3 uvw) {
+      bool present;
+      vec4 v = rawAt(uvw, present);
+      if (!present) return vec4(0.0);
+      return vec4(composeRaw(v), 1.0);
     }
 
     bool inBox(vec3 p) {
       return all(greaterThanEqual(p, vec3(0.0))) && all(lessThanEqual(p, vec3(1.0)));
+    }
+
+    // A slab, projected channel by channel on the RAW values — the Fiji convention:
+    // project the intensities, then window and colour the projection once (the only
+    // order under which "average" is the mean intensity). The samples sit at
+    //   uvw_k = base + (−h + k·δ)·n + ½,   k = 0 … N−1,   h = (N − 1)·δ/2
+    // (N = slabSteps, δ = slabDelta, n = sliceNormal), and only the K of them inside
+    // the volume box count:
+    //   MIP (projMode 1)      p_i = max_k s_i(uvw_k)
+    //   average (projMode 2)  p_i = (1/K)·Σ_k s_i(uvw_k)
+    // hits = K (0: the slab misses the volume at this pixel); missing = one of the
+    // samples fell on a brick the atlas does not hold (read as 0).
+    vec4 projectSlab(vec3 base, out int hits, out bool missing) {
+      vec4 raw = vec4(0.0);
+      hits = 0;
+      missing = false;
+      float halfSlab = float(slabSteps - 1) * slabDelta * 0.5;
+      for (int i = 0; i < 1024; i++) {
+        if (i >= slabSteps) break;
+        vec3 uvw = base + (-halfSlab + float(i) * slabDelta) * sliceNormal + 0.5;
+        if (!inBox(uvw)) continue;
+        bool present;
+        vec4 s = rawAt(uvw, present);
+        if (!present) missing = true;
+        if (projMode == 1) raw = max(raw, s);
+        else raw += s;
+        hits++;
+      }
+      if (hits > 0 && projMode == 2) raw /= float(hits);
+      return raw;
     }
 
     #ifdef FALLBACK_TEX
@@ -192,11 +245,61 @@ const VolumeSlicer = (() => {
     }
     #endif
 
+    #ifdef RAW_OUTPUT
+    #ifdef FALLBACK_TEX
+    // 1.0 for a channel always read from the fallback (one the pass did not load).
+    uniform vec4 fallbackChannels;
+
+    // The fallback's raw texel under uv (exact bytes, no filtering); false outside it.
+    // Its rows are stored top row first, the frame counts them from the bottom.
+    bool fallbackRaw(vec2 uv, out vec4 raw) {
+      vec2 fuv = (uv - fallbackRect.xy) / fallbackRect.zw;
+      if (any(lessThan(fuv, vec2(0.0))) || any(greaterThan(fuv, vec2(1.0)))) return false;
+      ivec2 size = textureSize(fallbackTex, 0);
+      ivec2 p = clamp(ivec2(floor(fuv * vec2(size))), ivec2(0), size - 1);
+      raw = texelFetch(fallbackTex, ivec2(p.x, size.y - 1 - p.y), 0);
+      return true;
+    }
+    #endif
+    #endif
+
     void main() {
       vec2 uv = uvWindow.xy + vUv * uvWindow.zw;
       vec2 pc = (uv - 0.5) * 2.0 * sliceExtent;
       vec3 base = sliceOrigin + pc.x * sliceRight + pc.y * sliceUp;
 
+      #ifdef RAW_OUTPUT
+      // Raw values: one plane's texel, or a slab's per-channel projection (projectSlab,
+      // quantised to a byte by the target). The colour is applied afterwards
+      // (SliceCompositor) with the colour path's own formula, so both paths give the
+      // same picture. (0,0,0,0) wherever the colour path leaves the pixel transparent
+      // for want of a voxel: outside the box, or a missing brick with no fallback.
+      // A projected slab is opaque over the whole volume, black where no channel
+      // shows; with fewer than four channels the unused channel 3 carries that
+      // coverage (1 inside the volume) so the compositor keeps the outside transparent.
+      vec4 raw = vec4(0.0);
+      bool missing = false;
+      if (projMode == 0 || slabSteps <= 1) {
+        vec3 uvw = base + 0.5;
+        if (!inBox(uvw)) { fragColor = vec4(0.0); return; }
+        bool present;
+        raw = rawAt(uvw, present);
+        missing = !present;
+      } else {
+        int hits;
+        raw = projectSlab(base, hits, missing);
+        if (hits == 0) { fragColor = vec4(0.0); return; }
+        if (numChannels < 4) raw.a = 1.0;
+      }
+      #ifdef FALLBACK_TEX
+      vec4 f;
+      bool covered = fallbackRaw(uv, f);
+      // As the colour path: a plane or slab short of a brick shows the fallback there.
+      if (missing) { fragColor = covered ? f : vec4(0.0); return; }
+      if (covered) raw = mix(raw, f, fallbackChannels);
+      #endif
+      fragColor = raw;
+      #else
       if (projMode == 0 || slabSteps <= 1) {
         vec3 uvw = base + 0.5;
         if (!inBox(uvw)) discard;
@@ -213,20 +316,11 @@ const VolumeSlicer = (() => {
         return;
       }
 
-      vec3 acc = vec3(0.0);
-      int hits = 0;
-      bool missing = false;
-      float halfSlab = float(slabSteps - 1) * slabDelta * 0.5;
-      for (int i = 0; i < 1024; i++) {
-        if (i >= slabSteps) break;
-        vec3 uvw = base + (-halfSlab + float(i) * slabDelta) * sliceNormal + 0.5;
-        if (!inBox(uvw)) continue;
-        vec4 s = colorAt(uvw);
-        if (s.a < 0.5) missing = true;
-        if (projMode == 1) acc = max(acc, s.rgb);
-        else acc += s.rgb;
-        hits++;
-      }
+      // A slab: the raw projection first, then the channel window and colour once —
+      // the RAW_OUTPUT picture coloured by SliceCompositor, term for term.
+      int hits;
+      bool missing;
+      vec4 p = projectSlab(base, hits, missing);
       if (hits == 0) discard;
       #ifdef FALLBACK_TEX
       // A slab is only as complete as every brick it crosses: keep the preview until
@@ -237,8 +331,15 @@ const VolumeSlicer = (() => {
         discard;
       }
       #endif
-      if (projMode == 2) acc /= float(hits);
-      fragColor = vec4(acc, 1.0);
+      // The raw target stores p as a byte, rounded to the nearest (GLES 3.0 §2.1.6.2);
+      // the same rounding here keeps the colour picture byte-equal to the recoloured
+      // raw one (a MIP of exact texels is already on that grid; a mean, or a linearly
+      // filtered slice stack, is not).
+      p = floor(p * 255.0 + 0.5) / 255.0;
+      // Opaque over the whole slab, black where no channel shows (no 0.005 cut-off,
+      // unlike one plane): the slab reads as one block, as the z-stack shows it.
+      fragColor = vec4(composeRaw(p), 1.0);
+      #endif
     }
   `;
 
@@ -294,7 +395,7 @@ const VolumeSlicer = (() => {
     _scheduleRender();
   }
 
-  function _buildMaterial() {
+  function _buildMaterial(rawOutput = false) {
     const u = {};
     const defaults = {
       svrAtlas0: { value: null },
@@ -347,10 +448,12 @@ const VolumeSlicer = (() => {
     u.uvWindow     = { value: new THREE.Vector4(0, 0, 1, 1) };
     u.fallbackTex  = { value: _fallback ? _fallback.texture : null };
     u.fallbackRect = { value: _fallback ? _fallback.rect.clone() : new THREE.Vector4(0, 0, 1, 1) };
+    u.fallbackChannels = { value: new THREE.Vector4(0, 0, 0, 0) };
 
     const defines = {};
     if (_volumeMaterial?.defines?.ENABLE_SVR) defines.ENABLE_SVR = 1;
     if (_fallback) defines.FALLBACK_TEX = 1;
+    if (rawOutput) defines.RAW_OUTPUT = 1;
 
     _mat = new THREE.ShaderMaterial({
       glslVersion: THREE.GLSL3,
@@ -358,7 +461,10 @@ const VolumeSlicer = (() => {
       fragmentShader: FRAG,
       defines,
       uniforms: u,
-      depthTest: false, depthWrite: false
+      depthTest: false, depthWrite: false,
+      // Raw bytes must land untouched: no blending (three r147 already maps an opaque
+      // NormalBlending material to NoBlending — stated, not relied upon).
+      blending: rawOutput ? THREE.NoBlending : THREE.NormalBlending
     });
   }
 
@@ -748,7 +854,7 @@ const VolumeSlicer = (() => {
       const fb = options?.fallback;
       const rect = fb?.rect;
       const hasFallback = Boolean(fb?.canvas && rect && Number.isFinite(rect.renderRes) && rect.renderRes > 0);
-      if (_foreign && (_foreign.source !== material || _foreign.hasFallback !== hasFallback)) releaseForeign();
+      if (_foreign && (_foreign.source !== material || _foreign.hasFallback !== hasFallback)) _releaseForeignColour();
       if (hasFallback) {
         if (!_foreign?.texture || _foreign.canvas !== fb.canvas) {
           _foreign?.texture?.dispose?.();
@@ -797,12 +903,212 @@ const VolumeSlicer = (() => {
     }
   }
 
-  /** Drops the material and picture kept for renderWithMaterial() (end of a native pass). */
+  /**
+   * Drops the materials and pictures kept for renderWithMaterial() and
+   * renderRawWithMaterial(), and the raw render's target (end of a native pass).
+   */
   function releaseForeign() {
+    _releaseForeignColour();
+    _releaseForeignRaw();
+    _releaseRawPass();
+  }
+
+  function _releaseForeignColour() {
     if (!_foreign) return;
     _foreign.mat?.dispose?.();
     _foreign.texture?.dispose?.();
     _foreign = null;
+  }
+
+  function _releaseForeignRaw() {
+    if (!_foreignRaw) return;
+    _foreignRaw.mat?.dispose?.();
+    _foreignRaw.texture?.dispose?.();
+    _foreignRaw = null;
+  }
+
+  function _releaseRawPass() {
+    _rawPass?.target?.dispose?.();
+    _rawPass = null;
+  }
+
+  function _acquireRawPass(w, h) {
+    if (_rawPass && _rawPass.w === w && _rawPass.h === h) return _rawPass;
+    _releaseRawPass();
+    const target = new THREE.WebGLRenderTarget(w, h, { format: THREE.RGBAFormat, type: THREE.UnsignedByteType });
+    try {
+      _rawPass = { target, buf: new Uint8Array(w * h * 4), w, h };
+    } catch (err) {
+      target.dispose?.();
+      throw err;
+    }
+    return _rawPass;
+  }
+
+  function _isRawPicture(raw) {
+    if (!raw || !ArrayBuffer.isView(raw.data) || raw.data.BYTES_PER_ELEMENT !== 1) return false;
+    const w = Number(raw.width);
+    const h = Number(raw.height);
+    return Number.isInteger(w) && Number.isInteger(h) && w > 0 && h > 0 && raw.data.length >= w * h * 4;
+  }
+
+  /**
+   * One render of `spec` through `material`'s atlas at `size` px that returns the RAW
+   * channel values instead of colours (the RAW_OUTPUT variant of the slice shader):
+   * RGBA = channels 0..3 as the colour math reads them, per-channel max / mean across
+   * a slab, (0,0,0,0) outside the volume and where a brick is missing with no
+   * fallback. The target is RGBA8 with no blending and no colour-space step, so the
+   * bytes are the atlas's own (a mean is rounded to the nearest byte).
+   *   options.window           {x, y, w, h}: that part of the frame alone (renderHighRes)
+   *   options.fallbackRaw      { raw, rect }: a raw picture of the same plane at the same
+   *                            render size (the Studio preview's), cropped to rect
+   *                            (_sliceContentRect's {x, y, x2, y2, renderRes}); read
+   *                            wherever a brick is missing — a DataTexture of its exact
+   *                            bytes (a 2D canvas would premultiply channel 3 away)
+   *   options.fallbackChannels channel indices always taken from the fallback where it
+   *                            covers the pixel (channels the pass did not load)
+   *   options.keepTarget       keep the target and readback buffer for the next call
+   *                            (a native pass); released by releaseForeign()
+   * @returns {{data: Uint8Array, width: number, height: number, channels: number,
+   *   projected: boolean, coverage: boolean}|null}
+   *   rows top-down (canvas order); `data` is a copy the caller owns; `channels` is the
+   *   volume's channel count (the numChannels uniform); `projected` marks a slab
+   *   (MIP / average over more than one sample), which SliceCompositor draws opaque
+   *   over the whole volume as the colour path does; `coverage` marks a projected slab
+   *   of fewer than four channels, whose unused channel 3 is 255 inside the volume and
+   *   0 outside it (the part of the frame the colour path leaves transparent)
+   */
+  function renderRawWithMaterial(material, spec, size = 1024, options = null) {
+    if (_disabled || !_renderer || !material) return null;
+
+    const previousVolumeMaterial = _volumeMaterial;
+    const previousMaterial = _mat;
+    const previousSpec = { ..._spec };
+
+    try {
+      const fb = options?.fallbackRaw;
+      const rect = fb?.rect;
+      const hasFallback = Boolean(_isRawPicture(fb?.raw) && rect && Number.isFinite(rect.renderRes) && rect.renderRes > 0);
+      if (_foreignRaw && (_foreignRaw.source !== material || _foreignRaw.hasFallback !== hasFallback)) _releaseForeignRaw();
+      if (hasFallback) {
+        if (!_foreignRaw?.texture || _foreignRaw.fallbackData !== fb.raw.data) {
+          _foreignRaw?.texture?.dispose?.();
+          const texture = new THREE.DataTexture(fb.raw.data, fb.raw.width, fb.raw.height, THREE.RGBAFormat, THREE.UnsignedByteType);
+          texture.minFilter = THREE.NearestFilter;
+          texture.magFilter = THREE.NearestFilter;
+          texture.generateMipmaps = false;
+          texture.flipY = false;
+          texture.premultiplyAlpha = false;
+          texture.unpackAlignment = 1;
+          texture.needsUpdate = true;
+          _foreignRaw = { ..._foreignRaw, texture, fallbackData: fb.raw.data };
+        }
+        // Same placement as renderWithMaterial's picture: canvas columns [x, x2] and
+        // rows [y, y2] (top-down) of a renderRes frame, in GL orientation.
+        const res = rect.renderRes;
+        const x = Math.max(0, Math.round(rect.x));
+        const y = Math.max(0, Math.round(rect.y));
+        const x2 = Math.min(res - 1, Math.round(rect.x2));
+        const y2 = Math.min(res - 1, Math.round(rect.y2));
+        _fallback = {
+          texture: _foreignRaw.texture,
+          rect: new THREE.Vector4(x / res, (res - 1 - y2) / res, (x2 - x + 1) / res, (y2 - y + 1) / res)
+        };
+      }
+      _volumeMaterial = material;
+      if (_foreignRaw?.mat) {
+        _mat = _foreignRaw.mat;
+        if (_fallback) {
+          _mat.uniforms.fallbackTex.value = _fallback.texture;
+          _mat.uniforms.fallbackRect.value.copy(_fallback.rect);
+        }
+      } else {
+        _buildMaterial(true);
+        _foreignRaw = { ..._foreignRaw, source: material, hasFallback, mat: _mat };
+      }
+      const only = Array.isArray(options?.fallbackChannels) ? options.fallbackChannels : [];
+      _mat.uniforms.fallbackChannels.value.set(...[0, 1, 2, 3].map(c => (hasFallback && only.includes(c) ? 1 : 0)));
+      if (_scene?.children?.[0]) _scene.children[0].material = _mat;
+      if (spec) _spec = { ..._spec, ...spec };
+      return _renderRawPass(size, options?.window || null, Boolean(options?.keepTarget));
+    } finally {
+      _fallback = null;
+      _volumeMaterial = previousVolumeMaterial;
+      _mat = previousMaterial;
+      _spec = previousSpec;
+      if (_scene?.children?.[0] && previousMaterial) _scene.children[0].material = previousMaterial;
+    }
+  }
+
+  function _renderRawPass(size, window, keepTarget) {
+    if (!_hasRenderableVolume() || !_scene || !_camera) return null;
+    _syncUniforms();
+    const win = _normalizeWindow(window, size);
+    const w = win ? win.w : size;
+    const h = win ? win.h : size;
+    let pass;
+    try {
+      pass = _acquireRawPass(w, h);
+    } catch (err) {
+      console.warn('[VolumeSlicer] Raw render allocation failed.', err);
+      return null;
+    }
+    if (win) _mat.uniforms.uvWindow.value.set(win.x / size, (size - win.y - win.h) / size, win.w / size, win.h / size);
+    else _mat.uniforms.uvWindow.value.set(0, 0, 1, 1);
+
+    const prevTarget = _renderer.getRenderTarget();
+    const prevViewport = new THREE.Vector4();
+    _renderer.getViewport(prevViewport);
+    const prevAutoClear = _renderer.autoClear;
+    const pr = _renderer.getPixelRatio();
+    try {
+      _renderer.autoClear = true;
+      _renderer.setRenderTarget(pass.target);
+      _renderer.setViewport(0, 0, w / pr, h / pr);
+      _renderer.clear();
+      _renderer.render(_scene, _camera);
+      _renderer.readRenderTargetPixels(pass.target, 0, 0, w, h, pass.buf);
+    } finally {
+      _renderer.setRenderTarget(prevTarget);
+      _renderer.setViewport(prevViewport);
+      _renderer.autoClear = prevAutoClear;
+    }
+
+    let data;
+    try {
+      data = new Uint8Array(w * h * 4);
+    } catch (err) {
+      console.warn('[VolumeSlicer] Raw readback copy allocation failed.', err);
+      if (!keepTarget) _releaseRawPass();
+      return null;
+    }
+    // GL rows run bottom-up; the copy is top-down, like a canvas.
+    const row = w * 4;
+    for (let y = 0; y < h; y++) {
+      const src = (h - 1 - y) * row;
+      data.set(pass.buf.subarray(src, src + row), y * row);
+    }
+    if (!keepTarget) _releaseRawPass();
+    const u = _mat.uniforms;
+    const channels = Math.max(1, Math.min(4, Math.round(Number(u.numChannels?.value)) || 4));
+    // The shader's own test for a slab (projMode ≠ 0 and more than one sample).
+    const projected = Number(u.projMode?.value) !== 0 && Number(u.slabSteps?.value) > 1;
+    // The shader writes the coverage when numChannels < 4 (the uniform, not the clamp above).
+    const coverage = projected && Number(u.numChannels?.value) < 4;
+    return { data, width: w, height: h, channels, projected, coverage };
+  }
+
+  /**
+   * Histograms of a raw slice for the channel panel, in VolumeViewer.
+   * getChannelHistograms()'s shape (see SliceCompositor.histograms).
+   * `slice` = { raw, width, height } with raw a raw picture or its bytes.
+   */
+  function computeChannelHistograms(slice, bins = 256) {
+    if (typeof SliceCompositor === 'undefined' || !slice) return [];
+    const raw = _isRawPicture(slice.raw)
+      ? slice.raw
+      : { data: slice.raw, width: Number(slice.width), height: Number(slice.height) };
+    return SliceCompositor.histograms(raw, bins);
   }
 
   function _scheduleRender() {
@@ -861,6 +1167,12 @@ const VolumeSlicer = (() => {
   }
 
   function recompose(sliceResult, channelState) {
+    // A slice that carries its raw values is re-coloured from them: same pixels, same
+    // frame, no re-render (its atlas may be gone — the Studio's native pass).
+    if (_isRawPicture(sliceResult?.raw) && typeof SliceCompositor !== 'undefined') {
+      const canvas = SliceCompositor.compose(sliceResult.raw, channelState, { numChannels: sliceResult.raw.channels });
+      return canvas ? { ...sliceResult, canvas, width: canvas.width, height: canvas.height } : null;
+    }
     if (sliceResult.source !== 'gpu-slicer' && sliceResult.source !== 'zstack') return null;
     // Make sure we use the same plane spec
     const oldSpec = getPlaneSpec();
@@ -977,8 +1289,10 @@ const VolumeSlicer = (() => {
     planeGeometry,
     renderHighRes,
     renderWithMaterial,
+    renderRawWithMaterial,
     releaseForeign,
     recompose,
+    computeChannelHistograms,
     onChange,
     dispose,
     /** Force an immediate preview render (e.g. after channel change) */

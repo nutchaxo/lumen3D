@@ -68,6 +68,10 @@ const VolumeViewer = (() => {
   // Number of DISPLAY streams in flight. A background prefetch refuses to start
   // while this is non-zero — see the guard at the top of loadBrickedVolumeStream.
   let _fgStreamActive = 0;
+  // Slice-stack loads in flight (loadVolume), each { loadId } once it has one. The
+  // current one (loadId === _loadCounter) re-uploads the displayed texture about once
+  // a second while its slices land; a superseded one only drains its fetches.
+  const _sliceLoads = new Set();
   let _transitionCube = null;
   let _transitionMaterial = null;
   let _transitionEntry = null;
@@ -465,6 +469,12 @@ const VolumeViewer = (() => {
     uniform int steps;
     uniform int renderMode;   // 0 = DVR, 1 = Emission (MIP), 2 = Natural Fluorescence
     uniform float exposure;   // global brightness multiplier
+    // View export (renderViewImage). fragCoordOffset: where this tile's window sits in
+    // the full exported image, so the jitter below reads the coordinate one full-size
+    // render would give it; (0,0) on screen. exportAlpha: 0 on screen, 1 for a
+    // transparent export (see fragAlpha).
+    uniform vec2 fragCoordOffset;
+    uniform int exportAlpha;
 
     // ── Natural Fluorescence (renderMode 2) controls ──
     uniform float absorption;    // Beer-Lambert extinction (front-to-back occlusion → 3D form)
@@ -556,6 +566,19 @@ const VolumeViewer = (() => {
       return fract((p3.x + p3.y) * p3.z);
     }
 
+    // Alpha of the ray's pixel. On screen it is 1: the canvas shows the light C as an
+    // opaque pixel over the page background. A transparent export needs coverage
+    // instead, so the PNG composites like the light it records: premultiplied (C, a)
+    // with a = max(opacity, max(C)) clamped to [0,1] — never below the brightest
+    // channel, so C <= a keeps it a valid premultiplied pixel and over black it is
+    // exactly C, the screen value. opacity is the ray's own: 1 - transmittance in the
+    // emission-absorption mode, the accumulated alpha in DVR, 0 for MIP (pure light).
+    float fragAlpha(vec3 c, float opacity) {
+      if (exportAlpha == 0) return 1.0;
+      vec3 cc = clamp(c, 0.0, 1.0);
+      return clamp(max(opacity, max(cc.r, max(cc.g, cc.b))), 0.0, 1.0);
+    }
+
     // ACES filmic tone mapping — keeps colours saturated and vivid under high brightness
     vec3 ACESFilm(vec3 x) {
       return clamp((x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14), 0.0, 1.0);
@@ -586,7 +609,7 @@ const VolumeViewer = (() => {
 
       float rayLength = bounds.y - bounds.x;
       float delta = rayLength / max(float(steps), 1.0);
-      float jitter = hash(gl_FragCoord.xy) * delta;
+      float jitter = hash(gl_FragCoord.xy + fragCoordOffset) * delta;
       vec3 p = vOrigin + (bounds.x + jitter) * rayDir;
       float t = jitter;
 
@@ -812,7 +835,7 @@ const VolumeViewer = (() => {
 
         // (4) Constant-luminance saturation push for fluorescent brilliance.
         vec3 fluColor = clamp(mix(vec3(Lout), toned, saturation), 0.0, 1.0);
-        fragColor = vec4(fluColor, 1.0);
+        fragColor = vec4(fluColor, fragAlpha(fluColor, 1.0 - clebT));
         return;
       }
 
@@ -828,7 +851,7 @@ const VolumeViewer = (() => {
         finalColor = accumDVR * exposure;
       }
 
-      fragColor = vec4(finalColor, 1.0);
+      fragColor = vec4(finalColor, fragAlpha(finalColor, renderMode == 0 ? accumAlpha : 0.0));
     }
   `;
 
@@ -913,6 +936,9 @@ const VolumeViewer = (() => {
         steps: { value: 100 },
         renderMode: { value: 2 },  // 2 = Natural Fluorescence by default
         exposure: { value: 1.0 },  // global brightness
+        // View export only (renderViewImage); inert on screen.
+        fragCoordOffset: { value: new THREE.Vector2(0, 0) },
+        exportAlpha: { value: 0 },
         // Natural Fluorescence (mode 2) — tuned defaults for embryo immunofluorescence.
         absorption:   { value: 1.8 },
         emissionGain: { value: 2.2 },
@@ -1692,6 +1718,18 @@ const VolumeViewer = (() => {
    * @param {function} onProgress Progress callback
    */
   async function loadVolume(basePath, metadata, timepoint = null, onProgress = null, options = {}) {
+    // Registered for the whole load, whatever way it ends (a throw included), so a
+    // view export never waits on a load that is over (_isVolumeStreaming).
+    const job = { loadId: 0 };
+    _sliceLoads.add(job);
+    try {
+      return await _loadSliceVolume(basePath, metadata, timepoint, onProgress, options, job);
+    } finally {
+      _sliceLoads.delete(job);
+    }
+  }
+
+  async function _loadSliceVolume(basePath, metadata, timepoint, onProgress, options, job) {
     const perfId = _perf()?.start('volume.load.slices', {
       quality: options.quality || '1024x1024',
       timepoint
@@ -1699,6 +1737,7 @@ const VolumeViewer = (() => {
     if (_brickStreamAbort) _brickStreamAbort.cancelled = true;
     if (_seedRafId !== null) { cancelAnimationFrame(_seedRafId); _seedRafId = null; } // LEAK-023
     const loadId = ++_loadCounter;
+    job.loadId = loadId;
     const quality = _normalizeQualityKey(options.quality || '1024x1024');
     _emitQualityState({ active: quality, mode: 'slice', progress: 0, message: `Loading ${quality} slices...` });
     const qualityInfo = _resolveQuality(metadata, quality);
@@ -3247,6 +3286,52 @@ const VolumeViewer = (() => {
     return { spinDeg: ((THREE.MathUtils.radToDeg(spinRad) % 360) + 360) % 360 };
   }
 
+  /**
+   * The screen's axes in the volume's own frame — the voxel axes, physically
+   * proportioned: P = L ⊙ p / max(p), L the cube-local position ([−½, ½]³), p the
+   * physical extent per axis (a missing axis counting as 1, as in
+   * VolumeSlicer.planeGeometry). That is the frame VolumeSlicer poses its planes
+   * in, so a slice drawn along `right` / `up` shows the voxels the way the canvas
+   * does. `toward` is the normal of the screen-parallel planes, toward the camera.
+   *   The cube draws L at world T + Qc·(s ⊙ L), s = cube.scale (per-axis stretch:
+   *   the physical proportions, Z times the display scale), and both the
+   *   ray-marcher (its sample position + ½) and the slicer (base + ½) read the
+   *   texture at L + ½, through the same atlas lookup — no flip on either side.
+   *   A world direction d is thus the local direction s⁻¹ ⊙ Qc⁻¹·d, the
+   *   P direction ∝ (p / s) ⊙ Qc⁻¹·d; a normal maps through the inverse
+   *   transpose, ∝ (s / p) ⊙ Qc⁻¹·n. A negative scale component (a mirror) is
+   *   carried by the same formulas. The camera basis is read from its world
+   *   matrix (columns: right, up, backward), wherever the camera points.
+   * While a pose is in flight the pose it flies to is used: a figure asked for
+   * mid-flight gets the orientation the screen is about to settle on.
+   * @returns {{right: THREE.Vector3, up: THREE.Vector3, toward: THREE.Vector3,
+   *   settling: boolean}|null} unit vectors; null before the scene exists
+   */
+  function getScreenFrameInVolume() {
+    if (!cube || !camera) return null;
+    camera.updateMatrixWorld();
+    const qc = (_poseAnim ? _poseAnim.to : cube.quaternion).clone();
+    if (cube.parent) qc.premultiply(cube.parent.getWorldQuaternion(new THREE.Quaternion()));
+    const qInv = qc.invert();
+    const physical = getPhysicalSize();
+    const axis = (v) => (Number(v) > 0 ? Number(v) : 1);
+    const px = axis(physical?.x);
+    const py = axis(physical?.y);
+    const pz = axis(physical?.z);
+    const sx = cube.scale.x || 1;
+    const sy = cube.scale.y || 1;
+    const sz = cube.scale.z || 1;
+    const column = (i) => new THREE.Vector3().setFromMatrixColumn(camera.matrixWorld, i).applyQuaternion(qInv);
+    const direction = (v) => new THREE.Vector3(v.x * px / sx, v.y * py / sy, v.z * pz / sz).normalize();
+    const back = column(2);
+    return {
+      right: direction(column(0)),
+      up: direction(column(1)),
+      toward: new THREE.Vector3(back.x * sx / px, back.y * sy / py, back.z * sz / pz).normalize(),
+      settling: _poseAnim !== null
+    };
+  }
+
   function centerSample() {
     if (!cube) return;
     cube.position.set(0, 0, 0);
@@ -4559,6 +4644,651 @@ const VolumeViewer = (() => {
     _scheduleFrame();
   }
 
+  // ── 3D view export (PNG) ──────────────────────────────────────────────────────────
+  // The current view rendered off screen at any size, tile by tile, through the scene,
+  // camera and ray-march materials the render loop draws, at the idle step count —
+  // never the reduced frame shown while interacting or streaming. The dialog, the file
+  // and the scale bar belong to viewer.js (_bindViewExport).
+
+  let _viewExportInFlight = false;
+
+  /** Pixel ratio of an idle frame; _animate lowers it while interacting/streaming. */
+  function _idlePixelRatio() {
+    return Math.min((typeof window !== 'undefined' && window.devicePixelRatio) || 1, 2);
+  }
+
+  /**
+   * The 3D view's size: CSS pixels, and the device pixels of an idle frame's drawing
+   * buffer (three floors CSS size × pixel ratio). null before init().
+   */
+  function getViewSize() {
+    if (!renderer) return null;
+    const css = renderer.getSize(new THREE.Vector2());
+    const pixelRatio = _idlePixelRatio();
+    return {
+      cssWidth: css.x,
+      cssHeight: css.y,
+      pixelRatio,
+      width: Math.max(1, Math.floor(css.x * pixelRatio)),
+      height: Math.max(1, Math.floor(css.y * pixelRatio))
+    };
+  }
+
+  /**
+   * µm per pixel of an image `imageHeight` pixels tall showing `cam`'s view, read at
+   * the depth of the specimen centre — the rule of the on-screen bar
+   * (VolumeGrid._updateScaleBar). A perspective camera maps a length L lying in the
+   * view plane at depth d, measured along the view axis (so a panned specimen keeps
+   * its scale), to L / (2·tan(fov/2)·d) of the image height, and one world unit is
+   * physical.x / cube.scale.x µm (computePhysicalScale normalises the cube to the
+   * longer of X and Y; X carries no display override). Hence
+   *     µm per pixel = 2·tan(fov/2)·d · (physical.x / cube.scale.x) / imageHeight.
+   * Neither the aspect ratio nor a view offset enters: pixels are square, and a tile of
+   * a view-offset camera keeps the pitch of the full image. 0 without a calibration
+   * (a bar would count voxels) or with the specimen behind the camera.
+   */
+  function _micronsPerPixelFor(cam, cubeObj, physical, imageHeight) {
+    if (!cam || !cubeObj || !(imageHeight > 0)) return 0;
+    const calibrated = physical && physical.calibrationStatus !== 'metadata-missing' && physical.mode !== 'metadata-missing';
+    const umPerUnit = calibrated && cubeObj.scale.x > 0 ? Number(physical.x) / cubeObj.scale.x : 0;
+    if (!(umPerUnit > 0)) return 0;
+    const dir = cam.getWorldDirection(new THREE.Vector3());
+    const depth = new THREE.Vector3().copy(cubeObj.position).sub(cam.position).dot(dir);
+    if (!(depth > 0)) return 0;
+    const heightAtDepth = 2 * Math.tan(THREE.MathUtils.degToRad(cam.fov) / 2) * depth;
+    return heightAtDepth * umPerUnit / imageHeight;
+  }
+
+  /** µm per pixel of an image `imageHeight` pixels tall of the current view (see above). */
+  function micronsPerPixel(imageHeight) {
+    return _micronsPerPixelFor(camera, cube, getPhysicalSize(), imageHeight);
+  }
+
+  /**
+   * Tiles of a width × height image, row-major from the top-left corner, at most
+   * `tile` pixels a side. Tile {x, y, w, h} covers columns [x, x+w) and rows [y, y+h),
+   * rows counted downward (the canvas's convention and three's view-offset one), so
+   * every pixel of the image belongs to exactly one tile.
+   */
+  function _planExportTiles(width, height, tile) {
+    const tiles = [];
+    const step = Math.max(1, Math.floor(tile));
+    for (let y = 0; y < height; y += step) {
+      for (let x = 0; x < width; x += step) {
+        tiles.push({ x, y, w: Math.min(step, width - x), h: Math.min(step, height - y) });
+      }
+    }
+    return tiles;
+  }
+
+  /**
+   * camera.setViewOffset arguments for one tile: its window of the full width × height
+   * frustum. three moves the near-plane window by offsetX·(window width)/W to the right
+   * and offsetY·(window height)/H down, and shrinks it to w/W × h/H, so a world point
+   * that lands on pixel (px, py) of the full image lands on (px − x, py − y) of the tile.
+   */
+  function _exportTileViewOffset(t, width, height) {
+    return [width, height, t.x, t.y, t.w, t.h];
+  }
+
+  /**
+   * gl_FragCoord offset of one tile. The tile is drawn into a w × h viewport whose
+   * origin is its BOTTOM-left pixel (GL window coordinates), so its fragment (fx, fy)
+   * is fragment (x + fx, H − (y + h) + fy) of one full-size render. Adding
+   * (x, H − y − h) feeds the ray-march jitter that coordinate: the dither runs on
+   * across tile seams exactly as a single W × H frame would draw it.
+   */
+  function _exportTileFragOffset(t, height) {
+    return [t.x, height - t.y - t.h];
+  }
+
+  /**
+   * Render-target configurations, best first: the largest tile the GPU takes with the
+   * canvas's multisampling, the same without it, then halving down to 256 px. One that
+   * cannot be allocated (or runs out of memory) falls through to the next.
+   */
+  function _exportTileConfigs(maxTile, samples) {
+    const configs = [];
+    let tile = Math.max(1, Math.floor(maxTile));
+    if (samples > 0) configs.push({ tile, samples });
+    for (;;) {
+      configs.push({ tile, samples: 0 });
+      if (tile <= 256) break;
+      tile = Math.max(256, Math.floor(tile / 2));
+    }
+    return configs;
+  }
+
+  function _viewExportError(code, message) {
+    const err = new Error(message);
+    err.code = code;
+    return err;
+  }
+
+  function _viewExportAbortError() {
+    try {
+      return new DOMException('View export cancelled', 'AbortError');
+    } catch (_) {
+      const err = new Error('View export cancelled');
+      err.name = 'AbortError';
+      return err;
+    }
+  }
+
+  function _throwIfViewExportStopped(signal) {
+    if (signal && signal.aborted) throw _viewExportAbortError();
+    if (_contextLost || renderer?.getContext?.()?.isContextLost?.()) {
+      throw _viewExportError('context-lost', 'The GPU context was lost during the export');
+    }
+  }
+
+  // A macrotask, not a frame: requestAnimationFrame is frozen in a hidden tab, and a
+  // MessageChannel message (unlike setTimeout) is not throttled there either.
+  function _macrotask() {
+    return new Promise(resolve => {
+      if (typeof MessageChannel === 'function') {
+        const channel = new MessageChannel();
+        channel.port1.onmessage = () => { channel.port1.close(); resolve(); };
+        channel.port2.postMessage(0);
+      } else {
+        setTimeout(resolve, 0);
+      }
+    });
+  }
+
+  /** Drains the GL error queue; true when `code` was among the errors. */
+  function _glErrorsInclude(gl, code) {
+    let hit = false;
+    for (let i = 0; i < 16; i++) {
+      const error = gl.getError();
+      if (error === gl.NO_ERROR) break;
+      if (error === code) hit = true;
+    }
+    return hit;
+  }
+
+  /**
+   * The output canvas, or null when the browser cannot hold it. Past its limits a
+   * browser may still hand out a context whose drawing is silently dropped, so one
+   * pixel is written in the far corner and read back.
+   */
+  function _allocExportCanvas(width, height) {
+    let canvas = null;
+    try {
+      canvas = document.createElement('canvas');
+      canvas.width = width;
+      canvas.height = height;
+      const ctx = canvas.getContext('2d');
+      if (ctx && canvas.width === width && canvas.height === height) {
+        ctx.fillStyle = '#ff0000';
+        ctx.fillRect(width - 1, height - 1, 1, 1);
+        const probe = ctx.getImageData(width - 1, height - 1, 1, 1).data;
+        ctx.clearRect(width - 1, height - 1, 1, 1);
+        if (probe[0] === 255 && probe[3] === 255) return { canvas, ctx };
+      }
+    } catch (_) { /* fall through: not allocatable */ }
+    if (canvas) { canvas.width = 0; canvas.height = 0; }
+    return null;
+  }
+
+  /**
+   * The GPU pass that turns a rendered tile into the bytes of the image. The tile holds
+   * premultiplied colour (C, A) — the ray-march adds light C at alpha 1, sprites and
+   * lines blend "over" — with row 0 at the bottom (GL window origin). It is read
+   * row-flipped, so the read-back comes out top row first, then either composited over
+   * the background exactly as the browser composites the canvas over the page,
+   * C + B·(1 − A), or un-premultiplied for a transparent PNG, whose pixels are straight
+   * (C/A, A).
+   */
+  function _createExportComposite(background) {
+    const hex = typeof background === 'string' ? background : '#000000';
+    const channel = (i) => parseInt(hex.slice(1 + 2 * i, 3 + 2 * i), 16) / 255;
+    const compositeMaterial = new THREE.ShaderMaterial({
+      glslVersion: THREE.GLSL3,
+      uniforms: {
+        tileTex: { value: null },
+        tileHeight: { value: 1 },
+        background: { value: new THREE.Vector3(channel(0), channel(1), channel(2)) },
+        opaque: { value: background ? 1 : 0 }
+      },
+      vertexShader: 'void main() { gl_Position = vec4(position.xy, 0.0, 1.0); }',
+      fragmentShader: `
+        precision highp float;
+        precision highp int;
+        uniform sampler2D tileTex;
+        uniform int tileHeight;
+        uniform vec3 background;
+        uniform int opaque;
+        out vec4 exportColor;
+        void main() {
+          ivec2 p = ivec2(gl_FragCoord.xy);
+          vec4 src = texelFetch(tileTex, ivec2(p.x, tileHeight - 1 - p.y), 0);
+          if (opaque == 1) {
+            exportColor = vec4(src.rgb + background * (1.0 - src.a), 1.0);
+          } else {
+            exportColor = src.a > 0.0 ? vec4(min(src.rgb / src.a, vec3(1.0)), src.a) : vec4(0.0);
+          }
+        }
+      `,
+      depthTest: false,
+      depthWrite: false,
+      blending: THREE.NoBlending
+    });
+    const geometry = new THREE.PlaneGeometry(2, 2);
+    const quad = new THREE.Mesh(geometry, compositeMaterial);
+    quad.frustumCulled = false;
+    const compositeScene = new THREE.Scene();
+    compositeScene.add(quad);
+    return {
+      scene: compositeScene,
+      camera: new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1),
+      material: compositeMaterial,
+      geometry,
+      uniforms: compositeMaterial.uniforms
+    };
+  }
+
+  /**
+   * The two off-screen targets of one configuration (the render, multisampled like the
+   * canvas when possible, and the composite) plus the read-back buffer, or null when
+   * the GPU (or the JS heap) refuses them.
+   */
+  function _allocExportTargets(config, width, height) {
+    const gl = renderer.getContext();
+    const w = Math.min(config.tile, width);
+    const h = Math.min(config.tile, height);
+    const base = {
+      format: THREE.RGBAFormat,
+      type: THREE.UnsignedByteType,
+      minFilter: THREE.NearestFilter,
+      magFilter: THREE.NearestFilter,
+      generateMipmaps: false,
+      stencilBuffer: false
+    };
+    const prevTarget = renderer.getRenderTarget();
+    let renderTarget = null;
+    let compositeTarget = null;
+    _glErrorsInclude(gl, gl.OUT_OF_MEMORY);
+    try {
+      renderTarget = new THREE.WebGLRenderTarget(w, h, { ...base, depthBuffer: true, samples: config.samples });
+      compositeTarget = new THREE.WebGLRenderTarget(w, h, { ...base, depthBuffer: false });
+      for (const target of [renderTarget, compositeTarget]) {
+        renderer.setRenderTarget(target); // allocates the GL storage
+        if (gl.checkFramebufferStatus(gl.FRAMEBUFFER) !== gl.FRAMEBUFFER_COMPLETE) throw new Error('incomplete framebuffer');
+      }
+      if (_glErrorsInclude(gl, gl.OUT_OF_MEMORY)) throw new Error('GPU out of memory');
+      const pixels = new Uint8Array(w * h * 4);
+      return { render: renderTarget, composite: compositeTarget, pixels, tile: config.tile, samples: config.samples };
+    } catch (err) {
+      console.warn(`[VolumeViewer] View export: ${config.tile}px tiles (${config.samples}× MSAA) unavailable:`, err?.message || err);
+      renderTarget?.dispose();
+      compositeTarget?.dispose();
+      return null;
+    } finally {
+      renderer.setRenderTarget(prevTarget);
+    }
+  }
+
+  function _disposeExportTargets(targets) {
+    if (!targets) return;
+    targets.render?.dispose();
+    targets.composite?.dispose();
+  }
+
+  /** Every material drawing with the ray-march shader: the volume, a cross-fade cube,
+   *  the grid's projection walls (they share the fragment shader). */
+  function _rayMarchMaterials() {
+    const found = new Set();
+    scene.traverse((obj) => {
+      const m = obj.material;
+      if (m && !Array.isArray(m) && m.isShaderMaterial && m.fragmentShader === fragmentShader) found.add(m);
+    });
+    return [...found];
+  }
+
+  // The premultiplied twin of a ray-march material's blending, used while the shader
+  // writes coverage alpha (transparent export): the same compositing of light, with the
+  // colour no longer multiplied by that alpha on the way in.
+  //   AdditiveBlending (SRC_ALPHA, ONE; screen alpha 1 → dst + C)   → (ONE, ONE)
+  //   NormalBlending   (SRC_ALPHA, 1−SRC_ALPHA; alpha 1 → C)         → (ONE, 1−SRC_ALPHA)
+  // At alpha 1 either twin gives exactly the screen's result.
+  function _premultipliedBlendFactors(blending) {
+    if (blending === THREE.AdditiveBlending) return [THREE.OneFactor, THREE.OneFactor];
+    if (blending === THREE.NormalBlending) return [THREE.OneFactor, THREE.OneMinusSrcAlphaFactor];
+    return null;
+  }
+
+  /** The scene sync _animate runs before it renders (gizmo, grid and axes, cross-fade
+   *  cube, cut plane, measurement labels), for an off-screen frame. */
+  function _prepareExportFrame() {
+    try {
+      _syncRotGizmoTransform();
+      _syncGridRotation();
+      if (_transitionCube) {
+        _transitionCube.position.copy(cube.position);
+        _transitionCube.quaternion.copy(cube.quaternion);
+        _transitionCube.scale.copy(cube.scale);
+      }
+      if (_cutPlaneMesh?.visible) _syncCutPlaneToOrbit();
+      _updateMeasurementLabelPositions(false, null);
+    } catch (err) {
+      console.warn('[VolumeViewer] Error in export pre-render update:', err);
+    }
+  }
+
+  /**
+   * One tile. The snapshot pose, the idle step count and the tile's jitter offset go
+   * on the live scene; the tile's window of the full frustum is rendered off screen,
+   * composited, read back and written into the output canvas. Everything it changed is
+   * put back in `finally` — render target, clear colour, materials, pose — so the live
+   * view never sees an export state, even when a render throws. Synchronous: no frame
+   * of the render loop can run in between. false on GPU out-of-memory.
+   */
+  function _renderExportTile(tile, job) {
+    const { width, height, snap, targets, composite, ctx, background } = job;
+    const gl = renderer.getContext();
+    const prevTarget = renderer.getRenderTarget();
+    const prevClearColor = renderer.getClearColor(new THREE.Color());
+    const prevClearAlpha = renderer.getClearAlpha();
+    const prevSteps = material.uniforms.steps.value;
+    const live = {
+      position: cube.position.clone(),
+      quaternion: cube.quaternion.clone(),
+      scale: cube.scale.clone(),
+      interacting: cube.userData.isInteractingNow
+    };
+    const marchers = _rayMarchMaterials().map((m) => ({
+      m,
+      blending: m.blending,
+      blendEquation: m.blendEquation,
+      blendSrc: m.blendSrc,
+      blendDst: m.blendDst,
+      blendEquationAlpha: m.blendEquationAlpha,
+      blendSrcAlpha: m.blendSrcAlpha,
+      blendDstAlpha: m.blendDstAlpha,
+      exportAlpha: m.uniforms?.exportAlpha ? m.uniforms.exportAlpha.value : null,
+      offset: m.uniforms?.fragCoordOffset ? m.uniforms.fragCoordOffset.value.clone() : null
+    }));
+    try {
+      cube.position.copy(snap.position);
+      cube.quaternion.copy(snap.quaternion);
+      cube.scale.copy(snap.scale);
+      cube.userData.isInteractingNow = false;
+      material.uniforms.steps.value = _targetSteps;
+      const [fx, fy] = _exportTileFragOffset(tile, height);
+      for (const saved of marchers) {
+        const m = saved.m;
+        if (m.uniforms?.fragCoordOffset) m.uniforms.fragCoordOffset.value.set(fx, fy);
+        if (background !== null) continue;
+        if (m.uniforms?.exportAlpha) m.uniforms.exportAlpha.value = 1;
+        const factors = _premultipliedBlendFactors(saved.blending);
+        if (factors) {
+          m.blending = THREE.CustomBlending;
+          m.blendEquation = THREE.AddEquation;
+          m.blendSrc = factors[0];
+          m.blendDst = factors[1];
+          m.blendEquationAlpha = null;
+          m.blendSrcAlpha = null;
+          m.blendDstAlpha = null;
+        }
+      }
+      _prepareExportFrame();
+
+      snap.camera.setViewOffset(..._exportTileViewOffset(tile, width, height));
+      targets.render.viewport.set(0, 0, tile.w, tile.h);
+      renderer.setRenderTarget(targets.render);
+      renderer.setClearColor(0x000000, 0);
+      renderer.clear(true, true, true);
+      renderer.render(scene, snap.camera);
+
+      composite.uniforms.tileTex.value = targets.render.texture;
+      composite.uniforms.tileHeight.value = tile.h;
+      targets.composite.viewport.set(0, 0, tile.w, tile.h);
+      renderer.setRenderTarget(targets.composite);
+      renderer.render(composite.scene, composite.camera);
+      renderer.readRenderTargetPixels(targets.composite, 0, 0, tile.w, tile.h, targets.pixels);
+      if (gl.isContextLost()) throw _viewExportError('context-lost', 'The GPU context was lost during the export');
+      if (_glErrorsInclude(gl, gl.OUT_OF_MEMORY)) return false;
+      const bytes = new Uint8ClampedArray(targets.pixels.buffer, 0, tile.w * tile.h * 4);
+      ctx.putImageData(new ImageData(bytes, tile.w, tile.h), tile.x, tile.y);
+      return true;
+    } finally {
+      snap.camera.clearViewOffset();
+      composite.uniforms.tileTex.value = null;
+      renderer.setRenderTarget(prevTarget);
+      renderer.setClearColor(prevClearColor, prevClearAlpha);
+      material.uniforms.steps.value = prevSteps;
+      for (const saved of marchers) {
+        const m = saved.m;
+        m.blending = saved.blending;
+        m.blendEquation = saved.blendEquation;
+        m.blendSrc = saved.blendSrc;
+        m.blendDst = saved.blendDst;
+        m.blendEquationAlpha = saved.blendEquationAlpha;
+        m.blendSrcAlpha = saved.blendSrcAlpha;
+        m.blendDstAlpha = saved.blendDstAlpha;
+        if (saved.exportAlpha !== null) m.uniforms.exportAlpha.value = saved.exportAlpha;
+        if (saved.offset) m.uniforms.fragCoordOffset.value.copy(saved.offset);
+      }
+      cube.position.copy(live.position);
+      cube.quaternion.copy(live.quaternion);
+      cube.scale.copy(live.scale);
+      cube.userData.isInteractingNow = live.interacting;
+      _prepareExportFrame();
+    }
+  }
+
+  /**
+   * true while anything still writes into the displayed volume: a brick stream, or the
+   * current slice-stack load. _fgStreamActive counts the display streams because a
+   * superseded stream's `finally` clears _isStreamingBricks while the one that
+   * replaced it (a quality switch mid-stream) is still landing bricks.
+   */
+  function _isVolumeStreaming() {
+    if (_isStreamingBricks || _fgStreamActive > 0) return true;
+    for (const job of _sliceLoads) {
+      if (job.loadId && job.loadId === _loadCounter) return true;
+    }
+    return false;
+  }
+
+  // Uniforms a tile sets (and puts back) itself, or that the render loop tunes every
+  // frame (steps: the tile renders with _targetSteps whatever the loop left there).
+  const EXPORT_VOLATILE_UNIFORMS = new Set(['steps', 'fragCoordOffset', 'exportAlpha']);
+
+  function _pushExportValue(out, v) {
+    if (v === null || v === undefined) { out.push(null); return; }
+    const type = typeof v;
+    if (type === 'number' || type === 'boolean' || type === 'string') { out.push(v); return; }
+    // A texture counts by identity and upload version (a re-upload changes what it shows).
+    if (v.isTexture) { out.push(v.id, v.version); return; }
+    if (v.isMatrix3 || v.isMatrix4) { for (let i = 0; i < v.elements.length; i++) out.push(v.elements[i]); return; }
+    if (v.isVector2) { out.push(v.x, v.y); return; }
+    if (v.isVector3) { out.push(v.x, v.y, v.z); return; }
+    if (v.isVector4 || v.isQuaternion) { out.push(v.x, v.y, v.z, v.w); return; }
+    if (v.isColor) { out.push(v.r, v.g, v.b); return; }
+    if (Array.isArray(v) || ArrayBuffer.isView(v)) {
+      out.push(v.length);
+      for (let i = 0; i < v.length; i++) _pushExportValue(out, v[i]);
+      return;
+    }
+    out.push(v);
+  }
+
+  /**
+   * Everything a tile reads that the user can change while the export runs (the
+   * sidebar and toolbar stay live), as one flat array: every ray-march material's
+   * visibility, defines and uniform values (exposure, render mode, channel colour /
+   * window / gamma / opacity / on-off, clip box, stabilisation warp, textures), every
+   * object of the scene with its visibility (grid, axes, tracking layer,
+   * measurements, cut plane — shown, hidden, added, removed), the cube scale (the
+   * z display scale), the idle step count and the cut plane. The pose is not in it:
+   * the tiles render a snapshot of it.
+   */
+  function _exportFingerprint() {
+    const out = [];
+    for (const m of _rayMarchMaterials()) {
+      out.push(m.id, m.visible);
+      const defines = m.defines || {};
+      for (const key of Object.keys(defines)) out.push(key, defines[key]);
+      const uniforms = m.uniforms || {};
+      for (const key of Object.keys(uniforms)) {
+        if (EXPORT_VOLATILE_UNIFORMS.has(key)) continue;
+        out.push(key);
+        _pushExportValue(out, uniforms[key]?.value);
+      }
+    }
+    scene.traverse((obj) => { out.push(obj.id, obj.visible); });
+    out.push(cube.scale.x, cube.scale.y, cube.scale.z, _targetSteps);
+    const plane = _planeSpec || {};
+    out.push(plane.mode, plane.value, plane.yaw, plane.pitch, plane.roll, plane.visible);
+    return out;
+  }
+
+  function _sameExportFingerprint(a, b) {
+    if (a.length !== b.length) return false;
+    for (let i = 0; i < a.length; i++) {
+      // NaN equals NaN here: an unset value must not read as a change.
+      if (a[i] !== b[i] && !(a[i] !== a[i] && b[i] !== b[i])) return false;
+    }
+    return true;
+  }
+
+  /** Resolves once nothing is feeding the displayed volume, reporting its progress:
+   *  tiles rendered while bricks or slices land would each show a different volume. */
+  async function _waitForSteadyVolume(signal, onProgress) {
+    for (;;) {
+      _throwIfViewExportStopped(signal);
+      if (!_isVolumeStreaming()) return;
+      onProgress({ phase: 'waiting', progress: Math.max(0, Math.min(1, Number(_qualityState.progress) || 0)) });
+      await new Promise(resolve => setTimeout(resolve, 250));
+    }
+  }
+
+  /**
+   * Render the current view into a width × height canvas (device pixels): the same
+   * picture as the screen, sharper. Each tile is one window of the full frustum
+   * (camera.setViewOffset) drawn into an off-screen target, so the output may exceed
+   * what the GPU renders in one pass; tiles are rendered one per macrotask, from a
+   * snapshot of the pose taken once the volume stopped streaming — a tile rendered
+   * while bricks or slices land, after the volume was swapped (timepoint, quality), or
+   * after a display setting changed (_exportFingerprint: channels, exposure, render
+   * mode, clip, grid / axes / overlays, z scale) restarts the image, three times at most.
+   *
+   * Background: '#rrggbb' composites the render over that colour exactly as the page
+   * shows the canvas; anything else gives a transparent PNG whose ray-march pixels
+   * carry coverage alpha (see fragAlpha in the shader) — over black it is the screen
+   * image, over anything else a faint glow stays translucent instead of turning into
+   * an opaque dark pixel.
+   *
+   * @param {{width:number, height:number, background?:string|null,
+   *          onProgress?:Function, signal?:AbortSignal}} options
+   *   onProgress receives { phase: 'waiting', progress } (0..1 of the stream) or
+   *   { phase: 'render', tile, tiles } before each tile.
+   * @returns {Promise<HTMLCanvasElement>} carrying `exportInfo` = { micronsPerPixel
+   *   (of the output, 0 without calibration), tileSize, tiles, samples }. Rejects with
+   *   an AbortError on cancel, else an Error whose `code` is 'busy' | 'no-view' | 'size'
+   *   | 'canvas' | 'gpu-memory' | 'context-lost' | 'unstable' (the volume kept loading
+   *   or changing) | 'display-changed' (the display settings kept changing).
+   */
+  async function renderViewImage(options = {}) {
+    const width = Math.floor(Number(options.width));
+    const height = Math.floor(Number(options.height));
+    const signal = options.signal || null;
+    const onProgress = typeof options.onProgress === 'function' ? options.onProgress : () => {};
+    const background = typeof options.background === 'string' && /^#[0-9a-f]{6}$/i.test(options.background)
+      ? options.background.toLowerCase()
+      : null;
+    if (_viewExportInFlight) throw _viewExportError('busy', 'A view export is already running');
+    if (!renderer || !scene || !camera || !cube || !material) throw _viewExportError('no-view', 'The 3D view is not ready');
+    if (!(width > 0) || !(height > 0)) throw _viewExportError('size', `Invalid export size ${options.width} × ${options.height}`);
+    _viewExportInFlight = true;
+    let targets = null;
+    let composite = null;
+    let output = null;
+    try {
+      _throwIfViewExportStopped(signal);
+      output = _allocExportCanvas(width, height);
+      if (!output) throw _viewExportError('canvas', `The browser cannot allocate a ${width} × ${height} image`);
+      composite = _createExportComposite(background);
+      const gl = renderer.getContext();
+      const caps = renderer.capabilities || {};
+      const viewportMax = gl.getParameter(gl.MAX_VIEWPORT_DIMS) || [2048, 2048];
+      const maxTile = Math.min(
+        2048,
+        caps.maxTextureSize || 2048,
+        gl.getParameter(gl.MAX_RENDERBUFFER_SIZE) || 2048,
+        viewportMax[0] || 2048,
+        viewportMax[1] || 2048
+      );
+      const configs = _exportTileConfigs(maxTile, caps.isWebGL2 ? Math.min(4, caps.maxSamples || 0) : 0);
+      let configIndex = 0;
+      let restarts = 0;
+      let lastChange = 'volume';
+      for (;;) {
+        await _waitForSteadyVolume(signal, onProgress);
+        const entry = _activeVolumeEntry;
+        const snap = {
+          camera: camera.clone(),
+          position: cube.position.clone(),
+          quaternion: cube.quaternion.clone(),
+          scale: cube.scale.clone()
+        };
+        const fingerprint = _exportFingerprint();
+        while (!targets && configIndex < configs.length) {
+          targets = _allocExportTargets(configs[configIndex], width, height);
+          if (!targets) configIndex++;
+        }
+        if (!targets) throw _viewExportError('gpu-memory', 'Not enough GPU memory for the export, even in 256 px tiles');
+        const tiles = _planExportTiles(width, height, targets.tile);
+        const job = { width, height, snap, targets, composite, ctx: output.ctx, background };
+        let outcome = 'done';
+        for (let i = 0; i < tiles.length; i++) {
+          _throwIfViewExportStopped(signal);
+          if (_isVolumeStreaming() || _activeVolumeEntry !== entry) { outcome = 'changed'; lastChange = 'volume'; break; }
+          // A display setting changed between two tiles: the image would be banded.
+          if (!_sameExportFingerprint(fingerprint, _exportFingerprint())) { outcome = 'changed'; lastChange = 'display'; break; }
+          onProgress({ phase: 'render', tile: i + 1, tiles: tiles.length });
+          if (!_renderExportTile(tiles[i], job)) { outcome = 'oom'; break; }
+          await _macrotask();
+        }
+        if (outcome === 'done') {
+          output.canvas.exportInfo = {
+            micronsPerPixel: _micronsPerPixelFor(snap.camera, snap, getPhysicalSize(), height),
+            tileSize: targets.tile,
+            tiles: tiles.length,
+            samples: targets.samples
+          };
+          return output.canvas;
+        }
+        output.ctx.clearRect(0, 0, width, height);
+        if (outcome === 'oom') {
+          _disposeExportTargets(targets);
+          targets = null;
+          configIndex++;
+          continue;
+        }
+        restarts++;
+        if (restarts > 3) {
+          throw lastChange === 'display'
+            ? _viewExportError('display-changed', 'The display settings kept changing during the export')
+            : _viewExportError('unstable', 'The volume kept changing during the export');
+        }
+      }
+    } catch (err) {
+      if (output) { output.canvas.width = 0; output.canvas.height = 0; }
+      throw err;
+    } finally {
+      _disposeExportTargets(targets);
+      if (composite) {
+        composite.material.dispose();
+        composite.geometry.dispose();
+      }
+      _viewExportInFlight = false;
+      _scheduleFrame();
+    }
+  }
+
   function getMaterial() {
     return material;
   }
@@ -4593,6 +5323,7 @@ const VolumeViewer = (() => {
     isSampleUpsideDown,
     getRawPoseQuaternion: (flag) => _rawPoseQuaternion(flag === undefined ? _upsideDown : Boolean(flag)),
     isPoseAnimating: () => _poseAnim !== null,
+    getScreenFrameInVolume,
     resetView,
     resetClipping,
     fitCameraToVolume,
@@ -4642,6 +5373,10 @@ const VolumeViewer = (() => {
     floorLutsFromManifest: (manifest, channels, histograms = null) => _floorLuts(_floorsFromManifest(manifest, channels, histograms), channels),
     getScene: () => scene,
     getCamera: () => camera,
+    // ── 3D view export (PNG) ──
+    renderViewImage,
+    getViewSize,
+    micronsPerPixel,
     // ── Hooks for overlays that must live in the volume's own frame ──────────────
     // Parenting to `cube` (not to the scene) inherits the orbit, the pan, the
     // physical aspect scale and the operator's Z display scale for free — the grid

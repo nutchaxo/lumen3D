@@ -35,6 +35,21 @@ const StudioEditor = (() => {
     distance: 'move-horizontal',
     angle: 'scan-line'
   };
+  // Layers drawn from an (x, y, w, h) box. They rotate at draw time about the box
+  // centre; every other layer is made of points and has its rotation baked into them.
+  const BOX_LAYER_TYPES = ['rectangle', 'ellipse', 'text'];
+  const ROTATION_SNAP_DEG = 15;
+  // Rotate handle: a circle on a stem above the selection, sized in screen pixels.
+  const ROTATE_HANDLE_OFFSET = 28;
+  const ROTATE_HANDLE_RADIUS = 5;
+  const ROTATE_HANDLE_HIT = 10;
+  const TEXT_PAD = 5;
+  const ROTATE_CURSOR = (() => {
+    const arc = "<path d='M19 12a7 7 0 1 1-2.05-4.95'/><path d='M19 4.5v3.5h-3.5'/>";
+    const svg = "<svg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke-linecap='round' stroke-linejoin='round'>"
+      + `<g stroke='#000' stroke-width='4'>${arc}</g><g stroke='#fff' stroke-width='2'>${arc}</g></svg>`;
+    return `url("data:image/svg+xml,${encodeURIComponent(svg)}") 12 12, grab`;
+  })();
 
   let _container = null;
   let _workspace = null;
@@ -74,6 +89,9 @@ const StudioEditor = (() => {
   let _channelsSeeding = false;
   let _progressEl = null;
   let _progressOnCancel = null;
+  // compare.js calls init() on top of this file's own DOMContentLoaded init: bound
+  // twice, every key and pointer event ran twice (one Ctrl+Z undid two steps).
+  let _eventsBound = false;
 
   function init() {
     _container = document.getElementById('studio-layout');
@@ -94,13 +112,22 @@ const StudioEditor = (() => {
   }
 
   function open(sliceResult) {
-    if (!sliceResult?.canvas) {
+    if (!sliceResult?.canvas && !_hasRaw(sliceResult)) {
       _toast(_t('toast.renderSliceFirst', 'Render a slice before opening Studio.'));
       return;
     }
-    const preparedSlice = _prepareSliceForStudio(sliceResult);
+    // A new document: the previous one's raw values and GPU textures go with it.
+    _cancelChannelRecompose();
+    _releaseRaw();
+    // The slice's own channel state seeds the new document.
+    const preparedSlice = _prepareSliceForStudio(sliceResult, _seedChannelState(sliceResult));
+    if (!preparedSlice?.canvas) {
+      _toast(_t('toast.renderSliceFirst', 'Render a slice before opening Studio.'));
+      return;
+    }
     _sliceResult = preparedSlice;
     _sliceImage = preparedSlice.canvas;
+    _releaseScratchCanvases();
     _doc = _createDocument(preparedSlice);
     _history = [];
     _future = [];
@@ -112,6 +139,9 @@ const StudioEditor = (() => {
     _container.classList.remove('hidden');
     _resizeCanvas();
     _fitImageToViewport();
+    // A Compare cell that carries its raw values is shown coloured from them from the
+    // start, as every channel edit will colour it (a slab: per-channel projection).
+    if (_doc.layoutMaps?.some(_hasRaw)) _rerenderSliceFromChannels(undefined, { rawOnly: true });
     _ensureDefaultScaleBarLayer();
     _pushHistory('Open Studio');
     _renderAll();
@@ -123,12 +153,20 @@ const StudioEditor = (() => {
    * picture is redrawn — layers, panels and calibration are left exactly as they are.
    */
   function setSliceResult(sliceResult, options = {}) {
-    if (!sliceResult?.canvas) return;
+    if (!sliceResult?.canvas && !_hasRaw(sliceResult)) return;
     if (!_doc || !_isOpen || options.reopen) {
       open(sliceResult);
       return;
     }
-    const preparedSlice = _prepareSliceForStudio(sliceResult);
+    // Coloured with the DOCUMENT's channel state, never the slice's own: a refresh of
+    // the native pass carries the viewer's colours and must not undo the operator's
+    // edits made in the Studio since it opened.
+    const previousRaw = _sliceResult?.raw || null;
+    const preparedSlice = _prepareSliceForStudio(sliceResult, _doc.channelState);
+    if (!preparedSlice?.canvas) return;
+    if (previousRaw && previousRaw !== preparedSlice.raw && typeof SliceCompositor !== 'undefined') {
+      SliceCompositor.release(previousRaw);
+    }
     _sliceResult = preparedSlice;
     _sliceImage = preparedSlice.canvas;
     if (options.imageOnly && preparedSlice.width === _doc.sourceSlice.width && preparedSlice.height === _doc.sourceSlice.height) {
@@ -202,6 +240,16 @@ const StudioEditor = (() => {
     const pendingCancel = _progressOnCancel;
     setLoadProgress(null);
     pendingCancel?.();
+    _cancelChannelRecompose();
+    _releaseRaw();
+    _releaseScratchCanvases();
+    // The Compare figure the cells were re-coloured on is the Studio's own copy of the
+    // one compare.js handed over: nothing shows it any more.
+    if (_doc?.layoutMaps?.length && _sliceImage && _sliceImage !== _sliceResult?.canvas && _sliceImage !== _sliceCanvas) {
+      _sliceImage.width = 0;
+      _sliceImage.height = 0;
+      _sliceImage = _sliceResult?.canvas || null;
+    }
     _container.classList.add('hidden');
     // If we're in the standalone viewer, we need to show the viewer elements again
     document.getElementById('webgl-canvas')?.classList.remove('hidden');
@@ -252,11 +300,14 @@ const StudioEditor = (() => {
         physicalSizeUm: _clone(sliceResult.physicalSizeUm || null)
       },
       layoutMaps: (sliceResult.layoutMaps || []).map(m => ({
-        ..._clone({ ...m, iframe: undefined, raw: undefined, sliceResult: undefined }),
+        ..._clone(_layoutMapData(m)),
         iframe: m.iframe,
         raw: m.raw,
         sliceResult: m.sliceResult
       })),
+      // The Compare figure's own backdrop: a re-coloured cell is laid on it, so the
+      // transparent pixels of a slice keep the colour the figure was composed on.
+      layoutBackground: typeof sliceResult.layoutBackground === 'string' ? sliceResult.layoutBackground : null,
       viewport: {
         zoom: 1,
         panX: 0,
@@ -270,6 +321,8 @@ const StudioEditor = (() => {
   }
 
   function _bindEvents() {
+    if (_eventsBound) return;
+    _eventsBound = true;
     document.getElementById('btn-close-studio')?.addEventListener('click', close);
     document.getElementById('btn-studio-open')?.addEventListener('click', () => {
       if (typeof ViewerApp !== 'undefined' && typeof ViewerApp.openStudio === 'function') {
@@ -615,6 +668,9 @@ const StudioEditor = (() => {
     ctx.lineWidth = Math.max(1, (style.strokeWidth || 3) * scale);
     ctx.lineJoin = 'round';
     ctx.lineCap = 'round';
+    // A text box is its measured text, and a box turns about its centre: measure first.
+    if (layer.type === 'text') _measureTextLayer(ctx, layer);
+    _applyLayerRotation(ctx, layer);
 
     if (layer.type === 'rectangle') {
       ctx.strokeRect(layer.x, layer.y, layer.w, layer.h);
@@ -647,21 +703,50 @@ const StudioEditor = (() => {
       ctx.stroke();
       _drawAngleArc(ctx, layer);
     } else if (layer.type === 'text') {
-      ctx.font = `${style.fontWeight || 700} ${style.fontSize || 18}px Inter, Arial, sans-serif`;
       ctx.textBaseline = 'top';
       ctx.textAlign = 'left';
-      const pad = 5;
-      const metrics = ctx.measureText(layer.text || '');
-      layer.w = Math.max(20, metrics.width);
-      layer.h = style.fontSize || 18;
+      // The pad is symmetric about the box, so the background turns about the same
+      // centre as the text.
       if (style.textBackground !== false) {
         ctx.fillStyle = 'rgba(0,0,0,0.55)';
-        ctx.fillRect(layer.x - pad, layer.y - pad, layer.w + pad * 2, layer.h + pad * 2);
+        ctx.fillRect(layer.x - TEXT_PAD, layer.y - TEXT_PAD, layer.w + TEXT_PAD * 2, layer.h + TEXT_PAD * 2);
       }
       ctx.fillStyle = style.stroke || '#ffffff';
       ctx.fillText(layer.text || '', layer.x, layer.y);
     }
     ctx.restore();
+  }
+
+  // Sets the font and writes the measured box into the layer (w = text width, h = font
+  // size). When the words or the font change on a turned label, the box regrows from
+  // its turned top-left corner — where the first glyph sits — instead of sliding the
+  // whole label along the image axes.
+  function _measureTextLayer(ctx, layer) {
+    const style = layer.style || {};
+    ctx.font = `${style.fontWeight || 700} ${style.fontSize || 18}px Inter, Arial, sans-serif`;
+    const w = Math.max(20, ctx.measureText(layer.text || '').width);
+    const h = style.fontSize || 18;
+    if (w === layer.w && h === layer.h) return;
+    const rad = _layerRotationRad(layer);
+    if (rad && Number.isFinite(layer.x) && Number.isFinite(layer.y) && Number.isFinite(layer.w) && Number.isFinite(layer.h)) {
+      const box = _regrowRotatedBox({ x: layer.x, y: layer.y, w: layer.w, h: layer.h }, rad, w, h);
+      layer.x = box.x;
+      layer.y = box.y;
+    }
+    layer.w = w;
+    layer.h = h;
+  }
+
+  // ctx.rotate about the box centre: T(c)·R(θ)·T(−c), the same turn _layerContains
+  // undoes and _rotatedBoxCorners reproduces.
+  function _applyLayerRotation(ctx, layer) {
+    if (!_isBoxLayer(layer)) return;
+    const rad = _layerRotationRad(layer);
+    if (!rad) return;
+    const c = _boxCentre(_layerBox(layer));
+    ctx.translate(c.x, c.y);
+    ctx.rotate(rad);
+    ctx.translate(-c.x, -c.y);
   }
 
   function _drawEndCap(ctx, x1, y1, x2, y2, cap, width, atStart) {
@@ -702,10 +787,28 @@ const StudioEditor = (() => {
     ctx.textAlign = 'center';
     ctx.textBaseline = 'bottom';
     const metrics = ctx.measureText(label);
+    // The label stays upright and sits beside the segment on its upper side, whatever
+    // the segment's direction u. With n the unit normal to u pointing up (n.y ≤ 0), a
+    // W×H box centred at mid + n·D clears the line when D ≥ |n.x|·W/2 + |n.y|·H/2 + gap;
+    // for a horizontal segment that is the historical placement, 4 px above the line.
+    const bw = metrics.width + 12;
+    const bh = fontSize + 8;
+    const len = Math.hypot(p.x2 - p.x1, p.y2 - p.y1);
+    const ux = len > 0 ? (p.x2 - p.x1) / len : 1;
+    const uy = len > 0 ? (p.y2 - p.y1) / len : 0;
+    let nx = uy;
+    let ny = -ux;
+    if (ny > 0 || (ny === 0 && nx > 0)) {
+      nx = -nx;
+      ny = -ny;
+    }
+    const gap = Math.abs(nx) * bw / 2 + Math.abs(ny) * bh / 2 + 4;
+    const cx = mx + nx * gap;
+    const cy = my + ny * gap;
     ctx.fillStyle = 'rgba(0,0,0,0.58)';
-    ctx.fillRect(mx - metrics.width / 2 - 6, my - fontSize - 12, metrics.width + 12, fontSize + 8);
+    ctx.fillRect(cx - bw / 2, cy - bh / 2, bw, bh);
     ctx.fillStyle = style.stroke || '#ffffff';
-    ctx.fillText(label, mx, my - 7);
+    ctx.fillText(label, cx, cy + bh / 2 - 3);
     ctx.restore();
   }
 
@@ -786,20 +889,53 @@ const StudioEditor = (() => {
     const layer = _selectedLayer();
     if (!layer || layer.visible === false) return;
     const handles = _handlesForLayer(layer);
-    const box = _layerBounds(layer);
+    const zoom = Math.max(0.001, _doc.viewport.zoom);
+    // A turned box is outlined as itself (its handles turn with it); a point layer, whose
+    // rotation is already in its points, by its bounds.
+    const boxRad = _isBoxLayer(layer) ? _layerRotationRad(layer) : 0;
     ctx.save();
     ctx.strokeStyle = '#ffffff';
-    ctx.lineWidth = Math.max(1, 1.5 / _doc.viewport.zoom);
-    ctx.setLineDash([5 / _doc.viewport.zoom, 5 / _doc.viewport.zoom]);
-    ctx.strokeRect(box.x, box.y, box.w, box.h);
+    ctx.lineWidth = Math.max(1, 1.5 / zoom);
+    ctx.setLineDash([5 / zoom, 5 / zoom]);
+    if (boxRad) {
+      const corners = Object.fromEntries(_rotatedBoxCorners(_layerBox(layer), boxRad).map(c => [c.id, c]));
+      ctx.beginPath();
+      ['nw', 'ne', 'se', 'sw'].forEach((id, i) => {
+        if (i === 0) ctx.moveTo(corners[id].x, corners[id].y);
+        else ctx.lineTo(corners[id].x, corners[id].y);
+      });
+      ctx.closePath();
+      ctx.stroke();
+    } else {
+      const box = _layerBounds(layer);
+      ctx.strokeRect(box.x, box.y, box.w, box.h);
+    }
     ctx.setLineDash([]);
+    const s = 6 / zoom;
     handles.forEach(handle => {
+      ctx.save();
+      ctx.translate(handle.x, handle.y);
+      if (boxRad) ctx.rotate(boxRad);
       ctx.fillStyle = handle.id === _hoverHandle ? '#00d2ff' : '#ffffff';
-      const s = 6 / _doc.viewport.zoom;
-      ctx.fillRect(handle.x - s / 2, handle.y - s / 2, s, s);
+      ctx.fillRect(-s / 2, -s / 2, s, s);
       ctx.strokeStyle = '#050607';
-      ctx.strokeRect(handle.x - s / 2, handle.y - s / 2, s, s);
+      ctx.strokeRect(-s / 2, -s / 2, s, s);
+      ctx.restore();
     });
+    if (layer.locked !== true) {
+      const knob = _rotationHandle(layer);
+      ctx.beginPath();
+      ctx.moveTo(knob.baseX, knob.baseY);
+      ctx.lineTo(knob.x, knob.y);
+      ctx.strokeStyle = '#ffffff';
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.arc(knob.x, knob.y, ROTATE_HANDLE_RADIUS / zoom, 0, Math.PI * 2);
+      ctx.fillStyle = _hoverHandle === 'rotate' ? '#00d2ff' : '#ffffff';
+      ctx.fill();
+      ctx.strokeStyle = '#050607';
+      ctx.stroke();
+    }
     ctx.restore();
   }
 
@@ -835,7 +971,7 @@ const StudioEditor = (() => {
     _pointerStart = null;
     _canvas.style.cursor = 'default';
     if (!_drawing || _drawing.type === 'angle') return;
-    const wasEditingLayer = _drawing.mode === 'move' || _drawing.mode === 'handle';
+    const wasEditingLayer = _drawing.mode === 'move' || _drawing.mode === 'handle' || _drawing.mode === 'rotate';
     _drawing = null;
     if (wasEditingLayer) {
       _pushHistory('Edit layer');
@@ -869,6 +1005,15 @@ const StudioEditor = (() => {
       _canvas.style.cursor = 'grabbing';
       return;
     }
+    // Before the pan test: Shift is both "pan" on an empty press and "snap to 15°" while
+    // turning, and a press on the rotate handle means the latter.
+    if (_activeTool === 'select' && event.button === 0 && !_spaceDown) {
+      const selected = _selectedLayer();
+      if (selected && _hitRotationHandle(selected, imagePoint)) {
+        _beginLayerRotation(selected, imagePoint);
+        return;
+      }
+    }
     if (event.button === 1 || event.button === 2 || event.shiftKey || _spaceDown) {
       _isPanning = true;
       _pointerStart = { x: event.clientX, y: event.clientY, panX: _doc.viewport.panX, panY: _doc.viewport.panY };
@@ -878,6 +1023,13 @@ const StudioEditor = (() => {
 
     if (_activeTool === 'select') {
       const hit = _hitTest(imagePoint);
+      if (hit?.handle === 'rotate') {
+        const target = _doc.layers.find(item => item.id === hit.id);
+        if (target) {
+          _beginLayerRotation(target, imagePoint);
+          return;
+        }
+      }
       _selectedId = hit?.id || null;
       _hoverHandle = hit?.handle || null;
       const layer = _selectedLayer();
@@ -971,7 +1123,27 @@ const StudioEditor = (() => {
     if (!_drawing) {
       const hit = _hitTest(imagePoint);
       _hoverHandle = hit?.handle || null;
-      _canvas.style.cursor = hit?.handle ? 'nwse-resize' : hit ? 'move' : (_activeTool === 'select' ? 'default' : 'crosshair');
+      const hitLayer = hit ? _doc.layers.find(item => item.id === hit.id) : null;
+      _canvas.style.cursor = hit?.handle === 'rotate' ? ROTATE_CURSOR
+        : hit?.handle ? _resizeCursor(hitLayer, hit.handle)
+          : hit ? 'move' : (_activeTool === 'select' ? 'default' : 'crosshair');
+      const hint = hit?.handle === 'rotate'
+        ? _t('studio.rotateHandleHint', 'Drag to rotate. Shift: 15° steps. [ and ] turn by 15° (Shift: 1°).')
+        : '';
+      if (_canvas.title !== hint) _canvas.title = hint;
+      _draw();
+      return;
+    }
+    if (_drawing.mode === 'rotate') {
+      const layer = _selectedLayer();
+      if (layer) {
+        // Pointer angle about the fixed centre, relative to where the drag started:
+        // the handle need not sit straight above the centre (an angle layer's centroid).
+        const angle = Math.atan2(imagePoint.y - _drawing.centre.y, imagePoint.x - _drawing.centre.x);
+        const turned = _layerRotationDeg(_drawing.original) + (angle - _drawing.startAngle) * 180 / Math.PI;
+        const target = event.shiftKey ? _snapRotationDeg(turned, ROTATION_SNAP_DEG) : Math.round(turned * 10) / 10;
+        _rotateLayerFromSnapshot(layer, _drawing.original, target);
+      }
       _draw();
       return;
     }
@@ -1027,6 +1199,14 @@ const StudioEditor = (() => {
       return;
     }
     if (!_drawing || _drawing.type === 'angle') return;
+    if (_drawing.mode === 'rotate') {
+      const layer = _selectedLayer();
+      const turned = layer && _layerRotationDeg(layer) !== _layerRotationDeg(_drawing.original);
+      _drawing = null;
+      if (turned) _pushHistory('Rotate layer');
+      _renderAll();
+      return;
+    }
     if (_drawing.mode === 'move' || _drawing.mode === 'handle') {
       _pushHistory('Edit layer');
       _drawing = null;
@@ -1075,7 +1255,7 @@ const StudioEditor = (() => {
   function _onDblClick(event) {
     const point = _screenToImage(_eventCanvasPoint(event));
     const hit = _hitTest(point);
-    if (!hit) return;
+    if (!hit || hit.handle === 'rotate') return;
     const layer = _doc.layers.find(item => item.id === hit.id);
     if (!layer || layer.locked) return;
     if (layer.type === 'text') {
@@ -1115,6 +1295,20 @@ const StudioEditor = (() => {
       _deleteSelected();
       return;
     }
+    // [ / ] turn the selection by 15°, with Shift by 1°. Shift+[ types '{' on most
+    // layouts; AltGr (Ctrl+Alt on Windows) is how an AZERTY keyboard types '[' at all,
+    // so only a bare Ctrl/Cmd is left to the browser.
+    const rotateSign = { '[': -1, '{': -1, ']': 1, '}': 1 }[event.key];
+    if (rotateSign && !((event.ctrlKey || event.metaKey) && !event.altKey)) {
+      // A pointer gesture in progress owns the layer: its moves are recomputed from the
+      // layer as the gesture found it (_drawing.original), which a key turn would not
+      // update — the turn would be undone by the next move, or throw a handle off.
+      // A pending angle draft (clicks between releases, no `mode`) is not a gesture.
+      if (_drawing?.mode || _isPanning || _isRotating || _viewGesture) return;
+      const fine = event.shiftKey || event.key === '{' || event.key === '}';
+      if (_rotateSelectedBy(rotateSign * (fine ? 1 : ROTATION_SNAP_DEG), event.repeat)) event.preventDefault();
+      return;
+    }
     const tool = TOOL_KEYS[event.key.toLowerCase()];
     if (tool) _setTool(tool);
   }
@@ -1122,9 +1316,18 @@ const StudioEditor = (() => {
   function _onKeyUp(event) {
     if (event.key === ' ') _spaceDown = false;
     if (event.key === 'Escape') {
+      // Escape during a drag puts the layer back as it was when the drag began: the
+      // gesture never reached the history, so leaving it half-applied would make the
+      // next undo jump over it.
+      const editing = _drawing && ['move', 'handle', 'rotate'].includes(_drawing.mode) ? _drawing : null;
+      if (editing?.original && _doc) {
+        const index = _doc.layers.findIndex(layer => layer.id === editing.original.id);
+        if (index >= 0) _doc.layers[index] = _clone(editing.original);
+      }
       _drawing = null;
       _closePalette();
       _draw();
+      if (editing) _renderProperties();
     }
   }
 
@@ -1210,6 +1413,7 @@ const StudioEditor = (() => {
       ${style.strokeWidth !== undefined ? `<label><span data-i18n="studio.propThickness">Thickness</span> <input type="range" id="prop-thickness" min="1" max="30" value="${style.strokeWidth || 3}"></label>` : ''}
       ${layer.text !== undefined ? `<label><span data-i18n="studio.propText">Text</span> <input class="form-input" id="prop-text" value="${_escape(layer.text || '')}"></label>` : ''}
       ${style.fontSize !== undefined ? `<label><span data-i18n="studio.propFontSize">Font Size</span> <input type="range" id="prop-fontsize" min="8" max="160" value="${style.fontSize || 24}"></label>` : ''}
+      ${_rotationControl(layer)}
       ${['line', 'arrow', 'distance', 'scalebar'].includes(layer.type) ? _capControls(style) : ''}
       ${layer.type === 'scalebar' ? _scaleBarControls(layer) : ''}
       <div class="studio-property-row">
@@ -1223,6 +1427,7 @@ const StudioEditor = (() => {
       </div>
       <div class="studio-measurement-readout">${_escape(_measurementLabel(layer) || '')}</div>
     `;
+    if (typeof I18n !== 'undefined' && I18n.translateDOM) I18n.translateDOM();
     _bindProperty('prop-name', 'input', value => { layer.name = value; });
     _bindProperty('prop-color', 'input', value => { layer.style.stroke = value; layer.style.fill = value; });
     _bindProperty('prop-opacity', 'input', value => { layer.style.opacity = Number(value); });
@@ -1231,13 +1436,13 @@ const StudioEditor = (() => {
     _bindProperty('prop-fontsize', 'input', value => { layer.style.fontSize = Number(value); });
     _bindProperty('prop-startcap', 'change', value => { layer.style.startCap = value; });
     _bindProperty('prop-endcap', 'change', value => { layer.style.endCap = value; });
+    _bindRotationProperty(layer);
     _bindScaleBarValueProperty(layer);
     _propsContainer.querySelectorAll('input[name="prop-scalebar-unit"]').forEach(input => {
       input.addEventListener('change', () => {
         layer.unit = input.value;
         layer.value = _snapScaleBarValue(layer.value || 100);
-        layer.x2 = layer.x1 + _scaleBarPixels(layer);
-        layer.y2 = layer.y1;
+        _setScaleBarEnd(layer);
         _updateMeasurementText(layer);
         _commitPropertyChange();
       });
@@ -1264,21 +1469,12 @@ const StudioEditor = (() => {
       return;
     }
 
-    let raw = _sliceResult?.raw;
-    let w = _sliceResult?.width;
-    let h = _sliceResult?.height;
-    if (activeMap?.raw) {
-      raw = activeMap.raw;
-      w = activeMap.sourceWidth;
-      h = activeMap.sourceHeight;
-    }
-    _studioHistograms = _computeStudioHistograms(raw, w, h, activeMap);
+    _studioHistograms = _computeStudioHistograms(isCompare ? activeMap?.raw : _sliceResult?.raw, activeMap);
 
     if (typeof createChannelPanel !== 'undefined') {
       if (!window._studioChannelPanel) {
         window._studioChannelPanel = createChannelPanel();
       }
-      let _recomposeRaf = null;
       _channelsSeeding = true;
       try {
         window._studioChannelPanel.init('studio-channels', { dimensions: { c: channels.length }, channels }, (idx, state) => {
@@ -1292,14 +1488,7 @@ const StudioEditor = (() => {
           } else {
             _doc.channelState[idx] = state;
           }
-
-          const panelToUpdate = panelIdx >= 0 ? panelIdx : undefined;
-          if (!_recomposeRaf) {
-            _recomposeRaf = requestAnimationFrame(() => {
-              _recomposeRaf = null;
-              _rerenderSliceFromChannels(panelToUpdate);
-            });
-          }
+          _scheduleChannelRecompose(panelIdx >= 0 ? panelIdx : undefined);
         });
       } finally {
         _channelsSeeding = false;
@@ -1311,7 +1500,141 @@ const StudioEditor = (() => {
     }
   }
 
-  function _computeStudioHistograms(raw, w, h, map) {
+  // ── Channel edits → the picture ──────────────────────────
+  // One recomposition per frame while a control is dragged, and the last state is
+  // always drawn: an edit after a quiet spell is drawn at once (a click, a colour, a
+  // toggle), edits inside a frame are coalesced into one trailing draw. That draw
+  // waits for the next animation frame, with a timer as backstop — a hidden page
+  // never runs its animation frames.
+  const RECOMPOSE_FRAME_MS = 16;
+  const RECOMPOSE_BACKSTOP_MS = 64;
+  const _recompose = { pending: null, raf: 0, timer: 0, lastAt: -Infinity };
+
+  function _nowMs() {
+    return (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+  }
+
+  /** `panelIdx` = a Compare cell; undefined = the single slice (or every cell). */
+  function _scheduleChannelRecompose(panelIdx) {
+    const r = _recompose;
+    if (panelIdx === undefined || r.pending === 'all') r.pending = 'all';
+    else (r.pending ||= new Set()).add(panelIdx);
+    if (r.raf || r.timer) return;
+    if (_nowMs() - r.lastAt >= RECOMPOSE_FRAME_MS) {
+      _flushChannelRecompose();
+      return;
+    }
+    if (typeof requestAnimationFrame === 'function') r.raf = requestAnimationFrame(_flushChannelRecompose);
+    r.timer = setTimeout(_flushChannelRecompose, RECOMPOSE_BACKSTOP_MS);
+  }
+
+  function _flushChannelRecompose() {
+    const r = _recompose;
+    const pending = r.pending;
+    _cancelChannelRecompose();
+    if (!pending || !_doc) return;
+    r.lastAt = _nowMs();
+    if (pending === 'all') _rerenderSliceFromChannels(undefined);
+    else pending.forEach(index => _rerenderSliceFromChannels(index));
+  }
+
+  function _cancelChannelRecompose() {
+    const r = _recompose;
+    if (r.raf && typeof cancelAnimationFrame === 'function') cancelAnimationFrame(r.raf);
+    if (r.timer) clearTimeout(r.timer);
+    r.raf = 0;
+    r.timer = 0;
+    r.pending = null;
+  }
+
+  // ── Raw slices (SliceCompositor) ─────────────────────────
+  // A slice that carries its raw channel values (VolumeSlicer.renderRawWithMaterial)
+  // is always shown coloured from them with the Studio's channel state: the same
+  // pixels, frame and crop as the picture it came with, so annotations never move.
+  let _sliceCanvas = null;
+  let _panelCanvas = null;
+
+  function _hasRaw(holder) {
+    return typeof SliceCompositor !== 'undefined' && SliceCompositor.isRaw(holder?.raw);
+  }
+
+  /** `raw` coloured with `channelState` into `target` (kept and reused); null on failure. */
+  function _composeRaw(raw, channelState, target) {
+    try {
+      return SliceCompositor.compose(raw, Array.isArray(channelState) ? channelState : [], {
+        numChannels: raw.channels,
+        target
+      });
+    } catch (err) {
+      console.warn('[StudioEditor] Slice colouring failed:', err);
+      return null;
+    }
+  }
+
+  // The Studio's own canvases: the single slice's picture, and the scratch a Compare
+  // cell is coloured into before it is laid on the figure.
+  function _ownSliceCanvas() {
+    if (!_sliceCanvas) _sliceCanvas = document.createElement('canvas');
+    return _sliceCanvas;
+  }
+
+  function _ownPanelCanvas() {
+    if (!_panelCanvas) _panelCanvas = document.createElement('canvas');
+    return _panelCanvas;
+  }
+
+  /**
+   * Gives back the backing store of the Studio's own canvases once nothing shows them:
+   * the Compare cell scratch (sized to the last cell coloured, ~58 MB for a 3800² crop)
+   * always, the slice canvas only when it is not the picture on screen. A canvas keeps
+   * its pixels until it is resized, so dropping the reference alone is not enough.
+   */
+  function _releaseScratchCanvases() {
+    if (_panelCanvas) {
+      _panelCanvas.width = 0;
+      _panelCanvas.height = 0;
+      _panelCanvas = null;
+    }
+    if (_sliceCanvas && _sliceCanvas !== _sliceImage && _sliceCanvas !== _sliceResult?.canvas) {
+      _sliceCanvas.width = 0;
+      _sliceCanvas.height = 0;
+      _sliceCanvas = null;
+    }
+  }
+
+  function _seedChannelState(sliceResult) {
+    if (Array.isArray(sliceResult?.channelState)) return sliceResult.channelState;
+    return (typeof ViewerApp !== 'undefined' && ViewerApp.getChannelState) ? (ViewerApp.getChannelState() || []) : [];
+  }
+
+  /**
+   * Drops every raw buffer the Studio holds (the current slice, the Compare cells,
+   * the undo history's cells) and frees the compositor's GPU textures. Tens of MB a
+   * slice at native resolution: kept only while the document that shows them is open.
+   */
+  function _releaseRaw() {
+    if (typeof SliceCompositor !== 'undefined') SliceCompositor.release();
+    if (_sliceResult?.raw) _sliceResult = { ..._sliceResult, raw: null };
+    const docs = [_doc, ..._history.map(h => h?.doc), ..._future.map(h => h?.doc)];
+    docs.forEach(doc => {
+      (doc?.layoutMaps || []).forEach(map => {
+        if (!map) return;
+        map.raw = null;
+        if (map.sliceResult?.raw) map.sliceResult = { ...map.sliceResult, raw: null };
+      });
+    });
+  }
+
+  function _computeStudioHistograms(raw, map) {
+    // The slice's own values when it carries them: the histogram of what is shown,
+    // in the shape VolumeViewer.getChannelHistograms() gives the channel panel.
+    if (typeof SliceCompositor !== 'undefined' && SliceCompositor.isRaw(raw)) {
+      try {
+        return SliceCompositor.histograms(raw, 256);
+      } catch (err) {
+        console.warn('[StudioEditor] Slice histograms unavailable:', err);
+      }
+    }
     // compare.html loads neither VolumeViewer nor VolumeSlicer, so the only histograms
     // of that panel's volume live inside the panel's own (same-origin) frame.
     if (map?.iframe) {
@@ -1322,17 +1645,19 @@ const StudioEditor = (() => {
         console.warn('[StudioEditor] Panel frame histograms unavailable:', err);
       }
     }
-    if (typeof VolumeSlicer !== 'undefined' && raw) {
-      return VolumeSlicer.computeChannelHistograms({raw, width: w, height: h}, 64) || [];
-    }
     if (typeof VolumeViewer !== 'undefined' && VolumeViewer.getChannelHistograms) {
       return VolumeViewer.getChannelHistograms() || [];
     }
     return [];
   }
 
-  function _rerenderSliceFromChannels(activePanelOnly) {
-    if (!_sliceResult) return;
+  /**
+   * Re-colours the picture after a channel edit. `activePanelOnly` = the Compare cell
+   * to redo (undefined: every cell). `options.rawOnly` redoes only the cells that carry
+   * raw values (the opening of a Compare document).
+   */
+  function _rerenderSliceFromChannels(activePanelOnly, options = {}) {
+    if (!_sliceResult || !_doc) return;
 
     // In compare mode (layoutMaps), each panel uses its own iframe's VolumeSlicer
     // so we don't need a global VolumeSlicer check here.
@@ -1373,17 +1698,22 @@ const StudioEditor = (() => {
       croppedCanvas.height = croppedHeight;
       const croppedCtx = croppedCanvas.getContext('2d');
       croppedCtx.drawImage(canvas, minX, minY, croppedWidth, croppedHeight, 0, 0, croppedWidth, croppedHeight);
-      
+
       return croppedCanvas;
     }
 
     if (_doc.layoutMaps?.length > 0) {
-      // Build base image: start from current _sliceImage
-      const tempCanvas = document.createElement('canvas');
-      tempCanvas.width = _sliceImage.width;
-      tempCanvas.height = _sliceImage.height;
+      // The figure the cells are laid on: copied once from the picture compare.js
+      // handed over, then redrawn in place (a copy per drag frame of an 8k figure is
+      // hundreds of MB of garbage).
+      let tempCanvas = _sliceImage;
+      if (!tempCanvas || tempCanvas === _sliceResult.canvas) {
+        tempCanvas = document.createElement('canvas');
+        tempCanvas.width = _sliceImage.width;
+        tempCanvas.height = _sliceImage.height;
+        tempCanvas.getContext('2d').drawImage(_sliceImage, 0, 0);
+      }
       const ctx = tempCanvas.getContext('2d');
-      ctx.drawImage(_sliceImage, 0, 0);
 
       let changed = false;
 
@@ -1395,21 +1725,16 @@ const StudioEditor = (() => {
       indicesToUpdate.forEach(mapIdx => {
         const map = _doc.layoutMaps[mapIdx];
         if (!map) return;
-        const targetSlicer = map.iframe?.contentWindow?.VolumeSlicer
-          || (typeof VolumeSlicer !== 'undefined' ? VolumeSlicer : null);
-        if (!targetSlicer?.recompose) return;
         let recomposedCanvas = null;
 
-        if (map.raw) {
-           const recomposed = targetSlicer.recompose(
-             { raw: map.raw, width: map.sourceWidth, height: map.sourceHeight, source: 'gpu-slicer' }, 
-             map.channelState, 
-             STUDIO_SLICE_SUPPRESSION
-           );
-           if (recomposed?.canvas) {
-             recomposedCanvas = recomposed.canvas;
-           }
-        } else if (map.sliceResult) {
+        if (_hasRaw(map)) {
+           // The cell's own pixels (the panel's crop, map.raw.width × height),
+           // re-coloured by this page's compositor: no panel render at all.
+           recomposedCanvas = _composeRaw(map.raw, map.channelState, _ownPanelCanvas());
+        } else if (!options.rawOnly && map.sliceResult) {
+           const targetSlicer = map.iframe?.contentWindow?.VolumeSlicer
+             || (typeof VolumeSlicer !== 'undefined' ? VolumeSlicer : null);
+           if (!targetSlicer?.recompose) return;
            // While editing, render the cell at the size it actually occupies in the
            // composite: anything more is thrown away by the drawImage below, anything
            // less comes back softer than the cell the operator started from.
@@ -1418,7 +1743,7 @@ const StudioEditor = (() => {
            const renderRes = (activePanelOnly !== undefined) ? cellRes : fullRes;
            const recomposed = targetSlicer.recompose(
              { ...map.sliceResult, width: renderRes },
-             map.channelState, 
+             map.channelState,
              STUDIO_SLICE_SUPPRESSION
            );
            if (recomposed?.canvas) {
@@ -1472,16 +1797,34 @@ const StudioEditor = (() => {
         }
 
         if (recomposedCanvas) {
-           ctx.clearRect(map.x, map.y, map.w, map.h);
+           // The cell goes back to the figure's backdrop before the new colours are
+           // laid on it: a slice is transparent outside the specimen.
+           if (_doc.layoutBackground) {
+             ctx.fillStyle = _doc.layoutBackground;
+             ctx.fillRect(map.x, map.y, map.w, map.h);
+           } else {
+             ctx.clearRect(map.x, map.y, map.w, map.h);
+           }
            ctx.drawImage(recomposedCanvas, map.x, map.y, map.w, map.h);
            changed = true;
         }
       });
-      
+
       if (changed) {
         _sliceImage = tempCanvas;
         _draw();
       }
+      return;
+    }
+
+    if (_hasRaw(_sliceResult)) {
+      // Re-coloured in place from the slice's own values: same frame and crop, so
+      // every annotation keeps its coordinates (no re-render, no re-crop).
+      const canvas = _composeRaw(_sliceResult.raw, _doc.channelState, _ownSliceCanvas());
+      if (!canvas) return;
+      _sliceResult = { ..._sliceResult, canvas, width: canvas.width, height: canvas.height };
+      _sliceImage = canvas;
+      _draw();
       return;
     }
 
@@ -1490,27 +1833,40 @@ const StudioEditor = (() => {
     const recomposed = VolumeSlicer.recompose?.({ ..._sliceResult, width: _sliceResult.renderRes || _sliceResult.width }, _doc.channelState, STUDIO_SLICE_SUPPRESSION);
     if (!recomposed?.canvas) return;
     const croppedRecomposed = cropEmptySpace(recomposed.canvas);
-    
+
     _sliceResult = { ...recomposed, canvas: croppedRecomposed, width: croppedRecomposed.width, height: croppedRecomposed.height, renderRes: _sliceResult.renderRes || _sliceResult.width };
     _sliceImage = croppedRecomposed;
     _doc.sourceSlice.width = croppedRecomposed.width;
     _doc.sourceSlice.height = croppedRecomposed.height;
     _doc.calibration.pixelSizeUm = recomposed.pixelSizeUm || _doc.calibration.pixelSizeUm;
-    
+
     _draw();
   }
 
-  function _prepareSliceForStudio(sliceResult) {
+  /**
+   * The picture the Studio shows for `sliceResult`: coloured from its raw values with
+   * `channelState` (the document's once one is open, the slice's own to seed a new
+   * one) when it carries them; otherwise the slice's own canvas, re-rendered through
+   * VolumeSlicer for the sources it can re-render.
+   */
+  function _prepareSliceForStudio(sliceResult, channelState = null) {
+    if (_hasRaw(sliceResult)) {
+      const state = Array.isArray(channelState) ? channelState : _seedChannelState(sliceResult);
+      const canvas = _composeRaw(sliceResult.raw, state, _ownSliceCanvas());
+      if (canvas) return { ...sliceResult, canvas, width: canvas.width, height: canvas.height };
+    }
     if (!sliceResult?.canvas || typeof VolumeSlicer === 'undefined' || typeof VolumeSlicer.recompose !== 'function') {
       return sliceResult;
     }
     try {
-      const channels = Array.isArray(sliceResult.channelState) && sliceResult.channelState.length
-        ? sliceResult.channelState
-        : (Array.isArray(_doc?.channelState) && _doc.channelState.length
-          ? _doc.channelState
-          : (typeof ViewerApp !== 'undefined' && ViewerApp.getChannelState ? ViewerApp.getChannelState() : []));
-      return VolumeSlicer.recompose(sliceResult, channels, STUDIO_SLICE_SUPPRESSION) || sliceResult;
+      const channels = Array.isArray(channelState) && channelState.length
+        ? channelState
+        : Array.isArray(sliceResult.channelState) && sliceResult.channelState.length
+          ? sliceResult.channelState
+          : (Array.isArray(_doc?.channelState) && _doc.channelState.length
+            ? _doc.channelState
+            : (typeof ViewerApp !== 'undefined' && ViewerApp.getChannelState ? ViewerApp.getChannelState() : []));
+      return VolumeSlicer.recompose({ ...sliceResult, raw: null }, channels, STUDIO_SLICE_SUPPRESSION) || sliceResult;
     } catch (err) {
       console.warn('[StudioEditor] Failed to prepare slice:', err);
       return sliceResult;
@@ -1567,8 +1923,7 @@ const StudioEditor = (() => {
         endCap: style.endCap || 'bar'
       }
     };
-    layer.x2 = layer.x1 + _scaleBarPixels(layer);
-    layer.y2 = layer.y1;
+    _setScaleBarEnd(layer);
     _doc.layers.push(layer);
   }
 
@@ -1581,6 +1936,8 @@ const StudioEditor = (() => {
       visible: true,
       locked: false,
       groupId: null,
+      // Degrees, (−180, 180], clockwise on screen (image y points down).
+      rotation: 0,
       style: {
         stroke: color,
         fill: color,
@@ -1645,8 +2002,11 @@ const StudioEditor = (() => {
     if (draft.type === 'scalebar') {
       layer.unit = 'um';
       layer.value = _snapScaleBarValue(100);
-      layer.x2 = layer.x1 + _scaleBarPixels(layer);
+      // A bar is laid from where it was placed; where the pointer was released says
+      // nothing of its length, so it must not choose the cell that calibrates it.
+      layer.x2 = layer.x1;
       layer.y2 = layer.y1;
+      _setScaleBarEnd(layer);
       layer.style.startCap = 'bar';
       layer.style.endCap = 'bar';
     }
@@ -1659,6 +2019,9 @@ const StudioEditor = (() => {
 
   function _hitTest(point) {
     if (!_doc) return null;
+    // The rotate handle floats outside its layer, where another layer may lie on top.
+    const selected = _activeTool === 'select' ? _selectedLayer() : null;
+    if (selected && _hitRotationHandle(selected, point)) return { id: selected.id, handle: 'rotate' };
     for (let i = _doc.layers.length - 1; i >= 0; i--) {
       const layer = _doc.layers[i];
       if (layer.visible === false) continue;
@@ -1675,9 +2038,12 @@ const StudioEditor = (() => {
   }
 
   function _layerContains(layer, point) {
-    const box = _layerBounds(layer);
-    if (['rectangle', 'ellipse', 'text'].includes(layer.type)) {
-      return point.x >= box.x && point.x <= box.x + box.w && point.y >= box.y && point.y <= box.y + box.h;
+    if (_isBoxLayer(layer)) {
+      // The pointer is brought into the box's own frame by the inverse turn R(−θ) about
+      // the box centre, where the box is axis-aligned again.
+      const box = _layerBox(layer);
+      const local = _rotatePointAbout(point, _boxCentre(box), -_layerRotationRad(layer));
+      return local.x >= box.x && local.x <= box.x + box.w && local.y >= box.y && local.y <= box.y + box.h;
     }
     if (['line', 'arrow', 'distance', 'scalebar'].includes(layer.type)) {
       const p = _linePoints(layer);
@@ -1702,13 +2068,139 @@ const StudioEditor = (() => {
         { id: 'p3', x: layer.x3, y: layer.y3 }
       ];
     }
-    const box = _layerBounds(layer);
-    return [
-      { id: 'nw', x: box.x, y: box.y },
-      { id: 'ne', x: box.x + box.w, y: box.y },
-      { id: 'sw', x: box.x, y: box.y + box.h },
-      { id: 'se', x: box.x + box.w, y: box.y + box.h }
-    ];
+    return _rotatedBoxCorners(_layerBox(layer), _layerRotationRad(layer));
+  }
+
+  // The rotate handle: a knob on a stem above the top-centre of the selection — of the
+  // turned box itself for a box layer (so it turns with it), of the bounds for a point
+  // layer. The stem has a constant length on screen.
+  function _rotationHandle(layer) {
+    const offset = ROTATE_HANDLE_OFFSET / Math.max(0.001, _doc.viewport.zoom);
+    if (_isBoxLayer(layer)) {
+      const box = _layerBox(layer);
+      const c = _boxCentre(box);
+      const rad = _layerRotationRad(layer);
+      const base = _rotatePointAbout({ x: c.x, y: box.y }, c, rad);
+      const knob = _rotatePointAbout({ x: c.x, y: box.y - offset }, c, rad);
+      return { x: knob.x, y: knob.y, baseX: base.x, baseY: base.y };
+    }
+    const bounds = _layerBounds(layer);
+    const x = bounds.x + bounds.w / 2;
+    return { x, y: bounds.y - offset, baseX: x, baseY: bounds.y };
+  }
+
+  function _hitRotationHandle(layer, point) {
+    if (!layer || !_doc || layer.locked === true || layer.visible === false) return false;
+    const knob = _rotationHandle(layer);
+    return Math.hypot(point.x - knob.x, point.y - knob.y) <= ROTATE_HANDLE_HIT / Math.max(0.001, _doc.viewport.zoom);
+  }
+
+  function _beginLayerRotation(layer, point) {
+    const centre = _layerRotationCentre(layer);
+    _selectedId = layer.id;
+    _hoverHandle = 'rotate';
+    _drawing = {
+      mode: 'rotate',
+      start: point,
+      centre,
+      startAngle: Math.atan2(point.y - centre.y, point.x - centre.x),
+      original: _clone(layer)
+    };
+    _canvas.style.cursor = ROTATE_CURSOR;
+    _draw();
+  }
+
+  // Resize cursor of a box handle: the handle's outward direction in the box frame,
+  // turned by the layer and by the view, read to the nearest of the four cursor axes.
+  function _resizeCursor(layer, handleId) {
+    const id = String(handleId || '');
+    if (!_isBoxLayer(layer) || !/^[ns]?[ew]?$/.test(id) || !id) return 'nwse-resize';
+    const lx = id.includes('e') ? 1 : id.includes('w') ? -1 : 0;
+    const ly = id.includes('s') ? 1 : id.includes('n') ? -1 : 0;
+    const deg = Math.atan2(ly, lx) * 180 / Math.PI + _layerRotationDeg(layer) + (_doc.viewport.rotation || 0) * 180 / Math.PI;
+    const index = ((Math.round(deg / 45) % 4) + 4) % 4;
+    return ['ew-resize', 'nwse-resize', 'ns-resize', 'nesw-resize'][index];
+  }
+
+  // Centre a layer turns about: the box centre, or the mean of the defining points —
+  // invariant under the turn itself, so +θ then −θ lands exactly where it started.
+  function _layerRotationCentre(layer) {
+    if (_isBoxLayer(layer)) return _boxCentre(_layerBox(layer));
+    return _centroid(_handlesForGeometry(layer));
+  }
+
+  /**
+   * Sets a layer's rotation to `targetDeg`, starting from `snapshot` (the layer as it was
+   * when the gesture began, so repeated previews never accumulate float error).
+   * Box layers only record the angle: they are turned when drawn. Point layers carry
+   * measurements read from their points and the (possibly anisotropic) calibration, so
+   * the turn is baked into the points and the labels keep reading real image geometry:
+   *   line, arrow        — a rigid turn of the points about their centroid;
+   *   angle              — a rigid turn in µm space about the centroid, so the angle it
+   *                        measures is unchanged with anisotropic pixels;
+   *   distance           — a ruler: its direction turns rigidly, its pixel length is
+   *                        re-derived so the measured µm are unchanged (_rotateRuler);
+   *   scale bar          — its direction IS its rotation; the pixel length along it is
+   *                        the one that measures exactly its value (_scaleBarPixels).
+   */
+  function _rotateLayerFromSnapshot(layer, snapshot, targetDeg) {
+    const target = _normalizeRotationDeg(targetDeg);
+    const delta = (target - _layerRotationDeg(snapshot)) * Math.PI / 180;
+    layer.rotation = target;
+    if (_isBoxLayer(layer)) return;
+    if (!delta) {
+      // Back at the starting angle: the starting points, bit for bit.
+      ['x1', 'y1', 'x2', 'y2', 'x3', 'y3'].forEach(k => { if (snapshot[k] !== undefined) layer[k] = snapshot[k]; });
+      _updateMeasurementText(layer);
+      return;
+    }
+    if (layer.type === 'scalebar') {
+      // The bar turns about its middle, measured with the calibration of the cell that
+      // middle lies in (a Compare figure; the document's otherwise): a bar of that length
+      // centred there has its middle in that cell, which is exactly what _scaleBarCell
+      // then reads back, so the stored far end stays the drawn one after the turn.
+      const centre = _layerRotationCentre(snapshot);
+      const u = _scaleBarDirection(layer);
+      const centreCell = _doc?.layoutMaps?.length ? _nearestCell(centre.x, centre.y) : null;
+      const px = centreCell?.pixelSizeUm || _layerPixelSize(snapshot);
+      const length = _lengthInPixels(layer.unit || 'um', layer.value || 100, _umPerPixelAlong(u.x, u.y, px));
+      layer.x1 = centre.x - u.x * length / 2;
+      layer.y1 = centre.y - u.y * length / 2;
+      layer.x2 = centre.x + u.x * length / 2;
+      layer.y2 = centre.y + u.y * length / 2;
+    } else if (layer.type === 'distance') {
+      const turned = _rotateRuler(
+        { x: snapshot.x1, y: snapshot.y1 },
+        { x: snapshot.x2, y: snapshot.y2 },
+        delta,
+        _layerPixelSize(snapshot)
+      );
+      Object.assign(layer, turned);
+    } else if (layer.type === 'angle') {
+      // An angle is read in µm space (_angleDegrees), so it is turned there: a rigid
+      // turn of the physical figure about its centroid c,
+      //   p' = c + S⁻¹·R(θ)·S·(p − c),   S = diag(psx, psy),
+      // keeps the angle between its arms whatever the pixel anisotropy (a rigid turn in
+      // pixels would not: 90° at 1 × 2 µm/px reads 53.1° after 45°). The centroid of the
+      // turned points is c again, so the calibration it is read with does not change.
+      const centre = _layerRotationCentre(snapshot);
+      const px = _layerPixelSize(snapshot);
+      const sx = Number(px?.x) > 0 ? Number(px.x) : 1;
+      const sy = Number(px?.y) > 0 ? Number(px.y) : sx;
+      ['1', '2', '3'].forEach(n => {
+        const v = _rotateVec((snapshot[`x${n}`] - centre.x) * sx, (snapshot[`y${n}`] - centre.y) * sy, delta);
+        layer[`x${n}`] = centre.x + v.x / sx;
+        layer[`y${n}`] = centre.y + v.y / sy;
+      });
+    } else if (['line', 'arrow'].includes(layer.type)) {
+      const centre = _layerRotationCentre(snapshot);
+      ['1', '2'].forEach(n => {
+        const p = _rotatePointAbout({ x: snapshot[`x${n}`], y: snapshot[`y${n}`] }, centre, delta);
+        layer[`x${n}`] = p.x;
+        layer[`y${n}`] = p.y;
+      });
+    }
+    _updateMeasurementText(layer);
   }
 
   function _applyHandle(layer, handle, point, original) {
@@ -1735,37 +2227,35 @@ const StudioEditor = (() => {
       }
       return;
     }
-    const box = _layerBounds(original);
-    const left = handle.includes('w') ? point.x : box.x;
-    const right = handle.includes('e') ? point.x : box.x + box.w;
-    const top = handle.includes('n') ? point.y : box.y;
-    const bottom = handle.includes('s') ? point.y : box.y + box.h;
-    layer.x = Math.min(left, right);
-    layer.y = Math.min(top, bottom);
-    layer.w = Math.abs(right - left);
-    layer.h = Math.abs(bottom - top);
+    // Resized in the box's own frame; the opposite corner stays put in image space.
+    const box = _resizeRotatedBox(_layerBox(original), _layerRotationRad(original), handle, point);
+    layer.x = box.x;
+    layer.y = box.y;
+    layer.w = box.w;
+    layer.h = box.h;
   }
 
+  // A scale bar is resized along its own direction u: the pointer is projected on the
+  // bar's axis ((P − A)·u), never read as a raw x, so a turned bar keeps its angle.
   function _applyScaleBarHandle(layer, handle, point, original) {
     const base = original || _clone(layer);
     const basePoints = _linePoints(base);
+    const u = _scaleBarDirection(base);
     const minPixels = Math.max(1, _scaleBarPixelsForValue(layer, layer.unit || 'um', SCALEBAR_STEP));
 
     if (handle === 'p1') {
-      const right = basePoints.x2;
-      layer.x1 = Math.min(point.x, right - minPixels);
-      layer.y1 = base.y1;
-      layer.value = _scaleBarValueFromPixels(layer, right - layer.x1);
+      const along = Math.max(minPixels, (basePoints.x2 - point.x) * u.x + (basePoints.y2 - point.y) * u.y);
+      layer.x1 = basePoints.x2 - u.x * along;
+      layer.y1 = basePoints.y2 - u.y * along;
+      layer.value = _scaleBarValueFromPixels(layer, along);
     } else {
       layer.x1 = base.x1;
       layer.y1 = base.y1;
-      layer.value = _scaleBarValueFromPixels(layer, point.x - base.x1);
+      layer.value = _scaleBarValueFromPixels(layer, (point.x - base.x1) * u.x + (point.y - base.y1) * u.y);
     }
 
-    const snappedLength = _scaleBarPixels(layer);
     layer.value = _snapScaleBarValue(layer.value);
-    layer.x2 = layer.x1 + snappedLength;
-    layer.y2 = layer.y1;
+    _setScaleBarEnd(layer);
     _updateMeasurementText(layer);
   }
 
@@ -1799,28 +2289,54 @@ const StudioEditor = (() => {
     });
   }
 
+  // A scale bar's far end is never stored as truth: it is x1 + u·L, with u its direction
+  // and L the pixel length that measures its value.
   function _linePoints(layer) {
     if (layer.type !== 'scalebar') return { x1: layer.x1, y1: layer.y1, x2: layer.x2, y2: layer.y2 };
     const length = _scaleBarPixels(layer);
-    return { x1: layer.x1, y1: layer.y1, x2: layer.x1 + length, y2: layer.y1 };
+    const u = _scaleBarDirection(layer);
+    return { x1: layer.x1, y1: layer.y1, x2: layer.x1 + u.x * length, y2: layer.y1 + u.y * length };
+  }
+
+  // The direction of a bar is its rotation: a bar is born horizontal and only ever
+  // turns through a rotation, so an old document (no rotation) stays horizontal.
+  function _scaleBarDirection(layer) {
+    return _unitFromDeg(_layerRotationDeg(layer));
+  }
+
+  // Writes the far end back after a value, unit or rotation change, along the bar.
+  function _setScaleBarEnd(layer) {
+    const p = _linePoints(layer);
+    layer.x2 = p.x2;
+    layer.y2 = p.y2;
   }
 
   function _scaleBarPixels(layer) {
-    const px = _pixelSizeForPoint(layer.x1, layer.y1);
-    const um = layer.value || 100;
-    return _scaleBarPixelsForValue(layer, layer.unit || 'um', um);
+    return _scaleBarPixelsForValue(layer, layer.unit || 'um', layer.value || 100);
+  }
+
+  // µm per image px along the bar (see _umPerPixelAlong): psx for a horizontal bar,
+  // psy for a vertical one, in between otherwise.
+  function _scaleBarUmPerPixel(layer) {
+    const u = _scaleBarDirection(layer);
+    return _umPerPixelAlong(u.x, u.y, _layerPixelSize(layer));
   }
 
   function _scaleBarPixelsForValue(layer, unit, value) {
-    const px = layer ? _pixelSizeForPoint(layer.x1, layer.y1).x : (_doc?.calibration?.pixelSizeUm?.x || 1);
+    const px = layer ? _scaleBarUmPerPixel(layer) : (_doc?.calibration?.pixelSizeUm?.x || 1);
+    return _lengthInPixels(unit, value, px);
+  }
+
+  // Image px spanned by `value` `unit` at `umPerPixel` µm per px along the bar.
+  function _lengthInPixels(unit, value, umPerPixel) {
     if (unit === 'px') return value;
-    if (unit === 'mm') return (value * 1000) / px;
-    if (unit === 'cm') return (value * 10000) / px;
-    return value / px;
+    if (unit === 'mm') return (value * 1000) / umPerPixel;
+    if (unit === 'cm') return (value * 10000) / umPerPixel;
+    return value / umPerPixel;
   }
 
   function _scaleBarValueFromPixels(layer, pixelLength) {
-    const px = layer ? _pixelSizeForPoint(layer.x1, layer.y1).x : (_doc?.calibration?.pixelSizeUm?.x || 1);
+    const px = layer ? _scaleBarUmPerPixel(layer) : (_doc?.calibration?.pixelSizeUm?.x || 1);
     const length = Math.max(1, Math.abs(Number(pixelLength) || 1));
     const unit = layer.unit || 'um';
     let umValue = length * px;
@@ -1855,14 +2371,90 @@ const StudioEditor = (() => {
     return _doc?.calibration?.pixelSizeUm || { x: 1, y: 1 };
   }
 
+  /**
+   * The calibration a point layer (distance, scale bar, angle, line, arrow) measures
+   * with. A single slice has one. In a Compare figure every cell has its own, and the
+   * layer takes the one of the cell under the middle of its stored points — the
+   * midpoint of its two ends, the centroid of an angle's three — else of the nearest
+   * cell (a middle in the gutter between cells). That middle is the centre every turn
+   * of the layer is made about (_layerRotationCentre), so turning a layer never hands
+   * it to a neighbouring cell's µm/px, as reading it under x1 did once a turn carried
+   * x1 over a cell edge. A scale bar's far end is derived (x1 + u·L) but its stored copy
+   * (x2, y2) is rewritten by every change of the bar (_setScaleBarEnd, the turn), so its
+   * middle is read without the length it calibrates; with no stored end, x1.
+   */
+  function _layerPixelSize(layer) {
+    if (!_doc?.layoutMaps?.length) return _pixelSizeForPoint(layer?.x1, layer?.y1);
+    if (layer?.type === 'scalebar') {
+      const cell = _scaleBarCell(layer);
+      if (cell) return cell.pixelSizeUm;
+    }
+    const points = (layer?.type === 'angle' ? ['1', '2', '3'] : ['1', '2'])
+      .map(n => ({ x: Number(layer?.[`x${n}`]), y: Number(layer?.[`y${n}`]) }))
+      .filter(p => Number.isFinite(p.x) && Number.isFinite(p.y));
+    const middle = points.length ? _centroid(points) : null;
+    const cell = middle ? _nearestCell(middle.x, middle.y) : null;
+    return cell ? cell.pixelSizeUm : _pixelSizeForPoint(layer?.x1, layer?.y1);
+  }
+
+  /**
+   * The Compare cell that calibrates a scale bar. Its middle x1 + u·L(c)/2 depends on the
+   * length L(c) the cell's own µm/px gives, so the stored (x2, y2) — the end written with
+   * the previous choice — cannot decide it: two cells of different calibration would hand
+   * the bar to each other at every rewrite. The bar belongs to a cell c whose own length
+   * puts the middle in c (nearest cell, gutters included); the cell of the stored middle
+   * is tried first, so a bar that satisfies it keeps it (a turn about the middle, a value
+   * edit). When no cell is self-consistent (a start near an edge, the cells' lengths each
+   * throwing the middle into the other) the cell of the start point decides: it does not
+   * move when the far end is rewritten, so the choice cannot flip back and forth.
+   */
+  function _scaleBarCell(layer) {
+    const x1 = Number(layer?.x1);
+    const y1 = Number(layer?.y1);
+    if (!Number.isFinite(x1) || !Number.isFinite(y1)) return null;
+    const u = _scaleBarDirection(layer);
+    const unit = layer.unit || 'um';
+    const value = layer.value || 100;
+    const x2 = Number(layer.x2);
+    const y2 = Number(layer.y2);
+    const previous = Number.isFinite(x2) && Number.isFinite(y2)
+      ? _nearestCell((x1 + x2) / 2, (y1 + y2) / 2)
+      : _nearestCell(x1, y1);
+    const candidates = [previous, ...(_doc?.layoutMaps || []).filter(m => m?.pixelSizeUm && m !== previous)];
+    for (const cell of candidates) {
+      if (!cell?.pixelSizeUm) continue;
+      const length = _lengthInPixels(unit, value, _umPerPixelAlong(u.x, u.y, cell.pixelSizeUm));
+      if (_nearestCell(x1 + u.x * length / 2, y1 + u.y * length / 2) === cell) return cell;
+    }
+    return _nearestCell(x1, y1);
+  }
+
+  // The calibrated Compare cell a point lies in (the first, as _pixelSizeForPoint), or
+  // the nearest one: squared distance to the cell rectangle, 0 inside it.
+  function _nearestCell(x, y) {
+    let best = null;
+    let bestDist = Infinity;
+    (_doc?.layoutMaps || []).forEach(m => {
+      if (!m?.pixelSizeUm) return;
+      const dx = Math.max(m.x - x, 0, x - (m.x + m.w));
+      const dy = Math.max(m.y - y, 0, y - (m.y + m.h));
+      const dist = dx * dx + dy * dy;
+      if (dist < bestDist) {
+        best = m;
+        bestDist = dist;
+      }
+    });
+    return best;
+  }
+
   function _lineLengthUm(layer) {
     const p = _linePoints(layer);
-    const px = _pixelSizeForPoint(p.x1, p.y1);
+    const px = _layerPixelSize(layer);
     return Math.hypot((p.x2 - p.x1) * px.x, (p.y2 - p.y1) * px.y);
   }
 
   function _angleDegrees(layer) {
-    const px = _pixelSizeForPoint(layer.x1, layer.y1);
+    const px = _layerPixelSize(layer);
     const dx1 = (layer.x2 - layer.x1) * px.x;
     const dy1 = (layer.y2 - layer.y1) * px.y;
     const dx2 = (layer.x3 - layer.x1) * px.x;
@@ -1879,14 +2471,33 @@ const StudioEditor = (() => {
     return delta;
   }
 
+  function _isBoxLayer(layer) {
+    return BOX_LAYER_TYPES.includes(layer?.type);
+  }
+
+  function _layerRotationDeg(layer) {
+    return _normalizeRotationDeg(layer?.rotation);
+  }
+
+  function _layerRotationRad(layer) {
+    return _layerRotationDeg(layer) * Math.PI / 180;
+  }
+
+  // The unrotated box of a box layer (a negative w/h drawn right-to-left is folded).
+  function _layerBox(layer) {
+    return {
+      x: Math.min(layer.x, layer.x + (layer.w || 0)),
+      y: Math.min(layer.y, layer.y + (layer.h || 0)),
+      w: Math.abs(layer.w || 1),
+      h: Math.abs(layer.h || 1)
+    };
+  }
+
+  // Axis-aligned bounds in image space (minimap, align, snapping): a turned box is
+  // bounded as turned.
   function _layerBounds(layer) {
-    if (['rectangle', 'ellipse', 'text'].includes(layer.type)) {
-      return {
-        x: Math.min(layer.x, layer.x + (layer.w || 0)),
-        y: Math.min(layer.y, layer.y + (layer.h || 0)),
-        w: Math.abs(layer.w || 1),
-        h: Math.abs(layer.h || 1)
-      };
+    if (_isBoxLayer(layer)) {
+      return _rotatedBoxAabb(_layerBox(layer), _layerRotationRad(layer));
     }
     const points = _handlesForGeometry(layer);
     const xs = points.map(p => p.x);
@@ -1961,8 +2572,10 @@ const StudioEditor = (() => {
 
   function _redo() {
     if (!_future.length) return;
+    // The entry undo set aside is already a copy nobody edits: it goes back as it is
+    // (a JSON copy of it would stringify every Compare cell's raw buffer).
     const item = _future.pop();
-    _history.push(_clone(item));
+    _history.push(item);
     _doc = _clone(item.doc);
     _selectedId = null;
     _renderAll();
@@ -1990,8 +2603,7 @@ const StudioEditor = (() => {
     const applyValue = (commit) => {
       layer.value = _snapScaleBarValue(node.value);
       node.value = layer.value;
-      layer.x2 = layer.x1 + _scaleBarPixels(layer);
-      layer.y2 = layer.y1;
+      _setScaleBarEnd(layer);
       _updateMeasurementText(layer);
       _draw();
       _renderLayers();
@@ -1999,6 +2611,88 @@ const StudioEditor = (() => {
     };
     node.addEventListener('input', () => applyValue(false));
     node.addEventListener('change', () => applyValue(true));
+  }
+
+  // Slider and degree field drive the same angle. 'input' previews, 'change' commits one
+  // step of history; every preview of one edit starts from the snapshot taken at its
+  // first event, so a point layer is never turned by a sum of small float rotations.
+  // A commit updates the controls where they are (never a panel rebuild, which would
+  // take the keyboard focus away from the slider between two arrow presses).
+  function _bindRotationProperty(layer) {
+    const slider = document.getElementById('prop-rotation');
+    const field = document.getElementById('prop-rotation-num');
+    const reset = document.getElementById('prop-rotation-reset');
+    if (!slider || !field) return;
+    let snapshot = null;
+    const apply = (raw, commit, source) => {
+      if (layer.locked === true) return;
+      const text = String(raw ?? '').trim();
+      const value = Number(text);
+      if (text === '' || !Number.isFinite(value)) {
+        // An edit that ends on nothing usable (the field emptied, a lone '-') puts the
+        // layer back as it was before its previews, and leaves no history step.
+        if (!commit) return;
+        if (snapshot) _rotateLayerFromSnapshot(layer, snapshot, _layerRotationDeg(snapshot));
+        snapshot = null;
+        _writeRotationControls(layer, slider, field);
+        _draw();
+        return;
+      }
+      if (!snapshot) snapshot = _clone(layer);
+      _rotateLayerFromSnapshot(layer, snapshot, value);
+      // The slider being dragged is left where the operator put it: −180 and 180 are
+      // one angle, spelled 180, and writing that back throws the thumb to the far end.
+      // The field is not rewritten under the operator's typing ('-' on the way to '-30').
+      _writeRotationControls(layer, source === slider ? null : slider, (source !== field || commit) ? field : null);
+      _draw();
+      if (!commit) return;
+      const turned = _layerRotationDeg(snapshot) !== _layerRotationDeg(layer);
+      snapshot = null;
+      if (turned) _pushHistory('Rotate layer');
+    };
+    slider.addEventListener('input', () => apply(slider.value, false, slider));
+    slider.addEventListener('change', () => apply(slider.value, true, slider));
+    field.addEventListener('input', () => apply(field.value, false, field));
+    field.addEventListener('change', () => apply(field.value, true, field));
+    reset?.addEventListener('click', () => apply(0, true, reset));
+  }
+
+  // The layer's angle into the rotation controls given (null = leave that one), and its
+  // measurement into the readout.
+  function _writeRotationControls(layer, slider, field) {
+    const deg = _formatDeg(_layerRotationDeg(layer));
+    if (slider) slider.value = deg;
+    if (field) field.value = deg;
+    const readout = _propsContainer?.querySelector('.studio-measurement-readout');
+    if (readout) readout.textContent = _measurementLabel(layer) || '';
+  }
+
+  // The properties panel updated in place after a turn made elsewhere; false when the
+  // panel does not show this layer's rotation controls (then it is rebuilt).
+  function _syncRotationControls(layer) {
+    const holder = _propsContainer?.querySelector('.studio-rotation-prop');
+    if (!holder || holder.getAttribute('data-layer-id') !== String(layer.id)) return false;
+    _writeRotationControls(layer, document.getElementById('prop-rotation'), document.getElementById('prop-rotation-num'));
+    return true;
+  }
+
+  // Keyboard rotation. A held key repeats: the whole hold is one step of history.
+  function _rotateSelectedBy(stepDeg, coalesce) {
+    const layer = _selectedLayer();
+    if (!layer || layer.locked === true) return false;
+    _rotateLayerFromSnapshot(layer, _clone(layer), _layerRotationDeg(layer) + stepDeg);
+    const top = _history[_history.length - 1];
+    if (coalesce && _history.length > 1 && top?.label === 'Rotate layer' && top.layerId === layer.id) {
+      _doc.updatedAt = new Date().toISOString();
+      top.doc = _clone(_doc);
+      _future = [];
+    } else {
+      _pushHistory('Rotate layer');
+      _history[_history.length - 1].layerId = layer.id;
+    }
+    _draw();
+    if (!_syncRotationControls(layer)) _renderProperties();
+    return true;
   }
 
   function _deleteSelected() {
@@ -2090,47 +2784,26 @@ const StudioEditor = (() => {
     _renderProperties();
   }
 
-  async function _exportPng() {
+  // The export is the picture the Studio shows, as coloured: the slice it holds is the
+  // best the page produced (viewer.js upgrades it to native in place), so nothing is
+  // re-rendered here.
+  function _exportPng() {
     if (!_doc || !_sliceResult) return;
     _toast(_t('toast.renderingNative', 'Rendering native export...'));
     let source = _sliceResult;
 
-    // ── Compare mode (layoutMaps): recompose all panels at full resolution ──
     if (_doc.layoutMaps?.length > 0) {
-      // Force full-res recompose of ALL panels (not interactive = no downscale)
+      // Compare: every cell recomposed at full resolution (not the interactive,
+      // cell-sized render of a drag).
       _rerenderSliceFromChannels(undefined);
-      // Use the current _sliceImage which now has all channel modifications applied
       source = {
         canvas: _sliceImage,
         width: _sliceImage.width,
         height: _sliceImage.height
       };
-    } else {
-      // ── Single-slice mode: try native export, fallback to recomposed ──
-      const dataset = typeof ViewerApp !== 'undefined' && ViewerApp.getDatasetMeta ? ViewerApp.getDatasetMeta() : null;
-      if (dataset && typeof VolumeSlicer !== 'undefined') {
-        try {
-          const maxSource = Math.max(
-            Number(dataset.dimensions?.x) || _sliceResult.width,
-            Number(dataset.dimensions?.y) || _sliceResult.height,
-            _sliceResult.width,
-            _sliceResult.height
-          );
-          source = await VolumeSlicer.renderNative(dataset, _doc.planeSpec, _doc.channelState, {
-            timepoint: _doc.timepoint,
-            physicalSizeUm: _sliceResult.physicalSizeUm,
-            baseUrl: window.location.origin,
-            outputSize: maxSource,
-            preferredSourceKind: 'webstack'
-          });
-        } catch (err) {
-          console.warn('[StudioEditor] Native export fallback:', err);
-        }
-      }
-      // If channel modifications were made, use the recomposed _sliceImage
-      if (_sliceImage && _sliceImage !== _sliceResult.canvas) {
-        source = { ...source, canvas: _sliceImage, width: _sliceImage.width, height: _sliceImage.height };
-      }
+    } else if (_sliceImage && _sliceImage !== _sliceResult.canvas) {
+      // A single slice re-coloured since it was handed over.
+      source = { ..._sliceResult, canvas: _sliceImage, width: _sliceImage.width, height: _sliceImage.height };
     }
 
     const canvas = _composeExportCanvas(source, { metadataStamp: true });
@@ -2181,7 +2854,7 @@ const StudioEditor = (() => {
       ]
       : [
         _doc.dataset?.name || 'Slice Studio',
-        `${(_doc.planeSpec?.mode || 'xy').toUpperCase()} ${_doc.planeSpec?.projection || 'single'}`,
+        _planeLabel(_doc.planeSpec),
         `${source.width}x${source.height}`,
         `px ${(_doc.calibration.pixelSizeUm.x || 1).toFixed(4)} um`
       ];
@@ -2197,9 +2870,29 @@ const StudioEditor = (() => {
     ctx.restore();
   }
 
+  // The plane a figure was cut in, as its caption names it. The Z-stack browser hands
+  // its slab over as an oblique plane with axis 'z' and pitch 0 (viewer.js
+  // _zstackStudioSpec: the XY slices only turned in their own plane, yaw 180 = seen
+  // from the −Z side), so it is named XY; an inspector cut carries no such axis and
+  // stays OBLIQUE.
+  function _planeLabel(spec) {
+    const mode = String(spec?.mode || 'xy').toLowerCase();
+    const yaw = Number(spec?.yaw) || 0;
+    const flatXY = mode === 'oblique' && spec?.axis === 'z' && !Number(spec?.pitch) && yaw % 180 === 0;
+    return `${flatXY ? 'XY' : mode.toUpperCase()} ${spec?.projection || 'single'}`;
+  }
+
   function _exportJson() {
     if (!_doc) return;
-    const blob = new Blob([JSON.stringify(_doc, null, 2)], { type: 'application/json' });
+    let text;
+    try {
+      text = JSON.stringify(_portableDocument(_doc), null, 2);
+    } catch (err) {
+      console.warn('[StudioEditor] Studio JSON export failed:', err);
+      _toast(_t('studio.exportJsonFailed', 'The Studio JSON could not be written.'));
+      return;
+    }
+    const blob = new Blob([text], { type: 'application/json' });
     ExportManager?.downloadBlob?.(blob, `${_safeName(_doc.dataset?.name || 'slice')}_studio.json`);
   }
 
@@ -2227,16 +2920,25 @@ const StudioEditor = (() => {
   }
 
   function _migrateDocument(value) {
-    if (value?.version === DOC_VERSION && Array.isArray(value.layers)) return value;
+    if (value?.version === DOC_VERSION && Array.isArray(value.layers)) return _normalizeLayerRotations(value);
     if (Array.isArray(value)) {
       const doc = _createDocument(_sliceResult);
       doc.layers = value.map(old => _migrateLayer(old)).filter(Boolean);
       return doc;
     }
     if (Array.isArray(value?.layers)) {
-      return { ..._createDocument(_sliceResult), ...value, version: DOC_VERSION };
+      return _normalizeLayerRotations({ ..._createDocument(_sliceResult), ...value, version: DOC_VERSION });
     }
     throw new Error('Unsupported Studio JSON format.');
+  }
+
+  // A document saved before layers could turn has no `rotation` (→ 0); a hand-edited
+  // one may carry anything, which must never reach ctx.rotate as NaN.
+  function _normalizeLayerRotations(doc) {
+    doc.layers.forEach(layer => {
+      if (layer && typeof layer === 'object') layer.rotation = _normalizeRotationDeg(layer.rotation);
+    });
+    return doc;
   }
 
   function _migrateLayer(old) {
@@ -2270,6 +2972,7 @@ const StudioEditor = (() => {
     layer.style.fontSize = _clamp(layer.style.fontSize, 1, 400);
     layer.style.opacity = _clamp01(layer.style.opacity);
     if (old.unit === 'µm') layer.unit = 'um';
+    layer.rotation = _normalizeRotationDeg(old.rotation);
     return layer;
   }
 
@@ -2283,6 +2986,30 @@ const StudioEditor = (() => {
     `;
   }
 
+  function _rotationControl(layer) {
+    const deg = _formatDeg(_layerRotationDeg(layer));
+    const locked = layer.locked === true;
+    const off = locked ? 'disabled' : '';
+    const label = _escape(_t('studio.propRotation', 'Rotation'));
+    const resetTitle = _escape(_t('studio.resetRotation', 'Reset rotation'));
+    const lockedTitle = locked ? ` title="${_escape(_t('studio.rotationLocked', 'Unlock the layer to rotate it.'))}"` : '';
+    return `
+      <div class="studio-rotation-prop${locked ? ' is-locked' : ''}" data-layer-id="${_escape(layer.id)}"${lockedTitle}>
+        <span data-i18n="studio.propRotation">${label}</span>
+        <div class="studio-rotation-prop-row">
+          <input type="range" id="prop-rotation" min="-180" max="180" step="1" value="${deg}" aria-label="${label}" ${off}>
+          <input type="number" class="form-input" id="prop-rotation-num" min="-180" max="180" step="any" value="${deg}" aria-label="${label}" ${off}>
+          <span class="studio-rotation-prop-unit" aria-hidden="true">&deg;</span>
+          <button type="button" class="btn btn-icon btn-ghost btn-sm" id="prop-rotation-reset" title="${resetTitle}" data-i18n-title="studio.resetRotation" ${off}><i data-lucide="rotate-ccw"></i></button>
+        </div>
+      </div>
+    `;
+  }
+
+  function _formatDeg(deg) {
+    return String(Math.round(Number(deg) * 10) / 10 || 0);
+  }
+
   function _scaleBarControls(layer) {
     const unit = layer.unit || 'um';
     const value = _snapScaleBarValue(layer.value || 100);
@@ -2293,6 +3020,149 @@ const StudioEditor = (() => {
       </div>
     `;
   }
+
+  // ── Layer rotation geometry (pure: no DOM, no document state) ─────────────────
+  // Image space is y-down, so a positive angle turns clockwise on screen: the sense of
+  // CanvasRenderingContext2D.rotate, which is what draws the box layers.
+
+  // Any angle → (−180, 180], the one spelling the controls show and the JSON stores.
+  function _normalizeRotationDeg(deg) {
+    const n = Number(deg);
+    if (!Number.isFinite(n)) return 0;
+    let r = n % 360;
+    if (r > 180) r -= 360;
+    else if (r <= -180) r += 360;
+    return r === 0 ? 0 : r;
+  }
+
+  function _snapRotationDeg(deg, step) {
+    return _normalizeRotationDeg(Math.round(Number(deg) / step) * step);
+  }
+
+  // Unit vector at `deg`, exact on the four right angles (cos(π/2) is 6e-17, and a bar
+  // turned by 90° must be exactly vertical).
+  function _unitFromDeg(deg) {
+    const r = _normalizeRotationDeg(deg);
+    if (r === 0) return { x: 1, y: 0 };
+    if (r === 90) return { x: 0, y: 1 };
+    if (r === 180) return { x: -1, y: 0 };
+    if (r === -90) return { x: 0, y: -1 };
+    const rad = r * Math.PI / 180;
+    return { x: Math.cos(rad), y: Math.sin(rad) };
+  }
+
+  // R(θ)·v, R(θ) = [[cos θ, −sin θ], [sin θ, cos θ]].
+  function _rotateVec(x, y, rad) {
+    if (!rad) return { x, y };
+    const cos = Math.cos(rad);
+    const sin = Math.sin(rad);
+    return { x: x * cos - y * sin, y: x * sin + y * cos };
+  }
+
+  // p' = c + R(θ)(p − c). With −θ it is the inverse, which takes a pointer into the
+  // frame of a layer turned by θ.
+  function _rotatePointAbout(p, c, rad) {
+    if (!rad) return { x: p.x, y: p.y };
+    const v = _rotateVec(p.x - c.x, p.y - c.y, rad);
+    return { x: c.x + v.x, y: c.y + v.y };
+  }
+
+  function _boxCentre(box) {
+    return { x: box.x + box.w / 2, y: box.y + box.h / 2 };
+  }
+
+  function _centroid(points) {
+    const n = Math.max(1, points.length);
+    return {
+      x: points.reduce((sum, p) => sum + p.x, 0) / n,
+      y: points.reduce((sum, p) => sum + p.y, 0) / n
+    };
+  }
+
+  // Corners of an (x, y, w, h) box turned by θ about its centre, named after the corner
+  // they are in the box's own frame ('se' stays the handle that grows w and h).
+  function _rotatedBoxCorners(box, rad) {
+    const c = _boxCentre(box);
+    return [
+      ['nw', box.x, box.y],
+      ['ne', box.x + box.w, box.y],
+      ['sw', box.x, box.y + box.h],
+      ['se', box.x + box.w, box.y + box.h]
+    ].map(([id, x, y]) => ({ id, ..._rotatePointAbout({ x, y }, c, rad) }));
+  }
+
+  // Axis-aligned bounds of the turned box: same centre, half-extents
+  // ex = |w/2·cos θ| + |h/2·sin θ|, ey = |w/2·sin θ| + |h/2·cos θ|.
+  function _rotatedBoxAabb(box, rad) {
+    if (!rad) return { x: box.x, y: box.y, w: box.w, h: box.h };
+    const c = _boxCentre(box);
+    const cos = Math.abs(Math.cos(rad));
+    const sin = Math.abs(Math.sin(rad));
+    const ex = (box.w / 2) * cos + (box.h / 2) * sin;
+    const ey = (box.w / 2) * sin + (box.h / 2) * cos;
+    return { x: c.x - ex, y: c.y - ey, w: 2 * ex, h: 2 * ey };
+  }
+
+  // Resize of a box turned by θ, dragged by `handle` (n/s/e/w or a corner) to `point`.
+  // The anchor A — the opposite corner, or the opposite edge's midpoint — must not move
+  // in image space:
+  //   a  = anchor in the box frame, from the centre c;   A = c + R(θ)·a
+  //   d  = R(−θ)·(P − A)       the pointer seen from A along the box's own axes
+  //   w' = |d.x|, h' = |d.y|   (an axis the handle does not drive keeps its size, d = 0)
+  //   c' = A + R(θ)·(d/2)      the new centre, halfway from A to the pointer
+  // The box is stored unturned about c': (x, y) = c' − (w', h')/2. Dragging across the
+  // anchor flips the box rather than giving it a negative size.
+  function _resizeRotatedBox(box, rad, handle, point) {
+    const id = String(handle || '');
+    const sx = id.includes('e') ? 1 : id.includes('w') ? -1 : 0;
+    const sy = id.includes('s') ? 1 : id.includes('n') ? -1 : 0;
+    const c = _boxCentre(box);
+    const anchor = _rotatePointAbout({
+      x: sx > 0 ? box.x : sx < 0 ? box.x + box.w : c.x,
+      y: sy > 0 ? box.y : sy < 0 ? box.y + box.h : c.y
+    }, c, rad);
+    const d = _rotateVec(point.x - anchor.x, point.y - anchor.y, -rad);
+    const w = sx ? Math.abs(d.x) : box.w;
+    const h = sy ? Math.abs(d.y) : box.h;
+    const half = _rotateVec(sx ? d.x / 2 : 0, sy ? d.y / 2 : 0, rad);
+    return { x: anchor.x + half.x - w / 2, y: anchor.y + half.y - h / 2, w, h };
+  }
+
+  // The same box re-measured to (w, h) — a text layer whose words changed — regrowing
+  // from its turned top-left corner: holding c + R(θ)(−w/2, −h/2) fixed gives
+  // c' = c + R(θ)((w' − w)/2, (h' − h)/2).
+  function _regrowRotatedBox(box, rad, w, h) {
+    const d = _rotateVec((w - box.w) / 2, (h - box.h) / 2, rad);
+    return { x: box.x + box.w / 2 + d.x - w / 2, y: box.y + box.h / 2 + d.y - h / 2, w, h };
+  }
+
+  // µm spanned by one image px along the unit direction (ux, uy) with pixels of
+  // psx × psy µm: the step (ux, uy) px covers (ux·psx, uy·psy) µm, so L px along it
+  // measure L·hypot(ux·psx, uy·psy) µm — psx for a horizontal segment, psy for a
+  // vertical one. A missing psy means square pixels.
+  function _umPerPixelAlong(ux, uy, px) {
+    const sx = Number(px?.x) > 0 ? Number(px.x) : 1;
+    const sy = Number(px?.y) > 0 ? Number(px.y) : sx;
+    return Math.hypot(ux * sx, uy * sy);
+  }
+
+  // A measured segment turned by θ about its midpoint like a ruler: the direction turns
+  // rigidly on screen and the pixel length is re-derived so the physical length ℓ is
+  // kept, L' = ℓ / hypot(u'x·psx, u'y·psy). With square pixels L' = L (a rigid turn);
+  // with anisotropic pixels a rigid turn would change the value the layer reads.
+  function _rotateRuler(p1, p2, rad, px) {
+    const dx = p2.x - p1.x;
+    const dy = p2.y - p1.y;
+    const length = Math.hypot(dx, dy);
+    if (!(length > 0)) return { x1: p1.x, y1: p1.y, x2: p2.x, y2: p2.y };
+    const um = length * _umPerPixelAlong(dx / length, dy / length, px);
+    const u = _rotateVec(dx / length, dy / length, rad);
+    const half = um / _umPerPixelAlong(u.x, u.y, px) / 2;
+    const cx = (p1.x + p2.x) / 2;
+    const cy = (p1.y + p2.y) / 2;
+    return { x1: cx - u.x * half, y1: cy - u.y * half, x2: cx + u.x * half, y2: cy + u.y * half };
+  }
+  // ── End of layer rotation geometry ────────────────────────────────────────────
 
   function _layerName(layer) {
     return layer.type.charAt(0).toUpperCase() + layer.type.slice(1);
@@ -2332,19 +3202,44 @@ const StudioEditor = (() => {
     return pow;
   }
 
+  // The fields of a Compare cell that live only as long as the page that opened the
+  // Studio: the panel's frame, the cell's raw channel values (w·h·4 bytes, tens of MB
+  // at native resolution) and the panel slice they came with. They are shared by
+  // reference between the document and its undo history, and never go through JSON:
+  // a typed array stringifies one key per byte (hundreds of MB, then a RangeError),
+  // a frame does not stringify at all, and none of them can be restored from a file.
+  const LAYOUT_RUNTIME_KEYS = ['iframe', 'raw', 'sliceResult'];
+
+  function _layoutMapData(map) {
+    const data = { ...map };
+    LAYOUT_RUNTIME_KEYS.forEach(key => { delete data[key]; });
+    return data;
+  }
+
+  function _isDocument(value) {
+    return Boolean(value && value.version && value.createdAt && value.layoutMaps);
+  }
+
+  // The document as a file holds it: every cell without its runtime fields.
+  function _portableDocument(doc) {
+    return { ...doc, layoutMaps: (doc.layoutMaps || []).map(_layoutMapData) };
+  }
+
   function _clone(value) {
     if (!value) return value;
-    if (value.version && value.createdAt && value.layoutMaps) {
-      const cloneMaps = value.layoutMaps;
-      const tempDoc = { ...value, layoutMaps: undefined };
-      const clonedDoc = JSON.parse(JSON.stringify(tempDoc));
-      clonedDoc.layoutMaps = cloneMaps.map(m => ({
-        ...JSON.parse(JSON.stringify({ ...m, iframe: undefined, raw: undefined, sliceResult: undefined })),
+    if (_isDocument(value)) {
+      const clonedDoc = JSON.parse(JSON.stringify({ ...value, layoutMaps: undefined }));
+      clonedDoc.layoutMaps = value.layoutMaps.map(m => ({
+        ...JSON.parse(JSON.stringify(_layoutMapData(m))),
         iframe: m.iframe,
         raw: m.raw,
         sliceResult: m.sliceResult
       }));
       return clonedDoc;
+    }
+    // A history entry ({ label, doc }): its document through the branch above.
+    if (typeof value === 'object' && _isDocument(value.doc)) {
+      return { ...JSON.parse(JSON.stringify({ ...value, doc: undefined })), doc: _clone(value.doc) };
     }
     return JSON.parse(JSON.stringify(value));
   }

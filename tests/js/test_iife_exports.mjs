@@ -12,6 +12,7 @@ const FILES = [
   ['js/pages/2d.js', 'App2D'],
   ['js/core/measurement-store.js', 'MeasurementStore'],
   ['js/core/compat.js', 'Compat'],
+  ['js/core/slice-compositor.js', 'SliceCompositor'],
 ];
 
 const stubDocument = { addEventListener() {}, createElement() { return { getContext() { return {}; }, style: {} }; }, getElementById() { return null; }, querySelector() { return null; } };

@@ -270,14 +270,19 @@ assert.deepEqual(plain(plugin.getStudioSliceRange()), { lo: 10, hi: 89 }, '3D mo
 const viewerSrc = readFileSync(path.join(ROOT, 'js/pages/viewer.js'), 'utf8');
 assert.ok(/function _zstackStudioSpec\(\)/.test(viewerSrc), 'viewer builds the Studio plane from the browser');
 assert.ok(/getStudioSliceRange/.test(viewerSrc), 'viewer asks the browser for the slice range');
-assert.ok(/value: \(lo \+ n \/ 2\) \/ z,/.test(viewerSrc), 'plane centred on the slab');
+// The plane is oblique now (faced and turned like the screen, see
+// test_zstack_studio_orientation.mjs): its value is the slab centre c on the +Z face
+// and 1 − c on the −Z one, which puts it at texture depth c either way.
+assert.ok(/const c = \(lo \+ n \/ 2\) \/ z;/.test(viewerSrc) && /value: pose\.back \? 1 - c : c,/.test(viewerSrc), 'plane centred on the slab');
 assert.ok(/slabThickness: n,\s*slabStepNorm: 1 \/ z,\s*projection: n > 1 \? 'mip' : 'single'/.test(viewerSrc), 'one sample per slice, MIP when thicker than one slice');
 assert.ok(/_renderStudioPreviewSlice\(_zstackStudioSpec\(\)\)/.test(viewerSrc), 'Studio opens on that plane (then upgrades to native)');
 assert.ok(/const spec = options\.spec \|\| VolumeSlicer\.getPlaneSpec\(\);/.test(viewerSrc), 'native pass renders the same plane');
 // The bricks of a projected slab come from the slicer's own slab geometry (every
 // layer within halfThickness of the plane) — tests/js/test_native_slice_geometry.mjs
 // checks the selection itself.
-assert.ok(/VolumeSlicer\.planeGeometry\(spec, VolumeViewer\.getPhysicalSize\?\.\(\)\)/.test(viewerSrc), 'native pass reads the slab geometry from the slicer');
+// (Its third argument is the material's sampling space — a stabilised timelapse's
+// warp, tests/js/test_slicer_warp.mjs.)
+assert.ok(/VolumeSlicer\.planeGeometry\(spec, VolumeViewer\.getPhysicalSize\?\.\(\)(, space)?\)/.test(viewerSrc), 'native pass reads the slab geometry from the slicer');
 assert.ok(/const tolerance = geom\.halfThickness \+/.test(viewerSrc), 'native pass loads every brick within the slab half-thickness');
 const slicerSrc = readFileSync(path.join(ROOT, 'js/viewers/volume-slicer.js'), 'utf8');
 assert.ok(/const MAX_SLAB_STEPS = 1024;/.test(slicerSrc) && /for \(int i = 0; i < 1024; i\+\+\)/.test(slicerSrc), 'slicer slab can span a whole stack');

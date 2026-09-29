@@ -327,11 +327,64 @@
           <button class="btn btn-icon btn-solid" id="btn-reset-view" title="Reset view" data-i18n-title="tips.resetViewLow" aria-label="Reset view" data-i18n-aria="tips.resetViewLow">
             <i data-lucide="rotate-ccw"></i>
           </button>
+          <!-- PNG export of the 3D view (viewer.js _bindViewExport): a core feature, hidden
+               in an embedded page, where the Compare page has its own figure export. -->
+          <button type="button" class="btn btn-icon btn-solid" id="btn-export-view" title="Export the 3D view as PNG" data-i18n-title="tips.exportView" aria-label="Export the 3D view as PNG" data-i18n-aria="tips.exportView" aria-haspopup="dialog" aria-expanded="false" aria-controls="view-export-popover">
+            <i data-lucide="image-down"></i>
+          </button>
           <!-- Full workspace reset: view + tools + channels + measurements, and the
                #state= leaves the URL. btn-reset-view above only moves the camera. -->
           <button class="btn btn-icon btn-solid" id="btn-reset-workspace" title="Reset workspace" data-i18n-title="tips.resetWorkspace" aria-label="Reset workspace" data-i18n-aria="tips.resetWorkspace">
             <i data-lucide="eraser"></i>
           </button>
+        </div>
+
+        <!-- 3D view export dialog, opened by btn-export-view (viewer.js _bindViewExport). -->
+        <div class="view-export-popover hidden" id="view-export-popover" role="dialog" aria-modal="false" aria-labelledby="view-export-title">
+          <div class="view-export-header">
+            <strong id="view-export-title" data-i18n="exportView.title">Export 3D view</strong>
+            <button type="button" class="btn btn-icon btn-ghost btn-sm" id="btn-view-export-close" title="Close" data-i18n-title="tips.close" aria-label="Close" data-i18n-aria="tips.close">
+              <i data-lucide="x"></i>
+            </button>
+          </div>
+          <fieldset class="view-export-group">
+            <legend data-i18n="exportView.size">Size</legend>
+            <div class="view-export-choices">
+              <label class="view-export-choice"><input type="radio" name="view-export-size" value="screen" checked><span data-i18n="exportView.sizeScreen">Screen</span></label>
+              <label class="view-export-choice"><input type="radio" name="view-export-size" value="2"><span>2×</span></label>
+              <label class="view-export-choice"><input type="radio" name="view-export-size" value="4"><span>4×</span></label>
+              <label class="view-export-choice"><input type="radio" name="view-export-size" value="custom"><span data-i18n="viewer.custom">Custom</span></label>
+            </div>
+            <label class="view-export-width">
+              <span data-i18n="exportView.width">Width</span>
+              <input type="number" id="view-export-width" class="form-input" min="16" max="16384" step="1" inputmode="numeric">
+              <span>px</span>
+            </label>
+            <div class="view-export-dims" id="view-export-dims" aria-live="polite">—</div>
+            <div class="view-export-note hidden" id="view-export-clamp" data-i18n="exportView.clamped">Reduced to the largest image the browser can hold (16384 px a side, 268 megapixels).</div>
+          </fieldset>
+          <fieldset class="view-export-group">
+            <legend data-i18n="viewer.background">Background</legend>
+            <div class="view-export-choices">
+              <label class="view-export-choice"><input type="radio" name="view-export-bg" value="display" checked><span data-i18n="exportView.bgDisplay">As displayed</span></label>
+              <label class="view-export-choice"><input type="radio" name="view-export-bg" value="transparent"><span data-i18n="viewer.transparent">Transparent</span></label>
+              <label class="view-export-choice"><input type="radio" name="view-export-bg" value="black"><span data-i18n="exportView.bgBlack">Black</span></label>
+              <label class="view-export-choice"><input type="radio" name="view-export-bg" value="white"><span data-i18n="exportView.bgWhite">White</span></label>
+            </div>
+          </fieldset>
+          <fieldset class="view-export-group">
+            <legend data-i18n="exportView.overlays">Overlays</legend>
+            <label class="view-export-check"><input type="checkbox" id="view-export-scalebar" checked><span data-i18n="exportView.scaleBar">Scale bar</span></label>
+            <div class="view-export-note hidden" id="view-export-scalebar-note" data-i18n="exportView.noCalibration">This dataset has no physical calibration: a scale bar would count voxels, not µm.</div>
+          </fieldset>
+          <div class="view-export-status hidden" id="view-export-status" role="status" aria-live="polite">
+            <div class="view-export-status-text" id="view-export-status-text"></div>
+            <div class="view-export-track hidden"><div class="view-export-fill" id="view-export-fill"></div></div>
+          </div>
+          <div class="view-export-actions">
+            <button type="button" class="btn btn-outline btn-sm hidden" id="btn-view-export-cancel" data-i18n="app.cancel">Cancel</button>
+            <button type="button" class="btn btn-primary btn-sm" id="btn-view-export-go"><i data-lucide="download"></i><span data-i18n="viewer.exportPng">Export PNG</span></button>
+          </div>
         </div>
 
         <!-- Quality loading progress (bottom-left) -->
@@ -519,6 +572,7 @@
   <script src="js/components/studio-editor.js?v=20260615-fixed1"></script>
   <script src="js/viewers/volume-grid.js?v=20260615-fixed1"></script>
 
+  <script src="js/core/slice-compositor.js"></script>
   <script src="js/viewers/volume-slicer.js?v=20260615-fixed1"></script>
   <script src="js/viewers/volume-viewer.js?v=20260615-fixed1"></script>
   <script src="js/viewers/tracking-overlay.js?v=20260615-fixed1"></script>

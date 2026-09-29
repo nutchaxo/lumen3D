@@ -1079,7 +1079,9 @@ const CompareApp = (() => {
     canvas.height = canvasH;
     const ctx = canvas.getContext('2d');
     const dark = Theme.isDark?.() !== false;
-    ctx.fillStyle = dark ? '#05070b' : '#ffffff';
+    // Also the backdrop the Studio lays a re-coloured cell on (layoutBackground).
+    const backdrop = dark ? '#05070b' : '#ffffff';
+    ctx.fillStyle = backdrop;
     ctx.fillRect(0, 0, canvasW, canvasH);
 
     const layoutMaps = [];
@@ -1154,6 +1156,7 @@ const CompareApp = (() => {
     // ── 6. Open ──
     StudioEditor.open({
       canvas, width: canvasW, height: canvasH,
+      layoutBackground: backdrop,
       source: 'compare',
       pixelSizeUm: firstPixelSizeUm,
       layoutMaps,

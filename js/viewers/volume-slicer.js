@@ -121,6 +121,13 @@ const VolumeSlicer = (() => {
     // alone, so a caller that only keeps a crop pays only that crop's readback.
     uniform vec4  uvWindow;
 
+    #ifdef VOLUME_WARP
+    // 4D stabilisation, linked by reference from the volume material: cube (object)
+    // space → texture coordinate of the timepoint on screen (volume-viewer.js,
+    // setTimepointTransform). The define follows the volume material's (_syncUniforms).
+    uniform mat4 volumeWarp;
+    #endif
+
     #ifdef FALLBACK_TEX
     // The picture shown wherever a brick the plane crosses is not in the atlas: the
     // Studio's preview of the same plane at the same render size, so the chunks of
@@ -205,12 +212,30 @@ const VolumeSlicer = (() => {
       return all(greaterThanEqual(p, vec3(0.0))) && all(lessThanEqual(p, vec3(1.0)));
     }
 
+    // The texture coordinate of the cube-space point p, by the ray-marcher's own map
+    // (volume-viewer.js, per-sample uvw): p + ½, or volumeWarp·p on a stabilised
+    // timelapse. base (main) IS that cube space: sliceOrigin + pc.x·sliceRight +
+    // pc.y·sliceUp with sliceRight = r ⊙ maxP/p_axis (planeGeometry), i.e. the
+    // physically proportioned plane P = base ⊙ p_axis/maxP expressed in cube units,
+    // the frame the cube geometry is drawn in (world = T + Qc·(s ⊙ base)) and the one
+    // the ray-marcher marches its p in (vOrigin = modelMatrix⁻¹·camera). Unwarped both
+    // read base + ½; warped both read volumeWarp·base — the same voxel for the same
+    // point of the volume on screen, and the in-box test below runs on that texture
+    // coordinate (this timepoint's data), not on base.
+    vec3 texCoord(vec3 p) {
+      #ifdef VOLUME_WARP
+      return (volumeWarp * vec4(p, 1.0)).xyz;
+      #else
+      return p + 0.5;
+      #endif
+    }
+
     // A slab, projected channel by channel on the RAW values — the Fiji convention:
     // project the intensities, then window and colour the projection once (the only
     // order under which "average" is the mean intensity). The samples sit at
-    //   uvw_k = base + (−h + k·δ)·n + ½,   k = 0 … N−1,   h = (N − 1)·δ/2
-    // (N = slabSteps, δ = slabDelta, n = sliceNormal), and only the K of them inside
-    // the volume box count:
+    //   uvw_k = texCoord(base + (−h + k·δ)·n),   k = 0 … N−1,   h = (N − 1)·δ/2
+    // (N = slabSteps, δ = slabDelta, n = sliceNormal, a cube-space step), and only the
+    // K of them inside the volume box count:
     //   MIP (projMode 1)      p_i = max_k s_i(uvw_k)
     //   average (projMode 2)  p_i = (1/K)·Σ_k s_i(uvw_k)
     // hits = K (0: the slab misses the volume at this pixel); missing = one of the
@@ -222,7 +247,7 @@ const VolumeSlicer = (() => {
       float halfSlab = float(slabSteps - 1) * slabDelta * 0.5;
       for (int i = 0; i < 1024; i++) {
         if (i >= slabSteps) break;
-        vec3 uvw = base + (-halfSlab + float(i) * slabDelta) * sliceNormal + 0.5;
+        vec3 uvw = texCoord(base + (-halfSlab + float(i) * slabDelta) * sliceNormal);
         if (!inBox(uvw)) continue;
         bool present;
         vec4 s = rawAt(uvw, present);
@@ -280,7 +305,7 @@ const VolumeSlicer = (() => {
       vec4 raw = vec4(0.0);
       bool missing = false;
       if (projMode == 0 || slabSteps <= 1) {
-        vec3 uvw = base + 0.5;
+        vec3 uvw = texCoord(base);
         if (!inBox(uvw)) { fragColor = vec4(0.0); return; }
         bool present;
         raw = rawAt(uvw, present);
@@ -301,7 +326,7 @@ const VolumeSlicer = (() => {
       fragColor = raw;
       #else
       if (projMode == 0 || slabSteps <= 1) {
-        vec3 uvw = base + 0.5;
+        vec3 uvw = texCoord(base);
         if (!inBox(uvw)) discard;
         vec4 s = colorAt(uvw);
         #ifdef FALLBACK_TEX
@@ -435,6 +460,11 @@ const VolumeSlicer = (() => {
     if (_volumeMaterial?.uniforms) {
       linked.forEach(k => { if (_volumeMaterial.uniforms[k]) u[k] = _volumeMaterial.uniforms[k]; });
     }
+    // The stabilisation warp, by reference too: setTimepointTransform() rewrites the
+    // matrix in place for every timepoint, and the slice follows without a rebuild.
+    // Unlinked (a material without it), texCoord's identity: cube + ½.
+    u.volumeWarp = _volumeMaterial?.uniforms?.volumeWarp
+      || { value: new THREE.Matrix4().makeTranslation(0.5, 0.5, 0.5) };
 
     // Slice-specific uniforms (owned by slicer)
     u.sliceOrigin = { value: new THREE.Vector3() };
@@ -454,6 +484,7 @@ const VolumeSlicer = (() => {
     if (_volumeMaterial?.defines?.ENABLE_SVR) defines.ENABLE_SVR = 1;
     if (_fallback) defines.FALLBACK_TEX = 1;
     if (rawOutput) defines.RAW_OUTPUT = 1;
+    if (samplingSpace(_volumeMaterial)) defines.VOLUME_WARP = 1;
 
     _mat = new THREE.ShaderMaterial({
       glslVersion: THREE.GLSL3,
@@ -505,6 +536,136 @@ const VolumeSlicer = (() => {
   }
 
   /**
+   * How `material` maps the slicer's cube space to its texture: null when it reads
+   * texture = cube + ½ (no VOLUME_WARP define: every volume but a stabilised
+   * timelapse), else the ray-marcher's own state, copied from its uniforms —
+   *   warp             cube → texture of the timepoint on screen (volumeWarp),
+   *   boxMin, boxSize  the display box in cube units (clipBoxMin / clipBoxSize): the
+   *                    enlarged cube geometry, the box the clip sliders act in.
+   * A copy: the next timepoint does not move a space already handed out.
+   */
+  function samplingSpace(material) {
+    const u = material?.uniforms;
+    if (!material?.defines?.VOLUME_WARP || !u?.volumeWarp?.value?.elements) return null;
+    return _normalizeSpace({
+      warp: u.volumeWarp.value.elements,
+      boxMin: u.clipBoxMin?.value || null,
+      boxSize: u.clipBoxSize?.value || null
+    });
+  }
+
+  /** A space as samplingSpace() returns it, from a Matrix4 / 16 numbers (column-major)
+   *  and {x,y,z} / [x,y,z] boxes; null when the warp is missing or singular. */
+  function _normalizeSpace(space) {
+    if (!space || !space.warp) return null;
+    const elements = space.warp.elements || space.warp;
+    if (!elements || elements.length !== 16) return null;
+    const warp = new THREE.Matrix4().fromArray(Array.from(elements, Number));
+    if (!warp.elements.every(Number.isFinite) || !(Math.abs(warp.determinant()) > 1e-12)) return null;
+    const vec = (v, fallback) => {
+      const a = Array.isArray(v) ? v : (v ? [v.x, v.y, v.z] : null);
+      return a && a.length === 3 && a.every(Number.isFinite)
+        ? new THREE.Vector3(a[0], a[1], a[2])
+        : new THREE.Vector3(fallback, fallback, fallback);
+    };
+    const boxSize = vec(space.boxSize, 1);
+    if (!(boxSize.x > 0 && boxSize.y > 0 && boxSize.z > 0)) boxSize.set(1, 1, 1);
+    return { warp, boxMin: vec(space.boxMin, -0.5), boxSize };
+  }
+
+  /** The physical extent per axis as planeGeometry reads it (EDGE-035: a missing or
+   *  non-positive axis counts as 1), and the longest one. */
+  function _physicalAxes(physical) {
+    const px = physical && physical.x > 0 ? physical.x : 1;
+    const py = physical && physical.y > 0 ? physical.y : 1;
+    const pz = physical && physical.z > 0 ? physical.z : 1;
+    return { px, py, pz, maxP: Math.max(px, py, pz) || 1 };
+  }
+
+  /**
+   * Half-side of the square frame, in quad units — the physically proportioned cube
+   * frame P = cube ⊙ p_axis/maxP, one unit = the longest physical axis. EXTENT for a
+   * volume read unwarped. A stabilised one is shown in its display box, which
+   * outgrows the acquisition box by the whole drift of the series; planeGeometry then
+   * centres the frame on the display box and the frame is at least the box's
+   * half-diagonal in P,
+   *   E = max(EXTENT, ½·|boxSize ⊙ p/maxP|),
+   * so the cut of ANY plane through the display box fits in it: for X on the plane,
+   * |X − c′| ≤ |X − c| ≤ E, c the box centre and c′ its orthogonal projection on the
+   * plane (the frame's centre), and the square of half-side E holds the disc of radius
+   * E. One value per dataset, not per plane: a Studio pixel is 2E·maxP/renderRes µm.
+   */
+  function frameExtent(space, physical = null) {
+    const s = space ? _normalizeSpace(space) : null;
+    if (!s) return EXTENT;
+    const { px, py, pz, maxP } = _physicalAxes(physical);
+    const half = 0.5 * Math.hypot(s.boxSize.x * px / maxP, s.boxSize.y * py / maxP, s.boxSize.z * pz / maxP);
+    return Number.isFinite(half) ? Math.max(EXTENT, half) : EXTENT;
+  }
+
+  /**
+   * Where `value` ∈ [0, 1] puts a plane of normal `normal` (unit, in P — the normal
+   * _computePlaneVectors gives, read as a cube-space vector for the origin): the plane
+   * passes through the cube point n·d with
+   *   d = offset + value·slope,   offset = (m·c)/(m·n) − ½·slope,   slope = |B ⊙ m|,
+   * m = normalize(n ⊙ p/maxP) the plane's unit normal in cube space (= planeGeometry's
+   * unwarped texNormal), c and B the centre and size of the box the plane sweeps.
+   * Unwarped (no `space`) that box is the volume, c = 0 and B = 1: d = value − ½,
+   * the plane of every earlier version, returned as { offset: −½, slope: 1, box: null }.
+   * On a stabilised timelapse it is the DISPLAY box (space.boxMin / boxSize), the box
+   * the clip sliders act in, which outgrows the acquisition box by the drift of the
+   * series: an axis-aligned plane (m = n = ±e_k) sits at c_k ± (value − ½)·B_k —
+   * object min_k + value·B_k on +e_k, a clip slider's own mapping — so [0, 1] reaches
+   * every slice of the display box; an oblique one sweeps the same share of it an
+   * unwarped plane sweeps of the volume, m·x from m·c − ½(m·n)·slope to
+   * m·c + ½(m·n)·slope, through the box centre at ½. VolumeViewer places its cut-plane
+   * mesh with the same map, so the plane on screen is the plane the slicer samples.
+   */
+  function _planeSweep(normal, physical, space) {
+    const s = space ? _normalizeSpace(space) : null;
+    const unwarped = { offset: -0.5, slope: 1, box: null };
+    if (!s || !normal) return unwarped;
+    const { px, py, pz, maxP } = _physicalAxes(physical);
+    const m = new THREE.Vector3(normal.x * px / maxP, normal.y * py / maxP, normal.z * pz / maxP);
+    const length = m.length();
+    if (!(length > 0)) return unwarped;
+    m.divideScalar(length);
+    const mn = m.dot(normal);
+    const slope = Math.hypot(s.boxSize.x * m.x, s.boxSize.y * m.y, s.boxSize.z * m.z);
+    const centre = s.boxMin.clone().addScaledVector(s.boxSize, 0.5);
+    const offset = m.dot(centre) / mn - 0.5 * slope;
+    if (!(mn > 1e-9) || !(slope > 0) || !Number.isFinite(offset)) return unwarped;
+    return { offset, slope, box: { centre, size: s.boxSize.clone() } };
+  }
+
+  /** The value a plane spec's position is read from (_computePlaneVectors' rule). */
+  function _planeValue(spec) {
+    return Number.isFinite(+(spec && spec.value)) ? +spec.value : 0.5;
+  }
+
+  /**
+   * The sweep of `spec`'s plane (see _planeSweep) — { offset, slope, box } with
+   * depth = offset + value·slope along the P normal of the spec, box = the display
+   * box ({ centre, size }, cube units) or null unwarped. VolumeViewer reads it to draw
+   * and drag its cut plane where the slicer samples it.
+   */
+  function planeSweep(spec, physical = null, space = null) {
+    return _planeSweep(_computePlaneVectors(spec || {}).normal, physical, space);
+  }
+
+  /** The depth (cube units, along the spec's P normal) its value puts the plane at. */
+  function planeDepth(spec, physical = null, space = null) {
+    const sweep = planeSweep(spec, physical, space);
+    return sweep.offset + _planeValue(spec) * sweep.slope;
+  }
+
+  /** The value that puts `spec`'s plane at `depth` (unclamped): planeDepth's inverse. */
+  function planeValueAtDepth(spec, depth, physical = null, space = null) {
+    const sweep = planeSweep(spec, physical, space);
+    return (Number(depth) - sweep.offset) / sweep.slope;
+  }
+
+  /**
    * The slab the shader samples for `spec`, in normalised texture units ([0,1]³ is
    * the volume). The plane is posed in physical space (yaw/pitch/roll, a position
    * along its normal) and drawn with maxP/p_axis anisotropy so that one unit of the
@@ -516,25 +677,48 @@ const VolumeSlicer = (() => {
    * Everything that has to agree with the shader (the Studio's native pass choosing
    * its bricks) reads the geometry here instead of re-deriving it.
    *
+   * With a sampling `space` (a stabilised timelapse, see samplingSpace) the plane
+   * lives in cube space — the display frame, where the cut plane and the clip ranges
+   * of the 3D view live —, its value sweeping the display box (_planeSweep: the depth
+   * VolumeViewer draws its cut plane at), and the texture is read at W·x (W =
+   * space.warp, affine, linear part L). The texture-space plane is then the image of
+   * the cube one:
+   *   center = W·origin;
+   *   normal ∝ L⁻ᵀ·m, m the cube-space unit normal S⁻¹n/|S⁻¹n| (a normal maps by the
+   *            inverse transpose: m·(x − o) = 0 ⇔ (L⁻ᵀm)·(W x − W o) = 0);
+   *   halfThickness = h·|(L·step)·normal|, h = (steps − 1)·delta/2: the texture
+   *            displacement of the outermost sample, measured along that normal.
+   * The frame is centred on the display box — sliceOrigin moves within the plane to
+   * the orthogonal projection (in P) of the box centre — and its half-side is
+   * frameExtent(space), so the whole display box is framed whatever the drift.
+   *
    * @param {object} spec  plane spec (mode, value, yaw, pitch, roll, slabThickness,
-   *                       slabStepNorm, projection)
+   *                       slabStepNorm, projection). slabStepNorm is a spacing along
+   *                       the normal in cube units (= texture units when unwarped).
    * @param {{x:number,y:number,z:number}|null} physical  physical extent per axis
    *        (µm); a missing or non-positive axis counts as 1 (EDGE-035)
+   * @param {object|null} [space]  samplingSpace() of the material the plane is
+   *        rendered through; null/omitted = texture = cube + ½ (unchanged geometry)
    * @returns {{ origin: THREE.Vector3, center: THREE.Vector3, right: THREE.Vector3,
    *   up: THREE.Vector3, step: THREE.Vector3, normal: THREE.Vector3, steps: number,
-   *   delta: number, projMode: number, projected: boolean, halfThickness: number }}
+   *   delta: number, projMode: number, projected: boolean, halfThickness: number,
+   *   extent: number, warped: boolean }}
    *   origin/right/up/step are the shader's sliceOrigin/sliceRight/sliceUp/
-   *   sliceNormal (cube space, centre at 0); center = origin + 0.5 (texture space);
-   *   normal is the unit normal of the sampled plane in texture space;
-   *   halfThickness is half the slab's extent along that normal (0 for one plane).
+   *   sliceNormal (cube space, centre at 0); center is the plane point the frame is
+   *   centred on, in texture space (origin + 0.5 unwarped); normal is the unit normal
+   *   of the sampled plane in texture space; halfThickness is half the slab's extent
+   *   along that normal (0 for one plane); extent is the frame's half-side (quad
+   *   units, the shader's sliceExtent).
    */
-  function planeGeometry(spec, physical = null) {
+  function planeGeometry(spec, physical = null, space = null) {
     const { origin, right, up, normal } = _computePlaneVectors(spec || {});
     const px = physical && physical.x > 0 ? physical.x : 1;
     const py = physical && physical.y > 0 ? physical.y : 1;
     const pz = physical && physical.z > 0 ? physical.z : 1;
     const maxP = Math.max(px, py, pz) || 1;
     const scale = new THREE.Vector3(maxP / px, maxP / py, maxP / pz);
+    const rightP = right.clone();
+    const upP = up.clone();
     right.multiply(scale);
     up.multiply(scale);
     const step = normal.clone().multiply(scale);
@@ -554,33 +738,97 @@ const VolumeSlicer = (() => {
       delta = stepNorm / (step.length() || 1);
     }
     const projected = steps > 1 && projMode !== 0;
-    const halfThickness = projected ? ((steps - 1) * delta * 0.5) / texNormalLength : 0;
+    const warped = space ? _normalizeSpace(space) : null;
+    if (!warped) {
+      const halfThickness = projected ? ((steps - 1) * delta * 0.5) / texNormalLength : 0;
+      return {
+        origin,
+        center: origin.clone().addScalar(0.5),
+        right,
+        up,
+        step,
+        normal: texNormal,
+        steps,
+        delta,
+        projMode,
+        projected,
+        halfThickness,
+        extent: EXTENT,
+        warped: false
+      };
+    }
+
+    // The plane's position: value sweeps the display box (_planeSweep), where the clip
+    // sliders act and the cut plane on screen moves — not the acquisition box, whose
+    // [−½, ½] along the normal leaves the drifted part of a late timepoint unreachable.
+    const sweep = _planeSweep(normal, physical, warped);
+    origin.copy(normal).multiplyScalar(sweep.offset + _planeValue(spec) * sweep.slope);
+    // The frame's centre: the display box centre c projected (in P, where rightP /
+    // upP / normal are orthonormal) on the plane — origin + a·right + b·up in cube
+    // units with a, b the in-plane components of c_P − origin_P (x_P = x / scale).
+    const c = warped.boxMin.clone().addScaledVector(warped.boxSize, 0.5);
+    const dP = new THREE.Vector3((c.x - origin.x) / scale.x, (c.y - origin.y) / scale.y, (c.z - origin.z) / scale.z);
+    const framed = origin.clone().addScaledVector(right, dP.dot(rightP)).addScaledVector(up, dP.dot(upP));
+    const linear = new THREE.Matrix3().setFromMatrix4(warped.warp);
+    const normalTex = texNormal.clone().applyMatrix3(linear.clone().invert().transpose());
+    const normalTexLength = normalTex.length() || 1;
+    normalTex.divideScalar(normalTexLength);
+    const stepTex = step.clone().applyMatrix3(linear);
     return {
-      origin,
-      center: origin.clone().addScalar(0.5),
+      origin: framed,
+      center: framed.clone().applyMatrix4(warped.warp),
       right,
       up,
       step,
-      normal: texNormal,
+      normal: normalTex,
       steps,
       delta,
       projMode,
       projected,
-      halfThickness
+      halfThickness: projected ? (steps - 1) * delta * 0.5 * Math.abs(stepTex.dot(normalTex)) : 0,
+      extent: frameExtent(warped, physical),
+      warped: true
     };
+  }
+
+  function _physicalSize() {
+    return (typeof VolumeViewer !== 'undefined' && VolumeViewer.getPhysicalSize)
+      ? VolumeViewer.getPhysicalSize()
+      : null;
+  }
+
+  // The VOLUME_WARP define and the linked volumeWarp uniform follow the source
+  // material's: setTimepointTransform() switches the define on and off on the SAME
+  // material object (the stabilisation toggle), which updateMaterial() never hears of.
+  // three.js caches programs by their defines, so a toggle back reuses the program.
+  function _syncWarp(space) {
+    const src = _volumeMaterial?.uniforms?.volumeWarp;
+    let changed = false;
+    if (src && _mat.uniforms.volumeWarp !== src) {
+      _mat.uniforms.volumeWarp = src;
+      changed = true;
+    }
+    const want = Boolean(space);
+    if (want !== Boolean(_mat.defines?.VOLUME_WARP)) {
+      _mat.defines = _mat.defines || {};
+      if (want) _mat.defines.VOLUME_WARP = 1;
+      else delete _mat.defines.VOLUME_WARP;
+      changed = true;
+    }
+    if (changed) _mat.needsUpdate = true;
   }
 
   function _syncUniforms() {
     if (!_mat) return;
     const u = _mat.uniforms;
-    const physical = (typeof VolumeViewer !== 'undefined' && VolumeViewer.getPhysicalSize)
-      ? VolumeViewer.getPhysicalSize()
-      : null;
-    const g = planeGeometry(_spec, physical);
+    const space = samplingSpace(_volumeMaterial);
+    _syncWarp(space);
+    const g = planeGeometry(_spec, _physicalSize(), space);
     u.sliceOrigin.value.copy(g.origin);
     u.sliceRight.value.copy(g.right);
     u.sliceUp.value.copy(g.up);
     u.sliceNormal.value.copy(g.step);
+    u.sliceExtent.value = g.extent;
     u.projMode.value = g.projMode;
     u.slabSteps.value = g.steps;
     u.slabDelta.value = g.delta;
@@ -738,7 +986,7 @@ const VolumeSlicer = (() => {
   }
 
   /**
-   * Renders the plane at `size` px (a square frame, 2·EXTENT cube units across it) and
+   * Renders the plane at `size` px (a square frame, getPlaneExtentUnits() across it) and
    * returns the canvas — module-owned, overwritten by the next render, so a caller
    * copies what it keeps. `window` = {x, y, w, h} (pixels of that frame, y down)
    * renders and reads back that rectangle alone, at the same scale: the same pixels
@@ -854,7 +1102,10 @@ const VolumeSlicer = (() => {
       const fb = options?.fallback;
       const rect = fb?.rect;
       const hasFallback = Boolean(fb?.canvas && rect && Number.isFinite(rect.renderRes) && rect.renderRes > 0);
-      if (_foreign && (_foreign.source !== material || _foreign.hasFallback !== hasFallback)) _releaseForeignColour();
+      // The cached program is keyed by its source, its fallback AND its warp (a
+      // stabilised timelapse samples through VOLUME_WARP; the toggle flips it).
+      const warp = Boolean(samplingSpace(material));
+      if (_foreign && (_foreign.source !== material || _foreign.hasFallback !== hasFallback || _foreign.warp !== warp)) _releaseForeignColour();
       if (hasFallback) {
         if (!_foreign?.texture || _foreign.canvas !== fb.canvas) {
           _foreign?.texture?.dispose?.();
@@ -889,7 +1140,7 @@ const VolumeSlicer = (() => {
         }
       } else {
         _buildMaterial();
-        _foreign = { ..._foreign, source: material, hasFallback, mat: _mat };
+        _foreign = { ..._foreign, source: material, hasFallback, warp, mat: _mat };
       }
       if (_scene?.children?.[0]) _scene.children[0].material = _mat;
       if (spec) _spec = { ..._spec, ...spec };
@@ -989,7 +1240,8 @@ const VolumeSlicer = (() => {
       const fb = options?.fallbackRaw;
       const rect = fb?.rect;
       const hasFallback = Boolean(_isRawPicture(fb?.raw) && rect && Number.isFinite(rect.renderRes) && rect.renderRes > 0);
-      if (_foreignRaw && (_foreignRaw.source !== material || _foreignRaw.hasFallback !== hasFallback)) _releaseForeignRaw();
+      const warp = Boolean(samplingSpace(material));
+      if (_foreignRaw && (_foreignRaw.source !== material || _foreignRaw.hasFallback !== hasFallback || _foreignRaw.warp !== warp)) _releaseForeignRaw();
       if (hasFallback) {
         if (!_foreignRaw?.texture || _foreignRaw.fallbackData !== fb.raw.data) {
           _foreignRaw?.texture?.dispose?.();
@@ -1024,7 +1276,7 @@ const VolumeSlicer = (() => {
         }
       } else {
         _buildMaterial(true);
-        _foreignRaw = { ..._foreignRaw, source: material, hasFallback, mat: _mat };
+        _foreignRaw = { ..._foreignRaw, source: material, hasFallback, warp, mat: _mat };
       }
       const only = Array.isArray(options?.fallbackChannels) ? options.fallbackChannels : [];
       _mat.uniforms.fallbackChannels.value.set(...[0, 1, 2, 3].map(c => (hasFallback && only.includes(c) ? 1 : 0)));
@@ -1284,9 +1536,17 @@ const VolumeSlicer = (() => {
     getPreviewResolution,
     flushPreview,
     onVisibleChange,
-    /** Cube units drawn across the preview's width (= height): 2 × EXTENT. */
-    getPlaneExtentUnits: () => 2 * EXTENT,
+    /** Quad units drawn across the frame's width (= height): 2 × frameExtent — 2 ×
+     *  EXTENT unless `material` (default: the linked volume material) samples a
+     *  stabilised timelapse, whose display box can need a larger frame. */
+    getPlaneExtentUnits: (material) => 2 * frameExtent(
+      samplingSpace(material === undefined ? _volumeMaterial : material), _physicalSize()),
     planeGeometry,
+    planeSweep,
+    planeDepth,
+    planeValueAtDepth,
+    samplingSpace,
+    frameExtent,
     renderHighRes,
     renderWithMaterial,
     renderRawWithMaterial,

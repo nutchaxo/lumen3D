@@ -582,6 +582,8 @@
     "errGeneric": "Échec de l'export : {message}"
   },
   "studio": {
+    "importOtherFigure": "Ce fichier Studio a été enregistré pour une autre figure : ses annotations ont été importées, mais ses réglages de canaux n'ont été appliqués que là où la figure correspond.",
+    "importChannelsKept": "Les annotations ont été importées. Cette image n'a pas de valeurs brutes de canaux à recolorer : elle garde ses réglages de canaux.",
     "exportJsonFailed": "Le JSON du Studio n'a pas pu être écrit.",
     "propRotation": "Rotation",
     "resetRotation": "Réinitialiser la rotation",

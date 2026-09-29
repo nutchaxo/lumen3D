@@ -1576,7 +1576,7 @@ const VolumeViewer = (() => {
 
   function _obliqueSpecKeepingCenter(angles = {}) {
     const currentNormal = _normalForPlaneSpec(_planeSpec);
-    const center = currentNormal.clone().multiplyScalar((_planeSpec.value ?? 0.5) - 0.5);
+    const center = currentNormal.clone().multiplyScalar(_planeDepth(_planeSpec));
     const draft = {
       ..._planeSpec,
       mode: 'oblique',
@@ -1585,7 +1585,7 @@ const VolumeViewer = (() => {
       roll: Number.isFinite(angles.roll) ? angles.roll : (_planeSpec.roll || 0)
     };
     const nextNormal = _normalForPlaneSpec(draft);
-    const nextValue = THREE.MathUtils.clamp(center.dot(nextNormal) + 0.5, 0, 1);
+    const nextValue = THREE.MathUtils.clamp(_planeValueAtDepth(draft, center.dot(nextNormal)), 0, 1);
     return {
       yaw: draft.yaw,
       pitch: draft.pitch,
@@ -2165,6 +2165,7 @@ const VolumeViewer = (() => {
       material.uniforms.clipBoxMin.value.copy(lo);
       material.uniforms.clipBoxSize.value.copy(size);
     }
+    if (_cutPlaneMesh?.visible) _syncCutPlaneToOrbit();
     _scheduleFrame();
   }
 
@@ -2179,6 +2180,8 @@ const VolumeViewer = (() => {
         delete material.defines.VOLUME_WARP;
         material.needsUpdate = true;
         if (typeof VolumeGrid !== 'undefined') VolumeGrid.rebuild?.();
+        // The cut plane's value sweeps the display box only while warped (_planeSweep).
+        if (_cutPlaneMesh?.visible) _syncCutPlaneToOrbit();
         _scheduleFrame();
       }
       return false;
@@ -2201,6 +2204,7 @@ const VolumeViewer = (() => {
       material.defines.VOLUME_WARP = 1;
       material.needsUpdate = true;
       if (typeof VolumeGrid !== 'undefined') VolumeGrid.rebuild?.();
+      if (_cutPlaneMesh?.visible) _syncCutPlaneToOrbit();
     }
     if (_transitionMaterial?.uniforms?.volumeWarp) {
       _transitionMaterial.uniforms.volumeWarp.value.copy(material.uniforms.volumeWarp.value);
@@ -3296,7 +3300,8 @@ const VolumeViewer = (() => {
    *   The cube draws L at world T + Qc·(s ⊙ L), s = cube.scale (per-axis stretch:
    *   the physical proportions, Z times the display scale), and both the
    *   ray-marcher (its sample position + ½) and the slicer (base + ½) read the
-   *   texture at L + ½, through the same atlas lookup — no flip on either side.
+   *   texture at L + ½ (at volumeWarp·L, both, on a stabilised timelapse), through
+   *   the same atlas lookup — no flip on either side.
    *   A world direction d is thus the local direction s⁻¹ ⊙ Qc⁻¹·d, the
    *   P direction ∝ (p / s) ⊙ Qc⁻¹·d; a normal maps through the inverse
    *   transpose, ∝ (s / p) ⊙ Qc⁻¹·n. A negative scale component (a mirror) is
@@ -3868,7 +3873,11 @@ const VolumeViewer = (() => {
       startClientY: clientY,
       axisX: axis.x / axisLength,
       axisY: axis.y / axisLength,
-      pixelsPerUnit: axisLength
+      pixelsPerUnit: axisLength,
+      // Depth per unit of value: 1, or the display box's extent along the normal on a
+      // stabilised timelapse (the value sweeps that box), so the plane keeps pace with
+      // the pointer either way.
+      depthPerValue: _planeSweep(_planeSpec)?.slope || 1
     };
   }
 
@@ -3877,7 +3886,7 @@ const VolumeViewer = (() => {
     const deltaX = clientX - state.startClientX;
     const deltaY = clientY - state.startClientY;
     const travel = (deltaX * state.axisX) + (deltaY * state.axisY);
-    const next = state.startValue + (travel / Math.max(8, state.pixelsPerUnit));
+    const next = state.startValue + (travel / Math.max(8, state.pixelsPerUnit)) / (state.depthPerValue || 1);
     setPlaneSpec({ value: next, visible: true });
   }
 
@@ -3936,9 +3945,21 @@ const VolumeViewer = (() => {
     const localOrientation = _orientationForPlaneSpec(_planeSpec);
     const localNormal = _normalForPlaneSpec(_planeSpec);
 
-    // Local position along normal, scaled by cube dimensions
-    const localPos = localNormal.clone().multiplyScalar(_planeSpec.value - 0.5);
+    // Local position along normal, scaled by cube dimensions. The depth is the
+    // slicer's (VolumeSlicer.planeSweep): value − ½, or on a stabilised timelapse the
+    // display box the value sweeps.
+    const sweep = _planeSweep(_planeSpec);
+    const localPos = localNormal.clone().multiplyScalar(_planeDepth(_planeSpec, sweep));
     localPos.multiply(cube.scale);
+    // The display box is larger than the volume and off its centre: the plane is drawn
+    // around the box centre's orthogonal projection on it (in this cube-rotated frame,
+    // where the plane's normal is localNormal), as the slicer frames it.
+    let boxScale = null;
+    if (sweep) {
+      const toCentre = sweep.box.centre.clone().multiply(cube.scale).sub(localPos);
+      localPos.add(toCentre.addScaledVector(localNormal, -toCentre.dot(localNormal)));
+      boxScale = sweep.box.size.clone().multiply(cube.scale);
+    }
 
     // Cube's world rotation (from orbit controls)
     const cubeRot = cube.quaternion;
@@ -3950,9 +3971,11 @@ const VolumeViewer = (() => {
     const worldPos = localPos.applyQuaternion(cubeRot).add(cube.position);
     _cutPlaneMesh.position.copy(worldPos);
 
-    // Scale: use the cube's max axis so the plane covers the volume
+    // Scale: use the cube's max axis so the plane covers the volume (the display box's)
     const s = _planeSpec.mode === 'oblique' ? 1.45 : 1.04;
-    const maxScale = Math.max(cube.scale.x, cube.scale.y, cube.scale.z);
+    const maxScale = boxScale
+      ? Math.max(boxScale.x, boxScale.y, boxScale.z)
+      : Math.max(cube.scale.x, cube.scale.y, cube.scale.z);
     _cutPlaneMesh.scale.set(s * maxScale, s * maxScale, 1);
 
     _updateCutSlabFaces();
@@ -4098,6 +4121,32 @@ const VolumeViewer = (() => {
     return 'xy';
   }
 
+  /**
+   * How the plane's value maps to a depth along its normal (object units), from the
+   * slicer that samples the plane (VolumeSlicer.planeSweep) so the mesh on screen and
+   * the slice agree: null unwarped (depth = value − ½), else { offset, slope, box } —
+   * on a stabilised timelapse the value sweeps the display box, the box the clip
+   * sliders act in, instead of the acquisition box it outgrows.
+   */
+  function _planeSweep(spec = _planeSpec) {
+    if (typeof VolumeSlicer === 'undefined' || !VolumeSlicer.planeSweep || !VolumeSlicer.samplingSpace) return null;
+    const space = VolumeSlicer.samplingSpace(material);
+    if (!space) return null;
+    const sweep = VolumeSlicer.planeSweep(spec, getPhysicalSize(), space);
+    return sweep && sweep.box ? sweep : null;
+  }
+
+  function _planeDepth(spec = _planeSpec, sweep = _planeSweep(spec)) {
+    const value = Number.isFinite(Number(spec.value)) ? Number(spec.value) : 0.5;
+    return sweep ? sweep.offset + value * sweep.slope : value - 0.5;
+  }
+
+  /** The value that puts `spec`'s plane at `depth` (unclamped): _planeDepth's inverse. */
+  function _planeValueAtDepth(spec, depth) {
+    const sweep = _planeSweep(spec);
+    return sweep ? (depth - sweep.offset) / sweep.slope : depth + 0.5;
+  }
+
   function _normalForPlaneSpec(spec = _planeSpec) {
     if (spec.mode === 'yz') return new THREE.Vector3(1, 0, 0);
     if (spec.mode === 'xz') return new THREE.Vector3(0, 1, 0);
@@ -4158,12 +4207,16 @@ const VolumeViewer = (() => {
 
   function placePlaneAtPoint(point, options = {}) {
     if (!point?.normalized) return;
+    // point.normalized is the object point + ½; the value that puts the plane through
+    // it is read with the plane's own depth map (the coordinate itself unwarped).
+    const sweep = _planeSweep(_planeSpec);
+    const valueAt = (coordinate) => (sweep ? (coordinate - 0.5 - sweep.offset) / sweep.slope : coordinate);
     if (_planeSpec.mode === 'yz') {
-      setPlaneSpec({ value: point.normalized.x, visible: options.visible ?? true });
+      setPlaneSpec({ value: valueAt(point.normalized.x), visible: options.visible ?? true });
       return;
     }
     if (_planeSpec.mode === 'xz') {
-      setPlaneSpec({ value: point.normalized.y, visible: options.visible ?? true });
+      setPlaneSpec({ value: valueAt(point.normalized.y), visible: options.visible ?? true });
       return;
     }
     if (_planeSpec.mode === 'oblique') {
@@ -4173,11 +4226,11 @@ const VolumeViewer = (() => {
         point.normalized.y - 0.5,
         point.normalized.z - 0.5
       );
-      const alongNormal = THREE.MathUtils.clamp(local.dot(normal) + 0.5, 0, 1);
+      const alongNormal = THREE.MathUtils.clamp(_planeValueAtDepth(_planeSpec, local.dot(normal)), 0, 1);
       setPlaneSpec({ value: alongNormal, visible: options.visible ?? true });
       return;
     }
-    setPlaneSpec({ value: point.normalized.z, visible: options.visible ?? true });
+    setPlaneSpec({ value: valueAt(point.normalized.z), visible: options.visible ?? true });
   }
 
   function pickVolumePoint(clientX, clientY) {
@@ -5420,6 +5473,18 @@ const VolumeViewer = (() => {
       }
       const lo = u.clipMin.value, hi = u.clipMax.value;
       return cx >= lo.x && cx <= hi.x && cy >= lo.y && cy <= hi.y && cz >= lo.z && cz <= hi.z;
+    },
+    /** The object-space box the normalised clip ranges act in, as the shader reads
+     *  it: clipCoord ∈ [0,1]³ ↔ object min + clipCoord ⊙ size — the display box
+     *  (clipBoxMin/Size) under VOLUME_WARP, the unit box (p + ½) otherwise. A range
+     *  [a, b] of setClipRange('z', a, b) is thus the object slab
+     *  min.z + [a, b]·size.z. Copies; `warped` mirrors the shader's define. */
+    getClipSpace: () => {
+      const u = material?.uniforms;
+      if (material?.defines?.VOLUME_WARP && u?.clipBoxMin && u?.clipBoxSize) {
+        return { warped: true, min: u.clipBoxMin.value.clone(), size: u.clipBoxSize.value.clone() };
+      }
+      return { warped: false, min: new THREE.Vector3(-0.5, -0.5, -0.5), size: new THREE.Vector3(1, 1, 1) };
     },
     triggerRender: _scheduleFrame,
     setOnPostRender: (cb) => {

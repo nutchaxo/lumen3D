@@ -412,7 +412,7 @@ const viewerState = [
 {
   const v = read('js/pages/viewer.js');
   const preview = v.slice(v.indexOf('function _renderStudioPreviewSlice('), v.indexOf('function _nativeLabel('));
-  assert.ok(/raw: _studioRawFor\(spec, renderRes, cropRect\)/.test(preview), 'the preview carries its raw values (same crop)');
+  assert.ok(/raw: _studioRawFor\(spec, renderRes, cropRect, canvas\)/.test(preview), 'the preview carries its raw values (same crop; the colour picture for a slab footprint)');
   const rawFor = v.slice(v.indexOf('function _studioRawFor('), v.indexOf('function _studioRawFor(') + 900);
   assert.ok(/_sliceWindowForRect\(cropRect, renderRes\)/.test(rawFor) && /renderRawWithMaterial\(material, spec, renderRes, \{ window: win \}\)/.test(rawFor), 'raw window = the colour crop');
   const upgrade = v.slice(v.indexOf('async function _upgradeStudioSliceToNative('), v.indexOf('function _drawScaleBar('));
@@ -422,7 +422,7 @@ const viewerState = [
   assert.ok(/filter\(c => !wantedChannels\.includes\(c\)\)/.test(native), 'channels not downloaded come from the preview');
   assert.ok(/VolumeSlicer\.releaseForeign\?\.\(\);/.test(native), 'the throwaway material and target are released at the end');
   const current = v.slice(v.indexOf('function getCurrentSliceResult('), v.indexOf('function getCurrentSliceResult(') + 4000);
-  assert.equal((current.match(/raw: withRaw \? _studioRawFor\(spec, renderRes, cropRect\) : null/g) || []).length, 2, 'the Compare Studio gets raw values (z-stack and slice)');
+  assert.equal((current.match(/raw: withRaw \? _studioRawFor\(spec, renderRes, cropRect, canvas\) : null/g) || []).length, 2, 'the Compare Studio gets raw values (z-stack and slice)');
   assert.ok(/getCurrentSliceResult\(\{ raw: false \}\)/.test(v), 'a thumbnail skips the raw render');
 
   const viewerHtml = read('viewer.html');

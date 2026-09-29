@@ -280,7 +280,9 @@ assert.ok(/const spec = options\.spec \|\| VolumeSlicer\.getPlaneSpec\(\);/.test
 // The bricks of a projected slab come from the slicer's own slab geometry (every
 // layer within halfThickness of the plane) — tests/js/test_native_slice_geometry.mjs
 // checks the selection itself.
-assert.ok(/VolumeSlicer\.planeGeometry\(spec, VolumeViewer\.getPhysicalSize\?\.\(\)\)/.test(viewerSrc), 'native pass reads the slab geometry from the slicer');
+// (Its third argument is the material's sampling space — a stabilised timelapse's
+// warp, tests/js/test_slicer_warp.mjs.)
+assert.ok(/VolumeSlicer\.planeGeometry\(spec, VolumeViewer\.getPhysicalSize\?\.\(\)(, space)?\)/.test(viewerSrc), 'native pass reads the slab geometry from the slicer');
 assert.ok(/const tolerance = geom\.halfThickness \+/.test(viewerSrc), 'native pass loads every brick within the slab half-thickness');
 const slicerSrc = readFileSync(path.join(ROOT, 'js/viewers/volume-slicer.js'), 'utf8');
 assert.ok(/const MAX_SLAB_STEPS = 1024;/.test(slicerSrc) && /for \(int i = 0; i < 1024; i\+\+\)/.test(slicerSrc), 'slicer slab can span a whole stack');

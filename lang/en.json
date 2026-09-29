@@ -582,6 +582,8 @@
     "errGeneric": "Export failed: {message}"
   },
   "studio": {
+    "importOtherFigure": "This Studio file was saved for another figure: its annotations were imported, but its channel settings were applied only where the figure matches.",
+    "importChannelsKept": "The annotations were imported. This picture has no raw channel values to recolour, so it keeps its channel settings.",
     "exportJsonFailed": "The Studio JSON could not be written.",
     "propRotation": "Rotation",
     "resetRotation": "Reset rotation",

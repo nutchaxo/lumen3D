@@ -175,7 +175,8 @@ function randomRaw(w, h, seed, zeroFraction = 0.2) {
   assert.ok(/if \(length\(s\.rgb\) < 0\.005\) discard;/.test(slicer), 'slicer discards below 0.005');
   assert.ok(/const VISIBLE_MIN = 0\.005;/.test(compositor) && /if \(uAlphaMode == 0 && length\(c\) < \$\{VISIBLE_MIN\.toFixed\(3\)\}\)/.test(compositor), 'compositor uses the same threshold (one plane)');
   assert.ok(/if \(uAlphaMode == 2 && v\.a == 0\.0\) \{ outColor = vec4\(0\.0\); return; \}/.test(compositor), 'a coverage raw leaves the outside of the volume transparent');
-  assert.ok(/gl\.uniform1i\(_loc\.alphaMode, _alphaMode\(raw, options\)\)/.test(compositor), 'the GPU path reads the same alpha mode as the CPU path');
+  const gpu = compositor.slice(compositor.indexOf('function _composeGpu('), compositor.indexOf('function compose('));
+  assert.ok(/const alphaMode = _alphaMode\(raw, options\);/.test(gpu) && /gl\.uniform1i\(_loc\.alphaMode, alphaMode\)/.test(gpu), 'the GPU path reads the same alpha mode as the CPU path');
   for (const [ch, comp] of [[0, 'r'], [1, 'g'], [2, 'b'], [3, 'a']]) {
     assert.ok(new RegExp(`en${ch}==1 && numChannels>${ch}\\) c \\+= channelValue\\(v\\.${comp},`).test(slicer), `slicer channel ${ch} reads v.${comp}`);
     assert.ok(new RegExp(`uNumChannels > ${ch}\\) c \\+= channelValue\\(v\\.${comp},`).test(compositor), `compositor channel ${ch} reads v.${comp}`);
@@ -385,6 +386,363 @@ function refSlabPixel(bytes, state, numChannels) {
   assert.deepEqual([...SC.composePixels({ data: new Uint8Array(exampleBytes), width: 1, height: 1, channels: 1, projected: true }, states[0])],
     [255, 255, 255, 255], 'average intensity, then the window');
   console.log('one slab convention (raw projection, then colour): OK');
+}
+
+// ── 10. Four-channel slabs: the footprint comes as raw.coverageMask ────────────
+// A four-channel volume has no spare channel for the footprint; the viewer hands the
+// colour picture's alpha as a w·h byte mask. Off the mask: (0,0,0,0) whatever the
+// channels hold; on it: the slab colour, opaque black where nothing shows.
+function footprintMask(w, h, seed) {
+  // A turned square (a rotated z-stack slab inside its bounding crop) plus the crop's
+  // padding: 0 there, 255 inside.
+  const mask = new Uint8Array(w * h);
+  const cx = (w - 1) / 2; const cy = (h - 1) / 2;
+  const a = 0.6 + (seed % 5) * 0.1;
+  const half = Math.min(w, h) * 0.34;
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const u = (x - cx) * Math.cos(a) + (y - cy) * Math.sin(a);
+      const v = -(x - cx) * Math.sin(a) + (y - cy) * Math.cos(a);
+      if (Math.abs(u) <= half && Math.abs(v) <= half) mask[y * w + x] = 255;
+    }
+  }
+  return mask;
+}
+const SLAB_STATE = [
+  { color: '#00FF00', min: 0.05, max: 0.6, gamma: 1.3, opacity: 0.8, enabled: true },
+  { color: '#FF00FF', min: 0, max: 1, gamma: 1, opacity: 0.7, enabled: true },
+  { color: '#0088FF', min: 0.2, max: 0.9, gamma: 0.6, opacity: 1, enabled: true },
+  { color: '#FFFFFF', min: 0.1, max: 1, gamma: 1, opacity: 1, enabled: true },
+];
+{
+  const w = 29; const h = 21;
+  const mask = footprintMask(w, h, 3);
+  const raw = { ...randomRaw(w, h, 11, 0.35), channels: 4, projected: true, coverage: false, coverageMask: mask };
+  // Signal off the footprint must not show (the colour path discarded those pixels).
+  raw.data.set([250, 250, 250, 250], 0);
+  assert.equal(mask[0], 0, 'the corner is off the footprint');
+  const out = SC.composePixels(raw, SLAB_STATE);
+  assert.deepEqual([...SC.composePixels(raw, SLAB_STATE, { lut: false })], [...out], 'LUT = direct with a mask');
+  let on = 0; let off = 0; let blackOn = 0;
+  for (let i = 0; i < w * h; i++) {
+    const got = [...out.subarray(i * 4, i * 4 + 4)];
+    if (mask[i] === 0) {
+      assert.deepEqual(got, [0, 0, 0, 0], `pixel ${i}: off the footprint, transparent`);
+      off++;
+    } else {
+      const px = raw.data.subarray(i * 4, i * 4 + 4);
+      const want = refSlabPixel(px, SLAB_STATE, 4);
+      if (want.some((v, k) => v !== got[k])) assert.fail(`masked slab pixel ${i} = ${got}, the slab shader gives ${want}`);
+      if (!px[0] && !px[1] && !px[2] && !px[3]) { assert.deepEqual(got, [0, 0, 0, 255], 'on the footprint with no signal: opaque black'); blackOn++; }
+      on++;
+    }
+  }
+  assert.ok(on > 0 && off > 0 && blackOn > 0, `the sample has both sides and empty pixels on the footprint (${on}/${off}/${blackOn})`);
+  // Every channel is coloured (the mask is not a channel): channel 3 shows.
+  const white = { data: new Uint8Array([0, 0, 0, 255]), width: 1, height: 1, channels: 4, projected: true, coverageMask: new Uint8Array([255]) };
+  assert.deepEqual([...SC.composePixels(white, SLAB_STATE)], [255, 255, 255, 255], 'channel 3 of a masked raw is data');
+
+  // Without a mask (or a mask of another frame, or options.coverageMask: null) the
+  // slab is opaque over its whole crop, as before.
+  const opaque = SC.composePixels({ ...raw, coverageMask: undefined }, SLAB_STATE);
+  for (let i = 0; i < w * h; i++) assert.equal(opaque[i * 4 + 3], 255, 'no mask: opaque everywhere');
+  assert.deepEqual([...SC.composePixels({ ...raw, coverageMask: new Uint8Array(w * h + 1) }, SLAB_STATE)], [...opaque], 'a mask of another size is ignored');
+  assert.deepEqual([...SC.composePixels({ ...raw, coverageMask: new Uint16Array(w * h) }, SLAB_STATE)], [...opaque], 'a mask that is not bytes is ignored');
+  assert.deepEqual([...SC.composePixels(raw, SLAB_STATE, { coverageMask: null })], [...opaque], 'options.coverageMask: null ignores it');
+  assert.deepEqual([...SC.composePixels({ ...raw, coverageMask: undefined }, SLAB_STATE, { coverageMask: mask })], [...out], 'options.coverageMask supplies it');
+  assert.ok(SC.isCoverageMask(mask, w, h) && !SC.isCoverageMask(mask, w, h + 1) && !SC.isCoverageMask(null, w, h), 'isCoverageMask: exactly w·h bytes');
+
+  // One plane keeps the 0.005 threshold: the mask is a slab's, never read there.
+  const plane = SC.composePixels({ ...raw, projected: false }, SLAB_STATE);
+  for (let i = 0; i < w * h; i++) {
+    const want = refPixel(raw.data.subarray(i * 4, i * 4 + 4), SLAB_STATE, 4);
+    const got = [...plane.subarray(i * 4, i * 4 + 4)];
+    if (want.some((v, k) => v !== got[k])) assert.fail(`single plane with a stray mask, pixel ${i} = ${got}, the shader gives ${want}`);
+  }
+  // A coverage raw (fewer than four channels) keeps its channel-3 footprint: the mask
+  // is not consulted, the footprint byte decides.
+  const raw3 = { ...randomRaw(w, h, 21, 0.3), channels: 3, projected: true, coverage: true, coverageMask: new Uint8Array(w * h) };
+  for (let i = 0; i < w * h; i++) raw3.data[i * 4 + 3] = mask[i];
+  const out3 = SC.composePixels(raw3, SLAB_STATE);
+  for (let i = 0; i < w * h; i++) {
+    const got = [...out3.subarray(i * 4, i * 4 + 4)];
+    if (mask[i] === 0) assert.deepEqual(got, [0, 0, 0, 0], 'coverage raw: off the footprint byte, transparent');
+    else {
+      const want = refSlabPixel(raw3.data.subarray(i * 4, i * 4 + 4), SLAB_STATE, 3);
+      if (want.some((v, k) => v !== got[k])) assert.fail(`coverage raw pixel ${i} = ${got}, expected ${want} (the all-zero mask must be ignored)`);
+    }
+  }
+
+  // Histograms: pixels off the mask are left out even when their channels are not 0.
+  const hist = SC.histograms(raw, 256);
+  assert.equal(hist.length, 4, 'four channels histogrammed');
+  let expected = 0;
+  let expectedAll = 0;
+  for (let i = 0; i < w * h; i++) {
+    const any = raw.data[i * 4] | raw.data[i * 4 + 1] | raw.data[i * 4 + 2] | raw.data[i * 4 + 3];
+    if (any) expectedAll++;
+    if (any && mask[i]) expected++;
+  }
+  assert.ok(expected < expectedAll, 'the sample holds signal off the footprint');
+  assert.equal(hist[0].total, expected, 'only the footprint is counted');
+  assert.equal(SC.histograms({ ...raw, coverageMask: undefined }, 256)[0].total, expectedAll, 'without the mask every non-empty pixel counts');
+
+  // A Compare panel's mask comes from the panel's iframe: another realm.
+  const foreignMask = vm.runInNewContext(`new Uint8Array(${w * h})`);
+  foreignMask.set(mask);
+  assert.ok(!(foreignMask instanceof Uint8Array), 'the mask really is from another realm');
+  assert.deepEqual([...SC.composePixels({ ...raw, coverageMask: foreignMask }, SLAB_STATE)], [...out], 'a cross-realm mask is honoured');
+  console.log('four-channel slabs, coverage mask (CPU): OK');
+}
+
+// ── 11. The GPU path with a mask, run through an emulated WebGL2 context ────────
+// The context records every texture, unit and uniform; drawArrays runs a line-by-line
+// transcription of the compositor's FRAG (checked against the source below) on the
+// textures actually bound to the units its samplers name. So: the mask reaches the
+// shader as an R8 texture of its exact bytes on unit 1, rows flip the same way as the
+// raw, one upload serves every raw of the frame, and release() frees it only once no
+// cached raw uses it.
+{
+  const compositorSrc = read('js/core/slice-compositor.js');
+  const frag = compositorSrc.slice(compositorSrc.indexOf('const FRAG = `'), compositorSrc.indexOf('function _compile('));
+  // The lines the emulation below transcribes.
+  assert.ok(/uniform sampler2D uMask;/.test(frag), 'FRAG declares the mask sampler');
+  assert.ok(/ivec2 p = ivec2\(gl_FragCoord\.xy\);\s*vec4 v = texelFetch\(uRaw, ivec2\(p\.x, uHeight - 1 - p\.y\), 0\);/.test(frag), 'raw texel, rows flipped');
+  assert.ok(/if \(uAlphaMode == 2 && v\.a == 0\.0\) \{ outColor = vec4\(0\.0\); return; \}\s*if \(uAlphaMode == 3 && texelFetch\(uMask, ivec2\(p\.x, uHeight - 1 - p\.y\), 0\)\.r == 0\.0\) \{ outColor = vec4\(0\.0\); return; \}/.test(frag),
+    'mode 3: the mask texel at the same row flip as the raw; 0 → transparent');
+  assert.ok(/if \(uAlphaMode == 0 && length\(c\) < \$\{VISIBLE_MIN\.toFixed\(3\)\}\) \{ outColor = vec4\(0\.0\); return; \}\s*outColor = vec4\(clamp\(c, 0\.0, 1\.0\), 1\.0\);/.test(frag), 'threshold only for one plane, opaque otherwise');
+  const gpuSrc = compositorSrc.slice(compositorSrc.indexOf('function _composeGpu('), compositorSrc.indexOf('function compose('));
+  assert.ok(/_maskTextureFor\(gl, mask, w, h, raw\.data\)/.test(gpuSrc) && /_textureFor\(gl, raw, mask\)/.test(gpuSrc), 'each upload keeps the other texture of the compose from eviction');
+  assert.ok(/if \(k === keep \|\| entry\.kind !== kind\) continue;/.test(compositorSrc), 'the eviction loop skips the kept texture (and every texture of the other kind)');
+  assert.ok(/gl\.texImage2D\(gl\.TEXTURE_2D, 0, internalFormat, w, h, 0, format, gl\.UNSIGNED_BYTE, data\)/.test(compositorSrc) && /gl\.R8, gl\.RED/.test(compositorSrc), 'the mask is an R8 / RED texture');
+
+  const E = {
+    TEXTURE_2D: 0x0DE1, TEXTURE0: 0x84C0, TEXTURE1: 0x84C1, RGBA8: 0x8058, RGBA: 0x1908, R8: 0x8229, RED: 0x1903,
+    UNSIGNED_BYTE: 0x1401, NO_ERROR: 0, MAX_TEXTURE_SIZE: 0x0D33, VERTEX_SHADER: 0x8B31, FRAGMENT_SHADER: 0x8B30,
+    COMPILE_STATUS: 0x8B81, LINK_STATUS: 0x8B82, UNPACK_ALIGNMENT: 0x0CF5, UNPACK_FLIP_Y_WEBGL: 0x9240,
+    UNPACK_PREMULTIPLY_ALPHA_WEBGL: 0x9241, UNPACK_COLORSPACE_CONVERSION_WEBGL: 0x9243, NONE: 0,
+    TEXTURE_MIN_FILTER: 0x2801, TEXTURE_MAG_FILTER: 0x2800, NEAREST: 0x2600, TEXTURE_WRAP_S: 0x2802,
+    TEXTURE_WRAP_T: 0x2803, CLAMP_TO_EDGE: 0x812F, BLEND: 0x0BE2, DEPTH_TEST: 0x0B71, SCISSOR_TEST: 0x0C11, TRIANGLES: 4,
+  };
+  const f32 = (x) => Math.fround(x);
+  const units = [];
+  let active = 0;
+  const uniforms = {};
+  const log = { uploads: [], deleted: [], draws: 0, puts: 0 };
+  let glCanvas = null;
+  const gl = {
+    ...E,
+    get drawingBufferWidth() { return glCanvas.width; },
+    get drawingBufferHeight() { return glCanvas.height; },
+    isContextLost: () => false,
+    getParameter: (p) => (p === E.MAX_TEXTURE_SIZE ? 16384 : 0),
+    createShader: () => ({}), shaderSource() {}, compileShader() {}, getShaderParameter: () => true, getShaderInfoLog: () => '', deleteShader() {},
+    createProgram: () => ({}), attachShader() {}, linkProgram() {}, getProgramParameter: () => true, getProgramInfoLog: () => '', deleteProgram() {},
+    createVertexArray: () => ({}), bindVertexArray() {},
+    getUniformLocation: (_p, name) => name,
+    createTexture: () => ({ deleted: false }),
+    activeTexture(u) { active = u - E.TEXTURE0; },
+    bindTexture(_t, tex) { units[active] = tex; },
+    pixelStorei() {}, texParameteri() {},
+    texImage2D(_t, _l, internal, w, h, _b, format, type, data) {
+      const tex = units[active];
+      Object.assign(tex, { internal, format, type, w, h, data: Uint8Array.from(data) });
+      log.uploads.push(tex);
+    },
+    getError: () => E.NO_ERROR,
+    deleteTexture(tex) { tex.deleted = true; log.deleted.push(tex); },
+    viewport() {}, disable() {}, useProgram() {},
+    uniform1i(loc, v) { uniforms[loc] = v; },
+    uniform3fv(loc, v) { uniforms[loc] = Array.from(v, f32); },
+    uniform4fv(loc, v) { uniforms[loc] = Array.from(v, f32); },
+    drawArrays() { log.draws++; runFrag(); },
+  };
+  // The compositor's FRAG, transcribed (float32 uniforms, as the GPU holds them).
+  function runFrag() {
+    const W = glCanvas.width; const H = glCanvas.height;
+    const rawTex = units[uniforms.uRaw];
+    const maskTex = units[uniforms.uMask];
+    assert.ok(rawTex && !rawTex.deleted && rawTex.internal === E.RGBA8 && rawTex.format === E.RGBA, 'uRaw names a live RGBA8 texture');
+    const out = new Uint8ClampedArray(W * H * 4);
+    for (let yb = 0; yb < H; yb++) {
+      for (let x = 0; x < W; x++) {
+        const ty = uniforms.uHeight - 1 - yb;
+        const t = (ty * rawTex.w + x) * 4;
+        const v = [0, 1, 2, 3].map((c) => rawTex.data[t + c] / 255);
+        let px = [0, 0, 0, 0];
+        let hidden = uniforms.uAlphaMode === 2 && v[3] === 0;
+        if (!hidden && uniforms.uAlphaMode === 3) {
+          assert.ok(maskTex && !maskTex.deleted && maskTex.internal === E.R8 && maskTex.format === E.RED, 'uMask names a live R8 texture in mode 3');
+          hidden = maskTex.data[ty * maskTex.w + x] / 255 === 0;
+        }
+        if (!hidden) {
+          const c = [0, 0, 0];
+          for (let i = 0; i < 4; i++) {
+            if (!(uniforms.uEnabled[i] > 0.5 && uniforms.uNumChannels > i)) continue;
+            let k = Math.min(1, Math.max(0, (v[i] - uniforms.uMin[i]) / Math.max(uniforms.uMax[i] - uniforms.uMin[i], 0.0001)));
+            if (uniforms.uGamma[i] !== 1) k = Math.pow(k, uniforms.uGamma[i]);
+            k *= uniforms.uOpacity[i];
+            for (let j = 0; j < 3; j++) c[j] += k * uniforms.uColor[i * 3 + j];
+          }
+          if (uniforms.uAlphaMode === 0 && Math.hypot(...c) < 0.005) hidden = true;
+          else px = [...c.map((q) => Math.round(Math.min(1, Math.max(0, q)) * 255)), 255];
+        }
+        // Framebuffer row yb is canvas row H − 1 − yb once drawImage'd.
+        out.set(px, ((H - 1 - yb) * W + x) * 4);
+      }
+    }
+    glCanvas.pixels = out;
+  }
+  function canvas2d() {
+    const c = { width: 0, height: 0, pixels: null, addEventListener() {} };
+    const ctx = {
+      clearRect() { c.pixels = new Uint8ClampedArray(c.width * c.height * 4); },
+      drawImage(src) { c.pixels = new Uint8ClampedArray(src.pixels); },
+      createImageData: (w, h) => ({ width: w, height: h, data: new Uint8ClampedArray(w * h * 4) }),
+      putImageData(img) { log.puts++; c.pixels = new Uint8ClampedArray(img.data); },
+    };
+    c.getContext = (kind) => {
+      if (kind === 'webgl2') { glCanvas = c; return gl; }
+      return kind === '2d' ? ctx : null;
+    };
+    return c;
+  }
+  const SCG = loadModule('js/core/slice-compositor.js', 'SliceCompositor', { THREE, document: { createElement: () => canvas2d() } });
+
+  const w = 13; const h = 9;
+  const mask = footprintMask(w, h, 1);
+  const rawA = { ...randomRaw(w, h, 31, 0.35), channels: 4, projected: true, coverage: false, coverageMask: mask };
+  rawA.data.set([240, 240, 240, 240], 0);
+  const target = canvas2d();
+  const drawn = SCG.compose(rawA, SLAB_STATE, { target });
+  assert.equal(drawn, target, 'drawn into the caller\'s canvas');
+  assert.equal(log.draws, 1, 'the GPU path drew');
+  assert.equal(log.puts, 0, 'no CPU fallback');
+  assert.equal(uniforms.uAlphaMode, 3, 'mode 3: coverage mask');
+  assert.equal(uniforms.uRaw, 0, 'the raw on unit 0');
+  assert.equal(uniforms.uMask, 1, 'the mask on unit 1');
+  const maskTex = units[1];
+  assert.ok(maskTex && maskTex.internal === E.R8 && maskTex.format === E.RED && maskTex.type === E.UNSIGNED_BYTE && maskTex.w === w && maskTex.h === h, 'R8 texture of w × h');
+  assert.deepEqual([...maskTex.data], [...mask], 'the mask bytes as they are (rows top-down, flipped at the fetch like the raw)');
+  const cpu = SC.composePixels(rawA, SLAB_STATE);
+  for (let i = 0; i < w * h; i++) {
+    assert.equal(target.pixels[i * 4 + 3], cpu[i * 4 + 3], `GPU alpha = CPU alpha at pixel ${i}`);
+    assert.equal(target.pixels[i * 4 + 3], mask[i] ? 255 : 0, `GPU alpha follows the mask at pixel ${i}`);
+    for (let k = 0; k < 3; k++) {
+      assert.ok(Math.abs(target.pixels[i * 4 + k] - cpu[i * 4 + k]) <= 1, `GPU colour within one unit of the CPU at pixel ${i}`);
+    }
+  }
+  const bytesA = w * h * 4 + w * h;
+  assert.equal(SCG.textureBytes(), bytesA, 'raw RGBA8 + mask R8 held');
+
+  // A native refresh: new raw values, the same frame and mask → the mask is not re-uploaded.
+  const uploadsBefore = log.uploads.length;
+  const rawB = { ...randomRaw(w, h, 32, 0.35), channels: 4, projected: true, coverage: false, coverageMask: mask };
+  SCG.compose(rawB, SLAB_STATE, { target });
+  assert.equal(log.uploads.length, uploadsBefore + 1, 'one upload: the new raw alone');
+  assert.equal(units[1], maskTex, 'the cached mask texture is bound again');
+  // The Studio releases the previous picture after colouring the new one.
+  SCG.release(rawA);
+  assert.ok(!maskTex.deleted, 'the mask survives the release of a raw while another cached raw uses it');
+  assert.equal(SCG.textureBytes(), bytesA, 'raw B + the mask');
+  SCG.release(rawB);
+  assert.ok(maskTex.deleted, 'released with the last raw that used it');
+  assert.equal(SCG.textureBytes(), 0, 'nothing held');
+
+  // No mask: uMask shares the raw's unit; a single plane keeps the threshold.
+  const plane = { ...randomRaw(w, h, 33, 0.35), channels: 4 };
+  SCG.compose(plane, SLAB_STATE, { target });
+  assert.equal(uniforms.uAlphaMode, 0, 'one plane: threshold');
+  assert.equal(uniforms.uMask, 0, 'uMask on the raw\'s unit, no unit left empty');
+  const cpuPlane = SC.composePixels(plane, SLAB_STATE);
+  for (let i = 0; i < w * h; i++) assert.equal(target.pixels[i * 4 + 3], cpuPlane[i * 4 + 3], `one plane: GPU alpha = CPU alpha at ${i}`);
+  // A coverage raw ignores a mask it happens to carry: no R8 upload.
+  const uploads3 = log.uploads.length;
+  const raw3 = { ...randomRaw(w, h, 34, 0.3), channels: 3, projected: true, coverage: true, coverageMask: mask };
+  SCG.compose(raw3, SLAB_STATE, { target });
+  assert.equal(uniforms.uAlphaMode, 2, 'channel-3 coverage');
+  assert.equal(log.uploads.length, uploads3 + 1, 'the raw alone is uploaded');
+  assert.ok(log.uploads.at(-1).internal === E.RGBA8, 'no mask texture');
+  const cpu3 = SC.composePixels(raw3, SLAB_STATE);
+  for (let i = 0; i < w * h; i++) assert.equal(target.pixels[i * 4 + 3], cpu3[i * 4 + 3], `coverage raw: GPU alpha = CPU alpha at ${i}`);
+  SCG.release();
+  assert.equal(SCG.textureBytes(), 0, 'release() frees every texture, masks included');
+  console.log('four-channel slabs, coverage mask (GPU path, emulated context): OK');
+}
+
+// ── 12. Texture budgets: masks are counted apart from the raws ─────────────────
+// A Compare Studio of four 4-channel z-stack MIP cells whose raws alone fit the 256 MiB
+// raw budget: charged to the same budget, their masks (a quarter of a raw each) pushed
+// the set over it, and every all-cell recolour evicted the next cell's raw to upload the
+// current one — each raw re-uploaded on every pass, in a cycle. With the masks' own
+// budget (a quarter of the raws') the second pass uploads nothing.
+{
+  const E = {
+    TEXTURE_2D: 1, TEXTURE0: 0x84C0, TEXTURE1: 0x84C1, RGBA8: 2, RGBA: 3, R8: 4, RED: 5, UNSIGNED_BYTE: 6, NO_ERROR: 0,
+    MAX_TEXTURE_SIZE: 7, VERTEX_SHADER: 8, FRAGMENT_SHADER: 9, COMPILE_STATUS: 10, LINK_STATUS: 11, UNPACK_ALIGNMENT: 12,
+    UNPACK_FLIP_Y_WEBGL: 13, UNPACK_PREMULTIPLY_ALPHA_WEBGL: 14, UNPACK_COLORSPACE_CONVERSION_WEBGL: 15, NONE: 0,
+    TEXTURE_MIN_FILTER: 16, TEXTURE_MAG_FILTER: 17, NEAREST: 18, TEXTURE_WRAP_S: 19, TEXTURE_WRAP_T: 20, CLAMP_TO_EDGE: 21,
+    BLEND: 22, DEPTH_TEST: 23, SCISSOR_TEST: 24, TRIANGLES: 4,
+  };
+  const uploads = [];
+  const deleted = [];
+  let glCanvas = null;
+  const gl = {
+    ...E,
+    get drawingBufferWidth() { return glCanvas.width; },
+    get drawingBufferHeight() { return glCanvas.height; },
+    isContextLost: () => false,
+    getParameter: () => 16384,
+    createShader: () => ({}), shaderSource() {}, compileShader() {}, getShaderParameter: () => true, getShaderInfoLog: () => '', deleteShader() {},
+    createProgram: () => ({}), attachShader() {}, linkProgram() {}, getProgramParameter: () => true, getProgramInfoLog: () => '', deleteProgram() {},
+    createVertexArray: () => ({}), bindVertexArray() {}, getUniformLocation: (_p, n) => n,
+    createTexture: () => ({}), activeTexture() {}, bindTexture() {}, pixelStorei() {}, texParameteri() {},
+    texImage2D(_t, _l, internal, w, h, _b, _f, _ty, data) { uploads.push({ internal, bytes: data.length }); },
+    getError: () => 0, deleteTexture(t) { deleted.push(t); }, viewport() {}, disable() {}, useProgram() {},
+    uniform1i() {}, uniform3fv() {}, uniform4fv() {}, drawArrays() {},
+  };
+  const canvas = () => {
+    const c = { width: 0, height: 0, addEventListener() {} };
+    const ctx = { clearRect() {}, drawImage() {}, createImageData: () => ({}), putImageData() { throw new Error('CPU fallback'); } };
+    c.getContext = (k) => (k === 'webgl2' ? (glCanvas = c, gl) : k === '2d' ? ctx : null);
+    return c;
+  };
+  const SCB = loadModule('js/core/slice-compositor.js', 'SliceCompositor', { document: { createElement: canvas } });
+  const BUDGET = 256 * 1024 * 1024;
+  // 3700² cells: four raws (4 B/px) fit the raw budget, raws + masks (5 B/px) do not.
+  const side = 3700;
+  const n = side * side;
+  assert.ok(4 * 4 * n <= BUDGET && 4 * 5 * n > BUDGET, 'the case: raws alone fit, raws and masks together would not');
+  const cells = [0, 1, 2, 3].map(() => ({
+    data: new Uint8Array(n * 4), width: side, height: side, channels: 4, projected: true, coverage: false,
+    coverageMask: new Uint8Array(n).fill(255),
+  }));
+  const state = [0, 1, 2, 3].map(() => ({ enabled: true, color: '#ffffff', min: 0, max: 1, gamma: 1, opacity: 1 }));
+  const target = canvas();
+  for (const c of cells) assert.equal(SCB.compose(c, state, { target }), target, 'drawn on the GPU');
+  assert.equal(uploads.length, 8, 'the opening uploads four raws and four masks');
+  assert.equal(uploads.filter((u) => u.internal === E.R8).length, 4, 'four of them R8 masks');
+  assert.equal(deleted.length, 0, 'nothing evicted');
+  assert.equal(SCB.textureBytes(), 4 * 5 * n, 'every raw and mask held');
+  for (let pass = 0; pass < 3; pass++) for (const c of cells) SCB.compose(c, state, { target });
+  assert.equal(uploads.length, 8, 'three all-cell recolours upload nothing (the masks evict no raw)');
+  assert.equal(deleted.length, 0, 'and evict nothing');
+
+  // Each kind stays within its own budget: a fifth raw evicts the oldest raw, never a
+  // mask; masks beyond a quarter of the raw budget evict the oldest mask, never a raw.
+  const fifth = { ...cells[0], data: new Uint8Array(n * 4), coverageMask: cells[0].coverageMask };
+  SCB.compose(fifth, state, { target });
+  assert.equal(uploads.length, 9, 'the fifth raw is uploaded, its (shared) mask is cached');
+  assert.equal(deleted.length, 1, 'one texture evicted to make room');
+  assert.equal(SCB.textureBytes(), 4 * 5 * n, 'four raws and four masks held again');
+  SCB.compose(cells[1], state, { target });
+  assert.equal(uploads.length, 9, 'cell 1 is still cached: the evicted texture was the oldest raw, cell 0\'s');
+  SCB.compose(cells[0], state, { target });
+  assert.equal(uploads.length, 10, 'cell 0\'s raw comes back; its mask never left');
+  assert.ok(uploads.at(-1).internal === E.RGBA8, 'a raw upload alone');
+  SCB.release();
+  assert.equal(SCB.textureBytes(), 0);
+  console.log('texture budgets (masks counted apart, no recolour thrash): OK');
 }
 
 console.log('slice compositor: OK');

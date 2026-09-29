@@ -1708,6 +1708,19 @@ const ViewerApp = (() => {
    * kept slice in 3D mode) sampled one voxel per step and MIP-projected when the slab
    * is thicker than one slice — the calibrated 2D counterpart of the slab on screen,
    * turned and faced the way the screen shows it (see _zstackFlatPose).
+   *   A stabilised timelapse (VolumeViewer.getClipSpace().warped): the browser's range
+   * [lo/z, (hi+1)/z] acts in the DISPLAY box (the shader's clipBoxMin/Size), so the
+   * slab on screen is the object slab [z0, z1] = min.z + [lo, hi + 1]/z · size.z, and
+   * the slicer samples it through the same warp (VolumeSlicer: texCoord = volumeWarp·p).
+   * There the plane's value sweeps the display box too (VolumeSlicer.planeSweep: an
+   * axis plane at object min.z + value·size.z on +Z, max.z − value·size.z on −Z), so
+   * the slab centre c_o = (z0 + z1)/2 = min.z + c·size.z is reached by the very value
+   * of the unwarped spec, c on +Z and 1 − c on −Z — always inside [0, 1], so the
+   * slicer's clamp and a later setPlaneSpec leave it where it is. The samples cut the
+   * slab into N = round((z1 − z0)·z) equal parts and sit at their centres, (z1 − z0)/N
+   * apart: about one acquisition slice (1/z object unit is one voxel depth in µm,
+   * however the rigid warp turns it), a MIP as soon as N > 1. With size.z = 1 and
+   * min.z = −½ it is the unwarped spec, term for term.
    */
   function _zstackStudioSpec() {
     const { z } = _zstackGetDims();
@@ -1721,6 +1734,26 @@ const ViewerApp = (() => {
     // slab's centre and the samples land on the voxel centres (lo + 0.5 + k) / z.
     const c = (lo + n / 2) / z;
     const pose = _zstackFlatPose(VolumeViewer.getScreenFrameInVolume?.());
+    const clip = VolumeViewer.getClipSpace?.();
+    const zMin = Number(clip?.min?.z);
+    const zSize = Number(clip?.size?.z);
+    if (clip?.warped && Number.isFinite(zMin) && zSize > 0) {
+      // The display-box slab (see above), sampled evenly through the warp.
+      const z0 = zMin + (lo / z) * zSize;
+      const z1 = zMin + ((hi + 1) / z) * zSize;
+      const steps = Math.max(1, Math.min(1024, Math.round((z1 - z0) * z)));
+      return {
+        mode: 'oblique',
+        axis: 'z',
+        value: pose.back ? 1 - c : c,
+        yaw: pose.back ? 180 : 0,
+        pitch: 0,
+        roll: pose.roll,
+        slabThickness: steps,
+        slabStepNorm: (z1 - z0) / steps,
+        projection: steps > 1 ? 'mip' : 'single'
+      };
+    }
     return {
       mode: 'oblique',
       axis: 'z',
@@ -1807,7 +1840,8 @@ const ViewerApp = (() => {
       cropRect,
       // The same pixels as raw channel values: the Studio colours those with its own
       // channel state, and the native pass reads them wherever a chunk is missing.
-      raw: _studioRawFor(spec, renderRes, cropRect),
+      // A four-channel slab takes its footprint from this colour picture's alpha.
+      raw: _studioRawFor(spec, renderRes, cropRect, canvas),
       // Not 'gpu-slicer': that source makes the Studio re-render the slice through
       // VolumeSlicer.recompose at the cropped width, which reframes the image and
       // would break the geometry contract with the native pass.
@@ -2081,7 +2115,12 @@ const ViewerApp = (() => {
   function _nativeSliceBricksForSpec(spec, dims, lod = 0) {
     if (typeof BrickLoader === 'undefined' || !BrickLoader.activeBricks) return [];
     if (typeof VolumeSlicer === 'undefined' || !VolumeSlicer.planeGeometry) return [];
-    const geom = VolumeSlicer.planeGeometry(spec, VolumeViewer.getPhysicalSize?.());
+    // A stabilised timelapse samples the texture at W·x (VOLUME_WARP): the plane the
+    // shader reads is the affine image of the cube plane, and planeGeometry gives its
+    // centre, normal (L⁻ᵀ·m) and slab half-thickness in texture space. The live
+    // material is the one the native pass clones for its throwaway atlas, right after.
+    const space = VolumeSlicer.samplingSpace ? VolumeSlicer.samplingSpace(VolumeViewer.getMaterial?.() || null) : null;
+    const geom = VolumeSlicer.planeGeometry(spec, VolumeViewer.getPhysicalSize?.(), space);
     const n = geom.normal;
     const bs = dims.brickSize || 64;
     const dx = Math.max(1, dims.x || 1);
@@ -2102,6 +2141,22 @@ const ViewerApp = (() => {
       if (v1 < v0) return [];
       axisRange = { v0, v1 };
     }
+    // A stabilised timelapse: the registration's rotation leans the texture-space
+    // normal off every axis (a Kabsch-stabilised series always carries some), so the
+    // branch above never applies, yet a nearly flat cut still reads a short run of
+    // voxels of each brick along the axis k the normal leans on most. A sample u of
+    // the slab lies within T = halfThickness of the plane, n·(u − center) ∈ [−T, T], so
+    //   n_k·u_k ∈ [n·center − T − S_hi, n·center + T − S_lo],
+    // [S_lo, S_hi] the range of Σ_{j≠k} n_j·u_j over the brick's footprint (widened by
+    // one voxel on each side of each other axis, for floor()); that run of u_k, one
+    // voxel of slack each way, is the brick's region. An unwarped oblique cut keeps
+    // whole bricks, as before.
+    const dimOf = { x: dx, y: dy, z: dz };
+    const lean = !axis && geom.warped
+      ? ['y', 'z'].reduce((best, k) => (Math.abs(n[k]) > Math.abs(n[best]) ? k : best), 'x')
+      : null;
+    const leanOthers = lean ? ['x', 'y', 'z'].filter(k => k !== lean) : null;
+    const planeAt = lean ? n.dot(geom.center) : 0;
 
     const bricks = [];
     for (const b of BrickLoader.activeBricks(lod)) {
@@ -2130,6 +2185,30 @@ const ViewerApp = (() => {
         const dist = Math.abs(n.dot(center.sub(geom.center)));
         const radius = Math.abs(n.x) * extent.x + Math.abs(n.y) * extent.y + Math.abs(n.z) * extent.z;
         if (dist > radius + tolerance) continue;
+        if (lean) {
+          const o = { x: ox, y: oy, z: oz };
+          const e = { x: bw, y: bh, z: bd };
+          let sLo = 0;
+          let sHi = 0;
+          for (const j of leanOthers) {
+            const a = n[j] * (o[j] - 1) / dimOf[j];
+            const c = n[j] * (o[j] + e[j] + 1) / dimOf[j];
+            sLo += Math.min(a, c);
+            sHi += Math.max(a, c);
+          }
+          const h = geom.halfThickness;
+          const u0 = (planeAt - h - sHi) / n[lean];
+          const u1 = (planeAt + h - sLo) / n[lean];
+          const dim = dimOf[lean];
+          const lo = Math.max(0, Math.floor(Math.min(u0, u1) * dim) - 1 - o[lean]);
+          const hi = Math.min(e[lean] - 1, Math.floor(Math.max(u0, u1) * dim) + 1 - o[lean]);
+          if (hi < lo) continue;
+          if (lo > 0 || hi < e[lean] - 1) {
+            region = { x0: 0, x1: bw, y0: 0, y1: bh, z0: 0, z1: bd };
+            region[lean + '0'] = lo;
+            region[lean + '1'] = hi + 1;
+          }
+        }
       }
       bricks.push({ bx: b.bx, by: b.by, bz: b.bz, region });
     }
@@ -2140,7 +2219,22 @@ const ViewerApp = (() => {
     let maxDim = Math.max(dims.x || 1, dims.y || 1);
     if (spec.mode === 'xz') maxDim = Math.max(dims.x || 1, dims.z || 1);
     else if (spec.mode === 'yz') maxDim = Math.max(dims.y || 1, dims.z || 1);
-    return Math.max(512, Math.min(8192, Math.ceil(maxDim * 1.5)));
+    // About one render pixel per voxel of the longest axis: the frame spans
+    // getPlaneExtentUnits() longest-axis lengths — 1.5, or more for a stabilised
+    // timelapse whose display box needs a larger frame (VolumeSlicer.frameExtent).
+    const units = typeof VolumeSlicer !== 'undefined' && VolumeSlicer.getPlaneExtentUnits
+      ? VolumeSlicer.getPlaneExtentUnits(VolumeViewer.getMaterial?.())
+      : 1.5;
+    return Math.max(512, Math.min(8192, Math.ceil(maxDim * units)));
+  }
+
+  // A capture for the Compare Studio: about one render pixel per voxel of the longest
+  // in-plane axis across the slicer frame (1.5 units, wider on a stabilised timelapse).
+  function _captureRenderRes(maxRes) {
+    const units = typeof VolumeSlicer !== 'undefined' && VolumeSlicer.getPlaneExtentUnits
+      ? VolumeSlicer.getPlaneExtentUnits(VolumeViewer.getMaterial?.())
+      : 1.5;
+    return Math.ceil(maxRes * (Number(units) > 0 ? Number(units) : 1.5));
   }
 
   /**
@@ -2152,14 +2246,15 @@ const ViewerApp = (() => {
    * the slice stage's scale bar uses. (Weighting v by p instead only equals that
    * along the longest axis: an XZ cut's vertical and a non-square XY cut's short
    * axis came out short by p_axis / maxP.) A missing axis counts as 1, as in
-   * planeGeometry.
+   * planeGeometry. 2·EXTENT is the frame of the volume material on screen: larger
+   * for a stabilised timelapse (VolumeSlicer.frameExtent), same formula.
    */
   function _slicePixelSizeUm(_spec, renderRes) {
     const physical = VolumeViewer.getPhysicalSize?.() || null;
     const axis = (v) => (Number(v) > 0 ? Number(v) : 1);
     const maxP = Math.max(axis(physical?.x), axis(physical?.y), axis(physical?.z));
     const units = typeof VolumeSlicer !== 'undefined' && VolumeSlicer.getPlaneExtentUnits
-      ? VolumeSlicer.getPlaneExtentUnits()
+      ? VolumeSlicer.getPlaneExtentUnits(VolumeViewer.getMaterial?.())
       : 1.5;
     const um = (units * maxP) / Math.max(1, renderRes);
     return { x: um, y: um };
@@ -2263,17 +2358,75 @@ const ViewerApp = (() => {
    * browser's MIP, an inspector MIP / average) carries `projected` (and `coverage`)
    * from the slicer itself — the one place every raw of this page is rendered, the
    * native pass included — so the Studio draws it opaque like the colour picture.
+   * `colour` is that colour picture (the canvas _cropEmptySliceSpace cut with the
+   * same cropRect): a slab of four channels has no spare byte for its footprint, so
+   * it gets `coverageMask` from the colour picture's alpha (_sliceCoverageMask) and
+   * the Studio keeps the pixels off the volume transparent, as the colour picture
+   * does.
    */
-  function _studioRawFor(spec, renderRes, cropRect) {
+  function _studioRawFor(spec, renderRes, cropRect, colour = null) {
     if (typeof SliceCompositor === 'undefined' || typeof VolumeSlicer === 'undefined' || !VolumeSlicer.renderRawWithMaterial) return null;
     const material = VolumeViewer.getMaterial?.();
     if (!material || !spec) return null;
     const win = cropRect ? _sliceWindowForRect(cropRect, renderRes) : null;
     if (cropRect && !win) return null;
+    let raw;
     try {
-      return VolumeSlicer.renderRawWithMaterial(material, spec, renderRes, { window: win });
+      raw = VolumeSlicer.renderRawWithMaterial(material, spec, renderRes, { window: win });
     } catch (err) {
       console.warn('[ViewerApp] Raw slice values unavailable; the Studio keeps the rendered colours.', err);
+      return null;
+    }
+    if (_needsCoverageMask(raw)) _withCoverageMask(raw, _sliceCoverageMask(colour, raw.width, raw.height));
+    return raw;
+  }
+
+  /** A projected slab whose raw has no footprint of its own (four channels: no channel 3 to spare). */
+  function _needsCoverageMask(raw) {
+    return Boolean(raw && raw.projected === true && raw.coverage !== true);
+  }
+
+  /**
+   * Sets `mask` as `raw.coverageMask` when the raw needs one and the mask is one byte
+   * per pixel of it (the same crop); `raw` is returned either way. Without a mask
+   * the Studio draws a four-channel slab opaque over its whole crop.
+   */
+  function _withCoverageMask(raw, mask) {
+    if (!_needsCoverageMask(raw)) return raw;
+    if (ArrayBuffer.isView(mask) && mask.BYTES_PER_ELEMENT === 1 && mask.length === raw.width * raw.height) {
+      raw.coverageMask = mask;
+    }
+    return raw;
+  }
+
+  /**
+   * The footprint of a slab on the volume, read from the COLOUR render of the same
+   * plane, frame and crop — no extra GPU render: the slicer's colour path writes a
+   * slab opaque exactly where one of its samples lies in the volume (hits > 0) and
+   * discards elsewhere, over a target cleared to alpha 0, so the picture's alpha is 0
+   * or 255 and is the coverage. → Uint8Array(width·height), 255 covered / 0 not, rows
+   * top-down like a raw; null when `canvas` is not width × height or cannot be read.
+   * Read in bands of rows: a native crop is tens of megapixels, and one getImageData
+   * would hold four bytes per pixel of it at once.
+   */
+  function _sliceCoverageMask(canvas, width, height) {
+    if (!canvas || canvas.width !== width || canvas.height !== height || !(width > 0 && height > 0)) return null;
+    // 4 Mpx a band (16 MB of RGBA): a handful of readbacks for a native crop.
+    const BAND_ROWS = Math.max(1, Math.floor((1 << 22) / width));
+    try {
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return null;
+      const mask = new Uint8Array(width * height);
+      for (let y0 = 0; y0 < height; y0 += BAND_ROWS) {
+        const rows = Math.min(BAND_ROWS, height - y0);
+        const px = ctx.getImageData(0, y0, width, rows).data;
+        for (let i = 0, o = y0 * width, n = rows * width; i < n; i++, o++) {
+          if (px[i * 4 + 3] >= 128) mask[o] = 255;
+        }
+      }
+      return mask;
+    } catch (err) {
+      console.warn('[ViewerApp] Slab footprint unavailable; the Studio draws the slab opaque over its crop.', err);
       return null;
     }
   }
@@ -2333,6 +2486,15 @@ const ViewerApp = (() => {
     const tempMaterial = sourceMaterial.clone();
     tempMaterial.defines = { ...(sourceMaterial.defines || {}) };
     if (THREE.UniformsUtils) tempMaterial.uniforms = THREE.UniformsUtils.clone(sourceMaterial.uniforms);
+    // A stabilised timelapse: the pass samples the timepoint on screen in the frame on
+    // screen. The define copy above carries VOLUME_WARP; the warp and the display box
+    // are copies of the ones on screen now (the brick picker just read the same
+    // material), frozen for the pass — the slicer reads its sampling space from THIS
+    // material (VolumeSlicer.samplingSpace), so plane, bricks and render agree.
+    for (const k of ['volumeWarp', 'clipBoxMin', 'clipBoxSize']) {
+      const v = sourceMaterial.uniforms?.[k]?.value;
+      if (v?.clone && tempMaterial.uniforms) tempMaterial.uniforms[k] = { value: v.clone() };
+    }
 
     const tempSvr = new SVRManager();
     const bs = dims.brickSize || 64;
@@ -2363,6 +2525,12 @@ const ViewerApp = (() => {
     const rawMode = Boolean(sliceWindow && typeof SliceCompositor !== 'undefined' && VolumeSlicer.renderRawWithMaterial
       && (!fallback || (SliceCompositor.isRaw(previewRaw) && previewRaw.width === sliceWindow.w && previewRaw.height === sliceWindow.h)));
     const rawFallback = rawMode && fallback ? { raw: previewRaw, rect: cropRect } : null;
+    // A four-channel slab's footprint (coverageMask) is the preview's, for every
+    // picture of the pass: same plane and crop, and the footprint is geometry alone
+    // (which of the slab's samples fall inside the volume box — the spec, the physical
+    // size and, on a stabilised timelapse, the timepoint's warp; never the level or the
+    // bricks), so it is the same at native resolution.
+    const previewCoverageMask = rawMode ? (previewRaw?.coverageMask || null) : null;
     const previewOnlyChannels = wantedChannels
       ? Array.from({ length: channels }, (_, c) => c).filter(c => !wantedChannels.includes(c))
       : [];
@@ -2431,7 +2599,7 @@ const ViewerApp = (() => {
     };
     const sliceResult = (picture, rect, extra) => ({
       canvas: picture.canvas,
-      raw: picture.raw,
+      raw: _withCoverageMask(picture.raw, previewCoverageMask),
       width: picture.canvas ? picture.canvas.width : picture.raw.width,
       height: picture.canvas ? picture.canvas.height : picture.raw.height,
       renderRes,
@@ -4672,7 +4840,7 @@ const ViewerApp = (() => {
         const spec = _zstackStudioSpec();
         const dim = datasetMeta?.dimensions || {};
         const maxRes = Math.max(Number(dim.original_x) || Number(dim.x) || 1024, Number(dim.original_y) || Number(dim.y) || 1024);
-        const renderRes = Math.ceil(maxRes * 1.5);
+        const renderRes = _captureRenderRes(maxRes);
         let canvas = VolumeSlicer.renderWithMaterial(VolumeViewer.getMaterial(), spec, renderRes, _currentChannelState());
 
         if (canvas) {
@@ -4683,7 +4851,7 @@ const ViewerApp = (() => {
             width: canvas.width,
             height: canvas.height,
             renderRes: renderRes,
-            raw: withRaw ? _studioRawFor(spec, renderRes, cropRect) : null,
+            raw: withRaw ? _studioRawFor(spec, renderRes, cropRect, canvas) : null,
             source: 'zstack',
             quality: 'high',
             planeSpec: spec,
@@ -4699,7 +4867,7 @@ const ViewerApp = (() => {
     if (typeof VolumeSlicer !== 'undefined') {
       const dim = datasetMeta?.dimensions || {};
       const maxRes = Math.max(Number(dim.original_x) || Number(dim.x) || 1024, Number(dim.original_y) || Number(dim.y) || 1024);
-      const renderRes = Math.ceil(maxRes * 1.5);
+      const renderRes = _captureRenderRes(maxRes);
       let canvas = VolumeSlicer.renderHighRes(renderRes);
       if (canvas) {
         const cropRect = _sliceContentRect(canvas);
@@ -4711,7 +4879,7 @@ const ViewerApp = (() => {
           width: canvas.width,
           height: canvas.height,
           renderRes: renderRes,
-          raw: withRaw ? _studioRawFor(spec, renderRes, cropRect) : null,
+          raw: withRaw ? _studioRawFor(spec, renderRes, cropRect, canvas) : null,
           source: 'gpu-slicer',
           quality: 'high',
           planeSpec: spec,

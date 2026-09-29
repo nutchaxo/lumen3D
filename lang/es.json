@@ -582,6 +582,8 @@
     "errGeneric": "Error en la exportación: {message}"
   },
   "studio": {
+    "importOtherFigure": "Este archivo de Studio se guardó para otra figura: sus anotaciones se importaron, pero sus ajustes de canales solo se aplicaron donde la figura coincide.",
+    "importChannelsKept": "Las anotaciones se importaron. Esta imagen no tiene valores brutos de canales para recolorear, así que conserva sus ajustes de canales.",
     "exportJsonFailed": "No se pudo escribir el JSON del Studio.",
     "propRotation": "Rotación",
     "resetRotation": "Restablecer la rotación",

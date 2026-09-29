@@ -2564,9 +2564,13 @@ const StudioEditor = (() => {
 
   function _undo() {
     if (_history.length <= 1) return;
+    const previous = _doc;
     _future.push(_history.pop());
     _doc = _clone(_history[_history.length - 1].doc);
     _selectedId = null;
+    // The picture follows the channels of the document it shows again (an undone
+    // import puts its colours back).
+    _recolourForDocChange(previous);
     _renderAll();
   }
 
@@ -2574,10 +2578,12 @@ const StudioEditor = (() => {
     if (!_future.length) return;
     // The entry undo set aside is already a copy nobody edits: it goes back as it is
     // (a JSON copy of it would stringify every Compare cell's raw buffer).
+    const previous = _doc;
     const item = _future.pop();
     _history.push(item);
     _doc = _clone(item.doc);
     _selectedId = null;
+    _recolourForDocChange(previous);
     _renderAll();
   }
 
@@ -2897,48 +2903,570 @@ const StudioEditor = (() => {
   }
 
   function _importJson(event) {
-    const file = event.target.files?.[0];
+    const input = event?.target;
+    const file = input?.files?.[0];
     if (!file) return;
     const reader = new FileReader();
     reader.onload = () => {
       try {
-        const loaded = JSON.parse(reader.result);
-        _doc = _migrateDocument(loaded);
-        _selectedId = null;
-        _history = [];
-        _future = [];
-        _pushHistory('Import JSON');
-        _renderAll();
-      } catch (err) {
-        console.warn('[StudioEditor] Invalid JSON:', err);
-        _toast(_t('toast.invalidStudioJson', 'Invalid Studio JSON.'));
+        _importDocumentText(reader.result);
       } finally {
-        event.target.value = '';
+        if (input) input.value = '';
       }
+    };
+    reader.onerror = () => {
+      if (input) input.value = '';
+      _toast(_t('toast.invalidStudioJson', 'Invalid Studio JSON.'));
     };
     reader.readAsText(file);
   }
 
-  function _migrateDocument(value) {
-    if (value?.version === DOC_VERSION && Array.isArray(value.layers)) return _normalizeLayerRotations(value);
-    if (Array.isArray(value)) {
-      const doc = _createDocument(_sliceResult);
-      doc.layers = value.map(old => _migrateLayer(old)).filter(Boolean);
-      return doc;
+  // ── Studio JSON import ───────────────────────────────────
+  // A Studio file holds a figure's layers, guides, groups and channel settings, never
+  // its pixels, and no Compare cell's frame, raw values or panel slice (see
+  // LAYOUT_RUNTIME_KEYS). It is applied to the figure that is OPEN, which keeps its
+  // geometry: picture size, plane, calibration, background, Compare cell layout and
+  // every cell's runtime fields. The file's channel settings are applied only where the
+  // file describes the open figure — the same size, dataset (or figure name), plane and
+  // timepoint (see _planImport); then the single slice when it carries raw values, and
+  // each Compare cell whose rectangle is the open cell's within
+  // IMPORT_MATCH_TOLERANCE_PX — and the picture is coloured with them. A file saved for
+  // another figure still brings its annotations, with a warning. The file is read and
+  // checked completely before anything changes; if applying it fails anyway, the
+  // figure is put back as it was. The import is one step of the history: undo returns
+  // to the figure before it, colours included.
+  const IMPORT_MATCH_TOLERANCE_PX = 2;
+  const IMPORT_SAFE_ID = /^[A-Za-z0-9_.:-]{1,128}$/;
+  const IMPORT_LAYER_TYPE = /^[a-z][a-z0-9_-]{0,31}$/i;
+  const IMPORT_GEOMETRY_KEYS = ['x', 'y', 'w', 'h', 'x1', 'y1', 'x2', 'y2', 'x3', 'y3'];
+  const IMPORT_STYLE_NUMBERS = { strokeWidth: [0, 200], fontSize: [1, 400], fontWeight: [100, 1000], opacity: [0, 1] };
+  const IMPORT_STYLE_COLORS = ['stroke', 'fill'];
+  const IMPORT_STYLE_FLAGS = ['textBackground', 'fillEnabled'];
+  const IMPORT_CAPS = ['none', 'arrow', 'bar', 'dot'];
+  const IMPORT_UNITS = ['um', 'mm', 'cm', 'px'];
+  // A style value this version does not know is kept only if it is harmless wherever it
+  // may be written: a flag, a finite number, or a short plain token.
+  const IMPORT_STYLE_TOKEN = /^[#\w\s.,()%-]{0,64}$/;
+  const IMPORT_CHANNEL_NUMBERS = ['min', 'max', 'midtone', 'gamma', 'opacity', 'denoise_sigma'];
+
+  /** Applies the text of a Studio file to the open figure; false when nothing changed. */
+  function _importDocumentText(text) {
+    if (!_isOpen || !_doc || !_sliceImage) return false;
+    // A channel edit still waiting for its frame belongs to the figure as it is now.
+    _flushChannelRecompose();
+    let plan;
+    try {
+      plan = _planImport(_migrateDocument(JSON.parse(String(text ?? ''))));
+    } catch (err) {
+      console.warn('[StudioEditor] Invalid Studio JSON:', err);
+      _toast(_t('toast.invalidStudioJson', 'Invalid Studio JSON.'));
+      return false;
     }
-    if (Array.isArray(value?.layers)) {
-      return _normalizeLayerRotations({ ..._createDocument(_sliceResult), ...value, version: DOC_VERSION });
+    const before = {
+      doc: _doc, history: _history, future: _future, selectedId: _selectedId,
+      sliceResult: _sliceResult, sliceImage: _sliceImage
+    };
+    try {
+      _doc = plan.doc;
+      _selectedId = null;
+      _drawing = null;
+      _recolourForImport(plan);
+      // One more step of the open figure's history (a copy, so a failure below leaves
+      // it as it was): undo goes back to the figure before the import, its colours
+      // included (_recolourForDocChange).
+      _history = before.history.slice();
+      _pushHistory('Import JSON');
+      _renderAll();
+    } catch (err) {
+      console.warn('[StudioEditor] Studio JSON import failed; the figure is kept as it was:', err);
+      const importedImage = _sliceImage;
+      _doc = before.doc;
+      _history = before.history;
+      _future = before.future;
+      _selectedId = before.selectedId;
+      _sliceResult = before.sliceResult;
+      _sliceImage = before.sliceImage;
+      try {
+        // Only a picture the import redrew IN PLACE needs its colours back; one it
+        // left alone (the figure compare.js handed over, the import drawing on a copy)
+        // is exact as it is, and re-rendering its cells would replace it.
+        if (plan.recolourStarted && _importRedrewInPlace(before, importedImage)) {
+          _recolourPicture(plan.recolourCells, plan.recolourSlice);
+        }
+        _renderAll();
+      } catch (restoreErr) {
+        console.warn('[StudioEditor] Could not redraw the figure after a failed import:', restoreErr);
+      }
+      // A Compare figure copy the failed import made and nothing shows any more.
+      if (_doc.layoutMaps?.length && importedImage && importedImage !== _sliceImage
+        && importedImage !== before.sliceImage && importedImage !== _sliceResult?.canvas) {
+        importedImage.width = 0;
+        importedImage.height = 0;
+      }
+      _toast(_t('toast.invalidStudioJson', 'Invalid Studio JSON.'));
+      return false;
     }
-    throw new Error('Unsupported Studio JSON format.');
+    if (plan.mismatch) {
+      _toast(_t('studio.importOtherFigure', 'This Studio file was saved for another figure: its annotations were imported, but its channel settings were applied only where the figure matches.'));
+    } else if (plan.channelsKept) {
+      _toast(_t('studio.importChannelsKept', 'The annotations were imported. This picture has no raw channel values to recolour, so it keeps its channel settings.'));
+    }
+    return true;
   }
 
-  // A document saved before layers could turn has no `rotation` (→ 0); a hand-edited
-  // one may carry anything, which must never reach ctx.rotate as NaN.
-  function _normalizeLayerRotations(doc) {
+  /**
+   * Whether the failed import drew on the very canvas the figure shows again: the
+   * Studio's own copy of a Compare figure (the cells are redrawn on it in place; the
+   * figure compare.js handed over is only ever copied), or a single slice's picture
+   * the import coloured into again (the Studio's slice canvas, or whatever canvas the
+   * import's picture was).
+   */
+  function _importRedrewInPlace(before, importedImage) {
+    if (before.doc.layoutMaps?.length) return before.sliceImage !== before.sliceResult?.canvas;
+    return before.sliceImage === importedImage || (Boolean(_sliceCanvas) && before.sliceImage === _sliceCanvas);
+  }
+
+  /**
+   * The document the open figure becomes with `file` (the checked content of a Studio
+   * file, from _migrateDocument): the open document — geometry, calibration, viewport,
+   * every Compare cell with its runtime fields by reference — carrying the file's
+   * layers, guides and groups, and its channel settings where it matches. Measurements
+   * are re-read against the open figure's calibration: a scale bar keeps its value, a
+   * distance and an angle their points. Pure: the open document is not touched.
+   *   The file is this figure when it has its size, names the same dataset (id or
+   * path; the figure's name when neither side has one — a Compare figure is named by
+   * its panels' datasets, in order), shows the same plane and the same timepoint, and,
+   * for a Compare figure, has the same cells. A channel's name is taken from the file
+   * only when both name the same dataset. Channel settings are applied to the single
+   * slice only when it can be recoloured without changing its frame (it carries raw
+   * values; channelsKept otherwise), and a cell or slice is recoloured only when its
+   * settings actually change.
+   */
+  function _planImport(file) {
+    const open = _doc;
+    const openMaps = Array.isArray(open.layoutMaps) ? open.layoutMaps : [];
+    const fileMaps = file.layoutMaps;
+    const identity = _importFigureIdentity(file.dataset, open.dataset);
+    let figureMatches = _sameImportSize(file.sourceSlice, open.sourceSlice)
+      && identity.same
+      && _sameImportPlane(file.planeSpec, open.planeSpec)
+      && _sameImportTimepoint(file.timepoint, open.timepoint);
+    // A single slice and a Compare composite are never the same figure.
+    if (fileMaps && (fileMaps.length > 0) !== (openMaps.length > 0)) figureMatches = false;
+    let mismatch = !figureMatches;
+    const merge = (saved, current) => _mergeImportedChannels(saved, current, { names: identity.confirmed });
+
+    const doc = _clone(open);
+    doc.version = DOC_VERSION;
+    if (file.createdAt) doc.createdAt = file.createdAt;
+    doc.layers = file.layers;
+    doc.guides = file.guides;
+    doc.groups = file.groups;
+
+    let recolourSlice = false;
+    let channelsKept = false;
+    const recolourCells = [];
+    if (!openMaps.length) {
+      if (figureMatches && file.channelState) {
+        const merged = merge(file.channelState, open.channelState);
+        if (!_sameChannels(merged, open.channelState)) {
+          // Without raw values the slice is re-rendered through the slicer, a frame of
+          // another size and crop than the one the annotations are laid on.
+          if (_hasRaw(_sliceResult)) {
+            doc.channelState = merged;
+            recolourSlice = true;
+          } else {
+            channelsKept = true;
+          }
+        }
+      }
+    } else if (figureMatches && fileMaps) {
+      if (fileMaps.length !== openMaps.length) {
+        mismatch = true;
+      } else {
+        openMaps.forEach((cell, index) => {
+          const saved = fileMaps[index];
+          if (!_sameImportCell(saved, cell)) {
+            mismatch = true;
+            return;
+          }
+          if (!saved.channelState) return;
+          const merged = merge(saved.channelState, cell.channelState);
+          if (_sameChannels(merged, cell.channelState)) return;
+          doc.layoutMaps[index].channelState = merged;
+          recolourCells.push(index);
+        });
+      }
+      if (!mismatch && file.channelState) {
+        doc.channelState = merge(file.channelState, open.channelState);
+      }
+    }
+
+    // Read against the open document, whose layout and calibration `doc` shares.
     doc.layers.forEach(layer => {
-      if (layer && typeof layer === 'object') layer.rotation = _normalizeRotationDeg(layer.rotation);
+      if (layer.type === 'scalebar') _setScaleBarEnd(layer);
+      _updateMeasurementText(layer);
     });
-    return doc;
+    return { doc, mismatch, channelsKept, recolourSlice, recolourCells, recolourStarted: false };
+  }
+
+  // The picture coloured with the current document's channels where an import applied
+  // them: those Compare cells, or the single slice from its raw values (same frame).
+  function _recolourForImport(plan) {
+    plan.recolourStarted = plan.recolourCells.length > 0 || plan.recolourSlice;
+    _recolourPicture(plan.recolourCells, plan.recolourSlice);
+  }
+
+  /** Re-colours the Compare cells `cells` (indices) or, with `slice`, the single slice, with _doc's channels. */
+  function _recolourPicture(cells, slice) {
+    if (_doc.layoutMaps?.length) {
+      (cells || []).forEach(index => _rerenderSliceFromChannels(index));
+      return;
+    }
+    if (!slice || !_hasRaw(_sliceResult)) return;
+    const prepared = _prepareSliceForStudio(_sliceResult, _doc.channelState);
+    if (!prepared?.canvas) return;
+    if (prepared.width !== _doc.sourceSlice.width || prepared.height !== _doc.sourceSlice.height) return;
+    _sliceResult = prepared;
+    _sliceImage = prepared.canvas;
+    _draw();
+  }
+
+  /**
+   * After undo / redo: the picture takes the colours of the document it shows now
+   * where they differ from those of `previous` — each Compare cell whose channels
+   * changed, and the single slice when it carries raw values (re-coloured in place,
+   * same frame; one without them keeps its picture: a re-render would re-crop it).
+   */
+  function _recolourForDocChange(previous) {
+    if (!previous || !_doc) return;
+    if (_doc.layoutMaps?.length) {
+      const changed = [];
+      _doc.layoutMaps.forEach((cell, index) => {
+        if (!_sameChannels(cell?.channelState, previous.layoutMaps?.[index]?.channelState)) changed.push(index);
+      });
+      _recolourPicture(changed, false);
+      return;
+    }
+    if (!_sameChannels(_doc.channelState, previous.channelState)) _recolourPicture(null, true);
+  }
+
+  function _sameChannels(a, b) {
+    return JSON.stringify(Array.isArray(a) ? a : []) === JSON.stringify(Array.isArray(b) ? b : []);
+  }
+
+  function _sameImportSize(saved, open) {
+    if (!saved) return true;
+    return _nearImport(saved.width, open?.width) && _nearImport(saved.height, open?.height);
+  }
+
+  function _sameImportCell(saved, open) {
+    if (!saved || !open) return false;
+    if (!['x', 'y', 'w', 'h'].every(key => _nearImport(saved[key], open[key]))) return false;
+    return _sameImportIdentity(
+      _importIdentity(saved.dataset) || _importToken(saved.datasetId),
+      _importIdentity(open.dataset) || _importToken(open.datasetId)
+    );
+  }
+
+  function _nearImport(a, b) {
+    const x = Number(a);
+    const y = Number(b);
+    return typeof a === 'number' && Number.isFinite(x) && Number.isFinite(y) && Math.abs(x - y) <= IMPORT_MATCH_TOLERANCE_PX;
+  }
+
+  // A dataset is named by its id (or path); two figures that both name one must name
+  // the same.
+  function _importIdentity(dataset) {
+    return _importToken(dataset?.id) || _importToken(dataset?.path);
+  }
+
+  function _importToken(value) {
+    return typeof value === 'string' && value ? value : null;
+  }
+
+  function _sameImportIdentity(a, b) {
+    return !a || !b || a === b;
+  }
+
+  /**
+   * Whether the file's figure and the open one show the same dataset: `same` false
+   * when they name different ones, `confirmed` when both name the same. A figure is
+   * named by its dataset's id or path; when neither side has one, by the figure's
+   * name — a Compare figure has no id, and its name lists its panels' datasets in
+   * order ('Em1 vs Em2'), so another pair (or the same pair swapped) with cells of the
+   * same size is not taken for it. A side that names nothing makes no claim.
+   */
+  function _importFigureIdentity(fileDataset, openDataset) {
+    const a = _importIdentity(fileDataset);
+    const b = _importIdentity(openDataset);
+    if (a && b) return { same: a === b, confirmed: a === b };
+    if (a || b) return { same: true, confirmed: false };
+    const nameA = _importToken(fileDataset?.name);
+    const nameB = _importToken(openDataset?.name);
+    if (nameA && nameB) return { same: nameA === nameB, confirmed: nameA === nameB };
+    return { same: true, confirmed: false };
+  }
+
+  // The plane a figure shows, compared on the keys that place it; a key only one side
+  // gives makes no claim. Every z-stack slab of a dataset has the same crop, so the
+  // size alone does not tell slice 10 from slice 40.
+  const IMPORT_PLANE_NUMBERS = { value: 1e-6, yaw: 1e-3, pitch: 1e-3, roll: 1e-3, slabThickness: 0, slabStepNorm: 1e-9 };
+  const IMPORT_PLANE_ANGLES = ['yaw', 'pitch', 'roll'];
+
+  function _sameImportPlane(saved, open) {
+    if (!_isPlainObject(saved) || !_isPlainObject(open)) return true;
+    for (const key of ['mode', 'axis', 'projection']) {
+      if (typeof saved[key] === 'string' && typeof open[key] === 'string' && saved[key] !== open[key]) return false;
+    }
+    return Object.keys(IMPORT_PLANE_NUMBERS).every(key => {
+      const a = saved[key];
+      const b = open[key];
+      if (typeof a !== 'number' || typeof b !== 'number' || !Number.isFinite(a) || !Number.isFinite(b)) return true;
+      let d = a - b;
+      if (IMPORT_PLANE_ANGLES.includes(key)) d = ((d % 360) + 540) % 360 - 180;
+      return Math.abs(d) <= IMPORT_PLANE_NUMBERS[key];
+    });
+  }
+
+  function _sameImportTimepoint(saved, open) {
+    const finite = v => typeof v === 'number' && Number.isFinite(v);
+    return !finite(saved) || !finite(open) || saved === open;
+  }
+
+  /**
+   * The file's channel settings over the open figure's, channel by channel: the open
+   * figure decides how many channels there are, a channel the file does not describe
+   * (missing, null, shorter list) keeps its settings, and a setting the file gives with
+   * the wrong type is ignored. A channel's name comes from the file only with
+   * `options.names` (both figures name the same dataset). The numbers of a channel the
+   * file describes are brought into the ranges the channel panel keeps
+   * (_normalizeImportedChannel), so the picture is coloured with what the panel shows.
+   */
+  function _mergeImportedChannels(saved, current, options = {}) {
+    const own = Array.isArray(current) ? current : [];
+    const file = Array.isArray(saved) ? saved : [];
+    const count = own.length || file.length;
+    const merged = [];
+    for (let i = 0; i < count; i++) {
+      const channel = _isPlainObject(own[i]) ? _clone(own[i]) : {};
+      const item = _isPlainObject(file[i]) ? file[i] : null;
+      if (item) {
+        const given = new Set();
+        IMPORT_CHANNEL_NUMBERS.forEach(key => {
+          if (typeof item[key] === 'number' && Number.isFinite(item[key])) {
+            channel[key] = item[key];
+            given.add(key);
+          }
+        });
+        if (given.size) _normalizeImportedChannel(channel, given);
+        if (_isImportColor(item.color)) channel.color = item.color;
+        if (options.names && typeof item.name === 'string' && item.name) channel.name = item.name;
+        const on = item.enabled !== undefined ? item.enabled : item.active;
+        if (typeof on === 'boolean') channel.enabled = on;
+        if (typeof item.expanded === 'boolean') channel.expanded = item.expanded;
+        if (typeof item.filterBackground === 'boolean') channel.filterBackground = item.filterBackground;
+      }
+      merged.push(channel);
+    }
+    return merged;
+  }
+
+  /**
+   * One channel's numbers as ChannelPanel.setState keeps them (the Studio's panel
+   * shows what setState makes of the document; the compositor colours with the
+   * document itself, so both must hold the same values): min ∈ [0, 0.99],
+   * max ∈ [min + 0.01, 1], opacity ∈ [0.05, 1], denoise_sigma ≥ 0, and the midtone
+   * inside the window, [min + 0.01, max − 0.01], with the gamma it implies,
+   *   gamma = clamp(ln ½ / ln r, 0.18, 5.5),  r = (midtone − min) / (max − min)
+   * (the panel reads a midtone first and derives the gamma; a gamma within 1e-6 of it
+   * is kept as the file wrote it). A gamma the file gives without a midtone is
+   * clamped to [0.18, 5.5] and, when the channel has a midtone, moves it to
+   * min + ½^(1/gamma)·(max − min): pow(0, 0) = 1 made a gamma of 0 paint the whole
+   * picture in the channel's colour. `given`: the numeric keys the file set.
+   */
+  function _normalizeImportedChannel(channel, given) {
+    const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
+    const num = (v, fallback) => (typeof v === 'number' && Number.isFinite(v) ? v : fallback);
+    const min = Math.min(clamp(num(channel.min, 0), 0, 1), 0.99);
+    const max = clamp(Math.max(clamp(num(channel.max, 1), 0, 1), min + 0.01), 0, 1);
+    channel.min = min;
+    channel.max = max;
+    if ('opacity' in channel) channel.opacity = clamp(num(channel.opacity, 1), 0.05, 1);
+    if ('denoise_sigma' in channel) channel.denoise_sigma = Math.max(0, num(channel.denoise_sigma, 0));
+    if (given.has('gamma') && !given.has('midtone')) {
+      channel.gamma = clamp(channel.gamma, 0.18, 5.5);
+      if (Number.isFinite(channel.midtone)) channel.midtone = min + Math.pow(0.5, 1 / channel.gamma) * (max - min);
+    }
+    if (typeof channel.midtone === 'number' && Number.isFinite(channel.midtone)) {
+      const midtone = clamp(clamp(channel.midtone, 0, 1), min + 0.01, max - 0.01);
+      const relative = clamp((midtone - min) / Math.max(0.001, max - min), 0, 1);
+      const gamma = Math.max(0.18, Math.min(5.5, Math.log(0.5) / Math.log(clamp(relative, 0.001, 0.999))));
+      channel.midtone = midtone;
+      if (!(Math.abs(num(channel.gamma, NaN) - gamma) <= 1e-6 * gamma)) channel.gamma = gamma;
+    } else if ('gamma' in channel) {
+      channel.gamma = clamp(num(channel.gamma, 1), 0.18, 5.5);
+    }
+  }
+
+  /**
+   * The content of a Studio file, checked: `{ createdAt, dataset, sourceSlice,
+   * planeSpec, timepoint, channelState, layoutMaps, layers, guides, groups }` (null where the file says
+   * nothing). A list or an object in the wrong place, or a layer, guide, group or cell
+   * that cannot be read, makes the whole file invalid; values inside an entry are
+   * coerced (a non-finite coordinate → 0, an angle → (−180, 180], an unsafe id → a new
+   * one). Channel settings are only type-checked here: _mergeImportedChannels reads them.
+   */
+  function _migrateDocument(value) {
+    if (Array.isArray(value)) {
+      // The first Studio files were a bare list of layers.
+      return _checkImportedFile({ layers: value.map(old => (_isPlainObject(old) ? _migrateLayer(old) : old)) });
+    }
+    if (!_isPlainObject(value) || !Array.isArray(value.layers)) throw new Error('Unsupported Studio JSON format.');
+    return _checkImportedFile(value);
+  }
+
+  function _checkImportedFile(value) {
+    const given = key => value[key] !== undefined && value[key] !== null;
+    const expect = (ok, what) => {
+      if (!ok) throw new Error(`Studio JSON: ${what}.`);
+    };
+    ['layoutMaps', 'channelState', 'guides', 'groups'].forEach(key => {
+      expect(!given(key) || Array.isArray(value[key]), `${key} is not a list`);
+    });
+    ['sourceSlice', 'dataset'].forEach(key => {
+      expect(!given(key) || _isPlainObject(value[key]), `${key} is not an object`);
+    });
+
+    const groupIds = new Set();
+    const groups = (value.groups || []).map(group => {
+      expect(_isPlainObject(group), 'a group is not an object');
+      const id = _importId(group.id, 'group', groupIds);
+      return { id, name: typeof group.name === 'string' ? group.name : '', collapsed: group.collapsed === true };
+    });
+    const layerIds = new Set();
+    const layers = value.layers.map(layer => {
+      expect(_isPlainObject(layer) && typeof layer.type === 'string' && IMPORT_LAYER_TYPE.test(layer.type), 'a layer has no readable type');
+      const checked = _checkImportedLayer(layer, layerIds);
+      if (checked.groupId !== null && !groupIds.has(checked.groupId)) checked.groupId = null;
+      return checked;
+    });
+    const guides = (value.guides || []).map(guide => {
+      expect(_isPlainObject(guide) && (guide.axis === 'x' || guide.axis === 'y') && Number.isFinite(guide.value), 'a guide is not readable');
+      return { axis: guide.axis, value: guide.value };
+    });
+    const layoutMaps = given('layoutMaps')
+      ? value.layoutMaps.map(cell => {
+        expect(_isPlainObject(cell), 'a layout cell is not an object');
+        expect(cell.channelState === undefined || cell.channelState === null || Array.isArray(cell.channelState), "a layout cell's channelState is not a list");
+        return _layoutMapData(cell);
+      })
+      : null;
+    return {
+      createdAt: typeof value.createdAt === 'string' && value.createdAt ? value.createdAt : null,
+      dataset: given('dataset') ? value.dataset : null,
+      sourceSlice: given('sourceSlice') ? value.sourceSlice : null,
+      // Only compared with the open figure's (never applied): a value that cannot be
+      // read makes no claim.
+      planeSpec: _isPlainObject(value.planeSpec) ? value.planeSpec : null,
+      timepoint: typeof value.timepoint === 'number' && Number.isFinite(value.timepoint) ? value.timepoint : null,
+      channelState: given('channelState') ? value.channelState : null,
+      layoutMaps,
+      layers,
+      guides,
+      groups
+    };
+  }
+
+  // One layer of a file, as the Studio draws and lists it. The id is written into the
+  // layer list's markup and compared with the dataset string of its row, so it must be
+  // a unique plain token; the colours go into a colour input and a canvas style.
+  function _checkImportedLayer(value, usedIds) {
+    const layer = JSON.parse(JSON.stringify(value));
+    layer.id = _importId(layer.id, layer.type, usedIds);
+    IMPORT_GEOMETRY_KEYS.forEach(key => {
+      if (!(key in layer)) return;
+      const n = Number(layer[key]);
+      layer[key] = layer[key] !== null && Number.isFinite(n) ? n : 0;
+    });
+    if ('value' in layer) {
+      const n = Number(layer.value);
+      if (Number.isFinite(n) && n > 0) layer.value = n;
+      else delete layer.value;
+    }
+    if ('points' in layer) {
+      if (Array.isArray(layer.points)) {
+        layer.points = layer.points
+          .filter(p => _isPlainObject(p) && Number.isFinite(Number(p.x)) && Number.isFinite(Number(p.y)))
+          .map(p => ({ ...p, x: Number(p.x), y: Number(p.y) }));
+      } else {
+        delete layer.points;
+      }
+    }
+    ['name', 'text'].forEach(key => {
+      if (!(key in layer) || typeof layer[key] === 'string') return;
+      layer[key] = (typeof layer[key] === 'number' && Number.isFinite(layer[key])) ? String(layer[key]) : '';
+    });
+    if (layer.unit === 'µm') layer.unit = 'um';
+    if ('unit' in layer && !IMPORT_UNITS.includes(layer.unit)) delete layer.unit;
+    if ('meta' in layer && !_isPlainObject(layer.meta)) delete layer.meta;
+    layer.groupId = typeof layer.groupId === 'string' && IMPORT_SAFE_ID.test(layer.groupId) ? layer.groupId : null;
+    layer.visible = layer.visible !== false;
+    layer.locked = layer.locked === true;
+    // A document saved before layers could turn has no `rotation` (→ 0); a hand-edited
+    // one may carry anything, which must never reach ctx.rotate as NaN.
+    layer.rotation = _normalizeRotationDeg(layer.rotation);
+    layer.style = _checkImportedStyle(layer.style);
+    return layer;
+  }
+
+  function _checkImportedStyle(value) {
+    const style = {};
+    if (!_isPlainObject(value)) return style;
+    Object.keys(value).forEach(key => {
+      const v = value[key];
+      if (key === '__proto__') return;
+      if (IMPORT_STYLE_COLORS.includes(key)) {
+        if (_isImportColor(v)) style[key] = v;
+      } else if (Object.prototype.hasOwnProperty.call(IMPORT_STYLE_NUMBERS, key)) {
+        const [lo, hi] = IMPORT_STYLE_NUMBERS[key];
+        const n = Number(v);
+        if (v !== null && v !== '' && Number.isFinite(n)) style[key] = Math.max(lo, Math.min(hi, n));
+      } else if (key === 'startCap' || key === 'endCap') {
+        // 'flat' is the v1.0.0 name of the bar cap (_drawCap still draws it as one).
+        if (v === 'flat') style[key] = 'bar';
+        else if (IMPORT_CAPS.includes(v)) style[key] = v;
+      } else if (IMPORT_STYLE_FLAGS.includes(key)) {
+        if (typeof v === 'boolean') style[key] = v;
+      } else if (typeof v === 'boolean' || (typeof v === 'number' && Number.isFinite(v))
+        || (typeof v === 'string' && IMPORT_STYLE_TOKEN.test(v))) {
+        style[key] = v;
+      }
+    });
+    return style;
+  }
+
+  function _importId(value, type, usedIds) {
+    let id = typeof value === 'number' && Number.isFinite(value) ? String(value) : value;
+    if (typeof id !== 'string' || !IMPORT_SAFE_ID.test(id) || usedIds.has(id)) {
+      do {
+        id = `${type}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`;
+      } while (usedIds.has(id));
+    }
+    usedIds.add(id);
+    return id;
+  }
+
+  function _isImportColor(value) {
+    return typeof value === 'string' && (
+      /^#[0-9a-f]{3,8}$/i.test(value)
+      || /^rgba?\(\s*[\d.\s,%]+\)$/i.test(value)
+      || /^[a-z]{3,20}$/i.test(value)
+    );
+  }
+
+  function _isPlainObject(value) {
+    return value !== null && typeof value === 'object' && !Array.isArray(value);
   }
 
   function _migrateLayer(old) {

@@ -582,6 +582,8 @@
     "errGeneric": "Export mislukt: {message}"
   },
   "studio": {
+    "importOtherFigure": "Dit Studio-bestand is opgeslagen voor een andere figuur: de annotaties zijn geïmporteerd, maar de kanaalinstellingen zijn alleen toegepast waar de figuur overeenkomt.",
+    "importChannelsKept": "De annotaties zijn geïmporteerd. Deze afbeelding heeft geen ruwe kanaalwaarden om opnieuw in te kleuren, dus ze behoudt haar kanaalinstellingen.",
     "exportJsonFailed": "De Studio-JSON kon niet worden geschreven.",
     "propRotation": "Rotatie",
     "resetRotation": "Rotatie herstellen",

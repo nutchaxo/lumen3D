@@ -349,7 +349,14 @@
     "skipToViewer": "Naar de viewer",
     "renderMode": "Weergavemodus",
     "exposure": "Zichtbaarheid (belichting)",
-    "customColor": "Aangepaste kleur"
+    "customColor": "Aangepaste kleur",
+    "detailStatus": "Detail: {count} blokken van niveau {level} in beeld",
+    "detailLoading": "Detail: {loaded} van {total} blokken van niveau {level} laden",
+    "detailNoBudget": "Detail niet beschikbaar: te weinig GPU-geheugen",
+    "detailMode": "Detail bij inzoomen",
+    "detailAuto": "Automatisch",
+    "detailOn": "Aan",
+    "detailOff": "Uit"
   },
   "compare": {
     "title": "Vergelijkingsmodus",
@@ -698,7 +705,8 @@
     "nativeReady": "Originele doorsnede klaar ({n} blokken).",
     "nativeReadyMissing": "Originele doorsnede klaar ({n} blokken; {missing} op de vorige resolutie).",
     "uncalibrated": "niet gekalibreerd",
-    "bigPassMessagePlanes": "Deze figuur projecteert {n} coupes: het native beeld leest {planes} opgeslagen vlakken, ongeveer {mb} MB ({tiles} beeldtegels)."
+    "bigPassMessagePlanes": "Deze figuur projecteert {n} coupes: het native beeld leest {planes} opgeslagen vlakken, ongeveer {mb} MB ({tiles} beeldtegels).",
+    "bigPassMessageMips": "Deze figuur projecteert {n} coupes: het native beeld leest {layers} opgeslagen laagprojecties en {planes} opgeslagen vlakken, ongeveer {mb} MB ({tiles} beeldtegels)."
   },
   "admin": {
     "loginTitle": "{brand} Beheer",
@@ -1155,7 +1163,10 @@
     "rjUnreadable": "item(s) onleesbaar bij het lezen van de map",
     "insufficientDisk": "Onvoldoende schijfruimte op de server ({needed} nodig, {free} vrij)",
     "tooLarge": "\"{name}\" is groter dan de server voor één bestand accepteert.",
-    "rjDisk": "onvoldoende schijfruimte op de server"
+    "rjDisk": "onvoldoende schijfruimte op de server",
+    "confirmOverwriteKeep": "Er bestaat al een gepubliceerde dataset met deze naam. Vervangen? De afbeeldingengalerij en de velden die u invulde (naam, oriëntatie, bijschriften…) blijven behouden als de nieuwe import ze niet levert.",
+    "publishedKept": "Dataset gepubliceerd ✓ — behouden uit de vorige versie: {kept}",
+    "keptGallery": "de galerij"
   },
   "appearance": {
     "title": "Vormgeving",
@@ -1863,7 +1874,8 @@
     "uninstallConfirm": "Deze plug-in verwijderen?",
     "uninstalled": "Plug-in verwijderd.",
     "lastShader": "Niet mogelijk: laatste weergavemodus.",
-    "uninstallFailed": "Verwijderen mislukt."
+    "uninstallFailed": "Verwijderen mislukt.",
+    "rollback": "Catalogus geweigerd: ouder (nr. {offered}) dan een catalogus die deze server al aanvaardde (nr. {seen}). Hij kan sindsdien gecorrigeerde pluginversies opnieuw installeren."
   },
   "docs": {
     "title": "Documentatie",
@@ -2054,6 +2066,36 @@
     "assembling": "Vlakken samenstellen {x}/{y}",
     "written": "Geschreven",
     "reasonOffline": "de server was niet bereikbaar",
-    "errDisk": "onvoldoende schijfruimte op de server (nodig / vrij)"
+    "errDisk": "onvoldoende schijfruimte op de server (nodig / vrij)",
+    "reasonWebpEncode": "deze browser kan geen verliesloze WebP-afbeeldingen coderen",
+    "reasonWebpEncodeServer": "de server kan geen verliesloze WebP-afbeeldingen coderen",
+    "reasonNumpy": "de server heeft geen NumPy",
+    "reasonCompression": "deze browser heeft geen compressiestreams",
+    "reasonPng": "deze browser leest PNG-tegels niet exact terug",
+    "reasonHandler": "deze pagina heeft geen converter voor deze update",
+    "errNoExecutor": "noch deze browser noch de server kan deze update uitvoeren",
+    "errBlocked": "een lager niveau van de piramide is nog niet klaar",
+    "errBadWebp": "de server weigerde een geconverteerde brick",
+    "toastNoExecutor": "Geen uitvoerder kan uitvoeren: {list}. Die stappen mislukken.",
+    "noExecutor": "Noch deze browser noch de server kan deze update uitvoeren. Datasets die haar nodig hebben stoppen vóór deze stap.",
+    "serverSome": "De server kan sommige updates zelf uitvoeren, deze niet:",
+    "execNone": "geen",
+    "spu": "{s} s/eenheid",
+    "probing": "controleren…",
+    "capOk": "beschikbaar",
+    "colUpdate": "Update",
+    "colEta": "Geschatte tijd",
+    "execHint": "Beide uitvoerders vereisen dat dit tabblad open blijft. De snelste beschikbare wordt gebruikt tenzij u kiest.",
+    "benchMigration": "Update",
+    "benchNoSample": "Nog geen dataset klaar voor deze stap: voer eerst de eerdere updates uit.",
+    "step": "stap {i} van {n}",
+    "etaStep": "Resterende tijd (deze stap)",
+    "etaChain": "Resterende tijd (alle stappen)",
+    "etaUnknown": "voer de benchmark uit",
+    "errUnitTimeout": "de server kan een eenheid niet binnen zijn tijdslimiet converteren",
+    "toastUnitTimeoutSwitch": "{update}: de server kan sommige eenheden niet op tijd converteren. {name} gaat verder in deze browser.",
+    "toastUnitTimeoutStuck": "Update van {name} gestopt: {error}. {hint}",
+    "unitTimeoutRetry": "Probeer het opnieuw in deze browser of verwerk de dataset opnieuw met de pipeline.",
+    "unitTimeoutNoBrowser": "Deze browser kan deze update ook niet uitvoeren; verwerk de dataset opnieuw met de pipeline."
   }
 }

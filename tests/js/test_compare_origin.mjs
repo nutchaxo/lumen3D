@@ -18,9 +18,10 @@ const docStub = {
   createElement: () => ({ classList: { add() {}, remove() {} }, style: {}, appendChild() {} }),
   body: { appendChild() {} },
 };
+const ComparePanelRpc = loadModule('js/pages/compare-policy.js', 'ComparePanelRpc');
 const CompareApp = loadModule('js/pages/compare.js', 'CompareApp', {
   window: { location: { origin: ORIGIN }, addEventListener() {}, postMessage() {} },
-  document: docStub, Utils, requestAnimationFrame: () => {}, setTimeout,
+  document: docStub, Utils, requestAnimationFrame: () => {}, setTimeout, ComparePanelRpc,
 });
 
 assert.ok(CompareApp && typeof CompareApp._handleIframeMessage === 'function',

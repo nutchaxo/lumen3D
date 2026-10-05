@@ -12,6 +12,7 @@ Output structure:
 import os
 import sys
 import glob
+import io
 from datetime import datetime
 import multiprocessing
 
@@ -278,12 +279,16 @@ class CellIDAssigner:
         # State: list of (unique_cell_id, x, y, z) for the "current" cells
         current_cells = []
 
+        # track_group holds this track's rows in table order, so filtering it per frame
+        # yields the same rows, in the same order, as masking the whole table did, at a
+        # cost proportional to the track instead of to the table.
+        group_tp = track_group["timepoint"].to_numpy()
+        group_index = track_group.index.to_numpy()
+        group_coords = track_group[["x", "y", "z"]].to_numpy()
         for t_idx, tp in enumerate(timepoints):
-            # Get all rows for this track at this timepoint
-            tp_mask = (df["track_id"] == track_id) & (df["timepoint"] == tp)
-            tp_rows = df.loc[tp_mask].copy()
-            tp_indices = tp_rows.index.tolist()
-            tp_coords = tp_rows[["x", "y", "z"]].values  # shape (n_curr, 3)
+            sel = group_tp == tp
+            tp_indices = group_index[sel].tolist()
+            tp_coords = group_coords[sel]  # shape (n_curr, 3)
 
             n_curr = len(tp_indices)
 
@@ -387,11 +392,12 @@ class CellIDAssigner:
                     best_mother_prev_idx = r
 
             if best_mother_prev_idx is None:
-                # Fallback: pick any unprocessed mother
-                for r in row_ind:
-                    if r not in processed_mothers:
-                        best_mother_prev_idx = r
-                        break
+                # More new spots than cells that could have divided (the track's count
+                # more than doubled in one frame, e.g. a spot missed on the previous frame):
+                # a cell divides once per frame, so this spot starts a cell of its own,
+                # without a parent. It joins current_cells in the loop at the end.
+                df.at[tp_indices[new_j], "unique_cell_id"] = self._new_id()
+                continue
 
             processed_mothers.add(best_mother_prev_idx)
 
@@ -701,11 +707,22 @@ def stabilize_coordinates(df, assigner):
     return df, diagnostics
 
 
+def _plotting():
+    """matplotlib (headless) and imageio, imported only by the figure/video helpers so the
+    analysis core stays importable without them."""
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    import imageio.v2 as imageio
+    return plt, imageio
+
+
 def plot_stabilization_diagnostics(diagnostics, out_dir):
     """
     Generate diagnostic plots for stabilization quality.
     Saves a multi-panel PNG.
     """
+    plt, _ = _plotting()
     fig, axes = plt.subplots(2, 2, figsize=(14, 10))
     fig.suptitle("Stabilization Quality Diagnostics", fontsize=16, fontweight="bold")
 
@@ -1304,17 +1321,22 @@ def _build_surface_point_clouds(df, coord_cols, smooth_steps=1, allow_track_gaps
     }
 
 
-def compute_embryo_surfaces(df, smooth_steps=10):
+SURFACE_COORD_SYSTEMS = {
+    "stab": ("x_stab", "y_stab", "z_stab"),
+    "raw": ("x", "y", "z"),
+}
+
+
+def compute_embryo_surfaces(df, smooth_steps=10, coord_systems=("stab", "raw")):
     """
     Compute embryo surface meshes for all timepoints, both coordinate systems.
     Exporte deux variantes :
       - raw/stab : strictement sur les points mesurés aux frames brutes
       - raw_interp/stab_interp : version dense alignée avec le slider smooth du viewer
+    `coord_systems` restricts the systems built (a source without raw coordinates has
+    only the stabilised one); the order of the keys of the result follows it.
     """
-    coord_systems = {
-        "stab": ("x_stab", "y_stab", "z_stab"),
-        "raw": ("x", "y", "z"),
-    }
+    coord_systems = {name: SURFACE_COORD_SYSTEMS[name] for name in coord_systems}
     
     surface_data = {}
     
@@ -1424,6 +1446,7 @@ def interpolate_dataframe(df, steps_per_interval=10):
 
 def _pad_and_save_video(frames, video_path, fps):
     """Pad frames to uniform size (divisible by 16) and save as MP4."""
+    _, imageio = _plotting()
     max_h = max(f.shape[0] for f in frames)
     max_w = max(f.shape[1] for f in frames)
     new_h = ((max_h + 15) // 16) * 16
@@ -1452,6 +1475,7 @@ def _render_frames(df, timepoints, regions, region_colors,
                        or None to skip rotation annotations.
     title : optional title string displayed at top of each frame.
     """
+    plt, imageio = _plotting()
     frames = []
 
     def _get_col(g, spec):
@@ -1664,7 +1688,29 @@ def render_3d_videos(df, out_dir, diagnostics, fps=1):
     )
     # Right: raw (not stabilized)
     print(f"  Rendering raw comparison panels ({len(timepoints)} frames)...")
-    frames_not_stab# ---------------------------------------------
+    frames_not_stab = _render_frames(
+        df, timepoints, regions, region_colors,
+        plot_x="x", plot_y="y", plot_z="z",
+        xlim=shared_xlim, ylim=shared_ylim, zlim=shared_zlim,
+        elev=-70, azim=-100,
+        rotations_per_tp=None,
+        title="RAW"
+    )
+    side_by_side = []
+    for left, right in zip(frames_stab, frames_not_stab):
+        h = max(left.shape[0], right.shape[0])
+        pair = []
+        for frame in (left, right):
+            padded = np.full((h, frame.shape[1], frame.shape[2]), 255, dtype=frame.dtype)
+            padded[:frame.shape[0]] = frame
+            pair.append(padded)
+        side_by_side.append(np.concatenate(pair, axis=1))
+    cmp_path = os.path.join(out_dir, "stabilized_vs_raw_video.mp4")
+    _pad_and_save_video(side_by_side, cmp_path, fps)
+    print(f"  Saved: {cmp_path}")
+
+
+# ---------------------------------------------
 #  EXPORT ORCHESTRATOR
 # ---------------------------------------------
 

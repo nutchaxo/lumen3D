@@ -349,7 +349,14 @@
     "skipToViewer": "Ir al visor",
     "renderMode": "Modo de renderizado",
     "exposure": "Visibilidad (exposición)",
-    "customColor": "Color personalizado"
+    "customColor": "Color personalizado",
+    "detailStatus": "Detalle: {count} bricks del nivel {level} visibles",
+    "detailLoading": "Detalle: cargando {loaded} de {total} bricks del nivel {level}",
+    "detailNoBudget": "Detalle no disponible: memoria GPU insuficiente",
+    "detailMode": "Detalle al ampliar",
+    "detailAuto": "Automático",
+    "detailOn": "Activado",
+    "detailOff": "Desactivado"
   },
   "compare": {
     "title": "Modo de comparación",
@@ -698,7 +705,8 @@
     "nativeReady": "Corte nativo listo ({n} bloques).",
     "nativeReadyMissing": "Corte nativo listo ({n} bloques; {missing} a la resolución anterior).",
     "uncalibrated": "sin calibrar",
-    "bigPassMessagePlanes": "Esta figura proyecta {n} cortes: su imagen nativa lee {planes} planos almacenados, unos {mb} MB ({tiles} teselas de imagen)."
+    "bigPassMessagePlanes": "Esta figura proyecta {n} cortes: su imagen nativa lee {planes} planos almacenados, unos {mb} MB ({tiles} teselas de imagen).",
+    "bigPassMessageMips": "Esta figura proyecta {n} cortes: su imagen nativa lee {layers} proyecciones de capas almacenadas y {planes} planos almacenados, unos {mb} MB ({tiles} teselas de imagen)."
   },
   "admin": {
     "loginTitle": "{brand} Admin",
@@ -1155,7 +1163,10 @@
     "rjUnreadable": "elemento(s) ilegible(s) al leer la carpeta",
     "insufficientDisk": "Espacio en disco insuficiente en el servidor ({needed} necesarios, {free} libres)",
     "tooLarge": "«{name}» supera el tamaño que el servidor acepta para un archivo.",
-    "rjDisk": "espacio en disco insuficiente en el servidor"
+    "rjDisk": "espacio en disco insuficiente en el servidor",
+    "confirmOverwriteKeep": "Ya hay un dataset publicado con este nombre. ¿Reemplazarlo? Su galería y los campos que rellenó (nombre, orientación, leyendas…) se conservan si la nueva importación no los aporta.",
+    "publishedKept": "Dataset publicado ✓ — conservado de la versión anterior: {kept}",
+    "keptGallery": "la galería"
   },
   "appearance": {
     "title": "Apariencia",
@@ -1863,7 +1874,8 @@
     "uninstallConfirm": "¿Desinstalar este plugin?",
     "uninstalled": "Plugin desinstalado.",
     "lastShader": "No se puede: último modo de render.",
-    "uninstallFailed": "Error al desinstalar."
+    "uninstallFailed": "Error al desinstalar.",
+    "rollback": "Catálogo rechazado: es más antiguo (n.º {offered}) que uno ya aceptado por este servidor (n.º {seen}). Podría reinstalar versiones de plugins corregidas desde entonces."
   },
   "docs": {
     "title": "Documentación",
@@ -2054,6 +2066,36 @@
     "assembling": "Ensamblando planos {x}/{y}",
     "written": "Escrito",
     "reasonOffline": "no se pudo contactar con el servidor",
-    "errDisk": "espacio en disco insuficiente en el servidor (necesario / libre)"
+    "errDisk": "espacio en disco insuficiente en el servidor (necesario / libre)",
+    "reasonWebpEncode": "este navegador no puede codificar imágenes WebP sin pérdida",
+    "reasonWebpEncodeServer": "el servidor no puede codificar imágenes WebP sin pérdida",
+    "reasonNumpy": "el servidor no tiene NumPy",
+    "reasonCompression": "este navegador no tiene flujos de compresión",
+    "reasonPng": "este navegador no reproduce exactamente las teselas PNG",
+    "reasonHandler": "esta página no tiene conversor para esta actualización",
+    "errNoExecutor": "ni este navegador ni el servidor pueden ejecutar esta actualización",
+    "errBlocked": "un nivel inferior de la pirámide aún no está completo",
+    "errBadWebp": "el servidor rechazó un brick convertido",
+    "toastNoExecutor": "Ningún ejecutor puede ejecutar: {list}. Esos pasos fallarán.",
+    "noExecutor": "Ni este navegador ni el servidor pueden ejecutar esta actualización. Los datasets que la necesitan se detienen antes de este paso.",
+    "serverSome": "El servidor puede ejecutar algunas actualizaciones, no estas:",
+    "execNone": "ninguno",
+    "spu": "{s} s/unidad",
+    "probing": "comprobando…",
+    "capOk": "disponible",
+    "colUpdate": "Actualización",
+    "colEta": "Tiempo estimado",
+    "execHint": "Ambos ejecutores necesitan esta pestaña abierta. Se usa el más rápido disponible salvo que elija otro.",
+    "benchMigration": "Actualización",
+    "benchNoSample": "Ningún dataset está listo para este paso: ejecute antes las actualizaciones anteriores.",
+    "step": "paso {i} de {n}",
+    "etaStep": "Tiempo restante (este paso)",
+    "etaChain": "Tiempo restante (todos los pasos)",
+    "etaUnknown": "ejecute la prueba",
+    "errUnitTimeout": "el servidor no puede convertir una unidad dentro de su límite de tiempo",
+    "toastUnitTimeoutSwitch": "{update}: el servidor no puede convertir algunas unidades a tiempo. Se continúa {name} en este navegador.",
+    "toastUnitTimeoutStuck": "Actualización de {name} detenida: {error}. {hint}",
+    "unitTimeoutRetry": "Vuelva a intentarlo en este navegador o reprocese el dataset con el pipeline.",
+    "unitTimeoutNoBrowser": "Este navegador tampoco puede ejecutar esta actualización; reprocese el dataset con el pipeline."
   }
 }

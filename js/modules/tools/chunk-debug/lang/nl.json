@@ -7,6 +7,7 @@
   "tipSize": "Grootte",
   "tipVox": "vox",
   "tipStored": "Opgeslagen",
+  "tipBorder": "opgeslagen als {n}³ met een rand van één voxel",
   "tipFile": "Bestand",
   "tipChannels": "kanalen",
   "tipLod": "LOD",

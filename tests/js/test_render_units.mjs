@@ -42,6 +42,7 @@ const U = new Function('THREE', `
   const clipPlanes = { xMin: 0, xMax: 1, yMin: 0, yMax: 1, zMin: 0, zMax: 1 };
   const material = { uniforms: { clipMin: { value: new THREE.Vector3(0, 0, 0) }, clipMax: { value: new THREE.Vector3(1, 1, 1) } } };
   function _scheduleFrame() {}
+  function _roiSchedule() {}
   function _gpuBudgetBytes() { return 2048 * 1024 * 1024; }
   ${lift('_nextAdaptiveState')}
   ${lift('_settledSampleCap')}

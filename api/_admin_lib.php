@@ -1444,6 +1444,69 @@ function admin_load_stats(): array {
     return $d;
 }
 
+// ── Telemetry throttle (twin: dev_server.py _telemetry_allow — read the format and
+// the arithmetic there) ──────────────────────────────────────────────────────
+// One fixed-size binary file (16-byte global bucket + LUMEN_TELEMETRY_SLOTS 16-byte
+// slots, u32 tag | u32 milli-tokens | u64 last refill ms, little-endian): it can
+// never grow, and a request costs a lock and two 16-byte reads/writes. It sits in a
+// dot-directory under api/, which every host shape refuses to serve.
+const LUMEN_TELEMETRY_IP_BURST = 60;
+const LUMEN_TELEMETRY_IP_RATE = 1;
+const LUMEN_TELEMETRY_GLOBAL_BURST = 600;
+const LUMEN_TELEMETRY_GLOBAL_RATE = 20;
+const LUMEN_TELEMETRY_SLOTS = 4096;
+
+function lumen_telemetry_store(): ?string {
+    $dir = admin_private_dir() . '/.telemetry';
+    if (!is_dir($dir) && !@mkdir($dir, 0700, true) && !is_dir($dir)) return null;
+    return $dir . '/throttle.bin';
+}
+
+function lumen_telemetry_refill(int $tokens, int $last, int $now, int $burst, int $rate): array {
+    if ($now > $last) $tokens = min($burst * 1000, $tokens + ($now - $last) * $rate);
+    return [$tokens, $now];
+}
+
+/** Spend one token of the client's bucket and of the global one, or refuse. A store
+ *  that cannot be opened lets the beacon through: counting is the beacon's job. */
+function lumen_telemetry_allow(string $ip, ?int $nowMs = null, ?string $store = null): bool {
+    $now = $nowMs ?? (int)floor(microtime(true) * 1000);
+    $path = $store ?? lumen_telemetry_store();
+    if ($path === null) return true;
+    $fh = @fopen($path, 'c+b');
+    if ($fh === false) return true;
+    if (!@flock($fh, LOCK_EX)) { @fclose($fh); return true; }
+    try {
+        $h = hash('sha256', $ip !== '' ? $ip : 'unknown', true);
+        $slot = unpack('V', substr($h, 0, 4))[1] % LUMEN_TELEMETRY_SLOTS;
+        $tag = unpack('V', substr($h, 4, 4))[1] | 1;
+        $off = 16 * (1 + $slot);
+        $read = function (int $at) use ($fh): array {
+            fseek($fh, $at);
+            $raw = (string)fread($fh, 16);
+            if (strlen($raw) !== 16) return [0, 0, 0];
+            $u = unpack('Vtag/Vtok/Pt', $raw);
+            return [$u['tag'], $u['tok'], $u['t']];
+        };
+        [, $gTok, $gT] = $read(0);
+        if ($gT === 0) { $gTok = LUMEN_TELEMETRY_GLOBAL_BURST * 1000; $gT = $now; }
+        [$gTok, $gT] = lumen_telemetry_refill($gTok, $gT, $now, LUMEN_TELEMETRY_GLOBAL_BURST, LUMEN_TELEMETRY_GLOBAL_RATE);
+        [$sTag, $sTok, $sT] = $read($off);
+        if ($sTag !== $tag) { $sTag = $tag; $sTok = LUMEN_TELEMETRY_IP_BURST * 1000; $sT = $now; }
+        [$sTok, $sT] = lumen_telemetry_refill($sTok, $sT, $now, LUMEN_TELEMETRY_IP_BURST, LUMEN_TELEMETRY_IP_RATE);
+        $allowed = $sTok >= 1000 && $gTok >= 1000;
+        if ($allowed) { $sTok -= 1000; $gTok -= 1000; }
+        fseek($fh, 0);
+        fwrite($fh, pack('VVP', 0, $gTok, $gT));
+        fseek($fh, $off);
+        fwrite($fh, pack('VVP', $sTag, $sTok, $sT));
+        return $allowed;
+    } finally {
+        @flock($fh, LOCK_UN);
+        @fclose($fh);
+    }
+}
+
 function admin_record_event(string $kind, ?string $datasetId = null): void {
     $map = ['visit' => 'visits', 'view' => 'views', 'download' => 'downloads'];
     if (!isset($map[$kind])) return;
@@ -2533,14 +2596,56 @@ function mkt_fetch_catalog(): array {
     if (!mkt_verify_signature($raw, MARKETPLACE_CATALOG_URL . '.sig')) return [false, 'catalog_signature_invalid'];
     $d = json_decode($raw, true);
     if (!is_array($d) || !isset($d['plugins']) || !is_array($d['plugins'])) return [false, 'invalid_catalog'];
+    $refusal = mkt_check_serial($d);
+    if ($refusal !== null) return [false, $refusal];
     return [true, $d['plugins']];
+}
+
+// Anti-rollback (twin of dev_server.py _marketplace_check_serial — the rationale is
+// there): the highest signed-catalog `serial` this host accepted lives in
+// api/marketplace-state.json; an older catalog is refused. Only a signature-proven
+// catalog may raise it.
+function mkt_state_file(): string { return __DIR__ . '/marketplace-state.json'; }
+
+/** null when the catalog may be used, else the error code. The last refusal's
+ *  serials are kept in mkt_rollback_info() for the listing. */
+function mkt_check_serial(array $doc): ?string {
+    $serial = $doc['serial'] ?? 0;
+    if (!is_int($serial) || $serial < 0) return 'catalog_invalid_serial';
+    if (MARKETPLACE_PUBKEY === '') return null;
+    $out = lumen_with_lock(mkt_state_file(), function () use ($serial, $doc) {
+        $state = admin_read_json(mkt_state_file());
+        $seen = is_array($state) && is_int($state['highestSerial'] ?? null) && $state['highestSerial'] >= 0
+            ? $state['highestSerial'] : 0;
+        if ($serial < $seen) { mkt_rollback_info(['offered' => $serial, 'seen' => $seen]); return 'catalog_rollback'; }
+        if ($serial > $seen) {
+            $issued = $doc['issuedAt'] ?? null;
+            lumen_write_file_atomic(mkt_state_file(), (string)json_encode([
+                'highestSerial' => $serial,
+                'issuedAt' => is_string($issued) ? $issued : null,
+                'acceptedAt' => date('Y-m-d\TH:i:s'),
+            ], JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));
+        }
+        return null;
+    });
+    return is_string($out) ? $out : null;
+}
+
+function mkt_rollback_info(?array $set = null): ?array {
+    static $info = null;
+    if ($set !== null) $info = $set;
+    return $info;
 }
 
 function mkt_list(): array {
     $base = ['configured' => MARKETPLACE_CATALOG_URL !== '', 'signed' => MARKETPLACE_PUBKEY !== ''];
     if (MARKETPLACE_CATALOG_URL === '') return $base + ['plugins' => []];
     [$ok, $res] = mkt_fetch_catalog();
-    if (!$ok) return $base + ['error' => $res, 'plugins' => []];
+    if (!$ok) {
+        $out = $base + ['error' => $res, 'plugins' => []];
+        if ($res === 'catalog_rollback') $out['rollback'] = mkt_rollback_info();
+        return $out;
+    }
     $ver = admin_max_version(changelog_dir());
     $installed = [];
     foreach (admin_list_plugins() as $p) $installed[$p['path']] = $p;
@@ -2624,7 +2729,7 @@ function mkt_install(string $catalogId, string $password, bool $upgrade = false)
     if (!admin_reauth($password)) return [401, ['error' => 'bad_password']];
     $rec = admin_credential();
     [$ok, $res] = mkt_fetch_catalog();
-    if (!$ok) return [502, ['error' => $res]];
+    if (!$ok) return [502, $res === 'catalog_rollback' ? ['error' => $res, 'rollback' => mkt_rollback_info()] : ['error' => $res]];
     $entry = null;
     foreach ($res as $e) { if (is_array($e) && (string)($e['id'] ?? '') === $catalogId) { $entry = $e; break; } }
     if (!$entry) return [404, ['error' => 'unknown_catalog_id']];
@@ -2744,7 +2849,7 @@ function admin_update_protected(string $rel): bool {
     // Runtime/operator state — never shipped in a release, but fail-safe anyway.
     static $stateFiles = ['api/admin_credential.json', 'api/config.json', 'api/stats.json',
                           'api/disabled-plugins.json', 'api/quarantined-plugins.json', 'api/plugin-trust.json',
-                          'api/.update-pending.json', 'api/trusted-proxies.json'];
+                          'api/.update-pending.json', 'api/trusted-proxies.json', 'api/marketplace-state.json'];
     if (in_array($rel, $stateFiles, true)) return true;
     foreach (['config/pages/', 'api/page-drafts/', 'secrets/',
               'DATA_WEB/', 'logs/', 'backups/', 'js/modules/'] as $prefix) {

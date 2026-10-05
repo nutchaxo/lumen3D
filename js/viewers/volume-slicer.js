@@ -87,6 +87,11 @@ const VolumeSlicer = (() => {
     uniform vec3 volumeDim;
     uniform vec3 ptDim;
     uniform float brickSize;
+    // Atlas slot layout (svr-manager.js): slot edge (64, or 66 with the 1-voxel border
+    // of a v3 brick), border width, and the bytes per voxel (1 R8, 2 RG8, 4 RGBA8).
+    uniform float slotStride;
+    uniform float brickApron;
+    uniform int svrComponents;
     #endif
 
     uniform int numChannels;
@@ -161,8 +166,20 @@ const VolumeSlicer = (() => {
       vec3 brickOrigin = brickCoord * brickSize;
       vec3 brickExtent = min(vec3(brickSize), volumeDim - brickOrigin);
       vec3 localVoxel = clamp(floor(logicalPixels - brickOrigin), vec3(0.0), max(vec3(0.0), brickExtent - vec3(1.0)));
-      vec3 atlasVoxel = slotIndex * brickSize + localVoxel;
+      // The voxel's own texel: a bordered slot keeps its interior from texel 1 on. The
+      // slice reads exact voxels (the texel centre), a LINEAR atlas included: at a texel
+      // centre the filter weights of the neighbours are 0.
+      vec3 atlasVoxel = slotIndex * slotStride + vec3(brickApron) + localVoxel;
       return vec4((atlasVoxel + vec3(0.5)) / atlasDim, atlasPage);
+    }
+
+    // An R8 / RG8 atlas samples as (r, 0, 0, 1) / (r, g, 0, 1): the channels the
+    // dataset does not have read as 0, as in an RGBA8 atlas.
+    vec4 keepComponents(vec4 v) {
+      if (svrComponents >= 4) return v;
+      if (svrComponents == 3) return vec4(v.rgb, 0.0);
+      if (svrComponents == 2) return vec4(v.rg, 0.0, 0.0);
+      return vec4(v.r, 0.0, 0.0, 0.0);
     }
 
     vec4 sampleSVRAtlas(vec3 atlasCoord, float atlasPage) {
@@ -205,7 +222,7 @@ const VolumeSlicer = (() => {
       vec4 atlasLookup = getAtlasLookup(uvw);
       present = atlasLookup.w >= 0.0;
       if (!present) return vec4(0.0);
-      return sampleSVRAtlas(atlasLookup.xyz, atlasLookup.w);
+      return keepComponents(sampleSVRAtlas(atlasLookup.xyz, atlasLookup.w));
       #else
       present = true;
       return texture(svrAtlas0, uvw);
@@ -462,7 +479,7 @@ const VolumeSlicer = (() => {
   // and channel settings (zero copy; a channel edit shows on the next render).
   const LINKED_UNIFORMS = [
     'svrAtlas0', 'svrAtlas1', 'svrAtlas2', 'svrAtlas3', 'svrAtlas4', 'svrAtlas5', 'svrAtlas6', 'svrAtlas7',
-    'pageTable', 'atlasDim', 'volumeDim', 'ptDim', 'brickSize', 'numChannels',
+    'pageTable', 'atlasDim', 'volumeDim', 'ptDim', 'brickSize', 'slotStride', 'brickApron', 'svrComponents', 'numChannels',
     'color0', 'min0', 'max0', 'gamma0', 'opacity0', 'en0',
     'color1', 'min1', 'max1', 'gamma1', 'opacity1', 'en1',
     'color2', 'min2', 'max2', 'gamma2', 'opacity2', 'en2',
@@ -473,7 +490,9 @@ const VolumeSlicer = (() => {
     if (/^svrAtlas\d$/.test(k) || k === 'pageTable') return { value: null };
     if (k === 'atlasDim') return { value: new THREE.Vector3(512, 512, 512) };
     if (k === 'volumeDim' || k === 'ptDim') return { value: new THREE.Vector3(1, 1, 1) };
-    if (k === 'brickSize') return { value: 64.0 };
+    if (k === 'brickSize' || k === 'slotStride') return { value: 64.0 };
+    if (k === 'brickApron') return { value: 0 };
+    if (k === 'svrComponents') return { value: 4 };
     if (k === 'numChannels') return { value: 0 };
     if (/^color\d$/.test(k)) return { value: new THREE.Vector3(1, 1, 1) };
     if (/^max\d$/.test(k) || /^gamma\d$/.test(k) || /^opacity\d$/.test(k)) return { value: 1 };

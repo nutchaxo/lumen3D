@@ -38,7 +38,11 @@ const read = (f) => readFileSync(path.join(ROOT, f), 'utf8');
 
   const c = read('js/pages/compare.js');
   assert.ok(!/contentDocument/.test(c), 'Compare never reads a panel document');
-  assert.ok(/win\.ViewerApp\.getCaptureCanvas\(\)/.test(c) && /win\.App2D\.getCaptureCanvas\(\)/.test(c), 'Compare asks each page for its canvas');
+  // Compare asks the page (REQUEST_CAPTURE) and the page snapshots what it shows into a
+  // bitmap in the task of the request (test_v3_page_compare_rpc.mjs runs both sides).
+  assert.ok(/_rpc\.request\(panel\.index, 'REQUEST_CAPTURE'/.test(c) && !/\.(?:ViewerApp|App2D)\b/.test(c), 'Compare asks each page for its canvas');
+  assert.ok(/const canvas = getCaptureCanvas\(\);\s*if \(canvas && canvas\.width && canvas\.height && typeof createImageBitmap === 'function'\) pending = createImageBitmap\(canvas\)/.test(v),
+    'the volume page snapshots its capture canvas in the task of the request');
   assert.ok(/getCaptureCanvas:/.test(read('js/pages/2d.js')), 'the photograph page answers too');
 
   const em = read('js/core/export-manager.js');

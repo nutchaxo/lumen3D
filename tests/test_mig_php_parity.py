@@ -289,6 +289,8 @@ class Parity(unittest.TestCase):
         for row in list(rows_a.values()) + list(rows_b.values()):
             if row.get("job"):
                 row["job"] = strip_times(row["job"])
+            row["jobs"] = [strip_times(j) for j in row.get("jobs") or []]
+        self.maxDiff = None
         self.assertEqual(rows_a, rows_b)
         self.assertEqual(sorted(sa["server"]), sorted(sb["server"]), "server capability keys differ")
 

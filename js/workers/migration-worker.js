@@ -6,16 +6,25 @@
    encode) and POSTs the result to /api/migrations.php?action=unit_put.
 
    Generic: nothing here knows a migration. The handler is a classic script under
-   js/migrations/<id>.js that registers itself on `self.LumenMigrationHandlers[id]`
-   with { prepare, listUnits, planUnitWork, runUnit } (see js/migrations/m002-planes.js).
+   js/migrations/<id>.js that registers itself on `self.LumenMigrationHandlers[id]`:
+     prepare(ctx)                → state     ctx = { datasetBase, fetchJson(url), fetchText(url) }
+     listUnits(state, opts)      → [{ key, empty, level? }]   (may be async; opts.sample = for a benchmark)
+     planUnitWork(key, state)    → work      (may be async)
+     runUnit(work, state, io)    → { body: Uint8Array unit blob, bytesIn, tiles }
+                                   io = { fetchRange(url, start, end), fetchStored(req) → [{bz, by, bx, bytes}], signal }
+     probe()                     → { available, reasons:[codes] }   optional: can THIS browser run it
+     requires: [ids]             optional: handlers whose code this one reuses (imported after it)
+     slotsPerWorker: n           optional: units one worker may hold at once (memory bound)
+   (see js/migrations/m002-planes.js, m003-layer-mips.js, m004-bricks-v3.js).
 
    Concurrency is owned by the page: it never posts more `run` messages than the slots
    it gave this worker, so the worker holds at most that many units in memory.
 
    Messages in:
      config  { endpoint, csrf }
-     prepare { reqId, migration, dataset, datasetBase }  → prepared { reqId, ok, error?, trees? }
-     list    { reqId, migration, dataset }                → listed   { reqId, units:[{key, empty}] }
+     probe   { reqId, migration }                         → probed   { reqId, ok, available, reasons }
+     prepare { reqId, migration, dataset, datasetBase }  → prepared { reqId, ok, error?, trees?, slotsPerWorker? }
+     list    { reqId, migration, dataset, opts? }         → listed   { reqId, units:[{key, empty}] }
      run     { reqId, migration, dataset, unit, dry }     → unit_done { reqId, key, done, total, bytesIn,
                                                               bytesOut, tiles, seconds } | unit_failed
                                                               { reqId, key, error, status, fatal }
@@ -129,6 +138,14 @@ async function fetchJson(url) {
   }, null);
 }
 
+async function fetchText(url) {
+  return withRetries(async () => {
+    const res = await fetch(url, { credentials: 'same-origin', cache: 'no-cache' });
+    if (!res.ok) throw httpError(res.status, null, `HTTP ${res.status} for ${url}`);
+    return res.text();
+  }, null);
+}
+
 async function fetchRange(url, start, end, signal) {
   return withRetries(async () => {
     const res = await fetch(url, { headers: { Range: `bytes=${start}-${end - 1}` }, credentials: 'same-origin', signal });
@@ -158,8 +175,55 @@ async function putUnit(migration, dataset, unit, body, dry, signal) {
   }, signal);
 }
 
-function handlerFor(migration) {
-  if (!/^m\d{3}-[a-z0-9-]+$/.test(String(migration))) throw new Error('bad migration id');
+const STORE_PARALLEL = 8;
+
+/** One stored output of this job (GET action=store_get); null when the server holds none. */
+async function storeGet(migration, dataset, key, signal) {
+  const q = new URLSearchParams({ action: 'store_get', dataset, migration, brick: key });
+  return withRetries(async () => {
+    const res = await fetch(`${_endpoint}?${q}`, { credentials: 'same-origin', cache: 'no-store', signal });
+    if (res.ok) return new Uint8Array(await res.arrayBuffer());
+    let data = null;
+    try { data = await res.json(); } catch (_) { data = null; }
+    // 404 `absent` = a brick dropped by ESS (its interior is zero): the reader treats it as zeros.
+    if (res.status === 404 && data && data.error === 'absent') return null;
+    const err = httpError(res.status, data && data.error, (data && (data.message || data.error)) || `HTTP ${res.status}`);
+    if (data && data.detail) err.detail = String(data.detail);
+    throw err;
+  }, signal);
+}
+
+/**
+ * Outputs this job already produced and the server holds, for a migration whose later units
+ * read earlier ones (m004: level k+1 from level k). req = { t, level, channel, bricks:
+ * [[bz, by, bx]…] }; answered as the list [{ bz, by, bx, bytes }] of the bricks that exist
+ * (an absent one is all zeros), in request order. A list, not one concatenated blob: a level-k
+ * unit reads up to 10³ stored bricks, and a copy of all of them would double the unit's peak.
+ */
+async function fetchStored(migration, dataset, req, signal) {
+  const list = Array.isArray(req.bricks) ? req.bricks : [];
+  const found = new Array(list.length).fill(null);
+  let next = 0;
+  let failed = false;
+  const lane = async () => {
+    while (next < list.length && !failed) {
+      const i = next++;
+      const [bz, by, bx] = list[i];
+      try {
+        found[i] = await storeGet(migration, dataset, `t${req.t}.k${req.level}.c${req.channel}.z${bz}.y${by}.x${bx}`, signal);
+      } catch (err) { failed = true; throw err; }
+    }
+  };
+  await Promise.all(Array.from({ length: Math.max(1, Math.min(STORE_PARALLEL, list.length)) }, lane));
+  const out = [];
+  list.forEach(([bz, by, bx], i) => { if (found[i]) out.push({ bz, by, bx, bytes: found[i] }); });
+  return out;
+}
+
+const ID_RE = /^m\d{3}-[a-z0-9-]+$/;
+
+function _import(migration) {
+  if (!ID_RE.test(String(migration))) throw new Error('bad migration id');
   if (!_loaded.has(migration)) {
     importScripts(`../migrations/${migration}.js${_V}`);
     _loaded.add(migration);
@@ -169,12 +233,31 @@ function handlerFor(migration) {
   return h;
 }
 
+function handlerFor(migration) {
+  const h = _import(migration);
+  for (const dep of Array.isArray(h.requires) ? h.requires : []) _import(dep);
+  return h;
+}
+
+async function onProbe(msg) {
+  try {
+    const h = handlerFor(msg.migration);
+    const r = typeof h.probe === 'function' ? await h.probe() : { available: true, reasons: [] };
+    post({ type: 'probed', reqId: msg.reqId, ok: true, available: !!(r && r.available), reasons: (r && r.reasons) || [] });
+  } catch (err) {
+    post({ type: 'probed', reqId: msg.reqId, ok: false, available: false, reasons: ['no_handler'], error: String(err && err.message || err) });
+  }
+}
+
 async function onPrepare(msg) {
   try {
     const h = handlerFor(msg.migration);
-    const state = await h.prepare({ datasetBase: msg.datasetBase, fetchJson });
+    const state = await h.prepare({ datasetBase: msg.datasetBase, fetchJson, fetchText });
     _states.set(`${msg.migration}|${msg.dataset}`, state);
-    post({ type: 'prepared', reqId: msg.reqId, ok: true, trees: state.trees ? state.trees.length : null });
+    post({
+      type: 'prepared', reqId: msg.reqId, ok: true, trees: state.trees ? state.trees.length : null,
+      slotsPerWorker: Number.isInteger(h.slotsPerWorker) && h.slotsPerWorker > 0 ? h.slotsPerWorker : null,
+    });
   } catch (err) {
     post({ type: 'prepared', reqId: msg.reqId, ok: false, error: String(err && err.message || err) });
   }
@@ -186,9 +269,9 @@ function stateOf(msg) {
   return s;
 }
 
-function onList(msg) {
+async function onList(msg) {
   try {
-    const units = handlerFor(msg.migration).listUnits(stateOf(msg));
+    const units = await handlerFor(msg.migration).listUnits(stateOf(msg), msg.opts || {});
     post({ type: 'listed', reqId: msg.reqId, ok: true, units });
   } catch (err) {
     post({ type: 'listed', reqId: msg.reqId, ok: false, error: String(err && err.message || err) });
@@ -202,8 +285,12 @@ async function onRun(msg) {
   try {
     const h = handlerFor(msg.migration);
     const state = stateOf(msg);
-    const work = h.planUnitWork(msg.unit, state);
-    const io = { fetchRange: (url, s, e) => fetchRange(url, s, e, ac.signal), signal: ac.signal };
+    const work = await h.planUnitWork(msg.unit, state);
+    const io = {
+      fetchRange: (url, s, e) => fetchRange(url, s, e, ac.signal),
+      fetchStored: (req) => fetchStored(msg.migration, msg.dataset, req, ac.signal),
+      signal: ac.signal,
+    };
     const res = await h.runUnit(work, state, io);
     const reply = await putUnit(msg.migration, msg.dataset, msg.unit, res.body, !!msg.dry, ac.signal);
     post({
@@ -233,6 +320,7 @@ self.onmessage = (e) => {
       if (msg.endpoint) _endpoint = msg.endpoint;
       if (msg.csrf !== undefined) _csrf = msg.csrf;
       break;
+    case 'probe': onProbe(msg); break;
     case 'prepare': onPrepare(msg); break;
     case 'list': onList(msg); break;
     case 'run': onRun(msg); break;

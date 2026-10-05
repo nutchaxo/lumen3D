@@ -677,7 +677,9 @@ let singleJson;
 
 // ── A failed Compare import leaves a picture it never drew on exactly as it was ─
 {
-  // Cells without raw values: a recolour re-renders the cell through its panel's slicer.
+  // Cells without raw values: a recolour re-renders the cell through the page's own
+  // slicer (a Compare panel's document is never reached into: the frame below has
+  // nothing the Studio may call).
   const renders = [];
   const panelSlicer = {
     recompose(sr, state) {
@@ -688,7 +690,8 @@ let singleJson;
       return { ...sr, canvas: c, width: 256, height: 256 };
     },
   };
-  const frame = { contentWindow: { VolumeSlicer: panelSlicer } };
+  const frame = { contentWindow: null };
+  ctx.VolumeSlicer = panelSlicer;
   Object.defineProperty(frame, 'toJSON', { value: () => { throw new Error('iframe serialised'); } });
   const openPlain = () => {
     const figure = makeCanvas('figure'); figure.width = 2200; figure.height = 1200;
@@ -722,6 +725,7 @@ let singleJson;
   same(S.sliceImage, figure, 'the untouched original figure is shown again, not a re-rendered copy');
   assert.equal(S.doc.layoutMaps[0].channelState[0].color, stateA[0].color);
   Studio.close();
+  delete ctx.VolumeSlicer;
   console.log('failed Compare import: the original figure is restored as is, unchanged cells never re-rendered: OK');
 }
 

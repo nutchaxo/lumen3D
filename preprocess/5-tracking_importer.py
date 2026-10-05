@@ -8,7 +8,9 @@ workbook exported from Imaris; the last two are normalised by `tracking_sources.
 into the dataset directory:
 
     tracks.json[.gz]   trajectories in the schema the viewer consumes
-    model.glb          the pre-baked population surfaces, if one was exported
+    model.glb          the population surfaces: the GLB exported beside the container when
+                       there is one, otherwise reconstructed from the cells with the
+                       tracking pipeline's own surface code (tracking_sources.build_surface_glb)
 
 and injects into `metadata.json` a `registration` block holding the per-timepoint
 rigid transform that maps RAW acquisition coordinates onto the STABILISED frame.
@@ -45,13 +47,25 @@ if str(HERE) not in sys.path:
     sys.path.insert(0, str(HERE))
 from run_preprocess import atomic_write_bytes, atomic_write_json  # noqa: E402
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"
 
 SIGNATURE = "IMARIS_TRACKER_V1"
 # A Procrustes fit residual under this is machine noise: the stabilisation is rigid and
 # the recovered matrix can be applied to the images. Above it, we refuse to claim so.
 RIGID_TOLERANCE_UM = 0.05
 MIN_FIT_POINTS = 4
+# Share of the raw positions that must fall inside the acquisition box (widened by
+# ALIGNMENT_PAD of its span on every side) for the tracking to be taken as registered with
+# the volume. Below it, the positions are most likely in another unit than the extent.
+ALIGNMENT_MIN_INSIDE = 0.5
+ALIGNMENT_PAD = 0.10
+# A population spreading over less than this share of the acquisition box's largest side
+# is not a plausible tracking of that volume: positions in mm read as um land in a corner
+# of a box starting at 0, inside it but a thousand times too small.
+ALIGNMENT_MIN_SPAN = 0.01
+# Unit the positions would be in, if multiplying them by the factor aligns them (the
+# same factors as 1-ims_metadata.UNIT_TO_UM).
+UNIT_SCALES = {"mm": 1e3, "nm": 1e-3, "m": 1e6}
 
 
 def _sig(value, digits=4):
@@ -397,6 +411,68 @@ def _image_box_union(registration: dict, extent: dict, occupied=None):
     }
 
 
+def check_alignment(points, extent: dict):
+    """Does the tracking sit in the volume's acquisition box?
+
+    ``insideAcquisitionBox`` is the share of the positions within the box widened by
+    ALIGNMENT_PAD of its span per side; the tracking is ``aligned`` when that share reaches
+    ALIGNMENT_MIN_INSIDE and the positions spread over at least ALIGNMENT_MIN_SPAN of the
+    box's largest side. Otherwise each unit factor of UNIT_SCALES is tried and the one that
+    satisfies both with the most positions inside is reported as the probable unit of the
+    positions. Nothing is rescaled:
+    a container declares no unit, so the operator decides.
+    """
+    if not points or not isinstance(extent, dict) or "min" not in extent or "max" not in extent:
+        return None
+    pts = np.asarray(points, float)
+    lo = np.asarray(extent["min"], float)
+    hi = np.asarray(extent["max"], float)
+    pad = (hi - lo) * ALIGNMENT_PAD
+
+    def share(arr):
+        return float(np.all((arr >= lo - pad) & (arr <= hi + pad), axis=1).mean())
+
+    box_span = float(np.max(hi - lo))
+
+    def span_ratio(arr):
+        return float(np.max(arr.max(0) - arr.min(0))) / box_span if box_span > 0 else 0.0
+
+    def plausible(arr):
+        s = share(arr)
+        return s >= ALIGNMENT_MIN_INSIDE and span_ratio(arr) >= ALIGNMENT_MIN_SPAN, s
+
+    ok, inside = plausible(pts)
+    out = {"insideAcquisitionBox": round(inside, 4), "spanRatio": round(span_ratio(pts), 6),
+           "aligned": ok}
+    if not ok:
+        best = None
+        for unit, factor in UNIT_SCALES.items():
+            fits, s = plausible(pts * factor)
+            if fits and (best is None or s > best[1]):
+                best = (unit, s, factor)
+        if best:
+            out["probableUnit"] = {"unit": best[0], "toUm": best[2],
+                                   "insideAfter": round(best[1], 4)}
+    return out
+
+
+def _reconstruct_surface(doc: dict, dataset_dir: Path):
+    """model.glb rebuilt from the cells, or None (pandas / the analysis code unavailable,
+    fewer than 4 cells in every frame). Never fatal: the tracks are already written."""
+    try:
+        import tracking_sources
+        built = tracking_sources.build_surface_glb(doc, dataset_dir / ".model.rebuilt.glb",
+                                                   verbose=False)
+        if built is None:
+            print("[TRACKING] surfaces: no timepoint has the 4 cells a surface needs")
+            return None
+        os.replace(built, dataset_dir / "model.glb")
+        return dataset_dir / "model.glb"
+    except Exception as exc:
+        print(f"[TRACKING] surfaces could not be reconstructed: {exc}")
+        return None
+
+
 def _bounds(points):
     if not points:
         return None
@@ -406,7 +482,8 @@ def _bounds(points):
 
 
 def import_tracking(track_path: Path, dataset_dir: Path, glb_path: Path = None,
-                    timepoint_offset: int = -1, write_gzip: bool = True):
+                    timepoint_offset: int = -1, write_gzip: bool = True,
+                    build_surface: bool = True):
     doc = _load_source(track_path)
     tracks, has_raw = build_tracks_document(doc)
 
@@ -433,8 +510,8 @@ def import_tracking(track_path: Path, dataset_dir: Path, glb_path: Path = None,
     print(f"[TRACKING] tracks.json: {len(tracks['cells'])} cells, "
           f"{len(tracks['timepoints'])} timepoints, {len(payload)/1e6:.2f} MB{gz_note}")
 
-    # --- Copy the surface GLB ---
-    surface_rel = None
+    # --- Surface GLB: the exported one, else reconstructed from the cells ---
+    surface_rel = surface_origin = None
     if glb_path is None:
         candidate = track_path.with_suffix(".glb")
         glb_path = candidate if candidate.exists() else None
@@ -442,10 +519,18 @@ def import_tracking(track_path: Path, dataset_dir: Path, glb_path: Path = None,
         staged = dataset_dir / ".model.glb.tmp"
         shutil.copy2(glb_path, staged)
         os.replace(staged, dataset_dir / "model.glb")
+        # A container synthesised from Scene8 / a workbook carries its source kind; its GLB
+        # was reconstructed by tracking_sources, not exported by the tracking pipeline.
+        kind = ((doc.get("data") or {}).get("provenance") or {}).get("kind")
+        surface_origin = "reconstructed" if kind in ("scene8", "excel") else "exported"
         surface_rel = "model.glb"
-        print(f"[TRACKING] model.glb: {(dataset_dir / 'model.glb').stat().st_size/1e6:.1f} MB")
+    elif build_surface and _reconstruct_surface(doc, dataset_dir):
+        surface_rel, surface_origin = "model.glb", "reconstructed"
+    if surface_rel:
+        print(f"[TRACKING] model.glb ({surface_origin}): "
+              f"{(dataset_dir / 'model.glb').stat().st_size/1e6:.1f} MB")
     else:
-        print("[TRACKING] no surface GLB found — the overlay will render cells and trails only")
+        print("[TRACKING] no surface GLB — the overlay will render cells and trails only")
 
     # --- Region inventory (drives the legend and the region colour palette) ---
     region_counts = Counter(c["region"] for c in tracks["cells"].values())
@@ -466,6 +551,7 @@ def import_tracking(track_path: Path, dataset_dir: Path, glb_path: Path = None,
         "imported": datetime.now().isoformat(),
         "tracksPath": "tracks.json",
         "surfacePath": surface_rel,
+        "surfaceOrigin": surface_origin,
         "cellCount": len(tracks["cells"]),
         "timepointCount": len(tracks["timepoints"]),
         "hasRawCoordinates": has_raw,
@@ -480,6 +566,21 @@ def import_tracking(track_path: Path, dataset_dir: Path, glb_path: Path = None,
     provenance = (doc.get("data") or {}).get("provenance")
     if isinstance(provenance, dict):
         metadata["tracking"]["provenance"] = provenance
+        unit = provenance.get("unit")
+        if isinstance(unit, dict) and unit.get("status") == "unknown":
+            print(f"[TRACKING] [!] unknown position unit {unit.get('declared')!r}: coordinates "
+                  f"kept unconverted, the tracks are NOT aligned with the volume")
+
+    alignment = check_alignment(raw_pts or stab_pts, metadata.get("acquisitionExtentUm"))
+    if alignment:
+        alignment["basis"] = "raw" if raw_pts else "stabilized"
+        metadata["tracking"]["alignment"] = alignment
+        if not alignment["aligned"]:
+            hint = alignment.get("probableUnit")
+            print(f"[TRACKING] [!] only {alignment['insideAcquisitionBox']:.0%} of the "
+                  f"{alignment['basis']} positions lie in the volume's acquisition box"
+                  + (f" — they look like {hint['unit']} (x{hint['toUm']:g} brings "
+                     f"{hint['insideAfter']:.0%} inside)" if hint else ""))
 
     if registration:
         extent = metadata.get("acquisitionExtentUm")
@@ -521,13 +622,16 @@ def main():
                     help="added to the tracking timepoint to get the volume frame index "
                          "(default -1: Imaris counts frames from 1, the brick pyramid from 0)")
     ap.add_argument("--no-gzip", action="store_true", help="skip writing tracks.json.gz")
+    ap.add_argument("--no-surface", action="store_true",
+                    help="do not reconstruct model.glb when the source brings none")
     args = ap.parse_args()
 
     try:
         import_tracking(Path(args.track), Path(args.dataset),
                         Path(args.glb) if args.glb else None,
                         timepoint_offset=args.timepoint_offset,
-                        write_gzip=not args.no_gzip)
+                        write_gzip=not args.no_gzip,
+                        build_surface=not args.no_surface)
         print("[TRACKING] Import complete.")
     except Exception as exc:
         import traceback

@@ -4,11 +4,17 @@
  * Brings published datasets up to the platform's current data format, like a software
  * update: every dataset carries a `formatVersion`, the server lists the migrations each
  * one still needs, and this tab applies them — one dataset after another, each dataset's
- * migrations in order — with either executor (DOCS/dataset-migrations/SPEC.md §6, §9):
+ * migrations in order — with either executor (DOCS/dataset-migrations/SPEC.md §6, §9, §13.5):
  *
- *   A. this browser: js/workers/migration-worker.js range-reads the bricks, re-cuts and
- *      re-encodes them and uploads the result unit by unit;
+ *   A. this browser: js/workers/migration-worker.js reads the published data, converts it
+ *      with the migration's handler and uploads the result unit by unit;
  *   B. the server: the tab drives a loop of bounded `unit_run` calls.
+ *
+ * Each executor can or cannot run each migration (the server says so per migration in
+ * `status.server.migrations`, the browser by running the handler's probe), so the executor is
+ * chosen PER MIGRATION: the operator's pick when it is available, else the faster one the
+ * benchmark measured, else whichever can run it. One dataset's chain may thus run a step in
+ * this browser and the next on the server.
  *
  * Both write the same server journal, so a job survives a reload, a pause, an executor
  * switch. The tab must stay open either way (a shared host has no background worker):
@@ -23,13 +29,14 @@
 import { Utils, I18n, t as _t, escHtml, apiFetchStatus, getCsrf, toast, el, refreshIcons, storageGet, storageSet } from './shared.js';
 import {
   API_MIGRATIONS, createApi, Runner, WorkerPool, buildQueue, migrationChain,
-  remainingUnits, estimateSeconds, benchBrowser, benchServer,
+  remainingUnits, estimateSeconds, benchBrowser, benchServer, serverCapability, chooseExecutor,
 } from './migration-runner.js';
 
 const V = (() => { try { return new URL(import.meta.url).search; } catch (_) { return ''; } })();
 const TAB_ID = 'dataset-updates';
 const LOG_KEY = 'lumen-dupd-log';
-const EXEC_KEY = 'lumen-dupd-executor';
+const EXEC_KEY = 'lumen-dupd-executor';      // the one executor of web 1.58 (fallback)
+const EXECS_KEY = 'lumen-dupd-executors';    // { migration: 'browser' | 'server' }
 const LOG_MAX = 50;
 
 // The English fallback must interpolate too: a key missing from lang/*.json still has to read
@@ -47,7 +54,10 @@ let _loadError = null;
 let _runner = null;
 let _progress = null;      // last progress event
 let _online = true;
-let _bench = { browser: null, server: null, running: null, error: null, dataset: null, n: 4 };
+// results: migration → { browser, server } (each { secondsPerUnit, bytesIn, bytesOut, units })
+let _bench = { results: {}, running: null, error: null, migration: null, dataset: null, n: 4 };
+let _choices = null;        // migration → 'browser' | 'server', the operator's picks
+const _browserCaps = {};    // migration → { available, reasons } | { pending: true }
 let _paintTimer = null;
 let _guardsBound = false;
 
@@ -95,11 +105,28 @@ function needsWork(ds) {
 
 const REASONS = {
   no_webp_decode: () => t('dupd.reasonWebp', 'the server cannot decode lossless WebP images'),
+  no_webp_encode: () => t('dupd.reasonWebpEncodeServer', 'the server cannot encode lossless WebP images'),
+  no_numpy: () => t('dupd.reasonNumpy', 'the server has no NumPy'),
+  no_compression_stream: () => t('dupd.reasonCompression', 'this browser has no compression streams'),
+  no_png_codec: () => t('dupd.reasonPng', 'this browser does not round-trip PNG tiles exactly'),
+  no_plane_codec: () => t('dupd.reasonPng', 'this browser does not round-trip PNG tiles exactly'),
+  no_handler: () => t('dupd.reasonHandler', 'this page has no converter for this update'),
   no_zlib: () => t('dupd.reasonZlib', 'the server has no zlib compression'),
   low_memory: () => t('dupd.reasonMemory', 'the server allows less than 128 MiB of memory per request'),
   exec_time_too_short: () => t('dupd.reasonTime', 'the server stops requests after less than 10 seconds'),
 };
-function reasonText(code) { return (REASONS[code] || (() => code))(); }
+// Codes both executors may report, worded for the one that reported them.
+const EXEC_REASONS = {
+  no_webp_lossless_encode: {
+    browser: () => t('dupd.reasonWebpEncode', 'this browser cannot encode lossless WebP images'),
+    server: () => t('dupd.reasonWebpEncodeServer', 'the server cannot encode lossless WebP images'),
+  },
+};
+function reasonText(code, executor) {
+  const per = EXEC_REASONS[code];
+  if (per) return (per[executor] || per.browser)();
+  return (REASONS[code] || (() => code))();
+}
 
 const ERRORS = {
   source_changed: () => t('dupd.errSourceChanged', 'the dataset was re-processed since the update started'),
@@ -109,7 +136,11 @@ const ERRORS = {
   request_failed: () => t('dupd.errRequest', 'a request keeps failing'),
   prepare_failed: () => t('dupd.errPrepare', 'the dataset could not be read'),
   unauthorized: () => t('dupd.reasonAuth', 'session expired'),
+  unit_blocked: () => t('dupd.errBlocked', 'a lower level of the pyramid is not complete yet'),
+  bad_webp: () => t('dupd.errBadWebp', 'the server refused a converted brick'),
   insufficient_disk: () => t('dupd.errDisk', 'not enough disk space on the server (needed / free)'),
+  no_executor: () => t('dupd.errNoExecutor', 'neither this browser nor the server can run this update'),
+  unit_timeout: () => t('dupd.errUnitTimeout', 'the server cannot convert one unit within its time limit'),
 };
 /** A server/worker error code in words, with its detail when there is one. */
 function errorText(code, detail) {
@@ -156,6 +187,46 @@ function poolOptions() {
   };
 }
 
+function choices() {
+  if (_choices) return _choices;
+  _choices = {};
+  try {
+    const v = JSON.parse(storageGet(EXECS_KEY) || '{}');
+    if (v && typeof v === 'object') for (const k of Object.keys(v)) if (v[k] === 'browser' || v[k] === 'server') _choices[k] = v[k];
+  } catch (_) { /* fresh */ }
+  const legacy = storageGet(EXEC_KEY);
+  if ((legacy === 'browser' || legacy === 'server') && !_choices['m002-planes']) _choices['m002-planes'] = legacy;
+  return _choices;
+}
+
+/** Capabilities of both executors for `mid`; browser null = not probed yet. */
+function capsOf(mid) {
+  const b = _browserCaps[mid];
+  return { browser: b && !b.pending ? b : null, server: serverCapability(_status && _status.server, mid) };
+}
+
+function benchOf(mid) { return _bench.results[mid] || {}; }
+
+/** The executor a job of `mid` runs on now; null when nothing can run it. */
+function executorOf(mid) {
+  return chooseExecutor({ choice: choices()[mid], caps: capsOf(mid), bench: benchOf(mid) });
+}
+
+/** Units of `mid` left on `ds`: per-migration estimate when the server gives one. */
+function stepUnits(ds, mid) {
+  const per = ds && ds.estimate && ds.estimate.migrations && ds.estimate.migrations[mid];
+  if (per && Number.isFinite(per.units)) return per.units;   // the server already left done units out
+  const chain = migrationChain(ds, (_status && _status.migrations) || []);
+  return chain[0] === mid ? remainingUnits(ds) : null;
+}
+
+/** Seconds for `mid` on `ds` with the executor it would run on, or null. */
+function stepSeconds(ds, mid) {
+  const x = executorOf(mid);
+  const r = x && benchOf(mid)[x];
+  return estimateSeconds(stepUnits(ds, mid), r && r.secondsPerUnit);
+}
+
 function runner() {
   if (_runner) return _runner;
   _runner = new Runner({
@@ -163,10 +234,32 @@ function runner() {
     pool: () => new WorkerPool(poolOptions()),
     datasetBase,
     onEvent: onRunnerEvent,
+    executorFor: (mid) => executorOf(mid),
+    estimateStep: (id, mid) => stepSeconds(dsById(id), mid),
   });
-  const saved = storageGet(EXEC_KEY);
-  if (saved === 'server' || saved === 'browser') _runner.executor = saved;
   return _runner;
+}
+
+/** Runs each relevant handler's probe once (in a worker of the runner's pool). */
+function probeBrowser() {
+  for (const m of relevantMigrations()) {
+    if (_browserCaps[m.id]) continue;
+    _browserCaps[m.id] = { pending: true };
+    let p;
+    try { p = runner().pool.probe(m.id); } catch (err) { p = Promise.reject(err); }
+    p.then((c) => { _browserCaps[m.id] = c; })
+      .catch(() => { _browserCaps[m.id] = { available: false, reasons: ['no_handler'] }; })
+      .finally(() => paint());
+  }
+}
+
+/** Registry entries some dataset still needs (all of them when none does). */
+function relevantMigrations() {
+  const reg = (_status && _status.migrations) || [];
+  const used = new Set();
+  for (const ds of (_status && _status.datasets) || []) for (const id of migrationChain(ds, reg)) used.add(id);
+  const out = reg.filter((m) => used.has(m.id));
+  return out.length ? out : reg;
 }
 
 function isRunning() { return !!_runner && (_runner.state === 'running' || _runner.state === 'pausing'); }
@@ -184,6 +277,7 @@ function onRunnerEvent(e) {
   if (e.type === 'job_failed') {
     pushLog({ ok: false, dataset: e.dataset, name: nameOf(e.dataset), migration: e.migration, error: e.error, code: e.code, detail: e.detail });
     _progress = null;
+    if (e.code === 'unit_timeout') { onUnitTimeout(e); return; }
     toast(t('dupd.toastFailed', 'Update of {name} failed: {error}', { name: nameOf(e.dataset), error: e.code ? errorText(e.code, e.detail) : e.error }), 'error');
     load();
     return;
@@ -200,13 +294,54 @@ function onRunnerEvent(e) {
   }
 }
 
-function setExecutor(x) {
+// `${dataset}|${migration}` already moved to the browser after a unit_timeout: once only, so a
+// browser that fails too ends in the log instead of a loop.
+const _timeoutSwitched = new Set();
+
+/**
+ * The server could not convert a unit of `e.migration` in time, twice (unit_timeout). The job's
+ * journal is shared by both executors: when this browser can run the migration, its choice
+ * switches to the browser and the dataset resumes there; otherwise the operator is told why.
+ */
+function onUnitTimeout(e) {
+  const mid = e.migration;
+  const title = loc(migration(mid) && migration(mid).title) || mid;
+  const c = capsOf(mid);
+  const browserOk = !(c.browser && c.browser.available === false);
+  const key = `${e.dataset}|${mid}`;
+  if (!browserOk || _timeoutSwitched.has(key)) {
+    toast(t('dupd.toastUnitTimeoutStuck', 'Update of {name} stopped: {error}. {hint}', {
+      name: nameOf(e.dataset), error: errorText('unit_timeout'),
+      hint: browserOk ? t('dupd.unitTimeoutRetry', 'Retry it in this browser, or reprocess the dataset with the pipeline.')
+        : t('dupd.unitTimeoutNoBrowser', 'This browser cannot run this update either; reprocess the dataset with the pipeline.') }), 'error');
+    load();
+    return;
+  }
+  _timeoutSwitched.add(key);
+  choices()[mid] = 'browser';
+  storageSet(EXECS_KEY, JSON.stringify(choices()));
+  toast(t('dupd.toastUnitTimeoutSwitch', '{update}: the server cannot convert some units in time. Continuing {name} in this browser.', {
+    update: title, name: nameOf(e.dataset) }), 'warning');
+  // The journal is kept: the browser picks the job up where the server stopped, once the
+  // status says what the job looks like now.
+  freshLoad().then(() => retryDataset(e.dataset)).catch(() => {});
+}
+
+/** A status read that starts after any one in flight (load() skips while one runs). */
+async function freshLoad() {
+  while (_loading) await new Promise((res) => setTimeout(res, 100));
+  await load();
+}
+
+function setExecutor(mid, x) {
   const r = runner();
-  if (x === 'server' && !(_status && _status.server && _status.server.available)) return;
-  r.executor = x;
-  storageSet(EXEC_KEY, x);
-  // A running job switches at its next unit boundary: pause, then resume on the new executor.
-  if (isRunning()) {
+  const c = capsOf(mid);
+  if (x === 'server' && !c.server.available) return;
+  if (x === 'browser' && c.browser && !c.browser.available) return;
+  choices()[mid] = x;
+  storageSet(EXECS_KEY, JSON.stringify(choices()));
+  // A running job of that migration switches at its next unit boundary: pause, then resume.
+  if (isRunning() && r.current && r.current.migration === mid && r.current.executor !== x) {
     r.pause('switch');
     // Only while the pause settles: a queue that ends meanwhile (idle) or a resume from
     // elsewhere must not leave this polling forever.
@@ -223,6 +358,11 @@ function updateDatasets(ids) {
   if (!_status) return;
   const items = buildQueue(_status.datasets, _status.migrations, ids);
   if (!items.length) { toast(t('dupd.nothing', 'Everything is up to date.'), 'info'); return; }
+  const stuck = [...new Set(items.map((q) => q.migration))].filter((mid) => !executorOf(mid));
+  if (stuck.length) {
+    toast(t('dupd.toastNoExecutor', 'No executor can run: {list}. Those steps will fail.', {
+      list: stuck.map((mid) => loc(migration(mid) && migration(mid).title) || mid).join(', ') }), 'warning');
+  }
   runner().enqueue(items);
   bindGuards();
   paint();
@@ -258,32 +398,48 @@ async function cancelDataset(id) {
 
 // ── Benchmark ─────────────────────────────────────────────────────────────────
 
-function defaultBenchDataset() {
-  const pending = ((_status && _status.datasets) || []).filter(needsWork);
-  pending.sort((a, b) => (remainingUnits(a) || Infinity) - (remainingUnits(b) || Infinity));
-  return pending[0] ? pending[0].id : null;
+/** Datasets a benchmark of `mid` can sample: those whose next step it is (its inputs exist). */
+function benchDatasets(mid) {
+  const reg = (_status && _status.migrations) || [];
+  const list = ((_status && _status.datasets) || []).filter((d) => migrationChain(d, reg)[0] === mid);
+  list.sort((a, b) => (remainingUnits(a) || Infinity) - (remainingUnits(b) || Infinity));
+  return list;
+}
+
+function benchMigration() {
+  const rel = relevantMigrations();
+  if (_bench.migration && rel.some((m) => m.id === _bench.migration)) return _bench.migration;
+  const first = rel.find((m) => benchDatasets(m.id).length) || rel[0];
+  return first ? first.id : null;
+}
+
+function benchDataset(mid) {
+  const list = benchDatasets(mid);
+  if (_bench.dataset && list.some((d) => d.id === _bench.dataset)) return _bench.dataset;
+  return list[0] ? list[0].id : null;
 }
 
 async function runBench(which) {
-  const id = _bench.dataset || defaultBenchDataset();
+  const mid = benchMigration();
+  const id = mid && benchDataset(mid);
   if (!id || _bench.running) return;
-  const ds = dsById(id);
-  const mig = ds && migrationChain(ds, _status.migrations)[0];
-  if (!mig) return;
   _bench.running = which;
   _bench.error = null;
   paint();
   try {
+    const res = _bench.results[mid] = _bench.results[mid] || {};
     if (which === 'browser') {
       const pool = new WorkerPool(poolOptions());
       try {
-        _bench.browser = await benchBrowser({ pool, dataset: id, migration: mig, datasetBase: datasetBase(id), n: _bench.n });
+        res.browser = await benchBrowser({ pool, dataset: id, migration: mid, datasetBase: datasetBase(id), n: _bench.n });
       } finally { pool.terminate(); }
     } else {
-      _bench.server = await benchServer({ api, dataset: id, n: _bench.n });
+      res.server = await benchServer({ api, dataset: id, migration: mid, n: _bench.n });
     }
   } catch (err) {
-    _bench.error = String(err && err.message || err);
+    _bench.error = err && err.code && (EXEC_REASONS[err.code] || REASONS[err.code] || ERRORS[err.code])
+      ? (ERRORS[err.code] ? errorText(err.code, err.detail) : reasonText(err.code, which))
+      : String(err && err.message || err);
   }
   _bench.running = null;
   paint();
@@ -326,64 +482,107 @@ function root() { return el('dataset-updates-root'); }
 
 function serverPanel() {
   const s = (_status && _status.server) || {};
-  if (s.available) {
-    const lim = s.maxRunSeconds ? ' ' + t('dupd.serverSlice', '(steps of {s} s)', { s: s.maxRunSeconds }) : '';
+  const rel = relevantMigrations();
+  const off = rel.map((m) => ({ m, cap: serverCapability(s, m.id) })).filter((x) => !x.cap.available);
+  const lim = s.maxRunSeconds ? ' ' + t('dupd.serverSlice', '(steps of {s} s)', { s: s.maxRunSeconds }) : '';
+  if (!off.length && (rel.length || s.available)) {
     return `<p class="dupd-cap dupd-cap--ok"><i data-lucide="check-circle-2"></i>${escHtml(t('dupd.serverOk', 'The server can run updates itself.') + lim)}</p>`;
   }
-  const reasons = (s.reasons || []).map((c) => `<li>${escHtml(reasonText(c))}</li>`).join('');
+  const items = off.length
+    ? off.map(({ m, cap }) => `<li><b>${escHtml(loc(m.title) || m.id)}</b>: ${escHtml((cap.reasons || []).map((c) => reasonText(c, 'server')).join('; ') || t('dupd.reasonUnknown', 'capability check unavailable'))}</li>`).join('')
+    : (s.reasons || []).map((c) => `<li>${escHtml(reasonText(c, 'server'))}</li>`).join('');
+  const head = off.length && off.length < rel.length
+    ? t('dupd.serverSome', 'The server can run some updates itself, not these:')
+    : t('dupd.serverNo', 'The server cannot run updates itself:');
   return `<div class="dupd-cap dupd-cap--no"><i data-lucide="info"></i><div>
-    <p>${escHtml(t('dupd.serverNo', 'The server cannot run updates itself:'))}</p>
-    <ul>${reasons || `<li>${escHtml(t('dupd.reasonUnknown', 'capability check unavailable'))}</li>`}</ul>
+    <p>${escHtml(head)}</p>
+    <ul>${items || `<li>${escHtml(t('dupd.reasonUnknown', 'capability check unavailable'))}</li>`}</ul>
     ${s.detail ? `<p class="adm-muted dupd-small">${escHtml(s.detail)}</p>` : ''}</div></div>`;
 }
 
-function executorPicker() {
-  const r = runner();
-  const avail = !!(_status && _status.server && _status.server.available);
-  const why = avail ? '' : (((_status && _status.server && _status.server.reasons) || []).map(reasonText).join('; ')
-    || t('dupd.reasonUnknown', 'capability check unavailable'));
-  const opt = (val, title, sub, disabled) => `
-    <label class="dupd-exec ${r.executor === val ? 'is-on' : ''} ${disabled ? 'is-off' : ''}">
-      <input type="radio" name="dupd-exec" value="${val}" ${r.executor === val ? 'checked' : ''} ${disabled ? 'disabled' : ''}>
-      <span><b>${escHtml(title)}</b><em>${escHtml(sub)}</em></span>
-    </label>`;
-  return `<div class="dupd-execs" role="radiogroup" aria-label="${escHtml(t('dupd.executor', 'Executor'))}">
-    ${opt('browser', t('dupd.execBrowser', 'A · This browser'), t('dupd.execBrowserSub', 'Downloads the data, converts it here and uploads the result. Keep this tab open.'), false)}
-    ${opt('server', t('dupd.execServer', 'B · The server'), avail
-      ? t('dupd.execServerSub', 'The server converts the data in short steps driven by this tab. Keep this tab open.')
-      : t('dupd.execServerOff', 'Unavailable: {why}', { why }), !avail)}
-  </div>`;
+function execLabel(x) {
+  return x === 'server' ? t('dupd.execServerShort', 'server') : x === 'browser' ? t('dupd.execBrowserShort', 'browser') : t('dupd.execNone', 'none');
+}
+
+function spuText(r) {
+  return r && r.secondsPerUnit ? t('dupd.spu', '{s} s/unit', { s: r.secondsPerUnit.toFixed(2) }) : '';
+}
+
+/** One row per migration: which executor runs it, what each one can do, the benchmark. */
+function executorTable() {
+  const rel = relevantMigrations();
+  if (!rel.length) return `<p class="adm-muted">${escHtml(t('dupd.noMigrations', 'No data update is defined.'))}</p>`;
+  const rows = rel.map((m, i) => {
+    const c = capsOf(m.id);
+    const chosen = executorOf(m.id);
+    const b = benchOf(m.id);
+    const cell = (x) => {
+      const cap = c[x];
+      const pending = x === 'browser' && (!_browserCaps[m.id] || _browserCaps[m.id].pending);
+      const off = cap && cap.available === false;
+      const why = off ? (cap.reasons || []).map((r) => reasonText(r, x)).join('; ') || t('dupd.reasonUnknown', 'capability check unavailable') : '';
+      const sub = pending ? t('dupd.probing', 'checking…') : off ? why : (spuText(b[x]) || t('dupd.capOk', 'available'));
+      return `<td><label class="dupd-exec ${chosen === x ? 'is-on' : ''} ${off ? 'is-off' : ''}" ${off ? `title="${escHtml(why)}"` : ''}>
+        <input type="radio" name="dupd-exec-${i}" data-mig="${escHtml(m.id)}" value="${x}" ${chosen === x ? 'checked' : ''} ${off ? 'disabled' : ''}>
+        <span><b>${escHtml(x === 'browser' ? t('dupd.execBrowser', 'A · This browser') : t('dupd.execServer', 'B · The server'))}</b><em>${escHtml(sub)}</em></span>
+      </label></td>`;
+    };
+    const none = !chosen
+      ? `<p class="adm-error dupd-small dupd-noexec"><i data-lucide="alert-triangle"></i>${escHtml(t('dupd.noExecutor', 'Neither this browser nor the server can run this update. Datasets that need it stop before this step.'))}</p>`
+      : '';
+    return `<tr><td><b>${escHtml(loc(m.title) || m.id)}</b><span class="adm-muted dupd-small dupd-block">${escHtml(String(m.from))} → ${escHtml(String(m.to))}</span>${none}</td>${cell('browser')}${cell('server')}</tr>`;
+  }).join('');
+  return `<div class="dupd-scroll"><table class="dupd-table dupd-exec-table" aria-label="${escHtml(t('dupd.executor', 'Executor'))}">
+    <thead><tr><th>${escHtml(t('dupd.colUpdate', 'Update'))}</th><th>${escHtml(t('dupd.colEtaBrowser', 'Browser'))}</th><th>${escHtml(t('dupd.colEtaServer', 'Server'))}</th></tr></thead>
+    <tbody>${rows}</tbody></table></div>
+    <p class="adm-muted dupd-small">${escHtml(t('dupd.execHint', 'Both executors need this tab open. The faster available one is used unless you pick one.'))}</p>`;
 }
 
 function benchCard() {
-  const list = ((_status && _status.datasets) || []).filter(needsWork);
-  const sel = _bench.dataset || defaultBenchDataset();
-  const avail = !!(_status && _status.server && _status.server.available);
+  const rel = relevantMigrations();
+  const mid = benchMigration();
+  const list = mid ? benchDatasets(mid) : [];
+  const sel = mid ? benchDataset(mid) : null;
+  const c = mid ? capsOf(mid) : { browser: null, server: { available: false } };
+  const b = mid ? benchOf(mid) : {};
   const res = (r) => r && r.secondsPerUnit
     ? t('dupd.benchRes', '{s} s per unit · {in} in · {out} out ({n} units)', {
       s: r.secondsPerUnit.toFixed(2), in: fmtMB(r.bytesIn), out: fmtMB(r.bytesOut), n: r.units })
     : '—';
+  const browserOff = c.browser && c.browser.available === false;
   let est = '';
-  if ((_bench.browser && _bench.browser.secondsPerUnit) || (_bench.server && _bench.server.secondsPerUnit)) {
-    let totB = 0, totS = 0;
-    const rows = list.map((d) => {
-      const u = remainingUnits(d);
-      const b = estimateSeconds(u, _bench.browser && _bench.browser.secondsPerUnit);
-      const s = estimateSeconds(u, _bench.server && _bench.server.secondsPerUnit);
-      totB += b || 0; totS += s || 0;
-      return `<tr><td>${escHtml(dsName(d))}</td><td class="num">${u}</td><td class="num">${fmtDuration(b)}</td><td class="num">${fmtDuration(s)}</td></tr>`;
+  const all = ((_status && _status.datasets) || []).filter(needsWork);
+  const anyBench = Object.values(_bench.results).some((r) => r && ((r.browser && r.browser.secondsPerUnit) || (r.server && r.server.secondsPerUnit)));
+  if (anyBench && all.length) {
+    let total = 0, totalKnown = true;
+    const reg = (_status && _status.migrations) || [];
+    const rows = all.map((d) => {
+      const chain = migrationChain(d, reg);
+      let sec = 0, known = true;
+      const steps = chain.map((id) => {
+        const s = stepSeconds(d, id);
+        if (s === null) known = false; else sec += s;
+        return `${escHtml(loc(migration(id) && migration(id).title) || id)} · ${escHtml(execLabel(executorOf(id)))} · ${escHtml(fmtDuration(s))}`;
+      });
+      if (known) total += sec; else totalKnown = false;
+      return `<tr><td>${escHtml(dsName(d))}<span class="adm-muted dupd-small dupd-block">${steps.join('<br>')}</span></td><td class="num">${known ? fmtDuration(sec) : '—'}</td></tr>`;
     }).join('');
     est = `<table class="dupd-table dupd-est">
-      <thead><tr><th>${escHtml(t('dupd.colDataset', 'Dataset'))}</th><th class="num">${escHtml(t('dupd.colUnits', 'Units'))}</th>
-      <th class="num">${escHtml(t('dupd.colEtaBrowser', 'Browser'))}</th><th class="num">${escHtml(t('dupd.colEtaServer', 'Server'))}</th></tr></thead>
+      <thead><tr><th>${escHtml(t('dupd.colDataset', 'Dataset'))}</th><th class="num">${escHtml(t('dupd.colEta', 'Estimated time'))}</th></tr></thead>
       <tbody>${rows}</tbody>
-      <tfoot><tr><td>${escHtml(t('dupd.total', 'Total'))}</td><td></td><td class="num">${_bench.browser ? fmtDuration(totB) : '—'}</td><td class="num">${_bench.server ? fmtDuration(totS) : '—'}</td></tr></tfoot>
+      <tfoot><tr><td>${escHtml(t('dupd.total', 'Total'))}</td><td class="num">${totalKnown ? fmtDuration(total) : '≥ ' + fmtDuration(total)}</td></tr></tfoot>
     </table>
     <p class="adm-muted dupd-small">${escHtml(t('dupd.benchNote', 'Estimates only: either executor can be chosen freely.'))}</p>`;
   }
   return `<div class="adm-card dupd-card">
     <div class="adm-card-head"><i data-lucide="gauge"></i><span>${escHtml(t('dupd.benchTitle', 'Benchmark'))}</span></div>
     <div class="adm-card-body">
+      <div class="dupd-row">
+        <label class="adm-field-label" for="dupd-bench-mig">${escHtml(t('dupd.benchMigration', 'Update'))}</label>
+        <select id="dupd-bench-mig" class="adm-field-input" ${rel.length ? '' : 'disabled'}>
+          ${rel.map((m) => `<option value="${escHtml(m.id)}" ${m.id === mid ? 'selected' : ''}>${escHtml(loc(m.title) || m.id)}</option>`).join('')}
+        </select>
+      </div>
       <div class="dupd-row">
         <label class="adm-field-label" for="dupd-bench-ds">${escHtml(t('dupd.benchOn', 'Sample dataset'))}</label>
         <select id="dupd-bench-ds" class="adm-field-input" ${list.length ? '' : 'disabled'}>
@@ -392,15 +591,16 @@ function benchCard() {
         <label class="adm-field-label" for="dupd-bench-n">${escHtml(t('dupd.benchUnits', 'Units'))}</label>
         <input id="dupd-bench-n" class="adm-field-input dupd-n" type="number" min="1" max="8" value="${_bench.n}">
       </div>
+      ${mid && !list.length ? `<p class="adm-muted dupd-small">${escHtml(t('dupd.benchNoSample', 'No dataset is ready for this step yet: run the earlier updates first.'))}</p>` : ''}
       <div class="dupd-row">
-        <button class="adm-btn adm-btn-ghost adm-btn-sm" data-dupd="bench-browser" ${!sel || _bench.running || isRunning() ? 'disabled' : ''}>
+        <button class="adm-btn adm-btn-ghost adm-btn-sm" data-dupd="bench-browser" ${!sel || browserOff || _bench.running || isRunning() ? 'disabled' : ''}>
           ${_bench.running === 'browser' ? '<span class="spinner spinner-sm"></span>' : '<i data-lucide="monitor"></i>'} ${escHtml(t('dupd.benchBrowser', 'Test the browser'))}</button>
-        <span class="dupd-bench-res">${escHtml(res(_bench.browser))}</span>
+        <span class="dupd-bench-res">${escHtml(browserOff ? (c.browser.reasons || []).map((r) => reasonText(r, 'browser')).join('; ') : res(b.browser))}</span>
       </div>
       <div class="dupd-row">
-        <button class="adm-btn adm-btn-ghost adm-btn-sm" data-dupd="bench-server" ${!sel || !avail || _bench.running || isRunning() ? 'disabled' : ''}>
+        <button class="adm-btn adm-btn-ghost adm-btn-sm" data-dupd="bench-server" ${!sel || !c.server.available || _bench.running || isRunning() ? 'disabled' : ''}>
           ${_bench.running === 'server' ? '<span class="spinner spinner-sm"></span>' : '<i data-lucide="server"></i>'} ${escHtml(t('dupd.benchServer', 'Test the server'))}</button>
-        <span class="dupd-bench-res">${escHtml(avail ? res(_bench.server) : t('dupd.benchServerOff', 'server executor unavailable'))}</span>
+        <span class="dupd-bench-res">${escHtml(c.server.available ? res(b.server) : t('dupd.benchServerOff', 'server executor unavailable'))}</span>
       </div>
       ${_bench.error ? `<p class="adm-error dupd-small">${escHtml(_bench.error)}</p>` : ''}
       ${est}
@@ -446,7 +646,11 @@ function datasetsCard() {
   const rows = list.map((ds) => {
     const chain = migrationChain(ds, _status.migrations);
     const what = chain.length
-      ? chain.map((id) => escHtml(loc(migration(id) && migration(id).title) || id)).join('<br>')
+      ? chain.map((id, i) => {
+        const x = executorOf(id);
+        return `<span class="dupd-step">${chain.length > 1 ? `<span class="adm-muted">${i + 1}.</span> ` : ''}${escHtml(loc(migration(id) && migration(id).title) || id)}
+          <span class="adm-tag ${x ? '' : 'adm-tag-danger'}">${escHtml(execLabel(x))}</span></span>`;
+      }).join('')
         + (ds.repair && !(ds.pending || []).length ? ` <span class="adm-tag adm-tag-warn">${escHtml(t('dupd.repair', 'repair'))}</span>` : '')
       : `<span class="adm-ok">${escHtml(t('dupd.upToDate', 'up to date'))}</span>`;
     const est = chain.length && ds.estimate
@@ -516,20 +720,25 @@ function paintProgress() {
   }
   const pct = p.total ? (100 * p.done) / p.total : 0;
   const mig = migration(p.migration);
+  const steps = p.steps > 1
+    ? `<p class="dupd-chain dupd-small">${(p.chain || []).map((id, i) => `<span class="${i + 1 < p.step ? 'is-done' : i + 1 === p.step ? 'is-on' : ''}">${i + 1}. ${escHtml(loc(migration(id) && migration(id).title) || id)}</span>`).join('')}</p>`
+    : '';
   const eta = p.phase !== 'finalizing' ? fmtDuration(p.eta)
     : (p.assembly && p.assembly.planes
       ? t('dupd.assembling', 'Assembling planes {x}/{y}', { x: p.assembly.written, y: p.assembly.planes })
       : t('dupd.finalizing', 'assembling and publishing…'));
   body.innerHTML = `
-    <p class="dupd-job-title"><b>${escHtml(nameOf(p.dataset))}</b> — ${escHtml(loc(mig && mig.title) || p.migration)}
-      <span class="adm-muted">· ${escHtml(p.executor === 'server' ? t('dupd.execServerShort', 'server') : t('dupd.execBrowserShort', 'browser'))}</span></p>
+    <p class="dupd-job-title"><b>${escHtml(nameOf(p.dataset))}</b> — ${p.steps > 1 ? escHtml(t('dupd.step', 'step {i} of {n}', { i: p.step, n: p.steps })) + ' · ' : ''}${escHtml(loc(mig && mig.title) || p.migration)}
+      <span class="adm-muted">· ${escHtml(execLabel(p.executor))}</span></p>
+    ${steps}
     <div class="adm-progress" role="progressbar" aria-label="${escHtml(t('dupd.units', 'Units'))}" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${pct.toFixed(1)}"><div class="adm-progress-bar" id="dupd-bar"></div></div>
     <dl class="dupd-stats">
       <div><dt>${escHtml(t('dupd.units', 'Units'))}</dt><dd>${p.done} / ${p.total} (${pct.toFixed(1)} %)</dd></div>
       <div><dt>${escHtml(t('dupd.down', 'Downloaded'))}</dt><dd>${fmtMB(p.bytesIn)}</dd></div>
       <div><dt>${escHtml(p.executor === 'server' ? t('dupd.written', 'Written') : t('dupd.up', 'Uploaded'))}</dt><dd>${fmtMB(p.bytesOut)}</dd></div>
       <div><dt>${escHtml(t('dupd.rate', 'Speed'))}</dt><dd>${p.rate > 0 ? escHtml(t('dupd.rateVal', '{n} units/min', { n: (p.rate * 60).toFixed(1) })) : '—'}</dd></div>
-      <div><dt>${escHtml(t('dupd.eta', 'Time left'))}</dt><dd>${escHtml(eta)}</dd></div>
+      <div><dt>${escHtml(p.steps > 1 ? t('dupd.etaStep', 'Time left (this step)') : t('dupd.eta', 'Time left'))}</dt><dd>${escHtml(eta)}</dd></div>
+      ${p.steps > 1 && p.step < p.steps ? `<div><dt>${escHtml(t('dupd.etaChain', 'Time left (all steps)'))}</dt><dd>${escHtml(p.etaChain !== null && p.etaChain !== undefined ? fmtDuration(p.etaChain) : t('dupd.etaUnknown', 'run the benchmark'))}</dd></div>` : ''}
     </dl>
     ${_online ? '' : `<p class="adm-warn dupd-small"><i data-lucide="wifi-off"></i> ${escHtml(t('dupd.offline', 'Connection lost — waiting for the network, nothing is lost.'))}</p>`}
     <p class="adm-muted dupd-small">${escHtml(t('dupd.keepOpen', 'Keep this tab open: closing it or leaving it pauses the update.'))}</p>
@@ -547,7 +756,7 @@ function logCard() {
     const what = e.ok
       ? t('dupd.logOk', 'format {v} · {units} units · {dur} · {exec}', {
         v: e.formatVersion, units: e.units, dur: fmtDuration(e.seconds),
-        exec: e.executor === 'server' ? t('dupd.execServerShort', 'server') : t('dupd.execBrowserShort', 'browser') })
+        exec: execLabel(e.executor) })
       : (e.code ? errorText(e.code, e.detail) : (e.error || ''));
     return `<li class="${e.ok ? '' : 'is-failed'}"><span class="adm-muted dupd-small">${escHtml(when)}</span>
       <b>${escHtml(e.name || e.dataset)}</b> — ${escHtml(loc(mig && mig.title) || e.migration)}
@@ -599,7 +808,7 @@ function paint() {
     <div class="adm-grid adm-grid-2 dupd-grid">
       <div class="adm-card dupd-card">
         <div class="adm-card-head"><i data-lucide="cpu"></i><span>${escHtml(t('dupd.executor', 'Executor'))}</span></div>
-        <div class="adm-card-body">${serverPanel()}${executorPicker()}</div>
+        <div class="adm-card-body">${serverPanel()}${executorTable()}</div>
       </div>
       ${benchCard()}
     </div>
@@ -618,7 +827,7 @@ async function load() {
     if (r.ok && r.data && Array.isArray(r.data.datasets)) {
       _status = r.data;
       _loadError = null;
-      if (_status.server && !_status.server.available && _runner && _runner.executor === 'server' && !isRunning()) _runner.executor = 'browser';
+      probeBrowser();
     } else {
       _loadError = t('dupd.loadFailed', 'Could not read the update status ({status}).', { status: r.status || t('dupd.network', 'network') });
     }
@@ -652,7 +861,8 @@ function bindRoot() {
   });
   host.addEventListener('change', (e) => {
     const tg = e.target;
-    if (tg.name === 'dupd-exec') setExecutor(tg.value);
+    if (tg.dataset && tg.dataset.mig && /^dupd-exec-/.test(tg.name || '')) setExecutor(tg.dataset.mig, tg.value);
+    else if (tg.id === 'dupd-bench-mig') { _bench.migration = tg.value; _bench.dataset = null; _bench.error = null; paint(); }
     else if (tg.id === 'dupd-bench-ds') { _bench.dataset = tg.value; }
     else if (tg.id === 'dupd-bench-n') { _bench.n = Math.max(1, Math.min(8, parseInt(tg.value, 10) || 4)); }
   });

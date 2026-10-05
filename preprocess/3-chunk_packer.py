@@ -16,6 +16,8 @@ if str(HERE) not in sys.path:
     sys.path.insert(0, str(HERE))
 from run_preprocess import worker_count, atomic_write_json, read_json_file  # noqa: E402
 import planes_writer  # noqa: E402
+import mips_writer  # noqa: E402
+import bricks_v3_writer as v3  # noqa: E402
 
 # Empty-space skipping counts the voxels the RENDERER can draw, not the voxels that
 # are merely non-zero.
@@ -369,6 +371,82 @@ def pack_timepoint(temp_dir: Path, bricks_dir: Path, t_idx: int, lod_levels, n_c
     return levels_manifest, transport
 
 
+def _tree_tqdm(desc, total):
+    from tqdm import tqdm
+    return tqdm(total=total, desc=desc, leave=False, ascii=True, mininterval=2.0)
+
+
+def pack_timepoint_v3(temp_dir: Path, bricks_dir: Path, t_idx: int, lod_levels, n_ch: int,
+                      executor, tp_subdir: str, encode_fn=None, planes_fn=None, mip_fn=None):
+    """Format 4 of one timepoint (SPEC §12, §13): the v3 brick tree under
+    bricks/<tp_subdir>, the XY planes under planes/<tp_subdir> and the layer MIPs under
+    mips/<tp_subdir>, all from the level files of step 2 (t{t}_c{c}_lod{k}.bin, shape
+    (depth, height, width) of each level). Returns {"format": 4, "levels", "index"} —
+    the tree's half of the manifest, which build_packs writes once every tree is done.
+
+    The *_fn arguments are the worker functions, or wrappers a caller's pool can import
+    by name.
+    """
+    window = 2 * (getattr(executor, "_max_workers", 1) or 1)
+    tree_dir = bricks_dir / tp_subdir if tp_subdir else bricks_dir
+    label = tp_subdir or "t000"
+    files = [[temp_dir / f"t{t_idx:03d}_c{c}_lod{li['lod']}.bin" for c in range(n_ch)]
+             for li in lod_levels]
+    for row in files:
+        for p in row:
+            if not p.exists():
+                print(f"[WARNING] Processed file not found: {p}")
+    levels = [{"level": li["lod"],
+               "dimensions": {"x": li["width"], "y": li["height"], "z": li["depth"]},
+               "voxelSize": li["voxelSize"]} for li in lod_levels]
+
+    def run_with(fn_override):
+        def run(fn, tasks):
+            return ordered_results(executor, fn_override or fn, tasks, window)
+        return run
+
+    bars = {}
+
+    def progress(level, channel, done, total):
+        bar = bars.get((level, channel))
+        if bar is None:
+            bar = bars[(level, channel)] = _tree_tqdm(f"Bricks v3 niveau {level} c{channel}", total)
+        bar.update(1)
+        if done == total:
+            bar.close()
+
+    tree = v3.write_tree([[str(p) if p.exists() else None for p in row] for row in files],
+                         levels, tree_dir, run_with(encode_fn), progress)
+    for row in tree["levels"]:
+        d, g = row["dimensions"], row["gridSize"]
+        print(f"[PACKER] {label} niveau {row['level']}: {d['x']}x{d['y']}x{d['z']} "
+              f"(grille {g['x']}x{g['y']}x{g['z']}, {row['stored']} brick(s) stockee(s) "
+              f"sur {row['brickCount'] * n_ch}, {row['bytes'] / 1e6:.1f} MB)")
+
+    lod0 = lod_levels[0]
+    dims = (lod0["width"], lod0["height"], lod0["depth"])
+    lod0_files = files[0]
+    planes_root = bricks_dir.parent / "planes"
+    tasks = planes_writer.plane_tasks(lod0_files, dims, None,
+                                      planes_root / tp_subdir if tp_subdir else planes_root)
+    written = 0
+    from tqdm import tqdm
+    for _z, size in tqdm(ordered_results(executor, planes_fn or planes_writer.write_plane_task,
+                                         tasks, window),
+                         total=len(tasks), desc="Plans XY (PNG)", leave=False,
+                         ascii=True, mininterval=2.0):
+        written += size
+    print(f"[PACKER] {label} plans XY : {len(tasks)} plan(s), {written / 1e6:.1f} MB")
+
+    mips_root = bricks_dir.parent / "mips"
+    mip_bytes = mips_writer.write_tree(lod0_files, dims,
+                                       mips_root / tp_subdir if tp_subdir else mips_root,
+                                       run_with(mip_fn))
+    print(f"[PACKER] {label} MIP par couche : {mips_writer.layer_count(dims[2])} couche(s), "
+          f"{mip_bytes / 1e6:.1f} MB")
+    return {"format": v3.FORMAT_VERSION, "levels": tree["levels"], "index": tree["index"]}
+
+
 def histograms_for_timepoint(temp_dir: Path, t_idx: int, n_ch: int, lod_num: int):
     """Per-channel 64-bin histogram of one timepoint, on its coarsest LOD."""
     out = []
@@ -410,6 +488,9 @@ def build_packs(temp_dir: Path, output_dir: Path):
     proc_meta = read_json_file(temp_dir / "processing_meta.json")
     if not proc_meta:
         raise FileNotFoundError(f"{temp_dir / 'processing_meta.json'} absent ou illisible")
+
+    if int(proc_meta.get("datasetFormat") or 2) >= v3.FORMAT_VERSION:
+        return build_packs_v3(temp_dir, output_dir, proc_meta)
 
     lod_levels = proc_meta["lod_levels"]
     n_ch = proc_meta["n_channels"]
@@ -491,6 +572,50 @@ def build_packs(temp_dir: Path, output_dir: Path):
     print(f"[PACKER] Wrote manifest.json to {manifest_path} ({size_mb:.2f} MB)")
     planes_writer.write_manifests(output_dir)
     print(f"[PACKER] planes/ : manifest(s) ecrit(s), format {planes_writer.FORMAT_VERSION}")
+    if is_timelapse:
+        print(f"[PACKER] {n_tp} timepoints indexed")
+
+
+def build_packs_v3(temp_dir: Path, output_dir: Path, proc_meta: dict):
+    """bricks/manifest.json of a format-4 dataset, then the planes and MIP manifests that
+    record its sha256. A tree step 2 has not packed (no pack_tNNN.json) is packed now."""
+    lod_levels = proc_meta["lod_levels"]
+    n_ch = proc_meta["n_channels"]
+    n_tp = proc_meta["n_timepoints"]
+    is_timelapse = n_tp > 1
+    coarsest = lod_levels[-1]["lod"]
+    bricks_dir = output_dir / "bricks"
+    bricks_dir.mkdir(parents=True, exist_ok=True)
+
+    executor = None
+    trees, histograms = {}, {}
+    try:
+        for t_idx in range(n_tp):
+            key = f"t{t_idx:03d}"
+            packed = read_json_file(temp_dir / f"pack_{key}.json")
+            if not packed or packed.get("format") != v3.FORMAT_VERSION:
+                if executor is None:
+                    executor = ProcessPoolExecutor(max_workers=worker_count())
+                if is_timelapse:
+                    print(f"[PACKER] === timepoint {t_idx + 1}/{n_tp} ({key}) ===")
+                packed = pack_timepoint_v3(temp_dir, bricks_dir, t_idx, lod_levels, n_ch,
+                                           executor, key if is_timelapse else "")
+            trees[key if is_timelapse else ""] = packed
+            histograms[key] = histograms_for_timepoint(temp_dir, t_idx, n_ch, coarsest)
+    finally:
+        if executor is not None:
+            executor.shutdown()
+
+    manifest = v3.manifest_v3(n_ch, trees, histograms["t000"],
+                              __import__("datetime").datetime.now().isoformat(),
+                              histograms if is_timelapse else None, dataset=output_dir.name)
+    manifest_path = bricks_dir / "manifest.json"
+    atomic_write_json(manifest_path, manifest, separators=(",", ":"))
+    print(f"[PACKER] Wrote manifest.json (v3) to {manifest_path} "
+          f"({manifest_path.stat().st_size / 1e3:.1f} kB)")
+    planes_writer.write_manifests(output_dir)
+    mips_writer.write_manifests(output_dir)
+    print(f"[PACKER] planes/ + mips/ : manifests ecrits, format {v3.FORMAT_VERSION}")
     if is_timelapse:
         print(f"[PACKER] {n_tp} timepoints indexed")
 

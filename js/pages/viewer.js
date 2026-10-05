@@ -992,7 +992,7 @@ const ViewerApp = (() => {
   function _applyQualityMode(value) {
     const select = document.getElementById('select-quality');
     _qualityMode = _normalizeQualityParam(value) || '512x512';
-    if (select) select.value = _qualityMode;
+    _showQualityInSelect(select, _qualityMode);
     VolumeViewer.setQualityTarget?.(_qualityMode, _qualityMode);
     _stopPrefetch();
     _preloadedTimepoints.clear();
@@ -1014,11 +1014,60 @@ const ViewerApp = (() => {
         // fatal-error card meant for a dataset that never mounted.
         console.warn('[ViewerApp] Quality switch failed:', err);
         _qualityMode = previous;
-        if (select) select.value = previous;
+        _showQualityInSelect(select, previous);
         VolumeViewer.setQualityTarget?.(previous, previous);
         _setQualityStatus(`${_qualityLabel(previous)} — ${String(err?.message || err)}`);
         throw err;
       });
+  }
+
+  /** True when the mounted brick manifest is a v3 tree (SPEC §13.3) — the renderer's own test. */
+  function _isV3BrickManifest(manifest = _brickManifest) {
+    return Boolean(manifest) && (manifest.schema === 'iribhm-bricks-v3' || manifest.version === 3);
+  }
+
+  // The quality keys the select may offer, in order of preference when several land on
+  // one level (native always wins level 0; 512, the default, before the others). A v3
+  // tree offers the presets of SPEC §13.7; a v2 tree every power-of-two key, each level
+  // reached by one of them shown once.
+  const QUALITY_KEYS_V3 = ['native', '512x512', '1024x1024'];
+  const QUALITY_KEYS_V2 = ['native', '512x512', '1024x1024', '256x256', '2048x2048', '4096x4096'];
+
+  /**
+   * The renderer's answer for `keys` on the mounted tree (VolumeViewer.getQualityLevels:
+   * [{ key, value, level, dims, voxelSize }]) — the one quality → level rule of the page,
+   * so the select, its labels, the Compare footprints and every load agree with what
+   * the renderer really loads, on a v2 and on a v3 tree. null without a manifest.
+   */
+  function _rendererQualityLevels(keys) {
+    if (typeof VolumeViewer === 'undefined' || typeof VolumeViewer.getQualityLevels !== 'function') return null;
+    let out = null;
+    try {
+      out = VolumeViewer.getQualityLevels(keys, Array.isArray(_brickManifest?.levels) ? _brickManifest : null);
+    } catch (err) {
+      out = null;
+    }
+    return Array.isArray(out) && out.length ? out : null;
+  }
+
+  /**
+   * The qualities the select offers: [{ value, lod, dims: {x, y, z} }], one per level
+   * the renderer reaches, finest first — or null before a bricked dataset is mounted.
+   */
+  function _qualityLevels() {
+    const resolved = _rendererQualityLevels(_isV3BrickManifest() ? QUALITY_KEYS_V3 : QUALITY_KEYS_V2);
+    if (!resolved) return null;
+    const byLevel = new Map();
+    for (const e of resolved) {
+      const value = _normalizeQualityParam(e?.value ?? e?.key);
+      const lod = Number(e?.level);
+      const dims = e?.dims;
+      if (!value || !Number.isInteger(lod) || lod < 0 || byLevel.has(lod)) continue;
+      if (!dims || !(Number(dims.x) > 0 && Number(dims.y) > 0 && Number(dims.z) > 0)) continue;
+      byLevel.set(lod, { value, lod, dims: { x: Number(dims.x), y: Number(dims.y), z: Number(dims.z) } });
+    }
+    const out = [...byLevel.values()].sort((a, b) => a.lod - b.lod);
+    return out.length ? out : null;
   }
 
   function _updateQualityOptionLabels() {
@@ -1026,19 +1075,13 @@ const ViewerApp = (() => {
     if (!select) return;
     const current = _normalizeQualityParam(_qualityMode || select.value) || '512x512';
 
-    const levels = Array.isArray(_brickManifest?.levels) ? _brickManifest.levels : null;
-    
-    if (levels && levels.length > 0) {
+    const offered = _qualityLevels();
+    if (offered && offered.length > 0) {
       select.innerHTML = '';
-      levels.forEach((l, idx) => {
+      offered.forEach(({ value, dims }) => {
         const opt = document.createElement('option');
-        const isNative = idx === 0;
-        const dims = l.dimensions;
-        const maxDim = Math.max(dims.x, dims.y, dims.z);
-        // Round to nearest power of 2 for labeling, unless native
-        let labelDim = Math.pow(2, Math.round(Math.log2(maxDim)));
-        opt.value = isNative ? 'native' : `${labelDim}x${labelDim}`;
-        const name = isNative ? _t('viewer.native', 'Native') : `${labelDim}`;
+        opt.value = value;
+        const name = value === 'native' ? _t('viewer.native', 'Native') : value.split('x')[0];
         opt.textContent = `${name} (${dims.x}x${dims.y}x${dims.z})`;
         select.appendChild(opt);
       });
@@ -1055,66 +1098,44 @@ const ViewerApp = (() => {
     }
 
     const options = [...select.options];
+    // A quality not offered under its own key (it lands on the level of another one)
+    // shows as the option of that level.
+    const sameLevel = offered ? _qualityValueForLod(_lodForQuality(current)) : null;
     const fallback = options.find(option => option.value === '512x512')
       || options.find(option => option.value === '256x256')
       || options[0];
-    select.value = options.some(option => option.value === current) ? current : (fallback?.value || '512x512');
+    select.value = options.some(option => option.value === current)
+      ? current
+      : (sameLevel && options.some(option => option.value === sameLevel) ? sameLevel : (fallback?.value || '512x512'));
+  }
+
+  /**
+   * Shows `quality` in the select: its own option, else the option of the level it loads
+   * (a host or a URL may ask for "1024x1024" where that level is offered as "native").
+   */
+  function _showQualityInSelect(select, quality) {
+    if (!select) return;
+    const options = [...(select.options || [])];
+    if (options.some(o => o.value === quality)) { select.value = quality; return; }
+    const same = _qualityValueForLod(_lodForQuality(quality));
+    if (same && options.some(o => o.value === same)) select.value = same;
+    else select.value = quality;
   }
 
   // CAP-008: inverse of the option labeling in _updateQualityOptionLabels — maps a LOD
-  // index back to the <select> value it is shown under (lod 0 => 'native', else the
-  // power-of-two label). Used to sync the selector to the resolution actually rendered.
-  function _qualityValueForLod(lod, levels) {
-    if (!Array.isArray(levels) || !levels[lod] || !levels[lod].dimensions) return null;
-    if (lod === 0) return 'native';
-    const dims = levels[lod].dimensions;
-    const maxDim = Math.max(dims.x, dims.y, dims.z);
-    const labelDim = Math.pow(2, Math.round(Math.log2(maxDim)));
-    return `${labelDim}x${labelDim}`;
+  // index back to the <select> value it is shown under. Used to sync the selector to the
+  // resolution actually rendered. null for a level no offered quality reaches.
+  function _qualityValueForLod(lod) {
+    const offered = _qualityLevels();
+    const hit = offered ? offered.find(o => o.lod === Number(lod)) : null;
+    return hit ? hit.value : null;
   }
 
-  function _lodForQuality(quality, levelCount, levels = null) {
-    const maxIdx = Math.max(0, levelCount - 1);
-    if (!quality || quality === 'native') return 0;
-
-    const lodMatch = quality.match(/^lod(\d+)$/);
-    if (lodMatch) {
-      return Math.min(maxIdx, parseInt(lodMatch[1], 10));
-    }
-
-    // Handle resolution keys (e.g. 256x256, 512x512, 1024x1024)
-    const match = quality.match(/^(\d+)x\d+$/);
-    if (match) {
-      const targetSize = parseInt(match[1], 10);
-      if (levels && Array.isArray(levels)) {
-        let bestLod = 0;
-        let minDiff = Infinity;
-        for (let i = 0; i < levels.length; i++) {
-          const dims = levels[i]?.dimensions;
-          if (dims && dims.x && dims.y) {
-            const maxDim = Math.max(dims.x, dims.y);
-            const diff = Math.abs(maxDim - targetSize);
-            if (diff < minDiff) {
-              minDiff = diff;
-              bestLod = i;
-            }
-          }
-        }
-        return bestLod;
-      } else {
-        // Fallback calculation based on typical levels
-        if (targetSize <= 256) return maxIdx;
-        if (targetSize <= 512) return Math.min(maxIdx, Math.max(0, maxIdx - 1));
-        if (targetSize <= 1024) return Math.min(maxIdx, Math.max(0, maxIdx - 2));
-        return 0;
-      }
-    }
-
-    // Fallbacks for legacy/abstract keys
-    if (quality === 'preview' || quality === 'low') return maxIdx;
-    if (quality === 'balanced' || quality === 'medium') return Math.min(maxIdx, Math.max(0, maxIdx - 1));
-    if (quality === 'high') return Math.min(maxIdx, Math.max(0, maxIdx - 2));
-    return 0;
+  /** The level the renderer loads for `quality` on the mounted tree (0 = native when it cannot say). */
+  function _lodForQuality(quality) {
+    const resolved = _rendererQualityLevels([quality]);
+    const lod = Number(resolved?.[0]?.level);
+    return Number.isInteger(lod) && lod >= 0 ? lod : 0;
   }
 
   function _qualityDimsLabel(quality) {
@@ -1125,7 +1146,7 @@ const ViewerApp = (() => {
   function _qualityDims(quality) {
     const levels = Array.isArray(_brickManifest?.levels) ? _brickManifest.levels : null;
     if (levels?.length) {
-      const lod = _lodForQuality(quality, levels.length, levels);
+      const lod = _lodForQuality(quality);
       const dims = levels[lod]?.dimensions;
       if (dims?.x && dims?.y && dims?.z) return dims;
     }
@@ -1181,7 +1202,37 @@ const ViewerApp = (() => {
       });
     }
 
+    _bindDetailControls();
     _bindViewExport();
+  }
+
+  // ── Zoom detail (the renderer's region of interest) ───────────────────────────
+  // Past the quality's resolution the renderer streams the finer bricks in view into a
+  // second atlas; the select sets its mode (auto / on / off) and the line under it says
+  // what it is doing (VolumeViewer.getDetailStatus().message, already translated).
+  const DETAIL_MODES = ['auto', 'on', 'off'];
+
+  function _renderDetailStatus(status) {
+    const line = document.getElementById('detail-status');
+    if (line) line.textContent = String(status?.message || '');
+    const select = document.getElementById('select-detail-mode');
+    if (select && DETAIL_MODES.includes(status?.mode) && select.value !== status.mode) select.value = status.mode;
+  }
+
+  function _bindDetailControls() {
+    const select = document.getElementById('select-detail-mode');
+    if (typeof VolumeViewer === 'undefined' || typeof VolumeViewer.setDetailMode !== 'function') {
+      select?.closest('label')?.classList.add('hidden');
+      return;
+    }
+    if (select) {
+      select.addEventListener('change', () => {
+        const mode = DETAIL_MODES.includes(select.value) ? select.value : 'auto';
+        _renderDetailStatus({ ...(VolumeViewer.getDetailStatus?.() || {}), mode: VolumeViewer.setDetailMode(mode) });
+      });
+    }
+    if (typeof VolumeViewer.onDetailStatus === 'function') VolumeViewer.onDetailStatus(_renderDetailStatus);
+    else _renderDetailStatus(VolumeViewer.getDetailStatus?.());
   }
 
   // ── 3D view export (PNG) ─────────────────────────────────────────────────────────
@@ -2216,7 +2267,11 @@ const ViewerApp = (() => {
     const choice = await Dialog.ask({
       icon: 'layers',
       title: _t('studio.bigPassTitle', 'Large native figure'),
-      message: planes
+      message: planes && planes.layers > 0
+        ? _tf('studio.bigPassMessageMips', 'This figure projects {n} slices: its native picture reads {layers} stored layer projections and {planes} stored planes, about {mb} MB ({tiles} image tiles).', {
+          n: Number(spec.slabThickness) || 1, mb: mb(native.bytes), layers: planes.layers, planes: planes.planes, tiles: planes.tiles
+        })
+        : planes
         ? _tf('studio.bigPassMessagePlanes', 'This figure projects {n} slices: its native picture reads {planes} stored planes, about {mb} MB ({tiles} image tiles).', {
           n: Number(spec.slabThickness) || 1, mb: mb(native.bytes), planes: planes.planes, tiles: planes.tiles
         })
@@ -2685,6 +2740,58 @@ const ViewerApp = (() => {
     return wanted.length ? wanted : Array.from({ length: channelCount }, (_, c) => c);
   }
 
+  // ── Brick frames (v2 64³, v3 66³ with a 1-voxel border, SPEC §13.2) ────────────
+
+  /**
+   * The frame the mounted tree delivers its bricks in: { apron: 0, stride: 64 } for a
+   * v2 tree, { apron: 1, stride: 66 } for a v3 one, whose stored voxel s of an axis is
+   * the volume voxel 64·b − 1 + s (BrickLoader.getFormat).
+   */
+  function _nativeBrickFrame() {
+    const fmt = typeof BrickLoader !== 'undefined' && BrickLoader.getFormat ? BrickLoader.getFormat() : null;
+    const apron = Number(fmt?.apron) === 1 ? 1 : 0;
+    return { apron, stride: 64 + 2 * apron };
+  }
+
+  /**
+   * The box of brick `brick` a native task asks the loader for. `region` is a box of
+   * the brick's INTERIOR (voxels [0, 64) of each axis, null = every interior voxel
+   * inside the volume) — the frame the page's brick pickers and both backends work in.
+   * v2: that box. v3: the same voxels in the stored 66³ frame (+1 on every bound), so
+   * the loader decodes and hands over exactly them; with `border` the box grows by the
+   * 1-voxel border on each side ([x0, x1 + 2) in the stored frame — the voxels a 66³
+   * atlas slot holds around them; null = the whole stored brick, the loader cutting it
+   * to the voxels in [−1, dimension]).
+   */
+  function _nativeLoaderRegion(brick, region, dims, frame, border = false) {
+    if (!frame || !frame.apron) return region || null;
+    if (border && !region) return null;
+    const bs = 64;
+    const a = frame.apron;
+    // The interior voxels inside the volume: past its far face the stored frame holds
+    // a clamped copy of the last voxel, which is no voxel of the brick's own.
+    const ext = {
+      x: Math.min(bs, dims.x - brick.bx * bs),
+      y: Math.min(bs, dims.y - brick.by * bs),
+      z: Math.min(bs, dims.z - brick.bz * bs)
+    };
+    const src = region || { x0: 0, x1: ext.x, y0: 0, y1: ext.y, z0: 0, z1: ext.z };
+    const r = {
+      x0: src.x0, x1: Math.min(src.x1, ext.x),
+      y0: src.y0, y1: Math.min(src.y1, ext.y),
+      z0: src.z0, z1: Math.min(src.z1, ext.z)
+    };
+    if (border) return { x0: r.x0, x1: r.x1 + 2 * a, y0: r.y0, y1: r.y1 + 2 * a, z0: r.z0, z1: r.z1 + 2 * a };
+    return { x0: r.x0 + a, x1: r.x1 + a, y0: r.y0 + a, y1: r.y1 + a, z0: r.z0 + a, z1: r.z1 + a };
+  }
+
+  /** A box the loader delivered (stored frame) back in the interior frame; null stays null (a whole v2 brick). */
+  function _nativeInteriorRegion(region, frame) {
+    if (!frame || !frame.apron || !region) return region || null;
+    const a = frame.apron;
+    return { x0: region.x0 - a, x1: region.x1 - a, y0: region.y0 - a, y1: region.y1 - a, z0: region.z0 - a, z1: region.z1 - a };
+  }
+
   // ── Format-2 planes/ (the native level re-cut into XY planes, SPEC §3/§8) ──────
   const _planeTrees = new Map();   // planes base → Promise<PlaneLoader tree | null>
 
@@ -2728,6 +2835,62 @@ const ViewerApp = (() => {
     return p;
   }
 
+  /**
+   * The format-3 mips/ tree beside the planes on screen (SPEC §12: per brick layer
+   * the per-channel maximum over its 64 planes), opened once per tree, or null —
+   * never throws. Same directory rule as planes/ (mips/, mips/tNNN).
+   */
+  function _mipsTreeOnScreen(dims0) {
+    if (!(Number(datasetMeta?.formatVersion) >= 3) || !PlaneLoader.openMips) return Promise.resolve(null);
+    const planesBase = _planesBaseOnScreen();
+    if (!planesBase || !dims0) return Promise.resolve(null);
+    const base = planesBase.replace(/\/planes(\/|$)/, '/mips$1');
+    if (base === planesBase) return Promise.resolve(null);
+    let p = _planeTrees.get(base);
+    if (!p) {
+      const brickDir = datasetMeta?.qualities?.native?.directory || 'bricks';
+      p = PlaneLoader.openMips(base, {
+        dimensions: { x: dims0.x, y: dims0.y, z: dims0.z },
+        channels: Number(dims0.channels) > 0 ? Number(dims0.channels) : null,
+        sourceManifestUrl: `${_basePath}/${brickDir}/manifest.json`
+      }).catch((err) => {
+        console.warn(`[ViewerApp] ${base} is not usable; the Studio reads the planes.`, err?.message || err);
+        return null;
+      });
+      _planeTrees.set(base, p);
+    }
+    return p;
+  }
+
+  /**
+   * The slab [z0, z1) a MIP plan reads when it samples EVERY plane of it (the z-stack
+   * figures: one sample per slice) — the only case a layer MIP may stand for its 64
+   * planes (SPEC §12) — else null.
+   */
+  function _mipsSlabOf(plan) {
+    if (!plan || !plan.reduced || plan.axis !== 'z' || !Array.isArray(plan.voxels) || !plan.voxels.length) return null;
+    const v = plan.voxels;
+    const z0 = v[0];
+    const z1 = v[v.length - 1] + 1;
+    if (z1 - z0 !== v.length) return null;
+    for (let i = 1; i < v.length; i++) if (v[i] !== v[i - 1] + 1) return null;
+    return { z0, z1 };
+  }
+
+  /**
+   * What a MIP slab costs through the layer MIPs: { bytes, tiles, layers, planes }
+   * (headers sampled), or null when the slab has no whole layer in it.
+   */
+  async function _mipsSlabEstimate(planesTree, mipsTree, slab, chans, rect, opts = {}) {
+    const split = PlaneLoader.planSlabMax(slab.z0, slab.z1, planesTree.dimensions.z);
+    if (!split.layers.length) return null;
+    const a = await mipsTree.estimate(split.layers, chans, rect, { ...opts, sample: Math.min(16, split.layers.length) });
+    const b = split.planes.length
+      ? await planesTree.estimate(split.planes, chans, rect, { ...opts, sample: Math.min(16, split.planes.length) })
+      : { bytes: 0, tiles: 0 };
+    return { bytes: a.bytes + b.bytes, tiles: a.tiles + b.tiles, layers: split.layers.length, planes: split.planes.length };
+  }
+
   /** A pass the planes can serve: an XY plane (or MIP slab) of the plane path at LOD0. */
   function _planesServePass(passPlan, lod) {
     return lod === 0 && passPlan?.path === 'plane' && Boolean(passPlan.plan) && !passPlan.plan.empty && passPlan.plan.axis === 'z';
@@ -2749,8 +2912,18 @@ const ViewerApp = (() => {
       const chans = BrickLoader.getTransportEncoding?.() === 'raw-rgba-gzip'
         ? Array.from({ length: channels }, (_, c) => c)
         : _nativeSliceChannels(channels);
-      const est = await tree.estimate(passPlan.plan.voxels, chans, { x0: 0, y0: 0, x1: dims.x, y1: dims.y }, { sample: 16 });
-      return { bytes: est.bytes, tiles: est.tiles, planes: passPlan.plan.voxels.length };
+      const rect = { x0: 0, y0: 0, x1: dims.x, y1: dims.y };
+      // A whole-stack figure of a format-3 tree reads one layer MIP per 64 planes.
+      const slab = _mipsSlabOf(passPlan.plan);
+      const mips = slab ? await _mipsTreeOnScreen(dims) : null;
+      if (mips) {
+        try {
+          const viaMips = await _mipsSlabEstimate(tree, mips, slab, chans, rect);
+          if (viaMips) return viaMips;
+        } catch (err) { /* the planes estimate below */ }
+      }
+      const est = await tree.estimate(passPlan.plan.voxels, chans, rect, { sample: 16 });
+      return { bytes: est.bytes, tiles: est.tiles, planes: passPlan.plan.voxels.length, layers: 0 };
     } catch (err) {
       return null;
     }
@@ -2806,21 +2979,40 @@ const ViewerApp = (() => {
       if (v?.clone && tempMaterial.uniforms) tempMaterial.uniforms[k] = { value: v.clone() };
     }
     const bs = dims.brickSize || 64;
+    // A v3 tree: an atlas whose slots hold the stored 66³ (SVRManager reports `apron`
+    // 1, its material sampling slot origin + 1 + local voxel) takes the bricks with
+    // their border; any other atlas takes the 64³ interiors, as from a v2 tree.
+    const frame = _nativeBrickFrame();
     const tempSvr = new SVRManager();
     try {
-      tempSvr.init(channels, dims, renderer, tempMaterial, { targetSlots: bricks.length + 1 });
+      tempSvr.init(channels, dims, renderer, tempMaterial, { targetSlots: bricks.length + 1, apron: frame.apron });
     } catch (err) {
       tempSvr.dispose?.();
       tempMaterial.dispose?.();
       throw err;
     }
+    const apron = frame.apron && Number(tempSvr.apron) === frame.apron ? frame.apron : 0;
     if (BrickLoader.hasBrick) tempSvr.pointEmptyBricks((bx, by, bz) => !BrickLoader.hasBrick(bx, by, bz, lod));
     return {
       kind: 'atlas',
       material: tempMaterial,
       plane: null,
-      /** A composed brick box (whole interior bricks come with no region). → bricks written. */
+      apron,
+      /**
+       * A composed brick box (whole interior bricks come with no region). With `apron`
+       * the box is in the stored 66³ frame (null = the whole stored brick, cut to the
+       * volume). → bricks written.
+       */
       write(brick, data, region) {
+        if (apron) {
+          const s = bs + 2 * apron;
+          const r = region || {
+            x0: 0, x1: Math.min(s, dims.x - brick.bx * bs + 2 * apron),
+            y0: 0, y1: Math.min(s, dims.y - brick.by * bs + 2 * apron),
+            z0: 0, z1: Math.min(s, dims.z - brick.bz * bs + 2 * apron)
+          };
+          return tempSvr.writeRgbaBrickRegion(brick.bx, brick.by, brick.bz, data, r.x0, r.y0, r.z0, r.x1 - r.x0, r.y1 - r.y0, r.z1 - r.z0) ? 1 : 0;
+        }
         const r = region || {
           x0: 0, x1: Math.min(bs, dims.x - brick.bx * bs),
           y0: 0, y1: Math.min(bs, dims.y - brick.by * bs),
@@ -3007,10 +3199,19 @@ const ViewerApp = (() => {
       return null;
     }
     if (!backend) backend = _atlasNativeBackend(dims, channels, bricks, lod);
+    const brickFrame = _nativeBrickFrame();
+    let borderFrame = Boolean(backend.apron);
     // An XY cut of a format-2 tree reads its planes/: the voxels of the plane alone,
     // not the 64 slices of every brick it crosses (any failure: the bricks, below).
     const planesTree = backend.plane && _planesServePass(passPlan, lod)
       ? await _planesTreeOnScreen(BrickLoader.getDimensions(0))
+      : null;
+    // A whole-stack MIP of a format-3 tree reads one layer MIP per 64 planes inside
+    // the slab (and the planes of the partial layers at its ends): pixel for pixel the
+    // maximum over every plane (any failure: every plane, then the bricks).
+    const mipsSlab = planesTree ? _mipsSlabOf(passPlan.plan) : null;
+    const mipsTree = mipsSlab && PlaneLoader.planSlabMax(mipsSlab.z0, mipsSlab.z1, planesTree.dimensions.z).layers.length
+      ? await _mipsTreeOnScreen(BrickLoader.getDimensions(0))
       : null;
 
     const onProgress = typeof options.onProgress === 'function' ? options.onProgress : null;
@@ -3186,11 +3387,16 @@ const ViewerApp = (() => {
         partials.set(key, { data, missing: new Set(row.failedChannels) });
         return;
       }
-      commit(brick, data, row.region || null);
+      // The backends work in the interior frame, a 66³-slot atlas in the stored one.
+      commit(brick, data, borderFrame ? (row.region || null) : _nativeInteriorRegion(row.region || null, brickFrame));
       status(false);
     };
+    // A v3 tree (SPEC §13.2): every task asks for the interior voxels it needs in the
+    // stored 66³ frame — a one-voxel plane of each brick for an XZ / YZ cut, the
+    // loader merging the bricks' byte runs of each pack into multi-range requests.
     const tasksFor = (pairs) => pairs.map(({ brick, channel }) => ({
-      bx: brick.bx, by: brick.by, bz: brick.bz, lod, channel, region: brick.region || null
+      bx: brick.bx, by: brick.by, bz: brick.bz, lod, channel,
+      region: _nativeLoaderRegion(brick, brick.region || null, dims, brickFrame, borderFrame)
     }));
     const loadOptions = (group) => ({
       group,
@@ -3221,7 +3427,7 @@ const ViewerApp = (() => {
      * the shader reads exactly the texels the bricks path writes. → a slice result,
      * or throws (the caller then reads the bricks).
      */
-    const planesPass = async (tree) => {
+    const planesPass = async (tree, mips = null) => {
       const plan = passPlan.plan;
       const bs = plan.bs;
       const plane = backend.plane;
@@ -3257,14 +3463,21 @@ const ViewerApp = (() => {
         }
       };
 
-      const est = await tree.estimate(plan.voxels, chans, rect, { signal, onBytes, sample: plan.reduced ? 16 : 0 });
+      const est = mips
+        ? await _mipsSlabEstimate(tree, mips, mipsSlab, chans, rect, { signal, onBytes })
+        : await tree.estimate(plan.voxels, chans, rect, { signal, onBytes, sample: plan.reduced ? 16 : 0 });
+      if (!est) throw new Error('no whole brick layer in the slab');
       throwIfAborted(null);
       chunkTotal = Math.max(1, est.tiles);
       PARTIAL_MIN_CHUNKS = Math.max(1, Math.ceil(chunkTotal / 50));
       bytesTotal = Math.max(bytesDone, est.bytes);
       startedAt = now();
       onProgress?.({ percent: 0, chunks: 0, totalChunks: chunkTotal, bytesDone, bytesTotal, etaSeconds: null, lod, dims });
-      if (plan.reduced) {
+      if (mips) {
+        await PlaneLoader.loadSlabMax(tree, mips, mipsSlab.z0, mipsSlab.z1, chans, rect, {
+          signal, compose, bands: true, onBand: upload(0), onBytes, onTiles, concurrency: 3
+        });
+      } else if (plan.reduced) {
         await tree.loadRegionMax(plan.voxels, chans, rect, { signal, compose, bands: true, onBand: upload(0), onBytes, onTiles, concurrency: 3 });
       } else {
         for (const z of plan.voxels) {
@@ -3288,36 +3501,46 @@ const ViewerApp = (() => {
       return sliceResult(picture, {
         quality: 'native',
         missingChunks: 0,
-        path: 'planes',
+        path: mips ? 'mips' : 'planes',
         bytesTotal,
         elapsedMs: now() - startedAt,
         netMs: lastBrickAt ? Math.max(1, lastBrickAt - startedAt) : 0
       });
     };
 
+    // A failed source, from scratch, on a fresh plane texture.
+    const restartOnFreshPlane = () => {
+      cancelPartial();
+      const used = backend;
+      backend = null;
+      used.dispose();
+      backend = _planeNativeBackend(passPlan.plan, dims, channels);
+      borderFrame = false;
+      written = 0;
+      writtenSinceRender = 0;
+      gpuLost = 0;
+      fraction = 0;
+      bytesDone = 0;
+      lastBrickAt = 0;
+      chunkTotal = bricks.length;
+      PARTIAL_MIN_CHUNKS = Math.max(1, Math.ceil(bricks.length / 50));
+    };
+
     try {
       if (planesTree) {
-        try {
-          const result = await planesPass(planesTree);
-          if (result) return result;
-        } catch (err) {
-          if (controller.signal.aborted || err?.name === 'AbortError') throw new DOMException('Native slice render cancelled', 'AbortError');
-          console.warn('[ViewerApp] Native Studio pass: planes/ failed; reading the bricks instead.', err?.message || err);
+        // mips/ + planes/, then planes/ alone, then the bricks.
+        for (const mips of mipsTree ? [mipsTree, null] : [null]) {
+          try {
+            const result = await planesPass(planesTree, mips);
+            if (result) return result;
+          } catch (err) {
+            if (controller.signal.aborted || err?.name === 'AbortError') throw new DOMException('Native slice render cancelled', 'AbortError');
+            console.warn(mips
+              ? '[ViewerApp] Native Studio pass: mips/ failed; reading every plane instead.'
+              : '[ViewerApp] Native Studio pass: planes/ failed; reading the bricks instead.', err?.message || err);
+          }
+          restartOnFreshPlane();
         }
-        // The bricks, from scratch, on a fresh plane texture.
-        cancelPartial();
-        const used = backend;
-        backend = null;
-        used.dispose();
-        backend = _planeNativeBackend(passPlan.plan, dims, channels);
-        written = 0;
-        writtenSinceRender = 0;
-        gpuLost = 0;
-        fraction = 0;
-        bytesDone = 0;
-        lastBrickAt = 0;
-        chunkTotal = bricks.length;
-        PARTIAL_MIN_CHUNKS = Math.max(1, Math.ceil(bricks.length / 50));
       }
       _setSliceStatus(_tf('studio.nativePreparing', 'Preparing the native slice ({n} chunks)…', { n: bricks.length }));
       const pairs = [];
@@ -4757,7 +4980,7 @@ const ViewerApp = (() => {
     // (e.g. native exceeds the GPU's atlas budget). Reflect the resolution actually
     // displayed in the selector and tell the user, requiring an explicit OK ack.
     if (result.downgraded && Number.isFinite(result.lod) && Array.isArray(_brickManifest?.levels)) {
-      const actualQuality = _qualityValueForLod(result.lod, _brickManifest.levels);
+      const actualQuality = _qualityValueForLod(result.lod);
       if (actualQuality && actualQuality !== primaryQuality) {
         const requestedLabel = _qualityLabel(primaryQuality);
         const actualLabel = _qualityLabel(actualQuality);
@@ -4822,6 +5045,21 @@ const ViewerApp = (() => {
     _preloadTimer = null;
   }
 
+  /**
+   * The manifest of one timepoint tree of a v3 timelapse (SPEC §13.3): the shared
+   * manifest with that row's `index` and no `timepoints`, mounted at bricks/<row.path>.
+   * The row's index url is written relative to bricks/ ("t000/index.bin"); the loader
+   * resolves it against the tree it mounts, so it is re-expressed relative to that
+   * tree ("index.bin"). null for a v2 row or a malformed one.
+   */
+  function _v3TimepointManifest(manifest, row) {
+    if (!_isV3BrickManifest(manifest) || !row || typeof row !== 'object' || !row.index || typeof row.index.url !== 'string') return null;
+    const path = String(row.path || '').replace(/^\/+|\/+$/g, '');
+    let url = row.index.url.replace(/^\/+/, '');
+    if (path && url.startsWith(`${path}/`)) url = url.slice(path.length + 1);
+    return { ...manifest, timepoints: null, index: { ...row.index, url } };
+  }
+
   function _scheduleAdjacentPreload(basePath, t) {
     if (!isLive || _isIframe || !Number.isFinite(t)) return;
     _cancelAdjacentPreload();
@@ -4841,15 +5079,16 @@ const ViewerApp = (() => {
     const work = tpRows && typeof tpRows === 'object'
       ? () => {
         const brickDir = datasetMeta?.qualities?.native?.directory || 'bricks';
-        const levels = _brickManifest?.levels || [];
-        const lod = _lodForQuality(_qualityMode, levels.length, levels);
+        const lod = _lodForQuality(_qualityMode);
         candidates.forEach(frame => {
           const key = `t${String(frame).padStart(3, '0')}`;
           const row = tpRows[key] || tpRows[String(frame)] || tpRows[frame];
-          if (!row?.brickTransport) return;
+          // v2: the row's own brickTransport; v3: the shared manifest with the row's index.
+          const transport = row?.brickTransport || _v3TimepointManifest(_brickManifest, row);
+          if (!transport) return;
           _preloadedTimepoints.add(frame);
           BrickLoader.prefetchPacks?.(
-            `${basePath}/${brickDir}/${row.path || key}`, row.brickTransport, lod, 0
+            `${basePath}/${brickDir}/${row.path || key}`, transport, lod, 0
           )?.catch?.(() => {});   // best effort: the foreground load retries properly
         });
       }
@@ -5121,6 +5360,8 @@ const ViewerApp = (() => {
 
     // A relay of this panel's own message (the URL index is a string, a host may send a number).
     if (data.sourceIndex !== undefined && data.sourceIndex !== null && String(data.sourceIndex) === String(_panelIndex)) return;
+
+    if (_answerHostRequest(data)) return;
 
     if (data.type === 'SYNC_Z') {
       const value = parseFloat(data.value);
@@ -5415,10 +5656,117 @@ const ViewerApp = (() => {
   // back (PLUGIN_STATE / TOOL_CHANGED). Only a page with a panel index has a host.
   let _suppressToolSync = false;
 
-  function _postToHost(msg) {
+  function _postToHost(msg, transfer) {
     if (!_isIframe || _panelIndex === null) return;
     // SEC-012: restrict targetOrigin to this page's origin (no wildcard leak).
-    window.parent.postMessage({ ...msg, sourceIndex: _panelIndex }, Utils.trustedTargetOrigin());
+    const message = { ...msg, sourceIndex: _panelIndex };
+    if (Array.isArray(transfer) && transfer.length) window.parent.postMessage(message, Utils.trustedTargetOrigin(), transfer);
+    else window.parent.postMessage(message, Utils.trustedTargetOrigin());
+  }
+
+  // ── Requests of the host (Compare) ─────────────────────────
+  // The host never calls into this document: it asks (REQUEST_*, with a requestId)
+  // and this page answers in its own message with the same requestId (ok: false and
+  // an error when it cannot). Pictures travel as ImageBitmaps (transferred), data as
+  // plain structured-cloneable values.
+
+  /** A JSON-safe copy (no function, no DOM node): what a state or a slice description may carry across. */
+  function _plainForHost(value) {
+    return value === undefined ? null : JSON.parse(JSON.stringify(value));
+  }
+
+  /**
+   * A slice result as the host can receive it: the picture as `bitmap` (an
+   * ImageBitmap to transfer), the raw channel values kept as typed arrays, the
+   * histograms of the volume for a cell without raw, everything else JSON-safe.
+   * → Promise<{ result, transfer }> | null without a picture.
+   */
+  function _sliceResultForHost(sr) {
+    if (!sr?.canvas || typeof createImageBitmap !== 'function') return null;
+    const { canvas, raw, ...rest } = sr;
+    // The slice canvases here are copies (_copyCanvas), not the WebGL view: they
+    // keep their pixels while the bitmap is made.
+    return createImageBitmap(canvas).then((bitmap) => {
+      const result = _plainForHost(rest);
+      result.bitmap = bitmap;
+      if (raw && ArrayBuffer.isView(raw.data)) {
+        result.raw = {
+          data: raw.data, width: raw.width, height: raw.height, channels: raw.channels,
+          projected: raw.projected === true, coverage: raw.coverage === true
+        };
+        if (ArrayBuffer.isView(raw.coverageMask)) result.raw.coverageMask = raw.coverageMask;
+      } else {
+        result.raw = null;
+      }
+      let histograms = null;
+      try { histograms = VolumeViewer.getChannelHistograms?.() || null; } catch (err) { histograms = null; }
+      result.histograms = histograms ? _plainForHost(histograms) : null;
+      return { result, transfer: [bitmap] };
+    });
+  }
+
+  /** Answers one REQUEST_* of the host; false for any other message. */
+  function _answerHostRequest(data) {
+    if (!data || typeof data.type !== 'string' || !data.type.startsWith('REQUEST_') || data.type === 'REQUEST_SCREENSHOT') return false;
+    const requestId = typeof data.requestId === 'string' ? data.requestId : null;
+    if (!requestId) return true;
+    const failure = (err) => String(err?.message || err || 'unavailable');
+    if (data.type === 'REQUEST_CAPTURE') {
+      // The WebGL drawing buffer is not kept between frames: render and snapshot it
+      // in this very task (createImageBitmap copies the canvas when it is called).
+      let pending = null;
+      try {
+        const canvas = getCaptureCanvas();
+        if (canvas && canvas.width && canvas.height && typeof createImageBitmap === 'function') pending = createImageBitmap(canvas);
+      } catch (err) {
+        _postToHost({ type: 'CAPTURE', requestId, ok: false, error: failure(err) });
+        return true;
+      }
+      if (!pending) {
+        _postToHost({ type: 'CAPTURE', requestId, ok: false, error: 'nothing to capture' });
+        return true;
+      }
+      pending.then(
+        (bitmap) => _postToHost({ type: 'CAPTURE', requestId, ok: true, bitmap, width: bitmap.width, height: bitmap.height }, [bitmap]),
+        (err) => _postToHost({ type: 'CAPTURE', requestId, ok: false, error: failure(err) })
+      );
+      return true;
+    }
+    if (data.type === 'REQUEST_STUDIO_SLICE') {
+      let pending = null;
+      try {
+        pending = _sliceResultForHost(getCurrentSliceResult());
+      } catch (err) {
+        _postToHost({ type: 'STUDIO_SLICE', requestId, ok: false, error: failure(err) });
+        return true;
+      }
+      if (!pending) {
+        _postToHost({ type: 'STUDIO_SLICE', requestId, ok: false, error: 'no slice to hand over' });
+        return true;
+      }
+      pending.then(
+        ({ result, transfer }) => _postToHost({ type: 'STUDIO_SLICE', requestId, ok: true, result }, transfer),
+        (err) => _postToHost({ type: 'STUDIO_SLICE', requestId, ok: false, error: failure(err) })
+      );
+      return true;
+    }
+    if (data.type === 'REQUEST_WORKSPACE_STATE') {
+      try {
+        _postToHost({ type: 'WORKSPACE_STATE', requestId, ok: true, state: _isInitialized ? _plainForHost(_getWorkspaceState()) : null });
+      } catch (err) {
+        _postToHost({ type: 'WORKSPACE_STATE', requestId, ok: false, error: failure(err) });
+      }
+      return true;
+    }
+    if (data.type === 'REQUEST_CHANNEL_STATE') {
+      try {
+        _postToHost({ type: 'CHANNEL_STATE', requestId, ok: true, channels: _plainForHost(getChannelState()) });
+      } catch (err) {
+        _postToHost({ type: 'CHANNEL_STATE', requestId, ok: false, error: failure(err) });
+      }
+      return true;
+    }
+    return false;
   }
 
   function _postPanelReady() {
@@ -5465,13 +5813,18 @@ const ViewerApp = (() => {
     if (!levels?.length || typeof BrickLoader === 'undefined' || typeof SVRManager === 'undefined' || !SVRManager.planAtlas) return null;
     const renderer = VolumeViewer.getRenderer?.();
     const max3D = Math.max(64, renderer?.capabilities?.max3DTextureSize || 2048);
-    // Without the viewer's footprints: the level's non-empty bricks, one 64³ slot each.
+    // Without the viewer's footprints: the level's non-empty bricks, one slot each — 66³ on
+    // a bordered (v3) tree, and R8 / RG8 texels for 1–2 channel data, as the atlas is built.
+    const format = BrickLoader.getFormat?.() || null;
+    const brickSize = Number(format?.brickStride) || 64;
+    const channels = Number(format?.channels) || Number(_brickManifest?.channels) || 4;
+    const components = channels <= 1 ? 1 : (channels === 2 ? 2 : 4);
     const out = {};
     for (const quality of offered) {
-      const lod = _lodForQuality(quality, levels.length, levels);
+      const lod = _lodForQuality(quality);
       const count = BrickLoader.activeBrickCount?.(lod);
       if (!(count > 0)) continue;
-      const plan = SVRManager.planAtlas(count, { max3D });
+      const plan = SVRManager.planAtlas(count, { max3D, brickSize, components });
       if (plan && plan.bytes > 0) out[quality] = plan.bytes;
     }
     return Object.keys(out).length ? out : null;

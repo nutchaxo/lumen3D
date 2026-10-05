@@ -1,5 +1,7 @@
 {
   "version": 1,
+  "serial": 2,
+  "issuedAt": "2026-10-05T18:40:11Z",
   "plugins": [
     {
       "id": "gaussian-filter",
@@ -113,11 +115,11 @@
       "icon": "bug",
       "platformCompat": "1.x",
       "sandboxCapabilities": null,
-      "latestVersion": "1.0.2",
-      "assetUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/chunk-debug/plugin-chunk-debug-1.0.2.zip",
+      "latestVersion": "1.1.0",
+      "assetUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/chunk-debug/plugin-chunk-debug-1.1.0.zip",
       "sumsUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/chunk-debug/SHA256SUMS",
       "sigUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/chunk-debug/SHA256SUMS.sig",
-      "sha256": "2362ae919f16a0ebbeb793abf9fcf83bc4d975b63130f5e655d1b784ae97a6f4",
+      "sha256": "8cf60bc309caaaf6b4866f4eea66eb5a52d63d60d33f947959c34caa24824a14",
       "recommended": false
     },
     {

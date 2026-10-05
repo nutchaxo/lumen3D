@@ -213,7 +213,7 @@ function makeEnv({ dims = { x: 70, y: 52, z: 41, brickSize: BS, channels: 4 }, l
       '_renderNativeSliceForStudio', '_studioGeometry', '_studioCalibrated', '_planeWorkerInstance', '_planeJob', '_studioCoverageMask',
       '_reducePlaneTile', '_nativeLabel', '_scaleCropRect', '_tf', '_nativePassEstimate', '_confirmLargeNativePass',
       '_upgradeStudioSliceToNative', '_renderStudioPreviewSlice', '_planesBaseOnScreen', '_planesTreeOnScreen', '_planesServePass',
-      '_planesPassEstimate'].map(lift).join('\n')}
+      '_planesPassEstimate', '_nativeBrickFrame', '_nativeLoaderRegion', '_nativeInteriorRegion', '_mipsTreeOnScreen', '_mipsSlabOf', '_mipsSlabEstimate'].map(lift).join('\n')}
     return {
       upgrade: _upgradeStudioSliceToNative,
       native: _renderNativeSliceForStudio,

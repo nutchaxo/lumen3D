@@ -64,6 +64,7 @@ import shutil
 import tempfile
 import threading
 import time
+import zlib
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -170,13 +171,22 @@ def _journal_lock(key: str) -> threading.Lock:
 #   4  download/ originals — never needed to open a dataset
 TIER_CORE, TIER_PREVIEW, TIER_MID, TIER_FULL, TIER_EXTRA = 0, 1, 2, 3, 4
 
-_RE_PACK = re.compile(r"^lod(\d{1,2})/(c\d{1,2}|rgba)/pack_\d{1,6}\.bin$")
+_RE_PACK = re.compile(r"^lod(\d{1,2})/(c\d{1,2}|rgba)/pack_\d{1,6}\.bin\Z", re.ASCII)
 _RE_TIMEPOINT = re.compile(r"^t(\d{1,6})/(.+)$")
 # Format-2 plane copy of the native level (DOCS/dataset-migrations/SPEC.md §3): one
 # tree at planes/ (a 3d dataset, or a single-frame timelapse), one per frame at
 # planes/tNNN/ (a timelapse). Nothing else is ever written there by the pipeline.
 _RE_PLANES = re.compile(r"^planes/(?:(t\d{3,6})/)?(manifest\.json|z\d{5,7}\.bin)\Z", re.ASCII)
 _PLANES_MAGIC = b"LPLN"
+# Format 3 (SPEC §12): the per-layer maximum projections, tiled like the planes; the
+# pack header field `z` is the layer index, magic LMIP.
+_RE_MIPS = re.compile(r"^mips/(?:(t\d{3,6})/)?(manifest\.json|l\d{5,7}\.bin)\Z", re.ASCII)
+_MIPS_MAGIC = b"LMIP"
+# Format 4 (SPEC §13): brick pyramid v3 — a binary index per tree and packs per
+# (level, channel), `l{k}/c{c}/pNNNNN.bin`.
+_RE_PACK_V3 = re.compile(r"^l(\d{1,2})/c(\d{1,2})/p\d{5}\.bin\Z", re.ASCII)
+_INDEX_V3_MAGIC = b"LBIX"
+BRICKS_V3_SCHEMA = "iribhm-bricks-v3"
 
 # download/ originals. Deliberately data-only: no archive that a server might
 # expand, no markup, no script. `.zip` is the one container, and it is only ever
@@ -281,6 +291,13 @@ def classify_path(type_dir: str, rel: str):
             return None
         return TIER_EXTRA, ("planes_manifest" if m.group(2) == "manifest.json" else "planes_pack")
 
+    if rel.startswith("mips/"):
+        # Layer MIPs only speed up whole-stack figures: last, like the planes.
+        m = _RE_MIPS.match(rel)
+        if not m or type_dir not in VOLUME_TYPE_DIRS or (m.group(1) and type_dir != "live"):
+            return None
+        return TIER_EXTRA, ("mips_manifest" if m.group(2) == "manifest.json" else "mips_pack")
+
     if not rel.startswith("bricks/") or type_dir not in VOLUME_TYPE_DIRS:
         return None
     inner = rel[len("bricks/"):]
@@ -301,7 +318,10 @@ def classify_path(type_dir: str, rel: str):
         if inner == "manifest.json":
             return TIER_CORE, "manifest"
 
-    m = _RE_PACK.match(inner)
+    # The v3 binary index is what makes a tree mountable, like the v2 manifest.
+    if inner == "index.bin":
+        return TIER_CORE, "index"
+    m = _RE_PACK.match(inner) or _RE_PACK_V3.match(inner)
     if not m:
         return None
     lod = int(m.group(1))
@@ -322,7 +342,7 @@ def _pack_lod(rel: str):
     if tp:
         timepoint = int(tp.group(1))
         inner = tp.group(2)
-    m = _RE_PACK.match(inner)
+    m = _RE_PACK.match(inner) or _RE_PACK_V3.match(inner)
     return (int(m.group(1)), timepoint) if m else None
 
 
@@ -471,6 +491,11 @@ def _free_bytes(path: Path) -> int | None:
 
 
 def load_journal(type_dir: str, folder: str) -> dict | None:
+    """The journal as it stands now: the JSON file with the chunk log folded in.
+
+    Folding happens in memory only; ``save_journal`` is what makes it durable and
+    empties the log. Callers that save must have loaded under ``_journal_lock`` so
+    no record can be appended between the two (appends take the same lock)."""
     jp = journal_path(type_dir, folder)
     if jp is None or not jp.exists():
         return None
@@ -478,16 +503,245 @@ def load_journal(type_dir: str, folder: str) -> dict | None:
         data = json.loads(jp.read_text(encoding="utf-8"))
     except Exception:
         return None
-    return data if isinstance(data, dict) else None
+    if not isinstance(data, dict):
+        return None
+    _fold_log(data, type_dir, folder)
+    return data
 
 
 def save_journal(journal: dict) -> bool:
-    jp = journal_path(journal.get("type", ""), journal.get("folder", ""))
+    """Compaction: write the folded journal atomically, then drop the chunk log.
+
+    A crash between the two leaves records the journal already holds; folding them
+    again sets bits that are already set, so the order is safe."""
+    type_dir, folder = journal.get("type", ""), journal.get("folder", "")
+    jp = journal_path(type_dir, folder)
     if jp is None:
         return False
     journal["updatedAt"] = _now_iso()
     _atomic_write_json(jp, journal)
+    lp = log_path(type_dir, folder)
+    if lp is not None:
+        try:
+            lp.unlink()
+        except FileNotFoundError:
+            pass
+        except OSError:
+            pass   # a reader holds it (Windows): the records stay foldable, never wrong
     return True
+
+
+# ── Chunk log + file table (shared with api/_upload_lib.php) ───────────────────
+# Rewriting the whole JSON journal for every 8 MiB chunk cost 40 ms at 20 000 files
+# and half a second at the 200 000-file ceiling, under the dataset lock, so the
+# parallel streams were serialised through it. A chunk now costs one 16-byte append.
+#
+# Shared format (both backends read and write it — an import started under one
+# resumes under the other). All integers little-endian.
+#
+#   uploads/state/<type>__<folder>.json   the journal. Each file entry carries an
+#       integer "id" (never reused: "nextId" counts up), assigned when the entry is
+#       created and REPLACED whenever its bitmap is reset or its size changes, so a
+#       record logged against an old incarnation of a file can never mark the new
+#       one.
+#   uploads/state/<type>__<folder>.files  the file table, rewritten whenever ids
+#       change: 16-byte header  "LUFT" | u32 version=1 | u32 count | u32 0,
+#       then `count` 32-byte records at 16 + id*32:
+#       u64 size | u32 chunkSize | u32 flags (bit 0 = live) | 16 bytes sha256(path)[:16].
+#       It lets a chunk be checked against the planned size/chunk size without
+#       parsing the journal; the path tag proves the client's `fid` names the path
+#       it sends.
+#   uploads/state/<type>__<folder>.log    the chunk log, append-only: 16-byte records
+#       u32 id | u32 chunkIndex | "LUC1" | u32 crc32(bytes 0..11).
+#       A record is appended only after the chunk's bytes are fsync'ed, so a record
+#       that survives a crash always describes bytes on disk. A torn tail (length
+#       not a multiple of 16) or a record whose magic/CRC does not match is
+#       ignored: losing one only costs a re-send. The log is fsync'ed every 32nd
+#       record and at compaction.
+#
+# Compaction (fold the log into the journal, write it, delete the log) happens at
+# plan, at file completion and on every journal write; status reads fold in memory.
+
+_LOG_RECORD = struct.Struct("<II4sI")
+_LOG_MAGIC = b"LUC1"
+_LOG_SYNC_EVERY = 32
+_TABLE_HEADER = struct.Struct("<4sIII")
+_TABLE_RECORD = struct.Struct("<QII16s")
+_TABLE_MAGIC = b"LUFT"
+_TABLE_LIVE = 1
+
+
+def log_path(type_dir: str, folder: str):
+    safe = _safe_dataset(type_dir, folder)
+    if safe is None:
+        return None
+    return STATE_DIR / f"{safe[0]}__{safe[1]}.log"
+
+
+def table_path(type_dir: str, folder: str):
+    safe = _safe_dataset(type_dir, folder)
+    if safe is None:
+        return None
+    return STATE_DIR / f"{safe[0]}__{safe[1]}.files"
+
+
+def _path_tag(rel: str) -> bytes:
+    return hashlib.sha256(rel.encode("utf-8")).digest()[:16]
+
+
+def _log_record(file_id: int, index: int) -> bytes:
+    head = struct.pack("<II4s", file_id, index, _LOG_MAGIC)
+    return head + struct.pack("<I", zlib.crc32(head) & 0xFFFFFFFF)
+
+
+def read_log(type_dir: str, folder: str) -> list[tuple[int, int]]:
+    """Every intact ``(file id, chunk index)`` record of the dataset's chunk log."""
+    lp = log_path(type_dir, folder)
+    if lp is None:
+        return []
+    try:
+        data = lp.read_bytes()
+    except OSError:
+        return []
+    out = []
+    size = _LOG_RECORD.size
+    for off in range(0, len(data) - size + 1, size):
+        fid, index, magic, crc = _LOG_RECORD.unpack_from(data, off)
+        if magic == _LOG_MAGIC and zlib.crc32(data[off:off + 12]) & 0xFFFFFFFF == crc:
+            out.append((fid, index))
+    return out
+
+
+def _fold_log(journal: dict, type_dir: str, folder: str) -> int:
+    """Apply the chunk log to ``journal`` in memory. Returns the records applied."""
+    records = read_log(type_dir, folder)
+    if not records:
+        return 0
+    files = journal.get("files") if isinstance(journal.get("files"), dict) else {}
+    by_id = {e["id"]: e for e in files.values()
+             if isinstance(e, dict) and isinstance(e.get("id"), int)}
+    maps: dict[int, tuple[bytearray, int]] = {}
+    applied = 0
+    for fid, index in records:
+        entry = by_id.get(fid)
+        if entry is None:
+            continue
+        if fid not in maps:
+            size = int(entry.get("size", 0))
+            chunk = int(entry.get("chunkSize", DEFAULT_CHUNK_SIZE)) or DEFAULT_CHUNK_SIZE
+            nbits = _bits_len(size, chunk)
+            maps[fid] = (_bitmap_decode(entry.get("bits", ""), nbits), nbits)
+        bits, nbits = maps[fid]
+        if index < nbits:
+            _bit_set(bits, index)
+            applied += 1
+    for fid, (bits, nbits) in maps.items():
+        entry = by_id[fid]
+        entry["bits"] = _bitmap_encode(bits)
+        # Same rule as the per-chunk journal write it replaces: a file whose every
+        # chunk is in reads done; only finalize_file ever takes that back.
+        if nbits and _bit_count(bits) == nbits:
+            entry["done"] = True
+    if applied:
+        lp = log_path(type_dir, folder)
+        try:
+            mtime = lp.stat().st_mtime
+            journal["lastChunkAt"] = datetime.fromtimestamp(mtime, timezone.utc).isoformat(timespec="seconds")
+        except OSError:
+            pass
+    return applied
+
+
+def _ensure_ids(journal: dict) -> bool:
+    """Give every file entry an id (a journal written before the chunk log had
+    none). Returns True when anything changed."""
+    changed = False
+    next_id = journal.get("nextId")
+    files = journal.get("files") if isinstance(journal.get("files"), dict) else {}
+    used = [e["id"] for e in files.values() if isinstance(e, dict) and isinstance(e.get("id"), int)]
+    if not isinstance(next_id, int) or (used and next_id <= max(used)):
+        next_id = (max(used) + 1) if used else 0
+        changed = True
+    for entry in files.values():
+        if isinstance(entry, dict) and not isinstance(entry.get("id"), int):
+            entry["id"] = next_id
+            next_id += 1
+            changed = True
+    journal["nextId"] = next_id
+    return changed
+
+
+def _new_id(journal: dict, entry: dict) -> None:
+    """A fresh incarnation of a file: its old id (and every log record naming it)
+    no longer applies."""
+    _ensure_ids(journal)
+    entry["id"] = journal["nextId"]
+    journal["nextId"] += 1
+
+
+def _write_table(journal: dict) -> None:
+    type_dir, folder = journal.get("type", ""), journal.get("folder", "")
+    tp = table_path(type_dir, folder)
+    if tp is None:
+        return
+    count = int(journal.get("nextId") or 0)
+    buf = bytearray(_TABLE_HEADER.size + count * _TABLE_RECORD.size)
+    _TABLE_HEADER.pack_into(buf, 0, _TABLE_MAGIC, 1, count, 0)
+    for rel, entry in (journal.get("files") or {}).items():
+        if not isinstance(entry, dict) or not isinstance(entry.get("id"), int):
+            continue
+        fid = entry["id"]
+        if not 0 <= fid < count:
+            continue
+        chunk = int(entry.get("chunkSize", DEFAULT_CHUNK_SIZE)) or DEFAULT_CHUNK_SIZE
+        _TABLE_RECORD.pack_into(buf, _TABLE_HEADER.size + fid * _TABLE_RECORD.size,
+                                int(entry.get("size", 0)), chunk, _TABLE_LIVE, _path_tag(rel))
+    _atomic_write_bytes(tp, bytes(buf))
+
+
+def read_table_record(type_dir: str, folder: str, file_id: int):
+    """``(size, chunkSize, tag)`` of a live file-table record, or None."""
+    tp = table_path(type_dir, folder)
+    if tp is None or not isinstance(file_id, int) or file_id < 0:
+        return None
+    try:
+        with open(tp, "rb") as fh:
+            head = fh.read(_TABLE_HEADER.size)
+            if len(head) != _TABLE_HEADER.size:
+                return None
+            magic, version, count, _ = _TABLE_HEADER.unpack(head)
+            if magic != _TABLE_MAGIC or version != 1 or file_id >= count:
+                return None
+            fh.seek(_TABLE_HEADER.size + file_id * _TABLE_RECORD.size)
+            raw = fh.read(_TABLE_RECORD.size)
+    except OSError:
+        return None
+    if len(raw) != _TABLE_RECORD.size:
+        return None
+    size, chunk, flags, tag = _TABLE_RECORD.unpack(raw)
+    if not flags & _TABLE_LIVE or chunk <= 0:
+        return None
+    return size, chunk, tag
+
+
+def _append_log(type_dir: str, folder: str, file_id: int, index: int) -> None:
+    lp = log_path(type_dir, folder)
+    _make_dir(lp.parent)
+    with open(lp, "ab") as fh:
+        fh.write(_log_record(file_id, index))
+        fh.flush()
+        if (fh.tell() // _LOG_RECORD.size) % _LOG_SYNC_EVERY == 0:
+            os.fsync(fh.fileno())
+
+
+def _remove_state_files(type_dir: str, folder: str) -> None:
+    for p in (journal_path(type_dir, folder), log_path(type_dir, folder),
+              table_path(type_dir, folder)):
+        if p is not None:
+            try:
+                p.unlink()
+            except OSError:
+                pass
 
 
 def _now_iso() -> str:
@@ -508,6 +762,7 @@ def _new_journal(type_dir: str, folder: str) -> dict:
         # pipeline's original metadata.json — see plan().
         "metaLocked": False,
         "publishedAt": None,
+        "nextId": 0,
     }
 
 
@@ -667,6 +922,7 @@ def _plan_one(type_dir: str, folder: str, files, chunk_size: int, budget=None) -
         if journal is None:
             journal = _new_journal(type_dir, folder)
         jfiles = journal.setdefault("files", {})
+        _ensure_ids(journal)
 
         # Bytes this drop still has to write: everything not already stored. Refused
         # up front, before the journal changes, when the volume cannot hold it — a
@@ -719,14 +975,18 @@ def _plan_one(type_dir: str, folder: str, files, chunk_size: int, budget=None) -
                 item["chunkSize"] = int(entry.get("chunkSize", chunk_size))
                 item["missing"] = missing_chunks(entry)
                 item["done"] = False
+                item["fileId"] = entry["id"]
                 continue
             # New file, or the size changed (a re-run of the pipeline) — start over.
             nbits = _bits_len(item["size"], chunk_size)
-            jfiles[rel] = {
+            fresh = {
                 "size": item["size"], "chunkSize": chunk_size, "kind": item["kind"],
                 "tier": item["tier"], "bits": _bitmap_encode(bytearray((nbits + 7) // 8)),
                 "done": item["size"] == 0, "sha": None,
             }
+            _new_id(journal, fresh)
+            jfiles[rel] = fresh
+            item["fileId"] = fresh["id"]
             item["received"] = 0
             item["chunkSize"] = chunk_size
             item["missing"] = list(range(nbits))
@@ -752,6 +1012,7 @@ def _plan_one(type_dir: str, folder: str, files, chunk_size: int, budget=None) -
                 except OSError:
                     pass
         save_journal(journal)
+        _write_table(journal)
 
     total = sum(i["size"] for i in accepted)
     done = sum(i.get("received", 0) for i in accepted)
@@ -768,12 +1029,18 @@ def _plan_one(type_dir: str, folder: str, files, chunk_size: int, budget=None) -
 # ── Chunk ingest ───────────────────────────────────────────────────────────────
 
 def write_chunk(type_dir: str, folder: str, rel: str, index: int,
-                data: bytes, sha256_hex: str | None) -> tuple[int, dict]:
+                data: bytes, sha256_hex: str | None, file_id=None) -> tuple[int, dict]:
     """Verify and store one chunk. Returns (http_status, payload).
 
     The SHA-256 is checked BEFORE the write: a corrupted or tampered chunk never
     touches the staging file, so a file on disk is only ever made of bytes that
     matched what the client hashed.
+
+    With ``file_id`` (the ``fileId`` plan() returned) the planned geometry is read
+    from the file table and the bytes are written outside the dataset lock; only
+    the 16-byte log append is serialised. Without it (an older client) or for
+    metadata.json (whose operator lock lives in the journal) the journal is
+    consulted.
     """
     safe = _safe_dataset(type_dir, folder)
     if safe is None:
@@ -798,6 +1065,72 @@ def write_chunk(type_dir: str, folder: str, rel: str, index: int,
     if actual != sha256_hex.lower():
         return 422, {"error": "checksum_mismatch", "expected": sha256_hex, "actual": actual}
 
+    tag = _path_tag(rel)
+    tp = table_path(type_dir, folder)
+    if not isinstance(file_id, int) or rel == "metadata.json" or not tp.exists():
+        return _write_chunk_journal(type_dir, folder, rel, index, data, dest)
+    record = read_table_record(type_dir, folder, file_id)
+    if record is None or record[2] != tag:
+        # A retired id (the file was re-planned with another size, reset, or
+        # dropped) or one naming another path: these bytes belong to no file the
+        # journal still plans. The client re-plans and gets the live id.
+        return 409, {"error": "file_not_planned"}
+
+    size, chunk_size, _ = record
+    nbits = _bits_len(size, chunk_size)
+    if index >= nbits:
+        return 400, {"error": "index_out_of_range"}
+    offset = index * chunk_size
+    expected_len = min(chunk_size, size - offset)
+    if len(data) != expected_len:
+        return 400, {"error": "bad_chunk_length", "expected": expected_len, "actual": len(data)}
+    try:
+        _write_at(dest, offset, data)
+    except OSError as exc:
+        return _write_error(exc, len(data))
+    with _journal_lock(key):
+        # Re-read under the lock: a plan or a reset in between may have retired this
+        # id, and a record must never name a file it does not belong to.
+        again = read_table_record(type_dir, folder, file_id)
+        jp = journal_path(type_dir, folder)
+        if again is None or again[2] != tag or again[:2] != record[:2] or not jp.exists():
+            return 409, {"error": "file_not_planned"}
+        try:
+            _append_log(type_dir, folder, file_id, index)
+        except OSError as exc:
+            return _write_error(exc, len(data))
+    return 200, {"ok": True, "index": index, "chunks": nbits}
+
+
+def _write_at(dest: Path, offset: int, data: bytes) -> None:
+    """Sparse write at the exact offset, then fsync: chunks land in any order and in
+    parallel, a re-sent chunk is idempotent, and the log record that follows may
+    only ever describe bytes that are on disk."""
+    _make_dir(dest.parent)
+    fd = os.open(str(dest), os.O_RDWR | os.O_CREAT | getattr(os, "O_BINARY", 0), 0o644)
+    try:
+        os.lseek(fd, offset, os.SEEK_SET)
+        view = memoryview(data)
+        while view:
+            n = os.write(fd, view)
+            view = view[n:]
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
+def _write_error(exc: OSError, wanted: int) -> tuple[int, dict]:
+    # A failure costs a re-send, never a corrupt file (the record follows the
+    # bytes). A full disk is terminal for the transfer (507), not a hiccup to retry.
+    if _is_disk_full(exc):
+        return 507, {"error": "insufficient_disk", "neededBytes": wanted,
+                     "freeBytes": _free_bytes(STAGING_DIR)}
+    return 500, {"error": "write_failed"}
+
+
+def _write_chunk_journal(type_dir: str, folder: str, rel: str, index: int,
+                         data: bytes, dest: Path) -> tuple[int, dict]:
+    key = dataset_key(type_dir, folder)
     with _journal_lock(key):
         journal = load_journal(type_dir, folder)
         if journal is None:
@@ -819,31 +1152,24 @@ def write_chunk(type_dir: str, folder: str, rel: str, index: int,
         if len(data) != expected_len:
             return 400, {"error": "bad_chunk_length", "expected": expected_len, "actual": len(data)}
 
-        try:
-            _make_dir(dest.parent)
-            # Sparse write at the exact offset: chunks may land in any order and in
-            # parallel, and a re-sent chunk is idempotent (same bytes, same place).
-            with open(dest, "r+b" if dest.exists() else "w+b") as fh:
-                fh.seek(offset)
-                fh.write(data)
-
-            bits = _bitmap_decode(entry.get("bits", ""), nbits)
-            _bit_set(bits, index)
-            entry["bits"] = _bitmap_encode(bits)
-            got = _bit_count(bits, nbits)
-            entry["done"] = got == nbits
-            journal["lastChunkAt"] = _now_iso()
+        if not isinstance(entry.get("id"), int):
+            # A journal from before the chunk log: number it once, durably.
+            _ensure_ids(journal)
             save_journal(journal)
+            _write_table(journal)
+        try:
+            _write_at(dest, offset, data)
+            _append_log(type_dir, folder, entry["id"], index)
         except OSError as exc:
-            # The bit is only persisted after the bytes, so a failure here costs a
-            # re-send, never a corrupt file. A full disk is terminal for the
-            # transfer (507), not a network hiccup to retry forever.
-            if _is_disk_full(exc):
-                return 507, {"error": "insufficient_disk", "neededBytes": len(data),
-                             "freeBytes": _free_bytes(STAGING_DIR)}
-            return 500, {"error": "write_failed"}
+            return _write_error(exc, len(data))
+        bits = _bitmap_decode(entry.get("bits", ""), nbits)
+        _bit_set(bits, index)
+        entry["bits"] = _bitmap_encode(bits)
+        got = _bit_count(bits, nbits)
+        done = bool(entry.get("done")) or got == nbits
+        entry["done"] = done
         return 200, {"ok": True, "index": index, "chunks": nbits, "have": got,
-                     "done": bool(entry["done"]), "received": received_bytes(entry)}
+                     "done": done, "received": received_bytes(entry)}
 
 
 def finalize_file(type_dir: str, folder: str, rel: str, root_hex: str | None) -> tuple[int, dict]:
@@ -892,7 +1218,9 @@ def finalize_file(type_dir: str, folder: str, rel: str, root_hex: str | None) ->
             # the next plan() re-sends it rather than publishing a corrupt pack.
             entry["bits"] = _bitmap_encode(bytearray((nbits + 7) // 8))
             entry["done"] = False
+            _new_id(journal, entry)
             save_journal(journal)
+            _write_table(journal)
             return 409, {"error": "size_mismatch", "expected": size, "actual": on_disk}
 
         # The journal is about to declare this file complete; make sure its bytes
@@ -949,22 +1277,28 @@ def _validate_file_content(type_dir: str, rel: str, path: Path, kind: str | None
             if not head.startswith(_MAGIC["webp"][0]) and not head.startswith(_MAGIC["png"][0]):
                 return False, f"{kind}_not_image"
             return True, None
-        if kind == "planes_manifest":
+        if kind in ("planes_manifest", "mips_manifest"):
             doc = _read_json(path)
-            if doc is None or doc.get("schema") != "lumen-planes-v1":
-                return False, "planes_manifest_invalid"
+            schema = "lumen-planes-v1" if kind == "planes_manifest" else "lumen-mips-v1"
+            if doc is None or doc.get("schema") != schema:
+                return False, f"{kind}_invalid"
             return True, None
-        if kind == "planes_pack":
+        if kind in ("planes_pack", "mips_pack"):
             # Magic, version 1 and a file long enough for its own entry table
-            # (16 + 12·C·TY·TX bytes, SPEC §3.2).
+            # (16 + 12·C·TY·TX bytes, SPEC §3.2; a MIP pack has the same layout, §12).
+            magic = _PLANES_MAGIC if kind == "planes_pack" else _MIPS_MAGIC
             with path.open("rb") as fh:
                 head = fh.read(16)
-            if len(head) < 16 or head[:4] != _PLANES_MAGIC:
-                return False, "planes_pack_bad_magic"
+            if len(head) < 16 or head[:4] != magic:
+                return False, f"{kind}_bad_magic"
             ver, ch, tx, ty = struct.unpack_from("<HHHH", head, 4)
             if ver != 1 or not ch or not tx or not ty or path.stat().st_size < 16 + 12 * ch * tx * ty:
-                return False, "planes_pack_bad_header"
+                return False, f"{kind}_bad_header"
             return True, None
+        if kind == "index":
+            with path.open("rb") as fh:
+                data = fh.read(_INDEX_V3_MAX_BYTES + 1)
+            return _index_v3_shape(data)[0:2]
         if kind == "extra" and rel.endswith(".glb"):
             with path.open("rb") as fh:
                 head = fh.read(4)
@@ -995,6 +1329,147 @@ BRICK_SIZE = 64
 _KNOWN_ENCODINGS = frozenset({"raw-u8", "raw-u8-gzip", "raw-rgba-gzip", "webp-lossless"})
 
 
+# ── Brick pyramid v3 (format 4, SPEC §13.3) ─────────────────────────────────────
+# index.bin: "LBIX" | u16 version=1 | u16 levels | u16 channels | u16 0, then per
+# level u32 gridX, gridY, gridZ, packCount, then per level, per channel, per brick
+# (bz, by, bx) {u16 pack, u32 offset, u32 length} (length 0 = absent). Pack p of
+# level k, channel c is l{k}/c{c}/p{p:05d}.bin beside the index.
+_INDEX_V3_MAX_BYTES = 32 * 1024 * 1024   # twin of LUMEN_UP_INDEX_V3_MAX (read whole by PHP under 128 MiB)
+
+
+def _index_v3_shape(data: bytes):
+    """(ok, reason, levels [(gx, gy, gz, packs)], channels) of an index.bin — its
+    magic, version and EXACT length (header + level table + 10 bytes per slot)."""
+    if len(data) < 12 or data[:4] != _INDEX_V3_MAGIC:
+        return False, "index_bad_magic", [], 0
+    if len(data) > _INDEX_V3_MAX_BYTES:
+        return False, "index_too_large", [], 0
+    version, n_levels, channels, _r = struct.unpack_from("<HHHH", data, 4)
+    if version != 1 or not n_levels or not channels:
+        return False, "index_bad_header", [], 0
+    pos = 12 + 16 * n_levels
+    if len(data) < pos:
+        return False, "index_truncated", [], 0
+    levels = [struct.unpack_from("<IIII", data, 12 + 16 * i) for i in range(n_levels)]
+    expected = pos + sum(10 * channels * gx * gy * gz for gx, gy, gz, _ in levels)
+    if len(data) != expected:
+        return False, "index_bad_length", [], 0
+    return True, None, levels, channels
+
+
+def _validate_manifest_v3(man: dict):
+    """bricks/manifest.json of format 4 (SPEC §13.3): the geometry the v3 reader
+    builds on, and an index entry per tree."""
+    def _int(v):
+        return isinstance(v, int) and not isinstance(v, bool)
+
+    if man.get("version") != 3:
+        return False, "manifest_v3_bad_version"
+    if not (_int(man.get("channels")) and man["channels"] >= 1):
+        return False, "manifest_bad_channels"
+    if man.get("brickSize") != BRICK_SIZE or man.get("apron") != 1:
+        return False, "manifest_bad_brick_size"
+    packing = man.get("brickPacking")
+    if not isinstance(packing, dict) or (packing.get("mode"), packing.get("cols"),
+                                         packing.get("rows"), packing.get("slice")) != ("grid", 9, 8, 66):
+        return False, "manifest_bad_packing_grid"
+    if man.get("encoding") != "webp-lossless":
+        return False, "manifest_bad_encoding"
+    levels = man.get("levels")
+    if not isinstance(levels, list) or not levels:
+        return False, "manifest_no_levels"
+    for i, level in enumerate(levels):
+        if not isinstance(level, dict) or level.get("level") != i:
+            return False, f"manifest_level_{i}_out_of_order"
+        for key in ("dimensions", "gridSize"):
+            d = level.get(key)
+            if not isinstance(d, dict) or not all(_int(d.get(a)) and d[a] > 0 for a in ("x", "y", "z")):
+                return False, f"manifest_level_{i}_bad_{key}"
+    for key, info in _v3_trees(man):
+        if key is None:
+            return False, "manifest_v3_bad_timepoints"
+        want = f"{key}/index.bin" if key else "index.bin"
+        if (not isinstance(info, dict) or info.get("url") != want or not _int(info.get("bytes"))
+                or not isinstance(info.get("sha256"), str) or not re.fullmatch(r"[0-9a-f]{64}", info["sha256"])):
+            return False, "manifest_v3_bad_index"
+    return True, None
+
+
+_RE_TREE_KEY = re.compile(r"^t\d{3,6}\Z", re.ASCII)
+
+
+def _v3_trees(man: dict) -> list:
+    """[(tree key, index info)]: ('', index) for a 3d tree, ('tNNN', index) per frame
+    of a timelapse; (None, None) for a malformed timepoint row."""
+    tps = man.get("timepoints")
+    if tps is None:
+        return [("", man.get("index"))]
+    if not isinstance(tps, list) or not tps:
+        return [(None, None)]
+    out = []
+    for row in tps:
+        key = row.get("path") if isinstance(row, dict) else None
+        if not isinstance(key, str) or not _RE_TREE_KEY.match(key):
+            out.append((None, None))
+        else:
+            out.append((key, row.get("index")))
+    return out
+
+
+def _cross_check_v3(ds_dir: Path, man: dict) -> list[str]:
+    """Every tree's index.bin is the one the manifest hashed, describes the manifest's
+    levels and channels, and every brick it lists lies inside a pack that arrived —
+    the v3 counterpart of the brickToPack check."""
+    errors: list[str] = []
+    bricks = ds_dir / "bricks"
+    levels = man.get("levels") or []
+    for key, info in _v3_trees(man):
+        tree = bricks / key if key else bricks
+        label = key or "bricks"
+        try:
+            data = (tree / "index.bin").read_bytes() if (tree / "index.bin").stat().st_size <= _INDEX_V3_MAX_BYTES else b""
+        except OSError:
+            errors.append(f"missing_index:{label}")
+            continue
+        if len(data) != info.get("bytes") or hashlib.sha256(data).hexdigest() != info.get("sha256"):
+            errors.append(f"index_hash_mismatch:{label}")
+            continue
+        ok, reason, idx_levels, channels = _index_v3_shape(data)
+        if not ok:
+            errors.append(f"{reason}:{label}")
+            continue
+        if len(idx_levels) != len(levels) or channels != man.get("channels"):
+            errors.append(f"index_shape_mismatch:{label}")
+            continue
+        pos = 12 + 16 * len(idx_levels)
+        for k, ((gx, gy, gz, _packs), row) in enumerate(zip(idx_levels, levels)):
+            g = row.get("gridSize") or {}
+            if (gx, gy, gz) != (g.get("x"), g.get("y"), g.get("z")):
+                errors.append(f"index_grid_mismatch:{label}:l{k}")
+                break
+            n = gx * gy * gz
+            for c in range(channels):
+                extent: dict[int, int] = {}
+                for pack, offset, length in struct.iter_unpack("<HII", data[pos:pos + 10 * n]):
+                    if length:
+                        end = offset + length
+                        if end > extent.get(pack, 0):
+                            extent[pack] = end
+                pos += 10 * n
+                for pack, end in extent.items():
+                    rel = f"l{k}/c{c}/p{pack:05d}.bin"
+                    try:
+                        size = (tree / rel).stat().st_size
+                    except OSError:
+                        errors.append(f"missing_pack:{(key + '/') if key else ''}{rel}")
+                        continue
+                    if size < end:
+                        errors.append(f"truncated_pack:{(key + '/') if key else ''}{rel}")
+                if len(errors) >= 20:
+                    return errors
+    return errors
+
+
 def _validate_manifest(man: dict):
     """Mirror of js/core/brick-loader.js `_validateManifest`, minus the parts that
     only matter once decoding starts.
@@ -1008,6 +1483,8 @@ def _validate_manifest(man: dict):
     def _int(v):
         return isinstance(v, int) and not isinstance(v, bool)
 
+    if man.get("schema") == BRICKS_V3_SCHEMA:
+        return _validate_manifest_v3(man)
     levels = man.get("levels")
     if not isinstance(levels, list) or not levels:
         return False, "manifest_no_levels"
@@ -1269,7 +1746,11 @@ def _check_bricks(ds_dir: Path) -> list[str]:
         return ["manifest_not_json"]
     ok, reason = _validate_manifest(man)
     errors = [] if ok else [reason or "manifest_invalid"]
-    errors.extend(_cross_check_packs(ds_dir, man))
+    if man.get("schema") == BRICKS_V3_SCHEMA:
+        if ok:
+            errors.extend(_cross_check_v3(ds_dir, man))
+    else:
+        errors.extend(_cross_check_packs(ds_dir, man))
     return errors
 
 
@@ -1352,12 +1833,20 @@ def describe(type_dir: str, folder: str) -> dict | None:
         "rejected": journal.get("rejected") or [],
         "publishedExists": (DATA_WEB / type_dir / folder / "metadata.json").exists(),
         "updatedAt": journal.get("updatedAt"),
+        # The journal itself is only rewritten at plan/file completion; a long file
+        # streams for hours in the chunk log alone, which still counts as activity.
+        "lastActivityAt": max((t for t in (journal.get("updatedAt"), journal.get("lastChunkAt"))
+                               if isinstance(t, str)), key=_age_key, default=None),
         # Only an INCOMPLETE import is on the clock (see gc()) — showing a
         # countdown on a finished one would promise a deletion that never comes.
         "expiresInS": (max(0, int(STALE_AFTER_S - _age_seconds(last)))
                        if last and state != STATE_STAGED else None),
         "hasThumbnail": bool(ds_dir and (ds_dir / "thumbnail.webp").exists()),
     }
+
+
+def _age_key(iso: str) -> float:
+    return -_age_seconds(iso)
 
 
 def list_staged() -> list[dict]:
@@ -1441,7 +1930,9 @@ def write_staged_metadata(type_dir: str, folder: str, meta: dict) -> tuple[int, 
         entry["size"] = (ds_dir / "metadata.json").stat().st_size
         entry["done"] = True
         entry["bits"] = _bitmap_encode(bytearray(1))
+        _new_id(journal, entry)
         save_journal(journal)
+        _write_table(journal)
     return 200, {"ok": True}
 
 
@@ -1462,7 +1953,9 @@ def save_staged_thumbnail(type_dir: str, folder: str, image_bytes: bytes) -> tup
         entry["size"] = len(image_bytes)
         entry["done"] = True
         entry["bits"] = _bitmap_encode(bytearray(1))
+        _new_id(journal, entry)
         save_journal(journal)
+        _write_table(journal)
     return 200, {"ok": True}
 
 
@@ -1500,10 +1993,24 @@ def publish_dataset(type_dir: str, folder: str, *, overwrite: bool = False,
         return 409, {"error": "already_exists"}
 
     key = dataset_key(type_dir, folder)
+    carried = {"carriedKeys": [], "carriedGallery": False}
     with _journal_lock(key):
+        meta = _read_json(src / "metadata.json") or {}
+        changed = False
+        if dest.exists():
+            # Re-publishing over a live dataset replaces what the pipeline measures,
+            # not what the operator curated (orientation, names, gallery…): those keys
+            # are carried over unless the new upload states them itself.
+            old_meta = _read_json(dest / "metadata.json") or {}
+            for k in CURATED_KEYS:
+                if k in old_meta and k not in meta:
+                    meta[k] = old_meta[k]
+                    carried["carriedKeys"].append(k)
+                    changed = True
         if hidden:
-            meta = _read_json(src / "metadata.json") or {}
             meta["hidden"] = True
+            changed = True
+        if changed:
             _atomic_write_json(src / "metadata.json", meta)
         _sweep_tmp_files(src)
 
@@ -1542,20 +2049,75 @@ def publish_dataset(type_dir: str, folder: str, *, overwrite: bool = False,
             return 500, {"error": "publish_failed", "detail": exc.__class__.__name__}
 
         if replaced is not None:
+            carried["carriedGallery"] = _carry_gallery(replaced, dest)
             # A file still held open (a viewer streaming a pack, an AV scan) makes
             # this fail on Windows; whatever survives is dot-named, invisible, and
             # reclaimed by recover_publish_leftovers() at the next start.
             shutil.rmtree(replaced, ignore_errors=True)
 
-        jp = journal_path(type_dir, folder)
-        if jp and jp.exists():
-            try:
-                jp.unlink()
-            except OSError:
-                pass
+        _remove_state_files(type_dir, folder)
         _prune_empty(STAGING_DIR / type_dir)
 
-    return 200, {"ok": True, "id": key, "hidden": hidden}
+    return 200, {"ok": True, "id": key, "hidden": hidden, **carried}
+
+
+# Twin of preprocess/run_preprocess.py CURATED_KEYS — read, not imported (the
+# server never imports the pipeline). `formatVersion` is pipeline-owned and must
+# never be carried over a freshly produced value.
+CURATED_KEYS = (
+    "name", "description", "stage", "stageNumeric", "embryo", "line", "staining",
+    "reporter", "hidden", "gallery", "tags", "notes", "created",
+    "orientation", "orientationAxes", "upsideDown", "defaultView", "exposure",
+    "linkedTrackingId", "relatedIds",
+)
+GALLERY_DIRNAME = "gallery"
+
+
+def _carry_gallery(old_dir: Path, new_dir: Path) -> bool:
+    """Move the replaced dataset's gallery/ (images + thumbnails) into the new one.
+
+    An import never carries a gallery/ of its own (the allowlist has no rule for
+    it), so the old folder is the only copy. Afterwards the gallery list in the new
+    metadata.json keeps only entries whose file is really there."""
+    src = old_dir / GALLERY_DIRNAME
+    dst = new_dir / GALLERY_DIRNAME
+    moved = False
+    if src.is_dir() and not dst.exists():
+        try:
+            _replace_retry(src, dst)
+            moved = True
+        except OSError:
+            try:
+                shutil.copytree(src, dst)
+                moved = True
+            except OSError:
+                shutil.rmtree(dst, ignore_errors=True)
+    meta_path = new_dir / "metadata.json"
+    meta = _read_json(meta_path)
+    if isinstance(meta, dict) and isinstance(meta.get("gallery"), list):
+        kept = [e for e in meta["gallery"]
+                if isinstance(e, dict) and _gallery_file_present(dst, e.get("file"))]
+        if kept != meta["gallery"]:
+            if kept:
+                meta["gallery"] = kept
+            else:
+                meta.pop("gallery", None)
+            try:
+                _atomic_write_json(meta_path, meta)
+            except OSError:
+                pass
+    return moved
+
+
+def _gallery_file_present(gdir: Path, name) -> bool:
+    if not isinstance(name, str):
+        return False
+    name = name.replace("\\", "/").strip("/")
+    if name.startswith(GALLERY_DIRNAME + "/"):
+        name = name[len(GALLERY_DIRNAME) + 1:]
+    if not name or "/" in name or name.startswith("."):
+        return False
+    return (gdir / name).is_file()
 
 
 def _sweep_tmp_files(ds_dir: Path) -> None:
@@ -1626,12 +2188,7 @@ def discard_dataset(type_dir: str, folder: str) -> tuple[int, dict]:
     with _journal_lock(dataset_key(type_dir, folder)):
         if src is not None and src.is_dir():
             shutil.rmtree(src, ignore_errors=True)
-        jp = journal_path(type_dir, folder)
-        if jp and jp.exists():
-            try:
-                jp.unlink()
-            except OSError:
-                pass
+        _remove_state_files(type_dir, folder)
         _prune_empty(STAGING_DIR / type_dir)
     return 200, {"ok": True}
 
@@ -1656,16 +2213,23 @@ def gc(max_age_s: int = STALE_AFTER_S) -> dict:
     the operator a re-upload they never asked for. The grace period covers uploads
     that DIED, which is what it was asked to cover.
     """
-    removed, kept = [], 0
+    result, _ = gc_and_list(max_age_s)
+    return result
+
+
+def gc_and_list(max_age_s: int = STALE_AFTER_S) -> tuple[dict, list[dict]]:
+    """gc() plus the descriptions of what it kept — the admin list needs both, and
+    walking every journal twice per poll was half its cost."""
+    removed, kept = [], []
     for info in list_staged():
-        last = info.get("updatedAt")
+        last = info.get("lastActivityAt") or info.get("updatedAt")
         expired = last and _age_seconds(last) > max_age_s
         if expired and info.get("state") != STATE_STAGED:
             discard_dataset(info["type"], info["folder"])
             removed.append(info["key"])
         else:
-            kept += 1
-    return {"removed": removed, "kept": kept}
+            kept.append(info)
+    return {"removed": removed, "kept": len(kept)}, kept
 
 
 # ── Directory guards (.htaccess written at runtime) ──────────────────────────

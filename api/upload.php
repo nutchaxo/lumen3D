@@ -105,8 +105,7 @@ case 'limits':
     ]);
 
 case 'list':
-    lumen_up_gc();
-    admin_json_out(['ok' => true, 'datasets' => lumen_up_list()]);
+    admin_json_out(['ok' => true, 'datasets' => lumen_up_gc_and_list()[1]]);
 
 case 'state':
     $info = lumen_up_describe($type, $folder);
@@ -140,8 +139,9 @@ case 'chunk':
         admin_json_out(['error' => 'body_truncated', 'maxChunkSize' => lumen_up_chunk_limit(),
                         'declared' => $declared, 'received' => strlen($data)], 413);
     }
+    $fid = isset($_GET['fid']) && is_string($_GET['fid']) && preg_match('/^[0-9]{1,9}$/D', $_GET['fid']) ? (int)$_GET['fid'] : null;
     lumen_up_out(lumen_up_write_chunk($type, $folder, lumen_str($_GET['path'] ?? null) ?? '', $index, $data,
-                                      lumen_str($_GET['sha256'] ?? null)));
+                                      lumen_str($_GET['sha256'] ?? null), $fid));
 
 case 'file_done':
     $body = lumen_up_body();

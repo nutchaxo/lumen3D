@@ -33,11 +33,11 @@ jobs:
       # cannot run says SKIP and --strict-skips turns that into a failure, so a test
       # never stops running unnoticed. --check-clean fails if a test dirtied the tree.
       - name: Pipeline dependencies (the preprocessing tests run the real scripts)
-        run: pip install numpy==2.5.1 scipy==1.16.0 h5py==3.16.0 Pillow==11.1.0 tqdm==4.67.1
+        run: pip install numpy==2.5.1 scipy==1.16.0 h5py==3.16.0 Pillow==11.1.0 tqdm==4.67.1 pandas==2.2.3
       - name: Light pipeline pack (the admin/pack tests read the pack the repo builds)
         run: python tools/build_pipeline_bundle.py
       - name: Full test suite
-        run: python tests/run_all.py -j 2 --strict-skips --check-clean
+        run: python tests/run_all.py -j 2 --timeout 600 --strict-skips --check-clean
 
       # ── Security invariants (fail the build on regression) ──
       - name: Sandbox must never grant allow-same-origin (INV-6)

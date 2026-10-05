@@ -334,7 +334,7 @@ class FormatVersionNotCurated(unittest.TestCase):
 
 @unittest.skipUnless(HAVE_DEPS, "preprocessing dependencies missing")
 class Orchestrator(unittest.TestCase):
-    def test_published_dataset_is_format_2(self):
+    def test_published_dataset_carries_planes(self):
         tmp = Path(tempfile.mkdtemp(prefix="lumen_mig_pipe_run_"))
         try:
             raw = tmp / "raw"
@@ -349,7 +349,7 @@ class Orchestrator(unittest.TestCase):
             self.assertEqual(r.returncode, 0, r.stdout[-2000:] + r.stderr[-2000:])
             ds = out / "3d" / "Dll4-E10-5-Em3"
             meta = json.loads((ds / "metadata.json").read_text(encoding="utf-8"))
-            self.assertEqual(meta["formatVersion"], 2)
+            self.assertEqual(meta["formatVersion"], 4)       # the pipeline writes format 4
             self.assertTrue(pw.planes_complete(ds))
             first = {p.name: p.read_bytes() for p in (ds / "planes").glob("z*.bin")}
             self.assertEqual(len(first), 20)
@@ -361,7 +361,7 @@ class Orchestrator(unittest.TestCase):
             r = subprocess.run(cmd, capture_output=True, text=True, env=env, timeout=600)
             self.assertEqual(r.returncode, 0, r.stdout[-2000:] + r.stderr[-2000:])
             meta = json.loads((ds / "metadata.json").read_text(encoding="utf-8"))
-            self.assertEqual(meta["formatVersion"], 2)
+            self.assertEqual(meta["formatVersion"], 4)
             self.assertFalse((ds / "planes" / "stale.txt").exists())
             self.assertFalse(list(ds.glob("*.pre-swap")))
             self.assertEqual({p.name: p.read_bytes() for p in (ds / "planes").glob("z*.bin")}, first)

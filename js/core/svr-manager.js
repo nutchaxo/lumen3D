@@ -6,11 +6,25 @@
    brick of the volume grid, RGB = the brick's slot (x, y, z) inside its
    page, A = page index + 1 (0 = no brick; the shader skips it).
 
-   A slot is 64³ voxels of `components` bytes (4 = RGBA8, the default: one
-   channel per byte). The atlas is sized BEFORE allocation against a VRAM
-   budget (SVRManager.vramBudget): a level that does not fit is refused up
-   front, so the caller picks a coarser level instead of attempting a
-   multi-GiB texture the driver may accept and then page or lose.
+   A slot holds one brick: 64³ voxels on a v2 tree, 66³ on a v3 tree (the
+   64³ interior plus a 1-voxel border, DOCS/dataset-migrations/SPEC.md
+   §13.2), of `components` bytes per voxel (4 = RGBA8, the default; 2 = RG8
+   and 1 = R8 for datasets of two and one channels). The slot edge is the
+   "stride" (64 or 66) every layout, byte count and upload offset is measured
+   in. A bordered atlas is sampled with hardware trilinear filtering: a sample
+   inside a brick reads texel slotOrigin + 1 + local, whose 2×2×2 footprint
+   never leaves the slot, so the filter is seamless across bricks; a v2 atlas
+   keeps nearest filtering (no border: a linear fetch would blend the next
+   slot's brick in).
+
+   The atlas is sized BEFORE allocation against a VRAM budget
+   (SVRManager.vramBudget): a level that does not fit is refused up front, so
+   the caller picks a coarser level instead of attempting a multi-GiB texture
+   the driver may accept and then page or lose.
+
+   role 'detail' (region-of-interest streaming, volume-viewer.js): the same
+   atlas published under the detail* uniforms and the ROI_DETAIL define, at
+   most DETAIL_MAX_PAGES pages (the shader's detailAtlas0..3).
    ============================================================ */
 
 class SVRManager {
@@ -120,8 +134,20 @@ class SVRManager {
     return Math.min(4, Math.max(stored, SVRManager._sessionLosses || 0));
   }
 
+  /** Bytes of one slot: stride³ voxels of `components` bytes (stride 64, or 66 bordered). */
   static slotBytes(components = 4, brickSize = 64) {
     return brickSize * brickSize * brickSize * components;
+  }
+
+  /** The slot edge of a tree: 64 + 2·apron (SPEC §13.2). */
+  static strideFor(apron = 0) {
+    return SVRManager.BRICK_INTERIOR + 2 * (Number(apron) > 0 ? 1 : 0);
+  }
+
+  /** Atlas components for a channel count: R8 for one channel, RG8 for two, RGBA8 beyond. */
+  static componentsForChannels(channels) {
+    const n = Math.max(1, Math.round(Number(channels) || 1));
+    return n === 1 ? 1 : n === 2 ? 2 : 4;
   }
 
   /** Bytes held right now by the atlases of every live manager of this page. */
@@ -133,27 +159,58 @@ class SVRManager {
 
   /**
    * The atlas layout holding `targetSlots` slots with the least waste: pages of
-   * dim × dim × depth voxels (dim ∈ {256, 512, 1024}, depth a multiple of 64), all
-   * pages the same size (the shader reads one atlasDim), at most 8 pages, no page
-   * above `maxPageBytes`. A page of dim² × depth holds (dim/64)² · depth/64 slots, so
-   * the waste is under one 64-voxel layer per page: ≤ 15 slots per page at dim 256,
-   * ≤ 63 at 512. Null when no layout fits (too many slots for 8 pages).
+   * dim × dim × depth voxels (dim = n·stride, n ∈ {4, 8, 16} — 256/512/1024 for the
+   * 64-voxel slots of a v2 tree, 264/528/1056 for the 66-voxel bordered slots of v3 —
+   * depth a multiple of the stride), all pages the same size (the shader reads one
+   * atlasDim), at most `maxPages` pages, no page above `maxPageBytes`. A page of
+   * dim² × depth holds n² · depth/stride slots, so the waste is under one layer of
+   * slots per page: ≤ 15 slots per page at n = 4, ≤ 63 at n = 8. `brickSize` is the
+   * slot edge (the stride). Null when no layout fits (too many slots for the pages).
    */
-  static planAtlas(targetSlots, { max3D = 2048, components = 4, maxPageBytes = 512 * 1024 * 1024, brickSize = 64 } = {}) {
+  static planAtlas(targetSlots, { max3D = 2048, components = 4, maxPageBytes = 512 * 1024 * 1024, brickSize = 64, maxPages = SVRManager.MAX_PAGES } = {}) {
     const target = Math.max(1, Math.ceil(Number(targetSlots) || 1));
-    const slotBytes = SVRManager.slotBytes(components, brickSize);
+    const stride = Math.max(1, Math.round(Number(brickSize) || 64));
+    const pageLimit = Math.max(1, Math.min(SVRManager.MAX_PAGES, Math.floor(Number(maxPages) || SVRManager.MAX_PAGES)));
+    const slotBytes = SVRManager.slotBytes(components, stride);
     let best = null;
-    for (const dim of [256, 512, 1024]) {
+    for (const n of SVRManager.SLOTS_PER_SIDE) {
+      const dim = n * stride;
       if (dim > max3D) continue;
-      const perLayer = (dim / brickSize) * (dim / brickSize);
-      const maxLayers = Math.min(Math.floor(max3D / brickSize), Math.floor(maxPageBytes / (perLayer * slotBytes)));
+      const perLayer = n * n;
+      const maxLayers = Math.min(Math.floor(max3D / stride), Math.floor(maxPageBytes / (perLayer * slotBytes)));
       if (maxLayers < 1) continue;
       const pages = Math.ceil(target / (perLayer * maxLayers));
-      if (pages > SVRManager.MAX_PAGES) continue;
+      if (pages > pageLimit) continue;
       const layers = Math.ceil(target / (pages * perLayer));
       const slots = pages * layers * perLayer;
-      const plan = { dim, depth: layers * brickSize, pages, slots, bytes: slots * slotBytes, components };
+      const plan = { dim, depth: layers * stride, pages, slots, bytes: slots * slotBytes, components, stride };
       if (!best || plan.slots < best.slots || (plan.slots === best.slots && plan.pages < best.pages)) best = plan;
+    }
+    return best;
+  }
+
+  /**
+   * The largest layout whose bytes stay within `bytes` (same options as planAtlas):
+   * the slot count is searched, not guessed, because layouts round up to whole layers.
+   * Null when not even one slot fits.
+   */
+  static planAtlasWithin(bytes, options = {}) {
+    const limit = Math.floor(Number(bytes) || 0);
+    const stride = Math.max(1, Math.round(Number(options.brickSize) || 64));
+    const slotBytes = SVRManager.slotBytes(options.components || 4, stride);
+    let hi = Math.floor(limit / slotBytes);
+    if (hi < 1) return null;
+    const fits = (n) => {
+      const p = SVRManager.planAtlas(n, options);
+      return p && p.bytes <= limit ? p : null;
+    };
+    let best = fits(1);
+    if (!best) return null;
+    let lo = 1;
+    while (lo < hi) {
+      const mid = Math.ceil((lo + hi) / 2);
+      const p = fits(mid);
+      if (p) { best = p; lo = mid; } else hi = mid - 1;
     }
     return best;
   }
@@ -169,20 +226,22 @@ class SVRManager {
    * already allocated are NOT subtracted unless `includeLive`; init() does subtract
    * them). The viewer uses it to choose a coarser level BEFORE allocating.
    */
-  static maxSlotsForBudget(renderer, { components = 4, budgetBytes = null, includeLive = false, brickSize = 64 } = {}) {
+  static maxSlotsForBudget(renderer, { components = 4, budgetBytes = null, includeLive = false, brickSize = 64, maxPages = SVRManager.MAX_PAGES } = {}) {
     const budget = Number.isFinite(Number(budgetBytes)) && budgetBytes !== null ? Number(budgetBytes) : SVRManager.vramBudget(renderer).bytes;
     const available = Math.max(0, budget - (includeLive ? SVRManager.liveAtlasBytes() : 0));
     const max3D = Math.max(64, renderer?.capabilities?.max3DTextureSize || 2048);
     const maxPageBytes = SVRManager._maxPageBytes(budget);
+    const stride = Math.max(1, Math.round(Number(brickSize) || 64));
+    const pageLimit = Math.max(1, Math.min(SVRManager.MAX_PAGES, Math.floor(Number(maxPages) || SVRManager.MAX_PAGES)));
     // Capacity of the largest layout the texture limits allow.
     let capacity = 0;
-    for (const dim of [256, 512, 1024]) {
-      if (dim > max3D) continue;
-      const perLayer = (dim / brickSize) * (dim / brickSize);
-      const maxLayers = Math.min(Math.floor(max3D / brickSize), Math.floor(maxPageBytes / (perLayer * SVRManager.slotBytes(components, brickSize))));
-      if (maxLayers >= 1) capacity = Math.max(capacity, perLayer * maxLayers * SVRManager.MAX_PAGES);
+    for (const n of SVRManager.SLOTS_PER_SIDE) {
+      if (n * stride > max3D) continue;
+      const perLayer = n * n;
+      const maxLayers = Math.min(Math.floor(max3D / stride), Math.floor(maxPageBytes / (perLayer * SVRManager.slotBytes(components, stride))));
+      if (maxLayers >= 1) capacity = Math.max(capacity, perLayer * maxLayers * pageLimit);
     }
-    return Math.max(0, Math.min(capacity, Math.floor(available / SVRManager.slotBytes(components, brickSize))));
+    return Math.max(0, Math.min(capacity, Math.floor(available / SVRManager.slotBytes(components, stride))));
   }
 
   /** Back-compatible name: the slot ceiling for this GPU's budget (RGBA8 slots). */
@@ -191,7 +250,8 @@ class SVRManager {
   }
 
   static slotsPerAtlasForConfig(config, brickSize = 64) {
-    return (config.dim / brickSize) * (config.dim / brickSize) * (config.depth / brickSize);
+    const stride = config.stride || brickSize;
+    return Math.floor(config.dim / stride) * Math.floor(config.dim / stride) * Math.floor(config.depth / stride);
   }
 
   static slotsForConfig(config, brickSize = 64) {
@@ -201,7 +261,13 @@ class SVRManager {
   constructor() {
     this.atlasDim = 512;
     this.atlasDepth = 512;
+    // brickSize: the INTERIOR edge of a brick (what the page table's cells are cut in);
+    // slotStride: the edge of an atlas slot (64, or 66 with the 1-voxel border).
     this.brickSize = 64;
+    this.apron = 0;
+    this.slotStride = 64;
+    this.role = 'base';
+    this.pageLimit = SVRManager.MAX_PAGES;
     this.atlasPages = 1;
     this.components = 4;
     this.slotsX = this.atlasDim / this.brickSize;
@@ -254,6 +320,15 @@ class SVRManager {
    *   budgetBytes   replaces SVRManager.vramBudget(renderer).bytes for this atlas.
    *   ignoreBudget  allocate whatever the GPU accepts (operator override).
    *   countLiveAtlases (default true) subtract the atlases of the other live managers.
+   *   apron         1: bricks are delivered with their 1-voxel border (v3, 66³ slots,
+   *                 trilinear); 0: 64³ slots, nearest. Defaults to `volumeDim.apron`,
+   *                 which BrickLoader.getDimensions() carries, so an atlas built from
+   *                 the loader's dimensions takes the mounted tree's frame by itself.
+   *                 Every brick this atlas receives (writeRgbaBrick, writeBrick,
+   *                 writeRgbaBrickRegion) is in that frame: stored voxel s of an axis
+   *                 is volume voxel 64·b − apron + s.
+   *   role          'base' (default) or 'detail' (see the header).
+   *   maxPages      page limit (≤ 8; a detail atlas is capped at DETAIL_MAX_PAGES).
    */
   init(channels, volumeDim, renderer, material, options = {}) {
     this._releaseGpuResources();
@@ -262,6 +337,15 @@ class SVRManager {
     this.renderer = renderer;
     this.material = material;
     this.components = [1, 2, 4].includes(Number(options.components)) ? Number(options.components) : 4;
+    const apronRaw = options.apron !== undefined ? options.apron : volumeDim?.apron;
+    this.apron = Number(apronRaw) > 0 ? 1 : 0;
+    this.slotStride = SVRManager.strideFor(this.apron);
+    if (volumeDim?.brickStride !== undefined && Number(volumeDim.brickStride) !== this.slotStride && options.apron === undefined) {
+      throw Object.assign(new Error(`SVR atlas: brick stride ${volumeDim.brickStride} does not match apron ${this.apron}`), { code: 'SVR_BAD_FORMAT' });
+    }
+    this.role = options.role === 'detail' ? 'detail' : 'base';
+    const pageCap = this.role === 'detail' ? SVRManager.DETAIL_MAX_PAGES : SVRManager.MAX_PAGES;
+    this.pageLimit = Math.max(1, Math.min(pageCap, Math.floor(Number(options.maxPages) || pageCap)));
     this.brickMap.clear();
     this._lru = new Map();
     this.slotQueue = [];
@@ -282,7 +366,7 @@ class SVRManager {
     const others = options.countLiveAtlases === false ? 0 : SVRManager.liveAtlasBytes(this);
     const available = options.ignoreBudget ? Infinity : Math.max(0, budget - others);
     const maxPageBytes = SVRManager._maxPageBytes(options.ignoreBudget ? Infinity : budget);
-    const slotBytes = SVRManager.slotBytes(this.components, this.brickSize);
+    const slotBytes = SVRManager.slotBytes(this.components, this.slotStride);
     const requested = Math.ceil(Number(options.targetSlots) || 0);
     const targeted = requested > 1;
 
@@ -292,9 +376,9 @@ class SVRManager {
     let allocated = null;
     let lastError = null;
     for (;;) {
-      const plan = SVRManager.planAtlas(target, { max3D, components: this.components, maxPageBytes, brickSize: this.brickSize });
+      const plan = SVRManager.planAtlas(target, { max3D, components: this.components, maxPageBytes, brickSize: this.slotStride, maxPages: this.pageLimit });
       if (!plan) {
-        throw Object.assign(new Error(`SVR atlas cannot hold ${target} bricks within ${SVRManager.MAX_PAGES} pages of the 3D texture limit (${max3D})`),
+        throw Object.assign(new Error(`SVR atlas cannot hold ${target} bricks within ${this.pageLimit} pages of the 3D texture limit (${max3D})`),
           { code: 'SVR_OVER_BUDGET', neededSlots: target });
       }
       if (plan.bytes > available) {
@@ -358,10 +442,12 @@ class SVRManager {
         const atlas = new TextureClass(null, this.atlasDim, this.atlasDim, this.atlasDepth);
         atlas.format = format;
         atlas.type = THREE.UnsignedByteType;
-        // SVR slots are packed edge-to-edge in the atlas. Linear filtering would
-        // interpolate with neighboring slots at brick boundaries and create seams.
-        atlas.minFilter = THREE.NearestFilter;
-        atlas.magFilter = THREE.NearestFilter;
+        // Slots are packed edge to edge. Without a border, linear filtering would blend
+        // the neighbouring slot's brick in at every brick face: nearest. With the 1-voxel
+        // border every trilinear footprint stays inside its own slot: linear.
+        const filter = this.apron ? THREE.LinearFilter : THREE.NearestFilter;
+        atlas.minFilter = filter;
+        atlas.magFilter = filter;
         atlas.unpackAlignment = 1;
         pages.push(atlas);
         if (this.renderer) this._initAtlasTexture(atlas);
@@ -387,10 +473,10 @@ class SVRManager {
     this.atlasDim = config.dim;
     this.atlasDepth = config.depth;
     this.atlasPages = config.pages || 1;
-    this.slotsX = this.atlasDim / this.brickSize;
-    this.slotsY = this.atlasDim / this.brickSize;
-    this.slotsZ = this.atlasDepth / this.brickSize;
-    this.slotsPerAtlas = SVRManager.slotsPerAtlasForConfig(config, this.brickSize);
+    this.slotsX = Math.floor(this.atlasDim / this.slotStride);
+    this.slotsY = Math.floor(this.atlasDim / this.slotStride);
+    this.slotsZ = Math.floor(this.atlasDepth / this.slotStride);
+    this.slotsPerAtlas = SVRManager.slotsPerAtlasForConfig({ ...config, stride: this.slotStride }, this.slotStride);
     this.maxSlots = this.slotsPerAtlas * this.atlasPages;
   }
 
@@ -414,8 +500,9 @@ class SVRManager {
       gl.bindTexture(gl.TEXTURE_3D, tex);
     }
 
-    gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
-    gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+    const glFilter = this.apron ? gl.LINEAR : gl.NEAREST;
+    gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_MIN_FILTER, glFilter);
+    gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_MAG_FILTER, glFilter);
     gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
     gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
     gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_WRAP_R, gl.CLAMP_TO_EDGE);
@@ -510,8 +597,15 @@ class SVRManager {
       console.warn('[SVRManager] updateUniforms() on a released manager — refusing to publish (atlases/page table are gone).');
       return false;
     }
+    if (this.role === 'detail') return this._publishDetail();
     this.material.defines.ENABLE_SVR = 1;
+    SVRManager._setDefine(this.material, 'SVR_COMPONENTS', this.components === 4 ? null : this.components);
     this.material.needsUpdate = true;
+    const set = (name, value) => { if (this.material.uniforms[name]) this.material.uniforms[name].value = value; };
+    // Slot addressing (the shader's slotCoord): texel = slot·slotStride + brickApron + local.
+    set('slotStride', this.slotStride);
+    set('brickApron', this.apron);
+    set('svrComponents', this.components);
 
     if (this.material.uniforms.svrPageCount) {
       this.material.uniforms.svrPageCount.value = this.atlases.length;
@@ -532,6 +626,104 @@ class SVRManager {
     for (let i = 1; i < SVRManager.MAX_PAGES; i++) {
       const u = this.material.uniforms['svrAtlas' + i];
       if (u) u.value = this.atlases[i] || this.atlases[0] || null;
+    }
+    return true;
+  }
+
+  /** A detail atlas: the detail* uniforms and the ROI_DETAIL define (see the header). */
+  _publishDetail() {
+    const m = this.material;
+    const set = (name, value) => { if (m.uniforms[name]) m.uniforms[name].value = value; };
+    m.defines.ROI_DETAIL = 1;
+    SVRManager._setDefine(m, 'ROI_DETAIL_COMPONENTS', this.components === 4 ? null : this.components);
+    m.needsUpdate = true;
+    set('detailPageTable', this.pageTable);
+    set('detailAtlasDim', new THREE.Vector3(this.atlasDim, this.atlasDim, this.atlasDepth));
+    set('detailVolumeDim', new THREE.Vector3(this.volumeDim.x, this.volumeDim.y, this.volumeDim.z));
+    set('detailPtDim', new THREE.Vector3(this.ptNx, this.ptNy, this.ptNz));
+    set('detailSlotStride', this.slotStride);
+    set('detailApron', this.apron);
+    set('detailPageCount', this.atlases.length);
+    for (let i = 0; i < SVRManager.DETAIL_MAX_PAGES; i++) set('detailAtlas' + i, this.atlases[i] || this.atlases[0] || null);
+    return true;
+  }
+
+  /**
+   * Take a detail atlas off `material` (or this manager's): the define goes, every
+   * detail uniform is unbound, the page count drops to 0 (a stale binding then reads as
+   * "no detail brick", never as voxels of a released texture).
+   */
+  static unpublishDetail(material) {
+    if (!material?.uniforms) return;
+    let changed = false;
+    for (const d of ['ROI_DETAIL', 'ROI_DETAIL_COMPONENTS']) {
+      if (material.defines && d in material.defines) { delete material.defines[d]; changed = true; }
+    }
+    if (material.uniforms.detailPageTable) material.uniforms.detailPageTable.value = null;
+    for (let i = 0; i < SVRManager.DETAIL_MAX_PAGES; i++) {
+      if (material.uniforms['detailAtlas' + i]) material.uniforms['detailAtlas' + i].value = null;
+    }
+    if (material.uniforms.detailPageCount) material.uniforms.detailPageCount.value = 0;
+    if (changed) material.needsUpdate = true;
+  }
+
+  /** Set (value !== null) or remove (null) a define; needsUpdate only on a change. */
+  static _setDefine(material, name, value) {
+    if (!material) return;
+    material.defines = material.defines || {};
+    if (value === null || value === undefined) {
+      if (name in material.defines) { delete material.defines[name]; material.needsUpdate = true; }
+    } else if (material.defines[name] !== value) {
+      material.defines[name] = value;
+      material.needsUpdate = true;
+    }
+  }
+
+  // ── Residency (region-of-interest streaming) ────────────────────────────────
+  /** Is brick (bx, by, bz) in the atlas (and pointed at by the page table)? */
+  has(bx, by, bz) {
+    const slot = this.brickMap.get(`${bx}_${by}_${bz}`);
+    if (slot === undefined || !this.pageData) return false;
+    return this.pageData[(bz * this.ptNx * this.ptNy + by * this.ptNx + bx) * 4 + 3] !== 0;
+  }
+
+  /** Mark a resident brick as just used: it becomes the last one the LRU recycles. */
+  touch(bx, by, bz) {
+    const slot = this.brickMap.get(`${bx}_${by}_${bz}`);
+    if (slot === undefined) return false;
+    this._lru.delete(slot);
+    this._lru.set(slot, true);
+    return true;
+  }
+
+  /** Bricks resident now, least recently used first ("bx_by_bz" keys). */
+  residentKeys() {
+    const out = [];
+    for (const slot of this._lru.keys()) {
+      const key = this.slotToBrick[slot];
+      if (key) out.push(key);
+    }
+    return out;
+  }
+
+  /** How many bricks the atlas holds right now. */
+  residentCount() {
+    return this.brickMap.size;
+  }
+
+  /** Drop a brick: its slot goes back to the free list, its page-table entry is cleared. */
+  evict(bx, by, bz) {
+    const key = `${bx}_${by}_${bz}`;
+    const slot = this.brickMap.get(key);
+    if (slot === undefined) return false;
+    this.brickMap.delete(key);
+    this._lru.delete(slot);
+    this.slotToBrick[slot] = null;
+    this.slotData.delete(slot);
+    this.freeSlots.push(slot);
+    if (this.pageData) {
+      this.pageData[(bz * this.ptNx * this.ptNy + by * this.ptNx + bx) * 4 + 3] = 0;
+      if (this.pageTable) this.pageTable.needsUpdate = true;
     }
     return true;
   }
@@ -583,7 +775,7 @@ class SVRManager {
   }
 
   /**
-   * One channel of a brick (scalar voxels, bs³, z-major). The slot's other channels
+   * One channel of a brick (scalar voxels, stride³, z-major). The slot's other channels
    * come from a CPU copy of the slot, dropped when the slot is recycled; prefer
    * writeRgbaBrick (all channels at once, nothing kept in JS memory).
    */
@@ -595,12 +787,12 @@ class SVRManager {
     this._writeChannelToSlot(slotIndex, channel, brickData, bw, bh, bd);
     const uploadData = this._extractSlotRegion(slotIndex, bw, bh, bd);
     return this._finishUpload(bx, by, bz, slotIndex, ptIdx,
-      this._uploadRgbaRegion(coord.atlas, coord.x * this.brickSize, coord.y * this.brickSize, coord.z * this.brickSize, bw, bh, bd, uploadData));
+      this._uploadRgbaRegion(coord.atlas, coord.x * this.slotStride, coord.y * this.slotStride, coord.z * this.slotStride, bw, bh, bd, uploadData));
   }
 
   /**
    * A whole brick, `components` bytes per voxel interleaved (channel c in byte c),
-   * either bs³ voxels or exactly the bw × bh × bd box inside the volume (a composed
+   * either stride³ voxels (66³ on a bordered atlas) or exactly the bw × bh × bd box (a composed
    * brick cut with cropToVolume, uploaded as it is). Returns false when the upload
    * was refused (the page-table entry is then left empty: the shader skips it).
    */
@@ -611,11 +803,12 @@ class SVRManager {
     const coord = this._slotCoord(slotIndex);
     const ptIdx = this._pointPageTable(bx, by, bz, coord);
     return this._finishUpload(bx, by, bz, slotIndex, ptIdx,
-      this._uploadRgbaRegion(coord.atlas, coord.x * this.brickSize, coord.y * this.brickSize, coord.z * this.brickSize, bw, bh, bd, uploadData));
+      this._uploadRgbaRegion(coord.atlas, coord.x * this.slotStride, coord.y * this.slotStride, coord.z * this.slotStride, bw, bh, bd, uploadData));
   }
 
   /**
-   * Upload only the sub-box [rx, rx+rw) x [ry, ry+rh) x [rz, rz+rd) of a brick's slot.
+   * Upload only the sub-box [rx, rx+rw) x [ry, ry+rh) x [rz, rz+rd) of a brick's slot
+   * (coordinates in the slot's frame: 0..65 on a bordered atlas, 0..63 otherwise).
    * `data` holds that box alone (tightly packed, `components` bytes per voxel,
    * z-major). The page table points at the slot exactly as for a whole brick, so the
    * caller guarantees that nothing outside the box is ever sampled: a slice through
@@ -624,7 +817,7 @@ class SVRManager {
    * atlas, never the ray-marcher's own.
    */
   writeRgbaBrickRegion(bx, by, bz, data, rx, ry, rz, rw, rh, rd) {
-    const bs = this.brickSize;
+    const bs = this.slotStride;
     if (!data || !(rw > 0 && rh > 0 && rd > 0)) return false;
     if (rx < 0 || ry < 0 || rz < 0 || rx + rw > bs || ry + rh > bs || rz + rd > bs) return false;
     const needed = rw * rh * rd * this.components;
@@ -668,7 +861,7 @@ class SVRManager {
    */
   pointEmptyBricks(isEmpty) {
     if (typeof isEmpty !== 'function' || !this.pageData || !this.freeSlots.length) return 0;
-    const bs = this.brickSize;
+    const bs = this.slotStride;
     const slotIndex = this.freeSlots.pop();
     const coord = this._slotCoord(slotIndex);
     const gl = this.renderer?.getContext?.();
@@ -729,7 +922,7 @@ class SVRManager {
 
   _compactRgbaBrickData(brickData, bw, bh, bd) {
     if (!brickData) return null;
-    const bs = this.brickSize;
+    const bs = this.slotStride;
     const comps = this.components;
     const required = bw * bh * bd * comps;
     if (brickData.length === required) return brickData;
@@ -753,7 +946,7 @@ class SVRManager {
   _slotBuffer(slotIndex) {
     let slot = this.slotData.get(slotIndex);
     if (!slot) {
-      slot = new Uint8Array(this.brickSize * this.brickSize * this.brickSize * this.components);
+      slot = new Uint8Array(this.slotStride * this.slotStride * this.slotStride * this.components);
       this.slotData.set(slotIndex, slot);
     }
     return slot;
@@ -762,7 +955,7 @@ class SVRManager {
   _writeChannelToSlot(slotIndex, channel, brickData, bw, bh, bd) {
     if (!brickData) return;
     const slot = this._slotBuffer(slotIndex);
-    const bs = this.brickSize;
+    const bs = this.slotStride;
     const comps = this.components;
     for (let lz = 0; lz < bd; lz++) {
       const srcZOff = lz * bs * bs;
@@ -855,6 +1048,10 @@ class SVRManager {
 }
 
 SVRManager.MAX_PAGES = 8;   // the shader's svrAtlas0..7
+SVRManager.DETAIL_MAX_PAGES = 4;   // the shader's detailAtlas0..3
+SVRManager.BRICK_INTERIOR = 64;
+// Slots per side of a page: 4, 8 or 16 (256/512/1024 texels at stride 64).
+SVRManager.SLOTS_PER_SIDE = [4, 8, 16];
 SVRManager.CONTEXT_LOSS_MEMORY_MS = 7 * 24 * 3600 * 1000;
 SVRManager._live = new Set();
 SVRManager._failedAllocBytes = Infinity;
@@ -862,3 +1059,131 @@ SVRManager._sessionLosses = 0;
 SVRManager._sessionOverrideBytes = null;
 
 window.SVRManager = SVRManager;
+
+/* ── Region-of-interest scheduling ───────────────────────────────────────────
+   Pure decisions behind the viewer's detail streaming (volume-viewer.js, "Region
+   of interest"): which finer level the view needs, which of its bricks are on
+   screen and in what order, and what one round loads, keeps and lets go. No GPU,
+   no network: everything comes in as numbers and callbacks.
+   ──────────────────────────────────────────────────────────────────────────── */
+const SVRRoi = {
+  // A level is fine enough while one of its voxels covers at most this many screen
+  // pixels; beyond it (the user zoomed past the resolution on screen) a finer level
+  // is streamed for what is in view.
+  DETAIL_PIXELS_PER_VOXEL: 1.5,
+
+  /** Focal length in pixels of a perspective camera: H / (2·tan(fov/2)). */
+  focalPx(viewportHeightPx, fovDeg) {
+    const h = Math.max(1, Number(viewportHeightPx) || 1);
+    const t = Math.tan((Math.max(1e-3, Math.min(179, Number(fovDeg) || 45)) * Math.PI / 180) / 2);
+    return h / (2 * t);
+  },
+
+  /** Screen pixels one voxel of world length `voxelWorld` covers at `distance`. */
+  pixelsPerVoxel(focalPx, voxelWorld, distance) {
+    return (Number(focalPx) || 0) * (Number(voxelWorld) || 0) / Math.max(1e-6, Number(distance) || 0);
+  },
+
+  /**
+   * The detail level for the view, or null when the resident one is fine enough.
+   * levels: [{ level, voxelWorld }] (voxelWorld: world length of a voxel of that
+   * level along its finer XY axis), baseLevel: the level resident everywhere.
+   * Detail is needed when a base voxel covers more than `threshold` pixels; it is
+   * then the COARSEST finer level whose voxel covers at most `threshold` pixels (the
+   * fewest bytes that resolve the view), level 0 when none does.
+   * → { level: k | null, basePixelsPerVoxel, pixelsPerVoxel (of the chosen level) }
+   */
+  chooseDetailLevel({ levels, baseLevel, focalPx, distance, threshold = SVRRoi.DETAIL_PIXELS_PER_VOXEL }) {
+    const byLevel = new Map((levels || []).map(l => [Number(l.level), Number(l.voxelWorld)]));
+    const base = Number(baseLevel);
+    const basePpv = SVRRoi.pixelsPerVoxel(focalPx, byLevel.get(base), distance);
+    const out = { level: null, basePixelsPerVoxel: basePpv, pixelsPerVoxel: basePpv };
+    if (!(base > 0) || !(basePpv > threshold)) return out;
+    for (let k = base - 1; k >= 0; k--) {
+      if (!byLevel.has(k)) continue;
+      const ppv = SVRRoi.pixelsPerVoxel(focalPx, byLevel.get(k), distance);
+      out.level = k;
+      out.pixelsPerVoxel = ppv;
+      if (ppv <= threshold) break;
+    }
+    return out;
+  },
+
+  /** Is the box [min, max] entirely outside one of `planes` ([nx, ny, nz, d], the
+   *  inside being n·p + d ≥ 0)? The box's corner furthest along n decides. */
+  boxOutside(min, max, planes) {
+    for (const [nx, ny, nz, d] of planes || []) {
+      const px = nx >= 0 ? max.x : min.x;
+      const py = ny >= 0 ? max.y : min.y;
+      const pz = nz >= 0 ? max.z : min.z;
+      if (nx * px + ny * py + nz * pz + d < 0) return true;
+    }
+    return false;
+  },
+
+  /**
+   * The bricks of a level that are in view, most important first.
+   *   bricks      [{ bx, by, bz }] the bricks the level stores
+   *   dims        the level's voxel counts {x, y, z}; brick b spans
+   *               [64·b, min(64·b + 64, dim)) voxels, i.e. that range / dim in uvw
+   *   planes      the view frustum in uvw space ([nx, ny, nz, d], inside ≥ 0)
+   *   clipMin/Max the clip box in uvw (bricks wholly outside it are not shown)
+   *   worldScale  world length of one uvw unit along x, y, z (the cube's scale)
+   *   project(u, v, w) → { x, y, depth } NDC position and view depth of a uvw point
+   *   near        the smallest depth counted (the camera's near plane)
+   * priority = (world diagonal of the brick / depth of its centre) / (1 + 4·r²), r the
+   * NDC distance of its centre from the view centre: big on screen and central first.
+   * Ties keep the (bz, by, bx) order.
+   */
+  rankVisible({ bricks, dims, planes, clipMin = { x: 0, y: 0, z: 0 }, clipMax = { x: 1, y: 1, z: 1 }, worldScale = { x: 1, y: 1, z: 1 }, project, near = 1e-3, brickSize = 64 }) {
+    const out = [];
+    const min = { x: 0, y: 0, z: 0 };
+    const max = { x: 0, y: 0, z: 0 };
+    for (const b of bricks || []) {
+      min.x = (b.bx * brickSize) / dims.x; max.x = Math.min((b.bx + 1) * brickSize, dims.x) / dims.x;
+      min.y = (b.by * brickSize) / dims.y; max.y = Math.min((b.by + 1) * brickSize, dims.y) / dims.y;
+      min.z = (b.bz * brickSize) / dims.z; max.z = Math.min((b.bz + 1) * brickSize, dims.z) / dims.z;
+      if (max.x <= clipMin.x || min.x >= clipMax.x || max.y <= clipMin.y || min.y >= clipMax.y || max.z <= clipMin.z || min.z >= clipMax.z) continue;
+      if (SVRRoi.boxOutside(min, max, planes)) continue;
+      const p = project ? project((min.x + max.x) / 2, (min.y + max.y) / 2, (min.z + max.z) / 2) : null;
+      const depth = Math.max(near, p ? Number(p.depth) || near : near);
+      const r = p ? Math.hypot(Number(p.x) || 0, Number(p.y) || 0) : 0;
+      const diag = Math.hypot((max.x - min.x) * worldScale.x, (max.y - min.y) * worldScale.y, (max.z - min.z) * worldScale.z);
+      out.push({ bx: b.bx, by: b.by, bz: b.bz, key: `${b.bx}_${b.by}_${b.bz}`, priority: (diag / depth) / (1 + 4 * r * r), order: out.length });
+    }
+    out.sort((a, b) => (b.priority - a.priority) || (a.order - b.order));
+    return out;
+  },
+
+  /**
+   * One scheduling round within `capacity` slots.
+   *   ranked       rankVisible's list
+   *   isResident(key) / inFlight (Set of keys already being fetched)
+   *   residentKeys the atlas's resident keys, least recently used first
+   * → { want: the `capacity` most important keys,
+   *     load: their bricks neither resident nor in flight (priority order),
+   *     keep: the wanted resident keys, least important first — touched in this order
+   *           the most important ends most recent, so the LRU never recycles a
+   *           wanted brick while an unwanted one is left,
+   *     evict: resident keys not wanted, least recently used first: the slots new
+   *           bricks take (recycled lazily as they land),
+   *     inView: how many bricks are in view, dropped: how many of them do not fit }
+   */
+  plan({ ranked, isResident, inFlight = new Set(), capacity, residentKeys = [] }) {
+    const cap = Math.max(0, Math.floor(Number(capacity) || 0));
+    const list = ranked || [];
+    const wanted = list.slice(0, cap);
+    const wantSet = new Set(wanted.map(r => r.key));
+    const load = [];
+    const keep = [];
+    for (const r of wanted) {
+      if (isResident(r.key)) keep.push(r.key);
+      else if (!inFlight.has(r.key)) load.push(r);
+    }
+    keep.reverse();
+    const evict = residentKeys.filter(k => !wantSet.has(k));
+    return { want: wanted.map(r => r.key), load, keep, evict, inView: list.length, dropped: Math.max(0, list.length - wanted.length) };
+  }
+};
+
+window.SVRRoi = SVRRoi;

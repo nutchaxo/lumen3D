@@ -11,6 +11,8 @@ if str(HERE) not in sys.path:
     sys.path.insert(0, str(HERE))
 from run_preprocess import merge_curated, atomic_write_json, read_json_file  # noqa: E402
 import planes_writer  # noqa: E402
+import mips_writer  # noqa: E402
+import bricks_v3_writer  # noqa: E402
 
 COLORS = ["#00FF00", "#00AAFF", "#FF00FF", "#FF0000", "#FFFF00", "#00FFFF"]
 
@@ -113,6 +115,20 @@ def merge_volume_metadata(existing: dict, fresh: dict) -> dict:
     return merged
 
 
+def dataset_format_version(output_dir: Path) -> int:
+    """The highest format whose structures are complete on disk, each naming the bricks
+    manifest as it stands now: 4 = v3 bricks + planes + layer MIPs, 3 = v2 bricks +
+    planes + MIPs, 2 = v2 bricks + planes, else 1. A dataset never claims a structure it
+    does not have; the admin's Data updates tab completes a lower one."""
+    if not planes_writer.planes_complete(output_dir):
+        return 1
+    if not mips_writer.mips_complete(output_dir):
+        return planes_writer.FORMAT_VERSION
+    if bricks_v3_writer.bricks_complete(output_dir):
+        return bricks_v3_writer.FORMAT_VERSION
+    return mips_writer.FORMAT_VERSION
+
+
 def generate_catalog_metadata(temp_dir: Path, output_dir: Path, existing_path: Path = None,
                               display_name: str = None):
     with open(temp_dir / "processing_meta.json", "r", encoding="utf-8") as fm:
@@ -191,11 +207,7 @@ def generate_catalog_metadata(temp_dir: Path, output_dir: Path, existing_path: P
             "gamma": 1.0
         })
 
-    # Format 2 = the XY planes step 3 wrote (planes_writer). Claimed only when every
-    # tree names the bricks manifest as it stands now; otherwise the dataset reads as
-    # format 1 and the admin's Data updates tab produces the planes.
-    format_version = (planes_writer.FORMAT_VERSION if planes_writer.planes_complete(output_dir)
-                      else 1)
+    format_version = dataset_format_version(output_dir)
 
     now = datetime.now().isoformat()
     metadata = {
@@ -284,12 +296,19 @@ def _inject_histograms(temp_dir, manifest_path, manifest, lod_levels, n_ch, n_tp
     packer = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(packer)
     coarsest = lod_levels[-1]["lod"]
+    v3 = manifest.get("schema") == bricks_v3_writer.SCHEMA
     print(f"[CATALOG] Computing histograms on LOD {coarsest}"
           f"{f' for {n_tp} timepoints' if n_tp > 1 else ''}...")
     histograms = packer.histograms_for_timepoint(temp_dir, 0, n_ch, coarsest)
     manifest["histograms"] = histograms
     tp_manifest = manifest.get("timepoints")
-    if isinstance(tp_manifest, dict):
+    if v3 and isinstance(tp_manifest, list) and len(tp_manifest) > 1:
+        manifest["timepointHistograms"] = {
+            key: (histograms if t_idx == 0
+                  else packer.histograms_for_timepoint(temp_dir, t_idx, n_ch, coarsest))
+            for t_idx, key in enumerate(f"t{t:03d}" for t in range(n_tp))
+            if key in bricks_v3_writer.tree_keys(manifest)}
+    elif isinstance(tp_manifest, dict):
         for t_idx in range(n_tp):
             key = f"t{t_idx:03d}"
             if key in tp_manifest:
@@ -298,9 +317,11 @@ def _inject_histograms(temp_dir, manifest_path, manifest, lod_levels, n_ch, n_tp
                     else packer.histograms_for_timepoint(temp_dir, t_idx, n_ch, coarsest))
     atomic_write_json(manifest_path, manifest, separators=(",", ":"))
     print(f"[CATALOG] Injected histograms into manifest.json")
-    # The planes record the bricks manifest's sha256: follow its new bytes.
+    # The planes and MIPs record the bricks manifest's sha256: follow its new bytes.
     if (manifest_path.parent.parent / "planes").is_dir():
         planes_writer.write_manifests(manifest_path.parent.parent)
+    if (manifest_path.parent.parent / "mips").is_dir():
+        mips_writer.write_manifests(manifest_path.parent.parent)
 
 
 if __name__ == "__main__":

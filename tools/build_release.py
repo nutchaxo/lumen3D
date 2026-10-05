@@ -100,7 +100,7 @@ API_RUNTIME_STATE = frozenset(
     }
 )
 # Runtime directories under api/ (PHP sessions, login throttle, file locks, page drafts).
-API_RUNTIME_DIRS = frozenset({".sessions", ".bruteforce", ".locks", "page-drafts"})
+API_RUNTIME_DIRS = frozenset({".sessions", ".bruteforce", ".locks", ".telemetry", "page-drafts"})
 
 API_SHIPPED_FILES = frozenset({".htaccess", "ca-bundle.pem"})
 

@@ -176,6 +176,7 @@ function enqueue(jobs) {
 
     const entry = {
       ds: job.ds, path: job.path, file: job.file, size: job.size,
+      fileId: Number.isInteger(job.fileId) ? job.fileId : null,
       chunkSize, chunkCount, remaining: missing.length,
       // The digest-of-digests root can only be computed when THIS session sent
       // every chunk; after a resume the earlier digests are gone. The server
@@ -255,7 +256,8 @@ async function sendChunk(job, entry) {
   }
 
   const url = `${_endpoint}?action=chunk&ds=${encodeURIComponent(job.ds)}`
-            + `&path=${encodeURIComponent(job.path)}&index=${job.index}&sha256=${digest}`;
+            + `&path=${encodeURIComponent(job.path)}&index=${job.index}&sha256=${digest}`
+            + (entry.fileId !== null ? `&fid=${entry.fileId}` : '');
 
   let res;
   const ctl = new AbortController();

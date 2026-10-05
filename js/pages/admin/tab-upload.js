@@ -164,9 +164,9 @@ async function onBodyClick(e) {
     if (r.ok && r.data?.ok) {
       toast(t('upl.published', 'Dataset publié ✓ (masqué de l\'explorer — activez-le dans l\'onglet Datasets)'));
     } else if (r.data?.error === 'already_exists') {
-      if (confirm(t('upl.confirmOverwrite', 'Un dataset publié porte déjà ce nom. Le remplacer ?'))) {
+      if (confirm(t('upl.confirmOverwriteKeep', 'Un dataset publié porte déjà ce nom. Le remplacer ? Sa galerie d\'images et les champs que vous avez renseignés (nom, orientation, légendes…) sont conservés quand le nouvel import ne les fournit pas.'))) {
         const r2 = await Upload.publish(key, { overwrite: true });
-        toast(r2.ok && r2.data?.ok ? t('upl.published', 'Dataset publié ✓ (masqué de l\'explorer — activez-le dans l\'onglet Datasets)')
+        toast(r2.ok && r2.data?.ok ? publishedMessage(r2.data)
                                    : t('upl.errPublishShort', 'Publication refusée.'), r2.ok ? 'success' : 'error');
       }
     } else {
@@ -179,6 +179,17 @@ async function onBodyClick(e) {
     await Upload.discard(key);
     toast(t('upl.discarded', 'Import supprimé.'));
   }
+}
+
+/** A publish over an existing dataset says what it carried over from it. */
+function publishedMessage(data) {
+  const keys = Array.isArray(data?.carriedKeys) ? data.carriedKeys.filter((k) => k !== 'hidden') : [];
+  if (!keys.length && !data?.carriedGallery) {
+    return t('upl.published', 'Dataset publié ✓ (masqué de l\'explorer — activez-le dans l\'onglet Datasets)');
+  }
+  const kept = [data.carriedGallery ? t('upl.keptGallery', 'la galerie') : null, keys.length ? keys.join(', ') : null]
+    .filter(Boolean).join(' ; ');
+  return t('upl.publishedKept', 'Dataset publié ✓ — conservé de l\'ancienne version : {kept}', { kept });
 }
 
 // ── Render ─────────────────────────────────────────────────────────────────────

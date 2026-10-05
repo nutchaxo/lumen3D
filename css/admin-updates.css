@@ -37,7 +37,7 @@
 .dupd-problem { display: block; margin-top: 3px; }
 .dupd-actions { white-space: nowrap; text-align: right; }
 
-.dupd-job-title { font-size: 13.5px; margin-bottom: 10px; word-break: break-all; }
+.dupd-job-title { font-size: 13.5px; margin-bottom: 10px; overflow-wrap: anywhere; }
 .dupd-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 10px; margin: 12px 0 6px; }
 .dupd-stats dt { font-size: 11px; color: var(--adm-text-muted); text-transform: uppercase; letter-spacing: 0.04em; }
 .dupd-stats dd { margin: 2px 0 0; font-size: 13.5px; font-variant-numeric: tabular-nums; }
@@ -52,3 +52,16 @@
 @media (max-width: 640px) {
   .dupd-table th:nth-child(4), .dupd-table td:nth-child(4) { display: none; }
 }
+
+/* Executor per migration (web 1.59): one row per update, a choice per executor. */
+.dupd-block { display: block; }
+.dupd-exec-table td { vertical-align: top; }
+.dupd-exec-table .dupd-exec { padding: 8px 10px; min-width: 150px; }
+.dupd-noexec { display: flex; gap: 6px; align-items: flex-start; margin: 6px 0 0; }
+.dupd-noexec i { width: 14px; height: 14px; flex-shrink: 0; margin-top: 1px; }
+.dupd-step { display: block; }
+.dupd-step + .dupd-step { margin-top: 4px; }
+.dupd-step .adm-tag { margin-left: 4px; font-size: 11px; }
+.dupd-chain { display: flex; flex-wrap: wrap; gap: 4px 12px; margin: -4px 0 10px; color: var(--adm-text-muted); }
+.dupd-chain .is-done { text-decoration: line-through; }
+.dupd-chain .is-on { color: var(--adm-text); font-weight: 600; }

@@ -17,8 +17,14 @@ HERE = Path(__file__).resolve().parent
 if str(HERE) not in sys.path:
     sys.path.insert(0, str(HERE))
 from run_preprocess import worker_count, thumbnail_lod, atomic_write_json  # noqa: E402
+import bricks_v3_writer as v3  # noqa: E402
 
-__version__ = "0.14.0"
+__version__ = "0.15.0"
+
+# Dataset format the run produces: 4 (brick pyramid v3 + planes + layer MIPs, SPEC §12-13)
+# by default; 2 (v2 bricks on the square 256·2^k ladder + planes) is kept for the
+# migration tests, which build a format-2 dataset to migrate.
+DEFAULT_DATASET_FORMAT = v3.FORMAT_VERSION
 
 # How many timepoints are sampled to establish the shared window of a timelapse.
 # Evenly spaced over the series and always including the first and the last frame.
@@ -368,7 +374,8 @@ def _allocate(path: Path, size: int) -> None:
 
 
 def lod_ladder(W: int, H: int, D: int):
-    """LOD0 at native size, then square 256·2^k levels below max(W, H), coarsest last."""
+    """Format 2 (legacy): LOD0 at native size, then square 256·2^k levels below
+    max(W, H), coarsest last, every level keeping all D planes."""
     lod_info = [{"lod": 0, "width": W, "height": H, "depth": D}]
     max_dim = max(W, H)
     target_dims = []
@@ -382,8 +389,32 @@ def lod_ladder(W: int, H: int, D: int):
     return lod_info
 
 
+def pyramid_levels(W: int, H: int, D: int, voxel_size):
+    """Format-4 levels as LOD entries: level 0 native, then v3.level_ladder (X and Y
+    halved, Z halved while that keeps the voxel from becoming coarser in Z than in XY)."""
+    return [{"lod": lv["level"], "width": lv["dimensions"]["x"], "height": lv["dimensions"]["y"],
+             "depth": lv["dimensions"]["z"], "voxelSize": lv["voxelSize"], "halveZ": lv["halveZ"]}
+            for lv in v3.level_ladder((W, H, D), voxel_size)]
+
+
+def reduce_levels(executor, temp_dir: Path, t_idx: int, c_idx: int, lod_info) -> None:
+    """Levels 1… of one channel, each from the previous one (integer mean, half up), in
+    z ranges over the pool: a worker holds two planes of the finer level at a time."""
+    for prev, li in zip(lod_info, lod_info[1:]):
+        src = temp_dir / f"t{t_idx:03d}_c{c_idx}_lod{prev['lod']}.bin"
+        dst = temp_dir / f"t{t_idx:03d}_c{c_idx}_lod{li['lod']}.bin"
+        src_shape = (prev["depth"], prev["height"], prev["width"])
+        dst_shape = (li["depth"], li["height"], li["width"])
+        _allocate(dst, li["depth"] * li["height"] * li["width"])
+        step = max(1, -(-li["depth"] // (4 * worker_count())))
+        _run(executor, v3.reduce_task,
+             [(str(src), src_shape, str(dst), dst_shape, li["halveZ"], z, min(z + step, li["depth"]))
+              for z in range(0, li["depth"], step)],
+             f"Niveau {li['lod']} ({li['width']}x{li['height']}x{li['depth']})")
+
+
 def process_channel(executor, path, name, shape, lod_info, temp_dir, t_idx, c_idx,
-                    bounds=None):
+                    bounds=None, dataset_format=DEFAULT_DATASET_FORMAT):
     """Level one channel of one timepoint into its LOD files. `bounds` is the shared
     window of a timelapse; without it the window comes from this volume. Returns the
     99.9th percentile of the raw subsample (the frame's signal level)."""
@@ -431,6 +462,10 @@ def process_channel(executor, path, name, shape, lod_info, temp_dir, t_idx, c_id
 
     # ─── Step 4 : Exporting downscaled LOD levels ─────────────────────────
     print("  Step 4: Exporting downscaled LOD levels...", flush=True)
+    if dataset_format >= v3.FORMAT_VERSION:
+        reduce_levels(executor, temp_dir, t_idx, c_idx, lod_info)
+        print(f"  Channel {c_idx} processed successfully.")
+        return frame_sig
     targets = []
     for li in lod_info[1:]:
         p = temp_dir / f"t{t_idx:03d}_c{c_idx}_lod{li['lod']}.bin"
@@ -465,7 +500,7 @@ def _drop_packed_files(temp_dir: Path, t_idx: int, n_ch: int, lod_info) -> None:
 
 
 def process_image(input_ims: Path, metadata_json: Path, temp_dir: Path, pack_into: Path = None,
-                  executor=None):
+                  executor=None, dataset_format: int = DEFAULT_DATASET_FORMAT):
     """Level every (timepoint, channel) of an .ims into temp LOD files.
 
     With `pack_into` (a dataset directory) each timepoint is packed into its bricks/ as
@@ -483,8 +518,9 @@ def process_image(input_ims: Path, metadata_json: Path, temp_dir: Path, pack_int
     temp_dir.mkdir(parents=True, exist_ok=True)
     path = str(input_ims)
 
-    lod_info = lod_ladder(W, H, D)
-    print(f"[PROCESS] LOD levels to generate: {len(lod_info)}")
+    v4 = dataset_format >= v3.FORMAT_VERSION
+    lod_info = pyramid_levels(W, H, D, meta.get("voxel_size")) if v4 else lod_ladder(W, H, D)
+    print(f"[PROCESS] LOD levels to generate: {len(lod_info)} (dataset format {dataset_format})")
     for li in lod_info:
         print(f"  LOD {li['lod']}: {li['width']}x{li['height']}x{li['depth']}")
 
@@ -520,16 +556,21 @@ def process_image(input_ims: Path, metadata_json: Path, temp_dir: Path, pack_int
                 print(f"[PROCESS] Processing Channel {c_idx} (T {t_idx})...", flush=True)
                 name = res0[tp_key][ch_key]["Data"].name
                 frame_sig = process_channel(executor, path, name, shape, lod_info, temp_dir,
-                                            t_idx, c_idx, global_bounds.get(c_idx))
+                                            t_idx, c_idx, global_bounds.get(c_idx),
+                                            dataset_format)
                 signal_levels[f"t{t_idx:03d}_c{c_idx}"] = round(frame_sig, 4)
 
             if bricks_dir is not None:
                 key = f"t{t_idx:03d}" if is_timelapse else ""
-                levels, transport = _packer().pack_timepoint(
-                    temp_dir, bricks_dir, t_idx, lod_info, n_ch, executor, key,
-                    encode_fn=encode_brick_batch, layer_fn=layer_max_grid)
-                atomic_write_json(temp_dir / f"pack_t{t_idx:03d}.json",
-                                  {"levels": levels, "brickTransport": transport},
+                if v4:
+                    packed = _packer().pack_timepoint_v3(temp_dir, bricks_dir, t_idx, lod_info,
+                                                         n_ch, executor, key)
+                else:
+                    levels, transport = _packer().pack_timepoint(
+                        temp_dir, bricks_dir, t_idx, lod_info, n_ch, executor, key,
+                        encode_fn=encode_brick_batch, layer_fn=layer_max_grid)
+                    packed = {"levels": levels, "brickTransport": transport}
+                atomic_write_json(temp_dir / f"pack_t{t_idx:03d}.json", packed,
                                   separators=(",", ":"))
                 _drop_packed_files(temp_dir, t_idx, n_ch, lod_info)
     finally:
@@ -548,6 +589,7 @@ def process_image(input_ims: Path, metadata_json: Path, temp_dir: Path, pack_int
         "depth": D,
         "n_channels": n_ch,
         "n_timepoints": n_tp,
+        "datasetFormat": dataset_format,
         "extent": meta.get("extent"),
         "timestamps": meta.get("timestamps"),
         "time_interval_minutes": meta.get("time_interval_minutes"),
@@ -568,11 +610,14 @@ if __name__ == "__main__":
     ap.add_argument("--pack-into", default=None,
                     help="dataset directory: pack each timepoint into its bricks/ as soon as "
                          "it is levelled, then delete its temporary LOD files")
+    ap.add_argument("--format", type=int, choices=(2, 4), default=DEFAULT_DATASET_FORMAT,
+                    help="dataset format to produce (default 4; 2 = the legacy v2 bricks)")
     args = ap.parse_args()
 
     try:
         process_image(Path(args.input_ims), Path(args.metadata_json), Path(args.temp_dir),
-                      Path(args.pack_into) if args.pack_into else None)
+                      Path(args.pack_into) if args.pack_into else None,
+                      dataset_format=args.format)
         print(f"[PROCESS] Image processing complete.")
     except Exception as e:
         import traceback

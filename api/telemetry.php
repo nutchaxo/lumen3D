@@ -8,10 +8,20 @@
  *   POST ?action=visit
  *   POST ?action=view&id=<type/folder>
  *   POST ?action=download&id=<type/folder>
+ *
+ * Throttled per client IP and globally (token buckets, lumen_telemetry_allow):
+ * a refused beacon answers 429 without touching api/stats.json.
  */
 
 declare(strict_types=1);
 require_once __DIR__ . '/_admin_lib.php';
+
+// Beacons are POSTs (navigator.sendBeacon); a GET would let any third-party page
+// count visits with an <img> tag (twin of dev_server.py).
+if (($_SERVER['REQUEST_METHOD'] ?? 'GET') !== 'POST') admin_json_out(['error' => 'Method not allowed (use POST)'], 405);
+// Refused before anything is read or written: a flood costs a hash and two 16-byte
+// slot updates per request (lumen_telemetry_allow), never a stats rewrite.
+if (!lumen_telemetry_allow(admin_client_ip())) admin_json_out(['error' => 'rate_limited'], 429);
 
 $action = lumen_str($_GET['action'] ?? null) ?? '';
 if (!in_array($action, ['visit', 'view', 'download'], true)) admin_json_out(['error' => 'bad_kind'], 400);

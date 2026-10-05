@@ -155,8 +155,115 @@ function gallery_clean_text($value, int $limit = GALLERY_CAPTION_MAX): string {
     return (string)preg_replace('/[\x80-\xFF]*$/', '', substr($v, 0, $limit));
 }
 
-function gallery_entry(string $name, array $src): array {
+// Grid-sized copies (twin of dev_server.py GALLERY_THUMB_*): gallery/thumbs/<file>.webp,
+// or .jpg where GD cannot encode WebP, at most GALLERY_THUMB_PX on the long side.
+// A plain sub-folder: dot-segments are never served, and gallery_reconcile lists files only.
+const GALLERY_THUMB_DIRNAME = 'thumbs';
+const GALLERY_THUMB_PX = 320;
+const GALLERY_THUMB_MAX_SOURCE_PIXELS = 50000000;
+
+/** Relative path (from gallery/) of the current thumbnail of $name, or null. A
+ *  thumbnail older than its source is stale and does not count. */
+function gallery_thumb_existing(string $gdir, string $name): ?string {
+    clearstatcache();
+    $src = @filemtime($gdir . '/' . $name);
+    if ($src === false) return null;
+    foreach (['webp', 'jpg'] as $ext) {
+        $rel = GALLERY_THUMB_DIRNAME . "/$name.$ext";
+        $t = @filemtime($gdir . '/' . $rel);
+        if ($t !== false && $t >= $src) return $rel;
+    }
+    return null;
+}
+
+function gallery_thumb_webp_ok(): bool {
+    if (!function_exists('imagewebp') || !function_exists('gd_info')) return false;
+    return !empty(gd_info()['WebP Support']);
+}
+
+/** Write the thumbnail of gallery/$name with GD. Its relative path, or null when GD
+ *  is missing or the image cannot (or should not) be decoded. */
+function gallery_make_thumb(string $gdir, string $name): ?string {
+    if (!function_exists('imagecreatefromstring') || !function_exists('imagecopyresampled')) return null;
+    $path = $gdir . '/' . $name;
+    $info = @getimagesize($path);
+    if (!is_array($info) || $info[0] <= 0 || $info[1] <= 0) return null;
+    if ($info[0] * $info[1] > GALLERY_THUMB_MAX_SOURCE_PIXELS) return null;
+    // GD holds a decoded image as 4 bytes per pixel (+ the file and a resized copy):
+    // under a 128 MiB memory_limit a 50 MP canvas would be a fatal error, and every later
+    // save of the dataset (which re-syncs the thumbnails) would die on it too.
+    $limit = lumen_up_ini_bytes((string)ini_get('memory_limit'));
+    if ($limit > 0) {
+        $room = $limit - memory_get_usage(true) - (int)@filesize($path) - 16777216;
+        if ($info[0] * $info[1] * 5 > $room) return null;
+    }
+    $raw = @file_get_contents($path);
+    $src = $raw === false ? false : @imagecreatefromstring($raw);
+    if ($src === false) return null;
+    // EXIF orientation of a camera JPEG (Pillow's exif_transpose on the Python side).
+    if (($info[2] ?? 0) === IMAGETYPE_JPEG && function_exists('exif_read_data')) {
+        $o = (int)((@exif_read_data($path)['Orientation'] ?? 1));
+        if (in_array($o, [2, 4, 5, 7], true) && function_exists('imageflip')) imageflip($src, IMG_FLIP_HORIZONTAL);
+        $turn = [3 => 180, 4 => 180, 5 => 270, 6 => 270, 7 => 90, 8 => 90][$o] ?? 0;
+        if ($turn) { $r = imagerotate($src, $turn, 0); if ($r !== false) { imagedestroy($src); $src = $r; } }
+    }
+    $w = imagesx($src); $h = imagesy($src);
+    $scale = min(1.0, GALLERY_THUMB_PX / max($w, $h));
+    $tw = max(1, (int)round($w * $scale)); $th = max(1, (int)round($h * $scale));
+    $dst = imagecreatetruecolor($tw, $th);
+    $webp = gallery_thumb_webp_ok();
+    if ($webp) {
+        imagealphablending($dst, false);
+        imagesavealpha($dst, true);
+        imagefill($dst, 0, 0, imagecolorallocatealpha($dst, 0, 0, 0, 127));
+    } else {
+        imagefill($dst, 0, 0, imagecolorallocate($dst, 255, 255, 255));
+        imagealphablending($dst, true);
+    }
+    imagecopyresampled($dst, $src, 0, 0, 0, 0, $tw, $th, $w, $h);
+    imagedestroy($src);
+    ob_start();
+    $ok = $webp ? imagewebp($dst, null, 80) : imagejpeg($dst, null, 85);
+    $bytes = (string)ob_get_clean();
+    imagedestroy($dst);
+    if (!$ok || $bytes === '') return null;
+    $tdir = $gdir . '/' . GALLERY_THUMB_DIRNAME;
+    if (!is_dir($tdir) && !admin_make_dir($tdir)) return null;
+    $rel = GALLERY_THUMB_DIRNAME . "/$name." . ($webp ? 'webp' : 'jpg');
+    if (!lumen_write_file_atomic($gdir . '/' . $rel, $bytes)) return null;
+    $stale = $tdir . "/$name." . ($webp ? 'jpg' : 'webp');
+    if (is_file($stale)) @unlink($stale);
+    return $rel;
+}
+
+/** Every gallery image gets a current thumbnail; a thumbnail whose image is gone is
+ *  removed. Run on add, delete, save and the lazy `gallery_thumbs` action. */
+function gallery_sync_thumbs(string $ds_dir): void {
+    $gdir = $ds_dir . '/' . GALLERY_DIRNAME;
+    if (!is_dir($gdir)) return;
+    $names = [];
+    foreach (scandir($gdir) ?: [] as $f) {
+        if (is_file("$gdir/$f") && gallery_rel($f) === $f) $names[$f] = true;
+    }
+    foreach (array_keys($names) as $n) {
+        if (gallery_thumb_existing($gdir, (string)$n) === null) gallery_make_thumb($gdir, (string)$n);
+    }
+    $tdir = $gdir . '/' . GALLERY_THUMB_DIRNAME;
+    if (!is_dir($tdir)) return;
+    foreach (scandir($tdir) ?: [] as $t) {
+        if ($t === '.' || $t === '..' || !is_file("$tdir/$t")) continue;
+        $dot = strrpos($t, '.');
+        $base = $dot === false ? '' : substr($t, 0, $dot);
+        $ext = $dot === false ? '' : substr($t, $dot + 1);
+        if (!in_array($ext, ['webp', 'jpg'], true) || !isset($names[$base])) @unlink("$tdir/$t");
+    }
+}
+
+function gallery_entry(string $name, array $src, ?string $gdir = null): array {
     $item = ['file' => $name];
+    // Derived from the disk, never from the posted entry.
+    $thumb = $gdir !== null ? gallery_thumb_existing($gdir, $name) : null;
+    if ($thumb !== null) $item['thumb'] = $thumb;
     $title   = gallery_clean_text($src['title'] ?? '', 120);
     $caption = gallery_clean_text($src['caption'] ?? '');
     if ($title !== '')   $item['title'] = $title;
@@ -200,11 +307,11 @@ function gallery_reconcile(array $meta, string $ds_dir, $fallback = null): array
         $name = gallery_rel($entry['file'] ?? null);
         if ($name === null || isset($seen[$name]) || !isset($disk_set[$name])) continue;
         $seen[$name] = true;
-        $out[] = gallery_entry($name, $entry);
+        $out[] = gallery_entry($name, $entry, $gdir);
     }
     foreach ($on_disk as $name) {
         if (isset($seen[$name])) continue;
-        $out[] = gallery_entry($name, $prior[$name] ?? []);
+        $out[] = gallery_entry($name, $prior[$name] ?? [], $gdir);
     }
     return array_slice($out, 0, MAX_GALLERY_ITEMS);
 }
@@ -251,15 +358,16 @@ function gallery_add(string $id, string $ds_dir, array $body): array {
             return [500, ['error' => 'Write failed']];
         }
         admin_fix_file_mode($gdir . DIRECTORY_SEPARATOR . $name);
+        gallery_make_thumb($gdir, $name);
 
         $entry = gallery_entry($name, [
             'title'   => $body['title'] ?? '',
             'caption' => $body['caption'] ?? '',
             'added'   => date('c'),
-        ]);
+        ], $gdir);
         $current[] = $entry;
         $meta['gallery'] = $current;
-        $meta['_lastModified'] = date('c');
+        $meta['lastModified'] = date('c');
         if (!write_json($meta_path, $meta)) return [500, ['error' => 'Write failed']];
         return [200, [
             'ok' => true, 'item' => $entry, 'gallery' => $current,
@@ -274,14 +382,36 @@ function gallery_delete(string $ds_dir, $file): array {
     if ($name === null) return [400, ['error' => 'Invalid file']];
     $target = $ds_dir . DIRECTORY_SEPARATOR . GALLERY_DIRNAME . DIRECTORY_SEPARATOR . $name;
     if (is_file($target) && !@unlink($target)) return [500, ['error' => 'Delete failed']];
+    foreach (['webp', 'jpg'] as $ext) {
+        $t = $ds_dir . '/' . GALLERY_DIRNAME . '/' . GALLERY_THUMB_DIRNAME . "/$name.$ext";
+        if (is_file($t)) @unlink($t);
+    }
 
     $meta_path = $ds_dir . DIRECTORY_SEPARATOR . 'metadata.json';
     return lumen_with_lock($meta_path, function () use ($meta_path, $ds_dir) {
         $meta = read_json_doc($meta_path) ?: [];
         $meta['gallery'] = gallery_reconcile($meta, $ds_dir);
-        $meta['_lastModified'] = date('c');
+        $meta['lastModified'] = date('c');
         if (!write_json($meta_path, $meta)) return [500, ['error' => 'Write failed']];
         return [200, ['ok' => true, 'gallery' => $meta['gallery']]];
+    });
+}
+
+/** Lazy thumbnails for a gallery that predates them (twin of dev_server.py
+ *  _gallery_thumbs). @return array{0:int,1:array} */
+function gallery_thumbs(string $ds_dir): array {
+    $meta_path = $ds_dir . DIRECTORY_SEPARATOR . 'metadata.json';
+    if (!is_file($meta_path)) return [404, ['error' => 'Dataset not found']];
+    return lumen_with_lock($meta_path, function () use ($meta_path, $ds_dir) {
+        $meta = read_json_doc($meta_path);
+        if (!is_array($meta)) return [500, ['error' => 'Unreadable metadata']];
+        gallery_sync_thumbs($ds_dir);
+        $gallery = gallery_reconcile($meta, $ds_dir);
+        if ($gallery !== ($meta['gallery'] ?? [])) {
+            if ($gallery) $meta['gallery'] = $gallery; else unset($meta['gallery']);
+            if (!write_json($meta_path, $meta)) return [500, ['error' => 'Write failed']];
+        }
+        return [200, ['ok' => true, 'gallery' => $gallery]];
     });
 }
 
@@ -351,6 +481,7 @@ function save_dataset_meta(string $id, string $ds_dir, array $body): array {
     return lumen_with_lock($path, function () use ($id, $ds_dir, $path, $body) {
         $stored = read_json_doc($path);
         $meta   = is_array($stored) ? $stored : [];
+        gallery_sync_thumbs($ds_dir);
         foreach ($body as $k => $v) $meta[$k] = $v;
         [$type, $folder] = explode('/', $id, 2);
         $meta['id']           = $id;
@@ -444,7 +575,7 @@ require_auth();
 // to flip a dataset public (`?action=set_visibility&id=…` with an empty body).
 // admin_require_write() enforces POST *and* the token together.
 const DATASET_WRITE_ACTIONS = ['save', 'save_thumbnail', 'rebuild_catalog', 'set_visibility',
-                               'gallery_add', 'gallery_delete'];
+                               'gallery_add', 'gallery_delete', 'gallery_thumbs'];
 if (in_array($action, DATASET_WRITE_ACTIONS, true)) {
     admin_require_write();   // POST + X-CSRF-Token; exits on failure
 }
@@ -476,6 +607,7 @@ if (strncmp($id, LUMEN_STAGING_PREFIX, strlen(LUMEN_STAGING_PREFIX)) === 0) {
             json_out(['error' => 'not_published'], 409);
         case 'gallery_add':
         case 'gallery_delete':
+        case 'gallery_thumbs':
             // The staging store accepts only what the preprocessing pipeline emits
             // (lumen_up_classify); a gallery is attached once the import is published.
             json_out(['error' => 'not_published'], 409);
@@ -562,6 +694,12 @@ switch ($action) {
         if (!$id) json_out(['error' => 'Missing id'], 400);
         $body = lumen_request_json() ?? [];
         [$st, $pl] = gallery_delete(dataset_dir($id), $body['file'] ?? null);
+        json_out($pl, $st);
+
+    case 'gallery_thumbs':
+        require_auth();
+        if (!$id) json_out(['error' => 'Missing id'], 400);
+        [$st, $pl] = gallery_thumbs(dataset_dir($id));
         json_out($pl, $st);
 
     case 'rebuild_catalog':

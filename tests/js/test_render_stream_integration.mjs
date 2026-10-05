@@ -177,6 +177,9 @@ function makeWorld({ max3D = 256, blurWorker = null } = {}) {
       await new Promise(r => setTimeout(r, 0));
     }
   };
+  // These scenarios test the stream itself: the region-of-interest rounds (which
+  // the framing of this 800 × 600 view would start on LOD1) have their own test.
+  ctx.__VV.setDetailMode('off');
   const world = {
     gl, canvas, listeners, renderer, events, files, ctx, rafQueue, pump,
     VV: ctx.__VV, SVR: ctx.__SVR, BL: ctx.__BL,
@@ -245,7 +248,9 @@ const isStorage = (s, w, h, d) => s.w === w && s.h === h && s.d === d;
   const fp = W.VV.getQualityFootprints(['256x256', 'native']);
   assert.equal(fp.levels.length, 2);
   assert.equal(fp.levels[0].mode, 'svr');
-  assert.equal(fp.levels[0].bytes, 64 * MiB, 'LOD0: a 256×256×256 atlas of 64 one-MiB slots');
+  // Two channels: RG8 slots (half of RGBA8), plus the page table (8 × 8 × 1 RGBA8 texels).
+  assert.equal(fp.levels[0].components, 2, 'LOD0: a two-channel atlas is RG8');
+  assert.equal(fp.levels[0].bytes, 32 * MiB + 8 * 8 * 4, 'LOD0: a 256×256×256 atlas of 64 half-MiB slots and its page table');
   assert.equal(fp.levels[1].mode, 'monolithic');
   assert.equal(fp.levels[1].bytes, 16 * MiB);
   assert.equal(fp.qualities.native.lod, 0);
@@ -308,7 +313,7 @@ const isStorage = (s, w, h, d) => s.w === w && s.h === h && s.d === d;
   assert.equal(res.lod, 1, 'degraded to the level that fits');
   assert.equal(res.downgraded, true);
   assert.equal(res.downgradeReason, 'vram-budget');
-  assert.equal(res.neededBytes, 64 * MiB, 'the refused level is priced');
+  assert.equal(res.neededBytes, 32 * MiB + 8 * 8 * 4, 'the refused level is priced (RG8 atlas + page table)');
   assert.ok(!W.gl.log.storage.some(s => isStorage(s, 256, 256, 256)), 'the over-budget atlas is never allocated');
   W.VV.dispose();
   W.SVR.setVramBudget(null);

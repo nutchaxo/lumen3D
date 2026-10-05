@@ -104,6 +104,12 @@ class TestAllowlist(StagingCase):
             ("2d", "preview.webp"),
             ("2d", "image.webp"),
             ("2d", "download/photo.tif"),
+            ("3d", "planes/manifest.json"),
+            ("3d", "planes/z00000.bin"),
+            ("3d", "planes/z00256.bin"),
+            ("live", "planes/t000/manifest.json"),
+            ("live", "planes/t012/z00063.bin"),
+            ("live", "planes/manifest.json"),             # a single-frame timelapse
         ):
             self.assertIsNotNone(us.classify_path(type_dir, rel), f"should allow: {rel}")
 
@@ -130,8 +136,62 @@ class TestAllowlist(StagingCase):
             ("2d", "bricks/manifest.json"),              # a photograph has no bricks
             ("2d", "bricks/lod0/c0/pack_00.bin"),
             ("2d", "model.glb"),
+            ("2d", "planes/manifest.json"),               # a photograph has no planes
+            ("3d", "planes/t000/z00000.bin"),             # frames: live only
+            ("3d", "planes/z12.bin"),                     # 5-digit pad is the format
+            ("3d", "planes/z00000.bin.php"),
+            ("3d", "planes/index.html"),
+            ("3d", "planes/.planes-incoming/z00000.bin"),
+            ("live", "planes/t1/z00000.bin"),
+            ("live", "planes/t000/sub/z00000.bin"),
+            ("3d", "planes/z0000٣.bin"),             # a non-ASCII digit
+            ("3d", "planes/z00000.bin\n"),
         ):
             self.assertIsNone(us.classify_path(type_dir, rel), f"should refuse: {rel}")
+
+    def test_planes_travel_in_the_last_tier(self):
+        for rel in ("planes/manifest.json", "planes/z00001.bin"):
+            self.assertEqual(us.classify_path("3d", rel)[0], us.TIER_EXTRA)
+        self.assertEqual(us.classify_path("live", "planes/t003/z00001.bin"),
+                         (us.TIER_EXTRA, "planes_pack"))
+
+    def test_a_format_2_dataset_with_planes_validates(self):
+        """SPEC §11: the planes/ of a dataset made by preprocess >= 0.20.0 are staged,
+        content-checked and do not make validate_dataset fail."""
+        import struct as _struct
+        mb = json.dumps(META).encode()
+        nb = json.dumps(MANIFEST).encode()
+        pack = b"X" * 10
+        thumb = b"RIFF" + b"0" * 20
+        pm = json.dumps({"schema": "lumen-planes-v1", "formatVersion": 2}).encode()
+        plane = b"LPLN" + _struct.pack("<HHHHI", 1, 1, 1, 1, 0) + _struct.pack("<QI", 0, 0)
+        files = (("metadata.json", mb), ("bricks/manifest.json", nb),
+                 ("bricks/lod0/c0/pack_00.bin", pack), ("thumbnail.webp", thumb),
+                 ("planes/manifest.json", pm), ("planes/z00000.bin", plane))
+        us.plan([{"type": "3d", "folder": "P2", "files": [{"path": r, "size": len(b)} for r, b in files]}])
+        for rel, blob in files:
+            self.send("P2", rel, blob)
+        v = us.validate_dataset("3d", "P2")
+        self.assertTrue(v["ok"], v)
+
+    def test_a_planes_file_is_content_checked(self):
+        bad = b"NOPE" + b"\0" * 28
+        us.plan([{"type": "3d", "folder": "PB", "files": [{"path": "planes/z00000.bin", "size": len(bad)}]}])
+        st, pl = us.write_chunk("3d", "PB", "planes/z00000.bin", 0, bad, sha(bad))
+        self.assertEqual(st, 200, pl)
+        st, pl = us.finalize_file("3d", "PB", "planes/z00000.bin", None)
+        self.assertNotEqual(st, 200, pl)
+        self.assertIn("planes_pack", json.dumps(pl))
+        short = b"LPLN" + bytes([1, 0, 4, 0, 8, 0, 8, 0, 0, 0, 0, 0])   # claims 4·8·8 entries
+        self.assertEqual(us._validate_file_content("3d", "planes/z00000.bin", self._tmpfile(short), "planes_pack"),
+                         (False, "planes_pack_bad_header"))
+        self.assertEqual(us._validate_file_content("3d", "planes/manifest.json", self._tmpfile(b'{"schema":"x"}'),
+                                                   "planes_manifest"), (False, "planes_manifest_invalid"))
+
+    def _tmpfile(self, data):
+        p = Path(self.tmp) / ("blob%d" % len(data))
+        p.write_bytes(data)
+        return p
 
     def test_the_journal_is_keyed_by_the_canonical_type(self):
         """One vocabulary: the staging directory, the journal file name and the

@@ -15,6 +15,7 @@ HERE = Path(__file__).resolve().parent
 if str(HERE) not in sys.path:
     sys.path.insert(0, str(HERE))
 from run_preprocess import worker_count, atomic_write_json, read_json_file  # noqa: E402
+import planes_writer  # noqa: E402
 
 # Empty-space skipping counts the voxels the RENDERER can draw, not the voxels that
 # are merely non-zero.
@@ -202,7 +203,7 @@ class _PackWriter:
 
 
 def pack_timepoint(temp_dir: Path, bricks_dir: Path, t_idx: int, lod_levels, n_ch: int,
-                   executor, tp_subdir: str, encode_fn=None, layer_fn=None):
+                   executor, tp_subdir: str, encode_fn=None, layer_fn=None, planes_fn=None):
     """Brick, compress and pack every LOD of a single timepoint.
 
     tp_subdir is '' for a single-timepoint ('3d') dataset — the packs then land
@@ -213,9 +214,15 @@ def pack_timepoint(temp_dir: Path, bricks_dir: Path, t_idx: int, lod_levels, n_c
 
     encode_fn / layer_fn are this module's encode_brick_batch / layer_max_grid, or
     wrappers a caller's pool can import by name.
+
+    The native level is also re-cut into XY planes (planes_writer, dataset format 2)
+    under <dataset>/planes/<tp_subdir>, from the same LOD0 file and masked by the same
+    kept-brick index, while that file is still on disk. Their manifest.json is written
+    by build_packs once bricks/manifest.json has its final bytes.
     """
     encode_fn = encode_fn or encode_brick_batch
     layer_fn = layer_fn or layer_max_grid
+    planes_fn = planes_fn or planes_writer.write_plane_task
     window = 2 * (getattr(executor, "_max_workers", 1) or 1)
 
     tp_root = bricks_dir / tp_subdir if tp_subdir else bricks_dir
@@ -336,6 +343,21 @@ def pack_timepoint(temp_dir: Path, bricks_dir: Path, t_idx: int, lod_levels, n_c
             "chunks": manifest_chunks,
             "nonEmptyCount": non_empty_count
         })
+
+    lod0 = next((li for li in lod_levels if li["lod"] == 0), None)
+    if lod0 is not None:
+        planes_root = bricks_dir.parent / "planes"
+        planes_dir = planes_root / tp_subdir if tp_subdir else planes_root
+        files = [temp_dir / f"t{t_idx:03d}_c{c}_lod0.bin" for c in range(n_ch)]
+        tasks = planes_writer.plane_tasks(files, (lod0["width"], lod0["height"], lod0["depth"]),
+                                          brick_to_pack, planes_dir)
+        written = 0
+        for _z, size in tqdm(ordered_results(executor, planes_fn, tasks, window),
+                             total=len(tasks), desc="Plans XY (PNG)", leave=False,
+                             ascii=True, mininterval=2.0):
+            written += size
+        print(f"[PACKER] {tp_subdir or 't000'} plans XY : {len(tasks)} plan(s), "
+              f"{written / 1e6:.1f} MB")
 
     transport = {
         "mode": "packs",
@@ -467,6 +489,8 @@ def build_packs(temp_dir: Path, output_dir: Path):
 
     size_mb = manifest_path.stat().st_size / 1e6
     print(f"[PACKER] Wrote manifest.json to {manifest_path} ({size_mb:.2f} MB)")
+    planes_writer.write_manifests(output_dir)
+    print(f"[PACKER] planes/ : manifest(s) ecrit(s), format {planes_writer.FORMAT_VERSION}")
     if is_timelapse:
         print(f"[PACKER] {n_tp} timepoints indexed")
 

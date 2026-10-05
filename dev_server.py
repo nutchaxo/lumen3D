@@ -62,6 +62,10 @@ from pathlib import Path
 # the chunk/journal/validation logic is self-contained and unit-testable without
 # an HTTP server; this file only routes to it. See upload_staging.py.
 import upload_staging
+# In-place format upgrades of published datasets (admin "Data updates" tab). Same
+# split: the engine and its pure format functions live in dataset_migrations.py,
+# this file only authenticates and routes /api/migrations.php to it.
+import dataset_migrations
 
 __version__ = "0.16.0"
 
@@ -4341,6 +4345,19 @@ def _save_staged_thumbnail(dataset_id: str, image_data: str):
 _META_LOCK = threading.RLock()
 
 
+def _migrations_bind() -> None:
+    """Point the migrations engine at this server's tree and metadata lock (the tests
+    move DATA_WEB / UPLOADS_DIR after import, so this runs per request; it only
+    reconfigures when a path actually changed)."""
+    data_web, uploads = Path(DATA_WEB).resolve(), Path(UPLOADS_DIR).resolve()
+    if (dataset_migrations.DATA_WEB != data_web or dataset_migrations.UPLOADS_DIR != uploads
+            or dataset_migrations._META_LOCK is not _META_LOCK):
+        dataset_migrations.configure(
+            ROOT, data_web=data_web, uploads_dir=uploads, meta_lock=_META_LOCK,
+            on_metadata_change=lambda: _CATALOG_CACHE.__setitem__("sig", None),
+            file_mode=_file_mode())
+
+
 def _save_dataset(dataset_id: str, body: dict) -> bool:
     with _META_LOCK:
         return _save_dataset_locked(dataset_id, body)
@@ -5630,6 +5647,8 @@ class AdminHandler(http.server.SimpleHTTPRequestHandler):
             self._serve_downloads(parsed)
         elif parsed.path == "/api/upload.php":
             self._guarded(self._handle_upload, parsed, body=None, raw=None)
+        elif parsed.path == "/api/migrations.php":
+            self._guarded(self._handle_migrations, parsed, body=None, raw=None)
         elif parsed.path in ("/api/auth.php", "/api/datasets.php", "/api/admin.php", "/api/telemetry.php", "/api/site.php"):
             self._guarded(self._handle_api, parsed, body=None)
         elif _is_forbidden_static(clean_path) or _has_dot_segment(clean_path) or "\x00" in clean_path:
@@ -6090,6 +6109,9 @@ class AdminHandler(http.server.SimpleHTTPRequestHandler):
         if parsed.path == "/api/upload.php":
             self._guarded(self._read_upload_post, parsed)
             return
+        if parsed.path == "/api/migrations.php":
+            self._guarded(self._read_migrations_post, parsed)
+            return
         limit = _API_BODY_LIMITS.get(parsed.path)
         if limit is None:
             self._reject(405, {"error": "Method not allowed"})
@@ -6162,6 +6184,66 @@ class AdminHandler(http.server.SimpleHTTPRequestHandler):
         if not isinstance(body, dict):
             body = {}
         self._handle_upload(parsed, body=body, raw=None)
+
+    def _read_migrations_post(self, parsed):
+        """A migrations POST: `unit_put` carries a unit blob as the RAW body (up to
+        32 MiB of PNG tiles, never base64), every other action a small JSON body.
+        Session and CSRF are checked BEFORE a byte is read, so an anonymous or forged
+        request cannot make the server buffer a 32 MiB body."""
+        params = dict(urllib.parse.parse_qsl(parsed.query))
+        session = _get_session(self._token())
+        if not session:
+            self._reject(401, {"error": "Not authenticated"})
+            return
+        ok, status, payload = _authorize_write(self.command, session, self.headers.get("X-CSRF-Token"))
+        if not ok:
+            self._reject(status, payload)
+            return
+        if params.get("action") == "unit_put":
+            length = self._content_length(dataset_migrations.MAX_UNIT_BODY)
+            if length is None:
+                return
+            raw = self._read_exact(length)
+            if raw is None:
+                self._reject(400, {"error": "short_body"})
+                return
+            self._handle_migrations(parsed, body={}, raw=raw)
+            return
+        length = self._content_length(64 * 1024)
+        if length is None:
+            return
+        raw = self._read_exact(length) if length else b"{}"
+        if raw is None:
+            self._reject(400, {"error": "short_body"})
+            return
+        try:
+            body = json.loads(raw.decode("utf-8"))
+        except Exception:
+            body = {}
+        self._handle_migrations(parsed, body=body if isinstance(body, dict) else {}, raw=None)
+
+    def _handle_migrations(self, parsed, body, raw):
+        """api/migrations.php — dataset format upgrades (SPEC DOCS/dataset-migrations).
+        Every action needs the admin session; the mutating ones POST + CSRF (checked
+        again here for the GET path, which only serves `status`)."""
+        params = dict(urllib.parse.parse_qsl(parsed.query))
+        action = params.get("action", "")
+        session = _get_session(self._token())
+        if not session:
+            self._json(401, {"error": "Not authenticated"})
+            return
+        if action in dataset_migrations.WRITE_ACTIONS:
+            ok, status, payload = _authorize_write(self.command, session, self.headers.get("X-CSRF-Token"))
+            if not ok:
+                self._json(status, payload)
+                return
+            upload_staging.ensure_dirs()   # asserts the deny-all guard of uploads/
+        elif action != "status" or self.command != "GET":
+            self._json(400, {"error": "Unknown action"})
+            return
+        _migrations_bind()
+        status, payload = dataset_migrations.handle(action, params, body, raw)
+        self._json_nostore(status, payload)
 
     def _read_exact(self, length: int):
         """Read exactly `length` bytes, or None if the peer hung up early.

@@ -200,6 +200,9 @@ function makeEnv({ dims = { x: 70, y: 52, z: 41, brickSize: BS, channels: 4 }, l
     const STUDIO_PREVIEW_MAX = 2048;
     const STUDIO_CONFIRM_BYTES = 256 * 1024 * 1024;
     const datasetMeta = { dimensions: { c: 4 } };
+    // Format 1 (no planes/): the bricks, as before.
+    const _planeTrees = new Map();
+    let _basePath = 'DATA_WEB/3d/demo';
     let _zstackActive = env.zstackActive;
     function _setSliceStatus() {}
     function _t(key, fallback) { return fallback; }
@@ -209,7 +212,8 @@ function makeEnv({ dims = { x: 70, y: 52, z: 41, brickSize: BS, channels: 4 }, l
       '_needsCoverageMask', '_withCoverageMask', '_nativeSliceChannels', '_nativePassPlan', '_atlasNativeBackend', '_planeNativeBackend',
       '_renderNativeSliceForStudio', '_studioGeometry', '_studioCalibrated', '_planeWorkerInstance', '_planeJob', '_studioCoverageMask',
       '_reducePlaneTile', '_nativeLabel', '_scaleCropRect', '_tf', '_nativePassEstimate', '_confirmLargeNativePass',
-      '_upgradeStudioSliceToNative', '_renderStudioPreviewSlice'].map(lift).join('\n')}
+      '_upgradeStudioSliceToNative', '_renderStudioPreviewSlice', '_planesBaseOnScreen', '_planesTreeOnScreen', '_planesServePass',
+      '_planesPassEstimate'].map(lift).join('\n')}
     return {
       upgrade: _upgradeStudioSliceToNative,
       native: _renderNativeSliceForStudio,

@@ -20,7 +20,7 @@ jobs:
       - uses: shivammathur/setup-php@v2
         with:
           php-version: '8.1'   # the advertised PHP floor for the fallback
-          extensions: zip, mbstring, sodium
+          extensions: zip, mbstring, sodium, gd
 
       - name: Changelog structure check
         run: python tools/check_version.py --no-tag

@@ -12,6 +12,7 @@
   <link rel="stylesheet" href="css/admpan.css">
   <link rel="stylesheet" href="css/admin-shell.css">
   <link rel="stylesheet" href="css/admin-upload.css">
+  <link rel="stylesheet" href="css/admin-updates.css">
   <script src="js/core/theme-boot.js" data-theme-key="adm-theme"></script>
 </head>
 <body data-page="admin">
@@ -166,6 +167,10 @@
         <i data-lucide="upload-cloud"></i>
         <span class="adm-nav-label" data-i18n="admin.navUpload">Import</span>
         <span class="adm-nav-dot" id="nav-upload-dot" style="display:none"></span>
+      </button>
+      <button class="adm-nav-item" data-tab="dataset-updates">
+        <i data-lucide="layers"></i>
+        <span class="adm-nav-label" data-i18n="dupd.nav">Data updates</span>
       </button>
       <button class="adm-nav-item" data-tab="stats">
         <i data-lucide="bar-chart-3"></i>
@@ -516,6 +521,11 @@
     <!-- ───────── TAB: DATASET TYPES (operator-editable type names) ───────── -->
     <section class="adm-tabpanel" id="tab-dataset-types" data-tab="dataset-types">
       <div class="adm-tab-inner" id="dataset-types-root"></div>
+    </section>
+
+    <!-- ───────── TAB: DATA UPDATES (dataset format migrations) ───────── -->
+    <section class="adm-tabpanel" id="tab-dataset-updates" data-tab="dataset-updates">
+      <div class="adm-tab-inner" id="dataset-updates-root"></div>
     </section>
 
     <!-- ───────── TAB: STATISTICS ───────── -->

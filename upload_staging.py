@@ -59,6 +59,7 @@ import hashlib
 import json
 import os
 import re
+import struct
 import shutil
 import tempfile
 import threading
@@ -171,6 +172,11 @@ TIER_CORE, TIER_PREVIEW, TIER_MID, TIER_FULL, TIER_EXTRA = 0, 1, 2, 3, 4
 
 _RE_PACK = re.compile(r"^lod(\d{1,2})/(c\d{1,2}|rgba)/pack_\d{1,6}\.bin$")
 _RE_TIMEPOINT = re.compile(r"^t(\d{1,6})/(.+)$")
+# Format-2 plane copy of the native level (DOCS/dataset-migrations/SPEC.md §3): one
+# tree at planes/ (a 3d dataset, or a single-frame timelapse), one per frame at
+# planes/tNNN/ (a timelapse). Nothing else is ever written there by the pipeline.
+_RE_PLANES = re.compile(r"^planes/(?:(t\d{3,6})/)?(manifest\.json|z\d{5,7}\.bin)\Z", re.ASCII)
+_PLANES_MAGIC = b"LPLN"
 
 # download/ originals. Deliberately data-only: no archive that a server might
 # expand, no markup, no script. `.zip` is the one container, and it is only ever
@@ -266,6 +272,14 @@ def classify_path(type_dir: str, rel: str):
         if ext not in _DOWNLOAD_EXT:
             return None
         return TIER_EXTRA, "download"
+
+    if rel.startswith("planes/"):
+        # Planes never gate opening a dataset (the bricks serve every cut until they
+        # arrive), so they travel last.
+        m = _RE_PLANES.match(rel)
+        if not m or type_dir not in VOLUME_TYPE_DIRS or (m.group(1) and type_dir != "live"):
+            return None
+        return TIER_EXTRA, ("planes_manifest" if m.group(2) == "manifest.json" else "planes_pack")
 
     if not rel.startswith("bricks/") or type_dir not in VOLUME_TYPE_DIRS:
         return None
@@ -934,6 +948,22 @@ def _validate_file_content(type_dir: str, rel: str, path: Path, kind: str | None
                 head = fh.read(16)
             if not head.startswith(_MAGIC["webp"][0]) and not head.startswith(_MAGIC["png"][0]):
                 return False, f"{kind}_not_image"
+            return True, None
+        if kind == "planes_manifest":
+            doc = _read_json(path)
+            if doc is None or doc.get("schema") != "lumen-planes-v1":
+                return False, "planes_manifest_invalid"
+            return True, None
+        if kind == "planes_pack":
+            # Magic, version 1 and a file long enough for its own entry table
+            # (16 + 12·C·TY·TX bytes, SPEC §3.2).
+            with path.open("rb") as fh:
+                head = fh.read(16)
+            if len(head) < 16 or head[:4] != _PLANES_MAGIC:
+                return False, "planes_pack_bad_magic"
+            ver, ch, tx, ty = struct.unpack_from("<HHHH", head, 4)
+            if ver != 1 or not ch or not tx or not ty or path.stat().st_size < 16 + 12 * ch * tx * ty:
+                return False, "planes_pack_bad_header"
             return True, None
         if kind == "extra" and rel.endswith(".glb"):
             with path.open("rb") as fh:

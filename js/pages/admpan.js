@@ -49,6 +49,7 @@ async function loadPageSystem() {
 
 registerTab({ id: 'datasets', titleKey: 'admin.navDatasets', titleDefault: 'Datasets', load: async () => { return (await import(`./admin/tab-datasets.js${V}`)).DatasetsTab; } });
 registerTab({ id: 'dataset-types', titleKey: 'dtypes.nav', titleDefault: 'Types de données', load: async () => { return (await import(`./admin/tab-dataset-types.js${V}`)).DatasetTypesTab; } });
+registerTab({ id: 'dataset-updates', titleKey: 'dupd.nav', titleDefault: 'Data updates', load: async () => { return (await import(`./admin/tab-dataset-updates.js${V}`)).DatasetUpdatesTab; } });
 registerTab({ id: 'upload', titleKey: 'admin.navUpload', titleDefault: 'Import', load: async () => { return (await import(`./admin/tab-upload.js${V}`)).UploadTab; } });
 registerTab({ id: 'stats', titleKey: 'admin.navStats', titleDefault: 'Statistiques', load: async () => { return (await import(`./admin/tab-stats.js${V}`)).StatsTab; } });
 registerTab({ id: 'plugins', titleKey: 'admin.navPlugins', titleDefault: 'Plugins', load: async () => { return (await import(`./admin/tab-plugins.js${V}`)).PluginsTab; } });

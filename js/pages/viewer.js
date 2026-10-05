@@ -2193,9 +2193,15 @@ const ViewerApp = (() => {
   async function _confirmLargeNativePass(spec) {
     if (!_zstackActive || !(Number(spec?.slabThickness) > 1)) return 0;
     const native = _nativePassEstimate(spec, 0);
+    // A format-2 tree reads the slab's planes instead of its bricks.
+    const planes = native ? await _planesPassEstimate(spec) : null;
+    if (native && planes) native.bytes = planes.bytes;
     if (!native || native.bytes <= STUDIO_CONFIRM_BYTES || typeof Dialog === 'undefined') return 0;
     const levels = Array.isArray(_brickManifest?.levels) ? _brickManifest.levels.length : (BrickLoader.getManifest?.()?.levels?.length || 1);
-    const lower = levels > 1 ? _nativePassEstimate(spec, 1) : null;
+    let lower = levels > 1 ? _nativePassEstimate(spec, 1) : null;
+    // Through the planes the native picture can cost less than the next level's bricks:
+    // offering the smaller picture for more bytes would be no choice at all.
+    if (lower && !(lower.bytes < native.bytes)) lower = null;
     const mb = (b) => String(Math.max(1, Math.round(b / 1e6)));
     const options = [
       { id: 'native', primary: !lower, variant: lower ? undefined : 'primary', label: _tf('studio.bigPassNative', 'Load native ({mb} MB)', { mb: mb(native.bytes) }) }
@@ -2210,9 +2216,13 @@ const ViewerApp = (() => {
     const choice = await Dialog.ask({
       icon: 'layers',
       title: _t('studio.bigPassTitle', 'Large native figure'),
-      message: _tf('studio.bigPassMessage', 'This figure projects {n} slices: its native picture needs every brick of them, about {mb} MB ({bricks} bricks).', {
-        n: Number(spec.slabThickness) || 1, mb: mb(native.bytes), bricks: native.bricks
-      }),
+      message: planes
+        ? _tf('studio.bigPassMessagePlanes', 'This figure projects {n} slices: its native picture reads {planes} stored planes, about {mb} MB ({tiles} image tiles).', {
+          n: Number(spec.slabThickness) || 1, mb: mb(native.bytes), planes: planes.planes, tiles: planes.tiles
+        })
+        : _tf('studio.bigPassMessage', 'This figure projects {n} slices: its native picture needs every brick of them, about {mb} MB ({bricks} bricks).', {
+          n: Number(spec.slabThickness) || 1, mb: mb(native.bytes), bricks: native.bricks
+        }),
       note: _t('studio.bigPassNote', 'Trim the stack with the z-stack browser\'s handles to load fewer slices.'),
       dismissId: 'keep',
       options
@@ -2675,6 +2685,77 @@ const ViewerApp = (() => {
     return wanted.length ? wanted : Array.from({ length: channelCount }, (_, c) => c);
   }
 
+  // ── Format-2 planes/ (the native level re-cut into XY planes, SPEC §3/§8) ──────
+  const _planeTrees = new Map();   // planes base → Promise<PlaneLoader tree | null>
+
+  /**
+   * The planes/ directory of the brick tree on screen: <ds>/planes, or
+   * <ds>/planes/tNNN for the timepoint of a timelapse. null when the dataset does not
+   * claim format 2, or is a staging preview (its bytes come through the blob proxy,
+   * whose `path` query cannot carry the packs' `?v=`).
+   */
+  function _planesBaseOnScreen() {
+    if (typeof PlaneLoader === 'undefined' || typeof PlaneCodec === 'undefined') return null;
+    if (!(Number(datasetMeta?.formatVersion) >= 2)) return null;
+    if (!_basePath || !_basePath.startsWith('DATA_WEB/')) return null;
+    const tps = _brickManifest?.timepoints;
+    if (tps && typeof tps === 'object') {
+      const tp = Number.isFinite(Number(_currentTimepoint)) ? Number(_currentTimepoint) : 0;
+      const key = `t${String(tp).padStart(3, '0')}`;
+      const row = tps[key] ?? tps[String(tp)] ?? tps[tp];
+      return row ? `${_basePath}/planes/${row.path || key}` : null;
+    }
+    return `${_basePath}/planes`;
+  }
+
+  /** The opened planes tree on screen (once per tree), or null — never throws. */
+  function _planesTreeOnScreen(dims0) {
+    const base = _planesBaseOnScreen();
+    if (!base || !dims0) return Promise.resolve(null);
+    let p = _planeTrees.get(base);
+    if (!p) {
+      const brickDir = datasetMeta?.qualities?.native?.directory || 'bricks';
+      p = PlaneLoader.open(base, {
+        dimensions: { x: dims0.x, y: dims0.y, z: dims0.z },
+        channels: Number(dims0.channels) > 0 ? Number(dims0.channels) : null,
+        sourceManifestUrl: `${_basePath}/${brickDir}/manifest.json`
+      }).catch((err) => {
+        console.warn(`[ViewerApp] ${base} is not usable; the Studio reads the bricks.`, err?.message || err);
+        return null;
+      });
+      _planeTrees.set(base, p);
+    }
+    return p;
+  }
+
+  /** A pass the planes can serve: an XY plane (or MIP slab) of the plane path at LOD0. */
+  function _planesServePass(passPlan, lod) {
+    return lod === 0 && passPlan?.path === 'plane' && Boolean(passPlan.plan) && !passPlan.plan.empty && passPlan.plan.axis === 'z';
+  }
+
+  /**
+   * What the planes would fetch for the native pass of `spec`: { bytes, tiles, planes }
+   * (an estimate from a sample of plane headers), or null when the planes cannot serve it.
+   */
+  async function _planesPassEstimate(spec) {
+    try {
+      const dims = BrickLoader.getDimensions(0);
+      if (!dims) return null;
+      const passPlan = _nativePassPlan(spec, dims, 0, null);
+      if (!_planesServePass(passPlan, 0)) return null;
+      const tree = await _planesTreeOnScreen(dims);
+      if (!tree) return null;
+      const channels = Math.min(4, Math.max(1, Number(dims.channels) || Number(datasetMeta?.dimensions?.c) || 1));
+      const chans = BrickLoader.getTransportEncoding?.() === 'raw-rgba-gzip'
+        ? Array.from({ length: channels }, (_, c) => c)
+        : _nativeSliceChannels(channels);
+      const est = await tree.estimate(passPlan.plan.voxels, chans, { x0: 0, y0: 0, x1: dims.x, y1: dims.y }, { sample: 16 });
+      return { bytes: est.bytes, tiles: est.tiles, planes: passPlan.plan.voxels.length };
+    } catch (err) {
+      return null;
+    }
+  }
+
   /**
    * How the native pass of `spec` at `lod` gets its voxels: 'plane' — an axis-aligned
    * plane of an unwarped volume read from a 2D array texture of exactly the voxel
@@ -2926,6 +3007,11 @@ const ViewerApp = (() => {
       return null;
     }
     if (!backend) backend = _atlasNativeBackend(dims, channels, bricks, lod);
+    // An XY cut of a format-2 tree reads its planes/: the voxels of the plane alone,
+    // not the 64 slices of every brick it crosses (any failure: the bricks, below).
+    const planesTree = backend.plane && _planesServePass(passPlan, lod)
+      ? await _planesTreeOnScreen(BrickLoader.getDimensions(0))
+      : null;
 
     const onProgress = typeof options.onProgress === 'function' ? options.onProgress : null;
     const onPartial = typeof options.onPartial === 'function' ? options.onPartial : null;
@@ -2934,6 +3020,10 @@ const ViewerApp = (() => {
     const partials = new Map();
     const pendingWrites = new Set();
     let written = 0;
+    // Chunks of the pass: bricks, or the non-empty plane tiles of a planes pass.
+    let chunkTotal = bricks.length;
+    // Plane-texture uploads the GPU refused, seen by a progressive refresh.
+    let gpuLost = 0;
     let fraction = 0;
     let lastStatusAt = 0;
     let bytesTotal = 0;
@@ -2960,8 +3050,8 @@ const ViewerApp = (() => {
       if (elapsed > 2000 && bytesTotal > 0 && bytesDone > 0.03 * bytesTotal && bytesDone < bytesTotal) {
         etaSeconds = ((bytesTotal - bytesDone) * elapsed) / bytesDone / 1000;
       }
-      _setSliceStatus(_tf('studio.nativeStatus', 'Native slice: {done}/{total} chunks, {pct}%', { done: written, total: bricks.length, pct }));
-      onProgress?.({ percent: pct, chunks: written, totalChunks: bricks.length, bytesDone, bytesTotal, etaSeconds, lod, dims });
+      _setSliceStatus(_tf('studio.nativeStatus', 'Native slice: {done}/{total} chunks, {pct}%', { done: written, total: chunkTotal, pct }));
+      onProgress?.({ percent: pct, chunks: written, totalChunks: chunkTotal, bytesDone, bytesTotal, etaSeconds, lod, dims });
     };
 
     // → { canvas, raw }: raw alone in raw mode (the Studio colours it; the same buffer
@@ -3000,7 +3090,7 @@ const ViewerApp = (() => {
       channelState,
       timepoint: _currentTimepoint,
       nativeChunks: written,
-      totalChunks: bricks.length,
+      totalChunks: chunkTotal,
       ...extra
     });
 
@@ -3009,7 +3099,7 @@ const ViewerApp = (() => {
     const PARTIAL_MIN_MS = 500;
     // A refresh is worth its render once a couple of percent of the chunks are new,
     // or after two seconds regardless (the first pack of a slow host).
-    const PARTIAL_MIN_CHUNKS = Math.max(1, Math.ceil(bricks.length / 50));
+    let PARTIAL_MIN_CHUNKS = Math.max(1, Math.ceil(bricks.length / 50));
     let partialTimer = null;
     let lastPartialAt = now();
     let lastPartialCost = 0;
@@ -3018,7 +3108,9 @@ const ViewerApp = (() => {
       if (!onPartial || controller.signal.aborted || !writtenSinceRender) return;
       if (needsMask && !coverageMask) return;
       const t0 = now();
-      written -= backend.flush();
+      const lost = backend.flush();
+      written -= lost;
+      gpuLost += lost;
       const picture = renderSlice();
       if (!picture) return;
       lastPartialAt = now();
@@ -3120,7 +3212,113 @@ const ViewerApp = (() => {
       }
     };
 
+    /**
+     * The planes pass: the plane texture filled from the planes/ tree — layer i of a
+     * single plane from plane z = layerBase + i, layer 0 of a MIP slab from the
+     * per-channel maximum over every voxel plane the slab samples (plan.voxels), the
+     * floor LUTs applied to the stored values as the brick compose does. Each band of
+     * tile rows is uploaded as it is decoded and its brick columns marked present, so
+     * the shader reads exactly the texels the bricks path writes. → a slice result,
+     * or throws (the caller then reads the bricks).
+     */
+    const planesPass = async (tree) => {
+      const plan = passPlan.plan;
+      const bs = plan.bs;
+      const plane = backend.plane;
+      if (tree.tileSize % bs !== 0) throw new Error(`tile size ${tree.tileSize} is not a multiple of the brick size ${bs}`);
+      const chans = wantedChannels || Array.from({ length: channels }, (_, c) => c);
+      const rect = { x0: 0, y0: 0, x1: dims.x, y1: dims.y };
+      const compose = { components: 4, slots: chans, luts: chans.map(c => floorLuts[c] || null) };
+      const signal = controller.signal;
+      const onBytes = (n) => {
+        bytesDone += n;
+        if (bytesDone > bytesTotal) bytesTotal = bytesDone;
+        lastBrickAt = now();
+        fraction = bytesTotal > 0 ? bytesDone / bytesTotal : 0;
+        status(false);
+      };
+      const onTiles = (n) => {
+        if (!(n > 0) || signal.aborted) return;
+        written += n;
+        // A MIP slab's texture is filled once every plane is in: nothing to refresh before.
+        if (!plan.reduced) {
+          writtenSinceRender += n;
+          schedulePartial();
+        }
+        status(false);
+      };
+      const cu = Math.ceil(plane.width / bs);
+      const upload = (layer) => (band) => {
+        if (signal.aborted) return;
+        if (!plane.upload(0, band.y0, band.width, band.height, layer, band.rgba)) throw new Error('the GPU refused a band of the plane texture');
+        const bv1 = Math.floor((band.y0 + band.height - 1) / bs);
+        for (let bv = Math.floor(band.y0 / bs); bv <= bv1; bv++) {
+          for (let bu = 0; bu < cu; bu++) plane.setPresent(bu, bv, layer, true);
+        }
+      };
+
+      const est = await tree.estimate(plan.voxels, chans, rect, { signal, onBytes, sample: plan.reduced ? 16 : 0 });
+      throwIfAborted(null);
+      chunkTotal = Math.max(1, est.tiles);
+      PARTIAL_MIN_CHUNKS = Math.max(1, Math.ceil(chunkTotal / 50));
+      bytesTotal = Math.max(bytesDone, est.bytes);
+      startedAt = now();
+      onProgress?.({ percent: 0, chunks: 0, totalChunks: chunkTotal, bytesDone, bytesTotal, etaSeconds: null, lod, dims });
+      if (plan.reduced) {
+        await tree.loadRegionMax(plan.voxels, chans, rect, { signal, compose, bands: true, onBand: upload(0), onBytes, onTiles, concurrency: 3 });
+      } else {
+        for (const z of plan.voxels) {
+          await tree.loadRegion(z, chans, rect, { signal, compose, bands: true, onBand: upload(z - plan.layerBase), onBytes, onTiles });
+          throwIfAborted(null);
+        }
+      }
+      await maskReady;
+      throwIfAborted(null);
+      cancelPartial();
+      gpuLost += backend.flush();
+      if (gpuLost) throw new Error(`the GPU refused ${gpuLost} band(s) of the plane texture`);
+      written = chunkTotal;
+      bytesTotal = bytesDone;
+      fraction = 1;
+      status(true);
+      const picture = renderSlice();
+      if (backend.flush()) throw new Error('the GPU refused part of the plane texture');
+      if (!picture) return null;
+      _setSliceStatus(_tf('studio.nativeReady', 'Native slice ready ({n} chunks).', { n: chunkTotal }));
+      return sliceResult(picture, {
+        quality: 'native',
+        missingChunks: 0,
+        path: 'planes',
+        bytesTotal,
+        elapsedMs: now() - startedAt,
+        netMs: lastBrickAt ? Math.max(1, lastBrickAt - startedAt) : 0
+      });
+    };
+
     try {
+      if (planesTree) {
+        try {
+          const result = await planesPass(planesTree);
+          if (result) return result;
+        } catch (err) {
+          if (controller.signal.aborted || err?.name === 'AbortError') throw new DOMException('Native slice render cancelled', 'AbortError');
+          console.warn('[ViewerApp] Native Studio pass: planes/ failed; reading the bricks instead.', err?.message || err);
+        }
+        // The bricks, from scratch, on a fresh plane texture.
+        cancelPartial();
+        const used = backend;
+        backend = null;
+        used.dispose();
+        backend = _planeNativeBackend(passPlan.plan, dims, channels);
+        written = 0;
+        writtenSinceRender = 0;
+        gpuLost = 0;
+        fraction = 0;
+        bytesDone = 0;
+        lastBrickAt = 0;
+        chunkTotal = bricks.length;
+        PARTIAL_MIN_CHUNKS = Math.max(1, Math.ceil(bricks.length / 50));
+      }
       _setSliceStatus(_tf('studio.nativePreparing', 'Preparing the native slice ({n} chunks)…', { n: bricks.length }));
       const pairs = [];
       for (const brick of bricks) {
@@ -3175,7 +3373,7 @@ const ViewerApp = (() => {
     } finally {
       cancelPartial();
       partials.clear();
-      backend.dispose();
+      backend?.dispose();
       // The shared slicer programs and tile pass are this pass's to release only while
       // no other pass has taken over.
       if (_nativeSliceAbort === controller || !_nativeSliceAbort) VolumeSlicer.releaseForeign?.();

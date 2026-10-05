@@ -10,6 +10,7 @@ HERE = Path(__file__).resolve().parent
 if str(HERE) not in sys.path:
     sys.path.insert(0, str(HERE))
 from run_preprocess import merge_curated, atomic_write_json, read_json_file  # noqa: E402
+import planes_writer  # noqa: E402
 
 COLORS = ["#00FF00", "#00AAFF", "#FF00FF", "#FF0000", "#FFFF00", "#00FFFF"]
 
@@ -190,9 +191,16 @@ def generate_catalog_metadata(temp_dir: Path, output_dir: Path, existing_path: P
             "gamma": 1.0
         })
 
+    # Format 2 = the XY planes step 3 wrote (planes_writer). Claimed only when every
+    # tree names the bricks manifest as it stands now; otherwise the dataset reads as
+    # format 1 and the admin's Data updates tab produces the planes.
+    format_version = (planes_writer.FORMAT_VERSION if planes_writer.planes_complete(output_dir)
+                      else 1)
+
     now = datetime.now().isoformat()
     metadata = {
         "id": f"{dataset_type}/{dataset_name}",
+        "formatVersion": format_version,
         "name": shown_name,
         "type": dataset_type,
         "stage": stage,
@@ -290,6 +298,9 @@ def _inject_histograms(temp_dir, manifest_path, manifest, lod_levels, n_ch, n_tp
                     else packer.histograms_for_timepoint(temp_dir, t_idx, n_ch, coarsest))
     atomic_write_json(manifest_path, manifest, separators=(",", ":"))
     print(f"[CATALOG] Injected histograms into manifest.json")
+    # The planes record the bricks manifest's sha256: follow its new bytes.
+    if (manifest_path.parent.parent / "planes").is_dir():
+        planes_writer.write_manifests(manifest_path.parent.parent)
 
 
 if __name__ == "__main__":

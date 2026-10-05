@@ -2,9 +2,9 @@
 """Generate the self-contained Windows launcher `run_preprocess.bat`.
 
 Reads `launcher_template.bat.in`, injects configuration, and appends every
-pipeline script (run_preprocess.py, the numbered steps, the 2D importer and the
-tracking attachment) base64-encoded so the single .bat can reconstruct them on a
-machine that has never seen Python.
+pipeline script (run_preprocess.py, the numbered steps, the planes writer, the 2D
+importer and the tracking attachment) base64-encoded so the single .bat can
+reconstruct them on a machine that has never seen Python.
 
 Run this whenever a pipeline .py or the template changes:
     python build_launcher.py
@@ -26,6 +26,8 @@ SCRIPTS = [
     "2-image_processor.py",
     "3-chunk_packer.py",
     "4-catalog_generator.py",
+    # Imported by steps 2-4: the XY planes of the native level (dataset format 2).
+    "planes_writer.py",
     "2d_importer.py",
     # Attaching a tracking that ships as a .imaris_track container needs nothing more.
     # Extracting one from a .ims or a workbook also needs the lab's SCRIPTS/Analysis.py
@@ -73,7 +75,7 @@ def main() -> None:
             sys.exit(f"[FATAL] Script du pipeline introuvable : {path}")
         embedded += encode_block(index, path)
 
-    # Download-bundle tool (index 5), embedded from ../tools/.
+    # Download-bundle tool (the index after the scripts), embedded from ../tools/.
     dl_path = HERE.parent / "tools" / DOWNLOAD_TOOL
     if not dl_path.exists():
         sys.exit(f"[FATAL] Outil download introuvable : {dl_path}")

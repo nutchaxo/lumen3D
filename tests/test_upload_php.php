@@ -49,8 +49,25 @@ $allowed = [
     ['live', 'model.glb'], ['live', 'tracks.json.gz'],
     ['2d', 'metadata.json'], ['2d', 'preview.webp'], ['2d', 'image.webp'],
     ['2d', 'download/photo.tif'],
+    // Format-2 planes (DOCS/dataset-migrations/SPEC.md §11).
+    ['3d', 'planes/manifest.json'], ['3d', 'planes/z00000.bin'], ['3d', 'planes/z00256.bin'],
+    ['live', 'planes/t000/manifest.json'], ['live', 'planes/t012/z00063.bin'], ['live', 'planes/manifest.json'],
 ];
 foreach ($allowed as [$t, $p]) check("allow  $t/$p", lumen_up_classify($t, $p) !== null);
+check('planes ride in the last tier', lumen_up_classify('3d', 'planes/z00001.bin') === [LUMEN_UP_TIER_EXTRA, 'planes_pack']
+    && lumen_up_classify('live', 'planes/t003/manifest.json') === [LUMEN_UP_TIER_EXTRA, 'planes_manifest']);
+$tmpPlane = tempnam(sys_get_temp_dir(), 'lpl');
+file_put_contents($tmpPlane, 'LPLN' . pack('vvvvV', 1, 1, 1, 1, 0) . pack('PV', 0, 0));
+check('a well-formed plane pack passes its content check', lumen_up_validate_file('3d', 'planes/z00000.bin', $tmpPlane, 'planes_pack') === [true, null]);
+file_put_contents($tmpPlane, 'LPLN' . pack('vvvvV', 1, 4, 8, 8, 0));
+check('a plane pack shorter than its entry table is refused', lumen_up_validate_file('3d', 'planes/z00000.bin', $tmpPlane, 'planes_pack') === [false, 'planes_pack_bad_header']);
+file_put_contents($tmpPlane, str_repeat("\0", 40));
+check('a plane pack without its magic is refused', lumen_up_validate_file('3d', 'planes/z00000.bin', $tmpPlane, 'planes_pack') === [false, 'planes_pack_bad_magic']);
+file_put_contents($tmpPlane, '{"schema":"other"}');
+check('a planes manifest of another schema is refused', lumen_up_validate_file('3d', 'planes/manifest.json', $tmpPlane, 'planes_manifest') === [false, 'planes_manifest_invalid']);
+file_put_contents($tmpPlane, '{"schema":"lumen-planes-v1"}');
+check('a planes manifest passes its content check', lumen_up_validate_file('3d', 'planes/manifest.json', $tmpPlane, 'planes_manifest') === [true, null]);
+@unlink($tmpPlane);
 
 $refused = [
     ['3d', 'evil.php'], ['3d', '.htaccess'], ['3d', 'index.html'],
@@ -64,6 +81,9 @@ $refused = [
     ['2d', 'model.glb'],
     // The former spellings are not types any more: no alias, nothing is staged under them.
     ['fixed', 'metadata.json'], ['wholemount', 'image.webp'],
+    ['2d', 'planes/manifest.json'], ['3d', 'planes/t000/z00000.bin'], ['3d', 'planes/z12.bin'],
+    ['3d', 'planes/z00000.bin.php'], ['3d', 'planes/index.html'], ['3d', 'planes/.planes-incoming/z00000.bin'],
+    ['live', 'planes/t1/z00000.bin'], ['live', 'planes/t000/sub/z00000.bin'], ['3d', "planes/z00000.bin\n"],
 ];
 foreach ($refused as [$t, $p]) check("refuse $t/$p", lumen_up_classify($t, $p) === null);
 

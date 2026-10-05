@@ -141,6 +141,15 @@ function lumen_up_classify(string $type, $rel): ?array {
         return [LUMEN_UP_TIER_EXTRA, 'download'];
     }
 
+    if (strncmp($rel, 'planes/', 7) === 0) {
+        // Format-2 plane copy of the native level (DOCS/dataset-migrations/SPEC.md §3):
+        // planes/ for one tree, planes/tNNN/ per frame of a timelapse. It never gates
+        // opening a dataset (the bricks serve every cut until it arrives): last tier.
+        if (!preg_match('#^planes/(?:(t[0-9]{3,6})/)?(manifest\.json|z[0-9]{5,7}\.bin)$#D', $rel, $m)) return null;
+        if (!in_array($type, LUMEN_UP_VOLUME_TYPES, true) || ($m[1] !== '' && $type !== 'live')) return null;
+        return [LUMEN_UP_TIER_EXTRA, $m[2] === 'manifest.json' ? 'planes_manifest' : 'planes_pack'];
+    }
+
     if (strncmp($rel, 'bricks/', 7) !== 0 || !in_array($type, LUMEN_UP_VOLUME_TYPES, true)) return null;
     $inner = substr($rel, 7);
     if ($inner === 'manifest.json') return [LUMEN_UP_TIER_CORE, 'manifest'];
@@ -696,6 +705,20 @@ function lumen_up_validate_file(string $type, string $rel, string $path, ?string
     if (in_array($kind, ['thumbnail', 'preview', 'image'], true)) {
         $head = lumen_up_head($path, 16);
         if (strncmp($head, 'RIFF', 4) !== 0 && strncmp($head, "\x89PNG\r\n\x1a\n", 8) !== 0) return [false, $kind . '_not_image'];
+        return [true, null];
+    }
+    if ($kind === 'planes_manifest') {
+        $doc = lumen_up_read_json($path);
+        if ($doc === null || ($doc['schema'] ?? null) !== 'lumen-planes-v1') return [false, 'planes_manifest_invalid'];
+        return [true, null];
+    }
+    if ($kind === 'planes_pack') {
+        // Magic, version 1 and a file long enough for its own entry table (16 + 12·C·TY·TX, SPEC §3.2).
+        $head = lumen_up_head($path, 16);
+        if (strlen($head) < 16 || strncmp($head, 'LPLN', 4) !== 0) return [false, 'planes_pack_bad_magic'];
+        $h = unpack('vver/vch/vtx/vty', substr($head, 4, 8));
+        clearstatcache(true, $path);
+        if ($h['ver'] !== 1 || !$h['ch'] || !$h['tx'] || !$h['ty'] || (int)@filesize($path) < 16 + 12 * $h['ch'] * $h['tx'] * $h['ty']) return [false, 'planes_pack_bad_header'];
         return [true, null];
     }
     if ($kind === 'extra' && substr($rel, -4) === '.glb') {

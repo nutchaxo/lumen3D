@@ -135,11 +135,11 @@ const bus = await import(pathToFileURL(path.join(ROOT, 'js/pages/admin/bus.js'))
   const entry = read('js/pages/admpan.js');
   const staticImports = entry.match(/^import .* from '\.\/admin\/[^']+';/gm) || [];
   assert.equal(staticImports.length, 1, 'admpan.js statically imports only the shell');
-  assert.equal((entry.match(/registerTab\(/g) || []).length, 15, 'all fifteen tabs are still registered');
+  assert.equal((entry.match(/registerTab\(/g) || []).length, 16, 'all sixteen tabs are still registered');
   // Cache busting: the release build stamps ?v= on STATIC specifiers only, so every
   // lazily imported tab (and the page-system scripts) must carry the entry's own stamp.
   const dyn = entry.match(/import\(`[^`]*`\)/g) || [];
-  assert.equal(dyn.length, 15, 'one lazy import per tab');
+  assert.equal(dyn.length, 16, 'one lazy import per tab');
   for (const d of dyn) assert.ok(d.endsWith('${V}`)'), `${d} inherits the entry's ?v= stamp`);
   assert.match(entry, /s\.src = src \+ V;/, 'page-system scripts inherit the stamp too');
   assert.match(read('js/pages/admin/upload-manager.js'), /upload-worker\.js\$\{new URL\(import\.meta\.url\)\.search\}/, 'the upload worker URL inherits the stamp');

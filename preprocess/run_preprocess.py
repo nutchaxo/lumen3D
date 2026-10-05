@@ -15,7 +15,7 @@ import traceback
 from datetime import datetime
 from pathlib import Path
 
-__version__ = "0.19.0"
+__version__ = "0.20.0"
 
 # ── Paths ──────────────────────────────────────────────────────────────────────
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -426,7 +426,7 @@ def _resolve_download_script():
 #
 # Entries the pipeline owns inside a dataset folder. Everything else there — download/,
 # gallery/, any file the operator dropped in — is never touched.
-PIPELINE_ENTRIES = ("bricks", "thumbnail.webp")
+PIPELINE_ENTRIES = ("bricks", "planes", "thumbnail.webp")
 TRACKING_ENTRIES = ("tracks.json", "tracks.json.gz", "model.glb")
 SWAP_SUFFIX = ".pre-swap"
 SWAP_MARKER = ".swap-in-progress"

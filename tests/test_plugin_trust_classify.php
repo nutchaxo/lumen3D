@@ -1,12 +1,13 @@
 <?php
 /* PHP twin of tests/test_plugin_trust_classify.py — asserts admin_classify_plugin
    agrees with dev_server.py:_classify_plugin on the key semantics: sandbox:true
-   routes to the sandbox lane, dev-trust is loopback-gated, sandboxed-approval wins,
+   routes to the sandbox lane, dev-trust needs the explicit LUMEN_DEV_TRUST=1 flag
+   (never the client address), sandboxed-approval wins,
    hash-pinning + cap-subset void a stale approval. Uses the bundled fixtures. */
 declare(strict_types=1);
 require_once __DIR__ . '/../api/_admin_lib.php';
 
-$_SERVER['REMOTE_ADDR'] = '127.0.0.1';  // loopback → dev-trust active (a .git checkout)
+putenv('LUMEN_DEV_TRUST=1');            // explicit flag on a .git checkout → dev-trust active
 $SB  = modules_dir() . '/tools/screenshot-sandboxed';  // sandbox:true
 $REG = modules_dir() . '/tools/screenshot';            // regular in-page
 $hSB = admin_plugin_hash(admin_plugin_file_hashes($SB));
@@ -19,8 +20,15 @@ check('dev + sandbox:true -> sandboxed (author lane)',
 check('dev + regular -> dev (in-page)',
     admin_classify_plugin('tools/screenshot', $REG, [], null)['tier'] === 'dev');
 
+putenv('LUMEN_DEV_TRUST');              // flag off → NO dev-trust, whatever the address
+$_SERVER['REMOTE_ADDR'] = '127.0.0.1';   // a loopback reverse proxy makes every visitor "local"
+check('loopback without the flag -> untrusted (no address-based dev-trust)',
+    admin_classify_plugin('tools/screenshot', $REG, [], null)['tier'] === 'untrusted');
+$_SERVER['REMOTE_ADDR'] = '';
+check('empty REMOTE_ADDR without the flag -> untrusted',
+    admin_classify_plugin('tools/screenshot', $REG, [], null)['tier'] === 'untrusted');
 $_SERVER['REMOTE_ADDR'] = '192.168.1.9';  // LAN client → NO dev-trust
-check('LAN + regular -> untrusted (loopback gate)',
+check('LAN + regular -> untrusted',
     admin_classify_plugin('tools/screenshot', $REG, [], null)['tier'] === 'untrusted');
 check('LAN + sandboxed approval (hash ok) -> sandboxed (wins)',
     admin_classify_plugin('tools/screenshot-sandboxed', $SB,

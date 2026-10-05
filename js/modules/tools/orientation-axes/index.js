@@ -237,7 +237,16 @@ PluginRegistry.implement('orientation-axes', {
     canvas.width = 128;
     canvas.height = 64;
     const ctx = canvas.getContext('2d');
-    ctx.font = 'bold 44px Inter, sans-serif';
+    // A renamed arm can be much wider than the one-letter default: shrink the
+    // font until the text fits the canvas, so a long name is never cut off.
+    let size = 44;
+    ctx.font = `bold ${size}px Inter, sans-serif`;
+    const width = typeof ctx.measureText === 'function' ? ctx.measureText(text).width : 0;
+    const room = canvas.width - 8;
+    if (width > room) {
+      size = Math.max(12, Math.floor(size * room / width));
+      ctx.font = `bold ${size}px Inter, sans-serif`;
+    }
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     ctx.fillStyle = '#' + colorHex.toString(16).padStart(6, '0');
@@ -351,11 +360,12 @@ PluginRegistry.implement('orientation-axes', {
       // The embryo is at cube.quaternion.
       // The calibration base aligns the embryo to the axes.
       // Q_world = Q_cube * Q_base^{-1}
-      const invBase = (this._baseQuaternion || new THREE.Quaternion()).clone().invert();
-      const finalQ = cube.quaternion.clone().multiply(invBase);
-      this._group.quaternion.copy(finalQ);
+      const invBase = this._tmpInv || (this._tmpInv = new THREE.Quaternion());
+      if (this._baseQuaternion) invBase.copy(this._baseQuaternion).invert(); else invBase.identity();
+      this._group.quaternion.copy(cube.quaternion).multiply(invBase);
 
-      const worldPos = this._localPos.clone().applyQuaternion(cube.quaternion).add(cube.position);
+      const worldPos = this._tmpPos || (this._tmpPos = new THREE.Vector3());
+      worldPos.copy(this._localPos).applyQuaternion(cube.quaternion).add(cube.position);
       this._group.position.copy(worldPos);
     }
 
@@ -520,8 +530,9 @@ PluginRegistry.implement('orientation-axes', {
   },
 
   setState(s) {
-    if (typeof s?.localPos === 'object') {
-      this._localPos.set(s.localPos.x, s.localPos.y, s.localPos.z);
+    const lp = s?.localPos;
+    if (lp && typeof lp === 'object' && [lp.x, lp.y, lp.z].every(Number.isFinite)) {
+      this._localPos.set(lp.x, lp.y, lp.z);
     }
     if (typeof s?.visible === 'boolean' && s.visible !== this._visible) {
       this.activate();

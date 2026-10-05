@@ -10,10 +10,16 @@ PluginRegistry.implement('screenshot', {
   async activate() {
     const ctx = this._ctx;
     if (!ctx) return;
-    const blob = await ctx.getCanvasBlob({ mime: 'image/png', quality: 0.95 });
-    if (!blob) return;
+    const fail = () => ctx.ui?.toast?.(ctx.i18n?.t?.('failed') ?? 'Screenshot failed');
+    let blob = null;
+    try {
+      blob = await ctx.getCanvasBlob({ mime: 'image/png', quality: 0.95 });
+    } catch (err) {
+      console.warn('[screenshot] capture failed:', err);
+    }
+    if (!blob) { fail(); return; }
     const meta = ctx.dataset.getMeta();
-    const name = meta ? meta.name : 'viewer';
+    const name = String(meta?.name || 'viewer').replace(/[^\w.-]+/g, '_');
     if (typeof ExportManager !== 'undefined') {
       ExportManager.downloadBlob(blob, `${name}_screenshot.png`);
     }

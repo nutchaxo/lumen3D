@@ -36,17 +36,23 @@ function buildFrameIndex(timepoints) {
   return { map, frameCount: sorted.length, sorted };
 }
 
+/** 6 hex digits, or the 3-digit shorthand expanded (#fa0 -> ffaa00); null when neither. */
+function hexDigits(hex) {
+  let s = String(hex || '').replace('#', '').trim().toLowerCase();
+  if (/^[0-9a-f]{3}$/.test(s)) s = s[0] + s[0] + s[1] + s[1] + s[2] + s[2];
+  return /^[0-9a-f]{6}$/.test(s) ? s : null;
+}
+
 function hexToRgb(hex) {
-  const s = String(hex || '').replace('#', '');
-  if (s.length !== 6) return [1, 1, 1];
+  const s = hexDigits(hex);
+  if (!s) return [1, 1, 1];
   const n = parseInt(s, 16);
-  if (!Number.isFinite(n)) return [1, 1, 1];
   return [((n >> 16) & 255) / 255, ((n >> 8) & 255) / 255, (n & 255) / 255];
 }
 
 function normalizeHex(hex) {
-  const s = String(hex || '').replace('#', '').toLowerCase();
-  return /^[0-9a-f]{6}$/.test(s) ? `#${s}` : '#ffffff';
+  const s = hexDigits(hex);
+  return s ? `#${s}` : '#ffffff';
 }
 
 /** A lineage reference may name the cell key, its `id` field or its Imaris
@@ -71,6 +77,8 @@ function makeCellResolver(cells, ids) {
     return -1;
   };
 }
+
+const MAX_SLOT_TABLE_ENTRIES = 1 << 28;   // 1 GiB of Int32
 
 function asList(value) {
   if (Array.isArray(value)) return value;
@@ -130,14 +138,22 @@ function packTracks(doc, post = () => {}) {
   // Pass 1 — how many cells exist per frame. Cells appear and disappear (324 at
   // t=1, 348 at t=10, 65 at t=30 on the reference series): drawing a fixed count
   // would leave hundreds of stale points frozen at their last known position.
-  const counts = new Uint16Array(frameCount);
+  // 32-bit tables: a 16-bit count or slot index wraps silently past 65 535 cells (or cells
+  // alive in one frame) and the overlay would then draw and pick the wrong cells.
+  // A malformed spot (missing or non-finite coordinate) is skipped and counted, never
+  // allowed to drop the whole layer: one bad row in an export must not hide every cell.
+  const isPosition = (v) => !!v && v.length >= 3
+    && Number.isFinite(+v[0]) && Number.isFinite(+v[1]) && Number.isFinite(+v[2]);
+  const counts = new Uint32Array(frameCount);
   let unmapped = 0;
+  let malformed = 0;
   for (const id of ids) {
     const p = cells[id] && cells[id].positions;
     if (!p) continue;
     for (const key in p) {
       const f = keyToFrame.get(key);
       if (f === undefined) { unmapped++; continue; }
+      if (!isPosition(p[key])) { malformed++; continue; }
       counts[f]++;
     }
   }
@@ -147,12 +163,12 @@ function packTracks(doc, post = () => {}) {
   const stride = maxN * 3;
   const posStab = new Float32Array(frameCount * stride);
   const posRaw = new Float32Array(frameCount * stride);
-  const cellIdx = new Uint16Array(frameCount * maxN);
+  const cellIdx = new Uint32Array(frameCount * maxN);
   // One colour per CELL, not per cell per frame: a cell's region never changes,
   // so a per-frame colour array would be 30x the same bytes.
   const palette = new Float32Array(cellTotal * 3);
   const regions = new Array(cellTotal);
-  const cursor = new Uint16Array(frameCount);
+  const cursor = new Uint32Array(frameCount);
   let hasRawAll = true;
 
   // Per-cell analysis tables.
@@ -160,13 +176,20 @@ function packTracks(doc, post = () => {}) {
   const parent = new Int32Array(cellTotal).fill(-1);
   const daughterLists = new Array(cellTotal);
   const flags = new Uint8Array(cellTotal);          // bit 0 mitosis, bit 1 fusion
-  const regionIdx = new Uint16Array(cellTotal);
+  const regionIdx = new Uint32Array(cellTotal);
   const regionNames = [];
   const regionColors = [];
   const regionOf = new Map();
-  const firstFrame = new Int16Array(cellTotal).fill(-1);
-  const lastFrame = new Int16Array(cellTotal).fill(-1);
-  const cellFrameSlot = new Int32Array(cellTotal * frameCount).fill(-1);
+  const firstFrame = new Int32Array(cellTotal).fill(-1);
+  const lastFrame = new Int32Array(cellTotal).fill(-1);
+  // Dense cells x frames table (one array read answers "where is cell c at frame f"). It is
+  // the one structure that grows with the product, so refuse a size no tab could hold with a
+  // message that says why, instead of an opaque RangeError from the allocator.
+  const slotEntries = cellTotal * frameCount;
+  if (slotEntries > MAX_SLOT_TABLE_ENTRIES) {
+    throw new Error(`tracks.json: ${cellTotal} cells x ${frameCount} frames needs a ${slotEntries}-entry slot table (limit ${MAX_SLOT_TABLE_ENTRIES}); split the series or track fewer cells`);
+  }
+  const cellFrameSlot = new Int32Array(slotEntries).fill(-1);
   const hasRawCell = new Uint8Array(cellTotal);
 
   for (let c = 0; c < cellTotal; c++) {
@@ -197,11 +220,12 @@ function packTracks(doc, post = () => {}) {
     for (const key in p) {
       const f = keyToFrame.get(key);
       if (f === undefined) continue;
+      const v = p[key];
+      if (!isPosition(v)) continue;
       const slot = cursor[f]++;
       const o = f * stride + slot * 3;
-      const v = p[key];
       posStab[o] = v[0]; posStab[o + 1] = v[1]; posStab[o + 2] = v[2];
-      const r = raw && raw[key];
+      const r = raw && isPosition(raw[key]) ? raw[key] : null;
       // No raw pair for this timepoint: fall back to the stabilised value rather
       // than leaving a zero, which would park a point at the acquisition origin.
       posRaw[o] = r ? r[0] : v[0];
@@ -236,7 +260,7 @@ function packTracks(doc, post = () => {}) {
 
   return {
     phase: 'done',
-    frameCount, maxN, cellTotal, hasRaw: hasRawAll, unmapped,
+    frameCount, maxN, cellTotal, hasRaw: hasRawAll, unmapped, malformed,
     ids, trackIds, regions, regionNames, regionColors,
     timepoints,
     posStab, posRaw, cellIdx, counts, palette,

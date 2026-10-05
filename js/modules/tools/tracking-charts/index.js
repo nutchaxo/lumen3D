@@ -21,6 +21,9 @@ PluginRegistry.implement('tracking-charts', {
   _scale: 'linear',
   _plotly: null,
   _renderedIn: null,      // { stabilized, threshold } of the last plot
+  _cache: null,           // { data, map: key -> series } — a series is a pure function of its key
+  _optionsTimer: null,
+  _unsubLang: null,
 
   METRICS: ['population', 'velocity', 'neighbors', 'mitoses'],
   PLOTLY_SRC: 'js/vendor/plotly.min.js',
@@ -41,12 +44,18 @@ PluginRegistry.implement('tracking-charts', {
     });
     this._unsubs = [
       this._T.on('loaded', () => this._render()),
-      this._T.on('options', () => this._render()),
+      // The neighbour radius is the only option a plot depends on, and the slider
+      // fires per tick: wait for it to settle, and ignore it for other metrics.
+      this._T.on('options', () => {
+        if (this._metric !== 'neighbors') return;
+        clearTimeout(this._optionsTimer);
+        this._optionsTimer = setTimeout(() => { this._optionsTimer = null; this._render(); }, 160);
+      }),
       // Only the frame of REFERENCE matters here (stabilised vs raw); the frame
       // index does not, so a scrub never re-plots.
       this._T.on('frame', (d) => { if (this._renderedIn && this._renderedIn.stabilized !== Boolean(d.stabilized)) this._render(); })
     ];
-    ctx.i18n.onLanguageChange?.(() => { this._applyLabels(); this._render(); });
+    this._unsubLang = ctx.i18n.onLanguageChange?.(() => { this._applyLabels(); this._render(); }) || null;
     return this;
   },
 
@@ -82,9 +91,17 @@ PluginRegistry.implement('tracking-charts', {
   dispose() {
     this._unsubs.forEach(fn => fn());
     this._unsubs = [];
+    this._unsubLang?.();
+    this._unsubLang = null;
+    clearTimeout(this._optionsTimer);
+    this._optionsTimer = null;
+    this._cache = null;
+    this._open = false;
     if (this._els?.graph && window.Plotly) { try { Plotly.purge(this._els.graph); } catch (_) { /* nothing to purge */ } }
     this._panel?.remove();
     this._panel = null;
+    this._els = null;
+    this._renderedIn = null;
   },
 
   // ── Series (pure functions of the packed tables) ──────────
@@ -101,15 +118,38 @@ PluginRegistry.implement('tracking-charts', {
     const um = [0, 0, 0], prev = [0, 0, 0];
 
     if (metric === 'neighbors') {
+      // Cells are bucketed in a grid of edge `radius`: every neighbour of a cell
+      // lies in the 27 buckets around it, so a frame costs O(n) instead of O(n^2).
+      const r2 = radius * radius;
+      const cell = Math.max(radius, 1e-6);
+      const key = (ix, iy, iz) => `${ix},${iy},${iz}`;
       for (let f = 0; f < F; f++) {
         const cells = this._T.cellsAt(f);
-        const pts = cells.map(c => this._T.positionUm(c, f));
+        const xyz = new Float64Array(cells.length * 3);
+        const present = new Uint8Array(cells.length);
+        const buckets = new Map();
         for (let i = 0; i < cells.length; i++) {
-          if (!pts[i]) continue;
+          const p = this._T.positionUm(cells[i], f, {}, um);
+          if (!p) continue;
+          xyz[i * 3] = p[0]; xyz[i * 3 + 1] = p[1]; xyz[i * 3 + 2] = p[2];
+          present[i] = 1;
+          const k = key(Math.floor(p[0] / cell), Math.floor(p[1] / cell), Math.floor(p[2] / cell));
+          const b = buckets.get(k);
+          if (b) b.push(i); else buckets.set(k, [i]);
+        }
+        for (let i = 0; i < cells.length; i++) {
+          if (!present[i]) continue;
+          const x0 = xyz[i * 3], y0 = xyz[i * 3 + 1], z0 = xyz[i * 3 + 2];
+          const cx = Math.floor(x0 / cell), cy = Math.floor(y0 / cell), cz = Math.floor(z0 / cell);
           let count = 0;
-          for (let j = 0; j < cells.length; j++) {
-            if (i === j || !pts[j]) continue;
-            if (Math.hypot(pts[i][0] - pts[j][0], pts[i][1] - pts[j][1], pts[i][2] - pts[j][2]) <= radius) count++;
+          for (let ix = cx - 1; ix <= cx + 1; ix++) for (let iy = cy - 1; iy <= cy + 1; iy++) for (let iz = cz - 1; iz <= cz + 1; iz++) {
+            const b = buckets.get(key(ix, iy, iz));
+            if (!b) continue;
+            for (const j of b) {
+              if (j === i) continue;
+              const dx = x0 - xyz[j * 3], dy = y0 - xyz[j * 3 + 1], dz = z0 - xyz[j * 3 + 2];
+              if (dx * dx + dy * dy + dz * dz <= r2) count++;
+            }
           }
           const r = data.regionIdx[cells[i]];
           sums[r][f] += count; n[r][f]++;
@@ -155,6 +195,22 @@ PluginRegistry.implement('tracking-charts', {
       }
     }
     return this._pack(data, x, sums, n, metric === 'velocity');
+  },
+
+  /** series() memoised on everything it depends on: the metric, the frame of
+   *  reference on screen and (for the neighbours) the radius. Switching the scale
+   *  or the language re-plots without recomputing. */
+  _cachedSeries(metric) {
+    const data = this._T.getData();
+    if (!this._cache || this._cache.data !== data) this._cache = { data, map: new Map() };
+    const radius = this._T.getOptions().neighborThresholdUm;
+    const key = `${metric}|${this._T.isStabilized()}|${metric === 'neighbors' ? radius : ''}`;
+    let rows = this._cache.map.get(key);
+    if (!rows) {
+      rows = this.series(metric);
+      this._cache.map.set(key, rows);
+    }
+    return rows;
   },
 
   _pack(data, x, sums, n, average) {
@@ -209,7 +265,7 @@ PluginRegistry.implement('tracking-charts', {
     this._els.status.textContent = '';
     this._ensurePlotly().then(() => {
       if (!this._open || !this._T.getData()) return;
-      const series = this.series(this._metric);
+      const series = this._cachedSeries(this._metric);
       const bar = this._metric === 'mitoses';
       const traces = series.map(row => ({
         x: row.x,

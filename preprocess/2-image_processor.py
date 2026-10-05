@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
+import argparse
+import importlib.util
 import json
+import math
+import os
 import sys
 from pathlib import Path
 import h5py
@@ -7,10 +11,12 @@ import numpy as np
 from PIL import Image
 from scipy.ndimage import median_filter, binary_opening, binary_dilation
 from concurrent.futures import ProcessPoolExecutor
-from contextlib import ExitStack
-from multiprocessing import shared_memory
-import os
 from tqdm import tqdm
+
+HERE = Path(__file__).resolve().parent
+if str(HERE) not in sys.path:
+    sys.path.insert(0, str(HERE))
+from run_preprocess import worker_count, thumbnail_lod, atomic_write_json  # noqa: E402
 
 __version__ = "0.14.0"
 
@@ -18,54 +24,277 @@ __version__ = "0.14.0"
 # Evenly spaced over the series and always including the first and the last frame.
 GLOBAL_NORM_SAMPLES = 8
 
+# ── Streaming geometry ─────────────────────────────────────────────────────────
+# A channel is never held whole in memory. It is read from the .ims in tiles; each
+# tile is levelled independently and written straight into the LOD0 file.
+#
+# Exactness of a tile against the whole-volume computation: every operation is local.
+#   * the signal mask is binary_opening(iterations=1) — one erosion then one dilation —
+#     followed by binary_dilation(iterations=3), all with the 6-connected cross. Each
+#     erosion/dilation looks one voxel away, so a value computed at a tile edge that has
+#     no real neighbours beyond it can be wrong there, and the error moves inward by one
+#     voxel per operation: 1 + 1 + 3 = 5 voxels. A halo of MASK_HALO = 5 real voxels
+#     around the core therefore yields the exact whole-volume mask inside the core;
+#   * the 3x3x3 median reads one voxel away, which the same halo covers;
+#   * window leveling is per voxel.
+# At a face of the VOLUME the tile has no halo, its array edge is the volume edge, and
+# scipy applies the same border rule it applies to the whole volume (border_value=0 for
+# the morphology, 'reflect' for the median). The output is therefore byte-identical to
+# levelling the whole channel at once, whatever the tiling.
+MASK_HALO = 5
+SUBSAMPLE_STEP = 4            # white point ranks vol[::4, ::4, ::4]
+DEFAULT_TILE_MVOX = 24        # voxels per tile INCLUDING its halo, in millions
 
-def _worker_count() -> int:
-    """Size of the median-filter pool.
+# Rough per-worker cost of a tile: the raw read (2 B for uint16), its float32 copy (4),
+# the mask and its morphology temporaries (~3), the median, composite, clip and norm
+# arrays (~16) — ~25 B per voxel, so the default tile costs ~600 MB per worker.
 
-    One worker per logical core saturates the CPU, but each one also allocates its own
-    float32 copies of a Z-block plus the scipy median temporaries — roughly a gigabyte
-    apiece on a large field. Added to the three whole-volume shared blocks (float32 +
-    bool mask + uint8 output), a 22-core machine asks for ~33 GiB of Windows *commit*
-    at once, and commit is bounded by RAM + page file, not by free RAM.
 
-    Measured failure: 3789x3789x125x4ch on a 63.5 GiB machine whose commit limit was
-    89.6 GiB but which had only 36.3 GiB of it free (other services running). The pool
-    died at block 4 of 32 with WinError 1455 "the paging file is too small", after the
-    orchestrator had already cleared the dataset's bricks -- a published dataset lost to
-    a transient resource shortage.
-
-    LUMEN_PREPROCESS_WORKERS caps the pool so a busy or smaller machine can still finish.
-    Unset, the behaviour is exactly as before: one worker per logical core.
-    """
-    raw = os.environ.get("LUMEN_PREPROCESS_WORKERS", "").strip()
+def _tile_budget() -> int:
+    raw = os.environ.get("LUMEN_PREPROCESS_TILE_MVOX", "").strip()
     if raw:
         try:
-            n = int(raw)
-            if n >= 1:
-                return min(n, os.cpu_count() or 1)
-            print(f"[PROCESS] LUMEN_PREPROCESS_WORKERS={raw!r} ignore (doit etre >= 1)", flush=True)
+            value = float(raw)
+            if value > 0:
+                return max(1, int(value * 1024 * 1024))
         except ValueError:
-            print(f"[PROCESS] LUMEN_PREPROCESS_WORKERS={raw!r} ignore (entier attendu)", flush=True)
-    return os.cpu_count() or 1
+            pass
+        print(f"[PROCESS] LUMEN_PREPROCESS_TILE_MVOX={raw!r} ignore (nombre > 0 attendu)", flush=True)
+    return DEFAULT_TILE_MVOX * 1024 * 1024
 
 
-def _corner_samples(vol, W, H, D):
-    """The 8 corner cubes — pure camera background, no specimen there."""
-    corner_size = max(1, min(32, W // 4, H // 4, D // 4))
-    corners = [
-        vol[:corner_size, :corner_size, :corner_size],
-        vol[:corner_size, :corner_size, -corner_size:],
-        vol[:corner_size, -corner_size:, :corner_size],
-        vol[:corner_size, -corner_size:, -corner_size:],
-        vol[-corner_size:, :corner_size, :corner_size],
-        vol[-corner_size:, :corner_size, -corner_size:],
-        vol[-corner_size:, -corner_size:, :corner_size],
-        vol[-corner_size:, -corner_size:, -corner_size:]
-    ]
-    return np.concatenate([c.flatten() for c in corners])
+def plan_tiles(shape, halo: int, budget: int):
+    """Core boxes (z0, z1, y0, y1, x0, x1) covering the volume, each with its halo
+    under `budget` voxels. Whole planes are preferred (one contiguous read per slab);
+    Y then X are split only when a plane slab does not fit."""
+    D, H, W = shape
+
+    def cost(cz, cy, cx):
+        return min(D, cz + 2 * halo) * min(H, cy + 2 * halo) * min(W, cx + 2 * halo)
+
+    cz, cy, cx = min(D, 64), H, W
+    while cost(cz, cy, cx) > budget:
+        if cy >= cx and cy > 32:
+            cy = -(-cy // 2)
+        elif cx > 32:
+            cx = -(-cx // 2)
+        elif cz > 4:
+            cz = -(-cz // 2)
+        else:
+            break
+    return [(z, min(z + cz, D), y, min(y + cy, H), x, min(x + cx, W))
+            for z in range(0, D, cz) for y in range(0, H, cy) for x in range(0, W, cx)]
 
 
-def _estimate_global_bounds(res0, tp_keys, c_idx, W, H, D):
+def _halo_box(box, shape, halo):
+    z0, z1, y0, y1, x0, x1 = box
+    D, H, W = shape
+    return (max(0, z0 - halo), min(D, z1 + halo), max(0, y0 - halo), min(H, y1 + halo),
+            max(0, x0 - halo), min(W, x1 + halo))
+
+
+def corner_boxes(shape):
+    """The 8 corner cubes — pure camera background, no specimen there. Each is kept as
+    its own box: when the volume is thinner than two cubes they overlap, and the
+    whole-volume estimator counted those voxels once per cube."""
+    D, H, W = shape
+    cs = max(1, min(32, W // 4, H // 4, D // 4))
+    zs = ((0, min(cs, D)), (max(0, D - cs), D))
+    ys = ((0, min(cs, H)), (max(0, H - cs), H))
+    xs = ((0, min(cs, W)), (max(0, W - cs), W))
+    return [(z[0], z[1], y[0], y[1], x[0], x[1]) for z in zs for y in ys for x in xs]
+
+
+def _intersect(a, b):
+    box = (max(a[0], b[0]), min(a[1], b[1]), max(a[2], b[2]), min(a[3], b[3]),
+           max(a[4], b[4]), min(a[5], b[5]))
+    return box if box[0] < box[1] and box[2] < box[3] and box[4] < box[5] else None
+
+
+def _strided(block, origin):
+    """The voxels of `block` (whose first voxel sits at volume index `origin`) that
+    vol[::4, ::4, ::4] selects — the same lattice whatever the tiling."""
+    z0, y0, x0 = origin
+    s = SUBSAMPLE_STEP
+    return block[(-z0) % s::s, (-y0) % s::s, (-x0) % s::s]
+
+
+def subsample_size(shape) -> int:
+    return math.prod(-(-n // SUBSAMPLE_STEP) for n in shape)
+
+
+# ── Worker side ────────────────────────────────────────────────────────────────
+# Workers read the .ims themselves (one open handle per process, reused across tiles)
+# and write their output into the LOD files through memory maps, so nothing heavier
+# than a tile box crosses a process pipe.
+_H5_FILES = {}
+
+
+def _h5_dataset(path: str, name: str):
+    f = _H5_FILES.get(path)
+    if f is None:
+        # A larger chunk cache keeps a chunk decompressed while the neighbouring tile
+        # rows of the same chunk are read.
+        f = h5py.File(path, "r", rdcc_nbytes=64 * 1024 * 1024)
+        _H5_FILES[path] = f
+    return f[name]
+
+
+def _close_h5_files():
+    for f in _H5_FILES.values():
+        try:
+            f.close()
+        except Exception:
+            pass
+    _H5_FILES.clear()
+
+
+def sample_tile(args):
+    """Pass 1 over one tile: its share of the white-point subsample and of the corner
+    cubes, as float32 exactly as the whole-volume estimator saw them."""
+    path, name, shape, box = args
+    z0, z1, y0, y1, x0, x1 = box
+    block = _h5_dataset(path, name)[z0:z1, y0:y1, x0:x1]
+    sub = _strided(block, (z0, y0, x0)).astype(np.float32).ravel()
+    corners = []
+    for cb in corner_boxes(shape):
+        part = _intersect(box, cb)
+        if part is not None:
+            corners.append(block[part[0] - z0:part[1] - z0, part[2] - y0:part[3] - y0,
+                                 part[4] - x0:part[5] - x0].astype(np.float32).ravel())
+    corner = np.concatenate(corners) if corners else np.empty(0, np.float32)
+    return sub, corner
+
+
+def level_tile(args):
+    """Selective Masked Median Filtering + Window Leveling for one tile.
+
+    Inside the signal mask the original (sharp) biological signal is kept as-is;
+    outside the mask the background is replaced by a 3D median (size=3) that crushes
+    shot-noise and isolated hot pixels without blurring the cells. Window Leveling then
+    maps [bg_floor, sig_max] -> [0, 255] (uint8) — any value <= bg_floor collapses to an
+    absolute 0, guaranteeing pure-black empty space for the SVR brick packer.
+
+    The tile is read with its halo (see MASK_HALO) and only its core is written.
+    Returns the number of masked voxels in the core and, when asked, the core's share
+    of the white-point subsample.
+    """
+    (path, name, shape, box, bg_floor, sig_max, lod0_path, want_subsample) = args
+    z0, z1, y0, y1, x0, x1 = box
+    hz0, hz1, hy0, hy1, hx0, hx1 = _halo_box(box, shape, MASK_HALO)
+
+    vol = _h5_dataset(path, name)[hz0:hz1, hy0:hy1, hx0:hx1].astype(np.float32)
+
+    # Signal mask: threshold 10 % above the noise floor; a morphological opening drops
+    # isolated hot pixels (so they get median-crushed below), then a 3-iteration
+    # dilation guards the natural fluorescent fade-out around the biological signal so
+    # the median filter never bites into cells.
+    mask = np.greater(vol, bg_floor * 1.1)
+    mask = binary_opening(mask, iterations=1)
+    mask = binary_dilation(mask, iterations=3)
+
+    cz0, cz1 = z0 - hz0, z1 - hz0
+    cy0, cy1 = y0 - hy0, y1 - hy0
+    cx0, cx1 = x0 - hx0, x1 - hx0
+    core = (slice(cz0, cz1), slice(cy0, cy1), slice(cx0, cx1))
+
+    # The median of a core voxel reads one voxel around it: filter the core plus that
+    # ring only (clipped at the tile, which is the volume edge wherever no halo exists).
+    mz0, my0, mx0 = max(0, cz0 - 1), max(0, cy0 - 1), max(0, cx0 - 1)
+    ring = vol[mz0:min(vol.shape[0], cz1 + 1), my0:min(vol.shape[1], cy1 + 1),
+               mx0:min(vol.shape[2], cx1 + 1)]
+    smoothed = median_filter(ring, size=3)[cz0 - mz0:cz1 - mz0, cy0 - my0:cy1 - my0,
+                                           cx0 - mx0:cx1 - mx0]
+    block_data = vol[core]
+    block_mask = mask[core]
+    composite = np.where(block_mask, block_data, smoothed)
+
+    if sig_max - bg_floor <= 0.0:
+        sig_max = bg_floor + 1.0
+    # Window Leveling [bg_floor, sig_max] -> [0, 255]
+    clean = np.clip(composite, bg_floor, sig_max)
+    norm = (clean - bg_floor) / (sig_max - bg_floor)
+    block_u8 = (norm * 255.0).astype(np.uint8)
+
+    out = np.memmap(lod0_path, dtype=np.uint8, mode="r+", shape=shape)
+    try:
+        out[z0:z1, y0:y1, x0:x1] = block_u8
+        out.flush()
+    finally:
+        del out
+
+    sub = _strided(block_data, (z0, y0, x0)).ravel().copy() if want_subsample else None
+    return int(np.count_nonzero(block_mask)), sub
+
+
+def downscale_planes(args):
+    """Write planes [z0, z1) of every reduced LOD from the levelled LOD0 planes."""
+    lod0_path, shape, z0, z1, targets = args
+    D, H, W = shape
+    src = np.memmap(lod0_path, dtype=np.uint8, mode="r", shape=shape)
+    outs = [(w, h, np.memmap(p, dtype=np.uint8, mode="r+", shape=(D, h, w)))
+            for (w, h, p) in targets]
+    try:
+        for z in range(z0, z1):
+            pil_img = Image.fromarray(np.array(src[z]))
+            for (w, h, dst) in outs:
+                resized = pil_img.resize((w, h), Image.Resampling.BILINEAR)
+                dst[z] = np.asarray(resized, dtype=np.uint8)
+        for (_, _, dst) in outs:
+            dst.flush()
+    finally:
+        del src
+        outs.clear()
+    return z1 - z0
+
+
+# ── The 3-chunk_packer module, for packing each timepoint as soon as it is levelled ─
+_PACKER = None
+
+
+def _packer():
+    global _PACKER
+    if _PACKER is None:
+        spec = importlib.util.spec_from_file_location("lumen_chunk_packer",
+                                                      str(HERE / "3-chunk_packer.py"))
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        _PACKER = module
+    return _PACKER
+
+
+# The packer's worker functions are reached through these module-level wrappers: a
+# process pool can only call a function its workers can import by name, and this file
+# is the one they import.
+def encode_brick_batch(args):
+    return _packer().encode_brick_batch(args)
+
+
+def layer_max_grid(args):
+    return _packer().layer_max_grid(args)
+
+
+# ── Main side ──────────────────────────────────────────────────────────────────
+def _run(executor, fn, tasks, desc):
+    results = executor.map(fn, tasks) if executor is not None else map(fn, tasks)
+    return list(tqdm(results, total=len(tasks), desc=desc, leave=False, ascii=True,
+                     mininterval=2.0))
+
+
+def sample_channel(executor, path, name, shape):
+    """White-point subsample and corner samples of one channel volume, in one pass."""
+    tiles = plan_tiles(shape, 0, _tile_budget())
+    sub = np.empty(subsample_size(shape), dtype=np.float32)
+    corners, cursor = [], 0
+    for part, corner in _run(executor, sample_tile, [(path, name, shape, b) for b in tiles],
+                             "Sampling"):
+        sub[cursor:cursor + part.size] = part
+        cursor += part.size
+        corners.append(corner)
+    return sub[:cursor], np.concatenate(corners)
+
+
+def _estimate_global_bounds(executor, path, res0, tp_keys, c_idx, shape):
     """Shared [bg_floor, sig_max] window for one channel of a timelapse.
 
     Levelling each frame against its own percentiles makes the series flicker: as
@@ -91,10 +320,10 @@ def _estimate_global_bounds(res0, tp_keys, c_idx, W, H, D):
                          key=lambda x: int(x.split()[-1]))
         if c_idx >= len(ch_keys):
             continue
-        vol = res0[tp_keys[t_idx]][ch_keys[c_idx]]["Data"][:D, :H, :W].astype(np.float32)
-        corner_pool.append(_corner_samples(vol, W, H, D))
-        signal_pool.append(vol[::4, ::4, ::4].flatten())
-        del vol
+        name = res0[tp_keys[t_idx]][ch_keys[c_idx]]["Data"].name
+        sub, corner = sample_channel(executor, path, name, shape)
+        corner_pool.append(corner)
+        signal_pool.append(sub)
 
     pooled = np.concatenate(signal_pool)
     bg_floor = float(np.percentile(np.concatenate(corner_pool), 99.0))
@@ -115,270 +344,235 @@ def _estimate_global_bounds(res0, tp_keys, c_idx, W, H, D):
         basis = "whole volume (too little signal to rank)"
     print(f"    global bg_floor={bg_floor:.2f}  sig_max={sig_max:.2f} "
           f"(pooled over {len(corner_pool)} timepoints, white point from {basis})", flush=True)
+    _warn_window(bg_floor, sig_max, pooled)
     return bg_floor, sig_max
 
-def process_z_block(args):
-    """Selective Masked Median Filtering + Window Leveling for one Z-block.
 
-    Inside the signal mask the original (sharp) biological signal is kept as-is;
-    outside the mask the background is replaced by a 3D median (size=3) that
-    crushes shot-noise and isolated hot pixels without blurring the cells. The
-    block carries a ±1 Z halo so the median sees real neighbours across block
-    seams; the halo is stripped before writing back. Finally a Window Leveling maps
-    [bg_floor, sig_max] -> [0, 255] (uint8) — any value <= bg_floor collapses to
-    an absolute 0, guaranteeing pure-black empty space for the SVR brick packer.
+def _warn_window(bg_floor: float, sig_max: float, subsample) -> None:
+    """Say so when the window is suspect. Nothing is changed: the window is what the
+    estimator gives, and changing it silently would make two runs of one file differ."""
+    if sig_max - bg_floor <= max(1.0, 0.01 * abs(bg_floor)):
+        print(f"    [!] fenetre quasi nulle (sig_max - bg_floor = {sig_max - bg_floor:.3g}) : "
+              f"signal tres epars, le volume sera presque binaire", flush=True)
+    if subsample is not None and subsample.size:
+        median = float(np.median(subsample))
+        if bg_floor > median * 1.5 and bg_floor - median > 2.0:
+            print(f"    [!] bruit des coins ({bg_floor:.2f}) bien au-dessus de la mediane du volume "
+                  f"({median:.2f}) : un coin touche peut-etre l'echantillon (tuiles, rognage) "
+                  f"et le signal faible sera coupe", flush=True)
 
-    The volume, the mask and the output buffer live in shared memory: the worker
-    receives only names and indices. Shipping the blocks themselves through the
-    process pool moved ~285 MB per timepoint across Windows pipes and exhausted the
-    OS ("WinError 1450: insufficient system resources") the moment the pipeline had
-    more than one frame to grind through.
-    """
-    (vol_name, mask_name, out_name, shape, z_start, z_end,
-     halo_lo, halo_hi, bg_floor, sig_max) = args
 
-    vol_shm = shared_memory.SharedMemory(name=vol_name)
-    mask_shm = shared_memory.SharedMemory(name=mask_name)
-    out_shm = shared_memory.SharedMemory(name=out_name)
-    try:
-        vol = np.ndarray(shape, dtype=np.float32, buffer=vol_shm.buf)
-        mask = np.ndarray(shape, dtype=bool, buffer=mask_shm.buf)
-        out = np.ndarray(shape, dtype=np.uint8, buffer=out_shm.buf)
+def _allocate(path: Path, size: int) -> None:
+    with open(path, "wb") as fh:
+        fh.truncate(size)
 
-        if sig_max - bg_floor <= 0.0:
-            sig_max = bg_floor + 1.0
 
-        zs, ze = z_start - halo_lo, z_end + halo_hi
-        block_data = vol[zs:ze]
-        block_mask = mask[zs:ze]
-
-        # Masked compositing: keep signal inside the mask, smooth the rest
-        smoothed = median_filter(block_data, size=3)
-        composite = np.where(block_mask, block_data, smoothed)
-
-        # Window Leveling [bg_floor, sig_max] -> [0, 255]
-        clean = np.clip(composite, bg_floor, sig_max)
-        norm = (clean - bg_floor) / (sig_max - bg_floor)
-        block_u8 = (norm * 255.0).astype(np.uint8)
-
-        # Strip the Z halo before reassembly
-        z_hi = block_u8.shape[0] - halo_hi
-        out[z_start:z_end] = block_u8[halo_lo:z_hi]
-        return z_start
-    finally:
-        vol_shm.close()
-        mask_shm.close()
-        out_shm.close()
-
-def process_image(input_ims: Path, metadata_json: Path, temp_dir: Path):
-    with open(metadata_json, "r", encoding="utf-8") as f:
-        meta = json.load(f)
-        
-    W, H, D = meta["width"], meta["height"], meta["depth"]
-    n_ch = meta["n_channels"]
-    n_tp = meta["n_timepoints"]
-    
-    temp_dir.mkdir(parents=True, exist_ok=True)
-    
-    # Open IMS file
-    f_ims = h5py.File(str(input_ims), "r")
-    res0 = f_ims["DataSet"]["ResolutionLevel 0"]
-    tp_keys = sorted([k for k in res0.keys() if k.startswith("TimePoint")], key=lambda x: int(x.split()[-1]))
-    
-    # We will save downscaled shapes in processing_meta.json
-    lod_info = []
-    
-    # Determine downscaling LOD levels
-    lod = 0
-    lod_info.append({
-        "lod": lod,
-        "width": W,
-        "height": H,
-        "depth": D
-    })
-    
+def lod_ladder(W: int, H: int, D: int):
+    """LOD0 at native size, then square 256·2^k levels below max(W, H), coarsest last."""
+    lod_info = [{"lod": 0, "width": W, "height": H, "depth": D}]
     max_dim = max(W, H)
     target_dims = []
     curr_dim = 256
     while curr_dim < max_dim:
         target_dims.append(curr_dim)
         curr_dim *= 2
-        
     target_dims.reverse()
-    
-    for target_dim in target_dims:
-        lod += 1
-        lod_info.append({
-            "lod": lod,
-            "width": target_dim,
-            "height": target_dim,
-            "depth": D
-        })
-        
+    for lod, target_dim in enumerate(target_dims, start=1):
+        lod_info.append({"lod": lod, "width": target_dim, "height": target_dim, "depth": D})
+    return lod_info
+
+
+def process_channel(executor, path, name, shape, lod_info, temp_dir, t_idx, c_idx,
+                    bounds=None):
+    """Level one channel of one timepoint into its LOD files. `bounds` is the shared
+    window of a timelapse; without it the window comes from this volume. Returns the
+    99.9th percentile of the raw subsample (the frame's signal level)."""
+    D, H, W = shape
+    n_voxels = D * H * W
+    want_subsample = bounds is not None
+
+    # ─── Step 1 : Bound estimation (Corner Sampling) ──────────────────────
+    # bg_floor = 99th percentile of the 8 volume corners (pure camera background,
+    # no embryo there); sig_max = 99.9th percentile of the globally sub-sampled
+    # volume (saturate the brightest 0.1 %).
+    print("  Step 1: Estimation des bornes (Corner Sampling)...", flush=True)
+    if bounds is None:
+        sub, corner_data = sample_channel(executor, path, name, shape)
+        bg_floor = float(np.percentile(corner_data, 99.0))
+        print(f"    bg_floor (99e centile du bruit des coins): {bg_floor:.2f}", flush=True)
+        frame_sig = float(np.percentile(sub, 99.9))
+        sig_max = frame_sig
+        print(f"    sig_max (99.9e centile global): {sig_max:.2f}", flush=True)
+        _warn_window(bg_floor, sig_max, sub)
+        del sub, corner_data
+    else:
+        bg_floor, sig_max = bounds
+
+    # ─── Steps 2-3 : signal mask, masked median, window leveling, per tile ─
+    print("  Step 2-3: Masque de signal + Masked Median Filtering + Window Leveling...",
+          flush=True)
+    lod0 = temp_dir / f"t{t_idx:03d}_c{c_idx}_lod0.bin"
+    _allocate(lod0, n_voxels)
+    tiles = plan_tiles(shape, MASK_HALO, _tile_budget())
+    tasks = [(path, name, shape, box, bg_floor, sig_max, str(lod0), want_subsample)
+             for box in tiles]
+    masked, parts = 0, []
+    for count, part in _run(executor, level_tile, tasks, "Masked Median + Leveling"):
+        masked += count
+        if part is not None:
+            parts.append(part)
+    print(f"    Couverture du masque: {100.0 * masked / max(1, n_voxels):.2f}% des voxels",
+          flush=True)
+    if want_subsample:
+        frame_sig = float(np.percentile(np.concatenate(parts), 99.9))
+        print(f"    bornes globales: bg_floor={bg_floor:.2f} sig_max={sig_max:.2f} "
+              f"(signal propre a cette frame: {frame_sig:.2f})", flush=True)
+        del parts
+
+    # ─── Step 4 : Exporting downscaled LOD levels ─────────────────────────
+    print("  Step 4: Exporting downscaled LOD levels...", flush=True)
+    targets = []
+    for li in lod_info[1:]:
+        p = temp_dir / f"t{t_idx:03d}_c{c_idx}_lod{li['lod']}.bin"
+        _allocate(p, li["width"] * li["height"] * D)
+        targets.append((li["width"], li["height"], str(p)))
+    if targets:
+        step = max(1, -(-D // (4 * worker_count())))
+        _run(executor, downscale_planes,
+             [(str(lod0), shape, z, min(z + step, D), targets) for z in range(0, D, step)],
+             "Exporting LODs")
+    print(f"  Channel {c_idx} processed successfully.")
+    return frame_sig
+
+
+def _drop_packed_files(temp_dir: Path, t_idx: int, n_ch: int, lod_info) -> None:
+    """Once a timepoint is in its packs only two of its LOD files are still read: the
+    coarsest one (histograms, step 3) and, for the first frame, the thumbnail level."""
+    keep = {lod_info[-1]["lod"]}
+    if t_idx == 0:
+        keep.add(thumbnail_lod(lod_info))
+    for c_idx in range(n_ch):
+        for li in lod_info:
+            if li["lod"] in keep:
+                continue
+            p = temp_dir / f"t{t_idx:03d}_c{c_idx}_lod{li['lod']}.bin"
+            try:
+                p.unlink()
+            except FileNotFoundError:
+                pass
+            except PermissionError:
+                print(f"[PROCESS] {p.name} encore ouvert, supprime en fin de traitement", flush=True)
+
+
+def process_image(input_ims: Path, metadata_json: Path, temp_dir: Path, pack_into: Path = None,
+                  executor=None):
+    """Level every (timepoint, channel) of an .ims into temp LOD files.
+
+    With `pack_into` (a dataset directory) each timepoint is packed into its bricks/ as
+    soon as all its channels are levelled, and its LOD files are deleted: the temporary
+    disk then holds one frame at a time instead of the whole acquisition. `executor`
+    defaults to one process pool for the whole run.
+    """
+    with open(metadata_json, "r", encoding="utf-8") as f:
+        meta = json.load(f)
+
+    W, H, D = meta["width"], meta["height"], meta["depth"]
+    n_ch = meta["n_channels"]
+    n_tp = meta["n_timepoints"]
+    shape = (D, H, W)
+    temp_dir.mkdir(parents=True, exist_ok=True)
+    path = str(input_ims)
+
+    lod_info = lod_ladder(W, H, D)
     print(f"[PROCESS] LOD levels to generate: {len(lod_info)}")
     for li in lod_info:
         print(f"  LOD {li['lod']}: {li['width']}x{li['height']}x{li['depth']}")
 
-    # A timelapse is levelled against ONE window per channel (see
-    # _estimate_global_bounds); a single-timepoint dataset keeps the historical
-    # per-volume estimate so previously published datasets reprocess identically.
-    is_timelapse = n_tp > 1
-    global_bounds = {}
-    if is_timelapse:
-        for c_idx in range(n_ch):
-            global_bounds[c_idx] = _estimate_global_bounds(res0, tp_keys, c_idx, W, H, D)
+    own_pool = executor is None
+    if own_pool:
+        executor = ProcessPoolExecutor(max_workers=worker_count())
 
-    # Per-(timepoint, channel) brightness of the RAW signal, recorded but never
-    # baked into the voxels: bleaching correction stays a reversible display choice.
-    signal_levels = {}
+    f_ims = h5py.File(path, "r")
+    try:
+        res0 = f_ims["DataSet"]["ResolutionLevel 0"]
+        tp_keys = sorted([k for k in res0.keys() if k.startswith("TimePoint")],
+                         key=lambda x: int(x.split()[-1]))
 
-    shape = (D, H, W)
-    n_voxels = D * H * W
+        # A timelapse is levelled against ONE window per channel (see
+        # _estimate_global_bounds); a single-timepoint dataset keeps the historical
+        # per-volume estimate so previously published datasets reprocess identically.
+        is_timelapse = n_tp > 1
+        global_bounds = {}
+        if is_timelapse:
+            for c_idx in range(n_ch):
+                global_bounds[c_idx] = _estimate_global_bounds(executor, path, res0, tp_keys,
+                                                               c_idx, shape)
 
-    for t_idx, tp_key in enumerate(tp_keys):
-        ch_keys = sorted([k for k in res0[tp_key].keys() if k.startswith("Channel")], key=lambda x: int(x.split()[-1]))
+        # Per-(timepoint, channel) brightness of the RAW signal, recorded but never
+        # baked into the voxels: bleaching correction stays a reversible display choice.
+        signal_levels = {}
+        bricks_dir = Path(pack_into) / "bricks" if pack_into else None
 
-        for c_idx, ch_key in enumerate(ch_keys):
-          print(f"[PROCESS] Processing Channel {c_idx} (T {t_idx})...", flush=True)
-          ds = res0[tp_key][ch_key]["Data"]
+        for t_idx, tp_key in enumerate(tp_keys):
+            ch_keys = sorted([k for k in res0[tp_key].keys() if k.startswith("Channel")],
+                             key=lambda x: int(x.split()[-1]))
+            for c_idx, ch_key in enumerate(ch_keys):
+                print(f"[PROCESS] Processing Channel {c_idx} (T {t_idx})...", flush=True)
+                name = res0[tp_key][ch_key]["Data"].name
+                frame_sig = process_channel(executor, path, name, shape, lod_info, temp_dir,
+                                            t_idx, c_idx, global_bounds.get(c_idx))
+                signal_levels[f"t{t_idx:03d}_c{c_idx}"] = round(frame_sig, 4)
 
-          # The volume, its mask and the levelled output are allocated in shared
-          # memory so the worker pool addresses them by name instead of pickling
-          # slices across process pipes (see process_z_block).
-          with ExitStack() as stack:
-            vol_shm = shared_memory.SharedMemory(create=True, size=n_voxels * 4)
-            mask_shm = shared_memory.SharedMemory(create=True, size=n_voxels)
-            out_shm = shared_memory.SharedMemory(create=True, size=n_voxels)
-            # ExitStack unwinds LIFO, so registering unlink before close before the pool
-            # tears down in the only order that is safe: workers gone, then views closed,
-            # then the blocks released. (SharedMemory is not a context manager before 3.13.)
-            for shm in (vol_shm, mask_shm, out_shm):
-                stack.callback(shm.unlink)
-            for shm in (vol_shm, mask_shm, out_shm):
-                stack.callback(shm.close)
-            executor = stack.enter_context(ProcessPoolExecutor(max_workers=_worker_count()))
+            if bricks_dir is not None:
+                key = f"t{t_idx:03d}" if is_timelapse else ""
+                levels, transport = _packer().pack_timepoint(
+                    temp_dir, bricks_dir, t_idx, lod_info, n_ch, executor, key,
+                    encode_fn=encode_brick_batch, layer_fn=layer_max_grid)
+                atomic_write_json(temp_dir / f"pack_t{t_idx:03d}.json",
+                                  {"levels": levels, "brickTransport": transport},
+                                  separators=(",", ":"))
+                _drop_packed_files(temp_dir, t_idx, n_ch, lod_info)
+    finally:
+        f_ims.close()
+        _close_h5_files()
+        if own_pool:
+            executor.shutdown()
 
-            vol = np.ndarray(shape, dtype=np.float32, buffer=vol_shm.buf)
-            mask = np.ndarray(shape, dtype=bool, buffer=mask_shm.buf)
-            vol_u8 = np.ndarray(shape, dtype=np.uint8, buffer=out_shm.buf)
-
-            print(f"  Loading 3D volume ({W}x{H}x{D}) in memory as Float32...", flush=True)
-            # Read entire volume directly to allow h5py C-core to optimize chunk reads
-            # Extremely fast compared to reading slice-by-slice in Python
-            vol[:] = ds[:D, :H, :W]
-
-            # ─── Step 1 : Bound estimation (Corner Sampling) ──────────────────
-            # bg_floor = 99th percentile of the 8 volume corners (pure camera
-            # background, no embryo there); sig_max = 99.9th percentile of the
-            # globally sub-sampled volume (saturate the brightest 0.1 %).
-            print("  Step 1: Estimation des bornes (Corner Sampling)...", flush=True)
-            down_vol = vol[::4, ::4, ::4]
-            frame_sig = float(np.percentile(down_vol, 99.9))
-            if is_timelapse:
-                bg_floor, sig_max = global_bounds[c_idx]
-                print(f"    bornes globales: bg_floor={bg_floor:.2f} sig_max={sig_max:.2f} "
-                      f"(signal propre a cette frame: {frame_sig:.2f})", flush=True)
-            else:
-                corner_data = _corner_samples(vol, W, H, D)
-                bg_floor = float(np.percentile(corner_data, 99.0))
-                print(f"    bg_floor (99e centile du bruit des coins): {bg_floor:.2f}", flush=True)
-                sig_max = frame_sig
-                print(f"    sig_max (99.9e centile global): {sig_max:.2f}", flush=True)
-            signal_levels[f"t{t_idx:03d}_c{c_idx}"] = round(frame_sig, 4)
-            del down_vol
-
-            # ─── Step 2 : Signal mask ─────────────────────────────────────────
-            # Threshold 10 % above the noise floor; a morphological opening drops
-            # isolated hot pixels (so they get median-crushed below), then a
-            # 3-iteration dilation guards the natural fluorescent fade-out around
-            # the biological signal so the median filter never bites into cells.
-            print("  Step 2: Construction du masque de signal...", flush=True)
-            np.greater(vol, bg_floor * 1.1, out=mask)
-            mask[:] = binary_opening(mask, iterations=1)
-            mask[:] = binary_dilation(mask, iterations=3)
-            print(f"    Couverture du masque: {100.0 * mask.mean():.2f}% des voxels", flush=True)
-
-            # ─── Step 3 : Masked median filtering + Window Leveling ───────────
-            # Parallel over Z-blocks; each block carries a ±1 Z halo for the
-            # 3D median so there is no seam between blocks.
-            print("  Step 3: Masked Median Filtering + Window Leveling...", flush=True)
-            z_chunk_size = max(4, D // (os.cpu_count() * 2))
-            tasks = []
-            for z_start in range(0, D, z_chunk_size):
-                z_end = min(z_start + z_chunk_size, D)
-                halo_lo = 1 if z_start > 0 else 0
-                halo_hi = 1 if z_end < D else 0
-                tasks.append((vol_shm.name, mask_shm.name, out_shm.name, shape,
-                              z_start, z_end, halo_lo, halo_hi, bg_floor, sig_max))
-
-            for _ in tqdm(executor.map(process_z_block, tasks), total=len(tasks),
-                          desc="Masked Median + Leveling", leave=False, ascii=True, mininterval=2.0):
-                pass
-
-            # ─── Step 4 : Exporting downscaled LOD levels ─────────────────────
-            print("  Step 4: Exporting downscaled LOD levels...", flush=True)
-            lod_files = {}
-            for li in lod_info:
-                lod_num = li["lod"]
-                lod_file = temp_dir / f"t{t_idx:03d}_c{c_idx}_lod{lod_num}.bin"
-                lod_files[lod_num] = open(lod_file, "wb")
-
-            for z in tqdm(range(D), desc="Exporting LODs", leave=False, ascii=True, mininterval=2.0):
-                slice_u8 = vol_u8[z]
-                # Write native LOD0
-                lod_files[0].write(slice_u8.tobytes())
-                # Write downscaled LODs
-                pil_img = Image.fromarray(slice_u8, mode="L")
-                for li in lod_info[1:]:
-                    lod_num = li["lod"]
-                    resized = pil_img.resize((li["width"], li["height"]), Image.Resampling.BILINEAR)
-                    resized_arr = np.asarray(resized, dtype=np.uint8)
-                    lod_files[lod_num].write(resized_arr.tobytes())
-
-            # Close all file handles
-            for f_handle in lod_files.values():
-                f_handle.close()
-            # vol / mask / vol_u8 are views on the shared blocks; ExitStack closes and
-            # unlinks them as the `with` unwinds. Drop the views first so no numpy
-            # object still references a buffer that is about to be released.
-            del vol, mask, vol_u8
-            print(f"  Channel {c_idx} processed successfully.")
-
-    f_ims.close()
-    
     # Save the LOD info for next step
-    with open(temp_dir / "processing_meta.json", "w", encoding="utf-8") as fm:
-        json.dump({
-            "lod_levels": lod_info,
-            "voxel_size": meta["voxel_size"],
-            "channel_names": meta["channel_names"],
-            "width": W,
-            "height": H,
-            "depth": D,
-            "n_channels": n_ch,
-            "n_timepoints": n_tp,
-            "extent": meta.get("extent"),
-            "timestamps": meta.get("timestamps"),
-            "time_interval_minutes": meta.get("time_interval_minutes"),
-            "normalization": {
-                "mode": "global" if is_timelapse else "per-volume",
-                "bounds": {f"c{c}": {"bgFloor": round(b[0], 4), "sigMax": round(b[1], 4)}
-                           for c, b in global_bounds.items()},
-                "signalLevels": signal_levels
-            }
-        }, fm, indent=2)
+    atomic_write_json(temp_dir / "processing_meta.json", {
+        "lod_levels": lod_info,
+        "voxel_size": meta["voxel_size"],
+        "channel_names": meta["channel_names"],
+        "width": W,
+        "height": H,
+        "depth": D,
+        "n_channels": n_ch,
+        "n_timepoints": n_tp,
+        "extent": meta.get("extent"),
+        "timestamps": meta.get("timestamps"),
+        "time_interval_minutes": meta.get("time_interval_minutes"),
+        "normalization": {
+            "mode": "global" if is_timelapse else "per-volume",
+            "bounds": {f"c{c}": {"bgFloor": round(b[0], 4), "sigMax": round(b[1], 4)}
+                       for c, b in global_bounds.items()},
+            "signalLevels": signal_levels
+        }
+    }, indent=2)
+
 
 if __name__ == "__main__":
-    if len(sys.argv) < 4:
-        print("Usage: python 2-image_processor.py <input_ims> <metadata_json> <temp_dir>")
-        sys.exit(1)
-        
-    input_ims = Path(sys.argv[1])
-    metadata_json = Path(sys.argv[2])
-    temp_dir = Path(sys.argv[3])
-    
+    ap = argparse.ArgumentParser(description="Level an .ims into temporary LOD volumes.")
+    ap.add_argument("input_ims")
+    ap.add_argument("metadata_json")
+    ap.add_argument("temp_dir")
+    ap.add_argument("--pack-into", default=None,
+                    help="dataset directory: pack each timepoint into its bricks/ as soon as "
+                         "it is levelled, then delete its temporary LOD files")
+    args = ap.parse_args()
+
     try:
-        process_image(input_ims, metadata_json, temp_dir)
+        process_image(Path(args.input_ims), Path(args.metadata_json), Path(args.temp_dir),
+                      Path(args.pack_into) if args.pack_into else None)
         print(f"[PROCESS] Image processing complete.")
     except Exception as e:
         import traceback

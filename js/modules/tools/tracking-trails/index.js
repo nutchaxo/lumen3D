@@ -23,6 +23,11 @@ PluginRegistry.implement('tracking-trails', {
   _material: null,
   _capacity: 0,
   _maxSpeed: 0,
+  _speedStab: null,       // frame of reference the cached _maxSpeed was measured in
+  _segTotal: -1,          // segments the series can ever draw (sum of cell life spans)
+  _unsubLang: null,
+  _els: null,
+  _white: null,
   _opts: { length: 0, future: false, opacity: 0.6, colorBy: 'region' },
 
   _t(key, params) { return this._ctx.i18n.t(key, params); },
@@ -40,13 +45,13 @@ PluginRegistry.implement('tracking-trails', {
     });
     const rebuild = () => this._rebuild();
     this._unsubs = [
-      this._T.on('loaded', () => { this._maxSpeed = 0; this._syncLengthRange(); rebuild(); }),
+      this._T.on('loaded', () => { this._maxSpeed = 0; this._segTotal = -1; this._syncLengthRange(); rebuild(); }),
       this._T.on('frame', rebuild),
       this._T.on('refresh', rebuild),
       this._T.on('selection', rebuild),
       this._T.on('style', rebuild)
     ];
-    ctx.i18n.onLanguageChange?.(() => this._applyLabels());
+    this._unsubLang = ctx.i18n.onLanguageChange?.(() => this._applyLabels()) || null;
     return this;
   },
 
@@ -80,14 +85,19 @@ PluginRegistry.implement('tracking-trails', {
   dispose() {
     this._unsubs.forEach(fn => fn());
     this._unsubs = [];
+    this._unsubLang?.();
+    this._unsubLang = null;
     this._destroyLines();
     this._section?.remove();
     this._section = null;
+    this._els = null;
+    this._active = false;
   },
 
   // ── Private: state ────────────────────────────────────────
 
   _setActive(on) {
+    if (on && !this._T.isAvailable()) on = false;
     this._active = Boolean(on);
     if (this._section) this._section.root.hidden = !this._active;
     if (this._active) this._rebuild();
@@ -142,6 +152,10 @@ PluginRegistry.implement('tracking-trails', {
   /** The fastest step of the whole series, so "colour by speed" keeps one scale
    *  across frames instead of re-normalising every rebuild. */
   _speedScale(data) {
+    // positionUm follows the frame of reference on screen, so the scale measured
+    // in one is not the other's.
+    const stab = Boolean(this._T.isStabilized());
+    if (this._speedStab !== stab) { this._maxSpeed = 0; this._speedStab = stab; }
     if (this._maxSpeed > 0) return this._maxSpeed;
     let max = 0;
     const a = [0, 0, 0], b = [0, 0, 0];
@@ -156,6 +170,19 @@ PluginRegistry.implement('tracking-trails', {
     return this._maxSpeed;
   },
 
+  /** Upper bound of the segments a rebuild can write: every cell draws at most
+   *  one per step of its life. Counted once per dataset. */
+  _segmentTotal(data) {
+    if (this._segTotal >= 0) return this._segTotal;
+    let total = 0;
+    for (let c = 0; c < data.cellTotal; c++) {
+      const first = data.firstFrame[c], last = data.lastFrame[c];
+      if (first >= 0 && last > first) total += last - first;
+    }
+    this._segTotal = total;
+    return total;
+  },
+
   _dt(data, f) {
     const t = data.timepoints;
     return (t && t.length > f + 1) ? Math.max(1e-6, t[f + 1] - t[f]) : 1;
@@ -166,8 +193,7 @@ PluginRegistry.implement('tracking-trails', {
     const T = this._T;
     const data = T.getData();
     if (!data) return;
-    const maxSegments = data.cellTotal * Math.max(1, data.frameCount - 1);
-    if (!this._ensureLines(maxSegments)) return;
+    if (!this._ensureLines(this._segmentTotal(data))) return;
 
     const style = T.getStyle() || {};
     const frame = T.getFrame();
@@ -180,6 +206,7 @@ PluginRegistry.implement('tracking-trails', {
     const v0 = new THREE.Vector3(), v1 = new THREE.Vector3();
     const um0 = [0, 0, 0], um1 = [0, 0, 0];
     const tmp = new THREE.Color();
+    const white = this._white || (this._white = new THREE.Color(1, 1, 1));
     let n = 0;   // vertices written
 
     for (let c = 0; c < data.cellTotal; c++) {
@@ -210,7 +237,7 @@ PluginRegistry.implement('tracking-trails', {
         } else {
           tmp.setRGB(r, g, b);
         }
-        if (isSel) tmp.lerp(new THREE.Color(1, 1, 1), 0.5);
+        if (isSel) tmp.lerp(white, 0.5);
         const o = n * 3;
         pos[o] = v0.x; pos[o + 1] = v0.y; pos[o + 2] = v0.z;
         pos[o + 3] = v1.x; pos[o + 4] = v1.y; pos[o + 5] = v1.z;

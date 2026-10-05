@@ -113,9 +113,9 @@
       <div class="widget-box">
         <h3>Icon Buttons</h3>
         <div class="flex gap-2 items-center">
-          <button class="btn btn-icon btn-ghost"><i data-lucide="camera"></i></button>
-          <button class="btn btn-icon btn-solid" style="background: var(--bg-active); color: var(--text-primary); border-radius: var(--radius-md); width: 40px; height: 40px; display: inline-flex; align-items: center; justify-content: center;"><i data-lucide="play"></i></button>
-          <button class="btn btn-icon btn-primary"><i data-lucide="save"></i></button>
+          <button class="btn btn-icon btn-ghost" aria-label="Capture"><i data-lucide="camera"></i></button>
+          <button class="btn btn-icon btn-solid" style="background: var(--bg-active); color: var(--text-primary); border-radius: var(--radius-md); width: 40px; height: 40px; display: inline-flex; align-items: center; justify-content: center;" aria-label="Play"><i data-lucide="play"></i></button>
+          <button class="btn btn-icon btn-primary" aria-label="Save"><i data-lucide="save"></i></button>
         </div>
       </div>
       <div class="widget-box">
@@ -135,12 +135,12 @@
     <div class="widget-grid">
       <div class="widget-box">
         <h3>Range Slider</h3>
-        <input type="range" class="range-slider mb-4" min="0" max="100" value="50">
+        <input type="range" class="range-slider mb-4" min="0" max="100" value="50" aria-label="Range slider demo">
         
         <h3 class="mt-4">Toggle Switch</h3>
         <div class="flex items-center gap-2">
           <label class="toggle">
-            <input type="checkbox" checked>
+            <input type="checkbox" checked aria-label="Active state">
             <span class="toggle-track"></span>
             <span class="toggle-thumb"></span>
           </label>
@@ -148,7 +148,7 @@
         </div>
         <div class="flex items-center gap-2 mt-2">
           <label class="toggle">
-            <input type="checkbox">
+            <input type="checkbox" aria-label="Inactive state">
             <span class="toggle-track"></span>
             <span class="toggle-thumb"></span>
           </label>
@@ -158,14 +158,14 @@
       
       <div class="widget-box">
         <h3>Select Dropdown</h3>
-        <select class="form-select text-sm p-1 rounded border border-light bg-surface text-primary mb-4" style="width:100%; height: 36px;">
+        <select aria-label="Quality" class="form-select text-sm p-1 rounded border border-light bg-surface text-primary mb-4" style="width:100%; height: 36px;">
           <option>Low Quality</option>
           <option selected>Medium Quality</option>
           <option>Native Quality</option>
         </select>
         
         <h3 class="mt-4">Color Picker</h3>
-        <input type="color" value="#00FF66" class="form-input" style="height:36px;padding:4px;width:100%;border-radius: var(--radius-md);background: var(--bg-surface);border: 1px solid var(--border-default);">
+        <input type="color" aria-label="Colour" value="#00FF66" class="form-input" style="height:36px;padding:4px;width:100%;border-radius: var(--radius-md);background: var(--bg-surface);border: 1px solid var(--border-default);">
       </div>
     </div>
   </div>

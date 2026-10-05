@@ -20,7 +20,9 @@ Sources (2) and (3) are raw observations: they carry spot positions, track membe
 classification, but no unique cell identity, no lineage and no stabilisation. Those are
 produced here by calling the lab's own analysis code (``SCRIPTS/Analysis.py``) rather than a
 second implementation — a dataset must yield the same tracks whether it went through the
-tracking pipeline or through this shortcut.
+tracking pipeline or through this shortcut. The population surfaces are NOT rebuilt here:
+only a container (1) can bring a ``model.glb``; a dataset attached from (2) or (3) gets
+cells and trails, and its surface layer stays empty until the tracking pipeline is run.
 
 CLI (diagnostics):
     python tracking_sources.py <file.ims|file.xls|file.xlsx> [--list] [--out <container>]
@@ -479,10 +481,18 @@ def read_excel(path) -> dict:
     if not out:
         raise ValueError(f"{path.name} / {sheet_name}: aucune ligne exploitable")
 
+    warnings = [f"{skipped} lignes ignorees (valeurs manquantes)"] if skipped else []
+    # The time column is read as a frame index. Imaris writes one there; a workbook whose
+    # times are fractional was exported in seconds or hours and would be misplaced.
+    fractional = sum(1 for e in out if float(e["timepoint"]) != int(e["timepoint"]))
+    if fractional:
+        warnings.append(f"{fractional} valeurs de temps non entieres dans '{header[it]}' : "
+                        f"la colonne est lue comme un numero de frame — verifiez l'export")
+
     return {
         "rows": out,
         "regionSource": region_name,
-        "warnings": ([f"{skipped} lignes ignorees (valeurs manquantes)"] if skipped else []),
+        "warnings": warnings,
         "provenance": {
             "kind": "excel",
             "file": path.name,
@@ -685,6 +695,9 @@ def _merge_regions_from_excel(table: dict, ims_path: Path, verbose: bool) -> Non
             side = read_excel(cand)
         except Exception:
             continue
+        if len(side["rows"]) != len(table["rows"]) and verbose:
+            print(f"  [TRACKING] [!] {cand.name} compte {len(side['rows'])} spots, l'objet Imaris "
+                  f"du volume {len(table['rows'])} : le classeur n'est peut-etre pas a jour")
         if not side.get("regionSource"):
             continue
         labels = {int(r["cell_id"]): r["region"] for r in side["rows"] if r.get("region")}

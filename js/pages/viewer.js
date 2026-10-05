@@ -58,6 +58,43 @@ const ViewerApp = (() => {
     return `api/upload.php?action=blob&ds=${encodeURIComponent(p.slice(_STAGING_PREFIX.length))}&path=`;
   }
 
+  /**
+   * `p` when it names a dataset the way the catalog does — '<type>/<folder>' or
+   * 'staging:<type>/<folder>', one known type, one folder segment — else null. The
+   * path is spliced into the data URL (DATA_WEB/<path>/…, or the staging proxy's
+   * query): a '..' segment, a second slash or a backslash would reach any same-origin
+   * file the browser resolves it to.
+   */
+  function _safeDatasetPath(p) {
+    const s = String(p ?? '');
+    const bare = s.startsWith(_STAGING_PREFIX) ? s.slice(_STAGING_PREFIX.length) : s;
+    const slash = bare.indexOf('/');
+    if (slash <= 0) return null;
+    const type = bare.slice(0, slash);
+    const folder = bare.slice(slash + 1);
+    if (!folder || folder === '.' || folder === '..' || /[\\/?#%\u0000-\u001f]/.test(folder)) return null;
+    const known = typeof Utils.isDatasetType === 'function' ? Utils.isDatasetType(type) : /^[a-z0-9]+$/.test(type);
+    return known ? s : null;
+  }
+
+  // metadata.json fetched as soon as the URL names the dataset, in parallel with the
+  // instance config, the translations, the catalog and the plugin discovery (it used
+  // to wait for all of them): { path, promise → { ok, status, meta, error } }.
+  let _prefetchedMeta = null;
+
+  function _fetchDatasetMetadata(datasetPath) {
+    return fetch(`${_datasetBase(datasetPath)}/metadata.json`)
+      .then(async (resp) => {
+        if (!resp.ok) return { ok: false, status: resp.status, meta: null, error: null };
+        try {
+          return { ok: true, status: resp.status, meta: await resp.json(), error: null };
+        } catch (err) {
+          return { ok: false, status: resp.status, meta: null, error: err };
+        }
+      })
+      .catch(err => ({ ok: false, status: 0, meta: null, error: err }));
+  }
+
   // The directory a dataset lives in IS its type, published or staged. A path
   // naming no known type belongs to none — guessing one would gate the plugins
   // and the header label on a lie.
@@ -69,23 +106,8 @@ const ViewerApp = (() => {
 
   async function init() {
     const initPerfId = _perf()?.start('viewer.init');
-    // 1. Init core
-    Theme.init();
-    // Instance config first so I18n.t() sees the brand/specimen tokens.
-    await InstanceConfig.load();
-    // PERF: I18n.init() and Catalog.load() are independent network fetches —
-    // overlap them so the boot head waits on max(), not the sum, of the two.
-    // Both must still be fully resolved before Catalog.getById (below) and the
-    // v0.12.45 plugin-load order downstream; do NOT fold the plugin discovery in.
-    await Promise.all([I18n.init(), Catalog.load()]);
-    InstanceConfig.applyHead();
-    InstanceConfig.applyDom();
-
-    if (window.lucide) lucide.createIcons();
-    _updateThemeIcon();
-    Theme.onChange(_updateThemeIcon);
-
-    // 2. Read dataset ID and iframe params
+    // 1. The URL first: a hosting page must hear of a failure (PANEL_ERROR) from the
+    // first await on, and the dataset's own files can be asked for right away.
     const params = new URLSearchParams(window.location.search);
     datasetId = params.get('id');
     _isIframe = params.get('hideHeader') === 'true';
@@ -94,6 +116,32 @@ const ViewerApp = (() => {
     if (requestedQuality) _qualityMode = requestedQuality;
 
     const isAdmin = params.get('mode') === 'admin';
+    const fallbackPath = isAdmin ? _safeDatasetPath(params.get('path')) : null;
+
+    // Started now, awaited where they are needed: the plugin list and the dataset's
+    // metadata.json do not depend on the instance config, the translations or the
+    // catalog, and the first brick used to wait for all four in a row.
+    const discoverP = (typeof PluginRegistry !== 'undefined')
+      ? PluginRegistry.discover('js/modules').catch(err => ({ error: err }))
+      : null;
+    const earlyPath = fallbackPath || _safeDatasetPath(datasetId);
+    _prefetchedMeta = earlyPath ? { path: earlyPath, promise: _fetchDatasetMetadata(earlyPath) } : null;
+
+    // 2. Init core
+    Theme.init();
+    // Instance config first so I18n.t() sees the brand/specimen tokens.
+    await InstanceConfig.load();
+    // I18n.init() and Catalog.load() are independent network fetches: overlapped, so
+    // the boot head waits on the slowest of them (and of the two fetches above), not
+    // on their sum. Both are resolved before Catalog.getById (below), and the plugins
+    // are still loaded before any UI is built (the v0.12.45 invariant).
+    await Promise.all([I18n.init(), Catalog.load()]);
+    InstanceConfig.applyHead();
+    InstanceConfig.applyDom();
+
+    if (window.lucide) lucide.createIcons();
+    _updateThemeIcon();
+    Theme.onChange(_updateThemeIcon);
 
     if (_isIframe) {
       document.body.classList.add('viewer-iframe');
@@ -112,8 +160,8 @@ const ViewerApp = (() => {
     }
 
     datasetMeta = Catalog.getById(datasetId);
-    
-    const fallbackPath = params.get('path');
+    if (datasetMeta && !_safeDatasetPath(datasetMeta.path || datasetMeta.id)) datasetMeta = null;
+
     if (!datasetMeta && isAdmin && datasetId && fallbackPath) {
       datasetMeta = {
         id: datasetId,
@@ -178,7 +226,6 @@ const ViewerApp = (() => {
     document.getElementById('dataset-title').textContent = datasetMeta.name;
     document.getElementById('dataset-subtitle').textContent =
       `${Utils.datasetTypeLabel(datasetMeta.type)} - ${Utils.formatStage(datasetMeta.stage)} - ${Utils.formatDate(datasetMeta.date)}`;
-    if (typeof AnnotationManager !== 'undefined') AnnotationManager.init({ items: [] });
 
     // A #state= link is somebody's *saved view*, not the dataset: it reopens their
     // camera, channel curves, measurements and tool layout on top of it. Ask which
@@ -203,7 +250,9 @@ const ViewerApp = (() => {
       // viewer — the 3D canvas must always boot (rule 1.1). Individual plugin
       // failures are already quarantined inside the registry; this catches the rest.
       try {
-        const modulePaths = await PluginRegistry.discover('js/modules');
+        const discovered = await discoverP;
+        if (discovered?.error) throw discovered.error;
+        const modulePaths = discovered;
         // Only the plugins that cover the type being shown: a plugin naming its
         // `dataTypes` is taken at its word, so the photograph-only tools stay off
         // the volume viewer. Plugins declaring nothing predate the field and were
@@ -233,7 +282,10 @@ const ViewerApp = (() => {
     }
 
     // Initialize WebGL Viewer
-    VolumeViewer.init('webgl-canvas');
+    // Every reader of this canvas renders it in its own task first (renderNow, the
+    // canvas's toBlob/toDataURL hooks, getCaptureCanvas for a host page), so the
+    // drawing buffer need not be kept between frames.
+    VolumeViewer.init('webgl-canvas', { preserveDrawingBuffer: false });
     // The slice on screen ⇔ the two renders swapped (_setSliceStage): one listener
     // serves the tool, a sibling's SYNC_SLICER_SPEC and the Z-stack browser alike.
     if (typeof VolumeSlicer !== 'undefined' && VolumeSlicer.onVisibleChange) VolumeSlicer.onVisibleChange(_setSliceStage);
@@ -249,12 +301,21 @@ const ViewerApp = (() => {
     _qualityProgressUnsub?.();
     _qualityProgressUnsub = VolumeViewer.onQualityProgress?.(_handleQualityProgress) || null;
     // ELE-18 (EDGE-001): surface a visible status on GPU context loss/restore (Rule 1.1).
-    VolumeViewer.onContextLost?.(() => _setQualityStatus('Contexte GPU perdu — rendu en pause. Rechargez la page si l\'image ne revient pas.'));
-    VolumeViewer.onContextRestored?.(() => _setQualityStatus('Contexte GPU restauré — rechargez le volume pour réafficher.'));
+    VolumeViewer.onContextLost?.(() => _setQualityStatus(_t('viewer.gpuLost', 'GPU context lost: rendering is paused until the browser gives it back.')));
+    VolumeViewer.onContextRestored?.((info) => {
+      if (!info?.reloading || !info.reload) {
+        _setQualityStatus(_t('viewer.gpuRestored', 'GPU context restored.'));
+        return;
+      }
+      _setQualityStatus(_t('viewer.gpuReloading', 'GPU context restored: reloading the volume…'));
+      Promise.resolve(info.reload)
+        .then(() => _setQualityStatus(_t('viewer.gpuRestored', 'GPU context restored.')))
+        .catch((err) => _setQualityStatus(_tf('viewer.gpuReloadFailed', 'GPU context restored, but the volume could not be reloaded: {message}', { message: String(err?.message || err) })));
+    });
     VolumeViewer.setZDisplayScale(_zDisplayScale, { notify: false });
     _refreshTrackingVisuals();
     VolumeViewer.setMeasurements(_volumeMeasurements);
-    if (_isIframe || true) { // Always bind onCameraChange now
+    {
       VolumeViewer.onCameraChange((state) => {
         // Never broadcast camera changes while the z-stack browser holds the view
         // top-down (slice mode): that forced XY framing would corrupt other panels'
@@ -273,8 +334,10 @@ const ViewerApp = (() => {
       });
       // Broadcast full slicer plane spec to sibling decompose panels on every change.
       // Uses onPlaneSpecChange which fires for all plane mutations (position, yaw, pitch, roll, slab, mode).
+      // A page that is not embedded has no sibling to tell (window.parent === window:
+      // every plane-drag frame used to post the spec to itself).
       VolumeViewer.onPlaneSpecChange?.((spec) => {
-        if (_suppressSlicerSync || _zstackActive || !_isInitialized) return;
+        if (!_isIframe || _suppressSlicerSync || _zstackActive || !_isInitialized) return;
         // SEC-012: restrict targetOrigin to this page's origin (no wildcard leak).
         window.parent.postMessage({
           type: 'SYNC_SLICER_SPEC',
@@ -331,7 +394,9 @@ const ViewerApp = (() => {
         setMeasurements: (m) => VolumeViewer.setMeasurements(m),
         onMeasurePoint: (cb) => VolumeViewer.onMeasurePoint(cb),
         onPlaneSpecChange: (cb) => VolumeViewer.onPlaneSpecChange(cb),
-        getPhysicalCalibration: () => VolumeViewer.getPhysicalCalibration?.()
+        getPhysicalCalibration: () => VolumeViewer.getPhysicalCalibration?.(),
+        // Render the view now: a plugin reading the WebGL canvas calls it in the same task.
+        renderNow: () => VolumeViewer.renderNow?.() || false
       },
       slicer: {
         init: (opts) => typeof VolumeSlicer !== 'undefined' ? VolumeSlicer.init(opts) : null,
@@ -498,6 +563,7 @@ const ViewerApp = (() => {
       }
     });
     _initTrackingLayer();
+    _noticeExtraChannels();
 
     // Operator-attached images (annotated captures, figures). datasetMeta is already
     // merged with metadata.json at this point, so the array is the authoritative one.
@@ -766,65 +832,121 @@ const ViewerApp = (() => {
     if (window.matchMedia('(max-width: 700px)').matches) _collapse();
   }
 
-  // Rule 1.4 — un metadata.json présent doit être structurellement cohérent ; un
-  // metadata incohérent est REJETÉ (pas monté partiellement). On ne valide que ce
-  // qui est présent : un champ absent reste pris dans le fallback catalogue.
+  // Bounds of a volume the platform can stream: 64³ bricks, at most 2^20 voxels an
+  // axis; four channels are drawn (the shader's and the atlas's RGBA), more are
+  // accepted and said so at mount.
+  const MAX_VOXELS_PER_AXIS = 1 << 20;
+  const MAX_CHANNELS = 64;
+
+  /**
+   * Rule 1.4 — a metadata.json must be structurally sound; an unsound one is REJECTED
+   * (never mounted partially). Only what is present is checked: a missing field keeps
+   * the catalog's value. → { ok, reason }
+   */
   function _validateDatasetMetadata(meta, expectLive) {
     if (!meta || typeof meta !== 'object' || Array.isArray(meta)) {
-      return { ok: false, reason: 'racine non-objet' };
+      return { ok: false, reason: 'the root is not an object' };
     }
     const _posInt = (v) => Number.isFinite(v) && Number.isInteger(v) && v > 0;
+    const _axis = (v) => _posInt(v) && v <= MAX_VOXELS_PER_AXIS;
     const d = meta.dimensions;
     if (d !== undefined) {
-      if (!d || typeof d !== 'object' || Array.isArray(d)) return { ok: false, reason: 'dimensions non-objet' };
-      if (!_posInt(d.x) || !_posInt(d.y) || !_posInt(d.z)) return { ok: false, reason: 'dimensions x/y/z invalides' };
-      if (d.c !== undefined && !_posInt(d.c)) return { ok: false, reason: 'dimensions.c invalide' };
-      if (d.t !== undefined && !_posInt(d.t)) return { ok: false, reason: 'dimensions.t invalide' };
+      if (!d || typeof d !== 'object' || Array.isArray(d)) return { ok: false, reason: 'dimensions is not an object' };
+      if (!_axis(d.x) || !_axis(d.y) || !_axis(d.z)) return { ok: false, reason: 'dimensions x/y/z invalid' };
+      if (d.c !== undefined && !(_posInt(d.c) && d.c <= MAX_CHANNELS)) return { ok: false, reason: 'dimensions.c invalid' };
+      if (d.t !== undefined && !_posInt(d.t)) return { ok: false, reason: 'dimensions.t invalid' };
     }
-    // Live : le scrubber lit dimensions.t — il doit exister, dans metadata.json OU le
-    // catalogue (datasetMeta n'est pas encore fusionné ici, d'où le fallback effectif).
+    // A timelapse's scrubber reads dimensions.t: it must exist, in metadata.json OR the
+    // catalog (datasetMeta is not merged yet, hence the effective fallback).
     if (expectLive) {
       const effT = (d && _posInt(d.t)) ? d.t : datasetMeta?.dimensions?.t;
-      if (!_posInt(effT)) return { ok: false, reason: 'dataset live sans dimensions.t' };
+      if (!_posInt(effT)) return { ok: false, reason: 'live dataset without dimensions.t' };
     }
     if (meta.voxel_size !== undefined) {
       const v = meta.voxel_size;
-      if (!v || typeof v !== 'object' || Array.isArray(v)) return { ok: false, reason: 'voxel_size non-objet' };
+      if (!v || typeof v !== 'object' || Array.isArray(v)) return { ok: false, reason: 'voxel_size is not an object' };
       const _posNum = (x) => Number.isFinite(x) && x > 0;
-      if (!_posNum(v.x) || !_posNum(v.y) || !_posNum(v.z)) return { ok: false, reason: 'voxel_size x/y/z invalides' };
+      if (!_posNum(v.x) || !_posNum(v.y) || !_posNum(v.z)) return { ok: false, reason: 'voxel_size x/y/z invalid' };
     }
     if (meta.channels !== undefined) {
-      if (!Array.isArray(meta.channels) || meta.channels.length === 0) return { ok: false, reason: 'channels non-tableau ou vide' };
-      if (meta.channels.some((c) => !c || typeof c !== 'object')) return { ok: false, reason: 'channels contient un élément non-objet' };
+      if (!Array.isArray(meta.channels) || meta.channels.length === 0) return { ok: false, reason: 'channels is not a non-empty array' };
+      if (meta.channels.length > MAX_CHANNELS) return { ok: false, reason: `${meta.channels.length} channels` };
+      if (meta.channels.some((c) => !c || typeof c !== 'object')) return { ok: false, reason: 'channels holds a non-object' };
       if (d && _posInt(d.c) && meta.channels.length !== d.c) return { ok: false, reason: `channels.length (${meta.channels.length}) != dimensions.c (${d.c})` };
     }
     return { ok: true };
   }
 
+  /**
+   * The optional blocks the viewer reads, checked one by one: a malformed block is
+   * dropped with a warning (the dataset mounts without that feature — no
+   * stabilisation, no tracking layer, no gallery) instead of feeding NaN matrices or
+   * a path out of the dataset folder to the code that uses it. → the names dropped.
+   */
+  function _dropMalformedBlocks(meta) {
+    const dropped = [];
+    const finite3 = (a) => Array.isArray(a) && a.length === 3 && a.every(Number.isFinite);
+    const drop = (key) => { delete meta[key]; dropped.push(key); };
+    if (meta.registration !== undefined) {
+      const reg = meta.registration;
+      const ok = reg && typeof reg === 'object' && (reg.transforms === undefined || (Array.isArray(reg.transforms)
+        && reg.transforms.every(r => r && Number.isInteger(r.index) && Array.isArray(r.matrix) && r.matrix.length === 16 && r.matrix.every(Number.isFinite))));
+      if (!ok) drop('registration');
+    }
+    if (meta.acquisitionExtentUm !== undefined) {
+      const e = meta.acquisitionExtentUm;
+      if (!(e && finite3(e.min) && finite3(e.max) && e.max.every((v, i) => v > e.min[i]))) drop('acquisitionExtentUm');
+    }
+    if (meta.tracking !== undefined) {
+      const t = meta.tracking;
+      const path = t && typeof t === 'object' ? t.tracksPath : null;
+      // A path inside the dataset folder: relative, no '..' segment, no scheme.
+      const okPath = path === undefined || path === null
+        || (typeof path === 'string' && path.length < 512
+          && !/(^|[\\/])\.\.([\\/]|$)/.test(path) && !/^([a-z][a-z0-9+.-]*:|[\\/])/i.test(path));
+      if (!(t && typeof t === 'object' && okPath)) drop('tracking');
+    }
+    if (meta.qualities !== undefined && !(meta.qualities && typeof meta.qualities === 'object' && !Array.isArray(meta.qualities))) drop('qualities');
+    if (meta.gallery !== undefined && !Array.isArray(meta.gallery)) drop('gallery');
+    if (dropped.length) console.warn(`[ViewerApp] metadata.json: malformed block(s) ignored: ${dropped.join(', ')}`);
+    return dropped;
+  }
+
   async function _mergeDatasetMetadata() {
-    // BUG-033 (Rule 1.4): metadata.json fetch may fail (no path / non-ok). The
-    // catalogue fallback is acceptable ONLY if it already carries dimensions;
-    // otherwise downstream calibration would compute on NaN, so abort init with
-    // a clear error instead of mounting incomplete metadata.
+    // BUG-033 (Rule 1.4): without a path the catalog row is all there is, acceptable
+    // only if it carries the dimensions (calibration would compute on NaN otherwise).
     const _hasCatalogDims = !!datasetMeta?.dimensions
       && Number.isFinite(datasetMeta.dimensions.x)
       && Number.isFinite(datasetMeta.dimensions.y)
       && Number.isFinite(datasetMeta.dimensions.z);
     const datasetPath = datasetMeta?.path || datasetMeta?.id;
     if (!datasetPath) {
-      if (!_hasCatalogDims) throw new Error('metadata.json introuvable et dimensions absentes du catalogue');
+      if (!_hasCatalogDims) throw new Error(_t('viewer.errMetadataMissing', 'metadata.json not found and no dimensions in the catalog'));
       return;
     }
     try {
-      const resp = await fetch(`${_datasetBase(datasetPath)}/metadata.json`);
-      if (!resp.ok) {
-        if (!_hasCatalogDims) throw new Error(`metadata.json inaccessible (HTTP ${resp.status}) et dimensions absentes du catalogue`);
+      // The fetch init() started from the URL, when it asked for this very dataset.
+      const fetched = await (_prefetchedMeta && _prefetchedMeta.path === datasetPath
+        ? _prefetchedMeta.promise
+        : _fetchDatasetMetadata(datasetPath));
+      _prefetchedMeta = null;
+      if (!fetched.ok) {
+        if (fetched.error) throw fetched.error;
+        // A published dataset without its metadata.json (404 and the like) is broken,
+        // whatever the catalog still lists; a staged import, or a server that failed
+        // this once (5xx, no answer), may be read from the catalog row alone.
+        const staged = String(datasetPath).startsWith(_STAGING_PREFIX);
+        const transient = fetched.status === 0 || fetched.status >= 500;
+        if (!(staged || transient) || !_hasCatalogDims) {
+          throw new Error(_tf('viewer.errMetadataHttp', 'metadata.json unavailable (HTTP {status})', { status: fetched.status }));
+        }
         return;
       }
-      const meta = await resp.json();
+      const meta = fetched.meta;
       const expectLive = datasetMeta?.type === 'live' || meta?.type === 'live';
       const v = _validateDatasetMetadata(meta, expectLive);
-      if (!v.ok) throw new Error(`metadata.json invalide : ${v.reason}`);
+      if (!v.ok) throw new Error(_tf('viewer.errMetadataInvalid', 'Invalid metadata.json: {reason}', { reason: v.reason }));
+      _dropMalformedBlocks(meta);
       datasetMeta = {
         ...datasetMeta,
         ...meta,
@@ -862,19 +984,30 @@ const ViewerApp = (() => {
    * sidebar select and a hosting page (SET_QUALITY) share this one door.
    * @returns {Promise<void>} settles once the volume is on screen at that quality
    */
-  function _setQualityMode(value) {
+  /**
+   * The quality the page now targets, without loading anything: the select, the
+   * viewer's target, the background buffering (stopped, and its "already warmed"
+   * memo forgotten — it was warmed at the previous level).
+   */
+  function _applyQualityMode(value) {
     const select = document.getElementById('select-quality');
-    const previous = _qualityMode;
     _qualityMode = _normalizeQualityParam(value) || '512x512';
     if (select) select.value = _qualityMode;
     VolumeViewer.setQualityTarget?.(_qualityMode, _qualityMode);
+    _stopPrefetch();
+    _preloadedTimepoints.clear();
     // Repaint the buffer for the quality we just switched TO. Stepping back down to
     // one already loaded shows its frames immediately instead of an empty bar.
-    _stopPrefetch();
     _refreshBuffer();
-    if (!_basePath) return Promise.resolve();
+  }
+
+  function _setQualityMode(value) {
+    const select = document.getElementById('select-quality');
+    const previous = _qualityMode;
+    _applyQualityMode(value);
+    if (!_basePath) return Promise.resolve({ ok: true });
     return _loadTimepoint(_basePath, _currentTimepoint, { force: true })
-      .then(() => { _kickPrefetch(200); })
+      .then((result) => { _kickPrefetch(200); return result; })
       .catch(err => {
         // The volume already on screen is intact: say so in the status line and
         // fall back to the quality it is at, rather than covering it with the
@@ -1677,6 +1810,16 @@ const ViewerApp = (() => {
     document.getElementById('btn-studio-open')?.addEventListener('click', () => openStudio());
   }
 
+  // The Studio opens on a picture of at most this many pixels a side, rendered from
+  // the atlas already on the GPU (the native pass then streams the full-size one): a
+  // native-frame preview of a 5735² dataset was a 75 Mpx render, read back and
+  // scanned in JS before anything showed.
+  const STUDIO_PREVIEW_MAX = 2048;
+  // A z-stack figure whose native pass would download more than this asks first.
+  const STUDIO_CONFIRM_BYTES = 256 * 1024 * 1024;
+  let _studioOpening = false;
+  let _nativePassSeq = 0;
+
   async function openStudio() {
     if (typeof StudioEditor === 'undefined' && !_isIframe) return;
 
@@ -1686,21 +1829,26 @@ const ViewerApp = (() => {
       return;
     }
 
-    // The Studio used to open only once the native LOD0 slice had arrived. That is
-    // hundreds of MB of packs for one plane (a 3789² dataset streams ~330 MB / 3160
-    // bricks for a single XY cut), so the button did nothing for minutes. Open on the
-    // plane the GPU already holds — costs one render, no network — and upgrade in
-    // place once the native pass lands.
-    // The Z-stack browser is not the slice inspector: its plane comes from the
-    // browser's cursor and trim, not from the (hidden) inspector plane.
-    const preview = _zstackActive
-      ? _renderStudioPreviewSlice(_zstackStudioSpec())
-      : _renderStudioPreviewSlice();
-    const opening = preview || getCurrentSliceResult();
-    if (!opening) return;
-    StudioEditor.open(opening);
-
-    if (preview) await _upgradeStudioSliceToNative(preview);
+    // A second press while the first one is still rendering its preview would open a
+    // second document and start a second native pass on top of the first.
+    if (_studioOpening) return;
+    _studioOpening = true;
+    let preview = null;
+    let token = null;
+    try {
+      // The Studio used to open only once the native LOD0 slice had arrived — minutes
+      // of packs for one plane. It opens on the plane the GPU already holds (one render,
+      // no network) and upgrades in place once the native pass lands. The Z-stack
+      // browser is not the slice inspector: its plane comes from the browser's cursor
+      // and trim, not from the (hidden) inspector plane.
+      preview = await _renderStudioPreviewSlice(_zstackActive ? _zstackStudioSpec() : null);
+      const opening = preview || getCurrentSliceResult();
+      if (!opening) return;
+      token = StudioEditor.open(opening);
+    } finally {
+      _studioOpening = false;
+    }
+    if (preview && token !== null && token !== undefined) await _upgradeStudioSliceToNative(preview, token);
   }
 
   /**
@@ -1811,46 +1959,160 @@ const ViewerApp = (() => {
   }
 
   /**
-   * The Studio's opening image: the current plane rendered from the atlas already
-   * resident on the GPU, framed exactly as the native pass will frame it so the
-   * upgrade is a pixel swap and every annotation keeps its coordinates.
-   * With an explicit `spec` the inspector plane is left untouched (it need not even
-   * be shown): the render goes through a throwaway slicer material.
+   * The plane `spec` samples through `material` (the live volume material by
+   * default), as plain numbers (StudioPlaneOps.plainGeometry), and the warp of a
+   * stabilised timelapse (16 numbers, column-major; null unwarped).
    */
-  function _renderStudioPreviewSlice(spec = null) {
-    if (typeof VolumeSlicer === 'undefined' || !VolumeSlicer.renderHighRes) return null;
+  function _studioGeometry(spec, material = VolumeViewer.getMaterial?.()) {
+    const space = VolumeSlicer.samplingSpace ? VolumeSlicer.samplingSpace(material || null) : null;
+    const g = VolumeSlicer.planeGeometry(spec, VolumeViewer.getPhysicalSize?.(), space);
+    return {
+      geom: StudioPlaneOps.plainGeometry(g),
+      warp: space?.warp?.elements ? Array.from(space.warp.elements) : null
+    };
+  }
+
+  /** False when the volume carries no physical calibration (its "µm" are voxel counts). */
+  function _studioCalibrated() {
+    const phys = VolumeViewer.getPhysicalSize?.();
+    const cal = VolumeViewer.getPhysicalCalibration?.();
+    return !(cal?.calibrationStatus === 'metadata-missing' || phys?.calibrationStatus === 'metadata-missing' || phys?.mode === 'metadata-missing');
+  }
+
+  // ── Studio plane worker ──────────────────────────────────────────────────────
+  // The MIP reductions of the native pass and the slab footprints, off the main
+  // thread; StudioPlaneOps on the main thread when no worker can run.
+  let _planeWorker = null;
+  let _planeWorkerFailed = false;
+  let _planeJobSeq = 0;
+  const _planeJobs = new Map();
+
+  function _planeWorkerInstance() {
+    if (_planeWorker || _planeWorkerFailed || typeof Worker === 'undefined') return _planeWorker;
+    try {
+      _planeWorker = new Worker('js/workers/studio-plane-worker.js');
+      _planeWorker.onmessage = (e) => {
+        const job = _planeJobs.get(e.data?.id);
+        if (!job) return;
+        _planeJobs.delete(e.data.id);
+        if (e.data.error) job.reject(new Error(e.data.error));
+        else job.resolve(e.data);
+      };
+      _planeWorker.onerror = (err) => {
+        console.warn('[ViewerApp] Studio plane worker failed; computing on the main thread.', err?.message || err);
+        _planeWorkerFailed = true;
+        _planeWorker?.terminate?.();
+        _planeWorker = null;
+        const jobs = [..._planeJobs.values()];
+        _planeJobs.clear();
+        jobs.forEach(job => job.retry());
+      };
+    } catch (err) {
+      _planeWorkerFailed = true;
+      _planeWorker = null;
+    }
+    return _planeWorker;
+  }
+
+  /** Runs `msg` in the plane worker (transferring `transfer`), or `fallback()` here
+   *  (also when the worker dies, for a job whose data was not transferred). */
+  function _planeJob(msg, transfer, fallback) {
+    const worker = _planeWorkerInstance();
+    if (!worker) return Promise.resolve().then(fallback);
+    return new Promise((resolve, reject) => {
+      const id = ++_planeJobSeq;
+      // A job whose data went to a worker that died cannot be run again here.
+      const retry = fallback
+        ? () => Promise.resolve().then(fallback).then(resolve, reject)
+        : () => reject(new Error('Studio plane worker lost'));
+      _planeJobs.set(id, { resolve, reject, retry });
+      try {
+        worker.postMessage({ ...msg, id }, transfer);
+      } catch (err) {
+        _planeJobs.delete(id);
+        retry();
+      }
+    });
+  }
+
+  /** The footprint of a projected slab over `win` of a renderRes frame (StudioPlaneOps.coverageMask). */
+  function _studioCoverageMask(geom, renderRes, win, warp) {
+    const params = { geometry: geom, renderRes, window: { x: win.x, y: win.y, w: win.w, h: win.h }, warp };
+    return _planeJob({ op: 'coverage', ...params }, [], () => ({ mask: StudioPlaneOps.coverageMask(geom, renderRes, params.window, warp) }))
+      .then(r => r.mask)
+      .catch(err => {
+        console.warn('[ViewerApp] Slab footprint unavailable; the Studio draws the slab opaque over its crop.', err);
+        return null;
+      });
+  }
+
+  /** Per-channel max of a brick box over the voxel planes `keep` (a MIP slab tile). */
+  function _reducePlaneTile(data, box, axis, keep) {
+    const job = { box: { ...box }, axis, keep: Array.from(keep) };
+    if (!_planeWorkerInstance()) return Promise.resolve().then(() => StudioPlaneOps.reduceMax(data, job.box, axis, job.keep));
+    // The worker takes the buffer itself (the composed brick is this pass's alone).
+    const own = data.byteOffset === 0 && data.byteLength === data.buffer.byteLength ? data : data.slice();
+    return _planeJob({ op: 'reduce', data: own.buffer, ...job }, [own.buffer], null)
+      .then(r => ({ data: r.data instanceof Uint8Array ? r.data : new Uint8Array(r.data), w: r.w, h: r.h }));
+  }
+
+  /**
+   * The Studio's opening picture: the plane rendered from the atlas already resident
+   * on the GPU, as raw channel values (the Studio colours them), at most
+   * STUDIO_PREVIEW_MAX px a side. Its crop is the plane's footprint on the volume,
+   * computed from the geometry (StudioPlaneOps.cropRect) — no full-frame render, read
+   * back and scanned in JS to find it. The native pass frames the same footprint at
+   * its own resolution and the Studio re-scales the layers drawn meanwhile.
+   * With an explicit `spec` the inspector plane is left untouched (it need not even
+   * be shown).
+   */
+  async function _renderStudioPreviewSlice(spec = null) {
+    if (typeof VolumeSlicer === 'undefined' || !VolumeSlicer.renderRawWithMaterial || typeof StudioPlaneOps === 'undefined') return null;
     if (!spec && !VolumeSlicer.isVisible?.()) return null;
-    if (spec && (!VolumeSlicer.renderWithMaterial || !VolumeViewer.getMaterial?.())) return null;
+    const material = VolumeViewer.getMaterial?.();
+    if (!material) return null;
     const dims = (typeof BrickLoader !== 'undefined' && BrickLoader.isReady?.()) ? BrickLoader.getDimensions(0) : null;
     if (!dims) return null;
-    const explicitPlane = !!spec;
     if (!spec) spec = VolumeSlicer.getPlaneSpec();
-    const renderRes = _nativeStudioRenderSize(spec, dims);
-    const rendered = explicitPlane
-      ? VolumeSlicer.renderWithMaterial(VolumeViewer.getMaterial(), spec, renderRes, _currentChannelState())
-      : VolumeSlicer.renderHighRes(renderRes);
-    if (!rendered) return null;
-    const cropRect = _sliceContentRect(rendered);
-    const canvas = _cropEmptySliceSpace(rendered, cropRect);
+    const nativeRes = _nativeStudioRenderSize(spec, dims);
+    const renderRes = Math.min(nativeRes, STUDIO_PREVIEW_MAX);
+    const { geom, warp } = _studioGeometry(spec, material);
+    const cropRect = StudioPlaneOps.cropRect(geom, renderRes, warp);
+    const win = cropRect ? _sliceWindowForRect(cropRect, renderRes) : null;
+    if (!win) return null;
+    const channelState = _currentChannelState();
+    let raw = null;
+    let canvas = null;
+    try {
+      raw = VolumeSlicer.renderRawWithMaterial(material, spec, renderRes, { window: win });
+      if (!raw) {
+        // No raw values: the colours as rendered (the Studio cannot re-colour them).
+        const colour = VolumeSlicer.renderWithMaterial(material, spec, renderRes, channelState, { window: win });
+        if (colour) canvas = _copyCanvas(colour);
+      }
+    } finally {
+      VolumeSlicer.releaseHiPass?.();
+    }
+    if (!raw && !canvas) return null;
+    // A four-channel slab has no spare byte for its footprint (channel 3 is data).
+    if (_needsCoverageMask(raw)) _withCoverageMask(raw, await _studioCoverageMask(geom, renderRes, win, warp));
     return {
       canvas,
-      width: canvas.width,
-      height: canvas.height,
+      width: win.w,
+      height: win.h,
       renderRes,
+      nativeRes,
       cropRect,
-      // The same pixels as raw channel values: the Studio colours those with its own
-      // channel state, and the native pass reads them wherever a chunk is missing.
-      // A four-channel slab takes its footprint from this colour picture's alpha.
-      raw: _studioRawFor(spec, renderRes, cropRect, canvas),
+      raw,
       // Not 'gpu-slicer': that source makes the Studio re-render the slice through
-      // VolumeSlicer.recompose at the cropped width, which reframes the image and
-      // would break the geometry contract with the native pass.
+      // VolumeSlicer.recompose, while this picture is re-coloured from its raw values.
       source: 'studio-preview',
       quality: 'preview',
       planeSpec: spec,
       pixelSizeUm: _slicePixelSizeUm(spec, renderRes),
+      calibrated: _studioCalibrated(),
       physicalSizeUm: VolumeViewer.getPhysicalSize?.(),
-      channelState: _currentChannelState(),
+      channelState,
       timepoint: _currentTimepoint
     };
   }
@@ -1868,10 +2130,10 @@ const ViewerApp = (() => {
     const seconds = Number(progress.etaSeconds);
     if (Number.isFinite(seconds) && seconds > 0) {
       eta = seconds >= 90
-        ? _t('studio.etaMinutes', '~{m} min left', { m: Math.round(seconds / 60) })
-        : _t('studio.etaSeconds', '~{s} s left', { s: Math.max(1, Math.round(seconds)) });
+        ? _tf('studio.etaMinutes', '~{m} min left', { m: Math.round(seconds / 60) })
+        : _tf('studio.etaSeconds', '~{s} s left', { s: Math.max(1, Math.round(seconds)) });
     }
-    const text = _t('studio.loadingStage', '{res}: {chunks}/{total} chunks · {done}/{size} MB · {eta}', {
+    const text = _tf('studio.loadingStage', '{res}: {chunks}/{total} chunks · {done}/{size} MB · {eta}', {
       res,
       chunks: progress.chunks || 0,
       total: progress.totalChunks || 0,
@@ -1883,94 +2145,164 @@ const ViewerApp = (() => {
   }
 
   /**
+   * A crop rect ({x, y, x2, y2, renderRes}, inclusive pixel bounds) of one frame
+   * expressed in a frame of `renderRes` px — the same region of the plane, every
+   * bound scaled by k = renderRes / rect.renderRes and rounded outwards. null when
+   * there is no rect.
+   */
+  function _scaleCropRect(rect, renderRes) {
+    if (!rect || !(Number(rect.renderRes) > 0) || !(renderRes > 0)) return null;
+    if (rect.renderRes === renderRes) return { ...rect };
+    const k = renderRes / rect.renderRes;
+    return {
+      x: Math.max(0, Math.floor(rect.x * k)),
+      y: Math.max(0, Math.floor(rect.y * k)),
+      x2: Math.min(renderRes - 1, Math.ceil((rect.x2 + 1) * k) - 1),
+      y2: Math.min(renderRes - 1, Math.ceil((rect.y2 + 1) * k) - 1),
+      renderRes
+    };
+  }
+
+  /** _t with the params filled into the English fallback too. */
+  function _tf(key, fallback, params) {
+    let text = _t(key, fallback, params);
+    if (params) Object.keys(params).forEach((p) => { text = text.split(`{${p}}`).join(String(params[p])); });
+    return text;
+  }
+
+  /** Bricks and bytes the native pass would load for `spec` at `lod` (no network). */
+  function _nativePassEstimate(spec, lod) {
+    const dims = BrickLoader.getDimensions(lod);
+    if (!dims) return null;
+    const plan = _nativePassPlan(spec, dims, lod, null);
+    if (!plan) return null;
+    const channels = Math.max(1, Math.min(4, Number(dims.channels) || Number(datasetMeta?.dimensions?.c) || 1));
+    const rgbaTransport = BrickLoader.getTransportEncoding?.() === 'raw-rgba-gzip';
+    const wanted = rgbaTransport ? [-1] : _nativeSliceChannels(channels);
+    const tasks = [];
+    for (const b of plan.bricks) for (const c of wanted) tasks.push({ bx: b.bx, by: b.by, bz: b.bz, lod, channel: c, region: b.region });
+    return { bricks: plan.bricks.length, bytes: BrickLoader.estimateTaskBytes?.(tasks) || 0, dims };
+  }
+
+  /**
+   * A z-stack figure over many slices needs every LOD0 brick of them (the browser's
+   * 3D mode keeps the whole stack: gigabytes on the largest datasets). Above
+   * STUDIO_CONFIRM_BYTES the operator chooses: native, the next level down, or the
+   * preview as it is. → the level to load, or null to keep the preview.
+   */
+  async function _confirmLargeNativePass(spec) {
+    if (!_zstackActive || !(Number(spec?.slabThickness) > 1)) return 0;
+    const native = _nativePassEstimate(spec, 0);
+    if (!native || native.bytes <= STUDIO_CONFIRM_BYTES || typeof Dialog === 'undefined') return 0;
+    const levels = Array.isArray(_brickManifest?.levels) ? _brickManifest.levels.length : (BrickLoader.getManifest?.()?.levels?.length || 1);
+    const lower = levels > 1 ? _nativePassEstimate(spec, 1) : null;
+    const mb = (b) => String(Math.max(1, Math.round(b / 1e6)));
+    const options = [
+      { id: 'native', primary: !lower, variant: lower ? undefined : 'primary', label: _tf('studio.bigPassNative', 'Load native ({mb} MB)', { mb: mb(native.bytes) }) }
+    ];
+    if (lower) {
+      options.push({
+        id: 'lower', primary: true, variant: 'primary',
+        label: _tf('studio.bigPassLower', 'Load at {x} × {y} ({mb} MB)', { x: lower.dims.x, y: lower.dims.y, mb: mb(lower.bytes) })
+      });
+    }
+    options.push({ id: 'keep', label: _t('studio.bigPassKeep', 'Keep the preview') });
+    const choice = await Dialog.ask({
+      icon: 'layers',
+      title: _t('studio.bigPassTitle', 'Large native figure'),
+      message: _tf('studio.bigPassMessage', 'This figure projects {n} slices: its native picture needs every brick of them, about {mb} MB ({bricks} bricks).', {
+        n: Number(spec.slabThickness) || 1, mb: mb(native.bytes), bricks: native.bricks
+      }),
+      note: _t('studio.bigPassNote', 'Trim the stack with the z-stack browser\'s handles to load fewer slices.'),
+      dismissId: 'keep',
+      options
+    });
+    if (choice === 'native') return 0;
+    if (choice === 'lower' && lower) return 1;
+    return null;
+  }
+
+  /**
    * Upgrades the Studio's picture to native in one pass: the preview stands in
    * wherever a chunk is still on its way, so *Stop here* keeps the picture as it is.
+   * `token` (StudioEditor.open's) scopes every progress and picture update to the
+   * document it was opened for. A level the GPU cannot hold (the 3D atlas of an
+   * oblique cut over budget) is retried one level down, and labelled so.
    */
-  async function _upgradeStudioSliceToNative(preview) {
+  async function _upgradeStudioSliceToNative(preview, token) {
     if (typeof BrickLoader === 'undefined' || !BrickLoader.isReady?.()) return;
     const dims0 = BrickLoader.getDimensions(0);
     if (!dims0) return;
-    const onCancel = () => _cancelNativeSlice();
-    const renderRes = Number(preview.renderRes) > 0 ? preview.renderRes : _nativeStudioRenderSize(preview.planeSpec, dims0);
-    StudioEditor.setLoadProgress?.({ percent: 0, label: _nativeLabel(dims0), onCancel });
+    const scoped = { token };
+    const spec = preview.planeSpec;
+    let lod = await _confirmLargeNativePass(spec);
+    if (lod === null || !StudioEditor.isOpen?.() || (StudioEditor.documentToken && StudioEditor.documentToken() !== token)) return;
+
+    _cancelNativeSlice(false);
+    const controller = new AbortController();
+    _nativeSliceAbort = controller;
+    const owns = () => _nativeSliceAbort === controller;
+    const onCancel = () => { if (owns()) _cancelNativeSlice(); else controller.abort(); };
+    const renderRes = Number(preview.nativeRes) > 0 ? preview.nativeRes : _nativeStudioRenderSize(spec, dims0);
+    const levels = BrickLoader.getManifest?.()?.levels?.length || (Array.isArray(_brickManifest?.levels) ? _brickManifest.levels.length : 1);
+    let downgradeNote = '';
+    const label = (dims, progress) => `${_nativeLabel(dims, progress)}${downgradeNote}`;
+    StudioEditor.setLoadProgress?.({ percent: 0, label: label(BrickLoader.getDimensions(lod) || dims0), onCancel }, scoped);
     let missing = 0;
     try {
-      const sr = await _renderNativeSliceForStudio({
-        spec: preview.planeSpec,
-        cropRect: preview.cropRect,
-        renderRes,
-        lod: 0,
-        fallback: { canvas: preview.canvas, raw: preview.raw || null },
-        onProgress: (progress) => {
-          StudioEditor.setLoadProgress?.({ percent: progress.percent, label: _nativeLabel(dims0, progress), onCancel });
-        },
-        // Chunks land one after the other, as they do in the 3D view: every partial
-        // picture is the same frame with more of it native and the preview elsewhere.
-        onPartial: (partial) => {
-          if (StudioEditor.isOpen?.()) StudioEditor.setSliceResult(partial, { imageOnly: true });
+      let sr = null;
+      for (;;) {
+        const dims = BrickLoader.getDimensions(lod) || dims0;
+        try {
+          sr = await _renderNativeSliceForStudio({
+            spec,
+            renderRes,
+            // The preview's crop at the native frame's scale: the picture the Studio swaps
+            // in frames the same region, so the layers drawn meanwhile scale with it.
+            cropRect: _scaleCropRect(preview.cropRect, renderRes),
+            lod,
+            controller,
+            fallback: { canvas: preview.canvas, raw: preview.raw || null, rect: preview.cropRect },
+            onProgress: (progress) => {
+              StudioEditor.setLoadProgress?.({ percent: progress.percent, label: label(dims, progress), onCancel }, scoped);
+            },
+            // Chunks land one after the other, as they do in the 3D view: every partial
+            // picture is the same frame with more of it native and the preview elsewhere.
+            onPartial: (partial) => {
+              if (StudioEditor.isOpen?.()) StudioEditor.setSliceResult(partial, { imageOnly: true, token });
+            }
+          });
+          break;
+        } catch (err) {
+          const overBudget = err?.code === 'SVR_OVER_BUDGET' || err?.code === 'SVR_ALLOC_FAILED';
+          if (!overBudget || lod + 1 >= levels || controller.signal.aborted) throw err;
+          lod += 1;
+          const lower = BrickLoader.getDimensions(lod);
+          console.warn(`[ViewerApp] Native Studio pass does not fit the GPU (${err.message}); retrying at level ${lod}.`);
+          downgradeNote = ` · ${_tf('studio.nativeDowngraded', 'GPU memory: {x} × {y}', { x: lower?.x || '?', y: lower?.y || '?' })}`;
+          StudioEditor.setLoadProgress?.({ percent: 0, label: label(lower || dims0), onCancel }, scoped);
         }
-      });
+      }
       if (sr && StudioEditor.isOpen?.()) {
-        StudioEditor.setSliceResult(sr);
+        StudioEditor.setSliceResult(sr, { token });
         missing = Number(sr.missingChunks) || 0;
       }
     } catch (err) {
       if (err?.name !== 'AbortError') {
         console.warn('[ViewerApp] Native Studio slice failed; keeping the picture so far:', err);
-        _setSliceStatus('Native HD unavailable; keeping the picture so far.');
+        _setSliceStatus(_t('studio.nativeFailed', 'Native resolution unavailable; the picture so far is kept.'));
       }
     } finally {
-      StudioEditor.setLoadProgress?.(null);
+      if (owns()) _nativeSliceAbort = null;
+      StudioEditor.setLoadProgress?.(null, scoped);
     }
     if (missing > 0 && StudioEditor.isOpen?.()) {
-      const key = 'studio.nativeMissing';
-      const text = (typeof I18n !== 'undefined' && I18n.t) ? I18n.t(key, { missing }) : key;
       StudioEditor.setLoadProgress?.({
         percent: 100,
-        label: text === key ? `Native resolution: ${missing} chunks could not be loaded and stay at preview resolution.` : text
-      });
-      setTimeout(() => {
-        if (!_nativeSliceAbort && StudioEditor.isOpen?.()) StudioEditor.setLoadProgress?.(null);
-      }, 8000);
+        label: _tf('studio.nativeMissing', 'Native resolution: {missing} chunks could not be loaded and stay at preview resolution.', { missing })
+      }, scoped);
+      setTimeout(() => StudioEditor.setLoadProgress?.(null, scoped), 8000);
     }
-  }
-
-  function _drawScaleBar(ctx, canvasWidth, canvasHeight) {
-    const physical = VolumeViewer.getPhysicalSize?.();
-    if (!physical || !physical.x) return;
-
-    const micronsPerPixel = physical.x / (datasetMeta?.dimensions?.x || canvasWidth);
-    const barLengthMicrons = _niceScaleBarLength(canvasWidth * micronsPerPixel * 0.2);
-    const barLengthPx = barLengthMicrons / micronsPerPixel;
-
-    const margin = 16;
-    const barHeight = 5;
-    const x = canvasWidth - margin - barLengthPx;
-    const y = canvasHeight - margin - barHeight - 16;
-
-    // Bar background
-    ctx.save();
-    ctx.fillStyle = 'rgba(0,0,0,0.5)';
-    ctx.fillRect(x - 4, y - 4, barLengthPx + 8, barHeight + 24);
-
-    // Bar
-    ctx.fillStyle = '#ffffff';
-    ctx.fillRect(x, y, barLengthPx, barHeight);
-
-    // Label
-    ctx.font = 'bold 11px Inter, Arial, sans-serif';
-    ctx.textAlign = 'center';
-    ctx.fillStyle = '#ffffff';
-    ctx.fillText(`${barLengthMicrons} µm`, x + barLengthPx / 2, y + barHeight + 14);
-    ctx.restore();
-  }
-
-  function _niceScaleBarLength(approxMicrons) {
-    const nice = [1, 2, 5, 10, 20, 50, 100, 200, 500, 1000, 2000, 5000];
-    for (const n of nice) {
-      if (n >= approxMicrons * 0.6) return n;
-    }
-    return Math.round(approxMicrons / 100) * 100 || 100;
   }
 
   function _bindExportAndWorkspace() {
@@ -1979,13 +2311,13 @@ const ViewerApp = (() => {
       dataset: datasetMeta,
       scope: 'viewer',
       getCanvas: () => document.getElementById('webgl-canvas'),
+      renderNow: () => VolumeViewer.renderNow?.(),
       getCanvasBlob: _getFigureBlob,
       getCustomExports: _getAllCustomExports,
       getGraph: _getPluginGraph,
       getWorkspaceState: _getWorkspaceState,
       applyWorkspaceState: _applyWorkspaceState,
-      getMeasurements: () => MeasurementStore.list(datasetId, 'viewer'),
-      getAnnotations: () => (typeof AnnotationManager !== 'undefined' ? AnnotationManager.all() : [])
+      getMeasurements: () => MeasurementStore.list(datasetId, 'viewer')
     });
 
     // btn-export (Download Center) is generated by PluginRegistry.buildToolbarButtons()
@@ -1994,11 +2326,6 @@ const ViewerApp = (() => {
     // exposed on the ViewerContext). The old manual addEventListener here double-wired
     // the click (the modal opened twice per press) — removed. Save/Restore/Presentation
     // are likewise handled by their plugins via data-plugin-id.
-  }
-
-  function _nudgeCutPlane(delta) {
-    const state = VolumeViewer.getPlaneSpec();
-    VolumeViewer.setPlaneSpec({ value: state.value + delta, visible: true });
   }
 
   function _updateCutPlaneUi(state = VolumeViewer.getCutPlaneState()) {
@@ -2047,59 +2374,15 @@ const ViewerApp = (() => {
     if (_nativeSliceAbort) {
       _nativeSliceAbort.abort();
       _nativeSliceAbort = null;
-      if (updateStatus) _setSliceStatus('Cancelling native render...');
+      if (updateStatus) _setSliceStatus(_t('studio.nativeCancelling', 'Cancelling the native render…'));
     }
   }
 
   /**
-   * The compact voxel box `region` of a brick delivered whole (bs³ voxels of
-   * `bytesPerVoxel` bytes each); bytes that already are that box, or a whole brick
-   * asked whole, come back as they are. null when the bytes are neither shape (a
-   * brick the loader could not decode), so the caller drops it rather than upload it.
-   */
-  function _brickRegionData(data, bs, region, bytesPerVoxel = 1) {
-    if (!data) return null;
-    const wholeBytes = bs * bs * bs * bytesPerVoxel;
-    if (!region) return data.length === wholeBytes ? data : null;
-    const rw = region.x1 - region.x0;
-    const rh = region.y1 - region.y0;
-    const rd = region.z1 - region.z0;
-    const boxBytes = rw * rh * rd * bytesPerVoxel;
-    if (data.length === boxBytes) return data;
-    if (data.length !== wholeBytes) return null;
-    const out = new Uint8Array(boxBytes);
-    const rowBytes = rw * bytesPerVoxel;
-    let dst = 0;
-    for (let z = region.z0; z < region.z1; z++) {
-      for (let y = region.y0; y < region.y1; y++) {
-        const src = ((z * bs + y) * bs + region.x0) * bytesPerVoxel;
-        out.set(data.subarray(src, src + rowBytes), dst);
-        dst += rowBytes;
-      }
-    }
-    return out;
-  }
-
-  /** Interleaves per-channel voxel boxes into RGBA, one byte per channel, floor LUT applied. */
-  function _composeRgbaRegion(channelData, floorLuts, channels, voxelCount) {
-    const out = new Uint8Array(voxelCount * 4);
-    const active = Math.max(0, Math.min(4, Number(channels) || 4));
-    for (let c = 0; c < active; c++) {
-      const src = channelData?.[c];
-      if (!src) continue;
-      const lut = floorLuts?.[c] || null;
-      const n = Math.min(voxelCount, src.length);
-      for (let i = 0, dst = c; i < n; i++, dst += 4) {
-        const value = src[i] || 0;
-        out[dst] = lut ? lut[value] : value;
-      }
-    }
-    return out;
-  }
-
-  /**
-   * The LOD0 bricks the Studio's native pass has to load for `spec`, each with the
-   * voxel box of it the shader can sample (`region`; null = the whole brick).
+   * The LOD0 bricks the Studio's native pass has to load for `spec` into a 3D atlas
+   * (oblique cuts, stabilised timelapses, slabs the plane path cannot reproduce),
+   * each with the voxel box of it the shader can sample (`region`; null = the whole
+   * brick).
    *
    * The test runs in texture space against the very plane the slicer samples
    * (VolumeSlicer.planeGeometry). The physical anisotropy tilts an oblique plane
@@ -2108,9 +2391,11 @@ const ViewerApp = (() => {
    * bands of an oblique native slice. A brick is kept when its box comes within the
    * slab's half-thickness of the plane, plus one voxel along the normal for the
    * shader's floor() to a voxel index. Along an axis-aligned plane the sampled
-   * voxels of a brick are a short run of planes, so only those (one voxel of slack
-   * each side) are decoded and uploaded: a single cut costs three planes of every
-   * brick instead of sixty-four.
+   * voxels of a brick are a short run of planes, so only those are decoded and
+   * uploaded: the voxel floor(c·dim), and its neighbour only when c·dim lies within
+   * SLACK voxel of their common face — where the GPU's float32 product may floor to
+   * either side. (A whole voxel of slack each way pulled a second brick layer in at
+   * one plane position in 32 and doubled that cut's download.)
    */
   function _nativeSliceBricksForSpec(spec, dims, lod = 0) {
     if (typeof BrickLoader === 'undefined' || !BrickLoader.activeBricks) return [];
@@ -2122,22 +2407,24 @@ const ViewerApp = (() => {
     const space = VolumeSlicer.samplingSpace ? VolumeSlicer.samplingSpace(VolumeViewer.getMaterial?.() || null) : null;
     const geom = VolumeSlicer.planeGeometry(spec, VolumeViewer.getPhysicalSize?.(), space);
     const n = geom.normal;
+    const nc = geom.center;
     const bs = dims.brickSize || 64;
     const dx = Math.max(1, dims.x || 1);
     const dy = Math.max(1, dims.y || 1);
     const dz = Math.max(1, dims.z || 1);
     const tolerance = geom.halfThickness + Math.abs(n.x) / dx + Math.abs(n.y) / dy + Math.abs(n.z) / dz;
+    // float32 keeps a texture coordinate to ~6e-8: a few 1e-4 voxel on the longest axes.
+    const SLACK = 4e-3;
 
     const axis = Math.abs(n.x) > 0.999999 ? 'x' : Math.abs(n.y) > 0.999999 ? 'y' : Math.abs(n.z) > 0.999999 ? 'z' : null;
     let axisRange = null;
     if (axis) {
       const dim = axis === 'x' ? dx : axis === 'y' ? dy : dz;
-      const c = geom.center[axis];
+      const c = nc[axis];
       const h = geom.halfThickness;
-      // The shader reads voxel floor(uvw * dim) (clamped to the volume); one voxel of
-      // slack each way covers how the GPU rounds that product.
-      const v0 = Math.max(0, Math.floor((c - h) * dim) - 1);
-      const v1 = Math.min(dim - 1, Math.floor((c + h) * dim) + 1);
+      // The shader reads voxel floor(uvw · dim), clamped to the volume.
+      const v0 = Math.max(0, Math.floor((c - h) * dim - SLACK));
+      const v1 = Math.min(dim - 1, Math.floor((c + h) * dim + SLACK));
       if (v1 < v0) return [];
       axisRange = { v0, v1 };
     }
@@ -2156,7 +2443,10 @@ const ViewerApp = (() => {
       ? ['y', 'z'].reduce((best, k) => (Math.abs(n[k]) > Math.abs(n[best]) ? k : best), 'x')
       : null;
     const leanOthers = lean ? ['x', 'y', 'z'].filter(k => k !== lean) : null;
-    const planeAt = lean ? n.dot(geom.center) : 0;
+    const planeAt = lean ? n.x * nc.x + n.y * nc.y + n.z * nc.z : 0;
+    const anx = Math.abs(n.x);
+    const any = Math.abs(n.y);
+    const anz = Math.abs(n.z);
 
     const bricks = [];
     for (const b of BrickLoader.activeBricks(lod)) {
@@ -2178,13 +2468,15 @@ const ViewerApp = (() => {
         region[axis + '0'] = lo;
         region[axis + '1'] = hi + 1;
       } else {
-        const min = new THREE.Vector3(ox / dx, oy / dy, oz / dz);
-        const max = new THREE.Vector3((ox + bw) / dx, (oy + bh) / dy, (oz + bd) / dz);
-        const center = min.clone().add(max).multiplyScalar(0.5);
-        const extent = max.clone().sub(min).multiplyScalar(0.5);
-        const dist = Math.abs(n.dot(center.sub(geom.center)));
-        const radius = Math.abs(n.x) * extent.x + Math.abs(n.y) * extent.y + Math.abs(n.z) * extent.z;
-        if (dist > radius + tolerance) continue;
+        // The brick box (texture units) against the slab: |n·(centre − c)| ≤ Σ|n_k|·half-extent_k + tolerance.
+        const ex = bw / (2 * dx);
+        const ey = bh / (2 * dy);
+        const ez = bd / (2 * dz);
+        const cx = ox / dx + ex;
+        const cy = oy / dy + ey;
+        const cz = oz / dz + ez;
+        const dist = Math.abs(n.x * (cx - nc.x) + n.y * (cy - nc.y) + n.z * (cz - nc.z));
+        if (dist > anx * ex + any * ey + anz * ez + tolerance) continue;
         if (lean) {
           const o = { x: ox, y: oy, z: oz };
           const e = { x: bw, y: bh, z: bd };
@@ -2222,19 +2514,23 @@ const ViewerApp = (() => {
     // About one render pixel per voxel of the longest axis: the frame spans
     // getPlaneExtentUnits() longest-axis lengths — 1.5, or more for a stabilised
     // timelapse whose display box needs a larger frame (VolumeSlicer.frameExtent).
+    // The slicer renders it in tiles and only the crop is read back, so the frame is
+    // not held to a render-target size: 8192 used to decimate the 5735² datasets to
+    // 0.95 px per voxel. 16384 px is the canvas side browsers reliably draw.
     const units = typeof VolumeSlicer !== 'undefined' && VolumeSlicer.getPlaneExtentUnits
       ? VolumeSlicer.getPlaneExtentUnits(VolumeViewer.getMaterial?.())
       : 1.5;
-    return Math.max(512, Math.min(8192, Math.ceil(maxDim * units)));
+    return Math.max(512, Math.min(16384, Math.ceil(maxDim * units)));
   }
 
   // A capture for the Compare Studio: about one render pixel per voxel of the longest
-  // in-plane axis across the slicer frame (1.5 units, wider on a stabilised timelapse).
+  // in-plane axis across the slicer frame (1.5 units, wider on a stabilised timelapse),
+  // within the 16384 px a canvas side reliably holds.
   function _captureRenderRes(maxRes) {
     const units = typeof VolumeSlicer !== 'undefined' && VolumeSlicer.getPlaneExtentUnits
       ? VolumeSlicer.getPlaneExtentUnits(VolumeViewer.getMaterial?.())
       : 1.5;
-    return Math.ceil(maxRes * (Number(units) > 0 ? Number(units) : 1.5));
+    return Math.min(16384, Math.ceil(maxRes * (Number(units) > 0 ? Number(units) : 1.5)));
   }
 
   /**
@@ -2268,75 +2564,10 @@ const ViewerApp = (() => {
     return out;
   }
 
-  /** Bounding box of the non-transparent pixels, padded — null when fully empty. */
-  function _sliceContentRect(canvas) {
-    if (!canvas) return null;
-    const ctx = canvas.getContext('2d');
-    const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-    const data = imgData.data;
-    let minX = canvas.width;
-    let minY = canvas.height;
-    let maxX = 0;
-    let maxY = 0;
-
-    for (let y = 0; y < canvas.height; y++) {
-      for (let x = 0; x < canvas.width; x++) {
-        const alpha = data[(y * canvas.width + x) * 4 + 3];
-        if (alpha > 5) {
-          if (x < minX) minX = x;
-          if (x > maxX) maxX = x;
-          if (y < minY) minY = y;
-          if (y > maxY) maxY = y;
-        }
-      }
-    }
-    if (minX > maxX || minY > maxY) return null;
-
-    const padding = 10;
-    return {
-      x: Math.max(0, minX - padding),
-      y: Math.max(0, minY - padding),
-      x2: Math.min(canvas.width - 1, maxX + padding),
-      y2: Math.min(canvas.height - 1, maxY + padding),
-      renderRes: canvas.width
-    };
-  }
-
   /**
-   * Crop to `rect` when one is supplied, else to the canvas's own content box.
-   * The Studio hands the preview's rect back for the native pass so both images
-   * frame the exact same region: annotation coordinates then survive the swap
-   * untouched (the native pass resolves faint signal the preview LOD misses, so
-   * recomputing the box would shift every layer by a few pixels).
-   */
-  function _cropEmptySliceSpace(canvas, rect = null) {
-    if (!canvas) return canvas;
-    let box = rect && Number.isFinite(rect.x) ? rect : null;
-    if (box && box.renderRes && box.renderRes !== canvas.width) {
-      const s = canvas.width / box.renderRes;
-      box = { x: box.x * s, y: box.y * s, x2: box.x2 * s, y2: box.y2 * s };
-    }
-    if (!box) box = _sliceContentRect(canvas);
-    // Nothing to crop to (empty plane). Still copy: `canvas` is VolumeSlicer's shared
-    // _hiCanvas, which the next high-res render overwrites in place.
-    if (!box) return _copyCanvas(canvas);
-
-    const minX = Math.max(0, Math.round(box.x));
-    const minY = Math.max(0, Math.round(box.y));
-    const maxX = Math.min(canvas.width - 1, Math.round(box.x2));
-    const maxY = Math.min(canvas.height - 1, Math.round(box.y2));
-    if (minX > maxX || minY > maxY) return canvas;
-
-    const cropped = document.createElement('canvas');
-    cropped.width = maxX - minX + 1;
-    cropped.height = maxY - minY + 1;
-    cropped.getContext('2d').drawImage(canvas, minX, minY, cropped.width, cropped.height, 0, 0, cropped.width, cropped.height);
-    return cropped;
-  }
-
-  /**
-   * The frame window {x, y, w, h} that _cropEmptySliceSpace would cut for `rect` out
-   * of a `size` px render — null when the rect is unusable or drawn at another size.
+   * The frame window {x, y, w, h} a crop rect ({x, y, x2, y2, renderRes}, inclusive
+   * pixel bounds) cuts out of a `size` px frame — null when the rect is unusable or
+   * drawn at another size.
    */
   function _sliceWindowForRect(rect, size) {
     if (!rect || !Number.isFinite(rect.x) || !Number.isFinite(rect.x2)) return null;
@@ -2351,18 +2582,16 @@ const ViewerApp = (() => {
 
   /**
    * The raw channel values (VolumeSlicer.renderRawWithMaterial) of `spec` at
-   * `renderRes`, cut to exactly the pixels _cropEmptySliceSpace(…, cropRect) keeps of
-   * the colour render (null cropRect: the whole frame). The Studio colours them with
-   * its own channel state (SliceCompositor). null when they cannot be rendered: the
-   * picture then keeps the colours it was rendered with. A slab's raw (the z-stack
-   * browser's MIP, an inspector MIP / average) carries `projected` (and `coverage`)
-   * from the slicer itself — the one place every raw of this page is rendered, the
-   * native pass included — so the Studio draws it opaque like the colour picture.
-   * `colour` is that colour picture (the canvas _cropEmptySliceSpace cut with the
-   * same cropRect): a slab of four channels has no spare byte for its footprint, so
-   * it gets `coverageMask` from the colour picture's alpha (_sliceCoverageMask) and
-   * the Studio keeps the pixels off the volume transparent, as the colour picture
-   * does.
+   * `renderRes`, cut to exactly the window `cropRect` gives the colour render (null
+   * cropRect: the whole frame). The Studio colours them with its own channel state
+   * (SliceCompositor). null when they cannot be rendered: the picture then keeps the
+   * colours it was rendered with. A slab's raw (the z-stack browser's MIP, an
+   * inspector MIP / average) carries `projected` (and `coverage`) from the slicer
+   * itself, so the Studio draws it opaque like the colour picture. `colour` is that
+   * colour picture (same crop): a slab of four channels has no spare byte for its
+   * footprint, so it gets `coverageMask` from the colour picture's alpha
+   * (_sliceCoverageMask) and the Studio keeps the pixels off the volume transparent,
+   * as the colour picture does.
    */
   function _studioRawFor(spec, renderRes, cropRect, colour = null) {
     if (typeof SliceCompositor === 'undefined' || typeof VolumeSlicer === 'undefined' || !VolumeSlicer.renderRawWithMaterial) return null;
@@ -2447,40 +2676,40 @@ const ViewerApp = (() => {
   }
 
   /**
-   * Renders `options.spec` (the inspector plane by default) at the resolution of
-   * brick level `options.lod` (LOD0 = native): the bricks the plane crosses stream
-   * into a throwaway atlas — only the voxel planes each brick contributes — and the
-   * slicer renders the plane through it, in a frame of `options.renderRes` px (the
-   * native frame by default, so every stage of an upgrade shares the same picture).
-   * `options.onPartial` receives a picture of the same frame every few hundred
-   * milliseconds while chunks land, `options.fallback.canvas` (the preview, cropped
-   * to `options.cropRect`) standing in wherever a chunk is still missing. A chunk
-   * that fails for good keeps those preview pixels in the final picture and is
-   * counted in `missingChunks`. In raw mode (a known frame, and `options.fallback.raw`
-   * — the preview's raw values — whenever a fallback is given) every picture is raw
-   * channel values alone (`raw`, `canvas` null).
+   * How the native pass of `spec` at `lod` gets its voxels: 'plane' — an axis-aligned
+   * plane of an unwarped volume read from a 2D array texture of exactly the voxel
+   * planes it samples (StudioPlaneOps.planePlan; one plane: ~0.1 GiB of VRAM where the
+   * atlas took 1–7 GiB), or 'atlas' — a throwaway 3D atlas of the bricks
+   * _nativeSliceBricksForSpec picks (oblique cuts, stabilised timelapses, an average
+   * slab, a slab sample on a voxel face).
+   *   options.plane    false keeps the atlas (no raw output to read the plane into)
+   *   options.reduced  false refuses a MIP plane: without a fallback picture the
+   *                    shader shows a slab short of a brick that failed from the bricks
+   *                    it has, which the reduced plane cannot.
    */
-  async function _renderNativeSliceForStudio(options = {}) {
-    if (typeof BrickLoader === 'undefined' || typeof SVRManager === 'undefined' || typeof VolumeSlicer === 'undefined') return null;
-    if (!BrickLoader.isReady?.() || !VolumeSlicer.renderWithMaterial || !VolumeViewer.getRenderer?.() || !VolumeViewer.getMaterial?.()) return null;
+  function _nativePassPlan(spec, dims, lod, options = null) {
+    const allowPlane = options?.plane !== false;
+    const allowReduced = options?.reduced !== false;
+    const bs = dims.brickSize || 64;
+    if (allowPlane && typeof StudioPlaneOps !== 'undefined' && VolumeSlicer.createPlaneVolume) {
+      const { geom } = _studioGeometry(spec);
+      const plan = geom && !geom.warped ? StudioPlaneOps.planePlan(geom, dims, BrickLoader.activeBricks(lod), bs) : null;
+      if (plan && plan.empty) return { path: 'plane', plan, bricks: [] };
+      if (plan && (!plan.reduced || allowReduced)) return { path: 'plane', plan, bricks: plan.bricks };
+    }
+    return { path: 'atlas', plan: null, bricks: _nativeSliceBricksForSpec(spec, dims, lod) };
+  }
 
-    _cancelNativeSlice(false);
-    const lod = Math.max(0, Math.floor(Number(options.lod) || 0));
-    const dims = BrickLoader.getDimensions(lod);
-    if (!dims) return null;
-    const stageName = lod === 0 ? 'native HD' : `${dims.x}x${dims.y}`;
-    const channels = Math.max(1, Math.min(4, Number(dims.channels) || Number(datasetMeta?.dimensions?.c) || 1));
-    // The plane the preview was framed on: the inspector's, or the one handed in
-    // (the Z-stack browser's slab), so the native pass swaps pixels under the same frame.
-    const spec = options.spec || VolumeSlicer.getPlaneSpec();
-    const bricks = _nativeSliceBricksForSpec(spec, dims, lod);
-    if (!bricks.length) return null;
-
-    const onProgress = typeof options.onProgress === 'function' ? options.onProgress : null;
-    const onPartial = typeof options.onPartial === 'function' ? options.onPartial : null;
-    const controller = new AbortController();
-    _nativeSliceAbort = controller;
-
+  /**
+   * The throwaway 3D atlas of an atlas pass: a copy of the volume material (so the
+   * slicer reads this atlas, not the one on screen) and an SVRManager sized for
+   * `bricks` within the VRAM budget — over it, init throws err.code SVR_OVER_BUDGET /
+   * SVR_ALLOC_FAILED and the caller tries the next level down. The bricks level `lod`
+   * does not store (ESS-dropped) point at one slot of zeros: they ARE zero voxels, not
+   * bricks still on their way, so the preview never stands in for them (a MIP slab
+   * crosses some in most columns of a specimen).
+   */
+  function _atlasNativeBackend(dims, channels, bricks, lod) {
     const renderer = VolumeViewer.getRenderer();
     const sourceMaterial = VolumeViewer.getMaterial();
     const tempMaterial = sourceMaterial.clone();
@@ -2495,131 +2724,288 @@ const ViewerApp = (() => {
       const v = sourceMaterial.uniforms?.[k]?.value;
       if (v?.clone && tempMaterial.uniforms) tempMaterial.uniforms[k] = { value: v.clone() };
     }
-
-    const tempSvr = new SVRManager();
     const bs = dims.brickSize || 64;
-    const now = () => performance.now?.() || Date.now();
+    const tempSvr = new SVRManager();
+    try {
+      tempSvr.init(channels, dims, renderer, tempMaterial, { targetSlots: bricks.length + 1 });
+    } catch (err) {
+      tempSvr.dispose?.();
+      tempMaterial.dispose?.();
+      throw err;
+    }
+    if (BrickLoader.hasBrick) tempSvr.pointEmptyBricks((bx, by, bz) => !BrickLoader.hasBrick(bx, by, bz, lod));
+    return {
+      kind: 'atlas',
+      material: tempMaterial,
+      plane: null,
+      /** A composed brick box (whole interior bricks come with no region). → bricks written. */
+      write(brick, data, region) {
+        const r = region || {
+          x0: 0, x1: Math.min(bs, dims.x - brick.bx * bs),
+          y0: 0, y1: Math.min(bs, dims.y - brick.by * bs),
+          z0: 0, z1: Math.min(bs, dims.z - brick.bz * bs)
+        };
+        return tempSvr.writeRgbaBrickRegion(brick.bx, brick.by, brick.bz, data, r.x0, r.y0, r.z0, r.x1 - r.x0, r.y1 - r.y0, r.z1 - r.z0) ? 1 : 0;
+      },
+      /** Uploads the GPU refused since the last check (their page entries are cleared). → bricks lost. */
+      flush() {
+        return (tempSvr.flushUploadErrors?.() || []).length;
+      },
+      dispose() {
+        tempSvr.dispose?.();
+        tempMaterial.dispose?.();
+      }
+    };
+  }
+
+  /**
+   * The plane texture of a plane pass (VolumeSlicer.createPlaneVolume). One plane: a
+   * brick's voxel plane(s) are cut out of its box here (a 64 × 64 copy) and uploaded
+   * as they land. A MIP slab: each brick box is reduced to its per-channel maximum in
+   * the plane worker, the column's bricks are max-ed together, and the column is
+   * uploaded — and marked present — once all of them are in. → throws err.code
+   * PLANE_UNSUPPORTED / PLANE_ALLOC_FAILED (the caller falls back to the atlas).
+   */
+  function _planeNativeBackend(plan, dims, channels) {
+    const plane = VolumeSlicer.createPlaneVolume({
+      axis: plan.axis, dims, layers: plan.layers, layerBase: plan.layerBase, reduced: plan.reduced, brickSize: plan.bs
+    });
+    // The channel count is all the raw shader takes from the volume material here.
+    const numChannels = Number(VolumeViewer.getMaterial?.()?.uniforms?.numChannels?.value);
+    const material = { defines: {}, uniforms: { numChannels: { value: Number.isFinite(numChannels) && numChannels > 0 ? numChannels : channels } } };
+    const columns = new Map();
+    for (const [key, col] of plan.columns) columns.set(key, { ...col, got: 0, tile: null });
+    // A column (and layer) no brick of the plan fills is made of ESS-dropped bricks:
+    // zero voxels, which the texture already holds (WebGL zero-initialises storage).
+    // Present from the start, or the preview would stand in for it for good.
+    const awaited = new Set();
+    if (plan.reduced) for (const key of plan.columns.keys()) awaited.add(`${key}_0`);
+    else for (const b of plan.bricks) for (const lo of b.layerOffsets || []) awaited.add(`${b.column}_${lo.layer}`);
+    const cu = Math.ceil(plane.width / plan.bs);
+    const cv = Math.ceil(plane.height / plan.bs);
+    for (let layer = 0; layer < plane.layers; layer++) {
+      for (let bv = 0; bv < cv; bv++) {
+        for (let bu = 0; bu < cu; bu++) {
+          if (!awaited.has(`${bu}_${bv}_${layer}`)) plane.setPresent(bu, bv, layer, true);
+        }
+      }
+    }
+    return {
+      kind: 'plane',
+      material,
+      plane,
+      write(brick, data, region) {
+        const box = StudioPlaneOps.boxOf(region, plan.bs);
+        const place = StudioPlaneOps.tilePlacement(brick, box, plan.axis, plan.bs);
+        const col = columns.get(brick.column);
+        if (!col) return 0;
+        if (!plan.reduced) {
+          for (const lo of brick.layerOffsets || []) {
+            const tile = StudioPlaneOps.extractLayer(data, box, plan.axis, lo.offset);
+            if (!plane.upload(place.u0, place.v0, tile.w, tile.h, lo.layer, tile.data)) return 0;
+            plane.setPresent(col.bu, col.bv, lo.layer, true);
+          }
+          return 1;
+        }
+        return _reducePlaneTile(data, box, plan.axis, brick.keep).then((tile) => {
+          if (!col.tile) col.tile = tile.data;
+          else {
+            const acc = col.tile;
+            const t = tile.data;
+            for (let i = 0; i < acc.length; i++) if (t[i] > acc[i]) acc[i] = t[i];
+          }
+          col.got += 1;
+          if (col.got < col.need) return 0;
+          const ok = plane.upload(place.u0, place.v0, tile.w, tile.h, 0, col.tile);
+          col.tile = null;
+          if (!ok) return 0;
+          plane.setPresent(col.bu, col.bv, 0, true);
+          return col.need;
+        });
+      },
+      /** Tiles the GPU refused since the last check (marked absent again). → bricks lost. */
+      flush() {
+        let lost = 0;
+        for (const t of plane.flushErrors()) {
+          if (!plan.reduced) lost += 1;
+          else {
+            const col = [...columns.values()].find(c => c.bu === t.bu && c.bv === t.bv);
+            lost += col ? col.need : 1;
+          }
+        }
+        return lost;
+      },
+      dispose() {
+        plane.dispose();
+        columns.clear();
+      }
+    };
+  }
+
+  /**
+   * Renders `options.spec` (the inspector plane by default) at the resolution of
+   * brick level `options.lod` (LOD0 = native) in a frame of `options.renderRes` px,
+   * cut to the plane's footprint on the volume (`options.cropRect`, else computed
+   * from the geometry). The bricks the plane reads stream in through their own loader
+   * batch (own group and signal: a viewer stream started meanwhile cannot cancel or
+   * drop them), composed and floor-LUT'ed in the decode workers, into a plane texture
+   * or a throwaway 3D atlas (_nativePassPlan). `options.onPartial` receives a picture
+   * of the same frame every few hundred milliseconds while chunks land,
+   * `options.fallback` ({ raw, canvas, rect }: the Studio preview and ITS crop rect)
+   * standing in wherever a chunk is still missing. A chunk that fails for good (the
+   * failed channels are retried once, alone) keeps those preview pixels in the final
+   * picture: `missingChunks` = bricks − bricks written, and such a picture is labelled
+   * 'native-partial', never 'native'. In raw mode every picture is raw channel values
+   * (`raw`, one buffer refilled in place, `canvas` null).
+   * `options.controller` is the caller's AbortController (else one of its own).
+   * Throws err.code SVR_OVER_BUDGET / SVR_ALLOC_FAILED when the atlas does not fit.
+   */
+  async function _renderNativeSliceForStudio(options = {}) {
+    if (typeof BrickLoader === 'undefined' || typeof SVRManager === 'undefined' || typeof VolumeSlicer === 'undefined' || typeof StudioPlaneOps === 'undefined') return null;
+    if (!BrickLoader.isReady?.() || !VolumeSlicer.renderWithMaterial || !VolumeViewer.getRenderer?.() || !VolumeViewer.getMaterial?.()) return null;
+
+    const controller = options.controller || new AbortController();
+    if (!options.controller) {
+      _cancelNativeSlice(false);
+      _nativeSliceAbort = controller;
+    }
+    const lod = Math.max(0, Math.floor(Number(options.lod) || 0));
+    const dims = BrickLoader.getDimensions(lod);
+    if (!dims) return null;
+    const channelCount = Math.max(1, Number(dims.channels) || Number(datasetMeta?.dimensions?.c) || 1);
+    // The shader and the atlas carry four channels: a fifth is not shown (said at mount).
+    const channels = Math.min(4, channelCount);
+    // The plane the preview was framed on: the inspector's, or the one handed in
+    // (the Z-stack browser's slab), so the native pass swaps pixels under the same frame.
+    const spec = options.spec || VolumeSlicer.getPlaneSpec();
+    const sourceMaterial = VolumeViewer.getMaterial();
+    const renderRes = Number(options.renderRes) > 0 ? Math.round(options.renderRes) : _nativeStudioRenderSize(spec, dims);
+    const { geom, warp } = _studioGeometry(spec, sourceMaterial);
+    const cropRect = options.cropRect || StudioPlaneOps.cropRect(geom, renderRes, warp);
+    const sliceWindow = cropRect ? _sliceWindowForRect(cropRect, renderRes) : null;
+    if (!sliceWindow) return null;
+
+    // Raw mode: the pass reads back the sampled channel values, not colours, and the
+    // Studio colours them with its own channel state (SliceCompositor) — an edit made
+    // in the Studio survives every refresh. The preview's raw values stand in for the
+    // chunks still missing, and for the channels the pass does not download (off in
+    // the viewer): switched on in the Studio they show at preview resolution instead
+    // of black. The preview is looked up by frame position, at its own resolution.
+    const previewRaw = options.fallback?.raw && typeof SliceCompositor !== 'undefined' && SliceCompositor.isRaw(options.fallback.raw)
+      ? options.fallback.raw : null;
+    const previewCanvas = options.fallback?.canvas || null;
+    const fallbackRect = options.fallback?.rect || options.cropRect || null;
+    const rawMode = Boolean(typeof SliceCompositor !== 'undefined' && VolumeSlicer.renderRawWithMaterial && (previewRaw || !previewCanvas));
+    const rawFallback = rawMode && previewRaw && fallbackRect ? { raw: previewRaw, rect: fallbackRect } : null;
+    const colourFallback = !rawMode && previewCanvas && fallbackRect ? { canvas: previewCanvas, rect: fallbackRect } : null;
+
     const rgbaTransport = BrickLoader.getTransportEncoding?.() === 'raw-rgba-gzip';
-    const floorLuts = VolumeViewer.floorLutsFromManifest?.(BrickLoader.getManifest?.(), channels) || [];
+    const floorLuts = (VolumeViewer.floorLutsFromManifest?.(BrickLoader.getManifest?.(), channels) || []).slice(0, channels);
     // Scalar transport stores one pack set per channel, so a disabled channel is a
     // whole quarter of the traffic that never reaches a pixel. RGBA transport packs
     // all four together — there is nothing to skip there.
     const wantedChannels = rgbaTransport ? null : _nativeSliceChannels(channels);
-    const perBrickTasks = rgbaTransport ? 1 : wantedChannels.length;
-    const channelState = _currentChannelState();
-    const renderRes = Number(options.renderRes) > 0 ? Math.round(options.renderRes) : _nativeStudioRenderSize(spec, dims);
-    const cropRect = options.cropRect || null;
-    const fallback = options.fallback?.canvas && cropRect ? { canvas: options.fallback.canvas, rect: cropRect } : null;
-    // With the preview's frame known, only that window of the frame is rendered and
-    // read back — the same pixels _cropEmptySliceSpace would cut out of the full frame.
-    const sliceWindow = _sliceWindowForRect(cropRect, renderRes);
-    // Raw mode: the pass reads back the sampled channel values, not colours
-    // (VolumeSlicer.renderRawWithMaterial), and the Studio colours them with its own
-    // channel state (SliceCompositor) — an edit made in the Studio survives every
-    // refresh, and re-colouring needs no atlas once this throwaway one is gone. It
-    // takes the preview's frame (the window) and, with a fallback, the preview's raw
-    // values of that same crop for the chunks still missing. Channels the pass does
-    // not download (off in the viewer) are read from the preview raw as well: switched
-    // on in the Studio they show at preview resolution instead of black.
-    const previewRaw = options.fallback?.raw || null;
-    const rawMode = Boolean(sliceWindow && typeof SliceCompositor !== 'undefined' && VolumeSlicer.renderRawWithMaterial
-      && (!fallback || (SliceCompositor.isRaw(previewRaw) && previewRaw.width === sliceWindow.w && previewRaw.height === sliceWindow.h)));
-    const rawFallback = rawMode && fallback ? { raw: previewRaw, rect: cropRect } : null;
-    // A four-channel slab's footprint (coverageMask) is the preview's, for every
-    // picture of the pass: same plane and crop, and the footprint is geometry alone
-    // (which of the slab's samples fall inside the volume box — the spec, the physical
-    // size and, on a stabilised timelapse, the timepoint's warp; never the level or the
-    // bricks), so it is the same at native resolution.
-    const previewCoverageMask = rawMode ? (previewRaw?.coverageMask || null) : null;
     const previewOnlyChannels = wantedChannels
       ? Array.from({ length: channels }, (_, c) => c).filter(c => !wantedChannels.includes(c))
       : [];
+    const channelState = _currentChannelState();
 
+    let passPlan = _nativePassPlan(spec, dims, lod, { plane: rawMode, reduced: Boolean(rawFallback) });
+    let backend = null;
+    if (passPlan.path === 'plane' && passPlan.bricks.length) {
+      try {
+        backend = _planeNativeBackend(passPlan.plan, dims, channels);
+      } catch (err) {
+        console.warn('[ViewerApp] Plane texture unavailable; the native pass uses a 3D atlas.', err?.message || err);
+        passPlan = { path: 'atlas', plan: null, bricks: _nativeSliceBricksForSpec(spec, dims, lod) };
+      }
+    }
+    const bricks = passPlan.bricks;
+    if (!bricks.length) {
+      backend?.dispose?.();
+      return null;
+    }
+    if (!backend) backend = _atlasNativeBackend(dims, channels, bricks, lod);
+
+    const onProgress = typeof options.onProgress === 'function' ? options.onProgress : null;
+    const onPartial = typeof options.onPartial === 'function' ? options.onPartial : null;
+    const now = () => performance.now?.() || Date.now();
     const brickByKey = new Map(bricks.map(b => [`${b.bx}_${b.by}_${b.bz}`, b]));
-    const pendingScalar = new Map();
-    const failed = new Set();
-    let totalTasks = 0;
-    let doneTasks = 0;
-    let writtenBricks = 0;
+    const partials = new Map();
+    const pendingWrites = new Set();
+    let written = 0;
+    let fraction = 0;
     let lastStatusAt = 0;
     let bytesTotal = 0;
     let bytesDone = 0;
     let startedAt = now();
     let lastBrickAt = 0;
-
-    const tasksFor = (list) => {
-      const tasks = [];
-      for (const brick of list) {
-        const base = { bx: brick.bx, by: brick.by, bz: brick.bz, lod, region: brick.region || null };
-        if (rgbaTransport) tasks.push({ ...base, channel: -1 });
-        else for (const c of wantedChannels) tasks.push({ ...base, channel: c });
-      }
-      return tasks;
-    };
-    const voxelsOf = (brick) => {
-      const r = brick.region;
-      return r ? (r.x1 - r.x0) * (r.y1 - r.y0) * (r.z1 - r.z0) : bs * bs * bs;
-    };
+    let rawOut = null;
+    // A four-channel slab's footprint (no spare channel for it), computed once in the
+    // plane worker for this frame: geometry alone, the same for every picture.
+    let coverageMask = null;
+    const needsMask = rawMode && geom.projected && !(Number(sourceMaterial.uniforms?.numChannels?.value) < 4);
+    const maskReady = needsMask
+      ? _studioCoverageMask(geom, renderRes, sliceWindow, warp).then(m => { coverageMask = m; })
+      : Promise.resolve();
 
     const status = (force = false) => {
       const t = now();
       if (!force && t - lastStatusAt < 250) return;
       lastStatusAt = t;
-      const pct = Math.round((doneTasks / Math.max(1, totalTasks)) * 100);
+      const pct = Math.round(fraction * 100);
       // An estimate once a few seconds and a few percent of the bytes are in.
       const elapsed = t - startedAt;
       let etaSeconds = null;
       if (elapsed > 2000 && bytesTotal > 0 && bytesDone > 0.03 * bytesTotal && bytesDone < bytesTotal) {
         etaSeconds = ((bytesTotal - bytesDone) * elapsed) / bytesDone / 1000;
       }
-      _setSliceStatus(`Rendering ${stageName} slice: ${writtenBricks}/${bricks.length} chunks, ${pct}%`);
-      onProgress?.({ percent: pct, chunks: writtenBricks, totalChunks: bricks.length, bytesDone, bytesTotal, etaSeconds, lod, dims });
+      _setSliceStatus(_tf('studio.nativeStatus', 'Native slice: {done}/{total} chunks, {pct}%', { done: written, total: bricks.length, pct }));
+      onProgress?.({ percent: pct, chunks: written, totalChunks: bricks.length, bytesDone, bytesTotal, etaSeconds, lod, dims });
     };
 
-    // Always through the fallback variant of the slice shader (one program for the
-    // whole pass): with every brick present it is never sampled.
-    // → { canvas, raw }: raw alone in raw mode (the Studio colours it; one render and
-    // one readback per refresh, as the colour path), a canvas otherwise.
+    // → { canvas, raw }: raw alone in raw mode (the Studio colours it; the same buffer
+    // refilled at every refresh), a canvas otherwise.
     const renderSlice = () => {
       if (rawMode) {
-        const raw = VolumeSlicer.renderRawWithMaterial(tempMaterial, spec, renderRes, {
-          window: sliceWindow, fallbackRaw: rawFallback, fallbackChannels: previewOnlyChannels, keepTarget: true
+        const raw = VolumeSlicer.renderRawWithMaterial(backend.material, spec, renderRes, {
+          window: sliceWindow, fallbackRaw: rawFallback, fallbackChannels: previewOnlyChannels, plane: backend.plane, out: rawOut
         });
-        if (raw) return { canvas: null, raw };
+        if (raw) {
+          rawOut = raw;
+          return { canvas: null, raw };
+        }
+        if (backend.plane) return null;
       }
       const rendered = VolumeSlicer.renderWithMaterial(
-        tempMaterial, spec, renderRes, channelState, { fallback, window: sliceWindow }
+        backend.material, spec, renderRes, channelState, { fallback: colourFallback, window: sliceWindow }
       );
-      if (!rendered) return null;
       // The slicer's canvas is overwritten by its next render: keep a copy.
-      return {
-        canvas: sliceWindow ? _copyCanvas(rendered) : _cropEmptySliceSpace(rendered, cropRect || _sliceContentRect(rendered)),
-        raw: null
-      };
+      return rendered ? { canvas: _copyCanvas(rendered), raw: null } : null;
     };
-    const sliceResult = (picture, rect, extra) => ({
+    const sliceResult = (picture, extra) => ({
       canvas: picture.canvas,
-      raw: _withCoverageMask(picture.raw, previewCoverageMask),
+      raw: _withCoverageMask(picture.raw, coverageMask),
       width: picture.canvas ? picture.canvas.width : picture.raw.width,
       height: picture.canvas ? picture.canvas.height : picture.raw.height,
       renderRes,
-      cropRect: rect,
+      cropRect,
       source: 'native-slicer',
-      quality: lod === 0 ? 'native' : `lod${lod}`,
+      quality: 'native-partial',
       lod,
       planeSpec: spec,
       pixelSizeUm: _slicePixelSizeUm(spec, renderRes),
+      calibrated: _studioCalibrated(),
       physicalSizeUm: VolumeViewer.getPhysicalSize?.(),
       channelState,
       timepoint: _currentTimepoint,
-      nativeChunks: writtenBricks,
+      nativeChunks: written,
       totalChunks: bricks.length,
       ...extra
     });
 
-    // The progressive picture is re-rendered from the growing atlas at most every
-    // PARTIAL_MIN_MS, and never more often than a few times the previous render's own
-    // cost (reading back a 5684² frame is a good part of a second on a large dataset).
+    // The progressive picture is re-rendered at most every PARTIAL_MIN_MS, and never
+    // more often than a few times the previous render's own cost.
     const PARTIAL_MIN_MS = 500;
     // A refresh is worth its render once a couple of percent of the chunks are new,
     // or after two seconds regardless (the first pack of a slow host).
@@ -2630,13 +3016,16 @@ const ViewerApp = (() => {
     let writtenSinceRender = 0;
     const renderPartial = () => {
       if (!onPartial || controller.signal.aborted || !writtenSinceRender) return;
+      if (needsMask && !coverageMask) return;
       const t0 = now();
+      written -= backend.flush();
       const picture = renderSlice();
       if (!picture) return;
-      lastPartialCost = now() - t0;
       lastPartialAt = now();
       writtenSinceRender = 0;
-      onPartial(sliceResult(picture, cropRect, { partial: true }));
+      onPartial(sliceResult(picture, { partial: true }));
+      // The Studio's compose of the picture counts in the refresh's cost.
+      lastPartialCost = now() - t0;
     };
     const partialTick = () => {
       partialTimer = null;
@@ -2654,132 +3043,143 @@ const ViewerApp = (() => {
       if (partialTimer) { clearTimeout(partialTimer); partialTimer = null; }
     };
 
-    const upload = (brick, key, rgba) => {
-      const r = brick.region;
-      let ok = true;
-      if (r) {
-        ok = tempSvr.writeRgbaBrickRegion(brick.bx, brick.by, brick.bz, rgba, r.x0, r.y0, r.z0, r.x1 - r.x0, r.y1 - r.y0, r.z1 - r.z0);
-      } else {
-        const bw = Math.min(bs, dims.x - brick.bx * bs);
-        const bh = Math.min(bs, dims.y - brick.by * bs);
-        const bd = Math.min(bs, dims.z - brick.bz * bs);
-        tempSvr.writeRgbaBrick(brick.bx, brick.by, brick.bz, rgba, bw, bh, bd);
-      }
-      if (ok === false) {
-        failed.add(key);
+    const commit = (brick, data, region) => {
+      let res;
+      try {
+        res = backend.write(brick, data, region);
+      } catch (err) {
+        console.warn('[ViewerApp] Native Studio chunk could not be written:', err);
         return;
       }
-      writtenBricks++;
-      writtenSinceRender++;
-      schedulePartial();
+      const done = (n) => {
+        if (!(n > 0) || controller.signal.aborted) return;
+        written += n;
+        writtenSinceRender += n;
+        schedulePartial();
+      };
+      if (res && typeof res.then === 'function') {
+        const p = res.then(done, (err) => console.warn('[ViewerApp] Native Studio chunk could not be reduced:', err))
+          .finally(() => pendingWrites.delete(p));
+        pendingWrites.add(p);
+      } else {
+        done(Number(res) || 0);
+      }
     };
 
-    const onBrickLoaded = ({ bx, by, bz, channel, data }) => {
-      if (controller.signal.aborted) return;
-      const key = `${bx}_${by}_${bz}`;
+    // A composed row: one brick, its channels interleaved, floor LUT applied (in a
+    // decode worker). A brick some of whose channels failed is held until the retry
+    // brings them — only those are downloaded again.
+    const onBrickLoaded = (row) => {
+      if (controller.signal.aborted || !row?.data) return;
+      const key = `${row.bx}_${row.by}_${row.bz}`;
       const brick = brickByKey.get(key);
       if (!brick) return;
-      bytesDone = Math.min(bytesTotal, bytesDone + (BrickLoader.taskBytes?.({ lod, channel, bx, by, bz }) || 0));
+      const got = Array.isArray(row.channels) ? row.channels : [];
+      for (const c of got) bytesDone += BrickLoader.taskBytes?.({ lod, channel: c, bx: row.bx, by: row.by, bz: row.bz, region: brick.region || null }) || 0;
+      bytesDone = Math.min(bytesTotal || bytesDone, bytesDone);
       lastBrickAt = now();
-      if (channel === -1) {
-        const box = _brickRegionData(data, bs, brick.region, 4);
-        if (!box) failed.add(key);
-        else upload(brick, key, VolumeViewer.applyRgbaBrickLuts?.(box, floorLuts, channels) || box);
-      } else {
-        const box = _brickRegionData(data, bs, brick.region, 1);
-        if (!box) {
-          failed.add(key);
-          pendingScalar.delete(key);
-        } else {
-          let pending = pendingScalar.get(key);
-          if (!pending) {
-            pending = { count: 0, data: new Array(channels) };
-            pendingScalar.set(key, pending);
-          }
-          if (!pending.data[channel]) pending.count++;
-          pending.data[channel] = box;
-          if (pending.count >= perBrickTasks) {
-            pendingScalar.delete(key);
-            upload(brick, key, _composeRgbaRegion(pending.data, floorLuts, channels, voxelsOf(brick)));
-          }
+      let data = row.data;
+      const held = partials.get(key);
+      if (held) {
+        const voxels = Math.floor(held.data.length / 4);
+        for (const c of got) {
+          if (c < 0 || c > 3) continue;
+          for (let i = 0, o = c; i < voxels; i++, o += 4) held.data[o] = data[o];
+          held.missing.delete(c);
         }
+        if (held.missing.size) return;
+        partials.delete(key);
+        data = held.data;
+      } else if (Array.isArray(row.failedChannels) && row.failedChannels.length) {
+        partials.set(key, { data, missing: new Set(row.failedChannels) });
+        return;
       }
-      doneTasks++;
+      commit(brick, data, row.region || null);
       status(false);
     };
-    const loadOptions = {
+    const tasksFor = (pairs) => pairs.map(({ brick, channel }) => ({
+      bx: brick.bx, by: brick.by, bz: brick.bz, lod, channel, region: brick.region || null
+    }));
+    const loadOptions = (group) => ({
+      group,
+      signal: controller.signal,
       concurrency: Math.min(32, Math.max(4, Number(navigator.hardwareConcurrency) || 8)),
-      cancelPrevious: false,
-      preserveOrder: true,
       // The runs of a pack this plane needs, not the whole pack (a cut across the
       // stack needs a few bricks of many packs).
       byteRanges: true,
       streamOnly: true,
-      cacheResults: false,
-      // Bricks the viewer already decoded are free; writing this batch back would
-      // evict its working set (a slice is thousands of bricks), so read only.
-      readCache: true,
-      // The loader runs its own AbortController, so aborting ours is invisible to
-      // it: without this hook, closing the Studio left the whole LOD0 transfer
-      // running to completion in the background.
-      shouldAbort: () => controller.signal.aborted,
+      compose: { channels, luts: floorLuts, components: 4, cropToVolume: true },
       onBrickLoaded,
-      onBrickError: ({ bx, by, bz }) => {
-        failed.add(`${bx}_${by}_${bz}`);
-        doneTasks++;
-        status(false);
-      },
-      onProgress: () => status(false)
-    };
-    const throwIfAborted = () => {
-      if (controller.signal.aborted) throw new DOMException('Native slice render cancelled', 'AbortError');
+      onProgress: (f) => { fraction = f; status(false); }
+    });
+    const throwIfAborted = (summary) => {
+      // A batch cancelled by anything but this pass (the dataset was switched) is
+      // just as unusable as one the operator stopped.
+      if (controller.signal.aborted || summary?.cancelled) {
+        throw new DOMException('Native slice render cancelled', 'AbortError');
+      }
     };
 
     try {
-      _setSliceStatus(`Preparing ${stageName} slice (${bricks.length} LOD${lod} chunks)...`);
-      tempSvr.init(channels, dims, renderer, tempMaterial, { targetSlots: bricks.length });
-
-      const tasks = tasksFor(bricks);
-      totalTasks = tasks.length;
+      _setSliceStatus(_tf('studio.nativePreparing', 'Preparing the native slice ({n} chunks)…', { n: bricks.length }));
+      const pairs = [];
+      for (const brick of bricks) {
+        if (rgbaTransport) pairs.push({ brick, channel: -1 });
+        else for (const c of wantedChannels) pairs.push({ brick, channel: c });
+      }
+      const tasks = tasksFor(pairs);
       bytesTotal = BrickLoader.estimateTaskBytes?.(tasks) || 0;
       startedAt = now();
       onProgress?.({ percent: 0, chunks: 0, totalChunks: bricks.length, bytesDone: 0, bytesTotal, etaSeconds: null, lod, dims });
-      await BrickLoader.loadBrickTasks(tasks, loadOptions);
-      throwIfAborted();
+      const group = `studio-native-${++_nativePassSeq}`;
+      const first = await BrickLoader.loadBrickTasks(tasks, loadOptions(group));
+      throwIfAborted(first?.summary);
 
       // A fetch or decode that failed for good (the loader already retried each one)
-      // left holes: one calm pass for those bricks once the rush is over, before
-      // deciding they are missing.
-      if (failed.size) {
-        const retry = [...failed].map(key => brickByKey.get(key)).filter(Boolean);
-        for (const key of failed) pendingScalar.delete(key);
-        failed.clear();
-        const retryTasks = tasksFor(retry);
-        totalTasks += retryTasks.length;
-        await BrickLoader.loadBrickTasks(retryTasks, loadOptions);
-        throwIfAborted();
+      // left holes: one calm pass for exactly those (brick, channel) pairs once the
+      // rush is over, before deciding they are missing.
+      const failedPairs = (first?.summary?.failed || [])
+        .map(f => ({ brick: brickByKey.get(`${f.bx}_${f.by}_${f.bz}`), channel: f.channel }))
+        .filter(p => p.brick);
+      if (failedPairs.length) {
+        const retry = await BrickLoader.loadBrickTasks(tasksFor(failedPairs), loadOptions(`${group}-retry`));
+        throwIfAborted(retry?.summary);
       }
+      await Promise.all([...pendingWrites]);
+      await maskReady;
+      throwIfAborted(null);
       cancelPartial();
-      if (!writtenBricks) return null;
+      written -= backend.flush();
+      if (!written) return null;
 
+      fraction = 1;
       status(true);
-      // A brick that never made it whole keeps the preview's pixels in the final
-      // picture (a softer patch beats a hole) and is reported.
-      const missing = new Set([...failed, ...pendingScalar.keys()]).size;
       const picture = renderSlice();
+      written -= backend.flush();
       if (!picture) return null;
-      const rect = cropRect || (picture.canvas ? _sliceContentRect(picture.canvas) : null);
+      // A brick that never made it keeps the preview's pixels in the final picture (a
+      // softer patch beats a hole) and is reported.
+      const missing = Math.max(0, bricks.length - written);
       _setSliceStatus(missing > 0
-        ? `${stageName} slice ready (${writtenBricks} chunks; ${missing} kept at the previous resolution).`
-        : `${stageName} slice ready (${writtenBricks} chunks).`);
+        ? _tf('studio.nativeReadyMissing', 'Native slice ready ({n} chunks; {missing} kept at the previous resolution).', { n: written, missing })
+        : _tf('studio.nativeReady', 'Native slice ready ({n} chunks).', { n: written }));
       // netMs: the transfer alone (first request to last brick), the measure of the link.
-      return sliceResult(picture, rect, { missingChunks: missing, bytesTotal, elapsedMs: now() - startedAt, netMs: lastBrickAt ? Math.max(1, lastBrickAt - startedAt) : 0 });
+      return sliceResult(picture, {
+        quality: missing > 0 ? 'native-partial' : (lod === 0 ? 'native' : `lod${lod}`),
+        missingChunks: missing,
+        path: passPlan.path,
+        bytesTotal,
+        elapsedMs: now() - startedAt,
+        netMs: lastBrickAt ? Math.max(1, lastBrickAt - startedAt) : 0
+      });
     } finally {
       cancelPartial();
-      VolumeSlicer.releaseForeign?.();
-      tempSvr.dispose?.();
-      tempMaterial.dispose?.();
-      if (_nativeSliceAbort === controller) _nativeSliceAbort = null;
+      partials.clear();
+      backend.dispose();
+      // The shared slicer programs and tile pass are this pass's to release only while
+      // no other pass has taken over.
+      if (_nativeSliceAbort === controller || !_nativeSliceAbort) VolumeSlicer.releaseForeign?.();
+      if (!options.controller && _nativeSliceAbort === controller) _nativeSliceAbort = null;
     }
   }
 
@@ -2792,33 +3192,11 @@ const ViewerApp = (() => {
     return ChannelPanel.getState?.() || _channelState;
   }
 
-  function _rotateSliceRoll(delta) {
-    const spec = VolumeViewer.getPlaneSpec();
-    VolumeViewer.setPlaneSpec({ mode: 'oblique', roll: (spec.roll || 0) + delta, visible: true });
-  }
-
-  function _snapSlicePlane() {
-    const spec = VolumeViewer.getPlaneSpec();
-    const normals = [
-      { mode: 'xy', yaw: 0, pitch: 0 },
-      { mode: 'xz', yaw: 0, pitch: 90 },
-      { mode: 'yz', yaw: 90, pitch: 0 }
-    ];
-    if (spec.mode !== 'oblique') {
-      VolumeViewer.setPlaneSpec({ yaw: 0, pitch: 0, roll: 0, visible: true });
-      return;
-    }
-    const yaw = Math.round((spec.yaw || 0) / 90) * 90;
-    const pitch = Math.round((spec.pitch || 0) / 45) * 45;
-    const exact = normals.find(row => Math.abs(yaw - row.yaw) < 1 && Math.abs(pitch - row.pitch) < 1);
-    VolumeViewer.setPlaneSpec(exact ? { mode: exact.mode, yaw: 0, pitch: 0, roll: 0, visible: true } : { yaw, pitch, roll: 0, visible: true });
-  }
-
   function _getSliceExports() {
     const hasMeasurements = MeasurementStore.list(datasetId, 'viewer').length > 0;
     return [
-      { action: 'measure-csv', icon: 'ruler', label: 'Measurements CSV', enabled: hasMeasurements, handler: () => _exportMeasurements('csv') },
-      { action: 'measure-json', icon: 'braces', label: 'Measurements JSON', enabled: hasMeasurements, handler: () => _exportMeasurements('json') }
+      { action: 'measure-csv', icon: 'ruler', label: _t('viewer.exportMeasuresCsv', 'Measurements CSV'), enabled: hasMeasurements, handler: () => _exportMeasurements('csv') },
+      { action: 'measure-json', icon: 'braces', label: _t('viewer.exportMeasuresJson', 'Measurements JSON'), enabled: hasMeasurements, handler: () => _exportMeasurements('json') }
     ];
   }
 
@@ -2924,7 +3302,7 @@ const ViewerApp = (() => {
   function _exportMeasurements(format) {
     const items = MeasurementStore.list(datasetId, 'viewer');
     if (!items.length) {
-      ExportManager.toast?.('No measurement is available to export');
+      ExportManager.toast?.(_t('viewer.exportMeasuresNone', 'No measurement is available to export'));
       return;
     }
     const blob = new Blob([
@@ -3037,13 +3415,12 @@ const ViewerApp = (() => {
     VolumeViewer.setCutPlaneVisible(false);
     _resetClipSliders();
 
-    // 3. Measurements + annotations.
+    // 3. Measurements.
     MeasurementStore.clear(datasetId, 'viewer');
     _volumeMeasurements = [];
     _volumeMeasureDraft = [];
     VolumeViewer.setMeasurements([]);
     _renderVolumeMeasurement();
-    if (typeof AnnotationManager !== 'undefined') AnnotationManager.clear();
 
     // 4. Channels back to the dataset's display defaults (colour, gamma, min/max,
     //    denoise σ, visibility) — re-derived from metadata, not from a snapshot.
@@ -3196,11 +3573,10 @@ const ViewerApp = (() => {
       _updatePhysicalStatus();
     }
 
-    if (viewerState.qualityMode) {
-      _qualityMode = _normalizeQualityParam(viewerState.qualityMode) || '512x512';
-      const select = document.getElementById('select-quality');
-      if (select) select.value = _qualityMode;
-    }
+    // The quality is applied with the load that follows (end of this function): the
+    // select, the viewer's target and the buffering all move with it.
+    const restoredQuality = viewerState.qualityMode ? _normalizeQualityParam(viewerState.qualityMode) : null;
+    const qualityChanged = Boolean(restoredQuality && restoredQuality !== _qualityMode);
     if (Number.isFinite(viewerState.exposure)) {
       const slider = document.getElementById('slider-exposure');
       if (slider) {
@@ -3291,10 +3667,18 @@ const ViewerApp = (() => {
       Timeline.setSpeed?.(viewerState.playbackFps);
     }
 
-    if (isLive && Number.isFinite(viewerState.timepoint)) {
-      Timeline.setFrame(viewerState.timepoint);
-    } else if (_basePath && viewerState.qualityMode) {
-      _loadTimepoint(_basePath, _currentTimepoint, { force: true }).catch(_showLoadingError);
+    const restoredFrame = isLive && Number.isFinite(viewerState.timepoint) ? viewerState.timepoint : null;
+    if (restoredFrame !== null && restoredFrame !== _currentTimepoint) {
+      // Another frame: its load (Timeline → _requestTimepoint) runs at the restored quality.
+      if (qualityChanged) _applyQualityMode(restoredQuality);
+      Timeline.setFrame(restoredFrame);
+    } else if (_basePath && qualityChanged) {
+      // The same frame (or no time axis): reloaded at the restored quality — on a
+      // timelapse the Timeline would see an unchanged frame and load nothing.
+      if (restoredFrame !== null) Timeline.setFrame(restoredFrame, true, false);
+      _setQualityMode(restoredQuality).catch(_showLoadingError);
+    } else if (restoredFrame !== null) {
+      Timeline.setFrame(restoredFrame, true, false);
     }
     _updateVolumeSourceStatus();
 
@@ -3325,11 +3709,11 @@ const ViewerApp = (() => {
   function _handleVolumeMeasurePoint(point) {
     const calibration = VolumeViewer.getPhysicalCalibration?.();
     if (calibration?.calibrationStatus === 'metadata-missing') {
-      _setVolumeMeasureStatus('Physical calibration is missing for this dataset. Distance measurement needs calibrated voxel metadata.');
+      _setVolumeMeasureStatus(Utils.escapeHtml(_t('viewer.measureNoCalibration', 'Physical calibration is missing for this dataset. Distance measurement needs calibrated voxel metadata.')));
       return;
     }
     if (!point?.physicalUm) {
-      _setVolumeMeasureStatus('No calibrated volume point was detected.');
+      _setVolumeMeasureStatus(Utils.escapeHtml(_t('viewer.measureNoPoint', 'No calibrated volume point was detected.')));
       return;
     }
     if (_volumeMeasureDraft.length >= 2) _volumeMeasureDraft = [];
@@ -3411,11 +3795,11 @@ const ViewerApp = (() => {
         ? _volumeMeasurements.map(item => `
           <div class="measurement-row" style="display: flex; align-items: center; gap: 4px; padding: 4px 0;">
             <button class="btn btn-ghost btn-sm measure-color-btn" type="button" data-volume-measure-action="toggle-color" data-measurement-id="${Utils.escapeHtml(item.id)}" style="padding: 0; width: 24px; height: 24px; border: none; flex-shrink: 0;">
-              <span style="background:${item.color}; width:16px; height:16px; display:inline-block; border-radius:3px; border:1px solid rgba(255,255,255,0.2); vertical-align:middle;"></span>
+              <span style="background:${_safeMeasureColor(item.color)}; width:16px; height:16px; display:inline-block; border-radius:3px; border:1px solid rgba(255,255,255,0.2); vertical-align:middle;"></span>
             </button>
             <input type="text" value="${Utils.escapeHtml(item.label || '')}" placeholder="${Utils.escapeHtml(_t('plugins.measure-distance.labelPlaceholder', 'Label'))}" class="form-input text-xs" style="flex: 1; min-width: 0; width: 50px; padding: 2px 4px; background: rgba(0,0,0,0.2); border: 1px solid var(--border-light); color: var(--text-primary); border-radius: 4px;" data-volume-measure-action="rename" data-measurement-id="${Utils.escapeHtml(item.id)}">
             <span style="white-space: nowrap; font-size: 11px; color: var(--text-muted);">
-              ${item.visible === false ? 'Hidden' : `${_fmtUm(item.distance)} µm`}
+              ${item.visible === false ? Utils.escapeHtml(_t('viewer.measureHidden', 'Hidden')) : `${_fmtUm(item.distance)} µm`}
             </span>
             <span class="related-actions" style="display: flex; gap: 2px;">
               <button class="btn btn-ghost btn-sm" type="button" data-volume-measure-action="toggle" data-measurement-id="${Utils.escapeHtml(item.id)}" style="padding: 2px;">
@@ -3427,19 +3811,19 @@ const ViewerApp = (() => {
             </span>
           </div>
         `).join('')
-        : 'No saved measurement yet.';
+        : Utils.escapeHtml(_t('viewer.measureNone', 'No saved measurement yet.'));
       if (window.lucide) lucide.createIcons({ nodes: [list] });
     }
 
     if (!_volumeMeasureDraft.length) {
-      _setVolumeMeasureStatus('Click two points on the embryo surface.');
+      _setVolumeMeasureStatus(Utils.escapeHtml(_t('viewer.measureHint', 'Click two points on the specimen surface.')));
       return;
     }
     if (_volumeMeasureDraft.length === 1) {
       const p = _volumeMeasureDraft[0].physicalUm;
       _setVolumeMeasureStatus(`
-        <div class="metric-tile"><small>Point A</small><strong>${_fmtUm(p.x)}, ${_fmtUm(p.y)}, ${_fmtUm(p.z)} um</strong></div>
-        <div class="text-xs text-muted">Click a second point to measure distance.</div>
+        <div class="metric-tile"><small>${Utils.escapeHtml(_t('viewer.measurePointA', 'Point A'))}</small><strong>${_fmtUm(p.x)}, ${_fmtUm(p.y)}, ${_fmtUm(p.z)} µm</strong></div>
+        <div class="text-xs text-muted">${Utils.escapeHtml(_t('viewer.measureSecond', 'Click a second point to measure distance.'))}</div>
       `);
       return;
     }
@@ -3447,11 +3831,16 @@ const ViewerApp = (() => {
     const distance = _distance3d(a, b);
     _setVolumeMeasureStatus(`
       <div class="metric-grid">
-        <div class="metric-tile"><small>Distance</small><strong>${_fmtUm(distance)} um</strong></div>
-        <div class="metric-tile"><small>Delta Z</small><strong>${_fmtUm(Math.abs(a.z - b.z))} um</strong></div>
+        <div class="metric-tile"><small>${Utils.escapeHtml(_t('viewer.measureDistance', 'Distance'))}</small><strong>${_fmtUm(distance)} µm</strong></div>
+        <div class="metric-tile"><small>${Utils.escapeHtml(_t('viewer.measureDeltaZ', 'Delta Z'))}</small><strong>${_fmtUm(Math.abs(a.z - b.z))} µm</strong></div>
       </div>
-      <div class="text-xs text-muted">Measured between two picked surface points in calibrated physical coordinates.</div>
+      <div class="text-xs text-muted">${Utils.escapeHtml(_t('viewer.measureNote', 'Measured between two picked surface points in calibrated physical coordinates.'))}</div>
     `);
+  }
+
+  /** A stored colour as CSS: #rgb … #rrggbbaa only (it may come from a shared #state= link). */
+  function _safeMeasureColor(color) {
+    return /^#[0-9a-f]{3,8}$/i.test(String(color || '')) ? String(color) : '#ff4d4f';
   }
 
   function _setVolumeMeasureStatus(html) {
@@ -3478,7 +3867,7 @@ const ViewerApp = (() => {
     const measurement = MeasurementStore.add(datasetId, 'viewer', {
       scope: 'viewer',
       datasetId,
-      label: `Measure ${_volumeMeasurements.length + 1}`,
+      label: _tf('viewer.measureLabel', 'Measure {n}', { n: _volumeMeasurements.length + 1 }),
       unit: 'um',
       distance: _distance3d(aPoint.physicalUm, bPoint.physicalUm),
       points: _volumeMeasureDraft.map(point => ({
@@ -3540,9 +3929,10 @@ const ViewerApp = (() => {
   // ─── 4D stabilisation ────────────────────────────────────────────────────────
   // metadata.registration carries, per timepoint, the rigid transform the tracking
   // analysis used to cancel the specimen's global motion. Applying it to the volume
-  // puts images and tracks in the same frame. It is offered only when the transform
+  // puts images and tracks in the same frame. It is applied only when the transform
   // was verified rigid at import time (qcSummary.rigid) — a non-rigid one would
-  // deform the images and is refused rather than approximated.
+  // deform the images and is refused rather than approximated. ViewerApp.
+  // setVolumeStabilized(false) shows the raw acquisition frame instead.
   let _registration = null;
   let _stabilizeVolume = false;
 
@@ -3554,6 +3944,9 @@ const ViewerApp = (() => {
   let _pfGeneration = 0;
   let _pfRunning = false;
   let _pfTimer = null;
+  // A kick that found a run still unwinding (a quality switch stops it, but its
+  // in-flight frame finishes first): honoured by that run on its way out.
+  let _pfRekick = false;
 
   function _stopPrefetch() {
     _pfGeneration++;
@@ -3579,7 +3972,10 @@ const ViewerApp = (() => {
   }
 
   async function _runPrefetch() {
-    if (_pfRunning) return;
+    if (_pfRunning) {
+      _pfRekick = true;
+      return;
+    }
     // Never in a compare panel: compare mounts up to four iframes, each a full
     // document with its own VolumeViewer, budget and WebGL context — four
     // simultaneous prefetches of the same series would quadruple both.
@@ -3625,6 +4021,10 @@ const ViewerApp = (() => {
       console.warn('[ViewerApp] prefetch stopped:', err?.message || err);
     } finally {
       _pfRunning = false;
+      if (_pfRekick) {
+        _pfRekick = false;
+        _kickPrefetch(200);
+      }
     }
   }
 
@@ -3651,10 +4051,10 @@ const ViewerApp = (() => {
     if (!el || !total) return;
     const label = _qualityLabel(_qualityMode);
     if (capacity && capacity < total) {
-      el.textContent = _tt('js.bufferPartial', 'Tampon {n}/{total} · {q} — la série entière ne tient pas en mémoire ({cap} images max)')
+      el.textContent = _tt('js.bufferPartial', 'Buffer {n}/{total} · {q} — the whole series does not fit in memory ({cap} frames max)')
         .replace('{n}', resident).replace('{total}', total).replace('{q}', label).replace('{cap}', capacity);
     } else {
-      el.textContent = _tt('js.bufferFull', 'Tampon {n}/{total} · {q}')
+      el.textContent = _tt('js.bufferFull', 'Buffer {n}/{total} · {q}')
         .replace('{n}', resident).replace('{total}', total).replace('{q}', label);
     }
   }
@@ -3784,9 +4184,9 @@ const ViewerApp = (() => {
     const style = TrackingOverlay.getStyle();
     _trackingHandle = ChannelPanel.registerLayer({
       id: 'tracking',
-      title: _tt('js.trackingLayer', 'Points de suivi'),
+      title: _tt('js.trackingLayer', 'Tracking points'),
       swatch: meta.regions?.[0]?.color || '#2ecc71',
-      summary: _tt('js.trackingLoading', 'Chargement du suivi…'),
+      summary: _tt('js.trackingLoading', 'Loading tracking…'),
       expanded: true,
       body: () => {
         const regions = TrackingOverlay.isLoaded()
@@ -3799,12 +4199,12 @@ const ViewerApp = (() => {
           </span>`).join('');
         return `
           <div class="layer-row">
-            <label for="tracking-size">${_tt('js.trackingSize', 'Taille (µm)')}</label>
+            <label for="tracking-size">${_tt('js.trackingSize', 'Size (µm)')}</label>
             <input type="range" id="tracking-size" min="2" max="40" step="1" value="${style.diameterUm}">
             <output id="tracking-size-out">${style.diameterUm}</output>
           </div>
           <div class="layer-row">
-            <label for="tracking-opacity">${_tt('js.trackingOpacity', 'Opacité')}</label>
+            <label for="tracking-opacity">${_tt('js.trackingOpacity', 'Opacity')}</label>
             <input type="range" id="tracking-opacity" min="10" max="100" step="5" value="${Math.round(style.opacity * 100)}">
             <output id="tracking-opacity-out">${Math.round(style.opacity * 100)}%</output>
           </div>
@@ -3852,14 +4252,17 @@ const ViewerApp = (() => {
       // Read the stabilisation flag off the EVENT, never by asking the viewer
       // again: the two can disagree for one frame while a load settles.
       if (!TrackingOverlay.hasRawCoordinates() && !d.stabilized) {
-        TrackingOverlay.setStyle({ visible: false });
+        // The page hides it (the operator's own visibility setting is left alone).
+        if (TrackingOverlay.setAutoHidden) TrackingOverlay.setAutoHidden(true);
+        else TrackingOverlay.setStyle({ visible: false });
         _trackingHandle?.setSummary(_tt('js.trackingNoRaw',
-          'Coordonnées brutes absentes : suivi masqué sur un volume non stabilisé'));
+          'Raw coordinates missing: tracking hidden on an unstabilised volume'));
         return;
       }
+      TrackingOverlay.setAutoHidden?.(false);
       TrackingOverlay.setFrame(d.frame, { stabilized: d.stabilized });
       _trackingHandle?.setSummary(
-        `${TrackingOverlay.getCount()} / ${Number(meta.cellCount) || 0} ${_tt('js.trackingCells', 'cellules')}`);
+        `${TrackingOverlay.getCount()} / ${Number(meta.cellCount) || 0} ${_tt('js.trackingCells', 'cells')}`);
       // Emitted AFTER the overlay moved: a plugin drawing on top of the points
       // must never lead them by a frame.
       if (TrackingOverlay.isLoaded()) _trackingEmit('frame', { frame: d.frame, stabilized: Boolean(d.stabilized) });
@@ -3872,9 +4275,9 @@ const ViewerApp = (() => {
 
     TrackingOverlay.load(_basePath, meta, (p) => {
       if (p.phase === 'download') {
-        _trackingHandle?.setSummary(`${_tt('js.trackingLoading', 'Chargement du suivi…')} ${Math.round(p.pct * 100)}%`);
+        _trackingHandle?.setSummary(`${_tt('js.trackingLoading', 'Loading tracking…')} ${Math.round(p.pct * 100)}%`);
       } else if (p.phase === 'parse' || p.phase === 'bake') {
-        _trackingHandle?.setSummary(_tt('js.trackingPreparing', 'Préparation des pistes…'));
+        _trackingHandle?.setSummary(_tt('js.trackingPreparing', 'Preparing tracks…'));
       }
     }).then((data) => {
       const stabilized = Boolean(VolumeViewer.isStabilized?.());
@@ -3882,13 +4285,13 @@ const ViewerApp = (() => {
       if (_trackingSelected >= 0) TrackingOverlay.setSelected(_trackingSelected);
       _trackingHandle?.refreshBody();
       _trackingHandle?.setSummary(
-        `${TrackingOverlay.getCount()} / ${Number(meta.cellCount) || 0} ${_tt('js.trackingCells', 'cellules')}`);
+        `${TrackingOverlay.getCount()} / ${Number(meta.cellCount) || 0} ${_tt('js.trackingCells', 'cells')}`);
       _trackingReadyResolve(data);
       _trackingEmit('loaded', { cellTotal: data.cellTotal, frameCount: data.frameCount });
       _trackingEmit('frame', { frame: _currentTimepoint || 0, stabilized });
     }).catch(err => {
       console.warn('[ViewerApp] tracking overlay failed:', err);
-      _trackingHandle?.setSummary(_tt('js.trackingUnavailable', 'Suivi indisponible'));
+      _trackingHandle?.setSummary(_tt('js.trackingUnavailable', 'Tracking unavailable'));
       _trackingReadyResolve(null);
     });
   }
@@ -3965,21 +4368,33 @@ const ViewerApp = (() => {
    *  the console filled with AbortError. Following the loader's own pace plays slower
    *  than requested but actually shows frames, and intermediate frames are dropped
    *  rather than queued so playback never falls behind the scrubber. */
-  function _requestTimepoint(basePath, frame) {
+  function _requestTimepoint(basePath, frame, origin = 'user', remount = false) {
     if (!Number.isFinite(frame)) return;
     if (_tpInFlight) {
-      _tpPending = (frame === _currentTimepoint) ? null : frame;
+      _tpPending = (frame === _currentTimepoint && !remount) ? null : { frame, origin, remount };
       return;
     }
-    if (frame === _currentTimepoint) return;
+    if (frame === _currentTimepoint && !remount) return;
     _tpInFlight = true;
-    _loadTimepoint(basePath, frame)
-      .catch(_showLoadingError)
+    let remountFrame = null;
+    _loadTimepoint(basePath, frame, { origin })
+      .catch((err) => {
+        _showLoadingError(err);
+        // The frame of _currentTimepoint is the last one shown: the scrubber goes back
+        // to it, and asking for the failed frame again is a new request, not a no-op.
+        if (isLive && typeof Timeline !== 'undefined' && Number.isFinite(_currentTimepoint)) {
+          Timeline.setFrame(_currentTimepoint, true, false);
+          // A frame streamed in place of the one on screen takes that one down first
+          // (VolumeViewer frees it for the budget check): put it back (from the cache).
+          if (!remount && _currentTimepoint !== frame && !_hasMountedVolume()) remountFrame = _currentTimepoint;
+        }
+      })
       .finally(() => {
         _tpInFlight = false;
         const next = _tpPending;
         _tpPending = null;
-        if (next !== null) _requestTimepoint(basePath, next);
+        if (next !== null) _requestTimepoint(basePath, next.frame, next.origin, next.remount);
+        else if (remountFrame !== null) _requestTimepoint(basePath, remountFrame, 'sync', true);
       });
   }
 
@@ -3991,6 +4406,14 @@ const ViewerApp = (() => {
     return _loadTimepointInner(basePath, t, opts).finally(_releasePlayback);
   }
 
+  /**
+   * Loads timepoint `t` (null for a volume without a time axis) at the page's quality.
+   * → { ok: true, quality } once it is on screen, undefined when a later load took
+   * over (nothing of this one is applied). `_currentTimepoint` moves to `t` only then:
+   * a frame that fails or is superseded leaves the frame on screen the current one.
+   * opts: force (reload at a new quality), quality, origin ('sync': asked by a sibling
+   * panel's SYNC_TIME — its arrival is not news for the siblings).
+   */
   async function _loadTimepointInner(basePath, t, opts = {}) {
     _tpLoadStart = performance.now?.() || Date.now();
     const perfId = _perf()?.start('viewer.timepoint.load', {
@@ -3998,7 +4421,6 @@ const ViewerApp = (() => {
       qualityMode: _qualityMode,
       forced: Boolean(opts.force)
     });
-    _currentTimepoint = t;
     const loadToken = ++_activeLoadToken;
     // ELE-11 (RACE-002): any post-await resumption on a stale load (quality/timepoint
     // changed meanwhile) must NOT mutate _brickManifest, the quality select, or _qualityMode.
@@ -4009,45 +4431,54 @@ const ViewerApp = (() => {
     const loaderText = document.getElementById('loader-text');
     let primaryQuality = opts.quality || _qualityMode || '512x512';
     const qualityKey = _qualityKey(t, primaryQuality);
-    const activeEntry = VolumeViewer.getSamplingVolume?.();
-    const hasActiveVolume = Boolean(activeEntry && (activeEntry.textures || activeEntry.data));
+    const hasActiveVolume = _hasMountedVolume();
     const isQualitySwitch = Boolean(hasActiveVolume && (opts.force || loadedTimepoints.has(t)));
     const useBlockingLoader = !isQualitySwitch && (opts.force || !loadedTimepoints.has(t) || !_loadedQualities.has(qualityKey));
-    
+
     if (useBlockingLoader) {
-      if (loader) loader.style.display = 'flex';
+      _showLoaderProgress();
       if (loaderText) {
+        loaderText.removeAttribute('data-i18n');
         loaderText.textContent = isLive
-          ? `Loading Timepoint ${t + 1} (${primaryQuality})...`
-          : `Loading Volume Data (${primaryQuality})...`;
+          ? _tf('viewer.loadingTimepoint', 'Loading timepoint {n} ({quality})…', { n: (Number(t) || 0) + 1, quality: _qualityLabel(primaryQuality) })
+          : _tf('viewer.loadingVolume', 'Loading volume data ({quality})…', { quality: _qualityLabel(primaryQuality) });
       }
-      progressFill.style.width = '0%';
+      if (progressFill) progressFill.style.width = '0%';
     } else if (loader) {
       loader.style.display = 'none';
       VolumeViewer.setQualityTarget?.(primaryQuality, _qualityMode);
     }
+    const onLoadProgress = (progress) => {
+      if (loadToken === _activeLoadToken && useBlockingLoader && progressFill) {
+        progressFill.style.width = `${progress * 100}%`;
+      }
+    };
 
-    _setQualityStatus(`Loading ${primaryQuality}...`);
+    _setQualityStatus(_tf('viewer.loadingQuality', 'Loading {quality}…', { quality: _qualityLabel(primaryQuality) }));
+    // A first open shows the coarsest level as soon as it is complete and streams the
+    // asked one behind it: the loader card goes as soon as there is a picture.
+    const firstPicture = useBlockingLoader ? {
+      coarseFirst: true,
+      onFirstPicture: () => {
+        if (loadToken === _activeLoadToken && loader) loader.style.display = 'none';
+      }
+    } : {};
     let result;
     try {
-      result = await _loadVolumeForQuality(basePath, datasetMeta, t, primaryQuality, (progress) => {
-        if (loadToken === _activeLoadToken && useBlockingLoader && progressFill) {
-          progressFill.style.width = `${progress * 100}%`;
-        }
-      }, { deferActivation: isQualitySwitch, hideTransition: !opts.force });
+      result = await _loadVolumeForQuality(basePath, datasetMeta, t, primaryQuality, onLoadProgress,
+        { deferActivation: isQualitySwitch, hideTransition: !opts.force, ...firstPicture });
       if (_isStale()) { _bailStale(); return; }
-      if ((!result || result.available === false) && primaryQuality === '512x512') {
+      if ((!result || result.available === false) && !result?.stale && primaryQuality === '512x512') {
         console.warn('[ViewerApp] 512x512 unavailable, falling back to 256x256:', result?.reason || 'unknown');
+        const requested = primaryQuality;
         primaryQuality = '256x256';
         _qualityMode = '256x256';
         const select = document.getElementById('select-quality');
         if (select) select.value = '256x256';
         VolumeViewer.setQualityTarget?.(primaryQuality, _qualityMode);
-        result = await _loadVolumeForQuality(basePath, datasetMeta, t, primaryQuality, (progress) => {
-          if (loadToken === _activeLoadToken && useBlockingLoader && progressFill) {
-            progressFill.style.width = `${progress * 100}%`;
-          }
-        }, { deferActivation: isQualitySwitch, hideTransition: !opts.force });
+        _showResolutionDowngradeNotice(_qualityLabel(requested), _qualityLabel(primaryQuality));
+        result = await _loadVolumeForQuality(basePath, datasetMeta, t, primaryQuality, onLoadProgress,
+          { deferActivation: isQualitySwitch, hideTransition: !opts.force });
         if (_isStale()) { _bailStale(); return; }
       }
       if (!_isStale() && result && result.manifest) {
@@ -4055,27 +4486,28 @@ const ViewerApp = (() => {
         _updateQualityOptionLabels();
       }
     } catch (err) {
-      if (primaryQuality === '512x512') {
+      // A load that lost the race says nothing about the quality it asked for.
+      if (_isStale()) { _bailStale(); return; }
+      if (primaryQuality === '512x512' && err?.name !== 'AbortError') {
         console.warn('[ViewerApp] 512x512 failed, falling back to 256x256:', err);
+        const requested = primaryQuality;
         primaryQuality = '256x256';
         _qualityMode = '256x256';
         const select = document.getElementById('select-quality');
         if (select) select.value = '256x256';
         VolumeViewer.setQualityTarget?.(primaryQuality, _qualityMode);
-        result = await _loadVolumeForQuality(basePath, datasetMeta, t, primaryQuality, (progress) => {
-          if (loadToken === _activeLoadToken && useBlockingLoader && progressFill) {
-            progressFill.style.width = `${progress * 100}%`;
-          }
-        }, { deferActivation: isQualitySwitch, hideTransition: !opts.force });
+        _showResolutionDowngradeNotice(_qualityLabel(requested), _qualityLabel(primaryQuality));
+        result = await _loadVolumeForQuality(basePath, datasetMeta, t, primaryQuality, onLoadProgress,
+          { deferActivation: isQualitySwitch, hideTransition: !opts.force });
         if (_isStale()) { _bailStale(); return; }
       } else {
-      _perf()?.end(perfId, {
-        status: 'error',
-        timepoint: t,
-        quality: primaryQuality,
-        message: err?.message || String(err)
-      });
-      throw err;
+        _perf()?.end(perfId, {
+          status: 'error',
+          timepoint: t,
+          quality: primaryQuality,
+          message: err?.message || String(err)
+        });
+        throw err;
       }
     }
 
@@ -4086,10 +4518,6 @@ const ViewerApp = (() => {
       _updateQualityOptionLabels();
     }
 
-    if (!result || result.available === false) {
-      throw new Error(result?.reason || `Quality ${primaryQuality} unavailable`);
-    }
-
     if (result?.stale || loadToken !== _activeLoadToken) {
       _perf()?.end(perfId, {
         status: 'stale',
@@ -4098,7 +4526,12 @@ const ViewerApp = (() => {
       });
       return;
     }
-    
+
+    if (!result || result.available === false) {
+      throw new Error(result?.reason || _tf('viewer.qualityUnavailable', 'Quality {quality} unavailable', { quality: _qualityLabel(primaryQuality) }));
+    }
+
+    _currentTimepoint = t;
     _loadedQualities.add(qualityKey);
     loadedTimepoints.add(t);
     _applyStabilization(t);
@@ -4135,11 +4568,14 @@ const ViewerApp = (() => {
         const qSelect = document.getElementById('select-quality');
         if (qSelect) qSelect.value = actualQuality;
         VolumeViewer.setQualityTarget?.(actualQuality, actualQuality);
-        _showResolutionDowngradeNotice(requestedLabel, actualLabel);
+        _showResolutionDowngradeNotice(requestedLabel, actualLabel, result);
       }
     }
 
-    _setQualityStatus(`${_qualityLabel(primaryQuality)} active${result ? ` (${result.width}x${result.height}x${result.depth})` : ''}${result?.fromCache ? ' from cache' : ''}${_sliceWarning(result)}.`);
+    const grid = result ? ` (${result.width}x${result.height}x${result.depth})` : '';
+    _setQualityStatus(`${(result?.fromCache
+      ? _tf('viewer.qualityActiveCached', '{quality} active{grid} from cache', { quality: _qualityLabel(primaryQuality), grid })
+      : _tf('viewer.qualityActive', '{quality} active{grid}', { quality: _qualityLabel(primaryQuality), grid }))}${_sliceWarning(result)}.`);
     _updatePhysicalStatus();
 
     // Refresh slicer material after texture upload
@@ -4149,13 +4585,15 @@ const ViewerApp = (() => {
       if (_sliceStaged) _updateSliceStageResolution();
     }
 
-    
     if (isLive) {
       _refreshBuffer();
       _kickPrefetch();
       // The boot frame is not an operator action (same rule as the camera and the
-      // channels): a panel added late must not drag its siblings back to frame 0.
-      if (_isIframe && _isInitialized) {
+      // channels): a panel added late must not drag its siblings back to frame 0. Nor
+      // is a frame a sibling asked for: told back, the host would relay it to the
+      // sender, which then re-derives its own frame from it — a longer timelapse could
+      // only rest on the frames the shorter one can represent.
+      if (_isIframe && _isInitialized && opts.origin !== 'sync') {
         const total = Number(datasetMeta?.dimensions?.t) || 0;
         _postToHost({ type: 'SYNC_TIME', value: t, total, fraction: total > 1 ? t / (total - 1) : 0 });
       }
@@ -4172,11 +4610,23 @@ const ViewerApp = (() => {
       depth: result?.depth || null,
       streamMode: result?.streamMode || 'slices'
     });
+    return { ok: true, quality: primaryQuality };
+  }
+
+  // The pending warm-up of adjacent frames: an idle callback or a timeout, cancelled
+  // by the API that made it (the two count their handles apart).
+  let _preloadIdle = false;
+
+  function _cancelAdjacentPreload() {
+    if (!_preloadTimer) return;
+    if (_preloadIdle && typeof cancelIdleCallback === 'function') cancelIdleCallback(_preloadTimer);
+    else clearTimeout(_preloadTimer);
+    _preloadTimer = null;
   }
 
   function _scheduleAdjacentPreload(basePath, t) {
     if (!isLive || _isIframe || !Number.isFinite(t)) return;
-    if (_preloadTimer) clearTimeout(_preloadTimer);
+    _cancelAdjacentPreload();
     const total = datasetMeta.dimensions?.t || 0;
     const candidates = [t + 1, t - 1, t + 2]
       .filter(frame => frame >= 0 && frame < total)
@@ -4190,7 +4640,7 @@ const ViewerApp = (() => {
     // project .htaccess already documents. Warm the actual pack files instead: they are
     // 45-125 KB per timepoint here, and the switch then costs a decode, not a round-trip.
     const tpRows = _brickManifest?.timepoints;
-    const run = tpRows && typeof tpRows === 'object'
+    const work = tpRows && typeof tpRows === 'object'
       ? () => {
         const brickDir = datasetMeta?.qualities?.native?.directory || 'bricks';
         const levels = _brickManifest?.levels || [];
@@ -4211,22 +4661,31 @@ const ViewerApp = (() => {
           VolumeViewer.preloadVolume(basePath, datasetMeta, frame, { quality: '256x256' })
             .then((result) => {
               if (result.successfulLoads > 0) {
-                _setQualityStatus(`Nearby previews cached. ${_qualityLabel(_qualityMode)} remains the displayed target.`);
+                _setQualityStatus(_tf('viewer.nearbyCached', 'Nearby previews cached. {quality} remains the displayed target.', { quality: _qualityLabel(_qualityMode) }));
               }
             })
             .catch(err => console.warn('[ViewerApp] Timepoint preload failed:', err));
         });
       };
+    const run = () => { _preloadTimer = null; work(); };
 
-    _preloadTimer = window.requestIdleCallback
-      ? requestIdleCallback(run, { timeout: 1800 })
+    _preloadIdle = typeof window.requestIdleCallback === 'function';
+    _preloadTimer = _preloadIdle
+      ? window.requestIdleCallback(run, { timeout: 1800 })
       : setTimeout(run, 350);
   }
 
   function _sliceWarning(result) {
+    const bricks = Number(result?.missingBricks) || 0;
+    if (bricks > 0) {
+      return `; ${bricks === 1
+        ? _t('viewer.brickMissingOne', '1 brick could not be loaded')
+        : _tf('viewer.brickMissingMany', '{n} bricks could not be loaded', { n: bricks })}`;
+    }
     if (!result?.failedLoads) return '';
-    const label = result.failedLoads === 1 ? 'slice image missing' : 'slice images missing';
-    return `; ${result.failedLoads} ${label}`;
+    return `; ${result.failedLoads === 1
+      ? _t('viewer.sliceMissingOne', '1 slice image missing')
+      : _tf('viewer.sliceMissingMany', '{n} slice images missing', { n: result.failedLoads })}`;
   }
 
   // Key of the in-memory "already loaded" set. `t` is a timepoint index, or null
@@ -4282,17 +4741,36 @@ const ViewerApp = (() => {
     const loading = progress < 1 && /(loading|streaming|fetching)/i.test(message);
     panel.classList.toggle('hidden', !loading);
     fill.style.width = `${Math.round(progress * 100)}%`;
-    text.textContent = `${_qualityLabel(active)} ${Math.round(progress * 100)}%`;
+    text.textContent = `${_qualityLabel(active)} ${Math.round(progress * 100)}%${message ? ` · ${message}` : ''}`;
   }
 
   function _setQualityStatus(text) {
     const status = document.getElementById('quality-status');
-    if (status) status.textContent = text;
+    if (!status) return;
+    // Live text from now on: the language switch must not reset it to the default line.
+    status.removeAttribute('data-i18n');
+    status.textContent = text;
   }
 
   // CAP-008: dismissible notice shown when the requested resolution could not fit in GPU
   // memory and a lower LOD was rendered instead. Requires an explicit OK to acknowledge.
-  function _showResolutionDowngradeNotice(requestedLabel, actualLabel) {
+  function _showResolutionDowngradeNotice(requestedLabel, actualLabel, result = null) {
+    let text = _tf(
+      'viewer.resDowngrade',
+      '{requested} resolution exceeds available GPU memory — displaying {actual} instead.',
+      { requested: requestedLabel, actual: actualLabel }
+    );
+    const mb = (b) => String(Math.round(Number(b) / (1024 * 1024)));
+    if (Number(result?.neededBytes) > 0 && Number(result?.budgetBytes) > 0) {
+      text += ` ${_tf('viewer.resDowngradeBytes', '({needed} MB needed, {budget} MB available for the volume.)', { needed: mb(result.neededBytes), budget: mb(result.budgetBytes) })}`;
+    } else if (result?.downgradeReason === 'alloc-failed') {
+      text += ` ${_t('viewer.resDowngradeRefused', '(The GPU refused the allocation.)')}`;
+    }
+    _showViewerNotice(text);
+  }
+
+  /** A dismissible notice over the viewer, acknowledged with OK (one at a time). */
+  function _showViewerNotice(text) {
     document.querySelector('.res-downgrade-notice')?.remove();
     const notice = document.createElement('div');
     notice.className = 'res-downgrade-notice';
@@ -4301,11 +4779,7 @@ const ViewerApp = (() => {
 
     const msg = document.createElement('span');
     msg.className = 'res-downgrade-notice__msg';
-    msg.textContent = _t(
-      'viewer.resDowngrade',
-      `Résolution ${requestedLabel} trop lourde pour la mémoire GPU — affichage en ${actualLabel}.`,
-      { requested: requestedLabel, actual: actualLabel }
-    );
+    msg.textContent = text;
 
     const btn = document.createElement('button');
     btn.type = 'button';
@@ -4316,6 +4790,14 @@ const ViewerApp = (() => {
     notice.appendChild(msg);
     notice.appendChild(btn);
     document.body.appendChild(notice);
+  }
+
+  /** A dataset of more than four channels mounts with its first four (the renderer's RGBA). */
+  function _noticeExtraChannels() {
+    const count = Number(datasetMeta?.dimensions?.c) || (Array.isArray(datasetMeta?.channels) ? datasetMeta.channels.length : 0);
+    if (count > 4) {
+      _showViewerNotice(_tf('viewer.channelsBeyondFour', 'This dataset has {n} channels: the viewer and the Studio show the first 4.', { n: count }));
+    }
   }
 
   function _loadZDisplayScale() {
@@ -4379,24 +4861,23 @@ const ViewerApp = (() => {
     }
 
     const calibrationLabel = calibration.calibrationStatus === 'exact'
-      ? 'Exact'
+      ? _t('viewer.calExact', 'Exact')
       : calibration.calibrationStatus === 'estimated'
-        ? 'Estimated'
-        : 'Metadata missing';
+        ? _t('viewer.calEstimated', 'Estimated')
+        : _t('viewer.calMissing', 'Metadata missing');
     const zDisplayed = physical.z * _zDisplayScale;
-    const overrideText = Math.abs(_zDisplayScale - 1) > 1e-6
-      ? `Display override: ${_zDisplayScale.toFixed(2)}x`
-      : 'Display override: 1.00x';
+    const overrideText = _tf('viewer.displayOverride', 'Display override: {k}x', { k: _zDisplayScale.toFixed(2) });
     const active = VolumeViewer.getSamplingVolume?.();
     const activeGrid = active?.width && active?.height && active?.depth
       ? `${active.width}x${active.height}x${active.depth}`
       : '--';
     const nativeDims = _qualityDims('native');
     const nativeGrid = nativeDims ? `${nativeDims.x}x${nativeDims.y}x${nativeDims.z}` : '--';
+    const esc = (v) => Utils.escapeHtml(String(v));
     status.innerHTML = `
-      <strong>Physical size: ${_fmtUm(physical.x)} x ${_fmtUm(physical.y)} x ${_fmtUm(zDisplayed)} &micro;m</strong><br>
-      Voxel grid: active ${activeGrid}; native ${nativeGrid}<br>
-      Calibration: ${calibrationLabel}; ${overrideText}; slice thickness: ${_fmtUm(physical.sliceThickness)} &micro;m
+      <strong>${esc(_tf('viewer.physicalSize', 'Physical size: {x} x {y} x {z} µm', { x: _fmtUm(physical.x), y: _fmtUm(physical.y), z: _fmtUm(zDisplayed) }))}</strong><br>
+      ${esc(_tf('viewer.voxelGrid', 'Voxel grid: active {active}; native {native}', { active: activeGrid, native: nativeGrid }))}<br>
+      ${esc(_tf('viewer.calibrationLine', 'Calibration: {cal}; {override}; slice thickness: {t} µm', { cal: calibrationLabel, override: overrideText, t: _fmtUm(physical.sliceThickness) }))}
     `;
   }
 
@@ -4420,237 +4901,282 @@ const ViewerApp = (() => {
     // The timeline scrubber uses 'input' on its range. Wait, it's a custom scrubber.
     // For now, we will rely on internal Timeline events if needed, or we just listen.
 
-    // Listen from parent
+    // Listen from parent — the hosting page alone: the same origin is not enough (an
+    // opener, another tab or a plugin frame of the site shares it).
     window.addEventListener('message', (e) => {
-      if (!Utils.isTrustedMessageOrigin(e)) return;
+      if (!Utils.isTrustedMessageOrigin(e) || e.source !== window.parent || window.parent === window) return;
       const data = e.data;
-      if (!data || !data.type) return;
+      if (!data || typeof data !== 'object' || typeof data.type !== 'string') return;
+      try {
+        _handleHostMessage(data);
+      } catch (err) {
+        console.warn(`[ViewerApp] Host message ${data.type} failed:`, err);
+      }
+    });
+  }
 
-      // NOTE: APPLY_WORKSPACE_STATE is handled by the module-level listener
-      // installed before init() runs (at the bottom of viewer.js). Do NOT handle
-      // it here to avoid double-processing.
+  /** One message from the hosting page (already checked: its origin and its window). */
+  function _handleHostMessage(data) {
+    // NOTE: APPLY_WORKSPACE_STATE is handled by the module-level listener
+    // installed before init() runs (at the bottom of viewer.js). Do NOT handle
+    // it here to avoid double-processing.
 
-      if (data.sourceIndex === _panelIndex) return;
+    // A relay of this panel's own message (the URL index is a string, a host may send a number).
+    if (data.sourceIndex !== undefined && data.sourceIndex !== null && String(data.sourceIndex) === String(_panelIndex)) return;
 
-      if (data.type === 'SYNC_Z') {
-        const value = parseFloat(data.value);
-        if (Number.isFinite(value)) {
-          _suppressSlicerSync = true;
-          try {
-            VolumeViewer.setPlaneSpec({ value }, { notify: false });
-            // The staged slice follows the sibling's slider, not only the 3D plane.
-            if (typeof VolumeSlicer !== 'undefined' && VolumeSlicer.isVisible()) {
-              VolumeSlicer.setPlaneSpec({ value });
-              _slicerSyncSlidersFromSpec();
-            } else {
-              const slider = document.getElementById('slicer-position');
-              if (slider) slider.value = Math.round(value * 100);
-            }
-          } finally {
-            _suppressSlicerSync = false;
-          }
-        }
-      } else if (data.type === 'SYNC_CHANNELS') {
-        const params = data.value;
-        const matchingIdx = _channelState.findIndex(ch => ch.name === params.name);
-        if (matchingIdx !== -1) {
-          const newState = [..._channelState];
-          newState[matchingIdx] = { ...newState[matchingIdx], ...params };
-          ChannelPanel.setState(newState, { notify: false });
-          _channelState[matchingIdx] = { ...newState[matchingIdx] };
-          VolumeViewer.updateChannel(matchingIdx, params);
-        }
-      } else if (data.type === 'SYNC_EXPOSURE') {
-        // A sibling panel moved its exposure: follow it, silently.
-        const slider = document.getElementById('slider-exposure');
-        if (slider && Number.isFinite(Number(data.value))) {
-          slider.value = Math.max(20, Math.min(500, Math.round(Number(data.value) * 100)));
-          _suppressChannelSync = true;
-          try { _syncExposureFromUi(); } finally { _suppressChannelSync = false; }
-        }
-      } else if (data.type === 'SET_CHANNEL_ACTIVE') {
-        // Support both key names: channelIndex (sent by _decomposeChannels) and value (legacy)
-        // The panel's visibility flag is `enabled` (ChannelPanel); `active` is the
-        // legacy metadata spelling it only falls back to, so writing it here left
-        // every decomposed panel showing every channel.
-        const targetIdx = Number(data.channelIndex ?? data.value);
-        const newState = _channelState.map((ch, idx) => ({ ...ch, enabled: idx === targetIdx }));
-        ChannelPanel.setState(newState, { notify: false });
-        newState.forEach((ch, idx) => {
-          _channelState[idx] = { ...ch };
-          VolumeViewer.updateChannel(idx, ch);
-        });
-        window.dispatchEvent(new CustomEvent('channels-updated'));
-      } else if (data.type === 'SYNC_ZSTACK_SLICE') {
-        // A sibling panel moved its z-stack browser: open ours if needed and mirror
-        // its mode, cursor, thickness and trim — or close ours when it closed. The
-        // guard keeps the mirror silent.
-        _suppressZstackSync = true;
-        try {
-          if (data.mode === 'off') {
-            if (_zstackActive) _applyZstackState(false, null);
-          } else {
-            if (!_zstackActive) _applyZstackState(true, null);
-            const mod = _zstackModule();
-            if (mod?.impl?.applySync) mod.impl.applySync(data);
-          }
-        } finally {
-          _suppressZstackSync = false;
-        }
-      } else if (data.type === 'SYNC_SLICER_SPEC') {
-        // A sibling panel moved the slice-through-volume plane. The 3D plane mesh
-        // follows it and the slice goes on the stage (VolumeSlicer visibility →
-        // _setSliceStage), exactly as when this panel's own tool is open — the
-        // raymarcher has no cut-plane uniform, the slicer is the only way to show
-        // the cut. The spec's `visible` flag is authoritative: a sibling whose plane
-        // is OFF must not replace this panel's volume with a flat slice, but the
-        // position is tracked either way so the plane is aligned when it comes
-        // back. While this panel's own tool is open it decides for itself. The
-        // stage and the Z-stack browser exclude each other.
-        const spec = data.spec && typeof data.spec === 'object' ? data.spec : {};
-        const specVisible = spec.visible !== false;
-        const ownTool = typeof ToolManager !== 'undefined' && ToolManager.current() === 'slice';
-        if (specVisible && _zstackActive) _applyZstackState(false, null);
+    if (data.type === 'SYNC_Z') {
+      const value = parseFloat(data.value);
+      if (Number.isFinite(value)) {
         _suppressSlicerSync = true;
         try {
-          VolumeViewer.setPlaneSpec(spec, { notify: false, visible: specVisible || ownTool });
-          if (typeof VolumeSlicer !== 'undefined') {
-            const mat = VolumeViewer.getMaterial?.();
-            if (mat) VolumeSlicer.updateMaterial(mat);
-            VolumeSlicer.setPlaneSpec(spec);
-            if (!ownTool) VolumeSlicer.setVisible(specVisible);
-            if (VolumeSlicer.isVisible()) {
-              _slicerSyncSlidersFromSpec();
-              _slicerSyncPresetButtons(VolumeSlicer.getPlaneSpec().mode);
-            }
+          VolumeViewer.setPlaneSpec({ value }, { notify: false });
+          // The staged slice follows the sibling's slider, not only the 3D plane.
+          if (typeof VolumeSlicer !== 'undefined' && VolumeSlicer.isVisible()) {
+            VolumeSlicer.setPlaneSpec({ value });
+            _slicerSyncSlidersFromSpec();
+          } else {
+            const slider = document.getElementById('slicer-position');
+            if (slider) slider.value = Math.round(value * 100);
           }
         } finally {
           _suppressSlicerSync = false;
         }
-      } else if (data.type === 'SYNC_TIME' && isLive) {
-        // Timelapses of different lengths align by elapsed fraction, not by index.
-        const mine = Number(datasetMeta?.dimensions?.t) || 0;
-        const theirs = Number(data.total) || 0;
-        const frame = (mine > 1 && theirs > 1 && theirs !== mine && Number.isFinite(Number(data.fraction)))
-          ? Math.round(Number(data.fraction) * (mine - 1))
-          : Number(data.value);
-        if (Number.isFinite(frame)) Timeline.setFrame(frame, false);
       }
-      if (data.type === 'SYNC_CAMERA') {
-        // While the z-stack browser holds the view top-down (slice mode), block camera
-        // orientation sync (rotation/pan) so another panel cannot rotate the fixed
-        // projection. Zoom (cameraZ) is allowed to stay consistent with the other view's scale.
-        if (_zstackLocksCamera()) {
-          if (Number.isFinite(data.value?.cameraZ)) {
-            VolumeViewer.setCameraState({ kind: 'volume', cameraZ: data.value.cameraZ });
-          }
-        } else {
-          VolumeViewer.setCameraState(_cameraStateFromSibling(data.value));
+    } else if (data.type === 'SYNC_CHANNELS') {
+      const params = data.value;
+      if (!params || typeof params !== 'object' || typeof params.name !== 'string') return;
+      const matchingIdx = _channelState.findIndex(ch => ch.name === params.name);
+      if (matchingIdx !== -1) {
+        // Only the settings this channel already has, of the same kind — nothing a
+        // sibling's message invents rides into the channel state.
+        const current = _channelState[matchingIdx] || {};
+        const patch = {};
+        for (const [k, v] of Object.entries(params)) {
+          if (k === 'name' || !Object.prototype.hasOwnProperty.call(current, k)) continue;
+          const kind = typeof current[k];
+          if (kind === 'number' ? Number.isFinite(v) : (kind === 'boolean' || kind === 'string') && typeof v === kind) patch[k] = v;
         }
-        if (Number.isFinite(data.value?.zDisplayScale)) {
-          // Mirrored for the session only: persisting it would stamp a sibling's
-          // anisotropy correction onto THIS dataset for every future visit.
-          _zDisplayScale = _clampZDisplayScale(data.value.zDisplayScale);
-          const slider = document.getElementById('slider-z-scale');
-          if (slider) slider.value = Math.round(_zDisplayScale * 100);
-          _updateZScaleLabel();
-          _updatePhysicalStatus();
+        const newState = [..._channelState];
+        newState[matchingIdx] = { ...current, ...patch };
+        ChannelPanel.setState(newState, { notify: false });
+        // What the panel accepted (clamped, re-derived), not the raw message.
+        const applied = ChannelPanel.getState?.()?.[matchingIdx] || newState[matchingIdx];
+        _channelState[matchingIdx] = { ...applied };
+        VolumeViewer.updateChannel(matchingIdx, applied);
+      }
+    } else if (data.type === 'SYNC_EXPOSURE') {
+      // A sibling panel moved its exposure: follow it, silently.
+      const slider = document.getElementById('slider-exposure');
+      if (slider && Number.isFinite(Number(data.value))) {
+        slider.value = Math.max(20, Math.min(500, Math.round(Number(data.value) * 100)));
+        _suppressChannelSync = true;
+        try { _syncExposureFromUi(); } finally { _suppressChannelSync = false; }
+      }
+    } else if (data.type === 'SET_CHANNEL_ACTIVE') {
+      if (!Number.isInteger(Number(data.channelIndex ?? data.value))) return;
+      // Support both key names: channelIndex (sent by _decomposeChannels) and value (legacy)
+      // The panel's visibility flag is `enabled` (ChannelPanel); `active` is the
+      // legacy metadata spelling it only falls back to, so writing it here left
+      // every decomposed panel showing every channel.
+      const targetIdx = Number(data.channelIndex ?? data.value);
+      const newState = _channelState.map((ch, idx) => ({ ...ch, enabled: idx === targetIdx }));
+      ChannelPanel.setState(newState, { notify: false });
+      newState.forEach((ch, idx) => {
+        _channelState[idx] = { ...ch };
+        VolumeViewer.updateChannel(idx, ch);
+      });
+      window.dispatchEvent(new CustomEvent('channels-updated'));
+    } else if (data.type === 'SYNC_ZSTACK_SLICE') {
+      // A sibling panel moved its z-stack browser: open ours if needed and mirror
+      // its mode, cursor, thickness and trim — or close ours when it closed. The
+      // guard keeps the mirror silent.
+      _suppressZstackSync = true;
+      try {
+        if (data.mode === 'off') {
+          if (_zstackActive) _applyZstackState(false, null);
+        } else {
+          if (!_zstackActive) _applyZstackState(true, null);
+          const mod = _zstackModule();
+          if (mod?.impl?.applySync) mod.impl.applySync(data);
+        }
+      } finally {
+        _suppressZstackSync = false;
+      }
+    } else if (data.type === 'SYNC_SLICER_SPEC') {
+      // A sibling panel moved the slice-through-volume plane. The 3D plane mesh
+      // follows it and the slice goes on the stage (VolumeSlicer visibility →
+      // _setSliceStage), exactly as when this panel's own tool is open — the
+      // raymarcher has no cut-plane uniform, the slicer is the only way to show
+      // the cut. The spec's `visible` flag is authoritative: a sibling whose plane
+      // is OFF must not replace this panel's volume with a flat slice, but the
+      // position is tracked either way so the plane is aligned when it comes
+      // back. While this panel's own tool is open it decides for itself. The
+      // stage and the Z-stack browser exclude each other.
+      const spec = data.spec && typeof data.spec === 'object' ? data.spec : {};
+      const specVisible = spec.visible !== false;
+      const ownTool = typeof ToolManager !== 'undefined' && ToolManager.current() === 'slice';
+      if (specVisible && _zstackActive) _applyZstackState(false, null);
+      _suppressSlicerSync = true;
+      try {
+        VolumeViewer.setPlaneSpec(spec, { notify: false, visible: specVisible || ownTool });
+        if (typeof VolumeSlicer !== 'undefined') {
+          const mat = VolumeViewer.getMaterial?.();
+          if (mat) VolumeSlicer.updateMaterial(mat);
+          VolumeSlicer.setPlaneSpec(spec);
+          if (!ownTool) VolumeSlicer.setVisible(specVisible);
+          if (VolumeSlicer.isVisible()) {
+            _slicerSyncSlidersFromSpec();
+            _slicerSyncPresetButtons(VolumeSlicer.getPlaneSpec().mode);
+          }
+        }
+      } finally {
+        _suppressSlicerSync = false;
+      }
+    } else if (data.type === 'SYNC_TIME' && isLive) {
+      // Timelapses of different lengths align by elapsed fraction, not by index.
+      const mine = Number(datasetMeta?.dimensions?.t) || 0;
+      const theirs = Number(data.total) || 0;
+      const frame = (mine > 1 && theirs > 1 && theirs !== mine && Number.isFinite(Number(data.fraction)))
+        ? Math.round(Number(data.fraction) * (mine - 1))
+        : Number(data.value);
+      // The frame a sibling is on: moved to silently, and its arrival is not posted back.
+      if (Number.isFinite(frame) && _basePath && typeof Timeline !== 'undefined') {
+        // A frame this series has (a sibling's index is not checked against our length).
+        const own = mine > 0 ? Math.max(0, Math.min(mine - 1, Math.round(frame))) : Math.max(0, Math.round(frame));
+        Timeline.setFrame(own, true, false);
+        _requestTimepoint(_basePath, own, 'sync');
+      }
+    }
+    if (data.type === 'SYNC_CAMERA') {
+      // While the z-stack browser holds the view top-down (slice mode), block camera
+      // orientation sync (rotation/pan) so another panel cannot rotate the fixed
+      // projection. Zoom (cameraZ) is allowed to stay consistent with the other view's scale.
+      if (_zstackLocksCamera()) {
+        if (Number.isFinite(data.value?.cameraZ)) {
+          VolumeViewer.setCameraState({ kind: 'volume', cameraZ: data.value.cameraZ });
+        }
+      } else {
+        VolumeViewer.setCameraState(_cameraStateFromSibling(data.value));
+      }
+      if (Number.isFinite(data.value?.zDisplayScale)) {
+        // Mirrored for the session only: persisting it would stamp a sibling's
+        // anisotropy correction onto THIS dataset for every future visit.
+        _zDisplayScale = _clampZDisplayScale(data.value.zDisplayScale);
+        const slider = document.getElementById('slider-z-scale');
+        if (slider) slider.value = Math.round(_zDisplayScale * 100);
+        _updateZScaleLabel();
+        _updatePhysicalStatus();
+      }
+    }
+    if (data.type === 'TOGGLE_SIDEBAR') {
+      const sidebar = document.querySelector('.viewer-sidebar');
+      if (data.value === true) {
+        sidebar.classList.remove('sidebar-hidden');
+      } else {
+        sidebar.classList.add('sidebar-hidden');
+      }
+      _scheduleViewerResize();
+    } else if (data.type === 'SET_TOOL') {
+      _applyHostTool(data.tool);
+    } else if (data.type === 'PANEL_HELLO') {
+      // The host asks for the panel's description (again): answer once ready.
+      if (_isInitialized) _postPanelReady();
+    } else if (data.type === 'PLUGIN_ACTIVATE') {
+      _activateHostPlugin(data.id);
+    } else if (data.type === 'SET_QUALITY') {
+      // Always answered: the host stages one panel at a time and waits for this reply.
+      const quality = _normalizeQualityParam(data.quality);
+      if (!quality) {
+        _postToHost({ type: 'QUALITY_STATUS', quality: _qualityMode, requested: String(data.quality ?? ''), phase: 'error', message: 'unknown quality' });
+      } else if (quality === _qualityMode && _loadedQualities.has(_qualityKey(_currentTimepoint, quality))) {
+        _postToHost({ type: 'QUALITY_STATUS', quality, phase: 'ready' });
+      } else {
+        // Up or down alike: the volume is reloaded at that level.
+        Promise.resolve(_setQualityMode(quality))
+          // A load that a later one superseded (a timeline tick) did not show the level yet.
+          // `quality` is the level on screen: lower than `requested` when the GPU budget
+          // made the viewer settle on a coarser one (downgraded) — asking again would
+          // only reload the same coarser level.
+          .then((result) => _postToHost({
+            type: 'QUALITY_STATUS', quality: _qualityMode, requested: quality,
+            downgraded: Boolean(result?.ok && _qualityMode !== quality),
+            phase: result?.ok ? 'ready' : 'superseded'
+          }))
+          .catch((err) => _postToHost({ type: 'QUALITY_STATUS', quality, phase: 'error', message: String(err?.message || err) }));
+      }
+    } else if (data.type === 'SET_SAMPLE_UPSIDE_DOWN') {
+      // The admin editor's sample-side switch, on its preview: lay the volume
+      // flat with the face the flag names as the top toward the camera — what the
+      // z-stack browser will show — so the operator picks the side by looking.
+      VolumeViewer.setSampleUpsideDown?.(data.value === true, { preview: true });
+    } else if (data.type === 'TOGGLE_VISUAL') {
+      if (data.visual === 'grid') {
+        VolumeViewer.setGridMode?.(data.state ? 1 : 0);
+      } else if (data.visual === 'axes') {
+        VolumeViewer.setAxesVisible?.(!!data.state);
+      }
+    } else if (data.type === 'TOGGLE_ZSTACK') {
+      // Handled by the early module-level listener (_applyZstackState).
+      // This path runs only if the message arrives AFTER _bindIframeSync (i.e. late messages).
+      // The browser closes the slice tool itself (mutual exclusion, in its plugin).
+      _applyZstackState(!!data.state, data.slice ?? null);
+    } else if (data.type === 'ZSTACK_HOVER_STATE') {
+      if (_zstackActive) {
+        const panel = document.getElementById('zstack-browser');
+        if (panel) {
+          panel.classList.toggle('zstack-hidden', !data.state);
         }
       }
-      if (data.type === 'TOGGLE_SIDEBAR') {
-        const sidebar = document.querySelector('.viewer-sidebar');
-        if (data.value === true) {
-          sidebar.classList.remove('sidebar-hidden');
-        } else {
-          sidebar.classList.add('sidebar-hidden');
+    } else if (data.type === 'REQUEST_SCREENSHOT') {
+      try {
+        let canvas = null;
+        if (_zstackActive || (typeof VolumeSlicer !== 'undefined' && VolumeSlicer.isVisible())) {
+          // A 512 px thumbnail: rendered at 1024, never at the native frame size.
+          const sr = getCurrentSliceResult({ raw: false, maxRes: 1024 });
+          canvas = sr?.canvas;
         }
-        _scheduleViewerResize();
-      } else if (data.type === 'SET_TOOL') {
-        _applyHostTool(data.tool);
-      } else if (data.type === 'PANEL_HELLO') {
-        // The host asks for the panel's description (again): answer once ready.
-        if (_isInitialized) _postPanelReady();
-      } else if (data.type === 'PLUGIN_ACTIVATE') {
-        _activateHostPlugin(data.id);
-      } else if (data.type === 'SET_QUALITY') {
-        const quality = _normalizeQualityParam(data.quality);
-        if (quality) {
-          Promise.resolve(_setQualityMode(quality))
-            .then(() => _postToHost({ type: 'QUALITY_STATUS', quality: _qualityMode, phase: 'ready' }))
-            .catch(() => _postToHost({ type: 'QUALITY_STATUS', quality, phase: 'error' }));
-        }
-      } else if (data.type === 'SET_SAMPLE_UPSIDE_DOWN') {
-        // The admin editor's sample-side switch, on its preview: lay the volume
-        // flat with the face the flag names as the top toward the camera — what the
-        // z-stack browser will show — so the operator picks the side by looking.
-        VolumeViewer.setSampleUpsideDown?.(data.value === true, { preview: true });
-      } else if (data.type === 'TOGGLE_VISUAL') {
-        if (data.visual === 'grid') {
-          VolumeViewer.setGridMode?.(data.state ? 1 : 0);
-        } else if (data.visual === 'axes') {
-          VolumeViewer.setAxesVisible?.(!!data.state);
-        }
-      } else if (data.type === 'TOGGLE_ZSTACK') {
-        // Handled by the early module-level listener (_applyZstackState).
-        // This path runs only if the message arrives AFTER _bindIframeSync (i.e. late messages).
-        // The browser closes the slice tool itself (mutual exclusion, in its plugin).
-        _applyZstackState(!!data.state, data.slice ?? null);
-      } else if (data.type === 'ZSTACK_HOVER_STATE') {
-        if (_zstackActive) {
-          const panel = document.getElementById('zstack-browser');
-          if (panel) {
-            panel.classList.toggle('zstack-hidden', !data.state);
+        
+        if (!canvas) {
+          if (typeof VolumeViewer !== 'undefined' && VolumeViewer.getRenderer) {
+            canvas = VolumeViewer.getRenderer()?.domElement;
           }
         }
-      } else if (data.type === 'REQUEST_SCREENSHOT') {
-        try {
-          let canvas = null;
-          if (_zstackActive || (typeof VolumeSlicer !== 'undefined' && VolumeSlicer.isVisible())) {
-            const sr = getCurrentSliceResult({ raw: false });
-            canvas = sr?.canvas;
-          }
-          
-          if (!canvas) {
-            if (typeof VolumeViewer !== 'undefined' && VolumeViewer.getRenderer) {
-              canvas = VolumeViewer.getRenderer()?.domElement;
-            }
-          }
-          
-          if (!canvas) {
-            canvas = document.getElementById('webgl-canvas');
-          }
+        
+        if (!canvas) {
+          canvas = document.getElementById('webgl-canvas');
+        }
 
-          if (!canvas) {
-            // SEC-012: restrict targetOrigin to this page's origin (no wildcard leak).
-            window.parent.postMessage({ type: 'SCREENSHOT_RESPONSE', sourceIndex: _panelIndex, success: false, error: 'No active canvas found' }, Utils.trustedTargetOrigin());
-            return;
-          }
-          const size = 512;
-          const thumbCanvas = document.createElement('canvas');
-          thumbCanvas.width = size;
-          thumbCanvas.height = size;
-          const ctx = thumbCanvas.getContext('2d');
-          ctx.fillStyle = '#080a12';
-          ctx.fillRect(0, 0, size, size);
-          
-          const sWidth = canvas.width;
-          const sHeight = canvas.height;
-          const scale = Math.min(size / sWidth, size / sHeight);
-          const dWidth = sWidth * scale;
-          const dHeight = sHeight * scale;
-          const dx = (size - dWidth) / 2;
-          const dy = (size - dHeight) / 2;
-          
-          ctx.drawImage(canvas, dx, dy, dWidth, dHeight);
-          const dataUrl = thumbCanvas.toDataURL('image/webp', 0.9);
+        if (!canvas) {
           // SEC-012: restrict targetOrigin to this page's origin (no wildcard leak).
-          window.parent.postMessage({ type: 'SCREENSHOT_RESPONSE', sourceIndex: _panelIndex, success: true, dataUrl }, Utils.trustedTargetOrigin());
-        } catch (err) {
-          // SEC-012: restrict targetOrigin to this page's origin (no wildcard leak).
-          window.parent.postMessage({ type: 'SCREENSHOT_RESPONSE', sourceIndex: _panelIndex, success: false, error: err.message }, Utils.trustedTargetOrigin());
+          window.parent.postMessage({ type: 'SCREENSHOT_RESPONSE', sourceIndex: _panelIndex, success: false, error: 'No active canvas found' }, Utils.trustedTargetOrigin());
+          return;
         }
+        const size = 512;
+        const thumbCanvas = document.createElement('canvas');
+        thumbCanvas.width = size;
+        thumbCanvas.height = size;
+        const ctx = thumbCanvas.getContext('2d');
+        ctx.fillStyle = '#080a12';
+        ctx.fillRect(0, 0, size, size);
+        
+        const sWidth = canvas.width;
+        const sHeight = canvas.height;
+        const scale = Math.min(size / sWidth, size / sHeight);
+        const dWidth = sWidth * scale;
+        const dHeight = sHeight * scale;
+        const dx = (size - dWidth) / 2;
+        const dy = (size - dHeight) / 2;
+        
+        if (canvas === VolumeViewer.getRenderer?.()?.domElement) VolumeViewer.renderNow?.();
+        ctx.drawImage(canvas, dx, dy, dWidth, dHeight);
+        const dataUrl = thumbCanvas.toDataURL('image/webp', 0.9);
+        // SEC-012: restrict targetOrigin to this page's origin (no wildcard leak).
+        window.parent.postMessage({ type: 'SCREENSHOT_RESPONSE', sourceIndex: _panelIndex, success: true, dataUrl }, Utils.trustedTargetOrigin());
+      } catch (err) {
+        // SEC-012: restrict targetOrigin to this page's origin (no wildcard leak).
+        window.parent.postMessage({ type: 'SCREENSHOT_RESPONSE', sourceIndex: _panelIndex, success: false, error: err.message }, Utils.trustedTargetOrigin());
       }
-    });
+    }
   }
 
   // ── Anatomical camera sync ────────────────────────────────
@@ -4712,11 +5238,45 @@ const ViewerApp = (() => {
         volume: true,
         timeline: Boolean(isLive),
         channels: _channelState.length,
-        tracking: Boolean(datasetMeta?.tracking?.tracksPath)
+        tracking: Boolean(datasetMeta?.tracking?.tracksPath),
+        // GPU bytes each quality's atlas would take, for the host's quality staging.
+        qualityBytes: _qualityBytes()
       },
       quality: _qualityMode,
       tool: typeof ToolManager !== 'undefined' ? ToolManager.current() : 'navigate'
     });
+  }
+
+  /**
+   * The GPU bytes each quality of the select would allocate
+   * ({ '512x512': n, '1024x1024': n, native: n, … }), as the viewer plans its volume
+   * (VolumeViewer.getQualityFootprints). null before a bricked dataset is mounted.
+   */
+  function _qualityBytes() {
+    const select = document.getElementById('select-quality');
+    const offered = select ? [...select.options].map(o => o.value) : ['512x512', '1024x1024', 'native'];
+    const footprints = VolumeViewer.getQualityFootprints?.(offered);
+    if (footprints?.qualities) {
+      const out = {};
+      for (const [quality, fp] of Object.entries(footprints.qualities)) {
+        if (Number(fp?.bytes) > 0) out[quality] = Number(fp.bytes);
+      }
+      if (Object.keys(out).length) return out;
+    }
+    const levels = Array.isArray(_brickManifest?.levels) ? _brickManifest.levels : null;
+    if (!levels?.length || typeof BrickLoader === 'undefined' || typeof SVRManager === 'undefined' || !SVRManager.planAtlas) return null;
+    const renderer = VolumeViewer.getRenderer?.();
+    const max3D = Math.max(64, renderer?.capabilities?.max3DTextureSize || 2048);
+    // Without the viewer's footprints: the level's non-empty bricks, one 64³ slot each.
+    const out = {};
+    for (const quality of offered) {
+      const lod = _lodForQuality(quality, levels.length, levels);
+      const count = BrickLoader.activeBrickCount?.(lod);
+      if (!(count > 0)) continue;
+      const plan = SVRManager.planAtlas(count, { max3D });
+      if (plan && plan.bytes > 0) out[quality] = plan.bytes;
+    }
+    return Object.keys(out).length ? out : null;
   }
 
   function _bindHost() {
@@ -4761,20 +5321,71 @@ const ViewerApp = (() => {
     return Number.isFinite(value) ? Math.max(0.25, Math.min(2.0, value)) : 1.0;
   }
 
-  function _showLoadingError(err) {
-    console.error('[ViewerApp] Loading failed:', err);
-    _postToHost({ type: 'PANEL_ERROR', message: String(err?.message || err || 'Unknown loading error') });
+  /** Is a volume on screen (a failed frame of a timelapse leaves the previous one up)? */
+  function _hasMountedVolume() {
+    const entry = VolumeViewer.getSamplingVolume?.();
+    return Boolean(entry && (entry.textures || entry.data));
+  }
+
+  /** The loader's progress view (spinner, label, bar), its error card hidden. */
+  function _showLoaderProgress() {
     const loader = document.getElementById('viewer-loader');
     if (!loader) return;
-    const message = Utils.escapeHtml(err?.message || err || 'Unknown loading error');
     loader.style.display = 'flex';
-    loader.innerHTML = `
-      <i data-lucide="alert-triangle" style="width:48px;height:48px;margin-bottom:16px;color:var(--color-error)"></i>
-      <h3>Loading Error</h3>
-      <p style="color:var(--text-muted);margin-top:8px;max-width:400px;text-align:center">${message}</p>
-      <a href="explorer.html" class="btn btn-primary" style="margin-top:16px">Return to Explorer</a>
-    `;
-    if (window.lucide) lucide.createIcons();
+    document.getElementById('loader-body')?.classList.remove('hidden');
+    const card = document.getElementById('loader-error');
+    if (card) {
+      card.classList.add('hidden');
+      card.replaceChildren();
+    }
+  }
+
+  /**
+   * A load failed. With a volume already on screen (a timelapse frame, a restore, a
+   * quality switch) it stays there and the status line says what failed. With none,
+   * the loader shows the error card — in its own element, so the progress bar and the
+   * label every later load writes to are still there.
+   */
+  function _showLoadingError(err) {
+    console.error('[ViewerApp] Loading failed:', err);
+    const text = String(err?.message || err || _t('viewer.errUnknown', 'Unknown loading error'));
+    if (_isInitialized && _hasMountedVolume()) {
+      const loader = document.getElementById('viewer-loader');
+      if (loader) loader.style.display = 'none';
+      _setQualityStatus(_tf('viewer.loadFailedKept', 'Loading failed: {message}. The volume on screen is kept.', { message: text }));
+      return;
+    }
+    _postToHost({ type: 'PANEL_ERROR', message: text });
+    const loader = document.getElementById('viewer-loader');
+    if (!loader) return;
+    loader.style.display = 'flex';
+    document.getElementById('loader-body')?.classList.add('hidden');
+    let card = document.getElementById('loader-error');
+    if (!card) {
+      card = document.createElement('div');
+      card.id = 'loader-error';
+      card.className = 'viewer-loader-error';
+      card.setAttribute('role', 'alert');
+      loader.appendChild(card);
+    }
+    const icon = document.createElement('i');
+    icon.setAttribute('data-lucide', 'alert-triangle');
+    icon.className = 'viewer-loader-error__icon';
+    const title = document.createElement('h3');
+    title.textContent = _t('viewer.loadingError', 'Loading error');
+    const message = document.createElement('p');
+    message.className = 'viewer-loader-error__message';
+    message.textContent = text;
+    card.replaceChildren(icon, title, message);
+    if (!_isIframe) {
+      const back = document.createElement('a');
+      back.href = 'explorer.html';
+      back.className = 'btn btn-primary viewer-loader-error__back';
+      back.textContent = _t('viewer.backToExplorer', 'Return to Explorer');
+      card.appendChild(back);
+    }
+    card.classList.remove('hidden');
+    if (window.lucide) lucide.createIcons({ nodes: [card] });
   }
 
   async function _getFigureBlob(options = {}) {
@@ -4798,6 +5409,7 @@ const ViewerApp = (() => {
     const ctx = composed.getContext('2d');
     ctx.fillStyle = resolved.color;
     ctx.fillRect(0, 0, composed.width, composed.height);
+    if (canvas.id === 'webgl-canvas') VolumeViewer.renderNow?.();
     ctx.drawImage(canvas, 0, 0);
     return await new Promise(resolve => composed.toBlob(resolve, options.mime || 'image/png', options.quality || 0.95));
   }
@@ -4812,7 +5424,7 @@ const ViewerApp = (() => {
       node.textContent = I18n.t('viewer.volSourceUnavailable');
       return;
     }
-    node.textContent = `Display: ${preferred.label}.`;
+    node.textContent = _tf('viewer.volSourceDisplay', 'Display: {label}.', { label: preferred.label });
   }
 
   function _scheduleViewerResize() {
@@ -4824,72 +5436,64 @@ const ViewerApp = (() => {
 
   /**
    * The slice on screen for the Studio (the Compare page's, the fallback of
-   * openStudio) or a thumbnail. `options.raw === false` skips the raw channel values
-   * (one more render) that let the Studio re-colour the picture — a thumbnail
-   * (REQUEST_SCREENSHOT) needs the colours alone.
+   * openStudio) or a thumbnail: the z-stack browser's slab when it is open, else the
+   * inspector plane, framed on the plane's footprint on the volume (cropRect, from the
+   * geometry, at renderRes) and rendered for that window alone. `options.raw === false`
+   * skips the raw channel values (one more render) that let the Studio re-colour the
+   * picture — a thumbnail needs the colours alone; `options.maxRes` caps the frame
+   * (a 512 px thumbnail has no use for a native-size render).
    */
   function getCurrentSliceResult(options = {}) {
-    let result = null;
     const withRaw = options?.raw !== false;
+    const maxRes = Number(options?.maxRes) > 0 ? Math.round(Number(options.maxRes)) : 0;
+    const dim = datasetMeta?.dimensions || {};
+    const maxDim = Math.max(Number(dim.original_x) || Number(dim.x) || 1024, Number(dim.original_y) || Number(dim.y) || 1024);
 
-    if (_zstackActive && typeof VolumeSlicer !== 'undefined' && VolumeSlicer.renderWithMaterial && VolumeViewer.getMaterial?.()) {
-      const { z } = _zstackGetDims();
-      if (z >= 1) {
-        // The browser's slab (or its whole kept range in 3D), rendered through a
-        // throwaway slicer material so the inspector plane is never disturbed.
-        const spec = _zstackStudioSpec();
-        const dim = datasetMeta?.dimensions || {};
-        const maxRes = Math.max(Number(dim.original_x) || Number(dim.x) || 1024, Number(dim.original_y) || Number(dim.y) || 1024);
-        const renderRes = _captureRenderRes(maxRes);
-        let canvas = VolumeSlicer.renderWithMaterial(VolumeViewer.getMaterial(), spec, renderRes, _currentChannelState());
-
-        if (canvas) {
-          const cropRect = _sliceContentRect(canvas);
-          canvas = _cropEmptySliceSpace(canvas, cropRect);
-          return {
-            canvas,
-            width: canvas.width,
-            height: canvas.height,
-            renderRes: renderRes,
-            raw: withRaw ? _studioRawFor(spec, renderRes, cropRect, canvas) : null,
-            source: 'zstack',
-            quality: 'high',
-            planeSpec: spec,
-            pixelSizeUm: _slicePixelSizeUm(spec, renderRes),
-            physicalSizeUm: VolumeViewer.getPhysicalSize?.(),
-            channelState: _currentChannelState(),
-            timepoint: _currentTimepoint
-          };
-        }
-      }
-    }
-
-    if (typeof VolumeSlicer !== 'undefined') {
-      const dim = datasetMeta?.dimensions || {};
-      const maxRes = Math.max(Number(dim.original_x) || Number(dim.x) || 1024, Number(dim.original_y) || Number(dim.y) || 1024);
-      const renderRes = _captureRenderRes(maxRes);
-      let canvas = VolumeSlicer.renderHighRes(renderRes);
-      if (canvas) {
-        const cropRect = _sliceContentRect(canvas);
-        canvas = _cropEmptySliceSpace(canvas, cropRect);
-        const spec = VolumeSlicer.getPlaneSpec();
-
+    const capture = (spec, source) => {
+      const material = VolumeViewer.getMaterial?.();
+      if (!material || !spec || typeof StudioPlaneOps === 'undefined') return null;
+      const full = _captureRenderRes(maxDim);
+      const renderRes = maxRes ? Math.min(full, maxRes) : full;
+      const { geom, warp } = _studioGeometry(spec, material);
+      const cropRect = StudioPlaneOps.cropRect(geom, renderRes, warp);
+      const win = cropRect ? _sliceWindowForRect(cropRect, renderRes) : null;
+      if (!win) return null;
+      const channelState = _currentChannelState();
+      try {
+        const rendered = VolumeSlicer.renderWithMaterial(material, spec, renderRes, channelState, { window: win });
+        if (!rendered) return null;
+        const canvas = _copyCanvas(rendered);
         return {
           canvas,
           width: canvas.width,
           height: canvas.height,
-          renderRes: renderRes,
+          renderRes,
+          cropRect,
           raw: withRaw ? _studioRawFor(spec, renderRes, cropRect, canvas) : null,
-          source: 'gpu-slicer',
+          source,
           quality: 'high',
           planeSpec: spec,
           pixelSizeUm: _slicePixelSizeUm(spec, renderRes),
-          channelState: _currentChannelState()
+          calibrated: _studioCalibrated(),
+          physicalSizeUm: VolumeViewer.getPhysicalSize?.(),
+          channelState,
+          timepoint: _currentTimepoint
         };
+      } finally {
+        VolumeSlicer.releaseHiPass?.();
       }
+    };
+
+    if (typeof VolumeSlicer !== 'undefined' && VolumeSlicer.renderWithMaterial) {
+      // The browser's slab (or its whole kept range in 3D), rendered through the shared
+      // slicer program so the inspector plane is never disturbed.
+      if (_zstackActive && _zstackGetDims().z >= 1) {
+        const result = capture(_zstackStudioSpec(), 'zstack');
+        if (result) return result;
+      }
+      const result = capture(VolumeSlicer.getPlaneSpec(), 'gpu-slicer');
+      if (result) return result;
     }
-
-
 
     // Default: 3D screenshot
     if (typeof VolumeViewer !== 'undefined' && VolumeViewer.getRenderer) {
@@ -4899,6 +5503,7 @@ const ViewerApp = (() => {
         tempCanvas.width = renderer.domElement.width;
         tempCanvas.height = renderer.domElement.height;
         const ctx = tempCanvas.getContext('2d');
+        VolumeViewer.renderNow?.();
         ctx.drawImage(renderer.domElement, 0, 0);
         return {
           canvas: tempCanvas,
@@ -4907,12 +5512,32 @@ const ViewerApp = (() => {
           source: '3d',
           quality: '256x256',
           channelState: _currentChannelState(),
-          pixelSizeUm: datasetMeta?.calibration?.pixelSizeUm || { x: 1, y: 1 }
+          // A perspective view has no single pixel size: no scale bar, distances in px.
+          pixelSizeUm: null,
+          calibrated: false
         };
       }
     }
-    
+
     return null;
+  }
+
+  /**
+   * The canvas this page shows — the staged slice while the slice tool is open, else
+   * the WebGL view — ready to be read by the CALLER in its current task: the WebGL
+   * view is rendered now, its drawing buffer is not kept between frames. A host page
+   * (Compare) calls this synchronously through the same-origin frame and draws the
+   * canvas before returning to its event loop.
+   */
+  function getCaptureCanvas() {
+    if (_sliceStaged && typeof VolumeSlicer !== 'undefined') {
+      VolumeSlicer.flushPreview?.();
+      const slice = VolumeSlicer.getPreviewCanvas?.();
+      if (slice?.width && slice?.height) return slice;
+    }
+    const canvas = document.getElementById('webgl-canvas');
+    if (!canvas || typeof VolumeViewer === 'undefined' || !VolumeViewer.renderNow?.()) return null;
+    return canvas;
   }
 
   function getSamplingVolume() {
@@ -4933,84 +5558,6 @@ const ViewerApp = (() => {
 
   // ── Slice Inspector ─────────────────────────────────────
 
-  // _initSlicer is now handled by the slice-inspector module.
-  // This stub remains so workspace-restore code that calls ToolManager.activate('slice')
-  // still has a valid _initSlicer reference if called before modules load.
-  function _initSlicer() {
-    if (typeof VolumeSlicer === 'undefined') return;
-    // Delegate to module if already loaded
-    const mod = typeof PluginRegistry !== 'undefined' ? PluginRegistry.getModule('slice-inspector') : null;
-    if (mod) return; // module will init itself
-
-    // Initialize slicer with renderer (material will be linked after first load)
-    const r = VolumeViewer.getRenderer();
-    if (r) {
-      VolumeSlicer.init({ renderer: r, material: VolumeViewer.getMaterial() });
-      if (VolumeViewer.getMaterial()) {
-        VolumeSlicer.updateMaterial(VolumeViewer.getMaterial());
-      }
-    }
-
-    // Mount preview canvas
-    const mount = document.getElementById('slicer-preview-mount');
-    if (mount) {
-      mount.innerHTML = '';
-      mount.appendChild(VolumeSlicer.getPreviewCanvas());
-    }
-
-    // Preset buttons
-    document.querySelectorAll('.slicer-preset').forEach(btn => {
-      btn.addEventListener('click', () => {
-        const mode = btn.dataset.preset;
-        document.querySelectorAll('.slicer-preset').forEach(b => b.classList.remove('active'));
-        btn.classList.add('active');
-        _slicerSetSpec({ mode, yaw: 0, pitch: 0, roll: 0 });
-        // Reset angle sliders
-        _slicerSyncSlidersFromSpec();
-      });
-    });
-
-    // Position slider
-    _slicerBindSlider('slicer-position', 'slicer-val-pos', v => {
-      _slicerSetSpec({ value: v / 100 });
-    }, v => (v / 100).toFixed(2));
-
-    // Angle sliders
-    _slicerBindSlider('slicer-yaw', 'slicer-val-yaw', v => {
-      _slicerSetSpec({ mode: 'oblique', yaw: v });
-      _slicerSyncPresetButtons('oblique');
-    }, v => `${v}°`);
-    _slicerBindSlider('slicer-pitch', 'slicer-val-pitch', v => {
-      _slicerSetSpec({ mode: 'oblique', pitch: v });
-      _slicerSyncPresetButtons('oblique');
-    }, v => `${v}°`);
-    _slicerBindSlider('slicer-roll', 'slicer-val-roll', v => {
-      _slicerSetSpec({ mode: 'oblique', roll: v });
-      _slicerSyncPresetButtons('oblique');
-    }, v => `${v}°`);
-
-    // Slab
-    _slicerBindSlider('slicer-slab', 'slicer-val-slab', v => {
-      _slicerSetSpec({ slabThickness: v });
-    }, v => String(v));
-
-    // Projection mode
-    document.getElementById('slicer-projection')?.addEventListener('change', e => {
-      _slicerSetSpec({ projection: e.target.value });
-    });
-
-    // Open in Studio button
-    document.getElementById('btn-slicer-studio')?.addEventListener('click', () => openStudio());
-
-    // Listen to plane changes from 3D interaction → sync slicer
-    VolumeViewer.onPlaneSpecChange(spec => {
-      if (!VolumeSlicer.isVisible()) return;
-      VolumeSlicer.setPlaneSpec(spec);
-      _slicerSyncSlidersFromSpec();
-      _slicerSyncPresetButtons(spec.mode);
-    });
-  }
-
   function _slicerSetSpec(partial) {
     const cur = VolumeSlicer.getPlaneSpec();
     const next = { ...cur, ...partial };
@@ -5019,17 +5566,6 @@ const ViewerApp = (() => {
     VolumeSlicer.setPlaneSpec(next);
     // Also update the 3D plane mesh
     VolumeViewer.setPlaneSpec(next, { notify: false });
-  }
-
-  function _slicerBindSlider(sliderId, labelId, onChange, format) {
-    const slider = document.getElementById(sliderId);
-    const label = document.getElementById(labelId);
-    if (!slider) return;
-    slider.addEventListener('input', () => {
-      const v = Number(slider.value);
-      if (label) label.textContent = format(v);
-      onChange(v);
-    });
   }
 
   function _slicerSyncSlidersFromSpec() {
@@ -5233,10 +5769,24 @@ const ViewerApp = (() => {
     return { z, c, vz, totalRange, interval };
   }
 
-  return { 
+  /** An exception out of init(): the operator sees it, a hosting page hears of it. */
+  function _bootFailed(err) {
+    let shown = false;
+    try {
+      _showLoadingError(err);
+      shown = true;
+    } finally {
+      // _showLoadingError posts PANEL_ERROR itself before the volume is mounted; when
+      // it threw, a host still waiting for PANEL_READY must not wait out its timeout.
+      if (!shown && !_isInitialized) _postToHost({ type: 'PANEL_ERROR', message: String(err?.message || err) });
+    }
+  }
+
+  return {
     init,
     openStudio,
     getCurrentSliceResult,
+    getCaptureCanvas,
     getSamplingVolume,
     getDatasetMeta,
     getCurrentTimepoint,
@@ -5245,6 +5795,9 @@ const ViewerApp = (() => {
     applyWorkspaceState: _applyWorkspaceState,
     getChannelHistograms: () => (typeof VolumeViewer !== 'undefined' && VolumeViewer.getChannelHistograms ? VolumeViewer.getChannelHistograms() : null),
     resetWorkspace,
+    // Stabilised timelapse ⇄ raw acquisition frame (false when there is no registration).
+    setVolumeStabilized,
+    _bootFailed,
     // Exposed for early module-level TOGGLE_ZSTACK listener:
     _applyZstackState,
     _setPendingZstack: (v) => { _pendingZstackState = v; }, // v = {desired, slice}
@@ -5261,10 +5814,14 @@ window.ViewerApp = ViewerApp;
 // _bindIframeSync() is called INSIDE init() after several awaits — by then the
 // message may have already been delivered and lost. We install here to guarantee
 // it is always caught, regardless of init() timing.
+// Both early listeners hear the hosting page alone (a Compare panel, the admin
+// preview): same origin is not enough, and a top-level viewer has no host.
+const _fromViewerHost = (e) => Utils.isTrustedMessageOrigin(e) && window.parent !== window && e.source === window.parent;
+
 window.addEventListener('message', (e) => {
-  if (!Utils.isTrustedMessageOrigin(e)) return;
+  if (!_fromViewerHost(e)) return;
   const data = e.data;
-  if (!data || data.type !== 'APPLY_WORKSPACE_STATE' || !data.state) return;
+  if (!data || data.type !== 'APPLY_WORKSPACE_STATE' || !data.state || typeof data.state !== 'object' || Array.isArray(data.state)) return;
   console.log('[ViewerApp] Early listener: APPLY_WORKSPACE_STATE received — routing to ViewerApp.applyWorkspaceState');
   ViewerApp.applyWorkspaceState(data.state);
 });
@@ -5273,7 +5830,7 @@ window.addEventListener('message', (e) => {
 // before _bindIframeSync() (and its message listener) is set up inside init().
 // If already initialized, apply immediately. Otherwise buffer inside the IIFE.
 window.addEventListener('message', (e) => {
-  if (!Utils.isTrustedMessageOrigin(e)) return;
+  if (!_fromViewerHost(e)) return;
   const data = e.data;
   if (!data || data.type !== 'TOGGLE_ZSTACK') return;
   const desired = !!data.state;
@@ -5289,6 +5846,12 @@ window.addEventListener('message', (e) => {
 // throws despite the per-subsystem try/catch barriers, surface it instead of a silent
 // unhandled rejection, so failures are diagnosable rather than a blank viewer.
 document.addEventListener('DOMContentLoaded', () => {
-  Promise.resolve(ViewerApp.init()).catch(err => console.error('[ViewerApp] boot failed:', err));
+  Promise.resolve()
+    .then(() => ViewerApp.init())
+    .catch((err) => {
+      console.error('[ViewerApp] boot failed:', err);
+      // A hosting page (Compare) waits for PANEL_READY: tell it, and the operator.
+      ViewerApp._bootFailed?.(err);
+    });
 });
 

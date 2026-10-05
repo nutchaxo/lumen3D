@@ -1,9 +1,3 @@
-# Prevent direct web access to the config file
-<Files "config.php">
-    Order Deny,Allow
-    Deny from all
-</Files>
-
 # Protect ALL admin state files and PHP includes. dev_server.py blocks the whole
 # api/ dir from static serving; on a raw Apache/PHP host these files would otherwise
 # be downloadable. Denying every api/*.json (credentials, stats, plugin toggles,
@@ -12,7 +6,15 @@
 # drifting as new state files are added. Nginx equivalent:
 #   location ~* /api/.*\.json$ { deny all; }
 #   location ~* /api/_admin_lib\.php$ { deny all; }
-<FilesMatch "\.json$|^_[A-Za-z0-9_]+\.php$">
+# Also denied: the temp files of an atomic write (.tmp-*), lock files, PHP session
+# files of the private session store (sess_*), and the sources an update parks
+# beside the live ones (*.lumen-old / *.lumen-new) — served as text, they would
+# publish the old code. The root .htaccess additionally refuses every dot-segment
+# (api/.sessions/, api/.bruteforce/, api/.locks/…).
+# config.php: releases up to 1.56.2 shipped it (a password hash, no <?php tag, so it
+# is served as TEXT). An older updater never deletes files; the first update run by
+# this version's updater removes it (ADMIN_UPDATE_OBSOLETE) — until then, denied.
+<FilesMatch "\.json$|^_[A-Za-z0-9_]+\.php$|^config\.php$|^\.|^sess_|\.lock$|\.lumen-(old|new|backup)$">
     <IfModule mod_authz_core.c>
         Require all denied
     </IfModule>

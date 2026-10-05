@@ -1,3 +1,5 @@
 {
-  "label": "Desenfoque gaussiano σ"
+  "label": "Desenfoque gaussiano σ",
+  "unavailableSparse": "No disponible con esta calidad (atlas de bloques disperso): elija una calidad inferior para usar el desenfoque.",
+  "unavailable": "El desenfoque no está disponible para este volumen."
 }

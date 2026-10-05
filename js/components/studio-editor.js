@@ -5,10 +5,6 @@
 const StudioEditor = (() => {
   const DOC_VERSION = 2;
   const COLORS = ['#ff4d4f', '#00d2ff', '#ffd166', '#00a654', '#9b59b6', '#ffffff'];
-  const STUDIO_SLICE_SUPPRESSION = {
-    floorMax: 128,
-    signalThreshold: 6
-  };
   const SCALEBAR_STEP = 10;
   // Single source for the slice backdrop: the editing surface and the exported PNG
   // must agree, otherwise the figure changes the moment it leaves the Studio.
@@ -89,9 +85,43 @@ const StudioEditor = (() => {
   let _channelsSeeding = false;
   let _progressEl = null;
   let _progressOnCancel = null;
+  // Identifies the open document: open() and close() both move it on. A caller that
+  // streams into a document (the native pass) passes the token open() returned, so a
+  // pass left over from a closed document can neither draw into the next one nor
+  // clear its progress bar and cancel hook.
+  let _docToken = 0;
   // compare.js calls init() on top of this file's own DOMContentLoaded init: bound
   // twice, every key and pointer event ran twice (one Ctrl+Z undid two steps).
   let _eventsBound = false;
+  // Bumped whenever the picture's pixels change in place (a recolour into the same
+  // canvas): with the picture's identity it keys the minimap's cached thumbnail.
+  let _pictureVersion = 0;
+  const _minimapThumb = { canvas: null, image: null, version: -1, w: 0, h: 0 };
+  // The per-cell channel buttons of a Compare figure: built once per document, moved
+  // with the view (never rebuilt per pan or zoom step).
+  let _compareMenuButtons = [];
+  // An open run of channel edits coalesced into one history step (a slider drag);
+  // closed by the panel's change / pointerup, a pause, or another history step.
+  let _channelEditRun = null;
+  const CHANNEL_EDIT_RUN_MS = 1000;
+  // The channel panel as last built: what it shows, so a layer edit does not rebuild it.
+  let _channelsShown = null;
+  // A slice without raw values is re-coloured by re-rendering it through the slicer;
+  // the crop window in that render is fixed once so the frame (and every annotation
+  // laid on it) never moves when a channel change changes what is visible.
+  let _nonRawCrop = null;
+  // The slot the single slice's raw texture lives in (SliceCompositor options.slot):
+  // a progressive refresh rewrites it in place instead of allocating a new texture.
+  const SLICE_TEXTURE_SLOT = { name: 'studio-slice' };
+  // Limits of a Studio file read back (a figure has tens of layers, not thousands).
+  const IMPORT_MAX_BYTES = 5 * 1024 * 1024;
+  const IMPORT_MAX_LAYERS = 2000;
+  const IMPORT_MAX_POINTS = 10000;
+  const IMPORT_MAX_TEXT = 2000;
+  // The largest canvas the PNG export asks a browser for: 16384 px a side and 2²⁸ px
+  // (Chrome's and Firefox's area cap; past it toBlob silently gives null).
+  const EXPORT_MAX_SIDE = 16384;
+  const EXPORT_MAX_PIXELS = 268435456;
 
   function init() {
     _container = document.getElementById('studio-layout');
@@ -111,30 +141,49 @@ const StudioEditor = (() => {
     _resizeCanvas();
   }
 
+  /**
+   * Opens a new document on `sliceResult`. → the document's token (see
+   * setSliceResult / setLoadProgress `options.token`), or null when nothing opened.
+   */
   function open(sliceResult) {
     if (!sliceResult?.canvas && !_hasRaw(sliceResult)) {
       _toast(_t('toast.renderSliceFirst', 'Render a slice before opening Studio.'));
-      return;
+      return null;
     }
     // A new document: the previous one's raw values and GPU textures go with it.
     _cancelChannelRecompose();
+    _cancelDrawRequest();
+    _resetPointerState();
+    _closeTextEditor(false);
     _releaseRaw();
+    _nonRawCrop = null;
     // The slice's own channel state seeds the new document.
     const preparedSlice = _prepareSliceForStudio(sliceResult, _seedChannelState(sliceResult));
     if (!preparedSlice?.canvas) {
       _toast(_t('toast.renderSliceFirst', 'Render a slice before opening Studio.'));
-      return;
+      return null;
     }
+    // A stream still running for the previous document belongs to it alone.
+    if (_isOpen) {
+      const pendingCancel = _progressOnCancel;
+      setLoadProgress(null);
+      pendingCancel?.();
+    }
+    _docToken++;
     _sliceResult = preparedSlice;
     _sliceImage = preparedSlice.canvas;
+    _pictureVersion++;
     _releaseScratchCanvases();
     _doc = _createDocument(preparedSlice);
     _history = [];
     _future = [];
+    _channelEditRun = null;
+    _channelsShown = null;
     _selectedId = null;
     _activeTool = 'select';
     // A previous session may have left the index on a cell this document has not got.
     _activeStudioPanelIndex = 0;
+    _removeCompareMenus();
     _isOpen = true;
     _container.classList.remove('hidden');
     _resizeCanvas();
@@ -145,19 +194,34 @@ const StudioEditor = (() => {
     _ensureDefaultScaleBarLayer();
     _pushHistory('Open Studio');
     _renderAll();
+    return _docToken;
+  }
+
+  /** The token of the open document (0 before the first open). */
+  function documentToken() {
+    return _docToken;
+  }
+
+  // A caller that names a document (options.token) is heard only by that document.
+  function _staleToken(options) {
+    return options && options.token !== undefined && options.token !== null && options.token !== _docToken;
   }
 
   /**
    * Swaps the slice behind the open document. `options.imageOnly` is the progressive
    * refresh of the native pass: the same frame with more chunks native, so only the
    * picture is redrawn — layers, panels and calibration are left exactly as they are.
+   * Ignored while the Studio is closed (a late refresh never re-opens it) unless
+   * `options.reopen`, and when `options.token` names another document. A result of
+   * another size re-scales the layers and guides to the new frame.
    */
   function setSliceResult(sliceResult, options = {}) {
     if (!sliceResult?.canvas && !_hasRaw(sliceResult)) return;
-    if (!_doc || !_isOpen || options.reopen) {
+    if (options.reopen) {
       open(sliceResult);
       return;
     }
+    if (!_doc || !_isOpen || _staleToken(options)) return;
     // Coloured with the DOCUMENT's channel state, never the slice's own: a refresh of
     // the native pass carries the viewer's colours and must not undo the operator's
     // edits made in the Studio since it opened.
@@ -169,29 +233,88 @@ const StudioEditor = (() => {
     }
     _sliceResult = preparedSlice;
     _sliceImage = preparedSlice.canvas;
+    _pictureVersion++;
     if (options.imageOnly && preparedSlice.width === _doc.sourceSlice.width && preparedSlice.height === _doc.sourceSlice.height) {
       _draw();
       return;
     }
-    _doc.sourceSlice.width = preparedSlice.width;
-    _doc.sourceSlice.height = preparedSlice.height;
+    const oldW = Number(_doc.sourceSlice.width) || preparedSlice.width;
+    const oldH = Number(_doc.sourceSlice.height) || preparedSlice.height;
+    if (preparedSlice.width !== oldW || preparedSlice.height !== oldH) {
+      _rescaleDocumentGeometry(preparedSlice.width / oldW, preparedSlice.height / oldH);
+    }
+    const calibrated = _isCalibratedSlice(preparedSlice);
+    const pixelSizeUm = preparedSlice.pixelSizeUm ? _normalizePixelSize(preparedSlice.pixelSizeUm) : null;
+    for (const doc of [_doc, ..._history.map(h => h.doc), ..._future.map(h => h.doc)]) {
+      if (!doc?.sourceSlice) continue;
+      doc.sourceSlice.width = preparedSlice.width;
+      doc.sourceSlice.height = preparedSlice.height;
+      if (doc.calibration) {
+        doc.calibration.calibrated = calibrated;
+        if (pixelSizeUm) doc.calibration.pixelSizeUm = _clone(pixelSizeUm);
+      }
+    }
     _doc.sourceSlice.source = preparedSlice.source || _doc.sourceSlice.source;
     _doc.sourceSlice.quality = preparedSlice.quality || _doc.sourceSlice.quality;
     _doc.planeSpec = _clone(preparedSlice.planeSpec || _doc.planeSpec || {});
     _doc.timepoint = preparedSlice.timepoint ?? _doc.timepoint;
-    _doc.calibration.pixelSizeUm = _clone(preparedSlice.pixelSizeUm || _doc.calibration.pixelSizeUm);
     _doc.calibration.spanUm = _clone(preparedSlice.spanUm || _doc.calibration.spanUm);
     _doc.calibration.physicalSizeUm = _clone(preparedSlice.physicalSizeUm || _doc.calibration.physicalSizeUm);
+    _doc.layers.forEach(layer => {
+      if (layer.type === 'scalebar') _setScaleBarEnd(layer);
+      _updateMeasurementText(layer);
+    });
     _ensureDefaultScaleBarLayer();
     _renderAll();
+  }
+
+  /**
+   * The same figure handed over at another resolution: every coordinate the document
+   * holds in image px is scaled by (sx, sy), so each layer and guide stays on the
+   * structure it marks. Sizes in screen terms (stroke width, font size) are kept.
+   */
+  function _rescaleDocumentGeometry(sx, sy) {
+    if (!_doc || !Number.isFinite(sx) || !Number.isFinite(sy) || sx <= 0 || sy <= 0) return;
+    // The open document and every snapshot of its history: an undo after the swap
+    // must bring back layers on THIS frame. The view zoom divides by the same factor
+    // (screen = (image − centre)·zoom + pan), so the figure stays where it was on screen.
+    for (const doc of [_doc, ..._history.map(h => h.doc), ..._future.map(h => h.doc)]) {
+      if (!doc) continue;
+      (doc.layers || []).forEach(layer => {
+        ['x', 'x1', 'x2', 'x3', 'w'].forEach(k => { if (Number.isFinite(layer[k])) layer[k] *= sx; });
+        ['y', 'y1', 'y2', 'y3', 'h'].forEach(k => { if (Number.isFinite(layer[k])) layer[k] *= sy; });
+        if (Array.isArray(layer.points)) layer.points = layer.points.map(p => ({ ...p, x: p.x * sx, y: p.y * sy }));
+      });
+      (doc.guides || []).forEach(guide => { guide.value *= guide.axis === 'x' ? sx : sy; });
+      if (doc.viewport && Number.isFinite(doc.viewport.zoom)) doc.viewport.zoom /= Math.sqrt(sx * sy);
+    }
+  }
+
+  /**
+   * False for a picture without a physical scale: a photograph whose file carries no
+   * resolution (calibrated: false / pixelSizeUm: null), a perspective 3D capture. Its
+   * distances are measured in pixels and it gets no scale bar.
+   */
+  function _isCalibratedSlice(slice) {
+    if (!slice || slice.calibrated === false) return false;
+    const x = Number(slice.pixelSizeUm?.x);
+    return Number.isFinite(x) && x > 0;
+  }
+
+  /** The open single-picture document has no physical scale (see _isCalibratedSlice). */
+  function _isUncalibrated() {
+    return Boolean(_doc && !(_doc.layoutMaps?.length > 1) && _doc.calibration?.calibrated === false);
   }
 
   /**
    * Progress of a slice still streaming in behind the open document (the native-
    * resolution upgrade). `null` clears the bar. `onCancel` is invoked if the operator
    * cancels or closes the Studio, so the transfer stops instead of running on unseen.
+   * `options.token` (from open()) scopes the call to that document: a pass that ends
+   * after its document was closed cannot clear the bar or the cancel hook of the next.
    */
-  function setLoadProgress(state) {
+  function setLoadProgress(state, options = {}) {
+    if (_staleToken(options)) return;
     if (!state) {
       _progressOnCancel = null;
       _progressEl?.remove();
@@ -233,6 +356,13 @@ const StudioEditor = (() => {
     return el;
   }
 
+  /**
+   * Closes the Studio and gives back everything the document held: the raw values and
+   * their GPU textures, the Studio's own canvases (the native-size picture, a Compare
+   * figure copy, the cell scratch, the minimap thumbnail), the undo history, and the
+   * Compare cells' panel frames and slices. getDocument() still returns the closed
+   * document, without its runtime fields.
+   */
   function close() {
     if (!_isOpen) return;
     _isOpen = false;
@@ -240,16 +370,35 @@ const StudioEditor = (() => {
     const pendingCancel = _progressOnCancel;
     setLoadProgress(null);
     pendingCancel?.();
+    _docToken++;
     _cancelChannelRecompose();
+    _cancelDrawRequest();
+    _resetPointerState();
+    _closeTextEditor(false);
     _releaseRaw();
     _releaseScratchCanvases();
     // The Compare figure the cells were re-coloured on is the Studio's own copy of the
-    // one compare.js handed over: nothing shows it any more.
-    if (_doc?.layoutMaps?.length && _sliceImage && _sliceImage !== _sliceResult?.canvas && _sliceImage !== _sliceCanvas) {
+    // one compare.js handed over, and the single slice's canvas is the Studio's own:
+    // nothing shows either any more. The canvas compare.js handed over stays its own.
+    if (_sliceImage && _sliceImage !== _sliceResult?.canvas && _sliceImage !== _sliceCanvas) {
       _sliceImage.width = 0;
       _sliceImage.height = 0;
-      _sliceImage = _sliceResult?.canvas || null;
     }
+    if (_sliceCanvas) {
+      _sliceCanvas.width = 0;
+      _sliceCanvas.height = 0;
+      _sliceCanvas = null;
+    }
+    _releaseMinimapThumb();
+    _removeCompareMenus();
+    _sliceImage = null;
+    _sliceResult = null;
+    _nonRawCrop = null;
+    _history = [];
+    _future = [];
+    _channelEditRun = null;
+    _channelsShown = null;
+    if (_doc) _doc = _portableDocument(_doc);
     _container.classList.add('hidden');
     // If we're in the standalone viewer, we need to show the viewer elements again
     document.getElementById('webgl-canvas')?.classList.remove('hidden');
@@ -270,7 +419,6 @@ const StudioEditor = (() => {
       || (typeof ViewerApp !== 'undefined' && ViewerApp.getDatasetMeta ? ViewerApp.getDatasetMeta() : null);
     const channelState = sliceResult.channelState
       || (typeof ViewerApp !== 'undefined' && ViewerApp.getChannelState ? ViewerApp.getChannelState() : []);
-    const pixelSizeUm = sliceResult.pixelSizeUm || { x: 1, y: 1 };
     return {
       version: DOC_VERSION,
       createdAt: new Date().toISOString(),
@@ -292,10 +440,8 @@ const StudioEditor = (() => {
       planeSpec: _clone(sliceResult.planeSpec || {}),
       channelState: _clone(channelState || []),
       calibration: {
-        pixelSizeUm: {
-          x: Number(pixelSizeUm.x) || 1,
-          y: Number(pixelSizeUm.y) || Number(pixelSizeUm.x) || 1
-        },
+        calibrated: _isCalibratedSlice(sliceResult) || Boolean(sliceResult.layoutMaps?.length),
+        pixelSizeUm: { ..._normalizePixelSize(sliceResult.pixelSizeUm) },
         spanUm: _clone(sliceResult.spanUm || null),
         physicalSizeUm: _clone(sliceResult.physicalSizeUm || null)
       },
@@ -339,6 +485,10 @@ const StudioEditor = (() => {
     document.getElementById('btn-studio-export-json')?.addEventListener('click', _exportJson);
     document.getElementById('btn-studio-import')?.addEventListener('click', () => document.getElementById('studio-import-file')?.click());
     document.getElementById('studio-import-file')?.addEventListener('change', _importJson);
+
+    // The end of a channel control gesture closes its run of edits (one history step).
+    _channelsContainer?.addEventListener('change', _endChannelEditRun);
+    _channelsContainer?.addEventListener('pointerup', _endChannelEditRun);
 
     _toolsContainer?.addEventListener('click', (event) => {
       const button = event.target.closest('[data-studio-tool]');
@@ -411,7 +561,7 @@ const StudioEditor = (() => {
         if (!_doc) return;
         _doc.viewport.rotation = (Number(event.target.value) || 0) * Math.PI / 180;
         document.getElementById('studio-rotation-val').textContent = `${event.target.value} deg`;
-        _viewportChanged();
+        _viewportChanged(true);
       });
     }
     if (window.lucide) lucide.createIcons();
@@ -490,59 +640,113 @@ const StudioEditor = (() => {
   }
 
   // The per-cell buttons are absolutely positioned from the viewport transform, so
-  // every change of that transform has to move them. Kept out of _draw(): this
-  // rebuilds DOM, _draw() runs per pointer move.
-  function _viewportChanged() {
+  // every change of that transform has to move them. `defer` (a pointer or wheel
+  // stream) draws once per animation frame instead of once per event.
+  function _viewportChanged(defer = false) {
+    if (defer) {
+      _requestDraw({ menus: true });
+      return;
+    }
     _draw();
-    if (_doc?.layoutMaps?.length > 1) _renderCompareMenus();
+    if (_doc?.layoutMaps?.length > 1) _positionCompareMenus();
   }
 
+  // ── Coalesced redraws ─────────────────────────────────────
+  // Pointer and wheel events arrive faster than the screen refreshes (up to 1 kHz on
+  // some mice): they ask for a draw, and one draw per animation frame serves them all.
+  // A timer backstops the frame, which a hidden page never runs.
+  const DRAW_BACKSTOP_MS = 64;
+  const _drawRequest = { raf: 0, timer: 0, dirty: false, menus: false };
+
+  function _requestDraw(options = {}) {
+    const r = _drawRequest;
+    r.dirty = true;
+    if (options.menus) r.menus = true;
+    if (r.raf || r.timer) return;
+    if (typeof requestAnimationFrame === 'function') r.raf = requestAnimationFrame(_flushDraw);
+    r.timer = setTimeout(_flushDraw, DRAW_BACKSTOP_MS);
+  }
+
+  function _flushDraw() {
+    const { dirty, menus } = _drawRequest;
+    _cancelDrawRequest();
+    if (dirty) _draw();
+    if (menus && _doc?.layoutMaps?.length > 1) _positionCompareMenus();
+  }
+
+  function _cancelDrawRequest() {
+    const r = _drawRequest;
+    if (r.raf && typeof cancelAnimationFrame === 'function') cancelAnimationFrame(r.raf);
+    if (r.timer) clearTimeout(r.timer);
+    r.raf = 0;
+    r.timer = 0;
+    r.dirty = false;
+    r.menus = false;
+  }
+
+  function _removeCompareMenus() {
+    _compareMenuButtons.forEach(btn => btn.remove?.());
+    _compareMenuButtons = [];
+  }
+
+  // One button per cell, made when the document gets its cells; afterwards only its
+  // place and its active colour change.
   function _renderCompareMenus() {
-    document.querySelectorAll('.studio-compare-menu').forEach(el => el.remove());
-
-    if (!_doc || !_doc.layoutMaps || _doc.layoutMaps.length <= 1) return;
-    const activeIndex = _activePanelIndex();
-
+    if (!_doc || !_doc.layoutMaps || _doc.layoutMaps.length <= 1) {
+      _removeCompareMenus();
+      return;
+    }
     const workspace = document.getElementById('studio-workspace');
     if (!workspace) return;
+    if (_compareMenuButtons.length !== _doc.layoutMaps.length || _compareMenuButtons.some(btn => btn.parentElement && btn.parentElement !== workspace)) {
+      _removeCompareMenus();
+      _compareMenuButtons = _doc.layoutMaps.map((_, index) => {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'studio-compare-menu btn btn-icon btn-sm shadow-md transition-all';
+        btn.style.position = 'absolute';
+        btn.style.zIndex = '100';
+        btn.style.border = '1px solid rgba(255,255,255,0.15)';
+        btn.style.borderRadius = '6px';
+        btn.innerHTML = '<i data-lucide="sliders-horizontal"></i>';
+        btn.title = _t('studio.panelChannels', `Panel ${index + 1} channels`, { n: index + 1 });
+        btn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          _activeStudioPanelIndex = index;
+          _channelEditRun = null;
+          _renderChannels();
+          _positionCompareMenus();
+        });
+        workspace.appendChild(btn);
+        return btn;
+      });
+      if (window.lucide) lucide.createIcons();
+    }
+    _positionCompareMenus();
+  }
+
+  function _positionCompareMenus() {
+    if (!_doc?.layoutMaps || _compareMenuButtons.length !== _doc.layoutMaps.length || !_sliceImage) return;
+    const workspace = document.getElementById('studio-workspace');
+    if (!workspace) return;
+    const activeIndex = _activePanelIndex();
     const canvasRect = _canvas.getBoundingClientRect();
     const workspaceRect = workspace.getBoundingClientRect();
     const offsetX = canvasRect.left - workspaceRect.left;
     const offsetY = canvasRect.top - workspaceRect.top;
-
     _doc.layoutMaps.forEach((map, index) => {
-      // Position at bottom-right of this layout map cell
+      const btn = _compareMenuButtons[index];
+      // At the bottom-right corner of the cell.
       const screenPt = _imageToScreen({ x: map.x + map.w, y: map.y + map.h });
-
-      const btn = document.createElement('button');
-      btn.className = 'studio-compare-menu btn btn-icon btn-sm shadow-md transition-all';
-      btn.style.position = 'absolute';
       btn.style.left = `${offsetX + screenPt.x - 36}px`;
       btn.style.top = `${offsetY + screenPt.y - 36}px`;
-      btn.style.zIndex = '100';
-      btn.style.background = index === activeIndex
-        ? 'var(--color-primary, #3b82f6)' : 'var(--bg-surface, #1e1e2e)';
-      btn.style.color = index === activeIndex
-        ? '#fff' : 'var(--text-muted, #888)';
-      btn.style.border = '1px solid rgba(255,255,255,0.15)';
-      btn.style.borderRadius = '6px';
-
-      btn.innerHTML = '<i data-lucide="sliders-horizontal"></i>';
-      btn.title = _t('studio.panelChannels', `Panel ${index + 1} channels`, { n: index + 1 });
-      
-      btn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        _activeStudioPanelIndex = index;
-        _renderChannels();
-        _renderCompareMenus();
-      });
-
-      workspace.appendChild(btn);
+      btn.style.background = index === activeIndex ? 'var(--color-primary, #3b82f6)' : 'var(--bg-surface, #1e1e2e)';
+      btn.style.color = index === activeIndex ? '#fff' : 'var(--text-muted, #888)';
     });
-    if (window.lucide) lucide.createIcons();
   }
 
   function _draw() {
+    _drawRequest.dirty = false;
     if (!_ctx || !_canvas || !_doc || !_sliceImage) return;
     const { viewport } = _doc;
     _ctx.setTransform(1, 0, 0, 1, 0, 0);
@@ -627,6 +831,40 @@ const StudioEditor = (() => {
     _ctx.restore();
   }
 
+  // The picture scaled down to the minimap, made once per picture: drawing the
+  // native-size canvas into 180 × 120 px on every redraw is a full-resolution
+  // resample per pointer move.
+  function _minimapThumbnail(iw, ih) {
+    const t = _minimapThumb;
+    const w = Math.max(1, Math.round(iw));
+    const h = Math.max(1, Math.round(ih));
+    if (t.canvas && t.image === _sliceImage && t.version === _pictureVersion && t.w === w && t.h === h) return t.canvas;
+    if (!t.canvas) t.canvas = document.createElement('canvas');
+    const c = t.canvas;
+    if (c.width !== w) c.width = w;
+    if (c.height !== h) c.height = h;
+    const ctx = c.getContext('2d');
+    if (!ctx) return _sliceImage;
+    ctx.clearRect(0, 0, w, h);
+    ctx.drawImage(_sliceImage, 0, 0, w, h);
+    t.image = _sliceImage;
+    t.version = _pictureVersion;
+    t.w = w;
+    t.h = h;
+    return c;
+  }
+
+  function _releaseMinimapThumb() {
+    const t = _minimapThumb;
+    if (t.canvas) {
+      t.canvas.width = 0;
+      t.canvas.height = 0;
+    }
+    t.canvas = null;
+    t.image = null;
+    t.version = -1;
+  }
+
   function _drawMinimap() {
     if (!_minimap || !_doc || !_sliceImage) return;
     const ctx = _minimap.getContext('2d');
@@ -641,7 +879,7 @@ const StudioEditor = (() => {
     const ix = (w - iw) / 2;
     const iy = (h - ih) / 2;
     ctx.globalAlpha = 0.82;
-    ctx.drawImage(_sliceImage, ix, iy, iw, ih);
+    ctx.drawImage(_minimapThumbnail(iw, ih), ix, iy, iw, ih);
     ctx.globalAlpha = 1;
     ctx.strokeStyle = '#00d2ff';
     ctx.lineWidth = 1;
@@ -971,7 +1209,8 @@ const StudioEditor = (() => {
     _pointerStart = null;
     _canvas.style.cursor = 'default';
     if (!_drawing || _drawing.type === 'angle') return;
-    const wasEditingLayer = _drawing.mode === 'move' || _drawing.mode === 'handle' || _drawing.mode === 'rotate';
+    const wasEditingLayer = (_drawing.mode === 'move' || _drawing.mode === 'handle' || _drawing.mode === 'rotate')
+      && _gestureChangedLayer(_drawing);
     _drawing = null;
     if (wasEditingLayer) {
       _pushHistory('Edit layer');
@@ -1046,11 +1285,12 @@ const StudioEditor = (() => {
     }
 
     if (_activeTool === 'text') {
-      const text = prompt('Text label:', 'Annotation');
-      if (text) {
+      event.preventDefault?.();
+      _openTextEditor(imagePoint, _t('studio.textDefault', 'Annotation'), (text) => {
+        if (!text || !_doc) return;
         _pushLayer(_newTextLayer(imagePoint, text));
         _setTool('select');
-      }
+      });
       return;
     }
 
@@ -1099,7 +1339,7 @@ const StudioEditor = (() => {
       v.zoom = zoom;
       _viewGesture.midX = f.midX;
       _viewGesture.midY = f.midY;
-      _viewportChanged();
+      _viewportChanged(true);
       return;
     }
     if (_isRotating && _rotationStart) {
@@ -1110,28 +1350,31 @@ const StudioEditor = (() => {
       if (slider) slider.value = String(((deg + 540) % 360) - 180);
       const label = document.getElementById('studio-rotation-val');
       if (label) label.textContent = `${Math.round(_doc.viewport.rotation * 180 / Math.PI)} deg`;
-      _viewportChanged();
+      _viewportChanged(true);
       return;
     }
     if (_isPanning && _pointerStart) {
       _doc.viewport.panX = _pointerStart.panX + (event.clientX - _pointerStart.x);
       _doc.viewport.panY = _pointerStart.panY + (event.clientY - _pointerStart.y);
-      _viewportChanged();
+      _viewportChanged(true);
       return;
     }
     const imagePoint = _screenToImage(_eventCanvasPoint(event));
     if (!_drawing) {
       const hit = _hitTest(imagePoint);
+      const previousHandle = _hoverHandle;
       _hoverHandle = hit?.handle || null;
       const hitLayer = hit ? _doc.layers.find(item => item.id === hit.id) : null;
-      _canvas.style.cursor = hit?.handle === 'rotate' ? ROTATE_CURSOR
+      const cursor = hit?.handle === 'rotate' ? ROTATE_CURSOR
         : hit?.handle ? _resizeCursor(hitLayer, hit.handle)
           : hit ? 'move' : (_activeTool === 'select' ? 'default' : 'crosshair');
+      if (_canvas.style.cursor !== cursor) _canvas.style.cursor = cursor;
       const hint = hit?.handle === 'rotate'
         ? _t('studio.rotateHandleHint', 'Drag to rotate. Shift: 15° steps. [ and ] turn by 15° (Shift: 1°).')
         : '';
       if (_canvas.title !== hint) _canvas.title = hint;
-      _draw();
+      // Hovering only changes which handle is lit: nothing to repaint otherwise.
+      if (previousHandle !== _hoverHandle) _requestDraw();
       return;
     }
     if (_drawing.mode === 'rotate') {
@@ -1144,12 +1387,12 @@ const StudioEditor = (() => {
         const target = event.shiftKey ? _snapRotationDeg(turned, ROTATION_SNAP_DEG) : Math.round(turned * 10) / 10;
         _rotateLayerFromSnapshot(layer, _drawing.original, target);
       }
-      _draw();
+      _requestDraw();
       return;
     }
     if (_drawing.type === 'angle') {
       _drawing.current = imagePoint;
-      _draw();
+      _requestDraw();
       return;
     }
     if (_drawing.mode === 'move') {
@@ -1160,7 +1403,7 @@ const StudioEditor = (() => {
         _moveLayerTo(layer, _drawing.original, dx, dy);
         _applySnapping(layer);
       }
-      _draw();
+      _requestDraw();
       return;
     }
     if (_drawing.mode === 'handle') {
@@ -1169,11 +1412,32 @@ const StudioEditor = (() => {
         _applyHandle(layer, _drawing.handle, imagePoint, _drawing.original);
         _updateMeasurementText(layer);
       }
-      _draw();
+      _requestDraw();
       return;
     }
     _drawing.current = imagePoint;
-    _draw();
+    _requestDraw();
+  }
+
+  // Whether a move / handle gesture actually changed its layer: a plain click on a
+  // layer selects it, and must neither add a history step nor drop the redo stack.
+  function _gestureChangedLayer(drawing) {
+    if (!drawing?.original) return true;
+    const layer = _doc?.layers.find(item => item.id === drawing.original.id);
+    if (!layer) return true;
+    return JSON.stringify(layer) !== JSON.stringify(drawing.original);
+  }
+
+  function _resetPointerState() {
+    _drawing = null;
+    _isPanning = false;
+    _isRotating = false;
+    _pointerStart = null;
+    _rotationStart = null;
+    _viewGesture = null;
+    _touchPointers.clear();
+    _spaceDown = false;
+    _hoverHandle = null;
   }
 
   function _onPointerUp(event) {
@@ -1208,8 +1472,9 @@ const StudioEditor = (() => {
       return;
     }
     if (_drawing.mode === 'move' || _drawing.mode === 'handle') {
-      _pushHistory('Edit layer');
+      const changed = _gestureChangedLayer(_drawing);
       _drawing = null;
+      if (changed) _pushHistory('Edit layer');
       _renderAll();
       return;
     }
@@ -1236,20 +1501,19 @@ const StudioEditor = (() => {
   function _onWheel(event) {
     if (!_doc) return;
     event.preventDefault();
-    const canvasPoint = _eventCanvasPoint(event);
-    const before = _screenToImage(canvasPoint);
-    const zoom = _doc.viewport.zoom;
+    // The image point under the cursor P stays under it. With
+    //   screen = pan + R(rot)·zoom·(image − centre),
+    // holding that point fixed across zoom z₀ → z₁ gives pan' = P − (P − pan)·(z₁/z₀):
+    // the rotation cancels out (the two-finger gesture uses the same relation).
+    const p = _eventCanvasPoint(event);
+    const v = _doc.viewport;
+    const zoom = v.zoom;
     const factor = event.deltaY > 0 ? 0.9 : 1.1;
-    _doc.viewport.zoom = Math.max(0.02, Math.min(32, _doc.viewport.zoom * factor));
-    const after = _screenToImage(canvasPoint);
-    const dx = after.x - before.x;
-    const dy = after.y - before.y;
-    const cx = dx / _doc.viewport.zoom;
-    const cy = dy / _doc.viewport.zoom;
-    _doc.viewport.panX += cx * (_doc.viewport.zoom - zoom);
-    _doc.viewport.panY += cy * (_doc.viewport.zoom - zoom);
-
-    _viewportChanged();
+    v.zoom = Math.max(0.02, Math.min(32, zoom * factor));
+    const k = v.zoom / zoom;
+    v.panX = p.x - (p.x - v.panX) * k;
+    v.panY = p.y - (p.y - v.panY) * k;
+    _viewportChanged(true);
   }
 
   function _onDblClick(event) {
@@ -1259,13 +1523,75 @@ const StudioEditor = (() => {
     const layer = _doc.layers.find(item => item.id === hit.id);
     if (!layer || layer.locked) return;
     if (layer.type === 'text') {
-      const text = prompt('Edit text:', layer.text || '');
-      if (text !== null) {
-        layer.text = text;
+      _openTextEditor({ x: layer.x, y: layer.y }, layer.text || '', (text) => {
+        const target = _doc?.layers.find(item => item.id === layer.id);
+        if (!target || text === (target.text || '')) return;
+        target.text = text;
         _pushHistory('Edit text');
         _renderAll();
-      }
+      });
     }
+  }
+
+  // ── Inline text entry ─────────────────────────────────────
+  // A text field laid over the canvas where the label goes, instead of window.prompt:
+  // a prompt is refused inside some embedded frames and freezes the page while open.
+  // Enter or leaving the field commits, Escape cancels.
+  let _textEditor = null;
+
+  function _openTextEditor(imagePoint, initial, onCommit) {
+    _closeTextEditor(true);
+    const host = _workspace || _canvas?.parentElement;
+    if (!host || !_doc || !_sliceImage) return;
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.className = 'form-input studio-text-input';
+    input.value = String(initial ?? '').slice(0, IMPORT_MAX_TEXT);
+    input.maxLength = IMPORT_MAX_TEXT;
+    input.setAttribute?.('aria-label', _t('studio.textPrompt', 'Text label'));
+    const screen = _imageToScreen(imagePoint);
+    const canvasRect = _canvas.getBoundingClientRect();
+    const hostRect = host.getBoundingClientRect();
+    input.style.position = 'absolute';
+    input.style.left = `${Math.max(0, canvasRect.left - hostRect.left + screen.x)}px`;
+    input.style.top = `${Math.max(0, canvasRect.top - hostRect.top + screen.y)}px`;
+    input.style.zIndex = '120';
+    input.style.minWidth = '180px';
+    let done = false;
+    const finish = (commit) => {
+      if (done) return;
+      done = true;
+      if (_textEditor?.input === input) _textEditor = null;
+      const value = input.value;
+      input.remove?.();
+      if (commit) onCommit(value);
+    };
+    input.addEventListener('keydown', (event) => {
+      event.stopPropagation();
+      if (event.key === 'Enter') {
+        event.preventDefault();
+        finish(true);
+      } else if (event.key === 'Escape') {
+        event.preventDefault();
+        finish(false);
+      }
+    });
+    input.addEventListener('keyup', event => event.stopPropagation());
+    host.appendChild(input);
+    _textEditor = { input, finish };
+    // Focused once the pointer event that asked for it is over: its default action
+    // would otherwise move the focus back off the field (and commit it at once).
+    setTimeout(() => {
+      if (done) return;
+      input.focus?.();
+      input.select?.();
+      input.addEventListener('blur', () => finish(true));
+    }, 0);
+  }
+
+  function _closeTextEditor(commit) {
+    _textEditor?.finish(commit);
+    _textEditor = null;
   }
 
   function _onKeyDown(event) {
@@ -1309,7 +1635,9 @@ const StudioEditor = (() => {
       if (_rotateSelectedBy(rotateSign * (fine ? 1 : ROTATION_SNAP_DEG), event.repeat)) event.preventDefault();
       return;
     }
-    const tool = TOOL_KEYS[event.key.toLowerCase()];
+    // A tool letter alone: Ctrl+R, Ctrl+D, Alt+… belong to the browser and the system.
+    if (event.ctrlKey || event.metaKey || event.altKey) return;
+    const tool = TOOL_KEYS[String(event.key || '').toLowerCase()];
     if (tool) _setTool(tool);
   }
 
@@ -1428,11 +1756,11 @@ const StudioEditor = (() => {
       <div class="studio-measurement-readout">${_escape(_measurementLabel(layer) || '')}</div>
     `;
     if (typeof I18n !== 'undefined' && I18n.translateDOM) I18n.translateDOM();
-    _bindProperty('prop-name', 'input', value => { layer.name = value; });
+    _bindProperty('prop-name', 'input', value => { layer.name = value; }, { relist: true });
     _bindProperty('prop-color', 'input', value => { layer.style.stroke = value; layer.style.fill = value; });
     _bindProperty('prop-opacity', 'input', value => { layer.style.opacity = Number(value); });
     _bindProperty('prop-thickness', 'input', value => { layer.style.strokeWidth = Number(value); });
-    _bindProperty('prop-text', 'input', value => { layer.text = value; });
+    _bindProperty('prop-text', 'input', value => { layer.text = String(value).slice(0, IMPORT_MAX_TEXT); });
     _bindProperty('prop-fontsize', 'input', value => { layer.style.fontSize = Number(value); });
     _bindProperty('prop-startcap', 'change', value => { layer.style.startCap = value; });
     _bindProperty('prop-endcap', 'change', value => { layer.style.endCap = value; });
@@ -1444,6 +1772,8 @@ const StudioEditor = (() => {
         layer.value = _snapScaleBarValue(layer.value || 100);
         _setScaleBarEnd(layer);
         _updateMeasurementText(layer);
+        const valueField = document.getElementById('prop-scalebar-value');
+        if (valueField) valueField.value = layer.value;
         _commitPropertyChange();
       });
     });
@@ -1465,11 +1795,21 @@ const StudioEditor = (() => {
       : (Array.isArray(_doc.channelState) ? _doc.channelState : []);
 
     if (!channels.length) {
+      _channelsShown = null;
       _channelsContainer.innerHTML = `<div class="studio-empty">${_escape(_t('studio.noChannelMeta', 'No channel metadata.'))}</div>`;
       return;
     }
 
-    _studioHistograms = _computeStudioHistograms(isCompare ? activeMap?.raw : _sliceResult?.raw, activeMap);
+    // The panel already shows these channels, of this cell, over these values (a layer
+    // edit, a selection): rebuilding it would redo every control and histogram.
+    const raw = isCompare ? activeMap?.raw : _sliceResult?.raw;
+    // raw.version: the native pass refills one raw buffer in place, and its histograms
+    // change with every refill.
+    const shown = { panel: isCompare ? _activePanelIndex() : -1, raw: raw || null, rawVersion: raw?.version, json: JSON.stringify(channels) };
+    if (_channelsShown && _channelsShown.panel === shown.panel && _channelsShown.raw === shown.raw
+      && _channelsShown.rawVersion === shown.rawVersion && _channelsShown.json === shown.json) return;
+
+    _studioHistograms = _computeStudioHistograms(raw, activeMap);
 
     if (typeof createChannelPanel !== 'undefined') {
       if (!window._studioChannelPanel) {
@@ -1480,14 +1820,20 @@ const StudioEditor = (() => {
         window._studioChannelPanel.init('studio-channels', { dimensions: { c: channels.length }, channels }, (idx, state) => {
           if (_channelsSeeding) return;
           const panelIdx = _doc.layoutMaps?.length > 0 ? _activePanelIndex() : -1;
+          let list;
           if (panelIdx >= 0) {
             const target = _doc.layoutMaps[panelIdx];
             if (!target) return;
             if (!Array.isArray(target.channelState)) target.channelState = [];
             target.channelState[idx] = state;
+            list = target.channelState;
           } else {
             _doc.channelState[idx] = state;
+            list = _doc.channelState;
           }
+          // The panel shows this state already.
+          if (_channelsShown) _channelsShown.json = JSON.stringify(list);
+          _recordChannelEdit(panelIdx);
           _scheduleChannelRecompose(panelIdx >= 0 ? panelIdx : undefined);
         });
       } finally {
@@ -1495,9 +1841,38 @@ const StudioEditor = (() => {
       }
       window._studioChannelPanel.setState(channels, { notify: false });
       window._studioChannelPanel.setHistograms(_studioHistograms);
+      _channelsShown = shown;
     } else {
+      _channelsShown = null;
       _channelsContainer.innerHTML = `<div class="studio-empty">${_escape(_t('studio.channelPanelMissing', 'ChannelPanel not loaded.'))}</div>`;
     }
+  }
+
+  /**
+   * A channel edit is a step of the history like a layer edit, so undo takes back the
+   * last edit whichever it was, and undoing an annotation never reverts the channels
+   * set after it. A run of edits of one cell (a slider drag: one notification per
+   * frame) is one step, closed by the panel's change / pointerup, a pause of
+   * CHANNEL_EDIT_RUN_MS, or any other step.
+   */
+  function _recordChannelEdit(panelIdx) {
+    if (!_doc) return;
+    const now = _nowMs();
+    const top = _history[_history.length - 1];
+    const run = _channelEditRun;
+    if (run && run.panel === panelIdx && run.entry === top && _history.length > 1 && now - run.at <= CHANNEL_EDIT_RUN_MS) {
+      _doc.updatedAt = new Date().toISOString();
+      top.doc = _clone(_doc);
+      _future = [];
+      run.at = now;
+      return;
+    }
+    _pushHistory('Edit channels');
+    _channelEditRun = { panel: panelIdx, entry: _history[_history.length - 1], at: now };
+  }
+
+  function _endChannelEditRun() {
+    _channelEditRun = null;
   }
 
   // ── Channel edits → the picture ──────────────────────────
@@ -1558,13 +1933,20 @@ const StudioEditor = (() => {
     return typeof SliceCompositor !== 'undefined' && SliceCompositor.isRaw(holder?.raw);
   }
 
-  /** `raw` coloured with `channelState` into `target` (kept and reused); null on failure. */
-  function _composeRaw(raw, channelState, target) {
+  /**
+   * `raw` coloured with `channelState` into `target` (kept and reused); null on failure.
+   * `slot`: the compositor texture slot of this picture (a refresh of the same size
+   * rewrites it instead of uploading a new texture).
+   */
+  function _composeRaw(raw, channelState, target, slot = null) {
     try {
-      return SliceCompositor.compose(raw, Array.isArray(channelState) ? channelState : [], {
+      const canvas = SliceCompositor.compose(raw, Array.isArray(channelState) ? channelState : [], {
         numChannels: raw.channels,
-        target
+        target,
+        ...(slot ? { slot } : {})
       });
+      if (canvas) _pictureVersion++;
+      return canvas;
     } catch (err) {
       console.warn('[StudioEditor] Slice colouring failed:', err);
       return null;
@@ -1659,49 +2041,6 @@ const StudioEditor = (() => {
   function _rerenderSliceFromChannels(activePanelOnly, options = {}) {
     if (!_sliceResult || !_doc) return;
 
-    // In compare mode (layoutMaps), each panel uses its own iframe's VolumeSlicer
-    // so we don't need a global VolumeSlicer check here.
-    // For single-slice mode, we do need global VolumeSlicer.
-
-    function cropEmptySpace(canvas) {
-      const ctx = canvas.getContext('2d', { willReadFrequently: true });
-      const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-      const data = imgData.data;
-      let minX = canvas.width, minY = canvas.height, maxX = 0, maxY = 0;
-
-      // Optimized scan: only check rows/columns at edges to find bounds faster
-      const w = canvas.width, h = canvas.height;
-      for (let y = 0; y < h; y++) {
-        for (let x = 0; x < w; x++) {
-          if (data[(y * w + x) * 4 + 3] > 5) {
-            if (x < minX) minX = x;
-            if (x > maxX) maxX = x;
-            if (y < minY) minY = y;
-            if (y > maxY) maxY = y;
-          }
-        }
-      }
-
-      if (minX > maxX || minY > maxY) return canvas;
-
-      const padding = 10;
-      minX = Math.max(0, minX - padding);
-      minY = Math.max(0, minY - padding);
-      maxX = Math.min(w - 1, maxX + padding);
-      maxY = Math.min(h - 1, maxY + padding);
-
-      const croppedWidth = maxX - minX + 1;
-      const croppedHeight = maxY - minY + 1;
-
-      const croppedCanvas = document.createElement('canvas');
-      croppedCanvas.width = croppedWidth;
-      croppedCanvas.height = croppedHeight;
-      const croppedCtx = croppedCanvas.getContext('2d');
-      croppedCtx.drawImage(canvas, minX, minY, croppedWidth, croppedHeight, 0, 0, croppedWidth, croppedHeight);
-
-      return croppedCanvas;
-    }
-
     if (_doc.layoutMaps?.length > 0) {
       // The figure the cells are laid on: copied once from the picture compare.js
       // handed over, then redrawn in place (a copy per drag frame of an 8k figure is
@@ -1717,7 +2056,6 @@ const StudioEditor = (() => {
 
       let changed = false;
 
-      // Determine which panels to recompose
       const indicesToUpdate = (activePanelOnly !== undefined && activePanelOnly >= 0)
         ? [Math.min(activePanelOnly, _doc.layoutMaps.length - 1)]
         : _doc.layoutMaps.map((_, i) => i);
@@ -1728,90 +2066,68 @@ const StudioEditor = (() => {
         let recomposedCanvas = null;
 
         if (_hasRaw(map)) {
-           // The cell's own pixels (the panel's crop, map.raw.width × height),
-           // re-coloured by this page's compositor: no panel render at all.
-           recomposedCanvas = _composeRaw(map.raw, map.channelState, _ownPanelCanvas());
+          // The cell's own pixels (the panel's crop, map.raw.width × height),
+          // re-coloured by this page's compositor: no panel render at all.
+          recomposedCanvas = _composeRaw(map.raw, map.channelState, _ownPanelCanvas());
         } else if (!options.rawOnly && map.sliceResult) {
-           const targetSlicer = map.iframe?.contentWindow?.VolumeSlicer
-             || (typeof VolumeSlicer !== 'undefined' ? VolumeSlicer : null);
-           if (!targetSlicer?.recompose) return;
-           // While editing, render the cell at the size it actually occupies in the
-           // composite: anything more is thrown away by the drawImage below, anything
-           // less comes back softer than the cell the operator started from.
-           const fullRes = map.sliceResult.renderRes || map.sliceResult.width || 1024;
-           const cellRes = Math.max(1, Math.round(Math.max(map.w, map.h)));
-           const renderRes = (activePanelOnly !== undefined) ? cellRes : fullRes;
-           const recomposed = targetSlicer.recompose(
-             { ...map.sliceResult, width: renderRes },
-             map.channelState,
-             STUDIO_SLICE_SUPPRESSION
-           );
-           if (recomposed?.canvas) {
-             const gpuCanvas = recomposed.canvas;
-             // Cache crop bounds on first render — geometry never changes,
-             // only pixel colors change. Recomputing every frame is both
-             // slow (full pixel scan) and buggy (bounds shift when background
-             // goes transparent, causing stretching).
-             if (!map._cropRect) {
-               const cctx = gpuCanvas.getContext('2d', { willReadFrequently: true });
-               const imgData = cctx.getImageData(0, 0, gpuCanvas.width, gpuCanvas.height);
-               const d = imgData.data;
-               const gw = gpuCanvas.width, gh = gpuCanvas.height;
-               let x0 = gw, y0 = gh, x1 = 0, y1 = 0;
-               for (let y = 0; y < gh; y++) {
-                 for (let x = 0; x < gw; x++) {
-                   if (d[(y * gw + x) * 4 + 3] > 5) {
-                     if (x < x0) x0 = x;
-                     if (x > x1) x1 = x;
-                     if (y < y0) y0 = y;
-                     if (y > y1) y1 = y;
-                   }
-                 }
-               }
-               if (x0 <= x1 && y0 <= y1) {
-                 const pad = 4;
-                 // Store as normalized ratios so they work at any render resolution
-                 map._cropRect = {
-                   x: Math.max(0, x0 - pad) / gw,
-                   y: Math.max(0, y0 - pad) / gh,
-                   x2: Math.min(gw - 1, x1 + pad) / gw,
-                   y2: Math.min(gh - 1, y1 + pad) / gh
-                 };
-               }
-             }
-             if (map._cropRect) {
-               const cr = map._cropRect;
-               const sx = Math.round(cr.x * gpuCanvas.width);
-               const sy = Math.round(cr.y * gpuCanvas.height);
-               const sw = Math.round((cr.x2 - cr.x) * gpuCanvas.width) + 1;
-               const sh = Math.round((cr.y2 - cr.y) * gpuCanvas.height) + 1;
-               const cropped = document.createElement('canvas');
-               cropped.width = sw;
-               cropped.height = sh;
-               cropped.getContext('2d').drawImage(gpuCanvas, sx, sy, sw, sh, 0, 0, sw, sh);
-               recomposedCanvas = cropped;
-             } else {
-               recomposedCanvas = gpuCanvas;
-             }
-           }
+          const targetSlicer = map.iframe?.contentWindow?.VolumeSlicer
+            || (typeof VolumeSlicer !== 'undefined' ? VolumeSlicer : null);
+          if (!targetSlicer?.recompose) return;
+          // While editing, render the cell at the size it actually occupies in the
+          // composite: anything more is thrown away by the drawImage below, anything
+          // less comes back softer than the cell the operator started from.
+          const fullRes = map.sliceResult.renderRes || map.sliceResult.width || 1024;
+          const cellRes = Math.max(1, Math.round(Math.max(map.w, map.h)));
+          const renderRes = (activePanelOnly !== undefined) ? cellRes : fullRes;
+          const recomposed = targetSlicer.recompose({ ...map.sliceResult, width: renderRes }, map.channelState);
+          if (recomposed?.canvas) {
+            const gpuCanvas = recomposed.canvas;
+            // The crop box is found once, on the first render: the geometry never
+            // changes, only the colours do, and a box re-found on every frame moves
+            // when a channel change makes the edge of the specimen transparent.
+            if (!map._cropRect) {
+              const rect = _contentRect(gpuCanvas, 4);
+              if (rect) {
+                const gw = gpuCanvas.width;
+                const gh = gpuCanvas.height;
+                // Normalised, so it holds at any render resolution.
+                map._cropRect = { x: rect.x / gw, y: rect.y / gh, x2: rect.x2 / gw, y2: rect.y2 / gh };
+              }
+            }
+            if (map._cropRect) {
+              const cr = map._cropRect;
+              const sx = Math.round(cr.x * gpuCanvas.width);
+              const sy = Math.round(cr.y * gpuCanvas.height);
+              const sw = Math.round((cr.x2 - cr.x) * gpuCanvas.width) + 1;
+              const sh = Math.round((cr.y2 - cr.y) * gpuCanvas.height) + 1;
+              const cropped = document.createElement('canvas');
+              cropped.width = sw;
+              cropped.height = sh;
+              cropped.getContext('2d').drawImage(gpuCanvas, sx, sy, sw, sh, 0, 0, sw, sh);
+              recomposedCanvas = cropped;
+            } else {
+              recomposedCanvas = gpuCanvas;
+            }
+          }
         }
 
         if (recomposedCanvas) {
-           // The cell goes back to the figure's backdrop before the new colours are
-           // laid on it: a slice is transparent outside the specimen.
-           if (_doc.layoutBackground) {
-             ctx.fillStyle = _doc.layoutBackground;
-             ctx.fillRect(map.x, map.y, map.w, map.h);
-           } else {
-             ctx.clearRect(map.x, map.y, map.w, map.h);
-           }
-           ctx.drawImage(recomposedCanvas, map.x, map.y, map.w, map.h);
-           changed = true;
+          // The cell goes back to the figure's backdrop before the new colours are
+          // laid on it: a slice is transparent outside the specimen.
+          if (_doc.layoutBackground) {
+            ctx.fillStyle = _doc.layoutBackground;
+            ctx.fillRect(map.x, map.y, map.w, map.h);
+          } else {
+            ctx.clearRect(map.x, map.y, map.w, map.h);
+          }
+          ctx.drawImage(recomposedCanvas, map.x, map.y, map.w, map.h);
+          changed = true;
         }
       });
 
       if (changed) {
         _sliceImage = tempCanvas;
+        _pictureVersion++;
         _draw();
       }
       return;
@@ -1820,7 +2136,7 @@ const StudioEditor = (() => {
     if (_hasRaw(_sliceResult)) {
       // Re-coloured in place from the slice's own values: same frame and crop, so
       // every annotation keeps its coordinates (no re-render, no re-crop).
-      const canvas = _composeRaw(_sliceResult.raw, _doc.channelState, _ownSliceCanvas());
+      const canvas = _composeRaw(_sliceResult.raw, _doc.channelState, _ownSliceCanvas(), SLICE_TEXTURE_SLOT);
       if (!canvas) return;
       _sliceResult = { ..._sliceResult, canvas, width: canvas.width, height: canvas.height };
       _sliceImage = canvas;
@@ -1828,49 +2144,109 @@ const StudioEditor = (() => {
       return;
     }
 
-    // Single-slice mode: need global VolumeSlicer
-    if (typeof VolumeSlicer === 'undefined') return;
-    const recomposed = VolumeSlicer.recompose?.({ ..._sliceResult, width: _sliceResult.renderRes || _sliceResult.width }, _doc.channelState, STUDIO_SLICE_SUPPRESSION);
-    if (!recomposed?.canvas) return;
-    const croppedRecomposed = cropEmptySpace(recomposed.canvas);
-
-    _sliceResult = { ...recomposed, canvas: croppedRecomposed, width: croppedRecomposed.width, height: croppedRecomposed.height, renderRes: _sliceResult.renderRes || _sliceResult.width };
-    _sliceImage = croppedRecomposed;
-    _doc.sourceSlice.width = croppedRecomposed.width;
-    _doc.sourceSlice.height = croppedRecomposed.height;
-    _doc.calibration.pixelSizeUm = recomposed.pixelSizeUm || _doc.calibration.pixelSizeUm;
-
+    const recoloured = _recolourNonRawSlice(_sliceResult, _doc.channelState);
+    if (!recoloured) return;
+    _sliceResult = recoloured;
+    _sliceImage = recoloured.canvas;
+    _pictureVersion++;
     _draw();
+  }
+
+  /**
+   * Bounding box {x, y, x2, y2} of the pixels of `canvas` whose alpha exceeds 5,
+   * padded by `padding` px and clipped to the canvas — the box the viewer crops a
+   * slice to (viewer.js _sliceContentRect, padding 10). null when nothing shows.
+   */
+  function _contentRect(canvas, padding) {
+    const w = canvas.width;
+    const h = canvas.height;
+    const data = canvas.getContext('2d', { willReadFrequently: true }).getImageData(0, 0, w, h).data;
+    let minX = w;
+    let minY = h;
+    let maxX = -1;
+    let maxY = -1;
+    for (let y = 0; y < h; y++) {
+      for (let x = 0, o = y * w * 4 + 3; x < w; x++, o += 4) {
+        if (data[o] > 5) {
+          if (x < minX) minX = x;
+          if (x > maxX) maxX = x;
+          if (y < minY) minY = y;
+          if (y > maxY) maxY = y;
+        }
+      }
+    }
+    if (maxX < minX || maxY < minY) return null;
+    return {
+      x: Math.max(0, minX - padding),
+      y: Math.max(0, minY - padding),
+      x2: Math.min(w - 1, maxX + padding),
+      y2: Math.min(h - 1, maxY + padding)
+    };
+  }
+
+  /**
+   * A slice without raw values coloured with `channelState`: re-rendered through the
+   * slicer at the frame it was cut from (`renderRes`), then cut to the SAME window as
+   * the picture the document is laid on, whatever the new colours make visible — the
+   * picture keeps its size and every annotation its place. The window is the slice's
+   * own `cropRect` when it carries one; otherwise it is found once, in a render with
+   * the slice's own colours (the render the viewer cropped), and kept for the
+   * document. null when the slice cannot be re-rendered (only gpu-slicer / zstack
+   * slices can) or the window cannot be placed.
+   */
+  function _recolourNonRawSlice(sliceResult, channelState) {
+    if (typeof VolumeSlicer === 'undefined' || typeof VolumeSlicer.recompose !== 'function') return null;
+    if (sliceResult?.source !== 'gpu-slicer' && sliceResult?.source !== 'zstack') return null;
+    const renderRes = Number(sliceResult.renderRes) > 0 ? Number(sliceResult.renderRes) : null;
+    const w = Number(_doc?.sourceSlice?.width) || sliceResult.width;
+    const h = Number(_doc?.sourceSlice?.height) || sliceResult.height;
+    if (!renderRes || !(w > 0) || !(h > 0)) return null;
+    const render = (state) => {
+      try {
+        return VolumeSlicer.recompose({ ...sliceResult, raw: null, width: renderRes }, state)?.canvas || null;
+      } catch (err) {
+        console.warn('[StudioEditor] Slice re-render failed:', err);
+        return null;
+      }
+    };
+    if (!_nonRawCrop) {
+      const given = sliceResult.cropRect;
+      if (given && Number.isFinite(given.x) && Number.isFinite(given.y)) {
+        const s = given.renderRes ? renderRes / given.renderRes : 1;
+        _nonRawCrop = { x: Math.round(given.x * s), y: Math.round(given.y * s) };
+      } else {
+        const seed = render(Array.isArray(sliceResult.channelState) ? sliceResult.channelState : channelState);
+        const rect = seed ? _contentRect(seed, 10) : null;
+        if (!rect) return null;
+        _nonRawCrop = { x: rect.x, y: rect.y };
+      }
+    }
+    const frame = render(channelState);
+    if (!frame) return null;
+    const canvas = document.createElement('canvas');
+    canvas.width = w;
+    canvas.height = h;
+    canvas.getContext('2d').drawImage(frame, _nonRawCrop.x, _nonRawCrop.y, w, h, 0, 0, w, h);
+    return { ...sliceResult, canvas, width: w, height: h, renderRes };
   }
 
   /**
    * The picture the Studio shows for `sliceResult`: coloured from its raw values with
    * `channelState` (the document's once one is open, the slice's own to seed a new
-   * one) when it carries them; otherwise the slice's own canvas, re-rendered through
-   * VolumeSlicer for the sources it can re-render.
+   * one) when it carries them. A slice without raw values is shown as it was handed
+   * over when it already has those colours (always on opening), else re-coloured
+   * through the slicer in the document's frame (_recolourNonRawSlice).
    */
   function _prepareSliceForStudio(sliceResult, channelState = null) {
     if (_hasRaw(sliceResult)) {
       const state = Array.isArray(channelState) ? channelState : _seedChannelState(sliceResult);
-      const canvas = _composeRaw(sliceResult.raw, state, _ownSliceCanvas());
+      const canvas = _composeRaw(sliceResult.raw, state, _ownSliceCanvas(), SLICE_TEXTURE_SLOT);
       if (canvas) return { ...sliceResult, canvas, width: canvas.width, height: canvas.height };
     }
-    if (!sliceResult?.canvas || typeof VolumeSlicer === 'undefined' || typeof VolumeSlicer.recompose !== 'function') {
-      return sliceResult;
-    }
-    try {
-      const channels = Array.isArray(channelState) && channelState.length
-        ? channelState
-        : Array.isArray(sliceResult.channelState) && sliceResult.channelState.length
-          ? sliceResult.channelState
-          : (Array.isArray(_doc?.channelState) && _doc.channelState.length
-            ? _doc.channelState
-            : (typeof ViewerApp !== 'undefined' && ViewerApp.getChannelState ? ViewerApp.getChannelState() : []));
-      return VolumeSlicer.recompose({ ...sliceResult, raw: null }, channels, STUDIO_SLICE_SUPPRESSION) || sliceResult;
-    } catch (err) {
-      console.warn('[StudioEditor] Failed to prepare slice:', err);
-      return sliceResult;
-    }
+    if (!sliceResult?.canvas) return sliceResult;
+    const own = Array.isArray(sliceResult.channelState) ? sliceResult.channelState : null;
+    if (!Array.isArray(channelState) || !own || _sameChannels(channelState, own)) return sliceResult;
+    return _recolourNonRawSlice(sliceResult, channelState) || sliceResult;
   }
 
   function _setTool(tool) {
@@ -1896,7 +2272,7 @@ const StudioEditor = (() => {
   }
 
   function _ensureDefaultScaleBarLayer() {
-    if (!_doc || !_sliceResult?.defaultScaleBar) return;
+    if (!_doc || !_sliceResult?.defaultScaleBar || _isUncalibrated()) return;
     const existing = _doc.layers.find(layer => layer.meta?.kind === 'default-scalebar');
     if (existing) return;
     const base = _sliceResult.defaultScaleBar;
@@ -2000,7 +2376,8 @@ const StudioEditor = (() => {
       layer.style.endCap = 'none';
     }
     if (draft.type === 'scalebar') {
-      layer.unit = 'um';
+      // Without a physical scale a bar can only count pixels.
+      layer.unit = _isUncalibrated() ? 'px' : 'um';
       layer.value = _snapScaleBarValue(100);
       // A bar is laid from where it was placed; where the pointer was released says
       // nothing of its length, so it must not choose the cell that calibrates it.
@@ -2162,7 +2539,7 @@ const StudioEditor = (() => {
       const centre = _layerRotationCentre(snapshot);
       const u = _scaleBarDirection(layer);
       const centreCell = _doc?.layoutMaps?.length ? _nearestCell(centre.x, centre.y) : null;
-      const px = centreCell?.pixelSizeUm || _layerPixelSize(snapshot);
+      const px = centreCell?.pixelSizeUm ? _normalizePixelSize(centreCell.pixelSizeUm) : _layerPixelSize(snapshot);
       const length = _lengthInPixels(layer.unit || 'um', layer.value || 100, _umPerPixelAlong(u.x, u.y, px));
       layer.x1 = centre.x - u.x * length / 2;
       layer.y1 = centre.y - u.y * length / 2;
@@ -2272,21 +2649,29 @@ const StudioEditor = (() => {
     });
   }
 
+  // The layer's centre snaps to the nearest guide within reach on each axis (the
+  // figure's centre lines and the operator's guides): one correction per axis, both
+  // measured from the same bounds and applied in a single move.
   function _applySnapping(layer) {
     const threshold = 7 / Math.max(0.001, _doc.viewport.zoom);
     const box = _layerBounds(layer);
-    const centers = [
+    const centre = { x: box.x + box.w / 2, y: box.y + box.h / 2 };
+    const guides = [
       { axis: 'x', value: _doc.sourceSlice.width / 2 },
       { axis: 'y', value: _doc.sourceSlice.height / 2 },
       ..._doc.guides
     ];
-    centers.forEach(guide => {
-      const current = guide.axis === 'x' ? box.x + box.w / 2 : box.y + box.h / 2;
-      if (Math.abs(current - guide.value) <= threshold) {
-        const delta = guide.value - current;
-        _moveLayerTo(layer, _clone(layer), guide.axis === 'x' ? delta : 0, guide.axis === 'y' ? delta : 0);
-      }
+    const delta = { x: 0, y: 0 };
+    ['x', 'y'].forEach(axis => {
+      let best = null;
+      guides.forEach(guide => {
+        if (guide.axis !== axis || !Number.isFinite(guide.value)) return;
+        const d = guide.value - centre[axis];
+        if (Math.abs(d) <= threshold && (best === null || Math.abs(d) < Math.abs(best))) best = d;
+      });
+      if (best !== null) delta[axis] = best;
     });
+    if (delta.x || delta.y) _moveLayerTo(layer, _clone(layer), delta.x, delta.y);
   }
 
   // A scale bar's far end is never stored as truth: it is x1 + u·L, with u its direction
@@ -2323,7 +2708,7 @@ const StudioEditor = (() => {
   }
 
   function _scaleBarPixelsForValue(layer, unit, value) {
-    const px = layer ? _scaleBarUmPerPixel(layer) : (_doc?.calibration?.pixelSizeUm?.x || 1);
+    const px = layer ? _scaleBarUmPerPixel(layer) : _pixelSizeForPoint(NaN, NaN).x;
     return _lengthInPixels(unit, value, px);
   }
 
@@ -2336,7 +2721,7 @@ const StudioEditor = (() => {
   }
 
   function _scaleBarValueFromPixels(layer, pixelLength) {
-    const px = layer ? _scaleBarUmPerPixel(layer) : (_doc?.calibration?.pixelSizeUm?.x || 1);
+    const px = layer ? _scaleBarUmPerPixel(layer) : _pixelSizeForPoint(NaN, NaN).x;
     const length = Math.max(1, Math.abs(Number(pixelLength) || 1));
     const unit = layer.unit || 'um';
     let umValue = length * px;
@@ -2353,7 +2738,9 @@ const StudioEditor = (() => {
   }
 
   function _measurementLabel(layer) {
-    if (layer.type === 'distance') return `${_lineLengthUm(layer).toFixed(2)} um`;
+    if (layer.type === 'distance') {
+      return _isUncalibrated() ? `${_lineLengthUm(layer).toFixed(1)} px` : `${_lineLengthUm(layer).toFixed(2)} um`;
+    }
     if (layer.type === 'angle') return `${_angleDegrees(layer).toFixed(1)} deg`;
     if (layer.type === 'scalebar') return `${_snapScaleBarValue(layer.value || 100)} ${layer.unit || 'um'}`;
     return layer.text || '';
@@ -2363,12 +2750,31 @@ const StudioEditor = (() => {
     if (['distance', 'angle', 'scalebar'].includes(layer.type)) layer.text = _measurementLabel(layer);
   }
 
+  /**
+   * A calibration {x, y} in µm per px that every measurement can divide and multiply
+   * by: each axis finite and > 0, a missing or unusable y taken as x (square pixels),
+   * nothing usable at all → 1 µm/px. A calibration that is already sound is returned
+   * as it is (the same object).
+   */
+  function _normalizePixelSize(px) {
+    const x = Number(px?.x);
+    const y = Number(px?.y);
+    const okX = Number.isFinite(x) && x > 0;
+    const okY = Number.isFinite(y) && y > 0;
+    if (okX && okY && px && typeof px === 'object') return px;
+    const sx = okX ? x : (okY ? y : 1);
+    return { x: sx, y: okY ? y : sx };
+  }
+
   function _pixelSizeForPoint(x, y) {
     if (_doc?.layoutMaps?.length) {
       const map = _doc.layoutMaps.find(m => x >= m.x && x <= m.x + m.w && y >= m.y && y <= m.y + m.h);
-      if (map && map.pixelSizeUm) return map.pixelSizeUm;
+      if (map && map.pixelSizeUm) return _normalizePixelSize(map.pixelSizeUm);
     }
-    return _doc?.calibration?.pixelSizeUm || { x: 1, y: 1 };
+    // No physical scale: lengths are counted in image pixels (a volume without voxel
+    // calibration still carries a nominal µm/px that is not one).
+    if (_isUncalibrated()) return { x: 1, y: 1 };
+    return _normalizePixelSize(_doc?.calibration?.pixelSizeUm);
   }
 
   /**
@@ -2387,14 +2793,14 @@ const StudioEditor = (() => {
     if (!_doc?.layoutMaps?.length) return _pixelSizeForPoint(layer?.x1, layer?.y1);
     if (layer?.type === 'scalebar') {
       const cell = _scaleBarCell(layer);
-      if (cell) return cell.pixelSizeUm;
+      if (cell) return _normalizePixelSize(cell.pixelSizeUm);
     }
     const points = (layer?.type === 'angle' ? ['1', '2', '3'] : ['1', '2'])
       .map(n => ({ x: Number(layer?.[`x${n}`]), y: Number(layer?.[`y${n}`]) }))
       .filter(p => Number.isFinite(p.x) && Number.isFinite(p.y));
     const middle = points.length ? _centroid(points) : null;
     const cell = middle ? _nearestCell(middle.x, middle.y) : null;
-    return cell ? cell.pixelSizeUm : _pixelSizeForPoint(layer?.x1, layer?.y1);
+    return cell ? _normalizePixelSize(cell.pixelSizeUm) : _pixelSizeForPoint(layer?.x1, layer?.y1);
   }
 
   /**
@@ -2587,18 +2993,26 @@ const StudioEditor = (() => {
     _renderAll();
   }
 
+  // One step of history for an edit made in the properties panel. The panel already
+  // shows the new values: it is updated in place (the readout) rather than rebuilt, so
+  // the control being used keeps the keyboard focus between two arrow presses.
   function _commitPropertyChange() {
     _pushHistory('Edit properties');
-    _renderAll();
+    _draw();
+    _renderLayers();
+    const layer = _selectedLayer();
+    const readout = _propsContainer?.querySelector('.studio-measurement-readout');
+    if (layer && readout) readout.textContent = _measurementLabel(layer) || '';
   }
 
-  function _bindProperty(id, eventName, setter) {
+  function _bindProperty(id, eventName, setter, options = {}) {
     const node = document.getElementById(id);
     if (!node) return;
     node.addEventListener(eventName, event => {
       setter(event.target.value);
-      _draw();
-      _renderLayers();
+      _requestDraw();
+      // Only the name shows in the layer list.
+      if (options.relist) _renderLayers();
     });
     node.addEventListener('change', _commitPropertyChange);
   }
@@ -2611,9 +3025,8 @@ const StudioEditor = (() => {
       node.value = layer.value;
       _setScaleBarEnd(layer);
       _updateMeasurementText(layer);
-      _draw();
-      _renderLayers();
       if (commit) _commitPropertyChange();
+      else _requestDraw();
     };
     node.addEventListener('input', () => applyValue(false));
     node.addEventListener('change', () => applyValue(true));
@@ -2795,6 +3208,14 @@ const StudioEditor = (() => {
   // re-rendered here.
   function _exportPng() {
     if (!_doc || !_sliceResult) return;
+    // A channel edit still waiting for its frame is part of the figure being exported.
+    _flushChannelRecompose();
+    const width = Number(_sliceImage?.width) || Number(_sliceResult.width) || 0;
+    const height = Number(_sliceImage?.height) || Number(_sliceResult.height) || 0;
+    if (!(width > 0 && height > 0) || width > EXPORT_MAX_SIDE || height > EXPORT_MAX_SIDE || width * height > EXPORT_MAX_PIXELS) {
+      _toast(_t('studio.exportTooLarge', `This figure is too large to export as one PNG (${width} × ${height} px).`, { w: width, h: height }));
+      return;
+    }
     _toast(_t('toast.renderingNative', 'Rendering native export...'));
     let source = _sliceResult;
 
@@ -2812,11 +3233,34 @@ const StudioEditor = (() => {
       source = { ..._sliceResult, canvas: _sliceImage, width: _sliceImage.width, height: _sliceImage.height };
     }
 
-    const canvas = _composeExportCanvas(source, { metadataStamp: true });
-    canvas.toBlob(blob => {
-      if (!blob) return;
-      ExportManager?.downloadBlob?.(blob, `${_exportBaseName()}_studio.png`);
-    }, 'image/png', 1);
+    let canvas;
+    try {
+      canvas = _composeExportCanvas(source, { metadataStamp: true });
+    } catch (err) {
+      console.warn('[StudioEditor] PNG export failed:', err);
+      _toast(_t('studio.exportPngFailed', 'The PNG could not be written (the browser refused a canvas this large).'));
+      return;
+    }
+    // The export canvas is the figure at full size (256 MB at 8192²): its pixels go
+    // back as soon as the encoder is done with them.
+    const releaseCanvas = () => {
+      canvas.width = 0;
+      canvas.height = 0;
+    };
+    try {
+      canvas.toBlob(blob => {
+        releaseCanvas();
+        if (!blob) {
+          _toast(_t('studio.exportPngFailed', 'The PNG could not be written (the browser refused a canvas this large).'));
+          return;
+        }
+        ExportManager?.downloadBlob?.(blob, `${_exportBaseName()}_studio.png`);
+      }, 'image/png', 1);
+    } catch (err) {
+      releaseCanvas();
+      console.warn('[StudioEditor] PNG export failed:', err);
+      _toast(_t('studio.exportPngFailed', 'The PNG could not be written (the browser refused a canvas this large).'));
+    }
   }
 
   // A composite of several panels is not "the slice" of any single dataset: it is
@@ -2862,7 +3306,9 @@ const StudioEditor = (() => {
         _doc.dataset?.name || 'Slice Studio',
         _planeLabel(_doc.planeSpec),
         `${source.width}x${source.height}`,
-        `px ${(_doc.calibration.pixelSizeUm.x || 1).toFixed(4)} um`
+        _isUncalibrated()
+          ? _t('studio.uncalibrated', 'uncalibrated')
+          : `px ${_normalizePixelSize(_doc.calibration.pixelSizeUm).x.toFixed(4)} um`
       ];
     const text = bits.join(' | ');
     ctx.save();
@@ -2906,6 +3352,11 @@ const StudioEditor = (() => {
     const input = event?.target;
     const file = input?.files?.[0];
     if (!file) return;
+    if (Number(file.size) > IMPORT_MAX_BYTES) {
+      if (input) input.value = '';
+      _toast(_t('studio.importTooLarge', 'This file is too large to be a Studio file (over 5 MB).'));
+      return;
+    }
     const reader = new FileReader();
     reader.onload = () => {
       try {
@@ -2939,6 +3390,18 @@ const StudioEditor = (() => {
   const IMPORT_SAFE_ID = /^[A-Za-z0-9_.:-]{1,128}$/;
   const IMPORT_LAYER_TYPE = /^[a-z][a-z0-9_-]{0,31}$/i;
   const IMPORT_GEOMETRY_KEYS = ['x', 'y', 'w', 'h', 'x1', 'y1', 'x2', 'y2', 'x3', 'y3'];
+  // The coordinates each kind of layer is drawn from: one a file leaves out is 0, so a
+  // label or a handle never reads NaN.
+  const IMPORT_REQUIRED_GEOMETRY = {
+    rectangle: ['x', 'y', 'w', 'h'],
+    ellipse: ['x', 'y', 'w', 'h'],
+    text: ['x', 'y', 'w', 'h'],
+    line: ['x1', 'y1', 'x2', 'y2'],
+    arrow: ['x1', 'y1', 'x2', 'y2'],
+    distance: ['x1', 'y1', 'x2', 'y2'],
+    scalebar: ['x1', 'y1', 'x2', 'y2'],
+    angle: ['x1', 'y1', 'x2', 'y2', 'x3', 'y3']
+  };
   const IMPORT_STYLE_NUMBERS = { strokeWidth: [0, 200], fontSize: [1, 400], fontWeight: [100, 1000], opacity: [0, 1] };
   const IMPORT_STYLE_COLORS = ['stroke', 'fill'];
   const IMPORT_STYLE_FLAGS = ['textBackground', 'fillEnabled'];
@@ -2956,7 +3419,9 @@ const StudioEditor = (() => {
     _flushChannelRecompose();
     let plan;
     try {
-      plan = _planImport(_migrateDocument(JSON.parse(String(text ?? ''))));
+      const source = String(text ?? '');
+      if (source.length > IMPORT_MAX_BYTES) throw new Error('Studio JSON: the file is too large.');
+      plan = _planImport(_migrateDocument(JSON.parse(source)));
     } catch (err) {
       console.warn('[StudioEditor] Invalid Studio JSON:', err);
       _toast(_t('toast.invalidStudioJson', 'Invalid Studio JSON.'));
@@ -3333,6 +3798,7 @@ const StudioEditor = (() => {
     };
     ['layoutMaps', 'channelState', 'guides', 'groups'].forEach(key => {
       expect(!given(key) || Array.isArray(value[key]), `${key} is not a list`);
+      expect(!given(key) || value[key].length <= IMPORT_MAX_LAYERS, `${key} is longer than ${IMPORT_MAX_LAYERS}`);
     });
     ['sourceSlice', 'dataset'].forEach(key => {
       expect(!given(key) || _isPlainObject(value[key]), `${key} is not an object`);
@@ -3344,13 +3810,22 @@ const StudioEditor = (() => {
       const id = _importId(group.id, 'group', groupIds);
       return { id, name: typeof group.name === 'string' ? group.name : '', collapsed: group.collapsed === true };
     });
+    expect(value.layers.length <= IMPORT_MAX_LAYERS, `more than ${IMPORT_MAX_LAYERS} layers`);
     const layerIds = new Set();
-    const layers = value.layers.map(layer => {
+    let unknown = 0;
+    const layers = value.layers.filter(layer => {
       expect(_isPlainObject(layer) && typeof layer.type === 'string' && IMPORT_LAYER_TYPE.test(layer.type), 'a layer has no readable type');
+      // A kind of layer this Studio cannot draw would sit in the list invisible and
+      // out of reach of the pointer: it is left out.
+      if (Object.prototype.hasOwnProperty.call(IMPORT_REQUIRED_GEOMETRY, layer.type)) return true;
+      unknown++;
+      return false;
+    }).map(layer => {
       const checked = _checkImportedLayer(layer, layerIds);
       if (checked.groupId !== null && !groupIds.has(checked.groupId)) checked.groupId = null;
       return checked;
     });
+    if (unknown) console.warn(`[StudioEditor] ${unknown} layer(s) of a kind this Studio does not draw were left out of the import.`);
     const guides = (value.guides || []).map(guide => {
       expect(_isPlainObject(guide) && (guide.axis === 'x' || guide.axis === 'y') && Number.isFinite(guide.value), 'a guide is not readable');
       return { axis: guide.axis, value: guide.value };
@@ -3389,6 +3864,9 @@ const StudioEditor = (() => {
       const n = Number(layer[key]);
       layer[key] = layer[key] !== null && Number.isFinite(n) ? n : 0;
     });
+    (IMPORT_REQUIRED_GEOMETRY[layer.type] || []).forEach(key => {
+      if (!(key in layer)) layer[key] = 0;
+    });
     if ('value' in layer) {
       const n = Number(layer.value);
       if (Number.isFinite(n) && n > 0) layer.value = n;
@@ -3397,6 +3875,7 @@ const StudioEditor = (() => {
     if ('points' in layer) {
       if (Array.isArray(layer.points)) {
         layer.points = layer.points
+          .slice(0, IMPORT_MAX_POINTS)
           .filter(p => _isPlainObject(p) && Number.isFinite(Number(p.x)) && Number.isFinite(Number(p.y)))
           .map(p => ({ ...p, x: Number(p.x), y: Number(p.y) }));
       } else {
@@ -3404,8 +3883,12 @@ const StudioEditor = (() => {
       }
     }
     ['name', 'text'].forEach(key => {
-      if (!(key in layer) || typeof layer[key] === 'string') return;
-      layer[key] = (typeof layer[key] === 'number' && Number.isFinite(layer[key])) ? String(layer[key]) : '';
+      if (!(key in layer)) return;
+      if (typeof layer[key] !== 'string') {
+        layer[key] = (typeof layer[key] === 'number' && Number.isFinite(layer[key])) ? String(layer[key]) : '';
+      }
+      // Measured and drawn on every redraw: a label, not a document.
+      if (layer[key].length > IMPORT_MAX_TEXT) layer[key] = layer[key].slice(0, IMPORT_MAX_TEXT);
     });
     if (layer.unit === 'µm') layer.unit = 'um';
     if ('unit' in layer && !IMPORT_UNITS.includes(layer.unit)) delete layer.unit;
@@ -3801,7 +4284,8 @@ const StudioEditor = (() => {
     setLoadProgress,
     isOpen: () => _isOpen,
     close,
-    getDocument
+    getDocument,
+    documentToken
   };
 })();
 

@@ -40,6 +40,14 @@ const PHASE_DONE = 'done';
 //   editable  — metadata + manifest + coarsest LOD in; openable at low res
 //   staged    — everything in and validated; publishable
 //   stalled   — untouched past the grace period; awaiting a re-drop before GC
+// The server's disk cannot hold the drop (plan refusal) or filled up mid-transfer
+// (507). Sizes are what the server reported; an unknown one reads as "?".
+function insufficientDiskMessage(needed, free) {
+  const fmt = (n) => (Number.isFinite(n) && n >= 0 ? formatBytes(n) : '?');
+  return t('upl.insufficientDisk', `Espace disque insuffisant sur le serveur (${fmt(needed)} requis, ${fmt(free)} libres)`,
+           { needed: fmt(needed), free: fmt(free) });
+}
+
 export const DS_UPLOADING = 'uploading';
 export const DS_EDITABLE = 'editable';
 export const DS_STAGED = 'staged';
@@ -58,6 +66,8 @@ const _state = {
   speed: 0,              // bytes/s, smoothed
   etaS: null,
   error: null,
+  failed: [],            // files that exhausted their retries in this run: [{ ds, path, reason }]
+  network: 'online',     // 'offline' while the worker waits for the link to come back
   chunkSize: 8388608,
   parallel: 4,
   backend: null,
@@ -73,6 +83,7 @@ export function isBusy() {
       || _state.phase === PHASE_UPLOADING;
 }
 export function isPaused() { return _state.phase === PHASE_PAUSED; }
+export function hasFailed() { return _state.failed.length > 0 && !isBusy(); }
 /** True while bytes are in flight OR parked mid-transfer — what the exit guard asks. */
 export function hasUnfinishedWork() {
   return isBusy() || (_state.phase === PHASE_PAUSED && _state.sentBytes < _state.totalBytes);
@@ -81,6 +92,10 @@ export function hasUnfinishedWork() {
 // ── Folder walk ────────────────────────────────────────────────────────────────
 
 const MAX_ENTRIES = 400000;
+// Files resolved to File handles at once. `entry.file()` is an async round-trip to
+// the OS per file; one at a time, a 100k-pack dataset spends minutes before the
+// first byte moves.
+const WALK_PARALLEL = 8;
 
 /**
  * Read a dropped DataTransfer into `[{ path, file }]` with paths relative to the
@@ -104,32 +119,43 @@ export async function readDataTransfer(dataTransfer) {
     // No directory support (or plain files dropped): fall back to the file list.
     return Array.from(dataTransfer.files || []).map((file) => ({ path: file.name, file }));
   }
+  // `skipped` counts what could NOT be read (a file the OS refused, a directory
+  // whose listing failed, anything past MAX_ENTRIES): the import must tell the
+  // operator, otherwise a half-read dataset only fails validation hours later.
   const out = [];
+  out.skipped = 0;
   for (const root of roots) await walkEntry(root, root.name, out);
   return out;
 }
 
 async function walkEntry(entry, path, out) {
-  if (out.length >= MAX_ENTRIES) return;
+  if (out.length >= MAX_ENTRIES) { out.skipped++; return; }
   if (entry.isFile) {
     const file = await new Promise((resolve) => entry.file(resolve, () => resolve(null)));
-    if (file) out.push({ path, file });
+    if (file) out.push({ path, file }); else out.skipped++;
     return;
   }
   if (!entry.isDirectory) return;
   const reader = entry.createReader();
   for (;;) {
-    const batch = await new Promise((resolve) => reader.readEntries(resolve, () => resolve([])));
+    const batch = await new Promise((resolve) => reader.readEntries(resolve, () => { out.skipped++; resolve([]); }));
     if (!batch.length) break;      // drained — a single readEntries call caps at ~100
-    for (const child of batch) await walkEntry(child, `${path}/${child.name}`, out);
+    const files = batch.filter((c) => c.isFile);
+    const dirs = batch.filter((c) => !c.isFile);
+    for (let i = 0; i < files.length; i += WALK_PARALLEL) {
+      await Promise.all(files.slice(i, i + WALK_PARALLEL).map((c) => walkEntry(c, `${path}/${c.name}`, out)));
+    }
+    for (const d of dirs) await walkEntry(d, `${path}/${d.name}`, out);
   }
 }
 
 /** `<input type="file" webkitdirectory>` → the same shape as readDataTransfer. */
 export function readFileInput(fileList) {
-  return Array.from(fileList || []).map((file) => ({
+  const out = Array.from(fileList || []).map((file) => ({
     path: file.webkitRelativePath || file.name, file,
   }));
+  out.skipped = 0;
+  return out;
 }
 
 // ── Grouping ───────────────────────────────────────────────────────────────────
@@ -171,13 +197,29 @@ export async function groupIntoDatasets(entries) {
   // Deepest first, so a dataset nested under another candidate root wins its files.
   roots.sort((a, b) => b.split('/').length - a.split('/').length);
 
+  // One pass over the entries: each belongs to its DEEPEST ancestor root. (Filtering
+  // the whole listing once per root was O(roots x entries).)
+  const rootSet = new Set(roots);
+  const filesByRoot = new Map();
+  for (const e of entries) {
+    const parts = e.path.split('/');
+    for (let k = parts.length - 1; k >= 0; k--) {
+      const cand = parts.slice(0, k).join('/');
+      if (!rootSet.has(cand)) continue;
+      let bucket = filesByRoot.get(cand);
+      if (!bucket) filesByRoot.set(cand, (bucket = []));
+      bucket.push(e);
+      break;
+    }
+  }
+
   const datasets = [];
   const untyped = [];
   const claimed = new Set();
   let flatDrop = false;
   for (const root of roots) {
     const prefix = root ? `${root}/` : '';
-    const files = entries.filter((e) => e.path.startsWith(prefix) && !claimed.has(e.path));
+    const files = (filesByRoot.get(root) || []).filter((e) => !claimed.has(e.path));
     if (!files.length) continue;
 
     const segments = root.split('/').filter(Boolean);
@@ -252,9 +294,25 @@ function recomputeTotals() {
  * skipped, and datasets already published are reported so they are not sent
  * again. Nothing about a resume is a special case here.
  */
+let _lastEntries = null;
+
 export async function startImport(entries, options = {}) {
+  // Without SubtleCrypto (plain http on a host other than localhost) no chunk can
+  // be hashed: say so once, up front, instead of failing every file in turn.
+  if (!(typeof window !== 'undefined' && window.isSecureContext !== false
+        && typeof crypto !== 'undefined' && crypto.subtle)) {
+    _state.error = t('upl.errInsecure', 'Les imports exigent une connexion sécurisée (HTTPS, ou localhost) : ce navigateur ne peut pas calculer les empreintes de contrôle en HTTP simple.');
+    emit();
+    return { ok: false };
+  }
+  // A drop while the transfer is paused: the new files join the paused queue, and
+  // dropping them is an explicit request to go on.
+  const wasPaused = _state.phase === PHASE_PAUSED;
+  const failPhase = wasPaused ? PHASE_PAUSED : PHASE_IDLE;
+  _lastEntries = entries;
   _state.phase = PHASE_SCANNING;
   _state.error = null;
+  _state.failed = [];
   emit();
 
   const limits = await apiFetch(`${API_UPLOAD}?action=limits`);
@@ -273,7 +331,7 @@ export async function startImport(entries, options = {}) {
     ...untyped.map((u) => ({ path: u.folder, reason: 'unknown_type' })),
   ];
   if (!datasets.length) {
-    _state.phase = PHASE_IDLE;
+    _state.phase = failPhase;
     if (untyped.length) {
       const u = untyped[0];
       _state.error = u.declared
@@ -293,29 +351,42 @@ export async function startImport(entries, options = {}) {
   _state.phase = PHASE_PLANNING;
   emit();
 
-  const plan = await apiFetchStatus(`${API_UPLOAD}?action=plan`, {
-    method: 'POST',
-    body: JSON.stringify({
-      chunkSize: _state.chunkSize,
-      datasets: datasets.map((d) => ({
-        type: d.type, folder: d.folder,
-        files: d.files.map((f) => ({ path: f.path, size: f.size })),
-      })),
-    }),
-  });
-  if (!plan.ok || !plan.data || !plan.data.ok) {
-    _state.phase = PHASE_IDLE;
-    _state.error = t('upl.errPlan', 'Le serveur a refusé le plan d\'import.');
-    emit();
-    return { ok: false };
+  // One request per dataset: the plan lists every file with its size, and the body
+  // of a large drop in a single request can exceed the host's post_max_size.
+  const planned = [];
+  for (const d of datasets) {
+    const plan = await apiFetchStatus(`${API_UPLOAD}?action=plan`, {
+      method: 'POST',
+      body: JSON.stringify({
+        chunkSize: _state.chunkSize,
+        datasets: [{ type: d.type, folder: d.folder, files: d.files.map((f) => ({ path: f.path, size: f.size })) }],
+      }),
+    });
+    if (!plan.ok || !plan.data || !plan.data.ok) {
+      _state.phase = failPhase;
+      _state.error = plan.status === 413
+        ? t('upl.errPlanTooBig', 'La liste des fichiers de « {folder} » dépasse la taille de requête acceptée par le serveur (post_max_size).', { folder: d.folder })
+        : plan.status === 0
+          ? t('upl.errPlanNetwork', 'Le serveur ne répond pas. Vérifiez la connexion puis reglissez le dossier.')
+          : t('upl.errPlan', 'Le serveur a refusé le plan d\'import.');
+      emit();
+      return { ok: false };
+    }
+    _state.chunkSize = plan.data.chunkSize || _state.chunkSize;
+    planned.push(...(plan.data.datasets || []));
   }
-  _state.chunkSize = plan.data.chunkSize || _state.chunkSize;
 
   // Merge the server's verdict with the local File handles.
   const jobs = [];
 
-  plan.data.datasets.forEach((pd, dsIndex) => {
+  planned.forEach((pd, dsIndex) => {
     const local = datasets.find((d) => d.type === pd.type && d.folder === pd.folder);
+    if (pd.error === 'insufficient_disk') {
+      // Refused before a byte was sent: the server's volume cannot hold this drop.
+      _state.error = insufficientDiskMessage(pd.neededBytes, pd.freeBytes);
+      _state.rejected.push({ path: `${pd.type}/${pd.folder}`, reason: pd.error });
+      return;
+    }
     if (!local || pd.error) {
       _state.rejected.push({ path: `${pd.type}/${pd.folder}`, reason: pd.error || 'unknown' });
       return;
@@ -356,18 +427,37 @@ export async function startImport(entries, options = {}) {
   recomputeTotals();
   _speed.reset(_state.sentBytes);
 
+  const unread = (entries && entries.skipped) || 0;
+  if (unread > 0) {
+    _state.rejected.push({ path: String(unread), reason: 'unreadable' });
+  }
+
   if (!jobs.length) {
-    _state.phase = PHASE_DONE;
+    _state.phase = wasPaused ? PHASE_PAUSED : PHASE_DONE;
     await refreshStaged();
     emit();
     return { ok: true, nothingToDo: true };
   }
 
   _state.phase = PHASE_UPLOADING;
+  _state.network = 'online';
+  if (unread > 0) {
+    _state.error = t('upl.errUnreadable', '{n} élément(s) du dossier n\'ont pas pu être lus et seront absents de l\'import.', { n: unread });
+  }
   emit();
   ensureWorker();
   _worker.postMessage({ type: 'enqueue', jobs });
+  // The worker is still paused from before the drop: without this the panel would
+  // read "uploading" while nothing moves.
+  if (wasPaused) _worker.postMessage({ type: 'resume' });
+  _speed.reset(_state.sentBytes);
   return { ok: true, jobs: jobs.length };
+}
+
+/** Re-plan the last drop: only the chunks of the files that failed are sent again. */
+export async function retryFailed() {
+  if (!_lastEntries || isBusy()) return { ok: false };
+  return startImport(_lastEntries);
 }
 
 // ── Worker plumbing ────────────────────────────────────────────────────────────
@@ -424,6 +514,7 @@ async function onWorkerMessage(e) {
   switch (msg.type) {
     case 'progress':
       // msg.perDataset holds DELTAS since the last flush, never running totals.
+      _state.network = 'online';
       Object.entries(msg.perDataset || {}).forEach(([key, bytes]) => {
         const ds = _state.datasets.find((d) => d.key === key);
         if (ds) ds.receivedBytes = Math.min(ds.totalBytes, ds.receivedBytes + bytes);
@@ -450,10 +541,20 @@ async function onWorkerMessage(e) {
     case 'file-error': {
       const ds = _state.datasets.find((d) => d.key === msg.ds);
       if (ds) ds.error = msg.reason;
+      if (!_state.failed.some((f) => f.ds === msg.ds && f.path === msg.path)) {
+        _state.failed.push({ ds: msg.ds, path: msg.path, reason: msg.reason });
+      }
       _state.error = t('upl.errFile', 'Échec sur {path} ({reason}).', { path: msg.path, reason: msg.reason });
       emit();
       break;
     }
+
+    case 'network':
+      _state.network = msg.online ? 'online' : 'offline';
+      if (!msg.online) { _state.speed = 0; _state.etaS = null; }
+      else _speed.reset(_state.sentBytes);
+      emit();
+      break;
 
     case 'chunk-too-large':
       // A PHP host refused our chunk size. Shrink and re-plan; the already-stored
@@ -468,8 +569,15 @@ async function onWorkerMessage(e) {
     case 'fatal':
       _state.error = msg.reason === 'unauthorized'
         ? t('upl.errAuth', 'Session expirée — reconnectez-vous puis reglissez le dossier.')
-        : msg.reason;
+        : msg.reason === 'insecure_context'
+          ? t('upl.errInsecure', 'Les imports exigent une connexion sécurisée (HTTPS, ou localhost) : ce navigateur ne peut pas calculer les empreintes de contrôle en HTTP simple.')
+          : msg.reason === 'insufficient_disk'
+            ? insufficientDiskMessage(msg.neededBytes, msg.freeBytes)
+            : msg.reason;
       _state.phase = PHASE_IDLE;
+      // The worker stops waiting for the link when it gives up (a probe answering
+      // 401 ends the outage without an 'online' message): no stale offline banner.
+      _state.network = 'online';
       emit();
       break;
 
@@ -478,6 +586,10 @@ async function onWorkerMessage(e) {
         _state.phase = PHASE_DONE;
         _state.speed = 0;
         _state.etaS = null;
+        // "Done" must not read as "all sent": name the files that did not make it.
+        if (_state.failed.length) {
+          _state.error = t('upl.errSomeFailed', '{n} fichier(s) n\'ont pas pu être envoyés. Relancez-les avec « Réessayer » ou reglissez le dossier.', { n: _state.failed.length });
+        }
         await refreshStaged();
         emit();
       }
@@ -513,6 +625,9 @@ export function resume() {
 export function cancelAll() {
   if (_worker) _worker.postMessage({ type: 'abort' });
   _state.phase = PHASE_IDLE;
+  _state.failed = [];
+  _state.network = 'online';
+  _lastEntries = null;
   _state.datasets = [];
   recomputeTotals();
   _state.speed = 0;

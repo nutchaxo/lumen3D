@@ -225,20 +225,26 @@ function openCompare() {
   assert.equal(scratch.width, 0, 'close: the cell scratch backing store is given back');
   assert.equal(scratch.height, 0);
   assert.equal(figureCopy.width, 0, 'close: the Compare figure copy is given back');
-  assert.equal(S.sliceImage, S.sliceResult.canvas, '… the Studio points at the figure it was handed');
+  assert.equal(S.sliceImage, null, '… and the Studio holds no picture any more');
+  assert.equal(S.sliceResult, null, '… nor the slice it was handed');
+  assert.equal(S.history.length, 0, 'close: the undo history goes with the document');
+  for (const key of ['raw', 'iframe', 'sliceResult']) {
+    assert.ok(!(key in S.doc.layoutMaps[0]), `close: the closed document keeps no cell ${key} (panel frames and canvases released)`);
+  }
+  assert.equal(Studio.getDocument().layoutMaps.length, 2, 'getDocument() still answers with the closed document');
 
-  // A single raw slice: its canvas is the picture on screen, kept on close.
+  // A single raw slice: the Studio's own canvas at the slice's size, given back on close.
   const raw = guardedRaw(300, 200);
   Studio.open({ canvas: makeCanvas('viewer'), raw, width: 300, height: 200, source: 'studio-preview', planeSpec: { mode: 'xy' }, pixelSizeUm: { x: 1, y: 1 }, channelState: stateA });
   const sliceCanvas = S.sliceImage;
   assert.ok(sliceCanvas.width === 300 && sliceCanvas.tag === 'created', 'the single slice is coloured into the Studio\'s canvas');
   Studio.close();
-  assert.equal(sliceCanvas.width, 300, 'close: the slice canvas on screen is not shrunk under the picture');
+  assert.equal(sliceCanvas.width, 0, 'close: the native-size slice canvas is given back');
+  assert.equal(sliceCanvas.height, 0);
 
-  // A Compare document opened after it: the slice canvas is no longer shown, it goes.
+  // A new document after it gets a canvas of its own.
   openCompare();
   assert.notEqual(S.sliceImage, sliceCanvas);
-  assert.equal(sliceCanvas.width, 0, 'a new document gives back the previous slice canvas');
   Studio.close();
   console.log('scratch canvases released: OK');
 }

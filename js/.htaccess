@@ -1,0 +1,30 @@
+# Lumen3D — platform scripts (lumen-guard v2). js/modules/ receives plugin
+# packages (marketplace installs, operator copies): whatever a package carries,
+# nothing under js/ ever runs on the server. Same execution ban as DATA_WEB/.htaccess
+# (upload_staging.EXEC_BAN_RULES / api/_admin_lib.php lumen_exec_ban_rules).
+# Nginx equivalent: location ^~ /js/ { location ~ \.(php|phtml|phar|cgi|pl|py|sh)$ { return 403; } }
+<IfModule mod_php.c>
+    php_flag engine off
+</IfModule>
+<IfModule mod_php7.c>
+    php_flag engine off
+</IfModule>
+<IfModule mod_php5.c>
+    php_flag engine off
+</IfModule>
+<FilesMatch "\.(php|php[0-9]|phtml|phps|phar|cgi|pl|py|sh|shtml|htaccess)$">
+    <IfModule mod_authz_core.c>
+        Require all denied
+    </IfModule>
+    <IfModule !mod_authz_core.c>
+        Order allow,deny
+        Deny from all
+    </IfModule>
+</FilesMatch>
+<IfModule mod_mime.c>
+    RemoveHandler .php .phtml .phar .cgi .pl .py .sh .shtml
+    RemoveType .php .phtml .phar
+</IfModule>
+<IfModule mod_headers.c>
+    Header set X-Content-Type-Options "nosniff"
+</IfModule>

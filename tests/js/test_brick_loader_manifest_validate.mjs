@@ -19,7 +19,7 @@ function makeLoader() {
 }
 
 const VALID = {
-  levels: [{ level: 0, dimensions: { x: 128, y: 128, z: 128 }, brickSize: 128 }],
+  levels: [{ level: 0, dimensions: { x: 128, y: 128, z: 128 }, brickSize: 64 }],
   channels: 1, brickTransport: { encoding: 'raw-u8' },
 };
 
@@ -41,6 +41,9 @@ const VALID = {
     { levels: [{ level: -1, dimensions: { x: 1, y: 1, z: 1 } }] },    // negative level
     { levels: [{ level: 0, dimensions: { x: 1, y: 1, z: 1 } }], channels: 0 },  // channels < 1
     { levels: [{ level: 0, dimensions: { x: 1, y: 1, z: 1 } }], brickTransport: { encoding: 'bogus' } }, // unknown enc
+    { levels: [{ level: 0, dimensions: { x: 1, y: 1, z: 1 }, brickSize: 32 }] },                   // not 64
+    { brickSize: 128, levels: [{ level: 0, dimensions: { x: 1, y: 1, z: 1 } }] },                  // not 64
+    { levels: [{ level: 1, dimensions: { x: 1, y: 1, z: 1 } }, { level: 0, dimensions: { x: 1, y: 1, z: 1 } }] }, // out of order
   ];
   for (const m of bad) {
     assert.throws(() => BL._validateManifest(m), `should reject ${JSON.stringify(m)}`);
@@ -51,10 +54,12 @@ const VALID = {
 {
   const BL = makeLoader();
   BL.init('DATA_WEB/3d/A/bricks', VALID);
-  const kA = BL._cacheKey(0, 0, 1, 2, 3);
+  const before = BL.getManifest();
   assert.throws(() => BL.init('DATA_WEB/3d/B/bricks', { levels: [] }), 'malformed init throws');
   assert.ok(BL.isReady(), 'previous valid dataset still mounted after rejected init');
-  assert.equal(BL._cacheKey(0, 0, 1, 2, 3), kA, 'cache key tag unchanged (no partial mutation on reject)');
+  assert.equal(BL.getManifest(), before, 'mounted manifest unchanged (no partial mutation on reject)');
+  assert.equal(BL.getDimensions(0).x, 128, 'mounted dimensions unchanged');
+  assert.equal(BL.getDimensions(7), null, 'a level the manifest does not have has no dimensions');
 }
 
 console.log('ELE-21 brick-loader manifest validation: OK');

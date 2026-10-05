@@ -27,7 +27,8 @@ assert.ok(guardBeforePublish > start && guardBeforePublish < firstPublish,
 
 // 2) the per-slice finally must gate GPU uploads behind a stale check
 const staleGate = src.indexOf('const stale = loadId !== _loadCounter', start);
-const uploadIdx = src.indexOf('textures.forEach(t => { t.needsUpdate', start);
+// Each slice is uploaded on its own (texSubImage3D) once its channels have landed.
+const uploadIdx = src.indexOf('uploadSlice(zi);', start);
 assert.ok(uploadIdx > start, 'GPU upload line found');
 assert.ok(staleGate > start && staleGate < uploadIdx,
   'a "const stale = loadId !== _loadCounter" gate must precede the GPU upload');

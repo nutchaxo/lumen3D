@@ -60,7 +60,8 @@
     "renderingNative": "Renderizando la exportación nativa...",
     "invalidStudioJson": "JSON de Studio no válido.",
     "maxPanels": "Máximo de {count} paneles alcanzado.",
-    "noMultiChannel": "El dataset no tiene múltiples canales para descomponer."
+    "noMultiChannel": "El dataset no tiene múltiples canales para descomponer.",
+    "workspaceSaveFailed": "No se pudo guardar el espacio de trabajo (almacenamiento del navegador lleno o bloqueado). Use «Exportar espacio de trabajo»."
   },
   "download": {
     "title": "Centro de descargas",
@@ -98,10 +99,8 @@
     "measuresCsv": "Mediciones CSV",
     "measuresJson": "Mediciones JSON",
     "metadataJson": "Metadatos JSON",
-    "annotationsJson": "Anotaciones JSON",
     "noMeasures": "No hay mediciones para exportar",
-    "noMetadata": "No hay metadatos disponibles",
-    "noAnnotations": "No hay anotaciones para exportar"
+    "noMetadata": "No hay metadatos disponibles"
   },
   "nav": {
     "back": "Atrás",
@@ -110,7 +109,8 @@
     "compare": "Comparar",
     "about": "Acerca de",
     "upload": "Subir",
-    "settings": "Ajustes"
+    "settings": "Ajustes",
+    "skipToContent": "Saltar al contenido"
   },
   "theme": {
     "dark": "Oscuro",
@@ -163,7 +163,12 @@
     "fileSize": "Tamaño",
     "failed": "Error al cargar los datos",
     "failedDesc": "Conjunto de datos no encontrado o error al cargar.",
-    "tracked": "Rastreado"
+    "tracked": "Rastreado",
+    "noResultsHint": "Pruebe a ajustar los filtros o la búsqueda.",
+    "view": "Ver",
+    "badgeLinked": "Vinculado",
+    "badgeRaw": "Bruto",
+    "badgeWeb": "Web"
   },
   "viewer": {
     "controls": "Controles",
@@ -288,7 +293,63 @@
       "noteMeasurements": "Se eliminarán las medidas y anotaciones de esta sesión. La calidad de renderizado no se modifica.",
       "confirm": "Restablecer",
       "done": "Espacio de trabajo restablecido"
-    }
+    },
+    "denoiseUnavailableSparse": "El suavizado no está disponible en esta calidad (atlas de bloques): elija una calidad inferior.",
+    "denoiseFailed": "Error de suavizado en el canal {channel}: el canal se muestra sin filtrar.",
+    "gpuLost": "Contexto GPU perdido: el renderizado está en pausa hasta que el navegador lo devuelva.",
+    "gpuRestored": "Contexto GPU restaurado.",
+    "gpuReloading": "Contexto GPU restaurado: recargando el volumen…",
+    "gpuReloadFailed": "Contexto GPU restaurado, pero el volumen no se pudo recargar: {message}",
+    "errMetadataMissing": "metadata.json no encontrado y sin dimensiones en el catálogo",
+    "errMetadataHttp": "metadata.json no disponible (HTTP {status})",
+    "errMetadataInvalid": "metadata.json no válido: {reason}",
+    "errUnknown": "Error de carga desconocido",
+    "loadFailedKept": "Error de carga: {message}. Se conserva el volumen en pantalla.",
+    "loadingError": "Error de carga",
+    "backToExplorer": "Volver al explorador",
+    "loadingDataset": "Cargando el conjunto de datos…",
+    "loadingTimepoint": "Cargando el tiempo {n} ({quality})…",
+    "loadingVolume": "Cargando el volumen ({quality})…",
+    "loadingQuality": "Cargando {quality}…",
+    "qualityUnavailable": "Calidad {quality} no disponible",
+    "qualityActive": "{quality} activa{grid}",
+    "qualityActiveCached": "{quality} activa{grid} desde la caché",
+    "qualityDefault": "512x512 por defecto, 256x256 si no está disponible.",
+    "nearbyCached": "Vistas previas cercanas en caché. {quality} sigue siendo el objetivo mostrado.",
+    "brickMissingOne": "1 bloque no se pudo cargar",
+    "brickMissingMany": "{n} bloques no se pudieron cargar",
+    "sliceMissingOne": "Falta 1 imagen de corte",
+    "sliceMissingMany": "Faltan {n} imágenes de corte",
+    "resDowngradeBytes": "({needed} MB necesarios, {budget} MB disponibles para el volumen.)",
+    "resDowngradeRefused": "(La GPU rechazó la asignación.)",
+    "channelsBeyondFour": "Este conjunto de datos tiene {n} canales: el visor y el Studio muestran los 4 primeros.",
+    "calExact": "Exacta",
+    "calEstimated": "Estimada",
+    "calMissing": "Faltan metadatos",
+    "displayOverride": "Ajuste de visualización: {k}x",
+    "physicalSize": "Tamaño físico: {x} x {y} x {z} µm",
+    "voxelGrid": "Rejilla de vóxeles: activa {active}; nativa {native}",
+    "calibrationLine": "Calibración: {cal}; {override}; grosor de corte: {t} µm",
+    "volSourceDisplay": "Visualización: {label}.",
+    "exportMeasuresCsv": "Medidas CSV",
+    "exportMeasuresJson": "Medidas JSON",
+    "exportMeasuresNone": "No hay medidas para exportar",
+    "measureNoCalibration": "Falta la calibración física de este conjunto de datos. La medida de distancias necesita metadatos de vóxel calibrados.",
+    "measureNoPoint": "No se detectó ningún punto calibrado del volumen.",
+    "measureHidden": "Oculta",
+    "measureNone": "Aún no hay medidas guardadas.",
+    "measureHint": "Haga clic en dos puntos de la superficie de la muestra.",
+    "measurePointA": "Punto A",
+    "measureSecond": "Haga clic en un segundo punto para medir la distancia.",
+    "measureDistance": "Distancia",
+    "measureDeltaZ": "Delta Z",
+    "measureNote": "Medida entre dos puntos de superficie elegidos, en coordenadas físicas calibradas.",
+    "measureLabel": "Medida {n}",
+    "measure3dValues": "Valores 3D",
+    "skipToViewer": "Ir al visor",
+    "renderMode": "Modo de renderizado",
+    "exposure": "Visibilidad (exposición)",
+    "customColor": "Color personalizado"
   },
   "compare": {
     "title": "Modo de comparación",
@@ -352,7 +413,9 @@
     "panelFailed": "No se pudo cargar este dataset.",
     "channelsDropped": "{count} canal(es) omitido(s): como máximo {max} paneles.",
     "unknownDataset": "El dataset «{id}» no está en el catálogo.",
-    "uncalibrated": "sin calibrar"
+    "uncalibrated": "sin calibrar",
+    "retry": "Reintentar",
+    "noDatasets": "El catálogo aún no tiene conjuntos de datos."
   },
   "upload": {
     "title": "Subir y visualizar",
@@ -441,7 +504,7 @@
     "fileSize": "Tamaño del archivo"
   },
   "colorblind": {
-    "title": "Filtros de Accesibilidad (Daltonismo)",
+    "title": "Simulación de deficiencias de la visión del color",
     "group": {
       "general": "General",
       "red": "Deficiencias de Rojo (Protan — Protanopía / Protanomalía)",
@@ -449,7 +512,7 @@
       "blue": "Deficiencias de Azul (Tritan — Tritanopía / Tritanomalía)",
       "mono": "Monocromatismo (Ausencia total / parcial de color)"
     },
-    "none": "Desactivado (Sin corrección)",
+    "none": "Desactivado (sin simulación)",
     "protanopia": "Protanopía (Ceguera al rojo)",
     "protanomaly": "Protanomalía (Debilidad al rojo)",
     "deuteranopia": "Deuteranopía (Ceguera al verde)",
@@ -615,7 +678,26 @@
     "etaMinutes": "~{m} min restantes",
     "panelChannels": "Canales del panel {n}",
     "noChannelMeta": "Sin metadatos de canal.",
-    "channelPanelMissing": "Panel de canales no cargado."
+    "channelPanelMissing": "Panel de canales no cargado.",
+    "exportTooLarge": "Esta figura es demasiado grande para exportarse como un solo PNG ({w} × {h} px).",
+    "exportPngFailed": "No se pudo escribir el PNG (el navegador rechazó un lienzo tan grande).",
+    "importTooLarge": "Este archivo es demasiado grande para ser un archivo de Studio (más de 5 MB).",
+    "textDefault": "Anotación",
+    "textPrompt": "Texto de la etiqueta",
+    "bigPassTitle": "Figura nativa grande",
+    "bigPassMessage": "Esta figura proyecta {n} cortes: su imagen nativa necesita todos sus bloques, unos {mb} MB ({bricks} bloques).",
+    "bigPassNote": "Recorte la pila con las asas del navegador z-stack para cargar menos cortes.",
+    "bigPassNative": "Cargar en nativo ({mb} MB)",
+    "bigPassLower": "Cargar en {x} × {y} ({mb} MB)",
+    "bigPassKeep": "Conservar la vista previa",
+    "nativeDowngraded": "Memoria GPU: {x} × {y}",
+    "nativeFailed": "Resolución nativa no disponible; se conserva la imagen obtenida.",
+    "nativeCancelling": "Cancelando el renderizado nativo…",
+    "nativeStatus": "Corte nativo: {done}/{total} bloques, {pct} %",
+    "nativePreparing": "Preparando el corte nativo ({n} bloques)…",
+    "nativeReady": "Corte nativo listo ({n} bloques).",
+    "nativeReadyMissing": "Corte nativo listo ({n} bloques; {missing} a la resolución anterior).",
+    "uncalibrated": "sin calibrar"
   },
   "admin": {
     "loginTitle": "{brand} Admin",
@@ -968,12 +1050,17 @@
     "galleryDeleteError": "No se pudo eliminar la imagen.",
     "galleryFull": "Máximo {max} imágenes por dataset.",
     "galleryBadType": "«{name}»: formato no admitido (PNG, JPEG, WebP, GIF).",
-    "galleryTooLarge": "«{name}» supera los 8 MB.",
     "galleryReadFailed": "«{name}» ilegible.",
     "galleryUploadError": "No se pudo enviar «{name}»: {reason}",
     "reasonNoImage": "falta el bloque de imagen",
     "reasonBadImage": "bloque de imagen no válido",
-    "secOrientation2d": "Orientación"
+    "secOrientation2d": "Orientación",
+    "reauthTitle": "Confirmación requerida",
+    "confirm": "Confirmar",
+    "tabLoadFailed": "No se pudo cargar esta pestaña. Recargue la página.",
+    "sessionExpiredKept": "Sesión caducada: se conservan sus cambios sin guardar. Inicie sesión de nuevo.",
+    "updateUnverifiable": "Esta versión no se puede verificar (sin suma de control para su archivo) y no se aplicó.",
+    "galleryTooLargeMax": "«{name}» supera {max}."
   },
   "upl": {
     "title": "Importar datasets",
@@ -1054,7 +1141,20 @@
     "exitTitle": "Hay una transferencia en curso",
     "exitBody": "Salir de esta página pondrá la transferencia en pausa. Los archivos ya enviados se conservan: se reanudará donde se detuvo cuando vuelva a arrastrar la misma carpeta.",
     "exitStay": "Quedarse en la página",
-    "exitLeave": "Pausar y salir"
+    "exitLeave": "Pausar y salir",
+    "errInsecure": "Las importaciones requieren una conexión segura (HTTPS o localhost).",
+    "errPlanTooBig": "La lista de archivos de «{folder}» supera el tamaño de petición del servidor (post_max_size).",
+    "errPlanNetwork": "El servidor no responde. Compruebe la conexión y suelte la carpeta de nuevo.",
+    "errUnreadable": "{n} elemento(s) de la carpeta no se pudieron leer y faltarán en la importación.",
+    "errSomeFailed": "{n} archivo(s) no se pudieron enviar. Use «Reintentar» o suelte la carpeta de nuevo.",
+    "retry": "Reintentar",
+    "offline": "Conexión perdida: la transferencia se reanudará sola cuando vuelva la red.",
+    "statusOffline": "Conexión perdida, reanudación automática",
+    "statusDoneErrors": "Terminado con {n} archivo(s) con error",
+    "rjUnreadable": "elemento(s) ilegible(s) al leer la carpeta",
+    "insufficientDisk": "Espacio en disco insuficiente en el servidor ({needed} necesarios, {free} libres)",
+    "tooLarge": "«{name}» supera el tamaño que el servidor acepta para un archivo.",
+    "rjDisk": "espacio en disco insuficiente en el servidor"
   },
   "appearance": {
     "title": "Apariencia",
@@ -1688,7 +1788,12 @@
       "content": "Contenido",
       "add": "Añadir una pestaña",
       "accent": "Color de la pestaña activa"
-    }
+    },
+    "autosaveFailed": "Falló el guardado automático, haga clic para reintentar",
+    "lockedOther": "Abierta en otra pestaña, haga clic para tomar el control",
+    "switchUnsaved": "No se pudieron guardar los últimos cambios de esta página. ¿Cambiar de página de todos modos?",
+    "loadFailed": "Página ilegible, recargue antes de editar",
+    "takeoverConfirm": "Esta página está abierta en otra pestaña. Guardar aquí sobrescribirá sus cambios. ¿Continuar?"
   },
   "wizard": {
     "title": "Instalación guiada",
@@ -1826,6 +1931,21 @@
     "studioTitle": "Studio",
     "studioSubtitle": "Anotar la fotografía",
     "labels": "Etiquetas",
-    "textSize": "Tamaño de las etiquetas"
+    "textSize": "Tamaño de las etiquetas",
+    "nativeError": "No se pudo cargar la imagen a resolución completa."
+  },
+  "decomposition": {
+    "channel": "Canal: {name}",
+    "channelEdited": "Canal: {name} (editado)",
+    "addCombination": "Añadir combinación",
+    "customName": "Personalizado {n}",
+    "done": "Hecho",
+    "resetOriginal": "Restablecer original",
+    "clickToEdit": "Clic para editar esta vista",
+    "exportTooLarge": "Demasiadas vistas para una sola imagen. Quite algunas e inténtelo de nuevo."
+  },
+  "annotations": {
+    "enterLabel": "Introduzca la etiqueta de la anotación:",
+    "editLabel": "Editar etiqueta:"
   }
 }

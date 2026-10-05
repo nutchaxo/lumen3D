@@ -26,6 +26,7 @@ const Dialog = (() => {
   let _resolve = null;
   let _dismissId = null;
   let _previousFocus = null;
+  let _wasModalOpen = false;
 
   function ask(config = {}) {
     // A second dialog replaces the first rather than stacking: the caller of the
@@ -39,6 +40,9 @@ const Dialog = (() => {
     _overlay = _build(config, options);
     _previousFocus = document.activeElement;
     document.body.appendChild(_overlay);
+    // Another modal (the Download Center) may already own `modal-open`: remember it so
+    // closing this dialog does not lift the lock under that one.
+    _wasModalOpen = document.body.classList.contains('modal-open');
     document.body.classList.add('modal-open');
     if (window.lucide) lucide.createIcons({ nodes: [_overlay] });
 
@@ -73,7 +77,7 @@ const Dialog = (() => {
     if (config.icon) {
       const icon = document.createElement('div');
       icon.className = 'lumen-dialog-icon';
-      if (config.tone) icon.classList.add(`is-${config.tone}`);
+      String(config.tone || '').split(/\s+/).filter(Boolean).forEach(tn => icon.classList.add(`is-${tn}`));
       const glyph = document.createElement('i');
       glyph.setAttribute('data-lucide', config.icon);
       icon.appendChild(glyph);
@@ -111,7 +115,7 @@ const Dialog = (() => {
       const btn = document.createElement('button');
       btn.type = 'button';
       btn.className = 'lumen-dialog-option';
-      if (option.variant) btn.classList.add(`is-${option.variant}`);
+      String(option.variant || '').split(/\s+/).filter(Boolean).forEach(v => btn.classList.add(`is-${v}`));
       btn.setAttribute('data-dialog-option', option.id);
       if (option.primary) btn.setAttribute('data-dialog-primary', 'true');
 
@@ -147,6 +151,9 @@ const Dialog = (() => {
 
   function _onKeydown(e) {
     if (!_overlay) return;
+    // The dialog owns the keyboard: nothing behind it (tool shortcuts, viewer keys)
+    // may react while it is up.
+    e.stopPropagation();
     if (e.key === 'Escape' && _dismissId !== null) {
       e.preventDefault();
       _settle(_dismissId);
@@ -177,7 +184,7 @@ const Dialog = (() => {
     _resolve = null;
     _dismissId = null;
     document.removeEventListener('keydown', _onKeydown, true);
-    document.body.classList.remove('modal-open');
+    if (!_wasModalOpen) document.body.classList.remove('modal-open');
     if (overlay) {
       // The removal is on a timer, not on transitionend: in a document that is not
       // compositing the fade never fires an event and the node would linger forever.

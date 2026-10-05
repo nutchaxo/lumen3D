@@ -60,7 +60,8 @@
     "renderingNative": "Rendering native export...",
     "invalidStudioJson": "Invalid Studio JSON.",
     "maxPanels": "Maximum of {count} panels reached.",
-    "noMultiChannel": "Dataset does not have multiple channels to decompose."
+    "noMultiChannel": "Dataset does not have multiple channels to decompose.",
+    "workspaceSaveFailed": "Workspace could not be saved (browser storage is full or blocked). Use \"Export workspace\" instead."
   },
   "download": {
     "title": "Download Center",
@@ -98,10 +99,8 @@
     "measuresCsv": "Measurements CSV",
     "measuresJson": "Measurements JSON",
     "metadataJson": "Metadata JSON",
-    "annotationsJson": "Annotations JSON",
     "noMeasures": "No measurements to export",
-    "noMetadata": "No metadata available",
-    "noAnnotations": "No annotations to export"
+    "noMetadata": "No metadata available"
   },
   "nav": {
     "back": "Back",
@@ -110,7 +109,8 @@
     "compare": "Compare",
     "about": "About",
     "upload": "Upload",
-    "settings": "Settings"
+    "settings": "Settings",
+    "skipToContent": "Skip to content"
   },
   "theme": {
     "dark": "Dark",
@@ -163,7 +163,12 @@
     "fileSize": "Size",
     "failed": "Data Loading Failed",
     "failedDesc": "Dataset not found or failed to load. Please try again.",
-    "tracked": "Tracked"
+    "tracked": "Tracked",
+    "noResultsHint": "Try adjusting your filters or search query.",
+    "view": "View",
+    "badgeLinked": "Linked",
+    "badgeRaw": "Raw",
+    "badgeWeb": "Web"
   },
   "viewer": {
     "controls": "Controls",
@@ -288,7 +293,63 @@
       "noteMeasurements": "Measurements and annotations of this session are deleted. Render quality is left as it is.",
       "confirm": "Reset",
       "done": "Workspace reset"
-    }
+    },
+    "denoiseUnavailableSparse": "Denoise is not available at this quality (sparse brick atlas): choose a lower quality to use it.",
+    "denoiseFailed": "Denoise failed on channel {channel}: the channel is shown unfiltered.",
+    "gpuLost": "GPU context lost: rendering is paused until the browser gives it back.",
+    "gpuRestored": "GPU context restored.",
+    "gpuReloading": "GPU context restored: reloading the volume…",
+    "gpuReloadFailed": "GPU context restored, but the volume could not be reloaded: {message}",
+    "errMetadataMissing": "metadata.json not found and no dimensions in the catalog",
+    "errMetadataHttp": "metadata.json unavailable (HTTP {status})",
+    "errMetadataInvalid": "Invalid metadata.json: {reason}",
+    "errUnknown": "Unknown loading error",
+    "loadFailedKept": "Loading failed: {message}. The volume on screen is kept.",
+    "loadingError": "Loading error",
+    "backToExplorer": "Return to Explorer",
+    "loadingDataset": "Loading dataset…",
+    "loadingTimepoint": "Loading timepoint {n} ({quality})…",
+    "loadingVolume": "Loading volume data ({quality})…",
+    "loadingQuality": "Loading {quality}…",
+    "qualityUnavailable": "Quality {quality} unavailable",
+    "qualityActive": "{quality} active{grid}",
+    "qualityActiveCached": "{quality} active{grid} from cache",
+    "qualityDefault": "512x512 by default, 256x256 when unavailable.",
+    "nearbyCached": "Nearby previews cached. {quality} remains the displayed target.",
+    "brickMissingOne": "1 brick could not be loaded",
+    "brickMissingMany": "{n} bricks could not be loaded",
+    "sliceMissingOne": "1 slice image missing",
+    "sliceMissingMany": "{n} slice images missing",
+    "resDowngradeBytes": "({needed} MB needed, {budget} MB available for the volume.)",
+    "resDowngradeRefused": "(The GPU refused the allocation.)",
+    "channelsBeyondFour": "This dataset has {n} channels: the viewer and the Studio show the first 4.",
+    "calExact": "Exact",
+    "calEstimated": "Estimated",
+    "calMissing": "Metadata missing",
+    "displayOverride": "Display override: {k}x",
+    "physicalSize": "Physical size: {x} x {y} x {z} µm",
+    "voxelGrid": "Voxel grid: active {active}; native {native}",
+    "calibrationLine": "Calibration: {cal}; {override}; slice thickness: {t} µm",
+    "volSourceDisplay": "Display: {label}.",
+    "exportMeasuresCsv": "Measurements CSV",
+    "exportMeasuresJson": "Measurements JSON",
+    "exportMeasuresNone": "No measurement is available to export",
+    "measureNoCalibration": "Physical calibration is missing for this dataset. Distance measurement needs calibrated voxel metadata.",
+    "measureNoPoint": "No calibrated volume point was detected.",
+    "measureHidden": "Hidden",
+    "measureNone": "No saved measurement yet.",
+    "measureHint": "Click two points on the specimen surface.",
+    "measurePointA": "Point A",
+    "measureSecond": "Click a second point to measure distance.",
+    "measureDistance": "Distance",
+    "measureDeltaZ": "Delta Z",
+    "measureNote": "Measured between two picked surface points in calibrated physical coordinates.",
+    "measureLabel": "Measure {n}",
+    "measure3dValues": "3D values",
+    "skipToViewer": "Skip to the viewer",
+    "renderMode": "Render mode",
+    "exposure": "Visibility (exposure)",
+    "customColor": "Custom colour"
   },
   "compare": {
     "title": "Comparison Mode",
@@ -352,7 +413,9 @@
     "panelFailed": "Could not load this dataset.",
     "channelsDropped": "{count} channel(s) left out: at most {max} panels.",
     "unknownDataset": "Dataset \"{id}\" is not in the catalog.",
-    "uncalibrated": "uncalibrated"
+    "uncalibrated": "uncalibrated",
+    "retry": "Retry",
+    "noDatasets": "The catalog has no dataset yet."
   },
   "upload": {
     "title": "Upload and View",
@@ -441,7 +504,7 @@
     "fileSize": "File Size"
   },
   "colorblind": {
-    "title": "Color Blindness & Weakness Filters",
+    "title": "Colour Vision Deficiency Simulation",
     "group": {
       "general": "General",
       "red": "Red Deficiencies (Protan — Red-Blind / Red-Weak)",
@@ -449,7 +512,7 @@
       "blue": "Blue Deficiencies (Tritan — Blue-Blind / Blue-Weak)",
       "mono": "Monochromacy (Total / Partial Absence of Color)"
     },
-    "none": "Off (No Correction)",
+    "none": "Off (no simulation)",
     "protanopia": "Protanopia (Red-Blind)",
     "protanomaly": "Protanomaly (Red-Weak)",
     "deuteranopia": "Deuteranopia (Green-Blind)",
@@ -615,7 +678,26 @@
     "etaMinutes": "~{m} min left",
     "panelChannels": "Panel {n} channels",
     "noChannelMeta": "No channel metadata.",
-    "channelPanelMissing": "Channel panel not loaded."
+    "channelPanelMissing": "Channel panel not loaded.",
+    "exportTooLarge": "This figure is too large to export as one PNG ({w} × {h} px).",
+    "exportPngFailed": "The PNG could not be written (the browser refused a canvas this large).",
+    "importTooLarge": "This file is too large to be a Studio file (over 5 MB).",
+    "textDefault": "Annotation",
+    "textPrompt": "Text label",
+    "bigPassTitle": "Large native figure",
+    "bigPassMessage": "This figure projects {n} slices: its native picture needs every brick of them, about {mb} MB ({bricks} bricks).",
+    "bigPassNote": "Trim the stack with the z-stack browser's handles to load fewer slices.",
+    "bigPassNative": "Load native ({mb} MB)",
+    "bigPassLower": "Load at {x} × {y} ({mb} MB)",
+    "bigPassKeep": "Keep the preview",
+    "nativeDowngraded": "GPU memory: {x} × {y}",
+    "nativeFailed": "Native resolution unavailable; the picture so far is kept.",
+    "nativeCancelling": "Cancelling the native render…",
+    "nativeStatus": "Native slice: {done}/{total} chunks, {pct}%",
+    "nativePreparing": "Preparing the native slice ({n} chunks)…",
+    "nativeReady": "Native slice ready ({n} chunks).",
+    "nativeReadyMissing": "Native slice ready ({n} chunks; {missing} kept at the previous resolution).",
+    "uncalibrated": "uncalibrated"
   },
   "admin": {
     "loginTitle": "{brand} Admin",
@@ -968,12 +1050,17 @@
     "galleryDeleteError": "Could not delete the image.",
     "galleryFull": "Maximum {max} images per dataset.",
     "galleryBadType": "“{name}”: unsupported format (PNG, JPEG, WebP, GIF).",
-    "galleryTooLarge": "“{name}” exceeds 8 MB.",
     "galleryReadFailed": "“{name}” could not be read.",
     "galleryUploadError": "Could not upload “{name}”: {reason}",
     "reasonNoImage": "image block missing",
     "reasonBadImage": "invalid image block",
-    "secOrientation2d": "Orientation"
+    "secOrientation2d": "Orientation",
+    "reauthTitle": "Confirmation required",
+    "confirm": "Confirm",
+    "tabLoadFailed": "Could not load this tab. Reload the page.",
+    "sessionExpiredKept": "Session expired, your unsaved changes are kept. Sign in again to continue.",
+    "updateUnverifiable": "This release cannot be verified (no checksum for its archive) and was not applied.",
+    "galleryTooLargeMax": "“{name}” exceeds {max}."
   },
   "upl": {
     "title": "Import datasets",
@@ -1054,7 +1141,20 @@
     "exitTitle": "A transfer is running",
     "exitBody": "Leaving this page pauses the transfer. Files already uploaded are kept: it resumes where it stopped when you drop the same folder again.",
     "exitStay": "Stay on this page",
-    "exitLeave": "Pause and leave"
+    "exitLeave": "Pause and leave",
+    "errInsecure": "Imports require a secure connection (HTTPS or localhost).",
+    "errPlanTooBig": "The file list of \"{folder}\" exceeds the server's request size limit (post_max_size).",
+    "errPlanNetwork": "The server is not responding. Check the connection and drop the folder again.",
+    "errUnreadable": "{n} item(s) in the folder could not be read and will be missing from the import.",
+    "errSomeFailed": "{n} file(s) could not be sent. Use \"Retry\" or drop the folder again.",
+    "retry": "Retry",
+    "offline": "Connection lost. The transfer resumes by itself when the network returns.",
+    "statusOffline": "Connection lost, resuming automatically",
+    "statusDoneErrors": "Finished with {n} failed file(s)",
+    "rjUnreadable": "item(s) unreadable while reading the folder",
+    "insufficientDisk": "Not enough disk space on the server ({needed} needed, {free} free)",
+    "tooLarge": "\"{name}\" is larger than the server accepts for one file.",
+    "rjDisk": "not enough disk space on the server"
   },
   "appearance": {
     "title": "Appearance",
@@ -1688,7 +1788,12 @@
       "content": "Content",
       "add": "Add a tab",
       "accent": "Active tab colour"
-    }
+    },
+    "autosaveFailed": "Autosave failed, click to retry",
+    "lockedOther": "Open in another tab, click to take over",
+    "switchUnsaved": "The last changes to this page could not be saved. Switch page anyway?",
+    "loadFailed": "Page unreadable, reload before editing",
+    "takeoverConfirm": "This page is open in another tab. Saving here will overwrite its changes. Continue?"
   },
   "wizard": {
     "title": "Guided setup",
@@ -1826,6 +1931,21 @@
     "studioTitle": "Studio",
     "studioSubtitle": "Annotate the photograph",
     "labels": "Labels",
-    "textSize": "Label size"
+    "textSize": "Label size",
+    "nativeError": "The full-resolution image could not be loaded."
+  },
+  "decomposition": {
+    "channel": "Channel: {name}",
+    "channelEdited": "Channel: {name} (Edited)",
+    "addCombination": "Add Combination",
+    "customName": "Custom {n}",
+    "done": "Done",
+    "resetOriginal": "Reset to original",
+    "clickToEdit": "Click to edit this view",
+    "exportTooLarge": "Too many views to export as one image. Remove some and try again."
+  },
+  "annotations": {
+    "enterLabel": "Enter annotation label:",
+    "editLabel": "Edit label:"
   }
 }

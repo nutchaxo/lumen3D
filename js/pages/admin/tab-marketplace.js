@@ -11,7 +11,7 @@
 
 'use strict';
 
-import { API_ADMIN, t, escHtml, apiFetch, apiFetchStatus, toast, el, refreshIcons } from './shared.js';
+import { API_ADMIN, t, escHtml, apiFetch, apiFetchStatus, toast, el, refreshIcons, askPassword } from './shared.js';
 import { runPluginUpdates } from './plugin-update.js';
 
 let _data = { configured: false, signed: false, plugins: [] };
@@ -118,15 +118,23 @@ function render() {
   refreshIcons(root);
 }
 
-async function load() {
-  const data = await apiFetch(`${API_ADMIN}?action=marketplace_catalog`);
-  if (data) _data = data;
-  render();
+let _loadedAt = 0;
+let _loading = null;
+function load() {
+  if (_loading) return _loading;
+  _loading = (async () => {
+    try {
+      const data = await apiFetch(`${API_ADMIN}?action=marketplace_catalog`);
+      if (data) { _data = data; _loadedAt = Date.now(); }
+      render();
+    } finally { _loading = null; }
+  })();
+  return _loading;
 }
 
 async function install(id) {
   if (_busy) return;
-  const pw = prompt(t('mkt.installConfirm', "Installer ce plugin ? Confirmez avec votre mot de passe administrateur :"));
+  const pw = await askPassword(t('mkt.installConfirm', "Installer ce plugin ? Confirmez avec votre mot de passe administrateur :"));
   if (!pw) return;
   _busy = true;
   toast(t('mkt.installing', 'Installation en cours (téléchargement + vérification)…'), 'info');
@@ -163,7 +171,8 @@ export const MarketplaceTab = {
   titleKey: 'admin.navMarketplace',
   titleDefault: 'Catalogue',
   mounted: false,
-  mount() { render(); load(); },
-  activate() { load(); },
+  mount() { render(); },
+  // The catalog is fetched from the publisher: do not repeat it on every visit.
+  activate() { if (!_loadedAt || Date.now() - _loadedAt > 5 * 60 * 1000) load(); },
   relabel() { render(); },
 };

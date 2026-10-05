@@ -25,7 +25,15 @@ PluginRegistry.implement('tracking-inspector', {
   _neighborLines: null,
   _neighborGeometry: null,
   _neighborMaterial: null,
-  _velocityGroup: null,
+  _velocityGroup: null,    // shafts (LineSegments) + heads (InstancedMesh), both updated in place
+  _velocityLines: null,
+  _velocityCones: null,
+  _velocityConeGeometry: null,
+  _velocityLineMaterial: null,
+  _velocityConeMaterial: null,
+  _inspKey: null,          // what the inspector / neighbour list last painted
+  _neighKey: null,
+  _unsubLang: null,
   _pending: null,          // a workspace selection waiting for the tracks
   _pointerStart: null,
 
@@ -47,16 +55,16 @@ PluginRegistry.implement('tracking-inspector', {
       bind: (body) => this._bind(body)
     });
     this._unsubs = [
-      this._T.on('loaded', () => { this._applyPending(); this._renderAll(); }),
+      this._T.on('loaded', () => { this._inspKey = null; this._neighKey = null; this._applyPending(); this._renderAll(); }),
       this._T.on('frame', () => this._renderDynamic()),
-      this._T.on('refresh', () => this._rebuild3d()),
+      this._T.on('refresh', () => { this._renderInspector(); this._rebuild3d(); }),
       this._T.on('style', () => this._rebuild3d()),
       this._T.on('selection', () => this._renderAll()),
       this._T.on('options', () => { this._syncThreshold(); this._renderAll(); }),
       ctx.tools.onChange((tool) => this._onTool(tool))
     ];
     this._bindCanvas();
-    ctx.i18n.onLanguageChange?.(() => this._applyLabels());
+    this._unsubLang = ctx.i18n.onLanguageChange?.(() => this._applyLabels()) || null;
     this._renderAll();
     return this;
   },
@@ -111,10 +119,17 @@ PluginRegistry.implement('tracking-inspector', {
   dispose() {
     this._unsubs.forEach(fn => fn());
     this._unsubs = [];
+    this._unsubLang?.();
+    this._unsubLang = null;
     this._ac?.abort?.();
+    this._ac = null;
+    const canvas = this._ctx?.ui.getCanvas?.();
+    if (canvas) canvas.style.cursor = '';
     this._destroy3d();
     this._section?.remove();
     this._section = null;
+    this._els = null;
+    this._inspKey = null; this._neighKey = null;
   },
 
   // ── Analysis (pure functions of the packed tables) ────────
@@ -252,6 +267,8 @@ PluginRegistry.implement('tracking-inspector', {
       if (!start || this._ctx.tools.current() !== 'inspect') return;
       // A drag orbits the volume; only a still click picks.
       if (Math.hypot(e.clientX - start.x, e.clientY - start.y) >= 6) return;
+      // A hidden layer is not clickable.
+      if ((this._T.getStyle() || {}).visible === false) return;
       const c = this._T.pick(e.clientX, e.clientY);
       if (c >= 0) this._T.select(c);
     }, opts);
@@ -285,32 +302,63 @@ PluginRegistry.implement('tracking-inspector', {
       parent.add(this._neighborGroup);
     }
     if (!this._velocityGroup) {
+      // One LineSegments for every shaft and one InstancedMesh for every head,
+      // rewritten in place each frame (an ArrowHelper per cell would allocate a
+      // group, a line, a mesh and two materials per arrow per frame).
+      const cap = this.MAX_ARROWS;
+      const geo = new THREE.BufferGeometry();
+      const pos = new THREE.BufferAttribute(new Float32Array(cap * 2 * 3), 3);
+      const col = new THREE.BufferAttribute(new Float32Array(cap * 2 * 3), 3);
+      pos.setUsage(THREE.DynamicDrawUsage); col.setUsage(THREE.DynamicDrawUsage);
+      geo.setAttribute('position', pos); geo.setAttribute('color', col);
+      geo.setDrawRange(0, 0);
+      this._velocityLineMaterial = new THREE.LineBasicMaterial({ vertexColors: true, transparent: true, depthTest: false, depthWrite: false });
+      this._velocityLines = new THREE.LineSegments(geo, this._velocityLineMaterial);
+      this._velocityLines.frustumCulled = false;
+      // Tip at the origin, base at y = -1: the head of an arrow, owned by this plugin.
+      this._velocityConeGeometry = new THREE.CylinderGeometry(0, 0.5, 1, 5, 1);
+      this._velocityConeGeometry.translate(0, -0.5, 0);
+      this._velocityConeMaterial = new THREE.MeshBasicMaterial({ transparent: true, depthTest: false, depthWrite: false });
+      this._velocityCones = new THREE.InstancedMesh(this._velocityConeGeometry, this._velocityConeMaterial, cap);
+      this._velocityCones.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+      this._velocityCones.setColorAt(0, new THREE.Color(1, 1, 1));
+      this._velocityCones.count = 0;
+      this._velocityCones.frustumCulled = false;
       this._velocityGroup = new THREE.Group();
       this._velocityGroup.renderOrder = 41;
+      this._velocityGroup.add(this._velocityLines, this._velocityCones);
       parent.add(this._velocityGroup);
     }
     return true;
   },
 
-  _clearGroup(group) {
-    while (group.children.length) {
-      const child = group.children[group.children.length - 1];
-      group.remove(child);
-      child.line?.geometry?.dispose?.(); child.line?.material?.dispose?.();
-      child.cone?.geometry?.dispose?.(); child.cone?.material?.dispose?.();
-    }
-  },
-
   _destroy3d() {
     const parent = this._T?.getVolumeObject();
     if (this._neighborGroup) { parent?.remove(this._neighborGroup); this._neighborGeometry?.dispose?.(); this._neighborMaterial?.dispose?.(); }
-    if (this._velocityGroup) { this._clearGroup(this._velocityGroup); parent?.remove(this._velocityGroup); }
+    if (this._velocityGroup) {
+      parent?.remove(this._velocityGroup);
+      this._velocityLines?.geometry?.dispose?.();
+      this._velocityLineMaterial?.dispose?.();
+      this._velocityConeGeometry?.dispose?.();
+      this._velocityConeMaterial?.dispose?.();
+      this._velocityCones?.dispose?.();
+    }
     this._neighborGroup = null; this._neighborLines = null; this._neighborGeometry = null; this._neighborMaterial = null;
-    this._velocityGroup = null;
+    this._velocityGroup = null; this._velocityLines = null; this._velocityCones = null;
+    this._velocityConeGeometry = null; this._velocityLineMaterial = null; this._velocityConeMaterial = null;
   },
 
   _rebuild3d() {
-    if (!this._T.getData() || !this._ensure3d()) return;
+    if (!this._T.getData()) return;
+    if (!this._showNeighbors && !this._showVelocity) {
+      // Nothing to draw: hide what exists, create nothing.
+      const shown = this._neighborGroup?.visible || this._velocityGroup?.visible;
+      if (this._neighborGroup) this._neighborGroup.visible = false;
+      if (this._velocityGroup) this._velocityGroup.visible = false;
+      if (shown) this._T.triggerRender();
+      return;
+    }
+    if (!this._ensure3d()) return;
     this._rebuildNeighbors();
     this._rebuildVelocity();
     this._T.triggerRender();
@@ -349,17 +397,28 @@ PluginRegistry.implement('tracking-inspector', {
   },
 
   _rebuildVelocity() {
-    this._clearGroup(this._velocityGroup);
     const style = this._T.getStyle() || {};
     if (!this._showVelocity || style.visible === false) { this._velocityGroup.visible = false; return; }
     const data = this._T.getData();
     const space = this._T.getAcquisitionSpace();
-    if (!space) return;
+    if (!space) { this._velocityGroup.visible = false; return; }
     const S = space.size;
     const frame = this._T.getFrame();
     const rows = this.velocityRows(frame, this.MAX_ARROWS, data);
-    const maxSpeed = Math.max(1e-6, ...rows.map(r => r.speed));
-    const origin = new THREE.Vector3(), dir = new THREE.Vector3();
+    let maxSpeed = 1e-6;
+    for (const r of rows) if (r.speed > maxSpeed) maxSpeed = r.speed;
+    const geo = this._velocityLines.geometry;
+    const pos = geo.attributes.position.array, col = geo.attributes.color.array;
+    const cones = this._velocityCones;
+    const origin = this._o || (this._o = new THREE.Vector3());
+    const dir = this._d || (this._d = new THREE.Vector3());
+    const up = this._up || (this._up = new THREE.Vector3(0, 1, 0));
+    const quat = this._q || (this._q = new THREE.Quaternion());
+    const scale = this._s || (this._s = new THREE.Vector3());
+    const place = this._m || (this._m = new THREE.Matrix4());
+    const tip = this._tip || (this._tip = new THREE.Vector3());
+    const color = this._c || (this._c = new THREE.Color());
+    let n = 0;
     for (const row of rows) {
       const flags = data.flags[row.index];
       if (style.showMitosis === false && (flags & 1)) continue;
@@ -372,13 +431,30 @@ PluginRegistry.implement('tracking-inspector', {
       dir.set(row.dx / norm * lengthUm / S.x, row.dy / norm * lengthUm / S.y, row.dz / norm * lengthUm / S.z);
       const length = dir.length();
       if (length <= 0) continue;
-      const color = new THREE.Color().setHSL(0.58 - Math.min(1, row.speed / maxSpeed) * 0.58, 0.95, 0.56);
-      const arrow = new THREE.ArrowHelper(dir.clone().normalize(), origin.clone(), length, color, length * 0.28, length * 0.16);
-      arrow.line.material.depthTest = false; arrow.cone.material.depthTest = false;
-      arrow.line.material.transparent = true; arrow.cone.material.transparent = true;
-      this._velocityGroup.add(arrow);
+      dir.divideScalar(length);
+      color.setHSL(0.58 - Math.min(1, row.speed / maxSpeed) * 0.58, 0.95, 0.56);
+      // Shaft: origin -> start of the head. Head: a cone of height 0.28 L and base
+      // diameter 0.16 L whose tip sits at origin + L * dir.
+      const headLength = length * 0.28, headWidth = length * 0.16;
+      tip.copy(dir).multiplyScalar(length - headLength).add(origin);
+      const o = n * 6;
+      pos[o] = origin.x; pos[o + 1] = origin.y; pos[o + 2] = origin.z;
+      pos[o + 3] = tip.x; pos[o + 4] = tip.y; pos[o + 5] = tip.z;
+      col[o] = col[o + 3] = color.r; col[o + 1] = col[o + 4] = color.g; col[o + 2] = col[o + 5] = color.b;
+      quat.setFromUnitVectors(up, dir);
+      tip.copy(dir).multiplyScalar(length).add(origin);
+      place.compose(tip, quat, scale.set(headWidth, headLength, headWidth));
+      cones.setMatrixAt(n, place);
+      cones.setColorAt(n, color);
+      n++;
     }
-    this._velocityGroup.visible = this._velocityGroup.children.length > 0;
+    geo.setDrawRange(0, n * 2);
+    geo.attributes.position.needsUpdate = true;
+    geo.attributes.color.needsUpdate = true;
+    cones.count = n;
+    cones.instanceMatrix.needsUpdate = true;
+    if (cones.instanceColor) cones.instanceColor.needsUpdate = true;
+    this._velocityGroup.visible = n > 0;
   },
 
   // ── Private: rendering ────────────────────────────────────
@@ -396,6 +472,13 @@ PluginRegistry.implement('tracking-inspector', {
     this._rebuild3d();
   },
 
+  /** Cheap identity of a neighbour list, to repaint only when it moved. */
+  _rowsKey(rows) {
+    let k = '';
+    for (const r of rows) k += `${r.index}:${r.distance.toFixed(1)};`;
+    return k;
+  },
+
   _speedText(m) {
     const meta = this._ctx.dataset.getMeta();
     const perFrame = `${this._fmt(m.meanSpeed)} ${this._t('umPerFrame')}`;
@@ -409,9 +492,14 @@ PluginRegistry.implement('tracking-inspector', {
     if (!node) return;
     const c = this._T.getSelected();
     const data = this._T.getData();
-    if (c < 0 || !data) { node.innerHTML = this._esc(this._t('inspectorDesc')); return; }
-    const m = this.cellMetrics(c, data);
+    if (c < 0 || !data) { this._inspKey = null; node.innerHTML = this._esc(this._t('inspectorDesc')); return; }
     const neighbors = this.neighborRows(c, this._T.getFrame(), 4, data);
+    // The text depends on the cell, the frame of reference, the radius and the
+    // nearest cells: during playback it is repainted only when one of them moves.
+    const key = `${c}|${this._T.isStabilized()}|${this._T.getOptions().neighborThresholdUm}|${this._rowsKey(neighbors)}`;
+    if (key === this._inspKey && node.firstChild) return;
+    this._inspKey = key;
+    const m = this.cellMetrics(c, data);
     const esc = (s) => this._esc(s);
     node.innerHTML = `
       <div class="metric-grid">
@@ -458,8 +546,11 @@ PluginRegistry.implement('tracking-inspector', {
     const node = this._els?.neighbors;
     if (!node) return;
     const c = this._T.getSelected();
-    if (c < 0 || !this._T.getData()) { node.innerHTML = this._esc(this._t('neighborDesc')); return; }
+    if (c < 0 || !this._T.getData()) { this._neighKey = null; node.innerHTML = this._esc(this._t('neighborDesc')); return; }
     const rows = this.neighborRows(c, this._T.getFrame(), 10);
+    const key = `${c}|${this._T.getOptions().neighborThresholdUm}|${this._rowsKey(rows)}`;
+    if (key === this._neighKey && node.firstChild) return;
+    this._neighKey = key;
     if (!rows.length) { node.innerHTML = this._esc(this._t('noNeighbors')); return; }
     node.innerHTML = rows.map((r, i) => `
       <div class="neighbor-row">
@@ -504,7 +595,15 @@ PluginRegistry.implement('tracking-inspector', {
   },
 
   _csv(rows) {
-    return rows.map(row => row.map(v => `"${String(v ?? '').replace(/"/g, '""')}"`).join(',')).join('\n');
+    // A text cell that opens with = + - @ (or a control character) would be run as
+    // a formula by a spreadsheet: a leading apostrophe makes it plain text.
+    // Numbers are written as they are.
+    const cell = (v) => {
+      let t = String(v ?? '');
+      if (typeof v === 'string' && /^[=+\-@\t\r]/.test(t)) t = `'${t}`;
+      return `"${t.replace(/"/g, '""')}"`;
+    };
+    return rows.map(row => row.map(cell).join(',')).join('\n');
   },
 
   _safeName() {
@@ -600,6 +699,7 @@ PluginRegistry.implement('tracking-inspector', {
     this._section.setTitle(this._t('title'));
     this._section.body.querySelectorAll('[data-ti]').forEach(el => { el.textContent = this._t(el.getAttribute('data-ti')); });
     this._section.body.querySelectorAll('[data-ti-placeholder]').forEach(el => { el.placeholder = this._t(el.getAttribute('data-ti-placeholder')); });
+    this._inspKey = null; this._neighKey = null;
     this._renderAll();
   }
 });

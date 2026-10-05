@@ -1,5 +1,6 @@
 {
   "title": "Cuadrícula calibrada (ninguna / amplia / fina)",
   "aria": "Cuadrícula calibrada",
-  "step": "cuadrícula"
+  "step": "cuadrícula",
+  "uncalibrated": "Cuadrícula no disponible: esta fotografía no tiene tamaño de píxel"
 }

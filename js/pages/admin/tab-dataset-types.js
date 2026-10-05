@@ -26,25 +26,18 @@ import {
   API_SITE, API_DATASETS, I18n, Utils, t, escHtml,
   apiFetch, apiFetchStatus, toast, el, refreshIcons, deepClone,
 } from './shared.js';
-import { setUnsaved } from './bus.js';
+import { setUnsaved, registerDirtyGuard, bindTabSave } from './bus.js';
 
 let _types = {};        // the datasetTypes block being edited
 let _counts = null;     // type id → number of published datasets
 let _defaults = {};     // locale code → lang dictionary (for per-locale placeholders)
 let _dirty = false;
-let _raisedUnsaved = false;
+let _loading = null;
+let _loaded = false;   // the form holds the server's names (an empty form after a failed read would erase them)
 
-/**
- * bus.setUnsaved drives ONE shared indicator, and the Datasets tab owns the
- * cross-tab guard (bus.setDirtyGuard) plus its own Ctrl+S handler. This tab must
- * therefore never install a dirty guard — that would REPLACE the Datasets tab's,
- * disabling its discard confirmation — and must only lower the shared indicator
- * it raised itself, or loading this tab would clear the Datasets tab's dot.
- */
 function _mark(on) {
   _dirty = !!on;
-  if (_dirty) { setUnsaved(true); _raisedUnsaved = true; }
-  else if (_raisedUnsaved) { setUnsaved(false); _raisedUnsaved = false; }
+  setUnsaved(_dirty, 'dataset-types');
   const s = el('dtypes-save');
   if (s) s.disabled = !_dirty;
 }
@@ -204,6 +197,7 @@ function _collect() {
 }
 
 async function save() {
+  if (!_loaded) { toast(t('dtypes.saveError', "Échec de l'enregistrement."), 'error'); load(); return; }
   _collect();
   const btn = el('dtypes-save');
   if (btn) btn.disabled = true;
@@ -216,7 +210,7 @@ async function save() {
   }
   fresh.datasetTypes = _types;
 
-  const r = await apiFetchStatus(`${API_SITE}?action=save&doc=instance`, {
+  const r = await apiFetchStatus(`${API_SITE}?action=save&doc=instance&merge=datasetTypes`, {
     method: 'POST', body: JSON.stringify(fresh),
   });
   if (!r.ok) {
@@ -244,15 +238,24 @@ function resetToDefaults() {
 }
 
 // ── Load ────────────────────────────────────────────────────────
-async function load() {
-  await _loadDefaults();
-  const data = await apiFetch(`${API_SITE}?action=get&doc=instance`);
-  const block = (data && typeof data === 'object' && data.datasetTypes && typeof data.datasetTypes === 'object')
-    ? data.datasetTypes : {};
-  _types = deepClone(block);
-  _mark(false);
-  render();
-  loadCounts();
+function load() {
+  if (_loading) return _loading;
+  _loading = (async () => {
+    try {
+      await _loadDefaults();
+      const data = await apiFetch(`${API_SITE}?action=get&doc=instance`);
+      if (_dirty) return;
+      if (!data || typeof data !== 'object' || Array.isArray(data)) return;
+      _loaded = true;
+      const block = (data && typeof data === 'object' && data.datasetTypes && typeof data.datasetTypes === 'object')
+        ? data.datasetTypes : {};
+      _types = deepClone(block);
+      _mark(false);
+      render();
+      loadCounts();
+    } finally { _loading = null; }
+  })();
+  return _loading;
 }
 
 async function loadCounts() {
@@ -273,7 +276,8 @@ export const DatasetTypesTab = {
   titleKey: 'dtypes.nav',
   titleDefault: 'Types de données',
   mounted: false,
-  mount() { render(); load(); },
+  mount() { bindTabSave('dataset-types', () => { if (_dirty) save(); return true; });
+    registerDirtyGuard('dataset-types', () => _dirty, () => _mark(false)); render(); },
   activate() { if (_dirty) paintCounts(); else load(); },
   // A language switch changes every placeholder and the live label in each card
   // head; keep whatever is being typed rather than reloading over it.

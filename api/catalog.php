@@ -2,53 +2,59 @@
 /**
  * IRIBHM Microscopy Platform — public catalog endpoint
  * ====================================================
- * Builds the dataset catalog by scanning DATA_WEB/<type>/<name>/metadata.json on every
- * request, and returns it. Nothing is cached and no file is consulted.
+ * Serves the dataset catalog derived from DATA_WEB/<type>/<name>/metadata.json —
+ * the same document dev_server.py builds (_build_catalog): every metadata field of
+ * each configured or thumbnailed, non-hidden dataset, newest first. See
+ * rebuild_catalog() in _admin_lib.php.
  *
  * Why there is no catalog.json behind this
  * ----------------------------------------
- * The catalog holds NO information of its own: every field is either copied from a
- * dataset's metadata.json (name, channels, stage, dimensions, voxel size…), derived
- * from it (physicalSizeUm = dimensions x voxel_size), or deduced from the directory
- * (thumbnail if the file exists, volumeSources by probing bricks/manifest.json). It is
- * a pure projection, so a persisted copy can only ever be right by accident.
+ * The catalog holds NO information of its own: every field is copied from a
+ * dataset's metadata.json or deduced from the directory (thumbnail if the file
+ * exists, identity from the folder). It used to be a static file that only the admin
+ * panel rewrote, so a dataset uploaded by SFTP stayed invisible until someone clicked
+ * "Régénérer catalog.json". It is built from the tree instead.
  *
- * It used to be a static file that only rebuild_catalog() rewrote, and that only ran
- * from the admin panel — so a dataset uploaded by SFTP, which is the documented way to
- * add one, stayed invisible until someone clicked "Régénérer catalog.json". Serving it
- * dynamically removes the failure mode instead of papering over it with cache
- * invalidation, which mtime cannot do reliably anyway: mtimes have one-second
- * resolution, so two changes inside the same second are indistinguishable.
+ * Cost: the built document is cached in api/.catalog-cache.json, keyed by a
+ * signature made of stat calls only (type directories, dataset folders, metadata.json
+ * mtime + size), so a page view decodes no metadata.json unless one changed; every
+ * write through the admin API also drops the cache. A response carries an ETag, and a
+ * revalidation with a matching If-None-Match costs a 304.
  *
- * Cost: one scandir per type plus one metadata.json read per dataset, per request.
- * That is O(datasets) on a page load — fine at this scale (tens of datasets, a few
- * hundred KB), and the reason the Python server keeps an mtime cache instead
- * (dev_server.py, PERF-035). If this instance ever grows to hundreds of datasets with
- * large per-timepoint metadata, put a cache back HERE rather than in a file the
- * operator can desynchronise.
+ * A public GET never WRITES a dataset: the identity repair of metadata.json runs in
+ * the admin paths (datasets.php, upload.php). The one migration step kept here is the
+ * rename of the legacy type directories (fixed → 3d, wholemount → 2d), because the
+ * scan reads the canonical names and a host that had not migrated yet would answer
+ * with an empty catalog; it is guarded by two is_dir() calls.
  *
  * Wired in .htaccess and router.php:
  *   RewriteRule ^DATA_WEB/catalog\.json$ api/catalog.php [L,QSA]
- * Without mod_rewrite Apache serves the static DATA_WEB/catalog.json instead, which is
- * whatever the admin panel last generated.
  *
  * Public on purpose: the catalog is public data. No session, no auth, read-only.
  */
 
 declare(strict_types=1);
+require_once __DIR__ . '/_admin_lib.php';
 
-define('LUMEN_DATASETS_LIB', 1);
-require_once __DIR__ . '/datasets.php';   // library mode: rebuild_catalog() only
+if (lumen_migration_dirs_pending()) lumen_migrate_dataset_types();
 
-// One-shot rename of the legacy type directories (fixed→3d, wholemount→2d) on a host
-// that predates the unified vocabulary. Stated here as well as inside datasets.php
-// because this endpoint is the one a visitor hits first: the catalog scans
-// DATA_WEB/<type>/ by the canonical names, and a host that had not migrated yet would
-// answer with an empty catalog. A no-op (a few is_dir calls) once migrated.
-lumen_migrate_dataset_types();
+$body = lumen_catalog_json();
+$etag = '"' . substr(hash('sha256', $body), 0, 32) . '"';
 
 header('Content-Type: application/json; charset=utf-8');
 header('X-Content-Type-Options: nosniff');
-header('Cache-Control: no-store');
+// Revalidated on every use (the catalog changes whenever a dataset does), but a
+// matching ETag answers with an empty 304 instead of the whole document.
+header('Cache-Control: no-cache');
+header('ETag: ' . $etag);
 
-echo json_encode(rebuild_catalog(), JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE);
+// mod_deflate (DeflateAlterETag, on by default) sends the compressed answer as
+// "<etag>-gzip", which the browser then quotes back: strip that suffix and a weak
+// prefix, or a gzipped host would never answer 304.
+$inm = (string)($_SERVER['HTTP_IF_NONE_MATCH'] ?? '');
+$seen = array_map(fn($t) => (string)preg_replace(['/^W\//', '/-gzip"$/'], ['', '"'], trim($t)), explode(',', $inm));
+if ($inm !== '' && in_array($etag, $seen, true)) {
+    http_response_code(304);
+    exit;
+}
+echo $body;

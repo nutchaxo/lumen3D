@@ -33,7 +33,7 @@
 'use strict';
 
 import { API_SITE, I18n, Utils, t, escHtml, apiFetch, apiFetchStatus, toast, el, refreshIcons } from './shared.js';
-import { setUnsaved } from './bus.js';
+import { setUnsaved, registerDirtyGuard } from './bus.js';
 import { renderFields, renderGroups } from './pages-controls.js';
 import { renderTranslatePanel } from './pages-translate.js';
 import { renderVariablesPanel } from './pages-variables.js';
@@ -57,18 +57,24 @@ let _bound = false;                 // window 'message' listener installed once
 let _editorOnly = false;            // dedicated editor tab (admpan.html?editor=<slug>)
 let _seeded = false;                // built-in page: showing the starter template (not yet published)
 let _beforeUnloadBound = false;     // editor-tab unsaved-work guard installed once
+let _switching = false;             // a page is being loaded: edits are ignored, autosave is off
+let _loadToken = 0;                 // bumped per selectPage: lets an in-flight save/load know it is stale
+let _loadFailed = false;            // the current page could not be read: saving would blank it
+let _autosaveFailed = false;        // the last background save failed (chip turns red, retries run)
+let _lockedOut = false;             // another editor tab holds this page: this tab does not autosave
+let _rev = null;                    // server revision of the page this tab last read or wrote (409 when it moved on)
 const _langDicts = {};              // locale code → loaded i18n dict (for faithful templates)
 
 const _id = (p) => p + Math.random().toString(36).slice(2, 9);
 let _editGen = 0;                   // bumped on every edit — lets an in-flight autosave know if newer edits arrived
-function _mark(on) { if (on) _editGen++; _dirty = on; setUnsaved(on); ['pages-save', 'pe-save'].forEach((id) => { const s = el(id); if (s) s.disabled = !on; }); _updateSaveChip(); }
+function _mark(on) { if (on) _editGen++; _dirty = on; setUnsaved(on, 'pages'); ['pages-save', 'pe-save'].forEach((id) => { const s = el(id); if (s) s.disabled = !on; }); _updateSaveChip(); }
 function _locales() { try { if (I18n && I18n.getAvailableLanguages) { const l = I18n.getAvailableLanguages(); if (l.length) return l; } } catch (_) {} return [{ code: 'en', native: 'EN' }, { code: 'fr', native: 'FR' }, { code: 'es', native: 'ES' }]; }
 function _lv(v) { if (v == null) return ''; if (typeof v === 'string') return v; if (typeof v === 'object') return v[_editLoc] || ''; return String(v); }
 
 // A frame mutation just happened → mark dirty, snapshot for undo, refresh the
 // sidebar (selection may have moved), push the model into the iframe, and
 // schedule a debounced draft autosave.
-function _afterMutate() { _mark(true); _histPush(); renderSidebar(); _syncFrame(); _requestAutosave(); }
+function _afterMutate() { if (_switching) return; _mark(true); _histPush(); renderSidebar(); _syncFrame(); _requestAutosave(); }
 
 // ── Undo / redo history ─────────────────────────────────────────
 // Bounded snapshot stack of the working model (JSON strings so structuredClone
@@ -114,7 +120,11 @@ function _updateHistButtons() {
 function _fmtTime(d) { try { return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }); } catch (_) { return ''; } }
 function _updateSaveChip() {
   const c = el('pe-status'); if (!c) return;
-  if (_dirty) { c.textContent = '● ' + t('pages.unsaved', 'Non enregistré'); c.style.color = 'var(--color-warning,#e6a817)'; }
+  c.style.cursor = '';
+  if (_loadFailed) { c.textContent = '⚠ ' + t('pages.loadFailed', 'Page illisible — rechargez avant de modifier'); c.style.color = 'var(--color-error,#e5484d)'; }
+  else if (_lockedOut) { c.textContent = '🔒 ' + t('pages.lockedOther', 'Ouverte dans un autre onglet — cliquez pour reprendre'); c.style.color = 'var(--color-warning,#e6a817)'; c.style.cursor = 'pointer'; }
+  else if (_autosaveFailed) { c.textContent = '⚠ ' + t('pages.autosaveFailed', 'Échec de la sauvegarde auto — cliquez pour réessayer'); c.style.color = 'var(--color-error,#e5484d)'; c.style.cursor = 'pointer'; }
+  else if (_dirty) { c.textContent = '● ' + t('pages.unsaved', 'Non enregistré'); c.style.color = 'var(--color-warning,#e6a817)'; }
   else if (_lastSavedAt) { c.textContent = '✓ ' + t('pages.savedAt', 'Enregistré') + ' ' + _fmtTime(_lastSavedAt); c.style.color = 'var(--text-muted,#8a8a9a)'; }
   else { c.textContent = ''; }
 }
@@ -123,12 +133,16 @@ function _updateSaveChip() {
 let _keysBound = false;
 function _onKey(e) {
   if (_mode !== 'editor') return;
+  // In the in-shell fallback the mode stays 'editor' after the operator moves to
+  // another tab: the shortcuts must not follow them there.
+  if (!_editorOnly && !document.querySelector('.adm-tabpanel.active[data-tab="pages"]')) return;
   const mod = e.ctrlKey || e.metaKey;
   const tag = (e.target && e.target.tagName) || '';
   const typing = /^(INPUT|TEXTAREA|SELECT)$/.test(tag) || (e.target && e.target.isContentEditable);
   const k = (e.key || '').toLowerCase();
-  if (mod && !e.shiftKey && k === 'z') { e.preventDefault(); undo(); return; }
-  if (mod && ((e.shiftKey && k === 'z') || k === 'y')) { e.preventDefault(); redo(); return; }
+  // In a text field Ctrl+Z belongs to the field (its own undo stack), not to the page model.
+  if (mod && !e.shiftKey && k === 'z') { if (typing) return; e.preventDefault(); undo(); return; }
+  if (mod && ((e.shiftKey && k === 'z') || k === 'y')) { if (typing) return; e.preventDefault(); redo(); return; }
   if (mod && k === 's') { e.preventDefault(); saveDraft(); return; }
   if (mod && k === 'd') { if (_sel && _sel.wi != null) { e.preventDefault(); duplicateWidget(_sel.si, _sel.ci, _sel.wi); } return; }
   if (mod && k === 'c' && !typing) { if (_sel && _sel.wi != null) { e.preventDefault(); _copyWidget(); } return; }
@@ -234,13 +248,15 @@ function _migrate(src) {
   }
   return [];
 }
+const _isObj = (v) => v != null && typeof v === 'object' && !Array.isArray(v);
 function _sanitizeSections(list) {
-  return (Array.isArray(list) ? list : []).map((s) => ({
+  // A hand-edited or truncated file can hold nulls / scalars anywhere in the tree.
+  return (Array.isArray(list) ? list : []).filter(_isObj).map((s) => ({
     id: s.id || _id('s'),
     props: Object.assign({ bg: '', padY: 48, fullWidth: false, maxWidth: 1080, gap: 24, vAlign: 'stretch' }, s.props || {}),
-    columns: (Array.isArray(s.columns) ? s.columns : [_newColumn(12)]).map((c) => ({
+    columns: (Array.isArray(s.columns) ? s.columns.filter(_isObj) : [_newColumn(12)]).map((c) => ({
       id: c.id || _id('c'), width: Math.min(12, Math.max(1, +c.width || 12)), props: c.props || {},
-      widgets: (Array.isArray(c.widgets) ? c.widgets : []).map((w) => {
+      widgets: (Array.isArray(c.widgets) ? c.widgets.filter(_isObj) : []).map((w) => {
         const nw = Object.assign({ id: w.id || _id('w') }, w);
         // Legacy buttons kept the variant in props.style (a string); the generic
         // style panel now owns props.style (an object), so move it to props.variant
@@ -917,10 +933,9 @@ async function _saveGradPresets(list) {
   if (!_instance || typeof _instance !== 'object' || Array.isArray(_instance)) _instance = {};
   _instance.editor = (_instance.editor && typeof _instance.editor === 'object') ? _instance.editor : {};
   _instance.editor.gradientPresets = (Array.isArray(list) ? list : []).slice(0, 40);
-  await _reconcileInstance();   // don't clobber a concurrent Identity save
   try {
-    const r = await apiFetchStatus(`${API_SITE}?action=save&doc=instance`, { method: 'POST', body: JSON.stringify(_instance) });
-    if (!r.ok) toast(t('pages.saveError', "Échec de l'enregistrement."), 'error');
+    const ok = await _saveInstancePaths(['editor.gradientPresets']);
+    if (!ok) toast(t('pages.saveError', "Échec de l'enregistrement."), 'error');
     else toast(t('pages.pc.presetSaved', 'Préréglages de dégradés mis à jour.'), 'success');
   } catch (_) {}
 }
@@ -977,7 +992,7 @@ function renderLauncher() {
         <iframe id="pages-view" title="preview" src="${escHtml(_viewUrl())}" style="width:100%;height:520px;border:none;display:block;background:var(--bg-base,#0d0d1a);pointer-events:none"></iframe>
       </div>
     </div>`;
-  el('pages-select').addEventListener('change', (e) => selectPage(e.target.value));
+  el('pages-select').addEventListener('change', (e) => switchPage(e.target.value));
   el('pages-new').addEventListener('click', newPage);
   el('pages-delete').addEventListener('click', deletePage);
   el('pages-loc').addEventListener('change', (e) => { _editLoc = e.target.value; });
@@ -1019,7 +1034,8 @@ function renderEditor() {
       </div>
     </div>`;
   el('pe-exit').addEventListener('click', exitEditor);
-  el('pe-select').addEventListener('change', (e) => selectPage(e.target.value));
+  el('pe-select').addEventListener('change', (e) => switchPage(e.target.value));
+  el('pe-status').addEventListener('click', _onChipClick);
   el('pe-loc').addEventListener('change', (e) => { _editLoc = e.target.value; renderSidebar(); _syncFrame(); });
   el('pe-revert').addEventListener('click', revert);
   el('pe-undo').addEventListener('click', undo);
@@ -1046,8 +1062,8 @@ function enterEditor() {
 }
 function exitEditor() {
   if (_editorOnly) {
-    if (_dirty && !confirm(t('pages.exitUnsaved', 'Modifications non enregistrées. Quitter sans publier ?'))) return;
-    _dirty = false;                                     // let beforeunload proceed silently
+    if ((_dirty || _autosaveFailed) && !confirm(t('pages.exitUnsaved', 'Modifications non enregistrées. Quitter sans publier ?'))) return;
+    _dirty = false; _autosaveFailed = false;                                     // let beforeunload proceed silently
     window.close();                                     // script-opened tab → closes
     setTimeout(() => { location.href = 'admpan.html#pages'; }, 250);  // direct-URL tab → back to admin
     return;
@@ -1089,33 +1105,46 @@ function _frameLabels() {
 function _syncFrame() {
   const f = _frameEl();
   if (!f || !f.contentWindow) return;
-  try { f.contentWindow.postMessage({ type: 'LUMEN_EDIT_DOC', sections: _sections, background: _background, sel: _sel, editLoc: _editLoc, messages: _frameLabels(), hasTemplate: _hasTemplateFor(_slug) }, '*'); } catch (_) {}
+  try { f.contentWindow.postMessage({ type: 'LUMEN_EDIT_DOC', sections: _sections, background: _background, sel: _sel, editLoc: _editLoc, messages: _frameLabels(), hasTemplate: _hasTemplateFor(_slug) }, location.origin); } catch (_) {}
 }
-function _postFrame(msg) { const f = _frameEl(); if (f && f.contentWindow) try { f.contentWindow.postMessage(msg, '*'); } catch (_) {} }
+function _postFrame(msg) { const f = _frameEl(); if (f && f.contentWindow) try { f.contentWindow.postMessage(msg, location.origin); } catch (_) {} }
+
+// Indices arriving from the frame are untrusted input: integers or nothing.
+const _ix = (v) => (Number.isInteger(v) && v >= 0 && v < 100000 ? v : null);
+function _cleanSel(s) {
+  if (!_isObj(s)) return null;
+  const si = _ix(s.si);
+  if (si === null) return null;
+  return { si, ci: s.ci == null ? null : _ix(s.ci), wi: s.wi == null ? null : _ix(s.wi) };
+}
 
 function _onMessage(e) {
   const f = _frameEl();
-  if (!f || e.source !== f.contentWindow) return;
+  if (!f || e.source !== f.contentWindow || e.origin !== location.origin) return;
+  if (_switching) return;
   const m = e.data;
   if (!m || typeof m !== 'object') return;
   switch (m.type) {
     case 'LUMEN_EDIT_READY': _syncFrame(); break;
-    case 'LUMEN_EDIT_SELECT': _sel = m.sel; _side = 'settings'; renderSidebar(); _syncFrame(); break;
+    case 'LUMEN_EDIT_SELECT': _sel = m.sel == null ? null : _cleanSel(m.sel); _side = 'settings'; renderSidebar(); _syncFrame(); break;
     case 'LUMEN_EDIT_DROP': _applyDrop(m.target, m.payload); break;
-    case 'LUMEN_EDIT_RESIZE': _applyResize(m.si, m.ci, m.leftWidth); break;
-    case 'LUMEN_EDIT_ACTION': _applyAction(m.action, m.sel, m.arg); break;
+    case 'LUMEN_EDIT_RESIZE': if (_ix(m.si) !== null && _ix(m.ci) !== null && Number.isFinite(m.leftWidth)) _applyResize(m.si, m.ci, m.leftWidth); break;
+    case 'LUMEN_EDIT_ACTION': if (typeof m.action === 'string') _applyAction(m.action, _cleanSel(m.sel) || {}, m.arg); break;
   }
 }
 
 function _applyDrop(target, payload) {
+  if (!_isObj(target) || !_isObj(payload) || _ix(target.si) === null || _ix(target.ci) === null) return;
   const col = _sections[target.si]?.columns[target.ci];
   if (!col) return;
+  if (!Number.isInteger(target.index) || target.index < 0) return;
   if (payload.kind === 'new') {
     const w = _newWidget(payload.wtype);
     col.widgets.splice(target.index, 0, w);
     _sel = { si: target.si, ci: target.ci, wi: target.index };
   } else if (payload.kind === 'move') {
     const from = payload.from;
+    if (!_isObj(from) || _ix(from.si) === null || _ix(from.ci) === null || _ix(from.wi) === null) return;
     const fc = _sections[from.si]?.columns[from.ci];
     if (!fc) return;
     const [w] = fc.widgets.splice(from.wi, 1);
@@ -1141,6 +1170,12 @@ function _applyResize(si, ci, leftWidth) {
 }
 
 function _applyAction(action, sel, arg) {
+  if (action !== 'addSection' && action !== 'loadDefault') {
+    if (!Number.isInteger(sel.si)) return;
+    if (/Column|Widget/.test(action) && !Number.isInteger(sel.ci)) return;
+    if (/Widget/.test(action) && !Number.isInteger(sel.wi)) return;
+    if (/^move/.test(action)) arg = Number(arg) < 0 ? -1 : 1;
+  }
   switch (action) {
     case 'addSection': addSection(); break;
     case 'loadDefault': loadDefaultTemplate(); break;
@@ -1200,22 +1235,121 @@ function renderSidebar() {
 // Silent debounced draft autosave (used by the Traduire panel: translations
 // are many small edits — saving each one immediately would spam the API).
 let _autosaveTimer = null;
+let _retryTimer = null;
+let _retryCount = 0;
+let _saveChain = Promise.resolve();
+const _RETRY_MS = [2000, 5000, 15000, 30000];
 function _cancelAutosave() { clearTimeout(_autosaveTimer); _autosaveTimer = null; }
-function _requestAutosave() {
-  clearTimeout(_autosaveTimer);
-  _autosaveTimer = setTimeout(async () => {
-    if (!_doc || typeof _doc !== 'object' || Array.isArray(_doc)) _doc = _emptyDoc();
-    _doc.draft = _draftSource();
-    _doc.published = _doc.published || { sections: [] };
-    // Capture the edit generation at serialize time: edits made DURING the
-    // network round-trip aren't in this payload, so only clear the dirty flag
-    // if nothing changed since (else the beforeunload guard would disarm with
-    // unsaved edits still pending).
-    const gen = _editGen;
-    const r = await apiFetchStatus(`${API_SITE}?action=save&doc=pages/${encodeURIComponent(_slug)}`, { method: 'POST', body: JSON.stringify(_doc) });
-    if (r.ok && _editGen === gen) { _lastSavedAt = new Date(); _mark(false); }
-  }, 1200);
+function _cancelRetry() { clearTimeout(_retryTimer); _retryTimer = null; }
+
+// Page saves run one at a time: a publish can never overtake an autosave still on
+// the wire (the later one would otherwise land last and win with stale content).
+function _enqueueSave(fn) {
+  const run = _saveChain.then(fn, fn);
+  _saveChain = run.catch(() => {});
+  return run;
 }
+
+/**
+ * Write the working draft of the CURRENT page (save_draft: the server stores the
+ * draft — and the title — alone, never the published block, so a publish made
+ * elsewhere can never be reverted by a background save). The revision this tab
+ * last saw travels along: when the page moved on in another editor the server
+ * answers 409 and nothing is written.
+ * Resolves { ok } | { ok:false, stale:true } (the page changed meanwhile) |
+ * { ok:false, conflict:true } (409) | { ok:false, status }.
+ */
+async function _persistDraft(draftOverride) {
+  const slug = _slug, token = _loadToken;
+  if (!slug) return { ok: false, stale: true };
+  if (_loadFailed) return { ok: false, status: 0, blocked: true };
+  const draft = JSON.parse(JSON.stringify(draftOverride || _draftSource()));
+  const body = { draft };
+  if (_isObj(_doc) && _isObj(_doc.title)) body.title = _doc.title;
+  const rev = _rev ? `&rev=${encodeURIComponent(_rev)}` : '';
+  const r = await apiFetchStatus(`${API_SITE}?action=save_draft&doc=pages/${encodeURIComponent(slug)}${rev}`, { method: 'POST', body: JSON.stringify(body) });
+  if (token !== _loadToken) return { ok: false, stale: true };
+  if (r.status === 409) {
+    _lockedOut = true; _cancelAutosave(); _updateSaveChip();
+    return { ok: false, conflict: true, status: 409 };
+  }
+  if (!r.ok) return { ok: false, status: r.status };
+  if (r.data && typeof r.data.rev === 'string') _rev = r.data.rev;
+  if (!_isObj(_doc)) _doc = _emptyDoc();
+  _doc.draft = draft;
+  return { ok: true };
+}
+
+// Network down (0), server trouble (5xx), timeout/throttle (408/429) and an expired
+// session (401: the retry resumes once the operator signs in again) are transient.
+function _autosaveRetryable(r) {
+  if (!r || r.blocked) return false;
+  const s = r.status | 0;
+  return s === 0 || s >= 500 || s === 401 || s === 408 || s === 429;
+}
+
+function _requestAutosave() {
+  if (_switching) return;
+  clearTimeout(_autosaveTimer);
+  _autosaveTimer = setTimeout(() => { _autosaveTimer = null; _runAutosave(); }, 1200);
+}
+
+async function _runAutosave() {
+  if (_switching) return;
+  if (_lockedOut) { _updateSaveChip(); return; }
+  _cancelRetry();
+  // The edit generation at serialize time: edits made DURING the round-trip are
+  // not in this payload, so the dirty flag is cleared only if nothing changed
+  // since (else the unsaved-work guard would disarm with edits still pending).
+  const gen = _editGen;
+  const r = await _enqueueSave(() => _persistDraft());
+  if (r.stale || r.conflict) return;   // a conflict waits for the operator (chip → take over)
+  if (r.ok) {
+    _autosaveFailed = false; _retryCount = 0;
+    _lastSavedAt = new Date();
+    if (_editGen === gen) _mark(false); else _updateSaveChip();
+    return;
+  }
+  _autosaveFailed = true;
+  _updateSaveChip();
+  // Back off, and wait for the network instead of hammering a dead link. A refusal
+  // that a retry cannot change (invalid page 400, too large 413, unreadable page)
+  // stays red until the operator acts: retrying it every 30 s forever helps nobody.
+  if (_autosaveRetryable(r) && navigator.onLine !== false) {
+    _retryTimer = setTimeout(() => { _retryTimer = null; _runAutosave(); }, _RETRY_MS[Math.min(_retryCount, _RETRY_MS.length - 1)]);
+    _retryCount++;
+  }
+}
+
+function _onChipClick() {
+  if (_lockedOut) { _takeOver(); _runAutosave(); }
+  else if (_autosaveFailed) { _retryCount = 0; _runAutosave(); }
+}
+
+// ── One editor per page ─────────────────────────────────────────
+// Two editor tabs on the same page would overwrite each other's draft on every
+// autosave. The tab that arrives second is told so and stays quiet (no autosave)
+// until the operator takes the page over or the first tab goes away.
+const _tabId = _id('t');
+let _chan = null;
+function _isEditing() { return _editorOnly || _mode === 'editor'; }
+function _initLock() {
+  if (_chan || typeof BroadcastChannel === 'undefined') return;
+  try { _chan = new BroadcastChannel('lumen-page-editor'); } catch (_) { _chan = null; return; }
+  _chan.onmessage = (ev) => {
+    const m = ev.data;
+    if (!_isObj(m) || m.id === _tabId || m.slug !== _slug || !_isEditing()) return;
+    if (m.t === 'hello') _chan.postMessage({ t: 'here', slug: _slug, id: _tabId, to: m.id });
+    else if (m.t === 'here' && m.to === _tabId) { _lockedOut = true; _updateSaveChip(); }
+    else if (m.t === 'takeover') { _lockedOut = true; _cancelAutosave(); _updateSaveChip(); }
+    else if (m.t === 'bye' && _lockedOut) { _lockedOut = false; _updateSaveChip(); if (_dirty) _requestAutosave(); }
+  };
+  window.addEventListener('pagehide', () => _post({ t: 'bye' }));
+  window.addEventListener('online', () => { if (_autosaveFailed) { _retryCount = 0; _runAutosave(); } });
+}
+function _post(m) { try { _chan?.postMessage(Object.assign({ slug: _slug, id: _tabId }, m)); } catch (_) { /* channel closed */ } }
+function _announce() { if (_isEditing()) _post({ t: 'hello' }); }
+function _takeOver() { _lockedOut = false; _rev = null; _post({ t: 'takeover' }); _updateSaveChip(); }
 
 // The editor tab holds a single _instance snapshot for its whole lifetime and
 // never re-fetches; a concurrent Identity (tab-branding) save in another tab
@@ -1232,12 +1366,19 @@ async function _reconcileInstance() {
   } catch (_) { /* offline / first-run → keep our snapshot */ }
 }
 
-async function _saveInstanceDoc() {
+// Writes only the listed paths of instance.json (the server merges them into the
+// stored document), so an Identity or Types save made meanwhile is never undone.
+async function _saveInstancePaths(paths) {
   if (!_instance || typeof _instance !== 'object' || Array.isArray(_instance)) _instance = {};
-  await _reconcileInstance();
-  const r = await apiFetchStatus(`${API_SITE}?action=save&doc=instance`, { method: 'POST', body: JSON.stringify(_instance) });
+  const r = await apiFetchStatus(`${API_SITE}?action=save&doc=instance&merge=${encodeURIComponent(paths.join(','))}`,
+    { method: 'POST', body: JSON.stringify(_instance) });
   if (r.ok) { try { if (typeof InstanceConfig !== 'undefined') await InstanceConfig.load(); } catch (_) {} }
   return r.ok;
+}
+
+async function _saveInstanceDoc() {
+  await _reconcileInstance();
+  return _saveInstancePaths([..._INSTANCE_OWNED]);
 }
 
 // The draft/published SOURCE object: sections + optional page background.
@@ -1454,9 +1595,7 @@ async function _setPageVisibility(slug, show) {
   const pg = (_instance.nav && Array.isArray(_instance.nav.customPages)) ? _instance.nav.customPages.find((p) => p.slug === slug) : null;
   if (!pg) return;
   pg.show = show;
-  const r = await apiFetchStatus(`${API_SITE}?action=save&doc=instance`, { method: 'POST', body: JSON.stringify(_instance) });
-  if (r.ok) {
-    try { if (typeof InstanceConfig !== 'undefined') await InstanceConfig.load(); } catch (_) {}
+  if (await _saveInstancePaths(['nav.customPages'])) {
     toast(show ? t('pages.pageShown', 'Page affichée dans le menu.') : t('pages.pageHidden', 'Page masquée du menu.'), 'success');
   } else toast(t('pages.saveError', "Échec de l'enregistrement."), 'error');
 }
@@ -1707,19 +1846,62 @@ function _buildPageList() {
 
 function _emptyDoc() { return { title: {}, published: { sections: [] }, draft: { sections: [] } }; }
 
+// The select was changed by the operator: save what is pending on the page being
+// left (or ask), then load the other one. A silent drop of the last second of
+// edits, or of an edit whose autosave had failed, is not acceptable.
+async function switchPage(slug) {
+  const restoreSelects = () => ['pages-select', 'pe-select'].forEach((id) => { const s = el(id); if (s) s.value = _slug; });
+  if (slug === _slug) return;
+  if (_dirty || _autosaveFailed || _autosaveTimer) {
+    _cancelAutosave(); _cancelRetry(); _flushHist();
+    let saved = false;
+    if (!_lockedOut) {
+      const r = await _enqueueSave(() => _persistDraft());
+      saved = !!r.ok || !!r.stale;
+    }
+    if (!saved && !confirm(t('pages.switchUnsaved', 'Les dernières modifications de cette page n\'ont pas pu être enregistrées. Changer de page quand même ?'))) {
+      restoreSelects();
+      if (_dirty) _requestAutosave();
+      return;
+    }
+    if (saved) { _autosaveFailed = false; _retryCount = 0; }
+  }
+  await selectPage(slug);
+}
+
 async function selectPage(slug) {
-  // A pending translate-panel autosave must not fire across a page switch:
-  // at fire time it would persist the NEW page's just-loaded state (for a
-  // built-in page, that silently writes the seeded template as its draft).
-  clearTimeout(_autosaveTimer);
+  // A pending autosave must not fire across a page switch: at fire time it would
+  // persist the NEW page's just-loaded state (for a built-in page, that silently
+  // writes the seeded template as its draft). `_slug` and the model stay on the
+  // old page until the new one has arrived; nothing is saved or edited meanwhile.
+  _cancelAutosave(); _cancelRetry();
+  const token = ++_loadToken;
+  _switching = true;
+  let got;
+  try {
+    got = await apiFetchStatus(`${API_SITE}?action=get&doc=pages/${encodeURIComponent(slug)}`);
+  } finally {
+    if (token === _loadToken) _switching = false;
+  }
+  if (token !== _loadToken) return;   // a newer selection superseded this one
+  if (!got.ok && _slug) {
+    toast(t('pages.loadFailed', 'Page illisible — rechargez avant de modifier'), 'error');
+    ['pages-select', 'pe-select'].forEach((id) => { const s = el(id); if (s) s.value = _slug; });
+    if (_dirty) _requestAutosave();
+    return;
+  }
+  _post({ t: 'bye' });
   _slug = slug;
-  const data = await apiFetch(`${API_SITE}?action=get&doc=pages/${encodeURIComponent(slug)}`);
+  _rev = got.ok ? (got.rev || null) : null;
+  _loadFailed = !got.ok;
+  _autosaveFailed = false; _retryCount = 0; _lockedOut = false;
+  const data = got.data;
   // A MISSING doc comes back as [] on PHP hosts (site.php) and {} on the Python
   // dev server. `typeof [] === 'object'`, so without the Array guard _doc became
   // an ARRAY — then `_doc.draft = …` set a named property that JSON.stringify
   // silently drops (arrays serialize indices only), so save persisted `[]` and
   // every edit vanished on reload. Always normalize to a real doc object.
-  _doc = (data && typeof data === 'object' && !Array.isArray(data)) ? data : _emptyDoc();
+  _doc = _isObj(data) ? data : _emptyDoc();
   const src = (_doc.draft && (Array.isArray(_doc.draft.sections) || Array.isArray(_doc.draft.blocks))) ? _doc.draft : (_doc.published || {});
   _sections = _sanitizeSections(_migrate(src));
   _background = (src && src.background && typeof src.background === 'object' && src.background.preset)
@@ -1729,7 +1911,7 @@ async function selectPage(slug) {
   // seed the editable starter template so the surface opens with content. Not
   // marked dirty — nothing changes until the operator saves/publishes.
   _seeded = false;
-  if (!_sections.length) {
+  if (!_sections.length && !_loadFailed) {
     const tpl = _defaultTemplate(slug);
     if (tpl.length) { _sections = tpl; _seeded = true; }
   }
@@ -1741,6 +1923,7 @@ async function selectPage(slug) {
     try { history.replaceState(null, '', `admpan.html?editor=${encodeURIComponent(slug)}`); } catch (_) {}
   }
   render();
+  _announce();
 }
 
 async function newPage() {
@@ -1758,8 +1941,7 @@ async function newPage() {
   _instance.nav = _instance.nav || {};
   _instance.nav.customPages = Array.isArray(_instance.nav.customPages) ? _instance.nav.customPages : [];
   _instance.nav.customPages.push({ slug, label: { [_editLoc]: label }, show: false });
-  await apiFetchStatus(`${API_SITE}?action=save&doc=instance`, { method: 'POST', body: JSON.stringify(_instance) });
-  try { if (typeof InstanceConfig !== 'undefined') await InstanceConfig.load(); } catch (_) {}
+  await _saveInstancePaths(['nav.customPages']);
   _buildPageList();
   toast(t('pages.created', 'Page créée. Elle apparaîtra dans le menu après publication.'), 'success');
   await selectPage(slug);
@@ -1777,8 +1959,7 @@ async function _revealPageInNav(slug) {
     const pg = list ? list.find((p) => p.slug === slug) : null;
     if (!pg || pg.show !== false) return;
     pg.show = true;
-    await apiFetchStatus(`${API_SITE}?action=save&doc=instance`, { method: 'POST', body: JSON.stringify(_instance) });
-    try { if (typeof InstanceConfig !== 'undefined') await InstanceConfig.load(); } catch (_) {}
+    await _saveInstancePaths(['nav.customPages']);
     _buildPageList();
   } catch (_) { /* non-fatal: the page is published, just not yet linked */ }
 }
@@ -1787,6 +1968,7 @@ async function deletePage() {
   const page = _pages.find((p) => p.slug === _slug);
   if (!page || page.builtin) { toast(t('pages.cantDeleteBuiltin', 'Les pages intégrées ne peuvent pas être supprimées (réinitialisez-les).'), 'warning'); return; }
   if (!confirm(t('pages.deleteConfirm', 'Supprimer cette page ?'))) return;
+  _cancelAutosave(); _cancelRetry();   // a late autosave would recreate the file being deleted
   // Real delete: unlink config/pages/<slug>.json. The old action=reset only
   // rewrote it to {}, leaving the page publicly reachable at page.html?slug=
   // forever and accumulating orphan files invisible to the admin.
@@ -1797,21 +1979,38 @@ async function deletePage() {
   await _reconcileInstance();
   _instance.nav = _instance.nav || {};
   _instance.nav.customPages = (Array.isArray(_instance.nav.customPages) ? _instance.nav.customPages : []).filter((p) => p.slug !== _slug);
-  await apiFetchStatus(`${API_SITE}?action=save&doc=instance`, { method: 'POST', body: JSON.stringify(_instance) });
-  try { if (typeof InstanceConfig !== 'undefined') await InstanceConfig.load(); } catch (_) {}
+  await _saveInstancePaths(['nav.customPages']);
   _buildPageList();
   toast(t('pages.deleted', 'Page supprimée.'), 'success');
   await selectPage('home');
 }
 
+// A manual save/publish from a tab that another editor tab has the page open in:
+// the operator decides explicitly (last writer wins otherwise).
+function _confirmTakeOver() {
+  if (!_lockedOut) return true;
+  if (!confirm(t('pages.takeoverConfirm', 'Cette page est ouverte dans un autre onglet. Enregistrer ici écrasera ses modifications. Continuer ?'))) return false;
+  _takeOver();
+  return true;
+}
+
 async function saveDraft() {
-  _cancelAutosave();   // this IS the save — a late debounced one would be redundant/racing
-  if (!_doc || typeof _doc !== 'object' || Array.isArray(_doc)) _doc = _emptyDoc();
-  _doc.draft = _draftSource();
-  _doc.published = _doc.published || { sections: [] };
-  const r = await apiFetchStatus(`${API_SITE}?action=save&doc=pages/${encodeURIComponent(_slug)}`, { method: 'POST', body: JSON.stringify(_doc) });
-  if (r.ok) { _lastSavedAt = new Date(); _mark(false); toast(t('pages.draftSaved', 'Brouillon enregistré.'), 'success'); }
-  else toast(t('pages.saveError', "Échec de l'enregistrement."), 'error');
+  if (_switching) return;
+  if (!_confirmTakeOver()) return;
+  _cancelAutosave(); _cancelRetry();   // this IS the save — a late debounced one would be redundant/racing
+  const gen = _editGen;
+  const r = await _enqueueSave(() => _persistDraft());
+  if (r.stale) return;
+  if (r.conflict) { toast(t('pages.lockedOther', 'Ouverte dans un autre onglet — cliquez pour reprendre'), 'warning'); return; }
+  if (r.ok) {
+    _autosaveFailed = false; _retryCount = 0;
+    _lastSavedAt = new Date();
+    if (_editGen === gen) _mark(false); else _updateSaveChip();
+    toast(t('pages.draftSaved', 'Brouillon enregistré.'), 'success');
+  } else {
+    _autosaveFailed = true; _updateSaveChip();
+    toast(t('pages.saveError', "Échec de l'enregistrement."), 'error');
+  }
 }
 
 function _restorePublishBtn(btn) {
@@ -1829,17 +2028,36 @@ async function publish() {
   // Cancel any pending translate autosave: it serialized an OLD _doc (with the
   // pre-publish `published` block) and would, if it landed after this publish,
   // overwrite the freshly-published doc wholesale.
-  _cancelAutosave();
+  if (_switching) return;
+  if (!_confirmTakeOver()) return;
+  _cancelAutosave(); _cancelRetry();
   const btn = el('pe-publish');
   if (btn) { btn.disabled = true; btn.innerHTML = `<span class="spinner spinner-sm"></span> ${escHtml(t('pages.publishing', 'Publication…'))}`; }
-  if (!_doc || typeof _doc !== 'object' || Array.isArray(_doc)) _doc = _emptyDoc();
-  _doc.draft = _draftSource();
-  const s = await apiFetchStatus(`${API_SITE}?action=save&doc=pages/${encodeURIComponent(_slug)}`, { method: 'POST', body: JSON.stringify(_doc) });
-  if (!s.ok) { _restorePublishBtn(btn); toast(t('pages.saveError', "Échec de l'enregistrement."), 'error'); return; }
-  const r = await apiFetchStatus(`${API_SITE}?action=publish&doc=pages/${encodeURIComponent(_slug)}`, { method: 'POST', body: '{}' });
+  if (!_isObj(_doc)) _doc = _emptyDoc();
+  // Written and published back to back on the page's save queue: no background
+  // save can slip between the two, and none can land after.
+  const slug = _slug;
+  const gen = _editGen;
+  const outcome = await _enqueueSave(async () => {
+    const s = await _persistDraft();
+    if (!s.ok) return { step: 'save', s };
+    const p = await apiFetchStatus(`${API_SITE}?action=publish&doc=pages/${encodeURIComponent(slug)}`, { method: 'POST', body: '{}' });
+    return { step: 'publish', p };
+  });
+  if (outcome.step === 'save' && outcome.s.stale) { _restorePublishBtn(btn); return; }
+  if (outcome.step === 'save' && outcome.s.conflict) {
+    _restorePublishBtn(btn);
+    toast(t('pages.lockedOther', 'Ouverte dans un autre onglet — cliquez pour reprendre'), 'warning');
+    return;
+  }
+  if (outcome.step === 'save') { _restorePublishBtn(btn); toast(t('pages.saveError', "Échec de l'enregistrement."), 'error'); return; }
+  const r = outcome.p;
+  if (r.ok && r.data && typeof r.data.rev === 'string') _rev = r.data.rev;
   if (r.ok) {
+    _autosaveFailed = false; _retryCount = 0;
     _lastSavedAt = new Date();
-    _mark(false); _doc.published = JSON.parse(JSON.stringify(_draftSource())); _seeded = false; renderSidebar();
+    if (_editGen === gen) _mark(false); else _updateSaveChip();
+    _doc.published = JSON.parse(JSON.stringify(_doc.draft || _draftSource())); _seeded = false; renderSidebar();
     await _revealPageInNav(_slug);   // first publish of a custom page → make it visible in the menu
     toast(t('pages.published', 'Page publiée ✓'), 'success');
     if (btn) { btn.disabled = false; btn.innerHTML = `<i data-lucide="check"></i> ${escHtml(t('pages.publishedBtn', 'Publié ✓'))}`; try { refreshIcons(btn.parentElement || document); } catch (_) {} setTimeout(() => _restorePublishBtn(btn), 2600); }
@@ -1848,7 +2066,8 @@ async function publish() {
 
 async function revert() {
   const isBuiltin = SPECIAL.some((s) => s.slug === _slug);
-  _cancelAutosave();   // a late autosave would re-write the draft we're about to reset
+  _cancelAutosave(); _cancelRetry();   // a late autosave would re-write the draft we're about to reset
+  await _saveChain;                    // ...and so would one already on the wire
   if (isBuiltin) {
     // Built-in home/about have a shipped default template to fall back to.
     if (!confirm(t('pages.revertConfirm', 'Réinitialiser cette page à son état par défaut ?'))) return;
@@ -1862,14 +2081,18 @@ async function revert() {
   // action=reset wiped published content too (unrecoverable data loss). Restore
   // from _doc.published purely client-side, then persist draft==published.
   if (!confirm(t('pages.discardDraftConfirm', 'Annuler les modifications non publiées et revenir à la version publiée ?'))) return;
-  const pub = (_doc && _doc.published && typeof _doc.published === 'object') ? _doc.published : { sections: [] };
+  // The published version as it is on the server NOW, not as this tab last saw it.
+  const latest = await apiFetchStatus(`${API_SITE}?action=get&doc=pages/${encodeURIComponent(_slug)}`);
+  if (!latest.ok) { toast(t('pages.saveError', "Échec de l'enregistrement."), 'error'); return; }
+  const pub = (_isObj(latest.data) && _isObj(latest.data.published)) ? latest.data.published : { sections: [] };
+  _rev = latest.rev || null;
   _sections = _sanitizeSections(_migrate(pub));
   _background = (pub.background && typeof pub.background === 'object' && pub.background.preset) ? JSON.parse(JSON.stringify(pub.background)) : null;
   _sel = null; _seeded = false;
-  if (!_doc || typeof _doc !== 'object' || Array.isArray(_doc)) _doc = _emptyDoc();
-  _doc.draft = JSON.parse(JSON.stringify(pub));
-  const r = await apiFetchStatus(`${API_SITE}?action=save&doc=pages/${encodeURIComponent(_slug)}`, { method: 'POST', body: JSON.stringify(_doc) });
+  if (!_isObj(_doc)) _doc = _emptyDoc();
+  const r = await _enqueueSave(() => _persistDraft(JSON.parse(JSON.stringify(pub))));
   _mark(false);
+  _histReset();
   renderSidebar(); _syncFrame();
   if (r.ok) toast(t('pages.draftDiscarded', 'Modifications annulées.'), 'success');
   else toast(t('pages.saveError', "Échec de l'enregistrement."), 'error');
@@ -1882,9 +2105,10 @@ async function load() {
   // tab branch, so a popup-blocked in-shell session lost work silently).
   if (!_beforeUnloadBound) {
     _beforeUnloadBound = true;
-    window.addEventListener('beforeunload', (e) => { if (_dirty) { e.preventDefault(); e.returnValue = ''; } });
+    window.addEventListener('beforeunload', (e) => { if (_dirty || _autosaveFailed) { e.preventDefault(); e.returnValue = ''; } });
   }
   if (!_keysBound) { _keysBound = true; window.addEventListener('keydown', _onKey); }
+  _initLock();
   const inst = await apiFetch(`${API_SITE}?action=get&doc=instance`);
   _instance = (inst && typeof inst === 'object') ? inst : {};
   try { _editLoc = (I18n && I18n.getLanguage) ? I18n.getLanguage() : 'en'; } catch (_) { _editLoc = 'en'; }
@@ -1907,12 +2131,29 @@ async function load() {
   await selectPage(_slug || 'home');
 }
 
+let _loadingTab = null;
+function loadOnce() {
+  if (_loadingTab) return _loadingTab;
+  _loadingTab = load().finally(() => { _loadingTab = null; });
+  return _loadingTab;
+}
+
+// "Continue without saving": drop the pending work for real, so the next visit
+// reloads the page from the server instead of resurrecting it.
+function discardPending() {
+  _cancelAutosave(); _cancelRetry();
+  _autosaveFailed = false;
+  _mark(false);
+}
+
 export const PagesTab = {
   id: 'pages',
   titleKey: 'admin.navPages',
   titleDefault: 'Pages',
   mounted: false,
-  mount() { load(); },
-  activate() { load(); },
+  mount() { registerDirtyGuard('pages', () => _dirty || _autosaveFailed, discardPending); },
+  // Revisiting the tab must not throw away an edit in progress (or one whose
+  // background save failed): reload from the server only when nothing is pending.
+  activate() { if (!_dirty && !_autosaveFailed && !_autosaveTimer) loadOnce(); },
   relabel() { render(); },
 };

@@ -26,6 +26,9 @@ let _loading = true;
 
 const unitMB = () => t('admin.pipelineUnitMB', 'Mo');
 
+// Download links come from a remote release listing: only https is rendered.
+function _isHttps(u) { return typeof u === 'string' && /^https:\/\//i.test(u); }
+
 function fmtSize(bytes) {
   if (!bytes || bytes < 0) return null;
   const mb = bytes / 1024 / 1024;
@@ -58,7 +61,7 @@ function editionCard(key, opts) {
     action = `<button class="adm-btn adm-btn-ghost adm-pl-dl" disabled>
                 <span class="spinner spinner-sm"></span> ${escHtml(t('admin.pipelineChecking', 'Vérification…'))}
               </button>`;
-  } else if (info.newer && info.newer.url) {
+  } else if (info.newer && _isHttps(info.newer.url)) {
     // A newer pack than this host's has been published. Offer it as the primary
     // action and keep the installed one reachable — an offline processing station
     // may well be why the operator came here.
@@ -77,7 +80,7 @@ function editionCard(key, opts) {
     action = `<a class="adm-btn adm-btn-accent adm-pl-dl" href="${escHtml(API_ADMIN)}?action=pipeline_download&amp;edition=${escHtml(key)}" download>
                 <i data-lucide="download"></i> ${escHtml(t('admin.pipelineDownload', 'Télécharger'))}
               </a>`;
-  } else if (info.available && info.url) {
+  } else if (info.available && _isHttps(info.url)) {
     action = `<a class="adm-btn adm-btn-accent adm-pl-dl" href="${escHtml(info.url)}" target="_blank" rel="noopener">
                 <i data-lucide="external-link"></i> ${escHtml(t('admin.pipelineDownload', 'Télécharger'))}
               </a>`;

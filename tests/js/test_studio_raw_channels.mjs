@@ -152,6 +152,7 @@ const renderer = {
   clear() {},
   render(scene) {
     const m = scene.children[0].material;
+    this._flip = Number(m.uniforms.flipY?.value) === 1;
     renders.push({
       material: m, target: this._target, defines: { ...m.defines }, blending: m.blending,
       uvWindow: m.uniforms.uvWindow.value.toArray(), normal: m.uniforms.sliceNormal.value.toArray(),
@@ -159,11 +160,13 @@ const renderer = {
       fallbackChannels: m.uniforms.fallbackChannels?.value.toArray() || null,
     });
   },
-  // GL rows from the bottom: byte 0 = the GL row, byte 1 = the column.
+  // Byte 0 = the GL row of the window the target row shows (counted from the bottom),
+  // byte 1 = the column. A render drawn with flipY puts the window's top row in the
+  // target's first row, as the shader does (vUv.y → 1 − vUv.y).
   readRenderTargetPixels(target, x, y, w, h, buf) {
     for (let r = 0; r < h; r++) for (let c = 0; c < w; c++) {
       const o = (r * w + c) * 4;
-      buf[o] = r & 255; buf[o + 1] = c & 255; buf[o + 2] = 7; buf[o + 3] = 9;
+      buf[o] = (this._flip ? h - 1 - r : r) & 255; buf[o + 1] = c & 255; buf[o + 2] = 7; buf[o + 3] = 9;
     }
   },
 };
@@ -197,11 +200,12 @@ const volumeMaterial = {
   // Same source again: the same material (one shader compile per pass).
   VolumeSlicer.renderRawWithMaterial(volumeMaterial, { mode: 'xz', value: 0.5 }, 100, { window: { x: 10, y: 20, w: 30, h: 40 } });
   assert.equal(renders.at(-1).material, r0.material, 'the raw material is cached per source');
-  assert.notEqual(renders.at(-1).target, r0.target, 'without keepTarget the target is released after each render');
-  VolumeSlicer.renderRawWithMaterial(volumeMaterial, { mode: 'xz' }, 100, { keepTarget: true });
+  assert.equal(renders.at(-1).target, r0.target, 'one tile-sized target serves every render of a pass');
+  VolumeSlicer.renderRawWithMaterial(volumeMaterial, { mode: 'xz' }, 100, {});
   const kept = renders.at(-1).target;
-  VolumeSlicer.renderRawWithMaterial(volumeMaterial, { mode: 'xz' }, 100, { keepTarget: true });
-  assert.equal(renders.at(-1).target, kept, 'keepTarget: one target for the whole pass');
+  VolumeSlicer.releaseHiPass();
+  VolumeSlicer.renderRawWithMaterial(volumeMaterial, { mode: 'xz' }, 100, {});
+  assert.notEqual(renders.at(-1).target, kept, 'releaseHiPass gives the tile target back');
 
   // The raw fallback: exact bytes, nearest, no flip, placed like the colour fallback.
   const fb = { data: new Uint8Array(30 * 40 * 4).fill(3), width: 30, height: 40, channels: 3 };
@@ -225,8 +229,10 @@ const volumeMaterial = {
   assert.deepEqual([...renders.at(-1).fallbackChannels], [0, 0, 0, 0], 'no mask asked: none');
 
   VolumeSlicer.releaseForeign();
+  assert.equal(r1.material.uniforms.fallbackTex.value, null, 'releaseForeign drops the fallback picture');
+  assert.equal(r1.material.uniforms.svrAtlas0.value, null, 'and the pass atlas reference');
   VolumeSlicer.renderRawWithMaterial(volumeMaterial, { mode: 'xy' }, 100, {});
-  assert.notEqual(renders.at(-1).material, r0.material, 'releaseForeign drops the cached raw material');
+  assert.equal(renders.at(-1).material, r0.material, 'the compiled program outlives the pass (one material per define set)');
   assert.equal(VolumeSlicer.renderRawWithMaterial(null, {}, 100), null, 'no material: null');
 
   // A slab's raw says so (the shader's own test: projMode ≠ 0 and more than one
@@ -355,7 +361,7 @@ const viewerState = [
 
   // Closing drops the raw values.
   Studio.close();
-  assert.equal(S.sliceResult.raw, null, 'raw released on close');
+  assert.equal(S.sliceResult, null, 'raw released on close (the slice and its raw values with it)');
   console.log('single-slice Studio on raw values: OK');
 }
 
@@ -402,8 +408,8 @@ const viewerState = [
   assert.equal(S.doc.layoutMaps[0].channelState[1].enabled, false, 'the cell state holds the edit');
 
   Studio.close();
-  assert.equal(S.doc.layoutMaps[0].raw, null, 'the cells\' raw values are released on close');
-  assert.equal(S.doc.layoutMaps[0].sliceResult.raw, null, 'including the ones held by the panel slice');
+  assert.ok(!S.doc.layoutMaps[0].raw, 'the cells\' raw values are released on close');
+  assert.ok(!S.doc.layoutMaps[0].sliceResult?.raw, 'including the ones held by the panel slice');
   assert.ok(S.history.every(h => (h.doc.layoutMaps || []).every(m => !m.raw)), 'and by the undo history');
   console.log('Compare Studio on raw values: OK');
 }
@@ -411,19 +417,20 @@ const viewerState = [
 // ── 6. The viewer and the pages wire it ───────────────────────────────────────
 {
   const v = read('js/pages/viewer.js');
-  const preview = v.slice(v.indexOf('function _renderStudioPreviewSlice('), v.indexOf('function _nativeLabel('));
-  assert.ok(/raw: _studioRawFor\(spec, renderRes, cropRect, canvas\)/.test(preview), 'the preview carries its raw values (same crop; the colour picture for a slab footprint)');
-  const rawFor = v.slice(v.indexOf('function _studioRawFor('), v.indexOf('function _studioRawFor(') + 900);
+  const preview = v.slice(v.indexOf('async function _renderStudioPreviewSlice('), v.indexOf('function _nativeLabel('));
+  assert.ok(/raw = VolumeSlicer\.renderRawWithMaterial\(material, spec, renderRes, \{ window: win \}\)/.test(preview), 'the preview is raw values of the crop window');
+  assert.ok(/StudioPlaneOps\.cropRect\(geom, renderRes, warp\)/.test(preview), 'its crop comes from the geometry');
+  const rawFor = v.slice(v.indexOf('function _studioRawFor('), v.indexOf('function _studioRawFor(') + 1400);
   assert.ok(/_sliceWindowForRect\(cropRect, renderRes\)/.test(rawFor) && /renderRawWithMaterial\(material, spec, renderRes, \{ window: win \}\)/.test(rawFor), 'raw window = the colour crop');
-  const upgrade = v.slice(v.indexOf('async function _upgradeStudioSliceToNative('), v.indexOf('function _drawScaleBar('));
-  assert.ok(/fallback: \{ canvas: preview\.canvas, raw: preview\.raw \|\| null \}/.test(upgrade), 'the native pass gets the preview raw');
+  const upgrade = v.slice(v.indexOf('async function _upgradeStudioSliceToNative('), v.indexOf('function _bindExportAndWorkspace('));
+  assert.ok(/fallback: \{ canvas: preview\.canvas, raw: preview\.raw \|\| null, rect: preview\.cropRect \}/.test(upgrade), 'the native pass gets the preview raw and its crop');
   const native = v.slice(v.indexOf('async function _renderNativeSliceForStudio('), v.indexOf('function _setSliceStatus('));
-  assert.ok(/renderRawWithMaterial\(tempMaterial, spec, renderRes, \{\s*window: sliceWindow, fallbackRaw: rawFallback, fallbackChannels: previewOnlyChannels, keepTarget: true/.test(native), 'native refreshes are raw, with the preview as fallback');
+  assert.ok(/renderRawWithMaterial\(backend\.material, spec, renderRes, \{\s*window: sliceWindow, fallbackRaw: rawFallback, fallbackChannels: previewOnlyChannels, plane: backend\.plane, out: rawOut/.test(native), 'native refreshes are raw, with the preview as fallback, refilling one buffer');
   assert.ok(/filter\(c => !wantedChannels\.includes\(c\)\)/.test(native), 'channels not downloaded come from the preview');
-  assert.ok(/VolumeSlicer\.releaseForeign\?\.\(\);/.test(native), 'the throwaway material and target are released at the end');
+  assert.ok(/VolumeSlicer\.releaseForeign\?\.\(\);/.test(native), 'the shared slicer resources are released at the end');
   const current = v.slice(v.indexOf('function getCurrentSliceResult('), v.indexOf('function getCurrentSliceResult(') + 4000);
-  assert.equal((current.match(/raw: withRaw \? _studioRawFor\(spec, renderRes, cropRect, canvas\) : null/g) || []).length, 2, 'the Compare Studio gets raw values (z-stack and slice)');
-  assert.ok(/getCurrentSliceResult\(\{ raw: false \}\)/.test(v), 'a thumbnail skips the raw render');
+  assert.equal((current.match(/raw: withRaw \? _studioRawFor\(spec, renderRes, cropRect, canvas\) : null/g) || []).length, 1, 'the Compare Studio gets raw values (z-stack and slice share one capture)');
+  assert.ok(/getCurrentSliceResult\(\{ raw: false, maxRes: 1024 \}\)/.test(v), 'a thumbnail skips the raw render and the native frame size');
 
   const viewerHtml = read('viewer.html');
   const compareHtml = read('compare.html');

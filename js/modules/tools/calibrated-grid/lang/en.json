@@ -1,5 +1,6 @@
 {
   "title": "Calibrated grid (none / coarse / fine)",
   "aria": "Calibrated grid",
-  "step": "grid"
+  "step": "grid",
+  "uncalibrated": "Grid unavailable: this photograph has no pixel size"
 }

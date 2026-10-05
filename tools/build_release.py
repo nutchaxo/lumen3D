@@ -33,7 +33,6 @@ ROOT_FILES = (
     "2d.html",
     "admpan.html",
     "about.html",
-    "widgets.html",
     "legal.html",   # legal notices page (footer link) — was missing → 404
     "page.html",    # custom-page host (page.html?slug=…) for the page builder — was missing → 404
     "dev_server.py",
@@ -89,12 +88,25 @@ API_RUNTIME_STATE = frozenset(
         "disabled-plugins.json",
         "quarantined-plugins.json",
         "plugin-trust.json",  # operator approvals — never ship (would pre-approve plugins)
+        "trusted-proxies.json",       # the host's own reverse-proxy list
+        "release-notes-cache.json",
+        # PHP runtime caches / locks (also refused by the api/ allowlist below, named
+        # here so the list documents every state file the backends write)
+        ".catalog-cache.json",
+        ".plugin-hash-cache.json",
+        ".update.lock",
+        ".update-pending.json",
     }
 )
+# Runtime directories under api/ (PHP sessions, login throttle, file locks, page drafts).
+API_RUNTIME_DIRS = frozenset({".sessions", ".bruteforce", ".locks", "page-drafts"})
+
+API_SHIPPED_FILES = frozenset({".htaccess", "ca-bundle.pem"})
 
 EXCLUDED_DIR_NAMES = frozenset({"__pycache__"})
-EXCLUDED_FILE_NAMES = frozenset({".DS_Store", "Thumbs.db"})
-EXCLUDED_SUFFIXES = frozenset({".pyc"})
+EXCLUDED_FILE_NAMES = frozenset({".DS_Store", "Thumbs.db", ".htaccess.lumen-backup"})
+# Sources a PHP update parks beside the live ones (never part of a release).
+EXCLUDED_SUFFIXES = frozenset({".pyc", ".lumen-old", ".lumen-new", ".lumen-backup"})
 
 # Fixed DOS timestamp so zip bytes do not vary with build-machine mtimes.
 ZIP_ENTRY_DATE = (1980, 1, 1, 0, 0, 0)
@@ -106,8 +118,16 @@ def is_excluded(rel_path):
         return True
     if rel_path.name in EXCLUDED_FILE_NAMES or rel_path.suffix in EXCLUDED_SUFFIXES:
         return True
-    if rel_path.parts[0] == "api" and rel_path.name in API_RUNTIME_STATE:
+    if rel_path.parts[0] == "api" and len(rel_path.parts) > 2 and rel_path.parts[1] in API_RUNTIME_DIRS:
         return True
+    if rel_path.parts[0] == "api":
+        # Explicit allowlist: the PHP entry points, the directory's .htaccess and the CA
+        # bundle. Anything else under api/ is runtime state of the host that built it
+        # (drafts, migration markers, a future state file) and must never ship.
+        if (len(rel_path.parts) != 2
+                or not (rel_path.suffix == ".php" or rel_path.name in API_SHIPPED_FILES)
+                or rel_path.name in API_RUNTIME_STATE):
+            return True
     # App-store model: bundled plugins are NOT shipped in the release — they are
     # installed on demand from the signed marketplace (first-run picker). js/modules/
     # itself stays (installs land there); every plugin folder + the stale discovery
@@ -206,13 +226,21 @@ def sha256_hex(data):
     return hashlib.sha256(data).hexdigest()
 
 
+def _release_timestamp():
+    """SOURCE_DATE_EPOCH (the commit time, set by CI) keeps two builds of one commit
+    byte-identical; without it, the build time."""
+    epoch = os.environ.get("SOURCE_DATE_EPOCH", "").strip()
+    moment = datetime.fromtimestamp(int(epoch), timezone.utc) if epoch.isdigit() else datetime.now(timezone.utc)
+    return moment.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
 def build_version_manifest(version, commit, file_hashes):
     """Serialize version.json (covers every zip file except itself)."""
     manifest = {
         "component": "lumen3d-web",
         "web": version,
         "tag": f"v{version}",
-        "released": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "released": _release_timestamp(),
         "commit": commit,
         "files": file_hashes,
     }
@@ -244,8 +272,11 @@ def write_zip(zip_path, entries):
 # admpan.html is EXCLUDED (its ESM module graph cannot be concatenated).
 BUNDLE_PAGES = (
     "index.html", "explorer.html", "viewer.html", "compare.html",
-    "2d.html", "about.html", "legal.html", "page.html", "widgets.html",
+    "2d.html", "about.html", "legal.html", "page.html",
 )
+# Scripts whose whole point is to run early in <head>: concatenating them into the
+# end-of-body bundle would defeat them.
+BUNDLE_EXCLUDED = frozenset({"js/core/theme-boot.js"})
 _SCRIPT_TAG_RE = re.compile(
     r'[ \t]*<script\b(?P<attrs>[^>]*?)\bsrc="(?P<src>[^"]+)"(?P<rest>[^>]*)>\s*</script>[ \t]*\n?',
     re.IGNORECASE,
@@ -268,7 +299,8 @@ def bundle_pages(by_name):
                 continue  # never concatenate ESM
             src = m.group("src")
             arc = src.split("?", 1)[0]
-            if arc.startswith("js/") and not arc.startswith("js/vendor/"):
+            if (arc.startswith("js/") and not arc.startswith("js/vendor/")
+                    and arc not in BUNDLE_EXCLUDED):
                 local.append((m, arc))
         if len(local) < 3:
             continue  # not worth a bundle
@@ -372,6 +404,8 @@ def main():
     parser.add_argument("--sign-seed-hex", default=None,
                         help="Ed25519 private seed (64 hex chars) to sign SHA256SUMS; "
                              "falls back to the LUMEN_SIGNING_KEY env var")
+    parser.add_argument("--require-signature", action="store_true",
+                        help="fail when no signing seed is available (CI release builds)")
     args = parser.parse_args()
 
     if not re.fullmatch(r"\d+\.\d+\.\d+", args.version):
@@ -468,6 +502,10 @@ def main():
         (out_dir / "SHA256SUMS.sig").write_text(sig.hex() + "\n", encoding="utf-8", newline="\n")
         pub = ed.publickey(seed).hex()
         print(f"    signed SHA256SUMS (Ed25519); public key {pub}")
+    elif args.require_signature:
+        print("ERROR: --require-signature but no signing seed (LUMEN_SIGNING_KEY unset) - "
+              "refusing to build an unsigned release.")
+        return 1
     else:
         print("    NOTE: no signing seed (LUMEN_SIGNING_KEY unset) — release is unsigned.")
     return 0

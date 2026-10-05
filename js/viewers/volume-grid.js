@@ -25,9 +25,15 @@ const VolumeGrid = (() => {
   let _axesVisible = false;
   let _gridSizes = { xy: 1.5, xz: 1.5, yz: 1.5 };
   let _axesLocalPos = new THREE.Vector3(-0.75, -0.75, -0.75);
-  // Scratch vectors of _updateScaleBar (it runs every frame).
+  // Scratch objects of the per-frame sync (syncTransforms, _updateScaleBar): nothing
+  // is allocated per frame.
   const _scaleDir = new THREE.Vector3();
   const _scaleRel = new THREE.Vector3();
+  const _scaleSize = new THREE.Vector2();
+  const _invScale = new THREE.Vector3();
+  const _camDir = new THREE.Vector3();
+  const _worldNormal = new THREE.Vector3();
+  const _axesWorld = new THREE.Vector3();
 
   /**
    * Initialize with references to shared scene objects.
@@ -139,7 +145,7 @@ const VolumeGrid = (() => {
   // enfants d'un groupe retiré de la scène (geometries, materials, CanvasTexture
   // des sprites X/Y/Z).
   // ATTENTION : THREE.ArrowHelper partage ses géométries line/cone comme
-  // singletons au niveau module (three r0.167) — les disposer corromprait tous
+  // singletons au niveau module (three r147) — les disposer corromprait tous
   // les autres ArrowHelper. On saute donc la géométrie des enfants d'ArrowHelper
   // et on ne libère que leur material (par instance).
   function _disposeGroup(group) {
@@ -294,12 +300,28 @@ const VolumeGrid = (() => {
   // ─── Per-frame Sync ───
 
   /** Called every frame to keep grid and axes in sync with cube rotation */
+  /**
+   * A projection wall shares the volume material's uniforms but compiles its own
+   * program from a copy of its defines, taken when the wall was built. The volume's
+   * defines move with what is bound (ENABLE_SVR for an atlas, HAS_OCCUPANCY,
+   * VOLUME_WARP, the channel switches): a stale copy samples an atlas page as if it
+   * were the whole volume. Kept equal here (no allocation when nothing changed).
+   */
+  function _syncProjDefines(mat) {
+    const src = _material.defines || {};
+    const dst = mat.defines || (mat.defines = {});
+    let changed = false;
+    for (const k in src) if (dst[k] !== src[k]) { dst[k] = src[k]; changed = true; }
+    for (const k in dst) if (!(k in src)) { delete dst[k]; changed = true; }
+    if (changed) mat.needsUpdate = true;
+  }
+
   function syncTransforms() {
     if (!_cube) return;
     if (_gridGroup) {
       _gridGroup.position.copy(_cube.position);
       _gridGroup.quaternion.copy(_cube.quaternion);
-      const invScale = new THREE.Vector3(
+      const invScale = _invScale.set(
         1 / (_cube.scale.x || 1),
         1 / (_cube.scale.y || 1),
         1 / (_cube.scale.z || 1)
@@ -313,14 +335,14 @@ const VolumeGrid = (() => {
           if (child.material?.uniforms?.steps && _material?.uniforms?.steps) {
             child.material.uniforms.steps.value = _material.uniforms.steps.value;
           }
+          if (child.material && _material) _syncProjDefines(child.material);
         }
       });
       if (_camera) {
-        const camDir = new THREE.Vector3();
-        _camera.getWorldDirection(camDir);
+        const camDir = _camera.getWorldDirection(_camDir);
         _gridGroup.children.forEach(child => {
           if (child.userData.isGridHandle) {
-            const worldNormal = child.userData.normal.clone().applyQuaternion(_cube.quaternion);
+            const worldNormal = _worldNormal.copy(child.userData.normal).applyQuaternion(_cube.quaternion);
             const dot = Math.abs(camDir.dot(worldNormal));
             const isParallel = dot > 0.939;
             child.userData.isParallel = isParallel;
@@ -335,7 +357,7 @@ const VolumeGrid = (() => {
       }
     }
     if (_axesGroup) {
-      const worldPos = _axesLocalPos.clone().applyQuaternion(_cube.quaternion).add(_cube.position);
+      const worldPos = _axesWorld.copy(_axesLocalPos).applyQuaternion(_cube.quaternion).add(_cube.position);
       _axesGroup.position.copy(worldPos);
       _axesGroup.quaternion.copy(_cube.quaternion);
       _axesGroup.children.forEach(child => {
@@ -366,12 +388,29 @@ const VolumeGrid = (() => {
   function _updateScaleBar() {
     const scaleBar = document.getElementById('viewer-scale-bar');
     if (!scaleBar || !_camera || !_renderer) return;
-    const hide = () => scaleBar.classList.add('hidden');
+    // The DOM is written only when the bar changes (a layout-free size read, and the
+    // last written state kept on the element itself).
+    const show = (width, text) => {
+      if (scaleBar._lumenBar === `${width}|${text}`) return;
+      scaleBar._lumenBar = `${width}|${text}`;
+      scaleBar.classList.remove('hidden');
+      scaleBar.style.width = width;
+      scaleBar.textContent = text;
+    };
+    const hide = () => {
+      if (scaleBar._lumenBar === 'hidden') return;
+      scaleBar._lumenBar = 'hidden';
+      scaleBar.classList.add('hidden');
+    };
     if (_gridMode === 0 || !_cube) { hide(); return; }
     const physical = _getPhysicalSize ? _getPhysicalSize() : null;
     const calibrated = physical && physical.calibrationStatus !== 'metadata-missing' && physical.mode !== 'metadata-missing';
     const umPerUnit = calibrated && _cube.scale.x > 0 ? Number(physical.x) / _cube.scale.x : 0;
-    const rect = _renderer.domElement.getBoundingClientRect();
+    // The renderer's CSS size (set on every resize), not getBoundingClientRect, which
+    // forces a layout on every frame.
+    const rect = typeof _renderer.getSize === 'function'
+      ? { width: _renderer.getSize(_scaleSize).x, height: _scaleSize.y }
+      : _renderer.domElement.getBoundingClientRect();
     if (!(umPerUnit > 0) || !(rect.height > 0)) { hide(); return; }
     _camera.getWorldDirection(_scaleDir);
     const depth = _scaleRel.copy(_cube.position).sub(_camera.position).dot(_scaleDir);
@@ -381,9 +420,7 @@ const VolumeGrid = (() => {
     const targetPx = Math.min(200, Math.max(60, rect.width * 0.2));
     const lengthUm = Utils.niceScaleLength(targetPx / pxPerUm);
     if (!(lengthUm > 0)) { hide(); return; }
-    scaleBar.classList.remove('hidden');
-    scaleBar.style.width = `${Math.max(20, Math.round(lengthUm * pxPerUm))}px`;
-    scaleBar.textContent = Utils.formatMicrons(lengthUm);
+    show(`${Math.max(20, Math.round(lengthUm * pxPerUm))}px`, Utils.formatMicrons(lengthUm));
   }
 
   /** Move axes to a world-space point projected from screen click */
@@ -391,8 +428,8 @@ const VolumeGrid = (() => {
     if (!_axesGroup || !_camera || !_renderer) return;
     const rect = _renderer.domElement.getBoundingClientRect();
     const ndc = new THREE.Vector2(
-      ((clientX - rect.left) / rect.width) * 2 - 1,
-      -((clientY - rect.top) / rect.height) * 2 + 1
+      ((clientX - rect.left) / Math.max(1, rect.width)) * 2 - 1,
+      -((clientY - rect.top) / Math.max(1, rect.height)) * 2 + 1
     );
     const camDir = new THREE.Vector3();
     _camera.getWorldDirection(camDir);
@@ -427,6 +464,7 @@ const VolumeGrid = (() => {
     rebuild,
     dispose,
     _disposeGroup,   // exposed for unit testing (ELE-30)
+    _syncProjDefines, // exposed for unit testing
     syncTransforms,
     setGridMode,
     getGridMode,

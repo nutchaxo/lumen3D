@@ -35,16 +35,21 @@ $csrfOk = admin_check_csrf();
 // are already decided above; nothing below needs $_SESSION.
 if (session_status() === PHP_SESSION_ACTIVE) session_write_close();
 
-$action = $_GET['action'] ?? '';
+$action = lumen_str($_GET['action'] ?? null) ?? '';
 $method = $_SERVER['REQUEST_METHOD'] ?? 'GET';
 
 if (!$authed) admin_json_out(['error' => 'Not authenticated'], 401);
 
 // Legacy staging trees and journals (uploads/staging/fixed, uploads/state/fixed__*)
 // are renamed to the unified vocabulary before any path is resolved from ?ds=.
-// Cheap enough for the parallel chunk POSTs: a handful of is_dir/glob calls, then a
-// static short-circuit for the rest of the request.
-lumen_migrate_dataset_types();
+// Not on `chunk`: an import sends thousands of them, and the migration's identity
+// pass reads every published metadata.json — the plan/list/state calls that open
+// every import already ran it.
+if ($action !== 'chunk' && $action !== 'ping') {
+    lumen_migrate_dataset_types();
+    // A publish the previous request did not finish (killed between its renames).
+    if (in_array($action, ['list', 'publish'], true)) lumen_up_recover_publish_leftovers();
+}
 
 const LUMEN_UP_WRITE_ACTIONS = ['plan', 'chunk', 'file_done', 'publish', 'discard',
                                 'save_metadata', 'save_thumbnail', 'gc'];
@@ -55,7 +60,7 @@ if (in_array($action, LUMEN_UP_WRITE_ACTIONS, true)) {
     lumen_up_ensure_dirs();
 }
 
-$ds = (string)($_GET['ds'] ?? '');
+$ds = lumen_str($_GET['ds'] ?? null) ?? '';
 $slash = strpos($ds, '/');
 $type   = $slash === false ? $ds : substr($ds, 0, $slash);
 $folder = $slash === false ? ''  : substr($ds, $slash + 1);
@@ -78,6 +83,12 @@ function lumen_up_out($result): void {
 }
 
 switch ($action) {
+
+case 'ping':
+    // The upload worker's network probe: a cheap authenticated round-trip that
+    // tells "the network is back" from "the session is gone" (401).
+    header('Cache-Control: no-store');
+    admin_json_out(['ok' => true]);
 
 case 'limits':
     // The client sizes its chunks from this. Unlike Python, a PHP host has a hard
@@ -109,7 +120,7 @@ case 'metadata':
     admin_json_out($meta ?: ['error' => 'not_staged'], $meta ? 200 : 404);
 
 case 'blob':
-    lumen_up_serve_blob($type, $folder, (string)($_GET['path'] ?? ''));
+    lumen_up_serve_blob($type, $folder, lumen_str($_GET['path'] ?? null) ?? '');
     exit;
 
 case 'plan':
@@ -129,19 +140,24 @@ case 'chunk':
         admin_json_out(['error' => 'body_truncated', 'maxChunkSize' => lumen_up_chunk_limit(),
                         'declared' => $declared, 'received' => strlen($data)], 413);
     }
-    lumen_up_out(lumen_up_write_chunk($type, $folder, $_GET['path'] ?? '', $index, $data, $_GET['sha256'] ?? null));
+    lumen_up_out(lumen_up_write_chunk($type, $folder, lumen_str($_GET['path'] ?? null) ?? '', $index, $data,
+                                      lumen_str($_GET['sha256'] ?? null)));
 
 case 'file_done':
     $body = lumen_up_body();
-    lumen_up_out(lumen_up_finalize($type, $folder, $body['path'] ?? '', $body['root'] ?? null));
+    lumen_up_out(lumen_up_finalize($type, $folder, lumen_str($body['path'] ?? null) ?? '', lumen_str($body['root'] ?? null)));
 
 case 'save_metadata':
-    $body = lumen_up_body();
-    lumen_up_out(lumen_up_write_metadata($type, $folder, $body['metadata'] ?? null));
+    // Decoded keeping `{}` maps as maps: this document is written back verbatim.
+    $raw = file_get_contents('php://input');
+    $doc = is_string($raw) ? lumen_json_decode_doc($raw) : null;
+    $meta = is_array($doc) ? ($doc['metadata'] ?? null) : null;
+    if ($meta instanceof stdClass) $meta = [];
+    lumen_up_out(lumen_up_write_metadata($type, $folder, $meta));
 
 case 'save_thumbnail':
     $body = lumen_up_body();
-    $image = (string)($body['image'] ?? '');
+    $image = lumen_str($body['image'] ?? null) ?? '';
     if (strncmp($image, 'data:image/', 11) !== 0) admin_json_out(['error' => 'Invalid image format'], 400);
     $comma = strpos($image, ',');
     $bytes = $comma === false ? false : base64_decode(substr($image, $comma + 1), true);
@@ -179,13 +195,15 @@ function lumen_up_serve_blob(string $type, string $folder, string $rel): void {
     $size = (int)@filesize($path);
 
     $start = 0; $end = $size - 1; $status = 200;
-    $range = $_SERVER['HTTP_RANGE'] ?? '';
-    if (strncmp($range, 'bytes=', 6) === 0) {
-        [$lo, $hi] = array_pad(explode('-', substr($range, 6), 2), 2, '');
-        $s = $lo === '' ? 0 : (int)$lo;
-        $e = $hi === '' ? $size - 1 : (int)$hi;
-        if ($s >= 0 && $s <= $e && $e < $size) { $start = $s; $end = $e; $status = 206; }
+    $r = lumen_up_parse_range((string)($_SERVER['HTTP_RANGE'] ?? ''), $size);
+    if ($r === false) {
+        http_response_code(416);
+        header("Content-Range: bytes */$size");
+        header('Content-Length: 0');
+        header('Cache-Control: no-store');
+        return;
     }
+    if ($r !== null) { [$start, $end] = $r; $status = 206; }
     $length = $end - $start + 1;
 
     http_response_code($status);

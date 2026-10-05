@@ -1,7 +1,7 @@
 {
   "id": "tracking-charts",
   "name": "Tracking Charts",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "platformCompat": ">=1.53.0",
   "dataTypes": [
     "live"

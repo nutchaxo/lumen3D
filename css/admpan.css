@@ -24,6 +24,10 @@
   --adm-accent-hover: #7d75ff;
   --adm-accent-glow:  rgba(108, 99, 255, 0.25);
   --adm-accent-subtle: rgba(108, 99, 255, 0.12);
+  /* Solid button fill: white label text needs 4.5:1 (WCAG AA); the decorative
+     --adm-accent (#6c63ff) only reaches 4.3:1. #5a50f5 = 5.4:1, #4f46e5 = 6.3:1. */
+  --adm-btn-fill:       #5a50f5;
+  --adm-btn-fill-hover: #4f46e5;
 
   /* Text */
   --adm-text:         #ededf5;
@@ -216,23 +220,23 @@ html, body {
 .adm-btn:active { transform: scale(0.97); }
 
 .adm-btn-primary {
-  background: var(--adm-accent);
+  background: var(--adm-btn-fill);
   color: #fff;
-  border-color: var(--adm-accent);
+  border-color: var(--adm-btn-fill);
 }
 .adm-btn-primary:hover {
-  background: var(--adm-accent-hover);
+  background: var(--adm-btn-fill-hover);
   box-shadow: 0 0 16px var(--adm-accent-glow);
 }
 
 .adm-btn-accent {
-  background: var(--adm-accent);
+  background: var(--adm-btn-fill);
   color: #fff;
-  border-color: var(--adm-accent);
+  border-color: var(--adm-btn-fill);
   font-weight: 600;
 }
 .adm-btn-accent:hover {
-  background: var(--adm-accent-hover);
+  background: var(--adm-btn-fill-hover);
   box-shadow: 0 0 16px var(--adm-accent-glow);
 }
 .adm-btn-accent:disabled {

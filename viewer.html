@@ -8,7 +8,8 @@
   <!-- Fonts -->
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" media="print" data-async-font>
+  <noscript><link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet"></noscript>
 
   <!-- Lucide Icons -->
   <script src="js/vendor/lucide.min.js" integrity="sha384-tTkFttkBclaU1cloKwOi9xk3pbao3VZxTjLNBt8iFABWDBQibbAbWpVmO28zMuxq" crossorigin="anonymous"></script>
@@ -24,8 +25,10 @@
   <link rel="stylesheet" href="css/components.css?v=20260615-fixed1">
   <link rel="stylesheet" href="css/viewer.css?v=20260615-fixed1">
   <link rel="stylesheet" href="css/tools.css?v=20260615-fixed1">
+  <script src="js/core/theme-boot.js"></script>
 </head>
 <body data-page="viewer">
+  <a class="skip-link" href="#main" data-i18n="viewer.skipToViewer">Skip to the viewer</a>
 
   <div class="viewer-layout">
     
@@ -95,7 +98,7 @@
     </header>
 
     <!-- Main Workspace -->
-    <div class="viewer-workspace">
+    <main class="viewer-workspace" id="main" tabindex="-1">
       
       <!-- Sidebar -->
       <aside class="viewer-sidebar" id="viewer-sidebar">
@@ -123,20 +126,20 @@
           <div class="panel-title" data-i18n="viewer.display">Display</div>
           <div class="flex flex-col gap-3 mt-3">
             <label class="text-xs text-muted">
-              Render Mode
+              <span data-i18n="viewer.renderMode">Render mode</span>
               <select id="select-render-mode" data-plugin-render-mode class="form-select text-sm p-1 rounded border border-light bg-surface text-primary" style="width:100%;" title="Select Render Mode" data-i18n-title="tips.renderModeDesc">
                 <!-- Populated dynamically by PluginRegistry (shaders) -->
               </select>
             </label>
             <label class="text-xs text-muted">
-              Visibility (Exposure)
+              <span data-i18n="viewer.exposure">Visibility (exposure)</span>
               <div style="display:flex;align-items:center;gap:6px;">
                 <input type="range" id="slider-exposure" min="20" max="500" value="100" step="10" style="flex:1;">
                 <span id="val-exposure" style="min-width:36px;text-align:right;font-size:11px;">1.00×</span>
               </div>
             </label>
             <label class="text-xs text-muted">
-              Background
+              <span data-i18n="viewer.background">Background</span>
               <select id="select-background-preset" class="form-select text-sm p-1 rounded border border-light bg-surface text-primary" style="width:100%;">
                 <option value="dark" selected data-i18n="viewer.dark">Dark</option>
                 <option value="light" data-i18n="viewer.light">Light</option>
@@ -146,7 +149,7 @@
               </select>
             </label>
             <label class="text-xs text-muted hidden" id="label-background-custom">
-              Custom color
+              <span data-i18n="viewer.customColor">Custom colour</span>
               <input type="color" id="input-background-color" value="#000000" class="form-input" style="height:36px;padding:4px;">
             </label>
             <div class="quality-status" id="volume-source-status" data-i18n="viewer.volSource">Volume source: web slice stack.</div>
@@ -156,13 +159,13 @@
         <!-- Render Quality Panel -->
         <div class="panel-section">
           <div class="panel-title" data-i18n="viewer.renderQuality">Render Quality</div>
-            <select id="select-quality" class="form-select text-sm p-1 rounded border border-light bg-surface text-primary" style="width:100%;">
+            <select id="select-quality" aria-label="Render Quality" data-i18n-aria="viewer.renderQuality" class="form-select text-sm p-1 rounded border border-light bg-surface text-primary" style="width:100%;">
               <option value="256x256">256x256</option>
               <option value="512x512" selected>512x512</option>
               <option value="1024x1024">1024x1024</option>
               <option value="native">Native</option>
             </select>
-            <div class="quality-status" id="quality-status">512x512 par défaut, fallback 256x256 si indisponible.</div>
+            <div class="quality-status" id="quality-status" role="status" data-i18n="viewer.qualityDefault">512x512 by default, 256x256 when unavailable.</div>
             <div class="quality-status" id="buffer-status"></div>
         </div>
 
@@ -174,7 +177,7 @@
           </div>
           <div>
             <div class="slider-label"><span data-i18n="viewer.zOverride">Display Z override</span><span id="val-z-scale">1.00x</span></div>
-            <input type="range" id="slider-z-scale" min="25" max="200" value="100" step="1">
+            <input type="range" id="slider-z-scale" aria-label="Display Z override" data-i18n-aria="viewer.zOverride" min="25" max="200" value="100" step="1">
           </div>
           <div class="physical-status" id="physical-size-status" role="status" data-i18n="viewer.dimPending">Physical dimensions pending.</div>
         </div>
@@ -200,19 +203,19 @@
         </div>
         <div class="panel-section">
           <div class="slider-label"><span data-i18n="viewer.position">Position</span><span id="slicer-val-pos">0.50</span></div>
-          <input type="range" id="slicer-position" min="0" max="100" value="50" step="1">
+          <input type="range" id="slicer-position" aria-label="Position" data-i18n-aria="viewer.position" min="0" max="100" value="50" step="1">
           <div class="slider-label"><span data-i18n="viewer.yaw">Yaw</span><span id="slicer-val-yaw">0°</span></div>
-          <input type="range" id="slicer-yaw" min="-180" max="180" value="0" step="1">
+          <input type="range" id="slicer-yaw" aria-label="Yaw" data-i18n-aria="viewer.yaw" min="-180" max="180" value="0" step="1">
           <div class="slider-label"><span data-i18n="viewer.pitch">Pitch</span><span id="slicer-val-pitch">0°</span></div>
-          <input type="range" id="slicer-pitch" min="-89" max="89" value="0" step="1">
+          <input type="range" id="slicer-pitch" aria-label="Pitch" data-i18n-aria="viewer.pitch" min="-89" max="89" value="0" step="1">
           <div class="slider-label"><span data-i18n="viewer.roll">Roll</span><span id="slicer-val-roll">0°</span></div>
-          <input type="range" id="slicer-roll" min="-180" max="180" value="0" step="1">
+          <input type="range" id="slicer-roll" aria-label="Roll" data-i18n-aria="viewer.roll" min="-180" max="180" value="0" step="1">
         </div>
         <div class="panel-section">
           <div class="slider-label"><span data-i18n="viewer.slabThick">Slab thickness</span><span id="slicer-val-slab">1</span></div>
-          <input type="range" id="slicer-slab" min="1" max="32" value="1" step="1">
+          <input type="range" id="slicer-slab" aria-label="Slab thickness" data-i18n-aria="viewer.slabThick" min="1" max="32" value="1" step="1">
           <label class="text-xs text-muted" style="margin-top:6px;">
-            Projection
+            <span data-i18n="viewer.projection">Projection</span>
             <select id="slicer-projection" class="form-select text-sm p-1 rounded border border-light bg-surface text-primary" style="width:100%;">
               <option value="single" selected data-i18n="viewer.single">Single</option>
               <option value="mip" data-i18n="viewer.mip">MIP</option>
@@ -245,7 +248,7 @@
               <!-- Custom vertical slider (zstack-browser plugin): a "3D" notch above the
                    track shows every kept slice; the cursor bar shows one slice or a slab;
                    the two triangular handles trim the slices above / below. -->
-              <div class="zstack-vslider" id="zstack-vslider" tabindex="0" role="slider" aria-orientation="vertical" aria-valuemin="-1" aria-valuemax="0" aria-valuenow="-1">
+              <div class="zstack-vslider" id="zstack-vslider" tabindex="0" role="slider" aria-label="Slices" data-i18n-aria="viewer.slices" aria-orientation="vertical" aria-valuemin="-1" aria-valuemax="0" aria-valuenow="-1">
                 <button type="button" class="zs-notch" id="zstack-notch"><i data-lucide="box"></i><span>3D</span></button>
                 <div class="zs-detent" aria-hidden="true"></div>
                 <div class="zs-track" id="zstack-track">
@@ -270,7 +273,7 @@
             <span class="zstack-thickness-label" id="zstack-thickness-label">Thickness</span>
             <div class="zstack-stepper">
               <button type="button" class="btn btn-ghost btn-icon btn-sm zstack-stepper-btn" id="btn-zstack-thk-minus" aria-label="−"><i data-lucide="minus"></i></button>
-              <input type="number" class="zstack-thickness-input" id="zstack-thickness-input" min="1" max="1" value="1" step="1">
+              <input type="number" class="zstack-thickness-input" id="zstack-thickness-input" aria-labelledby="zstack-thickness-label" min="1" max="1" value="1" step="1">
               <button type="button" class="btn btn-ghost btn-icon btn-sm zstack-stepper-btn" id="btn-zstack-thk-plus" aria-label="+"><i data-lucide="plus"></i></button>
             </div>
             <span class="zstack-thickness-um" id="zstack-thickness-um">—</span>
@@ -415,13 +418,13 @@
             </button>
           </div>
           <div class="scientific-panel-body">
-            <div id="volume-measure-status" class="tracking-inspector text-sm text-muted" data-i18n="viewer.measureDesc">Click two points on the embryo surface.</div>
+            <div id="volume-measure-status" class="tracking-inspector text-sm text-muted" role="status" data-i18n="viewer.measureDesc">Click two points on the specimen surface.</div>
             <div style="margin-bottom: 8px; display: flex; align-items: center; gap: 8px;">
               <label class="flex items-center gap-2 text-sm cursor-pointer" style="color: var(--text-primary);">
                 <input type="checkbox" id="toggle-measure-3d-labels" checked>
-                <span>Valeurs 3D</span>
+                <span data-i18n="viewer.measure3dValues">3D values</span>
               </label>
-              <input type="range" id="measure-text-size" min="10" max="100" value="48" style="flex: 1; min-width: 0;" title="Taille du texte" data-i18n-title="tips.textSize">
+              <input type="range" id="measure-text-size" min="10" max="100" value="48" style="flex: 1; min-width: 0;" title="Text size" data-i18n-title="tips.textSize" aria-label="Text size" data-i18n-aria="tips.textSize">
             </div>
             <div class="tracking-science-box" id="volume-measure-list" data-i18n="viewer.noMeasure">No saved measurement yet.</div>
             <div class="channel-actions">
@@ -434,11 +437,14 @@
         
         <!-- Loader -->
         <div class="viewer-loader" id="viewer-loader">
-          <i data-lucide="loader-2" class="animate-spin" style="width:48px;height:48px;margin-bottom:16px;"></i>
-          <h3 id="loader-text">Loading dataset...</h3>
-          <div class="progress-bar-container">
-            <div class="progress-bar-fill" id="loader-progress"></div>
+          <div class="viewer-loader-body" id="loader-body" role="status" aria-live="polite">
+            <i data-lucide="loader-2" class="animate-spin viewer-loader-spinner"></i>
+            <h3 id="loader-text" data-i18n="viewer.loadingDataset">Loading dataset…</h3>
+            <div class="progress-bar-container">
+              <div class="progress-bar-fill" id="loader-progress"></div>
+            </div>
           </div>
+          <div class="viewer-loader-error hidden" id="loader-error" role="alert"></div>
         </div>
       </div>
       
@@ -471,7 +477,7 @@
         </div>
       </aside>
       
-    </div>
+    </main>
 
     <!-- Timeline (Hidden by default, shown for LiveImaging) -->
     <div id="timeline-panel" class="hidden" style="flex-shrink: 0; width: 100%;"></div>
@@ -485,7 +491,7 @@
         <span class="text-xs text-muted" id="studio-subtitle" data-i18n="viewer.studioSubtitle">Edit and Annotate</span>
       </div>
       <div class="studio-header-right">
-        <input type="file" id="studio-import-file" accept=".json" class="hidden">
+        <input type="file" id="studio-import-file" accept=".json" class="hidden" aria-label="Import JSON" data-i18n-aria="viewer.importJson">
         <button class="btn btn-outline btn-sm" id="btn-studio-import"><i data-lucide="upload"></i><span data-i18n="viewer.importJson">Import JSON</span></button>
         <button class="btn btn-outline btn-sm" id="btn-studio-export-json"><i data-lucide="file-json"></i><span data-i18n="viewer.saveJson">Save JSON</span></button>
         <button class="btn btn-primary btn-sm" id="btn-studio-export-png"><i data-lucide="download"></i><span data-i18n="viewer.exportPng">Export PNG</span></button>
@@ -545,7 +551,6 @@
   <script src="js/core/theme.js"></script>
   <script src="js/core/colorblind.js?v=20260615-fixed1" nonce="{{CSP_NONCE}}"></script>
   <script src="js/core/catalog.js"></script>
-  <script src="js/core/download-manifest.js"></script>
   <script src="js/core/display-presets.js"></script>
   <script src="js/core/volume-source-manager.js"></script>
   <script src="js/core/dialog.js"></script>
@@ -554,7 +559,6 @@
   <script src="js/core/url-state.js?v=20260615-fixed1"></script>
   <script src="js/core/export-manager.js?v=20260615-fixed1"></script>
   <script src="js/core/tool-manager.js?v=20260615-fixed1"></script>
-  <script src="js/core/annotation-manager.js?v=20260615-fixed1"></script>
   <script src="js/core/perf-telemetry.js"></script>
   <script src="js/core/compat.js"></script>
   <script src="js/core/plugin-trust.js"></script>
@@ -562,21 +566,21 @@
   <script src="js/core/plugin-registry.js?v=20260615-fixed1" nonce="{{CSP_NONCE}}"></script>
   <script src="js/core/svr-manager.js?v=20260615-fixed1"></script>
   <script src="js/core/brick-loader.js?v=20260615-fixed1"></script>
-  <script src="js/core/aabb-intersector.js"></script>
 
   <script src="js/components/channel-panel.js?v=20260615-fixed1"></script>
   <script src="js/components/dataset-gallery.js"></script>
   <script src="js/components/decomposition-panel.js"></script>
   <script src="js/components/timeline.js?v=20260615-fixed1"></script>
-  <script src="js/components/annotation-layer.js?v=20260615-fixed1"></script>
   <script src="js/components/studio-editor.js?v=20260615-fixed1"></script>
   <script src="js/viewers/volume-grid.js?v=20260615-fixed1"></script>
 
   <script src="js/core/slice-compositor.js"></script>
+  <script src="js/workers/studio-plane-ops.js"></script>
   <script src="js/viewers/volume-slicer.js?v=20260615-fixed1"></script>
   <script src="js/viewers/volume-viewer.js?v=20260615-fixed1"></script>
   <script src="js/viewers/tracking-overlay.js?v=20260615-fixed1"></script>
   <script src="js/pages/viewer.js?v=20260615-fixed1"></script>
+  <script src="js/core/font-loader.js"></script>
   <!-- Modules are loaded dynamically by PluginRegistry.loadModules() in viewer.js -->
 </body>
 </html>

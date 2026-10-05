@@ -98,7 +98,14 @@ const MeasurementStore = (() => {
         item.createdAt || ''
       ]);
     });
-    return rows.map(row => row.map(value => `"${String(value ?? '').replace(/"/g, '""')}"`).join(',')).join('\n');
+    // A text cell starting with = + - @ would be evaluated as a formula by a spreadsheet:
+    // a leading apostrophe keeps it text. Numbers (a negative coordinate) are untouched.
+    const cell = value => {
+      let text = String(value ?? '');
+      if (typeof value !== 'number' && /^[=+\-@\t\r]/.test(text)) text = "'" + text;
+      return `"${text.replace(/"/g, '""')}"`;
+    };
+    return rows.map(row => row.map(cell).join(',')).join('\n');
   }
 
   function toJson(items = []) {

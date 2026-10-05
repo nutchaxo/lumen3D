@@ -42,6 +42,7 @@ const document = {
   createElement: t => new El(t),
   querySelector: sel => containers[sel] || null,
   querySelectorAll: () => [],
+  getElementById: () => null,
   body: { appendChild: el => { if (el.tagName === 'script') queueMicrotask(() => el.onload && el.onload()); } },
 };
 
@@ -68,8 +69,8 @@ const btns = g => containers[`[data-tool-group="${g}"]`].children;
 currentFetch = async () => ({ ok: false, status: 404 });
 {
   const paths = await PR.discover('js/modules');
-  assert.equal(paths.length, 16, 'discover embedded default = 16 module paths');
-  assert.ok(paths.includes('channels/histogram') && paths.includes('shaders/fluorescence'),
+  assert.equal(paths.length, 17, 'discover embedded default = 17 module paths');
+  assert.ok(paths.includes('channels/histogram') && paths.includes('shaders/fluorescence') && paths.includes('shaders/natural-fluorescence'),
     'embedded default spans channels + shaders, not just tools');
 }
 
@@ -99,7 +100,7 @@ currentFetch = async (url) => (url === 'api/plugins.php'
   : { ok: false, status: 404 });
 {
   const paths = await PR.discover('js/modules');
-  assert.equal(paths.length, 16, 'non-JSON php body is rejected, falls through to embedded default');
+  assert.equal(paths.length, 17, 'non-JSON php body is rejected, falls through to embedded default');
 }
 
 // ── loadModules(): registers every discovered tool from disk ──────────────────
@@ -114,7 +115,7 @@ currentFetch = async (url) => {
 const all = await PR.discover('js/modules');
 await PR.loadModules('js/modules', all);
 assert.equal(PR.listByPlacement('tools').length, 12, 'loadModules registered all 12 tool plugins');
-assert.equal(PR.listByPlacement('shaders').length, 2, '2 shaders registered (fluorescence + structure-dvr)');
+assert.equal(PR.listByPlacement('shaders').length, 3, '3 shaders registered (fluorescence + natural-fluorescence + structure-dvr)');
 assert.equal(PR.listByPlacement('channels').length, 2, '2 channel plugins registered');
 
 // ── buildToolbarButtons(): generation, clustering, ordering, types, visibility ─

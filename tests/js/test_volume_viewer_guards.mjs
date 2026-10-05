@@ -60,19 +60,21 @@ assert.ok(/setFromAxisAngle\(new THREE\.Vector3\(0, 0, 1\)/.test(s), 'BUG-038: r
 // DEAD-027 (no dims.gridSize fallback; the only gridSize left is the manifest read)
 assert.ok(!/dims\.gridSize/.test(s), 'DEAD-027: dead dims.gridSize branch removed');
 
-// DEAD-029
+// DEAD-029 — and the async seed loop too: it walked the depth one animation frame per
+// four slices for atlases that have no CPU data to copy (a no-op that delayed every
+// SVR stream and stalled in a hidden tab).
 assert.equal(count(/function _intersectGizmo/g), 0, 'DEAD-029: dead _intersectGizmo removed');
 assert.equal(count(/function _seedTexturesFromActive\(/g), 0, 'DEAD-029: dead sync _seedTexturesFromActive removed');
-assert.ok(/_seedTexturesFromActiveAsync/.test(s), 'DEAD-029: live async seed variant kept');
+assert.equal(count(/_seedTexturesFromActiveAsync/g), 0, 'the dead async seed loop is removed');
 
 // DEAD-030 (no two consecutive identical setFromCamera lines)
 assert.ok(!/_raycaster\.setFromCamera\(_pointer, camera\);\s*\r?\n\s*_raycaster\.setFromCamera\(_pointer, camera\);/.test(s),
   'DEAD-030: duplicate setFromCamera removed');
 
-// LEAK-023
-assert.ok(/_seedRafId/.test(s) && /cancelAnimationFrame\(_seedRafId\)/.test(s), 'LEAK-023: seed rAF tracked + cancellable');
+// LEAK-023: no seed rAF left to leak.
+assert.equal(count(/_seedRafId/g), 0, 'LEAK-023: no seed animation frame any more');
 
 // BUG-011
-assert.ok(/onBrickError/.test(s) && /failedBricks/.test(s), 'BUG-011: onBrickError wired, failures surfaced');
+assert.ok(/onBrickError/.test(s) && /missing\.add\(brickKey/.test(s) && /bricks missing/.test(s), 'BUG-011: onBrickError wired, dropped bricks counted and surfaced');
 
 console.log('volume-viewer guards + dead code (14 findings): OK');

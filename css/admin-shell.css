@@ -133,6 +133,11 @@ body.adm-editor-only .adm-tab-inner { max-width: none; padding: 0; }
 
 /* ── Content column + topbar ───────────────────────────────── */
 .adm-content { flex: 1; min-width: 0; display: flex; flex-direction: column; overflow: hidden; }
+.adm-main { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.adm-main:focus { outline: none; }
+.skip-link { position: absolute; left: 8px; top: -48px; z-index: 10000; padding: 8px 14px; border-radius: 6px;
+  background: var(--adm-card); color: var(--adm-text); border: 1px solid var(--adm-border-active); text-decoration: none; }
+.skip-link:focus { top: 8px; }
 
 .adm-topbar {
   height: 58px; flex-shrink: 0; display: flex; align-items: center; gap: 14px; padding: 0 20px;

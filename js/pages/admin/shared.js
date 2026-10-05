@@ -53,16 +53,23 @@ export function setCsrf(token) { _csrf = token || null; }
 export function getCsrf() { return _csrf; }
 export function setUnauthorizedHandler(fn) { _onUnauthorized = fn; }
 
+// The CSRF header and JSON content type are the base; a caller's own headers are
+// layered on top instead of replacing the whole object.
+function _requestInit(options) {
+  const { headers, ...rest } = options || {};
+  return {
+    ...rest,
+    headers: {
+      'Content-Type': 'application/json',
+      ...(_csrf ? { 'X-CSRF-Token': _csrf } : {}),
+      ...(headers || {}),
+    },
+  };
+}
+
 export async function apiFetch(url, options = {}) {
   try {
-    const res = await fetch(url, {
-      headers: {
-        'Content-Type': 'application/json',
-        ...(_csrf ? { 'X-CSRF-Token': _csrf } : {}),
-        ...(options.headers || {}),
-      },
-      ...options,
-    });
+    const res = await fetch(url, _requestInit(options));
     if (res.status === 401) {
       if (typeof _onUnauthorized === 'function') _onUnauthorized();
       return null;
@@ -83,27 +90,34 @@ export async function apiFetch(url, options = {}) {
   }
 }
 
-// Like apiFetch but returns { ok, status, data } so callers can branch on the
-// HTTP status (e.g. 409 already_configured / last_shader).
+// Like apiFetch but returns { ok, status, data, rev } so callers can branch on the
+// HTTP status (e.g. 409 already_configured / last_shader / stale). `rev` is the
+// site-doc revision an admin read of api/site.php carries (X-Lumen-Rev), null
+// elsewhere: sent back as ?rev= on a save, it turns a lost update into a 409.
 export async function apiFetchStatus(url, options = {}) {
   try {
-    const res = await fetch(url, {
-      headers: {
-        'Content-Type': 'application/json',
-        ...(_csrf ? { 'X-CSRF-Token': _csrf } : {}),
-        ...(options.headers || {}),
-      },
-      ...options,
-    });
+    const res = await fetch(url, _requestInit(options));
     if (res.status === 401 && typeof _onUnauthorized === 'function') _onUnauthorized();
     let data = null;
     try { data = JSON.parse(await res.text()); } catch { /* non-JSON */ }
-    return { ok: res.ok, status: res.status, data };
+    const rev = (res.headers && typeof res.headers.get === 'function') ? res.headers.get('X-Lumen-Rev') : null;
+    return { ok: res.ok, status: res.status, data, rev: rev || null };
   } catch (err) {
     console.error('API error:', url, err);
-    return { ok: false, status: 0, data: null };
+    return { ok: false, status: 0, data: null, rev: null };
   }
 }
+
+// ── localStorage that never throws (blocked site data, some private modes) ──
+export function storageGet(key) {
+  try { return localStorage.getItem(key); } catch (_) { return null; }
+}
+export function storageSet(key, value) {
+  try { localStorage.setItem(key, value); return true; } catch (_) { return false; }
+}
+
+// Minimum length of an admin password, enforced here AND by the server.
+export const MIN_PASSWORD = 8;
 
 // ── Toasts ─────────────────────────────────────────────────────
 let _toastContainer = null;
@@ -132,3 +146,41 @@ export function refreshIcons(root) {
 
 export const el = (id) => document.getElementById(id);
 export function deepClone(obj) { return JSON.parse(JSON.stringify(obj)); }
+
+/**
+ * Ask for the admin password in a real dialog (masked field, password-manager
+ * friendly) instead of window.prompt(), which echoes the typed text.
+ * Resolves the password, or null when the operator cancels.
+ */
+export function askPassword(message) {
+  return new Promise((resolve) => {
+    const overlay = document.createElement('div');
+    overlay.className = 'upl-exit';
+    overlay.setAttribute('role', 'alertdialog');
+    overlay.setAttribute('aria-modal', 'true');
+    overlay.innerHTML = `
+      <form class="upl-exit-card" autocomplete="on">
+        <h3 class="upl-exit-title">${escHtml(t('admin.reauthTitle', 'Confirmation requise'))}</h3>
+        <p class="upl-exit-body">${escHtml(message)}</p>
+        <input type="password" class="adm-field-input" name="password" autocomplete="current-password" style="width:100%;margin-top:14px">
+        <div class="upl-exit-actions">
+          <button type="button" class="adm-btn adm-btn-ghost" data-act="cancel">${escHtml(t('admin.cancel', 'Annuler'))}</button>
+          <button type="submit" class="adm-btn adm-btn-accent">${escHtml(t('admin.confirm', 'Confirmer'))}</button>
+        </div>
+      </form>`;
+    const input = overlay.querySelector('input');
+    const previous = document.activeElement;
+    const close = (value) => {
+      document.removeEventListener('keydown', onKey, true);
+      overlay.remove();
+      try { previous?.focus?.(); } catch (_) { /* element gone */ }
+      resolve(value);
+    };
+    const onKey = (e) => { if (e.key === 'Escape') { e.preventDefault(); close(null); } };
+    overlay.querySelector('form').addEventListener('submit', (e) => { e.preventDefault(); close(input.value || null); });
+    overlay.querySelector('[data-act="cancel"]').addEventListener('click', () => close(null));
+    document.addEventListener('keydown', onKey, true);
+    document.body.appendChild(overlay);
+    setTimeout(() => input.focus(), 20);
+  });
+}

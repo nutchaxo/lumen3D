@@ -31,6 +31,7 @@ import argparse
 import gzip
 import json
 import math
+import os
 import shutil
 import sys
 from collections import Counter, OrderedDict
@@ -38,6 +39,11 @@ from datetime import datetime
 from pathlib import Path
 
 import numpy as np
+
+HERE = Path(__file__).resolve().parent
+if str(HERE) not in sys.path:
+    sys.path.insert(0, str(HERE))
+from run_preprocess import atomic_write_bytes, atomic_write_json  # noqa: E402
 
 __version__ = "0.2.0"
 
@@ -417,11 +423,12 @@ def import_tracking(track_path: Path, dataset_dir: Path, glb_path: Path = None,
 
     # --- Write tracks.json (+ .gz) ---
     payload = json.dumps(tracks, ensure_ascii=False, separators=(",", ":"))
-    (dataset_dir / "tracks.json").write_text(payload, encoding="utf-8")
+    atomic_write_bytes(dataset_dir / "tracks.json", payload.encode("utf-8"))
     gz_note = ""
     if write_gzip:
-        with gzip.open(dataset_dir / "tracks.json.gz", "wb", compresslevel=9) as fh:
-            fh.write(payload.encode("utf-8"))
+        # mtime=0: the archive depends on the tracks alone, not on the hour it was made.
+        atomic_write_bytes(dataset_dir / "tracks.json.gz",
+                           gzip.compress(payload.encode("utf-8"), compresslevel=9, mtime=0))
         gz_note = f", {(dataset_dir / 'tracks.json.gz').stat().st_size/1e6:.2f} MB gzipped"
     print(f"[TRACKING] tracks.json: {len(tracks['cells'])} cells, "
           f"{len(tracks['timepoints'])} timepoints, {len(payload)/1e6:.2f} MB{gz_note}")
@@ -432,7 +439,9 @@ def import_tracking(track_path: Path, dataset_dir: Path, glb_path: Path = None,
         candidate = track_path.with_suffix(".glb")
         glb_path = candidate if candidate.exists() else None
     if glb_path and glb_path.exists():
-        shutil.copy2(glb_path, dataset_dir / "model.glb")
+        staged = dataset_dir / ".model.glb.tmp"
+        shutil.copy2(glb_path, staged)
+        os.replace(staged, dataset_dir / "model.glb")
         surface_rel = "model.glb"
         print(f"[TRACKING] model.glb: {(dataset_dir / 'model.glb').stat().st_size/1e6:.1f} MB")
     else:
@@ -494,8 +503,7 @@ def import_tracking(track_path: Path, dataset_dir: Path, glb_path: Path = None,
             print(f"[TRACKING]   [!] {w}")
 
     metadata["lastModified"] = datetime.now().isoformat()
-    with open(metadata_path, "w", encoding="utf-8") as fh:
-        json.dump(metadata, fh, indent=2, ensure_ascii=False)
+    atomic_write_json(metadata_path, metadata, indent=2, ensure_ascii=False)
     print(f"[TRACKING] Updated {metadata_path}")
     return metadata
 

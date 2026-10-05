@@ -37,7 +37,7 @@ const INSTALLER_UA = 'Lumen3D-Installer/1.0 (+https://github.com/' . GITHUB_REPO
 //   - Set    → signature is MANDATORY (fail-closed): a release that is unsigned, or
 //              whose signature does not verify, is REFUSED before any extraction.
 // Keep in lockstep with dev_server.py `_RELEASE_PUBKEY_HEX`. See tools/gen_signing_key.py.
-const PINNED_PUBKEY = '';
+const PINNED_PUBKEY = '9635e20bd09e2dc84830b018a99f3fb051de2f44db97f03e8d5f28e8d769ed79';
 
 const STATE_FILE = '.install-state.json';
 const LOCK_FILE  = '.install-lock';
@@ -252,25 +252,77 @@ function dir_mode(): int  { return mode_override('LUMEN_DIR_MODE')  ?? base_mode
 function file_mode(): int { return mode_override('LUMEN_FILE_MODE') ?? base_modes()[1]; }
 
 /**
+ * The platform's CODE is never widened like the data trees (twin of
+ * api/_admin_lib.php admin_code_*_mode): on a shared machine a world-writable
+ * api/*.php or .htaccess lets any other account replace what PHP executes. Always
+ * world-readable (the web server may be another user than PHP), never
+ * world-writable, group-writable only when the web root itself is.
+ */
+function code_dir_mode(): int {
+    $o = mode_override('LUMEN_DIR_MODE');
+    if ($o !== null) return ($o & ~0002) | 0755;
+    if (DIRECTORY_SEPARATOR !== '/') return 0755;
+    $root = @fileperms(target_dir());
+    return $root === false ? 0755 : ((($root & 0777) & 0775) | 0755);
+}
+
+function code_file_mode(): int {
+    $o = mode_override('LUMEN_FILE_MODE');
+    if ($o !== null) return ($o & 0664) | 0644;
+    if (DIRECTORY_SEPARATOR !== '/') return 0644;
+    $root = @fileperms(target_dir());
+    return $root === false ? 0644 : ((($root & 0777) & 0664) | 0644);
+}
+
+/** Path relative to the install dir ('' when outside it). */
+function rel_of(string $path): string {
+    $p    = str_replace('\\', '/', $path);
+    $root = rtrim(str_replace('\\', '/', target_dir()), '/');
+    if ($p === $root || strncmp($p, $root . '/', strlen($root) + 1) !== 0) return '';
+    return substr($p, strlen($root) + 1);
+}
+
+/** The operator-managed data trees: the only place the escalated modes apply. */
+function is_data_rel(string $rel): bool {
+    foreach (['DATA_WEB', 'uploads', 'config', 'api/page-drafts'] as $prefix) {
+        if ($rel === $prefix || strncmp($rel, $prefix . '/', strlen($prefix) + 1) === 0) return true;
+    }
+    return false;
+}
+
+function is_code_file(string $path): bool {
+    return (bool)preg_match('/(\.(php\d?|phtml|phps|phar|py|pl|cgi|sh)|(^|\/)\.htaccess|(^|\/)\.user\.ini)$/i',
+                            str_replace('\\', '/', $path));
+}
+
+function dir_mode_for(string $path): int {
+    return is_data_rel(rel_of($path)) ? dir_mode() : code_dir_mode();
+}
+
+function file_mode_for(string $path): int {
+    if (is_code_file($path)) return code_file_mode();
+    return is_data_rel(rel_of($path)) ? file_mode() : code_file_mode();
+}
+
+/**
  * mkdir + explicit chmod. mkdir()'s mode argument is masked by the process umask
  * (typically 022, which silently strips group/other write), so the mode has to be
  * set afterwards — for EVERY level a recursive mkdir may have created.
  */
 function make_dir(string $path): bool {
     if (is_dir($path)) return true;
-    if (!@mkdir($path, dir_mode(), true) && !is_dir($path)) return false;
-    $mode = dir_mode();
+    if (!@mkdir($path, dir_mode_for($path), true) && !is_dir($path)) return false;
     $cur  = rtrim(str_replace('\\', '/', $path), '/');
     $root = rtrim(str_replace('\\', '/', target_dir()), '/');
     while ($cur !== '' && strlen($cur) > strlen($root) && strncmp($cur, $root, strlen($root)) === 0) {
-        @chmod($cur, $mode);
+        @chmod($cur, dir_mode_for($cur));
         $cur = dirname($cur);
     }
     return true;
 }
 
 /** Apply the resolved file mode to something we just wrote (no-op on Windows). */
-function fix_file_mode(string $path): void { @chmod($path, file_mode()); }
+function fix_file_mode(string $path): void { @chmod($path, file_mode_for($path)); }
 
 /** Secrets that keep a restrictive mode (deleting them only needs the parent dir). */
 function is_secret_path(string $rel): bool {
@@ -724,6 +776,15 @@ function stream_download_tick(string $url, $fp, int $offset, int $rangeEnd, ?int
 
 // ── GitHub release resolution ────────────────────────────────────────────────
 
+/** The release key the installer verifies against: PINNED_PUBKEY. The test suite
+ *  loads this file as a library (LUMEN_INSTALL_LIB) and may substitute a throwaway
+ *  key of its own (LUMEN_INSTALL_TEST_PUBKEY) to exercise the signed path; a request
+ *  served by install.php defines neither, so the pinned key always applies there. */
+function install_release_pubkey(): string {
+    if (defined('LUMEN_INSTALL_LIB') && defined('LUMEN_INSTALL_TEST_PUBKEY')) return (string)LUMEN_INSTALL_TEST_PUBKEY;
+    return PINNED_PUBKEY;
+}
+
 /**
  * Verify a detached Ed25519 signature over the SHA256SUMS bytes against the pinned
  * public key, using PHP's built-in libsodium (PHP 7.2+). The signature body may be
@@ -732,7 +793,7 @@ function stream_download_tick(string $url, $fp, int $offset, int $rangeEnd, ?int
  */
 function release_signature_ok(string $sumsBody, string $sigBody): bool {
     if (!function_exists('sodium_crypto_sign_verify_detached')) return false;
-    $pkHex = trim(PINNED_PUBKEY);
+    $pkHex = trim(install_release_pubkey());
     if (!preg_match('/^[0-9a-fA-F]{64}$/', $pkHex)) return false;
     $pk = @hex2bin($pkHex);
     if ($pk === false || strlen($pk) !== 32) return false;
@@ -762,8 +823,11 @@ function release_signature_ok(string $sumsBody, string $sigBody): bool {
  * zipball_url), and resolve the expected sha256 from a SHA256SUMS asset if any.
  * Returns ['ok'=>bool, 'error'=>?, 'retryAfterMin'=>?, 'release'=>?array].
  */
-function fetch_release_info(): array {
-    $r = http_get_small(GITHUB_API_LATEST, ['Accept: application/vnd.github+json']);
+function fetch_release_info(?callable $get = null): array {
+    // $get(url, headers) answers like http_get_small (the default); injectable so the
+    // fail-closed rules are testable without a network.
+    $get = $get ?? 'http_get_small';
+    $r = $get(GITHUB_API_LATEST, ['Accept: application/vnd.github+json']);
     if ($r['status'] === 403 || $r['status'] === 429) {
         $retryMin = null;
         if (isset($r['headers']['x-ratelimit-reset'])) {
@@ -788,14 +852,16 @@ function fetch_release_info(): array {
     $version = ltrim($tag, 'vV');
     $assets = is_array($rel['assets'] ?? null) ? $rel['assets'] : [];
 
-    // Preferred asset: exact lumen3d-web-<version>.zip, else any lumen3d-web-*.zip.
+    // Only the archive NAMED after the tag (twin of the platform updater,
+    // admin_release_assets / dev_server.py _update_check): another lumen3d-web-*.zip
+    // attached to the release is never installed, and two of that exact name make
+    // the release ambiguous — refused either way.
     $asset = null;
+    $wanted = strtolower('lumen3d-web-' . $version . '.zip');
     foreach ($assets as $a) {
-        if (($a['name'] ?? '') === 'lumen3d-web-' . $version . '.zip') { $asset = $a; break; }
-    }
-    if ($asset === null) {
-        foreach ($assets as $a) {
-            if (preg_match('/^lumen3d-web-[0-9][A-Za-z0-9.\-]*\.zip$/', (string)($a['name'] ?? ''))) { $asset = $a; break; }
+        if (is_array($a) && strtolower((string)($a['name'] ?? '')) === $wanted) {
+            if ($asset !== null) return ['ok' => false, 'error' => 'checksum_missing', 'retryAfterMin' => null, 'release' => null];
+            $asset = $a;
         }
     }
 
@@ -805,6 +871,12 @@ function fetch_release_info(): array {
         $nm = (string)($a['name'] ?? '');
         if ($shaAsset === null && preg_match('/^sha256sums(\.txt)?$/i', $nm)) { $shaAsset = $a; }
         elseif ($sigAsset === null && preg_match('/^sha256sums(\.txt)?\.sig$/i', $nm)) { $sigAsset = $a; }
+    }
+
+    // No named lumen3d-web-*.zip asset → refused. The repository zipball is listed in
+    // no SHA256SUMS, so installing it would run code nothing has verified.
+    if ($asset === null) {
+        return ['ok' => false, 'error' => 'checksum_missing', 'retryAfterMin' => null, 'release' => null];
     }
 
     $info = [
@@ -817,13 +889,10 @@ function fetch_release_info(): array {
         'sha256'    => null,
         'publishedAt' => (string)($rel['published_at'] ?? ''),
     ];
-    if ($asset !== null && !empty($asset['browser_download_url']) && https_only((string)$asset['browser_download_url'])) {
+    if (!empty($asset['browser_download_url']) && https_only((string)$asset['browser_download_url'])) {
         $info['assetName'] = (string)$asset['name'];
         $info['zipUrl']    = (string)$asset['browser_download_url'];
         $info['size']      = isset($asset['size']) ? (int)$asset['size'] : null;
-    } elseif (!empty($rel['zipball_url']) && https_only((string)$rel['zipball_url'])) {
-        $info['zipball'] = true;
-        $info['zipUrl']  = (string)$rel['zipball_url'];
     } else {
         return ['ok' => false, 'error' => 'no_release_zip', 'retryAfterMin' => null, 'release' => null];
     }
@@ -832,13 +901,13 @@ function fetch_release_info(): array {
     }
 
     // Checksums apply to named assets only (a zipball is not listed in SHA256SUMS).
-    $info['signingConfigured'] = (PINNED_PUBKEY !== '');
+    $info['signingConfigured'] = (install_release_pubkey() !== '');
     $info['sigVerified'] = false;
     if ($shaAsset !== null && !$info['zipball'] && !empty($shaAsset['browser_download_url']) && https_only((string)$shaAsset['browser_download_url'])) {
-        $sums = http_get_small((string)$shaAsset['browser_download_url']);
+        $sums = $get((string)$shaAsset['browser_download_url'], []);
         if ($sums['ok']) {
             // Authenticity gate BEFORE trusting any digest from this manifest.
-            if (PINNED_PUBKEY !== '') {
+            if (install_release_pubkey() !== '') {
                 if (!function_exists('sodium_crypto_sign_verify_detached')) {
                     return ['ok' => false, 'error' => 'signature_unsupported', 'retryAfterMin' => null, 'release' => null];
                 }
@@ -848,7 +917,7 @@ function fetch_release_info(): array {
                 if ($sigUrl === null) {
                     return ['ok' => false, 'error' => 'signature_missing', 'retryAfterMin' => null, 'release' => null];
                 }
-                $sigResp = http_get_small($sigUrl);
+                $sigResp = $get($sigUrl, []);
                 if (!$sigResp['ok'] || !release_signature_ok($sums['body'], $sigResp['body'])) {
                     return ['ok' => false, 'error' => 'signature_invalid', 'retryAfterMin' => null, 'release' => null];
                 }
@@ -860,12 +929,19 @@ function fetch_release_info(): array {
                     break;
                 }
             }
-        } elseif (PINNED_PUBKEY !== '') {
+        } elseif (install_release_pubkey() !== '') {
             return ['ok' => false, 'error' => 'signature_invalid', 'retryAfterMin' => null, 'release' => null];
         }
-    } elseif (PINNED_PUBKEY !== '') {
+    } elseif (install_release_pubkey() !== '') {
         // A key is pinned but the release has no (named-asset) SHA256SUMS to authenticate.
         return ['ok' => false, 'error' => 'signature_missing', 'retryAfterMin' => null, 'release' => null];
+    }
+    // Fail closed, keyed or not: an archive whose digest no SHA256SUMS states is
+    // never installed (twin of the platform's own updater, which refuses the same).
+    // Without a pinned key the sums file itself is only TLS-authenticated — the page
+    // says so (signingConfigured=false) — but the download is still checked against it.
+    if ($info['sha256'] === null) {
+        return ['ok' => false, 'error' => 'checksum_missing', 'retryAfterMin' => null, 'release' => null];
     }
     return ['ok' => true, 'error' => null, 'retryAfterMin' => null, 'release' => $info];
 }
@@ -1045,6 +1121,13 @@ function extract_entry(ZipArchive $zip, int $index, string $stripPrefix, ?bool &
     $selfReal = realpath(__FILE__);
     if ($selfReal !== false && is_file($dest) && realpath($dest) === $selfReal) { $skipped = true; return 0; }
 
+    $hadHtaccess = null;
+    if ($rel === '.htaccess' && is_file($dest)) {
+        // Merged, not replaced: a re-run over our own merged file keeps the same
+        // operator lines (they sit outside the markers).
+        $prev = @file_get_contents($dest);
+        if (is_string($prev)) $hadHtaccess = $prev;
+    }
     $in = $zip->getStream($name);
     if ($in === false) throw new RuntimeException('zip_entry_read');
     $out = @fopen($dest, 'wb');                                              // 'wb' truncates any partial from a prior crash
@@ -1063,8 +1146,84 @@ function extract_entry(ZipArchive $zip, int $index, string $stripPrefix, ?bool &
     }
     fclose($in);
     fclose($out);
+    if ($rel === 'DATA_WEB/.htaccess') {
+        // The published tree's guard is the platform's own text (the copy an older
+        // release shipped used an unguarded `Options`, a 500 on hosts without
+        // AllowOverride Options).
+        if (@file_put_contents($dest, data_web_guard()) === false) throw new RuntimeException('disk_write');
+    } elseif ($rel === '.htaccess' && $hadHtaccess !== null) {
+        // The host (or the operator) already had a root .htaccess: its own lines
+        // (AddHandler for a PHP version, RewriteBase…) are kept around the shipped block.
+        $shipped = (string)@file_get_contents($dest);
+        @file_put_contents($dest . '.lumen-backup', $hadHtaccess);
+        if (@file_put_contents($dest, merge_htaccess($hadHtaccess, $shipped)) === false) throw new RuntimeException('disk_write');
+    }
     fix_file_mode($dest);
     return $written;
+}
+
+// ── Root .htaccess merge + DATA_WEB guard (twins of api/_admin_lib.php) ─────
+
+const HTACCESS_BEGIN = '# BEGIN LUMEN3D';
+const HTACCESS_END   = '# END LUMEN3D';
+
+function htaccess_block(string $shipped): string {
+    $b = strpos($shipped, HTACCESS_BEGIN);
+    $e = strpos($shipped, HTACCESS_END);
+    if ($b === false || $e === false || $e < $b) {
+        return HTACCESS_BEGIN . "\n" . rtrim($shipped, "\r\n") . "\n" . HTACCESS_END . "\n";
+    }
+    return substr($shipped, $b, $e + strlen(HTACCESS_END) - $b) . "\n";
+}
+
+/** Twin of admin_merge_htaccess: lines outside the LUMEN3D markers are the
+ *  operator's; a marker-less file keeps its top-level host directives above the block. */
+function merge_htaccess(string $existing, string $shipped): string {
+    $block = htaccess_block($shipped);
+    $existing = str_replace("\r\n", "\n", $existing);
+    $b = strpos($existing, HTACCESS_BEGIN);
+    $e = strpos($existing, HTACCESS_END);
+    if ($b !== false && $e !== false && $e > $b) {
+        return substr($existing, 0, $b) . $block . ltrim(substr($existing, $e + strlen(HTACCESS_END)), "\n");
+    }
+    $shippedLines = array_map('trim', explode("\n", str_replace("\r\n", "\n", $shipped)));
+    $keep = []; $depth = 0;
+    foreach (explode("\n", $existing) as $line) {
+        $t = trim($line);
+        if (preg_match('#^</[A-Za-z]#', $t)) { $depth = max(0, $depth - 1); continue; }
+        if (preg_match('#^<[A-Za-z]#', $t)) { $depth++; continue; }
+        if ($depth > 0 || $t === '' || $t[0] === '#') continue;
+        if (!preg_match('/^(AddHandler|SetHandler|AddType|Action|php_value|php_flag|php_admin_value|php_admin_flag|RewriteBase|SetEnv|PassEnv|FcgidWrapper|suPHP_\w+|DirectoryIndex)\b/i', $t)) continue;
+        if (in_array($t, $shippedLines, true)) continue;
+        $keep[] = $t;
+    }
+    if (!$keep) return $block;
+    return "# Operator lines kept across updates — host-specific directives go here, outside\n"
+         . "# the LUMEN3D block (which every update rewrites).\n"
+         . implode("\n", $keep) . "\n\n" . $block;
+}
+
+/** Twin of api/_admin_lib.php lumen_data_web_guard() — keep the two identical. */
+function data_web_guard(): string {
+    return "# Lumen3D — published dataset tree (lumen-guard v2). Generated by the\n"
+         . "# platform (api/_upload_lib.php, upload_staging.py); keep the copy in the\n"
+         . "# repository (DATA_WEB/.htaccess) identical.\n"
+         . "<IfModule mod_php.c>\n    php_flag engine off\n</IfModule>\n"
+         . "<IfModule mod_php7.c>\n    php_flag engine off\n</IfModule>\n"
+         . "<IfModule mod_php5.c>\n    php_flag engine off\n</IfModule>\n"
+         . "<FilesMatch \"\\.(php|php[0-9]|phtml|phps|phar|cgi|pl|py|sh|shtml|htaccess)\$\">\n"
+         . "    <IfModule mod_authz_core.c>\n        Require all denied\n    </IfModule>\n"
+         . "    <IfModule !mod_authz_core.c>\n        Order allow,deny\n        Deny from all\n    </IfModule>\n"
+         . "</FilesMatch>\n"
+         . "<IfModule mod_mime.c>\n    RemoveHandler .php .phtml .phar .cgi .pl .py .sh .shtml\n"
+         . "    RemoveType .php .phtml .phar\n</IfModule>\n"
+         . "<IfModule mod_headers.c>\n"
+         . "    Header set X-Content-Type-Options \"nosniff\"\n"
+         . "    <IfModule mod_setenvif.c>\n"
+         . "        SetEnvIf Request_URI \"/download/\" LUMEN_DOWNLOAD=1\n"
+         . "        Header set Content-Disposition \"attachment\" env=LUMEN_DOWNLOAD\n"
+         . "    </IfModule>\n"
+         . "</IfModule>\n";
 }
 
 // ── API handlers ─────────────────────────────────────────────────────────────
@@ -1210,17 +1369,20 @@ function handle_verify(): void {
             json_fail('size_mismatch', 200);
         }
         $expectedSha = $s['release']['sha256'] ?? null;
-        if ($expectedSha !== null) {
-            @set_time_limit(120);
-            $actual = hash_file('sha256', $zipPath);
-            if (!is_string($actual) || !hash_equals(strtolower($expectedSha), strtolower($actual))) {
-                @unlink($zipPath);                                           // corrupted/tampered → never extract
-                $s['phase'] = 'ready'; $s['received'] = 0;
-                write_state($s);
-                json_fail('sha256_mismatch', 200);
-            }
-        } else {
-            $warnings[] = 'no_checksum';                                     // proceed, but surface it
+        if (!is_string($expectedSha) || !preg_match('/^[0-9a-f]{64}\z/i', $expectedSha)) {
+            // A state written by an older installer that let an unverified archive
+            // through: never extract it.
+            @unlink($zipPath);
+            clear_artifacts(true);
+            json_fail('checksum_missing', 200);
+        }
+        @set_time_limit(120);
+        $actual = hash_file('sha256', $zipPath);
+        if (!is_string($actual) || !hash_equals(strtolower($expectedSha), strtolower($actual))) {
+            @unlink($zipPath);                                               // corrupted/tampered → never extract
+            $s['phase'] = 'ready'; $s['received'] = 0;
+            write_state($s);
+            json_fail('sha256_mismatch', 200);
         }
 
         $pf = zip_preflight($zipPath);
@@ -1234,7 +1396,7 @@ function handle_verify(): void {
         $s['extractedIndex'] = 0;
         $s['bytesWritten'] = 0;
         if (!write_state($s)) json_fail('state_write_failed', 500);
-        json_out(['ok' => true, 'stage' => 'archive', 'warnings' => $warnings, 'entries' => $pf['entries'], 'sha256Verified' => $expectedSha !== null]);
+        json_out(['ok' => true, 'stage' => 'archive', 'warnings' => $warnings, 'entries' => $pf['entries'], 'sha256Verified' => true]);
     }
 
     // Post-extraction verification.
@@ -1317,7 +1479,7 @@ function handle_configure(): void {
         // store) + the shared PHP include — matches the shipped api/.htaccess so a
         // fallback-created file can't leave plugin-trust.json web-readable.
         $rules = "# Lumen3D — protect admin state files (created by install.php)\n"
-            . "<FilesMatch \"\\.json$|^_admin_lib\\.php$\">\n"
+            . "<FilesMatch \"\\.json$|^_[A-Za-z0-9_]+\\.php$|^\\.|^sess_|\\.lock$|\\.lumen-(old|new|backup)$\">\n"
             . "    <IfModule mod_authz_core.c>\n        Require all denied\n    </IfModule>\n"
             . "    <IfModule !mod_authz_core.c>\n        Order allow,deny\n        Deny from all\n    </IfModule>\n"
             . "</FilesMatch>\n";
@@ -1376,6 +1538,9 @@ function handle_selfdelete(): void {
 }
 
 // ── Dispatch ─────────────────────────────────────────────────────────────────
+
+// Included by a test for its functions only: no session, no dispatch, no page.
+if (defined('LUMEN_INSTALL_LIB')) return;
 
 install_session();
 
@@ -1703,6 +1868,7 @@ const DICT = {
     err_no_release: "Aucune release publiée sur le dépôt GitHub {repo}.",
     err_no_release_zip: "La release ne contient aucune archive zip exploitable.",
     err_signature_missing: "Cette release n'est pas signée alors qu'une clé de signature est épinglée : authenticité impossible à prouver. Installation refusée.",
+    err_checksum_missing: "Cette release ne publie pas l'empreinte SHA-256 de son archive (fichier SHA256SUMS absent ou incomplet) : son intégrité ne peut pas être vérifiée. Installation refusée.",
     err_signature_invalid: "La signature de la release est invalide (clé épinglée). L'archive n'a pas été produite par la clé de signature du projet. Installation refusée.",
     err_signature_unsupported: "Une clé de signature est épinglée mais l'extension PHP « sodium » est absente : impossible de vérifier l'authenticité. Activez ext-sodium (incluse dans PHP ≥ 7.2).",
     err_github_unreachable: "Impossible de joindre l'API GitHub. Vérifiez la connectivité sortante du serveur.",
@@ -1815,6 +1981,7 @@ const DICT = {
     err_no_release: "No release published on the GitHub repository {repo}.",
     err_no_release_zip: "The release contains no usable zip archive.",
     err_signature_missing: "This release is unsigned but a signing key is pinned: authenticity cannot be proven. Installation refused.",
+    err_checksum_missing: "This release does not publish the SHA-256 digest of its archive (SHA256SUMS missing or incomplete): its integrity cannot be verified. Installation refused.",
     err_signature_invalid: "The release signature is invalid (pinned key). The archive was not produced by the project signing key. Installation refused.",
     err_signature_unsupported: "A signing key is pinned but the PHP \"sodium\" extension is missing: authenticity cannot be verified. Enable ext-sodium (bundled with PHP ≥ 7.2).",
     err_github_unreachable: "Cannot reach the GitHub API. Check the server's outbound connectivity.",

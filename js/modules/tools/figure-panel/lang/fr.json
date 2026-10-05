@@ -23,5 +23,8 @@
   "pickSome": "Cochez les photographies à inclure.",
   "rendering": "Rendu…",
   "ready": "{n} panneau(x) · {w} × {h} px",
-  "loadFailed": "Une photographie n'a pas pu être chargée."
+  "loadFailed": "Une photographie n'a pas pu être chargée.",
+  "readyPartial": "{n} panneau(x) · {w} × {h} px · {failed} n'a/ont pas pu être chargé(s)",
+  "unavailable": "photographie indisponible",
+  "uncalibrated": "non calibrée"
 }

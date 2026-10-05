@@ -50,7 +50,7 @@ const PluginRegistry = (() => {
     'tools/screenshot', 'tools/presentation-mode', 'tools/download-center', 'tools/decompose-channels',
     'tools/zstack-browser', 'tools/slice-inspector',
     'tools/measure-distance', 'tools/chunk-debug',
-    'shaders/fluorescence', 'shaders/structure-dvr',
+    'shaders/fluorescence', 'shaders/natural-fluorescence', 'shaders/structure-dvr',
     'channels/histogram', 'channels/gaussian-filter'
   ];
 
@@ -264,6 +264,7 @@ const PluginRegistry = (() => {
         // a redundant plugin.json round-trip; otherwise fetch it (static manifest
         // / PHP / embedded-default hosts, or a direct loadModules(paths) call).
         let meta = _discoveredMeta.get(modPath) || null;
+        let fetchedMetaText = null;
         if (!meta) {
           const jsonUrl = `${basePath}/${modPath}/plugin.json`;
           const resp = await fetch(jsonUrl);
@@ -273,6 +274,11 @@ const PluginRegistry = (() => {
           }
           try {
             meta = await resp.json();
+            if (meta && typeof meta === 'object') {
+              const copy = Object.assign({}, meta);
+              delete copy.trust;
+              fetchedMetaText = JSON.stringify(copy);
+            }
           } catch (err) {
             _quarantine(modPath, 'invalid-meta', `plugin.json is not valid JSON (${err.message})`);
             return;
@@ -348,6 +354,20 @@ const PluginRegistry = (() => {
           if (verdict.tier === 'untrusted') {
             _quarantine(modPath, 'untrusted', verdict.reason);
             return;
+          }
+          // The metadata that shaped the toolbar and the gates came from a separate
+          // fetch of plugin.json; require it to be the document that was hashed.
+          if (fetchedMetaText !== null && verdict.files && verdict.files['plugin.json']) {
+            let hashedText = null;
+            try {
+              const hashed = JSON.parse(new TextDecoder('utf-8').decode(verdict.files['plugin.json']));
+              if (hashed && typeof hashed === 'object') delete hashed.trust;
+              hashedText = JSON.stringify(hashed);
+            } catch (_) { /* leaves hashedText null → mismatch */ }
+            if (hashedText !== fetchedMetaText) {
+              _quarantine(modPath, 'invalid-meta', 'plugin.json changed while the plugin was being verified');
+              return;
+            }
           }
           meta._trust = { tier: verdict.tier, hash: verdict.hash };
 
@@ -920,7 +940,10 @@ const PluginRegistry = (() => {
 
       const btn = document.createElement('button');
       btn.dataset.pluginGenerated = '1';
-      if (meta.buttonId) btn.id = meta.buttonId;
+      // buttonId is plugin-authored: only a plain token that no other element owns.
+      if (meta.buttonId && /^[A-Za-z][\w-]*$/.test(String(meta.buttonId)) && !document.getElementById(meta.buttonId)) {
+        btn.id = meta.buttonId;
+      }
 
       if (meta.subtype === 'tool') {
         // ToolManager-mux tool (exclusive): wired by ToolManager via [data-tool].
@@ -1042,7 +1065,6 @@ const PluginRegistry = (() => {
       epoch = h && h.trustEpoch;
     } catch (_) { return; }
     if (typeof epoch !== 'number' || _trustEpoch === null || epoch === _trustEpoch) return;
-    _trustEpoch = epoch;
     // Re-fetch the authoritative vouched set; anything sandboxed and no longer
     // vouched (revoked / made incompatible) is torn down.
     let vouched;
@@ -1050,6 +1072,9 @@ const PluginRegistry = (() => {
       const data = await (await fetch('api/plugins', { cache: 'no-store' })).json();
       vouched = new Set((data.plugins || []).map(p => p.id));
     } catch (_) { return; }
+    // Committed only once the vouched set is in hand: a failed second request leaves
+    // the epoch unconsumed so the next poll retries instead of losing the revocation.
+    _trustEpoch = epoch;
     for (const [id, entry] of _modules) {
       const sandboxed = typeof PluginSandbox !== 'undefined' && PluginSandbox.isSandboxed && PluginSandbox.isSandboxed(id);
       if (sandboxed && !vouched.has(id)) {

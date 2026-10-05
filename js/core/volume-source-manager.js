@@ -3,8 +3,9 @@
    ============================================================ */
 
 const VolumeSourceManager = (() => {
-  // EDGE-031 (Rule 1.4): the source kinds the renderer can actually mount.
-  const ALLOWED_KINDS = new Set(['webstack', 'bricks', 'live']);
+  // EDGE-031 (Rule 1.4): the source kinds the renderer can actually mount. A
+  // timelapse is a 'bricks' source with one brick tree per timepoint.
+  const ALLOWED_KINDS = new Set(['webstack', 'bricks']);
 
   function normalizeSources(dataset = null) {
     const listed = Array.isArray(dataset?.volumeSources) ? dataset.volumeSources : [];
@@ -24,18 +25,26 @@ const VolumeSourceManager = (() => {
         }
         return true;
       })
-      .map((source, index) => {
+      .map((source, index) => ({ source, index }))
+      // Sources with an explicit priority come first, by priority; the others keep
+      // their listed order after them (a positional index is not a priority).
+      .sort((a, b) => {
+        const pa = Number.isFinite(a.source.priority) ? a.source.priority : Infinity;
+        const pb = Number.isFinite(b.source.priority) ? b.source.priority : Infinity;
+        return pa === pb ? a.index - b.index : (pa < pb ? -1 : 1);
+      })
+      .map(({ source }, rank) => {
         const kind = source.kind || 'webstack';
         return {
           ...source,
           kind,
           label: source.label || _label(kind),
-          priority: Number.isFinite(source.priority) ? source.priority : index,
+          priority: rank,
           available: source.available !== false,
           multiscale: Boolean(source.multiscale),
           path: source.path || null
         };
-      }).sort((a, b) => a.priority - b.priority);
+      });
     if (normalized.length) return normalized;
 
     return [{
@@ -48,27 +57,15 @@ const VolumeSourceManager = (() => {
     }];
   }
 
+  /** The source to display: the preferred kind when available, else the first
+   *  available one; null when none is available. */
   function preferred(dataset = null, preferredKind = null) {
     const sources = normalizeSources(dataset);
     if (preferredKind) {
       const exact = sources.find(source => source.kind === preferredKind && source.available);
       if (exact) return exact;
     }
-    return sources.find(source => source.available) || sources[0] || null;
-  }
-
-  function nativeSliceSource(dataset = null, preferredKind = null) {
-    return preferred(dataset, preferredKind);
-  }
-
-  async function describe(dataset = null, preferredKind = null) {
-    const source = preferred(dataset, preferredKind);
-    if (!source) return null;
-    return {
-      ...source,
-      ok: Boolean(source.available),
-      message: source.available ? 'Volume source is available.' : 'Volume source unavailable.'
-    };
+    return sources.find(source => source.available) || null;
   }
 
   function _label(kind) {
@@ -79,8 +76,6 @@ const VolumeSourceManager = (() => {
 
   return {
     normalizeSources,
-    preferred,
-    nativeSliceSource,
-    describe
+    preferred
   };
 })();

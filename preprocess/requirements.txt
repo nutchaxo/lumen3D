@@ -1,10 +1,11 @@
 # Preprocessing pipeline dependencies (run_preprocess.py + 1-…→4-…).
-# Authoritative set — mirrors build_launcher.py:DEPS ("numpy Pillow h5py scipy tqdm").
-h5py>=3.8.0
-numpy>=1.24.0
-scipy>=1.10.0
-Pillow>=10.0.0
-tqdm>=4.65.0
+# Authoritative set — mirrors build_launcher.py:DEPS. Pinned: two machines must produce
+# the same bytes from the same .ims, so a newer numpy/scipy is not picked up silently.
+h5py==3.16.0
+numpy==2.5.1
+scipy==1.16.0
+Pillow==11.1.0
+tqdm==4.67.1
 
 # Optional — cell tracking (step 5, on by default for timelapses). Without these the
 # volume still processes: tracking_sources.py reports what is missing and the dataset

@@ -61,6 +61,26 @@ api/quarantined-plugins.json
 api/plugin-trust.json
 api/release-notes-cache.json
 api/page-drafts/
+api/trusted-proxies.json
+# PHP runtime stores (sessions, login throttle, file locks, caches, update lock and
+# the busy files a Windows update parks for the next request)
+api/.sessions/
+api/.bruteforce/
+api/.locks/
+api/.catalog-cache.json
+api/.plugin-hash-cache.json
+api/.update.lock
+api/.update-pending.json
+api/.tmp-*
+# Sources an update parks beside the live ones, and the copy of the previous root
+# .htaccess the PHP updater keeps
+*.lumen-old
+*.lumen-new
+.htaccess.lumen-backup
+.update-staging-*/
+# Runtime probes / CA seed written by the PHP backend at the install root
+.lumen-perm-probe
+.lumen-ca-seed.pem
 
 # Self-update backups + runtime artifacts (version.json ships in the release
 # artifact and is written by updates — never tracked in git)

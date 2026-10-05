@@ -56,7 +56,10 @@ function loadTab() {
     deepClone: (v) => JSON.parse(JSON.stringify(v)),
     refreshIcons() {},
     setUnsaved: (on) => unsaved.push(!!on),
-    setDirtyGuard() {},
+    registerDirtyGuard() {},
+    setDatasetOpener() {},
+    bindTabSave() {},
+    apiFetchStatus: async () => ({ ok: false, status: 0, data: null }),
     Upload: { subscribe() {} },
     window: { location: { origin: 'http://localhost' }, addEventListener() {} },
     document: { addEventListener() {} },
@@ -229,17 +232,17 @@ const { T } = loadTab();
 // ── 8. The wiring that carries the answer ──────────────────────
 {
   const bus = read('js/pages/admin/bus.js');
-  assert.match(bus, /export function setDirtyGuard\(fn, discard\)/, 'the guard carries a discard handler');
-  assert.match(bus, /export function discardDirty\(\)/, 'bus exposes discardDirty');
+  assert.match(bus, /export function registerDirtyGuard\(id, fn, discard\)/, 'every tab registers a guard that carries a discard handler');
+  assert.match(bus, /export function discardDirty\(id\)/, 'bus exposes discardDirty');
 
   const shell = read('js/pages/admin/shell.js');
   const guard = shell.slice(shell.indexOf('function switchTab'), shell.indexOf('function switchTab') + 900);
   const ask = guard.indexOf("confirm(t('admin.confirmDiscard'");
-  const drop = guard.indexOf('discardDirty();');
+  const drop = guard.indexOf('discardDirty(_activeTab);');
   assert.ok(ask > 0 && drop > ask, 'the shell drops the edits once the operator confirms');
 
   const tab = read('js/pages/admin/tab-datasets.js');
-  assert.match(tab, /setDirtyGuard\(\(\) => _dirty, \(\) => discardChanges\(\)\)/, 'the Datasets tab registers both');
+  assert.match(tab, /registerDirtyGuard\('datasets', \(\) => _dirty, \(\) => discardChanges\(\)\)/, 'the Datasets tab registers both');
 }
 
 // ── 9. The preview must not echo the state it was handed ───────

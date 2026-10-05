@@ -39,25 +39,29 @@ function makeLoader() {
   assert.equal(dims.brickSize, 64, 'getDimensions fallback brickSize is 64 (was legacy 128)');
 }
 
-// ── Regression: an explicit per-level brickSize is still honored (fallback only
-// fires when absent). ──
+// ── A manifest declaring another brick size is REJECTED: the decoder, the SVR atlas
+// and both shaders are built on 64, so a 32³ manifest would mount scrambled. ──
 {
   const BL = makeLoader();
-  BL.init('DATA_WEB/3d/B/bricks', {
+  assert.throws(() => BL.init('DATA_WEB/3d/B/bricks', {
     levels: [{ level: 0, dimensions: { x: 256, y: 256, z: 256 }, brickSize: 32 }],
     channels: 1, brickTransport: { encoding: 'raw-u8' },
-  });
-  assert.equal(BL.getDimensions(0).brickSize, 32, 'explicit level.brickSize honored over fallback');
+  }), /brickSize must be 64/, 'level.brickSize 32 rejected');
+  assert.throws(() => BL.init('DATA_WEB/3d/B/bricks', {
+    brickSize: 128, levels: [{ level: 0, dimensions: { x: 256, y: 256, z: 256 } }],
+    channels: 1, brickTransport: { encoding: 'raw-u8' },
+  }), /brickSize must be 64/, 'manifest brickSize 128 rejected');
+  assert.equal(BL.isReady(), false, 'nothing mounted');
 }
 
 // ── Behavioral: getCacheStats memory estimate uses 64³ per brick (256 KiB),
 // not 128³ (2 MiB). With BRICK_SIZE=64 and N cached bricks, MB ≈ N * 64³ / 1MiB. ──
 {
   const BL = makeLoader();
-  // getCacheStats reads _cache.size; with an empty cache the estimate is 0 either
-  // way, so assert the formula constant directly via the source AND the empty case.
+  // Decoded bricks are not cached any more: the estimate is the compressed bytes held.
   const stats = BL.getCacheStats();
   assert.equal(stats.memoryEstimateMB, 0, 'empty cache estimate is 0');
+  assert.equal(stats.entries, 0, 'no decoded-brick cache');
 }
 
 // ── Structural: header comment fixed + BRICK_SIZE drives the cache estimate. ──
@@ -67,9 +71,7 @@ function makeLoader() {
   const loaderSrc = readFileSync(path.join(ROOT, 'js/core/brick-loader.js'), 'utf8');
   assert.ok(/const BRICK_SIZE = 64;/.test(loaderSrc), 'BRICK_SIZE constant is 64');
   assert.ok(!/Loads chunked volume bricks \(128/.test(loaderSrc), 'header comment no longer says 128³');
-  // the 8×-wrong cache estimate is now driven by the corrected constant
-  assert.ok(/_cache\.size \* BRICK_SIZE \* BRICK_SIZE \* BRICK_SIZE/.test(loaderSrc),
-    'getCacheStats still derives from BRICK_SIZE (now 64)');
+  assert.ok(!/LRU_LIMIT/.test(loaderSrc), 'the dead decoded-brick LRU is gone');
 }
 
 console.log('STREAMING-2 BRICK_SIZE=64 fallback: OK');

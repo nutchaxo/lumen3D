@@ -20,41 +20,58 @@ const ColorBlind = (() => {
     } catch (_) { return null; }
   })();
 
-  const _filters = {
-    'none': '',
-    'protanopia': `
-      <filter id="cb-protanopia">
-        <feColorMatrix type="matrix" values="1.2 0 0 0 0  0 1 0 0 0  0.8 0 1 0 0  0 0 0 1 0" />
-      </filter>`,
-    'protanomaly': `
-      <filter id="cb-protanomaly">
-        <feColorMatrix type="matrix" values="1.1 0 0 0 0  0 1 0 0 0  0.4 0 1 0 0  0 0 0 1 0" />
-      </filter>`,
-    'deuteranopia': `
-      <filter id="cb-deuteranopia">
-        <feColorMatrix type="matrix" values="1 0 0 0 0  0 1.2 0 0 0  0 0.8 1 0 0  0 0 0 1 0" />
-      </filter>`,
-    'deuteranomaly': `
-      <filter id="cb-deuteranomaly">
-        <feColorMatrix type="matrix" values="1 0 0 0 0  0 1.1 0 0 0  0 0.4 1 0 0  0 0 0 1 0" />
-      </filter>`,
-    'tritanopia': `
-      <filter id="cb-tritanopia">
-        <feColorMatrix type="matrix" values="1 0 0.8 0 0  0 1 0 0 0  0 0 1.2 0 0  0 0 0 1 0" />
-      </filter>`,
-    'tritanomaly': `
-      <filter id="cb-tritanomaly">
-        <feColorMatrix type="matrix" values="1 0 0.4 0 0  0 1 0 0 0  0 0 1.1 0 0  0 0 0 1 0" />
-      </filter>`,
-    'achromatopsia': `
-      <filter id="cb-achromatopsia">
-        <feColorMatrix type="matrix" values="1.5 0 0 0 -0.2  0 1.5 0 0 -0.2  0 0 1.5 0 -0.2  0 0 0 1 0" />
-      </filter>`,
-    'achromatomaly': `
-      <filter id="cb-achromatomaly">
-        <feColorMatrix type="matrix" values="1.2 0 0 0 -0.1  0 1.2 0 0 -0.1  0 0 1.2 0 -0.1  0 0 0 1 0" />
-      </filter>`
+  // ── Colour-vision SIMULATION matrices ───────────────────────
+  // These filters show the page as a person with the chosen deficiency perceives it
+  // (a simulation, so a designer can check that nothing relies on a confusable hue);
+  // they do not recolour the page to compensate for it.
+  //
+  // protan / deutan / tritan: Machado, Oliveira & Fernandes, "A Physiologically-based
+  // Model for Simulation of Color Vision Deficiency", IEEE TVCG 15(6), 2009 — the 3x3
+  // matrices of the table at severity 1.0 (…opia, complete absence of the cone type) and
+  // 0.5 (…omaly, anomalous cone). They act on LINEAR-light RGB, which is why every
+  // filter below declares color-interpolation-filters="linearRGB" (the SVG default,
+  // stated so nobody "fixes" it to sRGB). Each row sums to 1: neutral greys are preserved.
+  //
+  // achromatopsia: rod monochromacy keeps only luminance, so all three output channels
+  // are the relative luminance Y = 0.2126 R + 0.7152 G + 0.0722 B (Rec. 709, linear light).
+  // achromatomaly: partial loss, the same 0.5 severity as the anomalies above, i.e. the
+  // mean of identity and the luminance matrix.
+  const _LUM = [0.2126, 0.7152, 0.0722];
+  const _MATRICES = {
+    protanopia:    [0.152286, 1.052583, -0.204868,  0.114503, 0.786281, 0.099216,  -0.003882, -0.048116, 1.051998],
+    protanomaly:   [0.458064, 0.679578, -0.137642,  0.092785, 0.846313, 0.060902,  -0.007494, -0.016807, 1.024301],
+    deuteranopia:  [0.367322, 0.860646, -0.227968,  0.280085, 0.672501, 0.047413,  -0.011820,  0.042940, 0.968881],
+    deuteranomaly: [0.547494, 0.607765, -0.155259,  0.181692, 0.781742, 0.036566,  -0.010410,  0.027275, 0.983136],
+    tritanopia:    [1.255528, -0.076749, -0.178779, -0.078411, 0.930809, 0.147602,  0.004733,  0.691367, 0.303900],
+    tritanomaly:   [1.017277, 0.027029, -0.044306,  -0.006113, 0.958479, 0.047634,  0.006379,  0.248708, 0.744913],
+    achromatopsia: [..._LUM, ..._LUM, ..._LUM],
+    achromatomaly: [
+      0.5 + 0.5 * _LUM[0], 0.5 * _LUM[1],       0.5 * _LUM[2],
+      0.5 * _LUM[0],       0.5 + 0.5 * _LUM[1], 0.5 * _LUM[2],
+      0.5 * _LUM[0],       0.5 * _LUM[1],       0.5 + 0.5 * _LUM[2]
+    ]
   };
+
+  // feColorMatrix wants 4x5 (RGBA + offset); alpha passes through untouched.
+  function _filterMarkup(id, m) {
+    const f = n => (+n.toFixed(6)).toString();
+    const values = [
+      m[0], m[1], m[2], 0, 0,
+      m[3], m[4], m[5], 0, 0,
+      m[6], m[7], m[8], 0, 0,
+      0, 0, 0, 1, 0
+    ].map(f).join(' ');
+    return `<filter id="cb-${id}" color-interpolation-filters="linearRGB"><feColorMatrix type="matrix" values="${values}" /></filter>`;
+  }
+
+  const _filters = { none: '' };
+  Object.keys(_MATRICES).forEach(id => { _filters[id] = _filterMarkup(id, _MATRICES[id]); });
+
+  function _isKnown(type) {
+    return typeof type === 'string' && Object.prototype.hasOwnProperty.call(_filters, type);
+  }
+  function _storageGet(key) { try { return localStorage.getItem(key); } catch (_) { return null; } }
+  function _storageSet(key, value) { try { localStorage.setItem(key, value); } catch (_) { /* blocked or full */ } }
 
   const _options = [
     { id: 'none' },
@@ -113,8 +130,8 @@ const ColorBlind = (() => {
     document.body.appendChild(svgContainer);
 
     // Load saved preference
-    const saved = localStorage.getItem('iribhm-colorblind');
-    if (saved && _filters[saved] !== undefined) {
+    const saved = _storageGet('iribhm-colorblind');
+    if (saved && _isKnown(saved)) {
       _current = saved;
     }
     
@@ -125,7 +142,7 @@ const ColorBlind = (() => {
     // its panels) arrives as a `storage` event; apply it here too.
     if (typeof window.addEventListener === 'function') window.addEventListener('storage', e => {
       if (e.key !== 'iribhm-colorblind') return;
-      const next = e.newValue && _filters[e.newValue] !== undefined ? e.newValue : 'none';
+      const next = e.newValue && _isKnown(e.newValue) ? e.newValue : 'none';
       if (next === _current) return;
       _current = next;
       _apply();
@@ -133,9 +150,9 @@ const ColorBlind = (() => {
   }
 
   function set(type) {
-    if (_filters[type] === undefined) return;
+    if (!_isKnown(type)) return;
     _current = type;
-    localStorage.setItem('iribhm-colorblind', _current);
+    _storageSet('iribhm-colorblind', _current);
     _apply();
     closeModal();
   }
@@ -144,11 +161,19 @@ const ColorBlind = (() => {
     return _current;
   }
 
+  // The filter sits on <html>, not <body>: a filter on any other element makes it the
+  // containing block of its position:fixed descendants (navbars, dialogs, toasts, the
+  // lightbox would then scroll with the page); the Filter Effects spec exempts the
+  // document root element. While the chooser is open the page filter is lifted so the
+  // option previews (which carry their own filter) are not filtered twice.
+  let _modalOpen = false;
+
   function _apply() {
-    if (_current === 'none') {
-      document.body.style.filter = '';
+    const root = document.documentElement;
+    if (_current === 'none' || _modalOpen) {
+      root.style.filter = '';
     } else {
-      document.body.style.filter = `url(#cb-${_current})`;
+      root.style.filter = `url(#cb-${_current})`;
     }
     
     // Update active state in modal if it's open
@@ -165,11 +190,11 @@ const ColorBlind = (() => {
   }
 
   function openModal() {
+    if (_closeTimer) { clearTimeout(_closeTimer); _closeTimer = null; }
+    _modalOpen = true;
     let modal = document.getElementById('cb-modal');
     if (!modal) {
       modal = createModal();
-      // Append to html (documentElement) instead of body to prevent the body's CSS filter
-      // from breaking the position:fixed containing block of the modal.
       document.documentElement.appendChild(modal);
       // Wait for DOM to register the modal before adding 'show' class for animation
       setTimeout(() => modal.classList.add('show'), 10);
@@ -179,14 +204,20 @@ const ColorBlind = (() => {
     _apply(); // to ensure active class is set
   }
 
+  let _closeTimer = null;
+
   function closeModal() {
+    _modalOpen = false;
     const modal = document.getElementById('cb-modal');
     if (modal) {
       modal.classList.remove('show');
-      setTimeout(() => {
+      if (_closeTimer) clearTimeout(_closeTimer);
+      _closeTimer = setTimeout(() => {
+        _closeTimer = null;
         if (modal.parentNode) modal.parentNode.removeChild(modal);
       }, 300); // match transition
     }
+    _apply();
   }
 
   function createModal() {
@@ -204,10 +235,15 @@ const ColorBlind = (() => {
 
     const header = document.createElement('div');
     header.className = 'cb-modal-header';
-    header.innerHTML = `
-      <h3 data-i18n="colorblind.title">${I18n.t('colorblind.title')}</h3>
-      <button class="cb-modal-close" onclick="ColorBlind.closeModal()">&times;</button>
-    `;
+    const heading = document.createElement('h3');
+    heading.dataset.i18n = 'colorblind.title';
+    heading.textContent = I18n.t('colorblind.title');
+    const closeBtn = document.createElement('button');
+    closeBtn.type = 'button';
+    closeBtn.className = 'cb-modal-close';
+    closeBtn.textContent = '×';
+    closeBtn.addEventListener('click', closeModal);
+    header.append(heading, closeBtn);
     content.appendChild(header);
 
     const body = document.createElement('div');
@@ -428,5 +464,4 @@ const ColorBlind = (() => {
   return { set, get, openModal, closeModal };
 })();
 
-// Assign to window for inline onclick handlers
 window.ColorBlind = ColorBlind;

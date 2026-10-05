@@ -9,8 +9,9 @@
  * Endpoint:
  *   GET /api/plugins.php   → { "plugins": [ { path, placement, id, ...meta }, ... ] }
  *
- * Side effect: rewrites js/modules/manifest.json (best-effort) so static
- * deploys keep a fresh fallback with no manual build step.
+ * Side effect: refreshes js/modules/manifest.json (best-effort, atomically, and
+ * only when its content would change) so static deploys keep a fresh fallback
+ * with no manual build step — a public GET must not rewrite a file every time.
  */
 
 declare(strict_types=1);
@@ -25,7 +26,7 @@ $ROOT        = dirname(__DIR__);                                   // WebPlatfor
 $MODULES_DIR = $ROOT . DIRECTORY_SEPARATOR . 'js' . DIRECTORY_SEPARATOR . 'modules';
 $PLACEMENTS  = ['tools', 'channels', 'shaders'];
 // Same guard as dev_server.py _SAFE_FOLDER_RE: one safe path component, no traversal.
-$SAFE_FOLDER = '/^[A-Za-z0-9_][A-Za-z0-9._-]*$/';
+$SAFE_FOLDER = '/^[A-Za-z0-9_][A-Za-z0-9._-]*$/D';
 
 function discover_plugins(): array {
     global $MODULES_DIR, $PLACEMENTS, $SAFE_FOLDER;
@@ -74,10 +75,10 @@ function write_manifest(array $plugins): void {
         'placement' => $p['placement'],
         'id'        => $p['id'] ?? null,
     ], $plugins);
-    @file_put_contents(
-        $MODULES_DIR . DIRECTORY_SEPARATOR . 'manifest.json',
-        json_encode(['plugins' => $light], JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE)
-    );
+    $path = $MODULES_DIR . DIRECTORY_SEPARATOR . 'manifest.json';
+    $json = json_encode(['plugins' => $light], JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE);
+    if ($json === false || (is_file($path) && @file_get_contents($path) === $json)) return;
+    lumen_write_file_atomic($path, $json);
 }
 
 $plugins = discover_plugins();
@@ -108,11 +109,12 @@ $approvals = admin_load_trust();
 $manifest  = admin_release_manifest();
 $trusted = [];
 foreach ($plugins as $p) {
-    $tr = admin_classify_plugin($p['path'], $MODULES_DIR . '/' . $p['path'], $approvals, $manifest);
+    // One hashing pass per plugin, memoised on the files' stat signature: this runs
+    // on every page load of every visitor.
+    $tr = admin_classify_plugin($p['path'], $MODULES_DIR . '/' . $p['path'], $approvals, $manifest, true);
     if ($tr['tier'] === 'untrusted') continue;
-    $fh = admin_plugin_file_hashes($MODULES_DIR . '/' . $p['path']);
     $p['trust'] = ['tier' => $tr['tier'], 'hash' => $tr['hash'], 'mode' => $tr['mode'] ?? null,
-                   'caps' => $tr['caps'] ?? null, 'files' => array_keys($fh)];
+                   'caps' => $tr['caps'] ?? null, 'files' => $tr['files']];
     $trusted[] = $p;
 }
 $plugins = $trusted;

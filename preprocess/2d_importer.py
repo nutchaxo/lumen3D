@@ -35,6 +35,13 @@ from pathlib import Path
 import numpy as np
 from PIL import Image
 
+HERE = Path(__file__).resolve().parent
+if str(HERE) not in sys.path:
+    sys.path.insert(0, str(HERE))
+# One curated-key list and one merge rule for the photograph importer and the volume
+# pipeline, so a re-import protects exactly what the admin panel lets the lab edit.
+from run_preprocess import CURATED_KEYS, merge_curated, atomic_write_text  # noqa: E402,F401
+
 __version__ = "0.18.0"
 
 # The directory a dataset sits in IS its type: DATA_WEB/2d/<folder> is dataset '2d/<folder>'.
@@ -45,15 +52,14 @@ THUMB_BACKGROUND = (8, 10, 18)
 NATIVE_QUALITY = 90
 PREVIEW_QUALITY = 80
 
+# WebP stores each side on 14 bits.
+WEBP_MAX_SIDE = 16383
+
 IJ_METADATA_TAG = 50839
 IJ_METADATA_COUNTS_TAG = 50838
 X_RESOLUTION_TAG = 282
+Y_RESOLUTION_TAG = 283
 IMAGE_DESCRIPTION_TAG = 270
-
-# Keys the lab edits by hand in the admin panel. A re-import refreshes what the
-# file measures and leaves these alone.
-CURATED_KEYS = ("name", "description", "stage", "stageNumeric", "embryo", "line",
-                "staining", "reporter", "hidden", "gallery", "tags", "notes", "created")
 
 
 # ── ImageJ metadata ────────────────────────────────────────────────────────────
@@ -83,9 +89,19 @@ def read_ij_metadata(im) -> dict:
     return out
 
 
-def read_planes(im) -> list:
+def read_planes(im, description: str = "") -> list:
+    """The colour planes of the picture. An ImageJ hyperstack stores its pages in
+    channel-fastest order, so the first `channels=` pages are one complete composite;
+    the further pages of a Z or T stack are other pictures, not more colour, and adding
+    them in would blend several images into one."""
+    n_frames = getattr(im, "n_frames", 1)
+    m = re.search(r"^channels=(\d+)", description, re.MULTILINE)
+    n_planes = min(n_frames, int(m.group(1))) if m else n_frames
+    if n_planes < n_frames:
+        print(f"  [note] {n_frames} pages, composite of the first {n_planes} (channels={n_planes}); "
+              f"the other slices/frames are not part of this picture")
     planes = []
-    for i in range(getattr(im, "n_frames", 1)):
+    for i in range(n_planes):
         im.seek(i)
         planes.append(np.array(im))
     im.seek(0)
@@ -129,14 +145,20 @@ def _to_uint8(plane: np.ndarray) -> np.ndarray:
 
 # ── Calibration ────────────────────────────────────────────────────────────────
 def pixel_size_um(im, description: str) -> tuple:
-    """(µm per pixel, status). ImageJ writes XResolution in pixels per `unit`;
-    we only trust it when the unit is declared in microns."""
+    """((µm per pixel along x, along y), status). ImageJ writes X/YResolution in pixels
+    per `unit`; we only trust them when the unit is declared in microns. A file with
+    XResolution alone has square pixels."""
     xres = im.tag_v2.get(X_RESOLUTION_TAG)
+    yres = im.tag_v2.get(Y_RESOLUTION_TAG) or xres
     unit = re.search(r"^unit=(\S+)", description, re.MULTILINE)
     unit = unit.group(1).lower() if unit else ""
-    if xres and float(xres) > 0 and unit in ("micron", "microns", "um", "µm", "\\u00b5m"):
-        return 1.0 / float(xres), "exact"
+    if xres and float(xres) > 0 and unit in MICRON_UNITS:
+        y = float(yres) if yres and float(yres) > 0 else float(xres)
+        return (1.0 / float(xres), 1.0 / y), "exact"
     return None, "unknown"
+
+
+MICRON_UNITS = ("micron", "microns", "um", "\u00b5m", "\u03bcm", "\\u00b5m")
 
 
 # ── Leica block ────────────────────────────────────────────────────────────────
@@ -191,7 +213,28 @@ def _safe_float(text: str):
 
 
 # ── File-name conventions ──────────────────────────────────────────────────────
-STAGE_RX = re.compile(r"\bE(\d(?:[.,]\d{1,2})?)\b")
+def _load_stage_parser():
+    """The volume pipeline's embryonic-day parser (4-catalog_generator._parse_stage), so
+    a photograph and a volume of the same embryo read one stage from one spelling
+    (E8-5, E8.5, E85 -> E8.5; E10-5, E10.5, E105 -> E10.5)."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("lumen_catalog_generator",
+                                                  str(HERE / "4-catalog_generator.py"))
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module._parse_stage
+
+
+_PARSE_STAGE = _load_stage_parser()
+
+
+def _stage_of(text: str):
+    """(display, numeric) of the stage token in `text`, or None when it carries none."""
+    # Brackets count as separators, as they did for the photograph's former \b rule.
+    display, numeric = _PARSE_STAGE(re.sub(r"[()\[\]]", " ", text or ""))
+    return None if display == "Unknown" else (display, numeric)
+
+
 ZOOM_RX = re.compile(r"\bx(\d+(?:[.,]\d+)?)\b", re.IGNORECASE)
 DATE_RX = re.compile(r"\b(\d{6})\b")
 LINE_RX = re.compile(r"\b([A-Za-z0-9]+x[A-Za-z][A-Za-z0-9]*)\b")
@@ -203,18 +246,17 @@ def parse_filename(stem: str, line_override: str = None) -> dict:
     lif, sep, series = stem.partition(".lif - ")
     if not sep:
         lif, series = "", stem
-    stage_m = STAGE_RX.search(series) or STAGE_RX.search(lif)
+    stage = _stage_of(series) or _stage_of(lif)
     zoom_m = ZOOM_RX.search(series)
     dates = [d for d in DATE_RX.findall(series) if _valid_yymmdd(d)]
     tail = series[zoom_m.end():] if zoom_m else ""
     index = " ".join(t for t in tail.split() if t.isdigit() and t not in dates)
     line_m = LINE_RX.search(lif) or LINE_RX.search(series)
-    stage = stage_m.group(1).replace(",", ".") if stage_m else None
     return {
         "lif": (lif + ".lif") if lif else None,
         "series": series.strip(),
-        "stage": f"E{stage}" if stage else None,
-        "stageNumeric": float(stage) if stage else None,
+        "stage": stage[0] if stage else None,
+        "stageNumeric": stage[1] if stage else None,
         "zoom": float(zoom_m.group(1).replace(",", ".")) if zoom_m else None,
         "dissectionDate": _iso_date(dates[0]) if dates else None,
         "index": index or None,
@@ -252,9 +294,18 @@ def slugify(text: str) -> str:
 
 
 # ── Outputs ────────────────────────────────────────────────────────────────────
-def write_images(rgb: np.ndarray, out_dir: Path) -> dict:
+def write_images(rgb: np.ndarray, out_dir: Path, lossless: bool = False) -> dict:
+    h, w = rgb.shape[:2]
+    if max(w, h) > WEBP_MAX_SIDE:
+        raise ValueError(f"{w}x{h} px: WebP is limited to {WEBP_MAX_SIDE} px per side — "
+                         f"reduce the export before importing it")
     native = Image.fromarray(rgb, mode="RGB")
-    native.save(out_dir / "image.webp", "WEBP", quality=NATIVE_QUALITY, method=6)
+    # Lossy WebP always subsamples chroma 4:2:0, which perturbs the per-pixel B/R ratio
+    # the stain isolation reads at sharp edges; --lossless keeps every pixel exact.
+    if lossless:
+        native.save(out_dir / "image.webp", "WEBP", lossless=True, method=6)
+    else:
+        native.save(out_dir / "image.webp", "WEBP", quality=NATIVE_QUALITY, method=6)
 
     preview = native.copy()
     preview.thumbnail((PREVIEW_LONG_SIDE, PREVIEW_LONG_SIDE), Image.Resampling.LANCZOS)
@@ -278,7 +329,8 @@ def build_metadata(folder: str, parsed: dict, image: dict, px_um, cal_status: st
                    acquisition: dict, source: Path, staining: str) -> dict:
     now = datetime.now().isoformat()
     w, h = image["width"], image["height"]
-    physical = ({"x": round(w * px_um, 3), "y": round(h * px_um, 3)} if px_um else None)
+    px_x, px_y = px_um if px_um else (None, None)
+    physical = ({"x": round(w * px_x, 3), "y": round(h * px_y, 3)} if px_um else None)
     stage_txt = parsed["stage"] or "Unknown"
     return {
         "id": f"{DATASET_TYPE}/{folder}", "name": folder, "type": DATASET_TYPE,
@@ -286,7 +338,7 @@ def build_metadata(folder: str, parsed: dict, image: dict, px_um, cal_status: st
         "embryo": None, "line": parsed.get("line"), "staining": staining or "",
         "date": parsed.get("dissectionDate"),
         "dimensions": {"x": w, "y": h, "z": 1, "c": 3, "t": 1},
-        "pixelSizeUm": ({"x": round(px_um, 6), "y": round(px_um, 6)} if px_um else None),
+        "pixelSizeUm": ({"x": round(px_x, 6), "y": round(px_y, 6)} if px_um else None),
         "physicalSizeUm": physical,
         "calibrationStatus": cal_status,
         "calibrationNote": ("Pixel size read from the ImageJ resolution tags (microns)."
@@ -317,17 +369,7 @@ def _description(stage: str, parsed: dict, acq: dict) -> str:
     return ", ".join(bits) + "."
 
 
-def merge_curated(existing: dict, fresh: dict) -> dict:
-    """Re-import refreshes measurements, keeps what the lab edited."""
-    merged = dict(fresh)
-    for key in CURATED_KEYS:
-        if key in existing:
-            merged[key] = existing[key]
-    merged["lastModified"] = fresh["lastModified"]
-    return merged
-
-
-def write_download(source: Path, out_dir: Path, meta: dict) -> None:
+def write_download(source: Path, out_dir: Path, meta: dict, lossless: bool = False) -> None:
     dl = out_dir / "download"
     dl.mkdir(exist_ok=True)
     target = dl / source.name
@@ -337,10 +379,10 @@ def write_download(source: Path, out_dir: Path, meta: dict) -> None:
         os.link(source, target)
     except OSError:
         shutil.copy2(source, target)
-    (dl / "README.txt").write_text(_readme(source, meta), encoding="utf-8")
+    (dl / "README.txt").write_text(_readme(source, meta, lossless), encoding="utf-8")
 
 
-def _readme(source: Path, meta: dict) -> str:
+def _readme(source: Path, meta: dict, lossless: bool = False) -> str:
     acq = meta["acquisition"]
     px = meta.get("pixelSizeUm")
     lines = [
@@ -361,39 +403,62 @@ def _readme(source: Path, meta: dict) -> str:
         f"Dissection  : {acq.get('dissectionDate') or '-'}",
         "",
         "The TIFF is the untouched ImageJ export; image.webp beside it is the",
-        "display copy used by the viewer (lossy, quality 90).",
+        "display copy used by the viewer"
+        + (" (lossless)." if lossless else " (lossy, quality 90)."),
     ]
     return "\n".join(lines) + "\n"
 
 
 # ── Orchestration ──────────────────────────────────────────────────────────────
-def import_tiff(source: Path, output_root: Path, args) -> Path:
+def import_tiff(source: Path, output_root: Path, args, claimed: dict = None) -> Path:
     with Image.open(source) as im:
         ij = read_ij_metadata(im)
         description = str(im.tag_v2.get(IMAGE_DESCRIPTION_TAG, ""))
         px_um, cal_status = pixel_size_um(im, description)
-        rgb = compose_rgb(read_planes(im), ij.get("luts", []))
+        rgb = compose_rgb(read_planes(im, description), ij.get("luts", []))
 
     parsed = parse_filename(source.stem, args.line)
     folder = dataset_folder_name(parsed)
     out_dir = output_root / DATASET_TYPE / folder
     meta_path = out_dir / "metadata.json"
+
+    # Two different TIFFs can describe themselves identically (same line, stage, zoom,
+    # date and index); the second must neither be skipped as "already imported" nor
+    # overwrite the first.
+    if claimed is not None:
+        key = folder.casefold()
+        if key in claimed and claimed[key] != source:
+            raise ValueError(f"same dataset folder {folder} as {claimed[key].name} — "
+                             f"rename one of the two files")
+        claimed[key] = source
+    existing = _load_json(meta_path) if meta_path.exists() else {}
+    previous_source = (existing.get("acquisition") or {}).get("sourceFile")
+    if previous_source and previous_source != source.name:
+        raise ValueError(f"{folder} already holds {previous_source}, a different file — "
+                         f"rename one of the two files")
     if meta_path.exists() and not args.force:
         print(f"  [skip] {folder} exists (use --force to re-import)")
         return out_dir
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    image = write_images(rgb, out_dir)
+    lossless = bool(getattr(args, "lossless", False))
+    image = write_images(rgb, out_dir, lossless=lossless)
     info = (ij.get("info") or [""])[0]
     series = _series_name(ij, parsed)
     acquisition = leica_fields(info, series) if series else {}
     fresh = build_metadata(folder, parsed, image, px_um, cal_status, acquisition, source, args.staining)
-    meta = merge_curated(_load_json(meta_path), fresh) if meta_path.exists() else fresh
-    meta_path.write_text(json.dumps(meta, indent=2, ensure_ascii=False), encoding="utf-8")
+    meta = merge_curated(existing, fresh)
+    # metadata.json is written last, atomically: a half import is never mounted.
+    atomic_write_text(meta_path, json.dumps(meta, indent=2, ensure_ascii=False))
     if args.with_downloads:
-        write_download(source, out_dir, meta)
+        write_download(source, out_dir, meta, lossless)
 
-    px_txt = f"{px_um:.3f} um/px" if px_um else "uncalibrated"
+    if not px_um:
+        px_txt = "uncalibrated"
+    elif px_um[0] == px_um[1]:
+        px_txt = f"{px_um[0]:.3f} um/px"
+    else:
+        px_txt = f"{px_um[0]:.3f} x {px_um[1]:.3f} um/px"
     print(f"  [ok] {folder}  {image['width']}x{image['height']}  {meta['stage']}  {px_txt}")
     return out_dir
 
@@ -434,6 +499,9 @@ def main() -> int:
     ap.add_argument("--staining", default="", help="Staining label stored in metadata (e.g. X-gal).")
     ap.add_argument("--with-downloads", action="store_true", help="Place the original TIFF + README under download/.")
     ap.add_argument("--force", action="store_true", help="Re-import over an existing dataset (curation is preserved).")
+    ap.add_argument("--lossless", action="store_true",
+                    help="Store the native image losslessly (larger; keeps the colour ratios "
+                         "the stain isolation measures exact at every pixel).")
     args = ap.parse_args()
 
     files = collect_inputs(Path(args.input), args.only)
@@ -442,9 +510,10 @@ def main() -> int:
         return 1
     print(f"[2d] importer v{__version__} - {len(files)} file(s) -> {Path(args.output) / DATASET_TYPE}")
     failures = 0
+    claimed = {}
     for source in files:
         try:
-            import_tiff(source, Path(args.output), args)
+            import_tiff(source, Path(args.output), args, claimed)
         except Exception as exc:  # one bad export must not stop the batch
             failures += 1
             print(f"  [fail] {source.name}: {exc}")

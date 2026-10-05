@@ -13,10 +13,12 @@
 declare(strict_types=1);
 require_once __DIR__ . '/_admin_lib.php';
 
-$action = $_GET['action'] ?? '';
+$action = lumen_str($_GET['action'] ?? null) ?? '';
 if (!in_array($action, ['visit', 'view', 'download'], true)) admin_json_out(['error' => 'bad_kind'], 400);
 
-$id = $_GET['id'] ?? (json_decode(file_get_contents('php://input'), true)['id'] ?? null);
+// A non-string id (?id[]=x, {"id": 5}) is not an id: counted globally, never a 500.
+$id = lumen_str($_GET['id'] ?? null);
+if ($id === null && ($body = lumen_request_json()) !== null) $id = lumen_str($body['id'] ?? null);
 if (in_array($action, ['view', 'download'], true)) {
     // The id must be well-formed AND name a dataset that exists. admin_safe_dataset()
     // only proves the shape is safe — it deliberately accepts a not-yet-created folder
@@ -24,7 +26,8 @@ if (in_array($action, ['view', 'download'], true)) {
     // beacon let anyone append unlimited invented dataset keys to api/stats.json,
     // growing the file without bound and flooding the admin stats table.
     $safe = $id ? admin_safe_dataset($id) : null;
-    if ($safe === null || !is_dir($safe[2])) $id = null;   // still count globally
+    if ($safe === null || !is_file($safe[2] . '/metadata.json')) $id = null;   // still count globally
+    else $id = $safe[0] . '/' . $safe[1];                                       // one key per dataset
 } else {
     $id = null;
 }

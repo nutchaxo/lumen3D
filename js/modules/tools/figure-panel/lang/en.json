@@ -23,5 +23,8 @@
   "pickSome": "Tick the photographs to include.",
   "rendering": "Rendering…",
   "ready": "{n} panel(s) · {w} × {h} px",
-  "loadFailed": "A photograph could not be loaded."
+  "loadFailed": "A photograph could not be loaded.",
+  "readyPartial": "{n} panel(s) · {w} × {h} px · {failed} could not be loaded",
+  "unavailable": "photograph unavailable",
+  "uncalibrated": "uncalibrated"
 }

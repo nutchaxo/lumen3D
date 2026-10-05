@@ -24,7 +24,14 @@ PluginRegistry.implement('tracking-measure', {
   _draft: [],
   _measurements: [],
   _indexById: null,
-  _group: null,
+  _group: null,            // um-space group under the volume cube (o = (p - acqMin) / acqSize - 0.5)
+  _umGroup: null,
+  _spheres: [],            // pooled meshes, reused across redraws
+  _cylinders: [],
+  _sphereGeometry: null,
+  _cylinderGeometry: null,
+  _materials: new Map(),   // colour -> shared material
+  _unsubLang: null,
   _pointerStart: null,
 
   COLORS: ['#ff4d4f', '#ffd700', '#00ffff', '#7fff00', '#ff69b4', '#9400d3', '#1e90ff', '#ff8c00'],
@@ -46,13 +53,16 @@ PluginRegistry.implement('tracking-measure', {
     });
     this._unsubs = [
       this._T.on('loaded', () => { this._indexById = null; this._renderAll(); }),
-      this._T.on('frame', () => this._renderAll()),
+      this._T.on('frame', () => {
+        // Only a follow-cells row or a pending first pick depends on the frame.
+        if (this._draft.length || this._measurements.some(r => r.mode === 'follow-cells')) this._renderAll();
+      }),
       this._T.on('refresh', () => this._draw()),
       this._T.on('style', () => this._draw()),
       ctx.tools.onChange((tool) => this._onTool(tool))
     ];
     this._bindCanvas();
-    ctx.i18n.onLanguageChange?.(() => this._applyLabels());
+    this._unsubLang = ctx.i18n.onLanguageChange?.(() => this._applyLabels()) || null;
     this._renderAll();
     return this;
   },
@@ -88,10 +98,17 @@ PluginRegistry.implement('tracking-measure', {
   dispose() {
     this._unsubs.forEach(fn => fn());
     this._unsubs = [];
+    this._unsubLang?.();
+    this._unsubLang = null;
     this._ac?.abort?.();
+    this._ac = null;
+    const canvas = this._ctx?.ui.getCanvas?.();
+    if (canvas && canvas.style.cursor === 'crosshair') canvas.style.cursor = '';
     this._destroyGroup();
     this._panel?.remove();
     this._panel = null;
+    this._els = null;
+    this._draft = [];
   },
 
   // ── Measurement model ─────────────────────────────────────
@@ -176,6 +193,8 @@ PluginRegistry.implement('tracking-measure', {
       this._pointerStart = null;
       if (!start || this._ctx.tools.current() !== 'cell-measure') return;
       if (Math.hypot(e.clientX - start.x, e.clientY - start.y) >= 6) return;
+      // A hidden layer is not clickable.
+      if ((this._T.getStyle() || {}).visible === false) return;
       this._addDraft(this._T.pick(e.clientX, e.clientY));
     }, opts);
   },
@@ -197,73 +216,101 @@ PluginRegistry.implement('tracking-measure', {
     if (!parent) return false;
     this._group = new THREE.Group();
     this._group.renderOrder = 42;
+    this._umGroup = new THREE.Group();
+    this._group.add(this._umGroup);
     parent.add(this._group);
+    this._sphereGeometry = new THREE.SphereGeometry(1, 12, 8);
+    this._cylinderGeometry = new THREE.CylinderGeometry(1, 1, 1, 8);
     return true;
-  },
-
-  _clearGroup() {
-    if (!this._group) return;
-    while (this._group.children.length) {
-      const child = this._group.children[this._group.children.length - 1];
-      this._group.remove(child);
-      child.traverse?.((o) => { o.geometry?.dispose?.(); o.material?.dispose?.(); });
-    }
   },
 
   _destroyGroup() {
     if (!this._group) return;
-    this._clearGroup();
     this._T?.getVolumeObject()?.remove(this._group);
-    this._group = null;
+    this._sphereGeometry?.dispose?.();
+    this._cylinderGeometry?.dispose?.();
+    this._materials.forEach(m => m.dispose());
+    this._materials.clear();
+    this._spheres = []; this._cylinders = [];
+    this._group = null; this._umGroup = null;
+    this._sphereGeometry = null; this._cylinderGeometry = null;
   },
 
-  _toObject(um) {
-    return this._T.umToObject(new THREE.Vector3(um[0], um[1], um[2]), new THREE.Vector3());
+  _material(color) {
+    const key = String(color);
+    let m = this._materials.get(key);
+    if (!m) {
+      m = new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.95, depthTest: false, depthWrite: false });
+      this._materials.set(key, m);
+    }
+    return m;
   },
 
-  /** A sphere of `radiusUm` at an object-space point, round in world space. */
-  _marker(o, radiusUm, color) {
-    const S = this._T.getAcquisitionSpace().size;
-    const mesh = new THREE.Mesh(new THREE.SphereGeometry(1, 12, 8),
-      new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.95, depthTest: false, depthWrite: false }));
-    mesh.scale.set(radiusUm / S.x, radiusUm / S.y, radiusUm / S.z);
-    mesh.position.copy(o);
+  /** The pooled mesh number `i` of a list, created on first use. */
+  _pooled(list, i, geometry) {
+    let mesh = list[i];
+    if (!mesh) {
+      mesh = new THREE.Mesh(geometry, this._material('#ffffff'));
+      list.push(mesh);
+      this._umGroup.add(mesh);
+    }
+    mesh.visible = true;
     return mesh;
   },
 
-  _segment(a, b, color) {
-    const S = this._T.getAcquisitionSpace().size;
-    const length = a.distanceTo(b);
-    if (length <= 0) return null;
-    const r = this.LINE_RADIUS_UM / S.x;
-    const mesh = new THREE.Mesh(new THREE.CylinderGeometry(r, r, length, 8),
-      new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.95, depthTest: false, depthWrite: false }));
-    mesh.position.copy(a).lerp(b, 0.5);
-    mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), b.clone().sub(a).normalize());
-    return mesh;
+  /** Everything is drawn in micrometres under a group that maps um to the cube's
+   *  object space, so a sphere of radius r um and a cylinder of radius r um are
+   *  round in the specimen whatever the acquisition box proportions. */
+  _fitUmGroup(space) {
+    const A = space.min, S = space.size;
+    this._umGroup.scale.set(1 / S.x, 1 / S.y, 1 / S.z);
+    this._umGroup.position.set(-A.x / S.x - 0.5, -A.y / S.y - 0.5, -A.z / S.z - 0.5);
   },
 
   _draw() {
-    if (!this._T.getData() || !this._T.getAcquisitionSpace() || !this._ensureGroup()) return;
-    this._clearGroup();
+    const space = this._T.getAcquisitionSpace();
+    if (!this._T.getData() || !space || !this._ensureGroup()) return;
+    this._fitUmGroup(space);
     const style = this._T.getStyle() || {};
+    const oa = this._oa || (this._oa = new THREE.Vector3());
+    const ob = this._ob || (this._ob = new THREE.Vector3());
+    const up = this._up || (this._up = new THREE.Vector3(0, 1, 0));
+    const dir = this._dir || (this._dir = new THREE.Vector3());
+    let spheres = 0, cylinders = 0;
+    const sphere = (p, radius, color) => {
+      const m = this._pooled(this._spheres, spheres++, this._sphereGeometry);
+      m.material = this._material(color);
+      m.position.set(p[0], p[1], p[2]);
+      m.scale.setScalar(radius);
+    };
     if (style.visible !== false) {
       for (const row of this.listMeasurements()) {
         if (row.visible === false || row.points.length !== 2) continue;
-        const a = this._toObject(row.points[0]), b = this._toObject(row.points[1]);
-        if (!a || !b) continue;
-        if (!this._T.isInsideClip(a) && !this._T.isInsideClip(b)) continue;
-        const seg = this._segment(a, b, row.color || '#ff4d4f');
-        if (seg) this._group.add(seg);
-        this._group.add(this._marker(a, this.MARKER_RADIUS_UM, row.color || '#ff4d4f'));
-        this._group.add(this._marker(b, this.MARKER_RADIUS_UM, row.color || '#ff4d4f'));
+        const pa = row.points[0], pb = row.points[1];
+        this._T.umToObject(oa.set(pa[0], pa[1], pa[2]), oa);
+        this._T.umToObject(ob.set(pb[0], pb[1], pb[2]), ob);
+        if (!this._T.isInsideClip(oa) && !this._T.isInsideClip(ob)) continue;
+        const color = row.color || '#ff4d4f';
+        dir.set(pb[0] - pa[0], pb[1] - pa[1], pb[2] - pa[2]);
+        const length = dir.length();
+        if (length > 0) {
+          const seg = this._pooled(this._cylinders, cylinders++, this._cylinderGeometry);
+          seg.material = this._material(color);
+          seg.position.set((pa[0] + pb[0]) / 2, (pa[1] + pb[1]) / 2, (pa[2] + pb[2]) / 2);
+          seg.quaternion.setFromUnitVectors(up, dir.divideScalar(length));
+          seg.scale.set(this.LINE_RADIUS_UM, length, this.LINE_RADIUS_UM);
+        }
+        sphere(pa, this.MARKER_RADIUS_UM, color);
+        sphere(pb, this.MARKER_RADIUS_UM, color);
       }
       if (this._draft.length === 1) {
-        const o = this._T.positionObject(this._draft[0], this._T.getFrame(), new THREE.Vector3());
-        if (o) this._group.add(this._marker(o, this.MARKER_RADIUS_UM, '#ff9f43'));
+        const p = this._T.positionUm(this._draft[0], this._T.getFrame());
+        if (p) sphere(p, this.MARKER_RADIUS_UM, '#ff9f43');
       }
     }
-    this._group.visible = this._group.children.length > 0;
+    for (let i = spheres; i < this._spheres.length; i++) this._spheres[i].visible = false;
+    for (let i = cylinders; i < this._cylinders.length; i++) this._cylinders[i].visible = false;
+    this._group.visible = spheres + cylinders > 0;
     this._T.triggerRender();
   },
 

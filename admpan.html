@@ -7,12 +7,15 @@
   <meta name="robots" content="noindex, nofollow">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" media="print" data-async-font>
+  <noscript><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap"></noscript>
   <link rel="stylesheet" href="css/admpan.css">
   <link rel="stylesheet" href="css/admin-shell.css">
   <link rel="stylesheet" href="css/admin-upload.css">
+  <script src="js/core/theme-boot.js" data-theme-key="adm-theme"></script>
 </head>
 <body data-page="admin">
+<a class="skip-link" href="#main" data-i18n="nav.skipToContent">Skip to content</a>
 
 <!-- ═══════════════════════════════════════════════════════
      FIRST-RUN SETUP SCREEN (no credential configured yet)
@@ -42,11 +45,11 @@
     <div class="setup-step" data-step="1">
       <p class="adm-gate-intro" data-i18n="wizard.accountIntro">Créez le compte administrateur. Le mot de passe est stocké de façon irréversible (hash) et n'est jamais transmis à des tiers.</p>
       <div class="adm-gate-form">
-        <div class="adm-field"><label class="adm-field-label" data-i18n="admin.username">Identifiant</label>
+        <div class="adm-field"><label class="adm-field-label" for="setup-username" data-i18n="admin.username">Identifiant</label>
           <input type="text" id="setup-username" class="adm-field-input" value="admin" autocomplete="username" spellcheck="false"></div>
-        <div class="adm-field"><label class="adm-field-label" data-i18n="admin.newPassword">Nouveau mot de passe</label>
+        <div class="adm-field"><label class="adm-field-label" for="setup-password" data-i18n="admin.newPassword">Nouveau mot de passe</label>
           <input type="password" id="setup-password" class="adm-field-input" autocomplete="new-password" placeholder="••••••••"></div>
-        <div class="adm-field"><label class="adm-field-label" data-i18n="admin.confirmPassword">Confirmer le mot de passe</label>
+        <div class="adm-field"><label class="adm-field-label" for="setup-password2" data-i18n="admin.confirmPassword">Confirmer le mot de passe</label>
           <input type="password" id="setup-password2" class="adm-field-input" autocomplete="new-password" placeholder="••••••••"></div>
       </div>
     </div>
@@ -55,14 +58,14 @@
     <div class="setup-step" data-step="2" style="display:none">
       <p class="adm-gate-intro" data-i18n="wizard.identityIntro">Nommez votre instance et le type d'objet que vous visualisez. Vous pourrez tout affiner ensuite.</p>
       <div class="adm-gate-form">
-        <div class="adm-field"><label class="adm-field-label" data-i18n="wizard.instanceName">Nom de l'instance</label>
+        <div class="adm-field"><label class="adm-field-label" for="setup-name" data-i18n="wizard.instanceName">Nom de l'instance</label>
           <input type="text" id="setup-name" class="adm-field-input" placeholder="Lumen3D"></div>
-        <div class="adm-field"><label class="adm-field-label" data-i18n="wizard.org">Organisation (option.)</label>
+        <div class="adm-field"><label class="adm-field-label" for="setup-org" data-i18n="wizard.org">Organisation (option.)</label>
           <input type="text" id="setup-org" class="adm-field-input" placeholder="Mon laboratoire"></div>
         <div style="display:flex;gap:10px">
-          <div class="adm-field" style="flex:1"><label class="adm-field-label" data-i18n="wizard.specimenSingular">Objet (singulier)</label>
+          <div class="adm-field" style="flex:1"><label class="adm-field-label" for="setup-spec-s" data-i18n="wizard.specimenSingular">Objet (singulier)</label>
             <input type="text" id="setup-spec-s" class="adm-field-input" placeholder="sample"></div>
-          <div class="adm-field" style="flex:1"><label class="adm-field-label" data-i18n="wizard.specimenPlural">Objet (pluriel)</label>
+          <div class="adm-field" style="flex:1"><label class="adm-field-label" for="setup-spec-p" data-i18n="wizard.specimenPlural">Objet (pluriel)</label>
             <input type="text" id="setup-spec-p" class="adm-field-input" placeholder="samples"></div>
         </div>
       </div>
@@ -78,9 +81,9 @@
     <div class="setup-step" data-step="4" style="display:none">
       <p class="adm-gate-intro" data-i18n="wizard.textsIntro">Derniers réglages : accroche et mention de pied de page.</p>
       <div class="adm-gate-form">
-        <div class="adm-field"><label class="adm-field-label" data-i18n="wizard.tagline">Accroche</label>
+        <div class="adm-field"><label class="adm-field-label" for="setup-tagline" data-i18n="wizard.tagline">Accroche</label>
           <input type="text" id="setup-tagline" class="adm-field-input" placeholder="3D Imaging Data Viewer"></div>
-        <div class="adm-field"><label class="adm-field-label" data-i18n="wizard.copyright">Pied de page</label>
+        <div class="adm-field"><label class="adm-field-label" for="setup-copyright" data-i18n="wizard.copyright">Pied de page</label>
           <input type="text" id="setup-copyright" class="adm-field-input" placeholder="© Mon organisation"></div>
       </div>
     </div>
@@ -119,11 +122,11 @@
     </div>
     <div class="adm-gate-form">
       <div class="adm-field">
-        <label class="adm-field-label" data-i18n="admin.username">Identifiant</label>
+        <label class="adm-field-label" for="login-username" data-i18n="admin.username">Identifiant</label>
         <input type="text" id="login-username" class="adm-field-input" autocomplete="username" placeholder="admin" spellcheck="false">
       </div>
       <div class="adm-field">
-        <label class="adm-field-label" data-i18n="admin.password">Mot de passe</label>
+        <label class="adm-field-label" for="login-password" data-i18n="admin.password">Mot de passe</label>
         <input type="password" id="login-password" class="adm-field-input" autocomplete="current-password" placeholder="••••••••">
       </div>
       <button class="adm-btn adm-btn-accent adm-gate-submit" id="btn-login" data-i18n="admin.signIn">Se connecter</button>
@@ -263,6 +266,8 @@
       </div>
     </header>
 
+    <main class="adm-main" id="main" tabindex="-1">
+
     <!-- ───────── TAB: DATASETS (ported 3-column editor) ───────── -->
     <section class="adm-tabpanel adm-tabpanel-flush active" id="tab-datasets" data-tab="datasets">
       <div class="admin-body">
@@ -276,7 +281,7 @@
             </div>
             <div class="list-search-wrap">
               <span class="list-search-icon">🔍</span>
-              <input type="text" class="list-search-input" id="dataset-search"
+              <input type="text" class="list-search-input" id="dataset-search" aria-label="Rechercher" data-i18n-aria="admin.search"
                      placeholder="Rechercher…" data-i18n-placeholder="admin.search" autocomplete="off">
               <button class="list-search-clear" id="search-clear" style="display:none">✕</button>
             </div>
@@ -411,7 +416,7 @@
                     <span data-i18n="admin.galleryDropHint">Glissez des images ici, ou cliquez pour parcourir</span>
                     <span class="gal-formats">PNG · JPEG · WebP · GIF — 8 Mo max</span>
                   </div>
-                  <input type="file" id="gallery-file" class="gal-file"
+                  <input type="file" id="gallery-file" class="gal-file" aria-label="Ajouter des images" data-i18n-aria="admin.galleryAdd"
                          accept="image/png,image/jpeg,image/webp,image/gif" multiple>
                   <div class="gal-grid" id="gallery-grid"></div>
                   <div class="gal-empty" id="gallery-empty" data-i18n="admin.galleryEmpty">Aucune image attachée pour l'instant.</div>
@@ -578,6 +583,7 @@
       <div class="adm-tab-inner" id="upload-root"></div>
     </section>
 
+    </main>
   </div><!-- /adm-content -->
 </div><!-- /admin-app -->
 
@@ -612,15 +618,12 @@
         crossorigin="anonymous"></script>
 <!-- Core (classic scripts) — must load before the admin ES modules so I18n/Utils
      are available in the shared global lexical scope. -->
+<script src="js/core/font-loader.js"></script>
 <script src="js/core/utils.js?v=20260504"></script>
 <script src="js/core/ui-actions.js"></script>
 <script src="js/core/instance-config.js?v=20260706"></script>
 <script src="js/core/i18n.js?v=20260504"></script>
 <script src="js/core/catalog.js?v=20260504"></script>
-<script src="js/core/page-vars.js"></script>
-<script src="js/core/page-background.js"></script>
-<script src="js/core/page-renderer.js?v=20260712"></script>
-<script src="js/core/page-templates.js"></script>
-<script type="module" src="js/pages/admpan.js?v=20260709-pb2"></script>
+<script type="module" src="js/pages/admpan.js?v=20260710-lazy"></script>
 </body>
 </html>

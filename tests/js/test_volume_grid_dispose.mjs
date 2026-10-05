@@ -8,7 +8,7 @@ import assert from 'node:assert/strict';
 import { loadModule } from './harness.mjs';
 
 const VolumeGrid = loadModule('js/viewers/volume-grid.js', 'VolumeGrid', {
-  THREE: { Vector3: function () {} }, window: {}, document: {},
+  THREE: { Vector3: function () {}, Vector2: function () {} }, window: {}, document: {},
 });
 assert.equal(typeof VolumeGrid._disposeGroup, 'function', '_disposeGroup exposed');
 
@@ -44,5 +44,19 @@ assert.equal(spriteMap.dispose.calls, 1, 'sprite CanvasTexture map disposed (the
 assert.equal(sharedArrowGeom.dispose.calls, 0, 'ArrowHelper SHARED geometry must NOT be disposed');
 
 assert.equal(typeof VolumeGrid.dispose, 'function', 'public dispose() exposed');
+
+// A projection wall's defines follow the volume material's (built with a copy).
+{
+  const volumeMaterial = { defines: { ENABLE_CHANNEL_0: 1, HAS_OCCUPANCY: 1 }, uniforms: {} };
+  VolumeGrid.init({ scene: {}, cube: null, camera: null, renderer: null, material: volumeMaterial });
+  const wall = { defines: { ...volumeMaterial.defines }, needsUpdate: false };
+  VolumeGrid._syncProjDefines(wall);
+  assert.equal(wall.needsUpdate, false, 'nothing changed: no recompile');
+  delete volumeMaterial.defines.HAS_OCCUPANCY;
+  volumeMaterial.defines.ENABLE_SVR = 1;
+  VolumeGrid._syncProjDefines(wall);
+  assert.deepEqual(wall.defines, { ENABLE_CHANNEL_0: 1, ENABLE_SVR: 1 }, 'the wall samples the atlas the way the volume does');
+  assert.equal(wall.needsUpdate, true);
+}
 
 console.log('ELE-30 VolumeGrid dispose (ArrowHelper-safe): OK');

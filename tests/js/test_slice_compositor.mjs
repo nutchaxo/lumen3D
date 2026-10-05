@@ -512,7 +512,7 @@ const SLAB_STATE = [
     'mode 3: the mask texel at the same row flip as the raw; 0 → transparent');
   assert.ok(/if \(uAlphaMode == 0 && length\(c\) < \$\{VISIBLE_MIN\.toFixed\(3\)\}\) \{ outColor = vec4\(0\.0\); return; \}\s*outColor = vec4\(clamp\(c, 0\.0, 1\.0\), 1\.0\);/.test(frag), 'threshold only for one plane, opaque otherwise');
   const gpuSrc = compositorSrc.slice(compositorSrc.indexOf('function _composeGpu('), compositorSrc.indexOf('function compose('));
-  assert.ok(/_maskTextureFor\(gl, mask, w, h, raw\.data\)/.test(gpuSrc) && /_textureFor\(gl, raw, mask\)/.test(gpuSrc), 'each upload keeps the other texture of the compose from eviction');
+  assert.ok(/_maskTextureFor\(gl, mask, w, h, options\?\.slot \|\| raw\.data\)/.test(gpuSrc) && /_textureFor\(gl, raw, mask, options\?\.slot \|\| null\)/.test(gpuSrc), 'each upload keeps the other texture of the compose from eviction');
   assert.ok(/if \(k === keep \|\| entry\.kind !== kind\) continue;/.test(compositorSrc), 'the eviction loop skips the kept texture (and every texture of the other kind)');
   assert.ok(/gl\.texImage2D\(gl\.TEXTURE_2D, 0, internalFormat, w, h, 0, format, gl\.UNSIGNED_BYTE, data\)/.test(compositorSrc) && /gl\.R8, gl\.RED/.test(compositorSrc), 'the mask is an R8 / RED texture');
 

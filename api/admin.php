@@ -22,8 +22,8 @@ admin_update_finish_pending();   // no-op unless a prior update parked busy file
 admin_session_start();
 if (!admin_is_auth()) admin_json_out(['error' => 'Not authenticated'], 401);
 
-$action = $_GET['action'] ?? '';
-$body   = ($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST' ? (json_decode(file_get_contents('php://input'), true) ?: []) : [];
+$action = lumen_str($_GET['action'] ?? null) ?? '';
+$body   = ($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST' ? (lumen_request_json() ?? []) : [];
 
 if (in_array($action, ['set_plugin', 'update_apply', 'approve_plugin', 'revoke_plugin', 'install_plugin', 'update_plugin', 'uninstall_plugin', 'repair_permissions'], true)) admin_require_write();
 
@@ -43,10 +43,7 @@ switch ($action) {
         // of truth (api/catalog.php generates the catalog per request), so reading it
         // would show stale names for any dataset added since the last admin rebuild.
         $names = [];
-        if (!defined('LUMEN_DATASETS_LIB')) define('LUMEN_DATASETS_LIB', 1);
-        require_once __DIR__ . '/datasets.php';
-        $cat = rebuild_catalog();
-        foreach (($cat['datasets'] ?? []) as $ds) {
+        foreach (rebuild_catalog() as $ds) {
             if (isset($ds['path'])) $names[$ds['path']] = $ds['name'] ?? $ds['path'];
         }
         $rows = [];
@@ -98,17 +95,17 @@ switch ($action) {
     case 'approve_plugin': {
         // INV-4: re-auth with the current password; the server re-hashes on disk and
         // requires client==server agreement on the exact bytes.
-        $rec = admin_credential();
-        if (!$rec || !admin_verify_password($body['password'] ?? '', $rec['password_pbkdf2'] ?? '')) admin_json_out(['error' => 'bad_password'], 401);
-        $path = $body['path'] ?? ''; $mode = $body['mode'] ?? '';
+        // Throttled like a login: a stolen session cookie must not buy unlimited guesses.
+        if (!admin_reauth($body['password'] ?? null)) admin_json_out(['error' => 'bad_password'], 401);
+        $path = lumen_str($body['path'] ?? null) ?? ''; $mode = lumen_str($body['mode'] ?? null) ?? '';
         if (!in_array($mode, ['trusted', 'sandboxed'], true)) admin_json_out(['error' => 'bad_mode'], 400);
-        if (!preg_match('#^(tools|channels|shaders)/[A-Za-z0-9_][A-Za-z0-9._-]*$#', $path)) admin_json_out(['error' => 'bad_path'], 400);
+        if (!preg_match('#^(tools|channels|shaders)/[A-Za-z0-9_][A-Za-z0-9._-]*$#D', $path)) admin_json_out(['error' => 'bad_path'], 400);
         $modDir = modules_dir() . '/' . $path;
         if (!is_file($modDir . '/plugin.json')) admin_json_out(['error' => 'unknown_plugin'], 404);
         $serverHash = admin_plugin_hash(admin_plugin_file_hashes($modDir));
-        if (($body['sha256'] ?? '') !== $serverHash) admin_json_out(['error' => 'hash_mismatch', 'serverHash' => $serverHash], 409);
+        if (lumen_str($body['sha256'] ?? null) !== $serverHash) admin_json_out(['error' => 'hash_mismatch', 'serverHash' => $serverHash], 409);
         $declared = admin_plugin_declared_caps($modDir);
-        $caps = array_values(array_intersect(is_array($body['caps'] ?? null) ? $body['caps'] : [], SANDBOX_CAP_ALLOWLIST));
+        $caps = array_values(array_intersect(array_filter(is_array($body['caps'] ?? null) ? $body['caps'] : [], 'is_string'), SANDBOX_CAP_ALLOWLIST));
         $caps = array_values(array_unique(array_merge($caps, $declared)));
         $approvals = array_values(array_filter(admin_load_trust(), fn($a) => ($a['path'] ?? '') !== $path));
         $approvals[] = ['path' => $path, 'sha256' => $serverHash, 'mode' => $mode, 'caps' => $caps,
@@ -118,7 +115,7 @@ switch ($action) {
     }
 
     case 'revoke_plugin': {
-        $path = $body['path'] ?? '';
+        $path = lumen_str($body['path'] ?? null) ?? '';
         $approvals = admin_load_trust();
         $remaining = array_values(array_filter($approvals, fn($a) => ($a['path'] ?? '') !== $path));
         if (count($remaining) === count($approvals)) admin_json_out(['error' => 'not_approved'], 404);
@@ -131,22 +128,22 @@ switch ($action) {
         admin_json_out(mkt_list());
 
     case 'install_plugin': {
-        [$st, $pl] = mkt_install((string)($body['id'] ?? ''), (string)($body['password'] ?? ''));
+        [$st, $pl] = mkt_install(lumen_str($body['id'] ?? null) ?? '', lumen_str($body['password'] ?? null) ?? '');
         admin_json_out($pl, $st);
     }
 
     case 'update_plugin': {
-        [$st, $pl] = mkt_install((string)($body['id'] ?? ''), (string)($body['password'] ?? ''), true);
+        [$st, $pl] = mkt_install(lumen_str($body['id'] ?? null) ?? '', lumen_str($body['password'] ?? null) ?? '', true);
         admin_json_out($pl, $st);
     }
 
     case 'uninstall_plugin': {
-        [$st, $pl] = mkt_uninstall((string)($body['path'] ?? ''));
+        [$st, $pl] = mkt_uninstall(lumen_str($body['path'] ?? null) ?? '');
         admin_json_out($pl, $st);
     }
 
     case 'set_plugin': {
-        $path = $body['id'] ?? '';
+        $path = lumen_str($body['id'] ?? null) ?? '';
         $enabled = (bool)($body['enabled'] ?? true);
         $known = array_map(fn($p) => $p['path'], admin_list_plugins());
         if (!in_array($path, $known, true)) admin_json_out(['error' => 'unknown_plugin'], 404);
@@ -181,14 +178,14 @@ switch ($action) {
 
     case 'docs_download':
         // Emits the document itself and exits — must NOT fall through to admin_json_out.
-        admin_doc_send((string)($_GET['file'] ?? ''), ($_GET['inline'] ?? '') === '1');
+        admin_doc_send(lumen_str($_GET['file'] ?? null) ?? '', ($_GET['inline'] ?? '') === '1');
 
     case 'pipeline_info':
         admin_json_out(admin_pipeline_info());
 
     case 'pipeline_download':
         // Emits the zip itself and exits — it must NOT fall through to admin_json_out.
-        admin_pipeline_send($_GET['edition'] ?? 'leger');
+        admin_pipeline_send(lumen_str($_GET['edition'] ?? null) ?? 'leger');
 
     case 'update_check': {
         $current = admin_max_version(changelog_dir()) ?? '0.0.0';
@@ -225,7 +222,7 @@ switch ($action) {
             'notes' => $rel['body'] ?? null, 'publishedAt' => $rel['published_at'] ?? null,
             'changelogs' => $changelogs, 'changelogsSource' => $source,
             'zipUrl' => $rel['zipball_url'] ?? null, 'htmlUrl' => $rel['html_url'] ?? null,
-        ]);
+        ] + admin_update_check_assets($rel, $latest));
     }
 
     case 'changelog_history':
@@ -235,7 +232,7 @@ switch ($action) {
         // Compat report against the target version (mirrors dev_server.py). PHP
         // can't self-apply, but the admin UI still shows which plugins a manual
         // upgrade would render incompatible.
-        $target = $_GET['target'] ?? null;
+        $target = lumen_str($_GET['target'] ?? null);
         $current = admin_max_version(changelog_dir());
         $disabled = admin_load_disabled();
         $ok = []; $willQuarantine = []; $blocking = []; $shadersSurviving = 0;

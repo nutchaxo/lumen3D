@@ -95,6 +95,10 @@ function makeViewer(world, onTile) {
     let _qualityState = { progress: 0.4 };
     let _targetSteps = 400;
     let _planeSpec = { mode: 'xy', value: 0.5, yaw: 0, pitch: 0, roll: 0, visible: false };
+    let _poseAnim = null;
+    let _lastDisplayRequest = null;
+    function _setLabelRasterScale() {}
+    function _idlePixelRatio() { return 1; }
     ${volatile[0]}
     function _allocExportCanvas(width, height) { return { canvas: { width, height }, ctx: { clearRect() {} } }; }
     function _createExportComposite() { return { material: { dispose() {} }, geometry: { dispose() {} } }; }

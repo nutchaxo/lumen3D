@@ -60,7 +60,8 @@
     "renderingNative": "Bezig met renderen op oorspronkelijke resolutie…",
     "invalidStudioJson": "Ongeldige Studio-JSON.",
     "maxPanels": "Maximaal {count} panelen bereikt.",
-    "noMultiChannel": "Deze dataset heeft niet meerdere kanalen om te ontleden."
+    "noMultiChannel": "Deze dataset heeft niet meerdere kanalen om te ontleden.",
+    "workspaceSaveFailed": "Werkruimte kon niet worden opgeslagen (browseropslag vol of geblokkeerd). Gebruik \"Werkruimte exporteren\"."
   },
   "download": {
     "title": "Downloadcentrum",
@@ -98,10 +99,8 @@
     "measuresCsv": "Metingen CSV",
     "measuresJson": "Metingen JSON",
     "metadataJson": "Metadata JSON",
-    "annotationsJson": "Annotaties JSON",
     "noMeasures": "Geen metingen om te exporteren",
-    "noMetadata": "Geen metadata beschikbaar",
-    "noAnnotations": "Geen annotaties om te exporteren"
+    "noMetadata": "Geen metadata beschikbaar"
   },
   "nav": {
     "back": "Terug",
@@ -110,7 +109,8 @@
     "compare": "Vergelijken",
     "about": "Over",
     "upload": "Uploaden",
-    "settings": "Instellingen"
+    "settings": "Instellingen",
+    "skipToContent": "Naar de inhoud"
   },
   "theme": {
     "dark": "Donker",
@@ -163,7 +163,12 @@
     "fileSize": "Grootte",
     "failed": "Laden van data mislukt",
     "failedDesc": "Dataset niet gevonden of laden mislukt. Probeer het opnieuw.",
-    "tracked": "Gevolgd"
+    "tracked": "Gevolgd",
+    "noResultsHint": "Pas uw filters of zoekopdracht aan.",
+    "view": "Bekijken",
+    "badgeLinked": "Gekoppeld",
+    "badgeRaw": "Ruw",
+    "badgeWeb": "Web"
   },
   "viewer": {
     "controls": "Bediening",
@@ -288,7 +293,63 @@
       "noteMeasurements": "Metingen en annotaties van deze sessie worden verwijderd. De renderkwaliteit blijft ongewijzigd.",
       "confirm": "Herstellen",
       "done": "Werkomgeving hersteld"
-    }
+    },
+    "denoiseUnavailableSparse": "Ruisonderdrukking is niet beschikbaar bij deze kwaliteit (blokkenatlas): kies een lagere kwaliteit.",
+    "denoiseFailed": "Ruisonderdrukking mislukt voor kanaal {channel}: het kanaal wordt ongefilterd getoond.",
+    "gpuLost": "GPU-context verloren: weergave gepauzeerd tot de browser hem teruggeeft.",
+    "gpuRestored": "GPU-context hersteld.",
+    "gpuReloading": "GPU-context hersteld: volume wordt opnieuw geladen…",
+    "gpuReloadFailed": "GPU-context hersteld, maar het volume kon niet opnieuw worden geladen: {message}",
+    "errMetadataMissing": "metadata.json niet gevonden en geen afmetingen in de catalogus",
+    "errMetadataHttp": "metadata.json niet beschikbaar (HTTP {status})",
+    "errMetadataInvalid": "Ongeldige metadata.json: {reason}",
+    "errUnknown": "Onbekende laadfout",
+    "loadFailedKept": "Laden mislukt: {message}. Het getoonde volume blijft staan.",
+    "loadingError": "Laadfout",
+    "backToExplorer": "Terug naar de verkenner",
+    "loadingDataset": "Dataset laden…",
+    "loadingTimepoint": "Tijdpunt {n} laden ({quality})…",
+    "loadingVolume": "Volume laden ({quality})…",
+    "loadingQuality": "{quality} laden…",
+    "qualityUnavailable": "Kwaliteit {quality} niet beschikbaar",
+    "qualityActive": "{quality} actief{grid}",
+    "qualityActiveCached": "{quality} actief{grid} uit de cache",
+    "qualityDefault": "Standaard 512x512, 256x256 indien niet beschikbaar.",
+    "nearbyCached": "Nabije voorbeelden in de cache. {quality} blijft het getoonde doel.",
+    "brickMissingOne": "1 blok kon niet worden geladen",
+    "brickMissingMany": "{n} blokken konden niet worden geladen",
+    "sliceMissingOne": "1 doorsnedebeeld ontbreekt",
+    "sliceMissingMany": "{n} doorsnedebeelden ontbreken",
+    "resDowngradeBytes": "({needed} MB nodig, {budget} MB beschikbaar voor het volume.)",
+    "resDowngradeRefused": "(De GPU weigerde de toewijzing.)",
+    "channelsBeyondFour": "Deze dataset heeft {n} kanalen: de viewer en de Studio tonen de eerste 4.",
+    "calExact": "Exact",
+    "calEstimated": "Geschat",
+    "calMissing": "Metadata ontbreken",
+    "displayOverride": "Weergavecorrectie: {k}x",
+    "physicalSize": "Fysieke grootte: {x} x {y} x {z} µm",
+    "voxelGrid": "Voxelraster: actief {active}; origineel {native}",
+    "calibrationLine": "Kalibratie: {cal}; {override}; doorsnededikte: {t} µm",
+    "volSourceDisplay": "Weergave: {label}.",
+    "exportMeasuresCsv": "Metingen CSV",
+    "exportMeasuresJson": "Metingen JSON",
+    "exportMeasuresNone": "Geen metingen om te exporteren",
+    "measureNoCalibration": "De fysieke kalibratie ontbreekt voor deze dataset. Afstandsmeting vereist gekalibreerde voxelmetadata.",
+    "measureNoPoint": "Geen gekalibreerd punt van het volume gevonden.",
+    "measureHidden": "Verborgen",
+    "measureNone": "Nog geen opgeslagen metingen.",
+    "measureHint": "Klik op twee punten van het oppervlak van het preparaat.",
+    "measurePointA": "Punt A",
+    "measureSecond": "Klik op een tweede punt om de afstand te meten.",
+    "measureDistance": "Afstand",
+    "measureDeltaZ": "Delta Z",
+    "measureNote": "Gemeten tussen twee gekozen oppervlaktepunten, in gekalibreerde fysieke coördinaten.",
+    "measureLabel": "Meting {n}",
+    "measure3dValues": "3D-waarden",
+    "skipToViewer": "Naar de viewer",
+    "renderMode": "Weergavemodus",
+    "exposure": "Zichtbaarheid (belichting)",
+    "customColor": "Aangepaste kleur"
   },
   "compare": {
     "title": "Vergelijkingsmodus",
@@ -352,7 +413,9 @@
     "panelFailed": "Deze dataset kon niet worden geladen.",
     "channelsDropped": "{count} kana(a)l(en) weggelaten: maximaal {max} panelen.",
     "unknownDataset": "Dataset “{id}” staat niet in de catalogus.",
-    "uncalibrated": "niet gekalibreerd"
+    "uncalibrated": "niet gekalibreerd",
+    "retry": "Opnieuw proberen",
+    "noDatasets": "De catalogus bevat nog geen datasets."
   },
   "upload": {
     "title": "Uploaden en bekijken",
@@ -441,7 +504,7 @@
     "fileSize": "Bestandsgrootte"
   },
   "colorblind": {
-    "title": "Filters voor kleurenblindheid en kleurzwakte",
+    "title": "Simulatie van kleurenzienstoornissen",
     "group": {
       "general": "Algemeen",
       "red": "Roodstoornissen (protan — roodblind / roodzwak)",
@@ -449,7 +512,7 @@
       "blue": "Blauwstoornissen (tritan — blauwblind / blauwzwak)",
       "mono": "Monochromasie (volledig / gedeeltelijk ontbreken van kleur)"
     },
-    "none": "Uit (geen correctie)",
+    "none": "Uit (geen simulatie)",
     "protanopia": "Protanopie (roodblind)",
     "protanomaly": "Protanomalie (roodzwak)",
     "deuteranopia": "Deuteranopie (groenblind)",
@@ -615,7 +678,26 @@
     "etaMinutes": "nog ~{m} min",
     "panelChannels": "Kanalen van paneel {n}",
     "noChannelMeta": "Geen kanaalmetadata.",
-    "channelPanelMissing": "Kanaalpaneel niet geladen."
+    "channelPanelMissing": "Kanaalpaneel niet geladen.",
+    "exportTooLarge": "Deze figuur is te groot om als één PNG te exporteren ({w} × {h} px).",
+    "exportPngFailed": "De PNG kon niet worden geschreven (de browser weigerde zo'n groot canvas).",
+    "importTooLarge": "Dit bestand is te groot voor een Studio-bestand (meer dan 5 MB).",
+    "textDefault": "Annotatie",
+    "textPrompt": "Labeltekst",
+    "bigPassTitle": "Grote originele figuur",
+    "bigPassMessage": "Deze figuur projecteert {n} doorsneden: het originele beeld heeft al hun blokken nodig, ongeveer {mb} MB ({bricks} blokken).",
+    "bigPassNote": "Snijd de stapel bij met de grepen van de z-stack-browser om minder doorsneden te laden.",
+    "bigPassNative": "Origineel laden ({mb} MB)",
+    "bigPassLower": "Laden in {x} × {y} ({mb} MB)",
+    "bigPassKeep": "Voorbeeld behouden",
+    "nativeDowngraded": "GPU-geheugen: {x} × {y}",
+    "nativeFailed": "Originele resolutie niet beschikbaar; het beeld tot nu toe blijft behouden.",
+    "nativeCancelling": "Originele weergave annuleren…",
+    "nativeStatus": "Originele doorsnede: {done}/{total} blokken, {pct}%",
+    "nativePreparing": "Originele doorsnede voorbereiden ({n} blokken)…",
+    "nativeReady": "Originele doorsnede klaar ({n} blokken).",
+    "nativeReadyMissing": "Originele doorsnede klaar ({n} blokken; {missing} op de vorige resolutie).",
+    "uncalibrated": "niet gekalibreerd"
   },
   "admin": {
     "loginTitle": "{brand} Beheer",
@@ -956,12 +1038,29 @@
     "galleryDeleteError": "Kan de afbeelding niet verwijderen.",
     "galleryFull": "Maximaal {max} afbeeldingen per dataset.",
     "galleryBadType": "“{name}”: niet-ondersteund formaat (PNG, JPEG, WebP, GIF).",
-    "galleryTooLarge": "“{name}” is groter dan 8 MB.",
     "galleryReadFailed": "“{name}” kan niet worden gelezen.",
     "galleryUploadError": "Kan “{name}” niet uploaden: {reason}",
     "reasonNoImage": "afbeeldingsblok ontbreekt",
     "reasonBadImage": "ongeldig afbeeldingsblok",
-    "secOrientation2d": "Oriëntatie"
+    "secOrientation2d": "Oriëntatie",
+    "reauthTitle": "Bevestiging vereist",
+    "confirm": "Bevestigen",
+    "tabLoadFailed": "Dit tabblad kon niet worden geladen. Herlaad de pagina.",
+    "sessionExpiredKept": "Sessie verlopen: uw niet-opgeslagen wijzigingen blijven bewaard. Meld u opnieuw aan.",
+    "updateUnverifiable": "Deze release kan niet worden geverifieerd (geen controlesom voor het archief) en is niet toegepast.",
+    "pipelineDownloadNew": "Download v{v}",
+    "pipelineDownloadInstalled": "Geïnstalleerde versie (v{v})",
+    "pipelineNewerNote": "Er is een nieuwere versie van het pakket gepubliceerd ({tag}).",
+    "pipelineUpdateTitle": "Nieuwe versie van het pakket: v{remote}",
+    "pipelineUpdateHint": "Deze server biedt v{local} aan. Download hieronder de nieuwe versie; het platform zelf hoeft hiervoor niet te worden bijgewerkt.",
+    "pipelinePackUpdates": "Verwerkingspakket",
+    "pipelinePackUpToDate": "Het verwerkingspakket is up-to-date.",
+    "pipelinePackUnreachable": "GitHub kon niet worden bereikt om het verwerkingspakket te controleren.",
+    "pipelinePackAvailable": "Nieuw verwerkingspakket",
+    "pipelinePackInstalled": "hier: v{v}",
+    "pipelinePackHint": "Het wordt geïnstalleerd op het verwerkingswerkstation, niet op deze server: download het en vervang de map die daar wordt gebruikt.",
+    "pipelinePackGet": "Het pakket downloaden",
+    "galleryTooLargeMax": "“{name}” is groter dan {max}."
   },
   "upl": {
     "title": "Datasets importeren",
@@ -1042,7 +1141,20 @@
     "exitTitle": "Er loopt een overdracht",
     "exitBody": "Deze pagina verlaten pauzeert de overdracht. Al verzonden bestanden blijven bewaard: ze hervat waar ze stopte zodra u dezelfde map opnieuw sleept.",
     "exitStay": "Op deze pagina blijven",
-    "exitLeave": "Pauzeren en verlaten"
+    "exitLeave": "Pauzeren en verlaten",
+    "errInsecure": "Imports vereisen een beveiligde verbinding (HTTPS of localhost).",
+    "errPlanTooBig": "De bestandslijst van \"{folder}\" overschrijdt de maximale aanvraaggrootte van de server (post_max_size).",
+    "errPlanNetwork": "De server reageert niet. Controleer de verbinding en sleep de map opnieuw.",
+    "errUnreadable": "{n} item(s) in de map konden niet worden gelezen en ontbreken in de import.",
+    "errSomeFailed": "{n} bestand(en) konden niet worden verzonden. Gebruik \"Opnieuw proberen\" of sleep de map opnieuw.",
+    "retry": "Opnieuw proberen",
+    "offline": "Verbinding verbroken: de overdracht hervat vanzelf zodra het netwerk terug is.",
+    "statusOffline": "Verbinding verbroken, hervat automatisch",
+    "statusDoneErrors": "Voltooid met {n} mislukte bestand(en)",
+    "rjUnreadable": "item(s) onleesbaar bij het lezen van de map",
+    "insufficientDisk": "Onvoldoende schijfruimte op de server ({needed} nodig, {free} vrij)",
+    "tooLarge": "\"{name}\" is groter dan de server voor één bestand accepteert.",
+    "rjDisk": "onvoldoende schijfruimte op de server"
   },
   "appearance": {
     "title": "Vormgeving",
@@ -1676,7 +1788,12 @@
       "content": "Inhoud",
       "add": "Een tabblad toevoegen",
       "accent": "Kleur van het actieve tabblad"
-    }
+    },
+    "autosaveFailed": "Automatisch opslaan mislukt, klik om opnieuw te proberen",
+    "lockedOther": "Open in een ander tabblad, klik om over te nemen",
+    "switchUnsaved": "De laatste wijzigingen aan deze pagina konden niet worden opgeslagen. Toch van pagina wisselen?",
+    "loadFailed": "Pagina onleesbaar, herlaad voor het bewerken",
+    "takeoverConfirm": "Deze pagina is open in een ander tabblad. Hier opslaan overschrijft de wijzigingen daar. Doorgaan?"
   },
   "wizard": {
     "title": "Begeleide installatie",
@@ -1814,6 +1931,21 @@
     "studioTitle": "Studio",
     "studioSubtitle": "De foto annoteren",
     "labels": "Labels",
-    "textSize": "Labelgrootte"
+    "textSize": "Labelgrootte",
+    "nativeError": "De afbeelding op volle resolutie kon niet worden geladen."
+  },
+  "decomposition": {
+    "channel": "Kanaal: {name}",
+    "channelEdited": "Kanaal: {name} (bewerkt)",
+    "addCombination": "Combinatie toevoegen",
+    "customName": "Aangepast {n}",
+    "done": "Klaar",
+    "resetOriginal": "Terug naar origineel",
+    "clickToEdit": "Klik om deze weergave te bewerken",
+    "exportTooLarge": "Te veel weergaven voor één afbeelding. Verwijder er enkele en probeer opnieuw."
+  },
+  "annotations": {
+    "enterLabel": "Voer het label van de annotatie in:",
+    "editLabel": "Label bewerken:"
   }
 }

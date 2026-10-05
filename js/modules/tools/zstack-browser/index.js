@@ -50,7 +50,7 @@ PluginRegistry.implement('zstack-browser', {
     this._ctx = ctx;
     this._bindControls();
     this._applyLabels();
-    ctx.i18n.onLanguageChange?.(() => { this._applyLabels(); this._render(); });
+    this._unsubLang = ctx.i18n.onLanguageChange?.(() => { this._applyLabels(); this._render(); }) || null;
     return this;
   },
 
@@ -76,7 +76,7 @@ PluginRegistry.implement('zstack-browser', {
     // resetClipping would erase the cut plane a workspace has just restored,
     // and the siblings would be told to leave a stack they are not in.
     if (desired || wasActive) this._show(desired, options);
-    if (desired && Number.isFinite(slice) && slice > 0) {
+    if (desired && Number.isFinite(slice) && slice >= 0) {
       // Applied synchronously, while the SYNC_ZSTACK_SLICE receiver's echo guard is
       // still raised; re-arm it anyway so a caller without one cannot ping-pong with
       // the sibling panel. Restore prev to keep nesting safe.
@@ -744,6 +744,8 @@ PluginRegistry.implement('zstack-browser', {
   },
 
   dispose() {
+    this._unsubLang?.();
+    this._unsubLang = null;
     this._ac?.abort();
     this._ac = null;
     this._els = null;

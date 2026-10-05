@@ -69,8 +69,14 @@ function bounded(arr) {
   assert.ok(result.blurredData[w * 4 + 5] > 0, 'neighbour received energy');
 }
 
-// ── Structural: per-axis radius clamp present in both helpers ──
-assert.ok(/r > \(\(w - 1\) >> 1\)/.test(SRC), 'BUG-014: horizontal radius clamped to row width');
-assert.ok(/r > \(\(h - 1\) >> 1\)/.test(SRC), 'BUG-014: vertical radius clamped to column height');
+// ── Behavioural: a radius wider than the slice reads clamped indices, never outside it ──
+{
+  const w = 5, h = 3;
+  const raw = new Uint8Array(w * h).fill(90);
+  const { result, error } = runBlur({ width: w, height: h, depth: 1, sigma: 25, rawData: raw });
+  assert.equal(error, null, 'huge sigma on a 5x3 slice must not error');
+  // Edge replication conserves a constant image exactly
+  assert.ok(Array.from(result.blurredData).every(v => v === 90), 'a constant slice stays constant');
+}
 
 console.log('BUG-014 gaussian blur radius bounds: OK');

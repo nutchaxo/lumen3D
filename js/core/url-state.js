@@ -18,6 +18,14 @@ const UrlState = (() => {
   // every single second. They stay in the payload — only the change test ignores them.
   const VOLATILE_PATHS = [['viewer', 'cache']];
 
+  // A workspace is a few KB. Deflate expands up to ~1000:1, so a crafted link must not
+  // be allowed to inflate unbounded; and a #state= past a few tens of KB is no longer a
+  // link anyone can share (browsers truncate or refuse such URLs).
+  const MAX_HASH_CHARS = 2 * 1024 * 1024;
+  const MAX_INFLATED_BYTES = 16 * 1024 * 1024;
+  const MAX_WRITTEN_HASH_CHARS = 64 * 1024;
+  let _warnedOversize = false;
+
   async function encodeState(state) {
     try {
       const json = JSON.stringify(state);
@@ -43,6 +51,7 @@ const UrlState = (() => {
   async function decodeState(hashStr) {
     if (!hashStr || !hashStr.startsWith('#state=')) return null;
     try {
+      if (hashStr.length > MAX_HASH_CHARS) throw new Error('state hash too long');
       const base64url = hashStr.replace('#state=', '');
       const base64 = base64url.replace(/-/g, '+').replace(/_/g, '/') + '==='.slice((base64url.length + 3) % 4);
       const binaryStr = atob(base64);
@@ -53,8 +62,23 @@ const UrlState = (() => {
       }
 
       const stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream('deflate-raw'));
-      const json = await new Response(stream).text();
-      return JSON.parse(json);
+      const reader = stream.getReader();
+      const parts = [];
+      let total = 0;
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        total += value.byteLength;
+        if (total > MAX_INFLATED_BYTES) {
+          try { await reader.cancel(); } catch (_) { /* already torn down */ }
+          throw new Error('decompressed state exceeds ' + MAX_INFLATED_BYTES + ' bytes');
+        }
+        parts.push(value);
+      }
+      const merged = new Uint8Array(total);
+      let at = 0;
+      for (const p of parts) { merged.set(p, at); at += p.byteLength; }
+      return JSON.parse(new TextDecoder('utf-8').decode(merged));
     } catch (err) {
       console.warn('[UrlState] Failed to decode state from URL:', err);
       return null;
@@ -175,13 +199,17 @@ const UrlState = (() => {
   function _fingerprint(state) {
     if (!state) return null;
     try {
-      const copy = JSON.parse(JSON.stringify(state));
+      // One serialisation, with the volatile members dropped by the replacer (no deep clone).
+      const holders = [];
       for (const path of VOLATILE_PATHS) {
-        let node = copy;
+        let node = state;
         for (let i = 0; i < path.length - 1 && node; i++) node = node[path[i]];
-        if (node && typeof node === 'object') delete node[path[path.length - 1]];
+        if (node && typeof node === 'object') holders.push([node, path[path.length - 1]]);
       }
-      return JSON.stringify(copy);
+      return JSON.stringify(state, function (key, value) {
+        for (const [holder, name] of holders) if (this === holder && key === name) return undefined;
+        return value;
+      });
     } catch (err) {
       return null;
     }
@@ -206,11 +234,24 @@ const UrlState = (() => {
     const generation = _generation;
     const encoded = await encodeState(state);
     if (!encoded || generation !== _generation) return;
+    if (encoded.length > MAX_WRITTEN_HASH_CHARS) {
+      if (!_warnedOversize) {
+        _warnedOversize = true;
+        console.warn('[UrlState] Workspace too large for a shareable link; the address bar is no longer updated (use "Save state" to export it).');
+      }
+      // A stale #state= would restore an older workspace than the one on screen.
+      if (window.location.hash.startsWith('#state=')) { clearHash(); _lastFingerprint = fingerprint; }
+      return;
+    }
     const newHash = `#state=${encoded}`;
     // Only update if it actually changed to prevent history spam and layout thrashing
     if (newHash !== window.location.hash && newHash !== _lastHash) {
       _lastHash = newHash;
-      window.history.replaceState(null, '', window.location.pathname + window.location.search + newHash);
+      try {
+        window.history.replaceState(null, '', window.location.pathname + window.location.search + newHash);
+      } catch (err) {
+        console.warn('[UrlState] Could not write the address bar:', err);
+      }
     }
   }
 

@@ -25,7 +25,7 @@
 
   --text-primary:     #E8E8F0;
   --text-secondary:   #9999BB;
-  --text-muted:       #666688;
+  --text-muted:       #9090B0;
   --text-inverse:     #1A1A2E;
 
   --border-subtle:    rgba(255, 255, 255, 0.06);
@@ -64,7 +64,13 @@
 
   --text-primary:     #1A1A2E;
   --text-secondary:   #555577;
-  --text-muted:       #9999AA;
+  --text-muted:       #656578;
+
+  /* The brand green is 3.19:1 on white: as TEXT (links, active tabs, stat numbers) it
+     fails WCAG AA in the light theme, so the light theme uses the darker green
+     (5.05:1 on white). Dark theme keeps the bright one (6.0:1 on #0D0D1A). */
+  --color-primary:        #00803F;
+  --color-primary-hover:  #006B35;
   --text-inverse:     #FFFFFF;
 
   --border-subtle:    rgba(0, 0, 0, 0.05);
@@ -86,9 +92,9 @@
   --glass-border:   rgba(0, 0, 0, 0.06);
 
   --badge-3d-bg:         rgba(0, 180, 224, 0.10);
-  --badge-3d-text:       #0090B8;
+  --badge-3d-text:       #007391;
   --badge-2d-bg:         rgba(91, 75, 214, 0.10);
   --badge-2d-text:       #5B4BD6;
   --badge-live-bg:       rgba(230, 140, 20, 0.10);
-  --badge-live-text:     #D48500;
+  --badge-live-text:     #A06000;
 }

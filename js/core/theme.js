@@ -8,12 +8,15 @@ const Theme = (() => {
   let _current = 'dark';
   const _listeners = [];
 
+  function _storageGet(key) { try { return localStorage.getItem(key); } catch (_) { return null; } }
+  function _storageSet(key, value) { try { localStorage.setItem(key, value); } catch (_) { /* blocked or full: the theme still applies to this page */ } }
+
   /**
    * Initialize theme from saved preference or system preference
    */
   function init() {
-    const saved = localStorage.getItem('iribhm-theme');
-    if (saved) {
+    const saved = _storageGet('iribhm-theme');
+    if (saved === 'dark' || saved === 'light') {
       _current = saved;
     } else {
       // BUG-045: previously a no-op ternary selected dark in both branches after
@@ -26,7 +29,7 @@ const Theme = (() => {
 
     // Listen for system theme changes
     window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', e => {
-      if (!localStorage.getItem('iribhm-theme')) {
+      if (!_storageGet('iribhm-theme')) {
         _current = e.matches ? 'dark' : 'light';
         _apply();
         _notify();
@@ -51,8 +54,8 @@ const Theme = (() => {
    */
   function toggle() {
     _current = _current === 'dark' ? 'light' : 'dark';
-    localStorage.setItem('iribhm-theme', _current);
     _apply();
+    _storageSet('iribhm-theme', _current);
     _notify();
   }
 
@@ -63,8 +66,8 @@ const Theme = (() => {
   function set(theme) {
     if (theme !== 'dark' && theme !== 'light') return;
     _current = theme;
-    localStorage.setItem('iribhm-theme', _current);
     _apply();
+    _storageSet('iribhm-theme', _current);
     _notify();
   }
 
@@ -98,10 +101,16 @@ const Theme = (() => {
    */
   function onChange(fn) {
     _listeners.push(fn);
+    return () => {
+      const i = _listeners.indexOf(fn);
+      if (i !== -1) _listeners.splice(i, 1);
+    };
   }
 
   function _notify() {
-    _listeners.forEach(fn => fn(_current));
+    _listeners.slice().forEach(fn => {
+      try { fn(_current); } catch (err) { console.warn('[Theme] listener error:', err); }
+    });
   }
 
   return { init, toggle, set, get, isDark, onChange };

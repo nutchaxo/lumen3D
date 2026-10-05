@@ -1,3 +1,4 @@
 {
-  "title": "Screenshot"
+  "title": "Screenshot",
+  "failed": "Screenshot failed: the view could not be captured."
 }

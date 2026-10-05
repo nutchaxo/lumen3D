@@ -18,7 +18,9 @@ function check(string $name, $cond): void {
 $api = __DIR__ . '/../api';
 foreach (['admin.php', 'datasets.php', 'site.php', 'media.php', 'upload.php'] as $f) {
     $src = (string)file_get_contents("$api/$f");
+    // site.php resumes (never creates) a session: its public read serves anonymous visitors.
     $start = strpos($src, 'admin_session_start();');
+    if ($start === false) $start = strpos($src, 'admin_session_resume();');
     $close = strpos($src, 'session_write_close();');
     check("$f releases the session lock", $close !== false);
     check("$f releases it after the session was opened", $start !== false && $close !== false && $close > $start);

@@ -1,5 +1,6 @@
 {
   "title": "Gekalibreerd raster (geen / grof / fijn)",
   "aria": "Gekalibreerd raster",
-  "step": "raster"
+  "step": "raster",
+  "uncalibrated": "Raster niet beschikbaar: deze foto heeft geen pixelgrootte"
 }

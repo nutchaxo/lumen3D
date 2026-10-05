@@ -4,10 +4,20 @@
  * dev_server.py /api/site.php handler. PHP is the PRIMARY deployment target,
  * so this endpoint is a first-class implementation, not a fallback.
  *
- *   GET  ?action=get&doc=<instance|theme|legal|pages/<slug>>   (PUBLIC read)
- *   POST ?action=save&doc=...   body = JSON document            (admin + CSRF)
+ *   GET  ?action=get&doc=<instance|theme|legal>   (public read; a page: admin only)
+ *   GET  ?action=get&doc=pages/<slug>             (admin; anonymous → 401 — the public
+ *                                                   pages read config/pages/<slug>.json)
+ *   POST ?action=save&doc=...[&rev=R][&merge=a,b.c]   body = JSON document (admin + CSRF)
+ *   POST ?action=save_draft&doc=pages/<slug>[&rev=R]  body = {draft, title?}  (admin + CSRF)
  *   POST ?action=reset&doc=...                                  (admin + CSRF)
  *   POST ?action=publish&doc=pages/<slug>                       (admin + CSRF)
+ *
+ * Revisions: an admin GET answers with `X-Lumen-Rev`, every write with {rev}. A write
+ * sent with ?rev= of a revision that is no longer current is refused with 409
+ * {error:'stale', rev}. `merge` replaces only the listed (dotted) paths of the stored
+ * document, so tabs that share instance.json never overwrite each other's fields.
+ * Twin of dev_server.py's /api/site.php handler (_site_rev, _merge_paths,
+ * _site_save_draft).
  *
  * The docs live under the PUBLIC config/ dir (served like lang/*.json) so the
  * public pages can fetch them; they are written world-readable (0644), NOT
@@ -16,19 +26,12 @@
 
 declare(strict_types=1);
 require_once __DIR__ . '/_admin_lib.php';
-admin_session_start();
-// Read-only use of the session from here on (auth, CSRF): release its lock so this
-// request never serialises with the rest of the admin (see api/admin.php).
-if (session_status() === PHP_SESSION_ACTIVE) session_write_close();
 
-$action = $_GET['action'] ?? '';
-$method = $_SERVER['REQUEST_METHOD'] ?? 'GET';
-$body   = $method === 'POST'
-    ? (json_decode(file_get_contents('php://input'), true) ?: [])
-    : [];
-
-function site_config_dir(): string { return admin_root() . '/config'; }
-function site_defaults_dir(): string { return admin_root() . '/config/defaults/neutral'; }
+// Library mode (tests): the helpers below are defined, nothing is routed and no
+// session is touched. LUMEN_CONFIG_DIR / LUMEN_PAGE_DRAFTS_DIR point them elsewhere.
+function site_config_dir(): string { return defined('LUMEN_CONFIG_DIR') ? (string)LUMEN_CONFIG_DIR : admin_root() . '/config'; }
+function site_defaults_dir(): string { return site_config_dir() . '/defaults/neutral'; }
+function site_drafts_dir(): string { return defined('LUMEN_PAGE_DRAFTS_DIR') ? (string)LUMEN_PAGE_DRAFTS_DIR : __DIR__ . '/page-drafts'; }
 
 /** Map a doc name to [active, default] paths under config/, or null if unsafe. */
 function site_doc_path(string $doc): ?array {
@@ -38,7 +41,7 @@ function site_doc_path(string $doc): ?array {
     }
     if (strncmp($doc, 'pages/', 6) === 0) {
         $slug = substr($doc, 6);
-        if (preg_match('/^[a-z0-9][a-z0-9_-]{0,63}$/', $slug)) {
+        if (preg_match('/^[a-z0-9][a-z0-9_-]{0,63}$/D', $slug)) {
             return [site_config_dir() . "/pages/$slug.json", site_defaults_dir() . "/pages/$slug.json"];
         }
     }
@@ -55,8 +58,8 @@ function site_draft_path(string $doc): ?string {
     $doc = trim($doc);
     if (strncmp($doc, 'pages/', 6) !== 0) return null;
     $slug = substr($doc, 6);
-    if (!preg_match('/^[a-z0-9][a-z0-9_-]{0,63}$/', $slug)) return null;
-    return __DIR__ . '/page-drafts/' . $slug . '.json';
+    if (!preg_match('/^[a-z0-9][a-z0-9_-]{0,63}$/D', $slug)) return null;
+    return site_drafts_dir() . '/' . $slug . '.json';
 }
 
 /** Read a doc: active → default → empty. false on invalid doc name.
@@ -103,30 +106,14 @@ function site_load_admin(string $doc) {
 
 /** Atomic write of a PRIVATE doc under api/ (0600, never web-readable). */
 function site_write_private(string $path, array $data): bool {
-    $dir = dirname($path);
-    if (!is_dir($dir)) admin_make_dir($dir);
-    $tmp = tempnam($dir, '.tmp-');
-    if ($tmp === false) return false;
-    if (@file_put_contents($tmp, json_encode($data, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT)) === false) {
-        @unlink($tmp); return false;
-    }
-    if (!@rename($tmp, $path)) { @unlink($tmp); return false; }
-    @chmod($path, 0600);
-    return true;
+    $json = json_encode($data, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT);
+    return $json !== false && lumen_write_file_atomic($path, $json, 0600);
 }
 
-/** Atomic write of a PUBLIC config doc (0644, not 0600). */
+/** Atomic write of a PUBLIC config doc (readable by the web server, not 0600). */
 function site_write_public(string $path, array $data): bool {
-    $dir = dirname($path);
-    if (!is_dir($dir)) admin_make_dir($dir);
-    $tmp = tempnam($dir, '.tmp-');
-    if ($tmp === false) return false;
-    if (@file_put_contents($tmp, json_encode($data, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT)) === false) {
-        @unlink($tmp); return false;
-    }
-    if (!@rename($tmp, $path)) { @unlink($tmp); return false; }
-    admin_fix_file_mode($path);
-    return true;
+    $json = json_encode($data, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT);
+    return $json !== false && lumen_write_file_atomic($path, $json);
 }
 
 /** Scrub a CSS value so operator input can never break out of a declaration. */
@@ -207,12 +194,7 @@ function site_save_doc(string $doc, $data): bool {
     }
     if (!site_write_public($res[0], $data)) return false;
     if ($doc === 'theme') {
-        $css = site_generate_theme_css($data);
-        $cssPath = site_config_dir() . '/theme.css';
-        $tmp = tempnam(dirname($cssPath), '.tmp-');
-        if ($tmp !== false && @file_put_contents($tmp, $css) !== false && @rename($tmp, $cssPath)) {
-            admin_fix_file_mode($cssPath);
-        } elseif ($tmp !== false) { @unlink($tmp); }
+        lumen_write_file_atomic(site_config_dir() . '/theme.css', site_generate_theme_css($data));
     }
     return true;
 }
@@ -252,32 +234,187 @@ function site_publish_doc(string $doc): bool {
     return true;
 }
 
+/** Revision of a doc as the operator sees it: sha256 over the stored public file and,
+ *  for a page, its private draft (a missing file counts as empty), first 20 hex.
+ *  Twin of dev_server.py _site_rev — same bytes, same revision. */
+function site_rev(string $doc): ?string {
+    $res = site_doc_path($doc);
+    if ($res === null) return null;
+    $ctx = hash_init('sha256');
+    foreach ([$res[0], site_draft_path($doc)] as $path) {
+        $data = ($path !== null && is_file($path)) ? @file_get_contents($path) : '';
+        if (!is_string($data)) $data = '';
+        hash_update($ctx, strlen($data) . ':' . $data . ';');
+    }
+    return substr(hash_final($ctx), 0, 20);
+}
+
+/** `merge=variables,editor,nav.customPages` → validated dotted paths, or null. */
+function site_parse_merge($raw): ?array {
+    $paths = array_values(array_filter(array_map('trim', explode(',', (string)$raw)), 'strlen'));
+    if (!$paths || count($paths) > 32) return null;
+    foreach ($paths as $p) {
+        if (!preg_match('/^[A-Za-z0-9_-]{1,64}(\.[A-Za-z0-9_-]{1,64}){0,3}\z/', $p)) return null;
+    }
+    return $paths;
+}
+
+/** $current with each dotted path replaced by its value in $incoming — or removed when
+ *  $incoming has none. Keys nobody listed are left untouched. Twin of _merge_paths. */
+function site_merge_paths(array $current, array $incoming, array $paths): array {
+    foreach ($paths as $path) {
+        $segs = explode('.', $path);
+        $src = $incoming; $found = true;
+        foreach ($segs as $seg) {
+            if (is_array($src) && array_key_exists($seg, $src)) { $src = $src[$seg]; }
+            else { $found = false; break; }
+        }
+        $node = &$current;
+        $ok = true;
+        foreach (array_slice($segs, 0, -1) as $seg) {
+            if (!isset($node[$seg]) || !is_array($node[$seg])) {
+                if (!$found) { $ok = false; break; }
+                $node[$seg] = [];
+            }
+            $node = &$node[$seg];
+        }
+        if ($ok) {
+            $leaf = end($segs);
+            if ($found) $node[$leaf] = $src; else unset($node[$leaf]);
+        }
+        unset($node);
+    }
+    return $current;
+}
+
+/** Run $fn under the site-doc lock (one per doc). */
+function site_locked(string $doc, callable $fn) {
+    $res = site_doc_path($doc);
+    if ($res === null) return $fn();
+    return lumen_with_lock($res[0], $fn);
+}
+
+/** Save with an optional stale-revision check and field merge. @return array{0:int,1:array} */
+function site_save_checked(string $doc, $data, ?string $rev, ?array $merge): array {
+    if (site_doc_path($doc) === null) return [400, ['error' => 'Invalid doc']];
+    return site_locked($doc, function () use ($doc, $data, $rev, $merge) {
+        $current = site_rev($doc);
+        if ($rev !== null && $rev !== '' && $rev !== $current) return [409, ['error' => 'stale', 'rev' => $current]];
+        if ($merge !== null) {
+            if (strncmp(trim($doc), 'pages/', 6) === 0) return [400, ['error' => 'merge_not_supported']];
+            $base = site_load_doc($doc);
+            $data = site_merge_paths(is_array($base) ? $base : [], is_array($data) ? $data : [], $merge);
+        }
+        if (!site_save_doc($doc, is_array($data) ? $data : [])) return [400, ['error' => 'Invalid doc']];
+        return [200, ['ok' => true, 'rev' => site_rev($doc)]];
+    });
+}
+
+/** Write ONLY a page's private draft — and its title when the body carries one. The
+ *  published block is never touched. Body {draft, title?}. Twin of _site_save_draft. */
+function site_save_draft(string $doc, $body, ?string $rev): array {
+    $doc = trim($doc);
+    $draftPath = site_draft_path($doc);
+    if ($draftPath === null) return [400, ['error' => 'Invalid doc']];
+    $body = is_array($body) ? $body : [];
+    $draft = $body['draft'] ?? null;
+    if (!is_array($draft) || ($draft && array_keys($draft) === range(0, count($draft) - 1))) {
+        return [400, ['error' => "Invalid 'draft' block"]];
+    }
+    $probe = ['draft' => $draft];
+    $err = site_validate_page($probe);
+    if ($err !== null) return [400, ['error' => $err]];
+    return site_locked($doc, function () use ($doc, $body, $rev, $draftPath, $probe) {
+        $current = site_rev($doc);
+        if ($rev !== null && $rev !== '' && $rev !== $current) return [409, ['error' => 'stale', 'rev' => $current]];
+        if (array_key_exists('title', $body)) {
+            $public = site_load_public($doc);
+            $public = is_array($public) ? $public : [];
+            if (($public['title'] ?? null) !== $body['title']) {
+                $public['title'] = $body['title'];
+                if (!isset($public['published']) || !is_array($public['published'])) $public['published'] = ['sections' => []];
+                $public['schemaVersion'] = 2;
+                if (!site_write_public(site_doc_path($doc)[0], $public)) return [500, ['error' => 'write_failed']];
+            }
+        }
+        if (!is_dir(dirname($draftPath)) && !admin_make_dir(dirname($draftPath))) return [500, ['error' => 'write_failed']];
+        if (!site_write_private($draftPath, $probe['draft'])) return [500, ['error' => 'write_failed']];
+        return [200, ['ok' => true, 'rev' => site_rev($doc)]];
+    });
+}
+
+if (defined('LUMEN_SITE_LIB')) return;
+
+// The public read is served to every visitor of a custom page: a session is only
+// resumed when the client already carries one (the operator), never created — one
+// session file and one Set-Cookie per anonymous visit was the old cost.
+admin_session_resume();
+// Read-only use of the session from here on (auth, CSRF): release its lock so this
+// request never serialises with the rest of the admin (see api/admin.php).
+if (session_status() === PHP_SESSION_ACTIVE) session_write_close();
+
+$action = lumen_str($_GET['action'] ?? null) ?? '';
+$method = $_SERVER['REQUEST_METHOD'] ?? 'GET';
+$body   = $method === 'POST'
+    ? (json_decode((string)file_get_contents('php://input'), true) ?: [])
+    : [];
+
 // ── Public read ───────────────────────────────────────────────────────────────
 // Only the operator gets the draft back; everyone else sees published content.
 if ($action === 'get') {
-    $doc  = $_GET['doc'] ?? '';
-    $data = admin_is_auth() ? site_load_admin($doc) : site_load_public($doc);
+    $doc  = lumen_str($_GET['doc'] ?? null) ?? '';
+    $auth = admin_is_auth();
+    // An anonymous read of a PAGE is refused: the public pages read the static
+    // published copy, and an admin whose session expired must learn it here rather
+    // than be handed the published-only doc and autosave it over the draft.
+    if (!$auth && strncmp(trim($doc), 'pages/', 6) === 0) admin_json_out(['error' => 'Not authenticated'], 401);
+    $data = $auth ? site_load_admin($doc) : site_load_public($doc);
     if ($data === false) admin_json_out(['error' => 'Invalid doc'], 400);
+    if ($auth) {
+        header('Cache-Control: no-store');
+        header('X-Lumen-Rev: ' . (site_rev($doc) ?? ''));
+    }
     admin_json_out(is_array($data) ? $data : []);
 }
 
 // ── Writes: admin session + CSRF ──────────────────────────────────────────────
 if (!admin_is_auth()) admin_json_out(['error' => 'Not authenticated'], 401);
 
-if (in_array($action, ['save', 'reset', 'publish', 'delete'], true)) {
+if (in_array($action, ['save', 'save_draft', 'reset', 'publish', 'delete'], true)) {
     admin_require_write();  // POST + CSRF; exits on failure
-    $doc = $_GET['doc'] ?? '';
+    $doc = lumen_str($_GET['doc'] ?? null) ?? '';
+    $rev = lumen_str($_GET['rev'] ?? null);
     if ($action === 'save') {
         $payload = is_array($body) ? $body : [];
+        $merge = null;
+        if (isset($_GET['merge'])) {
+            $merge = site_parse_merge(lumen_str($_GET['merge']) ?? '');
+            if ($merge === null) admin_json_out(['error' => 'bad_merge'], 400);
+        }
         if (strncmp($doc, 'pages/', 6) === 0) {
             $verr = site_validate_page($payload);
             if ($verr !== null) admin_json_out(['error' => $verr], 400);
         }
-        admin_json_out(site_save_doc($doc, $payload) ? ['ok' => true] : ['error' => 'Invalid doc'], site_doc_path($doc) === null ? 400 : 200);
+        [$code, $out] = site_save_checked($doc, $payload, $rev, $merge);
+        admin_json_out($out, $code);
     }
-    if ($action === 'reset')   admin_json_out(site_reset_doc($doc) ? ['ok' => true] : ['error' => 'Invalid doc'], site_doc_path($doc) === null ? 400 : 200);
-    if ($action === 'publish') admin_json_out(site_publish_doc($doc) ? ['ok' => true] : ['error' => 'Invalid doc'], site_doc_path($doc) === null ? 400 : 200);
-    if ($action === 'delete')  admin_json_out(site_delete_doc($doc) ? ['ok' => true] : ['error' => 'Invalid doc'], site_doc_path($doc) === null ? 400 : 200);
+    if ($action === 'save_draft') {
+        [$code, $out] = site_save_draft($doc, $body, $rev);
+        admin_json_out($out, $code);
+    }
+    if (site_doc_path($doc) === null) admin_json_out(['error' => 'Invalid doc'], 400);
+    if ($action === 'reset') {
+        $ok = site_locked($doc, fn() => site_reset_doc($doc));
+        admin_json_out($ok ? ['ok' => true, 'rev' => site_rev($doc)] : ['error' => 'Invalid doc'], $ok ? 200 : 400);
+    }
+    if ($action === 'publish') {
+        $ok = site_locked($doc, fn() => site_publish_doc($doc));
+        admin_json_out($ok ? ['ok' => true, 'rev' => site_rev($doc)] : ['error' => 'Invalid doc'], $ok ? 200 : 400);
+    }
+    if ($action === 'delete') {
+        $ok = site_locked($doc, fn() => site_delete_doc($doc));
+        admin_json_out($ok ? ['ok' => true] : ['error' => 'Invalid doc'], $ok ? 200 : 400);
+    }
 }
 
 admin_json_out(['error' => 'Unknown action'], 400);

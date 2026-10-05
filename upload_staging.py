@@ -54,11 +54,13 @@ so a crash costs a re-send, never a corrupt file.
 from __future__ import annotations
 
 import base64
+import errno
 import hashlib
 import json
 import os
 import re
 import shutil
+import tempfile
 import threading
 import time
 from datetime import datetime, timezone
@@ -107,6 +109,16 @@ STALE_AFTER_S = 7 * 24 * 3600
 # million-entry plan in memory.
 MAX_FILES_PER_DATASET = 200_000
 MAX_DATASETS_PER_PLAN = 200
+# Largest single file a plan accepts (a raw .ims original is tens of GB). Also
+# bounds the received-chunk bitmap a client-declared size can make us allocate.
+MAX_FILE_SIZE = 1 << 40
+# Free space a plan must leave on the staging volume: the same disk usually holds
+# DATA_WEB, the credential, logs and the updater's backups.
+DISK_RESERVE_BYTES = 512 * 1024 * 1024
+
+# Our own temp files (atomic JSON writes). Never part of a dataset: skipped by the
+# stray-file check and swept before a publish.
+_TMP_PREFIX = ".lumen-tmp-"
 
 # ── State machine ──────────────────────────────────────────────────────────────
 # uploading  — core files still missing; NOT openable, NOT editable
@@ -162,12 +174,16 @@ _RE_TIMEPOINT = re.compile(r"^t(\d{1,6})/(.+)$")
 
 # download/ originals. Deliberately data-only: no archive that a server might
 # expand, no markup, no script. `.zip` is the one container, and it is only ever
-# offered as a download — nothing on the platform opens it.
+# offered as a download — nothing on the platform opens it. No document type a
+# browser renders as active content (html, xhtml, svg, xml: an XHTML-namespaced
+# .xml runs its <script> from our own origin).
 _DOWNLOAD_EXT = frozenset({
     "ims", "tif", "tiff", "png", "jpg", "jpeg", "webp", "gif",
-    "zip", "txt", "md", "csv", "json", "pdf", "xml", "gz", "h5", "hdf5",
+    "zip", "txt", "md", "csv", "json", "pdf", "gz", "h5", "hdf5",
 })
 _RE_DOWNLOAD_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 ._()+-]{0,180}$")
+# Windows device names: `download/CON.zip` opens the console device, not a file.
+_RE_WINDOWS_DEVICE = re.compile(r"^(con|prn|aux|nul|com[0-9]|lpt[0-9])(\..*)?$", re.IGNORECASE)
 
 # Files the pipeline writes at the dataset root, beyond metadata/thumbnail.
 _ROOT_EXTRA = {
@@ -238,7 +254,11 @@ def classify_path(type_dir: str, rel: str):
 
     if rel.startswith("download/"):
         name = rel[len("download/"):]
-        if "/" in name or not _RE_DOWNLOAD_NAME.match(name):
+        if "/" in name or not _RE_DOWNLOAD_NAME.match(name) or _RE_WINDOWS_DEVICE.match(name):
+            return None
+        if name.endswith((".", " ")):
+            # Windows drops a trailing dot/space: the file on disk would not be
+            # the one the allowlist judged.
             return None
         # Compare the FULL suffix chain, so `x.ome.tif` is judged on `tif` and a
         # double extension like `x.php.png` still resolves to its final `png`.
@@ -384,11 +404,56 @@ def _make_dir(path: Path) -> None:
     path.mkdir(parents=True, exist_ok=True)
 
 
-def _atomic_write_json(path: Path, data) -> None:
+def _replace_retry(src, dst, attempts: int = 10, delay: float = 0.04) -> None:
+    """os.replace with a short bounded retry: on Windows the rename fails while any
+    reader (the admin polling a journal, the static handler serving metadata.json)
+    holds the target open, usually for milliseconds."""
+    for i in range(attempts):
+        try:
+            os.replace(src, dst)
+            return
+        except PermissionError:
+            if i == attempts - 1:
+                raise
+            time.sleep(delay * (i + 1))
+
+
+def _atomic_write_bytes(path: Path, data: bytes) -> None:
+    """Whole-or-nothing write: a uniquely named temp sibling, then a rename. The
+    temp name is unique per call (two threads of one process used to share
+    `.tmp<pid>`), and it is removed on any failure."""
     _make_dir(path.parent)
-    tmp = path.with_suffix(path.suffix + f".tmp{os.getpid()}")
-    tmp.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
-    os.replace(tmp, path)
+    fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=_TMP_PREFIX)
+    try:
+        with os.fdopen(fd, "wb") as fh:
+            fh.write(data)
+        _replace_retry(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
+def _atomic_write_json(path: Path, data) -> None:
+    _atomic_write_bytes(path, json.dumps(data, ensure_ascii=False).encode("utf-8"))
+
+
+def _is_disk_full(exc: OSError) -> bool:
+    return (getattr(exc, "errno", None) in (errno.ENOSPC, getattr(errno, "EDQUOT", -1))
+            or getattr(exc, "winerror", None) in (39, 112))
+
+
+def _free_bytes(path: Path) -> int | None:
+    """Free bytes on the volume holding ``path`` (its nearest existing ancestor)."""
+    probe = Path(path)
+    while not probe.exists() and probe.parent != probe:
+        probe = probe.parent
+    try:
+        return shutil.disk_usage(str(probe)).free
+    except OSError:
+        return None
 
 
 def load_journal(type_dir: str, folder: str) -> dict | None:
@@ -523,6 +588,10 @@ def plan(datasets: list, chunk_size: int = DEFAULT_CHUNK_SIZE) -> dict:
     out = []
     if not isinstance(datasets, list):
         return {"ok": False, "error": "bad_request"}
+    # One free-space budget for the whole drop: each dataset spends from it, so
+    # several datasets that fit one by one cannot together overrun the disk.
+    free = _free_bytes(STAGING_DIR)
+    budget = [None if free is None else max(0, free - DISK_RESERVE_BYTES)]
     for raw in datasets[:MAX_DATASETS_PER_PLAN]:
         if not isinstance(raw, dict):
             continue
@@ -532,7 +601,7 @@ def plan(datasets: list, chunk_size: int = DEFAULT_CHUNK_SIZE) -> dict:
                         "error": "invalid_dataset", "files": [], "rejected": []})
             continue
         type_dir, folder = safe
-        out.append(_plan_one(type_dir, folder, raw.get("files"), chunk_size))
+        out.append(_plan_one(type_dir, folder, raw.get("files"), chunk_size, budget))
     return {"ok": True, "chunkSize": chunk_size, "datasets": out}
 
 
@@ -544,7 +613,7 @@ def _clamp_chunk(n) -> int:
     return max(MIN_CHUNK_SIZE, min(MAX_CHUNK_SIZE, n))
 
 
-def _plan_one(type_dir: str, folder: str, files, chunk_size: int) -> dict:
+def _plan_one(type_dir: str, folder: str, files, chunk_size: int, budget=None) -> dict:
     key = dataset_key(type_dir, folder)
     published_dir = (DATA_WEB / type_dir / folder)
     already_published = (published_dir / "metadata.json").exists()
@@ -572,6 +641,9 @@ def _plan_one(type_dir: str, folder: str, files, chunk_size: int) -> dict:
         if size < 0:
             rejected.append({"path": rel, "reason": "bad_size"})
             continue
+        if size > MAX_FILE_SIZE:
+            rejected.append({"path": rel, "reason": "too_large"})
+            continue
         tier, kind = verdict
         accepted.append({"path": rel, "size": size, "tier": tier, "kind": kind})
     assign_tiers(accepted)
@@ -581,6 +653,25 @@ def _plan_one(type_dir: str, folder: str, files, chunk_size: int) -> dict:
         if journal is None:
             journal = _new_journal(type_dir, folder)
         jfiles = journal.setdefault("files", {})
+
+        # Bytes this drop still has to write: everything not already stored. Refused
+        # up front, before the journal changes, when the volume cannot hold it — a
+        # full disk mid-transfer stalls every other writer on the host.
+        if budget is not None and budget[0] is not None:
+            needed = 0
+            for item in accepted:
+                entry = jfiles.get(item["path"])
+                if entry and int(entry.get("size", -1)) == item["size"]:
+                    needed += 0 if entry.get("done") else item["size"] - received_bytes(entry)
+                else:
+                    needed += item["size"]
+            if needed > budget[0]:
+                return {
+                    "key": key, "type": type_dir, "folder": folder,
+                    "error": "insufficient_disk", "neededBytes": needed,
+                    "freeBytes": budget[0], "files": [], "rejected": rejected[:200],
+                }
+            budget[0] -= needed
 
         for item in accepted:
             rel = item["path"]
@@ -685,10 +776,13 @@ def write_chunk(type_dir: str, folder: str, rel: str, index: int,
         return 400, {"error": "bad_index"}
     if len(data) > MAX_CHUNK_SIZE:
         return 413, {"error": "chunk_too_large"}
-    if sha256_hex:
-        actual = hashlib.sha256(data).hexdigest()
-        if actual != str(sha256_hex).lower():
-            return 422, {"error": "checksum_mismatch", "expected": sha256_hex, "actual": actual}
+    # The digest is mandatory: a chunk without one would land unverified and the
+    # finished file's integrity would rest on its size alone.
+    if not isinstance(sha256_hex, str) or not re.fullmatch(r"[0-9a-fA-F]{64}", sha256_hex):
+        return 400, {"error": "checksum_required"}
+    actual = hashlib.sha256(data).hexdigest()
+    if actual != sha256_hex.lower():
+        return 422, {"error": "checksum_mismatch", "expected": sha256_hex, "actual": actual}
 
     with _journal_lock(key):
         journal = load_journal(type_dir, folder)
@@ -711,20 +805,29 @@ def write_chunk(type_dir: str, folder: str, rel: str, index: int,
         if len(data) != expected_len:
             return 400, {"error": "bad_chunk_length", "expected": expected_len, "actual": len(data)}
 
-        _make_dir(dest.parent)
-        # Sparse write at the exact offset: chunks may land in any order and in
-        # parallel, and a re-sent chunk is idempotent (same bytes, same place).
-        with open(dest, "r+b" if dest.exists() else "w+b") as fh:
-            fh.seek(offset)
-            fh.write(data)
+        try:
+            _make_dir(dest.parent)
+            # Sparse write at the exact offset: chunks may land in any order and in
+            # parallel, and a re-sent chunk is idempotent (same bytes, same place).
+            with open(dest, "r+b" if dest.exists() else "w+b") as fh:
+                fh.seek(offset)
+                fh.write(data)
 
-        bits = _bitmap_decode(entry.get("bits", ""), nbits)
-        _bit_set(bits, index)
-        entry["bits"] = _bitmap_encode(bits)
-        got = _bit_count(bits, nbits)
-        entry["done"] = got == nbits
-        journal["lastChunkAt"] = _now_iso()
-        save_journal(journal)
+            bits = _bitmap_decode(entry.get("bits", ""), nbits)
+            _bit_set(bits, index)
+            entry["bits"] = _bitmap_encode(bits)
+            got = _bit_count(bits, nbits)
+            entry["done"] = got == nbits
+            journal["lastChunkAt"] = _now_iso()
+            save_journal(journal)
+        except OSError as exc:
+            # The bit is only persisted after the bytes, so a failure here costs a
+            # re-send, never a corrupt file. A full disk is terminal for the
+            # transfer (507), not a network hiccup to retry forever.
+            if _is_disk_full(exc):
+                return 507, {"error": "insufficient_disk", "neededBytes": len(data),
+                             "freeBytes": _free_bytes(STAGING_DIR)}
+            return 500, {"error": "write_failed"}
         return 200, {"ok": True, "index": index, "chunks": nbits, "have": got,
                      "done": bool(entry["done"]), "received": received_bytes(entry)}
 
@@ -777,6 +880,15 @@ def finalize_file(type_dir: str, folder: str, rel: str, root_hex: str | None) ->
             entry["done"] = False
             save_journal(journal)
             return 409, {"error": "size_mismatch", "expected": size, "actual": on_disk}
+
+        # The journal is about to declare this file complete; make sure its bytes
+        # survive a power loss first, or a crash could leave a zero-filled pack
+        # that still matches its size.
+        try:
+            with open(dest, "rb+") as fh:
+                os.fsync(fh.fileno())
+        except OSError:
+            pass
 
         ok, reason = _validate_file_content(type_dir, rel, dest, entry.get("kind"))
         if not ok:
@@ -848,6 +960,11 @@ def _read_json(path: Path):
     return data if isinstance(data, dict) else None
 
 
+# Twins of js/core/brick-loader.js BRICK_SIZE / _KNOWN_ENCODINGS.
+BRICK_SIZE = 64
+_KNOWN_ENCODINGS = frozenset({"raw-u8", "raw-u8-gzip", "raw-rgba-gzip", "webp-lossless"})
+
+
 def _validate_manifest(man: dict):
     """Mirror of js/core/brick-loader.js `_validateManifest`, minus the parts that
     only matter once decoding starts.
@@ -858,15 +975,28 @@ def _validate_manifest(man: dict):
     open is not a valid dataset — catch it while it is still in staging, where
     the operator can still fix and re-drop it.
     """
+    def _int(v):
+        return isinstance(v, int) and not isinstance(v, bool)
+
     levels = man.get("levels")
     if not isinstance(levels, list) or not levels:
         return False, "manifest_no_levels"
+    channels = man.get("channels")
+    if channels is not None and not (_int(channels) and channels >= 1):
+        return False, "manifest_bad_channels"
+    # The decoder, the GPU atlas and the shaders are all built on 64-voxel bricks.
+    if "brickSize" in man and not (_int(man["brickSize"]) and man["brickSize"] == BRICK_SIZE):
+        return False, "manifest_bad_brick_size"
     for i, level in enumerate(levels):
         if not isinstance(level, dict):
             return False, f"manifest_level_{i}_not_object"
         lvl = level.get("level")
-        if not isinstance(lvl, int) or isinstance(lvl, bool) or lvl < 0:
+        if not _int(lvl) or lvl < 0:
             return False, f"manifest_level_{i}_bad_index"
+        # A level is addressed by its number everywhere (lod<N>/ pack paths, the
+        # quality ladder): listed out of order, one level's bricks mount as another's.
+        if lvl != i:
+            return False, f"manifest_level_{i}_out_of_order"
         dims = level.get("dimensions")
         if not isinstance(dims, dict):
             return False, f"manifest_level_{i}_no_dimensions"
@@ -874,9 +1004,24 @@ def _validate_manifest(man: dict):
             v = dims.get(axis)
             if not isinstance(v, (int, float)) or isinstance(v, bool) or v <= 0:
                 return False, f"manifest_level_{i}_bad_{axis}"
+        if "brickSize" in level and not (_int(level["brickSize"]) and level["brickSize"] == BRICK_SIZE):
+            return False, f"manifest_level_{i}_bad_brick_size"
+    transport = man.get("brickTransport")
+    encoding = transport.get("encoding") if isinstance(transport, dict) else None
+    if encoding is not None and encoding not in _KNOWN_ENCODINGS:
+        return False, "manifest_bad_encoding"
+    # An absent packing is not "vertical": decoding a grid mosaic linearly scrambles
+    # the volume silently. When present it must name a mode the decoder knows.
     packing = man.get("brickPacking")
-    if isinstance(packing, dict) and packing.get("mode") not in (None, "grid", "vertical"):
-        return False, "manifest_bad_packing_mode"
+    if packing is not None:
+        if not isinstance(packing, dict) or packing.get("mode") not in ("grid", "vertical"):
+            return False, "manifest_bad_packing_mode"
+        if packing.get("mode") == "grid":
+            for k in ("cols", "rows"):
+                if k in packing and not (_int(packing[k]) and packing[k] >= 1):
+                    return False, "manifest_bad_packing_grid"
+    if encoding == "webp-lossless" and not (isinstance(packing, dict) and packing.get("mode") == "grid"):
+        return False, "manifest_lossless_needs_grid"
     return True, None
 
 
@@ -1069,6 +1214,8 @@ def _find_stray(ds_dir: Path, type_dir: str) -> list[str]:
     for dirpath, dirnames, filenames in os.walk(ds_dir):
         dirnames[:] = [d for d in dirnames if not d.startswith(".")]
         for name in filenames:
+            if name.startswith(_TMP_PREFIX):
+                continue
             full = Path(dirpath) / name
             try:
                 rel = full.relative_to(ds_dir).as_posix()
@@ -1279,8 +1426,7 @@ def save_staged_thumbnail(type_dir: str, folder: str, image_bytes: bytes) -> tup
         journal = load_journal(type_dir, folder)
         if journal is None:
             return 409, {"error": "not_staged"}
-        _make_dir(ds_dir)
-        (ds_dir / "thumbnail.webp").write_bytes(image_bytes)
+        _atomic_write_bytes(ds_dir / "thumbnail.webp", image_bytes)
         entry = journal.setdefault("files", {}).setdefault(
             "thumbnail.webp", {"chunkSize": DEFAULT_CHUNK_SIZE, "kind": "thumbnail", "tier": TIER_CORE})
         entry["size"] = len(image_bytes)
@@ -1329,15 +1475,19 @@ def publish_dataset(type_dir: str, folder: str, *, overwrite: bool = False,
             meta = _read_json(src / "metadata.json") or {}
             meta["hidden"] = True
             _atomic_write_json(src / "metadata.json", meta)
+        _sweep_tmp_files(src)
 
         _make_dir(dest_base)
         replaced = None
+        tmp = None
         try:
             if dest.exists():
+                # Dot-prefixed, so neither the catalog nor a static URL ever sees it
+                # (dev_server skips dot-folders and dot-segments).
                 replaced = dest_base / f".replaced-{folder}-{int(time.time())}"
-                os.replace(dest, replaced)
+                _replace_retry(dest, replaced)
             try:
-                os.replace(src, dest)
+                _replace_retry(src, dest)
             except OSError:
                 # Cross-device (staging on another volume): copy to a temp sibling,
                 # then rename it into place so `dest` is never partially populated.
@@ -1345,17 +1495,26 @@ def publish_dataset(type_dir: str, folder: str, *, overwrite: bool = False,
                 if tmp.exists():
                     shutil.rmtree(tmp, ignore_errors=True)
                 shutil.copytree(src, tmp)
-                os.replace(tmp, dest)
+                _replace_retry(tmp, dest)
+                tmp = None
                 shutil.rmtree(src, ignore_errors=True)
         except OSError as exc:
+            if tmp is not None:
+                shutil.rmtree(tmp, ignore_errors=True)
             if replaced is not None and not dest.exists():
                 try:
-                    os.replace(replaced, dest)
+                    _replace_retry(replaced, dest)
+                    replaced = None
                 except OSError:
                     pass
-            return 500, {"error": "publish_failed", "detail": str(exc)}
+            if _is_disk_full(exc):
+                return 507, {"error": "insufficient_disk", "freeBytes": _free_bytes(DATA_WEB)}
+            return 500, {"error": "publish_failed", "detail": exc.__class__.__name__}
 
         if replaced is not None:
+            # A file still held open (a viewer streaming a pack, an AV scan) makes
+            # this fail on Windows; whatever survives is dot-named, invisible, and
+            # reclaimed by recover_publish_leftovers() at the next start.
             shutil.rmtree(replaced, ignore_errors=True)
 
         jp = journal_path(type_dir, folder)
@@ -1367,6 +1526,65 @@ def publish_dataset(type_dir: str, folder: str, *, overwrite: bool = False,
         _prune_empty(STAGING_DIR / type_dir)
 
     return 200, {"ok": True, "id": key, "hidden": hidden}
+
+
+def _sweep_tmp_files(ds_dir: Path) -> None:
+    """Remove our own atomic-write temp files left by a crash, so they are never
+    carried into DATA_WEB with the dataset."""
+    for dirpath, dirnames, filenames in os.walk(ds_dir):
+        dirnames[:] = [d for d in dirnames if not d.startswith(".")]
+        for name in filenames:
+            if name.startswith(_TMP_PREFIX):
+                try:
+                    os.unlink(os.path.join(dirpath, name))
+                except OSError:
+                    pass
+
+
+_RE_REPLACED = re.compile(r"^\.replaced-(.+)-(\d+)$")
+_RE_INCOMING = re.compile(r"^\.incoming-(.+)-(\d+)$")
+
+
+def recover_publish_leftovers() -> list[str]:
+    """Settle what an interrupted publish left in DATA_WEB/<type>/.
+
+    ``.replaced-<folder>-<ts>``: the previous copy of a dataset. If ``<folder>``
+    itself is missing, the crash fell between the two renames, so the old copy
+    is put back; otherwise it is deleted. ``.incoming-<folder>-<ts>``: a partial
+    cross-volume copy, always deleted. Run at server start; idempotent. Returns
+    one line per action for the log.
+    """
+    log = []
+    for type_dir in ALLOWED_TYPE_DIRS:
+        base = DATA_WEB / type_dir
+        if not base.is_dir():
+            continue
+        try:
+            names = sorted(e.name for e in os.scandir(base) if e.is_dir(follow_symlinks=False))
+        except OSError:
+            continue
+        for name in names:
+            path = base / name
+            m = _RE_REPLACED.match(name)
+            if m:
+                folder = m.group(1)
+                live = base / folder
+                if _SAFE_FOLDER_RE.match(folder) and not live.exists():
+                    try:
+                        _replace_retry(path, live)
+                        log.append(f"restored {type_dir}/{folder} from an interrupted publish")
+                        continue
+                    except OSError as exc:
+                        log.append(f"FAILED restoring {type_dir}/{folder}: {exc}")
+                        continue
+                shutil.rmtree(path, ignore_errors=True)
+                log.append(("removed " if not path.exists() else "could not fully remove ")
+                           + f"{type_dir}/{name}")
+            elif _RE_INCOMING.match(name):
+                shutil.rmtree(path, ignore_errors=True)
+                log.append(("removed " if not path.exists() else "could not fully remove ")
+                           + f"{type_dir}/{name}")
+    return log
 
 
 def discard_dataset(type_dir: str, folder: str) -> tuple[int, dict]:
@@ -1420,42 +1638,73 @@ def gc(max_age_s: int = STALE_AFTER_S) -> dict:
     return {"removed": removed, "kept": kept}
 
 
-_STAGING_GUARD = (
-    "# Lumen3D upload staging — bytes here have NOT been validated yet and must\n"
-    "# never be reachable at a URL. The admin preview reads them through the\n"
-    "# authenticated api/upload.php?action=blob proxy instead.\n"
-    "<IfModule mod_authz_core.c>\n    Require all denied\n</IfModule>\n"
-    "<IfModule !mod_authz_core.c>\n    Order allow,deny\n    Deny from all\n</IfModule>\n"
-    "php_flag engine off\n"
-)
+# ── Directory guards (.htaccess written at runtime) ──────────────────────────
+# Twins of api/_admin_lib.php lumen_exec_ban_rules / lumen_data_web_guard /
+# lumen_staging_guard / lumen_media_guard: the SAME bytes, so the two backends and
+# the copy shipped in the repository (DATA_WEB/.htaccess) stop rewriting one
+# another. A guard is (re)written only when the file lacks GUARD_MARKER. Every
+# directive sits in an <IfModule> guard and none uses `Options` (a 500 on hosts
+# that only allow FileInfo/AuthConfig overrides).
+GUARD_MARKER = "lumen-guard v2"
 
-# Execution ban for the PUBLISHED tree. DATA_WEB is web-served by construction, so
-# it is the one directory that is both operator-writable and reachable. The import
-# allowlist already refuses anything the pipeline does not emit, but a dataset can
-# also arrive by SFTP or rsync, which bypasses it entirely.
-_DATA_WEB_GUARD = (
-    "# Lumen3D — published dataset tree. Generated: keep in sync with the copy in\n"
-    "# the repository root (DATA_WEB/.htaccess).\n"
+EXEC_BAN_RULES = (
     "<IfModule mod_php.c>\n    php_flag engine off\n</IfModule>\n"
     "<IfModule mod_php7.c>\n    php_flag engine off\n</IfModule>\n"
     "<IfModule mod_php5.c>\n    php_flag engine off\n</IfModule>\n"
-    '<FilesMatch "\\.(php|php[0-9]|phtml|phps|phar|cgi|pl|py|sh|htaccess)$">\n'
+    '<FilesMatch "\\.(php|php[0-9]|phtml|phps|phar|cgi|pl|py|sh|shtml|htaccess)$">\n'
     "    <IfModule mod_authz_core.c>\n        Require all denied\n    </IfModule>\n"
     "    <IfModule !mod_authz_core.c>\n        Order allow,deny\n        Deny from all\n    </IfModule>\n"
     "</FilesMatch>\n"
-    "<IfModule mod_mime.c>\n    RemoveHandler .php .phtml .phar .cgi .pl .py .sh\n"
+    "<IfModule mod_mime.c>\n    RemoveHandler .php .phtml .phar .cgi .pl .py .sh .shtml\n"
     "    RemoveType .php .phtml .phar\n</IfModule>\n"
-    "Options -Indexes -ExecCGI -Includes\n"
-    '<IfModule mod_headers.c>\n    Header set X-Content-Type-Options "nosniff"\n</IfModule>\n'
+)
+
+# DATA_WEB is web-served by construction, so it is the one directory that is both
+# operator-writable and reachable. The import allowlist already refuses anything
+# the pipeline does not emit, but a dataset can also arrive by SFTP or rsync. Every
+# file under a dataset's download/ folder is served as an attachment: an operator-
+# supplied XML or HTML report must never render as a document of this origin.
+DATA_WEB_GUARD = (
+    f"# Lumen3D — published dataset tree ({GUARD_MARKER}). Generated by the\n"
+    "# platform (api/_upload_lib.php, upload_staging.py); keep the copy in the\n"
+    "# repository (DATA_WEB/.htaccess) identical.\n"
+    + EXEC_BAN_RULES
+    + "<IfModule mod_headers.c>\n"
+    '    Header set X-Content-Type-Options "nosniff"\n'
+    "    <IfModule mod_setenvif.c>\n"
+    '        SetEnvIf Request_URI "/download/" LUMEN_DOWNLOAD=1\n'
+    '        Header set Content-Disposition "attachment" env=LUMEN_DOWNLOAD\n'
+    "    </IfModule>\n"
+    "</IfModule>\n"
+)
+
+STAGING_GUARD = (
+    f"# Lumen3D upload staging ({GUARD_MARKER}) — bytes here have NOT been\n"
+    "# validated yet and must never be reachable at a URL. The admin preview reads\n"
+    "# them through the authenticated api/upload.php?action=blob proxy instead.\n"
+    "<IfModule mod_authz_core.c>\n    Require all denied\n</IfModule>\n"
+    "<IfModule !mod_authz_core.c>\n    Order allow,deny\n    Deny from all\n</IfModule>\n"
+    "<IfModule mod_php.c>\n    php_flag engine off\n</IfModule>\n"
+    "<IfModule mod_php7.c>\n    php_flag engine off\n</IfModule>\n"
+)
+
+# config/uploads/ (the media library): images only, never a script.
+MEDIA_GUARD = (
+    f"# Lumen3D media library ({GUARD_MARKER}). Generated by api/media.php.\n"
+    + EXEC_BAN_RULES
+    + '<IfModule mod_headers.c>\n    Header set X-Content-Type-Options "nosniff"\n</IfModule>\n'
 )
 
 
-def _write_guard(path: Path, body: str) -> None:
+def write_guard(path: Path, body: str) -> None:
+    """Write ``body`` to ``path`` when its directory exists and the file lacks the
+    current marker (a guard already written by either backend is left alone)."""
     try:
         if not path.parent.is_dir():
             return
-        if not path.exists() or path.read_text(encoding="utf-8") != body:
-            path.write_text(body, encoding="utf-8")
+        if path.exists() and GUARD_MARKER in path.read_text(encoding="utf-8", errors="replace"):
+            return
+        _atomic_write_bytes(path, body.encode("utf-8"))
     except OSError:
         pass
 
@@ -1470,6 +1719,6 @@ def ensure_dirs() -> None:
     """
     _make_dir(STAGING_DIR)
     _make_dir(STATE_DIR)
-    _write_guard(UPLOADS_DIR / ".htaccess", _STAGING_GUARD)
+    write_guard(UPLOADS_DIR / ".htaccess", STAGING_GUARD)
     _make_dir(DATA_WEB)
-    _write_guard(DATA_WEB / ".htaccess", _DATA_WEB_GUARD)
+    write_guard(DATA_WEB / ".htaccess", DATA_WEB_GUARD)

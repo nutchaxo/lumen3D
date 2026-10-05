@@ -1,32 +1,57 @@
 /* ============================================================
    IRIBHM Microscopy Platform — Brick Loader
    ============================================================
-   Loads chunked volume bricks (64³) from a manifest,
-   manages an LRU memory cache, and provides sampling API.
+   Streams 64³ volume bricks out of the packs described by a dataset's
+   brick manifest (bricks/manifest.json) and hands them, decoded, to the
+   caller. Nothing decoded is cached here: the GPU atlas is where bricks
+   live once loaded. What is held is the COMPRESSED bytes of the packs a
+   running batch still needs, under a byte budget.
+
+   Vocabulary
+   - mount: one manifest + the URL it is served from (one timepoint of a
+     timelapse is its own mount). A batch keeps the mount it started on,
+     so a timepoint or quality switch never redirects its requests.
+   - batch: one loadBrickTasks() call. It owns its cancellation (its own
+     AbortController, optionally an external AbortSignal), its decode jobs
+     in the worker pool, and reports every task it could not deliver.
+   - source: the bytes a brick is cut from — a whole pack, or a byte run
+     of it asked with a Range header (`byteRanges`). Sources are shared
+     between batches and reference-counted by the tasks still to read
+     them: a source no live task needs is aborted while in flight and
+     dropped once landed.
    ============================================================ */
 
 const BrickLoader = (() => {
   // Real bricks are 64³ (preprocess/3-chunk_packer.py: BRICK_SIZE=64, mosaicked 8×8
-  // into 512² tiles). This is the fallback used only when a manifest level omits
-  // brickSize; it MUST match the decode/SVR/shader size (all hardcoded to 64).
-  // The old value 128 was a legacy constant that never matched real data and made
-  // every fallback wrong (mis-sized blank bricks, 8× cache-memory estimate).
+  // into 512² tiles). The decoder, the SVR atlas and both shaders are built on it; a
+  // manifest declaring another size is rejected rather than mounted scrambled.
   const BRICK_SIZE = 64;
-  // A 4D dataset holds one brick set PER TIMEPOINT, and the cache key already separates
-  // them, so the LRU is what decides how much of a timelapse stays decoded. 200 bricks
-  // (52 MB) is less than three timepoints of the reference series and made scrubbing
-  // re-decode everything; 1024 bricks is ~268 MB of heap and only fills if that many
-  // distinct bricks are actually visited.
-  let LRU_LIMIT = 1024;
-  const PACK_CACHE_LIMIT = 128;
+  const MiB = 1024 * 1024;
   const DEFAULT_CONCURRENT_LOADS = 24;
   // Pack bodies in flight at once. A browser opens at most six HTTP/1.1 connections
   // to a host and queues the rest in arrival order, the page's own calls included:
   // with every socket busy on a pack body, the admin panel's next request (the list,
   // the metadata of the dataset just clicked) waited for whole packs to land. Four
   // slots leave two sockets free; a bandwidth-bound link gains nothing from more
-  // parallel bodies, and decoding — not the fetch — is what the 24 loads above run.
+  // parallel bodies, and decoding — not the fetch — is what the loads above run.
   const DEFAULT_PACK_FETCH_SLOTS = 4;
+  // Landed compressed bytes kept in memory. A pack (4–24 MB on the reference data)
+  // is held only while a running batch still has bricks to cut from it; these
+  // budgets bound the total when the batches in flight need more than that.
+  const DEFAULT_PACK_CACHE_BYTES = 192 * MiB;
+  const DEFAULT_RANGE_CACHE_BYTES = 64 * MiB;
+  // Packs warmed for a timepoint that is not mounted yet (prefetchPacks).
+  const DEFAULT_PREFETCH_CACHE_BYTES = 32 * MiB;
+  // How far ahead of the task being decoded a batch asks for its next sources, so
+  // the network keeps working while a pack's bricks decode.
+  const DEFAULT_LOOKAHEAD_BYTES = 64 * MiB;
+  // A decode job unanswered this long means a hung worker: it is replaced and its
+  // jobs are retried. A pack body that receives nothing this long is aborted.
+  const DEFAULT_DECODE_TIMEOUT_MS = 30000;
+  const DEFAULT_FETCH_STALL_MS = 30000;
+  const RETRY_ATTEMPTS = 3;
+  const RETRY_DELAY_MS = 500;
+  const MAX_WORKER_RESPAWNS = 3;
   // Byte-range fetching (loadBrickTasks `byteRanges`): a cut through the volume needs
   // a few bricks of many packs — on the reference dataset an XZ cut needs 21 MB of
   // tiles spread over 157 MB of packs, a YZ cut 24 MB over 572 MB — so the runs the
@@ -37,84 +62,119 @@ const BrickLoader = (() => {
   const RANGE_GAP_BYTES = 512 * 1024;
   const RANGE_MAX_RUNS_PER_PACK = 48;
   const RANGE_WHOLE_PACK_FRACTION = 0.6;
-  const RANGE_CACHE_LIMIT = 256;
 
-  let _manifest = null;
-  let _basePath = '';
-  let _cache = new Map();     // key -> { data: Uint8Array, lod, channel, lastUsed }
-  let _packIndex = new Map(); // brick relative path -> { url, offset, length }
-  let _packCache = new Map(); // pack URL -> { promise: Promise<ArrayBuffer>, lastUsed: number }
-  let _packSizes = new Map(); // pack relative url -> bytes (the end of its last brick)
-  let _rangeCache = new Map(); // "url#start-end" -> { promise: Promise<{buffer, base}>, lastUsed }
-  let _activeBricksSet = new Set(); // set of "lod:bx_by_bz" for fast lookup
+  // The worker script carries the platform's own cache-busting stamp (the `?v=` of
+  // this script's tag), so a release reloads it and a dataset switch does not.
+  const _WORKER_URL = (() => {
+    const base = 'js/core/brick-decode-worker.js';
+    try {
+      const src = typeof document !== 'undefined' && document.currentScript ? document.currentScript.src : '';
+      const m = /[?&]v=([^&#]+)/.exec(src || '');
+      return m ? `${base}?v=${m[1]}` : base;
+    } catch (e) {
+      return base;
+    }
+  })();
+
+  const _settings = {
+    concurrentLoads: DEFAULT_CONCURRENT_LOADS,
+    packFetchSlots: DEFAULT_PACK_FETCH_SLOTS,
+    packCacheBytes: DEFAULT_PACK_CACHE_BYTES,
+    rangeCacheBytes: DEFAULT_RANGE_CACHE_BYTES,
+    prefetchCacheBytes: DEFAULT_PREFETCH_CACHE_BYTES,
+    lookaheadBytes: DEFAULT_LOOKAHEAD_BYTES,
+    decodeTimeoutMs: DEFAULT_DECODE_TIMEOUT_MS,
+    fetchStallMs: DEFAULT_FETCH_STALL_MS,
+    decodeWorkers: 0,          // 0 = min(8, cores − 1)
+    verifyHashes: false
+  };
+
+  let _mount = null;
+  let _datasetEpoch = 0;       // bumped on a real dataset switch
+  let _batchSeq = 0;
+  const _batches = new Set();
+
+  // Sources. key = absolute pack URL (whole pack) or `${url}#${start}-${end}` (run).
+  const _store = new Map();
+  const _runsByPack = new Map();        // absolute pack url -> Set<run entry>
+  const _packRefs = new Map();          // absolute pack url -> planned tasks still to read it
+  const _runRefs = new Map();           // run key -> planned tasks still to read it
+  const _bytes = { pack: 0, run: 0 };   // landed bytes held, per kind
+  const _rangeUnsupportedHosts = new Set();
+  const _rangeSupportedHosts = new Set();
+  const _rangeProbes = new Map();         // host -> promise of its first range answer
+  const _stats = { packFetches: 0, runFetches: 0, fetchedBytes: 0, refetches: 0, evictedInUse: 0 };
+  const _fetchedOnce = new Set();       // keys fetched in this dataset (re-download counter)
+
   let _workerSeq = 0;
-  let _workers = [];
-  let _workerNextIdx = 0;
-  let _workerReady = false;
-  let _workerPending = new Map();
-  let _pendingAbort = null;
-  let _generation = 0;     // ELE-12: bumped on every init(); tags in-flight loads so stale results are dropped
-  let _datasetTag = '';    // ELE-12/13: identifies the current dataset; part of the cache key
-  let _packFetchController = (typeof AbortController !== 'undefined') ? new AbortController() : null;  // ELE-17: loader-owned, lifetime = pack cache (NOT per-load)
-  let _loading = false;
-  let _fallbackWarningCount = 0;
+  let _workers = [];                    // { w, alive, inflight, respawns }
+  const _workerPending = new Map();     // id -> { rec, batchId, resolve, reject, timer, signal, onAbort }
   let _fallbackCanvas = null;
   let _fallbackCtx = null;
+  let _fallbackWarned = false;
+
   const _supportsWebGL3D = (() => {
     try {
       return !!document.createElement('canvas').getContext('webgl2');
     } catch { return false; }
   })();
-  const _settings = {
-    concurrentLoads: DEFAULT_CONCURRENT_LOADS,
-    packFetchSlots: DEFAULT_PACK_FETCH_SLOTS,
-    verifyHashes: false
-  };
+
+  const _now = () => (typeof performance !== 'undefined' && performance.now ? performance.now() : Date.now());
+  const _abortError = (msg = 'Brick loading cancelled') => new DOMException(msg, 'AbortError');
+
+  // ── Fetch slots: foreground first, background (prefetch) only when idle ──────
   let _fetchSlotsBusy = 0;
-  const _fetchSlotWaiters = [];   // { start(): void }, in order of arrival
+  const _fgWaiters = [];
+  const _bgWaiters = [];
+
+  function _drainFetchSlots() {
+    while (_fetchSlotsBusy < _settings.packFetchSlots && (_fgWaiters.length || _bgWaiters.length)) {
+      _fetchSlotsBusy++;
+      (_fgWaiters.length ? _fgWaiters : _bgWaiters).shift().start();
+    }
+  }
 
   function _releaseFetchSlot() {
     _fetchSlotsBusy = Math.max(0, _fetchSlotsBusy - 1);
-    while (_fetchSlotWaiters.length && _fetchSlotsBusy < _settings.packFetchSlots) {
-      _fetchSlotsBusy++;
-      _fetchSlotWaiters.shift().start();
-    }
+    _drainFetchSlots();
   }
 
   /**
    * Runs `request` (it returns the promise of a fetched body) once a pack-fetch slot
-   * is free, in order of arrival; the slot is held until the body has landed. An
-   * abort of `signal` while still waiting rejects at once and leaves the queue.
+   * is free, foreground requests in order of arrival before any background one; the
+   * slot is held until the body has landed. An abort of `signal` while still waiting
+   * rejects at once and leaves the queue.
    */
-  function _withFetchSlot(request, signal) {
-    if (signal?.aborted) return Promise.reject(new DOMException('Aborted', 'AbortError'));
+  function _withFetchSlot(request, signal, background = false) {
+    if (signal?.aborted) return Promise.reject(_abortError('Aborted'));
     let acquired;
-    if (_fetchSlotsBusy < _settings.packFetchSlots) {
+    if (_fetchSlotsBusy < _settings.packFetchSlots && (!background || !_fgWaiters.length)) {
       _fetchSlotsBusy++;
       acquired = Promise.resolve();
     } else {
+      const queue = background ? _bgWaiters : _fgWaiters;
       acquired = new Promise((resolve, reject) => {
         const waiter = { start: () => { signal?.removeEventListener('abort', onAbort); resolve(); } };
         const onAbort = () => {
-          const i = _fetchSlotWaiters.indexOf(waiter);
-          if (i >= 0) _fetchSlotWaiters.splice(i, 1);
-          reject(new DOMException('Aborted', 'AbortError'));
+          const i = queue.indexOf(waiter);
+          if (i >= 0) queue.splice(i, 1);
+          reject(_abortError('Aborted'));
         };
         signal?.addEventListener('abort', onAbort, { once: true });
-        _fetchSlotWaiters.push(waiter);
+        queue.push(waiter);
       });
     }
     return acquired.then(() => Promise.resolve().then(request).finally(_releaseFetchSlot));
   }
 
-  // ELE-21 (Rule 1.4): encodages que le décodeur sait traiter (cf. _fetchPackedRawBrick).
+  // ELE-21 (Rule 1.4): encodages que le décodeur sait traiter.
   const _KNOWN_ENCODINGS = new Set(['raw-u8', 'raw-u8-gzip', 'raw-rgba-gzip', 'webp-lossless']);
 
   // SEC-017 (Rule 1.4): une URL de pack vient du manifest et est concaténée telle
   // quelle sur le basePath du dataset puis fetchée. On refuse toute URL pouvant
   // s'échapper du répertoire dataset : segment '..', URL absolue (scheme:) ou
-  // protocole-relative (//host). Les coords bx/by/bz de _brickUrl sont dérivées
-  // d'entiers (pas de chaîne utilisateur) — seul l'URL issue du manifest est un vecteur.
+  // protocole-relative (//host). Les coords bx/by/bz sont dérivées d'entiers (pas de
+  // chaîne utilisateur) — seul l'URL issue du manifest est un vecteur.
   function _isSafePackUrl(u) {
     const s = String(u == null ? '' : u).trim();
     if (!s) return false;
@@ -123,11 +183,14 @@ const BrickLoader = (() => {
     return !s.replace(/^\/+/, '').split(/[\\/]/).includes('..');
   }
 
+  // The pack-URL scan of a 72 k-entry brickToPack is the costly part of validation:
+  // done once per transport object (a timelapse frame shares its row's object).
+  const _safeTransports = new WeakSet();
+
   /**
    * ELE-21 (Rule 1.4): valide la structure minimale d'un manifest AVANT montage.
-   * Throw explicite si malformé -> rejet propre plutôt qu'un TypeError opaque plus loin
-   * (getDimensions / volume-viewer). N'inspecte PAS nonEmpty/occupiedRatio : une brick
-   * vide (ESS, ELE-20) est un état légitime, pas une erreur de structure.
+   * Throw explicite si malformé -> rejet propre plutôt qu'un TypeError opaque plus loin.
+   * N'inspecte PAS nonEmpty/occupiedRatio : une brick vide (ESS) est un état légitime.
    */
   function _validateManifest(manifest) {
     const reject = (msg) => { throw new Error('[BrickLoader] Manifest rejected: ' + msg); };
@@ -136,29 +199,31 @@ const BrickLoader = (() => {
     if (manifest.channels !== undefined && !(Number.isInteger(manifest.channels) && manifest.channels >= 1)) {
       reject('channels must be an integer >= 1.');
     }
-    if (manifest.brickSize !== undefined && !(Number.isInteger(manifest.brickSize) && manifest.brickSize > 0)) {
-      reject('brickSize must be a positive integer.');
+    if (manifest.brickSize !== undefined && manifest.brickSize !== BRICK_SIZE) {
+      reject('brickSize must be ' + BRICK_SIZE + ' (the decoder, the atlas and the shaders are built on it).');
     }
     manifest.levels.forEach((level, i) => {
       if (!level || typeof level !== 'object') reject('level[' + i + '] is not an object.');
       if (!Number.isInteger(level.level) || level.level < 0) reject('level[' + i + '].level must be a non-negative integer.');
+      // A level is addressed by its number everywhere (pack paths lod<N>/, the quality
+      // ladder); an array out of order would mount one level's bricks as another's.
+      if (level.level !== i) reject('level[' + i + '].level must be ' + i + ' (levels listed in order).');
       const d = level.dimensions;
       if (!d || typeof d !== 'object') reject('level[' + i + '].dimensions is missing.');
       for (const axis of ['x', 'y', 'z']) {
         if (!(Number.isFinite(d[axis]) && d[axis] > 0)) reject('level[' + i + '].dimensions.' + axis + ' must be a positive number.');
       }
-      const bs = level.brickSize !== undefined ? level.brickSize : manifest.brickSize;
-      if (bs !== undefined && !(Number.isInteger(bs) && bs > 0)) reject('level[' + i + '].brickSize must be a positive integer.');
+      if (level.brickSize !== undefined && level.brickSize !== BRICK_SIZE) {
+        reject('level[' + i + '].brickSize must be ' + BRICK_SIZE + '.');
+      }
     });
     const enc = manifest.brickTransport && manifest.brickTransport.encoding;
     if (enc !== undefined && enc !== null && !_KNOWN_ENCODINGS.has(enc)) {
       reject('unknown brickTransport.encoding "' + enc + '".');
     }
-    // BUG-065 (Rule 1.4): le défaut historique `brickPacking || {mode:'vertical'}` faisait
-    // décoder une mosaïque grid en lecture linéaire -> volume mélangé silencieux (ok:true).
-    // On valide le packing : si présent, mode ∈ {grid, vertical} (grid => cols/rows entiers
-    // positifs) ; et un dataset webp-lossless DOIT porter un grid valide (le préproc en écrit
-    // toujours un) — sinon rejet plutôt que montage corrompu.
+    // BUG-065 (Rule 1.4): un packing absent ne vaut PAS 'vertical' (décoder une mosaïque
+    // grid en lecture linéaire mélangeait le volume en silence). Si présent, mode ∈
+    // {grid, vertical} ; un dataset webp-lossless DOIT porter un grid valide.
     const bp = manifest.brickPacking;
     if (bp !== undefined && bp !== null) {
       if (typeof bp !== 'object' || (bp.mode !== 'grid' && bp.mode !== 'vertical')) {
@@ -176,199 +241,252 @@ const BrickLoader = (() => {
       reject('webp-lossless requires brickPacking.mode "grid".');
     }
     // SEC-017 (Rule 1.4): rejet du manifest si une URL de pack peut s'échapper du dataset.
-    const b2p = manifest.brickTransport && manifest.brickTransport.brickToPack;
-    if (b2p && typeof b2p === 'object') {
+    const transport = manifest.brickTransport;
+    const b2p = transport && transport.brickToPack;
+    if (b2p && typeof b2p === 'object' && !_safeTransports.has(transport)) {
       for (const entry of Object.values(b2p)) {
         if (entry && entry.url !== undefined && !_isSafePackUrl(entry.url)) {
           reject('brickTransport.brickToPack contains an unsafe pack url "' + entry.url + '".');
         }
       }
+      _safeTransports.add(transport);
     }
   }
 
+  // ── Mount ─────────────────────────────────────────────────────────────────
+  // Derived indices are built once per manifest part and reused by every mount of
+  // it: a quality step re-inits on the same manifest object, a timelapse frame on a
+  // fresh wrapper around its row's shared `levels` / `brickTransport` objects.
+  const _packIndexCache = new WeakMap();   // brickTransport -> { packIndex, packSizes }
+  const _levelCache = new WeakMap();       // levels array -> Map(level -> grid)
+  const _EMPTY_INDEX = { packIndex: new Map(), packSizes: new Map(), stamp: '' };
+
   /**
-   * Initialize from a brick manifest JSON.
-   * @param {string} basePath  e.g. "DATA_WEB/3d/dataset-name/bricks"
-   * @param {object} manifest  parsed manifest.json
+   * A version for the pack URLs of one transport (`?v=<stamp>`). Packs are served
+   * with a day-long HTTP cache, so a dataset re-processed under the same name must
+   * not read yesterday's packs through today's manifest. The stamp is an FNV-1a
+   * 32-bit hash of what changes whenever a pack's bytes do: the published sha256 of
+   * every pack when the manifest carries them, else every pack's URL and size.
+   * Stable for an unchanged manifest, computed once per transport object.
    */
+  function _packStamp(transport, packSizes) {
+    let h = 0x811c9dc5;
+    const feed = (str) => {
+      for (let i = 0; i < str.length; i++) {
+        h ^= str.charCodeAt(i);
+        h = Math.imul(h, 0x01000193) >>> 0;
+      }
+    };
+    const hashes = transport.packHashes && typeof transport.packHashes === 'object' ? transport.packHashes : null;
+    if (hashes && Object.keys(hashes).length) {
+      for (const k in hashes) feed(`${k}=${hashes[k]};`);
+    } else {
+      for (const [url, size] of packSizes) feed(`${url}:${size};`);
+    }
+    if (transport.createdAt) feed(String(transport.createdAt));
+    return h.toString(36);
+  }
+
+  function _packIndexFor(transport) {
+    if (!transport || typeof transport !== 'object') return _EMPTY_INDEX;
+    let built = _packIndexCache.get(transport);
+    if (built) return built;
+    const packIndex = new Map();  // brick relative path -> { url, offset, length }
+    const packSizes = new Map();  // pack relative url -> bytes (the end of its last brick)
+    const index = transport.brickToPack;
+    if (index && typeof index === 'object') {
+      for (const brickPath in index) {
+        const entry = index[brickPath];
+        if (!entry?.url || !Number.isFinite(Number(entry.offset)) || !Number.isFinite(Number(entry.length))) continue;
+        if (!_isSafePackUrl(entry.url)) continue;  // SEC-017: defense in depth
+        const url = String(entry.url).replace(/^\/+/, '');
+        const offset = Number(entry.offset);
+        const length = Number(entry.length);
+        packIndex.set(String(brickPath).replace(/^\/+/, ''), { url, offset, length });
+        // A pack is the concatenation of its bricks: its size is the end of the last one.
+        if (offset + length > (packSizes.get(url) || 0)) packSizes.set(url, offset + length);
+      }
+    }
+    built = { packIndex, packSizes, stamp: _packStamp(transport, packSizes) };
+    _packIndexCache.set(transport, built);
+    return built;
+  }
+
+  /**
+   * Per level, the brick grid and a one-byte-per-brick occupancy map. Brick (bx, by,
+   * bz) is at index (bz·ny + by)·nx + bx with n = ceil(dimension / 64); a chunk id is
+   * "bz_by_bx". `nonEmpty` is the union over channels: a brick is listed when any
+   * channel has data there.
+   */
+  function _levelsFor(manifest) {
+    let grids = _levelCache.get(manifest.levels);
+    if (grids) return grids;
+    grids = new Map();
+    for (const level of manifest.levels) {
+      const d = level.dimensions;
+      const nx = Math.ceil(d.x / BRICK_SIZE);
+      const ny = Math.ceil(d.y / BRICK_SIZE);
+      const nz = Math.ceil(d.z / BRICK_SIZE);
+      const bits = new Uint8Array(nx * ny * nz);
+      let count = 0;
+      if (Array.isArray(level.chunks)) {
+        for (const chunk of level.chunks) {
+          if (!chunk || chunk.nonEmpty === false || typeof chunk.id !== 'string') continue;
+          const parts = chunk.id.split('_');
+          if (parts.length !== 3) continue;
+          const bz = parseInt(parts[0], 10);
+          const by = parseInt(parts[1], 10);
+          const bx = parseInt(parts[2], 10);
+          if (!(bx >= 0 && bx < nx && by >= 0 && by < ny && bz >= 0 && bz < nz)) continue;
+          const i = (bz * ny + by) * nx + bx;
+          if (!bits[i]) { bits[i] = 1; count++; }
+        }
+      }
+      grids.set(level.level, { dims: d, nx, ny, nz, bits, count });
+    }
+    _levelCache.set(manifest.levels, grids);
+    return grids;
+  }
+
+  function _makeMount(basePath, manifest) {
+    const transport = manifest.brickTransport || null;
+    const { packIndex, packSizes, stamp } = _packIndexFor(transport);
+    return {
+      packQuery: stamp ? `?v=${stamp}` : '',
+      basePath,
+      manifest,
+      encoding: transport?.encoding || null,
+      packMode: transport?.mode === 'packs' || packIndex.size > 0,
+      packing: manifest.brickPacking || {},
+      packIndex,
+      packSizes,
+      packHashes: transport?.packHashes && typeof transport.packHashes === 'object' ? transport.packHashes : null,
+      brickHashes: manifest.hashes && typeof manifest.hashes === 'object' ? manifest.hashes : null,
+      grids: _levelsFor(manifest)
+    };
+  }
+
   /** Dataset root = the mount path without its trailing per-timepoint segment.
    *  ".../bricks/t007" and ".../bricks/t008" are the same dataset, one frame apart. */
   function _datasetRoot(path) {
     return String(path || '').replace(/\/$/, '').replace(/\/t\d+$/, '');
   }
 
+  /**
+   * Mount a brick manifest served under `basePath` (e.g. "DATA_WEB/3d/<name>/bricks",
+   * or ".../bricks/t007" for one frame of a timelapse). A malformed manifest throws
+   * before anything changes. Re-mounting the same manifest at the same path is free.
+   * Mounting another DATASET cancels every running batch and drops every source;
+   * another quality or timepoint of the same dataset cancels nothing — each batch
+   * keeps the mount it was started on.
+   */
   function init(basePath, manifest) {
-    _validateManifest(manifest);     // ELE-21 (Rule 1.4): rejet AVANT toute mutation d'état partagé
-    cancelPending();                 // ELE-12: abort any prior in-flight load BEFORE mutating shared state
-
-    // Switching TIMEPOINT is not switching dataset. Both the decoded-brick keys
-    // (_cacheKey prefixes with _datasetTag == this path, which carries /tNNN) and the
-    // pack-cache keys (pack URLs, same) are already timepoint-unique, so nothing here
-    // can collide across frames. Wiping them per frame threw away valid work and, worse,
-    // terminated and respawned the whole decode-worker pool — with a cache-busting URL,
-    // so the worker script was re-downloaded — on every step of a scrub.
+    _validateManifest(manifest);     // ELE-21 (Rule 1.4): rejet AVANT toute mutation d'état
     const next = String(basePath).replace(/\/$/, '');
-    const sameDataset = _basePath !== '' && _datasetRoot(next) === _datasetRoot(_basePath);
-
-    _generation++;                   // ELE-12: invalidate tasks that captured the previous generation
-    _basePath = next;
-    _datasetTag = _basePath;         // ELE-12/13: dataset identity, part of the cache key
-    _manifest = manifest;
-    if (!sameDataset) {
-      _cache.clear();
-      _packCache.clear();
-      _rangeCache.clear();
-      // ELE-17: a real dataset switch -> cancel orphaned pack fetches and renew the loader-owned controller
-      if (_packFetchController) { try { _packFetchController.abort(); } catch (e) {} }
-      _packFetchController = (typeof AbortController !== 'undefined') ? new AbortController() : null;
-    }
-    _buildPackIndex();
-    if (!sameDataset || _workers.length === 0) _initWorker();
-
-    _activeBricksSet.clear();
-    if (manifest && Array.isArray(manifest.levels)) {
-      manifest.levels.forEach(level => {
-        const lod = level.level;
-        if (Array.isArray(level.chunks)) {
-          level.chunks.forEach(chunk => {
-            const parts = chunk.id.split('_');
-            if (parts.length === 3) {
-              const bz = parseInt(parts[0], 10);
-              const by = parseInt(parts[1], 10);
-              const bx = parseInt(parts[2], 10);
-              if (chunk.nonEmpty !== false) {
-                _activeBricksSet.add(`${lod}:${bx}_${by}_${bz}`);
-              }
-            }
-          });
-        }
-      });
-    }
+    if (_mount && _mount.manifest === manifest && _mount.basePath === next) return;
+    const sameDataset = Boolean(_mount) && _datasetRoot(next) === _datasetRoot(_mount.basePath);
+    if (_mount && !sameDataset) _switchDataset();
+    _mount = _makeMount(next, manifest);
+    _ensureWorkers();
   }
 
-  /** Warm the HTTP + pack caches for a timepoint that is NOT currently mounted.
-   *
-   *  The loader mounts one timepoint at a time, so prefetching a neighbour cannot go
-   *  through loadBricks() without fighting the visible frame. This only pulls the pack
-   *  FILES into _packCache — keyed by absolute URL, so they survive the next mount and
-   *  the switch then costs a decode instead of a network round-trip. Packs are small
-   *  (45-125 KB per timepoint here), which is the whole point of prefetching them.
-   *
-   *  @param {string} baseDir  ".../bricks/t007" — the neighbour's mount path
-   *  @param {object} transport that timepoint's brickTransport
-   */
-  function prefetchPacks(baseDir, transport, lod = 0, channel = 0, maxPacks = 8) {
-    const b2p = transport?.brickToPack;
-    if (!b2p || typeof b2p !== 'object') return Promise.resolve(0);
-    const prefix = `lod${lod}/c${channel}/`;
-    const urls = new Set();
-    for (const [key, entry] of Object.entries(b2p)) {
-      if (!key.startsWith(prefix) || !entry?.url) continue;
-      if (!_isSafePackUrl(entry.url)) continue;
-      urls.add(`${String(baseDir).replace(/\/$/, '')}/${String(entry.url).replace(/^\/+/, '')}`);
-      if (urls.size >= maxPacks) break;
-    }
-    if (!urls.size) return Promise.resolve(0);
-    const signal = _packFetchController ? _packFetchController.signal : undefined;
-    return Promise.all([...urls].map(url => {
-      if (_packCache.has(url)) return true;
-      _trimPackCache(PACK_CACHE_LIMIT - 1);
-      const promise = fetch(url, { signal }).then(resp => {
-        if (!resp.ok) throw new Error(`HTTP ${resp.status} for ${url}`);
-        return resp.arrayBuffer();
-      }).catch(err => { _packCache.delete(url); throw err; });
-      _packCache.set(url, { promise, lastUsed: performance.now?.() || Date.now() });
-      // A failed prefetch is not an error: the foreground load will retry properly.
-      return promise.then(() => true, () => false);
-    })).then(rows => rows.filter(Boolean).length);
+  function _switchDataset() {
+    _datasetEpoch++;
+    for (const batch of [..._batches]) _cancelBatch(batch, 'dataset-switch');
+    for (const entry of [..._store.values()]) _dropEntry(entry, true);
+    _store.clear();
+    _runsByPack.clear();
+    _packRefs.clear();
+    _runRefs.clear();
+    _bytes.pack = 0;
+    _bytes.run = 0;
+    _fetchedOnce.clear();
+    _workers.forEach(rec => { if (rec.alive) rec.w.postMessage({ type: 'CANCEL' }); });
+  }
+
+  // ── Queries on the current mount ─────────────────────────────────────────────
+  function _grid(lod) {
+    return _mount ? _mount.grids.get(Number(lod)) || null : null;
   }
 
   function hasBrick(bx, by, bz, lod = 0) {
-    return _activeBricksSet.has(`${lod}:${bx}_${by}_${bz}`);
+    const g = _grid(lod);
+    if (!g || !(bx >= 0 && bx < g.nx && by >= 0 && by < g.ny && bz >= 0 && bz < g.nz)) return false;
+    return g.bits[(bz * g.ny + by) * g.nx + bx] === 1;
   }
 
+  /** The non-empty bricks of a level, z-major then y then x. */
   function activeBricks(lod = 0) {
-    const prefix = `${lod}:`;
+    const g = _grid(lod);
     const bricks = [];
-    for (const key of _activeBricksSet) {
-      if (!key.startsWith(prefix)) continue;
-      const parts = key.slice(prefix.length).split('_').map(v => parseInt(v, 10));
-      if (parts.length !== 3 || parts.some(v => !Number.isFinite(v))) continue;
-      bricks.push({ bx: parts[0], by: parts[1], bz: parts[2] });
-    }
-    return bricks;
-  }
-
-  function configure(options = {}) {
-    if (Number.isFinite(Number(options.concurrentLoads))) {
-      _settings.concurrentLoads = Math.max(2, Math.min(96, Math.round(Number(options.concurrentLoads))));
-    }
-    if (Number.isFinite(Number(options.packFetchSlots))) {
-      _settings.packFetchSlots = Math.max(1, Math.min(16, Math.round(Number(options.packFetchSlots))));
-    }
-    if (options.verifyHashes !== undefined) {
-      _settings.verifyHashes = Boolean(options.verifyHashes);
-    }
-  }
-
-  function isReady() {
-    return Boolean(_manifest);
-  }
-
-  function getManifest() {
-    return _manifest;
-  }
-
-  /**
-   * Get the volume dimensions for a given LOD level.
-   */
-  function getDimensions(lod = 0) {
-    if (!_manifest) return null;
-    const level = _manifest.levels?.[lod] || _manifest.levels?.[0];
-    if (!level) return null;
-    return {
-      x: level.dimensions.x,
-      y: level.dimensions.y,
-      z: level.dimensions.z,
-      channels: _manifest.channels || 1,
-      brickSize: level.brickSize || BRICK_SIZE,
-      lod
-    };
-  }
-
-  /**
-   * Compute which bricks intersect a given axis-aligned slab.
-   * Returns array of { bx, by, bz } brick coordinates.
-   */
-  function bricksForSlab(axis, value, lod = 0) {
-    const dims = getDimensions(lod);
-    if (!dims) return [];
-    const bs = dims.brickSize;
-    const nx = Math.ceil(dims.x / bs);
-    const ny = Math.ceil(dims.y / bs);
-    const nz = Math.ceil(dims.z / bs);
-    const bricks = [];
-
-    // value is normalized [0,1] — convert to voxel index
-    const sliceIndex = Math.round(value * (
-      axis === 'x' ? dims.x - 1 : axis === 'y' ? dims.y - 1 : dims.z - 1
-    ));
-    const brickSlice = Math.floor(sliceIndex / bs);
-
-    for (let by = 0; by < ny; by++) {
-      for (let bx = 0; bx < nx; bx++) {
-        for (let bz = 0; bz < nz; bz++) {
-          if (axis === 'z' && bz === brickSlice) bricks.push({ bx, by, bz });
-          else if (axis === 'y' && by === brickSlice) bricks.push({ bx, by, bz });
-          else if (axis === 'x' && bx === brickSlice) bricks.push({ bx, by, bz });
+    if (!g) return bricks;
+    let i = 0;
+    for (let bz = 0; bz < g.nz; bz++) {
+      for (let by = 0; by < g.ny; by++) {
+        for (let bx = 0; bx < g.nx; bx++, i++) {
+          if (g.bits[i]) bricks.push({ bx, by, bz });
         }
       }
     }
     return bricks;
   }
 
+  /** How many bricks of a level are non-empty, without listing them. */
+  function activeBrickCount(lod = 0) {
+    return _grid(lod)?.count || 0;
+  }
+
+  function configure(options = {}) {
+    const num = (v) => Number.isFinite(Number(v)) ? Number(v) : null;
+    if (num(options.concurrentLoads) !== null) {
+      _settings.concurrentLoads = Math.max(2, Math.min(96, Math.round(num(options.concurrentLoads))));
+    }
+    if (num(options.packFetchSlots) !== null) {
+      _settings.packFetchSlots = Math.max(1, Math.min(16, Math.round(num(options.packFetchSlots))));
+      _drainFetchSlots();
+    }
+    if (num(options.packCacheBytes) !== null) _settings.packCacheBytes = Math.max(8 * MiB, num(options.packCacheBytes));
+    if (num(options.rangeCacheBytes) !== null) _settings.rangeCacheBytes = Math.max(4 * MiB, num(options.rangeCacheBytes));
+    if (num(options.prefetchCacheBytes) !== null) _settings.prefetchCacheBytes = Math.max(0, num(options.prefetchCacheBytes));
+    if (num(options.lookaheadBytes) !== null) _settings.lookaheadBytes = Math.max(0, num(options.lookaheadBytes));
+    if (num(options.decodeTimeoutMs) !== null) _settings.decodeTimeoutMs = Math.max(1000, num(options.decodeTimeoutMs));
+    if (num(options.fetchStallMs) !== null) _settings.fetchStallMs = Math.max(1000, num(options.fetchStallMs));
+    if (num(options.decodeWorkers) !== null) {
+      _settings.decodeWorkers = Math.max(0, Math.min(16, Math.round(num(options.decodeWorkers))));
+      if (_mount) _ensureWorkers();
+    }
+    if (options.verifyHashes !== undefined) {
+      _settings.verifyHashes = Boolean(options.verifyHashes);
+    }
+    _trimStore();
+  }
+
+  function isReady() {
+    return Boolean(_mount);
+  }
+
+  function getManifest() {
+    return _mount ? _mount.manifest : null;
+  }
+
+  /** Dimensions of a level, or null for a level the manifest does not have. */
+  function getDimensions(lod = 0) {
+    const g = _grid(lod);
+    if (!g) return null;
+    return {
+      x: g.dims.x,
+      y: g.dims.y,
+      z: g.dims.z,
+      channels: _mount.manifest.channels || 1,
+      brickSize: BRICK_SIZE,
+      lod: Number(lod)
+    };
+  }
+
   /**
-   * Compute all bricks needed for a 3D bounding box (normalized [0,1]).
+   * All bricks of a box given in normalized [0,1] coordinates. Each brick index is
+   * clamped to the grid (EDGE-055 / BUG-034): maxNorm = 1.0 or a negative minNorm
+   * never yields a brick outside it.
    */
   function bricksForRegion(minNorm, maxNorm, lod = 0) {
     const dims = getDimensions(lod);
@@ -377,12 +495,6 @@ const BrickLoader = (() => {
     const nx = Math.ceil(dims.x / bs);
     const ny = Math.ceil(dims.y / bs);
     const nz = Math.ceil(dims.z / bs);
-
-    // EDGE-055 / BUG-034: borne chaque index de brick à [0, n-1]. Sans clamp,
-    // maxNorm=1.0 émet un index hors grille (floor(dim/bs) == n quand dim est un
-    // multiple exact de bs) et un minNorm négatif émet des coords négatives. Les
-    // appelants compensaient avec maxNorm=0.9999 + un filtre hasBrick() ; le clamp
-    // rend la fonction correcte seule, robuste à un futur appelant sans ces gardes.
     const clamp = (v, n) => Math.max(0, Math.min(n - 1, Math.floor(v)));
     const x0 = clamp(minNorm.x * dims.x / bs, nx);
     const y0 = clamp(minNorm.y * dims.y / bs, ny);
@@ -390,7 +502,6 @@ const BrickLoader = (() => {
     const x1 = clamp(maxNorm.x * dims.x / bs, nx);
     const y1 = clamp(maxNorm.y * dims.y / bs, ny);
     const z1 = clamp(maxNorm.z * dims.z / bs, nz);
-
     const bricks = [];
     for (let bz = z0; bz <= z1; bz++) {
       for (let by = y0; by <= y1; by++) {
@@ -403,698 +514,814 @@ const BrickLoader = (() => {
   }
 
   /**
-   * Load a set of bricks (by coordinates) for a given channel and LOD.
-   * Returns a Map of "bx_by_bz" -> Uint8Array pixel data.
+   * One channel of a set of bricks. Returns Map "bx_by_bz" -> voxels (plus the
+   * batch `summary`, see loadBrickTasks).
    */
   async function loadBricks(brickCoords, channel = 0, lod = 0, options = {}) {
     const tasks = brickCoords.map(({ bx, by, bz }) => ({ bx, by, bz, channel, lod }));
-    const taskResults = await loadBrickTasks(tasks, {
-      ...options,
-      cancelPrevious: options.cancelPrevious !== false,
-      onBrickLoaded: (row) => {
-        options.onBrickLoaded?.(row);
-      }
-    });
+    const taskResults = await loadBrickTasks(tasks, { ...options, streamOnly: false });
     const results = new Map();
     for (const [key, data] of taskResults.entries()) {
       const coord = key.split(':').pop();
       if (coord) results.set(coord, data);
     }
+    results.summary = taskResults.summary;
     return results;
   }
 
-  /**
-   * Load an interleaved list of brick/channel tasks with a single queue.
-   * Task shape: { bx, by, bz, channel, lod, region? } — `region` is an optional voxel
-   * box {x0,x1,y0,y1,z0,z1} of the brick; a worker decode then delivers that box
-   * alone (length < brickSize³), anything else still delivers the whole brick.
-   * `options.byteRanges` fetches, for the packs this batch needs only part of, the
-   * byte runs of its bricks (Range requests) instead of the whole packs.
-   */
-  async function loadBrickTasks(tasks, options = {}) {
-    if (!_manifest) throw new Error('BrickLoader not initialized.');
-    
-    if (options.cancelPrevious !== false) cancelPending();
-    // Cooperative abort. cancelPending() is GLOBAL — calling it from the application
-    // would kill a concurrent display load — and a caller-side flag is invisible from
-    // here, so a cancelled batch used to keep fetching and decoding every remaining
-    // brick before its result was thrown away. This is the hook that actually stops it.
-    const shouldAbort = typeof options.shouldAbort === 'function' ? options.shouldAbort : null;
-    const controller = new AbortController();
-    _pendingAbort = controller;
-    _loading = true;
-    const generation = _generation;   // ELE-12: snapshot; drop results if a dataset switch bumps _generation
-
-    const results = new Map();
-    const toLoad = [];
-    const list = Array.isArray(tasks) ? tasks : [];
-    let loaded = 0;
-    const total = list.length;
-    let cacheHits = 0;
-    const writeDecodedCache = options.cacheResults === true || (!options.streamOnly && options.cacheResults !== false);
-    // A streaming batch (the Studio's native LOD0 slice) must not WRITE the LRU — its
-    // few thousand bricks would evict the viewer's whole working set — but re-decoding
-    // bricks the viewer already holds is pure waste. `readCache` separates the two.
-    const readDecodedCache = writeDecodedCache || options.readCache === true;
-    // PERF-022: yield on a ~8ms time budget instead of a hard per-brick setTimeout(1).
-    // The old per-brick yield was clamped to >=1ms (often 4ms+ in throttled tabs) and
-    // capped each worker's throughput regardless of fetch/decode speed.
-    const YIELD_BUDGET_MS = 8;
-    let _lastYield = performance.now();
-    const _yieldIfBudgetSpent = async () => {
-      const now = performance.now();
-      if (now - _lastYield > YIELD_BUDGET_MS) {
-        await new Promise(r => setTimeout(r, 0));
-        _lastYield = performance.now();
-      }
+  // ── Regions ──────────────────────────────────────────────────────────────────
+  /** The integer voxel box of a brick a task asks for, or null for the whole brick
+   *  (same rule as the decode worker: empty, malformed or full boxes mean whole). */
+  function _normalizeRegion(raw, bs = BRICK_SIZE) {
+    if (!raw || typeof raw !== 'object') return null;
+    const clampInt = (v, lo, hi) => Math.max(lo, Math.min(hi, Math.floor(Number(v))));
+    const box = {
+      x0: clampInt(raw.x0 ?? 0, 0, bs), x1: clampInt(raw.x1 ?? bs, 0, bs),
+      y0: clampInt(raw.y0 ?? 0, 0, bs), y1: clampInt(raw.y1 ?? bs, 0, bs),
+      z0: clampInt(raw.z0 ?? 0, 0, bs), z1: clampInt(raw.z1 ?? bs, 0, bs)
     };
-
-    // Check cache first
-    for (const task of list) {
-      const lod = Number.isFinite(Number(task.lod)) ? Number(task.lod) : 0;
-      const channel = Number.isFinite(Number(task.channel)) ? Number(task.channel) : 0;
-      const { bx, by, bz } = task;
-      const key = _cacheKey(lod, channel, bx, by, bz);
-      const cached = readDecodedCache ? _cache.get(key) : null;
-      if (cached) {
-        cached.lastUsed = performance.now();
-        if (!options.streamOnly) results.set(key, cached.data);
-        options.onBrickLoaded?.({
-          bx,
-          by,
-          bz,
-          channel,
-          lod,
-          data: cached.data,
-          region: task.region || null,
-          fromCache: true
-        });
-        loaded++;
-        cacheHits++;
-        if (options.onProgress) options.onProgress(loaded / total);
-
-        // PERF-022: yield to keep GPU uploads/UI responsive when replaying thousands
-        // of cached bricks — gated on the time budget instead of every 4th hit.
-        await _yieldIfBudgetSpent();
-      } else {
-        toLoad.push({ bx, by, bz, channel, lod, key, region: task.region || null });
-      }
+    for (const k of ['x', 'y', 'z']) {
+      if (!Number.isFinite(box[k + '0']) || !Number.isFinite(box[k + '1']) || box[k + '1'] <= box[k + '0']) return null;
     }
-
-    // Load remaining in batches
-    const queued = options.preserveOrder ? toLoad : _interleaveByTransport(toLoad);
-    const rangePlan = options.byteRanges ? _planRanges(queued) : null;
-    if (!queued.length && loaded === total) {
-      options.onProgress?.(1);
-      _loading = false;
-      _pendingAbort = null;
-      return results;
-    }
-
-    const concurrency = Math.max(1, Math.min(
-      Number(options.concurrency) || _settings.concurrentLoads || DEFAULT_CONCURRENT_LOADS,
-      queued.length
-    ));
-    let index = 0;
-    const workers = Array.from({ length: concurrency }, async () => {
-      while (index < queued.length && !controller.signal.aborted && generation === _generation) {
-        if (shouldAbort && shouldAbort()) break;
-        const { bx, by, bz, channel, lod, key, region } = queued[index++];
-        let success = false;
-        let retries = 3;
-        while (retries > 0 && !success && !controller.signal.aborted) {
-          if (shouldAbort && shouldAbort()) break;
-          try {
-            const url = _brickUrl(lod, channel, bx, by, bz);
-            const data = await _fetchBrickImage(url, controller.signal, { bx, by, bz, lod, region, rangePlan });
-            const stale = generation !== _generation;
-            // `key` was built before the switch, so it still carries the tag of the
-            // mount this brick belongs to and can never be read back by another one.
-            // Keeping it is therefore safe, and it is what makes scrubbing back over
-            // frames already fetched free instead of re-downloading them. (The original
-            // guard dropped the decoded brick because the cache used to be wiped on
-            // every switch — it no longer is for a timepoint change.)
-            // A task that asked for a sub-box of the brick (`region`) may have got just
-            // that box back: never let a partial brick into the LRU, where the viewer
-            // would read it as a whole one.
-            if (writeDecodedCache && !region) {
-              _cache.set(key, { data, lod, channel, lastUsed: performance.now() });
-              _trimCache();
-            }
-            // ELE-12: but never DELIVER it — the caller has moved on, and handing these
-            // pixels to the current frame's atlas would upload another frame's data.
-            if (stale) { success = true; break; }
-            if (!options.streamOnly) results.set(key, data);
-            options.onBrickLoaded?.({
-              bx,
-              by,
-              bz,
-              channel,
-              lod,
-              data,
-              region: region || null
-            });
-            success = true;
-          } catch (err) {
-            if (err.name === 'AbortError') break;
-            retries--;
-            if (retries === 0) {
-              console.warn(`[BrickLoader] Failed to load brick ${key} after retries:`, err);
-              // ELE-20: dégradation gracieuse TRACÉE (Rule 1.1) — la brick est droppée
-              // (jamais écrite au cache/atlas) et le viewer est notifié pour surfacer un statut.
-              options.onBrickError?.({ bx, by, bz, channel, lod, error: err });
-            } else {
-              await new Promise(r => setTimeout(r, 500));
-            }
-          }
-        }
-        loaded++;
-        if (options.onProgress) options.onProgress(loaded / total);
-
-        // PERF-022: yield on the shared time budget rather than an unconditional
-        // per-brick setTimeout(1) (which floored each worker at ~1-4ms/brick).
-        await _yieldIfBudgetSpent();
-      }
-    });
-    await Promise.allSettled(workers);
-
-    _loading = false;
-    _pendingAbort = null;
-    return results;
+    if (box.x0 === 0 && box.y0 === 0 && box.z0 === 0 && box.x1 === bs && box.y1 === bs && box.z1 === bs) return null;
+    return box;
   }
 
-  function _interleaveByTransport(tasks) {
-    if (!Array.isArray(tasks) || tasks.length < 2) return tasks || [];
-    const groups = new Map();
-    for (const task of tasks) {
-      const groupKey = _transportKeyForTask(task);
-      if (!groups.has(groupKey)) groups.set(groupKey, []);
-      groups.get(groupKey).push(task);
-    }
-    if (groups.size <= 1) return tasks;
-    const buckets = [...groups.values()].sort((a, b) => b.length - a.length);
-    if (_packIndex.size > 0) {
-      return buckets.flat();
-    }
-    const out = [];
-    let added = true;
-    while (added) {
-      added = false;
-      for (const bucket of buckets) {
-        if (!bucket.length) continue;
-        out.push(bucket.shift());
-        added = true;
+  const _regionVoxels = (r, bs = BRICK_SIZE) => (r ? (r.x1 - r.x0) * (r.y1 - r.y0) * (r.z1 - r.z0) : bs * bs * bs);
+  const _regionKey = (r) => (r ? `${r.x0},${r.x1},${r.y0},${r.y1},${r.z0},${r.z1}` : '');
+
+  /** The box `region` (or the whole brick) cut out of a whole brick of `comps` bytes per voxel. */
+  function _cropBox(data, bs, region, comps) {
+    if (!region) return data;
+    const rw = region.x1 - region.x0;
+    const out = new Uint8Array(_regionVoxels(region, bs) * comps);
+    const rowBytes = rw * comps;
+    let dst = 0;
+    for (let z = region.z0; z < region.z1; z++) {
+      for (let y = region.y0; y < region.y1; y++) {
+        const src = ((z * bs + y) * bs + region.x0) * comps;
+        out.set(data.subarray(src, src + rowBytes), dst);
+        dst += rowBytes;
       }
     }
     return out;
   }
 
+  // ── Batches ────────────────────────────────────────────────────────────────
   /**
-   * Assemble loaded bricks into a flat Uint8Array volume suitable for a 3D texture.
-   * Output shape: [depth * height * width * 4] (RGBA, one channel per color slot).
+   * Load brick tasks — `{ bx, by, bz, channel, lod, region? }`, `channel` -1 for the
+   * RGBA transport, `region` an optional voxel box {x0,x1,y0,y1,z0,z1} of the brick —
+   * as one batch.
+   *
+   * options
+   *   onBrickLoaded(row)   row = { bx, by, bz, channel, lod, data, region, batchId }.
+   *                        `data` is the brick's voxels, or the `region` box alone when
+   *                        a grid-packed brick was asked as a box (length tells which).
+   *   onBrickError(row)    a task that failed for good: { bx, by, bz, channel, lod, error }.
+   *   onProgress(f)        fraction of tasks settled.
+   *   onComplete(summary)  see below; also returned as `result.summary`.
+   *   signal               AbortSignal cancelling this batch only.
+   *   shouldAbort()        polled between tasks; true cancels this batch.
+   *   group / cancelPrevious
+   *                        Starting a batch cancels the live batches of its group when
+   *                        `cancelPrevious` is not false. The default group is
+   *                        'stream'; a batch started with `cancelPrevious: false` and no
+   *                        group is independent: no other batch cancels it (only its own
+   *                        signal/shouldAbort, cancelPending() or a dataset switch).
+   *   concurrency          tasks decoded at once (default configure().concurrentLoads).
+   *   strictOrder          keep the task order literally. By default the order is
+   *                        pack-major (see _packMajorOrder): it starts at the caller's
+   *                        FIRST brick and expands outward pack by pack, so a pack is
+   *                        downloaded once and released as soon as its bricks are cut.
+   *                        `preserveOrder` is accepted and means the default.
+   *   byteRanges           fetch, for packs the batch needs only part of, the byte
+   *                        runs of its bricks (Range requests) instead of whole packs.
+   *   luts                 per-channel Uint8Array(256) applied to the decoded bytes.
+   *   compose              { channels?, luts?, components?: 4|2|1, cropToVolume? }:
+   *                        deliver one row per BRICK instead of per task — the
+   *                        channels interleaved at `components` bytes per voxel (channel c
+   *                        in byte c), LUT applied, in a decode worker. The row is
+   *                        { bx, by, bz, lod, channel: 'rgba', composed: true, data,
+   *                        region, components, channels: [delivered], failedChannels:
+   *                        [failed] }; a channel that failed for good is left at zero
+   *                        and reported through onBrickError; a brick none of whose
+   *                        channels could be loaded is not delivered. `cropToVolume`
+   *                        cuts an edge brick to the voxels inside the volume (the row's
+   *                        `region` is then that box), which SVRManager.writeRgbaBrick
+   *                        uploads without another copy.
+   *   streamOnly           do not collect the returned Map (callers that consume rows).
+   *   cacheResults / readCache  accepted and ignored: decoded bricks are not cached.
+   *
+   * Resolves (never rejects on cancellation) to a Map "<lod>:c<channel>:bx_by_bz" ->
+   * data (empty with streamOnly) carrying `summary` = { batchId, total, delivered,
+   * failed: [{bx,by,bz,channel,lod,error}], skipped: [{bx,by,bz,channel,lod}],
+   * cancelled, reason }. Every task is in exactly one of delivered / failed / skipped:
+   * `skipped` lists what a cancellation left undone.
    */
-  function assembleBricks(brickDataMap, brickCoords, channel, lod = 0) {
-    const dims = getDimensions(lod);
-    if (!dims) return null;
-    const bs = dims.brickSize;
-    const width = dims.x;
-    const height = dims.y;
-    const depth = dims.z;
-    const channels = Math.min(4, dims.channels);
+  async function loadBrickTasks(tasks, options = {}) {
+    if (!_mount) throw new Error('BrickLoader not initialized.');
+    const mount = _mount;
+    const list = Array.isArray(tasks) ? tasks : [];
+    const explicitGroup = typeof options.group === 'string' && options.group ? options.group : null;
+    const group = explicitGroup || (options.cancelPrevious === false ? null : 'stream');
+    if (group && options.cancelPrevious !== false) {
+      for (const other of [..._batches]) if (other.group === group) _cancelBatch(other, 'superseded');
+    }
 
-    const volume = new Uint8Array(width * height * depth * 4);
+    const batch = {
+      id: ++_batchSeq,
+      group,
+      mount,
+      datasetEpoch: _datasetEpoch,
+      controller: new AbortController(),
+      reason: null,
+      order: [],
+      next: 0,
+      lookIdx: 0,
+      windowBytes: 0,
+      srcRemaining: new Map(),
+      inWindow: new Map(),
+      rangePlan: null,
+      luts: Array.isArray(options.luts) ? options.luts : null
+    };
+    batch.signal = batch.controller.signal;
+    _batches.add(batch);
+    const external = options.signal || null;
+    const onExternalAbort = () => _cancelBatch(batch, 'signal');
+    if (external) {
+      if (external.aborted) _cancelBatch(batch, 'signal');
+      else external.addEventListener('abort', onExternalAbort, { once: true });
+    }
+    const shouldAbort = typeof options.shouldAbort === 'function' ? options.shouldAbort : null;
+    const pollAbort = () => {
+      if (!batch.reason && shouldAbort && shouldAbort()) _cancelBatch(batch, 'shouldAbort');
+      return Boolean(batch.reason);
+    };
 
-    for (const { bx, by, bz } of brickCoords) {
-      const key = `${bx}_${by}_${bz}`;
-      const data = brickDataMap.get(key);
-      if (!data) continue;
+    const results = new Map();
+    const summary = { batchId: batch.id, total: list.length, delivered: 0, failed: [], skipped: [], cancelled: false, reason: null };
+    const failedTasks = new Set();
+    const deliveredTasks = new Set();
+    let settledTasks = 0;
+    const progress = () => {
+      settledTasks++;
+      options.onProgress?.(list.length ? settledTasks / list.length : 1);
+    };
 
-      const ox = bx * bs;
-      const oy = by * bs;
-      const oz = bz * bs;
-      const bw = Math.min(bs, width - ox);
-      const bh = Math.min(bs, height - oy);
-      const bd = Math.min(bs, depth - oz);
+    // PERF-022: yield on a ~8ms time budget instead of a hard per-brick setTimeout(1).
+    const YIELD_BUDGET_MS = 8;
+    let _lastYield = _now();
+    const _yieldIfBudgetSpent = async () => {
+      if (_now() - _lastYield > YIELD_BUDGET_MS) {
+        await new Promise(r => setTimeout(r, 0));
+        _lastYield = _now();
+      }
+    };
 
-      for (let lz = 0; lz < bd; lz++) {
-        for (let ly = 0; ly < bh; ly++) {
-          for (let lx = 0; lx < bw; lx++) {
-            const srcIdx = (lz * bs * bs + ly * bs + lx);
-            const gx = ox + lx;
-            const gy = oy + ly;
-            const gz = oz + lz;
-            const dstIdx = ((gz * height + gy) * width + gx) * 4;
-            // Place this channel's data in the appropriate RGBA slot
-            const value = data[srcIdx] || 0;
-            volume[dstIdx + channel] = value;
-          }
+    const planned = list.map((task, index) => _planTask(mount, task, index));
+    batch.rangePlan = options.byteRanges && !_rangeUnsupportedHosts.has(_hostOf(mount.basePath))
+      ? _planRanges(planned, mount)
+      : null;
+    for (const t of planned) _attachSource(batch, t);
+    batch.order = (options.strictOrder === true) ? planned : _packMajorOrder(planned, mount);
+    batch.order.forEach((t, i) => { t.orderIdx = i; });
+
+    const compose = options.compose && typeof options.compose === 'object' ? _normalizeCompose(options.compose, planned) : null;
+
+    try {
+      if (!batch.reason && planned.length) {
+        if (compose) {
+          await _runComposeBatch(batch, compose, options, {
+            pollAbort, progress, _yieldIfBudgetSpent, failedTasks, deliveredTasks, summary
+          });
+        } else {
+          await _runTaskBatch(batch, options, {
+            pollAbort, progress, _yieldIfBudgetSpent, failedTasks, deliveredTasks, summary, results
+          });
         }
       }
+    } finally {
+      if (external) external.removeEventListener('abort', onExternalAbort);
+      for (const t of planned) _unrefTask(batch, t);
+      _batches.delete(batch);
+      _trimStore();
     }
 
-    return { data: volume, width, height, depth, channels };
-  }
-
-  function cancelPending() {
-    if (_pendingAbort) {
-      _pendingAbort.abort();
-      _pendingAbort = null;
+    for (const t of planned) {
+      if (deliveredTasks.has(t) || failedTasks.has(t)) continue;
+      summary.skipped.push({ bx: t.bx, by: t.by, bz: t.bz, channel: t.channel, lod: t.lod });
     }
-    _workers.forEach(w => w.postMessage({ type: 'CANCEL' }));
-    _workerPending.forEach(({ reject }) => reject(new DOMException('Brick loading cancelled', 'AbortError')));
-    _workerPending.clear();
-    _loading = false;
+    summary.delivered = deliveredTasks.size;
+    summary.cancelled = Boolean(batch.reason);
+    summary.reason = batch.reason;
+    if (!planned.length) options.onProgress?.(1);
+    results.summary = summary;
+    options.onComplete?.(summary);
+    return results;
   }
 
-  function isLoading() {
-    return _loading;
-  }
-
-  function getCacheStats() {
+  function _planTask(mount, task, index) {
+    const lod = Number.isFinite(Number(task.lod)) ? Number(task.lod) : 0;
+    const channel = (task.channel === -1 || task.channel === 'rgba') ? -1
+      : (Number.isFinite(Number(task.channel)) ? Number(task.channel) : 0);
+    const { bx, by, bz } = task;
+    const rel = _relBrickPath(lod, channel, bx, by, bz);
+    const packed = mount.packIndex.get(rel) || null;
+    const nregion = _normalizeRegion(task.region, BRICK_SIZE);
     return {
-      entries: _cache.size,
-      limit: LRU_LIMIT,
-      memoryEstimateMB: Math.round(_cache.size * BRICK_SIZE * BRICK_SIZE * BRICK_SIZE / 1024 / 1024)
+      index, lod, channel, bx, by, bz, rel, packed,
+      region: task.region || null,
+      nregion,
+      brickKey: `${lod}:${bx}_${by}_${bz}|${_regionKey(nregion)}`,
+      src: null,
+      unrefed: false
     };
   }
 
-  function clearCache() {
-    _cache.clear();
-    _packCache.clear();
-    _rangeCache.clear();
-    // ELE-17: teardown of the pack cache -> abort orphaned pack fetches, renew controller
-    if (_packFetchController) { try { _packFetchController.abort(); } catch (e) {} }
-    _packFetchController = (typeof AbortController !== 'undefined') ? new AbortController() : null;
-    _workers.forEach(w => w.postMessage({ type: 'CANCEL' }));
-    // LEAK-013 (Rule 1.2): release the main-thread decode-fallback canvas (grown to the
-    // largest mosaic seen, willReadFrequently) so it is GC'd on dataset teardown.
-    _fallbackCtx = null;
-    _fallbackCanvas = null;
+  function _attachSource(batch, t) {
+    if (!t.packed) return;
+    const packAbs = _absUrl(batch.mount, t.packed.url);
+    const runs = batch.rangePlan?.get(t.packed.url);
+    const run = runs?.find(r => r.start <= t.packed.offset && t.packed.offset + t.packed.length <= r.end) || null;
+    const size = batch.mount.packSizes.get(t.packed.url) || (t.packed.offset + t.packed.length);
+    t.src = {
+      packAbs,
+      packRel: t.packed.url,
+      runKey: run ? `${packAbs}#${run.start}-${run.end}` : null,
+      runStart: run ? run.start : 0,
+      runEnd: run ? run.end : 0,
+      bytes: run ? run.end - run.start : size,
+      hash: batch.mount.packHashes ? batch.mount.packHashes[t.packed.url] || null : null
+    };
+    _packRefs.set(packAbs, (_packRefs.get(packAbs) || 0) + 1);
+    if (t.src.runKey) _runRefs.set(t.src.runKey, (_runRefs.get(t.src.runKey) || 0) + 1);
+    // A pack warmed by prefetchPacks is now someone's: it follows the refcount from here.
+    const warm = _store.get(packAbs);
+    if (warm) warm.retain = false;
+    const windowKey = t.src.runKey || packAbs;
+    batch.srcRemaining.set(windowKey, (batch.srcRemaining.get(windowKey) || 0) + 1);
   }
 
-  function _perf() {
-    return typeof PerfTelemetry !== 'undefined' ? PerfTelemetry : null;
-  }
-
-  function _initWorker() {
-    _workerReady = false;
-    _workerPending.forEach(({ reject }) => reject(new Error('Brick worker restarted')));
-    _workerPending.clear();
-    if (typeof Worker === 'undefined') return;
-    if (_workers && _workers.length > 0) {
-      _workers.forEach(w => { try { w.terminate(); } catch (e) {} });
+  function _unrefTask(batch, t) {
+    if (t.unrefed) return;
+    t.unrefed = true;
+    if (!t.src) return;
+    const { packAbs, runKey } = t.src;
+    const p = (_packRefs.get(packAbs) || 0) - 1;
+    if (p > 0) _packRefs.set(packAbs, p); else _packRefs.delete(packAbs);
+    if (runKey) {
+      const r = (_runRefs.get(runKey) || 0) - 1;
+      if (r > 0) _runRefs.set(runKey, r); else _runRefs.delete(runKey);
+      const re = _store.get(runKey);
+      if (re) _maybeRelease(re);
     }
-    _workers = [];
-    _workerNextIdx = 0;
-    
-    const cores = navigator.hardwareConcurrency || 4;
-    const count = Math.max(1, Math.min(8, cores - 1));
-    for (let i = 0; i < count; i++) {
-        try {
-          const w = new Worker('js/core/brick-decode-worker.js?v=' + Date.now());
-          w.onmessage = (event) => {
-            const msg = event.data || {};
-            if (msg.type === 'DECODE_RESULT') {
-              const pending = _workerPending.get(msg.id);
-              if (!pending) return;
-              _workerPending.delete(msg.id);
-              if (msg.ok) {
-                const bytes = new Uint8Array(msg.buffer);
-                bytes._transport = 'worker';
-                bytes.perf = msg.perf;
-                pending.resolve(bytes);
-              } else {
-                pending.reject(new Error(msg.message || 'Brick worker fetch failed'));
-              }
-            }
-          };
-          w.onerror = (err) => {
-            console.error('[BrickLoader] Decode Worker error:', err);
-          };
-          _workers.push(w);
-        } catch (e) {
-          console.warn('[BrickLoader] Failed to init worker:', e);
-        }
-    }
-    _workerReady = true;
-  }
-
-  // ── Internal ──────────────────────────────────────────────
-
-  function _cacheKey(lod, channel, bx, by, bz) {
-    // ELE-13: prefix with the dataset tag so bricks from different datasets can
-    // never collide in the shared LRU cache. The '|' delimiter keeps the coord
-    // as the last ':'-segment (preserves key.split(':').pop() used elsewhere).
-    return `${_datasetTag}|${lod}:c${channel}:${bx}_${by}_${bz}`;
-  }
-
-  function _brickUrl(lod, channel, bx, by, bz) {
-    if (channel === -1 || channel === 'rgba') {
-      const prefix = `${_basePath}/lod${lod}/rgba`;
-      return `${prefix}/x${String(bx).padStart(3, '0')}_y${String(by).padStart(3, '0')}_z${String(bz).padStart(3, '0')}.rgba`;
-    }
-    const prefix = `${_basePath}/lod${lod}/c${channel}`;
-    return `${prefix}/x${String(bx).padStart(3, '0')}_y${String(by).padStart(3, '0')}_z${String(bz).padStart(3, '0')}.webp`;
-  }
-
-  function _transportKeyForTask(task) {
-    const url = _brickUrl(task.lod, task.channel, task.bx, task.by, task.bz);
-    const rel = _hashKeyFromUrl(url);
-    return _packIndex.get(rel)?.url || rel;
-  }
-
-  async function _fetchBrickImage(url, signal, coord = null) {
-    const perf = _perf();
-    const span = perf?.start('brick.fetch.decode.unpack', { url });
-    const t0 = performance.now?.() || Date.now();
-    const raw = await _fetchPackedRawBrick(url, signal, coord);
-    if (raw) {
-      const t1 = performance.now?.() || Date.now();
-      perf?.end(span, {
-        status: 'ok',
-        transport: _manifest?.brickTransport?.encoding || 'raw-u8-pack',
-        worker: raw._transport === 'worker',
-        bytes: raw.byteLength || 0,
-        fetchMs: Math.round((t1 - t0) * 100) / 100,
-        blobMs: 0,
-        hashMs: 0,
-        decodeMs: 0,
-        unpackMs: 0
-      });
-      return raw;
-    }
-    const blob = await _fetchBrickBlob(url, signal);
-    const t1 = performance.now?.() || Date.now();
-    const t2 = performance.now?.() || Date.now();
-    if (_settings.verifyHashes) {
-      await _verifyBrickHash(url, blob);
-    }
-    const t3 = performance.now?.() || Date.now();
-    let objectUrl = null;
-    const img = window.createImageBitmap
-      ? await createImageBitmap(blob)
-      : await _imageElement(objectUrl = URL.createObjectURL(blob));
-    const t4 = performance.now?.() || Date.now();
-
-    // Extract grayscale voxel data from the image.
-    // Legacy packing: vertical stack (width=bs, height=bs*bs).
-    // v2 packing: atlas grid (cols x rows tiles of bs x bs slices).
-    const bs = _manifest?.levels?.[0]?.brickSize || BRICK_SIZE;
-    // BUG-065: pas de défaut 'vertical' (lecture linéaire => volume mélangé silencieux).
-    // _validateManifest garantit un grid valide pour webp-lossless ; sinon le worker/le
-    // décodeur échoue franchement (ok:false) au lieu de produire des voxels corrompus.
-    const packing = _manifest?.brickPacking || {};
-    if (!_fallbackCanvas) {
-      _fallbackCanvas = typeof OffscreenCanvas !== 'undefined'
-        ? new OffscreenCanvas(img.width, img.height)
-        : document.createElement('canvas');
-      _fallbackCanvas.width = img.width;
-      _fallbackCanvas.height = img.height;
-      _fallbackCtx = _fallbackCanvas.getContext('2d', { willReadFrequently: true });
-      _fallbackCtx.globalCompositeOperation = 'copy';
-    } else if (_fallbackCanvas.width < img.width || _fallbackCanvas.height < img.height) {
-      _fallbackCanvas.width = Math.max(_fallbackCanvas.width, img.width);
-      _fallbackCanvas.height = Math.max(_fallbackCanvas.height, img.height);
-      _fallbackCtx = _fallbackCanvas.getContext('2d', { willReadFrequently: true });
-      _fallbackCtx.globalCompositeOperation = 'copy';
-    }
-    _fallbackCtx.drawImage(img, 0, 0);
-    const imageData = _fallbackCtx.getImageData(0, 0, img.width, img.height);
-
-    const totalVoxels = bs * bs * bs;
-    const data = new Uint8Array(totalVoxels);
-    const srcData = imageData.data;
-    if (packing?.mode === 'grid') {
-      // ELE-25 (BUG-004): miroir du défaut du worker — la mosaïque réelle est 8x8
-      // (3-chunk_packer.py). Dériver de la géométrie réelle plutôt que le 16 magique trompeur.
-      const _gridCols = Number(packing.cols);
-      const cols = (Number.isFinite(_gridCols) && _gridCols >= 1)
-        ? _gridCols
-        : Math.ceil(bs / Math.ceil(Math.sqrt(bs)));
-      const canvasWidth = img.width;
-      const srcDataLocal = srcData;
-      const dataLocal = data;
-      const bsLocal = bs;
-      
-      const maxTileX = (bsLocal - 1) % cols;
-      const maxTileY = Math.floor((bsLocal - 1) / cols);
-      const maxPX = maxTileX * bsLocal + bsLocal - 1;
-      const maxPY = maxTileY * bsLocal + bsLocal - 1;
-      const isSafe = (canvasWidth > maxPX) && (img.height > maxPY) && ((maxPY * canvasWidth + maxPX) * 4 < srcDataLocal.length);
-      
-      if (isSafe) {
-        for (let z = 0; z < bsLocal; z++) {
-          const tileX = z % cols;
-          const tileY = Math.floor(z / cols);
-          const tileX_bs = tileX * bsLocal;
-          const tileY_bs = tileY * bsLocal;
-          const z_bs_bs = z * bsLocal * bsLocal;
-          for (let y = 0; y < bsLocal; y++) {
-            const py = tileY_bs + y;
-            const py_width = py * canvasWidth;
-            const z_bs_bs_y_bs = z_bs_bs + y * bsLocal;
-            
-            let srcIdx = (py_width + tileX_bs) * 4;
-            let dstIdx = z_bs_bs_y_bs;
-            
-            for (let x = 0; x < bsLocal; x++) {
-              dataLocal[dstIdx++] = srcDataLocal[srcIdx];
-              srcIdx += 4;
-            }
-          }
-        }
-      } else {
-        const srcLen = srcDataLocal.length;
-        for (let z = 0; z < bsLocal; z++) {
-          const tileX = z % cols;
-          const tileY = Math.floor(z / cols);
-          const tileX_bs = tileX * bsLocal;
-          const tileY_bs = tileY * bsLocal;
-          const z_bs_bs = z * bsLocal * bsLocal;
-          for (let y = 0; y < bsLocal; y++) {
-            const py = tileY_bs + y;
-            const py_width = py * canvasWidth;
-            const z_bs_bs_y_bs = z_bs_bs + y * bsLocal;
-            
-            let srcIdx = (py_width + tileX_bs) * 4;
-            let dstIdx = z_bs_bs_y_bs;
-            
-            for (let x = 0; x < bsLocal; x++) {
-              dataLocal[dstIdx++] = srcIdx < srcLen ? srcDataLocal[srcIdx] : 0;
-              srcIdx += 4;
-            }
-          }
-        }
-      }
+    const pe = _store.get(packAbs);
+    if (pe) _maybeRelease(pe);
+    const windowKey = runKey || packAbs;
+    const left = (batch.srcRemaining.get(windowKey) || 0) - 1;
+    if (left > 0) {
+      batch.srcRemaining.set(windowKey, left);
     } else {
-      const len = Math.min(totalVoxels, srcData.length >> 2);
-      const srcDataLocal = srcData;
-      const dataLocal = data;
-      let srcIdx = 0;
-      for (let i = 0; i < len; i++) {
-        dataLocal[i] = srcDataLocal[srcIdx];
-        srcIdx += 4;
+      batch.srcRemaining.delete(windowKey);
+      if (batch.inWindow.has(windowKey)) {
+        batch.windowBytes -= batch.inWindow.get(windowKey);
+        batch.inWindow.delete(windowKey);
       }
     }
+  }
 
-    if (objectUrl) URL.revokeObjectURL(objectUrl);
-    const t5 = performance.now?.() || Date.now();
-    perf?.end(span, {
-      status: 'ok',
-      bytes: Number(blob.size) || 0,
-      fetchMs: Math.round((t1 - t0) * 100) / 100,
-      blobMs: Math.round((t2 - t1) * 100) / 100,
-      hashMs: Math.round((t3 - t2) * 100) / 100,
-      decodeMs: Math.round((t4 - t3) * 100) / 100,
-      unpackMs: Math.round((t5 - t4) * 100) / 100
-    });
+  /**
+   * Pack-major order. A pack holds 128 consecutive bricks of ONE channel in raster
+   * order (x fastest, then y, then z), so the bricks are grouped by the source their
+   * first task is cut from, and the groups are taken in raster order expanding
+   * outward from the group of the caller's FIRST brick (the centre, for a
+   * centre-first caller): |raster(group) − raster(first brick)| ascending. The other
+   * channels' packs cover raster spans too, so each of them is cut through within a
+   * few consecutive groups and released; a caller order that jumps between packs
+   * (the viewer's radial order) instead held up to 0.9 GB of packs on the reference
+   * data, or re-downloaded them (4.9× on E95-1 native). Inside a group the bricks
+   * keep raster order and a brick's channel tasks stay together.
+   */
+  function _packMajorOrder(planned, mount = _mount) {
+    if (planned.length < 2) return planned;
+    const raster = (t) => {
+      const g = mount ? mount.grids.get(t.lod) : null;
+      const r = g ? (t.bz * g.ny + t.by) * g.nx + t.bx : t.index;
+      return t.lod * 1e12 + r;
+    };
+    const bricks = new Map();     // brickKey -> { first, raster, tasks }
+    for (const t of planned) {
+      let b = bricks.get(t.brickKey);
+      if (!b) bricks.set(t.brickKey, b = { first: t.index, raster: raster(t), tasks: [] });
+      b.tasks.push(t);
+    }
+    let origin = null;
+    const groups = new Map();     // anchor -> { raster, bricks }
+    for (const b of bricks.values()) {
+      if (!origin || b.first < origin.first) origin = b;
+      const anchorTask = b.tasks.find(x => x.src) || null;
+      const anchor = anchorTask ? (anchorTask.src.runKey || anchorTask.src.packAbs) : `brick:${b.tasks[0].brickKey}`;
+      let g = groups.get(anchor);
+      if (!g) groups.set(anchor, g = { raster: b.raster, bricks: [] });
+      g.raster = Math.min(g.raster, b.raster);
+      g.bricks.push(b);
+    }
+    const o = origin.raster;
+    const out = [];
+    const sorted = [...groups.values()].sort((a, b) => (Math.abs(a.raster - o) - Math.abs(b.raster - o)) || (a.raster - b.raster));
+    for (const g of sorted) {
+      g.bricks.sort((a, b) => a.raster - b.raster);
+      for (const b of g.bricks) out.push(...b.tasks);
+    }
+    return out;
+  }
+
+  /** Ask for the sources of the next tasks, up to `lookaheadBytes` not yet consumed. */
+  function _pump(batch) {
+    while (batch.lookIdx < batch.order.length && batch.windowBytes < _settings.lookaheadBytes && !batch.reason) {
+      const t = batch.order[batch.lookIdx++];
+      if (!t.src || t.unrefed) continue;
+      const key = t.src.runKey || t.src.packAbs;
+      if (batch.inWindow.has(key) || !batch.srcRemaining.has(key)) continue;
+      batch.inWindow.set(key, t.src.bytes);
+      batch.windowBytes += t.src.bytes;
+      _sourceEntry(batch, t);
+    }
+  }
+
+  function _cancelBatch(batch, reason) {
+    if (batch.reason) return;
+    batch.reason = reason;
+    try { batch.controller.abort(); } catch (e) { /* already aborted */ }
+    for (const [id, p] of [..._workerPending]) {
+      if (p.batchId === batch.id) _settlePending(id, false, _abortError());
+    }
+    _workers.forEach(rec => { if (rec.alive) rec.w.postMessage({ type: 'CANCEL', batch: batch.id }); });
+    // Release the sources of every task not started yet, so a download nobody else
+    // wants stops now instead of finishing in the background.
+    for (let i = batch.next; i < batch.order.length; i++) _unrefTask(batch, batch.order[i]);
+  }
+
+  async function _runTaskBatch(batch, options, ctx) {
+    const { pollAbort, progress, _yieldIfBudgetSpent, failedTasks, deliveredTasks, results } = ctx;
+    const concurrency = Math.max(1, Math.min(
+      Number(options.concurrency) || _settings.concurrentLoads || DEFAULT_CONCURRENT_LOADS,
+      batch.order.length
+    ));
+    const runner = async () => {
+      while (batch.next < batch.order.length) {
+        if (pollAbort()) break;
+        const t = batch.order[batch.next++];
+        _pump(batch);
+        const outcome = await _attemptTask(batch, t, () => _loadTask(batch, t));
+        if (outcome.ok) {
+          if (!batch.reason && batch.datasetEpoch === _datasetEpoch) {
+            deliveredTasks.add(t);
+            if (!options.streamOnly) results.set(`${t.lod}:c${t.channel}:${t.bx}_${t.by}_${t.bz}`, outcome.data);
+            options.onBrickLoaded?.({
+              bx: t.bx, by: t.by, bz: t.bz, channel: t.channel, lod: t.lod,
+              data: outcome.data, region: t.region || null, batchId: batch.id
+            });
+          }
+        } else if (!batch.reason) {
+          failedTasks.add(t);
+          ctx.summary.failed.push({ bx: t.bx, by: t.by, bz: t.bz, channel: t.channel, lod: t.lod, error: outcome.error });
+          console.warn(`[BrickLoader] Brick ${t.rel} failed:`, outcome.error);
+          // ELE-20 (Rule 1.1): the brick is dropped (never uploaded) and reported.
+          options.onBrickError?.({ bx: t.bx, by: t.by, bz: t.bz, channel: t.channel, lod: t.lod, error: outcome.error });
+        }
+        _unrefTask(batch, t);
+        if (!batch.reason) progress();
+        await _yieldIfBudgetSpent();
+      }
+    };
+    await Promise.allSettled(Array.from({ length: concurrency }, runner));
+  }
+
+  /** Up to RETRY_ATTEMPTS tries of `fn`; an error marked `fatal` is not retried. */
+  async function _attemptTask(batch, t, fn, stopOnWorkerLost = false) {
+    let lastError = null;
+    for (let attempt = 1; attempt <= RETRY_ATTEMPTS; attempt++) {
+      if (batch.reason) return { ok: false, error: _abortError() };
+      try {
+        const data = await fn(attempt);
+        return { ok: true, data };
+      } catch (err) {
+        lastError = err;
+        if (batch.reason) return { ok: false, error: err };
+        // A lost worker took a composed brick's partial buffer with it: the whole brick
+        // restarts (in _composeUnit), retrying this channel alone would be wrong.
+        if (err && (err.fatal || (stopOnWorkerLost && err.workerLost))) break;
+        if (attempt < RETRY_ATTEMPTS) await new Promise(r => setTimeout(r, RETRY_DELAY_MS * attempt));
+      }
+    }
+    return { ok: false, error: lastError };
+  }
+
+  const _fatal = (message) => Object.assign(new Error(message), { fatal: true });
+
+  function _expectedLength(mount, t, comps) {
+    const region = mount.packing?.mode === 'grid' ? t.nregion : null;
+    return _regionVoxels(region) * comps;
+  }
+
+  /**
+   * The decoded voxels of one task. Never returns compressed bytes: a brick that
+   * cannot be decoded, or decodes to a size that is neither the brick nor the asked
+   * box, throws — the caller drops and reports it.
+   */
+  async function _loadTask(batch, t, assemble = null) {
+    const mount = batch.mount;
+    const enc = mount.encoding;
+    if (!_supportsWebGL3D) throw _fatal('3D textures (WebGL2) are unavailable: bricks cannot be displayed.');
+    const lut = batch.luts && t.channel >= 0 ? batch.luts[t.channel] || null : null;
+    const whole = BRICK_SIZE * BRICK_SIZE * BRICK_SIZE;
+
+    if (!t.packed && mount.packMode) {
+      // ELE-20: brickToPack is the per-channel authority in pack mode. A brick absent
+      // from it was ESS-skipped for THIS channel (the union `nonEmpty` flag can still
+      // mark the slot occupied because another channel has data there): zeros.
+      if (assemble) return null;
+      const comps = enc === 'raw-rgba-gzip' ? 4 : 1;
+      return new Uint8Array(_regionVoxels(mount.packing?.mode === 'grid' ? t.nregion : null) * comps);
+    }
+
+    let bytes;
+    if (t.packed) {
+      bytes = await _readSlice(batch, t);
+    } else {
+      const ext = enc === 'raw-rgba-gzip' ? '.rgba.gz' : (enc === 'raw-u8-gzip' ? '.bin.gz' : (enc === 'raw-u8' ? '.bin' : '.webp'));
+      const rel = enc ? t.rel.replace(/\.(webp|rgba|bin)$/, ext) : t.rel;
+      const url = `${mount.basePath}/${rel}`;
+      const resp = await fetch(url, { signal: batch.signal });
+      // ELE-20: 404 sur un fetch direct -> échec tracé (retry + drop), jamais des zéros.
+      if (!resp.ok) throw new Error('HTTP ' + resp.status + ' for ' + url);
+      bytes = await resp.arrayBuffer();
+      if (!enc && _settings.verifyHashes) await _verifyBrickHash(mount, t.rel, bytes);
+    }
+
+    if (enc === 'raw-u8' || enc === 'raw-u8-gzip' || enc === 'raw-rgba-gzip') {
+      const data = enc === 'raw-u8' ? new Uint8Array(bytes) : await _decompressSlice(bytes);
+      const comps = enc === 'raw-rgba-gzip' ? 4 : 1;
+      if (data.length !== whole * comps) {
+        throw _fatal(`brick ${t.rel} holds ${data.length} bytes, expected ${whole * comps}`);
+      }
+      if (lut && comps === 1) for (let i = 0; i < data.length; i++) data[i] = lut[data[i]];
+      return data;
+    }
+
+    // webp-lossless, or a legacy manifest without transport (one .webp per brick).
+    const packing = mount.packing || {};
+    if (packing.mode !== 'grid' && packing.mode !== 'vertical') {
+      throw _fatal('unknown brick packing ' + JSON.stringify(packing.mode) + ' for ' + t.rel);
+    }
+    const expected = _expectedLength(mount, t, 1);
+    const job = { buffer: bytes, brickSize: BRICK_SIZE, packing, region: t.nregion, lut };
+    if (assemble) {
+      return _decodeInto(batch, job, assemble);
+    }
+    const data = await _decodeWebp(batch, job);
+    if (data.length !== expected) {
+      throw _fatal(`brick ${t.rel} decoded to ${data.length} voxels, expected ${expected}`);
+    }
     return data;
   }
 
-  async function _fetchPackedRawBrick(url, signal, coord = null) {
-    // ELE-20 (revised): hasBrick() / _activeBricksSet use the manifest `nonEmpty` flag,
-    // which is the UNION of all channels (a slot is "non-empty" if ANY channel has data
-    // there). `brickToPack`, however, is PER-CHANNEL. So a brick can be expected by the
-    // union yet legitimately absent from the pack index for one channel that was ESS-
-    // skipped at that position. That is NOT a pack/manifest inconsistency — it is a
-    // transparent (zero) brick for this channel. Only a 404 on a brick that IS in the
-    // pack index is a real failure (handled in the fetch path below).
-    const _expected = coord ? hasBrick(coord.bx, coord.by, coord.bz, coord.lod) : false;
-    const encoding = _manifest?.brickTransport?.encoding;
-    const isGzip = encoding === 'raw-u8-gzip' || encoding === 'raw-rgba-gzip';
-    const isWebp = encoding === 'webp-lossless';
-    const isRaw = encoding === 'raw-u8' || isGzip || isWebp;
-
-    if (!isRaw) return null;
-    const rel = _hashKeyFromUrl(url);
-    const cleanRel = String(rel || '').replace(/^\/+/, '');
-    const packed = _packIndex.get(cleanRel);
-    
-    // NATIVE DIRECT FETCH (unpacked)
-    if (!packed) {
-      if (_manifest?.brickTransport?.mode === 'packs' || _packIndex.size > 0) {
-        // ELE-20 (revised): brickToPack is the per-channel authority in pack mode. A brick
-        // absent from it is legitimately ESS-skipped for THIS channel even when the union-
-        // based nonEmpty flag marks the spatial slot occupied (another channel has data
-        // there). Return zeros (transparent voxels) instead of throwing a false failure.
-        if (_expected) console.debug('[BrickLoader] Brick absent from pack index for this channel (per-channel ESS): ' + url);
-        const bs = _manifest?.levels?.[0]?.brickSize || BRICK_SIZE;
-        const channels = encoding === 'raw-rgba-gzip' ? 4 : 1;
-        return new Uint8Array(bs * bs * bs * channels);
-      }
-      if (isRaw) {
-        if (!_supportsWebGL3D) {
-          if (_fallbackWarningCount++ < 1) console.warn('[BrickLoader] Fetching raw brick bypassed: 3D textures unsupported.');
-          return new Uint8Array(0);
-        }
-        
-        let fileExt = encoding === 'raw-rgba-gzip' ? '.rgba.gz' : '.bin.gz';
-        if (isWebp) fileExt = '.webp';
-        let targetRel = cleanRel.replace(/\.(webp|rgba|bin)$/, fileExt);
-        const chunkUrl = `${_basePath}/${targetRel}`;
-        
-        if (isWebp && _workers.length > 0 && _workerReady) {
-            const resp = await fetch(chunkUrl, { signal });
-            if (!resp.ok) {
-                // ELE-20: 404 / range non honoré -> échec tracé (retry + drop), jamais des zéros silencieux.
-                throw new Error('HTTP ' + resp.status + ' for ' + chunkUrl);
-            }
-            const buffer = await resp.arrayBuffer();
-            try {
-              return await _decodeWebpBrickInWorkerPool(buffer, signal, _manifest?.levels?.[0]?.brickSize || BRICK_SIZE, _manifest?.brickPacking || {}, coord?.region || null);
-            } catch (e) {
-              console.error('[BrickLoader] Worker decode failed, falling back:', e);
-            }
-        }
-        
-        const resp = await fetch(chunkUrl, { signal });
-        if (!resp.ok) {
-            // ELE-20: 404 sur fetch raw/gzip direct -> échec tracé, pas des zéros silencieux.
-            throw new Error('HTTP ' + resp.status + ' for ' + chunkUrl);
-        }
-        const buffer = await resp.arrayBuffer();
-        if (isGzip) return await _decompressSlice(buffer);
-        return new Uint8Array(buffer);
-      }
-      return null;
-    }
-    
-    // PACKED FETCH
-    if (!_supportsWebGL3D) {
-      if (_fallbackWarningCount++ < 1) console.warn('[BrickLoader] Fetching raw brick bypassed: 3D textures unsupported.');
-      return new Uint8Array(0);
-    }
-    
-    const compressedSlice = await _fetchPackSlice(packed, signal, coord?.rangePlan || null);
-    
-    if (isWebp && _workers.length > 0 && _workerReady) {
-      const sliceCopy = compressedSlice.slice(0); // Copy to avoid detached buffer fallback error
-      try {
-        return await _decodeWebpBrickInWorkerPool(sliceCopy, signal, _manifest?.levels?.[0]?.brickSize || BRICK_SIZE, _manifest?.brickPacking || {}, coord?.region || null);
-      } catch (e) {
-        // A cancelled load is the NORMAL outcome of scrubbing away from a frame, not a
-        // failure: re-raise it so the caller drops the task instead of paying for a
-        // main-thread decode of a brick nobody is waiting for any more. Scrubbing a
-        // timelapse otherwise filled the console with AbortError and burnt CPU decoding
-        // frames that had already been replaced.
-        if (e?.name === 'AbortError' || signal?.aborted) throw e;
-        console.error('[BrickLoader] Worker decode failed, falling back:', e);
-      }
-    }
-    
-    if (isGzip) return await _decompressSlice(compressedSlice);
-    return new Uint8Array(compressedSlice);
+  // ── Sources ─────────────────────────────────────────────────────────────────
+  function _hostOf(basePath) {
+    const m = /^([a-z][a-z0-9+.-]*:\/\/[^/]+)/i.exec(String(basePath || ''));
+    return m ? m[1].toLowerCase() : '';
   }
 
-  async function _decompressSlice(buffer) {
-    if (typeof DecompressionStream !== 'undefined') {
-      const stream = new Response(buffer).body.pipeThrough(new DecompressionStream('gzip'));
-      const uncompressed = await new Response(stream).arrayBuffer();
-      return new Uint8Array(uncompressed);
-    }
-    throw new Error('DecompressionStream is unavailable.');
+  function _absUrl(mount, rel) {
+    return `${mount.basePath}/${String(rel).replace(/^\/+/, '')}${mount.packQuery || ''}`;
   }
 
-  // `region` (optional {x0,x1,y0,y1,z0,z1} voxel box) asks the worker for that box of
-  // the brick alone; whether the bytes that come back are the box or the whole brick
-  // is the caller's to tell by their length (a cache hit, a raw transport or a
-  // main-thread decode still deliver the full brick).
-  function _decodeWebpBrickInWorkerPool(buffer, signal, brickSize, packing, region = null) {
-    const id = ++_workerSeq;
-    return new Promise((resolve, reject) => {
-      if (signal?.aborted) {
-        reject(new DOMException('Brick loading cancelled', 'AbortError'));
-        return;
-      }
-      const onAbort = () => {
-        _workerPending.delete(id);
-        reject(new DOMException('Brick loading cancelled', 'AbortError'));
-      };
-      signal?.addEventListener?.('abort', onAbort, { once: true });
-      _workerPending.set(id, {
-        resolve: (value) => {
-          signal?.removeEventListener?.('abort', onAbort);
-          if (value.perf && window.VolumeViewerDebug?.logBrickDecode) {
-            console.log(`[PERF-WORKER] decode: ${value.perf.total.toFixed(2)}ms (bmp: ${value.perf.bmp.toFixed(2)}, img: ${value.perf.img.toFixed(2)}, loop: ${value.perf.loop.toFixed(2)})`);
+  function _newEntry(key, kind, url) {
+    const entry = {
+      key, kind, url,
+      start: 0, end: 0,
+      state: 'pending',
+      buffer: null, base: 0, bytes: 0,
+      retain: false,
+      readers: 0,
+      lastUsed: _now(),
+      controller: new AbortController(),
+      accounted: false
+    };
+    entry.promise = new Promise((resolve, reject) => { entry.resolve = resolve; entry.reject = reject; });
+    entry.promise.catch(() => {});
+    _store.set(key, entry);
+    return entry;
+  }
+
+  /** The entry a task reads from: the whole pack when one is held or coming, else its
+   *  planned byte run, else the whole pack (created and requested on demand). */
+  function _sourceEntry(batch, t, forceWhole = false) {
+    const src = t.src;
+    const whole = _store.get(src.packAbs);
+    if (whole) return whole;
+    const useRun = !forceWhole && src.runKey && batch.rangePlan && batch.rangePlan.has(src.packRel);
+    if (useRun) return _store.get(src.runKey) || _createRunEntry(src);
+    return _createPackEntry(src.packAbs, { hash: src.hash });
+  }
+
+  function _createPackEntry(url, { retain = false, background = false, hash = null } = {}) {
+    const entry = _newEntry(url, 'pack', url);
+    entry.retain = retain;
+    if (_fetchedOnce.has(url)) _stats.refetches++;
+    _fetchedOnce.add(url);
+    const signal = entry.controller.signal;
+    _withFetchSlot(async () => {
+      _stats.packFetches++;
+      const resp = await fetch(url, { signal });
+      if (!resp.ok) throw new Error(`HTTP ${resp.status} for ${url}`);
+      const buffer = await _readBody(resp, entry);
+      if (hash && _settings.verifyHashes) await _verifyPackHash(url, buffer, hash);
+      return buffer;
+    }, signal, background).then(
+      (buffer) => _settleReady(entry, buffer, 0),
+      (err) => _settleFailed(entry, err)
+    );
+    return entry;
+  }
+
+  /**
+   * Whether a host honours Range is learnt from ONE request: until its first range
+   * request has answered, the others wait, so a host that ignores Range (it answers
+   * 200 with the whole pack) costs one whole-pack download, not one per run.
+   */
+  function _rangeGate(host, entry) {
+    if (_rangeSupportedHosts.has(host) || _rangeUnsupportedHosts.has(host)) return null;
+    const probe = _rangeProbes.get(host);
+    if (probe) return probe;
+    let done;
+    const p = new Promise(resolve => { done = resolve; });
+    p.done = () => { if (_rangeProbes.get(host) === p) _rangeProbes.delete(host); done(); };
+    _rangeProbes.set(host, p);
+    entry.probe = p;
+    return null;
+  }
+
+  function _createRunEntry(src) {
+    const entry = _newEntry(src.runKey, 'run', src.packAbs);
+    entry.start = src.runStart;
+    entry.end = src.runEnd;
+    let set = _runsByPack.get(src.packAbs);
+    if (!set) _runsByPack.set(src.packAbs, set = new Set());
+    set.add(entry);
+    if (_fetchedOnce.has(entry.key)) _stats.refetches++;
+    _fetchedOnce.add(entry.key);
+    const signal = entry.controller.signal;
+    const host = _hostOf(src.packAbs);
+    const viaWholePack = () => {
+      const pack = _store.get(src.packAbs) || _createPackEntry(src.packAbs, { hash: src.hash });
+      pack.promise.then(() => _migrateRunsToPack(src.packAbs, pack), (err) => _settleFailed(entry, err));
+    };
+    const endProbe = () => { if (entry.probe) { entry.probe.done(); entry.probe = null; } };
+    (async () => {
+      const gate = _rangeGate(host, entry);
+      if (gate) await gate;
+      if (entry.state !== 'pending') { endProbe(); return; }
+      // The whole pack is held or on its way (a 200 answer to a sibling run, another
+      // batch's whole-pack request), or this host ignores Range: read from the pack.
+      if (_store.get(src.packAbs) || _rangeUnsupportedHosts.has(host)) { endProbe(); viaWholePack(); return; }
+      _withFetchSlot(async () => {
+        const whole = _store.get(src.packAbs);
+        if (whole) return { adopt: whole };
+        if (entry.state !== 'pending') return { done: true };
+        _stats.runFetches++;
+        const resp = await fetch(src.packAbs, { signal, headers: { Range: `bytes=${entry.start}-${entry.end - 1}` } });
+        if (resp.status === 206) {
+          _rangeSupportedHosts.add(host);
+          endProbe();
+          const buffer = await _readBody(resp, entry);
+          if (buffer.byteLength !== entry.end - entry.start) {
+            throw new Error(`Range ${entry.start}-${entry.end - 1} of ${src.packAbs} answered ${buffer.byteLength} bytes`);
           }
-          resolve(value);
-        },
-        reject: (err) => {
-          signal?.removeEventListener?.('abort', onAbort);
-          reject(err);
+          return { buffer };
         }
-      });
-      const worker = _workers[_workerNextIdx];
-      _workerNextIdx = (_workerNextIdx + 1) % _workers.length;
-      worker.__idx = _workerNextIdx; worker.postMessage({ type: 'DECODE', id, buffer, brickSize, packing, region }, [buffer]);
-    });
+        if (resp.status === 200) {
+          // The server ignored Range and sent the whole pack: keep it as the pack, let
+          // every run of that pack read from it, and stop planning ranges on this host.
+          _rangeUnsupportedHosts.add(host);
+          const buffer = await _readBody(resp, entry);
+          const pack = _adoptWholePack(src.packAbs, buffer);
+          endProbe();
+          return { adopt: pack };
+        }
+        throw new Error(`HTTP ${resp.status} for ${src.packAbs} (range ${entry.start}-${entry.end - 1})`);
+      }, signal).then(
+        (got) => {
+          endProbe();
+          if (got.adopt) {
+            if (got.adopt.state === 'ready') _migrateRunsToPack(src.packAbs, got.adopt);
+            else got.adopt.promise.then(() => _migrateRunsToPack(src.packAbs, got.adopt), (err) => _settleFailed(entry, err));
+          } else if (got.buffer) {
+            _settleReady(entry, got.buffer, entry.start);
+          }
+        },
+        (err) => { endProbe(); _settleFailed(entry, err); }
+      );
+    })();
+    return entry;
   }
 
-  async function _fetchBrickBlob(url, signal) {
-    const rel = _hashKeyFromUrl(url);
-    const packed = _packIndex.get(rel);
-    if (packed) {
-      return new Blob([await _fetchPackSlice(packed, signal, null)], { type: 'image/webp' });
+  function _adoptWholePack(url, buffer) {
+    _rangeUnsupportedHosts.add(_hostOf(url));
+    for (const batch of _batches) {
+      if (batch.rangePlan) {
+        for (const rel of [...batch.rangePlan.keys()]) if (_absUrl(batch.mount, rel) === url) batch.rangePlan.delete(rel);
+      }
     }
-    const resp = await fetch(url, { signal });
-    if (!resp.ok) throw new Error(`HTTP ${resp.status} for ${url}`);
-    return resp.blob();
+    let pack = _store.get(url);
+    if (pack && pack.state === 'ready') return pack;
+    if (pack) {
+      // A whole-pack request of another batch is in flight: this body answers it.
+      _settleReady(pack, buffer, 0);
+      try { pack.controller.abort(); } catch (e) { /* settled */ }
+      return pack;
+    }
+    pack = _newEntry(url, 'pack', url);
+    _settleReady(pack, buffer, 0);
+    return pack;
   }
 
-  // ELE-17 (RACE-031): the per-URL pack promise is shared between concurrent
-  // loads. Binding the actual fetch to the FIRST caller's per-load signal meant
-  // a stale load's cancellation aborted bricks of the current load. Bind the
-  // shared fetch to the loader-owned _packFetchController (lifetime = pack cache,
-  // only aborted on init()/clearCache) and honour the caller's own signal by
-  // racing the shared promise against it — without poisoning it for others.
-  async function _fetchPackBuffer(relativeUrl, signal) {
-    const url = `${_basePath}/${String(relativeUrl).replace(/^\/+/, '')}`;
-    let entry = _packCache.get(url);
-    if (!entry) {
-      _trimPackCache(PACK_CACHE_LIMIT - 1);
-      const fetchSignal = _packFetchController ? _packFetchController.signal : signal;
-      const promise = _withFetchSlot(() => fetch(url, { signal: fetchSignal }).then(async resp => {
-        if (!resp.ok) throw new Error(`HTTP ${resp.status} for ${url}`);
-        return resp.arrayBuffer();
-      }), fetchSignal).catch(err => {
-        _packCache.delete(url);
+  function _migrateRunsToPack(url, pack) {
+    const set = _runsByPack.get(url);
+    if (!set) return;
+    for (const run of [...set]) {
+      if (run.state === 'pending') {
+        run.state = 'ready';
+        run.buffer = pack.buffer;
+        run.base = 0;
+        run.resolve({ buffer: pack.buffer, base: 0 });
+      }
+      try { run.controller.abort(); } catch (e) { /* settled */ }
+      _dropEntry(run, false);
+    }
+    _runsByPack.delete(url);
+  }
+
+  /** Reads a response body, aborting it when nothing arrives for `fetchStallMs`. */
+  async function _readBody(resp, entry) {
+    const reader = resp.body && typeof resp.body.getReader === 'function' ? resp.body.getReader() : null;
+    if (!reader) return resp.arrayBuffer();
+    const declared = Number(resp.headers?.get?.('content-length')) || 0;
+    let out = declared > 0 ? new Uint8Array(declared) : null;
+    const chunks = [];
+    let received = 0;
+    let stallTimer = null;
+    const arm = () => {
+      clearTimeout(stallTimer);
+      stallTimer = setTimeout(() => {
+        try { reader.cancel(); } catch (e) { /* closed */ }
+        try { entry.controller.abort(); } catch (e) { /* settled */ }
+      }, _settings.fetchStallMs);
+    };
+    try {
+      arm();
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        arm();
+        if (out && received + value.length <= out.length) {
+          out.set(value, received);
+        } else {
+          if (out) { chunks.push(out.subarray(0, received)); out = null; }
+          chunks.push(value);
+        }
+        received += value.length;
+      }
+    } finally {
+      clearTimeout(stallTimer);
+    }
+    if (entry.controller.signal.aborted) throw _abortError('Pack body stalled or cancelled');
+    if (out) return received === out.length ? out.buffer : out.buffer.slice(0, received);
+    const joined = new Uint8Array(received);
+    let at = 0;
+    for (const c of chunks) { joined.set(c, at); at += c.length; }
+    return joined.buffer;
+  }
+
+  function _settleReady(entry, buffer, base) {
+    if (entry.state !== 'pending') return;
+    entry.state = 'ready';
+    entry.buffer = buffer;
+    entry.base = base;
+    entry.bytes = buffer.byteLength;
+    _stats.fetchedBytes += buffer.byteLength;
+    if (_store.get(entry.key) === entry) {
+      _bytes[entry.kind] += entry.bytes;
+      entry.accounted = true;
+    }
+    entry.resolve({ buffer, base });
+    _maybeRelease(entry);
+    _trimStore();
+  }
+
+  function _settleFailed(entry, err) {
+    if (entry.state !== 'pending') return;
+    entry.state = 'failed';
+    if (_store.get(entry.key) === entry) _store.delete(entry.key);
+    if (entry.kind === 'run') _runsByPack.get(entry.url)?.delete(entry);
+    entry.reject(err);
+  }
+
+  function _refsOf(entry) {
+    return entry.kind === 'run' ? (_runRefs.get(entry.key) || 0) : (_packRefs.get(entry.key) || 0);
+  }
+
+  /** Drop an entry no live task needs: abort it in flight, release it once landed. */
+  function _maybeRelease(entry) {
+    if (_store.get(entry.key) !== entry) return;
+    if (entry.retain || entry.readers > 0 || _refsOf(entry) > 0) return;
+    _dropEntry(entry, true);
+  }
+
+  function _dropEntry(entry, abort) {
+    if (_store.get(entry.key) === entry) _store.delete(entry.key);
+    if (entry.accounted) {
+      _bytes[entry.kind] = Math.max(0, _bytes[entry.kind] - entry.bytes);
+      entry.accounted = false;
+    }
+    if (entry.kind === 'run') _runsByPack.get(entry.url)?.delete(entry);
+    if (entry.state === 'pending') {
+      entry.state = 'failed';
+      if (abort) { try { entry.controller.abort(); } catch (e) { /* settled */ } }
+      entry.reject(_abortError('Source released'));
+    }
+    entry.buffer = null;
+  }
+
+  /**
+   * Keep the landed bytes under the budgets: first the sources no task needs any
+   * more (prefetched packs), then — only when the batches in flight need more than
+   * the budget — the least recently read sources that no task is reading right now;
+   * those are fetched again if a task still needs them (counted in `refetches`).
+   */
+  function _trimStore() {
+    const retained = [..._store.values()].filter(e => e.retain && e.state === 'ready');
+    let retainedBytes = retained.reduce((s, e) => s + e.bytes, 0);
+    retained.sort((a, b) => a.lastUsed - b.lastUsed);
+    for (const e of retained) {
+      if (retainedBytes <= _settings.prefetchCacheBytes) break;
+      retainedBytes -= e.bytes;
+      _dropEntry(e, false);
+    }
+    for (const kind of ['pack', 'run']) {
+      const budget = kind === 'pack' ? _settings.packCacheBytes : _settings.rangeCacheBytes;
+      if (_bytes[kind] <= budget) continue;
+      const candidates = [..._store.values()]
+        .filter(e => e.kind === kind && e.state === 'ready' && e.readers === 0)
+        .sort((a, b) => ((_refsOf(a) > 0) - (_refsOf(b) > 0)) || (a.lastUsed - b.lastUsed));
+      for (const e of candidates) {
+        if (_bytes[kind] <= budget) break;
+        if (_refsOf(e) > 0) _stats.evictedInUse++;
+        _dropEntry(e, false);
+      }
+    }
+  }
+
+  /** The bytes of one brick, cut out of its source (a private copy, safe to transfer). */
+  async function _readSlice(batch, t) {
+    const { offset, length } = t.packed;
+    for (let pass = 0; pass < 2; pass++) {
+      const entry = _sourceEntry(batch, t, pass > 0);
+      const viaRun = entry.kind === 'run';
+      entry.readers++;
+      entry.lastUsed = _now();
+      try {
+        const got = await _awaitWithSignal(entry.promise, batch.signal);
+        const at = offset - got.base;
+        if (at < 0 || at + length > got.buffer.byteLength) {
+          throw new Error(`brick ${t.rel} lies outside the ${got.buffer.byteLength} bytes fetched for it`);
+        }
+        return got.buffer.slice(at, at + length);
+      } catch (err) {
+        if (batch.reason) throw err;
+        // A refused or broken range: this pack is fetched whole for the rest of the batch.
+        if (viaRun && pass === 0) {
+          batch.rangePlan?.delete(t.src.packRel);
+          continue;
+        }
         throw err;
-      });
-      entry = { promise, lastUsed: performance.now?.() || Date.now() };
-      _packCache.set(url, entry);
-    } else {
-      entry.lastUsed = performance.now?.() || Date.now();
+      } finally {
+        entry.readers--;
+        entry.lastUsed = _now();
+        _maybeRelease(entry);
+      }
     }
-    return _awaitWithSignal(entry.promise, signal);
+    throw new Error(`brick ${t.rel} could not be read`);
   }
 
-  // Resolve/reject with `promise`, but reject early (AbortError) if `signal`
-  // aborts — without aborting the underlying shared fetch (other callers keep it).
+  // Resolve/reject with `promise`, but reject early (AbortError) if `signal` aborts —
+  // without aborting the underlying shared fetch (other batches keep it).
   function _awaitWithSignal(promise, signal) {
     if (!signal) return promise;
-    if (signal.aborted) return Promise.reject(new DOMException('Aborted', 'AbortError'));
+    if (signal.aborted) return Promise.reject(_abortError('Aborted'));
     return new Promise((resolve, reject) => {
-      const onAbort = () => reject(new DOMException('Aborted', 'AbortError'));
+      const onAbort = () => reject(_abortError('Aborted'));
       signal.addEventListener('abort', onAbort, { once: true });
       promise.then(
         (v) => { signal.removeEventListener('abort', onAbort); resolve(v); },
@@ -1103,58 +1330,89 @@ const BrickLoader = (() => {
     });
   }
 
-  function _trimPackCache(limit = PACK_CACHE_LIMIT) {
-    if (_packCache.size <= limit) return;
-    const entries = [..._packCache.entries()].sort((a, b) => (a[1].lastUsed || 0) - (b[1].lastUsed || 0));
-    const removeCount = Math.max(0, _packCache.size - Math.max(0, limit));
-    for (let i = 0; i < removeCount; i++) {
-      _packCache.delete(entries[i][0]);
+  async function _decompressSlice(buffer) {
+    if (typeof DecompressionStream !== 'undefined') {
+      const stream = new Response(buffer).body.pipeThrough(new DecompressionStream('gzip'));
+      const uncompressed = await new Response(stream).arrayBuffer();
+      return new Uint8Array(uncompressed);
     }
+    throw _fatal('DecompressionStream is unavailable.');
   }
 
-  function _buildPackIndex() {
-    _packIndex = new Map();
-    _packSizes = new Map();
-    const index = _manifest?.brickTransport?.brickToPack;
-    if (!index || typeof index !== 'object') return;
-    for (const [brickPath, entry] of Object.entries(index)) {
-      if (!entry?.url || !Number.isFinite(Number(entry.offset)) || !Number.isFinite(Number(entry.length))) continue;
-      if (!_isSafePackUrl(entry.url)) continue;  // SEC-017: defense-in-depth (manifest already validated upfront)
-      const url = String(entry.url).replace(/^\/+/, '');
-      const offset = Number(entry.offset);
-      const length = Number(entry.length);
-      _packIndex.set(String(brickPath).replace(/^\/+/, ''), { url, offset, length });
-      // A pack is the concatenation of its bricks: its size is the end of the last one.
-      if (offset + length > (_packSizes.get(url) || 0)) _packSizes.set(url, offset + length);
+  async function _sha256Hex(buffer) {
+    const digest = await crypto.subtle.digest('SHA-256', buffer);
+    return Array.from(new Uint8Array(digest), b => b.toString(16).padStart(2, '0')).join('');
+  }
+
+  async function _verifyPackHash(url, buffer, expected) {
+    if (typeof crypto === 'undefined' || !crypto.subtle) return;
+    const actual = await _sha256Hex(buffer);
+    if (actual !== String(expected).toLowerCase()) throw new Error('Pack hash mismatch for ' + url);
+  }
+
+  async function _verifyBrickHash(mount, rel, buffer) {
+    const expected = mount.brickHashes ? mount.brickHashes[rel] : null;
+    if (!expected || typeof crypto === 'undefined' || !crypto.subtle) return;
+    if ((await _sha256Hex(buffer)) !== expected) throw _fatal('Brick hash mismatch for ' + rel);
+  }
+
+  /**
+   * Fill the pack store for a timepoint that is NOT mounted, so switching to it costs
+   * a decode rather than a download. Packs are asked through the background queue
+   * (after every foreground request), kept under `prefetchCacheBytes`, and become
+   * ordinary refcounted sources once a batch reads them.
+   *
+   * @param {string} baseDir   ".../bricks/t007" — the neighbour's mount path
+   * @param {object} transport that timepoint's brickTransport
+   * @param {number} lod
+   * @param {number|null} channel  one channel, or null for every channel
+   * @param {number} maxPacks
+   * @returns {Promise<number>} packs now held
+   */
+  function prefetchPacks(baseDir, transport, lod = 0, channel = 0, maxPacks = 8) {
+    const b2p = transport?.brickToPack;
+    if (!b2p || typeof b2p !== 'object') return Promise.resolve(0);
+    const prefix = channel === null || channel === undefined ? `lod${lod}/` : `lod${lod}/c${channel}/`;
+    const base = String(baseDir).replace(/\/$/, '');
+    const query = _packIndexFor(transport).stamp ? `?v=${_packIndexFor(transport).stamp}` : '';
+    const sizes = new Map();
+    for (const key in b2p) {
+      const entry = b2p[key];
+      if (!key.startsWith(prefix) || !entry?.url || !_isSafePackUrl(entry.url)) continue;
+      const url = `${base}/${String(entry.url).replace(/^\/+/, '')}${query}`;
+      const end = Number(entry.offset) + Number(entry.length);
+      if (!sizes.has(url) && sizes.size >= maxPacks) break;
+      sizes.set(url, Math.max(sizes.get(url) || 0, Number.isFinite(end) ? end : 0));
     }
+    if (!sizes.size) return Promise.resolve(0);
+    let retainedBytes = [..._store.values()].filter(e => e.retain).reduce((s, e) => s + (e.bytes || 0), 0);
+    const waits = [];
+    for (const [url, size] of sizes) {
+      const held = _store.get(url);
+      if (held) { waits.push(held.promise.then(() => true, () => false)); continue; }
+      if (retainedBytes + size > _settings.prefetchCacheBytes) break;
+      retainedBytes += size;
+      const entry = _createPackEntry(url, { retain: true, background: true });
+      // A failed prefetch is not an error: the foreground load will retry properly.
+      waits.push(entry.promise.then(() => true, () => false));
+    }
+    return Promise.all(waits).then(rows => rows.filter(Boolean).length);
   }
 
-  /** Compressed bytes of one brick task in its pack (0 when the pack index has no entry). */
-  function taskBytes(task) {
-    if (!task || !_packIndex.size) return 0;
-    const rel = _hashKeyFromUrl(_brickUrl(task.lod ?? 0, task.channel ?? 0, task.bx, task.by, task.bz));
-    return _packIndex.get(rel)?.length || 0;
-  }
-
-  /** Compressed bytes a batch of tasks has to bring in, pack index permitting. */
-  function estimateTaskBytes(tasks) {
-    let total = 0;
-    for (const task of Array.isArray(tasks) ? tasks : []) total += taskBytes(task);
-    return total;
-  }
-
+  // ── Range planning ─────────────────────────────────────────────────────────
   /**
    * For a batch that needs only part of some packs, the byte runs to fetch instead of
    * whole packs: per pack, the bricks' [offset, end) intervals sorted and merged across
    * gaps up to RANGE_GAP_BYTES; a pack whose runs would still cover most of it, or
-   * need too many requests, is left to be fetched whole. Map<url, runs> or null.
+   * need too many requests, is left to be fetched whole. Map<pack rel url, runs> or null.
    */
-  function _planRanges(tasks) {
-    if (!_packIndex.size) return null;
+  function _planRanges(tasks, mount = _mount) {
+    if (!mount || !mount.packIndex.size) return null;
     const perPack = new Map();
     for (const task of Array.isArray(tasks) ? tasks : []) {
-      const rel = _hashKeyFromUrl(_brickUrl(task.lod ?? 0, task.channel ?? 0, task.bx, task.by, task.bz));
-      const packed = _packIndex.get(rel);
+      const packed = task.packed !== undefined
+        ? task.packed
+        : mount.packIndex.get(_relBrickPath(task.lod ?? 0, task.channel ?? 0, task.bx, task.by, task.bz));
       if (!packed) continue;
       let list = perPack.get(packed.url);
       if (!list) perPack.set(packed.url, list = []);
@@ -1162,7 +1420,7 @@ const BrickLoader = (() => {
     }
     const plan = new Map();
     for (const [url, intervals] of perPack) {
-      const size = _packSizes.get(url) || 0;
+      const size = mount.packSizes.get(url) || 0;
       if (!size) continue;
       intervals.sort((a, b) => a[0] - b[0]);
       const runs = [];
@@ -1180,110 +1438,304 @@ const BrickLoader = (() => {
     return plan.size ? plan : null;
   }
 
-  function _trimRangeCache(limit = RANGE_CACHE_LIMIT) {
-    if (_rangeCache.size <= limit) return;
-    const entries = [..._rangeCache.entries()].sort((a, b) => (a[1].lastUsed || 0) - (b[1].lastUsed || 0));
-    const removeCount = Math.max(0, _rangeCache.size - Math.max(0, limit));
-    for (let i = 0; i < removeCount; i++) _rangeCache.delete(entries[i][0]);
+  function _relBrickPath(lod, channel, bx, by, bz) {
+    const c = `x${String(bx).padStart(3, '0')}_y${String(by).padStart(3, '0')}_z${String(bz).padStart(3, '0')}`;
+    if (channel === -1 || channel === 'rgba') return `lod${lod}/rgba/${c}.rgba`;
+    return `lod${lod}/c${channel}/${c}.webp`;
+  }
+
+  /** Compressed bytes of one brick task in its pack (0 when the pack index has no entry). */
+  function taskBytes(task) {
+    if (!task || !_mount || !_mount.packIndex.size) return 0;
+    const rel = _relBrickPath(task.lod ?? 0, task.channel ?? 0, task.bx, task.by, task.bz);
+    return _mount.packIndex.get(rel)?.length || 0;
+  }
+
+  /** Compressed bytes a batch of tasks has to bring in, pack index permitting. */
+  function estimateTaskBytes(tasks) {
+    let total = 0;
+    for (const task of Array.isArray(tasks) ? tasks : []) total += taskBytes(task);
+    return total;
+  }
+
+  // ── Composed bricks ─────────────────────────────────────────────────────────
+  function _normalizeCompose(raw, planned) {
+    const components = [1, 2, 4].includes(Number(raw.components)) ? Number(raw.components) : 4;
+    const maxChannel = planned.reduce((m, t) => Math.max(m, t.channel), -1);
+    const channels = Math.max(1, Math.min(components, Number(raw.channels) || (maxChannel + 1) || 1));
+    return {
+      components,
+      channels,
+      luts: Array.isArray(raw.luts) ? raw.luts : [],
+      cropToVolume: raw.cropToVolume === true
+    };
+  }
+
+  /** The box a composed brick is delivered as: the task's box, cut to the volume. */
+  function _composeRegion(mount, unit, compose) {
+    let r = unit.tasks[0].nregion;
+    if (compose.cropToVolume) {
+      const g = mount.grids.get(unit.lod);
+      if (g) {
+        const bs = BRICK_SIZE;
+        const bw = Math.min(bs, g.dims.x - unit.bx * bs);
+        const bh = Math.min(bs, g.dims.y - unit.by * bs);
+        const bd = Math.min(bs, g.dims.z - unit.bz * bs);
+        const base = r || { x0: 0, x1: bs, y0: 0, y1: bs, z0: 0, z1: bs };
+        r = _normalizeRegion({
+          x0: base.x0, x1: Math.min(base.x1, bw),
+          y0: base.y0, y1: Math.min(base.y1, bh),
+          z0: base.z0, z1: Math.min(base.z1, bd)
+        });
+      }
+    }
+    return r;
+  }
+
+  async function _runComposeBatch(batch, compose, options, ctx) {
+    const { pollAbort, progress, _yieldIfBudgetSpent, failedTasks, deliveredTasks, summary } = ctx;
+    const units = [];
+    const byKey = new Map();
+    for (const t of batch.order) {
+      let u = byKey.get(t.brickKey);
+      if (!u) {
+        byKey.set(t.brickKey, u = { key: t.brickKey, bx: t.bx, by: t.by, bz: t.bz, lod: t.lod, tasks: [] });
+        units.push(u);
+      }
+      u.tasks.push(t);
+    }
+    const perUnit = Math.max(1, Math.round(batch.order.length / Math.max(1, units.length)));
+    const concurrency = Math.max(1, Math.min(
+      Math.ceil((Number(options.concurrency) || _settings.concurrentLoads || DEFAULT_CONCURRENT_LOADS) / perUnit),
+      units.length
+    ));
+    let nextUnit = 0;
+    const runner = async () => {
+      while (nextUnit < units.length) {
+        if (pollAbort()) break;
+        const unit = units[nextUnit++];
+        // Tasks before this unit's are done or running: keep batch.next in step so a
+        // cancellation releases the sources of the units not started yet.
+        batch.next = Math.max(batch.next, unit.tasks[unit.tasks.length - 1].orderIdx + 1);
+        _pump(batch);
+        const out = await _composeUnit(batch, unit, compose);
+        if (!batch.reason && batch.datasetEpoch === _datasetEpoch) {
+          for (const t of unit.tasks) {
+            if (out.failed.has(t)) {
+              failedTasks.add(t);
+              summary.failed.push({ bx: t.bx, by: t.by, bz: t.bz, channel: t.channel, lod: t.lod, error: out.failed.get(t) });
+              console.warn(`[BrickLoader] Brick ${t.rel} failed:`, out.failed.get(t));
+              options.onBrickError?.({ bx: t.bx, by: t.by, bz: t.bz, channel: t.channel, lod: t.lod, error: out.failed.get(t) });
+            } else if (out.data) {
+              deliveredTasks.add(t);
+            }
+          }
+          if (out.data) {
+            options.onBrickLoaded?.({
+              bx: unit.bx, by: unit.by, bz: unit.bz, lod: unit.lod,
+              channel: 'rgba', composed: true, components: compose.components,
+              data: out.data, region: out.region,
+              channels: unit.tasks.filter(t => !out.failed.has(t)).map(t => t.channel),
+              failedChannels: unit.tasks.filter(t => out.failed.has(t)).map(t => t.channel),
+              batchId: batch.id
+            });
+          }
+          for (let i = 0; i < unit.tasks.length; i++) progress();
+        }
+        for (const t of unit.tasks) _unrefTask(batch, t);
+        await _yieldIfBudgetSpent();
+      }
+    };
+    await Promise.allSettled(Array.from({ length: concurrency }, runner));
   }
 
   /**
-   * The bytes of one brick out of its pack: from the whole pack when it is cached or
-   * not planned for ranges, otherwise from the planned byte run that holds the brick,
-   * asked with a Range header — one request per run, shared by every brick in it. A
-   * server that answers 200 to the Range has sent the whole pack, which is kept as
-   * such; any other answer drops the plan for that pack and fetches it whole.
+   * One brick, every channel task of it: each channel is decoded straight into the
+   * brick's interleaved buffer by ONE worker (LUT applied there), then the buffer is
+   * taken back once. A worker lost mid-brick takes the partial buffer with it, so the
+   * whole brick starts again on another worker (bounded by RETRY_ATTEMPTS).
    */
-  async function _fetchPackSlice(packed, signal, rangePlan) {
-    const start = Math.max(0, Number(packed.offset) || 0);
-    const end = start + Math.max(0, Number(packed.length) || 0);
-    const url = `${_basePath}/${String(packed.url).replace(/^\/+/, '')}`;
-    const stamp = () => performance.now?.() || Date.now();
-    const whole = _packCache.get(url);
-    if (whole) {
-      whole.lastUsed = stamp();
-      const buffer = await _awaitWithSignal(whole.promise, signal);
-      return buffer.slice(start, end);
-    }
-    const runs = rangePlan?.get(packed.url);
-    const run = runs?.find(r => r.start <= start && end <= r.end);
-    if (run) {
-      const key = `${url}#${run.start}-${run.end}`;
-      let entry = _rangeCache.get(key);
-      if (!entry) {
-        _trimRangeCache(RANGE_CACHE_LIMIT - 1);
-        const fetchSignal = _packFetchController ? _packFetchController.signal : signal;
-        const promise = _withFetchSlot(() => fetch(url, { signal: fetchSignal, headers: { Range: `bytes=${run.start}-${run.end - 1}` } }).then(async resp => {
-          if (resp.status === 206) {
-            const buffer = await resp.arrayBuffer();
-            if (buffer.byteLength !== run.end - run.start) {
-              throw new Error(`Range ${run.start}-${run.end - 1} of ${url} answered ${buffer.byteLength} bytes`);
-            }
-            return { buffer, base: run.start };
+  async function _composeUnit(batch, unit, compose) {
+    const mount = batch.mount;
+    const region = _composeRegion(mount, unit, compose);
+    const voxels = _regionVoxels(region);
+    const comps = compose.components;
+    const failed = new Map();
+    const rgbaTransport = unit.tasks.some(t => t.channel === -1);
+    for (let restart = 0; restart < RETRY_ATTEMPTS; restart++) {
+      failed.clear();
+      if (batch.reason) return { data: null, failed, region };
+      const workerDecodes = !rgbaTransport && mount.packing?.mode === 'grid'
+        && mount.encoding !== 'raw-u8' && mount.encoding !== 'raw-u8-gzip';
+      const rec = workerDecodes ? _pickWorker() : null;
+      const gen = rec ? rec.gen : 0;
+      const assemblyKey = `${batch.id}:${unit.key}:${restart}`;
+      const scalars = [];
+      let lost = false;
+      let inWorker = 0;
+      await Promise.all(unit.tasks.map(async (t) => {
+        const channel = t.channel;
+        if (channel !== -1 && (channel < 0 || channel >= comps)) {
+          failed.set(t, _fatal(`channel ${channel} does not fit ${comps} components`));
+          return;
+        }
+        const lut = channel >= 0 ? compose.luts[channel] || null : null;
+        const job = { ...t, nregion: region };
+        const outcome = await _attemptTask(batch, t, () => {
+          if (rec) {
+            const assemble = { rec, gen, key: assemblyKey, slot: channel, components: comps, lut };
+            return _loadTask(batch, job, assemble);
           }
-          if (resp.status === 200) {
-            const buffer = await resp.arrayBuffer();
-            _trimPackCache(PACK_CACHE_LIMIT - 1);
-            _packCache.set(url, { promise: Promise.resolve(buffer), lastUsed: stamp() });
-            return { buffer, base: 0 };
-          }
-          throw new Error(`HTTP ${resp.status} for ${url} (range ${run.start}-${run.end - 1})`);
-        }), fetchSignal).catch(err => {
-          _rangeCache.delete(key);
-          throw err;
-        });
-        entry = { promise, lastUsed: stamp() };
-        _rangeCache.set(key, entry);
-      } else {
-        entry.lastUsed = stamp();
+          return _loadTask(batch, job);
+        }, true);
+        if (!outcome.ok) {
+          if (outcome.error?.workerLost) lost = true;
+          failed.set(t, outcome.error);
+          return;
+        }
+        if (outcome.data === 'assembled') inWorker++;
+        else if (outcome.data) scalars.push({ channel, data: outcome.data, lut });
+      }));
+      if (batch.reason) {
+        if (rec?.alive) rec.w.postMessage({ type: 'DROP', key: assemblyKey });
+        return { data: null, failed, region };
       }
+      if (lost && restart < RETRY_ATTEMPTS - 1) continue;
+      if (failed.size === unit.tasks.length) {
+        if (rec?.alive) rec.w.postMessage({ type: 'DROP', key: assemblyKey });
+        return { data: null, failed, region };
+      }
+      let data;
       try {
-        const got = await _awaitWithSignal(entry.promise, signal);
-        return got.buffer.slice(start - got.base, end - got.base);
+        if (rec && inWorker && (!rec.alive || rec.gen !== gen)) {
+          throw Object.assign(new Error('Brick decode worker lost'), { workerLost: true });
+        }
+        data = (rec && inWorker)
+          ? await _postToWorker(batch, rec, { type: 'TAKE', key: assemblyKey, voxels, components: comps })
+          : new Uint8Array(voxels * comps);
       } catch (err) {
-        if (err?.name === 'AbortError' || signal?.aborted) throw err;
-        rangePlan.delete(packed.url);
+        if (batch.reason) return { data: null, failed, region };
+        if (restart < RETRY_ATTEMPTS - 1) continue;
+        for (const t of unit.tasks) if (!failed.has(t)) failed.set(t, err);
+        return { data: null, failed, region };
       }
+      if (!data || data.length !== voxels * comps) {
+        for (const t of unit.tasks) if (!failed.has(t)) failed.set(t, _fatal(`brick ${unit.key} assembled to ${data ? data.length : 0} bytes, expected ${voxels * comps}`));
+        return { data: null, failed, region };
+      }
+      // Main-thread paths (raw transports, no worker): interleave here.
+      for (const s of scalars) {
+        if (s.channel === -1) {
+          const box = s.data.length === voxels * 4 ? s.data : _cropBox(s.data, BRICK_SIZE, region, 4);
+          const luts = compose.luts;
+          for (let i = 0, o = 0; i < voxels; i++, o += 4) {
+            for (let c = 0; c < Math.min(4, comps); c++) {
+              const v = box[o + c];
+              data[i * comps + c] = luts[c] ? luts[c][v] : v;
+            }
+          }
+          continue;
+        }
+        const box = s.data.length === voxels ? s.data : _cropBox(s.data, BRICK_SIZE, region, 1);
+        const lut = s.lut;
+        for (let i = 0, o = s.channel; i < voxels; i++, o += comps) {
+          const v = box[i];
+          data[o] = lut ? lut[v] : v;
+        }
+      }
+      return { data, failed, region };
     }
-    const buffer = await _fetchPackBuffer(packed.url, signal);
-    return buffer.slice(start, end);
+    return { data: null, failed, region };
   }
 
-  async function _verifyBrickHash(url, blob) {
-    if (!_manifest?.hashes || !window.crypto?.subtle) return;
-    const expected = _manifest.hashes[_hashKeyFromUrl(url)];
-    if (!expected) return;
-    const buf = await blob.arrayBuffer();
-    const digest = await crypto.subtle.digest('SHA-256', buf);
-    const actual = Array.from(new Uint8Array(digest), b => b.toString(16).padStart(2, '0')).join('');
-    if (actual !== expected) {
-      throw new Error('Brick hash mismatch for ' + url);
+  // ── Decoding ────────────────────────────────────────────────────────────────
+  async function _decodeWebp(batch, job) {
+    const rec = _pickWorker();
+    if (rec) {
+      return _postToWorker(batch, rec, {
+        type: 'DECODE', buffer: job.buffer, brickSize: job.brickSize,
+        packing: job.packing, region: job.region, lut: job.lut
+      }, [job.buffer]);
     }
+    return _decodeWebpMainThread(job);
   }
 
-  function _hashKeyFromUrl(url) {
+  async function _decodeInto(batch, job, assemble) {
+    const { rec, gen, key, slot, components, lut } = assemble;
+    if (!rec.alive || rec.gen !== gen) throw Object.assign(new Error('Brick decode worker lost'), { workerLost: true });
+    await _postToWorker(batch, rec, {
+      type: 'DECODE', buffer: job.buffer, brickSize: job.brickSize, packing: job.packing,
+      region: job.region, lut, assemble: { key, slot, components }
+    }, [job.buffer]);
+    return 'assembled';
+  }
+
+  /** Main-thread decode, used only when no decode worker can run (CSP, file://). */
+  async function _decodeWebpMainThread(job) {
+    if (!_fallbackWarned) {
+      _fallbackWarned = true;
+      console.warn('[BrickLoader] No decode worker available: decoding bricks on the main thread.');
+    }
+    const bs = job.brickSize;
+    const packing = job.packing || {};
+    const blob = new Blob([job.buffer], { type: 'image/webp' });
+    let img = null;
+    let objectUrl = null;
     try {
-      // Robustly extract the relative path regardless of absolute/relative differences
-      let rel = String(url);
-      if (rel.startsWith('http')) {
-        const parsedUrl = new URL(rel);
-        rel = parsedUrl.pathname;
+      if (typeof createImageBitmap === 'function') {
+        img = await createImageBitmap(blob, { premultiplyAlpha: 'none', colorSpaceConversion: 'none' });
+      } else {
+        objectUrl = URL.createObjectURL(blob);
+        img = await _imageElement(objectUrl);
       }
-      // Convert basePath to a pathname for safe replacement
-      let base = String(_basePath);
-      if (base.startsWith('http')) {
-        base = new URL(base).pathname;
-      } else if (!base.startsWith('/')) {
-        base = '/' + base;
+      if (!_fallbackCanvas) {
+        _fallbackCanvas = typeof OffscreenCanvas !== 'undefined'
+          ? new OffscreenCanvas(img.width, img.height)
+          : document.createElement('canvas');
+        _fallbackCanvas.width = img.width;
+        _fallbackCanvas.height = img.height;
+        _fallbackCtx = _fallbackCanvas.getContext('2d', { willReadFrequently: true });
+        _fallbackCtx.globalCompositeOperation = 'copy';
+      } else if (_fallbackCanvas.width < img.width || _fallbackCanvas.height < img.height) {
+        _fallbackCanvas.width = Math.max(_fallbackCanvas.width, img.width);
+        _fallbackCanvas.height = Math.max(_fallbackCanvas.height, img.height);
+        _fallbackCtx = _fallbackCanvas.getContext('2d', { willReadFrequently: true });
+        _fallbackCtx.globalCompositeOperation = 'copy';
       }
-      if (!rel.startsWith('/')) rel = '/' + rel;
-      
-      if (rel.startsWith(base)) {
-        return rel.slice(base.length).replace(/^\/+/, '');
+      _fallbackCtx.drawImage(img, 0, 0);
+      const src = _fallbackCtx.getImageData(0, 0, img.width, img.height).data;
+      const region = packing.mode === 'grid' ? job.region : null;
+      const r = region || { x0: 0, x1: bs, y0: 0, y1: bs, z0: 0, z1: bs };
+      const rw = r.x1 - r.x0, rh = r.y1 - r.y0;
+      const out = new Uint8Array(_regionVoxels(region, bs));
+      const lut = job.lut || null;
+      if (packing.mode === 'grid') {
+        // Tile (tx, ty) holds z = ty·cols + tx; voxel (x, y, z) is mosaic pixel (tx·bs + x, ty·bs + y).
+        const gridCols = Number(packing.cols);
+        const cols = (Number.isFinite(gridCols) && gridCols >= 1) ? gridCols : Math.ceil(bs / Math.ceil(Math.sqrt(bs)));
+        const w = img.width;
+        for (let z = r.z0; z < r.z1; z++) {
+          const px0 = (z % cols) * bs;
+          const py0 = Math.floor(z / cols) * bs;
+          for (let y = r.y0; y < r.y1; y++) {
+            let dst = ((z - r.z0) * rh + (y - r.y0)) * rw;
+            const py = py0 + y;
+            for (let x = r.x0; x < r.x1; x++) {
+              const px = px0 + x;
+              const i = (py * w + px) * 4;
+              const v = (px < w && py < img.height && i < src.length) ? src[i] : 0;
+              out[dst++] = lut ? lut[v] : v;
+            }
+          }
+        }
+      } else {
+        const len = Math.min(out.length, src.length >> 2);
+        for (let i = 0; i < len; i++) out[i] = lut ? lut[src[i * 4]] : src[i * 4];
       }
-      return rel.replace(/^\/+/, '');
-    } catch (e) {
-      return String(url).replace(_basePath, '').replace(/^\/+/, '');
+      return out;
+    } finally {
+      if (img && typeof img.close === 'function') img.close();
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
     }
   }
 
@@ -1296,13 +1748,205 @@ const BrickLoader = (() => {
     });
   }
 
-  function _trimCache() {
-    if (_cache.size <= LRU_LIMIT) return;
-    // Evict least recently used
-    const entries = [..._cache.entries()].sort((a, b) => a[1].lastUsed - b[1].lastUsed);
-    const toRemove = entries.slice(0, _cache.size - LRU_LIMIT);
-    for (const [key] of toRemove) {
-      _cache.delete(key);
+  // ── Worker pool ──────────────────────────────────────────────────────────────
+  function _workerTarget() {
+    if (_settings.decodeWorkers > 0) return _settings.decodeWorkers;
+    const cores = (typeof navigator !== 'undefined' && navigator.hardwareConcurrency) || 4;
+    return Math.max(1, Math.min(8, cores - 1));
+  }
+
+  /** Spawns the pool once (it survives dataset switches) and resizes it to the target. */
+  function _ensureWorkers() {
+    if (typeof Worker === 'undefined') return;
+    const target = _workerTarget();
+    _workers = _workers.filter(rec => rec.alive);
+    while (_workers.filter(r => r.alive).length > target) {
+      const idle = _workers.find(r => r.alive && r.inflight === 0) || _workers.find(r => r.alive);
+      _retireWorker(idle, new Error('Brick decode pool resized'));
+      _workers.splice(_workers.indexOf(idle), 1);
+    }
+    while (_workers.filter(r => r.alive).length < target) {
+      const rec = { w: null, alive: false, inflight: 0, respawns: 0, gen: 0 };
+      if (!_spawnWorker(rec)) break;
+      _workers.push(rec);
+    }
+  }
+
+  function _spawnWorker(rec) {
+    let w;
+    try {
+      w = new Worker(_WORKER_URL);
+    } catch (e) {
+      console.warn('[BrickLoader] Failed to start a decode worker:', e);
+      return false;
+    }
+    rec.w = w;
+    rec.alive = true;
+    rec.gen = (rec.gen || 0) + 1;
+    rec.inflight = 0;
+    w.onmessage = (event) => {
+      const msg = event.data || {};
+      if (msg.type !== 'DECODE_RESULT') return;
+      const pending = _workerPending.get(msg.id);
+      if (!pending) return;
+      if (msg.ok) {
+        if (msg.perf && typeof window !== 'undefined' && window.VolumeViewerDebug?.logBrickDecode) {
+          console.log(`[PERF-WORKER] decode: ${msg.perf.total.toFixed(2)}ms (bmp: ${msg.perf.bmp.toFixed(2)}, img: ${msg.perf.img.toFixed(2)}, loop: ${msg.perf.loop.toFixed(2)})`);
+        }
+        _settlePending(msg.id, true, msg.buffer ? new Uint8Array(msg.buffer) : null);
+      } else {
+        _settlePending(msg.id, false, new Error(msg.message || 'Brick decode failed'));
+      }
+    };
+    // A worker that fails to load (404, CSP) or dies (OOM) never answers again: its
+    // jobs are rejected (retried elsewhere) and it is replaced a bounded number of times.
+    const onDead = (event) => {
+      event?.preventDefault?.();
+      _onWorkerDead(rec, new Error('Brick decode worker failed' + (event?.message ? ': ' + event.message : '')));
+    };
+    w.onerror = onDead;
+    w.onmessageerror = onDead;
+    return true;
+  }
+
+  function _retireWorker(rec, err) {
+    if (!rec) return;
+    rec.alive = false;
+    try { rec.w?.terminate(); } catch (e) { /* gone */ }
+    for (const [id, p] of [..._workerPending]) {
+      if (p.rec === rec) _settlePending(id, false, Object.assign(err, { workerLost: true }));
+    }
+  }
+
+  function _onWorkerDead(rec, err) {
+    if (!rec.alive) return;
+    console.error('[BrickLoader] Decode worker lost:', err.message);
+    _retireWorker(rec, err);
+    if (rec.respawns < MAX_WORKER_RESPAWNS) {
+      rec.respawns++;
+      _spawnWorker(rec);
+    }
+  }
+
+  function _pickWorker() {
+    let best = null;
+    for (const rec of _workers) {
+      if (rec.alive && (!best || rec.inflight < best.inflight)) best = rec;
+    }
+    return best;
+  }
+
+  function _postToWorker(batch, rec, msg, transfer = []) {
+    const id = ++_workerSeq;
+    return new Promise((resolve, reject) => {
+      if (batch.signal.aborted) { reject(_abortError()); return; }
+      if (!rec.alive) { reject(Object.assign(new Error('Brick decode worker lost'), { workerLost: true })); return; }
+      const pending = { rec, batchId: batch.id, resolve, reject, signal: batch.signal, onAbort: null, timer: null };
+      pending.onAbort = () => _settlePending(id, false, _abortError());
+      batch.signal.addEventListener('abort', pending.onAbort, { once: true });
+      pending.timer = setTimeout(() => {
+        if (_workerPending.has(id)) _onWorkerDead(rec, new Error('Brick decode timed out'));
+      }, _settings.decodeTimeoutMs);
+      _workerPending.set(id, pending);
+      rec.inflight++;
+      try {
+        rec.w.postMessage({ ...msg, id, batch: batch.id }, transfer);
+      } catch (err) {
+        _settlePending(id, false, err);
+      }
+    });
+  }
+
+  function _settlePending(id, ok, value) {
+    const p = _workerPending.get(id);
+    if (!p) return;
+    _workerPending.delete(id);
+    clearTimeout(p.timer);
+    p.signal?.removeEventListener('abort', p.onAbort);
+    p.rec.inflight = Math.max(0, p.rec.inflight - 1);
+    if (ok) p.resolve(value); else p.reject(value);
+  }
+
+  // ── Cancellation / teardown ────────────────────────────────────────────────
+  /** Cancel every running batch (all groups, independent ones included). */
+  function cancelPending() {
+    for (const batch of [..._batches]) _cancelBatch(batch, 'cancelPending');
+  }
+
+  /** Cancel the running batches of one group (e.g. 'stream'). */
+  function cancelGroup(group) {
+    for (const batch of [..._batches]) if (batch.group === group) _cancelBatch(batch, 'cancelGroup');
+  }
+
+  function isLoading() {
+    return _batches.size > 0;
+  }
+
+  /** Drop every source no running batch needs (prefetched packs included). */
+  function trimCaches() {
+    for (const entry of [..._store.values()]) {
+      entry.retain = false;
+      _maybeRelease(entry);
+    }
+    _trimStore();
+  }
+
+  /** Teardown: cancel every batch, drop every source, release the fallback canvas. */
+  function clearCache() {
+    cancelPending();
+    for (const entry of [..._store.values()]) _dropEntry(entry, true);
+    _store.clear();
+    _runsByPack.clear();
+    _bytes.pack = 0;
+    _bytes.run = 0;
+    // LEAK-013 (Rule 1.2): the main-thread decode canvas grows to the largest mosaic seen.
+    _fallbackCtx = null;
+    _fallbackCanvas = null;
+  }
+
+  function getCacheStats() {
+    let pending = 0;
+    let packEntries = 0;
+    let rangeEntries = 0;
+    for (const e of _store.values()) {
+      if (e.state === 'pending') pending++;
+      else if (e.kind === 'pack') packEntries++;
+      else rangeEntries++;
+    }
+    return {
+      entries: 0,                  // decoded bricks are not cached
+      packEntries,
+      rangeEntries,
+      pendingSources: pending,
+      packBytes: _bytes.pack,
+      rangeBytes: _bytes.run,
+      memoryEstimateMB: Math.round((_bytes.pack + _bytes.run) / MiB),
+      packCacheBytes: _settings.packCacheBytes,
+      rangeCacheBytes: _settings.rangeCacheBytes,
+      liveBatches: _batches.size,
+      workers: _workers.filter(r => r.alive).length,
+      packFetches: _stats.packFetches,
+      runFetches: _stats.runFetches,
+      fetchedBytes: _stats.fetchedBytes,
+      refetches: _stats.refetches,
+      evictedInUse: _stats.evictedInUse
+    };
+  }
+
+  /** A whole pack's bytes through the shared store (held only while awaited). */
+  async function _fetchPackBuffer(relativeUrl, signal) {
+    if (!_mount) throw new Error('BrickLoader not initialized.');
+    const url = _absUrl(_mount, relativeUrl);
+    _packRefs.set(url, (_packRefs.get(url) || 0) + 1);
+    const entry = _store.get(url) || _createPackEntry(url);
+    try {
+      const got = await _awaitWithSignal(entry.promise, signal);
+      return got.buffer;
+    } finally {
+      const n = (_packRefs.get(url) || 0) - 1;
+      if (n > 0) _packRefs.set(url, n); else _packRefs.delete(url);
+      const e = _store.get(url);
+      if (e) _maybeRelease(e);
     }
   }
 
@@ -1310,25 +1954,26 @@ const BrickLoader = (() => {
     init,
     isReady,
     getManifest,
-    getTransportEncoding: () => _manifest?.brickTransport?.encoding || null,
+    getTransportEncoding: () => (_mount ? _mount.encoding : null),
     getDimensions,
     configure,
-    bricksForSlab,
     bricksForRegion,
     hasBrick,
     prefetchPacks,
     activeBricks,
+    activeBrickCount,
     loadBricks,
     loadBrickTasks,
-    assembleBricks,
     cancelPending,
+    cancelGroup,
     isLoading,
     getCacheStats,
+    trimCaches,
     clearCache,
     taskBytes,
     estimateTaskBytes,
     _planRanges,       // exposed for unit testing
-    _cacheKey,         // exposed for unit testing (ELE-13)
+    _packMajorOrder,   // exposed for unit testing
     _fetchPackBuffer,  // exposed for unit testing (ELE-17)
     _validateManifest  // exposed for unit testing (ELE-21)
   };

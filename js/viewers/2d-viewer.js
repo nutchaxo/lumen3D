@@ -24,6 +24,10 @@ const Viewer2D = (() => {
   const WHEEL_STEP = 1.1;           // zoom factor per 100 wheel units
   const DRAG_THRESHOLD_PX = 4;      // below this a pointer gesture is a click
   const SCALE_BAR_TARGET_PX = 120;  // the bar picks the 1-2-5 length nearest to this
+  const WHEEL_LINE_PX = 33;         // one wheel "line" (Firefox reports notches in lines) in pixels
+  const WHEEL_MAX_DELTA_PX = 300;   // one wheel event never zooms by more than 3 notches
+  const NATIVE_DEFER_MS = 150;      // stepping through a collection: the native image waits for the key to settle
+  const PIXEL_WORKER_URL = 'js/workers/pixel-2d-worker.js';
 
   let _canvas = null;
   let _ctx = null;
@@ -31,8 +35,10 @@ const Viewer2D = (() => {
   let _resizeObserver = null;
 
   let _image = null;                // what is drawable now: preview, then native
-  let _hasNative = false;           // the native image.webp has decoded and is what _image holds
-  let _isolated = null;             // cached stain-isolation rendering of _image
+  let _hasNative = false;           // the native image.webp has decoded (it may be _image, or the preview when that is the larger)
+  let _imageGen = 0;                // bumped whenever _image changes: a processed copy is only valid for its generation
+  let _loadImgs = [];               // the Image objects of the load in flight, released when it is superseded
+  let _nativeTimer = 0;
   let _imgW = 0;                    // declared native size — known before any byte
   let _imgH = 0;
   let _pixelSizeUm = null;
@@ -45,8 +51,17 @@ const Viewer2D = (() => {
   let _labelRects = [];             // canvas-space hit boxes of the labels drawn last frame
   let _orient = { rotationDeg: 0, flipH: false };
   let _adjust = null;               // null = raw photograph; else the full adjustment set
-  let _adjusted = null;             // cached adjusted rendering of _image
-  let _flatMap = null;              // cached background map used by the flatten option
+  let _proc = null;                 // { key, gen, img } processed rendering (adjusted / isolated) of _image
+  let _procPending = null;          // the latest request while a job runs — only the newest is ever started
+  let _procRunning = null;
+  let _procBusy = false;
+  let _procWaiters = [];
+  let _pixelWorker = null;
+  let _pixelWorkerBroken = false;
+  let _pixelCalls = new Map();
+  let _pixelCallId = 0;
+  let _mainCache = { gen: -1 };     // maps kept for the main-thread path (no worker, or a synchronous export)
+  let _bgColor = '#000';            // canvas backdrop, read from the container's style when it can change
   let _overlays = [];               // plugin painters, drawn between the image and the measurements
   let _textSize = 14;               // label font size, CSS px
   let _showLabels = true;
@@ -70,47 +85,83 @@ const Viewer2D = (() => {
     _canvas.addEventListener('dblclick', () => fit());
     _resizeObserver = new ResizeObserver(() => resize());
     _resizeObserver.observe(_container);
+    if (typeof Theme !== 'undefined' && Theme.onChange) Theme.onChange(() => { _readBackground(); _scheduleDraw(); });
+    _readBackground();
     resize();
   }
 
   function dispose() {
     _loadToken++;
+    _cancelLoad();
     _resizeObserver?.disconnect();
     _image = null;
     _hasNative = false;
-    _isolated = null;
+    _dropProcessed();
+    _pixelWorker?.terminate();
+    _pixelWorker = null;
+    // A terminated worker never answers: settle its calls, or the processing loop
+    // would wait on them forever and no later adjustment would ever be applied.
+    const calls = [..._pixelCalls.values()];
+    _pixelCalls.clear();
+    calls.forEach(c => c.reject(new Error('2D viewer disposed')));
     _measurements = [];
+  }
+
+  /** The backdrop colour comes from the stylesheet; reading it forces a style
+   *  recalculation, so it is read when the theme or the size changes, not per frame. */
+  function _readBackground() {
+    if (_container) _bgColor = getComputedStyle(_container).backgroundColor || '#000';
   }
 
   /**
    * Start showing a photograph. The preview and the native image are fetched
    * together; whichever decodes first is painted, and a later, smaller image
    * never replaces a larger one already on screen.
+   * `deferNative` holds the (multi-MB) native request back for a moment: a
+   * collection stepped through with a held arrow key only ever downloads the
+   * photograph the key settled on.
    * @returns {Promise<void>} resolves once the native image is on screen
    */
   function load(spec) {
     const token = ++_loadToken;
+    _cancelLoad();
     _imgW = spec.width;
     _imgH = spec.height;
     _pixelSizeUm = Number.isFinite(spec.pixelSizeUm) && spec.pixelSizeUm > 0 ? spec.pixelSizeUm : null;
     _image = null;
+    _imageGen++;
     _hasNative = false;
-    _isolated = null;
-    _adjusted = null;
-    _flatMap = null;
+    _dropProcessed();
     _measurements = [];
+    _readBackground();
     fit();
     _emitState('loading');
 
     _decode(spec.previewUrl)
       .then(img => { if (_swap(token, img)) _emitState('preview'); })
       .catch(() => {});
-    return _decode(spec.nativeUrl)
-      .then(img => { if (_swap(token, img)) { _hasNative = true; _emitState('native'); } })
-      .catch(err => {
-        if (token === _loadToken && !_image) _emitState('error');
-        throw err;
-      });
+    return new Promise((resolve, reject) => {
+      const start = () => {
+        _nativeTimer = 0;
+        if (token !== _loadToken) { resolve(); return; }
+        _decode(spec.nativeUrl).then(img => {
+          if (token !== _loadToken) return;
+          // The native bytes are in even when _swap keeps a larger preview: the
+          // capture is as good as it gets, so it is not "preview" any more.
+          _swap(token, img);
+          _hasNative = true;
+          _emitState('native');
+        }).then(resolve, err => {
+          if (token !== _loadToken) { resolve(); return; }   // superseded: its failure is not news
+          // A native image that fails while the preview is up is its own state:
+          // the pill must not keep saying "loading native".
+          _emitState(_image ? 'nativeError' : 'error');
+          reject(err);
+        });
+      };
+      if (spec.deferNative) _nativeTimer = setTimeout(start, NATIVE_DEFER_MS);
+      else start();
+    });
   }
 
   /** Warm the browser cache so the next photograph paints from memory. */
@@ -124,6 +175,7 @@ const Viewer2D = (() => {
   function _decode(url) {
     const img = new Image();
     img.decoding = 'async';
+    _loadImgs.push(img);
     img.src = url;
     if (typeof img.decode === 'function') return img.decode().then(() => img);
     return new Promise((resolve, reject) => {
@@ -132,13 +184,22 @@ const Viewer2D = (() => {
     });
   }
 
+  /** Stop what the previous load still has in flight: an emptied `src` aborts the
+   *  transfer, so superseded photographs do not queue behind the current one. */
+  function _cancelLoad() {
+    clearTimeout(_nativeTimer);
+    _nativeTimer = 0;
+    for (const img of _loadImgs) {
+      if (img !== _image && !img.complete) { try { img.removeAttribute('src'); } catch (_) { /* detached */ } }
+    }
+    _loadImgs = [];
+  }
+
   function _swap(token, img) {
     if (token !== _loadToken) return false;
     if (_image && img.naturalWidth < _image.naturalWidth) return false;
     _image = img;
-    _isolated = null;
-    _adjusted = null;
-    _flatMap = null;
+    _imageGen++;
     _scheduleDraw();
     return true;
   }
@@ -187,7 +248,9 @@ const Viewer2D = (() => {
 
   function setView(view, reason) {
     if (!view || !Number.isFinite(view.scale) || view.scale <= 0) return;
-    _view = { scale: view.scale, tx: Number(view.tx) || 0, ty: Number(view.ty) || 0 };
+    // A value from a shared link or a workspace file obeys the same zoom range as the wheel.
+    const scale = Math.max(_fitScale * MIN_ZOOM_OUT, Math.min(MAX_SCALE, view.scale));
+    _view = { scale, tx: Number(view.tx) || 0, ty: Number(view.ty) || 0 };
     _viewChanged(reason || 'set');
   }
 
@@ -211,8 +274,12 @@ const Viewer2D = (() => {
     const w = _cssWidth(), h = _cssHeight();
     if (!w || !h) return;
     const wasFitted = Math.abs(_view.scale - _fitScale) < 1e-9;
-    _canvas.width = Math.round(w * dpr);
-    _canvas.height = Math.round(h * dpr);
+    // Assigning a canvas size clears it and reallocates the backing store, even
+    // to the same value: a drag-resize in Compare fires this on every frame.
+    const bw = Math.round(w * dpr), bh = Math.round(h * dpr);
+    if (_canvas.width !== bw) _canvas.width = bw;
+    if (_canvas.height !== bh) _canvas.height = bh;
+    _readBackground();
     if (wasFitted || !_image) fit('resize');
     else _scheduleDraw();
   }
@@ -344,7 +411,13 @@ const Viewer2D = (() => {
   function _onWheel(e) {
     e.preventDefault();
     const p = _local(e);
-    _zoomAround(_view.scale * Math.pow(WHEEL_STEP, -e.deltaY / 100), p.x, p.y);
+    // deltaY is in pixels, lines or pages depending on the browser and device
+    // (Firefox's mouse wheel reports 3 lines per notch): bring it to pixels.
+    let dy = e.deltaY;
+    if (e.deltaMode === 1) dy *= WHEEL_LINE_PX;
+    else if (e.deltaMode === 2) dy *= _cssHeight() || 600;
+    dy = Math.max(-WHEEL_MAX_DELTA_PX, Math.min(WHEEL_MAX_DELTA_PX, dy));
+    _zoomAround(_view.scale * Math.pow(WHEEL_STEP, -dy / 100), p.x, p.y);
   }
 
   function _pick(p) {
@@ -422,17 +495,20 @@ const Viewer2D = (() => {
    * of the canvas centre from the photograph's centre. Two photographs with
    * different pixel sizes given the same physical view show the same field at
    * the same magnification, centred on the same anatomical point.
+   * An uncalibrated photograph has no physical quantity to share: it neither
+   * reports a physical view (null) nor applies one.
    */
   function getPhysicalView() {
-    const o = _orientedSize(), px = _pixelSizeUm || 1;
+    if (!_pixelSizeUm) return null;     // without a calibration there is no physical quantity to share
+    const o = _orientedSize(), px = _pixelSizeUm;
     const ox = (_cssWidth() / 2 - _view.tx) / _view.scale;
     const oy = (_cssHeight() / 2 - _view.ty) / _view.scale;
     return { umPerCss: px / _view.scale, centerUm: { x: (ox - o.w / 2) * px, y: (oy - o.h / 2) * px } };
   }
 
   function setPhysicalView(pv) {
-    if (!pv || !(pv.umPerCss > 0)) return;
-    const o = _orientedSize(), px = _pixelSizeUm || 1;
+    if (!pv || !(pv.umPerCss > 0) || !_pixelSizeUm) return;
+    const o = _orientedSize(), px = _pixelSizeUm;
     const scale = px / pv.umPerCss;
     const ox = o.w / 2 + (pv.centerUm?.x || 0) / px;
     const oy = o.h / 2 + (pv.centerUm?.y || 0) / px;
@@ -441,144 +517,199 @@ const Viewer2D = (() => {
 
   // ── Display adjustments (non-destructive, display only) ────────────────────
   const ADJUST_DEFAULT = { brightness: 0, contrast: 0, gamma: 1, wbRed: 1, wbBlue: 1, flatten: false };
-  const FLAT_SCALE = 8;             // background map resolution
-  const FLAT_BACKGROUND_FRACTION = 0.4;   // the darkest 40 % of cells define the illumination model
+  const ADJUST_RANGE = {
+    brightness: [-100, 100], contrast: [-100, 100], gamma: [0.1, 10], wbRed: [0.1, 4], wbBlue: [0.1, 4]
+  };
 
-  /** Partial update; the defaults mean "raw photograph" and free the cache. */
+  /**
+   * Partial update; the defaults mean "raw photograph". Values come from a
+   * slider, a workspace file or a shared link: unknown keys are dropped and a
+   * value that is not a finite number is ignored (one in excess is clamped), so
+   * a crafted value cannot turn the look-up table into NaN and the picture black.
+   */
   function setAdjustments(partial) {
-    const next = { ...ADJUST_DEFAULT, ...(_adjust || {}), ...(partial || {}) };
+    const clean = {};
+    for (const [key, value] of Object.entries(partial || {})) {
+      if (key === 'flatten') clean.flatten = Boolean(value);
+      else if (ADJUST_RANGE[key] && typeof value === 'number' && Number.isFinite(value)) {
+        clean[key] = Math.max(ADJUST_RANGE[key][0], Math.min(ADJUST_RANGE[key][1], value));
+      }
+    }
+    const next = { ...ADJUST_DEFAULT, ...(_adjust || {}), ...clean };
     const isDefault = Object.keys(ADJUST_DEFAULT).every(k => next[k] === ADJUST_DEFAULT[k]);
     _adjust = isDefault ? null : next;
-    _adjusted = null;
     _scheduleDraw();
   }
 
   function getAdjustments() { return { ...ADJUST_DEFAULT, ...(_adjust || {}) }; }
 
-  /**
-   * Per-channel look-up:  x = v/255 · whiteBalance
-   *                       x = (x − ½)·(1 + contrast/100) + ½ + brightness/100
-   *                       x = clamp(x)^(1/gamma)
-   * The flatten option first divides each pixel by the local background — a
-   * grey opening (min then max filter) with a window wider than the specimen,
-   * which estimates the illumination fall-off without touching the embryo —
-   * so a vignetted background becomes even before the curve is applied.
-   */
-  function _adjustedImage() {
-    if (_adjusted) return _adjusted;
-    const w = _image.naturalWidth, h = _image.naturalHeight;
+  // ── Processed rendering: adjustments and stain isolation ───────────────────
+  // The per-pixel loops (PixelOps2D) run in a worker on an ImageBitmap that is
+  // transferred, never copied through the page. While a job runs the previous
+  // result — or the raw photograph — stays on screen; if requests pile up (a
+  // slider drag) only the newest is ever started, so the cost follows the
+  // pointer's pauses, not its speed. Without Worker / OffscreenCanvas the same
+  // maths runs on the main thread, one job at a time, as it always did.
+
+  /** What the display needs on top of the raw photograph, or null for nothing. */
+  function _wantedProcessing() {
+    if (_isolate) return { key: 'isolate', job: { kind: 'isolate' } };
+    if (_adjust) return { key: 'adjust:' + JSON.stringify(_adjust), job: { kind: 'adjust', adjust: { ..._adjust } } };
+    return null;
+  }
+
+  function _closeImg(img) { if (img && typeof img.close === 'function') img.close(); }
+
+  function _dropProcessed() {
+    if (_proc && _proc.img !== _image) _closeImg(_proc.img);
+    _proc = null;
+    _procPending = null;
+  }
+
+  /** The drawable source for the current settings. Starts a job when the cached
+   *  rendering is missing or stale and meanwhile returns the last one. */
+  function _displaySource() {
+    const want = _wantedProcessing();
+    if (!want || !_image) {
+      if (_proc) _dropProcessed();
+      return _image;
+    }
+    if (!_proc || _proc.key !== want.key || _proc.gen !== _imageGen) _requestProcessing(want);
+    return _proc ? _proc.img : _image;
+  }
+
+  function _requestProcessing(want) {
+    for (const queued of [_procPending, _procRunning]) {
+      if (queued && queued.key === want.key && queued.gen === _imageGen) return;
+    }
+    _procPending = { ...want, gen: _imageGen };
+    if (!_procBusy) _pumpProcessing();
+  }
+
+  async function _pumpProcessing() {
+    _procBusy = true;
+    try {
+      while (_procPending) {
+        const req = _procPending;
+        _procPending = null;
+        const image = _image;
+        if (!image || req.gen !== _imageGen) continue;
+        if (_proc && _proc.key === req.key && _proc.gen === req.gen) continue;
+        _procRunning = req;
+        let img = null;
+        try { img = await _runProcessing(req, image); }
+        catch (err) { console.warn('[Viewer2D] pixel processing failed, showing the photograph as stored.', err); }
+        if (req.gen !== _imageGen || image !== _image) { _closeImg(img); continue; }
+        // A failed job is remembered as "the raw photograph" for this key, so the
+        // draw loop does not ask for it again until the settings change.
+        if (_proc && _proc.img !== _image) _closeImg(_proc.img);
+        _proc = { key: req.key, gen: req.gen, img: img || image };
+        _scheduleDraw();
+      }
+    } finally {
+      _procBusy = false;
+      _procRunning = null;
+      const waiters = _procWaiters;
+      _procWaiters = [];
+      waiters.forEach(fn => fn());
+    }
+  }
+
+  function _runProcessing(req, image) {
+    const worker = _getPixelWorker();
+    if (!worker) {
+      return new Promise((resolve, reject) => {
+        setTimeout(() => { try { resolve(_processSync(req, image, req.gen)); } catch (err) { reject(err); } }, 0);
+      });
+    }
+    return createImageBitmap(image).then(bitmap => new Promise((resolve, reject) => {
+      const id = ++_pixelCallId;
+      _pixelCalls.set(id, { resolve, reject });
+      worker.postMessage({ id, imageId: req.gen, job: req.job, bitmap }, [bitmap]);
+    })).catch(err => {
+      // The worker died or cannot decode here: do this one on the main thread.
+      if (_pixelWorkerBroken) return _processSync(req, image, req.gen);
+      throw err;
+    });
+  }
+
+  function _getPixelWorker() {
+    if (_pixelWorker) return _pixelWorker;
+    if (_pixelWorkerBroken || typeof Worker === 'undefined' || typeof OffscreenCanvas === 'undefined'
+        || typeof createImageBitmap === 'undefined') return null;
+    try {
+      _pixelWorker = new Worker(PIXEL_WORKER_URL);
+    } catch (_) {
+      _pixelWorkerBroken = true;
+      return null;
+    }
+    _pixelWorker.onmessage = (e) => {
+      const call = _pixelCalls.get(e.data.id);
+      if (!call) { _closeImg(e.data.bitmap); return; }
+      _pixelCalls.delete(e.data.id);
+      if (e.data.error) call.reject(new Error(e.data.error));
+      else call.resolve(e.data.bitmap);
+    };
+    _pixelWorker.onerror = () => {
+      _pixelWorkerBroken = true;
+      const calls = [..._pixelCalls.values()];
+      _pixelCalls.clear();
+      _pixelWorker?.terminate();
+      _pixelWorker = null;
+      calls.forEach(c => c.reject(new Error('pixel worker failed')));
+    };
+    return _pixelWorker;
+  }
+
+  /** The same job on the calling thread: the fallback, and the synchronous answer
+   *  a capture needs when the worker has not delivered yet. Returns a canvas. */
+  function _processSync(req, image, gen) {
+    if (typeof PixelOps2D === 'undefined') throw new Error('PixelOps2D not loaded');
+    const w = image.naturalWidth, h = image.naturalHeight;
     const off = document.createElement('canvas');
     off.width = w;
     off.height = h;
     const octx = off.getContext('2d', { willReadFrequently: true });
-    octx.drawImage(_image, 0, 0);
+    octx.drawImage(image, 0, 0);
     const frame = octx.getImageData(0, 0, w, h);
-    const lut = _channelLuts();
-    const flat = _adjust.flatten ? _flattenMap(w, h) : null;
-    const d = frame.data;
-    for (let y = 0, i = 0; y < h; y++) {
-      const row = flat ? (y / FLAT_SCALE | 0) * flat.w : 0;
-      for (let x = 0; x < w; x++, i += 4) {
-        const gain = flat ? flat.gain[row + (x / FLAT_SCALE | 0)] : 1;
-        d[i] = lut.r[Math.min(255, d[i] * gain) | 0];
-        d[i + 1] = lut.g[Math.min(255, d[i + 1] * gain) | 0];
-        d[i + 2] = lut.b[Math.min(255, d[i + 2] * gain) | 0];
-      }
-    }
+    if (_mainCache.gen !== gen) _mainCache = { gen };
+    const sample = (sw, sh) => {
+      const small = document.createElement('canvas');
+      small.width = sw;
+      small.height = sh;
+      const sctx = small.getContext('2d', { willReadFrequently: true });
+      sctx.drawImage(image, 0, 0, sw, sh);
+      return sctx.getImageData(0, 0, sw, sh).data;
+    };
+    PixelOps2D.run(req.job, frame.data, w, h, sample, _mainCache);
     octx.putImageData(frame, 0, 0);
-    _adjusted = off;
     return off;
   }
 
-  function _channelLuts() {
-    const a = _adjust;
-    const k = 1 + a.contrast / 100, br = a.brightness / 100, g = 1 / Math.max(0.1, a.gamma);
-    const build = (wb) => {
-      const lut = new Uint8ClampedArray(256);
-      for (let v = 0; v < 256; v++) {
-        const x = _unit(((v / 255) * wb - 0.5) * k + 0.5 + br);
-        lut[v] = Math.round(Math.pow(x, g) * 255);
-      }
-      return lut;
-    };
-    return { r: build(a.wbRed), g: build(1), b: build(a.wbBlue) };
+  /** Resolves once the rendering for the current settings has landed. */
+  function whenProcessed() {
+    _displaySource();
+    if (!_procBusy && !_procPending) return Promise.resolve();
+    return new Promise(resolve => _procWaiters.push(resolve));
   }
 
-  /**
-   * gain(x, y) = mean illumination / local illumination, on a coarse map.
-   * The illumination is modelled as a quadratic surface fitted by least squares
-   * to the DARK cells only (the lower part of the luminance distribution, i.e.
-   * the matte background) — a smooth model cannot follow the embryo, so the
-   * specimen keeps its own contrast while the vignette is levelled.
-   */
-  function _flattenMap(w, h) {
-    if (_flatMap) return _flatMap;
-    const cw = Math.ceil(w / FLAT_SCALE), ch = Math.ceil(h / FLAT_SCALE);
-    const small = document.createElement('canvas');
-    small.width = cw;
-    small.height = ch;
-    const sctx = small.getContext('2d', { willReadFrequently: true });
-    sctx.drawImage(_image, 0, 0, cw, ch);
-    const px = sctx.getImageData(0, 0, cw, ch).data;
-    const lum = new Float32Array(cw * ch);
-    for (let i = 0; i < cw * ch; i++) lum[i] = 0.299 * px[i * 4] + 0.587 * px[i * 4 + 1] + 0.114 * px[i * 4 + 2];
-    const cutoff = _percentile(lum, FLAT_BACKGROUND_FRACTION);
-    const coef = _fitQuadratic(lum, cw, ch, cutoff);
-    const gain = new Float32Array(cw * ch);
-    let mean = 0;
-    for (let y = 0; y < ch; y++) for (let x = 0; x < cw; x++) mean += _quadratic(coef, x / cw, y / ch);
-    mean /= cw * ch;
-    for (let y = 0; y < ch; y++) {
-      for (let x = 0; x < cw; x++) {
-        gain[y * cw + x] = Math.max(0.5, Math.min(3, mean / Math.max(1, _quadratic(coef, x / cw, y / ch))));
-      }
-    }
-    _flatMap = { gain, w: cw, h: ch };
-    return _flatMap;
+  /** The source for a capture: exact for the current settings, never a stale one. */
+  function _exactSource() {
+    const want = _wantedProcessing();
+    if (!want || !_image) return _image;
+    if (_proc && _proc.key === want.key && _proc.gen === _imageGen) return _proc.img;
+    try { return _processSync({ ...want, gen: _imageGen }, _image, _imageGen); }
+    catch (_) { return _image; }
   }
 
-  function _percentile(values, fraction) {
-    const sorted = Float32Array.from(values).sort();
-    return sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * fraction))];
+  // ── Stain isolation ────────────────────────────────────────────────────────
+  // The maths (and its rationale) lives in PixelOps2D.applyIsolation.
+  function setIsolateStain(on) {
+    _isolate = Boolean(on);
+    _scheduleDraw();
   }
 
-  function _quadratic(c, x, y) {
-    return c[0] + c[1] * x + c[2] * y + c[3] * x * x + c[4] * y * y + c[5] * x * y;
-  }
-
-  /** Least-squares fit of z = c0 + c1·x + c2·y + c3·x² + c4·y² + c5·xy over cells with z ≤ cutoff. */
-  function _fitQuadratic(lum, cw, ch, cutoff) {
-    const n = 6, ata = Array.from({ length: n }, () => new Float64Array(n)), atb = new Float64Array(n);
-    for (let y = 0; y < ch; y++) {
-      for (let x = 0; x < cw; x++) {
-        const z = lum[y * cw + x];
-        if (z > cutoff) continue;
-        const u = x / cw, v = y / ch, row = [1, u, v, u * u, v * v, u * v];
-        for (let i = 0; i < n; i++) {
-          atb[i] += row[i] * z;
-          for (let j = 0; j < n; j++) ata[i][j] += row[i] * row[j];
-        }
-      }
-    }
-    return _solve(ata, atb);
-  }
-
-  /** Gaussian elimination with partial pivoting; a singular system yields a flat surface. */
-  function _solve(a, b) {
-    const n = b.length, m = a.map((row, i) => [...row, b[i]]);
-    for (let col = 0; col < n; col++) {
-      let pivot = col;
-      for (let r = col + 1; r < n; r++) if (Math.abs(m[r][col]) > Math.abs(m[pivot][col])) pivot = r;
-      if (Math.abs(m[pivot][col]) < 1e-12) return [b[0] / Math.max(1, a[0][0]), 0, 0, 0, 0, 0];
-      [m[col], m[pivot]] = [m[pivot], m[col]];
-      for (let r = 0; r < n; r++) {
-        if (r === col) continue;
-        const f = m[r][col] / m[col][col];
-        for (let c = col; c <= n; c++) m[r][c] -= f * m[col][c];
-      }
-    }
-    return m.map((row, i) => row[n] / row[i]);
-  }
+  function isIsolateStain() { return _isolate; }
 
   /**
    * Label placement. `labelOffset` is {x, y} in IMAGE pixels from the default
@@ -621,93 +752,6 @@ const Viewer2D = (() => {
     };
   }
 
-  // ── Stain isolation ────────────────────────────────────────────────────────
-  function setIsolateStain(on) {
-    _isolate = Boolean(on);
-    _scheduleDraw();
-  }
-
-  function isIsolateStain() { return _isolate; }
-
-  /**
-   * Stain isolation — a display aid, nothing measured reads it.
-   *
-   * X-gal lowers red and green far more than blue, so a stained pixel has
-   * B/R well above 1 (measured 2 to 4 in the densest cores) while unstained
-   * tissue sits near 0.6. The term is gated by a TISSUE CONTEXT — the local
-   * mean of "yellowness" (R+G)/2 − B over a ~40 px window — because the
-   * matte background carries blue speckles that would otherwise light up: a
-   * stain is something blue INSIDE yellow tissue. The gate is low (5) on
-   * purpose: a wide stained trunk drags the local mean down to 6–9 while
-   * the background never exceeds 2–6. The specimen is painted in dimmed grey
-   * and the stain in cyan.
-   */
-  const ISO_RATIO_LO = 1.0, ISO_RATIO_HI = 1.8;   // B/R mapped to 0..1
-  const ISO_CTX_SCALE = 4, ISO_CTX_RADIUS = 5;    // context map: ¼ res, 5-cell box ≈ 40 px
-  const ISO_CTX_MIN = 5;                          // tissue-context gate
-
-  function _isolation() {
-    if (_isolated) return _isolated;
-    const w = _image.naturalWidth, h = _image.naturalHeight;
-    const off = document.createElement('canvas');
-    off.width = w;
-    off.height = h;
-    const octx = off.getContext('2d', { willReadFrequently: true });
-    octx.drawImage(_image, 0, 0);
-    const frame = octx.getImageData(0, 0, w, h);
-    const ctxMap = _tissueContext(w, h);
-    const d = frame.data;
-    for (let y = 0, i = 0; y < h; y++) {
-      const row = (y / ISO_CTX_SCALE | 0) * ctxMap.w;
-      for (let x = 0; x < w; x++, i += 4) {
-        const r = d[i], g = d[i + 1], b = d[i + 2];
-        const lum = 0.299 * r + 0.587 * g + 0.114 * b;
-        const tissue = ctxMap.data[row + (x / ISO_CTX_SCALE | 0)];
-        const v = tissue > ISO_CTX_MIN ? _unit((b / (r + 1) - ISO_RATIO_LO) / (ISO_RATIO_HI - ISO_RATIO_LO)) : 0;
-        const grey = lum * 0.35 * (1 - v);
-        d[i] = grey + v * 90;
-        d[i + 1] = grey + v * 160;
-        d[i + 2] = grey + v * 255;
-      }
-    }
-    octx.putImageData(frame, 0, 0);
-    _isolated = off;
-    return off;
-  }
-
-  function _unit(v) { return v < 0 ? 0 : v > 1 ? 1 : v; }
-
-  /** Box-blurred yellowness at 1/ISO_CTX_SCALE resolution (summed-area table). */
-  function _tissueContext(w, h) {
-    const cw = Math.ceil(w / ISO_CTX_SCALE), ch = Math.ceil(h / ISO_CTX_SCALE);
-    const small = document.createElement('canvas');
-    small.width = cw;
-    small.height = ch;
-    const sctx = small.getContext('2d', { willReadFrequently: true });
-    sctx.drawImage(_image, 0, 0, cw, ch);
-    const px = sctx.getImageData(0, 0, cw, ch).data;
-    const sat = new Float32Array((cw + 1) * (ch + 1));
-    for (let y = 1; y <= ch; y++) {
-      let run = 0;
-      for (let x = 1; x <= cw; x++) {
-        const i = ((y - 1) * cw + (x - 1)) * 4;
-        run += Math.max(0, (px[i] + px[i + 1]) / 2 - px[i + 2]);
-        sat[y * (cw + 1) + x] = sat[(y - 1) * (cw + 1) + x] + run;
-      }
-    }
-    const data = new Float32Array(cw * ch);
-    const r = ISO_CTX_RADIUS, stride = cw + 1;
-    for (let y = 0; y < ch; y++) {
-      const y0 = Math.max(0, y - r), y1 = Math.min(ch, y + r + 1);
-      for (let x = 0; x < cw; x++) {
-        const x0 = Math.max(0, x - r), x1 = Math.min(cw, x + r + 1);
-        const sum = sat[y1 * stride + x1] - sat[y0 * stride + x1] - sat[y1 * stride + x0] + sat[y0 * stride + x0];
-        data[y * cw + x] = sum / ((y1 - y0) * (x1 - x0));
-      }
-    }
-    return { data, w: cw, h: ch };
-  }
-
   // ── Drawing ────────────────────────────────────────────────────────────────
   function _scheduleDraw() {
     if (_raf) return;
@@ -719,17 +763,12 @@ const Viewer2D = (() => {
     if (!_ctx) return;
     const dpr = window.devicePixelRatio || 1;
     _ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    _ctx.fillStyle = getComputedStyle(_container).backgroundColor || '#000';
+    _ctx.fillStyle = _bgColor;
     _ctx.fillRect(0, 0, _cssWidth(), _cssHeight());
     if (_image) _drawImage();
     _drawOverlays();
     _drawMeasurements();
     _drawScaleBar();
-  }
-
-  function _displaySource() {
-    if (_isolate) return _isolation();
-    return _adjust ? _adjustedImage() : _image;
   }
 
   function _drawImage() {
@@ -751,9 +790,12 @@ const Viewer2D = (() => {
   function _drawMeasurements() {
     _labelRects = [];
     for (const m of _measurements) {
-      if (m.visible === false || !Array.isArray(m.points) || m.points.length < 2) continue;
-      const a = _toCanvas(m.points[0].normalized.x * _imgW, m.points[0].normalized.y * _imgH);
-      const b = _toCanvas(m.points[1].normalized.x * _imgW, m.points[1].normalized.y * _imgH);
+      if (!m || m.visible === false || !Array.isArray(m.points) || m.points.length < 2) continue;
+      // A stored measurement is data: one malformed entry must not take the frame (and the scale bar) down.
+      const n0 = m.points[0]?.normalized, n1 = m.points[1]?.normalized;
+      if (!n0 || !n1 || !Number.isFinite(n0.x) || !Number.isFinite(n0.y) || !Number.isFinite(n1.x) || !Number.isFinite(n1.y)) continue;
+      const a = _toCanvas(n0.x * _imgW, n0.y * _imgH);
+      const b = _toCanvas(n1.x * _imgW, n1.y * _imgH);
       _ctx.lineWidth = 2;
       _ctx.strokeStyle = m.color || '#00FFFF';
       _ctx.fillStyle = m.color || '#00FFFF';
@@ -819,8 +861,11 @@ const Viewer2D = (() => {
   // ── Export ─────────────────────────────────────────────────────────────────
   function toBlob(options = {}) {
     if (!_canvas) return Promise.resolve(null);
-    _draw();
-    return new Promise(resolve => _canvas.toBlob(resolve, options.mime || 'image/png', options.quality || 0.95));
+    // A capture shows the settings as they are now, not the last rendering that landed.
+    return whenProcessed().then(() => {
+      _draw();
+      return new Promise(resolve => _canvas.toBlob(resolve, options.mime || 'image/png', options.quality || 0.95));
+    });
   }
 
   function getCanvas() { return _canvas; }
@@ -828,7 +873,7 @@ const Viewer2D = (() => {
   /** What is on screen (adjusted / isolated, mirrored, rotated) at native resolution — the Studio's input. */
   function getNativeCanvas() {
     if (!_image) return null;
-    const src = _displaySource();
+    const src = _exactSource();
     const o = _orientedSize();
     const out = document.createElement('canvas');
     out.width = Math.round(o.w);
@@ -851,7 +896,7 @@ const Viewer2D = (() => {
     onMeasurePoint, onLoadState, setMeasurements, getPhysicalCalibration,
     setMeasurementTextSize, getMeasurementTextSize, setShowMeasurementLabels, onLabelMove, getPixelSizeUm,
     setIsolateStain, isIsolateStain,
-    toBlob, getCanvas, getNativeCanvas
+    toBlob, getCanvas, getNativeCanvas, whenProcessed
   };
 })();
 

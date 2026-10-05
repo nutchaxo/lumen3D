@@ -10,6 +10,10 @@
  *   GET  ?action=get&id=<id>       → full metadata.json object
  *   POST ?action=save&id=<id>      → writes metadata.json, returns {ok}
  *   POST ?action=rebuild_catalog   → regenerates DATA_WEB/catalog.json
+ *
+ * Every metadata.json write is a read-modify-write under a per-file lock, written
+ * through a temp sibling + rename: a reader (the catalog, a viewer) never sees a
+ * truncated document, and two concurrent saves can no longer lose one another.
  */
 
 declare(strict_types=1);
@@ -71,27 +75,28 @@ function json_out(array $data, int $code = 200) {
 
 // ── Paths ────────────────────────────────────────────────────────────────────
 $ROOT      = dirname(__DIR__);                  // WebPlatform root
-$DATA_WEB  = $ROOT . DIRECTORY_SEPARATOR . 'DATA_WEB';
+$DATA_WEB  = data_web();
 $TYPES     = LUMEN_DATASET_TYPES;   // one shared vocabulary — see api/_admin_lib.php
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
 function read_json(string $path): ?array {
     if (!file_exists($path)) return null;
-    $raw = file_get_contents($path);
+    $raw = @file_get_contents($path);
     return $raw !== false ? (json_decode($raw, true) ?: null) : null;
 }
 
+/** A document about to be written back: `{}` maps survive the round trip. */
+function read_json_doc(string $path): ?array {
+    return lumen_read_json_doc($path) ?: null;
+}
+
+/** Atomic write (temp sibling + rename). json_encode returns false on malformed
+ *  UTF-8; writing that would blank the file — refused instead (Rule 1.1). */
 function write_json(string $path, array $data): bool {
-    $dir = dirname($path);
-    if (!is_dir($dir)) admin_make_dir($dir);
-    // json_encode returns false on malformed UTF-8. Writing that would truncate the
-    // file to nothing — refuse instead of destroying the document (Rule 1.1).
-    $json = json_encode($data, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE);
-    if ($json === false) return false;
-    if (file_put_contents($path, $json) === false) return false;
-    admin_fix_file_mode($path);
-    return true;
+    $ok = lumen_write_json_doc($path, $data);
+    if ($ok) lumen_catalog_invalidate();
+    return $ok;
 }
 
 // ── Dataset gallery (operator-attached images) ───────────────────────────────
@@ -131,7 +136,7 @@ function gallery_rel($file): ?string {
         $name = substr($name, strlen(GALLERY_DIRNAME) + 1);
     }
     if (strpos($name, '/') !== false) return null;
-    return preg_match('/^[A-Za-z0-9][A-Za-z0-9._-]{0,80}\.(webp|png|jpg|jpeg|gif)$/', $name) ? $name : null;
+    return preg_match('/^[A-Za-z0-9][A-Za-z0-9._-]{0,80}\.(webp|png|jpg|jpeg|gif)$/D', $name) ? $name : null;
 }
 
 /**
@@ -204,49 +209,63 @@ function gallery_reconcile(array $meta, string $ds_dir, $fallback = null): array
     return array_slice($out, 0, MAX_GALLERY_ITEMS);
 }
 
+/** The largest gallery image this host accepts as a raw request body: the platform's
+ *  ceiling, lowered to post_max_size when PHP is configured tighter (a body over it
+ *  arrives empty). The admin reads it from the `list` answer. */
+function gallery_max_bytes(): int {
+    $post = lumen_up_ini_bytes((string)(ini_get('post_max_size') ?: '8M'));
+    return $post > 0 ? min(MAX_GALLERY_BYTES, $post) : MAX_GALLERY_BYTES;
+}
+
 /** @return array{0:int,1:array} (http status, payload) */
 function gallery_add(string $id, string $ds_dir, array $body): array {
     if (!is_dir($ds_dir)) return [404, ['error' => 'Dataset not found']];
-    $image = (string)($body['image'] ?? '');
-    if (strncmp($image, 'data:image/', 11) !== 0) return [400, ['error' => 'Invalid image format']];
-    $comma = strpos($image, ',');
-    $raw = $comma === false ? false : base64_decode(substr($image, $comma + 1), false);
+    $raw = isset($body['raw']) && is_string($body['raw']) ? $body['raw'] : null;
+    if ($raw === null) {
+        // Legacy JSON form: a data: URL. The magic-byte check below applies to both.
+        $image = lumen_str($body['image'] ?? null) ?? '';
+        if (strncmp($image, 'data:image/', 11) !== 0) return [400, ['error' => 'Invalid image format']];
+        $comma = strpos($image, ',');
+        $raw = $comma === false ? false : base64_decode(substr($image, $comma + 1), false);
+    }
     if ($raw === false || $raw === '') return [400, ['error' => 'Invalid image data']];
     if (strlen($raw) > MAX_GALLERY_BYTES) return [400, ['error' => 'Image too large']];
     $ext = gallery_ext($raw);
     if ($ext === null) return [400, ['error' => 'Not a valid image (expected WebP/PNG/JPEG/GIF)']];
 
     $meta_path = $ds_dir . DIRECTORY_SEPARATOR . 'metadata.json';
-    $meta = read_json($meta_path) ?: [];
-    $current = gallery_reconcile($meta, $ds_dir);
-    if (count($current) >= MAX_GALLERY_ITEMS) {
-        return [409, ['error' => 'Gallery full (max ' . MAX_GALLERY_ITEMS . ' images)']];
-    }
+    return lumen_with_lock($meta_path, function () use ($id, $ds_dir, $meta_path, $raw, $ext, $body) {
+        $meta = read_json_doc($meta_path) ?: [];
+        $current = gallery_reconcile($meta, $ds_dir);
+        if (count($current) >= MAX_GALLERY_ITEMS) {
+            return [409, ['error' => 'Gallery full (max ' . MAX_GALLERY_ITEMS . ' images)']];
+        }
 
-    $gdir = $ds_dir . DIRECTORY_SEPARATOR . GALLERY_DIRNAME;
-    if (!is_dir($gdir) && !admin_make_dir($gdir)) return [500, ['error' => 'Write failed']];
-    $stem = gallery_stem((string)($body['filename'] ?? $body['name'] ?? ''));
-    $name = "$stem.$ext";
-    $i = 1;
-    while (is_file($gdir . DIRECTORY_SEPARATOR . $name)) { $name = "$stem-$i.$ext"; $i++; }
-    if (@file_put_contents($gdir . DIRECTORY_SEPARATOR . $name, $raw) === false) {
-        return [500, ['error' => 'Write failed']];
-    }
-    admin_fix_file_mode($gdir . DIRECTORY_SEPARATOR . $name);
+        $gdir = $ds_dir . DIRECTORY_SEPARATOR . GALLERY_DIRNAME;
+        if (!is_dir($gdir) && !admin_make_dir($gdir)) return [500, ['error' => 'Write failed']];
+        $stem = gallery_stem(lumen_str($body['filename'] ?? null) ?? lumen_str($body['name'] ?? null) ?? '');
+        $name = "$stem.$ext";
+        $i = 1;
+        while (is_file($gdir . DIRECTORY_SEPARATOR . $name)) { $name = "$stem-$i.$ext"; $i++; }
+        if (@file_put_contents($gdir . DIRECTORY_SEPARATOR . $name, $raw) === false) {
+            return [500, ['error' => 'Write failed']];
+        }
+        admin_fix_file_mode($gdir . DIRECTORY_SEPARATOR . $name);
 
-    $entry = gallery_entry($name, [
-        'title'   => $body['title'] ?? '',
-        'caption' => $body['caption'] ?? '',
-        'added'   => date('c'),
-    ]);
-    $current[] = $entry;
-    $meta['gallery'] = $current;
-    $meta['_lastModified'] = date('c');
-    if (!write_json($meta_path, $meta)) return [500, ['error' => 'Write failed']];
-    return [200, [
-        'ok' => true, 'item' => $entry, 'gallery' => $current,
-        'url' => 'DATA_WEB/' . $id . '/' . GALLERY_DIRNAME . '/' . $name,
-    ]];
+        $entry = gallery_entry($name, [
+            'title'   => $body['title'] ?? '',
+            'caption' => $body['caption'] ?? '',
+            'added'   => date('c'),
+        ]);
+        $current[] = $entry;
+        $meta['gallery'] = $current;
+        $meta['_lastModified'] = date('c');
+        if (!write_json($meta_path, $meta)) return [500, ['error' => 'Write failed']];
+        return [200, [
+            'ok' => true, 'item' => $entry, 'gallery' => $current,
+            'url' => 'DATA_WEB/' . $id . '/' . GALLERY_DIRNAME . '/' . $name,
+        ]];
+    });
 }
 
 /** @return array{0:int,1:array} */
@@ -257,11 +276,13 @@ function gallery_delete(string $ds_dir, $file): array {
     if (is_file($target) && !@unlink($target)) return [500, ['error' => 'Delete failed']];
 
     $meta_path = $ds_dir . DIRECTORY_SEPARATOR . 'metadata.json';
-    $meta = read_json($meta_path) ?: [];
-    $meta['gallery'] = gallery_reconcile($meta, $ds_dir);
-    $meta['_lastModified'] = date('c');
-    if (!write_json($meta_path, $meta)) return [500, ['error' => 'Write failed']];
-    return [200, ['ok' => true, 'gallery' => $meta['gallery']]];
+    return lumen_with_lock($meta_path, function () use ($meta_path, $ds_dir) {
+        $meta = read_json_doc($meta_path) ?: [];
+        $meta['gallery'] = gallery_reconcile($meta, $ds_dir);
+        $meta['_lastModified'] = date('c');
+        if (!write_json($meta_path, $meta)) return [500, ['error' => 'Write failed']];
+        return [200, ['ok' => true, 'gallery' => $meta['gallery']]];
+    });
 }
 
 /**
@@ -273,6 +294,25 @@ function gallery_delete(string $ds_dir, $file): array {
  * id the gate refuses must never reach the filesystem — a `save` on an unresolvable
  * id would otherwise mint a parallel tree beside the real dataset instead of failing.
  */
+/**
+ * Bytes of a posted thumbnail `{image: "data:image/…;base64,…"}`, or exit 400.
+ * Strict base64, a size cap and the MAGIC BYTES (WebP or PNG — what the editor
+ * produces and what the staged twin accepts): the file is served as an image to
+ * every visitor, so arbitrary bytes must not land under that name.
+ */
+const MAX_THUMBNAIL_BYTES = 5242880;
+function thumbnail_bytes(array $body): string {
+    $img = lumen_str($body['image'] ?? null) ?? '';
+    if (strncmp($img, 'data:image/', 11) !== 0) json_out(['error' => 'Invalid image format'], 400);
+    $comma = strpos($img, ',');
+    $bytes = $comma === false ? false : base64_decode(substr($img, $comma + 1), true);
+    if ($bytes === false || $bytes === '') json_out(['error' => 'Base64 decode failed'], 400);
+    if (strlen($bytes) > MAX_THUMBNAIL_BYTES) json_out(['error' => 'Image too large'], 400);
+    $ext = gallery_ext($bytes);
+    if ($ext !== 'webp' && $ext !== 'png') json_out(['error' => 'not_an_image'], 400);
+    return $bytes;
+}
+
 function dataset_dir(string $id): string {
     $safe = admin_safe_dataset($id);
     if ($safe === null) json_out(['error' => 'Invalid id'], 400);
@@ -287,7 +327,7 @@ function dataset_dir(string $id): string {
  * leaves `type` out of what it posts) still mounts in the editor.
  */
 function get_dataset_meta(string $id, string $ds_dir): ?array {
-    $meta = read_json($ds_dir . DIRECTORY_SEPARATOR . 'metadata.json');
+    $meta = read_json_doc($ds_dir . DIRECTORY_SEPARATOR . 'metadata.json');
     if (!$meta) return null;
     [$type, $folder] = explode('/', $id, 2);
     $meta['id']         = $id;
@@ -306,24 +346,26 @@ function get_dataset_meta(string $id, string $ds_dir): ?array {
  * @return array [status, payload]
  */
 function save_dataset_meta(string $id, string $ds_dir, array $body): array {
-    if (!is_dir($ds_dir) && !@mkdir($ds_dir, 0775, true)) return [500, ['error' => 'Write failed']];
+    if (!is_dir($ds_dir) && !admin_make_dir($ds_dir)) return [500, ['error' => 'Write failed']];
     $path   = $ds_dir . DIRECTORY_SEPARATOR . 'metadata.json';
-    $stored = read_json($path);
-    $meta   = is_array($stored) ? $stored : [];
-    foreach ($body as $k => $v) $meta[$k] = $v;
-    [$type, $folder] = explode('/', $id, 2);
-    $meta['id']           = $id;
-    $meta['type']         = $type;
-    $meta['folderName']   = $folder;
-    $meta['configured']   = true;
-    $meta['lastModified'] = date('c');
-    // The posted `gallery` decides ORDER and CAPTIONS only; which files exist is
-    // decided by the folder. Keeps a stale draft from resurrecting a deleted image
-    // or dropping one uploaded while the form was open.
-    $gallery = gallery_reconcile($meta, $ds_dir, is_array($stored) ? ($stored['gallery'] ?? null) : null);
-    if ($gallery) $meta['gallery'] = $gallery; else unset($meta['gallery']);
-    if (!write_json($path, $meta)) return [500, ['error' => 'Write failed']];
-    return [200, ['ok' => true, 'path' => $path]];
+    return lumen_with_lock($path, function () use ($id, $ds_dir, $path, $body) {
+        $stored = read_json_doc($path);
+        $meta   = is_array($stored) ? $stored : [];
+        foreach ($body as $k => $v) $meta[$k] = $v;
+        [$type, $folder] = explode('/', $id, 2);
+        $meta['id']           = $id;
+        $meta['type']         = $type;
+        $meta['folderName']   = $folder;
+        $meta['configured']   = true;
+        $meta['lastModified'] = date('c');
+        // The posted `gallery` decides ORDER and CAPTIONS only; which files exist is
+        // decided by the folder. Keeps a stale draft from resurrecting a deleted image
+        // or dropping one uploaded while the form was open.
+        $gallery = gallery_reconcile($meta, $ds_dir, is_array($stored) ? ($stored['gallery'] ?? null) : null);
+        if ($gallery) $meta['gallery'] = $gallery; else unset($meta['gallery']);
+        if (!write_json($path, $meta)) return [500, ['error' => 'Write failed']];
+        return [200, ['ok' => true, 'path' => $path]];
+    });
 }
 
 /** $ds_dir is passed in: the caller has already walked the directory, and a folder
@@ -339,8 +381,11 @@ function list_datasets(): array {
     foreach ($TYPES as $type) {
         $type_dir = $DATA_WEB . DIRECTORY_SEPARATOR . $type;
         if (!is_dir($type_dir)) continue;
-        foreach (scandir($type_dir) as $name) {
-            if ($name === '.' || $name === '..') continue;
+        foreach (scandir($type_dir) ?: [] as $name) {
+            // Dot entries are never datasets: '.', '..', and the '.replaced-*' /
+            // '.incoming-*' trees a publish parks for an instant (a crash in between
+            // would otherwise list a ghost the id gate then refuses to open).
+            if ($name === '' || $name[0] === '.') continue;
             $ds_dir = $type_dir . DIRECTORY_SEPARATOR . $name;
             if (!is_dir($ds_dir)) continue;
             $id   = $type . '/' . $name;
@@ -375,184 +420,17 @@ function list_datasets(): array {
     return $result;
 }
 
-/**
- * Rebuild DATA_WEB/catalog.json from all metadata.json files.
- * Mirrors the logic of generate_catalog.py in pure PHP.
- */
-function rebuild_catalog(): array {
-    global $DATA_WEB, $TYPES;
-
-    $CHANNEL_COLORS = ['#00FF66', '#FF3DFF', '#2F6BFF', '#FF3030'];
-    $catalog = ['datasets' => [], 'last_updated' => date('c')];
-
-    foreach ($TYPES as $type) {
-        $type_dir = $DATA_WEB . DIRECTORY_SEPARATOR . $type;
-        if (!is_dir($type_dir)) continue;
-        foreach (scandir($type_dir) as $name) {
-            if ($name[0] === '.') continue;
-            $ds_dir   = $type_dir . DIRECTORY_SEPARATOR . $name;
-            if (!is_dir($ds_dir)) continue;
-            $meta     = read_json($ds_dir . DIRECTORY_SEPARATOR . 'metadata.json');
-            if (!$meta) continue;
-            if (!empty($meta['hidden'])) continue;   // hidden datasets are excluded from the public catalog
-
-            $id = $type . '/' . $name;
-
-            // Channels
-            $raw_channels = $meta['channels'] ?? [];
-            $n_ch = (int)($meta['dimensions']['c'] ?? count($raw_channels));
-            $channels_out = [];
-            for ($i = 0; $i < $n_ch; $i++) {
-                $raw = is_array($raw_channels) ? ($raw_channels[$i] ?? null) : null;
-                // Admin may store channels as [{name, color, min, max, gamma, active}]
-                if (is_array($raw)) {
-                    $channels_out[] = [
-                        'name'   => $raw['name']  ?? "Channel " . ($i+1),
-                        'color'  => $raw['color']  ?? $CHANNEL_COLORS[$i % 4],
-                        'min'    => $raw['min']    ?? 0.0,
-                        'max'    => $raw['max']    ?? 1.0,
-                        'gamma'  => $raw['gamma']  ?? 1.0,
-                        'active' => $raw['active'] ?? true,
-                    ];
-                } else {
-                    // Legacy: channels is array of strings
-                    $channels_out[] = [
-                        'name'  => (string)($raw ?? "Channel " . ($i+1)),
-                        'color' => $CHANNEL_COLORS[$i % 4],
-                    ];
-                }
-            }
-
-            // Physical calibration
-            $vs = $meta['voxel_size'] ?? [];
-            $dims = $meta['dimensions'] ?? [];
-            $vx = (float)($vs['x'] ?? 1.0);
-            $vy = (float)($vs['y'] ?? $vx);
-            $vz = (float)($vs['z'] ?? 1.0);
-            $sx = (int)($dims['x'] ?? 1);
-            $sy = (int)($dims['y'] ?? 1);
-            $sz = (int)($dims['z'] ?? 1);
-            $physical = [
-                'x' => $sx * $vx, 'y' => $sy * $vy,
-                'z' => $sz > 1 ? (($sz - 1) * $vz + $vz) : $vz,
-                'sliceThickness' => $vz,
-                'voxelX' => $vx, 'voxelY' => $vy, 'voxelZ' => $vz,
-            ];
-
-            // Asset paths
-            $thumb_path = $ds_dir . DIRECTORY_SEPARATOR . 'thumbnail.webp';
-            $slices_dir = $ds_dir . DIRECTORY_SEPARATOR . 'slices';
-            $prev_manifest = $ds_dir . DIRECTORY_SEPARATOR . 'preview' . DIRECTORY_SEPARATOR . 'manifest.json';
-
-            $entry = [
-                // The DIRECTORY is the authority, never metadata.json's own `id`: the
-                // preprocessing pipelines wrote two different shapes into that field
-                // (type-prefixed for volumes, a bare folder name for photographs), and a
-                // dataset moved between type trees would keep the id of where it was.
-                'id'            => $id,
-                'name'          => $meta['name'] ?? $name,
-                'type'          => $type,
-                'stage'         => $meta['stage'] ?? 'Unknown',
-                'stageNumeric'  => $meta['stageNumeric'] ?? 0,
-                'embryo'        => $meta['embryo'] ?? null,
-                'description'   => $meta['description'] ?? null,
-                'tags'          => $meta['tags'] ?? [],
-                'path'          => $id,
-                'channels'      => $channels_out,
-                'dimensions'    => $dims,
-                'voxel_size'    => $vs,
-                // A photograph's extent comes from its pixel pitch, not from voxels.
-                'physicalSizeUm'=> ($type === '2d' && isset($meta['physicalSizeUm'])) ? $meta['physicalSizeUm'] : $physical,
-            ];
-
-            if (file_exists($thumb_path)) {
-                $entry['thumbnail'] = 'DATA_WEB/' . $id . '/thumbnail.webp';
-            }
-            if (isset($meta['qualities'])) {
-                $entry['qualities'] = $meta['qualities'];
-            }
-            if (isset($meta['volumeSources'])) {
-                $entry['volumeSources'] = $meta['volumeSources'];
-            }
-            // 4D / tracking. This builder writes a fixed key list, unlike the Python
-            // server which passes the whole metadata.json through — anything omitted
-            // here is silently absent from the public catalog on a PHP host, so the
-            // timeline, the stabilization and the tracking overlay would work in dev
-            // and quietly do nothing in production.
-            foreach ([
-                'timeline',                     // frame count, interval, acquisition clock
-                'registration',                 // per-timepoint rigid transform + QC
-                'tracking',                     // cell tracks: counts, regions, file paths
-                'acquisitionExtentUm',          // microscope stage frame the tracks live in
-                'optical_section_thickness_um', // exact physical depth
-                'intensityNormalization',       // shared window + per-frame signal levels
-                'relatedIds',
-                'image',                        // 2d: native + preview display copies
-                'pixelSizeUm',                  // 2d: calibrated pixel pitch (scale bar, measures)
-                'acquisition',                  // 2d: microscope, zoom, exposure, dissection date
-                'staining',                     // 2d: what was stained
-                'line',                         // 2d: reporter / strain line
-                'calibrationStatus',
-                'calibrationNote',
-            ] as $k) {
-                if (isset($meta[$k])) {
-                    $entry[$k] = $meta[$k];
-                }
-            }
-
-            // Fallbacks for older datasets that don't have them in metadata.json
-            if (!isset($entry['qualities']) && file_exists($prev_manifest)) {
-                $entry['qualities']['preview'] = read_json($prev_manifest);
-            }
-            if (!isset($entry['qualities']) && is_dir($slices_dir)) {
-                $entry['qualities']['balanced'] = [
-                    'directory' => 'slices', 'maxTextureSize' => 640, 'maxDepthSamples' => 128
-                ];
-                $entry['qualities']['high'] = [
-                    'directory' => 'slices', 'maxTextureSize' => 1024, 'maxDepthSamples' => 192
-                ];
-            }
-            
-            // Volume sources fallback
-            $brick_manifest = $ds_dir . DIRECTORY_SEPARATOR . 'bricks' . DIRECTORY_SEPARATOR . 'manifest.json';
-            if (!isset($entry['volumeSources'])) {
-                if (is_dir($slices_dir)) {
-                    $entry['volumeSources'] = [
-                        ['kind' => 'webstack', 'label' => 'Web slice stack', 'priority' => 0,
-                         'available' => true, 'multiscale' => false,
-                         'path' => 'DATA_WEB/' . $id],
-                    ];
-                } else {
-                    $entry['volumeSources'] = [];
-                }
-                
-                if (file_exists($brick_manifest)) {
-                    array_unshift($entry['volumeSources'], [
-                        'kind' => 'bricks', 'label' => 'Chunked bricks', 'priority' => -1,
-                        'available' => true, 'multiscale' => true,
-                        'path' => 'DATA_WEB/' . $id,
-                        'manifestPath' => 'DATA_WEB/' . $id . '/bricks/manifest.json',
-                    ]);
-                }
-            }
-
-            // Filter nulls
-            $entry = array_filter($entry, fn($v) => $v !== null);
-            $catalog['datasets'][] = $entry;
-        }
-    }
-
-    return $catalog;
-}
+/** The public catalog builder lives in _admin_lib.php (rebuild_catalog, lumen_catalog_json):
+ *  catalog.php, admin.php and the upload publish path use it without this router. */
 
 // ── Router ───────────────────────────────────────────────────────────────────
 if (LUMEN_DATASETS_AS_LIB) {
     return;   // library mode: the caller only wants rebuild_catalog()
 }
 
-$method = $_SERVER['REQUEST_METHOD'];
-$action = $_GET['action'] ?? '';
-$id     = trim($_GET['id'] ?? '', '/');
+$method = $_SERVER['REQUEST_METHOD'] ?? 'GET';
+$action = lumen_str($_GET['action'] ?? null) ?? '';
+$id     = trim(lumen_str($_GET['id'] ?? null) ?? '', '/');
 
 // Every action on this endpoint is admin-only — including the reads. `list`
 // enumerates HIDDEN datasets (list_datasets() reports them with their folder
@@ -583,17 +461,12 @@ if (strncmp($id, LUMEN_STAGING_PREFIX, strlen(LUMEN_STAGING_PREFIX)) === 0) {
             $meta = lumen_staged_dataset($sType, $sFolder);
             json_out($meta ?: ['error' => 'Not found'], $meta ? 200 : 404);
         case 'save':
-            $body = json_decode(file_get_contents('php://input'), true);
+            $body = lumen_request_json();
             if (!is_array($body)) json_out(['error' => 'Invalid JSON body'], 400);
             [$st, $pl] = lumen_up_write_metadata($sType, $sFolder, $body);
             json_out($pl, $st);
         case 'save_thumbnail':
-            $body = json_decode(file_get_contents('php://input'), true) ?: [];
-            $img = (string)($body['image'] ?? '');
-            if (strncmp($img, 'data:image/', 11) !== 0) json_out(['error' => 'Invalid image format'], 400);
-            $comma = strpos($img, ',');
-            $bytes = $comma === false ? false : base64_decode(substr($img, $comma + 1), true);
-            if ($bytes === false || $bytes === '') json_out(['error' => 'Base64 decode failed'], 400);
+            $bytes = thumbnail_bytes(lumen_request_json() ?? []);
             [$st, $pl] = lumen_up_write_thumbnail($sType, $sFolder, $bytes);
             if ($st === 200) $pl['path'] = lumen_staged_blob_url($sType, $sFolder, 'thumbnail.webp');
             json_out($pl, $st);
@@ -625,12 +498,17 @@ switch ($action) {
         // ONE list: an import becomes editable the moment its coarse LOD lands,
         // long before it is published.
         try {
+            lumen_up_recover_publish_leftovers();   // a publish killed between its renames
+        } catch (Throwable $e) {
+            error_log('datasets.php list: publish recovery failed: ' . $e->getMessage());
+        }
+        try {
             $staged = lumen_staged_rows();
         } catch (Throwable $e) {
             error_log('datasets.php list: staged rows unavailable: ' . $e->getMessage());
             $staged = [];
         }
-        json_out(['datasets' => array_merge(list_datasets(), $staged)]);
+        json_out(['datasets' => array_merge(list_datasets(), $staged), 'galleryMaxBytes' => gallery_max_bytes()]);
 
     case 'get':
         if (!$id) json_out(['error' => 'Missing id'], 400);
@@ -641,7 +519,7 @@ switch ($action) {
     case 'save':
         require_auth();
         if (!$id) json_out(['error' => 'Missing id'], 400);
-        $body = json_decode(file_get_contents('php://input'), true);
+        $body = lumen_request_json();
         if (!is_array($body)) json_out(['error' => 'Invalid JSON body'], 400);
         [$st, $pl] = save_dataset_meta($id, dataset_dir($id), $body);
         json_out($pl, $st);
@@ -649,48 +527,40 @@ switch ($action) {
     case 'save_thumbnail':
         require_auth();
         if (!$id) json_out(['error' => 'Missing id'], 400);
-
-        $body = json_decode(file_get_contents('php://input'), true);
-        if (!is_array($body) || empty($body['image'])) json_out(['error' => 'Invalid body or missing image'], 400);
-
-        // Security: only allow safe keys, never allow path traversal
-        if (strpos($id, '..') !== false) json_out(['error' => 'Invalid id'], 400);
-
-        $imgData = $body['image'];
-        if (preg_match('/^data:image\/(\w+);base64,/', $imgData, $type)) {
-            $imgData = substr($imgData, strpos($imgData, ',') + 1);
-            $imgData = base64_decode($imgData);
-            if ($imgData === false) {
-                json_out(['error' => 'Base64 decode failed'], 400);
-            }
-        } else {
-            json_out(['error' => 'Invalid image format'], 400);
-        }
-
+        $bytes = thumbnail_bytes(lumen_request_json() ?? []);
         $ds_dir = dataset_dir($id);
-        if (!is_dir($ds_dir)) {
-            json_out(['error' => 'Dataset directory does not exist'], 404);
-        }
-
-        $thumb_path = $ds_dir . DIRECTORY_SEPARATOR . 'thumbnail.webp';
-        if (file_put_contents($thumb_path, $imgData) === false) {
+        if (!is_dir($ds_dir)) json_out(['error' => 'Dataset directory does not exist'], 404);
+        if (!lumen_write_file_atomic($ds_dir . DIRECTORY_SEPARATOR . 'thumbnail.webp', $bytes)) {
             json_out(['error' => 'Failed to write thumbnail file'], 500);
         }
-
+        lumen_catalog_invalidate();
         json_out(['ok' => true, 'path' => 'DATA_WEB/' . $id . '/thumbnail.webp']);
 
     case 'gallery_add':
         require_auth();
         if (!$id) json_out(['error' => 'Missing id'], 400);
-        $body = json_decode(file_get_contents('php://input'), true);
-        if (!is_array($body)) json_out(['error' => 'Invalid JSON body'], 400);
+        $ctype = strtolower(trim(explode(';', (string)($_SERVER['CONTENT_TYPE'] ?? ($_SERVER['HTTP_CONTENT_TYPE'] ?? '')))[0]));
+        if (strncmp($ctype, 'image/', 6) === 0) {
+            // The image as its raw bytes (no base64 inside JSON, +33%); name and
+            // caption in the query string. Refused before reading when it cannot fit.
+            $len = (int)($_SERVER['CONTENT_LENGTH'] ?? 0);
+            if ($len > gallery_max_bytes()) json_out(['error' => 'too_large', 'limit' => gallery_max_bytes()], 413);
+            $raw = file_get_contents('php://input', false, null, 0, MAX_GALLERY_BYTES + 1);
+            $body = ['raw' => is_string($raw) ? $raw : '',
+                     'filename' => lumen_str($_GET['filename'] ?? null) ?? '',
+                     'title'    => lumen_str($_GET['title'] ?? null) ?? '',
+                     'caption'  => lumen_str($_GET['caption'] ?? null) ?? ''];
+        } else {
+            $body = lumen_request_json();
+            if (!is_array($body)) json_out(['error' => 'Invalid JSON body'], 400);
+        }
         [$st, $pl] = gallery_add($id, dataset_dir($id), $body);
         json_out($pl, $st);
 
     case 'gallery_delete':
         require_auth();
         if (!$id) json_out(['error' => 'Missing id'], 400);
-        $body = json_decode(file_get_contents('php://input'), true) ?: [];
+        $body = lumen_request_json() ?? [];
         [$st, $pl] = gallery_delete(dataset_dir($id), $body['file'] ?? null);
         json_out($pl, $st);
 
@@ -699,22 +569,27 @@ switch ($action) {
         $catalog = rebuild_catalog();
         $catalog_path = $DATA_WEB . DIRECTORY_SEPARATOR . 'catalog.json';
         if (!write_json($catalog_path, $catalog)) json_out(['error' => 'Catalog write failed'], 500);
-        json_out(['ok' => true, 'count' => count($catalog['datasets'])]);
+        json_out(['ok' => true, 'count' => count($catalog)]);
 
     case 'set_visibility':
         require_auth();
         if (!$id) json_out(['error' => 'Missing id'], 400);
-        if (strpos($id, '..') !== false) json_out(['error' => 'Invalid id'], 400);
-        $body = json_decode(file_get_contents('php://input'), true) ?: [];
+        $body = lumen_request_json() ?? [];
         $meta_path = dataset_dir($id) . DIRECTORY_SEPARATOR . 'metadata.json';
-        $meta = read_json($meta_path);
-        if (!$meta) json_out(['error' => 'Not found'], 404);
-        $meta['hidden'] = !empty($body['hidden']);
-        $meta['_lastModified'] = date('c');
-        if (!write_json($meta_path, $meta)) json_out(['error' => 'Write failed'], 500);
-        $catalog = rebuild_catalog();
-        write_json($DATA_WEB . DIRECTORY_SEPARATOR . 'catalog.json', $catalog);
-        json_out(['ok' => true, 'hidden' => $meta['hidden']]);
+        [$st, $pl] = lumen_with_lock($meta_path, function () use ($meta_path, $body) {
+            $meta = read_json_doc($meta_path);
+            if (!$meta) return [404, ['error' => 'Not found']];
+            $meta['hidden'] = !empty($body['hidden']);
+            $meta['_lastModified'] = date('c');
+            if (!write_json($meta_path, $meta)) return [500, ['error' => 'Write failed']];
+            return [200, ['ok' => true, 'hidden' => $meta['hidden']]];
+        });
+        if ($st === 200 && is_file($DATA_WEB . DIRECTORY_SEPARATOR . 'catalog.json')) {
+            // The static copy only serves hosts without mod_rewrite; keep it from
+            // still listing a dataset that was just hidden.
+            write_json($DATA_WEB . DIRECTORY_SEPARATOR . 'catalog.json', rebuild_catalog());
+        }
+        json_out($pl, $st);
 
     default:
         json_out(['error' => 'Unknown action'], 400);

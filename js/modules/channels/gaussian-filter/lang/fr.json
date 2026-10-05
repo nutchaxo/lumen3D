@@ -1,3 +1,5 @@
 {
-  "label": "Flou gaussien σ"
+  "label": "Flou gaussien σ",
+  "unavailableSparse": "Indisponible à cette qualité (atlas de briques creux) : choisissez une qualité inférieure pour utiliser le flou.",
+  "unavailable": "Le flou n'est pas disponible pour ce volume."
 }

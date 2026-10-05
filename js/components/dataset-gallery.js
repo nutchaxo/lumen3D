@@ -294,6 +294,8 @@ const DatasetGallery = (() => {
 
   function _onKeydown(e) {
     if (!_lightbox || _lightbox.root.hidden) return;
+    // The lightbox owns the keyboard: viewer shortcuts behind it must not also react.
+    e.stopPropagation();
     if (e.key === 'Escape') { e.preventDefault(); close(); }
     else if (e.key === 'ArrowLeft') { e.preventDefault(); step(-1); }
     else if (e.key === 'ArrowRight') { e.preventDefault(); step(1); }
@@ -331,7 +333,7 @@ const DatasetGallery = (() => {
     _lastFocus = document.activeElement;
     lb.root.hidden = false;
     document.body.classList.add('gallery-lightbox-open');
-    document.addEventListener('keydown', _onKeydown);
+    document.addEventListener('keydown', _onKeydown, true);
     _paint();
     lb.btnClose.focus();
   }
@@ -347,7 +349,7 @@ const DatasetGallery = (() => {
     _lightbox.root.hidden = true;
     _lightbox.img.removeAttribute('src');   // stop a large decode we no longer show
     document.body.classList.remove('gallery-lightbox-open');
-    document.removeEventListener('keydown', _onKeydown);
+    document.removeEventListener('keydown', _onKeydown, true);
     // Focus must not stay on a control that just became hidden. A mouse click does
     // not necessarily focus the thumbnail it opened, so <body> is a common value for
     // _lastFocus — fall back to the tile of the image that was on screen.

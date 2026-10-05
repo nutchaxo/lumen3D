@@ -64,6 +64,7 @@ const InstanceConfig = (() => {
 
   let _config = _clone(DEFAULT);
   let _loaded = false;
+  let _revision = 0;
   const _listeners = [];
 
   function _clone(o) { return JSON.parse(JSON.stringify(o)); }
@@ -74,6 +75,8 @@ const InstanceConfig = (() => {
     if (!src || typeof src !== 'object' || Array.isArray(src)) return src;
     const out = (dst && typeof dst === 'object' && !Array.isArray(dst)) ? dst : {};
     for (const k of Object.keys(src)) {
+      // JSON.parse yields "__proto__" as an own key; assigning through it would write into Object.prototype.
+      if (k === '__proto__' || k === 'constructor' || k === 'prototype') continue;
       const sv = src[k];
       out[k] = (sv && typeof sv === 'object' && !Array.isArray(sv))
         ? _merge(out[k], sv) : sv;
@@ -109,6 +112,7 @@ const InstanceConfig = (() => {
       }
     } catch (_) { /* keep default */ }
     _loaded = true;
+    _revision++;
     _notify();
     return _config;
   }
@@ -293,10 +297,19 @@ const InstanceConfig = (() => {
     return _config;
   }
 
-  function onChange(fn) { if (typeof fn === 'function') _listeners.push(fn); }
+  function onChange(fn) {
+    if (typeof fn !== 'function') return () => {};
+    _listeners.push(fn);
+    return () => {
+      const i = _listeners.indexOf(fn);
+      if (i !== -1) _listeners.splice(i, 1);
+    };
+  }
+  /** Bumped on every load(); lets callers memoise anything derived from the config. */
+  function revision() { return _revision; }
   function _notify() {
     _listeners.forEach(fn => { try { fn(_config); } catch (_) {} });
   }
 
-  return { load, boot, get, all, localized: _localized, tokens, applyDom, applyHead, applyNav, onChange, isLoaded };
+  return { load, boot, get, all, localized: _localized, tokens, applyDom, applyHead, applyNav, onChange, isLoaded, revision };
 })();

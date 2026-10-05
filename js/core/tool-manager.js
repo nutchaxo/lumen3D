@@ -55,9 +55,16 @@ const ToolManager = (() => {
   }
 
   function _handleShortcut(e) {
-    if (e.target && ['INPUT', 'TEXTAREA', 'SELECT'].includes(e.target.tagName)) return;
-    const tool = _shortcuts[e.key.toLowerCase()];
-    if (tool) activate(tool);
+    // Browser-autofill keydowns carry no key; Ctrl/Cmd/Alt chords (copy, paste, bookmark)
+    // and key auto-repeat belong to the browser, not to a tool.
+    if (typeof e.key !== 'string' || e.ctrlKey || e.metaKey || e.altKey || e.repeat) return;
+    const t = e.target;
+    if (t && (['INPUT', 'TEXTAREA', 'SELECT'].includes(t.tagName) || t.isContentEditable)) return;
+    // A modal owns the keyboard while it is open.
+    if (typeof Dialog !== 'undefined' && Dialog.isOpen && Dialog.isOpen()) return;
+    const key = e.key.toLowerCase();
+    if (!Object.prototype.hasOwnProperty.call(_shortcuts, key)) return;
+    activate(_shortcuts[key]);
   }
 
   function _isToolAvailable(tool) {

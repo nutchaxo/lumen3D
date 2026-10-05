@@ -27,6 +27,11 @@ Download Center's file explorer (api/downloads) will expose, in this order:
 The .ims is read straight from the Imaris HDF5 pyramid (ResolutionLevel L), so
 only the chosen (small) level is touched — never the full-resolution level 0.
 
+A timelapse ('live') keeps every frame in its .ims and its web archive; the TIFF and
+the MIPs are ONE frame of it — the first unless --timepoint says otherwise — and the
+README says which. One frame keeps the TIFF the size of a fixed stack's; the .ims beside
+it is the complete acquisition.
+
 Idempotent: existing artefacts are skipped unless --force. Each dataset is
 isolated in try/except so one failure never aborts the batch.
 
@@ -36,6 +41,7 @@ Usage:
   py tools/build_download_bundles.py --dry-run
   py tools/build_download_bundles.py --no-ims --no-archive   # only TIFF + MIP
   py tools/build_download_bundles.py --tiff-px 1024 --force
+  py tools/build_download_bundles.py --dataset live/<folder> --timepoint 12
 """
 from __future__ import annotations
 
@@ -56,10 +62,14 @@ import numpy as np
 # ── Paths / config ──────────────────────────────────────────────────────────
 ROOT = Path(__file__).resolve().parent.parent          # WebPlatform root
 DATA_WEB = ROOT / "DATA_WEB"
-# Where the original .ims files live (done/ + todo/ are scanned recursively).
+# Where the original .ims files live (done/ + todo/ are scanned recursively): the
+# lab's workstation default, LUMEN_RAW_DATA_DIRS (os.pathsep-separated) when set, and
+# --raw-dir in front of either.
 RAW_DATA_DIRS = [
     Path(r"C:\Users\Administrator\Desktop\Fixed images for database\RAW_DATA"),
 ]
+if os.environ.get("LUMEN_RAW_DATA_DIRS"):
+    RAW_DATA_DIRS = [Path(p) for p in os.environ["LUMEN_RAW_DATA_DIRS"].split(os.pathsep) if p]
 DATASET_TYPES = ("3d", "2d", "live")
 
 TARGET_PX = 2048               # desired long XY side of the generated TIFF
@@ -128,42 +138,22 @@ def _read_meta_json(d):
     return {}
 
 
-def load_datasets(filter_substr=None, types=DATASET_TYPES):
-    """Return [{id, type, folder, dir, meta}], driven by catalog.json when present.
-    metadata.json (written by the preprocess pipeline) takes precedence for `meta`
-    so this works even when run right after a dataset is built, before catalog.json
-    has aggregated it."""
-    out, seen = [], set()
-    catalog = DATA_WEB / "catalog.json"
-    entries = []
-    if catalog.exists():
-        try:
-            entries = json.loads(catalog.read_text(encoding="utf-8"))
-        except Exception as exc:
-            print(f"[warn] catalog.json unreadable ({exc}); falling back to dir scan")
-    for e in entries:
-        # A catalog entry's `id` and `path` are the same '<type>/<folder>' string;
-        # the type segment is the directory under DATA_WEB.
-        path = e.get("path") or e.get("id") or ""
-        parts = path.split("/", 1)
-        if len(parts) != 2:
-            continue
-        typ, folder = parts
-        d = DATA_WEB / typ / folder
-        if typ in types and d.is_dir():
-            out.append({"id": path, "type": typ, "folder": folder, "dir": d,
-                        "meta": _read_meta_json(d) or e})
-            seen.add(path)
-    # dir-scan fallback for anything not in the catalog
+def load_datasets(filter_substr=None, types=DATASET_TYPES, exact_id=None):
+    """Return [{id, type, folder, dir, meta}] for the dataset folders under DATA_WEB.
+    The catalog is generated per request from these same metadata.json files, so the
+    folders are the only index there is. `exact_id` ('<type>/<folder>') selects one
+    dataset; `filter_substr` matches folder names loosely."""
+    out = []
     for typ in types:
         base = DATA_WEB / typ
         if not base.is_dir():
             continue
         for d in sorted(base.iterdir()):
-            pid = f"{typ}/{d.name}"
-            if d.is_dir() and pid not in seen:
-                out.append({"id": pid, "type": typ, "folder": d.name, "dir": d,
+            if d.is_dir() and not d.name.startswith("."):
+                out.append({"id": f"{typ}/{d.name}", "type": typ, "folder": d.name, "dir": d,
                             "meta": _read_meta_json(d)})
+    if exact_id:
+        out = [o for o in out if o["id"] == exact_id]
     if filter_substr:
         out = [o for o in out if filter_substr.lower() in o["folder"].lower()]
     return out
@@ -187,7 +177,7 @@ def build_archive(ds_dir, folder, out_path, force, dry):
     # Collect the servable files first; the download/ folder is excluded so the
     # archive never contains the other artefacts (or itself).
     files = [p for p in sorted(ds_dir.rglob("*"))
-             if p.is_file() and p.relative_to(ds_dir).parts[:1] != ("download",)]
+             if p.is_file() and not _excluded_from_archive(p.relative_to(ds_dir))]
     if not files:
         return "skip (no web data yet)"        # un-preprocessed dataset → no empty zip
     if dry:
@@ -198,6 +188,14 @@ def build_archive(ds_dir, folder, out_path, force, dry):
             zf.write(path, arcname=str(Path(folder) / path.relative_to(ds_dir)))
     os.replace(tmp, out_path)
     return f"{len(files)} files, {fmt_size(out_path.stat().st_size)}"
+
+
+def _excluded_from_archive(rel: Path) -> bool:
+    """download/ (the other artefacts, and the archive itself), dotfiles (temporary
+    files, a publish marker) and the old entries a publish sets aside."""
+    first = rel.parts[0]
+    return (first == "download" or any(part.startswith(".") for part in rel.parts)
+            or first.endswith(".pre-swap") or first == "bricks.rollback")
 
 
 # ── Step 2 — original .ims via hard link (copy fallback) ────────────────────
@@ -217,7 +215,7 @@ def place_ims(ims_src, out_path, force, dry):
 
 
 # ── Step 3/4 — ImageJ TIFF (+ per-channel MIP) from the .ims pyramid ────────
-def list_levels(f):
+def list_levels(f, timepoint=0):
     """[(L, Xr, Yr, Zr)] from the Imaris ResolutionLevel groups (real sizes)."""
     dataset = f["DataSet"]
     out = []
@@ -225,7 +223,7 @@ def list_levels(f):
         if not key.startswith("ResolutionLevel"):
             continue
         L = int(key.split()[-1])
-        tp = dataset[key].get("TimePoint 0")
+        tp = dataset[key].get(f"TimePoint {timepoint}")
         if tp is None:
             continue
         ch0 = tp.get("Channel 0")
@@ -294,11 +292,13 @@ def range_from_hist(hist, lo_pct=1.0, hi_pct=99.9):
     return lo, max(hi, lo + 1.0)
 
 
-def tiff_info(folder, level, ch_names, vox, dtype):
-    """Free-text block surfaced by Fiji's Image ▸ Show Info."""
+def tiff_info(folder, level, ch_names, vox, dtype, frame=None):
+    """Free-text block surfaced by Fiji's Image ▸ Show Info. `frame` is
+    (timepoint index, timepoint count) for one frame of a timelapse."""
     return "\n".join([
         f"Dataset: {folder}",
-        f"Source: Imaris .ims ResolutionLevel {level}, native {dtype}",
+        f"Source: Imaris .ims ResolutionLevel {level}, native {dtype}"
+        + (f", timepoint {frame[0]} of 0..{frame[1] - 1}" if frame else ""),
         f"Voxel size (um): X={vox[0]:.6g} Y={vox[1]:.6g} Z={vox[2]:.6g}",
         "Channels: " + ", ".join(f"C{i + 1}={n}" for i, n in enumerate(ch_names)),
         "Voxel values are the raw acquisition intensities; only the stored "
@@ -330,24 +330,40 @@ def write_imagej_tiff(path, vol, vox, metadata):
             raise TiffTooLarge(str(w.message))
 
 
+def _timepoint_count(f) -> int:
+    res0 = f["DataSet"]["ResolutionLevel 0"]
+    return sum(1 for k in res0.keys() if k.startswith("TimePoint")) or 1
+
+
+def _slab_planes(data, zr) -> int:
+    """Planes read per HDF5 call: one chunk layer, so each compressed chunk is
+    decompressed once instead of once per plane it spans."""
+    chunks = getattr(data, "chunks", None)
+    return max(1, min(zr, chunks[0] if chunks else 16))
+
+
 def build_tiff_and_mips(ims_src, ds_dir, folder, channels_meta, tiff_path,
-                        mip_paths_for, want_tiff, want_mip, force, dry):
-    """Returns a status string. Reads ONE pyramid level (≈TARGET_PX), streams it
-    into a disk-backed memmap in the system temp dir (low RAM, never litters
-    download/), writes a calibrated ImageJ composite hyperstack, and emits
-    per-channel MIP PNGs."""
+                        mip_paths_for, want_tiff, want_mip, force, dry, timepoint=0):
+    """Returns a status string. Reads ONE pyramid level (≈TARGET_PX) of ONE timepoint,
+    streams it into a disk-backed memmap in the system temp dir (low RAM, never litters
+    download/), writes a calibrated ImageJ composite hyperstack, and emits per-channel
+    MIP PNGs."""
     import h5py
 
     tiff_done = tiff_path.exists() and not force
     if dry:
         return "would build tiff+mips"
 
-    with h5py.File(str(ims_src), "r") as f:
+    with h5py.File(str(ims_src), "r", rdcc_nbytes=64 * 1024 * 1024) as f:
         info = f.get("DataSetInfo", {}).get("Image", None)
-        levels = list_levels(f)
+        n_tp = _timepoint_count(f)
+        if not 0 <= timepoint < n_tp:
+            return f"timepoint {timepoint} out of range (0..{n_tp - 1})"
+        frame = (timepoint, n_tp) if n_tp > 1 else None
+        levels = list_levels(f, timepoint)
         if not levels:
             return "no resolution levels"
-        tp0 = f["DataSet"]["ResolutionLevel 0"]["TimePoint 0"]
+        tp0 = f["DataSet"]["ResolutionLevel 0"][f"TimePoint {timepoint}"]
         ch_keys = sorted([k for k in tp0.keys() if k.startswith("Channel")],
                          key=lambda s: int(s.split()[-1]))
         n_ch = len(ch_keys)
@@ -387,7 +403,7 @@ def build_tiff_and_mips(ims_src, ds_dir, folder, channels_meta, tiff_path,
                 ext("ExtMin1", "ExtMax1") / max(Yr, 1),
                 ext("ExtMin2", "ExtMax2") / max(Zr, 1),
             )
-            base = f["DataSet"][f"ResolutionLevel {L}"]["TimePoint 0"]
+            base = f["DataSet"][f"ResolutionLevel {L}"][f"TimePoint {timepoint}"]
             hists = ([np.zeros(nbins, dtype=np.int64) for _ in range(n_ch)]
                      if need_vol and nbins else None)
             tmp_dir = Path(tempfile.mkdtemp(prefix="lumen_bundle_"))
@@ -400,13 +416,16 @@ def build_tiff_and_mips(ims_src, ds_dir, folder, channels_meta, tiff_path,
                 for ci, ck in enumerate(ch_keys):
                     data = base[ck]["Data"]
                     mip = np.zeros((Yr, Xr), dtype=dtype)
-                    for z in range(Zr):                 # plane-by-plane → low RAM
-                        plane = data[z, :Yr, :Xr]
-                        if arr is not None:
-                            arr[z, ci] = plane
-                        np.maximum(mip, plane, out=mip)  # MIP accrues in the same pass
-                        if hists is not None:
-                            hists[ci] += np.bincount(plane.ravel(), minlength=nbins)
+                    step = _slab_planes(data, Zr)
+                    for z0 in range(0, Zr, step):        # one chunk layer at a time → low RAM
+                        slab = data[z0:min(z0 + step, Zr), :Yr, :Xr]
+                        for k, plane in enumerate(slab):
+                            if arr is not None:
+                                arr[z0 + k, ci] = plane
+                            np.maximum(mip, plane, out=mip)  # MIP accrues in the same pass
+                            if hists is not None:
+                                hists[ci] += np.bincount(plane.ravel(), minlength=nbins)
+                        del slab
                     mips.append(mip)
 
                 if not need_vol:
@@ -423,7 +442,7 @@ def build_tiff_and_mips(ims_src, ds_dir, folder, channels_meta, tiff_path,
                     "axes": "ZCYX", "spacing": vox[2], "unit": "um",
                     "mode": "composite", "LUTs": luts,
                     "Labels": [ch_names[c] for _ in range(Zr) for c in range(n_ch)],
-                    "Info": tiff_info(folder, L, ch_names, vox, dtype),
+                    "Info": tiff_info(folder, L, ch_names, vox, dtype, frame),
                 }
                 if ranges:
                     meta["Ranges"] = tuple(ranges)
@@ -439,7 +458,8 @@ def build_tiff_and_mips(ims_src, ds_dir, folder, channels_meta, tiff_path,
                     continue
                 os.replace(tmp_tif, tiff_path)
                 status.append(f"tiff L{L} {Xr}x{Yr}x{Zr} {dtype} "
-                              f"{fmt_size(tiff_path.stat().st_size)}")
+                              + (f"t{timepoint} " if frame else "")
+                              + f"{fmt_size(tiff_path.stat().st_size)}")
                 break
             finally:
                 # Windows refuses to unlink a file that is still mapped, and a
@@ -494,12 +514,12 @@ def _autoscale(plane):
 
 
 # ── Step 5 — README ─────────────────────────────────────────────────────────
-def write_readme(out_path, ds, ims_src, force, dry):
+def write_readme(out_path, ds, ims_src, force, dry, timepoint=0):
     if out_path.exists() and not force:
         return "skip (exists)"
     if dry:
         return "would write"
-    lines = _readme_photo(ds) if ds["type"] == "2d" else _readme_volume(ds, ims_src)
+    lines = _readme_photo(ds) if ds["type"] == "2d" else _readme_volume(ds, ims_src, timepoint)
     lines += [
         "",
         "Citation: cite the IRIBHM Microscopy Platform (Lumen3D, IRIBHM @ ULB) and "
@@ -536,7 +556,7 @@ def _readme_photo(ds):
     ]
 
 
-def _readme_volume(ds, ims_src):
+def _readme_volume(ds, ims_src, timepoint=0):
     meta = ds["meta"]
     dims = meta.get("dimensions", {})
     vox = meta.get("voxel_size", {})
@@ -557,17 +577,21 @@ def _readme_volume(ds, ims_src):
     for i, c in enumerate(chans):
         lines.append(f"  C{i+1}: {c.get('name','?')}  color={c.get('color','?')}  "
                      f"gamma={c.get('gamma','?')}")
+    n_tp = dims.get("t") if isinstance(dims.get("t"), int) else 1
+    one_frame = f" — timepoint {timepoint} of 0..{n_tp - 1} only" if n_tp > 1 else ""
     lines += [
         "",
         "Files in this folder:",
         f"  {ds['folder']}_web.zip   archive of the web/preprocessed dataset "
-        "(bricks + metadata + thumbnail)",
+        "(bricks + metadata + thumbnail" + (", every timepoint)" if n_tp > 1 else ")"),
         f"  {ds['folder']}.ims       original Imaris acquisition"
         + (f"  ({fmt_size(ims_src.stat().st_size)})" if ims_src and ims_src.exists() else " (not available)"),
         f"  {ds['folder']}.tif       multi-channel ImageJ/Fiji composite hyperstack "
-        f"(native bit depth, µm-calibrated, ~{TARGET_PX}px), from the .ims pyramid",
-        f"  {ds['folder']}_C*_*_MIP.png   per-channel maximum-intensity projection",
+        f"(native bit depth, µm-calibrated, ~{TARGET_PX}px), from the .ims pyramid{one_frame}",
+        f"  {ds['folder']}_C*_*_MIP.png   per-channel maximum-intensity projection{one_frame}",
     ]
+    if n_tp > 1:
+        lines.append(f"  The .ims holds all {n_tp} timepoints.")
     return lines
 
 
@@ -605,7 +629,7 @@ def process(ds, args):
             print(f"  [readme] FAILED: {exc}")
         return
 
-    ims_src = find_ims(folder)
+    ims_src = Path(args.ims) if getattr(args, "ims", None) else find_ims(folder)
     if ims_src is None and not (args.no_ims and args.no_tiff):
         print(f"  [.ims] not found in RAW_DATA for '{folder}' — skipping ims/tiff/mip")
 
@@ -624,7 +648,7 @@ def process(ds, args):
             safe = re.sub(r"[^A-Za-z0-9._-]+", "_", str(name)).strip("_") or f"C{ci+1}"
             return dl / f"{folder}_C{ci+1}_{safe}_MIP.png"
         try:
-            print(f"  [tiff/mip] {build_tiff_and_mips(ims_src, ds['dir'], folder, channels_meta, tiff_out, mip_path, not args.no_tiff, not args.no_mip, args.force, args.dry_run)}")
+            print(f"  [tiff/mip] {build_tiff_and_mips(ims_src, ds['dir'], folder, channels_meta, tiff_out, mip_path, not args.no_tiff, not args.no_mip, args.force, args.dry_run, args.timepoint)}")
         except Exception as exc:
             print(f"  [tiff/mip] FAILED: {exc}")
         # Drop the superseded OME-TIFF only once its replacement is on disk —
@@ -636,7 +660,7 @@ def process(ds, args):
 
     # 5. README
     try:
-        print(f"  [readme] {write_readme(dl / 'README.txt', ds, ims_src, args.force, args.dry_run)}")
+        print(f"  [readme] {write_readme(dl / 'README.txt', ds, ims_src, args.force, args.dry_run, args.timepoint)}")
     except Exception as exc:
         print(f"  [readme] FAILED: {exc}")
 
@@ -645,6 +669,10 @@ def main():
     global TARGET_PX, DATA_WEB, RAW_DATA_DIRS
     ap = argparse.ArgumentParser(description="Populate each dataset's download/ folder.")
     ap.add_argument("--datasets", help="case-insensitive substring filter on folder name")
+    ap.add_argument("--dataset", help="exactly one dataset, as '<type>/<folder>'")
+    ap.add_argument("--ims", help="the dataset's source .ims (default: searched in the raw dirs)")
+    ap.add_argument("--timepoint", type=int, default=0,
+                    help="frame of a timelapse the TIFF and MIPs show (default 0)")
     ap.add_argument("--types", default=",".join(DATASET_TYPES),
                     help="comma list: 3d,2d,live (a 2d dataset gets the "
                          "web archive only — its original TIFF and README come from the importer)")
@@ -666,7 +694,7 @@ def main():
         RAW_DATA_DIRS = [Path(args.raw_dir)] + RAW_DATA_DIRS
     types = tuple(t.strip() for t in args.types.split(",") if t.strip())
 
-    datasets = load_datasets(args.datasets, types)
+    datasets = load_datasets(args.datasets, types, exact_id=args.dataset)
     if not datasets:
         print("No datasets matched.")
         return 1

@@ -26,6 +26,7 @@ const docStub = {
   createElement: () => makeEl(),
   getElementById: (id) => (id === 'download-body' ? body : null),
   querySelector: () => null,
+  addEventListener() {}, removeEventListener() {},
   body: { appendChild() {}, classList: { add() {}, remove() {} } },
 };
 

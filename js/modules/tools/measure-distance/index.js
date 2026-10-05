@@ -13,7 +13,10 @@ PluginRegistry.implement('measure-distance', {
   _ctx: null,
   _draft: [],         // Up to 2 pending raw pick points
   _measurements: [],  // Committed measurements from MeasurementStore
-  _unsubscribe: null, // VolumeViewer.onMeasurePoint cleanup
+  _listNode: null,
+  _clearNode: null,
+  _onList: null,
+  _onClear: null,
 
   // ─── Colour constants ──────────────────────────────────────
   PALETTE: [
@@ -38,14 +41,15 @@ PluginRegistry.implement('measure-distance', {
     ctx.viewer.onMeasurePoint(pt => this._handlePoint(pt));
 
     // Bind list interaction (toggle, delete, rename, color)
-    const list = document.getElementById('volume-measure-list');
-    if (list) {
-      list.addEventListener('click',  e => this._handleListEvent(e));
-      list.addEventListener('change', e => this._handleListEvent(e));
-    }
+    this._onList = e => this._handleListEvent(e);
+    this._onClear = () => this._clear();
+    this._listNode = document.getElementById('volume-measure-list');
+    this._listNode?.addEventListener('click', this._onList);
+    this._listNode?.addEventListener('change', this._onList);
 
     // Bind Clear button
-    document.getElementById('btn-measure-clear')?.addEventListener('click', () => this._clear());
+    this._clearNode = document.getElementById('btn-measure-clear');
+    this._clearNode?.addEventListener('click', this._onClear);
 
     this._render();
     return this;
@@ -67,6 +71,8 @@ PluginRegistry.implement('measure-distance', {
 
   setState(s) {
     if (!s?.measurements) return;
+    // A first pick made on the previous dataset must not pair with a click on this one.
+    this._draft = [];
     this._measurements = this._ctx.measurements.setAll('viewer', s.measurements);
     this._ctx.viewer.setMeasurements(this._measurements);
     this._render();
@@ -79,11 +85,17 @@ PluginRegistry.implement('measure-distance', {
   _handlePoint(point) {
     const calibration = this._ctx.viewer.getPhysicalCalibration?.();
     if (calibration?.calibrationStatus === 'metadata-missing') {
-      this._setStatus(this._t('calibMissing'));
+      this._setStatus(this._ctx.ui.escapeHtml(this._t('calibMissing')));
       return;
     }
     if (!point?.physicalUm) {
-      this._setStatus(this._t('noPoint'));
+      this._setStatus(this._ctx.ui.escapeHtml(this._t('noPoint')));
+      return;
+    }
+    // Nothing visible under the cursor: the ray only met the volume's box, whose
+    // entry depth is not a point of the specimen — measuring it would be fiction.
+    if (point.onBoundingBox) {
+      this._setStatus(this._ctx.ui.escapeHtml(this._t('noStructure')));
       return;
     }
     if (this._draft.length >= 2) this._draft = [];
@@ -267,8 +279,16 @@ PluginRegistry.implement('measure-distance', {
     return v >= 1000 ? `${(v / 1000).toFixed(3)} mm` : `${v.toFixed(2)} µm`;
   },
 
+  // Teardown drops what is transient (pending pick, popup, listeners); the
+  // measurements themselves are the user's data and stay in MeasurementStore —
+  // only the Clear button and reset() erase them.
   dispose() {
-    this._clear();
+    this._draft = [];
     this._closeColorPopup();
+    this._listNode?.removeEventListener('click', this._onList);
+    this._listNode?.removeEventListener('change', this._onList);
+    this._clearNode?.removeEventListener('click', this._onClear);
+    this._listNode = null; this._clearNode = null;
+    try { this._ctx?.viewer?.onMeasurePoint?.(null); } catch (_) { /* viewer already gone */ }
   }
 });

@@ -1,23 +1,65 @@
+# Host-specific lines (AddHandler for a PHP version, RewriteBase, php_value…) go
+# ABOVE the LUMEN3D block: a one-click update rewrites the block and keeps every
+# line outside it (api/_admin_lib.php admin_merge_htaccess).
+# BEGIN LUMEN3D
 # Lumen3D — route HTML documents through the nonce-injecting CSP server so a PHP/
 # Apache deployment enforces the SAME strict Content-Security-Policy as the Python
 # dev server (per-request nonce). Non-HTML assets (js/css/img) and api/*.php routes
 # are served normally. Requires mod_rewrite; without it, HTML is served statically
 # with no CSP (the trust gate is then bypassable — prefer the Python server or add
 # a reverse-proxy that injects the nonce). See DOCS/plugin-sandbox/TECHNICAL.md.
+#
+# Every directive below sits in an <IfModule> guard: a directive from a module the
+# host has not loaded takes the WHOLE site down with a 500. `Options` is never used
+# (it needs AllowOverride Options, which many shared hosts do not grant — a 500 for
+# every request); directory listings are refused by a rewrite instead.
 <IfModule mod_rewrite.c>
     RewriteEngine On
+
+    # ── Never served ─────────────────────────────────────────────────────────
+    # Patterns are matched against the path RELATIVE to this directory, so they hold
+    # in a subdirectory install too (an anchored mod_alias RedirectMatch sees the
+    # full URL path and never matched there). None of these ships in a release, but
+    # an operator who rsyncs or SFTPs a working tree would otherwise publish them:
+    # secrets/ holds the Ed25519 SIGNING SEEDS; uploads/ holds imported bytes that
+    # have NOT passed validation (the admin preview reads them through
+    # api/upload.php?action=blob, never a URL). Nginx equivalent:
+    #   location ~ ^/(secrets|logs|backups|uploads)/ { deny all; }
+    #   location ~ /\.(?!well-known) { deny all; }
+    RewriteRule ^(secrets|logs|backups|uploads)(/|$) - [R=404,L]
+    # Every dot-segment (.git, .htaccess, api/.sessions, the updater's
+    # .update-staging-*, .install-lock…), .well-known excepted; and the sources an
+    # update parks beside the live ones, which would be served as text.
+    RewriteRule (^|/)\.(?!well-known(/|$)) - [R=404,L]
+    RewriteRule \.lumen-(old|new|backup)$ - [R=404,L]
+
     # Directory index → _serve.php (serves index.html with the nonce + CSP).
     RewriteRule ^$ _serve.php [L]
-    # Every *.html document → _serve.php. Real files that are not .html (assets,
-    # api/*.php) never match, so they are served directly by Apache.
+    # No directory listing anywhere below (DATA_WEB/3d/, js/modules/…).
+    RewriteCond %{REQUEST_FILENAME} -d
+    RewriteRule ^.+$ - [R=404,L]
+    # Every *.html document → _serve.php, which serves only the platform's own
+    # top-level pages and answers 404 for any other .html (a plugin folder, a
+    # dataset) — those are never served raw, with no CSP. Real files that are not
+    # .html (assets, api/*.php) never match, so Apache serves them directly.
     RewriteRule ^(.+)\.html$ _serve.php [L,QSA]
-    # The dataset catalog is DERIVED from every DATA_WEB/<type>/<name>/metadata.json.
-    # Routing it through PHP lets a dataset dropped in by SFTP appear without anyone
-    # clicking "Régénérer catalog.json" — the Python server already rebuilds it on GET.
-    # api/catalog.php builds the response per request; there is no catalog file on
-    # disk any more. Without mod_rewrite this rule is absent and the request 404s —
-    # this deployment REQUIRES mod_rewrite (as it already does to get a CSP at all).
+    # The dataset catalog is DERIVED from every DATA_WEB/<type>/<name>/metadata.json
+    # (api/catalog.php, cached by signature). Without mod_rewrite this rule is absent
+    # and the request 404s — this deployment REQUIRES mod_rewrite (as it already does
+    # to get a CSP at all).
     RewriteRule ^DATA_WEB/catalog\.json$ api/catalog.php [L,QSA]
+
+    # Versioned URLs never change content, so they are cached without asking: a
+    # script/style stamped ?v=<release> by tools/build_release.py, and a brick pack
+    # stamped ?v=<hash of the manifest's pack list> by js/core/brick-loader.js. The
+    # flag is an environment variable read by the Header rules below — keyed on the
+    # query string through mod_rewrite rather than an Apache 2.4 <If>, which is a
+    # syntax error (a 500 for the whole site) on a 2.2 core and cannot be guarded.
+    # dev_server.py applies the same table (_static_cache_policy).
+    RewriteCond %{QUERY_STRING} (^|&)v=
+    RewriteRule \.(js|mjs|css)$ - [E=LUMEN_VERSIONED:1]
+    RewriteCond %{QUERY_STRING} (^|&)v=
+    RewriteRule \.(bin|rgba|gz)$ - [E=LUMEN_VERSIONED_PACK:1]
 </IfModule>
 
 # Never serve the PHP entry/handler sources as text (only execute them).
@@ -27,67 +69,52 @@
     </IfModule>
 </FilesMatch>
 
-# ── Directories that must never be served ────────────────────────────────────
-# api/ carries its own .htaccess; these have none, and none of them ships in a
-# release — but an operator who rsyncs or SFTPs the whole working tree would
-# otherwise publish them. secrets/ is the worst case: it holds the Ed25519
-# SIGNING SEEDS, and leaking one lets an attacker sign a plugin or a release
-# that every installation trusts. Nginx equivalent:
-#   location ~ ^/(secrets|logs|backups|\.git)/ { deny all; }
-# Guarded like every other directive here: an unguarded directive from a module the
-# host hasn't loaded takes the WHOLE site down with a 500, and these directories
-# ship in no release — a 500 would be the worse failure.
-# uploads/ is the dataset import staging root: bytes that arrived from a browser
-# and have NOT passed validate_dataset() yet. It carries its own deny-all
-# .htaccess too, but this rule holds even if that file is lost — the admin
-# preview reads staged bytes through api/upload.php?action=blob, never a URL.
-<IfModule mod_alias.c>
-    RedirectMatch 404 ^/(secrets|logs|backups|uploads|\.git)(/|$)
-</IfModule>
-
 # ── Caching ──────────────────────────────────────────────────────────────────
-# The platform ships as ~25 separate JS files + CSS + fonts (no bundler). Without
-# caching, EVERY page navigation (index → explorer → viewer → admin) re-requests
-# all of them, and on hosts with aggressive per-IP rate limiting that burst returns
-# HTTP 429 and the viewer/admin fail to boot. These headers let the browser cache
-# the immutable static assets so each is fetched once, cutting request volume by an
-# order of magnitude. Static asset URLs carry ?v=… version strings, so a long
-# max-age is safe (a version bump changes the URL and busts the cache).
+# The platform ships as ~25 separate JS files + CSS + fonts (no bundler). On hosts
+# with aggressive per-IP rate limiting, re-requesting all of them on every page
+# navigation returns HTTP 429 and the viewer/admin fail to boot — so versioned
+# script/style URLs are cached outright. Everything else that can change under the
+# same URL is "no-cache": the browser keeps the body and reuses it after an
+# If-None-Match the server answers with a 304 (one round-trip, no bytes).
 # HTML is NOT cached here: it is served via _serve.php with a per-request CSP nonce
-# and its own Cache-Control: no-store. Config JSON is kept revalidated (operator edits).
+# and its own Cache-Control: no-store.
 <IfModule mod_headers.c>
-    <FilesMatch "\.(js|mjs|css|webp|png|jpe?g|gif|svg|ico|woff2?|ttf|eot)$">
+    <FilesMatch "\.(js|mjs|css)$">
+        Header set Cache-Control "no-cache"
+        Header set Cache-Control "public, max-age=604800, immutable" env=LUMEN_VERSIONED
+    </FilesMatch>
+    <FilesMatch "\.(webp|png|jpe?g|gif|svg|ico|woff2?|ttf|eot)$">
         Header set Cache-Control "public, max-age=604800"
     </FilesMatch>
     <FilesMatch "\.json$">
         Header set Cache-Control "no-cache"
     </FilesMatch>
-    # Brick packs ARE the volume: a native dataset is ~650 MB spread over ~70 of them.
-    # They carried no cache header at all, which does NOT mean "not cached" — it hands
-    # the decision to the browser's HEURISTIC cache, which reuses a response without
-    # revalidating for ~10% of its age (a day or so here). That is the worst of both:
-    # non-deterministic, and silently stale after a dataset is re-preprocessed.
-    # A long max-age is not the fix either — pack URLs carry no ?v= (the loader derives
-    # .../bricks/lodN/cM/pack_KK.bin from the manifest), so re-processing a dataset
-    # under the same name would serve the OLD voxels for a week. Half-updated volume =
-    # silently wrong science (rule 1.1).
-    # "no-cache" is the correct middle: the body is kept on disk and reused, but only
-    # after an If-None-Match the server answers with a 304. Revisiting a dataset costs
-    # one round-trip per pack instead of ~11 MB, and a re-processed dataset is picked
-    # up on the very next load (the ETag changes).
+    # Brick packs ARE the volume. The loader stamps each pack URL with a hash of the
+    # manifest's pack list, so a dataset re-processed under the same name is fetched
+    # at NEW URLs: a stamped pack is immutable for a year. An unstamped one (an older
+    # client, a direct link) is revalidated — a long max-age on it would serve the
+    # OLD voxels after a re-run, silently wrong science (rule 1.1).
     <FilesMatch "\.(bin|rgba|gz)$">
         Header set Cache-Control "no-cache"
+        Header set Cache-Control "public, max-age=31536000, immutable" env=LUMEN_VERSIONED_PACK
     </FilesMatch>
+    Header set X-Content-Type-Options "nosniff"
 </IfModule>
 <IfModule mod_expires.c>
     ExpiresActive On
-    ExpiresByType application/javascript "access plus 7 days"
-    ExpiresByType text/javascript        "access plus 7 days"
-    ExpiresByType text/css               "access plus 7 days"
     ExpiresByType image/webp             "access plus 30 days"
     ExpiresByType image/png              "access plus 30 days"
     ExpiresByType image/jpeg             "access plus 30 days"
     ExpiresByType image/svg+xml          "access plus 30 days"
     ExpiresByType font/woff2             "access plus 30 days"
-    ExpiresByType application/json       "access plus 0 seconds"
 </IfModule>
+
+# Compress text on the wire (a brick manifest is tens of MB of JSON, ~7x smaller
+# gzipped). Packs are WebP already and are left alone. AddOutputFilterByType lives in
+# mod_filter on Apache 2.4, hence both guards.
+<IfModule mod_deflate.c>
+    <IfModule mod_filter.c>
+        AddOutputFilterByType DEFLATE application/json text/html text/css text/plain application/javascript text/javascript image/svg+xml
+    </IfModule>
+</IfModule>
+# END LUMEN3D

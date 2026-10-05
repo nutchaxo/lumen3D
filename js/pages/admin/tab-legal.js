@@ -11,13 +11,15 @@
 'use strict';
 
 import { API_SITE, I18n, t, escHtml, apiFetch, apiFetchStatus, toast, el, refreshIcons } from './shared.js';
-import { setUnsaved } from './bus.js';
+import { setUnsaved, registerDirtyGuard, bindTabSave } from './bus.js';
 
 let _legal = { sections: [] };
 let _editLoc = 'en';
 let _dirty = false;
+let _loading = null;
+let _loaded = false;
 
-function _mark(on) { _dirty = on; setUnsaved(on); const s = el('legal-save'); if (s) s.disabled = !on; }
+function _mark(on) { _dirty = on; setUnsaved(on, 'legal'); const s = el('legal-save'); if (s) s.disabled = !on; }
 
 function _locales() {
   try { if (I18n && I18n.getAvailableLanguages) { const l = I18n.getAvailableLanguages(); if (l.length) return l; } } catch (_) {}
@@ -80,15 +82,29 @@ function render() {
   refreshIcons(root);
 }
 
-async function load() {
-  const data = await apiFetch(`${API_SITE}?action=get&doc=legal`);
-  _legal = (data && typeof data === 'object' && Array.isArray(data.sections)) ? data : { sections: [] };
-  try { _editLoc = (I18n && I18n.getLanguage) ? I18n.getLanguage() : 'en'; } catch (_) { _editLoc = 'en'; }
-  _mark(false);
-  render();
+function load() {
+  if (_loading) return _loading;
+  _loading = (async () => {
+    try {
+      const data = await apiFetch(`${API_SITE}?action=get&doc=legal`);
+      if (_dirty && _loaded) return;
+      if (!data || typeof data !== 'object' || !Array.isArray(data.sections)) return;
+      _legal = data;
+      _loaded = true;
+      try { _editLoc = (I18n && I18n.getLanguage) ? I18n.getLanguage() : 'en'; } catch (_) { _editLoc = 'en'; }
+      _mark(false);
+      render();
+    } finally { _loading = null; }
+  })();
+  return _loading;
 }
 
+function discard() { _mark(false); }
+
+function relabel() { render(); _mark(_dirty); }
+
 async function save() {
+  if (!_loaded) { toast(t('legal.saveError', "Échec de l'enregistrement."), 'error'); load(); return; }
   const r = await apiFetchStatus(`${API_SITE}?action=save&doc=legal`, { method: 'POST', body: JSON.stringify(_legal) });
   if (r.ok) { _mark(false); toast(t('legal.saved', 'Mentions légales enregistrées.'), 'success'); }
   else toast(t('legal.saveError', "Échec de l'enregistrement."), 'error');
@@ -97,7 +113,7 @@ async function save() {
 async function reset() {
   if (!confirm(t('legal.resetConfirm', 'Réinitialiser les mentions légales ?'))) return;
   const r = await apiFetchStatus(`${API_SITE}?action=reset&doc=legal`, { method: 'POST', body: '{}' });
-  if (r.ok) { toast(t('legal.resetDone', 'Réinitialisé.'), 'success'); await load(); }
+  if (r.ok) { toast(t('legal.resetDone', 'Réinitialisé.'), 'success'); _mark(false); await load(); }
   else toast(t('legal.saveError', "Échec de l'enregistrement."), 'error');
 }
 
@@ -106,7 +122,8 @@ export const LegalTab = {
   titleKey: 'admin.navLegal',
   titleDefault: 'Mentions légales',
   mounted: false,
-  mount() { render(); load(); },
-  activate() { load(); },
-  relabel() { render(); load(); },
+  mount() { bindTabSave('legal', () => { if (_dirty) save(); return true; });
+    registerDirtyGuard('legal', () => _dirty, discard); render(); },
+  activate() { if (!_dirty || !_loaded) load(); },
+  relabel,
 };

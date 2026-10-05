@@ -5,6 +5,9 @@
 const PerfTelemetry = (() => {
   const MAX_SPANS = 3000;
   const MAX_EVENTS = 5000;
+  // A span whose operation threw or was abandoned never reaches end(); bounding the open set
+  // keeps those orphans from accumulating over a long session (oldest dropped first).
+  const MAX_ACTIVE = 500;
   const _active = new Map();
   const _spans = [];
   const _events = [];
@@ -43,6 +46,10 @@ const PerfTelemetry = (() => {
   function start(name, meta = {}) {
     if (!name) return null;
     const id = `s_${++_seq}`;
+    if (_active.size >= MAX_ACTIVE) {
+      // Map iterates in insertion order: the first key is the oldest open span.
+      _active.delete(_active.keys().next().value);
+    }
     _active.set(id, {
       id,
       name: String(name),
@@ -51,6 +58,31 @@ const PerfTelemetry = (() => {
       meta: _safe(meta)
     });
     return id;
+  }
+
+  /**
+   * Run `fn` inside a span that is ALWAYS closed: on return, on a throw, and (for an async
+   * `fn`) on rejection. Prefer this to a bare start()/end() pair around anything that can
+   * throw or be aborted. A failure ends the span with `error: <message>` and is re-thrown.
+   * @returns {*} whatever `fn` returns (a promise stays a promise)
+   */
+  function measure(name, meta, fn) {
+    const id = start(name, meta);
+    let result;
+    try {
+      result = fn();
+    } catch (err) {
+      end(id, { error: String((err && err.message) || err) });
+      throw err;
+    }
+    if (result && typeof result.then === 'function') {
+      return result.then(
+        value => { end(id); return value; },
+        err => { end(id, { error: String((err && err.message) || err) }); throw err; }
+      );
+    }
+    end(id);
+    return result;
   }
 
   function end(id, meta = {}) {
@@ -144,7 +176,8 @@ const PerfTelemetry = (() => {
       if (value === null || ['string', 'number', 'boolean'].includes(typeof value)) {
         out[key] = value;
       } else if (Array.isArray(value)) {
-        out[key] = value.slice(0, 20);
+        // Primitives only: keeping live objects here would pin them in the span history.
+        out[key] = value.slice(0, 20).map(v => (v === null || ['string', 'number', 'boolean'].includes(typeof v)) ? v : String(v));
       } else {
         try {
           out[key] = JSON.parse(JSON.stringify(value));
@@ -168,6 +201,7 @@ const PerfTelemetry = (() => {
     inc,
     start,
     end,
+    measure,
     cancel,
     clear,
     getSummary

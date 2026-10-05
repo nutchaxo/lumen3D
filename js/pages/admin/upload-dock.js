@@ -19,9 +19,8 @@
 
 'use strict';
 
-import { t, escHtml, refreshIcons, toast } from './shared.js';
-import { navigateTo } from './bus.js';
-import { openDataset } from './tab-datasets.js';
+import { t, escHtml, refreshIcons, toast, storageGet, storageSet } from './shared.js';
+import { navigateTo, openDataset } from './bus.js';
 import * as Upload from './upload-manager.js';
 
 const SIZE_KEY = 'adm-upload-dock-size';
@@ -34,13 +33,13 @@ let _bound = false;
 let _structureSig = '';
 
 function loadSize() {
-  const v = localStorage.getItem(SIZE_KEY);
+  const v = storageGet(SIZE_KEY);
   return SIZES.includes(v) ? v : 'bar';
 }
 
 function setSize(size) {
   _size = SIZES.includes(size) ? size : 'bar';
-  localStorage.setItem(SIZE_KEY, _size);
+  storageSet(SIZE_KEY, _size);
   if (_root) _root.dataset.size = _size;
   _structureSig = '';        // a different size is a different DOM
   render();
@@ -82,6 +81,7 @@ function onClick(e) {
   if (action === 'shrink') { setSize(_size === 'panel' ? 'bar' : 'bubble'); return; }
   if (action === 'pause') { Upload.pause(); return; }
   if (action === 'resume') { Upload.resume(); return; }
+  if (action === 'retry') { Upload.retryFailed(); return; }
   if (action === 'goto') { navigateTo('upload'); setSize('panel'); return; }
   if (action === 'edit' && key) { openInEditor(key); return; }
   if (action === 'publish' && key) { doPublish(key); return; }
@@ -92,7 +92,6 @@ function onClick(e) {
 /** Jump to the Datasets tab AND open this dataset — landing on the list with
  *  nothing selected made the operator hunt for the row they just clicked. */
 function openInEditor(key) {
-  navigateTo('datasets');
   openDataset(`staging:${key}`);
 }
 
@@ -127,6 +126,8 @@ function structureSig(s, staged) {
     // doneCount is patched, not signed — see the Import tab for why.
     s.datasets.map((d) => `${d.key}:${d.state}:${d.fileCount}:${d.error || ''}`).join(','),
     staged.map((d) => `${d.key}:${d.state}`).join(','),
+    s.failed.length,
+    s.network,
     s.error || '',
   ].join('|');
 }
@@ -235,6 +236,7 @@ function renderBar(s, pct, working, paused) {
       <div class="dock-bar-actions">
         ${working ? actionBtn('pause', 'pause', t('upl.pause', 'Pause')) : ''}
         ${paused ? actionBtn('resume', 'play', t('upl.resume', 'Reprendre')) : ''}
+        ${Upload.hasFailed() ? actionBtn('retry', 'refresh-cw', t('upl.retry', 'Réessayer')) : ''}
         ${actionBtn('expand', 'list', t('upl.details', 'Détails'))}
       </div>
     </div>`;
@@ -250,6 +252,7 @@ function renderPanel(s, pct, working, paused, staged) {
         <div class="dock-head-actions">
           ${working ? actionBtn('pause', 'pause', t('upl.pause', 'Pause')) : ''}
           ${paused ? actionBtn('resume', 'play', t('upl.resume', 'Reprendre')) : ''}
+          ${Upload.hasFailed() ? actionBtn('retry', 'refresh-cw', t('upl.retry', 'Réessayer')) : ''}
           ${actionBtn('goto', 'external-link', t('upl.openTab', 'Ouvrir l\'onglet Import'))}
           ${actionBtn('shrink', 'minus', t('upl.dockHide', 'Réduire'))}
         </div>
@@ -322,9 +325,11 @@ function stateInfo(state) {
 
 function statusLabel(s, working, paused) {
   if (paused) return t('upl.statusPaused', 'Transfert en pause');
+  if (s.network === 'offline' && working) return t('upl.statusOffline', 'Connexion perdue — reprise automatique');
   if (s.phase === 'scanning') return t('upl.statusScanning', 'Lecture du dossier…');
   if (s.phase === 'planning') return t('upl.statusPlanning', 'Analyse et vérification…');
   if (working) return t('upl.statusUploading', 'Transfert en cours');
+  if (s.phase === 'done' && s.failed.length) return t('upl.statusDoneErrors', 'Terminé avec {n} fichier(s) en échec', { n: s.failed.length });
   if (s.phase === 'done') return t('upl.statusDone', 'Transfert terminé');
   return t('upl.statusIdle', 'Imports en attente');
 }

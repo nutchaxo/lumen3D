@@ -1,23 +1,169 @@
 #!/usr/bin/env python3
 import argparse
 import fnmatch
+import hashlib
+import importlib.util
 import json
 import os
+import re
 import shutil
 import signal
 import subprocess
 import sys
+import time
 import traceback
 from datetime import datetime
 from pathlib import Path
-import numpy as np
-from PIL import Image
 
-__version__ = "0.18.0"
+__version__ = "0.19.0"
 
 # ── Paths ──────────────────────────────────────────────────────────────────────
 SCRIPT_DIR = Path(__file__).resolve().parent
 PYTHON_EXE = sys.executable
+
+
+# ── Shared pipeline helpers ────────────────────────────────────────────────────
+# The numbered steps and the 2D importer import these from here rather than from a
+# module of their own: every way the pipeline is distributed (the repository, the
+# self-contained .bat launcher, the downloadable pipeline pack) ships this file beside
+# the steps, so a helper living here can never be missing where a step runs.
+
+# Windows' WaitForMultipleObjects caps a ProcessPoolExecutor at 61 workers; asking for
+# more raises ValueError before a single task runs.
+_WINDOWS_MAX_WORKERS = 61
+
+
+def worker_count() -> int:
+    """Size of a step's process pool.
+
+    One worker per logical core saturates the CPU, but each worker also holds its own
+    working set (a tile of the volume being levelled, a batch of bricks being encoded).
+    Commit on Windows is bounded by RAM + page file, not by free RAM: the measured
+    failure was 3789x3789x125x4ch on a 63.5 GiB machine with 36.3 GiB of commit free,
+    where the pool died with WinError 1455 "the paging file is too small".
+
+    LUMEN_PREPROCESS_WORKERS caps the pool so a busy or smaller machine can still finish.
+    Unset, one worker per logical core (61 at most on Windows).
+    """
+    cores = os.cpu_count() or 1
+    ceiling = min(cores, _WINDOWS_MAX_WORKERS) if os.name == "nt" else cores
+    raw = os.environ.get("LUMEN_PREPROCESS_WORKERS", "").strip()
+    if raw:
+        try:
+            n = int(raw)
+            if n >= 1:
+                return min(n, ceiling)
+            print(f"[PROCESS] LUMEN_PREPROCESS_WORKERS={raw!r} ignore (doit etre >= 1)", flush=True)
+        except ValueError:
+            print(f"[PROCESS] LUMEN_PREPROCESS_WORKERS={raw!r} ignore (entier attendu)", flush=True)
+    return ceiling
+
+
+def _retry_os(action, attempts: int = 40, delay: float = 0.1):
+    """Run a rename/replace, retrying while Windows reports the target busy.
+
+    The web server opens metadata.json and pack files for reading without
+    FILE_SHARE_DELETE, so replacing or renaming them fails for the few milliseconds
+    a request holds them. That is a wait, not an error.
+    """
+    for attempt in range(attempts):
+        try:
+            return action()
+        except PermissionError:
+            if attempt == attempts - 1:
+                raise
+            time.sleep(delay)
+
+
+def atomic_write_bytes(path, data: bytes) -> None:
+    """Write a file so a reader sees either the old content or the new one, never a
+    truncated mix: the bytes go to a temporary sibling, are flushed to disk, and
+    replace the target in one rename."""
+    path = Path(path)
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    try:
+        with open(tmp, "wb") as fh:
+            fh.write(data)
+            fh.flush()
+            os.fsync(fh.fileno())
+        _retry_os(lambda: os.replace(tmp, path))
+    except BaseException:
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
+        raise
+
+
+def atomic_write_text(path, text: str) -> None:
+    atomic_write_bytes(path, text.encode("utf-8"))
+
+
+def atomic_write_json(path, obj, **dump_kwargs) -> None:
+    atomic_write_text(path, json.dumps(obj, **dump_kwargs))
+
+
+# Keys the lab edits in the admin panel (or attaches afterwards). Re-processing a
+# dataset refreshes what the acquisition measures and leaves these alone; one list for
+# the volume pipeline and the 2D importer so both paths protect the same curation.
+CURATED_KEYS = (
+    "name", "description", "stage", "stageNumeric", "embryo", "line", "staining",
+    "reporter", "hidden", "gallery", "tags", "notes", "created",
+    "orientation", "orientationAxes", "upsideDown", "defaultView", "exposure",
+    "linkedTrackingId", "relatedIds",
+)
+
+
+def merge_curated(existing: dict, fresh: dict) -> dict:
+    """Metadata for a re-processed dataset: what the file measures comes from `fresh`,
+    every curated key from `existing`, and any key `fresh` does not produce at all
+    (added by the admin panel or a later step, e.g. a tracking block) is carried over
+    rather than dropped. A hidden dataset therefore stays hidden."""
+    if not isinstance(existing, dict) or not existing:
+        return dict(fresh)
+    merged = dict(fresh)
+    for key in CURATED_KEYS:
+        if key in existing:
+            merged[key] = existing[key]
+    for key, value in existing.items():
+        if key not in merged:
+            merged[key] = value
+    if "lastModified" in fresh:
+        merged["lastModified"] = fresh["lastModified"]
+    return merged
+
+
+def read_json_file(path) -> dict:
+    """A JSON object from disk, or {} when the file is absent or unreadable. utf-8-sig
+    tolerates the BOM a hand edit in Notepad leaves behind."""
+    try:
+        doc = json.loads(Path(path).read_text(encoding="utf-8-sig"))
+    except (OSError, ValueError):
+        return {}
+    return doc if isinstance(doc, dict) else {}
+
+
+def slugify(text: str) -> str:
+    """A folder name that survives a URL unescaped: `#` would truncate it, `%` would be
+    decoded, `?`/`+`/spaces/non-ASCII depend on who encodes them, and Windows strips a
+    trailing dot or space."""
+    return re.sub(r"-{2,}", "-", re.sub(r"[^A-Za-z0-9._-]+", "-", text)).strip("-.")
+
+
+def thumbnail_lod(lod_levels) -> int:
+    """The finest LOD whose long side is at most 1024 px — what the thumbnail MIP reads."""
+    for li in lod_levels:
+        if max(li["width"], li["height"]) <= 1024:
+            return li["lod"]
+    return 0
+
+
+def load_step(script_name: str, module_name: str):
+    """Import a numbered step (its file name is not a Python identifier) as a module."""
+    spec = importlib.util.spec_from_file_location(module_name, str(SCRIPT_DIR / script_name))
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 # ── Console styling (graceful ANSI; degrades to plain on redirect / no-VT) ──────
 def _supports_color() -> bool:
@@ -120,17 +266,16 @@ def build_thumbnail(temp_dir: Path, output_dir: Path, proc_meta: dict) -> None:
     Computes a Maximum Intensity Projection (MIP) for each channel from processed
     low-res volumes and composites them into a stunning false-color RGB thumbnail.
     """
+    import numpy as np
+    from PIL import Image
+
     n_ch = proc_meta["n_channels"]
     lod_levels = proc_meta["lod_levels"]
     D = proc_meta["depth"]
-    
-    # We use LOD1 or LOD2 to speed up MIP computation (max 512/1024 width)
-    target_lod = 0
-    for li in lod_levels:
-        if max(li["width"], li["height"]) <= 1024:
-            target_lod = li["lod"]
-            break
-            
+
+    # A LOD of at most 1024 px keeps the MIP cheap; step 2 keeps exactly this level of
+    # the first timepoint on disk for it.
+    target_lod = thumbnail_lod(lod_levels)
     li = lod_levels[target_lod]
     w_lod, h_lod = li["width"], li["height"]
     
@@ -214,9 +359,9 @@ def attach_tracking(ims_path: Path, dataset_output_dir: Path, temp_dir: Path,
     """
     if mode == "off":
         return
-    # The standalone .bat launcher embeds the volume steps only; saying nothing there is
-    # correct, while a missing module in a build that does ship it is worth reporting.
     if not (SCRIPT_DIR / "tracking_sources.py").exists():
+        print(_warn("   [!] tracking ignore : tracking_sources.py absent de cette installation "
+                    "du pipeline — le timelapse est publie sans trajectoires"))
         return
     try:
         import tracking_sources
@@ -224,6 +369,10 @@ def attach_tracking(ims_path: Path, dataset_output_dir: Path, temp_dir: Path,
         print(_warn(f"   [!] tracking ignore : {exc}"))
         return
 
+    # The lab's analysis code, imported in THIS process by tracking_sources, pins the
+    # BLAS/OpenMP thread variables to 1 at import. Every later step inherits the
+    # orchestrator's environment, so they are put back once the analysis has run.
+    saved_env = {k: os.environ.get(k) for k in _THREAD_ENV_VARS}
     try:
         if mode == "auto":
             resolved = tracking_sources.resolve(ims_path, temp_dir, dataset_name)
@@ -240,12 +389,22 @@ def attach_tracking(ims_path: Path, dataset_output_dir: Path, temp_dir: Path,
     except Exception as exc:
         print(_warn(f"   [!] tracking non exploitable : {exc}"))
         return
+    finally:
+        for key, value in saved_env.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
 
     try:
         run_step("5-tracking_importer.py", str(container), str(dataset_output_dir))
     except subprocess.CalledProcessError as exc:
         print(_warn(f"   [!] rattachement du tracking echoue (code {exc.returncode}) — "
                     f"le volume reste utilisable"))
+
+
+_THREAD_ENV_VARS = ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS",
+                    "VECLIB_MAXIMUM_THREADS", "NUMEXPR_NUM_THREADS")
 
 
 DOWNLOAD_SCRIPT_NAME = "build_download_bundles.py"
@@ -259,26 +418,176 @@ def _resolve_download_script():
             return cand.resolve()
     return None
 
+# ── Publishing a dataset (all or nothing) ──────────────────────────────────────
+# A run builds the whole dataset in a private staging tree under the temp directory
+# (same volume as DATA_WEB, so publishing is a handful of renames). The published
+# dataset keeps serving its previous bricks for the whole multi-hour run, and a run
+# that fails at any point before the swap leaves it exactly as it was.
+#
+# Entries the pipeline owns inside a dataset folder. Everything else there — download/,
+# gallery/, any file the operator dropped in — is never touched.
+PIPELINE_ENTRIES = ("bricks", "thumbnail.webp")
+TRACKING_ENTRIES = ("tracks.json", "tracks.json.gz", "model.glb")
+SWAP_SUFFIX = ".pre-swap"
+SWAP_MARKER = ".swap-in-progress"
+LEGACY_ROLLBACK = "bricks.rollback"
+
+
+def _sha256_file(path: Path) -> str:
+    h = hashlib.sha256()
+    with open(path, "rb") as fh:
+        for block in iter(lambda: fh.read(1 << 20), b""):
+            h.update(block)
+    return h.hexdigest()
+
+
+def _remove_path(path: Path) -> None:
+    if path.is_dir() and not path.is_symlink():
+        shutil.rmtree(path, ignore_errors=True)
+    else:
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            pass
+
+
+def _rename(src: Path, dst: Path) -> None:
+    _retry_os(lambda: os.rename(src, dst))
+
+
+def recover_interrupted_publish(final_dir: Path) -> None:
+    """Finish or undo a swap a crash interrupted, so a dataset is never left mixing
+    two runs. The marker records the hash of the metadata.json being installed: if
+    that file is in place the swap had committed and only the old copies remain to
+    be dropped; otherwise the old entries go back where they were."""
+    marker = final_dir / SWAP_MARKER
+    if marker.is_file():
+        info = read_json_file(marker)
+        meta = final_dir / "metadata.json"
+        committed = bool(info.get("metadataSha256")) and meta.is_file() \
+            and _sha256_file(meta) == info["metadataSha256"]
+        for entry in info.get("entries") or []:
+            old = final_dir / (entry + SWAP_SUFFIX)
+            if not old.exists():
+                continue
+            if committed:
+                _remove_path(old)
+            else:
+                current = final_dir / entry
+                if current.exists():
+                    _remove_path(current)
+                _rename(old, current)
+        marker.unlink()
+        print(_warn(f"   [<] publication interrompue de {final_dir.name} "
+                    f"{'terminee' if committed else 'annulee'}"))
+    # A run of an earlier pipeline version moved bricks/ aside for its whole duration
+    # and could be killed before putting them back.
+    legacy = final_dir / LEGACY_ROLLBACK
+    if legacy.is_dir() and not (final_dir / "bricks").exists():
+        _rename(legacy, final_dir / "bricks")
+        print(_warn(f"   [<] bricks/ precedent restaure pour {final_dir.name}"))
+
+
+def _merge_with_published(stage_dir: Path, final_dir: Path) -> None:
+    """Re-apply the curation of the published metadata.json at the last moment: the
+    operator may have edited it (hidden it, recalibrated it) while the run was busy."""
+    published = final_dir / "metadata.json"
+    if not published.is_file():
+        return
+    existing = read_json_file(published)
+    if not existing:
+        return
+    catalog = load_step("4-catalog_generator.py", "lumen_catalog_generator")
+    staged = stage_dir / "metadata.json"
+    merged = catalog.merge_volume_metadata(existing, read_json_file(staged))
+    atomic_write_json(staged, merged, indent=2, ensure_ascii=False)
+
+
+def publish_dataset(stage_dir: Path, final_dir: Path) -> None:
+    """Move a complete staged dataset into DATA_WEB, metadata.json last.
+
+    A new dataset appears in one rename. An existing one has its pipeline entries
+    swapped: the old ones are renamed aside, the new ones moved in, then metadata.json
+    is replaced — the commit point. Any failure before it puts everything back.
+    """
+    staged_meta = stage_dir / "metadata.json"
+    if not staged_meta.is_file():
+        raise RuntimeError(f"{stage_dir} n'a pas de metadata.json — rien a publier")
+
+    if not final_dir.exists():
+        final_dir.parent.mkdir(parents=True, exist_ok=True)
+        _rename(stage_dir, final_dir)
+        return
+
+    recover_interrupted_publish(final_dir)
+    _merge_with_published(stage_dir, final_dir)
+
+    entries = [e for e in PIPELINE_ENTRIES if (stage_dir / e).exists()]
+    if (stage_dir / "tracks.json").exists():
+        # A newly attached tracking replaces the whole previous set, including a surface
+        # the new analysis no longer has.
+        entries += list(TRACKING_ENTRIES)
+    marker = final_dir / SWAP_MARKER
+    atomic_write_json(marker, {"metadataSha256": _sha256_file(staged_meta), "entries": entries})
+
+    moved_aside, installed = [], []
+    try:
+        for entry in entries:
+            current = final_dir / entry
+            if current.exists():
+                stale = final_dir / (entry + SWAP_SUFFIX)
+                if stale.exists():
+                    _remove_path(stale)
+                _rename(current, stale)
+                moved_aside.append(entry)
+        for entry in entries:
+            if (stage_dir / entry).exists():
+                _rename(stage_dir / entry, final_dir / entry)
+                installed.append(entry)
+        _retry_os(lambda: os.replace(staged_meta, final_dir / "metadata.json"))
+    except BaseException:
+        for entry in reversed(installed):
+            try:
+                _rename(final_dir / entry, stage_dir / entry)
+            except OSError:
+                _remove_path(final_dir / entry)
+        for entry in reversed(moved_aside):
+            _rename(final_dir / (entry + SWAP_SUFFIX), final_dir / entry)
+        marker.unlink()
+        raise
+    marker.unlink()
+    for entry in moved_aside:
+        _remove_path(final_dir / (entry + SWAP_SUFFIX))
+    if (final_dir / LEGACY_ROLLBACK).exists():
+        _remove_path(final_dir / LEGACY_ROLLBACK)
+
+
+def dataset_folder_name(stem: str, type_dir: Path) -> str:
+    """The dataset folder for a source file. A name that is not URL-safe is
+    slugified, unless a dataset was already published under the raw name — its id,
+    links and curation stay where they are."""
+    slug = slugify(stem) or "dataset"
+    if slug != stem and (type_dir / stem).is_dir():
+        return stem
+    return slug
+
+
 def process_ims_file(ims_path: Path, output_root: Path, idx: int = 0, total: int = 0,
-                     with_downloads: bool = False, tracking: str = "auto") -> None:
-    dataset_name = ims_path.stem
+                     with_downloads: bool = False, tracking: str = "auto") -> bool:
+    """Run the whole pipeline on one .ims. Returns True once the dataset is published."""
+    display_name = ims_path.stem
     counter = f"[{idx}/{total}] " if total else ""
     print()
-    print(_hdr(f">> {counter}{dataset_name}"))
+    print(_hdr(f">> {counter}{display_name}"))
     print(_dim(f"   source : {ims_path}"))
     t0 = datetime.now()
-    
-    # Setup directories
-    temp_dir = output_root / f".temp_preprocess_{dataset_name}"
+
+    temp_dir = output_root / f".temp_preprocess_{slugify(display_name) or 'dataset'}"
     if temp_dir.exists():
         shutil.rmtree(temp_dir)
     temp_dir.mkdir(parents=True, exist_ok=True)
 
-    # Bound before the try: step 1 can fail, and the rollback handler must not turn a
-    # step-1 error into a NameError that hides it.
-    bricks_dir = None
-    bricks_rollback = None
-
+    published = None
     try:
         # Step 1: Extraction of metadata
         temp_meta_json = temp_dir / "meta.json"
@@ -291,82 +600,94 @@ def process_ims_file(ims_path: Path, output_root: Path, idx: int = 0, total: int
         with open(temp_meta_json, "r", encoding="utf-8") as fm:
             n_timepoints = int(json.load(fm).get("n_timepoints", 1) or 1)
         dataset_type = "live" if n_timepoints > 1 else "3d"
-        dataset_output_dir = output_root / dataset_type / dataset_name
-        # The previous bricks used to be DELETED here, before the heavy step even ran.
-        # Any failure after this point — and step 2 can fail for reasons that have
-        # nothing to do with the data, such as exhausting the Windows commit limit on a
-        # busy machine — left an already published dataset with no bricks at all and no
-        # way back. They are now moved aside and only dropped once the run has succeeded;
-        # on failure they are put back (see the except/finally below).
-        bricks_dir = dataset_output_dir / "bricks"
-        bricks_rollback = dataset_output_dir / "bricks.rollback"
-        if bricks_dir.exists():
-            if bricks_rollback.exists():
-                shutil.rmtree(bricks_rollback, ignore_errors=True)
-            bricks_dir.rename(bricks_rollback)
-        dataset_output_dir.mkdir(parents=True, exist_ok=True)
+        dataset_name = dataset_folder_name(display_name, output_root / dataset_type)
+        final_dir = output_root / dataset_type / dataset_name
+        if final_dir.exists():
+            # A previous run killed mid-publish: put the dataset back in one piece now,
+            # not hours from now when this run publishes.
+            recover_interrupted_publish(final_dir)
+        stage_dir = temp_dir / "stage" / dataset_type / dataset_name
+        stage_dir.mkdir(parents=True)
         print(_dim(f"   type   : {dataset_type}"
                    + (f" ({n_timepoints} timepoints)" if n_timepoints > 1 else "")))
+        if dataset_name != display_name:
+            print(_dim(f"   dossier: {dataset_name} (nom source non utilisable tel quel dans une URL)"))
 
-        # Step 2: Normalization, Background subtraction, Downscaling
-        run_step("2-image_processor.py", str(ims_path), str(temp_meta_json), str(temp_dir))
-        
+        # Step 2: Normalization, Background subtraction, Downscaling — each timepoint is
+        # packed into the staging tree as soon as it is levelled, so the temporary
+        # disk never holds more than one frame's LOD set.
+        run_step("2-image_processor.py", str(ims_path), str(temp_meta_json), str(temp_dir),
+                 "--pack-into", str(stage_dir))
+
         # Step 3: Compute thumbnail MIP
         with open(temp_dir / "processing_meta.json", "r", encoding="utf-8") as fm:
             proc_meta = json.load(fm)
-        build_thumbnail(temp_dir, dataset_output_dir, proc_meta)
-        
-        # Step 4: Chunking 64³ & Pack building
-        run_step("3-chunk_packer.py", str(temp_dir), str(dataset_output_dir))
-        
-        # Step 5: Catalog metadata (dataset.json / metadata.json)
-        run_step("4-catalog_generator.py", str(temp_dir), str(dataset_output_dir))
+        build_thumbnail(temp_dir, stage_dir, proc_meta)
+
+        # Step 4: Chunking 64³ & Pack building (manifest of the packs step 2 wrote)
+        run_step("3-chunk_packer.py", str(temp_dir), str(stage_dir))
+
+        # Step 5: Catalog metadata, merged with the curation of the published one
+        run_step("4-catalog_generator.py", str(temp_dir), str(stage_dir),
+                 "--existing", str(final_dir / "metadata.json"),
+                 "--display-name", display_name)
 
         # Step 6: cell tracking, when the acquisition has one. Only a timelapse can carry
         # trajectories, and the step needs the metadata.json step 4 just wrote.
         if n_timepoints > 1:
-            attach_tracking(ims_path, dataset_output_dir, temp_dir, dataset_name, tracking)
+            attach_tracking(ims_path, stage_dir, temp_dir, dataset_name, tracking)
 
-        # Step 7 (optional): download/ bundle — archive, original .ims, ImageJ TIFF,
-        # per-channel MIPs, README. Runs after step 4 so metadata.json exists. The
-        # source .ims is the one being processed, so point the tool at its folder.
-        if with_downloads:
-            dl_script = _resolve_download_script()
-            if dl_script is None:
-                print(_warn(f"   [!] {DOWNLOAD_SCRIPT_NAME} introuvable — download/ ignore"))
-            else:
-                run_script(dl_script,
-                           "--data-web", str(output_root),
-                           "--raw-dir", str(ims_path.parent),
-                           "--datasets", dataset_name,
-                           label="download/ (archive, ImageJ TIFF, MIP)")
-
-        # The run produced a complete brick set: the previous one can go.
-        if bricks_rollback is not None and bricks_rollback.exists():
-            shutil.rmtree(bricks_rollback, ignore_errors=True)
-
-        elapsed = (datetime.now() - t0).total_seconds()
-        print(_ok(f"   [OK] {dataset_name} termine en {elapsed:.0f}s"))
+        publish_dataset(stage_dir, final_dir)
+        published = final_dir
     except Exception as e:
-        print(_err(f"   [X] {dataset_name} : {e}"), file=sys.stderr)
+        print(_err(f"   [X] {display_name} : {e}"), file=sys.stderr)
         traceback.print_exc()
-        # Put the previous bricks back: a dataset that was serving before this run must
-        # still be serving after it failed. A partial set left by an interrupted step 3
-        # is worse than the old one — it is discarded.
-        try:
-            if bricks_rollback is not None and bricks_rollback.exists():
-                if bricks_dir.exists():
-                    shutil.rmtree(bricks_dir, ignore_errors=True)
-                bricks_rollback.rename(bricks_dir)
-                print(_warn(f"   [<] bricks/ precedent restaure pour {dataset_name}"), file=sys.stderr)
-        except Exception as restore_err:
-            print(_err(f"   [!] restauration de bricks/ impossible : {restore_err}"), file=sys.stderr)
+        print(_warn("   [<] le dataset publie (s'il existe) est inchange"), file=sys.stderr)
     finally:
-        # Clean up temporary processing binary files to free space.
         # ignore_errors: on a Ctrl+C teardown a just-killed worker may still hold a
         # handle for a few ms — never let cleanup mask the interruption.
         if temp_dir.exists():
             shutil.rmtree(temp_dir, ignore_errors=True)
+
+    if published is None:
+        return False
+
+    # Step 7 (optional): download/ bundle — archive, original .ims, ImageJ TIFF,
+    # per-channel MIPs, README. An extra on top of a dataset that is already
+    # published and complete: its failure is reported and never undoes the dataset.
+    if with_downloads:
+        dl_script = _resolve_download_script()
+        if dl_script is None:
+            print(_warn(f"   [!] {DOWNLOAD_SCRIPT_NAME} introuvable — download/ ignore"))
+        else:
+            try:
+                run_script(dl_script,
+                           "--data-web", str(output_root),
+                           "--raw-dir", str(ims_path.parent),
+                           "--dataset", f"{published.parent.name}/{published.name}",
+                           "--ims", str(ims_path),
+                           label="download/ (archive, ImageJ TIFF, MIP)")
+            except subprocess.CalledProcessError as exc:
+                print(_warn(f"   [!] download/ incomplet (code {exc.returncode}) — "
+                            f"le dataset publie reste utilisable"))
+
+    elapsed = (datetime.now() - t0).total_seconds()
+    print(_ok(f"   [OK] {display_name} termine en {elapsed:.0f}s"))
+    return True
+
+
+def _folder_collisions(ims_files) -> dict:
+    """Source files whose folder names would coincide (Windows folders ignore case),
+    mapped to the earlier file that claims the name."""
+    claimed, clashes = {}, {}
+    for path in ims_files:
+        key = (slugify(path.stem) or "dataset").casefold()
+        if key in claimed:
+            clashes[path] = claimed[key]
+        else:
+            claimed[key] = path
+    return clashes
+
 
 def main():
     parser = argparse.ArgumentParser(description="IRIBHM Microscopy Preprocessing Unified Pipeline")
@@ -411,17 +732,30 @@ def main():
     # Graceful Ctrl+C: confirm with the user, then tear the running step down cleanly.
     _install_sigint_handler()
 
+    # Two inputs that would land in the same folder must not overwrite each other: the
+    # first one claims the name, the second is refused and named.
+    clashes = _folder_collisions(ims_files)
+
     # One dataset at a time (bounded RAM) — each step already multithreads internally.
     interrupted = False
+    failed = []
     for i, ims_file in enumerate(ims_files):
+        if ims_file in clashes:
+            print(_err(f"   [X] {ims_file.name} : meme dossier de destination que "
+                       f"{clashes[ims_file].name} — renommez l'un des deux fichiers"))
+            failed.append(ims_file.name)
+            continue
         try:
-            process_ims_file(ims_file, output_dir, i + 1, len(ims_files),
-                             with_downloads=args.with_downloads, tracking=args.tracking)
+            ok = process_ims_file(ims_file, output_dir, i + 1, len(ims_files),
+                                  with_downloads=args.with_downloads, tracking=args.tracking)
+            if not ok:
+                failed.append(ims_file.name)
         except KeyboardInterrupt:
             interrupted = True
             break
         except Exception as exc:
             print(_err(f"   [X] {ims_file.name} : {exc}"))
+            failed.append(ims_file.name)
 
     if interrupted:
         # Remove any half-written temp folder left by the aborted dataset.
@@ -432,6 +766,9 @@ def main():
         sys.exit(130)
 
     print()
+    if failed:
+        print(_err(f"  Pipeline termine : {len(failed)} dataset(s) en echec — " + ", ".join(failed)))
+        sys.exit(1)
     print(_ok("  Pipeline termine."))
 
 if __name__ == "__main__":

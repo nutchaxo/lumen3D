@@ -36,6 +36,13 @@ const PluginSandbox = (() => {
   const MAX_TOAST = 200;
   const MAX_DOWNLOAD_BYTES = 32 * 1024 * 1024;
   const DOWNLOAD_MIME = new Set(['image/png', 'image/jpeg', 'application/json', 'text/csv', 'text/plain']);
+  // The file name is plugin-chosen: only an extension that matches the declared type is
+  // allowed, so an 'application/json' payload cannot be saved as update.bat or page.html.
+  const DOWNLOAD_EXT = {
+    'image/png': ['png'], 'image/jpeg': ['jpg', 'jpeg'], 'application/json': ['json'],
+    'text/csv': ['csv'], 'text/plain': ['txt', 'log']
+  };
+  const MAX_STATE_JSON = 256 * 1024;   // a workspace-state push; it ends up in the URL hash and localStorage
   const EVENT_TOPICS = new Set(['render', 'channels-updated', 'camera']);
 
   // Per-page CSP nonce (L9): sourced from THIS script tag's own .nonce, captured
@@ -250,7 +257,12 @@ const PluginSandbox = (() => {
       case 'state':
         // Workspace state pushed by the plugin — cached (opaque, by value; already
         // a structured-clone with no functions) for getWorkspaceState() to read.
-        entry.cachedState = env.payload;
+        // The rate limiter bounds the NUMBER of messages, not their size: cap what is kept.
+        {
+          let size = Infinity;
+          try { size = JSON.stringify(env.payload === undefined ? null : env.payload).length; } catch (_) { /* not serialisable */ }
+          if (size <= MAX_STATE_JSON) entry.cachedState = env.payload;
+        }
         break;
       case 'subscribe':
         _subscribe(entry, String(env.payload && env.payload.topic || ''));
@@ -282,10 +294,16 @@ const PluginSandbox = (() => {
         }
         case 'ui.download': {
           // INV-11: only within the gesture window opened by a real toolbar click.
-          if (_now() - entry.lastActivateAt > GESTURE_WINDOW_MS || entry.downloadUsed) { fail('no-gesture'); break; }
-          const filename = String(p.filename == null ? 'download' : p.filename).slice(0, 128).replace(/[\\/:*?"<>|\x00-\x1f]/g, '_');
+          if (_now() - entry.lastActivateAt > GESTURE_WINDOW_MS || entry.downloadUsed || !entry.activatedByUser) { fail('no-gesture'); break; }
+          let filename = String(p.filename == null ? 'download' : p.filename).slice(0, 128).replace(/[\\/:*?"<>|\x00-\x1f]/g, '_');
           const mime = String(p.mime || '');
           if (!DOWNLOAD_MIME.has(mime)) { fail('bad-mime'); break; }
+          const exts = DOWNLOAD_EXT[mime];
+          const dot = filename.lastIndexOf('.');
+          const ext = dot > 0 ? filename.slice(dot + 1).toLowerCase() : '';
+          if (exts.indexOf(ext) < 0) filename = (dot > 0 ? filename.slice(0, dot) : filename) + '.' + exts[0];
+          // base64 inflates by 4/3: refuse before decoding what could not fit anyway
+          if (String(p.dataB64 || '').length > Math.ceil(MAX_DOWNLOAD_BYTES * 4 / 3) + 4) { fail('too-large'); break; }
           const bytes = _fromB64(p.dataB64);
           if (!bytes || bytes.length > MAX_DOWNLOAD_BYTES) { fail('too-large'); break; }
           entry.downloadUsed = true;
@@ -304,8 +322,11 @@ const PluginSandbox = (() => {
           const g = _hostCtx.getCanvasBlob;
           if (!g) { fail('unsupported'); break; }
           entry.canvasInFlight = true;
-          Promise.resolve(g({ mime: p.mime === 'image/jpeg' ? 'image/jpeg' : 'image/png',
-                              quality: typeof p.quality === 'number' ? p.quality : 0.95 }))
+          // Started inside the chain: a synchronous throw from the getter reaches .catch and
+          // clears the flag, instead of leaving every later call answering 'busy'.
+          Promise.resolve()
+            .then(() => g({ mime: p.mime === 'image/jpeg' ? 'image/jpeg' : 'image/png',
+                            quality: typeof p.quality === 'number' ? p.quality : 0.95 }))
             .then((blob) => blob ? _blobToB64(blob) : null)
             .then((b64) => { entry.canvasInFlight = false; b64 ? ok({ dataB64: b64 }) : fail('internal'); })
             .catch(() => { entry.canvasInFlight = false; fail('internal'); });
@@ -367,13 +388,26 @@ const PluginSandbox = (() => {
     }
   }
   function _projectEvent(topic, p) {
-    if (topic === 'camera' && p) return { position: (p.position || []).map(Number), target: (p.target || []).map(Number) };
+    if (topic === 'camera' && p) {
+      // Only what the host really reports (VolumeViewer.getCameraState: position, quaternion,
+      // cameraZ; some hosts add a target), as plain numbers.
+      const nums = (v) => (Array.isArray(v) ? v.map(Number)
+        : (v && typeof v === 'object' && 'x' in v) ? [v.x, v.y, v.z, v.w].filter(c => c !== undefined).map(Number) : null);
+      const out = {};
+      const pos = nums(p.position); if (pos) out.position = pos;
+      const tgt = nums(p.target); if (tgt) out.target = tgt;
+      const quat = nums(p.quaternion); if (quat) out.quaternion = quat;
+      if (Number.isFinite(Number(p.cameraZ))) out.cameraZ = Number(p.cameraZ);
+      return out;
+    }
     if (topic === 'channels-updated') return _projectChannels();
     return {};  // 'render' carries no payload
   }
 
   // ── Spawn / lifecycle ───────────────────────────────────────────────────────
   async function spawn(meta, expectedHash, caps, code) {
+    // A second spawn under the same id would orphan the first frame (still registered by window).
+    if (_byId.has(meta.id)) kill(meta.id, 'respawn');
     // The registry already verified (INV-2) that `code` is the exact index.js bytes
     // whose composite hash == the operator-approved hash. `caps` were intersected
     // server-side (declared ∩ approved ∩ allowlist), so they are safe to grant here.
@@ -405,7 +439,7 @@ const PluginSandbox = (() => {
       subscribed: new Set(), button: null, lastToggle: { active: false },
       // -Infinity, NOT 0: early in page life _now() is small, and 0 would fall
       // INSIDE the gesture window → a download with no activation (real hole).
-      lastActivateAt: -Infinity, downloadUsed: false, canvasInFlight: false,
+      lastActivateAt: -Infinity, downloadUsed: false, canvasInFlight: false, activatedByUser: false,
       tokens: RATE_CAP, tokenAt: _now(), abuseCount: 0, abuseAt: _now(), missedPongs: 0,
       _spawn: null,
     };
@@ -434,6 +468,10 @@ const PluginSandbox = (() => {
     return {
       init() { return this; },                          // real init already ran in-frame
       activate() { entry.lastActivateAt = _now(); entry.downloadUsed = false;
+                   // A programmatic activation (workspace restore, Compare relay) is not a click:
+                   // where the browser can tell, only a real user activation opens the download gate.
+                   entry.activatedByUser = !(typeof navigator !== 'undefined' && navigator.userActivation)
+                     || navigator.userActivation.isActive;
                    _send(entry, 'sys', 'activate'); return entry.lastToggle; },
       deactivate() { _send(entry, 'sys', 'deactivate'); },
       // Workspace state is bridged: the plugin pushes state via LumenPlugin.saveState
@@ -468,11 +506,15 @@ const PluginSandbox = (() => {
     const entry = _byId.get(pluginId);
     if (!entry) return;
     _send(entry, 'sys', 'teardown');
-    // Remove identity entries BEFORE detaching (in-flight messages → unknown source).
+    // Remove identity entries BEFORE detaching (in-flight messages → unknown source): from
+    // here on nothing the frame sends is honoured, so its capabilities are gone at once.
     if (entry.win) _hosts.delete(entry.win);
     _byId.delete(pluginId);
     if (entry._spawn) { clearTimeout(entry._spawn.timer); entry._spawn.reject(new Error('killed:' + reason)); entry._spawn = null; }
-    try { entry.frame.remove(); } catch (_) {}
+    // The frame stays attached for a moment so the teardown message above is delivered and the
+    // plugin's dispose() can run; removing it in the same tick would drop the message.
+    const frame = entry.frame;
+    setTimeout(() => { try { frame.remove(); } catch (_) {} }, 100);
   }
   function killAll() { for (const id of Array.from(_byId.keys())) kill(id, 'killAll');
     if (_listenerBound) { window.removeEventListener('message', _onMessage); _listenerBound = false; }

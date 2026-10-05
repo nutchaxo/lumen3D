@@ -35,7 +35,7 @@ function makeWorld() {
 function makeLoader(world) {
   const started = [];
   const fetchImpl = async (url, init = {}) => {
-    const rel = String(url).split('/bricks/')[1];
+    const rel = String(url).split('/bricks/')[1].split('?')[0];
     const pack = world.packs[rel];
     if (!pack) return { ok: false, status: 404, arrayBuffer: async () => new ArrayBuffer(0) };
     let land, fail;
@@ -93,10 +93,12 @@ const landAll = async (started) => {
   assert.equal(started.length, N, 'every pack fetched exactly once');
   assert.equal(first.rows.length, N, 'every brick delivered');
   for (const row of first.rows) assert.equal(row.data[0], row.bx + 1, `brick ${row.bx} carries its own pack's bytes`);
+  assert.equal(BL.getCacheStats().packBytes, 0, 'every pack released once its bricks were cut');
   const again = load(BL);
   await settle();
+  assert.equal(started.length, N + 4, 'a later batch asks again, four bodies at a time (nothing is kept past its batch)');
+  await landAll(started);
   await again.done;
-  assert.equal(started.length, N, 'a second batch over the same bricks fetches nothing (LRU)');
   assert.equal(again.rows.length, N);
 }
 

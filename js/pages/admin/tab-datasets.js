@@ -12,9 +12,9 @@
 'use strict';
 
 import {
-  API_DATASETS, Utils, t, escHtml, apiFetch, toast, el, deepClone, refreshIcons,
+  API_DATASETS, Utils, t, escHtml, apiFetch, apiFetchStatus, toast, el, deepClone, refreshIcons,
 } from './shared.js';
-import { setUnsaved, setDirtyGuard } from './bus.js';
+import { setUnsaved, registerDirtyGuard, setDatasetOpener, bindTabSave } from './bus.js';
 import * as Upload from './upload-manager.js';
 
 const PREVIEW_DEBOUNCE = 150;
@@ -164,7 +164,7 @@ function setDirty(on) {
   const next = !!on;
   if (next === _dirty) return;
   _dirty = next;
-  setUnsaved(next);
+  setUnsaved(next, 'datasets');
 }
 
 /** Re-evaluate against the baseline. Every edit path ends here. */
@@ -177,7 +177,7 @@ function syncDirty() {
 }
 
 /** Baseline reset (load / save / discard): there is nothing pending, full stop. */
-function clearDirty() { _dirty = false; setUnsaved(false); }
+function clearDirty() { _dirty = false; setUnsaved(false, 'datasets'); }
 
 /**
  * DOM → draft for the fields the form owns. Called before every comparison AND on
@@ -231,14 +231,30 @@ function discardChanges({ repaint = true } = {}) {
 }
 
 // ── List ───────────────────────────────────────────────────────
+let _listSeq = 0;
+let _firstLoadPending = false;
 async function loadDatasets() {
+  // Answers can arrive out of order (tab activation + an import state change):
+  // only the newest request may paint.
+  const seq = ++_listSeq;
   const data = await apiFetch(`${API_DATASETS}?action=list`);
+  if (seq !== _listSeq) return;
   if (!data?.datasets) {
-    if (DOM.listLoading) DOM.listLoading.innerHTML =
-      `<div style="padding:20px;text-align:center;font-size:12px;color:var(--adm-text-muted)">${escHtml(t('admin.loadFailed', 'Impossible de charger les datasets.'))}</div>`;
+    if (DOM.listLoading) {
+      DOM.listLoading.innerHTML =
+        `<div style="padding:20px;text-align:center;font-size:12px;color:var(--adm-text-muted)">${escHtml(t('admin.loadFailed', 'Impossible de charger les datasets.'))}
+          <div style="margin-top:10px"><button type="button" class="adm-btn adm-btn-ghost adm-btn-sm" data-list-retry>${escHtml(t('admin.retry', 'Réessayer'))}</button></div></div>`;
+      DOM.listLoading.querySelector('[data-list-retry]')?.addEventListener('click', () => {
+        DOM.listLoading.innerHTML = '<div class="spinner"></div>';
+        loadDatasets();
+      });
+    } else if (_loaded) {
+      toast(t('admin.loadFailed', 'Impossible de charger les datasets.'), 'error');
+    }
     return;
   }
   _datasets = data.datasets;
+  if (Number.isFinite(data.galleryMaxBytes) && data.galleryMaxBytes > 0) _galleryMaxBytes = data.galleryMaxBytes;
   DOM.datasetCount.textContent = _datasets.length;
   if (DOM.listLoading) DOM.listLoading.remove();
   renderList();
@@ -898,7 +914,10 @@ async function toggleItemVisibility(id, btn) {
 // Order and captions, on the other hand, are ordinary form state: they ride along
 // in _draft and land with Save. Uploading therefore also advances _original, so a
 // fresh image never registers as an unsaved change.
-const GALLERY_MAX_BYTES = 8 * 1024 * 1024;
+// The image travels as its raw bytes (Content-Type image/*), so the ceiling is the
+// server's own: the `list` answer states it (galleryMaxBytes — the platform's 8 MiB,
+// lowered to post_max_size on a PHP host configured tighter). 5 MiB until it is known.
+let _galleryMaxBytes = 5 * 1024 * 1024;
 const GALLERY_MAX_ITEMS = 40;
 const GALLERY_TYPES = ['image/png', 'image/jpeg', 'image/webp', 'image/gif'];
 
@@ -961,15 +980,6 @@ function commitGallery(gallery) {
   renderGallery();
 }
 
-function readFileAsDataUrl(file) {
-  return new Promise((resolve, reject) => {
-    const fr = new FileReader();
-    fr.onload = () => resolve(String(fr.result || ''));
-    fr.onerror = () => reject(new Error('read failed'));
-    fr.readAsDataURL(file);
-  });
-}
-
 async function uploadGalleryFiles(files) {
   if (!_current || !_draft) return;
   if (_draft.staging) { toast(t('admin.galleryStaging', 'Publiez l\'import pour pouvoir lui attacher des images.'), 'error'); return; }
@@ -986,23 +996,21 @@ async function uploadGalleryFiles(files) {
       toast(t('admin.galleryBadType', `« ${file.name} » : format non supporté (PNG, JPEG, WebP, GIF).`, { name: file.name }), 'error');
       continue;
     }
-    if (file.size > GALLERY_MAX_BYTES) {
-      toast(t('admin.galleryTooLarge', `« ${file.name} » dépasse 8 Mo.`, { name: file.name }), 'error');
+    if (file.size > _galleryMaxBytes) {
+      const max = `${Math.floor(_galleryMaxBytes / (1024 * 1024) * 10) / 10} MB`;
+      toast(t('admin.galleryTooLargeMax', `« ${file.name} » dépasse ${max}.`, { name: file.name, max }), 'error');
       continue;
     }
-    let dataUrl;
-    try {
-      dataUrl = await readFileAsDataUrl(file);
-    } catch (_) {
-      toast(t('admin.galleryReadFailed', `« ${file.name} » illisible.`, { name: file.name }), 'error');
-      continue;
-    }
-    const data = await apiFetch(`${API_DATASETS}?action=gallery_add&id=${encodeURIComponent(_current.id)}`,
-      { method: 'POST', body: JSON.stringify({ image: dataUrl, filename: file.name }) });
+    // Raw bytes, read by the browser straight from the file: no base64 detour. The
+    // server takes the extension from the magic bytes, never from this name.
+    const res = await apiFetchStatus(
+      `${API_DATASETS}?action=gallery_add&id=${encodeURIComponent(_current.id)}&filename=${encodeURIComponent(file.name)}`,
+      { method: 'POST', body: file, headers: { 'Content-Type': file.type } });
+    const data = res.data;
     if (data?.ok) {
       commitGallery(data.gallery);
     } else {
-      const reason = data?.error || t('admin.unknownError', 'Inconnue');
+      const reason = data?.error || (res.status ? `HTTP ${res.status}` : t('admin.unknownError', 'Inconnue'));
       toast(t('admin.galleryUploadError', `Envoi de « ${file.name} » impossible : ${reason}`, { name: file.name, reason }), 'error');
     }
   }
@@ -1075,15 +1083,23 @@ function wireGallery() {
 }
 
 // ── Save / Reset ───────────────────────────────────────────────
+let _saving = false;
 async function saveDataset() {
-  if (!_current || !_draft) return;
+  if (!_current || !_draft || _saving) return;
+  _saving = true;
+  try { await saveDatasetNow(); } finally { _saving = false; }
+}
+
+async function saveDatasetNow() {
+  const savedId = _current.id;
   DOM.btnSave.disabled = true;
   DOM.btnSave.innerHTML = `<span class="spinner spinner-sm"></span> ${escHtml(t('admin.saving', 'Sauvegarde…'))}`;
 
   if (_isCalibratingOrientation && DOM.previewFrame.contentWindow) {
-    DOM.previewFrame.contentWindow.postMessage({ type: 'GET_ORIENTATION' }, '*');
+    DOM.previewFrame.contentWindow.postMessage({ type: 'GET_ORIENTATION' }, window.location.origin);
     await new Promise((resolve) => {
       const handler = (e) => {
+        if (e.source !== DOM.previewFrame.contentWindow) return;
         if (e.data?.type === 'ORIENTATION_RESULT') {
           if (e.data.orientation2d && typeof e.data.orientation2d === 'object') {
             const o = e.data.orientation2d;
@@ -1112,7 +1128,7 @@ async function saveDataset() {
       DOM.btnDefineOrientation.innerHTML = t('admin.defineOrientation', '🧭 Définir l\'orientation');
     }
     if (DOM.orientationStatus) DOM.orientationStatus.textContent = t('admin.orientationSet', 'Orientation définie ✓');
-    DOM.previewFrame.contentWindow.postMessage({ type: 'CALIBRATE_ORIENTATION_STOP' }, '*');
+    DOM.previewFrame.contentWindow.postMessage({ type: 'CALIBRATE_ORIENTATION_STOP' }, window.location.origin);
   }
 
   collectForm();
@@ -1121,20 +1137,26 @@ async function saveDataset() {
   // editor's to set: it is derived from the directory the dataset lives in and
   // re-asserted server-side on every write. Posting it back could only ever
   // persist a stale or inconsistent value, so it is left out of the payload.
-  const { type: _serverOwnedType, ...payload } = _draft;
-  const data = await apiFetch(`${API_DATASETS}?action=save&id=${encodeURIComponent(_current.id)}`,
+  const snapshot = deepClone(_draft);
+  const { type: _serverOwnedType, ...payload } = snapshot;
+  const data = await apiFetch(`${API_DATASETS}?action=save&id=${encodeURIComponent(savedId)}`,
     { method: 'POST', body: JSON.stringify(payload) });
 
   DOM.btnSave.disabled = false;
   DOM.btnSave.innerHTML = t('admin.save', '💾 Sauvegarder');
 
   if (data?.ok) {
-    _original = deepClone(_draft);
-    clearDirty();
     toast(t('admin.toastSaved', 'Dataset sauvegardé ✓'));
-    DOM.topbarName.textContent = _draft.name;
-    const idx = _datasets.findIndex((d) => d.id === _current.id);
-    if (idx !== -1) _datasets[idx] = { ..._datasets[idx], name: _draft.name, stage: _draft.stage, embryo: _draft.embryo, configured: true };
+    // The operator may have opened another dataset, or typed more, while the
+    // request was in flight: the baseline moves only for the dataset that was
+    // actually written, and to what was written.
+    if (_current && _current.id === savedId && _draft) {
+      _original = snapshot;
+      syncDirty();
+      DOM.topbarName.textContent = _draft.name;
+    }
+    const idx = _datasets.findIndex((d) => d.id === savedId);
+    if (idx !== -1) _datasets[idx] = { ..._datasets[idx], name: snapshot.name, stage: snapshot.stage, embryo: snapshot.embryo, configured: true };
     renderList();
     // No catalog rebuild: it is derived from metadata.json on every request.
   } else {
@@ -1184,10 +1206,12 @@ function wire() {
   DOM.btnReset.addEventListener('click', resetDataset);
   wireGallery();
 
+  let _searchTimer = null;
   DOM.datasetSearch.addEventListener('input', (e) => {
     _searchQuery = e.target.value;
     DOM.searchClear.style.display = _searchQuery ? 'block' : 'none';
-    renderList();
+    clearTimeout(_searchTimer);
+    _searchTimer = setTimeout(renderList, 120);
   });
   DOM.searchClear.addEventListener('click', () => {
     _searchQuery = ''; DOM.datasetSearch.value = '';
@@ -1297,15 +1321,13 @@ function wire() {
     pushOrientationAxes();
   });
 
-  // Ctrl+S
-  document.addEventListener('keydown', (e) => {
-    if (e.ctrlKey && (e.key === 's' || e.key === 'S') && _draft) { e.preventDefault(); saveDataset(); }
-  });
-  window.addEventListener('beforeunload', (e) => { if (_dirty) { e.preventDefault(); e.returnValue = ''; } });
+  // Ctrl/Cmd+S, only while this tab is the visible one and a dataset is open.
+  bindTabSave('datasets', () => { if (!_draft) return false; saveDataset(); return true; });
 
   // Sync from the embedded viewer iframe.
   window.addEventListener('message', (e) => {
     if (e.origin !== window.location.origin) return;   // SEC-006
+    if (DOM.previewFrame?.contentWindow && e.source !== DOM.previewFrame.contentWindow) return;
     if (e.data?.type === 'SYNC_CHANNELS' && e.data.value && _draft?.channels) {
       const idx = e.data.channelIndex;
       if (idx !== undefined && _draft.channels[idx]) {
@@ -1343,10 +1365,12 @@ export const DatasetsTab = {
   mounted: false,
   mount() {
     refDom();
-    setDirtyGuard(() => _dirty, () => discardChanges());
+    registerDirtyGuard('datasets', () => _dirty, () => discardChanges());
+    setDatasetOpener(openDataset);
     renderFilterTabs();
     wire();
-    loadDatasets();
+    _firstLoadPending = true;
+    loadDatasets().finally(() => { _firstLoadPending = false; });
     // An import promotes a dataset from "not editable" to "editable" the instant
     // its coarse LOD lands, and that must show up here without a reload. The
     // manager emits on every progress tick (a few times a second), so re-list only
@@ -1356,6 +1380,7 @@ export const DatasetsTab = {
   },
   // A type renamed in the Dataset types tab must show up on the chips here the
   // next time this tab is opened, not only after a reload.
-  activate() { renderFilterTabs(); if (_loaded) loadDatasets(); },
+  // The first load is already under way when mount() has just run.
+  activate() { renderFilterTabs(); if (!_firstLoadPending) loadDatasets(); },
   relabel() { renderFilterTabs(); renderList(); if (_draft) { populateForm(); applyStagingChrome(_draft); } },
 };

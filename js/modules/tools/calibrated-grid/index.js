@@ -36,7 +36,12 @@ PluginRegistry.implement('calibrated-grid', {
   dispose() { this._remove?.(); this._mode = 0; },
 
   _draw(c, h) {
-    if (!this._mode || !h.pixelSizeUm) return;
+    if (!this._mode) return;
+    if (!h.pixelSizeUm) {
+      // A grid in micrometres needs a calibration: say so instead of lighting the button and drawing nothing.
+      h.label(this._ctx.i18n.t('uncalibrated'), h.width / 2, 24, '#ffb454', 12);
+      return;
+    }
     const cssPerUm = h.scale / h.pixelSizeUm;
     const stepUm = h.niceLength((this._mode === 1 ? 120 : 60) / cssPerUm);
     const step = stepUm * cssPerUm;

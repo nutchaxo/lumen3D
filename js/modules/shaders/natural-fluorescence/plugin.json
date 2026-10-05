@@ -1,0 +1,21 @@
+{
+  "id": "natural-fluorescence",
+  "name": "Natural Fluorescence",
+  "version": "1.0.0",
+  "platformCompat": "1.x",
+  "contexts": [
+    "page",
+    "panel"
+  ],
+  "creator": "IRIBHM",
+  "placement": "shaders",
+  "renderModeValue": 2,
+  "order": 15,
+  "description": "Emission-absorption rendering: each fluorophore glows in its own colour and dense structures occlude what lies behind them.",
+  "i18nLanguages": [
+    "en",
+    "fr",
+    "es",
+    "nl"
+  ]
+}

@@ -63,7 +63,6 @@ const VolumeViewer = (() => {
   let _gizmoHovered = false;
   let _qualityTarget = '512x512';
   let _currentQualityMode = '512x512';
-  let _dirtyRegions = [];
   let _isStreamingBricks = false;
   // Number of DISPLAY streams in flight. A background prefetch refuses to start
   // while this is non-zero — see the guard at the top of loadBrickedVolumeStream.
@@ -79,9 +78,19 @@ const VolumeViewer = (() => {
   const _qualityListeners = new Set();
   let _brickStreamAbort = null;
   let _preloadStreamAbort = null;
-  // LEAK-023: handle for the LOD-seed rAF chunk loop so a mid-seed dataset/quality
-  // switch can cancel the pending frame instead of leaking it.
-  let _seedRafId = null;
+  // The last display load (brick stream or slice stack), replayed after a WebGL
+  // context loss: { kind, basePath, metadata, timepoint, onProgress, options }.
+  let _lastDisplayRequest = null;
+  // Bumped on every context loss: a stream started before it stops writing into
+  // textures that no longer exist.
+  let _contextEpoch = 0;
+  // Times of the context losses of this page: a reload that loses the context again
+  // and again (a driver that resets on every attempt) stops replaying (see
+  // _recoverFromContextLoss) instead of looping until the browser blocks WebGL.
+  const _contextLossTimes = [];
+  const CONTEXT_LOSS_LOOP = { count: 3, windowMs: 120000 };
+  // Listeners registered by init() (canvas, window), removed by dispose().
+  let _listenerAbort = null;
   let _firstInteractionLogged = false;
   const _frameStats = {
     lastTs: 0,
@@ -127,10 +136,34 @@ const VolumeViewer = (() => {
   let _homeQuaternion = null;
   let _isInteracting = false;
   let _activePointers = new Map();
-  let _targetSteps = 100;
+  // Sample cap per ray of a settled frame (the `steps` uniform at rest), refreshed
+  // every frame from the drawing-buffer size by _settledSampleCap.
+  let _targetSteps = 1024;
   let _lastInteractionTime = 0;
-  let _lastFrameRenderTime = 0;
   let _interactionTimeout = null;
+
+  // ── Ray-march sampling and adaptive quality ────────────────────────────────
+  // The march takes one sample every 1/sampleRate voxel lengths along the ray
+  // (see the shader's `delta`). A settled frame samples every voxel (rate 1: a
+  // maximum-intensity projection cannot miss a one-voxel structure) at the full
+  // pixel ratio. While the user drags, both the pixel ratio and the rate follow
+  // the measured frame time (_nextAdaptiveState) toward INTERACTIVE_TARGET_MS.
+  const MAX_MARCH_STEPS = 4096;            // the shader's loop bound
+  const IDLE_SAMPLE_RATE = 1.0;
+  const INTERACTIVE_TARGET_MS = 16.7;
+  const ADAPTIVE_LIMITS = { minScale: 0.25, maxScale: 1, minRate: 0.1, maxRate: 0.75 };
+  // A settled frame marches at most this many pixel·samples, so one draw call stays
+  // well under the ~2 s GPU watchdog (TDR) of Windows even with no empty space to
+  // skip; measured settled frames scale it (_settledBudgetScale).
+  const SETTLED_PIXEL_SAMPLE_BUDGET = 6e9;
+  let _adaptive = { scale: 0.75, rate: 0.35 };
+  let _settledBudgetScale = 1;
+  let _lastRenderAt = 0;
+  let _lastRenderInteractive = false;
+  // Redraws caused by bricks landing are coalesced: one frame every STREAM_REDRAW_MS.
+  const STREAM_REDRAW_MS = 250;
+  let _streamRedrawTimer = null;
+  let _lastStreamRedrawAt = 0;
 
   function _markInteraction() {
     _lastInteractionTime = Date.now();
@@ -160,18 +193,21 @@ const VolumeViewer = (() => {
         for (let wi = 0; wi < BLUR_POOL_SIZE; wi++) {
           const w = new Worker('js/workers/gaussian-blur-worker.js');
           w.onmessage = (e) => {
-            if (e.data.type === 'progress') return;
-            if (e.data.type === 'error') {
-              console.error(`[VolumeViewer] Blur worker ${wi} error:`, e.data.message);
+            const msg = e.data || {};
+            if (msg.type === 'progress') return;
+            if (msg.type === 'error') {
+              console.error(`[VolumeViewer] Blur worker ${wi} error (task ${msg.taskId}, chunk ${msg.chunkIndex}):`, msg.message);
+              _failBlurTask(msg.taskId, msg.message || 'blur worker error');
               return;
             }
-            if (e.data.type === 'result') {
-              const asm = _blurAssemblers.get(e.data.taskId);
+            if (msg.type === 'result') {
+              const asm = _blurAssemblers.get(msg.taskId);
               if (!asm) return; // stale
-              asm.chunks[e.data.chunkIndex] = new Uint8Array(e.data.blurredData);
+              asm.chunks[msg.chunkIndex] = new Uint8Array(msg.blurredData);
+              if (Number.isFinite(msg.effectiveSigma)) asm.effectiveSigma = msg.effectiveSigma;
               asm.remaining--;
               if (asm.remaining === 0) {
-                _blurAssemblers.delete(e.data.taskId);
+                _blurAssemblers.delete(msg.taskId);
                 // Assemblage des chunks en un seul buffer
                 const totalLen = asm.chunks.reduce((s, c) => s + c.length, 0);
                 const merged = new Uint8Array(totalLen);
@@ -180,11 +216,16 @@ const VolumeViewer = (() => {
                   merged.set(chunk, off);
                   off += chunk.length;
                 }
-                asm.onDone(merged);
+                asm.onDone(merged, asm.effectiveSigma);
               }
             }
           };
-          w.onerror = (err) => console.error(`[VolumeViewer] Blur worker ${wi} error:`, err.message);
+          // A worker that dies (script error, out of memory) answers none of its
+          // chunks: every task still waiting on the pool is failed, not left pending.
+          w.onerror = (err) => {
+            console.error(`[VolumeViewer] Blur worker ${wi} error:`, err?.message);
+            for (const taskId of [..._blurAssemblers.keys()]) _failBlurTask(taskId, err?.message || 'blur worker failed');
+          };
           _blurWorkerPool.push(w);
         }
         console.log(`[VolumeViewer] Blur worker pool initialized (${BLUR_POOL_SIZE} workers)`);
@@ -219,12 +260,23 @@ const VolumeViewer = (() => {
     if (el) el.classList.add('hidden');
   }
 
-  function _dispatchParallelBlur(rawSingleChannel, width, height, depth, sigma, onDone) {
+  /** A blur task that cannot complete: its assembler is dropped, the toast follows
+   *  the remaining count, and its owner is told (onError) so it can put the raw
+   *  channel back. */
+  function _failBlurTask(taskId, reason) {
+    const asm = _blurAssemblers.get(taskId);
+    if (!asm) return;
+    _blurAssemblers.delete(taskId);
+    asm.onError(reason);
+  }
+
+  function _dispatchParallelBlur(rawSingleChannel, width, height, depth, sigma, onDone, onError = () => {}) {
     const pool = _getBlurWorkerPool();
     if (!pool || pool.length === 0) {
-      // Fallback main-thread
-      console.warn('[VolumeViewer] No worker pool, falling back to main thread blur');
-      onDone(rawSingleChannel); // return unblurred as fallback
+      // Blurring a volume is not done on the UI thread (CLAUDE.md 1.2): the channel
+      // stays as it is, and the caller says so.
+      console.warn('[VolumeViewer] No blur worker pool: denoise unavailable');
+      onError('no blur worker');
       return;
     }
 
@@ -236,14 +288,14 @@ const VolumeViewer = (() => {
     const sliceSize = width * height;
     const chunks = new Array(N);
 
-    // Wrapping onDone to decrement counter and hide toast when all tasks complete
-    const wrappedOnDone = (merged) => {
+    const settle = () => {
       _blurActiveCount = Math.max(0, _blurActiveCount - 1);
       if (_blurActiveCount === 0) _hideBlurToast();
-      onDone(merged);
     };
+    const wrappedOnDone = (merged, effectiveSigma) => { settle(); onDone(merged, effectiveSigma); };
+    const wrappedOnError = (reason) => { settle(); onError(reason); };
 
-    _blurAssemblers.set(taskId, { remaining: N, chunks, onDone: wrappedOnDone });
+    _blurAssemblers.set(taskId, { remaining: N, chunks, onDone: wrappedOnDone, onError: wrappedOnError, effectiveSigma: sigma });
 
     for (let i = 0; i < N; i++) {
       const startZ = Math.floor(i * depth / N);
@@ -285,17 +337,14 @@ const VolumeViewer = (() => {
     '4096x4096': 12, '2048x2048': 16, '1024x1024': 32, native: 16, '256x256': 16, '512x512': 32,
     high: 32, preview: 16, balanced: 32
   };
-  const BRICK_TEXTURE_UPDATE_MS = { 
-    '4096x4096': 800, '2048x2048': 700, '1024x1024': 650, native: 800, '256x256': 450, '512x512': 550,
-    high: 650, preview: 450, balanced: 550
-  };
-  const BRICK_TEXTURE_UPDATE_OPS = { 
-    '4096x4096': 4, '2048x2048': 6, '1024x1024': 12, native: 4, '256x256': 8, '512x512': 12,
-    high: 12, preview: 8, balanced: 12
-  };
-  const IMAGE_CACHE_LIMIT = 640;
+  // In-flight slice-image requests only (one fetch per URL at a time). Decoded
+  // bitmaps are never retained: the caller closes each one as soon as its pixels are
+  // copied, and the browser's HTTP cache keeps the compressed files for a revisit.
   const _imageCache = new Map();
   const _volumeCache = new Map();
+  // First picture of a stream: the share of its bricks (taken centre first) that
+  // must be on the GPU before onFirstPicture fires.
+  const FIRST_PICTURE_FRACTION = 0.25;
 
   // A 4D manifest indexes EVERY timepoint in one document (3.4 MB for the 30-frame
   // reference series), and it used to be re-fetched on each timepoint switch with
@@ -385,11 +434,25 @@ const VolumeViewer = (() => {
 
   // We support up to 4 channels.
   // The texture3D holds RGBA (Channel 0,1,2,3)
-  // renderMode: 0 = DVR (depth/occlusion), 1 = Emission (Imaris-like additive fluorescence)
+  // renderMode: 0 = Structure DVR (front-to-back emission/occlusion), 1 = per-channel
+  // MIP (Imaris-like additive fluorescence), 2 = Natural Fluorescence (emission–absorption).
   const fragmentShader = `
     precision highp float;
     precision highp int;
     precision highp sampler3D;
+
+    #define MAX_MARCH_STEPS ${MAX_MARCH_STEPS}
+    // Structure DVR reference: a sample of displayed value a covers DVR_REF_ALPHA·a of
+    // the light over DVR_REF_STEP object units (0.05 per 1/100 of the volume: the look
+    // the mode had at 100 samples per ray). DVR_SLAB_REF: see dvrGain below.
+    #define DVR_REF_STEP 0.01
+    #define DVR_REF_ALPHA 0.05
+    #define DVR_SLAB_REF 0.25
+    // Depth pick: the march samples twice per voxel length, and the picked surface is
+    // where the displayed value first reaches PICK_SURFACE of the ray's maximum.
+    #define PICK_MAX_STEPS 4096
+    #define PICK_SURFACE 0.55
+    #define PICK_MIN_VALUE 0.02
 
     in vec3 vUv;
     in vec3 vOrigin;
@@ -410,14 +473,18 @@ const VolumeViewer = (() => {
     // not a multiple of the brick size (partial last brick) = volumeDim/(brickSize*gridDim).
     uniform vec3 occupancyScale;
     #endif
-    
+
+    // Voxel counts of the volume bound (texture space [0,1]^3 holds that lattice) and
+    // the brick edge in voxels. A brick cell is floor(uvw · volumeVoxels / brickSize).
+    uniform vec3 volumeVoxels;
+    uniform float brickSize;
+
     #ifdef ENABLE_SVR
     uniform sampler3D pageTable;
     uniform vec3 atlasDim;
     uniform vec3 volumeDim;
     uniform vec3 ptDim;
     uniform vec3 ptScale;
-    uniform float brickSize;
     // How many atlas pages are actually live. A sampler3D bound to nothing is an
     // INCOMPLETE texture, and WebGL defines a fetch from one as (0,0,0,1) -- alpha 1.
     // Read as a page index that is 255 - 1 = 254, i.e. "brick present, page 254",
@@ -428,45 +495,24 @@ const VolumeViewer = (() => {
     // inconsistent state back into "no brick" -- an empty view, never wrong voxels.
     uniform int svrPageCount;
 
-    vec4 getAtlasLookup(vec3 logicalPos) {
-        vec3 logicalPixels = clamp(logicalPos * volumeDim, vec3(0.0), volumeDim - vec3(1.0));
-        vec3 brickCoord = floor(logicalPixels / brickSize);
-        vec3 ptCoord = (brickCoord + vec3(0.5)) / ptDim;
-        vec4 page = texture(pageTable, ptCoord);
-        float atlasPage = floor(page.a * 255.0 + 0.5) - 1.0;
-        if (atlasPage < 0.0 || atlasPage > float(svrPageCount - 1)) return vec4(-1.0);
-        vec3 slotIndex = floor(page.rgb * 255.0 + 0.5);
-        vec3 brickOrigin = brickCoord * brickSize;
-        vec3 brickExtent = min(vec3(brickSize), volumeDim - brickOrigin);
-        vec3 localVoxel = clamp(floor(logicalPixels - brickOrigin), vec3(0.0), max(vec3(0.0), brickExtent - vec3(1.0)));
-        vec3 atlasVoxel = slotIndex * brickSize + localVoxel;
-        return vec4((atlasVoxel + vec3(0.5)) / atlasDim, atlasPage);
-    }
-
+    // textureLod everywhere in the march: the atlases have no mipmaps, so level 0 is
+    // what texture() returns, without needing derivatives inside divergent control
+    // flow (undefined there by GLSL ES 3.00).
     vec4 sampleSVRAtlas(vec3 atlasCoord, float atlasPage) {
-        vec4 value = texture(svrAtlas0, atlasCoord);
-        if (atlasPage < 0.5) {
-            value = texture(svrAtlas0, atlasCoord);
-        } else if (atlasPage < 1.5) {
-            value = texture(svrAtlas1, atlasCoord);
-        } else if (atlasPage < 2.5) {
-            value = texture(svrAtlas2, atlasCoord);
-        } else if (atlasPage < 3.5) {
-            value = texture(svrAtlas3, atlasCoord);
-        } else if (atlasPage < 4.5) {
-            value = texture(svrAtlas4, atlasCoord);
-        } else if (atlasPage < 5.5) {
-            value = texture(svrAtlas5, atlasCoord);
-        } else if (atlasPage < 6.5) {
-            value = texture(svrAtlas6, atlasCoord);
-        } else {
-            value = texture(svrAtlas7, atlasCoord);
-        }
-        return value;
+        if (atlasPage < 0.5) return textureLod(svrAtlas0, atlasCoord, 0.0);
+        if (atlasPage < 1.5) return textureLod(svrAtlas1, atlasCoord, 0.0);
+        if (atlasPage < 2.5) return textureLod(svrAtlas2, atlasCoord, 0.0);
+        if (atlasPage < 3.5) return textureLod(svrAtlas3, atlasCoord, 0.0);
+        if (atlasPage < 4.5) return textureLod(svrAtlas4, atlasCoord, 0.0);
+        if (atlasPage < 5.5) return textureLod(svrAtlas5, atlasCoord, 0.0);
+        if (atlasPage < 6.5) return textureLod(svrAtlas6, atlasCoord, 0.0);
+        return textureLod(svrAtlas7, atlasCoord, 0.0);
     }
     #endif
     uniform int numChannels;
+    // Sample cap per ray, and samples per voxel length (see delta in main()).
     uniform int steps;
+    uniform float sampleRate;
     uniform int renderMode;   // 0 = DVR, 1 = Emission (MIP), 2 = Natural Fluorescence
     uniform float exposure;   // global brightness multiplier
     // View export (renderViewImage). fragCoordOffset: where this tile's window sits in
@@ -475,6 +521,10 @@ const VolumeViewer = (() => {
     // transparent export (see fragAlpha).
     uniform vec2 fragCoordOffset;
     uniform int exportAlpha;
+    #ifdef PICK_MODE
+    // Depth pick (pickVolumePoint): 0 writes x and y of the hit, 1 writes z and the flag.
+    uniform int pickPass;
+    #endif
 
     // ── Natural Fluorescence (renderMode 2) controls ──
     uniform float absorption;    // Beer-Lambert extinction (front-to-back occlusion → 3D form)
@@ -529,8 +579,9 @@ const VolumeViewer = (() => {
     }
 
     // The clip box (clipMin..clipMax, normalised) in OBJECT space, so the march can be
-    // confined to it. Inverse of the per-sample clipCoord below: unwarped, uvw = p + 0.5;
-    // warped, the sliders act in the display box (clipBoxMin + clipCoord * clipBoxSize).
+    // confined to it. Unwarped, uvw = p + 0.5; warped, the sliders act in the display
+    // box (clipBoxMin + clipCoord * clipBoxSize). Every sample of the march lies in
+    // this box, so no per-sample clip test is needed.
     vec2 hitClipBox(vec3 orig, vec3 dir) {
       #ifdef VOLUME_WARP
       return hitAABB(orig, dir, clipBoxMin + clipMin * clipBoxSize, clipBoxMin + clipMax * clipBoxSize);
@@ -560,6 +611,121 @@ const VolumeViewer = (() => {
     }
     #endif
 
+    // Texture coordinate of the object-space point p.
+    vec3 toTexture(vec3 p) {
+      #ifdef VOLUME_WARP
+      vec3 uvw = (volumeWarp * vec4(p, 1.0)).xyz;
+      #else
+      vec3 uvw = p + vec3(0.5);
+      #endif
+      return uvw;
+    }
+
+    // The 64³ brick holding uvw.
+    vec3 brickCell(vec3 uvw) {
+      vec3 vox = clamp(uvw * volumeVoxels, vec3(0.0), volumeVoxels - vec3(1.0));
+      return floor(vox / brickSize);
+    }
+
+    // Empty-space skip: the ray parameter from uvw to the exit of brick 'cell'. The
+    // brick spans [cell, cell+1]·brickSize/volumeVoxels in texture space and
+    // d(uvw)/dt = dirTex, so each face is reached at (face − uvw)/dirTex; the exit is
+    // the nearest face ahead on each axis, the first of the three.
+    float brickExit(vec3 uvw, vec3 dirTex, vec3 cell) {
+      vec3 lo = cell * brickSize / volumeVoxels;
+      vec3 hi = min((cell + vec3(1.0)) * brickSize / volumeVoxels, vec3(1.0));
+      vec3 safe = dirTex + (1.0 - step(vec3(1e-8), abs(dirTex))) * 1e-8;
+      vec3 tt = (mix(lo, hi, step(vec3(0.0), safe)) - uvw) / safe;
+      return max(0.0, min(tt.x, min(tt.y, tt.z)));
+    }
+
+    // The voxel at uvw, or false when its brick holds no data; 'skip' is then the ray
+    // parameter to that brick's exit. The brick last looked up is kept in
+    // (cachedCell, cachedPage) — page.xyz = its atlas slot, page.w = its atlas page,
+    // −1 for an empty brick — so the page table (or the occupancy grid) is read once
+    // per brick a ray crosses instead of once per sample.
+    bool fetchVoxel(vec3 uvw, vec3 dirTex, inout vec3 cachedCell, inout vec4 cachedPage, out vec4 val, out float skip) {
+      skip = 0.0;
+      val = vec4(0.0);
+      #ifdef ENABLE_SVR
+      vec3 cell = brickCell(uvw);
+      if (any(notEqual(cell, cachedCell))) {
+        cachedCell = cell;
+        vec4 page = textureLod(pageTable, (cell + vec3(0.5)) / ptDim, 0.0);
+        float atlasPage = floor(page.a * 255.0 + 0.5) - 1.0;
+        cachedPage = (atlasPage < 0.0 || atlasPage > float(svrPageCount - 1))
+          ? vec4(-1.0)
+          : vec4(floor(page.rgb * 255.0 + 0.5), atlasPage);
+      }
+      if (cachedPage.w < 0.0) {
+        skip = brickExit(uvw, dirTex, cell);
+        return false;
+      }
+      // Nearest voxel: the slots are packed edge to edge with no 1-voxel apron, so a
+      // linear fetch would blend a neighbouring slot's brick across every brick face.
+      // The dense (monolithic) path samples trilinearly; matching it here needs bricks
+      // stored with an apron (66³), a change of the brick format.
+      vec3 logicalPixels = clamp(uvw * volumeDim, vec3(0.0), volumeDim - vec3(1.0));
+      vec3 brickOrigin = cell * brickSize;
+      vec3 brickExtent = min(vec3(brickSize), volumeDim - brickOrigin);
+      vec3 localVoxel = clamp(floor(logicalPixels - brickOrigin), vec3(0.0), max(vec3(0.0), brickExtent - vec3(1.0)));
+      vec3 atlasVoxel = cachedPage.xyz * brickSize + localVoxel;
+      val = sampleSVRAtlas((atlasVoxel + vec3(0.5)) / atlasDim, cachedPage.w);
+      return true;
+      #else
+        #ifdef HAS_OCCUPANCY
+        vec3 cell = brickCell(uvw);
+        if (any(notEqual(cell, cachedCell))) {
+          cachedCell = cell;
+          // The cell's centre, (cell + ½)·brickSize/volumeVoxels, in occupancy-grid
+          // coordinates (× occupancyScale): NEAREST then reads exactly that cell.
+          float occ = textureLod(mapOccupancy, (cell + vec3(0.5)) * brickSize / volumeVoxels * occupancyScale, 0.0).r;
+          cachedPage = vec4(occ < 0.5 ? -1.0 : 1.0);
+        }
+        if (cachedPage.w < 0.0) {
+          skip = brickExit(uvw, dirTex, cell);
+          return false;
+        }
+        #endif
+      val = textureLod(svrAtlas0, uvw, 0.0);
+      return true;
+      #endif
+    }
+
+    // Displayed value of each channel: window, gamma, opacity, on/off.
+    vec4 channelValues(vec4 val) {
+      vec4 v = vec4(0.0);
+      #if ENABLE_CHANNEL_0
+      if (en0 == 1) {
+        v.x = clamp((val.r - min0) / max(max0 - min0, 0.0001), 0.0, 1.0);
+        if (gamma0 != 1.0) v.x = pow(v.x, gamma0);
+        v.x *= opacity0;
+      }
+      #endif
+      #if ENABLE_CHANNEL_1
+      if (en1 == 1) {
+        v.y = clamp((val.g - min1) / max(max1 - min1, 0.0001), 0.0, 1.0);
+        if (gamma1 != 1.0) v.y = pow(v.y, gamma1);
+        v.y *= opacity1;
+      }
+      #endif
+      #if ENABLE_CHANNEL_2
+      if (en2 == 1) {
+        v.z = clamp((val.b - min2) / max(max2 - min2, 0.0001), 0.0, 1.0);
+        if (gamma2 != 1.0) v.z = pow(v.z, gamma2);
+        v.z *= opacity2;
+      }
+      #endif
+      #if ENABLE_CHANNEL_3
+      if (en3 == 1) {
+        v.w = clamp((val.a - min3) / max(max3 - min3, 0.0001), 0.0, 1.0);
+        if (gamma3 != 1.0) v.w = pow(v.w, gamma3);
+        v.w *= opacity3;
+      }
+      #endif
+      return v;
+    }
+
     float hash(vec2 p) {
       vec3 p3 = fract(vec3(p.xyx) * 0.1031);
       p3 += dot(p3, p3.yzx + 33.33);
@@ -584,12 +750,24 @@ const VolumeViewer = (() => {
       return clamp((x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14), 0.0, 1.0);
     }
 
+    #ifdef PICK_MODE
+    // 16-bit fixed point of x ∈ [0,1] as two bytes (high, low), each written as k/255
+    // so an RGBA8 target stores it exactly.
+    vec2 encode16(float x) {
+      float q = floor(clamp(x, 0.0, 1.0) * 65535.0 + 0.5);
+      float hi = floor(q / 256.0);
+      return vec2(hi, q - hi * 256.0) / 255.0;
+    }
+    #endif
+
     void main() {
       vec3 rayDir = normalize(vDirection);
       #ifdef VOLUME_WARP
       vec2 bounds = hitBoxWarped(vOrigin, rayDir);
+      vec3 dirTex = mat3(volumeWarp) * rayDir;
       #else
       vec2 bounds = hitBox(vOrigin, rayDir);
+      vec3 dirTex = rayDir;
       #endif
       if (bounds.x > bounds.y) discard;
 
@@ -598,19 +776,97 @@ const VolumeViewer = (() => {
       // measures the clipped segment against.
       float fullLength = max(bounds.y - bounds.x, 1e-6);
 
-      // Confine the march to the clip box so every one of the 'steps' samples lands in
-      // what is displayed. Marching the whole box and rejecting samples per clipCoord
-      // gave a thin z-slab (the Z-stack browser shows ONE slice) a fraction of a sample
-      // per ray, and none at all at the 24–48 steps used while interacting.
+      // Confine the march to the clip box so every sample lands in what is displayed.
+      // Marching the whole box and rejecting samples per clipCoord gave a thin z-slab
+      // (the Z-stack browser shows ONE slice) a fraction of a sample per ray.
       vec2 clipT = hitClipBox(vOrigin, rayDir);
       bounds.x = max(bounds.x, clipT.x);
       bounds.y = min(bounds.y, clipT.y);
       if (bounds.x >= bounds.y) discard;
 
       float rayLength = bounds.y - bounds.x;
-      float delta = rayLength / max(float(steps), 1.0);
+      // Sampling interval. Texture space [0,1]^3 holds volumeVoxels voxels per axis and
+      // d(uvw)/dt = dirTex, so the ray crosses
+      //     nu = |dirTex ⊙ volumeVoxels|
+      // voxel lengths per unit of its parameter (its direction measured in voxels).
+      // One sample every 1/sampleRate voxel lengths is
+      //     delta = 1 / (sampleRate · nu),
+      // whatever the ray's length, the axis it runs along or the level of detail; a ray
+      // needing more than 'steps' samples is spread evenly instead (delta = L/steps).
+      float nu = max(length(dirTex * volumeVoxels), 1e-6);
+
+      #ifdef PICK_MODE
+      // Depth of the surface under the pixel. Pass 1 finds the largest displayed value
+      // m along the ray; pass 2 the first point where the value reaches
+      // max(PICK_MIN_VALUE, PICK_SURFACE·m), linearly interpolated between the two
+      // samples around the crossing — the front of the brightest structure the pixel
+      // shows, through the same window, channels, clip box and stabilisation.
+      float pd = 1.0 / (2.0 * nu);
+      if (rayLength / pd > float(PICK_MAX_STEPS)) pd = rayLength / float(PICK_MAX_STEPS);
+      vec3 pc = vec3(-1.0);
+      vec4 pp = vec4(0.0);
+      float peak = 0.0;
+      float pt = 0.0;
+      for (int i = 0; i < PICK_MAX_STEPS; i++) {
+        if (pt > rayLength) break;
+        vec4 val; float skip;
+        if (!fetchVoxel(toTexture(vOrigin + (bounds.x + pt) * rayDir), dirTex, pc, pp, val, skip)) {
+          pt += max(pd, ceil(skip / pd) * pd);
+          continue;
+        }
+        vec4 v = channelValues(val);
+        peak = max(peak, max(max(v.x, v.y), max(v.z, v.w)));
+        pt += pd;
+      }
+      if (peak < PICK_MIN_VALUE) discard;
+      float surfaceValue = max(PICK_MIN_VALUE, PICK_SURFACE * peak);
+      pc = vec3(-1.0);
+      pt = 0.0;
+      float prevT = 0.0;
+      float prevD = 0.0;
+      float hitT = -1.0;
+      for (int i = 0; i < PICK_MAX_STEPS; i++) {
+        if (pt > rayLength) break;
+        vec4 val; float skip;
+        float d = 0.0;
+        if (!fetchVoxel(toTexture(vOrigin + (bounds.x + pt) * rayDir), dirTex, pc, pp, val, skip)) {
+          prevT = pt;
+          prevD = 0.0;
+          pt += max(pd, ceil(skip / pd) * pd);
+          continue;
+        }
+        vec4 v = channelValues(val);
+        d = max(max(v.x, v.y), max(v.z, v.w));
+        if (d >= surfaceValue) {
+          hitT = (d > prevD) ? mix(prevT, pt, (surfaceValue - prevD) / (d - prevD)) : pt;
+          break;
+        }
+        prevT = pt;
+        prevD = d;
+        pt += pd;
+      }
+      if (hitT < 0.0) discard;
+      vec3 hit = vOrigin + (bounds.x + hitT) * rayDir;
+      #ifdef VOLUME_WARP
+      vec3 hc = (hit - clipBoxMin) / clipBoxSize;
+      #else
+      vec3 hc = hit + vec3(0.5);
+      #endif
+      fragColor = pickPass == 0
+        ? vec4(encode16(hc.x), encode16(hc.y))
+        : vec4(encode16(hc.z), 1.0, 1.0);
+      return;
+      #endif
+
+      float delta = 1.0 / (max(sampleRate, 1e-3) * nu);
+      float maxSamples = float(max(steps, 1));
+      if (rayLength / delta > maxSamples) delta = rayLength / maxSamples;
+      // A segment shorter than one interval (a one-slice slab, a grazing ray, a coarse
+      // interactive rate) still gets its one sample, weighted by its real length; with
+      // delta > rayLength the jittered first sample fell past the exit on most pixels
+      // and the slab flickered as speckle while dragging.
+      delta = min(delta, rayLength);
       float jitter = hash(gl_FragCoord.xy + fragCoordOffset) * delta;
-      vec3 p = vOrigin + (bounds.x + jitter) * rayDir;
       float t = jitter;
 
       // Slab normalisation. A clipped segment is displayed as if it were optically
@@ -621,17 +877,33 @@ const VolumeViewer = (() => {
       // slices the slab holds. An unclipped ray is left exactly as it was (gain 1):
       //   slabGain = max(1, min(fullLength / rayLength, 1 / (absorption · rayLength)))
       float slabGain = max(1.0, 1.0 / (rayLength * max(absorption, 1.0 / fullLength)));
-      // Structure DVR (mode 0) adds a fixed 0.05 per sample, i.e. reaches opacity after
-      // 20 samples. Weight each sample so an unclipped ray is unchanged (w = 1) while a
-      // thin slab still fills that 20-sample budget instead of the ~0 it used to get:
-      //   w = max(rayLength / fullLength, min(1, 20 / steps))
-      float dvrW = max(rayLength / fullLength, min(1.0, 20.0 / max(float(steps), 1.0)));
+      // Structure DVR, same idea: a slab thinner than DVR_SLAB_REF is integrated as if
+      // it were that thick (never more than the full traversal, so an unclipped ray
+      // keeps gain 1). Each sample's opacity is the reference opacity carried over the
+      // actual interval (Beer–Lambert opacity correction):
+      //   aStep = 1 − (1 − DVR_REF_ALPHA·a)^(delta·dvrGain / DVR_REF_STEP)
+      // so a column's accumulated opacity depends on its length, not on how many
+      // samples cross it — the image no longer changes between a drag and rest.
+      float dvrGain = max(1.0, min(fullLength, DVR_SLAB_REF) / rayLength);
+      float dvrExponent = delta * dvrGain / DVR_REF_STEP;
 
       // ── Per-channel MIP accumulators (mode 1 - Fluorescence) ──
-      float mip0 = 0.0;
-      float mip1 = 0.0;
-      float mip2 = 0.0;
-      float mip3 = 0.0;
+      vec4 mip = vec4(0.0);
+      // The ceiling of each displayed channel (its opacity, 0 when off): once every
+      // channel reaches it nothing further along the ray can raise the projection.
+      vec4 mipCeil = vec4(0.0);
+      #if ENABLE_CHANNEL_0
+      if (en0 == 1) mipCeil.x = opacity0 * 0.999;
+      #endif
+      #if ENABLE_CHANNEL_1
+      if (en1 == 1) mipCeil.y = opacity1 * 0.999;
+      #endif
+      #if ENABLE_CHANNEL_2
+      if (en2 == 1) mipCeil.z = opacity2 * 0.999;
+      #endif
+      #if ENABLE_CHANNEL_3
+      if (en3 == 1) mipCeil.w = opacity3 * 0.999;
+      #endif
 
       // ── DVR accumulators (mode 0 - Structure) ──
       vec3  accumDVR   = vec3(0.0);
@@ -644,166 +916,63 @@ const VolumeViewer = (() => {
       vec4  clebChan  = vec4(0.0);
       float clebT     = 1.0;
       // Step-size independence: tie both opacity and emission to the physical step length
-      // 'delta', so brightness/occlusion stay invariant to 'steps' (the 24..600 LOD swing).
+      // 'delta', so brightness/occlusion stay invariant to the sample count.
       // Beer-Lambert transmittance prod(1-aStep)=prod(exp(-clebK*d))=exp(-absorption*int d ds)
       // is then EXACT regardless of step count; exposure is folded into the emission scale.
       float clebK    = absorption * delta;
       float clebEmit = emissionGain * exposure * delta * slabGain;
 
-      int maxSteps = steps;
-      for (int i = 0; i < 768; i++) {
-        if (i >= maxSteps) break;
+      vec3 cachedCell = vec3(-1.0);
+      vec4 cachedPage = vec4(0.0);
+      for (int i = 0; i < MAX_MARCH_STEPS; i++) {
         if (t >= rayLength) break;
         if (renderMode == 0 && accumAlpha > 0.97) break;
 
-        #ifdef VOLUME_WARP
-        vec3 uvw = (volumeWarp * vec4(p, 1.0)).xyz;
-        vec3 clipCoord = (p - clipBoxMin) / clipBoxSize;
-        #else
-        vec3 uvw = p + vec3(0.5);
-        vec3 clipCoord = uvw;
-        #endif
-        if (clipCoord.x >= clipMin.x && clipCoord.x <= clipMax.x &&
-            clipCoord.y >= clipMin.y && clipCoord.y <= clipMax.y &&
-            clipCoord.z >= clipMin.z && clipCoord.z <= clipMax.z) {
+        vec3 uvw = toTexture(vOrigin + (bounds.x + t) * rayDir);
+        vec4 val;
+        float skip;
+        if (!fetchVoxel(uvw, dirTex, cachedCell, cachedPage, val, skip)) {
+          // Jump to the brick's exit, on the jittered sample lattice.
+          t += max(delta, ceil(skip / delta) * delta);
+          continue;
+        }
+        vec4 v = channelValues(val);
 
-          #ifdef ENABLE_SVR
-          vec4 atlasLookup = getAtlasLookup(uvw);
-          if (atlasLookup.w < 0.0) {
-             t += delta * 2.5;
-             p += rayDir * (delta * 2.5);
-             continue;
+        if (renderMode == 1) {
+          mip = max(mip, v);
+          if (all(greaterThanEqual(mip, mipCeil))) break;
+        } else if (renderMode == 2) {
+          // Achromatic density = strongest channel (max, NOT sum: co-located channels
+          // share one structure's opacity rather than double-darkening it into mud).
+          float d = max(max(v.x, v.y), max(v.z, v.w));
+          if (d > 0.0025) {
+            // Beer-Lambert slab opacity (exact per segment, step-size independent).
+            float aStep = 1.0 - exp(-clebK * d);
+
+            // Emission = fluorophore colours weighted by their OWN intensity, so a
+            // green-only voxel emits pure green (additive — correct for independent
+            // emitters). v retains per-channel radiance for co-localization logic.
+            vec3 emit = v.x * color0 + v.y * color1 + v.z * color2 + v.w * color3;
+
+            // Front-to-back: emission attenuated by everything already in front (clebT).
+            // Dense near structures occlude the glow behind them → real 3D depth/form.
+            float wT = clebT * clebEmit;
+            clebColor += wT * emit;
+            clebChan  += wT * v;
+            clebT     *= (1.0 - aStep);
+
+            if (clebT < 0.004) break;  // early-ray-termination
           }
-          #else
-            #ifdef HAS_OCCUPANCY
-            // OCC-Z: scale into the brick-aligned occupancy grid (see uniform above).
-            // Sampling at raw uvw mis-placed the cell boundaries whenever a volume axis
-            // was not a multiple of 64, skipping populated slices of the last brick row
-            // (e.g. a 72-deep volume cut at z=36 instead of the real brick edge z=64).
-            float occ = texture(mapOccupancy, uvw * occupancyScale).r;
-            if (occ < 0.5) {
-               t += delta * 2.5;
-               p += rayDir * (delta * 2.5); // Leap forward safely
-               continue;
-             }
-            #endif
-          #endif
-
-          #ifdef ENABLE_SVR
-          vec4 val = sampleSVRAtlas(atlasLookup.xyz, atlasLookup.w);
-          #else
-          vec4 val = texture(svrAtlas0, uvw);
-          #endif
-
-          float v0 = 0.0;
-          float v1 = 0.0;
-          float v2 = 0.0;
-          float v3 = 0.0;
-
-          #if ENABLE_CHANNEL_0
-          if (en0 == 1) {
-            v0 = clamp((val.r - min0) / max(max0 - min0, 0.0001), 0.0, 1.0);
-            if (gamma0 != 1.0) v0 = pow(v0, gamma0);
-            v0 *= opacity0;
-          }
-          #endif
-
-          #if ENABLE_CHANNEL_1
-          if (en1 == 1) {
-            v1 = clamp((val.g - min1) / max(max1 - min1, 0.0001), 0.0, 1.0);
-            if (gamma1 != 1.0) v1 = pow(v1, gamma1);
-            v1 *= opacity1;
-          }
-          #endif
-
-          #if ENABLE_CHANNEL_2
-          if (en2 == 1) {
-            v2 = clamp((val.b - min2) / max(max2 - min2, 0.0001), 0.0, 1.0);
-            if (gamma2 != 1.0) v2 = pow(v2, gamma2);
-            v2 *= opacity2;
-          }
-          #endif
-
-          #if ENABLE_CHANNEL_3
-          if (en3 == 1) {
-            v3 = clamp((val.a - min3) / max(max3 - min3, 0.0001), 0.0, 1.0);
-            if (gamma3 != 1.0) v3 = pow(v3, gamma3);
-            v3 *= opacity3;
-          }
-          #endif
-
-          if (renderMode == 1) {
-            #if ENABLE_CHANNEL_0
-            mip0 = max(mip0, v0);
-            #endif
-            #if ENABLE_CHANNEL_1
-            mip1 = max(mip1, v1);
-            #endif
-            #if ENABLE_CHANNEL_2
-            mip2 = max(mip2, v2);
-            #endif
-            #if ENABLE_CHANNEL_3
-            mip3 = max(mip3, v3);
-            #endif
-          } else if (renderMode == 2) {
-            // Achromatic density = strongest channel (max, NOT sum: co-located channels
-            // share one structure's opacity rather than double-darkening it into mud).
-            float d = 0.0;
-            #if ENABLE_CHANNEL_0
-            d = max(d, v0);
-            #endif
-            #if ENABLE_CHANNEL_1
-            d = max(d, v1);
-            #endif
-            #if ENABLE_CHANNEL_2
-            d = max(d, v2);
-            #endif
-            #if ENABLE_CHANNEL_3
-            d = max(d, v3);
-            #endif
-
-            if (d > 0.0025) {
-              // Beer-Lambert slab opacity (exact per segment, step-size independent).
-              float aStep = 1.0 - exp(-clebK * d);
-
-              // Emission = fluorophore colours weighted by their OWN intensity, so a
-              // green-only voxel emits pure green (additive — correct for independent
-              // emitters). eCh retains per-channel radiance for co-localization logic.
-              vec3 emit = vec3(0.0);
-              vec4 eCh  = vec4(0.0);
-              #if ENABLE_CHANNEL_0
-              eCh.x = v0; emit += v0 * color0;
-              #endif
-              #if ENABLE_CHANNEL_1
-              eCh.y = v1; emit += v1 * color1;
-              #endif
-              #if ENABLE_CHANNEL_2
-              eCh.z = v2; emit += v2 * color2;
-              #endif
-              #if ENABLE_CHANNEL_3
-              eCh.w = v3; emit += v3 * color3;
-              #endif
-
-              // Front-to-back: emission attenuated by everything already in front (clebT).
-              // Dense near structures occlude the glow behind them → real 3D depth/form.
-              float wT = clebT * clebEmit;
-              clebColor += wT * emit;
-              clebChan  += wT * eCh;
-              clebT     *= (1.0 - aStep);
-
-              if (clebT < 0.004) break;  // early-ray-termination (MIP can never terminate)
-            }
-          } else {
-            float localAlpha = max(max(v0, v1), max(v2, v3));
-            if (localAlpha > 0.01) {
-              vec3 localColor = v0 * color0 + v1 * color1 + v2 * color2 + v3 * color3;
-              accumDVR   += localColor * localAlpha * 0.05 * dvrW;
-              accumAlpha += localAlpha * 0.05 * dvrW;
-            }
+        } else {
+          float localAlpha = max(max(v.x, v.y), max(v.z, v.w));
+          if (localAlpha > 0.01) {
+            vec3 localColor = v.x * color0 + v.y * color1 + v.z * color2 + v.w * color3;
+            float aStep = 1.0 - pow(max(1.0 - DVR_REF_ALPHA * localAlpha, 0.0), dvrExponent);
+            accumDVR   += (1.0 - accumAlpha) * aStep * localColor;
+            accumAlpha += (1.0 - accumAlpha) * aStep;
           }
         }
         t += delta;
-        p += rayDir * delta;
       }
 
       // ── Natural Fluorescence (mode 2): luminance-only Reinhard + chroma lock ──
@@ -842,9 +1011,9 @@ const VolumeViewer = (() => {
       vec3 finalColor;
 
       if (renderMode == 1) {
-        float totalMIP = max(max(mip0, mip1), max(mip2, mip3));
+        float totalMIP = max(max(mip.x, mip.y), max(mip.z, mip.w));
         if (totalMIP < 0.004) discard;
-        vec3 mipColor = mip0 * color0 + mip1 * color1 + mip2 * color2 + mip3 * color3;
+        vec3 mipColor = mip.x * color0 + mip.y * color1 + mip.z * color2 + mip.w * color3;
         finalColor = mipColor * exposure;
       } else {
         if (accumAlpha < 0.01) discard;
@@ -855,13 +1024,22 @@ const VolumeViewer = (() => {
     }
   `;
 
-  function init(containerId) {
+  /**
+   * Build the scene on the canvas `containerId`.
+   * options.preserveDrawingBuffer (default true): keep the last frame readable after
+   *   it is presented. A page whose every capture first calls renderNow() (render and
+   *   read in the same task) can pass false and spare a full-frame copy per frame.
+   */
+  function init(containerId, options = {}) {
     const container = document.getElementById(containerId);
+    if (renderer) dispose();
     _container = container;
-    
+    _listenerAbort = typeof AbortController === 'function' ? new AbortController() : null;
+    const listen = (target, type, fn, opts = {}) => target.addEventListener(type, fn, _listenerOptions(opts));
+
     // Setup Three.js Scene
     scene = new THREE.Scene();
-    
+
     const parent = container.parentElement || container;
     const w = Math.max(1, parent.clientWidth);
     const h = Math.max(1, parent.clientHeight);
@@ -870,32 +1048,45 @@ const VolumeViewer = (() => {
     camera = new THREE.PerspectiveCamera(45, w / h, 0.1, 100);
     camera.position.z = 2.5;
 
-    // Renderer
+    // Renderer. No multisampling: the ray-marched box is one fragment per pixel and
+    // MSAA only quadrupled the colour buffer and its resolve every frame.
     const canvas = container;
-    renderer = new THREE.WebGLRenderer({ canvas: canvas, alpha: true, antialias: true, preserveDrawingBuffer: true });
+    renderer = new THREE.WebGLRenderer({
+      canvas: canvas,
+      alpha: true,
+      antialias: false,
+      preserveDrawingBuffer: options.preserveDrawingBuffer !== false
+    });
+    // Captures read through the canvas's own encoders always see a fresh frame.
+    _installCaptureHooks(canvas);
     // ELE-18 (EDGE-001): WebGL context loss (VRAM exhaustion, driver reset/TDR, tab
     // backgrounding) must degrade gracefully (Rule 1.1). preventDefault() is REQUIRED so the
-    // browser may later restore the context; we stop the render loop and surface a visible
-    // status (hooks wired in viewer.js) instead of drawing on a dead context.
+    // browser may later restore the context; we stop the render loop, free the volumes
+    // (their textures died with the context) and lower the GPU budget, then reload the
+    // last view at that budget once the context comes back (_recoverFromContextLoss).
     canvas.addEventListener('webglcontextlost', (e) => {
       e.preventDefault();
       _contextLost = true;
       if (animationId) { cancelAnimationFrame(animationId); animationId = null; }
       console.error('[VolumeViewer] WebGL context lost - rendering paused.');
       _perf()?.event('viewer.context_lost', { quality: _qualityTarget });
-      _emitQualityState({ message: 'GPU context lost', progress: 0 });
+      _onWebglContextLost();
+      _emitQualityState({ message: 'GPU context lost — waiting for the GPU to come back', progress: 0 });
       _onContextLost?.();
-    }, false);
+    }, _listenerOptions());
     canvas.addEventListener('webglcontextrestored', () => {
       _contextLost = false;
-      console.warn('[VolumeViewer] WebGL context restored - volume must be reloaded.');
+      console.warn('[VolumeViewer] WebGL context restored - reloading the volume at a lower GPU budget.');
       _perf()?.event('viewer.context_restored', { quality: _qualityTarget });
-      _onContextRestored?.();
+      const reload = _recoverFromContextLoss();
+      _onContextRestored?.({ reloading: Boolean(reload), reload });
       _scheduleFrame();
-    }, false);
+    }, _listenerOptions());
     renderer.setSize(w, h, false);
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+    renderer.setPixelRatio(_idlePixelRatio());
     renderer.setClearColor(0x000000, 1); // Force Noir Pur pour l'Additive Blending
+    _lastAspect = w / h;
+    _labelRasterScale = _idlePixelRatio();
     _raycaster = new THREE.Raycaster();
     _pointer = new THREE.Vector2();
     setBackgroundPreset(_displayState.backgroundPreset, _displayState.backgroundColor);
@@ -928,13 +1119,17 @@ const VolumeViewer = (() => {
         volumeDim: { value: new THREE.Vector3(1, 1, 1) },
         ptDim: { value: new THREE.Vector3(1, 1, 1) },
         ptScale: { value: new THREE.Vector3(1, 1, 1) },
-        brickSize: { value: 64.0 },
+        brickSize: { value: VOLUME_BRICK_SIZE },
+        // Voxel lattice of the bound volume: what the sampling interval is measured in.
+        volumeVoxels: { value: new THREE.Vector3(1, 1, 1) },
         // 0 until an SVR manager publishes its live page count: an unpublished atlas
-        // must read as "no brick", not as page 254 (see getAtlasLookup).
+        // must read as "no brick", not as page 254 (see fetchVoxel).
         svrPageCount: { value: 0 },
         numChannels: { value: 0 },
-        steps: { value: 100 },
-        renderMode: { value: 2 },  // 2 = Natural Fluorescence by default
+        steps: { value: MAX_MARCH_STEPS },
+        sampleRate: { value: IDLE_SAMPLE_RATE },
+        pickPass: { value: 0 },
+        renderMode: { value: 2 },  // 2 = Natural Fluorescence until a shader plugin picks one
         exposure: { value: 1.0 },  // global brightness
         // View export only (renderViewImage); inert on screen.
         fragCoordOffset: { value: new THREE.Vector2(0, 0) },
@@ -975,19 +1170,29 @@ const VolumeViewer = (() => {
     _createMeasurementGroup();
 
     // Controls (Orbit)
-    _setupInteraction(container);
+    _setupInteraction(container, listen);
 
-    // Resize handler
-    window.addEventListener('resize', resize);
+    // One resize path: the observer of the box the canvas fills (the window only
+    // where ResizeObserver does not exist — it would fire for the same change twice).
     if (window.ResizeObserver && container.parentElement) {
       _resizeObserver = new ResizeObserver(resize);
       _resizeObserver.observe(container.parentElement);
       _observedParent = container.parentElement;
+    } else {
+      listen(window, 'resize', resize);
     }
 
     _initVolumeGrid();
     _animate();
   }
+
+  /** Listener options tied to this init: dispose() removes them all at once. */
+  function _listenerOptions(opts = {}) {
+    return _listenerAbort ? { ...opts, signal: _listenerAbort.signal } : opts;
+  }
+
+  // The canvas aspect the camera was last fitted for (resize keeps the zoom).
+  let _lastAspect = 1;
 
   function resize() {
     if (!_container || !camera || !renderer) return;
@@ -1001,20 +1206,62 @@ const VolumeViewer = (() => {
     }
     const width = Math.max(1, parent.clientWidth);
     const height = Math.max(1, parent.clientHeight);
-    camera.aspect = width / height;
-    camera.updateProjectionMatrix();
-    renderer.setSize(width, height, false);
-    if (_hasLoadedVolume) {
-      const requiredDistance = _fitCameraDistance(1.25);
-      if (Number.isFinite(requiredDistance) && camera.position.z < requiredDistance) {
-        camera.position.z = requiredDistance;
+    const aspect = width / height;
+    // The user's zoom is a distance relative to the one that frames the volume. A new
+    // aspect changes that framing distance; the camera keeps the same ratio to it, so
+    // opening a sidebar neither zooms out nor lets the volume overflow the view. The
+    // framing is measured on the unrotated box, so it does not drift with the pose.
+    if (_hasLoadedVolume && Math.abs(aspect - _lastAspect) > 1e-6) {
+      const before = _fitDistanceForAspect(_lastAspect);
+      const after = _fitDistanceForAspect(aspect);
+      if (before > 0 && after > 0 && Number.isFinite(after / before)) {
+        camera.position.z = Math.max(0.2, Math.min(100, camera.position.z * (after / before)));
       }
     }
-    if (scene && camera) renderer.render(scene, camera);
+    _lastAspect = aspect;
+    camera.aspect = aspect;
+    camera.updateProjectionMatrix();
+    renderer.setSize(width, height, false);
+    // Drawn by the loop, not here: a resize is an interaction (reduced frames while
+    // the box keeps changing), and one frame follows it.
+    _markInteraction();
     _scheduleFrame();
   }
-  
-  function _setupInteraction(canvas) {
+
+  /** Camera distance framing the unrotated volume box (cube.scale applied) at `aspect`. */
+  function _fitDistanceForAspect(aspect, margin = 1.25) {
+    if (!camera || !cube) return 0;
+    if (!cube.geometry.boundingBox) cube.geometry.computeBoundingBox();
+    const size = cube.geometry.boundingBox.getSize(new THREE.Vector3()).multiply(cube.scale);
+    const verticalFov = THREE.MathUtils.degToRad(camera.fov);
+    const horizontalFov = 2 * Math.atan(Math.tan(verticalFov / 2) * aspect);
+    const distanceY = (Math.abs(size.y) / 2) / Math.tan(verticalFov / 2);
+    const distanceX = (Math.abs(size.x) / 2) / Math.tan(horizontalFov / 2);
+    return Math.max(0.2, distanceX, distanceY, Math.abs(size.z) * 1.2) * margin;
+  }
+
+  /**
+   * Render the current view now, synchronously, so a capture in the same task reads
+   * this frame (with preserveDrawingBuffer off the canvas is blank between frames).
+   */
+  function renderNow() {
+    if (!renderer || !scene || !camera || _contextLost) return false;
+    _syncRotGizmoTransform();
+    _syncGridRotation();
+    if (_cutPlaneMesh?.visible) _syncCutPlaneToOrbit();
+    _updateMeasurementLabelPositions(false, _activeDragSprite);
+    renderer.render(scene, camera);
+    return true;
+  }
+
+  function _installCaptureHooks(canvas) {
+    if (!canvas || typeof HTMLCanvasElement === 'undefined') return;
+    const proto = HTMLCanvasElement.prototype;
+    canvas.toDataURL = function (...args) { renderNow(); return proto.toDataURL.apply(this, args); };
+    canvas.toBlob = function (...args) { renderNow(); return proto.toBlob.apply(this, args); };
+  }
+
+  function _setupInteraction(canvas, listen = (t, type, fn, o) => t.addEventListener(type, fn, o)) {
     let isDragging = false;
     let dragMode = 'rotate';
     let previousMousePosition = { x: 0, y: 0 };
@@ -1034,7 +1281,7 @@ const VolumeViewer = (() => {
     // Prevent native scroll / zoom gestures on the canvas
     canvas.style.touchAction = 'none';
     canvas.style.userSelect = 'none';
-    canvas.addEventListener('contextmenu', (e) => e.preventDefault());
+    listen(canvas, 'contextmenu', (e) => e.preventDefault());
 
     // Helper: get offset relative to canvas
     function _offset(e) {
@@ -1110,9 +1357,9 @@ const VolumeViewer = (() => {
       _scheduleFrame();
     }
 
-    canvas.addEventListener('pointerdown', (e) => {
+    listen(canvas, 'pointerdown', (e) => {
       e.preventDefault();
-      _activePointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      _activePointers.set(e.pointerId, { x: e.clientX, y: e.clientY, type: e.pointerType });
 
       // Two fingers or more → navigation gesture, whatever tool is active: the
       // volume must stay reachable on a tablet even in measure or cut mode.
@@ -1127,7 +1374,7 @@ const VolumeViewer = (() => {
         return;
       }
 
-      canvas.setPointerCapture(e.pointerId);
+      try { canvas.setPointerCapture(e.pointerId); } catch (_) { /* synthetic or already-ended pointer */ }
       _activePointerId = e.pointerId;
 
       if (!_firstInteractionLogged) {
@@ -1194,10 +1441,10 @@ const VolumeViewer = (() => {
       startMousePosition = { ...previousMousePosition };
     });
     
-    canvas.addEventListener('pointermove', (e) => {
+    listen(canvas, 'pointermove', (e) => {
       // Update pinch tracker
       if (_activePointers.has(e.pointerId)) {
-        _activePointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+        _activePointers.set(e.pointerId, { x: e.clientX, y: e.clientY, type: e.pointerType });
       }
 
       // Two-finger pan + pinch-to-zoom, applied in the same move
@@ -1342,7 +1589,7 @@ const VolumeViewer = (() => {
           
           const rect = renderer.domElement.getBoundingClientRect();
           // PERF-004: reuse module-level _raycaster/_pointer (synchronous, not retained)
-          _pointer.set(((e.clientX - rect.left) / rect.width) * 2 - 1, -((e.clientY - rect.top) / rect.height) * 2 + 1);
+          _pointer.set(((e.clientX - rect.left) / Math.max(1, rect.width)) * 2 - 1, -((e.clientY - rect.top) / Math.max(1, rect.height)) * 2 + 1);
           _raycaster.setFromCamera(_pointer, camera);
           const targetWorld = new THREE.Vector3();
           
@@ -1445,7 +1692,9 @@ const VolumeViewer = (() => {
                   0,
                   'XYZ'
               ));
-            cube.quaternion.multiplyQuaternions(deltaRotationQuaternion, cube.quaternion);
+            // Renormalised: thousands of compositions in a session would otherwise let
+            // the norm drift and shear the ray basis.
+            cube.quaternion.multiplyQuaternions(deltaRotationQuaternion, cube.quaternion).normalize();
           }
         } else {
           // Default: rotate — blocked when rotation is locked
@@ -1458,7 +1707,9 @@ const VolumeViewer = (() => {
                   0,
                   'XYZ'
               ));
-            cube.quaternion.multiplyQuaternions(deltaRotationQuaternion, cube.quaternion);
+            // Renormalised: thousands of compositions in a session would otherwise let
+            // the norm drift and shear the ray basis.
+            cube.quaternion.multiplyQuaternions(deltaRotationQuaternion, cube.quaternion).normalize();
           }
         }
         // Notify camera sync in real time — only for moves that actually changed something
@@ -1469,7 +1720,7 @@ const VolumeViewer = (() => {
       previousMousePosition = { x: off.x, y: off.y };
     });
 
-    canvas.addEventListener('pointerup', (e) => {
+    listen(canvas, 'pointerup', (e) => {
       _activePointers.delete(e.pointerId);
       if (_gesture) {
         if (_activePointers.size >= 2) { _seedGesture(); return; }
@@ -1509,7 +1760,7 @@ const VolumeViewer = (() => {
       _endInteraction();
     });
 
-    canvas.addEventListener('pointercancel', (e) => {
+    listen(canvas, 'pointercancel', (e) => {
       _activePointers.delete(e.pointerId);
       if (_gesture) {
         if (_activePointers.size >= 2) { _seedGesture(); return; }
@@ -1524,7 +1775,7 @@ const VolumeViewer = (() => {
       }
     });
 
-    canvas.addEventListener('wheel', (e) => {
+    listen(canvas, 'wheel', (e) => {
       e.preventDefault();
       // In cut mode: scroll over plane → move plane; otherwise zoom
       if (_activeTool === 'cut' && _cutPlane.visible && _planeHovered) {
@@ -1533,8 +1784,12 @@ const VolumeViewer = (() => {
         _markInteraction();
         return;
       }
-      camera.position.z += e.deltaY * 0.005;
-      camera.position.z = Math.max(0.2, Math.min(camera.position.z, 100));
+      // Proportional zoom, z·exp(k·Δ): one notch moves the camera by the same share of
+      // its distance near or far. deltaMode 1 (lines, Firefox) and 2 (pages) are brought
+      // to pixels first, so a notch is the same zoom in every browser.
+      const unit = e.deltaMode === 1 ? 33 : (e.deltaMode === 2 ? Math.max(1, canvas.clientHeight || 800) : 1);
+      const dy = Math.max(-600, Math.min(600, (Number(e.deltaY) || 0) * unit));
+      camera.position.z = Math.max(0.2, Math.min(100, camera.position.z * Math.exp(dy * 0.0015)));
       _markInteraction();
       _scheduleFrame();
       _notifyCameraChange();
@@ -1594,58 +1849,144 @@ const VolumeViewer = (() => {
     };
   }
 
-  function _animate() {
-    if (_contextLost) { animationId = null; return; }   // ELE-18: never draw on a lost context
-    const now = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
-    const isInteractingNow = _isInteracting || (_activePointers.size >= 2) || (Date.now() - _lastInteractionTime < 250);
+  /**
+   * One step of the interactive quality controller. The cost of a frame is close to
+   * pixels × samples, i.e. ∝ scale² · rate (scale: fraction of the idle pixel ratio,
+   * rate: samples per voxel length). A frame slower than 1.3 × target shrinks the
+   * resolution by sqrt(target / frame) — the factor that brings the cost back to the
+   * target — down to minScale, then the sample rate by target / frame. A frame at
+   * the target (≤ 1.1 × target: a vsync-paced frame says no more than that) grows
+   * the rate first, then the resolution, by small steps, so the two thresholds leave
+   * a band where nothing changes. Scale is quantised to 1/20 so the drawing buffer is
+   * not reallocated for a 1 % change.
+   * @returns {{scale:number, rate:number}} a new state (the input is not modified)
+   */
+  function _nextAdaptiveState(state, frameMs, targetMs = INTERACTIVE_TARGET_MS, limits = ADAPTIVE_LIMITS) {
+    let scale = Math.max(limits.minScale, Math.min(limits.maxScale, Number(state?.scale) || limits.maxScale));
+    let rate = Math.max(limits.minRate, Math.min(limits.maxRate, Number(state?.rate) || limits.minRate));
+    if (!(frameMs > 0) || !(targetMs > 0)) return { scale, rate };
+    if (frameMs > targetMs * 1.3) {
+      const ratio = targetMs / frameMs;
+      if (scale > limits.minScale + 1e-9) scale = Math.max(limits.minScale, scale * Math.max(0.5, Math.sqrt(ratio)));
+      else rate = Math.max(limits.minRate, rate * Math.max(0.5, ratio));
+    } else if (frameMs <= targetMs * 1.1) {
+      if (rate < limits.maxRate - 1e-9) rate = Math.min(limits.maxRate, rate * 1.1);
+      // At least one 1/20 quantum: ×1.05 alone rounds back down below 0.5, which left
+      // the resolution stuck at its floor for the session after one slow frame.
+      else scale = Math.min(limits.maxScale, Math.max(scale * 1.05, scale + 0.05));
+    }
+    scale = Math.max(limits.minScale, Math.min(limits.maxScale, Math.round(scale * 20) / 20));
+    return { scale, rate };
+  }
 
-    // Cap frame rate during active interaction to reduce GPU workload and temperature.
-    // At 40 FPS, the visual movement is still extremely fluid while saving significant GPU power.
-    if (isInteractingNow) {
-      const elapsed = now - _lastFrameRenderTime;
-      const minInterval = 25.0; // 40 FPS max (1000 / 40 = 25ms)
-      if (elapsed < minInterval) {
-        animationId = requestAnimationFrame(_animate);
-        return;
+  /**
+   * Sample cap per ray of a settled frame of `pixels` drawing-buffer pixels:
+   * the settled budget (pixel·samples) spread over the pixels, between 256 and the
+   * shader's loop bound. A ray that needs more samples than the cap is spread
+   * evenly over it (see delta in the shader).
+   */
+  function _settledSampleCap(pixels, budgetScale = 1) {
+    const p = Math.max(1, Number(pixels) || 1);
+    const budget = SETTLED_PIXEL_SAMPLE_BUDGET * Math.max(0.05, Math.min(1, Number(budgetScale) || 1));
+    return Math.max(256, Math.min(MAX_MARCH_STEPS, Math.floor(budget / p)));
+  }
+
+  // GPU time of a frame, read back a few frames later (EXT_disjoint_timer_query_webgl2).
+  // Without the extension the controller reads the time between two consecutive
+  // interactive frames, which is the frame time whenever the GPU is the bottleneck.
+  const _gpuTimer = { ext: undefined, pending: [] };
+
+  function _timerExt(gl) {
+    if (_gpuTimer.ext === undefined) {
+      try { _gpuTimer.ext = gl.getExtension('EXT_disjoint_timer_query_webgl2') || null; } catch (_) { _gpuTimer.ext = null; }
+    }
+    return _gpuTimer.ext;
+  }
+
+  function _beginGpuTimer() {
+    const gl = renderer?.getContext?.();
+    const ext = gl && typeof gl.createQuery === 'function' ? _timerExt(gl) : null;
+    if (!ext || _gpuTimer.pending.length >= 4) return null;
+    const query = gl.createQuery();
+    gl.beginQuery(ext.TIME_ELAPSED_EXT, query);
+    return query;
+  }
+
+  function _endGpuTimer(query, interactive) {
+    if (!query) return;
+    const gl = renderer.getContext();
+    gl.endQuery(_gpuTimer.ext.TIME_ELAPSED_EXT);
+    _gpuTimer.pending.push({ query, interactive });
+  }
+
+  function _pollGpuTimers() {
+    if (!_gpuTimer.pending.length || !renderer) return;
+    const gl = renderer.getContext();
+    const ext = _gpuTimer.ext;
+    const disjoint = gl.getParameter(ext.GPU_DISJOINT_EXT);
+    while (_gpuTimer.pending.length) {
+      const head = _gpuTimer.pending[0];
+      if (!disjoint && !gl.getQueryParameter(head.query, gl.QUERY_RESULT_AVAILABLE)) break;
+      _gpuTimer.pending.shift();
+      const ms = disjoint ? 0 : gl.getQueryParameter(head.query, gl.QUERY_RESULT) / 1e6;
+      gl.deleteQuery(head.query);
+      if (!(ms > 0)) continue;
+      if (head.interactive) {
+        _adaptive = _nextAdaptiveState(_adaptive, ms);
+      } else {
+        // A settled frame past ~200 ms comes too close to the GPU watchdog: lower the
+        // budget; one far under it gives some back.
+        if (ms > 200) _settledBudgetScale = Math.max(0.05, _settledBudgetScale * Math.max(0.5, 150 / ms));
+        else if (ms < 60) _settledBudgetScale = Math.min(1, _settledBudgetScale * 1.1);
       }
     }
-    _lastFrameRenderTime = now;
+  }
+
+  function _touchPointerCount() {
+    let n = 0;
+    for (const p of _activePointers.values()) if (p.type && p.type !== 'mouse') n++;
+    return n;
+  }
+
+  function _animate() {
+    if (_contextLost) { animationId = null; return; }   // ELE-18: never draw on a lost context
+    if (!renderer || !scene || !camera || !cube) { animationId = null; return; }   // disposed
+    const now = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+    const isInteractingNow = _isInteracting || (_touchPointerCount() >= 2) || (Date.now() - _lastInteractionTime < 250);
 
     if (_stepPoseAnimation(now)) _needsRender = true;
     _syncRotGizmoTransform();
     _syncGridRotation();
+    if (_gpuTimer.ext) _pollGpuTimers();
 
-    // Dynamically adjust steps value during interaction or streaming to keep frame rate high
-    if (material) {
-      const targetVal = (isInteractingNow || _isStreamingBricks)
-        ? Math.min(48, Math.max(24, Math.round(_targetSteps * 0.35)))
+    // Quality of this frame: a settled frame samples every voxel at the full pixel
+    // ratio within the settled budget; an interactive one follows the controller.
+    // Streaming no longer degrades the picture: its redraws are only throttled.
+    if (material && renderer) {
+      const idleRatio = _idlePixelRatio();
+      const targetRatio = isInteractingNow ? idleRatio * _adaptive.scale : idleRatio;
+      if (Math.abs(renderer.getPixelRatio() - targetRatio) > 1e-6) {
+        renderer.setPixelRatio(targetRatio);
+        _needsRender = true;
+      }
+      const size = renderer.getSize(_frameSize);
+      _targetSteps = _settledSampleCap(size.x * size.y * idleRatio * idleRatio, _settledBudgetScale);
+      // While dragging, a tenth of the settled budget bounds the first frames too,
+      // before the controller has measured anything.
+      const steps = isInteractingNow
+        ? _settledSampleCap(size.x * size.y * targetRatio * targetRatio, 0.1 * _settledBudgetScale)
         : _targetSteps;
-      
-      if (material.uniforms.steps.value !== targetVal) {
-        material.uniforms.steps.value = targetVal;
-        _needsRender = true; // Force redraw to apply quality change
+      const rate = isInteractingNow ? _adaptive.rate : IDLE_SAMPLE_RATE;
+      if (material.uniforms.steps.value !== steps) {
+        material.uniforms.steps.value = steps;
+        _needsRender = true;
       }
-
-      if (cube) {
-        cube.userData.isInteractingNow = isInteractingNow;
+      if (material.uniforms.sampleRate.value !== rate) {
+        material.uniforms.sampleRate.value = rate;
+        _needsRender = true;
       }
-
-      if (renderer) {
-        const basePixelRatio = Math.min(window.devicePixelRatio || 1, 2);
-        // During interaction or streaming, render at a lower resolution (0.40 for 1024x1024/native, 0.50 for others).
-        // This reduces pixel fill-rate by 6.25x (or 25x on Retina) during rotation/load.
-        const interactionScale = (_qualityTarget === '1024x1024' || _qualityTarget === 'native') ? 0.40 : 0.50;
-        const targetRatio = (isInteractingNow || _isStreamingBricks)
-          ? interactionScale
-          : basePixelRatio;
-        
-        if (renderer.getPixelRatio() !== targetRatio) {
-          renderer.setPixelRatio(targetRatio);
-          _needsRender = true;
-        }
-      }
+      if (cube) cube.userData.isInteractingNow = isInteractingNow;
     }
-
 
     if (_frameStats.lastTs > 0) {
       const dt = Math.max(0, now - _frameStats.lastTs);
@@ -1666,10 +2007,10 @@ const VolumeViewer = (() => {
       }
     }
     _frameStats.lastTs = now;
-    
+
     const cameraChanged = !camera.position.equals(_lastCameraPos) || !camera.quaternion.equals(_lastCameraQuat);
     const cubeChanged = !cube.position.equals(_lastCubePos) || !cube.quaternion.equals(_lastCubeQuat);
-    
+
     if (_needsRender || cameraChanged || cubeChanged) {
       try {
         if (_transitionCube) {
@@ -1682,7 +2023,17 @@ const VolumeViewer = (() => {
       } catch (err) {
         console.warn('[VolumeViewer] Error in pre-render update:', err);
       }
+      const query = _beginGpuTimer();
       renderer.render(scene, camera);
+      _endGpuTimer(query, isInteractingNow);
+      // Without a GPU timer: two interactive frames in consecutive animation frames
+      // are as far apart as the slower of the GPU and the display refresh.
+      if (!query && !_gpuTimer.ext && isInteractingNow && _lastRenderInteractive) {
+        const gap = now - _lastRenderAt;
+        if (gap > 0 && gap < 250) _adaptive = _nextAdaptiveState(_adaptive, gap);
+      }
+      _lastRenderAt = now;
+      _lastRenderInteractive = isInteractingNow;
       if (_onPostRender) _onPostRender();
       _lastCameraPos.copy(camera.position);
       _lastCameraQuat.copy(camera.quaternion);
@@ -1692,6 +2043,7 @@ const VolumeViewer = (() => {
       _idleFrameCount = 0;
     } else {
       _idleFrameCount++;
+      _lastRenderInteractive = false;
     }
 
     // Stop requestAnimationFrame loop immediately when idle to prevent GPU usage
@@ -1701,6 +2053,7 @@ const VolumeViewer = (() => {
       animationId = null;
     }
   }
+  const _frameSize = new THREE.Vector2();
 
   /** Wake the render loop if it's sleeping */
   function _scheduleFrame() {
@@ -1710,8 +2063,26 @@ const VolumeViewer = (() => {
     }
   }
 
+  /** A redraw asked by bricks landing: at most one every STREAM_REDRAW_MS. */
+  function _scheduleStreamRedraw() {
+    const now = Date.now();
+    const wait = STREAM_REDRAW_MS - (now - _lastStreamRedrawAt);
+    if (wait <= 0) {
+      _lastStreamRedrawAt = now;
+      _scheduleFrame();
+      return;
+    }
+    if (_streamRedrawTimer) return;
+    _streamRedrawTimer = setTimeout(() => {
+      _streamRedrawTimer = null;
+      _lastStreamRedrawAt = Date.now();
+      _scheduleFrame();
+    }, wait);
+  }
+
   /**
-   * Load WebP slices into a 3D Texture
+   * Load WebP slices into a 3D Texture (a dataset served as a slice stack, without
+   * bricks — the fallback when brick streaming is unavailable).
    * @param {string} basePath Base path to dataset
    * @param {Object} metadata Dataset metadata
    * @param {number} timepoint Optional timepoint to load
@@ -1722,6 +2093,7 @@ const VolumeViewer = (() => {
     // view export never waits on a load that is over (_isVolumeStreaming).
     const job = { loadId: 0 };
     _sliceLoads.add(job);
+    if (!options._replay) _lastDisplayRequest = { kind: 'slices', basePath, metadata, timepoint, onProgress, options };
     try {
       return await _loadSliceVolume(basePath, metadata, timepoint, onProgress, options, job);
     } finally {
@@ -1734,10 +2106,10 @@ const VolumeViewer = (() => {
       quality: options.quality || '1024x1024',
       timepoint
     });
-    if (_brickStreamAbort) _brickStreamAbort.cancelled = true;
-    if (_seedRafId !== null) { cancelAnimationFrame(_seedRafId); _seedRafId = null; } // LEAK-023
+    _cancelStream(_brickStreamAbort);
     const loadId = ++_loadCounter;
     job.loadId = loadId;
+    _resetThrottledProgress();
     const quality = _normalizeQualityKey(options.quality || '1024x1024');
     _emitQualityState({ active: quality, mode: 'slice', progress: 0, message: `Loading ${quality} slices...` });
     const qualityInfo = _resolveQuality(metadata, quality);
@@ -1779,44 +2151,49 @@ const VolumeViewer = (() => {
       };
     }
 
-    const scale = Math.min(1, qualityInfo.maxTextureSize / Math.max(sourceWidth, sourceHeight));
-    const width = Math.max(1, Math.round(sourceWidth * scale));
-    const height = Math.max(1, Math.round(sourceHeight * scale));
+    // The dense RGBA texture must fit both the single-3D-texture ceiling and the GPU
+    // budget: a quality whose slices would pass either is loaded at the largest slice
+    // size that fits (halved in X and Y until it does) and reported as downgraded.
     const zIndices = qualityInfo.zIndices || _buildSampleIndices(sourceDepth, qualityInfo.maxDepthSamples);
     const depth = zIndices.length;
     const channelCount = Math.min(channels, 4);
+    const budget = _gpuBudgetBytes();
+    const requestedScale = Math.min(1, qualityInfo.maxTextureSize / Math.max(sourceWidth, sourceHeight));
+    let scale = requestedScale;
+    let width;
+    let height;
+    for (;;) {
+      width = Math.max(1, Math.round(sourceWidth * scale));
+      height = Math.max(1, Math.round(sourceHeight * scale));
+      const bytes = width * height * depth * RGBA_TEXTURE_BYTES_PER_VOXEL;
+      if ((bytes < MONOLITHIC_RGBA_LIMIT_BYTES && bytes <= budget) || Math.max(width, height) <= 64) break;
+      scale /= 2;
+    }
     const isLive = metadata.type === 'live';
+    const stamp = _sliceStamp(metadata);
 
     const tasks = [];
     for (let zi = 0; zi < depth; zi++) {
       for (let c = 0; c < channelCount; c++) {
-        tasks.push({ zi, z: zIndices[zi], c, url: _sliceUrl(basePath, qualityInfo, isLive, timepoint, zIndices[zi], c) });
+        tasks.push({ zi, z: zIndices[zi], c, url: _sliceUrl(basePath, qualityInfo, isLive, timepoint, zIndices[zi], c, stamp) });
       }
     }
 
     const texturePerfId = _perf()?.start('texture.upload.prepare', { mode: 'slice', quality, width, height, depth });
-    const TextureClass = THREE.Data3DTexture || THREE.DataTexture3D;
-    const rgbaData = new Uint8Array(width * height * depth * RGBA_TEXTURE_BYTES_PER_VOXEL);
-    const texture3D = new TextureClass(rgbaData, width, height, depth);
-    texture3D.format = THREE.RGBAFormat;
-    texture3D.type = THREE.UnsignedByteType;
-    texture3D.minFilter = THREE.LinearFilter;
-    texture3D.magFilter = THREE.LinearFilter;
-    texture3D.unpackAlignment = 1;
+    let texture3D;
+    try {
+      texture3D = _allocMonolithicTexture(width, height, depth, false);
+    } catch (err) {
+      _perf()?.end(texturePerfId, { status: 'error' });
+      _perf()?.end(perfId, { status: 'error', quality, message: err.message });
+      _emitQualityState({ active: quality, mode: 'slice', progress: 0, message: `${quality} does not fit in GPU memory` });
+      throw err;
+    }
     const textures = [texture3D];
     _perf()?.end(texturePerfId, { status: 'ok' });
 
-    if (Boolean(_activeVolumeEntry && _activeVolumeEntry.textures)) {
-        const seeded = _seedVolumeFromActive(width, height, depth, channelCount);
-        if (seeded && seeded.length === rgbaData.length) {
-          rgbaData.set(seeded);
-          texture3D.needsUpdate = true;
-        }
-    }
-
-    // Cache mono-canal des pixels bruts (avant blur) — utilisé pour
-    // le changement de sigma sans re-fetch réseau.
-    // Taille par canal : width * height * depth octets.
+    // The decoded slices, one byte per voxel and channel: what each slice upload is
+    // interleaved from, and the raw channels the denoise filter starts from.
     const rawChannelData = Array.from(
       { length: channelCount },
       () => new Uint8Array(width * height * depth)
@@ -1826,7 +2203,7 @@ const VolumeViewer = (() => {
       key: cacheKey,
       textures,
       texture: texture3D,
-      data: rgbaData,
+      data: null,
       rawChannelData,
       width,
       height,
@@ -1839,15 +2216,20 @@ const VolumeViewer = (() => {
       basePath,
       timepoint,
       quality,
+      stride: RGBA_TEXTURE_BYTES_PER_VOXEL,
+      gpuBytes: width * height * depth * RGBA_TEXTURE_BYTES_PER_VOXEL,
+      downgraded: scale < requestedScale,
       backgroundSuppressed: true,
       successfulLoads: 0,
       failedLoads: 0,
-      histograms: _channelHistograms?.length ? _channelHistograms : _computeChannelHistograms(textures, width, height, depth, channelCount)
+      // Real counts arrive once the slices are in (_deferHistogramComputation).
+      histograms: _channelHistograms?.length ? _channelHistograms : _emptyHistograms(channelCount)
     };
     // ELE-10 (RACE-001): a newer load (dataset / timepoint / quality switch) may
     // have bumped _loadCounter while this one was preparing. Do not publish this
     // entry (it rebinds the material uniforms + recenters the camera) on a stale load.
     if (loadId !== _loadCounter && options.cancelStale !== false) {
+      _disposeVolumeEntry(entry);
       _perf()?.end(perfId, { status: 'stale', quality });
       return { stale: true };
     }
@@ -1857,45 +2239,33 @@ const VolumeViewer = (() => {
     let completed = 0;
     let successfulLoads = 0;
     let failedLoads = 0;
-    let pendingUploads = 0;
+    const sliceSize = width * height;
+    const channelsLanded = new Uint8Array(depth);
+    const sliceScratch = new Uint8Array(sliceSize * RGBA_TEXTURE_BYTES_PER_VOXEL);
+    const uploadSlice = (zi) => {
+      _interleaveChannels(rawChannelData, zi * sliceSize, sliceSize, sliceScratch, RGBA_TEXTURE_BYTES_PER_VOXEL);
+      _updateGPUTextureRegion(texture3D, { x: width, y: height, z: depth }, 0, 0, zi, width, height, 1, sliceScratch);
+    };
     const runnerCount = Math.min(CONCURRENT_IMAGE_LOADS, tasks.length || 1);
     const readers = Array.from({ length: runnerCount }, () => _createSliceReader(width, height));
     await _runLimited(tasks, runnerCount, async ({ zi, c, url }, runnerIndex) => {
+      let ok = false;
       try {
         const img = await _loadImage(url);
-        const reader = readers[runnerIndex] || readers[0] || _createSliceReader(width, height);
-        reader.ctx.clearRect(0, 0, width, height);
-        reader.ctx.drawImage(img, 0, 0, width, height);
-        const imgData = reader.ctx.getImageData(0, 0, width, height).data;
-        const sliceSize = width * height;
-        const rawOffset = zi * sliceSize;
-
-        // Sauvegarde des pixels bruts dans le cache mono-canal
-        // (extraction du canal R de l'image RGBA décodée = intensité grayscale)
-        for (let i = 0; i < sliceSize; i++) {
-          rawChannelData[c][rawOffset + i] = imgData[i * 4];
+        try {
+          const reader = readers[runnerIndex] || readers[0] || _createSliceReader(width, height);
+          reader.ctx.clearRect(0, 0, width, height);
+          reader.ctx.drawImage(img, 0, 0, width, height);
+          const imgData = reader.ctx.getImageData(0, 0, width, height).data;
+          // The R component of the decoded grayscale slice is the intensity.
+          const raw = rawChannelData[c];
+          for (let i = 0, src = 0, dst = zi * sliceSize; i < sliceSize; i++, src += 4, dst++) raw[dst] = imgData[src];
+        } finally {
+          img.close?.();
         }
-
-        // Application du flou gaussien si nécessaire (au chargement initial)
-        const sigma = _channelSigma[c] || 0;
-        const targetData = rgbaData;
-        const rgbaOffset = rawOffset * RGBA_TEXTURE_BYTES_PER_VOXEL + c;
-        if (sigma > 0.1) {
-          const blurBuf = new Uint8Array(sliceSize);
-          blurBuf.set(rawChannelData[c].subarray(rawOffset, rawOffset + sliceSize));
-          _gaussianBlurChannel(blurBuf, width, height, 0, 1, sigma);
-          for (let i = 0, dst = rgbaOffset; i < sliceSize; i++, dst += RGBA_TEXTURE_BYTES_PER_VOXEL) {
-            targetData[dst] = blurBuf[i];
-          }
-        } else {
-          const rawSlice = rawChannelData[c].subarray(rawOffset, rawOffset + sliceSize);
-          for (let i = 0, dst = rgbaOffset; i < sliceSize; i++, dst += RGBA_TEXTURE_BYTES_PER_VOXEL) {
-            targetData[dst] = rawSlice[i];
-          }
-        }
+        ok = true;
         successfulLoads++;
         entry.successfulLoads = successfulLoads;
-        pendingUploads++;
       } catch (e) {
         failedLoads++;
         entry.failedLoads = failedLoads;
@@ -1906,18 +2276,20 @@ const VolumeViewer = (() => {
         // now point at another dataset. Just let the runner drain.
         const stale = loadId !== _loadCounter && options.cancelStale !== false;
         if (!stale) {
-          if (completed >= tasks.length || (Date.now() - (textures[0]._lastUpdateTime || 0) > 1000)) {
-            textures.forEach(t => { t.needsUpdate = true; t._lastUpdateTime = Date.now(); });
-            _scheduleFrame();
-            pendingUploads = 0;
+          channelsLanded[zi]++;
+          // A slice is uploaded once, when its last channel has landed (or failed).
+          if (channelsLanded[zi] === channelCount) {
+            uploadSlice(zi);
+            if (ok || channelCount > 1) _scheduleStreamRedraw();
           }
           if (onProgress) onProgress(completed / tasks.length, quality);
-          _emitQualityState({ progress: completed / Math.max(1, tasks.length) });
+          _emitThrottledProgress(completed / Math.max(1, tasks.length));
         }
       }
     });
 
     if (loadId !== _loadCounter && options.cancelStale !== false) {
+      if (entry !== _activeVolumeEntry && !_volumeCache.has(entry.key)) _disposeVolumeEntry(entry);
       _perf()?.end(perfId, { status: 'stale', quality });
       return { stale: true };
     }
@@ -1939,16 +2311,26 @@ const VolumeViewer = (() => {
       console.warn(`Volume data is incomplete: ${failedLoads} of ${tasks.length} slice files could not be loaded from ${basePath}/${qualityInfo.directory}. Rendering partial volume.`);
     }
 
-    textures.forEach(t => t.needsUpdate = true);
     _scheduleFrame();
     entry.backgroundSuppressed = false;
     entry.successfulLoads = successfulLoads;
     entry.failedLoads = failedLoads;
+    // A volume with holes is shown but never filed as complete: a revisit loads again.
+    entry.degraded = failedLoads > 0;
     // Defer histogram computation off the critical render path
-    _deferHistogramComputation(entry, textures, width, height, depth, channelCount);
+    _deferHistogramComputation(entry);
     _storeVolumeCache(cacheKey, entry);
     _activateVolumeEntry(entry, metadata, sourceDepth, sourceWidth, channels, options);
-    _emitQualityState({ active: quality, mode: 'slice', progress: 1, message: `${quality} ready` });
+    // A denoise sigma set before the load is applied to the new volume (in workers).
+    _channelSigma.forEach((sigma, c) => { if (sigma > 0.1 && c < channelCount) _applyDenoise(c, sigma, entry); });
+    _emitQualityState({
+      active: quality,
+      mode: 'slice',
+      progress: 1,
+      message: failedLoads > 0
+        ? `${quality} ready — ${failedLoads} of ${tasks.length} slice images missing`
+        : `${quality} ready`
+    });
     _perf()?.end(perfId, {
       status: 'ok',
       fromCache: false,
@@ -1966,6 +2348,7 @@ const VolumeViewer = (() => {
       width,
       height,
       depth,
+      downgraded: entry.downgraded,
       successfulLoads,
       failedLoads,
       physicalSizeUm: _physicalSizeUm,
@@ -1973,17 +2356,34 @@ const VolumeViewer = (() => {
     };
   }
 
+  /** Interleave `count` voxels of every channel, from voxel `offset`, into `out`
+   *  (`stride` bytes per voxel, channel c in byte c; absent channels read 0). */
+  function _interleaveChannels(channelArrays, offset, count, out, stride) {
+    out.fill(0);
+    for (let c = 0; c < channelArrays.length && c < stride; c++) {
+      const src = channelArrays[c];
+      if (!src) continue;
+      for (let i = 0, o = c; i < count; i++, o += stride) out[o] = src[offset + i];
+    }
+    return out;
+  }
+
+  /**
+   * Warm the browser's HTTP cache with the slice files of a timepoint (nothing is
+   * decoded or kept in memory here: the slice load decodes them when it needs them).
+   */
   async function preloadVolume(basePath, metadata, timepoint = null, options = {}) {
     const quality = options.quality || '256x256';
     const qualityInfo = _resolveQuality(metadata, quality);
     const { z: sourceDepth, c: channels } = metadata.dimensions || {};
     const isLive = metadata.type === 'live';
     const zIndices = qualityInfo.zIndices || _buildSampleIndices(sourceDepth || 1, qualityInfo.maxDepthSamples);
+    const stamp = _sliceStamp(metadata);
     const tasks = [];
 
     for (let zi = 0; zi < zIndices.length; zi++) {
       for (let c = 0; c < Math.min(channels || 1, 4); c++) {
-        tasks.push(_sliceUrl(basePath, qualityInfo, isLive, timepoint, zIndices[zi], c));
+        tasks.push(_sliceUrl(basePath, qualityInfo, isLive, timepoint, zIndices[zi], c, stamp));
       }
     }
 
@@ -1993,7 +2393,7 @@ const VolumeViewer = (() => {
     let failedLoads = 0;
     await _runLimited(selected, options.concurrency || PRELOAD_IMAGE_LOADS, async (url) => {
       try {
-        await _loadImage(url);
+        await _prefetchSliceFile(url);
         successfulLoads++;
       } catch (err) {
         failedLoads++;
@@ -2086,6 +2486,8 @@ const VolumeViewer = (() => {
   function _applyDisplayScale() {
     if (!cube) return;
     cube.scale.set(_baseScale.x, _baseScale.y, _baseScale.z * _zDisplayScale);
+    // The measurement frame undoes this stretch: its points move with it.
+    if (_syncMeasurementFrame()) _renderMeasurements();
     _updateCutPlaneMesh();
     _scheduleFrame();
   }
@@ -2121,13 +2523,31 @@ const VolumeViewer = (() => {
 
   /** Declare the acquisition box and the (larger) box the stabilised series sweeps. */
   function setStabilizationSpace(extentUm, displayBoxUm) {
-    if (!extentUm) { _acqExtent = null; _displayBox = null; return; }
+    // Without a stabilisation space the cube is the unit acquisition box again — a
+    // dataset opened after a stabilised timelapse must not inherit its larger box.
+    const clear = () => {
+      _acqExtent = null;
+      _displayBox = null;
+      if (!cube || cube.userData.boxKey === undefined || cube.userData.boxKey === 'unit') return;
+      _clearTransitionVolume();
+      const previous = cube.geometry;
+      cube.geometry = new THREE.BoxGeometry(1, 1, 1);
+      cube.userData.boxKey = 'unit';
+      previous?.dispose?.();
+      if (material?.uniforms?.clipBoxMin) {
+        material.uniforms.clipBoxMin.value.set(-0.5, -0.5, -0.5);
+        material.uniforms.clipBoxSize.value.set(1, 1, 1);
+      }
+      if (_cutPlaneMesh?.visible) _syncCutPlaneToOrbit();
+      _scheduleFrame();
+    };
+    if (!extentUm) { clear(); return; }
     const min = new THREE.Vector3().fromArray(extentUm.min);
     const max = new THREE.Vector3().fromArray(extentUm.max);
     const size = new THREE.Vector3().subVectors(max, min);
-    if (size.x <= 0 || size.y <= 0 || size.z <= 0) {
+    if (!(size.x > 0 && size.y > 0 && size.z > 0)) {
       console.warn('[VolumeViewer] degenerate acquisition extent, stabilisation disabled');
-      _acqExtent = null; _displayBox = null; return;
+      clear(); return;
     }
     _acqExtent = { min, max, size };
     _displayBox = displayBoxUm
@@ -2173,7 +2593,16 @@ const VolumeViewer = (() => {
    *  @param {number[]|null} matrix column-major 4x4 mapping raw um -> stabilised um. */
   function setTimepointTransform(matrix) {
     if (!material) return false;
-    const enable = Boolean(matrix) && Boolean(_acqExtent);
+    // A rigid transform has det ±1; a singular or non-finite one would invert to a
+    // zero/NaN warp and the volume would vanish. Such a frame is shown unwarped.
+    let valid = Boolean(matrix);
+    if (valid) {
+      const values = Array.isArray(matrix) || ArrayBuffer.isView(matrix) ? Array.from(matrix) : null;
+      valid = Boolean(values) && values.length === 16 && values.every(Number.isFinite)
+        && Math.abs(new THREE.Matrix4().fromArray(values).determinant()) > 1e-9;
+      if (!valid) console.warn('[VolumeViewer] invalid timepoint transform ignored (not a finite invertible 4x4 matrix)');
+    }
+    const enable = valid && Boolean(_acqExtent);
     if (!enable) {
       if (_warpActive) {
         _warpActive = false;
@@ -2229,17 +2658,12 @@ const VolumeViewer = (() => {
     };
   }
 
-  function _stepsForVolumeEntry(entry) {
-    const quality = _normalizeQualityKey(entry?.quality || _qualityTarget || '512x512');
-    const longestAxis = Math.max(
-      Number(entry?.width) || 1,
-      Number(entry?.height) || 1,
-      (Number(entry?.depth) || 1) * 2
-    );
-    if (quality === 'native' || quality === '4096x4096' || quality === '2048x2048' || quality === '1024x1024') {
-      return Math.min(600, Math.max(256, Math.round(longestAxis)));
+  function _t(key, fallback, params) {
+    if (typeof I18n !== 'undefined' && typeof I18n.t === 'function') {
+      const v = I18n.t(key, params);
+      if (typeof v === 'string' && v !== key) return v;
     }
-    return Math.min(220, Math.max(96, Math.round(Math.max(Number(entry?.width) || 1, Number(entry?.depth) || 1))));
+    return String(fallback).replace(/\{(\w+)\}/g, (m, k) => (params && params[k] !== undefined ? params[k] : m));
   }
 
   function _activateVolumeEntry(entry, metadata, sourceDepth, sourceWidth, channels, options = {}) {
@@ -2247,27 +2671,25 @@ const VolumeViewer = (() => {
     // its atlases have no GPU texture left. Refuse it here rather than half-binding
     // the material, and say so, instead of rendering a saturated box that reads as
     // a real (and wrong) signal. Rule 1.1: never mount data we cannot vouch for.
-    if (entry.svrManager
+    if (entry.disposed || (entry.svrManager
         && typeof entry.svrManager.isUsable === 'function'
-        && !entry.svrManager.isUsable()) {
-      console.error('[VolumeViewer] Refusing to activate a volume whose SVR atlas was already released; keeping the previous volume on screen.');
+        && !entry.svrManager.isUsable())) {
+      console.error('[VolumeViewer] Refusing to activate a volume whose GPU textures were already released; keeping the previous volume on screen.');
       _emitQualityState({ message: `${entry.quality || 'volume'} dropped (GPU atlas released before display)` });
       return false;
     }
+    const previous = _activeVolumeEntry;
     if (entry.svrManager) {
-      if (_svrManager && _svrManager !== entry.svrManager) {
-        if (!_isSvrManagerCached(_svrManager)) _svrManager.dispose();
-      }
+      // The manager it replaces belongs to `previous`, released below unless cached.
       _svrManager = entry.svrManager;
       _svrManager.material = material;
       _svrManager.updateUniforms();
-    } else if (material?.defines?.ENABLE_SVR) {
-      delete material.defines.ENABLE_SVR;
-      material.needsUpdate = true;
-      if (_svrManager) {
-        if (!_isSvrManagerCached(_svrManager)) _svrManager.dispose();
-        _svrManager = null;
+    } else {
+      if (material?.defines?.ENABLE_SVR) {
+        delete material.defines.ENABLE_SVR;
+        material.needsUpdate = true;
       }
+      _svrManager = null;
     }
     const scaleInfo = computePhysicalScale(metadata, sourceDepth, sourceWidth);
     _baseScale.set(scaleInfo.scale.x, scaleInfo.scale.y, scaleInfo.scale.z);
@@ -2276,7 +2698,7 @@ const VolumeViewer = (() => {
     if (entry.histograms && entry.histograms.length) {
       const currentBins = _channelHistograms?.[0]?.bins || 0;
       const newBins = entry.histograms[0].bins || 0;
-      if (newBins >= currentBins) {
+      if (newBins >= currentBins || entry.histogramsExact) {
         _channelHistograms = entry.histograms;
       }
     }
@@ -2286,11 +2708,8 @@ const VolumeViewer = (() => {
     _applyDisplayScale();
 
     // On the SVR path updateUniforms() above is authoritative: it binds all EIGHT
-    // atlas pages plus the page table as one consistent set. Re-assigning 0..3 here
-    // from entry.textures overwrote half of that set and left 4..7 untouched, so a
-    // partial publish could not be recovered — the page table stayed unbound while
-    // the first four samplers pointed at released textures. Only the monolithic path
-    // needs these, and there entry.texture IS the single dense volume.
+    // atlas pages plus the page table as one consistent set. Only the monolithic path
+    // binds a texture here, and there entry.texture IS the single dense volume.
     if (!entry.svrManager) {
       material.uniforms.svrAtlas0.value = entry.texture || textures[0] || null;
       material.uniforms.svrAtlas1.value = textures[1] || textures[0] || entry.texture || null;
@@ -2298,6 +2717,7 @@ const VolumeViewer = (() => {
       material.uniforms.svrAtlas3.value = textures[3] || textures[0] || entry.texture || null;
       if (material.uniforms.svrPageCount) material.uniforms.svrPageCount.value = 0;
     }
+    material.uniforms.volumeVoxels.value.set(Math.max(1, entry.width || 1), Math.max(1, entry.height || 1), Math.max(1, entry.depth || 1));
     if (entry.occupancyMap) {
       material.defines.HAS_OCCUPANCY = 1;
       material.uniforms.mapOccupancy.value = entry.occupancyMap;
@@ -2312,30 +2732,57 @@ const VolumeViewer = (() => {
     }
     material.needsUpdate = true;
     material.uniforms.numChannels.value = Math.min(channels, 4);
-    _targetSteps = _stepsForVolumeEntry(entry);
-    material.uniforms.steps.value = _targetSteps;
 
     _recompileShaderForActiveChannels();
 
     if (!_hasLoadedVolume || options.fitCamera) {
-      console.log('[VolumeViewer] fitCameraToVolume called from _activateVolumeEntry, _hasLoadedVolume was:', _hasLoadedVolume);
       fitCameraToVolume();
       _hasLoadedVolume = true;
-    } else {
-      console.log('[VolumeViewer] Skipping fitCameraToVolume, _hasLoadedVolume=true');
     }
+
+    // The volume it replaces is freed now unless the cache keeps it (a native atlas,
+    // a volume with dropped bricks, a superseded slice load): nothing else refers to it.
+    if (previous && previous !== entry && !_isEntryCached(previous) && previous !== _transitionEntry) {
+      _disposeVolumeEntry(previous);
+    }
+    // What stays resident is re-evaluated against the budget with this volume counted.
+    _trimVolumeCache(entry);
+    if (typeof window !== 'undefined' && typeof CustomEvent === 'function') {
+      window.dispatchEvent(new CustomEvent('volume-capabilities', { detail: getCapabilities() }));
+    }
+    return true;
   }
+
+  // Uniforms that describe ONE volume (its textures and their layout). A cross-fade
+  // material has its own; every other uniform — channels, exposure, render mode,
+  // step count, clip box, warp — is the very object the main material holds, so a
+  // change made during a transition shows on both cubes.
+  const PER_VOLUME_UNIFORMS = new Set([
+    'svrAtlas0', 'svrAtlas1', 'svrAtlas2', 'svrAtlas3', 'svrAtlas4', 'svrAtlas5', 'svrAtlas6', 'svrAtlas7',
+    'mapOccupancy', 'occupancyScale', 'pageTable', 'atlasDim', 'volumeDim', 'ptDim', 'ptScale', 'brickSize',
+    'svrPageCount', 'numChannels', 'volumeVoxels'
+  ]);
 
   function _createTransitionMaterial() {
     if (!material) return null;
-    const transition = material.clone();
-    transition.defines = { ...(material.defines || {}) };
-    transition.uniforms = THREE.UniformsUtils ? THREE.UniformsUtils.clone(material.uniforms) : transition.uniforms;
-    transition.side = THREE.BackSide;
-    transition.transparent = true;
-    transition.depthWrite = false;
-    transition.blending = THREE.NormalBlending;
-    transition.needsUpdate = true;
+    const uniforms = {};
+    for (const [key, u] of Object.entries(material.uniforms)) {
+      if (!PER_VOLUME_UNIFORMS.has(key)) { uniforms[key] = u; continue; }
+      const v = u.value;
+      uniforms[key] = { value: v && typeof v.clone === 'function' && !v.isTexture ? v.clone() : v };
+    }
+    const transition = new THREE.ShaderMaterial({
+      glslVersion: THREE.GLSL3,
+      vertexShader,
+      fragmentShader,
+      defines: { ...(material.defines || {}) },
+      uniforms,
+      side: THREE.BackSide,
+      transparent: true,
+      depthWrite: false,
+      blending: THREE.NormalBlending
+    });
+    transition.visible = material.visible;
     return transition;
   }
 
@@ -2362,13 +2809,15 @@ const VolumeViewer = (() => {
     if (entry.svrManager) {
       entry.svrManager.material = _transitionMaterial;
       entry.svrManager.updateUniforms();
-    } else if (_transitionMaterial.defines?.ENABLE_SVR) {
-      delete _transitionMaterial.defines.ENABLE_SVR;
+    } else {
+      if (_transitionMaterial.defines?.ENABLE_SVR) delete _transitionMaterial.defines.ENABLE_SVR;
+      _transitionMaterial.uniforms.svrAtlas0.value = entry.texture || textures[0] || null;
+      _transitionMaterial.uniforms.svrAtlas1.value = textures[1] || textures[0] || entry.texture || null;
+      _transitionMaterial.uniforms.svrAtlas2.value = textures[2] || textures[0] || entry.texture || null;
+      _transitionMaterial.uniforms.svrAtlas3.value = textures[3] || textures[0] || entry.texture || null;
+      _transitionMaterial.uniforms.svrPageCount.value = 0;
     }
-    _transitionMaterial.uniforms.svrAtlas0.value = entry.texture || textures[0] || null;
-    _transitionMaterial.uniforms.svrAtlas1.value = textures[1] || textures[0] || entry.texture || null;
-    _transitionMaterial.uniforms.svrAtlas2.value = textures[2] || textures[0] || entry.texture || null;
-    _transitionMaterial.uniforms.svrAtlas3.value = textures[3] || textures[0] || entry.texture || null;
+    _transitionMaterial.uniforms.volumeVoxels.value.set(Math.max(1, entry.width || 1), Math.max(1, entry.height || 1), Math.max(1, entry.depth || 1));
     if (entry.occupancyMap) {
       _transitionMaterial.defines.HAS_OCCUPANCY = 1;
       _transitionMaterial.uniforms.mapOccupancy.value = entry.occupancyMap;
@@ -2380,7 +2829,6 @@ const VolumeViewer = (() => {
       if (_transitionMaterial.uniforms.mapOccupancy) _transitionMaterial.uniforms.mapOccupancy.value = null;
     }
     _transitionMaterial.uniforms.numChannels.value = Math.min(channels, 4);
-    _transitionMaterial.uniforms.steps.value = material.uniforms.steps.value;
     _transitionMaterial.needsUpdate = true;
     _scheduleFrame();
   }
@@ -2394,11 +2842,18 @@ const VolumeViewer = (() => {
     _scheduleFrame();
   }
 
-  function _sliceUrl(basePath, qualityInfo, isLive, timepoint, z, c) {
+  /** Version stamp of a dataset's slice files (its metadata's modification time), so a
+   *  re-generated stack is fetched again instead of served stale from the cache. */
+  function _sliceStamp(metadata) {
+    const v = metadata?.lastModified || metadata?.updated || metadata?.created || '';
+    return v ? String(v) : '';
+  }
+
+  function _sliceUrl(basePath, qualityInfo, isLive, timepoint, z, c, stamp = '') {
     const filename = isLive
       ? `t${String(timepoint).padStart(3, '0')}_z${String(z).padStart(3, '0')}_c${c}.webp`
       : `z${String(z).padStart(3, '0')}_c${c}.webp`;
-    return `${basePath}/${qualityInfo.directory}/${filename}?v=20260605_cachebust`;
+    return `${basePath}/${qualityInfo.directory}/${filename}${stamp ? `?v=${encodeURIComponent(stamp)}` : ''}`;
   }
 
   function _createSliceReader(width, height) {
@@ -2418,9 +2873,15 @@ const VolumeViewer = (() => {
   function _getCachedVolume(key) {
     const entry = _volumeCache.get(key);
     if (!entry) return null;
+    if (entry.disposed) { _volumeCache.delete(key); return null; }
     _volumeCache.delete(key);
     _volumeCache.set(key, entry);
     return entry;
+  }
+
+  function _isEntryCached(entry) {
+    if (!entry) return false;
+    return _volumeCache.get(entry.key) === entry;
   }
 
   function _isSvrManagerCached(manager) {
@@ -2432,68 +2893,139 @@ const VolumeViewer = (() => {
   }
 
   function _shouldCacheVolumeEntry(entry) {
+    if (entry?.degraded) return false;
     if (!entry?.svrManager) return true;
     const quality = _normalizeQualityKey(entry.quality || '');
     if (quality === 'native' || quality === '4096x4096') return Boolean(window.VolumeViewerDebug?.cacheNativeSvr);
     return true;
   }
 
-  /** Free a stream's GPU resources when it is abandoned before ever being cached. */
-  function _disposeAbandonedStream(textures, occTex, streamSvrManager) {
-    if (Array.isArray(textures)) textures.forEach(t => t?.dispose?.());
-    occTex?.dispose?.();
-    if (streamSvrManager && streamSvrManager !== _svrManager && !_isSvrManagerCached(streamSvrManager)) {
-      streamSvrManager.dispose();
+  /** Release every GPU resource an entry owns, and the CPU copies it holds. One
+   *  helper, called from every path that drops an entry — eviction, replacement,
+   *  refusal, abandoned stream, context loss, teardown. `force` releases the entry on
+   *  screen too (context loss, dispose). */
+  function _disposeVolumeEntry(entry, { force = false } = {}) {
+    if (!entry || entry.disposed) return;
+    if (entry === _activeVolumeEntry && !force) return;
+    const mgr = entry.svrManager;
+    if (mgr) {
+      const inUse = _activeVolumeEntry?.svrManager === mgr || _transitionEntry?.svrManager === mgr
+        || [..._volumeCache.values()].some(e => e !== entry && e.svrManager === mgr);
+      if (force || !inUse) {
+        mgr.dispose();
+        if (_svrManager === mgr) _svrManager = null;
+      }
     }
-  }
-
-  /** Release every GPU resource an entry owns. One helper, called from every path
-   *  that drops an entry — eviction, replacement, refusal, abandoned stream. They
-   *  used to each free a different subset: `occupancyMap` was freed by NONE of them,
-   *  so a texture leaked on every eviction, and the refusal branch dropped an entry
-   *  without freeing anything at all. */
-  function _disposeVolumeEntry(entry) {
-    if (!entry || entry === _activeVolumeEntry) return;
-    if (entry.svrManager && entry.svrManager !== _svrManager && !_isSvrManagerCached(entry.svrManager)) {
-      entry.svrManager.dispose();
-    }
-    if (Array.isArray(entry.textures)) entry.textures.forEach(t => t?.dispose?.());
+    if (Array.isArray(entry.textures) && !entry.svrManager) entry.textures.forEach(t => t?.dispose?.());
     entry.occupancyMap?.dispose?.();
     entry.occupancyMap = null;
+    entry.data = null;
+    entry.rawChannelData = null;
+    entry.channelData = null;
+    entry.disposed = true;
   }
 
-  /** An entry's REAL footprint. `data` is the very ArrayBuffer backing the 3D texture,
-   *  so this counts VRAM and the CPU mirror at once — they are the same bytes twice
-   *  over, which is why the budget below is deliberately conservative. */
-  function _entryBytes(entry) {
+  /** VRAM an entry holds: its atlas (SVR) or its dense texture. */
+  function _entryGpuBytes(entry) {
     if (!entry) return 0;
-    if (Number.isFinite(entry.byteLength)) return entry.byteLength;
-    return entry?.data?.length
-      || (entry?.width || 0) * (entry?.height || 0) * (entry?.depth || 0) * RGBA_TEXTURE_BYTES_PER_VOXEL;
+    if (entry.svrManager) return (entry.svrManager.atlasBytes || 0) + (entry.svrManager.pageData?.length || 0);
+    if (Number.isFinite(entry.gpuBytes)) return entry.gpuBytes;
+    return (entry.width || 0) * (entry.height || 0) * (entry.depth || 0) * (entry.stride || RGBA_TEXTURE_BYTES_PER_VOXEL);
+  }
+
+  /** JS memory an entry holds: the raw channels and filtered copies the denoise
+   *  filter keeps, and a CPU mirror where one exists. */
+  function _entryCpuBytes(entry) {
+    if (!entry) return 0;
+    let bytes = entry.data?.length || 0;
+    const raw = entry.rawChannelData || [];
+    for (const a of raw) bytes += a?.length || 0;
+    for (const [c, a] of (entry.channelData || []).entries()) if (a && a !== raw[c]) bytes += a.length;
+    return bytes;
+  }
+
+  /** An entry's real footprint, GPU and CPU together, as the cache budget counts it. */
+  function _entryBytes(entry) {
+    return _entryGpuBytes(entry) + _entryCpuBytes(entry);
   }
 
   function _storeVolumeCache(key, entry) {
     if (!_shouldCacheVolumeEntry(entry)) {
       const orphan = _volumeCache.get(key);
-      _volumeCache.delete(key);
-      _disposeVolumeEntry(orphan);
+      // A degraded volume never replaces a complete one already filed under its key.
+      if (orphan && orphan !== entry && !entry?.degraded) {
+        _volumeCache.delete(key);
+        _disposeVolumeEntry(orphan);
+      }
       return;
     }
     const previous = _volumeCache.get(key);
-    if (previous && previous !== entry) _disposeVolumeEntry(previous);
-    if (!Number.isFinite(entry.byteLength)) entry.byteLength = _entryBytes(entry);
+    if (previous && previous !== entry) {
+      _volumeCache.delete(key);
+      _disposeVolumeEntry(previous);
+    }
     _volumeCache.set(key, entry);
     _trimVolumeCache(entry);
   }
 
-  /** How many decoded timepoints may stay on the GPU.
-   *
-   *  A fixed 4 was written for single-volume datasets; on a 30-frame timelapse it means
-   *  the scrub evicts and re-uploads almost every step. Size it from what an entry
-   *  actually costs instead: a dense RGBA8 volume of the current dimensions (an upper
-   *  bound — a sparse SVR atlas only stores the non-empty bricks) against a VRAM budget.
-   *  At 256x256 that keeps a whole 30-frame series resident; at 512x512 it keeps ~12. */
-  const VOLUME_VRAM_BUDGET_BYTES = 768 * 1024 * 1024;
+  /** The VRAM budget of this page (SVRManager.vramBudget: GPU class, device memory,
+   *  recent context losses, an operator override). */
+  function _gpuBudgetBytes() {
+    const fallback = 1024 * 1024 * 1024;
+    if (typeof SVRManager === 'undefined' || typeof SVRManager.vramBudget !== 'function') return fallback;
+    try {
+      const b = SVRManager.vramBudget(renderer).bytes;
+      return Number.isFinite(b) && b > 0 ? b : fallback;
+    } catch (e) {
+      return fallback;
+    }
+  }
+
+  /** How much the volume cache may hold besides the volume on screen: 40 % of the VRAM
+   *  budget, between 128 and 768 MiB (768 MiB keeps ~12 frames of a 512² timelapse).
+   *  @param {number} [vramBytes] the VRAM budget (default: this page's). */
+  function _volumeCacheBudget(vramBytes = _gpuBudgetBytes()) {
+    const MiB = 1024 * 1024;
+    return Math.min(768 * MiB, Math.max(128 * MiB, Math.floor(Number(vramBytes) * 0.4) || 0));
+  }
+
+  /** VRAM held by every volume texture of this page right now: the SVR atlases of
+   *  every live manager (the Studio's included) and the dense textures of the cached,
+   *  displayed and cross-fading volumes. */
+  function _residentGpuBytes() {
+    let dense = 0;
+    const seen = new Set();
+    const add = (e) => {
+      if (!e || seen.has(e) || e.disposed) return;
+      seen.add(e);
+      if (!e.svrManager) dense += _entryGpuBytes(e);
+    };
+    for (const e of _volumeCache.values()) add(e);
+    add(_activeVolumeEntry);
+    add(_transitionEntry);
+    const svr = typeof SVRManager !== 'undefined' && typeof SVRManager.liveAtlasBytes === 'function'
+      ? SVRManager.liveAtlasBytes() : 0;
+    return dense + svr;
+  }
+
+  /**
+   * Make room for an allocation of `bytes`: cached volumes other than the one on
+   * screen are evicted (in _evictionVictim order) until the budget holds it.
+   * @returns {{ budget:number, resident:number, available:number }}
+   */
+  function _freeGpuFor(bytes) {
+    const budget = _gpuBudgetBytes();
+    let guard = 0;
+    while (_residentGpuBytes() + bytes > budget && guard++ < 4096) {
+      const key = _evictionVictim(null);
+      if (!key) break;
+      const victim = _volumeCache.get(key);
+      _volumeCache.delete(key);
+      _disposeVolumeEntry(victim);
+    }
+    const resident = _residentGpuBytes();
+    return { budget, resident, available: Math.max(0, budget - resident) };
+  }
 
   // Where playback currently is, so eviction can keep the frames we are about to
   // need instead of the ones we just left.
@@ -2530,20 +3062,17 @@ const VolumeViewer = (() => {
     let worst = null;
     let worstRank = -Infinity;
     for (const [key, entry] of _volumeCache) {
-      if (key === _activeTextureKey || entry === _activeVolumeEntry) continue;
+      if (key === _activeTextureKey || entry === _activeVolumeEntry || entry === _transitionEntry) continue;
       // SVR-014: the entry that was JUST stored and is about to be activated is not
-      // yet _activeVolumeEntry (activation is the statement after _storeVolumeCache),
-      // so without this it was a legal victim — and _entryBytes() prices an SVR entry
-      // at its DENSE size (1024x1024x226x4 = 904 MiB against a 768 MiB budget), which
-      // made it the entry evicted to make room for itself. Freeing an entry one line
-      // before showing it is never right, whatever the budget says.
+      // yet _activeVolumeEntry; freeing an entry one line before showing it is never
+      // right, whatever the budget says.
       if (protectedEntry && entry === protectedEntry) continue;
       const quality = _normalizeQualityKey(entry?.quality || '');
       const sameSeries = entry?.basePath === _playhead.basePath && quality === _playhead.quality;
       let rank;
       if (!sameSeries) {
         // Foreign quality/dataset: cheapest thing to lose, biggest first.
-        rank = 1e9 + _entryBytes(entry);
+        rank = 1e15 + _entryBytes(entry);
       } else if (_playhead.total > 0 && Number.isFinite(entry?.timepoint)) {
         rank = (entry.timepoint - _playhead.frame + _playhead.total) % _playhead.total;
       } else {
@@ -2554,14 +3083,18 @@ const VolumeViewer = (() => {
     return worst;
   }
 
+  /**
+   * Keep the cache within its budget (_volumeCacheBudget) AND everything resident —
+   * cache plus the volume on screen when the cache does not hold it (a native atlas)
+   * — within the VRAM budget. Budgets in BYTES, real ones (atlas size, CPU copies),
+   * never a count of entries.
+   */
   function _trimVolumeCache(protectedEntry = null) {
+    const vram = _gpuBudgetBytes();
+    const cacheBudget = _volumeCacheBudget(vram);
     let guard = 0;
-    // Budget in BYTES, not in entries. The old limit derived one entry count from the
-    // LARGEST entry present, so a single native frame (52 MiB) dropped the ceiling to
-    // 14 for every quality at once and wiped the 256/512 sets — which is exactly why
-    // stepping back down to a resolution you had already loaded was never instant.
-    while (_cachedBytes() > VOLUME_VRAM_BUDGET_BYTES && guard++ < 4096) {
-      if (_volumeCache.size <= 1) break;
+    while (guard++ < 4096 && _volumeCache.size) {
+      if (_cachedBytes() <= cacheBudget && _residentGpuBytes() <= vram) break;
       const key = _evictionVictim(protectedEntry);
       if (!key) break;
       const entry = _volumeCache.get(key);
@@ -2596,68 +3129,61 @@ const VolumeViewer = (() => {
       per = Math.max(per, _entryBytes(entry));
     }
     if (!per) return 0;   // nothing loaded yet at this quality: unknown, not zero
-    return Math.max(1, Math.floor(VOLUME_VRAM_BUDGET_BYTES / per));
+    return Math.max(1, Math.floor(_volumeCacheBudget() / per));
   }
 
-  function _computeChannelHistograms(textures, width, height, depth, channels, bins = 256) {
-    const histograms = Array.from({ length: channels }, () => new Array(bins).fill(0));
-    const voxels = width * height * depth;
-    if (!textures || textures.length === 0) return histograms.map(counts => ({ bins, counts, max: 1, total: 0 }));
-    const firstData = textures[0]?.image?.data;
-    const isRgbaAtlas = textures.length === 1 && firstData && firstData.length >= voxels * RGBA_TEXTURE_BYTES_PER_VOXEL;
-    if (isRgbaAtlas) {
-      for (let i = 0; i < voxels; i++) {
-        const base = i * RGBA_TEXTURE_BYTES_PER_VOXEL;
-        for (let c = 0; c < channels; c++) {
-          const bin = Math.min(bins - 1, Math.floor(((firstData[base + c] || 0) / 256) * bins));
-          histograms[c][bin]++;
-        }
-      }
-      return histograms.map(counts => ({
-        bins,
-        counts,
-        max: Math.max(1, ...counts),
-        total: counts.reduce((sum, value) => sum + value, 0)
-      }));
-    }
-    // Parse all voxels for an exact, noise-free histogram
-    for (let c = 0; c < channels; c++) {
-      if (c >= textures.length) continue;
-      const targetData = textures[c].image.data;
-      if (!targetData) continue;
-      for (let i = 0; i < voxels; i++) {
-        const bin = Math.min(bins - 1, Math.floor((targetData[i] / 256) * bins));
-        histograms[c][bin]++;
-      }
-    }
-    return histograms.map(counts => ({
-      bins,
-      counts,
-      max: Math.max(1, ...counts),
-      total: counts.reduce((sum, value) => sum + value, 0)
-    }));
+  function _emptyHistograms(channels, bins = 256) {
+    return Array.from({ length: Math.max(0, channels) }, () => ({ bins, counts: new Array(bins).fill(0), max: 1, total: 0 }));
   }
 
   /**
-   * Schedule histogram computation off the critical rendering path.
-   * Uses requestIdleCallback when available, falls back to setTimeout.
+   * Histogram of one channel (one byte per voxel), from at most `maxSamples` voxels
+   * taken at a fixed stride: counts are scaled back to the voxel count, so the shape
+   * — what the channel panel draws and the surface threshold reads — is unbiased
+   * while the cost stays bounded (4 M samples, not the 200 M voxels of a full volume).
    */
-  function _deferHistogramComputation(entry, textures, width, height, depth, channels) {
-    const compute = () => {
-      entry.histograms = _computeChannelHistograms(textures, width, height, depth, channels);
-      if (_activeVolumeEntry === entry) {
-        _channelHistograms = entry.histograms;
-      }
-    };
-    if (window.requestIdleCallback) {
-      requestIdleCallback(compute, { timeout: 800 });
-    } else {
-      setTimeout(compute, 50);
+  function _channelHistogram(values, bins = 256, maxSamples = 4 * 1024 * 1024) {
+    const counts = new Array(bins).fill(0);
+    const n = values?.length || 0;
+    if (!n) return { bins, counts, max: 1, total: 0 };
+    const stride = Math.max(1, Math.floor(n / maxSamples));
+    let taken = 0;
+    for (let i = 0; i < n; i += stride) {
+      counts[(values[i] * bins) >> 8]++;
+      taken++;
     }
+    const k = n / taken;
+    for (let b = 0; b < bins; b++) counts[b] = Math.round(counts[b] * k);
+    return { bins, counts, max: Math.max(1, ...counts), total: counts.reduce((s, v) => s + v, 0) };
+  }
+
+  /** Real histograms of a slice-stack volume, one channel per idle callback. */
+  function _deferHistogramComputation(entry) {
+    const raw = entry.rawChannelData || [];
+    const result = _emptyHistograms(raw.length);
+    let c = 0;
+    const step = () => {
+      if (entry.disposed || !entry.rawChannelData) return;
+      if (c < raw.length) {
+        result[c] = _channelHistogram(raw[c]);
+        c++;
+        schedule();
+        return;
+      }
+      entry.histograms = result;
+      entry.histogramsExact = true;
+      if (_activeVolumeEntry === entry) _channelHistograms = entry.histograms;
+    };
+    const schedule = () => {
+      if (typeof window !== 'undefined' && window.requestIdleCallback) requestIdleCallback(step, { timeout: 800 });
+      else setTimeout(step, 50);
+    };
+    schedule();
   }
 
   function _sampleArray(items, maxItems) {
     if (items.length <= maxItems) return items;
+    if (maxItems <= 1) return items.length ? [items[Math.floor((items.length - 1) / 2)]] : [];
     const result = [];
     const last = items.length - 1;
     for (let i = 0; i < maxItems; i++) {
@@ -2685,6 +3211,7 @@ const VolumeViewer = (() => {
     if (depth <= maxSamples) {
       return Array.from({ length: depth }, (_, i) => i);
     }
+    if (maxSamples <= 1) return [Math.floor(depth / 2)];
 
     const result = [];
     const last = depth - 1;
@@ -2693,37 +3220,16 @@ const VolumeViewer = (() => {
     }
     return [...new Set(result)];
   }
-  
-  function _loadImage(url) {
-    const cached = _imageCache.get(url);
-    if (cached) {
-      _imageCache.delete(url);
-      _imageCache.set(url, cached);
-      return cached.promise;
-    }
 
-    const entry = {};
-    entry.promise = _fetchImage(url)
-      .then((img) => {
-        entry.image = img;
-        return img;
-      })
-      .catch((err) => {
-        _imageCache.delete(url);
-        throw err;
-      });
-    _imageCache.set(url, entry);
-    _trimImageCache();
-    return entry.promise;
-  }
-
-  async function _fetchImage(url) {
+  /** One slice image, decoded. The caller owns the bitmap and closes it once its
+   *  pixels are copied: nothing decoded is kept here. */
+  async function _loadImage(url) {
     const perf = _perf();
     const fetchPerfId = perf?.start('image.fetch.decode', { url });
     if (window.createImageBitmap && window.fetch) {
       try {
         const t0 = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
-        const resp = await fetch(url, { cache: 'force-cache' });
+        const resp = await fetch(url);
         const t1 = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
         if (!resp.ok) throw new Error(`HTTP ${resp.status} for ${url}`);
         const blob = await resp.blob();
@@ -2759,87 +3265,147 @@ const VolumeViewer = (() => {
     });
   }
 
-  function _trimImageCache() {
-    while (_imageCache.size > IMAGE_CACHE_LIMIT) {
-      const first = _imageCache.entries().next().value;
-      if (!first) break;
-      const [key, entry] = first;
-      _imageCache.delete(key);
-      entry.promise?.then((img) => {
-        if (img && typeof img.close === 'function') img.close();
-      }).catch(() => {});
-    }
-  }
-  /**
-   * Flou gaussien 2D par canal — approximation O(n) par 3 passes de box blur.
-   * Formule : sigma → 3 rayons de box via l'algorithme de Mykhailo Radzievskyi / Ivan Googolplex.
-   * Fonctionne sur des données 8-bit entrelacées (RGBA etc.).
-   *
-   * @param {Uint8Array} pixelData  Données pixel entrelacées (modifiées in-place)
-   * @param {number}     width      Largeur de l'image en pixels
-   * @param {number}     height     Hauteur de l'image en pixels
-   * @param {number}     channelOffset  Index du canal dans l'entrelacement (0=R, 1=G, …)
-   * @param {number}     numChannels    Nombre total de canaux entrelacés (ex: 4 pour RGBA)
-   * @param {number}     sigma      Écart-type du noyau gaussien (en pixels)
-   */
-  function _gaussianBlurChannel(pixelData, width, height, channelOffset, numChannels, sigma) {
-    if (sigma <= 0.1) return;
-    const boxes = _boxesForGauss(sigma, 3);
-    const n = width * height;
-    const src = new Float32Array(n);
-    const dst = new Float32Array(n);
-    // Extraction du canal depuis les données entrelacées
-    for (let i = 0; i < n; i++) src[i] = pixelData[i * numChannels + channelOffset];
-    // 3 passes de box blur alternées H/V
-    for (const radius of boxes) {
-      _boxBlurH(src, dst, width, height, radius);
-      _boxBlurV(dst, src, width, height, radius);
-    }
-    // Réécriture du canal dans les données entrelacées
-    for (let i = 0; i < n; i++) pixelData[i * numChannels + channelOffset] = Math.round(Math.max(0, Math.min(255, src[i])));
+  /** Fetch a slice file into the HTTP cache (one request per URL at a time). */
+  function _prefetchSliceFile(url) {
+    const pending = _imageCache.get(url);
+    if (pending) return pending;
+    const p = fetch(url)
+      .then((resp) => {
+        if (!resp.ok) throw new Error(`HTTP ${resp.status} for ${url}`);
+        return resp.arrayBuffer();
+      })
+      .then(() => true)
+      .finally(() => { _imageCache.delete(url); });
+    _imageCache.set(url, p);
+    return p;
   }
 
-  /**
-   * Calcule les 3 rayons de box blur qui approximent un noyau gaussien de sigma donné.
-   * Référence : http://blog.ivank.net/fastest-gaussian-blur.html
-   */
-  function _boxesForGauss(sigma, n) {
-    const wIdeal = Math.sqrt((12 * sigma * sigma / n) + 1);
-    let wl = Math.floor(wIdeal);
-    if (wl % 2 === 0) wl--;
-    const wu = wl + 2;
-    const m = Math.round((12 * sigma * sigma - n * wl * wl - 4 * n * wl - 3 * n) / (-4 * wl - 4));
-    return Array.from({ length: n }, (_, i) => i < m ? (wl - 1) / 2 : (wu - 1) / 2);
+  // ── Denoise (per-channel in-plane Gaussian, js/workers/gaussian-blur-worker.js) ──
+  // Works on a volume held in ONE dense texture. The channels are taken from the
+  // slice-stack load, or read back from the GPU the first time the filter is used on a
+  // brick-streamed volume (no CPU copy is kept otherwise); the raw channel stays on
+  // the entry so σ → 0 restores it. A sparse atlas (bricks in arbitrary slots) has no
+  // plane to blur: the filter reports itself unavailable there.
+
+  function getCapabilities() {
+    const e = _activeVolumeEntry;
+    let denoise;
+    if (!e) denoise = { available: false, reason: 'no-volume' };
+    else if (e.svrManager) denoise = { available: false, reason: 'sparse-atlas' };
+    else if (!e.texture) denoise = { available: false, reason: 'no-volume' };
+    else denoise = { available: true, reason: null };
+    return { denoise, depthPick: Boolean(renderer) && !_contextLost };
   }
 
-  /** Box blur horizontal — moyenne glissante en O(width) par ligne */
-  function _boxBlurH(src, dst, w, h, r) {
-    if (r < 1) { dst.set(src); return; }
-    const iarr = 1.0 / (r + r + 1);
-    for (let y = 0; y < h; y++) {
-      let ti = y * w, li = ti, ri = ti + r;
-      const fv = src[ti], lv = src[ti + w - 1];
-      let val = (r + 1) * fv;
-      for (let j = 0; j < r; j++) val += src[ti + j];
-      for (let j = 0; j <= r; j++) { val += src[ri++] - fv; dst[ti++] = val * iarr; }
-      for (let j = r + 1; j < w - r; j++) { val += src[ri++] - src[li++]; dst[ti++] = val * iarr; }
-      for (let j = w - r; j < w; j++) { val += lv - src[li++]; dst[ti++] = val * iarr; }
+  function _reportDenoise(channel, detail) {
+    if (detail.reason === 'sparse-atlas') {
+      _emitQualityState({ message: _t('viewer.denoiseUnavailableSparse',
+        'Denoise is not available at this quality (sparse brick atlas): choose a lower quality to use it.') });
+    } else if (detail.reason === 'error') {
+      _emitQualityState({ message: _t('viewer.denoiseFailed', 'Denoise failed on channel {channel}: the channel is shown unfiltered.', { channel: channel + 1 }) });
+    }
+    if (typeof window !== 'undefined' && typeof CustomEvent === 'function') {
+      window.dispatchEvent(new CustomEvent('volume-denoise-state', { detail: { channel, ...detail } }));
     }
   }
 
-  /** Box blur vertical — moyenne glissante en O(height) par colonne */
-  function _boxBlurV(src, dst, w, h, r) {
-    if (r < 1) { dst.set(src); return; }
-    const iarr = 1.0 / (r + r + 1);
-    for (let x = 0; x < w; x++) {
-      let ti = x, li = ti, ri = ti + r * w;
-      const fv = src[ti], lv = src[ti + w * (h - 1)];
-      let val = (r + 1) * fv;
-      for (let j = 0; j < r; j++) val += src[ti + j * w];
-      for (let j = 0; j <= r; j++) { val += src[ri] - fv; dst[ti] = val * iarr; ri += w; ti += w; }
-      for (let j = r + 1; j < h - r; j++) { val += src[ri] - src[li]; dst[ti] = val * iarr; ri += w; li += w; ti += w; }
-      for (let j = h - r; j < h; j++) { val += lv - src[li]; dst[ti] = val * iarr; li += w; ti += w; }
+  /** The channels of a dense GPU volume, read back one Z layer at a time. */
+  async function _readbackChannels(entry) {
+    const gl = renderer?.getContext?.();
+    const glTex = gl ? renderer.properties.get(entry.texture)?.__webglTexture : null;
+    if (!gl || !glTex || gl.isContextLost?.()) throw new Error('volume texture unavailable for readback');
+    const { width: w, height: h, depth: d } = entry;
+    const channels = Math.max(1, Math.min(4, entry.channels || 1));
+    const raw = Array.from({ length: channels }, () => new Uint8Array(w * h * d));
+    const layer = new Uint8Array(w * h * 4);
+    const fb = gl.createFramebuffer();
+    const previousTarget = renderer.getRenderTarget();
+    try {
+      for (let z = 0; z < d; z++) {
+        // Re-bound for every layer: the render loop may have drawn in between.
+        renderer.state.bindFramebuffer(gl.FRAMEBUFFER, fb);
+        gl.framebufferTextureLayer(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, glTex, 0, z);
+        if (z === 0 && gl.checkFramebufferStatus(gl.FRAMEBUFFER) !== gl.FRAMEBUFFER_COMPLETE) {
+          throw new Error('volume texture is not readable');
+        }
+        gl.readPixels(0, 0, w, h, gl.RGBA, gl.UNSIGNED_BYTE, layer);
+        const base = z * w * h;
+        for (let c = 0; c < channels; c++) {
+          const out = raw[c];
+          for (let i = 0, o = c; i < w * h; i++, o += 4) out[base + i] = layer[o];
+        }
+        if ((z & 7) === 7) {
+          renderer.setRenderTarget(previousTarget);
+          await _macrotask();
+          if (entry.disposed || gl.isContextLost()) throw new Error('volume released during readback');
+        }
+      }
+    } finally {
+      renderer.setRenderTarget(previousTarget);
+      gl.deleteFramebuffer(fb);
     }
+    return raw;
+  }
+
+  /** Upload every channel of `entry.channelData` back into its texture, in slabs of
+   *  ≤ 16 MiB interleaved between macrotasks. false when superseded or released. */
+  async function _uploadEntryChannels(entry, isCurrent) {
+    const { width: w, height: h, depth: d } = entry;
+    const stride = entry.stride || RGBA_TEXTURE_BYTES_PER_VOXEL;
+    const slice = w * h;
+    const slabDepth = Math.max(1, Math.floor((16 * 1024 * 1024) / Math.max(1, slice * stride)));
+    const buffer = new Uint8Array(slabDepth * slice * stride);
+    for (let z0 = 0; z0 < d; z0 += slabDepth) {
+      if (entry.disposed || !isCurrent()) return false;
+      const dz = Math.min(slabDepth, d - z0);
+      const view = buffer.subarray(0, dz * slice * stride);
+      _interleaveChannels(entry.channelData, z0 * slice, dz * slice, view, stride);
+      _updateGPUTextureRegion(entry.texture, { x: w, y: h, z: d }, 0, 0, z0, w, h, dz, view);
+      _scheduleFrame();
+      if (z0 + dz < d) await _macrotask();
+    }
+    return true;
+  }
+
+  /** Blur channel `idx` of `entry` with σ = `sigma` voxels (σ ≤ 0.1 restores it). */
+  async function _applyDenoise(idx, sigma, entry = _activeVolumeEntry) {
+    if (!entry || entry.disposed) return;
+    if (entry.svrManager || !entry.texture) {
+      _reportDenoise(idx, { available: false, reason: entry.svrManager ? 'sparse-atlas' : 'no-volume', sigma });
+      return;
+    }
+    if (idx >= (entry.channels || 1)) return;
+    entry.denoiseGen = entry.denoiseGen || [0, 0, 0, 0];
+    const gen = ++entry.denoiseGen[idx];
+    const isCurrent = () => !entry.disposed && entry.denoiseGen[idx] === gen;
+    try {
+      if (!entry.rawChannelData) {
+        entry._readback = entry._readback || _readbackChannels(entry);
+        entry.rawChannelData = await entry._readback;
+        entry._readback = null;
+      }
+    } catch (err) {
+      entry._readback = null;
+      console.warn('[VolumeViewer] Denoise: volume readback failed:', err);
+      if (isCurrent()) _reportDenoise(idx, { available: false, reason: 'error', sigma });
+      return;
+    }
+    if (!isCurrent()) return;
+    const raw = entry.rawChannelData[idx];
+    if (!raw) return;
+    entry.channelData = entry.channelData || entry.rawChannelData.slice();
+    entry.denoiseSigma = entry.denoiseSigma || [0, 0, 0, 0];
+    const finish = async (data, effectiveSigma, failed = false) => {
+      if (!isCurrent()) return;   // a newer request owns this channel
+      entry.channelData[idx] = data;
+      entry.denoiseSigma[idx] = effectiveSigma;
+      const done = await _uploadEntryChannels(entry, isCurrent);
+      if (done) _reportDenoise(idx, { available: true, reason: failed ? 'error' : null, sigma, effectiveSigma });
+    };
+    if (!(sigma > 0.1)) { await finish(raw, 0); return; }
+    _dispatchParallelBlur(raw, entry.width, entry.height, entry.depth, sigma,
+      (blurred, effectiveSigma) => { finish(blurred, Number.isFinite(effectiveSigma) ? effectiveSigma : sigma); },
+      () => { finish(raw, 0, true); });
   }
 
   /**
@@ -2847,7 +3413,7 @@ const VolumeViewer = (() => {
    */
   function updateChannel(idx, params) {
     if (idx < 0 || idx > 3) return;
-    
+
     if (params.color) {
       // EDGE-026: reject malformed hex before parseInt — otherwise NaN reaches the color uniform.
       if (/^#[0-9a-fA-F]{6}$/.test(params.color)) {
@@ -2860,7 +3426,7 @@ const VolumeViewer = (() => {
         console.warn(`[VolumeViewer] updateChannel: invalid hex color "${params.color}" for channel ${idx} — ignored`);
       }
     }
-    
+
     if (params.min !== undefined) material.uniforms[`min${idx}`].value = params.min;
     if (params.max !== undefined) material.uniforms[`max${idx}`].value = params.max;
     if (params.gamma !== undefined) material.uniforms[`gamma${idx}`].value = Math.max(0.18, Math.min(5.5, params.gamma));
@@ -2870,69 +3436,14 @@ const VolumeViewer = (() => {
       _recompileShaderForActiveChannels();
     }
 
-    // Mise à jour du sigma de débruitage – via cache + Web Worker (pas de re-fetch réseau)
+    // Denoise σ: blurred in the worker pool from the entry's raw channel (no refetch).
     if (params.denoise_sigma !== undefined) {
       const newSigma = Math.max(0, Math.min(5, Number(params.denoise_sigma) || 0));
       const oldSigma = _channelSigma[idx] || 0;
       _channelSigma[idx] = newSigma;
-      if (Math.abs(newSigma - oldSigma) > 0.05 && _activeVolumeEntry) {
-        const entry = _activeVolumeEntry;
-        const { width, height, depth, data: texData, channels: chCount } = entry;
-
-        if (!texData) { console.warn(`[VolumeViewer] Denoise ch${idx}: no texData`); }
-        else {
-          // Construction paresseuse du cache mono-canal depuis le buffer RGBA
-          // si rawChannelData est absent (cas bricks, cache ancien, etc.)
-          if (!entry.rawChannelData) {
-            const numCh = chCount || Math.min(4, material.uniforms.numChannels.value);
-            const sliceSize = width * height;
-            entry.rawChannelData = Array.from({ length: numCh }, (_, c) => {
-              const buf = new Uint8Array(sliceSize * depth);
-              for (let zi = 0; zi < depth; zi++) {
-                const sliceOff = zi * sliceSize * 4;
-                const rawOff = zi * sliceSize;
-                for (let i = 0; i < sliceSize; i++) {
-                  buf[rawOff + i] = texData[sliceOff + i * 4 + c];
-                }
-              }
-              return buf;
-            });
-            console.log(`[VolumeViewer] Built rawChannelData from RGBA (${numCh} ch, ${entry.rawChannelData[0].length} bytes/ch)`);
-          }
-
-          const rawChannelData = entry.rawChannelData;
-          if (rawChannelData[idx] && rawChannelData[idx].length > 0) {
-            console.log(`[VolumeViewer] Denoise ch${idx}: σ ${oldSigma.toFixed(1)}→${newSigma.toFixed(1)}, cache=${rawChannelData[idx].length} bytes`);
-
-            // Callback exécuté quand le blur parallèle est terminé
-            const onResult = (blurredData) => {
-              const sliceSize = width * height;
-              for (let zi = 0; zi < depth; zi++) {
-                const sliceOffset = zi * sliceSize * 4;
-                const rawOffset = zi * sliceSize;
-                for (let i = 0; i < sliceSize; i++) {
-                  texData[sliceOffset + i * 4 + idx] = blurredData[rawOffset + i];
-                }
-              }
-              if (entry.texture) {
-                entry.texture.needsUpdate = true;
-                _scheduleFrame();
-              }
-              console.log(`[VolumeViewer] Denoise ch${idx} σ=${newSigma} done (${blurredData.length} bytes)`);
-            };
-
-            if (newSigma <= 0.1) {
-              // σ ≈ 0 : restaurer les données brutes sans blur
-              onResult(rawChannelData[idx]);
-            } else {
-              // Dispatch parallèle via le pool de Workers
-              _dispatchParallelBlur(rawChannelData[idx], width, height, depth, newSigma, onResult);
-            }
-          }
-        }
-      }
+      if (Math.abs(newSigma - oldSigma) > 0.05 && _activeVolumeEntry) _applyDenoise(idx, newSigma, _activeVolumeEntry);
     }
-    
+
     _scheduleFrame();
   }
 
@@ -2977,55 +3488,40 @@ const VolumeViewer = (() => {
    * Update clipping planes (0.0 to 1.0)
    */
   function setClip(axis, value) {
-    // value is max percentage (0 to 1)
-    const next = Math.max(0, Math.min(1, Number(value) || 0));
-    if (axis === 'x') {
-      clipPlanes.xMax = next;
-      material.uniforms.clipMax.value.x = next;
-    }
-    if (axis === 'y') {
-      clipPlanes.yMax = next;
-      material.uniforms.clipMax.value.y = next;
-    }
-    if (axis === 'z') {
-      clipPlanes.zMax = next;
-      material.uniforms.clipMax.value.z = next;
+    // value is the upper bound (0 to 1); it never goes below the axis's lower bound.
+    const v = Number(value);
+    const raw = Number.isFinite(v) ? Math.max(0, Math.min(1, v)) : 1;
+    if (axis === 'x' || axis === 'y' || axis === 'z') {
+      const next = Math.max(clipPlanes[`${axis}Min`], raw);
+      clipPlanes[`${axis}Max`] = next;
+      material.uniforms.clipMax.value[axis] = next;
     }
     _scheduleFrame();
   }
 
   /**
-   * Set both min and max clipping for an axis (0.0 to 1.0)
+   * Set both min and max clipping for an axis (0.0 to 1.0), or 'all' axes. An explicit
+   * 0 is a value (an empty range), not "unset"; only a missing / non-numeric bound
+   * falls back to 0 (min) or 1 (max).
    */
   function setClipRange(axis, min, max) {
     if (!material?.uniforms) return;
-    const lo = Math.max(0, Math.min(1, Number(min) || 0));
-    const hi = Math.max(lo, Math.min(1, Number(max) || 1));
-    if (axis === 'x' || axis === 'all') {
-      clipPlanes.xMin = axis === 'all' ? lo : lo;
-      clipPlanes.xMax = axis === 'all' ? hi : hi;
-      if (axis === 'x' || axis === 'all') {
-        material.uniforms.clipMin.value.x = clipPlanes.xMin;
-        material.uniforms.clipMax.value.x = clipPlanes.xMax;
-      }
-    }
-    if (axis === 'y' || axis === 'all') {
-      clipPlanes.yMin = axis === 'all' ? lo : lo;
-      clipPlanes.yMax = axis === 'all' ? hi : hi;
-      if (axis === 'y' || axis === 'all') {
-        material.uniforms.clipMin.value.y = clipPlanes.yMin;
-        material.uniforms.clipMax.value.y = clipPlanes.yMax;
-      }
-    }
-    if (axis === 'z' || axis === 'all') {
-      clipPlanes.zMin = lo;
-      clipPlanes.zMax = hi;
-      material.uniforms.clipMin.value.z = clipPlanes.zMin;
-      material.uniforms.clipMax.value.z = clipPlanes.zMax;
+    const num = (v, fallback) => {
+      const n = Number(v);
+      return v === null || v === undefined || v === '' || !Number.isFinite(n) ? fallback : n;
+    };
+    const lo = Math.max(0, Math.min(1, num(min, 0)));
+    const hi = Math.max(lo, Math.min(1, num(max, 1)));
+    for (const a of ['x', 'y', 'z']) {
+      if (axis !== a && axis !== 'all') continue;
+      clipPlanes[`${a}Min`] = lo;
+      clipPlanes[`${a}Max`] = hi;
+      material.uniforms.clipMin.value[a] = lo;
+      material.uniforms.clipMax.value[a] = hi;
     }
     _scheduleFrame();
   }
-  
+
   // ── Axis-aligned views in the frame the operator defined ────────────────────
   // `_frameQuaternion` (Q_base, metadata.orientation) is the cube pose at which the
   // reference axes of the specimen coincide with the world axes. An axis-aligned
@@ -3409,6 +3905,7 @@ const VolumeViewer = (() => {
     if (!camera || !cube || !_container) return;
     camera.position.set(0, 0, _fitCameraDistance(margin));
     camera.updateProjectionMatrix();
+    _lastAspect = camera.aspect;
   }
 
   function _fitCameraDistance(margin = 1.25) {
@@ -3500,14 +3997,58 @@ const VolumeViewer = (() => {
 
   function _createMeasurementGroup() {
     if (!cube || _measurementGroup) return;
+    // Measurements are drawn in an ISOTROPIC frame: a child of the cube whose scale
+    // undoes the cube's per-axis stretch s (physical proportions × Z display scale),
+    // so a marker stays a sphere, a line keeps its thickness in every orientation and
+    // a label is not squashed on a non-square volume. A cube-local point L is the
+    // point L ⊙ s of this frame — the same world point (_pointLocal).
     _measurementGroup = new THREE.Group();
     _measurementGroup.renderOrder = 30;
-    
+
     _labelsGroup = new THREE.Group();
     _labelsGroup.renderOrder = 35;
 
     _measurementGroup.add(_labelsGroup);
     cube.add(_measurementGroup);
+    _syncMeasurementFrame();
+  }
+
+  function _syncMeasurementFrame() {
+    if (!_measurementGroup || !cube) return false;
+    const s = cube.scale;
+    const next = [1 / (s.x || 1), 1 / (s.y || 1), 1 / (s.z || 1)];
+    const g = _measurementGroup.scale;
+    if (Math.abs(g.x - next[0]) < 1e-12 && Math.abs(g.y - next[1]) < 1e-12 && Math.abs(g.z - next[2]) < 1e-12) return false;
+    g.set(next[0], next[1], next[2]);
+    return true;
+  }
+
+  // Label layout cache: the camera and measurement-frame matrices and the measurement
+  // set the last layout was computed for. A frame caused by anything else (an
+  // exposure change, a brick landing) reuses the layout.
+  const _labelLayoutKey = new Float64Array(33);
+  let _labelLayoutVersion = 0;
+  let _labelLayoutValid = false;
+  const _lbl = {
+    right: new THREE.Vector3(),
+    up: new THREE.Vector3(),
+    centre: new THREE.Vector3(),
+    anchor: new THREE.Vector3(),
+    toLabel: new THREE.Vector3(),
+    world: new THREE.Vector3()
+  };
+
+  function _labelLayoutUnchanged() {
+    const cam = camera.matrixWorld.elements;
+    const grp = _measurementGroup.matrixWorld.elements;
+    let same = _labelLayoutValid && _labelLayoutKey[32] === _labelLayoutVersion;
+    for (let i = 0; i < 16; i++) {
+      if (_labelLayoutKey[i] !== cam[i]) { same = false; _labelLayoutKey[i] = cam[i]; }
+      if (_labelLayoutKey[16 + i] !== grp[i]) { same = false; _labelLayoutKey[16 + i] = grp[i]; }
+    }
+    _labelLayoutKey[32] = _labelLayoutVersion;
+    _labelLayoutValid = true;
+    return same;
   }
 
   /**
@@ -3516,24 +4057,30 @@ const VolumeViewer = (() => {
    * @param {THREE.Sprite|null} activeDraggedSprite - the sprite being dragged (null during animation loop)
    */
   function _updateMeasurementLabelPositions(finalizeDrag = false, activeDraggedSprite = null) {
-    if (!_showMeasurementLabels || _measurementSprites.length === 0 || !camera || !cube) return;
+    if (!_showMeasurementLabels || _measurementSprites.length === 0 || !camera || !cube || !_measurementGroup) return;
     try {
+      camera.updateMatrixWorld();
+      _measurementGroup.updateWorldMatrix(true, false);
+      if (!finalizeDrag && !activeDraggedSprite && _labelLayoutUnchanged()) return;
+      if (activeDraggedSprite || finalizeDrag) _labelLayoutValid = false;
+
       // Camera basis vectors in world space
-      const camRight = new THREE.Vector3();
-      const camUp = new THREE.Vector3();
-      camera.getWorldDirection(new THREE.Vector3());
-      camRight.setFromMatrixColumn(camera.matrixWorld, 0).normalize();
-      camUp.setFromMatrixColumn(camera.matrixWorld, 1).normalize();
+      const camRight = _lbl.right.setFromMatrixColumn(camera.matrixWorld, 0).normalize();
+      const camUp = _lbl.up.setFromMatrixColumn(camera.matrixWorld, 1).normalize();
+      const cubeCenter = cube.getWorldPosition(_lbl.centre);
+      const frame = _measurementGroup.matrixWorld;
 
-      const cubeCenter = new THREE.Vector3();
-      cube.getWorldPosition(cubeCenter);
-
-      // 1. Calculate target positions (before overlap resolution)
-      const items = _measurementSprites.map(sprite => {
-        const anchorLocal = (sprite.userData.anchorLocal || sprite.userData.anchor).clone();
-        const anchorWorld = anchorLocal.applyMatrix4(cube.matrixWorld);
-
-        const toLabel = anchorWorld.clone().sub(cubeCenter).normalize();
+      // 1. Target positions (before overlap resolution). Everything after this works in
+      //    the camera plane: a label's on-screen position is (u, v) = its world point
+      //    projected on camRight / camUp, and moving it by du·camRight + dv·camUp moves
+      //    (u, v) by exactly (du, dv) (the two are orthonormal), so the repulsion runs on
+      //    plain numbers and the world offset is applied once at the end.
+      const n = _measurementSprites.length;
+      const items = new Array(n);
+      for (let k = 0; k < n; k++) {
+        const sprite = _measurementSprites[k];
+        const anchorWorld = _lbl.anchor.copy(sprite.userData.anchorLocal || sprite.userData.anchor).applyMatrix4(frame);
+        const toLabel = _lbl.toLabel.copy(anchorWorld).sub(cubeCenter).normalize();
         const rightDot = toLabel.dot(camRight);
         const upDot = toLabel.dot(camUp);
 
@@ -3553,74 +4100,53 @@ const VolumeViewer = (() => {
         const customR = m?.labelOffset?.r || 0;
         const customT = m?.labelOffset?.t || 0;
         const pushDistance = 0.04 + customR;
-        const offset = camRight.clone().multiplyScalar(dirX * pushDistance + (-dirY) * customT)
-          .add(camUp.clone().multiplyScalar(dirY * pushDistance + dirX * customT));
-        const finalWorld = anchorWorld.clone().add(offset);
+        const offR = dirX * pushDistance + (-dirY) * customT;
+        const offU = dirY * pushDistance + dirX * customT;
+        const anchor = anchorWorld.clone();
+        const u0 = anchor.dot(camRight) + offR;
+        const v0 = anchor.dot(camUp) + offU;
+        const w = sprite.scale.x;
+        const h = sprite.scale.y;
+        const radius = Math.max(w, h) * 0.55;
+        const isBeingDragged = activeDraggedSprite != null && activeDraggedSprite === sprite;
+        const customRadius = m?.labelOffset?.customRadius;
+        items[k] = {
+          sprite, anchor, offR, offU,
+          // Visual centre in the camera plane (the sprite's pivot is off its centre).
+          u: u0 + (0.5 - sprite.center.x) * w,
+          v: v0 + (0.5 - sprite.center.y) * h,
+          du: 0, dv: 0,
+          radius,
+          effectiveRadius: isBeingDragged ? 0 : (customRadius !== undefined ? customRadius : radius)
+        };
+      }
+      const dist2D = (a, b) => Math.hypot((a.u + a.du) - (b.u + b.du), (a.v + a.dv) - (b.v + b.dv));
 
-        return { sprite, finalWorld, dirX, dirY };
-      });
-
-      // 2. Calculate visual centers and effective repulsion radii
-      items.forEach(item => {
-        const w = item.sprite.scale.x;
-        const h = item.sprite.scale.y;
-        const cx = 0.5 - item.sprite.center.x;
-        const cy = 0.5 - item.sprite.center.y;
-        item.visualCenter = item.finalWorld.clone()
-          .add(camRight.clone().multiplyScalar(cx * w))
-          .add(camUp.clone().multiplyScalar(cy * h));
-        item.radius = Math.max(w, h) * 0.55;
-
-        // activeDraggedSprite is passed explicitly — no closure dependency needed
-        const isBeingDragged = (activeDraggedSprite != null && activeDraggedSprite === item.sprite);
-        const customRadius = item.sprite.userData.measurement?.labelOffset?.customRadius;
-        item.effectiveRadius = isBeingDragged ? 0 : (customRadius !== undefined ? customRadius : item.radius);
-      });
-
-      // Helper: compute visual center of an item from its current finalWorld
-      const _vc = (item) => {
-        const s = item.sprite;
-        return item.finalWorld.clone()
-          .add(camRight.clone().multiplyScalar((0.5 - s.center.x) * s.scale.x))
-          .add(camUp.clone().multiplyScalar((0.5 - s.center.y) * s.scale.y));
-      };
-
-      // 3. Finalize drag: bake current positions into customRadius for the dropped
+      // 2. Finalize drag: bake current positions into customRadius for the dropped
       //    label AND all nearby labels so nothing snaps on the next render frame.
       if (finalizeDrag && activeDraggedSprite) {
         const dropped = items.find(it => it.sprite === activeDraggedSprite);
         if (dropped) {
-          const droppedVC = _vc(dropped);
-
-          items.forEach(other => {
-            if (other === dropped) return;
-            const otherVC = _vc(other);
-            const dist2D = Math.sqrt(
-              Math.pow(droppedVC.dot(camRight) - otherVC.dot(camRight), 2) +
-              Math.pow(droppedVC.dot(camUp)    - otherVC.dot(camUp),    2)
-            );
+          for (const other of items) {
+            if (other === dropped) continue;
+            const d = dist2D(dropped, other);
             const om = other.sprite.userData.measurement;
             if (!om.labelOffset) om.labelOffset = { r: 0, t: 0 };
-            const otherNaturalR = other.radius;
-            const otherCurrentR = om.labelOffset.customRadius ?? otherNaturalR;
+            const otherCurrentR = om.labelOffset.customRadius ?? other.radius;
             // If the dropped label is now closer than other's repulsion radius,
             // shrink other's customRadius to accept this closeness
-            if (dist2D < otherCurrentR) {
-              om.labelOffset.customRadius = Math.max(0, dist2D * 0.45);
+            if (d < otherCurrentR) {
+              om.labelOffset.customRadius = Math.max(0, d * 0.45);
               other.effectiveRadius = om.labelOffset.customRadius;
             }
-          });
+          }
 
           // Dropped label: customRadius = min gap to any other label's edge
           let minR = dropped.radius;
-          items.forEach(other => {
-            if (other === dropped) return;
-            const dist2D = Math.sqrt(
-              Math.pow(droppedVC.dot(camRight) - _vc(other).dot(camRight), 2) +
-              Math.pow(droppedVC.dot(camUp)    - _vc(other).dot(camUp),    2)
-            );
-            minR = Math.min(minR, Math.max(0, dist2D - other.effectiveRadius));
-          });
+          for (const other of items) {
+            if (other === dropped) continue;
+            minR = Math.min(minR, Math.max(0, dist2D(dropped, other) - other.effectiveRadius));
+          }
           const dm = dropped.sprite.userData.measurement;
           if (!dm.labelOffset) dm.labelOffset = { r: 0, t: 0 };
           dm.labelOffset.customRadius = minR;
@@ -3632,40 +4158,30 @@ const VolumeViewer = (() => {
         }
       }
 
-      // 4. Resolve overlaps via camera-plane repulsion
-      //    - Recompute visual centers each iteration from the updated finalWorld
-      //    - Skip ALL pairs involving the dragged sprite: user controls its position
-      if (items.length > 1) {
+      // 3. Resolve overlaps via camera-plane repulsion (pairs involving the dragged
+      //    sprite are skipped: the user controls its position).
+      if (n > 1) {
         for (let iter = 0; iter < 8; iter++) {
           let anyOverlap = false;
-          for (let i = 0; i < items.length; i++) {
-            for (let j = i + 1; j < items.length; j++) {
-              const si = items[i].sprite, sj = items[j].sprite;
-
-              // Completely skip any pair involving the dragged sprite during drag
+          for (let i = 0; i < n; i++) {
+            const a = items[i];
+            for (let j = i + 1; j < n; j++) {
+              const b = items[j];
               if (activeDraggedSprite != null &&
-                  (activeDraggedSprite === si || activeDraggedSprite === sj)) continue;
-
-              const minDist = items[i].effectiveRadius + items[j].effectiveRadius;
+                  (activeDraggedSprite === a.sprite || activeDraggedSprite === b.sprite)) continue;
+              const minDist = a.effectiveRadius + b.effectiveRadius;
               if (minDist <= 0) continue;
-
-              // Recompute visual centers from CURRENT finalWorld each iteration
-              const vi = _vc(items[i]);
-              const vj = _vc(items[j]);
-              const dx = vi.dot(camRight) - vj.dot(camRight);
-              const dy = vi.dot(camUp)    - vj.dot(camUp);
+              const dx = (a.u + a.du) - (b.u + b.du);
+              const dy = (a.v + a.dv) - (b.v + b.dv);
               const distSq = dx * dx + dy * dy;
-
               if (distSq < minDist * minDist && distSq > 1e-8) {
                 anyOverlap = true;
                 const dist = Math.sqrt(distSq);
                 const overlap = minDist - dist;
                 const pushX = (dx / dist) * overlap * 0.5;
                 const pushY = (dy / dist) * overlap * 0.5;
-                const pushVec = camRight.clone().multiplyScalar(pushX)
-                  .add(camUp.clone().multiplyScalar(pushY));
-                items[i].finalWorld.add(pushVec);
-                items[j].finalWorld.sub(pushVec);
+                a.du += pushX; a.dv += pushY;
+                b.du -= pushX; b.dv -= pushY;
               }
             }
           }
@@ -3673,12 +4189,14 @@ const VolumeViewer = (() => {
         }
       }
 
-      // 5. Apply final positions back to sprites
-      items.forEach(item => {
-        const finalLocal = item.finalWorld.clone();
-        cube.worldToLocal(finalLocal);
-        item.sprite.position.copy(finalLocal);
-      });
+      // 4. Apply final positions back to sprites (in the measurement frame).
+      for (const item of items) {
+        const world = _lbl.world.copy(item.anchor)
+          .addScaledVector(camRight, item.offR + item.du)
+          .addScaledVector(camUp, item.offU + item.dv);
+        _measurementGroup.worldToLocal(world);
+        item.sprite.position.copy(world);
+      }
     } catch (err) {
       console.warn('[VolumeViewer] Error in _updateMeasurementLabelPositions:', err);
     }
@@ -3702,62 +4220,89 @@ const VolumeViewer = (() => {
   }
 
   function setMeasurementTextSize(size) {
-    _measurementTextSize = size;
+    const n = Number(size);
+    if (!Number.isFinite(n)) return;
+    _measurementTextSize = Math.max(8, Math.min(256, n));
     _renderMeasurements();
+  }
+
+  // Label bitmaps are drawn at their font size × this factor (the device pixel ratio
+  // on screen; the export's own scale while a view export renders).
+  let _labelRasterScale = 1;
+
+  function _drawLabelCanvas(canvas, text, colorHex, fontSize, rasterScale) {
+    const ctx = canvas.getContext('2d');
+    const px = fontSize * rasterScale;
+    ctx.font = `bold ${px}px sans-serif`;
+    const textWidth = ctx.measureText(text).width;
+    const pad = px * 0.4;
+    canvas.width = Math.max(1, Math.ceil(textWidth + pad * 2));
+    canvas.height = Math.max(1, Math.ceil(px + pad * 2));
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.font = `bold ${px}px sans-serif`;
+    ctx.textBaseline = 'middle';
+    ctx.textAlign = 'center';
+    ctx.lineWidth = Math.max(2, px * 0.12);
+    ctx.strokeStyle = '#000000';
+    ctx.strokeText(text, canvas.width / 2, canvas.height / 2);
+    ctx.fillStyle = colorHex;
+    ctx.fillText(text, canvas.width / 2, canvas.height / 2);
   }
 
   function _createMeasurementTextSprite(text, colorHex, anchorPoint) {
     if (!text || text.trim() === '') return null;
     const canvas = document.createElement('canvas');
-    const ctx = canvas.getContext('2d');
-    
     const fontSize = _measurementTextSize;
-    ctx.font = `bold ${fontSize}px sans-serif`;
-    
-    const metrics = ctx.measureText(text);
-    const textWidth = metrics.width;
-    const pad = fontSize * 0.4;
-    
-    canvas.width = textWidth + pad * 2;
-    canvas.height = fontSize + pad * 2;
-    
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-    
-    ctx.font = `bold ${fontSize}px sans-serif`;
-    ctx.textBaseline = 'middle';
-    ctx.textAlign = 'center';
-    
-    ctx.lineWidth = Math.max(2, fontSize * 0.12);
-    ctx.strokeStyle = '#000000';
-    ctx.strokeText(text, canvas.width/2, canvas.height/2);
-    
-    ctx.fillStyle = colorHex;
-    ctx.fillText(text, canvas.width/2, canvas.height/2);
-    
+    _drawLabelCanvas(canvas, text, colorHex, fontSize, _labelRasterScale);
+
     const texture = new THREE.CanvasTexture(canvas);
     texture.minFilter = THREE.LinearFilter;
-    
-    const material = new THREE.SpriteMaterial({ 
-      map: texture, 
-      depthTest: false, 
-      transparent: true 
+
+    const material = new THREE.SpriteMaterial({
+      map: texture,
+      depthTest: false,
+      transparent: true
     });
-    
+
     const sprite = new THREE.Sprite(material);
-    // Inverse scale the sprite so the apparent size matches the requested size.
-    // Base scale is calculated at a standard resolution (e.g. 48px).
-    const scale = (0.0015 / 48) * fontSize;
+    // World size of the label: canvas pixels at raster scale 1 × (0.0015 / 48) world
+    // units per pixel per 48 px of font — independent of the bitmap's resolution.
+    const scale = (0.0015 / 48) * fontSize / _labelRasterScale;
     sprite.scale.set(canvas.width * scale, canvas.height * scale, 1);
-    
-    // The anchor in cube-local space is needed for position calculations
-    sprite.userData = { isMeasurementLabel: true, anchorLocal: anchorPoint.clone(), anchor: anchorPoint.clone() };
-    
+
+    // The anchor in measurement-frame space is needed for position calculations
+    sprite.userData = {
+      isMeasurementLabel: true, anchorLocal: anchorPoint.clone(), anchor: anchorPoint.clone(),
+      text, colorHex, fontSize, rasterScale: _labelRasterScale
+    };
+
     return sprite;
+  }
+
+  /** Redraw every label bitmap at `rasterScale` pixels per font pixel, in place (the
+   *  sprites, and so the scene, are unchanged — only their textures). */
+  function _setLabelRasterScale(rasterScale) {
+    const next = Math.max(1, Math.min(8, Number(rasterScale) || 1));
+    if (next === _labelRasterScale) return;
+    _labelRasterScale = next;
+    for (const sprite of _measurementSprites) {
+      const ud = sprite.userData;
+      const map = sprite.material?.map;
+      if (!map?.image || !ud?.text) continue;
+      _drawLabelCanvas(map.image, ud.text, ud.colorHex, ud.fontSize, next);
+      ud.rasterScale = next;
+      // A resized canvas needs a fresh GPU texture of the new size.
+      map.dispose();
+      map.needsUpdate = true;
+    }
+    _scheduleFrame();
   }
 
   function _renderMeasurements() {
     if (!_measurementGroup) return;
-    
+    _syncMeasurementFrame();
+    _labelLayoutVersion++;
+
     // Clear lines and markers
     for (let i = _measurementGroup.children.length - 1; i >= 0; i--) {
       const child = _measurementGroup.children[i];
@@ -3781,7 +4326,7 @@ const VolumeViewer = (() => {
       }
     }
     _measurementSprites = [];
-    
+
     _measurements.forEach(item => {
       if (item.visible === false) return;
       const points = Array.isArray(item.points) ? item.points : [];
@@ -3789,16 +4334,16 @@ const VolumeViewer = (() => {
       const a = _pointLocal(points[0]);
       const b = _pointLocal(points[1]);
       if (!a || !b) return;
-      
+
       const color = item.color || '#ff4d4f';
       _measurementGroup.add(_measurementLine(a, b, color));
-      
+
       if (_showMeasurementLabels && _labelsGroup) {
-        // Find extremity furthest from origin (which is 0,0,0 in local space)
+        // Extremity furthest from the volume centre (the frame's origin)
         const aDist = a.lengthSq();
         const bDist = b.lengthSq();
         const anchorLocal = aDist > bDist ? a.clone() : b.clone();
-        
+
         const labelText = item.label ? `${item.label}: ` : '';
         // BUG-007: distance may be absent/non-finite (e.g. degenerate or partially-restored measurement) — show em-dash instead of throwing.
         const d = Number.isFinite(item.distance) ? item.distance.toFixed(1) + ' µm' : '—';
@@ -3817,13 +4362,15 @@ const VolumeViewer = (() => {
     _scheduleFrame();
   }
 
+  /** A normalised volume point ([0,1]³) in the measurement frame: (n − ½) ⊙ cube.scale. */
   function _pointLocal(point) {
     const normalized = point?.normalized || point;
     if (!normalized || !Number.isFinite(normalized.x) || !Number.isFinite(normalized.y) || !Number.isFinite(normalized.z)) return null;
+    const s = cube ? cube.scale : { x: 1, y: 1, z: 1 };
     return new THREE.Vector3(
-      normalized.x - 0.5,
-      normalized.y - 0.5,
-      normalized.z - 0.5
+      (normalized.x - 0.5) * s.x,
+      (normalized.y - 0.5) * s.y,
+      (normalized.z - 0.5) * s.z
     );
   }
 
@@ -3914,7 +4461,7 @@ const VolumeViewer = (() => {
     if (!camera || !renderer) return null;
     const rect = renderer.domElement.getBoundingClientRect();
     // PERF-004: reuse module-level _raycaster/_pointer (synchronous, not retained)
-    _pointer.set(((clientX - rect.left) / rect.width) * 2 - 1, -((clientY - rect.top) / rect.height) * 2 + 1);
+    _pointer.set(((clientX - rect.left) / Math.max(1, rect.width)) * 2 - 1, -((clientY - rect.top) / Math.max(1, rect.height)) * 2 + 1);
     _raycaster.setFromCamera(_pointer, camera);
     const intersectables = [];
     const _vgAxesGroup = typeof VolumeGrid !== 'undefined' ? VolumeGrid.getAxesGroup() : null;
@@ -4233,16 +4780,25 @@ const VolumeViewer = (() => {
     setPlaneSpec({ value: valueAt(point.normalized.z), visible: options.visible ?? true });
   }
 
+  /**
+   * The volume point under a client-space position.
+   * @returns {{normalized:{x,y,z}, physicalUm:{x,y,z}|null, screen:{x,y},
+   *   depthSource:'projection'|'volume'|'bounding-box', onBoundingBox:boolean}|null}
+   *   depthSource 'volume': the depth of the first visible structure under the pixel
+   *   (GPU pick, see the shader's PICK_MODE); 'projection': a grid projection wall;
+   *   'bounding-box': nothing visible there (or no GPU pick possible) — the point is
+   *   where the ray enters the box and its depth means nothing (onBoundingBox: true).
+   */
   function pickVolumePoint(clientX, clientY) {
     if (!_raycaster || !_pointer || !camera || !cube || !renderer) return null;
     const rect = renderer.domElement.getBoundingClientRect();
     _pointer.x = ((clientX - rect.left) / Math.max(1, rect.width)) * 2 - 1;
     _pointer.y = -(((clientY - rect.top) / Math.max(1, rect.height)) * 2 - 1);
     _raycaster.setFromCamera(_pointer, camera);
-    
+
     let local = null;
-    let isProj = false;
-    
+    let source = null;
+
     // First check projections
     const _vgGridGrp = typeof VolumeGrid !== 'undefined' ? VolumeGrid.getGridGroup() : null;
     if (_vgGridGrp) {
@@ -4252,23 +4808,27 @@ const VolumeViewer = (() => {
           const hits = _raycaster.intersectObjects(projMeshes, false);
           if (hits.length > 0) {
              local = hits[0].point.clone().applyMatrix4(new THREE.Matrix4().copy(cube.matrixWorld).invert());
-             isProj = true;
+             source = 'projection';
           }
        }
     }
-    
-    // If no projection hit, fallback to volume
+
+    // Then the volume: the depth the GPU reads along this pixel's ray.
+    if (!local && material && material.visible) {
+      local = _gpuPickPoint(clientX - rect.left, clientY - rect.top, rect.width, rect.height);
+      if (local) source = 'volume';
+    }
     if (!local && material && material.visible) {
       const localRay = _raycaster.ray.clone().applyMatrix4(new THREE.Matrix4().copy(cube.matrixWorld).invert());
-      local = _pickSurfaceOnRay(localRay)
-        || localRay.intersectBox(
-          new THREE.Box3(new THREE.Vector3(-0.5, -0.5, -0.5), new THREE.Vector3(0.5, 0.5, 0.5)),
-          new THREE.Vector3()
-        );
+      local = localRay.intersectBox(
+        new THREE.Box3(new THREE.Vector3(-0.5, -0.5, -0.5), new THREE.Vector3(0.5, 0.5, 0.5)),
+        new THREE.Vector3()
+      );
+      if (local) source = 'bounding-box';
     }
 
-    const hit = Boolean(local);
-    if (!hit) return null;
+    if (!local) return null;
+    const isProj = source === 'projection';
 
     const norm = {
       x: isProj ? local.x + 0.5 : Math.max(0, Math.min(1, local.x + 0.5)),
@@ -4283,140 +4843,121 @@ const VolumeViewer = (() => {
         y: norm.y * physical.y,
         z: norm.z * physical.z
       } : null,
-      screen: { x: clientX - rect.left, y: clientY - rect.top }
+      screen: { x: clientX - rect.left, y: clientY - rect.top },
+      depthSource: source,
+      onBoundingBox: source === 'bounding-box'
     };
   }
 
-  function _pickSurfaceOnRay(localRay) {
-    const entry = _activeVolumeEntry;
-    if (!entry?.data || !entry.width || !entry.height || !entry.depth) return null;
-    const range = _rayBoxRange(localRay.origin, localRay.direction);
-    if (!range) return null;
-    const threshold = _surfaceThreshold(entry);
-    const steps = Math.max(128, Math.min(620, Math.round(Math.max(entry.width, entry.height, entry.depth) * 1.8)));
-    const samples = [];
-    for (let i = 0; i <= steps; i++) {
-      const t = range.tMin + (i / Math.max(1, steps)) * (range.tMax - range.tMin);
-      const p = localRay.origin.clone().addScaledVector(localRay.direction, t);
-      const norm = { x: p.x + 0.5, y: p.y + 0.5, z: p.z + 0.5 };
-      const inside = norm.x >= 0 && norm.x <= 1 && norm.y >= 0 && norm.y <= 1 && norm.z >= 0 && norm.z <= 1;
-      if (!inside) continue;
-      const value = _sampleActiveIntensity(entry, norm.x, norm.y, norm.z);
-      samples.push({ t, point: p, value });
-    }
-    if (!samples.length) return null;
-    const smooth = samples.map((_, idx) => {
-      const a = samples[Math.max(0, idx - 1)].value;
-      const b = samples[idx].value;
-      const c = samples[Math.min(samples.length - 1, idx + 1)].value;
-      return (a + b + c) / 3;
+  // GPU pick: the cube drawn alone, with the ray-march shader in PICK_MODE (same
+  // uniforms object as the volume, so the same window, channels, clip box, z-stack
+  // slab, warp and bricks), into a 1×1 target windowed onto the clicked pixel.
+  let _pick = null;
+
+  function _pickResources() {
+    if (_pick) return _pick;
+    const target = new THREE.WebGLRenderTarget(1, 1, {
+      format: THREE.RGBAFormat,
+      type: THREE.UnsignedByteType,
+      minFilter: THREE.NearestFilter,
+      magFilter: THREE.NearestFilter,
+      generateMipmaps: false,
+      depthBuffer: false,
+      stencilBuffer: false
     });
-    let maxValue = 0;
-    let maxIdx = 0;
-    for (let i = 0; i < smooth.length; i++) {
-      if (smooth[i] > maxValue) {
-        maxValue = smooth[i];
-        maxIdx = i;
-      }
-    }
-    if (maxValue < threshold) return null;
-    const surfaceTarget = Math.max(threshold, maxValue * 0.55);
-    let surfaceIdx = maxIdx;
-    for (let i = 0; i <= maxIdx; i++) {
-      if (smooth[i] >= surfaceTarget) {
-        surfaceIdx = i;
-        break;
-      }
-    }
-    const refineStart = Math.max(0, surfaceIdx - 2);
-    const refineEnd = Math.min(samples.length - 1, surfaceIdx + 2);
-    let bestIdx = surfaceIdx;
-    for (let i = refineStart; i <= refineEnd; i++) {
-      if (samples[i].value > samples[bestIdx].value) bestIdx = i;
-    }
-    return samples[bestIdx].point;
-  }
-
-  function _rayBoxRange(origin, direction) {
-    const min = -0.5;
-    const max = 0.5;
-    let tMin = -Infinity;
-    let tMax = Infinity;
-    for (const axis of ['x', 'y', 'z']) {
-      const o = origin[axis];
-      const d = direction[axis];
-      if (Math.abs(d) < 1e-8) {
-        if (o < min || o > max) return null;
-        continue;
-      }
-      const t0 = (min - o) / d;
-      const t1 = (max - o) / d;
-      tMin = Math.max(tMin, Math.min(t0, t1));
-      tMax = Math.min(tMax, Math.max(t0, t1));
-      if (tMax < tMin) return null;
-    }
-    return {
-      tMin: Math.max(0, tMin),
-      tMax
-    };
-  }
-
-  function _sampleActiveIntensity(entry, x, y, z) {
-    const px = Math.max(0, Math.min(entry.width - 1, x * Math.max(1, entry.width - 1)));
-    const py = Math.max(0, Math.min(entry.height - 1, y * Math.max(1, entry.height - 1)));
-    const pz = Math.max(0, Math.min(entry.depth - 1, z * Math.max(1, entry.depth - 1)));
-    const x0 = Math.floor(px);
-    const y0 = Math.floor(py);
-    const z0 = Math.floor(pz);
-    const x1 = Math.min(entry.width - 1, x0 + 1);
-    const y1 = Math.min(entry.height - 1, y0 + 1);
-    const z1 = Math.min(entry.depth - 1, z0 + 1);
-    const tx = px - x0;
-    const ty = py - y0;
-    const tz = pz - z0;
-    let intensity = 0;
-    for (const dz of [0, 1]) {
-      for (const dy of [0, 1]) {
-        for (const dx of [0, 1]) {
-          const xi = dx ? x1 : x0;
-          const yi = dy ? y1 : y0;
-          const zi = dz ? z1 : z0;
-          const wx = dx ? tx : 1 - tx;
-          const wy = dy ? ty : 1 - ty;
-          const wz = dz ? tz : 1 - tz;
-          const idx = ((zi * entry.height + yi) * entry.width + xi) * 4;
-          const value = Math.max(
-            entry.data[idx] || 0,
-            entry.data[idx + 1] || 0,
-            entry.data[idx + 2] || 0,
-            entry.data[idx + 3] || 0
-          );
-          intensity += value * wx * wy * wz;
-        }
-      }
-    }
-    return intensity;
-  }
-
-  function _surfaceThreshold(entry) {
-    const hist = _channelHistograms || [];
-    if (!hist.length) return 14;
-    const thresholds = hist.map(channelHist => {
-      const counts = channelHist?.counts || [];
-      const total = Math.max(1, channelHist?.total || 0);
-      const target = total * 0.2;
-      let acc = 0;
-      let bin = 0;
-      for (let i = 0; i < counts.length; i++) {
-        acc += counts[i];
-        if (acc >= target) {
-          bin = i;
-          break;
-        }
-      }
-      return Math.max(10, Math.round((bin / Math.max(1, counts.length - 1)) * 255));
+    const pickMaterial = new THREE.ShaderMaterial({
+      glslVersion: THREE.GLSL3,
+      vertexShader,
+      fragmentShader,
+      uniforms: material.uniforms,
+      defines: {},
+      side: THREE.BackSide,
+      transparent: false,
+      depthTest: false,
+      depthWrite: false,
+      blending: THREE.NoBlending
     });
-    return Math.max(12, Math.min(64, Math.min(...thresholds)));
+    const mesh = new THREE.Mesh(cube.geometry, pickMaterial);
+    mesh.matrixAutoUpdate = false;
+    mesh.frustumCulled = false;
+    const pickScene = new THREE.Scene();
+    pickScene.add(mesh);
+    _pick = { target, material: pickMaterial, mesh, scene: pickScene, definesKey: '', pixels: new Uint8Array(4) };
+    return _pick;
+  }
+
+  function _disposePickResources() {
+    if (!_pick) return;
+    _pick.target.dispose();
+    _pick.material.dispose();
+    _pick = null;
+  }
+
+  /**
+   * Decode the two pick passes into the cube-local point. Each pass is an RGBA8
+   * texel: pass 0 = (x hi, x lo, y hi, y lo), pass 1 = (z hi, z lo, 255, 255), the
+   * 16-bit fixed point of the position in the box the march ran in — the unit box
+   * (p + ½) unwarped, the display box (clipBoxMin + c·clipBoxSize) on a stabilised
+   * timelapse. A pass-1 alpha of 0 means the ray found nothing.
+   * @returns {THREE.Vector3|null}
+   */
+  function _decodePickTexels(xy, zf, warped, boxMin, boxSize, out = new THREE.Vector3()) {
+    if (!xy || !zf || zf[3] < 128) return null;
+    const u16 = (hi, lo) => (hi * 256 + lo) / 65535;
+    const c = [u16(xy[0], xy[1]), u16(xy[2], xy[3]), u16(zf[0], zf[1])];
+    if (warped) return out.set(boxMin.x + c[0] * boxSize.x, boxMin.y + c[1] * boxSize.y, boxMin.z + c[2] * boxSize.z);
+    return out.set(c[0] - 0.5, c[1] - 0.5, c[2] - 0.5);
+  }
+
+  function _gpuPickPoint(px, py, cssWidth, cssHeight) {
+    if (_contextLost || !renderer || !_activeVolumeEntry || !(cssWidth > 0) || !(cssHeight > 0)) return null;
+    const gl = renderer.getContext();
+    if (gl.isContextLost?.()) return null;
+    const pick = _pickResources();
+    const defines = { ...(material.defines || {}), PICK_MODE: 1 };
+    const key = JSON.stringify(defines);
+    if (key !== pick.definesKey) {
+      pick.material.defines = defines;
+      pick.material.needsUpdate = true;
+      pick.definesKey = key;
+    }
+    if (pick.mesh.geometry !== cube.geometry) pick.mesh.geometry = cube.geometry;
+    cube.updateMatrixWorld(true);
+    pick.mesh.matrix.copy(cube.matrixWorld);
+    pick.mesh.matrixWorld.copy(cube.matrixWorld);
+    camera.updateMatrixWorld();
+
+    const prevTarget = renderer.getRenderTarget();
+    const prevClear = renderer.getClearColor(new THREE.Color());
+    const prevAlpha = renderer.getClearAlpha();
+    const prevPass = material.uniforms.pickPass.value;
+    const x = Math.max(0, Math.min(cssWidth - 1, Math.floor(px)));
+    const y = Math.max(0, Math.min(cssHeight - 1, Math.floor(py)));
+    const texels = [];
+    try {
+      // The 1×1 window of the full frustum whose centre is the clicked pixel's.
+      camera.setViewOffset(cssWidth, cssHeight, x, y, 1, 1);
+      renderer.setClearColor(0x000000, 0);
+      for (let pass = 0; pass < 2; pass++) {
+        material.uniforms.pickPass.value = pass;
+        renderer.setRenderTarget(pick.target);
+        renderer.clear(true, false, false);
+        renderer.render(pick.scene, camera);
+        renderer.readRenderTargetPixels(pick.target, 0, 0, 1, 1, pick.pixels);
+        texels.push(Array.from(pick.pixels));
+      }
+    } catch (err) {
+      console.warn('[VolumeViewer] GPU depth pick failed:', err);
+      return null;
+    } finally {
+      camera.clearViewOffset();
+      material.uniforms.pickPass.value = prevPass;
+      renderer.setRenderTarget(prevTarget);
+      renderer.setClearColor(prevClear, prevAlpha);
+    }
+    const warped = Boolean(material.defines?.VOLUME_WARP);
+    return _decodePickTexels(texels[0], texels[1], warped,
+      material.uniforms.clipBoxMin.value, material.uniforms.clipBoxSize.value);
   }
 
   function onMeasurePoint(callback) {
@@ -4446,10 +4987,20 @@ const VolumeViewer = (() => {
   }
 
   function getCacheStats() {
+    let cachedGpu = 0;
+    let cachedCpu = 0;
+    for (const e of _volumeCache.values()) { cachedGpu += _entryGpuBytes(e); cachedCpu += _entryCpuBytes(e); }
+    const active = _activeVolumeEntry;
     return {
       images: _imageCache.size,
       volumes: _volumeCache.size,
-      activeTextureKey: _activeTextureKey
+      activeTextureKey: _activeTextureKey,
+      cachedGpuBytes: cachedGpu,
+      cachedCpuBytes: cachedCpu,
+      activeGpuBytes: active && !_isEntryCached(active) ? _entryGpuBytes(active) : 0,
+      residentGpuBytes: _residentGpuBytes(),
+      cacheBudgetBytes: _volumeCacheBudget(),
+      vramBudgetBytes: _gpuBudgetBytes()
     };
   }
 
@@ -4654,16 +5205,34 @@ const VolumeViewer = (() => {
    * Switch render mode: 0 = DVR (depth/structure), 1 = Emission MIP (Imaris-like),
    * 2 = Natural Fluorescence (emission–absorption, chroma-locked).
    */
+  /**
+   * Switch render mode: 0 = Structure DVR, 1 = per-channel MIP ('fluorescence'),
+   * 2 = Natural Fluorescence. Numbers, numeric strings ('2', what a sandboxed plugin
+   * sends) and the mode names are accepted; anything else is refused (false) instead
+   * of silently becoming MIP.
+   * @returns {boolean} true when the mode was applied
+   */
   function setRenderMode(mode) {
-    if (!material?.uniforms) return;
-    let m;
-    if (mode === 0 || mode === 'dvr' || mode === 'structure-dvr') m = 0;
-    else if (mode === 2 || mode === 'natural' || mode === 'natural-fluorescence') m = 2;
-    else m = 1;
+    if (!material?.uniforms) return false;
+    const names = { dvr: 0, 'structure-dvr': 0, structure: 0, mip: 1, fluorescence: 1, natural: 2, 'natural-fluorescence': 2 };
+    let m = null;
+    if (typeof mode === 'string' && Object.prototype.hasOwnProperty.call(names, mode.trim().toLowerCase())) {
+      m = names[mode.trim().toLowerCase()];
+    } else if (mode !== null && mode !== '' && Number.isInteger(Number(mode)) && [0, 1, 2].includes(Number(mode))) {
+      m = Number(mode);
+    }
+    if (m === null) {
+      console.warn(`[VolumeViewer] setRenderMode: unknown render mode ${JSON.stringify(mode)} — ignored`);
+      return false;
+    }
+    // The cross-fade material shares this uniform object (PER_VOLUME_UNIFORMS).
     material.uniforms.renderMode.value = m;
-    // Keep an in-flight cross-fade material consistent if the mode changes mid-transition.
-    if (_transitionMaterial?.uniforms?.renderMode) _transitionMaterial.uniforms.renderMode.value = m;
     _scheduleFrame();
+    return true;
+  }
+
+  function getRenderMode() {
+    return material?.uniforms ? material.uniforms.renderMode.value : null;
   }
 
   /**
@@ -5044,6 +5613,7 @@ const VolumeViewer = (() => {
     const prevClearColor = renderer.getClearColor(new THREE.Color());
     const prevClearAlpha = renderer.getClearAlpha();
     const prevSteps = material.uniforms.steps.value;
+    const prevRate = material.uniforms.sampleRate.value;
     const live = {
       position: cube.position.clone(),
       quaternion: cube.quaternion.clone(),
@@ -5067,7 +5637,10 @@ const VolumeViewer = (() => {
       cube.quaternion.copy(snap.quaternion);
       cube.scale.copy(snap.scale);
       cube.userData.isInteractingNow = false;
+      // The labels, the cut plane and the grid are laid out from this pose.
+      cube.updateMatrixWorld(true);
       material.uniforms.steps.value = _targetSteps;
+      material.uniforms.sampleRate.value = IDLE_SAMPLE_RATE;
       const [fx, fy] = _exportTileFragOffset(tile, height);
       for (const saved of marchers) {
         const m = saved.m;
@@ -5111,6 +5684,7 @@ const VolumeViewer = (() => {
       renderer.setRenderTarget(prevTarget);
       renderer.setClearColor(prevClearColor, prevClearAlpha);
       material.uniforms.steps.value = prevSteps;
+      material.uniforms.sampleRate.value = prevRate;
       for (const saved of marchers) {
         const m = saved.m;
         m.blending = saved.blending;
@@ -5127,6 +5701,7 @@ const VolumeViewer = (() => {
       cube.quaternion.copy(live.quaternion);
       cube.scale.copy(live.scale);
       cube.userData.isInteractingNow = live.interacting;
+      cube.updateMatrixWorld(true);
       _prepareExportFrame();
     }
   }
@@ -5147,7 +5722,7 @@ const VolumeViewer = (() => {
 
   // Uniforms a tile sets (and puts back) itself, or that the render loop tunes every
   // frame (steps: the tile renders with _targetSteps whatever the loop left there).
-  const EXPORT_VOLATILE_UNIFORMS = new Set(['steps', 'fragCoordOffset', 'exportAlpha']);
+  const EXPORT_VOLATILE_UNIFORMS = new Set(['steps', 'sampleRate', 'pickPass', 'fragCoordOffset', 'exportAlpha']);
 
   function _pushExportValue(out, v) {
     if (v === null || v === undefined) { out.push(null); return; }
@@ -5278,15 +5853,24 @@ const VolumeViewer = (() => {
       let configIndex = 0;
       let restarts = 0;
       let lastChange = 'volume';
+      // The view the user had when asking: taken now (not after the wait for the
+      // volume), and a pose still flying is taken where it lands. The camera keeps its
+      // vertical field of view at the image's own aspect, so a size that is not the
+      // screen's shows more or less of the scene, never a stretched one.
+      const snap = {
+        camera: camera.clone(),
+        position: cube.position.clone(),
+        quaternion: (_poseAnim ? _poseAnim.to : cube.quaternion).clone(),
+        scale: cube.scale.clone()
+      };
+      snap.camera.aspect = width / height;
+      snap.camera.updateProjectionMatrix();
+      // Label bitmaps at the export's own pixel density (restored in finally).
+      const cssHeight = renderer.getSize ? renderer.getSize(new THREE.Vector2()).y : height;
+      _setLabelRasterScale(Math.ceil(height / Math.max(1, cssHeight)));
       for (;;) {
         await _waitForSteadyVolume(signal, onProgress);
         const entry = _activeVolumeEntry;
-        const snap = {
-          camera: camera.clone(),
-          position: cube.position.clone(),
-          quaternion: cube.quaternion.clone(),
-          scale: cube.scale.clone()
-        };
         const fingerprint = _exportFingerprint();
         while (!targets && configIndex < configs.length) {
           targets = _allocExportTargets(configs[configIndex], width, height);
@@ -5337,6 +5921,7 @@ const VolumeViewer = (() => {
         composite.material.dispose();
         composite.geometry.dispose();
       }
+      _setLabelRasterScale(_idlePixelRatio());
       _viewExportInFlight = false;
       _scheduleFrame();
     }
@@ -5346,8 +5931,16 @@ const VolumeViewer = (() => {
     return material;
   }
 
+  // Throttle state of the stream's progress reports (_emitThrottledProgress).
+  const _progressEmit = { value: -1, at: 0 };
+
   return {
     init,
+    dispose,
+    releaseDataset,
+    renderNow,
+    getCapabilities,
+    getQualityFootprints,
     loadVolume,
     preloadVolume,
     updateChannel,
@@ -5417,6 +6010,7 @@ const VolumeViewer = (() => {
     setAxesVisible,
     setVolumeVisible,
     setRenderMode,
+    getRenderMode,
     setExposure,
     setFluorescenceParams,
     getRenderer: () => renderer,
@@ -5447,7 +6041,7 @@ const VolumeViewer = (() => {
     setPlayheadHint,
     /** Abort a background prefetch in flight (quality change, dataset change,
      *  tab hidden). Cooperative: the batch stops at its next brick boundary. */
-    cancelPreload: () => { if (_preloadStreamAbort) _preloadStreamAbort.cancelled = true; },
+    cancelPreload: () => _cancelStream(_preloadStreamAbort),
     getVolumeObject: () => cube,
     /** Acquisition box in um, or null until setStabilizationSpace() has run. */
     getAcquisitionSpace: () => (_acqExtent
@@ -5499,30 +6093,45 @@ const VolumeViewer = (() => {
     recompileShaderForActiveChannels: _recompileShaderForActiveChannels
   };
 
+  /**
+   * Stream one quality of a bricked volume into a GPU texture: a dense 3D texture
+   * when the level fits one, else a sparse SVR atlas of its non-empty bricks.
+   *
+   * options (besides quality / qualityMode / deferActivation / hideTransition /
+   * ignoreVolumeCache / concurrency / verifyHashes / preload, unchanged):
+   *   coarseFirst      on a first open (nothing on screen), show the coarsest level
+   *                    first, then stream the requested one behind it and swap it in
+   *                    when complete (default false).
+   *   onFirstPicture(info)
+   *                    called once something worth showing is on screen: the coarse
+   *                    preview complete (coarseFirst), else FIRST_PICTURE_FRACTION of
+   *                    the bricks — taken centre first — uploaded, or a cache hit.
+   *                    info = { quality, lod, preview: boolean, fromCache: boolean }.
+   *                    Not called for a deferred switch (the old volume stays shown)
+   *                    nor for a prefetch.
+   *
+   * Resolves to { available, stale, quality, width, height, depth, lod, requestedLod,
+   * downgraded, downgradeReason ('vram-budget' | 'alloc-failed' | 'capacity' | null),
+   * neededBytes, budgetBytes, successfulLoads (bricks delivered), failedLoads (bricks
+   * missing), missingBricks, degraded, fromCache, previewLod, contextLost, manifest, … }.
+   * A volume with missing bricks is shown but never cached as complete.
+   */
   async function loadBrickedVolumeStream(basePath, metadata, timepoint = null, onProgress = null, options = {}) {
     // ── Background prefetch mode ────────────────────────────────────────────────
     // Fills the cache for a timepoint that is NOT on screen. It must not touch a
-    // single piece of displayed state, and above all it must never run while a
-    // display load is in flight: BrickLoader is a single-mount singleton whose
-    // init() calls cancelPending() unconditionally, which aborts the foreground's
-    // fetches. The foreground's loadBrickTasks would then resolve NORMALLY
-    // (allSettled swallows it), its abortRef would still be false and its loadId
-    // still current — so it would cache and display a HALF-FILLED volume under the
-    // right key. Silent, persistent, and visually plausible: the worst kind.
-    //
-    // The guard lives here, not in viewer.js, because the application-level lock
-    // (_tpInFlight) is bypassed by four callers already (initial load, quality
-    // select, workspace restore) and any future one would bypass it too.
+    // single piece of displayed state, and it never runs while a display load is in
+    // flight (a display load preempts it through _loadCounter).
     const preload = Boolean(options.preload);
+    const isPreview = Boolean(options._previewOf);
     if (preload && _fgStreamActive > 0) return { available: false, reason: 'busy' };
     if (!preload) _fgStreamActive++;
 
     if (!preload) {
-      if (_brickStreamAbort) _brickStreamAbort.cancelled = true;
-      if (_seedRafId !== null) { cancelAnimationFrame(_seedRafId); _seedRafId = null; } // LEAK-023
+      if (!isPreview) {
+        _cancelStream(_brickStreamAbort);
+        if (!options._replay) _lastDisplayRequest = { kind: 'bricks', basePath, metadata, timepoint, onProgress, options };
+      }
       _clearTransitionVolume();
-      window._loggedWriteBrick = 0;
-      _dirtyRegions = [];
       if (options.qualityMode) {
         _currentQualityMode = options.qualityMode;
       } else if (options.quality) {
@@ -5534,313 +6143,235 @@ const VolumeViewer = (() => {
     }
     try {
       const quality = _normalizeQualityKey(options.quality || '1024x1024');
+      const shownQuality = isPreview ? options._previewOf : quality;
       // A prefetch is silent: _qualityState is a single merged singleton and the
       // progress overlay's visibility keys off a regex on its message, so emitting
       // from the background would flash the overlay once per prefetched frame.
       const emitState = preload ? (() => {}) : _emitQualityState;
-      const scheduleFrame = preload ? (() => {}) : _scheduleFrame;
-      const deferActivation = Boolean(options.deferActivation && _activeVolumeEntry && (_activeVolumeEntry.textures || _activeVolumeEntry.data));
-      const perfId = _perf()?.start('volume.load.bricks', {
-      quality,
-      timepoint
-    });
-    if (typeof BrickLoader === 'undefined') {
-      _perf()?.end(perfId, { status: 'unavailable', reason: 'BrickLoader unavailable' });
-      return { available: false, reason: 'BrickLoader unavailable' };
-    }
-    if (!preload) _qualityTarget = quality;
-    const cacheKey = _volumeCacheKey(basePath, quality, timepoint);
-    const cached = options.ignoreVolumeCache ? null : _getCachedVolume(cacheKey);
-    if (cached) {
-      if (preload) {
-        _perf()?.end(perfId, { status: 'ok', fromCache: true, quality, preload: true });
-        return { stale: false, available: true, cached: true, quality, preload: true };
-      }
-      _activateVolumeEntry(cached, metadata, cached.sourceDepth, cached.sourceWidth, cached.channels, options);
-      emitState({ active: quality, mode: 'bricks', progress: 1, message: `${quality} ready from cache` });
-      onProgress?.(1, quality);
-      _perf()?.end(perfId, {
-        status: 'ok',
-        fromCache: true,
-        quality,
-        width: cached.width,
-        height: cached.height,
-        depth: cached.depth
-      });
-      return {
-        stale: false,
-        available: true,
-        quality,
-        width: cached.width,
-        height: cached.height,
-        depth: cached.depth,
-        lod: cached.lod,
-        requestedLod: cached.requestedLod,
-        downgraded: Boolean(cached.downgraded),
-        successfulLoads: cached.successfulLoads || 0,
-        failedLoads: 0,
-        fromCache: true,
-        physicalSizeUm: _physicalSizeUm,
-        scaleMode: _scaleMode,
-        streamMode: 'bricks',
-        manifest: cached.manifest
+      const firePicture = (info) => {
+        if (preload || typeof options.onFirstPicture !== 'function') return;
+        try { options.onFirstPicture(info); } catch (err) { console.warn('[VolumeViewer] onFirstPicture failed:', err); }
       };
-    }
-    // Read, not bump: the prefetch inherits the current id, so the moment a display
-    // load starts (and bumps it) every existing `loadId !== _loadCounter` guard
-    // aborts the prefetch. The foreground preempts the background for free.
-    const loadId = preload ? _loadCounter : ++_loadCounter;
-    const brickDir = metadata?.qualities?.native?.directory || 'bricks';
-    let manifest;
-    try {
-      manifest = await _fetchBrickManifest(`${basePath}/${brickDir}`);
-    } catch (err) {
-      _perf()?.end(perfId, {
-        status: 'unavailable',
-        quality,
-        reason: err.message || String(err)
-      });
-      return { available: false, reason: err.message || String(err) };
-    }
-
-    const tpSelection = _selectBrickManifestForTimepoint(manifest, timepoint);
-    if (!tpSelection.available) {
-      _perf()?.end(perfId, {
-        status: 'unavailable',
-        quality,
-        reason: tpSelection.reason
-      });
-      return { available: false, reason: tpSelection.reason };
-    }
-    BrickLoader.configure?.({
-      concurrentLoads: options.concurrency || _brickConcurrencyForQuality(quality),
-      verifyHashes: Boolean(options.verifyHashes ?? window.IRIBHM_VERIFY_BRICK_HASHES)
-    });
-    try {
-      BrickLoader.init(`${basePath}/${brickDir}${tpSelection.subPath ? `/${tpSelection.subPath}` : ''}`, tpSelection.manifest);
-    } catch (err) {
-      // ELE-21: a rejected (malformed) manifest degrades to the {available:false}
-      // contract (Rule 1.1/1.4) instead of an opaque throw.
-      console.error('[VolumeViewer] Brick manifest rejected:', err);
-      _perf()?.event('volume.bricks.manifest_rejected', { quality, reason: err.message });
-      return { available: false, reason: err.message };
-    }
-    // Its OWN abort slot: a prefetch must never clear the foreground's.
-    const abortSlot = { cancelled: false, loadId };
-    if (!preload) _brickStreamAbort = abortSlot;
-    else _preloadStreamAbort = abortSlot;
-    const abortRef = abortSlot;
-    const levelCount = tpSelection.manifest.levels ? (Array.isArray(tpSelection.manifest.levels) ? tpSelection.manifest.levels.length : Object.keys(tpSelection.manifest.levels).length) : 1;
-    let lod = _lodForQuality(quality, levelCount, tpSelection.manifest.levels);
-    // CAP-008: remember the LOD the requested quality maps to, so the caller can detect
-    // (and surface) a capacity/VRAM-driven downgrade to a coarser LOD than asked for.
-    const requestedLod = lod;
-    let dims = BrickLoader.getDimensions(lod);
-    
-    const maxTextureSize = renderer?.capabilities?.max3DTextureSize || 2048;
-    
-    let textures = [];
-    let texture3D = null;
-    let rgbaData = null;
-    let streamSvrManager = null;
-    let allocated = false;
-    let width, height, depth;
-    const channels = Math.min(4, dims.channels || 1);
-    const minNorm = { x: 0, y: 0, z: 0 };
-    const maxNorm = { x: 0.9999, y: 0.9999, z: 0.9999 };
-    let allBricks = [];
-
-    while (!allocated && dims && lod < levelCount) {
-      const lodBeforeCapacityCheck = lod;
-      width = dims.x;
-      height = dims.y;
-      depth = dims.z;
-      // A single-channel dataset fills only the R component, so an RGBA8 texture is
-      // three quarters padding — 58 MiB instead of 15 MiB per timepoint on the reference
-      // 4D series, re-allocated on every frame switch and capping how many timepoints
-      // stay resident. Allocate one RedFormat texture instead.
-      //
-      // Everything downstream already handles a scalar texture: _writeBrick branches on
-      // _isRgbaTexture, _extractTextureRegionData computes stride = rgba ? 4 : 1,
-      // _compactScalarBrickData exists, and _computeChannelHistograms has a non-RGBA
-      // path. The shader needs no change either: sampling RedFormat yields
-      // vec4(r, 0, 0, 1), channel 0 reads val.r, and channels 1-3 are compiled OUT
-      // because _recompileShaderForActiveChannels gates ENABLE_CHANNEL_n on
-      // numChannels > n — without that the alpha of 1.0 would paint the volume white.
-      //
-      // Excluded when the bricks arrive RGBA-interleaved (raw-rgba-gzip): that transport
-      // writes four components at once through _writeRgbaBrick.
-      const rgbaTransport = BrickLoader.getTransportEncoding?.() === 'raw-rgba-gzip';
-      const scalarTexture = channels === 1 && !rgbaTransport;
-      const bytesPerVoxel = scalarTexture ? 1 : RGBA_TEXTURE_BYTES_PER_VOXEL;
-      const rgbaByteLength = width * height * depth * bytesPerVoxel;
-      const useSVR = (
-        dims.x > maxTextureSize ||
-        dims.y > maxTextureSize ||
-        dims.z > maxTextureSize ||
-        rgbaByteLength >= MONOLITHIC_RGBA_LIMIT_BYTES
-      );
-      // A prefetch NEVER takes the SVR path: it would claim _svrManager and the
-      // material defines of the volume on screen, and _shouldCacheVolumeEntry would
-      // throw the entry away at native anyway — paid for, then discarded.
-      if (preload && useSVR) {
-        _perf()?.end(perfId, { status: 'unavailable', reason: 'svr', quality });
-        return { available: false, reason: 'svr' };
+      let deferActivation = Boolean(options.deferActivation && _activeVolumeEntry && (_activeVolumeEntry.textures || _activeVolumeEntry.data));
+      const perfId = _perf()?.start('volume.load.bricks', { quality, timepoint });
+      if (typeof BrickLoader === 'undefined') {
+        _perf()?.end(perfId, { status: 'unavailable', reason: 'BrickLoader unavailable' });
+        return { available: false, reason: 'BrickLoader unavailable' };
       }
-      const SVRClass = useSVR
-        ? (window.SVRManager || (typeof SVRManager !== 'undefined' ? SVRManager : null))
-        : null;
-      allBricks = BrickLoader.bricksForRegion(minNorm, maxNorm, lod);
-      const MAX_ALLOWED_BRICKS = SVRClass ? SVRClass.estimateMaxSlots(renderer) : 4096;
-
-      let activeBricksCount = allBricks.filter(brick => 
-        BrickLoader.hasBrick(brick.bx, brick.by, brick.bz, lod)
-      ).length;
-
-      while (activeBricksCount > MAX_ALLOWED_BRICKS && lod < levelCount - 1) {
-        console.warn(`[VolumeViewer] LOD${lod} brick set (${activeBricksCount} active out of ${allBricks.length}) exceeds capacity (${MAX_ALLOWED_BRICKS}); downgrading to LOD${lod + 1}.`);
-        lod++;
-        dims = BrickLoader.getDimensions(lod);
-        allBricks = BrickLoader.bricksForRegion(minNorm, maxNorm, lod);
-        activeBricksCount = allBricks.filter(brick => 
-          BrickLoader.hasBrick(brick.bx, brick.by, brick.bz, lod)
-        ).length;
+      if (!preload && !isPreview) _qualityTarget = quality;
+      const cacheKey = _volumeCacheKey(basePath, quality, timepoint);
+      const cached = options.ignoreVolumeCache ? null : _getCachedVolume(cacheKey);
+      if (cached) {
+        if (preload) {
+          _perf()?.end(perfId, { status: 'ok', fromCache: true, quality, preload: true });
+          return { stale: false, available: true, cached: true, quality, preload: true };
+        }
+        _activateVolumeEntry(cached, metadata, cached.sourceDepth, cached.sourceWidth, cached.channels, options);
+        emitState({ active: shownQuality, mode: 'bricks', progress: 1, message: `${quality} ready from cache` });
+        onProgress?.(1, quality);
+        if (!deferActivation) firePicture({ quality, lod: cached.lod, preview: isPreview, fromCache: true });
+        _perf()?.end(perfId, { status: 'ok', fromCache: true, quality, width: cached.width, height: cached.height, depth: cached.depth });
+        return {
+          stale: false,
+          available: true,
+          quality,
+          width: cached.width,
+          height: cached.height,
+          depth: cached.depth,
+          lod: cached.lod,
+          requestedLod: cached.requestedLod,
+          downgraded: Boolean(cached.downgraded),
+          downgradeReason: cached.downgradeReason || null,
+          successfulLoads: cached.successfulLoads || 0,
+          failedLoads: 0,
+          missingBricks: 0,
+          degraded: false,
+          fromCache: true,
+          physicalSizeUm: _physicalSizeUm,
+          scaleMode: _scaleMode,
+          streamMode: 'bricks',
+          manifest: cached.manifest
+        };
       }
-      if (lod !== lodBeforeCapacityCheck) continue;
-
+      // Read, not bump: the prefetch inherits the current id, so the moment a display
+      // load starts (and bumps it) every `loadId !== _loadCounter` guard aborts the
+      // prefetch. A coarse preview shares the id of the load it previews.
+      const loadId = preload ? _loadCounter : (isPreview ? options._sharedLoadId : ++_loadCounter);
+      const epoch = _contextEpoch;
+      const brickDir = metadata?.qualities?.native?.directory || 'bricks';
+      let manifest;
       try {
-        const texturePerfId = _perf()?.start('texture.upload.prepare', { mode: 'bricks', quality, width, height, depth });
-        
-        if (useSVR) {
-          // Use SVR
-          if (!SVRClass) throw new Error('SVRManager unavailable: js/core/svr-manager.js must be loaded before volume-viewer.js');
-          if (!deferActivation && _svrManager) {
-            if (!_isSvrManagerCached(_svrManager)) _svrManager.dispose();
-            _svrManager = null;
-          }
-          streamSvrManager = new SVRClass();
-          if (!deferActivation) _svrManager = streamSvrManager;
-          const svrMaterial = deferActivation
-            ? (_transitionMaterial || _beginTransitionVolume(null, channels))
-            : material;
-          streamSvrManager.init(channels, dims, renderer, svrMaterial, { targetSlots: activeBricksCount });
-          const currentActiveCount = allBricks.filter(brick => 
-            BrickLoader.hasBrick(brick.bx, brick.by, brick.bz, lod)
-          ).length;
-          if (currentActiveCount > streamSvrManager.maxSlots && lod < levelCount - 1) {
-            console.warn(`[VolumeViewer] LOD${lod} brick set (${currentActiveCount} active) exceeds allocated SVR capacity (${streamSvrManager.maxSlots}); downgrading to LOD${lod + 1}.`);
-            streamSvrManager.dispose();
-            if (streamSvrManager === _svrManager) _svrManager = null;
-            streamSvrManager = null;
-            lod++;
-            dims = BrickLoader.getDimensions(lod);
-            continue;
-          }
-          textures = streamSvrManager.atlases;
-          texture3D = textures[0] || null;
-          rgbaData = null;
-        } else {
-          // Use Monolithic
-          if (material && material.defines.ENABLE_SVR) {
-            delete material.defines.ENABLE_SVR;
-            material.needsUpdate = true;
-          }
-          if (_svrManager) {
-            if (!_isSvrManagerCached(_svrManager)) _svrManager.dispose();
-            _svrManager = null;
-          }
-          const TextureClass = THREE.Data3DTexture || THREE.DataTexture3D;
-          rgbaData = new Uint8Array(rgbaByteLength);
-          texture3D = new TextureClass(rgbaData, width, height, depth);
-          texture3D.format = scalarTexture ? THREE.RedFormat : THREE.RGBAFormat;
-          texture3D.type = THREE.UnsignedByteType;
-          texture3D.minFilter = THREE.LinearFilter;
-          texture3D.magFilter = THREE.LinearFilter;
-          texture3D.unpackAlignment = 1;
-          texture3D.needsUpdate = true;
-          if (renderer) {
-              const t0 = performance.now();
-              const _gl = renderer.getContext();
-              // MONO-3DTEX: drain pre-existing GL errors so the post-alloc read reflects
-              // only this allocation, then check whether ANGLE accepted the 3D texture.
-              while (_gl.getError() !== _gl.NO_ERROR) { /* drain stale errors */ }
-              renderer.initTexture(texture3D);
-              const _allocErr = _gl.getError();
-              const t1 = performance.now();
-              console.log(`[PERF-INIT] RGBA volume allocated in ${(t1-t0).toFixed(2)}ms (${Math.round(rgbaByteLength / 1024 / 1024)} MiB)`);
-              if (_allocErr !== _gl.NO_ERROR) {
-                  // ANGLE/D3D11 can reject a large single TEXTURE_3D without throwing
-                  // ("glTexStorage3D: too large"). initTexture leaves no backing storage,
-                  // so without this check __webglInit would be set on a storage-less texture
-                  // and subsequent brick texSubImage3D uploads would write into uninitialised
-                  // GPU memory (pink). Throw so the catch downgrades the LOD (rule 1.1).
-                  // Release THIS texture before unwinding: it is not in `textures` yet,
-                  // so the catch below cannot see it, and ANGLE may well have reserved
-                  // part of it. Leaking here is what turns one rejection into a spiral.
-                  texture3D.dispose();
-                  throw new Error(`monolithic 3D texture allocation failed (glError=${_allocErr}, ${width}x${height}x${depth}, ${Math.round(rgbaByteLength / 1024 / 1024)} MiB)`);
-              }
-              const properties = renderer.properties.get(texture3D);
-              const webglTexture = properties?.__webglTexture;
-              if (webglTexture) {
-                  properties.__webglInit = true;
-                  properties.__version = texture3D.version;
-              }
-          }
-          texture3D.needsUpdate = false; // Prevent Three.js from attempting full texture upload
-          textures.push(texture3D);
-        }
-        _perf()?.end(texturePerfId, { status: 'ok' });
-        allocated = true;
+        manifest = await _fetchBrickManifest(`${basePath}/${brickDir}`);
       } catch (err) {
-        // Dropping the array does NOT free the GPU side: three only releases a
-        // WebGLTexture on dispose(), so a texture that WAS allocated before ANGLE
-        // rejected the next one leaked its whole footprint (52 MiB here) for the life
-        // of the renderer — and each leak makes the next allocation likelier to fail.
-        textures.forEach(t => t?.dispose?.());
-        textures = [];
-        if (streamSvrManager && streamSvrManager !== _svrManager) {
-          streamSvrManager.dispose();
-          streamSvrManager = null;
-        }
-        if (_svrManager && streamSvrManager === _svrManager) {
-          if (!_isSvrManagerCached(_svrManager)) _svrManager.dispose();
-          _svrManager = null;
-          streamSvrManager = null;
-        }
-        console.warn(`[VolumeViewer] Texture allocation failed for LOD${lod} (${width}x${height}x${depth}). Downgrading...`, err);
-        lod++;
-        dims = BrickLoader.getDimensions(lod);
+        _perf()?.end(perfId, { status: 'unavailable', quality, reason: err.message || String(err) });
+        return { available: false, reason: err.message || String(err) };
       }
-    }
+      if (loadId !== _loadCounter) {
+        _perf()?.end(perfId, { status: 'stale', quality });
+        return { stale: true };
+      }
 
-    if (!allocated || !dims) {
-      _perf()?.end(perfId, {
-        status: 'unavailable',
-        quality,
-        reason: 'Out of memory or invalid dimensions'
+      const tpSelection = _selectBrickManifestForTimepoint(manifest, timepoint);
+      if (!tpSelection.available) {
+        _perf()?.end(perfId, { status: 'unavailable', quality, reason: tpSelection.reason });
+        return { available: false, reason: tpSelection.reason };
+      }
+      BrickLoader.configure?.({
+        concurrentLoads: options.concurrency || _brickConcurrencyForQuality(quality),
+        verifyHashes: Boolean(options.verifyHashes ?? window.IRIBHM_VERIFY_BRICK_HASHES)
       });
-      return { available: false, reason: 'Insufficient memory for all resolutions' };
-    }
-    
-    const streamBricks = allBricks.filter(brick => BrickLoader.hasBrick(brick.bx, brick.by, brick.bz, lod));
-    const orderedBricks = _orderBricksForStreaming(streamBricks, dims);
-    console.log(`[VolumeViewer] Streaming LOD${lod}: ${orderedBricks.length} active bricks out of ${allBricks.length} logical bricks.`);
-    
-    let occTex = null;
-    let occScale = null;
-    if (tpSelection.manifest?.levels?.[lod]) {
-      const lvl = tpSelection.manifest.levels[lod];
-      const grid = lvl.gridSize;
-      if (grid) {
-        const occNx = grid.x || 1;
-        const occNy = grid.y || 1;
-        const occNz = grid.z || 1;
+      try {
+        BrickLoader.init(`${basePath}/${brickDir}${tpSelection.subPath ? `/${tpSelection.subPath}` : ''}`, tpSelection.manifest);
+      } catch (err) {
+        // ELE-21: a rejected (malformed) manifest degrades to the {available:false}
+        // contract (Rule 1.1/1.4) instead of an opaque throw.
+        console.error('[VolumeViewer] Brick manifest rejected:', err);
+        _perf()?.event('volume.bricks.manifest_rejected', { quality, reason: err.message });
+        return { available: false, reason: err.message };
+      }
+      const levels = tpSelection.manifest.levels;
+      const levelCount = levels ? (Array.isArray(levels) ? levels.length : Object.keys(levels).length) : 1;
+      const requestedLod = _lodForQuality(quality, levelCount, levels);
+
+      // ── Coarse level first ─────────────────────────────────────────────────────
+      let previewLod = null;
+      if (options.coarseFirst && !preload && !isPreview && !deferActivation && levelCount > 1 && requestedLod < levelCount - 1) {
+        const coarse = levelCount - 1;
+        emitState({ target: _qualityTarget, active: quality, mode: 'bricks', progress: 0, message: `Streaming preview (LOD${coarse}) before ${quality}...` });
+        const preview = await loadBrickedVolumeStream(basePath, metadata, timepoint, null, {
+          ...options,
+          quality: `lod${coarse}`,
+          coarseFirst: false,
+          deferActivation: false,
+          onFirstPicture: null,
+          _previewOf: quality,
+          _sharedLoadId: loadId
+        });
+        if (loadId !== _loadCounter || epoch !== _contextEpoch) {
+          _perf()?.end(perfId, { status: 'stale', quality });
+          return preview?.contextLost ? preview : { stale: true };
+        }
+        if (preview?.available && _activeVolumeEntry) {
+          previewLod = coarse;
+          deferActivation = true;
+          firePicture({ quality, lod: coarse, preview: true, fromCache: Boolean(preview.fromCache) });
+        }
+      }
+
+      // A stream that replaces the volume on screen at once frees it first, so the
+      // budget check below is made without it.
+      if (!preload && !deferActivation) _detachActiveVolume();
+
+      // Its OWN abort slot: a prefetch must never clear the foreground's.
+      const abortSlot = { cancelled: false, loadId, controller: typeof AbortController === 'function' ? new AbortController() : null };
+      if (!preload) _brickStreamAbort = abortSlot;
+      else _preloadStreamAbort = abortSlot;
+      const stopped = () => abortSlot.cancelled || loadId !== _loadCounter || epoch !== _contextEpoch;
+
+      // ── Level and texture, within the GPU budget ────────────────────────────────
+      const max3D = renderer?.capabilities?.max3DTextureSize || 2048;
+      const rgbaTransport = BrickLoader.getTransportEncoding?.() === 'raw-rgba-gzip';
+      const SVRClass = typeof SVRManager !== 'undefined' ? SVRManager : (window.SVRManager || null);
+      let lod = requestedLod;
+      let dims = null;
+      let texture3D = null;
+      let streamSvrManager = null;
+      let footprint = null;
+      let downgradeReason = null;
+      let firstRefusal = null;
+      const budget = _gpuBudgetBytes();
+      for (;;) {
+        const candidates = [];
+        for (let l = lod; l < levelCount; l++) {
+          const fp = _levelFootprint(l, { max3D, rgbaTransport, budget });
+          if (fp) candidates.push(fp);
+        }
+        const pinned = _pinnedGpuBytes();
+        // Nothing on screen and nothing else to show: the coarsest level is attempted
+        // even over the heuristic budget (only the GPU refusing it ends the load).
+        const choice = _chooseStreamLevel(candidates, { available: budget - pinned, preload, lastResort: !preload && !deferActivation });
+        for (const s of choice.skipped) {
+          if (!firstRefusal) firstRefusal = s;
+          downgradeReason = downgradeReason || s.reason;
+          if (s.reason === 'vram-budget') {
+            emitState({ message: `${quality}: LOD${s.lod} needs ${_mib(s.bytes)} MiB of GPU memory (budget ${_mib(budget - pinned)} MiB) — trying LOD${s.lod + 1}...` });
+          }
+        }
+        if (!choice.level) {
+          const reason = preload && choice.skipped.some(s => s.reason === 'svr-preload') ? 'svr' : 'Insufficient GPU memory for every level';
+          _perf()?.end(perfId, { status: 'unavailable', quality, reason });
+          if (!preload) emitState({ message: `${quality}: no level fits the GPU memory budget (${_mib(budget)} MiB)` });
+          return { available: false, reason, budgetBytes: budget, neededBytes: firstRefusal?.bytes || null };
+        }
+        footprint = choice.level;
+        lod = footprint.lod;
+        dims = BrickLoader.getDimensions(lod);
+        if (preload && footprint.bytes > budget - _residentGpuBytes()) {
+          _perf()?.end(perfId, { status: 'unavailable', reason: 'budget', quality });
+          return { available: false, reason: 'budget' };
+        }
+        if (!preload) _freeGpuFor(footprint.bytes);
+        const texturePerfId = _perf()?.start('texture.upload.prepare', { mode: 'bricks', quality, width: dims.x, height: dims.y, depth: dims.z });
+        try {
+          if (footprint.mode === 'svr') {
+            if (!SVRClass) throw new Error('SVRManager unavailable: js/core/svr-manager.js must be loaded before volume-viewer.js');
+            const svrMaterial = deferActivation
+              ? (_transitionMaterial || _beginTransitionVolume(null, footprint.channels))
+              : material;
+            streamSvrManager = new SVRClass();
+            streamSvrManager.init(footprint.channels, dims, renderer, svrMaterial, {
+              // ≥ 2: a single slot would read as "no target" (largest layout the budget allows).
+              targetSlots: Math.max(2, footprint.activeBricks),
+              // Dense textures are not SVR managers: the budget left for atlases is
+              // the page's budget minus them (init subtracts the other live atlases).
+              budgetBytes: Math.max(0, budget - (_residentGpuBytes() - SVRClass.liveAtlasBytes())),
+              ignoreBudget: Boolean(footprint.overBudget)
+            });
+          } else {
+            texture3D = _allocMonolithicTexture(dims.x, dims.y, dims.z, footprint.scalar);
+          }
+          _perf()?.end(texturePerfId, { status: 'ok' });
+          break;
+        } catch (err) {
+          _perf()?.end(texturePerfId, { status: 'error' });
+          streamSvrManager?.dispose?.();
+          streamSvrManager = null;
+          texture3D = null;
+          const reason = err?.code === 'SVR_OVER_BUDGET' ? 'vram-budget' : 'alloc-failed';
+          downgradeReason = downgradeReason || reason;
+          if (!firstRefusal) firstRefusal = { lod, bytes: footprint.bytes, reason };
+          console.warn(`[VolumeViewer] Texture allocation failed for LOD${lod} (${dims.x}x${dims.y}x${dims.z}, ${_mib(footprint.bytes)} MiB): ${err?.message || err}`);
+          emitState({ message: `${quality}: LOD${lod} could not be allocated on the GPU (${_mib(footprint.bytes)} MiB) — trying LOD${lod + 1}...` });
+          lod++;
+          if (lod >= levelCount) {
+            _perf()?.end(perfId, { status: 'unavailable', quality, reason: 'Out of GPU memory' });
+            emitState({ message: `${quality}: out of GPU memory at every level` });
+            return { available: false, reason: 'Insufficient GPU memory for every level', budgetBytes: budget };
+          }
+        }
+      }
+      if (lod === requestedLod) downgradeReason = null;
+
+      const width = dims.x;
+      const height = dims.y;
+      const depth = dims.z;
+      const channels = footprint.channels;
+      const streamBricks = BrickLoader.activeBricks(lod);
+      const extentUm = computePhysicalScale(metadata, Number(metadata.dimensions?.z) || depth, Number(metadata.dimensions?.x) || width).physicalSizeUm;
+      const orderedBricks = _orderBricksForStreaming(streamBricks, dims, extentUm);
+      console.log(`[VolumeViewer] Streaming LOD${lod}: ${orderedBricks.length} active bricks (${footprint.mode}, ${_mib(footprint.bytes)} MiB).`);
+
+      let occTex = null;
+      let occScale = null;
+      if (!streamSvrManager) {
+        // Per-brick occupancy of the dense texture: the march jumps over empty bricks.
+        const bs = VOLUME_BRICK_SIZE;
+        const occNx = Math.max(1, Math.ceil(width / bs));
+        const occNy = Math.max(1, Math.ceil(height / bs));
+        const occNz = Math.max(1, Math.ceil(depth / bs));
         const occData = new Uint8Array(occNx * occNy * occNz);
         for (const b of orderedBricks) {
-           if (b.bx < occNx && b.by < occNy && b.bz < occNz) {
-             occData[b.bz * occNx * occNy + b.by * occNx + b.bx] = 255;
-           }
+          if (b.bx < occNx && b.by < occNy && b.bz < occNz) occData[(b.bz * occNy + b.by) * occNx + b.bx] = 255;
         }
         const TextureClass = THREE.Data3DTexture || THREE.DataTexture3D;
         occTex = new TextureClass(occData, occNx, occNy, occNz);
@@ -5850,380 +6381,243 @@ const VolumeViewer = (() => {
         occTex.magFilter = THREE.NearestFilter;
         occTex.unpackAlignment = 1;
         occTex.needsUpdate = true;
-        // OCC-Z: the occupancy grid spans gridDim*brickSize voxels, which OVER-covers the
-        // volume when an axis is not a multiple of brickSize (partial last brick). Scale
-        // the normalized sample coord by volumeDim/(brickSize*gridDim) so NEAREST selects
-        // texel floor(voxel/brickSize) == the brick coord. For aligned axes this is 1.0.
-        const bs = dims.brickSize || VOLUME_BRICK_SIZE;
-        occScale = new THREE.Vector3(
-          width / (bs * occNx),
-          height / (bs * occNy),
-          depth / (bs * occNz)
-        );
+        // OCC-Z: the grid spans gridDim·brickSize voxels, which OVER-covers the volume
+        // when an axis is not a multiple of brickSize; volumeDim/(brickSize·gridDim)
+        // maps a texture coordinate to the grid so a cell is exactly a brick.
+        occScale = new THREE.Vector3(width / (bs * occNx), height / (bs * occNy), depth / (bs * occNz));
       }
-    }
 
-    const totalOps = Math.max(1, orderedBricks.length * channels);
-    let doneOps = 0;
-    const floors = _floorsFromManifest(tpSelection.manifest, channels, tpSelection.histograms);
-    const floorLuts = _floorLuts(floors, channels);
-    const manifestHistograms = _manifestHistograms(tpSelection.histograms, channels);
-    emitState({
-      target: _qualityTarget,
-      active: quality,
-      mode: 'bricks',
-      progress: 0,
-      message: `Streaming ${quality} bricks...`
-    });
-    if (onProgress) onProgress(0, quality);
-    await _yieldToPaint();
-    
-    const streamEntry = {
-      key: cacheKey,
-      textures: textures,
-      texture: texture3D || textures[0] || null,
-      data: rgbaData,
-      occupancyMap: occTex,
-      occupancyScale: occScale,
-      width,
-      height,
-      depth,
-      sourceWidth: Number(metadata.dimensions?.x) || width,
-      sourceHeight: Number(metadata.dimensions?.y) || height,
-      sourceDepth: Number(metadata.dimensions?.z) || depth,
-      channels,
-      zIndices: Array.from({ length: depth }, (_, idx) => idx),
-      basePath,
-      timepoint,
-      quality,
-      lod,
-      requestedLod,
-      downgraded: lod !== requestedLod,
-      successfulLoads: 0,
-      failedLoads: 0,
-      svrManager: streamSvrManager || null,
-      manifest: tpSelection.manifest,
-      histograms: manifestHistograms.length
-        ? manifestHistograms
-        : (_channelHistograms?.length ? _channelHistograms : [])
-    };
+      const floors = _floorsFromManifest(tpSelection.manifest, channels, tpSelection.histograms);
+      const floorLuts = _floorLuts(floors, channels);
+      const manifestHistograms = _manifestHistograms(tpSelection.histograms, channels);
+      const textures = streamSvrManager ? streamSvrManager.atlases : [texture3D];
+      const streamEntry = {
+        key: cacheKey,
+        textures,
+        texture: texture3D || textures[0] || null,
+        data: null,
+        occupancyMap: occTex,
+        occupancyScale: occScale,
+        width,
+        height,
+        depth,
+        stride: footprint.scalar ? 1 : RGBA_TEXTURE_BYTES_PER_VOXEL,
+        gpuBytes: streamSvrManager ? undefined : footprint.bytes,
+        sourceWidth: Number(metadata.dimensions?.x) || width,
+        sourceHeight: Number(metadata.dimensions?.y) || height,
+        sourceDepth: Number(metadata.dimensions?.z) || depth,
+        channels,
+        zIndices: Array.from({ length: depth }, (_, idx) => idx),
+        basePath,
+        timepoint,
+        quality,
+        lod,
+        requestedLod,
+        downgraded: lod !== requestedLod,
+        downgradeReason,
+        successfulLoads: 0,
+        failedLoads: 0,
+        svrManager: streamSvrManager || null,
+        manifest: tpSelection.manifest,
+        histograms: manifestHistograms.length
+          ? manifestHistograms
+          : (_channelHistograms?.length ? _channelHistograms : _emptyHistograms(channels)),
+        histogramsExact: manifestHistograms.length > 0
+      };
 
-    if (deferActivation) {
-      if (!_transitionMaterial) _beginTransitionVolume(null, channels);
-      _bindTransitionEntry(streamEntry, channels);
-      // On a TIMEPOINT change the transition cube is what the user watches fill in,
-      // brick by brick, on top of the previous frame — that is the "chunks loading"
-      // they see, and during playback it is pure noise. Hidden, the finished frame
-      // swaps in atomically at the end (_storeVolumeCache → _activateVolumeEntry).
-      // The cube itself must still EXIST: on the SVR path its material is the atlas
-      // upload target (svrMaterial). A manual quality switch keeps it visible — there
-      // the progressive fill is the only feedback the operator gets.
-      if (options.hideTransition && _transitionCube) _transitionCube.visible = false;
-    }
-
-    if (!preload && Boolean(_activeVolumeEntry && _activeVolumeEntry.textures) && textures.length > 1) {
+      const totalBricks = orderedBricks.length;
       emitState({
         target: _qualityTarget,
-        active: quality,
+        active: shownQuality,
         mode: 'bricks',
         progress: 0,
-        message: `Initializing ${quality}...`
+        message: isPreview
+          ? `Streaming preview (LOD${lod}, ${totalBricks} bricks) before ${shownQuality}...`
+          : `Streaming ${quality} bricks (LOD${lod}, ${totalBricks} bricks)...`
       });
-      await new Promise(resolve => {
-        _seedTexturesFromActiveAsync(textures, width, height, depth, channels, loadId, abortRef, resolve);
-      });
-    }
+      _resetThrottledProgress();
+      if (onProgress) onProgress(0, quality);
+      await _yieldToPaint();
 
-    if (!deferActivation && !preload) {
-      _activateVolumeEntry(streamEntry, metadata, streamEntry.sourceDepth, streamEntry.sourceWidth, channels, { ...options, fitCamera: !_hasLoadedVolume });
-    }
-    const rgbaBrickTransport = BrickLoader.getTransportEncoding?.() === 'raw-rgba-gzip';
-    const streamTasks = [];
-    if (rgbaBrickTransport) {
-      for (const brick of orderedBricks) {
-        streamTasks.push({ ...brick, channel: -1, lod });
+      // The cross-fade this stream fills, if any: only it is cleared by this stream (a
+      // stream that superseded this one may already show its own).
+      let ownTransition = null;
+      const clearOwnTransition = () => {
+        if (ownTransition && _transitionMaterial === ownTransition) _clearTransitionVolume();
+        ownTransition = null;
+      };
+      if (deferActivation) {
+        if (!_transitionMaterial) _beginTransitionVolume(null, channels);
+        _bindTransitionEntry(streamEntry, channels);
+        ownTransition = _transitionMaterial;
+        // On a TIMEPOINT change the transition cube is what the user watches fill in,
+        // brick by brick, on top of the previous frame; during playback it is pure
+        // noise. Hidden, the finished frame swaps in atomically at the end. The cube
+        // itself must still EXIST: on the SVR path its material is the atlas's.
+        if (options.hideTransition && _transitionCube) _transitionCube.visible = false;
+      } else if (!preload) {
+        _activateVolumeEntry(streamEntry, metadata, streamEntry.sourceDepth, streamEntry.sourceWidth, channels, { ...options, fitCamera: !_hasLoadedVolume });
       }
-    } else {
-      for (const brick of orderedBricks) {
-        for (let c = 0; c < channels; c++) {
-          streamTasks.push({ ...brick, channel: c, lod });
-        }
-      }
-    }
-    const effectiveTotalOps = Math.max(1, streamTasks.length);
-    let lastTextureUploadAt = Date.now();
-    let opsSinceTextureUpload = 0;
-    const pendingScalarBricks = new Map();
-    const streamStats = {
-      startedAt: performance.now?.() || Date.now(),
-      lastLogAt: performance.now?.() || Date.now(),
-      lastDoneOps: 0,
-      lastRgbaChunks: 0,
-      rgbaChunks: 0
-    };
-    const uploadEveryMs = BRICK_TEXTURE_UPDATE_MS[quality] || 900;
-    const uploadEveryOps = BRICK_TEXTURE_UPDATE_OPS[quality] || 24;
-    const maybeLogStreamStats = () => {
-      const now = performance.now?.() || Date.now();
-      if ((now - streamStats.lastLogAt) < 2000) return;
-      const dt = Math.max(0.001, (now - streamStats.lastLogAt) / 1000);
-      const channelRate = (doneOps - streamStats.lastDoneOps) / dt;
-      const chunkRate = (streamStats.rgbaChunks - streamStats.lastRgbaChunks) / dt;
-      console.log(`[VolumeViewer] stream ${quality}: ${streamStats.rgbaChunks}/${orderedBricks.length} chunks, ${doneOps}/${effectiveTotalOps} channel tasks, ${chunkRate.toFixed(1)} chunks/s, ${channelRate.toFixed(1)} channels/s, pending=${pendingScalarBricks.size}`);
-      streamStats.lastLogAt = now;
-      streamStats.lastDoneOps = doneOps;
-      streamStats.lastRgbaChunks = streamStats.rgbaChunks;
-    };
-    const markTextureDirty = (force = false) => {
-      const now = Date.now();
-      if (force || opsSinceTextureUpload >= uploadEveryOps || (now - lastTextureUploadAt) >= uploadEveryMs) {
-        for (const r of _dirtyRegions) {
-          _updateGPUTextureRegion(r.tex, r.dims, r.ox, r.oy, r.oz, r.bw, r.bh, r.bd, r.brickData);
-        }
-        _dirtyRegions = [];
-        scheduleFrame();
-        lastTextureUploadAt = now;
-        opsSinceTextureUpload = 0;
-      }
-    };
 
-    if (streamTasks.length && typeof BrickLoader.loadBrickTasks === 'function') {
-      let failedBricks = 0; // BUG-011: dropped/corrupt bricks for this load
-      await BrickLoader.loadBrickTasks(streamTasks, {
-        concurrency: options.concurrency || _brickConcurrencyForQuality(quality),
-        cancelPrevious: true,
-        preserveOrder: true,
-        streamOnly: true,
-        // Stops the batch the moment this stream is superseded, instead of paying
-        // for every remaining fetch and decode only to throw the result away.
-        shouldAbort: () => abortRef.cancelled || loadId !== _loadCounter,
-        onBrickError: ({ bx, by, bz, channel, error } = {}) => {
-          // BUG-011 (Rule 1.1): a dropped brick must surface as a degraded-quality
-          // status, not vanish silently. The render still degrades gracefully (the
-          // atlas slot keeps its seeded/empty content), but the user is told.
-          if (abortRef.cancelled || loadId !== _loadCounter) return;
-          failedBricks++;
-          console.warn(`[VolumeViewer] brick load failed (${bx},${by},${bz}) ch=${channel}:`, error);
-          emitState({
-            message: `${quality} loaded with ${failedBricks} dropped brick${failedBricks > 1 ? 's' : ''}`
-          });
-        },
-        onBrickLoaded: ({ bx, by, bz, channel, data: brickData }) => {
-          if (abortRef.cancelled || loadId !== _loadCounter) return;
-          if (channel === -1) {
-            if (streamSvrManager && streamSvrManager !== _svrManager) {
-              const bs = dims.brickSize || VOLUME_BRICK_SIZE;
-              const ox = bx * bs;
-              const oy = by * bs;
-              const oz = bz * bs;
-              const bw = Math.min(bs, dims.x - ox);
-              const bh = Math.min(bs, dims.y - oy);
-              const bd = Math.min(bs, dims.z - oz);
-              const uploadData = _applyRgbaBrickLuts(brickData, floorLuts, channels);
-              streamSvrManager.writeRgbaBrick(bx, by, bz, uploadData, bw, bh, bd);
+      // ── Bricks ─────────────────────────────────────────────────────────────────
+      // One composed row per brick (every channel interleaved, the background-floor
+      // LUT applied, cut to the volume at its edges) from the decode workers, uploaded
+      // as it is: no CPU copy of the volume, no per-voxel work on this thread.
+      const brickKey = (b) => `${b.bx}_${b.by}_${b.bz}`;
+      const missing = new Set();
+      const uploadFailed = new Set();
+      if (streamSvrManager) streamSvrManager.onUploadError = (keys) => { for (const k of keys) uploadFailed.add(k); };
+      const glCtx = renderer?.getContext?.();
+      if (!streamSvrManager && glCtx) { for (let i = 0; i < 16 && glCtx.getError() !== glCtx.NO_ERROR; i++) { /* drain: the end check reads this stream's */ } }
+      let delivered = 0;
+      let firstPictureFired = deferActivation || preload;
+      const firstPictureAt = Math.max(1, Math.ceil(totalBricks * FIRST_PICTURE_FRACTION));
+      const bs = VOLUME_BRICK_SIZE;
+      const streamTasks = [];
+      for (const brick of orderedBricks) {
+        if (rgbaTransport) streamTasks.push({ bx: brick.bx, by: brick.by, bz: brick.bz, channel: -1, lod });
+        else for (let c = 0; c < channels; c++) streamTasks.push({ bx: brick.bx, by: brick.by, bz: brick.bz, channel: c, lod });
+      }
+
+      let summary = null;
+      if (streamTasks.length) {
+        const result = await BrickLoader.loadBrickTasks(streamTasks, {
+          concurrency: options.concurrency || _brickConcurrencyForQuality(quality),
+          group: 'stream',
+          streamOnly: true,
+          signal: abortSlot.controller?.signal,
+          // Stops the batch the moment this stream is superseded, instead of paying
+          // for every remaining fetch and decode only to throw the result away.
+          shouldAbort: stopped,
+          compose: { channels, luts: floorLuts, components: footprint.scalar ? 1 : 4, cropToVolume: true },
+          onBrickError: ({ bx, by, bz, channel, error } = {}) => {
+            // BUG-011 (Rule 1.1): a dropped brick surfaces in the status, not silently.
+            if (stopped()) return;
+            missing.add(brickKey({ bx, by, bz }));
+            console.warn(`[VolumeViewer] brick load failed (${bx},${by},${bz}) ch=${channel}:`, error);
+          },
+          onBrickLoaded: (row) => {
+            if (stopped() || !row?.data) return;
+            const r = row.region;
+            const bw = r ? r.x1 - r.x0 : Math.min(bs, width - row.bx * bs);
+            const bh = r ? r.y1 - r.y0 : Math.min(bs, height - row.by * bs);
+            const bd = r ? r.z1 - r.z0 : Math.min(bs, depth - row.bz * bs);
+            let ok;
+            if (streamSvrManager) {
+              ok = streamSvrManager.writeRgbaBrick(row.bx, row.by, row.bz, row.data, bw, bh, bd);
             } else {
-              _writeRgbaBrick(textures, dims, { bx, by, bz }, brickData, floorLuts, channels, !deferActivation);
+              _updateGPUTextureRegion(texture3D, dims, row.bx * bs, row.by * bs, row.bz * bs, bw, bh, bd, row.data);
+              ok = true;
             }
-            streamStats.rgbaChunks++;
-            opsSinceTextureUpload++;
-            markTextureDirty(false);
-          } else {
-            const scalarKey = `${bx}_${by}_${bz}`;
-            let pending = pendingScalarBricks.get(scalarKey);
-            if (!pending) {
-              pending = {
-                bx,
-                by,
-                bz,
-                count: 0,
-                data: new Array(channels)
-              };
-              pendingScalarBricks.set(scalarKey, pending);
-            }
-            if (!pending.data[channel]) {
-              pending.count++;
-            }
-            pending.data[channel] = brickData;
-            if (pending.count >= channels) {
-              const rgbaBrick = _composeRgbaBrickFromScalarChannels(pending.data, floorLuts, channels, dims.brickSize || VOLUME_BRICK_SIZE);
-              if (streamSvrManager) {
-                const bs = dims.brickSize || VOLUME_BRICK_SIZE;
-                const ox = bx * bs;
-                const oy = by * bs;
-                const oz = bz * bs;
-                const bw = Math.min(bs, dims.x - ox);
-                const bh = Math.min(bs, dims.y - oy);
-                const bd = Math.min(bs, dims.z - oz);
-                streamSvrManager.writeRgbaBrick(bx, by, bz, rgbaBrick, bw, bh, bd);
+            if (!ok) uploadFailed.add(brickKey(row));
+            if (row.failedChannels?.length) missing.add(brickKey(row));
+            delivered++;
+            streamEntry.successfulLoads = delivered;
+            if (!preload) {
+              if (!firstPictureFired && delivered >= firstPictureAt) {
+                firstPictureFired = true;
+                _scheduleFrame();
+                firePicture({ quality, lod, preview: isPreview, fromCache: false });
               } else {
-                _writeRgbaBrick(textures, dims, { bx, by, bz }, rgbaBrick, null, channels, !deferActivation);
+                _scheduleStreamRedraw();
               }
-              streamStats.rgbaChunks++;
-              pendingScalarBricks.delete(scalarKey);
-              opsSinceTextureUpload++;
-              if (streamSvrManager) scheduleFrame();
-              markTextureDirty(false);
             }
-          }
-          doneOps++;
-          streamEntry.successfulLoads = doneOps;
-          const progress = Math.max(0, Math.min(1, doneOps / effectiveTotalOps));
-          emitState({ progress });
-          onProgress?.(progress, quality);
-          maybeLogStreamStats();
-        },
-        onProgress: (p) => {
-          const progress = Math.max(0, Math.min(1, Math.max(doneOps / effectiveTotalOps, p)));
-          emitState({ progress });
-          onProgress?.(progress, quality);
-        }
-      });
-    } else if (streamTasks.length) {
-      console.warn('[VolumeViewer] BrickLoader.loadBrickTasks unavailable; using legacy per-channel brick loader.');
-      for (let c = 0; c < channels; c++) {
-        if (abortRef.cancelled || loadId !== _loadCounter) break;
-        const brickData = await BrickLoader.loadBricks(orderedBricks, c, lod, {
-          cancelPrevious: c === 0,
-          onBrickLoaded: ({ bx, by, bz, data }) => {
-            if (abortRef.cancelled || loadId !== _loadCounter) return;
-            if (streamSvrManager && streamSvrManager !== _svrManager) {
-              const bs = dims.brickSize || VOLUME_BRICK_SIZE;
-              const ox = bx * bs;
-              const oy = by * bs;
-              const oz = bz * bs;
-              const bw = Math.min(bs, dims.x - ox);
-              const bh = Math.min(bs, dims.y - oy);
-              const bd = Math.min(bs, dims.z - oz);
-              streamSvrManager.writeBrick(c, bx, by, bz, data, bw, bh, bd);
-            } else {
-              _writeBrick(textures, dims, { bx, by, bz }, c, data, floorLuts[c]);
-            }
-            doneOps++;
-            opsSinceTextureUpload++;
-            streamEntry.successfulLoads = doneOps;
-            markTextureDirty(false);
-            const progress = Math.max(0, Math.min(1, doneOps / totalOps));
-            emitState({ progress });
-            onProgress?.(progress, quality);
           },
           onProgress: (p) => {
-            const progress = Math.max(0, Math.min(1, (c + p) / Math.max(1, channels)));
-            emitState({ progress });
-            onProgress?.(progress, quality);
+            if (stopped()) return;
+            const progress = Math.max(0, Math.min(1, p));
+            if (_emitThrottledProgress(progress, preload)) onProgress?.(progress, quality);
           }
         });
-        if (!streamEntry.successfulLoads && brickData?.size) {
-          for (const { bx, by, bz } of orderedBricks) {
-            const pixels = brickData.get(`${bx}_${by}_${bz}`);
-            if (!pixels) continue;
-            if (streamSvrManager && streamSvrManager !== _svrManager) {
-              const bs = dims.brickSize || VOLUME_BRICK_SIZE;
-              const ox = bx * bs;
-              const oy = by * bs;
-              const oz = bz * bs;
-              const bw = Math.min(bs, dims.x - ox);
-              const bh = Math.min(bs, dims.y - oy);
-              const bd = Math.min(bs, dims.z - oz);
-              streamSvrManager.writeBrick(c, bx, by, bz, pixels, bw, bh, bd);
-            } else {
-              _writeBrick(textures, dims, { bx, by, bz }, c, pixels, floorLuts[c]);
-            }
-            doneOps++;
-            streamEntry.successfulLoads = doneOps;
-          }
-          markTextureDirty(true);
-        }
+        summary = result?.summary || null;
       }
-    }
 
-    if (pendingScalarBricks.size) {
-      for (const pending of pendingScalarBricks.values()) {
-        const rgbaBrick = _composeRgbaBrickFromScalarChannels(pending.data, floorLuts, channels, dims.brickSize || VOLUME_BRICK_SIZE);
-        if (streamSvrManager) {
-          const bs = dims.brickSize || VOLUME_BRICK_SIZE;
-          const ox = pending.bx * bs;
-          const oy = pending.by * bs;
-          const oz = pending.bz * bs;
-          const bw = Math.min(bs, dims.x - ox);
-          const bh = Math.min(bs, dims.y - oy);
-          const bd = Math.min(bs, dims.z - oz);
-          streamSvrManager.writeRgbaBrick(pending.bx, pending.by, pending.bz, rgbaBrick, bw, bh, bd);
+      if (stopped()) {
+        clearOwnTransition();
+        // This entry never reaches the cache: nothing downstream would free it.
+        if (streamEntry !== _activeVolumeEntry) _disposeVolumeEntry(streamEntry);
+        if (epoch !== _contextEpoch) {
+          _perf()?.end(perfId, { status: 'context-lost', quality });
+          // Answered as a load that ended, so the page takes its loader down; the
+          // volume itself comes back from _recoverFromContextLoss.
+          return {
+            stale: false, available: true, contextLost: true, quality, width, height, depth, lod, requestedLod,
+            downgraded: lod !== requestedLod, downgradeReason, successfulLoads: delivered, failedLoads: totalBricks - delivered,
+            missingBricks: totalBricks - delivered, degraded: true, fromCache: false, physicalSizeUm: _physicalSizeUm,
+            scaleMode: _scaleMode, streamMode: 'bricks', manifest: tpSelection.manifest
+          };
+        }
+        emitState({ message: `${shownQuality} streaming cancelled` });
+        _perf()?.end(perfId, { status: 'stale', quality });
+        return { stale: true };
+      }
+
+      // Whatever the batch did not deliver whole is missing: failed tasks, and tasks
+      // a cancellation from outside this stream left undone (a dataset switch).
+      if (summary) {
+        for (const f of summary.failed || []) missing.add(brickKey(f));
+        if (summary.cancelled) for (const s of summary.skipped || []) missing.add(brickKey(s));
+      }
+      if (streamSvrManager) {
+        for (const k of streamSvrManager.flushUploadErrors()) uploadFailed.add(k);
+        streamSvrManager.onUploadError = null;
+      }
+      let uploadError = false;
+      if (!streamSvrManager && glCtx) {
+        const err = glCtx.getError();
+        uploadError = err !== glCtx.NO_ERROR && err !== glCtx.CONTEXT_LOST_WEBGL;
+        if (uploadError) console.warn(`[VolumeViewer] texSubImage3D reported glError=${err} while streaming LOD${lod}: the volume may have holes.`);
+      }
+      for (const k of uploadFailed) missing.add(k);
+      const missingCount = uploadError ? Math.max(missing.size, 1) : missing.size;
+
+      if (streamTasks.length && delivered === 0) {
+        clearOwnTransition();
+        if (streamEntry === _activeVolumeEntry) {
+          // Nothing landed: leave an empty volume on screen rather than a stale one.
+          streamEntry.degraded = true;
         } else {
-          _writeRgbaBrick(textures, dims, { bx: pending.bx, by: pending.by, bz: pending.bz }, rgbaBrick, null, channels, !deferActivation);
+          _disposeVolumeEntry(streamEntry);
         }
-        streamStats.rgbaChunks++;
-        opsSinceTextureUpload++;
-        if (streamSvrManager) scheduleFrame();
+        emitState({ active: shownQuality, mode: 'bricks', progress: 0, message: `${quality} bricks unavailable` });
+        _perf()?.end(perfId, { status: 'unavailable', quality, reason: 'No brick payload could be loaded' });
+        return { available: false, reason: 'No brick payload could be loaded' };
       }
-      pendingScalarBricks.clear();
-      markTextureDirty(true);
-    }
 
-    if (abortRef.cancelled || loadId !== _loadCounter) {
-      if (deferActivation) _clearTransitionVolume();
-      // This entry never reaches the cache, so nothing downstream will ever free it:
-      // only streamSvrManager was released here, leaving the monolithic volume texture
-      // (52 MiB on the reference series) and the occupancy map stranded on the GPU for
-      // every cancelled stream — and a prefetcher cancels a great many.
-      _disposeAbandonedStream(textures, occTex, streamSvrManager);
-      emitState({ message: `${quality} streaming cancelled` });
-      _perf()?.end(perfId, { status: 'stale', quality });
-      return { stale: true };
-    }
-    if (streamTasks.length && doneOps === 0) {
-      if (deferActivation) _clearTransitionVolume();
-      _disposeAbandonedStream(textures, occTex, streamSvrManager);
+      _scheduleFrame();
+      streamEntry.failedLoads = missingCount;
+      streamEntry.degraded = missingCount > 0;
+      // A degraded LOD must never be filed under the quality that was ASKED for by a
+      // background job: revisiting it would report a downgrade nobody asked for.
+      if (preload && (lod !== requestedLod || streamEntry.degraded)) {
+        _disposeVolumeEntry(streamEntry);
+        _perf()?.end(perfId, { status: 'unavailable', reason: lod !== requestedLod ? 'downgraded' : 'incomplete', quality });
+        return { available: false, reason: lod !== requestedLod ? 'downgraded' : 'incomplete' };
+      }
+      _storeVolumeCache(streamEntry.key, streamEntry);
+      if (!preload) _activateVolumeEntry(streamEntry, metadata, streamEntry.sourceDepth, streamEntry.sourceWidth, channels, options);
+      clearOwnTransition();
+      if (!preload && !firstPictureFired) firePicture({ quality, lod, preview: isPreview, fromCache: false });
       emitState({
-        active: quality,
+        active: shownQuality,
         mode: 'bricks',
-        progress: 0,
-        message: `${quality} bricks unavailable`
+        progress: 1,
+        message: isPreview
+          ? `Preview (LOD${lod}) ready — streaming ${shownQuality}...`
+          : (missingCount > 0
+            ? `${quality} ready — ${missingCount} of ${totalBricks} bricks missing (shown empty; not cached, reload to retry)`
+            : `${quality} bricks ready`)
       });
+      onProgress?.(1, quality);
       _perf()?.end(perfId, {
-        status: 'unavailable',
+        status: missingCount > 0 ? 'partial' : 'ok',
+        fromCache: false,
         quality,
-        reason: 'No brick payload could be loaded'
-      });
-      return { available: false, reason: 'No brick payload could be loaded' };
-    }
-
-    // Flush any remaining dirty regions
-    for (const r of _dirtyRegions) {
-      _updateGPUTextureRegion(r.tex, r.dims, r.ox, r.oy, r.oz, r.bw, r.bh, r.bd, r.brickData);
-    }
-    _dirtyRegions = [];
-    scheduleFrame();
-    streamEntry.histograms = manifestHistograms.length
-      ? manifestHistograms
-      : (_channelHistograms?.length ? _channelHistograms : []);
-    // A degraded LOD must never be filed under the quality that was ASKED for: the
-    // cache key carries no lod, so a prefetch that fell back under memory pressure
-    // would store a low-res volume labelled `native`, the bar would paint it as
-    // loaded, and revisiting it would fire the downgrade modal and rewrite
-    // _qualityMode for the session — all from a background job the user never asked for.
-    if (preload && Number.isFinite(requestedLod) && lod !== requestedLod) {
-      _disposeAbandonedStream(textures, occTex, streamSvrManager);
-      _perf()?.end(perfId, { status: 'unavailable', reason: 'downgraded', quality });
-      return { available: false, reason: 'downgraded' };
-    }
-    _storeVolumeCache(streamEntry.key, streamEntry);
-    if (!preload) _activateVolumeEntry(streamEntry, metadata, streamEntry.sourceDepth, streamEntry.sourceWidth, channels, options);
-    if (deferActivation) _clearTransitionVolume();
-    emitState({
-      active: quality,
-      mode: 'bricks',
-      progress: 1,
-      message: `${quality} bricks ready`
-    });
-    onProgress?.(1, quality);
-    _perf()?.end(perfId, {
-      status: 'ok',
-      fromCache: false,
-      quality,
-      width,
-      height,
-      depth,
-        successfulLoads: streamEntry.successfulLoads
+        width,
+        height,
+        depth,
+        successfulLoads: delivered,
+        failedLoads: missingCount
       });
       return {
         stale: false,
@@ -6233,13 +6627,18 @@ const VolumeViewer = (() => {
         height,
         depth,
         // CAP-008: actual LOD rendered vs the LOD the requested quality asked for.
-        // `downgraded` is true when the atlas/VRAM cascade forced a coarser LOD.
         lod,
         requestedLod,
         downgraded: lod !== requestedLod,
-        successfulLoads: streamEntry.successfulLoads,
-        failedLoads: 0,
+        downgradeReason,
+        neededBytes: firstRefusal?.bytes || null,
+        budgetBytes: budget,
+        successfulLoads: delivered,
+        failedLoads: missingCount,
+        missingBricks: missingCount,
+        degraded: missingCount > 0,
         fromCache: false,
+        previewLod,
         physicalSizeUm: _physicalSizeUm,
         scaleMode: _scaleMode,
         streamMode: 'bricks',
@@ -6250,10 +6649,362 @@ const VolumeViewer = (() => {
       // way out — and it must not force a redraw: it has nothing new to show.
       if (!preload) {
         _fgStreamActive = Math.max(0, _fgStreamActive - 1);
-        _isStreamingBricks = false;
+        // A superseded stream ends while the one that replaced it still streams.
+        _isStreamingBricks = _fgStreamActive > 0;
         _scheduleFrame();
       }
     }
+  }
+
+  function _mib(bytes) {
+    return Math.round((Number(bytes) || 0) / (1024 * 1024));
+  }
+
+  function _cancelStream(slot) {
+    if (!slot) return;
+    slot.cancelled = true;
+    try { slot.controller?.abort(); } catch (e) { /* already aborted */ }
+  }
+
+  function _resetThrottledProgress() {
+    _progressEmit.value = -1;
+    _progressEmit.at = 0;
+  }
+
+  /** Progress to the listeners at most every 0.5 % or 100 ms (always at 0 and 1):
+   *  a native stream settles tens of thousands of tasks. true when emitted. */
+  function _emitThrottledProgress(progress, silent = false) {
+    const now = Date.now();
+    if (progress < 1 && progress > 0 && Math.abs(progress - _progressEmit.value) < 0.005 && now - _progressEmit.at < 100) return false;
+    _progressEmit.value = progress;
+    _progressEmit.at = now;
+    if (!silent) _emitQualityState({ progress });
+    return true;
+  }
+
+  /**
+   * A dense 3D texture allocated on the GPU with texStorage3D and no upload: bricks are
+   * written into it with texSubImage3D (WebGL zero-fills new storage). Its GL texture
+   * is deleted by texture.dispose(). Throws when the GPU refuses the allocation.
+   */
+  function _allocMonolithicTexture(width, height, depth, scalar) {
+    const TextureClass = THREE.Data3DTexture || THREE.DataTexture3D;
+    const tex = new TextureClass(null, width, height, depth);
+    tex.format = scalar ? THREE.RedFormat : THREE.RGBAFormat;
+    tex.type = THREE.UnsignedByteType;
+    tex.minFilter = THREE.LinearFilter;
+    tex.magFilter = THREE.LinearFilter;
+    tex.unpackAlignment = 1;
+    if (!renderer) return tex;
+    const gl = renderer.getContext();
+    for (let i = 0; i < 16 && gl.getError() !== gl.NO_ERROR; i++) { /* drain stale errors */ }
+    const glTex = gl.createTexture();
+    renderer.state.bindTexture(gl.TEXTURE_3D, glTex);
+    gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_WRAP_R, gl.CLAMP_TO_EDGE);
+    gl.texStorage3D(gl.TEXTURE_3D, 1, scalar ? gl.R8 : gl.RGBA8, width, height, depth);
+    // MONO-3DTEX: ANGLE/D3D11 can reject a large TEXTURE_3D without throwing; a
+    // storage-less texture would then be painted with uninitialised GPU memory.
+    const err = gl.getError();
+    if (err !== gl.NO_ERROR) {
+      gl.deleteTexture(glTex);
+      throw new Error(`3D texture allocation failed (glError=${err}, ${width}x${height}x${depth}, ${_mib(width * height * depth * (scalar ? 1 : 4))} MiB)`);
+    }
+    const properties = renderer.properties.get(tex);
+    properties.__webglTexture = glTex;
+    properties.__webglInit = true;
+    properties.__version = tex.version;
+    tex.addEventListener('dispose', () => {
+      try { gl.deleteTexture(glTex); } catch (e) { /* context gone */ }
+      renderer?.properties?.remove?.(tex);
+    });
+    return tex;
+  }
+
+  /**
+   * GPU footprint of one level of the mounted manifest: its dense texture when every
+   * dimension fits a 3D texture and the texture stays under the single-texture
+   * ceiling, else the SVR atlas of its non-empty bricks (SVRManager.planAtlas).
+   * @returns {{lod, dims:{x,y,z}, channels, activeBricks, mode:'monolithic'|'svr',
+   *   scalar:boolean, bytes:number, planned:boolean}|null}
+   */
+  function _levelFootprint(lod, { max3D = 2048, rgbaTransport = false, budget = _gpuBudgetBytes() } = {}) {
+    const dims = typeof BrickLoader !== 'undefined' ? BrickLoader.getDimensions(lod) : null;
+    if (!dims) return null;
+    const channels = Math.min(4, dims.channels || 1);
+    // A single-channel level fills one byte per voxel: an R8 texture, not RGBA8.
+    const scalar = channels === 1 && !rgbaTransport;
+    const dense = dims.x * dims.y * dims.z * (scalar ? 1 : RGBA_TEXTURE_BYTES_PER_VOXEL);
+    const activeBricks = BrickLoader.activeBrickCount(lod);
+    const useSVR = dims.x > max3D || dims.y > max3D || dims.z > max3D || dense >= MONOLITHIC_RGBA_LIMIT_BYTES;
+    if (!useSVR) {
+      return { lod, dims: { x: dims.x, y: dims.y, z: dims.z }, channels, activeBricks, mode: 'monolithic', scalar, bytes: dense, planned: true };
+    }
+    const S = typeof SVRManager !== 'undefined' ? SVRManager : null;
+    const maxPageBytes = S && typeof S._maxPageBytes === 'function' ? S._maxPageBytes(budget) : 512 * 1024 * 1024;
+    const plan = S && typeof S.planAtlas === 'function'
+      ? S.planAtlas(Math.max(1, activeBricks), { max3D, components: 4, maxPageBytes })
+      : null;
+    return {
+      lod, dims: { x: dims.x, y: dims.y, z: dims.z }, channels, activeBricks, mode: 'svr', scalar: false,
+      bytes: plan ? plan.bytes : Infinity, planned: Boolean(plan)
+    };
+  }
+
+  /**
+   * The finest level that fits: candidates are tried finest first; one is skipped when
+   * its atlas cannot be laid out at all ('capacity'), when it is over `available`
+   * bytes ('vram-budget'), or when it needs an SVR atlas for a prefetch, which never
+   * takes one ('svr-preload'). With `lastResort` (nothing else on screen), when every
+   * level is over the budget the coarsest one that can be laid out is returned anyway,
+   * flagged `overBudget`: the budget is a heuristic, and an empty viewer is worse than
+   * an allocation the GPU may still accept (its refusal is handled by the caller).
+   * @returns {{ level: object|null, skipped: Array<{lod, bytes, reason}> }}
+   */
+  function _chooseStreamLevel(candidates, { available, preload = false, lastResort = false } = {}) {
+    const skipped = [];
+    let coarsestPlanned = null;
+    for (const c of candidates || []) {
+      if (!c) continue;
+      if (c.mode === 'svr' && preload) { skipped.push({ lod: c.lod, bytes: c.bytes, reason: 'svr-preload' }); continue; }
+      if (!c.planned) { skipped.push({ lod: c.lod, bytes: c.bytes, reason: 'capacity' }); continue; }
+      coarsestPlanned = c;
+      if (!(c.bytes <= available)) { skipped.push({ lod: c.lod, bytes: c.bytes, reason: 'vram-budget' }); continue; }
+      return { level: c, skipped };
+    }
+    if (lastResort && !preload && coarsestPlanned) return { level: { ...coarsestPlanned, overBudget: true }, skipped };
+    return { level: null, skipped };
+  }
+
+  /** VRAM no eviction can free: everything resident but the cached volumes that are
+   *  neither on screen nor cross-fading. */
+  function _pinnedGpuBytes() {
+    let evictable = 0;
+    for (const e of _volumeCache.values()) {
+      if (e === _activeVolumeEntry || e === _transitionEntry || e.disposed) continue;
+      evictable += _entryGpuBytes(e);
+    }
+    return Math.max(0, _residentGpuBytes() - evictable);
+  }
+
+  /**
+   * What each quality would cost on the GPU for the dataset mounted now (the
+   * BrickLoader manifest): per level and per quality key, the mode (dense texture or
+   * sparse atlas), the bytes, and whether it fits this page's VRAM budget. For a host
+   * that shares one GPU between several viewers (Compare). null before a manifest is
+   * mounted.
+   * @param {string[]} [qualities]
+   * @returns {{ budgetBytes:number, levels:object[], qualities:Object<string,object> }|null}
+   */
+  function getQualityFootprints(qualities = ['256x256', '512x512', '1024x1024', 'native']) {
+    if (typeof BrickLoader === 'undefined' || !BrickLoader.isReady?.()) return null;
+    const manifest = BrickLoader.getManifest?.();
+    const levels = manifest?.levels;
+    const levelCount = levels ? (Array.isArray(levels) ? levels.length : Object.keys(levels).length) : 1;
+    const max3D = renderer?.capabilities?.max3DTextureSize || 2048;
+    const budget = _gpuBudgetBytes();
+    const rgbaTransport = BrickLoader.getTransportEncoding?.() === 'raw-rgba-gzip';
+    const out = { budgetBytes: budget, levels: [], qualities: {} };
+    for (let lod = 0; lod < levelCount; lod++) {
+      const fp = _levelFootprint(lod, { max3D, rgbaTransport, budget });
+      if (fp) out.levels.push({ ...fp, fits: fp.planned && fp.bytes <= budget });
+    }
+    for (const q of qualities) {
+      const lod = _lodForQuality(_normalizeQualityKey(q), levelCount, levels);
+      const fp = out.levels.find(l => l.lod === lod);
+      if (fp) out.qualities[q] = fp;
+    }
+    return out;
+  }
+
+  // ── WebGL context loss ──────────────────────────────────────────────────────
+  /** The context is gone: so are every texture and atlas. Free them now (GL calls are
+   *  no-ops while the context is lost), stop the streams writing into them, and halve
+   *  the GPU budget (SVRManager.noteContextLost) so the reload asks for less. */
+  function _onWebglContextLost() {
+    _contextEpoch++;
+    _contextLossTimes.push(Date.now());
+    if (_contextLossTimes.length > CONTEXT_LOSS_LOOP.count) _contextLossTimes.shift();
+    // A loss may be the GPU watchdog cutting a long frame: settled frames ask for less.
+    _settledBudgetScale = Math.max(0.05, _settledBudgetScale * 0.5);
+    if (typeof SVRManager !== 'undefined' && typeof SVRManager.noteContextLost === 'function') SVRManager.noteContextLost();
+    _cancelStream(_brickStreamAbort);
+    _cancelStream(_preloadStreamAbort);
+    _releaseAllVolumes();
+    _disposePickResources();
+    _gpuTimer.pending = [];
+    _gpuTimer.ext = undefined;
+  }
+
+  /** Unbind every volume texture from the material (nothing is sampled from them). */
+  function _unbindVolumeUniforms() {
+    if (!material?.uniforms) return;
+    for (let i = 0; i < 8; i++) material.uniforms[`svrAtlas${i}`].value = null;
+    material.uniforms.pageTable.value = null;
+    material.uniforms.mapOccupancy.value = null;
+    material.uniforms.svrPageCount.value = 0;
+    if (material.defines?.ENABLE_SVR) { delete material.defines.ENABLE_SVR; material.needsUpdate = true; }
+  }
+
+  /**
+   * Take the volume on screen down before a stream that replaces it at once (not a
+   * deferred swap): a cached one stays in the cache (evictable), any other is freed
+   * now, so the new texture is allocated against the budget without it.
+   */
+  function _detachActiveVolume() {
+    const prev = _activeVolumeEntry;
+    if (!prev) return;
+    _activeVolumeEntry = null;
+    _activeTextureKey = null;
+    _svrManager = null;
+    _unbindVolumeUniforms();
+    if (!_isEntryCached(prev)) _disposeVolumeEntry(prev);
+    _scheduleFrame();
+  }
+
+  /** Free every volume (cache, screen, cross-fade) and unbind them from the material. */
+  function _releaseAllVolumes() {
+    const crossFading = _transitionEntry;
+    _clearTransitionVolume();
+    if (crossFading) _disposeVolumeEntry(crossFading, { force: true });
+    for (const entry of [..._volumeCache.values()]) _disposeVolumeEntry(entry, { force: true });
+    _volumeCache.clear();
+    if (_activeVolumeEntry) _disposeVolumeEntry(_activeVolumeEntry, { force: true });
+    _svrManager?.dispose?.();
+    _svrManager = null;
+    _activeVolumeEntry = null;
+    _activeTextureKey = null;
+    _unbindVolumeUniforms();
+  }
+
+  /**
+   * The context is back (three.js re-creates its own state): the last display load is
+   * replayed at the budget the loss lowered, so the view comes back at a level the GPU
+   * can hold instead of failing on the same allocation. Returns its promise (null when
+   * there was nothing on screen).
+   */
+  function _recoverFromContextLoss() {
+    const gl = renderer?.getContext?.();
+    if (gl) { for (let i = 0; i < 16 && gl.getError() !== gl.NO_ERROR; i++) { /* drain */ } }
+    _gpuTimer.ext = undefined;
+    const req = _lastDisplayRequest;
+    if (!req) return null;
+    const now = Date.now();
+    if (_contextLossTimes.length >= CONTEXT_LOSS_LOOP.count && now - _contextLossTimes[0] < CONTEXT_LOSS_LOOP.windowMs) {
+      _emitQualityState({ message: `The GPU reset ${_contextLossTimes.length} times in a row: the volume is not reloaded automatically. Choose a lower quality or reload the page.`, progress: 0 });
+      return null;
+    }
+    _emitQualityState({ message: `GPU context restored — reloading ${req.options?.quality || 'the volume'} at a lower GPU budget...`, progress: 0 });
+    const options = { ...(req.options || {}), ignoreVolumeCache: true, deferActivation: false, coarseFirst: false, _replay: true };
+    const run = req.kind === 'slices'
+      ? loadVolume(req.basePath, req.metadata, req.timepoint, req.onProgress, options)
+      : loadBrickedVolumeStream(req.basePath, req.metadata, req.timepoint, req.onProgress, options);
+    return run.then((result) => {
+      if (result?.available === false) {
+        _emitQualityState({ message: `GPU context restored, but the volume could not be reloaded (${result.reason || 'unavailable'})` });
+      } else if (result && !result.stale && (typeof options.onFirstPicture === 'function')) {
+        try { options.onFirstPicture({ quality: result.quality, lod: result.lod, preview: false, fromCache: false, recovered: true }); } catch (e) { /* page hook */ }
+      }
+      return result;
+    }, (err) => {
+      _emitQualityState({ message: `GPU context restored, but the volume could not be reloaded: ${err?.message || err}` });
+      throw err;
+    });
+  }
+
+  /**
+   * Free what a dataset switch leaves behind: every cached volume not of `keepBasePath`
+   * (all of them when it is null; the one on screen stays), the brick manifests of
+   * other datasets, pending slice prefetches, the loader's idle packs, and the blur
+   * workers when no blur runs.
+   */
+  function releaseDataset(keepBasePath = null) {
+    for (const [key, entry] of [..._volumeCache]) {
+      if (entry === _activeVolumeEntry || entry === _transitionEntry) continue;
+      if (keepBasePath && entry.basePath === keepBasePath) continue;
+      _volumeCache.delete(key);
+      _disposeVolumeEntry(entry);
+    }
+    for (const dir of [..._manifestCache.keys()]) {
+      if (!keepBasePath || !dir.startsWith(`${keepBasePath}/`)) _manifestCache.delete(dir);
+    }
+    _imageCache.clear();
+    if (typeof BrickLoader !== 'undefined') BrickLoader.trimCaches?.();
+    if (_blurWorkerPool && _blurActiveCount === 0 && _blurAssemblers.size === 0) {
+      _blurWorkerPool.forEach(w => w.terminate());
+      _blurWorkerPool = null;
+    }
+  }
+
+  /**
+   * Tear the viewer down: streams cancelled, every volume, atlas, overlay mesh,
+   * material and render target released, the blur workers terminated, the listeners
+   * and the resize observer removed, the render loop stopped and the renderer
+   * disposed. init() may be called again afterwards.
+   */
+  function dispose() {
+    _cancelStream(_brickStreamAbort);
+    _cancelStream(_preloadStreamAbort);
+    _loadCounter++;
+    if (animationId) { cancelAnimationFrame(animationId); animationId = null; }
+    if (_interactionTimeout) { clearTimeout(_interactionTimeout); _interactionTimeout = null; }
+    if (_streamRedrawTimer) { clearTimeout(_streamRedrawTimer); _streamRedrawTimer = null; }
+    _releaseAllVolumes();
+    _disposePickResources();
+    _manifestCache.clear();
+    _imageCache.clear();
+    for (const taskId of [..._blurAssemblers.keys()]) _failBlurTask(taskId, 'viewer disposed');
+    _blurWorkerPool?.forEach(w => w.terminate());
+    _blurWorkerPool = null;
+    _blurActiveCount = 0;
+    _hideBlurToast();
+    if (typeof TrackingOverlay !== 'undefined') TrackingOverlay.dispose?.();
+    if (typeof VolumeGrid !== 'undefined') VolumeGrid.dispose?.();
+    const disposeTree = (root) => root?.traverse?.((obj) => {
+      obj.geometry?.dispose?.();
+      const mats = Array.isArray(obj.material) ? obj.material : (obj.material ? [obj.material] : []);
+      mats.forEach((m) => { m.map?.dispose?.(); m.dispose?.(); });
+    });
+    for (const sprite of _measurementSprites) { sprite.material?.map?.dispose?.(); sprite.material?.dispose?.(); }
+    _measurementSprites = [];
+    disposeTree(_measurementGroup);
+    disposeTree(_cutPlaneMesh);
+    disposeTree(_rotGizmo);
+    if (cube) {
+      cube.geometry?.dispose?.();
+      scene?.remove(cube);
+    }
+    material?.dispose?.();
+    _resizeObserver?.disconnect();
+    _resizeObserver = null;
+    _observedParent = null;
+    _listenerAbort?.abort();
+    _listenerAbort = null;
+    _activePointers.clear();
+    _gpuTimer.pending = [];
+    _gpuTimer.ext = undefined;
+    renderer?.dispose?.();
+    renderer = null;
+    scene = null;
+    camera = null;
+    cube = null;
+    material = null;
+    _measurementGroup = null;
+    _labelsGroup = null;
+    _cutPlaneMesh = null;
+    _planeBorderMesh = null;
+    _cutSlabFaceA = null;
+    _cutSlabFaceB = null;
+    _rotGizmo = null;
+    _hasLoadedVolume = false;
+    _isStreamingBricks = false;
+    _fgStreamActive = 0;
+    _lastDisplayRequest = null;
+    _contextLost = false;
+    _contextLossTimes.length = 0;
   }
 
   function _lodForQuality(quality, levelCount, levels = null) {
@@ -6300,6 +7051,8 @@ const VolumeViewer = (() => {
     return 0;
   }
 
+  /** Canonical quality key: a resolution label, 'native', or 'lodN' (one level of the
+   *  pyramid, e.g. a coarse preview). Anything else is 512x512, with a warning. */
   function _normalizeQualityKey(value) {
     const key = String(value || '').trim().toLowerCase();
     if (key === 'low' || key === 'preview' || key === '256x256') return '256x256';
@@ -6308,6 +7061,8 @@ const VolumeViewer = (() => {
     if (key === '2048x2048') return '2048x2048';
     if (key === '4096x4096') return '4096x4096';
     if (key === 'native') return 'native';
+    if (/^lod\d+$/.test(key)) return key;
+    if (key) console.warn(`[VolumeViewer] unknown quality "${value}" — using 512x512`);
     return '512x512'; // default target
   }
 
@@ -6360,64 +7115,9 @@ const VolumeViewer = (() => {
     return tex?.format === THREE.RGBAFormat || tex?.image?.data?.length >= (tex?.image?.width || 0) * (tex?.image?.height || 0) * (tex?.image?.depth || 0) * RGBA_TEXTURE_BYTES_PER_VOXEL;
   }
 
-  function _compactScalarBrickData(brickData, bs, bw, bh, bd) {
-    if (!brickData) return null;
-    const required = bw * bh * bd;
-    if (brickData.length === required) return brickData;
-    const out = new Uint8Array(required);
-    let dst = 0;
-    for (let lz = 0; lz < bd; lz++) {
-      const srcZOff = lz * bs * bs;
-      for (let ly = 0; ly < bh; ly++) {
-        const srcIdx = srcZOff + ly * bs;
-        out.set(brickData.subarray(srcIdx, srcIdx + bw), dst);
-        dst += bw;
-      }
-    }
-    return out;
-  }
-
-  function _compactRgbaBrickData(brickData, bs, bw, bh, bd) {
-    if (!brickData) return null;
-    const required = bw * bh * bd * RGBA_TEXTURE_BYTES_PER_VOXEL;
-    if (brickData.length === required) return brickData;
-    const out = new Uint8Array(required);
-    let dst = 0;
-    for (let lz = 0; lz < bd; lz++) {
-      const srcZOff = lz * bs * bs * RGBA_TEXTURE_BYTES_PER_VOXEL;
-      for (let ly = 0; ly < bh; ly++) {
-        const srcIdx = srcZOff + ly * bs * RGBA_TEXTURE_BYTES_PER_VOXEL;
-        const len = bw * RGBA_TEXTURE_BYTES_PER_VOXEL;
-        out.set(brickData.subarray(srcIdx, srcIdx + len), dst);
-        dst += len;
-      }
-    }
-    return out;
-  }
-
-  function _extractTextureRegionData(tex, dims, ox, oy, oz, bw, bh, bd) {
-    const src = tex?.image?.data;
-    if (!src) return null;
-    const rgba = _isRgbaTexture(tex);
-    const stride = rgba ? RGBA_TEXTURE_BYTES_PER_VOXEL : 1;
-    const out = new Uint8Array(bw * bh * bd * stride);
-    let dst = 0;
-    for (let lz = 0; lz < bd; lz++) {
-      const gz = oz + lz;
-      for (let ly = 0; ly < bh; ly++) {
-        const srcIdx = ((gz * dims.y + oy + ly) * dims.x + ox) * stride;
-        const len = bw * stride;
-        out.set(src.subarray(srcIdx, srcIdx + len), dst);
-        dst += len;
-      }
-    }
-    return out;
-  }
-
+  /** texSubImage3D of a box (tightly packed, 1 or 4 bytes per voxel as the texture). */
   function _updateGPUTextureRegion(tex, dims, ox, oy, oz, bw, bh, bd, brickData) {
-    if (!renderer) return;
-    const uploadData = brickData || _extractTextureRegionData(tex, dims, ox, oy, oz, bw, bh, bd);
-    if (!uploadData || !uploadData.length) return;
+    if (!renderer || !brickData || !brickData.length) return;
     const properties = renderer.properties.get(tex);
     const webglTexture = properties?.__webglTexture;
     if (!webglTexture) {
@@ -6439,6 +7139,10 @@ const VolumeViewer = (() => {
     gl.pixelStorei(gl.UNPACK_SKIP_PIXELS, 0);
     gl.pixelStorei(gl.UNPACK_SKIP_ROWS, 0);
     gl.pixelStorei(gl.UNPACK_SKIP_IMAGES, 0);
+    // three leaves FLIP_Y / PREMULTIPLY set by the last texture it uploaded (true for a
+    // canvas label), and either one makes an ArrayBufferView upload an error.
+    if (gl.UNPACK_FLIP_Y_WEBGL !== undefined) gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+    if (gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL !== undefined) gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
     if (gl.PIXEL_UNPACK_BUFFER) {
       gl.bindBuffer(gl.PIXEL_UNPACK_BUFFER, null);
     }
@@ -6452,242 +7156,19 @@ const VolumeViewer = (() => {
       bw, bh, bd,
       glFormat,
       gl.UNSIGNED_BYTE,
-      uploadData
+      brickData
     );
 
     gl.pixelStorei(gl.UNPACK_ALIGNMENT, 4);
-    gl.pixelStorei(gl.UNPACK_ROW_LENGTH, 0);
-    gl.pixelStorei(gl.UNPACK_IMAGE_HEIGHT, 0);
-    gl.pixelStorei(gl.UNPACK_SKIP_PIXELS, 0);
-    gl.pixelStorei(gl.UNPACK_SKIP_ROWS, 0);
-    gl.pixelStorei(gl.UNPACK_SKIP_IMAGES, 0);
 
     if (!(renderer.state && renderer.state.bindTexture)) {
       gl.bindTexture(gl.TEXTURE_3D, prevBinding);
     }
   }
 
-  function _writeBrick(textures, dims, brick, channel, brickData, floorOrLut = 0) {
-    const bs = dims.brickSize || VOLUME_BRICK_SIZE;
-    const ox = brick.bx * bs;
-    const oy = brick.by * bs;
-    const oz = brick.bz * bs;
-    const bw = Math.min(bs, dims.x - ox);
-    const bh = Math.min(bs, dims.y - oy);
-    const bd = Math.min(bs, dims.z - oz);
-    
-    // CPU-side LUT application removed to prevent Main Thread stalling (2+ billion iterations for LOD 1024).
-    // The GPU fragment shader already handles `channelMins` and `channelMaxs` correctly.
-
-    const _t0 = performance.now();
-    if (_svrManager) {
-       _svrManager.writeBrick(channel, brick.bx, brick.by, brick.bz, brickData, bw, bh, bd);
-       return;
-    }
-    
-    const usesRgbaAtlas = textures.length === 1 && _isRgbaTexture(textures[0]);
-    if (usesRgbaAtlas ? (channel < 0 || channel >= RGBA_TEXTURE_BYTES_PER_VOXEL) : channel >= textures.length) return;
-    const tex = usesRgbaAtlas ? textures[0] : textures[channel];
-    if (!tex) return;
-    const targetData = tex.image.data;
-    if (targetData) {
-      let uploadData;
-      if (_isRgbaTexture(tex)) {
-        for (let lz = 0; lz < bd; lz++) {
-          const gz = oz + lz;
-          const srcZOff = lz * bs * bs;
-          for (let ly = 0; ly < bh; ly++) {
-            let srcIdx = srcZOff + ly * bs;
-            let dstIdx = ((gz * dims.y + oy + ly) * dims.x + ox) * RGBA_TEXTURE_BYTES_PER_VOXEL + channel;
-            for (let lx = 0; lx < bw; lx++) {
-              targetData[dstIdx] = brickData[srcIdx++] || 0;
-              dstIdx += RGBA_TEXTURE_BYTES_PER_VOXEL;
-            }
-          }
-        }
-        uploadData = _extractTextureRegionData(tex, dims, ox, oy, oz, bw, bh, bd);
-      } else {
-        for (let lz = 0; lz < bd; lz++) {
-          const gz = oz + lz;
-          const srcZOff = lz * bs * bs;
-          const dstZOff = gz * dims.y * dims.x;
-          for (let ly = 0; ly < bh; ly++) {
-            const srcIdx = srcZOff + ly * bs;
-            const dstIdx = dstZOff + (oy + ly) * dims.x + ox;
-            targetData.set(brickData.subarray(srcIdx, srcIdx + bw), dstIdx);
-          }
-        }
-        uploadData = _compactScalarBrickData(brickData, bs, bw, bh, bd);
-      }
-      _dirtyRegions.push({ tex, dims, ox, oy, oz, bw, bh, bd, brickData: uploadData });
-    }
-    const _t1 = performance.now();
-    if (!window._loggedWriteBrick) { window._loggedWriteBrick = 0; }
-    if (window._loggedWriteBrick < 50) { 
-       if (brickData && brickData.perf) {
-          console.log(`[PERF-LOAD] Chunk ${brick.bx},${brick.by},${brick.bz} decode took ${brickData.perf.total.toFixed(2)}ms (bmp: ${brickData.perf.bmp.toFixed(2)}ms, img: ${brickData.perf.img.toFixed(2)}ms, loop: ${brickData.perf.loop.toFixed(2)}ms)`);
-       }
-       console.log(`[PERF-WRITE] _writeBrick (chunk ${brick.bx},${brick.by},${brick.bz}) took ${(_t1-_t0).toFixed(2)}ms`); 
-       window._loggedWriteBrick++; 
-    }
-  }
-
-  function _writeRgbaBrick(textures, dims, brick, brickData, floorLuts = null, channels = 4, allowGlobalSvr = true) {
-    if (brickData && brickData.perf) {
-      if (!window._loggedWriteBrick) { window._loggedWriteBrick = 0; }
-      if (window._loggedWriteBrick < 50) {
-        console.log(`[PERF-LOAD] Chunk ${brick.bx},${brick.by},${brick.bz} decode took ${brickData.perf.total.toFixed(2)}ms (bmp: ${brickData.perf.bmp.toFixed(2)}ms, img: ${brickData.perf.img.toFixed(2)}ms, loop: ${brickData.perf.loop.toFixed(2)}ms)`);
-        window._loggedWriteBrick++;
-      }
-    }
-    const bs = dims.brickSize || VOLUME_BRICK_SIZE;
-    const ox = brick.bx * bs;
-    const oy = brick.by * bs;
-    const oz = brick.bz * bs;
-    const bw = Math.min(bs, dims.x - ox);
-    const bh = Math.min(bs, dims.y - oy);
-    const bd = Math.min(bs, dims.z - oz);
-    const uploadData = _applyRgbaBrickLuts(brickData, floorLuts, channels);
-    if (allowGlobalSvr && _svrManager) {
-      if (typeof _svrManager.writeRgbaBrick === 'function') {
-        _svrManager.writeRgbaBrick(brick.bx, brick.by, brick.bz, uploadData, bw, bh, bd);
-      } else {
-        for (let c = 0; c < channels; c++) {
-          const scalar = new Uint8Array(bs * bs * bs);
-          for (let i = 0, src = c; i < scalar.length; i++, src += RGBA_TEXTURE_BYTES_PER_VOXEL) {
-            scalar[i] = uploadData[src] || 0;
-          }
-          _svrManager.writeBrick(c, brick.bx, brick.by, brick.bz, scalar, bw, bh, bd);
-        }
-      }
-      return;
-    }
-    if (textures.length === 1 && _isRgbaTexture(textures[0])) {
-      const tex = textures[0];
-      const targetData = tex.image.data;
-      if (!targetData) return;
-      for (let lz = 0; lz < bd; lz++) {
-        const gz = oz + lz;
-        const srcZOff = lz * bs * bs * RGBA_TEXTURE_BYTES_PER_VOXEL;
-        for (let ly = 0; ly < bh; ly++) {
-          const srcIdx = srcZOff + ly * bs * RGBA_TEXTURE_BYTES_PER_VOXEL;
-          const dstIdx = ((gz * dims.y + oy + ly) * dims.x + ox) * RGBA_TEXTURE_BYTES_PER_VOXEL;
-          const len = bw * RGBA_TEXTURE_BYTES_PER_VOXEL;
-          targetData.set(uploadData.subarray(srcIdx, srcIdx + len), dstIdx);
-        }
-      }
-      _dirtyRegions.push({
-        tex,
-        dims,
-        ox,
-        oy,
-        oz,
-        bw,
-        bh,
-        bd,
-        brickData: _compactRgbaBrickData(uploadData, bs, bw, bh, bd)
-      });
-      return;
-    }
-    for(let c=0; c<channels; c++) {
-        if (c >= textures.length) continue;
-        const tex = textures[c];
-        const targetData = tex.image.data;
-        if (!targetData) continue;
-        const scalarUpload = new Uint8Array(bw * bh * bd);
-        let uploadIdx = 0;
-        for (let lz = 0; lz < bd; lz++) {
-          const gz = oz + lz;
-          for (let ly = 0; ly < bh; ly++) {
-            let srcIdx = ((lz * bs + ly) * bs) * 4 + c;
-            let dstIdx = (gz * dims.y + oy + ly) * dims.x + ox;
-            for (let lx = 0; lx < bw; lx++) {
-                const value = uploadData[srcIdx];
-                targetData[dstIdx++] = value;
-                scalarUpload[uploadIdx++] = value;
-                srcIdx += 4;
-            }
-          }
-        }
-        _dirtyRegions.push({ tex, dims, ox, oy, oz, bw, bh, bd, brickData: scalarUpload });
-    }
-  }
-
-  function _seedTexturesFromActiveAsync(textures, width, height, depth, channels, loadId, abortRef, onDone) {
-    const src = _activeVolumeEntry;
-    if (!src || !src.textures || !src.width || !src.height || !src.depth) {
-      onDone();
-      return;
-    }
-    
-    const srcW = src.width;
-    const srcH = src.height;
-    const srcD = src.depth;
-
-    const lutX = new Int32Array(width);
-    for (let x = 0; x < width; x++) {
-      lutX[x] = Math.max(0, Math.min(srcW - 1, Math.floor((x / width) * srcW)));
-    }
-
-    const lutY = new Int32Array(height);
-    for (let y = 0; y < height; y++) {
-      lutY[y] = Math.max(0, Math.min(srcH - 1, Math.floor((y / height) * srcH)));
-    }
-
-    let z = 0;
-    const chunkSlices = 4;
-    const dims = { x: width, y: height, z: depth };
-
-    function processNextChunk() {
-      if (abortRef.cancelled || loadId !== _loadCounter) {
-        // ELE-26 (BUG-005): resolve the seed Promise even on abort, otherwise the
-        // `await new Promise(resolve => _seedTexturesFromActiveAsync(..., resolve))`
-        // in loadBrickedVolumeStream stays suspended forever on a mid-seed switch.
-        _seedRafId = null; // LEAK-023: this chunk ran; no rAF is pending past it.
-        onDone();
-        return;
-      }
-
-      const zEnd = Math.min(depth, z + chunkSlices);
-      const numSlices = zEnd - z;
-
-      for (let c = 0; c < channels; c++) {
-        if (c >= textures.length || c >= src.textures.length) continue;
-        const dstData = textures[c].image.data;
-        const srcData = src.textures[c].image.data;
-        if (!dstData || !srcData) continue;
-
-        for (let cz = z; cz < zEnd; cz++) {
-          const sz = Math.max(0, Math.min(srcD - 1, Math.floor((cz / depth) * srcD)));
-          const srcZOff = sz * srcH * srcW;
-          const dstZOff = cz * height * width;
-          
-          for (let y = 0; y < height; y++) {
-            const srcYOff = srcZOff + lutY[y] * srcW;
-            const dstYOff = dstZOff + y * width;
-            const srcRow = srcData.subarray(srcYOff, srcYOff + srcW);
-            const dstRow = dstData.subarray(dstYOff, dstYOff + width);
-            for (let x = 0; x < width; x++) {
-              dstRow[x] = srcRow[lutX[x]];
-            }
-          }
-        }
-        
-        _updateGPUTextureRegion(textures[c], dims, 0, 0, z, width, height, numSlices);
-      }
-
-      z = zEnd;
-      if (z < depth) {
-        _seedRafId = requestAnimationFrame(processNextChunk); // LEAK-023
-      } else {
-        _seedRafId = null;
-        onDone();
-      }
-    }
-
-    _seedRafId = requestAnimationFrame(processNextChunk); // LEAK-023
-  }
-
+  // Kept for callers outside the stream (the Studio's native pass): the floor LUT and
+  // the channel interleave of a brick, on the calling thread. The stream itself has the
+  // decode workers do both (BrickLoader compose).
   function _applyRgbaBrickLuts(brickData, floorLuts = null, channels = 4) {
     if (!brickData || !floorLuts?.length) return brickData;
     const activeChannels = Math.max(0, Math.min(4, Number(channels) || 4, floorLuts.length));
@@ -6794,36 +7275,27 @@ const VolumeViewer = (() => {
     };
   }
 
-  function _orderBricksForStreaming(bricks, dims) {
-    const cx = Math.ceil(dims.x / Math.max(1, dims.brickSize)) / 2;
-    const cy = Math.ceil(dims.y / Math.max(1, dims.brickSize)) / 2;
-    const cz = Math.ceil(dims.z / Math.max(1, dims.brickSize)) / 2;
-    return [...bricks].sort((a, b) => {
-      const da = Math.hypot(a.bx - cx, a.by - cy, a.bz - cz);
-      const db = Math.hypot(b.bx - cx, b.by - cy, b.bz - cz);
-      return da - db;
-    });
-  }
-
-  function _seedVolumeFromActive(width, height, depth, channels) {
-    const src = _activeVolumeEntry;
-    if (!src?.data || !src.width || !src.height || !src.depth) return null;
-    const dst = new Uint8Array(width * height * depth * 4);
-    for (let z = 0; z < depth; z++) {
-      const sz = Math.max(0, Math.min(src.depth - 1, Math.round((z / Math.max(1, depth - 1)) * (src.depth - 1))));
-      for (let y = 0; y < height; y++) {
-        const sy = Math.max(0, Math.min(src.height - 1, Math.round((y / Math.max(1, height - 1)) * (src.height - 1))));
-        for (let x = 0; x < width; x++) {
-          const sx = Math.max(0, Math.min(src.width - 1, Math.round((x / Math.max(1, width - 1)) * (src.width - 1))));
-          const dstIdx = ((z * height + y) * width + x) * 4;
-          const srcIdx = ((sz * src.height + sy) * src.width + sx) * 4;
-          for (let c = 0; c < channels; c++) {
-            dst[dstIdx + c] = src.data[srcIdx + c] || 0;
-          }
-        }
-      }
-    }
-    return dst;
+  /**
+   * Bricks sorted by distance from the centre of the grid, in MICROMETRES — a brick
+   * holds 64 voxels on every axis but a Z voxel is often several times deeper than an
+   * XY one (and the pyramid only halves X and Y), so counting in brick indices would
+   * make "the centre" a slab. `extentUm` is the volume's physical size {x, y, z}; a
+   * voxel of this level is extent / dims on each axis. The loader starts at the first
+   * brick and takes its packs outward from there.
+   */
+  function _orderBricksForStreaming(bricks, dims, extentUm = null) {
+    const bs = Math.max(1, Number(dims?.brickSize) || VOLUME_BRICK_SIZE);
+    const nx = Math.max(1, Number(dims?.x) || bs);
+    const ny = Math.max(1, Number(dims?.y) || bs);
+    const nz = Math.max(1, Number(dims?.z) || bs);
+    const cx = Math.ceil(nx / bs) / 2;
+    const cy = Math.ceil(ny / bs) / 2;
+    const cz = Math.ceil(nz / bs) / 2;
+    const wx = Number(extentUm?.x) > 0 ? Number(extentUm.x) / nx : 1;
+    const wy = Number(extentUm?.y) > 0 ? Number(extentUm.y) / ny : wx;
+    const wz = Number(extentUm?.z) > 0 ? Number(extentUm.z) / nz : wx;
+    const d = (b) => Math.hypot((b.bx + 0.5 - cx) * wx, (b.by + 0.5 - cy) * wy, (b.bz + 0.5 - cz) * wz);
+    return [...bricks].map(b => [d(b), b]).sort((a, b) => a[0] - b[0]).map(e => e[1]);
   }
 
 })();

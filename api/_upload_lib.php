@@ -33,6 +33,13 @@ const LUMEN_UP_STALE_AFTER   = 604800;       // 7 days
 const LUMEN_UP_MAX_JSON      = 268435456;
 const LUMEN_UP_MAX_FILES     = 200000;
 const LUMEN_UP_MAX_DATASETS  = 200;
+// Largest single file a plan accepts (a raw .ims original is tens of GB); also bounds
+// the received-chunk bitmap a client-declared size can make us allocate. Twin of
+// upload_staging.MAX_FILE_SIZE.
+const LUMEN_UP_MAX_FILE_SIZE = 1099511627776;   // 1 TiB
+// Free space a plan must leave on the staging volume (the same disk usually holds
+// DATA_WEB, the credential and the logs). Twin of upload_staging.DISK_RESERVE_BYTES.
+const LUMEN_UP_DISK_RESERVE  = 536870912;       // 512 MiB
 
 const LUMEN_UP_TIER_CORE = 0, LUMEN_UP_TIER_PREVIEW = 1, LUMEN_UP_TIER_MID = 2,
       LUMEN_UP_TIER_FULL = 3, LUMEN_UP_TIER_EXTRA = 4;
@@ -42,7 +49,7 @@ const LUMEN_UP_STATE_EDITABLE  = 'editable';
 const LUMEN_UP_STATE_STAGED    = 'staged';
 const LUMEN_UP_STATE_STALLED   = 'stalled';
 
-function lumen_up_root(): string     { return admin_root() . '/uploads'; }
+function lumen_up_root(): string     { return defined('LUMEN_UPLOADS_DIR') ? (string)LUMEN_UPLOADS_DIR : admin_root() . '/uploads'; }
 function lumen_up_staging(): string  { return lumen_up_root() . '/staging'; }
 function lumen_up_state(): string    { return lumen_up_root() . '/state'; }
 
@@ -77,8 +84,10 @@ function lumen_up_ini_bytes(string $v): int {
 
 // ── Path shape ───────────────────────────────────────────────────────────────
 
+// No markup format (xml, html, svg, xhtml): DATA_WEB is served from this origin,
+// and a document there would run beside the admin session.
 const LUMEN_UP_DOWNLOAD_EXT = ['ims','tif','tiff','png','jpg','jpeg','webp','gif',
-                               'zip','txt','md','csv','json','pdf','xml','gz','h5','hdf5'];
+                               'zip','txt','md','csv','json','pdf','gz','h5','hdf5'];
 
 // Dataset roots — derived from the platform-wide vocabulary so this file cannot
 // drift from datasets.php / downloads.php / admin_safe_dataset(). Only the volume
@@ -125,7 +134,7 @@ function lumen_up_classify(string $type, $rel): ?array {
     if (strncmp($rel, 'download/', 9) === 0) {
         $name = substr($rel, 9);
         if (strpos($name, '/') !== false) return null;
-        if (!preg_match('/^[A-Za-z0-9][A-Za-z0-9 ._()+-]{0,180}$/', $name)) return null;
+        if (!preg_match('/^[A-Za-z0-9][A-Za-z0-9 ._()+-]{0,180}$/D', $name)) return null;
         $dot = strrpos($name, '.');
         $ext = $dot === false ? '' : strtolower(substr($name, $dot + 1));
         if (!in_array($ext, LUMEN_UP_DOWNLOAD_EXT, true)) return null;
@@ -189,7 +198,7 @@ function lumen_up_safe_dataset($type, $folder): ?array {
     $type = trim($type); $folder = trim($folder);
     if (!in_array($type, LUMEN_UP_TYPES, true)) return null;
     if ($folder === '.' || $folder === '..' || strlen($folder) > 180) return null;
-    if (!preg_match('/^[A-Za-z0-9_][A-Za-z0-9._-]*$/', $folder)) return null;
+    if (!preg_match('/^[A-Za-z0-9_][A-Za-z0-9._-]*$/D', $folder)) return null;
     return [$type, $folder];
 }
 
@@ -223,49 +232,25 @@ function lumen_up_journal_path($type, $folder): ?string {
     return lumen_up_state() . '/' . $safe[0] . '__' . $safe[1] . '.json';
 }
 
-function lumen_up_write_guard(string $path, string $body): void {
-    if (!is_dir(dirname($path))) return;
-    if (!is_file($path) || @file_get_contents($path) !== $body) @file_put_contents($path, $body);
-}
-
 /**
  * Create the staging root and (re)assert both directory guards.
  *
  * Written at runtime rather than relying on the shipped files: DATA_WEB is in the
  * updater's protect list, so a deployed host would otherwise never receive its
  * execution ban through an update, and a staging root created at runtime would
- * have no deny rule at all until the next release.
+ * have no deny rule at all until the next release. The rule texts live in
+ * _admin_lib.php (lumen_staging_guard / lumen_data_web_guard).
  */
 function lumen_up_ensure_dirs(): void {
     admin_make_dir(lumen_up_staging());
     admin_make_dir(lumen_up_state());
-    lumen_up_write_guard(lumen_up_root() . '/.htaccess',
-        "# Lumen3D upload staging — bytes here have NOT been validated yet and must\n"
-      . "# never be reachable at a URL. The admin preview reads them through the\n"
-      . "# authenticated api/upload.php?action=blob proxy instead.\n"
-      . "<IfModule mod_authz_core.c>\n    Require all denied\n</IfModule>\n"
-      . "<IfModule !mod_authz_core.c>\n    Order allow,deny\n    Deny from all\n</IfModule>\n"
-      . "php_flag engine off\n");
-
+    lumen_write_guard(lumen_up_root() . '/.htaccess', lumen_staging_guard());
     // Execution ban for the PUBLISHED tree. DATA_WEB is web-served by construction,
     // so it is the one directory that is both operator-writable and reachable. The
     // import allowlist already refuses anything the pipeline does not emit, but a
     // dataset can also arrive by SFTP or rsync, which bypasses it entirely.
     admin_make_dir(data_web());
-    lumen_up_write_guard(data_web() . '/.htaccess',
-        "# Lumen3D — published dataset tree. Generated: keep in sync with the copy in\n"
-      . "# the repository root (DATA_WEB/.htaccess).\n"
-      . "<IfModule mod_php.c>\n    php_flag engine off\n</IfModule>\n"
-      . "<IfModule mod_php7.c>\n    php_flag engine off\n</IfModule>\n"
-      . "<IfModule mod_php5.c>\n    php_flag engine off\n</IfModule>\n"
-      . "<FilesMatch \"\\.(php|php[0-9]|phtml|phps|phar|cgi|pl|py|sh|htaccess)\$\">\n"
-      . "    <IfModule mod_authz_core.c>\n        Require all denied\n    </IfModule>\n"
-      . "    <IfModule !mod_authz_core.c>\n        Order allow,deny\n        Deny from all\n    </IfModule>\n"
-      . "</FilesMatch>\n"
-      . "<IfModule mod_mime.c>\n    RemoveHandler .php .phtml .phar .cgi .pl .py .sh\n"
-      . "    RemoveType .php .phtml .phar\n</IfModule>\n"
-      . "Options -Indexes -ExecCGI -Includes\n"
-      . "<IfModule mod_headers.c>\n    Header set X-Content-Type-Options \"nosniff\"\n</IfModule>\n");
+    lumen_write_guard(data_web() . '/.htaccess', lumen_data_web_guard());
 }
 
 // ── Journal ──────────────────────────────────────────────────────────────────
@@ -316,12 +301,12 @@ function lumen_up_save_journal(array $journal): bool {
     $jp = lumen_up_journal_path($journal['type'] ?? '', $journal['folder'] ?? '');
     if ($jp === null) return false;
     $journal['updatedAt'] = lumen_up_now();
+    // `files` is a MAP keyed by relative path in the shared format: an empty PHP
+    // array would be written as `[]`, which upload_staging.py iterates as a dict.
+    if (isset($journal['files']) && is_array($journal['files']) && !$journal['files']) $journal['files'] = new stdClass();
     admin_make_dir(dirname($jp));
-    $tmp = $jp . '.tmp' . getmypid();
-    if (@file_put_contents($tmp, json_encode($journal, JSON_UNESCAPED_UNICODE)) === false) return false;
-    if (!@rename($tmp, $jp)) { @unlink($tmp); return false; }
-    admin_fix_file_mode($jp);
-    return true;
+    $json = json_encode($journal, JSON_UNESCAPED_UNICODE);
+    return $json !== false && lumen_write_file_atomic($jp, $json);
 }
 
 // ── Received-chunk bitmap (one bit per chunk, base64 in the journal) ──────────
@@ -406,10 +391,30 @@ function lumen_up_clamp_chunk($n): int {
     return max(LUMEN_UP_MIN_CHUNK, min(lumen_up_chunk_limit(), $n));
 }
 
+/** Free bytes on the volume holding the staging root, or null when unknown
+ *  (disk_free_space disabled, open_basedir). */
+function lumen_up_free_bytes(): ?int {
+    $probe = lumen_up_staging();
+    while (!is_dir($probe) && dirname($probe) !== $probe) $probe = dirname($probe);
+    $free = function_exists('disk_free_space') ? @disk_free_space($probe) : false;
+    return is_float($free) || is_int($free) ? (int)$free : null;
+}
+
+/** A failed write that the disk (or the account's quota) being full explains. PHP
+ *  surfaces no errno, so the free space after the failure is what tells. */
+function lumen_up_disk_full(int $wanted): bool {
+    $free = lumen_up_free_bytes();
+    return $free !== null && $free < max($wanted, 1);
+}
+
 function lumen_up_plan($datasets, $chunkSize): array {
     if (!is_array($datasets)) return ['ok' => false, 'error' => 'bad_request'];
     $chunkSize = lumen_up_clamp_chunk($chunkSize);
     $out = [];
+    // One free-space budget for the whole drop: each dataset spends from it, so
+    // several datasets that fit one by one cannot together overrun the disk.
+    $free = lumen_up_free_bytes();
+    $budget = $free === null ? null : max(0, $free - LUMEN_UP_DISK_RESERVE);
     foreach (array_slice($datasets, 0, LUMEN_UP_MAX_DATASETS) as $raw) {
         if (!is_array($raw)) continue;
         $safe = lumen_up_safe_dataset($raw['type'] ?? null, $raw['folder'] ?? null);
@@ -418,12 +423,12 @@ function lumen_up_plan($datasets, $chunkSize): array {
                       'error' => 'invalid_dataset', 'files' => [], 'rejected' => []];
             continue;
         }
-        $out[] = lumen_up_plan_one($safe[0], $safe[1], $raw['files'] ?? [], $chunkSize);
+        $out[] = lumen_up_plan_one($safe[0], $safe[1], $raw['files'] ?? [], $chunkSize, $budget);
     }
     return ['ok' => true, 'chunkSize' => $chunkSize, 'datasets' => $out];
 }
 
-function lumen_up_plan_one(string $type, string $folder, $files, int $chunkSize): array {
+function lumen_up_plan_one(string $type, string $folder, $files, int $chunkSize, ?int &$budget = null): array {
     $accepted = []; $rejected = []; $seen = [];
     foreach (array_slice(is_array($files) ? $files : [], 0, LUMEN_UP_MAX_FILES) as $f) {
         if (!is_array($f)) continue;
@@ -435,13 +440,32 @@ function lumen_up_plan_one(string $type, string $folder, $files, int $chunkSize)
         if ($verdict === null) { $rejected[] = ['path' => $rel, 'reason' => 'not_allowed']; continue; }
         $size = isset($f['size']) && is_numeric($f['size']) ? (int)$f['size'] : -1;
         if ($size < 0) { $rejected[] = ['path' => $rel, 'reason' => 'bad_size']; continue; }
+        if ($size > LUMEN_UP_MAX_FILE_SIZE) { $rejected[] = ['path' => $rel, 'reason' => 'too_large']; continue; }
         $accepted[] = ['path' => $rel, 'size' => $size, 'tier' => $verdict[0], 'kind' => $verdict[1]];
     }
     lumen_up_assign_tiers($accepted);
 
-    $result = lumen_up_journal_locked($type, $folder, function ($journal) use ($type, $folder, &$accepted, $rejected, $chunkSize) {
+    $refusal = null;
+    $result = lumen_up_journal_locked($type, $folder, function ($journal) use ($type, $folder, &$accepted, $rejected, $chunkSize, &$budget, &$refusal) {
         if ($journal === null) $journal = lumen_up_new_journal($type, $folder);
         if (!isset($journal['files']) || !is_array($journal['files'])) $journal['files'] = [];
+
+        // Bytes this drop still has to write: everything not already stored. Refused
+        // up front, before the journal changes, when the volume cannot hold it — a
+        // full disk mid-transfer stalls every other writer on the host.
+        if ($budget !== null) {
+            $needed = 0;
+            foreach ($accepted as $item) {
+                $entry = $journal['files'][$item['path']] ?? null;
+                if ($entry && (int)($entry['size'] ?? -1) === $item['size']) {
+                    $needed += !empty($entry['done']) ? 0 : $item['size'] - lumen_up_received($entry);
+                } else {
+                    $needed += $item['size'];
+                }
+            }
+            if ($needed > $budget) { $refusal = ['needed' => $needed, 'free' => $budget]; return null; }
+            $budget -= $needed;
+        }
 
         foreach ($accepted as &$item) {
             $rel = $item['path'];
@@ -503,6 +527,11 @@ function lumen_up_plan_one(string $type, string $folder, $files, int $chunkSize)
         lumen_up_save_journal($journal);
         return $journal;
     });
+    if ($refusal !== null) {
+        return ['key' => "$type/$folder", 'type' => $type, 'folder' => $folder,
+                'error' => 'insufficient_disk', 'neededBytes' => $refusal['needed'],
+                'freeBytes' => $refusal['free'], 'files' => [], 'rejected' => array_slice($rejected, 0, 200)];
+    }
     $journal = is_array($result) && isset($result['files']) ? $result : lumen_up_new_journal($type, $folder);
 
     $total = 0; $done = 0;
@@ -562,10 +591,13 @@ function lumen_up_write_chunk($type, $folder, $rel, $index, string $data, ?strin
 
         admin_make_dir(dirname($dest));
         $fh = @fopen($dest, 'c+b');           // create, never truncate
-        if ($fh === false) return [500, ['error' => 'write_failed']];
+        if ($fh === false) return lumen_up_disk_full(strlen($data)) ? [507, ['error' => 'insufficient_disk', 'neededBytes' => strlen($data), 'freeBytes' => lumen_up_free_bytes()]] : [500, ['error' => 'write_failed']];
         $ok = @fseek($fh, $offset) === 0 && @fwrite($fh, $data) === strlen($data);
-        @fclose($fh);
-        if (!$ok) return [500, ['error' => 'write_failed']];
+        $ok = @fclose($fh) && $ok;
+        // The bit is only persisted after the bytes, so a failure here costs a re-send,
+        // never a corrupt file. A full disk is terminal for the transfer (507), not a
+        // network hiccup to retry forever.
+        if (!$ok) return lumen_up_disk_full(strlen($data)) ? [507, ['error' => 'insufficient_disk', 'neededBytes' => strlen($data), 'freeBytes' => lumen_up_free_bytes()]] : [500, ['error' => 'write_failed']];
         admin_fix_file_mode($dest);
 
         $bits = lumen_up_bitmap_decode($entry['bits'] ?? '', $nbits);
@@ -685,24 +717,53 @@ function lumen_up_validate_file(string $type, string $rel, string $path, ?string
  * per-level dimensions passed the import, reported "integrity verified", and then
  * made the viewer reject it at mount time. Catch it while it is still in staging.
  */
+const LUMEN_UP_BRICK_SIZE = 64;   // twin of js/core/brick-loader.js BRICK_SIZE
+const LUMEN_UP_ENCODINGS = ['raw-u8', 'raw-u8-gzip', 'raw-rgba-gzip', 'webp-lossless'];
+
 function lumen_up_validate_manifest(array $man): array {
     $levels = $man['levels'] ?? null;
-    if (!is_array($levels) || !$levels) return [false, 'manifest_no_levels'];
+    if (!is_array($levels) || !$levels || array_keys($levels) !== range(0, count($levels) - 1)) return [false, 'manifest_no_levels'];
+    if (array_key_exists('channels', $man) && $man['channels'] !== null
+        && !(is_int($man['channels']) && $man['channels'] >= 1)) return [false, 'manifest_bad_channels'];
+    // The decoder, the GPU atlas and the shaders are all built on 64-voxel bricks.
+    if (array_key_exists('brickSize', $man) && $man['brickSize'] !== LUMEN_UP_BRICK_SIZE) return [false, 'manifest_bad_brick_size'];
     foreach ($levels as $i => $level) {
         if (!is_array($level)) return [false, "manifest_level_{$i}_not_object"];
         $lvl = $level['level'] ?? null;
         if (!is_int($lvl) || $lvl < 0) return [false, "manifest_level_{$i}_bad_index"];
+        // A level is addressed by its number everywhere (lod<N>/ pack paths, the
+        // quality ladder): listed out of order, one level's bricks mount as another's.
+        if ($lvl !== $i) return [false, "manifest_level_{$i}_out_of_order"];
         $dims = $level['dimensions'] ?? null;
         if (!is_array($dims)) return [false, "manifest_level_{$i}_no_dimensions"];
         foreach (['x', 'y', 'z'] as $axis) {
             $v = $dims[$axis] ?? null;
             if ((!is_int($v) && !is_float($v)) || $v <= 0) return [false, "manifest_level_{$i}_bad_{$axis}"];
         }
+        if (array_key_exists('brickSize', $level) && $level['brickSize'] !== LUMEN_UP_BRICK_SIZE) {
+            return [false, "manifest_level_{$i}_bad_brick_size"];
+        }
     }
+    $transport = $man['brickTransport'] ?? null;
+    $encoding = is_array($transport) ? ($transport['encoding'] ?? null) : null;
+    if ($encoding !== null && !in_array($encoding, LUMEN_UP_ENCODINGS, true)) return [false, 'manifest_bad_encoding'];
+    // An absent packing is not "vertical": decoding a grid mosaic linearly scrambles
+    // the volume silently. When present it must name a mode the decoder knows.
     $packing = $man['brickPacking'] ?? null;
-    if (is_array($packing) && isset($packing['mode'])
-        && !in_array($packing['mode'], ['grid', 'vertical'], true)) {
-        return [false, 'manifest_bad_packing_mode'];
+    if ($packing !== null) {
+        if (!is_array($packing) || !in_array($packing['mode'] ?? null, ['grid', 'vertical'], true)) {
+            return [false, 'manifest_bad_packing_mode'];
+        }
+        if ($packing['mode'] === 'grid') {
+            foreach (['cols', 'rows'] as $k) {
+                if (array_key_exists($k, $packing) && !(is_int($packing[$k]) && $packing[$k] >= 1)) {
+                    return [false, 'manifest_bad_packing_grid'];
+                }
+            }
+        }
+    }
+    if ($encoding === 'webp-lossless' && !(is_array($packing) && ($packing['mode'] ?? null) === 'grid')) {
+        return [false, 'manifest_lossless_needs_grid'];
     }
     return [true, null];
 }
@@ -973,7 +1034,7 @@ function lumen_up_write_metadata($type, $folder, $meta): array {
     $dir = lumen_up_dataset_dir($type, $folder);
     if ($dir === null || !is_array($meta)) return [400, ['error' => 'bad_body']];
 
-    $existing = lumen_up_read_json("$dir/metadata.json") ?: [];
+    $existing = lumen_read_json_doc("$dir/metadata.json") ?: [];
     $merged = array_merge($existing, array_diff_key($meta, array_flip(LUMEN_UP_COMPUTED)));
     $merged['type'] = $type;
     $merged['folderName'] = $folder;
@@ -988,10 +1049,7 @@ function lumen_up_write_metadata($type, $folder, $meta): array {
     return lumen_up_journal_locked($type, $folder, function ($journal) use ($type, $folder, $dir, $merged) {
         if ($journal === null) return [409, ['error' => 'not_staged']];
         admin_make_dir($dir);
-        $tmp = "$dir/metadata.json.tmp" . getmypid();
-        if (@file_put_contents($tmp, json_encode($merged, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE)) === false) return [500, ['error' => 'write_failed']];
-        @rename($tmp, "$dir/metadata.json");
-        admin_fix_file_mode("$dir/metadata.json");
+        if (!lumen_write_json_doc("$dir/metadata.json", $merged)) return [500, ['error' => 'write_failed']];
         $journal['metaLocked'] = true;
         $entry = $journal['files']['metadata.json'] ?? ['chunkSize' => LUMEN_UP_DEFAULT_CHUNK, 'kind' => 'metadata', 'tier' => LUMEN_UP_TIER_CORE];
         clearstatcache(true, "$dir/metadata.json");
@@ -1007,12 +1065,12 @@ function lumen_up_write_metadata($type, $folder, $meta): array {
 function lumen_up_write_thumbnail($type, $folder, string $bytes): array {
     $dir = lumen_up_dataset_dir($type, $folder);
     if ($dir === null) return [400, ['error' => 'invalid_dataset']];
-    if (strncmp($bytes, 'RIFF', 4) !== 0 && strncmp($bytes, "\x89PNG\r\n\x1a\n", 8) !== 0) return [400, ['error' => 'not_an_image']];
+    $isWebp = strncmp($bytes, 'RIFF', 4) === 0 && substr($bytes, 8, 4) === 'WEBP';
+    if (!$isWebp && strncmp($bytes, "\x89PNG\r\n\x1a\n", 8) !== 0) return [400, ['error' => 'not_an_image']];
     return lumen_up_journal_locked($type, $folder, function ($journal) use ($type, $dir, $bytes) {
         if ($journal === null) return [409, ['error' => 'not_staged']];
         admin_make_dir($dir);
-        if (@file_put_contents("$dir/thumbnail.webp", $bytes) === false) return [500, ['error' => 'write_failed']];
-        admin_fix_file_mode("$dir/thumbnail.webp");
+        if (!lumen_write_file_atomic("$dir/thumbnail.webp", $bytes)) return [500, ['error' => 'write_failed']];
         $entry = $journal['files']['thumbnail.webp'] ?? ['chunkSize' => LUMEN_UP_DEFAULT_CHUNK, 'kind' => 'thumbnail', 'tier' => LUMEN_UP_TIER_CORE];
         $entry['size'] = strlen($bytes);
         $entry['done'] = true;
@@ -1056,18 +1114,20 @@ function lumen_up_publish($type, $folder, bool $overwrite, bool $hidden): array 
     $src = lumen_up_dataset_dir($type, $folder);
     if ($src === null || !is_dir($src)) return [404, ['error' => 'not_staged']];
 
-    $verdict = lumen_up_validate_dataset($type, $folder);
-    if (empty($verdict['ok'])) return [409, array_merge(['error' => 'validation_failed'], $verdict)];
-
+    lumen_up_recover_publish_leftovers();
     $destBase = data_web() . "/$type";
     $dest = "$destBase/$folder";
     if (is_dir($dest) && !$overwrite) return [409, ['error' => 'already_exists']];
 
     return lumen_up_journal_locked($type, $folder, function ($journal) use ($type, $folder, $src, $dest, $destBase, $hidden) {
+        // Validated INSIDE the journal lock: a chunk acknowledged between a check
+        // made outside it and the move would be published unvalidated.
+        $verdict = lumen_up_validate_dataset($type, $folder);
+        if (empty($verdict['ok'])) return [409, array_merge(['error' => 'validation_failed'], $verdict)];
         if ($hidden) {
-            $meta = lumen_up_read_json("$src/metadata.json") ?: [];
+            $meta = lumen_read_json_doc("$src/metadata.json") ?: [];
             $meta['hidden'] = true;
-            @file_put_contents("$src/metadata.json", json_encode($meta, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE));
+            if (!lumen_write_json_doc("$src/metadata.json", $meta)) return [500, ['error' => 'publish_failed']];
         }
         admin_make_dir($destBase);
         $replaced = null;
@@ -1083,7 +1143,7 @@ function lumen_up_publish($type, $folder, bool $overwrite, bool $hidden): array 
             if (!lumen_up_rcopy($src, $tmp)) {
                 lumen_up_rrmdir($tmp);
                 if ($replaced !== null) @rename($replaced, $dest);
-                return [500, ['error' => 'publish_failed']];
+                return lumen_up_disk_full(1 << 20) ? [507, ['error' => 'insufficient_disk', 'freeBytes' => lumen_up_free_bytes()]] : [500, ['error' => 'publish_failed']];
             }
             if (!@rename($tmp, $dest)) {
                 lumen_up_rrmdir($tmp);
@@ -1093,6 +1153,7 @@ function lumen_up_publish($type, $folder, bool $overwrite, bool $hidden): array 
             lumen_up_rrmdir($src);
         }
         if ($replaced !== null) lumen_up_rrmdir($replaced);
+        lumen_catalog_invalidate();
         $jp = lumen_up_journal_path($type, $folder);
         if ($jp && is_file($jp)) @unlink($jp);
         // The flock sidecar too, or uploads/state/ slowly fills with dead
@@ -1101,6 +1162,44 @@ function lumen_up_publish($type, $folder, bool $overwrite, bool $hidden): array 
         @rmdir(lumen_up_staging() . "/$type");
         return [200, ['ok' => true, 'id' => "$type/$folder", 'hidden' => $hidden]];
     });
+}
+
+/**
+ * Settle what an interrupted publish left in DATA_WEB/<type>/ (twin of
+ * upload_staging.recover_publish_leftovers). `.replaced-<folder>-<ts>` is the
+ * previous copy of a dataset: put back when <folder> itself is missing (the request
+ * died between the two renames), deleted otherwise. `.incoming-<folder>-<ts>` is a
+ * partial cross-volume copy, always deleted. PHP has no start-up hook, so this runs
+ * on the admin paths that list or publish datasets; a tree with no dot-folder costs
+ * one scandir per type. Returns one line per action.
+ */
+function lumen_up_recover_publish_leftovers(): array {
+    $log = [];
+    foreach (LUMEN_UP_TYPES as $type) {
+        $base = data_web() . "/$type";
+        if (!is_dir($base)) continue;
+        $names = @scandir($base) ?: [];
+        foreach ($names as $name) {
+            if ($name === '.' || $name === '..' || $name[0] !== '.' || !is_dir("$base/$name") || is_link("$base/$name")) continue;
+            if (preg_match('/^\.replaced-(.+)-(\d+)\z/', $name, $m)) {
+                $folder = $m[1];
+                $live = "$base/$folder";
+                if (lumen_up_safe_dataset($type, $folder) !== null && !file_exists($live)) {
+                    $log[] = @rename("$base/$name", $live)
+                        ? "restored $type/$folder from an interrupted publish"
+                        : "FAILED restoring $type/$folder";
+                    continue;
+                }
+                lumen_up_rrmdir("$base/$name");
+                $log[] = (is_dir("$base/$name") ? 'could not fully remove ' : 'removed ') . "$type/$name";
+            } elseif (preg_match('/^\.incoming-(.+)-(\d+)\z/', $name)) {
+                lumen_up_rrmdir("$base/$name");
+                $log[] = (is_dir("$base/$name") ? 'could not fully remove ' : 'removed ') . "$type/$name";
+            }
+        }
+    }
+    if ($log) lumen_catalog_invalidate();
+    return $log;
 }
 
 function lumen_up_discard($type, $folder): array {
@@ -1118,6 +1217,32 @@ function lumen_up_discard($type, $folder): array {
         @rmdir(lumen_up_staging() . "/$type");
         return [200, ['ok' => true]];
     });
+}
+
+/**
+ * One byte range of a file of $size bytes (RFC 9110 §14). Twin of dev_server.py
+ * _parse_byte_range, answer for answer:
+ *   [start, end] (inclusive) — "a-b", "a-" (to the end) or "-n" (the LAST n bytes);
+ *                              an end beyond the file is clamped;
+ *   null  — absent, malformed or multi-part: the whole file is sent (200), which a
+ *           server may always do;
+ *   false — unsatisfiable (a start at or past the end, "-0", any range of an empty
+ *           file): answer 416 with "Content-Range: bytes * /size".
+ * @return array{0:int,1:int}|null|false
+ */
+function lumen_up_parse_range(string $header, int $size) {
+    if ($header === '' || !preg_match('/^\s*bytes\s*=\s*([0-9]{0,19})\s*-\s*([0-9]{0,19})\s*\z/', $header, $m)) return null;
+    [$lo, $hi] = [$m[1], $m[2]];
+    if ($lo === '' && $hi === '') return null;
+    if ($lo === '') {
+        $n = (int)$hi;
+        if ($n === 0 || $size <= 0) return false;
+        return [max(0, $size - $n), $size - 1];
+    }
+    $start = (int)$lo;
+    if ($hi !== '' && (int)$hi < $start) return null;
+    if ($start >= $size) return false;
+    return [$start, $hi !== '' ? min((int)$hi, $size - 1) : $size - 1];
 }
 
 // ── Staged datasets in the admin editor ──────────────────────────────────────

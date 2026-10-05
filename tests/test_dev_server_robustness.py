@@ -149,8 +149,12 @@ class TestClientIp(unittest.TestCase):
     def test_trusted_proxy_honors_xff(self):
         dev_server.TRUSTED_PROXIES.add("203.0.113.5")
         try:
-            h = self.FakeHandler("203.0.113.5", {"X-Forwarded-For": "198.51.100.7, 10.0.0.1"})
-            self.assertEqual(dev_server._client_ip(h), "198.51.100.7", "BUG-055: trusted proxy -> first XFF hop")
+            h = self.FakeHandler("203.0.113.5", {"X-Forwarded-For": "198.51.100.7"})
+            self.assertEqual(dev_server._client_ip(h), "198.51.100.7", "BUG-055: trusted proxy -> XFF client")
+            # The left-most hops are written by the client: the proxy appends the
+            # peer it saw, so the right-most untrusted hop is the real client.
+            h = self.FakeHandler("203.0.113.5", {"X-Forwarded-For": "1.2.3.4, 198.51.100.7"})
+            self.assertEqual(dev_server._client_ip(h), "198.51.100.7", "spoofed left-most hop ignored")
         finally:
             dev_server.TRUSTED_PROXIES.discard("203.0.113.5")
 

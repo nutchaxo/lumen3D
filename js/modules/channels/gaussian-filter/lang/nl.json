@@ -1,3 +1,5 @@
 {
-  "label": "Gaussiaanse vervaging σ"
+  "label": "Gaussiaanse vervaging σ",
+  "unavailableSparse": "Niet beschikbaar bij deze kwaliteit (dun bezette brick-atlas): kies een lagere kwaliteit om de vervaging te gebruiken.",
+  "unavailable": "De vervaging is niet beschikbaar voor dit volume."
 }

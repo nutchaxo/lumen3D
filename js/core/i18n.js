@@ -61,6 +61,21 @@ const I18n = (() => {
   // (endpoint → lang/manifest.json) overrides this when available, so
   // dropping a new lang/<code>.json is picked up without code edits.
   const DEFAULT_LANGS = ['en', 'fr', 'es'];
+  const _platformReady = new Set();
+  let _tokenCache = null;
+
+  // Dictionary codes and plugin ids come from files an operator or a plugin
+  // author controls; they become property names of plain objects.
+  function _isSafeKey(k) {
+    return typeof k === 'string' && k !== '' && k !== '__proto__' && k !== 'constructor' && k !== 'prototype';
+  }
+
+  function _storageGet(key) {
+    try { return localStorage.getItem(key); } catch (_) { return null; }
+  }
+  function _storageSet(key, value) {
+    try { localStorage.setItem(key, value); } catch (_) { /* blocked or full: the switch still applies for this page */ }
+  }
   let _available = DEFAULT_LANGS.slice();
 
   /**
@@ -69,7 +84,11 @@ const I18n = (() => {
    * @returns {Promise<object|null>} The translations object, or null on failure
    */
   async function loadLanguage(lang) {
-    if (_loaded[lang]) return _loaded[lang];
+    // _loaded[lang] can exist as a bare {plugins:{…}} stub (inline plugin
+    // dictionaries register before the platform file is read), so "present"
+    // is tracked separately from "the platform file was read".
+    if (_platformReady.has(lang) && _loaded[lang]) return _loaded[lang];
+    if (!_isSafeKey(lang)) return null;
     try {
       const basePath = _getBasePath();
       const resp = await fetch(`${basePath}lang/${lang}.json`);
@@ -81,6 +100,9 @@ const I18n = (() => {
       const existingPlugins = _loaded[lang] && _loaded[lang].plugins;
       if (existingPlugins) data.plugins = Object.assign(data.plugins || {}, existingPlugins);
       _loaded[lang] = data;
+      _platformReady.add(lang);
+      _tokenCache = null;
+      if (lang === _currentLang) _translations = data;
       return data;
     } catch (err) {
       console.warn(`[i18n] Failed to load language "${lang}":`, err);
@@ -182,7 +204,7 @@ const I18n = (() => {
    * @param {string[]} [langs]   shipped locales (plugin.json i18nLanguages)
    */
   async function loadPluginLang(id, path, langs) {
-    if (!id || !path) return;
+    if (!id || !path || !_isSafeKey(id)) return;
     _plugins[id] = { path, langs: Array.isArray(langs) ? langs.slice() : null };
     // PERF: fetch the fallback (en) and the active locale concurrently rather
     // than serially. 'en' is always loaded (per-plugin English fallback); the
@@ -210,10 +232,11 @@ const I18n = (() => {
    * @param {string[]} [langs] shipped locales (plugin.json i18nLanguages)
    */
   function registerPluginLang(id, path, dicts, langs) {
-    if (!id || !path || !dicts || typeof dicts !== 'object') return;
+    if (!id || !path || !dicts || typeof dicts !== 'object' || !_isSafeKey(id)) return;
     _plugins[id] = { path, langs: Array.isArray(langs) ? langs.slice() : null };
+    _tokenCache = null;
     for (const [code, dict] of Object.entries(dicts)) {
-      if (!dict || typeof dict !== 'object') continue;
+      if (!dict || typeof dict !== 'object' || !_isSafeKey(code)) continue;
       _loaded[code] = _loaded[code] || {};
       _loaded[code].plugins = _loaded[code].plugins || {};
       _loaded[code].plugins[id] = dict;
@@ -253,7 +276,7 @@ const I18n = (() => {
   async function init() {
     await discoverLanguages();
 
-    const saved = localStorage.getItem('iribhm-lang');
+    const saved = _storageGet('iribhm-lang');
     const browserLang = (navigator.language || 'en').split('-')[0];
     let lang = _fallbackLang;
     if (saved && isAvailable(saved)) lang = saved;
@@ -265,7 +288,7 @@ const I18n = (() => {
 
     // A saved/target locale whose file failed to load must not strand the
     // UI on a half-applied language — fall back cleanly.
-    if (!_loaded[lang]) lang = _fallbackLang;
+    if (!_platformReady.has(lang)) lang = _fallbackLang;
 
     _currentLang = lang;
     _translations = _loaded[lang] || _loaded[_fallbackLang] || {};
@@ -298,15 +321,16 @@ const I18n = (() => {
       return;
     }
     await loadLanguage(lang);
-    if (!_loaded[lang]) return; // load failed → keep current language
+    if (!_platformReady.has(lang)) return; // load failed → keep current language
 
     await Promise.all(Object.keys(_plugins).map(id => _ensurePluginLang(id, lang)));
 
     _currentLang = lang;
+    _tokenCache = null;
     _translations = _loaded[lang] || _loaded[_fallbackLang] || {};
-    localStorage.setItem('iribhm-lang', lang);
     _applyDocumentLang();
     _applyTranslations();
+    _storageSet('iribhm-lang', lang);
     _notify();
   }
 
@@ -348,14 +372,12 @@ const I18n = (() => {
     // so locale files stay domain-neutral. Explicit call-site params win over
     // instance tokens on a name clash. A function replacement avoids $-pattern
     // pitfalls in the replacement value.
-    const merged = _instanceTokens();
-    if (params) Object.assign(merged, params);
-    Object.keys(merged).forEach(p => {
-      if (value.indexOf('{' + p + '}') === -1) return;
-      const rep = String(merged[p]);
-      value = value.replace(new RegExp(`\\{${p}\\}`, 'g'), () => rep);
+    if (value.indexOf('{') === -1) return value;
+    const tokens = _instanceTokens();
+    return value.replace(/\{([A-Za-z0-9_]+)\}/g, (m, name) => {
+      if (params && Object.prototype.hasOwnProperty.call(params, name)) return String(params[name]);
+      return Object.prototype.hasOwnProperty.call(tokens, name) ? String(tokens[name]) : m;
     });
-    return value;
   }
 
   /**
@@ -385,7 +407,13 @@ const I18n = (() => {
   function _instanceTokens() {
     try {
       if (typeof InstanceConfig !== 'undefined' && InstanceConfig && InstanceConfig.tokens) {
-        return Object.assign({}, InstanceConfig.tokens());
+        // tokens() builds ~15 localized strings and resolves the type names back
+        // through this dictionary: memoise per (language, config revision).
+        const rev = typeof InstanceConfig.revision === 'function' ? InstanceConfig.revision() : 0;
+        if (_tokenCache && _tokenCache.lang === _currentLang && _tokenCache.rev === rev) return _tokenCache.map;
+        const map = Object.assign({}, InstanceConfig.tokens());
+        _tokenCache = { lang: _currentLang, rev, map };
+        return map;
       }
     } catch (_) { /* fall through */ }
     return {};
@@ -487,6 +515,10 @@ const I18n = (() => {
    */
   function onLanguageChange(fn) {
     _listeners.push(fn);
+    return () => {
+      const i = _listeners.indexOf(fn);
+      if (i !== -1) _listeners.splice(i, 1);
+    };
   }
 
   function _notify() {

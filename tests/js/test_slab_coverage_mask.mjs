@@ -6,13 +6,11 @@
 //   • viewer.js _sliceCoverageMask: the alpha of the colour picture, 255 / 0, read in
 //     bands of rows (exact at band boundaries, threshold 128), null on a size mismatch
 //     or an unreadable canvas;
-//   • _studioRawFor + _renderStudioPreviewSlice + getCurrentSliceResult (z-stack and
-//     inspector branches), lifted from viewer.js and run over a synthetic turned slab:
-//     the mask is the colour picture's crop, pixel for pixel, and the recoloured raw is
-//     transparent exactly where the colour picture is;
-//   • _upgradeStudioSliceToNative + _renderNativeSliceForStudio, lifted and run with a
-//     scripted loader: every progressive picture and the final one carry the preview's
-//     mask (the same buffer: one R8 upload for the whole pass), in the preview's frame;
+//   • _studioRawFor + getCurrentSliceResult (z-stack and inspector branches), lifted
+//     from viewer.js and run over a synthetic turned slab: the mask is the colour
+//     picture's crop, pixel for pixel, and the recoloured raw is transparent exactly
+//     where the colour picture is (the Studio preview and the native pass compute the
+//     footprint from the geometry: test_viewerpage_studio_pass / _native_plane);
 //   • the Studio never serialises it: it lives inside `raw`, which the document strips.
 //
 // Run: node tests/js/test_slab_coverage_mask.mjs
@@ -125,12 +123,18 @@ const inside = (x, y) => {
   const v = -dx * Math.sin(ANGLE) + dy * Math.cos(ANGLE);
   return Math.abs(u) <= 30 && Math.abs(v) <= 30;
 };
-// The crop _sliceContentRect cuts around that footprint: its bounding box, padded by 10 px.
-const FOOTPRINT_CROP = (() => {
-  let minX = RES; let minY = RES;
-  for (let y = 0; y < RES; y++) for (let x = 0; x < RES; x++) if (inside(x, y)) { minX = Math.min(minX, x); minY = Math.min(minY, y); }
-  return { x: Math.max(0, minX - 10), y: Math.max(0, minY - 10) };
+// The crop around that footprint: its bounding box, padded by 10 px.
+const FOOTPRINT_RECT = (() => {
+  let minX = RES; let minY = RES; let maxX = 0; let maxY = 0;
+  for (let y = 0; y < RES; y++) {
+    for (let x = 0; x < RES; x++) {
+      if (!inside(x, y)) continue;
+      minX = Math.min(minX, x); minY = Math.min(minY, y); maxX = Math.max(maxX, x); maxY = Math.max(maxY, y);
+    }
+  }
+  return { x: Math.max(0, minX - 10), y: Math.max(0, minY - 10), x2: Math.min(RES - 1, maxX + 10), y2: Math.min(RES - 1, maxY + 10) };
 })();
+const FOOTPRINT_CROP = { x: FOOTPRINT_RECT.x, y: FOOTPRINT_RECT.y };
 // Raw channel values on the frame: 0 off the volume (the shader's hits == 0), some
 // all-zero pixels on it (the slab shows nothing there: opaque black in the picture).
 const rawFrameAt = (x, y, c) => (!inside(x, y) || (x + 2 * y) % 7 === 0 ? 0 : (x * 31 + y * 17 + c * 53) % 256);
@@ -179,104 +183,53 @@ function makeEnv({ channels = 4, projection = 'mip', slabThickness = 9, zstackAc
   const VolumeSlicer = {
     isVisible: () => true,
     getPlaneSpec: () => spec,
-    renderHighRes: (size) => { calls.colour.push(['highres', size]); return colourFrame(); },
     renderWithMaterial: (mat, s, size, _state, options = {}) => {
       calls.colour.push(['material', size, options?.window || null]);
       return colourFrame(options?.window || null);
     },
     renderRawWithMaterial: (mat, s, size, options = {}) => {
       assert.equal(size, RES, 'raw at the colour picture\'s frame size');
-      const native = mat !== material;
-      calls.raw.push({ native, window: options.window, fallbackRaw: options.fallbackRaw || null });
-      return rawFrame(options.window, native ? 'native' : 'preview');
+      calls.raw.push({ window: options.window });
+      return rawFrame(options.window, 'preview');
     },
-    releaseForeign() {},
+    getPlaneExtentUnits: () => 1.5,
+    releaseHiPass() {},
   };
   const VolumeViewer = {
     getMaterial: () => material,
     getRenderer: () => ({}),
     getPhysicalSize: () => ({ x: 400, y: 400, z: 120 }),
-    floorLutsFromManifest: () => [],
-    applyRgbaBrickLuts: (box) => box,
   };
-  const dims = { x: 80, y: 80, z: 40, channels, brickSize: 64 };
-  const bricks = [{ bx: 0, by: 0, bz: 0, region: null }, { bx: 1, by: 0, bz: 0, region: null }, { bx: 0, by: 1, bz: 0, region: null }];
-  let clock = 1000;
-  const timers = new Map();
-  let timerId = 0;
-  const flushTimers = () => { const list = [...timers.values()]; timers.clear(); list.forEach(fn => fn()); };
-  const BrickLoader = {
-    isReady: () => true,
-    getDimensions: () => dims,
-    getTransportEncoding: () => 'raw-rgba-gzip',
-    getManifest: () => ({}),
-    estimateTaskBytes: (tasks) => tasks.length * 1000,
-    taskBytes: () => 1000,
-    async loadBrickTasks(tasks, opts) {
-      for (const t of tasks) {
-        opts.onBrickLoaded({ bx: t.bx, by: t.by, bz: t.bz, channel: t.channel, data: new Uint8Array(16) });
-        clock += 3000;
-        flushTimers(); // the progressive refresh fires between bricks
-      }
-    },
-  };
-  class SVRManager {
-    init() {}
-    writeRgbaBrick() {}
-    writeRgbaBrickRegion() { return true; }
-    dispose() {}
-  }
-  const StudioEditor = {
-    isOpen: () => true,
-    setLoadProgress: () => { calls.progress++; },
-    setSliceResult: (sr, options = {}) => (options.imageOnly ? calls.partials : calls.finals).push(sr),
-  };
+  // The crop: the footprint's bounding box padded by 10 px (StudioPlaneOps.cropRect
+  // computes it from the plane's geometry; here the footprint is the turned square).
+  const StudioPlaneOps = { cropRect: () => ({ ...FOOTPRINT_RECT, renderRes: RES }) };
   const body = `
-    let _nativeSliceAbort = null;
     let _currentTimepoint = 0;
     let _zstackActive = env.zstackActive;
     const datasetMeta = { dimensions: { x: 80, y: 80, z: 40, c: env.channels } };
-    function _cancelNativeSlice() {}
-    function _setSliceStatus() {}
-    function _nativeLabel() { return ''; }
-    function _t(key, fallback) { return fallback; }
     function _currentChannelState() { return env.state; }
-    function _nativeSliceChannels(n) { return Array.from({ length: n }, (_, c) => c); }
-    function _nativeSliceBricksForSpec() { return env.bricks; }
-    function _nativeStudioRenderSize() { return env.res; }
     function _slicePixelSizeUm() { return { x: 1, y: 1 }; }
-    function _brickRegionData(data) { return data; }
-    function _composeRgbaRegion() { return new Uint8Array(4); }
     function _zstackGetDims() { return { z: 40 }; }
     function _zstackStudioSpec() { return env.spec; }
+    function _studioGeometry() { return { geom: {}, warp: null }; }
+    function _studioCalibrated() { return true; }
     ${lift('_copyCanvas')}
-    ${lift('_sliceContentRect')}
-    ${lift('_cropEmptySliceSpace')}
     ${lift('_sliceWindowForRect')}
     ${lift('_studioRawFor')}
     ${lift('_needsCoverageMask')}
     ${lift('_withCoverageMask')}
     ${lift('_sliceCoverageMask')}
-    ${lift('_renderStudioPreviewSlice')}
-    ${lift('_upgradeStudioSliceToNative')}
-    ${lift('_renderNativeSliceForStudio')}
     ${lift('_captureRenderRes')}
     ${lift('getCurrentSliceResult')}
-    return { _renderStudioPreviewSlice, _upgradeStudioSliceToNative, getCurrentSliceResult, _sliceContentRect };
+    return { getCurrentSliceResult };
   `;
   const page = new Function(
-    'env', 'document', 'console', 'setTimeout', 'clearTimeout', 'performance', 'navigator', 'THREE',
-    'BrickLoader', 'SVRManager', 'VolumeSlicer', 'VolumeViewer', 'SliceCompositor', 'StudioEditor', 'I18n', body,
+    'env', 'document', 'console', 'VolumeSlicer', 'VolumeViewer', 'SliceCompositor', 'StudioPlaneOps', body,
   )(
-    { channels, state: STATE, bricks, res: RES, spec, zstackActive },
+    { channels, state: STATE, spec, zstackActive },
     documentStub,
     { warn() {}, log() {} },
-    (fn) => { const id = ++timerId; timers.set(id, fn); return id; },
-    (id) => { timers.delete(id); },
-    { now: () => clock },
-    { hardwareConcurrency: 8 },
-    { UniformsUtils: { clone: (u) => ({ ...u }) } },
-    BrickLoader, SVRManager, VolumeSlicer, VolumeViewer, SC, StudioEditor, undefined,
+    VolumeSlicer, VolumeViewer, SC, StudioPlaneOps,
   );
   return { page, calls, spec, projected };
 }
@@ -309,64 +262,6 @@ function assertRecolourKeepsOutsideTransparent(raw, colourCanvas, label) {
   for (let x = 0; x < raw.width; x++) assert.equal(out[x * 4 + 3], 0, `${label}: padding row transparent at ${x}`);
 }
 
-// ── 2. The Studio preview + the native upgrade, four channels, MIP slab ─────────
-{
-  const { page, calls } = makeEnv({ channels: 4, projection: 'mip', slabThickness: 9 });
-  const preview = page._renderStudioPreviewSlice(makeEnv().spec);
-  assert.ok(preview && preview.raw, 'the preview has its raw values');
-  assert.equal(preview.raw.projected, true);
-  assert.equal(preview.raw.coverage, false, 'four channels: no spare channel for the footprint');
-  assert.ok(preview.cropRect.x > 0 && preview.cropRect.y > 0, 'a padded crop inside the frame');
-  assert.equal(preview.raw.width, preview.canvas.width, 'raw and colour picture share the crop (width)');
-  assert.equal(preview.raw.height, preview.canvas.height, 'raw and colour picture share the crop (height)');
-  assertMaskFollowsCrop(preview.raw, preview.cropRect, 'preview');
-  assertRecolourKeepsOutsideTransparent(preview.raw, preview.canvas, 'preview');
-  // Without the mask the same raw would be the old black frame.
-  const opaque = SC.composePixels({ ...preview.raw, coverageMask: undefined }, STATE);
-  assert.ok([...Array(preview.raw.width * preview.raw.height).keys()].every(i => opaque[i * 4 + 3] === 255), 'the fix: without the mask the slab is opaque over the whole crop');
-
-  // The native pass: every picture carries the preview's mask, in the preview's frame.
-  await page._upgradeStudioSliceToNative(preview);
-  const nativeRaws = calls.raw.filter(r => r.native);
-  assert.ok(nativeRaws.length >= 2, `progressive refreshes plus the final render (${nativeRaws.length})`);
-  const win = { x: Math.round(preview.cropRect.x), y: Math.round(preview.cropRect.y), w: preview.raw.width, h: preview.raw.height };
-  nativeRaws.forEach((r, k) => {
-    assert.deepEqual({ ...r.window }, win, `native render ${k}: the preview's window`);
-    assert.equal(r.fallbackRaw?.raw, preview.raw, `native render ${k}: the preview raw as fallback`);
-  });
-  assert.ok(calls.partials.length >= 1, 'progressive pictures reached the Studio');
-  assert.equal(calls.finals.length, 1, 'the final picture reached the Studio');
-  for (const [label, sr] of [...calls.partials.map((p, k) => [`partial ${k}`, p]), ['final', calls.finals[0]]]) {
-    assert.equal(sr.canvas, null, `${label}: raw mode`);
-    assert.ok(sr.raw && sr.raw !== preview.raw, `${label}: its own raw values`);
-    assert.equal(sr.raw.coverageMask, preview.raw.coverageMask, `${label}: the preview's mask, the same buffer (uploaded once)`);
-    assert.deepEqual(sr.cropRect, preview.cropRect, `${label}: the preview's crop`);
-    assertRecolourKeepsOutsideTransparent(sr.raw, preview.canvas, label);
-  }
-  console.log('preview → native upgrade, four-channel MIP: mask follows the crop and reaches every native picture: OK');
-}
-
-// ── 3. Fewer channels, one plane: no mask ──────────────────────────────────────
-{
-  const three = makeEnv({ channels: 3, projection: 'mip', slabThickness: 9 });
-  const preview3 = three.page._renderStudioPreviewSlice(three.spec);
-  assert.equal(preview3.raw.coverage, true, 'three channels: the footprint is channel 3');
-  assert.equal(preview3.raw.coverageMask, undefined, 'no mask computed (no extra readback)');
-  const readsBefore = preview3.canvas.reads.length;
-  assert.equal(readsBefore, 0, 'the colour picture was not read back for a coverage raw');
-  assertRecolourKeepsOutsideTransparent(preview3.raw, preview3.canvas, 'three channels');
-  await three.page._upgradeStudioSliceToNative(preview3);
-  for (const sr of [...three.calls.partials, ...three.calls.finals]) assert.equal(sr.raw.coverageMask, undefined, 'native three-channel pictures: no mask');
-
-  const plane = makeEnv({ channels: 4, projection: 'single', slabThickness: 1 });
-  const previewPlane = plane.page._renderStudioPreviewSlice(plane.spec);
-  assert.equal(previewPlane.raw.projected, false, 'one plane');
-  assert.equal(previewPlane.raw.coverageMask, undefined, 'one plane: no mask, the 0.005 threshold decides');
-  await plane.page._upgradeStudioSliceToNative(previewPlane);
-  for (const sr of [...plane.calls.partials, ...plane.calls.finals]) assert.equal(sr.raw.coverageMask, undefined, 'native one-plane pictures: no mask');
-  console.log('three channels / one plane: no mask: OK');
-}
-
 // ── 4. getCurrentSliceResult (the Compare Studio's slice): z-stack and inspector ──
 {
   const zstack = makeEnv({ channels: 4, projection: 'mip', slabThickness: 9 });
@@ -374,7 +269,7 @@ function assertRecolourKeepsOutsideTransparent(raw, colourCanvas, label) {
   assert.equal(zs.source, 'zstack');
   assertMaskFollowsCrop(zs.raw, FOOTPRINT_CROP, 'z-stack result');
   assertRecolourKeepsOutsideTransparent(zs.raw, zs.canvas, 'z-stack result');
-  const thumb = zstack.page.getCurrentSliceResult({ raw: false });
+  const thumb = zstack.page.getCurrentSliceResult({ raw: false, maxRes: 1024 });
   assert.equal(thumb.raw, null, 'a thumbnail: no raw, so no mask and no readback');
   assert.equal(thumb.canvas.reads.length, 0, 'the thumbnail\'s colour picture is not read back');
 
@@ -382,7 +277,8 @@ function assertRecolourKeepsOutsideTransparent(raw, colourCanvas, label) {
   const inspector = makeEnv({ channels: 4, projection: 'average', slabThickness: 5, zstackActive: false });
   const sr = inspector.page.getCurrentSliceResult();
   assert.equal(sr.source, 'gpu-slicer');
-  assert.equal(inspector.calls.colour[0][0], 'highres', 'the inspector plane rendered in colour first');
+  assert.equal(inspector.calls.colour[0][0], 'material', 'the inspector plane rendered in colour first');
+  assert.deepEqual({ ...inspector.calls.colour[0][2] }, { x: FOOTPRINT_RECT.x, y: FOOTPRINT_RECT.y, w: FOOTPRINT_RECT.x2 - FOOTPRINT_RECT.x + 1, h: FOOTPRINT_RECT.y2 - FOOTPRINT_RECT.y + 1 }, 'the crop window alone is rendered');
   assertMaskFollowsCrop(sr.raw, FOOTPRINT_CROP, 'inspector result');
   assertRecolourKeepsOutsideTransparent(sr.raw, sr.canvas, 'inspector result');
   console.log('getCurrentSliceResult (z-stack MIP, inspector average): mask follows the crop: OK');

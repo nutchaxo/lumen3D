@@ -134,7 +134,9 @@ class SiteConfigTests(unittest.TestCase):
         # v1.11.2: /api/site.php MUST be routed in BOTH do_GET and do_POST — otherwise
         # every admin save (theme/branding/pages/legal) 405s on the Python dev server.
         self.assertIn("/api/site.php", inspect.getsource(ds.AdminHandler.do_GET))
-        self.assertIn("/api/site.php", inspect.getsource(ds.AdminHandler.do_POST))
+        # do_POST routes every JSON endpoint that has a body ceiling.
+        self.assertIn("/api/site.php", ds._API_BODY_LIMITS)
+        self.assertIn("_API_BODY_LIMITS", inspect.getsource(ds.AdminHandler.do_POST))
 
 
 if __name__ == "__main__":

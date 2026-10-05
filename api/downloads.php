@@ -32,7 +32,7 @@ $ROOT          = dirname(__DIR__);                                   // WebPlatf
 $DATA_WEB      = $ROOT . DIRECTORY_SEPARATOR . 'DATA_WEB';
 $ALLOWED_TYPES = LUMEN_DATASET_TYPES;   // one shared vocabulary — see api/_admin_lib.php
 // Same guard as dev_server.py _SAFE_FOLDER_RE: one safe path component, no traversal.
-$SAFE_FOLDER   = '/^[A-Za-z0-9_][A-Za-z0-9._-]*$/';
+$SAFE_FOLDER   = '/^[A-Za-z0-9_][A-Za-z0-9._-]*\z/';
 
 function fail(int $status, string $msg): void {
     http_response_code($status);
@@ -49,8 +49,8 @@ function within(string $path, string $rootReal): ?string {
     return null;
 }
 
-$datasetId = isset($_GET['dataset']) ? (string) $_GET['dataset'] : '';
-$subpath   = isset($_GET['path']) ? (string) $_GET['path'] : '';
+$datasetId = lumen_str($_GET['dataset'] ?? null) ?? '';
+$subpath   = lumen_str($_GET['path'] ?? null) ?? '';
 
 // ── Validate dataset id "<type>/<folder>" ───────────────────────────────────
 $parts = explode('/', $datasetId, 2);
@@ -61,6 +61,16 @@ if (!in_array($typeDir, $ALLOWED_TYPES, true)) fail(400, 'Invalid dataset');
 if ($folder === '.' || $folder === '..' || !preg_match($SAFE_FOLDER, $folder)) fail(400, 'Invalid dataset');
 
 $datasetSafe  = $typeDir . '/' . $folder;
+
+// A hidden dataset is out of the public catalog; its files must not be listed here
+// either (twin of dev_server.py). Answered exactly like an unknown dataset.
+$metaRaw = @file_get_contents($DATA_WEB . DIRECTORY_SEPARATOR . $typeDir . DIRECTORY_SEPARATOR . $folder . DIRECTORY_SEPARATOR . 'metadata.json');
+$metaDoc = is_string($metaRaw) ? json_decode($metaRaw, true) : null;
+if (is_array($metaDoc) && !empty($metaDoc['hidden'])) {
+    echo json_encode(['dataset' => $datasetSafe, 'path' => '', 'available' => false, 'entries' => []]);
+    exit;
+}
+
 $downloadRoot = $DATA_WEB . DIRECTORY_SEPARATOR . $typeDir . DIRECTORY_SEPARATOR . $folder . DIRECTORY_SEPARATOR . 'download';
 
 // ── Validate inner path (segment allowlist) ─────────────────────────────────

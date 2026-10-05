@@ -23,5 +23,8 @@
   "pickSome": "Marque las fotografías a incluir.",
   "rendering": "Renderizando…",
   "ready": "{n} panel(es) · {w} × {h} px",
-  "loadFailed": "No se pudo cargar una fotografía."
+  "loadFailed": "No se pudo cargar una fotografía.",
+  "readyPartial": "{n} panel(es) · {w} × {h} px · {failed} no se pudo/pudieron cargar",
+  "unavailable": "fotografía no disponible",
+  "uncalibrated": "sin calibrar"
 }

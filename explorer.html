@@ -8,7 +8,8 @@
   <!-- Fonts -->
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" media="print" data-async-font>
+  <noscript><link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet"></noscript>
 
   <!-- Lucide Icons -->
   <script src="js/vendor/lucide.min.js" integrity="sha384-tTkFttkBclaU1cloKwOi9xk3pbao3VZxTjLNBt8iFABWDBQibbAbWpVmO28zMuxq" crossorigin="anonymous"></script>
@@ -26,8 +27,10 @@
   <style nonce="{{CSP_NONCE}}">
     body { padding-top: var(--header-height); }
   </style>
+  <script src="js/core/theme-boot.js"></script>
 </head>
 <body data-page="explorer">
+  <a class="skip-link" href="#main" data-i18n="nav.skipToContent">Skip to content</a>
 
   <!-- Navigation Bar -->
   <nav class="navbar" id="navbar" style="background: var(--bg-base); border-bottom: 1px solid var(--border-subtle);">
@@ -66,7 +69,7 @@
     </div>
   </nav>
 
-  <main class="container">
+  <main class="container" id="main" tabindex="-1">
     <div style="margin-top: var(--space-8);">
       <h1 data-i18n="explorer.title">Data Explorer</h1>
       <p style="color: var(--text-secondary);" data-i18n="explorer.subtitle">Browse and filter datasets</p>
@@ -120,7 +123,7 @@
         <div class="explorer-header">
           <div class="explorer-search">
             <i data-lucide="search"></i>
-            <input type="text" id="search-input" data-i18n-placeholder="app.search" placeholder="Search…">
+            <input type="text" id="search-input" data-i18n-placeholder="app.search" placeholder="Search…" aria-label="Search" data-i18n-aria="app.search">
           </div>
 
           <div class="explorer-controls">
@@ -129,7 +132,7 @@
             </div>
 
             <!-- Sort By -->
-            <select class="btn btn-outline" id="sort-select" style="padding-right: var(--space-8);">
+            <select class="btn btn-outline" id="sort-select" aria-label="Sort by" data-i18n-aria="explorer.sortBy" style="padding-right: var(--space-8);">
               <option value="name_asc" data-i18n="explorer.sortName">Name (A-Z)</option>
               <option value="name_desc" data-i18n="explorer.sortName">Name (Z-A)</option>
               <option value="date_desc" data-i18n="explorer.sortDate">Newest First</option>
@@ -156,6 +159,7 @@
     </div>
   </main>
 
+  <script src="js/core/font-loader.js"></script>
   <script src="js/core/utils.js?v=20260504"></script>
   <script src="js/core/ui-actions.js"></script>
   <script src="js/core/instance-config.js?v=20260706"></script>
@@ -163,7 +167,6 @@
     <script src="js/core/theme.js?v=20260504"></script>
   <script src="js/core/colorblind.js?v=20260528" nonce="{{CSP_NONCE}}"></script>
   <script src="js/core/catalog.js?v=20260504"></script>
-  <script src="js/core/download-manifest.js?v=20260504"></script>
   <script src="js/core/workspace-state.js?v=20260504"></script>
   <script src="js/core/export-manager.js?v=20260504"></script>
   <script src="js/pages/explorer.js?v=20260504"></script>

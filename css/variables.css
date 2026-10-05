@@ -11,6 +11,11 @@
   --color-primary-hover:  #1FBB6C;
   --color-primary-dark:   #008A45;
   --color-primary-subtle: rgba(0, 166, 84, 0.15);
+  /* Filled controls carrying white text (WCAG AA, 4.5:1): #00803F = 5.05:1, hover 6.66:1.
+     The brand green above is 3.19:1 under white, which is fine for borders and
+     large accents but not for a label. */
+  --color-primary-strong:       #00803F;
+  --color-primary-strong-hover: #006B35;
 
   --color-accent:         #00D2FF;
   --color-accent-hover:   #33DBFF;
@@ -123,4 +128,16 @@
   --glass-bg:       rgba(26, 26, 46, 0.75);
   --glass-border:   rgba(255, 255, 255, 0.08);
   --glass-blur:     16px;
+}
+
+/* The operator's theme (config/theme.css) overrides --color-primary but not the strong
+   pair: derive it from whatever primary is in force, so a re-branded instance keeps
+   buttons in its own colour. 77 % / 64 % of the colour over black is exactly the fixed
+   pair above for the default green (#00A654 -> #00803F / #006B35), and only darkens a
+   brand colour, so white text keeps at least the contrast it had. */
+@supports (color: color-mix(in srgb, red 50%, black)) {
+  :root {
+    --color-primary-strong:       color-mix(in srgb, var(--color-primary) 77%, #000);
+    --color-primary-strong-hover: color-mix(in srgb, var(--color-primary) 64%, #000);
+  }
 }

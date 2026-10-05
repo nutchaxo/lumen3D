@@ -517,6 +517,8 @@ let singleJson;
   importText(JSON.stringify(hostile));
   assert.deepEqual(toasts, [], 'a readable file with odd values imports');
   const [rect, line, text, bar, poly] = S.doc.layers;
+  assert.equal(S.doc.layers.length, 4, 'a layer of a kind the Studio does not draw is left out');
+  assert.equal(poly, undefined);
   const ids = S.doc.layers.map(l => l.id);
   assert.ok(ids.every(id => /^[A-Za-z0-9_.:-]+$/.test(id)), `ids are plain tokens: ${ids}`);
   assert.equal(new Set(ids).size, ids.length, 'ids are unique');
@@ -540,7 +542,8 @@ let singleJson;
   assert.equal(bar.style.startCap, 'bar');
   assert.equal(bar.style.endCap, undefined, 'an unknown cap is dropped');
   assert.equal(bar.x2, 10 + 100 / 0.5, 'the scale bar end is re-derived from its value and the open calibration');
-  assert.deepEqual(plain(poly.points), [{ x: 1, y: 2 }], 'unreadable points are dropped');
+  assert.equal(line.x2, 4, 'given coordinates kept');
+  assert.ok(['x', 'y', 'w', 'h'].every(k => Number.isFinite(text[k])), 'a coordinate the layer is drawn from and the file left out is a number (0), never NaN');
   Studio.close();
 
   // The first Studio files: a bare list of layers.

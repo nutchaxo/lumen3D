@@ -1722,11 +1722,57 @@ body.viewer-iframe .scientific-panel {
   color: var(--text-primary);
 }
 
-@media (max-width: 980px) {
+/* The two panels stay beside the figure down to a tablet width: narrower first, then
+   gathered into one right-hand column (tools/layers above, properties/channels below).
+   Only a phone-sized viewport stacks them under the canvas. */
+@media (max-width: 1280px) {
+  .studio-sidebar-left {
+    width: 228px;
+  }
+
+  .studio-sidebar-right {
+    width: 272px;
+  }
+}
+
+@media (max-width: 1100px) and (min-width: 721px) {
+  .studio-body {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 288px;
+    grid-template-rows: minmax(0, 1fr) minmax(0, 1fr);
+  }
+
+  .studio-workspace {
+    grid-column: 1;
+    grid-row: 1 / span 2;
+    min-width: 0;
+  }
+
+  .studio-sidebar-left,
+  .studio-sidebar-right {
+    grid-column: 2;
+    width: auto;
+    min-height: 0;
+    border-right: 0;
+    border-left: 1px solid var(--border-subtle);
+  }
+
+  .studio-sidebar-left {
+    grid-row: 1;
+    border-bottom: 1px solid var(--border-subtle);
+  }
+
+  .studio-sidebar-right {
+    grid-row: 2;
+  }
+}
+
+@media (max-width: 720px) {
   .studio-body {
     display: grid;
     grid-template-columns: 1fr;
-    grid-template-rows: minmax(0, 1fr) auto auto;
+    grid-template-rows: minmax(42vh, 1fr) auto auto;
+    overflow-y: auto;
   }
 
   .studio-sidebar-left,
@@ -1739,7 +1785,14 @@ body.viewer-iframe .scientific-panel {
 
   .studio-workspace {
     grid-row: 1;
-    min-height: 42vh;
+  }
+
+  .studio-sidebar-left {
+    grid-row: 2;
+  }
+
+  .studio-sidebar-right {
+    grid-row: 3;
   }
 }
 

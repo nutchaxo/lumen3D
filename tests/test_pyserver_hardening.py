@@ -306,7 +306,7 @@ class LiveServer(unittest.TestCase):
             self.assertNotIn(b"Directory listing", body)
 
     def test_only_top_level_pages_are_documents(self):
-        st, h, body = self.req("GET", "/Admpan.HTML")
+        st, h, body = self.req("GET", "/admpan.html")
         self.assertEqual(st, 200)
         self.assertIn("nonce-", h.get("content-security-policy", ""))
         self.assertNotIn(b"{{CSP_NONCE}}", body)

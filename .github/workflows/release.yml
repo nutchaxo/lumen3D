@@ -31,6 +31,8 @@ jobs:
         run: python dev_server.py --check
       - name: Pipeline dependencies (the preprocessing tests run the real scripts)
         run: pip install numpy==2.5.1 scipy==1.16.0 h5py==3.16.0 Pillow==11.1.0 tqdm==4.67.1
+      - name: Light pipeline pack (the admin/pack tests read the pack the repo builds)
+        run: python tools/build_pipeline_bundle.py
       - name: Full test suite
         run: python tests/run_all.py -j 2 --strict-skips --check-clean
       - name: Sandbox must never grant allow-same-origin (INV-6)

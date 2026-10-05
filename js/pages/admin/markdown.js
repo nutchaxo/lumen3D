@@ -167,8 +167,12 @@ const RE_STRONG_U = new RegExp('(^|[^\\p{L}\\p{N}_])__' + INNER + '__(?![\\p{L}\
 const RE_EM_U = new RegExp('(^|[^\\p{L}\\p{N}_])_' + INNER + '_(?![\\p{L}\\p{N}_])', 'gu');
 const RE_STRIKE = new RegExp('~~' + INNER + '~~', 'g');
 
+// The lazy delimiter scans are quadratic in the worst case (a long run of unmatched
+// `*`): past this length a paragraph is left unstyled rather than risk freezing the tab.
+const EMPHASIS_MAX_CHARS = 4096;
+
 function emphasis(s) {
-  if (!/[*_~]/.test(s)) return s;
+  if (!/[*_~]/.test(s) || s.length > EMPHASIS_MAX_CHARS) return s;
   s = s.replace(RE_TRIPLE, (m, x) => `<em><strong>${emphasis(x)}</strong></em>`);
   s = s.replace(RE_STRONG, (m, x) => `<strong>${emphasis(x)}</strong>`);
   s = s.replace(RE_STRONG_U, (m, pre, x) => `${pre}<strong>${emphasis(x)}</strong>`);

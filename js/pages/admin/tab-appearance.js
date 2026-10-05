@@ -17,7 +17,7 @@
 'use strict';
 
 import { API_SITE, t, escHtml, apiFetch, apiFetchStatus, toast, el, refreshIcons } from './shared.js';
-import { setUnsaved } from './bus.js';
+import { setUnsaved, registerDirtyGuard, bindTabSave } from './bus.js';
 
 // ── Color math (hex ↔ rgb ↔ hsl) ────────────────────────────────
 function _hexToRgb(hex) {
@@ -104,8 +104,10 @@ let _theme = { tokens: {}, dark: {}, light: {} };   // full doc loaded from serv
 let _overrides = {};                                 // working token overrides
 let _dirty = false;
 let _previewDoc = null;
+let _loading = null;
+let _loaded = false;
 
-function _mark(on) { _dirty = on; setUnsaved(on); const s = el('appearance-save'); if (s) s.disabled = !on; }
+function _mark(on) { _dirty = on; setUnsaved(on, 'appearance'); const s = el('appearance-save'); if (s) s.disabled = !on; }
 
 function _computed(name, fallback) {
   if (_overrides[name] != null) return _overrides[name];
@@ -250,15 +252,34 @@ function _onPreviewReady() {
   }
 }
 
-async function load() {
-  const data = await apiFetch(`${API_SITE}?action=get&doc=theme`);
-  _theme = (data && typeof data === 'object') ? data : { tokens: {}, dark: {}, light: {} };
-  _overrides = Object.assign({}, _theme.tokens || {});
-  _mark(false);
+function load() {
+  if (_loading) return _loading;
+  _loading = (async () => {
+    try {
+      const data = await apiFetch(`${API_SITE}?action=get&doc=theme`);
+      if (_dirty && _loaded) return;
+      if (!data || typeof data !== 'object' || Array.isArray(data)) return;
+      _theme = data;
+      _loaded = true;
+      _overrides = Object.assign({}, _theme.tokens || {});
+      _mark(false);
+      render();
+    } finally { _loading = null; }
+  })();
+  return _loading;
+}
+
+function discard() { _mark(false); }
+
+function relabel() {
+  // Rebuild the labels from memory: the unsaved overrides are re-applied to the
+  // reloaded preview by _onPreviewReady, so nothing the operator set is lost.
   render();
+  _mark(_dirty);
 }
 
 async function save() {
+  if (!_loaded) { toast(t('appearance.saveError', "Échec de l'enregistrement du thème."), 'error'); load(); return; }
   const body = { tokens: _overrides, dark: _theme.dark || {}, light: _theme.light || {} };
   const r = await apiFetchStatus(`${API_SITE}?action=save&doc=theme`, { method: 'POST', body: JSON.stringify(body) });
   if (r.ok) {
@@ -293,7 +314,8 @@ export const AppearanceTab = {
   titleKey: 'admin.navAppearance',
   titleDefault: 'Apparence',
   mounted: false,
-  mount() { render(); load(); },
-  activate() { load(); },
-  relabel() { render(); load(); },
+  mount() { bindTabSave('appearance', () => { if (_dirty) save(); return true; });
+    registerDirtyGuard('appearance', () => _dirty, discard); render(); },
+  activate() { if (!_dirty || !_loaded) load(); },
+  relabel,
 };

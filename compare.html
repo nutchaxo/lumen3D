@@ -8,7 +8,8 @@
   <!-- Fonts -->
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" media="print" data-async-font>
+  <noscript><link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet"></noscript>
 
   <!-- Lucide Icons -->
   <script src="js/vendor/lucide.min.js" integrity="sha384-tTkFttkBclaU1cloKwOi9xk3pbao3VZxTjLNBt8iFABWDBQibbAbWpVmO28zMuxq" crossorigin="anonymous"></script>
@@ -398,8 +399,10 @@
       font-size: 10px; padding: 2px 6px; border-radius: 10px; margin-bottom: 4px; display: inline-block;
     }
   </style>
+  <script src="js/core/theme-boot.js"></script>
 </head>
 <body data-page="compare">
+  <a class="skip-link" href="#compare-grid" data-i18n="nav.skipToContent">Skip to content</a>
 
   <div class="compare-layout">
 
@@ -460,13 +463,13 @@
         <button class="btn btn-outline btn-sm flex items-center gap-2" id="btn-restore-compare-workspace">
           <i data-lucide="folder-open"></i> <span data-i18n="compare.restore">Restore</span>
         </button>
-        <select class="btn btn-outline btn-sm" id="compare-layout-mode" data-i18n-title="tips.panelLayout">
+        <select class="btn btn-outline btn-sm" id="compare-layout-mode" data-i18n-title="tips.panelLayout" aria-label="Panel layout" data-i18n-aria="tips.panelLayout">
           <option value="auto" selected data-i18n="compare.layoutAuto">Auto layout</option>
           <option value="columns" data-i18n="compare.layoutCols">Columns</option>
           <option value="rows" data-i18n="compare.layoutRows">Rows</option>
           <option value="grid" data-i18n="compare.layoutGrid">Grid</option>
         </select>
-        <select class="btn btn-outline btn-sm" id="compare-quality" data-i18n-title="compare.qualityHint">
+        <select class="btn btn-outline btn-sm" id="compare-quality" data-i18n-title="compare.qualityHint" aria-label="Render quality" data-i18n-aria="compare.qualityHint">
           <option value="auto" selected data-i18n="compare.qualityAuto">Auto quality</option>
           <option value="512x512">512x512</option>
           <option value="1024x1024">1024x1024</option>
@@ -484,14 +487,14 @@
     </div>
 
     <!-- Grid -->
-    <div class="compare-grid layout-0" id="compare-grid">
+    <main class="compare-grid layout-0" id="compare-grid" tabindex="-1">
       <div class="text-muted flex flex-col items-center gap-4" id="empty-state">
         <i data-lucide="grid" class="w-16 h-16 opacity-20"></i>
         <p data-i18n="compare.emptyTitle">No datasets selected for comparison.</p>
         <button class="btn btn-outline" data-action="add-dataset" data-i18n="compare.chooseBtn">Choose Dataset</button>
       </div>
       <!-- Panels are appended here by JS -->
-    </div>
+    </main>
 
   </div>
 
@@ -503,7 +506,7 @@
         <button class="btn btn-icon btn-ghost w-8 h-8 p-0" id="btn-close-modal" aria-label="Close" data-i18n-aria="app.close"><i data-lucide="x"></i></button>
       </div>
       <div class="modal-filters">
-        <input type="search" class="form-input" id="modal-search" placeholder="Search…" data-i18n-placeholder="compare.search" autocomplete="off">
+        <input type="search" class="form-input" id="modal-search" placeholder="Search…" data-i18n-placeholder="compare.search" aria-label="Search a dataset" data-i18n-aria="compare.search" autocomplete="off">
         <div class="modal-type-chips" id="modal-type-chips"></div>
       </div>
       <div class="modal-body" id="modal-dataset-list">
@@ -520,12 +523,12 @@
         <span class="text-xs text-muted" id="studio-subtitle" data-i18n="compare.studioSubtitle">Edit and Annotate</span>
       </div>
       <div class="studio-header-right">
-        <select class="form-select form-select-sm bg-surface" id="studio-scale-mode" data-i18n-title="tips.scaleMode">
+        <select class="form-select form-select-sm bg-surface" id="studio-scale-mode" data-i18n-title="tips.scaleMode" aria-label="Scale Mode" data-i18n-aria="tips.scaleMode">
           <option value="visual" data-i18n="compare.scaleVisual">Visual Size</option>
           <option value="physical" data-i18n="compare.scalePhysical">Physical Scale</option>
         </select>
         <div class="divider-vertical"></div>
-        <input type="file" id="studio-import-file" accept=".json" class="hidden">
+        <input type="file" id="studio-import-file" accept=".json" class="hidden" aria-label="Import JSON" data-i18n-aria="compare.importJson">
         <button class="btn btn-outline btn-sm" id="btn-studio-import"><i data-lucide="upload"></i> <span data-i18n="compare.importJson">Import JSON</span></button>
         <button class="btn btn-outline btn-sm" id="btn-studio-export-json"><i data-lucide="file-json"></i> <span data-i18n="compare.saveJson">Save JSON</span></button>
         <button class="btn btn-primary btn-sm" id="btn-studio-export-png"><i data-lucide="download"></i> <span data-i18n="compare.exportPng">Export PNG</span></button>
@@ -580,6 +583,7 @@
     </div>
   </div>
 
+  <script src="js/core/font-loader.js"></script>
   <script src="js/core/utils.js"></script>
   <script src="js/core/ui-actions.js"></script>
   <script src="js/core/instance-config.js"></script>
@@ -587,15 +591,13 @@
   <script src="js/core/theme.js"></script>
   <script src="js/core/colorblind.js" nonce="{{CSP_NONCE}}"></script>
   <script src="js/core/catalog.js"></script>
-  <script src="js/core/download-manifest.js"></script>
   <script src="js/core/workspace-state.js"></script>
   <script src="js/core/url-state.js"></script>
   <script src="js/core/export-manager.js"></script>
-  <script src="js/core/annotation-manager.js"></script>
   <script src="js/components/channel-panel.js"></script>
-  <script src="js/components/annotation-layer.js"></script>
   <script src="js/core/slice-compositor.js"></script>
   <script src="js/components/studio-editor.js"></script>
+  <script src="js/pages/compare-policy.js"></script>
   <script src="js/pages/compare.js"></script>
 </body>
 </html>

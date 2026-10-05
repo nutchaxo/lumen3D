@@ -56,6 +56,14 @@ PluginRegistry.implement('chunk-debug', {
     this._mode = { type: 'box' };
     this._lod = 0;
     this._lastSig = '';
+    this._model = null;         // manifest + LOD the chunk model was built for
+    this._modelLod = -1;
+    this._observedParent = null;
+    this._shapesRaf = null;
+    this._mv = new THREE.Matrix4();
+    this._px = new Float64Array(64);
+    this._py = new Float64Array(64);
+    this._pok = new Uint8Array(64);
     this._raycaster = new THREE.Raycaster();
     this._v = new THREE.Vector3();
     this._tooltip = null;
@@ -144,10 +152,12 @@ PluginRegistry.implement('chunk-debug', {
       // Redraw the (full-resolution) overlay whenever the camera moves — this is
       // what keeps the borders crisp while the WebGL volume renders low-res.
       if (typeof VolumeViewer.onCameraChange === 'function') {
-        this._unsubCamera = VolumeViewer.onCameraChange(() => this._recomputeStack());
+        this._unsubCamera = VolumeViewer.onCameraChange(() => this._recomputeStack(true));
       }
       if (typeof VolumeViewer.onPlaneSpecChange === 'function') {
-        this._unsubPlane = VolumeViewer.onPlaneSpecChange(() => this._rebuild());
+        // Only the section shapes depend on the plane; a drag fires per step, so
+        // they are rebuilt at most once per frame and the chunk model is kept.
+        this._unsubPlane = VolumeViewer.onPlaneSpecChange(() => this._scheduleShapes());
       }
       // z-stack slice / quality (LOD) changes emit no event a plugin can grab —
       // a cheap signature poll catches every mode/slice/LOD transition.
@@ -177,6 +187,7 @@ PluginRegistry.implement('chunk-debug', {
     if (this._ro) { try { this._ro.disconnect(); } catch (e) {} this._ro = null; }
     if (this._pollId) { clearInterval(this._pollId); this._pollId = null; }
     if (this._moveRaf) { cancelAnimationFrame(this._moveRaf); this._moveRaf = null; }
+    if (this._shapesRaf) { cancelAnimationFrame(this._shapesRaf); this._shapesRaf = null; }
     if (this._unsubCamera) { this._unsubCamera(); this._unsubCamera = null; }
     if (this._unsubPlane) { this._unsubPlane(); this._unsubPlane = null; }
 
@@ -191,6 +202,7 @@ PluginRegistry.implement('chunk-debug', {
     this._lastPointer = null;
     this._downXY = null;
     this._lastSig = '';
+    this._model = null; this._modelLod = -1; this._observedParent = null;
   },
 
   // ── overlay canvas ───────────────────────────────────────────────────────
@@ -209,12 +221,28 @@ PluginRegistry.implement('chunk-debug', {
     if (typeof ResizeObserver !== 'undefined') {
       this._ro = new ResizeObserver(() => { this._syncOverlaySize(); this._drawOverlay(); });
       this._ro.observe(parent);
+      // The canvas itself is observed too: the slice stage moves it into another
+      // container, which changes its size before anything else notices.
+      if (parent !== this._canvas) this._ro.observe(this._canvas);
+      this._observedParent = parent;
     }
   },
 
   _syncOverlaySize() {
     if (!this._oc || !this._canvas) return;
     const gl = this._canvas;
+    // Follow the canvas when the page re-parents it (the slice stage moves the 3D
+    // view into the inspector panel): the overlay must stay its sibling or its
+    // offsets and size describe another box.
+    const home = gl.parentElement;
+    if (home && this._oc.parentElement !== home) {
+      home.appendChild(this._oc);
+      if (this._ro) {
+        if (this._observedParent && this._observedParent !== gl) this._ro.unobserve(this._observedParent);
+        this._ro.observe(home);
+        this._observedParent = home;
+      }
+    }
     const w = Math.max(1, gl.clientWidth);
     const h = Math.max(1, gl.clientHeight);
     const dpr = Math.min(window.devicePixelRatio || 1, 2);
@@ -227,33 +255,43 @@ PluginRegistry.implement('chunk-debug', {
     this._ocW = w; this._ocH = h; this._ocDpr = dpr;
   },
 
-  _project(local, cam) {
-    const v = this._v.copy(local);
-    this._cube.localToWorld(v);              // local → world
-    v.applyMatrix4(cam.matrixWorldInverse);  // world → view space
-    if (v.z > -1e-4) return null;            // at/behind the camera → skip
-    v.applyMatrix4(cam.projectionMatrix);    // view → NDC (perspective divide)
-    return { x: (v.x * 0.5 + 0.5) * this._ocW, y: (1 - (v.y * 0.5 + 0.5)) * this._ocH };
+  /** Project a cube-local point to overlay pixels: local -> view through the
+   *  cube-to-view matrix computed once per draw, then view -> NDC. Returns false
+   *  for a point at/behind the camera; the result lands in _px/_py[i]. */
+  _projectInto(local, cam, i) {
+    const v = this._v.copy(local).applyMatrix4(this._mv);   // local → view space
+    if (v.z > -1e-4) return false;                          // at/behind the camera → skip
+    v.applyMatrix4(cam.projectionMatrix);                   // view → NDC (perspective divide)
+    this._px[i] = (v.x * 0.5 + 0.5) * this._ocW;
+    this._py[i] = (1 - (v.y * 0.5 + 0.5)) * this._ocH;
+    return true;
   },
 
   _strokeChunk(ctx, c, cam) {
     const corners = c.corners;
     if (!corners) return;
-    const proj = corners.map(p => this._project(p, cam));
+    if (corners.length > this._px.length) {
+      const n = Math.max(corners.length, this._px.length * 2);
+      this._px = new Float64Array(n); this._py = new Float64Array(n); this._pok = new Uint8Array(n);
+    }
+    for (let i = 0; i < corners.length; i++) this._pok[i] = this._projectInto(corners[i], cam, i) ? 1 : 0;
     for (const e of c.edges) {
-      const a = proj[e[0]], b = proj[e[1]];
-      if (a && b) { ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); }
+      if (!this._pok[e[0]] || !this._pok[e[1]]) continue;
+      ctx.moveTo(this._px[e[0]], this._py[e[0]]);
+      ctx.lineTo(this._px[e[1]], this._py[e[1]]);
     }
   },
 
   _drawOverlay() {
     const ctx = this._octx;
     if (!ctx || !this._active || !this._cube) return;
-    if (this._canvas.clientWidth !== this._ocW || this._canvas.clientHeight !== this._ocH) this._syncOverlaySize();
+    if (this._canvas.clientWidth !== this._ocW || this._canvas.clientHeight !== this._ocH
+      || this._oc.parentElement !== this._canvas.parentElement) this._syncOverlaySize();
     const cam = VolumeViewer.getCamera();
     if (!cam) return;
     cam.updateMatrixWorld();
     this._cube.updateMatrixWorld();
+    this._mv.multiplyMatrices(cam.matrixWorldInverse, this._cube.matrixWorld);
 
     ctx.setTransform(this._ocDpr, 0, 0, this._ocDpr, 0, 0);
     ctx.clearRect(0, 0, this._ocW, this._ocH);
@@ -343,6 +381,16 @@ PluginRegistry.implement('chunk-debug', {
 
   // ── chunk model ────────────────────────────────────────────────────────────
 
+  /** Shapes depend on the plane and the slice mode, the chunk model on the LOD
+   *  alone: a plane drag only redoes the former, at most once per frame. */
+  _scheduleShapes() {
+    if (!this._active || this._shapesRaf) return;
+    this._shapesRaf = requestAnimationFrame(() => {
+      this._shapesRaf = null;
+      this._rebuild();
+    });
+  },
+
   _rebuild() {
     if (!this._active) return;
 
@@ -351,6 +399,15 @@ PluginRegistry.implement('chunk-debug', {
 
     const lod = this._resolveLod(manifest);
     this._lod = lod;
+    if (this._model === manifest && this._modelLod === lod && this._chunks.length) {
+      this._mode = this._sliceMode();
+      this._buildShapes(this._mode);
+      this._lastSig = this._stateSignature();
+      this._recomputeStack(true);
+      return;
+    }
+    this._model = manifest;
+    this._modelLod = lod;
     const dims = BrickLoader.getDimensions(lod);
     const level = (manifest.levels || []).find(l => l.level === lod) || manifest.levels[lod] || manifest.levels[0];
     if (!dims || !level) { this._lastSig = this._stateSignature(); return; }
@@ -400,7 +457,7 @@ PluginRegistry.implement('chunk-debug', {
     this._buildShapes(this._mode);
     this._selected = null;
     this._lastSig = this._stateSignature();
-    this._recomputeStack(); // re-derives _selected for the current cursor + redraws
+    this._recomputeStack(true); // re-derives _selected for the current cursor + redraws
   },
 
   // Sum compressed bytes across channels; return the first pack file found.
@@ -661,8 +718,8 @@ PluginRegistry.implement('chunk-debug', {
     this._copyText(this._metaClipboardText(this._selected));
   },
 
-  _recomputeStack() {
-    if (!this._active || !this._cube || !this._lastPointer) { this._setStack([]); return; }
+  _recomputeStack(redraw) {
+    if (!this._active || !this._cube || !this._lastPointer) { this._setStack([], redraw); return; }
     const camera = VolumeViewer.getCamera();
     const renderer = VolumeViewer.getRenderer();
     if (!camera || !renderer) return;
@@ -709,7 +766,7 @@ PluginRegistry.implement('chunk-debug', {
       }
     }
     hits.sort((a, b) => a.t - b.t);
-    this._setStack(hits.map(h => h.c));
+    this._setStack(hits.map(h => h.c), redraw);
   },
 
   _rayAabb(ray, min, max) {
@@ -786,12 +843,17 @@ PluginRegistry.implement('chunk-debug', {
     return inside;
   },
 
-  _setStack(arr) {
+  /** `redraw` forces a repaint (the camera or the shapes moved); a pointer move
+   *  that lands on the same stack and the same chunk leaves the canvas as it is. */
+  _setStack(arr, redraw) {
     const key = arr.map(c => c.key).join(',');
-    if (key !== this._stackKey) { this._stackKey = key; this._depthIndex = 0; }
+    const changed = key !== this._stackKey;
+    if (changed) { this._stackKey = key; this._depthIndex = 0; }
     this._stack = arr;
     if (this._depthIndex > arr.length - 1) this._depthIndex = Math.max(0, arr.length - 1);
+    const previous = this._selected;
     this._selected = arr[this._depthIndex] || null;
+    if (!redraw && !changed && previous === this._selected) return;
     this._drawOverlay();
     this._updateTooltip();
   },
@@ -845,11 +907,11 @@ PluginRegistry.implement('chunk-debug', {
     const multi = this._stack.length > 1;
     const depth = multi ? ` · ${this._t('tipDepth')} ${this._depthIndex + 1}/${this._stack.length}` : '';
     const rows = [];
-    rows.push(`<div style="font-weight:600;color:var(--color-primary,#00A654);margin-bottom:2px">${this._t('tipId')} ${esc(sel.id)}</div>`);
-    rows.push(`<div>${this._t('tipSize')}: ${esc(vals.size)}</div>`);
-    if (vals.stored) rows.push(`<div>${this._t('tipStored')}: ${esc(vals.stored)}</div>`);
-    if (sel.file) rows.push(`<div>${this._t('tipFile')}: <span style="font-family:var(--font-mono,monospace);word-break:break-all">${esc(sel.file)}</span></div>`);
-    rows.push(`<div style="opacity:.65;margin-top:2px">${this._t('tipLod')} ${this._lod}${depth}</div>`);
+    rows.push(`<div style="font-weight:600;color:var(--color-primary,#00A654);margin-bottom:2px">${esc(this._t('tipId'))} ${esc(sel.id)}</div>`);
+    rows.push(`<div>${esc(this._t('tipSize'))}: ${esc(vals.size)}</div>`);
+    if (vals.stored) rows.push(`<div>${esc(this._t('tipStored'))}: ${esc(vals.stored)}</div>`);
+    if (sel.file) rows.push(`<div>${esc(this._t('tipFile'))}: <span style="font-family:var(--font-mono,monospace);word-break:break-all">${esc(sel.file)}</span></div>`);
+    rows.push(`<div style="opacity:.65;margin-top:2px">${esc(this._t('tipLod'))} ${this._lod}${esc(depth)}</div>`);
     const hint = this._t('hintCopy') + (multi ? ` · ${this._t('hintCycle')}` : '');
     rows.push(`<div style="opacity:.5;margin-top:3px">${esc(hint)}</div>`);
     tip.innerHTML = rows.join('');

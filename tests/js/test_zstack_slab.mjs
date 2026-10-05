@@ -257,7 +257,10 @@ assert.ok(/vec2 hitClipBox\(vec3 orig, vec3 dir\)/.test(shader), 'hitClipBox dec
 assert.ok(/vec2 clipT = hitClipBox\(vOrigin, rayDir\);\s*bounds\.x = max\(bounds\.x, clipT\.x\);\s*bounds\.y = min\(bounds\.y, clipT\.y\);/.test(shader), 'ray bounds intersected with the clip box');
 assert.ok(/float slabGain = max\(1\.0, 1\.0 \/ \(rayLength \* max\(absorption, 1\.0 \/ fullLength\)\)\);/.test(shader), 'slab normalisation formula');
 assert.ok(/emissionGain \* exposure \* delta \* slabGain/.test(shader), 'natural-fluorescence emission uses the slab gain');
-assert.ok(/accumAlpha \+= localAlpha \* 0\.05 \* dvrW;/.test(shader), 'structure DVR uses the per-sample weight');
+// Structure DVR: Beer–Lambert opacity correction over the sample interval, times a
+// slab gain that lets a thin slab reach the opacity of a reference thickness.
+assert.ok(/float dvrGain = max\(1\.0, min\(fullLength, DVR_SLAB_REF\) \/ rayLength\);/.test(shader), 'structure DVR slab gain');
+assert.ok(/accumAlpha \+= \(1\.0 - accumAlpha\) \* aStep;/.test(shader), 'structure DVR composites front to back');
 
 // ── 10. the Studio gets the slab on screen, not a single plane ───────────────
 meta = { dimensions: { z: 100, c: 2 }, voxel_size: { z: 2 } };
@@ -275,7 +278,7 @@ assert.ok(/getStudioSliceRange/.test(viewerSrc), 'viewer asks the browser for th
 // and 1 − c on the −Z one, which puts it at texture depth c either way.
 assert.ok(/const c = \(lo \+ n \/ 2\) \/ z;/.test(viewerSrc) && /value: pose\.back \? 1 - c : c,/.test(viewerSrc), 'plane centred on the slab');
 assert.ok(/slabThickness: n,\s*slabStepNorm: 1 \/ z,\s*projection: n > 1 \? 'mip' : 'single'/.test(viewerSrc), 'one sample per slice, MIP when thicker than one slice');
-assert.ok(/_renderStudioPreviewSlice\(_zstackStudioSpec\(\)\)/.test(viewerSrc), 'Studio opens on that plane (then upgrades to native)');
+assert.ok(/_renderStudioPreviewSlice\(_zstackActive \? _zstackStudioSpec\(\) : null\)/.test(viewerSrc), 'Studio opens on that plane (then upgrades to native)');
 assert.ok(/const spec = options\.spec \|\| VolumeSlicer\.getPlaneSpec\(\);/.test(viewerSrc), 'native pass renders the same plane');
 // The bricks of a projected slab come from the slicer's own slab geometry (every
 // layer within halfThickness of the plane) — tests/js/test_native_slice_geometry.mjs

@@ -11,6 +11,17 @@ const Explorer = (() => {
   };
   let _sortBy = 'name_asc';
 
+  // A key the dictionary does not have yet reads as the English text, not as the key.
+  function _tr(key, fallback) {
+    const v = I18n.t(key);
+    return v && v !== key ? v : fallback;
+  }
+
+  // Catalog fields are the operator's data (metadata.json): escaped before they
+  // reach innerHTML, and a non-string stage (8.5 written as a number) is a text, not a crash.
+  const esc = (v) => Utils.escapeHtml(v == null ? '' : String(v));
+  const stageText = (d) => Utils.formatStage(d.stage == null ? '' : String(d.stage));
+
   /**
    * Initialize the Explorer
    */
@@ -183,7 +194,7 @@ const Explorer = (() => {
       container.innerHTML = `
         <i data-lucide="search-x"></i>
         <h3>${I18n.t('app.noResults')}</h3>
-        <p style="margin-top:var(--space-2)">Try adjusting your filters or search query.</p>
+        <p style="margin-top:var(--space-2)">${esc(_tr('explorer.noResultsHint', 'Try adjusting your filters or search query.'))}</p>
       `;
     } else {
       container.className = _currentView === 'grid' ? 'dataset-grid' : 'dataset-list';
@@ -197,12 +208,12 @@ const Explorer = (() => {
   }
 
   function _createGridCard(dataset) {
-    const stageDisplay = Utils.formatStage(dataset.stage);
+    const stageDisplay = stageText(dataset);
     const dateDisplay = Utils.formatDate(dataset.date);
 
     const metaItems = [];
-    if (stageDisplay !== '—') metaItems.push(`<span>${stageDisplay}</span>`);
-    if (dateDisplay !== '—') metaItems.push(`<span>${dateDisplay}</span>`);
+    if (stageDisplay !== '—') metaItems.push(`<span>${esc(stageDisplay)}</span>`);
+    if (dateDisplay !== '—') metaItems.push(`<span>${esc(dateDisplay)}</span>`);
     const cellCount = Number(dataset.tracking?.cellCount) || 0;
     if (cellCount) metaItems.push(`<span>${cellCount} ${I18n.t('js.trackingCells').toLowerCase()}</span>`);
 
@@ -221,36 +232,36 @@ const Explorer = (() => {
           <div class="card-meta">${metaItems.join('<span style="opacity:0.3">&middot;</span>')}</div>
         </div>
         <div class="card-actions dataset-card-actions">
-          <span class="btn btn-primary btn-sm"><i data-lucide="eye"></i> View</span>
-          ${_compareButton(dataset, '<i data-lucide="columns-3"></i> Compare')}
-          <span class="btn btn-outline btn-sm" role="button" tabindex="0" data-download-id="${Utils.escapeHtml(dataset.id)}"><i data-lucide="download"></i> Download</span>
+          <span class="btn btn-primary btn-sm"><i data-lucide="eye"></i> ${esc(_tr('explorer.view', 'View'))}</span>
+          ${_compareButton(dataset, `<i data-lucide="columns-3"></i> ${esc(_tr('nav.compare', 'Compare'))}`)}
+          <span class="btn btn-outline btn-sm" role="button" tabindex="0" data-download-id="${Utils.escapeHtml(dataset.id)}"><i data-lucide="download"></i> ${esc(_tr('app.download', 'Download'))}</span>
         </div>
       </a>
     `;
   }
 
   function _createListCard(dataset) {
-    const stageDisplay = Utils.formatStage(dataset.stage);
+    const stageDisplay = stageText(dataset);
     const dateDisplay = Utils.formatDate(dataset.date);
 
     return `
       <a href="${_datasetUrl(dataset)}" class="dataset-list-item animate-fade-in" style="animation-duration:0.3s;">
         <div class="dataset-list-icon" style="background: ${Utils.datasetTypeGradient(dataset.type)};">
-          ${dataset.thumbnail ? `<img src="${dataset.thumbnail}" alt="" style="width:100%;height:100%;object-fit:cover;border-radius:inherit">` : `<i data-lucide="${Utils.datasetTypeIcon(dataset.type)}" style="color:var(--text-muted);opacity:0.6"></i>`}
+          ${dataset.thumbnail ? `<img src="${esc(dataset.thumbnail)}" alt="" loading="lazy" decoding="async" style="width:100%;height:100%;object-fit:cover;border-radius:inherit">` : `<i data-lucide="${Utils.datasetTypeIcon(dataset.type)}" style="color:var(--text-muted);opacity:0.6"></i>`}
         </div>
         <div class="dataset-list-content">
           <div style="display:flex;align-items:center;gap:var(--space-2);margin-bottom:var(--space-1)">
             ${_typeBadge(dataset, 'font-size:10px;padding:2px 6px;')}
-            <span style="font-size:var(--text-sm);color:var(--text-secondary);">${stageDisplay !== '—' ? stageDisplay + ' &middot; ' : ''}${dateDisplay}</span>
+            <span style="font-size:var(--text-sm);color:var(--text-secondary);">${stageDisplay !== '—' ? esc(stageDisplay) + ' &middot; ' : ''}${esc(dateDisplay)}</span>
             ${_availabilityBadges(dataset)}
           </div>
           <div class="dataset-list-title">${Utils.escapeHtml(dataset.name)}</div>
           <div style="font-size:var(--text-sm);color:var(--text-secondary);">${Utils.escapeHtml(dataset.description || '')}</div>
         </div>
         <div style="display:flex;align-items:center;padding:0 var(--space-4);">
-          <span class="btn btn-primary btn-sm">View</span>
-          ${_compareButton(dataset, 'Compare')}
-          <span class="btn btn-outline btn-sm" role="button" tabindex="0" data-download-id="${Utils.escapeHtml(dataset.id)}">Download</span>
+          <span class="btn btn-primary btn-sm">${esc(_tr('explorer.view', 'View'))}</span>
+          ${_compareButton(dataset, esc(_tr('nav.compare', 'Compare')))}
+          <span class="btn btn-outline btn-sm" role="button" tabindex="0" data-download-id="${Utils.escapeHtml(dataset.id)}">${esc(_tr('app.download', 'Download'))}</span>
         </div>
       </a>
     `;
@@ -274,7 +285,7 @@ const Explorer = (() => {
 
   function _datasetPreview(dataset) {
     if (dataset.thumbnail) {
-      return `<img src="${dataset.thumbnail}" alt="">`;
+      return `<img src="${esc(dataset.thumbnail)}" alt="" loading="lazy" decoding="async">`;
     }
     return `<i data-lucide="${Utils.datasetTypeIcon(dataset.type)}" style="width:48px;height:48px;color:var(--text-muted);opacity:0.4"></i>`;
   }
@@ -287,9 +298,9 @@ const Explorer = (() => {
     const hasTracking = Boolean(dataset.tracking && dataset.tracking.tracksPath);
     const hasLinked = (Catalog.getRelated?.(dataset.id) || []).length > 0;
     const badges = [];
-    if (hasLinked) badges.push('<span class="availability-badge">Linked</span>');
-    if (hasRaw) badges.push('<span class="availability-badge">Raw</span>');
-    if (dataset.path) badges.push('<span class="availability-badge">Web</span>');
+    if (hasLinked) badges.push(`<span class="availability-badge">${esc(_tr('explorer.badgeLinked', 'Linked'))}</span>`);
+    if (hasRaw) badges.push(`<span class="availability-badge">${esc(_tr('explorer.badgeRaw', 'Raw'))}</span>`);
+    if (dataset.path) badges.push(`<span class="availability-badge">${esc(_tr('explorer.badgeWeb', 'Web'))}</span>`);
     if (hasTracking) badges.push(`<span class="availability-badge">${Utils.escapeHtml(I18n.t('explorer.tracked'))}</span>`);
     return badges.join('');
   }

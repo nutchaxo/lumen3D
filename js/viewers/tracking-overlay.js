@@ -42,6 +42,9 @@ const TrackingOverlay = (() => {
   let _material = null;
   let _worker = null;
   let _disposed = false;
+  // Each load() takes a token; only the latest one may install its result.
+  let _loadToken = 0;
+  let _pendingLoad = null;     // { token, worker, reject }
 
   let _data = null;          // packed arrays from the worker
   let _drawn = null;         // instance index -> cell index, for picking
@@ -49,6 +52,9 @@ const TrackingOverlay = (() => {
   let _stabilized = false;
   let _selected = -1;
   let _style = { visible: true, diameterUm: 12, opacity: 0.95, showMitosis: true, showFusion: true };
+  // Hidden by the page for a reason of its own (a frame the layer cannot be drawn in),
+  // independently of the user's eye toggle (_style.visible).
+  let _autoHidden = false;
 
   const SELECTED_SCALE = 1.8;
   const FLAG_MITOSIS = 1;
@@ -60,6 +66,7 @@ const TrackingOverlay = (() => {
   const _c = new THREE.Color();
   const _raycaster = new THREE.Raycaster();
   const _ndc = new THREE.Vector2();
+  const _posScratch = [0, 0, 0];
 
   function init(opts = {}) {
     _volumeObject = opts.volumeObject || null;
@@ -97,6 +104,9 @@ const TrackingOverlay = (() => {
 
   function _destroyMesh() {
     if (_group && _volumeObject) _volumeObject.remove(_group);
+    // InstancedMesh.dispose() releases the instanceMatrix / instanceColor GPU buffers;
+    // the geometry and the material are released on their own.
+    _mesh?.dispose?.();
     _geometry?.dispose?.();
     _material?.dispose?.();
     _mesh = null; _geometry = null; _material = null; _group = null; _drawn = null;
@@ -148,24 +158,44 @@ const TrackingOverlay = (() => {
     _mesh.count = drawn;
     _mesh.instanceMatrix.needsUpdate = true;
     if (_mesh.instanceColor) _mesh.instanceColor.needsUpdate = true;
-    _group.visible = _style.visible && drawn > 0;
+    _group.visible = _style.visible && !_autoHidden && drawn > 0;
     _onDirty();
   }
 
+  const _abortError = (message) => {
+    try { return new DOMException(message, 'AbortError'); } catch (_) { return Object.assign(new Error(message), { name: 'AbortError' }); }
+  };
+
+  /**
+   * Load the tracks of a series. A later load() supersedes this one: its worker is
+   * terminated and its promise rejects with an AbortError, as does a load pending
+   * when dispose() runs — an awaiter (whenLoaded) never hangs.
+   */
   function load(basePath, trackingMeta, onProgress) {
     return new Promise((resolve, reject) => {
       const path = trackingMeta && trackingMeta.tracksPath;
       if (!path) { reject(new Error('no tracksPath')); return; }
+      if (_disposed) { reject(_abortError('tracking overlay disposed')); return; }
+      _abortPendingLoad('superseded by a newer load');
+      const token = ++_loadToken;
       // Version the worker URL: .htaccess caches js/ for a week, and
       // build_release.py only stamps HTML src attributes — never a string inside
       // JS — so an unversioned worker would be frozen on the host after a fix.
-      _worker = new Worker(`js/workers/tracks-load-worker.js?v=${Date.now()}`);
-      _worker.onmessage = (ev) => {
+      const worker = new Worker(`js/workers/tracks-load-worker.js?v=${Date.now()}`);
+      const pending = { token, worker, reject };
+      _pendingLoad = pending;
+      _worker = worker;
+      const finish = () => {
+        worker.terminate?.();               // one-shot job: release it immediately
+        if (_worker === worker) _worker = null;
+        if (_pendingLoad === pending) _pendingLoad = null;
+      };
+      worker.onmessage = (ev) => {
         const d = ev.data || {};
-        if (_disposed) return;
-        if (d.phase === 'error') { _terminate(); reject(new Error(d.message)); return; }
+        if (_disposed || token !== _loadToken) return;
+        if (d.phase === 'error') { finish(); reject(new Error(d.message)); return; }
         if (d.phase !== 'done') { onProgress?.(d); return; }
-        _terminate();                       // one-shot job: release it immediately
+        finish();
         _data = d;
         if (d.unmapped) {
           console.warn(`[TrackingOverlay] ${d.unmapped} timepoint keys had no matching frame`);
@@ -174,11 +204,24 @@ const TrackingOverlay = (() => {
         _rebuild();
         resolve(d);
       };
-      _worker.onerror = (e) => { _terminate(); reject(new Error(e.message || 'worker failed')); };
+      worker.onerror = (e) => {
+        if (token !== _loadToken) return;
+        finish();
+        reject(new Error(e.message || 'worker failed'));
+      };
       // Absolute: a relative URL inside a worker resolves against the WORKER's own
       // location (js/workers/), not the page, so `DATA_WEB/...` would 404.
-      _worker.postMessage({ url: new URL(`${basePath}/${path}`, location.href).href });
+      worker.postMessage({ url: new URL(`${basePath}/${path}`, location.href).href });
     });
+  }
+
+  function _abortPendingLoad(reason) {
+    const pending = _pendingLoad;
+    _pendingLoad = null;
+    if (!pending) return;
+    pending.worker.terminate?.();
+    if (_worker === pending.worker) _worker = null;
+    pending.reject(_abortError(reason));
   }
 
   function _terminate() {
@@ -193,10 +236,32 @@ const TrackingOverlay = (() => {
   }
 
   function setStyle(patch = {}) {
-    Object.assign(_style, patch);
-    if (_material && typeof patch.opacity === 'number') _material.opacity = patch.opacity;
+    const next = { ...patch };
+    // A non-finite or non-positive diameter would write NaN instance matrices.
+    if ('diameterUm' in next) {
+      const d = Number(next.diameterUm);
+      if (Number.isFinite(d) && d > 0) next.diameterUm = Math.min(1e4, d); else delete next.diameterUm;
+    }
+    if ('opacity' in next) {
+      const o = Number(next.opacity);
+      if (Number.isFinite(o)) next.opacity = Math.max(0, Math.min(1, o)); else delete next.opacity;
+    }
+    Object.assign(_style, next);
+    if (_material && typeof next.opacity === 'number') _material.opacity = next.opacity;
     _rebuild();
   }
+
+  /** Hide or show the layer for the page's own reasons (a frame without the
+   *  coordinates it needs), leaving the user's visibility setting untouched. */
+  function setAutoHidden(hidden) {
+    const next = Boolean(hidden);
+    if (next === _autoHidden) return;
+    _autoHidden = next;
+    if (_group) _group.visible = _style.visible && !_autoHidden && Boolean(_mesh?.count);
+    _onDirty?.();
+  }
+
+  function isAutoHidden() { return _autoHidden; }
 
   function getStyle() { return { ..._style }; }
 
@@ -244,7 +309,7 @@ const TrackingOverlay = (() => {
    *  Returns [x, y, z] (a fresh array, or `out` when given) or null when the cell
    *  does not exist at that frame. */
   function positionUm(c, f, opts = {}, out) {
-    if (!_data) return null;
+    if (!_data || !Number.isInteger(c)) return null;
     const frame = Number.isFinite(f) ? (f | 0) : _frame;
     if (c < 0 || c >= _data.cellTotal || frame < 0 || frame >= _data.frameCount) return null;
     const slot = _data.cellFrameSlot[c * _data.frameCount + frame];
@@ -260,7 +325,7 @@ const TrackingOverlay = (() => {
   /** Same point in the cube's object space (what a child of the volume object
    *  draws in). Fills `out` (a THREE.Vector3) and returns it, or null. */
   function positionObject(c, f, out, opts = {}) {
-    const p = positionUm(c, f, opts);
+    const p = positionUm(c, f, opts, _posScratch);
     if (!p || !_umToObject) return null;
     _v.set(p[0], p[1], p[2]);
     return _umToObject(_v, out || new THREE.Vector3());
@@ -284,6 +349,8 @@ const TrackingOverlay = (() => {
   /** The cell under a client-space point, or -1. Casts against the instanced mesh
    *  the frame actually drew, so a hidden (filtered / clipped) cell is never hit. */
   function pick(clientX, clientY, camera, domElement) {
+    // A hidden layer is not clickable: the raycaster tests layers, not .visible.
+    if (!_style.visible || _autoHidden || !_group?.visible) return -1;
     if (!_mesh || !_mesh.count || !_drawn || !camera || !domElement) return -1;
     const rect = domElement.getBoundingClientRect();
     _ndc.x = ((clientX - rect.left) / Math.max(1, rect.width)) * 2 - 1;
@@ -296,14 +363,17 @@ const TrackingOverlay = (() => {
 
   function dispose() {
     _disposed = true;
+    _loadToken++;
+    _abortPendingLoad('tracking overlay disposed');
     _terminate();
     _destroyMesh();
     _data = null;
     _selected = -1;
+    _autoHidden = false;
   }
 
   return {
-    init, load, setFrame, setStyle, getStyle, refresh, dispose,
+    init, load, setFrame, setStyle, getStyle, setAutoHidden, isAutoHidden, refresh, dispose,
     isLoaded, getCount, getRegions, hasRawCoordinates,
     getData, getFrame, isStabilizedFrame,
     setSelected, getSelected,

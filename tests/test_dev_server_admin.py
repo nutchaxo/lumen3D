@@ -66,15 +66,16 @@ class TestPluginToggle(unittest.TestCase):
     def test_last_shader_cannot_be_disabled(self):
         shaders = [p["path"] for p in dev_server._list_plugins() if p.get("placement") == "shaders"]
         self.assertGreaterEqual(len(shaders), 2, "fixture needs >=2 shaders")
-        ok, status, _ = dev_server._set_plugin_enabled(shaders[0], False)
-        self.assertTrue(ok)
-        self.assertIn(shaders[0], dev_server._load_disabled_plugins())
+        for path in shaders[:-1]:
+            ok, status, _ = dev_server._set_plugin_enabled(path, False)
+            self.assertTrue(ok)
+            self.assertIn(path, dev_server._load_disabled_plugins())
         # disabling the last remaining shader is refused
-        ok2, status2, payload2 = dev_server._set_plugin_enabled(shaders[1], False)
+        ok2, status2, payload2 = dev_server._set_plugin_enabled(shaders[-1], False)
         self.assertFalse(ok2)
         self.assertEqual(status2, 409)
         self.assertEqual(payload2.get("error"), "last_shader")
-        self.assertNotIn(shaders[1], dev_server._load_disabled_plugins())
+        self.assertNotIn(shaders[-1], dev_server._load_disabled_plugins())
 
     def test_unknown_plugin_rejected(self):
         ok, status, _ = dev_server._set_plugin_enabled("tools/does-not-exist", False)

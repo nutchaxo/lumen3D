@@ -1,3 +1,5 @@
 {
-  "label": "Gaussian blur σ"
+  "label": "Gaussian blur σ",
+  "unavailableSparse": "Not available at this quality (sparse brick atlas): choose a lower quality to use the blur.",
+  "unavailable": "The blur is not available for this volume."
 }

@@ -171,7 +171,7 @@ if "!_fail!"=="1" exit /b 1
 call :ensure_download_script
 exit /b 0
 
-rem ---- build_download_bundles.py : tools/ du depot, sinon extraction (index 5) -
+rem ---- build_download_bundles.py : tools/ du depot, sinon extraction (dernier bloc)
 :ensure_download_script
 if not "!FORCE_EXTRACT!"=="1" (
     if exist "!BATDIR!\..\tools\build_download_bundles.py" (
@@ -183,7 +183,7 @@ if not "!FORCE_EXTRACT!"=="1" (
         exit /b 0
     )
 )
-call :extract 5 "!WORK!\build_download_bundles.py"
+call :extract @@@DOWNLOAD_INDEX@@@ "!WORK!\build_download_bundles.py"
 if exist "!WORK!\build_download_bundles.py" (
     call :ok "build_download_bundles.py !DIM!(extrait)!R!"
 ) else (

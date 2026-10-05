@@ -24,11 +24,14 @@ const GITHUB_REPO        = 'nutchaxo/lumen3D';
 
 function admin_root(): string { return dirname(__DIR__); }
 function api_dir(): string { return __DIR__; }
-function cred_file(): string { return __DIR__ . '/admin_credential.json'; }
+function cred_file(): string { return defined('LUMEN_CRED_FILE') ? (string)LUMEN_CRED_FILE : __DIR__ . '/admin_credential.json'; }
+/** Where the platform keeps its private runtime state (locks, lockout store, session
+ *  files, caches): api/, which is never served. A test points it elsewhere. */
+function admin_private_dir(): string { return defined('LUMEN_PRIVATE_DIR') ? (string)LUMEN_PRIVATE_DIR : __DIR__; }
 function stats_file(): string { return __DIR__ . '/stats.json'; }
 function disabled_file(): string { return __DIR__ . '/disabled-plugins.json'; }
 function trust_file(): string { return __DIR__ . '/plugin-trust.json'; }
-function data_web(): string { return admin_root() . '/DATA_WEB'; }
+function data_web(): string { return defined('LUMEN_DATA_WEB') ? (string)LUMEN_DATA_WEB : admin_root() . '/DATA_WEB'; }
 function changelog_dir(): string { return admin_root() . '/changelog'; }
 function modules_dir(): string { return admin_root() . '/js/modules'; }
 function uploads_root(): string { return admin_root() . '/uploads'; }
@@ -55,8 +58,9 @@ const LUMEN_VOLUME_DATASET_TYPES = ['3d', 'live'];
 // into those directories nor delete what is inside them: POSIX takes the right to
 // delete a file from its PARENT DIRECTORY, not from the file.
 //
-// When that split is detected we create world-writable (0777/0666) so the site
-// stays under its owner's control; on a correctly configured host (suEXEC, per-user
+// When that split is detected we create the DATA trees world-writable (0777/0666) so
+// the site stays under its owner's control — never the code, see
+// admin_code_file_mode(); on a correctly configured host (suEXEC, per-user
 // pool) nothing changes. Secrets (api/*.json) keep 0600 — they are never meant to be
 // edited by hand, and deleting them only needs the parent directory.
 // Override with LUMEN_DIR_MODE / LUMEN_FILE_MODE.
@@ -110,26 +114,83 @@ function admin_base_modes(): array {
 function admin_dir_mode(): int  { return admin_mode_override('LUMEN_DIR_MODE')  ?? admin_base_modes()[0]; }
 function admin_file_mode(): int { return admin_mode_override('LUMEN_FILE_MODE') ?? admin_base_modes()[1]; }
 
+/**
+ * Modes for the platform's own CODE (everything outside the data trees, and any
+ * script-like file wherever it sits). The world-writable escalation above exists so
+ * the hosting account can manage what PHP writes into its DATA trees; applied to
+ * api/*.php, .htaccess or js/ it would let any other account on a shared machine
+ * replace the code PHP executes. Code is therefore never group/world-widened beyond
+ * what the web root itself grants to its group, and is always world-READABLE (the
+ * web server may be a different user than PHP). An operator override is honoured
+ * but can never make code world-writable.
+ */
+function admin_code_dir_mode(): int {
+    $o = admin_mode_override('LUMEN_DIR_MODE');
+    if ($o !== null) return ($o & ~0002) | 0755;
+    if (DIRECTORY_SEPARATOR !== '/') return 0755;
+    $root = @fileperms(admin_root());
+    return $root === false ? 0755 : ((($root & 0777) & 0775) | 0755);
+}
+
+function admin_code_file_mode(): int {
+    $o = admin_mode_override('LUMEN_FILE_MODE');
+    if ($o !== null) return ($o & 0664) | 0644;
+    if (DIRECTORY_SEPARATOR !== '/') return 0644;
+    $root = @fileperms(admin_root());
+    return $root === false ? 0644 : ((($root & 0777) & 0664) | 0644);
+}
+
+/** Path relative to the web root ('' when outside it). */
+function admin_rel_path(string $path): string {
+    $p    = str_replace('\\', '/', $path);
+    $root = rtrim(str_replace('\\', '/', admin_root()), '/');
+    if ($p === $root) return '';
+    if (strncmp($p, $root . '/', strlen($root) + 1) !== 0) return '';
+    return substr($p, strlen($root) + 1);
+}
+
+/** A file an interpreter or the web server would act on: never widened. */
+function admin_is_code_file(string $path): bool {
+    return (bool)preg_match('/(\.(php\d?|phtml|phps|phar|py|pl|cgi|sh)|(^|\/)\.htaccess|(^|\/)\.user\.ini)$/i',
+                            str_replace('\\', '/', $path));
+}
+
+/** The operator-managed data trees, the only place the escalated modes apply. */
+function admin_is_data_rel(string $rel): bool {
+    foreach (['DATA_WEB', 'uploads', 'config', 'api/page-drafts'] as $prefix) {
+        if ($rel === $prefix || strncmp($rel, $prefix . '/', strlen($prefix) + 1) === 0) return true;
+    }
+    return false;
+}
+
+function admin_dir_mode_for(string $path): int {
+    return admin_is_data_rel(admin_rel_path($path)) ? admin_dir_mode() : admin_code_dir_mode();
+}
+
+function admin_file_mode_for(string $path): int {
+    if (admin_is_code_file($path)) return admin_code_file_mode();
+    return admin_is_data_rel(admin_rel_path($path)) ? admin_file_mode() : admin_code_file_mode();
+}
+
 /** mkdir + explicit chmod on every level created (mkdir's mode is umask-masked). */
 function admin_make_dir(string $path): bool {
     if (is_dir($path)) return true;
-    if (!@mkdir($path, admin_dir_mode(), true) && !is_dir($path)) return false;
-    $mode = admin_dir_mode();
+    if (!@mkdir($path, admin_dir_mode_for($path), true) && !is_dir($path)) return false;
     $cur  = rtrim(str_replace('\\', '/', $path), '/');
     $root = rtrim(str_replace('\\', '/', admin_root()), '/');
     while ($cur !== '' && strlen($cur) > strlen($root) && strncmp($cur, $root, strlen($root)) === 0) {
-        @chmod($cur, $mode);
+        @chmod($cur, admin_dir_mode_for($cur));
         $cur = dirname($cur);
     }
     return true;
 }
 
-function admin_fix_file_mode(string $path): void { @chmod($path, admin_file_mode()); }
+function admin_fix_file_mode(string $path): void { @chmod($path, admin_file_mode_for($path)); }
 
 /** Apply the resolved modes to a freshly extracted subtree (zip extraction ignores them). */
 function mkt_modes_recursive(string $base): void {
     if (DIRECTORY_SEPARATOR !== '/' || !is_dir($base)) return;
-    @chmod($base, admin_dir_mode());
+    @chmod($base, admin_dir_mode_for($base));
     $it = new RecursiveIteratorIterator(
         new RecursiveDirectoryIterator($base, FilesystemIterator::SKIP_DOTS | FilesystemIterator::UNIX_PATHS),
         RecursiveIteratorIterator::SELF_FIRST,
@@ -137,7 +198,7 @@ function mkt_modes_recursive(string $base): void {
     );
     foreach ($it as $path => $info) {
         if ($info->isLink()) continue;
-        @chmod((string)$path, $info->isDir() ? admin_dir_mode() : admin_file_mode());
+        @chmod((string)$path, $info->isDir() ? admin_dir_mode_for((string)$path) : admin_file_mode_for((string)$path));
     }
 }
 
@@ -169,6 +230,9 @@ function admin_permissions_report(): array {
         'phpUser' => $name($php),
         'dirMode' => sprintf('%04o', admin_dir_mode()),
         'fileMode' => sprintf('%04o', admin_file_mode()),
+        // Code (api/*.php, .htaccess, js/…) is never widened like the data trees.
+        'codeDirMode' => sprintf('%04o', admin_code_dir_mode()),
+        'codeFileMode' => sprintf('%04o', admin_code_file_mode()),
         'rootMode' => sprintf('%04o', @fileperms($root) & 0777),
         // How the site is shared decides the modes; surfacing it turns a support
         // round-trip ("why 0770?") into something the operator can read off the card.
@@ -192,7 +256,6 @@ function admin_apply_tree_modes(int $maxEntries = 200000): array {
             'dirMode' => sprintf('%04o', admin_dir_mode()), 'fileMode' => sprintf('%04o', admin_file_mode()),
             'split' => admin_perms_owner_split()];
     if (DIRECTORY_SEPARATOR !== '/') return $out;
-    $dirMode = admin_dir_mode(); $fileMode = admin_file_mode();
     $it = new RecursiveIteratorIterator(
         new RecursiveDirectoryIterator($root, FilesystemIterator::SKIP_DOTS | FilesystemIterator::UNIX_PATHS),
         RecursiveIteratorIterator::SELF_FIRST,
@@ -203,7 +266,7 @@ function admin_apply_tree_modes(int $maxEntries = 200000): array {
         if ($info->isLink()) continue;
         $rel = ltrim(substr(str_replace('\\', '/', (string)$path), strlen($root)), '/');
         if ($rel === '' || admin_is_secret_path($rel)) continue;
-        $want = $info->isDir() ? $dirMode : $fileMode;
+        $want = $info->isDir() ? admin_dir_mode_for((string)$path) : admin_file_mode_for((string)$path);
         if ((@fileperms((string)$path) & 0777) === $want) continue;
         if (@chmod((string)$path, $want)) $out['fixed']++; else $out['failed']++;
     }
@@ -244,39 +307,152 @@ function admin_read_json(string $path): ?array {
     return is_array($d) ? $d : null;
 }
 
-/** Atomic-ish write: temp sibling + rename (atomic on the same filesystem). */
+/** Atomic write of a private api/ document (0600): temp sibling + rename. */
 function admin_write_json(string $path, array $data): bool {
+    $json = json_encode($data, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT);
+    if ($json === false) return false;
+    return lumen_write_file_atomic($path, $json, 0600);
+}
+
+/**
+ * Replace $path with $body without a reader ever seeing a partial file: the bytes
+ * go to a sibling temp file (same directory ⇒ same filesystem, so rename() is an
+ * atomic swap of the directory entry, also on Windows where PHP renames with
+ * MOVEFILE_REPLACE_EXISTING). tempnam() is not used: when the directory is not
+ * writable it silently falls back to the system temp dir, and the rename then
+ * crosses devices. $mode null = the platform's mode for that path.
+ */
+function lumen_write_file_atomic(string $path, string $body, ?int $mode = null): bool {
     $dir = dirname($path);
-    if (!is_dir($dir)) admin_make_dir($dir);
-    $tmp = tempnam($dir, '.tmp-');
-    if ($tmp === false) return false;
-    if (@file_put_contents($tmp, json_encode($data, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT)) === false) {
-        @unlink($tmp); return false;
-    }
-    if (!@rename($tmp, $path)) { @unlink($tmp); return false; }
-    @chmod($path, 0600);
+    if (!is_dir($dir) && !admin_make_dir($dir)) return false;
+    $tmp = $dir . '/.tmp-' . bin2hex(random_bytes(6));
+    $fh = @fopen($tmp, 'xb');
+    if ($fh === false) return false;
+    $ok = @fwrite($fh, $body) === strlen($body);
+    $ok = @fflush($fh) && $ok;
+    @fclose($fh);
+    if (!$ok || !@rename($tmp, $path)) { @unlink($tmp); return false; }
+    @chmod($path, $mode ?? admin_file_mode_for($path));
     return true;
+}
+
+/**
+ * Run $fn while holding an exclusive lock that guards $path's read-modify-write.
+ * The lock lives in api/.locks/ (never served, never inside a dataset folder), keyed
+ * by the target path; when no lock file can be created the work still runs — every
+ * write is atomic anyway, the lock only prevents lost updates between writers.
+ */
+function lumen_with_lock(string $path, callable $fn) {
+    $key = substr(hash('sha256', str_replace('\\', '/', $path)), 0, 32) . '.lock';
+    $fh = false;
+    foreach ([admin_private_dir() . '/.locks', sys_get_temp_dir() . '/lumen-locks-' . substr(md5(__DIR__), 0, 12)] as $dir) {
+        if (!is_dir($dir) && !@mkdir($dir, 0700, true) && !is_dir($dir)) continue;
+        $fh = @fopen($dir . '/' . $key, 'c');
+        if ($fh !== false) break;
+    }
+    if ($fh !== false) @flock($fh, LOCK_EX);
+    try {
+        return $fn();
+    } finally {
+        if ($fh !== false) { @flock($fh, LOCK_UN); @fclose($fh); }
+    }
+}
+
+/**
+ * Decode a JSON document that will be written back. json_decode(…, true) turns an
+ * empty object `{}` into an empty PHP array, which json_encode then writes as `[]`:
+ * a map silently became a list after one save on this backend (the Python twin keeps
+ * `{}`). Objects are decoded as objects first; non-empty ones become associative
+ * arrays (so callers keep array access), empty ones stay stdClass and re-encode as
+ * `{}`. Returns null when $raw is not JSON.
+ */
+function lumen_json_decode_doc(string $raw) {
+    $v = json_decode($raw, false);
+    if ($v === null && trim($raw) !== 'null') return null;
+    return lumen_json_unobject($v);
+}
+
+function lumen_json_unobject($v) {
+    if ($v instanceof stdClass) {
+        $a = get_object_vars($v);
+        if (!$a) return new stdClass();
+        // An object whose keys happen to read 0..n-1 would re-encode as a list.
+        if (array_keys($a) === range(0, count($a) - 1)) {
+            foreach ($a as $k => $x) $v->$k = lumen_json_unobject($x);
+            return $v;
+        }
+        foreach ($a as $k => $x) $a[$k] = lumen_json_unobject($x);
+        return $a;
+    }
+    if (is_array($v)) {
+        foreach ($v as $k => $x) $v[$k] = lumen_json_unobject($x);
+    }
+    return $v;
+}
+
+/** Read a JSON object document for a read-modify-write (see lumen_json_decode_doc). */
+function lumen_read_json_doc(string $path): ?array {
+    if (!is_file($path)) return null;
+    $raw = @file_get_contents($path);
+    if (!is_string($raw)) return null;
+    $d = lumen_json_decode_doc($raw);
+    return is_array($d) ? $d : null;
+}
+
+/** Atomic write of a PUBLIC JSON document (metadata.json, config/*.json). */
+function lumen_write_json_doc(string $path, array $doc): bool {
+    $json = json_encode($doc, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE);
+    if ($json === false) return false;   // malformed UTF-8: refuse rather than blank the file
+    return lumen_write_file_atomic($path, $json);
+}
+
+/** The request body as a JSON object, or null when it is absent or not an object. */
+function lumen_request_json(): ?array {
+    $raw = file_get_contents('php://input');
+    if (!is_string($raw) || $raw === '') return null;
+    $d = lumen_json_decode_doc($raw);
+    if ($d instanceof stdClass) return [];                       // `{}`: an empty object
+    if (!is_array($d) || ($d && array_keys($d) === range(0, count($d) - 1))) return null;   // a list is not an object
+    return $d;
+}
+
+/** A scalar request field as a string, or null when it is absent or not a string. */
+function lumen_str($v): ?string {
+    return is_string($v) ? $v : null;
 }
 
 // ── Password hashing (matches dev_server.py PBKDF2 format) ───────────────────
 function admin_hash_password(string $plain, ?string $saltHex = null, int $iters = ADMIN_PBKDF2_ITERS): string {
-    $salt = $saltHex !== null ? hex2bin($saltHex) : random_bytes(16);
+    $salt = $saltHex !== null ? @hex2bin($saltHex) : random_bytes(16);
+    if (!is_string($salt)) $salt = '';
     // length=0 → full digest (32 bytes for sha256) → 64 hex chars, like Python's dk.hex()
-    $hashHex = hash_pbkdf2('sha256', $plain, $salt, $iters, 0, false);
+    $hashHex = hash_pbkdf2('sha256', $plain, $salt, max(1, $iters), 0, false);
     return 'pbkdf2_sha256$' . $iters . '$' . bin2hex($salt) . '$' . $hashHex;
 }
 
+/** A credential hash written before salted PBKDF2: bare sha256 hex of the password. */
+function admin_is_legacy_hash(string $stored): bool {
+    return (bool)preg_match('/^[0-9a-f]{64}\z/i', $stored);
+}
+
+/**
+ * Verify a password against the stored PBKDF2 hash. A legacy unsalted sha256 is
+ * NEVER accepted here: the login path upgrades it on the spot (admin_login_verify)
+ * and every other password check — re-auth for plugin approval/installation, the
+ * current password of a change — refuses it.
+ */
 function admin_verify_password(string $plain, string $stored): bool {
-    if ($stored === '' ) return false;
-    if (strncmp($stored, 'pbkdf2_sha256$', 14) === 0) {
-        $parts = explode('$', $stored);
-        if (count($parts) !== 4) return false;
-        [$scheme, $iters, $saltHex, $hashHex] = $parts;
-        $computed = admin_hash_password($plain, $saltHex, (int)$iters);
-        return hash_equals($computed, $stored);
-    }
-    // Legacy unsalted sha256 (kept for backward compat, like Python)
-    return hash_equals($stored, hash('sha256', $plain));
+    if (strncmp($stored, 'pbkdf2_sha256$', 14) !== 0) return false;
+    $parts = explode('$', $stored);
+    if (count($parts) !== 4 || !ctype_digit($parts[1]) || !preg_match('/^[0-9a-f]+\z/i', $parts[2])) return false;
+    $computed = admin_hash_password($plain, $parts[2], (int)$parts[1]);
+    return hash_equals($stored, $computed);
+}
+
+/** A fixed hash the login runs against when the username is wrong or no credential
+ *  exists, so an unknown user costs the same PBKDF2 as a known one (no timing oracle). */
+function admin_dummy_hash(): string {
+    return 'pbkdf2_sha256$' . ADMIN_PBKDF2_ITERS . '$' . str_repeat('00', 16) . '$' . str_repeat('0', 64);
 }
 
 // ── Credential store ────────────────────────────────────────────────────────
@@ -293,6 +469,17 @@ function admin_credential_record(string $username, string $password): array {
         'created' => $now,
         'rotated' => $now,
     ];
+}
+
+/**
+ * The credential's identity for sessions: changes whenever the password does. A
+ * session remembers the stamp it was opened under, so rotating the password signs
+ * every OTHER session out (admin_is_auth refuses a stale stamp).
+ */
+function admin_credential_stamp(?array $rec = null): string {
+    $rec = $rec ?? admin_credential();
+    if (!is_array($rec)) return '';
+    return substr(hash('sha256', (string)($rec['password_pbkdf2'] ?? '') . '|' . (string)($rec['rotated'] ?? '')), 0, 32);
 }
 
 /** Create the credential ONLY if absent. Returns [ok, status, payload].
@@ -316,34 +503,315 @@ function admin_setup_credential(string $username, string $password): array {
 function admin_change_credential(string $current, string $new): array {
     $rec = admin_credential();
     if (!$rec) return [false, 409, ['error' => 'not_configured']];
-    if (!admin_verify_password($current, $rec['password_pbkdf2'] ?? '')) return [false, 401, ['error' => 'bad_current']];
+    if (!admin_verify_password($current, (string)($rec['password_pbkdf2'] ?? ''))) return [false, 401, ['error' => 'bad_current']];
     if (strlen($new) < 8) return [false, 400, ['error' => 'weak_password']];
-    $newrec = admin_credential_record($rec['username'] ?? 'admin', $new);
+    $newrec = admin_credential_record((string)($rec['username'] ?? 'admin'), $new);
     $newrec['created'] = $rec['created'] ?? $newrec['created'];
     return admin_write_json(cred_file(), $newrec)
         ? [true, 200, ['ok' => true]]
         : [false, 500, ['error' => 'write_failed']];
 }
 
-function admin_check_credentials(string $username, string $password): bool {
+/**
+ * Login check with constant work: the PBKDF2 always runs (against the real hash, or
+ * a dummy when the username is wrong or no credential exists) and the username is
+ * compared in constant time, so the response time says nothing about which half was
+ * wrong. A legacy unsalted sha256 credential is accepted once, here, and rewritten
+ * as PBKDF2 before the login succeeds; when that rewrite fails the login is refused.
+ * @return array{0:bool,1:?string} [ok, error code when refused for a reason other than bad credentials]
+ */
+function admin_login_verify(string $username, string $password): array {
     $rec = admin_credential();
-    if (!$rec) return false;
-    if ($username !== ($rec['username'] ?? null)) return false;
-    return admin_verify_password($password, $rec['password_pbkdf2'] ?? '');
+    $stored = is_array($rec) && is_string($rec['password_pbkdf2'] ?? null) ? $rec['password_pbkdf2'] : '';
+    $known  = is_array($rec) && is_string($rec['username'] ?? null) ? $rec['username'] : '';
+    $userOk = $known !== '' && hash_equals($known, $username);
+    if (admin_is_legacy_hash($stored)) {
+        admin_verify_password($password, admin_dummy_hash());     // same cost as the PBKDF2 path
+        $pwOk = hash_equals(strtolower($stored), hash('sha256', $password));
+        if (!($userOk && $pwOk)) return [false, null];
+        $upgraded = $rec;
+        $upgraded['password_pbkdf2'] = admin_hash_password($password);
+        $upgraded['version'] = 1;
+        if (!admin_write_json(cred_file(), $upgraded)) return [false, 'credential_upgrade_failed'];
+        return [true, null];
+    }
+    $pwOk = admin_verify_password($password, $userOk && $stored !== '' ? $stored : admin_dummy_hash());
+    return [$userOk && $pwOk && $stored !== '', null];
+}
+
+function admin_check_credentials(string $username, string $password): bool {
+    return admin_login_verify($username, $password)[0];
+}
+
+// ── Client address + trusted proxies ─────────────────────────────────────────
+// Behind a reverse proxy every request arrives from the proxy's address, so a
+// lockout keyed on REMOTE_ADDR would put all visitors in one bucket. The forwarded
+// headers are only believed when REMOTE_ADDR is a proxy the operator declared —
+// otherwise any client could pick its own bucket by sending X-Forwarded-For.
+// Declared in the environment (LUMEN_TRUSTED_PROXIES="10.0.0.1 192.168.0.0/16",
+// e.g. SetEnv in the vhost) or in api/trusted-proxies.json {"proxies": [...]}
+// (denied over HTTP like every api/*.json).
+
+function admin_trusted_proxies(): array {
+    static $list = null;
+    if ($list !== null) return $list;
+    $raw = getenv('LUMEN_TRUSTED_PROXIES');
+    if (!is_string($raw) || $raw === '') $raw = (string)($_SERVER['LUMEN_TRUSTED_PROXIES'] ?? '');
+    $items = preg_split('/[\s,]+/', $raw, -1, PREG_SPLIT_NO_EMPTY) ?: [];
+    $doc = admin_read_json(__DIR__ . '/trusted-proxies.json');
+    if (is_array($doc) && is_array($doc['proxies'] ?? null)) {
+        foreach ($doc['proxies'] as $p) if (is_string($p) && trim($p) !== '') $items[] = trim($p);
+    }
+    return $list = array_values(array_unique($items));
+}
+
+/** $ip inside $cidr ('a.b.c.d', 'a.b.c.d/n', IPv6 likewise). */
+function admin_ip_in_cidr(string $ip, string $cidr): bool {
+    $parts = explode('/', $cidr, 2);
+    $net = @inet_pton(trim($parts[0]));
+    $bin = @inet_pton($ip);
+    if ($net === false || $bin === false || strlen($net) !== strlen($bin)) return false;
+    $bits = isset($parts[1]) && ctype_digit($parts[1]) ? (int)$parts[1] : strlen($net) * 8;
+    $bits = max(0, min($bits, strlen($net) * 8));
+    $bytes = intdiv($bits, 8);
+    if (substr($net, 0, $bytes) !== substr($bin, 0, $bytes)) return false;
+    $rem = $bits % 8;
+    if ($rem === 0) return true;
+    $mask = (0xFF << (8 - $rem)) & 0xFF;
+    return (ord($net[$bytes]) & $mask) === (ord($bin[$bytes]) & $mask);
+}
+
+function admin_ip_trusted(string $ip): bool {
+    foreach (admin_trusted_proxies() as $p) if (admin_ip_in_cidr($ip, $p)) return true;
+    return false;
+}
+
+/** Whether the request came through a declared proxy. */
+function admin_via_trusted_proxy(): bool {
+    $remote = (string)($_SERVER['REMOTE_ADDR'] ?? '');
+    return $remote !== '' && admin_ip_trusted($remote);
+}
+
+/** The client's address: REMOTE_ADDR, or — behind a declared proxy — the right-most
+ *  X-Forwarded-For hop that is not itself a declared proxy. */
+function admin_client_ip(): string {
+    $remote = (string)($_SERVER['REMOTE_ADDR'] ?? '');
+    if (!admin_via_trusted_proxy()) return $remote !== '' ? $remote : 'unknown';
+    $hops = array_map('trim', explode(',', (string)($_SERVER['HTTP_X_FORWARDED_FOR'] ?? '')));
+    for ($i = count($hops) - 1; $i >= 0; $i--) {
+        $h = $hops[$i];
+        if ($h === '' || @inet_pton($h) === false) break;
+        if (!admin_ip_trusted($h)) return $h;
+    }
+    $real = trim((string)($_SERVER['HTTP_X_REAL_IP'] ?? ''));
+    return ($real !== '' && @inet_pton($real) !== false) ? $real : $remote;
+}
+
+/** HTTPS as the CLIENT sees it (TLS may end at a declared proxy). */
+function admin_request_is_https(): bool {
+    $https = strtolower((string)($_SERVER['HTTPS'] ?? ''));
+    if ($https !== '' && $https !== 'off') return true;
+    if (admin_via_trusted_proxy()) {
+        return strtolower(trim(explode(',', (string)($_SERVER['HTTP_X_FORWARDED_PROTO'] ?? ''))[0])) === 'https';
+    }
+    return false;
+}
+
+// ── Login throttling ─────────────────────────────────────────────────────────
+// Every password check (login, change_password, plugin approval/installation)
+// RESERVES an attempt before running PBKDF2, under an exclusive lock: N parallel
+// requests take N slots, so a burst can never get more guesses than the budget —
+// a check-then-verify design let every request of a burst pass the check before
+// any failure was recorded. A success gives its slot back.
+//
+// Two budgets: per client address (10 attempts, then 15 min locked) and a global
+// soft ceiling (200 attempts per 15 min across all addresses) that caps a guessing
+// run spread over many addresses. The store lives under api/ (never served); the
+// shared system temp dir is only a fallback, and when neither is writable the check
+// fails CLOSED — no lockout store must never mean no lockout.
+
+const ADMIN_BF_MAX_ATTEMPTS = 10;
+const ADMIN_BF_WINDOW       = 900;
+const ADMIN_BF_LOCK         = 900;
+const ADMIN_BF_GLOBAL_MAX   = 200;
+
+function admin_bf_dir(): ?string {
+    static $dir = false;
+    if ($dir !== false) return $dir;
+    $candidates = defined('LUMEN_PRIVATE_DIR')
+        ? [admin_private_dir() . '/.bruteforce']
+        : [__DIR__ . '/.bruteforce', sys_get_temp_dir() . '/lumen-bf-' . substr(hash('sha256', __DIR__), 0, 16)];
+    // Last resort: PHP's own session directory. It is writable wherever a login can
+    // work at all (the session lives there when api/.sessions cannot be created), so
+    // a host whose api/ is read-only and whose temp dir is outside open_basedir does
+    // not lock its operator out for good.
+    if (!defined('LUMEN_PRIVATE_DIR')) {
+        $ssp = (string)session_save_path();
+        $ssp = trim((string)substr($ssp, (int)strrpos(';' . $ssp, ';')));   // "N;MODE;/path" → "/path"
+        if ($ssp !== '') $candidates[] = rtrim($ssp, '/\\') . '/lumen-bf-' . substr(hash('sha256', __DIR__), 0, 16);
+    }
+    foreach ($candidates as $d) {
+        if (!is_dir($d) && !@mkdir($d, 0700, true) && !is_dir($d)) continue;
+        if (is_writable($d)) return $dir = $d;
+    }
+    return $dir = null;
+}
+
+/** Run $fn(array &$state, int $now) under the store lock; the state is then
+ *  persisted atomically. Null when the store is unusable. */
+function admin_bf_transaction(callable $fn) {
+    $dir = admin_bf_dir();
+    if ($dir === null) return null;
+    $lock = @fopen($dir . '/store.lock', 'c');
+    if ($lock === false) return null;
+    if (!@flock($lock, LOCK_EX)) { @fclose($lock); return null; }
+    try {
+        $path = $dir . '/state.json';
+        $raw = is_file($path) ? @file_get_contents($path) : '';
+        $state = is_string($raw) && $raw !== '' ? json_decode($raw, true) : null;
+        if (!is_array($state)) $state = [];
+        $state['ips'] = is_array($state['ips'] ?? null) ? $state['ips'] : [];
+        $state['global'] = is_array($state['global'] ?? null) ? $state['global'] : ['start' => 0, 'count' => 0];
+        $now = time();
+        foreach ($state['ips'] as $k => $b) {               // bounded: idle buckets expire
+            if (!is_array($b) || ((int)($b['until'] ?? 0) <= $now && (int)($b['start'] ?? 0) + ADMIN_BF_WINDOW <= $now)) {
+                unset($state['ips'][$k]);
+            }
+        }
+        $result = $fn($state, $now);
+        if (!$state['ips']) $state['ips'] = new stdClass();
+        $json = json_encode($state);
+        if ($json === false || !lumen_write_file_atomic($path, $json, 0600)) return null;
+        return $result;
+    } finally {
+        @flock($lock, LOCK_UN);
+        @fclose($lock);
+    }
+}
+
+/**
+ * Reserve one password attempt for the current client.
+ * @return array{0:bool,1:int,2:?string} [allowed, retryAfterSeconds, reason]
+ */
+function admin_bf_reserve(): array {
+    $key = hash('sha256', admin_client_ip());
+    $r = admin_bf_transaction(function (array &$state, int $now) use ($key) {
+        $b = $state['ips'][$key] ?? ['start' => $now, 'count' => 0, 'until' => 0];
+        if ((int)($b['until'] ?? 0) > $now) return [false, (int)$b['until'] - $now, 'locked'];
+        // A fresh bucket once the window has passed or an armed lock has expired
+        // (twin of dev_server.py _bf_reserve).
+        $until = (int)($b['until'] ?? 0);
+        if ((int)($b['start'] ?? 0) + ADMIN_BF_WINDOW <= $now || ($until > 0 && $until <= $now)) {
+            $b = ['start' => $now, 'count' => 0, 'until' => 0];
+        }
+        $g = $state['global'];
+        if ((int)($g['start'] ?? 0) + ADMIN_BF_WINDOW <= $now) $g = ['start' => $now, 'count' => 0];
+        if ((int)($g['count'] ?? 0) >= ADMIN_BF_GLOBAL_MAX) {
+            return [false, max(1, (int)$g['start'] + ADMIN_BF_WINDOW - $now), 'global'];
+        }
+        $b['count'] = (int)($b['count'] ?? 0) + 1;
+        if ($b['count'] >= ADMIN_BF_MAX_ATTEMPTS) $b['until'] = $now + ADMIN_BF_LOCK;
+        $g['count'] = (int)($g['count'] ?? 0) + 1;
+        $state['ips'][$key] = $b;
+        $state['global'] = $g;
+        return [true, 0, null];
+    });
+    return $r ?? [false, 60, 'store_unavailable'];
+}
+
+/** The attempt succeeded: the client's budget is reset and its global slot returned. */
+function admin_bf_success(): void {
+    $key = hash('sha256', admin_client_ip());
+    admin_bf_transaction(function (array &$state, int $now) use ($key) {
+        unset($state['ips'][$key]);
+        $state['global']['count'] = max(0, (int)($state['global']['count'] ?? 0) - 1);
+        return true;
+    });
+}
+
+/** Exit with the throttling answer when the attempt is refused. */
+function admin_bf_gate(): void {
+    [$ok, $retry, $reason] = admin_bf_reserve();
+    if ($ok) return;
+    header('Retry-After: ' . max(1, $retry));
+    if ($reason === 'store_unavailable') admin_json_out(['error' => 'lockout_store_unavailable'], 503);
+    admin_json_out(['error' => 'Trop de tentatives. Réessayez plus tard.', 'retryAfter' => $retry], 429);
+}
+
+/** Password re-authentication for a privileged admin action, throttled like a login. */
+function admin_reauth($password): bool {
+    if (!is_string($password)) return false;
+    admin_bf_gate();
+    $rec = admin_credential();
+    $ok = is_array($rec) && admin_verify_password($password, (string)($rec['password_pbkdf2'] ?? ''));
+    if ($ok) admin_bf_success();
+    return $ok;
 }
 
 // ── Sessions + CSRF (PHP native sessions) ───────────────────────────────────
-function admin_session_start(): void {
-    if (session_status() === PHP_SESSION_ACTIVE) return;
-    session_set_cookie_params([
-        'lifetime' => ADMIN_SESSION_TTL, 'path' => '/',
-        'secure' => isset($_SERVER['HTTPS']), 'httponly' => true, 'samesite' => 'Lax',
-    ]);
-    session_name('iribhm_admin');
-    session_start();
+// Server-side rules on top of the cookie:
+//  * use_strict_mode: an id the server never issued is refused (no session fixation
+//    by planting a chosen id);
+//  * a private save path under api/ when it can be created: the host's shared one is
+//    swept by ITS gc_maxlifetime (often 24 min), which signed admins out mid-edit
+//    long before the 8 h the cookie promises;
+//  * an ABSOLUTE expiry 8 h after login, whatever the activity (a stolen cookie does
+//    not live as long as it keeps being used);
+//  * the credential stamp: a password change signs every other session out.
+
+function admin_session_dir(): ?string {
+    $d = admin_private_dir() . '/.sessions';
+    if (!is_dir($d) && !@mkdir($d, 0700, true) && !is_dir($d)) return null;
+    return is_writable($d) ? $d : null;
 }
 
-function admin_is_auth(): bool { return !empty($_SESSION['admin_authenticated']); }
+function admin_session_start(): void {
+    if (session_status() === PHP_SESSION_ACTIVE) return;
+    if (!headers_sent()) {
+        @ini_set('session.use_strict_mode', '1');
+        @ini_set('session.use_only_cookies', '1');
+        @ini_set('session.use_trans_sid', '0');
+        @ini_set('session.gc_maxlifetime', (string)ADMIN_SESSION_TTL);
+        $dir = admin_session_dir();
+        if ($dir !== null) {
+            session_save_path($dir);
+            @ini_set('session.gc_probability', '1');
+            @ini_set('session.gc_divisor', '100');
+        }
+        session_set_cookie_params([
+            'lifetime' => ADMIN_SESSION_TTL, 'path' => '/',
+            'secure' => admin_request_is_https(), 'httponly' => true, 'samesite' => 'Lax',
+        ]);
+    }
+    session_name('iribhm_admin');
+    @session_start();
+}
+
+/** Start the session only when the client already holds one — a public request must
+ *  not create a session file and a Set-Cookie per anonymous visitor. */
+function admin_session_resume(): void {
+    if (session_status() === PHP_SESSION_ACTIVE) return;
+    if (!isset($_COOKIE['iribhm_admin']) || !is_string($_COOKIE['iribhm_admin'])) return;
+    admin_session_start();
+}
+
+/** Mark the session authenticated (fresh id, login time, credential stamp). */
+function admin_session_login(string $username, bool $rotateCsrf = true): void {
+    session_regenerate_id(true);
+    if ($rotateCsrf) unset($_SESSION['csrf']);    // a token minted before login never carries over
+    $_SESSION['admin_authenticated'] = true;
+    $_SESSION['admin_user'] = $username;
+    $_SESSION['auth_at'] = time();
+    $_SESSION['cred_stamp'] = admin_credential_stamp();
+}
+
+function admin_is_auth(): bool {
+    if (empty($_SESSION['admin_authenticated'])) return false;
+    $at = $_SESSION['auth_at'] ?? null;
+    if (!is_int($at) || time() - $at > ADMIN_SESSION_TTL) return false;
+    $stamp = $_SESSION['cred_stamp'] ?? null;
+    return is_string($stamp) && $stamp !== '' && hash_equals(admin_credential_stamp(), $stamp);
+}
 
 function admin_csrf(): string {
     if (empty($_SESSION['csrf'])) $_SESSION['csrf'] = bin2hex(random_bytes(32));
@@ -352,7 +820,7 @@ function admin_csrf(): string {
 
 function admin_check_csrf(): bool {
     $hdr = $_SERVER['HTTP_X_CSRF_TOKEN'] ?? '';
-    return !empty($_SESSION['csrf']) && hash_equals((string)$_SESSION['csrf'], (string)$hdr);
+    return !empty($_SESSION['csrf']) && is_string($hdr) && hash_equals((string)$_SESSION['csrf'], $hdr);
 }
 
 /** Enforce POST + CSRF for state-changing actions. Exits on failure. */
@@ -361,13 +829,43 @@ function admin_require_write(): void {
     if (!admin_check_csrf()) admin_json_out(['error' => 'Invalid or missing CSRF token'], 403);
 }
 
+/**
+ * A request that carries no CSRF token yet (login, logout) must still prove it was
+ * sent by this site's own script: a JSON content type (a cross-site form or a
+ * no-cors fetch can only send text/plain, urlencoded or multipart), and a browser
+ * origin, when it states one, equal to this host.
+ */
+function admin_same_origin_json(): bool {
+    $ctRaw = (string)($_SERVER['CONTENT_TYPE'] ?? ($_SERVER['HTTP_CONTENT_TYPE'] ?? ''));
+    if (strtolower(trim(explode(';', $ctRaw)[0])) !== 'application/json') return false;
+    // Sec-Fetch-Site is set by the browser itself and settles the question (twin of
+    // dev_server.py _same_origin_json_refusal): comparing Origin with Host as well
+    // would refuse the operator's own login behind a reverse proxy that rewrites Host
+    // and was not declared. Origin is the fallback for browsers that send no
+    // Sec-Fetch-Site.
+    $site = strtolower(trim((string)($_SERVER['HTTP_SEC_FETCH_SITE'] ?? '')));
+    if ($site !== '') return $site === 'same-origin' || $site === 'none';
+    $origin = (string)($_SERVER['HTTP_ORIGIN'] ?? '');
+    if ($origin === '') return true;
+    if ($origin === 'null') return false;
+    $host = (admin_via_trusted_proxy() && !empty($_SERVER['HTTP_X_FORWARDED_HOST']))
+        ? trim(explode(',', (string)$_SERVER['HTTP_X_FORWARDED_HOST'])[0])
+        : (string)($_SERVER['HTTP_HOST'] ?? '');
+    $oHost = parse_url($origin, PHP_URL_HOST);
+    $oPort = parse_url($origin, PHP_URL_PORT);
+    if (!is_string($oHost) || $host === '') return false;
+    // A Host header may carry the default port the Origin omits, or the reverse.
+    $norm = fn(string $h) => (string)preg_replace('/:(80|443)$/', '', strtolower($h));
+    return $norm($host) === $norm($oHost . ($oPort ? ':' . $oPort : ''));
+}
+
 // ── Path safety (mirrors _safe_dataset_dir) ─────────────────────────────────
 function admin_safe_dataset(string $id): ?array {
     $parts = explode('/', $id, 2);
     if (count($parts) !== 2) return null;
     [$type, $folder] = [trim($parts[0]), trim($parts[1])];
     if (!in_array($type, LUMEN_DATASET_TYPES, true)) return null;
-    if ($folder === '.' || $folder === '..' || !preg_match('/^[A-Za-z0-9_][A-Za-z0-9._-]*$/', $folder)) return null;
+    if ($folder === '.' || $folder === '..' || !preg_match('/^[A-Za-z0-9_][A-Za-z0-9._-]*$/D', $folder)) return null;
     $base = realpath(data_web() . '/' . $type);
     $dir  = $base ? realpath($base . '/' . $folder) : false;
     if ($base && $dir && strpos($dir, $base) === 0) return [$type, $folder, $dir];
@@ -451,6 +949,13 @@ function lumen_migration_pending(): bool {
     return false;
 }
 
+/** The part of the guard the PUBLIC catalog needs: a legacy type directory still in
+ *  DATA_WEB (the catalog scans the canonical names only). Two is_dir() calls. */
+function lumen_migration_dirs_pending(): bool {
+    foreach (array_keys(LUMEN_LEGACY_TYPE_DIRS) as $old) if (is_dir(data_web() . "/$old")) return true;
+    return false;
+}
+
 /** Retire DATA_WEB/tracking and uploads/staging/tracking: gone when empty, reported —
  *  never moved, never deleted — when something is in them. */
 function lumen_migration_retire_tracking(): void {
@@ -479,12 +984,7 @@ function lumen_migrate_legacy_id($value) {
 }
 
 function lumen_migration_write_text(string $path, string $body): bool {
-    $tmp = @tempnam(dirname($path), '.mig-');
-    if ($tmp === false) return false;
-    if (@file_put_contents($tmp, $body) === false) { @unlink($tmp); return false; }
-    if (!@rename($tmp, $path)) { @unlink($tmp); return false; }
-    admin_fix_file_mode($path);
-    return true;
+    return lumen_write_file_atomic($path, $body);
 }
 
 /**
@@ -571,6 +1071,12 @@ function lumen_migration_journals(): void {
     }
 }
 
+function lumen_migration_has_legacy_ids($ids): bool {
+    if (!is_array($ids)) return false;
+    foreach ($ids as $v) if (lumen_migrate_legacy_id($v) !== $v) return true;
+    return false;
+}
+
 /**
  * Make every published metadata.json agree with its folder: `type` is the directory
  * it sits in, `id` is '<type>/<folder>', and any dataset relation the operator
@@ -585,16 +1091,21 @@ function lumen_migration_metadata(): void {
             if ($folder === '.' || $folder === '..' || $folder === '' || $folder[0] === '.') continue;
             $path = "$base/$folder/metadata.json";
             if (!is_file($path)) continue;
-            $meta = admin_read_json($path);
-            if ($meta === null) continue;
-            $before = $meta;
-            $meta['type'] = $type;                  // the folder is the authority
-            $meta['id']   = "$type/$folder";
-            if (isset($meta['relatedIds']) && is_array($meta['relatedIds'])) {
-                $meta['relatedIds'] = array_map('lumen_migrate_legacy_id', $meta['relatedIds']);
-            }
-            if ($meta === $before) continue;
-            if (!lumen_migration_write_json($path, $meta)) error_log("dataset-type migration: FAILED metadata $type/$folder");
+            // Cheap read first: most files already agree, and those must cost no lock.
+            $peek = admin_read_json($path);
+            if ($peek === null) continue;
+            if (($peek['type'] ?? null) === $type && ($peek['id'] ?? null) === "$type/$folder"
+                && !lumen_migration_has_legacy_ids($peek['relatedIds'] ?? null)) continue;
+            lumen_with_lock($path, function () use ($path, $type, $folder) {
+                $meta = lumen_read_json_doc($path);       // keeps `{}` maps as maps
+                if ($meta === null) return;
+                $meta['type'] = $type;                     // the folder is the authority
+                $meta['id']   = "$type/$folder";
+                if (isset($meta['relatedIds']) && is_array($meta['relatedIds'])) {
+                    $meta['relatedIds'] = array_map('lumen_migrate_legacy_id', $meta['relatedIds']);
+                }
+                if (!lumen_migration_write_json($path, $meta)) error_log("dataset-type migration: FAILED metadata $type/$folder");
+            });
         }
     }
 }
@@ -619,33 +1130,30 @@ function lumen_migration_merge_counters($a, $b) {
 function lumen_migration_stats(): void {
     $file = stats_file();
     if (!is_file($file)) return;
-    $fp = @fopen($file, 'c+');
-    if ($fp === false) return;
-    @flock($fp, LOCK_EX);
-    $raw = stream_get_contents($fp);
-    $d = $raw ? (json_decode($raw, true) ?: []) : [];
-    if (isset($d['datasets']) && is_array($d['datasets'])) {
+    lumen_with_lock($file, function () use ($file) {
+        $d = admin_read_json($file);
+        if (!is_array($d) || !isset($d['datasets']) || !is_array($d['datasets'])) return;
         $rekeyed = []; $changed = false;
         foreach ($d['datasets'] as $key => $value) {
             $new = lumen_migrate_legacy_id((string)$key);
             if ($new !== (string)$key) $changed = true;
             $rekeyed[$new] = isset($rekeyed[$new]) ? lumen_migration_merge_counters($rekeyed[$new], $value) : $value;
         }
-        if ($changed) {
-            $d['datasets'] = $rekeyed;
-            // json_encode writes an empty PHP array as `[]`, and dev_server.py indexes
-            // these three as maps. Re-object them so a host that migrates while its
-            // stats are empty does not hand the Python twin a list.
-            foreach (['global', 'daily', 'datasets'] as $k) {
-                if (isset($d[$k]) && is_array($d[$k]) && !$d[$k]) $d[$k] = new stdClass();
-            }
-            rewind($fp);
-            ftruncate($fp, 0);
-            fwrite($fp, (string)json_encode($d, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT));
-        }
+        if (!$changed) return;
+        $d['datasets'] = $rekeyed;
+        admin_write_stats($d);
+    });
+}
+
+/** Persist api/stats.json atomically. json_encode writes an empty PHP array as `[]`,
+ *  and dev_server.py indexes `global`/`daily`/`datasets` as maps, so empty ones are
+ *  re-objected. A failed write leaves the previous file whole. */
+function admin_write_stats(array $d): bool {
+    foreach (['global', 'daily', 'datasets'] as $k) {
+        if (isset($d[$k]) && is_array($d[$k]) && !$d[$k]) $d[$k] = new stdClass();
     }
-    @flock($fp, LOCK_UN);
-    fclose($fp);
+    $json = json_encode($d, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT);
+    return $json !== false && lumen_write_file_atomic(stats_file(), $json, 0600);
 }
 
 /** config/instance.json — pageTitles is keyed by <body data-page>, and the photograph
@@ -726,6 +1234,206 @@ function lumen_migrate_dataset_types(): void {
     }
 }
 
+// ── Public catalog ───────────────────────────────────────────────────────────
+// Twin of dev_server.py _list_datasets + _build_catalog, field for field: a
+// dataset's entry IS its metadata.json, with the identity and the derived fields
+// re-asserted from the directory; listed when configured OR thumbnailed, never when
+// hidden; newest `date` first, then by name, both descending. A fixed key list here
+// used to drop every field the client later started reading (date, markers,
+// fileSize…) on PHP hosts only, and list half-configured datasets Python hid.
+
+/** Python truthiness of a decoded JSON value (None/False/0/""/[]/{} are false). */
+function lumen_py_truthy($v): bool {
+    if ($v instanceof stdClass) return (bool)get_object_vars($v);
+    return !($v === null || $v === false || $v === 0 || $v === 0.0 || $v === '' || $v === []);
+}
+
+/** One dataset row, or null when the folder holds no readable metadata.json object. */
+function lumen_catalog_row(string $type, string $name, string $ds_dir): ?array {
+    $raw = @file_get_contents($ds_dir . DIRECTORY_SEPARATOR . 'metadata.json');
+    if (!is_string($raw)) return null;
+    $meta = lumen_json_decode_doc($raw);
+    if ($meta instanceof stdClass) $meta = [];
+    if (!is_array($meta) || ($meta && array_keys($meta) === range(0, count($meta) - 1))) return null;
+
+    $id = $type . '/' . $name;
+    $configured = $meta['configured'] ?? false;
+    if (!lumen_py_truthy($configured)) $configured = $meta['_adminConfigured'] ?? false;
+    $entry = $meta;
+    $entry['id']           = $id;
+    $entry['path']         = $id;
+    $entry['name']         = lumen_py_truthy($meta['name'] ?? null) ? $meta['name'] : $name;
+    $entry['folderName']   = $name;
+    $entry['type']         = $type;
+    $entry['stage']        = $meta['stage'] ?? null;
+    $entry['stageNumeric'] = $meta['stageNumeric'] ?? null;
+    $entry['embryo']       = $meta['embryo'] ?? null;
+    $entry['configured']   = $configured;
+    $entry['thumbnail']    = is_file($ds_dir . DIRECTORY_SEPARATOR . 'thumbnail.webp')
+        ? 'DATA_WEB/' . $id . '/thumbnail.webp' : null;
+    if (!array_key_exists('volumeSources', $entry)) {
+        // A 2d dataset is a photograph: nothing for the volume renderer to mount.
+        $entry['volumeSources'] = $type === '2d' ? [] : [[
+            'kind' => 'webstack', 'label' => 'Web slice stack', 'priority' => 0,
+            'available' => true, 'multiscale' => false, 'path' => 'DATA_WEB/' . $id,
+        ]];
+    }
+    return $entry;
+}
+
+/** Every dataset with a metadata.json, in directory order (types, then folder names). */
+function lumen_catalog_rows(): array {
+    $rows = [];
+    foreach (LUMEN_DATASET_TYPES as $type) {
+        $type_dir = data_web() . DIRECTORY_SEPARATOR . $type;
+        if (!is_dir($type_dir)) continue;
+        $names = @scandir($type_dir) ?: [];
+        foreach ($names as $name) {
+            if ($name === '' || $name[0] === '.') continue;
+            $ds_dir = $type_dir . DIRECTORY_SEPARATOR . $name;
+            if (!is_dir($ds_dir)) continue;
+            $row = lumen_catalog_row($type, $name, $ds_dir);
+            if ($row !== null) $rows[] = $row;
+        }
+    }
+    return $rows;
+}
+
+/** The public catalog: a JSON list, the same document dev_server.py serves. */
+function rebuild_catalog(): array {
+    $catalog = array_values(array_filter(lumen_catalog_rows(), fn($ds) =>
+        (lumen_py_truthy($ds['configured'] ?? null) || ($ds['thumbnail'] ?? null) !== null)
+        && !lumen_py_truthy($ds['hidden'] ?? null)));
+    // Every missing/'Unknown' date collapses to one sentinel so it sorts last.
+    $dateKey = fn(array $x) => (is_string($x['date'] ?? null) && $x['date'] !== '' && $x['date'] !== 'Unknown')
+        ? $x['date'] : '0000-00-00';
+    $nameKey = fn(array $x) => is_scalar($x['name'] ?? null) ? (string)$x['name'] : '';
+    usort($catalog, function ($a, $b) use ($dateKey, $nameKey) {
+        $c = strcmp($dateKey($b), $dateKey($a));
+        return $c !== 0 ? $c : strcmp($nameKey($b), $nameKey($a));
+    });
+    return $catalog;
+}
+
+/**
+ * What the catalog depends on, read with stat calls only: every type directory, and
+ * per dataset its folder (a thumbnail or a sub-folder appearing changes it) and its
+ * metadata.json. mtimes have a one-second resolution, so the size is part of it, and
+ * every write through this API also drops the cache outright (lumen_catalog_invalidate).
+ */
+function lumen_catalog_signature(): string {
+    clearstatcache();
+    $parts = [];
+    foreach (LUMEN_DATASET_TYPES as $type) {
+        $type_dir = data_web() . DIRECTORY_SEPARATOR . $type;
+        if (!is_dir($type_dir)) { $parts[] = "$type:-"; continue; }
+        $parts[] = $type . ':' . (int)@filemtime($type_dir);
+        foreach (@scandir($type_dir) ?: [] as $name) {
+            if ($name === '' || $name[0] === '.') continue;
+            $ds = $type_dir . DIRECTORY_SEPARATOR . $name;
+            $m  = $ds . DIRECTORY_SEPARATOR . 'metadata.json';
+            $st = @stat($m);
+            $parts[] = $name . ':' . (int)@filemtime($ds) . ':' . ($st ? $st['mtime'] . '.' . $st['size'] : '-');
+        }
+    }
+    return hash('sha256', implode('|', $parts));
+}
+
+function lumen_catalog_cache_file(): string { return admin_private_dir() . '/.catalog-cache.json'; }
+
+function lumen_catalog_invalidate(): void {
+    $f = lumen_catalog_cache_file();
+    if (is_file($f)) @unlink($f);
+}
+
+/** The catalog response body, rebuilt only when the signature moved. */
+function lumen_catalog_json(): string {
+    $sig = lumen_catalog_signature();
+    $cache = admin_read_json(lumen_catalog_cache_file());
+    if (is_array($cache) && ($cache['sig'] ?? null) === $sig && is_string($cache['body'] ?? null)) {
+        return $cache['body'];
+    }
+    $body = json_encode(rebuild_catalog(), JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+    if ($body === false) {
+        $body = (string)json_encode(rebuild_catalog(),
+            JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE);
+    }
+    $doc = json_encode(['sig' => $sig, 'body' => $body], JSON_UNESCAPED_SLASHES);
+    if ($doc !== false) lumen_write_file_atomic(lumen_catalog_cache_file(), $doc, 0600);
+    return $body;
+}
+
+// ── Directory guards (.htaccess written at runtime) ───────────────────────────
+// DATA_WEB is in the updater's protect list and uploads/ + config/uploads/ are
+// created at runtime, so an update can never deliver their rules: the platform
+// writes them itself. Every directive sits inside an <IfModule> guard — a module the
+// host has not loaded must not turn every request under the tree into a 500 — and
+// none uses `Options`, which needs AllowOverride Options (a 500 on hosts that only
+// allow FileInfo/AuthConfig); directory listings are refused by the root .htaccess
+// rewrite instead.
+//
+// A guard is (re)written only when the file lacks the current marker, so the two
+// backends (upload_staging.py writes the same files) and the copy shipped in the
+// repository do not keep rewriting one another over whitespace.
+const LUMEN_GUARD_MARKER = 'lumen-guard v2';
+
+/** The script-execution ban shared by every operator-writable, web-served tree. */
+function lumen_exec_ban_rules(): string {
+    return "<IfModule mod_php.c>\n    php_flag engine off\n</IfModule>\n"
+         . "<IfModule mod_php7.c>\n    php_flag engine off\n</IfModule>\n"
+         . "<IfModule mod_php5.c>\n    php_flag engine off\n</IfModule>\n"
+         . "<FilesMatch \"\\.(php|php[0-9]|phtml|phps|phar|cgi|pl|py|sh|shtml|htaccess)\$\">\n"
+         . "    <IfModule mod_authz_core.c>\n        Require all denied\n    </IfModule>\n"
+         . "    <IfModule !mod_authz_core.c>\n        Order allow,deny\n        Deny from all\n    </IfModule>\n"
+         . "</FilesMatch>\n"
+         . "<IfModule mod_mime.c>\n    RemoveHandler .php .phtml .phar .cgi .pl .py .sh .shtml\n"
+         . "    RemoveType .php .phtml .phar\n</IfModule>\n";
+}
+
+/** DATA_WEB/.htaccess: execution ban, no MIME sniffing, and every file under a
+ *  dataset's download/ folder served as an attachment — an operator-supplied file
+ *  (an XML or HTML report dropped there by SFTP) must never render as a document of
+ *  this origin. */
+function lumen_data_web_guard(): string {
+    return "# Lumen3D — published dataset tree (" . LUMEN_GUARD_MARKER . "). Generated by the\n"
+         . "# platform (api/_upload_lib.php, upload_staging.py); keep the copy in the\n"
+         . "# repository (DATA_WEB/.htaccess) identical.\n"
+         . lumen_exec_ban_rules()
+         . "<IfModule mod_headers.c>\n"
+         . "    Header set X-Content-Type-Options \"nosniff\"\n"
+         . "    <IfModule mod_setenvif.c>\n"
+         . "        SetEnvIf Request_URI \"/download/\" LUMEN_DOWNLOAD=1\n"
+         . "        Header set Content-Disposition \"attachment\" env=LUMEN_DOWNLOAD\n"
+         . "    </IfModule>\n"
+         . "</IfModule>\n";
+}
+
+/** uploads/.htaccess: nothing in the staging store is ever reachable at a URL. */
+function lumen_staging_guard(): string {
+    return "# Lumen3D upload staging (" . LUMEN_GUARD_MARKER . ") — bytes here have NOT been\n"
+         . "# validated yet and must never be reachable at a URL. The admin preview reads\n"
+         . "# them through the authenticated api/upload.php?action=blob proxy instead.\n"
+         . "<IfModule mod_authz_core.c>\n    Require all denied\n</IfModule>\n"
+         . "<IfModule !mod_authz_core.c>\n    Order allow,deny\n    Deny from all\n</IfModule>\n"
+         . "<IfModule mod_php.c>\n    php_flag engine off\n</IfModule>\n"
+         . "<IfModule mod_php7.c>\n    php_flag engine off\n</IfModule>\n";
+}
+
+/** config/uploads/.htaccess (media library): images only, never a script. */
+function lumen_media_guard(): string {
+    return "# Lumen3D media library (" . LUMEN_GUARD_MARKER . "). Generated by api/media.php.\n"
+         . lumen_exec_ban_rules()
+         . "<IfModule mod_headers.c>\n    Header set X-Content-Type-Options \"nosniff\"\n</IfModule>\n";
+}
+
+/** Write $body to $path when the directory exists and the file lacks the marker. */
+function lumen_write_guard(string $path, string $body): void {
+    if (!is_dir(dirname($path))) return;
+    $cur = is_file($path) ? @file_get_contents($path) : false;
+    if (is_string($cur) && strpos($cur, LUMEN_GUARD_MARKER) !== false) return;
+    lumen_write_file_atomic($path, $body);
+}
+
 // ── Usage stats ─────────────────────────────────────────────────────────────
 function admin_load_stats(): array {
     $d = admin_read_json(stats_file());
@@ -741,27 +1449,21 @@ function admin_record_event(string $kind, ?string $datasetId = null): void {
     if (!isset($map[$kind])) return;
     $field = $map[$kind];
     $today = date('Y-m-d');
-    // flock-guarded read-modify-write
-    $fp = @fopen(stats_file(), 'c+');
-    if ($fp === false) return;
-    @flock($fp, LOCK_EX);
-    $raw = stream_get_contents($fp);
-    $d = $raw ? (json_decode($raw, true) ?: []) : [];
-    $d['global']   = $d['global']   ?? ['visits' => 0, 'views' => 0, 'downloads' => 0, 'since' => date('c')];
-    $d['daily']    = $d['daily']    ?? [];
-    $d['datasets'] = $d['datasets'] ?? [];
-    $d['global'][$field] = (int)($d['global'][$field] ?? 0) + 1;
-    $d['daily'][$today][$field] = (int)($d['daily'][$today][$field] ?? 0) + 1;
-    if ($datasetId && in_array($kind, ['view', 'download'], true)) {
-        $d['datasets'][$datasetId][$field] = (int)($d['datasets'][$datasetId][$field] ?? 0) + 1;
-        if ($kind === 'view') $d['datasets'][$datasetId]['lastViewed'] = date('c');
-    }
-    rewind($fp);
-    ftruncate($fp, 0);
-    fwrite($fp, json_encode($d, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT));
-    @flock($fp, LOCK_UN);
-    fclose($fp);
-    @chmod(stats_file(), 0600);
+    // Read-modify-write under a lock; the file is replaced atomically, so a full disk
+    // or a killed request can no longer truncate the whole usage history to nothing.
+    lumen_with_lock(stats_file(), function () use ($kind, $field, $today, $datasetId) {
+        $d = admin_read_json(stats_file()) ?? [];
+        $d['global']   = is_array($d['global'] ?? null) ? $d['global'] : ['visits' => 0, 'views' => 0, 'downloads' => 0, 'since' => date('c')];
+        $d['daily']    = is_array($d['daily'] ?? null) ? $d['daily'] : [];
+        $d['datasets'] = is_array($d['datasets'] ?? null) ? $d['datasets'] : [];
+        $d['global'][$field] = (int)($d['global'][$field] ?? 0) + 1;
+        $d['daily'][$today][$field] = (int)($d['daily'][$today][$field] ?? 0) + 1;
+        if ($datasetId && in_array($kind, ['view', 'download'], true)) {
+            $d['datasets'][$datasetId][$field] = (int)($d['datasets'][$datasetId][$field] ?? 0) + 1;
+            if ($kind === 'view') $d['datasets'][$datasetId]['lastViewed'] = date('c');
+        }
+        admin_write_stats($d);
+    });
 }
 
 // ── Plugins ─────────────────────────────────────────────────────────────────
@@ -771,7 +1473,7 @@ function admin_list_plugins(): array {
         $base = modules_dir() . '/' . $placement;
         if (!is_dir($base)) continue;
         foreach (scandir($base) as $name) {
-            if ($name[0] === '.' || !preg_match('/^[A-Za-z0-9_][A-Za-z0-9._-]*$/', $name)) continue;
+            if ($name[0] === '.' || !preg_match('/^[A-Za-z0-9_][A-Za-z0-9._-]*$/D', $name)) continue;
             $meta = admin_read_json($base . '/' . $name . '/plugin.json');
             if (!$meta) continue;
             if (!empty($meta['placement']) && $meta['placement'] !== $placement) continue;
@@ -1296,8 +1998,12 @@ const SANDBOX_CAP_ALLOWLIST = [
 // dev_server.py:_SANDBOX_DEFAULT_CAPS (twin parity), not the full allowlist.
 const SANDBOX_DEFAULT_CAPS = ['toolbar.addButton', 'ui.toast', 'viewer.getInfo'];
 
-/** {relpath: sha256hex} over raw bytes for every identity-bearing file. */
-function admin_plugin_file_hashes(string $modDir): array {
+/** {relpath: sha256hex} over raw bytes for every identity-bearing file.
+ *  $cached reuses a digest while the file's (mtime, ctime, size) is unchanged — for
+ *  the PUBLIC discovery path, which runs on every page load. Safe because the client
+ *  re-hashes the exact bytes it executes against the vouched hash (a stale digest
+ *  fails closed there); approval and installation always hash fresh. */
+function admin_plugin_file_hashes(string $modDir, bool $cached = false): array {
     $out = [];
     if (!is_dir($modDir)) return $out;
     $it = new RecursiveIteratorIterator(new RecursiveDirectoryIterator($modDir, FilesystemIterator::SKIP_DOTS));
@@ -1306,10 +2012,34 @@ function admin_plugin_file_hashes(string $modDir): array {
         $ext = strtolower($f->getExtension());
         if (!in_array($ext, TRUST_HASH_EXT, true) || $f->getFilename()[0] === '.') continue;
         $rel = str_replace('\\', '/', substr($f->getPathname(), strlen($modDir) + 1));
-        $out[$rel] = hash_file('sha256', $f->getPathname());
+        $out[$rel] = $cached ? admin_cached_file_hash($f->getPathname()) : hash_file('sha256', $f->getPathname());
     }
     ksort($out);
     return $out;
+}
+
+/** sha256 of a file, memoised in api/.plugin-hash-cache.json on (mtime, ctime, size). */
+function admin_cached_file_hash(string $path) {
+    static $cache = null, $dirty = false;
+    $file = admin_private_dir() . '/.plugin-hash-cache.json';
+    if ($cache === null) {
+        $cache = admin_read_json($file) ?? [];
+        register_shutdown_function(function () use (&$cache, &$dirty, $file) {
+            if (!$dirty) return;
+            // Bounded: entries for files that no longer exist are dropped on save.
+            foreach (array_keys($cache) as $k) if (!is_file((string)$k)) unset($cache[$k]);
+            $json = json_encode($cache ?: new stdClass(), JSON_UNESCAPED_SLASHES);
+            if ($json !== false) lumen_write_file_atomic($file, $json, 0600);
+        });
+    }
+    $st = @stat($path);
+    if ($st === false) return hash_file('sha256', $path);
+    $sig = $st['mtime'] . ':' . $st['ctime'] . ':' . $st['size'];
+    $hit = $cache[$path] ?? null;
+    if (is_array($hit) && ($hit[0] ?? null) === $sig && is_string($hit[1] ?? null)) return $hit[1];
+    $h = hash_file('sha256', $path);
+    if (is_string($h)) { $cache[$path] = [$sig, $h]; $dirty = true; }
+    return $h;
 }
 
 function admin_plugin_hash(array $fileHashes): string {
@@ -1347,18 +2077,22 @@ function admin_plugin_wants_sandbox(string $modDir): bool {
     return is_array($meta) && ($meta['sandbox'] ?? null) === true;
 }
 
-/** Dev-trust: a .git checkout served to a LOOPBACK client only (mirrors the Python
- *  loopback gate). Single source of truth so the classifier and the plugin_trust
- *  endpoint report the same value. */
+/** Dev-trust: every unapproved plugin of a .git checkout runs — so it is granted only
+ *  when the operator says so explicitly (environment LUMEN_DEV_TRUST=1, e.g. SetEnv in
+ *  a development vhost or `LUMEN_DEV_TRUST=1 php -S …`). The client address cannot
+ *  decide it: behind a reverse proxy on the same machine EVERY visitor arrives from
+ *  127.0.0.1. Single source of truth so the classifier and the plugin_trust endpoint
+ *  report the same value. */
 function admin_dev_trust(): bool {
-    $remote = $_SERVER['REMOTE_ADDR'] ?? '';
-    return is_dir(admin_root() . '/.git') && in_array($remote, ['127.0.0.1', '::1', ''], true);
+    $flag = getenv('LUMEN_DEV_TRUST');
+    if (!is_string($flag) || $flag === '') $flag = (string)($_SERVER['LUMEN_DEV_TRUST'] ?? '');
+    return $flag === '1' && is_dir(admin_root() . '/.git');
 }
 
-function admin_classify_plugin(string $pluginPath, string $modDir, array $approvals, ?array $manifest): array {
-    $fh = admin_plugin_file_hashes($modDir);
+function admin_classify_plugin(string $pluginPath, string $modDir, array $approvals, ?array $manifest, bool $cachedHashes = false): array {
+    $fh = admin_plugin_file_hashes($modDir, $cachedHashes);
     $hash = admin_plugin_hash($fh);
-    $base = ['hash' => $hash];
+    $base = ['hash' => $hash, 'files' => array_keys($fh)];
     // `sandbox: true` decides the LANE — a trusted sandbox plugin still runs in the
     // iframe (in-page it would crash on LumenPlugin.*). Twin of _plugin_wants_sandbox.
     $wantsSandbox = admin_plugin_wants_sandbox($modDir);
@@ -1668,6 +2402,78 @@ function mkt_error_payload(): array {
     return ['error' => 'unreachable', 'detail' => 'no HTTP transport available'];
 }
 
+/**
+ * Download $url straight into $dest (at most $limit bytes), never holding the body
+ * in memory: a release zip buffered whole could exceed a shared host's 128 MB
+ * memory_limit. Same transports and CA repair as mkt_fetch_bytes. False (and no
+ * $dest) on any failure; mkt_last_error() says why.
+ */
+function mkt_fetch_to_file(string $url, string $dest, int $limit): bool {
+    $caError = false;
+    mkt_last_error(['status' => 0, 'curl' => '', 'stream' => '', 'ca' => false, 'headers' => []]);
+    if (function_exists('curl_init')) {
+        if (mkt_curl_to_file($url, $dest, $limit, admin_ca_curl_opts(), $caError)) return true;
+        if ($caError) {
+            $forced = admin_ca_curl_opts(true);
+            if ($forced !== [] && mkt_curl_to_file($url, $dest, $limit, $forced, $caError)) return true;
+        }
+    }
+    if (!filter_var(ini_get('allow_url_fopen'), FILTER_VALIDATE_BOOLEAN)) return false;
+    $ctx = stream_context_create([
+        'http' => ['timeout' => 120, 'header' => "User-Agent: lumen3d-admin\r\n"],
+        'ssl'  => admin_ca_stream_opts($caError),
+    ]);
+    $in = @fopen($url, 'rb', false, $ctx);
+    if ($in === false) { $e = error_get_last(); mkt_last_error(['stream' => $e['message'] ?? 'stream fetch failed']); return false; }
+    $out = @fopen($dest, 'wb');
+    if ($out === false) { fclose($in); return false; }
+    $n = 0; $ok = true;
+    while (!feof($in)) {
+        $block = fread($in, 1048576);
+        if ($block === false) { $ok = false; break; }
+        $n += strlen($block);
+        if ($n > $limit || @fwrite($out, $block) !== strlen($block)) { $ok = false; break; }
+    }
+    fclose($in); fclose($out);
+    if (!$ok || $n === 0) { @unlink($dest); mkt_last_error(['stream' => $n > $limit ? 'body over limit' : 'stream read failed']); return false; }
+    return true;
+}
+
+/** One cURL attempt of mkt_fetch_to_file. */
+function mkt_curl_to_file(string $url, string $dest, int $limit, array $caOpts, bool &$caError): bool {
+    $fp = @fopen($dest, 'wb');
+    if ($fp === false) return false;
+    $n = 0; $over = false; $short = false;
+    $ch = curl_init($url);
+    curl_setopt_array($ch, $caOpts + [
+        CURLOPT_FOLLOWLOCATION  => true,
+        CURLOPT_MAXREDIRS       => 5,
+        CURLOPT_PROTOCOLS       => CURLPROTO_HTTPS,
+        CURLOPT_REDIR_PROTOCOLS => CURLPROTO_HTTPS,
+        CURLOPT_CONNECTTIMEOUT  => 20,
+        CURLOPT_TIMEOUT         => 600,
+        CURLOPT_SSL_VERIFYPEER  => true,
+        CURLOPT_SSL_VERIFYHOST  => 2,
+        CURLOPT_USERAGENT       => 'lumen3d-admin',
+        CURLOPT_WRITEFUNCTION   => function ($c, $chunk) use ($fp, &$n, $limit, &$over, &$short) {
+            $n += strlen($chunk);
+            if ($n > $limit) { $over = true; return 0; }                   // 0 aborts the transfer
+            if (fwrite($fp, $chunk) !== strlen($chunk)) { $short = true; return 0; }
+            return strlen($chunk);
+        },
+    ]);
+    curl_exec($ch);
+    $code = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    $err  = (string)curl_error($ch);
+    $caError = admin_is_ca_error($err);
+    curl_close($ch);
+    fclose($fp);
+    if (!$over && !$short && $err === '' && $code >= 200 && $code < 300 && $n > 0) return true;
+    @unlink($dest);
+    mkt_last_error(['status' => $code, 'curl' => $over ? 'body over limit' : ($short ? 'disk write failed' : $err), 'ca' => $caError]);
+    return false;
+}
+
 /** One cURL attempt. Sets $caError when the failure is a trust-store problem. */
 function mkt_curl_fetch(string $url, int $limit, array $caOpts, bool &$caError): ?string {
     $buf = ''; $headers = [];
@@ -1771,6 +2577,17 @@ function mkt_rmrf(string $p): void {
     elseif (is_file($p) || is_link($p)) @unlink($p);
 }
 
+/** A plugin package entry the platform can host: browser assets only, never a
+ *  server-side script or a dotfile (.htaccess, .user.ini). */
+function mkt_plugin_entry_allowed(string $name): bool {
+    $base = basename($name);
+    if ($base === '' || $base[0] === '.') return false;
+    if (strpos($base, '.') === false) return true;                 // LICENSE, README
+    $ext = strtolower((string)pathinfo($base, PATHINFO_EXTENSION));
+    return in_array($ext, ['js', 'mjs', 'json', 'css', 'html', 'md', 'txt', 'png', 'jpg', 'jpeg', 'gif',
+                           'webp', 'svg', 'woff', 'woff2', 'ttf', 'otf', 'wasm', 'glsl', 'frag', 'vert', 'map'], true);
+}
+
 /** Hardened extraction → dir holding plugin.json, or null. */
 function mkt_extract_zip(string $zipPath, string $dest): ?string {
     if (!class_exists('ZipArchive')) return null;
@@ -1783,6 +2600,9 @@ function mkt_extract_zip(string $zipPath, string $dest): ?string {
         $name = $st['name'];
         $first = explode('/', $name)[0];
         if ($name === '' || $name[0] === '/' || strpos($name, '\\') !== false || strpos($first, ':') !== false || in_array('..', explode('/', $name), true)) { $zip->close(); return null; }
+        // js/modules/ is served as static files with no execution ban: a plugin
+        // package may only carry what a browser plugin is made of.
+        if (substr($name, -1) !== '/' && !mkt_plugin_entry_allowed($name)) { $zip->close(); return null; }
         $total += (int)$st['size'];
         if ($total > 24 * 1024 * 1024) { $zip->close(); return null; }
     }
@@ -1801,15 +2621,15 @@ function mkt_extract_zip(string $zipPath, string $dest): ?string {
  *  @return array{0:int,1:array} [httpStatus, payload] */
 function mkt_install(string $catalogId, string $password, bool $upgrade = false): array {
     if (MARKETPLACE_CATALOG_URL === '') return [400, ['error' => 'marketplace_not_configured']];
+    if (!admin_reauth($password)) return [401, ['error' => 'bad_password']];
     $rec = admin_credential();
-    if (!$rec || !admin_verify_password($password, $rec['password_pbkdf2'] ?? '')) return [401, ['error' => 'bad_password']];
     [$ok, $res] = mkt_fetch_catalog();
     if (!$ok) return [502, ['error' => $res]];
     $entry = null;
     foreach ($res as $e) { if (is_array($e) && (string)($e['id'] ?? '') === $catalogId) { $entry = $e; break; } }
     if (!$entry) return [404, ['error' => 'unknown_catalog_id']];
     $placement = $entry['placement'] ?? ''; $pid = (string)($entry['id'] ?? '');
-    if (!in_array($placement, ['tools', 'channels', 'shaders'], true) || !preg_match('/^[A-Za-z0-9_][A-Za-z0-9._-]*$/', $pid)) return [400, ['error' => 'bad_plugin_id']];
+    if (!in_array($placement, ['tools', 'channels', 'shaders'], true) || !preg_match('/^[A-Za-z0-9_][A-Za-z0-9._-]*$/D', $pid)) return [400, ['error' => 'bad_plugin_id']];
     $path = "$placement/$pid"; $targetDir = modules_dir() . "/$placement/$pid";
     if (is_dir($targetDir) && !$upgrade) return [409, ['error' => 'already_installed']];
     if ($upgrade && !is_dir($targetDir)) return [404, ['error' => 'not_installed']];
@@ -1882,7 +2702,7 @@ function mkt_install(string $catalogId, string $password, bool $upgrade = false)
 
 /** @return array{0:int,1:array} */
 function mkt_uninstall(string $path): array {
-    if (!preg_match('#^(tools|channels|shaders)/[A-Za-z0-9_][A-Za-z0-9._-]*$#', $path)) return [400, ['error' => 'bad_path']];
+    if (!preg_match('#^(tools|channels|shaders)/[A-Za-z0-9_][A-Za-z0-9._-]*$#D', $path)) return [400, ['error' => 'bad_path']];
     $target = modules_dir() . '/' . $path;
     if (!is_dir($target)) return [404, ['error' => 'not_installed']];
     if (strpos($path, 'shaders/') === 0) {
@@ -1909,7 +2729,7 @@ function mkt_uninstall(string $path): array {
  *  dev_server.py:_RELEASE_PUBKEY_HEX / install.php:$PINNED_PUBKEY. Empty ⇒
  *  sha256-only (the sums file itself is unauthenticated); set ⇒ signature
  *  verification is MANDATORY and failures abort the update. */
-const LUMEN_RELEASE_PUBKEY = '';
+const LUMEN_RELEASE_PUBKEY = '9635e20bd09e2dc84830b018a99f3fb051de2f44db97f03e8d5f28e8d769ed79';
 
 /** Paths an update must never overwrite (twin of dev_server._UPDATE_PROTECT,
  *  restricted to what can exist on a PHP host) + Python/dev files that have no
@@ -1924,7 +2744,7 @@ function admin_update_protected(string $rel): bool {
     // Runtime/operator state — never shipped in a release, but fail-safe anyway.
     static $stateFiles = ['api/admin_credential.json', 'api/config.json', 'api/stats.json',
                           'api/disabled-plugins.json', 'api/quarantined-plugins.json', 'api/plugin-trust.json',
-                          'api/.update-pending.json'];
+                          'api/.update-pending.json', 'api/trusted-proxies.json'];
     if (in_array($rel, $stateFiles, true)) return true;
     foreach (['config/pages/', 'api/page-drafts/', 'secrets/',
               'DATA_WEB/', 'logs/', 'backups/', 'js/modules/'] as $prefix) {
@@ -1933,12 +2753,131 @@ function admin_update_protected(string $rel): bool {
     return false;
 }
 
+/** Files earlier releases shipped that no release carries any more: removed by the
+ *  update (api/config.php held the bcrypt hash of the old documented default
+ *  password, as text, readable wherever its deny rule is not honoured). */
+const ADMIN_UPDATE_OBSOLETE = ['api/config.php'];
+
+// ── Root .htaccess: shipped rules + the operator's own lines ─────────────────
+// Shared hosts routinely need lines of their own in the root .htaccess (AddHandler
+// for a PHP version, RewriteBase, php_value…). An update replacing the file
+// wholesale dropped them — after which PHP could be served as text and the admin
+// that ran the update 500s. The shipped rules sit between BEGIN/END LUMEN3D
+// markers; everything outside them belongs to the operator and is kept.
+const LUMEN_HTACCESS_BEGIN = '# BEGIN LUMEN3D';
+const LUMEN_HTACCESS_END   = '# END LUMEN3D';
+
+/** The shipped block (markers included); the whole file when it has no markers. */
+function admin_htaccess_block(string $shipped): string {
+    $b = strpos($shipped, LUMEN_HTACCESS_BEGIN);
+    $e = strpos($shipped, LUMEN_HTACCESS_END);
+    if ($b === false || $e === false || $e < $b) {
+        return LUMEN_HTACCESS_BEGIN . "\n" . rtrim($shipped, "\r\n") . "\n" . LUMEN_HTACCESS_END . "\n";
+    }
+    return substr($shipped, $b, $e + strlen(LUMEN_HTACCESS_END) - $b) . "\n";
+}
+
+/**
+ * Merge a newly shipped root .htaccess into the one on disk.
+ *  - The file on disk has markers: what is outside them is kept verbatim, what is
+ *    inside is replaced by the shipped block.
+ *  - It has none (written before the markers existed, or by the host): its
+ *    top-level host directives that the shipped file does not already carry are
+ *    kept in an operator section ABOVE the block (so an AddHandler still decides
+ *    which PHP runs the rewrites below it); everything else was ours.
+ */
+function admin_merge_htaccess(string $existing, string $shipped): string {
+    $block = admin_htaccess_block($shipped);
+    $existing = str_replace("\r\n", "\n", $existing);
+    $b = strpos($existing, LUMEN_HTACCESS_BEGIN);
+    $e = strpos($existing, LUMEN_HTACCESS_END);
+    if ($b !== false && $e !== false && $e > $b) {
+        $after = substr($existing, $e + strlen(LUMEN_HTACCESS_END));
+        return substr($existing, 0, $b) . $block . ltrim($after, "\n");
+    }
+    $shippedLines = array_map('trim', explode("\n", str_replace("\r\n", "\n", $shipped)));
+    $keep = []; $depth = 0;
+    foreach (explode("\n", $existing) as $line) {
+        $t = trim($line);
+        if (preg_match('#^</[A-Za-z]#', $t)) { $depth = max(0, $depth - 1); continue; }
+        if (preg_match('#^<[A-Za-z]#', $t)) { $depth++; continue; }
+        if ($depth > 0 || $t === '' || $t[0] === '#') continue;
+        if (!preg_match('/^(AddHandler|SetHandler|AddType|Action|php_value|php_flag|php_admin_value|php_admin_flag|RewriteBase|SetEnv|PassEnv|FcgidWrapper|suPHP_\w+|DirectoryIndex)\b/i', $t)) continue;
+        if (in_array($t, $shippedLines, true)) continue;
+        $keep[] = $t;
+    }
+    if (!$keep) return $block;
+    return "# Operator lines kept across updates — host-specific directives go here, outside\n"
+         . "# the LUMEN3D block (which every update rewrites).\n"
+         . implode("\n", $keep) . "\n\n" . $block;
+}
+
 /** @return array{0:int,1:array} [httpStatus, payload] — apply the latest GitHub
  *  release in place. No rollback under PHP (per-request runtime; a failed apply
- *  can simply be re-run — the copy pass is idempotent). */
+ *  can simply be re-run — the copy pass is idempotent). One apply at a time: a
+ *  second click (or a second admin) is refused while the first runs, instead of two
+ *  copy passes racing over the same files. */
 function admin_update_apply_php(): array {
+    $lock = @fopen(admin_private_dir() . '/.update.lock', 'c');
+    if ($lock === false) return [500, ['error' => 'update_lock_failed']];
+    if (!@flock($lock, LOCK_EX | LOCK_NB)) { @fclose($lock); return [409, ['error' => 'update_in_progress']]; }
+    try {
+        return admin_update_apply_locked();
+    } finally {
+        @flock($lock, LOCK_UN);
+        @fclose($lock);
+    }
+}
+
+/**
+ * The assets of a GitHub release the updater may apply (twin of the asset choice in
+ * dev_server.py _update_check). Only the archive NAMED after the tag is ever
+ * applied: any other lumen3d-web-*.zip (an extra one attached by hand, a stale one)
+ * is refused, two candidates for the same name make the release ambiguous, and
+ * GitHub's raw source zipball is never a candidate (no SHA256SUMS lists it).
+ * @return array{zipUrl:?string,assetName:?string,assetSize:?int,sumsUrl:?string,sigUrl:?string,error:?string}
+ */
+function admin_release_assets(array $rel, string $latest): array {
+    $out = ['zipUrl' => null, 'assetName' => null, 'assetSize' => null, 'sumsUrl' => null, 'sigUrl' => null, 'error' => null];
+    $wanted = $latest !== '' ? strtolower("lumen3d-web-$latest.zip") : null;
+    $candidates = []; $exact = [];
+    foreach ((is_array($rel['assets'] ?? null) ? $rel['assets'] : []) as $a) {
+        if (!is_array($a)) continue;
+        $n = (string)($a['name'] ?? ''); $u = (string)($a['browser_download_url'] ?? '');
+        if (preg_match('/^lumen3d-web-.*\.zip\z/i', $n)) {
+            $candidates[] = $a;
+            if ($wanted !== null && strtolower($n) === $wanted) $exact[] = $a;
+        } elseif ($n === 'SHA256SUMS') {
+            $out['sumsUrl'] = $u !== '' ? $u : null;
+        } elseif ($n === 'SHA256SUMS.sig') {
+            $out['sigUrl'] = $u !== '' ? $u : null;
+        }
+    }
+    if (count($exact) === 1) {
+        $out['zipUrl'] = (string)($exact[0]['browser_download_url'] ?? '') ?: null;
+        $out['assetName'] = (string)$exact[0]['name'];
+        $out['assetSize'] = isset($exact[0]['size']) ? (int)$exact[0]['size'] : null;
+        if ($out['zipUrl'] === null) $out['error'] = 'no_release_asset';
+    } elseif (count($exact) > 1) {
+        $out['error'] = 'ambiguous_asset';
+    } else {
+        $out['error'] = $candidates ? 'asset_name_mismatch' : 'no_release_asset';
+    }
+    if ($out['error'] === null && $out['sumsUrl'] === null) $out['error'] = 'no_checksums';
+    return $out;
+}
+
+/** The asset fields of update_check, named as dev_server.py names them. */
+function admin_update_check_assets(array $rel, string $latest): array {
+    $a = admin_release_assets($rel, $latest);
+    return ['assetUrl' => $a['zipUrl'], 'assetName' => $a['assetName'], 'assetSize' => $a['assetSize'],
+            'sumsUrl' => $a['sumsUrl'], 'sigUrl' => $a['sigUrl'], 'assetError' => $a['error'],
+            'signingConfigured' => LUMEN_RELEASE_PUBKEY !== ''];
+}
+
+function admin_update_apply_locked(): array {
     if (!class_exists('ZipArchive')) return [500, ['error' => 'zip_unavailable']];
-    @set_time_limit(300);
+    @set_time_limit(600);
     $root = admin_root();
 
     // 1. Resolve the latest release + its assets.
@@ -1950,14 +2889,11 @@ function admin_update_apply_php(): array {
     if ($latest === '' || admin_version_tuple($latest) <= admin_version_tuple($current)) {
         return [400, ['error' => 'no_update_available', 'current' => $current, 'latest' => $latest]];
     }
-    $zipUrl = $sumsUrl = $sigUrl = null;
-    foreach ($rel['assets'] as $a) {
-        $n = (string)($a['name'] ?? ''); $u = (string)($a['browser_download_url'] ?? '');
-        if (preg_match('/^lumen3d-web-[0-9.]+\.zip$/', $n)) $zipUrl = $u;
-        elseif ($n === 'SHA256SUMS') $sumsUrl = $u;
-        elseif ($n === 'SHA256SUMS.sig') $sigUrl = $u;
+    $assets = admin_release_assets($rel, $latest);
+    if ($assets['error'] !== null) {
+        return [400, ['error' => 'unverifiable_release', 'reason' => $assets['error'], 'latest' => $latest]];
     }
-    if (!$zipUrl || !$sumsUrl) return [502, ['error' => 'release_assets_missing']];
+    [$zipUrl, $sumsUrl, $sigUrl] = [$assets['zipUrl'], $assets['sumsUrl'], $assets['sigUrl']];
 
     // 2. Download + verify. SHA256SUMS authenticates the zip; the pinned key (when
     //    set) authenticates SHA256SUMS itself — same chain as install.php.
@@ -1973,22 +2909,24 @@ function admin_update_apply_php(): array {
             return [502, ['error' => 'release_signature_invalid']];
         }
     }
-    $zipBytes = mkt_fetch_bytes($zipUrl, 64 * 1024 * 1024);
-    if ($zipBytes === null) return [502, ['error' => 'zip_unreachable']];
+    // Fail closed: a release whose zip is not listed in its SHA256SUMS is refused,
+    // never installed unverified.
     $zipName = basename((string)parse_url($zipUrl, PHP_URL_PATH));
     $expect = null;
     foreach (preg_split('/\r?\n/', $sums) as $line) {
-        if (preg_match('/^([0-9a-f]{64})\s+\*?(.+)$/', trim($line), $m) && trim($m[2]) === $zipName) { $expect = $m[1]; break; }
+        if (preg_match('/^([0-9a-fA-F]{64})\s+\*?(.+)$/', trim($line), $m) && trim($m[2]) === $zipName) { $expect = strtolower($m[1]); break; }
     }
-    if ($expect === null || !hash_equals($expect, hash('sha256', $zipBytes))) return [502, ['error' => 'zip_digest_mismatch']];
+    if ($expect === null) return [400, ['error' => 'unverifiable_release', 'reason' => 'zip_not_in_sums', 'latest' => $latest]];
 
-    // 3. Staged extract under the web root (same filesystem → rename is cheap and
-    //    same-volume; extracting under /tmp broke on shared hosts before — EXDEV).
+    // 3. Staged download + extract under the web root (same filesystem → rename is
+    //    cheap and same-volume; extracting under /tmp broke on shared hosts — EXDEV).
+    //    The zip streams to disk: a release held in memory could exceed memory_limit.
     $staging = $root . '/.update-staging-' . bin2hex(random_bytes(4));
     if (!admin_make_dir($staging)) return [500, ['error' => 'staging_mkdir_failed']];
     $zipPath = $staging . '/release.zip';
-    if (@file_put_contents($zipPath, $zipBytes) === false) { mkt_rmrf($staging); return [500, ['error' => 'staging_write_failed']]; }
-    $zipBytes = null; // free the in-memory copy before extraction
+    if (!mkt_fetch_to_file($zipUrl, $zipPath, 64 * 1024 * 1024)) { mkt_rmrf($staging); return [502, ['error' => 'zip_unreachable']]; }
+    $actual = hash_file('sha256', $zipPath);
+    if (!is_string($actual) || !hash_equals($expect, $actual)) { mkt_rmrf($staging); return [502, ['error' => 'zip_digest_mismatch']]; }
     $zip = new ZipArchive();
     if ($zip->open($zipPath) !== true) { mkt_rmrf($staging); return [500, ['error' => 'zip_open_failed']]; }
     if ($zip->numFiles > 5000) { $zip->close(); mkt_rmrf($staging); return [500, ['error' => 'zip_too_large']]; }
@@ -2047,6 +2985,19 @@ function admin_update_apply_php(): array {
         // OPEN file (Windows allows rename, not delete-in-place; a plain unlink
         // there only marks delete-pending and the name stays blocked until the
         // handle closes — the new file then can't land). unlink is the fallback.
+        if ($relPath === '.htaccess' && is_file($dstF)) {
+            // Keep the operator's own lines (see admin_merge_htaccess); a copy of the
+            // previous file stays beside it, denied like every dotfile.
+            $prev = (string)@file_get_contents($dstF);
+            $merged = admin_merge_htaccess($prev, (string)@file_get_contents($srcF));
+            @file_put_contents($dstF . '.lumen-backup', $prev);
+            if (!lumen_write_file_atomic($dstF, $merged, admin_code_file_mode())) {
+                mkt_rmrf($staging);
+                return [500, ['error' => 'write_failed', 'path' => $relPath, 'filesUpdated' => $updated]];
+            }
+            $updated++;
+            continue;
+        }
         if (file_exists($dstF)) {
             @unlink($dstF . '.lumen-old');
             if (!@rename($dstF, $dstF . '.lumen-old')) @unlink($dstF);
@@ -2063,6 +3014,9 @@ function admin_update_apply_php(): array {
         $updated++;
     }
     foreach ($names as $relPath) @unlink($root . '/' . $relPath . '.lumen-old');   // best-effort sweep
+    foreach (ADMIN_UPDATE_OBSOLETE as $gone) {
+        if (!in_array($gone, $names, true) && is_file($root . '/' . $gone)) @unlink($root . '/' . $gone);
+    }
     mkt_rmrf($staging);
     if ($pending) @file_put_contents($root . '/api/.update-pending.json', json_encode(array_values($pending)));
     admin_opcache_flush($phpWritten);   // else opcache serves the OLD compiled *.php
@@ -2131,7 +3085,7 @@ function admin_migrate_inline_drafts(): void {
             $doc = json_decode((string)@file_get_contents($f), true);
             if (!is_array($doc) || !isset($doc['draft'])) continue;
             $slug = basename($f, '.json');
-            if (!preg_match('/^[a-z0-9][a-z0-9_-]{0,63}$/', $slug)) continue;
+            if (!preg_match('/^[a-z0-9][a-z0-9_-]{0,63}$/D', $slug)) continue;
             $draft = $doc['draft'];
             unset($doc['draft']);
             $target = __DIR__ . '/page-drafts/' . $slug . '.json';
@@ -2140,18 +3094,15 @@ function admin_migrate_inline_drafts(): void {
             // public copy is the only remaining copy of that draft, so a read-only
             // api/ would otherwise destroy the operator's unpublished work to fix a
             // confidentiality bug. A non-array draft carries nothing to lose.
-            if (is_array($draft)) {
-                if (@file_put_contents($target, json_encode($draft, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT)) === false) {
-                    $complete = false;
-                    continue;
-                }
-                @chmod($target, 0600);
-            }
-            if (@file_put_contents($f, json_encode($doc, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT)) === false) {
+            if (is_array($draft) && !admin_write_json($target, $draft)) {
                 $complete = false;
                 continue;
             }
-            admin_fix_file_mode($f);
+            $json = json_encode($doc, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT);
+            if ($json === false || !lumen_write_file_atomic($f, $json)) {
+                $complete = false;
+                continue;
+            }
         }
     }
     // Only claim the sweep is done when every page actually moved — otherwise the

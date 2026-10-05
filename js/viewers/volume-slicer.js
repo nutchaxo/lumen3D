@@ -39,19 +39,6 @@ const VolumeSlicer = (() => {
   let _visible = false;
   let _rafId = null;
   let _listeners = new Set();
-  // Set while _buildMaterial() runs for a renderWithMaterial() call that was handed
-  // a fallback picture (uniform + FALLBACK_TEX define).
-  let _fallback = null;
-  // The slicer material built for the last renderWithMaterial() source, kept until
-  // the source or the fallback presence changes: disposing it after every render
-  // released its program, and three.js then recompiled the slice shader — a few
-  // hundred milliseconds on ANGLE — for every progressive refresh of a native pass.
-  let _foreign = null;
-  // The same cache for renderRawWithMaterial() (its own slot: a native pass may
-  // render both kinds without evicting one program for the other), and the target
-  // + readback buffer of the raw renders, kept while a pass asks for it.
-  let _foreignRaw = null;
-  let _rawPass = null;
   let _visibleListeners = new Set();
   // The sidebar preview renders at PREVIEW_SIZE. On the slice stage (the canvas
   // area, viewer.js _setSliceStage) the interactive resolution follows the
@@ -83,6 +70,7 @@ const VolumeSlicer = (() => {
     precision highp sampler3D;
     // The raw fallback is read as exact bytes: not at the default lowp.
     precision highp sampler2D;
+    precision highp sampler2DArray;
 
     uniform sampler3D svrAtlas0;
     uniform sampler3D svrAtlas1;
@@ -120,6 +108,9 @@ const VolumeSlicer = (() => {
     // (0, 0, 1, 1) is the whole frame; a window renders the same pixels of that part
     // alone, so a caller that only keeps a crop pays only that crop's readback.
     uniform vec4  uvWindow;
+    // 1 renders the window upside down: the target's first row (GL bottom) holds the
+    // window's TOP row, so a readback is already in canvas order (no CPU flip).
+    uniform float flipY;
 
     #ifdef VOLUME_WARP
     // 4D stabilisation, linked by reference from the volume material: cube (object)
@@ -135,6 +126,24 @@ const VolumeSlicer = (() => {
     // fallbackRect places that (cropped) picture in the render frame, GL orientation.
     uniform sampler2D fallbackTex;
     uniform vec4 fallbackRect;
+    #endif
+
+    #ifdef PLANE_TEX
+    // The Studio's native picture of an axis-aligned plane, without a 3D atlas: the
+    // voxel planes the plane reads along its normal axis k (or, for a MIP slab, their
+    // per-channel maximum, planeReduced = 1) in a 2D array texture, texel (u, v, layer)
+    // = voxel (u, v) of plane layer, (u, v) the two other axes in x, y, z order. The
+    // voxel of uvw is computed exactly as getAtlasLookup computes it, floor of
+    // clamp(uvw·dim, 0, dim − 1); planePresence holds, per brick column and layer, 1
+    // once that brick's voxels are in (0: the atlas would have no brick there).
+    uniform sampler2DArray planeTex;
+    uniform sampler2DArray planePresence;
+    uniform vec3 planeDim;
+    uniform int planeAxis;       // 0: normal x (u = y, v = z); 1: y (u = x, v = z); 2: z (u = x, v = y)
+    uniform int planeLayerBase;  // voxel index along k of layer 0
+    uniform int planeLayers;
+    uniform int planeReduced;
+    uniform float planeBrickSize;
     #endif
 
     in vec2 vUv;
@@ -177,6 +186,21 @@ const VolumeSlicer = (() => {
     // The atlas texel at uvw: channels 0..3 in r, g, b, a. present is false where no
     // brick backs the voxel (every channel reads 0 there).
     vec4 rawAt(vec3 uvw, out bool present) {
+      #ifdef PLANE_TEX
+      vec3 voxel = floor(clamp(uvw * planeDim, vec3(0.0), planeDim - vec3(1.0)));
+      vec3 brick = floor(voxel / planeBrickSize);
+      ivec2 texel;
+      ivec2 column;
+      float along;
+      if (planeAxis == 2) { texel = ivec2(voxel.xy); column = ivec2(brick.xy); along = voxel.z; }
+      else if (planeAxis == 1) { texel = ivec2(voxel.xz); column = ivec2(brick.xz); along = voxel.y; }
+      else { texel = ivec2(voxel.yz); column = ivec2(brick.yz); along = voxel.x; }
+      int layer = planeReduced == 1 ? 0 : int(along) - planeLayerBase;
+      present = layer >= 0 && layer < planeLayers
+        && texelFetch(planePresence, ivec3(column, layer), 0).r > 0.5;
+      if (!present) return vec4(0.0);
+      return texelFetch(planeTex, ivec3(texel, layer), 0);
+      #else
       #ifdef ENABLE_SVR
       vec4 atlasLookup = getAtlasLookup(uvw);
       present = atlasLookup.w >= 0.0;
@@ -185,6 +209,7 @@ const VolumeSlicer = (() => {
       #else
       present = true;
       return texture(svrAtlas0, uvw);
+      #endif
       #endif
     }
 
@@ -255,6 +280,11 @@ const VolumeSlicer = (() => {
         if (projMode == 1) raw = max(raw, s);
         else raw += s;
         hits++;
+        #ifdef PLANE_TEX
+        // A reduced plane already holds the slab's maximum: every further sample in the
+        // box reads the same texel and the same presence.
+        if (planeReduced == 1) break;
+        #endif
       }
       if (hits > 0 && projMode == 2) raw /= float(hits);
       return raw;
@@ -289,7 +319,7 @@ const VolumeSlicer = (() => {
     #endif
 
     void main() {
-      vec2 uv = uvWindow.xy + vUv * uvWindow.zw;
+      vec2 uv = uvWindow.xy + vec2(vUv.x, flipY > 0.5 ? 1.0 - vUv.y : vUv.y) * uvWindow.zw;
       vec2 pc = (uv - 0.5) * 2.0 * sliceExtent;
       vec3 base = sliceOrigin + pc.x * sliceRight + pc.y * sliceUp;
 
@@ -415,57 +445,54 @@ const VolumeSlicer = (() => {
   function updateMaterial(material) {
     if (_disabled || !_initialized) return;
     _volumeMaterial = material;
-    _buildMaterial();
+    // Every load hands the material over again: the same program serves it as long as
+    // the defines agree (re-linked in place); a rebuild disposes the material it replaces.
+    if (_mat && Boolean(_mat.defines?.ENABLE_SVR) === Boolean(material?.defines?.ENABLE_SVR)) {
+      _linkUniforms(_mat.uniforms, material);
+    } else {
+      const previous = _mat;
+      _buildMaterial();
+      previous?.dispose?.();
+    }
     if (_scene?.children?.[0]) _scene.children[0].material = _mat;
     _scheduleRender();
   }
 
-  function _buildMaterial(rawOutput = false) {
-    const u = {};
-    const defaults = {
-      svrAtlas0: { value: null },
-      svrAtlas1: { value: null },
-      svrAtlas2: { value: null },
-      svrAtlas3: { value: null },
-      svrAtlas4: { value: null },
-      svrAtlas5: { value: null },
-      svrAtlas6: { value: null },
-      svrAtlas7: { value: null },
-      pageTable: { value: null },
-      atlasDim: { value: new THREE.Vector3(512, 512, 512) },
-      volumeDim: { value: new THREE.Vector3(1, 1, 1) },
-      ptDim: { value: new THREE.Vector3(1, 1, 1) },
-      brickSize: { value: 64.0 },
-      numChannels: { value: 0 }
-    };
-    Object.assign(u, defaults);
-    for (let i = 0; i < 4; i++) {
-      u[`color${i}`] = { value: new THREE.Vector3(1, 1, 1) };
-      u[`min${i}`] = { value: 0 };
-      u[`max${i}`] = { value: 1 };
-      u[`gamma${i}`] = { value: 1 };
-      u[`opacity${i}`] = { value: 1 };
-      u[`en${i}`] = { value: 0 };
-    }
+  // Uniforms read by reference from the volume material: its atlas pages, page table
+  // and channel settings (zero copy; a channel edit shows on the next render).
+  const LINKED_UNIFORMS = [
+    'svrAtlas0', 'svrAtlas1', 'svrAtlas2', 'svrAtlas3', 'svrAtlas4', 'svrAtlas5', 'svrAtlas6', 'svrAtlas7',
+    'pageTable', 'atlasDim', 'volumeDim', 'ptDim', 'brickSize', 'numChannels',
+    'color0', 'min0', 'max0', 'gamma0', 'opacity0', 'en0',
+    'color1', 'min1', 'max1', 'gamma1', 'opacity1', 'en1',
+    'color2', 'min2', 'max2', 'gamma2', 'opacity2', 'en2',
+    'color3', 'min3', 'max3', 'gamma3', 'opacity3', 'en3'
+  ];
 
-    // Link texture and channel uniforms by reference from the active volume material.
-    const linked = [
-      'svrAtlas0','svrAtlas1','svrAtlas2','svrAtlas3','svrAtlas4','svrAtlas5','svrAtlas6','svrAtlas7',
-      'pageTable','atlasDim','volumeDim','ptDim','brickSize','numChannels',
-      'color0','min0','max0','gamma0','opacity0','en0',
-      'color1','min1','max1','gamma1','opacity1','en1',
-      'color2','min2','max2','gamma2','opacity2','en2',
-      'color3','min3','max3','gamma3','opacity3','en3'
-    ];
-    if (_volumeMaterial?.uniforms) {
-      linked.forEach(k => { if (_volumeMaterial.uniforms[k]) u[k] = _volumeMaterial.uniforms[k]; });
-    }
+  function _defaultLinkedUniform(k) {
+    if (/^svrAtlas\d$/.test(k) || k === 'pageTable') return { value: null };
+    if (k === 'atlasDim') return { value: new THREE.Vector3(512, 512, 512) };
+    if (k === 'volumeDim' || k === 'ptDim') return { value: new THREE.Vector3(1, 1, 1) };
+    if (k === 'brickSize') return { value: 64.0 };
+    if (k === 'numChannels') return { value: 0 };
+    if (/^color\d$/.test(k)) return { value: new THREE.Vector3(1, 1, 1) };
+    if (/^max\d$/.test(k) || /^gamma\d$/.test(k) || /^opacity\d$/.test(k)) return { value: 1 };
+    return { value: 0 };   // min*, en*
+  }
+
+  /** Points `u`'s linked entries at `source`'s own uniform objects (defaults where it has none). */
+  function _linkUniforms(u, source) {
+    for (const k of LINKED_UNIFORMS) u[k] = source?.uniforms?.[k] || _defaultLinkedUniform(k);
     // The stabilisation warp, by reference too: setTimepointTransform() rewrites the
     // matrix in place for every timepoint, and the slice follows without a rebuild.
     // Unlinked (a material without it), texCoord's identity: cube + ½.
-    u.volumeWarp = _volumeMaterial?.uniforms?.volumeWarp
+    u.volumeWarp = source?.uniforms?.volumeWarp
       || { value: new THREE.Matrix4().makeTranslation(0.5, 0.5, 0.5) };
+  }
 
+  function _makeMaterial(source, defines) {
+    const u = {};
+    _linkUniforms(u, source);
     // Slice-specific uniforms (owned by slicer)
     u.sliceOrigin = { value: new THREE.Vector3() };
     u.sliceRight  = { value: new THREE.Vector3(1,0,0) };
@@ -476,17 +503,20 @@ const VolumeSlicer = (() => {
     u.slabDelta   = { value: 0.005 };
     u.projMode    = { value: 0 };
     u.uvWindow     = { value: new THREE.Vector4(0, 0, 1, 1) };
-    u.fallbackTex  = { value: _fallback ? _fallback.texture : null };
-    u.fallbackRect = { value: _fallback ? _fallback.rect.clone() : new THREE.Vector4(0, 0, 1, 1) };
+    u.flipY        = { value: 0 };
+    u.fallbackTex  = { value: null };
+    u.fallbackRect = { value: new THREE.Vector4(0, 0, 1, 1) };
     u.fallbackChannels = { value: new THREE.Vector4(0, 0, 0, 0) };
+    u.planeTex       = { value: null };
+    u.planePresence  = { value: null };
+    u.planeDim       = { value: new THREE.Vector3(1, 1, 1) };
+    u.planeAxis      = { value: 2 };
+    u.planeLayerBase = { value: 0 };
+    u.planeLayers    = { value: 1 };
+    u.planeReduced   = { value: 0 };
+    u.planeBrickSize = { value: 64 };
 
-    const defines = {};
-    if (_volumeMaterial?.defines?.ENABLE_SVR) defines.ENABLE_SVR = 1;
-    if (_fallback) defines.FALLBACK_TEX = 1;
-    if (rawOutput) defines.RAW_OUTPUT = 1;
-    if (samplingSpace(_volumeMaterial)) defines.VOLUME_WARP = 1;
-
-    _mat = new THREE.ShaderMaterial({
+    return new THREE.ShaderMaterial({
       glslVersion: THREE.GLSL3,
       vertexShader: VERT,
       fragmentShader: FRAG,
@@ -495,8 +525,44 @@ const VolumeSlicer = (() => {
       depthTest: false, depthWrite: false,
       // Raw bytes must land untouched: no blending (three r147 already maps an opaque
       // NormalBlending material to NoBlending — stated, not relied upon).
-      blending: rawOutput ? THREE.NoBlending : THREE.NormalBlending
+      blending: defines.RAW_OUTPUT ? THREE.NoBlending : THREE.NormalBlending
     });
+  }
+
+  /** The slicer's own material, for the inspector plane on screen (_volumeMaterial). */
+  function _buildMaterial() {
+    const defines = {};
+    if (_volumeMaterial?.defines?.ENABLE_SVR) defines.ENABLE_SVR = 1;
+    if (samplingSpace(_volumeMaterial)) defines.VOLUME_WARP = 1;
+    _mat = _makeMaterial(_volumeMaterial, defines);
+  }
+
+  // One material per define set for the explicit renders (renderWithMaterial,
+  // renderRawWithMaterial), kept for the page's life and re-linked to each source:
+  // three.js caches a program per define set only while a material uses it, and the
+  // slice shader (eight sampler3D, a 1024-step slab loop) costs a few hundred
+  // milliseconds to compile on ANGLE — disposing the material after every pass
+  // recompiled it at every Studio open.
+  const _programs = new Map();
+
+  function _foreignMaterial(source, { rawOutput = false, fallback = false, plane = false } = {}) {
+    const defines = {};
+    if (plane) defines.PLANE_TEX = 1;
+    else {
+      if (source?.defines?.ENABLE_SVR) defines.ENABLE_SVR = 1;
+      if (samplingSpace(source)) defines.VOLUME_WARP = 1;
+    }
+    if (fallback) defines.FALLBACK_TEX = 1;
+    if (rawOutput) defines.RAW_OUTPUT = 1;
+    const key = Object.keys(defines).sort().join('|') || 'plain';
+    let mat = _programs.get(key);
+    if (!mat) {
+      mat = _makeMaterial(source, defines);
+      _programs.set(key, mat);
+    } else {
+      _linkUniforms(mat.uniforms, source);
+    }
+    return mat;
   }
 
   // ── Plane Computation ────────────────────────────────────
@@ -818,12 +884,10 @@ const VolumeSlicer = (() => {
     if (changed) _mat.needsUpdate = true;
   }
 
-  function _syncUniforms() {
-    if (!_mat) return;
-    const u = _mat.uniforms;
-    const space = samplingSpace(_volumeMaterial);
-    _syncWarp(space);
-    const g = planeGeometry(_spec, _physicalSize(), space);
+  /** The plane uniforms of `mat` for `spec`, sampled through `source`'s space. */
+  function _syncUniformsFor(mat, spec, source) {
+    const u = mat.uniforms;
+    const g = planeGeometry(spec, _physicalSize(), samplingSpace(source));
     u.sliceOrigin.value.copy(g.origin);
     u.sliceRight.value.copy(g.right);
     u.sliceUp.value.copy(g.up);
@@ -834,12 +898,16 @@ const VolumeSlicer = (() => {
     u.slabDelta.value = g.delta;
   }
 
+  function _syncUniforms() {
+    if (!_mat) return;
+    _syncWarp(samplingSpace(_volumeMaterial));
+    _syncUniformsFor(_mat, _spec, _volumeMaterial);
+  }
+
   // ── Rendering ────────────────────────────────────────────
 
-
-  // ── Render: preview ──────────────────────────────────────
-  function _hasRenderableVolume() {
-    return Boolean(_mat?.uniforms?.svrAtlas0?.value);
+  function _hasRenderableVolume(mat = _mat) {
+    return Boolean(mat?.uniforms?.svrAtlas0?.value);
   }
 
   function _acquirePass(size) {
@@ -861,6 +929,45 @@ const VolumeSlicer = (() => {
     }
   }
 
+  /**
+   * One draw of `mat` into the w × h corner of `target`, read back into `readInto`;
+   * the renderer's target, viewport and autoClear are restored.
+   * The viewport is the target's own (target.viewport, which setRenderTarget applies
+   * as is), never renderer.setViewport: three multiplies that by the device pixel
+   * ratio and floors it, and at a fractional ratio (1.75: Windows at 175 %)
+   * (w / pr)·pr lands just below w — the last row and column were never drawn.
+   */
+  function _drawInto(mat, target, w, h, readInto) {
+    const prevTarget = _renderer.getRenderTarget();
+    const prevViewport = new THREE.Vector4();
+    _renderer.getViewport(prevViewport);
+    const prevAutoClear = _renderer.autoClear;
+    // The target starts transparent black whatever the page's clear colour: a pixel
+    // the colour path discards must read back alpha 0 (the slab footprint, the crop).
+    const prevClear = _renderer.getClearColor?.(new THREE.Color()) || null;
+    const prevClearAlpha = _renderer.getClearAlpha?.();
+    const quad = _scene.children[0];
+    const prevMat = quad.material;
+    try {
+      quad.material = mat;
+      target.viewport?.set(0, 0, w, h);
+      _renderer.autoClear = true;
+      _renderer.setRenderTarget(target);
+      if (prevClear) _renderer.setClearColor(0x000000, 0);
+      _renderer.clear();
+      _renderer.render(_scene, _camera);
+      _renderer.readRenderTargetPixels(target, 0, 0, w, h, readInto);
+    } finally {
+      quad.material = prevMat;
+      if (prevClear) _renderer.setClearColor(prevClear, prevClearAlpha);
+      _renderer.setRenderTarget(prevTarget);
+      _renderer.setViewport(prevViewport);
+      _renderer.autoClear = prevAutoClear;
+    }
+  }
+
+  // ── Render: preview ──────────────────────────────────────
+
   /** Renders the plane at `size` px into the preview canvas. */
   function _doPreview(size = _previewSize) {
     if (_disabled || !_visible || !_renderer || !_hasRenderableVolume()) return false;
@@ -874,40 +981,13 @@ const VolumeSlicer = (() => {
       return false;
     }
     _syncUniforms();
+    _mat.uniforms.uvWindow.value.set(0, 0, 1, 1);
+    // Drawn upside down: the readback is already in canvas order.
+    _mat.uniforms.flipY.value = 1;
+    _drawInto(_mat, pass.target, size, size, pass.buf);
 
-    // Save full renderer state
-    const prevTarget   = _renderer.getRenderTarget();
-    const prevViewport = new THREE.Vector4();
-    _renderer.getViewport(prevViewport);
-    const prevAutoClear = _renderer.autoClear;
-
-    // The viewport size must be in CSS/logical pixels (Three.js multiplies by
-    // pixelRatio internally). Dividing by pixelRatio makes the GL call land
-    // exactly at size × size — matching the render target.
-    const pr = _renderer.getPixelRatio();
-    const vpSize = size / pr;
-
-    _renderer.autoClear = true;
-    _renderer.setRenderTarget(pass.target);
-    _renderer.setViewport(0, 0, vpSize, vpSize);
-    _renderer.clear();
-    _renderer.render(_scene, _camera);
-
-    _renderer.readRenderTargetPixels(pass.target, 0, 0, size, size, pass.buf);
-
-    // ── CRITICAL: restore ALL renderer state ───────────────
-    _renderer.setRenderTarget(prevTarget);
-    _renderer.setViewport(prevViewport);
-    _renderer.autoClear = prevAutoClear;
-
-    // Flip Y (WebGL origin = bottom-left, Canvas2D origin = top-left)
     if (!pass.img) pass.img = _previewCtx.createImageData(size, size);
-    const px = pass.img.data;
-    for (let y = 0; y < size; y++) {
-      const src = (size - 1 - y) * size * 4;
-      const dst = y * size * 4;
-      px.set(pass.buf.subarray(src, src + size * 4), dst);
-    }
+    pass.img.data.set(pass.buf);
     // Resizing the bitmap clears it; putImageData refills it in the same task.
     if (_previewCanvas.width !== size || _previewCanvas.height !== size) {
       _previewCanvas.width = size;
@@ -917,60 +997,67 @@ const VolumeSlicer = (() => {
     return true;
   }
 
-  let _hiTarget = null;
-  let _hiBuf = null;
-  let _hiCanvas = null;
-  let _hiCtx = null;
-  let _hiImgData = null;
-  let _hiSize = 0;
-  // The pass of a windowed render (target, readback buffer, canvas of the window's
-  // size), kept between renders of the same window — a native pass refreshes the
-  // Studio's crop many times.
-  let _hiWindow = null;
+  // ── Render: explicit frames (Studio, captures) ─────────────
+  // A frame of renderRes² px, or a window of it, is drawn in square tiles: each tile
+  // is its own draw and its own readback, so no single GPU command runs long enough
+  // to trip the driver watchdog (Windows TDR, ~2 s: a thick slab samples up to 1024
+  // times per pixel), and the target and readback buffer stay tile-sized whatever the
+  // frame — they used to be frame-sized and kept for the rest of the session.
+  const TILE_MAX = 2048;
+  // Atlas fetches one draw may issue (pixels × slab samples): a thick slab gets smaller tiles.
+  const TILE_SAMPLE_BUDGET = 1 << 26;
+  let _tile = null;        // { target, buf, size }: the tile pass
+  let _outCanvas = null;   // { canvas, ctx }: renderHighRes()'s picture, overwritten by the next one
 
-  function _acquireHiPass(size) {
-    if (size === _hiSize && _hiTarget) return { target: _hiTarget, buf: _hiBuf, canvas: _hiCanvas, ctx: _hiCtx, img: _hiImgData, w: size, h: size };
-    if (_hiTarget) _hiTarget.dispose();
+  function _acquireTile(size) {
+    if (_tile && _tile.size >= size) return _tile;
+    _releaseTile();
+    const target = new THREE.WebGLRenderTarget(size, size, { format: THREE.RGBAFormat, type: THREE.UnsignedByteType });
     try {
-      _hiTarget = new THREE.WebGLRenderTarget(size, size, {
-        format: THREE.RGBAFormat, type: THREE.UnsignedByteType
-      });
-      _hiBuf = new Uint8Array(size * size * 4);
-      _hiCanvas = document.createElement('canvas');
-      _hiCanvas.width = size;
-      _hiCanvas.height = size;
-      _hiCtx = _hiCanvas.getContext('2d');
-      _hiImgData = _hiCtx.createImageData(size, size);
-      _hiSize = size;
-    } catch (err) {
-      _hiTarget?.dispose?.();
-      _hiTarget = null;
-      _hiBuf = null;
-      _hiCanvas = null;
-      _hiCtx = null;
-      _hiImgData = null;
-      _hiSize = 0;
-      throw err;
-    }
-    return { target: _hiTarget, buf: _hiBuf, canvas: _hiCanvas, ctx: _hiCtx, img: _hiImgData, w: size, h: size };
-  }
-
-  function _acquireWindowPass(w, h) {
-    if (_hiWindow && _hiWindow.w === w && _hiWindow.h === h) return _hiWindow;
-    _hiWindow?.target?.dispose?.();
-    _hiWindow = null;
-    const target = new THREE.WebGLRenderTarget(w, h, { format: THREE.RGBAFormat, type: THREE.UnsignedByteType });
-    try {
-      const canvas = document.createElement('canvas');
-      canvas.width = w;
-      canvas.height = h;
-      const ctx = canvas.getContext('2d');
-      _hiWindow = { target, buf: new Uint8Array(w * h * 4), canvas, ctx, img: ctx.createImageData(w, h), w, h };
+      _tile = { target, buf: new Uint8Array(size * size * 4), size };
     } catch (err) {
       target.dispose?.();
       throw err;
     }
-    return _hiWindow;
+    return _tile;
+  }
+
+  function _releaseTile() {
+    _tile?.target?.dispose?.();
+    _tile = null;
+  }
+
+  /** Tile side for `mat`'s plane: TILE_MAX, shrunk so pixels × slab samples stays in budget. */
+  function _tileSideFor(mat, w, h) {
+    const u = mat.uniforms;
+    const slab = Number(u.projMode?.value) !== 0 ? Math.max(1, Number(u.slabSteps?.value) || 1) : 1;
+    // A reduced plane reads one texel per pixel however thick the slab (FRAG: PLANE_TEX).
+    const samples = mat.defines?.PLANE_TEX && Number(u.planeReduced?.value) === 1 ? 1 : slab;
+    const side = Math.max(256, Math.floor(Math.sqrt(TILE_SAMPLE_BUDGET / samples)));
+    return Math.max(1, Math.min(TILE_MAX, side, Math.max(w, h)));
+  }
+
+  /**
+   * Draws the window `win` ({x, y, w, h}, pixels of a size × size frame, y down) of
+   * `mat` tile by tile; sink(tx, ty, tw, th, rows) receives each tile's pixels in
+   * canvas order (row r = window row ty + r, tw·4 bytes each). A tile's lowest row in
+   * the GL frame is size − (y + ty + th); it is drawn flipped (flipY), so its first
+   * row read back is its top one.
+   */
+  function _renderTiles(mat, size, win, sink) {
+    const T = _tileSideFor(mat, win.w, win.h);
+    const tile = _acquireTile(T);
+    const u = mat.uniforms;
+    u.flipY.value = 1;
+    for (let ty = 0; ty < win.h; ty += T) {
+      for (let tx = 0; tx < win.w; tx += T) {
+        const tw = Math.min(T, win.w - tx);
+        const th = Math.min(T, win.h - ty);
+        u.uvWindow.value.set((win.x + tx) / size, (size - (win.y + ty) - th) / size, tw / size, th / size);
+        _drawInto(mat, tile.target, tw, th, tile.buf);
+        sink(tx, ty, tw, th, tile.buf);
+      }
+    }
   }
 
   /** `window` as integer frame pixels, or null when empty, malformed or the whole frame. */
@@ -986,214 +1073,189 @@ const VolumeSlicer = (() => {
   }
 
   /**
+   * The frame window {x, y, w, h} a crop rect ({x, y, x2, y2, renderRes}, inclusive
+   * pixel bounds) cuts out of a `size` px frame — null when the rect is unusable or
+   * drawn at another size.
+   */
+  function windowForRect(rect, size) {
+    if (!rect || !Number.isFinite(rect.x) || !Number.isFinite(rect.x2)) return null;
+    if (rect.renderRes && rect.renderRes !== size) return null;
+    const minX = Math.max(0, Math.round(rect.x));
+    const minY = Math.max(0, Math.round(rect.y));
+    const maxX = Math.min(size - 1, Math.round(rect.x2));
+    const maxY = Math.min(size - 1, Math.round(rect.y2));
+    if (minX > maxX || minY > maxY) return null;
+    return { x: minX, y: minY, w: maxX - minX + 1, h: maxY - minY + 1 };
+  }
+
+  /** Applies a Studio channel state to `mat`'s (linked) channel uniforms; → restore(). */
+  function _applyChannelOverrides(mat, channelOverrides) {
+    if (!Array.isArray(channelOverrides)) return () => {};
+    const originals = {};
+    for (let i = 0; i < 4; i++) {
+      const cState = channelOverrides[i];
+      if (!cState || !mat.uniforms[`color${i}`]) continue;
+      originals[`color${i}`] = mat.uniforms[`color${i}`].value.clone();
+      originals[`min${i}`] = mat.uniforms[`min${i}`].value;
+      originals[`max${i}`] = mat.uniforms[`max${i}`].value;
+      originals[`gamma${i}`] = mat.uniforms[`gamma${i}`].value;
+      originals[`opacity${i}`] = mat.uniforms[`opacity${i}`].value;
+      originals[`en${i}`] = mat.uniforms[`en${i}`].value;
+
+      if (cState.color) {
+        if (typeof cState.color === 'string') {
+          const col = new THREE.Color(cState.color);
+          mat.uniforms[`color${i}`].value.set(col.r, col.g, col.b);
+        } else {
+          mat.uniforms[`color${i}`].value.set(cState.color.r/255, cState.color.g/255, cState.color.b/255);
+        }
+      }
+      if (cState.min !== undefined) mat.uniforms[`min${i}`].value = cState.min;
+      if (cState.max !== undefined) mat.uniforms[`max${i}`].value = cState.max;
+      if (cState.gamma !== undefined) mat.uniforms[`gamma${i}`].value = cState.gamma;
+      if (cState.opacity !== undefined) mat.uniforms[`opacity${i}`].value = cState.opacity;
+      if (typeof cState.enabled === 'boolean') mat.uniforms[`en${i}`].value = cState.enabled ? 1 : 0;
+    }
+    return () => {
+      for (const k in originals) {
+        if (typeof originals[k] === 'object') mat.uniforms[k].value.copy(originals[k]);
+        else mat.uniforms[k].value = originals[k];
+      }
+    };
+  }
+
+  function _acquireOutCanvas(w, h) {
+    if (_outCanvas && _outCanvas.canvas.width === w && _outCanvas.canvas.height === h) return _outCanvas;
+    const canvas = _outCanvas?.canvas || document.createElement('canvas');
+    canvas.width = w;
+    canvas.height = h;
+    _outCanvas = { canvas, ctx: canvas.getContext('2d') };
+    return _outCanvas;
+  }
+
+  /** The colour picture of `mat` (window of a size² frame) → the module's canvas, or null. */
+  function _renderColour(mat, size, channelOverrides, window) {
+    const restore = _applyChannelOverrides(mat, channelOverrides);
+    const win = _normalizeWindow(window, size) || { x: 0, y: 0, w: size, h: size };
+    try {
+      const out = _acquireOutCanvas(win.w, win.h);
+      let img = null;
+      _renderTiles(mat, size, win, (tx, ty, tw, th, rows) => {
+        if (!img || img.width !== tw || img.height !== th) img = out.ctx.createImageData(tw, th);
+        img.data.set(rows.subarray(0, tw * th * 4));
+        out.ctx.putImageData(img, tx, ty);
+      });
+      return out.canvas;
+    } catch (err) {
+      console.warn('[VolumeSlicer] High-res render failed.', err);
+      return null;
+    } finally {
+      restore();
+    }
+  }
+
+  /**
    * Renders the plane at `size` px (a square frame, getPlaneExtentUnits() across it) and
-   * returns the canvas — module-owned, overwritten by the next render, so a caller
-   * copies what it keeps. `window` = {x, y, w, h} (pixels of that frame, y down)
-   * renders and reads back that rectangle alone, at the same scale: the same pixels
-   * as that part of the full frame, for a fraction of the readback.
+   * returns the canvas — module-owned, overwritten by the next render and released by
+   * releaseHiPass(), so a caller copies what it keeps. `window` = {x, y, w, h} (pixels of
+   * that frame, y down) renders that rectangle alone, at the same scale: the same
+   * pixels as that part of the full frame, for a fraction of the cost.
    */
   function renderHighRes(size = 1024, channelOverrides = null, window = null) {
     if (_disabled || !_renderer || !_hasRenderableVolume()) return null;
     _syncUniforms();
+    return _renderColour(_mat, size, channelOverrides, window);
+  }
 
-    // Temporarily apply channel overrides for Studio
-    let originals = null;
-    if (channelOverrides && Array.isArray(channelOverrides)) {
-      originals = {};
-      for (let i = 0; i < 4; i++) {
-        const cState = channelOverrides[i];
-        if (!cState || !_mat.uniforms[`color${i}`]) continue;
-        originals[`color${i}`] = _mat.uniforms[`color${i}`].value.clone();
-        originals[`min${i}`] = _mat.uniforms[`min${i}`].value;
-        originals[`max${i}`] = _mat.uniforms[`max${i}`].value;
-        originals[`gamma${i}`] = _mat.uniforms[`gamma${i}`].value;
-        originals[`opacity${i}`] = _mat.uniforms[`opacity${i}`].value;
-        originals[`en${i}`] = _mat.uniforms[`en${i}`].value;
+  // Textures of the fallback pictures (the Studio preview) of explicit renders, kept
+  // while the same picture is handed in again (every refresh of a native pass).
+  let _fallbackColourTex = null; // { canvas, texture }
+  let _fallbackRawTex = null;    // { data, texture }
 
-        if (cState.color) {
-          if (typeof cState.color === 'string') {
-            const col = new THREE.Color(cState.color);
-            _mat.uniforms[`color${i}`].value.set(col.r, col.g, col.b);
-          } else {
-            _mat.uniforms[`color${i}`].value.set(cState.color.r/255, cState.color.g/255, cState.color.b/255);
-          }
-        }
-        if (cState.min !== undefined) _mat.uniforms[`min${i}`].value = cState.min;
-        if (cState.max !== undefined) _mat.uniforms[`max${i}`].value = cState.max;
-        if (cState.gamma !== undefined) _mat.uniforms[`gamma${i}`].value = cState.gamma;
-        if (cState.opacity !== undefined) _mat.uniforms[`opacity${i}`].value = cState.opacity;
-        if (typeof cState.enabled === 'boolean') _mat.uniforms[`en${i}`].value = cState.enabled ? 1 : 0;
-      }
-    }
-    const restoreOverrides = () => {
-      if (!originals) return;
-      for (const k in originals) {
-        if (typeof originals[k] === 'object') {
-          _mat.uniforms[k].value.copy(originals[k]);
-        } else {
-          _mat.uniforms[k].value = originals[k];
-        }
-      }
-    };
+  /** fallbackRect for a crop rect {x, y, x2, y2, renderRes}: canvas columns [x, x2] and
+   *  rows [y, y2] (top-down) of a renderRes frame, in GL orientation (0..1). */
+  function _fallbackRectFor(rect) {
+    const res = rect.renderRes;
+    const x = Math.max(0, Math.round(rect.x));
+    const y = Math.max(0, Math.round(rect.y));
+    const x2 = Math.min(res - 1, Math.round(rect.x2));
+    const y2 = Math.min(res - 1, Math.round(rect.y2));
+    return new THREE.Vector4(x / res, (res - 1 - y2) / res, (x2 - x + 1) / res, (y2 - y + 1) / res);
+  }
 
-    const win = _normalizeWindow(window, size);
-    let pass;
-    try {
-      pass = win ? _acquireWindowPass(win.w, win.h) : _acquireHiPass(size);
-    } catch (err) {
-      console.warn('[VolumeSlicer] High-res render allocation failed.', err);
-      restoreOverrides();
-      return null;
-    }
-    // The window's lowest row in the GL frame is size - (y + h).
-    if (win) _mat.uniforms.uvWindow.value.set(win.x / size, (size - win.y - win.h) / size, win.w / size, win.h / size);
-    else _mat.uniforms.uvWindow.value.set(0, 0, 1, 1);
-
-    const prevTarget   = _renderer.getRenderTarget();
-    const prevViewport = new THREE.Vector4();
-    _renderer.getViewport(prevViewport);
-    const prevAutoClear = _renderer.autoClear;
-
-    const pr = _renderer.getPixelRatio();
-
-    _renderer.autoClear = true;
-    _renderer.setRenderTarget(pass.target);
-    _renderer.setViewport(0, 0, pass.w / pr, pass.h / pr);
-    _renderer.clear();
-    _renderer.render(_scene, _camera);
-    _renderer.readRenderTargetPixels(pass.target, 0, 0, pass.w, pass.h, pass.buf);
-
-    restoreOverrides();
-
-    // Restore renderer
-    _renderer.setRenderTarget(prevTarget);
-    _renderer.setViewport(prevViewport);
-    _renderer.autoClear = prevAutoClear;
-
-    for (let y = 0; y < pass.h; y++) {
-      const src = (pass.h - 1 - y) * pass.w * 4;
-      const dst = y * pass.w * 4;
-      pass.img.data.set(pass.buf.subarray(src, src + pass.w * 4), dst);
-    }
-    pass.ctx.putImageData(pass.img, 0, 0);
-    return pass.canvas;
+  function _validRect(rect) {
+    return Boolean(rect && Number.isFinite(rect.renderRes) && rect.renderRes > 0 && Number.isFinite(rect.x) && Number.isFinite(rect.x2));
   }
 
   /**
    * One render of `spec` through `material` (its atlas, page table and channel
    * uniforms) at `size` px, the module's own material and plane left untouched.
    * `options.fallback = { canvas, rect }` paints `canvas` — a picture of the same
-   * plane at the same render size, cropped to `rect` ({x, y, x2, y2, renderRes} as
-   * _sliceContentRect gives it) — wherever a brick the plane crosses is missing from
-   * `material`'s atlas, so a partial atlas renders as "native where landed, preview
-   * elsewhere" instead of black holes. `options.window` = {x, y, w, h} renders that
-   * part of the frame alone (see renderHighRes). The slicer material built for
-   * `material` is kept for the next call with the same source (releaseForeign()
-   * drops it), so a pass of many renders compiles the slice shader once.
+   * plane, cropped to `rect` ({x, y, x2, y2, renderRes}: its own frame, any size) —
+   * wherever a brick the plane crosses is missing from `material`'s atlas, so a
+   * partial atlas renders as "native where landed, preview elsewhere" instead of
+   * black holes. `options.window` = {x, y, w, h} renders that part of the frame alone
+   * (see renderHighRes). The program is shared by every source with the same defines.
    */
   function renderWithMaterial(material, spec, size = 1024, channelOverrides = null, options = null) {
-    if (_disabled || !_renderer || !material) return null;
-
-    const previousVolumeMaterial = _volumeMaterial;
-    const previousMaterial = _mat;
-    const previousSpec = { ..._spec };
-
-    try {
-      const fb = options?.fallback;
-      const rect = fb?.rect;
-      const hasFallback = Boolean(fb?.canvas && rect && Number.isFinite(rect.renderRes) && rect.renderRes > 0);
-      // The cached program is keyed by its source, its fallback AND its warp (a
-      // stabilised timelapse samples through VOLUME_WARP; the toggle flips it).
-      const warp = Boolean(samplingSpace(material));
-      if (_foreign && (_foreign.source !== material || _foreign.hasFallback !== hasFallback || _foreign.warp !== warp)) _releaseForeignColour();
-      if (hasFallback) {
-        if (!_foreign?.texture || _foreign.canvas !== fb.canvas) {
-          _foreign?.texture?.dispose?.();
-          const texture = new THREE.CanvasTexture(fb.canvas);
-          // A non-power-of-two picture sampled 1:1: no mipmaps.
-          texture.generateMipmaps = false;
-          texture.minFilter = THREE.LinearFilter;
-          texture.magFilter = THREE.LinearFilter;
-          texture.wrapS = THREE.ClampToEdgeWrapping;
-          texture.wrapT = THREE.ClampToEdgeWrapping;
-          _foreign = { ..._foreign, texture, canvas: fb.canvas };
-        }
-        // The crop covers canvas columns [x, x2] and rows [y, y2] (top-down); in the
-        // GL frame the picture's lowest row is renderRes - 1 - y2. flipY (the
-        // CanvasTexture default) puts the canvas's last row at v = 0 to match.
-        const res = rect.renderRes;
-        const x = Math.max(0, Math.round(rect.x));
-        const y = Math.max(0, Math.round(rect.y));
-        const x2 = Math.min(res - 1, Math.round(rect.x2));
-        const y2 = Math.min(res - 1, Math.round(rect.y2));
-        _fallback = {
-          texture: _foreign.texture,
-          rect: new THREE.Vector4(x / res, (res - 1 - y2) / res, (x2 - x + 1) / res, (y2 - y + 1) / res)
-        };
+    if (_disabled || !_renderer || !material || !_scene) return null;
+    const fb = options?.fallback;
+    const hasFallback = Boolean(fb?.canvas && _validRect(fb.rect));
+    const mat = _foreignMaterial(material, { fallback: hasFallback });
+    if (!_hasRenderableVolume(mat)) return null;
+    if (hasFallback) {
+      if (!_fallbackColourTex || _fallbackColourTex.canvas !== fb.canvas) {
+        _fallbackColourTex?.texture?.dispose?.();
+        const texture = new THREE.CanvasTexture(fb.canvas);
+        // A non-power-of-two picture sampled 1:1: no mipmaps.
+        texture.generateMipmaps = false;
+        texture.minFilter = THREE.LinearFilter;
+        texture.magFilter = THREE.LinearFilter;
+        texture.wrapS = THREE.ClampToEdgeWrapping;
+        texture.wrapT = THREE.ClampToEdgeWrapping;
+        _fallbackColourTex = { canvas: fb.canvas, texture };
       }
-      _volumeMaterial = material;
-      if (_foreign?.mat) {
-        _mat = _foreign.mat;
-        if (_fallback) {
-          _mat.uniforms.fallbackTex.value = _fallback.texture;
-          _mat.uniforms.fallbackRect.value.copy(_fallback.rect);
-        }
-      } else {
-        _buildMaterial();
-        _foreign = { ..._foreign, source: material, hasFallback, warp, mat: _mat };
-      }
-      if (_scene?.children?.[0]) _scene.children[0].material = _mat;
-      if (spec) _spec = { ..._spec, ...spec };
-      return renderHighRes(size, channelOverrides, options?.window || null);
-    } finally {
-      _fallback = null;
-      _volumeMaterial = previousVolumeMaterial;
-      _mat = previousMaterial;
-      _spec = previousSpec;
-      if (_scene?.children?.[0] && previousMaterial) _scene.children[0].material = previousMaterial;
+      // flipY (the CanvasTexture default) puts the canvas's last row at v = 0, as the
+      // GL frame counts rows.
+      mat.uniforms.fallbackTex.value = _fallbackColourTex.texture;
+      mat.uniforms.fallbackRect.value.copy(_fallbackRectFor(fb.rect));
+    }
+    _syncUniformsFor(mat, { ..._spec, ...(spec || {}) }, material);
+    return _renderColour(mat, size, channelOverrides, options?.window || null);
+  }
+
+  /**
+   * Gives back the tile pass and the module canvas of the explicit renders (tile-sized
+   * target and readback buffer, the last picture's canvas): a Studio pass or a capture
+   * calls it once done. The next render allocates them again.
+   */
+  function releaseHiPass() {
+    _releaseTile();
+    if (_outCanvas) {
+      _outCanvas.canvas.width = 0;
+      _outCanvas.canvas.height = 0;
+      _outCanvas = null;
     }
   }
 
   /**
-   * Drops the materials and pictures kept for renderWithMaterial() and
-   * renderRawWithMaterial(), and the raw render's target (end of a native pass).
+   * End of a pass: drops the fallback textures and the references the shared programs
+   * hold to the pass's atlas / plane textures (the programs themselves stay compiled),
+   * and the tile pass (releaseHiPass).
    */
   function releaseForeign() {
-    _releaseForeignColour();
-    _releaseForeignRaw();
-    _releaseRawPass();
-  }
-
-  function _releaseForeignColour() {
-    if (!_foreign) return;
-    _foreign.mat?.dispose?.();
-    _foreign.texture?.dispose?.();
-    _foreign = null;
-  }
-
-  function _releaseForeignRaw() {
-    if (!_foreignRaw) return;
-    _foreignRaw.mat?.dispose?.();
-    _foreignRaw.texture?.dispose?.();
-    _foreignRaw = null;
-  }
-
-  function _releaseRawPass() {
-    _rawPass?.target?.dispose?.();
-    _rawPass = null;
-  }
-
-  function _acquireRawPass(w, h) {
-    if (_rawPass && _rawPass.w === w && _rawPass.h === h) return _rawPass;
-    _releaseRawPass();
-    const target = new THREE.WebGLRenderTarget(w, h, { format: THREE.RGBAFormat, type: THREE.UnsignedByteType });
-    try {
-      _rawPass = { target, buf: new Uint8Array(w * h * 4), w, h };
-    } catch (err) {
-      target.dispose?.();
-      throw err;
+    _fallbackColourTex?.texture?.dispose?.();
+    _fallbackColourTex = null;
+    _fallbackRawTex?.texture?.dispose?.();
+    _fallbackRawTex = null;
+    for (const mat of _programs.values()) {
+      const u = mat.uniforms;
+      _linkUniforms(u, null);
+      u.fallbackTex.value = null;
+      u.planeTex.value = null;
+      u.planePresence.value = null;
     }
-    return _rawPass;
+    releaseHiPass();
   }
 
   function _isRawPicture(raw) {
@@ -1211,143 +1273,259 @@ const VolumeSlicer = (() => {
    * fallback. The target is RGBA8 with no blending and no colour-space step, so the
    * bytes are the atlas's own (a mean is rounded to the nearest byte).
    *   options.window           {x, y, w, h}: that part of the frame alone (renderHighRes)
-   *   options.fallbackRaw      { raw, rect }: a raw picture of the same plane at the same
-   *                            render size (the Studio preview's), cropped to rect
-   *                            (_sliceContentRect's {x, y, x2, y2, renderRes}); read
+   *   options.fallbackRaw      { raw, rect }: a raw picture of the same plane, cropped to
+   *                            rect ({x, y, x2, y2, renderRes} of ITS frame — any
+   *                            resolution: it is looked up by frame position); read
    *                            wherever a brick is missing — a DataTexture of its exact
    *                            bytes (a 2D canvas would premultiply channel 3 away)
    *   options.fallbackChannels channel indices always taken from the fallback where it
    *                            covers the pixel (channels the pass did not load)
-   *   options.keepTarget       keep the target and readback buffer for the next call
-   *                            (a native pass); released by releaseForeign()
+   *   options.plane            a createPlaneVolume() handle: the voxels come from it
+   *                            instead of `material`'s atlas (an axis-aligned plane of
+   *                            an unwarped volume only); `material` still gives the
+   *                            channel count
+   *   options.out              a raw this function returned before, of the same size:
+   *                            refilled in place (`version` + 1) instead of allocating
    * @returns {{data: Uint8Array, width: number, height: number, channels: number,
-   *   projected: boolean, coverage: boolean}|null}
-   *   rows top-down (canvas order); `data` is a copy the caller owns; `channels` is the
-   *   volume's channel count (the numChannels uniform); `projected` marks a slab
-   *   (MIP / average over more than one sample), which SliceCompositor draws opaque
-   *   over the whole volume as the colour path does; `coverage` marks a projected slab
-   *   of fewer than four channels, whose unused channel 3 is 255 inside the volume and
-   *   0 outside it (the part of the frame the colour path leaves transparent)
+   *   projected: boolean, coverage: boolean, version?: number}|null}
+   *   rows top-down (canvas order); `data` is the caller's; `channels` is the volume's
+   *   channel count (the numChannels uniform); `projected` marks a slab (MIP / average
+   *   over more than one sample), which SliceCompositor draws opaque over the whole
+   *   volume as the colour path does; `coverage` marks a projected slab of fewer than
+   *   four channels, whose unused channel 3 is 255 inside the volume and 0 outside it
+   *   (the part of the frame the colour path leaves transparent)
    */
   function renderRawWithMaterial(material, spec, size = 1024, options = null) {
-    if (_disabled || !_renderer || !material) return null;
-
-    const previousVolumeMaterial = _volumeMaterial;
-    const previousMaterial = _mat;
-    const previousSpec = { ..._spec };
-
+    if (_disabled || !_renderer || !material || !_scene) return null;
+    const plane = options?.plane && options.plane.texture ? options.plane : null;
+    // The plane texture holds unwarped voxels: a stabilised timelapse keeps the atlas.
+    if (plane && samplingSpace(material)) return null;
+    const fb = options?.fallbackRaw;
+    const hasFallback = Boolean(_isRawPicture(fb?.raw) && _validRect(fb.rect));
+    const mat = _foreignMaterial(material, { rawOutput: true, fallback: hasFallback, plane: Boolean(plane) });
+    if (plane) _bindPlane(mat, plane);
+    else if (!_hasRenderableVolume(mat)) return null;
+    if (hasFallback) {
+      if (!_fallbackRawTex || _fallbackRawTex.data !== fb.raw.data) {
+        _fallbackRawTex?.texture?.dispose?.();
+        const texture = new THREE.DataTexture(fb.raw.data, fb.raw.width, fb.raw.height, THREE.RGBAFormat, THREE.UnsignedByteType);
+        texture.minFilter = THREE.NearestFilter;
+        texture.magFilter = THREE.NearestFilter;
+        texture.generateMipmaps = false;
+        texture.flipY = false;
+        texture.premultiplyAlpha = false;
+        texture.unpackAlignment = 1;
+        texture.needsUpdate = true;
+        _fallbackRawTex = { data: fb.raw.data, texture };
+      }
+      mat.uniforms.fallbackTex.value = _fallbackRawTex.texture;
+      mat.uniforms.fallbackRect.value.copy(_fallbackRectFor(fb.rect));
+    }
+    const only = Array.isArray(options?.fallbackChannels) ? options.fallbackChannels : [];
+    mat.uniforms.fallbackChannels.value.set(...[0, 1, 2, 3].map(c => (hasFallback && only.includes(c) ? 1 : 0)));
+    _syncUniformsFor(mat, { ..._spec, ...(spec || {}) }, material);
     try {
-      const fb = options?.fallbackRaw;
-      const rect = fb?.rect;
-      const hasFallback = Boolean(_isRawPicture(fb?.raw) && rect && Number.isFinite(rect.renderRes) && rect.renderRes > 0);
-      const warp = Boolean(samplingSpace(material));
-      if (_foreignRaw && (_foreignRaw.source !== material || _foreignRaw.hasFallback !== hasFallback || _foreignRaw.warp !== warp)) _releaseForeignRaw();
-      if (hasFallback) {
-        if (!_foreignRaw?.texture || _foreignRaw.fallbackData !== fb.raw.data) {
-          _foreignRaw?.texture?.dispose?.();
-          const texture = new THREE.DataTexture(fb.raw.data, fb.raw.width, fb.raw.height, THREE.RGBAFormat, THREE.UnsignedByteType);
-          texture.minFilter = THREE.NearestFilter;
-          texture.magFilter = THREE.NearestFilter;
-          texture.generateMipmaps = false;
-          texture.flipY = false;
-          texture.premultiplyAlpha = false;
-          texture.unpackAlignment = 1;
-          texture.needsUpdate = true;
-          _foreignRaw = { ..._foreignRaw, texture, fallbackData: fb.raw.data };
-        }
-        // Same placement as renderWithMaterial's picture: canvas columns [x, x2] and
-        // rows [y, y2] (top-down) of a renderRes frame, in GL orientation.
-        const res = rect.renderRes;
-        const x = Math.max(0, Math.round(rect.x));
-        const y = Math.max(0, Math.round(rect.y));
-        const x2 = Math.min(res - 1, Math.round(rect.x2));
-        const y2 = Math.min(res - 1, Math.round(rect.y2));
-        _fallback = {
-          texture: _foreignRaw.texture,
-          rect: new THREE.Vector4(x / res, (res - 1 - y2) / res, (x2 - x + 1) / res, (y2 - y + 1) / res)
-        };
-      }
-      _volumeMaterial = material;
-      if (_foreignRaw?.mat) {
-        _mat = _foreignRaw.mat;
-        if (_fallback) {
-          _mat.uniforms.fallbackTex.value = _fallback.texture;
-          _mat.uniforms.fallbackRect.value.copy(_fallback.rect);
-        }
-      } else {
-        _buildMaterial(true);
-        _foreignRaw = { ..._foreignRaw, source: material, hasFallback, warp, mat: _mat };
-      }
-      const only = Array.isArray(options?.fallbackChannels) ? options.fallbackChannels : [];
-      _mat.uniforms.fallbackChannels.value.set(...[0, 1, 2, 3].map(c => (hasFallback && only.includes(c) ? 1 : 0)));
-      if (_scene?.children?.[0]) _scene.children[0].material = _mat;
-      if (spec) _spec = { ..._spec, ...spec };
-      return _renderRawPass(size, options?.window || null, Boolean(options?.keepTarget));
-    } finally {
-      _fallback = null;
-      _volumeMaterial = previousVolumeMaterial;
-      _mat = previousMaterial;
-      _spec = previousSpec;
-      if (_scene?.children?.[0] && previousMaterial) _scene.children[0].material = previousMaterial;
+      return _renderRaw(mat, size, options?.window || null, options?.out || null);
+    } catch (err) {
+      console.warn('[VolumeSlicer] Raw render failed.', err);
+      return null;
     }
   }
 
-  function _renderRawPass(size, window, keepTarget) {
-    if (!_hasRenderableVolume() || !_scene || !_camera) return null;
-    _syncUniforms();
-    const win = _normalizeWindow(window, size);
-    const w = win ? win.w : size;
-    const h = win ? win.h : size;
-    let pass;
-    try {
-      pass = _acquireRawPass(w, h);
-    } catch (err) {
-      console.warn('[VolumeSlicer] Raw render allocation failed.', err);
-      return null;
-    }
-    if (win) _mat.uniforms.uvWindow.value.set(win.x / size, (size - win.y - win.h) / size, win.w / size, win.h / size);
-    else _mat.uniforms.uvWindow.value.set(0, 0, 1, 1);
-
-    const prevTarget = _renderer.getRenderTarget();
-    const prevViewport = new THREE.Vector4();
-    _renderer.getViewport(prevViewport);
-    const prevAutoClear = _renderer.autoClear;
-    const pr = _renderer.getPixelRatio();
-    try {
-      _renderer.autoClear = true;
-      _renderer.setRenderTarget(pass.target);
-      _renderer.setViewport(0, 0, w / pr, h / pr);
-      _renderer.clear();
-      _renderer.render(_scene, _camera);
-      _renderer.readRenderTargetPixels(pass.target, 0, 0, w, h, pass.buf);
-    } finally {
-      _renderer.setRenderTarget(prevTarget);
-      _renderer.setViewport(prevViewport);
-      _renderer.autoClear = prevAutoClear;
-    }
-
+  function _renderRaw(mat, size, window, out) {
+    const win = _normalizeWindow(window, size) || { x: 0, y: 0, w: size, h: size };
+    const reuse = _isRawPicture(out) && out.width === win.w && out.height === win.h ? out : null;
     let data;
     try {
-      data = new Uint8Array(w * h * 4);
+      data = reuse ? reuse.data : new Uint8Array(win.w * win.h * 4);
     } catch (err) {
-      console.warn('[VolumeSlicer] Raw readback copy allocation failed.', err);
-      if (!keepTarget) _releaseRawPass();
+      console.warn('[VolumeSlicer] Raw readback allocation failed.', err);
       return null;
     }
-    // GL rows run bottom-up; the copy is top-down, like a canvas.
-    const row = w * 4;
-    for (let y = 0; y < h; y++) {
-      const src = (h - 1 - y) * row;
-      data.set(pass.buf.subarray(src, src + row), y * row);
-    }
-    if (!keepTarget) _releaseRawPass();
-    const u = _mat.uniforms;
+    const stride = win.w * 4;
+    _renderTiles(mat, size, win, (tx, ty, tw, th, rows) => {
+      const row = tw * 4;
+      for (let r = 0; r < th; r++) data.set(rows.subarray(r * row, (r + 1) * row), (ty + r) * stride + tx * 4);
+    });
+    const u = mat.uniforms;
     const channels = Math.max(1, Math.min(4, Math.round(Number(u.numChannels?.value)) || 4));
     // The shader's own test for a slab (projMode ≠ 0 and more than one sample).
     const projected = Number(u.projMode?.value) !== 0 && Number(u.slabSteps?.value) > 1;
     // The shader writes the coverage when numChannels < 4 (the uniform, not the clamp above).
     const coverage = projected && Number(u.numChannels?.value) < 4;
-    return { data, width: w, height: h, channels, projected, coverage };
+    if (reuse) {
+      // New contents in the same buffer: SliceCompositor re-uploads on a new version.
+      reuse.version = (Number(reuse.version) || 0) + 1;
+      reuse.channels = channels;
+      reuse.projected = projected;
+      reuse.coverage = coverage;
+      return reuse;
+    }
+    return { data, width: win.w, height: win.h, channels, projected, coverage };
+  }
+
+  // ── Axis-aligned plane volumes (the Studio's native pass without a 3D atlas) ──
+
+  const _PLANE_AXES = { x: ['y', 'z'], y: ['x', 'z'], z: ['x', 'y'] };
+
+  function _planeError(code, message) {
+    return Object.assign(new Error(message), { code });
+  }
+
+  /**
+   * A 2D array texture holding the voxel planes an axis-aligned slice reads, for
+   * renderRawWithMaterial(…, { plane }): texel (u, v, layer) = voxel (u, v) of plane
+   * `layer`, (u, v) the two axes other than the normal one in x, y, z order — W × H ×
+   * layers × 4 bytes (one 5735² plane: 132 MB) instead of a 64³ atlas slot per brick.
+   *   desc = { axis: 'x' | 'y' | 'z', dims: {x, y, z} (voxels of the level), layers,
+   *            layerBase (voxel index along the normal of layer 0), reduced (one layer
+   *            holding a slab's maximum), brickSize }
+   * Returns { texture, presence, width, height, layers, bytes, upload(u0, v0, w, h,
+   * layer, data) → bool, setPresent(bu, bv, layer, on), flushErrors() → [{bu, bv,
+   * layer}], dispose() }. Throws err.code 'PLANE_UNSUPPORTED' (no WebGL2, a side above
+   * MAX_TEXTURE_SIZE, too many layers) or 'PLANE_ALLOC_FAILED' (the GPU refused it).
+   * A brick column (bu, bv) of a layer is sampled only once setPresent() marked it: a
+   * texel never written is never read (the shader reads "no brick" there, as the atlas
+   * would before the brick lands).
+   */
+  function createPlaneVolume(desc = {}) {
+    const gl = _renderer?.getContext?.();
+    const axes = _PLANE_AXES[desc.axis];
+    if (!gl || !axes || typeof gl.texStorage3D !== 'function' || !THREE.DataArrayTexture) {
+      throw _planeError('PLANE_UNSUPPORTED', 'Plane volumes need WebGL2 array textures');
+    }
+    const dims = desc.dims || {};
+    const W = Math.floor(Number(dims[axes[0]]) || 0);
+    const H = Math.floor(Number(dims[axes[1]]) || 0);
+    const L = Math.max(1, Math.floor(Number(desc.layers) || 1));
+    const bs = Math.max(1, Math.floor(Number(desc.brickSize) || 64));
+    const maxTex = Number(gl.getParameter(gl.MAX_TEXTURE_SIZE)) || 0;
+    const maxLayers = Number(gl.getParameter(gl.MAX_ARRAY_TEXTURE_LAYERS)) || 0;
+    if (!(W > 0 && H > 0) || W > maxTex || H > maxTex || L > maxLayers) {
+      throw _planeError('PLANE_UNSUPPORTED', `A ${W} × ${H} × ${L} plane exceeds this GPU's texture limits (${maxTex} px, ${maxLayers} layers)`);
+    }
+    for (let i = 0; i < 8 && gl.getError() !== gl.NO_ERROR; i++) { /* drain stale errors */ }
+    const texture = new THREE.DataArrayTexture(null, W, H, L);
+    texture.format = THREE.RGBAFormat;
+    texture.type = THREE.UnsignedByteType;
+    texture.minFilter = THREE.NearestFilter;
+    texture.magFilter = THREE.NearestFilter;
+    texture.generateMipmaps = false;
+    texture.unpackAlignment = 1;
+    const tex = gl.createTexture();
+    const bind = () => {
+      if (_renderer.state?.bindTexture) _renderer.state.bindTexture(gl.TEXTURE_2D_ARRAY, tex);
+      else gl.bindTexture(gl.TEXTURE_2D_ARRAY, tex);
+    };
+    bind();
+    gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    gl.texStorage3D(gl.TEXTURE_2D_ARRAY, 1, gl.RGBA8, W, H, L);
+    const allocError = gl.getError();
+    if (allocError !== gl.NO_ERROR) {
+      gl.deleteTexture(tex);
+      throw _planeError('PLANE_ALLOC_FAILED', `The GPU refused a ${W} × ${H} × ${L} plane texture (glError ${allocError})`);
+    }
+    // three binds this texture object for the planeTex sampler; it never uploads it
+    // (version 0), so the storage above is the one sampled.
+    const props = _renderer.properties.get(texture);
+    props.__webglTexture = tex;
+    props.__webglInit = true;
+    props.__version = texture.version;
+
+    const cu = Math.ceil(W / bs);
+    const cv = Math.ceil(H / bs);
+    const presenceData = new Uint8Array(cu * cv * L);
+    const presence = new THREE.DataArrayTexture(presenceData, cu, cv, L);
+    presence.format = THREE.RedFormat;
+    presence.type = THREE.UnsignedByteType;
+    presence.minFilter = THREE.NearestFilter;
+    presence.magFilter = THREE.NearestFilter;
+    presence.generateMipmaps = false;
+    presence.unpackAlignment = 1;
+    presence.needsUpdate = true;
+
+    let unchecked = [];
+    let disposed = false;
+    const handle = {
+      axis: desc.axis,
+      width: W,
+      height: H,
+      layers: L,
+      layerBase: Math.max(0, Math.floor(Number(desc.layerBase) || 0)),
+      reduced: Boolean(desc.reduced),
+      brickSize: bs,
+      dims: { x: Number(dims.x) || 1, y: Number(dims.y) || 1, z: Number(dims.z) || 1 },
+      texture,
+      presence,
+      bytes: W * H * L * 4,
+      /** One tile (w × h texels, RGBA rows of u) at (u0, v0) of `layer`. → false when it does not fit. */
+      upload(u0, v0, w, h, layer, data) {
+        if (disposed || !data || !(w > 0 && h > 0)) return false;
+        if (u0 < 0 || v0 < 0 || u0 + w > W || v0 + h > H || layer < 0 || layer >= L) return false;
+        if (data.length < w * h * 4) return false;
+        bind();
+        gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
+        gl.pixelStorei(gl.UNPACK_ROW_LENGTH, 0);
+        gl.pixelStorei(gl.UNPACK_IMAGE_HEIGHT, 0);
+        gl.pixelStorei(gl.UNPACK_SKIP_PIXELS, 0);
+        gl.pixelStorei(gl.UNPACK_SKIP_ROWS, 0);
+        gl.pixelStorei(gl.UNPACK_SKIP_IMAGES, 0);
+        if (gl.UNPACK_FLIP_Y_WEBGL !== undefined) gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+        if (gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL !== undefined) gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
+        if (gl.PIXEL_UNPACK_BUFFER) gl.bindBuffer(gl.PIXEL_UNPACK_BUFFER, null);
+        gl.texSubImage3D(gl.TEXTURE_2D_ARRAY, 0, u0, v0, layer, w, h, 1, gl.RGBA, gl.UNSIGNED_BYTE,
+          data.length === w * h * 4 ? data : data.subarray(0, w * h * 4));
+        gl.pixelStorei(gl.UNPACK_ALIGNMENT, 4);
+        unchecked.push({ bu: Math.floor(u0 / bs), bv: Math.floor(v0 / bs), layer });
+        return true;
+      },
+      setPresent(bu, bv, layer, on = true) {
+        if (bu < 0 || bv < 0 || bu >= cu || bv >= cv || layer < 0 || layer >= L) return;
+        presenceData[(layer * cv + bv) * cu + bu] = on ? 255 : 0;
+        presence.needsUpdate = true;
+      },
+      /**
+       * One gl.getError() for the uploads since the last call. WebGL cannot say which
+       * call failed, so on an error every column uploaded since is marked absent again
+       * and returned (the caller counts its bricks as missing).
+       */
+      flushErrors() {
+        const window = unchecked;
+        unchecked = [];
+        if (disposed || !window.length) return [];
+        const err = gl.getError();
+        if (err === gl.NO_ERROR) return [];
+        for (let i = 0; i < 8 && gl.getError() !== gl.NO_ERROR; i++) { /* drain */ }
+        window.forEach(t => handle.setPresent(t.bu, t.bv, t.layer, false));
+        console.warn(`[VolumeSlicer] Plane texture upload failed (glError=${err}); ${window.length} tile(s) left out.`);
+        return window;
+      },
+      dispose() {
+        if (disposed) return;
+        disposed = true;
+        try { gl.deleteTexture(tex); } catch (e) { /* context lost */ }
+        props.__webglTexture = null;
+        props.__webglInit = false;
+        texture.dispose();
+        presence.dispose();
+      }
+    };
+    return handle;
+  }
+
+  function _bindPlane(mat, plane) {
+    const u = mat.uniforms;
+    u.planeTex.value = plane.texture;
+    u.planePresence.value = plane.presence;
+    u.planeDim.value.set(plane.dims.x, plane.dims.y, plane.dims.z);
+    u.planeAxis.value = plane.axis === 'x' ? 0 : plane.axis === 'y' ? 1 : 2;
+    u.planeLayerBase.value = plane.layerBase;
+    u.planeLayers.value = plane.layers;
+    u.planeReduced.value = plane.reduced ? 1 : 0;
+    u.planeBrickSize.value = plane.brickSize;
   }
 
   /**
@@ -1418,23 +1596,24 @@ const VolumeSlicer = (() => {
     return { size: _previewSize, refineSize: _refineSize };
   }
 
+  /**
+   * The slice re-coloured with `channelState`. A slice that carries its raw values is
+   * re-coloured from them: same pixels, same frame, no re-render (its atlas may be
+   * gone — the Studio's native pass). A 'gpu-slicer' / 'zstack' capture without raw is
+   * rendered again through the volume material, at its own frame (renderRes) and crop
+   * (cropRect) when it carries them — the plane on screen is not touched.
+   */
   function recompose(sliceResult, channelState) {
-    // A slice that carries its raw values is re-coloured from them: same pixels, same
-    // frame, no re-render (its atlas may be gone — the Studio's native pass).
-    if (_isRawPicture(sliceResult?.raw) && typeof SliceCompositor !== 'undefined') {
+    if (!sliceResult) return null;
+    if (_isRawPicture(sliceResult.raw) && typeof SliceCompositor !== 'undefined') {
       const canvas = SliceCompositor.compose(sliceResult.raw, channelState, { numChannels: sliceResult.raw.channels });
       return canvas ? { ...sliceResult, canvas, width: canvas.width, height: canvas.height } : null;
     }
     if (sliceResult.source !== 'gpu-slicer' && sliceResult.source !== 'zstack') return null;
-    // Make sure we use the same plane spec
-    const oldSpec = getPlaneSpec();
-    if (sliceResult.planeSpec) setPlaneSpec(sliceResult.planeSpec);
-    
-    const canvas = renderHighRes(sliceResult.width || 1024, channelState);
-    
-    // Restore original plane spec
-    setPlaneSpec(oldSpec);
-    
+    if (!_volumeMaterial) return null;
+    const size = Number(sliceResult.renderRes) > 0 ? Math.round(sliceResult.renderRes) : (Number(sliceResult.width) || 1024);
+    const window = Number(sliceResult.renderRes) > 0 ? windowForRect(sliceResult.cropRect, size) : null;
+    const canvas = renderWithMaterial(_volumeMaterial, sliceResult.planeSpec || getPlaneSpec(), size, channelState, { window });
     if (!canvas) return null;
     return {
       ...sliceResult,
@@ -1511,14 +1690,11 @@ const VolumeSlicer = (() => {
     _rafId = null;
     _cancelRefine();
     _releasePasses();
-    _hiTarget?.dispose();
-    _hiWindow?.target?.dispose?.();
-    _hiWindow = null;
     releaseForeign();
+    for (const mat of _programs.values()) mat.dispose();
+    _programs.clear();
     _mat?.dispose();
     _scene = null;
-    _hiTarget = null;
-    _hiBuf = null;
     _initialized = false;
     _disabled = false;
   }
@@ -1550,7 +1726,10 @@ const VolumeSlicer = (() => {
     renderHighRes,
     renderWithMaterial,
     renderRawWithMaterial,
+    createPlaneVolume,
+    windowForRect,
     releaseForeign,
+    releaseHiPass,
     recompose,
     computeChannelHistograms,
     onChange,

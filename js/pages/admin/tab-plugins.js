@@ -8,7 +8,7 @@
 
 'use strict';
 
-import { API_ADMIN, t, escHtml, apiFetch, apiFetchStatus, toast, el, refreshIcons } from './shared.js';
+import { API_ADMIN, t, escHtml, apiFetch, apiFetchStatus, toast, el, refreshIcons, askPassword } from './shared.js';
 import { fetchPluginUpdates, runPluginUpdates } from './plugin-update.js';
 
 let _plugins = [];
@@ -194,7 +194,7 @@ async function onApprove(path, mode) {
     ? t('admin.approveTrustedWarn', 'ATTENTION : ce plugin s\'exécutera avec les pleins privilèges de la page (comme un plugin intégré). N\'approuvez « in-page » que du code que vous avez audité.')
     : t('admin.approveSandboxedWarn', 'Ce plugin s\'exécutera isolé dans un bac à sable (sans accès au DOM ni à l\'API admin).');
   if (!confirm(`${warn}\n\n${t('admin.approveHashNote', 'Empreinte')} : ${p.trust.hash}${capsNote}`)) return;
-  const password = prompt(t('admin.reauthPrompt', 'Confirmez votre mot de passe administrateur pour approuver :'));
+  const password = await askPassword(t('admin.reauthPrompt', 'Confirmez votre mot de passe administrateur pour approuver :'));
   if (!password) return;
   const r = await apiFetchStatus(`${API_ADMIN}?action=approve_plugin`, {
     method: 'POST',

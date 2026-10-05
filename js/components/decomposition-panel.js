@@ -61,6 +61,21 @@ const DecompositionPanel = (() => {
     return JSON.parse(JSON.stringify(obj));
   }
 
+  // I18n key with an English fallback (a missing key makes t() return the key itself).
+  function _tr(key, fallback, params) {
+    let v = (typeof I18n !== 'undefined' && I18n.t) ? I18n.t(key, params) : key;
+    if (v === key || v == null) {
+      v = fallback;
+      if (params) Object.keys(params).forEach(k => { v = v.split('{' + k + '}').join(String(params[k])); });
+    }
+    return v;
+  }
+
+  // Only a hex colour may reach an inline style or a canvas fillStyle.
+  function _safeColor(c, fallback) {
+    return (typeof c === 'string' && /^#(?:[0-9a-f]{3}|[0-9a-f]{6})$/i.test(c.trim())) ? c.trim() : fallback;
+  }
+
   // Keep the (dynamically generated) toolbar button's visual state in sync,
   // whether the panel is toggled from the toolbar, the in-panel close, or restore.
   function _syncToolbarButton(on) {
@@ -145,7 +160,7 @@ const DecompositionPanel = (() => {
       window.addEventListener('pagehide', dispose);
     }
 
-    window.addEventListener('channels-updated', () => {
+    _onChannelsUpdated = () => {
       if (!_isOpen) return;
       const globalState = _getGlobalChannels();
 
@@ -170,10 +185,22 @@ const DecompositionPanel = (() => {
           }
         });
       }
-      _rebuildList();
+      // A slider drag emits this at pointer rate: rebuild the DOM only when something the
+      // list DRAWS (which views exist, their titles, names, colours, enabled flags) changed;
+      // a min/max/gamma/opacity edit just needs the vignettes to pick up the new state.
+      const baseState = _editingCustomId !== null && _savedGlobalState ? _savedGlobalState : globalState;
+      if (_signature(_viewDescriptors(baseState)) === _listSignature) {
+        _syncCanvasStates();
+      } else {
+        _rebuildList();
+      }
       VolumeViewer.triggerRender();
-    });
+    };
+    window.addEventListener('channels-updated', _onChannelsUpdated);
   }
+
+  let _onChannelsUpdated = null;
+  let _listSignature = null;
 
   function _closePanel(panel, btnToggle) {
     _isOpen = false;
@@ -199,6 +226,7 @@ const DecompositionPanel = (() => {
     if (_decompRenderTimer !== null) { clearTimeout(_decompRenderTimer); _decompRenderTimer = null; }
     _decompDirty = false;
     if (_offPostRender) { _offPostRender(); _offPostRender = null; }
+    if (_onChannelsUpdated) { window.removeEventListener('channels-updated', _onChannelsUpdated); _onChannelsUpdated = null; }
     _canvases = [];
   }
 
@@ -263,7 +291,40 @@ const DecompositionPanel = (() => {
     // If we are editing a custom view, the "real" global state is the saved one.
     const baseState = _editingCustomId !== null && _savedGlobalState ? _savedGlobalState : _getGlobalChannels();
 
-    // 1. One view per active channel
+    // 1. One view per active channel, 2. the custom views
+    const views = _viewDescriptors(baseState);
+    views.forEach(v => _createViewItem(list, v.title, v.state, v.color, v.key));
+    _listSignature = _signature(views);
+
+    // 3. Add Custom button
+    const btnAdd = document.createElement('button');
+    btnAdd.className = 'btn btn-outline btn-sm';
+    btnAdd.style.width = '100%';
+    btnAdd.style.height = '40px';
+    btnAdd.style.borderStyle = 'dashed';
+    btnAdd.innerHTML = '<i data-lucide="plus"></i> ';
+    btnAdd.appendChild(document.createTextNode(_tr('decomposition.addCombination', 'Add Combination')));
+    btnAdd.onclick = () => {
+      const newState = _deepCopy(baseState);
+      _customViews.push({
+        id: 'custom_' + Date.now() + '_' + Math.random(),
+        name: _tr('decomposition.customName', 'Custom {n}', { n: _customViews.length + 1 }),
+        state: newState
+      });
+      _rebuildList();
+      VolumeViewer.triggerRender();
+    };
+    list.appendChild(btnAdd);
+
+    if (typeof lucide !== 'undefined') {
+      lucide.createIcons({ nodes: [list] });
+    }
+  }
+
+  // The views the list shows, in order: one per enabled channel, then the custom ones.
+  // Also refreshes the unedited single-channel states from the live channels.
+  function _viewDescriptors(baseState) {
+    const views = [];
     baseState.forEach((ch, idx) => {
       if (!ch.enabled) return;
       if (!_baseViews[idx]) {
@@ -275,37 +336,39 @@ const DecompositionPanel = (() => {
         singleState.forEach((sCh, sIdx) => { sCh.enabled = (sIdx === idx); });
         _baseViews[idx].state = singleState;
       }
-      const title = _baseViews[idx].edited ? `Channel: ${ch.name} (Edited)` : `Channel: ${ch.name}`;
-      _createViewItem(list, title, _baseViews[idx].state, ch.color, `base_${idx}`);
+      const title = _baseViews[idx].edited
+        ? _tr('decomposition.channelEdited', 'Channel: {name} (Edited)', { name: ch.name })
+        : _tr('decomposition.channel', 'Channel: {name}', { name: ch.name });
+      views.push({ key: `base_${idx}`, title, state: _baseViews[idx].state, color: _safeColor(ch.color, '#ffffff') });
     });
+    _customViews.forEach(cv => views.push({ key: cv.id, title: cv.name, state: cv.state, color: '#ffffff' }));
+    return views;
+  }
 
-    // 2. Custom views
-    _customViews.forEach((cv) => {
-      _createViewItem(list, cv.name, cv.state, '#ffffff', cv.id);
+  // What the list draws for these views, and nothing that only changes pixels.
+  function _signature(views) {
+    return JSON.stringify([
+      _editingCustomId,
+      views.map(v => [v.key, v.title, v.color, v.state.map(c => [c.enabled ? 1 : 0, c.name, c.color])])
+    ]);
+  }
+
+  // Point each existing vignette at its view's current state object (the arrays are
+  // replaced, not mutated, when the live channels change).
+  function _syncCanvasStates() {
+    _canvases.forEach(view => {
+      const key = view.key;
+      let state = null;
+      if (key.startsWith('base_')) {
+        const b = _baseViews[parseInt(key.split('_')[1], 10)];
+        if (b) state = b.state;
+      } else {
+        const cv = _customViews.find(v => v.id === key);
+        if (cv) state = cv.state;
+      }
+      if (state) view.state = state;
     });
-
-    // 3. Add Custom button
-    const btnAdd = document.createElement('button');
-    btnAdd.className = 'btn btn-outline btn-sm';
-    btnAdd.style.width = '100%';
-    btnAdd.style.height = '40px';
-    btnAdd.style.borderStyle = 'dashed';
-    btnAdd.innerHTML = '<i data-lucide="plus"></i> Add Combination';
-    btnAdd.onclick = () => {
-      const newState = _deepCopy(baseState);
-      _customViews.push({
-        id: 'custom_' + Date.now() + '_' + Math.random(),
-        name: `Custom ${_customViews.length + 1}`,
-        state: newState
-      });
-      _rebuildList();
-      VolumeViewer.triggerRender();
-    };
-    list.appendChild(btnAdd);
-
-    if (typeof lucide !== 'undefined') {
-      lucide.createIcons();
-    }
+    _scheduleDecompRender();
   }
 
   function _createViewItem(container, titleText, state, titleColor, customId) {
@@ -336,7 +399,7 @@ const DecompositionPanel = (() => {
     
     const titleSpan = document.createElement('span');
     titleSpan.textContent = titleText;
-    titleSpan.style.color = titleColor;
+    titleSpan.style.color = _safeColor(titleColor, '#ffffff');
     header.appendChild(titleSpan);
 
     const actions = document.createElement('div');
@@ -349,7 +412,8 @@ const DecompositionPanel = (() => {
       btnDone.style.padding = '0 6px';
       btnDone.style.height = '20px';
       btnDone.style.fontSize = '10px';
-      btnDone.innerHTML = '<i data-lucide="check" style="width:12px;height:12px;margin-right:2px;"></i> Done';
+      btnDone.innerHTML = '<i data-lucide="check" style="width:12px;height:12px;margin-right:2px;"></i> ';
+      btnDone.appendChild(document.createTextNode(_tr('decomposition.done', 'Done')));
       btnDone.onclick = (e) => {
         e.stopPropagation();
         _stopEditing();
@@ -364,7 +428,7 @@ const DecompositionPanel = (() => {
           btnReset.className = 'btn btn-icon btn-ghost btn-sm';
           btnReset.style.width = '20px';
           btnReset.style.height = '20px';
-          btnReset.title = "Reset to original";
+          btnReset.title = _tr('decomposition.resetOriginal', 'Reset to original');
           btnReset.innerHTML = '<i data-lucide="rotate-ccw" style="width:12px;height:12px;"></i>';
           btnReset.onclick = (e) => {
             e.stopPropagation();
@@ -417,7 +481,7 @@ const DecompositionPanel = (() => {
       if (ch.enabled) {
         const marker = document.createElement('span');
         marker.textContent = ch.name;
-        marker.style.color = ch.color;
+        marker.style.color = _safeColor(ch.color, '#ffffff');
         marker.style.fontSize = '12px';
         marker.style.fontWeight = '700';
         marker.style.lineHeight = '1.2';
@@ -429,7 +493,7 @@ const DecompositionPanel = (() => {
 
     if (!isEditingThis) {
       canvasWrap.style.cursor = 'pointer';
-      canvasWrap.title = "Click to edit this view";
+      canvasWrap.title = _tr('decomposition.clickToEdit', 'Click to edit this view');
       canvasWrap.onclick = () => {
         _startEditing(customId);
       };
@@ -441,7 +505,7 @@ const DecompositionPanel = (() => {
 
     container.appendChild(item);
 
-    _canvases.push({ canvas, ctx: canvas.getContext('2d'), state });
+    _canvases.push({ key: customId, canvas, ctx: canvas.getContext('2d'), state });
   }
 
   function _applyStateToMaterial(stateArray, material) {
@@ -500,11 +564,15 @@ const DecompositionPanel = (() => {
     // fragments at 0.5×) and rely on drawImage to upscale into the full-res vignette
     // canvas — soft while dragging, re-sharpened by the trailing full render at rest.
     const scale = draft ? _DECOMP_DRAFT_SCALE : 1;
+    // The vignettes share one size, so the WebGL buffer is resized once for them, not once each.
+    let bufW = -1, bufH = -1, camAspect = -1;
 
     for (const view of _canvases) {
       const rect = view.canvas.getBoundingClientRect();
-      const w = rect.width * (window.devicePixelRatio || 1);
-      const h = rect.height * (window.devicePixelRatio || 1);
+      // A canvas size is an integer: comparing it with a fractional product (browser zoom
+      // 110 %, dpr 1.25) would always differ and clear the canvas on every frame.
+      const w = Math.round(rect.width * (window.devicePixelRatio || 1));
+      const h = Math.round(rect.height * (window.devicePixelRatio || 1));
 
       if (w === 0 || h === 0) continue;
 
@@ -516,9 +584,17 @@ const DecompositionPanel = (() => {
         view.canvas.height = h;
       }
 
-      renderer.setSize(Math.max(1, rect.width * scale), Math.max(1, rect.height * scale), false);
-      camera.aspect = w / h;
-      camera.updateProjectionMatrix();
+      const sw = Math.max(1, rect.width * scale);
+      const sh = Math.max(1, rect.height * scale);
+      if (sw !== bufW || sh !== bufH) {
+        renderer.setSize(sw, sh, false);
+        bufW = sw; bufH = sh;
+      }
+      if (w / h !== camAspect) {
+        camAspect = w / h;
+        camera.aspect = camAspect;
+        camera.updateProjectionMatrix();
+      }
 
       _applyStateToMaterial(view.state, material);
 
@@ -570,10 +646,18 @@ const DecompositionPanel = (() => {
     });
   }
 
+  function _measurementText(m) {
+    const labelText = m.label ? `${m.label}: ` : '';
+    // Uncalibrated datasets store the unit 'units': say so rather than claim micrometres.
+    const unit = (!m.unit || m.unit === 'um' || m.unit === '\u00b5m') ? '\u00b5m' : m.unit;
+    return `${labelText}${m.distance.toFixed(1)} ${unit}`;
+  }
+
   function _drawMeasurementLegend(ctx, measurements, x, y, heightScale) {
     if (!measurements || measurements.length === 0) return;
-    
-    const visibleMeasurements = measurements.filter(m => m.visible !== false);
+
+    // An unfinished measurement stores distance: null; it has nothing to print.
+    const visibleMeasurements = measurements.filter(m => m.visible !== false && Number.isFinite(m.distance));
     if (visibleMeasurements.length === 0) return;
 
     const fontSize = Math.max(16, Math.floor(heightScale * 0.025));
@@ -585,19 +669,17 @@ const DecompositionPanel = (() => {
     ctx.fillStyle = 'rgba(0, 0, 0, 0.6)';
     ctx.strokeStyle = 'rgba(255, 255, 255, 0.2)';
     ctx.lineWidth = 1;
-    
+
     let maxTextWidth = 0;
     visibleMeasurements.forEach(m => {
-       const labelText = m.label ? `${m.label}: ` : '';
-       const text = `${labelText}${m.distance.toFixed(1)} µm`;
-       const metrics = ctx.measureText(text);
+       const metrics = ctx.measureText(_measurementText(m));
        if (metrics.width > maxTextWidth) maxTextWidth = metrics.width;
     });
-    
+
     const boxPad = fontSize * 0.8;
     const boxHeight = visibleMeasurements.length * (fontSize * 1.5) + boxPad;
     const boxWidth = maxTextWidth + boxPad * 2;
-    
+
     ctx.fillRect(x - boxWidth, y - boxHeight, boxWidth, boxHeight);
     ctx.strokeRect(x - boxWidth, y - boxHeight, boxWidth, boxHeight);
     ctx.restore();
@@ -606,18 +688,66 @@ const DecompositionPanel = (() => {
 
     for (let i = visibleMeasurements.length - 1; i >= 0; i--) {
       const m = visibleMeasurements[i];
-      const labelText = m.label ? `${m.label}: ` : '';
-      const text = `${labelText}${m.distance.toFixed(1)} µm`;
-      ctx.fillStyle = m.color || '#ff4d4f';
+      const text = _measurementText(m);
+      ctx.fillStyle = _safeColor(m.color, '#ff4d4f');
       ctx.strokeStyle = '#000000';
       ctx.lineWidth = Math.max(2, fontSize * 0.15);
-      
+
       const textX = x - boxPad;
       ctx.strokeText(text, textX, currentY);
       ctx.fillText(text, textX, currentY);
-      
+
       currentY -= (fontSize * 1.5);
     }
+  }
+
+  // Geometry of the exported figure for one vignette size. Pure, so the size limits
+  // below can be checked before a single pixel is allocated.
+  function _exportGeometry(layout, itemSize, count, mainAspect) {
+    const padding = 20;
+    let cols = 1;
+    let rows = count;
+    let totalWidth = 0, totalHeight = 0, mainWidth = 0, mainHeight = 0;
+    if (layout === 'grid') {
+      cols = Math.max(1, Math.ceil(Math.sqrt(count)));
+      rows = Math.ceil(count / cols);
+      totalWidth = cols * itemSize + (cols + 1) * padding;
+      totalHeight = rows * itemSize + (rows + 1) * padding;
+    } else if (layout === 'horizontal') {
+      mainHeight = itemSize;
+      mainWidth = mainHeight * mainAspect;
+      totalWidth = padding + mainWidth + padding + count * (itemSize + padding);
+      totalHeight = itemSize + padding * 2;
+    } else {
+      // main-right
+      mainHeight = Math.max(800, count * (itemSize + padding) + padding);
+      mainWidth = mainHeight * mainAspect;
+      const decompWidth = count > 0 ? itemSize + padding * 2 : 0;
+      totalWidth = mainWidth + decompWidth;
+      totalHeight = mainHeight;
+    }
+    return {
+      padding, cols, rows,
+      totalWidth: Math.round(totalWidth), totalHeight: Math.round(totalHeight),
+      mainWidth: Math.round(mainWidth), mainHeight: Math.round(mainHeight)
+    };
+  }
+
+  // Largest vignette size (<= wanted) whose figure, and whose main-view render, stay inside
+  // what a canvas and a WebGL drawing buffer can hold. Browsers cap one side near 16384 px
+  // and the total near 2^28 px; past that getContext() or the PNG comes back empty.
+  const _EXPORT_MAX_SIDE = 16384;
+  const _EXPORT_MAX_PIXELS = 120e6;
+  function _fitExportSize(layout, wanted, count, mainAspect, maxSide) {
+    let itemSize = wanted;
+    for (let i = 0; i < 40; i++) {
+      const g = _exportGeometry(layout, itemSize, count, mainAspect);
+      const side = Math.max(g.totalWidth, g.totalHeight, g.mainWidth, g.mainHeight);
+      if (side <= maxSide && g.totalWidth * g.totalHeight <= _EXPORT_MAX_PIXELS) return { itemSize, geometry: g };
+      itemSize = Math.floor(itemSize * 0.9);
+      if (itemSize < 64) break;
+    }
+    return null;
   }
 
   function _exportImage() {
@@ -628,7 +758,6 @@ const DecompositionPanel = (() => {
     const material = VolumeViewer.getMaterial();
     if (!renderer || !scene || !camera || !material) return;
 
-    const mainCanvas = renderer.domElement;
     const mainAspect = camera.aspect;
 
     // Get active volume resolution or default to 1024
@@ -641,39 +770,38 @@ const DecompositionPanel = (() => {
     itemSize = Math.max(512, Math.min(4096, itemSize));
 
     const layout = _exportLayout;
-    const padding = 20;
-    
-    let totalWidth = 0;
-    let totalHeight = 0;
-    let exportMainWidth = 0;
-    let exportMainHeight = 0;
+    let maxSide = _EXPORT_MAX_SIDE;
+    try {
+      const gl = renderer.getContext && renderer.getContext();
+      if (gl && gl.getParameter) {
+        maxSide = Math.min(maxSide, gl.getParameter(gl.MAX_RENDERBUFFER_SIZE) || maxSide, gl.getParameter(gl.MAX_TEXTURE_SIZE) || maxSide);
+      }
+    } catch (_) { /* keep the conservative default */ }
 
-    let cols = 1;
-    let rows = _canvases.length;
-
-    if (layout === 'grid') {
-      cols = Math.max(1, Math.ceil(Math.sqrt(_canvases.length)));
-      rows = Math.ceil(_canvases.length / cols);
-      totalWidth = cols * itemSize + (cols + 1) * padding;
-      totalHeight = rows * itemSize + (rows + 1) * padding;
-    } else if (layout === 'horizontal') {
-      exportMainHeight = itemSize;
-      exportMainWidth = exportMainHeight * mainAspect;
-      totalWidth = padding + exportMainWidth + padding + _canvases.length * (itemSize + padding);
-      totalHeight = itemSize + padding * 2;
-    } else {
-      // main-right
-      exportMainHeight = Math.max(800, _canvases.length * (itemSize + padding) + padding);
-      exportMainWidth = exportMainHeight * mainAspect;
-      const decompWidth = _canvases.length > 0 ? itemSize + padding * 2 : 0;
-      totalWidth = exportMainWidth + decompWidth;
-      totalHeight = exportMainHeight;
+    const fit = _fitExportSize(layout, itemSize, _canvases.length, mainAspect, maxSide);
+    if (!fit) {
+      console.warn('[DecompositionPanel] Export skipped: the figure cannot fit in a canvas at any vignette size.');
+      if (typeof ExportManager !== 'undefined' && ExportManager.toast) {
+        ExportManager.toast(_tr('decomposition.exportTooLarge', 'Too many views to export as one image. Remove some and try again.'));
+      }
+      return;
     }
+    if (fit.itemSize < itemSize) {
+      console.info(`[DecompositionPanel] Export vignettes reduced from ${itemSize} to ${fit.itemSize} px to fit the canvas limits.`);
+    }
+    itemSize = fit.itemSize;
+    const { padding, cols, totalWidth, totalHeight } = fit.geometry;
+    const exportMainWidth = fit.geometry.mainWidth;
+    const exportMainHeight = fit.geometry.mainHeight;
 
     const exportCanvas = document.createElement('canvas');
     exportCanvas.width = totalWidth;
     exportCanvas.height = totalHeight;
     const ctx = exportCanvas.getContext('2d');
+    if (!ctx) {
+      console.warn('[DecompositionPanel] Export skipped: the browser refused a 2D canvas of', totalWidth, 'x', totalHeight);
+      return;
+    }
 
     ctx.fillStyle = '#000000';
     ctx.fillRect(0, 0, totalWidth, totalHeight);
@@ -683,66 +811,70 @@ const DecompositionPanel = (() => {
     const origHeight = renderer.domElement.height / pixelRatio;
     const origAspect = camera.aspect;
 
-    // 1. Draw the Main View at High-Res if layout requires it
-    if (layout === 'main-right') {
-      renderer.setSize(exportMainWidth, exportMainHeight, false);
-      camera.aspect = mainAspect;
-      camera.updateProjectionMatrix();
-      _applyStateToMaterial(_getGlobalChannels(), material);
-      renderer.render(scene, camera);
-      ctx.drawImage(renderer.domElement, 0, 0, exportMainWidth, exportMainHeight);
-      _drawMarkersForState(ctx, _getGlobalChannels(), 0, 0, exportMainWidth, exportMainHeight, true);
-    } else if (layout === 'horizontal') {
-      renderer.setSize(exportMainWidth, exportMainHeight, false);
-      camera.aspect = mainAspect;
-      camera.updateProjectionMatrix();
-      _applyStateToMaterial(_getGlobalChannels(), material);
-      renderer.render(scene, camera);
-      ctx.drawImage(renderer.domElement, padding, padding, exportMainWidth, exportMainHeight);
-      _drawMarkersForState(ctx, _getGlobalChannels(), padding, padding, exportMainWidth, exportMainHeight, true);
-    }
-
-    // 2. Draw Decompositions at High-Res
-    renderer.setSize(itemSize, itemSize, false);
-    camera.aspect = 1;
-    camera.updateProjectionMatrix();
-
-    for (let i = 0; i < _canvases.length; i++) {
-      let currentX = 0, currentY = 0;
-
-      if (layout === 'grid') {
-        const c = i % cols;
-        const r = Math.floor(i / cols);
-        currentX = padding + c * (itemSize + padding);
-        currentY = padding + r * (itemSize + padding);
+    // The live viewer is resized and its uniforms rewritten below; whatever goes wrong
+    // in between, it must come back as it was.
+    try {
+      // 1. Draw the Main View at High-Res if layout requires it
+      if (layout === 'main-right') {
+        renderer.setSize(exportMainWidth, exportMainHeight, false);
+        camera.aspect = mainAspect;
+        camera.updateProjectionMatrix();
+        _applyStateToMaterial(_getGlobalChannels(), material);
+        renderer.render(scene, camera);
+        ctx.drawImage(renderer.domElement, 0, 0, exportMainWidth, exportMainHeight);
+        _drawMarkersForState(ctx, _getGlobalChannels(), 0, 0, exportMainWidth, exportMainHeight, true);
       } else if (layout === 'horizontal') {
-        currentX = padding + exportMainWidth + padding + i * (itemSize + padding);
-        currentY = padding;
-      } else {
-        // main-right
-        currentX = exportMainWidth + padding;
-        currentY = padding + i * (itemSize + padding);
+        renderer.setSize(exportMainWidth, exportMainHeight, false);
+        camera.aspect = mainAspect;
+        camera.updateProjectionMatrix();
+        _applyStateToMaterial(_getGlobalChannels(), material);
+        renderer.render(scene, camera);
+        ctx.drawImage(renderer.domElement, padding, padding, exportMainWidth, exportMainHeight);
+        _drawMarkersForState(ctx, _getGlobalChannels(), padding, padding, exportMainWidth, exportMainHeight, true);
       }
 
-      const view = _canvases[i];
-      _applyStateToMaterial(view.state, material);
+      // 2. Draw Decompositions at High-Res
+      renderer.setSize(itemSize, itemSize, false);
+      camera.aspect = 1;
+      camera.updateProjectionMatrix();
 
+      for (let i = 0; i < _canvases.length; i++) {
+        let currentX = 0, currentY = 0;
+
+        if (layout === 'grid') {
+          const c = i % cols;
+          const r = Math.floor(i / cols);
+          currentX = padding + c * (itemSize + padding);
+          currentY = padding + r * (itemSize + padding);
+        } else if (layout === 'horizontal') {
+          currentX = padding + exportMainWidth + padding + i * (itemSize + padding);
+          currentY = padding;
+        } else {
+          // main-right
+          currentX = exportMainWidth + padding;
+          currentY = padding + i * (itemSize + padding);
+        }
+
+        const view = _canvases[i];
+        _applyStateToMaterial(view.state, material);
+
+        renderer.render(scene, camera);
+        ctx.drawImage(renderer.domElement, currentX, currentY, itemSize, itemSize);
+
+        _drawMarkersForState(ctx, view.state, currentX, currentY, itemSize, itemSize, false);
+
+        ctx.strokeStyle = '#333333';
+        ctx.lineWidth = 2;
+        ctx.strokeRect(currentX, currentY, itemSize, itemSize);
+      }
+    } finally {
+      // 3. Restore Main View Screen State
+      renderer.setSize(origWidth, origHeight, false);
+      camera.aspect = origAspect;
+      camera.updateProjectionMatrix();
+      _applyStateToMaterial(_getGlobalChannels(), material);
       renderer.render(scene, camera);
-      ctx.drawImage(renderer.domElement, currentX, currentY, itemSize, itemSize);
-
-      _drawMarkersForState(ctx, view.state, currentX, currentY, itemSize, itemSize, false);
-
-      ctx.strokeStyle = '#333333';
-      ctx.lineWidth = 2;
-      ctx.strokeRect(currentX, currentY, itemSize, itemSize);
     }
-
-    // 3. Restore Main View Screen State
-    renderer.setSize(origWidth, origHeight, false);
-    camera.aspect = origAspect;
-    camera.updateProjectionMatrix();
-    _applyStateToMaterial(_getGlobalChannels(), material);
-    renderer.render(scene, camera);
 
     // 4. Draw Measurement Legend
     const measurements = (typeof VolumeViewer !== 'undefined' && VolumeViewer.getMeasurementState) ? VolumeViewer.getMeasurementState() : [];
@@ -762,11 +894,20 @@ const DecompositionPanel = (() => {
     }
     _drawMeasurementLegend(ctx, measurements, legendX, legendY, heightScale);
 
-    // 5. Trigger download
-    const link = document.createElement('a');
-    link.download = `decomposition_${layout}_${Date.now()}.png`;
-    link.href = exportCanvas.toDataURL('image/png');
-    link.click();
+    // 5. Trigger download. toBlob encodes off the main thread's critical path and avoids
+    // building a multi-megabyte base64 string the way toDataURL does.
+    exportCanvas.toBlob(blob => {
+      if (!blob) {
+        console.warn('[DecompositionPanel] The browser could not encode the exported image.');
+        return;
+      }
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.download = `decomposition_${layout}_${Date.now()}.png`;
+      link.href = url;
+      link.click();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    }, 'image/png');
   }
 
   return {

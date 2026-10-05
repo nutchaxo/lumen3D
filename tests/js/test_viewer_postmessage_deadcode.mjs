@@ -62,7 +62,7 @@ const count = (s, re) => (s.match(re) || []).length;
 
   // BUG-032 / BUG-033
   assert.ok(/Number\.isFinite\(totalFrames\)/.test(v), 'BUG-032: live dimensions.t guarded');
-  assert.ok(/dimensions absentes du catalogue|dimensions manquantes/.test(v), 'BUG-033: incomplete metadata rejected');
+  assert.ok(/no dimensions in the catalog/.test(v) && /errMetadataHttp/.test(v), 'BUG-033: incomplete metadata rejected');
 }
 
 // ── compare.js: DEAD-020 ──

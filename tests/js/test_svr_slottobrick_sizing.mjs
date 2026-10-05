@@ -54,37 +54,56 @@ function makeSvr() {
   assert.ok(svr.slotToBrick.every(x => x === null), 'slotToBrick fully null (normal)');
 }
 
-// ── Case 2: cascade-up — the smallest target atlas FAILS GPU allocation, forcing
-// the cascade to a larger atlas. maxSlots must grow AND slotToBrick must track it. ──
+// ── Case 2: the smallest atlas holding the target FAILS. The cascade never goes up
+// (a larger texture after a refusal only makes the next failure likelier): init
+// throws SVR_ALLOC_FAILED for the caller to choose a coarser level, and the session
+// remembers the refused size. ──
 {
   const svr = makeSvr();
-  // Capture the provisional maxSlots that _selectAtlasConfig picks (smallest config),
-  // before any allocation, to prove the cascade actually grew it.
-  let provisional = null;
-  let failFirst = true;
-  svr._initAtlasTexture = () => {
-    if (failFirst) { failFirst = false; throw new Error('simulated GPU OOM on smallest atlas'); }
-  };
-  // Hook _applyAtlasConfig to record the very first (provisional) maxSlots.
-  const realApply = svr._applyAtlasConfig.bind(svr);
-  svr._applyAtlasConfig = (cfg) => { realApply(cfg); if (provisional === null) provisional = svr.maxSlots; };
-
-  svr.init(1, { x: 64, y: 64, z: 64 }, makeRenderer(), { uniforms: {} }, { targetSlots: 2 });
-
-  assert.ok(svr.maxSlots > provisional,
-    `cascade grew maxSlots (${provisional} -> ${svr.maxSlots}) after the smallest atlas failed`);
-  // The core invariant the fix restores: slotToBrick sized on the FINAL maxSlots.
-  assert.equal(svr.slotToBrick.length, svr.maxSlots,
-    'slotToBrick sized on FINAL maxSlots (not the provisional pick)');
-  assert.equal(svr.freeSlots.length, svr.maxSlots, 'freeSlots sized on FINAL maxSlots');
-  assert.ok(svr.slotToBrick.every(x => x === null), 'slotToBrick fully null-initialized');
-
-  // Regression guard: with the bug, slotToBrick would be `provisional`-long, so a
-  // slotIndex in the grown range would read undefined at eviction. Verify the tail
-  // slot is a real, addressable null entry (not undefined).
-  const tail = svr.maxSlots - 1;
-  assert.strictEqual(svr.slotToBrick[tail], null,
-    'highest slot index is an initialized null (would be undefined if undersized)');
+  const sizes = [];
+  svr._initAtlasTexture = () => { sizes.push(svr.maxSlots); throw new Error('simulated GPU OOM'); };
+  assert.throws(() => svr.init(1, { x: 64, y: 64, z: 64 }, makeRenderer(), { uniforms: {} }, { targetSlots: 200 }),
+    (err) => err.code === 'SVR_ALLOC_FAILED', 'targeted failure throws for a coarser level');
+  assert.deepEqual(sizes, [208], 'one attempt, at the smallest layout (13 layers of 16 slots), never a larger one');
+  assert.ok(SVRManager.vramBudget(makeRenderer()).bytes < 208 * 1024 * 1024, 'the refused size caps the session budget');
 }
 
-console.log('BUG-035/STREAMING-21 slotToBrick sizing on final maxSlots: OK');
+// ── Case 2b: a failure on a LOST context says nothing about that size: no cap is
+// recorded (it would outlive the restored context and refuse even the coarsest level).
+{
+  SVRManager.resetGpuBudget();
+  const svr = makeSvr();
+  svr._initAtlasTexture = () => { throw new Error('context lost'); };
+  const lost = { capabilities: { max3DTextureSize: 2048 }, getContext: () => ({ NO_ERROR: 0, getError: () => 0, isContextLost: () => true }) };
+  assert.throws(() => svr.init(1, { x: 64, y: 64, z: 64 }, lost, { uniforms: {} }, { targetSlots: 200 }),
+    (err) => err.code === 'SVR_ALLOC_FAILED');
+  assert.equal(SVRManager._failedAllocBytes, Infinity, 'no session cap from a lost context');
+  SVRManager.resetGpuBudget();
+}
+
+// ── Case 3: untargeted init halves on refusal (down only), slotToBrick sized on the
+// FINAL maxSlots. ──
+{
+  SVRManager.resetGpuBudget();
+  const svr = makeSvr();
+  const tried = [];
+  svr._initAtlasTexture = () => { tried.push(svr.maxSlots); if (tried.length === 1) throw new Error('simulated GPU OOM'); };
+  svr.init(1, { x: 64, y: 64, z: 64 }, makeRenderer(), { uniforms: {} }, {});
+  assert.ok(tried.length >= 2 && tried[1] < tried[0], `second attempt smaller (${tried.join(' -> ')})`);
+  assert.equal(svr.slotToBrick.length, svr.maxSlots, 'slotToBrick sized on FINAL maxSlots');
+  assert.equal(svr.freeSlots.length, svr.maxSlots, 'freeSlots sized on FINAL maxSlots');
+  assert.strictEqual(svr.slotToBrick[svr.maxSlots - 1], null, 'highest slot index is an initialized null');
+}
+
+// ── Case 4: a target over the VRAM budget is refused BEFORE any allocation. ──
+{
+  SVRManager.resetGpuBudget();
+  const svr = makeSvr();
+  let calls = 0;
+  svr._initAtlasTexture = () => { calls++; };
+  assert.throws(() => svr.init(1, { x: 64, y: 64, z: 64 }, makeRenderer(), { uniforms: {} }, { targetSlots: 3000, budgetBytes: 1024 * 1024 * 1024 }),
+    (err) => err.code === 'SVR_OVER_BUDGET', '3000 slots (3 GiB) refused under a 1 GiB budget');
+  assert.equal(calls, 0, 'nothing allocated');
+}
+
+console.log('SVR atlas sizing (down-only cascade, final maxSlots, budget refusal): OK');

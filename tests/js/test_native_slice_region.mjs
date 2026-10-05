@@ -2,8 +2,7 @@
 // brick the plane crosses, not whole bricks:
 //   • the decode worker un-mosaics only the requested voxel box (`region`) of a
 //     grid-packed brick, z-major, and returns the full brick when no box is asked;
-//   • BrickLoader forwards `region` on every task row and never caches a brick that
-//     was requested as a box (a partial brick in the LRU would be read as a whole one);
+//   • BrickLoader forwards `region` on every task row (decoded bricks are not cached);
 //   • SVRManager.writeRgbaBrickRegion uploads that box into the slot, points the page
 //     table at the slot, and clears the entry again when the GPU upload fails.
 //
@@ -110,7 +109,8 @@ function makeWorker(bmpWidth = 512, bmpHeight = 512) {
   for (let z = 0; z < BS; z += 7) for (let y = 20; y < 23; y++) for (let x = 0; x < BS; x += 5) {
     assert.equal(rows.bytes[z * 3 * BS + (y - 20) * BS + x], expectedVoxel(z, y, x), `row voxel (${z},${y},${x})`);
   }
-  assert.deepEqual(rows.reads, [[0, 0, 512, 512]], 'a box spanning every tile row reads the whole mosaic');
+  assert.deepEqual(rows.reads, Array.from({ length: 8 }, (_, ty) => [0, ty * BS + 20, 512, 3]),
+    'a thin box spanning every tile row reads only its three rows of each tile row');
 
   // T5: a box that covers everything is a full brick, not a region.
   const whole = await w.decode(5, { x0: 0, x1: BS, y0: 0, y1: BS, z0: 0, z1: BS });
@@ -152,19 +152,13 @@ function makeWorker(bmpWidth = 512, bmpHeight = 512) {
   assert.equal(rows.length, 1, 'one row delivered');
   assert.deepEqual(plain(rows[0].region), region, 'the task region rides on the row');
   assert.equal(rows[0].data.length, BS * BS * BS, 'a raw transport still delivers the whole brick');
-  assert.equal(BL.getCacheStats().entries, 0, 'a brick requested as a box is never cached');
+  assert.equal(BL.getCacheStats().entries, 0, 'nothing decoded is cached');
 
   rows.length = 0;
   await BL.loadBrickTasks([{ lod: 0, channel: 0, bx: 0, by: 0, bz: 0 }],
     { cacheResults: true, onBrickLoaded: (row) => rows.push(row) });
   assert.equal(rows[0].region, null, 'no region -> null on the row');
-  assert.equal(BL.getCacheStats().entries, 1, 'a whole brick is cached as before');
-
-  rows.length = 0;
-  await BL.loadBrickTasks([{ lod: 0, channel: 0, bx: 0, by: 0, bz: 0, region }],
-    { cacheResults: true, onBrickLoaded: (row) => rows.push(row) });
-  assert.equal(rows[0].fromCache, true, 'a cached whole brick serves a region task');
-  assert.deepEqual(plain(rows[0].region), region, 'and the row still says which box was asked');
+  assert.equal(BL.getCacheStats().entries, 0, 'a whole brick is not cached either');
   console.log('BrickLoader region pass-through: OK');
 }
 
@@ -202,7 +196,7 @@ function makeWorker(bmpWidth = 512, bmpHeight = 512) {
 
   const svr = new SVRManager();
   svr.init(4, { x: 200, y: 130, z: 70 }, renderer, material, { targetSlots: 8 });
-  assert.equal(svr.maxSlots, 64, 'smallest atlas that fits 8 bricks (256^3 = 64 slots)');
+  assert.equal(svr.maxSlots, 16, 'smallest atlas that fits 8 bricks (one 256x256x64 layer = 16 slots)');
   calls.length = 0;
 
   const box = new Uint8Array(BS * BS * 3 * 4).fill(7);
@@ -221,9 +215,12 @@ function makeWorker(bmpWidth = 512, bmpHeight = 512) {
   assert.equal(calls.length, 0, 'nothing uploaded for a refused box');
   assert.equal(svr.brickMap.has('0_0_0'), false, 'no slot taken for a refused box');
 
-  // A GL error on the upload clears the page-table entry: the shader must see "no brick".
+  // A GL error is read once per window of uploads (flushUploadErrors): it clears the
+  // page-table entries of that window, the shader must see "no brick".
+  svr.flushUploadErrors();
   nextError = 1;
-  assert.equal(svr.writeRgbaBrickRegion(1, 1, 0, box, 0, 0, 0, BS, BS, 3), false, 'GL error reported');
+  assert.equal(svr.writeRgbaBrickRegion(1, 1, 0, box, 0, 0, 0, BS, BS, 3), true, 'upload issued (its error is read later)');
+  assert.deepEqual(Array.from(svr.flushUploadErrors()), ['1_1_0'], 'the flush reports the brick of the failed window');
   const ptIdx2 = (0 * svr.ptNx * svr.ptNy + 1 * svr.ptNx + 1) * 4;
   assert.equal(svr.pageData[ptIdx2 + 3], 0, 'failed upload leaves the entry empty');
   console.log('SVRManager.writeRgbaBrickRegion: OK');

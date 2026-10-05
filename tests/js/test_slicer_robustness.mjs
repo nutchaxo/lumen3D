@@ -6,7 +6,7 @@
 //   DEAD-017 dead `volumeScale` uniform (declared + wired, never used in GLSL)
 //   DEAD-031 stale header comment ("DataTexture3D" — render goes through the SVR atlas)
 //
-// aabb-intersector.js is pure math (vm-loadable) -> behavioral. volume-slicer.js
+// volume-slicer.js
 // touches THREE/DOM at load -> structural read-asserts.
 //
 // Run: node tests/js/test_slicer_robustness.mjs
@@ -17,22 +17,6 @@ import { fileURLToPath } from 'node:url';
 import { loadModule } from './harness.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
-
-// ── EDGE-009: aabb-intersector plane stays finite for hostile angles ──
-{
-  const A = loadModule('js/core/aabb-intersector.js', 'AABBIntersector', { console });
-  assert.equal(typeof A.planeFromSpec, 'function', 'planeFromSpec exposed');
-  const dims = { x: 100, y: 100, z: 100 };
-  const finite = p => p && ['nx', 'ny', 'nz', 'd'].every(k => Number.isFinite(p[k]));
-
-  assert.ok(finite(A.planeFromSpec({ mode: 'oblique', yaw: Infinity, pitch: 0, value: 0.5 }, dims)), 'EDGE-009: Infinity yaw -> finite plane');
-  assert.ok(finite(A.planeFromSpec({ mode: 'oblique', yaw: NaN, pitch: NaN, value: 0.5 }, dims)), 'EDGE-009: NaN angles -> finite plane');
-  assert.ok(finite(A.planeFromSpec({ mode: 'oblique', yaw: 'abc', pitch: 0, value: 0.5 }, dims)), 'EDGE-009: non-numeric yaw -> finite plane');
-  assert.ok(finite(A.planeFromSpec({ mode: 'xy', value: 2.5 }, dims)), 'EDGE-009/034: out-of-range value -> finite plane');
-
-  const v = A.planeFromSpec({ mode: 'oblique', yaw: 90, pitch: 0, value: 0.5 }, dims);
-  assert.ok(Math.abs(v.nx - 1) < 1e-6 && Math.abs(v.nz) < 1e-6, 'valid oblique yaw=90 still resolves a unit normal (regression)');
-}
 
 // ── Structural: slicer sanitize / guard / dead-code ──
 {

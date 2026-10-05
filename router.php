@@ -36,10 +36,14 @@ $path = '/' . implode('/', $_segs);
 // signing seeds, logs/ and backups/ hold operational traces and copies of them,
 // and uploads/ holds dataset bytes that have not been validated yet (the admin
 // preview reads those through api/upload.php?action=blob, never a static URL).
+// Any dot-segment is private too (.git, .htaccess, api/.sessions, the updater's
+// .update-staging-*, parked *.lumen-old sources…), .well-known excepted.
 if (preg_match('#^/api/.*\.json$#i', $path)
     || preg_match('#^/api/_[A-Za-z0-9_]+\.php$#i', $path)
     || preg_match('#^/api/config\.php$#i', $path)
-    || preg_match('#^/(secrets|logs|backups|uploads|\.git)(/|$)#i', $path)) {
+    || preg_match('#^/(secrets|logs|backups|uploads|\.git)(/|$)#i', $path)
+    || preg_match('#/\.(?!well-known(/|$))#', $path)
+    || preg_match('#\.lumen-(old|new|backup)$#i', $path)) {
     http_response_code(403);
     header('Content-Type: text/plain');
     echo 'Forbidden';
@@ -63,6 +67,20 @@ if ($path === '/' || substr($path, -5) === '.html') {
     if (lumen_serve_html(__DIR__, lumen_request_rel($_SERVER, __DIR__))) {
         return true;
     }
+    // Not one of the platform's pages: never fall through to a raw static serve,
+    // which would hand the document out with no CSP at all.
+    http_response_code(404);
+    header('Content-Type: text/plain');
+    echo 'Not found';
+    return true;
+}
+
+// No directory listings (php -S has none, but say so for every host shape).
+if (substr($path, -1) === '/' && is_dir(__DIR__ . $path)) {
+    http_response_code(404);
+    header('Content-Type: text/plain');
+    echo 'Not found';
+    return true;
 }
 
 return false;

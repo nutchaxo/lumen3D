@@ -19,7 +19,12 @@
   const ACTIONS = {
     'theme-toggle': () => { if (typeof Theme !== 'undefined' && Theme.toggle) Theme.toggle(); },
     'colorblind':   () => { if (typeof ColorBlind !== 'undefined' && ColorBlind.openModal) ColorBlind.openModal(); },
-    'lang-dropdown': () => { if (typeof toggleDropdown !== 'undefined') toggleDropdown('lang-dropdown'); },
+    // landing.js / explorer.js define their own toggleDropdown; every other page (compare)
+    // relies on the shared Utils one.
+    'lang-dropdown': () => {
+      if (typeof toggleDropdown === 'function') toggleDropdown('lang-dropdown');
+      else if (typeof Utils !== 'undefined' && Utils.toggleDropdown) Utils.toggleDropdown('lang-dropdown');
+    },
     'add-dataset':  () => { const b = document.getElementById('btn-add-dataset'); if (b) b.click(); },
   };
 
@@ -29,8 +34,9 @@
   document.addEventListener('click', (e) => {
     const el = e.target && e.target.closest ? e.target.closest('[data-action]') : null;
     if (!el) return;
-    const fn = ACTIONS[el.getAttribute('data-action')];
-    if (fn) fn();
+    const name = el.getAttribute('data-action');
+    if (!Object.prototype.hasOwnProperty.call(ACTIONS, name)) return;
+    ACTIONS[name]();
   });
 
   // Ensure Lucide icons render once the (async) CDN script has loaded, without an

@@ -210,24 +210,26 @@ function populateFeatured() {
  * @returns {string} HTML
  */
 function createDatasetCard(dataset, index = 0) {
-  const stageDisplay = Utils.formatStage(dataset.stage);
+  // Catalog fields are the operator's data: escaped before innerHTML, and a non-string stage is text, not a crash.
+  const esc = (v) => Utils.escapeHtml(v == null ? '' : String(v));
+  const stageDisplay = Utils.formatStage(dataset.stage == null ? '' : String(dataset.stage));
   const dateDisplay = Utils.formatDate(dataset.date);
   const sizeDisplay = dataset.fileSize ? Utils.formatFileSize(dataset.fileSize) : '';
 
   // Build meta info
   const metaItems = [];
-  if (stageDisplay !== '—') metaItems.push(`<span>${stageDisplay}</span>`);
-  if (dateDisplay !== '—') metaItems.push(`<span>${dateDisplay}</span>`);
+  if (stageDisplay !== '—') metaItems.push(`<span>${esc(stageDisplay)}</span>`);
+  if (dateDisplay !== '—') metaItems.push(`<span>${esc(dateDisplay)}</span>`);
   const cellCount = Number(dataset.tracking?.cellCount) || 0;
   if (cellCount) metaItems.push(`<span>${cellCount} ${I18n.t('js.trackingCells').toLowerCase()}</span>`);
   if (dataset.dimensions?.x && dataset.dimensions?.y && dataset.dimensions?.z) {
     const d = dataset.dimensions;
-    metaItems.push(`<span>${d.x}&times;${d.y}&times;${d.z}</span>`);
+    metaItems.push(`<span>${esc(d.x)}&times;${esc(d.y)}&times;${esc(d.z)}</span>`);
   }
 
   // SEC-015: dataset fields are catalog data — escape before innerHTML (mirrors explorer.js).
   const image = dataset.thumbnail
-    ? `<img src="${Utils.escapeHtml(dataset.thumbnail)}" alt="">`
+    ? `<img src="${Utils.escapeHtml(dataset.thumbnail)}" alt="" loading="lazy" decoding="async">`
     : `<i data-lucide="${Utils.datasetTypeIcon(dataset.type)}" style="width:48px;height:48px;color:var(--text-muted);opacity:0.4"></i>`;
 
   return `

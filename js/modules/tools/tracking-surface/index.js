@@ -10,8 +10,11 @@
  *
  * Colouring: uniform, local cell density (a Gaussian kernel around the tracked
  * cells of the current frame, or a _DENSITY attribute baked into the mesh), or
- * region (nearest tracked cell's region), each smoothed over the mesh. The
- * O(vertices x cells) pass is memoised on every input that can change it.
+ * region (nearest tracked cell's region), each smoothed over the mesh. The cells
+ * are bucketed in a uniform grid so a vertex only visits its neighbourhood, the
+ * mesh adjacency and the vertex positions in um are computed once per mesh, and the
+ * colour attribute is rewritten in place; the pass is memoised on every input that
+ * can change it.
  *
  * Clipping: the surface follows the volume's own clip box (Z-stack slab, clip
  * sliders) by default, and an oblique cut plane with a filled cap can be added.
@@ -37,12 +40,20 @@ PluginRegistry.implement('tracking-surface', {
   _matUniform: null,
   _matVertex: null,
   _planes: [],            // the array shared by every material (mutated in place)
-  _volumePlanes: [],
   _cutPlane: null,
   _capGroup: null,
   _helper: null,
   _capKey: null,
   _colorSig: null,
+  _legendKey: null,
+  _legendState: null,
+  _meshData: new WeakMap(),   // mesh -> { umPos, adjStart, adjList, attr, scratch*, ... }
+  _luts: {},                  // colormap -> Float32Array(256 * 3)
+  _boxPlanes: [],             // six volume-box planes, object space (reused)
+  _planePool: [],             // world-space planes handed to the materials (reused)
+  _planeCount: -1,
+  _lastSyncFrame: -1,
+  _cutCache: null,
   _bounds: null,          // { min, max, center, span } in um
   _opts: {
     opacity: 0.55, colorMode: 'density', colormap: 'viridis', followVolumeClip: true,
@@ -90,7 +101,7 @@ PluginRegistry.implement('tracking-surface', {
       this._T.on('style', () => { this._colorSig = null; this._update(); }),
       this._T.on('options', () => { this._colorSig = null; this._update(); })
     ];
-    ctx.i18n.onLanguageChange?.(() => { this._applyLabels(); this._renderLegend(); });
+    this._unsubLang = ctx.i18n.onLanguageChange?.(() => { this._applyLabels(); this._legendKey = null; this._renderLegend(); }) || null;
     return this;
   },
 
@@ -132,16 +143,25 @@ PluginRegistry.implement('tracking-surface', {
   dispose() {
     this._unsubs.forEach(fn => fn());
     this._unsubs = [];
+    this._unsubLang?.();
+    this._unsubLang = null;
     this._destroyModel();
+    this._dropLegendListener();
     this._legend?.remove();
     this._legend = null;
+    this._legendKey = null;
     this._section?.remove();
     this._section = null;
+    this._els = null;
+    this._active = false;
   },
 
   // ── Private: activation & loading ─────────────────────────
 
   _setActive(on) {
+    // A workspace saved on a tracked timelapse can reach a dataset without the
+    // block: there is no model to fetch, so the state is ignored.
+    if (on && !this._T.isAvailable()) on = false;
     this._active = Boolean(on);
     if (this._section) this._section.root.hidden = !this._active;
     if (this._active) {
@@ -208,13 +228,20 @@ PluginRegistry.implement('tracking-surface', {
     if (!parent || !space) throw new Error('no volume to attach to');
     this._destroyModel();
     const renderer = this._T.getRenderer();
-    if (renderer) renderer.localClippingEnabled = true;
+    if (renderer) {
+      this._prevLocalClipping = renderer.localClippingEnabled;
+      renderer.localClippingEnabled = true;
+    }
 
     this._matUniform = new THREE.MeshBasicMaterial({ color: 0x87ceeb, transparent: true, opacity: this._opts.opacity, side: THREE.DoubleSide, depthWrite: false });
     this._matVertex = new THREE.MeshBasicMaterial({ vertexColors: true, transparent: true, opacity: this._opts.opacity, side: THREE.DoubleSide, depthWrite: false });
     this._planes = [];
     this._matUniform.clippingPlanes = this._planes;
     this._matVertex.clippingPlanes = this._planes;
+    this._boxPlanes = Array.from({ length: 6 }, () => new THREE.Plane());
+    this._planePool = Array.from({ length: 7 }, () => new THREE.Plane());
+    this._planeCount = -1;
+    this._lastSyncFrame = -1;
 
     // um -> cube object space: o = (p - min) / size - 0.5
     const A = space.min, S = space.size;
@@ -233,10 +260,11 @@ PluginRegistry.implement('tracking-surface', {
     this._glb.updateMatrixWorld(true);
     this._glb.traverse((child) => {
       if (!child.isMesh) return;
+      child.userData.originalMaterial = child.material;
       child.material = this._matUniform;
       child.visible = false;
       child.frustumCulled = false;
-      child.onBeforeRender = () => this._syncPlanes();
+      child.onBeforeRender = (renderer) => this._syncPlanes(renderer);
       const info = this._parseVariant(child.name || child.parent?.name || '');
       if (!info) return;
       child.userData.surfaceVariant = info;
@@ -252,17 +280,27 @@ PluginRegistry.implement('tracking-surface', {
   },
 
   _destroyModel() {
+    this._clearCap();
     if (this._group) {
       this._T?.getVolumeObject()?.remove(this._group);
-      this._group.traverse((o) => { if (o.isMesh) { o.geometry?.dispose?.(); } });
+      this._group.traverse((o) => {
+        if (!o.isMesh) return;
+        o.onBeforeRender = () => {};
+        o.geometry?.dispose?.();
+        const own = o.userData.originalMaterial;
+        if (own && own !== this._matUniform && own !== this._matVertex) own.dispose?.();
+      });
     }
+    this._meshData = new WeakMap();
     this._matUniform?.dispose?.();
     this._matVertex?.dispose?.();
-    this._helper?.geometry?.dispose?.(); this._helper?.material?.dispose?.();
+    const renderer = this._T?.getRenderer?.();
+    if (renderer && this._prevLocalClipping !== undefined) renderer.localClippingEnabled = this._prevLocalClipping;
+    this._prevLocalClipping = undefined;
     this._group = null; this._glb = null; this._capGroup = null; this._helper = null;
     this._matUniform = null; this._matVertex = null;
     this._variants = { raw: [], stab: [] };
-    this._planes = []; this._volumePlanes = []; this._cutPlane = null;
+    this._planes = []; this._cutCache = null; this._planeCount = -1; this._lastSyncFrame = -1;
     this._bounds = null; this._colorSig = null; this._capKey = null;
   },
 
@@ -318,77 +356,175 @@ PluginRegistry.implement('tracking-surface', {
 
   // ── Private: colouring ────────────────────────────────────
 
-  /** Tracked cells of the current frame, as um positions in the group's space. */
+  /** Tracked cells of the current frame as flat tables: um positions in the
+   *  group's space (xyz triplets) and region indices. */
   _cellRows() {
     const data = this._T.getData();
     const style = this._T.getStyle() || {};
     const frame = this._T.getFrame();
-    const rows = [];
-    for (const c of this._T.cellsAt(frame)) {
+    const cells = this._T.cellsAt(frame);
+    const pos = new Float32Array(cells.length * 3);
+    const region = new Int32Array(cells.length);
+    const scratch = [0, 0, 0];
+    let n = 0;
+    for (const c of cells) {
       const flags = data.flags[c];
       if (style.showMitosis === false && (flags & 1)) continue;
       if (style.showFusion === false && (flags & 2)) continue;
-      const p = this._T.positionUm(c, frame);
+      const p = this._T.positionUm(c, frame, {}, scratch);
       if (!p) continue;
-      rows.push({ index: c, region: data.regionIdx[c], position: new THREE.Vector3(p[0], p[1], p[2]) });
+      pos[n * 3] = p[0]; pos[n * 3 + 1] = p[1]; pos[n * 3 + 2] = p[2];
+      region[n] = data.regionIdx[c];
+      n++;
     }
-    return rows;
+    return { n, pos, region };
   },
 
-  /** Vertex position of `mesh` in the group's um space (independent of the cube's
-   *  orbit): group^-1 . mesh.world. */
-  _umMatrix(mesh) {
-    this._group.updateWorldMatrix(true, false);
-    mesh.updateWorldMatrix(true, false);
-    return new THREE.Matrix4().copy(this._group.matrixWorld).invert().multiply(mesh.matrixWorld);
+  /** Uniform bucket grid over the cell rows: a vertex only visits the buckets
+   *  around it instead of every cell. `size` is the bucket edge in um. */
+  _buildGrid(rows, size) {
+    const cells = new Map();
+    const lo = [Infinity, Infinity, Infinity], hi = [-Infinity, -Infinity, -Infinity];
+    for (let i = 0; i < rows.n; i++) {
+      const ix = Math.floor(rows.pos[i * 3] / size), iy = Math.floor(rows.pos[i * 3 + 1] / size), iz = Math.floor(rows.pos[i * 3 + 2] / size);
+      const key = this._gridKey(ix, iy, iz);
+      const bucket = cells.get(key);
+      if (bucket) bucket.push(i); else cells.set(key, [i]);
+      if (ix < lo[0]) lo[0] = ix; if (ix > hi[0]) hi[0] = ix;
+      if (iy < lo[1]) lo[1] = iy; if (iy > hi[1]) hi[1] = iy;
+      if (iz < lo[2]) lo[2] = iz; if (iz > hi[2]) hi[2] = iz;
+    }
+    return { cells, size, lo, hi };
+  },
+
+  _gridKey(ix, iy, iz) { return ((ix + 4096) * 8192 + (iy + 4096)) * 8192 + (iz + 4096); },
+
+  /** Per-mesh data that depends on the geometry alone: vertex positions in the
+   *  group's um space, the vertex adjacency (CSR, one entry per triangle edge so
+   *  the weighting equals a per-triangle accumulation) and the colour buffers. */
+  _meshCache(mesh) {
+    let d = this._meshData.get(mesh);
+    const geo = mesh.geometry;
+    const pos = geo?.attributes?.position;
+    if (!pos) return null;
+    if (d && d.count === pos.count) return d;
+    const count = pos.count;
+    const e = this._umMatrix(mesh).elements;
+    const umPos = new Float32Array(count * 3);
+    for (let i = 0; i < count; i++) {
+      const x = pos.getX(i), y = pos.getY(i), z = pos.getZ(i);
+      // p' = M . (x, y, z, 1), M column-major
+      umPos[i * 3] = e[0] * x + e[4] * y + e[8] * z + e[12];
+      umPos[i * 3 + 1] = e[1] * x + e[5] * y + e[9] * z + e[13];
+      umPos[i * 3 + 2] = e[2] * x + e[6] * y + e[10] * z + e[14];
+    }
+    const index = geo.index?.array;
+    const triCount = index ? Math.floor(index.length / 3) : Math.floor(count / 3);
+    const at = (t, k) => (index ? index[t * 3 + k] : t * 3 + k);
+    const adjStart = new Uint32Array(count + 1);
+    for (let t = 0; t < triCount; t++) {
+      for (let k = 0; k < 3; k++) adjStart[at(t, k) + 1] += 2;
+    }
+    for (let i = 0; i < count; i++) adjStart[i + 1] += adjStart[i];
+    const adjList = new Uint32Array(adjStart[count]);
+    const fill = adjStart.slice(0, count);
+    for (let t = 0; t < triCount; t++) {
+      const a = at(t, 0), b = at(t, 1), c = at(t, 2);
+      adjList[fill[a]++] = b; adjList[fill[a]++] = c;
+      adjList[fill[b]++] = a; adjList[fill[b]++] = c;
+      adjList[fill[c]++] = a; adjList[fill[c]++] = b;
+    }
+    d = { count, umPos, adjStart, adjList, raw: new Float32Array(count * 3), tmp: new Float32Array(count * 3),
+      attr: new THREE.BufferAttribute(new Float32Array(count * 3), 3), values: new Float32Array(count) };
+    this._meshData.set(mesh, d);
+    return d;
+  },
+
+  /** 256-entry colour table of a colormap, built once. */
+  _lut(name) {
+    const key = this.COLOR_MAPS[name] ? name : 'viridis';
+    let lut = this._luts[key];
+    if (lut) return lut;
+    lut = new Float32Array(256 * 3);
+    const stops = this.COLOR_MAPS[key].map(c => new THREE.Color(c));
+    const tmp = new THREE.Color();
+    for (let i = 0; i < 256; i++) {
+      const scaled = (i / 255) * (stops.length - 1);
+      const k = Math.min(stops.length - 2, Math.floor(scaled));
+      tmp.copy(stops[k]).lerp(stops[k + 1], scaled - k);
+      lut[i * 3] = tmp.r; lut[i * 3 + 1] = tmp.g; lut[i * 3 + 2] = tmp.b;
+    }
+    this._luts[key] = lut;
+    return lut;
   },
 
   _colorSurfaces(meshes) {
     const style = this._T.getStyle() || {};
-    const sig = [this._opts.colorMode, this._opts.colormap, this._T.getFrame(), this._T.isStabilized(),
-      this._T.getOptions().neighborThresholdUm, style.showMitosis, style.showFusion,
+    const mode = this._opts.colorMode;
+    // A baked density is a property of the mesh: the tracked cells (hence the
+    // frame, the stabilisation, the neighbour radius and the filters) only matter
+    // when the colour is computed from them.
+    const fromCells = mode === 'region' || (mode === 'density' && meshes.some(m => !this._bakedDensity(m)));
+    const sig = [mode, this._opts.colormap, fromCells ? this._T.getFrame() : '', fromCells ? this._T.isStabilized() : '',
+      fromCells ? this._T.getOptions().neighborThresholdUm : '', fromCells ? style.showMitosis : '', fromCells ? style.showFusion : '',
       meshes.map(m => m.uuid).sort().join(',')].join('|');
     if (sig === this._colorSig) return;
     this._colorSig = sig;
-    const mode = this._opts.colorMode;
     if (mode === 'uniform') {
       meshes.forEach(m => { m.material = this._matUniform; });
       this._legendState = { kind: 'uniform' };
       return;
     }
-    const rows = this._cellRows();
+    const rows = fromCells ? this._cellRows() : null;
     if (mode === 'region') {
+      const grid = rows.n ? this._buildGrid(rows, 40) : null;
       meshes.forEach(m => {
-        const colors = this._regionColors(m, rows);
-        if (colors) { this._applyColors(m, colors); m.material = this._matVertex; }
+        const d = grid ? this._meshCache(m) : null;
+        if (d) { this._regionColors(d, rows, grid); this._applyColors(m, d); m.material = this._matVertex; }
         else m.material = this._matUniform;
       });
       this._legendState = { kind: 'region' };
       return;
     }
     // density
-    let stats = null;
+    const sigma = Math.max(8, Math.min(54, this._T.getOptions().neighborThresholdUm * 0.52));
+    const grid = rows && rows.n ? this._buildGrid(rows, Math.max(18, sigma * 2.8)) : null;
     const computed = [];
+    let total = 0;
     meshes.forEach(m => {
+      const d = this._meshCache(m);
+      if (!d) return;
       const baked = this._bakedDensity(m);
-      if (baked) { computed.push({ mesh: m, values: null, baked }); return; }
-      computed.push({ mesh: m, values: this._kernelDensity(m, rows) });
+      if (baked) { computed.push({ mesh: m, d, baked }); return; }
+      if (!grid) { computed.push({ mesh: m, d, values: null }); return; }
+      this._kernelDensity(d, rows, grid, sigma);
+      computed.push({ mesh: m, d, values: d.values });
+      total += d.count;
     });
-    const all = computed.flatMap(c => c.values || []);
-    if (all.length) stats = this._densityStats(all);
-    computed.forEach(({ mesh, values, baked }) => {
-      if (baked) { this._applyColors(mesh, this._bakedColors(baked)); mesh.material = this._matVertex; return; }
-      if (!values || !values.length || !stats) { mesh.material = this._matUniform; return; }
-      this._applyColors(mesh, this._densityColors(values, stats));
+    let stats = null;
+    if (total) {
+      const all = new Float32Array(total);
+      let o = 0;
+      computed.forEach(c => { if (c.values) { all.set(c.values, o); o += c.d.count; } });
+      stats = this._densityStats(all);
+    }
+    const lut = this._lut(this._opts.colormap);
+    computed.forEach(({ mesh, d, values, baked }) => {
+      if (baked) { this._bakedColors(baked, d, lut); this._applyColors(mesh, d); mesh.material = this._matVertex; return; }
+      if (!values || !stats) { mesh.material = this._matUniform; return; }
+      this._densityColors(values, stats, d, lut);
+      this._applyColors(mesh, d);
       mesh.material = this._matVertex;
     });
     this._legendState = { kind: 'density', min: stats?.p10 ?? 0, max: stats?.p90 ?? 1 };
   },
 
-  _applyColors(mesh, colors) {
-    const smoothed = this._smooth(mesh, colors);
-    mesh.geometry.setAttribute('color', new THREE.BufferAttribute(smoothed, 3));
-    mesh.geometry.attributes.color.needsUpdate = true;
+  /** Smooth the raw colours of `d`, write them into the mesh's own colour
+   *  attribute and flag it for upload. The attribute is created once per mesh. */
+  _applyColors(mesh, d) {
+    this._smooth(d, d.raw, d.attr.array);
+    if (mesh.geometry.attributes.color !== d.attr) mesh.geometry.setAttribute('color', d.attr);
+    d.attr.needsUpdate = true;
   },
 
   _bakedDensity(mesh) {
@@ -399,117 +535,144 @@ PluginRegistry.implement('tracking-surface', {
     return null;
   },
 
-  _bakedColors(attr) {
-    const colors = new Float32Array(attr.count * 3);
-    for (let i = 0; i < attr.count; i++) {
+  _bakedColors(attr, d, lut) {
+    const out = d.raw;
+    const n = Math.min(attr.count, d.count);
+    for (let i = 0; i < n; i++) {
       const raw = attr.array[i];
-      const c = this._rampColor(Math.max(0, Math.min(1, raw > 1 ? raw / 255 : raw)));
-      colors[i * 3] = c.r; colors[i * 3 + 1] = c.g; colors[i * 3 + 2] = c.b;
+      const t = Math.max(0, Math.min(1, raw > 1 ? raw / 255 : raw));
+      const k = Math.round(t * 255) * 3;
+      out[i * 3] = lut[k]; out[i * 3 + 1] = lut[k + 1]; out[i * 3 + 2] = lut[k + 2];
     }
-    return colors;
   },
 
-  /** Gaussian kernel density of the tracked cells at each vertex. The kernel
-   *  width follows the shared neighbour radius, so "dense" means the same thing
-   *  here and in the neighbour network. */
-  _kernelDensity(mesh, rows) {
-    const attr = mesh.geometry?.attributes?.position;
-    if (!attr || !rows.length) return [];
-    const sigma = Math.max(8, Math.min(54, this._T.getOptions().neighborThresholdUm * 0.52));
-    const radiusSq = Math.pow(Math.max(18, sigma * 2.8), 2);
-    const m = this._umMatrix(mesh);
-    const v = new THREE.Vector3();
-    const values = new Array(attr.count);
-    for (let i = 0; i < attr.count; i++) {
-      v.fromBufferAttribute(attr, i).applyMatrix4(m);
+  /** Gaussian kernel density of the tracked cells at each vertex:
+   *    rho(v) = sum_c exp(-|v - c|^2 / (2 sigma^2))   for |v - c| <= 2.8 sigma
+   *  The kernel width follows the shared neighbour radius, so "dense" means the
+   *  same thing here and in the neighbour network. The grid bucket edge equals the
+   *  cut-off radius, so the 27 buckets around a vertex hold every contributor. */
+  _kernelDensity(d, rows, grid, sigma) {
+    const radius = Math.max(18, sigma * 2.8);
+    const radiusSq = radius * radius;
+    const inv2s2 = 1 / (2 * sigma * sigma);
+    const { umPos, values, count } = d;
+    const { cells, size } = grid;
+    const rp = rows.pos;
+    for (let i = 0; i < count; i++) {
+      const x = umPos[i * 3], y = umPos[i * 3 + 1], z = umPos[i * 3 + 2];
+      const cx = Math.floor(x / size), cy = Math.floor(y / size), cz = Math.floor(z / size);
       let density = 0;
-      for (const row of rows) {
-        const dSq = v.distanceToSquared(row.position);
-        if (dSq > radiusSq) continue;
-        density += Math.exp(-dSq / (2 * sigma * sigma));
+      for (let ix = cx - 1; ix <= cx + 1; ix++) for (let iy = cy - 1; iy <= cy + 1; iy++) for (let iz = cz - 1; iz <= cz + 1; iz++) {
+        const bucket = cells.get(this._gridKey(ix, iy, iz));
+        if (!bucket) continue;
+        for (let b = 0; b < bucket.length; b++) {
+          const r = bucket[b] * 3;
+          const dx = x - rp[r], dy = y - rp[r + 1], dz = z - rp[r + 2];
+          const dSq = dx * dx + dy * dy + dz * dz;
+          if (dSq > radiusSq) continue;
+          density += Math.exp(-dSq * inv2s2);
+        }
       }
       values[i] = density;
     }
-    return values;
   },
 
-  _regionColors(mesh, rows) {
-    const attr = mesh.geometry?.attributes?.position;
-    if (!attr || !rows.length) return null;
+  /** Colour of the region of the nearest tracked cell, found by growing square
+   *  shells of buckets until no closer cell can exist: a cell in shell r+1 is at
+   *  least r * size away. */
+  _regionColors(d, rows, grid) {
     const data = this._T.getData();
-    const m = this._umMatrix(mesh);
-    const v = new THREE.Vector3();
-    const colors = new Float32Array(attr.count * 3);
     const palette = data.regionColors.map(hex => new THREE.Color(hex));
-    for (let i = 0; i < attr.count; i++) {
-      v.fromBufferAttribute(attr, i).applyMatrix4(m);
-      let nearest = -1, best = Infinity;
-      for (const row of rows) {
-        const dSq = v.distanceToSquared(row.position);
-        if (dSq < best) { best = dSq; nearest = row.region; }
+    const fallback = new THREE.Color(0x9aa4b3);
+    const { umPos, raw, count } = d;
+    const { cells, size, lo, hi } = grid;
+    const rp = rows.pos;
+    for (let i = 0; i < count; i++) {
+      const x = umPos[i * 3], y = umPos[i * 3 + 1], z = umPos[i * 3 + 2];
+      const cx = Math.floor(x / size), cy = Math.floor(y / size), cz = Math.floor(z / size);
+      const maxR = Math.max(Math.abs(cx - lo[0]), Math.abs(cx - hi[0]), Math.abs(cy - lo[1]), Math.abs(cy - hi[1]),
+        Math.abs(cz - lo[2]), Math.abs(cz - hi[2]));
+      let best = Infinity, nearest = -1;
+      for (let r = 0; r <= maxR; r++) {
+        for (let dx = -r; dx <= r; dx++) for (let dy = -r; dy <= r; dy++) {
+          const edge = Math.abs(dx) === r || Math.abs(dy) === r;
+          // Interior columns of a shell only touch its two caps (dz = +-r).
+          const step = edge || r === 0 ? 1 : 2 * r;
+          for (let dz = -r; dz <= r; dz += step) {
+            const bucket = cells.get(this._gridKey(cx + dx, cy + dy, cz + dz));
+            if (!bucket) continue;
+            for (let b = 0; b < bucket.length; b++) {
+              const k = bucket[b] * 3;
+              const ex = x - rp[k], ey = y - rp[k + 1], ez = z - rp[k + 2];
+              const dSq = ex * ex + ey * ey + ez * ez;
+              if (dSq < best) { best = dSq; nearest = rows.region[bucket[b]]; }
+            }
+          }
+        }
+        const reach = r * size;
+        if (best <= reach * reach) break;
       }
-      const c = nearest >= 0 ? palette[nearest] : new THREE.Color(0x9aa4b3);
-      colors[i * 3] = c.r; colors[i * 3 + 1] = c.g; colors[i * 3 + 2] = c.b;
+      const c = nearest >= 0 && palette[nearest] ? palette[nearest] : fallback;
+      raw[i * 3] = c.r; raw[i * 3 + 1] = c.g; raw[i * 3 + 2] = c.b;
     }
-    return colors;
   },
 
   _densityStats(values) {
-    const sorted = values.filter(Number.isFinite).sort((a, b) => a - b);
-    if (!sorted.length) return null;
+    let n = 0;
+    for (let i = 0; i < values.length; i++) if (Number.isFinite(values[i])) n++;
+    if (!n) return null;
+    const sorted = new Float32Array(n);
+    for (let i = 0, o = 0; i < values.length; i++) if (Number.isFinite(values[i])) sorted[o++] = values[i];
+    sorted.sort();
     return {
-      min: sorted[0], max: sorted[sorted.length - 1],
-      p10: sorted[Math.floor((sorted.length - 1) * 0.1)],
-      p90: sorted[Math.floor((sorted.length - 1) * 0.9)]
+      min: sorted[0], max: sorted[n - 1],
+      p10: sorted[Math.floor((n - 1) * 0.1)],
+      p90: sorted[Math.floor((n - 1) * 0.9)]
     };
   },
 
-  _densityColors(values, stats) {
-    const low = stats.p10, high = stats.p90;
-    const colors = new Float32Array(values.length * 3);
-    values.forEach((value, i) => {
-      const t = high > low ? Math.max(0, Math.min(1, (value - low) / (high - low))) : 0;
-      const c = this._rampColor(t);
-      colors[i * 3] = c.r; colors[i * 3 + 1] = c.g; colors[i * 3 + 2] = c.b;
-    });
-    return colors;
-  },
-
-  _rampColor(t) {
-    const stops = (this.COLOR_MAPS[this._opts.colormap] || this.COLOR_MAPS.viridis).map(c => new THREE.Color(c));
-    const scaled = Math.max(0, Math.min(1, t)) * (stops.length - 1);
-    const i = Math.min(stops.length - 2, Math.floor(scaled));
-    return stops[i].clone().lerp(stops[i + 1], scaled - i);
+  _densityColors(values, stats, d, lut) {
+    const low = stats.p10, high = stats.p90, out = d.raw;
+    const span = high - low;
+    for (let i = 0; i < d.count; i++) {
+      const t = span > 0 ? Math.max(0, Math.min(1, (values[i] - low) / span)) : 0;
+      const k = Math.round(t * 255) * 3;
+      out[i * 3] = lut[k]; out[i * 3 + 1] = lut[k + 1]; out[i * 3 + 2] = lut[k + 2];
+    }
   },
 
   /** Laplacian smoothing of vertex colours over the mesh adjacency, so triangle
-   *  boundaries do not read as colour steps. */
-  _smooth(mesh, colors, iterations = 2, blend = 0.5) {
-    const geo = mesh.geometry;
-    const count = geo?.attributes?.position?.count || 0;
-    if (!count || colors.length !== count * 3) return colors;
-    const adj = Array.from({ length: count }, () => []);
-    const index = geo.index?.array;
-    const triCount = index ? Math.floor(index.length / 3) : Math.floor(count / 3);
-    for (let t = 0; t < triCount; t++) {
-      const a = index ? index[t * 3] : t * 3, b = index ? index[t * 3 + 1] : t * 3 + 1, c = index ? index[t * 3 + 2] : t * 3 + 2;
-      adj[a].push(b, c); adj[b].push(a, c); adj[c].push(a, b);
-    }
-    let current = new Float32Array(colors);
+   *  boundaries do not read as colour steps:
+   *    c'_i = (1 - blend) c_i + blend * mean(c_i, c_j for j in N(i)).
+   *  Ping-pongs between the mesh's scratch buffer and `out` (the last pass lands in
+   *  `out`), so nothing is allocated. */
+  _smooth(d, src, out, iterations = 2, blend = 0.5) {
+    const { count, adjStart, adjList } = d;
+    let from = src;
     for (let it = 0; it < iterations; it++) {
-      const next = new Float32Array(current);
+      const to = (iterations - 1 - it) % 2 === 0 ? out : d.tmp;
       for (let i = 0; i < count; i++) {
-        const nb = adj[i];
-        if (!nb.length) continue;
-        let r = current[i * 3], g = current[i * 3 + 1], b = current[i * 3 + 2], n = 1;
-        for (const j of nb) { r += current[j * 3]; g += current[j * 3 + 1]; b += current[j * 3 + 2]; n++; }
-        next[i * 3] = current[i * 3] * (1 - blend) + (r / n) * blend;
-        next[i * 3 + 1] = current[i * 3 + 1] * (1 - blend) + (g / n) * blend;
-        next[i * 3 + 2] = current[i * 3 + 2] * (1 - blend) + (b / n) * blend;
+        const s = adjStart[i], e = adjStart[i + 1];
+        const r0 = from[i * 3], g0 = from[i * 3 + 1], b0 = from[i * 3 + 2];
+        if (s === e) { to[i * 3] = r0; to[i * 3 + 1] = g0; to[i * 3 + 2] = b0; continue; }
+        let r = r0, g = g0, b = b0;
+        for (let k = s; k < e; k++) { const j = adjList[k] * 3; r += from[j]; g += from[j + 1]; b += from[j + 2]; }
+        const inv = blend / (e - s + 1);
+        to[i * 3] = r0 * (1 - blend) + r * inv;
+        to[i * 3 + 1] = g0 * (1 - blend) + g * inv;
+        to[i * 3 + 2] = b0 * (1 - blend) + b * inv;
       }
-      current = next;
+      from = to;
     }
-    return current;
+    return out;
+  },
+
+  /** Vertex position of `mesh` in the group's um space (independent of the cube's
+   *  orbit): group^-1 . mesh.world. */
+  _umMatrix(mesh) {
+    this._group.updateWorldMatrix(true, false);
+    mesh.updateWorldMatrix(true, false);
+    return new THREE.Matrix4().copy(this._group.matrixWorld).invert().multiply(mesh.matrixWorld);
   },
 
   // ── Private: clipping ─────────────────────────────────────
@@ -536,60 +699,73 @@ PluginRegistry.implement('tracking-surface', {
 
   /** The cut plane in the group's um space. Everything BEYOND the plane along its
    *  normal is removed, so 100 % keeps the whole surface and sliding down cuts
-   *  into it. */
+   *  into it. Recomputed only when the clip spec or the surface bounds change;
+   *  callers must copy it before transforming it. */
   _cutPlaneUm() {
     const spec = this._opts.clip;
     if (!spec.enabled || !this._bounds) return null;
+    const c = this._cutCache;
+    if (c && c.mode === spec.mode && c.value === spec.value && c.yaw === spec.yaw && c.pitch === spec.pitch && c.bounds === this._bounds) return c.plane;
     const n = this._cutNormal(spec);
     const q = this._bounds.center.clone().addScaledVector(n, (spec.value - 0.5) * this._bounds.span);
     // Keep p where n.(q - p) >= 0  <=>  (-n).p + n.q >= 0
-    return new THREE.Plane(n.clone().negate(), n.dot(q));
+    const plane = new THREE.Plane(n.clone().negate(), n.dot(q));
+    this._cutCache = { mode: spec.mode, value: spec.value, yaw: spec.yaw, pitch: spec.pitch, bounds: this._bounds, plane };
+    return plane;
   },
 
   /** The volume's clip box (Z-stack slab, clip sliders) as six planes in the
-   *  CUBE's object space, mirroring the shader's own test. */
-  _volumeBoxPlanes() {
+   *  CUBE's object space, mirroring the shader's own test. Fills the reused
+   *  `_boxPlanes`; false when the volume has no clip uniforms. */
+  _fillVolumeBoxPlanes() {
     const material = this._ctx.viewer.getMaterial?.();
     const u = material?.uniforms;
-    if (!u || !u.clipMin || !u.clipMax) return [];
-    const lo = new THREE.Vector3(), hi = new THREE.Vector3();
+    if (!u || !u.clipMin || !u.clipMax) return false;
+    const lo = this._lo || (this._lo = new THREE.Vector3());
+    const hi = this._hi || (this._hi = new THREE.Vector3());
+    const tmp = this._tmpV || (this._tmpV = new THREE.Vector3());
     if (this._T.isStabilized() && u.clipBoxMin && u.clipBoxSize) {
-      lo.copy(u.clipBoxMin.value).add(u.clipMin.value.clone().multiply(u.clipBoxSize.value));
-      hi.copy(u.clipBoxMin.value).add(u.clipMax.value.clone().multiply(u.clipBoxSize.value));
+      lo.copy(u.clipBoxMin.value).add(tmp.copy(u.clipMin.value).multiply(u.clipBoxSize.value));
+      hi.copy(u.clipBoxMin.value).add(tmp.copy(u.clipMax.value).multiply(u.clipBoxSize.value));
     } else {
       lo.copy(u.clipMin.value).subScalar(0.5);
       hi.copy(u.clipMax.value).subScalar(0.5);
     }
-    return [
-      new THREE.Plane(new THREE.Vector3(1, 0, 0), -lo.x), new THREE.Plane(new THREE.Vector3(-1, 0, 0), hi.x),
-      new THREE.Plane(new THREE.Vector3(0, 1, 0), -lo.y), new THREE.Plane(new THREE.Vector3(0, -1, 0), hi.y),
-      new THREE.Plane(new THREE.Vector3(0, 0, 1), -lo.z), new THREE.Plane(new THREE.Vector3(0, 0, -1), hi.z)
-    ];
+    const P = this._boxPlanes;
+    P[0].set(tmp.set(1, 0, 0), -lo.x); P[1].set(tmp.set(-1, 0, 0), hi.x);
+    P[2].set(tmp.set(0, 1, 0), -lo.y); P[3].set(tmp.set(0, -1, 0), hi.y);
+    P[4].set(tmp.set(0, 0, 1), -lo.z); P[5].set(tmp.set(0, 0, -1), hi.z);
+    return true;
   },
 
   /** Re-express the clipping planes in WORLD space for this draw. Runs from the
-   *  meshes' onBeforeRender, so the cube's current orbit is what gets used. */
-  _syncPlanes() {
+   *  meshes' onBeforeRender, so the cube's current orbit is what gets used; the
+   *  work is done once per render call, not once per visible mesh. */
+  _syncPlanes(renderer) {
     if (!this._group) return;
     const cube = this._T.getVolumeObject();
     if (!cube) return;
-    const next = [];
-    if (this._opts.followVolumeClip) {
+    const frame = renderer?.info?.render?.frame;
+    if (Number.isFinite(frame) && frame === this._lastSyncFrame) return;
+    this._lastSyncFrame = Number.isFinite(frame) ? frame : -1;
+    const pool = this._planePool;
+    let n = 0;
+    if (this._opts.followVolumeClip && this._fillVolumeBoxPlanes()) {
       cube.updateWorldMatrix(true, false);
-      for (const p of this._volumeBoxPlanes()) next.push(p.applyMatrix4(cube.matrixWorld));
+      for (let i = 0; i < 6; i++) pool[n++].copy(this._boxPlanes[i]).applyMatrix4(cube.matrixWorld);
     }
     const cut = this._cutPlaneUm();
     if (cut) {
       this._group.updateWorldMatrix(true, false);
-      next.push(cut.applyMatrix4(this._group.matrixWorld));
+      pool[n++].copy(cut).applyMatrix4(this._group.matrixWorld);
     }
     // Mutate the shared array in place: both materials point at it.
     this._planes.length = 0;
-    next.forEach(p => this._planes.push(p));
+    for (let i = 0; i < n; i++) this._planes.push(pool[i]);
     // three.js caches the projected planes per material; a change of COUNT needs
     // a program refresh, a change of values does not.
-    if (this._matUniform && this._planeCount !== next.length) {
-      this._planeCount = next.length;
+    if (this._matUniform && this._planeCount !== n) {
+      this._planeCount = n;
       this._matUniform.needsUpdate = true;
       this._matVertex.needsUpdate = true;
     }
@@ -615,36 +791,42 @@ PluginRegistry.implement('tracking-surface', {
     this._helper.position.copy(q);
     this._capGroup.add(this._helper);
 
-    // …and a filled cap over the cut section: the convex hull of the mesh/plane
-    // intersection segments, in the plane's own 2D frame.
-    const segments = [];
-    meshes.forEach(mesh => this._planeSegments(mesh, plane, segments));
-    if (segments.length < 3) return;
+    // …and the filled section: the mesh/plane intersection segments, in the
+    // plane's own 2D frame, chained into closed contours; nested contours are
+    // holes (even-odd), so a lumen or a notch stays empty.
     const helper = Math.abs(n.y) > 0.8 ? new THREE.Vector3(1, 0, 0) : new THREE.Vector3(0, 1, 0);
     const right = helper.clone().cross(n).normalize();
     const up = n.clone().cross(right).normalize();
-    const pts = segments.map(p => ({ x: p.clone().sub(q).dot(right), y: p.clone().sub(q).dot(up) }));
-    const hull = this._convexHull(pts);
-    if (hull.length < 3) return;
-    const shape = new THREE.Shape();
-    shape.moveTo(hull[0].x, hull[0].y);
-    for (let i = 1; i < hull.length; i++) shape.lineTo(hull[i].x, hull[i].y);
-    shape.closePath();
+    const segments = [];
+    meshes.forEach(mesh => this._planeSegments(mesh, plane, q, right, up, segments));
+    const regions = this._nestLoops(this._assembleLoops(segments));
+    if (!regions.length) return;
+    const shapes = regions.map(({ outer, holes }) => {
+      const shape = new THREE.Shape(outer.map(p => new THREE.Vector2(p.x, p.y)));
+      holes.forEach(h => shape.holes.push(new THREE.Path(h.map(p => new THREE.Vector2(p.x, p.y)))));
+      return shape;
+    });
     const basis = new THREE.Matrix4().makeBasis(right, up, n).setPosition(q);
-    const cap = new THREE.Mesh(new THREE.ShapeGeometry(shape),
+    const cap = new THREE.Mesh(new THREE.ShapeGeometry(shapes),
       new THREE.MeshBasicMaterial({ color: this.CUT_COLOR, transparent: true, opacity: 0.5, side: THREE.DoubleSide, depthWrite: false }));
     cap.applyMatrix4(basis);
     this._capGroup.add(cap);
-    const loop = hull.map(p => new THREE.Vector3(p.x, p.y, 0));
-    loop.push(loop[0].clone());
-    const edge = new THREE.Line(new THREE.BufferGeometry().setFromPoints(loop),
-      new THREE.LineBasicMaterial({ color: '#ffffff', transparent: true, opacity: 0.95 }));
+    const outline = [];
+    regions.forEach(({ outer, holes }) => [outer, ...holes].forEach(loop => {
+      for (let i = 0; i < loop.length; i++) {
+        const a = loop[i], b = loop[(i + 1) % loop.length];
+        outline.push(a.x, a.y, 0, b.x, b.y, 0);
+      }
+    }));
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute('position', new THREE.Float32BufferAttribute(outline, 3));
+    const edge = new THREE.LineSegments(geometry, new THREE.LineBasicMaterial({ color: '#ffffff', transparent: true, opacity: 0.95 }));
     edge.applyMatrix4(basis);
     this._capGroup.add(edge);
   },
 
   _clearCap() {
-    if (!this._capGroup) return;
+    if (!this._capGroup) { this._helper = null; return; }
     while (this._capGroup.children.length) {
       const child = this._capGroup.children[this._capGroup.children.length - 1];
       this._capGroup.remove(child);
@@ -653,79 +835,183 @@ PluginRegistry.implement('tracking-surface', {
     this._helper = null;
   },
 
-  _planeSegments(mesh, plane, out) {
-    const position = mesh.geometry?.attributes?.position;
-    if (!position) return;
-    const index = mesh.geometry.index;
-    const m = this._umMatrix(mesh);
-    const a = new THREE.Vector3(), b = new THREE.Vector3(), c = new THREE.Vector3();
-    const readIndex = (tri, corner) => (index ? index.array[tri * 3 + corner] : tri * 3 + corner);
-    const triCount = index ? Math.floor(index.count / 3) : Math.floor(position.count / 3);
+  /** Triangle/plane intersection segments of `mesh`, appended to `out` as
+   *  x0, y0, x1, y1 in the plane's frame (origin `q`, axes `right`, `up`). A
+   *  triangle contributes the two distinct points where it crosses the plane. */
+  _planeSegments(mesh, plane, q, right, up, out) {
+    const d = this._meshCache(mesh);
+    if (!d) return;
+    const index = mesh.geometry.index?.array;
+    const triCount = index ? Math.floor(index.length / 3) : Math.floor(d.count / 3);
+    const P = d.umPos;
+    const nx = plane.normal.x, ny = plane.normal.y, nz = plane.normal.z, k = plane.constant;
     const eps = 1e-4;
-    for (let tri = 0; tri < triCount; tri++) {
-      a.fromBufferAttribute(position, readIndex(tri, 0)).applyMatrix4(m);
-      b.fromBufferAttribute(position, readIndex(tri, 1)).applyMatrix4(m);
-      c.fromBufferAttribute(position, readIndex(tri, 2)).applyMatrix4(m);
-      const da = plane.distanceToPoint(a), db = plane.distanceToPoint(b), dc = plane.distanceToPoint(c);
-      const hits = [];
-      this._edgeHit(a, b, da, db, eps, hits);
-      this._edgeHit(b, c, db, dc, eps, hits);
-      this._edgeHit(c, a, dc, da, eps, hits);
-      if (hits.length >= 2) out.push(hits[0], hits[1]);
+    const hits = [];
+    for (let t = 0; t < triCount; t++) {
+      const ia = (index ? index[t * 3] : t * 3) * 3, ib = (index ? index[t * 3 + 1] : t * 3 + 1) * 3, ic = (index ? index[t * 3 + 2] : t * 3 + 2) * 3;
+      const da = nx * P[ia] + ny * P[ia + 1] + nz * P[ia + 2] + k;
+      const db = nx * P[ib] + ny * P[ib + 1] + nz * P[ib + 2] + k;
+      const dc = nx * P[ic] + ny * P[ic + 1] + nz * P[ic + 2] + k;
+      if ((da > eps && db > eps && dc > eps) || (da < -eps && db < -eps && dc < -eps)) continue;
+      hits.length = 0;
+      this._edgeHit(P, ia, ib, da, db, eps, hits);
+      this._edgeHit(P, ib, ic, db, dc, eps, hits);
+      this._edgeHit(P, ic, ia, dc, da, eps, hits);
+      // A vertex lying on the plane is hit by both of its edges: keep distinct points.
+      const distinct = [];
+      for (const h of hits) {
+        if (!distinct.some(g => (g[0] - h[0]) ** 2 + (g[1] - h[1]) ** 2 + (g[2] - h[2]) ** 2 < 1e-8)) distinct.push(h);
+      }
+      // Three distinct points = a triangle lying in the plane: no crossing line.
+      if (distinct.length !== 2) continue;
+      for (const h of distinct) {
+        const rx = h[0] - q.x, ry = h[1] - q.y, rz = h[2] - q.z;
+        out.push(rx * right.x + ry * right.y + rz * right.z, rx * up.x + ry * up.y + rz * up.z);
+      }
     }
   },
 
-  _edgeHit(a, b, da, db, eps, hits) {
-    if (Math.abs(da) <= eps && Math.abs(db) <= eps) { hits.push(a.clone(), b.clone()); return; }
+  /** Where edge (a, b) of signed distances (da, db) meets the plane. The edge is
+   *  evaluated from its lexicographically smaller end, so the two triangles that
+   *  share it compute the identical point and their segments chain exactly. */
+  _edgeHit(P, ia, ib, da, db, eps, hits) {
+    if (Math.abs(da) <= eps && Math.abs(db) <= eps) { hits.push([P[ia], P[ia + 1], P[ia + 2]], [P[ib], P[ib + 1], P[ib + 2]]); return; }
     if ((da > eps && db > eps) || (da < -eps && db < -eps)) return;
     if (Math.abs(da - db) <= eps) return;
-    const t = da / (da - db);
-    if (t < -eps || t > 1 + eps) return;
-    hits.push(a.clone().lerp(b, THREE.MathUtils.clamp(t, 0, 1)));
+    if (P[ia] > P[ib] || (P[ia] === P[ib] && (P[ia + 1] > P[ib + 1] || (P[ia + 1] === P[ib + 1] && P[ia + 2] > P[ib + 2])))) {
+      const t = ia; ia = ib; ib = t;
+      const u = da; da = db; db = u;
+    }
+    const s = da / (da - db);
+    if (s < -eps || s > 1 + eps) return;
+    const c = Math.max(0, Math.min(1, s));
+    hits.push([P[ia] + (P[ib] - P[ia]) * c, P[ia + 1] + (P[ib + 1] - P[ia + 1]) * c, P[ia + 2] + (P[ib + 2] - P[ia + 2]) * c]);
   },
 
-  _convexHull(points) {
-    const unique = [];
+  /** Chain 2D segments (flat x0, y0, x1, y1) that share end points into closed
+   *  contours. An end point is identified at 0.1 nm; a chain that cannot close
+   *  (an open mesh) is closed by its own chord. Contours of fewer than three
+   *  points are dropped. Returns arrays of {x, y}. */
+  _assembleLoops(segs) {
+    const ids = new Map();
+    const xs = [], ys = [];
+    const node = (x, y) => {
+      const key = `${Math.round(x * 1e4)}:${Math.round(y * 1e4)}`;
+      let id = ids.get(key);
+      if (id === undefined) { id = xs.length; ids.set(key, id); xs.push(x); ys.push(y); }
+      return id;
+    };
+    const edges = [];
+    const adj = [];
     const seen = new Set();
-    for (const p of points) {
-      const key = `${p.x.toFixed(3)}|${p.y.toFixed(3)}`;
-      if (seen.has(key)) continue;
-      seen.add(key);
-      unique.push(p);
+    for (let i = 0; i + 3 < segs.length; i += 4) {
+      const a = node(segs[i], segs[i + 1]), b = node(segs[i + 2], segs[i + 3]);
+      if (a === b) continue;
+      // An edge lying in the plane is met from both of its triangles.
+      const ek = a < b ? `${a}_${b}` : `${b}_${a}`;
+      if (seen.has(ek)) continue;
+      seen.add(ek);
+      const e = edges.length / 2;
+      edges.push(a, b);
+      (adj[a] || (adj[a] = [])).push(e);
+      (adj[b] || (adj[b] = [])).push(e);
     }
-    unique.sort((p, q) => (p.x === q.x ? p.y - q.y : p.x - q.x));
-    if (unique.length < 3) return unique;
-    const cross = (o, a, b) => (a.x - o.x) * (b.y - o.y) - (a.y - o.y) * (b.x - o.x);
-    const lower = [];
-    for (const p of unique) {
-      while (lower.length >= 2 && cross(lower[lower.length - 2], lower[lower.length - 1], p) <= 0) lower.pop();
-      lower.push(p);
+    const used = new Uint8Array(edges.length / 2);
+    const loops = [];
+    for (let e0 = 0; e0 < used.length; e0++) {
+      if (used[e0]) continue;
+      used[e0] = 1;
+      const start = edges[e0 * 2];
+      let cur = edges[e0 * 2 + 1];
+      const chain = [start, cur];
+      while (cur !== start) {
+        const list = adj[cur] || [];
+        let next = -1;
+        for (const e of list) if (!used[e]) { next = e; break; }
+        if (next < 0) break;
+        used[next] = 1;
+        cur = edges[next * 2] === cur ? edges[next * 2 + 1] : edges[next * 2];
+        chain.push(cur);
+      }
+      if (chain[chain.length - 1] === start) chain.pop();
+      if (chain.length >= 3) loops.push(chain.map(id => ({ x: xs[id], y: ys[id] })));
     }
-    const upper = [];
-    for (let i = unique.length - 1; i >= 0; i--) {
-      const p = unique[i];
-      while (upper.length >= 2 && cross(upper[upper.length - 2], upper[upper.length - 1], p) <= 0) upper.pop();
-      upper.push(p);
-    }
-    lower.pop(); upper.pop();
-    return lower.concat(upper);
+    return loops;
+  },
+
+  /** Group contours into filled regions with the even-odd rule: a contour inside
+   *  an even number of others bounds a region, one inside an odd number is a hole
+   *  of the smallest contour that encloses it. */
+  _nestLoops(loops) {
+    const area = (l) => {
+      let a = 0;
+      for (let i = 0; i < l.length; i++) { const p = l[i], q = l[(i + 1) % l.length]; a += p.x * q.y - q.x * p.y; }
+      return Math.abs(a) / 2;
+    };
+    const inside = (pt, l) => {
+      let c = false;
+      for (let i = 0, j = l.length - 1; i < l.length; j = i++) {
+        if ((l[i].y > pt.y) !== (l[j].y > pt.y) && pt.x < (l[j].x - l[i].x) * (pt.y - l[i].y) / (l[j].y - l[i].y) + l[i].x) c = !c;
+      }
+      return c;
+    };
+    const kept = loops.map(l => ({ loop: l, area: area(l) })).filter(e => e.area > 1e-6);
+    const groups = new Map();
+    const holes = [];
+    kept.forEach((e, i) => {
+      const parents = [];
+      kept.forEach((o, j) => { if (j !== i && o.area > e.area && inside(e.loop[0], o.loop)) parents.push(j); });
+      if (parents.length % 2 === 0) groups.set(i, { outer: e.loop, holes: [] });
+      else {
+        const parent = parents.reduce((best, j) => (kept[j].area < kept[best].area ? j : best), parents[0]);
+        holes.push({ loop: e.loop, parent });
+      }
+    });
+    holes.forEach(h => groups.get(h.parent)?.holes.push(h.loop));
+    return [...groups.values()];
   },
 
   // ── Private: legend ───────────────────────────────────────
 
-  _renderLegend() {
+  _dropLegendListener() {
     const node = this._legend;
-    if (!node) return;
-    if (node._outsideClickListener) {
+    if (node?._outsideClickListener) {
       document.removeEventListener('click', node._outsideClickListener);
       node._outsideClickListener = null;
     }
+  },
+
+  _densityRangeText(state) {
+    return `${this._fmt(state.min)} → ${this._fmt(state.max)} ${this._t('relative')}`;
+  },
+
+  /** The legend DOM is rebuilt only when its structure changes (kind, colormap,
+   *  language): during playback only the range numbers move, and replacing the
+   *  nodes would close the colormap menu the user has open. */
+  _renderLegend() {
+    const node = this._legend;
+    if (!node) return;
     const state = this._legendState;
     if (!this._active || !this._glb || !state || state.kind === 'uniform') {
-      node.classList.add('hidden');
-      node.innerHTML = '';
+      if (this._legendKey !== 'hidden') {
+        this._dropLegendListener();
+        node.classList.add('hidden');
+        node.innerHTML = '';
+        this._legendKey = 'hidden';
+      }
       return;
     }
+    const key = state.kind === 'region' ? 'region' : `density|${this._opts.colormap}`;
+    if (key === this._legendKey) {
+      node.classList.remove('hidden');
+      if (state.kind === 'density') {
+        const range = node.querySelector('.viewer-legend-range');
+        if (range) range.textContent = this._densityRangeText(state);
+      }
+      return;
+    }
+    this._legendKey = key;
+    this._dropLegendListener();
     const esc = (s) => this._esc(s);
     node.classList.remove('hidden');
     if (state.kind === 'region') {
@@ -748,7 +1034,7 @@ PluginRegistry.implement('tracking-surface', {
       <div class="viewer-legend-gradient" id="tsf-legend-gradient" style="cursor:pointer; position:relative;" title="${esc(this._t('changeColormap'))}">
         ${this.COLOR_MAPS[activeMap].map(color => `<span style="background:${esc(color)}"></span>`).join('')}
       </div>
-      <div class="viewer-legend-range">${this._fmt(state.min)} → ${this._fmt(state.max)} ${esc(this._t('relative'))}</div>
+      <div class="viewer-legend-range">${esc(this._densityRangeText(state))}</div>
       <div id="tsf-colormap-menu" style="display:none; position:absolute; bottom:calc(100% + 8px); left:0; width:100%; background:var(--bg-surface); border:1px solid var(--border-subtle); border-radius:var(--radius-md); padding:var(--space-2); box-shadow:var(--shadow-md); z-index:20; max-height:220px; overflow-y:auto; flex-direction:column; gap:4px;">
         <div style="font-size:10px; color:var(--text-muted); padding-left:24px; margin-bottom:4px; text-transform:uppercase; font-weight:600;">${esc(this._t('selectColormap'))}</div>
         ${maps.map(n => {

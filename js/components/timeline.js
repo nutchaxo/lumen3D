@@ -109,7 +109,12 @@ const Timeline = (() => {
     I18n.onLanguageChange(() => _syncSpeedButton());
   }
 
+  let _lastTickFrame = NaN;
+
   function _renderDOM() {
+    // The container's markup is replaced below, so any pooled buffer segment is about to be
+    // detached: start the pool over with the new scrubber.
+    _bufSegPool = [];
     container.innerHTML = `
       <div class="viewer-timeline" style="width:100%; display:flex; align-items:center;">
         <div class="play-controls" style="display:flex; align-items:center; gap:8px;">
@@ -280,6 +285,7 @@ const Timeline = (() => {
     setPlayIcon('pause');
     
     _lastTime = performance.now();
+    _lastTickFrame = NaN;
     // PERF-025: requestAnimationFrame loop instead of setInterval(50ms) — it
     // auto-throttles in background tabs (no drift / wasted ticks) and syncs to the
     // render cadence; the dt-based advance keeps playback speed correct.
@@ -302,7 +308,12 @@ const Timeline = (() => {
       if (_currentFrame >= _totalFrames - 1) {
         _currentFrame = 0; // loop
       }
-      setFrame(_currentFrame, false, true);
+      // The playhead moves every animation frame but the shown frame does not: tell the
+      // consumer only when the (snapped) frame it would display actually changed.
+      const shown = snapFrame(Math.max(0, Math.min(_totalFrames - 1, _currentFrame)));
+      const changed = shown !== _lastTickFrame;
+      _lastTickFrame = shown;
+      setFrame(_currentFrame, false, changed);
       _playTimer = requestAnimationFrame(tick);
     };
     _playTimer = requestAnimationFrame(tick);
@@ -338,6 +349,11 @@ const Timeline = (() => {
     btnPlay.addEventListener('pointerdown', (e) => {
       e.preventDefault();
       togglePlay();
+    });
+    // Enter / Space on the focused button raise a click with detail 0; a mouse or touch click
+    // (detail > 0) was already handled on pointerdown above.
+    btnPlay.addEventListener('click', (e) => {
+      if (e.detail === 0) togglePlay();
     });
     
     let _dragPointerId = null;

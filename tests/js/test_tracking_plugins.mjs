@@ -34,7 +34,7 @@ const ok = (label, fn) => {
 // ── the worker, evaluated with a `self` stub so packTracks is reachable ──────
 function loadWorker() {
   const ctx = { console, Math, Number, String, Object, Array, Map, Set, JSON, Error,
-    Float32Array, Float64Array, Int16Array, Int32Array, Uint8Array, Uint16Array };
+    Float32Array, Float64Array, Int16Array, Int32Array, Uint8Array, Uint16Array, Uint32Array };
   ctx.self = { postMessage() {} };
   vm.createContext(ctx);
   vm.runInContext(readFileSync(path.join(ROOT, 'js/workers/tracks-load-worker.js'), 'utf8'), ctx, { filename: 'tracks-load-worker.js' });
@@ -161,6 +161,16 @@ ok('a lineage reference by track_id resolves too', () => {
   assert.deepEqual(Array.from(alt.parent), [-1, 0]);
   assert.deepEqual(Array.from(alt.daughterIdx), [1]);
   assert.equal(alt.hasRaw, false, 'no raw_positions anywhere');
+});
+
+ok('a malformed spot is skipped and counted, the layer still loads', () => {
+  const d = packTracks({ timepoints: [1, 2], cells: {
+    a: { id: 'a', positions: { '1': [0, 0, 0], '2': [1, 'x', 0] } },
+    b: { id: 'b', positions: { '1': [2, 0, 0], '2': null } }
+  } });
+  assert.equal(d.malformed, 2);
+  assert.equal(d.cellTotal, 2);
+  assert.equal(d.maxN, 2, 'frame 1 keeps both valid spots');
 });
 
 ok('malformed documents are refused', () => {

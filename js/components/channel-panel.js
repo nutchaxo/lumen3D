@@ -37,11 +37,24 @@ window.createChannelPanel = function() {
   let _soloRestore = null;  // enabled flags captured when solo was engaged
 
   const DEFAULT_COLORS = ['#00FF00', '#00AAFF', '#FF00FF', '#FF0000'];
+
+  // A channel colour is dataset / workspace / shared-link data that ends up in inline
+  // styles and in a shader uniform. Only a hex colour is accepted (3 digits are expanded);
+  // anything else, including a string carrying CSS declarations, is replaced by `fallback`.
+  function _safeColor(value, fallback) {
+    if (typeof value === 'string') {
+      const c = value.trim();
+      if (/^#[0-9a-f]{6}$/i.test(c)) return c;
+      if (/^#[0-9a-f]{3}$/i.test(c)) return '#' + c[1] + c[1] + c[2] + c[2] + c[3] + c[3];
+    }
+    return fallback;
+  }
   const OPACITY_LEVELS = [0.7, 0.42, 1];
 
   function init(containerId, metadata, onChange) {
     _container = document.getElementById(containerId);
     if (!_container) return;
+    _bindHoverEffects(_container);
     _onChangeCallback = onChange;
     _metadata = metadata || null;
 
@@ -84,10 +97,10 @@ window.createChannelPanel = function() {
         || (typeof channelMeta === 'string' ? channelMeta : (channelMeta?.name || `Channel ${i + 1}`));
 
       // Couleur : display_defaults > metadata.colors[i] > channelMeta.color > auto-détection
-      const color = dd?.color
-        || metaColors[i]
-        || (typeof channelMeta === 'object' && channelMeta?.color ? channelMeta.color : null)
-        || _colorForChannel(name, i);
+      const color = _safeColor(dd?.color, null)
+        || _safeColor(metaColors[i], null)
+        || _safeColor(typeof channelMeta === 'object' ? channelMeta?.color : null, null)
+        || _safeColor(_colorForChannel(name, i), DEFAULT_COLORS[i % DEFAULT_COLORS.length]);
 
       // Quand display_defaults est présent, on utilise ses valeurs de contraste/gamma.
       // Sinon, si preprocessing_applied: identité (min=0, max=1, gamma=1).
@@ -181,12 +194,14 @@ window.createChannelPanel = function() {
 
       _channels[idx] = {
         ..._channels[idx],
-        color: item.color || _channels[idx].color,
+        color: _safeColor(item.color, _channels[idx].color),
         min: nextMin,
         max: nextMax,
         midtone: nextMidtone,
         gamma: nextGamma,
-        opacity: _clamp(Number(item.opacity ?? _channels[idx].opacity), 0.05, 1),
+        opacity: Number.isFinite(Number(item.opacity ?? _channels[idx].opacity))
+          ? _clamp(Number(item.opacity ?? _channels[idx].opacity), 0.05, 1)
+          : _channels[idx].opacity,
         enabled: (item.enabled !== undefined ? item.enabled : item.active) !== false,
         expanded: item.expanded === undefined ? _channels[idx].expanded : Boolean(item.expanded),
         denoise_sigma: item.denoise_sigma ?? _channels[idx].denoise_sigma ?? 0
@@ -328,7 +343,7 @@ window.createChannelPanel = function() {
     for (const row of PALETTE) {
       html += `<div style="display: flex; gap: 4px;">`;
       for (const color of row) {
-        html += `<button type="button" data-channel-action="set-color" data-channel-idx="${idx}" data-color="${color}" style="width: 20px; height: 20px; border-radius: 4px; border: 1px solid rgba(255,255,255,0.15); background: ${color}; padding: 0; cursor: pointer; transition: transform 0.1s;" title="${color}" onmouseover="this.style.transform='scale(1.1)'" onmouseout="this.style.transform='scale(1)'"></button>`;
+        html += `<button type="button" data-channel-action="set-color" data-channel-idx="${idx}" data-color="${color}" style="width: 20px; height: 20px; border-radius: 4px; border: 1px solid rgba(255,255,255,0.15); background: ${color}; padding: 0; cursor: pointer; transition: transform 0.1s;" title="${color}"></button>`;
       }
       html += `</div>`;
     }
@@ -340,7 +355,7 @@ window.createChannelPanel = function() {
     const safeName = Utils.escapeHtml ? Utils.escapeHtml(channel.name) : channel.name;
     // SEC-019: channel.color is dataset/user data injected into inline styles —
     // escape before interpolation to prevent CSS/attribute injection.
-    const safeColor = Utils.escapeHtml ? Utils.escapeHtml(channel.color) : channel.color;
+    const safeColor = _safeColor(channel.color, '#ffffff');
     const expanded = channel.expanded ? 'expanded' : '';
     
     let pluginsHtml = '';
@@ -366,7 +381,7 @@ window.createChannelPanel = function() {
                   <input type="checkbox" id="ch-toggle-${channel.idx}" ${channel.enabled ? 'checked' : ''}>
                   <span class="channel-swatch" style="background:${safeColor};margin-left:8px;"></span>
                 </label>
-                <input type="text" id="ch-name-input-${channel.idx}" value="${safeName}" spellcheck="false" style="background:transparent;border:none;border-bottom:1px solid transparent;color:inherit;font-size:inherit;font-family:inherit;font-weight:inherit;outline:none;width:100%;transition:border-color 0.2s;" onfocus="this.style.borderColor='rgba(255,255,255,0.2)'" onblur="this.style.borderColor='transparent'">
+                <input type="text" id="ch-name-input-${channel.idx}" value="${safeName}" spellcheck="false" style="background:transparent;border:none;border-bottom:1px solid transparent;color:inherit;font-size:inherit;font-family:inherit;font-weight:inherit;outline:none;width:100%;transition:border-color 0.2s;">
               </div>
               <div class="channel-quick">
               <button class="btn btn-ghost btn-sm channel-icon-btn" type="button" data-channel-action="solo" data-channel-idx="${channel.idx}" aria-pressed="false" title="Solo channel" data-i18n-title="js.soloChannel">
@@ -437,7 +452,7 @@ window.createChannelPanel = function() {
         return;
       }
       if (action === 'set-color') {
-        _channels[idx].color = button.dataset.color;
+        _channels[idx].color = _safeColor(button.dataset.color, _channels[idx].color);
         const popup = _getEl(`ch-color-popup-${idx}`);
         if (popup) popup.style.display = 'none';
         _syncChannelUi(idx);
@@ -575,6 +590,19 @@ window.createChannelPanel = function() {
   // Close color popups when clicking outside.
   // LEAK-016 (Rule 1.2): keep a handle so the document-level listener can be torn
   // down (it was registered once at construction and never removed).
+  // Hover / focus feedback. These were inline onmouseover / onfocus attributes, which the
+  // enforced CSP drops; one delegated listener pair per container does the same through the CSSOM.
+  function _bindHoverEffects(container) {
+    if (container.__lumenHoverBound) return;
+    container.__lumenHoverBound = true;
+    const swatch = e => e.target.closest ? e.target.closest('.color-grid-popup button') : null;
+    const nameField = e => (e.target && e.target.id && e.target.id.indexOf('ch-name-input-') === 0) ? e.target : null;
+    container.addEventListener('mouseover', e => { const b = swatch(e); if (b) b.style.transform = 'scale(1.1)'; });
+    container.addEventListener('mouseout', e => { const b = swatch(e); if (b) b.style.transform = 'scale(1)'; });
+    container.addEventListener('focusin', e => { const f = nameField(e); if (f) f.style.borderColor = 'rgba(255,255,255,0.2)'; });
+    container.addEventListener('focusout', e => { const f = nameField(e); if (f) f.style.borderColor = 'transparent'; });
+  }
+
   const _onDocClick = (e) => {
     if (!e.target.closest('[data-channel-action="toggle-color"]') && !e.target.closest('.color-grid-popup')) {
       document.querySelectorAll('.color-grid-popup').forEach(p => p.style.display = 'none');
@@ -587,6 +615,9 @@ window.createChannelPanel = function() {
   }
   if (typeof window !== 'undefined') {
     window.addEventListener('pagehide', dispose);
+    // A page restored from the back/forward cache keeps its DOM but pagehide removed the
+    // listener: put it back (addEventListener ignores a duplicate registration).
+    window.addEventListener('pageshow', e => { if (e.persisted) document.addEventListener('click', _onDocClick); });
   }
 
   return {

@@ -1,5 +1,15 @@
+"""Static-only perf server: the dev server's static path without the admin API.
+
+    python fast_server.py [port] [host]
+
+Serves the tree exactly as dev_server.py does for a visitor (byte ranges, ETag /
+304, gzip, the cache policy, the {{SITE:…}} head injection, the enforcing CSP on
+the top-level pages, no directory listings, keep-alive) so a measurement taken
+here holds for the real server. Only the read-only discovery endpoints answer
+(catalog, plugins, languages, downloads, health); every admin route is 404.
+"""
+import os
 import posixpath
-import secrets
 import sys
 import urllib.parse
 from http.server import HTTPServer, SimpleHTTPRequestHandler
@@ -8,91 +18,84 @@ from socketserver import ThreadingMixIn
 
 ROOT = Path(__file__).resolve().parent
 
-# Reuse the canonical enforcing CSP policy AND the static deny list from the dev
-# server (single source of truth). If the import fails, HTML degrades to no CSP —
-# but the deny list must NOT degrade, so it falls back to a local fail-closed twin.
 try:
-    from dev_server import _csp_policy, _is_forbidden_static, _FORBIDDEN_ROOTS
-except Exception:
-    _csp_policy = None
-    _FORBIDDEN_ROOTS = frozenset({"api", "secrets", "logs", "backups", ".git"})
+    import dev_server as _ds
+except Exception as _exc:  # pragma: no cover - exercised only when the import breaks
+    _ds = None
+    _IMPORT_ERROR = _exc
+
+
+if _ds is not None:
+    _READ_ONLY_API = frozenset({"/api/health", "/api/plugins", "/api/plugins.php",
+                                "/api/languages", "/api/languages.php",
+                                "/api/downloads", "/api/downloads.php"})
+
+    class FastHandler(_ds.AdminHandler):
+        def do_GET(self):
+            path = urllib.parse.urlparse(self.path).path
+            if path.startswith("/api/") and path not in _READ_ONLY_API:
+                self._json(404, {"error": "Not found"})
+                return
+            super().do_GET()
+
+        def do_POST(self):
+            self._reject(405, {"error": "Method not allowed"})
+
+    Handler = FastHandler
+    ServerClass = _ds._QuietServer
+else:
+    # Fallback when dev_server cannot be imported: static files only, no CSP. The
+    # deny list must NOT degrade with it, so it is a local fail-closed twin.
+    _FORBIDDEN_ROOTS = frozenset({"api", "secrets", "logs", "backups", "uploads", ".git"})
 
     def _is_forbidden_static(request_path):
         p = urllib.parse.unquote(request_path or "").replace("\\", "/").split("?", 1)[0]
         p = posixpath.normpath("/" + p).lstrip("/").lower()
-        return p.split("/", 1)[0] in _FORBIDDEN_ROOTS
+        return p.split("/", 1)[0] in _FORBIDDEN_ROOTS or any(
+            seg.startswith(".") for seg in p.split("/"))
 
+    class Handler(SimpleHTTPRequestHandler):
+        protocol_version = "HTTP/1.1"
+        timeout = 60
 
-class NoCacheHandler(SimpleHTTPRequestHandler):
-    def end_headers(self):
-        self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
-        self.send_header("Pragma", "no-cache")
-        self.send_header("Expires", "0")
-        self.send_header("Access-Control-Allow-Origin", "*")
-        super().end_headers()
+        def end_headers(self):
+            self.send_header("Cache-Control", "no-cache")
+            self.send_header("X-Content-Type-Options", "nosniff")
+            super().end_headers()
 
-    def translate_path(self, path):
-        """No request may resolve inside a forbidden root (api/, secrets/, logs/,
-        backups/, .git/). This server has no admin API, but it runs from the repo
-        root — without this it served the signing seeds and the credential hash as
-        plain static files."""
-        fs = super().translate_path(path)
-        try:
-            rel = Path(fs).resolve().relative_to(ROOT)
-        except (ValueError, OSError):
+        def translate_path(self, path):
+            fs = super().translate_path(path)
+            try:
+                rel = Path(fs).resolve().relative_to(ROOT)
+            except (ValueError, OSError):
+                return fs
+            if rel.parts and rel.parts[0].lower() in _FORBIDDEN_ROOTS:
+                return str(ROOT / "__forbidden__")   # never exists → 404
             return fs
-        if rel.parts and rel.parts[0].lower() in _FORBIDDEN_ROOTS:
-            return str(ROOT / "__forbidden__")   # never exists → 404
-        return fs
 
-    def list_directory(self, path):
-        # No directory indexes: a perf-test server should never enumerate the tree.
-        self.send_error(404)
-        return None
+        def list_directory(self, path):
+            self.send_error(404)
+            return None
 
-    def do_GET(self):
-        clean = urllib.parse.unquote(self.path.split("?", 1)[0]).strip("/")
-        if _is_forbidden_static(clean):
-            self.send_error(404); return
-        # HTML documents get a per-request CSP nonce injected + the enforcing header,
-        # matching dev_server.py (so the strict CSP holds on this static server too).
-        if _csp_policy is not None and (clean == "" or clean.endswith(".html")):
-            self._serve_html(clean or "index.html")
-        else:
+        def do_GET(self):
+            clean = urllib.parse.unquote(self.path.split("?", 1)[0]).strip("/")
+            if _is_forbidden_static(clean) or clean.lower().endswith((".html", ".htm")):
+                # Without the dev server there is no nonce to inject: pages are
+                # not served rather than served with a dead CSP placeholder.
+                self.send_error(404)
+                return
             super().do_GET()
 
-    def do_HEAD(self):
-        clean = urllib.parse.unquote(self.path.split("?", 1)[0]).strip("/")
-        if _is_forbidden_static(clean):
-            self.send_error(404); return
-        super().do_HEAD()
+        def do_HEAD(self):
+            clean = urllib.parse.unquote(self.path.split("?", 1)[0]).strip("/")
+            if _is_forbidden_static(clean):
+                self.send_error(404)
+                return
+            super().do_HEAD()
 
-    def _serve_html(self, rel):
-        fs = (ROOT / rel.replace("\\", "/").lstrip("/")).resolve()
-        try:
-            fs.relative_to(ROOT)
-        except ValueError:
-            self.send_error(404); return
-        if not fs.is_file():
-            super().do_GET(); return
-        try:
-            html = fs.read_text(encoding="utf-8")
-        except OSError:
-            self.send_error(500); return
-        nonce = secrets.token_urlsafe(18)
-        body = html.replace("{{CSP_NONCE}}", nonce).encode("utf-8")
-        self.send_response(200)
-        self.send_header("Content-Type", "text/html; charset=utf-8")
-        self.send_header("Content-Length", str(len(body)))
-        self.send_header("Content-Security-Policy", _csp_policy(nonce))
-        self.send_header("X-Content-Type-Options", "nosniff")
-        self.send_header("X-Frame-Options", "SAMEORIGIN")
-        self.end_headers()
-        self.wfile.write(body)
-
-
-class ThreadingHTTPServer(ThreadingMixIn, HTTPServer):
-    daemon_threads = True
+    class ServerClass(ThreadingMixIn, HTTPServer):
+        daemon_threads = True
+        request_queue_size = 128
 
 
 if __name__ == '__main__':
@@ -103,6 +106,12 @@ if __name__ == '__main__':
     host = sys.argv[2] if len(sys.argv) > 2 else '127.0.0.1'
     if host not in ('127.0.0.1', 'localhost', '::1'):
         print(f"WARNING: binding {host} exposes this directory to the network.")
-    server = ThreadingHTTPServer((host, port), NoCacheHandler)
-    print(f"Serving on {host}:{port} (multi-threaded, no-cache, enforcing CSP on HTML)")
+    if _ds is None:
+        print(f"WARNING: dev_server import failed ({_IMPORT_ERROR!r}); serving static "
+              "files only, without HTML pages.")
+    # SimpleHTTPRequestHandler.__init__ sets self.directory to the CWD whatever the
+    # class says, so the tree is served from ROOT by moving there (as dev_server does).
+    os.chdir(ROOT)
+    server = ServerClass((host, port), Handler)
+    print(f"Serving on {host}:{port} (static only, same caching/CSP as dev_server)")
     server.serve_forever()

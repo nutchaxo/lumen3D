@@ -33,7 +33,9 @@ assert.ok(cBody.includes('clearTimeout(_decompRenderTimer)'), 'close cancels the
 
 // the actual render path is unchanged + canvas resize is size-guarded
 const rStart = src.indexOf('function _renderDecompositions');
-const rBody = src.slice(rStart, rStart + 2600);
+// bound the body by the next top-level function, not by a character count
+const rNext = src.indexOf('\n  function ', rStart + 10);
+const rBody = src.slice(rStart, rNext > rStart ? rNext : src.length);
 assert.ok(rBody.includes('renderer.render(scene, camera)'), 'render loop preserved');
 assert.ok(rBody.includes('renderer.setSize(origWidth, origHeight, false)'), 'main-view restore preserved');
 assert.ok(src.includes('if (view.canvas.width !== w || view.canvas.height !== h)'), 'canvas resize is size-guarded');

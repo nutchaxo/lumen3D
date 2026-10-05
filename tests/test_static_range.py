@@ -2,9 +2,9 @@
 
 The brick loader asks for the byte runs of a cut through the volume instead of whole
 packs; the stdlib handler answers a Range request with the whole file, so
-AdminHandler serves a single satisfiable range itself (206 + Content-Range) and
-leaves everything else (suffix past the start, unsatisfiable, multi-part, no Range)
-to the ordinary 200 answer.
+AdminHandler serves a single range itself (206 + Content-Range, the end clamped to
+the file), answers a range starting past the end with 416, and leaves everything
+else (malformed, multi-part, no Range) to the ordinary 200 answer.
 
 Run: python tests/test_static_range.py
 """
@@ -64,8 +64,22 @@ class StaticRangeTest(unittest.TestCase):
         self.assertEqual(body, self.data[-7:])
         self.assertEqual(headers.get("content-range"), f"bytes {size - 7}-{size - 1}/{size}")
 
+    def test_unsatisfiable_range_is_a_416(self):
+        size = len(self.data)
+        status, headers, body = self.get({"Range": "bytes=999999999-"})
+        self.assertEqual(status, 416)
+        self.assertEqual(headers.get("content-range"), f"bytes */{size}")
+        self.assertEqual(body, b"")
+
+    def test_end_past_the_file_is_clamped(self):
+        size = len(self.data)
+        status, headers, body = self.get({"Range": "bytes=10-99999999999"})
+        self.assertEqual(status, 206)
+        self.assertEqual(body, self.data[10:])
+        self.assertEqual(headers.get("content-range"), f"bytes 10-{size - 1}/{size}")
+
     def test_everything_else_is_the_whole_file(self):
-        for rng in ("bytes=999999999-", "bytes=30-10", "bytes=0-5,10-15", "items=0-5", "bytes=abc"):
+        for rng in ("bytes=30-10", "bytes=0-5,10-15", "items=0-5", "bytes=abc"):
             status, headers, body = self.get({"Range": rng})
             self.assertEqual(status, 200, rng)
             self.assertEqual(body, self.data, rng)

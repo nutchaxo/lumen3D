@@ -10,13 +10,17 @@
 
 import {
   I18n, Utils, API_AUTH, API_SITE, API_ADMIN, t, escHtml, apiFetch, apiFetchStatus, setCsrf,
-  setUnauthorizedHandler, toast, refreshIcons, el,
+  setUnauthorizedHandler, toast, refreshIcons, el, storageGet, storageSet, MIN_PASSWORD,
 } from './shared.js';
 import { isDirty, discardDirty, setNavigator } from './bus.js';
 import * as UploadDock from './upload-dock.js';
 import * as Upload from './upload-manager.js';
 
-const _tabs = new Map();   // id -> { id, mount, activate, relabel?, titleKey, titleDefault }
+// id -> { id, mount, activate, relabel?, titleKey, titleDefault }. A tab may be
+// registered as { id, titleKey, titleDefault, load: () => Promise<tab> }: its module
+// is then imported the first time the operator opens it, so the login screen and
+// the tab the operator actually uses do not parse the other fourteen.
+const _tabs = new Map();
 let _activeTab = null;
 let _appReady = false;
 // Dedicated page-editor tab (admpan.html?editor=<slug>): the shell hides its own
@@ -42,8 +46,8 @@ function showGate(which) {
   if (which === 'setup') { initWizard(); setTimeout(() => el('setup-password')?.focus(), 50); }
 }
 
-async function checkAuth() {
-  const data = await apiFetch(`${API_AUTH}?action=status`);
+async function checkAuth(probe) {
+  const data = probe !== undefined ? probe : await apiFetch(`${API_AUTH}?action=status`);
   if (data?.needsSetup) { showGate('setup'); return; }
   if (data?.authenticated) { setCsrf(data.csrf); enterApp(data.username); }
   else { showGate('login'); }
@@ -51,6 +55,9 @@ async function checkAuth() {
 
 function enterApp(username) {
   el('header-username').textContent = username || 'admin';
+  // A re-login after a session expiry must find the working tab exactly as it was
+  // left: the gate only hides the panel, it does not unload it.
+  const resuming = _activeTab !== null;
   showGate('app');
   _appReady = true;
   if (Utils) Utils.populateLanguageMenu?.(switchLanguage);
@@ -59,6 +66,8 @@ function enterApp(username) {
   // and running while the operator works in any other tab.
   try { UploadDock.mount(); } catch (e) { console.error(e); }
   bindUploadGuard();
+  if (resuming) { checkUpdateDot(); return; }
+  checkUpdateDot();
   if (_changelogOnly) {
     document.body.classList.add('adm-editor-only', 'adm-changelog-only');
     switchTab('changelog', true);
@@ -73,13 +82,26 @@ function enterApp(username) {
   switchTab(_tabs.has(initial) ? initial : 'datasets', true);
 }
 
+// The "update available" dot lives in the sidebar, but it used to be set only by
+// the Updates tab on its first mount: a fresh load never showed it. One cached
+// check at boot, off the critical path.
+function checkUpdateDot() {
+  if (_changelogOnly || _editorOnly) return;
+  const run = async () => {
+    const d = await apiFetch(`${API_ADMIN}?action=update_check`);
+    const dot = el('nav-update-dot');
+    if (dot && d && d.ok !== false && d.available) dot.style.display = 'inline-block';
+  };
+  const idle = window.requestIdleCallback || ((fn) => setTimeout(fn, 1500));
+  idle(() => { run().catch(() => {}); });
+}
+
 // ── Guided setup wizard (first run) ────────────────────────────
 // Step 1 (account) is the ONLY mandatory step — it creates the credential + an
 // authenticated session. Steps 2–4 (identity / theme / texts) then seed
 // config/instance.json + config/theme.json via the authenticated site endpoint.
 // The operator can Skip after step 1 (account made, defaults kept).
 
-const MIN_PASSWORD = 8;
 const WIZ_PRESETS = [
   { id: 'green',   tokens: { '--color-primary': '#00A654', '--color-primary-hover': '#1FBB6C', '--color-primary-dark': '#008A45', '--color-primary-subtle': 'rgba(0,166,84,0.15)', '--color-accent': '#00D2FF' } },
   { id: 'blue',    tokens: { '--color-primary': '#2F6BFF', '--color-primary-hover': '#5484FF', '--color-primary-dark': '#2050D0', '--color-primary-subtle': 'rgba(47,107,255,0.15)', '--color-accent': '#00D2FF' } },
@@ -170,11 +192,14 @@ async function finishWizard() {
     if (sp) inst.specimen.plural = sp;
     if (tagline) inst.brand.tagline = tagline;
     if (copyright) { inst.footer = inst.footer || {}; inst.footer.copyright = copyright; }
-    await apiFetchStatus(`${API_SITE}?action=save&doc=instance`, { method: 'POST', body: JSON.stringify(inst) });
+    // Only the fields this step wrote: a listed path missing from the body would be deleted.
+    const paths = ['brand', 'specimen'].concat(org ? ['org.name'] : [], copyright ? ['footer.copyright'] : []);
+    await apiFetchStatus(`${API_SITE}?action=save&doc=instance&merge=${encodeURIComponent(paths.join(','))}`, { method: 'POST', body: JSON.stringify(inst) });
     if (_wizPreset && _wizPreset.tokens) await apiFetchStatus(`${API_SITE}?action=save&doc=theme`, { method: 'POST', body: JSON.stringify({ tokens: _wizPreset.tokens, dark: {}, light: {} }) });
     try { if (typeof InstanceConfig !== 'undefined') { await InstanceConfig.load(); InstanceConfig.applyHead(); InstanceConfig.applyDom(); } } catch (_) {}
   } catch (_) { /* seeding is best-effort; the account is already created */ }
   await _installWizardPlugins();
+  _wizPassword = '';
   toast(t('wizard.done', 'Installation terminée ✓'));
   enterApp(_wizUsername);
 }
@@ -258,24 +283,38 @@ async function doLogout() {
   await apiFetch(`${API_AUTH}?action=logout`, { method: 'POST', body: '{}' });
   setCsrf(null);
   _appReady = false;
+  _activeTab = null;
+  // The operator already answered "continue without saving" (guardedLogout): the
+  // edits are dropped, so the next sign-in reloads every tab from the server and
+  // the login card is not held hostage by a beforeunload prompt.
+  discardDirty();
   showGate('login');
 }
 
 // ── Tab routing ────────────────────────────────────────────────
 
+async function ensureTabModule(tab) {
+  if (tab.impl) return tab.impl;
+  if (typeof tab.load !== 'function') { tab.impl = tab; return tab; }
+  if (!tab._loading) {
+    tab._loading = tab.load().then((impl) => { tab.impl = impl; return impl; })
+      .finally(() => { tab._loading = null; });
+  }
+  return tab._loading;
+}
+
 function switchTab(id, force = false) {
   if (!_tabs.has(id)) id = 'datasets';
   if (!force && id === _activeTab) { closeMobileSidebar(); return; }
 
-  // Guard: leaving ANY tab with unsaved changes (datasets CRUD, or the Pages
-  // editor). isDirty()/setUnsaved is a single shared flag, so the guard fires
-  // for whichever tab last marked itself dirty.
-  if (!force && _activeTab !== id && isDirty()) {
+  // Guard: leaving a tab that holds unsaved edits (each editing tab registers its
+  // own guard on the bus, so the question is about the tab being left).
+  if (!force && _activeTab !== null && _activeTab !== id && isDirty(_activeTab)) {
     const ok = confirm(t('admin.confirmDiscard', 'Modifications non sauvegardées. Continuer sans sauvegarder ?'));
     if (!ok) return;
     // Answering yes THROWS the edits away — asking again on the next tab click
     // would mean the answer was never honoured.
-    discardDirty();
+    discardDirty(_activeTab);
   }
 
   _activeTab = id;
@@ -297,8 +336,16 @@ function switchTab(id, force = false) {
   }
 
   if (tab) {
-    if (!tab.mounted) { try { tab.mount?.(); } catch (e) { console.error(e); } tab.mounted = true; }
-    try { tab.activate?.(); } catch (e) { console.error(e); }
+    ensureTabModule(tab).then((impl) => {
+      // The operator may have moved on while the module was downloading.
+      if (_activeTab !== id) return;
+      if (!tab.mounted) { try { impl.mount?.(); } catch (e) { console.error(e); } tab.mounted = true; }
+      try { impl.activate?.(); } catch (e) { console.error(e); }
+      refreshIcons();
+    }).catch((e) => {
+      console.error('Admin tab failed to load:', id, e);
+      toast(t('admin.tabLoadFailed', "Impossible de charger cet onglet. Rechargez la page."), 'error');
+    });
   }
   closeMobileSidebar();
   refreshIcons();
@@ -387,18 +434,19 @@ function closeExitOverlay() {
 
 /** Logout must not orphan a transfer — the session it authenticates is its own. */
 function guardedLogout() {
+  if (isDirty() && !confirm(t('admin.confirmDiscard', 'Modifications non sauvegardées. Continuer sans sauvegarder ?'))) return;
   if (!Upload.hasUnfinishedWork()) { doLogout(); return; }
   openExitOverlay(() => doLogout());
 }
 
 // ── Sidebar collapse + mobile drawer ───────────────────────────
 
-function loadCollapsed() { return localStorage.getItem('adm-sidebar-collapsed') === '1'; }
+function loadCollapsed() { return storageGet('adm-sidebar-collapsed') === '1'; }
 function applyCollapsed(on) {
   el('adm-sidebar').classList.toggle('collapsed', on);
   const ic = el('collapse-icon');
   if (ic) { ic.setAttribute('data-lucide', on ? 'panel-left-open' : 'panel-left-close'); refreshIcons(); }
-  localStorage.setItem('adm-sidebar-collapsed', on ? '1' : '0');
+  storageSet('adm-sidebar-collapsed', on ? '1' : '0');
 }
 function toggleCollapsed() { applyCollapsed(!el('adm-sidebar').classList.contains('collapsed')); }
 
@@ -413,12 +461,12 @@ function closeMobileSidebar() {
 
 // ── Theme ──────────────────────────────────────────────────────
 
-function loadTheme() { return localStorage.getItem('adm-theme') || 'dark'; }
+function loadTheme() { return storageGet('adm-theme') || 'dark'; }
 function applyTheme(mode) {
   document.documentElement.setAttribute('data-theme', mode);
   const ic = el('theme-icon');
   if (ic) { ic.setAttribute('data-lucide', mode === 'light' ? 'sun' : 'moon'); refreshIcons(); }
-  localStorage.setItem('adm-theme', mode);
+  storageSet('adm-theme', mode);
 }
 function toggleTheme() { applyTheme(loadTheme() === 'light' ? 'dark' : 'light'); }
 
@@ -431,7 +479,8 @@ async function switchLanguage(lang) {
   el('lang-dropdown')?.classList.remove('open');
   // Refresh the active tab's JS-built (inline-t) content.
   const tab = _tabs.get(_activeTab);
-  try { (tab?.relabel || tab?.activate)?.(); } catch (_) {}
+  const impl = tab?.impl || (typeof tab?.load === 'function' ? null : tab);
+  try { (impl?.relabel || impl?.activate)?.call(impl); } catch (_) {}
   // Topbar title key may need re-translation.
   const titleEl = el('topbar-tab-title');
   if (titleEl && tab) titleEl.textContent = t(tab.titleKey, tab.titleDefault);
@@ -480,15 +529,31 @@ export async function boot() {
   // global-lexical binding from the classic instance-config.js loaded before
   // this module (same access path as I18n/Utils).
   if (typeof InstanceConfig !== 'undefined') { try { await InstanceConfig.load(); } catch (_) {} }
+  // The auth probe does not depend on the translations: start it now.
+  const authProbe = apiFetch(`${API_AUTH}?action=status`);
   if (I18n?.init) { try { await I18n.init(); } catch (_) {} }
   if (typeof InstanceConfig !== 'undefined') {
     try { InstanceConfig.applyHead(); InstanceConfig.applyDom(); } catch (_) {}
   }
-  setUnauthorizedHandler(() => { if (_appReady) showGate('login'); });
+  setUnauthorizedHandler(() => {
+    if (!_appReady) return;
+    // A background request (autosave retry, upload probe) answering 401 while the
+    // operator is already at the login card must not re-show it: that steals the
+    // focus back to the username field in the middle of typing the password.
+    if (el('login-screen')?.style.display === 'flex') return;
+    showGate('login');
+    // The working tabs stay mounted behind the gate: signing in again resumes
+    // them with their unsaved edits.
+    const msg = el('login-error-msg'), box = el('login-error');
+    if (msg && box && isDirty()) {
+      msg.textContent = t('admin.sessionExpiredKept', 'Session expirée — vos modifications non enregistrées sont conservées. Reconnectez-vous pour continuer.');
+      box.style.display = 'flex';
+    }
+  });
   setNavigator(switchTab);
   applyTheme(loadTheme());
   applyCollapsed(loadCollapsed());
   bindChrome();
   refreshIcons();
-  await checkAuth();
+  await checkAuth(await authProbe);
 }

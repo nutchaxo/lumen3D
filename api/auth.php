@@ -13,6 +13,10 @@
  *   POST ?action=logout           → {ok}
  *   POST ?action=setup            {username,password} → {ok, username, csrf} (only if no credential)
  *   POST ?action=change_password  {current,new} → {ok} (auth + CSRF + current pw)
+ *
+ * Login throttling, the client address behind a declared proxy, the session rules
+ * (strict ids, absolute 8 h expiry, sign-out of other sessions on a password change)
+ * and the same-origin check for the token-less login/logout live in _admin_lib.php.
  */
 
 declare(strict_types=1);
@@ -22,75 +26,81 @@ admin_update_finish_pending();   // no-op unless a prior update parked busy file
 header('X-Content-Type-Options: nosniff');
 admin_session_start();
 
-// ── Brute-force lockout (per CLIENT IP, file-based; mirrors the Python budget) ──
-// The counter used to be a single per-installation file, which made it a denial-of-
-// service lever rather than a defence: ten failed attempts from anyone locked the
-// operator (and `action=setup`) out for 15 minutes, indefinitely renewable. Keying
-// it on the client address confines a lockout to the address that earned it — the
-// same shape as dev_server.py's per-IP budget.
-$LOCKOUT_FILE = sys_get_temp_dir() . '/iribhm_admin_lockout_'
-              . md5(__DIR__ . '|' . ($_SERVER['REMOTE_ADDR'] ?? 'unknown')) . '.json';
-$MAX_ATTEMPTS = 10;
-$LOCKOUT_SECS = 900;
-function bf_load(): array { global $LOCKOUT_FILE; $raw = @file_get_contents($LOCKOUT_FILE); $d = $raw !== false ? json_decode($raw, true) : null; return is_array($d) ? $d : ['attempts' => 0, 'until' => 0]; }
-function bf_locked(): bool { $l = bf_load(); return ($l['until'] ?? 0) > time(); }
-function bf_fail(): void { global $LOCKOUT_FILE, $MAX_ATTEMPTS, $LOCKOUT_SECS; $l = bf_load(); $l['attempts'] = ($l['attempts'] ?? 0) + 1; if ($l['attempts'] >= $MAX_ATTEMPTS) { $l['until'] = time() + $LOCKOUT_SECS; $l['attempts'] = 0; } @file_put_contents($LOCKOUT_FILE, json_encode($l)); }
-function bf_clear(): void { global $LOCKOUT_FILE; @file_put_contents($LOCKOUT_FILE, json_encode(['attempts' => 0, 'until' => 0])); }
-
-$action = $_GET['action'] ?? '';
+$action = lumen_str($_GET['action'] ?? null) ?? '';
 $method = $_SERVER['REQUEST_METHOD'] ?? 'GET';
-$body   = $method === 'POST' ? (json_decode(file_get_contents('php://input'), true) ?: []) : [];
+$body   = $method === 'POST' ? (lumen_request_json() ?? []) : [];
 
 switch ($action) {
 
     case 'status':
         admin_json_out([
             'authenticated' => admin_is_auth(),
-            'username'      => $_SESSION['admin_user'] ?? null,
+            'username'      => admin_is_auth() ? ($_SESSION['admin_user'] ?? null) : null,
             'csrf'          => admin_is_auth() ? admin_csrf() : null,
             'needsSetup'    => !admin_credential_exists(),
         ]);
 
-    case 'login':
+    case 'login': {
         // POST-only: a credential must never travel in a URL (proxy/access logs,
-        // Referer), and a GET could otherwise burn lockout budget with no body.
+        // Referer). JSON + same origin: another site must not be able to sign this
+        // browser into an account of its choosing (login CSRF).
         if ($method !== 'POST') admin_json_out(['error' => 'Method not allowed (use POST)'], 405);
-        if (bf_locked()) admin_json_out(['error' => 'Trop de tentatives. Réessayez plus tard.'], 429);
-        $u = trim($body['username'] ?? '');
-        $p = $body['password'] ?? '';
-        if (!admin_check_credentials($u, $p)) { bf_fail(); admin_json_out(['error' => 'Identifiants incorrects.'], 401); }
-        bf_clear();
-        session_regenerate_id(true);
-        $_SESSION['admin_authenticated'] = true;
-        $_SESSION['admin_user'] = $u;
+        if (!admin_same_origin_json()) admin_json_out(['error' => 'cross_origin_refused'], 403);
+        $u = lumen_str($body['username'] ?? null);
+        $p = lumen_str($body['password'] ?? null);
+        if ($u === null || $p === null) admin_json_out(['error' => 'bad_request'], 400);
+        $u = trim($u);
+        // The attempt is counted BEFORE the hash runs (see admin_bf_reserve).
+        admin_bf_gate();
+        [$ok, $why] = admin_login_verify($u, $p);
+        if (!$ok) {
+            if ($why === 'credential_upgrade_failed') admin_json_out(['error' => $why], 500);
+            admin_json_out(['error' => 'Identifiants incorrects.'], 401);
+        }
+        admin_bf_success();
+        admin_session_login($u);
         admin_json_out(['ok' => true, 'username' => $u, 'csrf' => admin_csrf()]);
+    }
 
     case 'logout':
+        if ($method !== 'POST') admin_json_out(['error' => 'Method not allowed (use POST)'], 405);
+        if (!admin_same_origin_json()) admin_json_out(['error' => 'cross_origin_refused'], 403);
         $_SESSION = [];
         session_destroy();
         admin_json_out(['ok' => true]);
 
     case 'setup':
         if ($method !== 'POST') admin_json_out(['error' => 'Method not allowed (use POST)'], 405);
-        if (bf_locked()) admin_json_out(['error' => 'Trop de tentatives. Réessayez plus tard.'], 429);
-        $u = $body['username'] ?? 'admin';
-        $p = $body['password'] ?? '';
+        $u = lumen_str($body['username'] ?? 'admin');
+        $p = lumen_str($body['password'] ?? '');
+        if ($u === null || $p === null) admin_json_out(['error' => 'bad_request'], 400);
+        admin_bf_gate();
         [$ok, $code, $payload] = admin_setup_credential($u, $p);
         if ($ok) {
-            session_regenerate_id(true);
-            $_SESSION['admin_authenticated'] = true;
-            $_SESSION['admin_user'] = $payload['username'];
+            admin_bf_success();
+            admin_session_login($payload['username']);
             $payload['csrf'] = admin_csrf();
             admin_json_out($payload);
         }
-        bf_fail();
         admin_json_out($payload, $code);
 
-    case 'change_password':
+    case 'change_password': {
         if (!admin_is_auth()) admin_json_out(['error' => 'Not authenticated'], 401);
         admin_require_write();
-        [$ok, $code, $payload] = admin_change_credential($body['current'] ?? '', $body['new'] ?? '');
+        $cur = lumen_str($body['current'] ?? null);
+        $new = lumen_str($body['new'] ?? null);
+        if ($cur === null || $new === null) admin_json_out(['error' => 'bad_request'], 400);
+        admin_bf_gate();
+        [$ok, $code, $payload] = admin_change_credential($cur, $new);
+        if ($code !== 401) admin_bf_success();       // only a wrong current password counts
+        if ($ok) {
+            // The new credential stamp signs every other session out; this one is
+            // re-issued under a fresh id and the new stamp.
+            admin_session_login((string)($_SESSION['admin_user'] ?? (admin_credential()['username'] ?? 'admin')), false);
+            $payload['csrf'] = admin_csrf();
+        }
         admin_json_out($payload, $code);
+    }
 
     default:
         admin_json_out(['error' => 'Unknown action.'], 400);

@@ -9,8 +9,10 @@
  * Endpoint:
  *   GET /api/languages.php   → { "languages": [ "en", "fr", "es", ... ] }
  *
- * Side effect: rewrites lang/manifest.json (best-effort) so static deploys keep
- * a fresh fallback with no manual build step. 'en' is always first (fallback).
+ * Side effect: refreshes lang/manifest.json (best-effort, atomically, and only
+ * when its content would change — a public GET must not rewrite a file on every
+ * visit) so static deploys keep a fresh fallback with no manual build step.
+ * 'en' is always first (fallback).
  */
 
 declare(strict_types=1);
@@ -39,10 +41,12 @@ function discover_languages(): array {
 
 function write_manifest(array $codes): void {
     global $LANG_DIR;
-    @file_put_contents(
-        $LANG_DIR . DIRECTORY_SEPARATOR . 'manifest.json',
-        json_encode(['languages' => $codes], JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE)
-    );
+    $path = $LANG_DIR . DIRECTORY_SEPARATOR . 'manifest.json';
+    $json = json_encode(['languages' => $codes], JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE);
+    if ($json === false || (is_file($path) && @file_get_contents($path) === $json)) return;
+    $tmp = $LANG_DIR . DIRECTORY_SEPARATOR . '.manifest-' . bin2hex(random_bytes(6));
+    if (@file_put_contents($tmp, $json) === false) { @unlink($tmp); return; }
+    if (!@rename($tmp, $path)) @unlink($tmp);
 }
 
 $codes = discover_languages();

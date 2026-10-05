@@ -44,7 +44,7 @@ const PageEditFrame = (() => {
   let _editLoc = 'en';
   let _host = null, _empty = null, _ind = null;
 
-  function _post(msg) { try { window.parent.postMessage(msg, '*'); } catch (_) {} }
+  function _post(msg) { try { window.parent.postMessage(msg, window.location.origin); } catch (_) {} }
   function _t(sel) { return sel && typeof sel === 'object' ? { si: sel.si, ci: sel.ci ?? null, wi: sel.wi ?? null } : null; }
   function _select(sel) { _post({ type: 'LUMEN_EDIT_SELECT', sel: _t(sel) }); }
   function _action(action, sel, arg) { _post({ type: 'LUMEN_EDIT_ACTION', action, sel: _t(sel), arg }); }
@@ -480,7 +480,7 @@ const PageEditFrame = (() => {
 
   // ── parent messages ─────────────────────────────────────────────
   function _onMessage(e) {
-    if (e.source !== window.parent) return;
+    if (e.source !== window.parent || e.origin !== window.location.origin) return;
     const m = e.data;
     if (!m || typeof m !== 'object') return;
     switch (m.type) {

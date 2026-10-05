@@ -15,6 +15,7 @@ PluginRegistry.implement('split-view', {
   _targetId: null,
   _link: true,
   _suppress: false,
+  _raf: 0,
   _unsubs: [],
 
   _t(key, params) { return this._ctx.i18n.t(key, params); },
@@ -55,6 +56,7 @@ PluginRegistry.implement('split-view', {
   dispose() {
     this._close();
     this._unsubs.forEach(fn => fn());
+    cancelAnimationFrame(this._raf);
     window.removeEventListener('message', this._onMessage);
     this._ui?.section.remove();
   },
@@ -108,17 +110,33 @@ PluginRegistry.implement('split-view', {
   },
 
   // ── Linked view ───────────────────────────────────────────────────────────
+  // A forced push (the pane just announced itself, "fit both") goes out at once; a
+  // follow-the-pointer push is coalesced to one per animation frame.
   _pushView(force) {
     if (!this._frame || this._suppress || (!this._link && !force)) return;
-    this._frame.contentWindow?.postMessage({ type: 'WM_SET_PHYSICAL_VIEW', view: this._ctx.viewer.getPhysicalView() }, Utils.trustedTargetOrigin());
+    if (force) { cancelAnimationFrame(this._raf); this._raf = 0; this._postView(); return; }
+    if (this._raf) return;
+    this._raf = requestAnimationFrame(() => { this._raf = 0; this._postView(); });
+  },
+
+  _postView() {
+    // An uncalibrated photograph has no physical view to give.
+    const view = this._ctx.viewer.getPhysicalView();
+    if (!view || !this._frame) return;
+    this._frame.contentWindow?.postMessage({ type: 'WM_SET_PHYSICAL_VIEW', view }, Utils.trustedTargetOrigin());
   },
 
   _handleMessage(e) {
     if (!Utils.isTrustedMessageOrigin(e) || !this._frame || e.source !== this._frame.contentWindow) return;
-    if (e.data?.type !== 'WM_PHYSICAL_VIEW' || !this._link) return;
+    const type = e.data?.type;
+    // The pane registers its listener only after its own boot, which is long after the
+    // iframe's load event: the first push must wait for it to say it is mounted, and
+    // so must the one after a different photograph is put in the pane.
+    if (type === 'PANEL_READY' || type === 'PANEL_DATASET') { this._pushView(true); return; }
+    if (type !== 'WM_PHYSICAL_VIEW' || !this._link || !e.data.view) return;
     this._suppress = true;
-    this._ctx.viewer.setPhysicalView(e.data.view);
-    this._suppress = false;
+    try { this._ctx.viewer.setPhysicalView(e.data.view); }
+    finally { this._suppress = false; }
   },
 
   // ── Panel ─────────────────────────────────────────────────────────────────

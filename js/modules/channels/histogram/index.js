@@ -267,6 +267,12 @@ PluginRegistry.implement('histogram', {
     }
 
     const totalPixels = hist.total || hist.counts.reduce((sum, val) => sum + val, 0);
+    // An empty channel (every brick dropped as empty space) has nothing to plot;
+    // dividing by its zero total would put NaN in the SVG.
+    if (!(totalPixels > 0) || hist.counts.length < 2) {
+      node.innerHTML = '';
+      return;
+    }
     const clipped = this._clipHistogramForDisplay(hist.counts);
     
     let displayCounts = [...clipped];

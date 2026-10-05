@@ -44,12 +44,22 @@ const ExportManager = (() => {
     _loadExplorer('');  // populate the file explorer at the download/ root
     _modal.classList.add('active');
     document.body.classList.add('modal-open');
+    document.addEventListener('keydown', _onModalKeydown, true);
   }
 
   function close() {
     if (!_modal) return;
     _modal.classList.remove('active');
     document.body.classList.remove('modal-open');
+    document.removeEventListener('keydown', _onModalKeydown, true);
+  }
+
+  function _onModalKeydown(e) {
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      e.stopPropagation();
+      close();
+    }
   }
 
   async function exportCanvas(options = {}) {
@@ -70,6 +80,8 @@ const ExportManager = (() => {
     const mime = options.mime || 'image/png';
     const extension = mime === 'image/webp' ? 'webp' : 'png';
     const name = _safeName(_ctx.dataset?.name || _ctx.dataset?.id || 'figure');
+    // A WebGL canvas without a kept drawing buffer is read in the task that renders it.
+    _ctx.renderNow?.();
     const blob = await new Promise(resolve => canvas.toBlob(resolve, mime, options.quality || 0.95));
     if (!blob) return;
     _downloadBlob(blob, `${name}_figure.${extension}`);
@@ -98,7 +110,7 @@ const ExportManager = (() => {
 
   function exportWorkspace(scope = _ctx.scope || 'viewer') {
     const payload = {
-      version: 1,
+      version: (typeof WorkspaceState !== 'undefined' && WorkspaceState.VERSION) || 2,
       scope,
       datasetId: _ctx.dataset?.id,
       exportedAt: new Date().toISOString(),
@@ -110,7 +122,15 @@ const ExportManager = (() => {
   }
 
   function saveWorkspace(scope = _ctx.scope || 'viewer') {
-    const payload = WorkspaceState.save(_ctx.dataset?.id, scope, _ctx.getWorkspaceState?.() || {});
+    let payload;
+    try {
+      payload = WorkspaceState.save(_ctx.dataset?.id, scope, _ctx.getWorkspaceState?.() || {});
+    } catch (err) {
+      // Quota exceeded or site data blocked: say so instead of leaving the click silent.
+      console.warn('[ExportManager] Workspace could not be saved:', err);
+      _toast(_t('toast.workspaceSaveFailed', 'Workspace could not be saved (browser storage is full or blocked). Use "Export workspace" instead.'));
+      return null;
+    }
     _toast(_t('toast.workspaceSaved', 'Workspace saved'));
     return payload;
   }
@@ -248,7 +268,7 @@ const ExportManager = (() => {
 
   function _quickAction(action, icon, label, enabled, disabledTitle) {
     const disabled = enabled ? '' : `disabled title="${Utils.escapeHtml(disabledTitle)}"`;
-    return `<button class="btn btn-outline btn-sm" data-export-action="${action}" ${disabled}><i data-lucide="${icon}"></i> ${label}</button>`;
+    return `<button class="btn btn-outline btn-sm" data-export-action="${Utils.escapeHtml(action)}" ${disabled}><i data-lucide="${Utils.escapeHtml(icon)}"></i> ${Utils.escapeHtml(label)}</button>`;
   }
 
   function _safeList(getter) {
@@ -374,7 +394,7 @@ const ExportManager = (() => {
     return _FILE_TYPES[String(ext || '').toLowerCase()]?.[1] || 'default';
   }
 
-  // ── Generated exports (measurements / metadata / annotations) ──────────────
+  // ── Generated exports (measurements / metadata) ──────────────
 
   function exportMeasures(format = 'csv') {
     const items = _safeList(_ctx.getMeasurements);
@@ -412,17 +432,6 @@ const ExportManager = (() => {
     _downloadBlob(new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' }), `${name}_metadata.json`);
   }
 
-  function exportAnnotations() {
-    const items = _safeList(_ctx.getAnnotations);
-    if (!items.length) {
-      _toast(_t('download.noAnnotations', 'No annotations to export'));
-      return;
-    }
-    const name = _safeName(_ctx.dataset?.name || _ctx.dataset?.id || 'annotations');
-    const json = JSON.stringify({ version: 1, annotations: items }, null, 2);
-    _downloadBlob(new Blob([json], { type: 'application/json' }), `${name}_annotations.json`);
-  }
-
   function _plotlyCsv(graph) {
     const traces = graph.data || graph._fullData || [];
     const rows = [['trace', 'x', 'y']];
@@ -434,7 +443,16 @@ const ExportManager = (() => {
         rows.push([name, xs[i] ?? '', ys[i] ?? '']);
       }
     });
-    return rows.map(row => row.map(value => `"${String(value).replace(/"/g, '""')}"`).join(',')).join('\n');
+    return rows.map(row => row.map(_csvCell).join(',')).join('\n');
+  }
+
+  // A cell that starts with = + - @ (or a tab/CR) is evaluated as a formula by Excel and
+  // LibreOffice; a leading apostrophe makes it plain text. Numbers are left alone so a
+  // negative coordinate stays a number.
+  function _csvCell(value) {
+    let text = String(value);
+    if (typeof value !== 'number' && /^[=+\-@\t\r]/.test(text)) text = "'" + text;
+    return `"${text.replace(/"/g, '""')}"`;
   }
 
   function _downloadBlob(blob, filename) {
@@ -484,13 +502,16 @@ const ExportManager = (() => {
   function _citationBlock() {
     const dataset = _ctx.dataset;
     if (!dataset) return null;
+    let brand = '';
+    try { brand = (typeof InstanceConfig !== 'undefined' && InstanceConfig.tokens().product) || ''; } catch (_) { /* no instance config on this page */ }
+    if (!brand) brand = 'Lumen3D';
     const parts = [
       dataset.name || dataset.id || 'Untitled dataset',
       dataset.stage ? `stage ${dataset.stage}` : null,
       dataset.date || null,
-      'IRIBHM Microscopy Platform'
+      brand
     ].filter(Boolean);
-    return `${parts.join(', ')}. Cite the IRIBHM Microscopy Platform, the dataset workspace export, and the original experiment or publication when available. Workspace export generated ${new Date().toISOString()}.`;
+    return `${parts.join(', ')}. Cite ${brand}, the dataset workspace export, and the original experiment or publication when available. Workspace export generated ${new Date().toISOString()}.`;
   }
 
   function _datasetIntro(dataset) {
@@ -520,6 +541,7 @@ const ExportManager = (() => {
     return v;
   }
 
+  let _toastTimer = null;
   function _toast(text) {
     let node = document.querySelector('.app-toast');
     if (!node) {
@@ -529,7 +551,9 @@ const ExportManager = (() => {
     }
     node.textContent = text;
     node.classList.add('visible');
-    setTimeout(() => node.classList.remove('visible'), 1800);
+    // One node serves every message: an earlier call's timer must not hide the newest text.
+    if (_toastTimer) clearTimeout(_toastTimer);
+    _toastTimer = setTimeout(() => { _toastTimer = null; node.classList.remove('visible'); }, 1800);
   }
 
   return {
@@ -541,7 +565,6 @@ const ExportManager = (() => {
     exportWorkspace,
     exportMeasures,
     exportMetadata,
-    exportAnnotations,
     downloadBlob: _downloadBlob,
     toast: _toast,
     saveWorkspace,

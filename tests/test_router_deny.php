@@ -32,7 +32,9 @@ function router_denied(string $path): bool {
     return (bool)(preg_match('#^/api/.*\.json$#i', $path)
         || preg_match('#^/api/_[A-Za-z0-9_]+\.php$#i', $path)
         || preg_match('#^/api/config\.php$#i', $path)
-        || preg_match('#^/(secrets|logs|backups|\.git)(/|$)#i', $path));
+        || preg_match('#^/(secrets|logs|backups|uploads|\.git)(/|$)#i', $path)
+        || preg_match('#/\.(?!well-known(/|$))#', $path)
+        || preg_match('#\.lumen-(old|new|backup)$#i', $path));
 }
 
 $fails = 0;
@@ -64,6 +66,13 @@ check('//secrets/marketplace-signing-seed.hex', true, 'seed + double slash');
 check('/logs/dev-server.log',              true,  'logs');
 check('/.git/config',                      true,  'VCS metadata');
 check('/api/admin_credential.json?x=1',    true,  'query string stripped, not matched');
+check('/api/.sessions/sess_abc',           true,  'private session store');
+check('/api/.bruteforce/state.json',       true,  'lockout store');
+check('/.update-staging-1a2b/x/api/auth.php', true, 'updater staging tree');
+check('/.htaccess.lumen-backup',           true,  'previous .htaccess kept by the updater');
+check('/api/_admin_lib.php.lumen-old',     true,  'parked old PHP source');
+check('/js/modules/tools/x/.htaccess',     true,  'dotfile anywhere');
+check('/uploads/staging/3d/x/metadata.json', true, 'import staging');
 
 // Must still be served — the real API routes and ordinary assets.
 check('/api/auth.php',                     false, 'auth route');
@@ -75,6 +84,7 @@ check('/js/core/utils.js',                 false, 'asset');
 check('/DATA_WEB/3d/x/metadata.json',   false, 'dataset metadata is public');
 check('/config/pages/home.json',           false, 'published page doc is public');
 check('/apiclient.js',                     false, 'not under api/ despite the prefix');
+check('/.well-known/acme-challenge/tok',   false, 'certificate challenge stays reachable');
 
 if ($fails > 0) { printf("\n%d failure(s)\n", $fails); exit(1); }
 echo "\nAll router deny-list checks passed.\n";

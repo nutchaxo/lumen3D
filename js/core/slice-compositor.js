@@ -32,7 +32,8 @@
 
    GPU path: its own small WebGL2 canvas and program (compare.html
    does not load three.js), the raw uploaded once as an RGBA8 texture
-   cached per raw buffer (a coverage mask as an R8 texture cached per
+   cached per raw buffer, or per caller slot — a refresh of the same
+   size rewrites the slot's texture in place (a coverage mask as an R8 texture cached per
    mask buffer: every native refresh of one Studio frame shares the
    preview's), one draw per compose, drawImage into the 2D
    canvas the caller keeps — no readback. CPU path (no WebGL2, a slice
@@ -284,10 +285,19 @@ const SliceCompositor = (() => {
     return canvas;
   }
 
+  // One ImageData per caller canvas, reused while the size holds: a slider drag on the
+  // CPU path recolours the same picture every frame, and a fresh w·h·4 buffer per frame
+  // (120 MB for a 30 Mpx slice) is pure garbage.
+  const _cpuImages = new WeakMap();
+
   function _composeCpu(raw, channelState, options, target) {
     const canvas = _prepareTarget(target, raw.width, raw.height);
     const ctx = canvas.getContext('2d');
-    const img = ctx.createImageData(raw.width, raw.height);
+    let img = _cpuImages.get(canvas);
+    if (!img || img.width !== raw.width || img.height !== raw.height) {
+      img = ctx.createImageData(raw.width, raw.height);
+      _cpuImages.set(canvas, img);
+    }
     composePixels(raw, channelState, { ...options, out: img.data });
     ctx.putImageData(img, 0, 0);
     return canvas;
@@ -439,24 +449,56 @@ const SliceCompositor = (() => {
     if (_gl && !_gl.isContextLost()) _gl.deleteTexture(entry.texture);
   }
 
+  // The buffer a slot's texture was last filled from, held weakly: the slot outlives
+  // the raws that pass through it, and must not keep a 100 MB refresh alive.
+  function _weak(value) {
+    return typeof WeakRef === 'function' && value && typeof value === 'object' ? new WeakRef(value) : value;
+  }
+
+  function _sourceOf(entry) {
+    const s = entry?.source;
+    return s && typeof WeakRef === 'function' && s instanceof WeakRef ? s.deref() : s;
+  }
+
+  function _setUnpackState(gl) {
+    gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
+    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+    gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
+    gl.pixelStorei(gl.UNPACK_COLORSPACE_CONVERSION_WEBGL, gl.NONE);
+  }
+
   /**
-   * The texture cached under `key` (a raw.data or a coverage mask buffer), uploaded
-   * from `data` — w × h texels of `texelBytes` bytes as `internalFormat` / `format`
-   * UNSIGNED_BYTE — when it is not cached at that size. Older textures of the same
-   * kind (a raw: 4 bytes a texel, a mask: 1) are evicted to stay within that kind's
-   * budget, never `keep` (the other texture of the same compose).
+   * The texture cached under `key`, holding the bytes of `source` (`version` tells a
+   * buffer refilled in place from its previous contents) — w × h texels of
+   * `texelBytes` bytes as `internalFormat` / `format` UNSIGNED_BYTE. `key` is the
+   * buffer itself, or a caller's slot (options.slot): a slot that receives another
+   * buffer of the same size — a progressive refresh of one picture — is rewritten
+   * with texSubImage2D into the texture it already has, no reallocation. Older
+   * textures of the same kind (a raw: 4 bytes a texel, a mask: 1) are evicted to stay
+   * within that kind's budget, never `keep` (the other texture of the same compose).
    * → the cache entry, or null when the upload failed.
    */
-  function _cachedTexture(gl, key, w, h, texelBytes, internalFormat, format, keep = null) {
+  function _cachedTexture(gl, key, source, version, w, h, texelBytes, internalFormat, format, keep = null) {
+    const bytes = w * h * texelBytes;
     const hit = _textures.get(key);
     if (hit && hit.w === w && hit.h === h) {
       // Most recently used last.
       _textures.delete(key);
       _textures.set(key, hit);
+      if (_sourceOf(hit) === source && hit.version === version) return hit;
+      gl.bindTexture(gl.TEXTURE_2D, hit.texture);
+      _setUnpackState(gl);
+      const data = source.length === bytes ? source : source.subarray(0, bytes);
+      gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, w, h, format, gl.UNSIGNED_BYTE, data);
+      if (gl.getError() !== gl.NO_ERROR) {
+        _deleteTexture(key);
+        return null;
+      }
+      hit.source = _weak(source);
+      hit.version = version;
       return hit;
     }
     if (hit) _deleteTexture(key);
-    const bytes = w * h * texelBytes;
     const kind = texelBytes === 1 ? 'mask' : 'raw';
     const budget = kind === 'mask' ? MASK_BUDGET_BYTES : TEXTURE_BUDGET_BYTES;
     let held = 0;
@@ -471,34 +513,67 @@ const SliceCompositor = (() => {
     }
     const texture = gl.createTexture();
     gl.bindTexture(gl.TEXTURE_2D, texture);
-    gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
-    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
-    gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
-    gl.pixelStorei(gl.UNPACK_COLORSPACE_CONVERSION_WEBGL, gl.NONE);
+    _setUnpackState(gl);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-    const data = key.length === bytes ? key : key.subarray(0, bytes);
+    const data = source.length === bytes ? source : source.subarray(0, bytes);
     gl.texImage2D(gl.TEXTURE_2D, 0, internalFormat, w, h, 0, format, gl.UNSIGNED_BYTE, data);
     if (gl.getError() !== gl.NO_ERROR) {
       gl.deleteTexture(texture);
       return null;
     }
-    const entry = { texture, bytes, w, h, kind, mask: null };
+    const entry = { texture, bytes, w, h, kind, mask: null, source: key === source ? source : _weak(source), version };
     _textures.set(key, entry);
     _textureBytes += bytes;
     return entry;
   }
 
-  /** The raw's RGBA8 texture (channels 0..3), cached per raw.data. */
-  function _textureFor(gl, raw, keep = null) {
-    return _cachedTexture(gl, raw.data, raw.width, raw.height, 4, gl.RGBA8, gl.RGBA, keep);
+  /** The raw's RGBA8 texture (channels 0..3), cached per raw.data or per `slot`. */
+  function _textureFor(gl, raw, keep = null, slot = null) {
+    return _cachedTexture(gl, slot || raw.data, raw.data, raw.version, raw.width, raw.height, 4, gl.RGBA8, gl.RGBA, keep);
   }
 
   /** A coverage mask's R8 texture, cached per mask buffer (shared by every raw of one frame). */
   function _maskTextureFor(gl, mask, w, h, keep = null) {
-    return _cachedTexture(gl, mask, w, h, 1, gl.R8, gl.RED, keep);
+    return _cachedTexture(gl, mask, mask, undefined, w, h, 1, gl.R8, gl.RED, keep);
+  }
+
+  /**
+   * The compositor canvas made at least w × h. Its drawing buffer only grows (a
+   * Compare figure's cells of different crops reuse one buffer instead of
+   * reallocating it per cell per frame) and is given back after a quiet spell
+   * (_scheduleIdleShrink). false when the browser cannot give a buffer that large.
+   */
+  function _sizeGlCanvas(gl, w, h) {
+    if (_glCanvas.width < w) _glCanvas.width = w;
+    if (_glCanvas.height < h) _glCanvas.height = h;
+    if (gl.drawingBufferWidth === _glCanvas.width && gl.drawingBufferHeight === _glCanvas.height) return true;
+    // The browser gave a smaller drawing buffer than asked (memory, size cap): the
+    // grown size may be what it refused, so ask for exactly this picture's.
+    _glCanvas.width = w;
+    _glCanvas.height = h;
+    return gl.drawingBufferWidth === w && gl.drawingBufferHeight === h;
+  }
+
+  // A native slice can leave a drawing buffer of hundreds of MB behind it; once nothing
+  // has been coloured for a while it goes back to 1 × 1 (the next compose regrows it).
+  const IDLE_SHRINK_MS = 15000;
+  let _shrinkTimer = null;
+
+  function _scheduleIdleShrink() {
+    if (typeof setTimeout !== 'function') return;
+    if (_shrinkTimer !== null && typeof clearTimeout === 'function') clearTimeout(_shrinkTimer);
+    _shrinkTimer = setTimeout(() => {
+      _shrinkTimer = null;
+      if (_glCanvas && (_glCanvas.width > 1 || _glCanvas.height > 1)) {
+        _glCanvas.width = 1;
+        _glCanvas.height = 1;
+      }
+    }, IDLE_SHRINK_MS);
+    // Node (the tests) must not wait for it; a browser timer id is a number.
+    _shrinkTimer?.unref?.();
   }
 
   function _composeGpu(raw, channelState, options, target) {
@@ -507,15 +582,12 @@ const SliceCompositor = (() => {
     const w = raw.width;
     const h = raw.height;
     if (_maxTextureSize && (w > _maxTextureSize || h > _maxTextureSize)) return null;
-    if (_glCanvas.width !== w) _glCanvas.width = w;
-    if (_glCanvas.height !== h) _glCanvas.height = h;
-    // The browser may give a smaller drawing buffer than asked (memory, viewport cap).
-    if (gl.drawingBufferWidth !== w || gl.drawingBufferHeight !== h) return null;
+    if (!_sizeGlCanvas(gl, w, h)) return null;
     const alphaMode = _alphaMode(raw, options);
     const mask = alphaMode === ALPHA_MASK ? _coverageMask(raw, options) : null;
-    const entry = _textureFor(gl, raw, mask);
+    const entry = _textureFor(gl, raw, mask, options?.slot || null);
     if (!entry) return null;
-    const maskEntry = mask ? _maskTextureFor(gl, mask, w, h, raw.data) : null;
+    const maskEntry = mask ? _maskTextureFor(gl, mask, w, h, options?.slot || raw.data) : null;
     if (mask && !maskEntry) return null;
     // release(raw) frees the mask's texture once no cached raw was composed with it.
     entry.mask = mask;
@@ -556,11 +628,15 @@ const SliceCompositor = (() => {
 
     // Read in the same task as the draw: the drawing buffer is still the frame just
     // drawn (no preserveDrawingBuffer needed). Every pixel is opaque or fully
-    // transparent black, so drawing over a cleared canvas copies it exactly.
+    // transparent black, so drawing over a cleared canvas copies it exactly. The
+    // viewport (0, 0, w, h) counts from the bottom-left of a buffer that may be larger
+    // than the picture: in canvas rows (top-down) it is rows H − h … H − 1.
     const canvas = _prepareTarget(target, w, h);
     const ctx = canvas.getContext('2d');
     ctx.clearRect(0, 0, w, h);
-    ctx.drawImage(_glCanvas, 0, 0);
+    if (_glCanvas.width === w && _glCanvas.height === h) ctx.drawImage(_glCanvas, 0, 0);
+    else ctx.drawImage(_glCanvas, 0, _glCanvas.height - h, w, h, 0, 0, w, h);
+    _scheduleIdleShrink();
     return canvas;
   }
 
@@ -572,7 +648,12 @@ const SliceCompositor = (() => {
    * numChannels uniform). `options.projected` / `options.coverage` default to the
    * raw's own flags (VolumeSlicer.renderRawWithMaterial sets them for a slab), and
    * `options.coverageMask` to raw.coverageMask (the viewer adds it to a four-channel
-   * slab; null ignores it). `options.cpu` forces the CPU path. null for a malformed raw.
+   * slab; null ignores it). `options.cpu` forces the CPU path. `options.slot` (any
+   * object the caller keeps, e.g. one per picture) caches the GPU texture under the
+   * slot instead of under raw.data: a new raw of the same size in the same slot (a
+   * progressive refresh) is written into the existing texture, not a new one.
+   * `raw.version`, when the caller refills one buffer in place, tells new contents
+   * from the cached ones. null for a malformed raw.
    */
   function compose(raw, channelState, options = {}) {
     if (!isRaw(raw) || typeof document === 'undefined') return null;
@@ -657,7 +738,12 @@ const SliceCompositor = (() => {
    */
   function release(raw = null) {
     if (raw) {
-      if (raw.data) _deleteTexture(raw.data);
+      if (raw.data) {
+        // Its own entry, and a slot whose texture still holds its bytes.
+        for (const [key, entry] of [..._textures]) {
+          if (entry.kind === 'raw' && (key === raw.data || _sourceOf(entry) === raw.data)) _deleteTexture(key);
+        }
+      }
       const mask = raw.coverageMask;
       if (mask && _textures.has(mask)) {
         let shared = false;
@@ -670,6 +756,8 @@ const SliceCompositor = (() => {
     }
     for (const key of [..._textures.keys()]) _deleteTexture(key);
     _textureBytes = 0;
+    if (_shrinkTimer !== null && typeof clearTimeout === 'function') clearTimeout(_shrinkTimer);
+    _shrinkTimer = null;
     if (_glCanvas) {
       _glCanvas.width = 1;
       _glCanvas.height = 1;

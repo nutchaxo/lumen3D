@@ -133,7 +133,8 @@ PluginRegistry.implement('orientation-2d', {
 
   // ── Admin handshake ───────────────────────────────────────────────────────
   _handleMessage(e) {
-    if (!Utils.isTrustedMessageOrigin(e)) return;
+    // The admin page (or a host) that embeds this one; another same-origin frame has no business here.
+    if (!Utils.isTrustedMessageOrigin(e) || e.source !== window.parent) return;
     const type = e.data?.type;
     if (type === 'CALIBRATE_ORIENTATION_START') this._setOpen(true);
     else if (type === 'CALIBRATE_ORIENTATION_STOP') this._setOpen(false);

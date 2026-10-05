@@ -69,6 +69,7 @@ PIPELINE_SCRIPTS = (
     "2-image_processor.py",
     "3-chunk_packer.py",
     "4-catalog_generator.py",
+    "planes_writer.py",
     "5-tracking_importer.py",
     "tracking_sources.py",
     "2d_importer.py",

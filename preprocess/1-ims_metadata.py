@@ -25,6 +25,12 @@ def attr_str(group, key, default=""):
             ).strip()
     return str(v).strip()
 
+# Imaris writes the extent in the unit of DataSetInfo/Image:Unit; everything downstream
+# (voxel sizes, scale bars, tracking registration) is in micrometres.
+UNIT_TO_UM = {"um": 1.0, "µm": 1.0, "μm": 1.0, "micron": 1.0, "microns": 1.0,
+              "micrometer": 1.0, "micrometre": 1.0, "nm": 1e-3, "mm": 1e3, "m": 1e6}
+
+
 def read_ims_metadata(file_path: Path) -> dict:
     with h5py.File(str(file_path), "r") as f:
         info = f.get("DataSetInfo", {}).get("Image", None)
@@ -33,22 +39,36 @@ def read_ims_metadata(file_path: Path) -> dict:
         height = int(attr_str(info, "Y", "1") or 1)
         depth = int(attr_str(info, "Z", "1") or 1)
 
-        def _ext(key, fallback=0.0):
+        # The extent is the only calibration an .ims carries: voxel = (ExtMax - ExtMin) / N.
+        # An attribute that is absent or unreadable must not be replaced by a guess
+        # (0 and 1 used to stand in, giving a voxel of 1/N um labelled "exact"), so a
+        # missing axis leaves the whole calibration undeclared.
+        def _ext(key):
+            raw = attr_str(info, key, "")
             try:
-                return float(attr_str(info, key, str(fallback)))
+                return float(raw) if raw != "" else None
             except ValueError:
-                return fallback
+                return None
 
-        ext_min_x = _ext("ExtMin0")
-        ext_max_x = _ext("ExtMax0", 1.0)
-        ext_min_y = _ext("ExtMin1")
-        ext_max_y = _ext("ExtMax1", 1.0)
-        ext_min_z = _ext("ExtMin2")
-        ext_max_z = _ext("ExtMax2", 1.0)
-
-        vox_x = (ext_max_x - ext_min_x) / max(width, 1)
-        vox_y = (ext_max_y - ext_min_y) / max(height, 1)
-        vox_z = (ext_max_z - ext_min_z) / max(depth, 1)
+        ext_min = [_ext("ExtMin0"), _ext("ExtMin1"), _ext("ExtMin2")]
+        ext_max = [_ext("ExtMax0"), _ext("ExtMax1"), _ext("ExtMax2")]
+        unit_raw = attr_str(info, "Unit", "um") or "um"
+        to_um = UNIT_TO_UM.get(unit_raw.strip().lower())
+        calibrated = to_um is not None and None not in ext_min and None not in ext_max
+        if calibrated:
+            ext_min = [v * to_um for v in ext_min]
+            ext_max = [v * to_um for v in ext_max]
+            vox_x = (ext_max[0] - ext_min[0]) / max(width, 1)
+            vox_y = (ext_max[1] - ext_min[1]) / max(height, 1)
+            vox_z = (ext_max[2] - ext_min[2]) / max(depth, 1)
+        else:
+            if to_um is None:
+                print(f"[METADATA] unite d'extent inconnue {unit_raw!r} : calibration ignoree",
+                      file=sys.stderr)
+            else:
+                print("[METADATA] ExtMin/ExtMax incomplets : calibration non declaree",
+                      file=sys.stderr)
+            vox_x = vox_y = vox_z = 0.0
 
         res0 = f.get("DataSet", {}).get("ResolutionLevel 0", {})
         timepoints = sorted(
@@ -118,11 +138,11 @@ def read_ims_metadata(file_path: Path) -> dict:
             # Microscope stage frame, in the acquisition unit (um). This is the frame
             # Imaris-derived object coordinates (spots, surfaces, cell tracks) live in,
             # so it is what an overlay has to be registered against.
-            "extent": {
-                "unit": attr_str(info, "Unit", "um") or "um",
-                "min": [ext_min_x, ext_min_y, ext_min_z],
-                "max": [ext_max_x, ext_max_y, ext_max_z]
-            },
+            "extent": ({
+                "unit": "um",
+                "min": ext_min,
+                "max": ext_max
+            } if calibrated else None),
             "timestamps": timestamps_iso,
             "time_interval_minutes": interval_minutes,
             "channel_names": channel_names

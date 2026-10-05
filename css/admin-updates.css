@@ -1,0 +1,54 @@
+/* Admin — "Data updates" tab (dataset format migrations). Tokens from admin-shell.css. */
+
+.dupd-card { margin-bottom: 16px; }
+.dupd-grid { margin-bottom: 16px; }
+.dupd-grid .dupd-card { margin-bottom: 0; }
+.dupd-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
+.adm-page-head .dupd-row { margin-top: 0; }
+.dupd-small { font-size: 12px; }
+.dupd-n { width: 72px; }
+.dupd-row select.adm-field-input { flex: 1 1 200px; min-width: 0; }
+.dupd-head-btn { margin-left: auto; }
+
+.dupd-cap { display: flex; gap: 8px; align-items: flex-start; font-size: 13px; margin-bottom: 12px; }
+.dupd-cap i { width: 16px; height: 16px; flex-shrink: 0; margin-top: 1px; }
+.dupd-cap--ok { color: var(--adm-success); }
+.dupd-cap--no { color: var(--adm-text-sec); }
+.dupd-cap--no ul { margin: 4px 0 0 16px; padding: 0; }
+
+.dupd-execs { display: grid; gap: 8px; }
+.dupd-exec { display: flex; gap: 10px; align-items: flex-start; padding: 10px 12px; border: 1px solid var(--adm-border); border-radius: 10px; cursor: pointer; }
+.dupd-exec.is-on { border-color: var(--adm-border-active); background: var(--adm-accent-subtle); }
+.dupd-exec.is-off { opacity: 0.55; cursor: not-allowed; }
+.dupd-exec input { margin-top: 3px; }
+.dupd-exec span { display: flex; flex-direction: column; gap: 2px; }
+.dupd-exec em { font-style: normal; font-size: 12px; color: var(--adm-text-sec); }
+
+.dupd-bench-res { font-size: 12.5px; color: var(--adm-text-sec); font-family: 'JetBrains Mono', monospace; }
+
+.dupd-scroll { overflow-x: auto; }
+.dupd-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.dupd-table th { text-align: left; font-weight: 600; font-size: 11.5px; color: var(--adm-text-sec); padding: 6px 8px; border-bottom: 1px solid var(--adm-border); white-space: nowrap; }
+.dupd-table td { padding: 8px; border-bottom: 1px solid var(--adm-border); vertical-align: top; }
+.dupd-table tfoot td { font-weight: 600; border-bottom: none; }
+.dupd-table .num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.dupd-est { margin-top: 12px; }
+.dupd-name { display: block; font-weight: 600; word-break: break-all; }
+.dupd-problem { display: block; margin-top: 3px; }
+.dupd-actions { white-space: nowrap; text-align: right; }
+
+.dupd-job-title { font-size: 13.5px; margin-bottom: 10px; word-break: break-all; }
+.dupd-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 10px; margin: 12px 0 6px; }
+.dupd-stats dt { font-size: 11px; color: var(--adm-text-muted); text-transform: uppercase; letter-spacing: 0.04em; }
+.dupd-stats dd { margin: 2px 0 0; font-size: 13.5px; font-variant-numeric: tabular-nums; }
+#dupd-progress-body .adm-warn i { width: 14px; height: 14px; vertical-align: -2px; }
+
+.dupd-migs, .dupd-log { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }
+.dupd-migs li { display: flex; gap: 10px; align-items: flex-start; }
+.dupd-migs p { margin: 2px 0 0; }
+.dupd-log li { display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: baseline; font-size: 13px; padding-bottom: 8px; border-bottom: 1px solid var(--adm-border); }
+.dupd-log li:last-child { border-bottom: none; }
+
+@media (max-width: 640px) {
+  .dupd-table th:nth-child(4), .dupd-table td:nth-child(4) { display: none; }
+}

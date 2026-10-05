@@ -48,18 +48,36 @@ const PluginTrust = (() => {
       where the client cannot re-verify and falls back to the server vouch. Returns
       null only on a fetch failure. */
   async function hashPluginFiles(basePath, modPath, relFiles) {
-    const fileHashes = {};
-    const bytes = {};
-    for (const rel of relFiles) {
+    // Every file of a plugin is fetched concurrently (they were fetched one after the
+    // other, which stretched the viewer boot by the sum of the round-trips).
+    //
+    // Cache policy, and why it does not weaken INV-2:
+    //  - Anything the page may EXECUTE (index.js, workers, helpers — i.e. everything that
+    //    is not a .json data file) is read with 'no-store': the bytes hashed are the
+    //    bytes from the origin right now, nothing a cache could have kept.
+    //  - .json files (plugin.json, lang/<code>.json) are never executed; they are only
+    //    folded into the composite hash. They use 'no-cache': the browser must
+    //    revalidate with the origin (If-None-Match / If-Modified-Since) and only a 304
+    //    reuses the stored body, so a file edited on disk is always re-read. The hash is
+    //    still computed over the real bytes. With a Last-Modified-only validator the
+    //    resolution is one second, which is acceptable because these bytes never run.
+    const entries = await Promise.all(relFiles.map(async rel => {
       try {
-        const resp = await fetch(`${basePath}/${modPath}/${rel}`, { cache: 'no-store' });
+        const executable = !/\.json$/i.test(rel);
+        const resp = await fetch(`${basePath}/${modPath}/${rel}`, { cache: executable ? 'no-store' : 'no-cache' });
         if (!resp.ok) return null;
         const b = new Uint8Array(await resp.arrayBuffer());
-        bytes[rel] = b;
-        if (_subtle) fileHashes[rel] = await fileHash(b);
+        return { rel, b, h: _subtle ? await fileHash(b) : null };
       } catch (_) {
         return null;
       }
+    }));
+    const fileHashes = {};
+    const bytes = {};
+    for (const e of entries) {
+      if (!e) return null;
+      bytes[e.rel] = e.b;
+      if (_subtle) fileHashes[e.rel] = e.h;
     }
     return { hash: _subtle ? await pluginHash(fileHashes) : null, fileHashes, bytes };
   }
@@ -95,7 +113,7 @@ const PluginTrust = (() => {
       const h = await hashPluginFiles(basePath, modPath, relFiles);
       if (!h || !h.hash) return { tier: 'untrusted', reason: 'hash-unavailable' };
       const ok = relFiles.every(rel => releaseManifest[prefix + rel] === h.fileHashes[rel]);
-      return ok ? { tier: 'bundled', hash: h.hash, bytes: h.bytes['index.js'], reason: 'manifest match' }
+      return ok ? { tier: 'bundled', hash: h.hash, bytes: h.bytes['index.js'], files: h.bytes, reason: 'manifest match' }
                 : { tier: 'untrusted', reason: 'manifest mismatch' };
     }
 
@@ -111,7 +129,7 @@ const PluginTrust = (() => {
       // so degrade to trusting its vouch (INV-2 relaxed) rather than break the viewer.
       console.warn('[PluginTrust] WebCrypto unavailable (insecure origin) — trusting the server vouch without client re-hash. Serve over HTTPS or http://localhost for full integrity verification.');
       return { tier: vouch.tier, hash: vouch.hash, mode: vouch.mode, caps: vouch.caps,
-               bytes: h.bytes['index.js'], reason: vouch.tier + ' (server-vouched, no client re-hash)' };
+               bytes: h.bytes['index.js'], files: h.bytes, reason: vouch.tier + ' (server-vouched, no client re-hash)' };
     }
 
     // INV-2: the bytes we are about to run must equal what the server classified.
@@ -120,7 +138,7 @@ const PluginTrust = (() => {
                reason: 'content changed since server classification (hash mismatch)' };
     }
     return { tier: vouch.tier, hash: h.hash, mode: vouch.mode, caps: vouch.caps,
-             bytes: h.bytes['index.js'], reason: vouch.tier };
+             bytes: h.bytes['index.js'], files: h.bytes, reason: vouch.tier };
   }
 
   return { SCHEME, fileHash, pluginHash, hashPluginFiles, evaluate,

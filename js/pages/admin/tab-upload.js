@@ -20,8 +20,7 @@
 'use strict';
 
 import { Utils, t, escHtml, refreshIcons, toast, el } from './shared.js';
-import { navigateTo } from './bus.js';
-import { openDataset } from './tab-datasets.js';
+import { navigateTo, openDataset } from './bus.js';
 import * as Upload from './upload-manager.js';
 
 let _host = null;
@@ -108,8 +107,16 @@ function wire() {
   if (!_delegated) { _host.addEventListener('click', onBodyClick); _delegated = true; }
 }
 
-async function begin(entries) {
+async function begin(entries, retry = false) {
   if (_busyScan) return;
+  if (retry) {
+    _busyScan = true; render();
+    const rr = await Upload.retryFailed();
+    _busyScan = false;
+    if (!rr.ok) toast(Upload.getState().error || t('upl.errPlan', 'Le serveur a refusé le plan d\'import.'), 'error');
+    render();
+    return;
+  }
   if (!entries || !entries.length) {
     toast(t('upl.errEmpty', 'Aucun fichier détecté dans ce dépôt.'), 'error');
     return;
@@ -136,11 +143,12 @@ async function onBodyClick(e) {
 
   if (action === 'pause') { Upload.pause(); return; }
   if (action === 'resume') { Upload.resume(); return; }
+  if (action === 'retry') { await begin(null, true); return; }
   if (action === 'cancel') {
     if (confirm(t('upl.confirmCancel', 'Arrêter le transfert ? Les fichiers déjà envoyés sont conservés et le transfert reprendra si vous reglissez le dossier.'))) Upload.cancelAll();
     return;
   }
-  if (action === 'edit') { navigateTo('datasets'); openDataset(`staging:${key}`); return; }
+  if (action === 'edit') { openDataset(`staging:${key}`); return; }
   if (action === 'validate') {
     btn.disabled = true;
     const v = await Upload.validate(key);
@@ -195,6 +203,8 @@ function structureSig(s, staged) {
     s.datasets.map((d) => `${d.key}:${d.state}:${d.fileCount}:${d.error || ''}`).join(','),
     staged.map((d) => `${d.key}:${d.state}`).join(','),
     s.rejected.length,
+    s.failed.length,
+    s.network,
     s.error || '',
   ].join('|');
 }
@@ -301,9 +311,11 @@ function renderGlobal(s) {
           ${working ? `<button type="button" class="adm-btn adm-btn-ghost" data-upl-action="pause"><i data-lucide="pause"></i> ${escHtml(t('upl.pause', 'Pause'))}</button>` : ''}
           ${paused ? `<button type="button" class="adm-btn adm-btn-accent" data-upl-action="resume"><i data-lucide="play"></i> ${escHtml(t('upl.resume', 'Reprendre'))}</button>` : ''}
           ${(working || paused) ? `<button type="button" class="adm-btn adm-btn-ghost" data-upl-action="cancel"><i data-lucide="x"></i> ${escHtml(t('upl.stop', 'Arrêter'))}</button>` : ''}
+          ${Upload.hasFailed() ? `<button type="button" class="adm-btn adm-btn-accent" data-upl-action="retry"><i data-lucide="refresh-cw"></i> ${escHtml(t('upl.retry', 'Réessayer'))}</button>` : ''}
         </div>
       </div>
       <div class="upl-progress"><div class="upl-progress-fill" data-upl-fill style="width:${pct.toFixed(1)}%"></div></div>
+      ${s.network === 'offline' ? `<div class="upl-error"><i data-lucide="wifi-off"></i> ${escHtml(t('upl.offline', 'Connexion perdue — le transfert reprendra tout seul dès que le réseau revient.'))}</div>` : ''}
       ${s.error ? `<div class="upl-error"><i data-lucide="alert-triangle"></i> ${escHtml(s.error)}</div>` : ''}
     </section>`;
 }
@@ -350,7 +362,7 @@ function card(d) {
       ${d.error ? `<div class="upl-card-err"><i data-lucide="alert-triangle"></i> ${escHtml(d.error)}</div>` : ''}
       ${(d.rejected || []).length ? `<details class="upl-card-rejected">
         <summary>${escHtml(t('upl.nRejected', '{n} fichier(s) ignoré(s)', { n: d.rejected.length }))}</summary>
-        <ul>${d.rejected.slice(0, 30).map((r) => `<li><code>${escHtml(r.path)}</code> — ${escHtml(rejectReason(r.reason))}</li>`).join('')}</ul>
+        <ul>${d.rejected.slice(0, 30).map((r) => `<li><code>${escHtml(r.path)}</code> — ${escHtml(rejectReason(r.reason, r.path))}</li>`).join('')}</ul>
       </details>` : ''}
       <div class="upl-card-actions">
         ${canEdit ? `<button type="button" class="adm-btn adm-btn-ghost adm-btn-sm" data-upl-action="edit" data-key="${escHtml(d.key)}"><i data-lucide="pencil"></i> ${escHtml(t('upl.edit', 'Éditer'))}</button>` : ''}
@@ -366,19 +378,23 @@ function renderRejected(rejected) {
     <h3 class="upl-section-title">${escHtml(t('upl.rejectedTitle', 'Fichiers ignorés'))}</h3>
     <p class="adm-page-sub">${escHtml(t('upl.rejectedSub', 'Seuls les fichiers produits par le pipeline sont acceptés. Tout le reste est refusé avant le moindre octet écrit.'))}</p>
     <ul class="upl-rejected">
-      ${rejected.slice(0, 100).map((r) => `<li><code>${escHtml(r.path)}</code> — ${escHtml(rejectReason(r.reason))}</li>`).join('')}
+      ${rejected.slice(0, 100).map((r) => `<li><code>${escHtml(r.path)}</code> — ${escHtml(rejectReason(r.reason, r.path))}</li>`).join('')}
     </ul>
     ${rejected.length > 100 ? `<p class="adm-page-sub">${escHtml(t('upl.andMore', '… et {n} de plus', { n: rejected.length - 100 }))}</p>` : ''}
   </section>`;
 }
 
-function rejectReason(reason) {
+function rejectReason(reason, path) {
+  const name = String(path || '').split('/').pop();
   const map = {
     not_allowed: t('upl.rjNotAllowed', 'type de fichier non attendu par la plateforme'),
     unsafe_path: t('upl.rjUnsafe', 'chemin refusé'),
     bad_size: t('upl.rjSize', 'taille invalide'),
+    too_large: t('upl.tooLarge', `« ${name} » dépasse la taille qu'accepte le serveur pour un fichier.`, { name }),
+    insufficient_disk: t('upl.rjDisk', 'espace disque insuffisant sur le serveur'),
     outside_dataset: t('upl.rjOutside', 'hors d\'un dossier de dataset (pas de metadata.json)'),
     invalid_dataset: t('upl.rjDataset', 'nom ou type de dataset invalide'),
+    unreadable: t('upl.rjUnreadable', 'élément(s) illisible(s) lors de la lecture du dossier'),
     unknown_type: t('upl.rjUnknownType', `type de dataset inconnu — metadata.json doit déclarer "type" (${(Utils ? Utils.DATASET_TYPES : []).join(', ')})`,
       { types: (Utils ? Utils.DATASET_TYPES : []).join(', ') }),
   };

@@ -10,14 +10,14 @@ PluginRegistry.implement('download-center', {
       dataset: this._ctx.dataset.getMeta(),
       scope: 'viewer',
       getCanvas: () => this._ctx.ui.getCanvas?.() || document.getElementById('webgl-canvas'),
+      renderNow: () => this._ctx.viewer?.renderNow?.(),
       getCanvasBlob: this._ctx.getCanvasBlob,
       getCustomExports: this._ctx.getCustomExports,
       // A plugin's on-screen chart (tracking-charts) becomes the graph exports.
       getGraph: this._ctx.getGraph,
       getWorkspaceState: this._ctx.workspace.getState,
       applyWorkspaceState: this._ctx.workspace.applyState,
-      getMeasurements: () => this._ctx.measurements.list('viewer'),
-      getAnnotations: () => (typeof AnnotationManager !== 'undefined' ? AnnotationManager.all() : [])
+      getMeasurements: () => this._ctx.measurements.list('viewer')
     });
   },
 

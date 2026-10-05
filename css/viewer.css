@@ -1152,8 +1152,45 @@ body.viewer-iframe .scientific-panel {
   backdrop-filter: blur(4px);
 }
 
+.viewer-loader-body,
+.viewer-loader-error {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  max-width: min(400px, calc(100% - 32px));
+  text-align: center;
+}
+
+.viewer-loader-body.hidden,
+.viewer-loader-error.hidden {
+  display: none;
+}
+
+.viewer-loader-spinner {
+  width: 48px;
+  height: 48px;
+  margin-bottom: 16px;
+}
+
+.viewer-loader-error__icon {
+  width: 48px;
+  height: 48px;
+  margin-bottom: 16px;
+  color: var(--color-error);
+}
+
+.viewer-loader-error__message {
+  color: var(--text-muted);
+  margin-top: 8px;
+  overflow-wrap: anywhere;
+}
+
+.viewer-loader-error__back {
+  margin-top: 16px;
+}
+
 .progress-bar-container {
-  width: 300px;
+  width: min(300px, calc(100vw - 32px));
   height: 6px;
   background: rgba(255, 255, 255, 0.2);
   border-radius: 3px;

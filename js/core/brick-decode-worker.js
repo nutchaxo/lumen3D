@@ -1,29 +1,73 @@
 /* IRIBHM Brick Decode Worker
-   Decodes WebP buffers into Raw Uint8Arrays off the main thread. */
+   Decodes the 512² WebP mosaic of one 64³ brick channel (8×8 tiles, one z plane per
+   tile) into voxel bytes off the main thread, and optionally composes the channels of
+   a brick into one RGBA buffer so the page never runs the per-voxel interleave.
+
+   Messages (all but CANCEL are run in arrival order on one queue):
+     DECODE {id, batch, buffer, brickSize, packing, region?, lut?, assemble?}
+       → DECODE_RESULT {id, ok, buffer?, region, assembled?, message?}
+       Without `assemble` the result is the scalar voxels of `region` (or of the
+       whole brick), with `lut` (256 bytes) applied when given.
+       With `assemble: {key, slot, components}` the voxels are written, LUT applied,
+       at stride `components` into the assembly buffer `key` (created zero-filled on
+       first use, sized region voxels × components) and the result carries no bytes.
+     TAKE {id, batch, key, voxels, components} → DECODE_RESULT {id, ok, buffer}: the
+       assembly, transferred and forgotten (zero-filled when no channel was written).
+     DROP {key}: forget an assembly.
+     CANCEL {batch?}: with a batch id, drop that batch's queued jobs, suppress its
+       in-flight results and forget its assemblies; without, the same for every job
+       posted so far (epoch). */
 
 let decodeQueue = Promise.resolve();
 let canvas = null;
 let ctx = null;
-let cancelEpoch = 0;   // bumped on CANCEL; queued/in-flight decodes from an older epoch are dropped
+let cancelEpoch = 0;   // bumped on a global CANCEL; jobs from an older epoch are dropped
+const cancelledBatches = new Set();
+const CANCELLED_BATCH_MEMORY = 1024;
+const assemblies = new Map();   // key -> { buf: Uint8Array, batch }
 
 self.onmessage = (event) => {
   const msg = event.data || {};
   if (msg.type === 'CANCEL') {
-    // A superseded load (dataset / quality / timepoint switch) asked to cancel:
-    // bump the epoch so queued jobs are skipped and in-flight results suppressed.
-    // (The CPU decode loop is not abortable mid-flight, so we gate the result.)
-    cancelEpoch++;
+    if (msg.batch !== undefined && msg.batch !== null) {
+      cancelledBatches.add(msg.batch);
+      if (cancelledBatches.size > CANCELLED_BATCH_MEMORY) {
+        cancelledBatches.delete(cancelledBatches.values().next().value);
+      }
+      for (const [key, a] of assemblies) if (a.batch === msg.batch) assemblies.delete(key);
+    } else {
+      // The CPU decode loop is not abortable mid-flight, so the result is gated instead.
+      cancelEpoch++;
+      assemblies.clear();
+    }
     return;
   }
-  if (msg.type === 'DECODE') {
+  if (msg.type === 'DROP') {
+    assemblies.delete(msg.key);
+    return;
+  }
+  if (msg.type === 'DECODE' || msg.type === 'TAKE') {
     const epoch = cancelEpoch;
-    decodeQueue = decodeQueue.then(() => processDecode(msg, epoch)).catch(console.error);
+    decodeQueue = decodeQueue.then(() => (msg.type === 'TAKE' ? processTake(msg, epoch) : processDecode(msg, epoch))).catch(console.error);
   }
 };
 
+function isLive(msg, epoch) {
+  return epoch === cancelEpoch && !(msg.batch !== undefined && msg.batch !== null && cancelledBatches.has(msg.batch));
+}
+
+function processTake(msg, epoch) {
+  if (!isLive(msg, epoch)) return;
+  const components = msg.components || 4;
+  let a = assemblies.get(msg.key);
+  assemblies.delete(msg.key);
+  const buf = a ? a.buf : new Uint8Array(Math.max(0, msg.voxels | 0) * components);
+  self.postMessage({ type: 'DECODE_RESULT', id: msg.id, ok: true, buffer: buf.buffer, assembled: true }, [buf.buffer]);
+}
+
 async function processDecode(msg, epoch) {
   // Skip a job cancelled before it started running.
-  if (epoch !== cancelEpoch) return;
+  if (!isLive(msg, epoch)) return;
   const id = msg.id;
   let bmp = null;
   try {
@@ -36,7 +80,9 @@ async function processDecode(msg, epoch) {
     const packing = msg.packing || {};
 
     const blob = new Blob([buffer], { type: 'image/webp' });
-    bmp = await createImageBitmap(blob);
+    // The bytes are measured intensities, not colours: no colour management, no
+    // alpha premultiplication may touch them on the way to the canvas.
+    bmp = await createImageBitmap(blob, { premultiplyAlpha: 'none', colorSpaceConversion: 'none' });
     const t1 = performance.now();
 
     if (!canvas) {
@@ -62,8 +108,28 @@ async function processDecode(msg, epoch) {
     const ry0 = region ? region.y0 : 0, ry1 = region ? region.y1 : bs;
     const rz0 = region ? region.z0 : 0, rz1 = region ? region.z1 : bs;
     const rw = rx1 - rx0, rh = ry1 - ry0, rd = rz1 - rz0;
+    const voxels = rw * rh * rd;
     const totalVoxels = bs * bs * bs;
-    const bytes = new Uint8Array(rw * rh * rd);
+
+    // Destination: a fresh scalar buffer, or the brick's RGBA (or RG / R) assembly at
+    // stride `components`, offset `slot`.
+    const assemble = msg.assemble && typeof msg.assemble === 'object' ? msg.assemble : null;
+    let dst, stride, offset;
+    if (assemble) {
+      stride = Math.max(1, Math.min(4, assemble.components || 4));
+      offset = Math.max(0, Math.min(stride - 1, assemble.slot | 0));
+      let a = assemblies.get(assemble.key);
+      if (!a || a.buf.length !== voxels * stride) {
+        a = { buf: new Uint8Array(voxels * stride), batch: msg.batch };
+        assemblies.set(assemble.key, a);
+      }
+      dst = a.buf;
+    } else {
+      stride = 1;
+      offset = 0;
+      dst = new Uint8Array(voxels);
+    }
+    const lut = msg.lut && msg.lut.length >= 256 ? msg.lut : null;
     let t2 = t1;
 
     if (packing.mode === 'grid') {
@@ -76,45 +142,54 @@ async function processDecode(msg, epoch) {
         ? _gridCols
         : Math.ceil(bs / Math.ceil(Math.sqrt(bs)));
       const bmpWidth = bmp.width;
-      const bsLocal = bs;
 
-      // Read back only the mosaic rows that hold the wanted tiles: for a single
-      // slice that is one tile row (an eighth of the image) instead of the whole
-      // 512x512 readback.
+      // Tile (tx, ty) of the mosaic holds z = ty·cols + tx; voxel (x, y, z) sits at
+      // mosaic pixel (tx·bs + x, ty·bs + y). Only the wanted y rows of each wanted
+      // tile row are read back: one band of `rh` rows per tile row when the box is
+      // thinner than a tile (an XZ cut reads 8 × 3 rows instead of 512), otherwise
+      // the tile rows as one block.
       const tileY0 = Math.floor(rz0 / cols);
       const tileY1 = Math.floor((rz1 - 1) / cols);
-      const rowOrigin = tileY0 * bsLocal;
-      const readH = Math.max(1, Math.min(bmp.height - rowOrigin, (tileY1 - tileY0 + 1) * bsLocal));
-      const imgData = ctx.getImageData(0, rowOrigin, bmpWidth, readH);
+      const bands = [];
+      if (rh < bs && tileY1 > tileY0) {
+        for (let ty = tileY0; ty <= tileY1; ty++) {
+          const top = ty * bs + ry0;
+          const h = Math.max(0, Math.min(bmp.height - top, rh));
+          bands.push({ ty0: ty, ty1: ty, top, h, data: h > 0 ? ctx.getImageData(0, top, bmpWidth, h).data : null });
+        }
+      } else {
+        const top = tileY0 * bs;
+        const h = Math.max(1, Math.min(bmp.height - top, (tileY1 - tileY0 + 1) * bs));
+        bands.push({ ty0: tileY0, ty1: tileY1, top, h, data: ctx.getImageData(0, top, bmpWidth, h).data });
+      }
       t2 = performance.now();
-      const srcDataLocal = imgData.data;
-      const bytesLocal = bytes;
 
-      let maxTileX = 0;
-      for (let z = rz0; z < rz1; z++) maxTileX = Math.max(maxTileX, z % cols);
-      const maxPX = maxTileX * bsLocal + rx1 - 1;
-      const maxPY = (tileY1 - tileY0) * bsLocal + ry1 - 1;
-      const isSafe = (bmpWidth > maxPX) && (readH > maxPY) && ((maxPY * bmpWidth + maxPX) * 4 < srcDataLocal.length);
-      const srcLen = srcDataLocal.length;
-
-      for (let z = rz0; z < rz1; z++) {
-        const tileX_bs = (z % cols) * bsLocal;
-        const tileY_bs = (Math.floor(z / cols) - tileY0) * bsLocal;
-        const zOff = (z - rz0) * rh * rw;
-
-        for (let y = ry0; y < ry1; y++) {
-          let srcIdx = ((tileY_bs + y) * bmpWidth + tileX_bs + rx0) * 4;
-          let dstIdx = zOff + (y - ry0) * rw;
-
-          if (isSafe) {
-            for (let x = rx0; x < rx1; x++) {
-              bytesLocal[dstIdx++] = srcDataLocal[srcIdx];
-              srcIdx += 4;
+      for (const band of bands) {
+        const src = band.data;
+        const srcLen = src ? src.length : 0;
+        for (let z = Math.max(rz0, band.ty0 * cols); z < Math.min(rz1, (band.ty1 + 1) * cols); z++) {
+          const tileX_bs = (z % cols) * bs;
+          const tileTop = Math.floor(z / cols) * bs;
+          const zOff = (z - rz0) * rh * rw;
+          for (let y = ry0; y < ry1; y++) {
+            const py = tileTop + y - band.top;          // row inside the band
+            let dstIdx = (zOff + (y - ry0) * rw) * stride + offset;
+            if (!src || py < 0 || py >= band.h || tileX_bs + rx1 > bmpWidth) {
+              // Out of the decoded picture (a truncated mosaic): those voxels stay 0.
+              let srcIdx = (py * bmpWidth + tileX_bs + rx0) * 4;
+              for (let x = rx0; x < rx1; x++) {
+                const v = (src && py >= 0 && py < band.h && tileX_bs + x < bmpWidth && srcIdx < srcLen) ? src[srcIdx] : 0;
+                dst[dstIdx] = lut ? lut[v] : v;
+                dstIdx += stride;
+                srcIdx += 4;
+              }
+              continue;
             }
-          } else {
-            for (let x = rx0; x < rx1; x++) {
-              bytesLocal[dstIdx++] = srcIdx < srcLen ? srcDataLocal[srcIdx] : 0;
-              srcIdx += 4;
+            let srcIdx = (py * bmpWidth + tileX_bs + rx0) * 4;
+            if (lut) {
+              for (let x = rx0; x < rx1; x++) { dst[dstIdx] = lut[src[srcIdx]]; dstIdx += stride; srcIdx += 4; }
+            } else {
+              for (let x = rx0; x < rx1; x++) { dst[dstIdx] = src[srcIdx]; dstIdx += stride; srcIdx += 4; }
             }
           }
         }
@@ -125,19 +200,18 @@ async function processDecode(msg, epoch) {
       const imgData = ctx.getImageData(0, 0, bmp.width, bmp.height);
       t2 = performance.now();
       const srcData = imgData.data;
-      const len = Math.min(totalVoxels, srcData.length >> 2);
-      const srcDataLocal = srcData;
-      const bytesLocal = bytes;
+      const len = Math.min(totalVoxels, srcData.length >> 2, voxels);
       let srcIdx = 0;
-      for (let i = 0; i < len; i++) {
-        bytesLocal[i] = srcDataLocal[srcIdx];
+      for (let i = 0, d = offset; i < len; i++, d += stride) {
+        const v = srcData[srcIdx];
+        dst[d] = lut ? lut[v] : v;
         srcIdx += 4;
       }
     } else {
       // BUG-065 (Rule 1.4 / 1.1): unknown or absent packing mode — fail loud rather
       // than silently producing a scrambled volume. The loader surfaces the dropped
       // brick as a status (onBrickError) instead of mounting corrupt data.
-      if (epoch !== cancelEpoch) return;
+      if (!isLive(msg, epoch)) return;
       self.postMessage({ type: 'DECODE_RESULT', id, ok: false, message: 'unknown packing mode: ' + JSON.stringify(packing.mode) });
       return;
     }
@@ -145,18 +219,16 @@ async function processDecode(msg, epoch) {
     const t3 = performance.now();
 
     // Suppress the result if a CANCEL arrived while we were decoding.
-    if (epoch !== cancelEpoch) return;
-    self.postMessage({
-      type: 'DECODE_RESULT',
-      id,
-      ok: true,
-      buffer: bytes.buffer,
-      region,
-      perf: { bmp: t1-t0, img: t2-t1, loop: t3-t2, total: t3-t0 }
-    }, [bytes.buffer]);
+    if (!isLive(msg, epoch)) return;
+    const perf = { bmp: t1 - t0, img: t2 - t1, loop: t3 - t2, total: t3 - t0 };
+    if (assemble) {
+      self.postMessage({ type: 'DECODE_RESULT', id, ok: true, assembled: true, region, perf });
+    } else {
+      self.postMessage({ type: 'DECODE_RESULT', id, ok: true, buffer: dst.buffer, region, perf }, [dst.buffer]);
+    }
   } catch (err) {
-    if (epoch !== cancelEpoch) return;
-    self.postMessage({ type: 'DECODE_RESULT', id, ok: false, message: err.message });
+    if (!isLive(msg, epoch)) return;
+    self.postMessage({ type: 'DECODE_RESULT', id, ok: false, message: err && err.message ? err.message : String(err) });
   } finally {
     // LEAK-011 (Rule 1.2): release the decoded ImageBitmap graphics handle on every
     // path (success, cancel-suppress, error) — otherwise one bitmap leaks per brick.

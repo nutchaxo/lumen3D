@@ -1,5 +1,6 @@
 {
   "title": "Grille calibrée (aucune / large / fine)",
   "aria": "Grille calibrée",
-  "step": "grille"
+  "step": "grille",
+  "uncalibrated": "Grille indisponible : cette photographie n'a pas de taille de pixel"
 }

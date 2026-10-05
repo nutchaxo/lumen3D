@@ -2,6 +2,7 @@
   "title": "Afstand meten",
   "calibMissing": "De fysieke kalibratie ontbreekt voor deze dataset. Afstandsmeting vereist gekalibreerde voxelmetadata.",
   "noPoint": "Er is geen gekalibreerd punt in het volume gevonden.",
+  "noStructure": "Geen structuur onder de cursor: klik op een zichtbaar deel van het preparaat.",
   "measureN": "Meting {n}",
   "labelPlaceholder": "Label",
   "hidden": "Verborgen",

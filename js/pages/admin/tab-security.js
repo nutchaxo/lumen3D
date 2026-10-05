@@ -9,7 +9,7 @@
 
 'use strict';
 
-import { API_AUTH, API_ADMIN, t, escHtml, apiFetchStatus, toast, el, refreshIcons } from './shared.js';
+import { API_AUTH, API_ADMIN, t, escHtml, apiFetchStatus, toast, el, refreshIcons, MIN_PASSWORD } from './shared.js';
 
 function render() {
   const root = el('security-root');
@@ -118,7 +118,7 @@ async function submit() {
   const n1 = el('sec-new').value || '';
   const n2 = el('sec-new2').value || '';
   err('');
-  if (n1.length < 4) { err(t('admin.setupWeak', 'Mot de passe trop court (4 caractères minimum).')); return; }
+  if (n1.length < MIN_PASSWORD) { err(t('wizard.weak', `Mot de passe trop court (${MIN_PASSWORD} caractères minimum).`, { n: MIN_PASSWORD })); return; }
   if (n1 !== n2) { err(t('admin.setupMismatch', 'Les mots de passe ne correspondent pas.')); return; }
 
   const btn = el('sec-submit');

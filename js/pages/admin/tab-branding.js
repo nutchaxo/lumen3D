@@ -15,12 +15,15 @@
 'use strict';
 
 import { API_SITE, I18n, t, escHtml, apiFetch, apiFetchStatus, toast, el, refreshIcons } from './shared.js';
-import { setUnsaved } from './bus.js';
+import { setUnsaved, registerDirtyGuard, bindTabSave } from './bus.js';
 
 let _cfg = {};
 let _dirty = false;
+let _loading = null;
+let _saving = false;
+let _loaded = false;
 
-function _mark(on) { _dirty = on; setUnsaved(on); const s = el('branding-save'); if (s) s.disabled = !on; }
+function _mark(on) { _dirty = on; setUnsaved(on, 'branding'); const s = el('branding-save'); if (s) s.disabled = !on || _saving; }
 
 function _locales() {
   try {
@@ -175,10 +178,14 @@ function render() {
   refreshIcons(root);
 }
 
-function _collect() {
+// What this form owns, as { dotted.path: value }. Anything else in instance.json
+// (variables, editor presets, custom nav entries, dataset-type names...) belongs to
+// other tabs and must survive an Identity save untouched.
+function _collectOwned() {
   const root = el('branding-root');
+  const owned = {};
   // Single-value text fields
-  root.querySelectorAll('input[data-path]').forEach((inp) => _set(inp.getAttribute('data-path'), inp.value.trim()));
+  root.querySelectorAll('input[data-path]').forEach((inp) => { owned[inp.getAttribute('data-path')] = inp.value.trim(); });
   // Localized fields → { code: value } (drop empties; guarantee a string if all empty)
   const locMap = {};
   root.querySelectorAll('input[data-loc-path]').forEach((inp) => {
@@ -187,10 +194,10 @@ function _collect() {
   });
   Object.entries(locMap).forEach(([p, obj]) => {
     const cleaned = {}; Object.entries(obj).forEach(([c, v]) => { if (v) cleaned[c] = v; });
-    _set(p, Object.keys(cleaned).length ? cleaned : '');
+    owned[p] = Object.keys(cleaned).length ? cleaned : '';
   });
   // Toggles
-  root.querySelectorAll('input[data-toggle]').forEach((inp) => _set(inp.getAttribute('data-toggle'), inp.checked));
+  root.querySelectorAll('input[data-toggle]').forEach((inp) => { owned[inp.getAttribute('data-toggle')] = inp.checked; });
   // Footer links
   const links = [];
   root.querySelectorAll('.adm-link-row').forEach((row) => {
@@ -198,19 +205,47 @@ function _collect() {
     const url = row.querySelector('.adm-link-url').value.trim();
     if (label || url) links.push({ label, url });
   });
-  _set('footer.links', links);
+  owned['footer.links'] = links;
+  return owned;
+}
+
+function _collect() {
+  const owned = _collectOwned();
+  Object.entries(owned).forEach(([p, v]) => _set(p, v));
+  return owned;
+}
+
+function _setIn(doc, path, val) {
+  const segs = path.split('.'); let o = doc;
+  for (let i = 0; i < segs.length - 1; i++) { if (typeof o[segs[i]] !== 'object' || o[segs[i]] == null) o[segs[i]] = {}; o = o[segs[i]]; }
+  o[segs[segs.length - 1]] = val;
 }
 
 async function save() {
-  _collect();
-  const r = await apiFetchStatus(`${API_SITE}?action=save&doc=instance`, { method: 'POST', body: JSON.stringify(_cfg) });
-  if (r.ok) {
+  if (_saving) return;
+  // Saving the empty form of a document that never loaded would blank the identity.
+  if (!_loaded) { toast(t('branding.saveError', "Échec de l'enregistrement."), 'error'); load(); return; }
+  _saving = true;
+  const btn = el('branding-save'); if (btn) btn.disabled = true;
+  try {
+    const owned = _collect();
+    // The page editor (its own browser tab) and the Types tab write to the same
+    // file, and this form may have been loaded long ago: the server replaces only
+    // the paths this form edits (merge=…) in the document as it is NOW, under its
+    // own lock — no read-modify-write window on this side.
+    const partial = {};
+    Object.entries(owned).forEach(([p, v]) => _setIn(partial, p, v));
+    const paths = Object.keys(owned).join(',');
+    const r = await apiFetchStatus(`${API_SITE}?action=save&doc=instance&merge=${encodeURIComponent(paths)}`,
+      { method: 'POST', body: JSON.stringify(partial) });
+    if (!r.ok) { toast(t('branding.saveError', "Échec de l'enregistrement."), 'error'); return; }
     _mark(false);
     // Re-apply to the current admin chrome (brand emoji/monogram bindings).
     try { if (typeof InstanceConfig !== 'undefined') { await InstanceConfig.load(); InstanceConfig.applyDom(); } } catch (_) {}
     toast(t('branding.saved', 'Identité enregistrée.'), 'success');
-  } else {
-    toast(t('branding.saveError', "Échec de l'enregistrement."), 'error');
+  } finally {
+    _saving = false;
+    const b = el('branding-save'); if (b) b.disabled = !_dirty;
   }
 }
 
@@ -219,17 +254,38 @@ async function reset() {
   const r = await apiFetchStatus(`${API_SITE}?action=reset&doc=instance`, { method: 'POST', body: '{}' });
   if (r.ok) {
     toast(t('branding.resetDone', 'Identité réinitialisée.'), 'success');
+    _mark(false);
     await load();
   } else {
     toast(t('branding.saveError', "Échec de l'enregistrement."), 'error');
   }
 }
 
-async function load() {
-  const data = await apiFetch(`${API_SITE}?action=get&doc=instance`);
-  _cfg = (data && typeof data === 'object') ? data : {};
-  _mark(false);
+function load() {
+  if (_loading) return _loading;
+  _loading = (async () => {
+    try {
+      const data = await apiFetch(`${API_SITE}?action=get&doc=instance`);
+      // Edits made while the request was in flight win over the server copy.
+      if (_dirty && _loaded) return;
+      if (!data || typeof data !== 'object' || Array.isArray(data)) return;
+      _cfg = data;
+      _loaded = true;
+      _mark(false);
+      render();
+    } finally { _loading = null; }
+  })();
+  return _loading;
+}
+
+function discard() { _mark(false); }
+
+function relabel() {
+  // Same document, new language: rebuild the form from what is in memory (the
+  // typed-but-unsaved values included) instead of re-fetching over it.
+  if (_dirty && el('branding-root')?.querySelector('input')) _collect();
   render();
+  _mark(_dirty);
 }
 
 export const BrandingTab = {
@@ -237,7 +293,9 @@ export const BrandingTab = {
   titleKey: 'admin.navBranding',
   titleDefault: 'Identité',
   mounted: false,
-  mount() { render(); load(); },
-  activate() { load(); },
-  relabel() { render(); load(); },
+  mount() { bindTabSave('branding', () => { if (_dirty) save(); return true; });
+    registerDirtyGuard('branding', () => _dirty, discard); render(); },
+  // A revisit refreshes from the server only when nothing is being edited.
+  activate() { if (!_dirty || !_loaded) load(); },
+  relabel,
 };

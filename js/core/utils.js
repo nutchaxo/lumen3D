@@ -30,7 +30,13 @@ const Utils = (() => {
    */
   function formatDate(dateStr) {
     if (!dateStr) return '—';
-    // Handle DDMMYYYY format
+    dateStr = String(dateStr);
+    // Eight digits are DDMMYYYY (the lab's file-name convention) or YYYYMMDD. The two are
+    // told apart by digits 5-6: a month (01-12) only in YYYYMMDD, a century (19/20) only in
+    // DDMMYYYY, so they never both match.
+    if (/^\d{8}$/.test(dateStr) && /^(19|20)\d{2}(0[1-9]|1[0-2])(0[1-9]|[12]\d|3[01])$/.test(dateStr)) {
+      return `${dateStr.slice(6, 8)}/${dateStr.slice(4, 6)}/${dateStr.slice(0, 4)}`;
+    }
     if (/^\d{8}$/.test(dateStr)) {
       const d = dateStr.slice(0, 2);
       const m = dateStr.slice(2, 4);
@@ -74,8 +80,7 @@ const Utils = (() => {
       // Stage (e.g., E75, E7, E8, E775)
       else if (/^E\d+$/i.test(part)) {
         result.stage = part;
-        const num = part.slice(1);
-        result.stageNumeric = num.length > 1 ? parseFloat(num[0] + '.' + num.slice(1)) : parseInt(num);
+        result.stageNumeric = parseFloat(_stageDigitsToDecimal(part.slice(1)));
       }
       // Embryo (e.g., Em1, Em10)
       else if (/^Em\d+$/i.test(part)) result.embryo = part;
@@ -101,11 +106,24 @@ const Utils = (() => {
    */
   function formatStage(stage) {
     if (!stage) return '—';
+    stage = String(stage);
     const match = stage.match(/^E(\d+)$/i);
     if (!match) return stage;
-    const num = match[1];
-    if (num.length === 1) return `E${num}`;
-    return `E${num[0]}.${num.slice(1)}`;
+    return `E${_stageDigitsToDecimal(match[1])}`;
+  }
+
+  /**
+   * "75" → "7.5", "775" → "7.75", "105" → "10.5", "10" → "10". Stages run from E7 to E18, so
+   * the integer part is one digit or two: three or more digits starting with 10-20 carry a
+   * two-digit integer part, two digits are a decimal only from 50 up (E75 = 7.5; E10 = 10).
+   * Same rule as Catalog._stageNumber.
+   */
+  function _stageDigitsToDecimal(digits) {
+    if (digits.length <= 1) return digits;
+    if (digits.length === 2) return parseInt(digits, 10) >= 50 ? `${digits[0]}.${digits[1]}` : digits;
+    const firstTwo = parseInt(digits.slice(0, 2), 10);
+    if (firstTwo >= 10 && firstTwo <= 20) return `${digits.slice(0, 2)}.${digits.slice(2)}`;
+    return `${digits[0]}.${digits.slice(1)}`;
   }
 
   /**
@@ -130,11 +148,25 @@ const Utils = (() => {
    */
   function throttle(fn, limit = 100) {
     let inThrottle = false;
+    let pending = null;
+    const open = () => {
+      if (pending) {
+        // The last call made inside the window is not lost: it runs when the window ends.
+        const { ctx, args } = pending;
+        pending = null;
+        fn.apply(ctx, args);
+        setTimeout(open, limit);
+      } else {
+        inThrottle = false;
+      }
+    };
     return function (...args) {
       if (!inThrottle) {
         fn.apply(this, args);
         inThrottle = true;
-        setTimeout(() => { inThrottle = false; }, limit);
+        setTimeout(open, limit);
+      } else {
+        pending = { ctx: this, args };
       }
     };
   }
@@ -231,9 +263,9 @@ const Utils = (() => {
       }
     }
     for (const child of children) {
-      if (typeof child === 'string') {
-        element.appendChild(document.createTextNode(child));
-      } else if (child instanceof HTMLElement) {
+      if (typeof child === 'string' || typeof child === 'number') {
+        element.appendChild(document.createTextNode(String(child)));
+      } else if (child instanceof Node) {
         element.appendChild(child);
       }
     }

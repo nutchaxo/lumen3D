@@ -39,7 +39,7 @@ function makeWorld() {
 function makeLoader(world, { rangeStatus = 206 } = {}) {
   const requests = [];
   const fetchImpl = async (url, init = {}) => {
-    const rel = String(url).split('/bricks/')[1];
+    const rel = String(url).split('/bricks/')[1].split('?')[0];
     const pack = world.packs[rel];
     if (!pack) return { ok: false, status: 404, arrayBuffer: async () => new ArrayBuffer(0) };
     const range = init.headers?.Range || null;

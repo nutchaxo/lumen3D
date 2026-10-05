@@ -29,7 +29,9 @@ C'est tout. L'outil :
 1. **package + signe** le plugin → `marketplace/plugins/<id>/`,
 2. **ajoute/met à jour** son entrée dans `marketplace-catalog.json` (avec les bonnes URLs),
 3. **re-signe** le catalogue,
-4. avec `--push` : **`git add/commit/push`** → le plugin est **live** immédiatement.
+4. avec `--push` : commit **de `marketplace/` seulement** (jamais le reste de l'index) puis push ; le plugin est **live** une fois sur la branche du catalogue (`main`).
+
+Le paquet est construit à côté du dossier publié puis échangé : un `plugin.json` qui échoue au build laisse la version publiée intacte. La graine de signature vient de `LUMEN_MARKETPLACE_SIGNING_KEY` ou de `secrets/marketplace-signing-seed.hex` (voir *Sous le capot*).
 
 Sans `--push`, l'outil prépare tout localement et t'affiche la commande git à lancer.
 
@@ -103,7 +105,10 @@ Contrôlé par `--recommended true|false` (par défaut : conserve l'existant, `t
 ## Sous le capot (comment ça reste sûr)
 
 - **Clé de signature.** La graine privée Ed25519 est lue depuis `secrets/marketplace-signing-seed.hex`
-  (gitignoré, machine-local) ou la variable d'env `LUMEN_SIGNING_KEY`. La **clé publique** est
+  (gitignoré, machine-local) ou la variable d'env `LUMEN_MARKETPLACE_SIGNING_KEY` (prioritaire). Ce n'est
+  **pas** `LUMEN_SIGNING_KEY`, la graine des releases du core : `publish_plugin.py` refuse une graine
+  dont la clé publique n'est pas `_MARKETPLACE_PUBKEY_HEX`, car tous les hôtes rejetteraient le
+  catalogue. La **clé publique** est
   épinglée dans la source (`dev_server.py:_MARKETPLACE_PUBKEY_HEX` + `api/_admin_lib.php:MARKETPLACE_PUBKEY`)
   et committée — elle ship dans chaque release et survit aux auto-updates.
 - **Chaîne de vérification (fail-closed).** À l'installation : signature du **catalogue** vérifiée
@@ -129,7 +134,8 @@ Contrôlé par `--recommended true|false` (par défaut : conserve l'existant, `t
 ```bash
 python tools/gen_signing_key.py     # génère la paire
 # → coller la CLÉ PUBLIQUE dans dev_server.py:_MARKETPLACE_PUBKEY_HEX ET api/_admin_lib.php:MARKETPLACE_PUBKEY, puis commit
-# → stocker la GRAINE PRIVÉE dans secrets/marketplace-signing-seed.hex (gitignoré) et/ou le secret CI LUMEN_SIGNING_KEY
+# → stocker la GRAINE PRIVÉE dans secrets/marketplace-signing-seed.hex (gitignoré) et/ou la variable LUMEN_MARKETPLACE_SIGNING_KEY
+#   (jamais dans LUMEN_SIGNING_KEY : c'est la clé des releases du core, une autre paire)
 # → renseigner _MARKETPLACE_CATALOG_URL / MARKETPLACE_CATALOG_URL (URL raw du catalogue)
 ```
 

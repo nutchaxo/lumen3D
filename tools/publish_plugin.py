@@ -11,7 +11,8 @@ immediately — no other step needed.
     python tools/publish_plugin.py --remove my-plugin --push             # unpublish
 
 The signing seed is read from secrets/marketplace-signing-seed.hex (or the
-LUMEN_SIGNING_KEY env var). The catalog's public URL base is derived from the
+LUMEN_MARKETPLACE_SIGNING_KEY env var - NOT LUMEN_SIGNING_KEY, which is the core
+release key: a catalog signed with it is rejected by every host). The catalog's public URL base is derived from the
 platform's pinned _MARKETPLACE_CATALOG_URL, so the asset URLs always match what
 the running platform fetches. Ed25519 signatures are deterministic, so re-running
 on an unchanged plugin produces no git change (nothing to commit — handled).
@@ -58,12 +59,22 @@ except Exception:
 
 
 def _seed() -> bytes:
-    env = os.environ.get("LUMEN_SIGNING_KEY", "").strip()
-    if env:
-        return bytes.fromhex(env)
-    if SEED_FILE.exists():
-        return bytes.fromhex(SEED_FILE.read_text(encoding="utf-8").strip())
-    sys.exit(f"ERROR: no signing seed. Set LUMEN_SIGNING_KEY or create {SEED_FILE.relative_to(REPO)}.")
+    env = os.environ.get("LUMEN_MARKETPLACE_SIGNING_KEY", "").strip()
+    try:
+        if env:
+            seed = bytes.fromhex(env)
+        elif SEED_FILE.exists():
+            seed = bytes.fromhex(SEED_FILE.read_text(encoding="utf-8").strip())
+        else:
+            sys.exit(f"ERROR: no signing seed. Set LUMEN_MARKETPLACE_SIGNING_KEY or create "
+                     f"{SEED_FILE.relative_to(REPO)}.")
+    except ValueError:
+        sys.exit("ERROR: the marketplace signing seed is not valid hex.")
+    pinned = getattr(dev_server, "_MARKETPLACE_PUBKEY_HEX", "")
+    if len(seed) != 32 or (pinned and ed.publickey(seed).hex() != pinned.lower()):
+        sys.exit("ERROR: this seed is not the one whose public key the platform pins as the "
+                 "marketplace key (dev_server._MARKETPLACE_PUBKEY_HEX): hosts would reject the catalog.")
+    return seed
 
 
 def _load_catalog() -> dict:
@@ -113,12 +124,13 @@ def _push(message: str) -> None:
     if _URL_BRANCH and cur != _URL_BRANCH:
         print(f"⚠  current branch '{cur}' ≠ catalog URL branch '{_URL_BRANCH}'. The raw URLs "
               f"resolve on '{_URL_BRANCH}', so publishing on '{cur}' won't be live until merged.")
-    _git("add", "marketplace")
-    st = _git("diff", "--cached", "--quiet")
+    _git("add", "--", "marketplace")
+    st = _git("diff", "--cached", "--quiet", "--", "marketplace")
     if st.returncode == 0:
         print("• nothing changed (deterministic re-sign) — already up to date, no commit.")
         return
-    c = _git("commit", "-m", message)
+    # Pathspec: commit ONLY marketplace/, never whatever else is staged in the index.
+    c = _git("commit", "-m", message, "--", "marketplace")
     if c.returncode != 0:
         sys.exit(f"ERROR: git commit failed:\n{c.stderr or c.stdout}")
     p = _git("push", "origin", cur)
@@ -139,9 +151,18 @@ def publish(plugin_dir: Path, recommended_arg, push: bool) -> None:
     seed = _seed()
 
     out = MARKETPLACE / "plugins" / pid
+    # Build beside the published folder and swap afterwards: a plugin.json that fails
+    # to build must not leave the catalog pointing at a folder that is gone.
+    building = out.with_name(pid + ".building")
+    shutil.rmtree(building, ignore_errors=True)
+    try:
+        info = bpr.build(src, building, seed.hex())
+        (building / "catalog-entry.json").unlink(missing_ok=True)
+    except BaseException:
+        shutil.rmtree(building, ignore_errors=True)
+        raise
     shutil.rmtree(out, ignore_errors=True)
-    info = bpr.build(src, out, seed.hex())
-    (out / "catalog-entry.json").unlink(missing_ok=True)
+    building.rename(out)
 
     cat = _load_catalog()
     existing = next((e for e in cat["plugins"] if e.get("id") == pid), None)

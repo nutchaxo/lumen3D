@@ -7,7 +7,8 @@
 
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" media="print" data-async-font>
+  <noscript><link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet"></noscript>
   <script src="js/vendor/lucide.min.js" integrity="sha384-tTkFttkBclaU1cloKwOi9xk3pbao3VZxTjLNBt8iFABWDBQibbAbWpVmO28zMuxq" crossorigin="anonymous"></script>
 
   <link rel="stylesheet" href="css/variables.css">
@@ -17,8 +18,10 @@
   <link rel="stylesheet" href="css/components.css">
   <link rel="stylesheet" href="css/layout.css">
   <link rel="stylesheet" href="css/pages.css?v=20260716">
+  <script src="js/core/theme-boot.js"></script>
 </head>
 <body data-page="custom">
+  <a class="skip-link" href="#main" data-i18n="nav.skipToContent">Skip to content</a>
 
   <nav class="navbar" id="navbar">
     <a href="index.html" class="navbar-brand">
@@ -31,7 +34,7 @@
     </div>
   </nav>
 
-  <main style="min-height:60vh;padding:40px 0 80px">
+  <main id="main" tabindex="-1" style="min-height:60vh;padding:40px 0 80px">
     <div id="page-blocks"></div>
     <p id="page-empty" style="display:none;text-align:center;opacity:.6;padding:80px 24px" data-i18n="pages.notFound">This page has no content.</p>
   </main>
@@ -44,6 +47,7 @@
     </div>
   </footer>
 
+  <script src="js/core/font-loader.js"></script>
   <script src="js/core/utils.js"></script>
   <script src="js/core/ui-actions.js"></script>
   <script src="js/core/instance-config.js?v=20260706"></script>

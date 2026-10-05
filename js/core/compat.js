@@ -157,6 +157,9 @@ const Compat = (() => {
           } catch (_) { /* fall through */ }
         }
         console.info('[Compat] Platform version unknown (no version.json, no /api/health) — compat gate disabled.');
+        // Do not keep the failure: a flaky request at boot must not switch the gate
+        // off for the life of the page. The next caller asks again.
+        _versionPromise = null;
         return null;
       })();
     }

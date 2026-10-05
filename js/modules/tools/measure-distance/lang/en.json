@@ -2,6 +2,7 @@
   "title": "Measure distance",
   "calibMissing": "Physical calibration is missing for this dataset. Distance measurement needs calibrated voxel metadata.",
   "noPoint": "No calibrated volume point was detected.",
+  "noStructure": "No structure under the cursor: click on a visible part of the specimen.",
   "measureN": "Measure {n}",
   "labelPlaceholder": "Label",
   "hidden": "Hidden",

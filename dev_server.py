@@ -31,9 +31,15 @@ Sessions:    in-memory dict (lost on server restart — that's fine for dev).
 """
 
 import argparse
+import atexit
+import email.utils
+import gzip
 import hashlib
+import hmac
 import http.server
+import ipaddress
 import json
+import math
 import os
 import posixpath
 import re
@@ -47,6 +53,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import zipfile
+from collections import OrderedDict
 from datetime import datetime
 from http import HTTPStatus
 from pathlib import Path
@@ -55,6 +62,10 @@ from pathlib import Path
 # the chunk/journal/validation logic is self-contained and unit-testable without
 # an HTTP server; this file only routes to it. See upload_staging.py.
 import upload_staging
+# In-place format upgrades of published datasets (admin "Data updates" tab). Same
+# split: the engine and its pure format functions live in dataset_migrations.py,
+# this file only authenticates and routes /api/migrations.php to it.
+import dataset_migrations
 
 __version__ = "0.16.0"
 
@@ -121,14 +132,98 @@ DEFAULT_USERNAME = "admin"
 # ── Session store (in-memory) ──────────────────────────────────────────────────
 # { token: { "username": ..., "expires": time.time() + TTL } }
 _SESSIONS: dict[str, dict] = {}
+_SESSIONS_LOCK = threading.Lock()
 SESSION_TTL = 28800  # 8 hours
-# Brute-force: { ip: { count, until } }
+# A single admin account needs a handful of live sessions; the ceiling only stops
+# a flood of successful logins from growing the dict without bound.
+MAX_SESSIONS = 256
+# Brute-force: { ip: { count, until, seen } }. Every read-check-increment happens
+# under _BRUTE_LOCK and the attempt is RESERVED before the password is hashed, so a
+# burst of parallel guesses cannot all pass the check while the PBKDF2s run.
 _BRUTE: dict[str, dict] = {}
+_BRUTE_LOCK = threading.Lock()
+_BRUTE_MAX_ENTRIES = 10_000
 MAX_ATTEMPTS = 10
-LOCKOUT_S    = 900  # 15 min
-# BUG-055: peers allowed to set X-Forwarded-For / X-Real-IP for the brute-force key.
-# Empty by default -> direct connections keyed on the TCP peer (behaviour unchanged).
+LOCKOUT_S    = 900  # 15 min; also the window after which old failures are forgotten
+# Soft ceiling across ALL addresses per LOCKOUT_S window (twin of ADMIN_BF_GLOBAL_MAX).
+BF_GLOBAL_MAX = 200
+_BRUTE_GLOBAL = {"start": 0.0, "count": 0}
+# Peers allowed to set X-Forwarded-For / X-Real-IP / X-Forwarded-Proto. Empty by
+# default -> every connection is keyed on its TCP peer. Behind a reverse proxy the
+# operator names it (--trusted-proxy, or LUMEN_TRUSTED_PROXIES="ip,ip,cidr"),
+# otherwise all visitors share the proxy's address and one lockout bucket.
 TRUSTED_PROXIES: set[str] = set()
+
+
+def _parse_proxy_list(value) -> set[str]:
+    out = set()
+    for item in re.split(r"[\s,;]+", str(value or "")):
+        item = item.strip()
+        if not item:
+            continue
+        try:
+            out.add(str(ipaddress.ip_network(item, strict=False)) if "/" in item
+                    else str(ipaddress.ip_address(item)))
+        except ValueError:
+            print(f"  [proxy] ignored invalid trusted proxy: {item!r}")
+    return out
+
+
+def _proxies_from_file(path: Path) -> set[str]:
+    """api/trusted-proxies.json {"proxies": [...]}: the list a PHP host keeps (never
+    served — api/*.json is denied), honoured here too so one file serves both."""
+    try:
+        doc = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return set()
+    items = doc.get("proxies") if isinstance(doc, dict) else None
+    return _parse_proxy_list(",".join(str(x) for x in items if isinstance(x, str))) if isinstance(items, list) else set()
+
+
+TRUSTED_PROXIES |= _parse_proxy_list(os.environ.get("LUMEN_TRUSTED_PROXIES", ""))
+TRUSTED_PROXIES |= _proxies_from_file(ROOT / "api" / "trusted-proxies.json")
+
+
+def _is_trusted_proxy(peer: str) -> bool:
+    if not TRUSTED_PROXIES or not peer:
+        return False
+    if peer in TRUSTED_PROXIES:
+        return True
+    try:
+        addr = ipaddress.ip_address(peer)
+    except ValueError:
+        return False
+    for item in TRUSTED_PROXIES:
+        if "/" in item:
+            try:
+                if addr in ipaddress.ip_network(item, strict=False):
+                    return True
+            except ValueError:
+                continue
+    return False
+
+
+# Session cookie `Secure` flag. Set automatically when a trusted proxy reports
+# X-Forwarded-Proto: https; LUMEN_COOKIE_SECURE=1 forces it (TLS terminated by a
+# proxy that does not send the header).
+_COOKIE_SECURE_FORCED = os.environ.get("LUMEN_COOKIE_SECURE", "").strip().lower() in ("1", "true", "yes")
+# Current PBKDF2-HMAC-SHA256 work factor (OWASP 2023 guidance). A stored hash with
+# fewer iterations is re-hashed at the next successful login.
+PBKDF2_ITERATIONS = 600_000
+# Ceilings on a JSON API body, per endpoint, checked against Content-Length before
+# a byte is read. The largest legitimate bodies are base64 images (media library
+# and gallery: 8 MB decoded) and a page-builder document (2 MB).
+_API_BODY_LIMITS = {
+    "/api/auth.php": 64 * 1024,
+    "/api/telemetry.php": 16 * 1024,
+    "/api/admin.php": 1024 * 1024,
+    "/api/site.php": 4 * 1024 * 1024,
+    "/api/media.php": 16 * 1024 * 1024,
+    "/api/datasets.php": 16 * 1024 * 1024,
+}
+# Idle/stall timeout of a client socket (seconds). Without it a peer that opens a
+# connection and sends nothing, or announces a body it never sends, pins a thread.
+_SOCKET_TIMEOUT_S = 60
 # EDGE-021 / EDGE-049: ceiling for an admin-uploaded thumbnail (reject before write).
 MAX_THUMB_BYTES = 5 * 1024 * 1024
 # Ceiling on ANY import request body. A chunk is capped far lower by
@@ -168,7 +263,7 @@ _RELEASE_ASSET_RE = re.compile(r"^lumen3d-web-.*\.zip$", re.IGNORECASE)
 #              signature does not verify under this key, is REJECTED (fail-closed).
 # To enable: generate a keypair (tools/gen_signing_key.py), paste the public key
 # here AND into install.php's $PINNED_PUBKEY, and store the seed as the CI secret.
-_RELEASE_PUBKEY_HEX = ""
+_RELEASE_PUBKEY_HEX = "9635e20bd09e2dc84830b018a99f3fb051de2f44db97f03e8d5f28e8d769ed79"
 
 # ── First-party plugin marketplace (white-label) ────────────────────────────────
 # A CURATED, first-party catalog of plugins the operator can browse + install in one
@@ -402,6 +497,20 @@ def _apply_tree_modes(max_entries: int = 200_000) -> dict:
     return out
 
 
+def _replace_retry(src, dst, attempts: int = 10, delay: float = 0.04) -> None:
+    """os.replace with a short bounded retry. On Windows a rename onto a file that
+    another thread (or the static handler, or an antivirus scan) holds open fails
+    with PermissionError for as long as that handle lives — typically milliseconds."""
+    for i in range(attempts):
+        try:
+            os.replace(src, dst)
+            return
+        except PermissionError:
+            if i == attempts - 1:
+                raise
+            time.sleep(delay * (i + 1))
+
+
 def _atomic_write(path: Path, data, *, binary: bool = False, mode: int | None = None) -> None:
     """RACE-020: write to a temp sibling then os.replace (atomic rename on the same
     filesystem), guarded by a process-wide lock — so two concurrent admin POSTs (or a
@@ -426,7 +535,7 @@ def _atomic_write(path: Path, data, *, binary: bool = False, mode: int | None = 
                     os.chmod(tmp, mode)
                 except OSError:
                     pass
-            os.replace(tmp, str(path))
+            _replace_retry(tmp, str(path))
         except BaseException:
             try:
                 os.unlink(tmp)
@@ -796,6 +905,134 @@ def _validate_page_doc(data):
     return True, None
 
 
+# Serialises every read-modify-write of a site doc (merge, draft, rev check): two
+# admin tabs saving at once must not interleave between the check and the write.
+_SITE_LOCK = threading.RLock()
+_MERGE_PATH_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}(\.[A-Za-z0-9_-]{1,64}){0,3}$")
+_MERGE_MAX_PATHS = 32
+
+
+def _site_rev(doc: str):
+    """Revision of a site doc as the operator sees it: sha256 over the stored public
+    file and, for a page, its private draft (a missing file counts as empty), first
+    20 hex. A client that read revision R and saves with ?rev=R is refused (409) when
+    the doc changed in between. Twin of api/site.php site_rev — same bytes, same rev."""
+    res = _site_doc_path(doc)
+    if not res:
+        return None
+    h = hashlib.sha256()
+    for path in (res[0], _site_draft_path(doc)):
+        data = b""
+        if path is not None:
+            try:
+                data = path.read_bytes()
+            except OSError:
+                data = b""
+        h.update(str(len(data)).encode("ascii") + b":" + data + b";")
+    return h.hexdigest()[:20]
+
+
+def _parse_merge_paths(raw):
+    """`merge=variables,editor,nav.customPages` → validated dotted paths, or None."""
+    paths = [p.strip() for p in str(raw or "").split(",") if p.strip()]
+    if not paths or len(paths) > _MERGE_MAX_PATHS or not all(_MERGE_PATH_RE.match(p) for p in paths):
+        return None
+    return paths
+
+
+def _merge_paths(current: dict, incoming: dict, paths) -> dict:
+    """``current`` with each dotted path replaced by its value in ``incoming`` — or
+    removed when ``incoming`` has none. Keys nobody listed are left untouched, which
+    is what lets the Identity tab, the Types tab and the page editor share one
+    instance.json without overwriting each other's fields."""
+    out = json.loads(json.dumps(current)) if isinstance(current, dict) else {}
+    for path in paths:
+        segs = path.split(".")
+        src, found = incoming, True
+        for seg in segs:
+            if isinstance(src, dict) and seg in src:
+                src = src[seg]
+            else:
+                found = False
+                break
+        node = out
+        for seg in segs[:-1]:
+            if not isinstance(node.get(seg), dict):
+                if not found:
+                    node = None
+                    break
+                node[seg] = {}
+            node = node[seg]
+        if node is None:
+            continue
+        if found:
+            node[segs[-1]] = json.loads(json.dumps(src))
+        else:
+            node.pop(segs[-1], None)
+    return out
+
+
+def _site_save_checked(doc: str, data, rev=None, merge=None):
+    """Save under _SITE_LOCK with an optional stale-revision check (``rev``) and an
+    optional field merge (``merge``: dotted paths). Returns (status, payload)."""
+    with _SITE_LOCK:
+        if _site_doc_path(doc) is None:
+            return 400, {"error": "Invalid doc"}
+        current = _site_rev(doc)
+        if rev and rev != current:
+            return 409, {"error": "stale", "rev": current}
+        if merge is not None:
+            if doc.strip().startswith("pages/"):
+                return 400, {"error": "merge_not_supported"}
+            base = _load_site_doc(doc)
+            data = _merge_paths(base if isinstance(base, dict) else {},
+                                data if isinstance(data, dict) else {}, merge)
+        if not _save_site_doc(doc, data if isinstance(data, (dict, list)) else {}):
+            return 400, {"error": "Invalid doc"}
+        return 200, {"ok": True, "rev": _site_rev(doc)}
+
+
+def _site_save_draft(doc: str, body, rev=None):
+    """Write ONLY a page's private draft — and its title when the body carries one.
+    The published block is never touched, so an autosave can never revert a publish
+    made elsewhere. Body: {"draft": {...}, "title"?: ...}. Returns (status, payload)."""
+    doc = (doc or "").strip()
+    draft_path = _site_draft_path(doc)
+    if draft_path is None:
+        return 400, {"error": "Invalid doc"}
+    body = body if isinstance(body, dict) else {}
+    draft = body.get("draft")
+    if not isinstance(draft, dict):
+        return 400, {"error": "Invalid 'draft' block"}
+    probe = {"draft": draft}
+    ok, err = _validate_page_doc(probe)
+    if not ok:
+        return 400, {"error": err or "Invalid page"}
+    with _SITE_LOCK:
+        current = _site_rev(doc)
+        if rev and rev != current:
+            return 409, {"error": "stale", "rev": current}
+        if "title" in body:
+            public = _load_site_public(doc)
+            public = public if isinstance(public, dict) else {}
+            if public.get("title") != body.get("title"):
+                public["title"] = body.get("title")
+                if not isinstance(public.get("published"), dict):
+                    public["published"] = {"sections": []}
+                public["schemaVersion"] = _PAGE_SCHEMA_VERSION
+                try:
+                    _atomic_write(_site_doc_path(doc)[0],
+                                  json.dumps(public, indent=2, ensure_ascii=False), mode=_file_mode())
+                except OSError:
+                    return 500, {"error": "write_failed"}
+        try:
+            draft_path.parent.mkdir(parents=True, exist_ok=True)
+            _atomic_write(draft_path, json.dumps(probe["draft"], indent=2, ensure_ascii=False), mode=0o600)
+        except OSError:
+            return 500, {"error": "write_failed"}
+        return 200, {"ok": True, "rev": _site_rev(doc)}
+
+
 def _publish_site_doc(doc: str) -> bool:
     """Promote a doc's draft to published (page builder). Copies the `draft` block over
     `published` in-place; no-op-safe for docs without a draft/published split."""
@@ -861,6 +1098,8 @@ def _media_upload(body):
         return {"ok": False, "error": "Fichier vide ou trop volumineux (max 8 Mo)"}
     try:
         _make_dir(MEDIA_DIR)
+        # Images only, never a script — the same guard api/media.php writes.
+        upload_staging.write_guard(MEDIA_DIR / ".htaccess", upload_staging.MEDIA_GUARD)
         stem, ext = name.rsplit(".", 1)
         target = MEDIA_DIR / name
         i = 1
@@ -891,20 +1130,44 @@ def _media_delete(name: str) -> bool:
         return False
 
 
+def _is_ip(value: str) -> bool:
+    try:
+        ipaddress.ip_address(value)
+        return True
+    except ValueError:
+        return False
+
+
 def _client_ip(handler) -> str:
-    """BUG-055: brute-force key. Honor X-Forwarded-For / X-Real-IP only when the direct
-    peer is a configured trusted proxy; otherwise use the real TCP peer address. This
-    avoids a shared-proxy-IP global lockout while not trusting client-supplied headers
-    from arbitrary peers."""
+    """The client's address, the key of the login throttle. The TCP peer, or —
+    behind a declared proxy (--trusted-proxy, LUMEN_TRUSTED_PROXIES,
+    api/trusted-proxies.json) — the right-most X-Forwarded-For hop that is not itself
+    a declared proxy: each proxy APPENDS the peer it saw, so anything left of that
+    hop was written by the client and would let a guesser pick a fresh bucket per
+    request. A malformed hop ends the walk; X-Real-IP, then the peer, are the
+    fallbacks. Twin of api/_admin_lib.php admin_client_ip."""
     peer = handler.client_address[0] if getattr(handler, "client_address", None) else handler.address_string()
-    if peer in TRUSTED_PROXIES:
-        xff = handler.headers.get("X-Forwarded-For")
-        if xff:
-            return xff.split(",")[0].strip()
-        xri = handler.headers.get("X-Real-IP")
-        if xri:
-            return xri.strip()
-    return peer
+    if not _is_trusted_proxy(peer):
+        return peer or "unknown"
+    hops = [h.strip() for h in (handler.headers.get("X-Forwarded-For") or "").split(",")]
+    for hop in reversed(hops):
+        if not hop or not _is_ip(hop):
+            break
+        if not _is_trusted_proxy(hop):
+            return hop
+    xri = (handler.headers.get("X-Real-IP") or "").strip()
+    return xri if xri and _is_ip(xri) else peer
+
+
+def _request_is_https(handler) -> bool:
+    """True when the browser reached us over TLS (terminated by a trusted proxy)."""
+    if _COOKIE_SECURE_FORCED:
+        return True
+    peer = handler.client_address[0] if getattr(handler, "client_address", None) else ""
+    if not _is_trusted_proxy(peer):
+        return False
+    proto = (handler.headers.get("X-Forwarded-Proto") or "").split(",")[0].strip().lower()
+    return proto == "https"
 
 
 def _is_supported_image(b: bytes) -> bool:
@@ -926,7 +1189,7 @@ def _sha256(plain: str) -> str:
     return hashlib.sha256(plain.encode()).hexdigest()
 
 
-def _hash_password(plain: str, salt=None, iterations: int = 200_000) -> str:
+def _hash_password(plain: str, salt=None, iterations: int = PBKDF2_ITERATIONS) -> str:
     """Salted PBKDF2-HMAC-SHA256, stored as 'pbkdf2_sha256$iters$salt_hex$hash_hex'."""
     if salt is None:
         salt = secrets.token_bytes(16)
@@ -937,18 +1200,47 @@ def _hash_password(plain: str, salt=None, iterations: int = 200_000) -> str:
 
 
 def _verify_password(plain: str, stored: str) -> bool:
-    if not stored:
+    if not isinstance(stored, str) or not stored or not isinstance(plain, str):
         return False
-    if stored.startswith("pbkdf2_sha256$"):
-        try:
+    try:
+        if stored.startswith("pbkdf2_sha256$"):
             _scheme, iters, salt_hex, _hash_hex = stored.split("$")
-            return secrets.compare_digest(
-                _hash_password(plain, salt=salt_hex, iterations=int(iters)), stored
-            )
-        except Exception:
-            return False
-    # Legacy unsalted SHA-256 (deprecated; kept so existing configs keep working).
-    return secrets.compare_digest(stored, _sha256(plain))
+            iters = int(iters)
+            if not (1 <= iters <= 10_000_000):
+                return False
+            return hmac.compare_digest(
+                _hash_password(plain, salt=salt_hex, iterations=iters).encode("ascii"),
+                stored.encode("utf-8"))
+        # Legacy unsalted SHA-256 credential. Still verified so an old install can
+        # log in once; _check_credentials then rewrites it as PBKDF2 and the legacy
+        # form is gone for good. Compared as bytes: str compare_digest raises on a
+        # non-ASCII stored value.
+        return hmac.compare_digest(stored.encode("utf-8"), _sha256(plain).encode("ascii"))
+    except Exception:
+        return False
+
+
+def _needs_rehash(stored: str) -> bool:
+    """A stored hash weaker than the current scheme: legacy SHA-256, or PBKDF2
+    with fewer iterations than PBKDF2_ITERATIONS."""
+    if not isinstance(stored, str) or not stored.startswith("pbkdf2_sha256$"):
+        return True
+    try:
+        return int(stored.split("$")[1]) < PBKDF2_ITERATIONS
+    except (IndexError, ValueError):
+        return True
+
+
+_DUMMY_HASH: list = []
+
+
+def _dummy_hash() -> str:
+    """A throwaway hash at the current cost, verified against when the username is
+    unknown or no credential exists, so a wrong username takes as long as a wrong
+    password and the timing does not reveal which one was wrong."""
+    if not _DUMMY_HASH:
+        _DUMMY_HASH.append(_hash_password(secrets.token_hex(16)))
+    return _DUMMY_HASH[0]
 
 
 def _load_config() -> dict:
@@ -1030,20 +1322,44 @@ def _setup_credential(username: str, password: str):
     """
     if not isinstance(password, str) or len(password) < 8:
         return False, 400, {"error": "weak_password"}
+    if CRED_FILE.exists():
+        return False, 409, {"error": "already_configured"}
     rec = _credential_record(username, password)
     data = json.dumps(rec, indent=2, ensure_ascii=False).encode("utf-8")
     CRED_FILE.parent.mkdir(parents=True, exist_ok=True)
-    try:
-        fd = os.open(str(CRED_FILE), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
-    except FileExistsError:
-        return False, 409, {"error": "already_configured"}
-    except OSError as e:
-        return False, 500, {"error": f"setup_failed: {e}"}
+    # Written in full to a temp sibling, then hard-linked into place: os.link fails
+    # if the target exists (create-exclusive, like O_EXCL) and the name only ever
+    # appears complete. A crash mid-write used to leave an EMPTY credential that
+    # blocked both login and setup until someone deleted it by hand.
+    fd, tmp = tempfile.mkstemp(dir=str(CRED_FILE.parent), prefix=".tmp-cred-")
     try:
         with os.fdopen(fd, "wb") as f:
             f.write(data)
+            f.flush()
+            os.fsync(f.fileno())
+        try:
+            os.chmod(tmp, 0o600)
+        except OSError:
+            pass
+        try:
+            os.link(tmp, str(CRED_FILE))
+        except FileExistsError:
+            return False, 409, {"error": "already_configured"}
+        except OSError:
+            # No hard links on this filesystem: fall back to the O_EXCL create.
+            try:
+                xfd = os.open(str(CRED_FILE), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+            except FileExistsError:
+                return False, 409, {"error": "already_configured"}
+            with os.fdopen(xfd, "wb") as f:
+                f.write(data)
     except OSError as e:
-        return False, 500, {"error": f"setup_write_failed: {e}"}
+        return False, 500, {"error": f"setup_failed: {e.__class__.__name__}"}
+    finally:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
     _harden_perms(CRED_FILE)
     return True, 200, {"ok": True, "username": rec["username"]}
 
@@ -1080,35 +1396,155 @@ def _write_credential_force(username: str, password: str) -> None:
     _harden_perms(CRED_FILE)
 
 
+_CRED_LOCK = threading.Lock()
+
+
 def _check_credentials(username: str, password: str) -> bool:
+    """Constant work whatever is wrong: an unknown username, or no credential at
+    all, still runs one PBKDF2 (against a dummy hash). A correct login on a weaker
+    stored hash (legacy SHA-256, fewer iterations) upgrades it in place."""
+    if not isinstance(username, str):
+        username = ""
+    if not isinstance(password, str):
+        password = ""
     rec = _load_credential()
-    if not rec:
+    stored = (rec or {}).get("password_pbkdf2") or ""
+    user_ok = bool(rec) and hmac.compare_digest(
+        username.encode("utf-8", "surrogatepass"),
+        str(rec.get("username") or "").encode("utf-8", "surrogatepass"))
+    if not user_ok or not isinstance(stored, str) or not stored:
+        _verify_password(password, _dummy_hash())
         return False
-    if username != rec.get("username"):
+    if not _verify_password(password, stored):
         return False
-    return _verify_password(password, rec.get("password_pbkdf2") or "")
+    if _needs_rehash(stored):
+        _upgrade_credential_hash(stored, password)
+    return True
+
+
+def _upgrade_credential_hash(old_stored: str, password: str) -> None:
+    """Re-hash the credential at the current cost after a successful login. Skipped
+    when the file changed in between (a concurrent password change wins)."""
+    with _CRED_LOCK:
+        rec = _load_credential()
+        if not rec or rec.get("password_pbkdf2") != old_stored:
+            return
+        rec["password_pbkdf2"] = _hash_password(password)
+        rec["version"] = 1
+        try:
+            _atomic_write(CRED_FILE, json.dumps(rec, indent=2, ensure_ascii=False))
+            _harden_perms(CRED_FILE)
+        except OSError as exc:
+            print(f"  [auth] credential re-hash failed: {exc}")
+
+
+def _brute_prune(now: float) -> None:
+    """Forget lockouts that have expired and failures older than the window; if the
+    table is still full, drop the least recently seen entries. Caller holds the lock."""
+    for key in [k for k, v in _BRUTE.items()
+                if v.get("until", 0) <= now and v.get("seen", 0) < now - LOCKOUT_S]:
+        _BRUTE.pop(key, None)
+    overflow = len(_BRUTE) - (_BRUTE_MAX_ENTRIES - 1)
+    if overflow > 0:
+        for key, _v in sorted(_BRUTE.items(), key=lambda kv: kv[1].get("seen", 0))[:overflow]:
+            _BRUTE.pop(key, None)
+
+
+def _bf_reserve(key: str):
+    """Reserve one password attempt for ``key`` (the client address) BEFORE the
+    password is hashed. Returns ``(allowed, retry_after_s, reason)``.
+
+    Twin of api/_admin_lib.php admin_bf_reserve, rule for rule: per address,
+    MAX_ATTEMPTS attempts in a LOCKOUT_S window, the last of them arming a LOCKOUT_S
+    lock; across all addresses, BF_GLOBAL_MAX attempts per window, which caps a
+    guessing run spread over many addresses. A burst of parallel requests takes one
+    slot each, so it can never get more guesses than the budget. The store is this
+    process's memory: it cannot be unwritable, so there is no fail-open path to close.
+    """
+    now = time.time()
+    with _BRUTE_LOCK:
+        bf = _BRUTE.get(key)
+        if bf is not None and bf.get("until", 0) > now:
+            return False, max(1, math.ceil(bf["until"] - now)), "locked"
+        if (bf is None or bf.get("start", 0) + LOCKOUT_S <= now
+                or (bf.get("until", 0) and bf["until"] <= now)):
+            if bf is None and len(_BRUTE) >= _BRUTE_MAX_ENTRIES:
+                _brute_prune(now)
+            bf = {"start": now, "count": 0, "until": 0, "seen": now}
+            _BRUTE[key] = bf
+        g = _BRUTE_GLOBAL
+        if g["start"] + LOCKOUT_S <= now:
+            g["start"], g["count"] = now, 0
+        if g["count"] >= BF_GLOBAL_MAX:
+            return False, max(1, math.ceil(g["start"] + LOCKOUT_S - now)), "global"
+        bf["count"] += 1
+        bf["seen"] = now
+        if bf["count"] >= MAX_ATTEMPTS:
+            bf["until"] = now + LOCKOUT_S
+        g["count"] += 1
+        return True, 0, None
+
+
+def _brute_reserve(key: str):
+    """Seconds left on a refusal (lockout or global ceiling), or None when the
+    attempt may proceed. See _bf_reserve."""
+    ok, retry, _reason = _bf_reserve(key)
+    return None if ok else retry
+
+
+def _brute_clear(key: str) -> None:
+    """The attempt succeeded: the address's budget is reset and its global slot
+    returned (twin of admin_bf_success)."""
+    with _BRUTE_LOCK:
+        _BRUTE.pop(key, None)
+        _BRUTE_GLOBAL["count"] = max(0, _BRUTE_GLOBAL["count"] - 1)
 
 
 def _new_session(username: str) -> str:
     token = secrets.token_hex(32)
-    _SESSIONS[token] = {
-        "username": username,
-        "expires": time.time() + SESSION_TTL,
-        "csrf": secrets.token_hex(32),
-    }
+    now = time.time()
+    with _SESSIONS_LOCK:
+        if len(_SESSIONS) >= MAX_SESSIONS:
+            for t in [t for t, v in _SESSIONS.items() if v.get("expires", 0) < now]:
+                _SESSIONS.pop(t, None)
+            while len(_SESSIONS) >= MAX_SESSIONS:
+                oldest = min(_SESSIONS, key=lambda t: _SESSIONS[t].get("expires", 0))
+                _SESSIONS.pop(oldest, None)
+        _SESSIONS[token] = {
+            "username": username,
+            "expires": now + SESSION_TTL,
+            "csrf": secrets.token_hex(32),
+        }
     return token
 
 
 def _get_session(token: str | None) -> dict | None:
     if not token:
         return None
-    s = _SESSIONS.get(token)
-    if not s:
-        return None
-    if s["expires"] < time.time():
-        del _SESSIONS[token]
-        return None
-    return s
+    with _SESSIONS_LOCK:
+        s = _SESSIONS.get(token)
+        if not s:
+            return None
+        if s["expires"] < time.time():
+            _SESSIONS.pop(token, None)
+            return None
+        return s
+
+
+def _drop_session(token: str | None) -> None:
+    if token:
+        with _SESSIONS_LOCK:
+            _SESSIONS.pop(token, None)
+
+
+def _revoke_other_sessions(keep_token: str | None) -> int:
+    """Log out every session but the caller's (password rotation: a stolen cookie
+    must not outlive the change meant to evict it)."""
+    with _SESSIONS_LOCK:
+        doomed = [t for t in _SESSIONS if t != keep_token]
+        for t in doomed:
+            _SESSIONS.pop(t, None)
+    return len(doomed)
 
 
 def _get_cookie_token(cookie_header: str | None) -> str | None:
@@ -1183,7 +1619,16 @@ def _is_forbidden_static(request_path: str) -> bool:
 
 # ── Usage statistics ───────────────────────────────────────────────────────────
 
-def _load_stats() -> dict:
+# Usage beacons are public and frequent; rewriting the whole stats.json for each
+# one serialised every request behind the file write. Increments accumulate here
+# and are merged into the file at most every _STATS_FLUSH_S seconds, whenever the
+# admin reads the figures, and at shutdown.
+_STATS_PENDING: dict = {}
+_STATS_LAST_FLUSH = [0.0]
+_STATS_FLUSH_S = 5.0
+
+
+def _read_stats_file() -> dict:
     if STATS_FILE.exists():
         try:
             d = json.loads(STATS_FILE.read_text(encoding="utf-8"))
@@ -1198,28 +1643,69 @@ def _load_stats() -> dict:
             "daily": {}, "datasets": {}}
 
 
+def _flush_stats_locked() -> None:
+    """Merge the pending increments into stats.json. Caller holds _STATS_LOCK."""
+    _STATS_LAST_FLUSH[0] = time.monotonic()
+    if not _STATS_PENDING:
+        return
+    pending = dict(_STATS_PENDING)
+    _STATS_PENDING.clear()
+    stats = _read_stats_file()
+    g = stats["global"]
+    g.setdefault("since", datetime.now().isoformat())
+    for (scope, key, field), value in pending.items():
+        if scope == "global":
+            g[field] = int(g.get(field, 0)) + value
+        elif scope == "daily":
+            day = stats["daily"].setdefault(key, {})
+            day[field] = int(day.get(field, 0)) + value
+        elif scope == "dataset":
+            ds = stats["datasets"].setdefault(key, {})
+            if field == "lastViewed":
+                ds["lastViewed"] = value
+            else:
+                ds[field] = int(ds.get(field, 0)) + value
+    try:
+        _atomic_write(STATS_FILE, json.dumps(stats, ensure_ascii=False, separators=(",", ":")))
+    except OSError as exc:
+        print(f"  [stats] write failed: {exc}")
+
+
+def _flush_stats() -> None:
+    with _STATS_LOCK:
+        _flush_stats_locked()
+
+
+atexit.register(_flush_stats)
+
+
+def _load_stats() -> dict:
+    """Current figures: the file plus anything still pending (flushed first)."""
+    with _STATS_LOCK:
+        _flush_stats_locked()
+        return _read_stats_file()
+
+
 def _record_event(kind: str, dataset_id: str | None = None) -> None:
     """Increment a usage counter (visit / view / download) — global, per-day, and
     per-dataset. Serialized by _STATS_LOCK so concurrent beacons never lose an
-    increment; the actual file write is the atomic temp+rename helper."""
+    increment. Callers pass a dataset id only after proving the dataset exists, so
+    the per-dataset table is bounded by the catalog."""
     field = {"visit": "visits", "view": "views", "download": "downloads"}.get(kind)
     if not field:
         return
     now = datetime.now()
     today = now.strftime("%Y-%m-%d")
     with _STATS_LOCK:
-        stats = _load_stats()
-        g = stats["global"]
-        g[field] = int(g.get(field, 0)) + 1
-        g.setdefault("since", now.isoformat())
-        day = stats["daily"].setdefault(today, {})
-        day[field] = int(day.get(field, 0)) + 1
+        for k in (("global", "", field), ("daily", today, field)):
+            _STATS_PENDING[k] = _STATS_PENDING.get(k, 0) + 1
         if dataset_id and kind in ("view", "download"):
-            ds = stats["datasets"].setdefault(dataset_id, {})
-            ds[field] = int(ds.get(field, 0)) + 1
+            k = ("dataset", dataset_id, field)
+            _STATS_PENDING[k] = _STATS_PENDING.get(k, 0) + 1
             if kind == "view":
-                ds["lastViewed"] = now.isoformat()
-        _atomic_write(STATS_FILE, json.dumps(stats, indent=2, ensure_ascii=False))  # RACE-020
+                _STATS_PENDING[("dataset", dataset_id, "lastViewed")] = now.isoformat()
+        if time.monotonic() - _STATS_LAST_FLUSH[0] >= _STATS_FLUSH_S:
+            _flush_stats_locked()
 
 
 def _admin_stats() -> dict:
@@ -2290,14 +2776,32 @@ def _update_check() -> dict:
     # pick up the SHA256SUMS asset when published so the download can be verified.
     asset_url = asset_name = sums_url = sig_url = None
     asset_size = None
+    asset_error = None
+    # The release artifact is named after the tag it was built for. Any other
+    # matching asset (an extra zip attached by hand, a stale one) is never applied,
+    # and two candidates for the same name make the release ambiguous: refused.
+    wanted = f"lumen3d-web-{latest}.zip" if latest else None
+    candidates = []
     for a in rel.get("assets") or []:
         name = a.get("name") or ""
         if _RELEASE_ASSET_RE.match(name):
-            asset_url, asset_name, asset_size = a.get("browser_download_url"), name, a.get("size")
+            candidates.append(a)
         elif name == "SHA256SUMS":
             sums_url = a.get("browser_download_url")
         elif name == "SHA256SUMS.sig":
             sig_url = a.get("browser_download_url")
+    exact = [a for a in candidates if wanted and (a.get("name") or "").lower() == wanted.lower()]
+    if len(exact) == 1:
+        a = exact[0]
+        asset_url, asset_name, asset_size = a.get("browser_download_url"), a.get("name"), a.get("size")
+    elif len(exact) > 1:
+        asset_error = "ambiguous_asset"
+    elif candidates:
+        asset_error = "asset_name_mismatch"
+    else:
+        asset_error = "no_release_asset"
+    if not asset_error and not sums_url:
+        asset_error = "no_checksums"
     # One entry per version the update brings, oldest first. The release body is
     # only the newest changelog, so a host several releases behind reads the
     # others from the notes asset; a release older than that asset gets its body.
@@ -2327,6 +2831,7 @@ def _update_check() -> dict:
         "assetSize": asset_size,
         "sumsUrl": sums_url,
         "sigUrl": sig_url,
+        "assetError": asset_error,
         "signingConfigured": bool(_RELEASE_PUBKEY_HEX),
     }
 
@@ -2404,9 +2909,16 @@ def _start_update():
             _UPDATE_STATE["running"] = False
             return False, 409, {"error": "pivot_pending"}
         info = _update_check()
-        if not info.get("available") or not (info.get("assetUrl") or info.get("zipUrl")):
+        if not info.get("available"):
             _UPDATE_STATE["running"] = False
             return False, 400, {"error": "no_update_available", "info": info}
+        # Only the curated, checksummed artifact is ever applied. GitHub's source
+        # zipball has no entry in SHA256SUMS and cannot be verified.
+        if info.get("assetError") or not (info.get("assetUrl") and info.get("sumsUrl")):
+            _UPDATE_STATE["running"] = False
+            return False, 400, {"error": "unverifiable_release",
+                                "reason": info.get("assetError") or "no_release_asset",
+                                "info": info}
         _UPDATE_STATE.update({"phase": "starting", "pct": 0, "message": "Préparation…",
                               "error": None, "target": info.get("latest")})
         threading.Thread(target=_run_update, args=(info,), daemon=True).start()
@@ -2465,7 +2977,13 @@ def _prune_backups(keep_zips: int = 3) -> None:
                 pass
 
 
-def _http_download(url: str, dest: Path, *, expected_size=None, progress=None) -> int:
+# Ceiling on a downloaded release archive. A real release is a few megabytes; the
+# cap only keeps a hostile or broken source from filling the disk.
+_RELEASE_MAX_BYTES = 1 << 30
+
+
+def _http_download(url: str, dest: Path, *, expected_size=None, progress=None,
+                   limit: int = _RELEASE_MAX_BYTES) -> int:
     """Stream url → dest. A truncated body must fail HERE (Content-Length check),
     never surface later in the apply phase. Returns bytes written."""
     req = urllib.request.Request(url, headers={
@@ -2475,12 +2993,16 @@ def _http_download(url: str, dest: Path, *, expected_size=None, progress=None) -
     with urllib.request.urlopen(req, timeout=120) as r, open(dest, "wb") as f:
         declared = r.headers.get("Content-Length")
         declared = int(declared) if declared and declared.isdigit() else None
+        if declared is not None and declared > limit:
+            raise OSError(f"archive trop volumineuse ({declared} octets)")
         while True:
             chunk = r.read(256 * 1024)
             if not chunk:
                 break
-            f.write(chunk)
             written += len(chunk)
+            if written > limit:
+                raise OSError("archive trop volumineuse")
+            f.write(chunk)
             if progress:
                 progress(written, declared or expected_size)
     if declared is not None and written != declared:
@@ -2558,6 +3080,27 @@ def _verify_release_signature(sums_raw: bytes, info: dict) -> None:
         raise OSError("signature de release invalide — authenticité refusée (fail-closed)")
     print(f"MAJ: signature de release vérifiée (Ed25519, clé {_RELEASE_PUBKEY_HEX[:16]}…).",
           flush=True)
+
+
+def _verify_release_download(info: dict, zip_path: Path) -> None:
+    """Integrity + authenticity of a downloaded release, fail-closed.
+
+    The asset MUST have its own line in SHA256SUMS and the digest MUST match: an
+    asset absent from the (signed) sums file used to skip the digest check, which
+    let a zip attached next to an older, validly signed SHA256SUMS through. With a
+    pinned key the sums file must also carry a valid signature; without one the
+    chain is integrity-only and _verify_release_signature says so loudly.
+    """
+    name = info.get("assetName")
+    if not info.get("sumsUrl") or not name:
+        raise OSError("release sans SHA256SUMS — intégrité impossible à prouver (fail-closed)")
+    sums_raw = _fetch_url_bytes(info["sumsUrl"])
+    _verify_release_signature(sums_raw, info)          # fail-closed if key pinned
+    expected = _parse_sha256sums(sums_raw).get(name)
+    if not expected:
+        raise OSError(f"{name} absent de SHA256SUMS — archive non couverte, refusée (fail-closed)")
+    if _sha256_file(zip_path) != expected:
+        raise OSError("empreinte SHA-256 de l'archive invalide")
 
 
 def _extract_release(zip_path: Path, dest: Path) -> Path:
@@ -2685,6 +3228,23 @@ def _download_capped(url: str, dest: Path, limit: int) -> None:
             f.write(chunk)
 
 
+# What a plugin package may carry (twin of api/_admin_lib.php mkt_plugin_entry_allowed):
+# js/modules/ is web-served, so a server-side script or a dotfile (.htaccess) in a
+# package must never land there, whatever signed the catalog.
+_PLUGIN_ENTRY_EXT = frozenset({"js", "mjs", "json", "css", "html", "md", "txt", "png", "jpg", "jpeg",
+                               "gif", "webp", "svg", "woff", "woff2", "ttf", "otf", "wasm", "glsl",
+                               "frag", "vert", "map"})
+
+
+def _plugin_entry_allowed(name: str) -> bool:
+    base = name.rstrip("/").rsplit("/", 1)[-1]
+    if not base or base.startswith("."):
+        return False
+    if "." not in base:
+        return True                       # LICENSE, README
+    return base.rsplit(".", 1)[1].lower() in _PLUGIN_ENTRY_EXT
+
+
 def _extract_plugin_zip(zip_path: Path, dest: Path) -> Path:
     """Hardened extraction of a plugin zip (remote input, rule 1.4): reject
     traversal/absolute/drive/backslash entries, cap entry count + total size. Returns
@@ -2702,6 +3262,8 @@ def _extract_plugin_zip(zip_path: Path, dest: Path) -> Path:
             if (not name or name.startswith(("/", "\\")) or "\\" in name
                     or ":" in first or ".." in name.split("/")):
                 raise OSError(f"entrée d'archive rejetée: {name!r}")
+            if not name.endswith("/") and not _plugin_entry_allowed(name):
+                raise OSError(f"entrée d'archive refusée (type de fichier): {name!r}")
             total += m.file_size
             if total > MAX_TOTAL:
                 raise OSError("archive plugin: trop volumineuse")
@@ -3000,8 +3562,11 @@ def _spawn_pivot() -> None:
     file about to be swapped. The copy — not the live file — is executed because
     the live dev_server.py is itself part of the swap."""
     import subprocess
-    pivot_script = Path(tempfile.gettempdir()) / f"lumen3d-pivot-{os.getpid()}.py"
-    shutil.copy2(Path(__file__).resolve(), pivot_script)
+    # A private 0700 directory: a predictable name in the shared temp dir could be
+    # pre-planted (symlink) by another local user and then executed by us.
+    pivot_dir = Path(tempfile.mkdtemp(prefix="lumen3d-pivot-"))
+    pivot_script = pivot_dir / "lumen3d-pivot.py"
+    shutil.copyfile(Path(__file__).resolve(), pivot_script)
     LOGS_DIR.mkdir(exist_ok=True)
     log_f = open(LOGS_DIR / f"update-pivot-{datetime.now():%Y%m%d-%H%M%S}.log",
                  "a", encoding="utf-8")
@@ -3037,7 +3602,9 @@ def _run_update(info: dict) -> None:
         _make_backup_zip(BACKUPS_DIR / f"backup-{current}-{ts}.zip")
 
         _set_update("download", 15, "Téléchargement de la mise à jour…")
-        url = info.get("assetUrl") or info.get("zipUrl")
+        url = info.get("assetUrl")
+        if not url or not info.get("sumsUrl") or not info.get("assetName"):
+            raise OSError("release sans archive vérifiable (asset + SHA256SUMS) — refusée")
         workdir.mkdir(parents=True, exist_ok=True)
         zip_path = workdir / "release.zip"
 
@@ -3045,24 +3612,14 @@ def _run_update(info: dict) -> None:
             if total:
                 _set_update("download", min(15 + int(35 * done / total), 50),
                             f"Téléchargement… {done / 1e6:.1f} / {total / 1e6:.1f} Mo")
-        _http_download(url, zip_path,
-                       expected_size=info.get("assetSize") if info.get("assetUrl") else None,
+        _http_download(url, zip_path, expected_size=info.get("assetSize"),
                        progress=_dl_progress)
 
         _set_update("verify", 55, "Vérification de l'authenticité…")
         # Authenticity + integrity chain: (pinned key) —sig→ SHA256SUMS —sha256→ zip.
         # Fetch the manifest bytes ONCE: the signature is over those exact bytes, and
         # the zip digest is read from the same bytes we authenticated.
-        if info.get("sumsUrl") and info.get("assetUrl") and info.get("assetName"):
-            sums_raw = _fetch_url_bytes(info["sumsUrl"])
-            _verify_release_signature(sums_raw, info)          # fail-closed if key pinned
-            expected = _parse_sha256sums(sums_raw).get(info["assetName"])
-            if expected and _sha256_file(zip_path) != expected:
-                raise OSError("empreinte SHA-256 de l'archive invalide")
-        elif _RELEASE_PUBKEY_HEX:
-            # A signing key is pinned but the release ships no SHA256SUMS to sign over.
-            raise OSError("release sans SHA256SUMS alors qu'une clé de signature est "
-                          "épinglée — authenticité impossible à prouver (fail-closed)")
+        _verify_release_download(info, zip_path)
         with zipfile.ZipFile(zip_path) as zf:
             bad = zf.testzip()
         if bad:
@@ -3406,16 +3963,14 @@ def _check_main(root_arg) -> int:
             errors.append(f"manquant: {rel}")
 
     if (root / "dev_server.py").exists():
-        cfile = str(Path(tempfile.gettempdir()) / f"lumen3d-check-{os.getpid()}.pyc")
+        check_dir = tempfile.mkdtemp(prefix="lumen3d-check-")
+        cfile = str(Path(check_dir) / "dev_server.pyc")
         try:
             py_compile.compile(str(root / "dev_server.py"), cfile=cfile, doraise=True)
         except Exception as e:
             errors.append(f"dev_server.py ne compile pas: {e}")
         finally:
-            try:
-                os.unlink(cfile)
-            except OSError:
-                pass
+            shutil.rmtree(check_dir, ignore_errors=True)
 
     version = _max_version(root / "changelog")
     if not version:
@@ -3533,6 +4088,14 @@ def _safe_subpath(root: Path, rel):
     return candidate
 
 
+def _dataset_is_hidden(ds_dir: Path) -> bool:
+    try:
+        meta = json.loads((ds_dir / "metadata.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    return isinstance(meta, dict) and bool(meta.get("hidden"))
+
+
 def _list_download_entries(download_root: Path, target: Path, dataset_id: str, rel: str):
     """List the immediate children of ``target`` (a dir inside ``download_root``).
 
@@ -3590,7 +4153,9 @@ def _list_datasets() -> list[dict]:
         if not base.is_dir():
             continue
         for ds_dir in sorted(base.iterdir()):
-            if not ds_dir.is_dir():
+            # A dot-folder is never a dataset: it is a publish in flight or its
+            # leftover (.incoming-*, .replaced-*), or something hand-made.
+            if ds_dir.name.startswith(".") or not ds_dir.is_dir():
                 continue
             meta_path = ds_dir / "metadata.json"
             if not meta_path.exists():
@@ -3610,6 +4175,8 @@ def _list_datasets() -> list[dict]:
             try:
                 meta = json.loads(meta_path.read_text(encoding="utf-8"))
             except Exception:
+                continue
+            if not isinstance(meta, dict):
                 continue
             thumb = ds_dir / "thumbnail.webp"
             thumb_url = f"DATA_WEB/{type_dir}/{ds_dir.name}/thumbnail.webp" if thumb.exists() else None
@@ -3772,7 +4339,31 @@ def _save_staged_thumbnail(dataset_id: str, image_data: str):
     return status, payload
 
 
+# Serialises every read-modify-write of a published metadata.json (editor save,
+# visibility flip, gallery add/delete): _atomic_write only makes each WRITE whole,
+# two interleaved RMWs would still lose one of the edits.
+_META_LOCK = threading.RLock()
+
+
+def _migrations_bind() -> None:
+    """Point the migrations engine at this server's tree and metadata lock (the tests
+    move DATA_WEB / UPLOADS_DIR after import, so this runs per request; it only
+    reconfigures when a path actually changed)."""
+    data_web, uploads = Path(DATA_WEB).resolve(), Path(UPLOADS_DIR).resolve()
+    if (dataset_migrations.DATA_WEB != data_web or dataset_migrations.UPLOADS_DIR != uploads
+            or dataset_migrations._META_LOCK is not _META_LOCK):
+        dataset_migrations.configure(
+            ROOT, data_web=data_web, uploads_dir=uploads, meta_lock=_META_LOCK,
+            on_metadata_change=lambda: _CATALOG_CACHE.__setitem__("sig", None),
+            file_mode=_file_mode())
+
+
 def _save_dataset(dataset_id: str, body: dict) -> bool:
+    with _META_LOCK:
+        return _save_dataset_locked(dataset_id, body)
+
+
+def _save_dataset_locked(dataset_id: str, body: dict) -> bool:
     safe = _safe_dataset_dir(dataset_id)
     if safe is None:
         return False
@@ -3787,6 +4378,10 @@ def _save_dataset(dataset_id: str, body: dict) -> bool:
             existing = json.loads(meta_path.read_text(encoding="utf-8"))
         except Exception:
             pass
+    if not isinstance(existing, dict):
+        existing = {}
+    if not isinstance(body, dict):
+        body = {}
 
     stored_gallery = existing.get("gallery")
     existing.update(body)
@@ -3812,6 +4407,11 @@ def _save_dataset(dataset_id: str, body: dict) -> bool:
 def _set_dataset_hidden(dataset_id: str, hidden: bool) -> bool:
     """Flip the `hidden` flag on a dataset's metadata.json. Hidden datasets are
     omitted from the public catalog.json (_build_catalog) but still listed in admin."""
+    with _META_LOCK:
+        return _set_dataset_hidden_locked(dataset_id, hidden)
+
+
+def _set_dataset_hidden_locked(dataset_id: str, hidden: bool) -> bool:
     safe = _safe_dataset_dir(dataset_id)
     if safe is None:
         return False
@@ -3822,6 +4422,8 @@ def _set_dataset_hidden(dataset_id: str, hidden: bool) -> bool:
     try:
         meta = json.loads(meta_path.read_text(encoding="utf-8"))
     except Exception:
+        return False
+    if not isinstance(meta, dict):
         return False
     meta["hidden"] = bool(hidden)
     meta["lastModified"] = datetime.now().isoformat()
@@ -3981,7 +4583,13 @@ def _gallery_reconcile(meta: dict, ds_dir: Path, fallback=None) -> list:
 
 
 def _gallery_add(dataset_id: str, body: dict):
-    """Decode a data: URL and store it as a new gallery image. Returns (status, payload)."""
+    """Store a new gallery image — raw bytes (``body["raw"]``) or a data: URL
+    (``body["image"]``). Returns (status, payload)."""
+    with _META_LOCK:
+        return _gallery_add_locked(dataset_id, body if isinstance(body, dict) else {})
+
+
+def _gallery_add_locked(dataset_id: str, body: dict):
     safe = _safe_dataset_dir(dataset_id)
     if safe is None:
         return 400, {"error": "Invalid dataset ID"}
@@ -3989,14 +4597,18 @@ def _gallery_add(dataset_id: str, body: dict):
     if not ds_dir.is_dir():
         return 404, {"error": "Dataset not found"}
 
-    image = (body or {}).get("image", "")
-    if not isinstance(image, str) or not image.startswith("data:image/"):
-        return 400, {"error": "Invalid image format"}
-    try:
-        import base64
-        raw = base64.b64decode(image.split(",", 1)[1])
-    except Exception:
-        return 400, {"error": "Invalid image data"}
+    raw = (body or {}).get("raw")
+    if not isinstance(raw, (bytes, bytearray)):
+        # Legacy JSON form: a data: URL. The magic-byte check below applies to both.
+        image = (body or {}).get("image", "")
+        if not isinstance(image, str) or not image.startswith("data:image/"):
+            return 400, {"error": "Invalid image format"}
+        try:
+            import base64
+            raw = base64.b64decode(image.split(",", 1)[1])
+        except Exception:
+            return 400, {"error": "Invalid image data"}
+    raw = bytes(raw)
     if not raw:
         return 400, {"error": "Empty image"}
     if len(raw) > MAX_GALLERY_BYTES:
@@ -4045,6 +4657,11 @@ def _gallery_add(dataset_id: str, body: dict):
 
 
 def _gallery_delete(dataset_id: str, file_name: str):
+    with _META_LOCK:
+        return _gallery_delete_locked(dataset_id, file_name)
+
+
+def _gallery_delete_locked(dataset_id: str, file_name: str):
     safe = _safe_dataset_dir(dataset_id)
     if safe is None:
         return 400, {"error": "Invalid dataset ID"}
@@ -4075,36 +4692,70 @@ def _gallery_delete(dataset_id: str, file_name: str):
     return 200, {"ok": True, "gallery": meta["gallery"]}
 
 
-def _catalog_mtime_sig() -> float:
-    """PERF-035: cheap change signature — the newest metadata.json mtime across the
-    dataset roots (plus each root dir mtime to catch added/removed datasets)."""
-    sig = 0.0
+# How long a computed catalog signature is trusted before the tree is stat-ed
+# again. Every write through this server resets the cache at once; the interval
+# only bounds how late an out-of-band change (SFTP, the pipeline) is noticed.
+_CATALOG_SIG_TTL_S = 2.0
+
+
+def _catalog_mtime_sig():
+    """Change signature of everything the catalog is built from: per dataset folder,
+    (name, metadata.json mtime_ns + size, thumbnail.webp mtime_ns + size). A MAX of
+    mtimes missed a metadata.json restored with an older mtime and a thumbnail
+    added by SFTP; hashing the full tuple catches both."""
+    h = hashlib.sha256(str(DATA_WEB).encode("utf-8", "surrogatepass"))
     for t in ALLOWED_TYPE_DIRS:
         base = DATA_WEB / t
         if not base.is_dir():
             continue
         try:
-            sig = max(sig, base.stat().st_mtime)
+            names = sorted(e.name for e in os.scandir(base))
         except OSError:
-            pass
-        for ds in base.iterdir():
-            try:
-                sig = max(sig, (ds / "metadata.json").stat().st_mtime)
-            except OSError:
-                pass
-    return sig
+            continue
+        for name in names:
+            if name.startswith("."):
+                continue
+            h.update(f"|{t}/{name}".encode("utf-8", "surrogatepass"))
+            for leaf in ("metadata.json", "thumbnail.webp"):
+                try:
+                    st = os.stat(base / name / leaf)
+                    h.update(f":{st.st_mtime_ns}:{st.st_size}".encode())
+                except OSError:
+                    h.update(b":-")
+    return h.hexdigest()
 
 
 def _list_datasets_cached() -> list[dict]:
     """PERF-035: re-parsing every metadata.json on each catalog.json GET was O(datasets)
-    JSON loads per request. Recompute only when the mtime signature changes."""
+    JSON loads per request. Recompute only when the signature changes, and stat the
+    tree at most every _CATALOG_SIG_TTL_S seconds."""
+    now = time.monotonic()
+    cached = _CATALOG_CACHE.get("data")
+    if (_CATALOG_CACHE.get("sig") is not None and cached is not None
+            and _CATALOG_CACHE.get("root") == str(DATA_WEB)
+            and now - _CATALOG_CACHE.get("checked", 0.0) < _CATALOG_SIG_TTL_S):
+        return cached
     sig = _catalog_mtime_sig()
-    if _CATALOG_CACHE["sig"] == sig and _CATALOG_CACHE["data"] is not None:
-        return _CATALOG_CACHE["data"]
+    if _CATALOG_CACHE.get("sig") == sig and cached is not None:
+        _CATALOG_CACHE["checked"] = now
+        return cached
     data = _list_datasets()
-    _CATALOG_CACHE["sig"] = sig
-    _CATALOG_CACHE["data"] = data
+    _CATALOG_CACHE.update({"sig": sig, "data": data, "checked": now,
+                           "root": str(DATA_WEB), "body": None})
     return data
+
+
+def _catalog_body() -> tuple[bytes, str]:
+    """The public catalog as encoded JSON plus its ETag, re-encoded only when the
+    underlying listing changed."""
+    data = _list_datasets_cached()
+    cached = _CATALOG_CACHE.get("body")
+    if cached is not None and cached[2] is data:
+        return cached[0], cached[1]
+    body = json.dumps(_build_catalog(), ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    etag = '"cat-' + hashlib.sha256(body).hexdigest()[:24] + '"'
+    _CATALOG_CACHE["body"] = (body, etag, data)
+    return body, etag
 
 
 def _build_catalog() -> list[dict]:
@@ -4324,7 +4975,7 @@ def _migrate_metadata(log: list) -> None:
             continue
         for ds_dir in sorted(base.iterdir()):
             meta_path = ds_dir / "metadata.json"
-            if not ds_dir.is_dir() or not meta_path.is_file():
+            if ds_dir.name.startswith(".") or not ds_dir.is_dir() or not meta_path.is_file():
                 continue
             try:
                 meta = json.loads(meta_path.read_text(encoding="utf-8"))
@@ -4653,11 +5304,265 @@ _DOWNLOAD_RE = re.compile(
     re.IGNORECASE)
 
 
+# ── Static serving helpers ─────────────────────────────────────────────────────
+
+# The platform's own documents: HTML files at the top of the tree. Only these get a
+# CSP nonce injected; an .html anywhere else (a plugin folder, a dataset, a backup
+# copy) is refused, because a same-origin document carrying a live nonce, or simply
+# loading same-origin scripts, would sidestep the plugin trust gate.
+_HTML_LIKE_EXT = (".html", ".htm", ".xhtml", ".shtml")
+
+# Text assets worth compressing on the wire. A pretty-printed brick manifest runs to
+# 23 MB and gzips to about 1.5 MB; it is the first heavy request of every open.
+_COMPRESSIBLE_EXT = frozenset({".json", ".jsonl", ".js", ".mjs", ".css", ".svg",
+                               ".txt", ".csv", ".md", ".map"})
+_GZIP_MIN_BYTES = 1024
+_GZIP_MAX_SOURCE = 256 * 1024 * 1024
+_GZIP_CACHE: "OrderedDict[tuple, bytes]" = OrderedDict()
+_GZIP_CACHE_LOCK = threading.Lock()
+_GZIP_CACHE_BUDGET = 96 * 1024 * 1024
+_GZIP_CACHE_BYTES = [0]
+
+# Cache lifetimes — the SAME rule as the root .htaccess, so a deployment behaves
+# alike on both backends. Revalidated (no-cache + ETag) costs a 304 when unchanged.
+#   brick pack (.bin/.rgba/.gz) WITH ?v=  → immutable for a year: the brick loader
+#       stamps every pack URL with a hash of the manifest's pack list, so a
+#       re-processed dataset gets new URLs and can never read yesterday's voxels;
+#   brick pack without ?v=                → revalidated;
+#   script/style WITH ?v= (release stamp) → immutable for a week (a host that rate-
+#       limits per address answers 429 when ~25 scripts revalidate on every page);
+#   everything else (unversioned scripts, JSON, manifests…) → revalidated.
+_CACHE_REVALIDATE = "no-cache"
+_CACHE_IMMUTABLE = "public, max-age=31536000, immutable"
+_CACHE_VERSIONED_ASSET = "public, max-age=604800, immutable"
+_PACK_EXT = (".bin", ".rgba", ".gz")
+_ASSET_EXT = (".js", ".mjs", ".css")
+
+# A document served from the dataset tree or the media library is someone's upload,
+# never one of our pages: whatever a browser makes of it, it runs nothing and reaches
+# nothing. Never applied to .js (a Worker script's own CSP would bind the worker).
+_UNTRUSTED_DOC_CSP = ("default-src 'none'; img-src 'self' data:; media-src 'self'; "
+                      "style-src 'unsafe-inline'; sandbox")
+
+def _static_cache_policy(rel_lower: str, query: str) -> str:
+    """Cache-Control for a static file (see the table above _CACHE_REVALIDATE). A
+    `v` parameter counts with an empty value too, as the .htaccess `(^|&)v=` does."""
+    versioned = "v" in urllib.parse.parse_qs(query or "", keep_blank_values=True)
+    if rel_lower.endswith(_PACK_EXT):
+        return _CACHE_IMMUTABLE if versioned else _CACHE_REVALIDATE
+    if rel_lower.endswith(_ASSET_EXT):
+        return _CACHE_VERSIONED_ASSET if versioned else _CACHE_REVALIDATE
+    return _CACHE_REVALIDATE
+
+
+_RANGE_UNSATISFIABLE = object()
+_RANGE_RE = re.compile(r"\s*bytes\s*=\s*([0-9]{0,19})\s*-\s*([0-9]{0,19})\s*")
+
+
+def _parse_byte_range(header, size: int):
+    """One RFC 9110 byte range against a representation of ``size`` bytes.
+
+    Returns ``(start, end)`` inclusive, ``None`` when the header is absent, malformed
+    or multi-part (the whole representation is then sent with a 200, which the RFC
+    allows), or ``_RANGE_UNSATISFIABLE`` (answer 416). A suffix ``bytes=-N`` is the
+    LAST N bytes; an end past the representation is clamped to ``size - 1``.
+    """
+    if not header:
+        return None
+    m = _RANGE_RE.fullmatch(header)
+    if not m:
+        return None
+    lo, hi = m.groups()
+    if not lo and not hi:
+        return None
+    if not lo:
+        n = int(hi)
+        if n == 0 or size == 0:
+            return _RANGE_UNSATISFIABLE
+        return max(0, size - n), size - 1
+    start = int(lo)
+    if hi and int(hi) < start:
+        return None
+    if start >= size:
+        return _RANGE_UNSATISFIABLE
+    end = min(int(hi), size - 1) if hi else size - 1
+    return start, end
+
+
+def _accepts_gzip(header) -> bool:
+    for part in (header or "").split(","):
+        token, _, params = part.strip().partition(";")
+        if token.strip().lower() not in ("gzip", "x-gzip", "*"):
+            continue
+        q = 1.0
+        for p in params.split(";"):
+            k, _, v = p.strip().partition("=")
+            if k.strip().lower() == "q":
+                try:
+                    q = float(v)
+                except ValueError:
+                    q = 0.0
+        if q > 0:
+            return True
+    return False
+
+
+def _gzip_cached(path: str, st) -> bytes:
+    """gzip of a file, memoised on (path, mtime_ns, size) under a byte budget."""
+    key = (path, st.st_mtime_ns, st.st_size)
+    with _GZIP_CACHE_LOCK:
+        hit = _GZIP_CACHE.get(key)
+        if hit is not None:
+            _GZIP_CACHE.move_to_end(key)
+            return hit
+    with open(path, "rb") as fh:
+        data = fh.read()
+    body = gzip.compress(data, compresslevel=6, mtime=0)
+    with _GZIP_CACHE_LOCK:
+        if key not in _GZIP_CACHE and len(body) <= _GZIP_CACHE_BUDGET // 4:
+            for old in [k for k in _GZIP_CACHE if k[0] == path]:
+                _GZIP_CACHE_BYTES[0] -= len(_GZIP_CACHE.pop(old))
+            _GZIP_CACHE[key] = body
+            _GZIP_CACHE_BYTES[0] += len(body)
+            while _GZIP_CACHE_BYTES[0] > _GZIP_CACHE_BUDGET and _GZIP_CACHE:
+                _k, v = _GZIP_CACHE.popitem(last=False)
+                _GZIP_CACHE_BYTES[0] -= len(v)
+    return body
+
+
+def _etag_matches(header, etag: str) -> bool:
+    """If-None-Match comparison (weak, as RFC 9110 requires for this header)."""
+    if not header:
+        return False
+    if header.strip() == "*":
+        return True
+    bare = etag[2:] if etag.startswith("W/") else etag
+    for tag in header.split(","):
+        tag = tag.strip()
+        if tag.startswith("W/"):
+            tag = tag[2:]
+        if tag == bare:
+            return True
+    return False
+
+
+def _not_modified_since(header, mtime: float) -> bool:
+    if not header:
+        return False
+    try:
+        ims = email.utils.parsedate_to_datetime(header)
+    except (TypeError, ValueError, IndexError, OverflowError):
+        return False
+    if ims is None:
+        return False
+    try:
+        return int(mtime) <= int(ims.timestamp())
+    except (OverflowError, OSError, ValueError):
+        return False
+
+
+def _has_dot_segment(clean_path: str) -> bool:
+    """A path segment starting with '.' (dotfiles, .git, a publish in flight such
+    as .incoming-*/.replaced-*) is never served. .well-known is the one exception."""
+    for seg in clean_path.replace("\\", "/").split("/"):
+        if seg.startswith(".") and seg not in (".well-known",):
+            return True
+    return False
+
+
+def _content_disposition_attachment(name: str) -> str:
+    ascii_name = re.sub(r'[^A-Za-z0-9._ ()+-]', "_", name)[:180] or "download"
+    quoted = urllib.parse.quote(name, safe="")
+    return f'attachment; filename="{ascii_name}"; filename*=UTF-8\'\'{quoted}'
+
+
+# ── Plugin discovery response cache ───────────────────────────────────────────
+# /api/plugins hashes every plugin file (trust classification) and inlines every
+# plugin dictionary; it is called on each page boot, by anyone. The response is
+# rebuilt only when something it depends on changes.
+_PLUGINS_CACHE: dict = {"sig": None, "body": None}
+
+
+def _plugins_signature() -> str:
+    h = hashlib.sha256()
+    h.update(f"{_DEV_TRUST}|{_TRUST_EPOCH}|{MODULES_DIR}".encode("utf-8", "surrogatepass"))
+    for f in (TRUST_FILE, ROOT / "version.json", DISABLED_PLUGINS_FILE, CHANGELOG_DIR):
+        try:
+            st = os.stat(f)
+            h.update(f"|{f.name}:{st.st_mtime_ns}:{st.st_size}".encode("utf-8", "surrogatepass"))
+        except OSError:
+            h.update(f"|{f.name}:-".encode("utf-8", "surrogatepass"))
+    for placement in PLUGIN_PLACEMENTS:
+        base = MODULES_DIR / placement
+        for dirpath, dirnames, filenames in os.walk(base):
+            dirnames.sort()
+            for name in sorted(filenames):
+                full = os.path.join(dirpath, name)
+                try:
+                    st = os.stat(full)
+                except OSError:
+                    continue
+                rel = os.path.relpath(full, MODULES_DIR)
+                h.update(f"|{rel}:{st.st_mtime_ns}:{st.st_size}".encode("utf-8", "surrogatepass"))
+    return h.hexdigest()
+
+
+class _DiscardWriter:
+    """Stand-in for wfile once a HEAD response's headers are out."""
+    def __init__(self, inner):
+        self._inner = inner
+
+    def write(self, data):
+        return len(data)
+
+    def flush(self):
+        try:
+            self._inner.flush()
+        except (OSError, ValueError):
+            pass
+
+
+class _QuietServer(http.server.ThreadingHTTPServer):
+    """ThreadingHTTPServer with a backlog sized for a Compare page (four embedded
+    viewers opening their sockets at once): the default of 5 dropped SYNs, which
+    Windows clients retry only after one to three seconds."""
+    request_queue_size = 128
+    daemon_threads = True
+
+
 class AdminHandler(http.server.SimpleHTTPRequestHandler):
     """
     Extends SimpleHTTPRequestHandler to intercept /api/* routes
     and delegate everything else to the normal static file serving.
     """
+
+    # Keep-alive: every response carries a Content-Length (or closes the
+    # connection), so the hundred-odd requests of a viewer boot share a few sockets.
+    protocol_version = "HTTP/1.1"
+    timeout = _SOCKET_TIMEOUT_S
+    disable_nagle_algorithm = True
+    # Explicit types for what the platform serves: with nosniff on every response a
+    # registry-derived guess (Windows maps .js to text/plain on some hosts) would
+    # stop scripts from loading.
+    extensions_map = {
+        **http.server.SimpleHTTPRequestHandler.extensions_map,
+        ".js": "text/javascript", ".mjs": "text/javascript",
+        ".css": "text/css", ".json": "application/json", ".jsonl": "application/x-ndjson",
+        ".map": "application/json", ".wasm": "application/wasm",
+        ".webp": "image/webp", ".svg": "image/svg+xml", ".png": "image/png",
+        ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif",
+        ".avif": "image/avif", ".ico": "image/x-icon",
+        ".glb": "model/gltf-binary", ".bin": "application/octet-stream",
+        ".rgba": "application/octet-stream", ".ims": "application/octet-stream",
+        ".h5": "application/octet-stream", ".hdf5": "application/octet-stream",
+        ".tif": "image/tiff", ".tiff": "image/tiff", ".pdf": "application/pdf",
+        ".zip": "application/zip", ".txt": "text/plain; charset=utf-8",
+        ".md": "text/plain; charset=utf-8", ".csv": "text/csv; charset=utf-8",
+        ".woff": "font/woff", ".woff2": "font/woff2", ".ttf": "font/ttf",
+    }
+
+    _head_only = False
+    _response_started = False
 
     def log_message(self, format, *args):
         # Compact log format. Quiet by default (PERF: skip the synchronous
@@ -4688,18 +5593,32 @@ class AdminHandler(http.server.SimpleHTTPRequestHandler):
             return str(ROOT / "__forbidden__")   # never exists → 404
         return fs
 
+    def send_response(self, code, message=None):
+        self._response_started = True
+        super().send_response(code, message)
+
+    def flush_headers(self):
+        super().flush_headers()
+        if self._head_only and not isinstance(self.wfile, _DiscardWriter):
+            # HEAD runs the GET route so both answer with the same status and
+            # headers; only the body is swallowed, after the header block went out.
+            self.wfile = _DiscardWriter(self.wfile)
+
     def do_HEAD(self):
-        """HEAD must traverse the SAME guard as GET.
+        """HEAD answers exactly what GET would, minus the body.
 
         Without an override the stdlib's do_HEAD bypasses the whole router: a HEAD
         on the credential store answered 200 with its size and mtime (i.e. when the
-        admin password was last changed) while the GET answered 404.
+        admin password was last changed) while the GET answered 404, and a HEAD on
+        a page returned the raw template's length.
         """
-        parsed = urllib.parse.urlparse(self.path)
-        if _is_forbidden_static(parsed.path.strip("/")):
-            self.send_error(HTTPStatus.NOT_FOUND)   # body suppressed on HEAD
-            return
-        super().do_HEAD()
+        self._head_only = True
+        real = self.wfile
+        try:
+            self.do_GET()
+        finally:
+            self.wfile = real
+            self._head_only = False
 
     def do_GET(self):
         parsed = urllib.parse.urlparse(self.path)
@@ -4712,8 +5631,10 @@ class AdminHandler(http.server.SimpleHTTPRequestHandler):
             # minimal by design (the version is already public on GitHub). The
             # lastUpdate summary (phase+target only, no details) lets the admin UI
             # report the outcome across the restart, before re-authentication.
+            # trustEpoch drives the viewers' live revocation of sandboxed plugins;
+            # whether this host runs in dev-trust is nobody else's business.
             payload = {"ok": True, "web": _max_version(CHANGELOG_DIR), "server": __version__,
-                       "devTrust": _DEV_TRUST, "trustEpoch": _TRUST_EPOCH}
+                       "trustEpoch": _TRUST_EPOCH}
             last = _read_last_update()
             if last and last.get("phase") in ("done", "rolled_back"):
                 payload["lastUpdate"] = {"phase": last["phase"], "target": last.get("target")}
@@ -4725,26 +5646,29 @@ class AdminHandler(http.server.SimpleHTTPRequestHandler):
         elif parsed.path in ("/api/downloads", "/api/downloads.php"):
             self._serve_downloads(parsed)
         elif parsed.path == "/api/upload.php":
-            self._handle_upload(parsed, body=None, raw=None)
+            self._guarded(self._handle_upload, parsed, body=None, raw=None)
+        elif parsed.path == "/api/migrations.php":
+            self._guarded(self._handle_migrations, parsed, body=None, raw=None)
         elif parsed.path in ("/api/auth.php", "/api/datasets.php", "/api/admin.php", "/api/telemetry.php", "/api/site.php"):
-            self._handle_api(parsed, body=None)
-        elif _is_forbidden_static(clean_path):
+            self._guarded(self._handle_api, parsed, body=None)
+        elif _is_forbidden_static(clean_path) or _has_dot_segment(clean_path) or "\x00" in clean_path:
             self._json(404, {"error": "Not found"})
-        elif clean_path == "" or clean_path.endswith(".html"):
+        elif clean_path == "":
+            self._serve_html("index.html")
+        elif clean_path.lower().endswith(_HTML_LIKE_EXT):
             # HTML documents get a per-request CSP nonce injected + the enforcing
-            # nonce-CSP header (INV-1). '' → index.html (the directory index).
-            self._serve_html(clean_path or "index.html")
+            # nonce-CSP header (INV-1) — but only the platform's own top-level pages.
+            self._serve_html(clean_path)
         else:
-            self._maybe_count_download(clean_path)
-            if "Range" in self.headers and self._serve_static_range():
-                return
-            super().do_GET()
+            self._serve_static(parsed, clean_path)
 
     def _maybe_count_download(self, clean_path: str):
         """Count a download when a file under DATA_WEB/<type>/<folder>/download/ is
         served. Server-side is the reliable hook (static GETs aren't POSTed). Range
-        continuations are skipped so one download ≈ one increment."""
-        if "Range" in self.headers:
+        continuations are skipped so one download ≈ one increment. Only an existing
+        dataset is counted (the caller has already proved the file exists): an
+        invented id must never mint a stats row."""
+        if "Range" in self.headers or self._head_only:
             return
         m = _DOWNLOAD_RE.match(clean_path.replace("\\", "/"))
         if not m:
@@ -4752,76 +5676,167 @@ class AdminHandler(http.server.SimpleHTTPRequestHandler):
         # The regex is case-insensitive (a URL may spell the type dir in any case on
         # a case-insensitive filesystem); the stats key must not be. Lower-casing it
         # keeps this counter and the telemetry beacon writing the SAME key.
-        ds_id = f"{m.group(1).lower()}/{m.group(2)}"
-        if _safe_dataset_dir(ds_id):
+        safe = _safe_dataset_dir(f"{m.group(1).lower()}/{m.group(2)}")
+        if safe and safe[2].is_dir():
             try:
-                _record_event("download", ds_id)
+                _record_event("download", f"{safe[0]}/{safe[1]}")
             except Exception:
                 pass
 
-    def _serve_static_range(self):
-        """Answer a single-range GET for a static file with a 206.
+    def list_directory(self, path):
+        # No directory indexes anywhere: a listing of DATA_WEB/<type>/ names every
+        # dataset, hidden ones included (twin of `Options -Indexes`).
+        self.send_error(HTTPStatus.NOT_FOUND)
+        return None
 
-        The brick loader asks for the byte runs of a cut through the volume instead of
-        whole packs (a cut across the stack needs a few bricks of many packs), and the
-        base handler would send the entire file back to a Range request. A malformed,
-        multi-part or unsatisfiable range falls through to the ordinary 200 answer,
-        which the loader takes as the whole pack.
+    def _static_cache_control(self, rel_lower: str, query: str) -> str:
+        return _static_cache_policy(rel_lower, query)
+
+    def _serve_static(self, parsed, clean_path: str):
+        """Every static file: validators (ETag / Last-Modified, 304), cache policy,
+        gzip for text assets, a single byte range for everything else.
+
+        The brick loader asks for the byte runs of a cut through the volume instead
+        of whole packs; a malformed or multi-part range is answered with the whole
+        file (200), an unsatisfiable one with 416.
         """
-        rng = self.headers.get("Range", "")
-        if not rng.startswith("bytes=") or "," in rng:
-            return False
-        path = self.translate_path(self.path)
-        if not os.path.isfile(path):
-            return False
+        fs = self.translate_path(self.path)
         try:
-            size = os.path.getsize(path)
-            lo, _, hi = rng[6:].partition("-")
-            if lo:
-                start = int(lo)
-                end = int(hi) if hi else size - 1
-            elif hi:
-                start = max(0, size - int(hi))
-                end = size - 1
-            else:
-                return False
-            if start < 0 or start > end or end >= size:
-                return False
-        except (ValueError, OSError):
-            return False
-        length = end - start + 1
-        self.send_response(206)
-        self.send_header("Content-Type", self.guess_type(path))
-        self.send_header("Content-Length", str(length))
-        self.send_header("Content-Range", f"bytes {start}-{end}/{size}")
-        self.send_header("Accept-Ranges", "bytes")
-        self.end_headers()
-        if self.command == "HEAD":
-            return True
-        with open(path, "rb") as fh:
+            real = Path(fs).resolve()
+            is_dir = real.is_dir()
+            is_file = (not is_dir) and real.is_file()
+        except OSError:
+            is_dir = is_file = False
+        if not is_file or real.suffix.lower() in _HTML_LIKE_EXT:
+            # Directories never list; an HTML document reached through an alias
+            # (trailing dot, 8.3 name) is not one of our pages either.
+            self._json(404, {"error": "Not found"})
+            return
+        try:
+            st = real.stat()
+        except OSError:
+            self._json(404, {"error": "Not found"})
+            return
+        size = st.st_size
+        rel = clean_path.replace("\\", "/")
+        rel_lower = rel.lower()
+        ctype = self.guess_type(str(real))
+        is_download = bool(_DOWNLOAD_RE.match(rel))
+        compressible = real.suffix.lower() in _COMPRESSIBLE_EXT and not is_download
+        rng_header = self.headers.get("Range")
+        use_gzip = (compressible and not rng_header and _GZIP_MIN_BYTES <= size <= _GZIP_MAX_SOURCE
+                    and _accepts_gzip(self.headers.get("Accept-Encoding")))
+        etag = f'"{st.st_mtime_ns:x}-{size:x}{"-gz" if use_gzip else ""}"'
+        last_modified = self.date_time_string(int(st.st_mtime))
+        cache_control = self._static_cache_control(rel_lower, parsed.query)
+
+        def common_headers():
+            self.send_header("ETag", etag)
+            self.send_header("Last-Modified", last_modified)
+            self.send_header("Cache-Control", cache_control)
+            if compressible:
+                self.send_header("Vary", "Accept-Encoding")
+            if is_download:
+                self.send_header("Content-Disposition",
+                                 _content_disposition_attachment(real.name))
+
+        inm = self.headers.get("If-None-Match")
+        if (_etag_matches(inm, etag) if inm
+                else _not_modified_since(self.headers.get("If-Modified-Since"), st.st_mtime)):
+            self.send_response(304)
+            common_headers()
+            self.end_headers()
+            return
+
+        if use_gzip:
+            try:
+                body = _gzip_cached(str(real), st)
+            except OSError:
+                self._json(404, {"error": "Not found"})
+                return
+            self._maybe_count_download(clean_path)
+            self.send_response(200)
+            self.send_header("Content-Type", ctype)
+            self.send_header("Content-Encoding", "gzip")
+            self.send_header("Content-Length", str(len(body)))
+            common_headers()
+            self.end_headers()
+            try:
+                self.wfile.write(body)
+            except (BrokenPipeError, ConnectionResetError):
+                self.close_connection = True
+            return
+
+        rng = None
+        if rng_header:
+            if_range = self.headers.get("If-Range")
+            if not if_range or if_range.strip() in (etag, last_modified):
+                rng = _parse_byte_range(rng_header, size)
+        if rng is _RANGE_UNSATISFIABLE:
+            self.send_response(416)
+            self.send_header("Content-Range", f"bytes */{size}")
+            self.send_header("Content-Length", "0")
+            common_headers()
+            self.end_headers()
+            return
+        start, end = rng if rng else (0, size - 1)
+        length = max(0, end - start + 1)
+        if not rng:
+            self._maybe_count_download(clean_path)
+        try:
+            fh = open(real, "rb")
+        except OSError:
+            self._json(404, {"error": "Not found"})
+            return
+        with fh:
+            self.send_response(206 if rng else 200)
+            self.send_header("Content-Type", ctype)
+            self.send_header("Content-Length", str(length))
+            self.send_header("Accept-Ranges", "bytes")
+            if rng:
+                self.send_header("Content-Range", f"bytes {start}-{end}/{size}")
+            common_headers()
+            self.end_headers()
+            if self._head_only:
+                return
             fh.seek(start)
             remaining = length
             while remaining > 0:
                 block = fh.read(min(remaining, 1 << 20))
                 if not block:
+                    # The file shrank under us: the promised length can no longer
+                    # be honoured, so the connection must not be reused.
+                    self.close_connection = True
                     break
                 try:
                     self.wfile.write(block)
                 except (BrokenPipeError, ConnectionResetError):
-                    return True
+                    self.close_connection = True
+                    return
                 remaining -= len(block)
-        return True
 
     def _serve_dynamic_catalog(self):
-        # BUG-062/PERF-035: same filter+sort as the static rebuild, off the mtime cache.
-        catalog = _build_catalog()
-        body = json.dumps(catalog, indent=2, ensure_ascii=False).encode("utf-8")
+        # BUG-062/PERF-035: same filter+sort as the static rebuild, off the mtime
+        # cache, encoded once per change, revalidated by ETag and gzipped on request.
+        body, etag = _catalog_body()
+        if _etag_matches(self.headers.get("If-None-Match"), etag):
+            self.send_response(304)
+            self.send_header("ETag", etag)
+            self.send_header("Cache-Control", _CACHE_REVALIDATE)
+            self.end_headers()
+            return
+        encoding = None
+        if len(body) >= _GZIP_MIN_BYTES and _accepts_gzip(self.headers.get("Accept-Encoding")):
+            body = gzip.compress(body, compresslevel=6, mtime=0)
+            encoding = "gzip"
         self.send_response(200)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
-        # BUG-060: do NOT re-send Access-Control-Allow-Origin / Cache-Control / Pragma /
-        # Expires here — end_headers() already emits CORS and (for a .json path) the
-        # no-cache trio. Sending them again duplicated every one of those headers.
+        if encoding:
+            self.send_header("Content-Encoding", encoding)
+        self.send_header("Vary", "Accept-Encoding")
+        self.send_header("ETag", etag)
+        self.send_header("Cache-Control", _CACHE_REVALIDATE)
         self.end_headers()
         self.wfile.write(body)
 
@@ -4832,34 +5847,46 @@ class AdminHandler(http.server.SimpleHTTPRequestHandler):
         Admin-disabled plugins are filtered out HERE (in discovery, before the client
         builds any UI) so the load-order invariant is preserved; the persisted manifest
         mirrors the filtered list so static hosts inherit the same exclusions."""
-        disabled = _load_disabled_plugins()
-        ver = _max_version(CHANGELOG_DIR)
-        approvals = _load_trust_store()
-        manifest = _release_manifest_files()
-        # Fail-closed on hosts with an API: incompatible OR untrusted plugins are
-        # filtered out of discovery, so an untrusted index.js is never even a load
-        # candidate (defense in depth — the real containment is the CSP, INV-1).
-        # Surviving plugins carry a `trust` vouch (tier/hash/mode/caps) the client
-        # re-verifies over the exact bytes it executes (INV-2).
-        plugins = []
-        for p in _list_plugins():
-            if p.get("path") in disabled:
-                continue
-            if not _compat_satisfies(ver, p.get("platformCompat"))[0]:
-                continue
-            trust = _classify_plugin(p["path"], MODULES_DIR / p["path"], approvals, manifest)
-            if trust["tier"] == "untrusted":
-                continue
-            p["trust"] = {"tier": trust["tier"], "hash": trust["hash"],
-                          "mode": trust.get("mode"), "caps": trust.get("caps"),
-                          "files": sorted(trust["files"].keys())}
-            plugins.append(p)
-        _write_plugins_manifest(plugins)
-        body = json.dumps({"plugins": plugins, "devTrust": _DEV_TRUST,
-                           "trustEpoch": _TRUST_EPOCH}, indent=2, ensure_ascii=False).encode("utf-8")
+        sig = _plugins_signature()
+        body = _PLUGINS_CACHE["body"] if _PLUGINS_CACHE["sig"] == sig else None
+        if body is None:
+            disabled = _load_disabled_plugins()
+            ver = _max_version(CHANGELOG_DIR)
+            approvals = _load_trust_store()
+            manifest = _release_manifest_files()
+            # Fail-closed on hosts with an API: incompatible OR untrusted plugins are
+            # filtered out of discovery, so an untrusted index.js is never even a load
+            # candidate (defense in depth — the real containment is the CSP, INV-1).
+            # Surviving plugins carry a `trust` vouch (tier/hash/mode/caps) the client
+            # re-verifies over the exact bytes it executes (INV-2).
+            plugins = []
+            for p in _list_plugins():
+                if p.get("path") in disabled:
+                    continue
+                if not _compat_satisfies(ver, p.get("platformCompat"))[0]:
+                    continue
+                trust = _classify_plugin(p["path"], MODULES_DIR / p["path"], approvals, manifest)
+                if trust["tier"] == "untrusted":
+                    continue
+                p["trust"] = {"tier": trust["tier"], "hash": trust["hash"],
+                              "mode": trust.get("mode"), "caps": trust.get("caps"),
+                              "files": sorted(trust["files"].keys())}
+                plugins.append(p)
+            _write_plugins_manifest(plugins)
+            body = json.dumps({"plugins": plugins, "devTrust": _DEV_TRUST,
+                               "trustEpoch": _TRUST_EPOCH},
+                              ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+            _PLUGINS_CACHE.update({"sig": sig, "body": body})
+        encoding = None
+        if len(body) >= _GZIP_MIN_BYTES and _accepts_gzip(self.headers.get("Accept-Encoding")):
+            body = gzip.compress(body, compresslevel=6, mtime=0)
+            encoding = "gzip"
         self.send_response(200)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
+        if encoding:
+            self.send_header("Content-Encoding", encoding)
+        self.send_header("Vary", "Accept-Encoding")
         self.send_header('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0')
         self.send_header('Pragma', 'no-cache')
         self.send_header('Expires', '0')
@@ -4900,6 +5927,11 @@ class AdminHandler(http.server.SimpleHTTPRequestHandler):
             return
         type_dir, folder, ds_dir = info
         dataset_id = f"{type_dir}/{folder}"
+        if _dataset_is_hidden(ds_dir):
+            # Same answer as a dataset that does not exist: a hidden dataset is not
+            # announced anywhere public, and its file list is no exception.
+            self._json_nostore(404, {"error": "Not found"})
+            return
         download_root = (ds_dir / "download").resolve()
         target = _safe_subpath(download_root, params.get("path", ""))
         if target is None:
@@ -4970,37 +6002,37 @@ class AdminHandler(http.server.SimpleHTTPRequestHandler):
                 pass
 
     def end_headers(self):
-        self._cors_headers()
-        path_no_query = self.path.split('?')[0]
-        if path_no_query.endswith('.json') or path_no_query.endswith('.jsonl') or path_no_query.endswith('.js'):
-            self.send_header('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0')
-            self.send_header('Pragma', 'no-cache')
-            self.send_header('Expires', '0')
-        elif path_no_query.endswith(('.bin', '.rgba', '.gz')):
-            # Brick payloads (twin of the .htaccess rule). NOT the no-store trio above:
-            # these must be STORED and revalidated, not refused. Sending nothing left it
-            # to the browser's heuristic cache, which reuses a response without asking
-            # for ~10% of its age — so re-running the preprocessing on a dataset kept
-            # showing the previous voxels. 'no-cache' keeps the body on disk but forces
-            # the If-Modified-Since, so a re-processed brick is picked up immediately.
-            self.send_header('Cache-Control', 'no-cache')
+        path_no_query = urllib.parse.unquote(self.path.split('?')[0]).strip("/").lower()
+        if self._cors_allowed():
+            self._cors_headers()
+        # Every response: no content-type guessing (a JSON, text or image answer can
+        # never be promoted to a document). HTML pages repeat it in _serve_html.
+        self.send_header("X-Content-Type-Options", "nosniff")
+        if path_no_query.startswith(("data_web/", "config/uploads/")):
+            self.send_header("Content-Security-Policy", _UNTRUSTED_DOC_CSP)
         # HTML documents carry the ENFORCING nonce-CSP set in _serve_html (not here —
-        # the nonce is per-request). Non-HTML responses need no CSP.
+        # the nonce is per-request).
         super().end_headers()
 
     def _serve_html(self, rel_path: str):
-        """Serve an HTML document with a fresh per-request CSP nonce substituted for
-        the {{CSP_NONCE}} placeholder, and the matching ENFORCING CSP header (INV-1).
-        Only the dev/PHP server can do per-request nonce injection; pure-static hosts
-        serve the literal placeholder (harmless — the nonce attr is inert with no CSP)."""
-        rel = rel_path.replace("\\", "/").lstrip("/")
-        fs_path = (ROOT / rel).resolve()
-        try:
-            fs_path.relative_to(ROOT)
-        except ValueError:
+        """Serve one of the platform's top-level HTML pages with a fresh per-request
+        CSP nonce substituted for the {{CSP_NONCE}} placeholder, and the matching
+        ENFORCING CSP header (INV-1). Only the dev/PHP server can do per-request
+        nonce injection; pure-static hosts serve the literal placeholder (harmless —
+        the nonce attr is inert with no CSP).
+
+        Anything else that looks like a document is refused: a page inside a plugin
+        folder or a dataset would otherwise be handed a valid nonce for this origin."""
+        rel = rel_path.replace("\\", "/").strip("/")
+        if not rel or "/" in rel or not rel.lower().endswith(".html"):
             self._json(404, {"error": "Not found"}); return
-        if not fs_path.is_file():
-            super().do_GET(); return  # let the base handler 404 / directory-index
+        try:
+            fs_path = (ROOT / rel).resolve()
+            ok = fs_path.parent == ROOT and fs_path.suffix.lower() == ".html" and fs_path.is_file()
+        except OSError:
+            ok = False
+        if not ok:
+            self._json(404, {"error": "Not found"}); return
         try:
             html = fs_path.read_text(encoding="utf-8")
         except OSError:
@@ -5022,26 +6054,98 @@ class AdminHandler(http.server.SimpleHTTPRequestHandler):
         self.send_header("Content-Type", "text/html; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Content-Security-Policy", _csp_policy(nonce))
-        self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("X-Frame-Options", "SAMEORIGIN")  # clickjacking (legacy; CSP frame-ancestors covers modern)
         self.send_header("Cache-Control", "no-store")  # per-request nonce → never cache
         self.end_headers()
         self.wfile.write(body)
 
+    def _reject(self, status: int, payload: dict):
+        """Answer without having read the request body: the unread bytes would be
+        parsed as the next request on a kept-alive connection, so close it."""
+        self.close_connection = True
+        body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Connection", "close")
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _content_length(self, limit: int):
+        """The announced body length, or None after answering 400/411/413. A length
+        is accepted only as plain decimal digits, never negative, never above
+        ``limit`` — refused before a byte is read off the socket."""
+        if self.headers.get("Transfer-Encoding"):
+            self._reject(411, {"error": "length_required"})
+            return None
+        raw = (self.headers.get("Content-Length") or "0").strip()
+        if not re.fullmatch(r"[0-9]{1,15}", raw):
+            self._reject(400, {"error": "bad_length"})
+            return None
+        length = int(raw)
+        if length > limit:
+            self._reject(413, {"error": "body_too_large", "limit": limit})
+            return None
+        return length
+
+    def _guarded(self, fn, *args, **kwargs):
+        """Run a route; an unexpected exception becomes a 500 JSON answer and a
+        closed connection instead of a reset socket and a stderr traceback."""
+        try:
+            fn(*args, **kwargs)
+        except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+            self.close_connection = True
+        except Exception as exc:
+            self.close_connection = True
+            self.log_error("unhandled %s on %s: %r", exc.__class__.__name__, self.path, exc)
+            if not self._response_started:
+                try:
+                    self._json(500, {"error": "internal_error"})
+                except Exception:
+                    pass
+
     def do_POST(self):
         parsed = urllib.parse.urlparse(self.path)
         if parsed.path == "/api/upload.php":
-            self._read_upload_post(parsed)
-        elif parsed.path in ("/api/auth.php", "/api/datasets.php", "/api/admin.php", "/api/telemetry.php", "/api/site.php", "/api/media.php"):
-            length = int(self.headers.get("Content-Length", 0))
-            raw = self.rfile.read(length) if length else b"{}"
-            try:
-                body = json.loads(raw.decode("utf-8"))
-            except Exception:
-                body = {}
-            self._handle_api(parsed, body=body)
-        else:
-            self._json(405, {"error": "Method not allowed"})
+            self._guarded(self._read_upload_post, parsed)
+            return
+        if parsed.path == "/api/migrations.php":
+            self._guarded(self._read_migrations_post, parsed)
+            return
+        limit = _API_BODY_LIMITS.get(parsed.path)
+        if limit is None:
+            self._reject(405, {"error": "Method not allowed"})
+            return
+        length = self._content_length(limit)
+        if length is None:
+            return
+        ctype = (self.headers.get("Content-Type") or "").split(";", 1)[0].strip().lower()
+        if parsed.path == "/api/datasets.php" and ctype.startswith("image/"):
+            # A gallery image travels as its raw bytes (no base64 inside JSON, +33%),
+            # its name and caption in the query string. Refused before a byte is read
+            # when it cannot fit.
+            if length > MAX_GALLERY_BYTES:
+                self._reject(413, {"error": "too_large", "limit": MAX_GALLERY_BYTES})
+                return
+            raw = self._read_exact(length)
+            if raw is None:
+                self._reject(400, {"error": "short_body"})
+                return
+            self._guarded(self._handle_api, parsed, body={}, raw_image=raw)
+            return
+        raw = self._read_exact(length) if length else b"{}"
+        if raw is None:
+            self._reject(400, {"error": "short_body"})
+            return
+        try:
+            body = json.loads(raw.decode("utf-8"))
+        except Exception:
+            body = {}
+        # Every handler reads fields with .get(): a JSON array, string or number
+        # is treated as an empty object rather than raising.
+        if not isinstance(body, dict):
+            body = {}
+        self._guarded(self._handle_api, parsed, body=body)
 
     def _read_upload_post(self, parsed):
         """Read an import POST — raw octets for `chunk`, JSON for everything else.
@@ -5051,32 +6155,95 @@ class AdminHandler(http.server.SimpleHTTPRequestHandler):
         base64 costs +33% on the wire and forces a multi-megabyte string through
         json.loads on both ends. All chunk parameters travel in the query string,
         so nothing here has to parse the body at all.
+
+        The session is checked BEFORE the body is read: an anonymous peer must not
+        be able to make the server buffer a 17 MiB chunk.
         """
         params = dict(urllib.parse.parse_qsl(parsed.query))
-        try:
-            length = int(self.headers.get("Content-Length", 0))
-        except ValueError:
-            self._json(400, {"error": "bad_length"})
+        if not _get_session(self._token()):
+            self._reject(401, {"error": "Not authenticated"})
             return
-        if length < 0 or length > _MAX_UPLOAD_BODY:
-            self._json(413, {"error": "body_too_large"})
+        length = self._content_length(_MAX_UPLOAD_BODY)
+        if length is None:
             return
         if params.get("action") == "chunk":
             raw = self._read_exact(length)
             if raw is None:
-                self._json(400, {"error": "short_body"})
+                self._reject(400, {"error": "short_body"})
                 return
             self._handle_upload(parsed, body=None, raw=raw)
             return
         raw = self._read_exact(length) if length else b"{}"
         if raw is None:
-            self._json(400, {"error": "short_body"})
+            self._reject(400, {"error": "short_body"})
             return
         try:
             body = json.loads(raw.decode("utf-8"))
         except Exception:
             body = {}
+        if not isinstance(body, dict):
+            body = {}
         self._handle_upload(parsed, body=body, raw=None)
+
+    def _read_migrations_post(self, parsed):
+        """A migrations POST: `unit_put` carries a unit blob as the RAW body (up to
+        32 MiB of PNG tiles, never base64), every other action a small JSON body.
+        Session and CSRF are checked BEFORE a byte is read, so an anonymous or forged
+        request cannot make the server buffer a 32 MiB body."""
+        params = dict(urllib.parse.parse_qsl(parsed.query))
+        session = _get_session(self._token())
+        if not session:
+            self._reject(401, {"error": "Not authenticated"})
+            return
+        ok, status, payload = _authorize_write(self.command, session, self.headers.get("X-CSRF-Token"))
+        if not ok:
+            self._reject(status, payload)
+            return
+        if params.get("action") == "unit_put":
+            length = self._content_length(dataset_migrations.MAX_UNIT_BODY)
+            if length is None:
+                return
+            raw = self._read_exact(length)
+            if raw is None:
+                self._reject(400, {"error": "short_body"})
+                return
+            self._handle_migrations(parsed, body={}, raw=raw)
+            return
+        length = self._content_length(64 * 1024)
+        if length is None:
+            return
+        raw = self._read_exact(length) if length else b"{}"
+        if raw is None:
+            self._reject(400, {"error": "short_body"})
+            return
+        try:
+            body = json.loads(raw.decode("utf-8"))
+        except Exception:
+            body = {}
+        self._handle_migrations(parsed, body=body if isinstance(body, dict) else {}, raw=None)
+
+    def _handle_migrations(self, parsed, body, raw):
+        """api/migrations.php — dataset format upgrades (SPEC DOCS/dataset-migrations).
+        Every action needs the admin session; the mutating ones POST + CSRF (checked
+        again here for the GET path, which only serves `status`)."""
+        params = dict(urllib.parse.parse_qsl(parsed.query))
+        action = params.get("action", "")
+        session = _get_session(self._token())
+        if not session:
+            self._json(401, {"error": "Not authenticated"})
+            return
+        if action in dataset_migrations.WRITE_ACTIONS:
+            ok, status, payload = _authorize_write(self.command, session, self.headers.get("X-CSRF-Token"))
+            if not ok:
+                self._json(status, payload)
+                return
+            upload_staging.ensure_dirs()   # asserts the deny-all guard of uploads/
+        elif action != "status" or self.command != "GET":
+            self._json(400, {"error": "Unknown action"})
+            return
+        _migrations_bind()
+        status, payload = dataset_migrations.handle(action, params, body, raw)
+        self._json_nostore(status, payload)
 
     def _read_exact(self, length: int):
         """Read exactly `length` bytes, or None if the peer hung up early.
@@ -5089,7 +6256,10 @@ class AdminHandler(http.server.SimpleHTTPRequestHandler):
             return b""
         chunks, remaining = [], length
         while remaining > 0:
-            block = self.rfile.read(min(remaining, 1 << 20))
+            try:
+                block = self.rfile.read(min(remaining, 1 << 20))
+            except (OSError, ValueError):
+                return None
             if not block:
                 return None
             chunks.append(block)
@@ -5098,6 +6268,7 @@ class AdminHandler(http.server.SimpleHTTPRequestHandler):
 
     def do_OPTIONS(self):
         self.send_response(204)
+        self.send_header("Content-Length", "0")
         self.end_headers()
 
     # ── Dataset import (staging) ───────────────────────────────────────────────
@@ -5142,6 +6313,10 @@ class AdminHandler(http.server.SimpleHTTPRequestHandler):
                 "staleAfterS": upload_staging.STALE_AFTER_S,
                 "backend": "python",
             })
+        elif action == "ping":
+            # The upload worker's network probe: a cheap authenticated round-trip
+            # that tells "the network is back" from "the session is gone" (401).
+            self._json_nostore(200, {"ok": True})
         elif action == "list":
             upload_staging.gc()
             self._json_nostore(200, {"ok": True, "datasets": upload_staging.list_staged()})
@@ -5231,21 +6406,18 @@ class AdminHandler(http.server.SimpleHTTPRequestHandler):
             self._json_nostore(404, {"error": "Not found"})
             return
 
-        start, end = 0, size - 1
-        status = 200
-        rng = self.headers.get("Range")
-        if rng and rng.startswith("bytes="):
-            try:
-                lo, _, hi = rng[6:].partition("-")
-                start = int(lo) if lo else 0
-                end = int(hi) if hi else size - 1
-                if start < 0 or start > end or end >= size:
-                    raise ValueError
-                status = 206
-            except ValueError:
-                start, end, status = 0, size - 1, 200
+        rng = _parse_byte_range(self.headers.get("Range"), size)
+        if rng is _RANGE_UNSATISFIABLE:
+            self.send_response(416)
+            self.send_header("Content-Range", f"bytes */{size}")
+            self.send_header("Content-Length", "0")
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            return
+        status = 206 if rng else 200
+        start, end = rng if rng else (0, size - 1)
 
-        length = end - start + 1
+        length = max(0, end - start + 1)
         self.send_response(status)
         self.send_header("Content-Type", "application/octet-stream")
         self.send_header("X-Content-Type-Options", "nosniff")
@@ -5255,7 +6427,7 @@ class AdminHandler(http.server.SimpleHTTPRequestHandler):
         if status == 206:
             self.send_header("Content-Range", f"bytes {start}-{end}/{size}")
         self.end_headers()
-        if self.command == "HEAD":
+        if self._head_only:
             return
         with open(path, "rb") as fh:
             fh.seek(start)
@@ -5263,16 +6435,18 @@ class AdminHandler(http.server.SimpleHTTPRequestHandler):
             while remaining > 0:
                 block = fh.read(min(remaining, 1 << 20))
                 if not block:
+                    self.close_connection = True
                     break
                 try:
                     self.wfile.write(block)
                 except (BrokenPipeError, ConnectionResetError):
+                    self.close_connection = True
                     return
                 remaining -= len(block)
 
     # ── API router ─────────────────────────────────────────────────────────────
 
-    def _handle_api(self, parsed, body):
+    def _handle_api(self, parsed, body, raw_image=None):
         params = dict(urllib.parse.parse_qsl(parsed.query))
         action = params.get("action", "")
         path   = parsed.path
@@ -5283,13 +6457,23 @@ class AdminHandler(http.server.SimpleHTTPRequestHandler):
         # PUBLISHED docs are also fetchable directly as static config/*.json — the
         # GET action exists so the admin editor can read a doc uniformly. Twin: api/site.php.
         if path == "/api/site.php":
+            doc_name = params.get("doc", "")
             if action == "get":
-                # Only the operator gets the draft back; everyone else sees published.
-                data = (_load_site_admin(params.get("doc", ""))
-                        if _get_session(self._token())
-                        else _load_site_public(params.get("doc", "")))
+                # Only the operator gets the draft back. An anonymous read of a PAGE
+                # is refused outright: the public pages read the static published
+                # copy (config/pages/<slug>.json), and an admin whose session expired
+                # must learn it here rather than be handed the published-only doc
+                # and autosave it over the draft.
+                session = _get_session(self._token())
+                if not session and doc_name.strip().startswith("pages/"):
+                    self._json(401, {"error": "Not authenticated"})
+                    return
+                data = _load_site_admin(doc_name) if session else _load_site_public(doc_name)
                 if data is None:
                     self._json(400, {"error": "Invalid doc"})
+                elif session:
+                    self._json(200, data, headers={"Cache-Control": "no-store",
+                                                   "X-Lumen-Rev": _site_rev(doc_name) or ""})
                 else:
                     self._json_nostore(200, data)
                 return
@@ -5297,30 +6481,44 @@ class AdminHandler(http.server.SimpleHTTPRequestHandler):
             if not session:
                 self._json(401, {"error": "Not authenticated"})
                 return
-            if action in ("save", "reset", "publish", "delete"):
+            if action in ("save", "save_draft", "reset", "publish", "delete"):
                 ok, status, payload = _authorize_write(
                     self.command, session, self.headers.get("X-CSRF-Token"))
                 if not ok:
                     self._json(status, payload)
                     return
+            rev = params.get("rev") or None
             if action == "save":
-                _doc_name = params.get("doc", "")
-                if _doc_name.startswith("pages/"):
+                merge = None
+                if "merge" in params:
+                    merge = _parse_merge_paths(params.get("merge"))
+                    if merge is None:
+                        self._json(400, {"error": "bad_merge"})
+                        return
+                if doc_name.startswith("pages/"):
                     _vok, _verr = _validate_page_doc(body if isinstance(body, dict) else {})
                     if not _vok:
                         self._json(400, {"error": _verr or "Invalid page"})
                         return
-                ok = _save_site_doc(_doc_name, body or {})
-                self._json(200 if ok else 400, {"ok": True} if ok else {"error": "Invalid doc"})
+                st, pl = _site_save_checked(doc_name, body or {}, rev=rev, merge=merge)
+                self._json(st, pl)
+            elif action == "save_draft":
+                st, pl = _site_save_draft(doc_name, body or {}, rev=rev)
+                self._json(st, pl)
             elif action == "reset":
-                ok = _reset_site_doc(params.get("doc", ""))
-                self._json(200 if ok else 400, {"ok": True} if ok else {"error": "Invalid doc"})
+                with _SITE_LOCK:
+                    ok = _reset_site_doc(doc_name)
+                self._json(200 if ok else 400,
+                           {"ok": True, "rev": _site_rev(doc_name)} if ok else {"error": "Invalid doc"})
             elif action == "delete":
-                ok = _delete_site_doc(params.get("doc", ""))
+                with _SITE_LOCK:
+                    ok = _delete_site_doc(doc_name)
                 self._json(200 if ok else 400, {"ok": True} if ok else {"error": "Invalid doc"})
             elif action == "publish":
-                ok = _publish_site_doc(params.get("doc", ""))
-                self._json(200 if ok else 400, {"ok": True} if ok else {"error": "Invalid doc"})
+                with _SITE_LOCK:
+                    ok = _publish_site_doc(doc_name)
+                self._json(200 if ok else 400,
+                           {"ok": True, "rev": _site_rev(doc_name)} if ok else {"error": "Invalid doc"})
             else:
                 self._json(400, {"error": f"Unknown action: {action}"})
             return
@@ -5351,6 +6549,17 @@ class AdminHandler(http.server.SimpleHTTPRequestHandler):
 
         # ── Auth ──────────────────────────────────────────────────────────────
         if path == "/api/auth.php":
+            if action in ("login", "logout", "setup", "change_password"):
+                # Login CSRF: a cross-site page could otherwise POST a text/plain
+                # "JSON" body (a simple request, no preflight) and log the victim
+                # into an attacker-chosen account, or claim a fresh install.
+                if self.command != "POST":
+                    self._json(405, {"error": "Method not allowed (use POST)"})
+                    return
+                refusal = self._same_origin_json_refusal()
+                if refusal:
+                    self._json(403, {"error": refusal})
+                    return
             if action == "status":
                 session = _get_session(self._token())
                 self._json(200, {"authenticated": session is not None,
@@ -5359,29 +6568,26 @@ class AdminHandler(http.server.SimpleHTTPRequestHandler):
                                  "needsSetup": not _credential_exists()})
 
             elif action == "login":
-                ip = _client_ip(self)  # BUG-055: proxy-aware client IP, not the raw peer
-                bf = _BRUTE.get(ip, {"count": 0, "until": 0})
-                if bf["until"] > time.time():
-                    remaining = int(bf["until"] - time.time())
-                    self._json(429, {"error": f"Trop de tentatives. Réessayez dans {remaining}s."})
+                # The attempt is counted BEFORE the password is hashed (proxy-aware
+                # client address), so a burst of parallel guesses cannot all slip
+                # past the lockout check.
+                ip = self._bf_gate()
+                if ip is None:
                     return
                 username = (body or {}).get("username", "")
                 password = (body or {}).get("password", "")
                 if _check_credentials(username, password):
-                    _BRUTE.pop(ip, None)
+                    _brute_clear(ip)
                     token = _new_session(username)
-                    self._json(200, {"ok": True, "username": username, "csrf": _SESSIONS[token]["csrf"]}, cookie=f"admpan_token={token}; Path=/; HttpOnly; SameSite=Lax")
+                    session = _get_session(token) or {}
+                    self._json(200, {"ok": True, "username": username, "csrf": session.get("csrf")},
+                               cookie=self._session_cookie(token))
                 else:
-                    bf["count"] = bf.get("count", 0) + 1
-                    if bf["count"] >= MAX_ATTEMPTS:
-                        bf["until"] = time.time() + LOCKOUT_S
-                    _BRUTE[ip] = bf
                     self._json(401, {"error": "Identifiants incorrects."})
 
             elif action == "logout":
-                token = self._token()
-                _SESSIONS.pop(token, None)
-                self._json(200, {"ok": True}, cookie="admpan_token=; Path=/; Max-Age=0")
+                _drop_session(self._token())
+                self._json(200, {"ok": True}, cookie=self._session_cookie(""))
 
             elif action == "setup":
                 # First-run password creation. _setup_credential is create-exclusive
@@ -5391,24 +6597,21 @@ class AdminHandler(http.server.SimpleHTTPRequestHandler):
                 if self.command != "POST":
                     self._json(405, {"error": "Method not allowed (use POST)"})
                     return
-                ip = _client_ip(self)
-                bf = _BRUTE.get(ip, {"count": 0, "until": 0})
-                if bf["until"] > time.time():
-                    remaining = int(bf["until"] - time.time())
-                    self._json(429, {"error": f"Trop de tentatives. Réessayez dans {remaining}s."})
+                ip = self._bf_gate()
+                if ip is None:
                     return
                 username = (body or {}).get("username") or DEFAULT_USERNAME
+                if not isinstance(username, str):
+                    username = DEFAULT_USERNAME
                 password = (body or {}).get("password", "")
                 ok, status, payload = _setup_credential(username, password)
                 if ok:
+                    _brute_clear(ip)
                     token = _new_session(payload["username"])
-                    self._json(200, {**payload, "csrf": _SESSIONS[token]["csrf"]},
-                               cookie=f"admpan_token={token}; Path=/; HttpOnly; SameSite=Lax")
+                    session = _get_session(token) or {}
+                    self._json(200, {**payload, "csrf": session.get("csrf")},
+                               cookie=self._session_cookie(token))
                 else:
-                    bf["count"] = bf.get("count", 0) + 1
-                    if bf["count"] >= MAX_ATTEMPTS:
-                        bf["until"] = time.time() + LOCKOUT_S
-                    _BRUTE[ip] = bf
                     self._json(status, payload)
 
             elif action == "change_password":
@@ -5422,9 +6625,18 @@ class AdminHandler(http.server.SimpleHTTPRequestHandler):
                 if not ok:
                     self._json(status, payload)
                     return
+                ip = self._bf_gate()
+                if ip is None:
+                    return
                 ok2, st2, pl2 = _change_credential(
                     (body or {}).get("current", ""), (body or {}).get("new", "")
                 )
+                if st2 != 401:          # only a wrong current password counts
+                    _brute_clear(ip)
+                if ok2:
+                    # Every other session dies with the old password; the caller
+                    # keeps the one that just proved knowledge of it.
+                    pl2 = {**pl2, "revokedSessions": _revoke_other_sessions(self._token())}
                 self._json(st2, pl2)
 
             else:
@@ -5451,7 +6663,8 @@ class AdminHandler(http.server.SimpleHTTPRequestHandler):
                 # editor is ONE list: an import becomes editable the moment its
                 # coarse LOD lands, long before it is published (Rule 1.3 — the
                 # operator should never have to watch a progress bar to start work).
-                self._json(200, {"datasets": _list_datasets() + _staged_dataset_rows()})
+                self._json(200, {"datasets": _list_datasets() + _staged_dataset_rows(),
+                                 "galleryMaxBytes": MAX_GALLERY_BYTES})
 
             elif action == "get":
                 ds_id = params.get("id", "")
@@ -5489,6 +6702,9 @@ class AdminHandler(http.server.SimpleHTTPRequestHandler):
                     # the import is published.
                     self._json(409, {"error": "not_published"})
                 elif action == "gallery_add":
+                    if raw_image is not None:
+                        body = {"raw": raw_image, "filename": params.get("filename", ""),
+                                "title": params.get("title", ""), "caption": params.get("caption", "")}
                     self._json(*_gallery_add(ds_id, body or {}))
                 else:
                     self._json(*_gallery_delete(ds_id, (body or {}).get("file", "")))
@@ -5513,10 +6729,17 @@ class AdminHandler(http.server.SimpleHTTPRequestHandler):
         # ── Telemetry (public usage beacons, no auth) ──────────────────────────
         if path == "/api/telemetry.php":
             kind = action  # visit | view | download
+            if self.command != "POST":
+                # Beacons are POSTs (navigator.sendBeacon); a GET would let any
+                # third-party page count visits with an <img> tag.
+                self._json(405, {"error": "Method not allowed (use POST)"})
+                return
             if kind not in ("visit", "view", "download"):
                 self._json(400, {"error": "bad_kind"})
                 return
             ds_id = params.get("id") or (body or {}).get("id")
+            if not isinstance(ds_id, str):
+                ds_id = None
             if kind in ("view", "download"):
                 # Well-formed AND existing. _safe_dataset_dir only proves the shape is
                 # safe (it accepts a not-yet-created folder so `save` can mint one), so
@@ -5567,23 +6790,29 @@ class AdminHandler(http.server.SimpleHTTPRequestHandler):
                                  "devTrust": _DEV_TRUST, "trustEpoch": _TRUST_EPOCH})
             elif action == "approve_plugin":
                 b = body or {}
+                ip = self._bf_gate()     # a password re-check, throttled like a login
+                if ip is None:
+                    return
                 ok2, st2, pl2 = _approve_plugin(b.get("path", ""), b.get("sha256", ""),
                                                 b.get("mode", ""), b.get("caps"),
                                                 b.get("password", ""))
+                if st2 != 401:
+                    _brute_clear(ip)
                 self._json(st2, pl2)
             elif action == "revoke_plugin":
                 ok2, st2, pl2 = _revoke_plugin((body or {}).get("path", ""))
                 self._json(st2, pl2)
             elif action == "marketplace_catalog":
                 self._json(200, _marketplace_list())
-            elif action == "install_plugin":
+            elif action in ("install_plugin", "update_plugin"):
                 b = body or {}
-                ok2, st2, pl2 = _install_marketplace_plugin(b.get("id", ""), b.get("password", ""))
-                self._json(st2, pl2)
-            elif action == "update_plugin":
-                b = body or {}
+                ip = self._bf_gate()     # a password re-check, throttled like a login
+                if ip is None:
+                    return
                 ok2, st2, pl2 = _install_marketplace_plugin(b.get("id", ""), b.get("password", ""),
-                                                            upgrade=True)
+                                                            upgrade=(action == "update_plugin"))
+                if st2 != 401:
+                    _brute_clear(ip)
                 self._json(st2, pl2)
             elif action == "uninstall_plugin":
                 ok2, st2, pl2 = _uninstall_marketplace_plugin((body or {}).get("path", ""))
@@ -5655,21 +6884,86 @@ class AdminHandler(http.server.SimpleHTTPRequestHandler):
     def _token(self) -> str | None:
         return _get_cookie_token(self.headers.get("Cookie"))
 
+    # Public, read-only endpoints that may be fetched cross-origin (an external
+    # catalogue or monitor). Everything else under /api/ is same-origin only: no
+    # CORS header, so a cross-site preflight for a JSON POST fails.
+    _CORS_PUBLIC_API = frozenset({"/api/health", "/api/plugins", "/api/plugins.php",
+                                  "/api/languages", "/api/languages.php",
+                                  "/api/downloads", "/api/downloads.php"})
+
+    def _cors_allowed(self) -> bool:
+        path = urllib.parse.urlparse(self.path).path
+        if not path.startswith("/api/"):
+            return self.command in ("GET", "HEAD")
+        return path in self._CORS_PUBLIC_API and self.command in ("GET", "HEAD")
+
     def _cors_headers(self):
         self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+        self.send_header("Access-Control-Allow-Methods", "GET, HEAD, OPTIONS")
         self.send_header("Access-Control-Allow-Headers", "Content-Type")
 
-    def _json(self, status: int, data: dict, cookie: str | None = None):
+    def _session_cookie(self, token: str) -> str:
+        """The admin session cookie (an empty token clears it). Secure when the
+        browser reached us over HTTPS through a trusted proxy (or when forced)."""
+        secure = "; Secure" if _request_is_https(self) else ""
+        if not token:
+            return f"admpan_token=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax{secure}"
+        return (f"admpan_token={token}; Path=/; Max-Age={SESSION_TTL}; HttpOnly; "
+                f"SameSite=Lax{secure}")
+
+    def _same_origin_json_refusal(self):
+        """None when an auth POST is a same-origin JSON request, else an error code.
+
+        application/json makes a cross-origin request preflighted (and the preflight
+        gets no CORS grant for /api/). Sec-Fetch-Site, sent by every current browser,
+        settles the origin question directly; Origin is the fallback for older ones.
+        A request with neither header is not from a browser page, so it cannot be a
+        forged cross-site request."""
+        ctype = (self.headers.get("Content-Type") or "").split(";", 1)[0].strip().lower()
+        if ctype != "application/json":
+            return "json_required"
+        site = (self.headers.get("Sec-Fetch-Site") or "").strip().lower()
+        if site:
+            return None if site in ("same-origin", "none") else "cross_origin"
+        origin = (self.headers.get("Origin") or "").strip()
+        if not origin:
+            return None
+        if origin == "null":
+            return "cross_origin"
+        allowed = {(self.headers.get("Host") or "").strip().lower()}
+        peer = self.client_address[0] if getattr(self, "client_address", None) else ""
+        if _is_trusted_proxy(peer):
+            fwd = (self.headers.get("X-Forwarded-Host") or "").split(",")[0].strip().lower()
+            if fwd:
+                allowed.add(fwd)
+        netloc = urllib.parse.urlparse(origin).netloc.lower()
+        if not netloc or netloc not in allowed:
+            return "cross_origin"
+        return None
+
+    def _json(self, status: int, data: dict, cookie: str | None = None, headers: dict | None = None):
         body = json.dumps(data, ensure_ascii=False).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
-        self._cors_headers()
         if cookie:
             self.send_header("Set-Cookie", cookie)
+        for k, v in (headers or {}).items():
+            self.send_header(k, v)
         self.end_headers()
         self.wfile.write(body)
+
+    def _bf_gate(self):
+        """Reserve a password attempt for this client; on refusal answer 429 (with
+        Retry-After) and return None. Returns the bucket key when the check may run.
+        Twin of api/_admin_lib.php admin_bf_gate."""
+        key = _client_ip(self)
+        ok, retry, _reason = _bf_reserve(key)
+        if ok:
+            return key
+        self._json(429, {"error": "Trop de tentatives. Réessayez plus tard.", "retryAfter": retry},
+                   headers={"Retry-After": str(max(1, retry))})
+        return None
 
     def _json_nostore(self, status: int, data: dict):
         # Like _json but with the explicit no-store trio used by the discovery
@@ -5706,18 +7000,22 @@ def main():
     parser.add_argument("--pivot", default=None, help=argparse.SUPPRESS)  # internal: update supervisor
     parser.add_argument("--dev-trust-local", action="store_true",
                         help="Trust every plugin in js/modules as first-party (DEV ONLY — never on a real deployment)")
+    parser.add_argument("--trusted-proxy", action="append", default=[], metavar="IP[,IP|CIDR]",
+                        help="Reverse proxy allowed to set X-Forwarded-For/-Proto/-Host "
+                             "(repeatable; also LUMEN_TRUSTED_PROXIES)")
     args = parser.parse_args()
+    for item in args.trusted_proxy:
+        TRUSTED_PROXIES.update(_parse_proxy_list(item))
 
     global _LOG_REQUESTS, _DEV_TRUST
     _LOG_REQUESTS = bool(args.verbose)
-    # Dev-trust is a POSITIVE signal (INV-3), never "version.json is missing". Two
-    # positive sources: the explicit --dev-trust-local flag, OR a `.git/` checkout
-    # BOUND TO LOOPBACK ONLY. The loopback gate is essential: a `.git` checkout
-    # served on 0.0.0.0 (LAN/public) must NOT auto-trust local plugins — otherwise a
-    # dropped-in third-party plugin would run in-page for every LAN visitor. A real
-    # deployment (release artifact, no .git) stays fail-closed regardless of host.
-    _git_dev = (ROOT / ".git").exists() and (args.host or "localhost") in ("localhost", "127.0.0.1", "::1")
-    _DEV_TRUST = bool(args.dev_trust_local) or _git_dev
+    # Dev-trust is a POSITIVE signal (INV-3) and comes from the explicit flag only.
+    # A `.git` checkout bound to loopback is also exactly what a production install
+    # behind a reverse proxy looks like, so it is no evidence of a developer.
+    # LUMEN_DEV_TRUST=1 is the same signal from the environment, honoured only in a
+    # .git checkout (twin of api/_admin_lib.php admin_dev_trust).
+    _DEV_TRUST = bool(args.dev_trust_local) or (
+        os.environ.get("LUMEN_DEV_TRUST", "").strip() == "1" and (ROOT / ".git").is_dir())
 
     if args.check:
         sys.exit(_check_main(args.root))
@@ -5773,13 +7071,17 @@ def main():
         print(f"  [types] staging root unavailable: {exc}")
     for line in _migrate_dataset_types():
         print(f"  [types] {line}")
+    # A publish interrupted by a crash (or a replaced dataset Windows would not let
+    # go of) leaves a dot-folder beside the datasets: restore or reclaim it.
+    for line in upload_staging.recover_publish_leftovers():
+        print(f"  [publish] {line}")
 
     rec = _load_credential()
     if rec:
         cred_line = f"  Login   : {rec.get('username', DEFAULT_USERNAME)}  (password in api/admin_credential.json)\n"
     else:
         cred_line = "  Login   : (first run — open the admin panel to create a password)\n"
-    trust_line = ("  Trust   : DEV — all local plugins trusted (.git checkout / --dev-trust-local)\n"
+    trust_line = ("  Trust   : DEV — all local plugins trusted (--dev-trust-local)\n"
                   if _DEV_TRUST else
                   "  Trust   : PROD — only bundled + operator-approved plugins load\n")
     print(
@@ -5807,7 +7109,9 @@ def main():
     _SERVE_ARGS = ["--host", args.host, "--port", str(args.port)] \
         + (["--verbose"] if args.verbose else [])
 
-    with http.server.ThreadingHTTPServer((args.host, args.port), handler) as httpd:
+    if TRUSTED_PROXIES:
+        print(f"  Proxies : {', '.join(sorted(TRUSTED_PROXIES))}")
+    with _QuietServer((args.host, args.port), handler) as httpd:
         _HTTPD = httpd
         try:
             httpd.serve_forever()

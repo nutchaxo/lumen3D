@@ -27,6 +27,10 @@ let _preflight = null;   // report shown between "Mettre à jour" and confirmati
 let _notesOpen = false;  // release-note entries unfolded (titles only when false; survives re-renders)
 let _notesVersion = null; // the version whose notes are shown — one pill per version the update brings
 let _polling = false;
+let _sawPivot = false;       // the pipeline reported 'pivoting': the server is about to exit
+let _targetVersion = '';      // version this run installs
+let _startVersion = '';       // version running when the run began
+const _bareVersion = (v) => String(v == null ? '' : v).trim().replace(/^v/i, '');
 let _plugins = null;     // marketplace catalog annotated with installed/update status
 let _pluginsBusy = false;
 let _pipeline = null;    // downloadable processing pack: what is here vs what is published
@@ -69,6 +73,15 @@ function updateBlock() {
   if (_check.noReleases) return `<div class="adm-update-state adm-ok"><i data-lucide="check-circle-2"></i> ${escHtml(t('admin.noReleases', 'Aucune release publiée sur GitHub pour le moment.'))}</div>`;
   if (!_check.available) return `<div class="adm-update-state adm-ok"><i data-lucide="check-circle-2"></i> ${escHtml(t('admin.upToDate', 'Vous êtes à jour.'))} <span class="adm-muted">(${escHtml(_check.latest || _check.current)})</span></div>`;
 
+  // The release offers no archive the updater may apply (none named after the tag,
+  // or no SHA256SUMS listing it): say so instead of a button that can only fail.
+  if (_check.assetError) {
+    return `
+    <div class="adm-update-state adm-avail"><i data-lucide="sparkles"></i> ${escHtml(t('admin.updateAvailable', 'Mise à jour disponible'))} : <b>v${escHtml(_check.latest)}</b></div>
+    ${notesBlock()}
+    <div class="adm-update-state adm-warn"><i data-lucide="shield-alert"></i> ${escHtml(unverifiableMessage(_check.assetError))}</div>`;
+  }
+
   return `
     <div class="adm-update-state adm-avail"><i data-lucide="sparkles"></i> ${escHtml(t('admin.updateAvailable', 'Mise à jour disponible'))} : <b>v${escHtml(_check.latest)}</b></div>
     ${notesBlock()}
@@ -78,6 +91,13 @@ function updateBlock() {
       ${_check.htmlUrl ? `<a class="adm-btn adm-btn-ghost" href="${escHtml(_check.htmlUrl)}" target="_blank" rel="noopener"><i data-lucide="external-link"></i> GitHub</a>` : ''}
     </div>
     <div class="adm-update-warn"><i data-lucide="shield"></i> ${escHtml(t('admin.updateWarn', 'Une sauvegarde est créée avant la mise à jour. Vos données (DATA_WEB), identifiants et statistiques sont préservés. Le serveur redémarre à la fin.'))}</div>`}`;
+}
+
+// A release the updater refuses to apply, with the server's reason (no_release_asset,
+// asset_name_mismatch, ambiguous_asset, no_checksums, zip_not_in_sums).
+function unverifiableMessage(reason) {
+  const base = t('admin.updateUnverifiable', "Cette version ne peut pas être vérifiée (aucune empreinte pour son archive) et n'a pas été appliquée.");
+  return reason ? `${base} (${reason})` : base;
 }
 
 // "· publiée le 11 sept. 2026" beside the notes heading, when GitHub dates the release.
@@ -431,7 +451,9 @@ async function confirmUpdate() {
     if (btn) { btn.disabled = false; btn.textContent = t('admin.confirmUpdate', 'Confirmer la mise à jour'); }
     toast(r.data?.error === 'no_update_available'
       ? t('admin.upToDate', 'Vous êtes à jour.')
-      : t('admin.updateFailed', 'Échec du lancement de la mise à jour.') + (r.data?.error ? ` (${r.data.error})` : ''), 'error');
+      : r.data?.error === 'unverifiable_release'
+        ? unverifiableMessage(r.data.reason)
+        : t('admin.updateFailed', 'Échec du lancement de la mise à jour.') + (r.data?.error ? ` (${r.data.error})` : ''), 'error');
     return;
   }
   // Synchronous apply (PHP hosts): the whole download→verify→swap ran inside this
@@ -447,6 +469,9 @@ async function confirmUpdate() {
     setTimeout(() => location.reload(), 2000);
     return;
   }
+  _targetVersion = _bareVersion(_check?.latest);
+  _startVersion = _bareVersion(_check?.current);
+  _sawPivot = false;
   _preflight = null;
   render();
   el('progress-card').style.display = 'block';
@@ -475,9 +500,17 @@ function setProgress(pct, msg, phase) {
 async function pollStatus() {
   if (_polling) return;
   _polling = true;
+  let misses = 0;
   const tick = async () => {
     const s = await apiFetch(`${API_ADMIN}?action=update_status`);
-    if (!s) { _polling = false; pollRestart(); return; }
+    if (!s) {
+      // One empty answer proves nothing (a dropped request, a 5xx page, an expired
+      // session all look the same). The server really restarting means it keeps
+      // not answering: only then switch to the restart probe.
+      if (++misses < 4) { setTimeout(tick, 1500); return; }
+      _polling = false; pollRestart(); return;
+    }
+    misses = 0;
     setProgress(s.pct || 0, s.message || '', s.phase);
     if (s.phase === 'error') {
       _polling = false;
@@ -486,7 +519,7 @@ async function pollStatus() {
       loadCheck();
       return;
     }
-    if (s.phase === 'pivoting') { _polling = false; pollRestart(); return; }
+    if (s.phase === 'pivoting') { _sawPivot = true; _polling = false; pollRestart(); return; }
     setTimeout(tick, 1000);
   };
   tick();
@@ -501,7 +534,15 @@ function pollRestart() {
       if (resp.ok) {
         const h = await resp.json();
         if (h?.ok) {
-          const done = h.lastUpdate?.phase !== 'rolled_back';
+          const rolledBack = h.lastUpdate?.phase === 'rolled_back';
+          // A server that answers is not proof the update landed: the OLD process
+          // answers too while it is still downloading or verifying. Success needs
+          // the new version, or (target unknown) a version change / the pivot.
+          const nowV = _bareVersion(h.web);
+          const landed = _targetVersion ? nowV === _targetVersion
+                                        : (_sawPivot || (_startVersion && nowV !== _startVersion));
+          if (!rolledBack && !landed) { if (Date.now() < deadline) { setTimeout(probe, 1500); return; } }
+          const done = !rolledBack && landed;
           setProgress(100,
             done ? `${t('admin.updateSucceeded', 'Mise à jour terminée avec succès. Le serveur a redémarré — reconnectez-vous.')} (v${h.web})`
                  : t('admin.updateRolledBack', "La nouvelle version n'a pas démarré — restauration automatique effectuée. L'ancienne version fonctionne."),
@@ -512,6 +553,7 @@ function pollRestart() {
       }
     } catch (_) { /* server still down — keep probing */ }
     if (Date.now() > deadline) {
+      _polling = false;
       setProgress(0, t('admin.updateTimeout', 'Le serveur ne répond plus. Vérifiez logs/update-pivot-*.log puis rechargez la page.'));
       return;
     }

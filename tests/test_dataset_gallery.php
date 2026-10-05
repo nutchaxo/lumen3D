@@ -13,10 +13,12 @@
      php tests/test_dataset_gallery.php                                          */
 declare(strict_types=1);
 
+$root = sys_get_temp_dir() . '/lumen-gallery-' . bin2hex(random_bytes(4));
+// Locks and caches go to the throwaway root, never into the checkout's api/.
+define('LUMEN_PRIVATE_DIR', $root);
 define('LUMEN_DATASETS_LIB', true);
 require_once __DIR__ . '/../api/datasets.php';
 
-$root = sys_get_temp_dir() . '/lumen-gallery-' . bin2hex(random_bytes(4));
 $ds   = $root . '/DATA_WEB/3d/demo';
 @mkdir($ds, 0777, true);
 

@@ -1,7 +1,7 @@
 {
   "id": "chunk-debug",
   "name": "Chunk Debug",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "platformCompat": "1.x",
   "contexts": [
     "page"

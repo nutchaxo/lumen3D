@@ -1,7 +1,7 @@
 {
   "id": "structure-dvr",
   "name": "🏗️ Structure (DVR)",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "platformCompat": "1.x",
   "contexts": [
     "page",

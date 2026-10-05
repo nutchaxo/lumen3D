@@ -68,13 +68,16 @@ const WorkspaceState = (() => {
       savedAt: new Date().toISOString(),
       state: _normalizeState(state, scope)
     };
+    // Throws QuotaExceededError / SecurityError to the caller on purpose: a workspace that
+    // did not persist must not be reported as saved.
     localStorage.setItem(key(datasetId, scope), JSON.stringify(payload));
     return payload;
   }
 
   function load(datasetId, scope) {
     _migrateLegacyKeys();
-    const raw = localStorage.getItem(key(datasetId, scope));
+    let raw = null;
+    try { raw = localStorage.getItem(key(datasetId, scope)); } catch (_) { return null; }
     if (!raw) return null;
     try {
       const payload = JSON.parse(raw);
@@ -92,7 +95,7 @@ const WorkspaceState = (() => {
 
   function clear(datasetId, scope) {
     _migrateLegacyKeys();
-    localStorage.removeItem(key(datasetId, scope));
+    try { localStorage.removeItem(key(datasetId, scope)); } catch (_) { /* storage blocked: nothing stored to clear */ }
   }
 
   function toBlob(payload) {
@@ -141,5 +144,5 @@ const WorkspaceState = (() => {
     return wrapped;
   }
 
-  return { save, load, clear, download, toBlob, key };
+  return { VERSION, save, load, clear, download, toBlob, key };
 })();

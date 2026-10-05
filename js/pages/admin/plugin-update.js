@@ -13,7 +13,7 @@
 
 'use strict';
 
-import { API_ADMIN, t, escHtml, apiFetch, apiFetchStatus, toast } from './shared.js';
+import { API_ADMIN, t, escHtml, apiFetch, apiFetchStatus, toast, askPassword } from './shared.js';
 
 let _busy = false;   // module-wide: two tabs must not swap plugin folders at once
 
@@ -75,7 +75,7 @@ async function updateOne(id, password) {
  */
 export async function runPluginUpdates(ids, { onBusy } = {}) {
   if (_busy || !ids || !ids.length) return { done: 0, lastError: null, cancelled: true };
-  const pw = prompt(t('admin.pluginUpdateConfirm', 'Mettre à jour ce(s) plugin(s) ? Confirmez avec votre mot de passe administrateur :'));
+  const pw = await askPassword(t('admin.pluginUpdateConfirm', 'Mettre à jour ce(s) plugin(s) ? Confirmez avec votre mot de passe administrateur :'));
   if (!pw) return { done: 0, lastError: null, cancelled: true };
 
   _busy = true;

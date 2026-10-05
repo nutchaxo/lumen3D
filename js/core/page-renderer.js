@@ -153,10 +153,22 @@ const PageRenderer = (() => {
   // introduced/extended in v1.18.0 (richtext inline links, icon-list items,
   // feature-card card-level href, quote.link). '' means "don't render this
   // link" (callers fall back to plain text).
+  // Allowlist, evaluated the way the URL parser reads the value: it drops ASCII
+  // tab/newline anywhere and leading C0 controls/spaces, so `java\tscript:` and
+  // `\u0001javascript:` are `javascript:` once navigated. Those characters (and the
+  // invisible Unicode ones) are removed BEFORE the scheme is read. A value with no
+  // scheme is a relative URL and passes.
+  const _SAFE_SCHEMES = new Set(['http', 'https', 'mailto', 'tel']);
+  function _schemeOf(u) {
+    const flat = String(u == null ? '' : u).replace(/[\u0000-\u0020\u007f-\u009f\u00ad\u200b-\u200f\u2028\u2029\u2060\ufeff]/g, '');
+    const m = /^([a-z][a-z0-9+.\-]*):/i.exec(flat);
+    return m ? m[1].toLowerCase() : '';
+  }
   function _safeHref(u) {
     const s = String(u == null ? '' : u).trim();
-    if (!s || /^\s*(javascript|vbscript|data)\s*:/i.test(s)) return '';
-    return s;
+    if (!s) return '';
+    const scheme = _schemeOf(s);
+    return (scheme === '' || _SAFE_SCHEMES.has(scheme)) ? s : '';
   }
   // Same guard, but with a default for widgets that always render an anchor
   // (button/hero-CTA/cta-banner/feature-card link): an empty or dangerous href
@@ -172,29 +184,103 @@ const PageRenderer = (() => {
     return Math.max(min, Math.min(max, x));
   }
 
+  // ── HTML widget sanitizer: an ALLOWLIST ──────────────────────────────────────
+  // Only the listed elements and attributes survive. An element that is not listed
+  // is unwrapped (its text stays); the ones that can execute or restyle the page
+  // are removed with their content. Elements outside the HTML namespace (SVG,
+  // MathML — mutation-XSS and style-injection carriers) are always removed.
+  const _XHTML_NS = 'http://www.w3.org/1999/xhtml';
+  const _HTML_ALLOW = new Set([
+    'a', 'abbr', 'b', 'bdi', 'bdo', 'blockquote', 'br', 'caption', 'cite', 'code', 'col', 'colgroup', 'dd', 'del',
+    'details', 'dfn', 'div', 'dl', 'dt', 'em', 'figcaption', 'figure', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'hr', 'i',
+    'img', 'ins', 'kbd', 'li', 'mark', 'ol', 'p', 'pre', 'q', 's', 'samp', 'small', 'span', 'strong', 'sub', 'summary',
+    'sup', 'table', 'tbody', 'td', 'tfoot', 'th', 'thead', 'time', 'tr', 'u', 'ul', 'var', 'wbr',
+    'section', 'article', 'aside', 'header', 'footer', 'nav', 'main', 'center', 'font', 'big', 'tt', 'strike',
+    'video', 'audio', 'source', 'track',
+  ]);
+  const _HTML_DROP = new Set([
+    'script', 'style', 'iframe', 'frame', 'frameset', 'object', 'embed', 'applet', 'link', 'meta', 'base', 'form',
+    'input', 'button', 'select', 'option', 'optgroup', 'textarea', 'template', 'noscript', 'svg', 'math', 'title',
+    'head', 'canvas', 'dialog', 'slot', 'portal', 'xmp', 'plaintext', 'listing',
+  ]);
+  // `id` stays: in-page anchors (`<a href="#methods">`) need their targets, and the
+  // platform's singletons are lexical globals that named access cannot shadow.
+  const _ATTR_GLOBAL = new Set(['id', 'class', 'title', 'lang', 'dir', 'role', 'style', 'align', 'valign']);
+  const _ATTR_BY_TAG = {
+    a: ['href', 'target', 'rel', 'hreflang'],
+    img: ['src', 'alt', 'width', 'height', 'loading', 'decoding'],
+    td: ['colspan', 'rowspan', 'headers'], th: ['colspan', 'rowspan', 'headers', 'scope', 'abbr'],
+    col: ['span'], colgroup: ['span'], ol: ['start', 'reversed', 'type'], li: ['value'],
+    time: ['datetime'], del: ['datetime', 'cite'], ins: ['datetime', 'cite'], blockquote: ['cite'], q: ['cite'],
+    details: ['open'], font: ['color', 'size', 'face'],
+    table: ['border', 'width', 'cellpadding', 'cellspacing'],
+    video: ['src', 'poster', 'controls', 'autoplay', 'muted', 'loop', 'playsinline', 'preload', 'width', 'height'],
+    audio: ['src', 'controls', 'autoplay', 'muted', 'loop', 'preload'],
+    source: ['src', 'type', 'media'], track: ['src', 'kind', 'srclang', 'label', 'default'],
+  };
+  const _DATA_IMG = /^data:image\/(?:png|jpe?g|gif|webp);base64,[a-z0-9+/=\s]*$/i;
+
+  // A style attribute is kept declaration by declaration. Anything that can lift
+  // the content out of its box (fixed/sticky, z-index), load active content, or
+  // hide behind a CSS escape is dropped.
+  function _cleanInlineStyle(v) {
+    const raw = String(v == null ? '' : v);
+    if (/[\\<>{}]|\/\*|@import|expression\s*\(|behavio(?:u)?r\s*:|-moz-binding/i.test(raw)) return '';
+    return raw.split(';').map((d) => d.trim()).filter((d) => {
+      if (!d) return false;
+      const i = d.indexOf(':');
+      if (i < 1) return false;
+      const prop = d.slice(0, i).trim().toLowerCase();
+      const val = d.slice(i + 1).trim().toLowerCase();
+      if (prop === 'z-index' || prop === 'behavior') return false;
+      if (prop === 'position' && /fixed|sticky/.test(val)) return false;
+      if (/url\s*\(/.test(val)) {
+        const m = /url\s*\(\s*(['"]?)([^'")]*)\1\s*\)/.exec(val);
+        if (!m) return false;
+        const sch = _schemeOf(m[2]);
+        if (sch !== '' && sch !== 'http' && sch !== 'https') return false;
+      }
+      return true;
+    }).join('; ');
+  }
+
+  function _cleanAttrs(el, tag) {
+    const allowed = _ATTR_BY_TAG[tag] || [];
+    [...el.attributes].forEach((a) => {
+      const n = a.name.toLowerCase();
+      let keep = _ATTR_GLOBAL.has(n) || allowed.includes(n) || n.startsWith('aria-') || /^data-[a-z0-9_.:-]+$/.test(n);
+      if (keep && (n === 'href' || n === 'cite')) keep = _safeHref(a.value) !== '';
+      if (keep && (n === 'src' || n === 'poster')) {
+        const sch = _schemeOf(a.value);
+        keep = sch === '' || sch === 'http' || sch === 'https' || _DATA_IMG.test(a.value.trim());
+      }
+      if (keep && n === 'style') {
+        const css = _cleanInlineStyle(a.value);
+        if (css) el.setAttribute('style', css); else keep = false;
+      }
+      if (keep && n === 'target' && !/^_(blank|self)$/.test(a.value)) keep = false;
+      if (!keep) el.removeAttribute(a.name);
+    });
+    // Any target=_blank link the author leaves in gets tab-nabbing protection.
+    if (el.hasAttribute('target')) el.setAttribute('rel', 'noopener noreferrer');
+  }
+
+  function _cleanChildren(parent) {
+    [...parent.childNodes].forEach((node) => {
+      if (node.nodeType === 3) return;                       // text
+      if (node.nodeType !== 1) { node.remove(); return; }    // comments, processing instructions
+      const tag = node.localName;
+      if (node.namespaceURI !== _XHTML_NS || _HTML_DROP.has(tag)) { node.remove(); return; }
+      if (!_HTML_ALLOW.has(tag)) { _cleanChildren(node); node.replaceWith(...node.childNodes); return; }
+      _cleanAttrs(node, tag);
+      _cleanChildren(node);
+    });
+  }
+
   function _sanitizeHtml(html) {
     const tpl = document.createElement('template');
     tpl.innerHTML = String(html || '');
-    const BAD = new Set(['SCRIPT', 'STYLE', 'IFRAME', 'OBJECT', 'EMBED', 'LINK', 'META', 'BASE', 'FORM']);
-    // Consistent with _safeHref: href/xlink:href/formaction reject
-    // javascript:/vbscript:/data: (data:text/html is an XSS vector); src keeps
-    // data: (legit inline images) but still drops the script schemes.
-    const HREFISH = new Set(['href', 'xlink:href', 'formaction']);
-    const walk = (node) => {
-      [...node.children].forEach((child) => {
-        if (BAD.has(child.tagName)) { child.remove(); return; }
-        [...child.attributes].forEach((a) => {
-          const n = a.name.toLowerCase();
-          if (n.startsWith('on')) child.removeAttribute(a.name);
-          else if (HREFISH.has(n) && /^\s*(javascript|vbscript|data)\s*:/i.test(a.value)) child.removeAttribute(a.name);
-          else if (n === 'src' && /^\s*(javascript|vbscript)\s*:/i.test(a.value)) child.removeAttribute(a.name);
-        });
-        // Any target=_blank link the author leaves in gets tab-nabbing protection.
-        if (child.hasAttribute('target')) child.setAttribute('rel', 'noopener noreferrer');
-        walk(child);
-      });
-    };
-    walk(tpl.content);
+    _cleanChildren(tpl.content);
     return tpl.innerHTML;
   }
 
@@ -1479,6 +1565,7 @@ const PageRenderer = (() => {
     render, renderSource, renderWidget, renderSection,
     styleCss, sectionCss, columnCss, overlayNode, styleClasses, applyStyleExtras,
     fetchSource, fetchBlocks, normalize: _normalize, lv: _lv,
+    sanitizeHtml: _sanitizeHtml, sanitizeNode: _cleanChildren, safeHref: _safeHref, schemeOf: _schemeOf, cleanInlineStyle: _cleanInlineStyle,
     WIDGET_TYPES, BLOCK_TYPES: WIDGET_TYPES,
   };
 })();

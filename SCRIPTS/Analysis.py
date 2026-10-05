@@ -18,32 +18,6 @@ import multiprocessing
 def _configure_threads_early():
     total = multiprocessing.cpu_count()
     n_workers = max(1, total - 4)
-    n_str = str(n_workers)
-    os.environ['OMP_NUM_THREADS']        = n_str
-    os.environ['OPENBLAS_NUM_THREADS']   = n_str
-    os.environ['MKL_NUM_THREADS']        = n_str
-    os.environ['VECLIB_MAXIMUM_THREADS'] = n_str
-    os.environ['NUMEXPR_NUM_THREADS']    = n_str
-"""
-Imaris Cell Tracking — Cell ID Assignment & Lineage Analysis
-=============================================================
-Reads Imaris Excel exports from DATA/<SAMPLE>/ folders,
-assigns unique biological cell IDs (handling mitosis events),
-and outputs a CSV with lineage information (parent/daughter cells).
-
-Output structure:
-    OUTPUT/<YY.MM.DD-HH.MM>/<SAMPLE>/cell_tracking.csv
-"""
-
-import os
-import sys
-import glob
-from datetime import datetime
-import multiprocessing
-
-def _configure_threads_early():
-    total = multiprocessing.cpu_count()
-    n_workers = max(1, total - 4)
     # FORCE 1 THREAD PER PROCESS TO AVOID OVERSUBSCRIPTION (256+ threads)
     n_str = "1"
     os.environ['OMP_NUM_THREADS']        = n_str
@@ -77,6 +51,13 @@ OUTPUT_ROOT = os.path.join(BASE_DIR, "OUTPUT")
 #  HELPERS
 # ---------------------------------------------
 
+# Largest displacement, in the coordinates' unit (micrometres in an Imaris export),
+# between two frames for a spot to continue a cell, or for a cell to be read as fused
+# into another. It is a distance per FRAME, so it implicitly assumes the acquisition
+# interval of the lab's timelapses; a much longer interval needs a larger value.
+MATCH_DISTANCE_UM = 60.0
+
+
 def euclidean_distance(p1, p2):
     """Euclidean distance between two 3D points (arrays of shape (3,))."""
     return np.sqrt(np.sum((p1 - p2) ** 2))
@@ -85,15 +66,15 @@ def euclidean_distance(p1, p2):
 def build_cost_matrix(coords_prev, coords_curr):
     """
     Build a cost matrix of Euclidean distances between two sets of 3D points.
-    Shape: (n_prev, n_curr).
+    Shape: (n_prev, n_curr). cost[i, j] = sqrt(sum_k (prev[i, k] - curr[j, k])^2),
+    evaluated for every pair at once by broadcasting (same arithmetic, same order of
+    summation over the three axes, as euclidean_distance).
     """
-    n_prev = len(coords_prev)
-    n_curr = len(coords_curr)
-    cost = np.zeros((n_prev, n_curr))
-    for i in range(n_prev):
-        for j in range(n_curr):
-            cost[i, j] = euclidean_distance(coords_prev[i], coords_curr[j])
-    return cost
+    prev = np.asarray(coords_prev, dtype=float).reshape(len(coords_prev), -1)
+    curr = np.asarray(coords_curr, dtype=float).reshape(len(coords_curr), -1)
+    if prev.shape[0] == 0 or curr.shape[0] == 0:
+        return np.zeros((prev.shape[0], curr.shape[0]))
+    return np.sqrt(np.sum((prev[:, None, :] - curr[None, :, :]) ** 2, axis=2))
 
 
 def assign_synthetic_track_ids(df: pd.DataFrame) -> pd.DataFrame:
@@ -440,7 +421,7 @@ class CellIDAssigner:
         # Assign IDs for matched cells that were NOT mothers (no mitosis for them)
         for r, c in zip(row_ind, col_ind):
             if r not in processed_mothers:
-                if cost[r, c] > 60.0:
+                if cost[r, c] > MATCH_DISTANCE_UM:
                     cid = self._new_id()
                 else:
                     cid = current_cells[r][0]
@@ -470,7 +451,7 @@ class CellIDAssigner:
         for p_idx in unmatched_prev:
             best_c_idx = np.argmin(cost[p_idx, :])
             # If the closest spot is reasonably close, consider it a fusion
-            if cost[p_idx, best_c_idx] < 60.0:  # 60 um threshold for fusion
+            if cost[p_idx, best_c_idx] < MATCH_DISTANCE_UM:
                 if best_c_idx not in fusion_targets:
                     fusion_targets[best_c_idx] = []
                 fusion_targets[best_c_idx].append(p_idx)
@@ -479,7 +460,7 @@ class CellIDAssigner:
         for c_idx, p_idx in zip(row_ind, col_ind):
             primary_parent_id = current_cells[p_idx][0]
             
-            if c_idx in fusion_targets and cost[p_idx, c_idx] < 60.0:
+            if c_idx in fusion_targets and cost[p_idx, c_idx] < MATCH_DISTANCE_UM:
                 # FUSION DETECTED
                 fused_prev_indices = [p_idx] + fusion_targets[c_idx]
                 parent_ids = sorted([current_cells[pi][0] for pi in fused_prev_indices])
@@ -499,7 +480,7 @@ class CellIDAssigner:
                 new_current.append((merged_id, tp_coords[c_idx]))
             else:
                 # Normal continuation, but check distance to prevent teleporting (bug fix)
-                if cost[p_idx, c_idx] > 60.0:
+                if cost[p_idx, c_idx] > MATCH_DISTANCE_UM:
                     # Too far, new cell
                     new_id = self._new_id()
                     df.at[tp_indices[c_idx], "unique_cell_id"] = new_id
@@ -516,8 +497,7 @@ class CellIDAssigner:
 
         # Build reverse lookup: unique_cell_id -> set of row indices
         id_to_indices = {}
-        for idx, row in df.iterrows():
-            cid = row["unique_cell_id"]
+        for idx, cid in zip(df.index, df["unique_cell_id"]):
             if cid not in id_to_indices:
                 id_to_indices[cid] = []
             id_to_indices[cid].append(idx)

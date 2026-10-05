@@ -20,6 +20,7 @@ jobs:
       - uses: shivammathur/setup-php@v2
         with:
           php-version: '8.1'   # the advertised PHP floor for the fallback
+          extensions: zip, mbstring, sodium, gd
 
       - name: Changelog structure check
         run: python tools/check_version.py --no-tag
@@ -27,28 +28,16 @@ jobs:
       - name: Server self-check (offline boot gate)
         run: python dev_server.py --check
 
-      # ── Conformance vectors — the three-language twins must agree ──
-      - name: Compat resolver parity (py/js/php)
-        run: |
-          python tests/test_compat.py
-          node tests/test_compat.js
-          php tests/test_compat.php
-      - name: Plugin-trust hash parity (py/js/php)
-        run: |
-          python tests/test_plugin_trust.py
-          node tests/test_plugin_trust.js
-          php tests/test_plugin_trust.php
-      - name: Trust classification (py + php parity) + sandbox broker + updater core
-        run: |
-          python tests/test_plugin_trust_classify.py
-          php tests/test_plugin_trust_classify.php
-          node tests/test_plugin_sandbox.js
-          python tests/test_update_pivot.py
-          PYTHONUTF8=1 python tests/test_update_reconcile.py
-      - name: Pipeline pack selection (py + php parity)
-        run: |
-          python tests/test_pipeline_pack.py
-          php tests/test_pipeline_pack.php
+      # ── Every test of the repository (python, node, php; the three-language
+      # twins - compat, trust, release notes, upload - are all in here). A test that
+      # cannot run says SKIP and --strict-skips turns that into a failure, so a test
+      # never stops running unnoticed. --check-clean fails if a test dirtied the tree.
+      - name: Pipeline dependencies (the preprocessing tests run the real scripts)
+        run: pip install numpy==2.5.1 scipy==1.16.0 h5py==3.16.0 Pillow==11.1.0 tqdm==4.67.1
+      - name: Light pipeline pack (the admin/pack tests read the pack the repo builds)
+        run: python tools/build_pipeline_bundle.py
+      - name: Full test suite
+        run: python tests/run_all.py -j 2 --strict-skips --check-clean
 
       # ── Security invariants (fail the build on regression) ──
       - name: Sandbox must never grant allow-same-origin (INV-6)

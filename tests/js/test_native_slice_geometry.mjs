@@ -7,8 +7,9 @@
 //   • viewer.js _nativeSliceBricksForSpec (run from the page source): an axis-aligned
 //     cut keeps the brick layer the shader reads — floor(value·dim), where the old
 //     round(value·(dim−1)) picked the layer below at a brick boundary and rendered a
-//     black slice — and asks for three voxel planes of each brick; a Z-stack slab asks
-//     for its slices plus one each side; an oblique cut on an anisotropic volume keeps
+//     black slice — and asks for that voxel plane of each brick (its neighbour too when
+//     the plane sits on a voxel face, where the GPU may floor either way); a Z-stack
+//     slab asks for its slices alone; an oblique cut on an anisotropic volume keeps
 //     every brick the tilted plane really crosses (the untilted normal misses some:
 //     the black bands), as whole bricks.
 //
@@ -103,30 +104,30 @@ const key = (b) => `${b.bx}_${b.by}_${b.bz}`;
   const cut = pick({ mode: 'xy', value: 0.64, slabThickness: 1, projection: 'single' }, dims);
   const layer1 = cut.filter((b) => b.bz === 1);
   assert.equal(layer1.length, 32 * 32, 'every brick of the layer the shader reads');
-  for (const b of layer1) assert.deepEqual(plain(b.region), { x0: 0, x1: 64, y0: 0, y1: 64, z0: 0, z1: 2 }, 'voxel 64 plus one of slack above');
-  for (const b of cut.filter((b) => b.bz === 0)) assert.deepEqual(plain(b.region), { x0: 0, x1: 64, y0: 0, y1: 64, z0: 63, z1: 64 }, 'one plane of slack below');
+  for (const b of layer1) assert.deepEqual(plain(b.region), { x0: 0, x1: 64, y0: 0, y1: 64, z0: 0, z1: 1 }, 'voxel 64 alone in layer 1');
+  for (const b of cut.filter((b) => b.bz === 0)) assert.deepEqual(plain(b.region), { x0: 0, x1: 64, y0: 0, y1: 64, z0: 63, z1: 64 }, 'on a voxel face: the plane below, which the GPU may floor to');
 
   // T7: mid-depth, a single layer and three planes of it.
   const mid = pick({ mode: 'xy', value: 0.5, slabThickness: 1, projection: 'single' }, dims);
   assert.equal(mid.length, 32 * 32, 'one layer');
-  for (const b of mid) { assert.equal(b.bz, 0); assert.deepEqual(plain(b.region), { x0: 0, x1: 64, y0: 0, y1: 64, z0: 49, z1: 52 }); }
+  for (const b of mid) { assert.equal(b.bz, 0); assert.deepEqual(plain(b.region), { x0: 0, x1: 64, y0: 0, y1: 64, z0: 49, z1: 51 }, '50.0 is a voxel face: 49 and 50'); }
 
   // T8: an XZ cut at 0.75 of a 2048-wide volume reads voxel row 1536 = brick row 24;
   // the old picker (round(0.75 × 2047) = 1535) stopped at row 23.
   const xz = pick({ mode: 'xz', value: 0.75, slabThickness: 1, projection: 'single' }, dims);
   const row24 = xz.filter((b) => b.by === 24);
   assert.equal(row24.length, 32 * 2, 'the brick row the shader reads, at every x and z');
-  for (const b of row24) assert.deepEqual(plain(b.region), { x0: 0, x1: 64, y0: 0, y1: 2, z0: 0, z1: b.bz === 1 ? 36 : 64 }, 'row 1536 plus one of slack, whole x/z extent, partial last z layer');
+  for (const b of row24) assert.deepEqual(plain(b.region), { x0: 0, x1: 64, y0: 0, y1: 1, z0: 0, z1: b.bz === 1 ? 36 : 64 }, 'row 1536, whole x/z extent, partial last z layer');
   assert.ok(xz.every((b) => b.by === 23 || b.by === 24), 'nothing beyond the row and its slack');
-  assert.ok(xz.filter((b) => b.by === 23).every((b) => b.region.y0 === 63 && b.region.y1 === 64), 'one row of slack below');
+  assert.ok(xz.filter((b) => b.by === 23).every((b) => b.region.y0 === 63 && b.region.y1 === 64), '1536.0 is a voxel face: row 1535 too');
 
-  // T9: a Z-stack slab of slices 60..64 asks for those plus one plane each side.
+  // T9: a Z-stack slab of slices 60..64 asks for those alone (its samples sit at voxel centres).
   const z = dims.z;
   const slab = pick({ mode: 'xy', value: (60 + 5 / 2) / z, slabThickness: 5, slabStepNorm: 1 / z, projection: 'mip' }, dims);
   assert.equal(slab.length, 2 * 32 * 32, 'both layers: the slab straddles the brick boundary at 64');
   for (const b of slab) {
-    if (b.bz === 0) assert.deepEqual(plain(b.region), { x0: 0, x1: 64, y0: 0, y1: 64, z0: 59, z1: 64 }, 'slices 59..63 of layer 0');
-    else assert.deepEqual(plain(b.region), { x0: 0, x1: 64, y0: 0, y1: 64, z0: 0, z1: 2 }, 'slices 64..65 of layer 1');
+    if (b.bz === 0) assert.deepEqual(plain(b.region), { x0: 0, x1: 64, y0: 0, y1: 64, z0: 60, z1: 64 }, 'slices 60..63 of layer 0');
+    else assert.deepEqual(plain(b.region), { x0: 0, x1: 64, y0: 0, y1: 64, z0: 0, z1: 1 }, 'slice 64 of layer 1');
   }
 
   // T10: an empty plane spec still selects the middle plane, and an empty brick set gives nothing.

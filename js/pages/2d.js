@@ -34,13 +34,30 @@ const App2D = (() => {
   let _suppressSidebarSync = false; // a sidebar closed on the host's order must not echo back
   let _pendingWorkspaceState = null; // APPLY_WORKSPACE_STATE that arrived before the photograph
   let _datasetListeners = [];
+  let _browserBuilt = false;        // the contact sheet is built the first time it is opened
+  let _prefetchTimer = 0;
+  let _viewPostRaf = 0;
+  let _lastZoomText = '';
 
   const $ = (id) => document.getElementById(id);
   const t = (key, params) => I18n.t(key, params);
   const esc = (s) => Utils.escapeHtml(s == null ? '' : String(s));
 
   // ── Boot ───────────────────────────────────────────────────────────────────
+  // A throw during boot must reach the host: a Compare panel that never says
+  // anything keeps its load slot for minutes.
   async function init() {
+    try {
+      await _init();
+    } catch (err) {
+      console.error('[App2D] The page could not start.', err);
+      let message;
+      try { message = t('2d.errorTitle'); } catch (_) { message = 'Could not open this photograph.'; }
+      _showError(err && err.message ? `${message} ${err.message}` : message);
+    }
+  }
+
+  async function _init() {
     await InstanceConfig.load();
     Theme.init();
     await I18n.init();
@@ -91,7 +108,6 @@ const App2D = (() => {
       _suppressSidebarSync = false;
       _bindPaneNav();
     }
-    _renderBrowserFilters();
     // A host must not be told the panel is ready before the photograph is on
     // screen, or its Studio would capture the upscaled preview. A photograph
     // that never decodes still has to bring the panel up.
@@ -197,6 +213,12 @@ const App2D = (() => {
     };
   }
 
+  /** Um per pixel from the metadata, or null: a missing, zero, negative or non-numeric value is "uncalibrated", never 1. */
+  function _pixelSize(meta) {
+    const v = Number(meta?.pixelSizeUm?.x);
+    return Number.isFinite(v) && v > 0 ? v : null;
+  }
+
   // ── Dataset resolution ─────────────────────────────────────────────────────
   async function _resolveDataset(id, path) {
     // A published dataset is in the catalog under '<type>/<folder>', which is
@@ -253,12 +275,13 @@ const App2D = (() => {
       nativeUrl: _fileUrl(_basePath, image.native || 'image.webp'),
       width: image.width || meta.dimensions?.x || 1,
       height: image.height || meta.dimensions?.y || 1,
-      pixelSizeUm: meta.pixelSizeUm?.x
+      pixelSizeUm: _pixelSize(meta),
+      deferNative: Boolean(opts.deferNative)
     }).catch(() => {});
 
     _restoreMeasurements();
     _markActiveCard();
-    _prefetchNeighbours();
+    clearTimeout(_prefetchTimer);
     for (const cb of _datasetListeners) cb(meta);
     // The host keeps a title and an id per panel; a photograph switched from the
     // pane's own previous / next / browse controls must reach it.
@@ -273,7 +296,7 @@ const App2D = (() => {
   // given, so the two never chase each other.
   function _bindPanelSync() {
     window.addEventListener('message', (e) => {
-      if (!Utils.isTrustedMessageOrigin(e)) return;
+      if (!Utils.isTrustedMessageOrigin(e) || e.source !== window.parent) return;
       const type = e.data?.type;
       if (type === 'WM_SET_PHYSICAL_VIEW') {
         _suppressSync = true;
@@ -281,7 +304,9 @@ const App2D = (() => {
         _suppressSync = false;
       } else if (type === 'WM_OPEN_DATASET') {
         const ds = Catalog.getById(e.data.id);
-        if (ds && ds.type === TYPE && ds.id !== _id) _openDataset(ds);
+        // `history` makes the page announce the switch (PANEL_DATASET), so a parent
+        // that linked the two views can push its view again onto the new photograph.
+        if (ds && ds.type === TYPE && ds.id !== _id) _openDataset(ds, { history: 'replace' });
       } else if (type === 'TOGGLE_SIDEBAR') {   // the Compare page's per-panel settings button
         _suppressSidebarSync = true;
         try { _setSidebarHidden(!e.data.value); }
@@ -296,9 +321,15 @@ const App2D = (() => {
     });
     // Only a gesture made inside this pane travels: a fit, a layout resize or a
     // view the parent itself pushed would otherwise cancel the other panes' zoom.
+    // A pointer can move a thousand times a second; the siblings need the view once per frame.
     Viewer2D.onViewChange((view, reason) => {
-      if (_suppressSync || reason !== 'user') return;
-      window.parent.postMessage({ type: 'WM_PHYSICAL_VIEW', sourceIndex: _panelIndex, panelIndex: _panelIndex, id: _id, view: Viewer2D.getPhysicalView() }, Utils.trustedTargetOrigin());
+      if (_suppressSync || reason !== 'user' || _viewPostRaf) return;
+      _viewPostRaf = requestAnimationFrame(() => {
+        _viewPostRaf = 0;
+        const physical = Viewer2D.getPhysicalView();
+        if (!physical) return;      // uncalibrated: there is no physical view to share
+        window.parent.postMessage({ type: 'WM_PHYSICAL_VIEW', sourceIndex: _panelIndex, panelIndex: _panelIndex, id: _id, view: physical }, Utils.trustedTargetOrigin());
+      });
     });
   }
 
@@ -355,13 +386,20 @@ const App2D = (() => {
     }
   }
 
-  function _prefetchNeighbours() {
-    for (const ds of [_neighbour(-1), _neighbour(1)]) {
-      if (!ds || ds.id === _id) continue;
-      const image = ds.image || {};
-      Viewer2D.prefetch(`DATA_WEB/${ds.path}/${image.preview || 'preview.webp'}`);
-      Viewer2D.prefetch(`DATA_WEB/${ds.path}/${image.native || 'image.webp'}`);
-    }
+  // Once this photograph is fully on screen and the page is idle, warm the cache
+  // for the two next ones. A pane inside Compare or a split view never does: it
+  // would multiply the downloads by the number of panes.
+  function _scheduleNeighbourPrefetch() {
+    if (_panelIndex !== null || _isAdmin) return;
+    clearTimeout(_prefetchTimer);
+    _prefetchTimer = setTimeout(() => {
+      for (const ds of [_neighbour(-1), _neighbour(1)]) {
+        if (!ds || ds.id === _id) continue;
+        const image = ds.image || {};
+        Viewer2D.prefetch(`DATA_WEB/${ds.path}/${image.preview || 'preview.webp'}`);
+        Viewer2D.prefetch(`DATA_WEB/${ds.path}/${image.native || 'image.webp'}`);
+      }
+    }, 400);
   }
 
   function _neighbour(delta) {
@@ -373,7 +411,7 @@ const App2D = (() => {
 
   function _step(delta) {
     const next = _neighbour(delta);
-    if (next && next.id !== _id) _openDataset(next, { history: 'push' });
+    if (next && next.id !== _id) _openDataset(next, { history: 'push', deferNative: true });
   }
 
   function _initExportManager() {
@@ -411,7 +449,7 @@ const App2D = (() => {
 
   function _infoRows() {
     const acq = _meta.acquisition || {};
-    const px = _meta.pixelSizeUm?.x;
+    const px = _pixelSize(_meta);
     const field = _meta.physicalSizeUm;
     const zoom = acq.zoom ?? acq.zoomNominal;
     return [
@@ -422,7 +460,7 @@ const App2D = (() => {
       [t('2d.zoom'), Number.isFinite(zoom) ? `×${zoom.toFixed(2)}` : null],
       [t('2d.pixelSize'), px ? `${px.toFixed(3)} µm/px` : t('2d.uncalibrated')],
       [t('2d.imageSize'), `${_meta.image?.width ?? _meta.dimensions?.x} × ${_meta.image?.height ?? _meta.dimensions?.y} px`],
-      [t('2d.field'), field?.x ? `${(field.x / 1000).toFixed(2)} × ${(field.y / 1000).toFixed(2)} mm` : null],
+      [t('2d.field'), Number(field?.x) > 0 && Number(field?.y) > 0 ? `${(Number(field.x) / 1000).toFixed(2)} × ${(Number(field.y) / 1000).toFixed(2)} mm` : null],
       [t('2d.microscope'), acq.microscope],
       [t('2d.camera'), acq.camera],
       [t('2d.exposure'), Number.isFinite(acq.exposureMs) ? `${acq.exposureMs.toFixed(1)} ms` : null],
@@ -458,6 +496,14 @@ const App2D = (() => {
     if (state === 'native') {
       pill.textContent = t('2d.nativeReady');
       _stateTimer = setTimeout(() => { pill.hidden = true; }, LOAD_STATE_LINGER_MS);
+      _scheduleNeighbourPrefetch();
+      return;
+    }
+    if (state === 'nativeError') {
+      // The preview is up; only the full-resolution image failed.
+      pill.classList.add('is-error');
+      const text = t('2d.nativeError');
+      pill.textContent = text === '2d.nativeError' ? t('2d.loadError') : text;
       return;
     }
     pill.textContent = t({ loading: '2d.loadingPreview', preview: '2d.loadingNative', error: '2d.loadError' }[state]);
@@ -466,10 +512,13 @@ const App2D = (() => {
   // Zoom as a percentage of native (one image pixel per device pixel) and the
   // physical size of one screen pixel at that zoom.
   function _renderZoom(view) {
-    const px = _meta?.pixelSizeUm?.x;
+    const px = _pixelSize(_meta);
     const pct = Math.round(view.scale * (window.devicePixelRatio || 1) * 100);
     const perScreenPx = px ? ` · ${(px / view.scale).toFixed(2)} µm/px` : '';
-    $('p2d-zoom').textContent = `${pct} %${perScreenPx}`;
+    const text = `${pct} %${perScreenPx}`;
+    if (text === _lastZoomText) return;
+    _lastZoomText = text;
+    $('p2d-zoom').textContent = text;
   }
 
   // ── Contact-sheet browser ──────────────────────────────────────────────────
@@ -529,7 +578,7 @@ const App2D = (() => {
       ds.line
     ].filter(Boolean).join(' · ');
     return Utils.el('button', { type: 'button', class: 'p2d-card', 'data-id': ds.id, title: ds.name },
-      Utils.el('img', { src: `DATA_WEB/${ds.path}/${image.preview || 'preview.webp'}`, alt: ds.name, decoding: 'async' }),
+      Utils.el('img', { src: `DATA_WEB/${ds.path}/${image.preview || 'preview.webp'}`, alt: ds.name, decoding: 'async', loading: 'lazy' }),
       Utils.el('div', { class: 'p2d-card-body' },
         Utils.el('span', { class: `badge ${Utils.datasetTypeBadgeClass(TYPE)}` }, Utils.formatStage(ds.stage)),
         Utils.el('div', { class: 'p2d-card-name' }, ds.name),
@@ -549,6 +598,7 @@ const App2D = (() => {
     $('p2d-browser').hidden = !open;
     $('btn-browse').classList.toggle('btn-solid', open);
     $('btn-browse').classList.toggle('btn-ghost', !open);
+    if (open && !_browserBuilt) { _browserBuilt = true; _renderBrowserFilters(); }
     if (open) { _markActiveCard(); $('p2d-search').focus(); }
   }
 
@@ -567,7 +617,7 @@ const App2D = (() => {
     $('toggle-measure-labels').addEventListener('change', (e) => Viewer2D.setShowMeasurementLabels(e.target.checked));
     $('btn-hamburger').addEventListener('click', () => _setSidebarHidden(false));
 
-    $('p2d-search').addEventListener('input', (e) => { _filters.search = e.target.value; _renderBrowserGrid(); });
+    $('p2d-search').addEventListener('input', (e) => { _filters.search = e.target.value; if (_browserBuilt) _renderBrowserGrid(); });
     $('p2d-browser').addEventListener('click', _onBrowserClick);
     document.addEventListener('keydown', _onKey);
     window.addEventListener('popstate', _onPopState);
@@ -588,6 +638,8 @@ const App2D = (() => {
   }
 
   function _onKey(e) {
+    // Ctrl+F, Alt+Left, Cmd+B and the like belong to the browser.
+    if (e.defaultPrevented || e.ctrlKey || e.metaKey || e.altKey) return;
     if (e.target && ['INPUT', 'TEXTAREA', 'SELECT'].includes(e.target.tagName)) {
       if (e.key === 'Escape') { e.target.blur(); _setBrowserOpen(false); }
       return;
@@ -684,7 +736,7 @@ const App2D = (() => {
       name: _meta.name || _id,
       datasetType: TYPE,
       toolbar,
-      features: { volume: false, timeline: false, channels: 0, tracking: false, photo: true },
+      features: { volume: false, timeline: false, channels: 0, tracking: false, photo: true, calibrated: Boolean(_pixelSize(_meta)) },
       quality: 'native',
       tool: typeof ToolManager !== 'undefined' ? ToolManager.current() : 'navigate'
     });
@@ -724,13 +776,17 @@ const App2D = (() => {
     if (!_meta) return null;
     const canvas = Viewer2D.getNativeCanvas();
     if (!canvas) return null;
-    const px = _meta.pixelSizeUm?.x || 1;
+    // No calibration in the metadata means none here either: the Studio is told
+    // so (pixelSizeUm null, calibrated false) instead of being handed 1 um/px.
+    const px = _pixelSize(_meta);
+    const py = Number(_meta.pixelSizeUm?.y) > 0 ? Number(_meta.pixelSizeUm.y) : px;
     return {
       canvas, width: canvas.width, height: canvas.height,
       // Before the native image has decoded, the capture is the 640 px preview
       // upscaled — say so rather than pass it off as the photograph's own pixels.
       source: '2d', quality: Viewer2D.hasNative?.() ? 'native' : 'preview', timepoint: 0,
-      pixelSizeUm: { x: px, y: _meta.pixelSizeUm?.y || px },
+      pixelSizeUm: px ? { x: px, y: py } : null,
+      calibrated: Boolean(px),
       dataset: _meta, channelState: []
     };
   }
@@ -769,6 +825,7 @@ const App2D = (() => {
     getWorkspaceState: () => (_meta ? _getWorkspaceState() : null),
     applyWorkspaceState,
     getStudioSliceResult: _studioSliceResult,
+    getCaptureCanvas: () => (_meta && typeof Viewer2D !== 'undefined' ? Viewer2D.getCanvas() : null),
     _isReady: () => Boolean(_meta)
   };
 })();
@@ -776,7 +833,7 @@ const App2D = (() => {
 // A host restores a workspace as soon as the frame has loaded (before init() is
 // through its awaits), like the volume viewer: catch it here, App2D buffers it.
 if (typeof window.addEventListener === 'function') window.addEventListener('message', (e) => {
-  if (!Utils.isTrustedMessageOrigin(e)) return;
+  if (!Utils.isTrustedMessageOrigin(e) || e.source !== window.parent) return;
   const data = e.data;
   if (!data || data.type !== 'APPLY_WORKSPACE_STATE' || !data.state) return;
   App2D.applyWorkspaceState(data.state);

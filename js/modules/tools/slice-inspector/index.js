@@ -99,7 +99,7 @@ PluginRegistry.implement('slice-inspector', {
     document.getElementById('btn-slicer-studio')?.addEventListener('click', () => ctx.ui.openStudio());
 
     // Sync slicer when 3D plane changes via drag
-    ctx.viewer.onPlaneSpecChange(spec => {
+    this._unsubPlane = ctx.viewer.onPlaneSpecChange(spec => {
       if (!ctx.slicer.isVisible()) return;
       ctx.slicer.setPlaneSpec(spec);
       this._syncSlidersFromSpec();
@@ -137,7 +137,9 @@ PluginRegistry.implement('slice-inspector', {
       if (el) el.value = val;
       if (lb) lb.textContent = fmt;
     };
-    set('slicer-position', Math.round((spec.value || 0.5) * 100), 'slicer-val-pos', (spec.value || 0.5).toFixed(2));
+    // 0 is a valid plane position: only a missing value falls back to the middle.
+    const position = Number.isFinite(spec.value) ? spec.value : 0.5;
+    set('slicer-position', Math.round(position * 100), 'slicer-val-pos', position.toFixed(2));
     set('slicer-yaw',   spec.yaw   || 0, 'slicer-val-yaw',   `${spec.yaw   || 0}°`);
     set('slicer-pitch', spec.pitch || 0, 'slicer-val-pitch', `${spec.pitch || 0}°`);
     set('slicer-roll',  spec.roll  || 0, 'slicer-val-roll',  `${spec.roll  || 0}°`);
@@ -161,6 +163,8 @@ PluginRegistry.implement('slice-inspector', {
   },
 
   dispose() {
+    this._unsubPlane?.();
+    this._unsubPlane = null;
     this._hide();
   }
 });

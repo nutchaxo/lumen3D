@@ -10,7 +10,8 @@
   <!-- Fonts -->
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" media="print" data-async-font>
+  <noscript><link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet"></noscript>
 
   <!-- Lucide Icons -->
   <script src="js/vendor/lucide.min.js" integrity="sha384-tTkFttkBclaU1cloKwOi9xk3pbao3VZxTjLNBt8iFABWDBQibbAbWpVmO28zMuxq" crossorigin="anonymous"></script>
@@ -36,8 +37,10 @@
     body { opacity: 0; transition: opacity 0.3s ease; }
     body.loaded { opacity: 1; }
   </style>
+  <script src="js/core/theme-boot.js"></script>
 </head>
 <body data-page="home">
+  <a class="skip-link" href="#main" data-i18n="nav.skipToContent">Skip to content</a>
 
   <!-- ═══════════════════════════════════════════════════════════ -->
   <!-- Navigation Bar                                             -->
@@ -80,6 +83,7 @@
 
   <!-- White-label: operator-published home blocks render here (page builder),
        replacing the default landing below. Empty by default → default shows. -->
+  <main id="main" tabindex="-1">
   <div id="home-blocks" style="display:none"></div>
   <div id="home-default">
 
@@ -230,6 +234,7 @@
   </section>
 
   </div><!-- /home-default -->
+  </main>
 
   <!-- ═══════════════════════════════════════════════════════════ -->
   <!-- Footer                                                      -->
@@ -251,6 +256,7 @@
   <!-- ═══════════════════════════════════════════════════════════ -->
   <!-- Scripts                                                     -->
   <!-- ═══════════════════════════════════════════════════════════ -->
+  <script src="js/core/font-loader.js"></script>
   <script src="js/core/utils.js?v=20260504"></script>
   <script src="js/core/ui-actions.js"></script>
   <script src="js/core/instance-config.js?v=20260706"></script>

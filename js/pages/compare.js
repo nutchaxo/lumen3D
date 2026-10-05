@@ -16,7 +16,8 @@
                     QUALITY_STATUS a SET_QUALITY settled
                     SYNC_*        camera / channels / exposure / z / time / slicer
                                   plane / z-stack, relayed to the siblings
-                    WM_PHYSICAL_VIEW a photograph's physical view (µm per px)
+                    WM_PHYSICAL_VIEW a photograph's physical view (µm per px);
+                                  only a calibrated photograph sends or receives one
                     SIDEBAR_CLOSED, REQUEST_COMPARE_STUDIO
      host → panel   PANEL_HELLO, SET_TOOL, PLUGIN_ACTIVATE, SET_QUALITY,
                     TOGGLE_SIDEBAR, TOGGLE_ZSTACK, ZSTACK_HOVER_STATE,
@@ -29,6 +30,12 @@ const CompareApp = (() => {
   const MAX_PARALLEL_PANEL_LOADS = 2;
   const PANEL_READY_TIMEOUT_MS = 180000;
   const QUALITY_TIMEOUT_MS = 180000;
+  // The panels share one renderer and one GPU: the sum of their atlases stays under
+  // one budget (CompareQuality), a panel that has not priced its levels yet is
+  // assumed to hold the 512 level of a typical dataset.
+  const SHARED_ATLAS_BUDGET_BYTES = 1.5 * 1024 * 1024 * 1024;
+  const UNPRICED_PANEL_BYTES = 256 * 1024 * 1024;
+  const AUTO_QUALITY_CEILING = '1024x1024';
   const INITIAL_PANEL_QUALITY = '512x512';
   const QUALITY_RANK = { '256x256': 0, '512x512': 1, '1024x1024': 2, '2048x2048': 3, '4096x4096': 4, native: 5 };
 
@@ -49,6 +56,8 @@ const CompareApp = (() => {
   // The last relayed view of each kind, replayed to a panel that joins later so
   // it opens where the others are rather than where its own default view sits.
   const _lastSync = {};
+  const _lastSyncSource = {};      // sync key -> index of the panel that produced it
+  const _channelSource = {};       // channel name -> index of the panel that produced it
 
   let _loadQueue = [];
   let _activeLoads = 0;
@@ -165,6 +174,8 @@ const CompareApp = (() => {
     });
     document.getElementById('compare-quality')?.addEventListener('change', (e) => {
       _qualityMode = e.target.value;
+      // An explicit choice is a new request: a level that failed before is tried again.
+      _panels.forEach(p => { p.qualityFailed = null; });
       _scheduleQuality();
     });
   }
@@ -180,7 +191,12 @@ const CompareApp = (() => {
     ExportManager.init(ctx);
     document.getElementById('btn-export-compare')?.addEventListener('click', () => ExportManager.openDownloadCenter(ctx));
     document.getElementById('btn-save-compare-workspace')?.addEventListener('click', () => {
-      if (!_getWorkspaceState()) { _toast(_t('compare.notAllReady', 'Wait for every panel to finish loading.')); return; }
+      if (!_getWorkspaceState()) {
+        const loading = _panels.filter(p => !p.ready && !p.failed).map(p => p.name);
+        const base = _t('compare.notAllReady', 'Wait for every panel to finish loading.');
+        _toast(loading.length ? `${base} (${loading.join(', ')})` : base);
+        return;
+      }
       ExportManager.saveWorkspace('compare');
     });
     document.getElementById('btn-restore-compare-workspace')?.addEventListener('click', () => ExportManager.restoreWorkspace('compare'));
@@ -253,7 +269,8 @@ const CompareApp = (() => {
     if (!list) return;
     const shown = _datasets.filter(_modalMatches);
     if (!shown.length) {
-      list.innerHTML = `<div class="modal-empty">${Utils.escapeHtml(_t('compare.noMatch', 'No dataset matches.'))}</div>`;
+      const message = _datasets.length ? _t('compare.noMatch', 'No dataset matches.') : _t('compare.noDatasets', 'The catalog has no dataset yet.');
+      list.innerHTML = `<div class="modal-empty">${Utils.escapeHtml(message)}</div>`;
       return;
     }
     // SEC-014: dataset fields are catalog data — escaped before innerHTML. The
@@ -313,6 +330,8 @@ const CompareApp = (() => {
       el: null, iframe: null,
       ready: false, failed: false, readyResolve: null,
       toolbar: { tools: [], toggles: [] }, features: {}, quality: null,
+      qualityBytes: null, qualityFailed: null,
+      timeTotal: 0, timeExpect: [],
       pendingState: restore?.state || null,
       pendingZstack: restore?.zstack || null,
       soloChannel: Number.isInteger(restore?.soloChannel) ? restore.soloChannel : null,
@@ -378,6 +397,9 @@ const CompareApp = (() => {
     _loadQueue = _loadQueue.filter(p => p !== panel);
     _qualityQueue = _qualityQueue.filter(p => p !== panel);
     if (_qualityBusy?.panel === panel) _finishQuality();
+    // What a closed panel last shared must not be replayed onto the next one.
+    _forgetSyncFrom(panel.index);
+    if (!_panels.length) _clearLastSync();
     // Navigating the frame away tears its document down at once (WebGL context,
     // decode workers, in-flight pack fetches); a detached iframe only goes when
     // the browser gets round to collecting it.
@@ -426,26 +448,55 @@ const CompareApp = (() => {
     // A restored workspace goes down as soon as the document exists: the viewer
     // buffers it and skips its initial camera fit, so the saved camera is not
     // fought over by the first frame (both pages keep a module-level listener).
-    iframe.addEventListener('load', () => {
+    // The frame starts as about:blank, whose own load event some browsers fire after
+    // this listener is attached: only the page itself may take the restored state.
+    const onLoad = () => {
+      let blank = false;
+      try { blank = iframe.contentWindow?.location.href === 'about:blank'; } catch (_) { /* unreadable: not blank */ }
+      if (blank) return;
+      iframe.removeEventListener('load', onLoad);
       if (panel.pendingState && iframe.contentWindow) {
         _postTo(panel, { type: 'APPLY_WORKSPACE_STATE', state: panel.pendingState });
         panel.restored = true;
         panel.pendingState = null;
       }
-    }, { once: true });
+    };
+    iframe.addEventListener('load', onLoad);
     _showPanelLoadState(panel, _t('compare.panelLoading', 'Loading…'));
     iframe.src = src;
     await _waitForPanelReady(panel);
     _notifyFramesResize();
   }
 
-  function _showPanelLoadState(panel, text) {
+  function _showPanelLoadState(panel, text, { retry = false } = {}) {
     const node = panel.el?.querySelector('.panel-load-state');
     if (!node) return;
+    node.querySelector('[data-retry]')?.remove();
     if (!text) { node.hidden = true; return; }
     node.hidden = false;
     const span = node.querySelector('span');
     if (span) span.textContent = text;
+    if (retry) {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'btn btn-outline btn-sm';
+      btn.dataset.retry = '1';
+      btn.textContent = _t('compare.retry', 'Retry');
+      btn.addEventListener('click', () => _retryPanel(panel));
+      node.appendChild(btn);
+    }
+  }
+
+  /** Load a failed panel again from scratch (its frame is replaced, not reused). */
+  function _retryPanel(panel) {
+    const d = Catalog.getById(panel.id);
+    if (!d || !panel.iframe || !_panels.includes(panel)) return;
+    panel.failed = false;
+    panel.ready = false;
+    panel.readyResolve = null;
+    panel.iframe.dataset.src = _panelSrc(d, panel.index);
+    _showPanelLoadState(panel, _t('compare.panelQueued', 'Waiting for a load slot…'));
+    _queuePanelLoad(panel);
   }
 
   function _waitForPanelReady(panel) {
@@ -453,8 +504,15 @@ const CompareApp = (() => {
     return new Promise(resolve => {
       panel.readyResolve = resolve;
       _setTimer(panel, () => {
+        // A timer of an earlier attempt (the panel was retried since) has no say.
+        if (panel.readyResolve !== resolve) return;
         if (!panel.ready && !panel.failed) {
           console.warn(`[Compare] Panel ${panel.index} gave no PANEL_READY within ${PANEL_READY_TIMEOUT_MS / 1000} s.`);
+          // Not ready and not failed would block the workspace save for good.
+          panel.failed = true;
+          panel.readyResolve = null;
+          _showPanelLoadState(panel, _t('compare.panelFailed', 'Could not load this dataset.'), { retry: true });
+          _updateActionButtons();
           resolve(false);
         }
       }, PANEL_READY_TIMEOUT_MS);
@@ -470,6 +528,7 @@ const CompareApp = (() => {
       toggles: Array.isArray(data.toolbar?.toggles) ? data.toolbar.toggles : []
     };
     panel.features = data.features || {};
+    panel.qualityBytes = _cleanQualityBytes(data.features?.qualityBytes);
     panel.quality = data.quality || panel.quality;
     if (data.name) _setPanelTitle(panel, data.name);
     if (data.datasetType) { panel.type = data.datasetType; panel.el.dataset.panelType = data.datasetType; }
@@ -497,14 +556,31 @@ const CompareApp = (() => {
     }
   }
 
+  /** What a volume panel says each quality level costs, or null (an older page, a bad value). */
+  function _cleanQualityBytes(raw) {
+    if (!raw || typeof raw !== 'object') return null;
+    const out = {};
+    for (const q of CompareQuality.LADDER) {
+      const v = Number(raw[q]);
+      if (Number.isFinite(v) && v > 0) out[q] = v;
+    }
+    return Object.keys(out).length ? out : null;
+  }
+
   /** What the siblings currently share, pushed to a panel that joins late. */
   function _replayLastSync(panel) {
     const volume = Boolean(panel.features.volume);
     if (_syncOptions.camera) {
       if (volume && _lastSync.SYNC_CAMERA) _postTo(panel, _lastSync.SYNC_CAMERA);
-      if (panel.features.photo && _lastSync.WM_PHYSICAL_VIEW) _postTo(panel, { type: 'WM_SET_PHYSICAL_VIEW', view: _lastSync.WM_PHYSICAL_VIEW.view });
+      if (panel.features.photo && panel.features.calibrated !== false && _lastSync.WM_PHYSICAL_VIEW) {
+        _postTo(panel, { type: 'WM_SET_PHYSICAL_VIEW', view: _lastSync.WM_PHYSICAL_VIEW.view });
+      }
     }
-    if (_syncOptions.time && panel.features.timeline && _lastSync.SYNC_TIME) _postTo(panel, _lastSync.SYNC_TIME);
+    if (_syncOptions.time && panel.features.timeline && _lastSync.SYNC_TIME) {
+      // An order like any other: the frame it loads is its answer, not news for the siblings.
+      CompareTimeSync.expect(panel, _lastSync.SYNC_TIME, Date.now());
+      _postTo(panel, _lastSync.SYNC_TIME);
+    }
     if (!volume) return;
     if (_syncOptions.channels) {
       Object.values(_lastSync.channels || {}).forEach(msg => _postTo(panel, msg));
@@ -524,7 +600,7 @@ const CompareApp = (() => {
     console.warn(`[Compare] Panel ${panel.index} (${panel.id}) reported an error: ${message}`);
     if (panel.ready) return;   // the volume already on screen is intact
     panel.failed = true;
-    _showPanelLoadState(panel, _t('compare.panelFailed', 'Could not load this dataset.'));
+    _showPanelLoadState(panel, _t('compare.panelFailed', 'Could not load this dataset.'), { retry: true });
     panel.readyResolve?.(false);
     panel.readyResolve = null;
     _updateActionButtons();
@@ -628,23 +704,42 @@ const CompareApp = (() => {
 
   // ── Quality (volume panels) ───────────────────────────────
 
-  function _qualityTarget() {
-    if (_qualityMode !== 'auto') return _qualityMode;
-    // Every volume panel counts, ready or not: four bricked volumes at 1024 would
-    // not fit the GPU budget, so a burst of additions (Decompose) settles at 512
-    // from the first panel instead of raising the early ones and not the late ones.
+  // Manual mode: one level for every volume panel. Auto: a level per panel from the
+  // shared budget (CompareQuality.plan) when the panels report what their levels
+  // cost, else the older rule by count — every volume panel counts, ready or not:
+  // four bricked volumes at 1024 would not fit the GPU budget, so a burst of
+  // additions (Decompose) settles at 512 from the first panel.
+  function _countTarget() {
     const volumes = _panels.filter(p => p.type !== '2d').length;
-    return volumes <= 2 ? '1024x1024' : '512x512';
+    return volumes <= 2 ? AUTO_QUALITY_CEILING : '512x512';
   }
 
-  /** Reload the volume panels one at a time towards the target quality; in auto
-   *  mode a panel is only ever raised, never brought back down. */
+  function _budgetPlan() {
+    const volumes = _panels.filter(p => p.type !== '2d');
+    const priced = volumes.filter(p => p.ready && p.qualityBytes && p.quality);
+    const reserve = (volumes.length - priced.length) * UNPRICED_PANEL_BYTES;
+    return CompareQuality.plan(
+      priced.map(p => ({ key: p.index, quality: p.quality, bytes: p.qualityBytes })),
+      SHARED_ATLAS_BUDGET_BYTES, reserve, AUTO_QUALITY_CEILING);
+  }
+
+  function _targetFor(panel, plan) {
+    if (_qualityMode !== 'auto') return _qualityMode;
+    return (plan || _budgetPlan()).get(panel.index) || _countTarget();
+  }
+
+  /** Reload the volume panels one at a time towards their target quality. A panel
+   *  that prices its levels may be brought DOWN when a new panel would overrun the
+   *  budget; one that does not is only ever raised. */
   function _scheduleQuality() {
-    const target = _qualityTarget();
     const rank = (q) => (q in QUALITY_RANK ? QUALITY_RANK[q] : -1);
+    const plan = _qualityMode === 'auto' ? _budgetPlan() : null;
     _panels.forEach(panel => {
       if (!panel.ready || !panel.features.volume || !panel.quality) return;
-      const wanted = _qualityMode === 'auto' ? rank(panel.quality) < rank(target) : panel.quality !== target;
+      const target = _targetFor(panel, plan);
+      const legacyAuto = _qualityMode === 'auto' && !panel.qualityBytes;
+      const wanted = (legacyAuto ? rank(panel.quality) < rank(target) : panel.quality !== target)
+        && panel.qualityFailed !== target;   // a switch that failed is not asked again for the same level
       if (!wanted) { _qualityQueue = _qualityQueue.filter(p => p !== panel); return; }
       if (_qualityBusy?.panel === panel || _qualityQueue.includes(panel)) return;
       _qualityQueue.push(panel);
@@ -653,15 +748,18 @@ const CompareApp = (() => {
   }
 
   function _drainQualityQueue() {
-    if (_qualityBusy || !_qualityQueue.length) return;
-    const panel = _qualityQueue.shift();
-    const target = _qualityTarget();
-    _qualityBusy = { panel, target, timer: null };
-    _qualityBusy.timer = _setTimer(panel, () => {
-      console.warn(`[Compare] Panel ${panel.index} did not settle at ${target} within ${QUALITY_TIMEOUT_MS / 1000} s.`);
-      _finishQuality();
-    }, QUALITY_TIMEOUT_MS);
-    _postTo(panel, { type: 'SET_QUALITY', quality: target });
+    while (!_qualityBusy && _qualityQueue.length) {
+      const panel = _qualityQueue.shift();
+      const target = _targetFor(panel);
+      if (panel.quality === target) continue;      // the plan moved while it waited
+      _qualityBusy = { panel, target, timer: null };
+      _qualityBusy.timer = _setTimer(panel, () => {
+        console.warn(`[Compare] Panel ${panel.index} did not settle at ${target} within ${QUALITY_TIMEOUT_MS / 1000} s.`);
+        panel.qualityFailed = target;
+        _finishQuality();
+      }, QUALITY_TIMEOUT_MS);
+      _postTo(panel, { type: 'SET_QUALITY', quality: target });
+    }
   }
 
   function _finishQuality() {
@@ -674,8 +772,15 @@ const CompareApp = (() => {
   }
 
   function _onQualityStatus(panel, data) {
-    // On an error the page reverted to what it had; the recorded quality stays.
-    if (data.phase === 'ready' && data.quality) panel.quality = data.quality;
+    // On an error the page reverted to what it had; the recorded quality stays, and
+    // the level that failed is remembered so the queue does not retry it forever.
+    // A panel whose GPU budget settled it below the target answers 'ready' with the
+    // lower quality: that target counts as failed too, or the queue would ask for it
+    // again on every pass and reload the volume each time.
+    const busy = _qualityBusy?.panel === panel ? _qualityBusy.target : null;
+    const settledBelow = data.phase === 'ready' && busy && (data.downgraded || (data.quality && data.quality !== busy));
+    if (data.phase === 'ready' && data.quality) { panel.quality = data.quality; panel.qualityFailed = settledBelow ? busy : null; }
+    if (data.phase === 'error' && busy) panel.qualityFailed = busy;
     if (_qualityBusy?.panel === panel) _finishQuality();
   }
 
@@ -908,37 +1013,37 @@ const CompareApp = (() => {
       case 'QUALITY_STATUS': _onQualityStatus(panel, data); break;
       case 'SYNC_CAMERA':
         if (!_syncOptions.camera) break;
-        _lastSync.SYNC_CAMERA = data;
+        _remember('SYNC_CAMERA', data, panel);
         _broadcast(data, panel.index);
         break;
       case 'WM_PHYSICAL_VIEW':
         // Photographs share a PHYSICAL view (µm per screen pixel + physical centre):
-        // the same field at the same magnification whatever their pixel sizes.
-        if (!_syncOptions.camera) break;
-        _lastSync.WM_PHYSICAL_VIEW = data;
-        _broadcast({ type: 'WM_SET_PHYSICAL_VIEW', view: data.view }, panel.index);
+        // the same field at the same magnification whatever their pixel sizes. An
+        // uncalibrated photograph has none to give or to take (its px is not a µm).
+        if (!_syncOptions.camera || !data.view) break;
+        _remember('WM_PHYSICAL_VIEW', data, panel);
+        _panels.forEach(p => {
+          if (p === panel || p.features.calibrated === false) return;
+          _postTo(p, { type: 'WM_SET_PHYSICAL_VIEW', view: data.view });
+        });
         break;
-      case 'SYNC_TIME':
-        if (!_syncOptions.time) break;
-        _lastSync.SYNC_TIME = data;
-        _broadcast(data, panel.index);
-        break;
+      case 'SYNC_TIME': _onSyncTime(panel, data); break;
       case 'SYNC_CHANNELS':
         if (!_syncOptions.channels) break;
         _lastSync.channels = _lastSync.channels || {};
-        if (data.value?.name) _lastSync.channels[data.value.name] = data;
+        if (data.value?.name) { _lastSync.channels[data.value.name] = data; _channelSource[data.value.name] = panel.index; }
         _broadcast(data, panel.index);
         break;
       case 'SYNC_EXPOSURE':
         if (!_syncOptions.channels) break;
-        _lastSync.SYNC_EXPOSURE = data;
+        _remember('SYNC_EXPOSURE', data, panel);
         _broadcast(data, panel.index);
         break;
       case 'SYNC_Z':
       case 'SYNC_ZSTACK_SLICE':
       case 'SYNC_SLICER_SPEC':
         if (!_syncOptions.z) break;
-        _lastSync[data.type] = data;
+        _remember(data.type, data, panel);
         _broadcast(data, panel.index);
         break;
       case 'SIDEBAR_CLOSED': {
@@ -949,6 +1054,43 @@ const CompareApp = (() => {
       case 'REQUEST_COMPARE_STUDIO': _openCompareStudio(); break;
       default: break;
     }
+  }
+
+  function _remember(key, data, panel) {
+    _lastSync[key] = data;
+    _lastSyncSource[key] = panel.index;
+  }
+
+  /** Drop what a panel produced (it was closed): a panel added later would otherwise open on a dataset no longer there. */
+  function _forgetSyncFrom(index) {
+    const same = (v) => String(v) === String(index);
+    for (const key of Object.keys(_lastSyncSource)) {
+      if (!same(_lastSyncSource[key])) continue;
+      delete _lastSync[key];
+      delete _lastSyncSource[key];
+    }
+    for (const name of Object.keys(_channelSource)) {
+      if (!same(_channelSource[name])) continue;
+      delete _channelSource[name];
+      if (_lastSync.channels) delete _lastSync.channels[name];
+    }
+  }
+
+  function _clearLastSync() {
+    for (const key of Object.keys(_lastSync)) delete _lastSync[key];
+    for (const key of Object.keys(_lastSyncSource)) delete _lastSyncSource[key];
+    for (const key of Object.keys(_channelSource)) delete _channelSource[key];
+  }
+
+  // ── Time sync ─────────────────────────────────────────────────
+  // A report of the frame a panel was told to show is its answer to the order, not
+  // a new action (CompareTimeSync): relaying it would pull the sender back.
+  function _onSyncTime(panel, data) {
+    if (Number(data.total) > 0) panel.timeTotal = Number(data.total);
+    const now = Date.now();
+    if (!_syncOptions.time || CompareTimeSync.isEcho(panel, data, now)) return;
+    _remember('SYNC_TIME', data, panel);
+    CompareTimeSync.relay(_panels, panel, data, now).forEach(p => _postTo(p, data));
   }
 
   // ── Decompose by channel ──────────────────────────────────
@@ -1010,7 +1152,9 @@ const CompareApp = (() => {
       entries.push({
         sr, panel, datasetName: panel.name,
         cx: rect.left + rect.width / 2 - gridRect.left,
-        cy: rect.top + rect.height / 2 - gridRect.top
+        cy: rect.top + rect.height / 2 - gridRect.top,
+        top: rect.top - gridRect.top,
+        bottom: rect.bottom - gridRect.top
       });
     });
     if (!entries.length) {
@@ -1023,13 +1167,18 @@ const CompareApp = (() => {
 
     // ── 3. Grid structure (cols × rows) from the panel positions ──
     const GAP = 6;
-    const tolerance = gridRect.height * 0.15;
+    // Two panels are on one row when their rectangles share most of their height — a
+    // fixed fraction of the grid would merge two real rows whose weights were dragged.
     const sorted = [...entries].sort((a, b) => a.cy - b.cy);
     const rows = [];
     sorted.forEach(entry => {
       const lastRow = rows[rows.length - 1];
-      if (lastRow && Math.abs(entry.cy - lastRow[0].cy) < tolerance) lastRow.push(entry);
-      else rows.push([entry]);
+      if (lastRow) {
+        const rowTop = Math.min(...lastRow.map(e => e.top)), rowBottom = Math.max(...lastRow.map(e => e.bottom));
+        const overlap = Math.min(entry.bottom, rowBottom) - Math.max(entry.top, rowTop);
+        if (overlap > 0.5 * Math.min(entry.bottom - entry.top, rowBottom - rowTop)) { lastRow.push(entry); return; }
+      }
+      rows.push([entry]);
     });
     rows.forEach(row => row.sort((a, b) => a.cx - b.cx));
     const nRows = rows.length;
@@ -1052,7 +1201,7 @@ const CompareApp = (() => {
       const k = pxOf(e) / targetUmPerPx;
       return { w: Math.max(1, Math.round(srcW * k)), h: Math.max(1, Math.round(srcH * k)) };
     };
-    let maxSliceW = 0, maxSliceH = 0;
+    let maxSliceW = 1, maxSliceH = 1;      // a 0 x 0 cell would make the canvas unusable
     entries.forEach(e => {
       const s = drawSize(e);
       maxSliceW = Math.max(maxSliceW, s.w);
@@ -1239,18 +1388,19 @@ const CompareApp = (() => {
     return { blob, width, height, panelCount: _panels.length, fallbackPanels, mime };
   }
 
-  /** The canvas a panel is showing: the staged slice while the slice tool is open
-   *  (its own, or a sibling's cut plane mirrored), the WebGL canvas of a volume,
-   *  the 2D canvas of a photograph. */
+  /** The canvas a panel is showing (the staged slice, the WebGL view of a volume,
+   *  the 2D canvas of a photograph), asked of the page itself: a volume page renders
+   *  its WebGL view inside this call, and the caller draws it before this task ends —
+   *  the page does not keep its drawing buffer between frames, so a canvas fetched
+   *  from the frame's document and read later would be blank. */
   function _visiblePanelCanvas(panel) {
-    const doc = panel.iframe?.contentDocument;
-    if (!doc) return null;
-    const stage = doc.getElementById('slice-stage');
-    if (stage && !stage.classList.contains('hidden')) {
-      const c = stage.querySelector('canvas');
-      if (c?.width && c?.height) return c;
-    }
-    return doc.getElementById('webgl-canvas') || doc.getElementById('p2d-canvas') || doc.querySelector('canvas');
+    const win = panel.iframe?.contentWindow;
+    if (!win) return null;
+    try {
+      if (win.ViewerApp?.getCaptureCanvas) return win.ViewerApp.getCaptureCanvas();
+      if (win.App2D?.getCaptureCanvas) return win.App2D.getCaptureCanvas();
+    } catch (_) { /* frame mid-navigation */ }
+    return null;
   }
 
   function _drawPanelCanvas(ctx, panel, x, y, w, h) {
@@ -1410,9 +1560,12 @@ const CompareApp = (() => {
     if (!_panels.length) {
       return { ui: { panelCount: 0 }, compare: { panels: [], layoutMode: _layoutMode, sync: { ..._syncOptions }, tool: _tool, quality: _qualityMode } };
     }
-    const iframeStates = _panels.map(_panelState);
-    // Half a comparison is not a workspace: wait for every panel.
-    if (iframeStates.some(s => s === null)) return null;
+    // Half a comparison is not a workspace: wait for every panel that is still
+    // loading. A panel that failed will never be ready; it is kept in the list
+    // (reopening the workspace tries it again) with no state of its own.
+    if (_panels.some(p => !p.ready && !p.failed)) return null;
+    const iframeStates = _panels.map(p => (p.ready ? _panelState(p) : null));
+    if (_panels.some((p, i) => p.ready && iframeStates[i] === null)) return null;
 
     return {
       ui: { panelCount: _panels.length },
@@ -1442,6 +1595,7 @@ const CompareApp = (() => {
     _loadQueue = [];
     _qualityQueue = [];
     _qualityBusy = null;
+    _clearLastSync();
 
     if (compareState.layoutMode) {
       _layoutMode = compareState.layoutMode;
@@ -1458,7 +1612,9 @@ const CompareApp = (() => {
         if (cb) cb.checked = Boolean(value);
       });
     }
-    if (compareState.quality) {
+    // A hash or a file is input: an unknown level would never be answered by the page
+    // and would hold the quality queue for minutes per panel.
+    if (compareState.quality === 'auto' || CompareQuality.isQuality(compareState.quality)) {
       _qualityMode = compareState.quality;
       const select = document.getElementById('compare-quality');
       if (select) select.value = _qualityMode;
@@ -1485,6 +1641,7 @@ const CompareApp = (() => {
   return {
     init,
     addPanel: _addPanel,
+    removePanel: _removePanel,
     getWorkspaceState: _getWorkspaceState,
     applyWorkspaceState: _applyWorkspaceState,
     composeFigure: _composeCompareFigure,

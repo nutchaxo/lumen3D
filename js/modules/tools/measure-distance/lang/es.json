@@ -2,6 +2,7 @@
   "title": "Medir la distancia",
   "calibMissing": "Falta la calibración física para este dataset. La medición de distancia requiere metadatos de vóxel calibrados.",
   "noPoint": "No se detectó ningún punto de volumen calibrado.",
+  "noStructure": "No hay ninguna estructura bajo el cursor: haga clic en una parte visible de la muestra.",
   "measureN": "Medición {n}",
   "labelPlaceholder": "Etiqueta",
   "hidden": "Oculto",

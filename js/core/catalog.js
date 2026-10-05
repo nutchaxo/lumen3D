@@ -8,15 +8,30 @@
 const Catalog = (() => {
   let _datasets = [];
   let _loaded = false;
+  let _inflight = null;
+  let _loadError = null;
 
   /**
-   * Load the catalog from JSON
+   * Load the catalog from JSON. Concurrent callers share one request; a failed load is
+   * not remembered as "loaded", so the next call retries (see getLoadError()).
    * @returns {Promise<void>}
    */
-  async function load() {
-    if (_loaded) return;
+  function load() {
+    if (_loaded) return Promise.resolve();
+    if (!_inflight) _inflight = _fetchCatalog().finally(() => { _inflight = null; });
+    return _inflight;
+  }
+
+  /** The error of the last failed load, or null. Lets a page say "could not load" instead of "not found". */
+  function getLoadError() {
+    return _loadError;
+  }
+
+  async function _fetchCatalog() {
     try {
-      const resp = await fetch(`./DATA_WEB/catalog.json?t=${Date.now()}`);
+      // The index is generated per request from the metadata.json files, so it must be
+      // revalidated each time (a dataset that was just published has to show up).
+      const resp = await fetch('./DATA_WEB/catalog.json', { cache: 'no-cache' });
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
       const data = await resp.json();
       const datasetsArray = Array.isArray(data) ? data : (data.datasets || []);
@@ -27,10 +42,11 @@ const Catalog = (() => {
           : (dataset.volumeSources || [])
       }));
       _loaded = true;
+      _loadError = null;
     } catch (err) {
       console.warn('[Catalog] Failed to load catalog, using embedded data:', err);
       _datasets = _getEmbeddedCatalog();
-      _loaded = true;
+      _loadError = err;
     }
   }
 
@@ -70,15 +86,15 @@ const Catalog = (() => {
     }
 
     if (filters.search) {
-      const q = filters.search.toLowerCase();
+      const q = String(filters.search).toLowerCase();
       result = result.filter(d =>
-        d.name?.toLowerCase().includes(q) ||
-        d.description?.toLowerCase().includes(q) ||
-        d.markers?.some(m => m.toLowerCase().includes(q)) ||
+        String(d.name ?? '').toLowerCase().includes(q) ||
+        String(d.description ?? '').toLowerCase().includes(q) ||
+        d.markers?.some(m => String(m).toLowerCase().includes(q)) ||
         d.channels?.some(c => _channelName(c).toLowerCase().includes(q)) ||
-        d.stage?.toLowerCase().includes(q) ||
-        d.embryo?.toLowerCase().includes(q) ||
-        d.regions?.some(r => r.toLowerCase().includes(q))
+        String(d.stage ?? '').toLowerCase().includes(q) ||
+        String(d.embryo ?? '').toLowerCase().includes(q) ||
+        d.regions?.some(r => String(typeof r === 'object' && r ? r.name : r).toLowerCase().includes(q))
       );
     }
 
@@ -307,6 +323,7 @@ const Catalog = (() => {
 
   return {
     load,
+    getLoadError,
     getAll,
     getById,
     filter,

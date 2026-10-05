@@ -51,7 +51,15 @@ const read = (rel) => readFileSync(path.join(ROOT, rel), 'utf8');
 // ── SEC-019 channel-panel ──
 {
   const s = read('js/components/channel-panel.js');
-  assert.ok(/const safeColor = Utils\.escapeHtml/.test(s), 'SEC-019: safeColor computed via escapeHtml');
+  // The colour is validated, not escaped: only a #rgb / #rrggbb literal reaches a style.
+  assert.ok(/const safeColor = _safeColor\(channel\.color, /.test(s), 'SEC-019: safeColor computed by the hex allowlist');
+  const fnSrc = s.slice(s.indexOf('function _safeColor('), s.indexOf('const OPACITY_LEVELS'));
+  const safeColor = new Function(`${fnSrc}; return _safeColor;`)();
+  assert.equal(safeColor('#ABCDEF', 'x'), '#ABCDEF');
+  assert.equal(safeColor('#abc', 'x'), '#aabbcc');
+  for (const bad of ['red;background:url(x)', '#fff" onmouseover="x', 'url(javascript:1)', '#12345', '', null, 42]) {
+    assert.equal(safeColor(bad, '#ffffff'), '#ffffff', `SEC-019: ${String(bad)} rejected`);
+  }
   assert.ok(!/background:\$\{channel\.color\}/.test(s), 'SEC-019: raw channel.color removed from inline styles');
   assert.ok((s.match(/\$\{safeColor\}/g) || []).length >= 2, 'SEC-019: both swatches use safeColor');
 }

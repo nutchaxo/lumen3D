@@ -122,8 +122,13 @@ function lumen_serve_html(string $root, string $rel): bool {
     if ($rootReal === false) return false;
     $rel = ltrim(str_replace('\\', '/', $rel), '/');
     if ($rel === '') $rel = 'index.html';
-    // Reject traversal up front, then realpath+prefix as the authoritative check.
-    if (strpos($rel, '..') !== false || substr($rel, -5) !== '.html') return false;
+    // Only the platform's own pages, which all sit at the install root, get the live
+    // nonce. A .html anywhere below (an unapproved plugin folder, a dataset's files,
+    // anything dropped by SFTP) would otherwise run as a trusted page of this origin
+    // with the CSP's blessing — such a request is answered 404, never served as-is.
+    // A NUL byte is refused before realpath(), which throws on one.
+    if (strpos($rel, "\0") !== false || !preg_match('/^[A-Za-z0-9_][A-Za-z0-9_.-]*\.html\z/', $rel)
+        || strpos($rel, '..') !== false) return false;
     $full = realpath($rootReal . DIRECTORY_SEPARATOR . $rel);
     if ($full === false || strncmp($full, $rootReal, strlen($rootReal)) !== 0 || !is_file($full)) return false;
 

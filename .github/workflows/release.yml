@@ -8,7 +8,48 @@ permissions:
   contents: write
 
 jobs:
+  # The release is built only from a commit whose whole test suite is green, and
+  # only after the same security-invariant checks CI runs on every push.
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.1'
+          extensions: zip, mbstring, sodium, gd
+
+      - name: Guard - tag matches newest changelog
+        run: python tools/check_version.py --tag "${GITHUB_REF_NAME}"
+      - name: Server self-check
+        run: python dev_server.py --check
+      - name: Pipeline dependencies (the preprocessing tests run the real scripts)
+        run: pip install numpy==2.5.1 scipy==1.16.0 h5py==3.16.0 Pillow==11.1.0 tqdm==4.67.1
+      - name: Light pipeline pack (the admin/pack tests read the pack the repo builds)
+        run: python tools/build_pipeline_bundle.py
+      - name: Full test suite
+        run: python tests/run_all.py -j 2 --strict-skips --check-clean
+      - name: Sandbox must never grant allow-same-origin (INV-6)
+        run: |
+          if grep -RnE "sandbox=[\"'][^\"']*allow-same-origin" js/; then
+            echo "::error::an iframe sandbox attribute grants allow-same-origin"; exit 1; fi
+      - name: No eval / new Function in first-party JS (CSP hardening)
+        run: |
+          if grep -RnE "\beval\s*\(|new Function\s*\(" js/core js/pages js/components js/modules js/viewers js/workers; then
+            echo "::error::eval / new Function found in first-party JS"; exit 1; fi
+      - name: No CDN <script src> in HTML (libs are self-hosted; CSP has no CDN)
+        run: |
+          if grep -RnE "<script[^>]+src=[\"']https?://" *.html; then
+            echo "::error::a CDN <script src> would be blocked by the enforced script-src 'self'"; exit 1; fi
+
   release:
+    needs: test
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -17,15 +58,16 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: Guard — tag matches newest changelog
-        run: python tools/check_version.py --tag "${GITHUB_REF_NAME}"
-
-      - name: Server self-check
-        run: python dev_server.py --check
+      - name: Signing key is mandatory
+        env:
+          LUMEN_SIGNING_KEY: ${{ secrets.LUMEN_SIGNING_KEY }}
+        run: |
+          if [ -z "${LUMEN_SIGNING_KEY}" ]; then
+            echo "::error::secret LUMEN_SIGNING_KEY is not set - refusing to publish an unsigned release"; exit 1; fi
 
       - name: Build the complete processing pack (offline edition)
         # ~70 MB with a full CPython runtime and every scientific dependency
-        # pre-installed — far too large for the web release zip (which carries the
+        # pre-installed - far too large for the web release zip (which carries the
         # light edition), so it rides as a separate release asset and the admin
         # panel links the operator's browser straight to it.
         #
@@ -40,32 +82,47 @@ jobs:
         # SHA256SUMS it then signs.
         run: python tools/build_pipeline_bundle.py --full --out dist --platform-version "${GITHUB_REF_NAME#v}"
 
-      - name: Build release artifact (signs SHA256SUMS if a key is configured)
+      - name: Build release artifact (signed)
         env:
-          # Ed25519 private seed (64 hex). Optional: if the secret is unset the
-          # release is built unsigned. Once the public key is pinned in
-          # dev_server.py/install.php, the updater REQUIRES this signature.
+          # Ed25519 private seed (64 hex). Mandatory: --require-signature fails the
+          # build when it is absent.
           LUMEN_SIGNING_KEY: ${{ secrets.LUMEN_SIGNING_KEY }}
-        run: python tools/build_release.py --version "${GITHUB_REF_NAME#v}" --out dist --commit "${GITHUB_SHA}"
+        run: |
+          export SOURCE_DATE_EPOCH="$(git log -1 --format=%ct "${GITHUB_SHA}")"
+          python tools/build_release.py --version "${GITHUB_REF_NAME#v}" --out dist --commit "${GITHUB_SHA}" --require-signature
 
-      - name: Collect release assets (include SHA256SUMS.sig when present)
+      - name: Verify SHA256SUMS.sig against the pinned public key
+        # Same key the updater (dev_server.py) and the installer (install.php) pin.
+        # Refuses a release those two would refuse: wrong secret, key not pinned,
+        # pinned keys that disagree.
+        run: python tools/verify_release_signature.py dist
+
+      - name: Collect release assets
         # Both processing packs are attached, not just the complete one: the admin
         # panel compares the host's light pack against the published one, and can
         # only offer an update if that pack exists as an asset.
         run: |
           set -e
-          ASSETS="dist/lumen3d-web-${GITHUB_REF_NAME#v}.zip dist/SHA256SUMS dist/lumen3d-release-notes.json"
-          if [ -f dist/SHA256SUMS.sig ]; then ASSETS="$ASSETS dist/SHA256SUMS.sig"; fi
+          ASSETS="dist/lumen3d-web-${GITHUB_REF_NAME#v}.zip dist/SHA256SUMS dist/SHA256SUMS.sig dist/lumen3d-release-notes.json"
           for PACK in dist/lumen3d-pipeline-*.zip; do
             if [ -f "$PACK" ]; then ASSETS="$ASSETS $PACK"; fi
           done
           echo "RELEASE_ASSETS=$ASSETS" >> "$GITHUB_ENV"
 
-      - name: Create GitHub release
+      - name: Publish GitHub release
+        # Created as a DRAFT, filled with every asset, and only then published, so
+        # hosts polling releases/latest never see a release without its zip. If a
+        # release for the tag already exists (made by hand), its assets are replaced
+        # and its notes refreshed instead of failing.
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: >
-          gh release create "$GITHUB_REF_NAME"
-          $RELEASE_ASSETS
-          --title "Lumen3D Web ${GITHUB_REF_NAME}"
-          --notes-file "changelog/changelog_${GITHUB_REF_NAME#v}.md"
+        run: |
+          set -e
+          NOTES="changelog/changelog_${GITHUB_REF_NAME#v}.md"
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release edit "$GITHUB_REF_NAME" --title "Lumen3D Web ${GITHUB_REF_NAME}" --notes-file "$NOTES"
+          else
+            gh release create "$GITHUB_REF_NAME" --draft --title "Lumen3D Web ${GITHUB_REF_NAME}" --notes-file "$NOTES"
+          fi
+          gh release upload "$GITHUB_REF_NAME" $RELEASE_ASSETS --clobber
+          gh release edit "$GITHUB_REF_NAME" --draft=false --latest

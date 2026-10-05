@@ -23,5 +23,8 @@
   "pickSome": "Vink de foto's aan die u wilt opnemen.",
   "rendering": "Renderen…",
   "ready": "{n} paneel/panelen · {w} × {h} px",
-  "loadFailed": "Een foto kon niet worden geladen."
+  "loadFailed": "Een foto kon niet worden geladen.",
+  "readyPartial": "{n} paneel/panelen · {w} × {h} px · {failed} kon(den) niet worden geladen",
+  "unavailable": "foto niet beschikbaar",
+  "uncalibrated": "ongekalibreerd"
 }

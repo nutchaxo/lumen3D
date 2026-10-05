@@ -77,12 +77,12 @@ try {
     // ── Status before ──────────────────────────────────────────────────────
     [$code, $st] = api('status');
     $rows = rows_by_id();
-    check('status: latest 2 + registry', $code === 200 && $st['latest'] === 2 && ($st['migrations'][0]['id'] ?? '') === 'm002-planes' && count($st['migrations'][0]['title']) === 4);
-    check('status: 3d dataset at v1 needs m002-planes', ($rows['3d/synthA']['pending'] ?? null) === ['m002-planes'] && $rows['3d/synthA']['formatVersion'] === 1 && $rows['3d/synthA']['name'] === 'synthA');
+    check('status: latest 4 + registry', $code === 200 && $st['latest'] === 4 && array_column($st['migrations'], 'id') === ['m002-planes', 'm003-layer-mips', 'm004-bricks-v3'] && ($st['migrations'][0]['id'] ?? '') === 'm002-planes' && count($st['migrations'][0]['title']) === 4);
+    check('status: 3d dataset at v1 needs m002-planes', ($rows['3d/synthA']['pending'] ?? null) === ['m002-planes', 'm003-layer-mips', 'm004-bricks-v3'] && $rows['3d/synthA']['formatVersion'] === 1 && $rows['3d/synthA']['name'] === 'synthA');
     check('status: live dataset has 2 trees', ($rows['live/synthL']['trees'] ?? 0) === 2);
     check('status: 2d dataset has nothing pending', ($rows['2d/photo']['pending'] ?? null) === []);
     $est = $rows['3d/synthA']['estimate'];
-    check('status: estimate counts non-empty units', $est['units'] === 14 && $est['unitsTotal'] === 14 && $est['bytes'] > 0 && $est['bytes'] === $est['bytesTotal']);
+    check('status: estimate counts non-empty units', $est['migrations']['m002-planes']['units'] === 14 && $est['migrations']['m002-planes']['unitsTotal'] === 14 && $est['migrations']['m002-planes']['bytes'] > 0 && $est['migrations']['m002-planes']['bytes'] === $est['migrations']['m002-planes']['bytesTotal'] && $est['migrations']['m003-layer-mips']['exact'] === false);
 
     // ── 3d: plan → unit_run → finalize ────────────────────────────────────
     [$code, $plan] = api('plan', ['dataset' => '3d/synthA', 'migration' => 'm002-planes']);
@@ -126,14 +126,14 @@ try {
     check('finalize: journal and tile store deleted', journal('3d', 'synthA') === null && !is_dir(lumen_mig_store_dir('3d', 'synthA', 'm002-planes')));
     check('finalize: no leftover dot-folder', !is_dir("$dir3d/.planes-incoming") && !is_dir("$dir3d/.planes-old"));
     $rows = rows_by_id();
-    check('status: 3d now up to date', $rows['3d/synthA']['pending'] === [] && $rows['3d/synthA']['formatVersion'] === 2 && !$rows['3d/synthA']['repair']);
+    check('status: 3d now at version 2, m003 and m004 pending', $rows['3d/synthA']['pending'] === ['m003-layer-mips', 'm004-bricks-v3'] && $rows['3d/synthA']['formatVersion'] === 2 && !$rows['3d/synthA']['repair']);
     [$c] = api('plan', ['dataset' => '3d/synthA', 'migration' => 'm002-planes']);
     check('plan: refused on an up-to-date dataset', $c === 409);
 
     // ── Repair detection ───────────────────────────────────────────────────
     rename("$dir3d/planes/z00069.bin", "$root/z69.bak");
     $rows = rows_by_id();
-    check('repair: a missing plane pack is detected at v2', $rows['3d/synthA']['repair'] === true && $rows['3d/synthA']['pending'] === ['m002-planes']);
+    check('repair: a missing plane pack is detected at v2', $rows['3d/synthA']['repair'] === true && $rows['3d/synthA']['pending'] === ['m002-planes', 'm003-layer-mips', 'm004-bricks-v3']);
     [$c] = api('plan', ['dataset' => '3d/synthA', 'migration' => 'm002-planes']);
     check('repair: plan accepted at version 2', $c === 200);
     api('cancel', ['dataset' => '3d/synthA', 'migration' => 'm002-planes']);
@@ -147,7 +147,7 @@ try {
     $m = json_decode((string)file_get_contents("$dir3d/metadata.json"), true); unset($m['formatVersion']);
     file_put_contents("$dir3d/metadata.json", json_encode($m));
     $rows = rows_by_id();
-    check('crash: valid planes + v1 shows as needing the update', $rows['3d/synthA']['pending'] === ['m002-planes'] && !$rows['3d/synthA']['repair']);
+    check('crash: valid planes + v1 shows as needing the update', $rows['3d/synthA']['pending'] === ['m002-planes', 'm003-layer-mips', 'm004-bricks-v3'] && !$rows['3d/synthA']['repair']);
     [$c, $fin] = api('finalize', ['dataset' => '3d/synthA', 'migration' => 'm002-planes']);
     check('crash: finalize without a job only bumps the version', $c === 200 && $fin['formatVersion'] === 2
         && json_decode((string)file_get_contents("$dir3d/metadata.json"), true)['formatVersion'] === 2);
@@ -297,7 +297,7 @@ try {
     $src = (string)file_get_contents(__DIR__ . '/../api/migrations.php');
     check('endpoint: session released after auth, before dispatch',
         strpos($src, 'admin_session_start();') < strpos($src, 'session_write_close();') && strpos($src, 'session_write_close();') < strpos($src, 'switch ($action)'));
-    check('endpoint: every write action is POST + CSRF', LUMEN_MIG_WRITE_ACTIONS === ['plan', 'unit_put', 'unit_run', 'finalize', 'cancel', 'bench']
+    check('endpoint: every write action is POST + CSRF', LUMEN_MIG_WRITE_ACTIONS === ['plan', 'unit_put', 'unit_run', 'finalize', 'cancel', 'bench', 'unit_inputs']
         && strpos($src, "in_array(\$action, LUMEN_MIG_WRITE_ACTIONS, true)") !== false && strpos($src, '$csrfOk') !== false);
 } catch (Throwable $e) {
     check('no exception', false, get_class($e) . ': ' . $e->getMessage() . ' @' . $e->getFile() . ':' . $e->getLine());

@@ -692,6 +692,7 @@ function populateForm() {
   renderOrientationAxes();
   renderDefaultView();
   renderGallery();
+  ensureGalleryThumbs();
   _formBound = true;
 }
 
@@ -933,6 +934,38 @@ function galleryUrl(file) {
   return `DATA_WEB/${_current.path || _current.id}/gallery/${encodeURIComponent(file)}`;
 }
 
+/** The 320 px copy the server keeps in gallery/thumbs/, or the original when the
+ *  entry has none (yet). */
+function galleryThumbUrl(item) {
+  const m = typeof item?.thumb === 'string'
+    && /^thumbs\/([A-Za-z0-9][A-Za-z0-9._-]{0,90}\.(?:webp|jpg))$/.exec(item.thumb);
+  return m ? `DATA_WEB/${_current.path || _current.id}/gallery/thumbs/${encodeURIComponent(m[1])}`
+           : galleryUrl(item?.file);
+}
+
+// Datasets whose gallery predates thumbnails get them made once, the first time
+// the gallery is shown (the server's `gallery_thumbs`), never on every render.
+const _thumbsRequested = new Set();
+async function ensureGalleryThumbs() {
+  const id = _current?.id;
+  if (!id || _draft?.staging || _thumbsRequested.has(id)) return;
+  if (!galleryItems().some((it) => it && !it.thumb)) return;
+  _thumbsRequested.add(id);
+  try {
+    const data = await apiFetch(`${API_DATASETS}?action=gallery_thumbs&id=${encodeURIComponent(id)}`,
+      { method: 'POST', body: '{}' });
+    if (data && data.ok && _current?.id === id) {
+      // Only the derived `thumb` fields are taken over: captions and order the
+      // operator is editing stay as they are in the draft.
+      const thumbs = new Map((data.gallery || []).map((g) => [g.file, g.thumb]));
+      for (const list of [_draft?.gallery, _original?.gallery]) {
+        (Array.isArray(list) ? list : []).forEach((g) => { if (g && thumbs.get(g.file)) g.thumb = thumbs.get(g.file); });
+      }
+      renderGallery();
+    }
+  } catch (_) { /* the grid keeps showing the originals */ }
+}
+
 function renderGallery() {
   if (!DOM.galleryGrid) return;
   const items = galleryItems();
@@ -951,7 +984,7 @@ function renderGallery() {
 
   DOM.galleryGrid.innerHTML = items.map((it, i) => `
     <div class="gal-item" data-gal-index="${i}">
-      <img class="gal-thumb" src="${escHtml(galleryUrl(it.file))}" alt="${escHtml(it.caption || it.file)}" loading="lazy">
+      <img class="gal-thumb" src="${escHtml(galleryThumbUrl(it))}" alt="${escHtml(it.caption || it.file)}" loading="lazy">
       <div class="gal-meta">
         <input class="config-input gal-caption" type="text" maxlength="400"
                data-gal-caption="${i}" value="${escHtml(it.caption || '')}"

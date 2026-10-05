@@ -167,6 +167,15 @@
             </select>
             <div class="quality-status" id="quality-status" role="status" data-i18n="viewer.qualityDefault">512x512 by default, 256x256 when unavailable.</div>
             <div class="quality-status" id="buffer-status"></div>
+            <label class="detail-mode-row text-xs text-muted" for="select-detail-mode">
+              <span data-i18n="viewer.detailMode">Zoom detail</span>
+              <select id="select-detail-mode" class="form-select text-sm p-1 rounded border border-light bg-surface text-primary">
+                <option value="auto" selected data-i18n="viewer.detailAuto">Automatic</option>
+                <option value="on" data-i18n="viewer.detailOn">On</option>
+                <option value="off" data-i18n="viewer.detailOff">Off</option>
+              </select>
+            </label>
+            <div class="quality-status" id="detail-status" role="status" aria-live="polite"></div>
         </div>
 
         <!-- Physical Scale Panel -->

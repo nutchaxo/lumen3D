@@ -2,9 +2,12 @@
    Decodes the 512² WebP mosaic of one 64³ brick channel (8×8 tiles, one z plane per
    tile) into voxel bytes off the main thread, and optionally composes the channels of
    a brick into one RGBA buffer so the page never runs the per-voxel interleave.
+   A v3 brick (66³ with its 1-voxel border, 9 × 8 tiles of 66², 594 × 528) is the same
+   grid layout with brickSize 66 and cols 9: `brickSize` is the stored edge (tile size
+   and brick extent alike), `expect` {width, height} the only picture size accepted.
 
    Messages (all but CANCEL are run in arrival order on one queue):
-     DECODE {id, batch, buffer, brickSize, packing, region?, lut?, assemble?}
+     DECODE {id, batch, buffer, brickSize, packing, region?, lut?, assemble?, expect?}
        → DECODE_RESULT {id, ok, buffer?, region, assembled?, message?}
        Without `assemble` the result is the scalar voxels of `region` (or of the
        whole brick), with `lut` (256 bytes) applied when given.
@@ -84,6 +87,12 @@ async function processDecode(msg, epoch) {
     // alpha premultiplication may touch them on the way to the canvas.
     bmp = await createImageBitmap(blob, { premultiplyAlpha: 'none', colorSpaceConversion: 'none' });
     const t1 = performance.now();
+    // A mosaic of a known size (a v3 brick: 9 × 8 slices of 66², 594 × 528) that
+    // decodes to another size is corrupt: refuse it rather than pad it with zeros.
+    const expect = msg.expect && typeof msg.expect === 'object' ? msg.expect : null;
+    if (expect && (bmp.width !== expect.width || bmp.height !== expect.height)) {
+      throw new Error(`brick mosaic is ${bmp.width}×${bmp.height}, expected ${expect.width}×${expect.height}`);
+    }
 
     if (!canvas) {
       canvas = new OffscreenCanvas(bmp.width, bmp.height);

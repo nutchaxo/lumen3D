@@ -272,7 +272,7 @@ const read = (rel) => readFileSync(path.join(ROOT, rel), 'utf8').replace(/\r/g, 
   assert.ok(/const namedMode = \['xy', 'xz', 'yz'\]\.includes\(spec\.mode\);\s*if \(!namedMode && Array\.isArray\(spec\.orientation\)/.test(vv), 'a named plane mode keeps its own orientation (a restored xz plane stays xz)');
 
   const c = read('js/pages/compare.js');
-  assert.ok(/win\.ViewerApp\.getCaptureCanvas\(\)/.test(c) && !/slicer-sync-overlay/.test(c) && !/contentDocument/.test(c),
+  assert.ok(/'REQUEST_CAPTURE'/.test(c) && /const canvas = getCaptureCanvas\(\);/.test(v) && !/slicer-sync-overlay/.test(c) && !/contentDocument/.test(c),
     'compare figure asks the page for the canvas it shows (the stage), not an overlay');
   const cap = v.slice(v.indexOf('function getCaptureCanvas()'), v.indexOf('function getSamplingVolume()'));
   assert.ok(/_sliceStaged/.test(cap) && /getPreviewCanvas/.test(cap) && /VolumeViewer\.renderNow/.test(cap),

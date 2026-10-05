@@ -38,6 +38,8 @@ except Exception:  # pragma: no cover
     Image = None
 
 MID = "m002-planes"
+# Since web 1.59.0 a format-1 dataset also needs m003 (layer MIPs) and m004 (bricks v3).
+LATER = ["m003-layer-mips", "m004-bricks-v3"]
 REAL_DS = Path(ROOT) / "DATA_WEB" / "3d" / "Egfl7eGFP-E825-Em2-10122024-DAPI-Pecam1647-10x-07xzoom-2x2Tiles-stack_Stitch"
 
 
@@ -279,7 +281,7 @@ class Engine(unittest.TestCase):
         ds, truth = make_3d(self.data_web)
         st = dm.status()
         row = next(r for r in st["datasets"] if r["id"] == "3d/SYN")
-        self.assertEqual((row["formatVersion"], row["pending"], row["repair"], row["trees"]), (1, [MID], False, 1))
+        self.assertEqual((row["formatVersion"], row["pending"], row["repair"], row["trees"]), (1, [MID] + LATER, False, 1))
         self.assertGreater(row["estimate"]["units"], 0)
         plan = dm.plan_job("3d/SYN", MID)
         # 2 layers x 2 channels x 2 x 2 tiles
@@ -299,7 +301,7 @@ class Engine(unittest.TestCase):
         self.assertFalse(dm.tile_store_dir("3d", "SYN", MID).exists())
         self.assertFalse((ds / ".planes-incoming").exists())
         row = next(r for r in dm.status()["datasets"] if r["id"] == "3d/SYN")
-        self.assertEqual((row["pending"], row["repair"], row["job"]), ([], False, None))
+        self.assertEqual((row["pending"], row["repair"], row["job"]), (LATER, False, None))
 
     def test_live_two_timepoints(self):
         ds, truth = make_live(self.data_web)
@@ -399,7 +401,7 @@ class Engine(unittest.TestCase):
         self.assertTrue((ds / "planes" / "manifest.json").exists())
         self.assertNotIn("formatVersion", self.meta(ds))
         row = next(r for r in dm.status()["datasets"] if r["id"] == "3d/SYN")
-        self.assertEqual((row["formatVersion"], row["pending"]), (1, [MID]))
+        self.assertEqual((row["formatVersion"], row["pending"]), (1, [MID] + LATER))
         self.assertEqual(dm.finalize("3d/SYN", MID)["formatVersion"], 2)
         assert_planes_equal(self, ds, truth)
         # Idempotent beyond the journal: a second finalize, and one with no job at all.
@@ -438,7 +440,7 @@ class Engine(unittest.TestCase):
         dm.finalize("3d/SYN", MID)
         (ds / "planes" / dm.pack_name(17)).unlink()
         row = next(r for r in dm.status()["datasets"] if r["id"] == "3d/SYN")
-        self.assertEqual((row["formatVersion"], row["pending"], row["repair"]), (2, [MID], True))
+        self.assertEqual((row["formatVersion"], row["pending"], row["repair"]), (2, [MID] + LATER, True))
         dm.plan_job("3d/SYN", MID)
         run_all_units("3d/SYN")
         self.assertEqual(dm.finalize("3d/SYN", MID)["formatVersion"], 2)
@@ -784,7 +786,7 @@ class HttpRoute(unittest.TestCase):
         cookie, csrf = hdrs["Set-Cookie"].split(";")[0], data["csrf"]
         st, data, _ = self.req("GET", base + "?action=status", cookie=cookie)
         self.assertEqual(st, 200, data)
-        self.assertEqual(data["latest"], 2)
+        self.assertEqual(data["latest"], 4)
         self.assertEqual(data["migrations"][0]["id"], MID)
         self.assertTrue(data["server"]["available"])
         self.assertEqual(self.req("POST", base + "?action=plan", {"dataset": "3d/SYN", "migration": MID},

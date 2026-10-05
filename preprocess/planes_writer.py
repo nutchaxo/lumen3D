@@ -98,9 +98,11 @@ def header_bytes(channels: int, tiles_x: int, tiles_y: int) -> int:
     return PACK_FIXED_BYTES + PACK_ENTRY_BYTES * channels * tiles_y * tiles_x
 
 
-def build_plane_pack(z: int, channels: int, tiles_x: int, tiles_y: int, payloads) -> bytes:
+def build_plane_pack(z: int, channels: int, tiles_x: int, tiles_y: int, payloads,
+                     magic: bytes = PACK_MAGIC) -> bytes:
     """One zNNNNN.bin. payloads: C·TY·TX byte strings in entry order (c, ty, tx), an
-    empty one for an all-zero tile."""
+    empty one for an all-zero tile. `magic` is LMIP for a layer-MIP pack (format 3),
+    whose `z` field is the layer index."""
     n = channels * tiles_y * tiles_x
     if len(payloads) != n:
         raise ValueError(f"build_plane_pack: {len(payloads)} payloads for {n} tiles")
@@ -108,7 +110,7 @@ def build_plane_pack(z: int, channels: int, tiles_x: int, tiles_y: int, payloads
         if not 1 <= v <= 0xFFFF:
             raise ValueError("build_plane_pack: count out of u16 range")
     head = bytearray(header_bytes(channels, tiles_x, tiles_y))
-    struct.pack_into("<4sHHHHI", head, 0, PACK_MAGIC, PACK_VERSION, channels, tiles_x,
+    struct.pack_into("<4sHHHHI", head, 0, magic, PACK_VERSION, channels, tiles_x,
                      tiles_y, z)
     offset = len(head)
     for i, data in enumerate(payloads):
@@ -119,8 +121,8 @@ def build_plane_pack(z: int, channels: int, tiles_x: int, tiles_y: int, payloads
     return bytes(head) + b"".join(payloads)
 
 
-def parse_plane_pack_header(data: bytes) -> dict:
-    if len(data) < PACK_FIXED_BYTES or data[:4] != PACK_MAGIC:
+def parse_plane_pack_header(data: bytes, magic: bytes = PACK_MAGIC) -> dict:
+    if len(data) < PACK_FIXED_BYTES or data[:4] != magic:
         raise ValueError("plane pack: bad magic")
     _m, version, channels, tiles_x, tiles_y, z = struct.unpack_from("<4sHHHHI", data, 0)
     if version != PACK_VERSION:
@@ -183,6 +185,18 @@ def _atomic_write(path: Path, data: bytes) -> None:
         raise
 
 
+def tile_payloads(plane, width: int, height: int) -> list:
+    """The TY·TX PNG payloads of one channel's (height, width) plane, b"" for an
+    all-zero tile (and for every tile when plane is None)."""
+    tiles_x, tiles_y = math.ceil(width / TILE), math.ceil(height / TILE)
+    out = []
+    for ty in range(tiles_y):
+        for tx in range(tiles_x):
+            tile = None if plane is None else                 plane[ty * TILE:min(height, (ty + 1) * TILE), tx * TILE:min(width, (tx + 1) * TILE)]
+            out.append(png_gray8(tile) if tile is not None and tile.any() else b"")
+    return out
+
+
 def plane_pack_for_z(z: int, planes, keep_layer: np.ndarray, width: int, height: int) -> bytes:
     """The pack of one z from its C planes.
 
@@ -197,14 +211,11 @@ def plane_pack_for_z(z: int, planes, keep_layer: np.ndarray, width: int, height:
     payloads = []
     for c in range(channels):
         plane = planes[c]
-        keep = keep_layer[c]
-        if plane is not None and not keep.all():
+        keep = keep_layer[c] if keep_layer is not None else None
+        if plane is not None and keep is not None and not keep.all():
             mask = np.repeat(np.repeat(keep, BRICK, axis=0), BRICK, axis=1)[:height, :width]
             plane = np.where(mask, plane, np.uint8(0))
-        for ty in range(tiles_y):
-            for tx in range(tiles_x):
-                tile = None if plane is None else                     plane[ty * TILE:min(height, (ty + 1) * TILE), tx * TILE:min(width, (tx + 1) * TILE)]
-                payloads.append(png_gray8(tile) if tile is not None and tile.any() else b"")
+        payloads += tile_payloads(plane, width, height)
     return build_plane_pack(z, channels, tiles_x, tiles_y, payloads)
 
 
@@ -233,18 +244,21 @@ def write_plane_task(args):
     return z, len(data)
 
 
-def plane_tasks(lod0_files, dims, brick_to_pack: dict, out_dir: Path):
+def plane_tasks(lod0_files, dims, brick_to_pack, out_dir: Path):
     """Tasks for write_plane_task covering every z of one tree, in z order.
 
     lod0_files: per channel, the (D, H, W) uint8 LOD0 file or None; dims = (X, Y, Z).
+    brick_to_pack: the v2 transport's index, whose absent bricks read 0; None for a
+    format-4 tree, whose exact empty-space skipping drops only bricks that are 0.
     """
     X, Y, Z = dims
     channels = len(lod0_files)
-    keep = kept_grid(brick_to_pack, channels, dims)
+    keep = kept_grid(brick_to_pack, channels, dims) if brick_to_pack is not None else None
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     paths = [str(p) if p is not None and Path(p).exists() else None for p in lod0_files]
-    return [(paths, (Z, Y, X), z, keep[:, z // BRICK].copy(), str(out_dir))
+    return [(paths, (Z, Y, X), z, keep[:, z // BRICK].copy() if keep is not None else None,
+             str(out_dir))
             for z in range(Z)]
 
 
@@ -253,6 +267,17 @@ def brick_trees(bricks_manifest: dict):
     """[(tree key or '', LOD0 dims (X, Y, Z), channels)] of a bricks manifest — one
     entry for a '3d' dataset, one per timepoint for a 'live' one."""
     channels = int(bricks_manifest.get("channels") or 0)
+    if bricks_manifest.get("schema") == "iribhm-bricks-v3":
+        # One level list for every tree of a v3 manifest; `timepoints` lists the trees.
+        levels = bricks_manifest.get("levels") or []
+        row = next((lv for lv in levels if int(lv.get("level", -1)) == 0), None)
+        if row is None:
+            raise ValueError("bricks manifest: no level 0")
+        d = row["dimensions"]
+        dims = (int(d["x"]), int(d["y"]), int(d["z"]))
+        tps = bricks_manifest.get("timepoints")
+        keys = sorted(row["path"] if isinstance(row, dict) else row for row in tps)             if isinstance(tps, list) and tps else [""]
+        return [(key, dims, channels) for key in keys]
 
     def lod0(levels):
         for lv in levels or []:
@@ -290,17 +315,19 @@ def tree_manifest(dims, channels: int, manifest_sha256: str, producer: str = "pi
     }
 
 
-def _check_tree_packs(tree_dir: Path, dims, channels: int) -> None:
-    """Every zNNNNN.bin of the tree is there with the header this tree implies."""
+def _check_tree_packs(tree_dir: Path, dims, channels: int, count: int = None,
+                      name=None, magic: bytes = PACK_MAGIC) -> None:
+    """Every pack of the tree (one per z, or `count` named by `name`) is there with the
+    header this tree implies."""
     X, Y, Z = dims
     tiles_x, tiles_y = math.ceil(X / TILE), math.ceil(Y / TILE)
     need = header_bytes(channels, tiles_x, tiles_y)
-    for z in range(Z):
-        path = tree_dir / pack_name(z)
+    for z in range(Z if count is None else count):
+        path = tree_dir / (name or pack_name)(z)
         try:
             size = path.stat().st_size
             with open(path, "rb") as fh:
-                head = parse_plane_pack_header(fh.read(need))
+                head = parse_plane_pack_header(fh.read(need), magic)
         except (OSError, ValueError) as exc:
             raise RuntimeError(f"{path}: plan illisible ({exc})") from exc
         if (head["channels"], head["tilesX"], head["tilesY"], head["z"]) != \

@@ -4,7 +4,8 @@ The brick loader asks for the byte runs of a cut through the volume instead of w
 packs; the stdlib handler answers a Range request with the whole file, so
 AdminHandler serves a single range itself (206 + Content-Range, the end clamped to
 the file), answers a range starting past the end with 416, and leaves everything
-else (malformed, multi-part, no Range) to the ordinary 200 answer.
+else (malformed, no Range) to the ordinary 200 answer. Several ranges are a
+multipart/byteranges 206 since web 1.59.0 (tests/test_v3_minor_multirange.py).
 
 Run: python tests/test_static_range.py
 """
@@ -79,7 +80,7 @@ class StaticRangeTest(unittest.TestCase):
         self.assertEqual(headers.get("content-range"), f"bytes 10-{size - 1}/{size}")
 
     def test_everything_else_is_the_whole_file(self):
-        for rng in ("bytes=30-10", "bytes=0-5,10-15", "items=0-5", "bytes=abc"):
+        for rng in ("bytes=30-10", "bytes=0-5,30-10", "items=0-5", "bytes=abc"):
             status, headers, body = self.get({"Range": rng})
             self.assertEqual(status, 200, rng)
             self.assertEqual(body, self.data, rng)

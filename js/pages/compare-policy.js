@@ -139,3 +139,96 @@ const CompareTimeSync = (() => {
 
   return { frameFor, isEcho, expect, relay };
 })();
+
+/* ============================================================
+   Compare: request / response with the panels
+   ============================================================
+   The host never reaches into a panel's document: what it needs from a page
+   (a capture of what it shows, the slice the Studio composes, its workspace
+   state, its channels) it asks for by postMessage and the page answers in its
+   own message. A request carries a `requestId`; the answer echoes it with the
+   answer type of that request. An answer is accepted only from the panel the
+   request went to (the caller has already checked the origin and the window),
+   only with the expected type, and only once; a request no answer settles in
+   time rejects (code COMPARE_TIMEOUT), and so does every request of a panel
+   that goes away. Pure: the page passes its own `post`, the tests fake windows.
+   ============================================================ */
+
+const ComparePanelRpc = (() => {
+  const ANSWER_OF = Object.freeze({
+    REQUEST_CAPTURE: 'CAPTURE',
+    REQUEST_STUDIO_SLICE: 'STUDIO_SLICE',
+    REQUEST_WORKSPACE_STATE: 'WORKSPACE_STATE',
+    REQUEST_CHANNEL_STATE: 'CHANNEL_STATE'
+  });
+  const ANSWERS = new Set(Object.values(ANSWER_OF));
+
+  function _error(code, message) {
+    return Object.assign(new Error(message), { code });
+  }
+
+  /**
+   * options.post(key, message)  sends `message` to the panel `key` (false/throw: not sent)
+   * options.timeoutMs           default time an answer may take
+   * options.setTimeout / clearTimeout  injectable timers
+   * → { request(key, type, payload?, { timeoutMs }?) → Promise<answer message>,
+   *     settle(key, message) → true when it answered a request of `key`,
+   *     dropPanel(key, reason?), pending() → number, isAnswer(type) }
+   */
+  function create(options = {}) {
+    const post = options.post;
+    const defaultTimeout = Number(options.timeoutMs) > 0 ? Number(options.timeoutMs) : 15000;
+    const setT = options.setTimeout || setTimeout;
+    const clearT = options.clearTimeout || clearTimeout;
+    const open = new Map();   // requestId → { key, answer, resolve, reject, timer }
+    let seq = 0;
+    const prefix = `r${Math.floor(Math.random() * 0x7fffffff).toString(36)}`;
+
+    function request(key, type, payload = {}, opts = {}) {
+      const answer = ANSWER_OF[type];
+      if (!answer) return Promise.reject(_error('COMPARE_BAD_REQUEST', `unknown request ${type}`));
+      const requestId = `${prefix}-${++seq}`;
+      const timeoutMs = Number(opts.timeoutMs) > 0 ? Number(opts.timeoutMs) : defaultTimeout;
+      return new Promise((resolve, reject) => {
+        const timer = setT(() => {
+          if (!open.delete(requestId)) return;
+          reject(_error('COMPARE_TIMEOUT', `${type}: no answer from panel ${key} within ${timeoutMs} ms`));
+        }, timeoutMs);
+        open.set(requestId, { key, answer, resolve, reject, timer });
+        let sent = false;
+        try { sent = post(key, { ...payload, type, requestId }) !== false; } catch (err) { sent = false; }
+        if (!sent) {
+          open.delete(requestId);
+          clearT(timer);
+          reject(_error('COMPARE_UNREACHABLE', `${type}: panel ${key} cannot be reached`));
+        }
+      });
+    }
+
+    function settle(key, message) {
+      const id = message && typeof message.requestId === 'string' ? message.requestId : null;
+      if (!id) return false;
+      const entry = open.get(id);
+      // Another panel's request, an answer of the wrong kind, or a second answer.
+      if (!entry || String(entry.key) !== String(key) || message.type !== entry.answer) return false;
+      open.delete(id);
+      clearT(entry.timer);
+      if (message.ok === false) entry.reject(_error('COMPARE_PANEL_ERROR', String(message.error || `${message.type} failed`)));
+      else entry.resolve(message);
+      return true;
+    }
+
+    function dropPanel(key, reason = 'panel closed') {
+      for (const [id, entry] of [...open]) {
+        if (String(entry.key) !== String(key)) continue;
+        open.delete(id);
+        clearT(entry.timer);
+        entry.reject(_error('COMPARE_UNREACHABLE', reason));
+      }
+    }
+
+    return { request, settle, dropPanel, pending: () => open.size, isAnswer: (t) => ANSWERS.has(t) };
+  }
+
+  return { ANSWER_OF, create };
+})();

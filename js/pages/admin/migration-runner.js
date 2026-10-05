@@ -7,9 +7,14 @@
  *     (datasets one after another, each dataset's migrations in registry order);
  *   * Runner — plan → units (browser worker pool, or a loop of server `unit_run` calls)
  *     → finalize, with pause / resume / cancel / retry, and resume from the server journal
- *     after a reload (`plan` is idempotent and returns the units still pending);
- *   * WorkerPool — the browser executor: N workers × S slots of js/workers/migration-worker.js;
- *   * benchmarks and duration estimates.
+ *     after a reload (`plan` is idempotent and returns the units still pending). The executor
+ *     is chosen PER MIGRATION, so one dataset's chain may run a step in this browser and the
+ *     next on the server. A migration whose units depend on earlier ones (m004: level k+1 reads
+ *     level k) runs in waves: `plan` names the units runnable now (`runnable`), the runner
+ *     re-plans after each wave until none is left;
+ *   * WorkerPool — the browser executor: N workers × S slots of js/workers/migration-worker.js
+ *     (a handler may lower S: `slotsPerWorker`), plus the per-migration capability probe;
+ *   * capabilities, executor choice, benchmarks and duration estimates.
  *
  * Nothing here is specific to a migration: the browser executor loads the handler module
  * named after the migration id inside the worker.
@@ -26,8 +31,11 @@ const UNIT_REQUEUE = 2;        // a non-fatal unit failure (after the worker's o
 const CALL_ATTEMPTS = 7;
 const CALL_BACKOFF_MS = [2000, 4000, 8000, 15000, 30000, 30000];
 // Bounds on loops that only end when the server says so.
-const MAX_PASSES = 3;            // browser passes over the pending units of one job
+const MAX_PASSES = 3;            // passes in a row over the pending units of one job without progress
 const MAX_STALLED_ASSEMBLY = 5;  // finalize answers in a row without a new plane written
+// Server error codes that no retry changes: `unit_timeout` = a unit that killed the request
+// twice (the server executor cannot convert it within its time limit).
+const DEFINITIVE_CODES = new Set(['unit_timeout']);
 
 // ── Ordering ──────────────────────────────────────────────────────────────────
 
@@ -123,6 +131,36 @@ export function sampleEvenly(list, count) {
   return out;
 }
 
+// ── Capabilities and executor choice ──────────────────────────────────────────
+
+/**
+ * Can the server run `migration`? `status.server.migrations[id]` when the server reports it
+ * per migration, else the global `status.server.available` / `reasons`.
+ */
+export function serverCapability(server, migration) {
+  const s = server || {};
+  const per = s.migrations && migration && s.migrations[migration];
+  if (per && typeof per === 'object') return { available: !!per.available, reasons: Array.isArray(per.reasons) ? per.reasons : [] };
+  return { available: !!s.available, reasons: Array.isArray(s.reasons) ? s.reasons : [] };
+}
+
+/**
+ * The executor to use for a migration: the operator's choice when it is available, else the
+ * faster benchmarked available one, else the browser, else the server; null when neither can
+ * run it.
+ *   caps  { browser: {available}|null (not probed yet = assumed available), server: {available} }
+ *   bench { browser: {secondsPerUnit}|null, server: {secondsPerUnit}|null }
+ */
+export function chooseExecutor({ choice, caps, bench }) {
+  const ok = (x) => (x === 'browser' ? !(caps && caps.browser && caps.browser.available === false)
+    : !!(caps && caps.server && caps.server.available));
+  if ((choice === 'browser' || choice === 'server') && ok(choice)) return choice;
+  const spu = (x) => (bench && bench[x] && bench[x].secondsPerUnit > 0 ? bench[x].secondsPerUnit : null);
+  const both = ['browser', 'server'].filter(ok);
+  if (both.length === 2 && spu('browser') && spu('server')) return spu('server') < spu('browser') ? 'server' : 'browser';
+  return both[0] || null;
+}
+
 // ── API ───────────────────────────────────────────────────────────────────────
 
 /** Thin client over /api/migrations.php; `request(url, init)` → { ok, status, data }. */
@@ -151,7 +189,7 @@ export function createApi(request, base = API_MIGRATIONS) {
     // Assembly is bounded in time too: an answer { complete: false, assembly } asks for another call.
     finalize: (dataset, migration) => postJson('finalize', { dataset, migration, maxSeconds: SERVER_SLICE_SECONDS }),
     cancel: (dataset, migration) => postJson('cancel', { dataset, migration }),
-    bench: (dataset, units) => postJson('bench', { dataset, units }),
+    bench: (dataset, units, migration) => postJson('bench', migration ? { dataset, migration, units } : { dataset, units }),
   };
 }
 
@@ -183,10 +221,31 @@ export class WorkerPool {
     this.pending = new Map();   // reqId → { resolve, reject, worker }
     this.waiters = [];
     this.bases = new Map();     // `${migration}|${dataset}` → datasetBase, to prepare a replacement worker
+    this.hints = new Map();     // migration → slots per worker its handler asks for
+    this.probes = new Map();    // migration → Promise<{ available, reasons }>
     this.dead = false;
   }
 
   get capacity() { return this.o.workers * this.o.slots; }
+
+  slotsFor(migration) {
+    const h = this.hints.get(migration);
+    return h ? Math.max(1, Math.min(this.o.slots, h)) : this.o.slots;
+  }
+
+  /** Units in flight for `migration` (a handler holding more memory per unit asks for fewer). */
+  capacityFor(migration) { return this.o.workers * this.slotsFor(migration); }
+
+  /** Can this browser run `migration`? Asked once per pool, answered by the handler's probe. */
+  probe(migration) {
+    if (!this.probes.has(migration)) {
+      this._ensure();
+      const p = this._send(this.workers[0], { type: 'probe', migration })
+        .then((r) => ({ available: !!(r && r.available), reasons: (r && r.reasons) || [] }));
+      this.probes.set(migration, p);
+    }
+    return this.probes.get(migration);
+  }
 
   _ensure() {
     while (this.workers.length < this.o.workers) {
@@ -239,6 +298,7 @@ export class WorkerPool {
     const key = `${migration}|${dataset}`;
     const r = await this._send(slot, { type: 'prepare', migration, dataset, datasetBase });
     if (r && r.ok) slot.prepared.add(key);
+    if (r && r.ok && Number.isInteger(r.slotsPerWorker) && r.slotsPerWorker > 0) this.hints.set(migration, r.slotsPerWorker);
     return r || { ok: false };
   }
 
@@ -252,9 +312,9 @@ export class WorkerPool {
     if (bad) throw Object.assign(new Error(bad.error || 'prepare failed'), { fatal: true, code: 'prepare_failed' });
   }
 
-  async list(dataset, migration) {
+  async list(dataset, migration, opts) {
     this._ensure();
-    const r = await this._send(this.workers[0], { type: 'list', migration, dataset });
+    const r = await this._send(this.workers[0], { type: 'list', migration, dataset, opts: opts || {} });
     if (!r.ok) throw new Error(r.error || 'list failed');
     return r.units;
   }
@@ -265,7 +325,8 @@ export class WorkerPool {
       if (this.dead) return { type: 'unit_failed', key: unit, error: 'terminated', aborted: true };
       // A worker that crashed was replaced: the replacement has not read the dataset yet.
       this._ensure();
-      const slot = this.workers.filter((s) => s.busy < this.o.slots).sort((a, b) => a.busy - b.busy)[0];
+      const slots = this.slotsFor(migration);
+      const slot = this.workers.filter((s) => s.busy < slots).sort((a, b) => a.busy - b.busy)[0];
       if (slot) {
         slot.busy++;
         const key = `${migration}|${dataset}`;
@@ -295,10 +356,18 @@ export class WorkerPool {
   }
 }
 
-/** Runs `keys` through `pool` with `pool.capacity` units in flight; stops early when `ctl.stop()` says so. */
+// The server refuses a unit whose inputs do not exist yet (its level's predecessor is not
+// complete): not a failure, the unit comes back in a later wave.
+const DEFER_CODES = new Set(['unit_blocked', 'not_runnable', 'level_pending']);
+
+/**
+ * Runs `keys` through `pool` with the migration's capacity in flight; stops early when
+ * `ctl.stop()` says so. Resolves { left, deferred }.
+ */
 export async function runBrowserUnits({ pool, dataset, migration, keys, dry = false, ctl }) {
   const queue = keys.slice();
   const tries = new Map();
+  const deferred = [];
   let fatal = null;
   const lane = async () => {
     while (queue.length && !fatal && !ctl.stop()) {
@@ -306,6 +375,7 @@ export async function runBrowserUnits({ pool, dataset, migration, keys, dry = fa
       const r = await pool.runUnit(dataset, migration, key, dry);
       if (r.type === 'unit_done') { ctl.onUnit(r); continue; }
       if (r.aborted || ctl.stop()) { queue.unshift(key); return; }
+      if (r.code && DEFER_CODES.has(r.code)) { deferred.push(key); continue; }
       const n = (tries.get(key) || 0) + 1;
       tries.set(key, n);
       if (r.fatal || n > UNIT_REQUEUE) {
@@ -315,22 +385,32 @@ export async function runBrowserUnits({ pool, dataset, migration, keys, dry = fa
       queue.push(key);
     }
   };
-  await Promise.all(Array.from({ length: Math.max(1, Math.min(pool.capacity, keys.length)) }, lane));
+  const cap = typeof pool.capacityFor === 'function' ? pool.capacityFor(migration) : pool.capacity;
+  await Promise.all(Array.from({ length: Math.max(1, Math.min(cap, keys.length)) }, lane));
   if (fatal) throw fatal;
-  return { left: queue.length };
+  return { left: queue.length, deferred };
 }
 
 // ── Runner ────────────────────────────────────────────────────────────────────
 
 /**
  * Drives the queue. Events (onEvent): { type: 'state' | 'progress' | 'job_done' | 'job_failed'
- * | 'log' | 'net', ... }. `executor` is 'browser' or 'server' and may change while paused.
+ * | 'log' | 'net', ... }. The executor of a job is `o.executorFor(migration)` when given, else
+ * `executors[migration]`, else `executor` ('browser' | 'server'); it is read when a job starts
+ * or resumes, so it may change while paused. null = nothing can run that migration: the job
+ * fails with code `no_executor`.
+ *
+ * Progress events carry the dataset's chain: `step` (1-based), `steps`, `chain`, and
+ * `etaChain` = this step's ETA + `o.estimateStep(dataset, migration)` of every later step
+ * (null when one of them is unknown).
  *
  * @param {object} o
  * @param {object} o.api           createApi(...)
  * @param {() => WorkerPool} o.pool  lazily created browser pool
  * @param {(id: string) => string} o.datasetBase  absolute URL of the published dataset
  * @param {(e: object) => void} o.onEvent
+ * @param {(migration: string) => string|null} [o.executorFor]
+ * @param {(dataset: string, migration: string) => number|null} [o.estimateStep]  seconds
  * @param {() => number} [o.now]   seconds
  */
 export class Runner {
@@ -340,6 +420,8 @@ export class Runner {
     this.queue = [];          // [{ dataset, migration }]
     this.state = 'idle';      // idle | running | pausing | paused | failed
     this.executor = 'browser';
+    this.executors = {};      // migration → 'browser' | 'server' (operator's choice)
+    this.chains = new Map();  // dataset → [migration ids] in order, as enqueued
     this.current = null;      // { dataset, migration, done, total, bytesIn, bytesOut }
     this.meter = new Meter();
     this._stop = false;
@@ -355,6 +437,9 @@ export class Runner {
   enqueue(items) {
     for (const it of items) {
       if (!this.queue.some((q) => q.dataset === it.dataset && q.migration === it.migration)) this.queue.push(it);
+      const chain = this.chains.get(it.dataset) || [];
+      if (!chain.includes(it.migration)) chain.push(it.migration);
+      this.chains.set(it.dataset, chain);
     }
     if (this.state === 'idle' || this.state === 'failed') this.start();
   }
@@ -395,10 +480,23 @@ export class Runner {
     const res = await this.o.api.cancel(cur.dataset, cur.migration);
     // The other migrations of that dataset depend on this one: drop them as well.
     this.queue = this.queue.filter((q) => q.dataset !== cur.dataset);
+    this.chains.delete(cur.dataset);
     this.current = null;
     this._emit({ type: 'log', level: 'info', dataset: cur.dataset, migration: cur.migration, code: 'cancelled' });
     this._setState(this.queue.length ? 'paused' : 'idle');
     return res;
+  }
+
+  executorFor(migration) {
+    if (this.o.executorFor) return this.o.executorFor(migration);
+    return this.executors[migration] || this.executor;
+  }
+
+  /** { step, steps, chain } of `dataset`'s migration `migration` (1-based step). */
+  chainPosition(dataset, migration) {
+    const chain = this.chains.get(dataset) || [migration];
+    const i = chain.indexOf(migration);
+    return { step: i >= 0 ? i + 1 : 1, steps: chain.length, chain: chain.slice() };
   }
 
   get pool() {
@@ -420,6 +518,7 @@ export class Runner {
         this.queue.shift();
         // The rest of this dataset's chain cannot run on a dataset whose step failed.
         this.queue = this.queue.filter((q) => q.dataset !== item.dataset);
+        this.chains.delete(item.dataset);
         this.current = null;
         this._emit({ type: 'job_failed', dataset: item.dataset, migration: item.migration, error: String(err && err.message || err), code: err && err.code || null, detail: err && err.detail || null });
         continue;
@@ -427,6 +526,7 @@ export class Runner {
       if (outcome === 'paused') { this._setState('paused', this.reason); return; }
       this.queue.shift();
       this.current = null;
+      if (!this.queue.some((q) => q.dataset === item.dataset)) this.chains.delete(item.dataset);
     }
     this._setState('idle');
   }
@@ -450,7 +550,10 @@ export class Runner {
     let offline = false;
     for (let attempt = 1; ; attempt++) {
       const r = await fn();
-      const transient = !r || r.status === 0 || r.status === 429 || r.status >= 500;
+      // A 5xx that names a definitive refusal (a unit the server cannot convert in time) is
+      // not retried: the next call would only meet the same answer.
+      const definitive = !!(r && r.data && typeof r.data.error === 'string' && DEFINITIVE_CODES.has(r.data.error));
+      const transient = !r || r.status === 0 || r.status === 429 || (r.status >= 500 && !definitive);
       if (!transient || attempt >= CALL_ATTEMPTS) {
         if (offline) this._emit({ type: 'net', online: true });
         if (transient && (!r || r.status === 0)) {
@@ -467,31 +570,54 @@ export class Runner {
     }
   }
 
-  async _runJob(item, pass = 1) {
+  async _runJob(item) {
     const { api } = this.o;
-    const plan = await this._call(() => api.plan(item.dataset, item.migration));
+    const executor = this.executorFor(item.migration);
+    if (executor !== 'browser' && executor !== 'server') {
+      throw Object.assign(new Error('no executor can run ' + item.migration), { code: 'no_executor' });
+    }
+    let plan = await this._call(() => api.plan(item.dataset, item.migration));
     if (plan.stopped) return 'paused';
     if (!plan.ok || !plan.data) throw apiError(plan, 'plan failed');
-    const p = plan.data;
-    const executor = this.executor;
+    let p = plan.data;
     const cur = this.current = {
       dataset: item.dataset, migration: item.migration, executor,
       total: p.total || 0, done: p.done || 0, empty: p.empty || 0,
-      bytesIn: 0, bytesOut: 0, startedAt: this.now(),
+      bytesIn: 0, bytesOut: 0, startedAt: this.now(), ...this.chainPosition(item.dataset, item.migration),
     };
     this.meter.reset();
     this.meter.add(this.now(), 0);
-    const progress = () => this._emit({
-      type: 'progress', ...cur,
-      rate: this.meter.rate(), eta: this.meter.eta(Math.max(0, cur.total - cur.done)),
-    });
+    const later = () => {
+      let sum = 0;
+      for (const mid of cur.chain.slice(cur.step)) {
+        const e = this.o.estimateStep ? this.o.estimateStep(item.dataset, mid) : null;
+        if (typeof e !== 'number' || !(e >= 0)) return null;   // unknown (null >= 0 is true in JS)
+        sum += e;
+      }
+      return sum;
+    };
+    const progress = () => {
+      const eta = this.meter.eta(Math.max(0, cur.total - cur.done));
+      const rest = later();
+      this._emit({
+        type: 'progress', ...cur, chain: cur.chain.slice(),
+        rate: this.meter.rate(), eta, etaChain: eta !== null && rest !== null ? eta + rest : null,
+      });
+    };
     progress();
 
-    const keys = Array.isArray(p.units) ? p.units : [];
-    if (keys.length && cur.done < cur.total) {
+    // Waves: the units runnable now (every pending one unless the server names fewer), then a
+    // re-plan. A wave that moves nothing forward counts toward MAX_PASSES.
+    let idle = 0;
+    for (;;) {
+      if (cur.done >= cur.total) break;
+      const pending = Array.isArray(p.units) ? p.units : [];
+      const keys = Array.isArray(p.runnable) ? p.runnable : pending;
+      if (!keys.length && !pending.length) break;
+      const before = cur.done;
       if (executor === 'server') {
         await this._runServer(cur, progress);
-      } else {
+      } else if (keys.length) {
         await this.pool.prepare(item.dataset, item.migration, this.o.datasetBase(item.dataset));
         await runBrowserUnits({
           pool: this.pool, dataset: item.dataset, migration: item.migration, keys,
@@ -509,22 +635,21 @@ export class Runner {
         });
       }
       if (this._stop) return 'paused';
-    }
-    if (cur.done < cur.total) {
-      // The server's count is the truth: a unit acknowledged twice or a page boundary
-      // can leave the local count short. Ask again before finalizing.
-      const again = await this._call(() => api.plan(item.dataset, item.migration));
-      if (again.stopped) return 'paused';
-      if (!again.ok || !again.data) throw apiError(again, 'plan failed');
-      cur.done = again.data.done; cur.total = again.data.total;
-      if (cur.done < cur.total) {
-        if (this._stop) return 'paused';
-        if ((again.data.units || []).length) {
-          // Units the server still lists after several passes are not going to land.
-          if (pass >= MAX_PASSES) throw Object.assign(new Error('units still pending after ' + pass + ' passes'), { code: 'incomplete' });
-          return this._runJob(item, pass + 1);
-        }
-      }
+      if (cur.done >= cur.total) break;   // finalize checks the journal itself
+      // The server's count is the truth (a unit acknowledged twice, a page boundary), and the
+      // next wave is the server's to name.
+      plan = await this._call(() => api.plan(item.dataset, item.migration));
+      if (plan.stopped) return 'paused';
+      if (!plan.ok || !plan.data) throw apiError(plan, 'plan failed');
+      p = plan.data;
+      const advanced = p.done > before;
+      cur.done = p.done; cur.total = p.total;
+      progress();
+      if (cur.done >= cur.total) break;
+      if (this._stop) return 'paused';
+      idle = advanced ? 0 : idle + 1;
+      // Units the server keeps listing without any landing are not going to land.
+      if (idle >= MAX_PASSES) throw Object.assign(new Error('units still pending after ' + idle + ' passes'), { code: 'incomplete' });
     }
     cur.phase = 'finalizing';
     progress();
@@ -554,6 +679,10 @@ export class Runner {
   }
 
   async _runServer(cur, progress) {
+    // A host with a short time limit stores a unit in octants across several calls
+    // (`partial: [{unit, parts, of}]`): more octants stored than last time is progress
+    // too, or a slow host would be stopped with no_progress half-way through a unit.
+    let lastParts = 0;
     while (!this._stop && cur.done < cur.total) {
       // Transient failures back off inside _call (bounded); the job state is on the server.
       const r = await this._call(() => this.o.api.unitRun(cur.dataset, cur.migration, false));
@@ -565,8 +694,13 @@ export class Runner {
       cur.bytesOut += r.data.bytesWritten || 0;
       const n = Math.max(0, cur.done - before);
       if (n) this.meter.add(this.now(), n);
+      const parts = (Array.isArray(r.data.partial) ? r.data.partial : [])
+        .reduce((s, p) => s + (Number(p && p.parts) || 0), 0);
+      const partsMoved = parts > lastParts;
+      lastParts = parts;
+      cur.partial = parts;
       progress();
-      if (!n && !(r.data.processed || []).length) {
+      if (!n && !(r.data.processed || []).length && !partsMoved) {
         throw Object.assign(new Error('server made no progress'), { code: 'no_progress' });
       }
     }
@@ -586,8 +720,13 @@ export class Runner {
  * secondsPerUnit is the WALL time per unit at the pool's concurrency (what an update costs).
  */
 export async function benchBrowser({ pool, dataset, migration, datasetBase, n = 4, now = () => performance.now() / 1000 }) {
+  const cap = typeof pool.probe === 'function' ? await pool.probe(migration) : { available: true };
+  if (!cap.available) {
+    throw Object.assign(new Error('this browser cannot run ' + migration), { code: (cap.reasons && cap.reasons[0]) || 'unavailable' });
+  }
   await pool.prepare(dataset, migration, datasetBase);
-  const units = (await pool.list(dataset, migration)).filter((u) => !u.empty).map((u) => u.key);
+  // `sample`: the units whose inputs exist before any job (m004: level 0 only).
+  const units = (await pool.list(dataset, migration, { sample: true })).filter((u) => !u.empty).map((u) => u.key);
   const sample = sampleEvenly(units, n);
   if (!sample.length) return { units: 0, secondsPerUnit: null, bytesIn: 0, bytesOut: 0 };
   let bytesIn = 0, bytesOut = 0, unitSeconds = 0;
@@ -598,17 +737,17 @@ export async function benchBrowser({ pool, dataset, migration, datasetBase, n = 
   });
   const wall = now() - t0;
   return {
-    units: sample.length, seconds: wall, secondsPerUnit: wall / sample.length,
+    migration, dataset, units: sample.length, seconds: wall, secondsPerUnit: wall / sample.length,
     unitSeconds: unitSeconds / sample.length, bytesIn, bytesOut, nonEmptyUnits: units.length,
   };
 }
 
-export async function benchServer({ api, dataset, n = 4 }) {
-  const r = await api.bench(dataset, Math.min(8, n));
+export async function benchServer({ api, dataset, migration, n = 4 }) {
+  const r = await api.bench(dataset, Math.min(8, n), migration);
   if (!r.ok || !r.data) throw apiError(r, 'bench failed');
   const d = r.data;
   return {
-    units: d.units, seconds: d.seconds,
+    migration, dataset, units: d.units, seconds: d.seconds,
     secondsPerUnit: d.secondsPerUnit > 0 ? d.secondsPerUnit : (d.units > 0 ? d.seconds / d.units : null),
     bytesIn: d.bytesRead || 0, bytesOut: d.bytesWritten || 0, sample: d.sample || null,
   };

@@ -19,6 +19,20 @@ let _busy = false;
 
 // A plugin's on-install trust posture: only toolbar action/toggle plugins are
 // sandboxable; shaders/channels run with full in-page trust (higher bar).
+
+/** The catalog error as the operator should read it. A rollback is not an outage:
+ *  the server refused a catalog older than one it already accepted (signed
+ *  `serial`), which could reinstate plugin versions with known flaws. */
+function catalogError(data) {
+  if (data?.error === 'catalog_rollback') {
+    const rb = data.rollback || {};
+    return t('mkt.rollback',
+      `Catalogue refusé : il est plus ancien (n° ${rb.offered ?? '?'}) qu'un catalogue déjà accepté par ce serveur (n° ${rb.seen ?? '?'}). Il pourrait réinstaller des versions de plugins corrigées depuis.`,
+      { offered: rb.offered ?? '?', seen: rb.seen ?? '?' });
+  }
+  return `${t('mkt.error', 'Catalogue indisponible')}: ${data?.error || ''}`;
+}
+
 function _trustBadge(p) {
   const sandboxable = p.placement === 'tools';
   return sandboxable
@@ -100,7 +114,7 @@ function render() {
       </div>
       <button class="adm-btn adm-btn-ghost adm-btn-sm" id="mkt-refresh"><i data-lucide="refresh-cw"></i> ${escHtml(t('mkt.refresh', 'Actualiser'))}</button>
     </div>
-    ${_data.error ? `<div class="adm-gate-error" style="display:flex">${escHtml(t('mkt.error', 'Catalogue indisponible'))}: ${escHtml(_data.error)}</div>` : ''}
+    ${_data.error ? `<div class="adm-gate-error" style="display:flex">${escHtml(catalogError(_data))}</div>` : ''}
     ${updatable.length ? `<div class="adm-update-actions" style="margin-top:14px">
         <button class="adm-btn adm-btn-accent" id="mkt-update-all"><i data-lucide="download-cloud"></i> ${escHtml(t('admin.pluginUpdateAll', 'Tout mettre à jour'))}</button>
       </div>` : ''}
@@ -143,6 +157,7 @@ async function install(id) {
   if (r.ok && r.data?.ok) { toast(t('mkt.installed2', 'Plugin installé et approuvé ✓'), 'success'); await load(); }
   else {
     const err = r.data?.error || 'error';
+    if (err === 'catalog_rollback') { toast(catalogError(r.data), 'error'); return; }
     const map = { bad_password: t('mkt.badPassword', 'Mot de passe incorrect.'), already_installed: t('mkt.alreadyInstalled', 'Déjà installé.'), incompatible: t('mkt.incompatible', 'incompatible'), install_failed: t('mkt.installFailed', "Échec de l'installation (vérification échouée)."), catalog_fetch_failed: t('mkt.catalogFail', 'Catalogue inaccessible.') };
     toast(map[err] || (t('mkt.installFailed', "Échec de l'installation.") + ' (' + err + ')'), 'error');
   }

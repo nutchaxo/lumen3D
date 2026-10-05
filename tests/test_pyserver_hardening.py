@@ -423,7 +423,8 @@ class TestStagingHardening(StagingCase):
         st, pl = us.write_chunk("3d", "D", "metadata.json", 0, b"abc", None)
         self.assertEqual((st, pl["error"]), (400, "checksum_required"))
         full = OSError(errno.ENOSPC, "No space left on device")
-        with mock.patch.object(us, "save_journal", side_effect=full):
+        # The ack is a chunk-log append since web 1.59.0 (no journal rewrite per chunk).
+        with mock.patch.object(us, "_append_log", side_effect=full):
             st, pl = us.write_chunk("3d", "D", "metadata.json", 0, b"abc", sha(b"abc"))
         self.assertEqual((st, pl["error"]), (507, "insufficient_disk"))
 

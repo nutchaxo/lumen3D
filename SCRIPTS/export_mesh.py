@@ -12,8 +12,14 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 import multiprocessing
 
 def get_worker_count() -> int:
-    total = multiprocessing.cpu_count()
-    return max(1, total - 4)
+    """Worker processes for the per-timepoint pools: every logical CPU but 4 (left to
+    the system), or LUMEN3D_TRACKING_WORKERS when set; never more than the 61 a Windows
+    ProcessPoolExecutor accepts."""
+    import os
+    import sys
+    env = os.environ.get("LUMEN3D_TRACKING_WORKERS", "").strip()
+    n = int(env) if env.isdigit() and int(env) > 0 else max(1, multiprocessing.cpu_count() - 4)
+    return min(n, 61) if sys.platform == "win32" else n
 
 def _pad_to_4(data: bytes, pad_byte: bytes = b'\x00') -> bytes:
     """Aligne sur multiple de 4 bytes (requis par spec glTF 2.0)."""

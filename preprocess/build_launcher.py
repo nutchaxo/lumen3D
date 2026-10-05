@@ -26,8 +26,11 @@ SCRIPTS = [
     "2-image_processor.py",
     "3-chunk_packer.py",
     "4-catalog_generator.py",
-    # Imported by steps 2-4: the XY planes of the native level (dataset format 2).
+    # Imported by steps 2-4: the XY planes of the native level (dataset format 2), the
+    # layer MIPs (format 3) and the brick pyramid v3 (format 4).
     "planes_writer.py",
+    "mips_writer.py",
+    "bricks_v3_writer.py",
     "2d_importer.py",
     # Attaching a tracking that ships as a .imaris_track container needs nothing more.
     # Extracting one from a .ims or a workbook also needs the lab's SCRIPTS/Analysis.py

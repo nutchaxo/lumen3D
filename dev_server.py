@@ -37,6 +37,7 @@ import gzip
 import hashlib
 import hmac
 import http.server
+import io
 import ipaddress
 import json
 import math
@@ -45,6 +46,7 @@ import posixpath
 import re
 import secrets
 import shutil
+import struct
 import sys
 import tempfile
 import threading
@@ -1558,7 +1560,7 @@ def _get_cookie_token(cookie_header: str | None) -> str | None:
 
 
 WRITE_ACTIONS = ("save", "save_thumbnail", "rebuild_catalog", "set_visibility",
-                 "gallery_add", "gallery_delete")
+                 "gallery_add", "gallery_delete", "gallery_thumbs")
 
 
 def _is_write_action(action: str) -> bool:
@@ -1706,6 +1708,58 @@ def _record_event(kind: str, dataset_id: str | None = None) -> None:
                 _STATS_PENDING[("dataset", dataset_id, "lastViewed")] = now.isoformat()
         if time.monotonic() - _STATS_LAST_FLUSH[0] >= _STATS_FLUSH_S:
             _flush_stats_locked()
+
+
+# ── Telemetry throttle (twin: api/_admin_lib.php lumen_telemetry_allow) ─────────
+# The beacon is public and unauthenticated, so a loop of requests could inflate the
+# counters and keep the stats writer busy. Two token buckets gate it: one per client
+# IP (resolved through the trusted-proxy rules of _client_ip) and one global. State
+# is a fixed table — 16-byte global bucket then TELEMETRY_SLOTS 16-byte slots, each
+# u32 tag | u32 milli-tokens | u64 last refill (ms), little-endian — so it can never
+# grow: an IP hashes to a slot (sha256(ip) bytes 0..3 as u32 LE, modulo the slot
+# count) and a different IP landing there (tag = bytes 4..7 | 1) simply starts a
+# fresh bucket; the global bucket still caps the total. Integer arithmetic, so the
+# two backends decide identically: tokens += elapsed_ms · rate (a rate of R per
+# second is R milli-tokens per ms), capped at burst·1000; a request costs 1000.
+TELEMETRY_IP_BURST = 60
+TELEMETRY_IP_RATE = 1            # tokens per second
+TELEMETRY_GLOBAL_BURST = 600
+TELEMETRY_GLOBAL_RATE = 20
+TELEMETRY_SLOTS = 4096
+_TELEMETRY_STATE = bytearray(16 * (1 + TELEMETRY_SLOTS))
+_TELEMETRY_LOCK = threading.Lock()
+
+
+def _telemetry_refill(tokens: int, last: int, now: int, burst: int, rate: int) -> tuple[int, int]:
+    if now > last:
+        tokens = min(burst * 1000, tokens + (now - last) * rate)
+    return tokens, now
+
+
+def _telemetry_allow(ip: str, now_ms: int | None = None, state: bytearray | None = None) -> bool:
+    """Spend one token of the client's bucket and of the global one, or refuse."""
+    now = int(time.time() * 1000) if now_ms is None else int(now_ms)
+    buf = _TELEMETRY_STATE if state is None else state
+    h = hashlib.sha256((ip or "unknown").encode("utf-8")).digest()
+    slot = int.from_bytes(h[0:4], "little") % TELEMETRY_SLOTS
+    tag = int.from_bytes(h[4:8], "little") | 1
+    off = 16 * (1 + slot)
+    with _TELEMETRY_LOCK:
+        _gtag, g_tok, g_t = struct.unpack_from("<IIQ", buf, 0)
+        if g_t == 0:
+            g_tok, g_t = TELEMETRY_GLOBAL_BURST * 1000, now
+        g_tok, g_t = _telemetry_refill(g_tok, g_t, now, TELEMETRY_GLOBAL_BURST, TELEMETRY_GLOBAL_RATE)
+        s_tag, s_tok, s_t = struct.unpack_from("<IIQ", buf, off)
+        if s_tag != tag:
+            s_tag, s_tok, s_t = tag, TELEMETRY_IP_BURST * 1000, now
+        s_tok, s_t = _telemetry_refill(s_tok, s_t, now, TELEMETRY_IP_BURST, TELEMETRY_IP_RATE)
+        allowed = s_tok >= 1000 and g_tok >= 1000
+        if allowed:
+            s_tok -= 1000
+            g_tok -= 1000
+        struct.pack_into("<IIQ", buf, 0, 0, g_tok, g_t)
+        struct.pack_into("<IIQ", buf, off, s_tag, s_tok, s_t)
+    return allowed
 
 
 def _admin_stats() -> dict:
@@ -2847,6 +2901,7 @@ _UPDATE_PROTECT = (
     "uploads",           # in-flight dataset imports — an update must not wipe them
     "api/admin_credential.json", "api/config.json", "api/stats.json",
     "api/disabled-plugins.json", "api/quarantined-plugins.json", "api/plugin-trust.json",
+    "api/marketplace-state.json",   # highest marketplace catalog serial seen (anti-rollback)
     "api/page-drafts",   # unpublished page drafts (private half of config/pages/*)
     "secrets",           # Ed25519 signing seeds — never shipped, never overwritten
     # White-label operator config (public, editable from admin). NOT the whole
@@ -3152,10 +3207,52 @@ def _verify_marketplace_signature(data_raw: bytes, sig_url) -> None:
         raise OSError("signature marketplace invalide — authenticité refusée (fail-closed)")
 
 
+# Anti-rollback (twin: api/_admin_lib.php mkt_check_serial). The signed catalog
+# carries a `serial` that tools/publish_plugin.py raises on every publish; a host
+# remembers the highest one it accepted and refuses an older catalog, which would
+# otherwise let whoever can serve a stale — still validly signed — catalog pin the
+# host to plugin versions with known flaws. A catalog without `serial` predates it
+# and reads as 0. Only a signature-proven catalog may raise the stored serial: an
+# unkeyed host could otherwise be frozen by one forged, huge serial.
+MARKETPLACE_STATE_FILE = ROOT / "api" / "marketplace-state.json"
+_MARKETPLACE_STATE_LOCK = threading.Lock()
+
+
+class MarketplaceRollback(OSError):
+    def __init__(self, offered: int, seen: int):
+        super().__init__("catalog_rollback")
+        self.offered, self.seen = offered, seen
+
+
+def _marketplace_check_serial(doc: dict) -> None:
+    serial = doc.get("serial", 0)
+    if isinstance(serial, bool) or not isinstance(serial, int) or serial < 0:
+        raise OSError("catalog_invalid_serial")
+    if not _MARKETPLACE_PUBKEY_HEX:
+        return
+    with _MARKETPLACE_STATE_LOCK:
+        try:
+            state = json.loads(MARKETPLACE_STATE_FILE.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            state = {}
+        seen = state.get("highestSerial", 0) if isinstance(state, dict) else 0
+        seen = seen if isinstance(seen, int) and not isinstance(seen, bool) and seen >= 0 else 0
+        if serial < seen:
+            raise MarketplaceRollback(serial, seen)
+        if serial > seen:
+            issued = doc.get("issuedAt")
+            _atomic_write(MARKETPLACE_STATE_FILE, json.dumps({
+                "highestSerial": serial,
+                "issuedAt": issued if isinstance(issued, str) else None,
+                "acceptedAt": datetime.now().isoformat(timespec="seconds"),
+            }, indent=2))
+
+
 def _fetch_marketplace_catalog() -> list:
     """Fetch + signature-verify the curated catalog JSON. Returns its plugin list.
     The catalog itself is signed (URL + '.sig') so the LIST of what-to-install is not
-    forgeable, not just each release."""
+    forgeable, not just each release; its serial is then checked against the highest
+    this host has accepted (anti-rollback)."""
     if not _MARKETPLACE_CATALOG_URL:
         raise OSError("marketplace_not_configured")
     raw = _fetch_url_bytes(_MARKETPLACE_CATALOG_URL, limit=1 << 20)
@@ -3164,6 +3261,7 @@ def _fetch_marketplace_catalog() -> list:
     plugins = data.get("plugins") if isinstance(data, dict) else None
     if not isinstance(plugins, list):
         raise OSError("catalogue marketplace invalide")
+    _marketplace_check_serial(data)
     return plugins
 
 
@@ -3187,6 +3285,9 @@ def _marketplace_list() -> dict:
         return {**base, "plugins": []}
     try:
         entries = _fetch_marketplace_catalog()
+    except MarketplaceRollback as e:
+        return {**base, "error": "catalog_rollback",
+                "rollback": {"offered": e.offered, "seen": e.seen}, "plugins": []}
     except Exception as e:
         return {**base, "error": str(e), "plugins": []}
     ver = _max_version(CHANGELOG_DIR)
@@ -3289,6 +3390,8 @@ def _install_marketplace_plugin(catalog_id: str, password: str, upgrade: bool = 
         return False, 401, {"error": "bad_password"}
     try:
         entries = _fetch_marketplace_catalog()
+    except MarketplaceRollback as e:
+        return False, 502, {"error": "catalog_rollback", "rollback": {"offered": e.offered, "seen": e.seen}}
     except Exception as e:
         return False, 502, {"error": "catalog_fetch_failed", "detail": str(e)}
     entry = next((e for e in entries if isinstance(e, dict) and str(e.get("id")) == str(catalog_id)), None)
@@ -4384,6 +4487,7 @@ def _save_dataset_locked(dataset_id: str, body: dict) -> bool:
         body = {}
 
     stored_gallery = existing.get("gallery")
+    _gallery_sync_thumbs(ds_dir)
     existing.update(body)
     existing["id"]          = f"{type_dir}/{folder}"   # one id shape everywhere: '<type>/<folder>'
     existing["type"]        = type_dir
@@ -4483,6 +4587,99 @@ _GALLERY_MAGIC_EXT = (
 )
 _GALLERY_FILE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,80}\.(webp|png|jpg|jpeg|gif)$")
 
+# Grid-sized copies of the gallery images (twin: api/datasets.php gallery_thumb_*).
+# gallery/thumbs/<file>.webp — or <file>.jpg where the imaging library cannot
+# encode WebP — at most GALLERY_THUMB_PX on the long side, never upscaled. The
+# viewer's grid and the admin list load these; the lightbox loads the original.
+# A sub-folder (not a dot-folder: every host shape refuses to serve dot-segments)
+# that _gallery_reconcile never mistakes for an image, since it lists files only.
+GALLERY_THUMB_DIRNAME = "thumbs"
+GALLERY_THUMB_PX = 320
+# Larger sources are left without a thumbnail (the grid falls back to the image):
+# an 8 MB PNG can still declare a decompression-bomb canvas.
+GALLERY_THUMB_MAX_SOURCE_PIXELS = 50_000_000
+
+
+def _gallery_thumb_existing(gdir: Path, name: str):
+    """Relative path (from gallery/) of the current thumbnail of ``name``, or None.
+    A thumbnail older than its source is stale and does not count."""
+    try:
+        src_mtime = (gdir / name).stat().st_mtime_ns
+    except OSError:
+        return None
+    for ext in ("webp", "jpg"):
+        rel = f"{GALLERY_THUMB_DIRNAME}/{name}.{ext}"
+        try:
+            if (gdir / rel).stat().st_mtime_ns >= src_mtime:
+                return rel
+        except OSError:
+            continue
+    return None
+
+
+def _gallery_make_thumb(gdir: Path, name: str):
+    """Write the thumbnail of gallery/<name>. Returns its relative path, or None when
+    Pillow is missing or the image cannot (or should not) be decoded."""
+    try:
+        from PIL import Image, ImageOps, features
+    except Exception:
+        return None
+    try:
+        with Image.open(gdir / name) as im:
+            if im.width * im.height > GALLERY_THUMB_MAX_SOURCE_PIXELS:
+                return None
+            im.draft("RGB", (GALLERY_THUMB_PX, GALLERY_THUMB_PX))
+            im = ImageOps.exif_transpose(im)
+            im = im.convert("RGBA")
+            im.thumbnail((GALLERY_THUMB_PX, GALLERY_THUMB_PX), Image.LANCZOS)
+            tdir = gdir / GALLERY_THUMB_DIRNAME
+            _make_dir(tdir)
+            buf = io.BytesIO()
+            if features.check("webp"):
+                im.save(buf, "WEBP", quality=80, method=4)
+                rel = f"{GALLERY_THUMB_DIRNAME}/{name}.webp"
+                stale = tdir / f"{name}.jpg"
+            else:
+                flat = Image.new("RGB", im.size, (255, 255, 255))
+                flat.paste(im, mask=im.getchannel("A"))
+                flat.save(buf, "JPEG", quality=85)
+                rel = f"{GALLERY_THUMB_DIRNAME}/{name}.jpg"
+                stale = tdir / f"{name}.webp"
+    except Exception:
+        return None
+    _atomic_write(gdir / rel, buf.getvalue(), binary=True, mode=_file_mode())
+    try:
+        stale.unlink()
+    except OSError:
+        pass
+    return rel
+
+
+def _gallery_sync_thumbs(ds_dir: Path) -> None:
+    """Every gallery image gets a current thumbnail; a thumbnail whose image is gone
+    is removed. Run on add, delete, save and the lazy `gallery_thumbs` action."""
+    gdir = ds_dir / GALLERY_DIRNAME
+    if not gdir.is_dir():
+        return
+    try:
+        names = [p.name for p in gdir.iterdir() if p.is_file() and _GALLERY_FILE_RE.match(p.name)]
+    except OSError:
+        return
+    for name in names:
+        if _gallery_thumb_existing(gdir, name) is None:
+            _gallery_make_thumb(gdir, name)
+    tdir = gdir / GALLERY_THUMB_DIRNAME
+    if tdir.is_dir():
+        keep = set(names)
+        for t in tdir.iterdir():
+            base, _, ext = t.name.rpartition(".")
+            if not t.is_file() or ext not in ("webp", "jpg") or base not in keep:
+                try:
+                    if t.is_file():
+                        t.unlink()
+                except OSError:
+                    pass
+
 
 def _gallery_ext(raw: bytes):
     for probe, ext in _GALLERY_MAGIC_EXT:
@@ -4555,6 +4752,10 @@ def _gallery_reconcile(meta: dict, ds_dir: Path, fallback=None) -> list:
 
     def _entry(name: str, src: dict) -> dict:
         item = {"file": name}
+        # Derived from the disk, never from the posted entry.
+        thumb = _gallery_thumb_existing(gdir, name)
+        if thumb:
+            item["thumb"] = thumb
         title = _gallery_clean_text(src.get("title"), 120)
         caption = _gallery_clean_text(src.get("caption"))
         if title:
@@ -4639,8 +4840,11 @@ def _gallery_add_locked(dataset_id: str, body: dict):
         name = f"{stem}-{i}.{ext}"
         i += 1
     _atomic_write(gdir / name, raw, binary=True, mode=_file_mode())  # RACE-020
+    thumb = _gallery_make_thumb(gdir, name)
 
     entry = {"file": name, "added": datetime.now().isoformat()}
+    if thumb:
+        entry["thumb"] = thumb
     title = _gallery_clean_text(body.get("title"), 120)
     caption = _gallery_clean_text(body.get("caption"))
     if title:
@@ -4654,6 +4858,35 @@ def _gallery_add_locked(dataset_id: str, body: dict):
     _CATALOG_CACHE["sig"] = None  # PERF-035
     return 200, {"ok": True, "item": entry, "gallery": current,
                  "url": f"DATA_WEB/{type_dir}/{folder}/{GALLERY_DIRNAME}/{name}"}
+
+
+def _gallery_thumbs(dataset_id: str):
+    """Lazy thumbnails for a gallery that predates them (the admin asks when it shows
+    a gallery with entries lacking `thumb`). Returns (status, payload)."""
+    with _META_LOCK:
+        safe = _safe_dataset_dir(dataset_id)
+        if safe is None:
+            return 400, {"error": "Invalid dataset ID"}
+        _type_dir, _folder, ds_dir = safe
+        meta_path = ds_dir / "metadata.json"
+        if not meta_path.is_file():
+            return 404, {"error": "Dataset not found"}
+        try:
+            meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        except Exception:
+            return 500, {"error": "Unreadable metadata"}
+        if not isinstance(meta, dict):
+            return 500, {"error": "Unreadable metadata"}
+        _gallery_sync_thumbs(ds_dir)
+        gallery = _gallery_reconcile(meta, ds_dir)
+        if gallery != (meta.get("gallery") or []):
+            if gallery:
+                meta["gallery"] = gallery
+            else:
+                meta.pop("gallery", None)
+            _atomic_write(meta_path, json.dumps(meta, indent=2, ensure_ascii=False), mode=_file_mode())
+            _CATALOG_CACHE["sig"] = None
+        return 200, {"ok": True, "gallery": gallery}
 
 
 def _gallery_delete(dataset_id: str, file_name: str):
@@ -4675,6 +4908,11 @@ def _gallery_delete_locked(dataset_id: str, file_name: str):
             target.unlink()
     except OSError:
         return 500, {"error": "Delete failed"}
+    for ext in ("webp", "jpg"):
+        try:
+            (ds_dir / GALLERY_DIRNAME / GALLERY_THUMB_DIRNAME / f"{name}.{ext}").unlink()
+        except OSError:
+            pass
 
     meta_path = ds_dir / "metadata.json"
     meta = {}
@@ -5389,6 +5627,70 @@ def _parse_byte_range(header, size: int):
     return start, end
 
 
+# Multi-range (RFC 9110 §14.2, §14.6): more ranges than this after coalescing and the
+# header is ignored (a 200 with the whole file — what Apache does past MaxRanges),
+# so one request cannot make the server assemble thousands of parts.
+MAX_BYTE_RANGES = 64
+_MAX_RANGE_SPECS = 1024
+_RANGE_SPEC_RE = re.compile(r"\s*([0-9]{0,19})\s*-\s*([0-9]{0,19})\s*")
+
+
+def _parse_byte_ranges(header, size: int, max_ranges: int = MAX_BYTE_RANGES):
+    """Every RFC 9110 byte range of ``header`` against ``size`` bytes.
+
+    Returns a list of inclusive ``(start, end)`` pairs, sorted and coalesced (an
+    overlapping or adjacent range merges into its neighbour, which the RFC allows
+    regardless of the order requested); ``None`` when the header is absent,
+    malformed (any bad element voids the whole header), or asks for more than
+    ``max_ranges`` distinct ranges — the whole representation is then sent;
+    ``_RANGE_UNSATISFIABLE`` when no range overlaps the representation. Suffix and
+    clamping rules are those of ``_parse_byte_range``.
+    """
+    if not header:
+        return None
+    unit, sep, spec = header.partition("=")
+    if not sep or unit.strip().lower() != "bytes":
+        return None
+    items = spec.split(",")
+    if len(items) > _MAX_RANGE_SPECS:
+        return None
+    wanted, seen_any = [], False
+    for item in items:
+        if not item.strip():
+            continue                    # the RFC list syntax tolerates empty elements
+        m = _RANGE_SPEC_RE.fullmatch(item)
+        if not m:
+            return None
+        lo, hi = m.groups()
+        if not lo and not hi:
+            return None
+        seen_any = True
+        if not lo:
+            n = int(hi)
+            if n > 0 and size > 0:
+                wanted.append((max(0, size - n), size - 1))
+            continue
+        start = int(lo)
+        if hi and int(hi) < start:
+            return None
+        if start < size:
+            wanted.append((start, min(int(hi), size - 1) if hi else size - 1))
+    if not seen_any:
+        return None
+    if not wanted:
+        return _RANGE_UNSATISFIABLE
+    wanted.sort()
+    merged = [list(wanted[0])]
+    for start, end in wanted[1:]:
+        if start <= merged[-1][1] + 1:
+            merged[-1][1] = max(merged[-1][1], end)
+        else:
+            merged.append([start, end])
+    if len(merged) > max_ranges:
+        return None
+    return [(a, b) for a, b in merged]
+
+
 def _accepts_gzip(header) -> bool:
     for part in (header or "").split(","):
         token, _, params = part.strip().partition(";")
@@ -5771,7 +6073,12 @@ class AdminHandler(http.server.SimpleHTTPRequestHandler):
         if rng_header:
             if_range = self.headers.get("If-Range")
             if not if_range or if_range.strip() in (etag, last_modified):
-                rng = _parse_byte_range(rng_header, size)
+                rng = _parse_byte_ranges(rng_header, size)
+        if isinstance(rng, list) and len(rng) > 1:
+            self._send_multipart_ranges(real, rng, size, ctype, common_headers)
+            return
+        if isinstance(rng, list):
+            rng = rng[0]
         if rng is _RANGE_UNSATISFIABLE:
             self.send_response(416)
             self.send_header("Content-Range", f"bytes */{size}")
@@ -5814,6 +6121,46 @@ class AdminHandler(http.server.SimpleHTTPRequestHandler):
                     self.close_connection = True
                     return
                 remaining -= len(block)
+
+    def _send_multipart_ranges(self, real: Path, ranges, size: int, ctype: str, common_headers):
+        """206 multipart/byteranges (RFC 9110 §14.6): one part per coalesced range,
+        each with its own Content-Range. The length is known up front, so the body
+        streams from the file without being assembled in memory."""
+        boundary = secrets.token_hex(16)
+        heads = [(f"\r\n--{boundary}\r\nContent-Type: {ctype}\r\n"
+                  f"Content-Range: bytes {a}-{b}/{size}\r\n\r\n").encode("latin-1") for a, b in ranges]
+        tail = f"\r\n--{boundary}--\r\n".encode("latin-1")
+        length = sum(len(h) for h in heads) + sum(b - a + 1 for a, b in ranges) + len(tail)
+        try:
+            fh = open(real, "rb")
+        except OSError:
+            self._json(404, {"error": "Not found"})
+            return
+        with fh:
+            self.send_response(206)
+            self.send_header("Content-Type", f"multipart/byteranges; boundary={boundary}")
+            self.send_header("Content-Length", str(length))
+            self.send_header("Accept-Ranges", "bytes")
+            common_headers()
+            self.end_headers()
+            if self._head_only:
+                return
+            try:
+                for head, (a, b) in zip(heads, ranges):
+                    self.wfile.write(head)
+                    fh.seek(a)
+                    remaining = b - a + 1
+                    while remaining > 0:
+                        block = fh.read(min(remaining, 1 << 20))
+                        if not block:
+                            # The file shrank: the promised length is a lie now.
+                            self.close_connection = True
+                            return
+                        self.wfile.write(block)
+                        remaining -= len(block)
+                self.wfile.write(tail)
+            except (BrokenPipeError, ConnectionResetError):
+                self.close_connection = True
 
     def _serve_dynamic_catalog(self):
         # BUG-062/PERF-035: same filter+sort as the static rebuild, off the mtime
@@ -6238,6 +6585,23 @@ class AdminHandler(http.server.SimpleHTTPRequestHandler):
                 self._json(status, payload)
                 return
             upload_staging.ensure_dirs()   # asserts the deny-all guard of uploads/
+        elif action == "store_get" and self.command == "GET":
+            # One stored v3 brick of an m004 tile store, read back by the browser
+            # executor to reduce the next level. A read: session only, no CSRF.
+            _migrations_bind()
+            status, ctype, data = dataset_migrations.handle_binary(action, params)
+            self.send_response(status)
+            self.send_header("Content-Type", ctype)
+            self.send_header("Content-Length", str(len(data)))
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.end_headers()
+            if not self._head_only:
+                try:
+                    self.wfile.write(data)
+                except (BrokenPipeError, ConnectionResetError):
+                    self.close_connection = True
+            return
         elif action != "status" or self.command != "GET":
             self._json(400, {"error": "Unknown action"})
             return
@@ -6318,8 +6682,8 @@ class AdminHandler(http.server.SimpleHTTPRequestHandler):
             # that tells "the network is back" from "the session is gone" (401).
             self._json_nostore(200, {"ok": True})
         elif action == "list":
-            upload_staging.gc()
-            self._json_nostore(200, {"ok": True, "datasets": upload_staging.list_staged()})
+            _gc, kept = upload_staging.gc_and_list()
+            self._json_nostore(200, {"ok": True, "datasets": kept})
         elif action == "state":
             info = upload_staging.describe(type_dir, folder)
             self._json_nostore(200 if info else 404,
@@ -6340,9 +6704,13 @@ class AdminHandler(http.server.SimpleHTTPRequestHandler):
                 index = int(params.get("index", "-1"))
             except ValueError:
                 index = -1
+            try:
+                file_id = int(params["fid"]) if "fid" in params else None
+            except ValueError:
+                file_id = None
             status, payload = upload_staging.write_chunk(
                 type_dir, folder, params.get("path", ""), index,
-                raw if raw is not None else b"", params.get("sha256"))
+                raw if raw is not None else b"", params.get("sha256"), file_id)
             self._json(status, payload)
         elif action == "file_done":
             status, payload = upload_staging.finalize_file(
@@ -6694,7 +7062,7 @@ class AdminHandler(http.server.SimpleHTTPRequestHandler):
                     status, payload = _save_thumbnail_bytes(ds_id, (body or {}).get("image", ""))
                     self._json(status, payload)
 
-            elif action in ("gallery_add", "gallery_delete"):
+            elif action in ("gallery_add", "gallery_delete", "gallery_thumbs"):
                 ds_id = params.get("id", "")
                 if _is_staged_id(ds_id):
                     # The staging store accepts only what the preprocessing pipeline
@@ -6706,6 +7074,8 @@ class AdminHandler(http.server.SimpleHTTPRequestHandler):
                         body = {"raw": raw_image, "filename": params.get("filename", ""),
                                 "title": params.get("title", ""), "caption": params.get("caption", "")}
                     self._json(*_gallery_add(ds_id, body or {}))
+                elif action == "gallery_thumbs":
+                    self._json(*_gallery_thumbs(ds_id))
                 else:
                     self._json(*_gallery_delete(ds_id, (body or {}).get("file", "")))
 
@@ -6733,6 +7103,11 @@ class AdminHandler(http.server.SimpleHTTPRequestHandler):
                 # Beacons are POSTs (navigator.sendBeacon); a GET would let any
                 # third-party page count visits with an <img> tag.
                 self._json(405, {"error": "Method not allowed (use POST)"})
+                return
+            if not _telemetry_allow(_client_ip(self)):
+                # Refused before anything is read or written: a flood costs a hash
+                # and two 16-byte slot updates per request, nothing more.
+                self._json(429, {"error": "rate_limited"})
                 return
             if kind not in ("visit", "view", "download"):
                 self._json(400, {"error": "bad_kind"})

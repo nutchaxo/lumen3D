@@ -41,6 +41,26 @@ const VolumeViewer = (() => {
   let _cutSlabFaceB = null;
   let _volumeBoundingBox = null;
   let _svrManager = null;
+  // Region-of-interest detail streaming (_roiUpdate): the finer level's atlas for the
+  // part of the volume in view, its mode ('auto' | 'on' | 'off'), the debounce timer,
+  // the round counter and the status the page shows.
+  let _roi = null;
+  let _roiMode = 'auto';
+  let _roiTimer = null;
+  let _roiSeq = 0;
+  let _roiStatus = { mode: 'auto', active: false, level: null, baseLevel: null, inView: 0, resident: 0, loading: 0, loaded: 0, capacity: 0, pixelsPerVoxel: null, reason: 'idle', message: '' };
+  const _roiListeners = new Set();
+  // Tuning of the region-of-interest rounds (see _roiUpdate).
+  const ROI_DEBOUNCE_MS = 350;
+  const ROI_MAX_BYTES = 768 * 1024 * 1024;
+  const ROI_AUTO_MIN_BUDGET = 1024 * 1024 * 1024;
+  const ROI_BUDGET_SHARE = 0.75;
+  const ROI_MIN_SLOTS = 32;
+  const ROI_CONCURRENCY = 8;
+  // One derived manifest per (manifest, timepoint): BrickLoader recognises a tree it
+  // has mounted by the manifest object, so the same timepoint must yield the same one.
+  const _tpManifestMemo = new WeakMap();
+
   let _planeHovered = false;
   const _cutPlaneListeners = new Set();
   const _planeSpecListeners = new Set();
@@ -479,12 +499,53 @@ const VolumeViewer = (() => {
     uniform vec3 volumeVoxels;
     uniform float brickSize;
 
+    // Atlas components (svr-manager.js): an R8 / RG8 atlas samples as (r, 0, 0, 1) /
+    // (r, g, 0, 1), and that alpha of 1 would read as a full channel 3. The channels a
+    // dataset does not have are zeroed instead (constant-folded per define).
+    #ifndef SVR_COMPONENTS
+    #define SVR_COMPONENTS 4
+    #endif
+    #ifndef ROI_DETAIL_COMPONENTS
+    #define ROI_DETAIL_COMPONENTS 4
+    #endif
+    vec4 keepComponents(vec4 v, int n) {
+      return n >= 4 ? v : (n == 2 ? vec4(v.rg, 0.0, 0.0) : (n == 3 ? vec4(v.rgb, 0.0) : vec4(v.r, 0.0, 0.0, 0.0)));
+    }
+
+    // Atlas texture coordinate of the continuous voxel position pos (texture space ×
+    // the level's voxel counts: voxel i spans [i, i+1], its centre at i + ½) inside the
+    // brick 'cell' held at atlas slot 'slot' (slots of 'stride' texels per side).
+    //   apron 1 (v3 bricks, 66³ slots, LINEAR atlas): the slot stores volume voxels
+    //     64·cell − 1 … 64·cell + 64, so texel slot·stride + 1 + (pos − 64·cell) is the
+    //     point pos itself. Hardware trilinear filtering reads the 2×2×2 texels around
+    //     it, floor(t − ½) and floor(t − ½) + 1 per axis; with local = pos − 64·cell in
+    //     [0, 64] those are slot texels 0 … 65 — the brick's own border at worst, which
+    //     holds the neighbouring bricks' voxels (clamp-to-edge outside the volume) — so
+    //     the result is exactly the trilinear interpolation of the whole volume, seamless
+    //     across bricks.
+    //   apron 0 (v2 bricks, 64³ slots, NEAREST atlas): the voxel under pos, clamped to
+    //     the brick's real extent, read at its texel centre.
+    vec3 slotCoord(vec3 pos, vec3 cell, vec3 slot, vec3 dim, float stride, float apron, vec3 atlasSize) {
+      if (apron > 0.5) {
+        vec3 local = clamp(pos - cell * brickSize, vec3(0.0), vec3(brickSize));
+        return (slot * stride + vec3(apron) + local) / atlasSize;
+      }
+      vec3 p = clamp(pos, vec3(0.0), dim - vec3(1.0));
+      vec3 brickOrigin = cell * brickSize;
+      vec3 brickExtent = min(vec3(brickSize), dim - brickOrigin);
+      vec3 localVoxel = clamp(floor(p - brickOrigin), vec3(0.0), max(vec3(0.0), brickExtent - vec3(1.0)));
+      return (slot * stride + localVoxel + vec3(0.5)) / atlasSize;
+    }
+
     #ifdef ENABLE_SVR
     uniform sampler3D pageTable;
     uniform vec3 atlasDim;
     uniform vec3 volumeDim;
     uniform vec3 ptDim;
     uniform vec3 ptScale;
+    // Slot edge in texels (64, or 66 with the 1-voxel border) and the border width.
+    uniform float slotStride;
+    uniform float brickApron;
     // How many atlas pages are actually live. A sampler3D bound to nothing is an
     // INCOMPLETE texture, and WebGL defines a fetch from one as (0,0,0,1) -- alpha 1.
     // Read as a page index that is 255 - 1 = 254, i.e. "brick present, page 254",
@@ -508,6 +569,39 @@ const VolumeViewer = (() => {
         if (atlasPage < 6.5) return textureLod(svrAtlas6, atlasCoord, 0.0);
         return textureLod(svrAtlas7, atlasCoord, 0.0);
     }
+    #endif
+
+    #ifdef ROI_DETAIL
+    // Region of interest: a FINER level's bricks, streamed only for the part of the
+    // volume in view (volume-viewer.js _roiUpdate), in their own atlas and page table.
+    // fetchVoxel reads the detail level wherever it holds the brick under the sample
+    // and falls back to the level resident everywhere elsewhere. With bordered (v3)
+    // bricks both levels are seamless inside themselves; where the detail region ends,
+    // the picture steps from the detail level to the coarser one at that brick's face
+    // (each side exactly its own level's trilinear interpolation, no gap, no blend).
+    uniform sampler3D detailPageTable;
+    uniform sampler3D detailAtlas0;
+    uniform sampler3D detailAtlas1;
+    uniform sampler3D detailAtlas2;
+    uniform sampler3D detailAtlas3;
+    uniform vec3 detailAtlasDim;
+    uniform vec3 detailVolumeDim;
+    uniform vec3 detailPtDim;
+    uniform float detailSlotStride;
+    uniform float detailApron;
+    uniform int detailPageCount;
+
+    vec4 sampleDetailAtlas(vec3 atlasCoord, float atlasPage) {
+        if (atlasPage < 0.5) return textureLod(detailAtlas0, atlasCoord, 0.0);
+        if (atlasPage < 1.5) return textureLod(detailAtlas1, atlasCoord, 0.0);
+        if (atlasPage < 2.5) return textureLod(detailAtlas2, atlasCoord, 0.0);
+        return textureLod(detailAtlas3, atlasCoord, 0.0);
+    }
+
+    // The detail brick last looked up (fetchVoxel): a memo of a pure lookup, valid
+    // for the whole draw.
+    vec3 detailCell = vec3(-1.0);
+    vec4 detailPage = vec4(-1.0);
     #endif
     uniform int numChannels;
     // Sample cap per ray, and samples per voxel length (see delta in main()).
@@ -621,22 +715,30 @@ const VolumeViewer = (() => {
       return uvw;
     }
 
-    // The 64³ brick holding uvw.
-    vec3 brickCell(vec3 uvw) {
-      vec3 vox = clamp(uvw * volumeVoxels, vec3(0.0), volumeVoxels - vec3(1.0));
+    // The 64³ brick (interior) holding uvw, in a level of 'dim' voxels.
+    vec3 brickCellIn(vec3 uvw, vec3 dim) {
+      vec3 vox = clamp(uvw * dim, vec3(0.0), dim - vec3(1.0));
       return floor(vox / brickSize);
     }
 
-    // Empty-space skip: the ray parameter from uvw to the exit of brick 'cell'. The
-    // brick spans [cell, cell+1]·brickSize/volumeVoxels in texture space and
-    // d(uvw)/dt = dirTex, so each face is reached at (face − uvw)/dirTex; the exit is
-    // the nearest face ahead on each axis, the first of the three.
-    float brickExit(vec3 uvw, vec3 dirTex, vec3 cell) {
-      vec3 lo = cell * brickSize / volumeVoxels;
-      vec3 hi = min((cell + vec3(1.0)) * brickSize / volumeVoxels, vec3(1.0));
+    vec3 brickCell(vec3 uvw) {
+      return brickCellIn(uvw, volumeVoxels);
+    }
+
+    // Empty-space skip: the ray parameter from uvw to the exit of brick 'cell' of a
+    // level of 'dim' voxels. The brick spans [cell, cell+1]·brickSize/dim in texture
+    // space and d(uvw)/dt = dirTex, so each face is reached at (face − uvw)/dirTex; the
+    // exit is the nearest face ahead on each axis, the first of the three.
+    float brickExitIn(vec3 uvw, vec3 dirTex, vec3 cell, vec3 dim) {
+      vec3 lo = cell * brickSize / dim;
+      vec3 hi = min((cell + vec3(1.0)) * brickSize / dim, vec3(1.0));
       vec3 safe = dirTex + (1.0 - step(vec3(1e-8), abs(dirTex))) * 1e-8;
       vec3 tt = (mix(lo, hi, step(vec3(0.0), safe)) - uvw) / safe;
       return max(0.0, min(tt.x, min(tt.y, tt.z)));
+    }
+
+    float brickExit(vec3 uvw, vec3 dirTex, vec3 cell) {
+      return brickExitIn(uvw, dirTex, cell, volumeVoxels);
     }
 
     // The voxel at uvw, or false when its brick holds no data; 'skip' is then the ray
@@ -647,6 +749,22 @@ const VolumeViewer = (() => {
     bool fetchVoxel(vec3 uvw, vec3 dirTex, inout vec3 cachedCell, inout vec4 cachedPage, out vec4 val, out float skip) {
       skip = 0.0;
       val = vec4(0.0);
+      #ifdef ROI_DETAIL
+      vec3 dPos = uvw * detailVolumeDim;
+      vec3 dCell = brickCellIn(uvw, detailVolumeDim);
+      if (any(notEqual(dCell, detailCell))) {
+        detailCell = dCell;
+        vec4 dp = textureLod(detailPageTable, (dCell + vec3(0.5)) / detailPtDim, 0.0);
+        float dAtlasPage = floor(dp.a * 255.0 + 0.5) - 1.0;
+        detailPage = (dAtlasPage < 0.0 || dAtlasPage > float(detailPageCount - 1))
+          ? vec4(-1.0)
+          : vec4(floor(dp.rgb * 255.0 + 0.5), dAtlasPage);
+      }
+      if (detailPage.w >= 0.0) {
+        val = keepComponents(sampleDetailAtlas(slotCoord(dPos, dCell, detailPage.xyz, detailVolumeDim, detailSlotStride, detailApron, detailAtlasDim), detailPage.w), ROI_DETAIL_COMPONENTS);
+        return true;
+      }
+      #endif
       #ifdef ENABLE_SVR
       vec3 cell = brickCell(uvw);
       if (any(notEqual(cell, cachedCell))) {
@@ -659,18 +777,14 @@ const VolumeViewer = (() => {
       }
       if (cachedPage.w < 0.0) {
         skip = brickExit(uvw, dirTex, cell);
+        #ifdef ROI_DETAIL
+        // A finer brick may hold signal where the coarse one was dropped as empty (a
+        // mean rounds a lone faint voxel to 0): never jump past the detail cell.
+        skip = min(skip, brickExitIn(uvw, dirTex, dCell, detailVolumeDim));
+        #endif
         return false;
       }
-      // Nearest voxel: the slots are packed edge to edge with no 1-voxel apron, so a
-      // linear fetch would blend a neighbouring slot's brick across every brick face.
-      // The dense (monolithic) path samples trilinearly; matching it here needs bricks
-      // stored with an apron (66³), a change of the brick format.
-      vec3 logicalPixels = clamp(uvw * volumeDim, vec3(0.0), volumeDim - vec3(1.0));
-      vec3 brickOrigin = cell * brickSize;
-      vec3 brickExtent = min(vec3(brickSize), volumeDim - brickOrigin);
-      vec3 localVoxel = clamp(floor(logicalPixels - brickOrigin), vec3(0.0), max(vec3(0.0), brickExtent - vec3(1.0)));
-      vec3 atlasVoxel = cachedPage.xyz * brickSize + localVoxel;
-      val = sampleSVRAtlas((atlasVoxel + vec3(0.5)) / atlasDim, cachedPage.w);
+      val = keepComponents(sampleSVRAtlas(slotCoord(uvw * volumeDim, cell, cachedPage.xyz, volumeDim, slotStride, brickApron, atlasDim), cachedPage.w), SVR_COMPONENTS);
       return true;
       #else
         #ifdef HAS_OCCUPANCY
@@ -684,6 +798,9 @@ const VolumeViewer = (() => {
         }
         if (cachedPage.w < 0.0) {
           skip = brickExit(uvw, dirTex, cell);
+          #ifdef ROI_DETAIL
+          skip = min(skip, brickExitIn(uvw, dirTex, dCell, detailVolumeDim));
+          #endif
           return false;
         }
         #endif
@@ -794,6 +911,10 @@ const VolumeViewer = (() => {
       // whatever the ray's length, the axis it runs along or the level of detail; a ray
       // needing more than 'steps' samples is spread evenly instead (delta = L/steps).
       float nu = max(length(dirTex * volumeVoxels), 1e-6);
+      #ifdef ROI_DETAIL
+      // Where the finer level is resident the ray must sample at ITS voxel pitch.
+      nu = max(nu, length(dirTex * detailVolumeDim));
+      #endif
 
       #ifdef PICK_MODE
       // Depth of the surface under the pixel. Pass 1 finds the largest displayed value
@@ -1120,6 +1241,22 @@ const VolumeViewer = (() => {
         ptDim: { value: new THREE.Vector3(1, 1, 1) },
         ptScale: { value: new THREE.Vector3(1, 1, 1) },
         brickSize: { value: VOLUME_BRICK_SIZE },
+        // Atlas slot layout (SVRManager.updateUniforms): slot edge, border, components.
+        slotStride: { value: VOLUME_BRICK_SIZE },
+        brickApron: { value: 0 },
+        svrComponents: { value: 4 },
+        // Region-of-interest detail atlas (ROI_DETAIL; SVRManager role 'detail').
+        detailPageTable: { value: null },
+        detailAtlas0: { value: null },
+        detailAtlas1: { value: null },
+        detailAtlas2: { value: null },
+        detailAtlas3: { value: null },
+        detailAtlasDim: { value: new THREE.Vector3(1, 1, 1) },
+        detailVolumeDim: { value: new THREE.Vector3(1, 1, 1) },
+        detailPtDim: { value: new THREE.Vector3(1, 1, 1) },
+        detailSlotStride: { value: VOLUME_BRICK_SIZE },
+        detailApron: { value: 0 },
+        detailPageCount: { value: 0 },
         // Voxel lattice of the bound volume: what the sampling interval is measured in.
         volumeVoxels: { value: new THREE.Vector3(1, 1, 1) },
         // 0 until an SVR manager publishes its live page count: an unpublished atlas
@@ -2040,6 +2177,7 @@ const VolumeViewer = (() => {
       _lastCubePos.copy(cube.position);
       _lastCubeQuat.copy(cube.quaternion);
       _needsRender = false;
+      if (cameraChanged || cubeChanged) _roiSchedule('camera');
       _idleFrameCount = 0;
     } else {
       _idleFrameCount++;
@@ -2679,6 +2817,8 @@ const VolumeViewer = (() => {
       return false;
     }
     const previous = _activeVolumeEntry;
+    // Detail bricks belong to the volume they refine: another volume drops them.
+    if (_roi && _roi.entry !== entry) _roiTeardown('volume-changed');
     if (entry.svrManager) {
       // The manager it replaces belongs to `previous`, released below unless cached.
       _svrManager = entry.svrManager;
@@ -2687,6 +2827,10 @@ const VolumeViewer = (() => {
     } else {
       if (material?.defines?.ENABLE_SVR) {
         delete material.defines.ENABLE_SVR;
+        material.needsUpdate = true;
+      }
+      if (material?.defines && 'SVR_COMPONENTS' in material.defines) {
+        delete material.defines.SVR_COMPONENTS;
         material.needsUpdate = true;
       }
       _svrManager = null;
@@ -2760,7 +2904,7 @@ const VolumeViewer = (() => {
   const PER_VOLUME_UNIFORMS = new Set([
     'svrAtlas0', 'svrAtlas1', 'svrAtlas2', 'svrAtlas3', 'svrAtlas4', 'svrAtlas5', 'svrAtlas6', 'svrAtlas7',
     'mapOccupancy', 'occupancyScale', 'pageTable', 'atlasDim', 'volumeDim', 'ptDim', 'ptScale', 'brickSize',
-    'svrPageCount', 'numChannels', 'volumeVoxels'
+    'svrPageCount', 'numChannels', 'volumeVoxels', 'slotStride', 'brickApron', 'svrComponents'
   ]);
 
   function _createTransitionMaterial() {
@@ -2771,11 +2915,15 @@ const VolumeViewer = (() => {
       const v = u.value;
       uniforms[key] = { value: v && typeof v.clone === 'function' && !v.isTexture ? v.clone() : v };
     }
+    // The detail atlas belongs to the volume on screen, never to the one fading in.
+    const defines = { ...(material.defines || {}) };
+    delete defines.ROI_DETAIL;
+    delete defines.ROI_DETAIL_COMPONENTS;
     const transition = new THREE.ShaderMaterial({
       glslVersion: THREE.GLSL3,
       vertexShader,
       fragmentShader,
-      defines: { ...(material.defines || {}) },
+      defines,
       uniforms,
       side: THREE.BackSide,
       transparent: true,
@@ -2811,6 +2959,7 @@ const VolumeViewer = (() => {
       entry.svrManager.updateUniforms();
     } else {
       if (_transitionMaterial.defines?.ENABLE_SVR) delete _transitionMaterial.defines.ENABLE_SVR;
+      if (_transitionMaterial.defines) delete _transitionMaterial.defines.SVR_COMPONENTS;
       _transitionMaterial.uniforms.svrAtlas0.value = entry.texture || textures[0] || null;
       _transitionMaterial.uniforms.svrAtlas1.value = textures[1] || textures[0] || entry.texture || null;
       _transitionMaterial.uniforms.svrAtlas2.value = textures[2] || textures[0] || entry.texture || null;
@@ -3441,7 +3590,7 @@ const VolumeViewer = (() => {
       const newSigma = Math.max(0, Math.min(5, Number(params.denoise_sigma) || 0));
       const oldSigma = _channelSigma[idx] || 0;
       _channelSigma[idx] = newSigma;
-      if (Math.abs(newSigma - oldSigma) > 0.05 && _activeVolumeEntry) _applyDenoise(idx, newSigma, _activeVolumeEntry);
+      if (Math.abs(newSigma - oldSigma) > 0.05 && _activeVolumeEntry) { _applyDenoise(idx, newSigma, _activeVolumeEntry); _roiSchedule('denoise'); }
     }
 
     _scheduleFrame();
@@ -3497,6 +3646,7 @@ const VolumeViewer = (() => {
       material.uniforms.clipMax.value[axis] = next;
     }
     _scheduleFrame();
+    _roiSchedule('clip');
   }
 
   /**
@@ -3520,6 +3670,7 @@ const VolumeViewer = (() => {
       material.uniforms.clipMax.value[a] = hi;
     }
     _scheduleFrame();
+    _roiSchedule('clip');
   }
 
   // ── Axis-aligned views in the frame the operator defined ────────────────────
@@ -5941,6 +6092,13 @@ const VolumeViewer = (() => {
     renderNow,
     getCapabilities,
     getQualityFootprints,
+    getQualityLevels,
+    getActiveLevel,
+    selectBrickManifest: (manifest, timepoint) => _selectBrickManifestForTimepoint(manifest, timepoint),
+    setDetailMode,
+    getDetailStatus,
+    onDetailStatus,
+    refreshDetail: () => _roiSchedule('request'),
     loadVolume,
     preloadVolume,
     updateChannel,
@@ -6131,6 +6289,8 @@ const VolumeViewer = (() => {
         _cancelStream(_brickStreamAbort);
         if (!options._replay) _lastDisplayRequest = { kind: 'bricks', basePath, metadata, timepoint, onProgress, options };
       }
+      // A new volume is coming: the detail bricks of the old one go (VRAM, loader group).
+      _roiTeardown('stream');
       _clearTransitionVolume();
       if (options.qualityMode) {
         _currentQualityMode = options.qualityMode;
@@ -6167,6 +6327,7 @@ const VolumeViewer = (() => {
           return { stale: false, available: true, cached: true, quality, preload: true };
         }
         _activateVolumeEntry(cached, metadata, cached.sourceDepth, cached.sourceWidth, cached.channels, options);
+        _roiSchedule('volume');
         emitState({ active: shownQuality, mode: 'bricks', progress: 1, message: `${quality} ready from cache` });
         onProgress?.(1, quality);
         if (!deferActivation) firePicture({ quality, lod: cached.lod, preview: isPreview, fromCache: true });
@@ -6216,12 +6377,15 @@ const VolumeViewer = (() => {
         _perf()?.end(perfId, { status: 'unavailable', quality, reason: tpSelection.reason });
         return { available: false, reason: tpSelection.reason };
       }
+      const treePath = `${basePath}/${brickDir}${tpSelection.subPath ? `/${tpSelection.subPath}` : ''}`;
       BrickLoader.configure?.({
         concurrentLoads: options.concurrency || _brickConcurrencyForQuality(quality),
         verifyHashes: Boolean(options.verifyHashes ?? window.IRIBHM_VERIFY_BRICK_HASHES)
       });
       try {
-        BrickLoader.init(`${basePath}/${brickDir}${tpSelection.subPath ? `/${tpSelection.subPath}` : ''}`, tpSelection.manifest);
+        // A v3 tree mounts once its binary index has landed and checked out (a promise);
+        // a v2 manifest mounts at once (an already resolved one).
+        await BrickLoader.init(treePath, tpSelection.manifest);
       } catch (err) {
         // ELE-21: a rejected (malformed) manifest degrades to the {available:false}
         // contract (Rule 1.1/1.4) instead of an opaque throw.
@@ -6229,9 +6393,21 @@ const VolumeViewer = (() => {
         _perf()?.event('volume.bricks.manifest_rejected', { quality, reason: err.message });
         return { available: false, reason: err.message };
       }
+      if (loadId !== _loadCounter) {
+        _perf()?.end(perfId, { status: 'stale', quality });
+        return { stale: true };
+      }
+      if (BrickLoader.getManifest?.() !== tpSelection.manifest) {
+        // A later mount won while this tree's index was in flight (BrickLoader.init
+        // resolves without mounting then): everything below reads the mounted tree.
+        _perf()?.end(perfId, { status: 'stale', quality });
+        return preload ? { available: false, reason: 'busy' } : { stale: true };
+      }
       const levels = tpSelection.manifest.levels;
       const levelCount = levels ? (Array.isArray(levels) ? levels.length : Object.keys(levels).length) : 1;
-      const requestedLod = _lodForQuality(quality, levelCount, levels);
+      const treeFormat = BrickLoader.getFormat?.() || null;
+      const bordered = Boolean(treeFormat && treeFormat.apron > 0);
+      const requestedLod = _lodForQuality(quality, levelCount, levels, treeFormat?.version === 3);
 
       // ── Coarse level first ─────────────────────────────────────────────────────
       let previewLod = null;
@@ -6322,6 +6498,8 @@ const VolumeViewer = (() => {
             streamSvrManager.init(footprint.channels, dims, renderer, svrMaterial, {
               // ≥ 2: a single slot would read as "no target" (largest layout the budget allows).
               targetSlots: Math.max(2, footprint.activeBricks),
+              components: footprint.components,
+              apron: bordered ? 1 : 0,
               // Dense textures are not SVR managers: the budget left for atlases is
               // the page's budget minus them (init subtracts the other live atlases).
               budgetBytes: Math.max(0, budget - (_residentGpuBytes() - SVRClass.liveAtlasBytes())),
@@ -6403,11 +6581,18 @@ const VolumeViewer = (() => {
         depth,
         stride: footprint.scalar ? 1 : RGBA_TEXTURE_BYTES_PER_VOXEL,
         gpuBytes: streamSvrManager ? undefined : footprint.bytes,
+        // What the region-of-interest streaming needs to refine this volume with the
+        // same transform the stream applied: the floor LUTs, the atlas format.
+        floorLuts,
+        components: footprint.components,
+        treePath,
+        treeVersion: treeFormat?.version || 2,
+        apron: bordered ? 1 : 0,
         sourceWidth: Number(metadata.dimensions?.x) || width,
         sourceHeight: Number(metadata.dimensions?.y) || height,
         sourceDepth: Number(metadata.dimensions?.z) || depth,
         channels,
-        zIndices: Array.from({ length: depth }, (_, idx) => idx),
+        zIndices: _levelSourcePlanes(depth, Number(metadata.dimensions?.z) || depth),
         basePath,
         timepoint,
         quality,
@@ -6473,15 +6658,39 @@ const VolumeViewer = (() => {
       let firstPictureFired = deferActivation || preload;
       const firstPictureAt = Math.max(1, Math.ceil(totalBricks * FIRST_PICTURE_FRACTION));
       const bs = VOLUME_BRICK_SIZE;
+      // A bordered (v3) brick arrives as its stored 66³ (stored voxel s of an axis is
+      // volume voxel 64·b − 1 + s). The atlas keeps the border (cropToVolume cuts an edge
+      // brick to the voxels in [−1, dim]); a dense texture takes the interior alone, the
+      // box [1, 1 + min(64, dim − 64·b)) of each axis, written at 64·b.
+      const slotEdge = bordered ? bs + 2 : bs;
+      const denseRegion = (brick) => (bordered && !streamSvrManager ? {
+        x0: 1, x1: 1 + Math.min(bs, width - brick.bx * bs),
+        y0: 1, y1: 1 + Math.min(bs, height - brick.by * bs),
+        z0: 1, z1: 1 + Math.min(bs, depth - brick.bz * bs)
+      } : undefined);
       const streamTasks = [];
       for (const brick of orderedBricks) {
+        const region = denseRegion(brick);
         if (rgbaTransport) streamTasks.push({ bx: brick.bx, by: brick.by, bz: brick.bz, channel: -1, lod });
-        else for (let c = 0; c < channels; c++) streamTasks.push({ bx: brick.bx, by: brick.by, bz: brick.bz, channel: c, lod });
+        else for (let c = 0; c < channels; c++) streamTasks.push({ bx: brick.bx, by: brick.by, bz: brick.bz, channel: c, lod, ...(region ? { region } : {}) });
       }
 
       let summary = null;
+      if (streamTasks.length && BrickLoader.getManifest?.() !== tpSelection.manifest) {
+        // Another tree of the dataset was mounted while this stream yielded (the detail
+        // streaming re-mounting the frame on screen during a prefetch): mount this one
+        // again — a same-dataset mount cancels nothing — before asking its bricks.
+        try { await BrickLoader.init(treePath, tpSelection.manifest); } catch (e) { /* checked below */ }
+        if (BrickLoader.getManifest?.() !== tpSelection.manifest || stopped()) {
+          clearOwnTransition();
+          if (streamEntry !== _activeVolumeEntry) _disposeVolumeEntry(streamEntry);
+          _perf()?.end(perfId, { status: 'stale', quality });
+          return preload ? { available: false, reason: 'busy' } : { stale: true };
+        }
+      }
       if (streamTasks.length) {
         const result = await BrickLoader.loadBrickTasks(streamTasks, {
+          manifest: tpSelection.manifest,
           concurrency: options.concurrency || _brickConcurrencyForQuality(quality),
           group: 'stream',
           streamOnly: true,
@@ -6489,7 +6698,7 @@ const VolumeViewer = (() => {
           // Stops the batch the moment this stream is superseded, instead of paying
           // for every remaining fetch and decode only to throw the result away.
           shouldAbort: stopped,
-          compose: { channels, luts: floorLuts, components: footprint.scalar ? 1 : 4, cropToVolume: true },
+          compose: { channels, luts: floorLuts, components: footprint.components, cropToVolume: !(bordered && !streamSvrManager) },
           onBrickError: ({ bx, by, bz, channel, error } = {}) => {
             // BUG-011 (Rule 1.1): a dropped brick surfaces in the status, not silently.
             if (stopped()) return;
@@ -6499,9 +6708,10 @@ const VolumeViewer = (() => {
           onBrickLoaded: (row) => {
             if (stopped() || !row?.data) return;
             const r = row.region;
-            const bw = r ? r.x1 - r.x0 : Math.min(bs, width - row.bx * bs);
-            const bh = r ? r.y1 - r.y0 : Math.min(bs, height - row.by * bs);
-            const bd = r ? r.z1 - r.z0 : Math.min(bs, depth - row.bz * bs);
+            // No region: a whole brick (a bordered one is its whole stored 66³).
+            const bw = r ? r.x1 - r.x0 : (bordered ? slotEdge : Math.min(bs, width - row.bx * bs));
+            const bh = r ? r.y1 - r.y0 : (bordered ? slotEdge : Math.min(bs, height - row.by * bs));
+            const bd = r ? r.z1 - r.z0 : (bordered ? slotEdge : Math.min(bs, depth - row.bz * bs));
             let ok;
             if (streamSvrManager) {
               ok = streamSvrManager.writeRgbaBrick(row.bx, row.by, row.bz, row.data, bw, bh, bd);
@@ -6528,7 +6738,16 @@ const VolumeViewer = (() => {
             const progress = Math.max(0, Math.min(1, p));
             if (_emitThrottledProgress(progress, preload)) onProgress?.(progress, quality);
           }
+        }).catch((err) => {
+          if (err?.code === 'BRICKS_MOUNT_CHANGED') return { mountChanged: true };
+          throw err;
         });
+        if (result?.mountChanged) {
+          clearOwnTransition();
+          if (streamEntry !== _activeVolumeEntry) _disposeVolumeEntry(streamEntry);
+          _perf()?.end(perfId, { status: 'stale', quality });
+          return preload ? { available: false, reason: 'busy' } : { stale: true };
+        }
         summary = result?.summary || null;
       }
 
@@ -6597,6 +6816,7 @@ const VolumeViewer = (() => {
       _storeVolumeCache(streamEntry.key, streamEntry);
       if (!preload) _activateVolumeEntry(streamEntry, metadata, streamEntry.sourceDepth, streamEntry.sourceWidth, channels, options);
       clearOwnTransition();
+      if (!preload && !isPreview) _roiSchedule('volume');
       if (!preload && !firstPictureFired) firePicture({ quality, lod, preview: isPreview, fromCache: false });
       emitState({
         active: shownQuality,
@@ -6740,17 +6960,24 @@ const VolumeViewer = (() => {
     const dense = dims.x * dims.y * dims.z * (scalar ? 1 : RGBA_TEXTURE_BYTES_PER_VOXEL);
     const activeBricks = BrickLoader.activeBrickCount(lod);
     const useSVR = dims.x > max3D || dims.y > max3D || dims.z > max3D || dense >= MONOLITHIC_RGBA_LIMIT_BYTES;
+    const base = { lod, dims: { x: dims.x, y: dims.y, z: dims.z }, channels, activeBricks };
     if (!useSVR) {
-      return { lod, dims: { x: dims.x, y: dims.y, z: dims.z }, channels, activeBricks, mode: 'monolithic', scalar, bytes: dense, planned: true };
+      return { ...base, mode: 'monolithic', scalar, components: scalar ? 1 : RGBA_TEXTURE_BYTES_PER_VOXEL, stride: VOLUME_BRICK_SIZE, bytes: dense, planned: true };
     }
     const S = typeof SVRManager !== 'undefined' ? SVRManager : null;
+    // The atlas takes one byte per channel the dataset has (R8, RG8, RGBA8 for 3–4) and
+    // slots of the tree's stride (66 with the border); its page table one RGBA8 texel
+    // per brick of the grid.
+    const components = rgbaTransport || !S?.componentsForChannels ? 4 : S.componentsForChannels(channels);
+    const stride = Number(dims.brickStride) || VOLUME_BRICK_SIZE;
     const maxPageBytes = S && typeof S._maxPageBytes === 'function' ? S._maxPageBytes(budget) : 512 * 1024 * 1024;
     const plan = S && typeof S.planAtlas === 'function'
-      ? S.planAtlas(Math.max(1, activeBricks), { max3D, components: 4, maxPageBytes })
+      ? S.planAtlas(Math.max(1, activeBricks), { max3D, components, maxPageBytes, brickSize: stride })
       : null;
+    const pageTableBytes = Math.ceil(dims.x / VOLUME_BRICK_SIZE) * Math.ceil(dims.y / VOLUME_BRICK_SIZE) * Math.ceil(dims.z / VOLUME_BRICK_SIZE) * 4;
     return {
-      lod, dims: { x: dims.x, y: dims.y, z: dims.z }, channels, activeBricks, mode: 'svr', scalar: false,
-      bytes: plan ? plan.bytes : Infinity, planned: Boolean(plan)
+      ...base, mode: 'svr', scalar: false, components, stride,
+      bytes: plan ? plan.bytes + pageTableBytes : Infinity, planned: Boolean(plan)
     };
   }
 
@@ -6804,6 +7031,7 @@ const VolumeViewer = (() => {
     const manifest = BrickLoader.getManifest?.();
     const levels = manifest?.levels;
     const levelCount = levels ? (Array.isArray(levels) ? levels.length : Object.keys(levels).length) : 1;
+    const v3 = _isV3Manifest(manifest);
     const max3D = renderer?.capabilities?.max3DTextureSize || 2048;
     const budget = _gpuBudgetBytes();
     const rgbaTransport = BrickLoader.getTransportEncoding?.() === 'raw-rgba-gzip';
@@ -6813,11 +7041,399 @@ const VolumeViewer = (() => {
       if (fp) out.levels.push({ ...fp, fits: fp.planned && fp.bytes <= budget });
     }
     for (const q of qualities) {
-      const lod = _lodForQuality(_normalizeQualityKey(q), levelCount, levels);
+      const lod = _lodForQuality(_normalizeQualityKey(q), levelCount, levels, v3);
       const fp = out.levels.find(l => l.lod === lod);
       if (fp) out.qualities[q] = fp;
     }
     return out;
+  }
+
+  /**
+   * The level each quality of the select shows, with its real dimensions, so the page
+   * can label "512" as what it is (e.g. "632 × 410 × 96"). `manifest` defaults to the
+   * one BrickLoader has mounted; a live dataset's manifest is read at its top level
+   * (v3: the levels every timepoint shares).
+   * @returns {Array<{ key, value (= key, the select's option value), level, dims: {x,y,z}, voxelSize: {x,y,z}|null }>|null}
+   */
+  function getQualityLevels(keys = ['256x256', '512x512', '1024x1024', 'native'], manifest = null) {
+    const m = manifest || (typeof BrickLoader !== 'undefined' ? BrickLoader.getManifest?.() : null);
+    const levels = Array.isArray(m?.levels) ? m.levels : null;
+    if (!levels || !levels.length) return null;
+    const v3 = _isV3Manifest(m);
+    return keys.map((key) => {
+      const level = _lodForQuality(_normalizeQualityKey(key), levels.length, levels, v3);
+      const lv = levels[level] || {};
+      const d = lv.dimensions || {};
+      const vs = lv.voxelSize || null;
+      return {
+        key,
+        value: key,
+        level,
+        dims: { x: Number(d.x) || 0, y: Number(d.y) || 0, z: Number(d.z) || 0 },
+        voxelSize: vs ? { x: Number(vs.x), y: Number(vs.y), z: Number(vs.z) } : null
+      };
+    });
+  }
+
+  /** The level on screen: { level, quality, dims, treeVersion, apron, components, mode }, or null. */
+  function getActiveLevel() {
+    const e = _activeVolumeEntry;
+    if (!e || !Number.isInteger(e.lod)) return null;
+    return {
+      level: e.lod,
+      quality: e.quality,
+      dims: { x: e.width, y: e.height, z: e.depth },
+      treeVersion: e.treeVersion || 2,
+      apron: e.apron || 0,
+      components: e.svrManager ? e.svrManager.components : (e.stride === 1 ? 1 : RGBA_TEXTURE_BYTES_PER_VOXEL),
+      mode: e.svrManager ? 'svr' : 'monolithic',
+      detailLevel: _roi && _roi.entry === e ? _roi.level : null
+    };
+  }
+
+  function _isV3Manifest(manifest) {
+    return Boolean(manifest) && (manifest.schema === 'iribhm-bricks-v3' || manifest.version === 3);
+  }
+
+  /**
+   * Source plane of each z of a level: the identity when the level keeps every plane;
+   * a level halved in Z (v3, SPEC §13.1) maps its z to the source plane at its centre,
+   * min(D − 1, floor((z + ½)·D/d)).
+   */
+  function _levelSourcePlanes(depth, sourceDepth) {
+    const d = Math.max(1, Math.floor(Number(depth) || 1));
+    const D = Math.max(1, Math.floor(Number(sourceDepth) || d));
+    if (D === d) return Array.from({ length: d }, (_, z) => z);
+    return Array.from({ length: d }, (_, z) => Math.min(D - 1, Math.floor((z + 0.5) * D / d)));
+  }
+
+  // ── Region of interest: finer bricks where the view needs them ───────────────
+  // The quality's level stays resident everywhere. When the user zooms past its
+  // resolution (one of its voxels over SVRRoi.DETAIL_PIXELS_PER_VOXEL screen pixels),
+  // the bricks of a finer level that are in view (frustum ∩ volume ∩ clip box) are
+  // streamed into a second atlas (SVRManager role 'detail', its own page table), most
+  // important first (big on screen, near the view centre), within what is left of the
+  // VRAM budget; bricks that left the view are recycled least recently used first.
+  // The shader samples the finest resident level at each position (fetchVoxel). Each
+  // round is debounced after the camera settles, cancels the previous round's loads
+  // (loader group 'roi'), and never runs while a volume streams. 'auto' turns itself
+  // on only with a VRAM budget of at least ROI_AUTO_MIN_BUDGET; 'on' whatever it is.
+
+  /** 'auto' (default), 'on' or 'off'. 'off' drops the detail bricks at once. */
+  function setDetailMode(mode) {
+    const m = mode === true ? 'on' : mode === false ? 'off' : String(mode || 'auto');
+    if (!['auto', 'on', 'off'].includes(m)) return _roiMode;
+    _roiMode = m;
+    if (m === 'off') _roiTeardown('off');
+    _setRoiStatus({ mode: m });
+    _roiSchedule('mode');
+    return _roiMode;
+  }
+
+  /**
+   * { mode, active, level, baseLevel, inView, resident, loading, loaded, capacity,
+   *   pixelsPerVoxel, reason, message } — reason: 'idle' | 'off' | 'zoomed-out' |
+   * 'finest' | 'budget' | 'budget-low' | 'alloc-failed' | 'streaming' | 'unsupported'
+   * | 'loading' | 'ready' | … ; message is the line to show (translated).
+   */
+  function getDetailStatus() {
+    return { ..._roiStatus };
+  }
+
+  function onDetailStatus(callback) {
+    if (typeof callback !== 'function') return () => {};
+    _roiListeners.add(callback);
+    callback(getDetailStatus());
+    return () => _roiListeners.delete(callback);
+  }
+
+  function _setRoiStatus(patch) {
+    const next = { ..._roiStatus, ...patch, mode: _roiMode };
+    next.message = _roiMessage(next);
+    const changed = Object.keys(next).some(k => next[k] !== _roiStatus[k]);
+    _roiStatus = next;
+    if (changed) _roiListeners.forEach((cb) => { try { cb({ ...next }); } catch (e) { console.warn('[VolumeViewer] detail status listener failed:', e); } });
+  }
+
+  function _roiMessage(s) {
+    if (s.reason === 'loading') {
+      return _t('viewer.detailLoading', 'Detail: loading {loaded} of {total} bricks of level {level}', { loaded: s.loaded, total: s.loading, level: s.level });
+    }
+    if (s.active && s.level !== null) {
+      return _t('viewer.detailStatus', 'Detail: {count} bricks of level {level} in view', { count: s.resident, level: s.level });
+    }
+    if (s.reason === 'budget' || s.reason === 'alloc-failed') {
+      return _t('viewer.detailNoBudget', 'Detail unavailable: not enough GPU memory left');
+    }
+    return '';
+  }
+
+  function _roiSchedule(reason = 'camera') {
+    if (_roiMode === 'off' && !_roi) return;
+    if (!renderer) return;
+    if (_roiTimer) clearTimeout(_roiTimer);
+    _roiTimer = setTimeout(() => {
+      _roiTimer = null;
+      _roiUpdate().catch((err) => console.warn('[VolumeViewer] detail streaming failed:', err));
+    }, ROI_DEBOUNCE_MS);
+  }
+
+  function _roiTeardown(reason) {
+    const roi = _roi;
+    _roi = null;
+    if (roi) {
+      roi.seq = -1;
+      try { roi.controller?.abort(); } catch (e) { /* already aborted */ }
+      if (typeof BrickLoader !== 'undefined') BrickLoader.cancelGroup?.('roi');
+      roi.mgr?.dispose?.();
+    }
+    if (material && typeof SVRManager !== 'undefined' && SVRManager.unpublishDetail) SVRManager.unpublishDetail(material);
+    if (roi) _scheduleFrame();
+    if (roi || _roiStatus.active) _setRoiStatus({ active: false, level: null, inView: 0, resident: 0, loading: 0, loaded: 0, capacity: 0, reason });
+  }
+
+  /** What the scheduler needs from the view: the focal length in device pixels, the
+   *  distance to the volume along the view's centre, and the cube's world scale. */
+  function _roiViewGeometry() {
+    cube.updateMatrixWorld(true);
+    camera.updateMatrixWorld();
+    const worldScale = new THREE.Vector3();
+    cube.getWorldScale(worldScale);
+    const size = renderer.getSize(new THREE.Vector2());
+    const focalPx = SVRRoi.focalPx(size.y * _idlePixelRatio(), camera.fov);
+    const camPos = new THREE.Vector3();
+    camera.getWorldPosition(camPos);
+    const forward = new THREE.Vector3();
+    camera.getWorldDirection(forward);
+    const inv = cube.matrixWorld.clone().invert();
+    const oLocal = camPos.clone().applyMatrix4(inv);
+    const aheadLocal = camPos.clone().add(forward).applyMatrix4(inv);
+    const box = new THREE.Box3(new THREE.Vector3(-0.5, -0.5, -0.5), new THREE.Vector3(0.5, 0.5, 0.5));
+    let distance;
+    if (box.containsPoint(oLocal)) {
+      distance = camera.near;
+    } else {
+      const ray = new THREE.Ray(oLocal, aheadLocal.sub(oLocal).normalize());
+      const hit = ray.intersectBox(box, new THREE.Vector3()) || box.clampPoint(oLocal, new THREE.Vector3());
+      distance = camPos.distanceTo(hit.applyMatrix4(cube.matrixWorld));
+    }
+    return { focalPx, distance: Math.max(camera.near, distance), worldScale: { x: worldScale.x, y: worldScale.y, z: worldScale.z } };
+  }
+
+  /** Texture space (uvw) → world: the cube's world matrix after the inverse of the
+   *  object → texture map (p + ½, or the stabilisation warp of a timelapse). */
+  function _roiTextureToWorld() {
+    const objToTex = _warpActive && material?.uniforms?.volumeWarp?.value
+      ? material.uniforms.volumeWarp.value.clone()
+      : new THREE.Matrix4().makeTranslation(0.5, 0.5, 0.5);
+    return cube.matrixWorld.clone().multiply(objToTex.invert());
+  }
+
+  /** The camera frustum as planes of texture space ([nx, ny, nz, d], inside ≥ 0). */
+  function _roiFrustumPlanes(texToWorld) {
+    const vp = new THREE.Matrix4().multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
+    const frustum = new THREE.Frustum().setFromProjectionMatrix(vp);
+    const worldToTex = texToWorld.clone().invert();
+    return frustum.planes.map((p) => {
+      const q = p.clone().applyMatrix4(worldToTex);
+      return [q.normal.x, q.normal.y, q.normal.z, q.constant];
+    });
+  }
+
+  /** uvw → { x, y } NDC and the view depth. */
+  function _roiProjector(texToWorld) {
+    const m = new THREE.Matrix4().multiplyMatrices(camera.matrixWorldInverse, texToWorld).elements;
+    const pm = camera.projectionMatrix.elements;
+    return (u, v, w) => {
+      const vx = m[0] * u + m[4] * v + m[8] * w + m[12];
+      const vy = m[1] * u + m[5] * v + m[9] * w + m[13];
+      const vz = m[2] * u + m[6] * v + m[10] * w + m[14];
+      const cx = pm[0] * vx + pm[4] * vy + pm[8] * vz + pm[12];
+      const cy = pm[1] * vx + pm[5] * vy + pm[9] * vz + pm[13];
+      const cw = pm[3] * vx + pm[7] * vy + pm[11] * vz + pm[15];
+      const depth = -vz;
+      if (!(cw > 1e-9)) return { x: 1e3, y: 1e3, depth: Math.max(camera.near, depth) };
+      return { x: cx / cw, y: cy / cw, depth };
+    };
+  }
+
+  /** A detail atlas for level k sized to what the budget leaves, or null (status says why). */
+  function _roiCreate(entry, k, budget) {
+    const dims = BrickLoader.getDimensions(k);
+    if (!dims) return null;
+    const channels = Math.max(1, Math.min(4, entry.channels || dims.channels || 1));
+    const components = SVRManager.componentsForChannels(channels);
+    const stride = Number(dims.brickStride) || VOLUME_BRICK_SIZE;
+    const free = Math.max(0, budget - _residentGpuBytes());
+    const bytes = Math.min(ROI_MAX_BYTES, Math.floor(free * ROI_BUDGET_SHARE));
+    const max3D = renderer?.capabilities?.max3DTextureSize || 2048;
+    const plan = SVRManager.planAtlasWithin(bytes, {
+      max3D, components, brickSize: stride, maxPages: SVRManager.DETAIL_MAX_PAGES, maxPageBytes: SVRManager._maxPageBytes(budget)
+    });
+    if (!plan || plan.slots < ROI_MIN_SLOTS) {
+      _setRoiStatus({ active: false, level: k, baseLevel: entry.lod, capacity: plan ? plan.slots : 0, reason: 'budget' });
+      return null;
+    }
+    const mgr = new SVRManager();
+    try {
+      mgr.init(channels, dims, renderer, material, {
+        role: 'detail', components, targetSlots: plan.slots, budgetBytes: plan.bytes, countLiveAtlases: false
+      });
+    } catch (err) {
+      mgr.dispose();
+      SVRManager.unpublishDetail(material);
+      console.warn(`[VolumeViewer] Detail atlas for level ${k} refused: ${err?.message || err}`);
+      _setRoiStatus({ active: false, level: k, baseLevel: entry.lod, capacity: 0, reason: 'alloc-failed' });
+      return null;
+    }
+    return { entry, level: k, mgr, channels, dims, bricks: null, inFlight: new Set(), controller: null, seq: 0, loaded: 0 };
+  }
+
+  /**
+   * One round: choose the level the view needs, rank its bricks in view, keep what is
+   * resident and wanted, load what is missing (one loader batch, group 'roi').
+   */
+  async function _roiUpdate() {
+    if (!renderer || !camera || !cube || !material || _contextLost) return;
+    if (_roiMode === 'off') { _roiTeardown('off'); return; }
+    const entry = _activeVolumeEntry;
+    const ready = entry && !entry.disposed && Number.isInteger(entry.lod) && entry.manifest && entry.treePath
+      && typeof BrickLoader !== 'undefined' && typeof SVRManager !== 'undefined' && typeof SVRRoi !== 'undefined';
+    if (!ready) { _roiTeardown('no-volume'); return; }
+    if (_fgStreamActive > 0 || _transitionEntry) { _setRoiStatus({ reason: 'streaming' }); return; }   // re-run when the stream ends
+    if (entry.lod === 0) { _roiTeardown('finest'); _setRoiStatus({ baseLevel: 0, reason: 'finest' }); return; }
+    // v2 trees keep the 1.58 behaviour: their levels are not an isotropic pyramid and
+    // their packs are not grouped by region, so a few detail bricks would pull whole
+    // multi-MiB packs. Detail streaming is a v3 (bordered pyramid) feature.
+    if ((entry.treeVersion || 2) < 3 || BrickLoader.getTransportEncoding?.() === 'raw-rgba-gzip') { _roiTeardown('unsupported'); _setRoiStatus({ reason: 'unsupported' }); return; }
+    // A denoised channel is filtered in the dense texture only: raw detail bricks over it
+    // would show another picture.
+    if (_channelSigma.some(sigma => sigma > 0.05)) { _roiTeardown('denoise'); _setRoiStatus({ reason: 'denoise' }); return; }
+    if (BrickLoader.getManifest?.() !== entry.manifest) {
+      // Another tree of the same dataset is mounted (a cached timepoint was shown):
+      // mount this one; nothing running is cancelled by it.
+      try { await BrickLoader.init(entry.treePath, entry.manifest); } catch (e) { _roiTeardown('mount'); return; }
+      if (_activeVolumeEntry !== entry || _fgStreamActive > 0) return;
+    }
+    const levels = (BrickLoader.getFormat?.()?.levels || []).filter(l => l && l.dims);
+    const view = _roiViewGeometry();
+    const choice = SVRRoi.chooseDetailLevel({
+      levels: levels.map(l => ({ level: l.level, voxelWorld: Math.min(view.worldScale.x / l.dims.x, view.worldScale.y / l.dims.y) })),
+      baseLevel: entry.lod, focalPx: view.focalPx, distance: view.distance
+    });
+    if (choice.level === null) {
+      _roiTeardown('zoomed-out');
+      _setRoiStatus({ baseLevel: entry.lod, pixelsPerVoxel: choice.basePixelsPerVoxel, reason: 'zoomed-out' });
+      return;
+    }
+    const budget = _gpuBudgetBytes();
+    if (_roiMode === 'auto' && budget < ROI_AUTO_MIN_BUDGET) {
+      _roiTeardown('budget-low');
+      _setRoiStatus({ baseLevel: entry.lod, pixelsPerVoxel: choice.basePixelsPerVoxel, reason: 'budget-low' });
+      return;
+    }
+    let roi = _roi;
+    if (roi && (roi.level !== choice.level || roi.entry !== entry)) { _roiTeardown('level'); roi = null; }
+    if (!roi) {
+      roi = _roiCreate(entry, choice.level, budget);
+      if (!roi) return;
+      _roi = roi;
+    }
+    const seq = ++_roiSeq;
+    roi.seq = seq;
+    const texToWorld = _roiTextureToWorld();
+    if (!roi.bricks) roi.bricks = BrickLoader.activeBricks(roi.level);
+    const clip = _warpActive
+      ? { min: { x: 0, y: 0, z: 0 }, max: { x: 1, y: 1, z: 1 } }
+      : { min: { x: clipPlanes.xMin, y: clipPlanes.yMin, z: clipPlanes.zMin }, max: { x: clipPlanes.xMax, y: clipPlanes.yMax, z: clipPlanes.zMax } };
+    const ranked = SVRRoi.rankVisible({
+      bricks: roi.bricks, dims: roi.dims, planes: _roiFrustumPlanes(texToWorld),
+      clipMin: clip.min, clipMax: clip.max, worldScale: view.worldScale,
+      project: _roiProjector(texToWorld), near: camera.near, brickSize: VOLUME_BRICK_SIZE
+    });
+    const keyXYZ = (key) => key.split('_').map(Number);
+    const plan = SVRRoi.plan({
+      ranked,
+      isResident: (key) => { const [x, y, z] = keyXYZ(key); return roi.mgr.has(x, y, z); },
+      inFlight: roi.inFlight,
+      capacity: roi.mgr.maxSlots,
+      residentKeys: roi.mgr.residentKeys()
+    });
+    for (const key of plan.keep) { const [x, y, z] = keyXYZ(key); roi.mgr.touch(x, y, z); }
+    roi.wanted = new Set(plan.want);
+    const residentInView = () => { let n = 0; for (const key of roi.wanted) { const [x, y, z] = keyXYZ(key); if (roi.mgr.has(x, y, z)) n++; } return n; };
+    const status = (extra = {}) => _setRoiStatus({
+      active: true, level: roi.level, baseLevel: entry.lod, inView: plan.inView, resident: residentInView(),
+      capacity: roi.mgr.maxSlots, pixelsPerVoxel: choice.basePixelsPerVoxel, ...extra
+    });
+    _scheduleFrame();
+    // The running batch goes on when it fetches exactly bricks still wanted and nothing
+    // else is missing; otherwise it is replaced by one fetching every wanted brick not
+    // resident (what it had in flight included).
+    const wantSet = roi.wanted;
+    const stale = [...roi.inFlight].some(k => !wantSet.has(k));
+    if (!plan.load.length && !stale) {
+      if (!roi.inFlight.size) status({ loading: 0, loaded: 0, reason: 'ready' });
+      return;
+    }
+    const missing = ranked.slice(0, roi.mgr.maxSlots).filter(r => !roi.mgr.has(...keyXYZ(r.key)));
+    if (!missing.length) {
+      try { roi.controller?.abort(); } catch (e) { /* already aborted */ }
+      roi.inFlight = new Set();
+      status({ loading: 0, loaded: 0, reason: 'ready' });
+      return;
+    }
+    try { roi.controller?.abort(); } catch (e) { /* already aborted */ }
+    const controller = typeof AbortController === 'function' ? new AbortController() : null;
+    roi.controller = controller;
+    roi.batchSeq = seq;
+    roi.inFlight = new Set(missing.map(b => b.key));
+    let loaded = 0;
+    status({ loading: missing.length, loaded: 0, reason: 'loading' });
+    const stopped = () => roi !== _roi || roi.batchSeq !== seq || _contextLost;
+    const tasks = [];
+    for (const b of missing) for (let c = 0; c < roi.channels; c++) tasks.push({ bx: b.bx, by: b.by, bz: b.bz, channel: c, lod: roi.level });
+    const bs = VOLUME_BRICK_SIZE;
+    const stride = roi.mgr.slotStride;
+    let lastStatusAt = 0;
+    const outcome = await BrickLoader.loadBrickTasks(tasks, {
+      manifest: entry.manifest,
+      group: 'roi',
+      streamOnly: true,
+      concurrency: ROI_CONCURRENCY,
+      signal: controller?.signal,
+      shouldAbort: stopped,
+      compose: { channels: roi.channels, luts: entry.floorLuts || [], components: roi.mgr.components, cropToVolume: true },
+      onBrickLoaded: (row) => {
+        if (roi !== _roi || !row?.data) return;
+        const r = row.region;
+        const bw = r ? r.x1 - r.x0 : (stride > bs ? stride : Math.min(bs, roi.dims.x - row.bx * bs));
+        const bh = r ? r.y1 - r.y0 : (stride > bs ? stride : Math.min(bs, roi.dims.y - row.by * bs));
+        const bd = r ? r.z1 - r.z0 : (stride > bs ? stride : Math.min(bs, roi.dims.z - row.bz * bs));
+        const key = `${row.bx}_${row.by}_${row.bz}`;
+        roi.inFlight.delete(key);
+        if (roi.mgr.writeRgbaBrick(row.bx, row.by, row.bz, row.data, bw, bh, bd)) loaded++;
+        _scheduleStreamRedraw();
+        const now = Date.now();
+        if (roi.batchSeq === seq && now - lastStatusAt > 200) { lastStatusAt = now; status({ loading: missing.length, loaded, reason: 'loading' }); }
+      },
+      onBrickError: ({ bx, by, bz } = {}) => { roi.inFlight.delete(`${bx}_${by}_${bz}`); }
+    }).catch((err) => {
+      // Another tree got mounted while this round waited (a timepoint prefetch's index):
+      // these coordinates are not its bricks. The next round mounts the frame again.
+      if (err?.code === 'BRICKS_MOUNT_CHANGED') return { mountChanged: true };
+      throw err;
+    });
+    if (outcome?.mountChanged) {
+      if (roi === _roi && roi.batchSeq === seq) { roi.inFlight = new Set(); _roiSchedule('mount'); }
+      return;
+    }
+    if (roi !== _roi) return;
+    roi.mgr.flushUploadErrors();
+    if (roi.batchSeq !== seq) return;
+    roi.inFlight = new Set();
+    _scheduleFrame();
+    status({ loading: 0, loaded, reason: 'ready' });
   }
 
   // ── WebGL context loss ──────────────────────────────────────────────────────
@@ -6847,6 +7463,7 @@ const VolumeViewer = (() => {
     material.uniforms.mapOccupancy.value = null;
     material.uniforms.svrPageCount.value = 0;
     if (material.defines?.ENABLE_SVR) { delete material.defines.ENABLE_SVR; material.needsUpdate = true; }
+    if (material.defines && 'SVR_COMPONENTS' in material.defines) { delete material.defines.SVR_COMPONENTS; material.needsUpdate = true; }
   }
 
   /**
@@ -6857,6 +7474,7 @@ const VolumeViewer = (() => {
   function _detachActiveVolume() {
     const prev = _activeVolumeEntry;
     if (!prev) return;
+    _roiTeardown('volume-changed');
     _activeVolumeEntry = null;
     _activeTextureKey = null;
     _svrManager = null;
@@ -6867,6 +7485,7 @@ const VolumeViewer = (() => {
 
   /** Free every volume (cache, screen, cross-fade) and unbind them from the material. */
   function _releaseAllVolumes() {
+    _roiTeardown('released');
     const crossFading = _transitionEntry;
     _clearTransitionVolume();
     if (crossFading) _disposeVolumeEntry(crossFading, { force: true });
@@ -6948,6 +7567,7 @@ const VolumeViewer = (() => {
   function dispose() {
     _cancelStream(_brickStreamAbort);
     _cancelStream(_preloadStreamAbort);
+    if (_roiTimer) { clearTimeout(_roiTimer); _roiTimer = null; }
     _loadCounter++;
     if (animationId) { cancelAnimationFrame(animationId); animationId = null; }
     if (_interactionTimeout) { clearTimeout(_interactionTimeout); _interactionTimeout = null; }
@@ -7007,7 +7627,7 @@ const VolumeViewer = (() => {
     _contextLossTimes.length = 0;
   }
 
-  function _lodForQuality(quality, levelCount, levels = null) {
+  function _lodForQuality(quality, levelCount, levels = null, v3 = false) {
     const maxIdx = Math.max(0, levelCount - 1);
     if (!quality || quality === 'native') return 0;
 
@@ -7020,6 +7640,16 @@ const VolumeViewer = (() => {
     const match = quality.match(/^(\d+)x\d+$/);
     if (match) {
       const targetSize = parseInt(match[1], 10);
+      // v3 (SPEC §13.7): the finest level whose larger XY side is at most 1.5 × the
+      // preset ("512" ≤ 768, "1024" ≤ 1536), the coarsest when none is that small.
+      if (v3 && Array.isArray(levels) && levels.length) {
+        const limit = 1.5 * targetSize;
+        for (let i = 0; i < levels.length; i++) {
+          const d = levels[i]?.dimensions;
+          if (d && Math.max(Number(d.x) || 0, Number(d.y) || 0) <= limit) return Math.min(i, maxIdx);
+        }
+        return Math.min(levels.length - 1, maxIdx);
+      }
       if (levels && Array.isArray(levels)) {
         let bestLod = 0;
         let minDiff = Infinity;
@@ -7234,9 +7864,50 @@ const VolumeViewer = (() => {
     });
   }
 
+  /**
+   * The manifest of one tree (one timepoint of a timelapse) and its path under the
+   * brick directory. v2: the timepoint's row overrides channels / levels / histograms /
+   * transport. v3 (SPEC §13.3): `timepoints` is an array of { path, index } rows; the
+   * tree is `bricks/<path>`, its own index.bin given relative to `bricks/` (so it must
+   * lie inside `<path>/`); levels and channels are the root manifest's.
+   */
   function _selectBrickManifestForTimepoint(manifest, timepoint) {
     if (!manifest || typeof manifest !== 'object') {
       return { available: false, reason: 'Invalid brick manifest payload' };
+    }
+    const memoKey = manifest.timepoints ? (Number.isFinite(Number(timepoint)) ? Number(timepoint) : 0) : 'root';
+    let memo = _tpManifestMemo.get(manifest);
+    if (!memo) { memo = new Map(); _tpManifestMemo.set(manifest, memo); }
+    if (memo.has(memoKey)) return memo.get(memoKey);
+    const result = _selectBrickManifestUncached(manifest, timepoint);
+    if (result.available) memo.set(memoKey, result);
+    return result;
+  }
+
+  function _selectBrickManifestUncached(manifest, timepoint) {
+    if (_isV3Manifest(manifest) && Array.isArray(manifest.timepoints)) {
+      const tp = Number.isFinite(Number(timepoint)) ? Number(timepoint) : 0;
+      const name = `t${String(tp).padStart(3, '0')}`;
+      const row = manifest.timepoints.find(r => r && r.path === name) || manifest.timepoints[tp] || null;
+      if (!row || !row.index || typeof row.index.url !== 'string') {
+        return { available: false, reason: `No bricks for requested timepoint ${tp}` };
+      }
+      const sub = String(row.path || name).replace(/^\/+|\/+$/g, '');
+      const url = String(row.index.url).replace(/^\/+/, '');
+      if (!sub || !url.startsWith(`${sub}/`)) {
+        return { available: false, reason: `Timepoint ${tp}: index ${url} is not inside its tree ${sub}/` };
+      }
+      // The frame's own histograms (SPEC §13.3 `timepointHistograms`), as a v2 row's:
+      // they set the frame's background floor, so the picture matches the v2 one.
+      const own = manifest.timepointHistograms && typeof manifest.timepointHistograms === 'object'
+        ? manifest.timepointHistograms[sub] : null;
+      const histograms = Array.isArray(own) ? own : (Array.isArray(manifest.histograms) ? manifest.histograms : []);
+      return {
+        available: true,
+        manifest: { ...manifest, timepoints: null, histograms, index: { ...row.index, url: url.slice(sub.length + 1) } },
+        subPath: sub,
+        histograms
+      };
     }
     const hasTimepoints = manifest.timepoints && typeof manifest.timepoints === 'object';
     if (!hasTimepoints) {

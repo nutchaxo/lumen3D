@@ -20,12 +20,23 @@ Sources (2) and (3) are raw observations: they carry spot positions, track membe
 classification, but no unique cell identity, no lineage and no stabilisation. Those are
 produced here by calling the lab's own analysis code (``SCRIPTS/Analysis.py``) rather than a
 second implementation — a dataset must yield the same tracks whether it went through the
-tracking pipeline or through this shortcut. The population surfaces are NOT rebuilt here:
-only a container (1) can bring a ``model.glb``; a dataset attached from (2) or (3) gets
-cells and trails, and its surface layer stays empty until the tracking pipeline is run.
+tracking pipeline or through this shortcut. The population surfaces are rebuilt the same way:
+``build_surface_glb`` runs the pipeline's ``Analysis.compute_embryo_surfaces`` (same
+parameters) on the cells of the normalised document and writes the GLB with the pipeline's
+own encoder (``export_html.export_surface_glb``), so a dataset attached from (2) or (3) — or
+from a container exported without its ``.glb`` — gets the same ``model.glb`` layout
+(``stab_tp_*``/``raw_tp_*``/``*_interp`` nodes) as one that went through the pipeline.
+
+Units. Imaris stores object positions in the dataset's unit (a ``Unit`` attribute on the
+Scene8 object, else on ``DataSetInfo/Image``; a ``Unit`` column on the Position sheet).
+Everything downstream — the volume extent, the registration, the 60 um matching threshold
+of the analysis — is in micrometres, so positions are converted with the very table
+``1-ims_metadata.py`` converts the volume extent with (``UNIT_TO_UM``): exactly
+``p_um = p_file * UNIT_TO_UM[unit]``. An unknown unit is never guessed: the coordinates are
+kept as they are and the document says so (``provenance.unit.status == "unknown"``).
 
 CLI (diagnostics):
-    python tracking_sources.py <file.ims|file.xls|file.xlsx> [--list] [--out <container>]
+    python tracking_sources.py <file.ims|file.xls|file.xlsx> [--list] [--out <container>] [--glb <surface.glb>]
 """
 import argparse
 import gzip
@@ -39,7 +50,7 @@ from pathlib import Path
 
 import numpy as np
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 SIGNATURE = "IMARIS_TRACKER_V1"
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -61,6 +72,68 @@ _POSITION_RESERVED = {
     "time", "time index", "trackid", "track id", "id", "birth", "death",
     "referenceframe", "reference frame", "class", "image", "channel", "level",
 }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  Units — the same table and the same default as the volume extent conversion
+# ─────────────────────────────────────────────────────────────────────────────
+
+_IMS_METADATA = None
+
+
+def _ims_metadata_module():
+    """``1-ims_metadata.py`` (its name is not an identifier, so it is loaded by path)."""
+    global _IMS_METADATA
+    if _IMS_METADATA is None:
+        script = SCRIPT_DIR / "1-ims_metadata.py"
+        spec = importlib.util.spec_from_file_location("lumen_ims_metadata", str(script))
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        _IMS_METADATA = module
+    return _IMS_METADATA
+
+
+def unit_factor(raw):
+    """``(factor to um or None, declared label)`` for a unit string.
+
+    ``None``/empty means "not declared" and resolves to ``um``, exactly as
+    ``read_ims_metadata`` does for the extent (Imaris writes um unless told otherwise).
+    """
+    label = (str(raw).strip() if raw is not None else "") or "um"
+    factor = _ims_metadata_module().UNIT_TO_UM.get(label.lower())
+    return factor, label
+
+
+def unit_record(label, factor, assumed=False) -> dict:
+    """Provenance entry describing how positions were brought to micrometres."""
+    if factor is None:
+        status = "unknown"
+    elif assumed:
+        status = "assumed"
+    elif factor == 1.0:
+        status = "native"
+    else:
+        status = "converted"
+    return {"declared": label, "toUm": factor, "status": status}
+
+
+def unknown_unit_warning(label) -> str:
+    return (f"unite des positions inconnue {label!r} : coordonnees laissees telles quelles, "
+            f"les pistes ne seront PAS alignees sur le volume (attendu : "
+            f"{', '.join(sorted(set(_ims_metadata_module().UNIT_TO_UM)))})")
+
+
+def ims_unit(ims_path, group_path: str = None):
+    """Unit label declared by an .ims: the object's own ``Unit``, else the image's."""
+    import h5py
+    md = _ims_metadata_module()
+    with h5py.File(str(ims_path), "r") as f:
+        if group_path and group_path in f:
+            label = md.attr_str(f[group_path], "Unit", "")
+            if label:
+                return label
+        info = f.get("DataSetInfo/Image")
+        return md.attr_str(info, "Unit", "") if info is not None else ""
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -321,7 +394,17 @@ def read_scene8(ims_path) -> dict:
             region_of_spot = {sid: mapping[tid] for sid, tid in track_of_spot.items() if tid in mapping}
             region_source = f"{gname} (pistes)"
 
+        # Positions (and radii) are in the object's unit; the object declares it, else the
+        # image does. p_um = p_file * factor, applied once here so that the analysis (whose
+        # matching threshold is in um) and the registration both see micrometres.
+        md = _ims_metadata_module()
+        declared = md.attr_str(group, "Unit", "") or md.attr_str(f.get("DataSetInfo/Image"), "Unit", "")
+        factor, label = unit_factor(declared)
+        scale = factor if factor is not None else 1.0
+        has_radius = spot.dtype.names is not None and "Radius" in spot.dtype.names
+
         rows = []
+        radii = []
         untimed = 0
         for s in spot:
             sid = int(s[0])
@@ -332,26 +415,37 @@ def read_scene8(ims_path) -> dict:
             rows.append({
                 "cell_id": sid,
                 "timepoint": float(frame),
-                "x": float(s[1]),
-                "y": float(s[2]),
-                "z": float(s[3]),
+                "x": float(s[1]) * scale,
+                "y": float(s[2]) * scale,
+                "z": float(s[3]) * scale,
                 "track_id": track_of_spot.get(sid),
                 "region": region_of_spot.get(sid, "Unknown"),
             })
+            if has_radius:
+                radii.append(float(s["Radius"]) * scale)
 
+    warnings = [f"{untimed} spots sans timepoint ignores"] if untimed else []
+    if factor is None:
+        warnings.append(unknown_unit_warning(label))
+    provenance = {
+        "kind": "scene8",
+        "file": ims_path.name,
+        "object": obj_key,
+        "spots": len(rows),
+        "tracks": len(tracks),
+        "regionColumn": region_source,
+        "timeBase": SCENE8_TIME_BASE,
+        "unit": unit_record(label, factor, assumed=not declared),
+    }
+    if radii:
+        provenance["spotRadiusUm"] = {"min": float(min(radii)),
+                                      "median": float(np.median(radii)),
+                                      "max": float(max(radii))}
     return {
         "rows": rows,
         "regionSource": region_source,
-        "warnings": ([f"{untimed} spots sans timepoint ignores"] if untimed else []),
-        "provenance": {
-            "kind": "scene8",
-            "file": ims_path.name,
-            "object": obj_key,
-            "spots": len(rows),
-            "tracks": len(tracks),
-            "regionColumn": region_source,
-            "timeBase": SCENE8_TIME_BASE,
-        },
+        "warnings": warnings,
+        "provenance": provenance,
     }
 
 
@@ -422,8 +516,14 @@ def _pick_position_sheet(path: Path):
     return fallback if fallback else (None, None, None, None)
 
 
-def read_excel(path) -> dict:
-    """Flat per-spot table read from an Imaris statistics workbook."""
+def read_excel(path, default_unit=None) -> dict:
+    """Flat per-spot table read from an Imaris statistics workbook.
+
+    Positions are converted to micrometres row by row from the sheet's ``Unit`` column (Imaris
+    writes one on every row). A sheet without one takes ``default_unit`` — the unit of the
+    volume it belongs to, when the caller knows it — and otherwise is assumed to be in um,
+    which is what the hand-made flat tables (``x_um`` …) are in; the provenance says which.
+    """
     path = Path(path)
     sheet_name, rows, head, layout = _pick_position_sheet(path)
     if rows is None:
@@ -444,6 +544,7 @@ def read_excel(path) -> dict:
     it = col("time", "timepoint", "time index", "frame", "t")
     iid = col("id", "cell_id", "spot_id", "object_id")
     itrack = col("trackid", "track_id", "track id")
+    iunit = col("unit")
 
     if None in (ix, iy, iz):
         raise ValueError(f"{path.name} / {sheet_name}: colonnes de position introuvables")
@@ -457,6 +558,11 @@ def read_excel(path) -> dict:
                 ireg, region_name = i, header[i]
                 break
 
+    if iunit is None:
+        sheet_factor, sheet_label = unit_factor(default_unit)
+        sheet_assumed = not default_unit
+    factors_seen = {}
+
     out, skipped = [], 0
     for raw in rows[head + 1:]:
         if raw is None or len(raw) <= max(ix, iy, iz):
@@ -467,6 +573,14 @@ def read_excel(path) -> dict:
         except (TypeError, ValueError):
             skipped += 1
             continue
+        if iunit is not None:
+            cell = raw[iunit] if iunit < len(raw) else None
+            factor, label = unit_factor(cell if cell not in (None, "") else default_unit)
+        else:
+            factor, label = sheet_factor, sheet_label
+        factors_seen[label] = factor
+        if factor is not None:
+            x, y, z = x * factor, y * factor, z * factor
         entry = {"x": x, "y": y, "z": z}
         entry["timepoint"] = _as_float(raw[it]) if it is not None else 1.0
         entry["cell_id"] = _as_float(raw[iid]) if iid is not None else float(len(out) + 1)
@@ -489,6 +603,19 @@ def read_excel(path) -> dict:
         warnings.append(f"{fractional} valeurs de temps non entieres dans '{header[it]}' : "
                         f"la colonne est lue comme un numero de frame — verifiez l'export")
 
+    unknown = sorted(label for label, factor in factors_seen.items() if factor is None)
+    for label in unknown:
+        warnings.append(unknown_unit_warning(label))
+    if len(factors_seen) == 1:
+        (label, factor), = factors_seen.items()
+        unit = unit_record(label, factor, assumed=(iunit is None and sheet_assumed))
+    else:
+        # Several units on one sheet: every row was converted with its own factor.
+        unit = {"declared": sorted(factors_seen), "toUm": None if unknown else "per-row",
+                "status": "unknown" if unknown else "converted"}
+    if iunit is None and default_unit:
+        unit["from"] = "volume"
+
     return {
         "rows": out,
         "regionSource": region_name,
@@ -500,6 +627,7 @@ def read_excel(path) -> dict:
             "layout": layout,
             "spots": len(out),
             "regionColumn": region_name,
+            "unit": unit,
         },
     }
 
@@ -659,6 +787,85 @@ def build_container(table: dict, dataset_name: str, verbose: bool = True) -> dic
     }
 
 
+def surface_frame(doc: dict):
+    """The analysis' per-spot table (``unique_cell_id``, ``timepoint``, raw ``x/y/z`` and
+    stabilised ``x_stab/y_stab/z_stab``) rebuilt from a tracker document.
+
+    The document holds exactly the columns ``compute_embryo_surfaces`` reads (``x`` = the
+    stabilised position, ``x_raw`` = the acquisition one, as ``export_imaris_track`` wrote
+    them), so the surfaces of any source are computed from the same numbers the pipeline
+    used. Rows are ordered by (timepoint, cell id) so that the point clouds — and with them
+    the Delaunay triangulations — do not depend on the order a source listed its spots in.
+    Returns ``(frame, has_raw)``.
+    """
+    import pandas as pd
+
+    cells = (doc.get("data") or {}).get("cells") or []
+    has_raw = bool(cells) and all(all(k in c for k in ("x_raw", "y_raw", "z_raw")) for c in cells)
+    records = []
+    for c in cells:
+        for i, t in enumerate(c["t"]):
+            row = {"unique_cell_id": int(c["id"]), "timepoint": float(t),
+                   "x_stab": float(c["x"][i]), "y_stab": float(c["y"][i]),
+                   "z_stab": float(c["z"][i])}
+            if has_raw:
+                row.update({"x": float(c["x_raw"][i]), "y": float(c["y_raw"][i]),
+                            "z": float(c["z_raw"][i])})
+            records.append(row)
+    frame = pd.DataFrame.from_records(records)
+    if len(frame):
+        frame = frame.sort_values(["timepoint", "unique_cell_id"], kind="mergesort")
+        frame = frame.reset_index(drop=True)
+    return frame, has_raw
+
+
+def build_surface_glb(doc: dict, glb_path, verbose: bool = True):
+    """Reconstruct the population surfaces of a tracker document into ``glb_path``.
+
+    Same reconstruction, same parameters and same GLB encoding as the tracking pipeline
+    (``Analysis.compute_embryo_surfaces`` → ``export_html.export_surface_glb``): one mesh per
+    timepoint and per coordinate system, nodes ``stab_tp_<t>``/``raw_tp_<t>`` and their
+    ``*_interp`` counterparts, a ``_DENSITY`` attribute, the document in the scene extras.
+    A document without raw coordinates gets the stabilised meshes only. The file is written
+    atomically. Returns the path, or None when no timepoint had enough cells (>= 4) for a
+    surface.
+    """
+    A = load_analysis()
+    import export_html  # sibling of Analysis.py, on sys.path once load_analysis() ran
+
+    frame, has_raw = surface_frame(doc)
+    if frame.empty:
+        return None
+    systems = ("stab", "raw") if has_raw else ("stab",)
+    surface_data = A.compute_embryo_surfaces(frame, coord_systems=systems)
+    if not any(m is not None for meshes in surface_data.values() for m in meshes.values()):
+        return None
+
+    glb_path = Path(glb_path)
+    glb_path.parent.mkdir(parents=True, exist_ok=True)
+    staged = glb_path.with_name(f".{glb_path.name}.{os.getpid()}.tmp")
+    try:
+        export_html.export_surface_glb(surface_data, doc, doc.get("dataset_name") or glb_path.stem,
+                                       str(staged))
+        os.replace(staged, glb_path)
+    finally:
+        if staged.exists():
+            staged.unlink()
+    if verbose:
+        print(f"  [TRACKING] surfaces reconstruites : {glb_path.name} "
+              f"({glb_path.stat().st_size / 1e6:.2f} MB, {'stab+raw' if has_raw else 'stab'})")
+    return glb_path
+
+
+def _surface_beside(doc: dict, container: Path, verbose: bool):
+    """Build ``<container>.glb``; a failure costs the surface layer, never the tracks."""
+    try:
+        return build_surface_glb(doc, container.with_suffix(".glb"), verbose=verbose)
+    except Exception as exc:
+        print(f"  [TRACKING] [!] surfaces non reconstruites : {exc}")
+        return None
+
+
 def write_container(doc: dict, path) -> Path:
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -672,11 +879,31 @@ def write_container(doc: dict, path) -> Path:
 #  Top level
 # ─────────────────────────────────────────────────────────────────────────────
 
-def read_source(source: TrackingSource) -> dict:
+def _volume_unit(ims_path):
+    """Unit the volume beside a workbook is in, or None when there is no readable .ims."""
+    ims_path = Path(ims_path) if ims_path else None
+    if ims_path is None or ims_path.suffix.lower() != ".ims" or not ims_path.is_file():
+        return None
+    try:
+        return ims_unit(ims_path) or None
+    except Exception:
+        return None
+
+
+def _ims_beside(workbook: Path):
+    """The volume a workbook was exported from, in the two layouts the lab ships."""
+    stem = workbook.stem[:-len("_analysis")] if workbook.stem.endswith("_analysis") else workbook.stem
+    for cand in (workbook.parent / f"{stem}.ims", workbook.parent.parent / f"{stem}.ims"):
+        if cand.is_file():
+            return cand
+    return None
+
+
+def read_source(source: TrackingSource, ims_path=None) -> dict:
     if source.kind == "scene8":
         return read_scene8(source.path)
     if source.kind == "excel":
-        return read_excel(source.path)
+        return read_excel(source.path, default_unit=_volume_unit(ims_path))
     raise ValueError(f"source {source.kind} is already a container")
 
 
@@ -739,7 +966,7 @@ def resolve(ims_path, workdir, dataset_name=None, verbose=True):
                 return source.path, source, source.glb
             if verbose:
                 print(f"  [TRACKING] source : {source.describe()}")
-            table = read_source(source)
+            table = read_source(source, ims_path)
             if not table or not table.get("rows"):
                 errors.append(f"{source.kind}: aucune donnee exploitable")
                 continue
@@ -751,7 +978,7 @@ def resolve(ims_path, workdir, dataset_name=None, verbose=True):
                 print(f"  [TRACKING] classification : {table['regionSource']}")
             doc = build_container(table, dataset_name, verbose=verbose)
             out = write_container(doc, Path(workdir) / f"{dataset_name}{CONTAINER_SUFFIX}")
-            return out, source, None
+            return out, source, _surface_beside(doc, out, verbose)
         except Exception as exc:
             errors.append(f"{source.kind}: {exc}")
             if verbose:
@@ -772,7 +999,9 @@ def materialize(path, workdir, dataset_name=None) -> Path:
         return path
     dataset_name = dataset_name or path.stem
     doc = load_document(path)
-    return write_container(doc, Path(workdir) / f"{dataset_name}{CONTAINER_SUFFIX}")
+    out = write_container(doc, Path(workdir) / f"{dataset_name}{CONTAINER_SUFFIX}")
+    _surface_beside(doc, out, verbose=True)
+    return out
 
 
 def load_document(path) -> dict:
@@ -791,7 +1020,7 @@ def load_document(path) -> dict:
             raise ValueError(f"{path.name}: aucun objet de tracking dans Scene8")
         _merge_regions_from_excel(table, path, verbose=True)
     elif path.suffix.lower() in EXCEL_SUFFIXES:
-        table = read_excel(path)
+        table = read_excel(path, default_unit=_volume_unit(_ims_beside(path)))
     else:
         raise ValueError(f"{path.name}: format non supporte "
                          f"(.imaris_track, .ims, {', '.join(EXCEL_SUFFIXES)})")
@@ -809,6 +1038,8 @@ def main():
                     help="lister les sources detectees sans rien convertir")
     ap.add_argument("--out", default=None,
                     help="ecrire le conteneur .imaris_track normalise a ce chemin")
+    ap.add_argument("--glb", default=None,
+                    help="reconstruire les surfaces de population dans ce .glb")
     args = ap.parse_args()
 
     path = Path(args.input)
@@ -828,9 +1059,15 @@ def main():
     prov = data.get("provenance") or {}
     if prov:
         print("provenance : " + ", ".join(f"{k}={v}" for k, v in prov.items()))
+    unit = prov.get("unit")
+    if isinstance(unit, dict) and unit.get("status") == "unknown":
+        print(f"[!] {unknown_unit_warning(unit.get('declared'))}")
     if args.out:
         write_container(doc, args.out)
         print(f"ecrit      : {args.out}")
+    if args.glb:
+        built = build_surface_glb(doc, args.glb)
+        print(f"surfaces   : {built if built else 'aucun timepoint avec 4 cellules'}")
     return 0
 
 

@@ -7,6 +7,7 @@
   "tipSize": "Tamaño",
   "tipVox": "vox",
   "tipStored": "Almacenado",
+  "tipBorder": "almacenado en {n}³ con un borde de un vóxel",
   "tipFile": "Archivo",
   "tipChannels": "canales",
   "tipLod": "LOD",

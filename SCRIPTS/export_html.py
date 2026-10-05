@@ -1,5 +1,4 @@
 import json
-import orjson
 import os
 import gzip
 import datetime
@@ -17,6 +16,42 @@ def _normalize_region_value(value) -> str:
     if not text or text.lower() in {"nan", "none"}:
         return "Unknown"
     return text
+
+
+def _dumps(payload) -> bytes:
+    """orjson when installed (fast), else the standard encoder with the same compact form."""
+    try:
+        import orjson
+    except ImportError:
+        return json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    return orjson.dumps(payload)
+
+
+def export_surface_glb(surface_data, payload, sample_name, output_path):
+    """Write the surfaces of every coordinate system into ONE GLB.
+
+    Nodes are named ``<system>_tp_<t>`` (stab_tp_1_0, raw_tp_1_0, stab_interp_tp_1_5, ...);
+    the viewer picks the prefix that matches its stabilised/raw toggle. ``payload`` (the
+    tracker document) rides in the scene extras. Used by the pipeline below and by
+    preprocess/tracking_sources.py, so every tracking source yields the same layout.
+    """
+    from export_mesh import export_meshes_to_glb_parallel
+
+    merged_meshes = {}
+    for cs_name, mesh_results in surface_data.items():
+        for tp, data in mesh_results.items():
+            if data is not None:
+                merged_meshes[(cs_name, round(float(tp), 2))] = data
+
+    print(f"  -> Encoding merged stab+raw surface ({len(merged_meshes)} nodes)...")
+    export_meshes_to_glb_parallel(
+        mesh_results=merged_meshes,
+        track_data=payload,
+        dataset_name=sample_name,
+        output_path=output_path
+    )
+
+
 def export_imaris_track(df_dense, out_dir, sample_name, out_filename="cell_tracking.imaris_track",
                         neighbor_dist_df=None, neighbor_summary_df=None, surface_data=None):
     """
@@ -119,10 +154,7 @@ def export_imaris_track(df_dense, out_dir, sample_name, out_filename="cell_track
     if neighbor_summary_df is not None and not neighbor_summary_df.empty:
         track_data["neighbor_summary"] = _df_to_records(neighbor_summary_df)
 
-    # --- Surface mesh data ---
-    # We now delegate export to GLB via the new parallel export module
-    from export_mesh import export_meshes_to_glb_parallel
-    
+    # --- Surface mesh data: exported to a sibling GLB by export_surface_glb ---
     # Encapsulate into Master Envelope Payload
     dt_now = datetime.datetime.now()
     payload = {
@@ -134,31 +166,14 @@ def export_imaris_track(df_dense, out_dir, sample_name, out_filename="cell_track
     }
     
     if surface_data is not None:
-        # ─── Fusionner stab + raw en un seul GLB ───
-        # Les nodes seront nommés stab_tp_1_0, raw_tp_1_0, etc.
-        # Le viewer choisit le bon préfixe selon le toggle "Stabilisé"
-        merged_meshes = {}
-        for cs_name, mesh_results in surface_data.items():
-            for tp, data in mesh_results.items():
-                if data is not None:
-                    merged_meshes[(cs_name, round(float(tp), 2))] = data
-        
-        glb_filename = f"{sample_name}.glb"
-        out_path = os.path.join(out_dir, glb_filename)
-        print(f"  -> Encoding merged stab+raw surface ({len(merged_meshes)} nodes)...")
-        export_meshes_to_glb_parallel(
-            mesh_results=merged_meshes,
-            track_data=payload,
-            dataset_name=sample_name,
-            output_path=out_path
-        )
+        export_surface_glb(surface_data, payload, sample_name,
+                           os.path.join(out_dir, f"{sample_name}.glb"))
     else:
         print("  [ERROR] No surface meshes provided for export.")
 
     # Always write the imaris_track JSON payload separately so the viewer drag&drop validator passes
     track_filepath = os.path.join(out_dir, out_filename)
-    import gzip, orjson
     with gzip.open(track_filepath, 'wb') as f:
         # We append a simple text header so we can detect it easily if needed, then dump JSON
         f.write(b"IMARIS_TRACKER_V1\n")
-        f.write(orjson.dumps(payload))
+        f.write(_dumps(payload))

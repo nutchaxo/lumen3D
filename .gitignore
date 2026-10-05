@@ -67,6 +67,8 @@ api/trusted-proxies.json
 # the busy files a Windows update parks for the next request)
 api/.sessions/
 api/.bruteforce/
+api/.telemetry/
+api/marketplace-state.json
 api/.locks/
 api/.catalog-cache.json
 api/.plugin-hash-cache.json

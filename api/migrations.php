@@ -8,7 +8,10 @@
  *   POST ?action=unit_run   { dataset, migration, maxSeconds, dry }
  *   POST ?action=finalize   { dataset, migration, maxSeconds? }   (complete:false ⇒ call again)
  *   POST ?action=cancel     { dataset, migration }
- *   POST ?action=bench      { dataset, units: N }
+ *   POST ?action=bench      { dataset, units: N, migration? }
+ *   POST ?action=unit_inputs { dataset, migration, unit }        what a browser unit reads
+ *   GET  ?action=store_get&dataset=&migration=m004-bricks-v3&brick=t.k.c.z.y.x   one stored
+ *        v3 brick (octet-stream), 404 {error:"absent"} when the brick was dropped
  *
  * Contract: DOCS/dataset-migrations/SPEC.md §5; engine: api/_migrations_lib.php.
  * Every action needs the admin session; every POST also the CSRF header. The session
@@ -47,8 +50,27 @@ foreach (['dataset', 'migration', 'unit', 'dry'] as $k) {
 // unit_put's body is the raw unit blob, streamed by the engine; every other POST is JSON.
 $body = ($method === 'POST' && $action !== 'unit_put') ? (lumen_request_json() ?? []) : [];
 
+if (in_array($action, LUMEN_MIG_BINARY_ACTIONS, true)) {
+    if ($method !== 'GET') admin_json_out(['error' => 'Method not allowed (use GET)'], 405);
+    foreach (['brick'] as $k) {
+        $v = lumen_str($_GET[$k] ?? null);
+        if ($v !== null) $params[$k] = $v;
+    }
+    [$status, $type, $data, $file] = lumen_mig_handle_binary($action, $params);
+    http_response_code($status);
+    header('Content-Type: ' . $type);
+    header('Cache-Control: no-store');
+    if ($file !== null) {
+        header('Content-Length: ' . filesize($file));
+        readfile($file);
+    } else {
+        echo $data;
+    }
+    exit;
+}
+
 switch ($action) {
-case 'status': case 'plan': case 'unit_put': case 'unit_run': case 'finalize': case 'cancel': case 'bench':
+case 'status': case 'plan': case 'unit_put': case 'unit_run': case 'finalize': case 'cancel': case 'bench': case 'unit_inputs':
     [$status, $payload] = lumen_mig_handle($action, $params, $body);
     admin_json_out($payload, $status);
 }

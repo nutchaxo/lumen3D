@@ -9,6 +9,8 @@
  *    The decoder accepts all five filter types.
  *  - plane packs `zNNNNN.bin`: 16-byte header "LPLN" + C·TY·TX entries {u64 offset, u32 length},
  *    little-endian, c-major then ty then tx; length 0 = an all-zero tile without payload.
+ *    A format-3 layer-MIP pack `mips/lNNNNN.bin` (SPEC §12) has the same layout with the
+ *    magic "LMIP" and the layer index in the `z` field.
  *
  * Classic script, usable from a window and from a worker (importScripts). No DOM.
  */
@@ -17,6 +19,8 @@ const PlaneCodec = (() => {
 
     const PNG_SIGNATURE = new Uint8Array([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]);
     const PACK_MAGIC = 'LPLN';
+    const MIPS_MAGIC = 'LMIP';
+    const PACK_MAGICS = [PACK_MAGIC, MIPS_MAGIC];
     const PACK_VERSION = 1;
     const PACK_FIXED_BYTES = 16;
     const PACK_ENTRY_BYTES = 12;
@@ -215,7 +219,9 @@ const PlaneCodec = (() => {
         return (c * tilesY + ty) * tilesX + tx;
     }
 
-    function buildPackHeader({ channels, tilesX, tilesY, z, entries }) {
+    function buildPackHeader({ channels, tilesX, tilesY, z, entries, magic }) {
+        magic = magic === undefined ? PACK_MAGIC : magic;
+        if (!PACK_MAGICS.includes(magic)) throw new Error('PlaneCodec.buildPackHeader: unknown magic');
         const n = channels * tilesX * tilesY;
         if (!Array.isArray(entries) || entries.length !== n) throw new Error('PlaneCodec.buildPackHeader: need C·TY·TX entries');
         for (const v of [channels, tilesX, tilesY]) {
@@ -223,7 +229,7 @@ const PlaneCodec = (() => {
         }
         const out = new Uint8Array(headerBytes(channels, tilesX, tilesY));
         const dv = new DataView(out.buffer);
-        for (let i = 0; i < 4; i++) out[i] = PACK_MAGIC.charCodeAt(i);
+        for (let i = 0; i < 4; i++) out[i] = magic.charCodeAt(i);
         dv.setUint16(4, PACK_VERSION, true);
         dv.setUint16(6, channels, true);
         dv.setUint16(8, tilesX, true);
@@ -238,11 +244,16 @@ const PlaneCodec = (() => {
         return out;
     }
 
-    function parsePackHeader(bytes) {
+    /**
+     * `expectMagic` (optional): 'LPLN' or 'LMIP' — a plane pack read where a MIP pack is
+     * expected (or the reverse) is refused; without it either magic is accepted.
+     */
+    function parsePackHeader(bytes, expectMagic) {
         bytes = _u8(bytes);
         if (bytes.length < PACK_FIXED_BYTES) throw new Error('PlaneCodec.parsePackHeader: short header');
-        for (let i = 0; i < 4; i++) {
-            if (bytes[i] !== PACK_MAGIC.charCodeAt(i)) throw new Error('PlaneCodec.parsePackHeader: bad magic');
+        const magic = String.fromCharCode(bytes[0], bytes[1], bytes[2], bytes[3]);
+        if (!PACK_MAGICS.includes(magic) || (expectMagic !== undefined && magic !== expectMagic)) {
+            throw new Error('PlaneCodec.parsePackHeader: bad magic');
         }
         const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
         const version = dv.getUint16(4, true);
@@ -260,7 +271,7 @@ const PlaneCodec = (() => {
             if (off > BigInt(Number.MAX_SAFE_INTEGER)) throw new Error('PlaneCodec.parsePackHeader: offset out of range');
             entries[i] = { offset: Number(off), length: dv.getUint32(p + 8, true) };
         }
-        return { version, channels, tilesX, tilesY, z, entries };
+        return { magic, version, channels, tilesX, tilesY, z, entries };
     }
 
     /** SPEC §5.1 unit blob: u32 count, then count × { u32 z, u32 length, PNG bytes } (little-endian). */
@@ -302,6 +313,7 @@ const PlaneCodec = (() => {
     const api = {
         PNG_SIGNATURE,
         PACK_MAGIC,
+        MIPS_MAGIC,
         PACK_VERSION,
         crc32: (b) => { const u = _u8(b); return crc32(u, 0, u.length); },
         filterNone,

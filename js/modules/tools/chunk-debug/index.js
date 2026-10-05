@@ -343,21 +343,33 @@ PluginRegistry.implement('chunk-debug', {
     } catch (e) { return 'native'; }
   },
 
-  // Mirror of VolumeViewer._lodForQuality (private) so the overlay shows the
-  // chunks of the LOD actually on screen. Falls back to the finest LOD that has
-  // bricks, so the overlay is never silently empty.
+  // The LOD actually on screen (VolumeViewer.getActiveLevel), else a mirror of the
+  // viewer's quality → level rule (v2: the level nearest the preset; v3, SPEC §13.7:
+  // the finest whose larger XY side is ≤ 1.5 × the preset). Falls back to the finest
+  // LOD that has bricks, so the overlay is never silently empty.
   _resolveLod(manifest) {
     const levels = (manifest && manifest.levels) || [];
     if (!levels.length) return 0;
     const maxIdx = levels.length - 1;
+    const active = typeof VolumeViewer !== 'undefined' && VolumeViewer.getActiveLevel ? VolumeViewer.getActiveLevel() : null;
+    const v3 = manifest.schema === 'iribhm-bricks-v3' || manifest.version === 3;
     const quality = this._currentQuality();
     let lod = 0;
     const lodMatch = /^lod(\d+)$/.exec(quality);
     const resMatch = /^(\d+)x\d+$/.exec(quality);
-    if (quality === 'native') {
+    if (active && Number.isInteger(active.level) && active.level <= maxIdx) {
+      lod = active.level;
+    } else if (quality === 'native') {
       lod = 0;
     } else if (lodMatch) {
       lod = Math.min(maxIdx, parseInt(lodMatch[1], 10));
+    } else if (resMatch && v3) {
+      const limit = 1.5 * parseInt(resMatch[1], 10);
+      lod = maxIdx;
+      for (let i = 0; i < levels.length; i++) {
+        const d = levels[i] && levels[i].dimensions;
+        if (d && Math.max(d.x || 0, d.y || 0) <= limit) { lod = i; break; }
+      }
     } else if (resMatch) {
       const target = parseInt(resMatch[1], 10);
       let best = 0, minDiff = Infinity;
@@ -422,11 +434,16 @@ PluginRegistry.implement('chunk-debug', {
     }
 
     const channels = manifest.channels || dims.channels || 1;
-    const voxelSize = manifest.voxelSize || null;
-    const scale = level.scale || 1;
+    // A v3 level carries its own voxel size (Z may have been halved, SPEC §13.1); a v2
+    // manifest one voxel size for LOD0, divided by the level's XY scale.
+    const levelInfo = BrickLoader.getLevelInfo ? BrickLoader.getLevelInfo(lod) : null;
+    const voxelSize = (levelInfo && levelInfo.voxelSize) || manifest.voxelSize || null;
+    const scale = levelInfo && levelInfo.voxelSize ? 1 : (level.scale || 1);
     const b2p = (manifest.brickTransport && manifest.brickTransport.brickToPack) || null;
     const dimX = level.dimensions.x, dimY = level.dimensions.y, dimZ = level.dimensions.z;
     const bs = dims.brickSize;
+    // The stored brick: 64³, or 66³ on a v3 tree (64³ interior + a 1-voxel border).
+    const stride = Number(dims.brickStride) || bs;
 
     this._chunks = BrickLoader.activeBricks(lod).map(b => {
       const key = `${b.bx}_${b.by}_${b.bz}`;
@@ -447,7 +464,7 @@ PluginRegistry.implement('chunk-debug', {
       return {
         key,
         id: meta && meta.id ? meta.id : `${b.bz}_${b.by}_${b.bx}`,
-        localMin, localMax, voxDims, umDims, channels,
+        localMin, localMax, voxDims, umDims, channels, stride,
         bytes: store.bytes, file: store.file,
         corners: null, edges: null, poly2: null
       };
@@ -460,9 +477,25 @@ PluginRegistry.implement('chunk-debug', {
     this._recomputeStack(true); // re-derives _selected for the current cursor + redraws
   },
 
-  // Sum compressed bytes across channels; return the first pack file found.
+  // Sum compressed bytes across channels; return the first pack file found. Without a
+  // brickToPack table (a v3 tree's binary index, or a v2 pack index) the loader's own
+  // index answers: taskBytes per channel, and the pack when it can name it.
   _lookupStorage(b2p, lod, bx, by, bz, channels) {
-    if (!b2p) return { bytes: null, file: null };
+    if (!b2p) {
+      if (typeof BrickLoader === 'undefined' || !BrickLoader.taskBytes) return { bytes: null, file: null };
+      let bytes = 0, file = null, found = false;
+      for (let c = 0; c < channels; c++) {
+        const n = BrickLoader.taskBytes({ bx, by, bz, channel: c, lod });
+        if (n > 0) { found = true; bytes += n; }
+        if (file === null && n > 0) {
+          const loc = BrickLoader.brickLocation ? BrickLoader.brickLocation({ bx, by, bz, channel: c, lod }) : null;
+          file = loc && loc.url ? loc.url : null;
+        }
+      }
+      const fmt = BrickLoader.getFormat ? BrickLoader.getFormat() : null;
+      if (found && file === null && fmt && fmt.version === 3) file = `l${lod}/c0…c${channels - 1}/p*.bin`;
+      return { bytes: found ? bytes : null, file };
+    }
     const p3 = v => String(v).padStart(3, '0');
     let bytes = 0, file = null, found = false;
     for (let c = 0; c < channels; c++) {
@@ -888,7 +921,8 @@ PluginRegistry.implement('chunk-debug', {
   // Shared value strings so the tooltip and the clipboard text never drift.
   _metaValues(sel) {
     const um = sel.umDims ? ` (${sel.umDims.map(x => x.toFixed(1)).join('×')} µm)` : '';
-    const size = `${sel.voxDims.join('×')} ${this._t('tipVox')}${um}`;
+    const border = sel.stride && sel.voxDims && sel.stride > 64 ? ` · ${this._t('tipBorder', { n: sel.stride })}` : '';
+    const size = `${sel.voxDims.join('×')} ${this._t('tipVox')}${um}${border}`;
     let stored = null;
     if (sel.bytes != null) {
       const ch = sel.channels > 1 ? ` · ${sel.channels} ${this._t('tipChannels')}` : '';

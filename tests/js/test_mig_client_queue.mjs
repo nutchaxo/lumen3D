@@ -355,7 +355,7 @@ const until = async (fn) => { for (let i = 0; i < 2000 && !fn(); i++) await new 
     r.enqueue([{ dataset: '3d/a', migration: 'm002-planes' }]);
     await until(() => r.state === 'idle');
     assert.equal(events.find((e) => e.type === 'job_failed').code, 'incomplete');
-    assert.equal(api.calls.filter((c) => c[0] === 'plan').length, 6, 'three passes, each re-planned');
+    assert.equal(api.calls.filter((c) => c[0] === 'plan').length, 4, 'the plan, then three passes without progress, each re-planned');
   }
 }
 

@@ -418,6 +418,8 @@ export async function startImport(entries, options = {}) {
         ds: pd.key, path: pf.path, file, size: pf.size,
         chunkSize: pf.chunkSize || _state.chunkSize,
         missing: pf.missing, tier: pf.tier ?? 9,
+        // The server's file-table id: lets a chunk be checked without the journal.
+        fileId: Number.isInteger(pf.fileId) ? pf.fileId : null,
         order: dsIndex * 100000 + fileIndex,
       });
     });

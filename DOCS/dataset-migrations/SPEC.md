@@ -223,3 +223,169 @@ Button in the tab, on a chosen dataset (default: the smallest pending one):
 
 ## 11. Import of a format-2 dataset
 The browser Import allowlist (`upload_staging.classify_path`, `api/_upload_lib.php:lumen_up_classify`) accepts `planes/manifest.json`, `planes/zNNNNN.bin` and `planes/tNNN/…` of a dataset made by preprocess ≥ 0.20.0; planes are uploaded in the last tier (the dataset is viewable before they arrive). A dataset published without them stays at the version its metadata claims only if the structure is complete — otherwise it is listed as needing a repair.
+
+---
+
+# Part II — web 1.59.0: formats 3 and 4
+
+LATEST becomes **4**. Registry (append, in order):
+
+| id | from | to | title (en) | applies to |
+|---|---|---|---|---|
+| `m003-layer-mips` | 2 | 3 | Maximum projections of each brick layer (fast whole-stack z-stack figures) | `3d`, `live` |
+| `m004-bricks-v3` | 3 | 4 | Brick pyramid v3: halved in Z too, 1-voxel border, binary index | `3d`, `live` |
+
+A dataset at version 1 runs m002 → m003 → m004 in order. The pipeline (≥ 0.21.0) writes
+format 4 directly. Repair rule (§1) extends to every structure a version claims.
+
+## 12. Format 3 — `mips/` (migration `m003-layer-mips`)
+
+Per tree, beside `planes/`: `mips/` (live: `mips/tNNN/`). For every brick layer `bz`
+(planes `z ∈ [64·bz, min(64·bz+64, Z))`) and channel `c`, the per-voxel **maximum over the
+layer's planes** of LOD0, at native XY resolution, tiled exactly like planes.
+* `mips/manifest.json`: same shape as §3.1 with `"schema": "lumen-mips-v1"`, `"formatVersion": 3`,
+  `"layers": ceil(Z/64)`, `"layerDepth": 64`, `"packPattern": "l{l}.bin"` (5-digit pad),
+  `source.manifestSha256` = sha256 of the bricks manifest bytes (format 4 re-stamps it, §13.6).
+* `mips/lNNNNN.bin`: the §3.2 pack layout with header field `z` = layer index `l` (magic `LMIP`).
+  Tiles: png-gray8, filter None, `length = 0` iff the tile is all zero.
+* Derivation: from `planes/` (decode the layer's ≤ 64 planes of a tile, per-voxel max). Exactly
+  equal to the max of the LOD0 voxels. Work unit = `(t, l, c, ty, tx)`, key
+  `t{t}.l{l}.c{c}.y{ty}.x{tx}`; inputs are plane tiles (range reads of plane packs).
+* Reader: a z-stack slab `[z0, z1)` with MIP = max over (layer MIPs of the layers fully inside
+  the slab) ∪ (planes of the partial layers at both ends) — pixel-identical to the max over
+  planes. A layer MIP is used only when the slab's sampling covers every plane of the layer
+  (the Studio's z-stack figures sample one plane per slice).
+
+## 13. Format 4 — brick pyramid v3 (migration `m004-bricks-v3`)
+
+The tree `bricks/` is replaced by a v3 tree (same directory name; the swap of §5.2 applies,
+`bricks.v2-old` removed after the version bump). planes/ and mips/ are unchanged.
+
+### 13.1 Levels — halved in X, Y **and Z**, aspect preserved
+* Level 0 = LOD0 voxels **verbatim** (decoded from the v2 bricks — never resampled).
+* Level k+1 from level k: X and Y halved (`ceil(n/2)`); Z halved **only when** the level-k voxel
+  is not already coarser in Z than in XY: halve Z iff `vz_k ≤ 1.5 · vxy_{k+1}` where `vxy` is the
+  XY voxel size (µm) after this step (isotropy-seeking, OME-Zarr style). Voxel sizes per level are
+  written in the manifest.
+* Reduction: mean of the 2×2(×2) source block (edge blocks average only the voxels that exist),
+  in integers, rounded half up: `(sum + n/2) // n`. Same arithmetic in the three implementations.
+* When Z is already 1 plane, a "halving" keeps 1 plane and doubles the Z voxel size.
+* `vxy` = the larger of the two XY voxel sizes; an uncalibrated volume is treated as cubic voxels.
+* Levels stop when `max(X, Y) ≤ 128` at the coarsest level (at least 1 level besides level 0
+  when `max(X,Y) > 128`).
+* ESS: a level-k brick is kept iff it holds at least one voxel ≥ 1 (exact, no occupancy
+  tolerance). (The v2 tolerance dropped real signal; level 0 keeps exactly the v2 bricks' content
+  — a v2 brick absent from the manifest is zeros.)
+
+### 13.2 Bricks with a 1-voxel border (apron)
+* Brick (bx, by, bz) of level k covers interior voxels `[64·b, 64·b+64)` per axis and is stored as
+  **66³**: voxels `[64·b − 1, 64·b + 65)`. Outside the volume: clamp-to-edge (replicate the edge
+  voxel). A neighbour brick dropped by ESS contributes zeros (it is zeros).
+* Mosaic: 66 slices of 66×66 (z-major), laid out in a grid of **9 columns × 8 rows** (72 slots,
+  the last 6 empty = 0) → a 594×528 greyscale image, slice s at column `s % 9`, row `s // 9`.
+* Encoding: **WebP lossless** (same as v2; one channel per image).
+* A brick is **stored iff its 64³ interior holds a voxel ≥ 1**; a brick absent from the index is
+  all zeros, border included (a reader never reconstructs a border from neighbours).
+
+### 13.3 Manifest v3 (`bricks/manifest.json`, compact) + binary index
+```json
+{ "schema": "iribhm-bricks-v3", "version": 3, "formatVersion": 4,
+  "channels": C, "brickSize": 64, "apron": 1, "brickPacking": {"mode":"grid","cols":9,"rows":8,"slice":66},
+  "encoding": "webp-lossless",
+  "levels": [ { "level": 0, "dimensions": {"x","y","z"}, "voxelSize": {"x","y","z"},
+                "gridSize": {"x","y","z"}, "brickCount": n } … ],
+  "timepoints": null | [ { "path": "t000", "index": { "url": "t000/index.bin", "bytes": N, "sha256": "…" } }, … ],   // live: one index per tree
+  "index": { "url": "index.bin", "bytes": N, "sha256": "…" },
+  "histograms": [ … ], "timepointHistograms": { "t000": [ … ] } (live, optional), "createdAt": "…" }
+```
+`index.bin` (per tree, little-endian): magic `LBIX`, u16 version 1, u16 levels, u16 channels,
+u16 reserved; per level: u32 gridX, gridY, gridZ, u32 packCount; then per level, per channel,
+per brick in order (bz, by, bx): `{ u16 pack, u32 offset, u32 length }` (10 bytes; length 0 =
+brick absent ⇒ zeros); then the pack names table: per level, per channel, packs named
+`l{k}/c{c}/p{NNNNN}.bin` (implicit, no strings). A client fetches `index.bin` once
+(~10 bytes per brick slot: 18 572 LOD0 bricks × 4 channels ≈ 0.74 MB raw, gzip on the wire).
+Pack URLs carry `?v=<first 12 hex of index sha256>`. `packCount` = total packs of the level over all channels; `brickCount` = bricks present (length > 0) in the level over all channels. For a `live` dataset the root `index` is absent and each timepoint row carries its own `index` (paths relative to `bricks/`).
+
+### 13.4 Packs
+`l{k}/c{c}/pNNNNN.bin`: concatenated brick images. Bricks are grouped by **super-block** (4×4×4
+bricks, the m004 work unit): super-blocks in order (SBZ, SBY, SBX), and inside a super-block the
+bricks in order (bz, by, bx); absent bricks are skipped. A pack holds whole super-blocks: a new
+pack starts before a super-block that would take the pack past 64 bricks or 16 MiB; a single
+super-block larger than 16 MiB (or than 64 bricks) is split in brick order across consecutive packs:
+a new pack starts before a brick when the pack is non-empty and holds 64 bricks or the brick
+would take it past 16 MiB; the super-block that follows a split may join the split's last pack
+if it fits. Empty super-blocks are skipped. Measured on a 5735²×172 embryo (simulated): a YZ
+native cut touches 66 packs instead of 668, an XZ cut 52 instead of 18 (≈ 118 multi-range
+requests for both instead of 686); XY cuts are served by `planes/`. (Grouping by
+super-block keeps an XZ or YZ cut — which crosses one brick row/column per super-block — to a few
+packs, so its byte runs merge into a handful of multi-range requests.) Pack numbering is per
+(level, channel), from 0. The reader never assumes an order: `index.bin` gives each brick's pack,
+offset and length.
+
+**Live index URL (§13.3)**: `timepoints[i].index.url` is relative to `bricks/` (e.g.
+`t000/index.bin`); a reader mounting the tree `bricks/t000/` resolves it against `bricks/`.
+
+### 13.5 Derivation (migration) — units
+Work unit = `(t, k, c, BZ, BY, BX)` super-block of 4×4×4 bricks of level k (key
+`t{t}.k{k}.c{c}.z{BZ}.y{BY}.x{BX}`). Level 0 units read the v2 LOD0 bricks of their block +
+the 1-voxel neighbourhood (decode only what is needed); level k+1 units read level-k v3 bricks
+(a level is processed only after the previous level is complete — the journal orders units by
+level). Executors: browser (needs lossless WebP encoding: `OffscreenCanvas.convertToBlob({type:
+'image/webp', quality: 1})` verified lossless by decoding back at probe time — otherwise the
+browser executor is unavailable for m004 with reason `no_webp_lossless_encode`), server (Python
+Pillow `lossless=True`; PHP GD `imagewebp($im, $f, IMG_WEBP_LOSSLESS)` — PHP ≥ 8.1 with WebP;
+probe = encode + decode a sample exactly).
+Capability is reported **per migration and per executor** (`status.server.migrations[id]`,
+browser probe per handler).
+
+### 13.6 Finalize
+Assemble packs + `index.bin` + manifest v3 into `.bricks-incoming/`, swap `bricks/` ↔ it, re-stamp
+`planes/manifest.json` and `mips/manifest.json` `source.manifestSha256` with the new manifest's
+sha256 (their voxels are LOD0, unchanged), bump to 4. Old `bricks.v2-old/` deleted after the bump.
+
+### 13.7 Reader (viewer)
+`BrickLoader` reads v2 and v3 (by `schema`). v3: binary index, packs per (level, channel), decode
+the 9×8 mosaic of 66² slices → 66³ brick; the SVR atlas stores 66³ slots and the ray-marcher
+samples with hardware trilinear filtering inside a slot (texture coordinate = slot origin + 1 +
+local·64 voxels), so filtering is seamless across bricks at every quality. Quality presets map to
+levels by the level's XY size: "512" = the finest level with `max(x,y) ≤ 768`, "1024" ≤ 1536,
+"native" = level 0; labels show the real dimensions.
+
+### 13.8 Decisions fixed during implementation (normative)
+* Voxel size of level 0: manifest `voxelSize`, else metadata `voxel_size`, else 1 µm (cubic).
+  A halved axis doubles its voxel size exactly.
+* Pack sizing: see §13.4 (whole super-blocks per pack, ≤ 64 bricks / 16 MiB).
+* Interior padding beyond the volume (last partial brick) is clamp-to-edge, like the border.
+* `m004` refuses (`trees_differ`) a timelapse whose frames differ in dimensions.
+* Damaged v3 bricks cannot be repaired by m004 (the v2 source is gone): reported as
+  `problem: bricks_v3_invalid`, not as a pending repair.
+* `plan` returns the units runnable **now** (`units`), with counts `runnable` / `pending`; for
+  m004 also `levels: [{dimensions, voxelSize, gridSize, halveZ, units, done}]`. A level-k unit of
+  a tree/channel is runnable once every lower level of that tree/channel is done; an early
+  `unit_put` answers 409 `unit_blocked`.
+* Extra actions: POST `unit_inputs` (lists a unit's inputs), GET `store_get`
+  (`&brick=t.k.c.z.y.x`, streams a stored level-k v3 brick of the job, 404 `absent` when it was
+  dropped) — what the browser executor reads level k back through.
+* m004 browser blobs: each brick must be lossless **VP8L**, 594×528, opaque, the 6 unused
+  mosaic slots zero.
+* Encoder reference: Pillow `lossless=True, quality=75, method=4` (pipeline and Python
+  migration byte-identical); other encoders are compared by decoded voxels.
+* Re-stamp (§13.6) only rewrites planes/mips manifests that carried the old v2 sha.
+
+### 13.9 Short time limits (shared PHP hosts)
+* Before every step the server calls `set_time_limit()`; `status.server.limits.resettable` says
+  whether the host honours it (otherwise the deadline is request start + `max_execution_time`).
+* An m004 unit may be processed by the SERVER in 8 octants (2×2×2 bricks of the super-block):
+  each octant's bricks go to the normal tile store and are recorded in `journal.partial[key]`;
+  the unit is marked done only when every non-empty octant is stored (same keys, same store
+  layout). Octants are used when no whole unit of that level has been timed yet, when the
+  slowest timed one (+25 %, `journal.timing`) would not fit, after any request death at that
+  level, or once a unit has octants stored. `unit_run` answers `partial: [{unit, parts, of: 8}]`;
+  the client counts more stored octants as progress. A browser `unit_put` of the whole unit
+  overwrites it and clears `partial` / `attempts`.
+* `journal.attempts[key]` is written before a step starts; a unit that killed its request twice
+  is answered 409 `{error: "unit_timeout", unit, attempts}` — the journal stays `running`, every
+  other unit's progress is kept; the tab switches that migration to the browser executor. A new
+  `plan` resets the counts.
+* `bench` stops at the time budget and reports `unitsMeasured` (m004 measured octant by octant
+  under a limit).

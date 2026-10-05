@@ -52,6 +52,14 @@ const DatasetGallery = (() => {
     return `${_base}/gallery/${encodeURIComponent(item.file)}`;
   }
 
+  // The grid's copy: gallery/thumbs/<file>.webp|jpg (server-made, 320 px), so a
+  // dock of forty figures does not pull forty originals through the sockets the
+  // brick packs need. Only a bare thumbs/<name> is accepted — it becomes a URL.
+  function _thumbUrlFor(item) {
+    const m = typeof item.thumb === 'string' && /^thumbs\/([A-Za-z0-9][A-Za-z0-9._-]{0,90}\.(?:webp|jpg))$/.exec(item.thumb);
+    return m ? `${_base}/gallery/thumbs/${encodeURIComponent(m[1])}` : null;
+  }
+
   function _label(item, index) {
     return item.title || item.caption || `${_t('viewer.galleryImage', 'Image')} ${index + 1}`;
   }
@@ -229,14 +237,18 @@ const DatasetGallery = (() => {
       btn.title = _label(item, i);
 
       const img = document.createElement('img');
-      img.src = _urlFor(item);
+      const thumb = _thumbUrlFor(item);
+      img.src = thumb || _urlFor(item);
       img.alt = item.caption || item.title || '';
       img.loading = 'lazy';
       img.decoding = 'async';
-      // A file removed from the folder behind the viewer's back must not leave a
-      // broken-image tile: drop the whole tile instead (Rule 1.1 — degrade, never
-      // show a half-rendered state), and drop the dock once nothing is left.
+      // A missing thumbnail falls back to the original once. A file removed from the
+      // folder behind the viewer's back must not leave a broken-image tile: drop the
+      // whole tile instead (Rule 1.1 — degrade, never show a half-rendered state),
+      // and drop the dock once nothing is left.
+      let triedFull = !thumb;
       img.addEventListener('error', () => {
+        if (!triedFull) { triedFull = true; img.src = _urlFor(item); return; }
         btn.remove();
         if (!dock.grid.childElementCount) dock.root.hidden = true;
       });

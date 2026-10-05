@@ -2017,16 +2017,10 @@ const StudioEditor = (() => {
         console.warn('[StudioEditor] Slice histograms unavailable:', err);
       }
     }
-    // compare.html loads neither VolumeViewer nor VolumeSlicer, so the only histograms
-    // of that panel's volume live inside the panel's own (same-origin) frame.
-    if (map?.iframe) {
-      try {
-        const fromFrame = map.iframe.contentWindow?.ViewerApp?.getChannelHistograms?.();
-        if (fromFrame?.length) return fromFrame;
-      } catch (err) {
-        console.warn('[StudioEditor] Panel frame histograms unavailable:', err);
-      }
-    }
+    // compare.html loads neither VolumeViewer nor VolumeSlicer: a Compare cell carries
+    // the histograms of its panel's volume, handed over with its slice (STUDIO_SLICE).
+    const handed = map?.sliceResult?.histograms;
+    if (Array.isArray(handed) && handed.length) return handed;
     if (typeof VolumeViewer !== 'undefined' && VolumeViewer.getChannelHistograms) {
       return VolumeViewer.getChannelHistograms() || [];
     }
@@ -2070,8 +2064,9 @@ const StudioEditor = (() => {
           // re-coloured by this page's compositor: no panel render at all.
           recomposedCanvas = _composeRaw(map.raw, map.channelState, _ownPanelCanvas());
         } else if (!options.rawOnly && map.sliceResult) {
-          const targetSlicer = map.iframe?.contentWindow?.VolumeSlicer
-            || (typeof VolumeSlicer !== 'undefined' ? VolumeSlicer : null);
+          // This page's own slicer (a cell of a Compare figure comes with its raw values:
+          // the panel's document is never reached into).
+          const targetSlicer = typeof VolumeSlicer !== 'undefined' ? VolumeSlicer : null;
           if (!targetSlicer?.recompose) return;
           // While editing, render the cell at the size it actually occupies in the
           // composite: anything more is thrown away by the drawImage below, anything

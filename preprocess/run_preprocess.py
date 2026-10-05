@@ -15,7 +15,7 @@ import traceback
 from datetime import datetime
 from pathlib import Path
 
-__version__ = "0.20.0"
+__version__ = "0.21.0"
 
 # ── Paths ──────────────────────────────────────────────────────────────────────
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -271,13 +271,13 @@ def build_thumbnail(temp_dir: Path, output_dir: Path, proc_meta: dict) -> None:
 
     n_ch = proc_meta["n_channels"]
     lod_levels = proc_meta["lod_levels"]
-    D = proc_meta["depth"]
 
     # A LOD of at most 1024 px keeps the MIP cheap; step 2 keeps exactly this level of
     # the first timepoint on disk for it.
     target_lod = thumbnail_lod(lod_levels)
     li = lod_levels[target_lod]
-    w_lod, h_lod = li["width"], li["height"]
+    # A format-4 level may have halved Z too: its own depth, not the native one.
+    w_lod, h_lod, D = li["width"], li["height"], li.get("depth", proc_meta["depth"])
     
     mips = []
     for c in range(n_ch):
@@ -426,7 +426,10 @@ def _resolve_download_script():
 #
 # Entries the pipeline owns inside a dataset folder. Everything else there — download/,
 # gallery/, any file the operator dropped in — is never touched.
-PIPELINE_ENTRIES = ("bricks", "planes", "thumbnail.webp")
+PIPELINE_ENTRIES = ("bricks", "planes", "mips", "thumbnail.webp")
+# Derived structures a run replaces as a whole: one the new run does not produce is
+# removed with the swap rather than left behind naming another bricks manifest.
+DERIVED_ENTRIES = ("planes", "mips")
 TRACKING_ENTRIES = ("tracks.json", "tracks.json.gz", "model.glb")
 SWAP_SUFFIX = ".pre-swap"
 SWAP_MARKER = ".swap-in-progress"
@@ -522,7 +525,8 @@ def publish_dataset(stage_dir: Path, final_dir: Path) -> None:
     recover_interrupted_publish(final_dir)
     _merge_with_published(stage_dir, final_dir)
 
-    entries = [e for e in PIPELINE_ENTRIES if (stage_dir / e).exists()]
+    entries = [e for e in PIPELINE_ENTRIES if (stage_dir / e).exists()
+               or (e in DERIVED_ENTRIES and (final_dir / e).exists())]
     if (stage_dir / "tracks.json").exists():
         # A newly attached tracking replaces the whole previous set, including a surface
         # the new analysis no longer has.

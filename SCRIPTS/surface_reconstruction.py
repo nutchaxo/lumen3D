@@ -106,14 +106,14 @@ def subdivide_large_triangles(
 # =============================================================================
 
 def get_worker_count() -> int:
-    """
-    Retourne le nombre de workers à utiliser :
-    tous les threads logiques disponibles moins 4 (réservés système).
-    Minimum 1 pour éviter les cas dégénérés.
-    """
-    total = multiprocessing.cpu_count()
-    workers = max(1, total - 4)
-    return workers
+    """Worker processes for the per-timepoint pools: every logical CPU but 4 (left to
+    the system), or LUMEN3D_TRACKING_WORKERS when set; never more than the 61 a Windows
+    ProcessPoolExecutor accepts."""
+    import os
+    import sys
+    env = os.environ.get("LUMEN3D_TRACKING_WORKERS", "").strip()
+    n = int(env) if env.isdigit() and int(env) > 0 else max(1, multiprocessing.cpu_count() - 4)
+    return min(n, 61) if sys.platform == "win32" else n
 
 
 def configure_numpy_threads(n_workers: int) -> None:

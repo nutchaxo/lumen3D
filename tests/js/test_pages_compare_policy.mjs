@@ -103,9 +103,26 @@ const cost = { '512x512': 256 * MB, '1024x1024': 1000 * MB, '2048x2048': 3000 * 
     set(t, k, v) { extra[k] = v; return true; },
     apply: () => proxy()
   });
+  // A panel page as the host sees it: a window it posts to. It answers the host's
+  // REQUEST_WORKSPACE_STATE in its own message (the host never calls into it).
+  const allPanels = [];
   const makeFrame = (index) => {
-    const win = { postMessage: (m) => posts.push({ index, m }), ViewerApp: { getWorkspaceState: () => ({ viewer: { cache: 1 } }) } };
-    return { dataset: {}, contentWindow: win, title: '', addEventListener() {}, removeEventListener() {}, win };
+    const frame = { dataset: {}, title: '', addEventListener() {}, removeEventListener() {} };
+    const win = {
+      postMessage: (m) => {
+        posts.push({ index, m });
+        if (m.type !== 'REQUEST_WORKSPACE_STATE') return;
+        Promise.resolve().then(() => {
+          const panel = allPanels.find(p => p.iframe === frame);
+          if (!panel) return;
+          ctx.CompareApp._handleIframeMessage({ origin: ORIGIN, source: win, data: {
+            type: 'WORKSPACE_STATE', requestId: m.requestId, ok: true, state: { viewer: { cache: 1, zstackSlice: 3 } }, sourceIndex: panel.index } });
+        });
+      }
+    };
+    frame.contentWindow = win;
+    frame.win = win;
+    return frame;
   };
   const frames = [];
   const makeEl = () => proxy({
@@ -139,6 +156,8 @@ const cost = { '512x512': 256 * MB, '1024x1024': 1000 * MB, '2048x2048': 3000 * 
 
   const a = App.addPanel('A'), b = App.addPanel('B');
   assert.ok(a && b);
+  allPanels.push(a, b);
+  const answers = () => new Promise(r => setImmediate(r));
   const ready = (panel, extra = {}) => App._handleIframeMessage({
     origin: ORIGIN, source: panel.iframe.contentWindow,
     data: { type: 'PANEL_READY', sourceIndex: panel.index, name: panel.id, datasetType: 'live', toolbar: { tools: [], toggles: [] },
@@ -151,13 +170,18 @@ const cost = { '512x512': 256 * MB, '1024x1024': 1000 * MB, '2048x2048': 3000 * 
   assert.equal(App.getWorkspaceState(), null, 'panels still loading: no workspace yet');
   ready(a);
   send(b, { type: 'PANEL_ERROR', message: 'boom' });
+  assert.equal(sentTo(a, 'REQUEST_WORKSPACE_STATE').length >= 1, true, 'a ready panel is asked for its state');
+  await answers();
   const ws = App.getWorkspaceState();
   assert.ok(ws, 'a failed panel does not block the workspace');
+  assert.equal(JSON.stringify(ws.compare.iframeStates[0]), '{"viewer":{"zstackSlice":3}}', 'the state the panel answered, brick cache dropped');
+  assert.equal(ws.compare.panelZstackStates[0].slice, 3);
   assert.equal(JSON.stringify(ws.compare.panels), '["A","B"]', 'the failed panel stays listed so reopening retries it');
   assert.equal(ws.compare.iframeStates[1], null);
 
   // Time echo through the real handler.
   const c = App.addPanel('C');
+  allPanels.push(c);
   ready(b, {});  // b recovers (a late PANEL_READY)
   ready(c);
   send(a, { type: 'SYNC_TIME', value: 50, total: 100, fraction: 50 / 99 });

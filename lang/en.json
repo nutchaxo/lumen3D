@@ -349,7 +349,14 @@
     "skipToViewer": "Skip to the viewer",
     "renderMode": "Render mode",
     "exposure": "Visibility (exposure)",
-    "customColor": "Custom colour"
+    "customColor": "Custom colour",
+    "detailStatus": "Detail: {count} bricks of level {level} in view",
+    "detailLoading": "Detail: loading {loaded} of {total} bricks of level {level}",
+    "detailNoBudget": "Detail unavailable: not enough GPU memory left",
+    "detailMode": "Zoom detail",
+    "detailAuto": "Automatic",
+    "detailOn": "On",
+    "detailOff": "Off"
   },
   "compare": {
     "title": "Comparison Mode",
@@ -698,7 +705,8 @@
     "nativeReady": "Native slice ready ({n} chunks).",
     "nativeReadyMissing": "Native slice ready ({n} chunks; {missing} kept at the previous resolution).",
     "uncalibrated": "uncalibrated",
-    "bigPassMessagePlanes": "This figure projects {n} slices: its native picture reads {planes} stored planes, about {mb} MB ({tiles} image tiles)."
+    "bigPassMessagePlanes": "This figure projects {n} slices: its native picture reads {planes} stored planes, about {mb} MB ({tiles} image tiles).",
+    "bigPassMessageMips": "This figure projects {n} slices: its native picture reads {layers} stored layer projections and {planes} stored planes, about {mb} MB ({tiles} image tiles)."
   },
   "admin": {
     "loginTitle": "{brand} Admin",
@@ -1155,7 +1163,10 @@
     "rjUnreadable": "item(s) unreadable while reading the folder",
     "insufficientDisk": "Not enough disk space on the server ({needed} needed, {free} free)",
     "tooLarge": "\"{name}\" is larger than the server accepts for one file.",
-    "rjDisk": "not enough disk space on the server"
+    "rjDisk": "not enough disk space on the server",
+    "confirmOverwriteKeep": "A published dataset already has this name. Replace it? Its image gallery and the fields you filled in (name, orientation, captions…) are kept when the new import does not provide them.",
+    "publishedKept": "Dataset published ✓ — kept from the previous version: {kept}",
+    "keptGallery": "the gallery"
   },
   "appearance": {
     "title": "Appearance",
@@ -1863,7 +1874,8 @@
     "uninstallConfirm": "Uninstall this plugin?",
     "uninstalled": "Plugin uninstalled.",
     "lastShader": "Cannot: last render mode.",
-    "uninstallFailed": "Uninstall failed."
+    "uninstallFailed": "Uninstall failed.",
+    "rollback": "Catalog refused: it is older (no. {offered}) than a catalog this server already accepted (no. {seen}). It could reinstall plugin versions fixed since."
   },
   "docs": {
     "title": "Documentation",
@@ -2054,6 +2066,36 @@
     "assembling": "Assembling planes {x}/{y}",
     "written": "Written",
     "reasonOffline": "the server could not be reached",
-    "errDisk": "not enough disk space on the server (needed / free)"
+    "errDisk": "not enough disk space on the server (needed / free)",
+    "reasonWebpEncode": "this browser cannot encode lossless WebP images",
+    "reasonWebpEncodeServer": "the server cannot encode lossless WebP images",
+    "reasonNumpy": "the server has no NumPy",
+    "reasonCompression": "this browser has no compression streams",
+    "reasonPng": "this browser does not round-trip PNG tiles exactly",
+    "reasonHandler": "this page has no converter for this update",
+    "errNoExecutor": "neither this browser nor the server can run this update",
+    "errBlocked": "a lower level of the pyramid is not complete yet",
+    "errBadWebp": "the server refused a converted brick",
+    "toastNoExecutor": "No executor can run: {list}. Those steps will fail.",
+    "noExecutor": "Neither this browser nor the server can run this update. Datasets that need it stop before this step.",
+    "serverSome": "The server can run some updates itself, not these:",
+    "execNone": "none",
+    "spu": "{s} s/unit",
+    "probing": "checking…",
+    "capOk": "available",
+    "colUpdate": "Update",
+    "colEta": "Estimated time",
+    "execHint": "Both executors need this tab open. The faster available one is used unless you pick one.",
+    "benchMigration": "Update",
+    "benchNoSample": "No dataset is ready for this step yet: run the earlier updates first.",
+    "step": "step {i} of {n}",
+    "etaStep": "Time left (this step)",
+    "etaChain": "Time left (all steps)",
+    "etaUnknown": "run the benchmark",
+    "errUnitTimeout": "the server cannot convert one unit within its time limit",
+    "toastUnitTimeoutSwitch": "{update}: the server cannot convert some units in time. Continuing {name} in this browser.",
+    "toastUnitTimeoutStuck": "Update of {name} stopped: {error}. {hint}",
+    "unitTimeoutRetry": "Retry it in this browser, or reprocess the dataset with the pipeline.",
+    "unitTimeoutNoBrowser": "This browser cannot run this update either; reprocess the dataset with the pipeline."
   }
 }

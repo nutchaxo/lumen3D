@@ -195,7 +195,7 @@ def _excluded_from_archive(rel: Path) -> bool:
     files, a publish marker) and the old entries a publish sets aside."""
     first = rel.parts[0]
     return (first == "download" or any(part.startswith(".") for part in rel.parts)
-            or first.endswith(".pre-swap") or first == "bricks.rollback")
+            or first.endswith(".pre-swap") or first in ("bricks.rollback", "bricks.v2-old"))
 
 
 # ── Step 2 — original .ims via hard link (copy fallback) ────────────────────

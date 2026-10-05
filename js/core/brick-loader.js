@@ -19,6 +19,18 @@
      between batches and reference-counted by the tasks still to read
      them: a source no live task needs is aborted while in flight and
      dropped once landed.
+
+   Two tree formats, told apart by the manifest's schema:
+   - v2: per-brick `brickToPack` entries in the manifest, 64³ bricks in
+     8 × 8 mosaics of 64², init() mounts at once.
+   - v3 (DOCS/dataset-migrations/SPEC.md §13): `iribhm-bricks-v3`, a binary
+     `index.bin` (checked against the manifest's length and sha256) located in
+     O(1) per brick, packs `l{k}/c{c}/pNNNNN.bin?v=<12 hex of its sha256>`,
+     66³ bricks (64³ + a 1-voxel border) in 9 × 8 mosaics of 66². init()
+     returns a promise and mounts once the index has landed; getFormat() tells
+     the caller which frame (stride 64 or 66) the delivered bricks are in.
+   The runs of one pack a batch asks with Range are coalesced into multi-range
+   requests (multipart/byteranges) on v3 trees (configure({ multiRange })).
    ============================================================ */
 
 const BrickLoader = (() => {
@@ -62,6 +74,32 @@ const BrickLoader = (() => {
   const RANGE_GAP_BYTES = 512 * 1024;
   const RANGE_MAX_RUNS_PER_PACK = 48;
   const RANGE_WHOLE_PACK_FRACTION = 0.6;
+  // Multi-range requests (`Range: bytes=a-b, c-d, …`): the runs of one pack asked
+  // together in ONE request, answered as multipart/byteranges. An XZ/YZ cut through a
+  // v3 tree reads one small run per brick of hundreds of packs; one request per pack
+  // instead of per run is what keeps it from queueing behind the socket limit. A part
+  // costs ~100 bytes of headers, so runs are merged only across small gaps. Caps keep
+  // the Range header under the 8 KB request-line/header limit of common servers.
+  const MULTI_RANGE_GAP_BYTES = 32 * 1024;
+  const MULTI_RANGE_MAX_RUNS_PER_PACK = 512;
+  const MULTI_RANGE_MAX_PARTS = 64;
+  const MULTI_RANGE_MAX_HEADER = 8000;
+
+  // ── Brick tree v3 (DOCS/dataset-migrations/SPEC.md §13) ──────────────────────
+  // Bricks of 64³ interior stored with a 1-voxel border (apron) as 66³, the 66 slices
+  // of 66² laid 9 columns × 8 rows (594 × 528, the last 6 slots empty), one WebP
+  // lossless image per brick and channel; a binary index locates every brick.
+  const V3_SCHEMA = 'iribhm-bricks-v3';
+  const V3_APRON = 1;
+  const V3_STRIDE = BRICK_SIZE + 2 * V3_APRON;      // 66
+  const V3_COLS = 9;
+  const V3_ROWS = 8;
+  const V3_INDEX_MAGIC = 'LBIX';
+  const V3_INDEX_HEAD = 12;                         // magic, u16 version, levels, channels, reserved
+  const V3_LEVEL_HEAD = 16;                         // u32 gridX, gridY, gridZ, packCount
+  const V3_ENTRY = 10;                              // u16 pack, u32 offset, u32 length
+  const V3_MAX_BRICK_BYTES = 16 * MiB;              // a pack is ≤ 16 MiB, so is a brick
+  const V3_INDEX_CACHE = 16;
 
   // The worker script carries the platform's own cache-busting stamp (the `?v=` of
   // this script's tag), so a release reloads it and a dataset switch does not.
@@ -86,10 +124,13 @@ const BrickLoader = (() => {
     decodeTimeoutMs: DEFAULT_DECODE_TIMEOUT_MS,
     fetchStallMs: DEFAULT_FETCH_STALL_MS,
     decodeWorkers: 0,          // 0 = min(8, cores − 1)
-    verifyHashes: false
+    verifyHashes: false,
+    multiRange: 'auto'         // 'auto' (v3 trees) | 'on' (every tree) | 'off'
   };
 
   let _mount = null;
+  let _initSeq = 0;
+  let _pendingInit = null;     // a v3 mount waiting for its index
   let _datasetEpoch = 0;       // bumped on a real dataset switch
   let _batchSeq = 0;
   const _batches = new Set();
@@ -103,6 +144,8 @@ const BrickLoader = (() => {
   const _rangeUnsupportedHosts = new Set();
   const _rangeSupportedHosts = new Set();
   const _rangeProbes = new Map();         // host -> promise of its first range answer
+  const _multiRangeBadHosts = new Set();  // hosts whose multi-range answers could not be used
+  const _runGroups = new Map();           // absolute pack url -> run request waiting for a slot
   const _stats = { packFetches: 0, runFetches: 0, fetchedBytes: 0, refetches: 0, evictedInUse: 0 };
   const _fetchedOnce = new Set();       // keys fetched in this dataset (re-download counter)
 
@@ -195,6 +238,7 @@ const BrickLoader = (() => {
   function _validateManifest(manifest) {
     const reject = (msg) => { throw new Error('[BrickLoader] Manifest rejected: ' + msg); };
     if (!manifest || typeof manifest !== 'object') reject('manifest is not an object.');
+    if (_isV3(manifest)) { _validateManifestV3(manifest, reject); return; }
     if (!Array.isArray(manifest.levels) || manifest.levels.length === 0) reject('levels must be a non-empty array.');
     if (manifest.channels !== undefined && !(Number.isInteger(manifest.channels) && manifest.channels >= 1)) {
       reject('channels must be an integer >= 1.');
@@ -251,6 +295,187 @@ const BrickLoader = (() => {
       }
       _safeTransports.add(transport);
     }
+  }
+
+  /** A v3 tree is told by its schema (SPEC §13.7); anything else is read as v2. */
+  function _isV3(manifest) {
+    return Boolean(manifest) && (manifest.schema === V3_SCHEMA || manifest.version === 3);
+  }
+
+  const _gridOf = (n) => Math.ceil(n / BRICK_SIZE);
+
+  /** SPEC §13.3: the manifest of a v3 tree, every field the reader relies on. */
+  function _validateManifestV3(m, reject) {
+    if (m.schema !== V3_SCHEMA) reject(`schema must be "${V3_SCHEMA}" for a version-3 tree.`);
+    if (m.version !== 3) reject('version must be 3.');
+    if (!(Number.isInteger(m.channels) && m.channels >= 1 && m.channels <= 0xFFFF)) reject('channels must be an integer in 1..65535.');
+    if (m.brickSize !== BRICK_SIZE) reject('brickSize must be ' + BRICK_SIZE + '.');
+    if (m.apron !== V3_APRON) reject('apron must be ' + V3_APRON + '.');
+    const bp = m.brickPacking;
+    if (!bp || bp.mode !== 'grid' || bp.cols !== V3_COLS || bp.rows !== V3_ROWS || bp.slice !== V3_STRIDE) {
+      reject(`brickPacking must be {"mode":"grid","cols":${V3_COLS},"rows":${V3_ROWS},"slice":${V3_STRIDE}}.`);
+    }
+    if (m.encoding !== 'webp-lossless') reject('encoding must be "webp-lossless".');
+    if (!Array.isArray(m.levels) || m.levels.length === 0 || m.levels.length > 0xFFFF) reject('levels must be a non-empty array.');
+    m.levels.forEach((level, i) => {
+      if (!level || typeof level !== 'object') reject('level[' + i + '] is not an object.');
+      if (level.level !== i) reject('level[' + i + '].level must be ' + i + ' (levels listed in order).');
+      const d = level.dimensions;
+      const g = level.gridSize;
+      if (!d || typeof d !== 'object') reject('level[' + i + '].dimensions is missing.');
+      if (!g || typeof g !== 'object') reject('level[' + i + '].gridSize is missing.');
+      for (const axis of ['x', 'y', 'z']) {
+        if (!(Number.isInteger(d[axis]) && d[axis] > 0)) reject('level[' + i + '].dimensions.' + axis + ' must be a positive integer.');
+        if (g[axis] !== _gridOf(d[axis])) reject('level[' + i + '].gridSize.' + axis + ' must be ceil(dimensions/' + BRICK_SIZE + ') = ' + _gridOf(d[axis]) + '.');
+      }
+      const v = level.voxelSize;
+      if (v !== undefined && v !== null) {
+        for (const axis of ['x', 'y', 'z']) {
+          if (!(Number.isFinite(v[axis]) && v[axis] > 0)) reject('level[' + i + '].voxelSize.' + axis + ' must be a positive number.');
+        }
+      }
+    });
+    const ix = m.index;
+    if (!ix || typeof ix !== 'object') reject('index is missing.');
+    if (!_isSafePackUrl(ix.url)) reject('index.url is not a safe relative url.');
+    if (!(Number.isInteger(ix.bytes) && ix.bytes > 0)) reject('index.bytes must be a positive integer.');
+    if (typeof ix.sha256 !== 'string' || !/^[0-9a-f]{64}$/.test(ix.sha256)) reject('index.sha256 must be a sha256 hex digest.');
+    if (m.timepoints !== undefined && m.timepoints !== null && !Array.isArray(m.timepoints)) reject('timepoints must be null or an array.');
+  }
+
+  // ── v3 binary index ───────────────────────────────────────────────────────────
+  const _v3IndexCache = new Map();   // absolute index url -> Promise<parsed index>
+
+  function _v3PackRel(k, c, p) {
+    return `l${k}/c${c}/p${String(p).padStart(5, '0')}.bin`;
+  }
+
+  function _v3IndexError(msg) {
+    return Object.assign(new Error('[BrickLoader] index.bin rejected: ' + msg), { fatal: true, code: 'BRICKS_INDEX_INVALID' });
+  }
+
+  /**
+   * SPEC §13.3 `index.bin`: "LBIX", u16 version 1, u16 levels, u16 channels, u16
+   * reserved; per level u32 gridX, gridY, gridZ, packCount; then per level, per
+   * channel, per brick in (bz, by, bx) order { u16 pack, u32 offset, u32 length }.
+   * The pack names are implicit (l{k}/c{c}/pNNNNN.bin), so the file is exactly that
+   * long. Checked against the manifest: level and channel counts, every level's grid,
+   * every stored brick's pack number (< packCount) and size. Returns the lookup
+   * tables: the raw entries (read in place), the per-level occupancy union over
+   * channels and every pack's size (the end of its last brick).
+   */
+  function _parseV3Index(bytes, manifest) {
+    const u8 = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+    if (u8.length < V3_INDEX_HEAD) throw _v3IndexError(`${u8.length} bytes, shorter than its header`);
+    for (let i = 0; i < 4; i++) {
+      if (u8[i] !== V3_INDEX_MAGIC.charCodeAt(i)) throw _v3IndexError('bad magic');
+    }
+    const dv = new DataView(u8.buffer, u8.byteOffset, u8.byteLength);
+    const version = dv.getUint16(4, true);
+    const L = dv.getUint16(6, true);
+    const C = dv.getUint16(8, true);
+    if (version !== 1) throw _v3IndexError(`version ${version} ≠ 1`);
+    if (L !== manifest.levels.length) throw _v3IndexError(`${L} levels ≠ the manifest's ${manifest.levels.length}`);
+    if (C !== manifest.channels) throw _v3IndexError(`${C} channels ≠ the manifest's ${manifest.channels}`);
+    if (u8.length < V3_INDEX_HEAD + V3_LEVEL_HEAD * L) throw _v3IndexError('truncated level table');
+    const levels = [];
+    let at = V3_INDEX_HEAD + V3_LEVEL_HEAD * L;
+    for (let k = 0; k < L; k++) {
+      const p = V3_INDEX_HEAD + V3_LEVEL_HEAD * k;
+      const nx = dv.getUint32(p, true), ny = dv.getUint32(p + 4, true), nz = dv.getUint32(p + 8, true);
+      const packCount = dv.getUint32(p + 12, true);
+      const ml = manifest.levels[k];
+      if (nx !== ml.gridSize.x || ny !== ml.gridSize.y || nz !== ml.gridSize.z) {
+        throw _v3IndexError(`level ${k} grid ${nx}×${ny}×${nz} ≠ the manifest's ${ml.gridSize.x}×${ml.gridSize.y}×${ml.gridSize.z}`);
+      }
+      const slots = nx * ny * nz;
+      levels.push({ k, nx, ny, nz, slots, packCount, base: at, dims: ml.dimensions, voxelSize: ml.voxelSize || null });
+      at += V3_ENTRY * C * slots;
+    }
+    if (u8.length !== at) throw _v3IndexError(`${u8.length} bytes ≠ ${at} for the levels' grids`);
+    const packSizes = new Map();   // pack rel url -> bytes
+    for (const lv of levels) {
+      const bits = new Uint8Array(lv.slots);
+      let count = 0;
+      for (let c = 0; c < C; c++) {
+        const base = lv.base + V3_ENTRY * c * lv.slots;
+        let lastPack = -1, lastRel = '', lastEnd = 0;
+        for (let i = 0; i < lv.slots; i++) {
+          const e = base + V3_ENTRY * i;
+          const length = dv.getUint32(e + 6, true);
+          if (length === 0) continue;
+          const pack = dv.getUint16(e, true);
+          const offset = dv.getUint32(e + 2, true);
+          if (pack >= lv.packCount) throw _v3IndexError(`level ${lv.k} channel ${c} brick ${i}: pack ${pack} ≥ packCount ${lv.packCount}`);
+          if (length > V3_MAX_BRICK_BYTES) throw _v3IndexError(`level ${lv.k} channel ${c} brick ${i}: ${length} bytes`);
+          if (pack !== lastPack) {
+            if (lastPack >= 0 && lastEnd > (packSizes.get(lastRel) || 0)) packSizes.set(lastRel, lastEnd);
+            lastPack = pack; lastRel = _v3PackRel(lv.k, c, pack); lastEnd = packSizes.get(lastRel) || 0;
+          }
+          if (offset + length > lastEnd) lastEnd = offset + length;
+          if (!bits[i]) { bits[i] = 1; count++; }
+        }
+        if (lastPack >= 0 && lastEnd > (packSizes.get(lastRel) || 0)) packSizes.set(lastRel, lastEnd);
+      }
+      lv.bits = bits;
+      lv.count = count;
+    }
+    return { u8, dv, channels: C, levels, packSizes };
+  }
+
+  /** One brick's location in a parsed v3 index, or null (absent ⇒ zeros). O(1). */
+  function _v3Lookup(index, k, c, bx, by, bz) {
+    const lv = index.levels[k];
+    if (!lv || !(c >= 0 && c < index.channels)) return null;
+    if (!(bx >= 0 && bx < lv.nx && by >= 0 && by < lv.ny && bz >= 0 && bz < lv.nz)) return null;
+    const e = lv.base + V3_ENTRY * (c * lv.slots + (bz * lv.ny + by) * lv.nx + bx);
+    const length = index.dv.getUint32(e + 6, true);
+    if (!length) return null;
+    return { url: _v3PackRel(k, c, index.dv.getUint16(e, true)), offset: index.dv.getUint32(e + 2, true), length };
+  }
+
+  /** SHA-256 hex of `bytes`: PlaneLoader's (crypto.subtle, else its FIPS 180-4 JS digest), else crypto.subtle. */
+  async function _sha256HexAny(bytes) {
+    if (typeof PlaneLoader !== 'undefined' && PlaneLoader && typeof PlaneLoader.sha256Hex === 'function') {
+      return PlaneLoader.sha256Hex(bytes);
+    }
+    if (typeof crypto !== 'undefined' && crypto && crypto.subtle) return _sha256Hex(bytes);
+    throw _v3IndexError('no SHA-256 implementation available to verify it');
+  }
+
+  /**
+   * The parsed index of the v3 tree at `basePath` (fetched once per url + sha256):
+   * its length must be `index.bytes` and its sha256 `index.sha256`.
+   */
+  function _loadV3Index(basePath, manifest, signal) {
+    const ix = manifest.index;
+    const url = `${String(basePath).replace(/\/$/, '')}/${String(ix.url).replace(/^\/+/, '')}?v=${ix.sha256.slice(0, 12)}`;
+    let p = _v3IndexCache.get(url);
+    if (p) {
+      return p.then((parsed) => {
+        const gridsDiffer = parsed.levels.some((lv, k) => {
+          const g = manifest.levels[k] && manifest.levels[k].gridSize;
+          return !g || lv.nx !== g.x || lv.ny !== g.y || lv.nz !== g.z;
+        });
+        if (parsed.levels.length !== manifest.levels.length || parsed.channels !== manifest.channels || gridsDiffer) {
+          throw _v3IndexError('cached index does not match this manifest');
+        }
+        return parsed;
+      });
+    }
+    p = (async () => {
+      const resp = await fetch(url, signal ? { signal } : undefined);
+      if (!resp.ok) throw Object.assign(new Error(`[BrickLoader] index.bin: HTTP ${resp.status} for ${url}`), { code: 'BRICKS_INDEX_HTTP' });
+      const bytes = new Uint8Array(await resp.arrayBuffer());
+      if (bytes.length !== ix.bytes) throw _v3IndexError(`${bytes.length} bytes ≠ index.bytes ${ix.bytes}`);
+      const digest = await _sha256HexAny(bytes);
+      if (digest !== ix.sha256) throw _v3IndexError('sha256 differs from the manifest\'s index.sha256');
+      return _parseV3Index(bytes, manifest);
+    })();
+    _v3IndexCache.set(url, p);
+    p.catch(() => { if (_v3IndexCache.get(url) === p) _v3IndexCache.delete(url); });
+    while (_v3IndexCache.size > V3_INDEX_CACHE) _v3IndexCache.delete(_v3IndexCache.keys().next().value);
+    return p;
   }
 
   // ── Mount ─────────────────────────────────────────────────────────────────
@@ -352,6 +577,11 @@ const BrickLoader = (() => {
     const transport = manifest.brickTransport || null;
     const { packIndex, packSizes, stamp } = _packIndexFor(transport);
     return {
+      version: 2,
+      bs: BRICK_SIZE,
+      apron: 0,
+      hasPackIndex: packIndex.size > 0,
+      lookup: (lod, channel, bx, by, bz) => packIndex.get(_relBrickPath(lod, channel, bx, by, bz)) || null,
       packQuery: stamp ? `?v=${stamp}` : '',
       basePath,
       manifest,
@@ -363,6 +593,33 @@ const BrickLoader = (() => {
       packHashes: transport?.packHashes && typeof transport.packHashes === 'object' ? transport.packHashes : null,
       brickHashes: manifest.hashes && typeof manifest.hashes === 'object' ? manifest.hashes : null,
       grids: _levelsFor(manifest)
+    };
+  }
+
+  function _makeMountV3(basePath, manifest, index) {
+    const grids = new Map();
+    for (const lv of index.levels) {
+      const ml = manifest.levels[lv.k];
+      grids.set(lv.k, { dims: ml.dimensions, nx: lv.nx, ny: lv.ny, nz: lv.nz, bits: lv.bits, count: lv.count, voxelSize: ml.voxelSize || null, packCount: lv.packCount });
+    }
+    return {
+      version: 3,
+      bs: V3_STRIDE,
+      apron: V3_APRON,
+      hasPackIndex: true,
+      lookup: (lod, channel, bx, by, bz) => _v3Lookup(index, lod, channel, bx, by, bz),
+      packQuery: `?v=${manifest.index.sha256.slice(0, 12)}`,
+      basePath,
+      manifest,
+      index,
+      encoding: 'webp-lossless',
+      packMode: true,
+      packing: { mode: 'grid', cols: V3_COLS, rows: V3_ROWS, slice: V3_STRIDE },
+      packIndex: null,
+      packSizes: index.packSizes,
+      packHashes: null,
+      brickHashes: null,
+      grids
     };
   }
 
@@ -380,13 +637,35 @@ const BrickLoader = (() => {
    * another quality or timepoint of the same dataset cancels nothing — each batch
    * keeps the mount it was started on.
    */
-  function init(basePath, manifest) {
+  function init(basePath, manifest, options = {}) {
     _validateManifest(manifest);     // ELE-21 (Rule 1.4): rejet AVANT toute mutation d'état
     const next = String(basePath).replace(/\/$/, '');
+    const token = ++_initSeq;
+    if (!_isV3(manifest)) {
+      _pendingInit = null;
+      _commitMount(next, manifest, () => _makeMount(next, manifest));
+      return Promise.resolve();
+    }
+    // A v3 tree mounts once its index has landed and checked out; until then the
+    // previous mount stays (and loadBrickTasks waits for this one).
+    if (_mount && _mount.manifest === manifest && _mount.basePath === next) {
+      _pendingInit = null;
+      return Promise.resolve();
+    }
+    const p = _loadV3Index(next, manifest, options.signal).then((index) => {
+      if (token !== _initSeq) return;    // a later init won
+      _commitMount(next, manifest, () => _makeMountV3(next, manifest, index));
+    });
+    const tracked = p.catch(() => {}).then(() => { if (_pendingInit === tracked) _pendingInit = null; });
+    _pendingInit = tracked;
+    return p;
+  }
+
+  function _commitMount(next, manifest, make) {
     if (_mount && _mount.manifest === manifest && _mount.basePath === next) return;
     const sameDataset = Boolean(_mount) && _datasetRoot(next) === _datasetRoot(_mount.basePath);
     if (_mount && !sameDataset) _switchDataset();
-    _mount = _makeMount(next, manifest);
+    _mount = make();
     _ensureWorkers();
   }
 
@@ -396,6 +675,7 @@ const BrickLoader = (() => {
     for (const entry of [..._store.values()]) _dropEntry(entry, true);
     _store.clear();
     _runsByPack.clear();
+    _runGroups.clear();
     _packRefs.clear();
     _runRefs.clear();
     _bytes.pack = 0;
@@ -458,6 +738,10 @@ const BrickLoader = (() => {
     if (options.verifyHashes !== undefined) {
       _settings.verifyHashes = Boolean(options.verifyHashes);
     }
+    if (options.multiRange !== undefined) {
+      const m = options.multiRange === true ? 'on' : (options.multiRange === false ? 'off' : String(options.multiRange));
+      if (m === 'auto' || m === 'on' || m === 'off') _settings.multiRange = m;
+    }
     _trimStore();
   }
 
@@ -479,8 +763,47 @@ const BrickLoader = (() => {
       z: g.dims.z,
       channels: _mount.manifest.channels || 1,
       brickSize: BRICK_SIZE,
+      brickStride: _mount.bs,
+      apron: _mount.apron,
       lod: Number(lod)
     };
+  }
+
+  /**
+   * The mounted tree's format: { version: 2|3, apron: 0|1, brickStride: 64|66,
+   * brickSize: 64, channels, levels: [{ level, dims: {x,y,z}, voxelSize: {x,y,z}|null,
+   * grid: {x,y,z}, brickCount }] } — null before a mount. `brickCount` counts the
+   * brick slots any channel stores.
+   */
+  function getFormat() {
+    if (!_mount) return null;
+    const levels = [];
+    for (const k of [..._mount.grids.keys()].sort((a, b) => a - b)) levels.push(getLevelInfo(k));
+    return {
+      version: _mount.version,
+      apron: _mount.apron,
+      brickStride: _mount.bs,
+      brickSize: BRICK_SIZE,
+      channels: _mount.manifest.channels || 1,
+      levels
+    };
+  }
+
+  /** One level of the mounted tree (see getFormat), or null. v3 adds `packCount`. */
+  function getLevelInfo(k) {
+    const g = _grid(k);
+    if (!g) return null;
+    const ml = Array.isArray(_mount.manifest.levels) ? _mount.manifest.levels[Number(k)] : null;
+    const vs = g.voxelSize || (ml && ml.voxelSize) || null;
+    const info = {
+      level: Number(k),
+      dims: { x: g.dims.x, y: g.dims.y, z: g.dims.z },
+      voxelSize: vs ? { x: vs.x, y: vs.y, z: vs.z } : null,
+      grid: { x: g.nx, y: g.ny, z: g.nz },
+      brickCount: g.count
+    };
+    if (_mount.version === 3) info.packCount = g.packCount;
+    return info;
   }
 
   /**
@@ -573,6 +896,11 @@ const BrickLoader = (() => {
    * RGBA transport, `region` an optional voxel box {x0,x1,y0,y1,z0,z1} of the brick —
    * as one batch.
    *
+   * On a v3 tree (getFormat().version === 3) a brick is delivered as its stored 66³
+   * (stride 66: stored voxel s of an axis is volume voxel 64·b − 1 + s, the border
+   * clamped to the volume's edge), `region` is a box of that 66³ frame, a brick the
+   * index does not hold is zeros 66³ (border included), and channel -1 is refused.
+   *
    * options
    *   onBrickLoaded(row)   row = { bx, by, bz, channel, lod, data, region, batchId }.
    *                        `data` is the brick's voxels, or the `region` box alone when
@@ -608,8 +936,12 @@ const BrickLoader = (() => {
    *                        channels could be loaded is not delivered. `cropToVolume`
    *                        cuts an edge brick to the voxels inside the volume (the row's
    *                        `region` is then that box), which SVRManager.writeRgbaBrick
-   *                        uploads without another copy.
+   *                        uploads without another copy. On a v3 tree the box keeps
+   *                        the stored voxels whose volume coordinate lies in
+   *                        [−1, dimension] (the voxels inside plus a 1-voxel border).
    *   streamOnly           do not collect the returned Map (callers that consume rows).
+   *   manifest             the manifest the tasks were planned on: rejects (code
+   *                        BRICKS_MOUNT_CHANGED) when another tree is mounted by then.
    *   cacheResults / readCache  accepted and ignored: decoded bricks are not cached.
    *
    * Resolves (never rejects on cancellation) to a Map "<lod>:c<channel>:bx_by_bz" ->
@@ -619,7 +951,14 @@ const BrickLoader = (() => {
    * `skipped` lists what a cancellation left undone.
    */
   async function loadBrickTasks(tasks, options = {}) {
+    if (_pendingInit) await _pendingInit;
     if (!_mount) throw new Error('BrickLoader not initialized.');
+    // A caller that planned its tasks on one tree names it: another tree mounted
+    // meanwhile (a timepoint prefetch, the detail streaming re-mounting the frame on
+    // screen, a v3 index landing) must not silently serve these coordinates.
+    if (options.manifest && _mount.manifest !== options.manifest) {
+      throw Object.assign(new Error('[BrickLoader] another tree is mounted than the one these tasks were planned on'), { code: 'BRICKS_MOUNT_CHANGED', stale: true });
+    }
     const mount = _mount;
     const list = Array.isArray(tasks) ? tasks : [];
     const explicitGroup = typeof options.group === 'string' && options.group ? options.group : null;
@@ -679,8 +1018,9 @@ const BrickLoader = (() => {
     };
 
     const planned = list.map((task, index) => _planTask(mount, task, index));
+    batch.multiRange = _multiRangeFor(mount);
     batch.rangePlan = options.byteRanges && !_rangeUnsupportedHosts.has(_hostOf(mount.basePath))
-      ? _planRanges(planned, mount)
+      ? _planRanges(planned, mount, batch.multiRange)
       : null;
     for (const t of planned) _attachSource(batch, t);
     batch.order = (options.strictOrder === true) ? planned : _packMajorOrder(planned, mount);
@@ -725,9 +1065,9 @@ const BrickLoader = (() => {
     const channel = (task.channel === -1 || task.channel === 'rgba') ? -1
       : (Number.isFinite(Number(task.channel)) ? Number(task.channel) : 0);
     const { bx, by, bz } = task;
-    const rel = _relBrickPath(lod, channel, bx, by, bz);
-    const packed = mount.packIndex.get(rel) || null;
-    const nregion = _normalizeRegion(task.region, BRICK_SIZE);
+    const rel = mount.version === 3 ? `l${lod}/c${channel}/${bz}_${by}_${bx}` : _relBrickPath(lod, channel, bx, by, bz);
+    const packed = mount.lookup(lod, channel, bx, by, bz);
+    const nregion = _normalizeRegion(task.region, mount.bs);
     return {
       index, lod, channel, bx, by, bz, rel, packed,
       region: task.region || null,
@@ -751,7 +1091,8 @@ const BrickLoader = (() => {
       runStart: run ? run.start : 0,
       runEnd: run ? run.end : 0,
       bytes: run ? run.end - run.start : size,
-      hash: batch.mount.packHashes ? batch.mount.packHashes[t.packed.url] || null : null
+      hash: batch.mount.packHashes ? batch.mount.packHashes[t.packed.url] || null : null,
+      multi: Boolean(batch.multiRange)
     };
     _packRefs.set(packAbs, (_packRefs.get(packAbs) || 0) + 1);
     if (t.src.runKey) _runRefs.set(t.src.runKey, (_runRefs.get(t.src.runKey) || 0) + 1);
@@ -922,7 +1263,7 @@ const BrickLoader = (() => {
 
   function _expectedLength(mount, t, comps) {
     const region = mount.packing?.mode === 'grid' ? t.nregion : null;
-    return _regionVoxels(region) * comps;
+    return _regionVoxels(region, mount.bs) * comps;
   }
 
   /**
@@ -935,15 +1276,20 @@ const BrickLoader = (() => {
     const enc = mount.encoding;
     if (!_supportsWebGL3D) throw _fatal('3D textures (WebGL2) are unavailable: bricks cannot be displayed.');
     const lut = batch.luts && t.channel >= 0 ? batch.luts[t.channel] || null : null;
-    const whole = BRICK_SIZE * BRICK_SIZE * BRICK_SIZE;
+    const bs = mount.bs;
+    const whole = bs * bs * bs;
+    if (mount.version === 3 && !(Number.isInteger(t.channel) && t.channel >= 0 && t.channel < (mount.manifest.channels || 1))) {
+      throw _fatal(`channel ${t.channel} does not exist in this tree (${mount.manifest.channels} channels)`);
+    }
 
     if (!t.packed && mount.packMode) {
       // ELE-20: brickToPack is the per-channel authority in pack mode. A brick absent
       // from it was ESS-skipped for THIS channel (the union `nonEmpty` flag can still
-      // mark the slot occupied because another channel has data there): zeros.
+      // mark the slot occupied because another channel has data there): zeros. In a
+      // v3 tree an absent brick is zeros border included (SPEC §13.2).
       if (assemble) return null;
       const comps = enc === 'raw-rgba-gzip' ? 4 : 1;
-      return new Uint8Array(_regionVoxels(mount.packing?.mode === 'grid' ? t.nregion : null) * comps);
+      return new Uint8Array(_regionVoxels(mount.packing?.mode === 'grid' ? t.nregion : null, bs) * comps);
     }
 
     let bytes;
@@ -976,7 +1322,10 @@ const BrickLoader = (() => {
       throw _fatal('unknown brick packing ' + JSON.stringify(packing.mode) + ' for ' + t.rel);
     }
     const expected = _expectedLength(mount, t, 1);
-    const job = { buffer: bytes, brickSize: BRICK_SIZE, packing, region: t.nregion, lut };
+    const job = { buffer: bytes, brickSize: bs, packing, region: t.nregion, lut };
+    // A v3 mosaic has one exact size; any other picture is a corrupt brick, not a
+    // truncated one to pad with zeros.
+    if (mount.version === 3) job.expect = { width: V3_COLS * V3_STRIDE, height: V3_ROWS * V3_STRIDE };
     if (assemble) {
       return _decodeInto(batch, job, assemble);
     }
@@ -988,6 +1337,17 @@ const BrickLoader = (() => {
   }
 
   // ── Sources ─────────────────────────────────────────────────────────────────
+  /** Whether the runs of a batch on `mount` may share multi-range requests. */
+  function _multiRangeFor(mount) {
+    const mode = _settings.multiRange;
+    if (mode === 'off') return false;
+    // A host whose multi-range answers were unusable gets single-range plans again
+    // (wide gap merging, few runs per pack), not 512 one-run requests per pack.
+    if (mount && _multiRangeBadHosts.has(_hostOf(mount.basePath))) return false;
+    if (mode === 'on') return true;
+    return Boolean(mount && mount.version === 3);
+  }
+
   function _hostOf(basePath) {
     const m = /^([a-z][a-z0-9+.-]*:\/\/[^/]+)/i.exec(String(basePath || ''));
     return m ? m[1].toLowerCase() : '';
@@ -1067,68 +1427,278 @@ const BrickLoader = (() => {
     const entry = _newEntry(src.runKey, 'run', src.packAbs);
     entry.start = src.runStart;
     entry.end = src.runEnd;
+    entry.src = src;
     let set = _runsByPack.get(src.packAbs);
     if (!set) _runsByPack.set(src.packAbs, set = new Set());
     set.add(entry);
     if (_fetchedOnce.has(entry.key)) _stats.refetches++;
     _fetchedOnce.add(entry.key);
-    const signal = entry.controller.signal;
     const host = _hostOf(src.packAbs);
-    const viaWholePack = () => {
-      const pack = _store.get(src.packAbs) || _createPackEntry(src.packAbs, { hash: src.hash });
-      pack.promise.then(() => _migrateRunsToPack(src.packAbs, pack), (err) => _settleFailed(entry, err));
-    };
-    const endProbe = () => { if (entry.probe) { entry.probe.done(); entry.probe = null; } };
     (async () => {
       const gate = _rangeGate(host, entry);
       if (gate) await gate;
-      if (entry.state !== 'pending') { endProbe(); return; }
+      if (entry.state !== 'pending') { _endProbe(entry); return; }
       // The whole pack is held or on its way (a 200 answer to a sibling run, another
       // batch's whole-pack request), or this host ignores Range: read from the pack.
-      if (_store.get(src.packAbs) || _rangeUnsupportedHosts.has(host)) { endProbe(); viaWholePack(); return; }
-      _withFetchSlot(async () => {
-        const whole = _store.get(src.packAbs);
-        if (whole) return { adopt: whole };
-        if (entry.state !== 'pending') return { done: true };
-        _stats.runFetches++;
-        const resp = await fetch(src.packAbs, { signal, headers: { Range: `bytes=${entry.start}-${entry.end - 1}` } });
-        if (resp.status === 206) {
-          _rangeSupportedHosts.add(host);
-          endProbe();
-          const buffer = await _readBody(resp, entry);
-          if (buffer.byteLength !== entry.end - entry.start) {
-            throw new Error(`Range ${entry.start}-${entry.end - 1} of ${src.packAbs} answered ${buffer.byteLength} bytes`);
-          }
-          return { buffer };
-        }
-        if (resp.status === 200) {
-          // The server ignored Range and sent the whole pack: keep it as the pack, let
-          // every run of that pack read from it, and stop planning ranges on this host.
-          _rangeUnsupportedHosts.add(host);
-          const buffer = await _readBody(resp, entry);
-          const pack = _adoptWholePack(src.packAbs, buffer);
-          endProbe();
-          return { adopt: pack };
-        }
-        throw new Error(`HTTP ${resp.status} for ${src.packAbs} (range ${entry.start}-${entry.end - 1})`);
-      }, signal).then(
-        (got) => {
-          endProbe();
-          if (got.adopt) {
-            if (got.adopt.state === 'ready') _migrateRunsToPack(src.packAbs, got.adopt);
-            else got.adopt.promise.then(() => _migrateRunsToPack(src.packAbs, got.adopt), (err) => _settleFailed(entry, err));
-          } else if (got.buffer) {
-            _settleReady(entry, got.buffer, entry.start);
-          }
-        },
-        (err) => { endProbe(); _settleFailed(entry, err); }
-      );
+      if (_store.get(src.packAbs) || _rangeUnsupportedHosts.has(host)) { _endProbe(entry); _runViaWholePack(entry); return; }
+      // The probe of a host goes alone: what it learns (Range honoured or not) decides
+      // for the requests waiting behind it.
+      if (src.multi && !entry.probe && !_multiRangeBadHosts.has(host)) _enqueueRun(entry);
+      else _fetchRuns(src.packAbs, host, [entry], null);
     })();
     return entry;
   }
 
+  function _endProbe(entry) {
+    if (entry.probe) { entry.probe.done(); entry.probe = null; }
+  }
+
+  function _runViaWholePack(entry) {
+    const src = entry.src;
+    const pack = _store.get(src.packAbs) || _createPackEntry(src.packAbs, { hash: src.hash });
+    pack.promise.then(() => _migrateRunsToPack(src.packAbs, pack), (err) => _settleFailed(entry, err));
+  }
+
+  /**
+   * Multi-range coalescing: a run of a pack joins that pack's request still waiting
+   * for a fetch slot; the runs are taken (sorted, capped) when the slot frees, so
+   * everything asked of a pack meanwhile leaves in one request.
+   */
+  function _enqueueRun(entry) {
+    const url = entry.src.packAbs;
+    let g = _runGroups.get(url);
+    if (!g) {
+      g = { url, host: _hostOf(url), queue: [], ctrl: new AbortController(), taken: false };
+      _runGroups.set(url, g);
+      // A microtask lets a batch's synchronous pump add all its runs before the group asks.
+      Promise.resolve().then(() => _fetchRuns(url, g.host, null, g));
+    }
+    g.queue.push(entry);
+    entry.controller.signal.addEventListener('abort', () => {
+      // Every run gone before the request left: the slot wait is abandoned.
+      if (!g.taken && g.queue.every(e => e.state !== 'pending')) {
+        if (_runGroups.get(url) === g) _runGroups.delete(url);
+        try { g.ctrl.abort(); } catch (err) { /* settled */ }
+      }
+    }, { once: true });
+  }
+
+  /** The runs of a waiting group one request carries (part and header caps); the rest form the next group. */
+  function _takeRuns(g) {
+    g.taken = true;
+    if (_runGroups.get(g.url) === g) _runGroups.delete(g.url);
+    const live = g.queue.filter(e => e.state === 'pending').sort((a, b) => (a.start - b.start) || (a.end - b.end));
+    const taken = [];
+    let header = 'bytes='.length;
+    for (const e of live) {
+      const part = String(e.start).length + String(e.end - 1).length + 3;   // "a-b, "
+      if (taken.length && (taken.length >= MULTI_RANGE_MAX_PARTS || header + part > MULTI_RANGE_MAX_HEADER)) break;
+      taken.push(e);
+      header += part;
+    }
+    for (const e of live.slice(taken.length)) _enqueueRun(e);
+    return taken;
+  }
+
+  /**
+   * One request for runs of the pack `url` — `entries`, or the runs of `group` taken
+   * when the fetch slot frees: `Range: bytes=a-b` for one run, `bytes=a-b, c-d, …` for
+   * several. The answer is
+   *   206 multipart/byteranges  every run cut out of the part that covers it;
+   *   206 one part              the runs its Content-Range covers (a server may merge
+   *                             close ranges, or serve only the first); the others are
+   *                             asked again one by one;
+   *   200                       the whole pack: kept as the pack, ranges stop for the host.
+   * A multipart body that cannot be parsed, or one unlabelled body for several ranges,
+   * sends its runs again one by one and stops multi-range requests to that host.
+   */
+  function _fetchRuns(url, host, entries, group) {
+    const ctrl = group ? group.ctrl : new AbortController();
+    const holder = { controller: ctrl };
+    let live = entries || [];
+    const watch = (list) => {
+      for (const e of list) {
+        e.controller.signal.addEventListener('abort', () => {
+          if (list.every(x => x.state !== 'pending')) { try { ctrl.abort(); } catch (err) { /* settled */ } }
+        }, { once: true });
+      }
+    };
+    if (!group) watch(live);
+    _withFetchSlot(async () => {
+      if (group) { live = _takeRuns(group); watch(live); }
+      const whole = _store.get(url);
+      if (whole) return { adopt: whole };
+      live = live.filter(e => e.state === 'pending');
+      if (!live.length) return { done: true };
+      _stats.runFetches++;
+      const range = 'bytes=' + live.map(e => `${e.start}-${e.end - 1}`).join(', ');
+      const resp = await fetch(url, { signal: ctrl.signal, headers: { Range: range } });
+      if (resp.status === 206) {
+        _rangeSupportedHosts.add(host);
+        live.forEach(_endProbe);
+        const header = (name) => (resp.headers && typeof resp.headers.get === 'function' ? resp.headers.get(name) || '' : '');
+        const contentType = header('content-type');
+        const contentRange = header('content-range');
+        const body = new Uint8Array(await _readBody(resp, holder));
+        if (/^\s*multipart\/byteranges/i.test(contentType)) {
+          try {
+            return { parts: _parseMultipartByteranges(body, contentType) };
+          } catch (err) {
+            if (live.length < 2) throw err;
+            _multiRangeBadHosts.add(host);
+            console.warn(`[BrickLoader] Multi-range answer of ${url} unusable (${err.message}); asking its runs one by one.`);
+            return { retry: live };
+          }
+        }
+        if (contentRange) {
+          const cr = _parseContentRange(contentRange);
+          if (!cr || cr.end - cr.start !== body.length) {
+            throw new Error(`Range answer of ${url}: Content-Range "${contentRange}" for ${body.length} bytes`);
+          }
+          return { parts: [{ start: cr.start, end: cr.end, bytes: body }] };
+        }
+        if (live.length === 1) {
+          const e = live[0];
+          if (body.length !== e.end - e.start) {
+            throw new Error(`Range ${e.start}-${e.end - 1} of ${url} answered ${body.length} bytes`);
+          }
+          return { parts: [{ start: e.start, end: e.end, bytes: body }] };
+        }
+        // Several ranges asked, one unlabelled body: nothing tells where it belongs.
+        _multiRangeBadHosts.add(host);
+        return { retry: live };
+      }
+      if (resp.status === 200) {
+        // The server ignored Range and sent the whole pack: keep it as the pack, let
+        // every run of that pack read from it. A 200 to SEVERAL ranges says only that
+        // the host will not answer multi-range requests (a server's range-count cap):
+        // single ranges stay planned (its probe was a single range). A 200 to one range
+        // stops range planning on this host.
+        if (live.length > 1) _multiRangeBadHosts.add(host);
+        else _rangeUnsupportedHosts.add(host);
+        const buffer = await _readBody(resp, holder);
+        const pack = _adoptWholePack(url, buffer);
+        live.forEach(_endProbe);
+        return { adopt: pack };
+      }
+      const what = live.length === 1 ? `range ${live[0].start}-${live[0].end - 1}` : `${live.length} ranges`;
+      throw new Error(`HTTP ${resp.status} for ${url} (${what})`);
+    }, ctrl.signal).then(
+      (got) => {
+        live.forEach(_endProbe);
+        if (got.adopt) {
+          if (got.adopt.state === 'ready') _migrateRunsToPack(url, got.adopt);
+          else got.adopt.promise.then(() => _migrateRunsToPack(url, got.adopt), (err) => live.forEach(e => _settleFailed(e, err)));
+          return;
+        }
+        if (got.retry) {
+          for (const e of got.retry) if (e.state === 'pending') _fetchRuns(url, host, [e], null);
+          return;
+        }
+        if (!got.parts) return;
+        const missing = [];
+        for (const e of live) {
+          if (e.state !== 'pending') continue;
+          const part = got.parts.find(p => p.start <= e.start && e.end <= p.end);
+          if (part) _settleReady(e, part.bytes.slice(e.start - part.start, e.end - part.start).buffer, e.start);
+          else missing.push(e);
+        }
+        if (!missing.length) return;
+        if (live.length === 1) {
+          const e = missing[0];
+          _settleFailed(e, new Error(`Range ${e.start}-${e.end - 1} of ${url} answered another range`));
+          return;
+        }
+        if (missing.length === live.length) _multiRangeBadHosts.add(host);
+        for (const e of missing) _fetchRuns(url, host, [e], null);
+      },
+      (err) => {
+        live.forEach(_endProbe);
+        // Abandoned while waiting for a slot (every run gone): settle what is queued.
+        const settle = group && !group.taken ? group.queue : live;
+        settle.forEach(e => _settleFailed(e, err));
+      }
+    );
+  }
+
+  /** "bytes a-b/total" → { start: a, end: b + 1 } (end exclusive), or null. */
+  function _parseContentRange(value) {
+    const m = /^\s*bytes\s+(\d+)\s*-\s*(\d+)\s*\/\s*(\d+|\*)\s*$/i.exec(String(value || ''));
+    if (!m) return null;
+    const start = Number(m[1]);
+    const last = Number(m[2]);
+    if (!(last >= start) || (m[3] !== '*' && last >= Number(m[3]))) return null;
+    return { start, end: last + 1 };
+  }
+
+  /**
+   * A multipart/byteranges body (RFC 9110 §14.6) → [{ start, end, bytes }]. Each part:
+   * "--boundary", a line break, header lines up to an empty line (Content-Range
+   * required), then exactly the bytes its Content-Range announces — cut by that length,
+   * never by searching for the boundary (brick bytes may contain it) — and the next
+   * delimiter right after (one line break between). "--boundary--" closes the body.
+   * Anything else throws.
+   */
+  function _parseMultipartByteranges(body, contentType) {
+    const m = /boundary\s*=\s*(?:"([^"]+)"|([^;\s]+))/i.exec(String(contentType || ''));
+    if (!m) throw new Error('multipart answer without a boundary');
+    const boundary = m[1] || m[2];
+    const delim = new Uint8Array(boundary.length + 2);
+    delim[0] = 45; delim[1] = 45;   // "--"
+    for (let i = 0; i < boundary.length; i++) {
+      const code = boundary.charCodeAt(i);
+      if (code < 32 || code > 126) throw new Error('multipart boundary is not printable ASCII');
+      delim[i + 2] = code;
+    }
+    const delimAt = (pos) => {
+      if (pos < 0 || pos + delim.length > body.length) return false;
+      for (let i = 0; i < delim.length; i++) if (body[pos + i] !== delim[i]) return false;
+      return true;
+    };
+    const eolAfter = (pos) => (body[pos] === 13 && body[pos + 1] === 10 ? pos + 2 : (body[pos] === 10 ? pos + 1 : pos));
+    // The first delimiter opens the body, possibly after a line break (or a short preamble).
+    let pos = -1;
+    for (let i = 0; i + delim.length <= body.length && i < 1024; i++) {
+      if (delimAt(i) && (i === 0 || body[i - 1] === 10)) { pos = i; break; }
+    }
+    if (pos < 0) throw new Error('multipart answer without a delimiter');
+    const parts = [];
+    for (;;) {
+      if (!delimAt(pos)) throw new Error(`multipart delimiter expected at byte ${pos}`);
+      pos += delim.length;
+      if (body[pos] === 45 && body[pos + 1] === 45) break;   // the closing "--boundary--"
+      while (body[pos] === 32 || body[pos] === 9) pos++;      // transport padding
+      const next = eolAfter(pos);
+      if (next === pos) throw new Error('multipart delimiter not followed by a line break');
+      pos = next;
+      let range = null;
+      for (;;) {
+        let eol = pos;
+        while (eol < body.length && body[eol] !== 10) eol++;
+        if (eol >= body.length) throw new Error('multipart part headers run past the body');
+        let line = '';
+        for (let i = pos; i < eol; i++) line += String.fromCharCode(body[i]);
+        line = line.replace(/\r$/, '');
+        pos = eol + 1;
+        if (!line) break;
+        const h = /^\s*content-range\s*:\s*(.*)$/i.exec(line);
+        if (h) {
+          range = _parseContentRange(h[1]);
+          if (!range) throw new Error(`multipart part with a malformed Content-Range "${h[1]}"`);
+        }
+      }
+      if (!range) throw new Error('multipart part without a Content-Range');
+      const len = range.end - range.start;
+      if (pos + len > body.length) throw new Error('multipart part shorter than its Content-Range');
+      parts.push({ start: range.start, end: range.end, bytes: body.subarray(pos, pos + len) });
+      pos = eolAfter(pos + len);
+    }
+    if (!parts.length) throw new Error('multipart answer without a part');
+    return parts;
+  }
+
+  /** A 200 body of pack `url` (the caller decides what it says about the host). */
   function _adoptWholePack(url, buffer) {
-    _rangeUnsupportedHosts.add(_hostOf(url));
     for (const batch of _batches) {
       if (batch.rangePlan) {
         for (const rel of [...batch.rangePlan.keys()]) if (_absUrl(batch.mount, rel) === url) batch.rangePlan.delete(rel);
@@ -1370,6 +1940,7 @@ const BrickLoader = (() => {
    * @returns {Promise<number>} packs now held
    */
   function prefetchPacks(baseDir, transport, lod = 0, channel = 0, maxPacks = 8) {
+    if (_isV3(transport)) return _prefetchPacksV3(baseDir, transport, lod, channel, maxPacks);
     const b2p = transport?.brickToPack;
     if (!b2p || typeof b2p !== 'object') return Promise.resolve(0);
     const prefix = channel === null || channel === undefined ? `lod${lod}/` : `lod${lod}/c${channel}/`;
@@ -1399,6 +1970,49 @@ const BrickLoader = (() => {
     return Promise.all(waits).then(rows => rows.filter(Boolean).length);
   }
 
+  /**
+   * prefetchPacks for a v3 tree: `manifest` is that tree's v3 manifest (its `index`
+   * names the tree's own index.bin). The index is fetched (and cached), then the packs
+   * of level `lod` — one channel, or every channel when `channel` is null — in pack
+   * order, up to `maxPacks`, under the same prefetch budget.
+   */
+  async function _prefetchPacksV3(baseDir, manifest, lod, channel, maxPacks) {
+    try { _validateManifest(manifest); } catch (e) { return 0; }
+    const base = String(baseDir).replace(/\/$/, '');
+    let index;
+    try { index = await _loadV3Index(base, manifest); } catch (e) { return 0; }
+    const lv = index.levels[Number(lod)];
+    if (!lv) return 0;
+    const query = `?v=${manifest.index.sha256.slice(0, 12)}`;
+    const channels = channel === null || channel === undefined
+      ? Array.from({ length: index.channels }, (_, c) => c)
+      : [Number(channel)];
+    const sizes = new Map();
+    outer:
+    for (const c of channels) {
+      for (let p = 0; p < lv.packCount; p++) {
+        const rel = _v3PackRel(lv.k, c, p);
+        const size = index.packSizes.get(rel);
+        if (!size) continue;
+        if (sizes.size >= maxPacks) break outer;
+        sizes.set(`${base}/${rel}${query}`, size);
+      }
+    }
+    if (!sizes.size) return 0;
+    let retainedBytes = [..._store.values()].filter(e => e.retain).reduce((s, e) => s + (e.bytes || 0), 0);
+    const waits = [];
+    for (const [url, size] of sizes) {
+      const held = _store.get(url);
+      if (held) { waits.push(held.promise.then(() => true, () => false)); continue; }
+      if (retainedBytes + size > _settings.prefetchCacheBytes) break;
+      retainedBytes += size;
+      const entry = _createPackEntry(url, { retain: true, background: true });
+      waits.push(entry.promise.then(() => true, () => false));
+    }
+    const rows = await Promise.all(waits);
+    return rows.filter(Boolean).length;
+  }
+
   // ── Range planning ─────────────────────────────────────────────────────────
   /**
    * For a batch that needs only part of some packs, the byte runs to fetch instead of
@@ -1406,13 +2020,17 @@ const BrickLoader = (() => {
    * gaps up to RANGE_GAP_BYTES; a pack whose runs would still cover most of it, or
    * need too many requests, is left to be fetched whole. Map<pack rel url, runs> or null.
    */
-  function _planRanges(tasks, mount = _mount) {
-    if (!mount || !mount.packIndex.size) return null;
+  function _planRanges(tasks, mount = _mount, multi = false) {
+    if (!mount || !mount.hasPackIndex) return null;
+    // With multi-range requests a run costs a part, not a request: merge only across
+    // small gaps, and allow as many runs as a pack has bricks.
+    const gap = multi ? MULTI_RANGE_GAP_BYTES : RANGE_GAP_BYTES;
+    const maxRuns = multi ? MULTI_RANGE_MAX_RUNS_PER_PACK : RANGE_MAX_RUNS_PER_PACK;
     const perPack = new Map();
     for (const task of Array.isArray(tasks) ? tasks : []) {
       const packed = task.packed !== undefined
         ? task.packed
-        : mount.packIndex.get(_relBrickPath(task.lod ?? 0, task.channel ?? 0, task.bx, task.by, task.bz));
+        : mount.lookup(task.lod ?? 0, task.channel ?? 0, task.bx, task.by, task.bz);
       if (!packed) continue;
       let list = perPack.get(packed.url);
       if (!list) perPack.set(packed.url, list = []);
@@ -1427,12 +2045,12 @@ const BrickLoader = (() => {
       let current = [intervals[0][0], intervals[0][1]];
       for (let i = 1; i < intervals.length; i++) {
         const [start, end] = intervals[i];
-        if (start - current[1] <= RANGE_GAP_BYTES) current[1] = Math.max(current[1], end);
+        if (start - current[1] <= gap) current[1] = Math.max(current[1], end);
         else { runs.push(current); current = [start, end]; }
       }
       runs.push(current);
       const bytes = runs.reduce((sum, r) => sum + (r[1] - r[0]), 0);
-      if (runs.length > RANGE_MAX_RUNS_PER_PACK || bytes >= RANGE_WHOLE_PACK_FRACTION * size) continue;
+      if (runs.length > maxRuns || bytes >= RANGE_WHOLE_PACK_FRACTION * size) continue;
       plan.set(url, runs.map(([start, end]) => ({ start, end })));
     }
     return plan.size ? plan : null;
@@ -1446,9 +2064,15 @@ const BrickLoader = (() => {
 
   /** Compressed bytes of one brick task in its pack (0 when the pack index has no entry). */
   function taskBytes(task) {
-    if (!task || !_mount || !_mount.packIndex.size) return 0;
-    const rel = _relBrickPath(task.lod ?? 0, task.channel ?? 0, task.bx, task.by, task.bz);
-    return _mount.packIndex.get(rel)?.length || 0;
+    if (!task || !_mount || !_mount.hasPackIndex) return 0;
+    return _mount.lookup(task.lod ?? 0, task.channel ?? 0, task.bx, task.by, task.bz)?.length || 0;
+  }
+
+  /** Where one brick task's bytes are stored: { url (pack, relative to the tree), offset, length } or null. */
+  function brickLocation(task) {
+    if (!task || !_mount || !_mount.hasPackIndex) return null;
+    const loc = _mount.lookup(task.lod ?? 0, task.channel ?? 0, task.bx, task.by, task.bz);
+    return loc ? { url: loc.url, offset: loc.offset, length: loc.length } : null;
   }
 
   /** Compressed bytes a batch of tasks has to bring in, pack index permitting. */
@@ -1477,16 +2101,19 @@ const BrickLoader = (() => {
     if (compose.cropToVolume) {
       const g = mount.grids.get(unit.lod);
       if (g) {
-        const bs = BRICK_SIZE;
-        const bw = Math.min(bs, g.dims.x - unit.bx * bs);
-        const bh = Math.min(bs, g.dims.y - unit.by * bs);
-        const bd = Math.min(bs, g.dims.z - unit.bz * bs);
+        const bs = mount.bs;
+        // v3: stored voxel s is volume voxel 64·b − 1 + s; keep s < dim − 64·b + 2,
+        // i.e. the voxels inside and one border voxel past the last one.
+        const extra = mount.apron ? 2 * mount.apron : 0;
+        const bw = Math.min(bs, g.dims.x - unit.bx * BRICK_SIZE + extra);
+        const bh = Math.min(bs, g.dims.y - unit.by * BRICK_SIZE + extra);
+        const bd = Math.min(bs, g.dims.z - unit.bz * BRICK_SIZE + extra);
         const base = r || { x0: 0, x1: bs, y0: 0, y1: bs, z0: 0, z1: bs };
         r = _normalizeRegion({
           x0: base.x0, x1: Math.min(base.x1, bw),
           y0: base.y0, y1: Math.min(base.y1, bh),
           z0: base.z0, z1: Math.min(base.z1, bd)
-        });
+        }, bs);
       }
     }
     return r;
@@ -1558,7 +2185,7 @@ const BrickLoader = (() => {
   async function _composeUnit(batch, unit, compose) {
     const mount = batch.mount;
     const region = _composeRegion(mount, unit, compose);
-    const voxels = _regionVoxels(region);
+    const voxels = _regionVoxels(region, mount.bs);
     const comps = compose.components;
     const failed = new Map();
     const rgbaTransport = unit.tasks.some(t => t.channel === -1);
@@ -1626,7 +2253,7 @@ const BrickLoader = (() => {
       // Main-thread paths (raw transports, no worker): interleave here.
       for (const s of scalars) {
         if (s.channel === -1) {
-          const box = s.data.length === voxels * 4 ? s.data : _cropBox(s.data, BRICK_SIZE, region, 4);
+          const box = s.data.length === voxels * 4 ? s.data : _cropBox(s.data, mount.bs, region, 4);
           const luts = compose.luts;
           for (let i = 0, o = 0; i < voxels; i++, o += 4) {
             for (let c = 0; c < Math.min(4, comps); c++) {
@@ -1636,7 +2263,7 @@ const BrickLoader = (() => {
           }
           continue;
         }
-        const box = s.data.length === voxels ? s.data : _cropBox(s.data, BRICK_SIZE, region, 1);
+        const box = s.data.length === voxels ? s.data : _cropBox(s.data, mount.bs, region, 1);
         const lut = s.lut;
         for (let i = 0, o = s.channel; i < voxels; i++, o += comps) {
           const v = box[i];
@@ -1654,7 +2281,7 @@ const BrickLoader = (() => {
     if (rec) {
       return _postToWorker(batch, rec, {
         type: 'DECODE', buffer: job.buffer, brickSize: job.brickSize,
-        packing: job.packing, region: job.region, lut: job.lut
+        packing: job.packing, region: job.region, lut: job.lut, expect: job.expect || null
       }, [job.buffer]);
     }
     return _decodeWebpMainThread(job);
@@ -1665,7 +2292,7 @@ const BrickLoader = (() => {
     if (!rec.alive || rec.gen !== gen) throw Object.assign(new Error('Brick decode worker lost'), { workerLost: true });
     await _postToWorker(batch, rec, {
       type: 'DECODE', buffer: job.buffer, brickSize: job.brickSize, packing: job.packing,
-      region: job.region, lut, assemble: { key, slot, components }
+      region: job.region, lut, expect: job.expect || null, assemble: { key, slot, components }
     }, [job.buffer]);
     return 'assembled';
   }
@@ -1687,6 +2314,9 @@ const BrickLoader = (() => {
       } else {
         objectUrl = URL.createObjectURL(blob);
         img = await _imageElement(objectUrl);
+      }
+      if (job.expect && (img.width !== job.expect.width || img.height !== job.expect.height)) {
+        throw _fatal(`brick mosaic is ${img.width}×${img.height}, expected ${job.expect.width}×${job.expect.height}`);
       }
       if (!_fallbackCanvas) {
         _fallbackCanvas = typeof OffscreenCanvas !== 'undefined'
@@ -1897,6 +2527,7 @@ const BrickLoader = (() => {
     for (const entry of [..._store.values()]) _dropEntry(entry, true);
     _store.clear();
     _runsByPack.clear();
+    _runGroups.clear();
     _bytes.pack = 0;
     _bytes.run = 0;
     // LEAK-013 (Rule 1.2): the main-thread decode canvas grows to the largest mosaic seen.
@@ -1956,6 +2587,8 @@ const BrickLoader = (() => {
     getManifest,
     getTransportEncoding: () => (_mount ? _mount.encoding : null),
     getDimensions,
+    getFormat,
+    getLevelInfo,
     configure,
     bricksForRegion,
     hasBrick,
@@ -1971,10 +2604,14 @@ const BrickLoader = (() => {
     trimCaches,
     clearCache,
     taskBytes,
+    brickLocation,
     estimateTaskBytes,
     _planRanges,       // exposed for unit testing
     _packMajorOrder,   // exposed for unit testing
     _fetchPackBuffer,  // exposed for unit testing (ELE-17)
-    _validateManifest  // exposed for unit testing (ELE-21)
+    _validateManifest, // exposed for unit testing (ELE-21)
+    _parseV3Index,     // exposed for unit testing (SPEC §13.3)
+    _parseMultipartByteranges,  // exposed for unit testing
+    _parseContentRange          // exposed for unit testing
   };
 })();

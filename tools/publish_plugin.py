@@ -9,6 +9,7 @@ immediately — no other step needed.
     python tools/publish_plugin.py path/to/my-plugin --push              # + go live
     python tools/publish_plugin.py path/to/my-plugin --recommended false --push
     python tools/publish_plugin.py --remove my-plugin --push             # unpublish
+    python tools/publish_plugin.py --resign                              # next serial, same content
 
 The signing seed is read from secrets/marketplace-signing-seed.hex (or the
 LUMEN_MARKETPLACE_SIGNING_KEY env var - NOT LUMEN_SIGNING_KEY, which is the core
@@ -21,6 +22,7 @@ from __future__ import annotations
 
 import argparse
 import json
+from datetime import datetime, timezone
 import os
 import shutil
 import subprocess
@@ -88,14 +90,41 @@ def _load_catalog() -> dict:
     return {"version": 1, "plugins": []}
 
 
-def _write_signed_catalog(cat: dict, seed: bytes) -> None:
+_FRESHNESS_KEYS = ("serial", "issuedAt")
+
+
+def _published_catalog() -> dict:
+    try:
+        d = json.loads(CATALOG.read_text(encoding="utf-8"))
+        return d if isinstance(d, dict) else {}
+    except Exception:
+        return {}
+
+
+def _write_signed_catalog(cat: dict, seed: bytes, force: bool = False) -> bool:
+    """Sign and write the catalog. Every content change raises `serial` by one and
+    stamps `issuedAt`: hosts refuse a catalog whose serial is lower than the highest
+    they accepted (anti-rollback, dev_server._marketplace_check_serial). Nothing is
+    rewritten when the content is unchanged (unless ``force``), so a re-run on an
+    unchanged plugin still produces no git change. Returns True when written."""
     cat["plugins"].sort(key=lambda e: (e.get("placement", ""), e.get("id", "")))
+    prev = _published_catalog()
+    body = {k: v for k, v in cat.items() if k not in _FRESHNESS_KEYS}
+    if not force and prev and {k: v for k, v in prev.items() if k not in _FRESHNESS_KEYS} == body:
+        return False
+    serial = prev.get("serial", 0)
+    serial = serial if isinstance(serial, int) and not isinstance(serial, bool) and serial >= 0 else 0
+    issued = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    cat.clear()
+    cat.update({"version": body.get("version", 1), "serial": serial + 1, "issuedAt": issued,
+                **{k: v for k, v in body.items() if k != "version"}})
     raw = (json.dumps(cat, indent=2, ensure_ascii=False) + "\n").encode("utf-8")
     CATALOG.write_bytes(raw)                                       # LF bytes: signed == published
     sig = ed.sign(seed, raw)
     CATALOG_SIG.write_text(sig.hex() + "\n", encoding="utf-8", newline="\n")
     if not ed.verify(ed.publickey(seed), raw, sig):
         sys.exit("ERROR: catalog self-verification failed after signing.")
+    return True
 
 
 def _entry(meta: dict, info: dict, recommended: bool) -> dict:
@@ -173,7 +202,8 @@ def publish(plugin_dir: Path, recommended_arg, push: bool) -> None:
     else:
         rec = True
     cat["plugins"] = [e for e in cat["plugins"] if e.get("id") != pid] + [_entry(meta, info, rec)]
-    _write_signed_catalog(cat, seed)
+    if _write_signed_catalog(cat, seed):
+        print(f"  catalog serial {cat['serial']} issued {cat['issuedAt']}")
 
     verb = "updated" if existing else "added"
     print(f"✓ {pid} v{info['version']} packaged + {verb} in catalog "
@@ -200,16 +230,33 @@ def remove(pid: str, push: bool) -> None:
         print("Prepared (not pushed). Re-run with --push to go live.")
 
 
+def resign(push: bool) -> None:
+    """Re-issue the catalog unchanged under the next serial (e.g. to supersede a
+    catalog that must no longer be accepted)."""
+    seed = _seed()
+    cat = _load_catalog()
+    _write_signed_catalog(cat, seed, force=True)
+    print(f"✓ catalog re-signed: serial {cat['serial']}, issued {cat['issuedAt']} ({len(cat['plugins'])} plugins)")
+    if push:
+        _push(f"marketplace: re-sign catalog (serial {cat['serial']})")
+    else:
+        print("Prepared (not pushed). Re-run with --push to go live.")
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description="Publish (or unpublish) a plugin to the signed marketplace.")
     ap.add_argument("plugin_dir", nargs="?", help="path to the plugin folder (contains plugin.json)")
     ap.add_argument("--remove", metavar="ID", help="unpublish a plugin by id instead of publishing")
+    ap.add_argument("--resign", action="store_true",
+                    help="re-sign the unchanged catalog under the next serial")
     ap.add_argument("--recommended", choices=["true", "false"], default=None,
                     help="preselect in the first-run picker (default: keep existing / true for new)")
     ap.add_argument("--push", action="store_true", help="commit + push marketplace/ so it goes live")
     args = ap.parse_args()
 
-    if args.remove:
+    if args.resign:
+        resign(args.push)
+    elif args.remove:
         remove(args.remove, args.push)
     elif args.plugin_dir:
         publish(Path(args.plugin_dir), args.recommended, args.push)

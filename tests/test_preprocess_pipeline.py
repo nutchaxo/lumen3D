@@ -313,7 +313,10 @@ class Orchestrator(unittest.TestCase):
         self.assertFalse(list(self.out.glob(".temp_preprocess_*")))
         manifest = json.loads((ds / "bricks" / "manifest.json").read_text(encoding="utf-8"))
         self.assertTrue(manifest["histograms"])
-        packs_before = {p.relative_to(ds).as_posix(): p.read_bytes() for p in ds.rglob("pack_*.bin")}
+        packs_before = {p.relative_to(ds).as_posix(): p.read_bytes()
+                        for p in (ds / "bricks").rglob("*.bin")}
+        self.assertTrue(any(name.endswith("index.bin") for name in packs_before))
+        self.assertTrue(any("/l0/c0/p" in name for name in packs_before))
 
         # The lab curates the dataset, then it is re-processed.
         meta.update(hidden=True, stage="TS17", orientation=[0, 0, 0, 1], exposure=1.5)
@@ -329,7 +332,8 @@ class Orchestrator(unittest.TestCase):
         self.assertEqual(again["orientation"], [0, 0, 0, 1])
         self.assertEqual(again["channels"][0]["color"], "#123456")
         self.assertTrue((ds / "download" / "keep.txt").exists())
-        packs_after = {p.relative_to(ds).as_posix(): p.read_bytes() for p in ds.rglob("pack_*.bin")}
+        packs_after = {p.relative_to(ds).as_posix(): p.read_bytes()
+                       for p in (ds / "bricks").rglob("*.bin")}
         self.assertEqual(packs_before, packs_after)      # same input, same bytes
 
         # A run that fails leaves the published dataset exactly as it was.
@@ -355,17 +359,23 @@ class Orchestrator(unittest.TestCase):
                            capture_output=True, text=True, env=self.env, timeout=600)
         self.assertEqual(r.returncode, 0, r.stderr[-2000:])
         left = sorted(p.name for p in work.glob("*.bin"))
-        # LOD0 (300 px) and LOD1 (256 px): the thumbnail level of t000 is LOD0 here, the
-        # coarsest level of every frame is LOD1; nothing else survives its packing.
-        self.assertEqual(left, ["t000_c0_lod0.bin", "t000_c0_lod1.bin", "t001_c0_lod1.bin",
-                                "t002_c0_lod1.bin"])
+        # Levels 300x280, 150x140, 75x70 (format 4): the thumbnail level of t000 is
+        # level 0 here, the coarsest level of every frame is level 2; nothing else
+        # survives its packing.
+        self.assertEqual(left, ["t000_c0_lod0.bin", "t000_c0_lod2.bin", "t001_c0_lod2.bin",
+                                "t002_c0_lod2.bin"])
         self.assertEqual(sorted(p.name for p in (stage / "bricks").iterdir()), ["t000", "t001", "t002"])
         r = subprocess.run([sys.executable, str(PRE / "3-chunk_packer.py"), str(work), str(stage)],
                            capture_output=True, text=True, env=self.env, timeout=600)
         self.assertEqual(r.returncode, 0, r.stderr[-2000:])
         manifest = json.loads((stage / "bricks" / "manifest.json").read_text(encoding="utf-8"))
-        self.assertEqual(sorted(manifest["timepoints"]), ["t000", "t001", "t002"])
-        self.assertTrue(all(row["histograms"] for row in manifest["timepoints"].values()))
+        self.assertEqual(manifest["schema"], "iribhm-bricks-v3")
+        self.assertEqual([row["path"] for row in manifest["timepoints"]], ["t000", "t001", "t002"])
+        self.assertEqual([row["index"]["url"] for row in manifest["timepoints"]],
+                         ["t000/index.bin", "t001/index.bin", "t002/index.bin"])
+        self.assertEqual(sorted(manifest["timepointHistograms"]), ["t000", "t001", "t002"])
+        self.assertTrue(all(manifest["timepointHistograms"].values()))
+        self.assertEqual(sorted(p.name for p in (stage / "mips").iterdir()), ["t000", "t001", "t002"])
 
 
 if __name__ == "__main__":

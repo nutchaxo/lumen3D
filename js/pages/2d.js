@@ -317,6 +317,8 @@ const App2D = (() => {
         _activateHostPlugin(e.data.id);
       } else if (type === 'PANEL_HELLO') {
         if (_meta) _postPanelReady();
+      } else if (typeof type === 'string' && type.startsWith('REQUEST_')) {
+        _answerHostRequest(e.data);
       }
     });
     // Only a gesture made inside this pane travels: a fit, a layout resize or a
@@ -720,9 +722,64 @@ const App2D = (() => {
   // what the toolbar offers (PANEL_READY), drives the toggles (PLUGIN_ACTIVATE)
   // and the tool (SET_TOOL), and hears every state change back (PLUGIN_STATE,
   // TOOL_CHANGED, PANEL_DATASET). Same wire as the volume viewer's.
-  function _postToHost(msg) {
+  function _postToHost(msg, transfer) {
     if (_panelIndex === null) return;
-    window.parent.postMessage({ ...msg, sourceIndex: _panelIndex }, Utils.trustedTargetOrigin());
+    const message = { ...msg, sourceIndex: _panelIndex };
+    if (Array.isArray(transfer) && transfer.length) window.parent.postMessage(message, Utils.trustedTargetOrigin(), transfer);
+    else window.parent.postMessage(message, Utils.trustedTargetOrigin());
+  }
+
+  // The host never calls into this document: it asks (REQUEST_*, with a requestId)
+  // and the page answers with the same requestId — pictures as transferred
+  // ImageBitmaps, data as plain values (ok: false and an error when it cannot).
+  function _answerHostRequest(data) {
+    const requestId = typeof data?.requestId === 'string' ? data.requestId : null;
+    if (!requestId) return;
+    const failure = (err) => String(err?.message || err || 'unavailable');
+    const plain = (v) => (v === undefined ? null : JSON.parse(JSON.stringify(v)));
+    if (data.type === 'REQUEST_CAPTURE') {
+      // Snapshot in this task, like the volume page (whose WebGL buffer is not kept).
+      let pending = null;
+      try {
+        const canvas = _meta && typeof Viewer2D !== 'undefined' ? Viewer2D.getCanvas() : null;
+        if (canvas && canvas.width && canvas.height && typeof createImageBitmap === 'function') pending = createImageBitmap(canvas);
+      } catch (err) {
+        _postToHost({ type: 'CAPTURE', requestId, ok: false, error: failure(err) });
+        return;
+      }
+      if (!pending) {
+        _postToHost({ type: 'CAPTURE', requestId, ok: false, error: 'nothing to capture' });
+        return;
+      }
+      pending.then(
+        (bitmap) => _postToHost({ type: 'CAPTURE', requestId, ok: true, bitmap, width: bitmap.width, height: bitmap.height }, [bitmap]),
+        (err) => _postToHost({ type: 'CAPTURE', requestId, ok: false, error: failure(err) })
+      );
+    } else if (data.type === 'REQUEST_STUDIO_SLICE') {
+      let sr = null;
+      try { sr = _studioSliceResult(); } catch (err) { sr = null; }
+      if (!sr?.canvas || typeof createImageBitmap !== 'function') {
+        _postToHost({ type: 'STUDIO_SLICE', requestId, ok: false, error: 'no photograph to hand over' });
+        return;
+      }
+      const { canvas, ...rest } = sr;
+      createImageBitmap(canvas).then(
+        (bitmap) => {
+          const result = { ...plain(rest), bitmap, raw: null, histograms: null };
+          _postToHost({ type: 'STUDIO_SLICE', requestId, ok: true, result }, [bitmap]);
+        },
+        (err) => _postToHost({ type: 'STUDIO_SLICE', requestId, ok: false, error: failure(err) })
+      );
+    } else if (data.type === 'REQUEST_WORKSPACE_STATE') {
+      try {
+        _postToHost({ type: 'WORKSPACE_STATE', requestId, ok: true, state: _meta ? plain(_getWorkspaceState()) : null });
+      } catch (err) {
+        _postToHost({ type: 'WORKSPACE_STATE', requestId, ok: false, error: failure(err) });
+      }
+    } else if (data.type === 'REQUEST_CHANNEL_STATE') {
+      // A photograph has no channels to decompose.
+      _postToHost({ type: 'CHANNEL_STATE', requestId, ok: true, channels: [] });
+    }
   }
 
   function _postPanelReady() {

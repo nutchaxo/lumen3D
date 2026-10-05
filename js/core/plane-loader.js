@@ -14,6 +14,15 @@
      tree.loadRegionMax(zs, channels, rect, opts)  per-channel maximum over planes
      tree.estimate(zs, channels, rect, opts)       bytes a load will fetch
 
+   Format 3 (SPEC §12) adds `mips/`: per brick layer l (planes [64·l, 64·l + 64)) the
+   per-channel maximum over its planes, packed like planes (`lNNNNN.bin`, magic LMIP):
+
+     const mips = await PlaneLoader.openMips(mipsBase, sameOptions)
+     mips.loadLayerMax(l, channels, rect, opts)    one layer's MIP
+     PlaneLoader.planSlabMax(z0, z1, depth)        { layers, planes } of a slab
+     PlaneLoader.loadSlabMax(tree, mips, z0, z1, channels, rect, opts)
+                                                   slab MIP = max over planes [z0, z1)
+
    `rect` = { x0, y0, x1, y1 } image pixels, half-open. The header of each z is
    range-read once ([0, headerBytes), cached); the tiles a region needs are fetched
    as merged byte runs with Range requests (a server that answers 200 hands back the
@@ -36,6 +45,13 @@ const PlaneLoader = (() => {
   const SCHEMA = 'lumen-planes-v1';
   const CODEC = 'png-gray8';
   const PACK_PATTERN = 'z{z}.bin';
+  // Format 3 (SPEC §12): per brick layer l (planes [64·l, min(64·l + 64, Z))) the
+  // per-voxel maximum over its planes, tiled and packed exactly like a plane.
+  const MIPS_SCHEMA = 'lumen-mips-v1';
+  const MIPS_PACK_PATTERN = 'l{l}.bin';
+  const LAYER_DEPTH = 64;
+  const KIND_PLANES = Object.freeze({ kind: 'planes', magic: 'LPLN', prefix: 'z', unit: 'plane' });
+  const KIND_MIPS = Object.freeze({ kind: 'mips', magic: 'LMIP', prefix: 'l', unit: 'layer' });
   // Runs closer than this are fetched as one (the gap is cheaper than a request).
   const RANGE_GAP_BYTES = 256 * 1024;
   const HEADER_CACHE_MAX = 4096;
@@ -139,13 +155,30 @@ const PlaneLoader = (() => {
    * Error carrying the reason (code PLANES_INVALID).
    */
   function validateManifest(m, expect = {}) {
-    const fail = (why) => { throw _planeError('PLANES_INVALID', `planes/manifest.json: ${why}`); };
+    return _validateTree(m, expect, { file: 'planes/manifest.json', schema: SCHEMA, formatVersion: 2, packPattern: PACK_PATTERN });
+  }
+
+  /**
+   * The mips/manifest.json of a format-3 tree (SPEC §12): the planes manifest's shape
+   * with its own schema, formatVersion 3, packPattern l{l}.bin, layerDepth 64 and
+   * layers = ceil(Z / 64). Error code MIPS_INVALID.
+   */
+  function validateMipsManifest(m, expect = {}) {
+    _validateTree(m, expect, { file: 'mips/manifest.json', schema: MIPS_SCHEMA, formatVersion: 3, packPattern: MIPS_PACK_PATTERN, code: 'MIPS_INVALID' });
+    if (m.layerDepth !== LAYER_DEPTH) throw _planeError('MIPS_INVALID', `mips/manifest.json: layerDepth ${JSON.stringify(m.layerDepth)} ≠ ${LAYER_DEPTH}`);
+    const layers = Math.ceil(m.dimensions.z / LAYER_DEPTH);
+    if (m.layers !== layers) throw _planeError('MIPS_INVALID', `mips/manifest.json: layers ${JSON.stringify(m.layers)} ≠ ceil(Z/${LAYER_DEPTH}) = ${layers}`);
+    return m;
+  }
+
+  function _validateTree(m, expect, spec) {
+    const fail = (why) => { throw _planeError(spec.code || 'PLANES_INVALID', `${spec.file}: ${why}`); };
     if (!m || typeof m !== 'object' || Array.isArray(m)) fail('not an object');
-    if (m.schema !== SCHEMA) fail(`schema ${JSON.stringify(m.schema)} ≠ ${SCHEMA}`);
-    if (m.formatVersion !== 2) fail(`formatVersion ${JSON.stringify(m.formatVersion)} ≠ 2`);
+    if (m.schema !== spec.schema) fail(`schema ${JSON.stringify(m.schema)} ≠ ${spec.schema}`);
+    if (m.formatVersion !== spec.formatVersion) fail(`formatVersion ${JSON.stringify(m.formatVersion)} ≠ ${spec.formatVersion}`);
     if (m.level !== 0) fail(`level ${JSON.stringify(m.level)} ≠ 0`);
     if (m.codec !== CODEC) fail(`codec ${JSON.stringify(m.codec)} ≠ ${CODEC}`);
-    if (m.packPattern !== PACK_PATTERN) fail(`packPattern ${JSON.stringify(m.packPattern)} ≠ ${PACK_PATTERN}`);
+    if (m.packPattern !== spec.packPattern) fail(`packPattern ${JSON.stringify(m.packPattern)} ≠ ${spec.packPattern}`);
     const d = m.dimensions || {};
     if (!_posInt(d.x) || !_posInt(d.y) || !_posInt(d.z)) fail('dimensions are not positive integers');
     const e = expect.dimensions;
@@ -165,6 +198,29 @@ const PlaneLoader = (() => {
     const sha = m.source && m.source.manifestSha256;
     if (typeof sha !== 'string' || !/^[0-9a-f]{64}$/.test(sha)) fail('source.manifestSha256 is not a sha256 hex digest');
     return m;
+  }
+
+  /**
+   * A pack header with the magic `magic` ("LPLN" plane, "LMIP" layer MIP). The magic
+   * is checked here; the rest of the layout (shared by both, SPEC §3.2 / §12) is
+   * parsed by PlaneCodec from a copy carrying the plane magic, so any codec version
+   * reads either.
+   */
+  function _parseHeader(codec, bytes, magic, label) {
+    const u8 = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+    for (let i = 0; i < 4; i++) {
+      if (u8[i] !== magic.charCodeAt(i)) throw _planeError('PLANES_INVALID', `${label}: magic is not ${magic}`);
+    }
+    let src = u8;
+    if (magic !== KIND_PLANES.magic) {
+      src = u8.slice();
+      for (let i = 0; i < 4; i++) src[i] = KIND_PLANES.magic.charCodeAt(i);
+    }
+    try {
+      return codec.parsePackHeader(src);
+    } catch (e) {
+      throw _planeError('PLANES_INVALID', `${label}: ${(e && e.message) || e}`);
+    }
   }
 
   // ── Workers ──────────────────────────────────────────────────────────────────
@@ -261,28 +317,31 @@ const PlaneLoader = (() => {
 
   // ── A tree ───────────────────────────────────────────────────────────────────
 
-  function _makeTree(base, manifest, stamp) {
+  function _makeTree(base, manifest, stamp, kind = KIND_PLANES) {
     const C = manifest.channels;
     const TS = manifest.tileSize;
     const TX = manifest.tiles.x;
     const TY = manifest.tiles.y;
     const dims = { x: manifest.dimensions.x, y: manifest.dimensions.y, z: manifest.dimensions.z };
     const headerBytes = manifest.headerBytes;
+    // Packs of the tree: one per plane z (planes/) or per layer l (mips/).
+    const count = kind === KIND_MIPS ? manifest.layers : dims.z;
+    const P = kind.prefix;
     const headers = new Map();       // z → Promise<{ offsets: Float64Array, lengths: Uint32Array }>
     const wholeFiles = new Map();    // z → Promise<Uint8Array> (a server without ranges)
     let rangeless = false;
 
-    const packUrl = (z) => `${base}/z${String(z).padStart(5, '0')}.bin${stamp ? `?v=${stamp}` : ''}`;
+    const packUrl = (z) => `${base}/${P}${String(z).padStart(5, '0')}.bin${stamp ? `?v=${stamp}` : ''}`;
 
     const checkZ = (z) => {
-      if (!Number.isInteger(z) || z < 0 || z >= dims.z) throw _planeError('PLANES_RANGE', `plane ${z} outside 0..${dims.z - 1}`);
+      if (!Number.isInteger(z) || z < 0 || z >= count) throw _planeError('PLANES_RANGE', `${kind.unit} ${z} outside 0..${count - 1}`);
     };
 
     /** Bytes [start, end) of pack z (a 200 answer: the whole pack, kept for this z). */
     async function fetchBytes(z, start, end, signal, onBytes) {
       if (rangeless) {
         const whole = await wholeFile(z, signal, onBytes);
-        if (end > whole.length) throw _planeError('PLANES_SHORT', `pack z${z} is ${whole.length} bytes, needs ${end}`);
+        if (end > whole.length) throw _planeError('PLANES_SHORT', `pack ${P}${z} is ${whole.length} bytes, needs ${end}`);
         return whole.subarray(start, end);
       }
       const resp = await fetch(packUrl(z), { headers: { Range: `bytes=${start}-${end - 1}` }, signal });
@@ -290,10 +349,10 @@ const PlaneLoader = (() => {
         const cr = resp.headers && typeof resp.headers.get === 'function' ? resp.headers.get('Content-Range') : null;
         const m = cr ? /bytes\s+(\d+)-(\d+)\//i.exec(cr) : null;
         if (m && (Number(m[1]) !== start || Number(m[2]) !== end - 1)) {
-          throw _planeError('PLANES_RANGE', `pack z${z}: asked bytes ${start}-${end - 1}, got ${cr}`);
+          throw _planeError('PLANES_RANGE', `pack ${P}${z}: asked bytes ${start}-${end - 1}, got ${cr}`);
         }
         const body = await _readBody(resp, onBytes, signal);
-        if (body.length !== end - start) throw _planeError('PLANES_SHORT', `pack z${z}: ${body.length} bytes for a ${end - start}-byte range`);
+        if (body.length !== end - start) throw _planeError('PLANES_SHORT', `pack ${P}${z}: ${body.length} bytes for a ${end - start}-byte range`);
         return body;
       }
       if (resp.status === 200) {
@@ -305,17 +364,17 @@ const PlaneLoader = (() => {
         wholeFiles.set(z, p);
         p.catch(() => wholeFiles.delete(z));
         const whole = await p;
-        if (end > whole.length) throw _planeError('PLANES_SHORT', `pack z${z} is ${whole.length} bytes, needs ${end}`);
+        if (end > whole.length) throw _planeError('PLANES_SHORT', `pack ${P}${z} is ${whole.length} bytes, needs ${end}`);
         return whole.subarray(start, end);
       }
-      throw _planeError('PLANES_HTTP', `pack z${z}: HTTP ${resp.status}`);
+      throw _planeError('PLANES_HTTP', `pack ${P}${z}: HTTP ${resp.status}`);
     }
 
     function wholeFile(z, signal, onBytes) {
       let p = wholeFiles.get(z);
       if (!p) {
         p = fetch(packUrl(z), { signal }).then((resp) => {
-          if (!resp.ok) throw _planeError('PLANES_HTTP', `pack z${z}: HTTP ${resp.status}`);
+          if (!resp.ok) throw _planeError('PLANES_HTTP', `pack ${P}${z}: HTTP ${resp.status}`);
           return _readBody(resp, onBytes, signal);
         });
         wholeFiles.set(z, p);
@@ -335,14 +394,14 @@ const PlaneLoader = (() => {
         const bytes = await fetchBytes(z, 0, headerBytes, opts.signal, opts.onBytes);
         const codec = _codec();
         if (!codec) throw _planeError('PLANES_NO_CODEC', 'PlaneCodec is not loaded');
-        const h = codec.parsePackHeader(bytes);
+        const h = _parseHeader(codec, bytes, kind.magic, `pack ${P}${z}`);
         if (h.channels !== C || h.tilesX !== TX || h.tilesY !== TY || h.z !== z) {
-          throw _planeError('PLANES_INVALID', `pack z${z} header (${h.channels} ch, ${h.tilesX}×${h.tilesY}, z ${h.z}) ≠ the manifest's`);
+          throw _planeError('PLANES_INVALID', `pack ${P}${z} header (${h.channels} ch, ${h.tilesX}×${h.tilesY}, z ${h.z}) ≠ the manifest's`);
         }
         const offsets = new Float64Array(h.entries.length);
         const lengths = new Uint32Array(h.entries.length);
         h.entries.forEach((e, i) => {
-          if (e.length > 0 && e.offset < headerBytes) throw _planeError('PLANES_INVALID', `pack z${z}: tile ${i} overlaps the header`);
+          if (e.length > 0 && e.offset < headerBytes) throw _planeError('PLANES_INVALID', `pack ${P}${z}: tile ${i} overlaps the header`);
           offsets[i] = e.offset;
           lengths[i] = e.length;
         });
@@ -458,37 +517,6 @@ const PlaneLoader = (() => {
       }));
     }
 
-    const composeSpec = (compose) => (compose ? {
-      components: compose.components || 4,
-      slots: Array.isArray(compose.slots) ? compose.slots.slice() : null,
-      luts: Array.isArray(compose.luts) ? compose.luts.map(l => (l && l.length >= 256 ? l : null)) : null
-    } : null);
-
-    function bandResult(band, r, answer, compose) {
-      const out = { y0: band.y0, height: band.y1 - band.y0, width: r.x1 - r.x0 };
-      if (compose) out.rgba = new Uint8Array(answer.rgba);
-      else out.planes = answer.planes.map(b => new Uint8Array(b));
-      return out;
-    }
-
-    /** Joins band results into one region ({ data: [per channel] } or { rgba }). */
-    function joinBands(r, list, bands, compose) {
-      const W = r.x1 - r.x0, H = r.y1 - r.y0;
-      if (bands.length === 1) {
-        const b = bands[0];
-        return compose ? { width: W, height: H, rgba: b.rgba } : { width: W, height: H, channels: list, data: b.planes };
-      }
-      if (compose) {
-        const comps = compose.components || 4;
-        const rgba = new Uint8Array(W * H * comps);
-        for (const b of bands) rgba.set(b.rgba, (b.y0 - r.y0) * W * comps);
-        return { width: W, height: H, rgba };
-      }
-      const data = list.map(() => new Uint8Array(W * H));
-      for (const b of bands) b.planes.forEach((p, i) => data[i].set(p, (b.y0 - r.y0) * W));
-      return { width: W, height: H, channels: list, data };
-    }
-
     /**
      * One plane z over `rect`, per requested channel (uint8, rows of rect width).
      *   opts.signal    AbortSignal
@@ -510,68 +538,27 @@ const PlaneLoader = (() => {
       const results = await dispatch(z, list, r, bands, opts, (bi, band, msg, transfer) =>
         _post(pool[bi % pool.length], { ...msg, mode: 'new', compose }, transfer).then((answer) => {
           _throwIfAborted(opts.signal);
-          const out = bandResult(band, r, answer, compose);
+          const out = _bandResult(band, r, answer, compose);
           opts.onBand && opts.onBand(out);
           return out;
         }));
       if (opts.bands) return { width: r.x1 - r.x0, height: r.y1 - r.y0, bands: results };
-      return joinBands(r, list, results, compose);
+      return _joinBands(r, list, results, compose);
     }
 
     /**
      * The per-channel maximum over the planes `zs` of `rect` (a MIP slab), reduced
      * in the workers as the planes arrive. Same options and answer as loadRegion,
-     * plus opts.concurrency (planes in flight, default 3) and opts.onPlane(done).
+     * plus opts.concurrency (packs in flight, default 3) and opts.onPlane(done, total).
+     * On a mips tree `zs` are layer indices: the maximum over those layers' MIPs.
      */
     async function loadRegionMax(zs, channels, rect, opts = {}) {
       const list = normChannels(channels);
       const r = normRect(rect);
       const planes = Array.from(new Set(Array.isArray(zs) ? zs : [])).sort((a, b) => a - b);
-      if (!planes.length) throw _planeError('PLANES_RANGE', 'no plane requested');
+      if (!planes.length) throw _planeError('PLANES_RANGE', `no ${kind.unit} requested`);
       planes.forEach(checkZ);
-      _throwIfAborted(opts.signal);
-      const pool = _workers();
-      const bands = bandsOf(r, pool.length);
-      const compose = composeSpec(opts.compose);
-      const job = `max${++_seq}`;
-      const keyOf = (bi) => `${job}:${bi}`;
-      const drop = () => bands.forEach((_, bi) => {
-        try { pool[bi % pool.length].w.postMessage({ op: 'drop', key: keyOf(bi) }); } catch (e) { /* gone */ }
-      });
-      try {
-        let next = 0;
-        let done = 0;
-        let failed = false;
-        const lane = async () => {
-          try {
-            while (next < planes.length && !failed) {
-              const z = planes[next++];
-              await dispatch(z, list, r, bands, opts, (bi, band, msg, transfer) =>
-                _post(pool[bi % pool.length], { ...msg, mode: 'max', key: keyOf(bi) }, transfer));
-              _throwIfAborted(opts.signal);
-              done++;
-              opts.onPlane && opts.onPlane(done, planes.length);
-            }
-          } catch (err) {
-            failed = true;   // the other lanes stop at their next plane
-            throw err;
-          }
-        };
-        const lanes = Math.max(1, Math.min(planes.length, Math.floor(Number(opts.concurrency) || 3)));
-        await Promise.all(Array.from({ length: lanes }, lane));
-        const results = await Promise.all(bands.map((band, bi) =>
-          _post(pool[bi % pool.length], { op: 'take', key: keyOf(bi), compose }).then((answer) => {
-            _throwIfAborted(opts.signal);
-            const out = bandResult(band, r, answer, compose);
-            opts.onBand && opts.onBand(out);
-            return out;
-          })));
-        if (opts.bands) return { width: r.x1 - r.x0, height: r.y1 - r.y0, bands: results };
-        return joinBands(r, list, results, compose);
-      } catch (err) {
-        drop();
-        throw err;
-      }
+      return _reduceMax(planes.map(z => ({ tree: self, index: z })), list, r, opts);
     }
 
     /**
@@ -603,11 +590,165 @@ const PlaneLoader = (() => {
       return { bytes: Math.round(bytes * k), tiles: Math.round(tiles * k), exact: pick.length === all.length };
     }
 
-    return Object.freeze({
-      base, manifest, stamp, dimensions: dims, channels: C, tileSize: TS, tiles: { x: TX, y: TY }, headerBytes,
+    const self = {
+      kind: kind.kind, base, manifest, stamp, dimensions: dims, channels: C, tileSize: TS, tiles: { x: TX, y: TY }, headerBytes,
       header, loadRegion, loadRegionMax, estimate,
-      isRangeless: () => rangeless
+      isRangeless: () => rangeless,
+      _dispatch: dispatch, _normRect: normRect, _normChannels: normChannels, _bandsOf: bandsOf
+    };
+    if (kind === KIND_MIPS) {
+      self.layers = count;
+      self.layerDepth = LAYER_DEPTH;
+      /** The MIP of layer l over `rect` (the per-channel maximum over its planes); loadRegion's answer. */
+      self.loadLayerMax = (l, channels, rect, opts = {}) => loadRegion(l, channels, rect, opts);
+      /** The maximum over several layer MIPs; loadRegionMax's answer. */
+      self.loadLayersMax = (ls, channels, rect, opts = {}) => loadRegionMax(ls, channels, rect, opts);
+      /** planSlabMax(z0, z1) over this tree's depth. */
+      self.planSlabMax = (z0, z1) => planSlabMax(z0, z1, dims.z);
+    }
+    return Object.freeze(self);
+  }
+
+  const composeSpec = (compose) => (compose ? {
+    components: compose.components || 4,
+    slots: Array.isArray(compose.slots) ? compose.slots.slice() : null,
+    luts: Array.isArray(compose.luts) ? compose.luts.map(l => (l && l.length >= 256 ? l : null)) : null
+  } : null);
+
+  function _bandResult(band, r, answer, compose) {
+    const out = { y0: band.y0, height: band.y1 - band.y0, width: r.x1 - r.x0 };
+    if (compose) out.rgba = new Uint8Array(answer.rgba);
+    else out.planes = answer.planes.map(b => new Uint8Array(b));
+    return out;
+  }
+
+  /** Joins band results into one region ({ data: [per channel] } or { rgba }). */
+  function _joinBands(r, list, bands, compose) {
+    const W = r.x1 - r.x0, H = r.y1 - r.y0;
+    if (bands.length === 1) {
+      const b = bands[0];
+      return compose ? { width: W, height: H, rgba: b.rgba } : { width: W, height: H, channels: list, data: b.planes };
+    }
+    if (compose) {
+      const comps = compose.components || 4;
+      const rgba = new Uint8Array(W * H * comps);
+      for (const b of bands) rgba.set(b.rgba, (b.y0 - r.y0) * W * comps);
+      return { width: W, height: H, rgba };
+    }
+    const data = list.map(() => new Uint8Array(W * H));
+    for (const b of bands) b.planes.forEach((p, i) => data[i].set(p, (b.y0 - r.y0) * W));
+    return { width: W, height: H, channels: list, data };
+  }
+
+  /**
+   * The per-channel maximum over `items` = [{ tree, index }] (planes of a planes tree,
+   * layers of a mips tree — trees of one geometry), reduced in the workers' band
+   * accumulators as each pack's tiles arrive. The maximum is order-free, so planes and
+   * layer MIPs mix freely.
+   */
+  async function _reduceMax(items, list, r, opts = {}) {
+    _throwIfAborted(opts.signal);
+    const pool = _workers();
+    const bands = items[0].tree._bandsOf(r, pool.length);
+    const compose = composeSpec(opts.compose);
+    const job = `max${++_seq}`;
+    const keyOf = (bi) => `${job}:${bi}`;
+    const drop = () => bands.forEach((_, bi) => {
+      try { pool[bi % pool.length].w.postMessage({ op: 'drop', key: keyOf(bi) }); } catch (e) { /* gone */ }
     });
+    try {
+      let next = 0;
+      let done = 0;
+      let failed = false;
+      const lane = async () => {
+        try {
+          while (next < items.length && !failed) {
+            const item = items[next++];
+            await item.tree._dispatch(item.index, list, r, bands, opts, (bi, band, msg, transfer) =>
+              _post(pool[bi % pool.length], { ...msg, mode: 'max', key: keyOf(bi) }, transfer));
+            _throwIfAborted(opts.signal);
+            done++;
+            opts.onPlane && opts.onPlane(done, items.length);
+          }
+        } catch (err) {
+          failed = true;   // the other lanes stop at their next pack
+          throw err;
+        }
+      };
+      const lanes = Math.max(1, Math.min(items.length, Math.floor(Number(opts.concurrency) || 3)));
+      await Promise.all(Array.from({ length: lanes }, lane));
+      const results = await Promise.all(bands.map((band, bi) =>
+        _post(pool[bi % pool.length], { op: 'take', key: keyOf(bi), compose }).then((answer) => {
+          _throwIfAborted(opts.signal);
+          const out = _bandResult(band, r, answer, compose);
+          opts.onBand && opts.onBand(out);
+          return out;
+        })));
+      if (opts.bands) return { width: r.x1 - r.x0, height: r.y1 - r.y0, bands: results };
+      return _joinBands(r, list, results, compose);
+    } catch (err) {
+      drop();
+      throw err;
+    }
+  }
+
+  /**
+   * How a z-stack MIP over the planes [z0, z1) of a volume `depth` planes deep splits
+   * between layer MIPs and planes (SPEC §12): the layers lying wholly inside the slab
+   * (layer l = planes [64·l, min(64·l + 64, depth))) and the planes of the partial
+   * layers at both ends. The maximum over `layers` ∪ `planes` is the maximum over every
+   * plane of the slab — valid only when the slab samples every plane.
+   * → { layers: [l…], planes: [z…] }, both ascending.
+   */
+  function planSlabMax(z0, z1, depth) {
+    const D = Math.floor(Number(depth));
+    if (!(Number.isInteger(D) && D > 0)) throw _planeError('PLANES_RANGE', `bad volume depth ${depth}`);
+    const a = Math.max(0, Math.floor(Number(z0)));
+    const b = Math.min(D, Math.floor(Number(z1)));
+    if (!(Number.isFinite(a) && Number.isFinite(b)) || b <= a) throw _planeError('PLANES_RANGE', `empty slab [${z0}, ${z1})`);
+    const layers = [];
+    const planes = [];
+    for (let z = a; z < b;) {
+      const l0 = Math.floor(z / LAYER_DEPTH) * LAYER_DEPTH;
+      const l1 = Math.min(l0 + LAYER_DEPTH, D);
+      if (z === l0 && l1 <= b) {
+        layers.push(l0 / LAYER_DEPTH);
+        z = l1;
+      } else {
+        const end = Math.min(l1, b);
+        for (; z < end; z++) planes.push(z);
+      }
+    }
+    return { layers, planes };
+  }
+
+  /**
+   * The per-channel MIP over the planes [z0, z1) of `rect`: the layer MIPs (`mips`, a
+   * tree from openMips) of the layers wholly inside the slab and the planes (`planes`,
+   * a tree from open) of the partial layers at its ends — pixel-identical to
+   * planes.loadRegionMax(every z of the slab). With mips null, every plane.
+   * Same options and answer as loadRegionMax (onPlane counts packs read).
+   */
+  async function loadSlabMax(planes, mips, z0, z1, channels, rect, opts = {}) {
+    if (!planes || planes.kind !== 'planes') throw _planeError('PLANES_RANGE', 'no planes tree');
+    const depth = planes.dimensions.z;
+    let plan = planSlabMax(z0, z1, depth);
+    if (mips) {
+      const same = mips.kind === 'mips' && mips.channels === planes.channels && mips.tileSize === planes.tileSize
+        && ['x', 'y', 'z'].every(k => mips.dimensions[k] === planes.dimensions[k]);
+      if (!same) throw _planeError('MIPS_INVALID', 'mips/ and planes/ describe different volumes');
+    } else {
+      const every = [];
+      for (const l of plan.layers) for (let z = l * LAYER_DEPTH; z < Math.min(l * LAYER_DEPTH + LAYER_DEPTH, depth); z++) every.push(z);
+      plan = { layers: [], planes: [...every, ...plan.planes].sort((x, y) => x - y) };
+    }
+    const list = planes._normChannels(channels);
+    const r = planes._normRect(rect);
+    const items = [
+      ...plan.layers.map(l => ({ tree: mips, index: l })),
+      ...plan.planes.map(z => ({ tree: planes, index: z }))
+    ];
+    return _reduceMax(items, list, r, opts);
   }
 
   /**
@@ -621,30 +762,53 @@ const PlaneLoader = (() => {
    * → a tree (see the header) | throws (code PLANES_INVALID / PLANES_HTTP / …)
    */
   async function open(base, options = {}) {
+    return _openTree(base, options, KIND_PLANES);
+  }
+
+  /**
+   * Opens the format-3 layer-MIP tree at `base` (`mips/`, or `mips/tNNN` of a
+   * timepoint), with the same options and checks as open() (code MIPS_INVALID for a
+   * manifest that is not one, PLANES_STALE when cut from another bricks manifest).
+   * → a mips tree: the tree API of open() over layer indices, plus layers, layerDepth,
+   *   loadLayerMax(l, channels, rect, opts), loadLayersMax(ls, …), planSlabMax(z0, z1).
+   */
+  async function openMips(base, options = {}) {
+    return _openTree(base, options, KIND_MIPS);
+  }
+
+  async function _openTree(base, options, kind) {
+    const mips = kind === KIND_MIPS;
+    const file = mips ? 'mips/manifest.json' : 'planes/manifest.json';
+    const code = mips ? 'MIPS_INVALID' : 'PLANES_INVALID';
     const root = String(base || '').replace(/\/+$/, '');
-    if (!root) throw _planeError('PLANES_INVALID', 'no planes base');
+    if (!root) throw _planeError(code, `no ${kind.kind} base`);
     if (!_codec()) throw _planeError('PLANES_NO_CODEC', 'PlaneCodec is not loaded');
     const resp = await fetch(`${root}/manifest.json`, { cache: 'no-cache', signal: options.signal });
-    if (!resp.ok) throw _planeError('PLANES_HTTP', `planes manifest: HTTP ${resp.status}`);
+    if (!resp.ok) throw _planeError('PLANES_HTTP', `${kind.kind} manifest: HTTP ${resp.status}`);
     const text = await resp.text();
     let manifest;
     try {
       manifest = JSON.parse(text);
     } catch (e) {
-      throw _planeError('PLANES_INVALID', 'planes/manifest.json is not JSON');
+      throw _planeError(code, `${file} is not JSON`);
     }
-    validateManifest(manifest, { dimensions: options.dimensions, channels: options.channels });
+    const expect = { dimensions: options.dimensions, channels: options.channels };
+    if (mips) validateMipsManifest(manifest, expect);
+    else validateManifest(manifest, expect);
     if (options.sourceManifestUrl) {
       // The copy the viewer itself read: the HTTP cache holds it.
       const src = await fetch(options.sourceManifestUrl, { cache: 'force-cache', signal: options.signal });
       if (!src.ok) throw _planeError('PLANES_HTTP', `bricks manifest: HTTP ${src.status}`);
       const digest = await sha256Hex(new Uint8Array(await src.arrayBuffer()));
       if (digest !== manifest.source.manifestSha256) {
-        throw _planeError('PLANES_STALE', 'planes/ was cut from another bricks manifest (dataset re-processed since)');
+        throw _planeError('PLANES_STALE', `${kind.kind}/ was cut from another bricks manifest (dataset re-processed since)`);
       }
     }
-    return _makeTree(root, manifest, _fnv1a(text));
+    return _makeTree(root, manifest, _fnv1a(text), kind);
   }
 
-  return { open, validateManifest, sha256Hex, dispose, _sha256Js, _fnv1a };
+  return {
+    open, openMips, validateManifest, validateMipsManifest, planSlabMax, loadSlabMax,
+    sha256Hex, dispose, LAYER_DEPTH, _sha256Js, _fnv1a
+  };
 })();

@@ -19,10 +19,18 @@
                     WM_PHYSICAL_VIEW a photograph's physical view (µm per px);
                                   only a calibrated photograph sends or receives one
                     SIDEBAR_CLOSED, REQUEST_COMPARE_STUDIO
+                    CAPTURE, STUDIO_SLICE, WORKSPACE_STATE, CHANNEL_STATE
+                                  answers to the host's requests (same requestId)
      host → panel   PANEL_HELLO, SET_TOOL, PLUGIN_ACTIVATE, SET_QUALITY,
                     TOGGLE_SIDEBAR, TOGGLE_ZSTACK, ZSTACK_HOVER_STATE,
                     SET_CHANNEL_ACTIVE, APPLY_WORKSPACE_STATE, the SYNC_* relays,
                     WM_SET_PHYSICAL_VIEW
+                    REQUEST_CAPTURE        what the panel shows, as an ImageBitmap
+                    REQUEST_STUDIO_SLICE   the slice the Studio composes (bitmap +
+                                           raw channel values + histograms)
+                    REQUEST_WORKSPACE_STATE / REQUEST_CHANNEL_STATE
+   The host never calls into a panel's document: every question is a request
+   (ComparePanelRpc, compare-policy.js) with a timeout, answered by the page.
    ============================================================ */
 
 const CompareApp = (() => {
@@ -61,6 +69,21 @@ const CompareApp = (() => {
 
   let _loadQueue = [];
   let _activeLoads = 0;
+
+  // Requests to the panels (ComparePanelRpc). A native-resolution slice can take the
+  // page seconds to render; a capture or a state is immediate.
+  const CAPTURE_TIMEOUT_MS = 10000;
+  const STUDIO_SLICE_TIMEOUT_MS = 90000;
+  const STATE_TIMEOUT_MS = 10000;
+  const _rpc = ComparePanelRpc.create({
+    post: (key, message) => {
+      const panel = _panelByIndex(key);
+      if (!panel?.iframe) return false;
+      _postTo(panel, message);
+      return true;
+    },
+    timeoutMs: STATE_TIMEOUT_MS
+  });
   let _qualityQueue = [];
   let _qualityBusy = null;         // { panel, timer } while one panel reloads
 
@@ -190,7 +213,9 @@ const CompareApp = (() => {
     };
     ExportManager.init(ctx);
     document.getElementById('btn-export-compare')?.addEventListener('click', () => ExportManager.openDownloadCenter(ctx));
-    document.getElementById('btn-save-compare-workspace')?.addEventListener('click', () => {
+    document.getElementById('btn-save-compare-workspace')?.addEventListener('click', async () => {
+      // The states as the panels hold them now, not as they last answered.
+      await _refreshPanelStates();
       if (!_getWorkspaceState()) {
         const loading = _panels.filter(p => !p.ready && !p.failed).map(p => p.name);
         const base = _t('compare.notAllReady', 'Wait for every panel to finish loading.');
@@ -393,6 +418,7 @@ const CompareApp = (() => {
     panel.timers.forEach(t => clearTimeout(t));
     panel.timers.clear();
     panel.readyResolve?.(false);
+    _rpc.dropPanel(panel.index);
     _panels = _panels.filter(p => p !== panel);
     _loadQueue = _loadQueue.filter(p => p !== panel);
     _qualityQueue = _qualityQueue.filter(p => p !== panel);
@@ -536,6 +562,7 @@ const CompareApp = (() => {
     _renderToolChips();
     _updateActionButtons();
     _showPanelLoadState(panel, null);
+    _refreshPanelState(panel);
     if (!first) return;
 
     // The host's state, now that the page listens: tool, then whatever a restore
@@ -995,7 +1022,8 @@ const CompareApp = (() => {
     const data = event.data;
     if (!data || typeof data.type !== 'string' || data.sourceIndex == null) return;
     const panel = _panelByIndex(data.sourceIndex);
-    if (!panel) return;
+    // An answer of a panel closed meanwhile still carries its transferred pictures.
+    if (!panel) { _releaseAnswer(data); return; }
     // Only the frame we mounted at that index speaks for it — not a frame nested
     // inside another panel that happens to carry the same index.
     if (event.source && panel.iframe?.contentWindow && event.source !== panel.iframe.contentWindow) return;
@@ -1052,6 +1080,14 @@ const CompareApp = (() => {
         break;
       }
       case 'REQUEST_COMPARE_STUDIO': _openCompareStudio(); break;
+      // Answers to the host's own requests (ComparePanelRpc): from this panel alone.
+      case 'CAPTURE':
+      case 'STUDIO_SLICE':
+      case 'WORKSPACE_STATE':
+      case 'CHANNEL_STATE':
+        // A late answer (its request timed out) or a duplicate: release its pictures.
+        if (!_rpc.settle(panel.index, data)) _releaseAnswer(data);
+        break;
       default: break;
     }
   }
@@ -1095,12 +1131,18 @@ const CompareApp = (() => {
 
   // ── Decompose by channel ──────────────────────────────────
 
-  function _decomposeChannels() {
+  async function _decomposeChannels() {
     if (_panels.length !== 1) return;
     const panel = _panels[0];
-    const app = panel.iframe?.contentWindow?.ViewerApp;
     let channels = [];
-    try { channels = app?.getChannelState?.() || []; } catch (_) { channels = []; }
+    try {
+      const answer = await _rpc.request(panel.index, 'REQUEST_CHANNEL_STATE', {}, { timeoutMs: STATE_TIMEOUT_MS });
+      channels = Array.isArray(answer.channels) ? answer.channels : [];
+    } catch (err) {
+      console.warn('[Compare] Channel state unavailable', panel.index, err?.message || err);
+    }
+    // The panel may have been closed, or another added, while it answered.
+    if (_panels.length !== 1 || _panels[0] !== panel) return;
     if (channels.length <= 1) {
       _toast(_t('toast.noMultiChannel', 'Dataset does not have multiple channels to decompose.'));
       return;
@@ -1122,19 +1164,69 @@ const CompareApp = (() => {
 
   // ── Studio ────────────────────────────────────────────────
 
-  function _panelSliceResult(panel) {
-    const win = panel.iframe?.contentWindow;
-    if (!win) return null;
-    try {
-      if (win.App2D?.getStudioSliceResult) return win.App2D.getStudioSliceResult();
-      if (win.ViewerApp?.getCurrentSliceResult) return win.ViewerApp.getCurrentSliceResult();
-    } catch (err) {
-      console.warn('[Compare] Panel unavailable for the Studio', panel.index, err);
-    }
-    return null;
+  /** Closes an ImageBitmap (or anything with close()); never throws. */
+  function _closeBitmap(bitmap) {
+    try { bitmap?.close?.(); } catch (_) { /* already released */ }
   }
 
+  /** The pictures an answer nobody waits for carries (CAPTURE / STUDIO_SLICE). */
+  function _releaseAnswer(data) {
+    if (!data || typeof data !== 'object') return;
+    if (data.type === 'CAPTURE') _closeBitmap(data.bitmap);
+    else if (data.type === 'STUDIO_SLICE') _closeBitmap(data.result?.bitmap);
+  }
+
+  /** A canvas of this document holding `bitmap` (which is released in every case). */
+  function _canvasFromBitmap(bitmap) {
+    try {
+      if (!bitmap || !(bitmap.width > 0) || !(bitmap.height > 0)) return null;
+      const canvas = document.createElement('canvas');
+      canvas.width = bitmap.width;
+      canvas.height = bitmap.height;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return null;
+      ctx.drawImage(bitmap, 0, 0);
+      return canvas;
+    } finally {
+      _closeBitmap(bitmap);
+    }
+  }
+
+  /**
+   * The slice a panel hands the Studio, asked of the page (REQUEST_STUDIO_SLICE): its
+   * picture comes as an ImageBitmap (drawn here into a canvas of this document), the
+   * raw channel values and the histograms as plain data. null when the page has none.
+   */
+  async function _panelSliceResult(panel) {
+    try {
+      const answer = await _rpc.request(panel.index, 'REQUEST_STUDIO_SLICE', {}, { timeoutMs: STUDIO_SLICE_TIMEOUT_MS });
+      const result = answer.result;
+      if (!result || typeof result !== 'object') return null;
+      const canvas = _canvasFromBitmap(result.bitmap);
+      if (!canvas) return null;
+      const { bitmap, ...rest } = result;
+      return { ...rest, canvas, width: canvas.width, height: canvas.height };
+    } catch (err) {
+      console.warn('[Compare] Panel unavailable for the Studio', panel.index, err?.message || err);
+      return null;
+    }
+  }
+
+  // The slices are asked of the panels (seconds for a busy one): a second click
+  // meanwhile must not open a second Studio over the first.
+  let _studioOpening = false;
+
   async function _openCompareStudio() {
+    if (_studioOpening) return;
+    _studioOpening = true;
+    try {
+      return await _openCompareStudioOnce();
+    } finally {
+      _studioOpening = false;
+    }
+  }
+
+  async function _openCompareStudioOnce() {
     const grid = document.getElementById('compare-grid');
     if (!grid || typeof StudioEditor === 'undefined') return;
     const physical = document.getElementById('studio-scale-mode')?.value === 'physical';
@@ -1144,10 +1236,11 @@ const CompareApp = (() => {
     // ── 1. Collect slice data + names WHILE the layout is still visible ──
     const gridRect = grid.getBoundingClientRect();
     const entries = [];
-    _panels.forEach(panel => {
-      if (!panel.ready) return;
-      const sr = _panelSliceResult(panel);
-      if (!sr?.canvas) return;
+    const ready = _panels.filter(panel => panel.ready);
+    const slices = await Promise.all(ready.map(panel => _panelSliceResult(panel)));
+    ready.forEach((panel, i) => {
+      const sr = slices[i];
+      if (!sr?.canvas || !_panels.includes(panel)) return;
       const rect = panel.el.getBoundingClientRect();
       entries.push({
         sr, panel, datasetName: panel.name,
@@ -1295,7 +1388,6 @@ const CompareApp = (() => {
           raw: entry.sr.raw || null,
           sourceWidth: srcW,
           sourceHeight: srcH,
-          iframe: entry.panel.iframe,
           sliceResult: entry.sr
         });
         if (entry.sr.channelState) combinedChannelState.push(...entry.sr.channelState);
@@ -1365,22 +1457,30 @@ const CompareApp = (() => {
     ctx.fillStyle = dark ? '#05070b' : '#ffffff';
     ctx.fillRect(0, 0, width, height);
 
-    _panels.forEach(panel => {
-      const rect = panel.el.getBoundingClientRect();
-      const x = Math.round((rect.left - gridRect.left) * scale);
-      const y = Math.round((rect.top - gridRect.top) * scale);
-      const w = Math.round(rect.width * scale);
-      const h = Math.round(rect.height * scale);
-      const title = panel.name || _t('compare.panel', 'Panel');
+    const panels = [..._panels];
+    const captures = await Promise.all(panels.map(panel => _panelCapture(panel)));
+    try {
+      panels.forEach((panel, i) => {
+        // A panel closed while the others answered has left the grid.
+        if (!_panels.includes(panel)) return;
+        const rect = panel.el.getBoundingClientRect();
+        const x = Math.round((rect.left - gridRect.left) * scale);
+        const y = Math.round((rect.top - gridRect.top) * scale);
+        const w = Math.round(rect.width * scale);
+        const h = Math.round(rect.height * scale);
+        const title = panel.name || _t('compare.panel', 'Panel');
 
-      ctx.fillStyle = dark ? '#111827' : '#f8fafc';
-      ctx.fillRect(x, y, w, h);
-      if (!_drawPanelCanvas(ctx, panel, x, y, w, h)) {
-        fallbackPanels++;
-        _drawPanelFallback(ctx, title, x, y, w, h, scale, dark);
-      }
-      _drawPanelLabel(ctx, title, x, y, w, scale, dark);
-    });
+        ctx.fillStyle = dark ? '#111827' : '#f8fafc';
+        ctx.fillRect(x, y, w, h);
+        if (!_drawPanelCanvas(ctx, captures[i], x, y, w, h)) {
+          fallbackPanels++;
+          _drawPanelFallback(ctx, title, x, y, w, h, scale, dark);
+        }
+        _drawPanelLabel(ctx, title, x, y, w, scale, dark);
+      });
+    } finally {
+      captures.forEach(_closeBitmap);
+    }
 
     _drawFigureStamp(ctx, width, height, scale, dark);
     const mime = format === 'webp' ? 'image/webp' : 'image/png';
@@ -1388,23 +1488,27 @@ const CompareApp = (() => {
     return { blob, width, height, panelCount: _panels.length, fallbackPanels, mime };
   }
 
-  /** The canvas a panel is showing (the staged slice, the WebGL view of a volume,
-   *  the 2D canvas of a photograph), asked of the page itself: a volume page renders
-   *  its WebGL view inside this call, and the caller draws it before this task ends —
-   *  the page does not keep its drawing buffer between frames, so a canvas fetched
-   *  from the frame's document and read later would be blank. */
-  function _visiblePanelCanvas(panel) {
-    const win = panel.iframe?.contentWindow;
-    if (!win) return null;
+  /**
+   * What a panel is showing (the staged slice, the WebGL view of a volume, the 2D
+   * canvas of a photograph), asked of the page (REQUEST_CAPTURE): the page renders
+   * its view and snapshots it into an ImageBitmap in the same task (its WebGL
+   * drawing buffer is not kept between frames) and transfers it here. null when the
+   * page has nothing to show or does not answer.
+   */
+  async function _panelCapture(panel) {
+    if (!panel?.ready) return null;
     try {
-      if (win.ViewerApp?.getCaptureCanvas) return win.ViewerApp.getCaptureCanvas();
-      if (win.App2D?.getCaptureCanvas) return win.App2D.getCaptureCanvas();
-    } catch (_) { /* frame mid-navigation */ }
-    return null;
+      const answer = await _rpc.request(panel.index, 'REQUEST_CAPTURE', {}, { timeoutMs: CAPTURE_TIMEOUT_MS });
+      const bitmap = answer.bitmap;
+      if (bitmap && bitmap.width > 0 && bitmap.height > 0) return bitmap;
+      _closeBitmap(bitmap);
+      return null;
+    } catch (err) {
+      return null;
+    }
   }
 
-  function _drawPanelCanvas(ctx, panel, x, y, w, h) {
-    const source = _visiblePanelCanvas(panel);
+  function _drawPanelCanvas(ctx, source, x, y, w, h) {
     if (!source || !source.width || !source.height) return false;
     if (_sampleCanvasNonzero(source) <= 16) return false;
     try {
@@ -1536,27 +1640,48 @@ const CompareApp = (() => {
 
   // ── Workspace ─────────────────────────────────────────────
 
+  /**
+   * The last workspace state a panel answered (REQUEST_WORKSPACE_STATE), or null
+   * before its first answer. The URL sync and the save read it synchronously; every
+   * read asks the panels again (_refreshPanelStates), so it is at most one answer old.
+   */
   function _panelState(panel) {
     if (!panel.ready) return null;
-    const win = panel.iframe?.contentWindow;
-    if (!win) return null;
-    try {
-      const state = win.ViewerApp?.getWorkspaceState ? win.ViewerApp.getWorkspaceState()
-        : (win.App2D?.getWorkspaceState ? win.App2D.getWorkspaceState() : null);
-      if (state?.viewer && 'cache' in state.viewer) {
-        // The brick cache fills on its own while a volume streams; left in, it
-        // would re-stamp the URL every second. It is telemetry, not workspace.
-        const { cache, ...viewer } = state.viewer;
-        return { ...state, viewer };
-      }
-      return state;
-    } catch (err) {
-      console.warn('[Compare] Panel state unavailable', panel.index, err);
-    }
-    return null;
+    return panel.workspaceState || null;
+  }
+
+  /** Asks one ready panel for its workspace state (one request at a time per panel). */
+  function _refreshPanelState(panel) {
+    if (!panel?.ready) return Promise.resolve(null);
+    if (panel.stateRequest) return panel.stateRequest;
+    const p = _rpc.request(panel.index, 'REQUEST_WORKSPACE_STATE', {}, { timeoutMs: STATE_TIMEOUT_MS })
+      .then((answer) => {
+        let state = answer.state && typeof answer.state === 'object' ? answer.state : null;
+        if (state?.viewer && 'cache' in state.viewer) {
+          // The brick cache fills on its own while a volume streams; left in, it
+          // would re-stamp the URL every second. It is telemetry, not workspace.
+          const { cache, ...viewer } = state.viewer;
+          state = { ...state, viewer };
+        }
+        if (state) panel.workspaceState = state;
+        return state;
+      })
+      .catch((err) => {
+        if (err?.code !== 'COMPARE_UNREACHABLE') console.warn('[Compare] Panel state unavailable', panel.index, err?.message || err);
+        return null;
+      })
+      .finally(() => { panel.stateRequest = null; });
+    panel.stateRequest = p;
+    return p;
+  }
+
+  /** Asks every ready panel for its state; resolves once they all answered (or failed). */
+  function _refreshPanelStates() {
+    return Promise.all(_panels.filter(p => p.ready).map(_refreshPanelState));
   }
 
   function _getWorkspaceState() {
+    _refreshPanelStates();
     if (!_panels.length) {
       return { ui: { panelCount: 0 }, compare: { panels: [], layoutMode: _layoutMode, sync: { ..._syncOptions }, tool: _tool, quality: _qualityMode } };
     }

@@ -541,7 +541,8 @@ class Engine(unittest.TestCase):
                     "js/core/plane-codec.js", "js/core/plane-loader.js",
                     "js/workers/plane-decode-worker.js", "js/workers/migration-worker.js",
                     "js/migrations/m002-planes.js", "js/pages/admin/migration-runner.js",
-                    "js/pages/admin/tab-dataset-updates.js", "css/admin-updates.css"):
+                    "js/pages/admin/tab-dataset-updates.js", "css/admin-updates.css",
+                    "js/migrations/speedtest-brick.webp"):
             self.assertIn(rel, shipped)
         sys.path.insert(0, os.path.join(ROOT, "tools"))
         try:
@@ -569,6 +570,26 @@ class Engine(unittest.TestCase):
         self.assertGreater(len(dry["processed"]), 0)
         self.assertEqual(dry["done"], dm.plan_job("3d/SYN", MID)["empty"])   # nothing recorded
         self.assertFalse(any(dm.tile_store_dir("3d", "SYN", MID).rglob("*.png")))
+
+    def test_speedtest_runs_the_shipped_block(self):
+        """The executors' speed test converts the synthetic brick shipped in js/migrations/
+        (no dataset needed) within its budget; speedtest_put counts and drops a block."""
+        sample = Path(ROOT) / "js" / "migrations" / "speedtest-brick.webp"
+        dm.configure(Path(ROOT), data_web=self.data_web, uploads_dir=self.tmp / "uploads")
+        status, out = dm.handle("speedtest", {}, {"maxSeconds": 0.3})
+        self.assertEqual(status, 200, out)
+        self.assertGreaterEqual(out["blocks"], 1)
+        self.assertEqual(out["bytesRead"], out["blocks"] * sample.stat().st_size)
+        self.assertGreater(out["bytesWritten"], 0)
+        self.assertLess(out["seconds"], 2.0)
+        voxels = dm.decode_brick(sample.read_bytes(), "webp-lossless", {"mode": "grid", "cols": 8})
+        self.assertEqual(len(voxels), 64 ** 3)
+        self.assertGreater(max(voxels), 100, "the test brick carries signal, not an empty volume")
+        self.assertEqual(dm.handle("speedtest_put", {}, {}, b"" * 5000), (200, {"ok": True, "bytes": 5000}))
+        status, out = dm.handle("speedtest_put", {}, {}, b"" * (dm.SPEEDTEST_PUT_MAX + 1))
+        self.assertEqual((status, out["error"]), (413, "body_too_large"))
+        self.assertIn("speedtest", dm.WRITE_ACTIONS)
+        self.assertIn("speedtest_put", dm.WRITE_ACTIONS)
 
     def test_without_numpy_tiles_are_byte_identical(self):
         """A host without numpy runs the pure-Python paths: same tiles, same bytes."""

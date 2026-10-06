@@ -14,7 +14,7 @@
  *     re-plans after each wave until none is left;
  *   * WorkerPool — the browser executor: N workers × S slots of js/workers/migration-worker.js
  *     (a handler may lower S: `slotsPerWorker`), plus the per-migration capability probe;
- *   * capabilities, executor choice, benchmarks and duration estimates.
+ *   * capabilities, executor choice, the executors' speed test and duration estimates.
  *
  * Nothing here is specific to a migration: the browser executor loads the handler module
  * named after the migration id inside the worker.
@@ -36,6 +36,8 @@ const MAX_STALLED_ASSEMBLY = 5;  // finalize answers in a row without a new plan
 // Server error codes that no retry changes: `unit_timeout` = a unit that killed the request
 // twice (the server executor cannot convert it within its time limit).
 const DEFINITIVE_CODES = new Set(['unit_timeout']);
+// Marker of a pool request that is a speed-test block, not a unit.
+const SPEEDTEST_JOB = '#speedtest';
 
 // ── Ordering ──────────────────────────────────────────────────────────────────
 
@@ -190,6 +192,7 @@ export function createApi(request, base = API_MIGRATIONS) {
     finalize: (dataset, migration) => postJson('finalize', { dataset, migration, maxSeconds: SERVER_SLICE_SECONDS }),
     cancel: (dataset, migration) => postJson('cancel', { dataset, migration }),
     bench: (dataset, units, migration) => postJson('bench', migration ? { dataset, migration, units } : { dataset, units }),
+    speedtest: (maxSeconds) => postJson('speedtest', { maxSeconds }),
   };
 }
 
@@ -275,7 +278,9 @@ export class WorkerPool {
     for (const [id, p] of this.pending) {
       if (p.slot !== slot) continue;
       this.pending.delete(id);
-      p.resolve(p.unit
+      p.resolve(p.unit === SPEEDTEST_JOB
+        ? { type: 'speedtest_done', ok: false, error: 'worker crashed: ' + (e && e.message || '') }
+        : p.unit
         ? { type: 'unit_failed', key: p.unit, error: 'worker crashed: ' + (e && e.message || ''), fatal: false }
         : { ok: false, error: 'worker crashed' });
     }
@@ -344,13 +349,31 @@ export class WorkerPool {
     }
   }
 
+  /** One block of the speed test in a free slot; resolves the worker's speedtest_done message. */
+  async speedtestBlock(sampleUrl) {
+    for (;;) {
+      if (this.dead) return { ok: false, aborted: true };
+      this._ensure();
+      const slot = this.workers.filter((s) => s.busy < this.o.slots).sort((a, b) => a.busy - b.busy)[0];
+      if (slot) {
+        slot.busy++;
+        return this._send(slot, { type: 'speedtest', sampleUrl }, SPEEDTEST_JOB);
+      }
+      await new Promise((r) => this.waiters.push(r));
+    }
+  }
+
   abortAll() { for (const s of this.workers) s.w.postMessage({ type: 'abort' }); }
 
   terminate() {
     this.dead = true;
     for (const s of this.workers) { try { s.w.terminate(); } catch (_) { /* gone */ } }
     this.workers = [];
-    for (const p of this.pending.values()) p.resolve(p.unit ? { type: 'unit_failed', key: p.unit, error: 'terminated', aborted: true } : { ok: false, error: 'terminated' });
+    for (const p of this.pending.values()) {
+      p.resolve(p.unit && p.unit !== SPEEDTEST_JOB
+        ? { type: 'unit_failed', key: p.unit, error: 'terminated', aborted: true }
+        : { ok: false, error: 'terminated', aborted: true });
+    }
     this.pending.clear();
     while (this.waiters.length) this._wake();
   }
@@ -395,7 +418,7 @@ export async function runBrowserUnits({ pool, dataset, migration, keys, dry = fa
 
 /**
  * Drives the queue. Events (onEvent): { type: 'state' | 'progress' | 'job_done' | 'job_failed'
- * | 'log' | 'net', ... }. The executor of a job is `o.executorFor(migration)` when given, else
+ * | 'log' | 'net', ... }. The executor of a job is `o.executorFor(migration, dataset)` when given, else
  * `executors[migration]`, else `executor` ('browser' | 'server'); it is read when a job starts
  * or resumes, so it may change while paused. null = nothing can run that migration: the job
  * fails with code `no_executor`.
@@ -409,7 +432,7 @@ export async function runBrowserUnits({ pool, dataset, migration, keys, dry = fa
  * @param {() => WorkerPool} o.pool  lazily created browser pool
  * @param {(id: string) => string} o.datasetBase  absolute URL of the published dataset
  * @param {(e: object) => void} o.onEvent
- * @param {(migration: string) => string|null} [o.executorFor]
+ * @param {(migration: string, dataset: string) => string|null} [o.executorFor]
  * @param {(dataset: string, migration: string) => number|null} [o.estimateStep]  seconds
  * @param {() => number} [o.now]   seconds
  */
@@ -487,8 +510,8 @@ export class Runner {
     return res;
   }
 
-  executorFor(migration) {
-    if (this.o.executorFor) return this.o.executorFor(migration);
+  executorFor(migration, dataset) {
+    if (this.o.executorFor) return this.o.executorFor(migration, dataset);
     return this.executors[migration] || this.executor;
   }
 
@@ -572,7 +595,7 @@ export class Runner {
 
   async _runJob(item) {
     const { api } = this.o;
-    const executor = this.executorFor(item.migration);
+    const executor = this.executorFor(item.migration, item.dataset);
     if (executor !== 'browser' && executor !== 'server') {
       throw Object.assign(new Error('no executor can run ' + item.migration), { code: 'no_executor' });
     }
@@ -713,42 +736,102 @@ export class Runner {
   }
 }
 
-// ── Benchmarks ────────────────────────────────────────────────────────────────
+// ── Speed test ────────────────────────────────────────────────────────────────
+
+export const SPEEDTEST_SECONDS = 5;
+export const SPEEDTEST_SAMPLE = 'js/migrations/speedtest-brick.webp';
 
 /**
- * Browser: `n` non-empty sample units, real downloads + decode + encode + dry upload.
- * secondsPerUnit is the WALL time per unit at the pool's concurrency (what an update costs).
+ * Both executors convert the same synthetic test block (dataset_migrations.speedtest) at the
+ * same time for `seconds`: the browser through its worker pool (download, decode, encode,
+ * upload, at the pool's concurrency like a real job), the server in bounded requests back to
+ * back (one at a time, like unit_run). A block counts when it ends inside the window. Resolves
+ *   { seconds, browser: side, server: side }
+ *   side = { blocks, bytesIn, bytesOut, error, code, detail }   (error 'skipped' = not asked)
+ * `onTick({ elapsed, browser, server })` follows the run. One side failing leaves the other
+ * running.
  */
-export async function benchBrowser({ pool, dataset, migration, datasetBase, n = 4, now = () => performance.now() / 1000 }) {
-  const cap = typeof pool.probe === 'function' ? await pool.probe(migration) : { available: true };
-  if (!cap.available) {
-    throw Object.assign(new Error('this browser cannot run ' + migration), { code: (cap.reasons && cap.reasons[0]) || 'unavailable' });
-  }
-  await pool.prepare(dataset, migration, datasetBase);
-  // `sample`: the units whose inputs exist before any job (m004: level 0 only).
-  const units = (await pool.list(dataset, migration, { sample: true })).filter((u) => !u.empty).map((u) => u.key);
-  const sample = sampleEvenly(units, n);
-  if (!sample.length) return { units: 0, secondsPerUnit: null, bytesIn: 0, bytesOut: 0 };
-  let bytesIn = 0, bytesOut = 0, unitSeconds = 0;
+export async function runSpeedtest({ pool, api, sampleUrl, seconds = SPEEDTEST_SECONDS, onTick,
+  browser = true, server = true, now = () => performance.now() / 1000 }) {
   const t0 = now();
-  await runBrowserUnits({
-    pool, dataset, migration, keys: sample, dry: true,
-    ctl: { stop: () => false, onUnit: (r) => { bytesIn += r.bytesIn || 0; bytesOut += r.bytesOut || 0; unitSeconds += r.seconds || 0; } },
-  });
-  const wall = now() - t0;
-  return {
-    migration, dataset, units: sample.length, seconds: wall, secondsPerUnit: wall / sample.length,
-    unitSeconds: unitSeconds / sample.length, bytesIn, bytesOut, nonEmptyUnits: units.length,
+  const deadline = t0 + seconds;
+  const side = () => ({ blocks: 0, bytesIn: 0, bytesOut: 0, error: null, code: null, detail: null, running: true });
+  const res = { seconds, browser: side(), server: side() };
+  const tick = () => {
+    try { onTick?.({ elapsed: Math.min(seconds, now() - t0), browser: res.browser, server: res.server }); } catch (_) { /* view only */ }
   };
+  const timer = setInterval(tick, 100);
+
+  const browserRun = async () => {
+    const b = res.browser;
+    if (!browser || !pool) { b.error = 'skipped'; return; }
+    let failed = false;
+    const lane = async () => {
+      while (!failed && now() < deadline) {
+        const r = await pool.speedtestBlock(sampleUrl);
+        if (r && r.ok) {
+          if (now() <= deadline) { b.blocks++; b.bytesIn += r.bytesIn || 0; b.bytesOut += r.bytesOut || 0; }
+          continue;
+        }
+        if (r && r.aborted) return;
+        failed = true;
+        b.error = (r && r.error) || 'failed';
+        b.code = (r && r.code) || null;
+      }
+    };
+    const lanes = Promise.all(Array.from({ length: Math.max(1, pool.capacity || 1) }, lane));
+    // The window closes on the deadline, not on the slowest block still in flight.
+    await Promise.race([lanes, new Promise((r) => setTimeout(r, Math.max(0, (deadline - now()) * 1000) + 50))]);
+    pool.terminate();
+    await lanes;
+  };
+
+  const serverRun = async () => {
+    const s = res.server;
+    if (!server || !api) { s.error = 'skipped'; return; }
+    while (now() < deadline - 0.1) {
+      const r = await api.speedtest(Math.min(1, deadline - now()));
+      const d = r && r.data;
+      if (!r || !r.ok || !d || d.ok === false) {
+        s.error = (d && (d.message || d.error)) || `HTTP ${r ? r.status : 0}`;
+        s.code = (d && d.error) || null;
+        s.detail = (d && d.detail) || null;
+        return;
+      }
+      s.blocks += Number(d.blocks) || 0;
+      s.bytesIn += Number(d.bytesRead) || 0;
+      s.bytesOut += Number(d.bytesWritten) || 0;
+      tick();
+    }
+  };
+
+  try {
+    await Promise.all([
+      browserRun().finally(() => { res.browser.running = false; }),
+      serverRun().finally(() => { res.server.running = false; }),
+    ]);
+  } finally {
+    clearInterval(timer);
+  }
+  tick();
+  return res;
 }
 
-export async function benchServer({ api, dataset, migration, n = 4 }) {
-  const r = await api.bench(dataset, Math.min(8, n), migration);
-  if (!r.ok || !r.data) throw apiError(r, 'bench failed');
-  const d = r.data;
-  return {
-    migration, dataset, units: d.units, seconds: d.seconds,
-    secondsPerUnit: d.secondsPerUnit > 0 ? d.secondsPerUnit : (d.units > 0 ? d.seconds / d.units : null),
-    bytesIn: d.bytesRead || 0, bytesOut: d.bytesWritten || 0, sample: d.sample || null,
-  };
+/**
+ * Scores of a speed test: blocks per second × 10, rounded (over the 5 s window a score is the
+ * block count doubled); null for a side that could not run. `winner` = the higher score
+ * ('browser' | 'server' | null on a tie or when neither ran), `ratio` = how many times faster.
+ */
+export function speedtestScores(res) {
+  const sec = res && res.seconds > 0 ? res.seconds : SPEEDTEST_SECONDS;
+  const score = (x) => (x && !x.error ? Math.round((10 * x.blocks) / sec) : null);
+  const b = score(res && res.browser);
+  const s = score(res && res.server);
+  let winner = null;
+  if (b !== null && s !== null) winner = s > b ? 'server' : b > s ? 'browser' : null;
+  else if (b) winner = 'browser';
+  else if (s) winner = 'server';
+  const lo = winner === 'server' ? b : s;
+  const hi = winner === 'server' ? s : b;
+  return { browser: b, server: s, winner, ratio: winner && lo > 0 ? hi / lo : null };
 }

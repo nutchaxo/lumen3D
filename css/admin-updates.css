@@ -1,67 +1,151 @@
 /* Admin — "Data updates" tab (dataset format migrations). Tokens from admin-shell.css. */
 
 .dupd-card { margin-bottom: 16px; }
-.dupd-grid { margin-bottom: 16px; }
-.dupd-grid .dupd-card { margin-bottom: 0; }
-.dupd-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
-.adm-page-head .dupd-row { margin-top: 0; }
+.dupd-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .dupd-small { font-size: 12px; }
-.dupd-n { width: 72px; }
-.dupd-row select.adm-field-input { flex: 1 1 200px; min-width: 0; }
+.dupd-block { display: block; }
 .dupd-head-btn { margin-left: auto; }
+.dupd-note { display: flex; align-items: center; gap: 6px; margin: 8px 0 0; }
+.dupd-note i { width: 14px; height: 14px; flex-shrink: 0; }
 
-.dupd-cap { display: flex; gap: 8px; align-items: flex-start; font-size: 13px; margin-bottom: 12px; }
-.dupd-cap i { width: 16px; height: 16px; flex-shrink: 0; margin-top: 1px; }
-.dupd-cap--ok { color: var(--adm-success); }
-.dupd-cap--no { color: var(--adm-text-sec); }
-.dupd-cap--no ul { margin: 4px 0 0 16px; padding: 0; }
+/* ── Progress bars (speed test, datasets) ─────────────────────── */
+.dupd-bar { position: relative; height: 10px; border-radius: 999px; background: rgba(127, 127, 160, 0.16); overflow: hidden; }
+.dupd-bar > span {
+  display: block; height: 100%; border-radius: inherit;
+  background: linear-gradient(90deg, var(--adm-accent), color-mix(in srgb, var(--adm-accent) 60%, #00d2ff));
+  transition: width 0.35s cubic-bezier(0.4, 0, 0.2, 1);
+}
+.dupd-bar.is-thin { height: 4px; }
+.dupd-bar.is-win > span { background: linear-gradient(90deg, var(--adm-success), color-mix(in srgb, var(--adm-success) 55%, #00d2ff)); }
+/* A running job: a soft sheen travels along the filled part. */
+.dupd-bar.is-run > span { background-size: 200% 100%; animation: dupd-sheen 1.8s linear infinite;
+  background-image: linear-gradient(90deg, var(--adm-accent) 0%, color-mix(in srgb, var(--adm-accent) 55%, #fff) 50%, var(--adm-accent) 100%); }
+@keyframes dupd-sheen { from { background-position: 100% 0; } to { background-position: -100% 0; } }
+@media (prefers-reduced-motion: reduce) { .dupd-bar.is-run > span { animation: none; } .dupd-bar > span { transition: none; } }
 
-.dupd-execs { display: grid; gap: 8px; }
-.dupd-exec { display: flex; gap: 10px; align-items: flex-start; padding: 10px 12px; border: 1px solid var(--adm-border); border-radius: 10px; cursor: pointer; }
-.dupd-exec.is-on { border-color: var(--adm-border-active); background: var(--adm-accent-subtle); }
-.dupd-exec.is-off { opacity: 0.55; cursor: not-allowed; }
-.dupd-exec input { margin-top: 3px; }
-.dupd-exec span { display: flex; flex-direction: column; gap: 2px; }
-.dupd-exec em { font-style: normal; font-size: 12px; color: var(--adm-text-sec); }
+/* ── Speed test ─────────────────────────────────────────────── */
+.dupd-speed-intro { margin: 0 0 14px; line-height: 1.5; }
+.dupd-races { display: grid; gap: 10px; }
+.dupd-race {
+  position: relative; display: grid; grid-template-columns: minmax(150px, 210px) 1fr 74px; align-items: center; gap: 14px;
+  padding: 12px 14px; border: 1px solid var(--adm-border); border-radius: 12px; background: rgba(127, 127, 160, 0.04);
+  transition: border-color 0.2s, background 0.2s;
+}
+.dupd-race.is-win { border-color: color-mix(in srgb, var(--adm-success) 55%, transparent); background: color-mix(in srgb, var(--adm-success) 7%, transparent); }
+.dupd-race.is-off { opacity: 0.6; }
+.dupd-race-who { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.dupd-race-who > i { width: 30px; height: 30px; padding: 7px; border-radius: 9px; flex-shrink: 0; background: var(--adm-accent-subtle); color: var(--adm-accent); }
+.dupd-race.is-win .dupd-race-who > i { background: color-mix(in srgb, var(--adm-success) 16%, transparent); color: var(--adm-success); }
+.dupd-race-who div { display: flex; flex-direction: column; min-width: 0; }
+.dupd-race-who b { font-size: 13.5px; }
+.dupd-race-who span { font-size: 11.5px; color: var(--adm-text-sec); overflow-wrap: anywhere; }
+.dupd-race-track .dupd-bar { height: 14px; }
+.dupd-race-score { display: flex; flex-direction: column; align-items: flex-end; line-height: 1.1; }
+.dupd-race-score b { font-size: 22px; font-weight: 700; font-variant-numeric: tabular-nums; letter-spacing: -0.02em; }
+.dupd-race-score span { font-size: 10.5px; color: var(--adm-text-muted); text-transform: uppercase; letter-spacing: 0.06em; }
+.dupd-race-badge {
+  position: absolute; top: -9px; right: 12px; padding: 2px 8px; border-radius: 999px;
+  font-size: 10.5px; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase;
+  background: var(--adm-success); color: #06281b;
+}
+.dupd-race-clock { display: flex; align-items: center; gap: 10px; margin-top: 14px; }
+.dupd-race-clock .dupd-bar { flex: 1; }
+.dupd-race-clock span { font-size: 12px; color: var(--adm-text-sec); font-variant-numeric: tabular-nums; min-width: 64px; text-align: right; }
+.dupd-speed-verdict { display: flex; align-items: flex-start; gap: 8px; margin: 14px 0 4px; font-size: 13.5px; }
+.dupd-speed-verdict i { width: 16px; height: 16px; flex-shrink: 0; margin-top: 1px; color: var(--adm-success); }
 
-.dupd-bench-res { font-size: 12.5px; color: var(--adm-text-sec); font-family: 'JetBrains Mono', monospace; }
+/* ── Datasets ───────────────────────────────────────────────── */
+.dupd-bulk { margin-left: 12px; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; font-weight: 500; }
+.dupd-lanes { display: flex; flex-wrap: wrap; gap: 8px; }
+.dupd-lane {
+  display: inline-flex; align-items: center; gap: 7px; padding: 6px 11px; border-radius: 999px;
+  border: 1px solid var(--adm-border); font-size: 12.5px; color: var(--adm-text-sec);
+}
+.dupd-lane i { width: 14px; height: 14px; }
+.dupd-lane b { color: var(--adm-text); font-weight: 600; }
+.dupd-lane.is-running { border-color: var(--adm-border-active); background: var(--adm-accent-subtle); }
+.dupd-lane.is-running::before { content: ''; width: 7px; height: 7px; border-radius: 50%; background: var(--adm-accent); animation: dupd-pulse 1.4s ease-in-out infinite; }
+.dupd-lane.is-paused { border-color: color-mix(in srgb, var(--adm-warning) 50%, transparent); }
+@keyframes dupd-pulse { 50% { opacity: 0.3; } }
+[data-dupd-lanes]:not(:empty) { margin-bottom: 14px; }
 
-.dupd-scroll { overflow-x: auto; }
-.dupd-table { width: 100%; border-collapse: collapse; font-size: 13px; }
-.dupd-table th { text-align: left; font-weight: 600; font-size: 11.5px; color: var(--adm-text-sec); padding: 6px 8px; border-bottom: 1px solid var(--adm-border); white-space: nowrap; }
-.dupd-table td { padding: 8px; border-bottom: 1px solid var(--adm-border); vertical-align: top; }
-.dupd-table tfoot td { font-weight: 600; border-bottom: none; }
-.dupd-table .num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
-.dupd-est { margin-top: 12px; }
-.dupd-name { display: block; font-weight: 600; word-break: break-all; }
-.dupd-problem { display: block; margin-top: 3px; }
-.dupd-actions { white-space: nowrap; text-align: right; }
+.dupd-ds-list { display: grid; gap: 10px; }
+.dupd-ds {
+  display: grid; grid-template-columns: 1fr auto; gap: 10px 16px; padding: 14px 16px;
+  border: 1px solid var(--adm-border); border-radius: 12px; transition: border-color 0.2s;
+}
+.dupd-ds.is-active { border-color: var(--adm-border-active); }
+.dupd-ds-main { min-width: 0; display: flex; flex-direction: column; gap: 8px; }
+.dupd-ds-id { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.dupd-ds-name { font-weight: 600; font-size: 14px; overflow-wrap: anywhere; }
+.dupd-ds-meta { font-size: 12px; color: var(--adm-text-sec); }
+.dupd-ds-steps { display: flex; flex-wrap: wrap; gap: 6px; }
+.dupd-ds-problem { display: flex; align-items: center; gap: 6px; margin: 0; }
+.dupd-ds-problem i { width: 14px; height: 14px; flex-shrink: 0; }
+.dupd-chip {
+  display: inline-flex; align-items: center; gap: 6px; padding: 3px 9px; border-radius: 999px;
+  font-size: 12px; background: rgba(127, 127, 160, 0.1); color: var(--adm-text-sec); max-width: 100%;
+}
+.dupd-chip b { flex-shrink: 0; display: inline-flex; align-items: center; justify-content: center; width: 16px; height: 16px; border-radius: 50%; font-size: 10px; background: var(--adm-accent-subtle); color: var(--adm-accent); }
+.dupd-chip em { font-style: normal; font-size: 11px; color: var(--adm-warning); }
+.dupd-chip em.is-bad { color: var(--adm-danger, #f87171); }
+.dupd-chip.is-warn { background: rgba(251, 191, 36, 0.15); color: var(--adm-warning); }
+.dupd-ds-ctrl { display: flex; flex-direction: column; align-items: flex-end; gap: 10px; }
+.dupd-ds-actions { display: flex; gap: 6px; }
+.dupd-icon-btn { padding-left: 8px; padding-right: 8px; }
+.dupd-icon-btn i { margin: 0; }
+.dupd-ds-live { grid-column: 1 / -1; }
+.dupd-ds-live:empty { display: none; }
 
-.dupd-job-title { font-size: 13.5px; margin-bottom: 10px; overflow-wrap: anywhere; }
-.dupd-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 10px; margin: 12px 0 6px; }
-.dupd-stats dt { font-size: 11px; color: var(--adm-text-muted); text-transform: uppercase; letter-spacing: 0.04em; }
-.dupd-stats dd { margin: 2px 0 0; font-size: 13.5px; font-variant-numeric: tabular-nums; }
-#dupd-progress-body .adm-warn i { width: 14px; height: 14px; vertical-align: -2px; }
+/* Executor switch: a two-way segmented control. */
+.dupd-seg { display: inline-flex; padding: 3px; border-radius: 10px; background: rgba(127, 127, 160, 0.1); gap: 2px; }
+.dupd-seg-btn {
+  position: relative; display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px; border: none; border-radius: 8px;
+  background: none; color: var(--adm-text-sec); font: inherit; font-size: 12.5px; font-weight: 500; cursor: pointer; white-space: nowrap;
+  transition: background 0.15s, color 0.15s, box-shadow 0.15s;
+}
+.dupd-seg-btn i { width: 14px; height: 14px; }
+.dupd-seg-btn:hover:not(:disabled) { color: var(--adm-text); }
+.dupd-seg-btn.is-on { background: var(--adm-card); color: var(--adm-text); box-shadow: 0 1px 3px rgba(0, 0, 0, 0.18), 0 0 0 1px var(--adm-border-active); }
+.dupd-seg-btn:disabled { cursor: not-allowed; }
+.dupd-seg-btn:disabled:not(.is-on) { opacity: 0.4; }
+.dupd-seg-rec { font-style: normal; font-size: 10px; color: var(--adm-success); }
 
-.dupd-migs, .dupd-log { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }
+.dupd-live-line { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; font-size: 12.5px; margin-bottom: 8px; }
+.dupd-live-stats { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 4px 12px; margin-top: 6px; font-size: 12px; color: var(--adm-text-sec); font-variant-numeric: tabular-nums; }
+.dupd-live-stats b { color: var(--adm-text); }
+.dupd-state { display: inline-flex; align-items: center; gap: 5px; padding: 2px 8px; border-radius: 999px; font-size: 11px; font-weight: 600; letter-spacing: 0.03em; text-transform: uppercase; }
+.dupd-state.is-run { background: var(--adm-accent-subtle); color: var(--adm-accent); }
+.dupd-state.is-wait { background: rgba(251, 191, 36, 0.15); color: var(--adm-warning); }
+.dupd-state.is-bad { background: rgba(248, 113, 113, 0.15); color: var(--adm-danger, #f87171); }
+.dupd-exec-tag { display: inline-flex; align-items: center; gap: 4px; margin-left: auto; color: var(--adm-text-sec); font-size: 12px; }
+.dupd-exec-tag i { width: 13px; height: 13px; }
+
+.dupd-empty { display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 22px 10px; color: var(--adm-text-sec); text-align: center; }
+.dupd-empty i { width: 32px; height: 32px; color: var(--adm-success); }
+.dupd-empty p { margin: 0; }
+
+/* ── Folded sections (up to date, formats, history) ─────────── */
+.dupd-folds { display: grid; gap: 4px; padding-top: 10px; padding-bottom: 10px; }
+.dupd-fold summary { cursor: pointer; padding: 6px 0; font-size: 13px; font-weight: 600; list-style-position: inside; }
+.dupd-fold[open] summary { margin-bottom: 8px; }
+.dupd-ds-list + .dupd-fold, .dupd-empty + .dupd-fold { margin-top: 12px; }
+.dupd-done-list, .dupd-migs, .dupd-log { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.dupd-done-list li { display: flex; align-items: baseline; gap: 8px; font-size: 13px; }
+.dupd-done-list i { width: 14px; height: 14px; color: var(--adm-success); align-self: center; flex-shrink: 0; }
 .dupd-migs li { display: flex; gap: 10px; align-items: flex-start; }
 .dupd-migs p { margin: 2px 0 0; }
-.dupd-log li { display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: baseline; font-size: 13px; padding-bottom: 8px; border-bottom: 1px solid var(--adm-border); }
-.dupd-log li:last-child { border-bottom: none; }
+.dupd-log { margin-bottom: 10px; }
+.dupd-log li { display: flex; gap: 8px; align-items: flex-start; font-size: 13px; }
+.dupd-log li > i { width: 15px; height: 15px; flex-shrink: 0; margin-top: 2px; color: var(--adm-success); }
+.dupd-log li.is-failed > i { color: var(--adm-danger, #f87171); }
 
-@media (max-width: 640px) {
-  .dupd-table th:nth-child(4), .dupd-table td:nth-child(4) { display: none; }
+@media (max-width: 720px) {
+  .dupd-race { grid-template-columns: 1fr 64px; }
+  .dupd-race-track { grid-column: 1 / -1; grid-row: 2; }
+  .dupd-ds { grid-template-columns: 1fr; }
+  .dupd-ds-ctrl { align-items: stretch; flex-direction: row; flex-wrap: wrap; justify-content: space-between; }
+  .dupd-bulk { margin-left: 0; width: 100%; }
 }
-
-/* Executor per migration (web 1.59): one row per update, a choice per executor. */
-.dupd-block { display: block; }
-.dupd-exec-table td { vertical-align: top; }
-.dupd-exec-table .dupd-exec { padding: 8px 10px; min-width: 150px; }
-.dupd-noexec { display: flex; gap: 6px; align-items: flex-start; margin: 6px 0 0; }
-.dupd-noexec i { width: 14px; height: 14px; flex-shrink: 0; margin-top: 1px; }
-.dupd-step { display: block; }
-.dupd-step + .dupd-step { margin-top: 4px; }
-.dupd-step .adm-tag { margin-left: 4px; font-size: 11px; }
-.dupd-chain { display: flex; flex-wrap: wrap; gap: 4px 12px; margin: -4px 0 10px; color: var(--adm-text-muted); }
-.dupd-chain .is-done { text-decoration: line-through; }
-.dupd-chain .is-on { color: var(--adm-text); font-weight: 600; }
+.dupd-card .adm-card-head { flex-wrap: wrap; }
+.dupd-migs .dupd-chip { white-space: nowrap; flex-shrink: 0; }

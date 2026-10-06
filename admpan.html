@@ -121,17 +121,20 @@
     <div class="adm-gate-error" id="login-error" style="display:none">
       <span id="login-error-msg" data-i18n="admin.badCreds">Identifiants incorrects.</span>
     </div>
-    <div class="adm-gate-form">
+    <!-- A real <form> with named fields: Chrome's password manager pairs the user name with
+         the password only inside a form it sees submitted (it then offers to save both and
+         fills both). The submit is handled in shell.js (no navigation). -->
+    <form class="adm-gate-form" id="login-form" method="post" action="admpan.html" autocomplete="on">
       <div class="adm-field">
         <label class="adm-field-label" for="login-username" data-i18n="admin.username">Identifiant</label>
-        <input type="text" id="login-username" class="adm-field-input" autocomplete="username" placeholder="admin" spellcheck="false">
+        <input type="text" id="login-username" name="username" class="adm-field-input" autocomplete="username" autocapitalize="none" placeholder="admin" spellcheck="false" required>
       </div>
       <div class="adm-field">
         <label class="adm-field-label" for="login-password" data-i18n="admin.password">Mot de passe</label>
-        <input type="password" id="login-password" class="adm-field-input" autocomplete="current-password" placeholder="••••••••">
+        <input type="password" id="login-password" name="password" class="adm-field-input" autocomplete="current-password" placeholder="••••••••" required>
       </div>
-      <button class="adm-btn adm-btn-accent adm-gate-submit" id="btn-login" data-i18n="admin.signIn">Se connecter</button>
-    </div>
+      <button type="submit" class="adm-btn adm-btn-accent adm-gate-submit" id="btn-login" data-i18n="admin.signIn">Se connecter</button>
+    </form>
     <div class="adm-gate-footer" data-i18n="admin.loginFooter">Accès restreint</div>
   </div>
 </div>
@@ -155,68 +158,82 @@
     </div>
 
     <nav class="adm-nav" id="adm-nav">
-      <button class="adm-nav-item active" data-tab="datasets">
-        <i data-lucide="database"></i>
-        <span class="adm-nav-label" data-i18n="admin.navDatasets">Datasets</span>
-      </button>
-      <button class="adm-nav-item" data-tab="dataset-types">
-        <i data-lucide="shapes"></i>
-        <span class="adm-nav-label" data-i18n="dtypes.nav">Types de données</span>
-      </button>
-      <button class="adm-nav-item" data-tab="upload">
-        <i data-lucide="upload-cloud"></i>
-        <span class="adm-nav-label" data-i18n="admin.navUpload">Import</span>
-        <span class="adm-nav-dot" id="nav-upload-dot" style="display:none"></span>
-      </button>
-      <button class="adm-nav-item" data-tab="dataset-updates">
-        <i data-lucide="layers"></i>
-        <span class="adm-nav-label" data-i18n="dupd.nav">Data updates</span>
-      </button>
-      <button class="adm-nav-item" data-tab="stats">
-        <i data-lucide="bar-chart-3"></i>
-        <span class="adm-nav-label" data-i18n="admin.navStats">Statistiques</span>
-      </button>
-      <button class="adm-nav-item" data-tab="plugins">
-        <i data-lucide="blocks"></i>
-        <span class="adm-nav-label" data-i18n="admin.navPlugins">Plugins</span>
-      </button>
-      <button class="adm-nav-item" data-tab="marketplace">
-        <i data-lucide="store"></i>
-        <span class="adm-nav-label" data-i18n="admin.navMarketplace">Catalogue</span>
-      </button>
-      <button class="adm-nav-item" data-tab="security">
-        <i data-lucide="shield-check"></i>
-        <span class="adm-nav-label" data-i18n="admin.navSecurity">Sécurité</span>
-      </button>
-      <button class="adm-nav-item" data-tab="updates">
-        <i data-lucide="refresh-cw"></i>
-        <span class="adm-nav-label" data-i18n="admin.navUpdates">Mises à jour</span>
-        <span class="adm-nav-dot" id="nav-update-dot" style="display:none"></span>
-      </button>
-      <button class="adm-nav-item" data-tab="pipeline">
-        <i data-lucide="package"></i>
-        <span class="adm-nav-label" data-i18n="admin.navPipeline">Pipeline</span>
-      </button>
-      <button class="adm-nav-item" data-tab="docs">
-        <i data-lucide="book-open"></i>
-        <span class="adm-nav-label" data-i18n="admin.navDocs">Documentation</span>
-      </button>
-      <button class="adm-nav-item" data-tab="branding">
-        <i data-lucide="badge"></i>
-        <span class="adm-nav-label" data-i18n="admin.navBranding">Identité</span>
-      </button>
-      <button class="adm-nav-item" data-tab="pages">
-        <i data-lucide="layout-template"></i>
-        <span class="adm-nav-label" data-i18n="admin.navPages">Pages</span>
-      </button>
-      <button class="adm-nav-item" data-tab="appearance">
-        <i data-lucide="palette"></i>
-        <span class="adm-nav-label" data-i18n="admin.navAppearance">Apparence</span>
-      </button>
-      <button class="adm-nav-item" data-tab="legal">
-        <i data-lucide="scale"></i>
-        <span class="adm-nav-label" data-i18n="admin.navLegal">Mentions légales</span>
-      </button>
+      <!-- Tabs grouped by what the operator is doing; the group of the open tab is the
+           first half of the topbar breadcrumb (shell.js reads data-group). -->
+      <div class="adm-nav-group" role="group" aria-labelledby="nav-group-data" data-group="data">
+        <div class="adm-nav-group-label" id="nav-group-data" data-i18n="admin.navGroupData">Données</div>
+        <button class="adm-nav-item active" data-tab="datasets">
+          <i data-lucide="database"></i>
+          <span class="adm-nav-label" data-i18n="admin.navDatasets">Datasets</span>
+        </button>
+        <button class="adm-nav-item" data-tab="upload">
+          <i data-lucide="upload-cloud"></i>
+          <span class="adm-nav-label" data-i18n="admin.navUpload">Import</span>
+          <span class="adm-nav-dot" id="nav-upload-dot" style="display:none"></span>
+        </button>
+        <button class="adm-nav-item" data-tab="dataset-updates">
+          <i data-lucide="layers"></i>
+          <span class="adm-nav-label" data-i18n="dupd.nav">Data updates</span>
+        </button>
+        <button class="adm-nav-item" data-tab="dataset-types">
+          <i data-lucide="shapes"></i>
+          <span class="adm-nav-label" data-i18n="dtypes.nav">Types de données</span>
+        </button>
+        <button class="adm-nav-item" data-tab="stats">
+          <i data-lucide="bar-chart-3"></i>
+          <span class="adm-nav-label" data-i18n="admin.navStats">Statistiques</span>
+        </button>
+      </div>
+      <div class="adm-nav-group" role="group" aria-labelledby="nav-group-site" data-group="site">
+        <div class="adm-nav-group-label" id="nav-group-site" data-i18n="admin.navGroupSite">Site public</div>
+        <button class="adm-nav-item" data-tab="branding">
+          <i data-lucide="badge"></i>
+          <span class="adm-nav-label" data-i18n="admin.navBranding">Identité</span>
+        </button>
+        <button class="adm-nav-item" data-tab="appearance">
+          <i data-lucide="palette"></i>
+          <span class="adm-nav-label" data-i18n="admin.navAppearance">Apparence</span>
+        </button>
+        <button class="adm-nav-item" data-tab="pages">
+          <i data-lucide="layout-template"></i>
+          <span class="adm-nav-label" data-i18n="admin.navPages">Pages</span>
+        </button>
+        <button class="adm-nav-item" data-tab="legal">
+          <i data-lucide="scale"></i>
+          <span class="adm-nav-label" data-i18n="admin.navLegal">Mentions légales</span>
+        </button>
+      </div>
+      <div class="adm-nav-group" role="group" aria-labelledby="nav-group-ext" data-group="ext">
+        <div class="adm-nav-group-label" id="nav-group-ext" data-i18n="admin.navGroupExtensions">Extensions</div>
+        <button class="adm-nav-item" data-tab="plugins">
+          <i data-lucide="blocks"></i>
+          <span class="adm-nav-label" data-i18n="admin.navPlugins">Plugins</span>
+        </button>
+        <button class="adm-nav-item" data-tab="marketplace">
+          <i data-lucide="store"></i>
+          <span class="adm-nav-label" data-i18n="admin.navMarketplace">Catalogue</span>
+        </button>
+      </div>
+      <div class="adm-nav-group" role="group" aria-labelledby="nav-group-system" data-group="system">
+        <div class="adm-nav-group-label" id="nav-group-system" data-i18n="admin.navGroupSystem">Système</div>
+        <button class="adm-nav-item" data-tab="updates">
+          <i data-lucide="refresh-cw"></i>
+          <span class="adm-nav-label" data-i18n="admin.navUpdates">Mises à jour</span>
+          <span class="adm-nav-dot" id="nav-update-dot" style="display:none"></span>
+        </button>
+        <button class="adm-nav-item" data-tab="pipeline">
+          <i data-lucide="package"></i>
+          <span class="adm-nav-label" data-i18n="admin.navPipeline">Pipeline</span>
+        </button>
+        <button class="adm-nav-item" data-tab="security">
+          <i data-lucide="shield-check"></i>
+          <span class="adm-nav-label" data-i18n="admin.navSecurity">Sécurité</span>
+        </button>
+        <button class="adm-nav-item" data-tab="docs">
+          <i data-lucide="book-open"></i>
+          <span class="adm-nav-label" data-i18n="admin.navDocs">Documentation</span>
+        </button>
+      </div>
     </nav>
 
     <div class="adm-sidebar-foot">
@@ -240,6 +257,8 @@
         <i data-lucide="menu"></i>
       </button>
       <div class="adm-topbar-title">
+        <span class="adm-topbar-group" id="topbar-tab-group" data-i18n="admin.navGroupData">Données</span>
+        <i data-lucide="chevron-right" class="adm-topbar-sep" aria-hidden="true"></i>
         <span id="topbar-tab-title" data-i18n="admin.navDatasets">Datasets</span>
       </div>
 

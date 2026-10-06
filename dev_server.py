@@ -6534,7 +6534,8 @@ class AdminHandler(http.server.SimpleHTTPRequestHandler):
 
     def _read_migrations_post(self, parsed):
         """A migrations POST: `unit_put` carries a unit blob as the RAW body (up to
-        32 MiB of PNG tiles, never base64), every other action a small JSON body.
+        32 MiB of PNG tiles, never base64), `speedtest_put` a converted test block (≤ 4 MiB,
+        dropped), every other action a small JSON body.
         Session and CSRF are checked BEFORE a byte is read, so an anonymous or forged
         request cannot make the server buffer a 32 MiB body."""
         params = dict(urllib.parse.parse_qsl(parsed.query))
@@ -6546,8 +6547,10 @@ class AdminHandler(http.server.SimpleHTTPRequestHandler):
         if not ok:
             self._reject(status, payload)
             return
-        if params.get("action") == "unit_put":
-            length = self._content_length(dataset_migrations.MAX_UNIT_BODY)
+        if params.get("action") in ("unit_put", "speedtest_put"):
+            cap = (dataset_migrations.MAX_UNIT_BODY if params.get("action") == "unit_put"
+                   else dataset_migrations.SPEEDTEST_PUT_MAX)
+            length = self._content_length(cap)
             if length is None:
                 return
             raw = self._read_exact(length)

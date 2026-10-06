@@ -4,7 +4,7 @@
    two-timepoint 'live' one) go through plan → unit_run / unit_put → finalize, and
    every plane tile is decoded and compared with the source voxels. Also: the probe,
    blob validation, executor switch, source-change detection, repair detection, the
-   crash between swap and version bump, the resumable finalize, cancel, bench.
+   crash between swap and version bump, the resumable finalize, cancel, bench, speed test.
      php tests/test_mig_php_executor.php                                         */
 declare(strict_types=1);
 
@@ -238,6 +238,16 @@ try {
     // ── bench + dry run + cancel ───────────────────────────────────────────
     [$c, $b] = api('bench', ['dataset' => '3d/synthA', 'units' => 3]);
     check('bench: 3 sample units, bytes in/out', $c === 200 && $b['units'] === 3 && count($b['sample']) === 3 && $b['bytesRead'] > 0 && $b['bytesWritten'] > 0 && $b['secondsPerUnit'] > 0, json_encode($b));
+    // ── speed test: the shipped synthetic block, no dataset ───────────────
+    [$c, $st] = api('speedtest', ['maxSeconds' => 0.3]);
+    check('speedtest: blocks of the shipped test brick, bytes in/out', $c === 200 && $st['blocks'] >= 1 && $st['bytesRead'] === $st['blocks'] * filesize(__DIR__ . '/../js/migrations/speedtest-brick.webp')
+        && $st['bytesWritten'] > 0 && $st['seconds'] < 2.0, json_encode($st));
+    [$c, $st] = api('speedtest', ['maxSeconds' => 99]);
+    check('speedtest: budget capped at 3 s', $c === 200 && $st['seconds'] < 4.0, json_encode($st));
+    [$c, $sp] = api('speedtest_put', [], [], str_repeat("", 5000));
+    check('speedtest_put: counts and drops the body', $c === 200 && $sp === ['ok' => true, 'bytes' => 5000]);
+    [$c, $sp] = api('speedtest_put', [], [], str_repeat("", LUMEN_MIG_SPEEDTEST_PUT_MAX + 1));
+    check('speedtest_put: refuses more than 4 MiB', $c === 413 && $sp['error'] === 'body_too_large');
     [$c, $run] = api('unit_run', ['dataset' => '3d/synthB', 'migration' => 'm002-planes', 'maxSeconds' => 5, 'dry' => true]);
     $j = journal('3d', 'synthB');
     check('unit_run dry: nothing recorded', $c === 200 && count($run['processed']) > 0 && $j['done'] === []);
@@ -297,7 +307,7 @@ try {
     $src = (string)file_get_contents(__DIR__ . '/../api/migrations.php');
     check('endpoint: session released after auth, before dispatch',
         strpos($src, 'admin_session_start();') < strpos($src, 'session_write_close();') && strpos($src, 'session_write_close();') < strpos($src, 'switch ($action)'));
-    check('endpoint: every write action is POST + CSRF', LUMEN_MIG_WRITE_ACTIONS === ['plan', 'unit_put', 'unit_run', 'finalize', 'cancel', 'bench', 'unit_inputs']
+    check('endpoint: every write action is POST + CSRF', LUMEN_MIG_WRITE_ACTIONS === ['plan', 'unit_put', 'unit_run', 'finalize', 'cancel', 'bench', 'unit_inputs', 'speedtest', 'speedtest_put']
         && strpos($src, "in_array(\$action, LUMEN_MIG_WRITE_ACTIONS, true)") !== false && strpos($src, '$csrfOk') !== false);
 } catch (Throwable $e) {
     check('no exception', false, get_class($e) . ': ' . $e->getMessage() . ' @' . $e->getFile() . ':' . $e->getLine());

@@ -38,6 +38,8 @@ const LUMEN_MIG_BRICKS_PER_TILE = 8;            // LUMEN_MIG_TILE / LUMEN_MIG_BR
 const LUMEN_MIG_MAX_BODY        = 33554432;     // 32 MiB unit blob (a real one tops out near 17 MB; PHP holds the body and a copy within memory_limit)
 const LUMEN_MIG_MAX_RUN_S       = 20;
 const LUMEN_MIG_MAX_BENCH_UNITS = 8;
+const LUMEN_MIG_SPEEDTEST_MAX_S  = 3.0;
+const LUMEN_MIG_SPEEDTEST_PUT_MAX = 4194304;
 const LUMEN_MIG_MIN_MEMORY      = 134217728;    // 128 MiB
 const LUMEN_MIG_MIN_EXEC_S      = 10;
 const LUMEN_MIG_ZLIB_LEVEL      = 6;
@@ -2077,6 +2079,56 @@ function lumen_mig_bench($datasetId, $n = 4, $mid = null, bool $requireServer = 
             'unitsMeasured' => round($units, 3)];
 }
 
+/**
+ * The executors' speed test (twin of dataset_migrations.speedtest). A block = what a unit
+ * does for each brick it reads: decode the 512² lossless-WebP mosaic of one 64³ brick and
+ * encode its voxels as one 512² png-gray8 tile. The input is the synthetic brick shipped with
+ * the platform (js/migrations/speedtest-brick.webp, which the browser downloads too). Blocks
+ * run back to back until the next one would end past $maxSeconds (≤ 3 s, at least one block,
+ * and within max_execution_time); nothing is written.
+ */
+function lumen_mig_speedtest($maxSeconds = 1.0): array {
+    lumen_mig_require_server(LUMEN_M002);
+    $budget = is_numeric($maxSeconds) ? (float)$maxSeconds : 1.0;
+    $budget = max(0.05, min(LUMEN_MIG_SPEEDTEST_MAX_S, $budget));
+    $raw = @file_get_contents(admin_root() . '/js/migrations/speedtest-brick.webp');
+    if (!is_string($raw) || $raw === '') throw new LumenMigError('speedtest_sample_missing', 500);
+    $clock = lumen_mig_exec_clock();
+    $tile = LUMEN_MIG_BRICK * 8;
+    $blocks = 0; $written = 0; $slowest = 0.0;
+    $t0 = microtime(true);
+    for (;;) {
+        $left = lumen_mig_clock_step($clock);
+        if ($blocks && $slowest * 1.5 > $left) break;
+        $b0 = microtime(true);
+        $img = lumen_mig_gd_open($raw);
+        if ($img === null) throw new LumenMigError('server_unavailable', 409, 'no_webp_decode');
+        try {
+            $voxels = lumen_mig_gd_red($img, $tile, $tile);
+        } finally {
+            imagedestroy($img);
+        }
+        $written += strlen(lumen_mig_png_encode($voxels, $tile, $tile));
+        $blocks++;
+        $now = microtime(true);
+        $slowest = max($slowest, $now - $b0);
+        if ($now - $t0 + $slowest > $budget) break;
+    }
+    return ['ok' => true, 'blocks' => $blocks, 'seconds' => round(microtime(true) - $t0, 4),
+            'bytesRead' => $blocks * strlen($raw), 'bytesWritten' => $written];
+}
+
+/** The browser's side of the speed test uploads each converted block here; the bytes are dropped. */
+function lumen_mig_speedtest_put(?string $raw): array {
+    if ($raw !== null) {
+        if (strlen($raw) > LUMEN_MIG_SPEEDTEST_PUT_MAX) throw new LumenMigError('body_too_large', 413);
+        return ['ok' => true, 'bytes' => strlen($raw)];
+    }
+    $declared = isset($_SERVER['CONTENT_LENGTH']) ? (int)$_SERVER['CONTENT_LENGTH'] : -1;
+    if ($declared > LUMEN_MIG_SPEEDTEST_PUT_MAX) throw new LumenMigError('body_too_large', 413);
+    return ['ok' => true, 'bytes' => lumen_mig_read_body(true)];
+}
+
 /** What a browser executor reads for one unit (twin of dataset_migrations.unit_inputs). */
 function lumen_mig_unit_inputs($datasetId, $mid, $key): array {
     [$m, $plan, $path] = lumen_mig_open_job($datasetId, $mid);
@@ -2972,7 +3024,7 @@ function lumen_mig_status(): array {
 
 // ── Dispatch (api/migrations.php) ────────────────────────────────────────────
 
-const LUMEN_MIG_WRITE_ACTIONS = ['plan', 'unit_put', 'unit_run', 'finalize', 'cancel', 'bench', 'unit_inputs'];
+const LUMEN_MIG_WRITE_ACTIONS = ['plan', 'unit_put', 'unit_run', 'finalize', 'cancel', 'bench', 'unit_inputs', 'speedtest', 'speedtest_put'];
 /** Binary answers (application/octet-stream) — routed to lumen_mig_handle_binary. */
 const LUMEN_MIG_BINARY_ACTIONS = ['store_get'];
 
@@ -3010,6 +3062,10 @@ function lumen_mig_handle(string $action, array $params, array $body, ?string $r
                 return [200, lumen_mig_bench($body['dataset'] ?? null, $body['units'] ?? 4, $body['migration'] ?? null, true)];
             case 'unit_inputs':
                 return [200, lumen_mig_unit_inputs($body['dataset'] ?? null, $body['migration'] ?? null, $body['unit'] ?? null)];
+            case 'speedtest':
+                return [200, lumen_mig_speedtest($body['maxSeconds'] ?? 1.0)];
+            case 'speedtest_put':
+                return [200, lumen_mig_speedtest_put($raw)];
         }
         return [400, ['error' => 'unknown_action']];
     } catch (LumenMigError $e) {

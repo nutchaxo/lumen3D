@@ -28,6 +28,9 @@
      run     { reqId, migration, dataset, unit, dry }     → unit_done { reqId, key, done, total, bytesIn,
                                                               bytesOut, tiles, seconds } | unit_failed
                                                               { reqId, key, error, status, fatal }
+     speedtest { reqId, sampleUrl }                       → speedtest_done { reqId, ok, bytesIn, bytesOut,
+                                                              seconds, error?, code? }
+                                                              one block of the executors' speed test
      abort   { reqId? }   abort one unit, or every unit in flight
    Messages out, besides the replies: net { online: bool } while a request waits for the link.
    ============================================================ */
@@ -313,6 +316,46 @@ async function onRun(msg) {
   }
 }
 
+// One block of the executors' speed test (dataset_migrations.speedtest is the server's side):
+// download the synthetic test brick, decode its lossless-WebP mosaic, encode the 64³ voxels as
+// one 512² png-gray8 tile and upload it to a sink that drops it — the work a browser unit does
+// for each brick, transfers included. No retry: a failure ends the browser's run of the test.
+const SPEEDTEST_DECODER = 'm002-planes';
+const SPEEDTEST_TREE = { encoding: 'webp-lossless', packing: { mode: 'grid', cols: 8 } };
+let _speedSeq = 0;
+
+async function onSpeedtest(msg) {
+  const ac = new AbortController();
+  _inflight.set(msg.reqId, ac);
+  const t0 = performance.now();
+  try {
+    const decodeBrick = handlerFor(SPEEDTEST_DECODER)._internals.decodeBrick;
+    const sep = msg.sampleUrl.includes('?') ? '&' : '?';
+    const res = await fetch(`${msg.sampleUrl}${sep}st=${Date.now()}-${++_speedSeq}`, { credentials: 'same-origin', cache: 'no-store', signal: ac.signal });
+    if (!res.ok) throw httpError(res.status, 'speedtest_sample_missing', `HTTP ${res.status} for the test brick`);
+    const bytes = new Uint8Array(await res.arrayBuffer());
+    const voxels = await decodeBrick(bytes, SPEEDTEST_TREE, 0);
+    const png = await PlaneCodec.encodePngGray(512, 512, voxels);
+    const headers = { 'Content-Type': 'application/octet-stream' };
+    if (_csrf) headers['X-CSRF-Token'] = _csrf;
+    const put = await fetch(`${_endpoint}?action=speedtest_put`, { method: 'POST', headers, body: png, credentials: 'same-origin', signal: ac.signal });
+    let data = null;
+    try { data = await put.json(); } catch (_) { data = null; }
+    if (!put.ok || !data || data.ok === false) throw httpError(put.status, data && data.error, `HTTP ${put.status} for the test upload`);
+    post({ type: 'speedtest_done', reqId: msg.reqId, ok: true, bytesIn: bytes.length, bytesOut: png.length, seconds: (performance.now() - t0) / 1000 });
+  } catch (err) {
+    post({
+      type: 'speedtest_done', reqId: msg.reqId, ok: false,
+      error: String(err && err.message || err),
+      code: err && err.code || (typeof CompressionStream === 'undefined' ? 'no_compression_stream' : null),
+      status: err && err.status || 0,
+      aborted: !!(err && err.name === 'AbortError'),
+    });
+  } finally {
+    _inflight.delete(msg.reqId);
+  }
+}
+
 self.onmessage = (e) => {
   const msg = e.data || {};
   switch (msg.type) {
@@ -324,6 +367,7 @@ self.onmessage = (e) => {
     case 'prepare': onPrepare(msg); break;
     case 'list': onList(msg); break;
     case 'run': onRun(msg); break;
+    case 'speedtest': onSpeedtest(msg); break;
     case 'abort':
       if (msg.reqId !== undefined && msg.reqId !== null) _inflight.get(msg.reqId)?.abort();
       else for (const ac of _inflight.values()) ac.abort();

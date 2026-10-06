@@ -2733,6 +2733,55 @@ def bench(dataset_id, n=4, mid=None, require_server: bool = False) -> dict:
             "sample": [unit_key_for(m["id"], u) for u in picks]}
 
 
+# The executors' speed test of the Data updates tab. A *block* is what a unit does for each
+# brick it reads: decode the 512² lossless-WebP mosaic of one 64³ brick and encode its voxels
+# as one 512² png-gray8 tile. The input is a fixed synthetic brick shipped with the platform
+# (blobs over shot noise, like a confocal stack); the browser downloads the same file, so a
+# score depends neither on the published datasets nor on their state.
+SPEEDTEST_SAMPLE = ("js", "migrations", "speedtest-brick.webp")
+SPEEDTEST_MAX_SECONDS = 3.0
+SPEEDTEST_PUT_MAX = 4 * 1024 * 1024
+
+
+def speedtest(max_seconds=1.0) -> dict:
+    """Blocks run back to back until the next one would end past `max_seconds` (≤ 3 s, at
+    least one block). Nothing is written. Needs what m002 needs (WebP decode + zlib)."""
+    _require_server(M002)
+    try:
+        budget = float(max_seconds)
+    except (TypeError, ValueError):
+        budget = 1.0
+    budget = max(0.05, min(SPEEDTEST_MAX_SECONDS, budget))
+    try:
+        raw = ROOT.joinpath(*SPEEDTEST_SAMPLE).read_bytes()
+    except OSError as exc:
+        raise MigrationError("speedtest_sample_missing", 500, str(exc))
+    packing = {"mode": "grid", "cols": BRICKS_PER_TILE}
+    blocks = written = 0
+    slowest = 0.0
+    t0 = time.monotonic()
+    while True:
+        b0 = time.monotonic()
+        voxels = decode_brick(raw, "webp-lossless", packing)
+        written += len(png_gray8(TILE_SIZE, TILE_SIZE, voxels))
+        blocks += 1
+        now = time.monotonic()
+        slowest = max(slowest, now - b0)
+        if now - t0 + slowest > budget:
+            break
+    return {"ok": True, "blocks": blocks, "seconds": round(time.monotonic() - t0, 4),
+            "bytesRead": blocks * len(raw), "bytesWritten": written}
+
+
+def speedtest_put(raw: bytes | None) -> dict:
+    """The browser's side of the speed test uploads each converted block here, like a
+    unit_put: the bytes cross the link and are dropped."""
+    n = len(raw or b"")
+    if n > SPEEDTEST_PUT_MAX:
+        raise MigrationError("body_too_large", 413)
+    return {"ok": True, "bytes": n}
+
+
 def _structure_valid(plan: Plan, mid: str) -> bool:
     if mid == M002:
         return dataset_planes_valid(plan)
@@ -3772,7 +3821,8 @@ def _estimate_for(plan: Plan, m: dict, j) -> dict:
 
 # ── HTTP dispatch (the dev server only routes here) ────────────────────────────
 
-WRITE_ACTIONS = ("plan", "unit_put", "unit_run", "finalize", "cancel", "bench", "unit_inputs")
+WRITE_ACTIONS = ("plan", "unit_put", "unit_run", "finalize", "cancel", "bench", "unit_inputs",
+                 "speedtest", "speedtest_put")
 # Binary answers (application/octet-stream) — routed to handle_binary(), not handle().
 BINARY_ACTIONS = ("store_get",)
 
@@ -3804,6 +3854,10 @@ def handle(action: str, params: dict, body, raw: bytes | None = None) -> tuple[i
                               require_server=True)
         if action == "unit_inputs":
             return 200, unit_inputs(body.get("dataset"), body.get("migration"), body.get("unit"))
+        if action == "speedtest":
+            return 200, speedtest(body.get("maxSeconds", 1.0))
+        if action == "speedtest_put":
+            return 200, speedtest_put(raw)
         return 400, {"error": "unknown_action"}
     except MigrationError as exc:
         payload = {"error": exc.code, **exc.extra}

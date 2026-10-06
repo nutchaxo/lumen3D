@@ -329,11 +329,7 @@ function switchTab(id, force = false) {
     p.classList.toggle('active', p.dataset.tab === id));
 
   const tab = _tabs.get(id);
-  const titleEl = el('topbar-tab-title');
-  if (titleEl && tab) {
-    titleEl.setAttribute('data-i18n', tab.titleKey);
-    titleEl.textContent = t(tab.titleKey, tab.titleDefault);
-  }
+  paintTopbarTitle(tab);
 
   if (tab) {
     ensureTabModule(tab).then((impl) => {
@@ -349,6 +345,27 @@ function switchTab(id, force = false) {
   }
   closeMobileSidebar();
   refreshIcons();
+}
+
+/** Topbar breadcrumb: the sidebar group holding the tab (none for a page without an entry), then its title. */
+function paintTopbarTitle(tab) {
+  const titleEl = el('topbar-tab-title');
+  if (titleEl && tab) {
+    titleEl.setAttribute('data-i18n', tab.titleKey);
+    titleEl.textContent = t(tab.titleKey, tab.titleDefault);
+  }
+  const groupEl = el('topbar-tab-group');
+  if (!groupEl) return;
+  const label = tab && document.querySelector(`.adm-nav-group .adm-nav-item[data-tab="${tab.id}"]`)
+    ?.closest('.adm-nav-group')?.querySelector('.adm-nav-group-label');
+  const key = label?.getAttribute('data-i18n');
+  if (key) {
+    groupEl.setAttribute('data-i18n', key);
+    groupEl.textContent = t(key, label.textContent);
+  } else {
+    groupEl.removeAttribute('data-i18n');
+    groupEl.textContent = '';
+  }
 }
 
 // ── Import guard: don't let a navigation silently kill a transfer ─────────────
@@ -481,9 +498,7 @@ async function switchLanguage(lang) {
   const tab = _tabs.get(_activeTab);
   const impl = tab?.impl || (typeof tab?.load === 'function' ? null : tab);
   try { (impl?.relabel || impl?.activate)?.call(impl); } catch (_) {}
-  // Topbar title key may need re-translation.
-  const titleEl = el('topbar-tab-title');
-  if (titleEl && tab) titleEl.textContent = t(tab.titleKey, tab.titleDefault);
+  paintTopbarTitle(tab);
   refreshIcons();
 }
 
@@ -491,9 +506,9 @@ async function switchLanguage(lang) {
 
 function bindChrome() {
   // Gates
-  el('btn-login')?.addEventListener('click', doLogin);
-  el('login-password')?.addEventListener('keydown', (e) => { if (e.key === 'Enter') doLogin(); });
-  el('login-username')?.addEventListener('keydown', (e) => { if (e.key === 'Enter') el('login-password').focus(); });
+  // A submitted <form> (Enter in either field, or the button) is what lets the browser's
+  // password manager store and fill the user name along with the password.
+  el('login-form')?.addEventListener('submit', (e) => { e.preventDefault(); doLogin(); });
   el('setup-next')?.addEventListener('click', wizNext);
   el('setup-back')?.addEventListener('click', wizBack);
   el('setup-skip')?.addEventListener('click', finishWizard);

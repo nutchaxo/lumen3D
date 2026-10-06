@@ -10,8 +10,11 @@
 //     and lands in a later wave;
 //   • a step no executor can run fails with `no_executor` after the earlier steps finished;
 //   • WorkerPool: the handler's `slotsPerWorker` lowers the units in flight of that migration
-//     only; `probe` asks the worker once per migration; benchBrowser refuses an unavailable
-//     browser and lists level-0 sample units only (`{ sample: true }`).
+//     only; `probe` asks the worker once per migration;
+//   • runSpeedtest: both executors race for the window at the same time, the browser through
+//     the pool's slots, the server in bounded calls; a side that fails keeps the other running;
+//     speedtestScores gives blocks/s × 10, the winner and the ratio;
+//   • Runner.executorFor receives the dataset (the tab picks the executor per dataset).
 //
 // Run: node tests/js/test_v3_bmig_runner.mjs
 import assert from 'node:assert/strict';
@@ -20,7 +23,7 @@ import { pathToFileURL } from 'node:url';
 import { ROOT } from './harness.mjs';
 
 const M = await import(pathToFileURL(path.join(ROOT, 'js/pages/admin/migration-runner.js')).href);
-const { Runner, buildQueue, serverCapability, chooseExecutor, runBrowserUnits, WorkerPool, benchBrowser } = M;
+const { Runner, buildQueue, serverCapability, chooseExecutor, runBrowserUnits, WorkerPool, runSpeedtest, speedtestScores } = M;
 
 const REG = [
   { id: 'm002-planes', from: 1, to: 2, types: ['3d', 'live'] },
@@ -313,11 +316,79 @@ function fakePool(api, capacity = 3) {
   assert.deepEqual(await pool.probe('m004-bricks-v3'), { available: false, reasons: ['no_webp_lossless_encode'] });
   await pool.probe('m004-bricks-v3');
   assert.equal(probes, 2, 'probed once per migration');
-  await assert.rejects(benchBrowser({ pool, dataset: '3d/a', migration: 'm004-bricks-v3', datasetBase: 'http://h/' }), (e) => e.code === 'no_webp_lossless_encode');
-  const b = await benchBrowser({ pool, dataset: '3d/a', migration: 'm003-layer-mips', datasetBase: 'http://h/', n: 4 });
-  assert.equal(b.units, 1, 'sample list, empty units skipped');
-  assert.equal(b.migration, 'm003-layer-mips');
   pool.terminate();
+}
+
+// ── speed test ──
+{
+  // A fake clock: every block / call advances it, so the window closes deterministically.
+  let clock = 0;
+  const now = () => clock;
+  let inFlight = 0, peak = 0;
+  const pool = {
+    capacity: 3,
+    dead: false,
+    async speedtestBlock(url) {
+      assert.equal(url, 'http://h/js/migrations/speedtest-brick.webp');
+      if (this.dead) return { ok: false, aborted: true };
+      inFlight++; peak = Math.max(peak, inFlight);
+      await new Promise((r) => setTimeout(r, 1));
+      clock += 0.05;
+      inFlight--;
+      return this.dead ? { ok: false, aborted: true } : { ok: true, bytesIn: 100, bytesOut: 150 };
+    },
+    terminate() { this.dead = true; },
+  };
+  const calls = [];
+  const api = {
+    async speedtest(maxSeconds) {
+      calls.push(maxSeconds);
+      assert.ok(maxSeconds > 0 && maxSeconds <= 1, 'bounded server calls');
+      await new Promise((r) => setTimeout(r, 1));
+      return { ok: true, status: 200, data: { ok: true, blocks: 4, bytesRead: 400, bytesWritten: 600, seconds: maxSeconds } };
+    },
+  };
+  const ticks = [];
+  const res = await runSpeedtest({ pool, api, sampleUrl: 'http://h/js/migrations/speedtest-brick.webp', seconds: 5, now, onTick: (s) => ticks.push(s.elapsed) });
+  assert.equal(peak, 3, 'the browser runs as many blocks at once as the pool has slots');
+  assert.ok(pool.dead, 'the pool is released when the window closes');
+  assert.ok(res.browser.blocks > 0 && !res.browser.error);
+  assert.equal(res.browser.bytesIn, 100 * res.browser.blocks);
+  assert.ok(calls.length >= 1 && res.server.blocks === 4 * calls.length && !res.server.error);
+  assert.ok(ticks.length > 0, 'progress is reported');
+  const sc = speedtestScores(res);
+  assert.equal(sc.browser, Math.round((10 * res.browser.blocks) / 5));
+  assert.equal(sc.server, Math.round((10 * res.server.blocks) / 5));
+
+  // The server refuses (no WebP decode): the browser still finishes its window.
+  clock = 0;
+  const pool2 = { ...pool, dead: false, speedtestBlock: pool.speedtestBlock, terminate() { this.dead = true; } };
+  const bad = { async speedtest() { return { ok: false, status: 409, data: { error: 'server_unavailable', detail: 'no_webp_decode' } }; } };
+  const res2 = await runSpeedtest({ pool: pool2, api: bad, sampleUrl: 'http://h/js/migrations/speedtest-brick.webp', seconds: 5, now });
+  assert.equal(res2.server.code, 'server_unavailable');
+  assert.equal(res2.server.detail, 'no_webp_decode');
+  assert.ok(res2.browser.blocks > 0, 'the browser side is not stopped by the server failing');
+  const sc2 = speedtestScores(res2);
+  assert.equal(sc2.server, null);
+  assert.equal(sc2.winner, 'browser');
+
+  assert.deepEqual(speedtestScores({ seconds: 5, browser: { blocks: 10 }, server: { blocks: 35 } }), { browser: 20, server: 70, winner: 'server', ratio: 3.5 });
+  assert.deepEqual(speedtestScores({ seconds: 5, browser: { blocks: 10 }, server: { blocks: 10 } }), { browser: 20, server: 20, winner: null, ratio: null });
+  assert.equal(speedtestScores({ seconds: 5, browser: { blocks: 0, error: 'x' }, server: { blocks: 0, error: 'y' } }).winner, null);
+}
+
+// ── executorFor gets the dataset ──
+{
+  const seen = [];
+  const api = {
+    plan: async () => ({ ok: true, status: 200, data: { total: 0, done: 0, units: [] } }),
+    finalize: async () => ({ ok: true, status: 200, data: { ok: true, formatVersion: 2 } }),
+  };
+  const r = new Runner({ api, pool: () => null, datasetBase: () => 'http://h/', onEvent: () => {},
+    executorFor: (mid, ds) => { seen.push([mid, ds]); return 'server'; } });
+  r.enqueue([{ dataset: '3d/x', migration: 'm002-planes' }]);
+  await until(() => r.state === 'idle');
+  assert.deepEqual(seen, [['m002-planes', '3d/x']]);
 }
 
 console.log('migration runner (formats 3/4): OK');

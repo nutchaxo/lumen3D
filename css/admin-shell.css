@@ -128,6 +128,17 @@ body.adm-editor-only .adm-tab-inner { max-width: none; padding: 0; }
 .adm-sidebar.collapsed .adm-nav-item { justify-content: center; padding: 10px; }
 .adm-sidebar.collapsed .adm-nav-item.active::before { left: 0; }
 
+/* Nav groups: a small caption over each cluster of tabs; collapsed, a thin rule stands in. */
+.adm-nav-group { display: flex; flex-direction: column; gap: 2px; }
+.adm-nav-group + .adm-nav-group { margin-top: 10px; }
+.adm-nav-group-label {
+  padding: 6px 12px 4px; font-size: 10.5px; font-weight: 700; letter-spacing: 0.08em;
+  text-transform: uppercase; color: var(--adm-text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.adm-nav-group .adm-nav-item { padding-top: 8px; padding-bottom: 8px; }
+.adm-sidebar.collapsed .adm-nav-group-label { font-size: 0; padding: 0; height: 1px; margin: 4px 10px; background: var(--adm-border); }
+.adm-sidebar.collapsed .adm-nav-group:first-child .adm-nav-group-label { display: none; }
+
 .adm-sidebar-overlay { display: none; position: fixed; inset: 0; background: rgba(0, 0, 0, 0.5); z-index: 60; }
 .adm-sidebar-overlay.show { display: block; }
 
@@ -143,7 +154,12 @@ body.adm-editor-only .adm-tab-inner { max-width: none; padding: 0; }
   height: 58px; flex-shrink: 0; display: flex; align-items: center; gap: 14px; padding: 0 20px;
   background: var(--adm-surface); border-bottom: 1px solid var(--adm-border); z-index: 20;
 }
-.adm-topbar-title { font-size: 15px; font-weight: 700; letter-spacing: -0.01em; }
+.adm-topbar-title { font-size: 15px; font-weight: 700; letter-spacing: -0.01em; display: flex; align-items: center; gap: 6px; min-width: 0; }
+.adm-topbar-group { font-weight: 500; color: var(--adm-text-muted); white-space: nowrap; }
+.adm-topbar-sep { width: 14px; height: 14px; color: var(--adm-text-muted); flex-shrink: 0; }
+.adm-topbar-group:empty, .adm-topbar-group:empty + .adm-topbar-sep { display: none; }
+#topbar-tab-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+@media (max-width: 640px) { .adm-topbar-group, .adm-topbar-sep { display: none; } }
 .adm-topbar-right { margin-left: auto; display: flex; align-items: center; gap: 8px; }
 
 .adm-icon-btn {
@@ -511,6 +527,8 @@ body.adm-changelog-only .adm-tab-inner { max-width: 980px; margin: 0 auto; paddi
   .adm-sidebar.collapsed .adm-brand-text,
   .adm-sidebar.collapsed .adm-nav-label,
   .adm-sidebar.collapsed .adm-nav-dot { display: revert; }
+  .adm-sidebar.collapsed .adm-nav-group-label { font-size: 10.5px; padding: 6px 12px 4px; height: auto; margin: 0; background: none; }
+  .adm-sidebar.collapsed .adm-nav-group:first-child .adm-nav-group-label { display: block; }
   .adm-sidebar.collapsed .adm-nav-item { justify-content: flex-start; padding: 10px 12px; }
   #btn-collapse { display: none; }
   .adm-mobile-only { display: inline-flex; }

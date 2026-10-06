@@ -3,22 +3,26 @@
  * =============================================
  * Brings published datasets up to the platform's current data format, like a software
  * update: every dataset carries a `formatVersion`, the server lists the migrations each
- * one still needs, and this tab applies them — one dataset after another, each dataset's
- * migrations in order — with either executor (DOCS/dataset-migrations/SPEC.md §6, §9, §13.5):
+ * one still needs, and this tab applies them (DOCS/dataset-migrations/SPEC.md §6, §9, §13.5)
+ * with one of two executors:
  *
  *   A. this browser: js/workers/migration-worker.js reads the published data, converts it
  *      with the migration's handler and uploads the result unit by unit;
  *   B. the server: the tab drives a loop of bounded `unit_run` calls.
  *
- * Each executor can or cannot run each migration (the server says so per migration in
- * `status.server.migrations`, the browser by running the handler's probe), so the executor is
- * chosen PER MIGRATION: the operator's pick when it is available, else the faster one the
- * benchmark measured, else whichever can run it. One dataset's chain may thus run a step in
- * this browser and the next on the server.
+ * The executor is chosen PER DATASET, before it starts, and is fixed while it runs. Each
+ * executor has its own queue (a `Runner` lane), so a dataset given to the browser and another
+ * given to the server are converted at the same time. A step the chosen executor cannot run
+ * (the server says so per migration in `status.server.migrations`, the browser by the
+ * handler's probe) goes to the other one, inside the same lane: a dataset's steps stay in order.
  *
- * Both write the same server journal, so a job survives a reload, a pause, an executor
- * switch. The tab must stay open either way (a shared host has no background worker):
- * leaving it, or closing the page, pauses the job.
+ * The speed test converts the same synthetic block (js/migrations/speedtest-brick.webp) on
+ * both executors at once for 5 seconds; its winner is the default executor of every dataset
+ * the operator has not set.
+ *
+ * Both executors write the same server journal, so a job survives a reload or a pause. The
+ * tab must stay open (a shared host has no background worker): leaving it, or closing the
+ * page, pauses every lane.
  *
  * Generic: nothing below knows a particular migration — titles and descriptions come from
  * the registry the server returns, and the worker loads js/migrations/<id>.js by id.
@@ -28,16 +32,19 @@
 
 import { Utils, I18n, t as _t, escHtml, apiFetchStatus, getCsrf, toast, el, refreshIcons, storageGet, storageSet } from './shared.js';
 import {
-  API_MIGRATIONS, createApi, Runner, WorkerPool, buildQueue, migrationChain,
-  remainingUnits, estimateSeconds, benchBrowser, benchServer, serverCapability, chooseExecutor,
+  API_MIGRATIONS, createApi, Runner, WorkerPool, buildQueue, migrationChain, remainingUnits, serverCapability,
+  runSpeedtest, speedtestScores, SPEEDTEST_SECONDS, SPEEDTEST_SAMPLE,
 } from './migration-runner.js';
 
 const V = (() => { try { return new URL(import.meta.url).search; } catch (_) { return ''; } })();
 const TAB_ID = 'dataset-updates';
+const EXECS = ['browser', 'server'];
+const DS_EXEC_KEY = 'lumen-dupd-ds-executor';   // { datasetId: 'browser' | 'server' }
+const SPEED_KEY = 'lumen-dupd-speedtest';       // the last speed test
 const LOG_KEY = 'lumen-dupd-log';
-const EXEC_KEY = 'lumen-dupd-executor';      // the one executor of web 1.58 (fallback)
-const EXECS_KEY = 'lumen-dupd-executors';    // { migration: 'browser' | 'server' }
-const LOG_MAX = 50;
+const LOG_MAX = 20;
+// The speed test's block needs WebP decode + zlib on the server: m002's capability.
+const SPEEDTEST_SERVER_MIGRATION = 'm002-planes';
 
 // The English fallback must interpolate too: a key missing from lang/*.json still has to read
 // "3 to update", not "{n} to update".
@@ -51,13 +58,12 @@ const api = createApi((url, init) => apiFetchStatus(url, init));
 let _status = null;
 let _loading = false;
 let _loadError = null;
-let _runner = null;
-let _progress = null;      // last progress event
+const _lanes = { browser: null, server: null };   // Runner per executor
+const _progress = new Map();                       // dataset id → last progress event
 let _online = true;
-// results: migration → { browser, server } (each { secondsPerUnit, bytesIn, bytesOut, units })
-let _bench = { results: {}, running: null, error: null, migration: null, dataset: null, n: 4 };
-let _choices = null;        // migration → 'browser' | 'server', the operator's picks
-const _browserCaps = {};    // migration → { available, reasons } | { pending: true }
+let _dsExec = null;
+const _browserCaps = {};                           // migration → { available, reasons } | { pending: true }
+let _speed = { running: false, elapsed: 0, live: null, result: null };
 let _paintTimer = null;
 let _guardsBound = false;
 
@@ -81,6 +87,10 @@ function lang() {
   try { return (I18n && I18n.getLanguage && I18n.getLanguage()) || 'en'; } catch (_) { return 'en'; }
 }
 
+function fmtNum(n, digits = 1) {
+  try { return Number(n).toLocaleString(lang(), { maximumFractionDigits: digits, minimumFractionDigits: digits }); } catch (_) { return Number(n).toFixed(digits); }
+}
+
 function loc(v) {
   if (!v) return '';
   if (typeof v === 'string') return v;
@@ -91,17 +101,16 @@ function typeLabel(type) {
   try { return Utils && Utils.datasetTypeLabel ? Utils.datasetTypeLabel(type) : type; } catch (_) { return type; }
 }
 
-function migration(id) {
-  return ((_status && _status.migrations) || []).find((m) => m.id === id) || null;
-}
-
-function dsById(id) {
-  return ((_status && _status.datasets) || []).find((d) => d.id === id) || null;
-}
-
-function needsWork(ds) {
-  return migrationChain(ds, (_status && _status.migrations) || []).length > 0;
-}
+function registry() { return (_status && _status.migrations) || []; }
+function datasets() { return (_status && _status.datasets) || []; }
+function migration(id) { return registry().find((m) => m.id === id) || null; }
+function migTitle(id) { return loc(migration(id) && migration(id).title) || id; }
+function dsById(id) { return datasets().find((d) => d.id === id) || null; }
+function chainOf(ds) { return migrationChain(ds, registry()); }
+function needsWork(ds) { return chainOf(ds).length > 0; }
+function dsName(ds) { return (ds && (ds.name || ds.folder || ds.id)) || ''; }
+function nameOf(id) { return dsName(dsById(id)) || id; }
+function other(x) { return x === 'browser' ? 'server' : 'browser'; }
 
 const REASONS = {
   no_webp_decode: () => t('dupd.reasonWebp', 'the server cannot decode lossless WebP images'),
@@ -141,6 +150,7 @@ const ERRORS = {
   insufficient_disk: () => t('dupd.errDisk', 'not enough disk space on the server (needed / free)'),
   no_executor: () => t('dupd.errNoExecutor', 'neither this browser nor the server can run this update'),
   unit_timeout: () => t('dupd.errUnitTimeout', 'the server cannot convert one unit within its time limit'),
+  speedtest_sample_missing: () => t('dupd.errSample', 'the test block is missing from this installation'),
 };
 /** A server/worker error code in words, with its detail when there is one. */
 function errorText(code, detail) {
@@ -148,21 +158,90 @@ function errorText(code, detail) {
   if (detail && detail !== base) return base ? `${base} (${detail})` : String(detail);
   return base || t('dupd.errUnknown', 'unknown error');
 }
-function dsName(ds) { return (ds && (ds.name || ds.folder || ds.id)) || ''; }
-function nameOf(id) { return dsName(dsById(id)) || id; }
 
-// ── Log (per-viewer convenience) ──────────────────────────────────────────────
-
-function readLog() {
-  try { const v = JSON.parse(storageGet(LOG_KEY) || '[]'); return Array.isArray(v) ? v : []; } catch (_) { return []; }
+function execName(x) {
+  return x === 'server' ? t('dupd.execServer', 'The server') : t('dupd.execBrowser', 'This browser');
 }
+function execIcon(x) { return x === 'server' ? 'server' : 'monitor'; }
+
+// ── Per-viewer conveniences (localStorage) ────────────────────────────────────
+
+function readJson(key, fallback) {
+  try { const v = JSON.parse(storageGet(key) || 'null'); return v === null ? fallback : v; } catch (_) { return fallback; }
+}
+
+function readLog() { const v = readJson(LOG_KEY, []); return Array.isArray(v) ? v : []; }
 function pushLog(entry) {
-  const log = readLog();
-  log.unshift({ at: new Date().toISOString(), ...entry });
-  storageSet(LOG_KEY, JSON.stringify(log.slice(0, LOG_MAX)));
+  storageSet(LOG_KEY, JSON.stringify([{ at: new Date().toISOString(), ...entry }, ...readLog()].slice(0, LOG_MAX)));
 }
 
-// ── Runner ────────────────────────────────────────────────────────────────────
+function dsExec() {
+  if (_dsExec) return _dsExec;
+  const v = readJson(DS_EXEC_KEY, {});
+  _dsExec = {};
+  if (v && typeof v === 'object') for (const k of Object.keys(v)) if (EXECS.includes(v[k])) _dsExec[k] = v[k];
+  return _dsExec;
+}
+function setDsExec(id, x) { dsExec()[id] = x; storageSet(DS_EXEC_KEY, JSON.stringify(dsExec())); }
+
+function speedResult() {
+  if (_speed.result === null) {
+    const v = readJson(SPEED_KEY, null);
+    _speed.result = v && v.browser && v.server ? v : false;
+  }
+  return _speed.result || null;
+}
+
+// ── Executors ─────────────────────────────────────────────────────────────────
+
+/** Can executor `x` run migration `mid`? The browser counts as able until its probe answers. */
+function stepOk(x, mid) {
+  if (x === 'server') return serverCapability(_status && _status.server, mid).available;
+  const b = _browserCaps[mid];
+  return !(b && b.available === false);
+}
+
+/** Why `x` cannot run `mid`, in words. */
+function stepWhyNot(x, mid) {
+  const cap = x === 'server' ? serverCapability(_status && _status.server, mid) : _browserCaps[mid];
+  const codes = (cap && cap.reasons) || [];
+  return codes.map((c) => reasonText(c, x)).join('; ') || t('dupd.reasonUnknown', 'capability check unavailable');
+}
+
+/** The executor that runs step `mid` of a dataset given to `x`: x itself, else the other one. */
+function stepExec(x, mid) {
+  if (stepOk(x, mid)) return x;
+  return stepOk(other(x), mid) ? other(x) : null;
+}
+
+function canUse(x, ds) { return chainOf(ds).some((mid) => stepOk(x, mid)); }
+
+/** The speed test's winner, if a test was run. */
+function recommended() {
+  const r = speedResult();
+  return r && r.scores ? r.scores.winner : null;
+}
+
+/** The lane holding `id` (current or queued), or null. */
+function laneOf(id) {
+  for (const x of EXECS) {
+    const r = _lanes[x];
+    if (r && ((r.current && r.current.dataset === id) || r.queue.some((q) => q.dataset === id))) return x;
+  }
+  return null;
+}
+
+/** The executor of a dataset: its lane while it runs, else the operator's pick, else the default. */
+function execOf(ds) {
+  const lane = laneOf(ds.id);
+  if (lane) return lane;
+  const pick = dsExec()[ds.id];
+  if (pick && canUse(pick, ds)) return pick;
+  for (const x of [recommended(), 'browser', 'server']) if (x && canUse(x, ds)) return x;
+  return null;
+}
+
+// ── Lanes ─────────────────────────────────────────────────────────────────────
 
 function absUrl(rel) { return new URL(rel, document.baseURI).href; }
 
@@ -173,7 +252,7 @@ function datasetBase(id) {
   return absUrl(`DATA_WEB/${encodeURIComponent(type)}/${encodeURIComponent(folder)}/`);
 }
 
-function poolOptions() {
+function poolOptions(extra) {
   const cores = (typeof navigator !== 'undefined' && navigator.hardwareConcurrency) || 4;
   return {
     // Each unit holds ≈ 16 MiB of planes plus its compressed bricks and tiles: four in
@@ -184,100 +263,60 @@ function poolOptions() {
     csrf: () => getCsrf(),
     spawn: () => new Worker(absUrl(`js/workers/migration-worker.js${V}`)),
     onNet: (online) => { _online = online; schedulePaint(); },
+    ...(extra || {}),
   };
 }
 
-function choices() {
-  if (_choices) return _choices;
-  _choices = {};
-  try {
-    const v = JSON.parse(storageGet(EXECS_KEY) || '{}');
-    if (v && typeof v === 'object') for (const k of Object.keys(v)) if (v[k] === 'browser' || v[k] === 'server') _choices[k] = v[k];
-  } catch (_) { /* fresh */ }
-  const legacy = storageGet(EXEC_KEY);
-  if ((legacy === 'browser' || legacy === 'server') && !_choices['m002-planes']) _choices['m002-planes'] = legacy;
-  return _choices;
+function lane(x) {
+  if (!_lanes[x]) {
+    _lanes[x] = new Runner({
+      api,
+      pool: () => new WorkerPool(poolOptions()),
+      datasetBase,
+      onEvent: (e) => onLaneEvent(x, e),
+      executorFor: (mid) => stepExec(x, mid),
+    });
+  }
+  return _lanes[x];
 }
 
-/** Capabilities of both executors for `mid`; browser null = not probed yet. */
-function capsOf(mid) {
-  const b = _browserCaps[mid];
-  return { browser: b && !b.pending ? b : null, server: serverCapability(_status && _status.server, mid) };
-}
+function laneState(x) { return _lanes[x] ? _lanes[x].state : 'idle'; }
+function isRunning() { return EXECS.some((x) => ['running', 'pausing'].includes(laneState(x))); }
+function isPaused() { return EXECS.some((x) => laneState(x) === 'paused' && _lanes[x].queue.length); }
+function anyActive() { return isRunning() || isPaused(); }
 
-function benchOf(mid) { return _bench.results[mid] || {}; }
-
-/** The executor a job of `mid` runs on now; null when nothing can run it. */
-function executorOf(mid) {
-  return chooseExecutor({ choice: choices()[mid], caps: capsOf(mid), bench: benchOf(mid) });
-}
-
-/** Units of `mid` left on `ds`: per-migration estimate when the server gives one. */
-function stepUnits(ds, mid) {
-  const per = ds && ds.estimate && ds.estimate.migrations && ds.estimate.migrations[mid];
-  if (per && Number.isFinite(per.units)) return per.units;   // the server already left done units out
-  const chain = migrationChain(ds, (_status && _status.migrations) || []);
-  return chain[0] === mid ? remainingUnits(ds) : null;
-}
-
-/** Seconds for `mid` on `ds` with the executor it would run on, or null. */
-function stepSeconds(ds, mid) {
-  const x = executorOf(mid);
-  const r = x && benchOf(mid)[x];
-  return estimateSeconds(stepUnits(ds, mid), r && r.secondsPerUnit);
-}
-
-function runner() {
-  if (_runner) return _runner;
-  _runner = new Runner({
-    api,
-    pool: () => new WorkerPool(poolOptions()),
-    datasetBase,
-    onEvent: onRunnerEvent,
-    executorFor: (mid) => executorOf(mid),
-    estimateStep: (id, mid) => stepSeconds(dsById(id), mid),
-  });
-  return _runner;
-}
-
-/** Runs each relevant handler's probe once (in a worker of the runner's pool). */
+/** Runs each relevant handler's probe once, in a one-worker pool dropped afterwards. */
 function probeBrowser() {
-  for (const m of relevantMigrations()) {
-    if (_browserCaps[m.id]) continue;
+  const todo = registry().filter((m) => !_browserCaps[m.id]);
+  if (!todo.length) return;
+  const pool = new WorkerPool(poolOptions({ workers: 1 }));
+  const runs = todo.map((m) => {
     _browserCaps[m.id] = { pending: true };
     let p;
-    try { p = runner().pool.probe(m.id); } catch (err) { p = Promise.reject(err); }
-    p.then((c) => { _browserCaps[m.id] = c; })
-      .catch(() => { _browserCaps[m.id] = { available: false, reasons: ['no_handler'] }; })
-      .finally(() => paint());
-  }
+    try { p = pool.probe(m.id); } catch (err) { p = Promise.reject(err); }
+    return p.then((c) => { _browserCaps[m.id] = c; })
+      .catch(() => { _browserCaps[m.id] = { available: false, reasons: ['no_handler'] }; });
+  });
+  Promise.allSettled(runs).then(() => { pool.terminate(); paint(); });
 }
 
-/** Registry entries some dataset still needs (all of them when none does). */
-function relevantMigrations() {
-  const reg = (_status && _status.migrations) || [];
-  const used = new Set();
-  for (const ds of (_status && _status.datasets) || []) for (const id of migrationChain(ds, reg)) used.add(id);
-  const out = reg.filter((m) => used.has(m.id));
-  return out.length ? out : reg;
-}
-
-function isRunning() { return !!_runner && (_runner.state === 'running' || _runner.state === 'pausing'); }
-
-function onRunnerEvent(e) {
-  if (e.type === 'progress') { _progress = e; schedulePaint(); return; }
+function onLaneEvent(x, e) {
+  if (e.type === 'progress') { _progress.set(e.dataset, e); schedulePaint(); return; }
   if (e.type === 'net') { _online = !!e.online; schedulePaint(); return; }
   if (e.type === 'job_done') {
-    pushLog({ ok: true, dataset: e.dataset, name: nameOf(e.dataset), migration: e.migration, executor: e.executor, seconds: e.seconds, units: e.units, bytesIn: e.bytesIn, bytesOut: e.bytesOut, formatVersion: e.formatVersion });
-    _progress = null;
-    toast(t('dupd.toastDone', '{name} updated to format {v}', { name: nameOf(e.dataset), v: e.formatVersion }), 'success');
+    pushLog({ ok: true, dataset: e.dataset, name: nameOf(e.dataset), migration: e.migration, executor: e.executor, seconds: e.seconds, units: e.units, formatVersion: e.formatVersion });
+    _progress.delete(e.dataset);
+    // One toast per dataset, when its last step lands (the lane still holds the step just done).
+    const r = _lanes[x];
+    const more = r && r.queue.some((q) => q.dataset === e.dataset && q.migration !== e.migration);
+    if (!more) toast(t('dupd.toastDone', '{name} updated to format {v}', { name: nameOf(e.dataset), v: e.formatVersion }), 'success');
     load();
     return;
   }
   if (e.type === 'job_failed') {
     pushLog({ ok: false, dataset: e.dataset, name: nameOf(e.dataset), migration: e.migration, error: e.error, code: e.code, detail: e.detail });
-    _progress = null;
-    if (e.code === 'unit_timeout') { onUnitTimeout(e); return; }
+    _progress.delete(e.dataset);
+    if (e.code === 'unit_timeout' && x === 'server') { onUnitTimeout(e); return; }
     toast(t('dupd.toastFailed', 'Update of {name} failed: {error}', { name: nameOf(e.dataset), error: e.code ? errorText(e.code, e.detail) : e.error }), 'error');
     load();
     return;
@@ -289,27 +328,23 @@ function onRunnerEvent(e) {
       // and brings up the sign-in card.
       load();
     }
-    if (e.state === 'idle') { _progress = null; load(); }
+    if (e.state === 'idle') load();
     paint();
   }
 }
 
-// `${dataset}|${migration}` already moved to the browser after a unit_timeout: once only, so a
-// browser that fails too ends in the log instead of a loop.
+// Datasets already moved to the browser after a unit_timeout: once only, so a browser that
+// fails too ends in the history instead of a loop.
 const _timeoutSwitched = new Set();
 
 /**
- * The server could not convert a unit of `e.migration` in time, twice (unit_timeout). The job's
- * journal is shared by both executors: when this browser can run the migration, its choice
- * switches to the browser and the dataset resumes there; otherwise the operator is told why.
+ * The server could not convert a unit in time, twice (unit_timeout). The journal is shared by
+ * both executors: when this browser can run the migration, the dataset continues in the
+ * browser lane; otherwise the operator is told why.
  */
 function onUnitTimeout(e) {
-  const mid = e.migration;
-  const title = loc(migration(mid) && migration(mid).title) || mid;
-  const c = capsOf(mid);
-  const browserOk = !(c.browser && c.browser.available === false);
-  const key = `${e.dataset}|${mid}`;
-  if (!browserOk || _timeoutSwitched.has(key)) {
+  const browserOk = stepOk('browser', e.migration);
+  if (!browserOk || _timeoutSwitched.has(e.dataset)) {
     toast(t('dupd.toastUnitTimeoutStuck', 'Update of {name} stopped: {error}. {hint}', {
       name: nameOf(e.dataset), error: errorText('unit_timeout'),
       hint: browserOk ? t('dupd.unitTimeoutRetry', 'Retry it in this browser, or reprocess the dataset with the pipeline.')
@@ -317,14 +352,12 @@ function onUnitTimeout(e) {
     load();
     return;
   }
-  _timeoutSwitched.add(key);
-  choices()[mid] = 'browser';
-  storageSet(EXECS_KEY, JSON.stringify(choices()));
+  _timeoutSwitched.add(e.dataset);
+  setDsExec(e.dataset, 'browser');
   toast(t('dupd.toastUnitTimeoutSwitch', '{update}: the server cannot convert some units in time. Continuing {name} in this browser.', {
-    update: title, name: nameOf(e.dataset) }), 'warning');
-  // The journal is kept: the browser picks the job up where the server stopped, once the
-  // status says what the job looks like now.
-  freshLoad().then(() => retryDataset(e.dataset)).catch(() => {});
+    update: migTitle(e.migration), name: nameOf(e.dataset) }), 'warning');
+  // The browser picks the job up where the server stopped, once the status says where that is.
+  freshLoad().then(() => updateDatasets([e.dataset])).catch(() => {});
 }
 
 /** A status read that starts after any one in flight (load() skips while one runs). */
@@ -333,37 +366,23 @@ async function freshLoad() {
   await load();
 }
 
-function setExecutor(mid, x) {
-  const r = runner();
-  const c = capsOf(mid);
-  if (x === 'server' && !c.server.available) return;
-  if (x === 'browser' && c.browser && !c.browser.available) return;
-  choices()[mid] = x;
-  storageSet(EXECS_KEY, JSON.stringify(choices()));
-  // A running job of that migration switches at its next unit boundary: pause, then resume.
-  if (isRunning() && r.current && r.current.migration === mid && r.current.executor !== x) {
-    r.pause('switch');
-    // Only while the pause settles: a queue that ends meanwhile (idle) or a resume from
-    // elsewhere must not leave this polling forever.
-    const wait = () => {
-      if (r.state === 'paused' && r.reason === 'switch') r.resume();
-      else if (r.state === 'pausing') setTimeout(wait, 150);
-    };
-    wait();
-  }
-  paint();
-}
-
 function updateDatasets(ids) {
   if (!_status) return;
-  const items = buildQueue(_status.datasets, _status.migrations, ids);
-  if (!items.length) { toast(t('dupd.nothing', 'Everything is up to date.'), 'info'); return; }
-  const stuck = [...new Set(items.map((q) => q.migration))].filter((mid) => !executorOf(mid));
-  if (stuck.length) {
-    toast(t('dupd.toastNoExecutor', 'No executor can run: {list}. Those steps will fail.', {
-      list: stuck.map((mid) => loc(migration(mid) && migration(mid).title) || mid).join(', ') }), 'warning');
+  const list = (ids ? ids.map(dsById).filter(Boolean) : datasets()).filter((ds) => needsWork(ds) && !laneOf(ds.id));
+  if (!list.length) { if (!ids) toast(t('dupd.nothing', 'Everything is up to date.'), 'info'); return; }
+  const stuck = new Set();
+  for (const ds of list) {
+    const x = execOf(ds);
+    if (!x) { stuck.add(dsName(ds)); continue; }
+    if (chainOf(ds).some((mid) => !stepExec(x, mid))) stuck.add(dsName(ds));
+    setDsExec(ds.id, x);
+    const r = lane(x);
+    r.enqueue(buildQueue([ds], registry(), [ds.id]));
+    if (r.state === 'paused') r.resume();
   }
-  runner().enqueue(items);
+  if (stuck.size) {
+    toast(t('dupd.toastNoExecutor', 'Neither executor can run every step of: {list}. Those steps will fail.', { list: [...stuck].join(', ') }), 'warning');
+  }
   bindGuards();
   paint();
 }
@@ -382,78 +401,80 @@ async function retryDataset(id) {
 async function cancelDataset(id) {
   const ds = dsById(id);
   if (!confirm(t('dupd.confirmCancel', 'Discard the progress of this update? The dataset stays as it was.'))) return;
-  const r = runner();
-  if (r.current && r.current.dataset === id) {
+  const x = laneOf(id);
+  const r = x && _lanes[x];
+  if (r && r.current && r.current.dataset === id) {
+    const wasRunning = r.state === 'running';
     const res = await r.cancelCurrent();
     if (res && !res.ok) toast(t('dupd.cancelFailed', 'Could not discard the job.'), 'error');
+    // The rest of that lane's queue was not cancelled: it carries on.
+    if (wasRunning && r.queue.length) r.resume();
   } else {
-    r.queue = r.queue.filter((q) => q.dataset !== id);
+    if (r) r.queue = r.queue.filter((q) => q.dataset !== id);
     if (ds && ds.job) {
       const res = await api.cancel(id, ds.job.migration);
       if (!res.ok) toast(t('dupd.cancelFailed', 'Could not discard the job.'), 'error');
     }
   }
+  _progress.delete(id);
   await load();
 }
 
-// ── Benchmark ─────────────────────────────────────────────────────────────────
+function pauseAll() { for (const x of EXECS) if (laneState(x) === 'running') _lanes[x].pause(); paint(); }
+function resumeAll() { for (const x of EXECS) { const r = _lanes[x]; if (r && r.queue.length && (r.state === 'paused' || r.state === 'failed')) r.resume(); } paint(); }
 
-/** Datasets a benchmark of `mid` can sample: those whose next step it is (its inputs exist). */
-function benchDatasets(mid) {
-  const reg = (_status && _status.migrations) || [];
-  const list = ((_status && _status.datasets) || []).filter((d) => migrationChain(d, reg)[0] === mid);
-  list.sort((a, b) => (remainingUnits(a) || Infinity) - (remainingUnits(b) || Infinity));
-  return list;
-}
+// ── Speed test ────────────────────────────────────────────────────────────────
 
-function benchMigration() {
-  const rel = relevantMigrations();
-  if (_bench.migration && rel.some((m) => m.id === _bench.migration)) return _bench.migration;
-  const first = rel.find((m) => benchDatasets(m.id).length) || rel[0];
-  return first ? first.id : null;
-}
-
-function benchDataset(mid) {
-  const list = benchDatasets(mid);
-  if (_bench.dataset && list.some((d) => d.id === _bench.dataset)) return _bench.dataset;
-  return list[0] ? list[0].id : null;
-}
-
-async function runBench(which) {
-  const mid = benchMigration();
-  const id = mid && benchDataset(mid);
-  if (!id || _bench.running) return;
-  _bench.running = which;
-  _bench.error = null;
+async function runSpeed() {
+  if (_speed.running || anyActive() || !_status) return;
+  const serverCap = serverCapability(_status.server, SPEEDTEST_SERVER_MIGRATION);
+  _speed = { running: true, elapsed: 0, live: null, result: speedResult() || false };
   paint();
+  const pool = new WorkerPool(poolOptions());
+  let res;
   try {
-    const res = _bench.results[mid] = _bench.results[mid] || {};
-    if (which === 'browser') {
-      const pool = new WorkerPool(poolOptions());
-      try {
-        res.browser = await benchBrowser({ pool, dataset: id, migration: mid, datasetBase: datasetBase(id), n: _bench.n });
-      } finally { pool.terminate(); }
-    } else {
-      res.server = await benchServer({ api, dataset: id, migration: mid, n: _bench.n });
-    }
+    res = await runSpeedtest({
+      pool, api, sampleUrl: absUrl(SPEEDTEST_SAMPLE + V), seconds: SPEEDTEST_SECONDS, server: serverCap.available,
+      onTick: (s) => { _speed.elapsed = s.elapsed; _speed.live = s; paintSpeed(); },
+    });
   } catch (err) {
-    _bench.error = err && err.code && (EXEC_REASONS[err.code] || REASONS[err.code] || ERRORS[err.code])
-      ? (ERRORS[err.code] ? errorText(err.code, err.detail) : reasonText(err.code, which))
-      : String(err && err.message || err);
+    res = null;
+    toast(t('dupd.speedFailed', 'The speed test could not run: {error}', { error: String(err && err.message || err) }), 'error');
+  } finally {
+    pool.terminate();
   }
-  _bench.running = null;
+  if (res) {
+    if (!serverCap.available) { res.server.code = 'server_unavailable'; res.server.detail = (serverCap.reasons || []).join(','); }
+    const side = (s) => ({ blocks: s.blocks, bytesIn: s.bytesIn, bytesOut: s.bytesOut, error: s.error, code: s.code, detail: s.detail });
+    _speed.result = { at: new Date().toISOString(), seconds: res.seconds, browser: side(res.browser), server: side(res.server), scores: speedtestScores(res) };
+    storageSet(SPEED_KEY, JSON.stringify(_speed.result));
+  }
+  _speed.running = false;
+  _speed.live = null;
   paint();
 }
 
-// ── Guards: leaving the tab or the page pauses a running job ──────────────────
+/** Why a side of the speed test has no score, in words. */
+function speedSideError(x, s) {
+  if (!s || !s.error) return '';
+  if (s.code === 'server_unavailable') {
+    const codes = String(s.detail || '').split(',').filter(Boolean);
+    return codes.length ? codes.map((c) => reasonText(c, 'server')).join('; ') : t('dupd.serverOff', 'the server cannot convert data itself');
+  }
+  if (s.code && (REASONS[s.code] || EXEC_REASONS[s.code])) return reasonText(s.code, x);
+  if (s.code && ERRORS[s.code]) return errorText(s.code, null);
+  return s.error;
+}
+
+// ── Guards: leaving the tab or the page pauses every lane ─────────────────────
 
 function bindGuards() {
   if (_guardsBound) return;
   _guardsBound = true;
   window.addEventListener('beforeunload', (e) => {
     if (!isRunning()) return;
-    // The browser shows its own prompt; the job pauses either way (the journal keeps it).
-    _runner.pauseNow('unload');
+    // The browser shows its own prompt; the jobs pause either way (the journal keeps them).
+    for (const x of EXECS) if (_lanes[x]) _lanes[x].pauseNow('unload');
     e.preventDefault();
     e.returnValue = '';
   });
@@ -466,7 +487,7 @@ function bindGuards() {
       e.stopImmediatePropagation();
       return;
     }
-    _runner.pause('left_tab');
+    for (const x of EXECS) if (laneState(x) === 'running') _lanes[x].pause('left_tab');
   }, true);
 }
 
@@ -475,311 +496,276 @@ function bindGuards() {
 function schedulePaint() {
   if (_paintTimer) return;
   // A timer, not requestAnimationFrame: a hidden tab must still record progress.
-  _paintTimer = setTimeout(() => { _paintTimer = null; paintProgress(); }, 200);
+  _paintTimer = setTimeout(() => { _paintTimer = null; paintLive(); }, 200);
 }
 
 function root() { return el('dataset-updates-root'); }
 
-function serverPanel() {
-  const s = (_status && _status.server) || {};
-  const rel = relevantMigrations();
-  const off = rel.map((m) => ({ m, cap: serverCapability(s, m.id) })).filter((x) => !x.cap.available);
-  const lim = s.maxRunSeconds ? ' ' + t('dupd.serverSlice', '(steps of {s} s)', { s: s.maxRunSeconds }) : '';
-  if (!off.length && (rel.length || s.available)) {
-    return `<p class="dupd-cap dupd-cap--ok"><i data-lucide="check-circle-2"></i>${escHtml(t('dupd.serverOk', 'The server can run updates itself.') + lim)}</p>`;
+function bar(pct, cls = '') {
+  const p = Math.max(0, Math.min(100, pct || 0));
+  return `<div class="dupd-bar ${cls}" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${p.toFixed(0)}"><span style="width:${p.toFixed(2)}%"></span></div>`;
+}
+
+function speedCard() {
+  const r = speedResult();
+  const live = _speed.running ? _speed.live : null;
+  const sides = {};
+  for (const x of EXECS) {
+    const s = live ? live[x] : r ? r[x] : null;
+    const score = s && !s.error ? Math.round((10 * s.blocks) / SPEEDTEST_SECONDS) : null;
+    sides[x] = { s, score };
   }
-  const items = off.length
-    ? off.map(({ m, cap }) => `<li><b>${escHtml(loc(m.title) || m.id)}</b>: ${escHtml((cap.reasons || []).map((c) => reasonText(c, 'server')).join('; ') || t('dupd.reasonUnknown', 'capability check unavailable'))}</li>`).join('')
-    : (s.reasons || []).map((c) => `<li>${escHtml(reasonText(c, 'server'))}</li>`).join('');
-  const head = off.length && off.length < rel.length
-    ? t('dupd.serverSome', 'The server can run some updates itself, not these:')
-    : t('dupd.serverNo', 'The server cannot run updates itself:');
-  return `<div class="dupd-cap dupd-cap--no"><i data-lucide="info"></i><div>
-    <p>${escHtml(head)}</p>
-    <ul>${items || `<li>${escHtml(t('dupd.reasonUnknown', 'capability check unavailable'))}</li>`}</ul>
-    ${s.detail ? `<p class="adm-muted dupd-small">${escHtml(s.detail)}</p>` : ''}</div></div>`;
-}
-
-function execLabel(x) {
-  return x === 'server' ? t('dupd.execServerShort', 'server') : x === 'browser' ? t('dupd.execBrowserShort', 'browser') : t('dupd.execNone', 'none');
-}
-
-function spuText(r) {
-  return r && r.secondsPerUnit ? t('dupd.spu', '{s} s/unit', { s: r.secondsPerUnit.toFixed(2) }) : '';
-}
-
-/** One row per migration: which executor runs it, what each one can do, the benchmark. */
-function executorTable() {
-  const rel = relevantMigrations();
-  if (!rel.length) return `<p class="adm-muted">${escHtml(t('dupd.noMigrations', 'No data update is defined.'))}</p>`;
-  const rows = rel.map((m, i) => {
-    const c = capsOf(m.id);
-    const chosen = executorOf(m.id);
-    const b = benchOf(m.id);
-    const cell = (x) => {
-      const cap = c[x];
-      const pending = x === 'browser' && (!_browserCaps[m.id] || _browserCaps[m.id].pending);
-      const off = cap && cap.available === false;
-      const why = off ? (cap.reasons || []).map((r) => reasonText(r, x)).join('; ') || t('dupd.reasonUnknown', 'capability check unavailable') : '';
-      const sub = pending ? t('dupd.probing', 'checking…') : off ? why : (spuText(b[x]) || t('dupd.capOk', 'available'));
-      return `<td><label class="dupd-exec ${chosen === x ? 'is-on' : ''} ${off ? 'is-off' : ''}" ${off ? `title="${escHtml(why)}"` : ''}>
-        <input type="radio" name="dupd-exec-${i}" data-mig="${escHtml(m.id)}" value="${x}" ${chosen === x ? 'checked' : ''} ${off ? 'disabled' : ''}>
-        <span><b>${escHtml(x === 'browser' ? t('dupd.execBrowser', 'A · This browser') : t('dupd.execServer', 'B · The server'))}</b><em>${escHtml(sub)}</em></span>
-      </label></td>`;
-    };
-    const none = !chosen
-      ? `<p class="adm-error dupd-small dupd-noexec"><i data-lucide="alert-triangle"></i>${escHtml(t('dupd.noExecutor', 'Neither this browser nor the server can run this update. Datasets that need it stop before this step.'))}</p>`
-      : '';
-    return `<tr><td><b>${escHtml(loc(m.title) || m.id)}</b><span class="adm-muted dupd-small dupd-block">${escHtml(String(m.from))} → ${escHtml(String(m.to))}</span>${none}</td>${cell('browser')}${cell('server')}</tr>`;
+  // The server side cannot even start without WebP decode + zlib: say why instead of 0.
+  const serverCap = serverCapability(_status && _status.server, SPEEDTEST_SERVER_MIGRATION);
+  if (!serverCap.available) sides.server = { s: { blocks: 0, error: 'server_unavailable', code: 'server_unavailable', detail: (serverCap.reasons || []).join(',') }, score: null };
+  const top = Math.max(1, ...EXECS.map((x) => sides[x].score || 0));
+  const winner = !_speed.running && r && r.scores ? r.scores.winner : null;
+  const rows = EXECS.map((x) => {
+    const { s, score } = sides[x];
+    const err = s && s.error && s.error !== 'skipped' && !(live && s.running) ? speedSideError(x, s) : '';
+    const off = !!err;
+    const sub = err
+      ? err
+      : s ? t('dupd.speedBlocks', '{n} blocks in {s} s', { n: s.blocks, s: SPEEDTEST_SECONDS })
+        : t('dupd.speedNotRun', 'not tested yet');
+    const pct = score !== null ? (100 * score) / top : 0;
+    const win = winner === x;
+    return `<div class="dupd-race ${win ? 'is-win' : ''} ${off ? 'is-off' : ''} ${live && s && s.running ? 'is-live' : ''}">
+      <div class="dupd-race-who"><i data-lucide="${execIcon(x)}"></i><div><b>${escHtml(execName(x))}</b><span>${escHtml(sub)}</span></div></div>
+      <div class="dupd-race-track">${bar(pct, win ? 'is-win' : '')}</div>
+      <div class="dupd-race-score"><b>${score !== null ? score : '—'}</b><span>${escHtml(t('dupd.speedPoints', 'points'))}</span></div>
+      ${win ? `<span class="dupd-race-badge">${escHtml(t('dupd.speedFastest', 'Fastest'))}</span>` : ''}
+    </div>`;
   }).join('');
-  return `<div class="dupd-scroll"><table class="dupd-table dupd-exec-table" aria-label="${escHtml(t('dupd.executor', 'Executor'))}">
-    <thead><tr><th>${escHtml(t('dupd.colUpdate', 'Update'))}</th><th>${escHtml(t('dupd.colEtaBrowser', 'Browser'))}</th><th>${escHtml(t('dupd.colEtaServer', 'Server'))}</th></tr></thead>
-    <tbody>${rows}</tbody></table></div>
-    <p class="adm-muted dupd-small">${escHtml(t('dupd.execHint', 'Both executors need this tab open. The faster available one is used unless you pick one.'))}</p>`;
-}
-
-function benchCard() {
-  const rel = relevantMigrations();
-  const mid = benchMigration();
-  const list = mid ? benchDatasets(mid) : [];
-  const sel = mid ? benchDataset(mid) : null;
-  const c = mid ? capsOf(mid) : { browser: null, server: { available: false } };
-  const b = mid ? benchOf(mid) : {};
-  const res = (r) => r && r.secondsPerUnit
-    ? t('dupd.benchRes', '{s} s per unit · {in} in · {out} out ({n} units)', {
-      s: r.secondsPerUnit.toFixed(2), in: fmtMB(r.bytesIn), out: fmtMB(r.bytesOut), n: r.units })
-    : '—';
-  const browserOff = c.browser && c.browser.available === false;
-  let est = '';
-  const all = ((_status && _status.datasets) || []).filter(needsWork);
-  const anyBench = Object.values(_bench.results).some((r) => r && ((r.browser && r.browser.secondsPerUnit) || (r.server && r.server.secondsPerUnit)));
-  if (anyBench && all.length) {
-    let total = 0, totalKnown = true;
-    const reg = (_status && _status.migrations) || [];
-    const rows = all.map((d) => {
-      const chain = migrationChain(d, reg);
-      let sec = 0, known = true;
-      const steps = chain.map((id) => {
-        const s = stepSeconds(d, id);
-        if (s === null) known = false; else sec += s;
-        return `${escHtml(loc(migration(id) && migration(id).title) || id)} · ${escHtml(execLabel(executorOf(id)))} · ${escHtml(fmtDuration(s))}`;
-      });
-      if (known) total += sec; else totalKnown = false;
-      return `<tr><td>${escHtml(dsName(d))}<span class="adm-muted dupd-small dupd-block">${steps.join('<br>')}</span></td><td class="num">${known ? fmtDuration(sec) : '—'}</td></tr>`;
-    }).join('');
-    est = `<table class="dupd-table dupd-est">
-      <thead><tr><th>${escHtml(t('dupd.colDataset', 'Dataset'))}</th><th class="num">${escHtml(t('dupd.colEta', 'Estimated time'))}</th></tr></thead>
-      <tbody>${rows}</tbody>
-      <tfoot><tr><td>${escHtml(t('dupd.total', 'Total'))}</td><td class="num">${totalKnown ? fmtDuration(total) : '≥ ' + fmtDuration(total)}</td></tr></tfoot>
-    </table>
-    <p class="adm-muted dupd-small">${escHtml(t('dupd.benchNote', 'Estimates only: either executor can be chosen freely.'))}</p>`;
+  let verdict = '';
+  if (_speed.running) {
+    verdict = `<div class="dupd-race-clock">${bar((100 * _speed.elapsed) / SPEEDTEST_SECONDS, 'is-thin')}<span>${escHtml(fmtNum(_speed.elapsed, 1))} / ${SPEEDTEST_SECONDS} s</span></div>`;
+  } else if (r && r.scores) {
+    const sc = r.scores;
+    const when = new Date(r.at).toLocaleString(lang());
+    const text = sc.winner
+      ? (sc.ratio && sc.ratio >= 1.05
+        ? t('dupd.speedVerdict', '{who} is {x}× faster: it is proposed by default for every dataset.', { who: execName(sc.winner), x: fmtNum(sc.ratio, 1) })
+        : t('dupd.speedVerdictOnly', '{who} is proposed by default for every dataset.', { who: execName(sc.winner) }))
+      : t('dupd.speedTie', 'Both executors are as fast: pick either.');
+    verdict = `<p class="dupd-speed-verdict"><i data-lucide="sparkles"></i><span>${escHtml(text)}</span></p>
+      <p class="adm-muted dupd-small">${escHtml(t('dupd.speedWhen', 'Tested on {when}.', { when }))}</p>`;
   }
-  return `<div class="adm-card dupd-card">
-    <div class="adm-card-head"><i data-lucide="gauge"></i><span>${escHtml(t('dupd.benchTitle', 'Benchmark'))}</span></div>
+  const blocked = anyActive();
+  return `<div class="adm-card-head"><i data-lucide="gauge"></i><span>${escHtml(t('dupd.speedTitle', 'Speed test'))}</span>
+      <button class="adm-btn ${r ? 'adm-btn-ghost' : 'adm-btn-accent'} adm-btn-sm dupd-head-btn" data-dupd="speed" ${_speed.running || blocked ? 'disabled' : ''}>
+        ${_speed.running ? '<span class="spinner spinner-sm"></span>' : '<i data-lucide="play"></i>'}
+        ${escHtml(_speed.running ? t('dupd.speedRunning', 'Testing…') : r ? t('dupd.speedAgain', 'Run again') : t('dupd.speedRun', 'Run the test ({s} s)', { s: SPEEDTEST_SECONDS }))}</button></div>
     <div class="adm-card-body">
-      <div class="dupd-row">
-        <label class="adm-field-label" for="dupd-bench-mig">${escHtml(t('dupd.benchMigration', 'Update'))}</label>
-        <select id="dupd-bench-mig" class="adm-field-input" ${rel.length ? '' : 'disabled'}>
-          ${rel.map((m) => `<option value="${escHtml(m.id)}" ${m.id === mid ? 'selected' : ''}>${escHtml(loc(m.title) || m.id)}</option>`).join('')}
-        </select>
-      </div>
-      <div class="dupd-row">
-        <label class="adm-field-label" for="dupd-bench-ds">${escHtml(t('dupd.benchOn', 'Sample dataset'))}</label>
-        <select id="dupd-bench-ds" class="adm-field-input" ${list.length ? '' : 'disabled'}>
-          ${list.map((d) => `<option value="${escHtml(d.id)}" ${d.id === sel ? 'selected' : ''}>${escHtml(dsName(d))}</option>`).join('')}
-        </select>
-        <label class="adm-field-label" for="dupd-bench-n">${escHtml(t('dupd.benchUnits', 'Units'))}</label>
-        <input id="dupd-bench-n" class="adm-field-input dupd-n" type="number" min="1" max="8" value="${_bench.n}">
-      </div>
-      ${mid && !list.length ? `<p class="adm-muted dupd-small">${escHtml(t('dupd.benchNoSample', 'No dataset is ready for this step yet: run the earlier updates first.'))}</p>` : ''}
-      <div class="dupd-row">
-        <button class="adm-btn adm-btn-ghost adm-btn-sm" data-dupd="bench-browser" ${!sel || browserOff || _bench.running || isRunning() ? 'disabled' : ''}>
-          ${_bench.running === 'browser' ? '<span class="spinner spinner-sm"></span>' : '<i data-lucide="monitor"></i>'} ${escHtml(t('dupd.benchBrowser', 'Test the browser'))}</button>
-        <span class="dupd-bench-res">${escHtml(browserOff ? (c.browser.reasons || []).map((r) => reasonText(r, 'browser')).join('; ') : res(b.browser))}</span>
-      </div>
-      <div class="dupd-row">
-        <button class="adm-btn adm-btn-ghost adm-btn-sm" data-dupd="bench-server" ${!sel || !c.server.available || _bench.running || isRunning() ? 'disabled' : ''}>
-          ${_bench.running === 'server' ? '<span class="spinner spinner-sm"></span>' : '<i data-lucide="server"></i>'} ${escHtml(t('dupd.benchServer', 'Test the server'))}</button>
-        <span class="dupd-bench-res">${escHtml(c.server.available ? res(b.server) : t('dupd.benchServerOff', 'server executor unavailable'))}</span>
-      </div>
-      ${_bench.error ? `<p class="adm-error dupd-small">${escHtml(_bench.error)}</p>` : ''}
-      ${est}
-    </div>
-  </div>`;
+      <p class="adm-muted dupd-small dupd-speed-intro">${escHtml(t('dupd.speedIntro', 'Both executors convert the same test block (a synthetic 64³ brick) for {s} seconds at the same time; the browser also downloads and uploads it, as it would in a real update. The higher score converts faster. No dataset is read or modified.', { s: SPEEDTEST_SECONDS }))}</p>
+      <div class="dupd-races">${rows}</div>
+      ${verdict}
+      ${blocked && !_speed.running ? `<p class="adm-muted dupd-small">${escHtml(t('dupd.speedBlocked', 'Available when no update is running.'))}</p>` : ''}
+    </div>`;
 }
 
-function jobCell(ds) {
-  const r = _runner;
-  const cur = r && r.current && r.current.dataset === ds.id ? _progress : null;
-  if (cur) {
-    const pct = cur.total ? Math.floor((100 * cur.done) / cur.total) : 0;
-    const label = r.state === 'running' ? t('dupd.stRunning', 'running')
-      : r.state === 'pausing' ? t('dupd.stPausing', 'pausing…') : t('dupd.stPaused', 'paused');
-    return `<span class="adm-tag">${escHtml(label)} ${pct} %</span>`;
-  }
-  if (r && r.queue.some((q) => q.dataset === ds.id)) return `<span class="adm-tag">${escHtml(t('dupd.stQueued', 'queued'))}</span>`;
-  const j = ds.job;
-  if (!j) return '';
-  if (j.state === 'failed') return `<span class="adm-tag adm-tag-danger">${escHtml(t('dupd.stFailed', 'failed'))}</span> <span class="adm-muted dupd-small">${escHtml(errorText(j.error, j.detail))}</span>`;
-  if (j.state === 'assembling') return `<span class="adm-tag adm-tag-warn">${escHtml(t('dupd.stAssembling', 'assembling'))}</span>`;
-  const pct = j.total ? Math.floor((100 * (j.done || 0)) / j.total) : 0;
-  return `<span class="adm-tag adm-tag-warn">${escHtml(t('dupd.stPaused', 'paused'))} ${pct} % (${j.done || 0}/${j.total || 0})</span>`;
+function paintSpeed() {
+  const card = el('dupd-speed');
+  if (!card) return;
+  card.innerHTML = speedCard();
+  refreshIcons(card);
+}
+
+/** The executor switch of a dataset row. */
+function execSwitch(ds, locked) {
+  const cur = execOf(ds);
+  const rec = recommended();
+  return `<div class="dupd-seg" role="radiogroup" aria-label="${escHtml(t('dupd.executor', 'Executor'))}">${EXECS.map((x) => {
+    const able = canUse(x, ds);
+    const why = able ? '' : chainOf(ds).map((mid) => stepWhyNot(x, mid)).filter(Boolean).join('; ');
+    const on = cur === x;
+    return `<button type="button" role="radio" aria-checked="${on}" class="dupd-seg-btn ${on ? 'is-on' : ''}"
+      data-dupd="exec" data-id="${escHtml(ds.id)}" data-exec="${x}" ${!able || locked ? 'disabled' : ''}
+      title="${escHtml(why || execName(x))}"><i data-lucide="${execIcon(x)}"></i><span>${escHtml(execName(x))}</span>${rec === x ? `<em class="dupd-seg-rec" title="${escHtml(t('dupd.recommended', 'Fastest in the speed test'))}">★</em>` : ''}</button>`;
+  }).join('')}</div>`;
+}
+
+/** The steps a dataset needs, each marked with the executor that would run it when it differs. */
+function stepChips(ds) {
+  const chain = chainOf(ds);
+  const x = execOf(ds);
+  const repair = ds.repair && !(ds.pending || []).length;
+  return chain.map((mid, i) => {
+    const sx = x ? stepExec(x, mid) : null;
+    const note = !sx ? `<em class="is-bad">${escHtml(t('dupd.stepNone', 'no executor'))}</em>`
+      : sx !== x ? `<em title="${escHtml(stepWhyNot(x, mid))}">${escHtml(t('dupd.stepOn', 'on {who}', { who: execName(sx).toLowerCase() }))}</em>` : '';
+    return `<span class="dupd-chip">${chain.length > 1 ? `<b>${i + 1}</b>` : ''}${escHtml(migTitle(mid))}${note}</span>`;
+  }).join('') + (repair ? `<span class="dupd-chip is-warn">${escHtml(t('dupd.repair', 'repair'))}</span>` : '');
 }
 
 function rowActions(ds) {
-  const r = _runner;
-  const active = r && ((r.current && r.current.dataset === ds.id) || r.queue.some((q) => q.dataset === ds.id));
+  const active = laneOf(ds.id);
   const out = [];
-  if (!active && needsWork(ds)) {
-    if (ds.job && ds.job.state === 'failed') out.push(`<button class="adm-btn adm-btn-ghost adm-btn-sm" data-dupd="retry" data-id="${escHtml(ds.id)}"><i data-lucide="rotate-ccw"></i> ${escHtml(t('dupd.retry', 'Retry'))}</button>`);
-    else if (ds.job) out.push(`<button class="adm-btn adm-btn-accent adm-btn-sm" data-dupd="update" data-id="${escHtml(ds.id)}"><i data-lucide="play"></i> ${escHtml(t('dupd.resume', 'Resume'))}</button>`);
-    else if (ds.repair && !(ds.pending || []).length) out.push(`<button class="adm-btn adm-btn-accent adm-btn-sm" data-dupd="update" data-id="${escHtml(ds.id)}"><i data-lucide="wrench"></i> ${escHtml(t('dupd.repairBtn', 'Repair'))}</button>`);
-    else out.push(`<button class="adm-btn adm-btn-accent adm-btn-sm" data-dupd="update" data-id="${escHtml(ds.id)}"><i data-lucide="download"></i> ${escHtml(t('dupd.update', 'Update'))}</button>`);
+  if (!active) {
+    const x = execOf(ds);
+    if (ds.job && ds.job.state === 'failed') out.push(`<button class="adm-btn adm-btn-ghost adm-btn-sm" data-dupd="retry" data-id="${escHtml(ds.id)}" ${x ? '' : 'disabled'}><i data-lucide="rotate-ccw"></i> ${escHtml(t('dupd.retry', 'Retry'))}</button>`);
+    else if (ds.job) out.push(`<button class="adm-btn adm-btn-accent adm-btn-sm" data-dupd="update" data-id="${escHtml(ds.id)}" ${x ? '' : 'disabled'}><i data-lucide="play"></i> ${escHtml(t('dupd.resume', 'Resume'))}</button>`);
+    else if (ds.repair && !(ds.pending || []).length) out.push(`<button class="adm-btn adm-btn-accent adm-btn-sm" data-dupd="update" data-id="${escHtml(ds.id)}" ${x ? '' : 'disabled'}><i data-lucide="wrench"></i> ${escHtml(t('dupd.repairBtn', 'Repair'))}</button>`);
+    else out.push(`<button class="adm-btn adm-btn-accent adm-btn-sm" data-dupd="update" data-id="${escHtml(ds.id)}" ${x ? '' : 'disabled'}><i data-lucide="download"></i> ${escHtml(t('dupd.update', 'Update'))}</button>`);
   }
-  if (ds.job || active) out.push(`<button class="adm-btn adm-btn-ghost adm-btn-sm" data-dupd="cancel" data-id="${escHtml(ds.id)}" title="${escHtml(t('dupd.cancel', 'Cancel'))}" aria-label="${escHtml(t('dupd.cancel', 'Cancel'))}"><i data-lucide="x"></i></button>`);
-  return out.join(' ');
+  if (ds.job || active) out.push(`<button class="adm-btn adm-btn-ghost adm-btn-sm dupd-icon-btn" data-dupd="cancel" data-id="${escHtml(ds.id)}" title="${escHtml(t('dupd.cancel', 'Cancel'))}" aria-label="${escHtml(t('dupd.cancel', 'Cancel'))}"><i data-lucide="x"></i></button>`);
+  return out.join('');
+}
+
+function pauseReason(r) {
+  return r.reason === 'left_tab' ? t('dupd.reasonLeft', 'you left the tab')
+    : r.reason === 'unload' ? t('dupd.reasonUnload', 'the page was closing')
+      : r.reason === 'unauthorized' ? t('dupd.reasonAuth', 'session expired')
+        : r.reason === 'offline' ? t('dupd.reasonOffline', 'the server could not be reached') : '';
+}
+
+/** The live part of a dataset row: progress while it runs or waits, the job left otherwise. */
+function rowLive(ds) {
+  const x = laneOf(ds.id);
+  const r = x && _lanes[x];
+  if (r) {
+    const p = r.current && r.current.dataset === ds.id ? _progress.get(ds.id) : null;
+    if (!p) {
+      const label = r.state === 'running' ? t('dupd.stQueued', 'Waiting for its turn')
+        : r.state === 'pausing' ? t('dupd.stPausing', 'Pausing…') : t('dupd.stPaused', 'Paused');
+      return `<div class="dupd-live-line"><span class="dupd-state is-wait">${escHtml(label)}</span>
+        <span class="adm-muted">${escHtml(t('dupd.stQueuedOn', 'next on {who}', { who: execName(x).toLowerCase() }))}</span></div>`;
+    }
+    const pct = p.total ? (100 * p.done) / p.total : 0;
+    const st = r.state === 'running' ? `<span class="dupd-state is-run">${escHtml(t('dupd.stRunning', 'Running'))}</span>`
+      : r.state === 'pausing' ? `<span class="dupd-state is-wait">${escHtml(t('dupd.stPausing', 'Pausing…'))}</span>`
+        : `<span class="dupd-state is-wait">${escHtml(t('dupd.stPaused', 'Paused'))}${pauseReason(r) ? ' · ' + escHtml(pauseReason(r)) : ''}</span>`;
+    const step = p.steps > 1 ? `${escHtml(t('dupd.step', 'step {i} of {n}', { i: p.step, n: p.steps }))} · ` : '';
+    const eta = p.phase === 'finalizing'
+      ? (p.assembly && p.assembly.planes ? t('dupd.assembling', 'Assembling planes {x}/{y}', { x: p.assembly.written, y: p.assembly.planes }) : t('dupd.finalizing', 'assembling and publishing…'))
+      : t('dupd.etaLeft', '{t} left', { t: fmtDuration(p.eta) });
+    const rate = p.rate > 0 ? ` · ${escHtml(t('dupd.rateVal', '{n} units/min', { n: fmtNum(p.rate * 60, 1) }))}` : '';
+    return `<div class="dupd-live-line">${st}<span>${step}${escHtml(migTitle(p.migration))}</span>
+        <span class="dupd-exec-tag"><i data-lucide="${execIcon(p.executor)}"></i>${escHtml(execName(p.executor))}</span></div>
+      ${bar(pct, r.state === 'running' ? 'is-run' : '')}
+      <div class="dupd-live-stats"><span><b>${fmtNum(pct, 1)} %</b> · ${p.done} / ${p.total} ${escHtml(t('dupd.units', 'units'))}</span>
+        <span>${escHtml(eta)}${rate}</span></div>`;
+  }
+  const j = ds.job;
+  if (!j) return '';
+  if (j.state === 'failed') {
+    return `<div class="dupd-live-line"><span class="dupd-state is-bad">${escHtml(t('dupd.stFailed', 'Failed'))}</span><span>${escHtml(errorText(j.error, j.detail))}</span></div>`;
+  }
+  const pct = j.total ? (100 * (j.done || 0)) / j.total : 0;
+  const label = j.state === 'assembling' ? t('dupd.stAssembling', 'Assembling') : t('dupd.stPaused', 'Paused');
+  return `<div class="dupd-live-line"><span class="dupd-state is-wait">${escHtml(label)}</span><span>${escHtml(migTitle(j.migration))}</span></div>
+    ${bar(pct)}
+    <div class="dupd-live-stats"><span><b>${fmtNum(pct, 1)} %</b> · ${j.done || 0} / ${j.total || 0} ${escHtml(t('dupd.units', 'units'))}</span>
+      <span class="adm-muted">${escHtml(t('dupd.resumeHint', 'Resume to continue where it stopped.'))}</span></div>`;
+}
+
+function datasetRow(ds) {
+  const active = !!laneOf(ds.id);
+  const latest = (_status && _status.latest) || '?';
+  const size = ds.estimate && !ds.job ? ` · ${remainingUnits(ds)} ${escHtml(t('dupd.units', 'units'))} · ${fmtMB(ds.estimate.bytes)}` : '';
+  return `<article class="dupd-ds ${active ? 'is-active' : ''}">
+    <div class="dupd-ds-main">
+      <div class="dupd-ds-id">
+        <span class="dupd-ds-name">${escHtml(dsName(ds))}</span>
+        <span class="dupd-ds-meta">${escHtml(typeLabel(ds.type))}${ds.trees > 1 ? ' · ' + escHtml(t('dupd.trees', '{n} timepoints', { n: ds.trees })) : ''}
+          · ${escHtml(t('dupd.formatFromTo', 'format {a} → {b}', { a: ds.formatVersion || 1, b: latest }))}${size}</span>
+      </div>
+      <div class="dupd-ds-steps">${stepChips(ds)}</div>
+      ${ds.problem ? `<p class="adm-warn dupd-small dupd-ds-problem"><i data-lucide="alert-triangle"></i>${escHtml(errorText(ds.problem, ds.problemDetail))}</p>` : ''}
+    </div>
+    <div class="dupd-ds-ctrl">
+      ${execSwitch(ds, active)}
+      <div class="dupd-ds-actions">${rowActions(ds)}</div>
+    </div>
+    <div class="dupd-ds-live" data-dupd-live="${escHtml(ds.id)}">${rowLive(ds)}</div>
+  </article>`;
+}
+
+function laneStrip() {
+  if (!anyActive()) return _online ? '' : `<p class="adm-warn dupd-small dupd-note"><i data-lucide="wifi-off"></i>${escHtml(t('dupd.offline', 'Connection lost — waiting for the network, nothing is lost.'))}</p>`;
+  const pills = EXECS.map((x) => {
+    const r = _lanes[x];
+    const st = laneState(x);
+    const queued = r ? new Set(r.queue.map((q) => q.dataset)).size : 0;
+    const text = st === 'running' || st === 'pausing'
+      ? (queued > 1 ? t('dupd.laneRunningN', 'converting · {n} waiting', { n: queued - 1 }) : t('dupd.laneRunning', 'converting'))
+      : st === 'paused' && queued ? t('dupd.lanePaused', 'paused · {n} left', { n: queued }) + (pauseReason(r) ? ` (${pauseReason(r)})` : '')
+        : t('dupd.laneIdle', 'idle');
+    return `<span class="dupd-lane is-${st === 'pausing' ? 'running' : st}"><i data-lucide="${execIcon(x)}"></i><b>${escHtml(execName(x))}</b><span>${escHtml(text)}</span></span>`;
+  }).join('');
+  return `<div class="dupd-lanes">${pills}</div>
+    ${_online ? '' : `<p class="adm-warn dupd-small dupd-note"><i data-lucide="wifi-off"></i>${escHtml(t('dupd.offline', 'Connection lost — waiting for the network, nothing is lost.'))}</p>`}
+    ${isRunning() ? `<p class="adm-muted dupd-small dupd-note"><i data-lucide="info"></i>${escHtml(t('dupd.keepOpen', 'Keep this tab open: closing it or leaving it pauses the updates.'))}</p>` : ''}`;
 }
 
 function datasetsCard() {
-  const list = (_status && _status.datasets) || [];
-  const pendingCount = list.filter(needsWork).length;
-  const rows = list.map((ds) => {
-    const chain = migrationChain(ds, _status.migrations);
-    const what = chain.length
-      ? chain.map((id, i) => {
-        const x = executorOf(id);
-        return `<span class="dupd-step">${chain.length > 1 ? `<span class="adm-muted">${i + 1}.</span> ` : ''}${escHtml(loc(migration(id) && migration(id).title) || id)}
-          <span class="adm-tag ${x ? '' : 'adm-tag-danger'}">${escHtml(execLabel(x))}</span></span>`;
-      }).join('')
-        + (ds.repair && !(ds.pending || []).length ? ` <span class="adm-tag adm-tag-warn">${escHtml(t('dupd.repair', 'repair'))}</span>` : '')
-      : `<span class="adm-ok">${escHtml(t('dupd.upToDate', 'up to date'))}</span>`;
-    const est = chain.length && ds.estimate
-      ? `${remainingUnits(ds)} · ${fmtMB(ds.estimate.bytes)}`
-      : '';
-    return `<tr>
-      <td><span class="dupd-name">${escHtml(dsName(ds))}</span><span class="adm-muted dupd-small">${escHtml(typeLabel(ds.type))}${ds.trees > 1 ? ' · ' + escHtml(t('dupd.trees', '{n} timepoints', { n: ds.trees })) : ''}</span>
-        ${ds.problem ? `<span class="dupd-problem adm-warn dupd-small">${escHtml(errorText(ds.problem, ds.problemDetail))}</span>` : ''}</td>
-      <td class="num">${escHtml(String(ds.formatVersion || 1))}</td>
-      <td>${what}</td>
-      <td class="num">${est}</td>
-      <td>${jobCell(ds)}</td>
-      <td class="dupd-actions">${rowActions(ds)}</td>
-    </tr>`;
-  }).join('');
+  const todo = datasets().filter(needsWork);
+  const done = datasets().filter((ds) => !needsWork(ds));
+  const idle = todo.filter((ds) => !laneOf(ds.id));
+  const bulk = idle.length > 1 ? `<div class="dupd-bulk"><span class="adm-muted dupd-small">${escHtml(t('dupd.bulk', 'All on:'))}</span>
+      ${EXECS.map((x) => `<button class="adm-btn adm-btn-ghost adm-btn-sm" data-dupd="exec-all" data-exec="${x}"><i data-lucide="${execIcon(x)}"></i> ${escHtml(execName(x))}</button>`).join('')}</div>` : '';
+  const list = todo.length
+    ? `<div class="dupd-ds-list">${todo.map(datasetRow).join('')}</div>`
+    : `<div class="dupd-empty"><i data-lucide="check-circle-2"></i><p>${escHtml(datasets().length ? t('dupd.allUpToDate', 'Every dataset is in the latest format.') : t('dupd.noDatasets', 'No published volume dataset.'))}</p></div>`;
+  const upToDate = done.length && todo.length
+    ? `<details class="dupd-fold"><summary>${escHtml(t('dupd.upToDateN', 'Up to date ({n})', { n: done.length }))}</summary>
+        <ul class="dupd-done-list">${done.map((ds) => `<li><i data-lucide="check"></i>${escHtml(dsName(ds))}<span class="adm-muted dupd-small">${escHtml(typeLabel(ds.type))} · ${escHtml(t('dupd.formatN', 'format {v}', { v: ds.formatVersion || 1 }))}</span></li>`).join('')}</ul></details>`
+    : '';
   return `<div class="adm-card dupd-card">
-    <div class="adm-card-head"><i data-lucide="database"></i><span>${escHtml(t('dupd.datasets', 'Datasets'))}</span>
-      <span class="adm-card-count">${escHtml(t('dupd.pendingCount', '{n} to update', { n: pendingCount }))}</span></div>
-    <div class="adm-card-body dupd-scroll">
-      ${list.length ? `<table class="dupd-table">
-        <thead><tr><th>${escHtml(t('dupd.colDataset', 'Dataset'))}</th><th class="num">${escHtml(t('dupd.colVersion', 'Format'))}</th>
-        <th>${escHtml(t('dupd.colPending', 'Pending'))}</th><th class="num">${escHtml(t('dupd.colEstimate', 'Units · size'))}</th>
-        <th>${escHtml(t('dupd.colJob', 'Job'))}</th><th></th></tr></thead>
-        <tbody>${rows}</tbody></table>` : `<p class="adm-muted">${escHtml(t('dupd.noDatasets', 'No published volume dataset.'))}</p>`}
+    <div class="adm-card-head"><i data-lucide="database"></i><span>${escHtml(t('dupd.datasets', 'Datasets to update'))}</span>
+      <span class="adm-card-count">${escHtml(t('dupd.pendingCount', '{n} to update', { n: todo.length }))}</span>${bulk}</div>
+    <div class="adm-card-body">
+      <div data-dupd-lanes>${laneStrip()}</div>
+      ${list}
+      ${upToDate}
     </div>
   </div>`;
 }
 
-function progressCard() {
-  return `<div class="adm-card dupd-card" id="dupd-progress-card">
-    <div class="adm-card-head"><i data-lucide="activity"></i><span>${escHtml(t('dupd.progressTitle', 'Current update'))}</span>
-      <span class="adm-card-count" id="dupd-state"></span></div>
-    <div class="adm-card-body" id="dupd-progress-body"></div>
-  </div>`;
-}
-
-function stateText() {
-  const r = _runner;
-  if (!r) return t('dupd.stIdle', 'idle');
-  const reason = r.reason === 'left_tab' ? t('dupd.reasonLeft', 'you left the tab')
-    : r.reason === 'unload' ? t('dupd.reasonUnload', 'the page was closing')
-      : r.reason === 'unauthorized' ? t('dupd.reasonAuth', 'session expired')
-        : r.reason === 'offline' ? t('dupd.reasonOffline', 'the server could not be reached') : '';
-  const map = {
-    idle: t('dupd.stIdle', 'idle'), running: t('dupd.stRunning', 'running'), pausing: t('dupd.stPausing', 'pausing…'),
-    paused: t('dupd.stPaused', 'paused'), failed: t('dupd.stFailed', 'failed'),
-  };
-  return (map[r.state] || r.state) + (reason && r.state === 'paused' ? ` (${reason})` : '');
-}
-
-function paintProgress() {
-  const body = el('dupd-progress-body');
-  const st = el('dupd-state');
-  if (st) st.textContent = stateText();
-  if (!body) return;
-  const r = _runner;
-  const p = _progress;
-  const controls = [];
-  if (r && (r.state === 'running')) controls.push(`<button class="adm-btn adm-btn-ghost adm-btn-sm" data-dupd="pause"><i data-lucide="pause"></i> ${escHtml(t('dupd.pause', 'Pause'))}</button>`);
-  if (r && (r.state === 'paused' || r.state === 'failed') && r.queue.length) controls.push(`<button class="adm-btn adm-btn-accent adm-btn-sm" data-dupd="resume"><i data-lucide="play"></i> ${escHtml(t('dupd.resume', 'Resume'))}</button>`);
-  if (r && r.queue.length > 1) controls.push(`<span class="adm-muted dupd-small">${escHtml(t('dupd.queued', '{n} more in the queue', { n: r.queue.length - 1 }))}</span>`);
-  if (!p) {
-    body.innerHTML = `<p class="adm-muted">${escHtml(r && r.queue.length ? t('dupd.waiting', 'Waiting…') : t('dupd.noJob', 'No update running.'))}</p>
-      <div class="dupd-row">${controls.join(' ')}</div>`;
-    refreshIcons(body);
-    return;
-  }
-  const pct = p.total ? (100 * p.done) / p.total : 0;
-  const mig = migration(p.migration);
-  const steps = p.steps > 1
-    ? `<p class="dupd-chain dupd-small">${(p.chain || []).map((id, i) => `<span class="${i + 1 < p.step ? 'is-done' : i + 1 === p.step ? 'is-on' : ''}">${i + 1}. ${escHtml(loc(migration(id) && migration(id).title) || id)}</span>`).join('')}</p>`
-    : '';
-  const eta = p.phase !== 'finalizing' ? fmtDuration(p.eta)
-    : (p.assembly && p.assembly.planes
-      ? t('dupd.assembling', 'Assembling planes {x}/{y}', { x: p.assembly.written, y: p.assembly.planes })
-      : t('dupd.finalizing', 'assembling and publishing…'));
-  body.innerHTML = `
-    <p class="dupd-job-title"><b>${escHtml(nameOf(p.dataset))}</b> — ${p.steps > 1 ? escHtml(t('dupd.step', 'step {i} of {n}', { i: p.step, n: p.steps })) + ' · ' : ''}${escHtml(loc(mig && mig.title) || p.migration)}
-      <span class="adm-muted">· ${escHtml(execLabel(p.executor))}</span></p>
-    ${steps}
-    <div class="adm-progress" role="progressbar" aria-label="${escHtml(t('dupd.units', 'Units'))}" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${pct.toFixed(1)}"><div class="adm-progress-bar" id="dupd-bar"></div></div>
-    <dl class="dupd-stats">
-      <div><dt>${escHtml(t('dupd.units', 'Units'))}</dt><dd>${p.done} / ${p.total} (${pct.toFixed(1)} %)</dd></div>
-      <div><dt>${escHtml(t('dupd.down', 'Downloaded'))}</dt><dd>${fmtMB(p.bytesIn)}</dd></div>
-      <div><dt>${escHtml(p.executor === 'server' ? t('dupd.written', 'Written') : t('dupd.up', 'Uploaded'))}</dt><dd>${fmtMB(p.bytesOut)}</dd></div>
-      <div><dt>${escHtml(t('dupd.rate', 'Speed'))}</dt><dd>${p.rate > 0 ? escHtml(t('dupd.rateVal', '{n} units/min', { n: (p.rate * 60).toFixed(1) })) : '—'}</dd></div>
-      <div><dt>${escHtml(p.steps > 1 ? t('dupd.etaStep', 'Time left (this step)') : t('dupd.eta', 'Time left'))}</dt><dd>${escHtml(eta)}</dd></div>
-      ${p.steps > 1 && p.step < p.steps ? `<div><dt>${escHtml(t('dupd.etaChain', 'Time left (all steps)'))}</dt><dd>${escHtml(p.etaChain !== null && p.etaChain !== undefined ? fmtDuration(p.etaChain) : t('dupd.etaUnknown', 'run the benchmark'))}</dd></div>` : ''}
-    </dl>
-    ${_online ? '' : `<p class="adm-warn dupd-small"><i data-lucide="wifi-off"></i> ${escHtml(t('dupd.offline', 'Connection lost — waiting for the network, nothing is lost.'))}</p>`}
-    <p class="adm-muted dupd-small">${escHtml(t('dupd.keepOpen', 'Keep this tab open: closing it or leaving it pauses the update.'))}</p>
-    <div class="dupd-row">${controls.join(' ')}</div>`;
-  const bar = el('dupd-bar');
-  if (bar) bar.style.width = `${pct.toFixed(2)}%`;
-  refreshIcons(body);
-}
-
-function logCard() {
+function infoCard() {
+  const migs = registry();
   const log = readLog();
-  const rows = log.map((e) => {
-    const mig = migration(e.migration);
+  const logRows = log.map((e) => {
     const when = new Date(e.at).toLocaleString(lang());
     const what = e.ok
-      ? t('dupd.logOk', 'format {v} · {units} units · {dur} · {exec}', {
-        v: e.formatVersion, units: e.units, dur: fmtDuration(e.seconds),
-        exec: execLabel(e.executor) })
+      ? t('dupd.logOk', 'format {v} · {units} units · {dur} · {exec}', { v: e.formatVersion, units: e.units, dur: fmtDuration(e.seconds), exec: execName(e.executor) })
       : (e.code ? errorText(e.code, e.detail) : (e.error || ''));
-    return `<li class="${e.ok ? '' : 'is-failed'}"><span class="adm-muted dupd-small">${escHtml(when)}</span>
-      <b>${escHtml(e.name || e.dataset)}</b> — ${escHtml(loc(mig && mig.title) || e.migration)}
-      <span class="${e.ok ? 'adm-ok' : 'adm-error'}">${escHtml(e.ok ? t('dupd.logDone', 'done') : t('dupd.stFailed', 'failed'))}</span>
-      <span class="adm-muted dupd-small">${escHtml(what)}</span></li>`;
+    return `<li class="${e.ok ? '' : 'is-failed'}"><i data-lucide="${e.ok ? 'check-circle-2' : 'x-circle'}"></i>
+      <div><b>${escHtml(e.name || e.dataset)}</b> — ${escHtml(migTitle(e.migration))}
+      <span class="adm-muted dupd-small dupd-block">${escHtml(when)} · ${escHtml(what)}</span></div></li>`;
   }).join('');
   return `<div class="adm-card dupd-card">
-    <div class="adm-card-head"><i data-lucide="history"></i><span>${escHtml(t('dupd.log', 'Finished updates'))}</span>
-      ${log.length ? `<button class="adm-btn adm-btn-ghost adm-btn-sm dupd-head-btn" data-dupd="clear-log">${escHtml(t('dupd.clearLog', 'Clear'))}</button>` : ''}</div>
-    <div class="adm-card-body">${log.length ? `<ul class="dupd-log">${rows}</ul>` : `<p class="adm-muted">${escHtml(t('dupd.logEmpty', 'Nothing yet.'))}</p>`}</div>
+    <div class="adm-card-body dupd-folds">
+      <details class="dupd-fold"><summary>${escHtml(t('dupd.available', 'Data formats'))} <span class="adm-muted">· ${escHtml(t('dupd.latest', 'latest format {v}', { v: (_status && _status.latest) || '?' }))}</span></summary>
+        ${migs.length ? `<ul class="dupd-migs">${migs.map((m) => `
+          <li><span class="dupd-chip">${escHtml(String(m.from))} → ${escHtml(String(m.to))}</span>
+            <div><b>${escHtml(loc(m.title) || m.id)}</b><p class="adm-muted dupd-small">${escHtml(loc(m.description))}</p></div></li>`).join('')}</ul>`
+          : `<p class="adm-muted">${escHtml(t('dupd.noMigrations', 'No data update is defined.'))}</p>`}
+      </details>
+      <details class="dupd-fold"><summary>${escHtml(t('dupd.log', 'History'))} <span class="adm-muted">· ${log.length}</span></summary>
+        ${log.length ? `<ul class="dupd-log">${logRows}</ul>
+          <button class="adm-btn adm-btn-ghost adm-btn-sm" data-dupd="clear-log"><i data-lucide="trash-2"></i> ${escHtml(t('dupd.clearLog', 'Clear'))}</button>`
+          : `<p class="adm-muted dupd-small">${escHtml(t('dupd.logEmpty', 'Nothing yet.'))}</p>`}
+      </details>
+    </div>
   </div>`;
 }
 
-function migrationsCard() {
-  const migs = (_status && _status.migrations) || [];
-  return `<div class="adm-card dupd-card">
-    <div class="adm-card-head"><i data-lucide="layers"></i><span>${escHtml(t('dupd.available', 'Available updates'))}</span>
-      <span class="adm-card-count">${escHtml(t('dupd.latest', 'latest format {v}', { v: (_status && _status.latest) || '?' }))}</span></div>
-    <div class="adm-card-body">${migs.length ? `<ul class="dupd-migs">${migs.map((m) => `
-      <li><span class="adm-tag">${escHtml(String(m.from))} → ${escHtml(String(m.to))}</span>
-        <div><b>${escHtml(loc(m.title) || m.id)}</b><p class="adm-muted dupd-small">${escHtml(loc(m.description))}</p></div></li>`).join('')}</ul>`
-      : `<p class="adm-muted">${escHtml(t('dupd.noMigrations', 'No data update is defined.'))}</p>`}</div>
-  </div>`;
+/** Repaints only what moves while units complete: the live part of each row and the lane strip. */
+function paintLive() {
+  const host = root();
+  if (!host || !_status) return;
+  host.querySelectorAll('[data-dupd-live]').forEach((node) => {
+    const ds = dsById(node.getAttribute('data-dupd-live'));
+    if (!ds) return;
+    node.innerHTML = rowLive(ds);
+    refreshIcons(node);
+  });
+  const strip = host.querySelector('[data-dupd-lanes]');
+  if (strip) {
+    strip.innerHTML = laneStrip();
+    refreshIcons(strip);
+  }
 }
 
 function paint() {
@@ -792,30 +778,25 @@ function paint() {
       : '<div class="adm-loading"><span class="spinner"></span></div>';
     return;
   }
-  const anyPending = (_status.datasets || []).some(needsWork);
+  const idle = datasets().filter((ds) => needsWork(ds) && !laneOf(ds.id) && execOf(ds));
+  const lanesBtn = isRunning()
+    ? `<button class="adm-btn adm-btn-ghost adm-btn-sm" data-dupd="pause"><i data-lucide="pause"></i> ${escHtml(t('dupd.pauseAll', 'Pause'))}</button>`
+    : isPaused() ? `<button class="adm-btn adm-btn-ghost adm-btn-sm" data-dupd="resume"><i data-lucide="play"></i> ${escHtml(t('dupd.resumeAll', 'Resume'))}</button>` : '';
   host.innerHTML = `
     <div class="adm-page-head">
       <div>
         <h2 class="adm-page-title">${escHtml(t('dupd.title', 'Data updates'))}</h2>
-        <p class="adm-page-sub">${escHtml(t('dupd.sub', 'Bring published datasets up to the current data format. The original data is never modified; an update can be paused and resumed at any time.'))}</p>
+        <p class="adm-page-sub">${escHtml(t('dupd.sub', 'Bring published datasets up to the current data format. Choose for each dataset whether this browser or the server converts it: two datasets on different executors are converted at the same time. The original data is never modified, and an update can be paused and resumed at any time.'))}</p>
       </div>
       <div class="dupd-row">
-        <button class="adm-btn adm-btn-ghost adm-btn-sm" data-dupd="refresh"><i data-lucide="refresh-cw"></i> ${escHtml(t('dupd.refresh', 'Refresh'))}</button>
-        <button class="adm-btn adm-btn-accent" data-dupd="update-all" ${anyPending && !isRunning() ? '' : 'disabled'}><i data-lucide="download"></i> ${escHtml(t('dupd.updateAll', 'Update all'))}</button>
+        <button class="adm-btn adm-btn-ghost adm-btn-sm" data-dupd="refresh" title="${escHtml(t('dupd.refresh', 'Refresh'))}"><i data-lucide="refresh-cw"></i> ${escHtml(t('dupd.refresh', 'Refresh'))}</button>
+        ${lanesBtn}
+        <button class="adm-btn adm-btn-accent" data-dupd="update-all" ${idle.length ? '' : 'disabled'}><i data-lucide="download"></i> ${escHtml(idle.length ? t('dupd.updateAllN', 'Update all ({n})', { n: idle.length }) : t('dupd.updateAll', 'Update all'))}</button>
       </div>
     </div>
-    ${progressCard()}
-    <div class="adm-grid adm-grid-2 dupd-grid">
-      <div class="adm-card dupd-card">
-        <div class="adm-card-head"><i data-lucide="cpu"></i><span>${escHtml(t('dupd.executor', 'Executor'))}</span></div>
-        <div class="adm-card-body">${serverPanel()}${executorTable()}</div>
-      </div>
-      ${benchCard()}
-    </div>
+    <section class="adm-card dupd-card dupd-speed" id="dupd-speed">${speedCard()}</section>
     ${datasetsCard()}
-    ${migrationsCard()}
-    ${logCard()}`;
-  paintProgress();
+    ${infoCard()}`;
   refreshIcons(host);
 }
 
@@ -851,20 +832,22 @@ function bindRoot() {
       case 'update': updateDatasets([id]); break;
       case 'retry': retryDataset(id); break;
       case 'cancel': cancelDataset(id); break;
-      case 'pause': _runner && _runner.pause(); paint(); break;
-      case 'resume': _runner && _runner.resume(); paint(); break;
-      case 'bench-browser': runBench('browser'); break;
-      case 'bench-server': runBench('server'); break;
+      case 'pause': pauseAll(); break;
+      case 'resume': resumeAll(); break;
+      case 'speed': runSpeed(); break;
+      case 'exec': {
+        const ds = dsById(id);
+        if (ds && !laneOf(id) && canUse(b.dataset.exec, ds)) { setDsExec(id, b.dataset.exec); paint(); }
+        break;
+      }
+      case 'exec-all':
+        for (const ds of datasets()) if (needsWork(ds) && !laneOf(ds.id) && canUse(b.dataset.exec, ds)) dsExec()[ds.id] = b.dataset.exec;
+        storageSet(DS_EXEC_KEY, JSON.stringify(dsExec()));
+        paint();
+        break;
       case 'clear-log': storageSet(LOG_KEY, '[]'); paint(); break;
       default: break;
     }
-  });
-  host.addEventListener('change', (e) => {
-    const tg = e.target;
-    if (tg.dataset && tg.dataset.mig && /^dupd-exec-/.test(tg.name || '')) setExecutor(tg.dataset.mig, tg.value);
-    else if (tg.id === 'dupd-bench-mig') { _bench.migration = tg.value; _bench.dataset = null; _bench.error = null; paint(); }
-    else if (tg.id === 'dupd-bench-ds') { _bench.dataset = tg.value; }
-    else if (tg.id === 'dupd-bench-n') { _bench.n = Math.max(1, Math.min(8, parseInt(tg.value, 10) || 4)); }
   });
 }
 

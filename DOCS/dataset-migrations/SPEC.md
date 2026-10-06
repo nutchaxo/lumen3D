@@ -132,6 +132,8 @@ JSON answers. Session lock released after authentication (cf. `session_write_clo
 | `finalize` | POST | `{ dataset, migration, maxSeconds? }` | `{ ok, complete, formatVersion?, assembly:{planes, written} }` — assembles, validates, swaps, bumps; resumable: call again until `complete:true` |
 | `cancel` | POST | `{ dataset, migration }` | deletes journal + tile store |
 | `bench` | POST | `{ dataset, units: N (≤ 8) }` | server executor on N sample units (dry: tiles discarded) → `{ seconds, units, bytesRead, bytesWritten }` |
+| `speedtest` | POST | `{ maxSeconds (≤ 3) }` | server side of the speed test (§7): test blocks back to back until the next one would end past `maxSeconds` (≥ 1 block) → `{ blocks, seconds, bytesRead, bytesWritten }`; needs m002's capability (409 `server_unavailable` otherwise) |
+| `speedtest_put` | POST (binary) | body = one converted test block (≤ 4 MiB) | `{ ok, bytes }` — read and dropped |
 
 `server.available` is false with reason codes when the server executor cannot run:
 `no_webp_decode` (PHP: `imagecreatefromwebp` missing or fails on a lossless sample; Python:
@@ -172,17 +174,34 @@ idempotent.
 * **Server (B)** — the tab loops `unit_run` calls (each one bounded in time) until done, then
   `finalize`. The tab must stay open too (shared hosts have no background workers); it shows
   that clearly.
-* Switching executor mid-job is allowed (same journal).
+* Both executors write the same journal, so a paused job can be resumed by the other one (the
+  tab fixes a dataset's executor while it runs; the operator changes it between runs).
 
-## 7. Benchmark
+## 7. Speed test (web 1.59.1; replaces the per-dataset benchmark of 1.58/1.59)
 
-Button in the tab, on a chosen dataset (default: the smallest pending one):
-* Browser: N sample units (default 4, non-empty), real downloads + decode + encode + upload
-  with `dry=1`; reports seconds per unit and bytes in/out.
-* Server: `bench` with the same N units.
-* Result: seconds per unit for each available executor and an estimated total duration per
-  pending dataset and for all of them. Informative only — the operator picks either
-  executor freely (B only when `server.available`).
+One button, no parameter, no dataset: both executors convert the **same synthetic test block**
+at the same time for **5 seconds**, and the one that converted more blocks wins.
+* Test block = what a unit does per brick it reads: decode the 512² lossless-WebP mosaic of one
+  64³ brick, encode its voxels as one 512² `png-gray8` tile. The input is the fixed file
+  `js/migrations/speedtest-brick.webp` shipped with the platform (Gaussian blobs over Poisson
+  shot noise, like a confocal stack; ~128 KiB).
+* Browser: the worker pool at its normal concurrency (workers × slots); each block downloads the
+  file (`cache: no-store`), decodes and encodes it in a worker and uploads the tile to
+  `speedtest_put` — the transfers a real browser unit makes. A block counts when it ends inside
+  the window; the pool is terminated at the deadline.
+* Server: `speedtest` calls of ≤ 1 s back to back until the window ends (one request at a time,
+  like `unit_run`).
+* Score = blocks per second × 10 (over 5 s: the block count doubled). The winner is the default
+  executor of every dataset the operator has not set. The `bench` action is kept for tools.
+
+## 7.1 Executor per dataset
+
+The tab chooses the executor **per dataset**, before it starts: the operator's pick (kept in the
+browser's localStorage), else the speed test's winner, else the browser, else the server. Each
+executor has its own queue (a `Runner` lane): datasets given to different executors are
+converted in parallel; datasets on the same executor one after another. A step the chosen
+executor cannot run (capabilities §13.5) runs on the other one within the same lane, so a
+dataset's steps stay in order. The choice is locked while the dataset is queued or running.
 
 ## 8. Reader (viewer / Studio)
 
@@ -202,12 +221,14 @@ Button in the tab, on a chosen dataset (default: the smallest pending one):
 
 * Lists: pending migrations (title, description), every volume dataset with its version,
   what is pending, an estimate (units, bytes), job progress if one exists (resumable).
-* Server capability panel (available or the reasons it is not), executor selector (A / B,
-  B disabled with the reason when unavailable), Benchmark button and results.
-* Actions: update one dataset, update all (a queue: datasets one after another, each
-  dataset's migrations in order), pause/resume, cancel a job, retry a failed one.
-* Precise progress (% units, MB in/out, ETA), log of finished updates. Leaving the tab with a
-  job running asks for confirmation (it pauses the job).
+* Speed test card (§7): one bar and score per executor, the winner, the reason an executor
+  cannot run.
+* One row per dataset that needs work: steps, a browser / server switch (§7.1; an executor that
+  can run none of the steps is disabled with the reason), update / resume / retry / cancel, and
+  its live progress (step, % units, rate, ETA). Datasets already up to date fold away.
+* Actions: update one dataset, update all (each with its own executor), pause / resume every
+  lane, cancel a job, retry a failed one. History of finished steps (folded).
+* Leaving the tab with a job running asks for confirmation (it pauses every lane).
 * Generic: nothing in the tab is specific to `m002-planes` except the handler module the
   browser executor loads for that id.
 

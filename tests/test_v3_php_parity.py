@@ -378,6 +378,13 @@ class V3Parity(unittest.TestCase):
         self.assertEqual((stc, typ, base64.b64decode(body)), (200, "application/octet-stream", stored[0].read_bytes()))
         (stc, typ, body), = b.php([{"op": "binary", "action": "store_get", "params": {"dataset": ds, "migration": M4, "brick": "t0.k0.c0.z99.y0.x0"}}])
         self.assertEqual((stc, json.loads(base64.b64decode(body))["error"]), (404, "absent"))
+        # store_get_many: byte-identical to the Python twin, absent brick = length 0.
+        many = {"dataset": ds, "migration": M4, "base": f"t0.k0.c{c0}", "bricks": f"{z_}.{y_}.{x_},99.0.0"}
+        (stc, typ, body), = b.php([{"op": "binary", "action": "store_get_many", "params": many}])
+        self.assertEqual((stc, typ), (200, "application/octet-stream"))
+        self.assertEqual(base64.b64decode(body), struct.pack("<III", 2, len(stored[0].read_bytes()), 0) + stored[0].read_bytes())
+        (stc, _typ, body), = b.php([{"op": "binary", "action": "store_get_many", "params": {**many, "bricks": ""}}])
+        self.assertEqual(stc, 400)
         # The rest by the PHP server executor, then the result is exact (mixed producer).
         self.php_run(b, ds, M4)
         man, _t, _n = self.check_v3(b.data_web / ds, self.truth3d, "3d", self.voxel3d)

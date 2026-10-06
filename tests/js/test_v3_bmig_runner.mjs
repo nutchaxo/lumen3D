@@ -14,7 +14,10 @@
 //   • runSpeedtest: both executors race for the window at the same time, the browser through
 //     the pool's slots, the server in bounded calls; a side that fails keeps the other running;
 //     speedtestScores gives blocks/s × 10, the winner and the ratio;
-//   • Runner.executorFor receives the dataset (the tab picks the executor per dataset).
+//   • Runner.executorFor receives the dataset (the tab picks the executor per dataset);
+//   • NetGovernor: requests in flight and per second are bounded; a request without answer or a
+//     429/503 halves the rate and holds new requests for a cooldown; answers raise it again; the
+//     pool relays its workers' turns (net_acquire → net_grant, net_release) to it.
 //
 // Run: node tests/js/test_v3_bmig_runner.mjs
 import assert from 'node:assert/strict';
@@ -23,7 +26,7 @@ import { pathToFileURL } from 'node:url';
 import { ROOT } from './harness.mjs';
 
 const M = await import(pathToFileURL(path.join(ROOT, 'js/pages/admin/migration-runner.js')).href);
-const { Runner, buildQueue, serverCapability, chooseExecutor, runBrowserUnits, WorkerPool, runSpeedtest, speedtestScores } = M;
+const { Runner, buildQueue, serverCapability, chooseExecutor, runBrowserUnits, WorkerPool, runSpeedtest, speedtestScores, NetGovernor } = M;
 
 const REG = [
   { id: 'm002-planes', from: 1, to: 2, types: ['3d', 'live'] },
@@ -359,6 +362,78 @@ function fakePool(api, capacity = 3) {
   pool2.terminate();
 }
 
+// ── network governor ──
+{
+  let t = 0;
+  const timers = [];
+  const g = new NetGovernor({ maxInFlight: 2, rate: 4, maxRate: 5, burst: 2, step: 0.5, cooldownMs: 5000,
+    now: () => t, setTimer: (fn, ms) => timers.push({ at: t + ms, fn }) });
+  const advance = async (ms) => {
+    t += ms;
+    for (;;) {
+      timers.sort((a, b) => a.at - b.at);
+      if (!timers.length || timers[0].at > t) break;
+      timers.shift().fn();
+      await Promise.resolve();
+    }
+    await new Promise((r) => setTimeout(r, 0));
+  };
+  const got = [];
+  for (let i = 0; i < 5; i++) g.acquire().then((rel) => { got.push(rel); });
+  await advance(0);
+  assert.equal(got.length, 2, 'never more than maxInFlight at once');
+  got[0]('ok'); got[1]('ok');
+  await advance(0);
+  assert.equal(got.length, 2, 'the burst is spent: the next start waits for a token');
+  await advance(250);
+  assert.equal(got.length, 3, 'one token every 1/rate s');
+  assert.ok(g.rate > 4, 'answered requests raise the rate');
+  // A request without answer: rate halved, every new start held for the cooldown.
+  const before = g.rate;
+  got[2]('fail');
+  assert.equal(g.rate, before / 2, 'rate halved');
+  assert.ok(g.holding, 'held after a failure');
+  await advance(1000);
+  assert.equal(got.length, 3, 'nothing starts during the cooldown');
+  await advance(5000);
+  assert.ok(got.length > 3, 'requests start again after the cooldown');
+  const inflight = g.inFlight;
+  const last = got[got.length - 1];
+  last('ok'); last('ok');
+  assert.equal(g.inFlight, inflight - 1, 'a release counts once');
+  // run(): a status-0 answer is a failure, an exception a failure, the turn is always given back.
+  const g2 = new NetGovernor({ maxInFlight: 4, rate: 8 });
+  await g2.run(async () => ({ status: 200 }));
+  const r0 = g2.rate;
+  await g2.run(async () => ({ status: 0 }));
+  assert.equal(g2.rate, r0 / 2);
+  assert.equal(g2.inFlight, 0);
+}
+
+// ── the pool relays its workers' turns to the governor ──
+{
+  const spawn = () => ({ posted: [], postMessage(m) { this.posted.push(m); }, terminate() {} });
+  const released = [];
+  const gov = { acquire: async () => (outcome) => released.push(outcome) };
+  const pool = new WorkerPool({ spawn, workers: 1, slots: 2, endpoint: 'x', csrf: () => null, governor: gov });
+  pool._ensure();
+  const w = pool.workers[0].w;
+  assert.equal(w.posted[0].governed, true, 'the worker is told to ask for turns');
+  w.onmessage({ data: { type: 'net_acquire', id: 7 } });
+  await new Promise((r) => setTimeout(r, 0));
+  assert.deepEqual(w.posted.at(-1), { type: 'net_grant', id: 7 });
+  w.onmessage({ data: { type: 'net_release', id: 7, outcome: 'throttled' } });
+  assert.deepEqual(released, ['throttled']);
+  w.onmessage({ data: { type: 'net_acquire', id: 8 } });
+  await new Promise((r) => setTimeout(r, 0));
+  pool.terminate();
+  assert.deepEqual(released, ['throttled', 'cancel'], 'a terminated worker gives its turns back');
+  const free = new WorkerPool({ spawn, workers: 1, slots: 1, endpoint: 'x', csrf: () => null });
+  free._ensure();
+  assert.equal(free.workers[0].w.posted[0].governed, false);
+  free.terminate();
+}
+
 // ── speed test ──
 {
   // A fake clock: every block / call advances it, so the window closes deterministically.
@@ -368,14 +443,14 @@ function fakePool(api, capacity = 3) {
   const pool = {
     capacity: 3,
     dead: false,
-    async speedtestBlock(url) {
-      assert.equal(url, 'http://h/js/migrations/speedtest-brick.webp');
+    async speedtestBlock(n) {
+      assert.equal(n, 8, 'batches of 8 blocks');
       if (this.dead) return { ok: false, aborted: true };
       inFlight++; peak = Math.max(peak, inFlight);
       await new Promise((r) => setTimeout(r, 1));
-      clock += 0.05;
+      clock += 0.2;
       inFlight--;
-      return this.dead ? { ok: false, aborted: true } : { ok: true, bytesIn: 100, bytesOut: 150 };
+      return this.dead ? { ok: false, aborted: true } : { ok: true, blocks: n, bytesIn: 800, bytesOut: 1200 };
     },
     terminate() { this.dead = true; },
   };
@@ -389,22 +464,23 @@ function fakePool(api, capacity = 3) {
     },
   };
   const ticks = [];
-  const res = await runSpeedtest({ pool, api, sampleUrl: 'http://h/js/migrations/speedtest-brick.webp', seconds: 5, now, onTick: (s) => ticks.push(s.elapsed) });
+  const res = await runSpeedtest({ pool, api, seconds: 5, now, onTick: (s) => ticks.push(s.elapsed) });
   assert.equal(peak, 3, 'the browser runs as many blocks at once as the pool has slots');
   assert.ok(pool.dead, 'the pool is released when the window closes');
   assert.ok(res.browser.blocks > 0 && !res.browser.error);
   assert.equal(res.browser.bytesIn, 100 * res.browser.blocks);
+  assert.ok(res.browser.seconds > 0 && res.browser.seconds <= 5, 'throughput over the last completed batch');
   assert.ok(calls.length >= 1 && res.server.blocks === 4 * calls.length && !res.server.error);
   assert.ok(ticks.length > 0, 'progress is reported');
   const sc = speedtestScores(res);
-  assert.equal(sc.browser, Math.round((10 * res.browser.blocks) / 5));
-  assert.equal(sc.server, Math.round((10 * res.server.blocks) / 5));
+  assert.equal(sc.browser, Math.round((10 * res.browser.blocks) / res.browser.seconds));
+  assert.equal(sc.server, Math.round((10 * res.server.blocks) / res.server.seconds));
 
   // The server refuses (no WebP decode): the browser still finishes its window.
   clock = 0;
   const pool2 = { ...pool, dead: false, speedtestBlock: pool.speedtestBlock, terminate() { this.dead = true; } };
   const bad = { async speedtest() { return { ok: false, status: 409, data: { error: 'server_unavailable', detail: 'no_webp_decode' } }; } };
-  const res2 = await runSpeedtest({ pool: pool2, api: bad, sampleUrl: 'http://h/js/migrations/speedtest-brick.webp', seconds: 5, now });
+  const res2 = await runSpeedtest({ pool: pool2, api: bad, seconds: 5, now });
   assert.equal(res2.server.code, 'server_unavailable');
   assert.equal(res2.server.detail, 'no_webp_decode');
   assert.ok(res2.browser.blocks > 0, 'the browser side is not stopped by the server failing');
@@ -413,6 +489,7 @@ function fakePool(api, capacity = 3) {
   assert.equal(sc2.winner, 'browser');
 
   assert.deepEqual(speedtestScores({ seconds: 5, browser: { blocks: 10 }, server: { blocks: 35 } }), { browser: 20, server: 70, winner: 'server', ratio: 3.5 });
+  assert.equal(speedtestScores({ seconds: 5, browser: { blocks: 32, seconds: 4 }, server: { blocks: 1 } }).browser, 80, 'each side over its own seconds');
   assert.deepEqual(speedtestScores({ seconds: 5, browser: { blocks: 10 }, server: { blocks: 10 } }), { browser: 20, server: 20, winner: null, ratio: null });
   assert.equal(speedtestScores({ seconds: 5, browser: { blocks: 0, error: 'x' }, server: { blocks: 0, error: 'y' } }).winner, null);
 }

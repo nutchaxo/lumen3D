@@ -35,7 +35,7 @@
 import { Utils, I18n, t as _t, escHtml, apiFetchStatus, getCsrf, toast, el, refreshIcons, storageGet, storageSet } from './shared.js';
 import {
   API_MIGRATIONS, createApi, Runner, WorkerPool, buildQueue, migrationChain, remainingUnits, serverCapability,
-  runSpeedtest, speedtestScores, SPEEDTEST_SECONDS, SPEEDTEST_SAMPLE,
+  runSpeedtest, speedtestScores, SPEEDTEST_SECONDS, netGovernor,
 } from './migration-runner.js';
 
 const V = (() => { try { return new URL(import.meta.url).search; } catch (_) { return ''; } })();
@@ -55,7 +55,11 @@ function t(key, def, params) {
   return params ? String(s).replace(/\{(\w+)\}/g, (m, k) => (k in params ? String(params[k]) : m)) : s;
 }
 
-const api = createApi((url, init) => apiFetchStatus(url, init));
+// Every request of this tab (status, plan, unit_run…) and of its workers shares the page's
+// network governor: a bounded number in flight and per second, slowed down when the host
+// stops answering, so the operator's address is never taken for a flood.
+const api = createApi((url, init) => netGovernor.run(() => apiFetchStatus(url, init)));
+netGovernor.onChange = () => schedulePaint();
 
 let _status = null;
 let _loading = false;
@@ -266,6 +270,7 @@ function poolOptions(extra) {
     endpoint: absUrl(API_MIGRATIONS),
     csrf: () => getCsrf(),
     spawn: () => new Worker(absUrl(`js/workers/migration-worker.js${V}`)),
+    governor: netGovernor,
     onNet: (online) => setOnline('pool', online),
     ...(extra || {}),
   };
@@ -451,7 +456,7 @@ async function runSpeed() {
   let res;
   try {
     res = await runSpeedtest({
-      pool, api, sampleUrl: absUrl(SPEEDTEST_SAMPLE + V), seconds: SPEEDTEST_SECONDS, server: serverCap.available,
+      pool, api, seconds: SPEEDTEST_SECONDS, server: serverCap.available,
       onTick: (s) => { _speed.elapsed = s.elapsed; _speed.live = s; paintSpeed(); },
     });
   } catch (err) {
@@ -462,7 +467,7 @@ async function runSpeed() {
   }
   if (res) {
     if (!serverCap.available) { res.server.code = 'server_unavailable'; res.server.detail = (serverCap.reasons || []).join(','); }
-    const side = (s) => ({ blocks: s.blocks, bytesIn: s.bytesIn, bytesOut: s.bytesOut, error: s.error, code: s.code, detail: s.detail });
+    const side = (s) => ({ blocks: s.blocks, seconds: s.seconds, bytesIn: s.bytesIn, bytesOut: s.bytesOut, error: s.error, code: s.code, detail: s.detail });
     _speed.result = { at: new Date().toISOString(), seconds: res.seconds, browser: side(res.browser), server: side(res.server), scores: speedtestScores(res) };
     storageSet(SPEED_KEY, JSON.stringify(_speed.result));
   }
@@ -529,7 +534,10 @@ function speedCard() {
   const sides = {};
   for (const x of EXECS) {
     const s = live ? live[x] : r ? r[x] : null;
-    const score = s && !s.error ? Math.round((10 * s.blocks) / SPEEDTEST_SECONDS) : null;
+    // Live: the count so far; done: the measured throughput (speedtestScores).
+    const score = !s || s.error ? null
+      : live ? Math.round((10 * s.blocks) / SPEEDTEST_SECONDS)
+        : r && r.scores && r.scores[x] !== null && r.scores[x] !== undefined ? r.scores[x] : Math.round((10 * s.blocks) / SPEEDTEST_SECONDS);
     sides[x] = { s, score };
   }
   // The server side cannot even start without WebP decode + zlib: say why instead of 0.
@@ -543,7 +551,7 @@ function speedCard() {
     const off = !!err;
     const sub = err
       ? err
-      : s ? t('dupd.speedBlocks', '{n} blocks in {s} s', { n: s.blocks, s: SPEEDTEST_SECONDS })
+      : s ? t('dupd.speedBlocks', '{n} blocks in {s} s', { n: s.blocks, s: fmtNum(live || !(s.seconds > 0) ? SPEEDTEST_SECONDS : s.seconds, 1) })
         : t('dupd.speedNotRun', 'not tested yet');
     const pct = score !== null ? (100 * score) / top : 0;
     const win = winner === x;
@@ -574,7 +582,7 @@ function speedCard() {
         ${_speed.running ? '<span class="spinner spinner-sm"></span>' : '<i data-lucide="play"></i>'}
         ${escHtml(_speed.running ? t('dupd.speedRunning', 'Testing…') : r ? t('dupd.speedAgain', 'Run again') : t('dupd.speedRun', 'Run the test ({s} s)', { s: SPEEDTEST_SECONDS }))}</button></div>
     <div class="adm-card-body">
-      <p class="adm-muted dupd-small dupd-speed-intro">${escHtml(t('dupd.speedIntro', 'Both executors convert the same test block (a synthetic 64³ brick) for {s} seconds at the same time; the browser also downloads and uploads it, as it would in a real update. The higher score converts faster. No dataset is read or modified.', { s: SPEEDTEST_SECONDS }))}</p>
+      <p class="adm-muted dupd-small dupd-speed-intro">${escHtml(t('dupd.speedIntro', 'Both executors convert the same test block (a synthetic 64³ brick) for {s} seconds at the same time; the browser also downloads and uploads it, in batches, as it would in a real update. The higher score converts faster. No dataset is read or modified.', { s: SPEEDTEST_SECONDS }))}</p>
       <div class="dupd-races">${rows}</div>
       ${verdict}
       ${blocked && !_speed.running ? `<p class="adm-muted dupd-small">${escHtml(t('dupd.speedBlocked', 'Available when no update is running.'))}</p>` : ''}
@@ -710,7 +718,10 @@ function laneStrip() {
         : t('dupd.laneIdle', 'idle');
     return `<span class="dupd-lane is-${st === 'pausing' ? 'running' : st}"><i data-lucide="${execIcon(x)}"></i><b>${escHtml(execName(x))}</b><span>${escHtml(text)}</span></span>`;
   }).join('');
-  return `<div class="dupd-lanes">${pills}</div>
+  const paced = netGovernor.holding
+    ? `<p class="adm-muted dupd-small dupd-note"><i data-lucide="timer"></i>${escHtml(t('dupd.paced', 'The host is answering slowly: requests are paced down so that it does not block this address.'))}</p>`
+    : '';
+  return `<div class="dupd-lanes">${pills}</div>${paced}
     ${isOnline() ? '' : `<p class="adm-warn dupd-small dupd-note"><i data-lucide="wifi-off"></i>${escHtml(t('dupd.offline', 'Connection lost — waiting for the network, nothing is lost.'))}</p>`}
     ${isRunning() ? `<p class="adm-muted dupd-small dupd-note"><i data-lucide="info"></i>${escHtml(t('dupd.keepOpen', 'Keep this tab open: closing it or leaving it pauses the updates.'))}</p>` : ''}`;
 }

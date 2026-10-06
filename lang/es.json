@@ -2024,7 +2024,7 @@
     "speedRunning": "Probando…",
     "speedAgain": "Repetir",
     "speedRun": "Lanzar la prueba ({s} s)",
-    "speedIntro": "Ambos ejecutores convierten a la vez el mismo bloque de prueba (un brick sintético de 64³) durante {s} segundos; el navegador además lo descarga y lo sube, como en una actualización real. La puntuación más alta convierte más rápido. No se lee ni se modifica ningún dataset.",
+    "speedIntro": "Ambos ejecutores convierten a la vez el mismo bloque de prueba (un brick sintético de 64³) durante {s} segundos; el navegador además lo descarga y lo sube por lotes, como en una actualización real. La puntuación más alta convierte más rápido. No se lee ni se modifica ningún dataset.",
     "speedBlocked": "Disponible cuando no hay ninguna actualización en curso.",
     "executor": "Ejecutor",
     "stepNone": "sin ejecutor",
@@ -2083,6 +2083,7 @@
     "updateAll": "Actualizar todo",
     "loadFailed": "No se pudo leer el estado de las actualizaciones ({status}).",
     "network": "red",
-    "recommended": "El más rápido en la prueba de velocidad"
+    "recommended": "El más rápido en la prueba de velocidad",
+    "paced": "El servidor responde con lentitud: las solicitudes se ralentizan para que no bloquee esta dirección."
   }
 }

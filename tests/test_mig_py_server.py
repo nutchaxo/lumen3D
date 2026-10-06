@@ -588,6 +588,10 @@ class Engine(unittest.TestCase):
         self.assertEqual(dm.handle("speedtest_put", {}, {}, b"" * 5000), (200, {"ok": True, "bytes": 5000}))
         status, out = dm.handle("speedtest_put", {}, {}, b"" * (dm.SPEEDTEST_PUT_MAX + 1))
         self.assertEqual((status, out["error"]), (413, "body_too_large"))
+        status, ctype, batch = dm.handle_binary("speedtest_sample", {"n": "3"})
+        self.assertEqual((status, ctype, batch), (200, "application/octet-stream", sample.read_bytes() * 3))
+        self.assertEqual(len(dm.handle_binary("speedtest_sample", {"n": "99"})[2]), 8 * sample.stat().st_size, "batch capped at 8")
+        self.assertIn("speedtest_sample", dm.BINARY_ACTIONS)
         self.assertIn("speedtest", dm.WRITE_ACTIONS)
         self.assertIn("speedtest_put", dm.WRITE_ACTIONS)
 

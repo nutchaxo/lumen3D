@@ -40,6 +40,7 @@ const LUMEN_MIG_MAX_RUN_S       = 20;
 const LUMEN_MIG_MAX_BENCH_UNITS = 8;
 const LUMEN_MIG_SPEEDTEST_MAX_S  = 3.0;
 const LUMEN_MIG_SPEEDTEST_PUT_MAX = 4194304;
+const LUMEN_MIG_SPEEDTEST_BATCH_MAX = 8;
 const LUMEN_MIG_MIN_MEMORY      = 134217728;    // 128 MiB
 const LUMEN_MIG_MIN_EXEC_S      = 10;
 const LUMEN_MIG_ZLIB_LEVEL      = 6;
@@ -2118,7 +2119,15 @@ function lumen_mig_speedtest($maxSeconds = 1.0): array {
             'bytesRead' => $blocks * strlen($raw), 'bytesWritten' => $written];
 }
 
-/** The browser's side of the speed test uploads each converted block here; the bytes are dropped. */
+/** The browser's input for a batch of $n (1..8) test blocks: the shipped test brick repeated $n times (one download per batch). */
+function lumen_mig_speedtest_sample($n = 1): string {
+    $k = is_numeric($n) ? max(1, min(LUMEN_MIG_SPEEDTEST_BATCH_MAX, (int)$n)) : 1;
+    $raw = @file_get_contents(admin_root() . '/js/migrations/speedtest-brick.webp');
+    if (!is_string($raw) || $raw === '') throw new LumenMigError('speedtest_sample_missing', 500);
+    return str_repeat($raw, $k);
+}
+
+/** The browser's side of the speed test uploads each converted batch here; the bytes are dropped. */
 function lumen_mig_speedtest_put(?string $raw): array {
     if ($raw !== null) {
         if (strlen($raw) > LUMEN_MIG_SPEEDTEST_PUT_MAX) throw new LumenMigError('body_too_large', 413);
@@ -2204,6 +2213,35 @@ function lumen_mig_store_get_path($datasetId, $mid, $key): string {
     $p = lumen_mig_v3_store_brick(lumen_mig_store_dir($type, $folder, LUMEN_M004), $t, $k, $c, $bz, $by, $bx);
     if (!is_file($p)) throw new LumenMigError('absent', 404);
     return $p;
+}
+
+/**
+ * Up to LUMEN_MIG_STORE_MANY_MAX stored bricks of one (t, level, channel) of the m004 tile
+ * store in one answer (twin of dataset_migrations.store_get_many): $base = "t{t}.k{k}.c{c}",
+ * $bricks = "z.y.x,z.y.x,…". Body: uint32 LE count, count × uint32 LE length (0 = not stored,
+ * its interior is zero), then the bricks' bytes in request order. One request per brick was a
+ * flood a shared host's firewall bans the operator's address for.
+ */
+function lumen_mig_store_get_many($datasetId, $mid, $base, $bricks): string {
+    $m = lumen_mig_migration($mid);
+    if ($m['id'] !== LUMEN_M004) throw new LumenMigError('not_applicable', 409);
+    if (!is_string($base) || !preg_match('/^t[0-9]{1,6}\.k[0-9]{1,2}\.c[0-9]{1,3}$/D', $base)) throw new LumenMigError('bad_unit');
+    $items = array_values(array_filter(explode(',', is_string($bricks) ? $bricks : ''), fn($b) => $b !== ''));
+    if (!$items || count($items) > LUMEN_MIG_STORE_MANY_MAX) throw new LumenMigError('bad_unit', 400, '1..' . LUMEN_MIG_STORE_MANY_MAX . ' bricks');
+    [$type, $folder] = lumen_mig_resolve($datasetId);
+    $store = lumen_mig_store_dir($type, $folder, LUMEN_M004);
+    $head = pack('V', count($items));
+    $body = '';
+    foreach ($items as $it) {
+        if (!preg_match('/^([0-9]{1,5})\.([0-9]{1,5})\.([0-9]{1,5})$/D', $it, $mz)) throw new LumenMigError('bad_unit');
+        [$t, $k, $c, $bz, $by, $bx] = lumen_mig_parse_key_for(LUMEN_M004, "$base.z{$mz[1]}.y{$mz[2]}.x{$mz[3]}");
+        $p = lumen_mig_v3_store_brick($store, $t, $k, $c, $bz, $by, $bx);
+        $data = is_file($p) ? @file_get_contents($p) : '';
+        if (!is_string($data)) $data = '';
+        $head .= pack('V', strlen($data));
+        $body .= $data;
+    }
+    return $head . $body;
 }
 
 // ── Kept from the format-2 engine ────────────────────────────────────────────
@@ -3026,7 +3064,9 @@ function lumen_mig_status(): array {
 
 const LUMEN_MIG_WRITE_ACTIONS = ['plan', 'unit_put', 'unit_run', 'finalize', 'cancel', 'bench', 'unit_inputs', 'speedtest', 'speedtest_put'];
 /** Binary answers (application/octet-stream) — routed to lumen_mig_handle_binary. */
-const LUMEN_MIG_BINARY_ACTIONS = ['store_get'];
+const LUMEN_MIG_BINARY_ACTIONS = ['store_get', 'store_get_many', 'speedtest_sample'];
+/** Bricks per store_get_many answer (a level-k+1 unit reads up to 10³ stored bricks). */
+const LUMEN_MIG_STORE_MANY_MAX = 128;
 
 function lumen_mig_error_payload(LumenMigError $e): array {
     $payload = ['error' => $e->codeName] + $e->extra;
@@ -3083,6 +3123,13 @@ function lumen_mig_handle_binary(string $action, array $params): array {
         if ($action === 'store_get') {
             return [200, 'application/octet-stream', null,
                     lumen_mig_store_get_path($params['dataset'] ?? null, $params['migration'] ?? null, $params['brick'] ?? null)];
+        }
+        if ($action === 'store_get_many') {
+            return [200, 'application/octet-stream',
+                    lumen_mig_store_get_many($params['dataset'] ?? null, $params['migration'] ?? null, $params['base'] ?? null, $params['bricks'] ?? null), null];
+        }
+        if ($action === 'speedtest_sample') {
+            return [200, 'application/octet-stream', lumen_mig_speedtest_sample($params['n'] ?? 1), null];
         }
         return [400, 'application/json', '{"error":"unknown_action"}', null];
     } catch (LumenMigError $e) {

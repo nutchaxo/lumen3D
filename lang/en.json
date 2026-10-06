@@ -2024,7 +2024,7 @@
     "speedRunning": "Testing…",
     "speedAgain": "Run again",
     "speedRun": "Run the test ({s} s)",
-    "speedIntro": "Both executors convert the same test block (a synthetic 64³ brick) for {s} seconds at the same time; the browser also downloads and uploads it, as it would in a real update. The higher score converts faster. No dataset is read or modified.",
+    "speedIntro": "Both executors convert the same test block (a synthetic 64³ brick) for {s} seconds at the same time; the browser also downloads and uploads it, in batches, as it would in a real update. The higher score converts faster. No dataset is read or modified.",
     "speedBlocked": "Available when no update is running.",
     "executor": "Executor",
     "stepNone": "no executor",
@@ -2083,6 +2083,7 @@
     "updateAll": "Update all",
     "loadFailed": "Could not read the update status ({status}).",
     "network": "network",
-    "recommended": "Fastest in the speed test"
+    "recommended": "Fastest in the speed test",
+    "paced": "The host is answering slowly: requests are paced down so that it does not block this address."
   }
 }

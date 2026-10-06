@@ -21,18 +21,20 @@
    it gave this worker, so the worker holds at most that many units in memory.
 
    Messages in:
-     config  { endpoint, csrf }
+     config  { endpoint, csrf, governed }
      probe   { reqId, migration }                         → probed   { reqId, ok, available, reasons }
      prepare { reqId, migration, dataset, datasetBase }  → prepared { reqId, ok, error?, trees?, slotsPerWorker? }
      list    { reqId, migration, dataset, opts? }         → listed   { reqId, units:[{key, empty}] }
      run     { reqId, migration, dataset, unit, dry }     → unit_done { reqId, key, done, total, bytesIn,
                                                               bytesOut, tiles, seconds } | unit_failed
                                                               { reqId, key, error, status, fatal }
-     speedtest { reqId, sampleUrl }                       → speedtest_done { reqId, ok, bytesIn, bytesOut,
-                                                              seconds, error?, code? }
-                                                              one block of the executors' speed test
+     speedtest { reqId, n }                               → speedtest_done { reqId, ok, blocks, bytesIn,
+                                                              bytesOut, seconds, error?, code? }
+                                                              one batch of the executors' speed test
+     net_grant { id }     the page's governor lets request `id` start (see governed())
      abort   { reqId? }   abort one unit, or every unit in flight
-   Messages out, besides the replies: net { online: bool } while a request waits for the link.
+   Messages out, besides the replies: net { online: bool } while a request waits for the link;
+   net_acquire { id } / net_release { id, outcome } around every request when governed.
    ============================================================ */
 
 'use strict';
@@ -80,11 +82,52 @@ function httpError(status, code, message) {
   });
 }
 
+// Every request waits for its turn from the page's network governor (migration-runner.js
+// NetGovernor, relayed by the pool): `net_acquire` → `net_grant`, then `net_release` with the
+// outcome once the body has been read in full, so the page bounds the requests in flight and per
+// second across every worker. A shared host's firewall bans an address that floods it.
+let _governed = false;
+let _turnSeq = 0;
+const _turns = new Map();   // id → resolve
+
+function netTurn() {
+  if (!_governed) return Promise.resolve(null);
+  const id = ++_turnSeq;
+  return new Promise((resolve) => { _turns.set(id, () => resolve(id)); post({ type: 'net_acquire', id }); });
+}
+
+/** Runs `fn()` (one request, body included) in a governed turn; the outcome steers the governor. */
+async function governed(fn) {
+  const id = await netTurn();
+  let outcome = 'ok';
+  try {
+    return await fn();
+  } catch (err) {
+    outcome = err && err.name === 'AbortError' ? 'cancel'
+      : err && err.status === undefined ? 'fail'
+        : err && (err.status === 429 || err.status === 503) ? 'throttled' : 'ok';
+    throw err;
+  } finally {
+    if (id !== null) post({ type: 'net_release', id, outcome });
+  }
+}
+
 // The link being down costs time, never attempts: wait for `online` or for any HTTP
 // answer to a cheap probe, with a growing delay, as long as the unit is not aborted.
-let _offline = false;
+// Units waiting for the link: `offline` when the first one starts waiting, `online` when the
+// last one leaves — on success AND on abort, or a unit paused mid-wait would leave the page
+// announcing a lost connection while every later request goes through.
+let _waiting = 0;
 async function waitForLink(signal) {
-  if (!_offline) { _offline = true; post({ type: 'net', online: false }); }
+  if (_waiting++ === 0) post({ type: 'net', online: false });
+  try {
+    await _waitForLink(signal);
+  } finally {
+    if (--_waiting === 0) post({ type: 'net', online: true });
+  }
+}
+
+async function _waitForLink(signal) {
   let delay = 2000;
   for (;;) {
     let onOnline = null;
@@ -99,14 +142,13 @@ async function waitForLink(signal) {
     }
     if (signal && signal.aborted) throw abortError();
     try {
-      await fetch(`${_endpoint}?action=ping&t=${Date.now()}`, { method: 'GET', credentials: 'same-origin', cache: 'no-store', signal });
+      await governed(() => fetch(`${_endpoint}?action=ping&t=${Date.now()}`, { method: 'GET', credentials: 'same-origin', cache: 'no-store', signal }).then((r) => r.arrayBuffer()));
       break;   // any answer, even a 4xx, means the link is back
     } catch (e) {
       if (e && e.name === 'AbortError') throw e;
       delay = Math.min(15000, Math.round(delay * 1.6));
     }
   }
-  if (_offline) { _offline = false; post({ type: 'net', online: true }); }
 }
 
 /** `attemptFn()` resolves a value or throws; network failures wait, server failures back off. */
@@ -116,7 +158,7 @@ async function withRetries(attemptFn, signal) {
   for (;;) {
     if (signal && signal.aborted) throw abortError();
     try {
-      return await attemptFn();
+      return await governed(attemptFn);
     } catch (err) {
       if (err && err.name === 'AbortError') throw err;
       if (err && err.status === undefined) {   // no HTTP answer: the request never made it
@@ -178,7 +220,12 @@ async function putUnit(migration, dataset, unit, body, dry, signal) {
   }, signal);
 }
 
-const STORE_PARALLEL = 8;
+// Stored bricks travel in batches (action store_get_many): a level-k+1 unit reads up to 10³ of
+// them, and one request per brick is a flood a shared host's firewall bans the operator's
+// address for. Two batches in flight per unit; every request also waits for the page's governor.
+const STORE_BATCH = 128;
+const STORE_PARALLEL = 2;
+let _storeManyMissing = false;   // a server older than store_get_many: one brick per request
 
 /** One stored output of this job (GET action=store_get); null when the server holds none. */
 async function storeGet(migration, dataset, key, signal) {
@@ -196,28 +243,72 @@ async function storeGet(migration, dataset, key, signal) {
   }, signal);
 }
 
+/** Up to STORE_BATCH stored bricks of one (t, level, channel): Uint8Array views (null = absent) in request order. */
+async function storeGetMany(migration, dataset, req, part, signal) {
+  const q = new URLSearchParams({
+    action: 'store_get_many', dataset, migration, base: `t${req.t}.k${req.level}.c${req.channel}`,
+    bricks: part.map(([bz, by, bx]) => `${bz}.${by}.${bx}`).join(','),
+  });
+  return withRetries(async () => {
+    const res = await fetch(`${_endpoint}?${q}`, { credentials: 'same-origin', cache: 'no-store', signal });
+    if (!res.ok) {
+      let data = null;
+      try { data = await res.json(); } catch (_) { data = null; }
+      const err = httpError(res.status, data && data.error, (data && (data.message || data.error)) || `HTTP ${res.status}`);
+      if (data && data.detail) err.detail = String(data.detail);
+      throw err;
+    }
+    const buf = new Uint8Array(await res.arrayBuffer());
+    const view = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
+    const n = buf.length >= 4 ? view.getUint32(0, true) : -1;
+    if (n !== part.length || buf.length < 4 + 4 * n) throw httpError(502, 'short_read', 'store_get_many: bad header');
+    const out = new Array(n);
+    let at = 4 + 4 * n;
+    for (let i = 0; i < n; i++) {
+      const len = view.getUint32(4 + 4 * i, true);
+      if (at + len > buf.length) throw httpError(502, 'short_read', 'store_get_many: truncated');
+      out[i] = len ? buf.subarray(at, at + len) : null;
+      at += len;
+    }
+    return out;
+  }, signal);
+}
+
 /**
  * Outputs this job already produced and the server holds, for a migration whose later units
  * read earlier ones (m004: level k+1 from level k). req = { t, level, channel, bricks:
  * [[bz, by, bx]…] }; answered as the list [{ bz, by, bx, bytes }] of the bricks that exist
- * (an absent one is all zeros), in request order. A list, not one concatenated blob: a level-k
- * unit reads up to 10³ stored bricks, and a copy of all of them would double the unit's peak.
+ * (an absent one is all zeros), in request order. Each brick is a view of its batch's answer:
+ * no second copy of what a unit reads.
  */
 async function fetchStored(migration, dataset, req, signal) {
   const list = Array.isArray(req.bricks) ? req.bricks : [];
   const found = new Array(list.length).fill(null);
-  let next = 0;
-  let failed = false;
-  const lane = async () => {
-    while (next < list.length && !failed) {
-      const i = next++;
+  if (_storeManyMissing) {
+    for (let i = 0; i < list.length; i++) {
       const [bz, by, bx] = list[i];
-      try {
-        found[i] = await storeGet(migration, dataset, `t${req.t}.k${req.level}.c${req.channel}.z${bz}.y${by}.x${bx}`, signal);
-      } catch (err) { failed = true; throw err; }
+      found[i] = await storeGet(migration, dataset, `t${req.t}.k${req.level}.c${req.channel}.z${bz}.y${by}.x${bx}`, signal);
     }
-  };
-  await Promise.all(Array.from({ length: Math.max(1, Math.min(STORE_PARALLEL, list.length)) }, lane));
+  } else {
+    const parts = [];
+    for (let i = 0; i < list.length; i += STORE_BATCH) parts.push(i);
+    let next = 0;
+    const lane = async () => {
+      while (next < parts.length) {
+        const from = parts[next++];
+        let got;
+        try {
+          got = await storeGetMany(migration, dataset, req, list.slice(from, from + STORE_BATCH), signal);
+        } catch (err) {
+          if (err && err.status === 400 && err.code === 'unknown_action') { _storeManyMissing = true; return; }
+          throw err;
+        }
+        for (let j = 0; j < got.length; j++) found[from + j] = got[j];
+      }
+    };
+    await Promise.all(Array.from({ length: Math.max(1, Math.min(STORE_PARALLEL, parts.length)) }, lane));
+    if (_storeManyMissing) return fetchStored(migration, dataset, req, signal);
+  }
   const out = [];
   list.forEach(([bz, by, bx], i) => { if (found[i]) out.push({ bz, by, bx, bytes: found[i] }); });
   return out;
@@ -316,33 +407,49 @@ async function onRun(msg) {
   }
 }
 
-// One block of the executors' speed test (dataset_migrations.speedtest is the server's side):
-// download the synthetic test brick, decode its lossless-WebP mosaic, encode the 64³ voxels as
-// one 512² png-gray8 tile and upload it to a sink that drops it — the work a browser unit does
-// for each brick, transfers included. No retry: a failure ends the browser's run of the test.
+// One batch of the executors' speed test (dataset_migrations.speedtest is the server's side):
+// download `n` copies of the synthetic test brick in ONE request, decode each lossless-WebP
+// mosaic, encode each 64³ brick as one 512² png-gray8 tile, and upload the tiles in ONE request
+// to a sink that drops them — the work and the bytes a browser unit moves per brick, in two
+// governed requests per batch. No retry: a failure ends the browser's run of the test.
 const SPEEDTEST_DECODER = 'm002-planes';
 const SPEEDTEST_TREE = { encoding: 'webp-lossless', packing: { mode: 'grid', cols: 8 } };
-let _speedSeq = 0;
 
 async function onSpeedtest(msg) {
   const ac = new AbortController();
   _inflight.set(msg.reqId, ac);
   const t0 = performance.now();
+  const n = Math.max(1, Math.min(8, msg.n | 0 || 1));
   try {
     const decodeBrick = handlerFor(SPEEDTEST_DECODER)._internals.decodeBrick;
-    const sep = msg.sampleUrl.includes('?') ? '&' : '?';
-    const res = await fetch(`${msg.sampleUrl}${sep}st=${Date.now()}-${++_speedSeq}`, { credentials: 'same-origin', cache: 'no-store', signal: ac.signal });
-    if (!res.ok) throw httpError(res.status, 'speedtest_sample_missing', `HTTP ${res.status} for the test brick`);
-    const bytes = new Uint8Array(await res.arrayBuffer());
-    const voxels = await decodeBrick(bytes, SPEEDTEST_TREE, 0);
-    const png = await PlaneCodec.encodePngGray(512, 512, voxels);
+    const q = new URLSearchParams({ action: 'speedtest_sample', n: String(n), t: String(Date.now()) });
+    const batch = await governed(async () => {
+      const res = await fetch(`${_endpoint}?${q}`, { credentials: 'same-origin', cache: 'no-store', signal: ac.signal });
+      if (!res.ok) throw httpError(res.status, 'speedtest_sample_missing', `HTTP ${res.status} for the test brick`);
+      return new Uint8Array(await res.arrayBuffer());
+    });
+    if (!batch.length || batch.length % n) throw httpError(502, 'short_read', 'the test batch is truncated');
+    const size = batch.length / n;
+    const tiles = [];
+    let outBytes = 0;
+    for (let i = 0; i < n; i++) {
+      const voxels = await decodeBrick(batch.subarray(i * size, (i + 1) * size), SPEEDTEST_TREE, 0);
+      const png = await PlaneCodec.encodePngGray(512, 512, voxels);
+      tiles.push(png);
+      outBytes += png.length;
+    }
+    const body = new Uint8Array(outBytes);
+    let at = 0;
+    for (const p of tiles) { body.set(p, at); at += p.length; }
     const headers = { 'Content-Type': 'application/octet-stream' };
     if (_csrf) headers['X-CSRF-Token'] = _csrf;
-    const put = await fetch(`${_endpoint}?action=speedtest_put`, { method: 'POST', headers, body: png, credentials: 'same-origin', signal: ac.signal });
-    let data = null;
-    try { data = await put.json(); } catch (_) { data = null; }
-    if (!put.ok || !data || data.ok === false) throw httpError(put.status, data && data.error, `HTTP ${put.status} for the test upload`);
-    post({ type: 'speedtest_done', reqId: msg.reqId, ok: true, bytesIn: bytes.length, bytesOut: png.length, seconds: (performance.now() - t0) / 1000 });
+    await governed(async () => {
+      const put = await fetch(`${_endpoint}?action=speedtest_put`, { method: 'POST', headers, body, credentials: 'same-origin', signal: ac.signal });
+      let data = null;
+      try { data = await put.json(); } catch (_) { data = null; }
+      if (!put.ok || !data || data.ok === false) throw httpError(put.status, data && data.error, `HTTP ${put.status} for the test upload`);
+    });
+    post({ type: 'speedtest_done', reqId: msg.reqId, ok: true, blocks: n, bytesIn: batch.length, bytesOut: outBytes, seconds: (performance.now() - t0) / 1000 });
   } catch (err) {
     post({
       type: 'speedtest_done', reqId: msg.reqId, ok: false,
@@ -359,7 +466,14 @@ async function onSpeedtest(msg) {
 self.onmessage = (e) => {
   const msg = e.data || {};
   switch (msg.type) {
+    case 'net_grant': {
+      const go = _turns.get(msg.id);
+      _turns.delete(msg.id);
+      if (go) go();
+      break;
+    }
     case 'config':
+      if (msg.governed !== undefined) _governed = !!msg.governed;
       if (msg.endpoint) _endpoint = msg.endpoint;
       if (msg.csrf !== undefined) _csrf = msg.csrf;
       break;

@@ -2741,6 +2741,7 @@ def bench(dataset_id, n=4, mid=None, require_server: bool = False) -> dict:
 SPEEDTEST_SAMPLE = ("js", "migrations", "speedtest-brick.webp")
 SPEEDTEST_MAX_SECONDS = 3.0
 SPEEDTEST_PUT_MAX = 4 * 1024 * 1024
+SPEEDTEST_BATCH_MAX = 8
 
 
 def speedtest(max_seconds=1.0) -> dict:
@@ -2773,8 +2774,22 @@ def speedtest(max_seconds=1.0) -> dict:
             "bytesRead": blocks * len(raw), "bytesWritten": written}
 
 
+def speedtest_sample(n=1) -> bytes:
+    """The browser's input for a batch of `n` (1..8) test blocks: the shipped test brick
+    repeated n times, so a batch costs one download whatever its size."""
+    try:
+        k = max(1, min(SPEEDTEST_BATCH_MAX, int(n)))
+    except (TypeError, ValueError):
+        k = 1
+    try:
+        raw = ROOT.joinpath(*SPEEDTEST_SAMPLE).read_bytes()
+    except OSError as exc:
+        raise MigrationError("speedtest_sample_missing", 500, str(exc))
+    return raw * k
+
+
 def speedtest_put(raw: bytes | None) -> dict:
-    """The browser's side of the speed test uploads each converted block here, like a
+    """The browser's side of the speed test uploads each converted batch here, like a
     unit_put: the bytes cross the link and are dropped."""
     n = len(raw or b"")
     if n > SPEEDTEST_PUT_MAX:
@@ -3030,6 +3045,42 @@ def store_get(dataset_id, mid, key) -> bytes:
     except OSError:
         raise MigrationError("absent", 404)
 
+
+# A unit of level k+1 reads up to 10³ stored bricks of level k: one request per brick was a
+# flood a shared host's firewall bans the operator's address for. They travel in batches.
+STORE_MANY_MAX = 128
+_STORE_BASE_RE = re.compile(r"^(t\d{1,6}\.k\d{1,2}\.c\d{1,3})\Z", re.ASCII)
+_STORE_ZYX_RE = re.compile(r"^(\d{1,5})\.(\d{1,5})\.(\d{1,5})\Z", re.ASCII)
+
+
+def store_get_many(dataset_id, mid, base, bricks) -> bytes:
+    """Up to STORE_MANY_MAX stored bricks of one (t, level, channel) of the m004 tile store in
+    one answer. `base` = "t{t}.k{k}.c{c}", `bricks` = "z.y.x,z.y.x,…" (brick coordinates).
+    Body: uint32 LE count, count × uint32 LE length (0 = not stored, its interior is zero),
+    then the bricks' bytes in request order."""
+    m = _migration(mid)
+    if m["id"] != M004:
+        raise MigrationError("not_applicable", 409)
+    if not isinstance(base, str) or not _STORE_BASE_RE.match(base):
+        raise MigrationError("bad_unit")
+    items = [b for b in str(bricks or "").split(",") if b]
+    if not items or len(items) > STORE_MANY_MAX:
+        raise MigrationError("bad_unit", 400, "1..%d bricks" % STORE_MANY_MAX)
+    type_dir, folder, _ds = _resolve_dataset(dataset_id)
+    store = tile_store_dir(type_dir, folder, M004)
+    lengths, parts = [], []
+    for it in items:
+        mz = _STORE_ZYX_RE.match(it)
+        if not mz:
+            raise MigrationError("bad_unit")
+        t, k, c, bz, by, bx = parse_unit_key_for(M004, "%s.z%s.y%s.x%s" % (base, *mz.groups()))
+        try:
+            data = _v3_store_brick(store, t, k, c, bz, by, bx).read_bytes()
+        except OSError:
+            data = b""
+        lengths.append(len(data))
+        parts.append(data)
+    return struct.pack("<%dI" % (len(items) + 1), len(items), *lengths) + b"".join(parts)
 
 
 # ── Finalize ───────────────────────────────────────────────────────────────────
@@ -3824,7 +3875,7 @@ def _estimate_for(plan: Plan, m: dict, j) -> dict:
 WRITE_ACTIONS = ("plan", "unit_put", "unit_run", "finalize", "cancel", "bench", "unit_inputs",
                  "speedtest", "speedtest_put")
 # Binary answers (application/octet-stream) — routed to handle_binary(), not handle().
-BINARY_ACTIONS = ("store_get",)
+BINARY_ACTIONS = ("store_get", "store_get_many", "speedtest_sample")
 
 
 def handle(action: str, params: dict, body, raw: bytes | None = None) -> tuple[int, dict]:
@@ -3875,6 +3926,11 @@ def handle_binary(action: str, params: dict) -> tuple[int, str, bytes]:
         if action == "store_get":
             data = store_get(params.get("dataset"), params.get("migration"), params.get("brick"))
             return 200, "application/octet-stream", data
+        if action == "store_get_many":
+            data = store_get_many(params.get("dataset"), params.get("migration"), params.get("base"), params.get("bricks"))
+            return 200, "application/octet-stream", data
+        if action == "speedtest_sample":
+            return 200, "application/octet-stream", speedtest_sample(params.get("n", 1))
         return 400, "application/json", b'{"error":"unknown_action"}'
     except MigrationError as exc:
         payload = {"error": exc.code, **exc.extra}

@@ -11,7 +11,10 @@
  *   POST ?action=bench      { dataset, units: N, migration? }
  *   POST ?action=unit_inputs { dataset, migration, unit }        what a browser unit reads
  *   POST ?action=speedtest  { maxSeconds }   server side of the executors' speed test
- *   POST ?action=speedtest_put   RAW body = one converted test block (dropped)
+ *   POST ?action=speedtest_put   RAW body = one converted test batch (dropped)
+ *   GET  ?action=speedtest_sample&n=1..8   the test brick repeated n times (octet-stream)
+ *   GET  ?action=store_get_many&dataset=&migration=m004-bricks-v3&base=t.k.c&bricks=z.y.x,…
+ *        up to 128 stored v3 bricks: u32 count, u32 lengths (0 = absent), bytes
  *   GET  ?action=store_get&dataset=&migration=m004-bricks-v3&brick=t.k.c.z.y.x   one stored
  *        v3 brick (octet-stream), 404 {error:"absent"} when the brick was dropped
  *
@@ -54,7 +57,7 @@ $body = ($method === 'POST' && $action !== 'unit_put' && $action !== 'speedtest_
 
 if (in_array($action, LUMEN_MIG_BINARY_ACTIONS, true)) {
     if ($method !== 'GET') admin_json_out(['error' => 'Method not allowed (use GET)'], 405);
-    foreach (['brick'] as $k) {
+    foreach (['brick', 'n', 'base', 'bricks'] as $k) {
         $v = lumen_str($_GET[$k] ?? null);
         if ($v !== null) $params[$k] = $v;
     }

@@ -39,6 +39,123 @@ const DEFINITIVE_CODES = new Set(['unit_timeout']);
 // Marker of a pool request that is a speed-test block, not a unit.
 const SPEEDTEST_JOB = '#speedtest';
 
+// ── Network governor ──────────────────────────────────────────────────────────
+
+/**
+ * Every HTTP request of the migrations (worker fetches, the tab's API calls, the speed test)
+ * goes through ONE governor per page: at most `maxInFlight` requests at once, at most `rate`
+ * request starts per second (token bucket of `burst`). A shared host's firewall bans an
+ * address that opens too many connections or sends too many requests per second — what a
+ * worker pool with several lanes did in web 1.59.1, which got the operator's IP banned.
+ *
+ * Adaptive (AIMD): a request that got no HTTP answer, or a 429 / 503, halves the rate (floor
+ * `minRate`) and holds every new request for a cooldown (5 s, doubling to 60 s while failures
+ * continue); each answered request raises the rate by `step` up to `maxRate`.
+ *
+ * acquire() → Promise<release(outcome)>, outcome = 'ok' | 'fail' | 'throttled' | 'cancel'.
+ */
+export class NetGovernor {
+  constructor(o = {}) {
+    // Defaults: about what web 1.59.0 sent (one pool, four units at a time, no ban reported),
+    // never the floods of 1.59.1 (two pools, one request per stored brick, an unbounded speed
+    // test: tens of connections and well over 40 requests per second).
+    this.maxInFlight = o.maxInFlight || 6;
+    this.maxRate = o.maxRate || 16;
+    this.minRate = o.minRate || 0.5;
+    this.rate = Math.min(this.maxRate, o.rate || 10);
+    this.burst = o.burst || 6;
+    this.step = o.step || 0.2;
+    this.cooldownMin = o.cooldownMs || 5000;
+    this.cooldownMax = o.cooldownMaxMs || 60000;
+    this.now = o.now || (() => Date.now());
+    this.setTimer = o.setTimer || ((fn, ms) => setTimeout(fn, ms));
+    this.tokens = this.burst;
+    this.last = this.now();
+    this.inFlight = 0;
+    this.queue = [];
+    this.holdUntil = 0;
+    this.cooldown = 0;
+    this._timer = null;
+    this.onChange = o.onChange || null;
+  }
+
+  acquire() {
+    return new Promise((resolve) => { this.queue.push(resolve); this._pump(); });
+  }
+
+  /** Requests waiting for their turn (for the view). */
+  get waiting() { return this.queue.length; }
+  get holding() { return this.now() < this.holdUntil; }
+
+  _refill() {
+    const t = this.now();
+    this.tokens = Math.min(this.burst, this.tokens + ((t - this.last) / 1000) * this.rate);
+    this.last = t;
+  }
+
+  _pump() {
+    if (this._timer) return;
+    for (;;) {
+      if (!this.queue.length) return;
+      const t = this.now();
+      if (t < this.holdUntil) { this._wait(this.holdUntil - t); return; }
+      if (this.inFlight >= this.maxInFlight) return;   // a release pumps again
+      this._refill();
+      if (this.tokens < 1) { this._wait(Math.ceil(((1 - this.tokens) / this.rate) * 1000)); return; }
+      this.tokens -= 1;
+      this.inFlight++;
+      const resolve = this.queue.shift();
+      let done = false;
+      resolve((outcome = 'ok') => {
+        if (done) return;
+        done = true;
+        this.inFlight--;
+        this._settle(outcome);
+        this._pump();
+      });
+    }
+  }
+
+  _wait(ms) {
+    this._timer = this.setTimer(() => { this._timer = null; this._pump(); }, Math.max(10, ms));
+  }
+
+  _settle(outcome) {
+    if (outcome === 'fail' || outcome === 'throttled') {
+      this.rate = Math.max(this.minRate, this.rate / 2);
+      this.cooldown = this.cooldown ? Math.min(this.cooldownMax, this.cooldown * 2) : this.cooldownMin;
+      this.holdUntil = Math.max(this.holdUntil, this.now() + this.cooldown);
+      this.tokens = Math.min(this.tokens, 0);
+      try { this.onChange?.(this); } catch (_) { /* view */ }
+    } else if (outcome === 'ok') {
+      const was = this.rate;
+      this.rate = Math.min(this.maxRate, this.rate + this.step);
+      if (this.now() >= this.holdUntil) this.cooldown = 0;
+      if (was !== this.rate) { try { this.onChange?.(this); } catch (_) { /* view */ } }
+    }
+  }
+
+  /** Runs `fn()` (a request resolving { status } or throwing on no answer) under the governor. */
+  async run(fn) {
+    const release = await this.acquire();
+    let outcome = 'ok';
+    try {
+      const r = await fn();
+      const st = r && typeof r.status === 'number' ? r.status : 200;
+      outcome = st === 0 ? 'fail' : (st === 429 || st === 503) ? 'throttled' : 'ok';
+      return r;
+    } catch (err) {
+      outcome = err && err.name === 'AbortError' ? 'cancel' : 'fail';
+      throw err;
+    } finally {
+      release(outcome);
+    }
+  }
+}
+
+/** The page's governor: every pool and every API call of the tab share it. */
+export const netGovernor = new NetGovernor();
+
 // ── Ordering ──────────────────────────────────────────────────────────────────
 
 /**
@@ -226,6 +343,7 @@ export class WorkerPool {
     this.bases = new Map();     // `${migration}|${dataset}` → datasetBase, to prepare a replacement worker
     this.hints = new Map();     // migration → slots per worker its handler asks for
     this.probes = new Map();    // migration → Promise<{ available, reasons }>
+    this.offline = new Set();   // workers whose units are waiting for the link
     this.dead = false;
   }
 
@@ -253,16 +371,23 @@ export class WorkerPool {
   _ensure() {
     while (this.workers.length < this.o.workers) {
       const w = this.o.spawn();
-      const slot = { w, busy: 0, prepared: new Set() };
+      const slot = { w, busy: 0, prepared: new Set(), grants: new Map() };
       w.onmessage = (e) => this._onMessage(slot, e.data || {});
       w.onerror = (e) => this._onCrash(slot, e);
-      w.postMessage({ type: 'config', endpoint: this.o.endpoint, csrf: this.o.csrf() });
+      w.postMessage({ type: 'config', endpoint: this.o.endpoint, csrf: this.o.csrf(), governed: !!this.o.governor });
       this.workers.push(slot);
     }
   }
 
   _onMessage(slot, msg) {
-    if (msg.type === 'net') { this.o.onNet?.(!!msg.online); return; }
+    if (msg.type === 'net') { this._setOffline(slot, !msg.online); return; }
+    if (msg.type === 'net_acquire') { this._grant(slot, msg.id); return; }
+    if (msg.type === 'net_release') {
+      const release = slot.grants.get(msg.id);
+      slot.grants.delete(msg.id);
+      if (release) release(msg.outcome || 'ok');
+      return;
+    }
     const p = this.pending.get(msg.reqId);
     if (!p) return;
     this.pending.delete(msg.reqId);
@@ -270,8 +395,18 @@ export class WorkerPool {
     p.resolve(msg);
   }
 
+  /** The pool is offline while ANY of its workers waits for the link; one report per change. */
+  _setOffline(slot, off) {
+    const was = this.offline.size > 0;
+    if (off) this.offline.add(slot); else this.offline.delete(slot);
+    const now = this.offline.size > 0;
+    if (now !== was) this.o.onNet?.(!now);
+  }
+
   _onCrash(slot, e) {
     // A dead worker fails its units (they are retried by the executor) and is replaced.
+    this._setOffline(slot, false);
+    this._releaseGrants(slot);
     const idx = this.workers.indexOf(slot);
     if (idx >= 0) this.workers.splice(idx, 1);
     try { slot.w.terminate(); } catch (_) { /* gone */ }
@@ -292,7 +427,7 @@ export class WorkerPool {
   _send(slot, msg, unit) {
     const reqId = ++this.seq;
     return new Promise((resolve) => {
-      this.pending.set(reqId, { resolve, slot, unit });
+      this.pending.set(reqId, { resolve, slot, unit, dataset: msg.dataset });
       slot.w.postMessage({ ...msg, reqId });
     });
   }
@@ -349,24 +484,52 @@ export class WorkerPool {
     }
   }
 
-  /** One block of the speed test in a free slot; resolves the worker's speedtest_done message. */
-  async speedtestBlock(sampleUrl) {
+  /** One batch of `n` speed-test blocks in a free slot; resolves the worker's speedtest_done message. */
+  async speedtestBlock(n = SPEEDTEST_BATCH) {
     for (;;) {
       if (this.dead) return { ok: false, aborted: true };
       this._ensure();
       const slot = this.workers.filter((s) => s.busy < this.o.slots).sort((a, b) => a.busy - b.busy)[0];
       if (slot) {
         slot.busy++;
-        return this._send(slot, { type: 'speedtest', sampleUrl }, SPEEDTEST_JOB);
+        return this._send(slot, { type: 'speedtest', n }, SPEEDTEST_JOB);
       }
       await new Promise((r) => this.waiters.push(r));
     }
   }
 
-  abortAll() { for (const s of this.workers) s.w.postMessage({ type: 'abort' }); }
+  /**
+   * Aborts the units in flight: every one, or only `dataset`'s — one pool serves every lane of
+   * the tab, and pausing one dataset must not abort another dataset's units.
+   */
+  abortAll(dataset) {
+    if (dataset === undefined) { for (const s of this.workers) s.w.postMessage({ type: 'abort' }); return; }
+    for (const [reqId, p] of this.pending) {
+      if (p.unit && p.dataset === dataset) p.slot.w.postMessage({ type: 'abort', reqId });
+    }
+  }
+
+  /** A worker asks to start one request: answered when the page's governor lets it go. */
+  _grant(slot, id) {
+    const g = this.o.governor;
+    if (!g) { slot.w.postMessage({ type: 'net_grant', id }); return; }
+    g.acquire().then((release) => {
+      // A worker gone meanwhile (crash, terminate) never uses its turn.
+      if (this.dead || !this.workers.includes(slot)) { release('cancel'); return; }
+      slot.grants.set(id, release);
+      slot.w.postMessage({ type: 'net_grant', id });
+    });
+  }
+
+  _releaseGrants(slot) {
+    for (const release of slot.grants.values()) release('cancel');
+    slot.grants.clear();
+  }
 
   terminate() {
+    for (const s of this.workers) this._releaseGrants(s);
     this.dead = true;
+    if (this.offline.size) { this.offline.clear(); this.o.onNet?.(true); }
     for (const s of this.workers) { try { s.w.terminate(); } catch (_) { /* gone */ } }
     this.workers = [];
     for (const p of this.pending.values()) {
@@ -487,7 +650,8 @@ export class Runner {
   /** Pause now: units in flight are abandoned (their tiles may land; a retried unit is harmless). */
   pauseNow(reason = null) {
     this.pause(reason);
-    try { this._pool?.abortAll(); } catch (_) { /* no pool */ }
+    // The pool may be shared with other runners: abort this runner's dataset only.
+    try { if (this.current) this._pool?.abortAll(this.current.dataset); } catch (_) { /* no pool */ }
   }
 
   resume() {
@@ -739,23 +903,28 @@ export class Runner {
 // ── Speed test ────────────────────────────────────────────────────────────────
 
 export const SPEEDTEST_SECONDS = 5;
-export const SPEEDTEST_SAMPLE = 'js/migrations/speedtest-brick.webp';
+// Blocks per browser request pair: a batch is downloaded in one request and uploaded in one,
+// so the test stays far below what a shared host's firewall counts as a flood.
+export const SPEEDTEST_BATCH = 8;
 
 /**
  * Both executors convert the same synthetic test block (dataset_migrations.speedtest) at the
- * same time for `seconds`: the browser through its worker pool (download, decode, encode,
- * upload, at the pool's concurrency like a real job), the server in bounded requests back to
- * back (one at a time, like unit_run). A block counts when it ends inside the window. Resolves
+ * same time for `seconds`: the browser through its worker pool (batches of SPEEDTEST_BATCH:
+ * one download, decode + encode, one upload — the pool's concurrency and the page's network
+ * governor, like a real job), the server in bounded requests back to back (one at a time, like
+ * unit_run). Each side's throughput is its blocks over the time of its last completed batch /
+ * call (`seconds` of the side), so a batch cut by the deadline does not bias it. A browser that
+ * finishes no batch inside the window gets one more window for its first. Resolves
  *   { seconds, browser: side, server: side }
- *   side = { blocks, bytesIn, bytesOut, error, code, detail }   (error 'skipped' = not asked)
+ *   side = { blocks, seconds, bytesIn, bytesOut, error, code, detail }   (error 'skipped' = not asked)
  * `onTick({ elapsed, browser, server })` follows the run. One side failing leaves the other
  * running.
  */
-export async function runSpeedtest({ pool, api, sampleUrl, seconds = SPEEDTEST_SECONDS, onTick,
+export async function runSpeedtest({ pool, api, seconds = SPEEDTEST_SECONDS, onTick,
   browser = true, server = true, now = () => performance.now() / 1000 }) {
   const t0 = now();
   const deadline = t0 + seconds;
-  const side = () => ({ blocks: 0, bytesIn: 0, bytesOut: 0, error: null, code: null, detail: null, running: true });
+  const side = () => ({ blocks: 0, seconds: 0, bytesIn: 0, bytesOut: 0, error: null, code: null, detail: null, running: true });
   const res = { seconds, browser: side(), server: side() };
   const tick = () => {
     try { onTick?.({ elapsed: Math.min(seconds, now() - t0), browser: res.browser, server: res.server }); } catch (_) { /* view only */ }
@@ -766,11 +935,16 @@ export async function runSpeedtest({ pool, api, sampleUrl, seconds = SPEEDTEST_S
     const b = res.browser;
     if (!browser || !pool) { b.error = 'skipped'; return; }
     let failed = false;
+    let closesAt = deadline;
     const lane = async () => {
       while (!failed && now() < deadline) {
-        const r = await pool.speedtestBlock(sampleUrl);
+        const r = await pool.speedtestBlock(SPEEDTEST_BATCH);
         if (r && r.ok) {
-          if (now() <= deadline) { b.blocks++; b.bytesIn += r.bytesIn || 0; b.bytesOut += r.bytesOut || 0; }
+          const t = now();
+          if (t <= closesAt) {
+            b.blocks += r.blocks || 1; b.bytesIn += r.bytesIn || 0; b.bytesOut += r.bytesOut || 0;
+            b.seconds = t - t0;
+          }
           continue;
         }
         if (r && r.aborted) return;
@@ -780,8 +954,11 @@ export async function runSpeedtest({ pool, api, sampleUrl, seconds = SPEEDTEST_S
       }
     };
     const lanes = Promise.all(Array.from({ length: Math.max(1, pool.capacity || 1) }, lane));
-    // The window closes on the deadline, not on the slowest block still in flight.
-    await Promise.race([lanes, new Promise((r) => setTimeout(r, Math.max(0, (deadline - now()) * 1000) + 50))]);
+    const until = (at) => Promise.race([lanes, new Promise((r) => setTimeout(r, Math.max(0, (at - now()) * 1000) + 50))]);
+    // The window closes on the deadline, not on the slowest batch still in flight — unless
+    // nothing finished yet (a slow link): then the first batches get one more window.
+    await until(deadline);
+    if (!b.blocks && !failed) { closesAt = deadline + seconds; await until(closesAt); }
     pool.terminate();
     await lanes;
   };
@@ -801,6 +978,7 @@ export async function runSpeedtest({ pool, api, sampleUrl, seconds = SPEEDTEST_S
       s.blocks += Number(d.blocks) || 0;
       s.bytesIn += Number(d.bytesRead) || 0;
       s.bytesOut += Number(d.bytesWritten) || 0;
+      s.seconds = now() - t0;
       tick();
     }
   };
@@ -818,13 +996,14 @@ export async function runSpeedtest({ pool, api, sampleUrl, seconds = SPEEDTEST_S
 }
 
 /**
- * Scores of a speed test: blocks per second × 10, rounded (over the 5 s window a score is the
- * block count doubled); null for a side that could not run. `winner` = the higher score
- * ('browser' | 'server' | null on a tie or when neither ran), `ratio` = how many times faster.
+ * Scores of a speed test: blocks per second × 10, rounded, over each side's own `seconds`
+ * (the window's when a side has none); null for a side that could not run. `winner` = the
+ * higher score ('browser' | 'server' | null on a tie or when neither ran), `ratio` = how many
+ * times faster.
  */
 export function speedtestScores(res) {
-  const sec = res && res.seconds > 0 ? res.seconds : SPEEDTEST_SECONDS;
-  const score = (x) => (x && !x.error ? Math.round((10 * x.blocks) / sec) : null);
+  const win = res && res.seconds > 0 ? res.seconds : SPEEDTEST_SECONDS;
+  const score = (x) => (x && !x.error ? Math.round((10 * x.blocks) / (x.seconds > 0 ? x.seconds : win)) : null);
   const b = score(res && res.browser);
   const s = score(res && res.server);
   let winner = null;

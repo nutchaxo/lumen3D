@@ -2024,7 +2024,7 @@
     "speedRunning": "Bezig met testen…",
     "speedAgain": "Opnieuw",
     "speedRun": "Test starten ({s} s)",
-    "speedIntro": "Beide uitvoerders zetten tegelijk hetzelfde testblok (een synthetische 64³-brick) om gedurende {s} seconden; de browser downloadt en uploadt het ook, zoals bij een echte update. De hoogste score zet het snelst om. Er wordt geen dataset gelezen of gewijzigd.",
+    "speedIntro": "Beide uitvoerders zetten tegelijk hetzelfde testblok (een synthetische 64³-brick) om gedurende {s} seconden; de browser downloadt en uploadt het ook in batches, zoals bij een echte update. De hoogste score zet het snelst om. Er wordt geen dataset gelezen of gewijzigd.",
     "speedBlocked": "Beschikbaar wanneer er geen update loopt.",
     "executor": "Uitvoerder",
     "stepNone": "geen uitvoerder",
@@ -2083,6 +2083,7 @@
     "updateAll": "Alles bijwerken",
     "loadFailed": "De updatestatus kon niet worden gelezen ({status}).",
     "network": "netwerk",
-    "recommended": "Snelste in de snelheidstest"
+    "recommended": "Snelste in de snelheidstest",
+    "paced": "De host antwoordt traag: verzoeken worden vertraagd zodat hij dit adres niet blokkeert."
   }
 }

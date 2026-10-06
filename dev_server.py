@@ -6588,9 +6588,10 @@ class AdminHandler(http.server.SimpleHTTPRequestHandler):
                 self._json(status, payload)
                 return
             upload_staging.ensure_dirs()   # asserts the deny-all guard of uploads/
-        elif action == "store_get" and self.command == "GET":
-            # One stored v3 brick of an m004 tile store, read back by the browser
-            # executor to reduce the next level. A read: session only, no CSRF.
+        elif action in dataset_migrations.BINARY_ACTIONS and self.command == "GET":
+            # A read, session only, no CSRF: one stored v3 brick of an m004 tile store
+            # (store_get, read back by the browser executor to reduce the next level), or
+            # the speed test's input batch (speedtest_sample).
             _migrations_bind()
             status, ctype, data = dataset_migrations.handle_binary(action, params)
             self.send_response(status)

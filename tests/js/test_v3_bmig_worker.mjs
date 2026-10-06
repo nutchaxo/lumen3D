@@ -3,10 +3,12 @@
 //     stamp, and answers the handler's verdict;
 //   • `prepare` reports the handler's `slotsPerWorker`;
 //   • an m004 level-0 unit range-reads the v2 packs and PUTs a brick blob; a level-1 unit reads
-//     each level-0 brick it needs back with GET `action=store_get&dataset&migration&brick=
-//     t.k.c.z.y.x` (404 `absent` = a dropped brick = zeros) and PUTs bricks equal to the
-//     reference reduction of the volume;
-//   • a refused `store_get` (409) is a fatal unit failure carrying the server's code.
+//     the level-0 bricks it needs back in ONE GET `action=store_get_many&dataset&migration&
+//     base=t.k.c&bricks=z.y.x,…` (length 0 = a dropped brick = zeros) and PUTs bricks equal to
+//     the reference reduction of the volume;
+//   • a server without store_get_many (400 unknown_action) is read one brick per GET
+//     `action=store_get` instead, with the same result;
+//   • a refused read (409) is a fatal unit failure carrying the server's code.
 //
 // Run: node tests/js/test_v3_bmig_worker.mjs
 import assert from 'node:assert/strict';
@@ -116,11 +118,28 @@ function parseBlob(u8) {
 
 const stored = new Map();   // level → [{bz,by,bx,bytes}]
 let refuseSource = false;
+let oldServer = false;
 const server = (req) => {
   if (req.url.endsWith('/metadata.json')) return json({ type: '3d' });
   if (req.url.endsWith('/bricks/manifest.json')) return json(manifest);
   if (req.url.includes('pack_00.bin')) { const [s, e] = rangeOf(req); return bytes(pack.subarray(s, e)); }
-  if (req.url.includes('action=store_get')) {
+  if (req.url.includes('action=store_get_many')) {
+    if (oldServer) return json({ error: 'unknown_action' }, 400);
+    if (refuseSource) return json({ ok: false, error: 'job_not_running' }, 409);
+    const q = new URL(req.url).searchParams;
+    assert.equal(q.get('dataset'), '3d/ds'); assert.equal(q.get('migration'), 'm004-bricks-v3');
+    const [, k] = /^t(\d+)\.k(\d+)\.c(\d+)$/.exec(q.get('base'));
+    const items = q.get('bricks').split(',').map((s) => s.split('.').map(Number));
+    const found = items.map(([z, y, x]) => (stored.get(+k) || []).find((b) => b.bz === z && b.by === y && b.bx === x));
+    const total = found.reduce((s, b) => s + (b ? b.bytes.length : 0), 0);
+    const out = new Uint8Array(4 + 4 * items.length + total);
+    const dv = new DataView(out.buffer);
+    dv.setUint32(0, items.length, true);
+    let at = 4 + 4 * items.length;
+    found.forEach((b, i) => { dv.setUint32(4 + 4 * i, b ? b.bytes.length : 0, true); if (b) { out.set(b.bytes, at); at += b.bytes.length; } });
+    return bytes(out, 200);
+  }
+  if (req.url.includes('action=store_get&')) {
     if (refuseSource) return json({ ok: false, error: 'job_not_running' }, 409);
     const q = new URL(req.url).searchParams;
     assert.equal(q.get('dataset'), '3d/ds'); assert.equal(q.get('migration'), 'm004-bricks-v3');
@@ -165,15 +184,19 @@ const r0 = await w.wait((m) => (m.type === 'unit_done' || m.type === 'unit_faile
 assert.equal(r0.type, 'unit_done', r0.error);
 assert.deepEqual(stored.get(0).map((b) => b.bx), [0, 1, 2, 3]);
 
-// level 1: one store_get per source brick
+// level 1: the source bricks in one store_get_many
 const lvl0 = stored.get(0);
 w.send({ type: 'run', reqId: 7, migration: 'm004-bricks-v3', dataset: '3d/ds', unit: 't0.k1.c0.z0.y0.x0' });
 const r1 = await w.wait((m) => (m.type === 'unit_done' || m.type === 'unit_failed') && m.reqId === 7);
 assert.equal(r1.type, 'unit_done', r1.error);
 const src = w.requests.filter((r) => r.url.includes('action=store_get'));
-assert.deepEqual(src.map((r) => new URL(r.url).searchParams.get('brick')).sort(), ['t0.k0.c0.z0.y0.x0', 't0.k0.c0.z0.y0.x1', 't0.k0.c0.z0.y0.x2', 't0.k0.c0.z0.y0.x3']);
-for (const r of src) assert.equal(r.method, 'GET');
+assert.equal(src.length, 1, 'one request for every source brick of the unit');
+assert.equal(src[0].method, 'GET');
+assert.equal(new URL(src[0].url).searchParams.get('base'), 't0.k0.c0');
+assert.ok(new URL(src[0].url).searchParams.get('bricks').split(',').length >= 4);
 assert.equal(r1.bytesIn, lvl0.reduce((s, b) => s + b.bytes.length, 0), 'bytesIn = the bytes of the bricks read');
+const pixelsOf = (list) => list.map((b) => Array.from(w.pictures.get(fakeWebpId(b.bytes)).rgba));
+const k1Batched = pixelsOf(stored.get(1));
 
 // reference: level 1 = 100 × 5 × 2 (isotropic default → Z halved)
 const X1 = 100, Y1 = 5, Z1 = 2;
@@ -197,7 +220,19 @@ for (const b of k1) {
   }
 }
 
-// a refused store_get is fatal with the server's code
+// a server older than store_get_many: one store_get per brick, same bricks
+stored.set(1, []);
+oldServer = true;
+const before = w.requests.length;
+w.send({ type: 'run', reqId: 9, migration: 'm004-bricks-v3', dataset: '3d/ds', unit: 't0.k1.c0.z0.y0.x0' });
+const r3 = await w.wait((m) => (m.type === 'unit_done' || m.type === 'unit_failed') && m.reqId === 9);
+assert.equal(r3.type, 'unit_done', r3.error);
+const single = w.requests.slice(before).filter((r) => r.url.includes('action=store_get&'));
+assert.ok(single.length >= 4, 'fallback: one store_get per brick');
+assert.deepEqual(pixelsOf(stored.get(1)), k1Batched, 'same bricks either way');
+oldServer = false;
+
+// a refused read is fatal with the server's code
 refuseSource = true;
 w.send({ type: 'run', reqId: 8, migration: 'm004-bricks-v3', dataset: '3d/ds', unit: 't0.k1.c0.z0.y0.x0' });
 const r2 = await w.wait((m) => (m.type === 'unit_done' || m.type === 'unit_failed') && m.reqId === 8);

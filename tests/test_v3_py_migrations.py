@@ -559,6 +559,24 @@ class Engine(unittest.TestCase):
         self.assertEqual((st, ctype, data), (200, "application/octet-stream", bricks[b]))
         self.assertEqual(dm.handle_binary("store_get", {"dataset": "3d/BR", "migration": M4,
                                                         "brick": "t0.k0.c0.z9.y9.x9"})[0], 404)
+        # store_get_many: the same bricks in one answer, 0 = not stored, request order kept
+        keys = list(bricks)[:2]
+        many = ",".join("%d.%d.%d" % k for k in keys) + ",9.9.9"
+        st, ctype, data = dm.handle_binary("store_get_many", {"dataset": "3d/BR", "migration": M4,
+                                                              "base": "t0.k0.c0", "bricks": many})
+        self.assertEqual((st, ctype), (200, "application/octet-stream"))
+        n = struct.unpack_from("<I", data)[0]
+        lens = struct.unpack_from("<%dI" % n, data, 4)
+        self.assertEqual(n, 3)
+        self.assertEqual(lens[2], 0)
+        at = 4 + 4 * n
+        for k, ln in zip(keys, lens):
+            self.assertEqual(data[at:at + ln], bricks[k])
+            at += ln
+        self.assertEqual(at, len(data))
+        for bad in ({"base": "t0.k0", "bricks": "0.0.0"}, {"base": "t0.k0.c0", "bricks": ""},
+                    {"base": "t0.k0.c0", "bricks": ",".join(["0.0.0"] * 129)}, {"base": "t0.k0.c0", "bricks": "0.0"}):
+            self.assertEqual(dm.handle_binary("store_get_many", {"dataset": "3d/BR", "migration": M4, **bad})[0], 400, bad)
         # the server takes over (executor switch), level by level
         run_job(self, "3d/BR", M4)
         verify_v3(self, ds, truth, voxel)

@@ -12,7 +12,9 @@
  *
  * The executor is chosen PER DATASET, before it starts, and is fixed while it runs. Each
  * executor has its own queue (a `Runner` lane), so a dataset given to the browser and another
- * given to the server are converted at the same time. A step the chosen executor cannot run
+ * given to the server are converted at the same time. Every browser-run step, whichever lane
+ * it belongs to, goes through ONE worker pool: this browser's share of the host's connections
+ * and of its own memory is fixed, however many lanes run. A step the chosen executor cannot run
  * (the server says so per migration in `status.server.migrations`, the browser by the
  * handler's probe) goes to the other one, inside the same lane: a dataset's steps stay in order.
  *
@@ -33,7 +35,7 @@
 import { Utils, I18n, t as _t, escHtml, apiFetchStatus, getCsrf, toast, el, refreshIcons, storageGet, storageSet } from './shared.js';
 import {
   API_MIGRATIONS, createApi, Runner, WorkerPool, buildQueue, migrationChain, remainingUnits, serverCapability,
-  runSpeedtest, speedtestScores, SPEEDTEST_SECONDS, SPEEDTEST_SAMPLE,
+  runSpeedtest, speedtestScores, SPEEDTEST_SECONDS, netGovernor,
 } from './migration-runner.js';
 
 const V = (() => { try { return new URL(import.meta.url).search; } catch (_) { return ''; } })();
@@ -53,14 +55,20 @@ function t(key, def, params) {
   return params ? String(s).replace(/\{(\w+)\}/g, (m, k) => (k in params ? String(params[k]) : m)) : s;
 }
 
-const api = createApi((url, init) => apiFetchStatus(url, init));
+// Every request of this tab (status, plan, unit_run…) and of its workers shares the page's
+// network governor: a bounded number in flight and per second, slowed down when the host
+// stops answering, so the operator's address is never taken for a flood.
+const api = createApi((url, init) => netGovernor.run(() => apiFetchStatus(url, init)));
+netGovernor.onChange = () => schedulePaint();
 
 let _status = null;
 let _loading = false;
 let _loadError = null;
 const _lanes = { browser: null, server: null };   // Runner per executor
 const _progress = new Map();                       // dataset id → last progress event
-let _online = true;
+// Sources (the shared pool, each lane's API calls) currently waiting for the link.
+const _offline = new Set();
+let _pool = null;
 let _dsExec = null;
 const _browserCaps = {};                           // migration → { available, reasons } | { pending: true }
 let _speed = { running: false, elapsed: 0, live: null, result: null };
@@ -262,16 +270,30 @@ function poolOptions(extra) {
     endpoint: absUrl(API_MIGRATIONS),
     csrf: () => getCsrf(),
     spawn: () => new Worker(absUrl(`js/workers/migration-worker.js${V}`)),
-    onNet: (online) => { _online = online; schedulePaint(); },
+    governor: netGovernor,
+    onNet: (online) => setOnline('pool', online),
     ...(extra || {}),
   };
+}
+
+function setOnline(source, online) {
+  const was = _offline.size === 0;
+  if (online) _offline.delete(source); else _offline.add(source);
+  if ((_offline.size === 0) !== was) schedulePaint();
+}
+function isOnline() { return _offline.size === 0; }
+
+/** The browser executor's pool, shared by both lanes (a server-lane step the server cannot run lands here too). */
+function sharedPool() {
+  if (!_pool || _pool.dead) _pool = new WorkerPool(poolOptions());
+  return _pool;
 }
 
 function lane(x) {
   if (!_lanes[x]) {
     _lanes[x] = new Runner({
       api,
-      pool: () => new WorkerPool(poolOptions()),
+      pool: sharedPool,
       datasetBase,
       onEvent: (e) => onLaneEvent(x, e),
       executorFor: (mid) => stepExec(x, mid),
@@ -289,7 +311,7 @@ function anyActive() { return isRunning() || isPaused(); }
 function probeBrowser() {
   const todo = registry().filter((m) => !_browserCaps[m.id]);
   if (!todo.length) return;
-  const pool = new WorkerPool(poolOptions({ workers: 1 }));
+  const pool = new WorkerPool(poolOptions({ workers: 1, onNet: (online) => setOnline('probe', online) }));
   const runs = todo.map((m) => {
     _browserCaps[m.id] = { pending: true };
     let p;
@@ -302,7 +324,7 @@ function probeBrowser() {
 
 function onLaneEvent(x, e) {
   if (e.type === 'progress') { _progress.set(e.dataset, e); schedulePaint(); return; }
-  if (e.type === 'net') { _online = !!e.online; schedulePaint(); return; }
+  if (e.type === 'net') { setOnline(`lane:${x}`, !!e.online); return; }
   if (e.type === 'job_done') {
     pushLog({ ok: true, dataset: e.dataset, name: nameOf(e.dataset), migration: e.migration, executor: e.executor, seconds: e.seconds, units: e.units, formatVersion: e.formatVersion });
     _progress.delete(e.dataset);
@@ -430,11 +452,11 @@ async function runSpeed() {
   const serverCap = serverCapability(_status.server, SPEEDTEST_SERVER_MIGRATION);
   _speed = { running: true, elapsed: 0, live: null, result: speedResult() || false };
   paint();
-  const pool = new WorkerPool(poolOptions());
+  const pool = new WorkerPool(poolOptions({ onNet: (online) => setOnline('speedtest', online) }));
   let res;
   try {
     res = await runSpeedtest({
-      pool, api, sampleUrl: absUrl(SPEEDTEST_SAMPLE + V), seconds: SPEEDTEST_SECONDS, server: serverCap.available,
+      pool, api, seconds: SPEEDTEST_SECONDS, server: serverCap.available,
       onTick: (s) => { _speed.elapsed = s.elapsed; _speed.live = s; paintSpeed(); },
     });
   } catch (err) {
@@ -445,7 +467,7 @@ async function runSpeed() {
   }
   if (res) {
     if (!serverCap.available) { res.server.code = 'server_unavailable'; res.server.detail = (serverCap.reasons || []).join(','); }
-    const side = (s) => ({ blocks: s.blocks, bytesIn: s.bytesIn, bytesOut: s.bytesOut, error: s.error, code: s.code, detail: s.detail });
+    const side = (s) => ({ blocks: s.blocks, seconds: s.seconds, bytesIn: s.bytesIn, bytesOut: s.bytesOut, error: s.error, code: s.code, detail: s.detail });
     _speed.result = { at: new Date().toISOString(), seconds: res.seconds, browser: side(res.browser), server: side(res.server), scores: speedtestScores(res) };
     storageSet(SPEED_KEY, JSON.stringify(_speed.result));
   }
@@ -512,7 +534,10 @@ function speedCard() {
   const sides = {};
   for (const x of EXECS) {
     const s = live ? live[x] : r ? r[x] : null;
-    const score = s && !s.error ? Math.round((10 * s.blocks) / SPEEDTEST_SECONDS) : null;
+    // Live: the count so far; done: the measured throughput (speedtestScores).
+    const score = !s || s.error ? null
+      : live ? Math.round((10 * s.blocks) / SPEEDTEST_SECONDS)
+        : r && r.scores && r.scores[x] !== null && r.scores[x] !== undefined ? r.scores[x] : Math.round((10 * s.blocks) / SPEEDTEST_SECONDS);
     sides[x] = { s, score };
   }
   // The server side cannot even start without WebP decode + zlib: say why instead of 0.
@@ -526,7 +551,7 @@ function speedCard() {
     const off = !!err;
     const sub = err
       ? err
-      : s ? t('dupd.speedBlocks', '{n} blocks in {s} s', { n: s.blocks, s: SPEEDTEST_SECONDS })
+      : s ? t('dupd.speedBlocks', '{n} blocks in {s} s', { n: s.blocks, s: fmtNum(live || !(s.seconds > 0) ? SPEEDTEST_SECONDS : s.seconds, 1) })
         : t('dupd.speedNotRun', 'not tested yet');
     const pct = score !== null ? (100 * score) / top : 0;
     const win = winner === x;
@@ -557,7 +582,7 @@ function speedCard() {
         ${_speed.running ? '<span class="spinner spinner-sm"></span>' : '<i data-lucide="play"></i>'}
         ${escHtml(_speed.running ? t('dupd.speedRunning', 'Testing…') : r ? t('dupd.speedAgain', 'Run again') : t('dupd.speedRun', 'Run the test ({s} s)', { s: SPEEDTEST_SECONDS }))}</button></div>
     <div class="adm-card-body">
-      <p class="adm-muted dupd-small dupd-speed-intro">${escHtml(t('dupd.speedIntro', 'Both executors convert the same test block (a synthetic 64³ brick) for {s} seconds at the same time; the browser also downloads and uploads it, as it would in a real update. The higher score converts faster. No dataset is read or modified.', { s: SPEEDTEST_SECONDS }))}</p>
+      <p class="adm-muted dupd-small dupd-speed-intro">${escHtml(t('dupd.speedIntro', 'Both executors convert the same test block (a synthetic 64³ brick) for {s} seconds at the same time; the browser also downloads and uploads it, in batches, as it would in a real update. The higher score converts faster. No dataset is read or modified.', { s: SPEEDTEST_SECONDS }))}</p>
       <div class="dupd-races">${rows}</div>
       ${verdict}
       ${blocked && !_speed.running ? `<p class="adm-muted dupd-small">${escHtml(t('dupd.speedBlocked', 'Available when no update is running.'))}</p>` : ''}
@@ -682,7 +707,7 @@ function datasetRow(ds) {
 }
 
 function laneStrip() {
-  if (!anyActive()) return _online ? '' : `<p class="adm-warn dupd-small dupd-note"><i data-lucide="wifi-off"></i>${escHtml(t('dupd.offline', 'Connection lost — waiting for the network, nothing is lost.'))}</p>`;
+  if (!anyActive()) return isOnline() ? '' : `<p class="adm-warn dupd-small dupd-note"><i data-lucide="wifi-off"></i>${escHtml(t('dupd.offline', 'Connection lost — waiting for the network, nothing is lost.'))}</p>`;
   const pills = EXECS.map((x) => {
     const r = _lanes[x];
     const st = laneState(x);
@@ -693,8 +718,11 @@ function laneStrip() {
         : t('dupd.laneIdle', 'idle');
     return `<span class="dupd-lane is-${st === 'pausing' ? 'running' : st}"><i data-lucide="${execIcon(x)}"></i><b>${escHtml(execName(x))}</b><span>${escHtml(text)}</span></span>`;
   }).join('');
-  return `<div class="dupd-lanes">${pills}</div>
-    ${_online ? '' : `<p class="adm-warn dupd-small dupd-note"><i data-lucide="wifi-off"></i>${escHtml(t('dupd.offline', 'Connection lost — waiting for the network, nothing is lost.'))}</p>`}
+  const paced = netGovernor.holding
+    ? `<p class="adm-muted dupd-small dupd-note"><i data-lucide="timer"></i>${escHtml(t('dupd.paced', 'The host is answering slowly: requests are paced down so that it does not block this address.'))}</p>`
+    : '';
+  return `<div class="dupd-lanes">${pills}</div>${paced}
+    ${isOnline() ? '' : `<p class="adm-warn dupd-small dupd-note"><i data-lucide="wifi-off"></i>${escHtml(t('dupd.offline', 'Connection lost — waiting for the network, nothing is lost.'))}</p>`}
     ${isRunning() ? `<p class="adm-muted dupd-small dupd-note"><i data-lucide="info"></i>${escHtml(t('dupd.keepOpen', 'Keep this tab open: closing it or leaving it pauses the updates.'))}</p>` : ''}`;
 }
 

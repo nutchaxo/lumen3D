@@ -133,7 +133,9 @@ JSON answers. Session lock released after authentication (cf. `session_write_clo
 | `cancel` | POST | `{ dataset, migration }` | deletes journal + tile store |
 | `bench` | POST | `{ dataset, units: N (≤ 8) }` | server executor on N sample units (dry: tiles discarded) → `{ seconds, units, bytesRead, bytesWritten }` |
 | `speedtest` | POST | `{ maxSeconds (≤ 3) }` | server side of the speed test (§7): test blocks back to back until the next one would end past `maxSeconds` (≥ 1 block) → `{ blocks, seconds, bytesRead, bytesWritten }`; needs m002's capability (409 `server_unavailable` otherwise) |
-| `speedtest_put` | POST (binary) | body = one converted test block (≤ 4 MiB) | `{ ok, bytes }` — read and dropped |
+| `speedtest_put` | POST (binary) | body = one converted test batch (≤ 4 MiB) | `{ ok, bytes }` — read and dropped |
+| `speedtest_sample` | GET (binary answer) | query `n` (1..8) | the test brick repeated n times (one download per browser batch) |
+| `store_get_many` | GET (binary answer) | query `dataset, migration=m004-bricks-v3, base=t{t}.k{k}.c{c}, bricks=z.y.x,…` (≤ 128) | `uint32 LE count`, `count × uint32 LE length` (0 = not stored, interior zero), then the bricks in request order — replaces one `store_get` per brick (web 1.59.2) |
 
 `server.available` is false with reason codes when the server executor cannot run:
 `no_webp_decode` (PHP: `imagecreatefromwebp` missing or fails on a lossless sample; Python:
@@ -185,14 +187,16 @@ at the same time for **5 seconds**, and the one that converted more blocks wins.
   64³ brick, encode its voxels as one 512² `png-gray8` tile. The input is the fixed file
   `js/migrations/speedtest-brick.webp` shipped with the platform (Gaussian blobs over Poisson
   shot noise, like a confocal stack; ~128 KiB).
-* Browser: the worker pool at its normal concurrency (workers × slots); each block downloads the
-  file (`cache: no-store`), decodes and encodes it in a worker and uploads the tile to
-  `speedtest_put` — the transfers a real browser unit makes. A block counts when it ends inside
-  the window; the pool is terminated at the deadline.
+* Browser: the worker pool at its normal concurrency (workers × slots), in batches of 8 blocks:
+  one `speedtest_sample?n=8` download, decode + encode of each block in a worker, one upload of
+  the 8 tiles to `speedtest_put` — the bytes a real browser unit moves, in two requests per batch,
+  under the network governor (§7.2). A batch counts when it ends inside the window (a browser
+  that finishes none gets one more window); the pool is terminated at the deadline.
 * Server: `speedtest` calls of ≤ 1 s back to back until the window ends (one request at a time,
   like `unit_run`).
-* Score = blocks per second × 10 (over 5 s: the block count doubled). The winner is the default
-  executor of every dataset the operator has not set. The `bench` action is kept for tools.
+* Score = blocks per second × 10, each side over the time of its last completed batch / call.
+  The winner is the default executor of every dataset the operator has not set. The `bench`
+  action is kept for tools.
 
 ## 7.1 Executor per dataset
 
@@ -202,6 +206,21 @@ executor has its own queue (a `Runner` lane): datasets given to different execut
 converted in parallel; datasets on the same executor one after another. A step the chosen
 executor cannot run (capabilities §13.5) runs on the other one within the same lane, so a
 dataset's steps stay in order. The choice is locked while the dataset is queued or running.
+
+## 7.2 Network governor (web 1.59.2)
+
+A shared host's firewall bans an address that opens too many connections or sends too many
+requests per second (web 1.59.1 got the operator's address banned: two worker pools, one
+`store_get` per stored brick, an unbounded speed test). Every request of the tab — its API calls
+and every worker fetch, of every pool — goes through ONE governor per page
+(`migration-runner.js` `NetGovernor` / `netGovernor`; workers ask for a turn with `net_acquire`,
+get `net_grant`, and return it with `net_release { outcome }` once the body is read):
+* at most 6 requests in flight, a token bucket of 6 starting at 10 requests/s, never above 16/s;
+* a request without HTTP answer, a 429 or a 503 halves the rate (floor 0.5/s) and holds every
+  new request for a cooldown (5 s, doubling to 60 s while failures go on); each answer raises the
+  rate by 0.2/s. The tab says when requests are being held.
+Measured on the synthetic pair of the tests (3 400 requests): 8 requests/s on average, 20 in the
+busiest second, against well over 40/s and tens of connections without it.
 
 ## 8. Reader (viewer / Studio)
 

@@ -244,6 +244,11 @@ try {
         && $st['bytesWritten'] > 0 && $st['seconds'] < 2.0, json_encode($st));
     [$c, $st] = api('speedtest', ['maxSeconds' => 99]);
     check('speedtest: budget capped at 3 s', $c === 200 && $st['seconds'] < 4.0, json_encode($st));
+    $sampleBytes = (string)file_get_contents(__DIR__ . '/../js/migrations/speedtest-brick.webp');
+    [$c, $ct, $batch] = lumen_mig_handle_binary('speedtest_sample', ['n' => '3']);
+    check('speedtest_sample: the test brick repeated n times', $c === 200 && $ct === 'application/octet-stream' && $batch === str_repeat($sampleBytes, 3));
+    [$c, , $batch] = lumen_mig_handle_binary('speedtest_sample', ['n' => '99']);
+    check('speedtest_sample: batch capped at 8', $c === 200 && strlen($batch) === 8 * strlen($sampleBytes));
     [$c, $sp] = api('speedtest_put', [], [], str_repeat("", 5000));
     check('speedtest_put: counts and drops the body', $c === 200 && $sp === ['ok' => true, 'bytes' => 5000]);
     [$c, $sp] = api('speedtest_put', [], [], str_repeat("", LUMEN_MIG_SPEEDTEST_PUT_MAX + 1));

@@ -137,6 +137,8 @@ function fakePool(api, capacity = 3) {
     api, pool: () => pool, datasetBase: () => 'http://h/', onEvent: (e) => events.push(e),
     executorFor: (mid) => exec[mid],
     estimateStep: (ds, mid) => ({ 'm003-layer-mips': 30, 'm004-bricks-v3': 100 })[mid] ?? null,
+    // A clock that always moves: the rate must not depend on two units landing in one millisecond.
+    now: (() => { let t = 0; return () => (t += 0.01); })(),
   });
   const ds = { id: '3d/a', type: '3d', formatVersion: 1, pending: ['m004-bricks-v3', 'm002-planes', 'm003-layer-mips'] };
   r.enqueue(buildQueue([ds], REG));
@@ -317,6 +319,44 @@ function fakePool(api, capacity = 3) {
   await pool.probe('m004-bricks-v3');
   assert.equal(probes, 2, 'probed once per migration');
   pool.terminate();
+}
+
+// ── one pool for every lane: network state aggregated, aborts scoped to a dataset ──
+{
+  const workers = [];
+  const spawn = () => {
+    const w = { posted: [], postMessage(m) { this.posted.push(m); }, terminate() {} };
+    workers.push(w);
+    return w;
+  };
+  const net = [];
+  const pool = new WorkerPool({ spawn, workers: 2, slots: 2, endpoint: 'x', csrf: () => null, onNet: (o) => net.push(o) });
+  pool._ensure();
+  const [a, b] = pool.workers;
+  a.w.onmessage({ data: { type: 'net', online: false } });
+  b.w.onmessage({ data: { type: 'net', online: false } });
+  a.w.onmessage({ data: { type: 'net', online: true } });
+  assert.deepEqual(net, [false], 'still offline while one worker waits');
+  b.w.onmessage({ data: { type: 'net', online: true } });
+  assert.deepEqual(net, [false, true], 'online once no worker waits');
+  b.w.onmessage({ data: { type: 'net', online: false } });
+  pool.terminate();
+  assert.deepEqual(net, [false, true, false, true], 'terminating clears a pending offline state');
+
+  const pool2 = new WorkerPool({ spawn, workers: 1, slots: 4, endpoint: 'x', csrf: () => null });
+  pool2._ensure();
+  const w = pool2.workers[0].w;
+  pool2.runUnit('3d/a', 'm002-planes', 'u1');
+  pool2.runUnit('3d/b', 'm002-planes', 'u2');
+  await new Promise((r) => setTimeout(r, 5));
+  const runs = w.posted.filter((m) => m.type === 'run');
+  w.posted.length = 0;
+  pool2.abortAll('3d/b');
+  assert.deepEqual(w.posted, [{ type: 'abort', reqId: runs.find((m) => m.dataset === '3d/b').reqId }], 'only the unit of that dataset is aborted');
+  w.posted.length = 0;
+  pool2.abortAll();
+  assert.deepEqual(w.posted, [{ type: 'abort' }], 'no dataset: every unit');
+  pool2.terminate();
 }
 
 // ── speed test ──

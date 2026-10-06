@@ -12,7 +12,9 @@
  *
  * The executor is chosen PER DATASET, before it starts, and is fixed while it runs. Each
  * executor has its own queue (a `Runner` lane), so a dataset given to the browser and another
- * given to the server are converted at the same time. A step the chosen executor cannot run
+ * given to the server are converted at the same time. Every browser-run step, whichever lane
+ * it belongs to, goes through ONE worker pool: this browser's share of the host's connections
+ * and of its own memory is fixed, however many lanes run. A step the chosen executor cannot run
  * (the server says so per migration in `status.server.migrations`, the browser by the
  * handler's probe) goes to the other one, inside the same lane: a dataset's steps stay in order.
  *
@@ -60,7 +62,9 @@ let _loading = false;
 let _loadError = null;
 const _lanes = { browser: null, server: null };   // Runner per executor
 const _progress = new Map();                       // dataset id → last progress event
-let _online = true;
+// Sources (the shared pool, each lane's API calls) currently waiting for the link.
+const _offline = new Set();
+let _pool = null;
 let _dsExec = null;
 const _browserCaps = {};                           // migration → { available, reasons } | { pending: true }
 let _speed = { running: false, elapsed: 0, live: null, result: null };
@@ -262,16 +266,29 @@ function poolOptions(extra) {
     endpoint: absUrl(API_MIGRATIONS),
     csrf: () => getCsrf(),
     spawn: () => new Worker(absUrl(`js/workers/migration-worker.js${V}`)),
-    onNet: (online) => { _online = online; schedulePaint(); },
+    onNet: (online) => setOnline('pool', online),
     ...(extra || {}),
   };
+}
+
+function setOnline(source, online) {
+  const was = _offline.size === 0;
+  if (online) _offline.delete(source); else _offline.add(source);
+  if ((_offline.size === 0) !== was) schedulePaint();
+}
+function isOnline() { return _offline.size === 0; }
+
+/** The browser executor's pool, shared by both lanes (a server-lane step the server cannot run lands here too). */
+function sharedPool() {
+  if (!_pool || _pool.dead) _pool = new WorkerPool(poolOptions());
+  return _pool;
 }
 
 function lane(x) {
   if (!_lanes[x]) {
     _lanes[x] = new Runner({
       api,
-      pool: () => new WorkerPool(poolOptions()),
+      pool: sharedPool,
       datasetBase,
       onEvent: (e) => onLaneEvent(x, e),
       executorFor: (mid) => stepExec(x, mid),
@@ -289,7 +306,7 @@ function anyActive() { return isRunning() || isPaused(); }
 function probeBrowser() {
   const todo = registry().filter((m) => !_browserCaps[m.id]);
   if (!todo.length) return;
-  const pool = new WorkerPool(poolOptions({ workers: 1 }));
+  const pool = new WorkerPool(poolOptions({ workers: 1, onNet: (online) => setOnline('probe', online) }));
   const runs = todo.map((m) => {
     _browserCaps[m.id] = { pending: true };
     let p;
@@ -302,7 +319,7 @@ function probeBrowser() {
 
 function onLaneEvent(x, e) {
   if (e.type === 'progress') { _progress.set(e.dataset, e); schedulePaint(); return; }
-  if (e.type === 'net') { _online = !!e.online; schedulePaint(); return; }
+  if (e.type === 'net') { setOnline(`lane:${x}`, !!e.online); return; }
   if (e.type === 'job_done') {
     pushLog({ ok: true, dataset: e.dataset, name: nameOf(e.dataset), migration: e.migration, executor: e.executor, seconds: e.seconds, units: e.units, formatVersion: e.formatVersion });
     _progress.delete(e.dataset);
@@ -430,7 +447,7 @@ async function runSpeed() {
   const serverCap = serverCapability(_status.server, SPEEDTEST_SERVER_MIGRATION);
   _speed = { running: true, elapsed: 0, live: null, result: speedResult() || false };
   paint();
-  const pool = new WorkerPool(poolOptions());
+  const pool = new WorkerPool(poolOptions({ onNet: (online) => setOnline('speedtest', online) }));
   let res;
   try {
     res = await runSpeedtest({
@@ -682,7 +699,7 @@ function datasetRow(ds) {
 }
 
 function laneStrip() {
-  if (!anyActive()) return _online ? '' : `<p class="adm-warn dupd-small dupd-note"><i data-lucide="wifi-off"></i>${escHtml(t('dupd.offline', 'Connection lost — waiting for the network, nothing is lost.'))}</p>`;
+  if (!anyActive()) return isOnline() ? '' : `<p class="adm-warn dupd-small dupd-note"><i data-lucide="wifi-off"></i>${escHtml(t('dupd.offline', 'Connection lost — waiting for the network, nothing is lost.'))}</p>`;
   const pills = EXECS.map((x) => {
     const r = _lanes[x];
     const st = laneState(x);
@@ -694,7 +711,7 @@ function laneStrip() {
     return `<span class="dupd-lane is-${st === 'pausing' ? 'running' : st}"><i data-lucide="${execIcon(x)}"></i><b>${escHtml(execName(x))}</b><span>${escHtml(text)}</span></span>`;
   }).join('');
   return `<div class="dupd-lanes">${pills}</div>
-    ${_online ? '' : `<p class="adm-warn dupd-small dupd-note"><i data-lucide="wifi-off"></i>${escHtml(t('dupd.offline', 'Connection lost — waiting for the network, nothing is lost.'))}</p>`}
+    ${isOnline() ? '' : `<p class="adm-warn dupd-small dupd-note"><i data-lucide="wifi-off"></i>${escHtml(t('dupd.offline', 'Connection lost — waiting for the network, nothing is lost.'))}</p>`}
     ${isRunning() ? `<p class="adm-muted dupd-small dupd-note"><i data-lucide="info"></i>${escHtml(t('dupd.keepOpen', 'Keep this tab open: closing it or leaving it pauses the updates.'))}</p>` : ''}`;
 }
 

@@ -226,6 +226,7 @@ export class WorkerPool {
     this.bases = new Map();     // `${migration}|${dataset}` → datasetBase, to prepare a replacement worker
     this.hints = new Map();     // migration → slots per worker its handler asks for
     this.probes = new Map();    // migration → Promise<{ available, reasons }>
+    this.offline = new Set();   // workers whose units are waiting for the link
     this.dead = false;
   }
 
@@ -262,7 +263,7 @@ export class WorkerPool {
   }
 
   _onMessage(slot, msg) {
-    if (msg.type === 'net') { this.o.onNet?.(!!msg.online); return; }
+    if (msg.type === 'net') { this._setOffline(slot, !msg.online); return; }
     const p = this.pending.get(msg.reqId);
     if (!p) return;
     this.pending.delete(msg.reqId);
@@ -270,8 +271,17 @@ export class WorkerPool {
     p.resolve(msg);
   }
 
+  /** The pool is offline while ANY of its workers waits for the link; one report per change. */
+  _setOffline(slot, off) {
+    const was = this.offline.size > 0;
+    if (off) this.offline.add(slot); else this.offline.delete(slot);
+    const now = this.offline.size > 0;
+    if (now !== was) this.o.onNet?.(!now);
+  }
+
   _onCrash(slot, e) {
     // A dead worker fails its units (they are retried by the executor) and is replaced.
+    this._setOffline(slot, false);
     const idx = this.workers.indexOf(slot);
     if (idx >= 0) this.workers.splice(idx, 1);
     try { slot.w.terminate(); } catch (_) { /* gone */ }
@@ -292,7 +302,7 @@ export class WorkerPool {
   _send(slot, msg, unit) {
     const reqId = ++this.seq;
     return new Promise((resolve) => {
-      this.pending.set(reqId, { resolve, slot, unit });
+      this.pending.set(reqId, { resolve, slot, unit, dataset: msg.dataset });
       slot.w.postMessage({ ...msg, reqId });
     });
   }
@@ -363,10 +373,20 @@ export class WorkerPool {
     }
   }
 
-  abortAll() { for (const s of this.workers) s.w.postMessage({ type: 'abort' }); }
+  /**
+   * Aborts the units in flight: every one, or only `dataset`'s — one pool serves every lane of
+   * the tab, and pausing one dataset must not abort another dataset's units.
+   */
+  abortAll(dataset) {
+    if (dataset === undefined) { for (const s of this.workers) s.w.postMessage({ type: 'abort' }); return; }
+    for (const [reqId, p] of this.pending) {
+      if (p.unit && p.dataset === dataset) p.slot.w.postMessage({ type: 'abort', reqId });
+    }
+  }
 
   terminate() {
     this.dead = true;
+    if (this.offline.size) { this.offline.clear(); this.o.onNet?.(true); }
     for (const s of this.workers) { try { s.w.terminate(); } catch (_) { /* gone */ } }
     this.workers = [];
     for (const p of this.pending.values()) {
@@ -487,7 +507,8 @@ export class Runner {
   /** Pause now: units in flight are abandoned (their tiles may land; a retried unit is harmless). */
   pauseNow(reason = null) {
     this.pause(reason);
-    try { this._pool?.abortAll(); } catch (_) { /* no pool */ }
+    // The pool may be shared with other runners: abort this runner's dataset only.
+    try { if (this.current) this._pool?.abortAll(this.current.dataset); } catch (_) { /* no pool */ }
   }
 
   resume() {

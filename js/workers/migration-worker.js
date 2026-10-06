@@ -82,9 +82,20 @@ function httpError(status, code, message) {
 
 // The link being down costs time, never attempts: wait for `online` or for any HTTP
 // answer to a cheap probe, with a growing delay, as long as the unit is not aborted.
-let _offline = false;
+// Units waiting for the link: `offline` when the first one starts waiting, `online` when the
+// last one leaves — on success AND on abort, or a unit paused mid-wait would leave the page
+// announcing a lost connection while every later request goes through.
+let _waiting = 0;
 async function waitForLink(signal) {
-  if (!_offline) { _offline = true; post({ type: 'net', online: false }); }
+  if (_waiting++ === 0) post({ type: 'net', online: false });
+  try {
+    await _waitForLink(signal);
+  } finally {
+    if (--_waiting === 0) post({ type: 'net', online: true });
+  }
+}
+
+async function _waitForLink(signal) {
   let delay = 2000;
   for (;;) {
     let onOnline = null;
@@ -106,7 +117,6 @@ async function waitForLink(signal) {
       delay = Math.min(15000, Math.round(delay * 1.6));
     }
   }
-  if (_offline) { _offline = false; post({ type: 'net', online: true }); }
 }
 
 /** `attemptFn()` resolves a value or throws; network failures wait, server failures back off. */

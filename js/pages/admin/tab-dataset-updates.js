@@ -44,7 +44,8 @@ const EXECS = ['browser', 'server'];
 const DS_EXEC_KEY = 'lumen-dupd-ds-executor';   // { datasetId: 'browser' | 'server' }
 const SPEED_KEY = 'lumen-dupd-speedtest';       // the last speed test
 const LOG_KEY = 'lumen-dupd-log';
-const LOG_MAX = 20;
+// Two entries per dataset (one per step): a whole catalogue must fit, or the count stops moving.
+const LOG_MAX = 1000;
 // The speed test's block needs WebP decode + zlib on the server: m002's capability.
 const SPEEDTEST_SERVER_MIGRATION = 'm002-planes';
 
@@ -716,7 +717,9 @@ function laneStrip() {
       ? (queued > 1 ? t('dupd.laneRunningN', 'converting · {n} waiting', { n: queued - 1 }) : t('dupd.laneRunning', 'converting'))
       : st === 'paused' && queued ? t('dupd.lanePaused', 'paused · {n} left', { n: queued }) + (pauseReason(r) ? ` (${pauseReason(r)})` : '')
         : t('dupd.laneIdle', 'idle');
-    return `<span class="dupd-lane is-${st === 'pausing' ? 'running' : st}"><i data-lucide="${execIcon(x)}"></i><b>${escHtml(execName(x))}</b><span>${escHtml(text)}</span></span>`;
+    const cur = r && r.current && (st === 'running' || st === 'pausing') ? r.current : null;
+    const what = cur ? ` <span class="adm-muted">· ${escHtml(nameOf(cur.dataset))} — ${escHtml(t('dupd.step', 'step {i} of {n}', { i: cur.step || 1, n: cur.steps || 1 }))}</span>` : '';
+    return `<span class="dupd-lane is-${st === 'pausing' ? 'running' : st}"><i data-lucide="${execIcon(x)}"></i><b>${escHtml(execName(x))}</b><span>${escHtml(text)}</span>${what}</span>`;
   }).join('');
   const paced = netGovernor.holding
     ? `<p class="adm-muted dupd-small dupd-note"><i data-lucide="timer"></i>${escHtml(t('dupd.paced', 'The host is answering slowly: requests are paced down so that it does not block this address.'))}</p>`

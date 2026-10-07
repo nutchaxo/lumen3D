@@ -14,9 +14,7 @@ Les chapitres 7 et 8 ont montré **à quoi ressemblent** les briques, `planes/`,
 Tous les exemples chiffrés viennent des **jeux de démonstration** (synthétiques, produits par le vrai pipeline) ou d'**essais réels** faits sur des jeux de test dans un dossier temporaire. Aucune donnée du laboratoire n'est montrée.
 :::
 
-# Partie A. Les fichiers
-
-## 17.1 Un jeu de données, un dossier : les trois arbres {.page}
+## 17.1 Un jeu de données, un dossier : les trois arbres
 
 Un jeu de données vit dans `DATA_WEB/<type>/<dossier>/`. Le **type** (`3d`, `2d` ou `live`) est le nom du dossier parent ; le dossier lui-même est l'identifiant du jeu : `3d/Embryo-E95-Em2-Pecam1-Sox2`.
 
@@ -275,7 +273,7 @@ Une cellule (la 23, qui se divise) :
 
 `positions` sont les coordonnées **stabilisées** en µm, `raw_positions` les coordonnées d'acquisition ; `parent` et `daughters` forment la **généalogie** (une mitose : une mère, deux filles qui partagent le même `track_id`). Le viewer charge ce fichier dans un Web Worker qui en fait des tableaux 32 bits compacts.
 
-## 17.5 Le catalogue et le vocabulaire des types {.page}
+## 17.5 Le catalogue et le vocabulaire des types
 
 ### Un catalogue qui n'est pas un fichier
 
@@ -338,9 +336,7 @@ Un fichier nommé `a.php.png` dont les octets ne sont pas ceux d'un PNG est **re
 La galerie **ne voyage pas** avec l'import (aucune règle de la liste blanche ne l'accepte). Quand un jeu est remplacé, c'est la plateforme qui **déplace** la galerie de l'ancien dossier vers le nouveau (section 17.18).
 :::
 
-# Partie B. Les formats et les migrations
-
-## 17.7 Les formats 1 à 4 {.page}
+## 17.7 Les formats 1 à 4
 
 Un jeu publié porte un numéro de **format** (`formatVersion`). Le visiteur n'a rien à faire : le viewer lit les quatre formats. Mais les formats récents ouvrent des possibilités que les anciens n'ont pas.
 
@@ -420,7 +416,7 @@ Pour vérifier chaque affirmation de ce chapitre, un jeu **synthétique de forma
 Ces tailles ne sont **pas représentatives** : le bruit aléatoire est incompressible, et le format 4 ajoute 9,7 % de bordure. Sur de vraies images (surtout du noir, du signal lisse), la pyramide v3 est en général plus légère. Retenez les **unités** et la **mécanique**, pas les mégaoctets.
 :::
 
-## 17.9 Les unités de travail et le journal {.page}
+## 17.9 Les unités de travail et le journal
 
 Convertir un jeu de 10 Go d'un seul tenant échouerait au premier incident. La plateforme le découpe donc en **unités** indépendantes.
 
@@ -564,7 +560,7 @@ Toutes exigent la session d'administration ; celles qui modifient exigent aussi 
 | `store_get_many` | renvoie jusqu'à 128 briques v3 du magasin, en une réponse |
 | `unit_inputs`, `store_get` | liste les entrées d'une unité ; lit une brique stockée |
 
-## 17.11 `finalize` : l'échange et le changement de version {.page}
+## 17.11 `finalize` : l'échange et le changement de version
 
 Quand toutes les unités sont faites, il reste à **assembler** les résultats en une structure complète, à l'**installer** et à **changer le numéro de version**. C'est le rôle de `finalize`, **toujours exécuté par le serveur**, quel qu'ait été l'exécutant des unités.
 
@@ -655,9 +651,7 @@ Avant chaque étape, le serveur appelle `set_time_limit()` ; `status.server.limi
 - Le **régulateur** protège l'adresse de l'opérateur ; **trois requêtes par unité** suffisent depuis la 1.59.3.
 :::
 
-# Partie C. L'import dans le navigateur
-
-## 17.13 Le parcours d'un import {.page}
+## 17.13 Le parcours d'un import
 
 Le chapitre 14 (section 14.3) montre l'onglet [Import]{.ui}. Voici ce qui se passe **sous** chaque geste.
 
@@ -707,7 +701,7 @@ La suite est détaillée aux sections 17.16 (blocs et journal) et 17.18 (vérifi
 | `metadata`, `save_metadata`, `save_thumbnail` | l'édition pendant l'envoi |
 | `publish`, `discard`, `gc` | publier, supprimer, nettoyer |
 
-## 17.14 La liste blanche {.page}
+## 17.14 La liste blanche
 
 Seul ce que **produit le pipeline** est accepté. Tout le reste est refusé **avant le premier octet**, par deux barrières successives.
 
@@ -728,7 +722,7 @@ Les détails des règles, tels que le moteur les applique :
 Un fichier nommé `a.php.png` **passe** (sa dernière extension est `png`) : ce n'est pas une faille, car `download/` n'est jamais exécuté et toujours servi en pièce jointe. Ce qui compte, c'est que le fichier arrive dans un dossier où **rien ne s'exécute**.
 :::
 
-## 17.15 Les paliers : pourquoi un jeu est éditable avant la fin {.page}
+## 17.15 Les paliers : pourquoi un jeu est éditable avant la fin
 
 Un jeu complet pèse des dizaines de gigaoctets, et l'envoi peut durer des heures. Les fichiers sont donc envoyés **par priorité** : les plus utiles d'abord.
 
@@ -756,7 +750,7 @@ Le jeu passe à l'état **éditable** quand **tous** les fichiers de palier 0 et
 
 Dès que vous **enregistrez** une édition sur un jeu en cours d'envoi, le serveur écrit votre `metadata.json` et pose un verrou (`metaLocked`). Le transfert **ne le réécrit plus** : la réception d'un nouveau bloc de `metadata.json`, ou une nouvelle planification, saute le fichier. Sans cela, la fin du transfert aurait silencieusement **effacé votre travail** en renvoyant le fichier d'origine.
 
-## 17.16 Les blocs et le journal d'import {.page}
+## 17.16 Les blocs et le journal d'import
 
 ### Un bloc
 
@@ -815,7 +809,7 @@ Ce qui rend le journal sûr même après un plantage :
 - le numéro de fichier n'est **jamais réutilisé** : quand un fichier est replanifié (taille changée) ou remis à zéro, il reçoit un nouveau numéro, et un enregistrement écrit pour l'ancien ne peut plus tomber sur le nouveau ;
 - le chemin du fichier est vérifié par une **empreinte de 16 octets** stockée dans la table : on prouve qu'un numéro désigne bien le chemin envoyé sans relire le journal.
 
-## 17.17 Les états d'un import et la purge {.page}
+## 17.17 Les états d'un import et la purge
 
 ![Quatre états ; un jeu abandonné est purgé au bout de sept jours, un jeu terminé jamais.](img/ch17/etats-import.svg){width=100%}
 
@@ -838,7 +832,7 @@ Un jeu que personne ne termine occupe du vrai disque dans la zone d'arrivée. L'
 
 L'aperçu d'un jeu non publié passe par l'action `blob` : un fichier de la zone d'arrivée est servi, **sous session d'administration**, comme des octets opaques (avec `nosniff`), jamais comme un document. La zone d'arrivée n'est atteignable par **aucune adresse** ; elle est bloquée dans le serveur Python, dans le `.htaccess` racine, dans `router.php` et par un fichier d'interdiction qui lui est propre.
 
-## 17.18 Valider, publier, remplacer {.page}
+## 17.18 Valider, publier, remplacer
 
 ### Valider
 

@@ -655,7 +655,7 @@ Una importación **interrumpida** no se guarda indefinidamente: la tarjeta muest
 **Publicar no hace público el dataset.** Llega **oculto**. Vaya a Datasets, ábralo y active [Visibilidad]{.ui}.
 :::
 
-**Sustituir un dataset ya publicado**: si el nombre ya existe, el panel pregunta «Ya hay un dataset publicado con este nombre. ¿Reemplazarlo? Su galería y los campos que rellenó (nombre, orientación, leyendas…) se conservan si la nueva importación no los aporta.». Tras la sustitución, un aviso enumera lo que se ha conservado (la galería, etc.).
+**Sustituir un dataset ya publicado**: si el nombre ya existe, el panel pregunta «Ya hay un dataset publicado con este nombre. ¿Reemplazarlo? Su galería y los campos que rellenó (nombre, orientación, leyendas…) se conservan si la nueva importación no los aporta.». Tras la sustitución, un aviso enumera lo que se ha conservado (la galería, etc.). Atención: un `metadata.json` producido por el pipeline siempre contiene un nombre, así que se muestra **el nuevo nombre**. La orientación y la galería sí se conservan de la versión anterior.
 
 **[Eliminar]{.ui}**: «¿Eliminar definitivamente los archivos ya enviados de este dataset?» y luego «Importación eliminada.». Disponible en todos los estados salvo **Publicado**.
 

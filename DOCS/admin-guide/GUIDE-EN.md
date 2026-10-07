@@ -655,7 +655,7 @@ An **interrupted** import is not kept forever: the card shows "purged in {d}", a
 **Publishing does not make the dataset public.** It arrives **hidden**. Go to Datasets, open it, switch on [Visibility]{.ui}.
 :::
 
-**Replacing an already published dataset**: if the name already exists, the panel asks "A published dataset already has this name. Replace it? Its image gallery and the fields you filled in (name, orientation, captions…) are kept when the new import does not provide them.". After the replacement, a toast lists what was kept (the gallery, etc.).
+**Replacing an already published dataset**: if the name already exists, the panel asks "A published dataset already has this name. Replace it? Its image gallery and the fields you filled in (name, orientation, captions…) are kept when the new import does not provide them.". After the replacement, a toast lists what was kept (the gallery, etc.). Note: a `metadata.json` produced by the pipeline always contains a name, so **the new name** is the one displayed. The orientation and the gallery are carried over from the old version.
 
 **[Delete]{.ui}**: "Permanently delete the files already uploaded for this dataset?", then "Import deleted.". Available in every state except **Published**.
 

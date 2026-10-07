@@ -655,7 +655,7 @@ Un import **interrompu** n'est pas gardé indéfiniment : la carte affiche « pu
 **Publier ne rend pas le dataset public.** Il arrive **masqué**. Allez dans Datasets, ouvrez-le, activez [Visibilité]{.ui}.
 :::
 
-**Remplacer un dataset déjà publié** : si le nom existe déjà, le panneau demande « Un dataset publié porte déjà ce nom. Le remplacer ? Sa galerie d'images et les champs que vous avez renseignés (nom, orientation, légendes…) sont conservés quand le nouvel import ne les fournit pas. ». Après remplacement, un toast liste ce qui a été conservé (la galerie, etc.).
+**Remplacer un dataset déjà publié** : si le nom existe déjà, le panneau demande « Un dataset publié porte déjà ce nom. Le remplacer ? Sa galerie d'images et les champs que vous avez renseignés (nom, orientation, légendes…) sont conservés quand le nouvel import ne les fournit pas. ». Après remplacement, un toast liste ce qui a été conservé (la galerie, etc.). Attention : un `metadata.json` produit par le pipeline contient toujours un nom ; c'est alors **ce nouveau nom** qui s'affiche. L'orientation et la galerie, elles, sont reprises de l'ancienne version.
 
 **[Supprimer]{.ui}** : « Supprimer définitivement les fichiers déjà envoyés pour ce dataset ? », puis « Import supprimé. ». Disponible dans tous les états sauf **Publié**.
 

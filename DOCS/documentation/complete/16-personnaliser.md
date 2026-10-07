@@ -10,7 +10,7 @@
 Ce chapitre explique la **mécanique** : où vit chaque réglage et comment il arrive à l'écran. Le pas-à-pas de chaque onglet est dans le « Guide de l'administrateur » (chapitres 6 à 11) ; le survol est au chapitre 14.
 :::
 
-## 16.1 Une plateforme, plusieurs maisons {.page}
+## 16.1 Une plateforme, plusieurs maisons
 
 Lumen3D est né pour regarder des embryons de souris. Il sert aujourd'hui à d'autres objets : organes, échantillons, tissus. Le **moteur** ne change pas ; ce que les visiteurs lisent change.
 
@@ -41,7 +41,7 @@ Tout ce qui est propre à *votre* site se trouve dans le dossier **`config/`** :
 À côté, hors de `config/` : les **brouillons** de pages vivent dans `api/page-drafts/` (privé, voir 16.6).
 
 ::: tech
-**Mise à jour et valeurs de départ.** Les fichiers de `config/` (sauf `defaults/`) sont sur la liste de ce que la mise à jour de la plateforme ne touche jamais : vos réglages survivent. Les fichiers de `defaults/neutral/` voyagent, eux, avec chaque version.
+**Mise à jour et valeurs de départ.** `instance.json`, `theme.json`, `theme.css`, `legal.json` et `pages/` figurent sur la liste de ce que la mise à jour de la plateforme ne touche jamais : vos réglages survivent. Les images envoyées ne font partie d'aucune version livrée, donc ne sont jamais remplacées. Les fichiers de `defaults/neutral/` voyagent, eux, avec chaque version.
 
 **Le plancher sans fichier.** Si `instance.json` est introuvable ou illisible, le navigateur retombe sur un vocabulaire neutre intégré au code (« Lumen3D », « sample »). Le serveur, lui, laisse jouer les textes de repli écrits dans les pages. Le site ne casse pas.
 
@@ -100,7 +100,7 @@ Dans la démonstration, la barre du haut affiche « **IRIBHM — ULB** » : c'es
 Chaque fichier porte son identifiant de version (`"$schema": "lumen3d-instance/1"`, `lumen3d-theme/1`, `lumen3d-legal/1`).
 :::
 
-## 16.3 Comment une valeur arrive à l'écran {.page}
+## 16.3 Comment une valeur arrive à l'écran
 
 Le nom de votre institution apparaît à de nombreux endroits : dans l'onglet du navigateur, dans la barre du haut, dans la phrase d'accueil. Trois mécanismes se partagent le travail, **tous alimentés par le même fichier**.
 
@@ -132,13 +132,13 @@ Le logo, le pied de page et le menu portent des attributs `data-instance` :
 
 ```html
 <span data-instance="brand.organization">Lumen3D</span>
-<a data-instance-attr="href:org.url; title:brand.tagline">…</a>
+<a data-instance-attr="title:brand.tagline">…</a>   <!-- variante pour un attribut -->
 ```
 
-Au chargement, `InstanceConfig` lit `instance.json` et écrit les valeurs : `data-instance` remplit le **texte** d'un élément, `data-instance-attr` remplit des **attributs** (« attribut:chemin », séparés par des points-virgules). Il applique aussi les titres, les `<meta>` et les entrées du menu (`nav.*`).
+Au chargement, `InstanceConfig` lit `instance.json` et écrit les valeurs : `data-instance` remplit le **texte** d'un élément, `data-instance-attr` remplit des **attributs** (« attribut:chemin », séparés par des points-virgules ; les pages livrées n'en ont pas besoin aujourd'hui, mais le mécanisme est prêt). Il applique aussi les titres, les `<meta>` et les entrées du menu (`nav.*`).
 
 ::: tech
-Le texte entre les balises est le **repli** : si le fichier est introuvable (hors ligne, installation neuve), la page affiche ce repli au lieu d'un trou. Un appel recommence après chaque changement de langue, car certaines valeurs dépendent de la langue.
+Le texte entre les balises est le **repli** : si le fichier est introuvable (hors ligne, installation neuve), la page affiche ce repli au lieu d'un trou. L'application peut être rappelée (après un changement de langue, ou quand l'aperçu de l'administration recharge la configuration).
 :::
 
 ### ③ Les jetons dans les phrases
@@ -188,7 +188,7 @@ Ce n'est pas une panne, c'est le repli qui fonctionne : la solution est de rempl
 
 ![La page d'accueil dans les quatre langues. Le nom de l'objet suit la langue ; en néerlandais, il retombe sur l'anglais faute de saisie.](img/ch16/langues-accueil.png){.shot width=100%}
 
-## 16.4 Les écrans de personnalisation {.page}
+## 16.4 Les écrans de personnalisation
 
 ### L'onglet Identité
 
@@ -252,7 +252,7 @@ Pour les **pages**, une protection de plus : chaque lecture porte une **révisio
 
 À la fin, l'assistant n'écrit que ce qu'il a rempli : `brand` (le monogramme prend les deux premiers caractères du nom, en majuscules), `specimen`, éventuellement `org.name` et `footer.copyright`, puis les jetons de couleur choisis dans `theme.json`.
 
-## 16.5 Le thème : couleurs, police, arrondis {.page}
+## 16.5 Le thème : couleurs, police, arrondis
 
 Le look du site est piloté par des **variables CSS** (des « jetons » de style) : `--color-primary`, `--font-sans`, `--radius-md`… L'onglet [Apparence]{.ui} n'en modifie qu'une poignée, à dessein.
 
@@ -319,7 +319,7 @@ Le thème n'est **pas** calé sur le réglage du système au premier passage. Si
 
 Chaque thème règle aussi `color-scheme` : les menus déroulants natifs, les barres de défilement et les sélecteurs de date prennent le bon aspect, sans texte clair sur fond blanc.
 
-## 16.6 Le constructeur de pages {.page}
+## 16.6 Le constructeur de pages
 
 Accueil, À propos, ou toute page que vous créez (protocoles, équipe, contact…) se construisent **à la souris**, comme dans un logiciel de mise en page.
 
@@ -370,7 +370,7 @@ Les variables `{…}` marchent dans **tous** les textes de page, mais pas dans l
 ![Deux fichiers, deux publics : le brouillon est privé, la version publiée est publique.](img/ch16/brouillon-publication.svg){width=96%}
 
 ::: remember
-**Rien n'est public avant [Publier]{.ui}.** Pendant que vous travaillez, les visiteurs voient l'ancienne version. Le brouillon est enregistré tout seul, mais il est rangé **hors de `config/`** : le dossier public se lit sans mot de passe, et l'éditeur enregistre toutes les secondes. Garder le brouillon dans `config/` aurait laissé n'importe qui regarder l'opérateur écrire.
+**Rien n'est public avant [Publier]{.ui}.** Pendant que vous travaillez, les visiteurs voient l'ancienne version. Le brouillon est enregistré tout seul, mais il est rangé **hors de `config/`** : ce dossier se lit sans mot de passe, et l'éditeur enregistre environ une fois par seconde pendant que vous écrivez. Un brouillon laissé dans `config/` aurait permis à n'importe qui de regarder l'opérateur écrire.
 :::
 
 Cela pose aussi des règles de bon sens à l'éditeur :
@@ -430,9 +430,9 @@ Méthode conseillée : rédigez toute la page dans **une** langue, puis passez s
 | largeur d'une colonne | 1 à 12 douzièmes |
 | adresse d'une page (`slug`) | minuscules, chiffres, `-`, `_` ; 64 caractères au plus |
 
-Un document hors limites est **refusé en entier** (il n'est jamais enregistré à moitié). Une page supprimée ou inconnue ramène à l'accueil plutôt que d'afficher une page vide.
+Un document hors limites est **refusé en entier**, jamais enregistré à moitié (seule la largeur d'une colonne est simplement ramenée entre 1 et 12). Une page supprimée ou inconnue ramène à l'accueil plutôt que d'afficher une page vide.
 
-## 16.7 Les mentions légales {.page}
+## 16.7 Les mentions légales
 
 Un site public a besoin d'un **éditeur**, d'un **hébergeur**, d'une politique de **données**. L'onglet [Mentions légales]{.ui} est un éditeur volontairement simple : une liste de **sections**, chacune avec un titre et un texte, **par langue**.
 
@@ -453,7 +453,7 @@ Un site public a besoin d'un **éditeur**, d'un **hébergeur**, d'une politique 
 Ces textes sont des **points de départ**, pas des conseils juridiques. Faites-les relire pour votre pays. N'oubliez pas qu'un serveur web garde généralement un **journal d'accès** (adresses IP) selon sa configuration : c'est l'affaire de votre hébergeur, et elle se déclare ici (voir 16.13).
 :::
 
-## 16.8 D'où vient la couleur de départ d'un canal ? {.page}
+## 16.8 D'où vient la couleur de départ d'un canal ?
 
 Quand vous ouvrez un jeu de données, chaque canal apparaît déjà en couleur. D'où vient cette couleur ? Le chapitre 11 montre comment on la **change** ; voici d'où elle **vient**.
 
@@ -495,9 +495,9 @@ Comme le pipeline écrit **toujours** une couleur (étape 3), les préréglages 
 Ces listes ne sont pas synchronisées : elles servent à des moments différents. La couleur **qui compte** pour le visiteur est celle du panneau de canaux, qui part de `metadata.json`. Les 27 couleurs du sélecteur, elles, sont fixes (chapitre 11).
 :::
 
-## 16.9 Traduire : comment le site parle quatre langues {.page}
+## 16.9 Traduire : comment le site parle quatre langues
 
-Le site public, le viewer, l'administration et même les mots de chaque outil sont traduits. Tout repose sur un **fichier par langue** et un **mot de passe d'accueil** : le code `t('clé')`.
+Le site public, le viewer, l'administration et même les mots de chaque outil sont traduits. Tout repose sur un **fichier par langue** et une seule fonction, `t('clé')`, qui rend le texte dans la langue du visiteur.
 
 ![Où vit chaque texte du site.](img/ch16/i18n-ou.svg){width=96%}
 
@@ -551,7 +551,7 @@ La liste des langues **n'est écrite nulle part en dur** : on la découvre, de l
 
 ::: steps
 1. `GET api/languages.php` : le serveur liste les fichiers `lang/<code>.json` (le nom doit être de la forme `fr` ou `pt-BR`).
-2. Sinon `lang/manifest.json`, l'index que le serveur Python **réécrit** à chaque découverte pour les hébergements statiques.
+2. Sinon `lang/manifest.json`, l'index que le serveur Python **réécrit** quand la liste change, pour les hébergements statiques.
 3. Sinon une liste de secours intégrée au code : anglais, français, espagnol.
 :::
 
@@ -579,7 +579,7 @@ Chaque plugin porte ses propres textes : `js/modules/<famille>/<id>/lang/<code>.
 
 - La liste des langues d'un plugin est déclarée dans son `plugin.json` (`i18nLanguages`) : on ne tente pas de charger un fichier qui n'existe pas.
 - Pour chaque plugin, le **repli est son propre anglais**. Le plugin de capture d'écran « sandboxé » n'a pas d'espagnol ; un visiteur espagnol le voit en anglais, sans erreur.
-- Les dictionnaires voyagent **dans la réponse de découverte des plugins**, pour éviter une requête par plugin et par langue.
+- Sur le serveur Python, les dictionnaires voyagent **dans la réponse de découverte des plugins** (une requête de moins par plugin et par langue) ; ailleurs, ils sont lus fichier par fichier, et seulement l'anglais et la langue choisie.
 - Un plugin qui offre une langue que la plateforme n'a pas ne l'ajoute pas au menu : seule la plateforme décide.
 
 ### Ajouter une langue
@@ -608,7 +608,7 @@ Les langues qui s'écrivent de droite à gauche (l'arabe est connu du code) reç
 | un plugin n'a pas la langue | l'anglais **du plugin** |
 | un jeton `{xyz}` n'existe pas | `{xyz}` s'affiche tel quel |
 
-## 16.10 Accessibilité, thème et mobile {.page}
+## 16.10 Accessibilité, thème et mobile
 
 L'accessibilité d'un outil d'imagerie a des limites (une image 3D reste une image). Voici ce que le code fait réellement.
 
@@ -626,7 +626,7 @@ Un petit script bloquant (`theme-boot.js`, quelques lignes) est placé dans l'`<
 - Les boutons d'icônes portent un nom (`aria-label`, ou une infobulle traduite) ; le texte vient des fichiers de langue.
 - Les fenêtres modales (`Dialog`) se ferment par <kbd>Échap</kbd> et écrivent leur texte par `textContent`.
 - Les outils du viewer ont des raccourcis (V, C, M, I, D…) : voir le chapitre 12.
-- Les feuilles de style contiennent **25 règles `:focus-visible`** : la bordure de focus est visible au clavier.
+- Les feuilles de style contiennent 25 occurrences de `:focus-visible` : l'élément qui a le focus clavier est entouré.
 
 ### Mouvement réduit
 
@@ -659,7 +659,7 @@ Le filtre s'applique à **toute la page**, y compris le viewer 3D, pour voir ce 
 ![Le même embryon (jeu de démonstration) avec les canaux DAPI, Pecam1, Sox2, sous quatre simulations.](img/ch16/daltonisme-viewer.png){.shot width=100%}
 
 ::: example
-Dans cette démonstration, le vert (Pecam1) et le magenta (Sox2) de la vue normale deviennent, en protanopie et en deutéranopie, des bleus et des beiges presque indiscernables : la forme reste lisible, mais **la distinction des deux marquages est perdue**. En tritanopie, le vert devient cyan et le magenta rose. C'est exactement ce qu'une figure de publication doit vérifier.
+Dans cette démonstration, le vert et le magenta de la vue normale deviennent, en protanopie et en deutéranopie, des **bleus et des beiges** : l'opposition rouge-vert qui séparait les deux marquages disparaît. En tritanopie, le vert devient cyan et le magenta rose. C'est exactement ce qu'une figure de publication doit vérifier.
 :::
 
 ![Les mêmes sept teintes, calculées par le script d'après les matrices du code.](img/ch16/daltonisme-teintes.svg){width=92%}
@@ -699,7 +699,7 @@ Le site est **utilisable sur téléphone**, avec des limites que le viewer ne pe
 
 La seule dépendance distante du site est **Google Fonts** (Inter, JetBrains Mono). Le lien est chargé **en différé** (`media="print"`, activé par `font-loader.js`) : la page ne l'attend pas pour s'afficher. Hors ligne ou si la police est bloquée, le navigateur utilise sa police sans empattement : le site reste lisible.
 
-## 16.11 Les statistiques d'usage {.page}
+## 16.11 Les statistiques d'usage
 
 Un laboratoire veut savoir si ses jeux de données sont regardés. Lumen3D le dit **sans rien savoir de vous**.
 
@@ -711,7 +711,7 @@ Un laboratoire veut savoir si ses jeux de données sont regardés. Lumen3D le di
 |---|---|
 | **Visites** | une fois par **session de navigation** (un onglet), à l'ouverture de l'**accueil** |
 | **Vues** | une fois par session et par jeu de données, quand un jeu s'ouvre dans le viewer |
-| **Téléchargements** | quand un fichier du dossier `download/` d'un jeu est servi **en entier** |
+| **Téléchargements** | quand un fichier du dossier `download/` d'un jeu (celui que propose le Download Center) est servi **en entier** |
 
 ::: tech
 - Les balises sont des requêtes `POST` envoyées par `navigator.sendBeacon`, sans attendre de réponse (elles survivent à la fermeture de l'onglet). Un `GET` est **refusé** (405) : une image tierce ne peut pas gonfler vos chiffres.
@@ -767,7 +767,7 @@ L'onglet [Statistiques]{.ui} présente trois cartes (avec le tracé des **30 der
 
 Changer le **nom** d'un type de données ne change aucun de ces chiffres. Lors du passage à l'ancien vocabulaire des types, les compteurs des anciennes clés sont **additionnés** à ceux des nouvelles.
 
-## 16.12 `PerfTelemetry` : le carnet de bord du viewer {.page}
+## 16.12 `PerfTelemetry` : le carnet de bord du viewer
 
 À ne pas confondre avec les statistiques. **`PerfTelemetry`** est un chronomètre interne que le viewer remplit pour **diagnostiquer** ses performances.
 
@@ -796,7 +796,7 @@ Dans la console du navigateur (F12) : `PerfTelemetry.getSummary()`. On obtient, 
 Seule la page du viewer charge `PerfTelemetry`. La ligne de progression que vous voyez en chargeant un volume (« 37 % — niveau 2 ») est une autre chose : un affichage, pas un journal.
 :::
 
-## 16.13 Récapitulatif {.page}
+## 16.13 Récapitulatif
 
 ### Je veux… où dois-je aller ?
 

@@ -211,3 +211,152 @@ Il n'y a **pas de bouton** « stabilisé / brut » dans l'interface : la stabili
 - Le seul feu vert est le **test de rigidité** du pipeline.
 :::
 
+## 13.3 Le Studio en profondeur {.page}
+
+::: tldr
+- Une figure du Studio est un **document** : des calques, des repères, des réglages de canaux, un plan, une calibration. Jamais de pixels dans le fichier JSON.
+- Les canaux se **recolorent sans nouveau rendu**, avec la même arithmétique que le shader de coupe.
+- La résolution **native** arrive après l'ouverture, par un chemin « plan » ou « atlas », sous la protection d'un **jeton** de document.
+:::
+
+Le chapitre 12 (§ 12.7) a montré comment annoter. Voici ce qui se passe quand vous cliquez.
+
+### Le document
+
+![L'anatomie d'un document du Studio, et ce que le fichier JSON ne contient jamais.](img/ch13/studio-document.svg){width=96%}
+
+Le document tient en un objet. Le Studio le **copie entièrement** à chaque étape de l'historique, avec deux conséquences : l'annulation est instantanée et sans surprise, et le document ne doit pas contenir de gros objets. Dans une figure de Comparer, chaque cellule porte trois champs d'exécution (les valeurs brutes, le cadre de page, la coupe) : `_portableDocument()` les retire de chaque export, et la copie d'historique les garde **par référence**, pas par duplication.
+
+- **L'historique** garde 80 étapes. Une modification de canal est une étape comme une autre : annuler défait la **dernière** modification, quelle qu'elle soit, et défaire une annotation ne remet jamais les canaux d'avant.
+- Une rafale de modifications d'un même panneau (un curseur qu'on tire, un message par image) forme **une seule étape**, close par le relâchement, par une pause d'une seconde, ou par une autre action.
+- **Types de calques** : rectangle, ellipse, texte, ligne, flèche, distance, angle, barre d'échelle. Chaque calque a un identifiant unique, un nom, deux drapeaux (visible, verrouillé), un groupe éventuel, une **rotation** en degrés (de −180 exclus à 180) et un style.
+- Les coordonnées sont en **pixels de l'image**. Quand la passe native remplace l'aperçu par une image plus grande, chaque coordonnée est multipliée par le rapport des tailles : un calque reste sur la structure qu'il marque (les épaisseurs et corps de police, eux, restent en pixels d'écran).
+
+### Le jeton de document
+
+![Pourquoi une passe native tardive ne peut pas abîmer la figure suivante.](img/ch13/studio-jeton.svg){width=94%}
+
+L'ouverture d'une figure renvoie un **jeton** (un numéro qui augmente à chaque document). La passe native, qui peut durer plusieurs minutes sur un gros volume, le présente à chacune de ses mises à jour. Si vous avez fermé la figure et en avez ouvert une autre, le jeton ne correspond plus : l'image tardive est **ignorée**, sa barre de progression aussi.
+
+Fermer le Studio libère l'image native, l'historique et les cadres de Comparer, et annule le transfert en cours.
+
+### Tourner un calque sans fausser une mesure
+
+Un rectangle, une ellipse ou un texte **tournent à l'affichage** autour de leur centre : seule la rotation est enregistrée. Une ligne, une flèche, une distance, un angle ou une barre d'échelle sont faits de **points** : la rotation est *cuite* dans les points, parce que leur étiquette se calcule à partir d'eux.
+
+![Une règle de 100 µm tournée sur des pixels de 1 × 2 µm : sa longueur en pixels est recalculée.](img/ch13/studio-regle.svg){width=94%}
+
+- **Ligne, flèche** : rotation rigide des points autour de leur centre.
+- **Angle** : tourné dans l'espace des **micromètres** (`p' = c + S⁻¹·R(θ)·S·(p − c)`, avec `S` la taille de pixel). Une rotation rigide en pixels changerait l'angle mesuré : sur des pixels de 1 × 2 µm, un angle droit tourné de 45° se lirait 53,1°.
+- **Distance** : la direction tourne, la longueur en pixels est **recalculée** pour garder la même longueur en µm.
+- **Barre d'échelle** : sa direction *est* sa rotation ; la longueur en pixels est celle qui mesure exactement sa valeur.
+
+::: example
+Distance de 100 µm sur des pixels de 1 × 2 µm. Horizontale : 100 px. À 45° : 100 / √(0,707² × 1² + 0,707² × 2²) = **63,25 px**. Verticale : **50 px**. La valeur affichée reste 100 µm.
+:::
+
+### Quelle taille de pixel pour un calque ?
+
+Une coupe simple n'a qu'une calibration. Une **figure de Comparer** en a une **par cellule** (un panneau = une cellule avec son rectangle et son µm/pixel). Un calque de points prend la calibration **de la cellule qui contient le milieu de ses points** (la plus proche, si le milieu tombe dans une gouttière). C'est aussi le centre de ses rotations : tourner un calque ne le confie donc jamais à la cellule voisine.
+
+La barre d'échelle est plus subtile : son milieu dépend de la longueur qu'elle prend, qui dépend de la cellule. Le Studio cherche donc une cellule **cohérente** (dont la longueur propre place le milieu dans cette même cellule) ; à défaut, c'est la cellule du point de départ qui décide, car elle ne bouge pas quand l'autre bout est réécrit.
+
+### Recolorer sans refaire le rendu
+
+![Le chemin des valeurs brutes aux couleurs.](img/ch13/studio-recolor.svg){width=96%}
+
+Quand le Studio ouvre une coupe, il reçoit deux choses : une image colorée, et les **valeurs brutes** des canaux (`raw` : quatre octets par pixel, un par canal 0 à 3). Le volume qui les a produites est un atlas jetable, disparu après la passe. La recoloration repart donc des valeurs brutes.
+
+:::: cols
+::: col
+![Coupe XY du jeu de démonstration, couleurs du viewer.](img/ch13/studio-recolor-a.png){.shot width=100%}
+:::
+::: col
+![Même coupe : DAPI éteint, Sox2 en orange. Les calques n'ont pas bougé.](img/ch13/studio-recolor-b.png){.shot width=100%}
+:::
+::::
+
+Le **compositeur** (`SliceCompositor`) applique à chaque canal allumé la formule du shader de coupe : fenêtre `(brut/255 − min) / max(max − min ; 10⁻⁴)`, puis gamma, puis `opacité × couleur`, et somme. Il tourne sur **son propre canevas WebGL2** (la page Comparer ne charge pas Three.js), avec une table de 256 valeurs par canal en repli.
+
+::: tech
+- La couleur de sortie est `clamp(Σ vᵢ·opacitéᵢ·couleurᵢ ; 0 ; 1) × 255`, **transparente** sous |rgb| < 0,005 pour une coupe simple (le shader de coupe écarte ces fragments), **opaque** (noire si rien ne s'affiche) pour une tranche projetée en MIP ou en moyenne.
+- Une tranche de **quatre canaux** n'a pas d'octet libre pour dire où le volume existe : elle porte à part un **masque de couverture** d'un octet par pixel, lu sur l'alpha du rendu en couleur du même plan.
+- Les textures des valeurs brutes sont gardées dans un budget de **256 Mio** (celles des masques dans un budget séparé de 64 Mio, pour qu'ils ne s'évincent pas). Un raw de même taille est **réécrit sur place** à chaque raffinement de la passe native (numéro `raw.version`).
+- Le repli sur table calcule en double précision ; la carte graphique, en flottants 32 bits, peut différer d'**une unité** sur un octet à une frontière d'arrondi.
+:::
+
+**Les histogrammes du Studio n'ont pas la même origine que ceux du viewer** (§ 11.5). Ils sont calculés **sur la coupe affichée** (jusqu'à 4 millions d'échantillons, un seul calcul par raw), pas sur tout le volume. C'est cohérent : vous réglez le contraste de ce que vous voyez dans la figure.
+
+### La passe native
+
+Un volume de plusieurs gigaoctets n'a pas de coupe « à portée de main » en pleine résolution. Le Studio fait donc deux temps.
+
+![De l'aperçu à la résolution native.](img/ch13/studio-natif.svg){width=94%}
+
+1. **L'aperçu** : la coupe que la carte graphique tient déjà, rendue en 2048 px au plus, sans aucun octet de réseau. Le Studio s'ouvre à l'instant.
+2. **La passe native** : le viewer calcule quelles briques le plan traverse, les récupère à la résolution maximale (niveau 0), et re-rend la coupe en valeurs brutes **à intervalles réguliers**.
+
+L'image de la passe est cadrée comme l'aperçu (même région du plan). Là où une brique manque encore, l'**aperçu comble le trou** : ce que vous voyez est toujours une image complète, de plus en plus nette. La taille de rendu est environ **un pixel par voxel de l'axe le plus long**, étendue au cadre de la coupe (× 1,5) : de 512 à 16 384 px.
+
+::: example
+Jeu de démonstration, 768 voxels sur X : 768 × 1,5 = **1 152 px** de rendu. Chaque pixel couvre 1,5 × 921,6 µm (la plus grande extension physique) / 1 152 = **1,2 µm**, c'est-à-dire exactement la taille du voxel : le natif de ce jeu est aussi petit que l'aperçu.
+:::
+
+### Deux chemins pour le même plan
+
+![Pourquoi un plan axial n'a pas besoin d'atlas.](img/ch13/studio-plan-atlas.svg){width=94%}
+
+- **Chemin « plan »** : pour un plan aligné sur un axe (XY, XZ, YZ) d'un volume non déformé. Le shader lit, pour chaque pixel, le voxel `floor(uvw × dim)` ; le long de la normale, la coordonnée ne dépend pas du pixel, donc les plans de voxels lus sont **connus d'avance**. Une texture 2D à couches ne contient que ceux-là. Pour une tranche MIP, chaque boîte de briques est réduite à son maximum par canal dans un *worker* (`studio-plane-worker.js`) puis les maxima des briques d'une colonne sont fusionnés.
+- **Chemin « atlas »** : coupe oblique, série stabilisée, tranche en moyenne. Un atlas 3D jetable, dimensionné **avant** d'être alloué contre le budget de mémoire vidéo (chapitre 10) ; s'il ne rentre pas (`SVR_OVER_BUDGET`), le niveau juste en dessous est essayé et l'étiquette de progression le dit.
+
+D'où viennent les octets d'un plan XY ?
+
+| Source | Quand | Ce qu'elle épargne |
+|---|---|---|
+| `planes/` (format 2 et plus) | coupe XY, niveau 0 | les 63 autres plans de chaque brique |
+| `mips/` (format 3 et plus) | tranche MIP sur toute la pile | un maximum par couche de 64 plans au lieu de 64 plans |
+| briques par plages d'octets | tout le reste | les briques non traversées et les paquets entiers |
+
+Les formats sont détaillés au chapitre 7 (§ 7.8 et 7.9) ; ici, le Studio ne fait que **choisir le plus économe** qui existe, et retombe sur les briques si le dossier ou un fichier manque.
+
+::: tech
+- **Brique vide ≠ brique manquante.** Une brique que le pipeline n'a pas stockée (tous ses voxels valent 0) est du **zéro**, jamais « en attente » : le chemin atlas pointe son entrée sur un seul emplacement de zéros ; le chemin plan marque ses texels présents d'emblée. Sinon l'aperçu remplacerait pour toujours chaque colonne qui traverse une brique vide.
+- **Raffinement progressif** : au plus toutes les 0,5 s, dès que 2 % des briques de la passe sont arrivées (ou après 2 s quoi qu'il arrive). Un rendu n'est pas relancé plus souvent qu'un petit multiple du coût du précédent.
+- **Échec** : un morceau qui échoue deux fois garde les pixels de l'aperçu et est compté (`missingChunks`). L'image finale est alors étiquetée « native partielle » et le Studio le dit.
+- **Canaux éteints dans le viewer** : quand le transport est par canal, ils ne sont pas téléchargés ; allumés ensuite dans le Studio, ils s'affichent à la résolution de l'aperçu plutôt qu'en noir.
+- **Indépendance** : le lot de briques de la passe a son propre groupe et son propre signal d'annulation : un chargement lancé par le viewer ne l'annule pas, fermer le Studio l'annule.
+:::
+
+::: warning
+**Plus de 256 Mio.** Une figure de Z-stack épaisse peut réclamer chaque brique de toutes ses coupes. Au-delà de 256 Mio estimés, une boîte propose trois choix : charger le natif (avec le nombre de Mo), charger le niveau inférieur (plus léger), ou garder l'aperçu. L'estimation passe par `planes/` et `mips/` quand ils existent : elle peut être très inférieure à celle des briques, et la boîte ne propose jamais « plus léger » pour plus d'octets.
+:::
+
+### La figure d'un Z-stack
+
+![Le plan d'une figure de Z-stack naît du repère de l'écran.](img/ch13/studio-zstack.svg){width=96%}
+
+Quand vous ouvrez le Studio depuis l'explorateur Z-stack, le plan n'est pas celui de la coupe oblique : il est construit pour que la figure **soit** l'écran. Le viewer demande où pointent la droite et le haut de l'écran dans le volume (`getScreenFrameInVolume`), choisit la face **+Z** ou **−Z** (donc un lacet de 0 ou 180°) la plus proche, puis le **roulis** qui cale l'image sur l'écran. Les `n` coupes du curseur deviennent une tranche de `n` échantillons, un par coupe ; au-delà d'une coupe, c'est un MIP.
+
+### Exporter, importer, et les limites
+
+| | Règle |
+|---|---|
+| PNG | taille de la figure, fond noir, **légende toujours incrustée** (jeu · plan · taille · pixel). Refusé au-delà de 16 384 px de côté ou 2²⁸ pixels |
+| JSON | calques, repères, canaux, plan, calibration, cellules de Comparer. Jamais de pixel |
+| Lecture d'un JSON | refus au-delà de 5 Mo, 2 000 calques, 10 000 points ; texte limité à 2 000 caractères |
+| Historique | 80 étapes |
+| Canaux | 4 au plus (la texture est RGBA) |
+
+**Importer un JSON** ne remplace pas la figure ouverte : il l'**applique**. Le fichier est vérifié en entier avant tout changement (types de calques connus, géométrie numérique, couleurs, identifiants uniques).
+
+- La figure ouverte garde son image, son cadre, sa calibration et ses cellules ; elle prend les **calques, repères et groupes** du fichier, avec les mesures relues contre la calibration de la figure ouverte (une barre d'échelle garde sa valeur, une distance ses points).
+- C'est **la même figure** si le fichier a la même taille, nomme le même jeu (identifiant ou chemin), montre le même plan (à une tolérance près) et la même image de la série, et, pour Comparer, les mêmes cellules.
+- Dans ce cas les **réglages de canaux** du fichier s'appliquent aussi, et seulement si la coupe peut être recolorée sans changer de cadre. Sinon (autre figure), seuls les **calques** passent, et un message l'indique.
+
+::: remember
+- Un document = calques + repères + canaux + plan + calibration, **sans pixels**.
+- La recoloration part des **valeurs brutes** : aucun nouveau rendu du volume.
+- La passe native choisit **plan** ou **atlas**, lit `planes/` et `mips/` quand ils existent, et se protège par un **jeton**.
+- Une rotation de calque **recalcule** les longueurs en pixels : la mesure ne bouge pas.
+:::
+

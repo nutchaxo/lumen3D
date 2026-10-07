@@ -34,8 +34,8 @@ def document():
            tr("Tout ce qui précède, en texte : calques, repères, canaux, plan, calibration, cellules de Comparer. Aucun pixel. Un fichier de 5 Mo, 2 000 calques ou 10 000 points est refusé à la lecture.",
               "All of the above, as text: layers, guides, channels, plane, calibration, Compare cells. No pixel. A file over 5 MB, 2,000 layers or 10,000 points is refused on reading."))
     s.card(484, 246, 296, 258, "red", tr("Jamais dans le fichier", "Never in the file"),
-           tr("Les valeurs brutes des canaux (raw), le cadre de la page (iframe) et la coupe elle-même (sliceResult) : trois champs d'exécution, retirés par _portableDocument() à chaque export et à chaque copie d'historique légère. Ils vivent en mémoire tant que le Studio est ouvert.",
-              "The raw channel values (raw), the page frame (iframe) and the slice itself (sliceResult): three runtime fields, stripped by _portableDocument() at every export. They live in memory only while the Studio is open."))
+           tr("Pour chaque cellule d'une figure de Comparer, trois champs d'exécution : les valeurs brutes des canaux (raw), le cadre de la page (iframe) et la coupe elle-même (sliceResult). Ils vivent en mémoire tant que le Studio est ouvert ; _portableDocument() les retire à chaque export.",
+              "For each cell of a Compare figure, three runtime fields: the raw channel values (raw), the page frame (iframe) and the slice itself (sliceResult). They live in memory while the Studio is open; _portableDocument() strips them at every export."))
     s.save()
 
 

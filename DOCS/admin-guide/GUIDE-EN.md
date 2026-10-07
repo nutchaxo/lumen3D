@@ -2,7 +2,7 @@
 title: "Administrator's guide"
 subtitle: "The Lumen3D admin panel, tab by tab"
 eyebrow: "IRIBHM · ULB — Lumen3D"
-version: "Web platform 1.59.2"
+version: "Web platform 1.59.3"
 date: "October 2026"
 abstract: "Everything you can do from the site's admin panel: manage and import datasets, bring them to the current format, customise the public site, install features, update the platform. Written for someone who has never seen this panel and cannot code."
 lang: en
@@ -859,7 +859,7 @@ States shown: **Waiting for its turn** ("next on the server"), **Running**, **Pa
 - **Leaving the tab**: "An update is running. Leaving this tab pauses it (you can resume later). Leave?". **Nothing is lost**: the server journal lets you resume after a reload, a cut or a change of executor.
 
 ::: warning
-**Do not start the same update in several tabs**, and do not restart it in a loop. In version 1.59.1, a flood of requests led a host to **ban an operator's address**. Since 1.59.2, **all** the tab's requests go through a **governor** (6 in flight at most, 10 to 16 per second; it slows down and pauses when the host answers slowly or returns 429 / 503). You may see: "The host is answering slowly: requests are paced down so that it does not block this address." or "Connection lost — waiting for the network, nothing is lost.". **Let it run.**
+**Do not start the same update in several tabs**, and do not restart it in a loop. In version 1.59.1, a flood of requests led a host to **ban an operator's address**. Since 1.59.2, **all** the tab's requests go through a **governor** (6 in flight at most; since 1.59.3, 4 to 6 per second, because each unit reads all its input data in a single request; it slows down and pauses when the host answers slowly or returns 429 / 503). You may see: "The host is answering slowly: requests are paced down so that it does not block this address." or "Connection lost — waiting for the network, nothing is lost.". **Let it run.**
 :::
 
 ## 5.8. The bottom sections
@@ -2097,7 +2097,7 @@ A tab that does not load shows "Could not load this tab. Reload the page.".
 |---|---|
 | **Staging / pending import** | The private area where an import's files arrive, never served by URL, before you click [Publish]{.ui}. |
 | **Executor** | Who does the computing for a data update: **this browser** or **the server**. Each has its own queue. |
-| **Network governor** | The safeguard that limits the number of requests sent to the host (6 in flight, 10 to 16 per second) so that it does not block your address. |
+| **Network governor** | The safeguard that limits the number of requests sent to the host (6 in flight, 4 to 6 per second) so that it does not block your address. |
 | **Journal** | The notebook kept by the server of what has already arrived or been converted: it lets you **resume** in the right place. |
 
 ### Extensions, pages, security
@@ -2114,4 +2114,4 @@ A tab that does not load shows "Could not load this tab. Reload the page.".
 
 ---
 
-*Document written for version **1.59.2** of the platform (pipeline 0.21.0, data format 4). Screenshots show a demonstration dataset (synthetic embryos); colours may differ if the theme has been modified.*
+*Document written for version **1.59.3** of the platform (pipeline 0.21.0, data format 4). Screenshots show a demonstration dataset (synthetic embryos); colours may differ if the theme has been modified.*

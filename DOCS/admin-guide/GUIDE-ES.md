@@ -2,7 +2,7 @@
 title: "Guía del administrador"
 subtitle: "El panel de administración de Lumen3D, pestaña por pestaña"
 eyebrow: "IRIBHM · ULB — Lumen3D"
-version: "Plataforma web 1.59.2"
+version: "Plataforma web 1.59.3"
 date: "Octubre de 2026"
 abstract: "Todo lo que se puede hacer desde el panel de administración del sitio: gestionar e importar los conjuntos de datos, llevarlos al formato actual, personalizar el sitio público, instalar funciones y actualizar la plataforma. Escrita para quien nunca ha visto este panel y no sabe programar."
 lang: es
@@ -859,7 +859,7 @@ Estados mostrados: **Esperando su turno** («siguiente en el servidor»), **En c
 - **Abandonar la pestaña**: «Hay una actualización en curso. Salir de esta pestaña la pausa (podrá reanudarla después). ¿Salir?». **No se pierde nada**: el registro del servidor permite reanudar tras una recarga, un corte o un cambio de ejecutor.
 
 ::: warning
-**No lance la misma actualización en varias pestañas**, y no la relance en bucle. En la versión 1.59.1, una avalancha de peticiones llevó a un proveedor de alojamiento a **bloquear la dirección** de un operador. Desde la 1.59.2, **todas** las peticiones de la pestaña pasan por un **regulador** (6 en vuelo como máximo, de 10 a 16 por segundo; reduce el ritmo y hace una pausa cuando el host responde con lentitud o devuelve 429 / 503). Puede ver: «El servidor responde con lentitud: las solicitudes se ralentizan para que no bloquee esta dirección.» o «Conexión perdida: esperando la red, no se pierde nada.». **Deje que actúe.**
+**No lance la misma actualización en varias pestañas**, y no la relance en bucle. En la versión 1.59.1, una avalancha de peticiones llevó a un proveedor de alojamiento a **bloquear la dirección** de un operador. Desde la 1.59.2, **todas** las peticiones de la pestaña pasan por un **regulador** (6 en vuelo como máximo; desde la 1.59.3, de 4 a 6 por segundo, porque cada unidad lee todos sus datos de entrada en una sola petición; reduce el ritmo y hace una pausa cuando el host responde con lentitud o devuelve 429 / 503). Puede ver: «El servidor responde con lentitud: las solicitudes se ralentizan para que no bloquee esta dirección.» o «Conexión perdida: esperando la red, no se pierde nada.». **Deje que actúe.**
 :::
 
 ## 5.8. Los paneles de abajo
@@ -2097,7 +2097,7 @@ Una pestaña que no carga muestra «No se pudo cargar esta pestaña. Recargue la
 |---|---|
 | **Staging / importación pendiente** | La zona privada donde llegan los archivos de una importación, nunca servida por URL, antes de su clic en [Publicar]{.ui}. |
 | **Ejecutor** | Quien hace el cálculo de una actualización de datos: **este navegador** o **el servidor**. Cada uno tiene su cola. |
-| **Regulador de red** | La salvaguarda que limita el número de peticiones enviadas al proveedor de alojamiento (6 en vuelo, de 10 a 16 por segundo) para evitar que bloquee su dirección. |
+| **Regulador de red** | La salvaguarda que limita el número de peticiones enviadas al proveedor de alojamiento (6 en vuelo, de 4 a 6 por segundo) para evitar que bloquee su dirección. |
 | **Registro** | El cuaderno que lleva el servidor de lo que ya ha llegado o se ha convertido: permite **reanudar** en el punto exacto. |
 
 ### Las extensiones, las páginas, la seguridad
@@ -2114,4 +2114,4 @@ Una pestaña que no carga muestra «No se pudo cargar esta pestaña. Recargue la
 
 ---
 
-*Documento escrito para la versión **1.59.2** de la plataforma (pipeline 0.21.0, formato de datos 4). Las capturas de pantalla muestran un conjunto de datos de demostración (embriones sintéticos); los colores pueden diferir si se ha modificado el tema.*
+*Documento escrito para la versión **1.59.3** de la plataforma (pipeline 0.21.0, formato de datos 4). Las capturas de pantalla muestran un conjunto de datos de demostración (embriones sintéticos); los colores pueden diferir si se ha modificado el tema.*

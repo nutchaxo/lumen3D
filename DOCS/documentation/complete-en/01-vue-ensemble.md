@@ -151,7 +151,7 @@ automatic test files
 
 A few version landmarks, valid at the date of this document:
 
-- web platform **1.59.2**; preparation pipeline **0.21.0**;
+- web platform **1.59.3**; preparation pipeline **0.21.0**;
 - current data format: [format 4]{.pill .green} (formats 1 to 3 are converted in place, see chapter 13);
 - every release is checked by the automatic tests before it is published.
 

@@ -2,7 +2,7 @@
 title: "Handleiding voor de beheerder"
 subtitle: "Het beheerpaneel van Lumen3D, tabblad voor tabblad"
 eyebrow: "IRIBHM · ULB — Lumen3D"
-version: "Webplatform 1.59.2"
+version: "Webplatform 1.59.3"
 date: "Oktober 2026"
 abstract: "Alles wat u kunt doen vanuit het beheerpaneel van de site: datasets beheren en importeren, ze naar het huidige formaat brengen, de publieke site aanpassen, functies installeren en het platform bijwerken. Geschreven voor iemand die dit paneel nog nooit heeft gezien en niet kan programmeren."
 lang: nl
@@ -859,7 +859,7 @@ Getoonde statussen: **Wacht op zijn beurt** (“volgende op de server”), **Bez
 - **Het tabblad verlaten**: “Er loopt een update. Dit tabblad verlaten pauzeert hem (u kunt later hervatten). Verlaten?”. **Er gaat niets verloren**: dankzij het serverjournaal kunt u hervatten na een herlaadbeurt, een onderbreking of een wissel van uitvoerder.
 
 ::: warning
-**Start dezelfde update niet in meerdere tabbladen**, en herstart niet in een lus. In versie 1.59.1 leidde een stortvloed aan verzoeken ertoe dat een hoster het **adres van een operator blokkeerde**. Sinds 1.59.2 lopen **alle** verzoeken van het tabblad via een **regelaar** (maximaal 6 tegelijk, 10 tot 16 per seconde; hij vertraagt en pauzeert wanneer de host traag antwoordt of 429 / 503 teruggeeft). U kunt zien: “De host antwoordt traag: verzoeken worden vertraagd zodat hij dit adres niet blokkeert.” of “Verbinding verbroken — wachten op het netwerk, er gaat niets verloren.”. **Laat het gewoon gebeuren.**
+**Start dezelfde update niet in meerdere tabbladen**, en herstart niet in een lus. In versie 1.59.1 leidde een stortvloed aan verzoeken ertoe dat een hoster het **adres van een operator blokkeerde**. Sinds 1.59.2 lopen **alle** verzoeken van het tabblad via een **regelaar** (maximaal 6 tegelijk; sinds 1.59.3 4 tot 6 per seconde, omdat elke eenheid al haar invoergegevens in één verzoek leest; hij vertraagt en pauzeert wanneer de host traag antwoordt of 429 / 503 teruggeeft). U kunt zien: “De host antwoordt traag: verzoeken worden vertraagd zodat hij dit adres niet blokkeert.” of “Verbinding verbroken — wachten op het netwerk, er gaat niets verloren.”. **Laat het gewoon gebeuren.**
 :::
 
 ## 5.8. De onderste blokken
@@ -2097,7 +2097,7 @@ Een tabblad dat niet laadt, toont “Dit tabblad kon niet worden geladen. Herlaa
 |---|---|
 | **Staging / wachtende import** | De privézone waar de bestanden van een import aankomen, nooit via URL geserveerd, vóór u op [Publiceren]{.ui} klikt. |
 | **Uitvoerder** | Wie de berekening van een data-update doet: **deze browser** of **de server**. Elk heeft zijn wachtrij. |
-| **Netwerkregelaar** | De beveiliging die het aantal naar de hoster gestuurde verzoeken beperkt (6 tegelijk, 10 tot 16 per seconde) om te voorkomen dat hij uw adres blokkeert. |
+| **Netwerkregelaar** | De beveiliging die het aantal naar de hoster gestuurde verzoeken beperkt (6 tegelijk, 4 tot 6 per seconde) om te voorkomen dat hij uw adres blokkeert. |
 | **Journaal** | Het schrift dat de server bijhoudt van wat al is aangekomen of omgezet: het maakt het **hervatten** op de juiste plek mogelijk. |
 
 ### De extensies, de pagina's, de beveiliging
@@ -2114,4 +2114,4 @@ Een tabblad dat niet laadt, toont “Dit tabblad kon niet worden geladen. Herlaa
 
 ---
 
-*Document geschreven voor versie **1.59.2** van het platform (pipeline 0.21.0, gegevensformaat 4). De schermafbeeldingen tonen een demodataset (synthetische embryo's); de kleuren kunnen afwijken als het thema is gewijzigd.*
+*Document geschreven voor versie **1.59.3** van het platform (pipeline 0.21.0, gegevensformaat 4). De schermafbeeldingen tonen een demodataset (synthetische embryo's); de kleuren kunnen afwijken als het thema is gewijzigd.*

@@ -2,7 +2,7 @@
 title: "Lumen3D — the essentials"
 subtitle: "What happens to your Imaris file, from the microscope to the screen"
 eyebrow: "IRIBHM · ULB — Lumen3D"
-version: "Web platform 1.59.2 · Pipeline 0.21.0"
+version: "Web platform 1.59.3 · Pipeline 0.21.0"
 date: "October 2026"
 abstract: "Ten pages to understand how an Imaris file is cleaned, reduced, cut into bricks and rendered in 3D in the browser — and what to keep in mind when you interpret your images. Each section points to the chapter of the full documentation that gives every detail."
 lang: en

@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 280" font-family="Inter, sans-serif">
+  <defs><marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#4a5468"/></marker></defs>
+  <rect width="800" height="280" rx="16" fill="#f8f9fd"/>
+  <text x="400" y="30" text-anchor="middle" font-size="17" font-weight="800" fill="#1c2333">A voxel of the demo dataset is not a cube</text>
+  <!-- voxel box -->
+  <g transform="translate(70,70)">
+    <polygon points="0,60 48,60 48,150 0,150" fill="#e8edff" stroke="#3b5bdb" stroke-width="2"/>
+    <polygon points="0,60 30,40 78,40 48,60" fill="#fff" stroke="#3b5bdb" stroke-width="2"/>
+    <polygon points="48,60 78,40 78,130 48,150" fill="#d0dbff" stroke="#3b5bdb" stroke-width="2"/>
+    <text x="24" y="173" text-anchor="middle" font-size="13" font-weight="700" fill="#3b5bdb">1.2 µm (X)</text>
+    <text x="102" y="64" font-size="13" font-weight="700" fill="#3b5bdb">1.2 µm (Y)</text>
+    <text x="90" y="112" font-size="13" font-weight="700" fill="#c92a2a">3.0 µm (Z)</text>
+    <text x="0" y="198" font-size="12" fill="#4a5468">Z is 2.5 times longer than X and Y.</text>
+  </g>
+  <!-- comparison -->
+  <g transform="translate(330,60)">
+    <rect width="440" height="190" rx="14" fill="#fff" stroke="#c5cbd8"/>
+    <text x="16" y="28" font-size="14" font-weight="800" fill="#1c2333">Two points 50 · 30 · 20 voxels apart (X · Y · Z)</text>
+    <rect x="16" y="46" width="408" height="62" rx="10" fill="#ebfbee" stroke="#2b8a3e"/>
+    <text x="28" y="68" font-size="13" font-weight="800" fill="#2b8a3e">Correct calculation (µm)</text>
+    <text x="28" y="90" font-size="13" fill="#1c2333">√((50×1.2)² + (30×1.2)² + (20×3.0)²) = √8,496 ≈ 92.2 µm</text>
+    <rect x="16" y="118" width="408" height="62" rx="10" fill="#fff0f0" stroke="#c92a2a"/>
+    <text x="28" y="140" font-size="13" font-weight="800" fill="#c92a2a">Wrong calculation (every voxel = 1.2 µm)</text>
+    <text x="28" y="162" font-size="13" fill="#1c2333">√(50² + 30² + 20²) × 1.2 = 61.6 × 1.2 ≈ 74.0 µm  (−20%)</text>
+  </g>
+</svg>

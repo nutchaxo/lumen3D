@@ -2,7 +2,7 @@
 title: "Lumen3D, de A à Z"
 subtitle: "Documentation complète de la plateforme"
 eyebrow: "IRIBHM · ULB — Lumen3D"
-version: "Plateforme Web 1.59.2 · Pipeline 0.21.0 · Format de données 4"
+version: "Plateforme Web 1.59.3 · Pipeline 0.21.0 · Format de données 4"
 date: "Octobre 2026"
 abstract: "Comment un fichier Imaris de plusieurs gigaoctets devient un embryon que l'on fait tourner dans un navigateur : les langages, les pages, le nettoyage de l'image, la compression, les briques, le rendu 3D, les outils de mesure et le panneau d'administration. Écrit pour des biologistes, illustré à chaque page."
 lang: fr
@@ -71,6 +71,6 @@ Une limite à connaître avant d'interpréter vos images.
 
 ::: note
 Les images de volumes proviennent d'**embryons de démonstration synthétiques**, traités par le vrai
-pipeline ; ce ne sont pas des données du laboratoire. Les chiffres sont lus dans le code (plateforme 1.59.2,
+pipeline ; ce ne sont pas des données du laboratoire. Les chiffres sont lus dans le code (plateforme 1.59.3,
 pipeline 0.21.0). Version courte : **« L'essentiel »** (10 pages), dans l'onglet *Documentation* du panneau d'administration.
 :::

@@ -2,7 +2,7 @@
 title: "Guide de l'administrateur"
 subtitle: "Le panneau d'administration de Lumen3D, onglet par onglet"
 eyebrow: "IRIBHM · ULB — Lumen3D"
-version: "Plateforme Web 1.59.2"
+version: "Plateforme Web 1.59.3"
 date: "Octobre 2026"
 abstract: "Tout ce qu'on peut faire depuis le panneau d'administration du site : gérer et importer les jeux de données, les mettre au format courant, personnaliser le site public, installer des fonctions, mettre la plateforme à jour. Écrit pour quelqu'un qui n'a jamais vu ce panneau et qui ne sait pas coder."
 lang: fr
@@ -859,7 +859,7 @@ Le bouton principal s'appelle [Réparer]{.ui} si le dataset se dit à jour mais 
 - **Quitter l'onglet** : « Une mise à jour est en cours. Quitter cet onglet la met en pause (vous pourrez la reprendre). Quitter ? ». **Rien n'est perdu** : le journal serveur permet de reprendre après un rechargement, une coupure ou un changement d'exécutant.
 
 ::: warning
-**Ne lancez pas la même mise à jour dans plusieurs onglets**, et ne relancez pas en boucle. En version 1.59.1, un afflux de requêtes avait conduit un hébergeur à **bannir l'adresse** d'un opérateur. Depuis la 1.59.2, **toutes** les requêtes de l'onglet passent par un **régulateur** (6 en vol au plus, 10 à 16 par seconde ; il ralentit et marque une pause quand l'hôte répond lentement ou renvoie 429 / 503). Vous pouvez voir : « L'hébergeur répond lentement : les requêtes sont ralenties pour qu'il ne bloque pas cette adresse. » ou « Connexion perdue — en attente du réseau, rien n'est perdu. ». **Laissez faire.**
+**Ne lancez pas la même mise à jour dans plusieurs onglets**, et ne relancez pas en boucle. En version 1.59.1, un afflux de requêtes avait conduit un hébergeur à **bannir l'adresse** d'un opérateur. Depuis la 1.59.2, **toutes** les requêtes de l'onglet passent par un **régulateur** (6 en vol au plus ; depuis la 1.59.3, 4 à 6 par seconde, car chaque unité lit toutes ses données d'entrée en une seule requête ; il ralentit et marque une pause quand l'hôte répond lentement ou renvoie 429 / 503). Vous pouvez voir : « L'hébergeur répond lentement : les requêtes sont ralenties pour qu'il ne bloque pas cette adresse. » ou « Connexion perdue — en attente du réseau, rien n'est perdu. ». **Laissez faire.**
 :::
 
 ## 5.8. Les volets du bas
@@ -2097,7 +2097,7 @@ Un onglet qui ne charge pas affiche « Impossible de charger cet onglet. Recharg
 |---|---|
 | **Staging / import en attente** | La zone privée où arrivent les fichiers d'un import, jamais servie par URL, avant votre clic sur [Publier]{.ui}. |
 | **Exécutant** | Qui fait le calcul d'une mise à jour de données : **ce navigateur** ou **le serveur**. Chacun a sa file. |
-| **Régulateur réseau** | Le garde-fou qui limite le nombre de requêtes envoyées à l'hébergeur (6 en vol, 10 à 16 par seconde) pour éviter qu'il bloque votre adresse. |
+| **Régulateur réseau** | Le garde-fou qui limite le nombre de requêtes envoyées à l'hébergeur (6 en vol, 4 à 6 par seconde) pour éviter qu'il bloque votre adresse. |
 | **Journal** | Le carnet tenu par le serveur de ce qui est déjà arrivé ou converti : il permet de **reprendre** au bon endroit. |
 
 ### Les extensions, les pages, la sécurité
@@ -2114,4 +2114,4 @@ Un onglet qui ne charge pas affiche « Impossible de charger cet onglet. Recharg
 
 ---
 
-*Document écrit pour la version **1.59.2** de la plateforme (pipeline 0.21.0, format de données 4). Les captures d'écran montrent un jeu de démonstration (embryons synthétiques) ; les couleurs peuvent différer si le thème a été modifié.*
+*Document écrit pour la version **1.59.3** de la plateforme (pipeline 0.21.0, format de données 4). Les captures d'écran montrent un jeu de démonstration (embryons synthétiques) ; les couleurs peuvent différer si le thème a été modifié.*

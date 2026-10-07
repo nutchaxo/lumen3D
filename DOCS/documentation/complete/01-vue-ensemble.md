@@ -151,7 +151,7 @@ fichiers de tests automatiques
 
 Quelques repères de version, valables à la date de ce document :
 
-- plateforme web **1.59.2** ; pipeline de préparation **0.21.0** ;
+- plateforme web **1.59.3** ; pipeline de préparation **0.21.0** ;
 - format de données courant : [format 4]{.pill .green} (les formats 1 à 3 sont convertis en place, voir chapitre 13) ;
 - chaque version est vérifiée par les tests automatiques avant d'être publiée.
 

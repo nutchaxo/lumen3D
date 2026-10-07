@@ -211,7 +211,7 @@ Les préréglages XY/XZ/YZ suivent les axes **du fichier**, pas ceux de l'embryo
 | 3 | [Épaisseur]{.ui} : 12 coupes = 36,00 µm |
 | 4 | [Rotation]{.ui} 0–360° |
 | 5 | Position : 174 à 207 µm de profondeur |
-| 6 | Ouvrir la tranche dans le Studio |
+| 6 | [Open in Slice Studio]{.ui} : ouvrir la tranche dans le Studio (libellé affiché en anglais) |
 | 7 | Le **cran 3D** : curseur ici = toute la pile en 3D |
 | 8 | La **piste** : une position par coupe |
 | 9 | **Triangles de rognage** (dessus / dessous) |

@@ -37,7 +37,7 @@ Hover over a button and a tooltip gives its name. The bar is arranged in **five 
 | 12 | [Presentation mode]{.ui} |
 | 13 | [Decompose by channel]{.ui} |
 | 14 | [Z-Stack Browser]{.ui} |
-| 15 | [Help and methods]{.ui} |
+| 15 | [Help and methods]{.ui}: a link to the About page (presentation and methods) |
 | 16 | [Colorblind filters]{.ui} |
 | 17 | [Toggle theme]{.ui} (light / dark) |
 | 18 | [Center sample]{.ui} |
@@ -433,10 +433,10 @@ A panel added late is "caught up": it receives the latest camera, the latest tim
 ### The shared memory
 
 ::: analogy
-**A buffet on a fixed budget.** The graphics card offers 1.5 GiB for all the panels. Each volume says what each quality costs. The viewer lowers the hungriest one while the total is too high, then raises the most modest one while it still fits, never going above 1024 in automatic mode.
+**A buffet on a fixed budget.** Compare keeps a **fixed** shared budget of 1.5 GiB for all the panels (it is not a measurement of your graphics card). Each volume says what each quality costs. The viewer lowers the hungriest one while the total is too high, then raises the most modest one while it still fits, never going above 1024 in automatic mode. This setting only concerns **volumes**: a 2D photograph has no quality.
 :::
 
-Panels start at 512; quality is raised **one panel at a time** (180 s delay). Choosing 512/1024/Native by hand forces the level.
+Panels start at 512; quality is raised **one panel at a time**; a panel that does not settle within 180 s is abandoned (message in the console) and the next one is handled. Choosing 512/1024/Native by hand forces the level.
 
 ### Decompose, figure, workspace
 

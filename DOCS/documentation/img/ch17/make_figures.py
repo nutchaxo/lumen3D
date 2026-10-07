@@ -16,10 +16,15 @@ import svglib
 import svgs_files
 import svgs_migr
 import svgs_import
+import figs_data
 
 svgs_files.run()
 svgs_files.run2()
+svgs_files.carte_chapitre()
+svgs_files.pack_planes()
 svgs_migr.run()
+svgs_migr.run2()
 svgs_import.run()
+figs_data.run()
 for w in svglib.WARN:
     print("WARN", w)

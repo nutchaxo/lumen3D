@@ -170,7 +170,7 @@ Because of **perspective**, a distant object looks smaller: the bar is exact onl
 | 5 | Plane [Position]{.ui}, then [Yaw]{.ui}, [Pitch]{.ui}, [Roll]{.ui} |
 | 6 | [Slab thickness]{.ui}: number of samples in the slab |
 | 7 | [Projection]{.ui}: [Single]{.ui}, [MIP]{.ui} or [Average]{.ui} |
-| 8 | Button to the Studio (§ 12.7) |
+| 8 | [Open in Studio (HD)]{.ui}: sends the slice to the Studio (§ 12.7) |
 :::
 :::::
 ::::::
@@ -211,7 +211,7 @@ The XY/XZ/YZ presets follow the axes **of the file**, not those of the embryo, u
 | 3 | [Thickness]{.ui}: 12 slices = 36.00 µm |
 | 4 | [Rotation]{.ui} 0–360° |
 | 5 | Position: 174 to 207 µm deep |
-| 6 | Open the slab in the Studio |
+| 6 | [Open in Slice Studio]{.ui}: sends the slab to the Studio |
 | 7 | The **3D notch**: cursor here = the whole stack in 3D |
 | 8 | The **track**: one position per slice |
 | 9 | **Trim triangles** (above / below) |
@@ -335,7 +335,7 @@ The most instructive tool of chapter 7: it **draws the edges of every non-empty 
 |---|---|
 | 1 | Tools: select, rectangle, ellipse, arrow, line, text, distance, angle, scale bar |
 | 2 | Layers (reorder, hide, lock) |
-| 3 | A distance measurement: 399.68 µm (label computed in µm) |
+| 3 | A distance measurement: 399.68 µm (label computed in µm; the figure writes the unit as "um") |
 | 4 | [Properties]{.ui} of the chosen layer: name, colour, opacity, thickness, [Rotation]{.ui} (−180 to 180°) |
 | 5 | [Channels]{.ui}: colour, min/max, gamma, on/off, with their histograms |
 :::

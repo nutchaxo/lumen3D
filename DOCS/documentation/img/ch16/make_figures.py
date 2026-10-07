@@ -57,7 +57,16 @@ class Svg:
         st = ' font-style="italic"' if italic else ""
         self.parts.append(
             f'<text x="{x}" y="{y}" font-family="{fam}" font-size="{size}" font-weight="{800 if bold else 400}" '
-            f'fill="{fill}" text-anchor="{anchor}"{st}>{escape(s)}</text>')
+            f'fill="{fill}" text-anchor="{anchor}"{st} xml:space="preserve">{escape(s)}</text>')
+
+    def para(self, x, y, s, size=12, maxw=700, lh=None, **kw):
+        import textwrap
+        lh = lh or size * 1.4
+        n = max(10, int(maxw / (size * 0.53)))
+        out = textwrap.wrap(s, n)
+        for i, ln in enumerate(out):
+            self.text(x, y + i * lh, ln, size, maxw=maxw, **kw)
+        return y + len(out) * lh
 
     def lines(self, x, y, arr, size=13, lh=None, **kw):
         lh = lh or size * 1.35
@@ -159,14 +168,14 @@ def simulate(hexc, name):
 def fig_config_carte():
     s = Svg("config-carte.svg", 470, L("Un dossier, des fichiers JSON : qui les lit, et ce que le visiteur voit",
                                        "One folder, a few JSON files: who reads them and what visitors see"))
-    s.text(24, 66, L("config/ (public)", "config/ (public)"), 13, True, ACC["blue"][0])
-    s.text(330, 66, L("lu par", "read by"), 13, True, ACC["violet"][0])
-    s.text(590, 66, L("ce que le visiteur voit", "what visitors see"), 13, True, ACC["green"][0])
+    s.text(24, 66, "config/ (public)", 13, True, ACC["blue"][0])
+    s.text(290, 66, L("lu par", "read by"), 13, True, ACC["violet"][0])
+    s.text(540, 66, L("ce que le visiteur voit", "what visitors see"), 13, True, ACC["green"][0])
     rows = [
         ("instance.json", "blue", L("le serveur : {{SITE:…}}", "the server: {{SITE:…}}"), "violet",
-         L("titre d'onglet, description, mots-clés", "tab title, description, keywords")),
-        ("instance.json", "blue", L("InstanceConfig + I18n", "InstanceConfig + I18n"), "violet",
-         L("logo, noms, pied de page, menu, {jetons}", "logo, names, footer, menu, {tokens}")),
+         L("titre d'onglet, SEO", "tab title, SEO")),
+        ("instance.json", "blue", "InstanceConfig + I18n", "violet",
+         L("logo, noms, pied, menu, {jetons}", "logo, names, footer, menu, {tokens}")),
         ("theme.json → theme.css", "blue", L("<link> sur chaque page", "<link> on every page"), "violet",
          L("couleurs, police, arrondis", "colours, font, corners")),
         ("legal.json", "blue", "legal.js", "violet", L("page Mentions légales", "Legal notice page")),
@@ -177,34 +186,34 @@ def fig_config_carte():
     ]
     y = 80
     for f, c1, r, c2, v in rows:
-        s.pill(24, y, 250, 38, f, c1, 13)
-        s.arrow(278, y + 19, 320, y + 19)
-        s.pill(324, y, 235, 38, r, c2, 12.5)
-        s.arrow(563, y + 19, 585, y + 19)
-        s.rect(589, y, 190, 38, "#fff", LINE, 10)
-        s.text(684, y + 24, v, 11.5, False, INK, "middle", maxw=180)
+        s.pill(24, y, 215, 38, f, c1, 13)
+        s.arrow(243, y + 19, 281, y + 19)
+        s.pill(285, y, 215, 38, r, c2, 12.5)
+        s.arrow(504, y + 19, 536, y + 19)
+        s.rect(540, y, 244, 38, "#fff", LINE, 10)
+        s.text(662, y + 24, v, 11.5, False, INK, "middle", maxw=232)
         y += 50
-    s.rect(24, y + 8, 755, 62, ACC["red"][1], ACC["red"][0], 12, 1.4, "5 4")
+    s.rect(24, y + 8, 760, 62, ACC["red"][1], ACC["red"][0], 12, 1.4, "5 4")
     s.text(40, y + 31, L("Hors de config/ : les brouillons de pages vivent dans api/page-drafts/ (privé, jamais servi).",
-                         "Outside config/: page drafts live in api/page-drafts/ (private, never served)."), 12.5, True, ACC["red"][0], maxw=725)
+                         "Outside config/: page drafts live in api/page-drafts/ (private, never served)."), 12.5, True, ACC["red"][0], maxw=735)
     s.text(40, y + 52, L("config/ est public : aucun secret n'y entre. Les mises à jour de la plateforme n'y touchent pas.",
-                         "config/ is public: no secret ever goes in. Platform updates leave it alone."), 12.5, False, INK, maxw=725)
+                         "config/ is public: no secret ever goes in. Platform updates leave it alone."), 12.5, False, INK, maxw=735)
     s.save()
 
 
 # ═════════════════════════ 2. three channels ═════════════════════════
 def fig_trois_canaux():
-    s = Svg("trois-canaux.svg", 420, L("Une valeur de instance.json, trois chemins vers l'écran",
+    s = Svg("trois-canaux.svg", 450, L("Une valeur de instance.json, trois chemins vers l'écran",
                                        "One instance.json value, three routes to the screen"))
     w = 246
     xs = [16, 277, 538]
-    heads = [L("① Le serveur, avant l'envoi", "① The server, before sending"),
-             L("② Le navigateur, au chargement", "② The browser, on load"),
-             L("③ Le navigateur, dans les textes", "③ The browser, inside texts")]
+    heads = [L("① Serveur, avant l'envoi", "① Server, before sending"),
+             L("② Navigateur, au chargement", "② Browser, on load"),
+             L("③ Navigateur, dans les textes", "③ Browser, inside texts")]
     cols = ["blue", "green", "violet"]
-    code = ["<title>{{SITE:pageTitles.home|Lumen3D}}</title>",
-            '<b data-instance="brand.monogram">IR</b>',
-            L("« Explorez les {specimenPlural} »", "“Explore {SpecimenPlural}”")]
+    code = [["<title>{{SITE:pageTitles.", "home|Lumen3D}}</title>"],
+            ['<b data-instance=', '"brand.monogram">IR</b>'],
+            [L("« Explorez les", "“Explore"), L("{specimenPlural} »", "{SpecimenPlural}”")]]
     what = [L("Remplace le marqueur par la valeur (échappée) ; sinon le texte de repli.",
               "Swaps the marker for the value (escaped); otherwise the fallback text."),
             L("Écrit la valeur dans l'élément : texte, ou attribut avec data-instance-attr.",
@@ -219,15 +228,10 @@ def fig_trois_canaux():
              "Language files stay neutral: no hard-coded “embryo”.")]
     for i in range(3):
         x = xs[i]
-        s.card(x, 56, w, 340, heads[i], cols[i])
+        s.card(x, 56, w, 350, heads[i], cols[i])
         s.text(x + 12, 106, L("Syntaxe", "Syntax"), 11.5, True, INK2)
         s.rect(x + 10, 114, w - 20, 50, "#f1f3f9", LINE, 8)
-        c = code[i]
-        if len(c) > 30:
-            parts = [c[:30], c[30:]]
-        else:
-            parts = [c]
-        for k, p in enumerate(parts):
+        for k, p in enumerate(code[i]):
             s.text(x + 18, 134 + k * 16, p, 11, False, INK, maxw=w - 30, mono=True)
         s.text(x + 12, 194, L("Ce qu'il fait", "What it does"), 11.5, True, INK2)
         import textwrap
@@ -236,14 +240,14 @@ def fig_trois_canaux():
         s.text(x + 12, 280, L("Pourquoi", "Why"), 11.5, True, INK2)
         for k, ln in enumerate(textwrap.wrap(why[i], 33)):
             s.text(x + 12, 298 + k * 16, ln, 12, False, INK, maxw=w - 24)
-    s.text(400, 414, L("Le même fichier alimente les trois : ils ne peuvent pas se contredire.",
+    s.text(400, 432, L("Le même fichier alimente les trois : ils ne peuvent pas se contredire.",
                        "One file feeds all three: they cannot disagree."), 13, True, INK2, "middle")
     s.save()
 
 
 # ═════════════════════════ 3. localizable value ═════════════════════════
 def fig_localisable():
-    s = Svg("localisable.svg", 380, L("Une valeur « par langue » : qui répond quoi ?",
+    s = Svg("localisable.svg", 396, L("Une valeur « par langue » : qui répond quoi ?",
                                       "A “per-language” value: who answers what?"))
     s.rect(24, 56, 752, 70, "#fff")
     s.text(40, 82, L("config/instance.json  →  specimen.plural", "config/instance.json  →  specimen.plural"), 12.5, True, ACC["blue"][0])
@@ -263,9 +267,10 @@ def fig_localisable():
         s.text(240, y + 22, ans, 14, True, INK, maxw=180)
         s.text(430, y + 22, why, 12, False, INK, maxw=345)
         y += 44
-    s.rect(24, 350 - 6 - 0, 752, 1, "#fff", "#fff")
-    s.text(400, 360, L("Ordre : langue du visiteur → « en » → première valeur. Une chaîne simple vaut pour toutes les langues.",
-                       "Order: visitor's language → “en” → first value. A plain string applies to every language."), 12.5, True, INK2, "middle", maxw=760)
+    s.text(400, 366, L("Ordre : langue du visiteur → « en » → première valeur.",
+                       "Order: visitor's language → “en” → first value."), 13, True, INK2, "middle", maxw=760)
+    s.text(400, 384, L("Une chaîne simple (sans accolades) vaut pour toutes les langues.",
+                       "A plain string (no braces) applies to every language."), 12, False, INK2, "middle", maxw=760)
     s.save()
 
 
@@ -276,22 +281,22 @@ def fig_theme_pipeline():
            [L("couleurs, police,", "colours, font,"), L("arrondis + aperçu", "corners + preview"), L("en direct", "live"), L("→ [Enregistrer]", "→ [Save]")])
     s.arrow(190, 130, 224, 130)
     s.card(228, 56, 170, 150, "theme.json", "blue",
-           ['{ "tokens": {', '  "--color-primary":', '    "#2F6BFF", … } }', L("seulement ce qui change", "only what changed")], 12)
+           ['{ "tokens": {', '  "--color-primary":', '    "#2F6BFF" } }', L("ce qui change seul", "only what changed")], 12)
     s.arrow(402, 130, 436, 130)
     s.card(440, 56, 170, 150, L("Le serveur compile", "The server compiles"), "green",
            [L("assainit chaque valeur", "scrubs every value"), L("(pas de { } ; @ < >)", "(no { } ; @ < >)"), L("→ :root { … }", "→ :root { … }")], 12)
     s.arrow(614, 130, 648, 130)
     s.card(652, 56, 132, 150, "theme.css", "amber",
-           [L("fichier servi,", "served file,"), L("identique pour", "same for"), L("tous les visiteurs", "every visitor")], 12)
+           [L("fichier servi,", "served file,"), L("identique pour", "same for"), L("chaque visiteur", "every visitor")], 12)
     # cascade
     s.text(24, 240, L("L'ordre des feuilles de style (la dernière gagne) :", "Stylesheet order (the last one wins):"), 13, True, INK2)
     items = [("variables.css", L("valeurs d'usine", "factory values"), "grey"),
              ("themes.css", L("sombre / clair", "dark / light"), "grey"),
              ("config/theme.css", L("VOTRE marque", "YOUR brand"), "amber"),
              ("base · components · layout…", L("mise en page", "layout"), "grey"),
-             (L("page + tools.css", "page + tools.css"), "", "grey")]
+             ("tools.css", L("outils", "tools"), "grey")]
     x = 24
-    ws = [140, 130, 160, 200, 110]
+    ws = [130, 120, 150, 215, 109]
     for (n, sub, c), w in zip(items, ws):
         s.rect(x, 252, w, 62, ACC[c][1], ACC[c][0], 10, 1.8 if c == "amber" else 1.2)
         s.text(x + w / 2, 278, n, 11.5, True, INK, "middle", maxw=w - 8)
@@ -299,11 +304,11 @@ def fig_theme_pipeline():
             s.text(x + w / 2, 298, sub, 11.5, False, INK2, "middle", maxw=w - 8)
         x += w + 6
     s.rect(24, 334, 752, 70, "#fff")
-    s.lines(40, 356, [L("Un fichier servi (pas un <style> injecté) : la politique de sécurité du site interdit les styles injectés.",
+    s.lines(40, 358, [L("Un fichier servi (pas un <style> injecté) : la politique de sécurité du site interdit les styles injectés.",
                         "A served file (not an injected <style>): the site's security policy forbids injected styles."),
-                      L("Le thème est donc là dès le premier affichage, sans clignotement. L'aperçu, lui, change les variables une à une.",
-                        "So the theme is there from the first paint, with no flicker. The preview changes variables one by one.")],
-            12, 18, maxw=720)
+                      L("Donc le thème est là dès le premier affichage. L'aperçu, lui, change les variables une à une.",
+                        "So the theme is there from the first paint. The preview changes variables one by one.")],
+            12, 20, maxw=725)
     s.save()
 
 
@@ -337,8 +342,8 @@ def fig_theme_derives(base="#2F6BFF"):
           "• hover, dark: HSL lightness is shifted by +8 / −10 points, as in the editor's code."),
         L("• subtle : la même couleur à 15 % d'opacité (fonds discrets, pastilles).",
           "• subtle: the same colour at 15 % opacity (quiet backgrounds, badges)."),
-        L("• strong : sert aux boutons pleins à texte blanc ; calculé par le navigateur (color-mix), il ne fait que foncer.",
-          "• strong: used by filled buttons with white text; computed by the browser (color-mix), it only darkens."),
+        L("• strong : pour les boutons pleins à texte blanc ; calculé par le navigateur (color-mix), il fonce seulement.",
+          "• strong: for filled buttons with white text; computed by the browser (color-mix), it only darkens."),
         L(f"Valeurs de l'exemple : base {base}, hover {hov}, dark {dark}, strong {strong}, strong-hover {strongh}.",
           f"Values in this example: base {base}, hover {hov}, dark {dark}, strong {strong}, strong-hover {strongh}."),
     ], 12, 22, maxw=715)
@@ -351,27 +356,28 @@ def fig_contraste():
                ("orange", "#FF7A2F"), ("crimson", "#E5484D")]
     names = {"green": L("Vert", "Green"), "blue": L("Bleu", "Blue"), "purple": L("Violet", "Purple"),
              "teal": L("Turquoise", "Teal"), "orange": L("Orange", "Orange"), "crimson": L("Carmin", "Crimson")}
-    s = Svg("contraste.svg", 390, L("Texte blanc sur un bouton de la couleur de marque", "White text on a brand-colour button"))
-    s.text(24, 60, L("Contraste du blanc sur --color-primary-strong (la couleur assombrie à 77 %), pour les 6 couleurs de l'assistant",
-                     "Contrast of white on --color-primary-strong (the colour darkened to 77 %), for the wizard's 6 colours"), 12.5, False, INK2, maxw=760)
-    x0, y0, bw = 150, 84, 520
+    s = Svg("contraste.svg", 440, L("Texte blanc sur un bouton de la couleur de marque", "White text on a brand-colour button"))
+    s.text(24, 60, L("Contraste du blanc sur --color-primary-strong (la couleur assombrie à 77 %),", "Contrast of white on --color-primary-strong (the colour darkened to 77 %),"), 12.5, False, INK2, maxw=760)
+    s.text(24, 78, L("pour les 6 couleurs proposées par l'assistant de première installation.", "for the 6 colours offered by the first-run wizard."), 12.5, False, INK2, maxw=760)
+    x0, y0, bw = 130, 104, 480
     maxv = 8.0
+    xa = x0 + 30 + bw * 4.5 / maxv
     for i, (k, col) in enumerate(presets):
         strong = mix_black(col, .77)
         c = contrast("#FFFFFF", strong)
         y = y0 + i * 40
-        s.text(24, y + 20, names[k], 13, True, INK, maxw=110)
+        s.text(24, y + 20, names[k], 13, True, INK, maxw=100)
         s.rect(x0, y + 2, 20, 24, strong, "#999", 4)
         w = bw * c / maxv
         ok = c >= 4.5
         s.rect(x0 + 30, y + 4, w, 20, ACC["green" if ok else "amber"][1], ACC["green" if ok else "amber"][0], 6, 1.4)
-        s.text(x0 + 30 + w + 8, y + 20, f"{c:.2f} : 1", 13, True, ACC["green" if ok else "amber"][0])
-    xa = x0 + 30 + bw * 4.5 / maxv
-    s.parts.append(f'<line x1="{xa}" y1="{y0-6}" x2="{xa}" y2="{y0+6*40-4}" stroke="{ACC["red"][0]}" stroke-width="2" stroke-dasharray="6 4"/>')
-    s.text(xa + 6, y0 + 6 * 40 + 14, L("4,5 : seuil WCAG AA pour du texte courant", "4.5: WCAG AA threshold for body text"), 12, True, ACC["red"][0], maxw=300)
-    s.rect(24, 340, 752, 36, ACC["amber"][1], ACC["amber"][0], 10, 1.2)
-    s.text(40, 363, L("Le calcul ne fait que foncer la couleur : il garde le contraste d'origine, il n'en garantit pas un minimum. Vérifiez les teintes claires.",
-                      "The calculation only darkens the colour: it keeps the original contrast, it does not guarantee a minimum. Check light hues."), 12, False, INK, maxw=720)
+        num = f"{c:.2f}".replace(".", ",") if LANG == "fr" else f"{c:.2f}"
+        s.text(x0 + 30 + max(w, bw * 4.5 / maxv + 6) + 8, y + 20, f"{num} : 1", 13, True, ACC["green" if ok else "amber"][0])
+    s.parts.append(f'<line x1="{xa}" y1="{y0-6}" x2="{xa}" y2="{y0+6*40-6}" stroke="{ACC["red"][0]}" stroke-width="2" stroke-dasharray="6 4"/>')
+    s.text(xa, y0 + 6 * 40 + 12, L("4,5 : seuil WCAG AA pour du texte courant", "4.5: WCAG AA threshold for body text"), 12, True, ACC["red"][0], "middle", maxw=330)
+    s.rect(24, 376, 752, 48, ACC["amber"][1], ACC["amber"][0], 10, 1.2)
+    s.text(40, 396, L("Le calcul ne fait que foncer la couleur : il garde le contraste d'origine sans en garantir un minimum.", "The calculation only darkens the colour: it keeps the original contrast without guaranteeing a minimum."), 12, False, INK, maxw=725)
+    s.text(40, 414, L("Après un changement de couleur, vérifiez les boutons en thème clair et en thème sombre.", "After changing the colour, check the buttons in both the light and the dark theme."), 12, True, INK, maxw=725)
     s.save()
 
 
@@ -405,7 +411,6 @@ def fig_page_modele():
     s.text(294, 424, L("… autant de sections que nécessaire (jusqu'à 300)", "… as many sections as needed (up to 300)"), 11.5, False, INK2, "middle")
     # legend
     s.card(584, 56, 200, 396, L("Les règles", "The rules"), "grey")
-    s.lines(596, 100, [L("Section", "Section"), ""], 12.5, 18, bold=True)
     items = [
         (L("Section", "Section"), [L("une bande de la page,", "a band of the page,"), L("avec ses marges et", "with its margins and"), L("son fond", "its background")]),
         (L("Colonne", "Column"), [L("largeur de 1 à 12", "width from 1 to 12"), L("(douzièmes), 6 colonnes", "(twelfths), 6 columns"), L("au plus par section ;", "at most per section;"), L("empilées sur mobile", "stacked on mobile")]),
@@ -458,8 +463,8 @@ def fig_widgets():
         for i, wid in enumerate(WIDGETS[cat]):
             r, c = divmod(i, per)
             s.pill(x + 12 + c * (cw + 8), y + 46 + r * 30, cw, 24, WNAME[LANG][wid], cols[cat], 11, False)
-    s.text(400, 432, L("4 + 6 + 10 + 8 + 3 = 27 types. « Statistiques », « Compteur animé » et « Derniers datasets » se remplissent seuls depuis le catalogue.",
-                       "6 + 10 + 8 + 3 = 27 types. “Stats”, “Animated counter” and “Latest datasets” fill themselves from the catalogue."), 11.5, False, INK2, "middle", maxw=770)
+    s.text(400, 432, L("6 + 10 + 8 + 3 = 27 types. Statistiques, Compteur animé et Derniers datasets se remplissent seuls depuis le catalogue.",
+                       "6 + 10 + 8 + 3 = 27 types. Stats, Animated counter and Latest datasets fill themselves from the catalogue."), 11.5, False, INK2, "middle", maxw=770)
     s.save()
 
 
@@ -495,9 +500,9 @@ def fig_brouillon():
 
 # ═════════════════════════ 10. channel colour ═════════════════════════
 def fig_couleur_canal():
-    s = Svg("couleur-canal.svg", 440, L("D'où vient la couleur de départ d'un canal ?", "Where does a channel's starting colour come from?"))
-    s.text(24, 62, L("Le viewer prend la première réponse non vide, de haut en bas (exemple : un canal nommé « Pecam1 ») :",
-                     "The viewer takes the first non-empty answer, top to bottom (example: a channel named “Pecam1”):"), 12.5, False, INK2, maxw=760)
+    s = Svg("couleur-canal.svg", 450, L("D'où vient la couleur de départ d'un canal ?", "Where does a channel's starting colour come from?"))
+    s.text(24, 62, L("Le viewer prend la première réponse non vide, de haut en bas (valeurs d'exemple ; canal « Pecam1 ») :",
+                     "The viewer takes the first non-empty answer, top to bottom (example values; channel named “Pecam1”):"), 12.5, False, INK2, maxw=760)
     steps = [
         ("1", "display_defaults[i].color", L("réglages d'affichage du jeu de données", "the dataset's display settings"), "#FF8800", "violet"),
         ("2", "colors[i]", L("liste de couleurs (ancien format)", "colour list (older format)"), "#FFFF00", "blue"),
@@ -512,11 +517,11 @@ def fig_couleur_canal():
         s.text(80, y + 24, name, 13.5, True, INK, mono=(n in "123"), maxw=330)
         s.text(80, y + 44, sub, 12, False, INK2, maxw=420)
         s.rect(640, y + 12, 60, 32, col, "#999", 6)
-        s.text(710, y + 33, col if n != "5" else "#00FF00 …", 11, False, INK2, mono=True, maxw=64)
+        s.text(708, y + 33, col, 11, False, INK2, mono=True, maxw=64)
         y += 64
     s.rect(24, y + 4, 752, 36, ACC["amber"][1], ACC["amber"][0], 10)
-    s.text(40, y + 27, L("Le pipeline écrit toujours une couleur (étape 3) : les préréglages 4 ne servent donc qu'aux jeux dont les métadonnées n'en ont pas.",
-                         "The pipeline always writes a colour (step 3): presets (step 4) only matter for datasets whose metadata has none."), 11.5, False, INK, maxw=725)
+    s.text(40, y + 27, L("Le pipeline écrit toujours une couleur (étape 3) : l'étape 4 ne sert qu'aux jeux dont les métadonnées n'en ont pas.",
+                         "The pipeline always writes a colour (step 3): step 4 only matters for datasets whose metadata has none."), 11.5, False, INK, maxw=725)
     s.save()
 
 
@@ -536,8 +541,8 @@ def fig_i18n_choix():
         y += 74
         if n != "3":
             s.arrow(51, y - 28, 51, y + 2, sw=1.8)
-    s.text(36, 318, L("À chaque étape, la langue doit exister dans lang/ (découverte :", "At each step the language must exist in lang/ (discovery:"), 11.5, False, INK, maxw=340)
-    s.text(36, 335, L("/api/languages → lang/manifest.json → en, fr, es).", "/api/languages → lang/manifest.json → en, fr, es)."), 11.5, False, INK, maxw=340)
+    s.text(36, 318, L("La langue doit exister dans lang/ (liste lue via", "The language must exist in lang/ (list read via"), 11.5, False, INK, maxw=340)
+    s.text(36, 335, L("/api/languages, sinon lang/manifest.json).", "/api/languages, else lang/manifest.json)."), 11.5, False, INK, maxw=340)
     s.text(36, 362, L("Charge d'abord « en », puis la langue choisie ; si", "Loads “en” first, then the chosen language; if its"), 11.5, False, INK, maxw=340)
     s.text(36, 379, L("son fichier échoue, l'interface reste en anglais.", "file fails, the interface stays in English."), 11.5, False, INK, maxw=340)
     s.text(36, 406, L("Un clic dans le menu écrit le choix et prévient", "A click in the menu stores the choice and tells"), 11.5, False, INK, maxw=340)
@@ -565,12 +570,12 @@ def fig_i18n_choix():
 
 # ═════════════════════════ 12. where texts live ═════════════════════════
 def fig_i18n_ou():
-    s = Svg("i18n-ou.svg", 440, L("Où vit chaque texte du site ?", "Where does each text of the site live?"))
+    s = Svg("i18n-ou.svg", 460, L("Où vit chaque texte du site ?", "Where does each text of the site live?"))
     rows = [
         ("lang/<code>.json", L("l'interface (boutons, messages, panneau d'admin)", "the interface (buttons, messages, admin panel)"),
          L("1 943 clés × 4 langues, parité testée", "1,943 keys × 4 languages, parity tested"), "blue"),
         ("plugins/…/lang/<code>.json", L("les mots de chaque outil", "each tool's own words"),
-         L("28 dictionnaires (240 clés en anglais) ; manque → anglais du plugin", "28 dictionaries (240 English keys); missing → the plugin's English"), "violet"),
+         L("28 dictionnaires (240 clés) ; manque → anglais", "28 dictionaries (240 keys); missing → English"), "violet"),
         ("config/instance.json", L("nom, accroche, spécimen, pied de page, SEO, types", "name, tagline, specimen, footer, SEO, types"),
          L("valeurs « par langue » : { en, fr, es, nl }", "“per-language” values: { en, fr, es, nl }"), "green"),
         ("config/pages/<slug>.json", L("le texte des pages que vous construisez", "the text of the pages you build"),
@@ -587,35 +592,34 @@ def fig_i18n_ou():
         s.text(400, y + 26, L("Comment", "How"), 11, True, INK2)
         s.text(400, y + 48, how, 12, False, INK, maxw=375)
         y += 74
-    s.text(400, y + 18, L("Les trois derniers appartiennent à VOTRE site : ils ne sont ni dans lang/ ni touchés par une mise à jour.",
-                          "The last three belong to YOUR site: they are neither in lang/ nor touched by an update."), 12.5, True, INK2, "middle", maxw=770)
+    s.text(400, y + 18, L("Les trois derniers appartiennent à VOTRE site : ni dans lang/, ni touchés par une mise à jour.",
+                          "The last three belong to YOUR site: not in lang/, not touched by an update."), 12.5, True, INK2, "middle", maxw=770)
     s.save()
 
 
 # ═════════════════════════ 13. rate limit ═════════════════════════
 def fig_debit():
-    s = Svg("limitation-debit.svg", 450, L("Deux seaux à jetons protègent le compteur de visites", "Two token buckets protect the visit counter"))
-    s.card(16, 56, 366, 190, L("Un seau par adresse", "One bucket per address"), "blue",
+    s = Svg("limitation-debit.svg", 456, L("Deux seaux à jetons protègent le compteur de visites", "Two token buckets protect the visit counter"))
+    s.card(16, 56, 366, 150, L("Un seau par adresse", "One bucket per address"), "blue",
            [L("capacité : 60 jetons", "capacity: 60 tokens"), L("remplissage : 1 jeton par seconde", "refill: 1 token per second"),
-            L("4 096 emplacements en mémoire :", "4,096 slots in memory:"), L("l'adresse est hachée (SHA-256),", "the address is hashed (SHA-256),"), L("jamais écrite sur le disque", "never written to disk")], 12.5)
-    s.card(418, 56, 366, 190, L("Un seau pour tout le site", "One bucket for the whole site"), "violet",
+            L("4 096 emplacements en mémoire ;", "4,096 slots in memory;"), L("adresse hachée, jamais écrite", "address hashed, never written")], 12.5)
+    s.card(418, 56, 366, 150, L("Un seau pour tout le site", "One bucket for the whole site"), "violet",
            [L("capacité : 600 jetons", "capacity: 600 tokens"), L("remplissage : 20 jetons par seconde", "refill: 20 tokens per second"),
-            L("plafonne le total, même si", "caps the total, even if"), L("beaucoup d'adresses se partagent", "many addresses share"), L("un même emplacement", "one slot")], 12.5)
-    s.text(400, 276, L("Chaque balise (visite, vue) coûte 1 jeton à chacun des deux seaux", "Each beacon (visit, view) costs 1 token from each of the two buckets"), 13.5, True, INK, "middle", maxw=770)
-    flow = [(L("Balise reçue", "Beacon received"), "blue"), (L("2 jetons dispo ?", "Both buckets non-empty?"), "amber"),
-            (L("Oui : on compte", "Yes: counted"), "green")]
-    x = 40
-    for t, c in flow:
-        s.rect(x, 296, 200, 44, ACC[c][1], ACC[c][0], 10)
-        s.text(x + 100, 323, t, 13, True, ACC[c][0], "middle", maxw=190)
-        x += 248
-    s.arrow(244, 318, 286, 318)
-    s.arrow(492, 318, 534, 318)
-    s.rect(286, 350, 200, 44, ACC["red"][1], ACC["red"][0], 10)
-    s.text(386, 377, L("Non : réponse 429, rien écrit", "No: answer 429, nothing written"), 12.5, True, ACC["red"][0], "middle", maxw=192)
-    s.arrow(386, 342, 386, 348, sw=1.6)
-    s.text(400, 424, L("Une inondation de requêtes coûte un hachage et deux mises à jour de 16 octets : jamais une réécriture du fichier de statistiques.",
-                       "A flood of requests costs one hash and two 16-byte updates: never a rewrite of the statistics file."), 12, False, INK2, "middle", maxw=770)
+            L("plafonne le total, même quand", "caps the total, even when"), L("des adresses partagent un emplacement", "addresses share a slot")], 12.5)
+    s.text(400, 240, L("Chaque balise (visite, vue) coûte 1 jeton à chacun des deux seaux", "Each beacon (visit, view) costs 1 token from each of the two buckets"), 13.5, True, INK, "middle", maxw=770)
+    s.rect(40, 262, 200, 44, ACC["blue"][1], ACC["blue"][0], 10)
+    s.text(140, 289, L("Balise reçue", "Beacon received"), 13, True, ACC["blue"][0], "middle", maxw=190)
+    s.rect(300, 262, 200, 44, ACC["amber"][1], ACC["amber"][0], 10)
+    s.text(400, 289, L("Les 2 seaux ont un jeton ?", "Both buckets have a token?"), 12.5, True, ACC["amber"][0], "middle", maxw=192)
+    s.rect(560, 262, 200, 44, ACC["green"][1], ACC["green"][0], 10)
+    s.text(660, 289, L("Oui : on compte", "Yes: counted"), 13, True, ACC["green"][0], "middle", maxw=190)
+    s.arrow(244, 284, 296, 284)
+    s.arrow(504, 284, 556, 284)
+    s.arrow(400, 310, 400, 336)
+    s.rect(300, 340, 200, 44, ACC["red"][1], ACC["red"][0], 10)
+    s.text(400, 367, L("Non : 429, rien écrit", "No: 429, nothing written"), 12.5, True, ACC["red"][0], "middle", maxw=192)
+    s.text(400, 414, L("Une inondation de requêtes coûte un hachage et deux mises à jour de 16 octets,", "A flood of requests costs one hash and two 16-byte updates,"), 12, False, INK2, "middle", maxw=770)
+    s.text(400, 432, L("jamais une réécriture du fichier de statistiques.", "never a rewrite of the statistics file."), 12, False, INK2, "middle", maxw=770)
     s.save()
 
 
@@ -655,18 +659,17 @@ def fig_daltonisme():
     names = [("none", L("Sans simulation", "No simulation")), ("protanopia", L("Protanopie (rouge absent)", "Protanopia (no red)")),
              ("deuteranopia", L("Deutéranopie (vert absent)", "Deuteranopia (no green)")),
              ("tritanopia", L("Tritanopie (bleu absent)", "Tritanopia (no blue)")), ("achromatopsia", L("Achromatopsie", "Achromatopsia"))]
-    s = Svg("daltonisme-teintes.svg", 360, L("Les mêmes 7 teintes vues par un œil sans cône rouge, vert, bleu — ou sans couleur",
-                                              "The same 7 hues seen by an eye lacking red, green or blue cones — or colour"))
+    s = Svg("daltonisme-teintes.svg", 372, L("Les mêmes 7 teintes, selon la déficience simulée", "The same 7 hues, by simulated deficiency"))
     y = 56
     for key, nm in names:
         s.text(24, y + 26, nm, 13, True, INK, maxw=215)
         for i, c in enumerate(pal):
             s.rect(250 + i * 74, y + 4, 66, 34, simulate(c, key), "#99a", 8)
         y += 48
-    s.text(400, 318, L("Calcul identique à celui du navigateur : matrices de Machado et al. (2009) sur la lumière linéaire ; "
-                       "achromatopsie = luminance.",
-                       "Same maths as the browser: Machado et al. (2009) matrices on linear light; achromatopsia = luminance."), 12, False, INK2, "middle", maxw=770)
-    s.text(400, 338, L("C'est une simulation pour vérifier une figure, pas une correction de couleurs.",
+    s.text(400, 312, L("Même calcul que le navigateur : matrices de Machado et al. (2009) sur la lumière linéaire ;",
+                       "Same maths as the browser: Machado et al. (2009) matrices on linear light;"), 12, False, INK2, "middle", maxw=770)
+    s.text(400, 330, L("achromatopsie = luminance seule.", "achromatopsia = luminance only."), 12, False, INK2, "middle", maxw=770)
+    s.text(400, 352, L("C'est une simulation pour vérifier une figure, pas une correction de couleurs.",
                        "It is a simulation to check a figure, not a colour correction."), 12.5, True, INK2, "middle", maxw=770)
     s.save()
 
@@ -674,24 +677,24 @@ def fig_daltonisme():
 # ═════════════════════════ 16. theme-boot timeline ═════════════════════════
 def fig_theme_boot():
     s = Svg("theme-boot.svg", 400, L("Pourquoi le thème clair ne clignote pas", "Why the light theme does not flash"))
-    s.text(24, 62, L("Chaque page est livrée avec data-theme=\"dark\". Un visiteur qui a choisi « clair » doit le recevoir AVANT le premier affichage :",
-                     "Every page ships with data-theme=\"dark\". A visitor who chose “light” must get it BEFORE the first paint:"), 12.5, False, INK2, maxw=765)
+    s.text(24, 62, L("Chaque page est livrée en thème sombre. Un visiteur qui a choisi « clair » doit l'avoir", "Every page ships in the dark theme. A visitor who chose “light” must have it"), 12.5, False, INK2, maxw=765)
+    s.text(24, 80, L("AVANT le premier affichage :", "BEFORE the first paint:"), 12.5, True, INK2, maxw=765)
     steps = [(L("1. Le <head> se lit", "1. <head> is parsed"), "grey"),
              (L("2. theme-boot.js", "2. theme-boot.js"), "green"),
              (L("3. Premier affichage", "3. First paint"), "blue"),
-             (L("4. Fin du <body> : theme.js", "4. End of <body>: theme.js"), "violet")]
+             (L("4. Fin du <body>", "4. End of <body>"), "violet")]
     desc = [[L("feuilles de style", "stylesheets"), L("(thème sombre par défaut)", "(dark theme by default)")],
             [L("lit localStorage ;", "reads localStorage;"), L("si « light » → data-theme", "if “light” → data-theme"), L("passe à light", "becomes light")],
             [L("la page apparaît déjà", "the page appears already"), L("dans le bon thème", "in the right theme")],
-            [L("branche le bouton,", "wires the button,"), L("suit les autres onglets", "follows other tabs")]]
+            [L("theme.js branche le", "theme.js wires the"), L("bouton, suit les autres", "button, follows the other"), L("onglets", "tabs")]]
     x = 16
     for (t, c), d in zip(steps, desc):
-        s.card(x, 84, 186, 150, t, c, d, 12, 12)
-        x += 194
-    for xa in (206, 400, 594):
-        s.arrow(xa, 160, xa + 6, 160, sw=1.6)
-    s.rect(16, 252, 768, 130, "#fff")
-    s.lines(32, 276, [
+        s.card(x, 96, 176, 140, t, c, d, 12, 12)
+        x += 198
+    for xa in (194, 392, 590):
+        s.arrow(xa, 166, xa + 20, 166, sw=1.8)
+    s.rect(16, 256, 768, 130, "#fff")
+    s.lines(32, 282, [
         L("• Sans theme-boot.js : un visiteur « clair » verrait d'abord une page sombre, puis un éclair blanc.",
           "• Without theme-boot.js: a “light” visitor would first see a dark page, then a white flash."),
         L("• Premier passage, sans choix mémorisé : le thème sombre (fort contraste pour la fluorescence).",
@@ -712,7 +715,7 @@ def fig_perf():
             L("texture.upload.prepare", "texture.upload.prepare"), L("viewer.frame_time (≈ 4 s)", "viewer.frame_time (≈ 4 s)"), L("viewer.context_lost …", "viewer.context_lost …")], 12)
     s.arrow(250, 150, 288, 150)
     s.card(292, 56, 230, 190, L("En mémoire, bornés", "In memory, bounded"), "green",
-           [L("3 000 durées (spans)", "3,000 spans"), L("5 000 évènements", "5,000 events"), L("500 mesures en cours", "500 open measures"),
+           [L("3 000 durées (spans)", "3,000 spans"), L("5 000 événements", "5,000 events"), L("500 mesures en cours", "500 open measures"),
             L("des compteurs", "some counters"), L("rien n'est écrit", "nothing is written")], 12)
     s.arrow(526, 150, 564, 150)
     s.card(568, 56, 216, 190, L("Console seulement", "Console only"), "violet",

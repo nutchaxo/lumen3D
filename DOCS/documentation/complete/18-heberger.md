@@ -489,8 +489,7 @@ Une version n'est signée **que si** la suite de tests est entièrement verte. C
 
 ![201 fichiers de tests, trois langages.](img/ch18/tests.svg){width=100%}
 
-::: keynums
-:::: keynums
+::::: keynums
 ::: keynum
 **201**
 fichiers de tests
@@ -507,8 +506,7 @@ Python (serveur, pipeline, import)
 **22**
 PHP (serveur jumeau)
 :::
-::::
-:::
+:::::
 
 - `python tests/run_all.py` découvre tous les fichiers `tests/test_*.py|js|php` et `tests/js/test_*.mjs`, et lance **chacun dans son propre processus**.
 - **`--strict-skips`** : un test qui ne peut pas s'exécuter (une extension PHP manquante) doit le dire, et ce mode le compte comme un **échec**. Un test ne peut donc pas s'arrêter de tourner sans que personne ne le voie.

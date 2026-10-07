@@ -1,33 +1,32 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 450" font-family="Inter, sans-serif">
-<defs><marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#4a5468"/></marker></defs><rect width="800" height="450" rx="16" fill="#f8f9fd"/>
-<text x="400" y="34" font-family="Inter, sans-serif" font-size="18" font-weight="800" fill="#1c2333" text-anchor="middle">Deux seaux à jetons protègent le compteur de visites</text>
-<rect x="16" y="56" width="366" height="190" rx="12" fill="#fff" stroke="#c5cbd8" stroke-width="1.2"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 456" font-family="Inter, sans-serif">
+<defs><marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#4a5468"/></marker></defs><rect width="800" height="456" rx="16" fill="#f8f9fd"/>
+<text x="400" y="34" font-family="Inter, sans-serif" font-size="18" font-weight="800" fill="#1c2333" text-anchor="middle" xml:space="preserve">Deux seaux à jetons protègent le compteur de visites</text>
+<rect x="16" y="56" width="366" height="150" rx="12" fill="#fff" stroke="#c5cbd8" stroke-width="1.2"/>
 <path d="M16,90 L16,68 Q16,56 28,56 L370,56 Q382,56 382,68 L382,90 Z" fill="#e8edff"/>
-<text x="199.0" y="78" font-family="Inter, sans-serif" font-size="12.5" font-weight="800" fill="#3b5bdb" text-anchor="middle">Un seau par adresse</text>
-<text x="28" y="112.0" font-family="Inter, sans-serif" font-size="12" font-weight="400" fill="#1c2333" text-anchor="start">capacité : 60 jetons</text>
-<text x="28" y="128.2" font-family="Inter, sans-serif" font-size="12" font-weight="400" fill="#1c2333" text-anchor="start">remplissage : 1 jeton par seconde</text>
-<text x="28" y="144.4" font-family="Inter, sans-serif" font-size="12" font-weight="400" fill="#1c2333" text-anchor="start">4 096 emplacements en mémoire :</text>
-<text x="28" y="160.60000000000002" font-family="Inter, sans-serif" font-size="12" font-weight="400" fill="#1c2333" text-anchor="start">l'adresse est hachée (SHA-256),</text>
-<text x="28" y="176.8" font-family="Inter, sans-serif" font-size="12" font-weight="400" fill="#1c2333" text-anchor="start">jamais écrite sur le disque</text>
-<rect x="418" y="56" width="366" height="190" rx="12" fill="#fff" stroke="#c5cbd8" stroke-width="1.2"/>
+<text x="199.0" y="78" font-family="Inter, sans-serif" font-size="12.5" font-weight="800" fill="#3b5bdb" text-anchor="middle" xml:space="preserve">Un seau par adresse</text>
+<text x="28" y="112.0" font-family="Inter, sans-serif" font-size="12" font-weight="400" fill="#1c2333" text-anchor="start" xml:space="preserve">capacité : 60 jetons</text>
+<text x="28" y="128.2" font-family="Inter, sans-serif" font-size="12" font-weight="400" fill="#1c2333" text-anchor="start" xml:space="preserve">remplissage : 1 jeton par seconde</text>
+<text x="28" y="144.4" font-family="Inter, sans-serif" font-size="12" font-weight="400" fill="#1c2333" text-anchor="start" xml:space="preserve">4 096 emplacements en mémoire ;</text>
+<text x="28" y="160.60000000000002" font-family="Inter, sans-serif" font-size="12" font-weight="400" fill="#1c2333" text-anchor="start" xml:space="preserve">adresse hachée, jamais écrite</text>
+<rect x="418" y="56" width="366" height="150" rx="12" fill="#fff" stroke="#c5cbd8" stroke-width="1.2"/>
 <path d="M418,90 L418,68 Q418,56 430,56 L772,56 Q784,56 784,68 L784,90 Z" fill="#f3f0ff"/>
-<text x="601.0" y="78" font-family="Inter, sans-serif" font-size="12.5" font-weight="800" fill="#7048e8" text-anchor="middle">Un seau pour tout le site</text>
-<text x="430" y="112.0" font-family="Inter, sans-serif" font-size="12" font-weight="400" fill="#1c2333" text-anchor="start">capacité : 600 jetons</text>
-<text x="430" y="128.2" font-family="Inter, sans-serif" font-size="12" font-weight="400" fill="#1c2333" text-anchor="start">remplissage : 20 jetons par seconde</text>
-<text x="430" y="144.4" font-family="Inter, sans-serif" font-size="12" font-weight="400" fill="#1c2333" text-anchor="start">plafonne le total, même si</text>
-<text x="430" y="160.60000000000002" font-family="Inter, sans-serif" font-size="12" font-weight="400" fill="#1c2333" text-anchor="start">beaucoup d'adresses se partagent</text>
-<text x="430" y="176.8" font-family="Inter, sans-serif" font-size="12" font-weight="400" fill="#1c2333" text-anchor="start">un même emplacement</text>
-<text x="400" y="276" font-family="Inter, sans-serif" font-size="13.5" font-weight="800" fill="#1c2333" text-anchor="middle">Chaque balise (visite, vue) coûte 1 jeton à chacun des deux seaux</text>
-<rect x="40" y="296" width="200" height="44" rx="10" fill="#e8edff" stroke="#3b5bdb" stroke-width="1.2"/>
-<text x="140" y="323" font-family="Inter, sans-serif" font-size="13" font-weight="800" fill="#3b5bdb" text-anchor="middle">Balise reçue</text>
-<rect x="288" y="296" width="200" height="44" rx="10" fill="#fff4e6" stroke="#e67700" stroke-width="1.2"/>
-<text x="388" y="323" font-family="Inter, sans-serif" font-size="13" font-weight="800" fill="#e67700" text-anchor="middle">2 jetons dispo ?</text>
-<rect x="536" y="296" width="200" height="44" rx="10" fill="#ebfbee" stroke="#2b8a3e" stroke-width="1.2"/>
-<text x="636" y="323" font-family="Inter, sans-serif" font-size="13" font-weight="800" fill="#2b8a3e" text-anchor="middle">Oui : on compte</text>
-<line x1="244" y1="318" x2="286" y2="318" stroke="#4a5468" stroke-width="2.2" marker-end="url(#arr)"/>
-<line x1="492" y1="318" x2="534" y2="318" stroke="#4a5468" stroke-width="2.2" marker-end="url(#arr)"/>
-<rect x="286" y="350" width="200" height="44" rx="10" fill="#fff0f0" stroke="#c92a2a" stroke-width="1.2"/>
-<text x="386" y="377" font-family="Inter, sans-serif" font-size="12.5" font-weight="800" fill="#c92a2a" text-anchor="middle">Non : réponse 429, rien écrit</text>
-<line x1="386" y1="342" x2="386" y2="348" stroke="#4a5468" stroke-width="1.6" marker-end="url(#arr)"/>
-<text x="400" y="424" font-family="Inter, sans-serif" font-size="12" font-weight="400" fill="#4a5468" text-anchor="middle">Une inondation de requêtes coûte un hachage et deux mises à jour de 16 octets : jamais une réécriture du fichier de statistiques.</text>
+<text x="601.0" y="78" font-family="Inter, sans-serif" font-size="12.5" font-weight="800" fill="#7048e8" text-anchor="middle" xml:space="preserve">Un seau pour tout le site</text>
+<text x="430" y="112.0" font-family="Inter, sans-serif" font-size="12" font-weight="400" fill="#1c2333" text-anchor="start" xml:space="preserve">capacité : 600 jetons</text>
+<text x="430" y="128.2" font-family="Inter, sans-serif" font-size="12" font-weight="400" fill="#1c2333" text-anchor="start" xml:space="preserve">remplissage : 20 jetons par seconde</text>
+<text x="430" y="144.4" font-family="Inter, sans-serif" font-size="12" font-weight="400" fill="#1c2333" text-anchor="start" xml:space="preserve">plafonne le total, même quand</text>
+<text x="430" y="160.60000000000002" font-family="Inter, sans-serif" font-size="12" font-weight="400" fill="#1c2333" text-anchor="start" xml:space="preserve">des adresses partagent un emplacement</text>
+<text x="400" y="240" font-family="Inter, sans-serif" font-size="13.5" font-weight="800" fill="#1c2333" text-anchor="middle" xml:space="preserve">Chaque balise (visite, vue) coûte 1 jeton à chacun des deux seaux</text>
+<rect x="40" y="262" width="200" height="44" rx="10" fill="#e8edff" stroke="#3b5bdb" stroke-width="1.2"/>
+<text x="140" y="289" font-family="Inter, sans-serif" font-size="13" font-weight="800" fill="#3b5bdb" text-anchor="middle" xml:space="preserve">Balise reçue</text>
+<rect x="300" y="262" width="200" height="44" rx="10" fill="#fff4e6" stroke="#e67700" stroke-width="1.2"/>
+<text x="400" y="289" font-family="Inter, sans-serif" font-size="12.5" font-weight="800" fill="#e67700" text-anchor="middle" xml:space="preserve">Les 2 seaux ont un jeton ?</text>
+<rect x="560" y="262" width="200" height="44" rx="10" fill="#ebfbee" stroke="#2b8a3e" stroke-width="1.2"/>
+<text x="660" y="289" font-family="Inter, sans-serif" font-size="13" font-weight="800" fill="#2b8a3e" text-anchor="middle" xml:space="preserve">Oui : on compte</text>
+<line x1="244" y1="284" x2="296" y2="284" stroke="#4a5468" stroke-width="2.2" marker-end="url(#arr)"/>
+<line x1="504" y1="284" x2="556" y2="284" stroke="#4a5468" stroke-width="2.2" marker-end="url(#arr)"/>
+<line x1="400" y1="310" x2="400" y2="336" stroke="#4a5468" stroke-width="2.2" marker-end="url(#arr)"/>
+<rect x="300" y="340" width="200" height="44" rx="10" fill="#fff0f0" stroke="#c92a2a" stroke-width="1.2"/>
+<text x="400" y="367" font-family="Inter, sans-serif" font-size="12.5" font-weight="800" fill="#c92a2a" text-anchor="middle" xml:space="preserve">Non : 429, rien écrit</text>
+<text x="400" y="414" font-family="Inter, sans-serif" font-size="12" font-weight="400" fill="#4a5468" text-anchor="middle" xml:space="preserve">Une inondation de requêtes coûte un hachage et deux mises à jour de 16 octets,</text>
+<text x="400" y="432" font-family="Inter, sans-serif" font-size="12" font-weight="400" fill="#4a5468" text-anchor="middle" xml:space="preserve">jamais une réécriture du fichier de statistiques.</text>
 </svg>

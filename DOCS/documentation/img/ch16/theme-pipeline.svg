@@ -1,51 +1,52 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 420" font-family="Inter, sans-serif">
 <defs><marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#4a5468"/></marker></defs><rect width="800" height="420" rx="16" fill="#f8f9fd"/>
-<text x="400" y="34" font-family="Inter, sans-serif" font-size="18" font-weight="800" fill="#1c2333" text-anchor="middle">Du sélecteur de couleur à toutes les pages</text>
+<text x="400" y="34" font-family="Inter, sans-serif" font-size="18" font-weight="800" fill="#1c2333" text-anchor="middle" xml:space="preserve">Du sélecteur de couleur à toutes les pages</text>
 <rect x="16" y="56" width="170" height="150" rx="12" fill="#fff" stroke="#c5cbd8" stroke-width="1.2"/>
 <path d="M16,90 L16,68 Q16,56 28,56 L174,56 Q186,56 186,68 L186,90 Z" fill="#f3f0ff"/>
-<text x="101.0" y="78" font-family="Inter, sans-serif" font-size="12.5" font-weight="800" fill="#7048e8" text-anchor="middle">Apparence</text>
-<text x="28" y="112.0" font-family="Inter, sans-serif" font-size="12" font-weight="400" fill="#1c2333" text-anchor="start">couleurs, police,</text>
-<text x="28" y="128.2" font-family="Inter, sans-serif" font-size="12" font-weight="400" fill="#1c2333" text-anchor="start">arrondis + aperçu</text>
-<text x="28" y="144.4" font-family="Inter, sans-serif" font-size="12" font-weight="400" fill="#1c2333" text-anchor="start">en direct</text>
-<text x="28" y="160.60000000000002" font-family="Inter, sans-serif" font-size="12" font-weight="400" fill="#1c2333" text-anchor="start">→ [Enregistrer]</text>
+<text x="101.0" y="78" font-family="Inter, sans-serif" font-size="12.5" font-weight="800" fill="#7048e8" text-anchor="middle" xml:space="preserve">Apparence</text>
+<text x="28" y="112.0" font-family="Inter, sans-serif" font-size="12" font-weight="400" fill="#1c2333" text-anchor="start" xml:space="preserve">couleurs, police,</text>
+<text x="28" y="128.2" font-family="Inter, sans-serif" font-size="12" font-weight="400" fill="#1c2333" text-anchor="start" xml:space="preserve">arrondis + aperçu</text>
+<text x="28" y="144.4" font-family="Inter, sans-serif" font-size="12" font-weight="400" fill="#1c2333" text-anchor="start" xml:space="preserve">en direct</text>
+<text x="28" y="160.60000000000002" font-family="Inter, sans-serif" font-size="12" font-weight="400" fill="#1c2333" text-anchor="start" xml:space="preserve">→ [Enregistrer]</text>
 <line x1="190" y1="130" x2="224" y2="130" stroke="#4a5468" stroke-width="2.2" marker-end="url(#arr)"/>
 <rect x="228" y="56" width="170" height="150" rx="12" fill="#fff" stroke="#c5cbd8" stroke-width="1.2"/>
 <path d="M228,90 L228,68 Q228,56 240,56 L386,56 Q398,56 398,68 L398,90 Z" fill="#e8edff"/>
-<text x="313.0" y="78" font-family="Inter, sans-serif" font-size="12" font-weight="800" fill="#3b5bdb" text-anchor="middle">theme.json</text>
-<text x="240" y="112.0" font-family="Inter, sans-serif" font-size="12" font-weight="400" fill="#1c2333" text-anchor="start">{ "tokens": {</text>
-<text x="240" y="128.2" font-family="Inter, sans-serif" font-size="12" font-weight="400" fill="#1c2333" text-anchor="start">  "--color-primary":</text>
-<text x="240" y="144.4" font-family="Inter, sans-serif" font-size="12" font-weight="400" fill="#1c2333" text-anchor="start">    "#2F6BFF", … } }</text>
-<text x="240" y="160.60000000000002" font-family="Inter, sans-serif" font-size="12" font-weight="400" fill="#1c2333" text-anchor="start">seulement ce qui change</text>
+<text x="313.0" y="78" font-family="Inter, sans-serif" font-size="12" font-weight="800" fill="#3b5bdb" text-anchor="middle" xml:space="preserve">theme.json</text>
+<text x="240" y="112.0" font-family="Inter, sans-serif" font-size="12" font-weight="400" fill="#1c2333" text-anchor="start" xml:space="preserve">{ "tokens": {</text>
+<text x="240" y="128.2" font-family="Inter, sans-serif" font-size="12" font-weight="400" fill="#1c2333" text-anchor="start" xml:space="preserve">  "--color-primary":</text>
+<text x="240" y="144.4" font-family="Inter, sans-serif" font-size="12" font-weight="400" fill="#1c2333" text-anchor="start" xml:space="preserve">    "#2F6BFF" } }</text>
+<text x="240" y="160.60000000000002" font-family="Inter, sans-serif" font-size="12" font-weight="400" fill="#1c2333" text-anchor="start" xml:space="preserve">ce qui change seul</text>
 <line x1="402" y1="130" x2="436" y2="130" stroke="#4a5468" stroke-width="2.2" marker-end="url(#arr)"/>
 <rect x="440" y="56" width="170" height="150" rx="12" fill="#fff" stroke="#c5cbd8" stroke-width="1.2"/>
 <path d="M440,90 L440,68 Q440,56 452,56 L598,56 Q610,56 610,68 L610,90 Z" fill="#ebfbee"/>
-<text x="525.0" y="78" font-family="Inter, sans-serif" font-size="12" font-weight="800" fill="#2b8a3e" text-anchor="middle">Le serveur compile</text>
-<text x="452" y="112.0" font-family="Inter, sans-serif" font-size="12" font-weight="400" fill="#1c2333" text-anchor="start">assainit chaque valeur</text>
-<text x="452" y="128.2" font-family="Inter, sans-serif" font-size="12" font-weight="400" fill="#1c2333" text-anchor="start">(pas de { } ; @ &lt; &gt;)</text>
-<text x="452" y="144.4" font-family="Inter, sans-serif" font-size="12" font-weight="400" fill="#1c2333" text-anchor="start">→ :root { … }</text>
+<text x="525.0" y="78" font-family="Inter, sans-serif" font-size="12" font-weight="800" fill="#2b8a3e" text-anchor="middle" xml:space="preserve">Le serveur compile</text>
+<text x="452" y="112.0" font-family="Inter, sans-serif" font-size="12" font-weight="400" fill="#1c2333" text-anchor="start" xml:space="preserve">assainit chaque valeur</text>
+<text x="452" y="128.2" font-family="Inter, sans-serif" font-size="12" font-weight="400" fill="#1c2333" text-anchor="start" xml:space="preserve">(pas de { } ; @ &lt; &gt;)</text>
+<text x="452" y="144.4" font-family="Inter, sans-serif" font-size="12" font-weight="400" fill="#1c2333" text-anchor="start" xml:space="preserve">→ :root { … }</text>
 <line x1="614" y1="130" x2="648" y2="130" stroke="#4a5468" stroke-width="2.2" marker-end="url(#arr)"/>
 <rect x="652" y="56" width="132" height="150" rx="12" fill="#fff" stroke="#c5cbd8" stroke-width="1.2"/>
 <path d="M652,90 L652,68 Q652,56 664,56 L772,56 Q784,56 784,68 L784,90 Z" fill="#fff4e6"/>
-<text x="718.0" y="78" font-family="Inter, sans-serif" font-size="12" font-weight="800" fill="#e67700" text-anchor="middle">theme.css</text>
-<text x="664" y="112.0" font-family="Inter, sans-serif" font-size="12" font-weight="400" fill="#1c2333" text-anchor="start">fichier servi,</text>
-<text x="664" y="128.2" font-family="Inter, sans-serif" font-size="12" font-weight="400" fill="#1c2333" text-anchor="start">identique pour</text>
-<text x="664" y="144.4" font-family="Inter, sans-serif" font-size="12" font-weight="400" fill="#1c2333" text-anchor="start">tous les visiteurs</text>
-<text x="24" y="240" font-family="Inter, sans-serif" font-size="13" font-weight="800" fill="#4a5468" text-anchor="start">L'ordre des feuilles de style (la dernière gagne) :</text>
-<rect x="24" y="252" width="140" height="62" rx="10" fill="#eef0f5" stroke="#4a5468" stroke-width="1.2"/>
-<text x="94.0" y="278" font-family="Inter, sans-serif" font-size="11.5" font-weight="800" fill="#1c2333" text-anchor="middle">variables.css</text>
-<text x="94.0" y="298" font-family="Inter, sans-serif" font-size="11.5" font-weight="400" fill="#4a5468" text-anchor="middle">valeurs d'usine</text>
-<rect x="170" y="252" width="130" height="62" rx="10" fill="#eef0f5" stroke="#4a5468" stroke-width="1.2"/>
-<text x="235.0" y="278" font-family="Inter, sans-serif" font-size="11.5" font-weight="800" fill="#1c2333" text-anchor="middle">themes.css</text>
-<text x="235.0" y="298" font-family="Inter, sans-serif" font-size="11.5" font-weight="400" fill="#4a5468" text-anchor="middle">sombre / clair</text>
-<rect x="306" y="252" width="160" height="62" rx="10" fill="#fff4e6" stroke="#e67700" stroke-width="1.8"/>
-<text x="386.0" y="278" font-family="Inter, sans-serif" font-size="11.5" font-weight="800" fill="#1c2333" text-anchor="middle">config/theme.css</text>
-<text x="386.0" y="298" font-family="Inter, sans-serif" font-size="11.5" font-weight="400" fill="#4a5468" text-anchor="middle">VOTRE marque</text>
-<rect x="472" y="252" width="200" height="62" rx="10" fill="#eef0f5" stroke="#4a5468" stroke-width="1.2"/>
-<text x="572.0" y="278" font-family="Inter, sans-serif" font-size="11.5" font-weight="800" fill="#1c2333" text-anchor="middle">base · components · layout…</text>
-<text x="572.0" y="298" font-family="Inter, sans-serif" font-size="11.5" font-weight="400" fill="#4a5468" text-anchor="middle">mise en page</text>
-<rect x="678" y="252" width="110" height="62" rx="10" fill="#eef0f5" stroke="#4a5468" stroke-width="1.2"/>
-<text x="733.0" y="278" font-family="Inter, sans-serif" font-size="11.5" font-weight="800" fill="#1c2333" text-anchor="middle">page + tools.css</text>
+<text x="718.0" y="78" font-family="Inter, sans-serif" font-size="12" font-weight="800" fill="#e67700" text-anchor="middle" xml:space="preserve">theme.css</text>
+<text x="664" y="112.0" font-family="Inter, sans-serif" font-size="12" font-weight="400" fill="#1c2333" text-anchor="start" xml:space="preserve">fichier servi,</text>
+<text x="664" y="128.2" font-family="Inter, sans-serif" font-size="12" font-weight="400" fill="#1c2333" text-anchor="start" xml:space="preserve">identique pour</text>
+<text x="664" y="144.4" font-family="Inter, sans-serif" font-size="12" font-weight="400" fill="#1c2333" text-anchor="start" xml:space="preserve">chaque visiteur</text>
+<text x="24" y="240" font-family="Inter, sans-serif" font-size="13" font-weight="800" fill="#4a5468" text-anchor="start" xml:space="preserve">L'ordre des feuilles de style (la dernière gagne) :</text>
+<rect x="24" y="252" width="130" height="62" rx="10" fill="#eef0f5" stroke="#4a5468" stroke-width="1.2"/>
+<text x="89.0" y="278" font-family="Inter, sans-serif" font-size="11.5" font-weight="800" fill="#1c2333" text-anchor="middle" xml:space="preserve">variables.css</text>
+<text x="89.0" y="298" font-family="Inter, sans-serif" font-size="11.5" font-weight="400" fill="#4a5468" text-anchor="middle" xml:space="preserve">valeurs d'usine</text>
+<rect x="160" y="252" width="120" height="62" rx="10" fill="#eef0f5" stroke="#4a5468" stroke-width="1.2"/>
+<text x="220.0" y="278" font-family="Inter, sans-serif" font-size="11.5" font-weight="800" fill="#1c2333" text-anchor="middle" xml:space="preserve">themes.css</text>
+<text x="220.0" y="298" font-family="Inter, sans-serif" font-size="11.5" font-weight="400" fill="#4a5468" text-anchor="middle" xml:space="preserve">sombre / clair</text>
+<rect x="286" y="252" width="150" height="62" rx="10" fill="#fff4e6" stroke="#e67700" stroke-width="1.8"/>
+<text x="361.0" y="278" font-family="Inter, sans-serif" font-size="11.5" font-weight="800" fill="#1c2333" text-anchor="middle" xml:space="preserve">config/theme.css</text>
+<text x="361.0" y="298" font-family="Inter, sans-serif" font-size="11.5" font-weight="400" fill="#4a5468" text-anchor="middle" xml:space="preserve">VOTRE marque</text>
+<rect x="442" y="252" width="215" height="62" rx="10" fill="#eef0f5" stroke="#4a5468" stroke-width="1.2"/>
+<text x="549.5" y="278" font-family="Inter, sans-serif" font-size="11.5" font-weight="800" fill="#1c2333" text-anchor="middle" xml:space="preserve">base · components · layout…</text>
+<text x="549.5" y="298" font-family="Inter, sans-serif" font-size="11.5" font-weight="400" fill="#4a5468" text-anchor="middle" xml:space="preserve">mise en page</text>
+<rect x="663" y="252" width="109" height="62" rx="10" fill="#eef0f5" stroke="#4a5468" stroke-width="1.2"/>
+<text x="717.5" y="278" font-family="Inter, sans-serif" font-size="11.5" font-weight="800" fill="#1c2333" text-anchor="middle" xml:space="preserve">tools.css</text>
+<text x="717.5" y="298" font-family="Inter, sans-serif" font-size="11.5" font-weight="400" fill="#4a5468" text-anchor="middle" xml:space="preserve">outils</text>
 <rect x="24" y="334" width="752" height="70" rx="12" fill="#fff" stroke="#c5cbd8" stroke-width="1.2"/>
-<text x="40" y="356" font-family="Inter, sans-serif" font-size="12" font-weight="400" fill="#1c2333" text-anchor="start">Un fichier servi (pas un &lt;style&gt; injecté) : la politique de sécurité du site interdit les styles injectés.</text>
-<text x="40" y="374" font-family="Inter, sans-serif" font-size="12" font-weight="400" fill="#1c2333" text-anchor="start">Le thème est donc là dès le premier affichage, sans clignotement. L'aperçu, lui, change les variables une à une.</text>
+<text x="40" y="358" font-family="Inter, sans-serif" font-size="12" font-weight="400" fill="#1c2333" text-anchor="start" xml:space="preserve">Un fichier servi (pas un &lt;style&gt; injecté) : la politique de sécurité du site interdit les styles injectés.</text>
+<text x="40" y="378" font-family="Inter, sans-serif" font-size="12" font-weight="400" fill="#1c2333" text-anchor="start" xml:space="preserve">Donc le thème est là dès le premier affichage. L'aperçu, lui, change les variables une à une.</text>
 </svg>

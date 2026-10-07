@@ -322,3 +322,91 @@ def run2():
     empreintes()
     catalogue()
     migration_types()
+
+
+def carte_chapitre():
+    b = [title(tr("Ce chapitre, en une carte", "This chapter, on one map"),
+               tr("Trois questions, trois parties : de quoi est fait un jeu de données, comment il change de format, comment il arrive.",
+                  "Three questions, three parts: what a dataset is made of, how it changes format, how it arrives."))]
+    parts = [
+        ("blue", "A", tr("Les fichiers", "The files"), tr("De quoi est fait un jeu de données ?", "What is a dataset made of?"),
+         [tr("17.1  les trois arbres annotés", "17.1  the three annotated trees"), tr("17.2  qui écrit quoi", "17.2  who writes what"), tr("17.3  metadata.json, champ par champ", "17.3  metadata.json, field by field"),
+          tr("17.4  manifestes, index, tracks.json", "17.4  manifests, index, tracks.json"), tr("17.5  catalogue et vocabulaire", "17.5  catalog and vocabulary"), tr("17.6  download/ et gallery/", "17.6  download/ and gallery/")]),
+        ("amber", "B", tr("Les formats et les migrations", "Formats and migrations"), tr("Comment un jeu change-t-il de format ?", "How does a dataset change format?"),
+         [tr("17.7  les formats 1 à 4", "17.7  formats 1 to 4"), tr("17.8  trois migrations", "17.8  three migrations"), tr("17.9  unités et journal", "17.9  units and journal"),
+          tr("17.10  deux exécutants", "17.10  two executors"), tr("17.11  finalize", "17.11  finalize"), tr("17.12  régulateur, hébergeurs lents", "17.12  governor, slow hosts")]),
+        ("green", "C", tr("L'import dans le navigateur", "The browser import"), tr("Comment un jeu arrive-t-il sans SFTP ?", "How does a dataset arrive without SFTP?"),
+         [tr("17.13  le parcours", "17.13  the journey"), tr("17.14  la liste blanche", "17.14  the allowlist"), tr("17.15  les paliers", "17.15  the tiers"),
+          tr("17.16  blocs et journal", "17.16  chunks and journal"), tr("17.17  états et purge", "17.17  states and purge"), tr("17.18  valider, publier, remplacer", "17.18  validate, publish, replace")]),
+    ]
+    for i, (col, letter, hd, q, items) in enumerate(parts):
+        x = 24 + i * 254
+        s, soft = P[col]
+        b.append(R(x, 78, 244, 258, soft, s, 14, 1.8))
+        b.append(CIRC(x + 26, 108, 16, s))
+        b.append(T(x + 26, 114, letter, 17, 800, "#fff", "middle"))
+        b.append(T(x + 50, 112, hd, 14, 800, s, maxw=190))
+        b.append(T(x + 14, 148, q, 12, 700, INK, maxw=220))
+        for j, it in enumerate(items):
+            b.append(T(x + 14, 180 + j * 24, it, 11.8, 400, INK, maxw=222))
+    b.append(R(24, 350, 752, 44, "#fff", LINE, 10))
+    b.append(T(400, 377, tr("Fil rouge : un jeu de données est un dossier, et chaque fichier a un auteur, une raison d'être et un contrôle d'intégrité.", "Common thread: a dataset is a folder, and every file has an author, a purpose and an integrity check."), 12, 600, INK, "middle", maxw=735))
+    save("carte-chapitre.svg", 410, b)
+
+
+def pack_planes():
+    import struct
+    f = WEB / "3d/Embryo-E95-Em2-Pecam1-Sox2/planes/z00030.bin"
+    data = f.read_bytes()
+    magic, ver, C, TX, TY, z = struct.unpack_from("<4sHHHHI", data, 0)
+    n = C * TX * TY
+    ents = [struct.unpack_from("<QI", data, 16 + 12 * i) for i in range(n)]
+    hb = 16 + 12 * n
+    b = [title(tr("Un fichier plan, octet par octet", "A plane file, byte by byte"),
+               tr(f"planes/z00030.bin du jeu de démonstration : {len(data):,} octets pour 3 canaux × 2 × 2 tuiles.".replace(",", " "),
+                  f"planes/z00030.bin of the demo dataset: {len(data):,} bytes for 3 channels × 2 × 2 tiles."))]
+    # en-tête décodé
+    hx = " ".join(f"{x:02x}" for x in data[:16])
+    b.append(R(24, 70, 752, 84, "#fff", P["blue"][0], 12, 1.6))
+    b.append(T(40, 92, tr("les 16 premiers octets", "the first 16 bytes"), 12.5, 800, P["blue"][0]))
+    b.append(T(40, 114, hx, 13, 700, INK, mono=True))
+    labs = [("4c 50 4c 4e", "« LPLN »", 0, 4), ("01 00", tr("version 1", "version 1"), 4, 2), ("03 00", "C = 3", 6, 2), ("02 00", "TX = 2", 8, 2), ("02 00", "TY = 2", 10, 2), ("1e 00 00 00", "z = 30", 12, 4)]
+    for hxs, lab, off, ln in labs:
+        x = 40 + off * 3 * 7.8 + (ln * 3 * 7.8) / 2 - 3
+        b.append(T(x, 138, lab, 10.8, 700, P["blue"][0], "middle"))
+    # table et charges utiles
+    b.append(T(24, 182, tr(f"Puis {n} entrées de 12 octets (décalage u64 + longueur u32), dans l'ordre canal, tuile Y, tuile X : en-tête = 16 + 12 × {n} = {hb} octets",
+                           f"Then {n} entries of 12 bytes (u64 offset + u32 length), in channel, tile Y, tile X order: header = 16 + 12 × {n} = {hb} bytes"), 12.2, 700, INK, maxw=752))
+    x0, W = 24, 752
+    total = len(data)
+    b.append(R(x0, 200, W * hb / total, 34, P["blue"][1], P["blue"][0], 3, 1.4))
+    cols = {0: "blue", 1: "green", 2: "violet"}
+    for i, (off, ln) in enumerate(ents):
+        c = i // (TX * TY)
+        if ln == 0:
+            continue
+        x = x0 + W * off / total
+        w = W * ln / total
+        b.append(R(x, 200, w, 34, P[cols[c]][1], P[cols[c]][0], 3, 1.4))
+        if w > 28:
+            b.append(T(x + w / 2, 222, f"c{c}", 11, 700, P[cols[c]][0], "middle"))
+    b.append(T(x0 + 2, 254, tr("table", "table"), 10.8, 700, P["blue"][0]))
+    # légende des tuiles
+    b.append(T(24, 288, tr("Les 12 tuiles (une ligne par entrée)", "The 12 tiles (one row per entry)"), 12.5, 800))
+    for i, (off, ln) in enumerate(ents):
+        c, rem = divmod(i, TX * TY)
+        ty, tx = divmod(rem, TX)
+        col = (i % 4)
+        x = 24 + (i % 4) * 190
+        y = 312 + (i // 4) * 54
+        s, soft = P[cols[c]] if ln else P["red"]
+        b.append(R(x, y, 180, 44, soft, s, 8, 1.4))
+        b.append(T(x + 10, y + 18, f"c{c}  y{ty}  x{tx}", 12, 800, s, mono=True))
+        if ln:
+            b.append(T(x + 10, y + 36, tr(f"début {off:,} · {ln:,} o".replace(",", " "), f"start {off:,} · {ln:,} B"), 10.8, 400, INK))
+        else:
+            b.append(T(x + 10, y + 36, tr("longueur 0 : tuile toute noire", "length 0: all-black tile"), 10.8, 700, s))
+    b.append(R(24, 482, 752, 56, P["amber"][1], P["amber"][0], 10, 1.4))
+    b.append(T(400, 506, tr("Chaque tuile est un PNG gris complet (signature 89 50 4e 47…), 512 × 512 pixels au plus.", "Each tile is a complete grey PNG (signature 89 50 4e 47…), 512 × 512 pixels at most."), 11.8, 700, INK, "middle", maxw=735))
+    b.append(T(400, 524, tr("Une tuile entièrement nulle n'occupe aucun octet : sa longueur est 0 et son décalage 0.", "A tile that is entirely zero takes no byte: its length is 0 and its offset 0."), 11.5, 400, INK2, "middle", maxw=735))
+    save("pack-planes.svg", 556, b)

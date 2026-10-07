@@ -1,47 +1,47 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 470" font-family="Inter, sans-serif">
 <defs><marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#4a5468"/></marker></defs><rect width="800" height="470" rx="16" fill="#f8f9fd"/>
-<text x="400" y="34" font-family="Inter, sans-serif" font-size="18" font-weight="800" fill="#1c2333" text-anchor="middle">Quelle langue ? Quelle phrase ?</text>
-<text x="24" y="60" font-family="Inter, sans-serif" font-size="13.5" font-weight="800" fill="#3b5bdb" text-anchor="start">A. Au chargement, la langue est choisie ainsi</text>
+<text x="400" y="34" font-family="Inter, sans-serif" font-size="18" font-weight="800" fill="#1c2333" text-anchor="middle" xml:space="preserve">Quelle langue ? Quelle phrase ?</text>
+<text x="24" y="60" font-family="Inter, sans-serif" font-size="13.5" font-weight="800" fill="#3b5bdb" text-anchor="start" xml:space="preserve">A. Au chargement, la langue est choisie ainsi</text>
 <rect x="24" y="72" width="360" height="360" rx="12" fill="#fff" stroke="#c5cbd8" stroke-width="1.2"/>
 <rect x="36" y="94" width="30" height="30" rx="15.0" fill="#e8edff" stroke="#3b5bdb" stroke-width="1"/>
-<text x="51.0" y="113.9" font-family="Inter, sans-serif" font-size="14" font-weight="800" fill="#3b5bdb" text-anchor="middle">1</text>
-<text x="78" y="106" font-family="Inter, sans-serif" font-size="13" font-weight="800" fill="#1c2333" text-anchor="start">Choix déjà fait ? </text>
-<text x="78" y="124" font-family="Inter, sans-serif" font-size="11.5" font-weight="400" fill="#4a5468" text-anchor="start">clé iribhm-lang du navigateur</text>
+<text x="51.0" y="113.9" font-family="Inter, sans-serif" font-size="14" font-weight="800" fill="#3b5bdb" text-anchor="middle" xml:space="preserve">1</text>
+<text x="78" y="106" font-family="Inter, sans-serif" font-size="13" font-weight="800" fill="#1c2333" text-anchor="start" xml:space="preserve">Choix déjà fait ? </text>
+<text x="78" y="124" font-family="Inter, sans-serif" font-size="11.5" font-weight="400" fill="#4a5468" text-anchor="start" xml:space="preserve">clé iribhm-lang du navigateur</text>
 <line x1="51" y1="132" x2="51" y2="162" stroke="#4a5468" stroke-width="1.8" marker-end="url(#arr)"/>
 <rect x="36" y="168" width="30" height="30" rx="15.0" fill="#ebfbee" stroke="#2b8a3e" stroke-width="1"/>
-<text x="51.0" y="187.9" font-family="Inter, sans-serif" font-size="14" font-weight="800" fill="#2b8a3e" text-anchor="middle">2</text>
-<text x="78" y="180" font-family="Inter, sans-serif" font-size="13" font-weight="800" fill="#1c2333" text-anchor="start">Langue du navigateur</text>
-<text x="78" y="198" font-family="Inter, sans-serif" font-size="11.5" font-weight="400" fill="#4a5468" text-anchor="start">« fr-BE » → « fr »</text>
+<text x="51.0" y="187.9" font-family="Inter, sans-serif" font-size="14" font-weight="800" fill="#2b8a3e" text-anchor="middle" xml:space="preserve">2</text>
+<text x="78" y="180" font-family="Inter, sans-serif" font-size="13" font-weight="800" fill="#1c2333" text-anchor="start" xml:space="preserve">Langue du navigateur</text>
+<text x="78" y="198" font-family="Inter, sans-serif" font-size="11.5" font-weight="400" fill="#4a5468" text-anchor="start" xml:space="preserve">« fr-BE » → « fr »</text>
 <line x1="51" y1="206" x2="51" y2="236" stroke="#4a5468" stroke-width="1.8" marker-end="url(#arr)"/>
 <rect x="36" y="242" width="30" height="30" rx="15.0" fill="#eef0f5" stroke="#4a5468" stroke-width="1"/>
-<text x="51.0" y="261.9" font-family="Inter, sans-serif" font-size="14" font-weight="800" fill="#4a5468" text-anchor="middle">3</text>
-<text x="78" y="254" font-family="Inter, sans-serif" font-size="13" font-weight="800" fill="#1c2333" text-anchor="start">Anglais</text>
-<text x="78" y="272" font-family="Inter, sans-serif" font-size="11.5" font-weight="400" fill="#4a5468" text-anchor="start">langue de secours, toujours là</text>
-<text x="36" y="318" font-family="Inter, sans-serif" font-size="11.5" font-weight="400" fill="#1c2333" text-anchor="start">À chaque étape, la langue doit exister dans lang/ (découverte :</text>
-<text x="36" y="335" font-family="Inter, sans-serif" font-size="11.5" font-weight="400" fill="#1c2333" text-anchor="start">/api/languages → lang/manifest.json → en, fr, es).</text>
-<text x="36" y="362" font-family="Inter, sans-serif" font-size="11.5" font-weight="400" fill="#1c2333" text-anchor="start">Charge d'abord « en », puis la langue choisie ; si</text>
-<text x="36" y="379" font-family="Inter, sans-serif" font-size="11.5" font-weight="400" fill="#1c2333" text-anchor="start">son fichier échoue, l'interface reste en anglais.</text>
-<text x="36" y="406" font-family="Inter, sans-serif" font-size="11.5" font-weight="400" fill="#1c2333" text-anchor="start">Un clic dans le menu écrit le choix et prévient</text>
-<text x="36" y="423" font-family="Inter, sans-serif" font-size="11.5" font-weight="400" fill="#1c2333" text-anchor="start">les autres pages ouvertes (événement « storage »).</text>
-<text x="416" y="60" font-family="Inter, sans-serif" font-size="13.5" font-weight="800" fill="#7048e8" text-anchor="start">B. Pour chaque texte, I18n.t('clé') cherche</text>
+<text x="51.0" y="261.9" font-family="Inter, sans-serif" font-size="14" font-weight="800" fill="#4a5468" text-anchor="middle" xml:space="preserve">3</text>
+<text x="78" y="254" font-family="Inter, sans-serif" font-size="13" font-weight="800" fill="#1c2333" text-anchor="start" xml:space="preserve">Anglais</text>
+<text x="78" y="272" font-family="Inter, sans-serif" font-size="11.5" font-weight="400" fill="#4a5468" text-anchor="start" xml:space="preserve">langue de secours, toujours là</text>
+<text x="36" y="318" font-family="Inter, sans-serif" font-size="11.5" font-weight="400" fill="#1c2333" text-anchor="start" xml:space="preserve">La langue doit exister dans lang/ (liste lue via</text>
+<text x="36" y="335" font-family="Inter, sans-serif" font-size="11.5" font-weight="400" fill="#1c2333" text-anchor="start" xml:space="preserve">/api/languages, sinon lang/manifest.json).</text>
+<text x="36" y="362" font-family="Inter, sans-serif" font-size="11.5" font-weight="400" fill="#1c2333" text-anchor="start" xml:space="preserve">Charge d'abord « en », puis la langue choisie ; si</text>
+<text x="36" y="379" font-family="Inter, sans-serif" font-size="11.5" font-weight="400" fill="#1c2333" text-anchor="start" xml:space="preserve">son fichier échoue, l'interface reste en anglais.</text>
+<text x="36" y="406" font-family="Inter, sans-serif" font-size="11.5" font-weight="400" fill="#1c2333" text-anchor="start" xml:space="preserve">Un clic dans le menu écrit le choix et prévient</text>
+<text x="36" y="423" font-family="Inter, sans-serif" font-size="11.5" font-weight="400" fill="#1c2333" text-anchor="start" xml:space="preserve">les autres pages ouvertes (événement « storage »).</text>
+<text x="416" y="60" font-family="Inter, sans-serif" font-size="13.5" font-weight="800" fill="#7048e8" text-anchor="start" xml:space="preserve">B. Pour chaque texte, I18n.t('clé') cherche</text>
 <rect x="416" y="72" width="368" height="360" rx="12" fill="#fff" stroke="#c5cbd8" stroke-width="1.2"/>
 <rect x="428" y="94" width="30" height="30" rx="15.0" fill="#e8edff" stroke="#3b5bdb" stroke-width="1"/>
-<text x="443.0" y="113.9" font-family="Inter, sans-serif" font-size="14" font-weight="800" fill="#3b5bdb" text-anchor="middle">1</text>
-<text x="470" y="106" font-family="Inter, sans-serif" font-size="13" font-weight="800" fill="#1c2333" text-anchor="start">langue courante</text>
-<text x="470" y="124" font-family="Inter, sans-serif" font-size="11.5" font-weight="400" fill="#4a5468" text-anchor="start">fr : « Explorez les {specimenPlural} »</text>
+<text x="443.0" y="113.9" font-family="Inter, sans-serif" font-size="14" font-weight="800" fill="#3b5bdb" text-anchor="middle" xml:space="preserve">1</text>
+<text x="470" y="106" font-family="Inter, sans-serif" font-size="13" font-weight="800" fill="#1c2333" text-anchor="start" xml:space="preserve">langue courante</text>
+<text x="470" y="124" font-family="Inter, sans-serif" font-size="11.5" font-weight="400" fill="#4a5468" text-anchor="start" xml:space="preserve">fr : « Explorez les {specimenPlural} »</text>
 <rect x="428" y="156" width="30" height="30" rx="15.0" fill="#ebfbee" stroke="#2b8a3e" stroke-width="1"/>
-<text x="443.0" y="175.9" font-family="Inter, sans-serif" font-size="14" font-weight="800" fill="#2b8a3e" text-anchor="middle">2</text>
-<text x="470" y="168" font-family="Inter, sans-serif" font-size="13" font-weight="800" fill="#1c2333" text-anchor="start">sinon l'anglais</text>
-<text x="470" y="186" font-family="Inter, sans-serif" font-size="11.5" font-weight="400" fill="#4a5468" text-anchor="start">en : « Explore {SpecimenPlural} »</text>
+<text x="443.0" y="175.9" font-family="Inter, sans-serif" font-size="14" font-weight="800" fill="#2b8a3e" text-anchor="middle" xml:space="preserve">2</text>
+<text x="470" y="168" font-family="Inter, sans-serif" font-size="13" font-weight="800" fill="#1c2333" text-anchor="start" xml:space="preserve">sinon l'anglais</text>
+<text x="470" y="186" font-family="Inter, sans-serif" font-size="11.5" font-weight="400" fill="#4a5468" text-anchor="start" xml:space="preserve">en : « Explore {SpecimenPlural} »</text>
 <rect x="428" y="218" width="30" height="30" rx="15.0" fill="#fff0f0" stroke="#c92a2a" stroke-width="1"/>
-<text x="443.0" y="237.9" font-family="Inter, sans-serif" font-size="14" font-weight="800" fill="#c92a2a" text-anchor="middle">3</text>
-<text x="470" y="230" font-family="Inter, sans-serif" font-size="13" font-weight="800" fill="#1c2333" text-anchor="start">sinon la clé elle-même</text>
-<text x="470" y="248" font-family="Inter, sans-serif" font-size="11.5" font-weight="400" fill="#4a5468" text-anchor="start">« landing.heroTitle » (trou visible)</text>
-<text x="428" y="288" font-family="Inter, sans-serif" font-size="13" font-weight="800" fill="#1c2333" text-anchor="start">Puis chaque {jeton} est remplacé :</text>
-<text x="428" y="310" font-family="Inter, sans-serif" font-size="12" font-weight="400" fill="#1c2333" text-anchor="start">1. valeur donnée par l'appelant</text>
-<text x="428" y="330" font-family="Inter, sans-serif" font-size="12" font-weight="400" fill="#1c2333" text-anchor="start">2. valeur de l'instance (brand, specimen…)</text>
-<text x="428" y="350" font-family="Inter, sans-serif" font-size="12" font-weight="400" fill="#1c2333" text-anchor="start">3. sinon le {jeton} reste tel quel</text>
+<text x="443.0" y="237.9" font-family="Inter, sans-serif" font-size="14" font-weight="800" fill="#c92a2a" text-anchor="middle" xml:space="preserve">3</text>
+<text x="470" y="230" font-family="Inter, sans-serif" font-size="13" font-weight="800" fill="#1c2333" text-anchor="start" xml:space="preserve">sinon la clé elle-même</text>
+<text x="470" y="248" font-family="Inter, sans-serif" font-size="11.5" font-weight="400" fill="#4a5468" text-anchor="start" xml:space="preserve">« landing.heroTitle » (trou visible)</text>
+<text x="428" y="288" font-family="Inter, sans-serif" font-size="13" font-weight="800" fill="#1c2333" text-anchor="start" xml:space="preserve">Puis chaque {jeton} est remplacé :</text>
+<text x="428" y="310" font-family="Inter, sans-serif" font-size="12" font-weight="400" fill="#1c2333" text-anchor="start" xml:space="preserve">1. valeur donnée par l'appelant</text>
+<text x="428" y="330" font-family="Inter, sans-serif" font-size="12" font-weight="400" fill="#1c2333" text-anchor="start" xml:space="preserve">2. valeur de l'instance (brand, specimen…)</text>
+<text x="428" y="350" font-family="Inter, sans-serif" font-size="12" font-weight="400" fill="#1c2333" text-anchor="start" xml:space="preserve">3. sinon le {jeton} reste tel quel</text>
 <rect x="428" y="380" width="344" height="42" rx="10" fill="#fff4e6" stroke="#e67700" stroke-width="1.2"/>
-<text x="600" y="397" font-family="Inter, sans-serif" font-size="12.5" font-weight="800" fill="#1c2333" text-anchor="middle">fr → « Explorez les embryons »</text>
-<text x="600" y="414" font-family="Inter, sans-serif" font-size="11.5" font-weight="400" fill="#1c2333" text-anchor="middle">nl → « Verken Embryos » (pas de nl dans le spécimen)</text>
+<text x="600" y="397" font-family="Inter, sans-serif" font-size="12.5" font-weight="800" fill="#1c2333" text-anchor="middle" xml:space="preserve">fr → « Explorez les embryons »</text>
+<text x="600" y="414" font-family="Inter, sans-serif" font-size="11.5" font-weight="400" fill="#1c2333" text-anchor="middle" xml:space="preserve">nl → « Verken Embryos » (pas de nl dans le spécimen)</text>
 </svg>

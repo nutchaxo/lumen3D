@@ -444,3 +444,52 @@ def run():
     finalize()
     speedtest()
     octants()
+
+
+# ── La règle « Z se réduit quand les voxels sont presque isotropes » ──────────
+def niveaux_z():
+    import sys
+    sys.path.insert(0, str(HERE.parents[3]))
+    import dataset_migrations as dm
+    b = [title(tr("Quand un niveau réduit-il aussi Z ?", "When does a level also halve Z?"),
+               tr("Règle : on divise Z par 2 seulement si vz ≤ 1,5 × (la taille XY du niveau suivant).", "Rule: Z is halved only if vz ≤ 1.5 × (the XY size of the next level)."))]
+    cases = [
+        (tr("Jeu de démonstration 3D (768 × 576 × 112 ; 1,2 × 1,2 × 3 µm)", "3D demo dataset (768 × 576 × 112; 1.2 × 1.2 × 3 µm)"), (768, 576, 112), (1.2, 1.2, 3.0)),
+        (tr("Gros embryon anisotrope (3789 × 3789 × 257 ; 0,43 × 0,43 × 2,06 µm)", "Large anisotropic embryo (3789 × 3789 × 257; 0.43 × 0.43 × 2.06 µm)"), (3789, 3789, 257), (0.430366, 0.430366, 2.057107)),
+    ]
+    y = 74
+    for ttl, dims, vox in cases:
+        g = dm.level_geometry(dims, vox)
+        b.append(T(24, y + 14, ttl, 12.8, 800, INK))
+        y += 26
+        cw = 118
+        for k, L in enumerate(g):
+            x = 24 + k * (cw + 8)
+            if x + cw > 790:
+                break
+            hz = L["halveZ"]
+            col = "green" if hz else "amber"
+            if k == 0:
+                col = "grey"
+            s, soft = P[col]
+            X, Y, Z = L["dimensions"]
+            vx, _vy, vz = L["voxelSize"]
+            b.append(R(x, y, cw, 92, soft, s, 10, 1.6))
+            b.append(T(x + 10, y + 18, f"{tr('niveau', 'level')} {k}", 12, 800, s))
+            b.append(T(x + 10, y + 38, f"{X}×{Y}×{Z}", 11.3, 600, INK, mono=True, maxw=cw - 14))
+            b.append(T(x + 10, y + 56, f"vxy {vx:.2f}", 10.6, 400, INK2, mono=True))
+            b.append(T(x + 10, y + 70, f"vz  {vz:.2f}", 10.6, 400, INK2, mono=True))
+            if k:
+                b.append(T(x + 10, y + 86, tr("Z réduit" if hz else "Z gardé", "Z halved" if hz else "Z kept"), 10.8, 800, s))
+            else:
+                b.append(T(x + 10, y + 86, tr("natif (verbatim)", "native (verbatim)"), 10.6, 700, s))
+        y += 118
+    b.append(R(24, y - 4, 752, 76, "#fff", LINE, 12))
+    b.append(T(40, y + 18, tr("Pourquoi ? Pour qu'un niveau grossier ait des voxels presque cubiques :", "Why? So that a coarse level has nearly cubic voxels:"), 12.3, 800))
+    b.append(T(40, y + 38, tr("tant que le voxel est bien plus épais en Z qu'en XY, on ne réduit que XY ; dès qu'il devient comparable, on réduit les trois axes.", "as long as the voxel is much thicker in Z than in XY, only XY is reduced; once comparable, all three axes are."), 11.6, 400, INK, maxw=715))
+    b.append(T(40, y + 58, tr("On s'arrête quand max(X, Y) ≤ 128 voxels. La moyenne est entière, arrondie au plus proche (demi vers le haut).", "We stop when max(X, Y) ≤ 128 voxels. The mean is an integer, rounded to nearest (half up)."), 11.6, 400, INK2, maxw=715))
+    save("niveaux-z.svg", y + 88, b)
+
+
+def run2():
+    niveaux_z()

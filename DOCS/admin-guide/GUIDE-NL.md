@@ -655,7 +655,7 @@ Een **onderbroken** import wordt niet eeuwig bewaard: de kaart toont “wordt ge
 **Publiceren maakt de dataset niet openbaar.** Hij komt **verborgen** aan. Ga naar Datasets, open hem en zet [Zichtbaarheid]{.ui} aan.
 :::
 
-**Een reeds gepubliceerde dataset vervangen**: bestaat de naam al, dan vraagt het paneel “Er bestaat al een gepubliceerde dataset met deze naam. Vervangen? De afbeeldingengalerij en de velden die u invulde (naam, oriëntatie, bijschriften…) blijven behouden als de nieuwe import ze niet levert.”. Na de vervanging somt een toast op wat behouden bleef (de galerij, enz.). Let op: een `metadata.json` die door de pijplijn is gemaakt, bevat altijd een naam; daarom wordt **de nieuwe naam** getoond. De oriëntatie en de galerij worden wel overgenomen van de oude versie.
+**Een reeds gepubliceerde dataset vervangen**: bestaat de naam al, dan vraagt het paneel “Er bestaat al een gepubliceerde dataset met deze naam. Vervangen? De afbeeldingengalerij en de velden die u invulde (naam, oriëntatie, bijschriften…) blijven behouden als de nieuwe import ze niet levert.”. Na de vervanging somt een toast op wat behouden bleef (de galerij, enz.). Let op: een `metadata.json` die door de verwerkingsketen is gemaakt, bevat altijd een naam; daarom wordt **de nieuwe naam** getoond. De oriëntatie en de galerij worden wel overgenomen van de oude versie.
 
 **[Verwijderen]{.ui}**: “De al verzonden bestanden van deze dataset definitief verwijderen?”, daarna “Import verwijderd.”. Beschikbaar in alle statussen behalve **Gepubliceerd**.
 

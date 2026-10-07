@@ -16,7 +16,7 @@ Toutes les pages publiques partagent la même barre du haut : le logo, les quatr
 Les captures de ce document sont en français et en thème sombre. Le nom du site (« IRIBHM — ULB »), les couleurs et même les textes de l'accueil sont ceux de l'instance photographiée : une autre institution peut les avoir changés (chapitre 13).
 :::
 
-## 3.2 L'Accueil
+## 3.2 L'Accueil {.page}
 
 C'est la vitrine : un message d'accueil, quelques chiffres et trois cartes, une par type de données.
 
@@ -34,7 +34,7 @@ C'est la vitrine : un message d'accueil, quelques chiffres et trois cartes, une 
 
 En dessous, la section [Jeux de données en vedette]{.ui} met en avant trois jeux choisis automatiquement (le suivi le plus riche, le volume le plus profond…). L'administrateur peut remplacer toute l'accueil par une page de son cru.
 
-## 3.3 L'Explorateur
+## 3.3 L'Explorateur {.page}
 
 L'Explorateur liste les jeux publiés. Les jeux **masqués** n'y figurent pas.
 
@@ -60,7 +60,7 @@ Sur chaque fiche, trois actions :
 Les pastilles de la fiche en disent long : **Web** (affichable), **Brut** (fichier d'origine à télécharger), **Suivi** (cellules suivies), **Lié** (d'autres jeux sont rattachés, par exemple une photographie du même embryon).
 :::
 
-## 3.4 Le viewer 3D
+## 3.4 Le viewer 3D {.page}
 
 C'est le cœur de la plateforme. Ouvrez un jeu 3D : le volume apparaît d'abord flou puis s'affine.
 
@@ -97,7 +97,7 @@ Les boutons de la barre dépendent des **plugins installés** sur votre instance
 **Partager exactement ce que vous voyez.** Après quelques secondes, l'adresse du navigateur change et se termine par `#state=…`. Elle contient la caméra, les canaux, l'outil actif et vos mesures. Copiez-la : la personne qui l'ouvre se voit proposer [Ouvrir la vue enregistrée]{.ui}.
 :::
 
-## 3.5 Le viewer Live : la ligne de temps
+## 3.5 Le viewer Live : la ligne de temps {.page}
 
 Un jeu Live s'ouvre dans la même page. Deux choses s'ajoutent : la **ligne de temps** en bas, et, s'il a été suivi, la couche [Points de suivi]{.ui} dans le panneau des canaux.
 
@@ -117,7 +117,7 @@ Un jeu Live s'ouvre dans la même page. Deux choses s'ajoutent : la **ligne de t
 Sur ce petit jeu, la lecture est instantanée. Sur un vrai time-lapse, la lecture **attend** que l'instant demandé soit chargé : vous voyez des images terminées, à la vitesse où elles arrivent (chapitre 10).
 :::
 
-## 3.6 La page 2D
+## 3.6 La page 2D {.page}
 
 Une photographie de stéréomicroscope, calibrée en micromètres. Pas de canaux ni de 3D : on déplace, on zoome, on mesure.
 
@@ -137,11 +137,34 @@ Une photographie de stéréomicroscope, calibrée en micromètres. Pas de canaux
 - [Parcourir la collection]{.ui} ouvre une planche-contact de toutes les photographies ; ← et → passent à la suivante.
 - La page affiche d'abord un aperçu léger, puis la résolution native dès qu'elle est prête.
 
-## 3.7 Comparer
+## 3.7 Comparer {.page}
 
-COMPARE_PLACEHOLDER
+Jusqu'à **quatre panneaux** côte à côte. Chaque panneau est un **vrai viewer** (ou une vraie page 2D) intégré : tout ce que vous savez faire dans le viewer, vous le faites ici, et on peut mélanger volumes et photographies.
 
-## 3.8 À propos et Mentions légales
+![Comparer trois embryons (E8.5, E9.5, E10.5 : jeu de démonstration).](img/ch03/comparer.png){.shot width=100%}
+
+::: legend
+| n | ce que c'est |
+|--|----------------------|
+| 1 | [Ajouter un jeu de données]{.ui} : ouvre une fenêtre de choix avec recherche et filtres par type. |
+| 2 | Les outils communs (Naviguer, Couper, Mesurer…) : un clic s'applique à tous les panneaux. |
+| 3 | [Studio]{.ui} (une figure composée de tous les panneaux), [Exporter]{.ui}, [Sauvegarder]{.ui} et [Restaurer]{.ui} l'espace de travail. |
+| 4 | [Disposition Auto]{.ui} (colonnes, lignes, grille) et [Qualité auto]{.ui}. |
+| 5 | **SYNC** : ce qui est synchronisé entre panneaux, [Plan Z]{.ui}, [Temps]{.ui}, [Caméra / vue]{.ui}, [Canaux]{.ui}. Tout est coché par défaut. |
+| 6 | Les boutons propres à un panneau (grille, axes, orientation, volume, Z-stack), son réglage et sa fermeture. |
+| 7 | Le nom du jeu du panneau. |
+:::
+
+::: example
+**Deux embryons, une seule caméra.** Avec [Caméra / vue]{.ui} coché, tourner un embryon fait tourner les autres. Même si deux jeux ont été calibrés différemment, ils restent alignés sur l'anatomie. Pour des time-lapses de longueurs différentes, c'est la **fraction** du temps écoulé qui est synchronisée (le milieu d'un film de 100 images correspond au milieu d'un film de 10).
+:::
+
+- **Qualité auto** : les panneaux s'ouvrent à 512, puis montent un par un (jusqu'à 1024 pour deux volumes, 512 au-delà) pour tenir dans une mémoire graphique commune.
+- Un seul volume à plusieurs canaux ? Le bouton [Décomposer]{.ui} le clone en un panneau par canal.
+- L'adresse de la page (`#state=…`) retient les panneaux et leur disposition : copiez-la pour partager la comparaison.
+
+
+## 3.8 À propos et Mentions légales {.page}
 
 **À propos** présente le projet. Son contenu par défaut est une page modifiable par l'administrateur (éditeur de pages, chapitre 13). **Mentions légales** affiche le texte juridique saisi dans l'onglet [Mentions légales]{.ui} ; le lien du pied de page n'apparaît que s'il est activé.
 

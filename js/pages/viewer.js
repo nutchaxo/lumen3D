@@ -1203,6 +1203,7 @@ const ViewerApp = (() => {
     }
 
     _bindDetailControls();
+    _bindGpuCompressionControls();
     _bindViewExport();
   }
 
@@ -1233,6 +1234,51 @@ const ViewerApp = (() => {
     }
     if (typeof VolumeViewer.onDetailStatus === 'function') VolumeViewer.onDetailStatus(_renderDetailStatus);
     else _renderDetailStatus(VolumeViewer.getDetailStatus?.());
+  }
+
+  // ── GPU compression (the display atlas in BC4 / BC5 blocks) ──────────────────────
+  // Half the VRAM per frame, so a timelapse's buffer holds twice the frames; the values
+  // on screen are approximate. The select sets the mode (VolumeViewer.setGpuCompression)
+  // and the volume on screen is loaded again in the new form; the line under it says
+  // which form is on screen.
+  const GPU_COMPRESSION_MODES = ['auto', 'on', 'off'];
+
+  function _renderGpuCompressionStatus() {
+    const state = VolumeViewer.getGpuCompression?.();
+    const line = document.getElementById('gpu-compression-status');
+    const select = document.getElementById('select-gpu-compression');
+    if (!state) return;
+    if (select && GPU_COMPRESSION_MODES.includes(state.mode) && select.value !== state.mode) select.value = state.mode;
+    if (!line) return;
+    line.textContent = !state.supported
+      ? _tt('viewer.gpuCompressionUnsupported', 'Not available on this GPU: shown from exact voxels.')
+      : state.active
+        ? _tt('viewer.gpuCompressionActive', 'Shown from GPU-compressed blocks: half the memory, so more frames stay loaded; voxel values are approximate.')
+        : _tt('viewer.gpuCompressionInactive', 'Shown from exact voxels.');
+  }
+
+  function _bindGpuCompressionControls() {
+    const select = document.getElementById('select-gpu-compression');
+    if (typeof VolumeViewer === 'undefined' || typeof VolumeViewer.setGpuCompression !== 'function') {
+      select?.closest('label')?.classList.add('hidden');
+      return;
+    }
+    if (select) {
+      select.addEventListener('change', () => {
+        const mode = GPU_COMPRESSION_MODES.includes(select.value) ? select.value : 'auto';
+        VolumeViewer.setGpuCompression(mode);
+        _stopPrefetch();
+        _preloadedTimepoints.clear();
+        _refreshBuffer();
+        if (!_basePath) { _renderGpuCompressionStatus(); return; }
+        _loadTimepoint(_basePath, _currentTimepoint, { force: true })
+          .then(() => { _refreshBuffer(); _kickPrefetch(200); })
+          .catch(err => console.warn('[ViewerApp] Reload after a GPU compression change failed:', err))
+          .finally(_renderGpuCompressionStatus);
+      });
+    }
+    window.addEventListener('volume-capabilities', _renderGpuCompressionStatus);
+    _renderGpuCompressionStatus();
   }
 
   // ── 3D view export (PNG) ─────────────────────────────────────────────────────────

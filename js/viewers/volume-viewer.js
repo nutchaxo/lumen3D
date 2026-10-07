@@ -46,6 +46,12 @@ const VolumeViewer = (() => {
   // the round counter and the status the page shows.
   let _roi = null;
   let _roiMode = 'auto';
+  // GPU-compressed display atlas: 'auto' compresses the atlases of a timelapse (where
+  // the cache must hold many frames), 'on' every bricked volume, 'off' none. Kept for
+  // the session and in localStorage 'lumen3d.gpuCompression'; a volume already loaded
+  // keeps its form until it is loaded again.
+  const GPU_COMPRESSION_MODES = ['auto', 'on', 'off'];
+  let _gpuCompressionSession = null;
   let _roiTimer = null;
   let _roiSeq = 0;
   let _roiStatus = { mode: 'auto', active: false, level: null, baseLevel: null, inView: 0, resident: 0, loading: 0, loaded: 0, capacity: 0, pixelsPerVoxel: null, reason: 'idle', message: '' };
@@ -460,6 +466,7 @@ const VolumeViewer = (() => {
     precision highp float;
     precision highp int;
     precision highp sampler3D;
+    precision highp sampler2DArray;
 
     #define MAX_MARCH_STEPS ${MAX_MARCH_STEPS}
     // Structure DVR reference: a sample of displayed value a covers DVR_REF_ALPHA·a of
@@ -478,6 +485,18 @@ const VolumeViewer = (() => {
     in vec3 vOrigin;
     in vec3 vDirection;
 
+    #ifdef SVR_ARRAY
+    // A compressed display atlas (svr-manager.js, compression 'bc'): RGTC pages, which
+    // WebGL2 only accepts as 2D array textures — one layer per voxel plane.
+    uniform sampler2DArray svrAtlas0;
+    uniform sampler2DArray svrAtlas1;
+    uniform sampler2DArray svrAtlas2;
+    uniform sampler2DArray svrAtlas3;
+    uniform sampler2DArray svrAtlas4;
+    uniform sampler2DArray svrAtlas5;
+    uniform sampler2DArray svrAtlas6;
+    uniform sampler2DArray svrAtlas7;
+    #else
     uniform sampler3D svrAtlas0;
     uniform sampler3D svrAtlas1;
     uniform sampler3D svrAtlas2;
@@ -486,6 +505,7 @@ const VolumeViewer = (() => {
     uniform sampler3D svrAtlas5;
     uniform sampler3D svrAtlas6;
     uniform sampler3D svrAtlas7;
+    #endif
     #ifdef HAS_OCCUPANCY
     uniform sampler3D mapOccupancy;
     // OCC-Z: maps a normalized volume coord to the per-brick occupancy grid so the
@@ -559,6 +579,46 @@ const VolumeViewer = (() => {
     // textureLod everywhere in the march: the atlases have no mipmaps, so level 0 is
     // what texture() returns, without needing derivatives inside divergent control
     // flow (undefined there by GLSL ES 3.00).
+    #ifdef SVR_ARRAY
+    // The atlas coordinate c (normalised by atlasDim, as for a 3D page) read from a
+    // page of layers. Hardware trilinear filtering of a 3D texture is, per axis, the
+    // linear blend of the two texels around t − ½: the blend in x and y is the layer's
+    // own bilinear filter, the one in z is done here — t = c.z·depth − ½, layers
+    // ⌊t⌋ and ⌊t⌋ + 1 weighted by 1 − f and f, f = t − ⌊t⌋. Exactly what the LINEAR
+    // 3D page returns; inside a bordered slot both layers belong to the brick (see
+    // slotCoord). A v2 (apron 0) atlas is NEAREST: the layer holding c, ⌊c.z·depth⌋.
+    // A macro over the local layers (svrL0, svrL1, svrF, svrBlend), not a function
+    // taking the sampler: sampler arguments go through a rewriting pass of ANGLE's
+    // translator that some backends mishandle.
+    #define SVR_LAYER(page) (svrBlend ? mix(textureLod(page, svrL0, 0.0), textureLod(page, svrL1, 0.0), svrF) : textureLod(page, svrL0, 0.0))
+    vec4 sampleSVRAtlas(vec3 atlasCoord, float atlasPage) {
+        bool svrBlend = brickApron > 0.5;
+        float t = atlasCoord.z * atlasDim.z - (svrBlend ? 0.5 : 0.0);
+        float z0 = floor(t);
+        float svrF = t - z0;
+        vec3 svrL0 = vec3(atlasCoord.xy, z0);
+        vec3 svrL1 = vec3(atlasCoord.xy, z0 + 1.0);
+        #ifdef SVR_ARRAY_PAIRS
+        // Three or four channels: page k is svrAtlas<k> (BC5: channels 0, 1) beside
+        // svrAtlas<k+4> (BC5: channels 2, 3, or BC4: channel 2 with g read as 0).
+        vec4 a; vec4 b;
+        if (atlasPage < 0.5) { a = SVR_LAYER(svrAtlas0); b = SVR_LAYER(svrAtlas4); }
+        else if (atlasPage < 1.5) { a = SVR_LAYER(svrAtlas1); b = SVR_LAYER(svrAtlas5); }
+        else if (atlasPage < 2.5) { a = SVR_LAYER(svrAtlas2); b = SVR_LAYER(svrAtlas6); }
+        else { a = SVR_LAYER(svrAtlas3); b = SVR_LAYER(svrAtlas7); }
+        return vec4(a.rg, b.rg);
+        #else
+        if (atlasPage < 0.5) return SVR_LAYER(svrAtlas0);
+        if (atlasPage < 1.5) return SVR_LAYER(svrAtlas1);
+        if (atlasPage < 2.5) return SVR_LAYER(svrAtlas2);
+        if (atlasPage < 3.5) return SVR_LAYER(svrAtlas3);
+        if (atlasPage < 4.5) return SVR_LAYER(svrAtlas4);
+        if (atlasPage < 5.5) return SVR_LAYER(svrAtlas5);
+        if (atlasPage < 6.5) return SVR_LAYER(svrAtlas6);
+        return SVR_LAYER(svrAtlas7);
+        #endif
+    }
+    #else
     vec4 sampleSVRAtlas(vec3 atlasCoord, float atlasPage) {
         if (atlasPage < 0.5) return textureLod(svrAtlas0, atlasCoord, 0.0);
         if (atlasPage < 1.5) return textureLod(svrAtlas1, atlasCoord, 0.0);
@@ -569,6 +629,7 @@ const VolumeViewer = (() => {
         if (atlasPage < 6.5) return textureLod(svrAtlas6, atlasCoord, 0.0);
         return textureLod(svrAtlas7, atlasCoord, 0.0);
     }
+    #endif
     #endif
 
     #ifdef ROI_DETAIL
@@ -2825,14 +2886,9 @@ const VolumeViewer = (() => {
       _svrManager.material = material;
       _svrManager.updateUniforms();
     } else {
-      if (material?.defines?.ENABLE_SVR) {
-        delete material.defines.ENABLE_SVR;
-        material.needsUpdate = true;
-      }
-      if (material?.defines && 'SVR_COMPONENTS' in material.defines) {
-        delete material.defines.SVR_COMPONENTS;
-        material.needsUpdate = true;
-      }
+      // A dense 3D texture next: no atlas define may stay (a compressed atlas's
+      // SVR_ARRAY would declare the pages sampler2DArray).
+      SVRManager.clearAtlasDefines(material);
       _svrManager = null;
     }
     const scaleInfo = computePhysicalScale(metadata, sourceDepth, sourceWidth);
@@ -2958,8 +3014,7 @@ const VolumeViewer = (() => {
       entry.svrManager.material = _transitionMaterial;
       entry.svrManager.updateUniforms();
     } else {
-      if (_transitionMaterial.defines?.ENABLE_SVR) delete _transitionMaterial.defines.ENABLE_SVR;
-      if (_transitionMaterial.defines) delete _transitionMaterial.defines.SVR_COMPONENTS;
+      SVRManager.clearAtlasDefines(_transitionMaterial);
       _transitionMaterial.uniforms.svrAtlas0.value = entry.texture || textures[0] || null;
       _transitionMaterial.uniforms.svrAtlas1.value = textures[1] || textures[0] || entry.texture || null;
       _transitionMaterial.uniforms.svrAtlas2.value = textures[2] || textures[0] || entry.texture || null;
@@ -6099,6 +6154,8 @@ const VolumeViewer = (() => {
     getActiveLevel,
     selectBrickManifest: (manifest, timepoint) => _selectBrickManifestForTimepoint(manifest, timepoint),
     setDetailMode,
+    getGpuCompression,
+    setGpuCompression,
     getDetailStatus,
     onDetailStatus,
     refreshDetail: () => _roiSchedule('request'),
@@ -6451,6 +6508,12 @@ const VolumeViewer = (() => {
       const max3D = renderer?.capabilities?.max3DTextureSize || 2048;
       const rgbaTransport = BrickLoader.getTransportEncoding?.() === 'raw-rgba-gzip';
       const SVRClass = typeof SVRManager !== 'undefined' ? SVRManager : (window.SVRManager || null);
+      // A GPU-compressed display atlas (getGpuCompression): a raw RGBA transport is
+      // interleaved on this thread and is never encoded here.
+      let useCompression = !rgbaTransport && _gpuCompressionWanted(metadata);
+      // A prefetch fills the cache: an atlas the cache would not keep (native) is not
+      // worth streaming in the background.
+      const preloadSvr = _shouldCacheVolumeEntry({ svrManager: true, quality });
       let lod = requestedLod;
       let dims = null;
       let texture3D = null;
@@ -6462,13 +6525,13 @@ const VolumeViewer = (() => {
       for (;;) {
         const candidates = [];
         for (let l = lod; l < levelCount; l++) {
-          const fp = _levelFootprint(l, { max3D, rgbaTransport, budget });
+          const fp = _levelFootprint(l, { max3D, rgbaTransport, budget, compressed: useCompression });
           if (fp) candidates.push(fp);
         }
         const pinned = _pinnedGpuBytes();
         // Nothing on screen and nothing else to show: the coarsest level is attempted
         // even over the heuristic budget (only the GPU refusing it ends the load).
-        const choice = _chooseStreamLevel(candidates, { available: budget - pinned, preload, lastResort: !preload && !deferActivation });
+        const choice = _chooseStreamLevel(candidates, { available: budget - pinned, preload, preloadSvr, lastResort: !preload && !deferActivation });
         for (const s of choice.skipped) {
           if (!firstRefusal) firstRefusal = s;
           downgradeReason = downgradeReason || s.reason;
@@ -6494,15 +6557,18 @@ const VolumeViewer = (() => {
         try {
           if (footprint.mode === 'svr') {
             if (!SVRClass) throw new Error('SVRManager unavailable: js/core/svr-manager.js must be loaded before volume-viewer.js');
-            const svrMaterial = deferActivation
-              ? (_transitionMaterial || _beginTransitionVolume(null, footprint.channels))
-              : material;
+            // A prefetched atlas publishes on no material: it reaches one when shown
+            // (_activateVolumeEntry hands it the material and republishes).
+            const svrMaterial = preload
+              ? null
+              : (deferActivation ? (_transitionMaterial || _beginTransitionVolume(null, footprint.channels)) : material);
             streamSvrManager = new SVRClass();
             streamSvrManager.init(footprint.channels, dims, renderer, svrMaterial, {
               // ≥ 2: a single slot would read as "no target" (largest layout the budget allows).
               targetSlots: Math.max(2, footprint.activeBricks),
               components: footprint.components,
               apron: bordered ? 1 : 0,
+              ...(footprint.compressed ? { compression: 'bc' } : {}),
               // Dense textures are not SVR managers: the budget left for atlases is
               // the page's budget minus them (init subtracts the other live atlases).
               budgetBytes: Math.max(0, budget - (_residentGpuBytes() - SVRClass.liveAtlasBytes())),
@@ -6518,6 +6584,13 @@ const VolumeViewer = (() => {
           streamSvrManager?.dispose?.();
           streamSvrManager = null;
           texture3D = null;
+          if (err?.code === 'SVR_BAD_FORMAT' && footprint?.compressed) {
+            // The compressed atlas is refused here (no RGTC after all): the same level,
+            // uncompressed.
+            console.warn(`[VolumeViewer] GPU-compressed atlas unavailable (${err.message}); streaming LOD${lod} uncompressed.`);
+            useCompression = false;
+            continue;
+          }
           const reason = err?.code === 'SVR_OVER_BUDGET' ? 'vram-budget' : 'alloc-failed';
           downgradeReason = downgradeReason || reason;
           if (!firstRefusal) firstRefusal = { lod, bytes: footprint.bytes, reason };
@@ -6606,6 +6679,8 @@ const VolumeViewer = (() => {
         successfulLoads: 0,
         failedLoads: 0,
         svrManager: streamSvrManager || null,
+        // Display voxels in the GPU's BC4 / BC5 blocks (lossy, display only).
+        gpuCompressed: Boolean(streamSvrManager?.compressed),
         manifest: tpSelection.manifest,
         histograms: manifestHistograms.length
           ? manifestHistograms
@@ -6702,7 +6777,11 @@ const VolumeViewer = (() => {
           // Stops the batch the moment this stream is superseded, instead of paying
           // for every remaining fetch and decode only to throw the result away.
           shouldAbort: stopped,
-          compose: { channels, luts: floorLuts, components: footprint.components, cropToVolume: !(bordered && !streamSvrManager) },
+          compose: {
+            channels, luts: floorLuts, components: footprint.components, cropToVolume: !(bordered && !streamSvrManager),
+            // A compressed atlas takes the bricks as blocks, encoded in the decode worker.
+            encode: streamSvrManager?.compressed ? 'bc' : null
+          },
           onBrickError: ({ bx, by, bz, channel, error } = {}) => {
             // BUG-011 (Rule 1.1): a dropped brick surfaces in the status, not silently.
             if (stopped()) return;
@@ -6710,14 +6789,16 @@ const VolumeViewer = (() => {
             console.warn(`[VolumeViewer] brick load failed (${bx},${by},${bz}) ch=${channel}:`, error);
           },
           onBrickLoaded: (row) => {
-            if (stopped() || !row?.data) return;
+            if (stopped() || !(row?.data || row?.encoded)) return;
             const r = row.region;
             // No region: a whole brick (a bordered one is its whole stored 66³).
             const bw = r ? r.x1 - r.x0 : (bordered ? slotEdge : Math.min(bs, width - row.bx * bs));
             const bh = r ? r.y1 - r.y0 : (bordered ? slotEdge : Math.min(bs, height - row.by * bs));
             const bd = r ? r.z1 - r.z0 : (bordered ? slotEdge : Math.min(bs, depth - row.bz * bs));
             let ok;
-            if (streamSvrManager) {
+            if (streamSvrManager && row.encoded) {
+              ok = streamSvrManager.writeEncodedBrick(row.bx, row.by, row.bz, row.encoded);
+            } else if (streamSvrManager) {
               ok = streamSvrManager.writeRgbaBrick(row.bx, row.by, row.bz, row.data, bw, bh, bd);
             } else {
               _updateGPUTextureRegion(texture3D, dims, row.bx * bs, row.by * bs, row.bz * bs, bw, bh, bd, row.data);
@@ -6830,7 +6911,7 @@ const VolumeViewer = (() => {
           ? `Preview (LOD${lod}) ready — streaming ${shownQuality}...`
           : (missingCount > 0
             ? `${quality} ready — ${missingCount} of ${totalBricks} bricks missing (shown empty; not cached, reload to retry)`
-            : `${quality} bricks ready`)
+            : `${quality} bricks ready${streamEntry.gpuCompressed ? ' (GPU-compressed display)' : ''}`)
       });
       onProgress?.(1, quality);
       _perf()?.end(perfId, {
@@ -6955,10 +7036,30 @@ const VolumeViewer = (() => {
    * @returns {{lod, dims:{x,y,z}, channels, activeBricks, mode:'monolithic'|'svr',
    *   scalar:boolean, bytes:number, planned:boolean}|null}
    */
-  function _levelFootprint(lod, { max3D = 2048, rgbaTransport = false, budget = _gpuBudgetBytes() } = {}) {
+  function _levelFootprint(lod, { max3D = 2048, rgbaTransport = false, budget = _gpuBudgetBytes(), compressed = false } = {}) {
     const dims = typeof BrickLoader !== 'undefined' ? BrickLoader.getDimensions(lod) : null;
     if (!dims) return null;
     const channels = Math.min(4, dims.channels || 1);
+    if (compressed && !rgbaTransport && typeof SVRManager !== 'undefined' && typeof SVRManager.pitchFor === 'function') {
+      // A compressed display atlas, whatever the level's size (a dense texture cannot
+      // hold RGTC in 3D): slots on a pitch of whole blocks, 0.5 byte per voxel and
+      // channel, two textures a page (so four pages) beyond two channels.
+      const S = SVRManager;
+      const stride = Number(dims.brickStride) || VOLUME_BRICK_SIZE;
+      const plan = S.planAtlas(Math.max(1, BrickLoader.activeBrickCount(lod)), {
+        max3D: S.maxPageDim(renderer, true),
+        maxPageBytes: S._maxPageBytes(budget),
+        brickSize: S.pitchFor(stride, true),
+        texelBytes: S.compressedTexelBytes(channels),
+        maxPages: channels > 2 ? S.MAX_PAGES / 2 : S.MAX_PAGES
+      });
+      const pageTableBytes = Math.ceil(dims.x / VOLUME_BRICK_SIZE) * Math.ceil(dims.y / VOLUME_BRICK_SIZE) * Math.ceil(dims.z / VOLUME_BRICK_SIZE) * 4;
+      return {
+        lod, dims: { x: dims.x, y: dims.y, z: dims.z }, channels, activeBricks: BrickLoader.activeBrickCount(lod),
+        mode: 'svr', compressed: true, scalar: false, components: S.componentsForChannels(channels), stride,
+        bytes: plan ? plan.bytes + pageTableBytes : Infinity, planned: Boolean(plan)
+      };
+    }
     // A single-channel level fills one byte per voxel: an R8 texture, not RGBA8.
     const scalar = channels === 1 && !rgbaTransport;
     const dense = dims.x * dims.y * dims.z * (scalar ? 1 : RGBA_TEXTURE_BYTES_PER_VOXEL);
@@ -6988,19 +7089,20 @@ const VolumeViewer = (() => {
   /**
    * The finest level that fits: candidates are tried finest first; one is skipped when
    * its atlas cannot be laid out at all ('capacity'), when it is over `available`
-   * bytes ('vram-budget'), or when it needs an SVR atlas for a prefetch, which never
-   * takes one ('svr-preload'). With `lastResort` (nothing else on screen), when every
+   * bytes ('vram-budget'), or when it needs an SVR atlas for a prefetch that the cache
+   * would not keep ('svr-preload': `preloadSvr` false, a native atlas). With
+   * `lastResort` (nothing else on screen), when every
    * level is over the budget the coarsest one that can be laid out is returned anyway,
    * flagged `overBudget`: the budget is a heuristic, and an empty viewer is worse than
    * an allocation the GPU may still accept (its refusal is handled by the caller).
    * @returns {{ level: object|null, skipped: Array<{lod, bytes, reason}> }}
    */
-  function _chooseStreamLevel(candidates, { available, preload = false, lastResort = false } = {}) {
+  function _chooseStreamLevel(candidates, { available, preload = false, preloadSvr = false, lastResort = false } = {}) {
     const skipped = [];
     let coarsestPlanned = null;
     for (const c of candidates || []) {
       if (!c) continue;
-      if (c.mode === 'svr' && preload) { skipped.push({ lod: c.lod, bytes: c.bytes, reason: 'svr-preload' }); continue; }
+      if (c.mode === 'svr' && preload && !preloadSvr) { skipped.push({ lod: c.lod, bytes: c.bytes, reason: 'svr-preload' }); continue; }
       if (!c.planned) { skipped.push({ lod: c.lod, bytes: c.bytes, reason: 'capacity' }); continue; }
       coarsestPlanned = c;
       if (!(c.bytes <= available)) { skipped.push({ lod: c.lod, bytes: c.bytes, reason: 'vram-budget' }); continue; }
@@ -7040,8 +7142,9 @@ const VolumeViewer = (() => {
     const budget = _gpuBudgetBytes();
     const rgbaTransport = BrickLoader.getTransportEncoding?.() === 'raw-rgba-gzip';
     const out = { budgetBytes: budget, levels: [], qualities: {} };
+    const compressed = !rgbaTransport && _gpuCompressionWanted(_lastDisplayRequest?.metadata || null);
     for (let lod = 0; lod < levelCount; lod++) {
-      const fp = _levelFootprint(lod, { max3D, rgbaTransport, budget });
+      const fp = _levelFootprint(lod, { max3D, rgbaTransport, budget, compressed });
       if (fp) out.levels.push({ ...fp, fits: fp.planned && fp.bytes <= budget });
     }
     for (const q of qualities) {
@@ -7091,6 +7194,7 @@ const VolumeViewer = (() => {
       apron: e.apron || 0,
       components: e.svrManager ? e.svrManager.components : (e.stride === 1 ? 1 : RGBA_TEXTURE_BYTES_PER_VOXEL),
       mode: e.svrManager ? 'svr' : 'monolithic',
+      compressed: Boolean(e.gpuCompressed),
       detailLevel: _roi && _roi.entry === e ? _roi.level : null
     };
   }
@@ -7109,6 +7213,69 @@ const VolumeViewer = (() => {
     const D = Math.max(1, Math.floor(Number(sourceDepth) || d));
     if (D === d) return Array.from({ length: d }, (_, z) => z);
     return Array.from({ length: d }, (_, z) => Math.min(D - 1, Math.floor((z + 0.5) * D / d)));
+  }
+
+  // ── GPU-compressed display atlas ───────────────────────────────────────────────
+  // (GPU_COMPRESSION_MODES and _gpuCompressionSession are declared with the module's
+  // state, above the IIFE's return.)
+
+  function _gpuCompressionMode() {
+    if (_gpuCompressionSession) return _gpuCompressionSession;
+    try {
+      const v = typeof localStorage !== 'undefined' ? localStorage.getItem('lumen3d.gpuCompression') : null;
+      if (GPU_COMPRESSION_MODES.includes(v)) return v;
+    } catch (e) { /* storage blocked */ }
+    return 'auto';
+  }
+
+  function _isTimelapse(metadata) {
+    return metadata?.type === 'live' || Number(metadata?.dimensions?.t) > 1;
+  }
+
+  /** Should a volume of `metadata` stream into a compressed atlas on this renderer? */
+  function _gpuCompressionWanted(metadata) {
+    const mode = _gpuCompressionMode();
+    if (mode === 'off' || (mode === 'auto' && !_isTimelapse(metadata))) return false;
+    if (!renderer || typeof SVRManager === 'undefined' || typeof SVRManager.compressionSupport !== 'function') return false;
+    return SVRManager.compressionSupport(renderer).bc;
+  }
+
+  /**
+   * { mode, supported, reason, wanted (for the volume of the last display load),
+   *   active (the volume on screen is compressed) }.
+   */
+  function getGpuCompression() {
+    const support = renderer && typeof SVRManager !== 'undefined' && SVRManager.compressionSupport
+      ? SVRManager.compressionSupport(renderer)
+      : { bc: false, reason: 'no-renderer' };
+    return {
+      mode: _gpuCompressionMode(),
+      supported: Boolean(support.bc),
+      reason: support.bc ? null : support.reason,
+      wanted: _gpuCompressionWanted(_lastDisplayRequest?.metadata || null),
+      active: Boolean(_activeVolumeEntry?.gpuCompressed)
+    };
+  }
+
+  /**
+   * Set the mode ('auto' | 'on' | 'off'). Cached volumes in the other form are dropped
+   * (the next frames load in the new one); the volume on screen is the caller's to
+   * reload. → getGpuCompression().
+   */
+  function setGpuCompression(mode) {
+    const m = mode === true ? 'on' : mode === false ? 'off' : String(mode || 'auto');
+    if (!GPU_COMPRESSION_MODES.includes(m)) return getGpuCompression();
+    _gpuCompressionSession = m;
+    try { if (typeof localStorage !== 'undefined') localStorage.setItem('lumen3d.gpuCompression', m); } catch (e) { /* storage blocked */ }
+    const want = _gpuCompressionWanted(_lastDisplayRequest?.metadata || null);
+    for (const [key, entry] of [..._volumeCache]) {
+      if (!entry || Boolean(entry.gpuCompressed) === want) continue;
+      _volumeCache.delete(key);
+      // The volume on screen (or fading in) stays until its replacement lands; out of
+      // the cache, a reload streams it again instead of finding it there.
+      if (entry !== _activeVolumeEntry && entry !== _transitionEntry) _disposeVolumeEntry(entry);
+    }
+    return getGpuCompression();
   }
 
   // ── Region of interest: finer bricks where the view needs them ───────────────
@@ -7466,8 +7633,7 @@ const VolumeViewer = (() => {
     material.uniforms.pageTable.value = null;
     material.uniforms.mapOccupancy.value = null;
     material.uniforms.svrPageCount.value = 0;
-    if (material.defines?.ENABLE_SVR) { delete material.defines.ENABLE_SVR; material.needsUpdate = true; }
-    if (material.defines && 'SVR_COMPONENTS' in material.defines) { delete material.defines.SVR_COMPONENTS; material.needsUpdate = true; }
+    SVRManager.clearAtlasDefines(material);
   }
 
   /**

@@ -368,7 +368,12 @@
     "qStreamingSlices": "Diffusion des coupes {quality}...",
     "qStreamingPreview": "Aperçu en cours (LOD{lod}) avant {quality}...",
     "qStreamingPreviewBricks": "Aperçu en cours (LOD{lod}, {count} briques) avant {quality}...",
-    "qStreamingBricks": "Diffusion des briques {quality} (LOD{lod}, {count} briques)..."
+    "qStreamingBricks": "Diffusion des briques {quality} (LOD{lod}, {count} briques)...",
+    "gpuCompression": "Compression GPU",
+    "gpuCompressionAuto": "Timelapses",
+    "gpuCompressionActive": "Affiché depuis des blocs compressés par le GPU : moitié moins de mémoire, donc plus de frames gardées ; les valeurs des voxels sont approchées (environ 1 à 2 niveaux sur 255). Le passage natif du Studio lit les voxels exacts.",
+    "gpuCompressionInactive": "Affiché depuis les voxels exacts.",
+    "gpuCompressionUnsupported": "Indisponible sur ce GPU : affiché depuis les voxels exacts."
   },
   "compare": {
     "title": "Mode comparaison",

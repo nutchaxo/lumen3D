@@ -176,6 +176,15 @@
               </select>
             </label>
             <div class="quality-status" id="detail-status" role="status" aria-live="polite"></div>
+            <label class="detail-mode-row text-xs text-muted" for="select-gpu-compression">
+              <span data-i18n="viewer.gpuCompression">GPU compression</span>
+              <select id="select-gpu-compression" class="form-select text-sm p-1 rounded border border-light bg-surface text-primary">
+                <option value="auto" selected data-i18n="viewer.gpuCompressionAuto">Timelapses</option>
+                <option value="on" data-i18n="viewer.detailOn">On</option>
+                <option value="off" data-i18n="viewer.detailOff">Off</option>
+              </select>
+            </label>
+            <div class="quality-status" id="gpu-compression-status" role="status" aria-live="polite"></div>
         </div>
 
         <!-- Physical Scale Panel -->
@@ -573,6 +582,7 @@
   <script src="js/core/plugin-trust.js"></script>
   <script src="js/core/plugin-sandbox.js" nonce="{{CSP_NONCE}}"></script>
   <script src="js/core/plugin-registry.js?v=20260615-fixed1" nonce="{{CSP_NONCE}}"></script>
+  <script src="js/core/bc-codec.js"></script>
   <script src="js/core/svr-manager.js?v=20260615-fixed1"></script>
   <script src="js/core/brick-loader.js?v=20260615-fixed1"></script>
 

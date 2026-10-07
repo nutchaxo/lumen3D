@@ -939,6 +939,13 @@ const BrickLoader = (() => {
    *                        uploads without another copy. On a v3 tree the box keeps
    *                        the stored voxels whose volume coordinate lies in
    *                        [−1, dimension] (the voxels inside plus a 1-voxel border).
+   *                        `encode: 'bc'` delivers the brick as the GPU's BC4 / BC5
+   *                        blocks instead (bc-codec.js, encoded in the decode worker
+   *                        that assembled it): the row's `data` is null and `encoded`
+   *                        is { width, height, depth, planes: [{ format, channels,
+   *                        bytes }] }, the box rounded up to whole 4 × 4 blocks, for
+   *                        SVRManager.writeEncodedBrick. Only a box starting at x = y = 0
+   *                        can be encoded (a compressed upload starts on a block edge).
    *   streamOnly           do not collect the returned Map (callers that consume rows).
    *   manifest             the manifest the tasks were planned on: rejects (code
    *                        BRICKS_MOUNT_CHANGED) when another tree is mounted by then.
@@ -2091,7 +2098,8 @@ const BrickLoader = (() => {
       components,
       channels,
       luts: Array.isArray(raw.luts) ? raw.luts : [],
-      cropToVolume: raw.cropToVolume === true
+      cropToVolume: raw.cropToVolume === true,
+      encode: raw.encode === 'bc' ? 'bc' : null
     };
   }
 
@@ -2153,15 +2161,15 @@ const BrickLoader = (() => {
               summary.failed.push({ bx: t.bx, by: t.by, bz: t.bz, channel: t.channel, lod: t.lod, error: out.failed.get(t) });
               console.warn(`[BrickLoader] Brick ${t.rel} failed:`, out.failed.get(t));
               options.onBrickError?.({ bx: t.bx, by: t.by, bz: t.bz, channel: t.channel, lod: t.lod, error: out.failed.get(t) });
-            } else if (out.data) {
+            } else if (out.data || out.encoded) {
               deliveredTasks.add(t);
             }
           }
-          if (out.data) {
+          if (out.data || out.encoded) {
             options.onBrickLoaded?.({
               bx: unit.bx, by: unit.by, bz: unit.bz, lod: unit.lod,
               channel: 'rgba', composed: true, components: compose.components,
-              data: out.data, region: out.region,
+              data: out.data || null, encoded: out.encoded || null, region: out.region,
               channels: unit.tasks.filter(t => !out.failed.has(t)).map(t => t.channel),
               failedChannels: unit.tasks.filter(t => out.failed.has(t)).map(t => t.channel),
               batchId: batch.id
@@ -2189,6 +2197,15 @@ const BrickLoader = (() => {
     const comps = compose.components;
     const failed = new Map();
     const rgbaTransport = unit.tasks.some(t => t.channel === -1);
+    // The box an encoded brick covers (its region, or the whole stored brick).
+    const box = region
+      ? { w: region.x1 - region.x0, h: region.y1 - region.y0, d: region.z1 - region.z0 }
+      : { w: mount.bs, h: mount.bs, d: mount.bs };
+    if (compose.encode && region && (region.x0 !== 0 || region.y0 !== 0)) {
+      for (const t of unit.tasks) failed.set(t, _fatal(`brick ${unit.key}: a box starting at x ${region.x0}, y ${region.y0} cannot be block-encoded`));
+      return { data: null, failed, region };
+    }
+    const encodeMsg = compose.encode ? { format: 'bc', channels: compose.channels, w: box.w, h: box.h, d: box.d } : null;
     for (let restart = 0; restart < RETRY_ATTEMPTS; restart++) {
       failed.clear();
       if (batch.reason) return { data: null, failed, region };
@@ -2237,9 +2254,19 @@ const BrickLoader = (() => {
         if (rec && inWorker && (!rec.alive || rec.gen !== gen)) {
           throw Object.assign(new Error('Brick decode worker lost'), { workerLost: true });
         }
+        // Encoded in the worker only when every channel was assembled there; a brick
+        // with main-thread channels is interleaved below and encoded afterwards.
+        const encodeInWorker = Boolean(encodeMsg && rec && inWorker && !scalars.length);
         data = (rec && inWorker)
-          ? await _postToWorker(batch, rec, { type: 'TAKE', key: assemblyKey, voxels, components: comps })
+          ? await _postToWorker(batch, rec, { type: 'TAKE', key: assemblyKey, voxels, components: comps, ...(encodeInWorker ? { encode: encodeMsg } : {}) })
           : new Uint8Array(voxels * comps);
+        if (encodeInWorker) {
+          if (!_validEncoded(data, box)) {
+            for (const t of unit.tasks) if (!failed.has(t)) failed.set(t, _fatal(`brick ${unit.key} encoded to an unexpected layout`));
+            return { data: null, failed, region };
+          }
+          return { data: null, encoded: data, failed, region };
+        }
       } catch (err) {
         if (batch.reason) return { data: null, failed, region };
         if (restart < RETRY_ATTEMPTS - 1) continue;
@@ -2263,16 +2290,37 @@ const BrickLoader = (() => {
           }
           continue;
         }
-        const box = s.data.length === voxels ? s.data : _cropBox(s.data, mount.bs, region, 1);
+        const src = s.data.length === voxels ? s.data : _cropBox(s.data, mount.bs, region, 1);
         const lut = s.lut;
         for (let i = 0, o = s.channel; i < voxels; i++, o += comps) {
-          const v = box[i];
+          const v = src[i];
           data[o] = lut ? lut[v] : v;
         }
+      }
+      if (encodeMsg) {
+        // No worker took the whole brick (no worker at all, or a raw transport): the
+        // same encoder on this thread, the way the decode itself ran here.
+        if (typeof BCCodec === 'undefined') {
+          for (const t of unit.tasks) if (!failed.has(t)) failed.set(t, _fatal('BC codec unavailable (js/core/bc-codec.js not loaded)'));
+          return { data: null, failed, region };
+        }
+        const enc = BCCodec.encodeBox(data, comps, box.w, box.h, box.d, compose.channels);
+        return { data: null, encoded: { width: enc.width, height: enc.height, depth: enc.depth, planes: enc.planes }, failed, region };
       }
       return { data, failed, region };
     }
     return { data: null, failed, region };
+  }
+
+  /** An encoded brick as the worker returns it: whole blocks covering `box`, one
+   *  plane per channel pair, each plane depth × block rows × blocks × 8 bytes/channel. */
+  function _validEncoded(enc, box) {
+    if (!enc || !Array.isArray(enc.planes) || !enc.planes.length) return false;
+    const bw = (box.w + 3) >> 2;
+    const bh = (box.h + 3) >> 2;
+    if (enc.width !== bw * 4 || enc.height !== bh * 4 || enc.depth !== box.d) return false;
+    return enc.planes.every(p => p && p.bytes instanceof Uint8Array && Array.isArray(p.channels)
+      && p.bytes.length === box.d * bh * bw * 8 * p.channels.length);
   }
 
   // ── Decoding ────────────────────────────────────────────────────────────────
@@ -2423,7 +2471,13 @@ const BrickLoader = (() => {
         if (msg.perf && typeof window !== 'undefined' && window.VolumeViewerDebug?.logBrickDecode) {
           console.log(`[PERF-WORKER] decode: ${msg.perf.total.toFixed(2)}ms (bmp: ${msg.perf.bmp.toFixed(2)}, img: ${msg.perf.img.toFixed(2)}, loop: ${msg.perf.loop.toFixed(2)})`);
         }
-        _settlePending(msg.id, true, msg.buffer ? new Uint8Array(msg.buffer) : null);
+        const value = msg.encoded
+          ? {
+            width: msg.encoded.width, height: msg.encoded.height, depth: msg.encoded.depth,
+            planes: (msg.encoded.planes || []).map(p => ({ format: p.format, channels: p.channels, bytes: new Uint8Array(p.buffer) }))
+          }
+          : (msg.buffer ? new Uint8Array(msg.buffer) : null);
+        _settlePending(msg.id, true, value);
       } else {
         _settlePending(msg.id, false, new Error(msg.message || 'Brick decode failed'));
       }

@@ -107,7 +107,9 @@ const U = new Function('THREE', `
   assert.equal(c.level.lod, 1);
   assert.equal(c.skipped[0].reason, 'capacity', 'an atlas that cannot be laid out is skipped as capacity');
   c = U._chooseStreamLevel(levels, { available: 1e12, preload: true });
-  assert.equal(c.level.lod, 3, 'a prefetch never takes an atlas');
+  assert.equal(c.level.lod, 3, 'a prefetch takes no atlas the cache would not keep (native)');
+  c = U._chooseStreamLevel(levels, { available: 2048 * MiB, preload: true, preloadSvr: true });
+  assert.equal(c.level.lod, 1, 'a prefetch of a cacheable quality takes its atlas (a timelapse buffers its frames)');
   assert.equal(U._chooseStreamLevel(levels, { available: 100 * MiB }).level, null, 'nothing fits: no level');
   c = U._chooseStreamLevel(levels, { available: 100 * MiB, lastResort: true });
   assert.equal(c.level.lod, 3, 'nothing on screen: the coarsest level is attempted over the budget');

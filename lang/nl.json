@@ -368,7 +368,12 @@
     "qStreamingSlices": "{quality}-coupes streamen...",
     "qStreamingPreview": "Voorbeeld streamen (LOD{lod}) vóór {quality}...",
     "qStreamingPreviewBricks": "Voorbeeld streamen (LOD{lod}, {count} blokken) vóór {quality}...",
-    "qStreamingBricks": "{quality}-blokken streamen (LOD{lod}, {count} blokken)..."
+    "qStreamingBricks": "{quality}-blokken streamen (LOD{lod}, {count} blokken)...",
+    "gpuCompression": "GPU-compressie",
+    "gpuCompressionAuto": "Tijdreeksen",
+    "gpuCompressionActive": "Weergegeven uit door de GPU gecomprimeerde blokken: half zoveel geheugen, dus meer frames blijven geladen; voxelwaarden zijn benaderd (ongeveer 1–2 niveaus op 255). De native pass van de Studio leest exacte voxels.",
+    "gpuCompressionInactive": "Weergegeven uit exacte voxels.",
+    "gpuCompressionUnsupported": "Niet beschikbaar op deze GPU: weergegeven uit exacte voxels."
   },
   "compare": {
     "title": "Vergelijkingsmodus",

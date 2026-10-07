@@ -1,0 +1,33 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 320" font-family="Inter, sans-serif">
+<defs><marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#4a5468"/></marker>
+<marker id="arrr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#c92a2a"/></marker></defs>
+<rect width="800" height="320" rx="16" fill="#f8f9fd"/>
+<text x="400" y="30" text-anchor="middle" font-size="17" font-weight="800" fill="#1c2333">Confiance accordée aux plugins</text>
+<text x="30" y="60" text-anchor="start" font-size="13.5" font-weight="800" fill="#1c2333">Les plugins : par défaut, on n’ouvre pas</text>
+<rect x="30" y="72" width="170" height="70" rx="12" fill="#ebfbee" stroke="#2b8a3e" stroke-width="1.6"/>
+<text x="115.0" y="94" text-anchor="middle" font-size="13.5" font-weight="800" fill="#2b8a3e">Intégré / catalogue</text>
+<text x="115.0" y="113" text-anchor="middle" font-size="11" fill="#1c2333">signé, vérifié</text>
+<rect x="215" y="72" width="170" height="70" rx="12" fill="#e8edff" stroke="#3b5bdb" stroke-width="1.6"/>
+<text x="300.0" y="94" text-anchor="middle" font-size="13.5" font-weight="800" fill="#3b5bdb">Approuvé</text>
+<text x="300.0" y="113" text-anchor="middle" font-size="11" fill="#1c2333">par vous, lié à une empreinte</text>
+<rect x="400" y="72" width="170" height="70" rx="12" fill="#f1f3f7" stroke="#4a5468" stroke-width="1.6"/>
+<text x="485.0" y="94" text-anchor="middle" font-size="13.5" font-weight="800" fill="#4a5468">Développement</text>
+<text x="485.0" y="113" text-anchor="middle" font-size="11" fill="#1c2333">avec --dev-trust-local</text>
+<rect x="585" y="72" width="170" height="70" rx="12" fill="#fff0f0" stroke="#c92a2a" stroke-width="1.6"/>
+<text x="670.0" y="94" text-anchor="middle" font-size="13.5" font-weight="800" fill="#c92a2a">Non fiable</text>
+<text x="670.0" y="113" text-anchor="middle" font-size="11" fill="#1c2333">non chargé</text>
+<rect x="30" y="166" width="356" height="134" rx="12" fill="#f3f0ff" stroke="#7048e8" stroke-width="1.6"/>
+<text x="208.0" y="196" text-anchor="middle" font-size="24">🔖</text>
+<text x="208.0" y="220" text-anchor="middle" font-size="13.5" font-weight="800" fill="#7048e8">Approbation liée à une empreinte</text>
+<text x="208.0" y="239" text-anchor="middle" font-size="11" fill="#1c2333">Vous approuvez ce contenu précis. Si un</text>
+<text x="208.0" y="255" text-anchor="middle" font-size="11" fill="#1c2333">seul fichier change, l’empreinte change :</text>
+<text x="208.0" y="271" text-anchor="middle" font-size="11" fill="#1c2333">le plugin redevient non fiable. Votre mot</text>
+<text x="208.0" y="287" text-anchor="middle" font-size="11" fill="#1c2333">de passe est demandé pour approuver.</text>
+<rect x="414" y="166" width="356" height="134" rx="12" fill="#e3fafc" stroke="#0c8599" stroke-width="1.6"/>
+<text x="592.0" y="196" text-anchor="middle" font-size="24">📦</text>
+<text x="592.0" y="220" text-anchor="middle" font-size="13.5" font-weight="800" fill="#0c8599">Bac à sable (iframe isolée)</text>
+<text x="592.0" y="239" text-anchor="middle" font-size="11" fill="#1c2333">Un plugin tiers peut tourner dans une</text>
+<text x="592.0" y="255" text-anchor="middle" font-size="11" fill="#1c2333">cage : sans accès à la page, il ne parle</text>
+<text x="592.0" y="271" text-anchor="middle" font-size="11" fill="#1c2333">que par messages, avec des permissions</text>
+<text x="592.0" y="287" text-anchor="middle" font-size="11" fill="#1c2333">déclarées et un débit limité.</text>
+</svg>

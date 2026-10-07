@@ -1,0 +1,54 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 412" font-family="Inter, sans-serif">
+<defs><marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#4a5468"/></marker>
+<marker id="arrr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#c92a2a"/></marker></defs>
+<rect width="800" height="412" rx="16" fill="#f8f9fd"/>
+<text x="400" y="30" text-anchor="middle" font-size="17" font-weight="800" fill="#1c2333">Mettre un dataset en ligne : deux chemins</text>
+<text x="30" y="64" text-anchor="start" font-size="13.5" font-weight="800" fill="#e67700">VOIE A · Copier à la main (FTP / SFTP)</text>
+<rect x="30" y="76" width="200" height="84" rx="12" fill="#fff4e6" stroke="#e67700" stroke-width="1.6"/>
+<text x="130.0" y="106" text-anchor="middle" font-size="24">📁</text>
+<text x="130.0" y="130" text-anchor="middle" font-size="13.5" font-weight="800" fill="#e67700">Dossier du pipeline</text>
+<text x="130.0" y="149" text-anchor="middle" font-size="12.5" fill="#1c2333">DATA_WEB/3d/mon-embryon/</text>
+<line x1="232" y1="118" x2="288" y2="118" stroke="#4a5468" stroke-width="2.2" marker-end="url(#arr)"/>
+<rect x="290" y="76" width="220" height="84" rx="12" fill="#fff4e6" stroke="#e67700" stroke-width="1.6"/>
+<text x="400.0" y="106" text-anchor="middle" font-size="24">🗂️</text>
+<text x="400.0" y="130" text-anchor="middle" font-size="13.5" font-weight="800" fill="#e67700">Copie dans DATA_WEB</text>
+<text x="400.0" y="149" text-anchor="middle" font-size="12.5" fill="#1c2333">dans 3d/, 2d/ ou live/</text>
+<line x1="512" y1="118" x2="568" y2="118" stroke="#4a5468" stroke-width="2.2" marker-end="url(#arr)"/>
+<rect x="570" y="76" width="200" height="84" rx="12" fill="#ebfbee" stroke="#2b8a3e" stroke-width="1.6"/>
+<text x="670.0" y="106" text-anchor="middle" font-size="24">✅</text>
+<text x="670.0" y="130" text-anchor="middle" font-size="13.5" font-weight="800" fill="#2b8a3e">Dans le catalogue</text>
+<text x="670.0" y="149" text-anchor="middle" font-size="12.5" fill="#1c2333">aussitôt, sans rien régénérer</text>
+<text x="30" y="196" text-anchor="start" font-size="13.5" font-weight="800" fill="#3b5bdb">VOIE B · Onglet Import (depuis le navigateur, sans FTP)</text>
+<rect x="30" y="208" width="132" height="112" rx="12" fill="#e8edff" stroke="#3b5bdb" stroke-width="1.6"/>
+<text x="96.0" y="238" text-anchor="middle" font-size="24">🖱️</text>
+<text x="96.0" y="262" text-anchor="middle" font-size="13.5" font-weight="800" fill="#3b5bdb">Glisser</text>
+<text x="96.0" y="281" text-anchor="middle" font-size="11.5" fill="#1c2333">le dossier ; le type</text>
+<text x="96.0" y="297" text-anchor="middle" font-size="11.5" fill="#1c2333">est détecté seul</text>
+<rect x="182" y="208" width="132" height="112" rx="12" fill="#e8edff" stroke="#3b5bdb" stroke-width="1.6"/>
+<text x="248.0" y="238" text-anchor="middle" font-size="24">☁️</text>
+<text x="248.0" y="262" text-anchor="middle" font-size="13.5" font-weight="800" fill="#3b5bdb">Envoi par paliers</text>
+<text x="248.0" y="281" text-anchor="middle" font-size="11.5" fill="#1c2333">blocs de 8 Mio</text>
+<text x="248.0" y="297" text-anchor="middle" font-size="11.5" fill="#1c2333">reprise si coupure</text>
+<rect x="334" y="208" width="132" height="112" rx="12" fill="#f3f0ff" stroke="#7048e8" stroke-width="1.6"/>
+<text x="400.0" y="238" text-anchor="middle" font-size="24">✏️</text>
+<text x="400.0" y="262" text-anchor="middle" font-size="13.5" font-weight="800" fill="#7048e8">Éditable tôt</text>
+<text x="400.0" y="281" text-anchor="middle" font-size="11.5" fill="#1c2333">renommer, canaux,</text>
+<text x="400.0" y="297" text-anchor="middle" font-size="11.5" fill="#1c2333">en quelques minutes</text>
+<rect x="486" y="208" width="132" height="112" rx="12" fill="#e3fafc" stroke="#0c8599" stroke-width="1.6"/>
+<text x="552.0" y="238" text-anchor="middle" font-size="24">🔍</text>
+<text x="552.0" y="262" text-anchor="middle" font-size="13.5" font-weight="800" fill="#0c8599">Vérifier</text>
+<text x="552.0" y="281" text-anchor="middle" font-size="11.5" fill="#1c2333">intégrité complète</text>
+<text x="552.0" y="297" text-anchor="middle" font-size="11.5" fill="#1c2333">du dataset reçu</text>
+<rect x="638" y="208" width="132" height="112" rx="12" fill="#ebfbee" stroke="#2b8a3e" stroke-width="1.6"/>
+<text x="704.0" y="238" text-anchor="middle" font-size="24">🚀</text>
+<text x="704.0" y="262" text-anchor="middle" font-size="13.5" font-weight="800" fill="#2b8a3e">Publier</text>
+<text x="704.0" y="281" text-anchor="middle" font-size="11.5" fill="#1c2333">un clic ; masqué</text>
+<text x="704.0" y="297" text-anchor="middle" font-size="11.5" fill="#1c2333">jusqu’à l’œil</text>
+<line x1="164" y1="264" x2="180" y2="264" stroke="#4a5468" stroke-width="2.2" marker-end="url(#arr)"/>
+<line x1="316" y1="264" x2="332" y2="264" stroke="#4a5468" stroke-width="2.2" marker-end="url(#arr)"/>
+<line x1="468" y1="264" x2="484" y2="264" stroke="#4a5468" stroke-width="2.2" marker-end="url(#arr)"/>
+<line x1="620" y1="264" x2="636" y2="264" stroke="#4a5468" stroke-width="2.2" marker-end="url(#arr)"/>
+<rect x="30" y="340" width="740" height="52" rx="12" fill="#fff" stroke="#c5cbd8"/>
+<text x="400" y="362" text-anchor="middle" font-size="12.5" font-weight="600" fill="#1c2333">Pendant tout le transfert, les fichiers restent dans une zone privée (uploads/staging/),</text>
+<text x="400" y="380" text-anchor="middle" font-size="12.5" font-weight="600" fill="#1c2333">jamais accessible par URL. Un dataset publié par l’Import est masqué par défaut.</text>
+</svg>

@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 360" font-family="Inter, sans-serif">
+  <rect width="800" height="360" rx="16" fill="#f8f9fd"/>
+  <text x="400" y="32" text-anchor="middle" font-size="18" font-weight="800" fill="#1c2333">De la souris au pixel : les quatre couches</text>
+  <g>
+    <rect x="40" y="52" width="540" height="62" rx="12" fill="#f3f0ff" stroke="#7048e8"/>
+    <text x="60" y="78" font-size="15" font-weight="800" fill="#7048e8">4 · Code Lumen3D (maison)</text>
+    <text x="60" y="99" font-size="12.5" fill="#1c2333">le lancer de rayons, l'atlas de briques, le streaming, les canaux, les mesures</text>
+    <rect x="40" y="124" width="540" height="62" rx="12" fill="#e8edff" stroke="#3b5bdb"/>
+    <text x="60" y="150" font-size="15" font-weight="800" fill="#3b5bdb">3 · Three.js 0.147.0 (bibliothèque)</text>
+    <text x="60" y="171" font-size="12.5" fill="#1c2333">la scène, la caméra, les matrices, le cube, la gestion des textures</text>
+    <rect x="40" y="196" width="540" height="62" rx="12" fill="#e3fafc" stroke="#0c8599"/>
+    <text x="60" y="222" font-size="15" font-weight="800" fill="#0c8599">2 · WebGL2 (dans le navigateur)</text>
+    <text x="60" y="243" font-size="12.5" fill="#1c2333">le langage standard pour parler à la carte graphique, textures 3D comprises</text>
+    <rect x="40" y="268" width="540" height="62" rx="12" fill="#ebfbee" stroke="#2b8a3e"/>
+    <text x="60" y="294" font-size="15" font-weight="800" fill="#2b8a3e">1 · La carte graphique (GPU)</text>
+    <text x="60" y="315" font-size="12.5" fill="#1c2333">les milliers de petits calculateurs et la mémoire vidéo (VRAM)</text>
+  </g>
+  <g stroke="#4a5468" stroke-width="2" fill="none"><path d="M610 300 V84" marker-end="url(#a)"/></g>
+  <defs><marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#4a5468"/></marker></defs>
+  <text x="640" y="170" font-size="13" font-weight="700" fill="#4a5468">chaque couche</text>
+  <text x="640" y="190" font-size="13" font-weight="700" fill="#4a5468">s'appuie sur</text>
+  <text x="640" y="210" font-size="13" font-weight="700" fill="#4a5468">celle du dessous</text>
+</svg>

@@ -95,6 +95,8 @@
     "explorerEmpty": "No se proporcionaron archivos descargables para este dataset.",
     "explorerFolderEmpty": "Esta carpeta está vacía.",
     "explorerError": "Listado de archivos no disponible (se requiere el servidor de la plataforma).",
+    "analysisTitle": "Exportaciones de análisis",
+    "analysisHint": "Generadas a partir de lo abierto en el visor: mediciones, tablas de los plugins y el gráfico en pantalla.",
     "generatedTitle": "Exportaciones generadas",
     "measuresCsv": "Mediciones CSV",
     "measuresJson": "Mediciones JSON",

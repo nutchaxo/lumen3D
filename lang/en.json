@@ -95,6 +95,8 @@
     "explorerEmpty": "No downloadable files provided for this dataset.",
     "explorerFolderEmpty": "This folder is empty.",
     "explorerError": "File listing is unavailable (platform server required).",
+    "analysisTitle": "Analysis exports",
+    "analysisHint": "Generated from what is open in the viewer: measurements, plugin tables and the chart on screen.",
     "generatedTitle": "Generated exports",
     "measuresCsv": "Measurements CSV",
     "measuresJson": "Measurements JSON",

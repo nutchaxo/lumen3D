@@ -95,6 +95,8 @@
     "explorerEmpty": "Aucun fichier téléchargeable fourni pour ce dataset.",
     "explorerFolderEmpty": "Ce dossier est vide.",
     "explorerError": "Listing des fichiers indisponible (serveur de la plateforme requis).",
+    "analysisTitle": "Exports d'analyse",
+    "analysisHint": "Générés à partir de ce qui est ouvert dans la visionneuse : mesures, tableaux des plugins et graphique affiché.",
     "generatedTitle": "Exports générés",
     "measuresCsv": "Mesures CSV",
     "measuresJson": "Mesures JSON",

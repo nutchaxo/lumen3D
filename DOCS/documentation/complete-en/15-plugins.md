@@ -329,7 +329,7 @@ An embedded page has no visible toolbar. It therefore **describes** what it offe
 
 | Plugin | Context | In one line |
 |---|---|---|
-| Download Center | page | Files of the dataset's `download/` folder, and a measurements CSV when there are any |
+| Download Center | page | Files of the dataset's `download/` folder, and above them the analysis exports of the page and its plugins (measurements, tracking tables, the chart on screen) |
 | Screenshot | page | PNG capture of the view |
 | Screenshot (sandboxed) | page | The same, **in a sandbox** (reference plugin) |
 | Presentation Mode | page | Full screen without interface |

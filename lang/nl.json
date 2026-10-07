@@ -95,6 +95,8 @@
     "explorerEmpty": "Voor deze dataset zijn geen downloadbare bestanden aangeleverd.",
     "explorerFolderEmpty": "Deze map is leeg.",
     "explorerError": "De bestandslijst is niet beschikbaar (platformserver vereist).",
+    "analysisTitle": "Analyse-exports",
+    "analysisHint": "Gemaakt uit wat in de viewer open is: metingen, tabellen van plugins en de getoonde grafiek.",
     "generatedTitle": "Gegenereerde exports",
     "measuresCsv": "Metingen CSV",
     "measuresJson": "Metingen JSON",

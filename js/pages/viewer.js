@@ -3659,8 +3659,11 @@ const ViewerApp = (() => {
     return ChannelPanel.getState?.() || _channelState;
   }
 
+  // Listed only when there is something to export: the Download Center shows every
+  // entry, and two greyed-out buttons on every dataset would only be noise.
   function _getSliceExports() {
     const hasMeasurements = MeasurementStore.list(datasetId, 'viewer').length > 0;
+    if (!hasMeasurements) return [];
     return [
       { action: 'measure-csv', icon: 'ruler', label: _t('viewer.exportMeasuresCsv', 'Measurements CSV'), enabled: hasMeasurements, handler: () => _exportMeasurements('csv') },
       { action: 'measure-json', icon: 'braces', label: _t('viewer.exportMeasuresJson', 'Measurements JSON'), enabled: hasMeasurements, handler: () => _exportMeasurements('json') }

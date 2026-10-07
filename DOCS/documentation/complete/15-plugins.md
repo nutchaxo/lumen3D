@@ -329,7 +329,7 @@ Une page embarquée n'a pas de barre d'outils visible. Elle **décrit** donc ce 
 
 | Plugin | Contexte | En une ligne |
 |---|---|---|
-| Download Center | page | Fichiers du dossier `download/` du jeu, et CSV des mesures s'il y en a |
+| Download Center | page | Fichiers du dossier `download/` du jeu, et au-dessus les exports d'analyse de la page et de ses plugins (mesures, tableaux du suivi cellulaire, graphique affiché) |
 | Screenshot | page | Capture PNG de la vue |
 | Screenshot (sandboxed) | page | La même, **en bac à sable** (plugin de référence) |
 | Presentation Mode | page | Plein écran sans interface |

@@ -1,7 +1,8 @@
 // Run: node tests/js/test_export_manager_scope.mjs
 //
 // Guards the scope-aware Download Center render (regression caught in review):
-//   - viewer / explorer scope  → the file explorer (download/ folder)
+//   - viewer / explorer scope  → the file explorer (download/ folder),
+//     the viewer's page/plugin exports listed above it
 //   - compare scope → the export-buttons modal, INCLUDING the
 //     page-supplied custom exports (compare composites, plugin exports)
 // A previous redesign dropped the custom-export path wholesale, silently
@@ -61,15 +62,16 @@ EM.openDownloadCenter({
 assert.ok(body.innerHTML.includes('data-export-action="compare-figure-png"'),
   'compare scope (no dataset) still renders its custom exports, not an empty modal');
 
-// ── viewer scope with a dataset shows the file explorer, not custom exports ──
+// ── viewer scope with a dataset keeps the file explorer AND lists the page/plugin
+//    exports above it (test_export_manager_viewer_exports.mjs covers the details) ──
 EM.openDownloadCenter({
   scope: 'viewer',
   dataset: { name: 'DS', path: '3d/DS' },
-  getCustomExports: () => [{ action: 'should-not-render', label: 'x', handler() {} }],
+  getCustomExports: () => [{ action: 'plugin-table-csv', label: 'x', handler() {} }],
 });
 assert.ok(body.innerHTML.includes('id="download-explorer"'),
   'viewer scope renders the file explorer');
-assert.ok(!body.innerHTML.includes('should-not-render'),
-  'viewer scope does not render generated/custom export buttons');
+assert.ok(body.innerHTML.includes('data-export-action="plugin-table-csv"'),
+  'viewer scope renders the page/plugin custom exports');
 
 console.log('test_export_manager_scope: OK');

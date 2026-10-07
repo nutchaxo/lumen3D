@@ -1,4 +1,4 @@
-# 13. Le panneau d'administration en bref
+# 14. Le panneau d'administration en bref
 
 ::: chapter-intro
 - Le panneau d'administration est la **salle des machines** de Lumen3D : c'est là que l'on met des données en ligne, que l'on règle l'apparence du site et que l'on met la plateforme à jour.
@@ -6,7 +6,7 @@
 - Ce chapitre est un **survol**. Le mode d'emploi pas à pas est le « **Guide de l'administrateur** », publié dans l'onglet [Documentation]{.ui} du panneau lui-même.
 :::
 
-## 13.1 À quoi sert le panneau, et comment y accéder
+## 14.1 À quoi sert le panneau, et comment y accéder
 
 Le site public est la vitrine : les visiteurs regardent des embryons. Le panneau d'administration est l'**arrière-boutique**. Il sert à :
 
@@ -19,7 +19,7 @@ Le site public est la vitrine : les visiteurs regardent des embryons. Le panneau
 Le panneau n'a **aucun lien public**. On l'ouvre en tapant l'adresse `admpan.html` à la suite de celle du site (par exemple `https://votre-site/admpan.html`). Il demande un identifiant et un mot de passe. Le mot de passe est créé lors de la toute première visite, grâce à un assistant en 5 étapes (compte, identité, thème, textes, plugins).
 :::
 
-## 13.2 Les 15 onglets, en 4 groupes
+## 14.2 Les 15 onglets, en 4 groupes
 
 La barre latérale de gauche range les onglets en quatre groupes. Le fil d'Ariane en haut rappelle où vous êtes (par exemple [Données › Datasets]{.ui}).
 
@@ -47,7 +47,7 @@ La barre latérale de gauche range les onglets en quatre groupes. Le fil d'Arian
 
 :::: cols-wide-right
 ::: col
-![Barre latérale du panneau (jeu de démonstration).](img/ch13/admin-overview.png){.shot width=100%}
+![Barre latérale du panneau (jeu de démonstration).](img/ch14/admin-overview.png){.shot width=100%}
 :::
 ::: col
 - [1]{.callout-num} Groupe [Données]{.ui} : les jeux de données
@@ -70,11 +70,11 @@ Une pastille orange « Modifications non sauvegardées » s'allume en haut dès 
 :::
 
 
-## 13.3 Mettre un dataset en ligne
+## 14.3 Mettre un dataset en ligne
 
 Le pipeline (chapitres 4 à 8) produit **un dossier**. Il y a deux façons de le déposer sur le serveur.
 
-![Deux chemins pour mettre un dataset en ligne.](img/ch13/flux-dataset.svg){width=100%}
+![Deux chemins pour mettre un dataset en ligne.](img/ch14/flux-dataset.svg){width=100%}
 
 ::: example
 **Voie A** : vous copiez le dossier dans `DATA_WEB/3d/` par FTP. Le dataset apparaît tout de suite : le catalogue est recalculé à chaque requête à partir des fichiers `metadata.json`, il n'y a rien à régénérer.
@@ -82,7 +82,7 @@ Le pipeline (chapitres 4 à 8) produit **un dossier**. Il y a deux façons de le
 
 ### L'onglet Import, pas à pas
 
-![L'onglet Import, avant le dépôt d'un dossier.](img/ch13/admin-import.png){.shot width=66%}
+![L'onglet Import, avant le dépôt d'un dossier.](img/ch14/admin-import.png){.shot width=66%}
 
 [1]{.callout-num} Zone de dépôt : glissez le dossier ou cliquez sur [Choisir un dossier]{.ui} · [2]{.callout-num} Rappel : transit par un dossier privé, seuls les fichiers attendus sont acceptés. Une fois le dossier déposé, l'onglet affiche la progression globale (pourcentage, volume, vitesse, temps restant) et une carte par dataset avec son état et ses boutons [Éditer]{.ui}, [Vérifier]{.ui}, [Publier]{.ui}, [Supprimer]{.ui}.
 
@@ -104,7 +104,7 @@ Un dataset publié par l'Import est **masqué par défaut**. Allez dans [Dataset
 :::
 
 
-## 13.4 Éditer un dataset
+## 14.4 Éditer un dataset
 
 Cliquez un dataset dans la liste de l'onglet [Datasets]{.ui} : l'aperçu s'ouvre au centre, les réglages à droite. Voici ce que vous pouvez y régler :
 
@@ -124,11 +124,11 @@ Ce que l'éditeur enregistre est un **réglage** : il est fusionné dans le `met
 
 Le bouton [Redéfinir la preview]{.ui} (sous l'aperçu) fait de la vue actuelle la vignette de l'explorateur. L'orientation 3D (axes, vue par défaut) est expliquée au chapitre 12.
 
-## 13.5 Mises à jour des données
+## 14.5 Mises à jour des données
 
 La façon dont les datasets sont stockés a évolué quatre fois (**formats 1 à 4**, voir chapitre 7). Un ancien dataset reste lisible, mais il peut être **mis au format actuel sans repasser par le pipeline**, comme on met à jour un logiciel.
 
-![Les trois mises à jour, les deux exécutants, le test de vitesse.](img/ch13/migrations.svg){width=100%}
+![Les trois mises à jour, les deux exécutants, le test de vitesse.](img/ch14/migrations.svg){width=100%}
 
 Les trois étapes ajoutent : `planes/` (un fichier par plan, coupes XY natives rapides dans le Studio), `mips/` (projection max de chaque couche de 64 plans, figures z-stack rapides), puis une pyramide de briques v3 (66³, bordure d'un voxel, `index.bin`).
 
@@ -136,7 +136,7 @@ Les trois étapes ajoutent : `planes/` (un fichier par plan, coupes XY natives r
 Le niveau natif est conservé voxel pour voxel : rien n'est perdu. L'ancien arbre `bricks/` n'est supprimé qu'après le changement de version du dataset. Un dataset produit par le pipeline 0.21.0 est **déjà** au format 4 : il n'y a rien à faire.
 :::
 
-![L'onglet Mises à jour des données (jeu de démonstration, avant lancement).](img/ch13/admin-dataset-updates.png){.shot width=66%}
+![L'onglet Mises à jour des données (jeu de démonstration, avant lancement).](img/ch14/admin-dataset-updates.png){.shot width=66%}
 
 [1]{.callout-num} [2]{.callout-num} Test de vitesse : [Lancer le test (5 s)]{.ui} compare navigateur et serveur · [3]{.callout-num} Choix de l'exécutant, dataset par dataset (verrouillé pendant l'exécution) · [4]{.callout-num} [Mettre à jour]{.ui} ce dataset · [5]{.callout-num} [Tout mettre à jour]{.ui} : traite tous les datasets prêts
 
@@ -146,21 +146,21 @@ Le niveau natif est conservé voxel pour voxel : rien n'est perdu. L'ancien arbr
 
 Ces mises à jour ne sont **pas obligatoires** : le viewer lit les formats 1 à 4. Elles accélèrent certaines opérations du Studio et améliorent l'affichage.
 
-## 13.6 Plugins et catalogue signé
+## 14.6 Plugins et catalogue signé
 
 Les plugins sont les outils du viewer (chapitre 12). Ils **ne sont pas livrés avec la plateforme** : on les installe à la demande depuis le [Catalogue]{.ui}, comme dans une boutique d'applications.
 
-- Le catalogue est **signé** : un plugin non vérifié n'est jamais installé (chapitre 14).
+- Le catalogue est **signé** : un plugin non vérifié n'est jamais installé (chapitre 19).
 - L'installation demande votre **mot de passe**, puis le plugin est installé et approuvé.
 - L'onglet [Plugins]{.ui} affiche trois cartes (Outils, Canaux, Modes de rendu) : un interrupteur par plugin et une étiquette de confiance (`intégré`, `approuvé`, `sandbox`, `non fiable`…).
 - Certains plugins n'apparaissent pas dans l'aperçu de l'onglet Datasets, ni dans la page Comparer : ils ne se déclarent compatibles qu'avec la page complète. Ce n'est pas une panne.
 
 
-## 13.7 Mettre à jour la plateforme
+## 14.7 Mettre à jour la plateforme
 
 Depuis [Système › Mises à jour]{.ui}, un bouton lance la mise à jour. Ce qui se passe derrière a été pensé pour qu'**un site ne reste jamais cassé**.
 
-![La bascule de mise à jour et son filet de sécurité.](img/ch13/mise-a-jour-plateforme.svg){width=100%}
+![La bascule de mise à jour et son filet de sécurité.](img/ch14/mise-a-jour-plateforme.svg){width=100%}
 
 ::: analogy
 **Le déménagement bleu-vert.** On monte le nouvel appartement à côté de l'ancien, on vérifie que l'eau et l'électricité marchent, et seulement alors on y emménage. Si quelque chose cloche, on retourne dans l'ancien, resté intact.
@@ -169,7 +169,7 @@ Depuis [Système › Mises à jour]{.ui}, un bouton lance la mise à jour. Ce qu
 - L'onglet affiche les **notes de version** de chaque version qui sera installée, et vérifie vos plugins avant : ceux qui seraient incompatibles sont mis de côté, puis réactivés plus tard.
 - Il montre aussi la version du **pack Pipeline** (onglet [Pipeline]{.ui}) : c'est un autre logiciel, qui s'installe sur le poste de traitement, pas sur le serveur.
 
-## 13.8 Personnaliser le site (marque blanche)
+## 14.8 Personnaliser le site (marque blanche)
 
 Lumen3D n'est pas lié à un laboratoire : tout ce que le public voit se règle sans écrire de code.
 
@@ -186,5 +186,5 @@ Renommer un type de données ne change que le **texte affiché** : jamais les do
 :::
 
 ::: see
-Pour le détail de chaque écran, des messages d'erreur et des cas particuliers, consultez le « **Guide de l'administrateur** » (onglet [Documentation]{.ui}). Pour la sécurité du panneau, voir le chapitre 14.
+Pour le détail de chaque écran, des messages d'erreur et des cas particuliers, consultez le « **Guide de l'administrateur** » (onglet [Documentation]{.ui}). Pour la sécurité du panneau, voir le chapitre 19.
 :::

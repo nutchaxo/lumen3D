@@ -1,4 +1,4 @@
-# 15. Glossaire
+# 21. Glossaire
 
 ::: chapter-intro
 - Les termes sont classés **par ordre alphabétique**. Chaque définition tient en une ou deux phrases.
@@ -29,7 +29,7 @@ Compression avec perte, sans perte
 : Avec perte, le fichier est plus petit mais les valeurs sont légèrement modifiées ; sans perte, on retrouve exactement les valeurs d'origine. Les briques sont stockées sans perte. → chapitre 6
 
 CSP (politique de sécurité du contenu)
-: Règle donnée au navigateur : n'exécuter que les scripts portant un code à usage unique (nonce). → chapitre 14
+: Règle donnée au navigateur : n'exécuter que les scripts portant un code à usage unique (nonce). → chapitre 19
 
 Dilatation
 : Opération qui épaissit les zones d'un masque d'un ou plusieurs pixels. → chapitre 5
@@ -38,7 +38,7 @@ Dilatation
 : Valeur lue en un point du volume pendant le lancer de rayons. Un rayon en prend des centaines. → chapitre 9
 
 Ed25519 (signature)
-: Méthode de signature numérique : un « sceau de cire » que seul l'éditeur peut apposer et que tout le monde peut vérifier. → chapitre 14
+: Méthode de signature numérique : un « sceau de cire » que seul l'éditeur peut apposer et que tout le monde peut vérifier. → chapitre 19
 
 ESS (Empty Space Skipping, saut de l'espace vide)
 : Les briques presque entièrement vides ne sont pas stockées ni parcourues, ce qui économise octets et calcul. → chapitres 7 et 9
@@ -56,7 +56,7 @@ Fonction de transfert
 : Règle qui convertit une valeur du volume en couleur et en opacité. → chapitre 11
 
 Format de données
-: Façon dont un dataset est rangé sur le disque ; numéroté de 1 à 4. Le format courant est le 4. → chapitres 7 et 13
+: Façon dont un dataset est rangé sur le disque ; numéroté de 1 à 4. Le format courant est le 4. → chapitres 7 et 14
 
 Gamma
 : Réglage qui éclaircit ou assombrit les tons moyens sans toucher aux extrêmes. → chapitre 11
@@ -95,7 +95,7 @@ Masque
 : Image en noir et blanc qui dit quels pixels comptent (blanc) et lesquels sont écartés (noir). → chapitre 5
 
 Migration
-: Mise à jour d'un dataset déjà publié vers un format plus récent, sans repasser par le pipeline. → chapitre 13
+: Mise à jour d'un dataset déjà publié vers un format plus récent, sans repasser par le pipeline. → chapitre 14
 
 MIP (projection d'intensité maximale)
 : Image où chaque pixel prend la valeur la plus forte rencontrée le long d'un axe. → chapitres 7 et 12
@@ -104,7 +104,7 @@ Mosaïque
 : Plusieurs petites images collées en une grande ; une brique est stockée comme une mosaïque de ses coupes. → chapitre 7
 
 Nonce
-: Code aléatoire à usage unique, tiré à chaque chargement de page, qui autorise les scripts du site. → chapitre 14
+: Code aléatoire à usage unique, tiré à chaque chargement de page, qui autorise les scripts du site. → chapitre 19
 
 Opacité
 : Degré d'absorption de la lumière par une structure : 0 est transparent, 1 est opaque. → chapitre 11
@@ -122,13 +122,13 @@ Pixel
 : Plus petit élément d'une image 2D. → chapitre 4
 
 Plans
-: Dossier `planes/` du format 2 : un fichier par plan z du niveau natif, pour lire une coupe XY sans charger 64 plans. → chapitre 13
+: Dossier `planes/` du format 2 : un fichier par plan z du niveau natif, pour lire une coupe XY sans charger 64 plans. → chapitre 14
 
 Plugin
-: Outil optionnel qui s'ajoute au viewer (mesure, capture, filtre…) ; il est installé depuis le catalogue signé. → chapitres 12 et 13
+: Outil optionnel qui s'ajoute au viewer (mesure, capture, filtre…) ; il est installé depuis le catalogue signé. → chapitres 12 et 14
 
 PNG
-: Format d'image sans perte ; les plans du format 2 sont des tuiles PNG de 512×512. → chapitre 13
+: Format d'image sans perte ; les plans du format 2 sont des tuiles PNG de 512×512. → chapitre 14
 
 Profondeur de bits
 : Nombre de bits par valeur : 8 bits donnent 256 niveaux, 16 bits en donnent 65 536. → chapitre 4
@@ -143,10 +143,10 @@ Shader
 : Petit programme exécuté par la carte graphique ; celui du viewer fait le lancer de rayons. → chapitre 9
 
 Signature
-: Voir Ed25519. → chapitre 14
+: Voir Ed25519. → chapitre 19
 
 Staging
-: Zone privée où arrivent les fichiers importés avant publication ; elle n'est jamais accessible par URL. → chapitres 13 et 14
+: Zone privée où arrivent les fichiers importés avant publication ; elle n'est jamais accessible par URL. → chapitres 14 et 19
 
 Streaming
 : Chargement progressif : on affiche ce qui est arrivé et on complète en continu, sans attendre tout le fichier. → chapitre 10

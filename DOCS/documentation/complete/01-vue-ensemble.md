@@ -29,7 +29,7 @@ Lance le **pipeline** Python qui transforme le fichier Imaris en dossier web.
 #### L'administrateur
 Importe, publie, personnalise le site, met à jour la plateforme.
 
-[chapitres 13 et 14]{.pill}
+[chapitres 14 et 19]{.pill}
 :::
 ::: card
 #### Le visiteur public
@@ -152,7 +152,7 @@ fichiers de tests automatiques
 Quelques repères de version, valables à la date de ce document :
 
 - plateforme web **1.59.3** ; pipeline de préparation **0.21.0** ;
-- format de données courant : [format 4]{.pill .green} (les formats 1 à 3 sont convertis en place, voir chapitre 13) ;
+- format de données courant : [format 4]{.pill .green} (les formats 1 à 3 sont convertis en place, voir chapitre 14) ;
 - chaque version est vérifiée par les tests automatiques avant d'être publiée.
 
 ## 1.6 Carte de la documentation

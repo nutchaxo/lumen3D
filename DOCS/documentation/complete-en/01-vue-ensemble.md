@@ -29,7 +29,7 @@ Runs the Python **pipeline** that turns the Imaris file into a web folder.
 #### The administrator
 Imports, publishes, customises the site, updates the platform.
 
-[chapters 13 and 14]{.pill}
+[chapters 14 and 19]{.pill}
 :::
 ::: card
 #### The public visitor
@@ -152,7 +152,7 @@ automatic test files
 A few version landmarks, valid at the date of this document:
 
 - web platform **1.59.3**; preparation pipeline **0.21.0**;
-- current data format: [format 4]{.pill .green} (formats 1 to 3 are converted in place, see chapter 13);
+- current data format: [format 4]{.pill .green} (formats 1 to 3 are converted in place, see chapter 14);
 - every release is checked by the automatic tests before it is published.
 
 ## 1.6 Map of the documentation

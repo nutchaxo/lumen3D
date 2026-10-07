@@ -182,5 +182,5 @@ What are the folders you will see if you open the project for? A glance at the f
 ![The project from above: visitor, server, preparation, quality.](img-en/ch02/arbo.svg){width=100%}
 
 ::: see
-The `DATA_WEB/` folders (published data) and `uploads/` (pending imports) are described in chapter 7 and chapter 13. The rules that prevent them from being reached from a web address are in chapter 14.
+The `DATA_WEB/` folders (published data) and `uploads/` (pending imports) are described in chapter 7 and chapter 14. The rules that prevent them from being reached from a web address are in chapter 19.
 :::

@@ -237,7 +237,7 @@ The type is decided automatically: more than one image in the file means `live`,
 - **Route B, without FTP**: in the admin panel, open the [Import]{.ui} tab and drag the folder into the [Drop a folder here]{.ui} area. The transfer picks up where it stopped if you restart it; then click [Publish]{.ui}.
 
 ::: warning
-A dataset published through the [Import]{.ui} tab is **hidden by default**: go to the [Datasets]{.ui} tab and turn its visibility on so that it appears in the public explorer (chapter 13).
+A dataset published through the [Import]{.ui} tab is **hidden by default**: go to the [Datasets]{.ui} tab and turn its visibility on so that it appears in the public explorer (chapter 14).
 :::
 
 ::: remember

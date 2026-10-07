@@ -1,4 +1,4 @@
-# 15. Glossary
+# 21. Glossary
 
 ::: chapter-intro
 - Terms are listed in **alphabetical order**. Each definition fits in one or two sentences.
@@ -29,16 +29,16 @@ Channel
 : One image of the same object for a given fluorescence colour (for example DAPI, Pecam1, Sox2). → chapter 4
 
 CSP (Content Security Policy)
-: A rule given to the browser: run only the scripts that carry a single-use code (a nonce). → chapter 14
+: A rule given to the browser: run only the scripts that carry a single-use code (a nonce). → chapter 19
 
 Data format
-: The way a dataset is laid out on disk; numbered 1 to 4. The current format is 4. → chapters 7 and 13
+: The way a dataset is laid out on disk; numbered 1 to 4. The current format is 4. → chapters 7 and 14
 
 Dilation
 : An operation that thickens the areas of a mask by one or more pixels. → chapter 5
 
 Ed25519 (signature)
-: A digital signature method: a "wax seal" that only the publisher can apply and that anyone can verify. → chapter 14
+: A digital signature method: a "wax seal" that only the publisher can apply and that anyone can verify. → chapter 19
 
 ESS (Empty Space Skipping)
 : Bricks that are almost entirely empty are neither stored nor traversed, which saves bytes and computation. → chapters 7 and 9
@@ -86,7 +86,7 @@ Median filter
 : Replaces each value with the median of its neighbours: it removes isolated dots without blurring the edges. → chapter 5
 
 Migration
-: Updating an already published dataset to a more recent format, without going through the pipeline again. → chapter 13
+: Updating an already published dataset to a more recent format, without going through the pipeline again. → chapter 14
 
 MIP (maximum intensity projection)
 : An image in which each pixel takes the strongest value met along an axis. → chapters 7 and 12
@@ -101,7 +101,7 @@ Noise (background)
 : Stray signal present even where there is nothing to see (scattered light, sensor electronics). → chapter 5
 
 Nonce
-: A random single-use code, drawn on every page load, that authorises the site's scripts. → chapter 14
+: A random single-use code, drawn on every page load, that authorises the site's scripts. → chapter 19
 
 Opacity
 : The degree to which a structure absorbs light: 0 is transparent, 1 is opaque. → chapter 11
@@ -119,13 +119,13 @@ Pixel
 : The smallest element of a 2D image. → chapter 4
 
 Planes
-: The `planes/` folder of format 2: one file per z plane of the native level, to read an XY slice without loading 64 planes. → chapter 13
+: The `planes/` folder of format 2: one file per z plane of the native level, to read an XY slice without loading 64 planes. → chapter 14
 
 Plugin
-: An optional tool added to the viewer (measurement, capture, filter…); it is installed from the signed catalogue. → chapters 12 and 13
+: An optional tool added to the viewer (measurement, capture, filter…); it is installed from the signed catalogue. → chapters 12 and 14
 
 PNG
-: A lossless image format; the planes of format 2 are 512×512 PNG tiles. → chapter 13
+: A lossless image format; the planes of format 2 are 512×512 PNG tiles. → chapter 14
 
 Pyramid
 : A set of versions of the volume at ever coarser resolutions, stacked like the storeys of a pyramid. → chapter 6
@@ -143,10 +143,10 @@ Shader
 : A small program run by the graphics card; the viewer's one does the ray marching. → chapter 9
 
 Signature
-: See Ed25519. → chapter 14
+: See Ed25519. → chapter 19
 
 Staging
-: A private area where imported files arrive before publication; it is never reachable by URL. → chapters 13 and 14
+: A private area where imported files arrive before publication; it is never reachable by URL. → chapters 14 and 19
 
 Streaming
 : Progressive loading: what has arrived is displayed and completed continuously, without waiting for the whole file. → chapter 10

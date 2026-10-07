@@ -50,7 +50,7 @@ Survolez un bouton : une info-bulle donne son nom. La barre est rangée en **cin
 ::::::
 
 ::: note
-**Votre barre peut être différente.** Les outils sont des *plugins* installés par l'administrateur depuis le catalogue (chapitre 13). Le débogage des chunks, la capture « bac à sable » et les outils 2D sont optionnels. Les outils de suivi cellulaire n'apparaissent que sur une série temporelle suivie.
+**Votre barre peut être différente.** Les outils sont des *plugins* installés par l'administrateur depuis le catalogue (chapitre 14). Le débogage des chunks, la capture « bac à sable » et les outils 2D sont optionnels. Les outils de suivi cellulaire n'apparaissent que sur une série temporelle suivie.
 :::
 
 ### Je veux… → j'utilise…

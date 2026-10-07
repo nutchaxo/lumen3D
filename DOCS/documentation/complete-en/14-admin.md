@@ -1,4 +1,4 @@
-# 13. The administration panel in brief
+# 14. The administration panel in brief
 
 ::: chapter-intro
 - The administration panel is Lumen3D's **engine room**: it is where you put data online, set the look of the site and update the platform.
@@ -6,7 +6,7 @@
 - This chapter is an **overview**. The step-by-step manual is the "**Administrator guide**", published in the panel's own [Documentation]{.ui} tab.
 :::
 
-## 13.1 What the panel is for, and how to reach it
+## 14.1 What the panel is for, and how to reach it
 
 The public site is the shop window: visitors look at embryos. The administration panel is the **back office**. It lets you:
 
@@ -19,7 +19,7 @@ The public site is the shop window: visitors look at embryos. The administration
 The panel has **no public link**. You open it by typing the address `admpan.html` after the site's address (for example `https://your-site/admpan.html`). It asks for a user name and a password. The password is created on the very first visit, using a 5-step wizard (account, identity, theme, texts, plugins).
 :::
 
-## 13.2 The 15 tabs, in 4 groups
+## 14.2 The 15 tabs, in 4 groups
 
 The left-hand sidebar arranges the tabs into four groups. The breadcrumb at the top tells you where you are (for example [Data › Datasets]{.ui}).
 
@@ -47,7 +47,7 @@ The left-hand sidebar arranges the tabs into four groups. The breadcrumb at the 
 
 :::: cols-wide-right
 ::: col
-![The panel's sidebar (demo dataset).](img-en/ch13/admin-overview.png){.shot width=100%}
+![The panel's sidebar (demo dataset).](img-en/ch14/admin-overview.png){.shot width=100%}
 :::
 ::: col
 - [1]{.callout-num} [Data]{.ui} group: the datasets
@@ -70,11 +70,11 @@ An orange "Unsaved changes" badge lights up at the top as soon as a tab holds ch
 :::
 
 
-## 13.3 Putting a dataset online
+## 14.3 Putting a dataset online
 
 The pipeline (chapters 4 to 8) produces **one folder**. There are two ways to put it on the server.
 
-![Two paths to put a dataset online.](img-en/ch13/flux-dataset.svg){width=100%}
+![Two paths to put a dataset online.](img-en/ch14/flux-dataset.svg){width=100%}
 
 ::: example
 **Route A**: you copy the folder into `DATA_WEB/3d/` by FTP. The dataset appears straight away: the catalogue is recomputed on every request from the `metadata.json` files, so there is nothing to regenerate.
@@ -82,7 +82,7 @@ The pipeline (chapters 4 to 8) produces **one folder**. There are two ways to pu
 
 ### The Import tab, step by step
 
-![The Import tab, before any transfer (demo dataset).](img-en/ch13/admin-import.png){.shot width=66%}
+![The Import tab, before any transfer (demo dataset).](img-en/ch14/admin-import.png){.shot width=66%}
 
 [1]{.callout-num} Drop zone: drag the folder or click [Choose a folder]{.ui} · [2]{.callout-num} Reminder: transit through a private folder, only the expected files are accepted
 
@@ -106,7 +106,7 @@ A dataset published by Import is **hidden by default**. Go to [Datasets]{.ui}, t
 :::
 
 
-## 13.4 Editing a dataset
+## 14.4 Editing a dataset
 
 Click a dataset in the [Datasets]{.ui} tab's list: the preview opens in the centre, the settings on the right. Here is what you can set there:
 
@@ -126,11 +126,11 @@ What the editor saves is a **setting**: it is merged into the dataset's `metadat
 
 The [Reset the preview]{.ui} button (under the preview) makes the current view the explorer's thumbnail. The 3D orientation (axes, default view) is explained in chapter 12.
 
-## 13.5 Data updates
+## 14.5 Data updates
 
 The way datasets are stored has evolved four times (**formats 1 to 4**, see chapter 7). An old dataset remains readable, but it can be **brought to the current format without going through the pipeline again**, like updating software.
 
-![The three updates, the two executors, the speed test.](img-en/ch13/migrations.svg){width=100%}
+![The three updates, the two executors, the speed test.](img-en/ch14/migrations.svg){width=100%}
 
 The three steps add: `planes/` (one file per plane, fast native XY slices in the Studio), `mips/` (maximum projection of each layer of 64 planes, fast z-stack figures), then a v3 brick pyramid (66³, one-voxel border, `index.bin`).
 
@@ -138,7 +138,7 @@ The three steps add: `planes/` (one file per plane, fast native XY slices in the
 The native level is kept voxel for voxel: nothing is lost. The old `bricks/` tree is deleted only after the dataset's version has changed. A dataset produced by pipeline 0.21.0 is **already** in format 4: there is nothing to do.
 :::
 
-![The Data updates tab (demo dataset, before launch).](img-en/ch13/admin-dataset-updates.png){.shot width=66%}
+![The Data updates tab (demo dataset, before launch).](img-en/ch14/admin-dataset-updates.png){.shot width=66%}
 
 [1]{.callout-num} [2]{.callout-num} Speed test: [Run the test (5 s)]{.ui} compares browser and server · [3]{.callout-num} Choice of executor, dataset by dataset (locked while running) · [4]{.callout-num} [Update]{.ui} this dataset · [5]{.callout-num} [Update all]{.ui}: processes every dataset that is ready
 
@@ -148,21 +148,21 @@ The native level is kept voxel for voxel: nothing is lost. The old `bricks/` tre
 
 These updates are **not mandatory**: the viewer reads formats 1 to 4. They speed up some Studio operations and improve the display.
 
-## 13.6 Plugins and the signed catalogue
+## 14.6 Plugins and the signed catalogue
 
 Plugins are the viewer's tools (chapter 12). They are **not shipped with the platform**: you install them on demand from the [Catalog]{.ui}, as in an app store.
 
-- The catalogue is **signed**: an unverified plugin is never installed (chapter 14).
+- The catalogue is **signed**: an unverified plugin is never installed (chapter 19).
 - Installation asks for your **password**, then the plugin is installed and approved.
 - The [Plugins]{.ui} tab shows three cards (Tools, Channels, Render modes): one switch per plugin and a trust label (`bundled`, `approved`, `sandbox`, `untrusted`…).
 - Some plugins do not appear in the Datasets tab's preview, nor in the Compare page: they declare themselves compatible with the full page only. This is not a fault.
 
 
-## 13.7 Updating the platform
+## 14.7 Updating the platform
 
 From [System › Updates]{.ui}, a button starts the update. What happens behind the scenes was designed so that **a site is never left broken**.
 
-![The update switch-over and its safety net.](img-en/ch13/mise-a-jour-plateforme.svg){width=100%}
+![The update switch-over and its safety net.](img-en/ch14/mise-a-jour-plateforme.svg){width=100%}
 
 ::: analogy
 **The blue-green move.** The new flat is set up next to the old one; you check that the water and electricity work, and only then do you move in. If something is wrong, you go back to the old one, which was left untouched.
@@ -171,7 +171,7 @@ From [System › Updates]{.ui}, a button starts the update. What happens behind 
 - The tab shows the **release notes** of every version that will be installed, and checks your plugins beforehand: any that would be incompatible are set aside, then re-enabled later.
 - It also shows the version of the **Pipeline pack** ([Pipeline]{.ui} tab): this is a different piece of software, which is installed on the processing workstation, not on the server.
 
-## 13.8 Customising the site (white label)
+## 14.8 Customising the site (white label)
 
 Lumen3D is not tied to one laboratory: everything the public sees can be set without writing code.
 
@@ -188,5 +188,5 @@ Renaming a data type changes only the **displayed text**: never the folders, ide
 :::
 
 ::: see
-For the detail of every screen, error messages and special cases, see the "**Administrator guide**" ([Documentation]{.ui} tab). For the panel's security, see chapter 14.
+For the detail of every screen, error messages and special cases, see the "**Administrator guide**" ([Documentation]{.ui} tab). For the panel's security, see chapter 19.
 :::

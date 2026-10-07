@@ -237,7 +237,7 @@ Le type est décidé tout seul : plus d'une image dans le fichier, c'est `live`,
 - **Route B, sans FTP** : dans le panneau d'administration, ouvrez l'onglet [Import]{.ui} et glissez le dossier dans la zone [Glissez un dossier ici]{.ui}. Le transfert reprend là où il s'est arrêté si vous le relancez ; ensuite, cliquez sur [Publier]{.ui}.
 
 ::: warning
-Un jeu de données publié par l'onglet [Import]{.ui} est **masqué par défaut** : allez dans l'onglet [Datasets]{.ui} et activez sa visibilité pour qu'il apparaisse dans l'explorateur public (chapitre 13).
+Un jeu de données publié par l'onglet [Import]{.ui} est **masqué par défaut** : allez dans l'onglet [Datasets]{.ui} et activez sa visibilité pour qu'il apparaisse dans l'explorateur public (chapitre 14).
 :::
 
 ::: remember

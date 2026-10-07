@@ -182,5 +182,5 @@ Si la qualité demandée dépasse le budget, la plateforme choisit le niveau plu
 ![Le projet vu de haut : visiteur, serveur, préparation, qualité.](img/ch02/arbo.svg){width=100%}
 
 ::: see
-Les dossiers `DATA_WEB/` (données publiées) et `uploads/` (imports en attente) sont décrits au chapitre 7 et au chapitre 13. Les règles qui empêchent de les atteindre depuis une adresse web sont au chapitre 14.
+Les dossiers `DATA_WEB/` (données publiées) et `uploads/` (imports en attente) sont décrits au chapitre 7 et au chapitre 14. Les règles qui empêchent de les atteindre depuis une adresse web sont au chapitre 19.
 :::

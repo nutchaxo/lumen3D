@@ -1098,6 +1098,7 @@ const BrickLoader = (() => {
       runStart: run ? run.start : 0,
       runEnd: run ? run.end : 0,
       bytes: run ? run.end - run.start : size,
+      packSize: size,
       hash: batch.mount.packHashes ? batch.mount.packHashes[t.packed.url] || null : null,
       multi: Boolean(batch.multiRange)
     };
@@ -1148,7 +1149,9 @@ const BrickLoader = (() => {
    * few consecutive groups and released; a caller order that jumps between packs
    * (the viewer's radial order) instead held up to 0.9 GB of packs on the reference
    * data, or re-downloaded them (4.9× on E95-1 native). Inside a group the bricks
-   * keep raster order and a brick's channel tasks stay together.
+   * follow their byte offset in the group's source (raster order for a brick without
+   * one) — the order a pack body arrives in, so each brick is cut out as soon as its
+   * bytes have landed (_awaitPrefix) — and a brick's channel tasks stay together.
    */
   function _packMajorOrder(planned, mount = _mount) {
     if (planned.length < 2) return planned;
@@ -1168,6 +1171,7 @@ const BrickLoader = (() => {
     for (const b of bricks.values()) {
       if (!origin || b.first < origin.first) origin = b;
       const anchorTask = b.tasks.find(x => x.src) || null;
+      b.offset = anchorTask ? anchorTask.packed.offset : -1;
       const anchor = anchorTask ? (anchorTask.src.runKey || anchorTask.src.packAbs) : `brick:${b.tasks[0].brickKey}`;
       let g = groups.get(anchor);
       if (!g) groups.set(anchor, g = { raster: b.raster, bricks: [] });
@@ -1178,7 +1182,7 @@ const BrickLoader = (() => {
     const out = [];
     const sorted = [...groups.values()].sort((a, b) => (Math.abs(a.raster - o) - Math.abs(b.raster - o)) || (a.raster - b.raster));
     for (const g of sorted) {
-      g.bricks.sort((a, b) => a.raster - b.raster);
+      g.bricks.sort((a, b) => (a.offset - b.offset) || (a.raster - b.raster));
       for (const b of g.bricks) out.push(...b.tasks);
     }
     return out;
@@ -1390,12 +1394,15 @@ const BrickLoader = (() => {
     if (whole) return whole;
     const useRun = !forceWhole && src.runKey && batch.rangePlan && batch.rangePlan.has(src.packRel);
     if (useRun) return _store.get(src.runKey) || _createRunEntry(src);
-    return _createPackEntry(src.packAbs, { hash: src.hash });
+    return _createPackEntry(src.packAbs, { hash: src.hash, size: src.packSize });
   }
 
-  function _createPackEntry(url, { retain = false, background = false, hash = null } = {}) {
+  function _createPackEntry(url, { retain = false, background = false, hash = null, size = 0 } = {}) {
     const entry = _newEntry(url, 'pack', url);
     entry.retain = retain;
+    // Bricks are cut out while the pack arrives, unless the pack must first match its
+    // hash: then no byte of it is used before the whole body is verified.
+    entry.progressive = !(hash && _settings.verifyHashes);
     if (_fetchedOnce.has(url)) _stats.refetches++;
     _fetchedOnce.add(url);
     const signal = entry.controller.signal;
@@ -1403,7 +1410,7 @@ const BrickLoader = (() => {
       _stats.packFetches++;
       const resp = await fetch(url, { signal });
       if (!resp.ok) throw new Error(`HTTP ${resp.status} for ${url}`);
-      const buffer = await _readBody(resp, entry);
+      const buffer = await _readBody(resp, entry, size);
       if (hash && _settings.verifyHashes) await _verifyPackHash(url, buffer, hash);
       return buffer;
     }, signal, background).then(
@@ -1462,7 +1469,7 @@ const BrickLoader = (() => {
 
   function _runViaWholePack(entry) {
     const src = entry.src;
-    const pack = _store.get(src.packAbs) || _createPackEntry(src.packAbs, { hash: src.hash });
+    const pack = _store.get(src.packAbs) || _createPackEntry(src.packAbs, { hash: src.hash, size: src.packSize });
     pack.promise.then(() => _migrateRunsToPack(src.packAbs, pack), (err) => _settleFailed(entry, err));
   }
 
@@ -1740,11 +1747,20 @@ const BrickLoader = (() => {
     _runsByPack.delete(url);
   }
 
-  /** Reads a response body, aborting it when nothing arrives for `fetchStallMs`. */
-  async function _readBody(resp, entry) {
+  /**
+   * Reads a response body, aborting it when nothing arrives for `fetchStallMs`.
+   * A progressive entry (`entry.progressive`) is filled into ONE contiguous buffer
+   * (sized from Content-Length, else `sizeHint`, doubled when outgrown) published as
+   * `entry.partial` / `entry.received` after every chunk, and the readers waiting for
+   * a prefix (`entry.waiters`, see _awaitPrefix) are woken as soon as it has landed:
+   * a brick is cut out while the rest of its pack is still downloading. A buffer that
+   * is outgrown is copied, never written again, so a slice taken from it stays valid.
+   */
+  async function _readBody(resp, entry, sizeHint = 0) {
     const reader = resp.body && typeof resp.body.getReader === 'function' ? resp.body.getReader() : null;
     if (!reader) return resp.arrayBuffer();
     const declared = Number(resp.headers?.get?.('content-length')) || 0;
+    if (entry.progressive) return _readBodyProgressive(reader, entry, declared || sizeHint);
     let out = declared > 0 ? new Uint8Array(declared) : null;
     const chunks = [];
     let received = 0;
@@ -1781,12 +1797,75 @@ const BrickLoader = (() => {
     return joined.buffer;
   }
 
+  async function _readBodyProgressive(reader, entry, size) {
+    let out = new Uint8Array(Math.max(size, 64 * 1024));
+    let received = 0;
+    let stallTimer = null;
+    const arm = () => {
+      clearTimeout(stallTimer);
+      stallTimer = setTimeout(() => {
+        try { reader.cancel(); } catch (e) { /* closed */ }
+        try { entry.controller.abort(); } catch (e) { /* settled */ }
+      }, _settings.fetchStallMs);
+    };
+    try {
+      arm();
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        arm();
+        if (received + value.length > out.length) {
+          const grown = new Uint8Array(Math.max(out.length * 2, received + value.length));
+          grown.set(out.subarray(0, received));
+          out = grown;
+        }
+        out.set(value, received);
+        received += value.length;
+        entry.partial = out;
+        entry.received = received;
+        _wakePrefixWaiters(entry);
+      }
+    } finally {
+      clearTimeout(stallTimer);
+    }
+    if (entry.controller.signal.aborted) throw _abortError('Pack body stalled or cancelled');
+    return received === out.length ? out.buffer : out.buffer.slice(0, received);
+  }
+
+  function _wakePrefixWaiters(entry) {
+    const waiters = entry.waiters;
+    if (!waiters || !waiters.length) return;
+    const keep = [];
+    for (const w of waiters) {
+      if (w.end <= entry.received) w.resolve({ buffer: entry.partial.buffer, base: 0 });
+      else keep.push(w);
+    }
+    entry.waiters = keep;
+  }
+
+  /**
+   * `{ buffer, base }` holding bytes [base, end) of `entry`'s source: the finished
+   * body, or — for a pack still downloading progressively — the buffer it is being
+   * written into, as soon as the first `end` bytes are in. A failed or dropped entry
+   * rejects through its own promise.
+   */
+  function _awaitPrefix(entry, end) {
+    if (entry.state !== 'pending' || !entry.progressive) return entry.promise;
+    if (entry.partial && entry.received >= end) return Promise.resolve({ buffer: entry.partial.buffer, base: 0 });
+    const reached = new Promise(resolve => {
+      (entry.waiters || (entry.waiters = [])).push({ end, resolve });
+    });
+    return Promise.race([reached, entry.promise]);
+  }
+
   function _settleReady(entry, buffer, base) {
     if (entry.state !== 'pending') return;
     entry.state = 'ready';
     entry.buffer = buffer;
     entry.base = base;
     entry.bytes = buffer.byteLength;
+    entry.partial = null;
+    entry.waiters = null;
     _stats.fetchedBytes += buffer.byteLength;
     if (_store.get(entry.key) === entry) {
       _bytes[entry.kind] += entry.bytes;
@@ -1800,6 +1879,8 @@ const BrickLoader = (() => {
   function _settleFailed(entry, err) {
     if (entry.state !== 'pending') return;
     entry.state = 'failed';
+    entry.partial = null;
+    entry.waiters = null;
     if (_store.get(entry.key) === entry) _store.delete(entry.key);
     if (entry.kind === 'run') _runsByPack.get(entry.url)?.delete(entry);
     entry.reject(err);
@@ -1829,6 +1910,8 @@ const BrickLoader = (() => {
       entry.reject(_abortError('Source released'));
     }
     entry.buffer = null;
+    entry.partial = null;
+    entry.waiters = null;
   }
 
   /**
@@ -1869,7 +1952,7 @@ const BrickLoader = (() => {
       entry.readers++;
       entry.lastUsed = _now();
       try {
-        const got = await _awaitWithSignal(entry.promise, batch.signal);
+        const got = await _awaitWithSignal(_awaitPrefix(entry, offset + length), batch.signal);
         const at = offset - got.base;
         if (at < 0 || at + length > got.buffer.byteLength) {
           throw new Error(`brick ${t.rel} lies outside the ${got.buffer.byteLength} bytes fetched for it`);

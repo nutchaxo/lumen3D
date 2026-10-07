@@ -1,0 +1,48 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 360" font-family="Inter, sans-serif">
+  <defs><marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#4a5468"/></marker></defs>
+  <rect width="800" height="360" rx="16" fill="#f8f9fd"/>
+  <text x="400" y="30" text-anchor="middle" font-size="17" font-weight="800" fill="#1c2333">« Isoler le marquage » : trois étapes pour chaque pixel</text>
+  <g>
+    <rect x="20" y="52" width="240" height="210" rx="14" fill="#fff" stroke="#c5cbd8"/>
+    <rect x="20" y="52" width="240" height="34" rx="14" fill="#fff4e6"/><rect x="20" y="70" width="240" height="16" fill="#fff4e6"/>
+    <text x="140" y="75" text-anchor="middle" font-size="13" font-weight="800" fill="#e67700">1 · Où est le tissu jaune ?</text>
+    <text x="36" y="112" font-size="12.5" fill="#1c2333">« jaunisme » d'un pixel =</text>
+    <text x="36" y="130" font-size="12.5" font-weight="700" fill="#1c2333">(rouge + vert) / 2 − bleu</text>
+    <text x="36" y="154" font-size="12.5" fill="#4a5468">On le moyenne sur un carré</text>
+    <text x="36" y="170" font-size="12.5" fill="#4a5468">d'environ 40 px de côté (image</text>
+    <text x="36" y="186" font-size="12.5" fill="#4a5468">réduite 4 fois, flou de rayon 5).</text>
+    <rect x="36" y="204" width="208" height="42" rx="10" fill="#fff4e6"/>
+    <text x="140" y="222" text-anchor="middle" font-size="12" font-weight="700" fill="#e67700">fond mat : 2 à 6</text>
+    <text x="140" y="238" text-anchor="middle" font-size="12" font-weight="700" fill="#e67700">tronc coloré large : 6 à 9</text>
+  </g>
+  <line x1="264" y1="157" x2="288" y2="157" stroke="#4a5468" stroke-width="2.4" marker-end="url(#a)"/>
+  <g>
+    <rect x="292" y="52" width="240" height="210" rx="14" fill="#fff" stroke="#c5cbd8"/>
+    <rect x="292" y="52" width="240" height="34" rx="14" fill="#e8edff"/><rect x="292" y="70" width="240" height="16" fill="#e8edff"/>
+    <text x="412" y="75" text-anchor="middle" font-size="13" font-weight="800" fill="#3b5bdb">2 · Le pixel est-il bleu ?</text>
+    <text x="308" y="112" font-size="12.5" fill="#1c2333">rapport  bleu / (rouge + 1)</text>
+    <text x="308" y="136" font-size="12.5" fill="#4a5468">Tissu non coloré : ≈ 0,6</text>
+    <text x="308" y="154" font-size="12.5" fill="#4a5468">Cœur très coloré : 2 à 4</text>
+    <text x="308" y="178" font-size="12.5" font-weight="700" fill="#1c2333">force v : 0 si rapport ≤ 1,0</text>
+    <text x="308" y="196" font-size="12.5" font-weight="700" fill="#1c2333">1 si rapport ≥ 1,8, linéaire entre</text>
+    <rect x="308" y="208" width="208" height="38" rx="10" fill="#fff0f0"/>
+    <text x="412" y="224" text-anchor="middle" font-size="12" font-weight="700" fill="#c92a2a">et seulement si le « jaunisme »</text>
+    <text x="412" y="239" text-anchor="middle" font-size="12" font-weight="700" fill="#c92a2a">local dépasse 5 (sinon v = 0)</text>
+  </g>
+  <line x1="536" y1="157" x2="560" y2="157" stroke="#4a5468" stroke-width="2.4" marker-end="url(#a)"/>
+  <g>
+    <rect x="564" y="52" width="216" height="210" rx="14" fill="#fff" stroke="#c5cbd8"/>
+    <rect x="564" y="52" width="216" height="34" rx="14" fill="#ebfbee"/><rect x="564" y="70" width="216" height="16" fill="#ebfbee"/>
+    <text x="672" y="75" text-anchor="middle" font-size="13" font-weight="800" fill="#2b8a3e">3 · On repeint</text>
+    <text x="580" y="112" font-size="12.5" fill="#1c2333">gris = luminosité × 0,35 × (1 − v)</text>
+    <text x="580" y="140" font-size="12.5" font-weight="700" fill="#1c2333">rouge  = gris + 90 × v</text>
+    <text x="580" y="160" font-size="12.5" font-weight="700" fill="#1c2333">vert    = gris + 160 × v</text>
+    <text x="580" y="180" font-size="12.5" font-weight="700" fill="#1c2333">bleu    = gris + 255 × v</text>
+    <rect x="580" y="198" width="184" height="18" rx="9" fill="#555"/><text x="672" y="211" text-anchor="middle" font-size="11" fill="#fff" font-weight="700">v = 0 : gris sombre</text>
+    <rect x="580" y="222" width="184" height="18" rx="9" fill="#2f80ff"/><text x="672" y="235" text-anchor="middle" font-size="11" fill="#fff" font-weight="700">v = 1 : bleu vif (90, 160, 255)</text>
+  </g>
+  <rect x="20" y="276" width="760" height="68" rx="12" fill="#f3f0ff" stroke="#7048e8"/>
+  <text x="36" y="298" font-size="13" font-weight="800" fill="#7048e8">Micro-exemple</text>
+  <text x="36" y="318" font-size="12.5" fill="#1c2333">Pixel (R, V, B) = (60, 90, 170) : 170 / 61 = 2,8 → v = 1, dans un tissu à « jaunisme » 8 : il devient bleu vif.</text>
+  <text x="36" y="336" font-size="12.5" fill="#1c2333">Pixel (200, 190, 120) : 120 / 201 = 0,6 → v = 0 : il devient gris sombre (0,35 × sa luminosité).</text>
+</svg>

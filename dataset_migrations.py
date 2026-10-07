@@ -2741,7 +2741,7 @@ def bench(dataset_id, n=4, mid=None, require_server: bool = False) -> dict:
 SPEEDTEST_SAMPLE = ("js", "migrations", "speedtest-brick.webp")
 SPEEDTEST_MAX_SECONDS = 3.0
 SPEEDTEST_PUT_MAX = 4 * 1024 * 1024
-SPEEDTEST_BATCH_MAX = 8
+SPEEDTEST_BATCH_MAX = 16
 
 
 def speedtest(max_seconds=1.0) -> dict:
@@ -2775,7 +2775,7 @@ def speedtest(max_seconds=1.0) -> dict:
 
 
 def speedtest_sample(n=1) -> bytes:
-    """The browser's input for a batch of `n` (1..8) test blocks: the shipped test brick
+    """The browser's input for a batch of `n` (1..16) test blocks: the shipped test brick
     repeated n times, so a batch costs one download whatever its size."""
     try:
         k = max(1, min(SPEEDTEST_BATCH_MAX, int(n)))
@@ -3081,6 +3081,66 @@ def store_get_many(dataset_id, mid, base, bricks) -> bytes:
         lengths.append(len(data))
         parts.append(data)
     return struct.pack("<%dI" % (len(items) + 1), len(items), *lengths) + b"".join(parts)
+
+
+# The browser executor's inputs in one answer: a unit reads up to ~64 byte runs of the published
+# files (one tile per plane file for a layer projection, the merged runs of the v2 packs for
+# planes and the v3 pyramid). One request per run was the bulk of the traffic a shared host's
+# firewall banned the operator's address for; a unit now asks for all of them at once.
+READ_RANGES_MAX = 1024
+READ_RANGES_MAX_BYTES = 32 * 1024 * 1024
+_RANGE_REL_RE = re.compile(r"^(?:bricks|planes|mips)(?:/[A-Za-z0-9_][A-Za-z0-9._-]{0,127}){1,6}\.bin\Z", re.ASCII)
+
+
+def read_ranges(dataset_id, ranges) -> bytes:
+    """Byte runs of the dataset's published packs, in request order. `ranges` = [[rel, start,
+    end], …] (rel: a .bin under bricks/, planes/ or mips/ of the dataset; end exclusive; at most
+    READ_RANGES_MAX runs and READ_RANGES_MAX_BYTES in all). Body: uint32 LE count, count ×
+    uint32 LE length, then the bytes. Every run is checked before a byte is read."""
+    _type_dir, _folder, ds_dir = _resolve_dataset(dataset_id)
+    if not isinstance(ranges, list) or not 1 <= len(ranges) <= READ_RANGES_MAX:
+        raise MigrationError("bad_range", 400, "1..%d ranges" % READ_RANGES_MAX)
+    root = ds_dir.resolve()
+    plan, sizes, total = [], {}, 0
+    for r in ranges:
+        if (not isinstance(r, (list, tuple)) or len(r) != 3 or not isinstance(r[0], str)
+                or not _RANGE_REL_RE.match(r[0]) or any(seg.startswith(".") for seg in r[0].split("/"))):
+            raise MigrationError("bad_range")
+        start, end = r[1], r[2]
+        if isinstance(start, bool) or isinstance(end, bool) or not isinstance(start, int) or not isinstance(end, int) \
+                or start < 0 or end <= start:
+            raise MigrationError("bad_range")
+        path = (root / r[0]).resolve()
+        try:
+            path.relative_to(root)
+        except ValueError:
+            raise MigrationError("bad_range")
+        if path not in sizes:
+            try:
+                sizes[path] = path.stat().st_size
+            except OSError:
+                raise MigrationError("range_missing", 404, r[0])
+        if end > sizes[path]:
+            raise MigrationError("bad_range", 416, r[0])
+        total += end - start
+        if total > READ_RANGES_MAX_BYTES:
+            raise MigrationError("bad_range", 413, "more than %d bytes" % READ_RANGES_MAX_BYTES)
+        plan.append((path, start, end))
+    parts, handles = [], {}
+    try:
+        for path, start, end in plan:
+            fh = handles.get(path)
+            if fh is None:
+                fh = handles[path] = open(path, "rb")
+            fh.seek(start)
+            data = fh.read(end - start)
+            if len(data) != end - start:
+                raise MigrationError("range_missing", 404, "short read")
+            parts.append(data)
+    finally:
+        for fh in handles.values():
+            fh.close()
+    return struct.pack("<%dI" % (len(parts) + 1), len(parts), *(len(x) for x in parts)) + b"".join(parts)
 
 
 # ── Finalize ───────────────────────────────────────────────────────────────────
@@ -3876,6 +3936,8 @@ WRITE_ACTIONS = ("plan", "unit_put", "unit_run", "finalize", "cancel", "bench", 
                  "speedtest", "speedtest_put")
 # Binary answers (application/octet-stream) — routed to handle_binary(), not handle().
 BINARY_ACTIONS = ("store_get", "store_get_many", "speedtest_sample")
+# Binary answers to a POST (JSON body, CSRF like the write actions).
+BINARY_POST_ACTIONS = ("read_ranges",)
 
 
 def handle(action: str, params: dict, body, raw: bytes | None = None) -> tuple[int, dict]:
@@ -3917,7 +3979,7 @@ def handle(action: str, params: dict, body, raw: bytes | None = None) -> tuple[i
         return exc.status, payload
 
 
-def handle_binary(action: str, params: dict) -> tuple[int, str, bytes]:
+def handle_binary(action: str, params: dict, body=None) -> tuple[int, str, bytes]:
     """A binary API call → (HTTP status, Content-Type, body). `store_get` (query dataset,
     migration=m004-bricks-v3, brick=t.k.c.z.y.x): one stored v3 brick of the tile store,
     which a browser executor reduces into the next level. Same authentication as
@@ -3931,6 +3993,9 @@ def handle_binary(action: str, params: dict) -> tuple[int, str, bytes]:
             return 200, "application/octet-stream", data
         if action == "speedtest_sample":
             return 200, "application/octet-stream", speedtest_sample(params.get("n", 1))
+        if action == "read_ranges":
+            b = body if isinstance(body, dict) else {}
+            return 200, "application/octet-stream", read_ranges(b.get("dataset"), b.get("ranges"))
         return 400, "application/json", b'{"error":"unknown_action"}'
     except MigrationError as exc:
         payload = {"error": exc.code, **exc.extra}

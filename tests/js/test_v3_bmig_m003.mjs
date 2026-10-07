@@ -104,7 +104,7 @@ async function buildTree(t) {
   return { text, packs, stamp: H._internals.fnv1a(text) };
 }
 
-async function run({ live }) {
+async function run({ live, batched = false }) {
   const tps = live ? [0, 3] : [0];
   const trees = new Map();
   for (const t of tps) trees.set(t, await buildTree(t));
@@ -141,13 +141,18 @@ async function run({ live }) {
       return f.slice(s, e);
     },
   };
+  // The worker's batched read: every run of a call in one request.
+  let batches = 0;
+  if (batched) io.fetchRanges = async (list) => { batches++; return Promise.all(list.map((r) => io.fetchRange(r.url, r.start, r.end))); };
   const units = H.listUnits(state);
   assert.equal(units.length, tps.length * Math.ceil(Z / 64) * C * TY * TX);
   let zeroUnits = 0;
   for (const u of units) {
     const work = H.planUnitWork(u.key, state);
     const before = ranges.length;
+    const batchesBefore = batches;
     const res = await H.runUnit(work, state, io);
+    if (batched) assert.ok(batches - batchesBefore <= 2, `one read for the missing headers, one for the tiles (${u.key})`);
     const { t, l, c, ty, tx } = work.unit;
     const blob = PC.parseUnitBlob(res.body);
     const w = Math.min(TS, X - tx * TS), h = Math.min(TS, Y - ty * TS);
@@ -185,6 +190,8 @@ async function run({ live }) {
 
 const n3 = await run({ live: false });
 const nl = await run({ live: true });
+await run({ live: false, batched: true });
+await run({ live: true, batched: true });
 
 // unit keys
 assert.equal(H._internals.unitKey(2, 1, 0, 3, 4), 't2.l1.c0.y3.x4');

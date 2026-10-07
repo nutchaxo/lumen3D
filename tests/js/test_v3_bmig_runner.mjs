@@ -444,13 +444,13 @@ function fakePool(api, capacity = 3) {
     capacity: 3,
     dead: false,
     async speedtestBlock(n) {
-      assert.equal(n, 8, 'batches of 8 blocks');
+      assert.equal(n, 16, 'batches of 16 blocks');
       if (this.dead) return { ok: false, aborted: true };
       inFlight++; peak = Math.max(peak, inFlight);
       await new Promise((r) => setTimeout(r, 1));
       clock += 0.2;
       inFlight--;
-      return this.dead ? { ok: false, aborted: true } : { ok: true, blocks: n, bytesIn: 800, bytesOut: 1200 };
+      return this.dead ? { ok: false, aborted: true } : { ok: true, blocks: n, bytesIn: 100 * n, bytesOut: 150 * n };
     },
     terminate() { this.dead = true; },
   };

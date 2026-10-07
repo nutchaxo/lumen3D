@@ -56,14 +56,15 @@ const SPEEDTEST_JOB = '#speedtest';
  */
 export class NetGovernor {
   constructor(o = {}) {
-    // Defaults: about what web 1.59.0 sent (one pool, four units at a time, no ban reported),
-    // never the floods of 1.59.1 (two pools, one request per stored brick, an unbounded speed
+    // Defaults: a unit's inputs arrive in one read_ranges / store_get_many answer and its result
+    // leaves in one unit_put, so a few large requests per second keep four units busy. Never the
+    // floods of web 1.59.1 (two pools, one request per byte run or stored brick, an unbounded speed
     // test: tens of connections and well over 40 requests per second).
     this.maxInFlight = o.maxInFlight || 6;
-    this.maxRate = o.maxRate || 16;
+    this.maxRate = o.maxRate || 6;
     this.minRate = o.minRate || 0.5;
-    this.rate = Math.min(this.maxRate, o.rate || 10);
-    this.burst = o.burst || 6;
+    this.rate = Math.min(this.maxRate, o.rate || 4);
+    this.burst = o.burst || 4;
     this.step = o.step || 0.2;
     this.cooldownMin = o.cooldownMs || 5000;
     this.cooldownMax = o.cooldownMaxMs || 60000;
@@ -905,7 +906,7 @@ export class Runner {
 export const SPEEDTEST_SECONDS = 5;
 // Blocks per browser request pair: a batch is downloaded in one request and uploaded in one,
 // so the test stays far below what a shared host's firewall counts as a flood.
-export const SPEEDTEST_BATCH = 8;
+export const SPEEDTEST_BATCH = 16;
 
 /**
  * Both executors convert the same synthetic test block (dataset_migrations.speedtest) at the

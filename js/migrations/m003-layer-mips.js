@@ -202,6 +202,32 @@
         await Promise.all(Array.from({ length: Math.max(1, Math.min(n, items.length)) }, lane));
     }
 
+    /**
+     * The plane headers this unit needs and the tree has not read yet, in one batched read
+     * (io.fetchRanges) — a layer projection reads 64 plane files, one request each was most of
+     * the executor's traffic. Without fetchRanges, _header reads them one by one.
+     */
+    async function _prefetchHeaders(tr, zs, io) {
+        if (typeof io.fetchRanges !== 'function') return 0;
+        const missing = zs.filter((z) => !tr.headers.has(z));
+        if (!missing.length) return 0;
+        const bufs = await io.fetchRanges(missing.map((z) => ({ url: packUrl(tr, z), start: 0, end: tr.headerBytes })));
+        missing.forEach((z, i) => {
+            const bytes = bufs[i];
+            const p = Promise.resolve().then(() => {
+                const h = codec().parsePackHeader(bytes, codec().PACK_MAGIC);
+                if (h.channels !== tr.channels || h.tilesX !== tr.tilesX || h.tilesY !== tr.tilesY || h.z !== z) {
+                    throw Object.assign(new Error(`plane pack z${z} does not match its manifest`), { code: 'bad_plane_pack', fatal: true });
+                }
+                return h.entries;
+            });
+            p.catch(() => tr.headers.delete(z));
+            tr.headers.set(z, p);
+        });
+        while (tr.headers.size > HEADER_CACHE_MAX) tr.headers.delete(tr.headers.keys().next().value);
+        return missing.length * tr.headerBytes;
+    }
+
     async function runUnit(work, state, io) {
         const tr = state.byT.get(work.tree);
         const PC = codec();
@@ -210,6 +236,28 @@
         let bytesIn = 0;
         const zs = [];
         for (let z = work.z0; z < work.z1; z++) zs.push(z);
+        if (typeof io.fetchRanges === 'function') {
+            bytesIn += await _prefetchHeaders(tr, zs, io);
+            const want = [];
+            for (const z of zs) {
+                const e = (await _header(tr, z, io))[idx];
+                if (e && e.length) want.push({ z, url: packUrl(tr, z), start: e.offset, end: e.offset + e.length });
+            }
+            if (io.signal && io.signal.aborted) throw Object.assign(new Error('aborted'), { name: 'AbortError' });
+            const pngs = want.length ? await io.fetchRanges(want) : [];
+            for (let i = 0; i < want.length; i++) {
+                const png = pngs[i];
+                pngs[i] = null;
+                bytesIn += png.length;
+                const d = await PC.decodePngGray(png);
+                if (d.width !== work.width || d.height !== work.height) {
+                    throw Object.assign(new Error(`plane tile z${want[i].z} is ${d.width}×${d.height}, expected ${work.width}×${work.height}`), { code: 'bad_plane_tile', fatal: true });
+                }
+                maxInto(acc, d.data);
+            }
+            const tiles = isAllZero(acc) ? [] : [{ z: work.unit.l, png: await PC.encodePngGray(work.width, work.height, acc) }];
+            return { body: PC.buildUnitBlob(tiles), bytesIn, tiles: tiles.length };
+        }
         await _pool(FETCH_PARALLEL, zs, async (z) => {
             if (io.signal && io.signal.aborted) throw Object.assign(new Error('aborted'), { name: 'AbortError' });
             const fresh = !tr.headers.has(z);

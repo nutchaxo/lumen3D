@@ -321,17 +321,32 @@
         return true;
     }
 
+
     /**
-     * io.fetchRange(absoluteUrl, start, endExclusive) → Uint8Array of exactly end − start bytes.
-     * An all-zero plane is not sent: its tile is `length = 0` in the pack (SPEC §3.2).
+     * Every run of `list` ([{ url, start, end }]) as Uint8Array, in order: in one request when
+     * the worker offers io.fetchRanges (the executor's batched read), else one io.fetchRange each.
+     */
+    async function fetchAll(io, list) {
+        if (typeof io.fetchRanges === 'function') return io.fetchRanges(list);
+        const out = [];
+        for (const r of list) out.push(await io.fetchRange(r.url, r.start, r.end));
+        return out;
+    }
+
+    /**
+     * io.fetchRanges([{ url, start, end }]) / io.fetchRange(absoluteUrl, start, endExclusive) →
+     * Uint8Array of exactly end − start bytes. An all-zero plane is not sent: its tile is
+     * `length = 0` in the pack (SPEC §3.2).
      */
     async function runUnit(work, state, io) {
         const tree = state.byT.get(work.tree);
         const planes = new Uint8Array(work.depth * work.height * work.width);
         let bytesIn = 0;
-        for (const run of work.runs) {
-            const url = tree.base + run.url + tree.query;
-            const buf = await io.fetchRange(url, run.start, run.end);
+        const bufs = await fetchAll(io, work.runs.map((run) => ({ url: tree.base + run.url + tree.query, start: run.start, end: run.end })));
+        for (let r = 0; r < work.runs.length; r++) {
+            const run = work.runs[r];
+            const buf = bufs[r];
+            bufs[r] = null;
             bytesIn += buf.length;
             for (const b of run.bricks) {
                 const bytes = buf.subarray(b.offset - run.start, b.offset - run.start + b.length);
@@ -356,7 +371,7 @@
         id: ID,
         prepare, listUnits, planUnitWork, runUnit,
         // exposed for tests
-        _internals: { packStamp, parseUnitKey, unitKey, mergeRuns, unmosaicGrid, scatterBrick, isAllZero, brickRel, gridCols, decodeBrick },
+        _internals: { packStamp, parseUnitKey, unitKey, mergeRuns, unmosaicGrid, scatterBrick, isAllZero, brickRel, gridCols, decodeBrick, fetchAll },
     };
     root.LumenMigrationHandlers = root.LumenMigrationHandlers || {};
     root.LumenMigrationHandlers[ID] = handler;

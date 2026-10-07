@@ -571,6 +571,29 @@ class Engine(unittest.TestCase):
         self.assertEqual(dry["done"], dm.plan_job("3d/SYN", MID)["empty"])   # nothing recorded
         self.assertFalse(any(dm.tile_store_dir("3d", "SYN", MID).rglob("*.png")))
 
+    def test_read_ranges_in_one_answer(self):
+        """read_ranges: runs of the dataset's own packs in request order (u32 count, u32 lengths,
+        bytes); anything outside bricks/ planes/ mips/ .bin files, or past a file's end, is refused
+        before a byte is read."""
+        ds, _ = make_3d(self.data_web, X=200, Y=130, Z=70, C=1)
+        packs = sorted((ds / "bricks").rglob("*.bin"))
+        self.assertTrue(packs)
+        a, b = packs[0], packs[-1]
+        ra, rb = a.relative_to(ds).as_posix(), b.relative_to(ds).as_posix()
+        status, ctype, data = dm.handle_binary("read_ranges", {}, {"dataset": "3d/SYN", "ranges": [[ra, 0, 10], [rb, 3, 9], [ra, 5, 6]]})
+        self.assertEqual((status, ctype), (200, "application/octet-stream"))
+        self.assertEqual(struct.unpack_from("<4I", data), (3, 10, 6, 1))
+        self.assertEqual(data[16:], a.read_bytes()[0:10] + b.read_bytes()[3:9] + a.read_bytes()[5:6])
+        size = a.stat().st_size
+        for bad, code in (([["../metadata.json", 0, 1]], 400), ([["metadata.json", 0, 1]], 400),
+                          ([[ra.replace(".bin", ".json"), 0, 1]], 400), ([["bricks/../../2d/x.bin", 0, 1]], 400),
+                          ([[ra, 5, 5]], 400), ([[ra, -1, 3]], 400), ([[ra, 0, size + 1]], 416),
+                          ([["bricks/lod0/nope.bin", 0, 1]], 404), ([], 400), ([[ra, 0, 1]] * 1025, 400)):
+            st = dm.handle_binary("read_ranges", {}, {"dataset": "3d/SYN", "ranges": bad})[0]
+            self.assertEqual(st, code, bad[:1])
+        self.assertEqual(dm.handle_binary("read_ranges", {}, {"dataset": "3d/../x", "ranges": [[ra, 0, 1]]})[0], 400)
+        self.assertIn("read_ranges", dm.BINARY_POST_ACTIONS)
+
     def test_speedtest_runs_the_shipped_block(self):
         """The executors' speed test converts the synthetic brick shipped in js/migrations/
         (no dataset needed) within its budget; speedtest_put counts and drops a block."""
@@ -590,7 +613,7 @@ class Engine(unittest.TestCase):
         self.assertEqual((status, out["error"]), (413, "body_too_large"))
         status, ctype, batch = dm.handle_binary("speedtest_sample", {"n": "3"})
         self.assertEqual((status, ctype, batch), (200, "application/octet-stream", sample.read_bytes() * 3))
-        self.assertEqual(len(dm.handle_binary("speedtest_sample", {"n": "99"})[2]), 8 * sample.stat().st_size, "batch capped at 8")
+        self.assertEqual(len(dm.handle_binary("speedtest_sample", {"n": "99"})[2]), 16 * sample.stat().st_size, "batch capped at 16")
         self.assertIn("speedtest_sample", dm.BINARY_ACTIONS)
         self.assertIn("speedtest", dm.WRITE_ACTIONS)
         self.assertIn("speedtest_put", dm.WRITE_ACTIONS)

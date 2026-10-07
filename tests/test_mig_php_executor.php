@@ -238,6 +238,27 @@ try {
     // ── bench + dry run + cancel ───────────────────────────────────────────
     [$c, $b] = api('bench', ['dataset' => '3d/synthA', 'units' => 3]);
     check('bench: 3 sample units, bytes in/out', $c === 200 && $b['units'] === 3 && count($b['sample']) === 3 && $b['bytesRead'] > 0 && $b['bytesWritten'] > 0 && $b['secondsPerUnit'] > 0, json_encode($b));
+    // ── read_ranges: a unit's pack runs in one answer ──────────────────────
+    $dsDir = LUMEN_DATA_WEB . '/3d/synthA';
+    $packsFound = [];
+    foreach (new RecursiveIteratorIterator(new RecursiveDirectoryIterator("$dsDir/bricks", FilesystemIterator::SKIP_DOTS)) as $f) {
+        if (substr($f->getFilename(), -4) === '.bin') $packsFound[] = str_replace('\\', '/', substr($f->getPathname(), strlen($dsDir) + 1));
+    }
+    sort($packsFound);
+    $ra = $packsFound[0]; $rb = end($packsFound);
+    $fa = (string)file_get_contents("$dsDir/$ra"); $fb = (string)file_get_contents("$dsDir/$rb");
+    [$c, $ct, $rr] = lumen_mig_handle_binary('read_ranges', [], ['dataset' => '3d/synthA', 'ranges' => [[$ra, 0, 10], [$rb, 3, 9], [$ra, 5, 6]]]);
+    check('read_ranges: runs in request order', $c === 200 && $ct === 'application/octet-stream'
+        && $rr === pack('VVVV', 3, 10, 6, 1) . substr($fa, 0, 10) . substr($fb, 3, 6) . substr($fa, 5, 1));
+    $bad = [[['../metadata.json', 0, 1]], [['metadata.json', 0, 1]], [[str_replace('.bin', '.json', $ra), 0, 1]],
+            [['bricks/../../2d/x.bin', 0, 1]], [[$ra, 5, 5]], [[$ra, -1, 3]], [], array_fill(0, 1025, [$ra, 0, 1])];
+    $codes = [];
+    foreach ($bad as $b) $codes[] = lumen_mig_handle_binary('read_ranges', [], ['dataset' => '3d/synthA', 'ranges' => $b])[0];
+    check('read_ranges: refuses what is not a run of the dataset\'s packs', $codes === array_fill(0, count($bad), 400), json_encode($codes));
+    check('read_ranges: past the end 416, missing pack 404',
+        lumen_mig_handle_binary('read_ranges', [], ['dataset' => '3d/synthA', 'ranges' => [[$ra, 0, strlen($fa) + 1]]])[0] === 416
+        && lumen_mig_handle_binary('read_ranges', [], ['dataset' => '3d/synthA', 'ranges' => [['bricks/lod0/nope.bin', 0, 1]]])[0] === 404);
+
     // ── speed test: the shipped synthetic block, no dataset ───────────────
     [$c, $st] = api('speedtest', ['maxSeconds' => 0.3]);
     check('speedtest: blocks of the shipped test brick, bytes in/out', $c === 200 && $st['blocks'] >= 1 && $st['bytesRead'] === $st['blocks'] * filesize(__DIR__ . '/../js/migrations/speedtest-brick.webp')
@@ -248,7 +269,7 @@ try {
     [$c, $ct, $batch] = lumen_mig_handle_binary('speedtest_sample', ['n' => '3']);
     check('speedtest_sample: the test brick repeated n times', $c === 200 && $ct === 'application/octet-stream' && $batch === str_repeat($sampleBytes, 3));
     [$c, , $batch] = lumen_mig_handle_binary('speedtest_sample', ['n' => '99']);
-    check('speedtest_sample: batch capped at 8', $c === 200 && strlen($batch) === 8 * strlen($sampleBytes));
+    check('speedtest_sample: batch capped at 16', $c === 200 && strlen($batch) === 16 * strlen($sampleBytes));
     [$c, $sp] = api('speedtest_put', [], [], str_repeat("", 5000));
     check('speedtest_put: counts and drops the body', $c === 200 && $sp === ['ok' => true, 'bytes' => 5000]);
     [$c, $sp] = api('speedtest_put', [], [], str_repeat("", LUMEN_MIG_SPEEDTEST_PUT_MAX + 1));

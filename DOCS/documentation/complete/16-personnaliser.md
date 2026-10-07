@@ -20,7 +20,7 @@ Lumen3D est né pour regarder des embryons de souris. Il sert aujourd'hui à d'a
 
 Tout ce qui est propre à *votre* site se trouve dans le dossier **`config/`** :
 
-![Le dossier config/ : chaque fichier, qui le lit, et ce que le visiteur en voit.](img/ch16/config-carte.svg){width=96%}
+![Le dossier config/ : chaque fichier, qui le lit, et ce que le visiteur en voit.](img/ch16/config-carte.svg){width=76%}
 
 ::: remember
 `config/` est **public** : n'importe quel visiteur peut lire ces fichiers. On n'y met donc **jamais de secret** (les mots de passe vivent dans `api/`, jamais servi).
@@ -29,7 +29,7 @@ Tout ce qui est propre à *votre* site se trouve dans le dossier **`config/`** :
 ### Les fichiers, un par un
 
 | Fichier | Ce qu'il contient | Se modifie dans l'onglet… |
-|---|---|---|
+|--------|-------------------|-------------|
 | `instance.json` | nom, vocabulaire, SEO, pied de page, menu, noms des types, variables | [Identité]{.ui}, [Types de données]{.ui}, [Pages]{.ui} |
 | `theme.json` | les valeurs de couleur, police, arrondi que vous avez changées | [Apparence]{.ui} |
 | `theme.css` | la feuille de style **compilée** à partir de `theme.json` | (généré, jamais à la main) |
@@ -55,7 +55,7 @@ C'est le fichier le plus riche. Voici ce que chaque bloc commande réellement.
 ### Identité et organisation
 
 | Champ | Où il apparaît | Se règle dans |
-|---|---|---|
+|-------|------------------|---------|
 | `brand.name` | jeton `{brand}` ; titre de la page `page.html` | [Identité]{.ui} · *Nom de l'instance* |
 | `brand.shortName` | jeton `{brandShort}` ; titre de l'administration | *Nom court* |
 | `brand.productName` | jeton `{product}` | *Nom du produit* |
@@ -72,7 +72,7 @@ Dans la démonstration, la barre du haut affiche « **IRIBHM — ULB** » : c'es
 ### Vocabulaire, référencement, pied de page, menu
 
 | Champ | Où il apparaît | Se règle dans |
-|---|---|---|
+|-------|------------------|---------|
 | `specimen.singular`, `specimen.plural` | jetons `{specimen}`, `{specimenPlural}` et leurs versions à majuscule | *Terminologie* (par langue) |
 | `datasetTypes.<type>.label`, `.title` | badges, filtres, cartes de l'accueil | [Types de données]{.ui} |
 | `seo.description`, `seo.keywords` | les balises `<meta>` de chaque page | *Accroche & SEO* |
@@ -81,6 +81,10 @@ Dans la démonstration, la barre du haut affiche « **IRIBHM — ULB** » : c'es
 | `nav.showExplorer`, `showCompare`, `showAbout` | affiche ou cache le lien dans la barre | *Navigation* |
 | `nav.showLegal` | ajoute le lien [Mentions légales]{.ui} **dans le pied de page** | *Navigation* |
 | `nav.customPages` | les pages que vous avez créées (`slug`, libellé, visible) | ajouté à la première publication |
+
+::: note
+**Décocher masque le lien, pas la page.** Si vous décochez [Afficher « Comparer »]{.ui}, l'adresse `compare.html` reste valide : seul le lien disparaît de la barre. Les pages que vous créez sont ajoutées à la suite des liens, dans l'ordre de la liste, avec le libellé dans la langue du visiteur.
+:::
 
 ### Les deux champs qui n'ont pas (encore) de place à l'écran
 
@@ -92,7 +96,7 @@ Dans la démonstration, la barre du haut affiche « **IRIBHM — ULB** » : c'es
 ### Réglages sans écran d'administration
 
 | Champ | À quoi il sert |
-|---|---|
+|--------|---------------------|
 | `channelColorPresets` | la couleur de départ d'un canal d'après son nom (voir 16.8) |
 | `variables` | vos variables personnalisées `{nom}` (gérées dans l'éditeur de pages, onglet Variables) |
 
@@ -104,7 +108,7 @@ Chaque fichier porte son identifiant de version (`"$schema": "lumen3d-instance/1
 
 Le nom de votre institution apparaît à de nombreux endroits : dans l'onglet du navigateur, dans la barre du haut, dans la phrase d'accueil. Trois mécanismes se partagent le travail, **tous alimentés par le même fichier**.
 
-![Trois chemins, un seul fichier : ils ne peuvent pas se contredire.](img/ch16/trois-canaux.svg){width=96%}
+![Trois chemins, un seul fichier : ils ne peuvent pas se contredire.](img/ch16/trois-canaux.svg){width=86%}
 
 ### ① Le serveur remplit l'en-tête
 
@@ -146,7 +150,7 @@ Le texte entre les balises est le **repli** : si le fichier est introuvable (hor
 Les fichiers de langue **ne contiennent jamais** le mot « embryon ». Ils écrivent un **jeton** entre accolades, que `I18n.t()` remplace au moment d'afficher :
 
 | Jeton | Vient de | Valeur dans la démonstration |
-|---|---|---|
+|-------|-----------|-------------|
 | `{brand}` | `brand.name` | IRIBHM Microscopy Platform |
 | `{brandShort}` | `brand.shortName` | Lumen3D |
 | `{product}` | `brand.productName` | Lumen3D |
@@ -157,16 +161,7 @@ Les fichiers de langue **ne contiennent jamais** le mot « embryon ». Ils écri
 | `{Specimen}`, `{SpecimenPlural}` | les mêmes, **première lettre en capitale** | Embryon, Embryons |
 | `{type3d}`, `{type2d}`, `{typeLive}` | le nom affiché de chaque type | 3D, 2D, Live |
 
-Treize jetons au total. L'éditeur de pages les liste (onglet [Variables]{.ui}), avec un bouton pour les copier :
-
-![Les jetons de l'instance et les variables dynamiques, tels que l'éditeur de pages les montre (jeu de démonstration).](img/ch16/editeur-variables.png){.shot width=42%}
-
-::: example
-La clé `landing.heroTitle` vaut `Explorez les {specimenPlural}` en français et `Explore {SpecimenPlural}` en anglais.
-
-- avec `specimen.plural.fr = embryons` → « **Explorez les embryons** » ;
-- si le laboratoire écrit « organoïdes » → « **Explorez les organoïdes** », sans toucher à un seul fichier de langue.
-:::
+Treize jetons au total. L'éditeur de pages les liste (onglet [Variables]{.ui}), avec un bouton pour copier chacun :
 
 ::: tech
 **Ordre de résolution d'un jeton** : d'abord une valeur passée par le code appelant (`{count}`, `{name}`…), puis le jeton de l'instance, sinon l'accolade **reste telle quelle** à l'écran (un jeton inconnu se voit).
@@ -174,11 +169,27 @@ La clé `landing.heroTitle` vaut `Explorez les {specimenPlural}` en français et
 **Un piège évité.** Les noms de types par défaut vivent eux-mêmes dans les fichiers de langue (`types.3d.label`…). Les lire par `I18n.t()` ferait appeler `t()` par la fonction qui sert `t()` : une boucle sans fin. Le code lit donc cette chaîne par **`I18n.raw()`**, la même recherche *sans* remplacement de jetons.
 :::
 
+:::: cols-wide-left
+::: col
+::: example
+La clé `landing.heroTitle` vaut `Explorez les {specimenPlural}` en français et `Explore {SpecimenPlural}` en anglais.
+
+- avec `specimen.plural.fr = embryons` → « **Explorez les embryons** » ;
+- si le laboratoire écrit « organoïdes » → « **Explorez les organoïdes** », sans toucher à un seul fichier de langue.
+:::
+
+Les mêmes jetons marchent dans les **textes de page** que vous écrivez (16.6). L'éditeur y ajoute les **variables dynamiques** : année, date, heure, et les compteurs du catalogue.
+:::
+::: col
+![Les jetons de l'instance, vus de l'éditeur de pages (jeu de démonstration).](img/ch16/variables-marque.png){.shot width=100%}
+:::
+::::
+
 ### Une valeur « par langue »
 
 Le nom d'un spécimen, une accroche, une description SEO : ces textes dépendent de la langue. Ils s'écrivent soit comme **une simple chaîne** (identique partout), soit comme un **objet par langue**.
 
-![Une valeur par langue : on répond avec la langue du visiteur, sinon l'anglais, sinon la première trouvée.](img/ch16/localisable.svg){width=92%}
+![Une valeur par langue : on répond avec la langue du visiteur, sinon l'anglais, sinon la première trouvée.](img/ch16/localisable.svg){width=82%}
 
 ::: example
 **Le néerlandais manquant.** Dans la démonstration, `specimen.plural` existe en anglais, français et espagnol, mais pas en néerlandais. Un visiteur néerlandais voit donc : « Verken **Embryos** » : la phrase est néerlandaise, le nom est le repli anglais, et il est en capitale car le jeton est `{SpecimenPlural}`.
@@ -186,13 +197,13 @@ Le nom d'un spécimen, une accroche, une description SEO : ces textes dépendent
 Ce n'est pas une panne, c'est le repli qui fonctionne : la solution est de remplir la ligne **NL** dans l'onglet [Identité]{.ui}.
 :::
 
-![La page d'accueil dans les quatre langues. Le nom de l'objet suit la langue ; en néerlandais, il retombe sur l'anglais faute de saisie.](img/ch16/langues-accueil.png){.shot width=100%}
+![La page d'accueil dans les quatre langues. Le nom de l'objet suit la langue ; en néerlandais, il retombe sur l'anglais faute de saisie.](img/ch16/langues-accueil.png){.shot width=90%}
 
 ## 16.4 Les écrans de personnalisation
 
 ### L'onglet Identité
 
-![L'onglet Identité & personnalisation (jeu de démonstration).](img/ch16/identite.png){.shot width=92%}
+![L'onglet Identité & personnalisation (jeu de démonstration).](img/ch16/identite.png){.shot width=78%}
 
 ::: legend
 | n | ce que c'est |
@@ -210,7 +221,7 @@ Chaque champ multilingue montre **autant de lignes que la plateforme a de langue
 
 ### L'onglet Types de données
 
-![L'onglet Types de données.](img/ch16/types-donnees.png){.shot width=92%}
+![L'onglet Types de données.](img/ch16/types-donnees.png){.shot width=78%}
 
 ::: legend
 | n | ce que c'est |
@@ -256,7 +267,7 @@ Pour les **pages**, une protection de plus : chaque lecture porte une **révisio
 
 Le look du site est piloté par des **variables CSS** (des « jetons » de style) : `--color-primary`, `--font-sans`, `--radius-md`… L'onglet [Apparence]{.ui} n'en modifie qu'une poignée, à dessein.
 
-![L'onglet Apparence : cinq couleurs, une police, un arrondi, et un aperçu du vrai site.](img/ch16/apparence.png){.shot width=92%}
+![L'onglet Apparence : cinq couleurs, une police, un arrondi, et un aperçu du vrai site.](img/ch16/apparence.png){.shot width=78%}
 
 ::: legend
 | n | ce que c'est |
@@ -270,7 +281,7 @@ Le look du site est piloté par des **variables CSS** (des « jetons » de style
 
 ### Du clic à toutes les pages
 
-![Le chemin d'un réglage de thème, et l'ordre des feuilles de style.](img/ch16/theme-pipeline.svg){width=96%}
+![Le chemin d'un réglage de thème, et l'ordre des feuilles de style.](img/ch16/theme-pipeline.svg){width=86%}
 
 ::: remember
 Le serveur ne laisse passer que des variables dont le nom commence par `--`, et retire de chaque valeur les caractères qui pourraient casser une feuille de style (`{ } ; < > \ @`) ; une valeur est coupée à 200 caractères. **Un thème mal saisi ne peut pas détruire la feuille entière.**
@@ -282,10 +293,10 @@ La feuille `theme.css` est chargée **après** `themes.css` (le thème sombre/cl
 
 Un seul sélecteur de couleur ne suffit pas : un bouton a besoin d'une teinte au survol, d'une teinte foncée, d'un fond discret. L'éditeur les **dérive** pour vous.
 
-![Une couleur choisie (ici #2F6BFF) et ses dérivés.](img/ch16/theme-derives.svg){width=96%}
+![Une couleur choisie (ici #2F6BFF) et ses dérivés.](img/ch16/theme-derives.svg){width=86%}
 
 | Réglage | Calcul |
-|---|---|
+|-----------|-------------|
 | `--color-primary-hover` | la clarté (HSL) **+ 8** points |
 | `--color-primary-dark` | la clarté **− 10** points |
 | `--color-primary-subtle` | la même couleur à **15 %** d'opacité (accent : 12 %) |
@@ -297,7 +308,7 @@ Succès, erreur et avertissement dérivent de la même façon (survol, fond disc
 
 Les boutons pleins portent du **texte blanc** sur `--color-primary-strong`. C'est la raison d'être du réglage « strong » : le vert d'usine (#00A654) ne donne que **3,19 : 1** sous du blanc, insuffisant pour du texte ; assombri, il passe à **5,05 : 1**. La règle WCAG AA demande **4,5 : 1**.
 
-![Contraste du texte blanc sur le bouton, pour les six couleurs proposées par l'assistant.](img/ch16/contraste.svg){width=92%}
+![Contraste du texte blanc sur le bouton, pour les six couleurs proposées par l'assistant.](img/ch16/contraste.svg){width=82%}
 
 ::: warning
 Le calcul **assombrit** la couleur choisie, il ne vérifie rien. Les teintes déjà sombres s'en sortent ; **l'orange** (4,22) et **la turquoise** (3,61) restent **sous le seuil**. Après avoir changé la couleur primaire, regardez vos boutons dans les deux thèmes.
@@ -311,7 +322,7 @@ Le contraste est le rapport de luminance relative WCAG, `(L1 + 0,05) / (L2 + 0,0
 
 Le thème **sombre** est le défaut, par choix : une image de fluorescence se lit mieux sur fond noir. Le visiteur bascule d'un clic ; son choix est mémorisé **dans son navigateur** (`iribhm-theme`).
 
-![Le même site en thème sombre (à gauche) et clair (à droite).](img/ch16/theme-clair-sombre.png){.shot width=100%}
+![Le même site en thème sombre (à gauche) et clair (à droite).](img/ch16/theme-clair-sombre.png){.shot width=90%}
 
 ::: note
 Le thème n'est **pas** calé sur le réglage du système au premier passage. Si le visiteur n'a **jamais** choisi, un changement du réglage clair/sombre de son système est suivi ; dès qu'il a choisi, c'est son choix qui compte.
@@ -319,11 +330,27 @@ Le thème n'est **pas** calé sur le réglage du système au premier passage. Si
 
 Chaque thème règle aussi `color-scheme` : les menus déroulants natifs, les barres de défilement et les sélecteurs de date prennent le bon aspect, sans texte clair sur fond blanc.
 
+### Le fond du viewer 3D : un réglage à part
+
+Le **fond du volume** ne suit pas le thème du site : c'est un réglage du viewer, dans la barre latérale ([Arrière-plan]{.ui}), mémorisé avec l'état de travail.
+
+| Choix | Couleur |
+|--------|----------------|
+| [Sombre]{.ui} (défaut) | `#000000` |
+| [Clair]{.ui} | `#f4f6fb` |
+| [Papier]{.ui} | `#f8f5ec` |
+| [Transparent]{.ui} | aucun fond (les exports en PNG gardent la transparence) |
+| [Personnalisé]{.ui} | la couleur que vous choisissez (`#1a1d27` au départ) |
+
+::: tip
+Un fond **clair** ou **papier** convient aux figures imprimées. Un code de couleur invalide est refusé avec un avertissement en console : le viewer garde la couleur par défaut du choix plutôt que d'afficher une teinte au hasard.
+:::
+
 ## 16.6 Le constructeur de pages
 
 Accueil, À propos, ou toute page que vous créez (protocoles, équipe, contact…) se construisent **à la souris**, comme dans un logiciel de mise en page.
 
-![Une page = des sections (bandes), des colonnes (douzièmes), des widgets (briques).](img/ch16/page-modele.svg){width=96%}
+![Une page = des sections (bandes), des colonnes (douzièmes), des widgets (briques).](img/ch16/page-modele.svg){width=86%}
 
 ### Le modèle : sections, colonnes, widgets
 
@@ -337,21 +364,64 @@ Accueil, À propos, ou toute page que vous créez (protocoles, équipe, contact�
 
 ### Les 27 widgets
 
-![Les 27 widgets, rangés comme dans la palette de l'éditeur.](img/ch16/widgets-27.svg){width=100%}
+![Les 27 widgets, rangés comme dans la palette de l'éditeur.](img/ch16/widgets-27.svg){width=90%}
 
-Quelques-uns méritent une précision :
+### Ce que fait chaque widget
 
-| Widget | À savoir |
-|---|---|
-| [Texte]{.ui} | mini-mise en forme : `**gras**`, `*italique*`, `[lien](adresse)` |
-| [Statistiques]{.ui}, [Compteur animé]{.ui} | peuvent se remplir **seuls** : jeux de données, spécimens, cellules suivies, régions |
-| [Derniers datasets]{.ui} | liste les jeux les plus récents du catalogue |
+| Widget | Ce que c'est, et ses réglages |
+|-------|------------------------------|
+| **Bases** | |
+| [Titre]{.ui} | un titre de section ; niveau de titre et alignement |
+| [Texte]{.ui} | un paragraphe ; mini-mise en forme `**gras**`, `*italique*`, `[lien](adresse)` |
+| [Image]{.ui} | une image avec légende et lien ; cadrage (remplir ou contenir), largeur, hauteur, texte alternatif |
+| [Icône]{.ui} | un pictogramme choisi dans la bibliothèque d'icônes (avec recherche) ; taille, couleur |
+| [Bouton]{.ui} | libellé et lien ; variante, icône à gauche ou à droite, taille, contour, pleine largeur |
+| [Badges]{.ui} | de petites étiquettes ; pastille colorée, police à chasse fixe, couleurs |
+| **Contenu** | |
+| [Héros]{.ui} | le grand bandeau d'accueil : titre, sous-titre, deux boutons, badge, halo décoratif, fond |
+| [Bandeau d'action]{.ui} | un encart qui invite à cliquer : titre, sous-titre, deux boutons |
+| [Carte icône]{.ui} | icône, image ou monogramme + titre + texte + lien ; disposition horizontale ou verticale |
+| [Citation]{.ui} | texte, auteur, rôle, photo ; en barre ou en carte |
+| [Galerie]{.ui} | des images en grille ; colonnes, légendes, zoom au survol |
+| [Profil]{.ui} | une fiche de personne : nom, rôle, description, média |
+| [Citation copiable]{.ui} | une référence avec bouton « copier » et un bloc repliable (BibTeX…) |
+| [Compteur animé]{.ui} | un chiffre qui défile ; valeur fixe **ou** source du catalogue ; préfixe, suffixe |
+| [Vidéo]{.ui} | un fichier `.mp4`/`.webm`, ou un lien YouTube/Vimeo qui s'ouvre **dans un nouvel onglet** ; image d'aperçu, boucle, lecture automatique muette |
+| [Bandeau de logos]{.ui} | une rangée de logos partenaires ; désaturés avec couleur au survol, plaque claire |
+| **Listes & données** | |
+| [Accordéon / FAQ]{.ui} | des questions qui se déplient ; une seule ouverte à la fois, la première ouverte |
+| [Frise chronologique]{.ui} | une suite d'étapes datées |
+| [Statistiques]{.ui} | une rangée de chiffres clés ; valeur fixe **ou** compteur du catalogue (jeux de données, spécimens, cellules, régions) |
+| [Derniers datasets]{.ui} | les cartes des jeux les plus récents ; nombre, colonnes, type et date affichés ou non |
+| [Liste à icônes]{.ui} | une liste à puces illustrées ; verticale ou horizontale |
+| [Onglets]{.ui} | du contenu réparti en onglets |
+| [Liste de liens]{.ui} | des lignes séparées par des filets fins, avec une flèche : la façon sobre de présenter des liens |
+| [Fiche d'informations]{.ui} | un tableau « libellé : valeur » |
+| **Structure** | |
+| [Séparateur]{.ui} | un trait ; épaisseur, largeur, style (plein, tirets, points), couleur |
+| [Espace]{.ui} | un vide réglable de 0 à 400 pixels (32 par défaut) |
 | [HTML]{.ui} | du HTML libre, **nettoyé par liste blanche** (voir ci-dessous) |
-| [Vidéo]{.ui} | un fichier `.mp4`/`.webm`, ou un lien YouTube/Vimeo qui s'ouvre **dans un nouvel onglet** |
-| [Citation copiable]{.ui} | une référence avec un bouton « copier » |
 
 ::: tech
 **Sécurité du contenu.** Le texte est toujours écrit par `textContent` (jamais interprété comme du HTML). Le widget HTML passe par une **liste blanche** : les scripts, les gestionnaires d'événements, les SVG et les liens `javascript:` sont retirés ; chaque attribut `style` est filtré déclaration par déclaration (pas de `position: fixed`, pas de `z-index`, pas d'URL exotique). Les liens saisis refusent les schémas `javascript:`, `vbscript:`, `data:`. Les vidéos externes ne sont **pas** intégrées dans la page : la politique de sécurité du site interdit les cadres tiers, d'où le simple lien.
+:::
+
+### Le style d'un élément
+
+Chaque **widget**, **colonne** et **section** a ses réglages de style, en sept familles :
+
+| Famille | Ce qu'on y règle |
+|-------|------------------------------|
+| Texte | couleur (ou **dégradé** peint dans les lettres), taille, graisse, interligne, espacement des lettres, italique, majuscules, alignement |
+| Fond & bordure | couleur ou image de fond, voile, arrondi, bordure (épaisseur, couleur, trait), ombre (légère, moyenne, grande, halo), opacité |
+| Espacement | marges et marges intérieures, côté par côté ou liés |
+| Taille | largeur maximale, hauteur minimale |
+| Effets | survol : lévitation, halo ou zoom |
+| Visibilité | masquer sur mobile, ou sur ordinateur |
+| CSS personnalisé | quelques déclarations CSS, **assainies** avant d'être appliquées |
+
+::: tech
+Le style est compilé en CSS **en ligne** (attribut `style`), sans feuille de style injectée : la politique de sécurité interdit les `<style>` ajoutés après coup. Seules les règles qui ont vraiment besoin d'une feuille (le survol `:hover`, les masquages par taille d'écran `@media`) vivent dans `css/pages.css`, un fichier du site. Chaque valeur passe par un filtre qui retire de quoi sortir d'une déclaration.
 :::
 
 ### Variables, jetons et fonds
@@ -367,7 +437,7 @@ Les variables `{…}` marchent dans **tous** les textes de page, mais pas dans l
 
 ### Brouillon et publication
 
-![Deux fichiers, deux publics : le brouillon est privé, la version publiée est publique.](img/ch16/brouillon-publication.svg){width=96%}
+![Deux fichiers, deux publics : le brouillon est privé, la version publiée est publique.](img/ch16/brouillon-publication.svg){width=86%}
 
 ::: remember
 **Rien n'est public avant [Publier]{.ui}.** Pendant que vous travaillez, les visiteurs voient l'ancienne version. Le brouillon est enregistré tout seul, mais il est rangé **hors de `config/`** : ce dossier se lit sans mot de passe, et l'éditeur enregistre environ une fois par seconde pendant que vous écrivez. Un brouillon laissé dans `config/` aurait permis à n'importe qui de regarder l'opérateur écrire.
@@ -385,7 +455,7 @@ Cela pose aussi des règles de bon sens à l'éditeur :
 
 L'éditeur s'ouvre **dans son propre onglet** (`admpan.html?editor=<page>`) : la **vraie** page apparaît dans un cadre, avec son vrai menu et son vrai thème ; l'éditeur ajoute une couche de poignées par-dessus.
 
-![L'éditeur de pages, sur la page « À propos » (jeu de démonstration).](img/ch16/editeur.png){.shot width=100%}
+![L'éditeur de pages, sur la page « À propos » (jeu de démonstration).](img/ch16/editeur.png){.shot width=90%}
 
 ::: legend
 | n | ce que c'est |
@@ -422,7 +492,7 @@ Méthode conseillée : rédigez toute la page dans **une** langue, puis passez s
 ### Les limites
 
 | Limite | Valeur |
-|---|---|
+|-----------|----------------|
 | taille d'une page | 2 Mo |
 | sections par page | 300 |
 | colonnes par section | 12 côté serveur, 6 dans l'éditeur |
@@ -436,7 +506,7 @@ Un document hors limites est **refusé en entier**, jamais enregistré à moiti�
 
 Un site public a besoin d'un **éditeur**, d'un **hébergeur**, d'une politique de **données**. L'onglet [Mentions légales]{.ui} est un éditeur volontairement simple : une liste de **sections**, chacune avec un titre et un texte, **par langue**.
 
-![La page legal.html, telle qu'un visiteur la voit (modèle neutre, en français).](img/ch16/legal-public.png){.shot width=88%}
+![La page legal.html, telle qu'un visiteur la voit (modèle neutre, en français).](img/ch16/legal-public.png){.shot width=74%}
 
 ::: legend
 | n | ce que c'est |
@@ -450,14 +520,14 @@ Un site public a besoin d'un **éditeur**, d'un **hébergeur**, d'une politique 
 - Le lien n'apparaît dans le pied de page que si la case [Afficher « Mentions légales »]{.ui} est cochée (décochée par défaut).
 
 ::: warning
-Ces textes sont des **points de départ**, pas des conseils juridiques. Faites-les relire pour votre pays. N'oubliez pas qu'un serveur web garde généralement un **journal d'accès** (adresses IP) selon sa configuration : c'est l'affaire de votre hébergeur, et elle se déclare ici (voir 16.13).
+Ces textes sont des **points de départ**, pas des conseils juridiques. Faites-les relire pour votre pays. N'oubliez pas qu'un serveur web garde généralement un **journal d'accès** (adresses IP) selon sa configuration : c'est l'affaire de votre hébergeur, et elle se déclare ici (voir 16.11).
 :::
 
 ## 16.8 D'où vient la couleur de départ d'un canal ?
 
 Quand vous ouvrez un jeu de données, chaque canal apparaît déjà en couleur. D'où vient cette couleur ? Le chapitre 11 montre comment on la **change** ; voici d'où elle **vient**.
 
-![La première réponse non vide l'emporte.](img/ch16/couleur-canal.svg){width=96%}
+![La première réponse non vide l'emporte.](img/ch16/couleur-canal.svg){width=86%}
 
 Le panneau prend la **première** réponse disponible :
 
@@ -485,7 +555,7 @@ Comme le pipeline écrit **toujours** une couleur (étape 3), les préréglages 
 ### Quatre listes de couleurs, quatre usages
 
 | Où | Couleurs |
-|---|---|
+|-------|-----------------|
 | le **pipeline** (`metadata.json`) | `#00FF00`, `#00AAFF`, `#FF00FF`, `#FF0000`, `#FFFF00`, `#00FFFF` |
 | l'**éditeur de datasets** (si rien) | `#00FF66`, `#FF3DFF`, `#2F6BFF`, `#FF3030` |
 | le **panneau de canaux** (cycle neutre) | `#00FF00`, `#00AAFF`, `#FF00FF`, `#FF0000` |
@@ -499,7 +569,7 @@ Ces listes ne sont pas synchronisées : elles servent à des moments différents
 
 Le site public, le viewer, l'administration et même les mots de chaque outil sont traduits. Tout repose sur un **fichier par langue** et une seule fonction, `t('clé')`, qui rend le texte dans la langue du visiteur.
 
-![Où vit chaque texte du site.](img/ch16/i18n-ou.svg){width=96%}
+![Où vit chaque texte du site.](img/ch16/i18n-ou.svg){width=86%}
 
 ### Les chiffres
 
@@ -513,7 +583,7 @@ Le site public, le viewer, l'administration et même les mots de chaque outil so
 Les 1 943 textes se répartissent ainsi :
 
 | Famille de clés | Textes | Ce qu'elle contient |
-|---|---|---|
+|--------|---|------------|
 | `pages` | 485 | l'éditeur de pages |
 | `admin` | 365 | le panneau d'administration |
 | `viewer` | 182 | le viewer |
@@ -527,21 +597,21 @@ Une clé d'une langue **existe dans les quatre**, avec les **mêmes jetons** `{�
 
 ### Quelle langue ? Quelle phrase ?
 
-![À gauche : le choix de la langue au chargement. À droite : la recherche d'un texte.](img/ch16/i18n-choix.svg){width=96%}
+![À gauche : le choix de la langue au chargement. À droite : la recherche d'un texte.](img/ch16/i18n-choix.svg){width=86%}
 
 - **Le choix.** La clé `iribhm-lang` du navigateur (écrite quand le visiteur clique dans le menu) ; sinon la langue du navigateur (« fr-BE » devient « fr ») ; sinon l'anglais.
 - **Le chargement.** L'anglais est lu **d'abord** (toujours), puis la langue choisie. Si ce fichier échoue, l'interface reste en anglais.
 - **La propagation.** Un clic dans le menu prévient les **autres pages ouvertes** de la même origine (événement `storage`) : dans Comparer, les panneaux embarqués changent de langue avec la page hôte.
 - **Le document.** L'attribut `lang` de la page suit la langue ; `dir="rtl"` est posé pour une langue de droite à gauche (aucune n'est livrée).
 
-![Le menu des langues de la barre du haut : un bouton par langue, avec son drapeau et son nom natif.](img/ch16/menu-langues.png){.shot width=88%}
+![Le menu des langues de la barre du haut : un bouton par langue, avec son drapeau et son nom natif.](img/ch16/menu-langues.png){.shot width=74%}
 
 ::: legend
 | n | ce que c'est |
 |--|----------------------|
 | 1 | Le bouton [Langue]{.ui}. |
 | 2 | Le menu : généré **à partir des langues découvertes**, anglais en premier, puis ordre alphabétique. |
-| 3 | Le filtre pour daltoniens (voir 16.11). |
+| 3 | Le filtre pour daltoniens (voir 16.10). |
 | 4 | Le thème clair / sombre. |
 :::
 
@@ -564,7 +634,7 @@ L'anglais est **toujours ajouté** à la liste, même s'il manquait : le menu ne
 Dans le HTML, un attribut dit quel texte affiche l'élément :
 
 | Attribut | Ce qu'il remplit |
-|---|---|
+|--------|------------------|
 | `data-i18n="clé"` | le texte de l'élément |
 | `data-i18n-placeholder` | le texte grisé d'un champ de saisie |
 | `data-i18n-title` | l'infobulle |
@@ -599,7 +669,7 @@ Les langues qui s'écrivent de droite à gauche (l'arabe est connu du code) reç
 ### Que se passe-t-il si… ?
 
 | Situation | Ce que voit le visiteur |
-|---|---|
+|----------|----------|
 | une clé manque en français | le texte **anglais** |
 | une clé manque aussi en anglais | la **clé elle-même** (« landing.heroTitle ») |
 | `specimen.plural` n'a pas de ligne `nl` | le nom **anglais** dans la phrase néerlandaise |
@@ -614,7 +684,7 @@ L'accessibilité d'un outil d'imagerie a des limites (une image 3D reste une ima
 
 ### Avant le premier affichage : le thème
 
-![Comment le thème clair arrive avant le premier affichage.](img/ch16/theme-boot.svg){width=96%}
+![Comment le thème clair arrive avant le premier affichage.](img/ch16/theme-boot.svg){width=86%}
 
 ::: tech
 Un petit script bloquant (`theme-boot.js`, quelques lignes) est placé dans l'`<head>`, après les feuilles de style. Il lit la clé du thème et, si elle vaut « light », change l'attribut `data-theme` **avant** que la page soit peinte. Le panneau d'administration le charge avec sa propre clé (`adm-theme`).
@@ -624,7 +694,7 @@ Un petit script bloquant (`theme-boot.js`, quelques lignes) est placé dans l'`<
 
 - Un lien d'évitement **« Aller au contenu »** est le premier élément focalisable de chaque page publique (9 pages sur 10 : seule la page de démonstration de widgets, non livrée, n'en a pas) ; il mène au `<main id="main">`.
 - Les boutons d'icônes portent un nom (`aria-label`, ou une infobulle traduite) ; le texte vient des fichiers de langue.
-- Les fenêtres modales (`Dialog`) se ferment par <kbd>Échap</kbd> et écrivent leur texte par `textContent`.
+- Les fenêtres modales (`Dialog`) sont déclarées `aria-modal` ; quand elles offrent une issue « annuler », <kbd>Échap</kbd> ou un clic sur le fond la choisit. Leur texte est écrit par `textContent`.
 - Les outils du viewer ont des raccourcis (V, C, M, I, D…) : voir le chapitre 12.
 - Les feuilles de style contiennent 25 occurrences de `:focus-visible` : l'élément qui a le focus clavier est entouré.
 
@@ -636,7 +706,7 @@ Si le système demande « réduire les animations », **toutes** les animations 
 
 Le bouton en forme d'œil de la barre du haut ouvre le menu **« Simulation des déficiences de la vision des couleurs »** : 9 choix en 5 groupes.
 
-![Le menu de simulation : pour chaque choix, sept teintes de test déjà filtrées.](img/ch16/daltonisme-menu.png){.shot width=92%}
+![Le menu de simulation : pour chaque choix, sept teintes de test déjà filtrées.](img/ch16/daltonisme-menu.png){.shot width=78%}
 
 ::: legend
 | n | ce que c'est |
@@ -656,13 +726,13 @@ Le bouton en forme d'œil de la barre du haut ouvre le menu **« Simulation des 
 
 Le filtre s'applique à **toute la page**, y compris le viewer 3D, pour voir ce que verrait une personne atteinte :
 
-![Le même embryon (jeu de démonstration) avec les canaux DAPI, Pecam1, Sox2, sous quatre simulations.](img/ch16/daltonisme-viewer.png){.shot width=100%}
+![Le même embryon (jeu de démonstration) avec les canaux DAPI, Pecam1, Sox2, sous quatre simulations.](img/ch16/daltonisme-viewer.png){.shot width=90%}
 
 ::: example
 Dans cette démonstration, le vert et le magenta de la vue normale deviennent, en protanopie et en deutéranopie, des **bleus et des beiges** : l'opposition rouge-vert qui séparait les deux marquages disparaît. En tritanopie, le vert devient cyan et le magenta rose. C'est exactement ce qu'une figure de publication doit vérifier.
 :::
 
-![Les mêmes sept teintes, calculées par le script d'après les matrices du code.](img/ch16/daltonisme-teintes.svg){width=92%}
+![Les mêmes sept teintes, calculées par le script d'après les matrices du code.](img/ch16/daltonisme-teintes.svg){width=82%}
 
 ::: tech
 - **Le calcul.** Chaque simulation est une matrice 3×3 de **Machado, Oliveira et Fernandes (2009)**, appliquée à la lumière **linéaire** (`color-interpolation-filters="linearRGB"`). Les « …opies » sont la sévérité 1,0 (cône absent) ; les « …omalies », la sévérité 0,5. Chaque ligne fait 1 : un gris reste gris. L'achromatopsie remplace les trois canaux par la luminance (0,2126 R + 0,7152 V + 0,0722 B) ; l'achromatomalie en est le mélange à moitié.
@@ -683,7 +753,7 @@ La simulation est un effet d'**affichage** : les exports (capture, figure) sont 
 
 Le site est **utilisable sur téléphone**, avec des limites que le viewer ne peut pas lever.
 
-![L'accueil, l'Explorateur, le viewer et son menu ☰, sur un écran de 390 pixels de large.](img/ch16/mobile.png){.shot width=100%}
+![L'accueil, l'Explorateur, le viewer et son menu ☰, sur un écran de 390 pixels de large.](img/ch16/mobile.png){.shot width=90%}
 
 - **Tactile.** Un doigt fait tourner le volume ; **deux doigts** le déplacent et le rapprochent (pincer). Aucune touche de modification n'est nécessaire.
 - **Barre d'outils repliée.** Quand les boutons ne tiennent plus sur une ligne, ils se rangent derrière un bouton ☰ (troisième et quatrième images).
@@ -703,12 +773,12 @@ La seule dépendance distante du site est **Google Fonts** (Inter, JetBrains Mon
 
 Un laboratoire veut savoir si ses jeux de données sont regardés. Lumen3D le dit **sans rien savoir de vous**.
 
-![Ce qui est compté, et ce qui n'est pas gardé.](img/ch16/stats-stockage.svg){width=96%}
+![Ce qui est compté, et ce qui n'est pas gardé.](img/ch16/stats-stockage.svg){width=86%}
 
 ### Ce qui est compté
 
 | Compteur | Quand il monte |
-|---|---|
+|-------|---------------------|
 | **Visites** | une fois par **session de navigation** (un onglet), à l'ouverture de l'**accueil** |
 | **Vues** | une fois par session et par jeu de données, quand un jeu s'ouvre dans le viewer |
 | **Téléchargements** | quand un fichier du dossier `download/` d'un jeu (celui que propose le Download Center) est servi **en entier** |
@@ -738,7 +808,7 @@ Rien d'autre que des **nombres** et une date :
 
 ### Se protéger de la fraude : deux seaux à jetons
 
-![Chaque balise coûte un jeton à deux seaux ; vide, elle reçoit 429.](img/ch16/limitation-debit.svg){width=96%}
+![Chaque balise coûte un jeton à deux seaux ; vide, elle reçoit 429.](img/ch16/limitation-debit.svg){width=86%}
 
 ::: analogy
 **Un guichet à tickets.** Chaque visiteur a un petit carnet de 60 tickets, qui se recharge à raison d'un par seconde. Le guichet entier a un carnet de 600, rechargé de 20 par seconde. Sans ticket dans l'un ou l'autre, on n'est pas servi.
@@ -754,7 +824,7 @@ Les compteurs ne gardent aucune donnée personnelle. Cela ne dit rien des **jour
 
 L'onglet [Statistiques]{.ui} présente trois cartes (avec le tracé des **30 derniers jours** dessiné à la main en SVG, sans bibliothèque de graphiques) et un tableau [Par dataset]{.ui} que l'on trie en cliquant un en-tête.
 
-![L'onglet Statistiques (chiffres de test du jeu de démonstration).](img/ch16/stats.png){.shot width=92%}
+![L'onglet Statistiques (chiffres de test du jeu de démonstration).](img/ch16/stats.png){.shot width=78%}
 
 ::: legend
 | n | ce que c'est |
@@ -771,7 +841,7 @@ Changer le **nom** d'un type de données ne change aucun de ces chiffres. Lors d
 
 À ne pas confondre avec les statistiques. **`PerfTelemetry`** est un chronomètre interne que le viewer remplit pour **diagnostiquer** ses performances.
 
-![PerfTelemetry : un carnet de bord qui ne quitte jamais l'onglet.](img/ch16/perf-telemetrie.svg){width=96%}
+![PerfTelemetry : un carnet de bord qui ne quitte jamais l'onglet.](img/ch16/perf-telemetrie.svg){width=86%}
 
 ::: remember
 **Rien n'est envoyé nulle part.** Le carnet vit dans la mémoire de l'onglet, borné (3 000 durées, 5 000 événements, 500 mesures ouvertes à la fois), et disparaît quand l'onglet se ferme.
@@ -780,7 +850,7 @@ Changer le **nom** d'un type de données ne change aucun de ces chiffres. Lors d
 ### Ce que le viewer note
 
 | Mesure | Ce qu'elle chronomètre |
-|---|---|
+|---------|------------------|
 | `viewer.init` | l'ouverture de la page jusqu'au volume prêt |
 | `viewer.timepoint.load` | le chargement d'un instant d'une série |
 | `volume.load.bricks` | le chargement des briques d'une qualité |
@@ -801,7 +871,7 @@ Seule la page du viewer charge `PerfTelemetry`. La ligne de progression que vous
 ### Je veux… où dois-je aller ?
 
 | Je veux… | J'utilise |
-|---|---|
+|-------------|-------------|
 | changer le nom, l'organisation, le logo | [Identité]{.ui} |
 | changer le mot « embryon » partout | [Identité]{.ui} › *Terminologie* |
 | renommer « 3D », « 2D », « Live » | [Types de données]{.ui} |
@@ -816,7 +886,7 @@ Seule la page du viewer charge `PerfTelemetry`. La ligne de progression que vous
 ### Les erreurs fréquentes, expliquées
 
 | Constat | Explication |
-|---|---|
+|-----------|-------------|
 | « Mon changement d'Apparence n'apparaît pas » | il n'est appliqué qu'après [Enregistrer]{.ui} ; videz le cache si le navigateur garde l'ancienne `theme.css` |
 | « Le lien Mentions légales a disparu » | la case est décochée par défaut dans [Identité]{.ui} |
 | « Mes liens de pied de page ne s'affichent pas » | voir 16.2 : ils sont enregistrés mais pas affichés |

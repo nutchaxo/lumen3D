@@ -84,3 +84,9 @@ mob = [("m-home", L("Accueil", "Home")), ("m-explorer", L("Explorateur", "Explor
        ("m-viewer", L("Viewer", "Viewer")), ("m-viewer-menu", L("Viewer, menu ☰", "Viewer, ☰ menu"))]
 cells = [labelled(Image.open(f"{RAW}/{n}.png"), lab, 360, 40, fs=18) for n, lab in mob]
 save(grid(cells, 4, gap=12), "mobile.png")
+
+# the brand-variables block of the page editor's Variables panel (cropped from editeur-variables.png)
+src = os.path.join(OUT, "editeur-variables.png")
+if os.path.exists(src):
+    im = Image.open(src).convert("RGB")
+    save(im.crop((0, 468, im.width, 1118)), "variables-marque.png")

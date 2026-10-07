@@ -56,7 +56,7 @@ def chargement():
 
 
 def planche():
-    s = Svg("2d-planche.svg", 344)
+    s = Svg("2d-planche.svg", 372)
     s.title(tr("La planche de figure : même échelle physique ou même taille", "The figure board: same physical scale or same size"))
     s.text(400, 58, tr("Exemple : photo A 1920 × 1440 px à 2,0 µm/px · photo B 1600 × 1200 px à 3,2 µm/px", "Example: photo A 1920 × 1440 px at 2.0 µm/px · photo B 1600 × 1200 px at 3.2 µm/px"), 12.5, 600, INK2, "middle")
     for k, (x0, head, c, wa, ha, wb, hb, note) in enumerate([
@@ -65,7 +65,7 @@ def planche():
         (410, tr("Même taille d'image", "Same image size"), "blue", 1600, 1200, 1600, 1200,
          tr("Chaque photo remplit la même cellule (1600 × 1200). A × 0,833, B × 1. Chaque panneau porte sa propre barre d'échelle.", "Each photo fills the same cell (1600 × 1200). A × 0.833, B × 1. Each panel carries its own scale bar."))]):
         st, so = P[c]
-        s.rect(x0, 76, 370, 250, "#fff", st, 14, 1.4)
+        s.rect(x0, 76, 370, 280, "#fff", st, 14, 1.4)
         s.text(x0 + 185, 100, head, 14, 800, st, "middle")
         cw, chh = 160, 120
         for j, (lab, w, h) in enumerate([("A", wa, ha), ("B", wb, hb)]):
@@ -75,8 +75,8 @@ def planche():
             s.rect(cx + (cw - ww) / 2, 116 + (chh - hh) / 2, ww, hh, so, st, 3, 1.6)
             s.text(cx + cw / 2, 116 + chh / 2 + 5, f"{lab} · {w} × {h}", 12, 800, st, "middle")
         s.para(x0 + 16, 276, note, 338, 12, 400, INK)
-    s.text(215, 312, tr("barre commune sous la planche", "common bar under the board"), 11.5, 700, P["green"][0], "middle")
-    s.text(595, 312, tr("une barre par panneau", "one bar per panel"), 11.5, 700, P["blue"][0], "middle")
+    s.text(215, 340, tr("barre commune sous la planche", "common bar under the board"), 11.5, 700, P["green"][0], "middle")
+    s.text(595, 340, tr("une barre par panneau", "one bar per panel"), 11.5, 700, P["blue"][0], "middle")
     s.save()
 
 

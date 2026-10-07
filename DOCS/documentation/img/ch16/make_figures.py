@@ -166,7 +166,7 @@ def simulate(hexc, name):
 
 # ═════════════════════════ 1. config map ═════════════════════════
 def fig_config_carte():
-    s = Svg("config-carte.svg", 470, L("Un dossier, des fichiers JSON : qui les lit, et ce que le visiteur voit",
+    s = Svg("config-carte.svg", 432, L("Un dossier, des fichiers JSON : qui les lit, et ce que le visiteur voit",
                                        "One folder, a few JSON files: who reads them and what visitors see"))
     s.text(24, 66, "config/ (public)", 13, True, ACC["blue"][0])
     s.text(290, 66, L("lu par", "read by"), 13, True, ACC["violet"][0])
@@ -186,17 +186,17 @@ def fig_config_carte():
     ]
     y = 80
     for f, c1, r, c2, v in rows:
-        s.pill(24, y, 215, 38, f, c1, 13)
-        s.arrow(243, y + 19, 281, y + 19)
-        s.pill(285, y, 215, 38, r, c2, 12.5)
-        s.arrow(504, y + 19, 536, y + 19)
-        s.rect(540, y, 244, 38, "#fff", LINE, 10)
-        s.text(662, y + 24, v, 11.5, False, INK, "middle", maxw=232)
-        y += 50
-    s.rect(24, y + 8, 760, 62, ACC["red"][1], ACC["red"][0], 12, 1.4, "5 4")
-    s.text(40, y + 31, L("Hors de config/ : les brouillons de pages vivent dans api/page-drafts/ (privé, jamais servi).",
+        s.pill(24, y, 215, 34, f, c1, 13)
+        s.arrow(243, y + 17, 281, y + 17)
+        s.pill(285, y, 215, 34, r, c2, 12.5)
+        s.arrow(504, y + 17, 536, y + 17)
+        s.rect(540, y, 244, 34, "#fff", LINE, 10)
+        s.text(662, y + 22, v, 11.5, False, INK, "middle", maxw=232)
+        y += 44
+    s.rect(24, y + 6, 760, 62, ACC["red"][1], ACC["red"][0], 12, 1.4, "5 4")
+    s.text(40, y + 29, L("Hors de config/ : les brouillons de pages vivent dans api/page-drafts/ (privé, jamais servi).",
                          "Outside config/: page drafts live in api/page-drafts/ (private, never served)."), 12.5, True, ACC["red"][0], maxw=735)
-    s.text(40, y + 52, L("config/ est public : aucun secret n'y entre. Les mises à jour de la plateforme n'y touchent pas.",
+    s.text(40, y + 50, L("config/ est public : aucun secret n'y entre. Les mises à jour de la plateforme n'y touchent pas.",
                          "config/ is public: no secret ever goes in. Platform updates leave it alone."), 12.5, False, INK, maxw=735)
     s.save()
 

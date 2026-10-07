@@ -1,0 +1,48 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 520" font-family="Inter, sans-serif">
+  <rect width="800" height="520" rx="16" fill="#f8f9fd"/>
+  <text x="400" y="32" text-anchor="middle" font-size="17" font-weight="800" fill="#1c2333">Documentation map: which question, which chapter?</text>
+
+  <g font-size="12.5">
+    <!-- group 1 -->
+    <rect x="24" y="50" width="752" height="86" rx="12" fill="#fff" stroke="#c5cbd8"/>
+    <rect x="24" y="50" width="150" height="86" rx="12" fill="#e8edff"/>
+    <text x="99" y="88" text-anchor="middle" font-size="13.5" font-weight="800" fill="#3b5bdb">Discover</text>
+    <text x="99" y="106" text-anchor="middle" fill="#4a5468">chapters 1 to 3</text>
+    <text x="190" y="78" fill="#1c2333"><tspan font-weight="800" fill="#3b5bdb">1</tspan>  What is Lumen3D for? Which data types?</text>
+    <text x="190" y="100" fill="#1c2333"><tspan font-weight="800" fill="#3b5bdb">2</tspan>  Which technologies, and what are they for?</text>
+    <text x="190" y="122" fill="#1c2333"><tspan font-weight="800" fill="#3b5bdb">3</tspan>  Where to click? What does each page look like?</text>
+
+    <!-- group 2 -->
+    <rect x="24" y="148" width="752" height="130" rx="12" fill="#fff" stroke="#c5cbd8"/>
+    <rect x="24" y="148" width="150" height="130" rx="12" fill="#ebfbee"/>
+    <text x="99" y="206" text-anchor="middle" font-size="13.5" font-weight="800" fill="#2b8a3e">Prepare</text>
+    <text x="99" y="224" text-anchor="middle" fill="#4a5468">the Python pipeline</text>
+    <text x="99" y="241" text-anchor="middle" fill="#4a5468">chapters 4 to 8</text>
+    <text x="190" y="172" fill="#1c2333"><tspan font-weight="800" fill="#2b8a3e">4</tspan>  What does an Imaris file contain?</text>
+    <text x="190" y="195" fill="#1c2333"><tspan font-weight="800" fill="#2b8a3e">5</tspan>  How is the background noise removed?</text>
+    <text x="190" y="218" fill="#1c2333"><tspan font-weight="800" fill="#2b8a3e">6</tspan>  How do we go from 14 GB to a few hundred MB?</text>
+    <text x="190" y="241" fill="#1c2333"><tspan font-weight="800" fill="#2b8a3e">7</tspan>  What are bricks, packs and levels of detail?</text>
+    <text x="190" y="264" fill="#1c2333"><tspan font-weight="800" fill="#2b8a3e">8</tspan>  Metadata, cell tracking, risk-free publishing</text>
+
+    <!-- group 3 -->
+    <rect x="24" y="290" width="752" height="108" rx="12" fill="#fff" stroke="#c5cbd8"/>
+    <rect x="24" y="290" width="150" height="108" rx="12" fill="#e3fafc"/>
+    <text x="99" y="338" text-anchor="middle" font-size="13.5" font-weight="800" fill="#0c8599">Display</text>
+    <text x="99" y="356" text-anchor="middle" fill="#4a5468">the browser</text>
+    <text x="99" y="373" text-anchor="middle" fill="#4a5468">chapters 9 to 12</text>
+    <text x="190" y="314" fill="#1c2333"><tspan font-weight="800" fill="#0c8599">9</tspan>   How is the 3D image computed?</text>
+    <text x="190" y="337" fill="#1c2333"><tspan font-weight="800" fill="#0c8599">10</tspan>  How to display gigabytes without waiting?</text>
+    <text x="190" y="360" fill="#1c2333"><tspan font-weight="800" fill="#0c8599">11</tspan>  Colours, contrast, histograms: what do they mean?</text>
+    <text x="190" y="383" fill="#1c2333"><tspan font-weight="800" fill="#0c8599">12</tspan>  What does each toolbar tool do?</text>
+
+    <!-- group 4 -->
+    <rect x="24" y="410" width="752" height="86" rx="12" fill="#fff" stroke="#c5cbd8"/>
+    <rect x="24" y="410" width="150" height="86" rx="12" fill="#f3f0ff"/>
+    <text x="99" y="448" text-anchor="middle" font-size="13.5" font-weight="800" fill="#7048e8">Administer</text>
+    <text x="99" y="466" text-anchor="middle" fill="#4a5468">and understand</text>
+    <text x="99" y="483" text-anchor="middle" fill="#4a5468">chapters 13 to 15</text>
+    <text x="190" y="438" fill="#1c2333"><tspan font-weight="800" fill="#7048e8">13</tspan>  What can the administrator do? (overview)</text>
+    <text x="190" y="460" fill="#1c2333"><tspan font-weight="800" fill="#7048e8">14</tspan>  Is my data protected? What happens after a failure?</text>
+    <text x="190" y="482" fill="#1c2333"><tspan font-weight="800" fill="#7048e8">15</tspan>  What does this word mean? (glossary)</text>
+  </g>
+</svg>

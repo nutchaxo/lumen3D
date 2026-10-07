@@ -114,14 +114,14 @@ def bordure():
         words = t2.split(" ")
         l1, l2 = "", ""
         for w in words:
-            if len(l1) + len(w) < 46:
+            if not l2 and len(l1) + len(w) < 46:
                 l1 += w + " "
             else:
                 l2 += w + " "
         b.append(text(ex + 14, yy + 47, l1.strip(), 12.5, 400, INK))
         b.append(text(ex + 14, yy + 64, l2.strip(), 12.5, 400, INK))
         yy += 88
-    b.append(text(400, 346, tr("Hors du volume, la bordure répète le dernier voxel (« clamp to edge »). Une brique absente vaut zéro, bordure comprise.",
+    b.append(text(400, 358, tr("Hors du volume, la bordure répète le dernier voxel (« clamp to edge »). Une brique absente vaut zéro, bordure comprise.",
                               "Outside the volume, the border repeats the last voxel (“clamp to edge”). An absent brick is zero, border included."),
                  12, 400, INK2, "middle", 'font-style="italic"'))
     save("bordure.svg", 366, b)

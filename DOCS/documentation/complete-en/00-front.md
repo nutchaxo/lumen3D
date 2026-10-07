@@ -1,0 +1,70 @@
+---
+title: "Lumen3D from A to Z"
+subtitle: "The complete documentation of the platform"
+eyebrow: "IRIBHM · ULB — Lumen3D"
+version: "Web platform 1.59.2 · Pipeline 0.21.0 · Data format 4"
+date: "October 2026"
+abstract: "How an Imaris file of several gigabytes becomes an embryo you can spin around in a browser: the languages, the pages, image cleaning, compression, bricks, 3D rendering, the measurement tools and the administration panel. Written for biologists, illustrated on every page."
+lang: en
+toc-title: "Contents"
+toc-class: compact
+cover-image: img/cover.png
+---
+
+# How to read this document {.unnumbered}
+
+::: lead
+This document explains **everything** Lumen3D does, without assuming that you can program. Every page has an illustration; the text stays short.
+:::
+
+## Three ways to read it
+
+:::: cards
+::: card
+#### 🚀 In 20 minutes
+Read the green **"In 30 seconds"** boxes and look at the figures.
+:::
+::: card
+#### 🧬 "My dataset"
+Chapters **4 to 8**: what happens to your Imaris file, step by step.
+:::
+::: card
+#### 🖥️ "The screen"
+Chapters **9 to 12**: how the viewer draws and how the tools work.
+:::
+::::
+
+## The boxes
+
+::: tldr
+The summary of a chapter or section, in three points.
+:::
+
+:::: cols
+::: col
+::: analogy
+A comparison with everyday life.
+:::
+::: example
+A hand calculation with real numbers.
+:::
+:::
+::: col
+::: tech
+Technical detail (formulas, file names). Skippable.
+:::
+::: warning
+A limit to know before interpreting images.
+:::
+:::
+::::
+
+## The conventions
+
+| You see… | It means… |
+|---|---|
+| [Save]{.ui} | a button or a label exactly as it appears on screen |
+| [3]{.callout-num} | numbered marker 3 on the screenshot above |
+| `metadata.json` | a file name or a technical value; “→ chapter 7” = explained in detail elsewhere |
+
+*Images come from synthetic demonstration embryos, not laboratory data; numbers are read from the code (platform 1.59.2, pipeline 0.21.0). A 10-page short version, "The Essentials", is in the administration panel.*

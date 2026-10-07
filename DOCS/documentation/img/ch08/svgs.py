@@ -154,7 +154,7 @@ def parcours():
     b.append(arrow(196, 130, 236, 130))
     b += box(240, 80, 170, 100, "green", [tr("menu [1] du", "menu [1] of"), "RUN.bat"], tr("2 · Vous lancez", "2 · You run"))
     b.append(arrow(412, 130, 452, 130))
-    b += box(456, 80, 150, 100, "amber", [tr("dossier output\\", "output\\ folder"), "3d\\ ou live\\"], tr("3 · Résultat", "3 · Result"))
+    b += box(456, 80, 150, 100, "amber", [tr("dossier output\\", "output\\ folder"), tr("3d\\ ou live\\", "3d\\ or live\\")], tr("3 · Résultat", "3 · Result"))
     b.append(arrow(608, 105, 640, 70))
     b.append(arrow(608, 155, 640, 200))
     b += box(642, 40, 140, 66, "violet", [tr("copie FTP dans", "FTP copy into"), "DATA_WEB/"], tr("Route A", "Route A"))

@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 300" font-family="Inter, sans-serif">
+  <defs><marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#4a5468"/></marker></defs>
+  <rect width="800" height="300" rx="16" fill="#f8f9fd"/>
+  <text x="400" y="32" text-anchor="middle" font-size="18" font-weight="800" fill="#1c2333">When the graphics card "crashes": automatic recovery</text>
+  <rect x="24" y="56" width="170" height="110" rx="12" fill="#fff0f0" stroke="#c92a2a"/>
+  <text x="109" y="82" text-anchor="middle" font-size="13" font-weight="800" fill="#c92a2a">1 · LOSS</text>
+  <text x="109" y="106" text-anchor="middle" font-size="12.5" fill="#1c2333">the browser removes</text><text x="109" y="124" text-anchor="middle" font-size="12.5" fill="#1c2333">the graphics context;</text><text x="109" y="142" text-anchor="middle" font-size="12.5" fill="#1c2333">rendering pauses</text>
+  <rect x="226" y="56" width="170" height="110" rx="12" fill="#fff4e6" stroke="#e67700"/>
+  <text x="311" y="82" text-anchor="middle" font-size="13" font-weight="800" fill="#e67700">2 · CLEAN-UP</text>
+  <text x="311" y="106" text-anchor="middle" font-size="12.5" fill="#1c2333">volumes are released,</text><text x="311" y="124" text-anchor="middle" font-size="12.5" fill="#1c2333">loads are cancelled,</text><text x="311" y="142" text-anchor="middle" font-size="12.5" fill="#1c2333">the budget is halved</text>
+  <rect x="428" y="56" width="170" height="110" rx="12" fill="#ebfbee" stroke="#2b8a3e"/>
+  <text x="513" y="82" text-anchor="middle" font-size="13" font-weight="800" fill="#2b8a3e">3 · RESTORE</text>
+  <text x="513" y="106" text-anchor="middle" font-size="12.5" fill="#1c2333">the browser gives the</text><text x="513" y="124" text-anchor="middle" font-size="12.5" fill="#1c2333">card back: the last view</text><text x="513" y="142" text-anchor="middle" font-size="12.5" fill="#1c2333">is reloaded, lighter</text>
+  <rect x="630" y="56" width="146" height="110" rx="12" fill="#fff" stroke="#c5cbd8"/>
+  <text x="703" y="82" text-anchor="middle" font-size="13" font-weight="800" fill="#1c2333">SAFEGUARD</text>
+  <text x="703" y="106" text-anchor="middle" font-size="12.5" fill="#1c2333">3 losses within</text><text x="703" y="124" text-anchor="middle" font-size="12.5" fill="#1c2333">120 s: no more</text><text x="703" y="142" text-anchor="middle" font-size="12.5" fill="#1c2333">automatic reload</text>
+  <line x1="196" y1="111" x2="222" y2="111" stroke="#4a5468" stroke-width="2" marker-end="url(#a)"/><line x1="398" y1="111" x2="424" y2="111" stroke="#4a5468" stroke-width="2" marker-end="url(#a)"/><line x1="600" y1="111" x2="626" y2="111" stroke="#4a5468" stroke-width="2" marker-end="url(#a)"/>
+  <rect x="24" y="190" width="752" height="86" rx="12" fill="#fff" stroke="#c5cbd8"/>
+  <text x="400" y="216" text-anchor="middle" font-size="13" font-weight="700" fill="#1c2333">The record of losses is kept for one week in your browser.</text>
+  <text x="400" y="238" text-anchor="middle" font-size="12.5" fill="#4a5468">Each recent loss halves the budget (4 halvings at most, floor of 256 MiB).</text>
+  <text x="400" y="258" text-anchor="middle" font-size="12.5" fill="#4a5468">After three losses in quick succession, the viewer invites you to choose a lower quality or reload the page.</text>
+</svg>

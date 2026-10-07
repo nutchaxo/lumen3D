@@ -1,0 +1,50 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 462" font-family="Inter, sans-serif">
+<defs><marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#4a5468"/></marker>
+<marker id="arrr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#c92a2a"/></marker></defs>
+<rect width="800" height="462" rx="16" fill="#f8f9fd"/>
+<text x="400" y="30" text-anchor="middle" font-size="17" font-weight="800" fill="#1c2333">Data updates: formats 1 → 4</text>
+<rect x="24" y="52" width="146" height="74" rx="12" fill="#f1f3f7" stroke="#4a5468" stroke-width="1.6"/>
+<text x="97.0" y="74" text-anchor="middle" font-size="13.5" font-weight="800" fill="#4a5468">Format 1</text>
+<text x="97.0" y="93" text-anchor="middle" font-size="12.5" fill="#1c2333">bricks only</text>
+<rect x="226" y="52" width="146" height="74" rx="12" fill="#e8edff" stroke="#3b5bdb" stroke-width="1.6"/>
+<text x="299.0" y="74" text-anchor="middle" font-size="13.5" font-weight="800" fill="#3b5bdb">Format 2</text>
+<text x="299.0" y="93" text-anchor="middle" font-size="12.5" fill="#1c2333">+ planes/</text>
+<rect x="428" y="52" width="146" height="74" rx="12" fill="#f3f0ff" stroke="#7048e8" stroke-width="1.6"/>
+<text x="501.0" y="74" text-anchor="middle" font-size="13.5" font-weight="800" fill="#7048e8">Format 3</text>
+<text x="501.0" y="93" text-anchor="middle" font-size="12.5" fill="#1c2333">+ mips/</text>
+<rect x="630" y="52" width="146" height="74" rx="12" fill="#ebfbee" stroke="#2b8a3e" stroke-width="1.6"/>
+<text x="703.0" y="74" text-anchor="middle" font-size="13.5" font-weight="800" fill="#2b8a3e">Format 4</text>
+<text x="703.0" y="93" text-anchor="middle" font-size="12.5" fill="#1c2333">v3 bricks (66³)</text>
+<line x1="172" y1="89" x2="224" y2="89" stroke="#4a5468" stroke-width="2.2" marker-end="url(#arr)"/>
+<text x="198" y="146" text-anchor="middle" font-size="12" font-weight="800" fill="#1c2333">1 → 2</text>
+<text x="198" y="162" text-anchor="middle" font-size="11.5" font-weight="400" fill="#4a5468">XY planes</text>
+<line x1="374" y1="89" x2="426" y2="89" stroke="#4a5468" stroke-width="2.2" marker-end="url(#arr)"/>
+<text x="400" y="146" text-anchor="middle" font-size="12" font-weight="800" fill="#1c2333">2 → 3</text>
+<text x="400" y="162" text-anchor="middle" font-size="11.5" font-weight="400" fill="#4a5468">layer projections</text>
+<line x1="576" y1="89" x2="628" y2="89" stroke="#4a5468" stroke-width="2.2" marker-end="url(#arr)"/>
+<text x="602" y="146" text-anchor="middle" font-size="12" font-weight="800" fill="#1c2333">3 → 4</text>
+<text x="602" y="162" text-anchor="middle" font-size="11.5" font-weight="400" fill="#4a5468">bricks rebuilt</text>
+<text x="400" y="196" text-anchor="middle" font-size="12" font-weight="400" fill="#4a5468">The new version is computed beside the old one; it replaces it only at the very end (dataset version changed last).</text>
+<text x="30" y="230" text-anchor="start" font-size="13.5" font-weight="800" fill="#1c2333">Who does the work? You choose, dataset by dataset:</text>
+<rect x="30" y="244" width="300" height="112" rx="12" fill="#e8edff" stroke="#3b5bdb" stroke-width="1.6"/>
+<text x="180.0" y="274" text-anchor="middle" font-size="24">🖥️</text>
+<text x="180.0" y="298" text-anchor="middle" font-size="13.5" font-weight="800" fill="#3b5bdb">This browser</text>
+<text x="180.0" y="317" text-anchor="middle" font-size="11.5" fill="#1c2333">downloads the bricks,</text>
+<text x="180.0" y="333" text-anchor="middle" font-size="11.5" fill="#1c2333">re-cuts them, sends the result back</text>
+<rect x="470" y="244" width="300" height="112" rx="12" fill="#e3fafc" stroke="#0c8599" stroke-width="1.6"/>
+<text x="620.0" y="274" text-anchor="middle" font-size="24">🗄️</text>
+<text x="620.0" y="298" text-anchor="middle" font-size="13.5" font-weight="800" fill="#0c8599">The server</text>
+<text x="620.0" y="317" text-anchor="middle" font-size="11.5" fill="#1c2333">converts in small requests;</text>
+<text x="620.0" y="333" text-anchor="middle" font-size="11.5" fill="#1c2333">greyed out if it cannot</text>
+<text x="400" y="298" text-anchor="middle" font-size="30" font-weight="800" fill="#4a5468">⇄</text>
+<text x="400" y="320" text-anchor="middle" font-size="11.5" font-weight="400" fill="#4a5468">same journal</text>
+<text x="400" y="336" text-anchor="middle" font-size="11.5" font-weight="400" fill="#4a5468">on the server</text>
+<rect x="30" y="376" width="360" height="70" rx="12" fill="#fff4e6" stroke="#e67700" stroke-width="1.6"/>
+<text x="210.0" y="398" text-anchor="middle" font-size="13.5" font-weight="800" fill="#e67700">Speed test (5 s)</text>
+<text x="210.0" y="417" text-anchor="middle" font-size="11.5" fill="#1c2333">both executors convert the same</text>
+<text x="210.0" y="433" text-anchor="middle" font-size="11.5" fill="#1c2333">block: the faster becomes the default</text>
+<rect x="410" y="376" width="360" height="70" rx="12" fill="#f3f0ff" stroke="#7048e8" stroke-width="1.6"/>
+<text x="590.0" y="398" text-anchor="middle" font-size="13.5" font-weight="800" fill="#7048e8">Network governor</text>
+<text x="590.0" y="417" text-anchor="middle" font-size="11.5" fill="#1c2333">6 requests in flight at most, 10 to 16/s;</text>
+<text x="590.0" y="433" text-anchor="middle" font-size="11.5" fill="#1c2333">it slows down if the host answers 429 or 503</text>
+</svg>

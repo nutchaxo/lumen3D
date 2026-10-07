@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 380" font-family="Inter, sans-serif">
+  <defs><marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#4a5468"/></marker></defs>
+  <rect width="800" height="380" rx="16" fill="#f8f9fd"/>
+  <text x="400" y="32" text-anchor="middle" font-size="18" font-weight="800" fill="#1c2333">The Gaussian blur: plane by plane, never between planes</text>
+  <!-- stack -->
+  <g stroke="#7048e8" fill="#f3f0ff">
+    <polygon points="60,90 200,90 230,70 90,70"/><polygon points="60,112 200,112 230,92 90,92"/><polygon points="60,134 200,134 230,114 90,114"/><polygon points="60,156 200,156 230,136 90,136"/>
+  </g>
+  <text x="145" y="190" text-anchor="middle" font-size="12.5" fill="#1c2333" font-weight="700">each Z plane</text>
+  <text x="145" y="208" text-anchor="middle" font-size="12.5" fill="#1c2333">is blurred alone, in X and Y</text>
+  <path d="M240 118 H300" stroke="#4a5468" stroke-width="2" marker-end="url(#a)"/>
+  <text x="275" y="92" text-anchor="middle" font-size="12" fill="#4a5468">up to 4</text><text x="275" y="106" text-anchor="middle" font-size="12" fill="#4a5468">workers</text>
+  <g font-size="12.5" font-weight="700" text-anchor="middle">
+    <rect x="310" y="60" width="90" height="26" rx="8" fill="#ebfbee" stroke="#2b8a3e"/><text x="355" y="78" fill="#2b8a3e">planes 1-28</text>
+    <rect x="310" y="92" width="90" height="26" rx="8" fill="#ebfbee" stroke="#2b8a3e"/><text x="355" y="110" fill="#2b8a3e">planes 29-56</text>
+    <rect x="310" y="124" width="90" height="26" rx="8" fill="#ebfbee" stroke="#2b8a3e"/><text x="355" y="142" fill="#2b8a3e">planes 57-84</text>
+    <rect x="310" y="156" width="90" height="26" rx="8" fill="#ebfbee" stroke="#2b8a3e"/><text x="355" y="174" fill="#2b8a3e">planes 85-112</text>
+  </g>
+  <text x="355" y="208" text-anchor="middle" font-size="12" fill="#4a5468">(example: 112 planes)</text>
+  <!-- right algo -->
+  <rect x="440" y="52" width="336" height="150" rx="14" fill="#fff" stroke="#c5cbd8"/>
+  <text x="608" y="78" text-anchor="middle" font-size="14" font-weight="800" fill="#1c2333">Two methods, same result</text>
+  <rect x="456" y="92" width="304" height="46" rx="10" fill="#e8edff" stroke="#3b5bdb"/>
+  <text x="608" y="112" text-anchor="middle" font-size="12.5" font-weight="700" fill="#3b5bdb">σ &lt; 1.8: exact Gaussian kernel</text><text x="608" y="129" text-anchor="middle" font-size="12" fill="#1c2333">radius = 3σ voxels (64 at most)</text>
+  <rect x="456" y="146" width="304" height="46" rx="10" fill="#fff4e6" stroke="#e67700"/>
+  <text x="608" y="166" text-anchor="middle" font-size="12.5" font-weight="700" fill="#e67700">σ ≥ 1.8: 3 "box" passes + 1 exact pass</text><text x="608" y="183" text-anchor="middle" font-size="12" fill="#1c2333">fast, and the total variance is exactly σ²</text>
+  <rect x="24" y="232" width="752" height="124" rx="14" fill="#fff" stroke="#c5cbd8"/>
+  <text x="400" y="258" text-anchor="middle" font-size="14" font-weight="800" fill="#1c2333">Why no blur in Z?</text>
+  <text x="400" y="282" text-anchor="middle" font-size="12.5" fill="#1c2333">The gap between two planes is often several times larger than a voxel's size in the plane</text>
+  <text x="400" y="300" text-anchor="middle" font-size="12.5" fill="#1c2333">(here 3.0 µm versus 1.2 µm). The same σ in voxels would therefore not be the same in micrometres.</text>
+  <text x="400" y="326" text-anchor="middle" font-size="12.5" fill="#4a5468">σ is expressed in voxels of the displayed level: the same σ blurs a larger real area at a coarse level.</text>
+</svg>

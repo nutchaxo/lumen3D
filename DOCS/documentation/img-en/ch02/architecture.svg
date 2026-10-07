@@ -1,0 +1,61 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 470" font-family="Inter, sans-serif">
+  <defs><marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#4a5468"/></marker></defs>
+  <rect width="800" height="470" rx="16" fill="#f8f9fd"/>
+  <text x="400" y="30" text-anchor="middle" font-size="17" font-weight="800" fill="#1c2333">Who does what: client, server, data</text>
+
+  <!-- client -->
+  <rect x="20" y="48" width="250" height="372" rx="14" fill="#e3fafc" stroke="#0c8599"/>
+  <text x="145" y="74" text-anchor="middle" font-size="15" font-weight="800" fill="#0c8599">CLIENT: your browser</text>
+  <g font-size="12.5" fill="#1c2333">
+    <rect x="36" y="90" width="218" height="52" rx="10" fill="#fff" stroke="#c5cbd8"/>
+    <text x="48" y="110" font-weight="700">HTML + CSS</text><text x="48" y="128" fill="#4a5468">pages and appearance</text>
+    <rect x="36" y="152" width="218" height="52" rx="10" fill="#fff" stroke="#c5cbd8"/>
+    <text x="48" y="172" font-weight="700">JavaScript</text><text x="48" y="190" fill="#4a5468">logic, tools, interface</text>
+    <rect x="36" y="214" width="218" height="52" rx="10" fill="#fff" stroke="#c5cbd8"/>
+    <text x="48" y="234" font-weight="700">Workers (background threads)</text><text x="48" y="252" fill="#4a5468">decode images in the background</text>
+    <rect x="36" y="276" width="218" height="52" rx="10" fill="#fff" stroke="#c5cbd8"/>
+    <text x="48" y="296" font-weight="700">WebGL2 + shaders GLSL</text><text x="48" y="314" fill="#4a5468">draw on the graphics card</text>
+    <rect x="36" y="338" width="218" height="68" rx="10" fill="#fff" stroke="#c5cbd8"/>
+    <text x="48" y="358" font-weight="700">Self-hosted libraries</text><text x="48" y="376" fill="#4a5468">Three.js 0.147.0, Lucide 0.344.0,</text><text x="48" y="392" fill="#4a5468">Plotly 2.27.0 (folder js/vendor/)</text>
+  </g>
+
+  <!-- server -->
+  <rect x="290" y="48" width="230" height="372" rx="14" fill="#f3f0ff" stroke="#7048e8"/>
+  <text x="405" y="74" text-anchor="middle" font-size="15" font-weight="800" fill="#7048e8">SERVER: the counter</text>
+  <g font-size="12.5" fill="#1c2333">
+    <rect x="306" y="90" width="198" height="62" rx="10" fill="#fff" stroke="#c5cbd8"/>
+    <text x="318" y="110" font-weight="700">Python (dev_server.py)</text><text x="318" y="128" fill="#4a5468">or PHP (folder api/)</text><text x="318" y="144" fill="#4a5468">two twin versions</text>
+    <rect x="306" y="162" width="198" height="40" rx="10" fill="#fff" stroke="#c5cbd8"/>
+    <text x="318" y="187" font-weight="700">serves the files</text>
+    <rect x="306" y="212" width="198" height="52" rx="10" fill="#fff" stroke="#c5cbd8"/>
+    <text x="318" y="232" font-weight="700">builds the catalogue</text><text x="318" y="250" fill="#4a5468">on every request</text>
+    <rect x="306" y="274" width="198" height="52" rx="10" fill="#fff" stroke="#c5cbd8"/>
+    <text x="318" y="294" font-weight="700">Administration API</text><text x="318" y="312" fill="#4a5468">login, import, updates</text>
+    <rect x="306" y="336" width="198" height="70" rx="10" fill="#fff" stroke="#c5cbd8"/>
+    <text x="318" y="356" font-weight="700">Protections</text><text x="318" y="374" fill="#4a5468">security policy (CSP),</text><text x="318" y="390" fill="#4a5468">password, sessions</text>
+  </g>
+
+  <!-- data -->
+  <rect x="540" y="48" width="240" height="372" rx="14" fill="#fff4e6" stroke="#e67700"/>
+  <text x="660" y="74" text-anchor="middle" font-size="15" font-weight="800" fill="#e67700">DATA: plain files</text>
+  <g font-size="12.5" fill="#1c2333">
+    <rect x="556" y="90" width="208" height="66" rx="10" fill="#fff" stroke="#c5cbd8"/>
+    <text x="568" y="110" font-weight="700">DATA_WEB/</text><text x="568" y="128" fill="#4a5468">3d/ · live/ · 2d/: bricks</text><text x="568" y="144" fill="#4a5468">WebP, .bin, metadata.json</text>
+    <rect x="556" y="166" width="208" height="52" rx="10" fill="#fff" stroke="#c5cbd8"/>
+    <text x="568" y="186" font-weight="700">config/</text><text x="568" y="204" fill="#4a5468">site name, theme, pages (JSON)</text>
+    <rect x="556" y="228" width="208" height="52" rx="10" fill="#fff" stroke="#c5cbd8"/>
+    <text x="568" y="248" font-weight="700">api/*.json</text><text x="568" y="266" fill="#4a5468">hashed password, statistics</text>
+    <rect x="556" y="290" width="208" height="52" rx="10" fill="#fff" stroke="#c5cbd8"/>
+    <text x="568" y="310" font-weight="700">uploads/</text><text x="568" y="328" fill="#4a5468">pending imports (never served)</text>
+    <rect x="556" y="352" width="208" height="54" rx="10" fill="#ebfbee" stroke="#2b8a3e"/>
+    <text x="568" y="372" font-weight="800" fill="#2b8a3e">No database</text><text x="568" y="390" fill="#4a5468">everything is files + JSON</text>
+  </g>
+
+  <line x1="272" y1="200" x2="288" y2="200" stroke="#4a5468" stroke-width="2.4" marker-end="url(#a)"/>
+  <line x1="288" y1="240" x2="272" y2="240" stroke="#4a5468" stroke-width="2.4" marker-end="url(#a)"/>
+  <line x1="522" y1="200" x2="538" y2="200" stroke="#4a5468" stroke-width="2.4" marker-end="url(#a)"/>
+  <line x1="538" y1="240" x2="522" y2="240" stroke="#4a5468" stroke-width="2.4" marker-end="url(#a)"/>
+
+  <text x="400" y="446" text-anchor="middle" font-size="12.5" font-style="italic" fill="#4a5468">The server never computes the 3D image: it hands out files, the browser does the rest.</text>
+  <text x="400" y="462" text-anchor="middle" font-size="11.5" fill="#4a5468">Arrows: HTTP requests from the browser (→) and files sent back (←).</text>
+</svg>

@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 340" font-family="Inter, sans-serif">
+  <rect width="800" height="340" rx="16" fill="#f8f9fd"/>
+  <text x="400" y="32" text-anchor="middle" font-size="18" font-weight="800" fill="#1c2333">The video memory budget estimated by the viewer</text>
+  <g stroke="#c5cbd8"><line x1="200" y1="60" x2="200" y2="270"/><line x1="320" y1="60" x2="320" y2="270" stroke-dasharray="3 4"/><line x1="440" y1="60" x2="440" y2="270" stroke-dasharray="3 4"/><line x1="560" y1="60" x2="560" y2="270" stroke-dasharray="3 4"/><line x1="680" y1="60" x2="680" y2="270" stroke-dasharray="3 4"/><line x1="800" y1="60" x2="800" y2="270" stroke="none"/></g>
+  <g font-size="12" fill="#4a5468" text-anchor="middle"><text x="200" y="290">0</text><text x="320" y="290">1 GiB</text><text x="440" y="290">2 GiB</text><text x="560" y="290">3 GiB</text><text x="680" y="290">4 GiB</text></g>
+  <g font-size="13" font-weight="700" fill="#1c2333" text-anchor="end"><text x="188" y="94">Software (no GPU)</text><text x="188" y="144">Integrated</text><text x="188" y="194">Dedicated</text><text x="188" y="244">Unknown</text></g>
+  <rect x="200" y="76" width="30" height="26" rx="6" fill="#c92a2a"/><text x="244" y="95" font-size="12.5" fill="#1c2333">256 MiB</text>
+  <rect x="200" y="126" width="240" height="26" rx="6" fill="#e67700" fill-opacity="0.35"/><rect x="200" y="126" width="60" height="26" rx="6" fill="#e67700"/><text x="452" y="145" font-size="12.5" fill="#1c2333">0.5 to 2 GiB</text>
+  <rect x="200" y="176" width="480" height="26" rx="6" fill="#2b8a3e" fill-opacity="0.35"/><rect x="200" y="176" width="360" height="26" rx="6" fill="#2b8a3e"/><text x="692" y="195" font-size="12.5" fill="#1c2333">3 to 4 GiB</text>
+  <rect x="200" y="226" width="240" height="26" rx="6" fill="#7048e8" fill-opacity="0.35"/><rect x="200" y="226" width="120" height="26" rx="6" fill="#7048e8"/><text x="452" y="245" font-size="12.5" fill="#1c2333">1 to 2 GiB</text>
+  <text x="400" y="320" text-anchor="middle" font-size="12.5" fill="#4a5468">Solid bar = low end of the range; light bar = high end.</text>
+</svg>

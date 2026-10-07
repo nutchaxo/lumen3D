@@ -49,7 +49,7 @@ Deux règles pour les cas limites :
 
 ## 7.3 D'un cube à une image : la mosaïque
 
-Le navigateur sait décoder une image 2D très vite, mais n'a pas de format d'image 3D. L'astuce : la brique de 66 coupes est **posée à plat** en une seule image, comme un planche-contact de 66 photos.
+Le navigateur sait décoder une image 2D très vite, mais n'a pas de format d'image 3D. L'astuce : la brique de 66 coupes est **posée à plat** en une seule image, comme une planche-contact de 66 photos.
 
 ![Les 66 coupes d'une brique rangées en 9 colonnes × 8 lignes ; les 6 dernières cases restent vides.](img/ch07/mosaique-schema.svg){width=100%}
 

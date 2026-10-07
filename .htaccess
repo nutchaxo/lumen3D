@@ -48,6 +48,17 @@
     # and the request 404s — this deployment REQUIRES mod_rewrite (as it already does
     # to get a CSP at all).
     RewriteRule ^DATA_WEB/catalog\.json$ api/catalog.php [L,QSA]
+    # Downloads are counted on the way in (twin of dev_server.py
+    # _maybe_count_download): a full GET of an existing file under a dataset's
+    # download/ folder goes through api/download.php, which counts it and answers a
+    # 302 to the same URL marked lumen_dl=1; that second request (and every HEAD or
+    # Range continuation) is served by Apache itself. [B] escapes the captured path
+    # so a file name holding & or % reaches the script intact.
+    RewriteCond %{REQUEST_METHOD} =GET
+    RewriteCond %{HTTP:Range} ^$
+    RewriteCond %{QUERY_STRING} !(^|&)lumen_dl=1(&|$)
+    RewriteCond %{REQUEST_FILENAME} -f
+    RewriteRule ^DATA_WEB/([^/]+)/([^/]+)/download/(.+)$ api/download.php?lumen_path=DATA_WEB/$1/$2/download/$3 [B,L,QSA]
 
     # Versioned URLs never change content, so they are cached without asking: a
     # script/style stamped ?v=<release> by tools/build_release.py, and a brick pack

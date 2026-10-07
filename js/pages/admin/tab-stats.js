@@ -15,9 +15,12 @@ let _sortKey = 'total';
 let _sortDir = -1;
 
 const METRICS = [
-  { key: 'visits',    icon: 'mouse-pointer-click', labelKey: 'admin.statVisits',    labelDef: 'Visites' },
-  { key: 'views',     icon: 'eye',                 labelKey: 'admin.statViews',     labelDef: 'Vues dataset' },
-  { key: 'downloads', icon: 'download',            labelKey: 'admin.statDownloads', labelDef: 'Téléchargements' },
+  { key: 'visits',    icon: 'mouse-pointer-click', labelKey: 'admin.statVisits',    labelDef: 'Visits',
+    hintKey: 'admin.statVisitsHint',    hintDef: 'One per browser tab, on any public page (admin panel and embedded pages excluded).' },
+  { key: 'views',     icon: 'eye',                 labelKey: 'admin.statViews',     labelDef: 'Dataset views',
+    hintKey: 'admin.statViewsHint',     hintDef: 'One per dataset opened in a browser tab.' },
+  { key: 'downloads', icon: 'download',            labelKey: 'admin.statDownloads', labelDef: 'Downloads',
+    hintKey: 'admin.statDownloadsHint', hintDef: 'One per complete download of a file from a dataset\'s download/ folder.' },
 ];
 
 function lastNDates(n) {
@@ -70,6 +73,7 @@ function render() {
           <span class="adm-stat-label">${escHtml(t(m.labelKey, m.labelDef))}</span>
         </div>
         <div class="adm-stat-value">${Number(g[m.key] || 0).toLocaleString()}</div>
+        <div class="adm-stat-hint">${escHtml(t(m.hintKey, m.hintDef))}</div>
         ${sparkline(series)}
       </div>`;
   }).join('');

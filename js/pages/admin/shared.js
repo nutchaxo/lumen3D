@@ -119,6 +119,23 @@ export function storageSet(key, value) {
 // Minimum length of an admin password, enforced here AND by the server.
 export const MIN_PASSWORD = 8;
 
+/**
+ * Text for a refused password attempt (login, or a password re-check): the
+ * servers answer a code, never a sentence. Null when `data` is not a refusal
+ * of that kind.
+ */
+export function throttleText(data) {
+  const code = data && data.error;
+  if (code === 'too_many_attempts') {
+    const s = Number(data.retryAfter);
+    return Number.isFinite(s) && s > 0
+      ? t('admin.tooManyAttemptsIn', 'Too many attempts. Try again in {min} min.', { min: Math.max(1, Math.ceil(s / 60)) })
+      : t('admin.tooManyAttempts', 'Too many attempts. Try again later.');
+  }
+  if (code === 'lockout_store_unavailable') return t('admin.lockoutStore', 'Sign-in is unavailable: the server cannot record attempts. Check the permissions of the api/ folder.');
+  return null;
+}
+
 // ── Toasts ─────────────────────────────────────────────────────
 let _toastContainer = null;
 export function toast(msg, type = 'success') {

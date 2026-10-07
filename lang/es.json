@@ -168,7 +168,11 @@
     "view": "Ver",
     "badgeLinked": "Vinculado",
     "badgeRaw": "Bruto",
-    "badgeWeb": "Web"
+    "badgeWeb": "Web",
+    "sortNameAsc": "Nombre (A-Z)",
+    "sortNameDesc": "Nombre (Z-A)",
+    "sortNewest": "Más recientes primero",
+    "sortStage": "Estadio (el más temprano)"
   },
   "viewer": {
     "controls": "Controles",
@@ -356,7 +360,15 @@
     "detailMode": "Detalle al ampliar",
     "detailAuto": "Automático",
     "detailOn": "Activado",
-    "detailOff": "Desactivado"
+    "detailOff": "Desactivado",
+    "openStudioHd": "Abrir en el Studio (HD)",
+    "openSliceStudio": "Abrir en el Studio de cortes",
+    "clearMeasures": "Borrar medidas",
+    "qLoadingSlices": "Cargando cortes {quality}...",
+    "qStreamingSlices": "Transmitiendo cortes {quality}...",
+    "qStreamingPreview": "Transmitiendo vista previa (LOD{lod}) antes de {quality}...",
+    "qStreamingPreviewBricks": "Transmitiendo vista previa (LOD{lod}, {count} bloques) antes de {quality}...",
+    "qStreamingBricks": "Transmitiendo bloques {quality} (LOD{lod}, {count} bloques)..."
   },
   "compare": {
     "title": "Modo de comparación",
@@ -706,7 +718,8 @@
     "nativeReadyMissing": "Corte nativo listo ({n} bloques; {missing} a la resolución anterior).",
     "uncalibrated": "sin calibrar",
     "bigPassMessagePlanes": "Esta figura proyecta {n} cortes: su imagen nativa lee {planes} planos almacenados, unos {mb} MB ({tiles} teselas de imagen).",
-    "bigPassMessageMips": "Esta figura proyecta {n} cortes: su imagen nativa lee {layers} proyecciones de capas almacenadas y {planes} planos almacenados, unos {mb} MB ({tiles} teselas de imagen)."
+    "bigPassMessageMips": "Esta figura proyecta {n} cortes: su imagen nativa lee {layers} proyecciones de capas almacenadas y {planes} planos almacenados, unos {mb} MB ({tiles} teselas de imagen).",
+    "noLayers": "Todavía no hay capas."
   },
   "admin": {
     "loginTitle": "{brand} Admin",
@@ -802,7 +815,7 @@
     "newPassword": "Nueva contraseña",
     "confirmPassword": "Confirmar contraseña",
     "createPassword": "Crear contraseña",
-    "setupWeak": "Contraseña demasiado corta (mínimo 4 caracteres).",
+    "setupWeak": "Contraseña demasiado corta (mínimo {n} caracteres).",
     "setupMismatch": "Las contraseñas no coinciden.",
     "creating": "Creando…",
     "setupDone": "Contraseña creada ✓",
@@ -1073,7 +1086,13 @@
     "navGroupData": "Datos",
     "navGroupSite": "Sitio público",
     "navGroupExtensions": "Extensiones",
-    "navGroupSystem": "Sistema"
+    "navGroupSystem": "Sistema",
+    "tooManyAttempts": "Demasiados intentos. Vuelva a intentarlo más tarde.",
+    "tooManyAttemptsIn": "Demasiados intentos. Vuelva a intentarlo en {min} min.",
+    "lockoutStore": "Inicio de sesión no disponible: el servidor no puede registrar los intentos. Compruebe los permisos de la carpeta api/.",
+    "statVisitsHint": "Una por pestaña del navegador, en cualquier página pública (excepto el panel de administración y las páginas integradas).",
+    "statViewsHint": "Una por dataset abierto en una pestaña del navegador.",
+    "statDownloadsHint": "Una por descarga completa de un archivo de la carpeta download/ de un dataset."
   },
   "upl": {
     "title": "Importar datasets",
@@ -1170,7 +1189,10 @@
     "rjDisk": "espacio en disco insuficiente en el servidor",
     "confirmOverwriteKeep": "Ya hay un dataset publicado con este nombre. ¿Reemplazarlo? Su galería y los campos que rellenó (nombre, orientación, leyendas…) se conservan si la nueva importación no los aporta.",
     "publishedKept": "Dataset publicado ✓ — conservado de la versión anterior: {kept}",
-    "keptGallery": "la galería"
+    "keptGallery": "la galería",
+    "errBadType": "Tipo de dataset desconocido: «{folder}» declara \"{declared}\" (se esperaba: {types}).",
+    "errNoType": "No se encontró el tipo de dataset de «{folder}»: su metadata.json debe declarar \"type\" ({types}), o la carpeta debe soltarse dentro de la carpeta de su tipo.",
+    "rjUnknownType": "tipo de dataset desconocido — metadata.json debe declarar \"type\" ({types})"
   },
   "appearance": {
     "title": "Apariencia",
@@ -1809,7 +1831,35 @@
     "lockedOther": "Abierta en otra pestaña, haga clic para tomar el control",
     "switchUnsaved": "No se pudieron guardar los últimos cambios de esta página. ¿Cambiar de página de todos modos?",
     "loadFailed": "Página ilegible, recargue antes de editar",
-    "takeoverConfirm": "Esta página está abierta en otra pestaña. Guardar aquí sobrescribirá sus cambios. ¿Continuar?"
+    "takeoverConfirm": "Esta página está abierta en otra pestaña. Guardar aquí sobrescribirá sus cambios. ¿Continuar?",
+    "unsaved": "Sin guardar",
+    "savedAt": "Guardado",
+    "undo": "Deshacer",
+    "redo": "Rehacer",
+    "dev": {
+      "desktop": "Escritorio",
+      "tablet": "Tableta",
+      "mobile": "Móvil"
+    },
+    "discardDraft": "Descartar borrador",
+    "discardDraftTitle": "Descartar los cambios no publicados",
+    "discardDraftConfirm": "¿Descartar los cambios no publicados y volver a la versión publicada?",
+    "draftDiscarded": "Cambios descartados.",
+    "revertTitle": "Restablecer la plantilla predeterminada",
+    "moveLeft": "Mover a la izquierda",
+    "moveRight": "Mover a la derecha",
+    "noWidgetMatch": "Ningún elemento coincide.",
+    "copied": "Elemento copiado.",
+    "media": {
+      "urlPh": "URL de la imagen",
+      "pick": "Elegir una imagen",
+      "upload": "Haga clic o suelte una imagen para subirla",
+      "uploadErr": "Error al subir.",
+      "loading": "Cargando…",
+      "empty": "Aún no se ha subido ninguna imagen.",
+      "listErr": "Biblioteca no disponible.",
+      "clear": "Quitar la imagen"
+    }
   },
   "wizard": {
     "title": "Instalación guiada",

@@ -11,7 +11,7 @@
 
 'use strict';
 
-import { API_ADMIN, t, escHtml, apiFetch, apiFetchStatus, toast, el, refreshIcons, askPassword } from './shared.js';
+import { API_ADMIN, t, escHtml, apiFetch, apiFetchStatus, toast, el, refreshIcons, askPassword, throttleText } from './shared.js';
 import { runPluginUpdates } from './plugin-update.js';
 
 let _data = { configured: false, signed: false, plugins: [] };
@@ -158,6 +158,7 @@ async function install(id) {
   else {
     const err = r.data?.error || 'error';
     if (err === 'catalog_rollback') { toast(catalogError(r.data), 'error'); return; }
+    if (throttleText(r.data)) { toast(throttleText(r.data), 'error'); return; }
     const map = { bad_password: t('mkt.badPassword', 'Mot de passe incorrect.'), already_installed: t('mkt.alreadyInstalled', 'Déjà installé.'), incompatible: t('mkt.incompatible', 'incompatible'), install_failed: t('mkt.installFailed', "Échec de l'installation (vérification échouée)."), catalog_fetch_failed: t('mkt.catalogFail', 'Catalogue inaccessible.') };
     toast(map[err] || (t('mkt.installFailed', "Échec de l'installation.") + ' (' + err + ')'), 'error');
   }

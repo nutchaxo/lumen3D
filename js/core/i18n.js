@@ -293,7 +293,7 @@ const I18n = (() => {
     _currentLang = lang;
     _translations = _loaded[lang] || _loaded[_fallbackLang] || {};
     _applyDocumentLang();
-    _applyTranslations();
+    _applyTranslations(document);
 
     // A language picked in another document of this origin (the Compare page over
     // its panels, a split-view host over its pane) reaches this one as a `storage`
@@ -329,7 +329,7 @@ const I18n = (() => {
     _tokenCache = null;
     _translations = _loaded[lang] || _loaded[_fallbackLang] || {};
     _applyDocumentLang();
-    _applyTranslations();
+    _applyTranslations(document);
     _storageSet('iribhm-lang', lang);
     _notify();
   }
@@ -453,10 +453,14 @@ const I18n = (() => {
   // ─── DOM application ──────────────────────────────────────
 
   /**
-   * Apply translations to all elements with data-i18n attribute
+   * Apply translations to all elements with data-i18n attribute, in the whole
+   * document or only under `root` (a panel rebuilt after the page was
+   * translated — its markup carries the keys but still holds the English
+   * fallback text until someone translates it).
    */
-  function _applyTranslations() {
-    document.querySelectorAll('[data-i18n]').forEach(el => {
+  function _applyTranslations(root) {
+    const scope = (root && typeof root.querySelectorAll === 'function') ? root : document;
+    scope.querySelectorAll('[data-i18n]').forEach(el => {
       const key = el.getAttribute('data-i18n');
       const translated = t(key);
       if (translated !== key) {
@@ -465,7 +469,7 @@ const I18n = (() => {
     });
 
     // Handle placeholders
-    document.querySelectorAll('[data-i18n-placeholder]').forEach(el => {
+    scope.querySelectorAll('[data-i18n-placeholder]').forEach(el => {
       const key = el.getAttribute('data-i18n-placeholder');
       const translated = t(key);
       if (translated !== key) {
@@ -474,7 +478,7 @@ const I18n = (() => {
     });
 
     // Handle titles/tooltips
-    document.querySelectorAll('[data-i18n-title]').forEach(el => {
+    scope.querySelectorAll('[data-i18n-title]').forEach(el => {
       const key = el.getAttribute('data-i18n-title');
       const translated = t(key);
       if (translated !== key) {
@@ -483,7 +487,7 @@ const I18n = (() => {
     });
 
     // Handle aria-labels
-    document.querySelectorAll('[data-i18n-aria]').forEach(el => {
+    scope.querySelectorAll('[data-i18n-aria]').forEach(el => {
       const key = el.getAttribute('data-i18n-aria');
       const translated = t(key);
       if (translated !== key) {
@@ -492,7 +496,7 @@ const I18n = (() => {
     });
 
     // Handle innerHTML targets (text containing markup, used sparingly)
-    document.querySelectorAll('[data-i18n-html]').forEach(el => {
+    scope.querySelectorAll('[data-i18n-html]').forEach(el => {
       const key = el.getAttribute('data-i18n-html');
       const translated = t(key);
       if (translated !== key) {
@@ -505,7 +509,7 @@ const I18n = (() => {
     // translated default, and a per-locale custom name). Refresh them here so a
     // language switch never leaves a stale type name behind.
     try {
-      if (typeof Utils !== 'undefined' && Utils.applyDatasetTypeLabels) Utils.applyDatasetTypeLabels(document);
+      if (typeof Utils !== 'undefined' && Utils.applyDatasetTypeLabels) Utils.applyDatasetTypeLabels(scope);
     } catch (_) { /* type labels are cosmetic: never break the translation pass */ }
   }
 

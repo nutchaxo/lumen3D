@@ -11,6 +11,7 @@
 import {
   I18n, Utils, API_AUTH, API_SITE, API_ADMIN, t, escHtml, apiFetch, apiFetchStatus, setCsrf,
   setUnauthorizedHandler, toast, refreshIcons, el, storageGet, storageSet, MIN_PASSWORD,
+  throttleText,
 } from './shared.js';
 import { isDirty, discardDirty, setNavigator } from './bus.js';
 import * as UploadDock from './upload-dock.js';
@@ -272,7 +273,7 @@ async function doLogin() {
     setCsrf(data.csrf || null);
     enterApp(username);
   } else {
-    el('login-error-msg').textContent = data?.error || t('admin.badCreds', 'Identifiants incorrects.');
+    el('login-error-msg').textContent = throttleText(data) || t('admin.badCreds', 'Identifiants incorrects.');
     err.style.display = 'flex';
     el('login-password').value = '';
     el('login-password').focus();

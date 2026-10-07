@@ -44,5 +44,22 @@
   function renderIcons() { if (window.lucide && lucide.createIcons) lucide.createIcons(); }
   window.addEventListener('load', renderIcons);
 
+  // Usage telemetry: one site visit per browser tab, whichever public page the
+  // visitor lands on first (sessionStorage is per tab). Not counted: the admin
+  // panel, and any page embedded in another (a Compare panel, the admin preview,
+  // the page editor's frame) — its host page already counted the visit.
+  function countVisit() {
+    try {
+      if (window.top !== window.self) return;
+      const page = document.body && document.body.getAttribute('data-page');
+      if (page === 'admin') return;
+      if (sessionStorage.getItem('lumen_visit')) return;
+      sessionStorage.setItem('lumen_visit', '1');
+      if (navigator.sendBeacon) navigator.sendBeacon('api/telemetry.php?action=visit');
+    } catch (_) { /* private mode, a cross-origin top, no beacon: not counted */ }
+  }
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', countVisit);
+  else countVisit();
+
   window.UIActions = { renderIcons };
 })();

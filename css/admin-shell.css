@@ -242,6 +242,7 @@ body.adm-editor-only .adm-tab-inner { max-width: none; padding: 0; }
 .adm-stat-ic i { width: 16px; height: 16px; }
 .adm-stat-label { font-size: 12.5px; color: var(--adm-text-sec); font-weight: 500; }
 .adm-stat-value { font-size: 30px; font-weight: 700; margin-top: 10px; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
+.adm-stat-hint { font-size: 11.5px; color: var(--text-muted); margin-top: 2px; line-height: 1.35; }
 .adm-spark { width: 100%; height: 48px; display: block; margin-top: 8px; }
 .adm-spark-area { fill: var(--adm-accent); opacity: 0.13; }
 .adm-spark-line { fill: none; stroke: var(--adm-accent); stroke-width: 2; vector-effect: non-scaling-stroke; stroke-linejoin: round; stroke-linecap: round; }

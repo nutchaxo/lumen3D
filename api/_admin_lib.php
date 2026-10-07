@@ -735,7 +735,7 @@ function admin_bf_gate(): void {
     if ($ok) return;
     header('Retry-After: ' . max(1, $retry));
     if ($reason === 'store_unavailable') admin_json_out(['error' => 'lockout_store_unavailable'], 503);
-    admin_json_out(['error' => 'Trop de tentatives. Réessayez plus tard.', 'retryAfter' => $retry], 429);
+    admin_json_out(['error' => 'too_many_attempts', 'retryAfter' => $retry], 429);
 }
 
 /** Password re-authentication for a privileged admin action, throttled like a login. */
@@ -1527,6 +1527,33 @@ function admin_record_event(string $kind, ?string $datasetId = null): void {
         }
         admin_write_stats($d);
     });
+}
+
+/**
+ * Count a download of DATA_WEB/<type>/<folder>/download/<file> (twin of
+ * dev_server.py _maybe_count_download). Counted: a full GET of a file that exists,
+ * inside the download/ folder of a dataset that exists. Not counted: a HEAD, a
+ * Range continuation (one download = one increment), anything else. Returns the
+ * dataset id counted, null when nothing was. Called by api/download.php (Apache,
+ * reached through the root .htaccess) and router.php (php -S).
+ */
+function lumen_count_download(string $rel, string $method, bool $hasRange): ?string {
+    if (strtoupper($method) !== 'GET' || $hasRange) return null;
+    $rel = ltrim(str_replace('\\', '/', $rel), '/');
+    if (!preg_match('#^DATA_WEB/([^/]+)/([^/]+)/download/(.+)$#iD', $rel, $m)) return null;
+    foreach (explode('/', $m[3]) as $seg) {
+        if ($seg === '' || $seg === '.' || $seg === '..') return null;
+    }
+    // The type directory may be spelt in any case on a case-insensitive filesystem;
+    // the stats key may not (same key as the telemetry beacon and the Python twin).
+    $safe = admin_safe_dataset(strtolower($m[1]) . '/' . $m[2]);
+    if ($safe === null || !is_dir($safe[2])) return null;
+    $root = realpath($safe[2] . '/download');
+    $file = $root !== false ? realpath($root . '/' . $m[3]) : false;
+    if ($root === false || $file === false || strpos($file, $root . DIRECTORY_SEPARATOR) !== 0 || !is_file($file)) return null;
+    $id = $safe[0] . '/' . $safe[1];
+    try { admin_record_event('download', $id); } catch (\Throwable $e) { return null; }
+    return $id;
 }
 
 // ── Plugins ─────────────────────────────────────────────────────────────────

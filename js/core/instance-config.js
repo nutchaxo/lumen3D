@@ -189,8 +189,10 @@ const InstanceConfig = (() => {
   function applyDom(root) {
     root = root || document;
     root.querySelectorAll('[data-instance]').forEach(el => {
+      // A localizable field (footer.copyright, …) is a string or a {en,fr,…} object.
       const v = get(el.getAttribute('data-instance'));
       if (typeof v === 'string') el.textContent = v;
+      else if (v && typeof v === 'object' && !Array.isArray(v)) el.textContent = _localized(v);
     });
     // "attr:path; attr2:path2" — set each attribute to the resolved value.
     root.querySelectorAll('[data-instance-attr]').forEach(el => {
@@ -206,6 +208,7 @@ const InstanceConfig = (() => {
       });
     });
     try { applyNav(root); } catch (_) {}
+    try { _applyOrgLink(root); } catch (_) {}
     // The operator's own type names live in this config, so a reload of it (the
     // admin preview, a save) must refresh them too — the other trigger is the
     // language switch, handled by I18n's translation pass.
@@ -252,8 +255,20 @@ const InstanceConfig = (() => {
     // (tagged links are cleared and re-appended, e.g. after a language switch).
     let legalLabel = 'Legal';
     try { if (typeof I18n !== 'undefined' && I18n.t) { const v = I18n.t('legal.pageTitle'); if (v && v !== 'legal.pageTitle') legalLabel = v; } } catch (_) {}
+    const footerLinks = (Array.isArray(get('footer.links')) ? get('footer.links') : [])
+      .map(lk => ({ label: _localized(lk && lk.label), href: _safeHref(lk && lk.url) }))
+      .filter(lk => lk.href);
     root.querySelectorAll('.footer-links').forEach(fl => {
-      fl.querySelectorAll('[data-instance-legal]').forEach(e => e.remove());
+      fl.querySelectorAll('[data-instance-legal],[data-instance-footlink]').forEach(e => e.remove());
+      // The operator's own footer links (Identity tab), then Legal.
+      footerLinks.forEach(lk => {
+        const a = document.createElement('a');
+        a.setAttribute('data-instance-footlink', '');
+        a.href = lk.href;
+        a.textContent = lk.label || lk.href.replace(/^(https?:\/\/|mailto:)/i, '');
+        if (/^https?:/i.test(lk.href)) { a.target = '_blank'; a.rel = 'noopener noreferrer'; }
+        fl.appendChild(a);
+      });
       if (nav.showLegal) {
         const a = document.createElement('a');
         a.setAttribute('data-instance-legal', '');
@@ -261,6 +276,53 @@ const InstanceConfig = (() => {
         a.textContent = legalLabel;
         fl.appendChild(a);
       }
+    });
+  }
+
+  /**
+   * A link the operator typed, or null when it is not safe to put in an href:
+   * http(s):, mailto: and same-site relative paths only (no javascript:, data:,
+   * protocol-relative //host or any other scheme).
+   */
+  function _safeHref(url) {
+    const u = typeof url === 'string' ? url.trim() : '';
+    if (!u || u.startsWith('//')) return null;
+    if (/^(https?:\/\/|mailto:)/i.test(u)) return u;
+    if (/^[a-z][a-z0-9+.-]*:/i.test(u)) return null;
+    return u;
+  }
+
+  /**
+   * The organization in the footer: after the copyright, its name (or the host of
+   * org.url) linked to org.url. Nothing when org.url is empty.
+   */
+  function _applyOrgLink(root) {
+    const href = _safeHref(get('org.url'));
+    root.querySelectorAll('.footer-brand').forEach(fb => {
+      fb.querySelectorAll('[data-instance-org]').forEach(e => e.remove());
+      if (!href) return;
+      const t = tokens();
+      let name = t.org || t.orgShort;
+      if (!name) { try { name = new URL(href, location.href).host || href; } catch (_) { name = href; } }
+      const a = document.createElement('a');
+      a.setAttribute('data-instance-org', '');
+      a.href = href;
+      a.textContent = name;
+      if (/^https?:/i.test(href)) { a.target = '_blank'; a.rel = 'noopener noreferrer'; }
+      // A copyright that already names the organization gets that name linked in
+      // place ("© 2026 <a>Org</a>") instead of the name twice.
+      const text = fb.childNodes.length === 1 && fb.firstChild.nodeType === 3 ? fb.firstChild : null;
+      const at = text ? text.data.indexOf(name) : -1;
+      if (at >= 0) {
+        const rest = text.splitText(at);
+        rest.data = rest.data.slice(name.length);
+        fb.insertBefore(a, rest);
+        return;
+      }
+      const sep = document.createElement('span');
+      sep.setAttribute('data-instance-org', '');
+      sep.textContent = ' · ';
+      fb.append(sep, a);
     });
   }
 

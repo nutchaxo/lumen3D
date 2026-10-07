@@ -168,7 +168,11 @@
     "view": "Bekijken",
     "badgeLinked": "Gekoppeld",
     "badgeRaw": "Ruw",
-    "badgeWeb": "Web"
+    "badgeWeb": "Web",
+    "sortNameAsc": "Naam (A-Z)",
+    "sortNameDesc": "Naam (Z-A)",
+    "sortNewest": "Nieuwste eerst",
+    "sortStage": "Stadium (vroegste eerst)"
   },
   "viewer": {
     "controls": "Bediening",
@@ -356,7 +360,15 @@
     "detailMode": "Detail bij inzoomen",
     "detailAuto": "Automatisch",
     "detailOn": "Aan",
-    "detailOff": "Uit"
+    "detailOff": "Uit",
+    "openStudioHd": "Openen in Studio (HD)",
+    "openSliceStudio": "Openen in Slice Studio",
+    "clearMeasures": "Metingen wissen",
+    "qLoadingSlices": "{quality}-coupes laden...",
+    "qStreamingSlices": "{quality}-coupes streamen...",
+    "qStreamingPreview": "Voorbeeld streamen (LOD{lod}) vóór {quality}...",
+    "qStreamingPreviewBricks": "Voorbeeld streamen (LOD{lod}, {count} blokken) vóór {quality}...",
+    "qStreamingBricks": "{quality}-blokken streamen (LOD{lod}, {count} blokken)..."
   },
   "compare": {
     "title": "Vergelijkingsmodus",
@@ -706,7 +718,8 @@
     "nativeReadyMissing": "Originele doorsnede klaar ({n} blokken; {missing} op de vorige resolutie).",
     "uncalibrated": "niet gekalibreerd",
     "bigPassMessagePlanes": "Deze figuur projecteert {n} coupes: het native beeld leest {planes} opgeslagen vlakken, ongeveer {mb} MB ({tiles} beeldtegels).",
-    "bigPassMessageMips": "Deze figuur projecteert {n} coupes: het native beeld leest {layers} opgeslagen laagprojecties en {planes} opgeslagen vlakken, ongeveer {mb} MB ({tiles} beeldtegels)."
+    "bigPassMessageMips": "Deze figuur projecteert {n} coupes: het native beeld leest {layers} opgeslagen laagprojecties en {planes} opgeslagen vlakken, ongeveer {mb} MB ({tiles} beeldtegels).",
+    "noLayers": "Nog geen lagen."
   },
   "admin": {
     "loginTitle": "{brand} Beheer",
@@ -802,7 +815,7 @@
     "newPassword": "Nieuw wachtwoord",
     "confirmPassword": "Wachtwoord bevestigen",
     "createPassword": "Wachtwoord aanmaken",
-    "setupWeak": "Wachtwoord te kort (minimaal 4 tekens).",
+    "setupWeak": "Wachtwoord te kort (minimaal {n} tekens).",
     "setupMismatch": "De wachtwoorden komen niet overeen.",
     "creating": "Aanmaken…",
     "setupDone": "Wachtwoord aangemaakt ✓",
@@ -1073,7 +1086,13 @@
     "navGroupData": "Gegevens",
     "navGroupSite": "Publieke site",
     "navGroupExtensions": "Extensies",
-    "navGroupSystem": "Systeem"
+    "navGroupSystem": "Systeem",
+    "tooManyAttempts": "Te veel pogingen. Probeer het later opnieuw.",
+    "tooManyAttemptsIn": "Te veel pogingen. Probeer het over {min} min opnieuw.",
+    "lockoutStore": "Aanmelden is niet beschikbaar: de server kan de pogingen niet registreren. Controleer de rechten van de map api/.",
+    "statVisitsHint": "Eén per browsertabblad, op elke openbare pagina (beheerpaneel en ingesloten pagina's niet meegeteld).",
+    "statViewsHint": "Eén per dataset die in een browsertabblad wordt geopend.",
+    "statDownloadsHint": "Eén per volledige download van een bestand uit de map download/ van een dataset."
   },
   "upl": {
     "title": "Datasets importeren",
@@ -1170,7 +1189,10 @@
     "rjDisk": "onvoldoende schijfruimte op de server",
     "confirmOverwriteKeep": "Er bestaat al een gepubliceerde dataset met deze naam. Vervangen? De afbeeldingengalerij en de velden die u invulde (naam, oriëntatie, bijschriften…) blijven behouden als de nieuwe import ze niet levert.",
     "publishedKept": "Dataset gepubliceerd ✓ — behouden uit de vorige versie: {kept}",
-    "keptGallery": "de galerij"
+    "keptGallery": "de galerij",
+    "errBadType": "Onbekend datasettype: ‘{folder}’ declareert \"{declared}\" (verwacht: {types}).",
+    "errNoType": "Datasettype niet gevonden voor ‘{folder}’: de metadata.json moet \"type\" declareren ({types}), of de map moet in de map van het type worden neergezet.",
+    "rjUnknownType": "onbekend datasettype — metadata.json moet \"type\" declareren ({types})"
   },
   "appearance": {
     "title": "Vormgeving",
@@ -1809,7 +1831,35 @@
     "lockedOther": "Open in een ander tabblad, klik om over te nemen",
     "switchUnsaved": "De laatste wijzigingen aan deze pagina konden niet worden opgeslagen. Toch van pagina wisselen?",
     "loadFailed": "Pagina onleesbaar, herlaad voor het bewerken",
-    "takeoverConfirm": "Deze pagina is open in een ander tabblad. Hier opslaan overschrijft de wijzigingen daar. Doorgaan?"
+    "takeoverConfirm": "Deze pagina is open in een ander tabblad. Hier opslaan overschrijft de wijzigingen daar. Doorgaan?",
+    "unsaved": "Niet opgeslagen",
+    "savedAt": "Opgeslagen",
+    "undo": "Ongedaan maken",
+    "redo": "Opnieuw",
+    "dev": {
+      "desktop": "Desktop",
+      "tablet": "Tablet",
+      "mobile": "Mobiel"
+    },
+    "discardDraft": "Concept verwerpen",
+    "discardDraftTitle": "De niet-gepubliceerde wijzigingen verwerpen",
+    "discardDraftConfirm": "De niet-gepubliceerde wijzigingen verwerpen en terugkeren naar de gepubliceerde versie?",
+    "draftDiscarded": "Wijzigingen verworpen.",
+    "revertTitle": "Terugzetten naar de standaardsjabloon",
+    "moveLeft": "Naar links",
+    "moveRight": "Naar rechts",
+    "noWidgetMatch": "Geen overeenkomend element.",
+    "copied": "Element gekopieerd.",
+    "media": {
+      "urlPh": "Afbeeldings-URL",
+      "pick": "Een afbeelding kiezen",
+      "upload": "Klik of sleep een afbeelding om te uploaden",
+      "uploadErr": "Uploaden mislukt.",
+      "loading": "Laden…",
+      "empty": "Nog geen afbeelding geüpload.",
+      "listErr": "Mediabibliotheek niet beschikbaar.",
+      "clear": "Afbeelding verwijderen"
+    }
   },
   "wizard": {
     "title": "Begeleide installatie",

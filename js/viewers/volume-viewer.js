@@ -2249,7 +2249,7 @@ const VolumeViewer = (() => {
     job.loadId = loadId;
     _resetThrottledProgress();
     const quality = _normalizeQualityKey(options.quality || '1024x1024');
-    _emitQualityState({ active: quality, mode: 'slice', progress: 0, message: `Loading ${quality} slices...` });
+    _emitQualityState({ active: quality, mode: 'slice', progress: 0, streaming: true, message: _t('viewer.qLoadingSlices', 'Loading {quality} slices...', { quality }) });
     const qualityInfo = _resolveQuality(metadata, quality);
     const { x: sourceWidth, y: sourceHeight, z: sourceDepth, c: channels } = metadata.dimensions;
     // EDGE-027 (Rule 1.4): reject malformed dimensions before any buffer allocation.
@@ -2372,7 +2372,7 @@ const VolumeViewer = (() => {
       return { stale: true };
     }
     _activateVolumeEntry(entry, metadata, sourceDepth, sourceWidth, channels, { ...options, fitCamera: !_hasLoadedVolume });
-    _emitQualityState({ active: quality, mode: 'slice', progress: 0, message: `Streaming ${quality} slices...` });
+    _emitQualityState({ active: quality, mode: 'slice', progress: 0, streaming: true, message: _t('viewer.qStreamingSlices', 'Streaming {quality} slices...', { quality }) });
 
     let completed = 0;
     let successfulLoads = 0;
@@ -5292,6 +5292,9 @@ const VolumeViewer = (() => {
   function onContextRestored(callback) { _onContextRestored = (typeof callback === 'function') ? callback : null; }
 
   function _emitQualityState(patch = {}) {
+    // `streaming` tells the page a load is under way (the progress line shows);
+    // any other new message (ready, cancelled, an error) ends it.
+    if (patch.message !== undefined && patch.streaming === undefined) patch = { ...patch, streaming: false };
     _qualityState = { ..._qualityState, ...patch };
     _qualityListeners.forEach(callback => callback({ ..._qualityState }));
   }
@@ -6413,7 +6416,7 @@ const VolumeViewer = (() => {
       let previewLod = null;
       if (options.coarseFirst && !preload && !isPreview && !deferActivation && levelCount > 1 && requestedLod < levelCount - 1) {
         const coarse = levelCount - 1;
-        emitState({ target: _qualityTarget, active: quality, mode: 'bricks', progress: 0, message: `Streaming preview (LOD${coarse}) before ${quality}...` });
+        emitState({ target: _qualityTarget, active: quality, mode: 'bricks', progress: 0, streaming: true, message: _t('viewer.qStreamingPreview', 'Streaming preview (LOD{lod}) before {quality}...', { lod: coarse, quality }) });
         const preview = await loadBrickedVolumeStream(basePath, metadata, timepoint, null, {
           ...options,
           quality: `lod${coarse}`,
@@ -6616,9 +6619,10 @@ const VolumeViewer = (() => {
         active: shownQuality,
         mode: 'bricks',
         progress: 0,
+        streaming: true,
         message: isPreview
-          ? `Streaming preview (LOD${lod}, ${totalBricks} bricks) before ${shownQuality}...`
-          : `Streaming ${quality} bricks (LOD${lod}, ${totalBricks} bricks)...`
+          ? _t('viewer.qStreamingPreviewBricks', 'Streaming preview (LOD{lod}, {count} bricks) before {quality}...', { lod, count: totalBricks, quality: shownQuality })
+          : _t('viewer.qStreamingBricks', 'Streaming {quality} bricks (LOD{lod}, {count} bricks)...', { lod, count: totalBricks, quality })
       });
       _resetThrottledProgress();
       if (onProgress) onProgress(0, quality);

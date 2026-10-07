@@ -256,12 +256,25 @@ const App2D = (() => {
   }
 
   // ── Dataset switching ──────────────────────────────────────────────────────
+  /** Usage telemetry, as in viewer.js: one view per photograph per browser tab,
+   *  never for an admin preview (editing a dataset must not inflate its count). */
+  function _countView(meta) {
+    if (_isAdmin || !meta || typeof meta.path !== 'string' || meta.path.startsWith('staging:')) return;
+    try {
+      const key = `lumen_view_${meta.path}`;
+      if (sessionStorage.getItem(key)) return;
+      sessionStorage.setItem(key, '1');
+      if (navigator.sendBeacon) navigator.sendBeacon(`api/telemetry.php?action=view&id=${encodeURIComponent(meta.path)}`);
+    } catch (_) { /* private mode / no beacon: not counted */ }
+  }
+
   /** @returns {Promise<void>} resolves when the native photograph is on screen (never rejects) */
   function _openDataset(meta, opts = {}) {
     _meta = meta;
     _id = meta.id;
     _basePath = _datasetBase(meta.path);
     if (!_isAdmin && _panelIndex === null) _syncUrl(opts.history);
+    _countView(meta);
     _renderHeader();
     _renderInfo();
     _renderGallery();

@@ -75,6 +75,14 @@ if ($path === '/' || substr($path, -5) === '.html') {
     return true;
 }
 
+// Count a download, then let php -S serve the file itself (twin of dev_server.py
+// _maybe_count_download; on Apache the root .htaccess routes through
+// api/download.php instead). A HEAD or a Range continuation is not a download.
+if (preg_match('#^/DATA_WEB/[^/]+/[^/]+/download/.+#', $path) && is_file(__DIR__ . $path)) {
+    require_once __DIR__ . '/api/_admin_lib.php';
+    lumen_count_download(substr($path, 1), (string)($_SERVER['REQUEST_METHOD'] ?? 'GET'), isset($_SERVER['HTTP_RANGE']));
+}
+
 // No directory listings (php -S has none, but say so for every host shape).
 if (substr($path, -1) === '/' && is_dir(__DIR__ . $path)) {
     http_response_code(404);

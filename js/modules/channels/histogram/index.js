@@ -40,7 +40,7 @@ PluginRegistry.implement('histogram', {
           <button class="btn btn-outline btn-sm" type="button" data-channel-action="preset-contrast" data-channel-idx="${channel.idx}" data-i18n="js.contrast">Contrast</button>
           <button class="btn btn-outline btn-sm" type="button" data-channel-action="reset" data-channel-idx="${channel.idx}" data-i18n="js.reset">Reset</button>
         </div>
-        <label class="flex items-center gap-2 text-xs text-muted cursor-pointer" title="Filtre passe-haut pour écraser le fond noir" data-i18n-title="js.highPass">
+        <label class="flex items-center gap-2 text-xs text-muted cursor-pointer" title="High-pass filter to crush black background" data-i18n-title="js.highPass">
           <input type="checkbox" id="ch-filter-${channel.idx}" data-channel-action="toggle-filter" data-channel-idx="${channel.idx}" ${channel.filterBackground ? 'checked' : ''}>
           <span data-i18n="plugins.histogram.ignoreLow">${t('ignoreLow', 'Ignore low')}</span>
         </label>

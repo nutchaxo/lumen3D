@@ -5175,7 +5175,7 @@ const ViewerApp = (() => {
     const progress = Math.max(0, Math.min(1, Number(state?.progress) || 0));
     const active = state?.active || state?.target || '';
     const message = String(state?.message || '');
-    const loading = progress < 1 && /(loading|streaming|fetching)/i.test(message);
+    const loading = progress < 1 && state?.streaming === true;
     panel.classList.toggle('hidden', !loading);
     fill.style.width = `${Math.round(progress * 100)}%`;
     text.textContent = `${_qualityLabel(active)} ${Math.round(progress * 100)}%${message ? ` · ${message}` : ''}`;

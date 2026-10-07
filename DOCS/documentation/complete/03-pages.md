@@ -78,26 +78,19 @@ C'est le cœur de la plateforme. Ouvrez un jeu 3D : le volume apparaît d'abord 
 | 7 | Quatre boutons sur le volume : centrer l'échantillon, réinitialiser la vue, exporter la vue en PNG, réinitialiser l'espace de travail. |
 :::
 
-### Bouger dans le volume
-
-| Geste | Effet |
-|---|---|
-| Glisser (bouton gauche) | faire tourner le volume |
-| <kbd>Maj</kbd> + glisser, ou bouton droit / milieu | déplacer |
-| Molette | zoomer |
-| Deux doigts (écran tactile) | déplacer et pincer pour zoomer |
+**Bouger** : glisser = tourner ; <kbd>Maj</kbd> + glisser (ou bouton droit) = déplacer ; molette = zoomer ; deux doigts = déplacer et pincer.
 
 Sous les canaux, le panneau [Affichage]{.ui} règle le [Mode de rendu]{.ui} (par défaut « Fluorescence »), la [Visibilité (exposition)]{.ui} et l'[Arrière-plan]{.ui}. Plus bas, [Détail au zoom]{.ui} charge des briques plus fines quand vous zoomez, et [Échelle Physique]{.ui} étire l'affichage en Z.
 
-::: remember
-Les boutons de la barre dépendent des **plugins installés** sur votre instance : une autre installation peut en avoir plus, ou moins. Chapitre 12 : chaque outil, un par un. Chapitre 11 : couleurs et histogrammes.
+::: note
+Les boutons dépendent des **plugins installés** sur votre instance. Chapitre 12 : chaque outil ; chapitre 11 : couleurs et histogrammes.
 :::
 
-::: example
-**Partager exactement ce que vous voyez.** Après quelques secondes, l'adresse du navigateur change et se termine par `#state=…`. Elle contient la caméra, les canaux, l'outil actif et vos mesures. Copiez-la : la personne qui l'ouvre se voit proposer [Ouvrir la vue enregistrée]{.ui}.
+::: tip
+**Partager votre vue.** L'adresse du navigateur se termine bientôt par `#state=…` : elle contient caméra, canaux, outil actif et mesures. Copiez-la, la personne qui l'ouvre peut [Ouvrir la vue enregistrée]{.ui}.
 :::
 
-## 3.5 Le viewer Live : la ligne de temps {.page}
+## 3.5 Le viewer Live : la ligne de temps
 
 Un jeu Live s'ouvre dans la même page. Deux choses s'ajoutent : la **ligne de temps** en bas, et, s'il a été suivi, la couche [Points de suivi]{.ui} dans le panneau des canaux.
 
@@ -155,16 +148,13 @@ Jusqu'à **quatre panneaux** côte à côte. Chaque panneau est un **vrai viewer
 | 7 | Le nom du jeu du panneau. |
 :::
 
-::: example
-**Deux embryons, une seule caméra.** Avec [Caméra / vue]{.ui} coché, tourner un embryon fait tourner les autres. Même si deux jeux ont été calibrés différemment, ils restent alignés sur l'anatomie. Pour des time-lapses de longueurs différentes, c'est la **fraction** du temps écoulé qui est synchronisée (le milieu d'un film de 100 images correspond au milieu d'un film de 10).
-:::
-
+- **Caméra / vue** coché : tourner un embryon fait tourner les autres, même calibrés différemment. Pour des time-lapses de longueurs différentes, on synchronise la **fraction** du temps écoulé.
 - **Qualité auto** : les panneaux s'ouvrent à 512, puis montent un par un (jusqu'à 1024 pour deux volumes, 512 au-delà) pour tenir dans une mémoire graphique commune.
 - Un seul volume à plusieurs canaux ? Le bouton [Décomposer]{.ui} le clone en un panneau par canal.
 - L'adresse de la page (`#state=…`) retient les panneaux et leur disposition : copiez-la pour partager la comparaison.
 
 
-## 3.8 À propos et Mentions légales {.page}
+## 3.8 À propos et Mentions légales
 
 **À propos** présente le projet. Son contenu par défaut est une page modifiable par l'administrateur (éditeur de pages, chapitre 13). **Mentions légales** affiche le texte juridique saisi dans l'onglet [Mentions légales]{.ui} ; le lien du pied de page n'apparaît que s'il est activé.
 

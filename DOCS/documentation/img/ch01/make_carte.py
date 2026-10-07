@@ -66,7 +66,7 @@ TX = {
                 "How do the tools work under the hood?"]),
             ("Administer", "and extend, chapters 14 to 18", "violet", [
                 "What can the administrator do? (overview)",
-                "Plugins: installation, trust, signed catalog",
+                "Plugins: installation, trust, signed catalogue",
                 "Change the name, colours, languages, pages",
                 "Files, formats, conversions and import in depth",
                 "Host, update, publish a release"]),

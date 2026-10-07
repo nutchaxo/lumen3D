@@ -31,7 +31,7 @@
 <text x="109" y="508.0" text-anchor="middle" font-size="14" font-weight="800" fill="#7048e8">Administer</text>
 <text x="109" y="526.0" text-anchor="middle" font-size="11" fill="#4a5468">and extend, chapters 14 to 18</text>
 <text x="208" y="466" font-size="12.5" fill="#1c2333"><tspan font-weight="800" fill="#7048e8">14</tspan><tspan dx="8">What can the administrator do? (overview)</tspan></text>
-<text x="208" y="490" font-size="12.5" fill="#1c2333"><tspan font-weight="800" fill="#7048e8">15</tspan><tspan dx="8">Plugins: installation, trust, signed catalog</tspan></text>
+<text x="208" y="490" font-size="12.5" fill="#1c2333"><tspan font-weight="800" fill="#7048e8">15</tspan><tspan dx="8">Plugins: installation, trust, signed catalogue</tspan></text>
 <text x="208" y="514" font-size="12.5" fill="#1c2333"><tspan font-weight="800" fill="#7048e8">16</tspan><tspan dx="8">Change the name, colours, languages, pages</tspan></text>
 <text x="208" y="538" font-size="12.5" fill="#1c2333"><tspan font-weight="800" fill="#7048e8">17</tspan><tspan dx="8">Files, formats, conversions and import in depth</tspan></text>
 <text x="208" y="562" font-size="12.5" fill="#1c2333"><tspan font-weight="800" fill="#7048e8">18</tspan><tspan dx="8">Host, update, publish a release</tspan></text>

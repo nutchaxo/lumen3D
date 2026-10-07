@@ -1,0 +1,78 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 540" font-family="Inter, sans-serif">
+  <defs><marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#4a5468"/></marker>
+  <marker id="r" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#c92a2a"/></marker></defs>
+  <rect width="800" height="540" rx="16" fill="#f8f9fd"/>
+  <text x="400" y="32" text-anchor="middle" font-size="18" font-weight="800" fill="#1c2333">Le lancer de rayons : un rayon par pixel</text>
+  <!-- eye -->
+  <text x="40" y="226" text-anchor="middle" font-size="40">👁️</text>
+  <text x="40" y="262" text-anchor="middle" font-size="12.5" font-weight="700" fill="#1c2333">l'œil</text>
+  <text x="40" y="278" text-anchor="middle" font-size="12.5" fill="#4a5468">(la caméra)</text>
+  <!-- screen -->
+  <rect x="164" y="130" width="12" height="240" rx="3" fill="#e8edff" stroke="#3b5bdb" stroke-width="1.5"/>
+  <rect x="162" y="244" width="16" height="12" fill="#c92a2a"/>
+  <text x="170" y="118" text-anchor="middle" font-size="13" font-weight="700" fill="#3b5bdb">l'écran</text>
+  <text x="170" y="388" text-anchor="middle" font-size="12.5" fill="#4a5468">un pixel = un rayon</text>
+  <!-- cube -->
+  <rect x="300" y="150" width="320" height="210" rx="6" fill="#fff" stroke="#1c2333" stroke-width="2"/>
+  <text x="460" y="142" text-anchor="middle" font-size="13" font-weight="700" fill="#1c2333">le cube (le volume)</text>
+  <ellipse cx="465" cy="300" rx="52" ry="26" fill="#f3f0ff" stroke="#7048e8" stroke-dasharray="4 3"/>
+  <text x="465" y="338" text-anchor="middle" font-size="12" fill="#7048e8" font-weight="700">une structure marquée</text>
+  <!-- ray -->
+  <line x1="62" y1="231" x2="300" y2="273.6" stroke="#c92a2a" stroke-width="2" stroke-dasharray="5 4"/>
+  <line x1="300" y1="273.6" x2="620" y2="331.8" stroke="#c92a2a" stroke-width="2.4"/>
+  <line x1="620" y1="331.8" x2="690" y2="344.5" stroke="#c92a2a" stroke-width="2" stroke-dasharray="5 4" marker-end="url(#r)"/>
+  <circle cx="300" cy="273.6" r="4.6" fill="#fff" stroke="#7048e8" stroke-width="1.6"/>
+<circle cx="320" cy="277.3" r="4.6" fill="#fff" stroke="#7048e8" stroke-width="1.6"/>
+<circle cx="340" cy="280.9" r="4.6" fill="#fff" stroke="#7048e8" stroke-width="1.6"/>
+<circle cx="360" cy="284.5" r="4.6" fill="#fff" stroke="#7048e8" stroke-width="1.6"/>
+<circle cx="380" cy="288.2" r="4.6" fill="#fff" stroke="#7048e8" stroke-width="1.6"/>
+<circle cx="400" cy="291.8" r="4.6" fill="#fff" stroke="#7048e8" stroke-width="1.6"/>
+<circle cx="420" cy="295.4" r="4.6" fill="#7048e8" stroke="#7048e8" stroke-width="1.6"/>
+<circle cx="440" cy="299.1" r="4.6" fill="#7048e8" stroke="#7048e8" stroke-width="1.6"/>
+<circle cx="460" cy="302.7" r="4.6" fill="#7048e8" stroke="#7048e8" stroke-width="1.6"/>
+<circle cx="480" cy="306.4" r="4.6" fill="#7048e8" stroke="#7048e8" stroke-width="1.6"/>
+<circle cx="500" cy="310.0" r="4.6" fill="#7048e8" stroke="#7048e8" stroke-width="1.6"/>
+<circle cx="520" cy="313.6" r="4.6" fill="#7048e8" stroke="#7048e8" stroke-width="1.6"/>
+<circle cx="540" cy="317.3" r="4.6" fill="#fff" stroke="#7048e8" stroke-width="1.6"/>
+<circle cx="560" cy="320.9" r="4.6" fill="#fff" stroke="#7048e8" stroke-width="1.6"/>
+<circle cx="580" cy="324.5" r="4.6" fill="#fff" stroke="#7048e8" stroke-width="1.6"/>
+<circle cx="600" cy="328.2" r="4.6" fill="#fff" stroke="#7048e8" stroke-width="1.6"/>
+<circle cx="620" cy="331.8" r="4.6" fill="#fff" stroke="#7048e8" stroke-width="1.6"/>
+
+  <!-- brackets -->
+  <path d="M300 372 V380 H640 V372" fill="none" stroke="#4a5468" stroke-width="1.5"/>
+  <text x="470" y="398" text-anchor="middle" font-size="12.5" fill="#4a5468">le rayon traverse le cube : un échantillon (●) à chaque longueur de voxel</text>
+  <!-- right note -->
+  <text x="700" y="296" font-size="12.5" fill="#7048e8" font-weight="700">● dans la</text>
+  <text x="700" y="312" font-size="12.5" fill="#7048e8" font-weight="700">structure :</text>
+  <text x="700" y="328" font-size="12.5" fill="#7048e8" font-weight="700">du signal</text>
+  <!-- steps -->
+  <g transform="translate(24,418)">
+    <rect width="182" height="104" rx="12" fill="#fff" stroke="#c5cbd8"/><rect width="182" height="26" rx="12" fill="#e8edff"/><rect y="14" width="182" height="12" fill="#e8edff"/>
+    <text x="91" y="18" text-anchor="middle" font-size="12.5" font-weight="800" fill="#3b5bdb">1 · DÉPART</text>
+    <text x="91" y="52" text-anchor="middle" font-size="12.5" fill="#1c2333">On lance un rayon</text>
+    <text x="91" y="70" text-anchor="middle" font-size="12.5" fill="#1c2333">de l'œil, à travers</text>
+    <text x="91" y="88" text-anchor="middle" font-size="12.5" fill="#1c2333">ce pixel.</text>
+  </g>
+  <g transform="translate(214,418)">
+    <rect width="182" height="104" rx="12" fill="#fff" stroke="#c5cbd8"/><rect width="182" height="26" rx="12" fill="#ebfbee"/><rect y="14" width="182" height="12" fill="#ebfbee"/>
+    <text x="91" y="18" text-anchor="middle" font-size="12.5" font-weight="800" fill="#2b8a3e">2 · ENTRÉE</text>
+    <text x="91" y="52" text-anchor="middle" font-size="12.5" fill="#1c2333">On calcule où le</text>
+    <text x="91" y="70" text-anchor="middle" font-size="12.5" fill="#1c2333">rayon entre et sort</text>
+    <text x="91" y="88" text-anchor="middle" font-size="12.5" fill="#1c2333">du cube.</text>
+  </g>
+  <g transform="translate(404,418)">
+    <rect width="182" height="104" rx="12" fill="#fff" stroke="#c5cbd8"/><rect width="182" height="26" rx="12" fill="#fff4e6"/><rect y="14" width="182" height="12" fill="#fff4e6"/>
+    <text x="91" y="18" text-anchor="middle" font-size="12.5" font-weight="800" fill="#e67700">3 · PAS</text>
+    <text x="91" y="52" text-anchor="middle" font-size="12.5" fill="#1c2333">Tous les 1 voxel :</text>
+    <text x="91" y="70" text-anchor="middle" font-size="12.5" fill="#1c2333">on lit la valeur de</text>
+    <text x="91" y="88" text-anchor="middle" font-size="12.5" fill="#1c2333">chaque canal.</text>
+  </g>
+  <g transform="translate(594,418)">
+    <rect width="182" height="104" rx="12" fill="#fff" stroke="#c5cbd8"/><rect width="182" height="26" rx="12" fill="#f3f0ff"/><rect y="14" width="182" height="12" fill="#f3f0ff"/>
+    <text x="91" y="18" text-anchor="middle" font-size="12.5" font-weight="800" fill="#7048e8">4 · COMBINER</text>
+    <text x="91" y="52" text-anchor="middle" font-size="12.5" fill="#1c2333">Les échantillons se</text>
+    <text x="91" y="70" text-anchor="middle" font-size="12.5" fill="#1c2333">combinent en UNE</text>
+    <text x="91" y="88" text-anchor="middle" font-size="12.5" fill="#1c2333">couleur : le pixel.</text>
+  </g>
+</svg>

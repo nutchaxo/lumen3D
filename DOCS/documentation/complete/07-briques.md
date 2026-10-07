@@ -16,7 +16,7 @@ Un embryon typique du laboratoire fait 3789 × 3789 × 178 voxels sur 4 canaux :
 **Une carte en ligne.** Quand vous zoomez sur une ville, le site ne télécharge pas la planète : il charge seulement les **tuiles** qui sont dans votre fenêtre, à la bonne finesse. Les briques sont les tuiles de votre embryon, avec une dimension de plus.
 :::
 
-![Comme les tuiles d'une carte, seules les briques visibles et non vides sont téléchargées.](img/ch07/tuiles.svg){width=71%}
+![Comme les tuiles d'une carte, seules les briques visibles et non vides sont téléchargées.](img/ch07/tuiles.svg){width=100%}
 
 Trois avantages, tous visibles à l'écran :
 
@@ -24,29 +24,11 @@ Trois avantages, tous visibles à l'écran :
 - **la mémoire est bornée** : la carte graphique ne reçoit que ce qu'elle peut loger (chapitre 10) ;
 - **le vide ne coûte rien** : une brique entièrement noire n'est jamais écrite sur le disque.
 
-::: keynums
-::: keynum
-**64³**
-
-voxels « utiles » par brique
-:::
-::: keynum
-**66³**
-
-voxels réellement stockés (avec bordure)
-:::
-::: keynum
-**1**
-
-image WebP par brique et par canal
-:::
-:::
-
 ## 7.2 Une brique : 64 voxels utiles et une bordure
 
 Une brique couvre **64 voxels** dans chaque direction. Mais elle est stockée avec **un voxel de plus de chaque côté** : 64 + 1 + 1 = **66**. Ce voxel de bordure est une copie du voxel voisin, pris dans la brique d'à côté.
 
-![Le cœur de la brique (bleu) est entouré d'une bordure d'un voxel (orange) copiée sur les briques voisines (violet).](img/ch07/bordure.svg){width=74%}
+![Le cœur de la brique (bleu) est entouré d'une bordure d'un voxel (orange) copiée sur les briques voisines (violet).](img/ch07/bordure.svg){width=100%}
 
 ::: why
 **À quoi sert la bordure ?** Pour dessiner une image lisse, la carte graphique *interpole* : la valeur à un point est un mélange pondéré des voxels qui l'entourent. Au bord d'une brique, il manque le voisin de l'autre côté. Sans bordure, la carte graphique devrait répéter le dernier voxel : on verrait un quadrillage régulier à la limite des briques. Avec la bordure, le voisin est là, et l'image est continue.
@@ -54,7 +36,7 @@ Une brique couvre **64 voxels** dans chaque direction. Mais elle est stockée av
 
 La figure suivante le montre sur de vraies données : le même profil d'intensité, à cheval sur la limite entre deux briques (en voxels 56 à 72).
 
-![Sans bordure (rouge) la valeur fait un palier puis saute ; avec bordure (vert) elle varie sans coupure. Jeu de démonstration, canal DAPI.](img/ch07/couture.png){width=71%}
+![Sans bordure (rouge) la valeur fait un palier puis saute ; avec bordure (vert) elle varie sans coupure. Jeu de démonstration, canal DAPI.](img/ch07/couture.png){width=85%}
 
 ::: example
 **Le surcoût de la bordure.** 66³ = 287 496 voxels contre 64³ = 262 144 : **9,7 % de plus** stockés, en échange d'images sans couture à tous les niveaux de qualité.
@@ -69,7 +51,7 @@ Deux règles pour les cas limites :
 
 Le navigateur sait décoder une image 2D très vite, mais n'a pas de format d'image 3D. L'astuce : la brique de 66 coupes est **posée à plat** en une seule image, comme un planche-contact de 66 photos.
 
-![Les 66 coupes d'une brique rangées en 9 colonnes × 8 lignes ; les 6 dernières cases restent vides.](img/ch07/mosaique-schema.svg){width=78%}
+![Les 66 coupes d'une brique rangées en 9 colonnes × 8 lignes ; les 6 dernières cases restent vides.](img/ch07/mosaique-schema.svg){width=100%}
 
 Chaque coupe fait 66 × 66 pixels ; la grille fait donc **9 × 66 = 594** pixels de large et **8 × 66 = 528** de haut, en niveaux de gris 8 bits. La règle est simple :
 
@@ -89,7 +71,7 @@ Pour un voxel (x', y', z') de la brique de 66³, son pixel dans l'image est : **
 
 Voici une vraie brique du jeu de démonstration, **telle qu'elle est stockée**, à côté de son cube en 3D.
 
-![La brique (7, 5, 0) du canal Sox2 : l'image WebP décodée, avec les numéros de quelques coupes, et le cube reconstitué.](img/ch07/mosaique.png){width=78%}
+![La brique (7, 5, 0) du canal Sox2 : l'image WebP décodée, avec les numéros de quelques coupes, et le cube reconstitué.](img/ch07/mosaique.png){width=100%}
 
 ::: note
 Les premières coupes sont noires parce que l'embryon de démonstration n'occupe que le bas de cette brique. Les cases 66 à 71 (les 6 dernières, en bas à droite) sont toujours vides : 72 places pour 66 coupes.
@@ -99,7 +81,7 @@ Les premières coupes sont noires parce que l'embryon de démonstration n'occupe
 
 Chaque canal a ses **propres** briques : la brique (7, 5, 0) existe en trois exemplaires indépendants (DAPI, Pecam1, Sox2). Le navigateur les assemble en couleur au dernier moment. Un canal peu dense, comme Pecam1 ici, donne une image beaucoup plus petite.
 
-![Les trois canaux de la même brique : même géométrie, contenus et poids différents.](img/ch07/canaux.png){width=78%}
+![Les trois canaux de la même brique : même géométrie, contenus et poids différents.](img/ch07/canaux.png){width=92%}
 
 ::: tech
 **Encodage.** Chaque mosaïque est enregistrée en WebP *sans perte* (bibliothèque Pillow, `lossless=True`, qualité 75, méthode 4) : le voxel relu est identique au voxel écrit. Une brique n'est conservée que si son intérieur 64³ contient **au moins un voxel ≥ 1** ; sinon elle est « absente » (longueur 0 dans l'index). Cette règle est calculée canal par canal.
@@ -118,13 +100,13 @@ Le chapitre 6 a construit la pyramide de résolutions. À chaque niveau, le volu
 
 La grille du niveau 0 compte 12 × 9 × 2 = 216 cases par canal, mais seules 100 (DAPI), 90 (Pecam1) et 79 (Sox2) contiennent du signal : les autres coins sont vides.
 
-![La grille de briques de chaque niveau pour une couche et un canal : en gris, les briques jamais écrites.](img/ch07/niveaux.png){width=78%}
+![La grille de briques de chaque niveau pour une couche et un canal : en gris, les briques jamais écrites.](img/ch07/niveaux.png){width=92%}
 
 ## 7.5 Les paquets : des boîtes de 64 briques
 
 Des milliers de petits fichiers seraient lents à servir. Les briques d'un même niveau et d'un même canal sont donc regroupées dans des **paquets** : `bricks/l0/c1/p00000.bin` est le premier paquet du niveau 0, canal 1.
 
-![Un paquet contient des super-blocs entiers de 4 × 4 × 4 briques : une coupe croise peu de paquets.](img/ch07/superblocs.svg){width=78%}
+![Un paquet contient des super-blocs entiers de 4 × 4 × 4 briques : une coupe croise peu de paquets.](img/ch07/superblocs.svg){width=100%}
 
 Les règles de remplissage :
 
@@ -138,13 +120,13 @@ Les règles de remplissage :
 
 Dans le jeu de démonstration, le niveau 0 du canal Pecam1 tient dans **deux paquets** (en bleu et orange ci-dessous) : les traits noirs sont les limites des super-blocs.
 
-![Quelles briques dans quel paquet, pour les deux couches du niveau 0 (canal Pecam1).](img/ch07/paquets.png){width=78%}
+![Quelles briques dans quel paquet, pour les deux couches du niveau 0 (canal Pecam1).](img/ch07/paquets.png){width=85%}
 
 ## 7.6 L'index et le manifeste
 
 Pour récupérer une brique, le navigateur doit savoir **dans quel paquet** elle est, **où elle commence** et **combien elle pèse**. Ces trois nombres sont dans `bricks/index.bin`, un petit fichier binaire : **10 octets par case de brique**.
 
-![Un fichier index.bin : un en-tête, une ligne par niveau, puis une entrée de 10 octets par case de brique.](img/ch07/index-bin.svg){width=78%}
+![Un fichier index.bin : un en-tête, une ligne par niveau, puis une entrée de 10 octets par case de brique.](img/ch07/index-bin.svg){width=100%}
 
 Voici les octets réels du jeu de démonstration, décodés à la main : l'en-tête, puis la brique (7, 5, 0) de chaque canal.
 
@@ -209,11 +191,9 @@ Les niveaux se répartissent ainsi : niveau 0 = 7,9 Mo, niveau 1 = 1,1 Mo, nivea
 
 Les briques sont des cubes. Pour afficher **une** coupe XY à pleine résolution (par exemple pour une figure du Studio), il faudrait lire toutes les briques de la couche, soit **64 plans de données** pour n'en utiliser qu'un.
 
-![Sans planes/, une coupe XY oblige à lire toute la couche ; avec planes/, un seul plan.](img/ch07/planes-schema.svg){width=78%}
-
 Le dossier `planes/` contient donc le niveau 0 **redécoupé plan par plan** : un fichier `zNNNNN.bin` par plan Z (`z00000.bin`, `z00001.bin`…). Chaque plan est coupé en tuiles de **512 × 512** pixels, enregistrées en PNG sans perte ; une tuile entièrement noire n'occupe aucun octet.
 
-![Octets lus pour la coupe z = 30 des trois canaux : 5 078 ko par les briques contre 94 ko par planes/ (54 fois moins).](img/ch07/planes_octets.png){width=62%}
+![Octets lus pour la coupe z = 30 des trois canaux : 5 078 ko par les briques contre 94 ko par planes/ (54 fois moins).](img/ch07/planes_octets.png){width=70%}
 
 ::: example
 **Le chiffre du jeu de démonstration.** La coupe XY z = 30 des trois canaux demande 5 078 326 octets via les briques de la couche 0, contre **94 053 octets** via `planes/z00030.bin`. Sur un grand embryon du laboratoire, une coupe de ce genre représentait environ 190 Mo, soit 40 secondes à 5 Mo/s.
@@ -231,17 +211,15 @@ Une **projection d'intensité maximale** (MIP) garde, pour chaque pixel, la vale
 
 Le dossier `mips/` en garde donc une copie toute faite **pour chaque couche de 64 plans** (`l00000.bin` = plans 0 à 63, `l00001.bin` = plans 64 à 111…), à la pleine résolution XY.
 
-![Une coupe (à gauche) et le MIP de la couche de 64 plans (à droite). Jeu de démonstration, canal DAPI.](img/ch07/mip_couche.png){width=74%}
+![Une coupe (à gauche) et le MIP de la couche de 64 plans (à droite). Jeu de démonstration, canal DAPI.](img/ch07/mip_couche.png){width=85%}
 
 Pour une épaisseur quelconque, le Studio combine : les **MIP des couches entièrement contenues** dans l'épaisseur, et les **plans individuels** des deux extrémités.
 
-![Épaisseur de 220 plans : 3 MIP de couches + 28 plans d'extrémité, soit 31 images au lieu de 220, avec un résultat identique.](img/ch07/mips-schema.svg){width=78%}
+![Épaisseur de 220 plans : 3 MIP de couches + 28 plans d'extrémité, soit 31 images au lieu de 220, avec un résultat identique.](img/ch07/mips-schema.svg){width=100%}
 
 ## 7.10 Les formats de données 1 à 4
 
 Au fil des versions, l'organisation des fichiers a évolué. Chaque jeu de données porte un numéro, `formatVersion`, dans son `metadata.json`. Le format **4** est le format actuel.
-
-![Chaque format ajoute une marche : planes/, mips/, puis les briques à bordure.](img/ch07/formats.svg){width=74%}
 
 | format | ce qu'il ajoute | migration |
 |---|---|---|

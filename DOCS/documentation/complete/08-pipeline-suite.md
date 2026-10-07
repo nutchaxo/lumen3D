@@ -14,7 +14,7 @@ La vignette est la petite image de la carte du jeu de données dans l'explorateu
 
 Pour chaque canal, le pipeline calcule un **MIP** (le voxel le plus brillant sur toute l'épaisseur), le colorie, puis **additionne** les canaux : où deux canaux se chevauchent, les couleurs s'ajoutent.
 
-![Trois MIP coloriés, additionnés, donnent la vignette réelle du jeu de démonstration.](img/ch08/vignette.png){width=78%}
+![Trois MIP coloriés, additionnés, donnent la vignette réelle du jeu de démonstration.](img/ch08/vignette.png){width=96%}
 
 ::: tech
 Couleurs de la vignette, dans l'ordre des canaux : vert, magenta, bleu, rouge, jaune, violet, cyan (rappelées en boucle). Elles n'ont pas de lien avec les couleurs choisies dans le viewer. L'image est réduite à 512 pixels pour son grand côté (interpolation de Lanczos), centrée sur un carré de fond `#080a12`, puis enregistrée en **WebP avec perte**, qualité 88 (33,6 ko ici).
@@ -24,7 +24,7 @@ Couleurs de la vignette, dans l'ordre des canaux : vert, magenta, bleu, rouge, j
 
 Pour chaque canal, le pipeline compte combien de voxels ont chaque valeur de gris, sur le **niveau le plus grossier** (le plus rapide à lire). Les valeurs 0 à 255 sont réparties en **64 classes** de largeur 3,98.
 
-![Les trois histogrammes stockés dans le manifeste du jeu de démonstration (échelle logarithmique : le fond à 0 écrase tout le reste en échelle linéaire).](img/ch08/histogrammes.png){width=78%}
+![Les trois histogrammes stockés dans le manifeste du jeu de démonstration (échelle logarithmique : le fond à 0 écrase tout le reste en échelle linéaire).](img/ch08/histogrammes.png){width=96%}
 
 Ils sont rangés dans `bricks/manifest.json` (`counts`, `edges`, `total`, `max`, `mean`, `std`) ; le viewer les affiche dans le panneau des canaux (chapitre 11). Pour une série temporelle, il y en a **un jeu par image**, car le photoblanchiment changerait l'échelle d'un jeu commun.
 
@@ -86,7 +86,7 @@ Le jeton doit être encadré de tirets, de soulignés ou d'espaces : `-E85-Em1-`
 
 Pour une série temporelle seulement, le pipeline cherche une **analyse de suivi** (cellules, trajectoires, divisions) et l'attache au jeu de données. Il la cherche à trois endroits, du meilleur au moins bon.
 
-![Les trois sources possibles, du fichier le plus complet au classeur le plus fragile.](img/ch08/sources-suivi.svg){width=78%}
+![Les trois sources possibles, du fichier le plus complet au classeur le plus fragile.](img/ch08/sources-suivi.svg){width=100%}
 
 ::: why
 **Pourquoi Scene8 passe avant Excel ?** Un classeur exporté peut être périmé : sur un jeu de données réel, il contenait 155 cellules alors que le volume en comptait 172. Les objets enregistrés dans le `.ims` sont toujours à jour. Le suivi est cherché automatiquement (option `--tracking auto`) ; si quelque chose échoue, le volume est publié quand même.
@@ -110,11 +110,9 @@ Pendant des heures, l'embryon dérive et tourne un peu dans le champ. Le pipelin
 **Un calque transparent.** Dessinez les cellules de l'image 1 sur un calque, puis celles de l'image 4 sur un autre. Pour les superposer, vous faites glisser le calque et vous le faites pivoter, mais vous ne l'étirez jamais : c'est exactement un mouvement « rigide ».
 :::
 
-![Un mouvement rigide : tourner et glisser, sans déformer.](img/ch08/rigide.svg){width=74%}
-
 Sur le jeu de démonstration, voici la même idée avec les vraies cellules (47 cellules présentes aux images 1 et 4, projection sur le plan x-y).
 
-![À gauche, les cellules de l'image 4 ont dérivé ; au centre, après rotation de 7,03 ° et translation, elles se superposent à l'image 1 ; à droite, les trajectoires brutes dérivent, les stabilisées restent en place.](img/ch08/kabsch.png){width=78%}
+![À gauche, les cellules de l'image 4 ont dérivé ; au centre, après rotation de 7,03 ° et translation, elles se superposent à l'image 1 ; à droite, les trajectoires brutes dérivent, les stabilisées restent en place.](img/ch08/kabsch.png){width=100%}
 
 L'algorithme utilisé s'appelle **Kabsch** (décomposition en valeurs singulières). Il choisit des **cellules de référence** (celles qui ne se divisent pas, présentes à au moins deux images) et cherche, image après image, la rotation et la translation qui les superposent au mieux ; il en faut au moins 3 en commun.
 
@@ -137,8 +135,6 @@ Le suivi est stabilisé, mais **pas les images**. Comme le mouvement est rigide,
 **Test de rigidité.** Le pipeline vérifie que la transformation est bien rigide : le plus grand résidu doit rester **≤ 0,05 µm**. Ici il vaut 7,6 × 10⁻¹⁴ µm (zéro, à l'erreur d'arrondi près), donc la stabilisation est appliquée aux images. Si le test échouait, un avertissement l'indiquerait et elle ne serait pas appliquée.
 :::
 
-Un dernier contrôle vérifie que les positions du suivi tombent bien dans la boîte de l'acquisition (au moins la moitié des positions dans la boîte élargie de 10 %) ; sinon il propose l'unité probable (mm, nm…) sans rien modifier.
-
 ## 8.5 Publier « tout ou rien »
 
 Un traitement dure parfois des heures. Pendant ce temps, **le jeu de données déjà en ligne continue de fonctionner** : tout est construit dans un dossier de travail privé, au même endroit du disque que `DATA_WEB`, et n'est installé qu'à la fin.
@@ -147,7 +143,7 @@ Un traitement dure parfois des heures. Pendant ce temps, **le jeu de données d�
 **La vitrine d'un magasin.** On prépare la nouvelle vitrine dans l'arrière-boutique ; on n'enlève l'ancienne qu'une fois la nouvelle entièrement montée. Si un problème survient, les clients voient toujours l'ancienne.
 :::
 
-![Les cinq temps de la publication ; `metadata.json` est écrit en dernier, c'est le point de non-retour.](img/ch08/publication.svg){width=78%}
+![Les cinq temps de la publication ; `metadata.json` est écrit en dernier, c'est le point de non-retour.](img/ch08/publication.svg){width=100%}
 
 Un **nouveau** jeu de données arrive en un seul renommage de dossier. Pour un jeu **existant**, seuls les éléments du pipeline sont remplacés (`bricks/`, `planes/`, `mips/`, la vignette, et `tracks.json`, `tracks.json.gz`, `model.glb` si un nouveau suivi existe). Tout le reste du dossier, comme `download/` ou `gallery/`, n'est jamais touché.
 
@@ -155,23 +151,9 @@ Un **nouveau** jeu de données arrive en un seul renommage de dossier. Pour un j
 
 Vous avez corrigé un nom, orienté l'embryon, ajouté des légendes dans l'administration ? Un nouveau passage du pipeline **ne l'écrase pas** : il fusionne, juste avant l'installation, les champs saisis à la main dans le nouveau `metadata.json`.
 
-::: cards
-::: card
-#### Identité
-
-`name`, `description`, `stage`, `stageNumeric`, `embryo`, `line`, `staining`, `reporter`, `tags`, `notes`, `created`
-:::
-::: card
-#### Affichage
-
-`hidden`, `orientation`, `orientationAxes`, `upsideDown`, `defaultView`, `exposure`
-:::
-::: card
-#### Liens et images
-
-`gallery`, `linkedTrackingId`, `relatedIds`, ainsi que tout champ que le nouveau passage ne produit pas (par exemple `tracking`)
-:::
-:::
+- **Identité** : `name`, `description`, `stage`, `stageNumeric`, `embryo`, `line`, `staining`, `reporter`, `tags`, `notes`, `created` ;
+- **Affichage** : `hidden`, `orientation`, `orientationAxes`, `upsideDown`, `defaultView`, `exposure` ;
+- **Liens et images** : `gallery`, `linkedTrackingId`, `relatedIds`, et tout champ que le nouveau passage ne produit pas (par exemple `tracking`).
 
 Les couleurs et réglages des canaux sont aussi conservés, tant que le **nombre de canaux** n'a pas changé. À l'inverse, `formatVersion` n'est **jamais** repris : il reflète toujours la structure réellement écrite sur le disque.
 
@@ -222,7 +204,7 @@ La taille de pixel n'est lue que si le TIFF déclare une unité en microns ; sin
 
 Le **pack Pipeline** (un dossier à décompresser sur un PC Windows) contient tout. Double-cliquez sur `RUN.bat` : il vérifie l'intégrité du pack (empreintes SHA-256), prépare Python et les bibliothèques, puis affiche un menu.
 
-![De votre ordinateur au site : on dépose les fichiers, on lance, puis on copie ou on glisse le résultat.](img/ch08/parcours-pipeline.svg){width=78%}
+![De votre ordinateur au site : on dépose les fichiers, on lance, puis on copie ou on glisse le résultat.](img/ch08/parcours-pipeline.svg){width=100%}
 
 | choix | ce que fait le menu |
 |---|---|
@@ -248,10 +230,6 @@ python run_preprocess.py --input input --output DATA_WEB --only "*E95*" --with-d
 | `--tracking` | `auto` (défaut), `off`, ou le chemin d'un fichier de suivi |
 
 Le type est décidé tout seul : plus d'une image dans le fichier, c'est `live`, sinon `3d`. `Ctrl+C` demande confirmation avant d'arrêter, et nettoie les fichiers temporaires.
-
-::: tip
-Le traitement tourne en parallèle sur les cœurs de l'ordinateur ; la variable `LUMEN_PREPROCESS_WORKERS` limite leur nombre si la mémoire est juste. Chaque volume est lu par **tuiles** : un canal n'a jamais besoin de tenir en mémoire d'un bloc.
-:::
 
 ### Comment le résultat arrive sur le serveur
 

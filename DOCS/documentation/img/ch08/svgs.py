@@ -140,9 +140,11 @@ def publication():
                 "Crash in the middle: at the next launch, the marker lets the pipeline finish or undo cleanly,"), 400, INK2),
             (tr("selon que metadata.json (dont l'empreinte sha256 est dans le marqueur) est déjà en place ou non.",
                 "depending on whether metadata.json (its sha256 is stored in the marker) is already in place."), 400, INK2)]
-    for k, (m, wt, colr) in enumerate(msgs):
-        for l, ln in enumerate(wrap(m, 104)):
-            b.append(text(40, 228 + (k * 30) + l * 0, ln, 12, wt, colr))
+    yy = 232
+    for m, wt, colr in msgs:
+        for ln in wrap(m, 112):
+            b.append(text(40, yy, ln, 12, wt, colr)); yy += 19
+        yy += 6
     save("publication.svg", 332, b)
 
 

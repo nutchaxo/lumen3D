@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 340" font-family="Inter, sans-serif">
+  <defs><marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#4a5468"/></marker></defs>
+  <rect width="800" height="340" rx="16" fill="#f8f9fd"/>
+  <text x="400" y="32" text-anchor="middle" font-size="18" font-weight="800" fill="#1c2333">Le cube a les vraies proportions de l'échantillon</text>
+  <!-- voxel grid (what the file holds) -->
+  <rect x="24" y="52" width="352" height="262" rx="14" fill="#fff" stroke="#c5cbd8"/>
+  <text x="200" y="78" text-anchor="middle" font-size="14" font-weight="800" fill="#1c2333">Ce que contient le fichier (en voxels)</text>
+  <g stroke="#c5cbd8"><rect x="90" y="130" width="200" height="150" fill="#e8edff"/><rect x="90" y="108" width="200" height="22" fill="#d0dbff"/></g>
+  <text x="190" y="124" text-anchor="middle" font-size="12" fill="#3b5bdb" font-weight="700">112 plans</text>
+  <text x="190" y="298" text-anchor="middle" font-size="13" font-weight="700" fill="#1c2333">768 voxels</text>
+  <text x="76" y="210" text-anchor="end" font-size="13" font-weight="700" fill="#1c2333">576</text>
+  <text x="200" y="326" text-anchor="middle" font-size="12" fill="#4a5468"> </text>
+  <!-- physical cube -->
+  <rect x="424" y="52" width="352" height="262" rx="14" fill="#fff" stroke="#c5cbd8"/>
+  <text x="600" y="78" text-anchor="middle" font-size="14" font-weight="800" fill="#1c2333">Ce que montre l'écran (en µm)</text>
+  <g stroke="#2b8a3e" stroke-width="1.6"><rect x="490" y="164" width="200" height="150" fill="#ebfbee" stroke="none"/><rect x="490" y="164" width="200" height="150" fill="none"/><path d="M490 164 L530 134 H730 L690 164 Z" fill="#d3f9d8"/><path d="M690 164 L730 134 V164 L730 254 L690 314 Z" fill="#b2f2bb" stroke="#2b8a3e"/></g>
+  <text x="590" y="338" text-anchor="middle" font-size="13" font-weight="700" fill="#1c2333">921,6 µm</text>
+  <text x="474" y="246" text-anchor="end" font-size="13" font-weight="700" fill="#1c2333">691,2 µm</text>
+  <text x="744" y="146" font-size="13" font-weight="700" fill="#1c2333">336 µm</text>
+  <line x1="364" y1="190" x2="418" y2="190" stroke="#4a5468" stroke-width="2.4" marker-end="url(#a)"/>
+  <text x="392" y="178" text-anchor="middle" font-size="12" font-weight="700" fill="#4a5468">× µm / voxel</text>
+</svg>

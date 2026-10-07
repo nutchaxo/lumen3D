@@ -185,7 +185,7 @@ def fig_chain():
         if i < 4: s.line(x + w + 2, 127, x + w + gap - 2, 127, INK2, 2.4, True)
     s.save("chaine.svg")
 
-def proj(x, y, z, ox=270, oy=300, W=250, H=190, dx=130, dz=110):
+def proj(x, y, z, ox=70, oy=370, W=250, H=190, dx=130, dz=110):
     return ox + x * W + z * dx, oy - y * H - z * dz
 
 def cube_faces(s, x, y, z, a, fill_front, fill_top, fill_right, stroke):
@@ -195,7 +195,7 @@ def cube_faces(s, x, y, z, a, fill_front, fill_top, fill_right, stroke):
     s.poly([P(x + a, y, z), P(x + a, y, z + a), P(x + a, y + a, z + a), P(x + a, y + a, z)], fill_right, stroke, 1.4)
 
 def fig_corners():
-    s = Svg(430, T("corn_title"))
+    s = Svg(420, T("corn_title"))
     P = proj
     # big cube wireframe (back edges dashed)
     v = {(i, j, k): P(i, j, k) for i in (0, 1) for j in (0, 1) for k in (0, 1)}
@@ -219,18 +219,18 @@ def fig_corners():
             cube_faces(s, x, y, z, a, "#ffd8a8", "#ffe8cc", "#ffc078", ACC["amber"][0])
     s.add(f'<ellipse cx="{cx}" cy="{cy}" rx="72" ry="55" fill="#dbe4ff" stroke="{ACC["blue"][0]}" stroke-width="1.5" opacity="0.55"/>')
     s.text(cx, cy + 5, T("corn_emb"), 14, 700, ACC["blue"][0], "middle")
-    s.rect(560, 120, 215, 150, "#fff", LINE, 14)
-    s.add(f'<rect x="580" y="140" width="22" height="22" fill="#ffd8a8" stroke="{ACC["amber"][0]}" stroke-width="1.5"/>')
-    s.text(612, 157, T("corn_small"), 14, 800, ACC["amber"][0])
-    s.text(580, 192, T("corn_size"), 12.5, 600, INK)
-    s.text(580, 212, T("corn_size2"), 12, 400, INK2)
+    s.rect(500, 140, 285, 150, "#fff", LINE, 14)
+    s.add(f'<rect x="520" y="160" width="22" height="22" fill="#ffd8a8" stroke="{ACC["amber"][0]}" stroke-width="1.5"/>')
+    s.text(552, 177, T("corn_small"), 14, 800, ACC["amber"][0])
+    s.text(520, 212, T("corn_size"), 12.5, 600, INK)
+    s.text(520, 234, T("corn_size2"), 12, 400, INK2)
     s.save("coins.svg")
 
 def fig_lattice():
     s = Svg(300, T("lat_title"))
-    n = 16; c = 20
+    n = 16; c = 14
     rng = np.random.default_rng(0)
-    for (ox, title, sub) in [(70, T("lat_all"), False), (440, T("lat_sub"), True)]:
+    for (ox, title, sub) in [(110, T("lat_all"), False), (466, T("lat_sub"), True)]:
         s.text(ox + n * c / 2, 62, title, 13, 700, INK, "middle")
         for i in range(n):
             for j in range(n):
@@ -242,10 +242,10 @@ def fig_lattice():
                 else:
                     fill = ACC["red"][0] if on else "#adb5bd"
                 s.add(f'<rect x="{ox+j*c}" y="{82+i*c}" width="{c-2}" height="{c-2}" fill="{fill}"/>')
-    s.line(400, 235, 430, 235, INK2, 2.4, True)
-    s.text(400, 275, T("lat_ratio"), 13, 700, ACC["red"][0], "middle")
-    s.text(400, 293, T("lat_count"), 12, 400, INK2, "middle")
-    s.h = 310; s.p[0] = s.p[0].replace("0 0 800 300", "0 0 800 310"); s.p[1] = s.p[1].replace('height="300"', 'height="310"')
+    s.line(345, 190, 440, 190, INK2, 2.4, True)
+    s.text(400, 335, T("lat_ratio"), 13, 700, ACC["red"][0], "middle")
+    s.text(400, 355, T("lat_count"), 12, 400, INK2, "middle")
+    s.h = 372; s.p[0] = s.p[0].replace("0 0 800 300", "0 0 800 372"); s.p[1] = s.p[1].replace('height="300"', 'height="372"')
     s.save("echantillon.svg")
 
 def fig_cross():

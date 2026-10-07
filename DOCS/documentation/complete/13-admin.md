@@ -23,41 +23,52 @@ Le panneau n'a **aucun lien public**. On l'ouvre en tapant l'adresse `admpan.htm
 
 La barre latérale de gauche range les onglets en quatre groupes. Le fil d'Ariane en haut rappelle où vous êtes (par exemple [Données › Datasets]{.ui}).
 
-![Le panneau d'administration (jeu de démonstration), dark theme.](img/ch13/admin-overview.png){.shot width=80%}
+| Onglet | Ce qu'il fait | Fréquence |
+|---|---|---|
+| **Données** | | |
+| [Datasets]{.ui} | Liste, aperçu, réglages | souvent |
+| [Import]{.ui} | Envoyer un dossier du pipeline | à chaque nouveau dataset |
+| [Mises à jour des données]{.ui} | Remettre au format 4 | rarement |
+| [Types de données]{.ui} | Renommer 3D, 2D, Live | une fois |
+| [Statistiques]{.ui} | Visites, vues, téléchargements | à l'occasion |
+| **Site public** | | |
+| [Identité]{.ui} | Nom, vocabulaire, SEO, menu | à l'installation |
+| [Apparence]{.ui} | Couleurs, police, arrondis | à l'installation |
+| [Pages]{.ui} | Éditeur visuel de pages | parfois |
+| [Mentions légales]{.ui} | Textes légaux, par langue | une fois |
+| **Extensions** | | |
+| [Plugins]{.ui} | Activer, approuver | parfois |
+| [Catalogue]{.ui} | Installer des plugins signés | parfois |
+| **Système** | | |
+| [Mises à jour]{.ui} | Mettre la plateforme à jour | régulièrement |
+| [Pipeline]{.ui} | Télécharger le pack (ch. 4 à 8) | à chaque nouveau pack |
+| [Sécurité]{.ui} | Mot de passe, permissions | rarement |
+| [Documentation]{.ui} | Lire les guides publiés | à la demande |
 
-[1]{.callout-num} Groupe [Données]{.ui} : tout ce qui concerne les jeux de données · [2]{.callout-num} Groupe [Site public]{.ui} : l'apparence et les textes que voient les visiteurs · [3]{.callout-num} Groupe [Extensions]{.ui} : les plugins · [4]{.callout-num} Groupe [Système]{.ui} : mises à jour, sécurité, documentation · [5]{.callout-num} Fil d'Ariane : groupe puis onglet courant · [6]{.callout-num} [7]{.callout-num} [8]{.callout-num} Thème clair/sombre du panneau, langue (français, anglais, espagnol, néerlandais), déconnexion · [9]{.callout-num} Lien vers le site public (s'ouvre dans un nouvel onglet)
+:::: cols-wide-right
+::: col
+![Barre latérale du panneau (jeu de démonstration).](img/ch13/admin-overview.png){.shot width=100%}
+:::
+::: col
+- [1]{.callout-num} Groupe [Données]{.ui} : les jeux de données
+- [2]{.callout-num} Groupe [Site public]{.ui} : apparence et textes vus par les visiteurs
+- [3]{.callout-num} Groupe [Extensions]{.ui} : les plugins
+- [4]{.callout-num} Groupe [Système]{.ui} : mises à jour, sécurité, documentation
+- [5]{.callout-num} Fil d'Ariane : groupe puis onglet courant
+- [6]{.callout-num} Lien vers le site public (nouvel onglet)
+
+En haut à droite : thème clair/sombre du panneau, langue (français, anglais, espagnol, néerlandais) et déconnexion.
+:::
+::::
 
 ::: remember
 Deux onglets commencent par « Mises à jour » : [Mises à jour des données]{.ui} (groupe Données : remettre **vos datasets** au format actuel) et [Mises à jour]{.ui} (groupe Système : mettre à jour **la plateforme**). Ne les confondez pas.
 :::
 
-## 13.3 Tableau des onglets
-
-| Onglet | Ce qu'il fait | Fréquence |
-|---|---|---|
-| **Données** | | |
-| [Datasets]{.ui} | Liste, aperçu et réglages de chaque dataset | souvent |
-| [Import]{.ui} | Envoyer un dossier du pipeline depuis le navigateur | à chaque nouveau dataset |
-| [Mises à jour des données]{.ui} | Passer les anciens datasets au format 4 | rarement |
-| [Types de données]{.ui} | Renommer « 3D », « 2D », « Live » pour le public | une fois |
-| [Statistiques]{.ui} | Visites, vues et téléchargements sur 30 jours | à l'occasion |
-| **Site public** | | |
-| [Identité]{.ui} | Nom de l'instance, vocabulaire, SEO, pied de page, menu | à l'installation |
-| [Apparence]{.ui} | Couleurs de marque, police, arrondis | à l'installation |
-| [Pages]{.ui} | Éditeur visuel de pages (accueil, À propos, pages libres) | parfois |
-| [Mentions légales]{.ui} | Texte des pages légales, par langue | une fois |
-| **Extensions** | | |
-| [Plugins]{.ui} | Activer, désactiver, approuver les plugins installés | parfois |
-| [Catalogue]{.ui} | Installer des plugins signés | parfois |
-| **Système** | | |
-| [Mises à jour]{.ui} | Version installée, mise à jour de la plateforme, notes de version | régulièrement |
-| [Pipeline]{.ui} | Télécharger le pack de préparation des données (chapitres 4 à 8) | à chaque nouveau pack |
-| [Sécurité]{.ui} | Changer le mot de passe, réparer les permissions | rarement |
-| [Documentation]{.ui} | Lire ou télécharger les guides publiés | à la demande |
-
 ::: tip
 Une pastille orange « Modifications non sauvegardées » s'allume en haut dès qu'un onglet contient des changements pas encore enregistrés. <kbd>Ctrl</kbd>+<kbd>S</kbd> enregistre l'onglet visible (Datasets, Types de données, Identité, Apparence, Mentions légales).
 :::
+
 
 ## 13.4 Mettre un dataset en ligne
 
@@ -71,7 +82,7 @@ Le pipeline (chapitres 4 à 8) produit **un dossier**. Il y a deux façons de le
 
 ### L'onglet Import, pas à pas
 
-![L'onglet Import, avec un envoi en cours (jeu de démonstration).](img/ch13/admin-import.png){.shot width=80%}
+![L'onglet Import, avec un envoi en cours (jeu de démonstration).](img/ch13/admin-import.png){.shot width=66%}
 
 [1]{.callout-num} Zone de dépôt : glissez le dossier ou cliquez sur [Choisir un dossier]{.ui} · [2]{.callout-num} Rappel : transit par un dossier privé, seuls les fichiers attendus sont acceptés · [3]{.callout-num} Progression globale : pourcentage, volume transféré, vitesse, temps restant · [4]{.callout-num} État du dataset (voir ci-dessous) · [5]{.callout-num} Boutons de la carte : [Éditer]{.ui}, [Vérifier]{.ui}, [Publier]{.ui}, [Supprimer]{.ui} selon l'état
 
@@ -92,9 +103,6 @@ Les états d'un dataset en cours d'import :
 Un dataset publié par l'Import est **masqué par défaut**. Allez dans [Datasets]{.ui} puis activez l'œil (ou l'interrupteur [Visibilité]{.ui}) pour le montrer au public.
 :::
 
-::: tech
-L'Import n'accepte que les fichiers que produit le pipeline (liste blanche fermée). Chaque bloc est vérifié par une empreinte SHA-256, et un journal sur le serveur retient les blocs reçus. Le transfert tourne dans un Web Worker, l'aperçu reste fluide. Une connexion sécurisée (HTTPS ou localhost) est nécessaire pour calculer ces empreintes.
-:::
 
 ## 13.5 Éditer un dataset
 
@@ -122,17 +130,13 @@ La façon dont les datasets sont stockés a évolué quatre fois (**formats 1 à
 
 ![Les trois mises à jour, les deux exécutants, le test de vitesse.](img/ch13/migrations.svg){width=100%}
 
-| Étape | Ce qu'elle ajoute | Pour quoi faire |
-|---|---|---|
-| 1 → 2 | dossier `planes/` : un fichier par plan z | coupes XY natives rapides dans le Studio |
-| 2 → 3 | dossier `mips/` : projection max de chaque couche de 64 plans | figures z-stack de toute la pile rapides |
-| 3 → 4 | pyramide de briques v3 (66³, bordure d'un voxel, `index.bin`) | filtrage sans couture, détail local |
+Les trois étapes ajoutent : `planes/` (un fichier par plan, coupes XY natives rapides dans le Studio), `mips/` (projection max de chaque couche de 64 plans, figures z-stack rapides), puis une pyramide de briques v3 (66³, bordure d'un voxel, `index.bin`).
 
 ::: why
 Le niveau natif est conservé voxel pour voxel : rien n'est perdu. L'ancien arbre `bricks/` n'est supprimé qu'après le changement de version du dataset. Un dataset produit par le pipeline 0.21.0 est **déjà** au format 4 : il n'y a rien à faire.
 :::
 
-![L'onglet Mises à jour des données (jeu de démonstration, avant lancement).](img/ch13/admin-dataset-updates.png){.shot width=80%}
+![L'onglet Mises à jour des données (jeu de démonstration, avant lancement).](img/ch13/admin-dataset-updates.png){.shot width=66%}
 
 [1]{.callout-num} [2]{.callout-num} Test de vitesse : [Lancer le test (5 s)]{.ui} compare navigateur et serveur · [3]{.callout-num} Choix de l'exécutant, dataset par dataset (verrouillé pendant l'exécution) · [4]{.callout-num} [Mettre à jour]{.ui} ce dataset · [5]{.callout-num} [Tout mettre à jour]{.ui} : traite tous les datasets prêts
 
@@ -151,9 +155,6 @@ Les plugins sont les outils du viewer (chapitre 12). Ils **ne sont pas livrés a
 - L'onglet [Plugins]{.ui} affiche trois cartes (Outils, Canaux, Modes de rendu) : un interrupteur par plugin et une étiquette de confiance (`intégré`, `approuvé`, `sandbox`, `non fiable`…).
 - Certains plugins n'apparaissent pas dans l'aperçu de l'onglet Datasets, ni dans la page Comparer : ils ne se déclarent compatibles qu'avec la page complète. Ce n'est pas une panne.
 
-::: example
-Le catalogue actuel propose **28 plugins** : par exemple Z-Stack Browser, Measure Distance, Download Center, Natural Fluorescence, ou les cinq outils de suivi cellulaire (réservés aux timelapses suivis).
-:::
 
 ## 13.8 Mettre à jour la plateforme
 

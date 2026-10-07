@@ -169,6 +169,10 @@ From [System › Updates]{.ui}, a button starts the update. What happens behind 
 :::
 
 - The tab shows the **release notes** of every version that will be installed, and checks your plugins beforehand: any that would be incompatible are set aside, then re-enabled later.
+::: warning
+This complete safety net (switch-over checked by a health probe, **automatic return** to the old version) exists on a **Python** server. On **PHP** hosting, the update is done in a single request, with the same SHA-256 and signature checks, but **without automatic rollback**: the files already copied stay in place. → chapter 18.
+:::
+
 - It also shows the version of the **Pipeline pack** ([Pipeline]{.ui} tab): this is a different piece of software, which is installed on the processing workstation, not on the server.
 
 ## 14.8 Customising the site (white label)

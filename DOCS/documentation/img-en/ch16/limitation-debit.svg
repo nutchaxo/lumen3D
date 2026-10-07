@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 456" font-family="Inter, sans-serif">
+<defs><marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#4a5468"/></marker></defs><rect width="800" height="456" rx="16" fill="#f8f9fd"/>
+<text x="400" y="34" font-family="Inter, sans-serif" font-size="18" font-weight="800" fill="#1c2333" text-anchor="middle" xml:space="preserve">Two token buckets protect the visit counter</text>
+<rect x="16" y="56" width="366" height="150" rx="12" fill="#fff" stroke="#c5cbd8" stroke-width="1.2"/>
+<path d="M16,90 L16,68 Q16,56 28,56 L370,56 Q382,56 382,68 L382,90 Z" fill="#e8edff"/>
+<text x="199.0" y="78" font-family="Inter, sans-serif" font-size="12.5" font-weight="800" fill="#3b5bdb" text-anchor="middle" xml:space="preserve">One bucket per address</text>
+<text x="28" y="112.0" font-family="Inter, sans-serif" font-size="12" font-weight="400" fill="#1c2333" text-anchor="start" xml:space="preserve">capacity: 60 tokens</text>
+<text x="28" y="128.2" font-family="Inter, sans-serif" font-size="12" font-weight="400" fill="#1c2333" text-anchor="start" xml:space="preserve">refill: 1 token per second</text>
+<text x="28" y="144.4" font-family="Inter, sans-serif" font-size="12" font-weight="400" fill="#1c2333" text-anchor="start" xml:space="preserve">4,096 slots in memory;</text>
+<text x="28" y="160.60000000000002" font-family="Inter, sans-serif" font-size="12" font-weight="400" fill="#1c2333" text-anchor="start" xml:space="preserve">address hashed, never written</text>
+<rect x="418" y="56" width="366" height="150" rx="12" fill="#fff" stroke="#c5cbd8" stroke-width="1.2"/>
+<path d="M418,90 L418,68 Q418,56 430,56 L772,56 Q784,56 784,68 L784,90 Z" fill="#f3f0ff"/>
+<text x="601.0" y="78" font-family="Inter, sans-serif" font-size="12.5" font-weight="800" fill="#7048e8" text-anchor="middle" xml:space="preserve">One bucket for the whole site</text>
+<text x="430" y="112.0" font-family="Inter, sans-serif" font-size="12" font-weight="400" fill="#1c2333" text-anchor="start" xml:space="preserve">capacity: 600 tokens</text>
+<text x="430" y="128.2" font-family="Inter, sans-serif" font-size="12" font-weight="400" fill="#1c2333" text-anchor="start" xml:space="preserve">refill: 20 tokens per second</text>
+<text x="430" y="144.4" font-family="Inter, sans-serif" font-size="12" font-weight="400" fill="#1c2333" text-anchor="start" xml:space="preserve">caps the total, even when</text>
+<text x="430" y="160.60000000000002" font-family="Inter, sans-serif" font-size="12" font-weight="400" fill="#1c2333" text-anchor="start" xml:space="preserve">addresses share a slot</text>
+<text x="400" y="240" font-family="Inter, sans-serif" font-size="13.5" font-weight="800" fill="#1c2333" text-anchor="middle" xml:space="preserve">Each beacon (visit, view) costs 1 token from each of the two buckets</text>
+<rect x="40" y="262" width="200" height="44" rx="10" fill="#e8edff" stroke="#3b5bdb" stroke-width="1.2"/>
+<text x="140" y="289" font-family="Inter, sans-serif" font-size="13" font-weight="800" fill="#3b5bdb" text-anchor="middle" xml:space="preserve">Beacon received</text>
+<rect x="300" y="262" width="200" height="44" rx="10" fill="#fff4e6" stroke="#e67700" stroke-width="1.2"/>
+<text x="400" y="289" font-family="Inter, sans-serif" font-size="12.5" font-weight="800" fill="#e67700" text-anchor="middle" xml:space="preserve">Both buckets have a token?</text>
+<rect x="560" y="262" width="200" height="44" rx="10" fill="#ebfbee" stroke="#2b8a3e" stroke-width="1.2"/>
+<text x="660" y="289" font-family="Inter, sans-serif" font-size="13" font-weight="800" fill="#2b8a3e" text-anchor="middle" xml:space="preserve">Yes: counted</text>
+<line x1="244" y1="284" x2="296" y2="284" stroke="#4a5468" stroke-width="2.2" marker-end="url(#arr)"/>
+<line x1="504" y1="284" x2="556" y2="284" stroke="#4a5468" stroke-width="2.2" marker-end="url(#arr)"/>
+<line x1="400" y1="310" x2="400" y2="336" stroke="#4a5468" stroke-width="2.2" marker-end="url(#arr)"/>
+<rect x="300" y="340" width="200" height="44" rx="10" fill="#fff0f0" stroke="#c92a2a" stroke-width="1.2"/>
+<text x="400" y="367" font-family="Inter, sans-serif" font-size="12.5" font-weight="800" fill="#c92a2a" text-anchor="middle" xml:space="preserve">No: 429, nothing written</text>
+<text x="400" y="414" font-family="Inter, sans-serif" font-size="12" font-weight="400" fill="#4a5468" text-anchor="middle" xml:space="preserve">A flood of requests costs one hash and two 16-byte updates,</text>
+<text x="400" y="432" font-family="Inter, sans-serif" font-size="12" font-weight="400" fill="#4a5468" text-anchor="middle" xml:space="preserve">never a rewrite of the statistics file.</text>
+</svg>

@@ -29,7 +29,7 @@ Runs the Python **pipeline** that turns the Imaris file into a web folder.
 #### The administrator
 Imports, publishes, customises the site, updates the platform.
 
-[chapters 14 and 19]{.pill}
+[chapters 14 to 19]{.pill}
 :::
 ::: card
 #### The public visitor
@@ -105,7 +105,7 @@ From the specimen to the screen, the data pass through four places.
 |---|---|---|---|
 | 1. Acquisition | confocal microscope + Imaris software | depends on the specimen | 4 |
 | 2. Preparation | technician, Python pipeline on their computer | minutes to hours, only once | 5 to 8 |
-| 3. Going online | administrator: import by drag-and-drop or SFTP, then publication | depends on the bandwidth | 13 |
+| 3. Going online | administrator: import by drag-and-drop or SFTP, then publication | depends on the bandwidth | 14 and 17 |
 | 4. Display | anyone, with a browser | a few seconds for the first image | 9 to 12 |
 
 ::: remember
@@ -152,14 +152,29 @@ automatic test files
 A few version landmarks, valid at the date of this document:
 
 - web platform **1.59.3**; preparation pipeline **0.21.0**;
-- current data format: [format 4]{.pill .green} (formats 1 to 3 are converted in place, see chapter 14);
+- current data format: [format 4]{.pill .green} (formats 1 to 3 are converted in place, see chapter 17);
 - every release is checked by the automatic tests before it is published.
 
 ## 1.6 Map of the documentation
 
-This document is organised like the data's journey. Find your question below.
+This document has **21 chapters**, organised like the data's journey: from the microscope to the screen, then administration, reliability and the appendices. Find your question below.
 
-![Which question, which chapter?](img-en/ch01/carte.svg){width=95%}
+![Which question, which chapter?](img-en/ch01/carte.svg){width=78%}
+
+| Chapter | Title | For whom |
+|---|---|---|
+| 1 – 3 | The platform at a glance; the technologies; a tour of the pages | everyone |
+| 4 – 8 | From Imaris to the web folder: background, reduction, bricks, metadata and tracking | technician |
+| 9 – 11 | 3D rendering, streaming, channels and histograms | biologist, the curious |
+| 12 – 13 | The tools one by one, then under the bonnet | biologist |
+| 14 | The administration panel in brief | administrator |
+| 15 | Plugins, trust and the signed catalogue | administrator |
+| 16 | Customising and translating | administrator |
+| 17 | Data in depth: files, formats, migrations, import | administrator, technician |
+| 18 | Hosting, updating, publishing a release | system administrator |
+| 19 | Security and reliability, with the "What happens if…?" table | everyone |
+| 20 | Appendices: module map, browser memories, limits, figures, versions | reference |
+| 21 | Glossary | everyone |
 
 ::: tip
 In a hurry? Read the **In 30 seconds** boxes at the start of each chapter: they are enough to tell whether the rest concerns you.

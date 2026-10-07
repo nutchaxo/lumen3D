@@ -4,7 +4,7 @@ subtitle: "Documentation complète de la plateforme"
 eyebrow: "IRIBHM · ULB — Lumen3D"
 version: "Plateforme Web 1.59.3 · Pipeline 0.21.0 · Format de données 4"
 date: "Octobre 2026"
-abstract: "Comment un fichier Imaris de plusieurs gigaoctets devient un embryon que l'on fait tourner dans un navigateur : les langages, les pages, le nettoyage de l'image, la compression, les briques, le rendu 3D, les outils de mesure et le panneau d'administration. Écrit pour des biologistes, illustré à chaque page."
+abstract: "Comment un fichier Imaris de plusieurs gigaoctets devient un embryon que l'on fait tourner dans un navigateur — et tout ce qui entoure ce voyage : les langages et les pages, le nettoyage de l'image, la compression, les briques, le rendu 3D, le streaming, les histogrammes, chaque outil et son fonctionnement interne, les plugins, la personnalisation et les langues, les formats de données, l'import, l'hébergement, les mises à jour, la sécurité. 21 chapitres écrits pour des biologistes, illustrés à chaque page."
 lang: fr
 toc-title: "Sommaire"
 toc-class: compact
@@ -18,9 +18,9 @@ Ce document explique **tout** ce que fait Lumen3D, sans supposer que vous savez 
 Chaque page a au moins une illustration ; le texte reste court.
 :::
 
-## Trois façons de le lire
+## Quatre façons de le lire
 
-:::: cards
+:::: {.cards .two}
 ::: card
 #### 🚀 En 20 minutes
 Lisez seulement les encadrés verts **« En 30 secondes »** de chaque chapitre et regardez les figures.
@@ -32,6 +32,10 @@ Chapitres **4 à 8** : ce qui arrive à votre fichier Imaris, étape par étape,
 ::: card
 #### 🖥️ « L'écran »
 Chapitres **9 à 12** : comment le viewer dessine le volume et comment fonctionnent les outils.
+:::
+::: card
+#### ⚙️ « Les coulisses »
+Chapitres **13 à 20** : le fonctionnement interne des outils, l'administration, les plugins, la personnalisation, les formats, l'hébergement, la sécurité.
 :::
 ::::
 

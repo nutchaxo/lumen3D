@@ -225,7 +225,7 @@ E9.5 dataset: 768 × 576 × 112 voxels of 1.2 × 1.2 × 3.0 µm.
 - The longest side (X) is set to 1; the cube therefore measures **1 × 0.75 × 0.365** (336 / 921.6).
 :::
 
-The viewer sorts the calibration into three states: **exact** (voxel sizes and section thickness known), **estimated**, or **absent**. Without calibration, the 3D **scale bar** is hidden rather than wrong.
+The viewer sorts the calibration into three states: **exact** (voxel sizes and section thickness known), **estimated**, or **absent**. Without calibration, the 3D **scale bar** is hidden rather than wrong. This status is **recomputed by the viewer** from the metadata it receives ("exact" only if a section thickness is known); the pipeline itself writes only `exact` or `metadata-missing` (chapter 8).
 
 In the [Physical Scale]{.ui} panel, the [Display Z override]{.ui} slider (from ×0.25 to ×2.0) stretches only the **display** in Z so that thin layers are easier to see; the [1:1]{.ui} button resets it. Measurements in µm ignore this stretch.
 

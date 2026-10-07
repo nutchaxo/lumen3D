@@ -232,7 +232,7 @@ The current pipeline (version 0.21.0) writes **format 4 directly**. A dataset pu
 
 ### "Data updates"
 
-Like a software update, the [Data updates]{.ui} tab of the admin panel (chapter 14) detects the datasets still in format 1, 2 or 3 and converts them **in place**, one by one. The native level is kept voxel for voxel: nothing is recomputed from the original.
+Like a software update, the [Data updates]{.ui} tab of the admin panel (chapter 17) detects the datasets still in format 1, 2 or 3 and converts them **in place**, one by one. The native level is kept voxel for voxel: nothing is recomputed from the original.
 
 ::: cards
 ::: card

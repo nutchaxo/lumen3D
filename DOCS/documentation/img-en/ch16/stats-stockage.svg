@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 440" font-family="Inter, sans-serif">
+<defs><marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#4a5468"/></marker></defs><rect width="800" height="440" rx="16" fill="#f8f9fd"/>
+<text x="400" y="34" font-family="Inter, sans-serif" font-size="18" font-weight="800" fill="#1c2333" text-anchor="middle" xml:space="preserve">What is counted, what is kept, what does not exist</text>
+<rect x="16" y="56" width="330" height="250" rx="12" fill="#fff" stroke="#c5cbd8" stroke-width="1.2"/>
+<path d="M16,90 L16,68 Q16,56 28,56 L334,56 Q346,56 346,68 L346,90 Z" fill="#e8edff"/>
+<text x="181.0" y="78" font-family="Inter, sans-serif" font-size="12.5" font-weight="800" fill="#3b5bdb" text-anchor="middle" xml:space="preserve">api/stats.json</text>
+<text x="30" y="104" font-family="JetBrains Mono, Consolas, monospace" font-size="11.5" font-weight="400" fill="#1c2333" text-anchor="start" xml:space="preserve">{ "global": { "visits": 19,</text>
+<text x="30" y="124" font-family="JetBrains Mono, Consolas, monospace" font-size="11.5" font-weight="400" fill="#1c2333" text-anchor="start" xml:space="preserve">    "views": 127, "downloads": 0,</text>
+<text x="30" y="144" font-family="JetBrains Mono, Consolas, monospace" font-size="11.5" font-weight="400" fill="#1c2333" text-anchor="start" xml:space="preserve">    "since": "2026-10-07…" },</text>
+<text x="30" y="164" font-family="JetBrains Mono, Consolas, monospace" font-size="11.5" font-weight="400" fill="#1c2333" text-anchor="start" xml:space="preserve">  "daily": { "2026-10-07":</text>
+<text x="30" y="184" font-family="JetBrains Mono, Consolas, monospace" font-size="11.5" font-weight="400" fill="#1c2333" text-anchor="start" xml:space="preserve">    { "views": 127, "visits": 19 } },</text>
+<text x="30" y="204" font-family="JetBrains Mono, Consolas, monospace" font-size="11.5" font-weight="400" fill="#1c2333" text-anchor="start" xml:space="preserve">  "datasets": { "3d/Embryo-…": {</text>
+<text x="30" y="224" font-family="JetBrains Mono, Consolas, monospace" font-size="11.5" font-weight="400" fill="#1c2333" text-anchor="start" xml:space="preserve">    "views": 87,</text>
+<text x="30" y="244" font-family="JetBrains Mono, Consolas, monospace" font-size="11.5" font-weight="400" fill="#1c2333" text-anchor="start" xml:space="preserve">    "lastViewed": "2026-10-07…" } } }</text>
+<text x="30" y="276" font-family="Inter, sans-serif" font-size="11" font-weight="400" fill="#4a5468" text-anchor="start" font-style="italic" xml:space="preserve">(example figures: demonstration set)</text>
+<rect x="366" y="56" width="418" height="118" rx="12" fill="#fff" stroke="#c5cbd8" stroke-width="1.2"/>
+<path d="M366,90 L366,68 Q366,56 378,56 L772,56 Q784,56 784,68 L784,90 Z" fill="#ebfbee"/>
+<text x="575.0" y="78" font-family="Inter, sans-serif" font-size="12" font-weight="800" fill="#2b8a3e" text-anchor="middle" xml:space="preserve">What is counted</text>
+<text x="378" y="112.0" font-family="Inter, sans-serif" font-size="12" font-weight="400" fill="#1c2333" text-anchor="start" xml:space="preserve">visit: one home-page opening per session</text>
+<text x="378" y="128.2" font-family="Inter, sans-serif" font-size="12" font-weight="400" fill="#1c2333" text-anchor="start" xml:space="preserve">view: a dataset opened in the viewer, once per session</text>
+<text x="378" y="144.4" font-family="Inter, sans-serif" font-size="12" font-weight="400" fill="#1c2333" text-anchor="start" xml:space="preserve">download: a file from download/ served in full</text>
+<rect x="366" y="188" width="418" height="118" rx="12" fill="#fff" stroke="#c5cbd8" stroke-width="1.2"/>
+<path d="M366,222 L366,200 Q366,188 378,188 L772,188 Q784,188 784,200 L784,222 Z" fill="#fff0f0"/>
+<text x="575.0" y="210" font-family="Inter, sans-serif" font-size="12" font-weight="800" fill="#c92a2a" text-anchor="middle" xml:space="preserve">What is NOT kept</text>
+<text x="378" y="244.0" font-family="Inter, sans-serif" font-size="12" font-weight="400" fill="#1c2333" text-anchor="start" xml:space="preserve">no IP address, no cookie, no identifier</text>
+<text x="378" y="260.2" font-family="Inter, sans-serif" font-size="12" font-weight="400" fill="#1c2333" text-anchor="start" xml:space="preserve">no browser, country or referring page</text>
+<text x="378" y="276.4" font-family="Inter, sans-serif" font-size="12" font-weight="400" fill="#1c2333" text-anchor="start" xml:space="preserve">no visitor: counters only</text>
+<rect x="16" y="322" width="768" height="100" rx="12" fill="#fff" stroke="#c5cbd8" stroke-width="1.2"/>
+<text x="32" y="346" font-family="Inter, sans-serif" font-size="12" font-weight="400" fill="#1c2333" text-anchor="start" xml:space="preserve">• Session = a tab: a sessionStorage key, which stays in the browser and disappears when it closes.</text>
+<text x="32" y="370" font-family="Inter, sans-serif" font-size="12" font-weight="400" fill="#1c2333" text-anchor="start" xml:space="preserve">• Admin previews are not counted; a dataset id must name a dataset that exists.</text>
+<text x="32" y="394" font-family="Inter, sans-serif" font-size="12" font-weight="400" fill="#1c2333" text-anchor="start" xml:space="preserve">• Writes are batched: at most every 5 seconds, when the admin reads, and at shutdown.</text>
+</svg>

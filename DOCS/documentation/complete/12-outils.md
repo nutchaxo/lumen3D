@@ -22,7 +22,7 @@ Survolez un bouton : une info-bulle donne son nom. La barre est rangée en **cin
 | 3 | [Mesurer la distance]{.ui} (<kbd>M</kbd>) |
 | 4 | [Centre de téléchargement]{.ui} |
 | 5 | Capture en « bac à sable » (plugin de démonstration) |
-| 6 | [Capture d'ecran]{.ui} |
+| 6 | [Capture d'écran]{.ui} |
 | 7 | [Basculer la Grille (Aucune / Normale / Fine)]{.ui} |
 | 8 | [Basculer les Axes]{.ui} |
 | 9 | [Basculer les axes d'orientation]{.ui} |
@@ -39,7 +39,7 @@ Survolez un bouton : une info-bulle donne son nom. La barre est rangée en **cin
 | 14 | [Explorateur Z-Stack]{.ui} |
 | 15 | [Aide et méthodes]{.ui} : un lien vers la page À propos (présentation et méthodes) |
 | 16 | [Filtres daltonisme]{.ui} |
-| 17 | [Changer le theme]{.ui} (clair / sombre) |
+| 17 | [Changer le thème]{.ui} (clair / sombre) |
 | 18 | [Centrer l'échantillon]{.ui} |
 | 19 | [Réinitialiser la vue]{.ui} |
 | 20 | [Exporter la vue 3D en PNG]{.ui} |
@@ -63,7 +63,7 @@ Survolez un bouton : une info-bulle donne son nom. La barre est rangée en **cin
 | Savoir où est l'avant de l'embryon | [Basculer les axes d'orientation]{.ui} | — |
 | Une figure annotée pour un article | Le Studio (§ 12.7) | — |
 | Une image 3D très grande ou transparente | [Exporter la vue 3D en PNG]{.ui} | — |
-| Une capture rapide de l'écran | [Capture d'ecran]{.ui} | — |
+| Une capture rapide de l'écran | [Capture d'écran]{.ui} | — |
 | Un panneau par canal | [Décomposer par canal]{.ui} | — |
 | Récupérer le fichier d'origine | [Centre de téléchargement]{.ui} | — |
 | Comparer deux embryons | La page Comparer (§ 12.8) | — |
@@ -211,7 +211,7 @@ Les préréglages XY/XZ/YZ suivent les axes **du fichier**, pas ceux de l'embryo
 | 3 | [Épaisseur]{.ui} : 12 coupes = 36,00 µm |
 | 4 | [Rotation]{.ui} 0–360° |
 | 5 | Position : 174 à 207 µm de profondeur |
-| 6 | [Open in Slice Studio]{.ui} : ouvrir la tranche dans le Studio (libellé affiché en anglais) |
+| 6 | [Ouvrir dans le Studio de coupe]{.ui} : ouvrir la tranche dans le Studio |
 | 7 | Le **cran 3D** : curseur ici = toute la pile en 3D |
 | 8 | La **piste** : une position par coupe |
 | 9 | **Triangles de rognage** (dessus / dessous) |
@@ -265,7 +265,7 @@ Le fichier a sa rotation `Q_base` (axes du fichier → axes anatomiques). La bou
 ## 12.6 Capture, export, présentation, téléchargement, canaux, chunks
 
 ::: tldr
-- Trois façons d'obtenir une image : [Capture d'ecran]{.ui} (rapide), [Exporter la vue 3D en PNG]{.ui} (grande taille), le Studio (figure annotée).
+- Trois façons d'obtenir une image : [Capture d'écran]{.ui} (rapide), [Exporter la vue 3D en PNG]{.ui} (grande taille), le Studio (figure annotée).
 - Le [Centre de téléchargement]{.ui} ne donne pas des captures : il donne les **fichiers** du jeu de données.
 :::
 
@@ -308,7 +308,7 @@ Dans le viewer, il affiche une **liste de fichiers** : le fichier Imaris d'origi
 ![Une vignette par canal : DAPI, Pecam1, Sox2.](img/ch12/decomposer-c.png){.shot width=100%}
 ::::::
 :::::: col
-Chaque canal allumé reçoit sa **vignette** (le même volume, avec ce canal seul). Cliquer une vignette permet de régler ce canal dans le panneau de gauche ([Terminé]{.ui} pour sortir, [Revenir à l'original]{.ui}). Les trois boutons (1) choisissent la disposition ; [Export]{.ui} (2) écrit un PNG `decomposition_<disposition>_<date>.png`. Chaque vignette est rendue à la taille du volume (512 à 4096 px) et le viewer refuse une image trop grande pour la carte graphique (« Trop de vues pour une seule image »).
+Chaque canal allumé reçoit sa **vignette** (le même volume, avec ce canal seul). Cliquer une vignette permet de régler ce canal dans le panneau de gauche ([Terminé]{.ui} pour sortir, [Revenir à l'original]{.ui}). Les trois boutons (1) choisissent la disposition ; [Exporter]{.ui} (2) écrit un PNG `decomposition_<disposition>_<date>.png`. Chaque vignette est rendue à la taille du volume (512 à 4096 px) et le viewer refuse une image trop grande pour la carte graphique (« Trop de vues pour une seule image »).
 ::::::
 :::::::
 

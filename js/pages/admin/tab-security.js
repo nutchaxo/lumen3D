@@ -9,7 +9,7 @@
 
 'use strict';
 
-import { API_AUTH, API_ADMIN, t, escHtml, apiFetchStatus, toast, el, refreshIcons, MIN_PASSWORD } from './shared.js';
+import { API_AUTH, API_ADMIN, t, escHtml, apiFetchStatus, toast, el, refreshIcons, MIN_PASSWORD, throttleText } from './shared.js';
 
 function render() {
   const root = el('security-root');
@@ -132,10 +132,12 @@ async function submit() {
   if (r.ok && r.data?.ok) {
     toast(t('admin.passwordChanged', 'Mot de passe modifié ✓'));
     ['sec-current', 'sec-new', 'sec-new2'].forEach((id) => { const e = el(id); if (e) e.value = ''; });
+  } else if (throttleText(r.data)) {
+    err(throttleText(r.data));
   } else if (r.status === 401 || r.data?.error === 'bad_current') {
     err(t('admin.badCurrent', 'Mot de passe actuel incorrect.'));
   } else if (r.data?.error === 'weak_password') {
-    err(t('admin.setupWeak', 'Mot de passe trop court (4 caractères minimum).'));
+    err(t('admin.setupWeak', `Mot de passe trop court (${MIN_PASSWORD} caractères minimum).`, { n: MIN_PASSWORD }));
   } else {
     err(t('admin.changeFailed', 'Échec du changement de mot de passe.'));
   }

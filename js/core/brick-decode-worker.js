@@ -14,12 +14,23 @@
        With `assemble: {key, slot, components}` the voxels are written, LUT applied,
        at stride `components` into the assembly buffer `key` (created zero-filled on
        first use, sized region voxels × components) and the result carries no bytes.
-     TAKE {id, batch, key, voxels, components} → DECODE_RESULT {id, ok, buffer}: the
-       assembly, transferred and forgotten (zero-filled when no channel was written).
+     TAKE {id, batch, key, voxels, components, encode?} → DECODE_RESULT {id, ok, buffer}:
+       the assembly, transferred and forgotten (zero-filled when no channel was written).
+       With `encode: {format: 'bc', channels, w, h, d}` (the assembly is that w × h × d
+       box) the assembly is encoded to the GPU's BC4 / BC5 blocks (bc-codec.js) and the
+       result carries `encoded: {width, height, depth, planes: [{format, channels,
+       buffer}]}` instead of `buffer`: the display atlas uploads the blocks as they are.
      DROP {key}: forget an assembly.
      CANCEL {batch?}: with a batch id, drop that batch's queued jobs, suppress its
        in-flight results and forget its assemblies; without, the same for every job
        posted so far (epoch). */
+
+// The block codec, from the same directory and with the same cache-busting stamp. A
+// sandbox without importScripts (unit tests) provides BCCodec itself, or never asks.
+if (typeof importScripts === 'function' && typeof BCCodec === 'undefined') {
+  const stamp = (/[?&]v=([^&#]+)/.exec((self.location && self.location.search) || '') || [])[1];
+  importScripts(`bc-codec.js${stamp ? `?v=${stamp}` : ''}`);
+}
 
 let decodeQueue = Promise.resolve();
 let canvas = null;
@@ -65,6 +76,24 @@ function processTake(msg, epoch) {
   let a = assemblies.get(msg.key);
   assemblies.delete(msg.key);
   const buf = a ? a.buf : new Uint8Array(Math.max(0, msg.voxels | 0) * components);
+  const enc = msg.encode && typeof msg.encode === 'object' ? msg.encode : null;
+  if (enc && enc.format === 'bc') {
+    let encoded;
+    try {
+      if (typeof BCCodec === 'undefined') throw new Error('BC codec unavailable in the decode worker');
+      if (enc.w * enc.h * enc.d !== (msg.voxels | 0)) throw new Error(`encode box ${enc.w}×${enc.h}×${enc.d} does not hold ${msg.voxels} voxels`);
+      encoded = BCCodec.encodeBox(buf, components, enc.w, enc.h, enc.d, enc.channels);
+    } catch (err) {
+      self.postMessage({ type: 'DECODE_RESULT', id: msg.id, ok: false, message: err && err.message ? err.message : String(err) });
+      return;
+    }
+    const planes = encoded.planes.map(p => ({ format: p.format, channels: p.channels, buffer: p.bytes.buffer }));
+    self.postMessage({
+      type: 'DECODE_RESULT', id: msg.id, ok: true, assembled: true,
+      encoded: { width: encoded.width, height: encoded.height, depth: encoded.depth, planes }
+    }, planes.map(p => p.buffer));
+    return;
+  }
   self.postMessage({ type: 'DECODE_RESULT', id: msg.id, ok: true, buffer: buf.buffer, assembled: true }, [buf.buffer]);
 }
 

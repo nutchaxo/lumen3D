@@ -1,0 +1,17 @@
+# Changelog v1.60.0 (Web Platform)
+
+## [ADDED]
+
+- **GPU-compressed display of timelapses**: the frames of a timelapse are now held on the GPU in RGTC blocks that the graphics card decodes in hardware (BC4 for one channel, BC5 for two, BC5 + BC4 or BC5 + BC5 for three or four). That is half a byte per voxel and channel instead of one, so the frame cache holds about twice as many timepoints at every quality, and a level that was over the VRAM budget may now fit. The encoder is the new `js/core/bc-codec.js` (deterministic: two modes per 4 × 4 block, one least-squares refit of the endpoints, background zeros kept exact). Bricks are encoded in the decode worker that assembles them (`BrickLoader` compose `encode: 'bc'`) and uploaded as they arrive (`SVRManager` `compression: 'bc'`, `writeEncodedBrick`).
+- **GPU compression setting**: the Render Quality panel has a *GPU compression* select — *Timelapses* (default), *On*, *Off* — and a status line saying whether the volume on screen is shown from compressed blocks. The choice is kept in localStorage `lumen3d.gpuCompression`. API: `VolumeViewer.getGpuCompression()` / `setGpuCompression(mode)`, `getActiveLevel().compressed`.
+
+## [OPTIMIZED]
+
+- **Timelapse buffering at high quality**: the background prefetch of the next timepoints now fills levels held in a sparse atlas too. It used to refuse every atlas, so at 1024 and on large datasets only the frame on screen was ever cached and playback reloaded each frame. Only atlases the cache would not keep (native) are still skipped. A prefetched atlas publishes on no material until its frame is shown.
+- **Small levels take less memory too**: with compression on, every level of a timelapse streams into a compressed atlas of its non-empty bricks, instead of a dense RGBA texture of 4 bytes per voxel: a two-channel level takes a quarter of the bytes per voxel, and nothing for its empty bricks.
+
+## [CHANGED]
+
+- **Atlas pages may be 2D arrays**: WebGL2 only accepts RGTC in a `TEXTURE_2D_ARRAY` (ANGLE refuses it in a 3D texture), so a compressed page holds one layer per voxel plane, with slots on a pitch of whole blocks (68 for a bordered 66³ brick). The ray-marcher and the slicer read such pages under the `SVR_ARRAY` define, blending two layers in the shader — exactly the trilinear filter of a 3D page. The second texture of a three- or four-channel page is bound to `svrAtlas4..7` (`SVR_ARRAY_PAIRS`, four pages at most). `SVRManager.clearAtlasDefines` takes every atlas define off before a dense texture is bound.
+- **Display only, approximate values**: compressed voxels are close to the stored ones but not equal to them. On a fluorescence-like test volume the error is 1.7 levels RMS (of 255) in the signal, 99.8 % of the background zeros stay exactly zero, and rendered views differ by 0.1 level per pixel on average (7 at most). The Studio's native pass and the zoom-detail atlas still read exact voxels; a distance pick finds its depth in what is displayed, as before. 3D datasets stay uncompressed unless the setting says *On*.
+- **Software renderers are never compressed**: SwiftShader and llvmpipe emulate RGTC by decompressing whole textures, and SwiftShader loses the WebGL context sampling a BC5 array of a few MiB (measured). `SVRManager.compressionSupport` refuses them and enables the extension again after a context restore; `SVRManager.allowSoftwareCompression` lifts the refusal for tests.

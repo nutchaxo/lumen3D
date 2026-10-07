@@ -215,6 +215,43 @@ const rowsOf = async (BL, tasks, opts = {}) => {
   assert.equal(diff, 0, 'cropped composed brick');
   console.log('v3 compose (4/2/1 components, LUT, cropToVolume): OK');
 
+  // ── compose encode 'bc': blocks from the worker = the codec on the composed brick ──
+  {
+    const BC = loadModule('js/core/bc-codec.js', 'BCCodec', { self: {} });
+    const tasks = [{ bx: 2, by: 1, bz: 0, channel: 1, lod: 0 }, { bx: 2, by: 1, bz: 0, channel: 0, lod: 0 },
+      { bx: 0, by: 0, bz: 0, channel: 0, lod: 0 }, { bx: 0, by: 0, bz: 0, channel: 1, lod: 0 }];
+    const raw = await rowsOf(BL, tasks, { compose: { components: 2, channels: 2, cropToVolume: true, luts: [null, lut] } });
+    const enc = await rowsOf(BL, tasks, { compose: { components: 2, channels: 2, cropToVolume: true, luts: [null, lut], encode: 'bc' } });
+    assert.equal(enc.summary.delivered, tasks.length, 'every task delivered as blocks');
+    assert.equal(enc.rows.length, 2);
+    for (const row of enc.rows) {
+      assert.equal(row.data, null, 'an encoded row carries no raw voxels');
+      const twin = raw.rows.find(q => q.bx === row.bx && q.by === row.by && q.bz === row.bz);
+      const r0 = twin.region || { x0: 0, x1: 66, y0: 0, y1: 66, z0: 0, z1: 66 };
+      const w = r0.x1 - r0.x0, h = r0.y1 - r0.y0, d = r0.z1 - r0.z0;
+      const want = BC.encodeBox(twin.data, 2, w, h, d, 2);
+      assert.deepEqual([row.encoded.width, row.encoded.height, row.encoded.depth], [want.width, want.height, want.depth], 'whole blocks over the box');
+      sameBytes(row.encoded.planes[0].bytes, want.planes[0].bytes, `BC5 blocks of ${row.bx},${row.by},${row.bz}`);
+    }
+    // No decode worker: the same blocks, encoded on the calling thread.
+    const BLm = loadBrickLoader(fetchImpl, { Worker: undefined, BCCodec: BC, createImageBitmap: undefined });
+    await BLm.init(BASE, tree.manifest);
+    const mainRaw = await rowsOf(BLm, tasks, { compose: { components: 2, channels: 2, cropToVolume: true, luts: [null, lut] } });
+    const main = await rowsOf(BLm, tasks, { compose: { components: 2, channels: 2, cropToVolume: true, luts: [null, lut], encode: 'bc' } });
+    assert.equal(main.rows.length, mainRaw.rows.length, 'the same bricks delivered with and without encoding');
+    for (const row of main.rows) {
+      const twin = mainRaw.rows.find(q => q.bx === row.bx && q.by === row.by && q.bz === row.bz);
+      const r0 = twin.region || { x0: 0, x1: 66, y0: 0, y1: 66, z0: 0, z1: 66 };
+      const want = BC.encodeBox(twin.data, 2, r0.x1 - r0.x0, r0.y1 - r0.y0, r0.z1 - r0.z0, 2);
+      sameBytes(row.encoded.planes[0].bytes, want.planes[0].bytes, 'main-thread encoding of the composed brick');
+    }
+    // A box that does not start on a block edge cannot be encoded: refused, not shifted.
+    const off = await rowsOf(BL, [{ bx: 0, by: 0, bz: 0, channel: 0, lod: 0, region: { x0: 1, x1: 66, y0: 0, y1: 66, z0: 0, z1: 66 } }],
+      { compose: { components: 1, channels: 1, encode: 'bc' } });
+    assert.equal(off.summary.failed.length, 1, 'an unaligned box fails');
+    console.log(`v3 compose encode 'bc' (worker and main thread, ${main.rows.length} bricks): OK`);
+  }
+
   // ── v2 after v3: a dataset switch back to a v2 tree still works ─────────────
   const BRICK = 64 ** 3;
   const pack = new Uint8Array(BRICK).fill(42);

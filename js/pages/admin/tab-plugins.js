@@ -8,7 +8,7 @@
 
 'use strict';
 
-import { API_ADMIN, t, escHtml, apiFetch, apiFetchStatus, toast, el, refreshIcons, askPassword } from './shared.js';
+import { API_ADMIN, t, escHtml, apiFetch, apiFetchStatus, toast, el, refreshIcons, askPassword, throttleText } from './shared.js';
 import { fetchPluginUpdates, runPluginUpdates } from './plugin-update.js';
 
 let _plugins = [];
@@ -203,6 +203,8 @@ async function onApprove(path, mode) {
   if (r.ok && r.data?.ok) {
     toast(t('admin.pluginApproved', 'Plugin approuvé ✓ (rechargez le viewer)'));
     load();
+  } else if (throttleText(r.data)) {
+    toast(throttleText(r.data), 'error');
   } else if (r.data?.error === 'bad_password') {
     toast(t('admin.badPassword', 'Mot de passe incorrect.'), 'error');
   } else if (r.data?.error === 'hash_mismatch') {

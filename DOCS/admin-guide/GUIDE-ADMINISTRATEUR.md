@@ -113,7 +113,7 @@ Si les identifiants sont mauvais, le message « Identifiants incorrects. » s'af
 ## 1.4. Essais répétés et durée de session
 
 ::: warning
-**Le panneau se protège des essais répétés.** Chaque échec est compté **avant** la vérification du mot de passe, par adresse : après **10 échecs en 15 minutes**, l'accès est bloqué pendant **15 minutes** (« Trop de tentatives. Réessayez plus tard. »). Un plafond global de 200 essais par 15 minutes protège aussi le site contre une attaque venue de plusieurs adresses.
+**Le panneau se protège des essais répétés.** Chaque échec est compté **avant** la vérification du mot de passe, par adresse : après **10 échecs en 15 minutes**, l'accès est bloqué pendant **15 minutes** (« Trop de tentatives. Réessayez dans N min. », le message suivant la langue du panneau ; même message pour le changement de mot de passe, l'approbation d'un plugin et l'installation depuis le Catalogue). Un plafond global de 200 essais par 15 minutes protège aussi le site contre une attaque venue de plusieurs adresses.
 :::
 
 - Un mauvais identifiant coûte **le même temps** qu'un mauvais mot de passe : on ne peut pas deviner quels comptes existent.
@@ -438,7 +438,7 @@ Un volume contient plusieurs **canaux**, un par marquage fluorescent. C'est ici 
 - **Le nom.** Les canaux arrivent nommés « Canal 1 », « Canal 2 »… Remplacez-les par le marquage réel : `DAPI`, `GFP`, `Pecam1`.
 - **La couleur.** Certaines sont attribuées d'après le nom : `DAPI` devient bleu, `GFP` vert, `Pecam1` magenta. Sinon, couleurs de repli : vert, magenta, bleu, rouge.
 - **Affiché ou masqué.** Décochez un canal peu informatif (vide, autofluorescence) : il reste disponible, mais le visiteur ne le voit pas d'abord.
-- **Min / max / gamma.** L'histogramme montre la répartition des intensités ; les poignées règlent seuil bas, seuil haut et gamma. [Auto]{.ui}, [Soft]{.ui}, [Contrast]{.ui} proposent des réglages tout faits, [Reset]{.ui} revient au départ.
+- **Min / max / gamma.** L'histogramme montre la répartition des intensités ; les poignées règlent seuil bas, seuil haut et gamma. [Auto]{.ui}, [Doux]{.ui}, [Contraste]{.ui} proposent des réglages tout faits, [Réinit.]{.ui} revient au départ.
 - **Isoler le canal** est un interrupteur : un second appui rétablit l'affichage d'avant.
 
 ::: warning
@@ -942,9 +942,9 @@ Les variables de page `{type3d}`, `{type2d}` et `{typeLive}` (chapitre 10) repre
 | 4 | Le détail **par jeu de données** ; cliquez un en-tête (Dataset, Vues, Téléch.) pour trier. |
 :::
 
-- **Visites** — ouvertures de la page d'accueil, comptées une fois par onglet du navigateur.
-- **Vues dataset** — fois où un jeu de données a été ouvert dans le visualiseur : l'indicateur le plus parlant.
-- **Téléchargements** — fichiers récupérés depuis le Download Center.
+- **Visites** — une par onglet du navigateur, sur la première page publique où arrive le visiteur, quelle qu'elle soit (accueil, explorateur, visualiseur, page 2D…) ; ni le panneau d'administration ni une page intégrée dans une autre (panneau de Comparer, aperçu de l'administration, éditeur de pages) ne comptent. Un visiteur arrivé directement sur un dataset compte donc une visite et une vue.
+- **Vues dataset** — fois où un jeu de données (volume ou photographie 2D) a été ouvert, une fois par onglet : l'indicateur le plus parlant.
+- **Téléchargements** — téléchargements complets d'un fichier du dossier `download/` d'un dataset (le Download Center), comptés de la même façon sur un hébergement Python ou PHP ; une reprise partielle n'est pas recomptée. Sous chaque chiffre, une ligne de l'onglet en rappelle la définition.
 
 Le tableau « Par dataset » donne vues, téléchargements et dernière consultation. Sans donnée : « Aucune donnée d'utilisation pour le moment. ». Renommer un type ne change pas ces chiffres.
 
@@ -993,7 +993,7 @@ Les champs **(MULTILINGUE)** affichent **une ligne par langue disponible** : `EN
 | **Monogramme (2–3 car.)** | Les lettres de la pastille du logo | `IR` |
 | **Emoji logo** | L'emoji affiché à côté du nom | 🔬 |
 | **Organisation** | Votre laboratoire ou institution | `IRIBHM — ULB` |
-| **Lien de l'organisation** | L'adresse de son site | `https://…` |
+| **Lien de l'organisation** | L'adresse de son site : le nom de l'organisation y renvoie dans le pied de page public | `https://…` |
 
 ## 8.3. Carte « Terminologie » — la plus utile
 
@@ -1009,7 +1009,7 @@ Ce mot est ensuite repris **automatiquement** dans toute l'interface publique : 
 | n | ce que c'est |
 |-|----------------------|
 | 1 | Carte **Pied de page** : la mention de copyright (par langue). |
-| 2 | Un **lien** du pied de page : [Libellé]{.ui} + adresse ; la croix le retire. |
+| 2 | Un **lien** du pied de page : [Libellé]{.ui} + adresse (`http(s)://`, `mailto:` ou relative), affiché avant « Mentions légales » ; la croix le retire. |
 | 3 | [Ajouter un lien]{.ui}. |
 | 4 | Carte **Navigation**. |
 | 5 | Les cases qui décident des entrées du menu public. |
@@ -1061,7 +1061,7 @@ Réinitialiser demande « Réinitialiser l'identité aux valeurs par défaut ? �
 | **Erreur** | Les messages d'erreur (rouge par défaut) |
 | **Avertissement** | Les alertes (orange par défaut) |
 
-Cliquez sur un carré de couleur pour ouvrir le sélecteur : **l'aperçu se met à jour instantanément**. Les boutons principaux sont dérivés de la couleur de l'instance et visent le contraste **WCAG AA** (sans le garantir pour toutes les couleurs : un texte blanc sur un orange ou un turquoise vif reste en dessous ; vérifiez la lisibilité dans l'aperçu) ; le thème enregistré s'applique avant le premier affichage.
+Cliquez sur un carré de couleur pour ouvrir le sélecteur : **l'aperçu se met à jour instantanément**. Les boutons principaux sont dérivés de la couleur de l'instance et atteignent toujours le contraste **WCAG AA** : le serveur assombrit leur couleur juste assez pour qu'un texte blanc y soit lisible (4,5 : 1), même sur un orange ou un turquoise vif, ce que l'aperçu montre déjà ; le thème enregistré s'applique avant le premier affichage.
 
 ::: tip
 Gardez Succès / Erreur / Avertissement **proches du vert / rouge / orange** : ce sont des repères universels.
@@ -1527,7 +1527,7 @@ Ces plugins ne sont **pas** livrés avec le site : ils s'installent à la demand
 | **Slice through Volume** | Une coupe plane orientable à travers le volume |
 | **Z-Stack Browser** | Parcourir les coupes : ouverture à plat animée, cran 3D, rognage haut / bas, barre d'épaisseur réglable, curseur « Rotation » |
 | **Decompose by Channel** | Afficher les canaux côte à côte |
-| **Download Center** | Récupérer fichiers, mesures, métadonnées, exports |
+| **Download Center** | Récupérer les fichiers du dossier `download/` et le CSV des mesures |
 | **Screenshot** | Capturer la vue 3D en PNG |
 | **Screenshot (sandboxed)** | La même capture, en bac à sable : l'exemple de plugin isolé |
 | **Presentation Mode** | Plein écran sans interface, pour projeter |
@@ -2009,9 +2009,9 @@ Il est **impossible** de le retrouver : le serveur n'en garde qu'une empreinte i
 
 **Rien d'autre n'est perdu** : ni datasets, ni pages, ni réglages. Pendant ce court laps de temps, n'importe qui ouvrant la page pourrait créer le compte à votre place : faites-le d'une traite.
 
-### « Trop de tentatives. Réessayez plus tard. »
+### « Trop de tentatives. Réessayez dans N min. »
 
-Après 10 échecs en 15 minutes, l'accès est bloqué 15 minutes. Attendez, puis reprenez avec le bon mot de passe. Derrière un proxy, voir §1.4.
+Après 10 échecs en 15 minutes, l'accès est bloqué 15 minutes ; le message indique l'attente restante en minutes. Attendez, puis reprenez avec le bon mot de passe. Derrière un proxy, voir §1.4.
 
 ### « J'ai modifié quelque chose et le site est cassé »
 

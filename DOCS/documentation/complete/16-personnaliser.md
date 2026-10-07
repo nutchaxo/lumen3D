@@ -86,11 +86,12 @@ Dans la démonstration, la barre du haut affiche « **IRIBHM — ULB** » : c'es
 **Décocher masque le lien, pas la page.** Si vous décochez [Afficher « Comparer »]{.ui}, l'adresse `compare.html` reste valide : seul le lien disparaît de la barre. Les pages que vous créez sont ajoutées à la suite des liens, dans l'ordre de la liste, avec le libellé dans la langue du visiteur.
 :::
 
-### Les deux champs qui n'ont pas (encore) de place à l'écran
+### Le lien de l'organisation et les liens du pied de page
 
-::: warning
-- **`org.url`** (*Lien de l'organisation*) et **`footer.links`** (*Pied de page → Liens*) se saisissent et se **mémorisent** bien dans `instance.json`, mais **aucune page livrée ne les affiche** aujourd'hui. Le pied de page montre le copyright, [À propos]{.ui}, [Contact]{.ui} et, si coché, [Mentions légales]{.ui}.
-- Pour afficher un lien d'institution, utilisez une page de l'éditeur (widget [Liste de liens]{.ui} ou [Bandeau de logos]{.ui}).
+::: note
+- **`footer.links`** (*Pied de page → Liens*) : le pied de page public (accueil, Explorateur, À propos, mentions légales, pages personnalisées) affiche vos liens **avant** [Mentions légales]{.ui}. Seules les adresses `http(s)://`, `mailto:` et relatives sont acceptées ; un lien externe s'ouvre dans un nouvel onglet.
+- **`org.url`** (*Lien de l'organisation*) : après le copyright, le pied de page ajoute « · » suivi du nom de l'organisation, lié à cette adresse (le nom d'hôte de l'adresse si aucun nom d'organisation n'est saisi ; rien si `org.url` est vide).
+- Le copyright saisi **par langue** s'affiche dans la langue du visiteur.
 :::
 
 ### Réglages sans écran d'administration
@@ -211,7 +212,7 @@ Ce n'est pas une panne, c'est le repli qui fonctionne : la solution est de rempl
 | 1 | Carte **Identité** : noms, monogramme, emoji, organisation. |
 | 2 | Carte **Terminologie** : le mot qui désigne vos objets d'étude, au singulier et au pluriel. |
 | 3 | Carte **Accroche & SEO** : accroche, description et mots-clés, par langue. |
-| 4 | Carte **Pied de page** : copyright (par langue) et liens (voir 16.2 : non affichés). |
+| 4 | Carte **Pied de page** : copyright (par langue) et liens, affichés dans le pied de page public (voir 16.2). |
 | 5 | Carte **Navigation** : une case par entrée du menu public. [Mentions légales]{.ui} est décochée par défaut. |
 | 6 | [Enregistrer]{.ui} : actif seulement quand un champ a changé. |
 | 7 | Un champ **multilingue** : une ligne par langue disponible. Ici la ligne **NL** est vide. |
@@ -300,7 +301,7 @@ Un seul sélecteur de couleur ne suffit pas : un bouton a besoin d'une teinte au
 | `--color-primary-hover` | la clarté (HSL) **+ 8** points |
 | `--color-primary-dark` | la clarté **− 10** points |
 | `--color-primary-subtle` | la même couleur à **15 %** d'opacité (accent : 12 %) |
-| `--color-primary-strong` | la couleur mélangée à **77 %** de noir (survol : 64 %) |
+| `--color-primary-strong` | **77 %** de la couleur sur du noir, puis assombrie d'un point à la fois jusqu'à **4,5 : 1** sous du blanc (survol : 64/77 de ce facteur) |
 
 Succès, erreur et avertissement dérivent de la même façon (survol, fond discret à 12 %).
 
@@ -310,8 +311,17 @@ Les boutons pleins portent du **texte blanc** sur `--color-primary-strong`. C'es
 
 ![Contraste du texte blanc sur le bouton, pour les six couleurs proposées par l'assistant.](img/ch16/contraste.svg){width=82%}
 
-::: warning
-Le calcul **assombrit** la couleur choisie, il ne vérifie rien. Les teintes déjà sombres s'en sortent ; **l'orange** (4,22) et **la turquoise** (3,61) restent **sous le seuil**. Après avoir changé la couleur primaire, regardez vos boutons dans les deux thèmes.
+::: note
+La figure montre le simple mélange à 77 %. Dès qu'une couleur primaire est définie, le **compilateur du thème** (côté serveur) calcule lui-même la couleur des boutons pleins : il part de 77 % et assombrit d'un point à la fois jusqu'à ce que le texte blanc atteigne **4,5 : 1**. Le seuil AA est donc **garanti** pour toute couleur qu'il sait lire (`#rgb`, `#rrggbb`, `rgb()`/`rgba()`). Les teintes déjà sombres ne bougent pas ; **l'orange** #FF7A2F (4,22 à 77 %) donne #BD5A23 (**4,52 : 1**) et **la turquoise** #0FC5A8 (3,61 à 77 %) donne #0A8672 (**4,50 : 1**). L'aperçu de l'onglet Apparence montre les mêmes couleurs avant l'enregistrement, et un `theme.css` existant est recompilé une fois, automatiquement, après la mise à jour. Sans couleur définie, le vert d'usine vient de la feuille de style (#00803F, 5,05 : 1).
+
+| Couleur de l'assistant | Bouton (survol) | Contraste |
+|-----------|-------------|------|
+| #00A654 | #008041 (#006A36) | 5,04 : 1 |
+| #2F6BFF | #2452C4 (#1E44A3) | 6,82 : 1 |
+| #7C5CFF | #5F47C4 (#4F3BA3) | 6,59 : 1 |
+| #0FC5A8 | #0A8672 (#097060) | 4,50 : 1 |
+| #FF7A2F | #BD5A23 (#9E4C1D) | 4,52 : 1 |
+| #E5484D | #B0373B (#932E31) | 6,08 : 1 |
 :::
 
 ::: tech
@@ -515,7 +525,7 @@ Un site public a besoin d'un **éditeur**, d'un **hébergeur**, d'une politique 
 | 2 | Le **texte** : un paragraphe par ligne blanche. Les `[crochets]` sont à remplacer par vos informations. |
 :::
 
-- Tant que vous n'avez rien publié, la page montre le **modèle neutre** livré (éditeur, protection des données, cookies et stockage local, propriété intellectuelle, avertissement, contact). Il est écrit en **anglais, français et espagnol**.
+- Tant que vous n'avez rien publié, la page montre le **modèle neutre** livré (éditeur, protection des données, cookies et stockage local, propriété intellectuelle, avertissement, contact). Il est écrit en **anglais, français, espagnol et néerlandais**.
 - Le texte est affiché par `textContent` : aucun HTML, aucune mise en forme, une section par bloc.
 - Le lien n'apparaît dans le pied de page que si la case [Afficher « Mentions légales »]{.ui} est cochée (décochée par défaut).
 
@@ -779,16 +789,16 @@ Un laboratoire veut savoir si ses jeux de données sont regardés. Lumen3D le di
 
 | Compteur | Quand il monte |
 |-------|---------------------|
-| **Visites** | une fois par **session de navigation** (un onglet), à l'ouverture de l'**accueil** |
-| **Vues** | une fois par session et par jeu de données, quand un jeu s'ouvre dans le viewer |
-| **Téléchargements** | quand un fichier du dossier `download/` d'un jeu (celui que propose le Download Center) est servi **en entier** |
+| **Visites** | une fois par **session de navigation** (un onglet), sur la **première page publique** ouverte, quelle qu'elle soit (accueil, explorateur, viewer, page 2D, comparaison, à propos, mentions légales, page personnalisée…) |
+| **Vues** | une fois par session et par jeu de données, quand un jeu s'ouvre (volume dans le viewer ou photographie dans la page 2D) |
+| **Téléchargements** | quand un fichier du dossier `download/` d'un jeu existant (celui que propose le Download Center) est servi **en entier** : un `GET` complet, ni un `HEAD`, ni une reprise partielle (`Range`) |
 
 ::: tech
 - Les balises sont des requêtes `POST` envoyées par `navigator.sendBeacon`, sans attendre de réponse (elles survivent à la fermeture de l'onglet). Un `GET` est **refusé** (405) : une image tierce ne peut pas gonfler vos chiffres.
 - « Une fois par session » veut dire : une clé de `sessionStorage` (`lumen_visit`, `lumen_view_<jeu>`) mémorise que c'est fait. Elle reste dans le navigateur et disparaît à la fermeture de l'onglet.
-- Les **aperçus de l'administration** (`mode=admin`) ne comptent pas : modifier un jeu ne gonfle pas ses vues.
-- Un visiteur qui arrive **directement** sur un jeu (lien reçu par courrier) compte une **vue** mais pas de **visite** : seule l'accueil compte les visites.
-- Les téléchargements sont comptés **côté serveur Python**, au moment où le fichier est servi (une reprise partielle n'est pas recomptée). Les hébergements PHP ont l'entrée de comptage mais aucun code du dépôt ne l'appelle pour un téléchargement : leur compteur reste à zéro.
+- Les **aperçus de l'administration** (`mode=admin`) ne comptent pas : modifier un jeu ne gonfle pas ses vues. Le panneau d'administration ne compte aucune visite, pas plus qu'une page intégrée dans une autre (panneau de la page Comparer, aperçu de l'administration, éditeur de pages).
+- Un visiteur qui arrive **directement** sur un jeu (lien reçu par courrier) compte une **visite** et une **vue** : c'est un choix délibéré, la visite est comptée sur la page d'arrivée, quelle qu'elle soit.
+- Les téléchargements sont comptés **par les deux serveurs**, avec la même règle, au moment où le fichier est servi (une reprise partielle n'est pas recomptée). Sur un hébergement Apache/PHP, le `.htaccess` racine fait passer la requête par `api/download.php`, qui la compte puis redirige (302) vers le même fichier marqué `?lumen_dl=1`, qu'Apache sert lui-même (reprise, plages et en-tête « pièce jointe » inchangés) ; sous `php -S`, c'est `router.php` qui compte.
 :::
 
 ### Ce qui est gardé : `api/stats.json`
@@ -829,11 +839,13 @@ L'onglet [Statistiques]{.ui} présente trois cartes (avec le tracé des **30 der
 ::: legend
 | n | ce que c'est |
 |--|----------------------|
-| 1 | **Visites** (ouvertures de l'accueil), avec la courbe des 30 derniers jours. |
+| 1 | **Visites** (une par onglet, sur n'importe quelle page publique), avec la courbe des 30 derniers jours. |
 | 2 | **Vues dataset** : l'indicateur le plus parlant. |
 | 3 | **Téléchargements**. |
 | 4 | Le détail par jeu : vues, téléchargements, dernière vue. Cliquez un en-tête pour trier. |
 :::
+
+Sous chaque chiffre, une ligne en rappelle la définition (« Une par onglet de navigateur, sur n'importe quelle page publique (hors panneau d'administration et pages intégrées). », « Une par dataset ouvert dans un onglet de navigateur. », « Un par téléchargement complet d'un fichier du dossier download/ d'un dataset. »).
 
 Changer le **nom** d'un type de données ne change aucun de ces chiffres. Lors du passage à l'ancien vocabulaire des types, les compteurs des anciennes clés sont **additionnés** à ceux des nouvelles.
 
@@ -889,7 +901,6 @@ Seule la page du viewer charge `PerfTelemetry`. La ligne de progression que vous
 |-----------|-------------|
 | « Mon changement d'Apparence n'apparaît pas » | il n'est appliqué qu'après [Enregistrer]{.ui} ; videz le cache si le navigateur garde l'ancienne `theme.css` |
 | « Le lien Mentions légales a disparu » | la case est décochée par défaut dans [Identité]{.ui} |
-| « Mes liens de pied de page ne s'affichent pas » | voir 16.2 : ils sont enregistrés mais pas affichés |
 | « Le néerlandais parle d'embryos » | la ligne **NL** de *Terminologie* est vide |
 | « Ma page est sauvée mais invisible » | le brouillon est enregistré ; il faut [Publier]{.ui} |
 | « L'éditeur dit que la page est ouverte ailleurs » | un autre onglet l'édite : reprenez la main ou fermez l'autre |

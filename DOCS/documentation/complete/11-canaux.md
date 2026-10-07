@@ -81,7 +81,7 @@ Chaque canal a sa carte dans le panneau [Canaux]{.ui}. La ligne de résumé (par
 | 2 | boutons : [Isoler le canal]{.ui} (Solo), opacité (goutte), couleur (pastille) |
 | 3 | histogramme, avec les trois poignées : Min (gauche), gamma (milieu), Max (droite) |
 | 4 | valeurs lues : Min, Gamma, Max |
-| 5 | boutons de réglage rapide : Auto, Soft, Contrast, Reset (voir ci-dessous) |
+| 5 | boutons de réglage rapide : Auto, Doux, Contraste, Réinit. (voir ci-dessous) |
 | 6 | curseur [Flou gaussien σ]{.ui} (section 11.7) |
 :::
 
@@ -110,21 +110,21 @@ La case [Ignorer le fond]{.ui} ne change que le **dessin** : elle multiplie les 
 
 ## 11.6 Les boutons de réglage rapide
 
-Les boutons sous l'histogramme posent d'un coup Min, Max et le milieu. Ils s'appellent **Auto**, **Soft**, **Contrast** et **Reset** dans le panneau (texte anglais affiché tel quel, même en interface française).
+Les boutons sous l'histogramme posent d'un coup Min, Max et le milieu. Ils s'appellent **Auto**, **Doux**, **Contraste** et **Réinit.** dans le panneau (comme tout le panneau des canaux, ils suivent la langue de l'interface).
 
 | Bouton | Min | Max | Gamma obtenu |
 |---|---|---|---|
 | **Auto** | percentile 0,5 % | percentile 99,5 % | 1 (milieu de la fenêtre) |
-| **Soft** | 5 | 240 | 0,83 |
-| **Contrast** | 20 | 209 | 1,22 |
-| **Reset** | 0 | 255 | 1 |
+| **Doux** | 5 | 240 | 0,83 |
+| **Contraste** | 20 | 209 | 1,22 |
+| **Réinit.** | 0 | 255 | 1 |
 
 ::: tech
-**Auto** parcourt l'histogramme (64 colonnes) : Min = dernière colonne dont le cumul reste ≤ 0,5 % des voxels, Max = fin de la dernière colonne dont le cumul reste ≤ 99,5 %. Sans histogramme : Min 0,01 et Max 0,98 (sur 1). Les presets sont exprimés sur l'échelle 0–1 : Soft = 0,02 / 0,94 avec milieu à 0,42 ; Contrast = 0,08 / 0,82 avec milieu à 0,5 ; Reset = 0 / 1 / 0,5.
+**Auto** parcourt l'histogramme (64 colonnes) : Min = dernière colonne dont le cumul reste ≤ 0,5 % des voxels, Max = fin de la dernière colonne dont le cumul reste ≤ 99,5 %. Sans histogramme : Min 0,01 et Max 0,98 (sur 1). Les presets sont exprimés sur l'échelle 0–1 : Doux = 0,02 / 0,94 avec milieu à 0,42 ; Contraste = 0,08 / 0,82 avec milieu à 0,5 ; Réinit. = 0 / 1 / 0,5.
 :::
 
 ::: example
-**Auto** sur le jeu E9.5 donne Max = 80 pour DAPI, 36 pour Pecam1 et 92 pour Sox2, et Min = 0 : comme 86 à 97 % des voxels sont du fond, le 0,5 % inférieur est entièrement dans la première colonne. [Reset]{.ui} remet 0 / 255.
+**Auto** sur le jeu E9.5 donne Max = 80 pour DAPI, 36 pour Pecam1 et 92 pour Sox2, et Min = 0 : comme 86 à 97 % des voxels sont du fond, le 0,5 % inférieur est entièrement dans la première colonne. [Réinit.]{.ui} remet 0 / 255.
 :::
 
 ::: warning

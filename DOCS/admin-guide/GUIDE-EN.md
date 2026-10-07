@@ -113,7 +113,7 @@ If the credentials are wrong, the message "Incorrect credentials." appears above
 ## 1.4. Repeated attempts and session length
 
 ::: warning
-**The panel protects itself against repeated attempts.** Each failure is counted **before** the password is checked, per address: after **10 failures in 15 minutes**, access is blocked for **15 minutes** ("Trop de tentatives. Réessayez plus tard." — this server message is always in French). A site-wide ceiling of 200 attempts per 15 minutes also protects the site against an attack coming from several addresses.
+**The panel protects itself against repeated attempts.** Each failure is counted **before** the password is checked, per address: after **10 failures in 15 minutes**, access is blocked for **15 minutes** ("Too many attempts. Try again in N min.", in the panel's language; the same message applies to the password change, plugin approval and installing from the Catalog). A site-wide ceiling of 200 attempts per 15 minutes also protects the site against an attack coming from several addresses.
 :::
 
 - A wrong user name costs **the same time** as a wrong password: nobody can guess which accounts exist.
@@ -942,9 +942,9 @@ The page variables `{type3d}`, `{type2d}` and `{typeLive}` (chapter 10) pick up 
 | 4 | The detail **by dataset**; click a header (Dataset, Views, Downl.) to sort. |
 :::
 
-- **Visits** — openings of the home page, counted once per browser tab.
-- **Dataset views** — times a dataset was opened in the viewer: the most telling indicator.
-- **Downloads** — files fetched from the Download Center.
+- **Visits** — one per browser tab, on whichever public page the visitor lands on first (home, explorer, viewer, 2D page…); neither the admin panel nor a page embedded in another (a Compare panel, the admin preview, the page editor) counts. A visitor arriving directly on a dataset therefore counts one visit and one view.
+- **Dataset views** — times a dataset (volume or 2D photograph) was opened, once per tab: the most telling indicator.
+- **Downloads** — complete downloads of a file from a dataset's `download/` folder (the Download Center), counted the same way on a Python or a PHP host; a partial resume is not counted again. Under each figure, a line of the tab recalls its definition.
 
 The "By dataset" table gives views, downloads and last visit. With no data: "No usage data yet.". Renaming a type does not change these figures.
 
@@ -993,7 +993,7 @@ This is what lets the same platform serve an embryology lab or a neuroscience in
 | **Monogram (2–3 chars)** | The letters in the logo badge | `IR` |
 | **Logo emoji** | The emoji shown next to the name | 🔬 |
 | **Organization** | Your laboratory or institution | `IRIBHM — ULB` |
-| **Organization link** | The address of its website | `https://…` |
+| **Organization link** | The address of its website: the organization's name links to it in the public footer | `https://…` |
 
 ## 8.3. The "Terminology" card — the most useful
 
@@ -1009,7 +1009,7 @@ This word is then used **automatically** throughout the public interface: titles
 | n | what it is |
 |-|----------------------|
 | 1 | **Footer** card: the copyright notice (per language). |
-| 2 | A footer **link**: [Label]{.ui} + address; the cross removes it. |
+| 2 | A footer **link**: [Label]{.ui} + address (`http(s)://`, `mailto:` or relative), shown before "Legal"; the cross removes it. |
 | 3 | [Add a link]{.ui}. |
 | 4 | **Navigation** card. |
 | 5 | The checkboxes that decide the public menu's entries. |
@@ -1061,7 +1061,7 @@ Resetting asks "Reset identity to defaults? Business content will be removed.". 
 | **Error** | Error messages (red by default) |
 | **Warning** | Alerts (orange by default) |
 
-Click a colour square to open the picker: **the preview updates instantly**. The main buttons are derived from the instance colour and aim for **WCAG AA** contrast (without guaranteeing it for every colour: white text on a bright orange or turquoise stays below it; check readability in the preview); the saved theme is applied before the first display.
+Click a colour square to open the picker: **the preview updates instantly**. The main buttons are derived from the instance colour and always reach **WCAG AA** contrast: the server darkens their colour just enough for white text to be readable on it (4.5 : 1), even on a bright orange or turquoise, as the preview already shows; the saved theme is applied before the first display.
 
 ::: tip
 Keep Success / Error / Warning **close to green / red / orange**: they are universal cues.
@@ -1151,8 +1151,8 @@ The editor **automatically saves the draft**, never the published version. A bad
 
 | Badge | Meaning |
 |---|---|
-| ● Non enregistré | Changes are waiting. (Shown in French in every language.) |
-| ✓ Enregistré hh:mm | The draft is up to date. (Shown in French in every language.) |
+| ● Unsaved | Changes are waiting. |
+| ✓ Saved hh:mm | The draft is up to date. |
 | ⚠ Autosave failed, click to retry | New automatic attempt, and when the network returns. |
 | 🔒 Open in another tab, click to take over | Lock between two editing tabs of the **same page**. |
 | ⚠ Page unreadable, reload before editing | The content could not be read. |
@@ -1527,7 +1527,7 @@ These plugins are **not** shipped with the site: they are installed on demand (f
 | **Slice through Volume** | An orientable flat cut through the volume |
 | **Z-Stack Browser** | Browse the slices: animated flat opening, 3D notch, top / bottom trimming, adjustable thickness bar, "Rotation" slider |
 | **Decompose by Channel** | Show the channels side by side |
-| **Download Center** | Fetch files, measurements, metadata, exports |
+| **Download Center** | Fetch the files of the `download/` folder and the measurements CSV |
 | **Screenshot** | Capture the 3D view as a PNG |
 | **Screenshot (sandboxed)** | The same capture, in a sandbox: the example of an isolated plugin |
 | **Presentation Mode** | Full screen without interface, for projecting |
@@ -2009,9 +2009,9 @@ It is **impossible** to recover it: the server keeps only an irreversible finger
 
 **Nothing else is lost**: no datasets, no pages, no settings. During this short window, anyone opening the page could create the account in your place: do it in one go.
 
-### "Trop de tentatives. Réessayez plus tard."
+### "Too many attempts. Try again in N min."
 
-After 10 failures in 15 minutes, access is blocked for 15 minutes. Wait, then try again with the right password. Behind a proxy, see §1.4. (This server message is always shown in French.)
+After 10 failures in 15 minutes, access is blocked for 15 minutes; the message gives the remaining wait in minutes. Wait, then try again with the right password. Behind a proxy, see §1.4.
 
 ### "I changed something and the site is broken"
 

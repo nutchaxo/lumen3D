@@ -46,7 +46,7 @@ L'Explorateur liste les jeux publiés. Les jeux **masqués** n'y figurent pas.
 | 1 | La recherche : elle cherche dans le nom, la description, les noms de canaux, le stade et l'embryon. |
 | 2 | Le filtre [Type de données]{.ui} : 3D, Live ou 2D. |
 | 3 | Le filtre [Stade]{.ui} : une case par stade présent (E8, E8.5, E9…). [Effacer les filtres]{.ui} remet tout à zéro. |
-| 4 | Le tri (Nom, Date, Stade) et le choix grille / liste ; à côté, le nombre de résultats. |
+| 4 | Le tri ([Nom (A-Z)]{.ui}, [Nom (Z-A)]{.ui}, [Plus récents d'abord]{.ui}, [Stade (le plus précoce)]{.ui}) et le choix grille / liste ; à côté, le nombre de résultats. |
 | 5 | Une fiche : miniature, type, pastilles, nom, description, stade et date. |
 :::
 
@@ -70,7 +70,7 @@ C'est le cœur de la plateforme. Ouvrez un jeu 3D : le volume apparaît d'abord 
 | n | ce que c'est |
 |--|----------------------|
 | 1 | Groupe **Outils** : [Naviguer]{.ui} (par défaut), [Couper à travers le volume]{.ui}, [Mesurer la distance]{.ui}. |
-| 2 | Groupe **Exporter** : [Centre de téléchargement]{.ui}, [Capture d'ecran]{.ui}. |
+| 2 | Groupe **Exporter** : [Centre de téléchargement]{.ui}, [Capture d'écran]{.ui}. |
 | 3 | Groupe **Visuels** : grille, axes, axes d'orientation, masquer le volume, débogage des briques. |
 | 4 | Groupe **Dispositions** : [Mode présentation]{.ui}, [Décomposer par canal]{.ui}, [Explorateur Z-Stack]{.ui}. |
 | 5 | Panneau [Canaux]{.ui} : une ligne par canal (case, couleur, histogramme réglable). |

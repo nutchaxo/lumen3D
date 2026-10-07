@@ -117,6 +117,27 @@ function lumen_request_rel(array $server, string $appDir): string {
  * Returns true if it served the response, false if the path is not a servable
  * .html under $root (caller then falls through / 404s). Path-contained.
  */
+/**
+ * Recompile config/theme.css when an older compiler wrote it (no "lumen-theme v2"
+ * marker), so a host updated past 1.59.4 gets the WCAG AA filled-button pair
+ * without the operator re-saving the theme. Twin of dev_server.py
+ * _refresh_stale_theme_css. Costs one 200-byte read per page once up to date.
+ */
+function lumen_refresh_theme_css(string $themeCss): void {
+    if (!is_file($themeCss)) return;
+    $head = @file_get_contents($themeCss, false, null, 0, 200);
+    if ($head === false || strpos($head, 'lumen-theme v2') !== false) return;
+    if (!is_writable($themeCss) || !is_writable(dirname($themeCss))) return;   // cannot rewrite: keep serving it
+    try {
+        if (!defined('LUMEN_SITE_LIB')) define('LUMEN_SITE_LIB', true);
+        require_once __DIR__ . '/site.php';
+        $theme = site_load_doc('theme');
+        lumen_write_file_atomic($themeCss, site_generate_theme_css(is_array($theme) ? $theme : []));
+    } catch (\Throwable $e) {
+        // A theme sheet that cannot be rewritten keeps serving as it is.
+    }
+}
+
 function lumen_serve_html(string $root, string $rel): bool {
     $rootReal = realpath($root);
     if ($rootReal === false) return false;
@@ -141,6 +162,7 @@ function lumen_serve_html(string $root, string $rel): bool {
     // immediately even though CSS is long-cached (.htaccess). The URL only changes
     // when theme.css is regenerated (theme editor / wizard) → cache stays effective.
     $themeCss = dirname(__DIR__) . '/config/theme.css';
+    lumen_refresh_theme_css($themeCss);
     $tv = is_file($themeCss) ? (int)@filemtime($themeCss) : 0;
     $body = str_replace('href="config/theme.css"', 'href="config/theme.css?v=' . $tv . '"', $body);
     $body = str_replace('{{CSP_NONCE}}', $nonce, $body);

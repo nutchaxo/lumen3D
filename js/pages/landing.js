@@ -7,14 +7,6 @@
 
 /* ── Initialization ──────────────────────────────────────── */
 document.addEventListener('DOMContentLoaded', async () => {
-  // Usage telemetry: count one site visit per browser session (fire-and-forget).
-  try {
-    if (!sessionStorage.getItem('lumen_visit')) {
-      sessionStorage.setItem('lumen_visit', '1');
-      navigator.sendBeacon?.('api/telemetry.php?action=visit');
-    }
-  } catch (_) { /* private mode / no beacon — ignore */ }
-
   // Init core systems. Instance config loads FIRST so I18n.t() can interpolate
   // the brand/specimen tokens and the head/brand reflect the operator's identity.
   await InstanceConfig.load();

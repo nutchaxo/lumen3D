@@ -18,6 +18,7 @@
 
 import { API_SITE, t, escHtml, apiFetch, apiFetchStatus, toast, el, refreshIcons } from './shared.js';
 import { setUnsaved, registerDirtyGuard, bindTabSave } from './bus.js';
+import { strongPair } from './theme-contrast.js';
 
 // ── Color math (hex ↔ rgb ↔ hsl) ────────────────────────────────
 function _hexToRgb(hex) {
@@ -125,6 +126,20 @@ function _applyOverridesToPreview() {
   const root = _previewDoc.documentElement;
   for (const [k, v] of Object.entries(_overrides)) {
     try { root.style.setProperty(k, v); } catch (_) {}
+  }
+  // The server compiles the filled-button pair from the primary (white text at
+  // WCAG AA, see theme-contrast.js); preview the same colours before saving.
+  const pair = strongPair(_overrides['--color-primary']);
+  if (pair) {
+    try {
+      root.style.setProperty('--color-primary-strong', pair[0]);
+      root.style.setProperty('--color-primary-strong-hover', pair[1]);
+    } catch (_) {}
+  } else {
+    try {
+      root.style.removeProperty('--color-primary-strong');
+      root.style.removeProperty('--color-primary-strong-hover');
+    } catch (_) {}
   }
 }
 

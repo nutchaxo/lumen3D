@@ -25,6 +25,22 @@
    role 'detail' (region-of-interest streaming, volume-viewer.js): the same
    atlas published under the detail* uniforms and the ROI_DETAIL define, at
    most DETAIL_MAX_PAGES pages (the shader's detailAtlas0..3).
+
+   compression 'bc' (the display atlas of a timelapse, volume-viewer.js): the
+   pages hold the GPU's RGTC blocks (bc-codec.js) — BC4 for one channel, BC5
+   for two, two textures per page for three or four channels (BC5 + BC4 /
+   BC5 + BC5, the shader's svrAtlas0..3 and svrAtlas4..7, so at most four
+   pages). Half a byte per voxel and channel instead of one: twice the bricks
+   in the same VRAM, uploaded as they arrive (the GPU decodes in hardware).
+   WebGL2 refuses RGTC in a TEXTURE_3D (ANGLE: "requires TEXTURE_2D_ARRAY"), so
+   a compressed page is a 2D array texture, one layer per voxel plane, and
+   the shader interpolates between two layers itself (SVR_ARRAY). A block is
+   4 × 4 texels of one plane: slots are laid out on a pitch rounded up to a
+   multiple of 4 (68 for a 66-voxel bordered brick, 64 otherwise), so every
+   upload starts on a block edge; the 2 texels of padding are never sampled.
+   The values are LOSSY (bc-codec.js gives the error bounds): the atlas is for
+   display only. Exact voxels (the Studio's native pass, measurements) never
+   come from it.
    ============================================================ */
 
 class SVRManager {
@@ -150,6 +166,97 @@ class SVRManager {
     return n === 1 ? 1 : n === 2 ? 2 : 4;
   }
 
+  /**
+   * Can this renderer hold a compressed ('bc') atlas? A hardware GPU, WebGL2 with
+   * EXT_texture_compression_rgtc and a BC5 2D array texture the driver actually
+   * accepts (allocated and written once, 4 × 4 × 1, then deleted). Cached per context.
+   * A software renderer (SwiftShader, llvmpipe — gpuInfo 'software') is refused: it
+   * emulates RGTC by decompressing whole textures, and SwiftShader loses the context
+   * sampling a BC5 array of a few MiB. SVRManager.allowSoftwareCompression = true lifts
+   * that (tests of the compressed path in a software browser, with tiny atlases).
+   * → { bc: boolean, reason: string|null, formats: { bc4, bc5 }|null }
+   */
+  static compressionSupport(renderer) {
+    let gl = null;
+    try { gl = renderer?.getContext?.() || null; } catch (e) { gl = null; }
+    if (!gl) return { bc: false, reason: 'no-context', formats: null };
+    const cached = SVRManager._supportCache.get(gl);
+    if (cached) {
+      // A restored context has lost its extensions: enable this one again (a no-op
+      // when it is already on).
+      if (cached.bc) { try { gl.getExtension('EXT_texture_compression_rgtc'); } catch (e) { /* lost */ } }
+      return cached;
+    }
+    if (SVRManager.gpuInfo(renderer).gpuClass === 'software' && !SVRManager.allowSoftwareCompression) {
+      const refused = { bc: false, reason: 'software-renderer', formats: null };
+      SVRManager._supportCache.set(gl, refused);
+      return refused;
+    }
+    let result;
+    try {
+      if (typeof gl.texStorage3D !== 'function' || typeof gl.compressedTexSubImage3D !== 'function' || gl.TEXTURE_2D_ARRAY === undefined) {
+        result = { bc: false, reason: 'webgl1', formats: null };
+      } else if (typeof BCCodec === 'undefined') {
+        result = { bc: false, reason: 'no-codec', formats: null };
+      } else {
+        const ext = gl.getExtension('EXT_texture_compression_rgtc');
+        if (!ext) {
+          result = { bc: false, reason: 'no-rgtc', formats: null };
+        } else {
+          const formats = { bc4: ext.COMPRESSED_RED_RGTC1_EXT, bc5: ext.COMPRESSED_RED_GREEN_RGTC2_EXT };
+          for (let i = 0; i < 16 && gl.getError() !== gl.NO_ERROR; i++) { /* drain */ }
+          const prev = gl.getParameter(gl.TEXTURE_BINDING_2D_ARRAY);
+          const tex = gl.createTexture();
+          gl.bindTexture(gl.TEXTURE_2D_ARRAY, tex);
+          gl.texStorage3D(gl.TEXTURE_2D_ARRAY, 1, formats.bc5, 4, 4, 1);
+          gl.compressedTexSubImage3D(gl.TEXTURE_2D_ARRAY, 0, 0, 0, 0, 4, 4, 1, formats.bc5, new Uint8Array(16));
+          const err = gl.getError();
+          // Back to the binding three.js believes is current on the active unit.
+          gl.bindTexture(gl.TEXTURE_2D_ARRAY, prev);
+          gl.deleteTexture(tex);
+          result = err === gl.NO_ERROR
+            ? { bc: true, reason: null, formats }
+            : { bc: false, reason: `refused (glError ${err})`, formats: null };
+        }
+      }
+    } catch (e) {
+      result = { bc: false, reason: e?.message || String(e), formats: null };
+    }
+    SVRManager._supportCache.set(gl, result);
+    return result;
+  }
+
+  /** Slot pitch (texels between slot origins) for a slot edge: a compressed atlas
+   *  rounds it up to whole 4 × 4 blocks. */
+  static pitchFor(stride, compressed = false) {
+    const s = Math.max(1, Math.round(Number(stride) || 64));
+    return compressed ? Math.ceil(s / 4) * 4 : s;
+  }
+
+  /** Bytes per texel of a compressed atlas of `channels` channels (0.5 per channel). */
+  static compressedTexelBytes(channels) {
+    return typeof BCCodec !== 'undefined' ? BCCodec.texelBytesFor(channels) : Math.max(1, Math.min(4, Math.round(Number(channels) || 1))) * 0.5;
+  }
+
+  /** Largest page edge an atlas may use: a 3D texture's limit, or for a compressed
+   *  (2D array) atlas the smaller of the 2D texture size and the layer count. */
+  static maxPageDim(renderer, compressed = false) {
+    const max3D = Math.max(64, renderer?.capabilities?.max3DTextureSize || 2048);
+    if (!compressed) return max3D;
+    let layers = 256;
+    try {
+      const gl = renderer?.getContext?.();
+      if (gl && gl.MAX_ARRAY_TEXTURE_LAYERS !== undefined) layers = Number(gl.getParameter(gl.MAX_ARRAY_TEXTURE_LAYERS)) || 256;
+    } catch (e) { /* default */ }
+    const max2D = Math.max(64, renderer?.capabilities?.maxTextureSize || 2048);
+    return Math.max(64, Math.min(max2D, layers));
+  }
+
+  /** Remove every atlas define from a material (a dense texture is bound next). */
+  static clearAtlasDefines(material) {
+    for (const d of ['ENABLE_SVR', 'SVR_COMPONENTS', 'SVR_ARRAY', 'SVR_ARRAY_PAIRS']) SVRManager._setDefine(material, d, null);
+  }
+
   /** Bytes held right now by the atlases of every live manager of this page. */
   static liveAtlasBytes(except = null) {
     let total = 0;
@@ -167,11 +274,12 @@ class SVRManager {
    * slots per page: ≤ 15 slots per page at n = 4, ≤ 63 at n = 8. `brickSize` is the
    * slot edge (the stride). Null when no layout fits (too many slots for the pages).
    */
-  static planAtlas(targetSlots, { max3D = 2048, components = 4, maxPageBytes = 512 * 1024 * 1024, brickSize = 64, maxPages = SVRManager.MAX_PAGES } = {}) {
+  static planAtlas(targetSlots, { max3D = 2048, components = 4, maxPageBytes = 512 * 1024 * 1024, brickSize = 64, maxPages = SVRManager.MAX_PAGES, texelBytes = null } = {}) {
     const target = Math.max(1, Math.ceil(Number(targetSlots) || 1));
     const stride = Math.max(1, Math.round(Number(brickSize) || 64));
     const pageLimit = Math.max(1, Math.min(SVRManager.MAX_PAGES, Math.floor(Number(maxPages) || SVRManager.MAX_PAGES)));
-    const slotBytes = SVRManager.slotBytes(components, stride);
+    // texelBytes (a compressed atlas: 0.5 per channel) replaces components.
+    const slotBytes = Number(texelBytes) > 0 ? stride * stride * stride * Number(texelBytes) : SVRManager.slotBytes(components, stride);
     let best = null;
     for (const n of SVRManager.SLOTS_PER_SIDE) {
       const dim = n * stride;
@@ -183,7 +291,7 @@ class SVRManager {
       if (pages > pageLimit) continue;
       const layers = Math.ceil(target / (pages * perLayer));
       const slots = pages * layers * perLayer;
-      const plan = { dim, depth: layers * stride, pages, slots, bytes: slots * slotBytes, components, stride };
+      const plan = { dim, depth: layers * stride, pages, slots, bytes: Math.ceil(slots * slotBytes), components, stride };
       if (!best || plan.slots < best.slots || (plan.slots === best.slots && plan.pages < best.pages)) best = plan;
     }
     return best;
@@ -197,7 +305,7 @@ class SVRManager {
   static planAtlasWithin(bytes, options = {}) {
     const limit = Math.floor(Number(bytes) || 0);
     const stride = Math.max(1, Math.round(Number(options.brickSize) || 64));
-    const slotBytes = SVRManager.slotBytes(options.components || 4, stride);
+    const slotBytes = Number(options.texelBytes) > 0 ? stride * stride * stride * Number(options.texelBytes) : SVRManager.slotBytes(options.components || 4, stride);
     let hi = Math.floor(limit / slotBytes);
     if (hi < 1) return null;
     const fits = (n) => {
@@ -266,6 +374,15 @@ class SVRManager {
     this.brickSize = 64;
     this.apron = 0;
     this.slotStride = 64;
+    // Texels between slot origins: the stride, or for a compressed atlas the stride
+    // rounded up to whole 4 × 4 blocks (pitchFor).
+    this.slotPitch = 64;
+    this.compressed = false;
+    // Compressed: one texture per page and plane (BCCodec.planesFor), planeAtlases[p][page];
+    // `atlases` is plane 0's. texelBytes: bytes per texel over every plane.
+    this.planes = null;
+    this.planeAtlases = [];
+    this.texelBytes = null;
     this.role = 'base';
     this.pageLimit = SVRManager.MAX_PAGES;
     this.atlasPages = 1;
@@ -329,6 +446,11 @@ class SVRManager {
    *                 is volume voxel 64·b − apron + s.
    *   role          'base' (default) or 'detail' (see the header).
    *   maxPages      page limit (≤ 8; a detail atlas is capped at DETAIL_MAX_PAGES).
+   *   compression   'bc': a compressed display atlas (see the header; only for role
+   *                 'base', and only where SVRManager.compressionSupport says so — init
+   *                 throws err.code 'SVR_BAD_FORMAT' otherwise). Bricks then go in
+   *                 through writeEncodedBrick (or writeRgbaBrick / writeBrick, encoded
+   *                 on this thread); writeRgbaBrickRegion is refused.
    */
   init(channels, volumeDim, renderer, material, options = {}) {
     this._releaseGpuResources();
@@ -344,7 +466,23 @@ class SVRManager {
       throw Object.assign(new Error(`SVR atlas: brick stride ${volumeDim.brickStride} does not match apron ${this.apron}`), { code: 'SVR_BAD_FORMAT' });
     }
     this.role = options.role === 'detail' ? 'detail' : 'base';
-    const pageCap = this.role === 'detail' ? SVRManager.DETAIL_MAX_PAGES : SVRManager.MAX_PAGES;
+    this.compressed = options.compression === 'bc';
+    this.planes = null;
+    this.texelBytes = null;
+    if (this.compressed) {
+      const support = SVRManager.compressionSupport(renderer);
+      if (this.role === 'detail' || !support.bc) {
+        this.compressed = false;
+        throw Object.assign(new Error(`SVR atlas: compression unavailable (${this.role === 'detail' ? 'detail atlas' : support.reason})`), { code: 'SVR_BAD_FORMAT' });
+      }
+      this.planes = BCCodec.planesFor(Math.min(channels, this.components === 4 ? 4 : this.components))
+        .map(p => ({ ...p, glFormat: support.formats[p.format] }));
+      this.texelBytes = this.planes.reduce((sum, p) => sum + p.texelBytes, 0);
+    }
+    this.slotPitch = SVRManager.pitchFor(this.slotStride, this.compressed);
+    const pageCap = this.role === 'detail'
+      ? SVRManager.DETAIL_MAX_PAGES
+      : (this.compressed ? Math.floor(SVRManager.MAX_PAGES / this.planes.length) : SVRManager.MAX_PAGES);
     this.pageLimit = Math.max(1, Math.min(pageCap, Math.floor(Number(options.maxPages) || pageCap)));
     this.brickMap.clear();
     this._lru = new Map();
@@ -359,14 +497,16 @@ class SVRManager {
     this.ptNz = Math.ceil(volumeDim.z / this.brickSize);
 
     const MiBb = 1024 * 1024;
-    const max3D = Math.max(64, renderer?.capabilities?.max3DTextureSize || 2048);
+    const max3D = SVRManager.maxPageDim(renderer, this.compressed);
     const budget = Number.isFinite(Number(options.budgetBytes)) && options.budgetBytes !== null && options.budgetBytes !== undefined
       ? Number(options.budgetBytes)
       : SVRManager.vramBudget(renderer).bytes;
     const others = options.countLiveAtlases === false ? 0 : SVRManager.liveAtlasBytes(this);
     const available = options.ignoreBudget ? Infinity : Math.max(0, budget - others);
     const maxPageBytes = SVRManager._maxPageBytes(options.ignoreBudget ? Infinity : budget);
-    const slotBytes = SVRManager.slotBytes(this.components, this.slotStride);
+    const slotBytes = this.compressed
+      ? this.slotPitch * this.slotPitch * this.slotPitch * this.texelBytes
+      : SVRManager.slotBytes(this.components, this.slotStride);
     const requested = Math.ceil(Number(options.targetSlots) || 0);
     const targeted = requested > 1;
 
@@ -376,9 +516,12 @@ class SVRManager {
     let allocated = null;
     let lastError = null;
     for (;;) {
-      const plan = SVRManager.planAtlas(target, { max3D, components: this.components, maxPageBytes, brickSize: this.slotStride, maxPages: this.pageLimit });
+      const plan = SVRManager.planAtlas(target, {
+        max3D, components: this.components, maxPageBytes, brickSize: this.slotPitch, maxPages: this.pageLimit,
+        texelBytes: this.compressed ? this.texelBytes : null
+      });
       if (!plan) {
-        throw Object.assign(new Error(`SVR atlas cannot hold ${target} bricks within ${this.pageLimit} pages of the 3D texture limit (${max3D})`),
+        throw Object.assign(new Error(`SVR atlas cannot hold ${target} bricks within ${this.pageLimit} pages of the texture limit (${max3D})`),
           { code: 'SVR_OVER_BUDGET', neededSlots: target });
       }
       if (plan.bytes > available) {
@@ -434,27 +577,33 @@ class SVRManager {
 
   _allocatePages(plan) {
     this._applyAtlasConfig(plan);
-    const TextureClass = THREE.Data3DTexture || THREE.DataTexture3D;
+    const TextureClass = this.compressed ? THREE.DataArrayTexture : (THREE.Data3DTexture || THREE.DataTexture3D);
     const format = this.components === 1 ? THREE.RedFormat : this.components === 2 ? THREE.RGFormat : THREE.RGBAFormat;
-    const pages = [];
+    const planes = this.compressed ? this.planes : [null];
+    const byPlane = planes.map(() => []);
     try {
-      for (let page = 0; page < this.atlasPages; page++) {
-        const atlas = new TextureClass(null, this.atlasDim, this.atlasDim, this.atlasDepth);
-        atlas.format = format;
-        atlas.type = THREE.UnsignedByteType;
-        // Slots are packed edge to edge. Without a border, linear filtering would blend
-        // the neighbouring slot's brick in at every brick face: nearest. With the 1-voxel
-        // border every trilinear footprint stays inside its own slot: linear.
-        const filter = this.apron ? THREE.LinearFilter : THREE.NearestFilter;
-        atlas.minFilter = filter;
-        atlas.magFilter = filter;
-        atlas.unpackAlignment = 1;
-        pages.push(atlas);
-        if (this.renderer) this._initAtlasTexture(atlas);
-        atlas.needsUpdate = false;
+      for (let p = 0; p < planes.length; p++) {
+        for (let page = 0; page < this.atlasPages; page++) {
+          const atlas = new TextureClass(null, this.atlasDim, this.atlasDim, this.atlasDepth);
+          // A compressed page's storage is made here (texStorage3D of its RGTC format);
+          // three.js only binds it, so the format fields below are never uploaded from.
+          atlas.format = this.compressed ? (planes[p].channels.length === 2 ? THREE.RGFormat : THREE.RedFormat) : format;
+          atlas.type = THREE.UnsignedByteType;
+          // Slots are packed edge to edge. Without a border, linear filtering would blend
+          // the neighbouring slot's brick in at every brick face: nearest. With the 1-voxel
+          // border every trilinear footprint stays inside its own slot: linear (on a
+          // compressed page: bilinear within a layer, the shader blending two layers).
+          const filter = this.apron ? THREE.LinearFilter : THREE.NearestFilter;
+          atlas.minFilter = filter;
+          atlas.magFilter = filter;
+          atlas.unpackAlignment = 1;
+          byPlane[p].push(atlas);
+          if (this.renderer) this._initAtlasTexture(atlas, planes[p]);
+          atlas.needsUpdate = false;
+        }
       }
     } catch (err) {
-      for (const atlas of pages) {
+      for (const atlas of byPlane.flat()) {
         this._disposeAtlasTexture(atlas);
         atlas.dispose?.();
       }
@@ -466,17 +615,18 @@ class SVRManager {
       }
       throw err;
     }
-    this.atlases = pages;
+    this.planeAtlases = this.compressed ? byPlane : [];
+    this.atlases = byPlane[0];
   }
 
   _applyAtlasConfig(config) {
     this.atlasDim = config.dim;
     this.atlasDepth = config.depth;
     this.atlasPages = config.pages || 1;
-    this.slotsX = Math.floor(this.atlasDim / this.slotStride);
-    this.slotsY = Math.floor(this.atlasDim / this.slotStride);
-    this.slotsZ = Math.floor(this.atlasDepth / this.slotStride);
-    this.slotsPerAtlas = SVRManager.slotsPerAtlasForConfig({ ...config, stride: this.slotStride }, this.slotStride);
+    this.slotsX = Math.floor(this.atlasDim / this.slotPitch);
+    this.slotsY = Math.floor(this.atlasDim / this.slotPitch);
+    this.slotsZ = Math.floor(this.atlasDepth / this.slotPitch);
+    this.slotsPerAtlas = SVRManager.slotsPerAtlasForConfig({ ...config, stride: this.slotPitch }, this.slotPitch);
     this.maxSlots = this.slotsPerAtlas * this.atlasPages;
   }
 
@@ -486,46 +636,52 @@ class SVRManager {
     return { internal: gl.RGBA8, format: gl.RGBA };
   }
 
-  _initAtlasTexture(atlas) {
+  _initAtlasTexture(atlas, plane = null) {
     const gl = this.renderer.getContext();
     for (let i = 0; i < 8 && gl.getError() !== gl.NO_ERROR; i++) {
       // Drain stale errors before testing this atlas allocation.
     }
+    const target = this.compressed ? gl.TEXTURE_2D_ARRAY : gl.TEXTURE_3D;
     const tex = gl.createTexture();
     let prevBinding = null;
     if (this.renderer.state && this.renderer.state.bindTexture) {
-      this.renderer.state.bindTexture(gl.TEXTURE_3D, tex);
+      this.renderer.state.bindTexture(target, tex);
     } else {
-      prevBinding = gl.getParameter(gl.TEXTURE_BINDING_3D);
-      gl.bindTexture(gl.TEXTURE_3D, tex);
+      prevBinding = gl.getParameter(this.compressed ? gl.TEXTURE_BINDING_2D_ARRAY : gl.TEXTURE_BINDING_3D);
+      gl.bindTexture(target, tex);
     }
 
     const glFilter = this.apron ? gl.LINEAR : gl.NEAREST;
-    gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_MIN_FILTER, glFilter);
-    gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_MAG_FILTER, glFilter);
-    gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
-    gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-    gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_WRAP_R, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(target, gl.TEXTURE_MIN_FILTER, glFilter);
+    gl.texParameteri(target, gl.TEXTURE_MAG_FILTER, glFilter);
+    gl.texParameteri(target, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(target, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(target, gl.TEXTURE_WRAP_R, gl.CLAMP_TO_EDGE);
     if (gl.PIXEL_UNPACK_BUFFER) {
       gl.bindBuffer(gl.PIXEL_UNPACK_BUFFER, null);
     }
-    const { internal, format } = this._glFormats(gl);
-    if (typeof gl.texStorage3D === 'function') {
-      gl.texStorage3D(gl.TEXTURE_3D, 1, internal, this.atlasDim, this.atlasDim, this.atlasDepth);
+    if (this.compressed) {
+      // WebGL zero-initialises new storage: an all-zero RGTC block decodes to 0.
+      gl.texStorage3D(target, 1, plane.glFormat, this.atlasDim, this.atlasDim, this.atlasDepth);
     } else {
-      gl.texImage3D(gl.TEXTURE_3D, 0, internal, this.atlasDim, this.atlasDim, this.atlasDepth, 0, format, gl.UNSIGNED_BYTE, null);
+      const { internal, format } = this._glFormats(gl);
+      if (typeof gl.texStorage3D === 'function') {
+        gl.texStorage3D(target, 1, internal, this.atlasDim, this.atlasDim, this.atlasDepth);
+      } else {
+        gl.texImage3D(target, 0, internal, this.atlasDim, this.atlasDim, this.atlasDepth, 0, format, gl.UNSIGNED_BYTE, null);
+      }
     }
 
     const err = gl.getError();
     if (err !== gl.NO_ERROR) {
       gl.deleteTexture(tex);
       if (prevBinding !== null) {
-        gl.bindTexture(gl.TEXTURE_3D, prevBinding);
+        gl.bindTexture(target, prevBinding);
       }
-      throw new Error(`SVR atlas GPU allocation failed (${this.atlasDim}x${this.atlasDim}x${this.atlasDepth}, glError=${err})`);
+      throw new Error(`SVR atlas GPU allocation failed (${this.atlasDim}x${this.atlasDim}x${this.atlasDepth}${this.compressed ? ` ${plane.format}` : ''}, glError=${err})`);
     }
     if (prevBinding !== null) {
-      gl.bindTexture(gl.TEXTURE_3D, prevBinding);
+      gl.bindTexture(target, prevBinding);
     }
 
     const properties = this.renderer.properties.get(atlas);
@@ -556,15 +712,17 @@ class SVRManager {
       this.pageTable.dispose();
       this.pageTable = null;
     }
+    const all = this.planeAtlases.length ? this.planeAtlases.flat() : this.atlases;
     if (this.renderer) {
-      for (const atlas of this.atlases) {
+      for (const atlas of all) {
         this._disposeAtlasTexture(atlas);
       }
     }
-    for (const atlas of this.atlases) {
+    for (const atlas of all) {
       atlas?.dispose?.();
     }
     this.atlases = [];
+    this.planeAtlases = [];
     this._atlasWebglTextures = [];
     this.atlasBytes = 0;
     SVRManager._live.delete(this);
@@ -600,10 +758,15 @@ class SVRManager {
     if (this.role === 'detail') return this._publishDetail();
     this.material.defines.ENABLE_SVR = 1;
     SVRManager._setDefine(this.material, 'SVR_COMPONENTS', this.components === 4 ? null : this.components);
+    // Compressed pages are 2D arrays (sampler2DArray, layers blended in the shader);
+    // with two planes svrAtlas0..3 hold the first one's pages, svrAtlas4..7 the second's.
+    SVRManager._setDefine(this.material, 'SVR_ARRAY', this.compressed ? 1 : null);
+    SVRManager._setDefine(this.material, 'SVR_ARRAY_PAIRS', this.compressed && this.planes.length > 1 ? 1 : null);
     this.material.needsUpdate = true;
     const set = (name, value) => { if (this.material.uniforms[name]) this.material.uniforms[name].value = value; };
-    // Slot addressing (the shader's slotCoord): texel = slot·slotStride + brickApron + local.
-    set('slotStride', this.slotStride);
+    // Slot addressing (the shader's slotCoord): texel = slot·slotStride + brickApron +
+    // local, slotStride being the pitch between slot origins.
+    set('slotStride', this.slotPitch);
     set('brickApron', this.apron);
     set('svrComponents', this.components);
 
@@ -622,6 +785,15 @@ class SVRManager {
     this.material.uniforms.ptScale.value = new THREE.Vector3(scaleX, scaleY, scaleZ);
     this.material.uniforms.brickSize.value = this.brickSize;
 
+    if (this.compressed && this.planes.length > 1) {
+      const half = SVRManager.MAX_PAGES / 2;
+      for (let i = 0; i < SVRManager.MAX_PAGES; i++) {
+        const pages = this.planeAtlases[i < half ? 0 : 1] || [];
+        const u = this.material.uniforms['svrAtlas' + i];
+        if (u) u.value = pages[i % half] || pages[0] || null;
+      }
+      return true;
+    }
     this.material.uniforms.svrAtlas0.value = this.atlases[0] || null;
     for (let i = 1; i < SVRManager.MAX_PAGES; i++) {
       const u = this.material.uniforms['svrAtlas' + i];
@@ -786,8 +958,7 @@ class SVRManager {
     const ptIdx = this._pointPageTable(bx, by, bz, coord);
     this._writeChannelToSlot(slotIndex, channel, brickData, bw, bh, bd);
     const uploadData = this._extractSlotRegion(slotIndex, bw, bh, bd);
-    return this._finishUpload(bx, by, bz, slotIndex, ptIdx,
-      this._uploadRgbaRegion(coord.atlas, coord.x * this.slotStride, coord.y * this.slotStride, coord.z * this.slotStride, bw, bh, bd, uploadData));
+    return this._finishUpload(bx, by, bz, slotIndex, ptIdx, this._uploadSlotBox(coord, bw, bh, bd, uploadData));
   }
 
   /**
@@ -802,8 +973,53 @@ class SVRManager {
     const slotIndex = this.getSlot(bx, by, bz);
     const coord = this._slotCoord(slotIndex);
     const ptIdx = this._pointPageTable(bx, by, bz, coord);
-    return this._finishUpload(bx, by, bz, slotIndex, ptIdx,
-      this._uploadRgbaRegion(coord.atlas, coord.x * this.slotStride, coord.y * this.slotStride, coord.z * this.slotStride, bw, bh, bd, uploadData));
+    return this._finishUpload(bx, by, bz, slotIndex, ptIdx, this._uploadSlotBox(coord, bw, bh, bd, uploadData));
+  }
+
+  /**
+   * A brick already in the GPU's blocks (BrickLoader compose `encode: 'bc'`): `encoded`
+   * = { width, height, depth, planes: [{ format, channels, bytes }] }, the box from the
+   * slot origin rounded up to whole blocks, one plane per texture of this atlas, in
+   * order. Returns false when this atlas is not compressed, the planes do not match it
+   * or the box does not fit a slot (the page-table entry is then left empty).
+   */
+  writeEncodedBrick(bx, by, bz, encoded) {
+    if (!this.compressed || !this._encodedFits(encoded)) return false;
+    const slotIndex = this.getSlot(bx, by, bz);
+    const coord = this._slotCoord(slotIndex);
+    const ptIdx = this._pointPageTable(bx, by, bz, coord);
+    return this._finishUpload(bx, by, bz, slotIndex, ptIdx, this._uploadEncoded(coord, encoded));
+  }
+
+  _encodedFits(enc) {
+    if (!enc || !Array.isArray(enc.planes) || enc.planes.length !== this.planes.length) return false;
+    if (!(enc.width > 0 && enc.height > 0 && enc.depth > 0)) return false;
+    if (enc.width % 4 || enc.height % 4 || enc.width > this.slotPitch || enc.height > this.slotPitch || enc.depth > this.slotPitch) return false;
+    const blocks = (enc.width / 4) * (enc.height / 4) * enc.depth;
+    return enc.planes.every((p, i) => p && p.bytes && p.format === this.planes[i].format
+      && p.bytes.length === blocks * 8 * this.planes[i].channels.length);
+  }
+
+  /** Upload a box of raw voxels (`components` bytes each) at a slot's origin — encoded
+   *  to blocks on this thread first when the atlas is compressed. */
+  _uploadSlotBox(coord, bw, bh, bd, uploadData) {
+    const p = this.slotPitch;
+    if (!this.compressed) return this._uploadRgbaRegion(coord.atlas, coord.x * p, coord.y * p, coord.z * p, bw, bh, bd, uploadData);
+    if (!uploadData || typeof BCCodec === 'undefined') return false;
+    const enc = BCCodec.encodeBox(uploadData, this.components, bw, bh, bd, this.channels);
+    return this._encodedFits(enc) ? this._uploadEncoded(coord, enc) : false;
+  }
+
+  /** compressedTexSubImage3D of each plane of an encoded box at a slot's origin. */
+  _uploadEncoded(coord, enc) {
+    const p = this.slotPitch;
+    let result = true;
+    for (let i = 0; i < this.planes.length; i++) {
+      const r = this._uploadCompressedRegion(i, coord.atlas, coord.x * p, coord.y * p, coord.z * p, enc.width, enc.height, enc.depth, enc.planes[i].bytes);
+      if (r === false) return false;
+      if (r === 'unchecked') result = 'unchecked';
+    }
+    return result;
   }
 
   /**
@@ -818,6 +1034,7 @@ class SVRManager {
    */
   writeRgbaBrickRegion(bx, by, bz, data, rx, ry, rz, rw, rh, rd) {
     const bs = this.slotStride;
+    if (this.compressed) return false;
     if (!data || !(rw > 0 && rh > 0 && rd > 0)) return false;
     if (rx < 0 || ry < 0 || rz < 0 || rx + rw > bs || ry + rh > bs || rz + rd > bs) return false;
     const needed = rw * rh * rd * this.components;
@@ -869,7 +1086,7 @@ class SVRManager {
       for (let i = 0; i < 8 && gl.getError() !== gl.NO_ERROR; i++) { /* drain stale errors */ }
     }
     const zeros = new Uint8Array(bs * bs * bs * this.components);
-    const result = this._uploadRgbaRegion(coord.atlas, coord.x * bs, coord.y * bs, coord.z * bs, bs, bs, bs, zeros);
+    const result = this._uploadSlotBox(coord, bs, bs, bs, zeros);
     const refused = result === false || (result === 'unchecked' && gl && gl.getError() !== gl.NO_ERROR);
     if (refused) {
       this.freeSlots.push(slotIndex);
@@ -1033,6 +1250,35 @@ class SVRManager {
     return 'unchecked';
   }
 
+  /**
+   * compressedTexSubImage3D of a box into one page of plane `plane`. The box starts on
+   * a block edge (x, y multiples of 4: slot pitch and offsets are) and spans whole
+   * blocks. Same return contract as _uploadRgbaRegion.
+   */
+  _uploadCompressedRegion(plane, atlasIndex, sx, sy, sz, bw, bh, bd, bytes) {
+    if (!this.renderer) return true;
+    const atlas = this.planeAtlases[plane]?.[atlasIndex];
+    if (!atlas || !bytes) return false;
+    if (sx < 0 || sy < 0 || sz < 0 || sx % 4 || sy % 4 || bw % 4 || bh % 4
+      || sx + bw > this.atlasDim || sy + bh > this.atlasDim || sz + bd > this.atlasDepth) {
+      console.warn('[SVRManager] Skipping misaligned or out-of-bounds compressed upload', {
+        sx, sy, sz, bw, bh, bd, atlasIndex, plane, atlasDim: this.atlasDim, atlasDepth: this.atlasDepth
+      });
+      return false;
+    }
+    const webglTexture = this.renderer.properties.get(atlas)?.__webglTexture;
+    if (!webglTexture) return false;
+    const gl = this.renderer.getContext();
+    if (this.renderer.state && this.renderer.state.bindTexture) {
+      this.renderer.state.bindTexture(gl.TEXTURE_2D_ARRAY, webglTexture);
+    } else {
+      gl.bindTexture(gl.TEXTURE_2D_ARRAY, webglTexture);
+    }
+    if (gl.PIXEL_UNPACK_BUFFER) gl.bindBuffer(gl.PIXEL_UNPACK_BUFFER, null);
+    gl.compressedTexSubImage3D(gl.TEXTURE_2D_ARRAY, 0, sx, sy, sz, bw, bh, bd, this.planes[plane].glFormat, bytes);
+    return 'unchecked';
+  }
+
   dispose() {
     this._releaseGpuResources();
     this.pageData = null;
@@ -1057,6 +1303,8 @@ SVRManager._live = new Set();
 SVRManager._failedAllocBytes = Infinity;
 SVRManager._sessionLosses = 0;
 SVRManager._sessionOverrideBytes = null;
+SVRManager._supportCache = new WeakMap();
+SVRManager.allowSoftwareCompression = false;
 
 window.SVRManager = SVRManager;
 

@@ -53,7 +53,7 @@ All PDFs are built by `DOCS/build/build_docs.py` (Markdown → HTML → Chromium
 |---|---|---|
 | `GUIDE-ADMIN` — administrator guide | FR, EN, ES, NL, MULTI | `DOCS/admin-guide/` |
 | `FULL DOCUMENTATION` — how the whole platform works, for biologists | EN, FR | `DOCS/documentation/complete-en/`, `complete/` |
-| `ESSENTIALS` — the 10-page summary for biologists | EN, FR | `DOCS/documentation/ESSENTIALS-*.md` |
+| `ESSENTIALS` — the ~25-page summary for biologists | EN, FR | `DOCS/documentation/ESSENTIALS-*.md` |
 
 ```
 python DOCS/build/build_docs.py                 # everything

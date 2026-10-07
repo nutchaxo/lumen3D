@@ -76,5 +76,5 @@ Une limite à connaître avant d'interpréter vos images.
 ::: note
 Les images de volumes proviennent d'**embryons de démonstration synthétiques**, traités par le vrai
 pipeline ; ce ne sont pas des données du laboratoire. Les chiffres sont lus dans le code (plateforme 1.59.3,
-pipeline 0.21.0). Version courte : **« L'essentiel »** (10 pages), dans l'onglet *Documentation* du panneau d'administration.
+pipeline 0.21.0). Version courte : **« L'essentiel »** (environ 25 pages), dans l'onglet *Documentation* du panneau d'administration.
 :::

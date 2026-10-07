@@ -113,7 +113,7 @@ Zijn de gegevens onjuist, dan verschijnt boven de velden het bericht “Onjuiste
 ## 1.4. Herhaalde pogingen en duur van de sessie
 
 ::: warning
-**Het paneel beschermt zich tegen herhaalde pogingen.** Elke mislukte poging wordt geteld **vóór** de controle van het wachtwoord, per adres: na **10 mislukte pogingen in 15 minuten** is de toegang **15 minuten** geblokkeerd (de server antwoordt dan met het Franstalige bericht « Trop de tentatives. Réessayez plus tard. », dat wil zeggen “Te veel pogingen. Probeer het later opnieuw.”). Een algemene grens van 200 pogingen per 15 minuten beschermt de site bovendien tegen een aanval vanaf meerdere adressen.
+**Het paneel beschermt zich tegen herhaalde pogingen.** Elke mislukte poging wordt geteld **vóór** de controle van het wachtwoord, per adres: na **10 mislukte pogingen in 15 minuten** is de toegang **15 minuten** geblokkeerd (“Te veel pogingen. Probeer het over N min opnieuw.”, in de taal van het paneel; hetzelfde bericht geldt voor het wijzigen van het wachtwoord, het goedkeuren van een plug-in en de installatie vanuit de Catalogus). Een algemene grens van 200 pogingen per 15 minuten beschermt de site bovendien tegen een aanval vanaf meerdere adressen.
 :::
 
 - Een verkeerde gebruikersnaam kost **evenveel tijd** als een verkeerd wachtwoord: niemand kan raden welke accounts bestaan.
@@ -438,7 +438,7 @@ Een volume bevat meerdere **kanalen**, één per fluorescente kleuring. Hier bes
 - **De naam.** De kanalen komen binnen als “Canal 1”, “Canal 2”… Vervang ze door de werkelijke kleuring: `DAPI`, `GFP`, `Pecam1`.
 - **De kleur.** Sommige worden op basis van de naam toegekend: `DAPI` wordt blauw, `GFP` groen, `Pecam1` magenta. Anders gelden reservekleuren: groen, magenta, blauw, rood.
 - **Getoond of verborgen.** Vink een weinig informatief kanaal uit (leeg, autofluorescentie): het blijft beschikbaar, maar de bezoeker ziet het eerst niet.
-- **Min / max / gamma.** Het histogram toont de verdeling van de intensiteiten; de handvatten stellen de lage drempel, de hoge drempel en de gamma in. [Auto]{.ui}, [Soft]{.ui}, [Contrast]{.ui} bieden kant-en-klare instellingen, [Reset]{.ui} keert terug naar het begin.
+- **Min / max / gamma.** Het histogram toont de verdeling van de intensiteiten; de handvatten stellen de lage drempel, de hoge drempel en de gamma in. [Auto]{.ui}, [Zacht]{.ui}, [Contrast]{.ui} bieden kant-en-klare instellingen, [Herstellen]{.ui} keert terug naar het begin.
 - **Kanaal solo** is een schakelaar: een tweede druk herstelt de vorige weergave.
 
 ::: warning
@@ -942,9 +942,9 @@ De paginavariabelen `{type3d}`, `{type2d}` en `{typeLive}` (hoofdstuk 10) nemen 
 | 4 | Het detail **per dataset**; klik op een kop (Dataset, Weergaven, Downl.) om te sorteren. |
 :::
 
-- **Bezoeken** — keren dat de startpagina is geopend, één keer per browsertabblad geteld.
-- **Datasetweergaven** — keren dat een dataset in de viewer is geopend: de meest veelzeggende indicator.
-- **Downloads** — bestanden opgehaald via het Download Center.
+- **Bezoeken** — één per browsertabblad, op de eerste openbare pagina waarop de bezoeker binnenkomt, welke ook (startpagina, verkenner, viewer, 2D-pagina…); het beheerpaneel en een pagina die in een andere is ingesloten (een paneel van Vergelijken, de beheervoorvertoning, de pagina-editor) tellen niet mee. Een bezoeker die rechtstreeks op een dataset binnenkomt, telt dus één bezoek en één weergave.
+- **Datasetweergaven** — keren dat een dataset (volume of 2D-foto) is geopend, één keer per tabblad: de meest veelzeggende indicator.
+- **Downloads** — volledige downloads van een bestand uit de map `download/` van een dataset (het Download Center), op dezelfde manier geteld op een Python- of PHP-host; een gedeeltelijke hervatting wordt niet opnieuw geteld. Onder elk cijfer herinnert een regel van het tabblad aan de definitie.
 
 De tabel “Per dataset” geeft weergaven, downloads en laatste raadpleging. Zonder gegevens: “Nog geen gebruiksgegevens.”. Een soort hernoemen verandert deze cijfers niet.
 
@@ -993,7 +993,7 @@ De velden **(MEERTALIG)** tonen **een regel per beschikbare taal**: `EN`, `FR`, 
 | **Monogram (2–3 tekens)** | De letters van het logolabel | `IR` |
 | **Logo-emoji** | De emoji naast de naam | 🔬 |
 | **Organisatie** | Uw lab of instelling | `IRIBHM — ULB` |
-| **Link van de organisatie** | Het adres van haar site | `https://…` |
+| **Link van de organisatie** | Het adres van haar site: de naam van de organisatie verwijst ernaar in de openbare voettekst | `https://…` |
 
 ## 8.3. Kaart “Terminologie” — de nuttigste
 
@@ -1009,7 +1009,7 @@ Dit woord wordt daarna **automatisch** overgenomen in de hele publieke interface
 | n | wat het is |
 |-|----------------------|
 | 1 | Kaart **Voettekst**: de copyrightvermelding (per taal). |
-| 2 | Een **link** van de voettekst: [Label]{.ui} + adres; het kruisje verwijdert hem. |
+| 2 | Een **link** van de voettekst: [Label]{.ui} + adres (`http(s)://`, `mailto:` of relatief), getoond vóór “Juridisch”; het kruisje verwijdert hem. |
 | 3 | [Link toevoegen]{.ui}. |
 | 4 | Kaart **Navigatie**. |
 | 5 | De vakjes die de ingangen van het publieke menu bepalen. |
@@ -1061,7 +1061,7 @@ Herstellen vraagt “Identiteit terugzetten op de standaardwaarden? De eigen inh
 | **Fout** | De foutmeldingen (standaard rood) |
 | **Waarschuwing** | De waarschuwingen (standaard oranje) |
 
-Klik op een kleurvlak om de kiezer te openen: **het voorbeeld wordt direct bijgewerkt**. De hoofdknoppen worden afgeleid van de kleur van de instantie en streven naar het **WCAG AA**-contrast (zonder het voor elke kleur te garanderen: witte tekst op fel oranje of turkoois blijft eronder; controleer de leesbaarheid in het voorbeeld); het opgeslagen thema wordt toegepast vóór de eerste weergave.
+Klik op een kleurvlak om de kiezer te openen: **het voorbeeld wordt direct bijgewerkt**. De hoofdknoppen worden afgeleid van de kleur van de instantie en halen altijd het **WCAG AA**-contrast: de server maakt hun kleur net donker genoeg om witte tekst erop leesbaar te maken (4,5 : 1), zelfs op fel oranje of turkoois, zoals het voorbeeld al toont; het opgeslagen thema wordt toegepast vóór de eerste weergave.
 
 ::: tip
 Houd Geslaagd / Fout / Waarschuwing **dicht bij groen / rood / oranje**: het zijn universele herkenningspunten.
@@ -1527,7 +1527,7 @@ Deze plug-ins worden **niet** met de site meegeleverd: ze worden op aanvraag ge�
 | **Slice through Volume** | Een richtbare vlakke snede door het volume |
 | **Z-Stack Browser** | Door de doorsneden bladeren: geanimeerde vlakke opening, 3D-inkeping, bijsnijden boven / onder, instelbare dikteband, schuifregelaar “Rotatie” |
 | **Decompose by Channel** | De kanalen naast elkaar tonen |
-| **Download Center** | Bestanden, metingen, metadata, exports ophalen |
+| **Download Center** | De bestanden van de map `download/` en de CSV van de metingen ophalen |
 | **Screenshot** | De 3D-weergave als PNG vastleggen |
 | **Screenshot (sandboxed)** | Dezelfde opname, in een zandbak: het voorbeeld van een geïsoleerde plug-in |
 | **Presentation Mode** | Volledig scherm zonder interface, om te projecteren |
@@ -2009,9 +2009,9 @@ Het is **onmogelijk** het terug te vinden: de server bewaart er alleen een onomk
 
 **Er gaat verder niets verloren**: geen datasets, geen pagina's, geen instellingen. In dat korte tijdsbestek zou iedereen die de pagina opent het account in uw plaats kunnen aanmaken: doe het dus in één keer.
 
-### “Te veel pogingen. Probeer het later opnieuw.”
+### “Te veel pogingen. Probeer het over N min opnieuw.”
 
-Na 10 mislukte pogingen in 15 minuten is de toegang 15 minuten geblokkeerd (het bericht « Trop de tentatives. Réessayez plus tard. » is Franstalig). Wacht en ga dan verder met het juiste wachtwoord. Achter een proxy: zie §1.4.
+Na 10 mislukte pogingen in 15 minuten is de toegang 15 minuten geblokkeerd; het bericht geeft de resterende wachttijd in minuten. Wacht en ga dan verder met het juiste wachtwoord. Achter een proxy: zie §1.4.
 
 ### “Ik heb iets gewijzigd en de site is stuk”
 

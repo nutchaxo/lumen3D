@@ -654,6 +654,16 @@ body.presentation-mode .viewer-layout {
   margin-bottom: var(--space-4);
 }
 
+.dl-section + .dl-section {
+  margin-top: var(--space-5);
+}
+
+.dl-section-hint {
+  margin: 0 0 var(--space-2);
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+}
+
 .dl-head-title {
   font-size: var(--text-md);
   font-weight: var(--weight-semibold);

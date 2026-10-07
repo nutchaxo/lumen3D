@@ -76,6 +76,8 @@ function stubImageApi() {
 }
 
 const WORKER_SRC = readFileSync(path.join(ROOT, 'js/core/brick-decode-worker.js'), 'utf8');
+// The block codec the worker imports (importScripts is not there under vm).
+const CODEC_SRC = readFileSync(path.join(ROOT, 'js/core/bc-codec.js'), 'utf8');
 
 /** A Worker running js/core/brick-decode-worker.js in its own vm context. */
 export class VmBrickWorker {
@@ -89,6 +91,7 @@ export class VmBrickWorker {
       if (this.terminated) return;
       setTimeout(() => this.onmessage && this.onmessage({ data: msg }), 0);
     };
+    vm.runInContext(CODEC_SRC, ctx, { filename: 'bc-codec.js' });
     vm.runInContext(WORKER_SRC, ctx, { filename: 'brick-decode-worker.js' });
     this.ctx = ctx;
   }

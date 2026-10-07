@@ -5,7 +5,7 @@
 const ExportManager = (() => {
   let _ctx = {};
   let _modal = null;
-  let _customExports = [];   // page-supplied exports (tracking measures, compare figures) — non-viewer scopes
+  let _customExports = [];   // page/plugin-supplied exports (viewer measurements, tracking tables, compare figures)
   // File-explorer state for the per-dataset download folder. `token` guards
   // against out-of-order responses when the user clicks through folders quickly.
   const _explorer = { path: '', token: 0, data: null };
@@ -200,10 +200,10 @@ const ExportManager = (() => {
     const scope = _ctx.scope || 'viewer';
 
     // The file explorer over the dataset's download/ folder is a per-dataset
-    // experience (viewer / explorer). Tracking and Compare have no download
-    // folder to browse, so they keep the export-buttons modal (figures, graph,
-    // workspace, page-supplied custom exports) — their Download Centers must not
-    // regress when the viewer's is simplified.
+    // experience (viewer / explorer), preceded in the viewer by the exports the
+    // page and its plugins generate. Compare has no download folder to browse, so
+    // it keeps the export-buttons modal (figures, graph, workspace, page-supplied
+    // custom exports).
     if (scope !== 'viewer' && scope !== 'explorer') {
       _renderGeneratedExports(body, dataset);
       return;
@@ -215,15 +215,25 @@ const ExportManager = (() => {
     }
 
     const measures = _safeList(_ctx.getMeasurements);
+    // What the page and its plugins produce (viewer measurements, cell-distance
+    // tables, neighbour lists, lineages…) and the chart a plugin shows on screen.
+    // A page that lists its own exports carries its measurements there, so the
+    // generic Measurements CSV button is kept only for a page that lists none.
+    _customExports = _validExports(_safeList(_ctx.getCustomExports));
+    const hasGraph = Boolean(_graphNode() && window.Plotly);
+    const measuresBtn = (measures.length && !_customExports.length)
+      ? `<button class="dl-measures-btn" data-export-action="measures-csv" title="${_t('download.measuresCsv', 'Measurements CSV')}"><i data-lucide="file-spreadsheet"></i><span>${_t('download.measuresCsv', 'Measurements CSV')}</span></button>`
+      : '';
     body.innerHTML = `
       <div class="dl-head">
         <div class="dl-head-title">${Utils.escapeHtml(dataset.name || dataset.id || 'Dataset')}</div>
         <div class="dl-head-sub">${Utils.escapeHtml(_datasetIntro(dataset))}</div>
       </div>
+      ${_analysisSectionHtml(_customExports, hasGraph)}
       <section class="dl-section">
         <div class="dl-section-head">
           <h3>${_t('download.filesTitle', 'Dataset files')}</h3>
-          ${measures.length ? `<button class="dl-measures-btn" data-export-action="measures-csv" title="${_t('download.measuresCsv', 'Measurements CSV')}"><i data-lucide="file-spreadsheet"></i><span>${_t('download.measuresCsv', 'Measurements CSV')}</span></button>` : ''}
+          ${measuresBtn}
         </div>
         <div id="download-explorer" class="dl-explorer">${_explorerLoadingHtml()}</div>
       </section>
@@ -264,6 +274,45 @@ const ExportManager = (() => {
       </section>
     `;
     if (window.lucide) lucide.createIcons({ nodes: [body, _modal] });
+  }
+
+  // Viewer-scope "Analysis exports": shown only when there is something to offer —
+  // a page or plugin export, or a chart on screen. Graph buttons appear only while
+  // a plugin displays one (no permanently greyed-out graph buttons on every dataset).
+  function _analysisSectionHtml(exports, hasGraph) {
+    if (!exports.length && !hasGraph) return '';
+    const unavailable = _t('download.exportUnavailable', 'Export unavailable');
+    const graphButtons = hasGraph ? [
+      _quickAction('graph-png', 'bar-chart-2', _t('download.graphPng', 'Graph PNG'), true, ''),
+      _quickAction('graph-svg', 'line-chart', _t('download.graphSvg', 'Graph SVG'), true, ''),
+      _quickAction('graph-csv', 'table', _t('download.graphCsv', 'Graph CSV'), true, '')
+    ].join('') : '';
+    return `
+      <section class="dl-section dl-section-analysis">
+        <div class="dl-section-head"><h3>${_t('download.analysisTitle', 'Analysis exports')}</h3></div>
+        <p class="dl-section-hint">${_t('download.analysisHint', 'Generated from what is open in the viewer: measurements, plugin tables and the chart on screen.')}</p>
+        <div class="export-quick-actions">
+          ${exports.map(item => _quickAction(item.action, item.icon || 'flask-conical', item.label || item.action, item.enabled !== false, item.disabledTitle || unavailable)).join('')}
+          ${graphButtons}
+        </div>
+      </section>
+    `;
+  }
+
+  // Entries a click can actually run, one per action (the first wins: the
+  // dispatcher looks an action up by name, so a duplicate would be dead).
+  function _validExports(list) {
+    const seen = new Set();
+    return list.filter(item => {
+      if (!item || typeof item !== 'object' || typeof item.action !== 'string' || !item.action) return false;
+      if (typeof item.handler !== 'function' || seen.has(item.action)) return false;
+      seen.add(item.action);
+      return true;
+    });
+  }
+
+  function _graphNode() {
+    try { return _ctx.getGraph?.() || null; } catch (_) { return null; }
   }
 
   function _quickAction(action, icon, label, enabled, disabledTitle) {

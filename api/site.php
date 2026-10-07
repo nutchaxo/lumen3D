@@ -134,11 +134,67 @@ function site_theme_block(string $selector, $tokens): string {
     return $decls ? ($selector . '{' . implode(';', $decls) . "}\n") : '';
 }
 
-/** Compile config/theme.json → the override sheet. Twin of dev_server.py:_generate_theme_css. */
+/** (r, g, b) in 0..255 for '#rgb', '#rrggbb', 'rgb(…)' or 'rgba(…)'; null otherwise. */
+function site_theme_parse_rgb($value): ?array {
+    $v = trim(is_string($value) ? $value : '');
+    if (preg_match('/^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/D', $v, $m)) {
+        $h = $m[1];
+        if (strlen($h) === 3) $h = $h[0] . $h[0] . $h[1] . $h[1] . $h[2] . $h[2];
+        return [hexdec(substr($h, 0, 2)), hexdec(substr($h, 2, 2)), hexdec(substr($h, 4, 2))];
+    }
+    if (preg_match('/^rgba?\(\s*(\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(\d{1,3})\s*(?:,\s*[0-9.]+%?\s*)?\)$/iD', $v, $m)) {
+        $rgb = [(int)$m[1], (int)$m[2], (int)$m[3]];
+        return max($rgb) <= 255 ? $rgb : null;
+    }
+    return null;
+}
+
+/** WCAG relative luminance over linearised sRGB channels (twin of dev_server.py). */
+function site_wcag_luminance(array $rgb): float {
+    $lin = [];
+    foreach ($rgb as $c) {
+        $x = $c / 255.0;
+        $lin[] = $x <= 0.04045 ? $x / 12.92 : pow(($x + 0.055) / 1.055, 2.4);
+    }
+    return 0.2126 * $lin[0] + 0.7152 * $lin[1] + 0.0722 * $lin[2];
+}
+
+/** The colour at $pct % over black, rounded half up per channel (integer maths). */
+function site_theme_scale(array $rgb, int $pct): array {
+    return array_map(fn($c) => intdiv($c * $pct + 50, 100), $rgb);
+}
+
+/**
+ * Filled-button pair (white text) for an operator primary colour, as
+ * ['#RRGGBB', '#RRGGBB'] (strong, hover), or null when the colour cannot be parsed.
+ * strong = the primary scaled toward black from 77 % down, one percent at a time,
+ * until white text reaches WCAG AA (4.5:1); hover = the same at 64/77 of that factor.
+ * Twin of dev_server.py _theme_strong_pair and js/pages/admin/theme-contrast.js.
+ */
+function site_theme_strong_pair($primary): ?array {
+    $rgb = site_theme_parse_rgb($primary);
+    if ($rgb === null) return null;
+    $pct = 77;
+    while ($pct > 0 && 1.05 / (site_wcag_luminance(site_theme_scale($rgb, $pct)) + 0.05) < 4.5) $pct--;
+    $hoverPct = intdiv($pct * 64 + 38, 77);
+    $hx = fn(array $c) => '#' . strtoupper(sprintf('%02x%02x%02x', $c[0], $c[1], $c[2]));
+    return [$hx(site_theme_scale($rgb, $pct)), $hx(site_theme_scale($rgb, $hoverPct))];
+}
+
+/** Compile config/theme.json → the override sheet. Twin of dev_server.py:_generate_theme_css
+ *  (including the WCAG AA filled-button pair derived from --color-primary). */
 function site_generate_theme_css($theme): string {
     if (!is_array($theme)) $theme = [];
-    $out = "/* GENERATED from config/theme.json by the theme editor — do not edit by hand. */\n";
-    $out .= site_theme_block(':root', $theme['tokens'] ?? null);
+    $tokens = $theme['tokens'] ?? null;
+    if (is_array($tokens)) {
+        $pair = site_theme_strong_pair($tokens['--color-primary'] ?? null);
+        if ($pair !== null) {
+            $tokens['--color-primary-strong'] = $pair[0];
+            $tokens['--color-primary-strong-hover'] = $pair[1];
+        }
+    }
+    $out = "/* GENERATED from config/theme.json by the theme editor — do not edit by hand. lumen-theme v2 */\n";
+    $out .= site_theme_block(':root', $tokens);
     if (!empty($theme['dark']))  $out .= site_theme_block('[data-theme="dark"]', $theme['dark']);
     if (!empty($theme['light'])) $out .= site_theme_block('[data-theme="light"]', $theme['light']);
     return $out;

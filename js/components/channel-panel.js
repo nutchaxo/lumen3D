@@ -8,6 +8,7 @@ window.createChannelPanel = function() {
   let _channels = [];
   let _histograms = [];
   let _onChangeCallback = null;
+  let _langUnsub = null;
   // The dataset metadata init() was given — the source the channel defaults are
   // re-derived from when the workspace is reset.
   let _metadata = null;
@@ -61,6 +62,16 @@ window.createChannelPanel = function() {
     _buildChannels(metadata);
     _renderAll();
     _channels.forEach((_, idx) => _notify(idx));
+    // Static labels follow the document pass on a language switch; the ones
+    // composed in code (slider readouts, summary) are re-synced here.
+    if (!_langUnsub && typeof I18n !== 'undefined' && I18n.onLanguageChange) {
+      _langUnsub = I18n.onLanguageChange(() => {
+        if (!_container) return;
+        I18n.translateDOM(_container);
+        _channels.forEach((_, idx) => _syncChannelUi(idx));
+        _applySoloUi();
+      });
+    }
   }
 
   /**
@@ -223,6 +234,9 @@ window.createChannelPanel = function() {
     _channels.forEach(channel => _bindChannel(channel.idx));
     _layers.forEach(layer => _bindLayer(layer));
     if (window.lucide) lucide.createIcons({ nodes: [_container] });
+    // The markup carries data-i18n keys with English fallback text; the page's
+    // translation pass ran before this panel existed, so translate it here.
+    if (typeof I18n !== 'undefined' && I18n.translateDOM) I18n.translateDOM(_container);
     _channels.forEach((_, idx) => {
       _syncChannelUi(idx);
     });

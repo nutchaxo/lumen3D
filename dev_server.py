@@ -789,19 +789,112 @@ def _theme_css_block(selector: str, tokens) -> str:
     return (selector + "{" + ";".join(decls) + "}\n") if decls else ""
 
 
+_THEME_HEX_RE = re.compile(r"^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$")
+_THEME_RGB_RE = re.compile(r"^rgba?\(\s*(\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(\d{1,3})\s*(?:,\s*[0-9.]+%?\s*)?\)$", re.IGNORECASE)
+_AA_TEXT_RATIO = 4.5     # WCAG 2.x AA, normal-size text
+
+
+def _theme_parse_rgb(value):
+    """(r, g, b) in 0..255 for '#rgb', '#rrggbb', 'rgb(…)' or 'rgba(…)'; None otherwise."""
+    v = str(value or "").strip()
+    m = _THEME_HEX_RE.match(v)
+    if m:
+        h = m.group(1)
+        if len(h) == 3:
+            h = "".join(c * 2 for c in h)
+        return tuple(int(h[i:i + 2], 16) for i in (0, 2, 4))
+    m = _THEME_RGB_RE.match(v)
+    if m:
+        rgb = tuple(int(x) for x in m.groups())
+        return rgb if all(c <= 255 for c in rgb) else None
+    return None
+
+
+def _wcag_luminance(rgb) -> float:
+    """WCAG relative luminance: L = 0.2126 R + 0.7152 G + 0.0722 B over the sRGB
+    channels linearised as c/12.92 (c ≤ 0.04045) or ((c + 0.055)/1.055)^2.4."""
+    lin = []
+    for c in rgb:
+        x = c / 255.0
+        lin.append(x / 12.92 if x <= 0.04045 else ((x + 0.055) / 1.055) ** 2.4)
+    return 0.2126 * lin[0] + 0.7152 * lin[1] + 0.0722 * lin[2]
+
+
+def _contrast_on_white(rgb) -> float:
+    """Contrast ratio of white text on `rgb`: (1 + 0.05) / (L + 0.05)."""
+    return 1.05 / (_wcag_luminance(rgb) + 0.05)
+
+
+def _theme_scale(rgb, pct: int):
+    """The colour at pct % over black, per channel, rounded half up (integer maths, so
+    the PHP and JS twins produce the same bytes)."""
+    return tuple((c * pct + 50) // 100 for c in rgb)
+
+
+def _theme_strong_pair(primary):
+    """The filled-button pair (white text) for an operator primary colour:
+    (--color-primary-strong, --color-primary-strong-hover) as '#rrggbb', or None
+    when the colour cannot be parsed (the CSS color-mix fallback then applies).
+
+    strong = the primary scaled toward black, starting at 77 % (what the stylesheet's
+    color-mix does, so the factory green keeps #00803F) and lowered one percent at a
+    time until white text on it reaches WCAG AA, 4.5:1; hover = the same colour at
+    64/77 of that factor (darker, so its contrast is higher still). A bright orange or
+    turquoise, which stayed under 4.5:1 at a fixed 77 %, is darkened just enough.
+    Twin of api/site.php site_theme_strong_pair and js/pages/admin/theme-contrast.js."""
+    rgb = _theme_parse_rgb(primary)
+    if rgb is None:
+        return None
+    pct = 77
+    while pct > 0 and _contrast_on_white(_theme_scale(rgb, pct)) < _AA_TEXT_RATIO:
+        pct -= 1
+    hover_pct = (pct * 64 + 38) // 77
+
+    def hx(c):
+        return "#" + "".join(f"{x:02X}" for x in c)
+    return hx(_theme_scale(rgb, pct)), hx(_theme_scale(rgb, hover_pct))
+
+
 def _generate_theme_css(theme: dict) -> str:
     """Compile config/theme.json → a CSS override sheet: :root{ structural tokens }
     plus optional [data-theme=dark|light]{ surface tokens }. Loaded AFTER themes.css
-    so it wins the cascade. Twin of api/site.php:site_generate_theme_css."""
+    so it wins the cascade. Twin of api/site.php:site_generate_theme_css.
+
+    When the operator set --color-primary, the filled-button pair is written out
+    explicitly (_theme_strong_pair) so white button text meets WCAG AA whatever the
+    colour; the pair always follows the primary (a stored strong token is replaced)."""
     if not isinstance(theme, dict):
         theme = {}
-    out = ["/* GENERATED from config/theme.json by the theme editor — do not edit by hand. */\n"]
-    out.append(_theme_css_block(":root", theme.get("tokens")))
+    tokens = theme.get("tokens")
+    if isinstance(tokens, dict):
+        pair = _theme_strong_pair(tokens.get("--color-primary"))
+        if pair is not None:
+            tokens = dict(tokens)
+            tokens["--color-primary-strong"], tokens["--color-primary-strong-hover"] = pair
+    out = ["/* GENERATED from config/theme.json by the theme editor — do not edit by hand. lumen-theme v2 */\n"]
+    out.append(_theme_css_block(":root", tokens))
     if theme.get("dark"):
         out.append(_theme_css_block('[data-theme="dark"]', theme.get("dark")))
     if theme.get("light"):
         out.append(_theme_css_block('[data-theme="light"]', theme.get("light")))
     return "".join(out)
+
+
+THEME_CSS_MARKER = "lumen-theme v2"   # bumped when the compiler's output changes
+
+
+def _refresh_stale_theme_css() -> bool:
+    """Recompile config/theme.css when it was written by an older compiler (no
+    THEME_CSS_MARKER): a host updated past 1.59.4 gets the WCAG AA button pair
+    without the operator re-saving the theme. Twin of api/_html_server.php
+    lumen_refresh_theme_css. Returns True when the sheet was rewritten."""
+    try:
+        if not THEME_CSS_FILE.exists() or THEME_CSS_MARKER in THEME_CSS_FILE.read_text(encoding="utf-8", errors="replace")[:200]:
+            return False
+        _regenerate_theme_css()
+        return True
+    except Exception:
+        return False
 
 
 def _regenerate_theme_css(theme: dict | None = None) -> None:
@@ -7360,7 +7453,7 @@ class AdminHandler(http.server.SimpleHTTPRequestHandler):
         ok, retry, _reason = _bf_reserve(key)
         if ok:
             return key
-        self._json(429, {"error": "Trop de tentatives. Réessayez plus tard.", "retryAfter": retry},
+        self._json(429, {"error": "too_many_attempts", "retryAfter": retry},
                    headers={"Retry-After": str(max(1, retry))})
         return None
 
@@ -7470,6 +7563,8 @@ def main():
         print(f"  [types] staging root unavailable: {exc}")
     for line in _migrate_dataset_types():
         print(f"  [types] {line}")
+    if _refresh_stale_theme_css():
+        print("  [theme] config/theme.css recompiled (filled-button contrast).")
     # A publish interrupted by a crash (or a replaced dataset Windows would not let
     # go of) leaves a dot-folder beside the datasets: restore or reclaim it.
     for line in upload_staging.recover_publish_leftovers():

@@ -95,6 +95,8 @@
     "explorerEmpty": "No downloadable files provided for this dataset.",
     "explorerFolderEmpty": "This folder is empty.",
     "explorerError": "File listing is unavailable (platform server required).",
+    "analysisTitle": "Analysis exports",
+    "analysisHint": "Generated from what is open in the viewer: measurements, plugin tables and the chart on screen.",
     "generatedTitle": "Generated exports",
     "measuresCsv": "Measurements CSV",
     "measuresJson": "Measurements JSON",
@@ -168,7 +170,11 @@
     "view": "View",
     "badgeLinked": "Linked",
     "badgeRaw": "Raw",
-    "badgeWeb": "Web"
+    "badgeWeb": "Web",
+    "sortNameAsc": "Name (A-Z)",
+    "sortNameDesc": "Name (Z-A)",
+    "sortNewest": "Newest first",
+    "sortStage": "Stage (earliest)"
   },
   "viewer": {
     "controls": "Controls",
@@ -356,7 +362,20 @@
     "detailMode": "Zoom detail",
     "detailAuto": "Automatic",
     "detailOn": "On",
-    "detailOff": "Off"
+    "detailOff": "Off",
+    "openStudioHd": "Open in Studio (HD)",
+    "openSliceStudio": "Open in Slice Studio",
+    "clearMeasures": "Clear measurements",
+    "qLoadingSlices": "Loading {quality} slices...",
+    "qStreamingSlices": "Streaming {quality} slices...",
+    "qStreamingPreview": "Streaming preview (LOD{lod}) before {quality}...",
+    "qStreamingPreviewBricks": "Streaming preview (LOD{lod}, {count} bricks) before {quality}...",
+    "qStreamingBricks": "Streaming {quality} bricks (LOD{lod}, {count} bricks)...",
+    "gpuCompression": "GPU compression",
+    "gpuCompressionAuto": "Timelapses",
+    "gpuCompressionActive": "Shown from GPU-compressed blocks: half the memory, so more frames stay loaded; voxel values are approximate (about 1–2 levels out of 255). The Studio's native pass reads exact voxels.",
+    "gpuCompressionInactive": "Shown from exact voxels.",
+    "gpuCompressionUnsupported": "Not available on this GPU: shown from exact voxels."
   },
   "compare": {
     "title": "Comparison Mode",
@@ -706,7 +725,8 @@
     "nativeReadyMissing": "Native slice ready ({n} chunks; {missing} kept at the previous resolution).",
     "uncalibrated": "uncalibrated",
     "bigPassMessagePlanes": "This figure projects {n} slices: its native picture reads {planes} stored planes, about {mb} MB ({tiles} image tiles).",
-    "bigPassMessageMips": "This figure projects {n} slices: its native picture reads {layers} stored layer projections and {planes} stored planes, about {mb} MB ({tiles} image tiles)."
+    "bigPassMessageMips": "This figure projects {n} slices: its native picture reads {layers} stored layer projections and {planes} stored planes, about {mb} MB ({tiles} image tiles).",
+    "noLayers": "No layers yet."
   },
   "admin": {
     "loginTitle": "{brand} Admin",
@@ -802,7 +822,7 @@
     "newPassword": "New password",
     "confirmPassword": "Confirm password",
     "createPassword": "Create password",
-    "setupWeak": "Password too short (4 characters minimum).",
+    "setupWeak": "Password too short ({n} characters minimum).",
     "setupMismatch": "The passwords do not match.",
     "creating": "Creating…",
     "setupDone": "Password created ✓",
@@ -1073,7 +1093,13 @@
     "navGroupData": "Data",
     "navGroupSite": "Public site",
     "navGroupExtensions": "Extensions",
-    "navGroupSystem": "System"
+    "navGroupSystem": "System",
+    "tooManyAttempts": "Too many attempts. Try again later.",
+    "tooManyAttemptsIn": "Too many attempts. Try again in {min} min.",
+    "lockoutStore": "Sign-in is unavailable: the server cannot record attempts. Check the permissions of the api/ folder.",
+    "statVisitsHint": "One per browser tab, on any public page (admin panel and embedded pages excluded).",
+    "statViewsHint": "One per dataset opened in a browser tab.",
+    "statDownloadsHint": "One per complete download of a file from a dataset's download/ folder."
   },
   "upl": {
     "title": "Import datasets",
@@ -1170,7 +1196,10 @@
     "rjDisk": "not enough disk space on the server",
     "confirmOverwriteKeep": "A published dataset already has this name. Replace it? Its image gallery and the fields you filled in (name, orientation, captions…) are kept when the new import does not provide them.",
     "publishedKept": "Dataset published ✓ — kept from the previous version: {kept}",
-    "keptGallery": "the gallery"
+    "keptGallery": "the gallery",
+    "errBadType": "Unknown dataset type: “{folder}” declares \"{declared}\" (expected: {types}).",
+    "errNoType": "Dataset type not found for “{folder}”: its metadata.json must declare \"type\" ({types}), or the folder must be dropped inside its type folder.",
+    "rjUnknownType": "unknown dataset type — metadata.json must declare \"type\" ({types})"
   },
   "appearance": {
     "title": "Appearance",
@@ -1809,7 +1838,35 @@
     "lockedOther": "Open in another tab, click to take over",
     "switchUnsaved": "The last changes to this page could not be saved. Switch page anyway?",
     "loadFailed": "Page unreadable, reload before editing",
-    "takeoverConfirm": "This page is open in another tab. Saving here will overwrite its changes. Continue?"
+    "takeoverConfirm": "This page is open in another tab. Saving here will overwrite its changes. Continue?",
+    "unsaved": "Unsaved",
+    "savedAt": "Saved",
+    "undo": "Undo",
+    "redo": "Redo",
+    "dev": {
+      "desktop": "Desktop",
+      "tablet": "Tablet",
+      "mobile": "Mobile"
+    },
+    "discardDraft": "Discard draft",
+    "discardDraftTitle": "Discard the unpublished changes",
+    "discardDraftConfirm": "Discard the unpublished changes and go back to the published version?",
+    "draftDiscarded": "Changes discarded.",
+    "revertTitle": "Reset to the default template",
+    "moveLeft": "Move left",
+    "moveRight": "Move right",
+    "noWidgetMatch": "No matching element.",
+    "copied": "Element copied.",
+    "media": {
+      "urlPh": "Image URL",
+      "pick": "Choose an image",
+      "upload": "Click or drop an image to upload",
+      "uploadErr": "Upload failed.",
+      "loading": "Loading…",
+      "empty": "No image uploaded yet.",
+      "listErr": "Media library unavailable.",
+      "clear": "Remove the image"
+    }
   },
   "wizard": {
     "title": "Guided setup",

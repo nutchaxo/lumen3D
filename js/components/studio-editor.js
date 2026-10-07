@@ -1662,7 +1662,8 @@ const StudioEditor = (() => {
   function _renderLayers() {
     if (!_layersContainer || !_doc) return;
     if (!_doc.layers.length) {
-      _layersContainer.innerHTML = '<div class="studio-empty">No layers yet.</div>';
+      _layersContainer.innerHTML = '<div class="studio-empty" data-i18n="studio.noLayers">No layers yet.</div>';
+      if (typeof I18n !== 'undefined' && I18n.translateDOM) I18n.translateDOM(_layersContainer);
       return;
     }
     _layersContainer.innerHTML = [..._doc.layers].reverse().map(layer => `
@@ -1676,6 +1677,7 @@ const StudioEditor = (() => {
     `).join('');
     _layersContainer.querySelectorAll('.studio-layer-item').forEach(item => _bindLayerItem(item));
     if (window.lucide) lucide.createIcons({ nodes: [_layersContainer] });
+    if (typeof I18n !== 'undefined' && I18n.translateDOM) I18n.translateDOM(_layersContainer);
   }
 
   function _bindLayerItem(item) {

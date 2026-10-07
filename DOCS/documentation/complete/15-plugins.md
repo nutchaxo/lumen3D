@@ -286,7 +286,7 @@ Résultat : **la barre change d'un dataset à l'autre**, sans une ligne de code 
 
 ### Espace de travail
 
-`getState()` de chaque plugin est rassemblé dans le **même objet** que la caméra et les canaux : c'est ce que gardent [Sauvegarder]{.ui} et [Restaurer]{.ui} du Centre de téléchargement, et ce que contient l'adresse `#state=…`. Un plugin sans `getState` n'est pas affecté. Un plugin encore « registered » (pas encore initialisé) est sauté.
+`getState()` de chaque plugin est rassemblé dans le **même objet** que la caméra et les canaux : c'est ce que gardent [Sauvegarder]{.ui} et [Restaurer]{.ui} du Centre de téléchargement de la page Comparer, et ce que contient l'adresse `#state=…`. Un plugin sans `getState` n'est pas affecté. Un plugin encore « registered » (pas encore initialisé) est sauté.
 
 ### Exports
 
@@ -329,7 +329,7 @@ Une page embarquée n'a pas de barre d'outils visible. Elle **décrit** donc ce 
 
 | Plugin | Contexte | En une ligne |
 |---|---|---|
-| Download Center | page | Fichiers, mesures, métadonnées, figures, espace de travail |
+| Download Center | page | Fichiers du dossier `download/` du jeu, et au-dessus les exports d'analyse de la page et de ses plugins (mesures, tableaux du suivi cellulaire, graphique affiché) |
 | Screenshot | page | Capture PNG de la vue |
 | Screenshot (sandboxed) | page | La même, **en bac à sable** (plugin de référence) |
 | Presentation Mode | page | Plein écran sans interface |

@@ -72,6 +72,17 @@ const VolumeSlicer = (() => {
     precision highp sampler2D;
     precision highp sampler2DArray;
 
+    #ifdef SVR_ARRAY
+    // A compressed display atlas (svr-manager.js): pages are 2D arrays of RGTC layers.
+    uniform sampler2DArray svrAtlas0;
+    uniform sampler2DArray svrAtlas1;
+    uniform sampler2DArray svrAtlas2;
+    uniform sampler2DArray svrAtlas3;
+    uniform sampler2DArray svrAtlas4;
+    uniform sampler2DArray svrAtlas5;
+    uniform sampler2DArray svrAtlas6;
+    uniform sampler2DArray svrAtlas7;
+    #else
     uniform sampler3D svrAtlas0;
     uniform sampler3D svrAtlas1;
     uniform sampler3D svrAtlas2;
@@ -80,6 +91,7 @@ const VolumeSlicer = (() => {
     uniform sampler3D svrAtlas5;
     uniform sampler3D svrAtlas6;
     uniform sampler3D svrAtlas7;
+    #endif
 
     #ifdef ENABLE_SVR
     uniform sampler3D pageTable;
@@ -182,6 +194,32 @@ const VolumeSlicer = (() => {
       return vec4(v.r, 0.0, 0.0, 0.0);
     }
 
+    #ifdef SVR_ARRAY
+    // The slice reads texel centres: the layer is the one holding the coordinate,
+    // ⌊c.z·depth⌋, and the bilinear filter of a layer at a texel centre is that texel.
+    // A macro, not a function taking the sampler (see volume-viewer.js SVR_LAYER).
+    #define SVR_LAYER(page) texture(page, svrL)
+    vec4 sampleSVRAtlas(vec3 atlasCoord, float atlasPage) {
+      vec3 svrL = vec3(atlasCoord.xy, floor(atlasCoord.z * atlasDim.z));
+      #ifdef SVR_ARRAY_PAIRS
+      vec4 a; vec4 b;
+      if (atlasPage < 0.5) { a = SVR_LAYER(svrAtlas0); b = SVR_LAYER(svrAtlas4); }
+      else if (atlasPage < 1.5) { a = SVR_LAYER(svrAtlas1); b = SVR_LAYER(svrAtlas5); }
+      else if (atlasPage < 2.5) { a = SVR_LAYER(svrAtlas2); b = SVR_LAYER(svrAtlas6); }
+      else { a = SVR_LAYER(svrAtlas3); b = SVR_LAYER(svrAtlas7); }
+      return vec4(a.rg, b.rg);
+      #else
+      if (atlasPage < 0.5) return SVR_LAYER(svrAtlas0);
+      if (atlasPage < 1.5) return SVR_LAYER(svrAtlas1);
+      if (atlasPage < 2.5) return SVR_LAYER(svrAtlas2);
+      if (atlasPage < 3.5) return SVR_LAYER(svrAtlas3);
+      if (atlasPage < 4.5) return SVR_LAYER(svrAtlas4);
+      if (atlasPage < 5.5) return SVR_LAYER(svrAtlas5);
+      if (atlasPage < 6.5) return SVR_LAYER(svrAtlas6);
+      return SVR_LAYER(svrAtlas7);
+      #endif
+    }
+    #else
     vec4 sampleSVRAtlas(vec3 atlasCoord, float atlasPage) {
       if (atlasPage < 0.5) return texture(svrAtlas0, atlasCoord);
       if (atlasPage < 1.5) return texture(svrAtlas1, atlasCoord);
@@ -192,6 +230,7 @@ const VolumeSlicer = (() => {
       if (atlasPage < 6.5) return texture(svrAtlas6, atlasCoord);
       return texture(svrAtlas7, atlasCoord);
     }
+    #endif
     #endif
 
     float channelValue(float raw, float lo, float hi, float gamma, float opacity) {
@@ -464,7 +503,7 @@ const VolumeSlicer = (() => {
     _volumeMaterial = material;
     // Every load hands the material over again: the same program serves it as long as
     // the defines agree (re-linked in place); a rebuild disposes the material it replaces.
-    if (_mat && Boolean(_mat.defines?.ENABLE_SVR) === Boolean(material?.defines?.ENABLE_SVR)) {
+    if (_mat && _atlasDefinesKey(_mat) === _atlasDefinesKey(material)) {
       _linkUniforms(_mat.uniforms, material);
     } else {
       const previous = _mat;
@@ -548,10 +587,24 @@ const VolumeSlicer = (() => {
     });
   }
 
+  // The atlas defines a material samples its pages with (svr-manager.js): sparse or
+  // dense, and a compressed atlas's 2D arrays (one or two textures per page).
+  const ATLAS_DEFINES = ['ENABLE_SVR', 'SVR_ARRAY', 'SVR_ARRAY_PAIRS'];
+
+  function _copyAtlasDefines(source, defines) {
+    if (!source?.defines?.ENABLE_SVR) return defines;
+    for (const d of ATLAS_DEFINES) if (source.defines[d]) defines[d] = 1;
+    return defines;
+  }
+
+  function _atlasDefinesKey(material) {
+    return ATLAS_DEFINES.map(d => (material?.defines?.[d] ? 1 : 0)).join('');
+  }
+
   /** The slicer's own material, for the inspector plane on screen (_volumeMaterial). */
   function _buildMaterial() {
     const defines = {};
-    if (_volumeMaterial?.defines?.ENABLE_SVR) defines.ENABLE_SVR = 1;
+    _copyAtlasDefines(_volumeMaterial, defines);
     if (samplingSpace(_volumeMaterial)) defines.VOLUME_WARP = 1;
     _mat = _makeMaterial(_volumeMaterial, defines);
   }
@@ -568,7 +621,7 @@ const VolumeSlicer = (() => {
     const defines = {};
     if (plane) defines.PLANE_TEX = 1;
     else {
-      if (source?.defines?.ENABLE_SVR) defines.ENABLE_SVR = 1;
+      _copyAtlasDefines(source, defines);
       if (samplingSpace(source)) defines.VOLUME_WARP = 1;
     }
     if (fallback) defines.FALLBACK_TEX = 1;
@@ -917,8 +970,20 @@ const VolumeSlicer = (() => {
     u.slabDelta.value = g.delta;
   }
 
+  // The atlas defines follow the source material's too: a timelapse shows a cached
+  // timepoint by re-publishing its atlas on the SAME material, and a compressed
+  // atlas (2D array pages) may follow an uncompressed one there.
+  function _syncAtlasDefines() {
+    if (!_volumeMaterial || _atlasDefinesKey(_mat) === _atlasDefinesKey(_volumeMaterial)) return;
+    _mat.defines = _mat.defines || {};
+    for (const d of ATLAS_DEFINES) delete _mat.defines[d];
+    _copyAtlasDefines(_volumeMaterial, _mat.defines);
+    _mat.needsUpdate = true;
+  }
+
   function _syncUniforms() {
     if (!_mat) return;
+    _syncAtlasDefines();
     _syncWarp(samplingSpace(_volumeMaterial));
     _syncUniformsFor(_mat, _spec, _volumeMaterial);
   }

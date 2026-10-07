@@ -13,9 +13,19 @@ fiable en amont.
 DÉTECTER    Release GitHub (releases/latest) → tag ; asset lumen3d-web-<v>.zip + SHA256SUMS
 VERSIONNER  core: changelog_X.Y.Z.md (vérité) → version.json (projection générée)
             plugin: plugin.json#version + platformCompat (liste/range)
-APPLIQUER   core: staging → os.replace(arbre) → --check → pivot → /api/health → ✓/rollback
-            plugin: (préparé) staging → os.replace(dossier), sans redémarrage
+APPLIQUER   core: staging → --check → pivot : renommages fichier par fichier, journalisés
+                  (live→old, staged→live) → /api/health → ✓/rollback (_reverse_plan)
+            plugin: staging → l'ancien dossier est mis de côté, le neuf renommé en place,
+                  l'ancien restauré en cas d'échec — sans redémarrage
 ```
+
+L'arbre n'est **jamais** échangé d'un seul `os.replace` : un répertoire contenant `DATA_WEB/`,
+`config/` et les secrets de `api/` ne peut pas être remplacé en bloc. Le pivot applique un
+**plan** (la liste des fichiers à poser et à supprimer) fichier par fichier, chaque renommage
+étant consigné dans un journal sur disque ; c'est ce journal qui rend l'opération reprenable et
+réversible (§2.2). Sur un hébergeur PHP, `admin_update_apply_php` (`api/_admin_lib.php`) copie
+l'arbre extrait par-dessus l'installation, en laissant les fichiers occupés en `*.lumen-new`
+finalisés par `admin_update_finish_pending`.
 
 ## 2. Le pipeline de mise à jour du core (`dev_server.py`)
 

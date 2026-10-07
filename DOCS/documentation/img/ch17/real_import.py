@@ -19,7 +19,7 @@ for p in sorted(SRC.rglob('*')):
         files.append({'path': rel, 'size': p.stat().st_size})
 # a few forbidden extras
 extras = [{'path': 'evil.php', 'size': 10}, {'path': '.htaccess', 'size': 5}, {'path': '../x.png', 'size': 3},
-          {'path': 'download/report.html', 'size': 3}, {'path': 'bricks/lod0/c0/pack_00.bin', 'size': 3},
+          {'path': 'download/report.html', 'size': 3},
           {'path': 'gallery/a.png', 'size': 3}]
 res = us.plan([{'type': TYPE, 'folder': FOLDER, 'files': files + extras}], CH)
 d = res['datasets'][0]

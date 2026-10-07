@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 300" font-family="Inter, sans-serif"><defs><marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#4a5468"/></marker></defs>
+<rect width="800" height="300" rx="16" fill="#f8f9fd"/>
+<text x="400" y="34" font-size="18" font-weight="800" fill="#1c2333" text-anchor="middle" >Reducing: the mean of a 2 × 2 × 2 block (real values from the demonstration set)</text>
+<text x="130" y="70" font-size="13" font-weight="700" fill="#1c2333" text-anchor="middle" >slice z</text>
+<rect x="60" y="82" width="70" height="50" fill="rgb(161,161,161)" stroke="#fff" stroke-width="2"/>
+<text x="95" y="113" font-size="17" font-weight="800" fill="#1c2333" text-anchor="middle" >162</text>
+<rect x="130" y="82" width="70" height="50" fill="rgb(126,126,126)" stroke="#fff" stroke-width="2"/>
+<text x="165" y="113" font-size="17" font-weight="800" fill="#fff" text-anchor="middle" >115</text>
+<rect x="60" y="132" width="70" height="50" fill="rgb(109,109,109)" stroke="#fff" stroke-width="2"/>
+<text x="95" y="163" font-size="17" font-weight="800" fill="#fff" text-anchor="middle" >92</text>
+<rect x="130" y="132" width="70" height="50" fill="rgb(94,94,94)" stroke="#fff" stroke-width="2"/>
+<text x="165" y="163" font-size="17" font-weight="800" fill="#fff" text-anchor="middle" >72</text>
+<text x="320" y="70" font-size="13" font-weight="700" fill="#1c2333" text-anchor="middle" >slice z + 1</text>
+<rect x="250" y="82" width="70" height="50" fill="rgb(84,84,84)" stroke="#fff" stroke-width="2"/>
+<text x="285" y="113" font-size="17" font-weight="800" fill="#fff" text-anchor="middle" >59</text>
+<rect x="320" y="82" width="70" height="50" fill="rgb(79,79,79)" stroke="#fff" stroke-width="2"/>
+<text x="355" y="113" font-size="17" font-weight="800" fill="#fff" text-anchor="middle" >52</text>
+<rect x="250" y="132" width="70" height="50" fill="rgb(70,70,70)" stroke="#fff" stroke-width="2"/>
+<text x="285" y="163" font-size="17" font-weight="800" fill="#fff" text-anchor="middle" >40</text>
+<rect x="320" y="132" width="70" height="50" fill="rgb(61,61,61)" stroke="#fff" stroke-width="2"/>
+<text x="355" y="163" font-size="17" font-weight="800" fill="#fff" text-anchor="middle" >29</text>
+<line x1="445" y1="132" x2="495" y2="132" stroke="#4a5468" stroke-width="2.4" marker-end="url(#arr)"/>
+<rect x="505" y="82" width="270" height="100" rx="12" fill="#ebfbee" stroke="#2b8a3e" stroke-width="1.8" />
+<text x="640" y="112" font-size="13" font-weight="700" fill="#1c2333" text-anchor="middle" >sum of the 8 values = 621</text>
+<text x="640" y="134" font-size="12" font-weight="400" fill="#4a5468" text-anchor="middle" >+ 4 (to round to the nearest)</text>
+<text x="640" y="160" font-size="12.5" font-weight="700" fill="#2b8a3e" text-anchor="middle" >÷ 8, integer part: (621 + 4) ÷ 8 = 78</text>
+<text x="400" y="235" font-size="17" font-weight="800" fill="#2b8a3e" text-anchor="middle" >→ 1 voxel of the next level: 78</text>
+</svg>

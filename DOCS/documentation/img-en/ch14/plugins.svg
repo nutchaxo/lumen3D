@@ -1,0 +1,33 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 320" font-family="Inter, sans-serif">
+<defs><marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#4a5468"/></marker>
+<marker id="arrr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#c92a2a"/></marker></defs>
+<rect width="800" height="320" rx="16" fill="#f8f9fd"/>
+<text x="400" y="30" text-anchor="middle" font-size="17" font-weight="800" fill="#1c2333">Trust granted to plugins</text>
+<text x="30" y="60" text-anchor="start" font-size="13.5" font-weight="800" fill="#1c2333">Plugins: by default, the door stays shut</text>
+<rect x="30" y="72" width="170" height="70" rx="12" fill="#ebfbee" stroke="#2b8a3e" stroke-width="1.6"/>
+<text x="115.0" y="94" text-anchor="middle" font-size="13.5" font-weight="800" fill="#2b8a3e">Bundled / catalogue</text>
+<text x="115.0" y="113" text-anchor="middle" font-size="11" fill="#1c2333">signed, verified</text>
+<rect x="215" y="72" width="170" height="70" rx="12" fill="#e8edff" stroke="#3b5bdb" stroke-width="1.6"/>
+<text x="300.0" y="94" text-anchor="middle" font-size="13.5" font-weight="800" fill="#3b5bdb">Approved</text>
+<text x="300.0" y="113" text-anchor="middle" font-size="11" fill="#1c2333">by you, tied to a fingerprint</text>
+<rect x="400" y="72" width="170" height="70" rx="12" fill="#f1f3f7" stroke="#4a5468" stroke-width="1.6"/>
+<text x="485.0" y="94" text-anchor="middle" font-size="13.5" font-weight="800" fill="#4a5468">Development</text>
+<text x="485.0" y="113" text-anchor="middle" font-size="11" fill="#1c2333">with --dev-trust-local</text>
+<rect x="585" y="72" width="170" height="70" rx="12" fill="#fff0f0" stroke="#c92a2a" stroke-width="1.6"/>
+<text x="670.0" y="94" text-anchor="middle" font-size="13.5" font-weight="800" fill="#c92a2a">Untrusted</text>
+<text x="670.0" y="113" text-anchor="middle" font-size="11" fill="#1c2333">not loaded</text>
+<rect x="30" y="166" width="356" height="134" rx="12" fill="#f3f0ff" stroke="#7048e8" stroke-width="1.6"/>
+<text x="208.0" y="196" text-anchor="middle" font-size="24">🔖</text>
+<text x="208.0" y="220" text-anchor="middle" font-size="13.5" font-weight="800" fill="#7048e8">Approval tied to a fingerprint</text>
+<text x="208.0" y="239" text-anchor="middle" font-size="11" fill="#1c2333">You approve this exact content. If a</text>
+<text x="208.0" y="255" text-anchor="middle" font-size="11" fill="#1c2333">single file changes, the fingerprint changes:</text>
+<text x="208.0" y="271" text-anchor="middle" font-size="11" fill="#1c2333">the plugin becomes untrusted again. Your</text>
+<text x="208.0" y="287" text-anchor="middle" font-size="11" fill="#1c2333">password is requested to approve.</text>
+<rect x="414" y="166" width="356" height="134" rx="12" fill="#e3fafc" stroke="#0c8599" stroke-width="1.6"/>
+<text x="592.0" y="196" text-anchor="middle" font-size="24">📦</text>
+<text x="592.0" y="220" text-anchor="middle" font-size="13.5" font-weight="800" fill="#0c8599">Sandbox (isolated iframe)</text>
+<text x="592.0" y="239" text-anchor="middle" font-size="11" fill="#1c2333">A third-party plugin can run in a</text>
+<text x="592.0" y="255" text-anchor="middle" font-size="11" fill="#1c2333">cage: with no access to the page, it talks</text>
+<text x="592.0" y="271" text-anchor="middle" font-size="11" fill="#1c2333">only by messages, with declared</text>
+<text x="592.0" y="287" text-anchor="middle" font-size="11" fill="#1c2333">permissions and a limited rate.</text>
+</svg>

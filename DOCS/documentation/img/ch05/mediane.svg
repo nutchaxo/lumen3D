@@ -1,0 +1,49 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 300" font-family="Inter, sans-serif"><defs><marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#4a5468"/></marker></defs>
+<rect width="800" height="300" rx="16" fill="#f8f9fd"/>
+<text x="400" y="34" font-size="18" font-weight="800" fill="#1c2333" text-anchor="middle" >Médiane ou moyenne ? Un pixel chaud au milieu de 8 voisins</text>
+<text x="190" y="64" font-size="14" font-weight="700" fill="#1c2333" text-anchor="middle" >Les 9 valeurs</text>
+<rect x="70" y="82.0" width="76" height="53.199999999999996" fill="#fff" stroke="#c5cbd8" stroke-width="1.2"/>
+<text x="108.0" y="113.6" font-size="14" font-weight="700" fill="#1c2333" text-anchor="middle" >2 810</text>
+<rect x="146" y="82.0" width="76" height="53.199999999999996" fill="#fff" stroke="#c5cbd8" stroke-width="1.2"/>
+<text x="184.0" y="113.6" font-size="14" font-weight="700" fill="#1c2333" text-anchor="middle" >3 120</text>
+<rect x="222" y="82.0" width="76" height="53.199999999999996" fill="#fff" stroke="#c5cbd8" stroke-width="1.2"/>
+<text x="260.0" y="113.6" font-size="14" font-weight="700" fill="#1c2333" text-anchor="middle" >2 950</text>
+<rect x="70" y="135.2" width="76" height="53.199999999999996" fill="#fff" stroke="#c5cbd8" stroke-width="1.2"/>
+<text x="108.0" y="166.79999999999998" font-size="14" font-weight="700" fill="#1c2333" text-anchor="middle" >3 040</text>
+<rect x="146" y="135.2" width="76" height="53.199999999999996" fill="#fff0f0" stroke="#c92a2a" stroke-width="2"/>
+<text x="184.0" y="166.79999999999998" font-size="14" font-weight="700" fill="#c92a2a" text-anchor="middle" >52 000</text>
+<rect x="222" y="135.2" width="76" height="53.199999999999996" fill="#fff" stroke="#c5cbd8" stroke-width="1.2"/>
+<text x="260.0" y="166.79999999999998" font-size="14" font-weight="700" fill="#1c2333" text-anchor="middle" >2 880</text>
+<rect x="70" y="188.39999999999998" width="76" height="53.199999999999996" fill="#fff" stroke="#c5cbd8" stroke-width="1.2"/>
+<text x="108.0" y="219.99999999999997" font-size="14" font-weight="700" fill="#1c2333" text-anchor="middle" >2 760</text>
+<rect x="146" y="188.39999999999998" width="76" height="53.199999999999996" fill="#fff" stroke="#c5cbd8" stroke-width="1.2"/>
+<text x="184.0" y="219.99999999999997" font-size="14" font-weight="700" fill="#1c2333" text-anchor="middle" >3 090</text>
+<rect x="222" y="188.39999999999998" width="76" height="53.199999999999996" fill="#fff" stroke="#c5cbd8" stroke-width="1.2"/>
+<text x="260.0" y="219.99999999999997" font-size="14" font-weight="700" fill="#1c2333" text-anchor="middle" >2 990</text>
+<text x="520" y="64" font-size="14" font-weight="700" fill="#1c2333" text-anchor="middle" >Rangées dans l'ordre :</text>
+<rect x="340" y="80" width="47" height="30" rx="4" fill="#fff" stroke="#c5cbd8" stroke-width="1"/>
+<text x="363.5" y="100" font-size="11" font-weight="700" fill="#1c2333" text-anchor="middle" >2,8k</text>
+<rect x="389" y="80" width="47" height="30" rx="4" fill="#fff" stroke="#c5cbd8" stroke-width="1"/>
+<text x="412.5" y="100" font-size="11" font-weight="700" fill="#1c2333" text-anchor="middle" >2,8k</text>
+<rect x="438" y="80" width="47" height="30" rx="4" fill="#fff" stroke="#c5cbd8" stroke-width="1"/>
+<text x="461.5" y="100" font-size="11" font-weight="700" fill="#1c2333" text-anchor="middle" >2,9k</text>
+<rect x="487" y="80" width="47" height="30" rx="4" fill="#fff" stroke="#c5cbd8" stroke-width="1"/>
+<text x="510.5" y="100" font-size="11" font-weight="700" fill="#1c2333" text-anchor="middle" >3,0k</text>
+<rect x="536" y="80" width="47" height="30" rx="4" fill="#ebfbee" stroke="#2b8a3e" stroke-width="2.4"/>
+<text x="559.5" y="100" font-size="11" font-weight="700" fill="#1c2333" text-anchor="middle" >3,0k</text>
+<rect x="585" y="80" width="47" height="30" rx="4" fill="#fff" stroke="#c5cbd8" stroke-width="1"/>
+<text x="608.5" y="100" font-size="11" font-weight="700" fill="#1c2333" text-anchor="middle" >3,0k</text>
+<rect x="634" y="80" width="47" height="30" rx="4" fill="#fff" stroke="#c5cbd8" stroke-width="1"/>
+<text x="657.5" y="100" font-size="11" font-weight="700" fill="#1c2333" text-anchor="middle" >3,1k</text>
+<rect x="683" y="80" width="47" height="30" rx="4" fill="#fff" stroke="#c5cbd8" stroke-width="1"/>
+<text x="706.5" y="100" font-size="11" font-weight="700" fill="#1c2333" text-anchor="middle" >3,1k</text>
+<rect x="732" y="80" width="47" height="30" rx="4" fill="#fff" stroke="#c5cbd8" stroke-width="1"/>
+<text x="755.5" y="100" font-size="11" font-weight="700" fill="#1c2333" text-anchor="middle" >52k</text>
+<rect x="330" y="135" width="210" height="82" rx="12" fill="#ebfbee" stroke="#2b8a3e" stroke-width="1.8" />
+<text x="435" y="163" font-size="14" font-weight="800" fill="#2b8a3e" text-anchor="middle" >médiane = 5e valeur = 2 990</text>
+<text x="435" y="188" font-size="12" font-weight="600" fill="#4a5468" text-anchor="middle" >le pixel chaud est écrasé</text>
+<rect x="560" y="135" width="215" height="82" rx="12" fill="#fff0f0" stroke="#c92a2a" stroke-width="1.8" />
+<text x="667" y="163" font-size="14" font-weight="800" fill="#c92a2a" text-anchor="middle" >moyenne = 8404</text>
+<text x="667" y="188" font-size="12" font-weight="600" fill="#4a5468" text-anchor="middle" >le pixel chaud contamine tout</text>
+<text x="400" y="280" font-size="11.5" font-weight="400" fill="#4a5468" text-anchor="middle" >Exemple 2D à 9 valeurs ; le pipeline prend 27 voxels (3 × 3 × 3).</text>
+</svg>

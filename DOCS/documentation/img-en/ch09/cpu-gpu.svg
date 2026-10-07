@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 330" font-family="Inter, sans-serif">
+  <rect width="800" height="330" rx="16" fill="#f8f9fd"/>
+  <text x="400" y="32" text-anchor="middle" font-size="18" font-weight="800" fill="#1c2333">Why the computation runs on the graphics card</text>
+  <!-- CPU -->
+  <rect x="24" y="52" width="360" height="250" rx="14" fill="#fff" stroke="#c5cbd8"/>
+  <rect x="24" y="52" width="360" height="36" rx="14" fill="#fff4e6"/><rect x="24" y="72" width="360" height="16" fill="#fff4e6"/>
+  <text x="204" y="76" text-anchor="middle" font-size="14" font-weight="800" fill="#e67700">THE PROCESSOR (CPU): one chef</text>
+  <text x="204" y="150" text-anchor="middle" font-size="64">👨‍🍳</text>
+  <text x="204" y="188" text-anchor="middle" font-size="13" fill="#1c2333" font-weight="700">Very skilled, but alone</text>
+  <text x="204" y="208" text-anchor="middle" font-size="13" fill="#4a5468">prepares the plates one by one</text>
+  <rect x="64" y="226" width="280" height="22" rx="11" fill="#fff4e6"/>
+  <text x="204" y="242" text-anchor="middle" font-size="12.5" font-weight="700" fill="#e67700">1,920 × 1,080 pixels = 2 million plates</text>
+  <text x="204" y="280" text-anchor="middle" font-size="12.5" fill="#4a5468">→ too slow to rotate an embryo live</text>
+  <!-- GPU -->
+  <rect x="416" y="52" width="360" height="250" rx="14" fill="#fff" stroke="#c5cbd8"/>
+  <rect x="416" y="52" width="360" height="36" rx="14" fill="#ebfbee"/><rect x="416" y="72" width="360" height="16" fill="#ebfbee"/>
+  <text x="596" y="76" text-anchor="middle" font-size="14" font-weight="800" fill="#2b8a3e">THE GRAPHICS CARD (GPU): kitchen hands</text>
+  <g font-size="22" text-anchor="middle">
+    <text x="452" y="124">🧑‍🍳</text><text x="488" y="124">🧑‍🍳</text><text x="524" y="124">🧑‍🍳</text><text x="560" y="124">🧑‍🍳</text><text x="596" y="124">🧑‍🍳</text><text x="632" y="124">🧑‍🍳</text><text x="668" y="124">🧑‍🍳</text><text x="704" y="124">🧑‍🍳</text><text x="740" y="124">🧑‍🍳</text>
+    <text x="452" y="156">🧑‍🍳</text><text x="488" y="156">🧑‍🍳</text><text x="524" y="156">🧑‍🍳</text><text x="560" y="156">🧑‍🍳</text><text x="596" y="156">🧑‍🍳</text><text x="632" y="156">🧑‍🍳</text><text x="668" y="156">🧑‍🍳</text><text x="704" y="156">🧑‍🍳</text><text x="740" y="156">🧑‍🍳</text>
+  </g>
+  <text x="596" y="188" text-anchor="middle" font-size="13" fill="#1c2333" font-weight="700">Each makes the same small gesture</text>
+  <text x="596" y="208" text-anchor="middle" font-size="13" fill="#4a5468">… each on its own pixel, all at the same time</text>
+  <rect x="456" y="226" width="280" height="22" rx="11" fill="#ebfbee"/>
+  <text x="596" y="242" text-anchor="middle" font-size="12.5" font-weight="700" fill="#2b8a3e">the small gesture = the "shader" (the pixel program)</text>
+  <text x="596" y="280" text-anchor="middle" font-size="12.5" fill="#4a5468">→ a smooth image, aiming for 60 times a second</text>
+</svg>

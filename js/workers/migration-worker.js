@@ -45,6 +45,7 @@ importScripts('../core/plane-codec.js' + _V);
 let _endpoint = '';
 let _csrf = null;
 const _states = new Map();      // `${migration}|${dataset}` → handler state
+const _bases = new Map();       // `${migration}|${dataset}` → absolute URL of the published dataset
 const _inflight = new Map();    // reqId → AbortController
 const _loaded = new Set();
 
@@ -300,7 +301,7 @@ async function fetchStored(migration, dataset, req, signal) {
         try {
           got = await storeGetMany(migration, dataset, req, list.slice(from, from + STORE_BATCH), signal);
         } catch (err) {
-          if (err && err.status === 400 && err.code === 'unknown_action') { _storeManyMissing = true; return; }
+          if (unknownAction(err)) { _storeManyMissing = true; return; }
           throw err;
         }
         for (let j = 0; j < got.length; j++) found[from + j] = got[j];
@@ -311,6 +312,85 @@ async function fetchStored(migration, dataset, req, signal) {
   }
   const out = [];
   list.forEach(([bz, by, bx], i) => { if (found[i]) out.push({ bz, by, bx, bytes: found[i] }); });
+  return out;
+}
+
+// A unit's input byte runs travel in one request (action read_ranges): a layer projection reads
+// one tile from each of 64 plane files, a planes or v3 unit dozens of pack runs, and one request
+// per run was the bulk of the traffic a shared host's firewall banned the operator's address for.
+const RANGES_BATCH = 512;
+const RANGES_BATCH_BYTES = 16 * 1024 * 1024;
+let _rangesMissing = false;   // a server older than read_ranges: one request per run
+
+/** A server older than an action answers 400 `unknown_action` (PHP) or `Unknown action` (Python). */
+function unknownAction(err) { return !!(err && err.status === 400 && /^unknown[ _]action$/i.test(String(err.code || ''))); }
+
+/** Runs [{ rel, start, end }] of the dataset's packs in one request → Uint8Array views, request order. */
+async function readRanges(dataset, part, signal) {
+  return withRetries(async () => {
+    const headers = { 'Content-Type': 'application/json' };
+    if (_csrf) headers['X-CSRF-Token'] = _csrf;
+    const res = await fetch(`${_endpoint}?action=read_ranges`, {
+      method: 'POST', headers, credentials: 'same-origin', signal,
+      body: JSON.stringify({ dataset, ranges: part.map((r) => [r.rel, r.start, r.end]) }),
+    });
+    if (!res.ok) {
+      let data = null;
+      try { data = await res.json(); } catch (_) { data = null; }
+      const err = httpError(res.status, data && data.error, (data && (data.message || data.error)) || `HTTP ${res.status}`);
+      if (data && data.detail) err.detail = String(data.detail);
+      throw err;
+    }
+    const buf = new Uint8Array(await res.arrayBuffer());
+    const view = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
+    const n = buf.length >= 4 ? view.getUint32(0, true) : -1;
+    if (n !== part.length || buf.length < 4 + 4 * n) throw httpError(502, 'short_read', 'read_ranges: bad header');
+    const out = new Array(n);
+    let at = 4 + 4 * n;
+    for (let i = 0; i < n; i++) {
+      const len = view.getUint32(4 + 4 * i, true);
+      if (len !== part[i].end - part[i].start || at + len > buf.length) throw httpError(502, 'short_read', 'read_ranges: truncated');
+      out[i] = buf.subarray(at, at + len);
+      at += len;
+    }
+    return out;
+  }, signal);
+}
+
+/**
+ * io.fetchRanges([{ url, start, end }]) → [Uint8Array] in request order (end exclusive). Runs of
+ * the dataset's own packs go to the server in batches; anything else, or a server without
+ * read_ranges, is read one run per request.
+ */
+async function fetchRanges(dataset, base, list, signal) {
+  const out = new Array(list.length);
+  const batched = [];
+  list.forEach((r, i) => {
+    const bare = String(r.url).split('?')[0];
+    const rel = !_rangesMissing && base && bare.startsWith(base) ? decodeURIComponent(bare.slice(base.length)) : null;
+    if (rel && r.end - r.start <= RANGES_BATCH_BYTES) batched.push({ i, rel, start: r.start, end: r.end });
+  });
+  for (let k = 0; k < batched.length;) {
+    let bytes = 0;
+    let j = k;
+    while (j < batched.length && j - k < RANGES_BATCH && (j === k || bytes + batched[j].end - batched[j].start <= RANGES_BATCH_BYTES)) {
+      bytes += batched[j].end - batched[j].start;
+      j++;
+    }
+    const part = batched.slice(k, j);
+    let got;
+    try {
+      got = await readRanges(dataset, part, signal);
+    } catch (err) {
+      if (unknownAction(err)) { _rangesMissing = true; break; }
+      throw err;
+    }
+    part.forEach((r, n) => { out[r.i] = got[n]; });
+    k = j;
+  }
+  for (let i = 0; i < list.length; i++) {
+    if (!out[i]) out[i] = await fetchRange(list[i].url, list[i].start, list[i].end, signal);
+  }
   return out;
 }
 
@@ -348,6 +428,7 @@ async function onPrepare(msg) {
     const h = handlerFor(msg.migration);
     const state = await h.prepare({ datasetBase: msg.datasetBase, fetchJson, fetchText });
     _states.set(`${msg.migration}|${msg.dataset}`, state);
+    _bases.set(`${msg.migration}|${msg.dataset}`, msg.datasetBase);
     post({
       type: 'prepared', reqId: msg.reqId, ok: true, trees: state.trees ? state.trees.length : null,
       slotsPerWorker: Number.isInteger(h.slotsPerWorker) && h.slotsPerWorker > 0 ? h.slotsPerWorker : null,
@@ -382,6 +463,7 @@ async function onRun(msg) {
     const work = await h.planUnitWork(msg.unit, state);
     const io = {
       fetchRange: (url, s, e) => fetchRange(url, s, e, ac.signal),
+      fetchRanges: (list) => fetchRanges(msg.dataset, _bases.get(`${msg.migration}|${msg.dataset}`), list, ac.signal),
       fetchStored: (req) => fetchStored(msg.migration, msg.dataset, req, ac.signal),
       signal: ac.signal,
     };
@@ -419,7 +501,7 @@ async function onSpeedtest(msg) {
   const ac = new AbortController();
   _inflight.set(msg.reqId, ac);
   const t0 = performance.now();
-  const n = Math.max(1, Math.min(8, msg.n | 0 || 1));
+  const n = Math.max(1, Math.min(16, msg.n | 0 || 1));
   try {
     const decodeBrick = handlerFor(SPEEDTEST_DECODER)._internals.decodeBrick;
     const q = new URLSearchParams({ action: 'speedtest_sample', n: String(n), t: String(Date.now()) });

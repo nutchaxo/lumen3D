@@ -1,0 +1,61 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 420" font-family="Inter, sans-serif"><defs><marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#4a5468"/></marker></defs>
+<rect width="800" height="420" rx="16" fill="#f8f9fd"/>
+<text x="400" y="34" font-size="18" font-weight="800" fill="#1c2333" text-anchor="middle" >Les 8 coins : du fond de caméra pur, sans embryon</text>
+<line x1="200" y1="260" x2="450" y2="260" stroke="#c5cbd8" stroke-width="1.6" stroke-dasharray="5 4"/>
+<line x1="200" y1="260" x2="200" y2="70" stroke="#c5cbd8" stroke-width="1.6" stroke-dasharray="5 4"/>
+<line x1="200" y1="260" x2="70" y2="370" stroke="#c5cbd8" stroke-width="1.6" stroke-dasharray="5 4"/>
+<ellipse cx="260.0" cy="220.0" rx="72" ry="55" fill="#dbe4ff" stroke="#3b5bdb" stroke-width="1.5" opacity="0.9"/>
+<text x="260.0" y="225.0" font-size="14" font-weight="700" fill="#3b5bdb" text-anchor="middle" >embryon</text>
+<polygon points="374.0,282.0 424.0,282.0 424.0,244.0 374.0,244.0" fill="#ffd8a8" stroke="#e67700" stroke-width="1.4"/>
+<polygon points="374.0,244.0 424.0,244.0 450.0,222.0 400.0,222.0" fill="#ffe8cc" stroke="#e67700" stroke-width="1.4"/>
+<polygon points="424.0,282.0 450.0,260.0 450.0,222.0 424.0,244.0" fill="#ffc078" stroke="#e67700" stroke-width="1.4"/>
+<polygon points="174.0,282.0 224.0,282.0 224.0,244.0 174.0,244.0" fill="#ffd8a8" stroke="#e67700" stroke-width="1.4"/>
+<polygon points="174.0,244.0 224.0,244.0 250.0,222.0 200.0,222.0" fill="#ffe8cc" stroke="#e67700" stroke-width="1.4"/>
+<polygon points="224.0,282.0 250.0,260.0 250.0,222.0 224.0,244.0" fill="#ffc078" stroke="#e67700" stroke-width="1.4"/>
+<polygon points="374.0,130.0 424.0,130.0 424.0,92.0 374.0,92.0" fill="#ffd8a8" stroke="#e67700" stroke-width="1.4"/>
+<polygon points="374.0,92.0 424.0,92.0 450.0,70.0 400.0,70.0" fill="#ffe8cc" stroke="#e67700" stroke-width="1.4"/>
+<polygon points="424.0,130.0 450.0,108.0 450.0,70.0 424.0,92.0" fill="#ffc078" stroke="#e67700" stroke-width="1.4"/>
+<polygon points="174.0,130.0 224.0,130.0 224.0,92.0 174.0,92.0" fill="#ffd8a8" stroke="#e67700" stroke-width="1.4"/>
+<polygon points="174.0,92.0 224.0,92.0 250.0,70.0 200.0,70.0" fill="#ffe8cc" stroke="#e67700" stroke-width="1.4"/>
+<polygon points="224.0,130.0 250.0,108.0 250.0,70.0 224.0,92.0" fill="#ffc078" stroke="#e67700" stroke-width="1.4"/>
+<polygon points="270.0,370 320.0,370 320.0,332.0 270.0,332.0" fill="#ffd8a8" stroke="#e67700" stroke-width="1.4"/>
+<polygon points="270.0,332.0 320.0,332.0 346.0,310.0 296.0,310.0" fill="#ffe8cc" stroke="#e67700" stroke-width="1.4"/>
+<polygon points="320.0,370 346.0,348.0 346.0,310.0 320.0,332.0" fill="#ffc078" stroke="#e67700" stroke-width="1.4"/>
+<polygon points="70,370 120.0,370 120.0,332.0 70,332.0" fill="#ffd8a8" stroke="#e67700" stroke-width="1.4"/>
+<polygon points="70,332.0 120.0,332.0 146.0,310.0 96.0,310.0" fill="#ffe8cc" stroke="#e67700" stroke-width="1.4"/>
+<polygon points="120.0,370 146.0,348.0 146.0,310.0 120.0,332.0" fill="#ffc078" stroke="#e67700" stroke-width="1.4"/>
+<polygon points="270.0,218.0 320.0,218.0 320.0,180.0 270.0,180.0" fill="#ffd8a8" stroke="#e67700" stroke-width="1.4"/>
+<polygon points="270.0,180.0 320.0,180.0 346.0,158.0 296.0,158.0" fill="#ffe8cc" stroke="#e67700" stroke-width="1.4"/>
+<polygon points="320.0,218.0 346.0,196.0 346.0,158.0 320.0,180.0" fill="#ffc078" stroke="#e67700" stroke-width="1.4"/>
+<polygon points="70,218.0 120.0,218.0 120.0,180.0 70,180.0" fill="#ffd8a8" stroke="#e67700" stroke-width="1.4"/>
+<polygon points="70,180.0 120.0,180.0 146.0,158.0 96.0,158.0" fill="#ffe8cc" stroke="#e67700" stroke-width="1.4"/>
+<polygon points="120.0,218.0 146.0,196.0 146.0,158.0 120.0,180.0" fill="#ffc078" stroke="#e67700" stroke-width="1.4"/>
+<line x1="70" y1="370" x2="320" y2="370" stroke="#4a5468" stroke-width="1.4"/>
+<line x1="320" y1="370" x2="320" y2="180" stroke="#4a5468" stroke-width="1.4"/>
+<line x1="320" y1="180" x2="70" y2="180" stroke="#4a5468" stroke-width="1.4"/>
+<line x1="70" y1="180" x2="70" y2="370" stroke="#4a5468" stroke-width="1.4"/>
+<line x1="70" y1="180" x2="200" y2="70" stroke="#4a5468" stroke-width="1.4"/>
+<line x1="200" y1="70" x2="450" y2="70" stroke="#4a5468" stroke-width="1.4"/>
+<line x1="450" y1="70" x2="450" y2="260" stroke="#4a5468" stroke-width="1.4"/>
+<line x1="320" y1="370" x2="450" y2="260" stroke="#4a5468" stroke-width="1.4"/>
+<line x1="320" y1="180" x2="450" y2="70" stroke="#4a5468" stroke-width="1.4"/>
+<polygon points="270.0,370 320.0,370 320.0,332.0 270.0,332.0" fill="#ffd8a8" stroke="#e67700" stroke-width="1.4"/>
+<polygon points="270.0,332.0 320.0,332.0 346.0,310.0 296.0,310.0" fill="#ffe8cc" stroke="#e67700" stroke-width="1.4"/>
+<polygon points="320.0,370 346.0,348.0 346.0,310.0 320.0,332.0" fill="#ffc078" stroke="#e67700" stroke-width="1.4"/>
+<polygon points="70,370 120.0,370 120.0,332.0 70,332.0" fill="#ffd8a8" stroke="#e67700" stroke-width="1.4"/>
+<polygon points="70,332.0 120.0,332.0 146.0,310.0 96.0,310.0" fill="#ffe8cc" stroke="#e67700" stroke-width="1.4"/>
+<polygon points="120.0,370 146.0,348.0 146.0,310.0 120.0,332.0" fill="#ffc078" stroke="#e67700" stroke-width="1.4"/>
+<polygon points="270.0,218.0 320.0,218.0 320.0,180.0 270.0,180.0" fill="#ffd8a8" stroke="#e67700" stroke-width="1.4"/>
+<polygon points="270.0,180.0 320.0,180.0 346.0,158.0 296.0,158.0" fill="#ffe8cc" stroke="#e67700" stroke-width="1.4"/>
+<polygon points="320.0,218.0 346.0,196.0 346.0,158.0 320.0,180.0" fill="#ffc078" stroke="#e67700" stroke-width="1.4"/>
+<polygon points="70,218.0 120.0,218.0 120.0,180.0 70,180.0" fill="#ffd8a8" stroke="#e67700" stroke-width="1.4"/>
+<polygon points="70,180.0 120.0,180.0 146.0,158.0 96.0,158.0" fill="#ffe8cc" stroke="#e67700" stroke-width="1.4"/>
+<polygon points="120.0,218.0 146.0,196.0 146.0,158.0 120.0,180.0" fill="#ffc078" stroke="#e67700" stroke-width="1.4"/>
+<ellipse cx="260.0" cy="220.0" rx="72" ry="55" fill="#dbe4ff" stroke="#3b5bdb" stroke-width="1.5" opacity="0.55"/>
+<text x="260.0" y="225.0" font-size="14" font-weight="700" fill="#3b5bdb" text-anchor="middle" >embryon</text>
+<rect x="500" y="140" width="285" height="150" rx="14" fill="#fff" stroke="#c5cbd8" stroke-width="1.2" />
+<rect x="520" y="160" width="22" height="22" fill="#ffd8a8" stroke="#e67700" stroke-width="1.5"/>
+<text x="552" y="177" font-size="14" font-weight="800" fill="#e67700" text-anchor="start" >8 petits cubes</text>
+<text x="520" y="212" font-size="12.5" font-weight="600" fill="#1c2333" text-anchor="start" >jusqu'à 32 × 32 × 32 voxels chacun</text>
+<text x="520" y="234" font-size="12" font-weight="400" fill="#4a5468" text-anchor="start" >(ici 28 : un quart de l'épaisseur Z = 112)</text>
+</svg>

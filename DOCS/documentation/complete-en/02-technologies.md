@@ -1,0 +1,186 @@
+# 2. The technologies: who does what
+
+::: chapter-intro
+- Lumen3D mixes five languages and a few file formats; each has **one single job**, and this chapter tells you which.
+- Everything the browser runs is **supplied by the site itself** (no outside service): the platform works offline and stays under control.
+- The server never computes the 3D image: it **hands out files**. The drawing is done on your side, on your graphics card.
+:::
+
+## 2.1 A web page is a human body
+
+Before the details, one image to remember it all:
+
+:::: cards
+::: card
+#### HTML: the skeleton
+Says what is on the page: a title, a button, a drawing area. One file per page, at the root of the project.
+:::
+::: card
+#### CSS: the clothes
+Says what it looks like: colours, sizes, light or dark theme. 16 style sheets.
+:::
+::: card
+#### JavaScript: the muscles
+Makes things move: a click on a button, downloading bricks, computing measurements.
+:::
+::::
+
+::: analogy
+**A web page = a body.** Without a skeleton (HTML) nothing holds together; without clothes (CSS) it looks bare; without muscles (JavaScript) nothing moves. Lumen3D adds a fourth organ: a very fast **eye**, the shader (section 2.3).
+:::
+
+## 2.2 The client: what runs in your browser
+
+The "client" is your browser. It receives the HTML, CSS and JavaScript files, then does all the visible work.
+
+- **"Vanilla" JavaScript**: plain JavaScript, organised in small modules, with no framework. About **68,400 lines**.
+- **Web Workers**: the browser's "behind-the-scenes employees". They decode the WebP images and do the heavy calculations so that the screen never freezes.
+- **Libraries**: Three.js (3D scene), Lucide (icons), Plotly (tracking charts). They are copied into the `js/vendor/` folder.
+
+![The languages, by amount of code (the "shaders" bar is included in the JavaScript).](img-en/ch02/loc-bars.svg){width=92%}
+
+::: why
+**Why JavaScript without a framework?** There is no build step: you edit a file, reload the page, and that is it. The code stays readable for someone who has not learned one more tool, and there is no dependency that could disappear or change from one month to the next. Only the administration panel uses modern modules (`import` / `export`).
+:::
+
+## 2.3 GLSL: the tiny program run millions of times
+
+The 3D image is not a photo: it is **computed for every frame displayed**. For each pixel of the screen, an imaginary ray is sent through the volume and the light it meets is accumulated (chapter 9). That makes millions of small, identical calculations.
+
+The graphics card is built for this: it runs them in parallel. The small program it executes is written in **GLSL**, the language of **shaders**.
+
+::: analogy
+**A shader is one recipe handed to a million cooks.** Each cook prepares a single pixel, all at the same time, with the same recipe. An ordinary processor would be one very fast cook: it would lose the race.
+:::
+
+- About **1,800 lines** of GLSL, written inside JavaScript files (volume rendering, the oblique slice, the recolouring of slices).
+- The browser hands them to **WebGL2**, the standard interface for talking to the graphics card.
+
+::: tech
+The volume is stored in the graphics card as **3D textures**, divided into slots of 64³ voxels (66³ in format 4). The shader reads these slots; empty ones are skipped. The details are in chapters 9 and 10.
+:::
+
+## 2.4 The server: a counter, not a brain
+
+The server is a program that answers the browser's requests. Here, it has **five jobs**:
+
+| Job | In plain words |
+|---|---|
+| Serving files | pages, scripts, bricks; with compression and caching |
+| Building the catalogue | the list of datasets is **recomputed on every request** by reading the `metadata.json` files |
+| Administration API | login, editing of dataset records, statistics |
+| Importing | receive a folder in pieces, check it, publish it |
+| Updating itself | download a signed version, check it, switch over, roll back if needed |
+
+![The three actors: the browser draws, the server hands out files, the data are plain files.](img-en/ch02/architecture.svg){width=100%}
+
+::: example
+**The catalogue is not a file.** You copy a dataset folder into `DATA_WEB/3d/`: it appears in the Explorer straight away. Nothing to regenerate, because the server rereads the records on every request (it remembers the result as long as no file has changed).
+:::
+
+### Two twin servers
+
+The same server exists **in two languages**, with the same interface towards the browser:
+
+:::: cols
+::: col
+#### Python: `dev_server.py`
+- recommended, port 8080;
+- standard library only: nothing to install;
+- it is the one that knows how to update itself in one block, with automatic rollback.
+:::
+::: col
+#### PHP: the `api/` folder
+- for ordinary university or institute hosting, which offers PHP but not Python;
+- same files, same formats, same password: an import started under one resumes under the other;
+- PHP 8.1 or later.
+:::
+::::
+
+::: tech
+A small server, `fast_server.py`, only hands out files (no administration): it is used for performance measurements. The two full servers are kept identical by automatic tests that compare their results.
+:::
+
+## 2.5 Python: the laboratory workbench
+
+The **preparation pipeline** is written in Python, because that is the toolbox of science: reading an HDF5 file (`h5py`), computing on large arrays (`numpy`), filtering (`scipy`), writing images (`Pillow`).
+
+::: analogy
+**The workbench.** The pipeline is the workshop where the piece is prepared, away from the shop window. The visitor never sees it: they only see the finished piece on the shelf (`DATA_WEB/`).
+:::
+
+- It runs on the technician's computer, **once per dataset**.
+- Pinned dependencies: `h5py` 3.16.0, `numpy` 2.5.1, `scipy` 1.16.0, `Pillow` 11.1.0, `tqdm` 4.67.1.
+- Python 3.10 or later. The five steps are detailed in chapters 4 to 8.
+
+## 2.6 File formats: containers
+
+A format is a **container**; what matters is what you put in it.
+
+| Format | Mental image | Role in Lumen3D |
+|---|---|---|
+| **JSON** | labelled index cards | `metadata.json` (a dataset's record), `manifest.json` (the brick index), configuration, translations |
+| **Lossless WebP** | an airtight box for an image | every brick; the pixels come back exactly |
+| **PNG** | the same, an older format | the whole planes of format 2 (fast slices) |
+| **`.bin` (packs)** | a ring binder | hundreds of bricks placed end to end, for fewer files |
+| **HDF5 (`.ims`)** | a **file system inside a file** | the original Imaris file: folders, arrays and metadata in a single block |
+| **glTF / GLB** | a cardboard 3D model | `model.glb`, the surface exported with cell tracking |
+| **TIFF** | the laboratory negative | only the optional downloads and the input of photographs |
+
+::: note
+The photograph of a 2D dataset is saved as WebP **with** slight loss (quality 90) by default. The bricks of volumes, on the other hand, are always lossless.
+:::
+
+## 2.7 Why everything is "self-hosted"
+
+Three.js, Lucide and Plotly are not loaded from the Internet: their files are **in the site's folder**. Here is why.
+
+::: steps
+1. **Offline**: on a closed institute network, nothing breaks.
+2. **Security**: the browser's security policy (CSP) accepts only code coming from the site itself. A foreign script would be **blocked**.
+3. **Integrity**: each library is checked by a fingerprint (SRI); if a single byte changes, it is refused.
+4. **Privacy**: no third party knows who is looking at which dataset.
+:::
+
+| Library | Version | Role |
+|---|---|---|
+| Three.js | 0.147.0 | 3D scene, camera, the starting cube of the rays |
+| Lucide | 0.344.0 | button icons |
+| Plotly | 2.27.0 | tracking charts (loaded only when a chart is opened) |
+
+::: why
+**Why such an old version of Three.js?** Version 0.147.0 is pinned on purpose: a single stable file that does not change under the platform's feet. The volume calculation itself is custom-written (the "ray marcher" of chapter 9); Three.js only provides the framework.
+:::
+
+::: note
+**The only exception**: the fonts (Google Fonts), loaded in the background. They only affect how the text looks.
+:::
+
+## 2.8 What the browser needs
+
+- a recent browser with **WebGL2** and **3D textures**; without them, the platform refuses to open a volume and shows a message rather than crashing;
+- a graphics card: the more memory it has, the higher the quality that can be reached;
+- the light/dark theme, the language and a colour-blind filter are in the header of every page.
+
+The platform **measures** the available memory and adapts to it:
+
+| Graphics card class | Memory budget used |
+|---|---|
+| no card (software rendering) | 256 MiB |
+| integrated (laptop) | 0.5 to 2 GiB |
+| dedicated | 3 to 4 GiB |
+| unknown | 1 to 2 GiB |
+
+::: remember
+If the requested quality exceeds the budget, the platform picks the smaller level and tells you: it does not crash (chapter 10).
+:::
+
+## 2.9 The project folder {.page}
+
+What are the folders you will see if you open the project for? A glance at the first two levels:
+
+![The project from above: visitor, server, preparation, quality.](img-en/ch02/arbo.svg){width=100%}
+
+::: see
+The `DATA_WEB/` folders (published data) and `uploads/` (pending imports) are described in chapter 7 and chapter 13. The rules that prevent them from being reached from a web address are in chapter 14.
+:::

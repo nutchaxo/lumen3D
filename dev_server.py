@@ -6588,6 +6588,26 @@ class AdminHandler(http.server.SimpleHTTPRequestHandler):
                 self._json(status, payload)
                 return
             upload_staging.ensure_dirs()   # asserts the deny-all guard of uploads/
+        elif action in dataset_migrations.BINARY_POST_ACTIONS and self.command == "POST":
+            # A browser unit's input runs in one answer (read_ranges): POST + CSRF like a write.
+            ok, status, payload = _authorize_write(self.command, session, self.headers.get("X-CSRF-Token"))
+            if not ok:
+                self._json(status, payload)
+                return
+            _migrations_bind()
+            status, ctype, data = dataset_migrations.handle_binary(action, params, body)
+            self.send_response(status)
+            self.send_header("Content-Type", ctype)
+            self.send_header("Content-Length", str(len(data)))
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.end_headers()
+            if not self._head_only:
+                try:
+                    self.wfile.write(data)
+                except (BrokenPipeError, ConnectionResetError):
+                    self.close_connection = True
+            return
         elif action in dataset_migrations.BINARY_ACTIONS and self.command == "GET":
             # A read, session only, no CSRF: one stored v3 brick of an m004 tile store
             # (store_get, read back by the browser executor to reduce the next level), or

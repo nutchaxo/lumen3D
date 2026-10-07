@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 330" font-family="Inter, sans-serif">
+  <rect width="800" height="330" rx="16" fill="#f8f9fd"/>
+  <text x="400" y="32" text-anchor="middle" font-size="17" font-weight="800" fill="#1c2333">Why a browser cannot simply “open” the stack</text>
+  <text x="400" y="54" text-anchor="middle" font-size="12.5" fill="#4a5468">Real example: embryo of 3789 × 3789 × 178 voxels, 4 channels (the pipeline's reference dataset)</text>
+
+  <!-- bars: 1 Go = 38.9 px, origin x=250 -->
+  <g font-size="13" fill="#1c2333">
+    <text x="236" y="98" text-anchor="end" font-weight="700">Imaris file (.ims)</text>
+    <rect x="250" y="80" width="518" height="28" rx="6" fill="#e67700"/>
+    <text x="260" y="99" font-size="13" font-weight="800" fill="#fff">14.4 GB</text>
+
+    <text x="236" y="140" text-anchor="end" font-weight="700">Stack in memory (1 byte/voxel)</text>
+    <rect x="250" y="122" width="367" height="28" rx="6" fill="#c92a2a"/>
+    <text x="260" y="141" font-weight="800" fill="#fff">10.2 GB (4 × 2.56 GB)</text>
+
+    <text x="236" y="198" text-anchor="end" font-weight="700">Graphics card memory</text>
+    <text x="236" y="214" text-anchor="end" font-size="11.5" fill="#4a5468">(budget used by the platform)</text>
+    <rect x="250" y="166" width="144" height="22" rx="6" fill="#2b8a3e"/>
+    <text x="402" y="182" font-size="12.5" fill="#1c2333">dedicated card: 3 to 4 GB</text>
+    <rect x="250" y="194" width="72" height="22" rx="6" fill="#3b5bdb"/>
+    <text x="330" y="210" font-size="12.5" fill="#1c2333">laptop (integrated): 0.5 to 2 GB</text>
+    <rect x="250" y="222" width="9" height="22" rx="4" fill="#7048e8"/>
+    <text x="267" y="238" font-size="12.5" fill="#1c2333">no graphics card (software rendering): 0.25 GB</text>
+  </g>
+  <line x1="250" y1="70" x2="250" y2="250" stroke="#c5cbd8" stroke-width="1.5"/>
+
+  <rect x="40" y="268" width="720" height="44" rx="12" fill="#fff4e6" stroke="#e67700"/>
+  <text x="400" y="288" text-anchor="middle" font-size="13" font-weight="700" fill="#1c2333">Conclusion: we must cut up, shrink, and load only what the screen shows.</text>
+  <text x="400" y="304" text-anchor="middle" font-size="12" fill="#4a5468">At ~5 MB/s (speed measured on a host), downloading 10 GB in one go would take over half an hour.</text>
+</svg>

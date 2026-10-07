@@ -1,0 +1,42 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 330" font-family="Inter, sans-serif"><defs><marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#4a5468"/></marker></defs>
+<rect width="800" height="330" rx="16" fill="#f8f9fd"/>
+<text x="400" y="34" font-size="18" font-weight="800" fill="#1c2333" text-anchor="middle" >From pixel to voxel</text>
+<text x="190" y="70" font-size="14" font-weight="700" fill="#1c2333" text-anchor="middle" >A pixel: one square of a 2D image</text>
+<rect x="100" y="90" width="36" height="36" fill="rgb(72,72,72)" stroke="#fff" stroke-width="1"/>
+<rect x="136" y="90" width="36" height="36" fill="rgb(95,95,95)" stroke="#fff" stroke-width="1"/>
+<rect x="172" y="90" width="36" height="36" fill="rgb(180,180,180)" stroke="#fff" stroke-width="1"/>
+<rect x="208" y="90" width="36" height="36" fill="rgb(147,147,147)" stroke="#fff" stroke-width="1"/>
+<rect x="244" y="90" width="36" height="36" fill="rgb(74,74,74)" stroke="#fff" stroke-width="1"/>
+<rect x="100" y="126" width="36" height="36" fill="rgb(124,124,124)" stroke="#fff" stroke-width="1"/>
+<rect x="136" y="126" width="36" height="36" fill="rgb(131,131,131)" stroke="#fff" stroke-width="1"/>
+<rect x="172" y="126" width="36" height="36" fill="rgb(83,83,83)" stroke="#fff" stroke-width="1"/>
+<rect x="208" y="126" width="36" height="36" fill="rgb(170,170,170)" stroke="#fff" stroke-width="1"/>
+<rect x="244" y="126" width="36" height="36" fill="rgb(77,77,77)" stroke="#fff" stroke-width="1"/>
+<rect x="100" y="162" width="36" height="36" fill="rgb(118,118,118)" stroke="#fff" stroke-width="1"/>
+<rect x="136" y="162" width="36" height="36" fill="rgb(137,137,137)" stroke="#fff" stroke-width="1"/>
+<rect x="172" y="162" width="36" height="36" fill="rgb(124,124,124)" stroke="#fff" stroke-width="1"/>
+<rect x="208" y="162" width="36" height="36" fill="rgb(148,148,148)" stroke="#fff" stroke-width="1"/>
+<rect x="244" y="162" width="36" height="36" fill="rgb(170,170,170)" stroke="#fff" stroke-width="1"/>
+<rect x="100" y="198" width="36" height="36" fill="rgb(203,203,203)" stroke="#fff" stroke-width="1"/>
+<rect x="136" y="198" width="36" height="36" fill="rgb(102,102,102)" stroke="#fff" stroke-width="1"/>
+<rect x="172" y="198" width="36" height="36" fill="rgb(157,157,157)" stroke="#fff" stroke-width="1"/>
+<rect x="208" y="198" width="36" height="36" fill="rgb(164,164,164)" stroke="#fff" stroke-width="1"/>
+<rect x="244" y="198" width="36" height="36" fill="rgb(103,103,103)" stroke="#fff" stroke-width="1"/>
+<rect x="100" y="234" width="36" height="36" fill="rgb(60,60,60)" stroke="#fff" stroke-width="1"/>
+<rect x="136" y="234" width="36" height="36" fill="rgb(206,206,206)" stroke="#fff" stroke-width="1"/>
+<rect x="172" y="234" width="36" height="36" fill="rgb(104,104,104)" stroke="#fff" stroke-width="1"/>
+<rect x="208" y="234" width="36" height="36" fill="rgb(107,107,107)" stroke="#fff" stroke-width="1"/>
+<rect x="244" y="234" width="36" height="36" fill="rgb(193,193,193)" stroke="#fff" stroke-width="1"/>
+<rect x="172" y="162" width="36" height="36" fill="none" stroke="#c92a2a" stroke-width="3"/>
+<text x="190" y="290" font-size="13" font-weight="700" fill="#c92a2a" text-anchor="middle" >one grey value</text>
+<line x1="310" y1="180" x2="400" y2="180" stroke="#4a5468" stroke-width="2" marker-end="url(#arr)"/>
+<text x="590" y="70" font-size="14" font-weight="700" fill="#1c2333" text-anchor="middle" >A voxel: a small 3D box</text>
+<polygon points="480,150 550,150 550,220 480,220" fill="#e8edff" stroke="#3b5bdb" stroke-width="2"/>
+<polygon points="480,150 530.0,100.0 600.0,100.0 550,150" fill="#d0dcff" stroke="#3b5bdb" stroke-width="2"/>
+<polygon points="550,150 600.0,100.0 600.0,170.0 550,220" fill="#bccbff" stroke="#3b5bdb" stroke-width="2"/>
+<text x="515.0" y="242" font-size="13" font-weight="700" fill="#3b5bdb" text-anchor="middle" >X: 1.2 µm</text>
+<text x="470" y="190.0" font-size="13" font-weight="700" fill="#3b5bdb" text-anchor="end" >Y: 1.2 µm</text>
+<text x="608.0" y="165.0" font-size="13" font-weight="700" fill="#c92a2a" text-anchor="start" >Z: 3.0 µm</text>
+<text x="590" y="285" font-size="13" font-weight="700" fill="#1c2333" text-anchor="middle" >Here the voxel is stretched: 1.2 × 1.2 × 3.0 µm</text>
+<text x="590" y="304" font-size="12" font-weight="400" fill="#4a5468" text-anchor="middle" >(anisotropic: thicker in Z than in X and Y)</text>
+</svg>

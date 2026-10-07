@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 300" font-family="Inter, sans-serif">
+  <rect width="800" height="300" rx="16" fill="#f8f9fd"/>
+  <text x="400" y="32" text-anchor="middle" font-size="18" font-weight="800" fill="#1c2333">Channel colours add up (like spotlights)</text>
+  <g>
+    <rect x="30" y="56" width="236" height="170" rx="12" fill="#000"/>
+    <g style="isolation:isolate"><circle cx="118" cy="140" r="58" fill="#00ff00" style="mix-blend-mode:screen"/><circle cx="178" cy="140" r="58" fill="#ff00ff" style="mix-blend-mode:screen"/></g>
+    <text x="148" y="250" text-anchor="middle" font-size="13" font-weight="700" fill="#1c2333">green + magenta = white</text>
+    <text x="148" y="268" text-anchor="middle" font-size="12" fill="#4a5468">where both are strong</text>
+  </g>
+  <g>
+    <rect x="282" y="56" width="236" height="170" rx="12" fill="#000"/>
+    <g style="isolation:isolate"><circle cx="370" cy="140" r="58" fill="#ff0000" style="mix-blend-mode:screen"/><circle cx="430" cy="140" r="58" fill="#00ff00" style="mix-blend-mode:screen"/></g>
+    <text x="400" y="250" text-anchor="middle" font-size="13" font-weight="700" fill="#1c2333">red + green = yellow</text>
+    <text x="400" y="268" text-anchor="middle" font-size="12" fill="#4a5468">the overlap turns yellow</text>
+  </g>
+  <g>
+    <rect x="534" y="56" width="236" height="170" rx="12" fill="#000"/>
+    <g style="isolation:isolate"><circle cx="622" cy="140" r="58" fill="#00aaff" style="mix-blend-mode:screen"/><circle cx="682" cy="140" r="58" fill="#ff00ff" style="mix-blend-mode:screen"/></g>
+    <text x="652" y="250" text-anchor="middle" font-size="13" font-weight="700" fill="#1c2333">light blue + magenta</text>
+    <text x="652" y="268" text-anchor="middle" font-size="12" fill="#4a5468">→ a very pale lilac</text>
+  </g>
+</svg>

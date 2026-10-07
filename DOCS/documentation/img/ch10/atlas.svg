@@ -1,0 +1,34 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 380" font-family="Inter, sans-serif">
+  <defs><marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#7048e8"/></marker></defs>
+  <rect width="800" height="380" rx="16" fill="#f8f9fd"/>
+  <text x="400" y="32" text-anchor="middle" font-size="18" font-weight="800" fill="#1c2333">L'atlas et la table des pages : un entrepôt et sa fiche d'index</text>
+  <!-- page table -->
+  <rect x="24" y="52" width="300" height="300" rx="14" fill="#fff" stroke="#c5cbd8"/>
+  <text x="174" y="78" text-anchor="middle" font-size="14" font-weight="800" fill="#7048e8">Table des pages (la fiche)</text>
+  <text x="174" y="96" text-anchor="middle" font-size="12" fill="#4a5468">une case par brique du volume</text>
+  <g stroke="#c5cbd8">
+    <rect x="54" y="116" width="60" height="50" fill="#f3f0ff"/><rect x="114" y="116" width="60" height="50" fill="#f3f0ff"/><rect x="174" y="116" width="60" height="50" fill="#f1f3f5"/><rect x="234" y="116" width="60" height="50" fill="#f3f0ff"/>
+    <rect x="54" y="166" width="60" height="50" fill="#f3f0ff"/><rect x="114" y="166" width="60" height="50" fill="#f3f0ff"/><rect x="174" y="166" width="60" height="50" fill="#f3f0ff"/><rect x="234" y="166" width="60" height="50" fill="#f1f3f5"/>
+    <rect x="54" y="216" width="60" height="50" fill="#f1f3f5"/><rect x="114" y="216" width="60" height="50" fill="#f3f0ff"/><rect x="174" y="216" width="60" height="50" fill="#f1f3f5"/><rect x="234" y="216" width="60" height="50" fill="#f1f3f5"/>
+  </g>
+  <g font-size="12" font-weight="700" fill="#7048e8" text-anchor="middle">
+    <text x="84" y="146">p0 · 3</text><text x="264" y="146">p0 · 7</text><text x="84" y="196">p0 · 1</text><text x="144" y="196">p1 · 0</text><text x="204" y="196">p0 · 5</text><text x="144" y="246">p0 · 2</text><text x="144" y="146" fill="#4a5468">p0 · 4</text>
+  </g>
+  <g font-size="12" fill="#4a5468" text-anchor="middle"><text x="204" y="146">vide</text><text x="264" y="196">vide</text><text x="84" y="246">vide</text><text x="204" y="246">vide</text><text x="264" y="246">vide</text></g>
+  <text x="174" y="292" text-anchor="middle" font-size="12.5" fill="#1c2333">« page · emplacement » ou « vide »</text>
+  <text x="174" y="312" text-anchor="middle" font-size="12.5" fill="#1c2333">(vide : le rayon saute la brique)</text>
+  <!-- atlas -->
+  <rect x="376" y="52" width="400" height="300" rx="14" fill="#fff" stroke="#c5cbd8"/>
+  <text x="576" y="78" text-anchor="middle" font-size="14" font-weight="800" fill="#0c8599">Atlas (les étagères)</text>
+  <text x="576" y="96" text-anchor="middle" font-size="12" fill="#4a5468">des emplacements identiques, en mémoire vidéo</text>
+  <g stroke="#0c8599" fill="#e3fafc">
+    <rect x="404" y="116" width="64" height="64" rx="4"/><rect x="474" y="116" width="64" height="64" rx="4"/><rect x="544" y="116" width="64" height="64" rx="4"/><rect x="614" y="116" width="64" height="64" rx="4"/><rect x="684" y="116" width="64" height="64" rx="4"/>
+    <rect x="404" y="186" width="64" height="64" rx="4"/><rect x="474" y="186" width="64" height="64" rx="4" fill="#fff" stroke-dasharray="4 3"/><rect x="544" y="186" width="64" height="64" rx="4"/><rect x="614" y="186" width="64" height="64" rx="4"/><rect x="684" y="186" width="64" height="64" rx="4" fill="#fff" stroke-dasharray="4 3"/>
+  </g>
+  <g font-size="13" font-weight="800" fill="#0c8599" text-anchor="middle"><text x="436" y="154">0</text><text x="506" y="154">1</text><text x="576" y="154">2</text><text x="646" y="154">3</text><text x="716" y="154">4</text><text x="436" y="224">5</text><text x="576" y="224">7</text><text x="646" y="224">8</text></g>
+  <g font-size="12" fill="#4a5468" text-anchor="middle"><text x="506" y="224">libre</text><text x="716" y="224">libre</text></g>
+  <text x="576" y="276" text-anchor="middle" font-size="12.5" fill="#1c2333">Une brique = un emplacement de 66 × 66 × 66 voxels (format 4)</text>
+  <text x="576" y="296" text-anchor="middle" font-size="12.5" fill="#1c2333">1 à 4 canaux par voxel (1 octet chacun) · jusqu'à 8 « pages »</text>
+  <text x="576" y="316" text-anchor="middle" font-size="12.5" fill="#1c2333">Plus d'emplacement libre ? On recycle le moins récemment utilisé.</text>
+  <line x1="294" y1="141" x2="372" y2="141" stroke="#7048e8" stroke-width="2" marker-end="url(#a)"/>
+</svg>

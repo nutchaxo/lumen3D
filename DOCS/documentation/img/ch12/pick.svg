@@ -1,0 +1,41 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 330" font-family="Inter, sans-serif">
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#4a5468"/></marker>
+  </defs>
+  <rect width="800" height="330" rx="16" fill="#f8f9fd"/>
+  <text x="400" y="30" text-anchor="middle" font-size="17" font-weight="800" fill="#1c2333">Où se pose le point quand vous cliquez ?</text>
+  <!-- left: ray through specimen -->
+  <g transform="translate(24,52)">
+    <rect width="250" height="250" rx="14" fill="#fff" stroke="#c5cbd8"/>
+    <text x="125" y="24" text-anchor="middle" font-size="13" font-weight="700" fill="#4a5468">Le rayon de votre clic</text>
+    <text x="30" y="62" font-size="26">👁</text>
+    <line x1="64" y1="56" x2="226" y2="214" stroke="#3b5bdb" stroke-width="2.4" stroke-dasharray="6 4" marker-end="url(#a)"/>
+    <ellipse cx="122" cy="120" rx="30" ry="20" fill="#ebfbee" stroke="#2b8a3e" stroke-width="1.5" opacity=".7"/>
+    <ellipse cx="170" cy="168" rx="26" ry="20" fill="#e67700" opacity=".35" stroke="#e67700" stroke-width="1.5"/>
+    <text x="108" y="108" font-size="11" fill="#2b8a3e" font-weight="700">voile faible</text>
+    <text x="150" y="204" font-size="11" fill="#e67700" font-weight="700">structure vive</text>
+    <circle cx="150" cy="151" r="7" fill="#c92a2a"/>
+    <text x="18" y="236" font-size="12" fill="#c92a2a" font-weight="700">● point enregistré</text>
+  </g>
+  <!-- right: profile -->
+  <g transform="translate(300,52)">
+    <rect width="476" height="250" rx="14" fill="#fff" stroke="#c5cbd8"/>
+    <text x="238" y="24" text-anchor="middle" font-size="13" font-weight="700" fill="#4a5468">Ce que l'écran montre le long du rayon</text>
+    <line x1="50" y1="206" x2="450" y2="206" stroke="#4a5468" stroke-width="1.6" marker-end="url(#a)"/>
+    <line x1="50" y1="206" x2="50" y2="42" stroke="#4a5468" stroke-width="1.6" marker-end="url(#a)"/>
+    <text x="250" y="232" text-anchor="middle" font-size="12" fill="#4a5468">profondeur le long du rayon →</text>
+    <text x="14" y="130" font-size="12" fill="#4a5468" transform="rotate(-90 14 130)" text-anchor="middle">valeur affichée</text>
+    <path d="M50,200 C90,196 110,160 140,166 C165,172 175,198 195,196 C230,150 250,70 290,60 C320,54 345,90 380,180 C395,196 420,203 445,204" fill="none" stroke="#2b8a3e" stroke-width="3"/>
+    <line x1="50" y1="60" x2="450" y2="60" stroke="#7048e8" stroke-width="1" stroke-dasharray="3 4"/>
+    <text x="456" y="64" font-size="12" font-weight="700" fill="#7048e8">m</text>
+    <text x="300" y="52" font-size="12" font-weight="700" fill="#7048e8">pic m (étape 1)</text>
+    <line x1="50" y1="105" x2="450" y2="105" stroke="#c92a2a" stroke-width="1.6" stroke-dasharray="6 4"/>
+    <text x="456" y="109" font-size="12" font-weight="700" fill="#c92a2a">55 % de m</text>
+    <circle cx="262" cy="105" r="7" fill="#c92a2a"/>
+    <line x1="262" y1="112" x2="262" y2="206" stroke="#c92a2a" stroke-width="1.2" stroke-dasharray="3 3"/>
+    <text x="268" y="142" font-size="12" font-weight="800" fill="#c92a2a">premier franchissement</text>
+    <text x="268" y="158" font-size="12" fill="#c92a2a">= le point mesuré</text>
+    <text x="102" y="150" font-size="12" fill="#4a5468">le voile reste</text>
+    <text x="102" y="164" font-size="12" fill="#4a5468">sous le seuil</text>
+  </g>
+</svg>

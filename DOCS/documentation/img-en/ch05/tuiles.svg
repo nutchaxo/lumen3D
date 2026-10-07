@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 410" font-family="Inter, sans-serif"><defs><marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#4a5468"/></marker></defs>
+<rect width="800" height="410" rx="16" fill="#f8f9fd"/>
+<text x="400" y="34" font-size="18" font-weight="800" fill="#1c2333" text-anchor="middle" >Big volume: cut into tiles with a 5-voxel margin</text>
+<text x="300" y="62" font-size="12.5" font-weight="600" fill="#4a5468" text-anchor="middle" >the channel (never loaded whole)</text>
+<rect x="60" y="74" width="480" height="200" rx="8" fill="#fff" stroke="#4a5468" stroke-width="1.8" />
+<line x1="300" y1="74" x2="300" y2="274" stroke="#c5cbd8" stroke-width="1.6" stroke-dasharray="6 4"/>
+<line x1="60" y1="174" x2="540" y2="174" stroke="#c5cbd8" stroke-width="1.6" stroke-dasharray="6 4"/>
+<rect x="60" y="74" width="260" height="120" fill="#fff4e6" stroke="#e67700" stroke-width="2" stroke-dasharray="6 4"/>
+<rect x="60" y="74" width="240" height="100" fill="#ebfbee" stroke="#2b8a3e" stroke-width="2.4"/>
+<rect x="300" y="174" width="240" height="100" fill="#f1f3f5" opacity="0.6"/>
+<text x="180" y="130" font-size="16" font-weight="800" fill="#2b8a3e" text-anchor="middle" >tile</text>
+<rect x="580" y="90" width="22" height="22" fill="#ebfbee" stroke="#2b8a3e" stroke-width="2"/>
+<text x="610" y="107" font-size="13" font-weight="800" fill="#2b8a3e" text-anchor="start" >core</text>
+<rect x="580" y="130" width="22" height="22" fill="#fff4e6" stroke="#e67700" stroke-width="2" stroke-dasharray="4 3"/>
+<text x="610" y="147" font-size="13" font-weight="800" fill="#e67700" text-anchor="start" >margin (halo)</text>
+<text x="580" y="190" font-size="12.5" font-weight="600" fill="#4a5468" text-anchor="start" >5 voxels</text>
+<text x="40" y="310" font-size="12.5" font-weight="600" fill="#2b8a3e" text-anchor="start" >tile core: what is written</text>
+<text x="40" y="330" font-size="12.5" font-weight="600" fill="#e67700" text-anchor="start" >5-voxel margin (halo): read to compute, then thrown away</text>
+<text x="40" y="352" font-size="12.5" font-weight="600" fill="#1c2333" text-anchor="start" >1 (opening: erosion) + 1 (dilation) + 3 (dilations) = 5 voxels of influence</text>
+<text x="40" y="374" font-size="12" font-weight="400" fill="#4a5468" text-anchor="start" >≤ 24 million voxels per tile, margin included</text>
+<text x="40" y="394" font-size="12.5" font-weight="700" fill="#3b5bdb" text-anchor="start" >Byte-identical result, whatever the tiling</text>
+</svg>

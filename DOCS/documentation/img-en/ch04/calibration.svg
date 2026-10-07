@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 290" font-family="Inter, sans-serif"><defs><marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#4a5468"/></marker></defs>
+<rect width="800" height="290" rx="16" fill="#f8f9fd"/>
+<text x="400" y="34" font-size="18" font-weight="800" fill="#1c2333" text-anchor="middle" >Calibration: the voxel size is deduced from the box</text>
+<text x="400" y="62" font-size="17" font-weight="800" fill="#3b5bdb" text-anchor="middle" >voxel = (ExtMax − ExtMin) ÷ N</text>
+<rect x="40" y="85" width="225" height="175" rx="14" fill="#fff" stroke="#c5cbd8" stroke-width="1.2" />
+<text x="152" y="112" font-size="18" font-weight="800" fill="#1c2333" text-anchor="middle" >X</text>
+<text x="152" y="138" font-size="11.5" font-weight="400" fill="#4a5468" text-anchor="middle" >The box, in µm</text>
+<text x="152" y="160" font-size="17" font-weight="700" fill="#e67700" text-anchor="middle" >921.6 µm</text>
+<text x="152" y="186" font-size="11.5" font-weight="400" fill="#4a5468" text-anchor="middle" >÷ number of voxels</text>
+<text x="152" y="208" font-size="17" font-weight="700" fill="#7048e8" text-anchor="middle" >768</text>
+<line x1="80" y1="218" x2="225" y2="218" stroke="#c5cbd8" stroke-width="1.5"/>
+<text x="152" y="244" font-size="19" font-weight="800" fill="#2b8a3e" text-anchor="middle" >= 1.2 µm</text>
+<rect x="285" y="85" width="225" height="175" rx="14" fill="#fff" stroke="#c5cbd8" stroke-width="1.2" />
+<text x="397" y="112" font-size="18" font-weight="800" fill="#1c2333" text-anchor="middle" >Y</text>
+<text x="397" y="138" font-size="11.5" font-weight="400" fill="#4a5468" text-anchor="middle" >The box, in µm</text>
+<text x="397" y="160" font-size="17" font-weight="700" fill="#e67700" text-anchor="middle" >691.2 µm</text>
+<text x="397" y="186" font-size="11.5" font-weight="400" fill="#4a5468" text-anchor="middle" >÷ number of voxels</text>
+<text x="397" y="208" font-size="17" font-weight="700" fill="#7048e8" text-anchor="middle" >576</text>
+<line x1="325" y1="218" x2="470" y2="218" stroke="#c5cbd8" stroke-width="1.5"/>
+<text x="397" y="244" font-size="19" font-weight="800" fill="#2b8a3e" text-anchor="middle" >= 1.2 µm</text>
+<rect x="530" y="85" width="225" height="175" rx="14" fill="#fff" stroke="#c5cbd8" stroke-width="1.2" />
+<text x="642" y="112" font-size="18" font-weight="800" fill="#1c2333" text-anchor="middle" >Z</text>
+<text x="642" y="138" font-size="11.5" font-weight="400" fill="#4a5468" text-anchor="middle" >The box, in µm</text>
+<text x="642" y="160" font-size="17" font-weight="700" fill="#e67700" text-anchor="middle" >336.0 µm</text>
+<text x="642" y="186" font-size="11.5" font-weight="400" fill="#4a5468" text-anchor="middle" >÷ number of voxels</text>
+<text x="642" y="208" font-size="17" font-weight="700" fill="#7048e8" text-anchor="middle" >112</text>
+<line x1="570" y1="218" x2="715" y2="218" stroke="#c5cbd8" stroke-width="1.5"/>
+<text x="642" y="244" font-size="19" font-weight="800" fill="#2b8a3e" text-anchor="middle" >= 3.0 µm</text>
+</svg>

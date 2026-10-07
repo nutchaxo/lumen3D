@@ -40,7 +40,7 @@ const LUMEN_MIG_MAX_RUN_S       = 20;
 const LUMEN_MIG_MAX_BENCH_UNITS = 8;
 const LUMEN_MIG_SPEEDTEST_MAX_S  = 3.0;
 const LUMEN_MIG_SPEEDTEST_PUT_MAX = 4194304;
-const LUMEN_MIG_SPEEDTEST_BATCH_MAX = 8;
+const LUMEN_MIG_SPEEDTEST_BATCH_MAX = 16;
 const LUMEN_MIG_MIN_MEMORY      = 134217728;    // 128 MiB
 const LUMEN_MIG_MIN_EXEC_S      = 10;
 const LUMEN_MIG_ZLIB_LEVEL      = 6;
@@ -2119,7 +2119,7 @@ function lumen_mig_speedtest($maxSeconds = 1.0): array {
             'bytesRead' => $blocks * strlen($raw), 'bytesWritten' => $written];
 }
 
-/** The browser's input for a batch of $n (1..8) test blocks: the shipped test brick repeated $n times (one download per batch). */
+/** The browser's input for a batch of $n (1..16) test blocks: the shipped test brick repeated $n times (one download per batch). */
 function lumen_mig_speedtest_sample($n = 1): string {
     $k = is_numeric($n) ? max(1, min(LUMEN_MIG_SPEEDTEST_BATCH_MAX, (int)$n)) : 1;
     $raw = @file_get_contents(admin_root() . '/js/migrations/speedtest-brick.webp');
@@ -2240,6 +2240,69 @@ function lumen_mig_store_get_many($datasetId, $mid, $base, $bricks): string {
         if (!is_string($data)) $data = '';
         $head .= pack('V', strlen($data));
         $body .= $data;
+    }
+    return $head . $body;
+}
+
+/**
+ * Byte runs of the dataset's published packs in one answer (twin of
+ * dataset_migrations.read_ranges): $ranges = [[rel, start, end], …], rel a .bin under bricks/,
+ * planes/ or mips/ of the dataset, end exclusive; at most 1024 runs and 32 MiB in all. Body:
+ * uint32 LE count, count × uint32 LE length, then the bytes. Every run is checked before a byte
+ * is read. One request per run was the bulk of the traffic a shared host's firewall banned the
+ * operator's address for.
+ */
+function lumen_mig_read_ranges($datasetId, $ranges): string {
+    [, , $dir] = lumen_mig_resolve($datasetId);
+    if (!is_array($ranges) || count($ranges) < 1 || array_keys($ranges) !== range(0, count($ranges) - 1) || count($ranges) > LUMEN_MIG_READ_RANGES_MAX) {
+        throw new LumenMigError('bad_range', 400, '1..' . LUMEN_MIG_READ_RANGES_MAX . ' ranges');
+    }
+    $root = realpath($dir);
+    if ($root === false) throw new LumenMigError('no_dataset', 404);
+    $plan = []; $sizes = []; $total = 0;
+    foreach ($ranges as $r) {
+        if (!is_array($r) || count($r) !== 3 || !is_string($r[0] ?? null)
+            || !preg_match('#^(?:bricks|planes|mips)(?:/[A-Za-z0-9_][A-Za-z0-9._-]{0,127}){1,6}\.bin$#D', $r[0])) {
+            throw new LumenMigError('bad_range');
+        }
+        foreach (explode('/', $r[0]) as $seg) if ($seg === '' || $seg[0] === '.') throw new LumenMigError('bad_range');
+        [$rel, $start, $end] = $r;
+        if (!is_int($start) || !is_int($end) || $start < 0 || $end <= $start) throw new LumenMigError('bad_range');
+        $path = realpath($root . '/' . $rel);
+        if ($path === false || !is_file($path)) throw new LumenMigError('range_missing', 404, $rel);
+        $rootSep = rtrim(str_replace('\\', '/', $root), '/') . '/';
+        if (strpos(str_replace('\\', '/', $path), $rootSep) !== 0) throw new LumenMigError('bad_range');
+        if (!isset($sizes[$path])) $sizes[$path] = (int)filesize($path);
+        if ($end > $sizes[$path]) throw new LumenMigError('bad_range', 416, $rel);
+        $total += $end - $start;
+        if ($total > LUMEN_MIG_READ_RANGES_MAX_BYTES) throw new LumenMigError('bad_range', 413, 'more than ' . LUMEN_MIG_READ_RANGES_MAX_BYTES . ' bytes');
+        $plan[] = [$path, $start, $end];
+    }
+    $head = pack('V', count($plan));
+    $body = '';
+    $handles = [];
+    try {
+        foreach ($plan as [$path, $start, $end]) {
+            if (!isset($handles[$path])) {
+                $fh = @fopen($path, 'rb');
+                if ($fh === false) throw new LumenMigError('range_missing', 404, 'unreadable');
+                $handles[$path] = $fh;
+            }
+            $fh = $handles[$path];
+            $n = $end - $start;
+            if (fseek($fh, $start) !== 0) throw new LumenMigError('range_missing', 404, 'short read');
+            $data = '';
+            while (strlen($data) < $n) {
+                $chunk = fread($fh, min(1048576, $n - strlen($data)));
+                if ($chunk === false || $chunk === '') break;
+                $data .= $chunk;
+            }
+            if (strlen($data) !== $n) throw new LumenMigError('range_missing', 404, 'short read');
+            $head .= pack('V', $n);
+            $body .= $data;
+        }
+    } finally {
+        foreach ($handles as $fh) fclose($fh);
     }
     return $head . $body;
 }
@@ -3067,6 +3130,10 @@ const LUMEN_MIG_WRITE_ACTIONS = ['plan', 'unit_put', 'unit_run', 'finalize', 'ca
 const LUMEN_MIG_BINARY_ACTIONS = ['store_get', 'store_get_many', 'speedtest_sample'];
 /** Bricks per store_get_many answer (a level-k+1 unit reads up to 10³ stored bricks). */
 const LUMEN_MIG_STORE_MANY_MAX = 128;
+/** Binary answers to a POST (JSON body, CSRF like the write actions). */
+const LUMEN_MIG_BINARY_POST_ACTIONS = ['read_ranges'];
+const LUMEN_MIG_READ_RANGES_MAX = 1024;
+const LUMEN_MIG_READ_RANGES_MAX_BYTES = 33554432;
 
 function lumen_mig_error_payload(LumenMigError $e): array {
     $payload = ['error' => $e->codeName] + $e->extra;
@@ -3118,7 +3185,7 @@ function lumen_mig_handle(string $action, array $params, array $body, ?string $r
  * (twin of dataset_migrations.handle_binary). store_get answers a file path the entry
  * point streams (a brick is ≤ ~1 MB, but never buffered twice); errors are JSON.
  */
-function lumen_mig_handle_binary(string $action, array $params): array {
+function lumen_mig_handle_binary(string $action, array $params, array $body = []): array {
     try {
         if ($action === 'store_get') {
             return [200, 'application/octet-stream', null,
@@ -3127,6 +3194,9 @@ function lumen_mig_handle_binary(string $action, array $params): array {
         if ($action === 'store_get_many') {
             return [200, 'application/octet-stream',
                     lumen_mig_store_get_many($params['dataset'] ?? null, $params['migration'] ?? null, $params['base'] ?? null, $params['bricks'] ?? null), null];
+        }
+        if ($action === 'read_ranges') {
+            return [200, 'application/octet-stream', lumen_mig_read_ranges($body['dataset'] ?? null, $body['ranges'] ?? null), null];
         }
         if ($action === 'speedtest_sample') {
             return [200, 'application/octet-stream', lumen_mig_speedtest_sample($params['n'] ?? 1), null];

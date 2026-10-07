@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 300" font-family="Inter, sans-serif">
+  <defs><marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#2b8a3e"/></marker>
+  <pattern id="h" width="8" height="8" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><rect width="8" height="8" fill="#f1f3f5"/><line x1="0" y1="0" x2="0" y2="8" stroke="#c5cbd8" stroke-width="3"/></pattern></defs>
+  <rect width="800" height="300" rx="16" fill="#f8f9fd"/>
+  <text x="400" y="32" text-anchor="middle" font-size="18" font-weight="800" fill="#1c2333">Sauter les briques vides</text>
+  <!-- bricks row -->
+  <g stroke="#c5cbd8" stroke-width="1.5">
+    <rect x="40" y="70" width="120" height="120" fill="#e8edff"/>
+    <rect x="160" y="70" width="120" height="120" fill="url(#h)"/>
+    <rect x="280" y="70" width="120" height="120" fill="url(#h)"/>
+    <rect x="400" y="70" width="120" height="120" fill="url(#h)"/>
+    <rect x="520" y="70" width="120" height="120" fill="#e8edff"/>
+    <rect x="640" y="70" width="120" height="120" fill="#e8edff"/>
+  </g>
+  <ellipse cx="100" cy="130" rx="34" ry="30" fill="#bac8ff"/><ellipse cx="580" cy="120" rx="30" ry="26" fill="#bac8ff"/><ellipse cx="700" cy="150" rx="34" ry="24" fill="#bac8ff"/>
+  <!-- ray -->
+  <line x1="20" y1="120" x2="780" y2="120" stroke="#c92a2a" stroke-width="2.2"/>
+  <g fill="#fff" stroke="#c92a2a" stroke-width="1.6">
+    <circle cx="52" cy="120" r="4"/><circle cx="76" cy="120" r="4"/><circle cx="100" cy="120" r="4"/><circle cx="124" cy="120" r="4"/><circle cx="148" cy="120" r="4"/>
+    <circle cx="532" cy="120" r="4"/><circle cx="556" cy="120" r="4"/><circle cx="580" cy="120" r="4"/><circle cx="604" cy="120" r="4"/><circle cx="628" cy="120" r="4"/>
+    <circle cx="652" cy="120" r="4"/><circle cx="676" cy="120" r="4"/><circle cx="700" cy="120" r="4"/><circle cx="724" cy="120" r="4"/><circle cx="748" cy="120" r="4"/>
+  </g>
+  <path d="M164 104 C 260 40, 420 40, 516 104" fill="none" stroke="#2b8a3e" stroke-width="3" marker-end="url(#a)"/>
+  <text x="340" y="86" text-anchor="middle" font-size="13.5" font-weight="800" fill="#2b8a3e">saut : zéro échantillon lu</text>
+  <text x="100" y="212" text-anchor="middle" font-size="12.5" fill="#1c2333" font-weight="700">brique présente</text>
+  <text x="340" y="212" text-anchor="middle" font-size="12.5" fill="#1c2333" font-weight="700">3 briques absentes (vides)</text>
+  <text x="640" y="212" text-anchor="middle" font-size="12.5" fill="#1c2333" font-weight="700">briques présentes</text>
+  <rect x="40" y="234" width="720" height="40" rx="10" fill="#fff" stroke="#c5cbd8"/>
+  <text x="400" y="258" text-anchor="middle" font-size="13" fill="#1c2333">La table des pages dit « pas de brique ici » → le rayon saute jusqu'à la face de sortie.</text>
+</svg>

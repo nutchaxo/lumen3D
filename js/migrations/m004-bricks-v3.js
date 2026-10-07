@@ -511,8 +511,11 @@
             const I = m002()._internals;
             const bytes = new Map();
             let bytesIn = 0;
-            for (const run of src.runs) {
-                const buf = await io.fetchRange(tree.v2.base + run.url + tree.v2.query, run.start, run.end);
+            const bufs = await I.fetchAll(io, src.runs.map((run) => ({ url: tree.v2.base + run.url + tree.v2.query, start: run.start, end: run.end })));
+            for (let r = 0; r < src.runs.length; r++) {
+                const run = src.runs[r];
+                const buf = bufs[r];
+                bufs[r] = null;
                 bytesIn += buf.length;
                 for (const b of run.bricks) {
                     bytes.set(`${b.bz},${b.by},${b.bx}`, buf.subarray(b.offset - run.start, b.offset - run.start + b.length));

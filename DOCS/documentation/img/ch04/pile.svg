@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 330" font-family="Inter, sans-serif"><defs><marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#4a5468"/></marker></defs>
+<rect width="800" height="330" rx="16" fill="#f8f9fd"/>
+<text x="400" y="34" font-size="18" font-weight="800" fill="#1c2333" text-anchor="middle" >Une pile confocale : 112 coupes empilées le long de Z</text>
+<polygon points="250,250 470,250 530,236 310,236" fill="#e8edff" stroke="#3b5bdb" stroke-width="1.2"/>
+<polygon points="262,228 482,228 542,214 322,214" fill="#dbe4ff" stroke="#3b5bdb" stroke-width="1.2"/>
+<polygon points="274,206 494,206 554,192 334,192" fill="#e8edff" stroke="#3b5bdb" stroke-width="1.2"/>
+<polygon points="286,184 506,184 566,170 346,170" fill="#dbe4ff" stroke="#3b5bdb" stroke-width="1.2"/>
+<polygon points="298,162 518,162 578,148 358,148" fill="#e8edff" stroke="#3b5bdb" stroke-width="1.2"/>
+<polygon points="310,140 530,140 590,126 370,126" fill="#dbe4ff" stroke="#3b5bdb" stroke-width="1.2"/>
+<polygon points="322,118 542,118 602,104 382,104" fill="#e8edff" stroke="#3b5bdb" stroke-width="1.2"/>
+<polygon points="334,96 554,96 614,82 394,82" fill="#dbe4ff" stroke="#3b5bdb" stroke-width="1.2"/>
+<polygon points="346,74 566,74 626,60 406,60" fill="#e8edff" stroke="#3b5bdb" stroke-width="1.2"/>
+<text x="238" y="268" font-size="13" font-weight="700" fill="#1c2333" text-anchor="end" >coupe 1</text>
+<text x="334" y="78" font-size="13" font-weight="700" fill="#1c2333" text-anchor="end" >coupe 112</text>
+<text x="366.0" y="272" font-size="13" font-weight="600" fill="#4a5468" text-anchor="middle" >768 × 576 voxels</text>
+<line x1="640" y1="258" x2="640" y2="76" stroke="#c92a2a" stroke-width="2.5" marker-end="url(#arr)"/>
+<text x="652" y="100" font-size="15" font-weight="800" fill="#c92a2a" text-anchor="start" >Z</text>
+<text x="652" y="180" font-size="13" font-weight="600" fill="#4a5468" text-anchor="start" >pas de 3,0 µm</text>
+<text x="652" y="200" font-size="13" font-weight="600" fill="#4a5468" text-anchor="start" >épaisseur totale 336 µm</text>
+</svg>

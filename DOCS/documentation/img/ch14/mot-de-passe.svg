@@ -1,0 +1,36 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 324" font-family="Inter, sans-serif">
+<defs><marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#4a5468"/></marker>
+<marker id="arrr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#c92a2a"/></marker></defs>
+<rect width="800" height="324" rx="16" fill="#f8f9fd"/>
+<text x="400" y="30" text-anchor="middle" font-size="17" font-weight="800" fill="#1c2333">Le mot de passe administrateur</text>
+<rect x="30" y="52" width="170" height="108" rx="12" fill="#e8edff" stroke="#3b5bdb" stroke-width="1.6"/>
+<text x="115.0" y="82" text-anchor="middle" font-size="24">🔑</text>
+<text x="115.0" y="106" text-anchor="middle" font-size="13.5" font-weight="800" fill="#3b5bdb">Votre mot de passe</text>
+<text x="115.0" y="125" text-anchor="middle" font-size="11.5" fill="#1c2333">tapé une seule fois</text>
+<text x="115.0" y="141" text-anchor="middle" font-size="11.5" fill="#1c2333">dans le formulaire</text>
+<line x1="202" y1="106" x2="262" y2="106" stroke="#4a5468" stroke-width="2.2" marker-end="url(#arr)"/>
+<rect x="264" y="52" width="200" height="108" rx="12" fill="#f3f0ff" stroke="#7048e8" stroke-width="1.6"/>
+<text x="364.0" y="82" text-anchor="middle" font-size="24">⚙️</text>
+<text x="364.0" y="106" text-anchor="middle" font-size="13.5" font-weight="800" fill="#7048e8">Broyeur à sens unique</text>
+<text x="364.0" y="125" text-anchor="middle" font-size="11.5" fill="#1c2333">PBKDF2-HMAC-SHA256</text>
+<text x="364.0" y="141" text-anchor="middle" font-size="11.5" fill="#1c2333">600 000 tours + sel</text>
+<line x1="466" y1="106" x2="526" y2="106" stroke="#4a5468" stroke-width="2.2" marker-end="url(#arr)"/>
+<rect x="528" y="52" width="242" height="108" rx="12" fill="#ebfbee" stroke="#2b8a3e" stroke-width="1.6"/>
+<text x="649.0" y="82" text-anchor="middle" font-size="24">🔏</text>
+<text x="649.0" y="106" text-anchor="middle" font-size="13.5" font-weight="800" fill="#2b8a3e">Empreinte enregistrée</text>
+<text x="649.0" y="125" text-anchor="middle" font-size="11.5" fill="#1c2333">api/admin_credential.json</text>
+<text x="649.0" y="141" text-anchor="middle" font-size="11.5" fill="#1c2333">jamais servi par le web</text>
+<text x="400" y="188" text-anchor="middle" font-size="12" font-weight="400" fill="#4a5468">On ne stocke jamais le mot de passe : seulement son « empreinte digitale ». On ne remonte pas d’une empreinte à un mot de passe.</text>
+<text x="30" y="222" text-anchor="start" font-size="13.5" font-weight="800" fill="#1c2333">Contre les essais répétés</text>
+<rect x="30" y="234" width="226" height="72" rx="12" fill="#fff4e6" stroke="#e67700" stroke-width="1.6"/>
+<text x="143.0" y="256" text-anchor="middle" font-size="13.5" font-weight="800" fill="#e67700">10 essais</text>
+<text x="143.0" y="275" text-anchor="middle" font-size="11" fill="#1c2333">par adresse, par fenêtre de 15 min</text>
+<line x1="258" y1="270" x2="278" y2="270" stroke="#4a5468" stroke-width="2.2" marker-end="url(#arr)"/>
+<rect x="280" y="234" width="226" height="72" rx="12" fill="#fff0f0" stroke="#c92a2a" stroke-width="1.6"/>
+<text x="393.0" y="256" text-anchor="middle" font-size="13.5" font-weight="800" fill="#c92a2a">Blocage 15 min</text>
+<text x="393.0" y="275" text-anchor="middle" font-size="11" fill="#1c2333">réponse « Trop de tentatives »</text>
+<line x1="508" y1="270" x2="528" y2="270" stroke="#4a5468" stroke-width="2.2" marker-end="url(#arr)"/>
+<rect x="530" y="234" width="226" height="72" rx="12" fill="#ebfbee" stroke="#2b8a3e" stroke-width="1.6"/>
+<text x="643.0" y="256" text-anchor="middle" font-size="13.5" font-weight="800" fill="#2b8a3e">Session de 8 h</text>
+<text x="643.0" y="275" text-anchor="middle" font-size="11" fill="#1c2333">fermée au changement de mot de passe</text>
+</svg>

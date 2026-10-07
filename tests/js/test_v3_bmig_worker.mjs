@@ -2,7 +2,7 @@
 //   • `probe` loads the handler, then the handlers it `requires` (m004 → m002), with the ?v=
 //     stamp, and answers the handler's verdict;
 //   • `prepare` reports the handler's `slotsPerWorker`;
-//   • an m004 level-0 unit range-reads the v2 packs and PUTs a brick blob; a level-1 unit reads
+//   • an m004 level-0 unit reads its v2 pack runs in ONE POST read_ranges and PUTs a brick blob; a level-1 unit reads
 //     the level-0 bricks it needs back in ONE GET `action=store_get_many&dataset&migration&
 //     base=t.k.c&bricks=z.y.x,…` (length 0 = a dropped brick = zeros) and PUTs bricks equal to
 //     the reference reduction of the volume;
@@ -117,12 +117,30 @@ function parseBlob(u8) {
 }
 
 const stored = new Map();   // level → [{bz,by,bx,bytes}]
+
+// read_ranges: the runs of one dataset's packs in one answer (u32 count, u32 lengths, bytes).
+function rangesAnswer(req, files) {
+  const body = JSON.parse(req.body);
+  const parts = body.ranges.map(([rel, s, e]) => {
+    const f = files(rel);
+    assert.ok(f, 'known pack ' + rel);
+    return f.subarray(s, e);
+  });
+  const total = parts.reduce((n, p) => n + p.length, 0);
+  const out = new Uint8Array(4 + 4 * parts.length + total);
+  const dv = new DataView(out.buffer);
+  dv.setUint32(0, parts.length, true);
+  let at = 4 + 4 * parts.length;
+  parts.forEach((p, i) => { dv.setUint32(4 + 4 * i, p.length, true); out.set(p, at); at += p.length; });
+  return { ok: true, status: 200, arrayBuffer: async () => out.buffer, json: async () => ({}) };
+}
 let refuseSource = false;
 let oldServer = false;
 const server = (req) => {
   if (req.url.endsWith('/metadata.json')) return json({ type: '3d' });
   if (req.url.endsWith('/bricks/manifest.json')) return json(manifest);
   if (req.url.includes('pack_00.bin')) { const [s, e] = rangeOf(req); return bytes(pack.subarray(s, e)); }
+  if (req.url.includes('action=read_ranges')) return rangesAnswer(req, (rel) => (/^bricks\/lod0\/c0\/pack_00\.bin$/.test(rel) ? pack : null));
   if (req.url.includes('action=store_get_many')) {
     if (oldServer) return json({ error: 'unknown_action' }, 400);
     if (refuseSource) return json({ ok: false, error: 'job_not_running' }, 409);
@@ -183,6 +201,8 @@ w.send({ type: 'run', reqId: 6, migration: 'm004-bricks-v3', dataset: '3d/ds', u
 const r0 = await w.wait((m) => (m.type === 'unit_done' || m.type === 'unit_failed') && m.reqId === 6);
 assert.equal(r0.type, 'unit_done', r0.error);
 assert.deepEqual(stored.get(0).map((b) => b.bx), [0, 1, 2, 3]);
+assert.equal(w.requests.filter((r) => r.url.includes('action=read_ranges')).length, 1, 'level 0: the v2 runs in one read_ranges');
+assert.equal(w.requests.filter((r) => r.url.includes('pack_00.bin')).length, 0, 'no Range request');
 
 // level 1: the source bricks in one store_get_many
 const lvl0 = stored.get(0);

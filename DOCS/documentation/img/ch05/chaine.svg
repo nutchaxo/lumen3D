@@ -1,0 +1,43 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 215" font-family="Inter, sans-serif"><defs><marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#4a5468"/></marker></defs>
+<rect width="800" height="215" rx="16" fill="#f8f9fd"/>
+<text x="400" y="34" font-size="18" font-weight="800" fill="#1c2333" text-anchor="middle" >Le nettoyage d'un canal, dans l'ordre du code</text>
+<rect x="24" y="62" width="138" height="130" rx="14" fill="#fff" stroke="#c5cbd8" stroke-width="1.2" />
+<rect x="24" y="62" width="138" height="36" rx="14" fill="#e8edff" stroke="#3b5bdb" stroke-width="1.2" />
+<rect x="25" y="82" width="136" height="16" fill="#e8edff"/>
+<text x="93.0" y="86" font-size="14" font-weight="800" fill="#3b5bdb" text-anchor="middle" >1 · Fond</text>
+<text x="93.0" y="120" font-size="14" font-weight="800" fill="#1c2333" text-anchor="middle" >bg_floor</text>
+<text x="93.0" y="148" font-size="12" font-weight="400" fill="#4a5468" text-anchor="middle" >99e percentile</text>
+<text x="93.0" y="166" font-size="12" font-weight="400" fill="#4a5468" text-anchor="middle" >des 8 coins</text>
+<line x1="164" y1="127" x2="182" y2="127" stroke="#4a5468" stroke-width="2.4" marker-end="url(#arr)"/>
+<rect x="184" y="62" width="138" height="130" rx="14" fill="#fff" stroke="#c5cbd8" stroke-width="1.2" />
+<rect x="184" y="62" width="138" height="36" rx="14" fill="#f3f0ff" stroke="#7048e8" stroke-width="1.2" />
+<rect x="185" y="82" width="136" height="16" fill="#f3f0ff"/>
+<text x="253.0" y="86" font-size="14" font-weight="800" fill="#7048e8" text-anchor="middle" >2 · Point blanc</text>
+<text x="253.0" y="120" font-size="14" font-weight="800" fill="#1c2333" text-anchor="middle" >sig_max</text>
+<text x="253.0" y="148" font-size="12" font-weight="400" fill="#4a5468" text-anchor="middle" >99,9e percentile</text>
+<text x="253.0" y="166" font-size="12" font-weight="400" fill="#4a5468" text-anchor="middle" >1 voxel sur 4</text>
+<line x1="324" y1="127" x2="342" y2="127" stroke="#4a5468" stroke-width="2.4" marker-end="url(#arr)"/>
+<rect x="344" y="62" width="138" height="130" rx="14" fill="#fff" stroke="#c5cbd8" stroke-width="1.2" />
+<rect x="344" y="62" width="138" height="36" rx="14" fill="#ebfbee" stroke="#2b8a3e" stroke-width="1.2" />
+<rect x="345" y="82" width="136" height="16" fill="#ebfbee"/>
+<text x="413.0" y="86" font-size="14" font-weight="800" fill="#2b8a3e" text-anchor="middle" >3 · Masque</text>
+<text x="413.0" y="120" font-size="14" font-weight="800" fill="#1c2333" text-anchor="middle" >signal à protéger</text>
+<text x="413.0" y="148" font-size="12" font-weight="400" fill="#4a5468" text-anchor="middle" >seuil, ouverture,</text>
+<text x="413.0" y="166" font-size="12" font-weight="400" fill="#4a5468" text-anchor="middle" >dilatation ×3</text>
+<line x1="484" y1="127" x2="502" y2="127" stroke="#4a5468" stroke-width="2.4" marker-end="url(#arr)"/>
+<rect x="504" y="62" width="138" height="130" rx="14" fill="#fff" stroke="#c5cbd8" stroke-width="1.2" />
+<rect x="504" y="62" width="138" height="36" rx="14" fill="#fff4e6" stroke="#e67700" stroke-width="1.2" />
+<rect x="505" y="82" width="136" height="16" fill="#fff4e6"/>
+<text x="573.0" y="86" font-size="14" font-weight="800" fill="#e67700" text-anchor="middle" >4 · Médiane</text>
+<text x="573.0" y="120" font-size="14" font-weight="800" fill="#1c2333" text-anchor="middle" >hors du masque</text>
+<text x="573.0" y="148" font-size="12" font-weight="400" fill="#4a5468" text-anchor="middle" >3 × 3 × 3</text>
+<text x="573.0" y="166" font-size="12" font-weight="400" fill="#4a5468" text-anchor="middle" >voxels</text>
+<line x1="644" y1="127" x2="662" y2="127" stroke="#4a5468" stroke-width="2.4" marker-end="url(#arr)"/>
+<rect x="664" y="62" width="138" height="130" rx="14" fill="#fff" stroke="#c5cbd8" stroke-width="1.2" />
+<rect x="664" y="62" width="138" height="36" rx="14" fill="#fff0f0" stroke="#c92a2a" stroke-width="1.2" />
+<rect x="665" y="82" width="136" height="16" fill="#fff0f0"/>
+<text x="733.0" y="86" font-size="14" font-weight="800" fill="#c92a2a" text-anchor="middle" >5 · Fenêtre</text>
+<text x="733.0" y="120" font-size="14" font-weight="800" fill="#1c2333" text-anchor="middle" >16 bits → 8 bits</text>
+<text x="733.0" y="148" font-size="12" font-weight="400" fill="#4a5468" text-anchor="middle" >[bg_floor ; sig_max]</text>
+<text x="733.0" y="166" font-size="12" font-weight="400" fill="#4a5468" text-anchor="middle" >→ [0 ; 255]</text>
+</svg>

@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="$lang$">
+<head>
+<meta charset="utf-8">
+<title>$title$</title>
+<link rel="stylesheet" href="$css$">
+$if(extra-css)$<link rel="stylesheet" href="$extra-css$">$endif$
+</head>
+<body class="$body-class$">
+
+<section class="cover">
+  <div class="cover-art">$if(cover-image)$<img src="$cover-image$" alt="">$endif$</div>
+  <div class="cover-text">
+    <div class="cover-eyebrow">$eyebrow$</div>
+    <h1 class="cover-title">$title$</h1>
+    <div class="cover-subtitle">$subtitle$</div>
+    <div class="cover-rule"></div>
+    <div class="cover-abstract">$abstract$</div>
+  </div>
+  <div class="cover-foot">
+    <span>$version$</span>
+    <span>$date$</span>
+  </div>
+</section>
+
+$if(toc)$
+<nav class="toc $toc-class$" id="sommaire">
+  <h2 class="toc-title">$if(toc-title)$$toc-title$$else$Sommaire$endif$</h2>
+$table-of-contents$
+</nav>
+$endif$
+
+<main>
+$body$
+</main>
+</body>
+</html>

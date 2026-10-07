@@ -1,7 +1,9 @@
 // Browser-executor worker (js/workers/migration-worker.js), SPEC §5.1, §6-A:
 //   • loads plane-codec + the handler named by the migration id (importScripts, ?v= kept);
-//   • a unit: Range requests on the stamped pack URLs, then ONE POST unit_put with the query
-//     dataset/migration/unit/dry, the CSRF header, an octet-stream body = the unit blob;
+//   • a unit: its pack runs in ONE POST action=read_ranges (relative paths, CSRF), then ONE POST
+//     unit_put with the query dataset/migration/unit/dry, the CSRF header, an octet-stream body =
+//     the unit blob; a server without read_ranges (400 Unknown action) gets Range requests on the
+//     stamped pack URLs instead;
 //   • a 503 is retried with back-off; a dropped connection waits for the link (net offline →
 //     online) without spending attempts; a 4xx is fatal at once; 401 carries its status;
 //   • a host answering 200 to a Range request: the asked bytes are sliced from the whole pack;
@@ -76,6 +78,24 @@ const json = (body, status = 200) => ({ ok: status < 400, status, json: async ()
 const bytes = (u8, status = 206) => ({ ok: true, status, arrayBuffer: async () => u8.slice().buffer, json: async () => ({}) });
 function rangeOf(req) { const m = /bytes=(\d+)-(\d+)/.exec(req.headers.Range || ''); return m ? [+m[1], +m[2] + 1] : null; }
 
+
+// read_ranges: the runs of one dataset's packs in one answer (u32 count, u32 lengths, bytes).
+function rangesAnswer(req, files) {
+  const body = JSON.parse(req.body);
+  const parts = body.ranges.map(([rel, s, e]) => {
+    const f = files(rel);
+    assert.ok(f, 'known pack ' + rel);
+    return f.subarray(s, e);
+  });
+  const total = parts.reduce((n, p) => n + p.length, 0);
+  const out = new Uint8Array(4 + 4 * parts.length + total);
+  const dv = new DataView(out.buffer);
+  dv.setUint32(0, parts.length, true);
+  let at = 4 + 4 * parts.length;
+  parts.forEach((p, i) => { dv.setUint32(4 + 4 * i, p.length, true); out.set(p, at); at += p.length; });
+  return { ok: true, status: 200, arrayBuffer: async () => out.buffer, json: async () => ({}) };
+}
+
 function server(opts = {}) {
   let puts = 0;
   return (req, all) => {
@@ -87,6 +107,13 @@ function server(opts = {}) {
       return opts.ignoreRange ? bytes(pack, 200) : bytes(pack.subarray(s, e));
     }
     if (req.url.includes('action=ping')) return json({ ok: false }, 400);
+    if (req.url.includes('action=read_ranges')) {
+      if (opts.oldServer) return json({ error: 'Unknown action' }, 400);
+      assert.equal(req.method, 'POST');
+      assert.equal(req.headers['X-CSRF-Token'], 'tok');
+      assert.equal(JSON.parse(req.body).dataset, '3d/ds');
+      return rangesAnswer(req, (rel) => (rel === 'bricks/lod0/c0/pack_00.bin' ? pack : null));
+    }
     if (req.url.includes('action=unit_put')) {
       puts++;
       if (opts.putDies) throw new TypeError('connection reset');
@@ -109,14 +136,13 @@ async function runOne(opts) {
   return { w, res };
 }
 
-// 1. Nominal unit.
+// 1. Nominal unit: its runs in one read_ranges, no Range request.
 {
   const { w, res } = await runOne({});
   assert.equal(res.type, 'unit_done', res.error);
   assert.deepEqual(w.loaded, ['../core/plane-codec.js?v=7', '../migrations/m002-planes.js?v=7']);
-  const ranges = w.requests.filter((r) => r.url.includes('pack_00.bin'));
-  assert.ok(ranges.length >= 1);
-  for (const r of ranges) assert.match(r.url, /^http:\/\/h\/DATA_WEB\/3d\/ds\/bricks\/lod0\/c0\/pack_00\.bin\?v=[0-9a-z]+$/);
+  assert.equal(w.requests.filter((r) => r.url.includes('action=read_ranges')).length, 1);
+  assert.equal(w.requests.filter((r) => r.url.includes('pack_00.bin')).length, 0);
   const put = w.requests.find((r) => r.url.includes('unit_put'));
   const q = new URL(put.url).searchParams;
   assert.equal(put.method, 'POST');
@@ -134,6 +160,16 @@ async function runOne(opts) {
   assert.equal(res.bytesOut, put.body.length);
   assert.equal(res.done, 1); assert.equal(res.total, 4);
 }
+// 1b. A server without read_ranges: Range requests on the stamped pack URLs, same unit.
+{
+  const { w, res } = await runOne({ oldServer: true });
+  assert.equal(res.type, 'unit_done', res.error);
+  const ranges = w.requests.filter((r) => r.url.includes('pack_00.bin'));
+  assert.ok(ranges.length >= 1);
+  for (const r of ranges) assert.match(r.url, /^http:\/\/h\/DATA_WEB\/3d\/ds\/bricks\/lod0\/c0\/pack_00\.bin\?v=[0-9a-z]+$/);
+  const tiles = w.PC.parseUnitBlob(w.requests.find((r) => r.url.includes('unit_put')).body);
+  assert.equal(tiles.length, Z);
+}
 // 2. dry=1 for the benchmark
 { const { w } = await runOne({ dry: true }); assert.equal(new URL(w.requests.find((r) => r.url.includes('unit_put')).url).searchParams.get('dry'), '1'); }
 // 3. 503 once → retried
@@ -144,7 +180,7 @@ async function runOne(opts) {
 }
 // 4. dropped connection → offline, probe, online, success
 {
-  const { w, res } = await runOne({ dropFirstRange: true });
+  const { w, res } = await runOne({ dropFirstRange: true, oldServer: true });
   assert.equal(res.type, 'unit_done', res.error);
   const net = w.out.filter((m) => m.type === 'net').map((m) => m.online);
   assert.deepEqual(net, [false, true]);
@@ -159,7 +195,7 @@ for (const st of [422, 401]) {
   assert.equal(w.requests.filter((r) => r.url.includes('unit_put')).length, 1);
 }
 // 6. host ignoring Range (200 with the whole pack)
-{ const { res } = await runOne({ ignoreRange: true }); assert.equal(res.type, 'unit_done', res.error); }
+{ const { res } = await runOne({ ignoreRange: true, oldServer: true }); assert.equal(res.type, 'unit_done', res.error); }
 // 6b. a request that always dies while the link answers: bounded, then a non-fatal failure
 {
   const { w, res } = await runOne({ putDies: true });

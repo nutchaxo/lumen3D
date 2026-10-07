@@ -1,0 +1,48 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 520" font-family="Inter, sans-serif">
+  <rect width="800" height="520" rx="16" fill="#f8f9fd"/>
+  <text x="400" y="32" text-anchor="middle" font-size="17" font-weight="800" fill="#1c2333">Carte de la documentation : quelle question, quel chapitre ?</text>
+
+  <g font-size="12.5">
+    <!-- group 1 -->
+    <rect x="24" y="50" width="752" height="86" rx="12" fill="#fff" stroke="#c5cbd8"/>
+    <rect x="24" y="50" width="150" height="86" rx="12" fill="#e8edff"/>
+    <text x="99" y="88" text-anchor="middle" font-size="13.5" font-weight="800" fill="#3b5bdb">Découvrir</text>
+    <text x="99" y="106" text-anchor="middle" fill="#4a5468">chapitres 1 à 3</text>
+    <text x="190" y="78" fill="#1c2333"><tspan font-weight="800" fill="#3b5bdb">1</tspan>  À quoi sert Lumen3D ? Quels types de données ?</text>
+    <text x="190" y="100" fill="#1c2333"><tspan font-weight="800" fill="#3b5bdb">2</tspan>  Quelles technologies, et à quoi servent-elles ?</text>
+    <text x="190" y="122" fill="#1c2333"><tspan font-weight="800" fill="#3b5bdb">3</tspan>  Où cliquer ? À quoi ressemble chaque page ?</text>
+
+    <!-- group 2 -->
+    <rect x="24" y="148" width="752" height="130" rx="12" fill="#fff" stroke="#c5cbd8"/>
+    <rect x="24" y="148" width="150" height="130" rx="12" fill="#ebfbee"/>
+    <text x="99" y="206" text-anchor="middle" font-size="13.5" font-weight="800" fill="#2b8a3e">Préparer</text>
+    <text x="99" y="224" text-anchor="middle" fill="#4a5468">le pipeline Python</text>
+    <text x="99" y="241" text-anchor="middle" fill="#4a5468">chapitres 4 à 8</text>
+    <text x="190" y="172" fill="#1c2333"><tspan font-weight="800" fill="#2b8a3e">4</tspan>  Que contient un fichier Imaris ?</text>
+    <text x="190" y="195" fill="#1c2333"><tspan font-weight="800" fill="#2b8a3e">5</tspan>  Comment le bruit de fond est-il retiré ?</text>
+    <text x="190" y="218" fill="#1c2333"><tspan font-weight="800" fill="#2b8a3e">6</tspan>  Comment passer de 14 Go à quelques centaines de Mo ?</text>
+    <text x="190" y="241" fill="#1c2333"><tspan font-weight="800" fill="#2b8a3e">7</tspan>  Que sont les briques, les packs, les niveaux de détail ?</text>
+    <text x="190" y="264" fill="#1c2333"><tspan font-weight="800" fill="#2b8a3e">8</tspan>  Métadonnées, suivi cellulaire, publication sans risque</text>
+
+    <!-- group 3 -->
+    <rect x="24" y="290" width="752" height="108" rx="12" fill="#fff" stroke="#c5cbd8"/>
+    <rect x="24" y="290" width="150" height="108" rx="12" fill="#e3fafc"/>
+    <text x="99" y="338" text-anchor="middle" font-size="13.5" font-weight="800" fill="#0c8599">Afficher</text>
+    <text x="99" y="356" text-anchor="middle" fill="#4a5468">le navigateur</text>
+    <text x="99" y="373" text-anchor="middle" fill="#4a5468">chapitres 9 à 12</text>
+    <text x="190" y="314" fill="#1c2333"><tspan font-weight="800" fill="#0c8599">9</tspan>   Comment l'image 3D est-elle calculée ?</text>
+    <text x="190" y="337" fill="#1c2333"><tspan font-weight="800" fill="#0c8599">10</tspan>  Comment afficher des gigaoctets sans attendre ?</text>
+    <text x="190" y="360" fill="#1c2333"><tspan font-weight="800" fill="#0c8599">11</tspan>  Couleurs, contrastes, histogrammes : que signifient-ils ?</text>
+    <text x="190" y="383" fill="#1c2333"><tspan font-weight="800" fill="#0c8599">12</tspan>  Que fait chaque outil de la barre d'outils ?</text>
+
+    <!-- group 4 -->
+    <rect x="24" y="410" width="752" height="86" rx="12" fill="#fff" stroke="#c5cbd8"/>
+    <rect x="24" y="410" width="150" height="86" rx="12" fill="#f3f0ff"/>
+    <text x="99" y="448" text-anchor="middle" font-size="13.5" font-weight="800" fill="#7048e8">Administrer</text>
+    <text x="99" y="466" text-anchor="middle" fill="#4a5468">et comprendre</text>
+    <text x="99" y="483" text-anchor="middle" fill="#4a5468">chapitres 13 à 15</text>
+    <text x="190" y="438" fill="#1c2333"><tspan font-weight="800" fill="#7048e8">13</tspan>  Que peut faire l'administrateur ? (aperçu)</text>
+    <text x="190" y="460" fill="#1c2333"><tspan font-weight="800" fill="#7048e8">14</tspan>  Mes données sont-elles protégées ? Que se passe-t-il en cas de panne ?</text>
+    <text x="190" y="482" fill="#1c2333"><tspan font-weight="800" fill="#7048e8">15</tspan>  Que veut dire ce mot ? (glossaire)</text>
+  </g>
+</svg>

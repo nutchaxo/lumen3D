@@ -134,7 +134,8 @@ JSON answers. Session lock released after authentication (cf. `session_write_clo
 | `bench` | POST | `{ dataset, units: N (≤ 8) }` | server executor on N sample units (dry: tiles discarded) → `{ seconds, units, bytesRead, bytesWritten }` |
 | `speedtest` | POST | `{ maxSeconds (≤ 3) }` | server side of the speed test (§7): test blocks back to back until the next one would end past `maxSeconds` (≥ 1 block) → `{ blocks, seconds, bytesRead, bytesWritten }`; needs m002's capability (409 `server_unavailable` otherwise) |
 | `speedtest_put` | POST (binary) | body = one converted test batch (≤ 4 MiB) | `{ ok, bytes }` — read and dropped |
-| `speedtest_sample` | GET (binary answer) | query `n` (1..8) | the test brick repeated n times (one download per browser batch) |
+| `speedtest_sample` | GET (binary answer) | query `n` (1..16) | the test brick repeated n times (one download per browser batch) |
+| `read_ranges` | POST (JSON body, CSRF; binary answer) | `{ dataset, ranges: [[rel, start, end], …] }` — rel a `.bin` under `bricks/`, `planes/` or `mips/` of the dataset, end exclusive, ≤ 1024 runs, ≤ 32 MiB | `uint32 LE count`, `count × uint32 LE length`, then the runs in request order; every run checked before a byte is read (400 `bad_range`, 413, 416, 404 `range_missing`). A browser unit's input runs in one request (web 1.59.3) |
 | `store_get_many` | GET (binary answer) | query `dataset, migration=m004-bricks-v3, base=t{t}.k{k}.c{c}, bricks=z.y.x,…` (≤ 128) | `uint32 LE count`, `count × uint32 LE length` (0 = not stored, interior zero), then the bricks in request order — replaces one `store_get` per brick (web 1.59.2) |
 
 `server.available` is false with reason codes when the server executor cannot run:
@@ -187,9 +188,9 @@ at the same time for **5 seconds**, and the one that converted more blocks wins.
   64³ brick, encode its voxels as one 512² `png-gray8` tile. The input is the fixed file
   `js/migrations/speedtest-brick.webp` shipped with the platform (Gaussian blobs over Poisson
   shot noise, like a confocal stack; ~128 KiB).
-* Browser: the worker pool at its normal concurrency (workers × slots), in batches of 8 blocks:
-  one `speedtest_sample?n=8` download, decode + encode of each block in a worker, one upload of
-  the 8 tiles to `speedtest_put` — the bytes a real browser unit moves, in two requests per batch,
+* Browser: the worker pool at its normal concurrency (workers × slots), in batches of 16 blocks:
+  one `speedtest_sample?n=16` download, decode + encode of each block in a worker, one upload of
+  the 16 tiles to `speedtest_put` — the bytes a real browser unit moves, in two requests per batch,
   under the network governor (§7.2). A batch counts when it ends inside the window (a browser
   that finishes none gets one more window); the pool is terminated at the deadline.
 * Server: `speedtest` calls of ≤ 1 s back to back until the window ends (one request at a time,
@@ -215,12 +216,18 @@ requests per second (web 1.59.1 got the operator's address banned: two worker po
 and every worker fetch, of every pool — goes through ONE governor per page
 (`migration-runner.js` `NetGovernor` / `netGovernor`; workers ask for a turn with `net_acquire`,
 get `net_grant`, and return it with `net_release { outcome }` once the body is read):
-* at most 6 requests in flight, a token bucket of 6 starting at 10 requests/s, never above 16/s;
+* at most 6 requests in flight, a token bucket of 4 starting at 4 requests/s, never above 6/s
+  (web 1.59.3; 10–16/s in 1.59.2, before a unit's inputs travelled in one request);
 * a request without HTTP answer, a 429 or a 503 halves the rate (floor 0.5/s) and holds every
   new request for a cooldown (5 s, doubling to 60 s while failures go on); each answer raises the
   rate by 0.2/s. The tab says when requests are being held.
-Measured on the synthetic pair of the tests (3 400 requests): 8 requests/s on average, 20 in the
-busiest second, against well over 40/s and tens of connections without it.
+* a unit's input runs travel in ONE `read_ranges` answer (a layer projection: the missing plane
+  headers in one, its 64 tiles in another), its level-k bricks in `store_get_many` answers of 128,
+  its result in one `unit_put` — about three requests per unit (a server without `read_ranges`
+  answers 400 *unknown action* and the worker falls back to one Range request per run).
+Measured on the synthetic pair of the tests (two 1100×900×130 / 1000×900×130 2-channel volumes,
+one per executor, formats 1 → 4): 1.59.1 ≈ 3 400 requests at over 40/s; 1.59.2 3 443 requests,
+8/s on average, 436 s; 1.59.3 424 requests, 3.7/s on average, 11 in the busiest second, 115 s.
 
 ## 8. Reader (viewer / Studio)
 

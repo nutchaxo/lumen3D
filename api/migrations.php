@@ -12,7 +12,9 @@
  *   POST ?action=unit_inputs { dataset, migration, unit }        what a browser unit reads
  *   POST ?action=speedtest  { maxSeconds }   server side of the executors' speed test
  *   POST ?action=speedtest_put   RAW body = one converted test batch (dropped)
- *   GET  ?action=speedtest_sample&n=1..8   the test brick repeated n times (octet-stream)
+ *   GET  ?action=speedtest_sample&n=1..16   the test brick repeated n times (octet-stream)
+ *   POST ?action=read_ranges { dataset, ranges: [[rel, start, end], …] }   up to 1024 runs of the
+ *        dataset's published packs (≤ 32 MiB): u32 count, u32 lengths, bytes
  *   GET  ?action=store_get_many&dataset=&migration=m004-bricks-v3&base=t.k.c&bricks=z.y.x,…
  *        up to 128 stored v3 bricks: u32 count, u32 lengths (0 = absent), bytes
  *   GET  ?action=store_get&dataset=&migration=m004-bricks-v3&brick=t.k.c.z.y.x   one stored
@@ -39,7 +41,7 @@ $method = $_SERVER['REQUEST_METHOD'] ?? 'GET';
 
 if (!$authed) admin_json_out(['error' => 'Not authenticated'], 401);
 
-if (in_array($action, LUMEN_MIG_WRITE_ACTIONS, true)) {
+if (in_array($action, LUMEN_MIG_WRITE_ACTIONS, true) || in_array($action, LUMEN_MIG_BINARY_POST_ACTIONS, true)) {
     if ($method !== 'POST') admin_json_out(['error' => 'Method not allowed (use POST)'], 405);
     if (!$csrfOk)           admin_json_out(['error' => 'Invalid or missing CSRF token'], 403);
     lumen_mig_ensure_dirs();
@@ -54,6 +56,17 @@ foreach (['dataset', 'migration', 'unit', 'dry'] as $k) {
 }
 // unit_put's body is the raw unit blob, streamed by the engine; every other POST is JSON.
 $body = ($method === 'POST' && $action !== 'unit_put' && $action !== 'speedtest_put') ? (lumen_request_json() ?? []) : [];
+
+if (in_array($action, LUMEN_MIG_BINARY_POST_ACTIONS, true)) {
+    // A browser unit's input runs in one answer (POST + CSRF, checked above).
+    [$status, $type, $data] = lumen_mig_handle_binary($action, $params, $body);
+    http_response_code($status);
+    header('Content-Type: ' . $type);
+    header('Cache-Control: no-store');
+    header('Content-Length: ' . strlen((string)$data));
+    echo $data;
+    exit;
+}
 
 if (in_array($action, LUMEN_MIG_BINARY_ACTIONS, true)) {
     if ($method !== 'GET') admin_json_out(['error' => 'Method not allowed (use GET)'], 405);

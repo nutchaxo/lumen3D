@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 300" font-family="Inter, sans-serif">
+  <defs><marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#4a5468"/></marker></defs>
+  <rect width="800" height="300" rx="16" fill="#f8f9fd"/>
+  <text x="400" y="32" text-anchor="middle" font-size="18" font-weight="800" fill="#1c2333">Quand la carte graphique « plante » : reprise automatique</text>
+  <rect x="24" y="56" width="170" height="110" rx="12" fill="#fff0f0" stroke="#c92a2a"/>
+  <text x="109" y="82" text-anchor="middle" font-size="13" font-weight="800" fill="#c92a2a">1 · PERTE</text>
+  <text x="109" y="106" text-anchor="middle" font-size="12.5" fill="#1c2333">le navigateur retire</text><text x="109" y="124" text-anchor="middle" font-size="12.5" fill="#1c2333">le contexte graphique ;</text><text x="109" y="142" text-anchor="middle" font-size="12.5" fill="#1c2333">le rendu se met en pause</text>
+  <rect x="226" y="56" width="170" height="110" rx="12" fill="#fff4e6" stroke="#e67700"/>
+  <text x="311" y="82" text-anchor="middle" font-size="13" font-weight="800" fill="#e67700">2 · NETTOYAGE</text>
+  <text x="311" y="106" text-anchor="middle" font-size="12.5" fill="#1c2333">les volumes sont libérés,</text><text x="311" y="124" text-anchor="middle" font-size="12.5" fill="#1c2333">les chargements annulés,</text><text x="311" y="142" text-anchor="middle" font-size="12.5" fill="#1c2333">le budget est divisé par 2</text>
+  <rect x="428" y="56" width="170" height="110" rx="12" fill="#ebfbee" stroke="#2b8a3e"/>
+  <text x="513" y="82" text-anchor="middle" font-size="13" font-weight="800" fill="#2b8a3e">3 · RESTAURATION</text>
+  <text x="513" y="106" text-anchor="middle" font-size="12.5" fill="#1c2333">le navigateur rend la</text><text x="513" y="124" text-anchor="middle" font-size="12.5" fill="#1c2333">carte : le dernier affichage</text><text x="513" y="142" text-anchor="middle" font-size="12.5" fill="#1c2333">est rechargé, en plus léger</text>
+  <rect x="630" y="56" width="146" height="110" rx="12" fill="#fff" stroke="#c5cbd8"/>
+  <text x="703" y="82" text-anchor="middle" font-size="13" font-weight="800" fill="#1c2333">GARDE-FOU</text>
+  <text x="703" y="106" text-anchor="middle" font-size="12.5" fill="#1c2333">3 pertes en moins</text><text x="703" y="124" text-anchor="middle" font-size="12.5" fill="#1c2333">de 120 s : plus de</text><text x="703" y="142" text-anchor="middle" font-size="12.5" fill="#1c2333">rechargement auto</text>
+  <line x1="196" y1="111" x2="222" y2="111" stroke="#4a5468" stroke-width="2" marker-end="url(#a)"/><line x1="398" y1="111" x2="424" y2="111" stroke="#4a5468" stroke-width="2" marker-end="url(#a)"/><line x1="600" y1="111" x2="626" y2="111" stroke="#4a5468" stroke-width="2" marker-end="url(#a)"/>
+  <rect x="24" y="190" width="752" height="86" rx="12" fill="#fff" stroke="#c5cbd8"/>
+  <text x="400" y="216" text-anchor="middle" font-size="13" font-weight="700" fill="#1c2333">La mémoire des pertes est conservée une semaine dans votre navigateur.</text>
+  <text x="400" y="238" text-anchor="middle" font-size="12.5" fill="#4a5468">Chaque perte récente divise par deux le budget (4 divisions au plus, plancher de 256 Mio).</text>
+  <text x="400" y="258" text-anchor="middle" font-size="12.5" fill="#4a5468">Après trois pertes rapprochées, le viewer vous invite à choisir une qualité plus basse ou à recharger la page.</text>
+</svg>

@@ -1,0 +1,55 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 330" font-family="Inter, sans-serif">
+  <rect width="800" height="330" rx="16" fill="#f8f9fd"/>
+  <text x="400" y="32" text-anchor="middle" font-size="17" font-weight="800" fill="#1c2333">Les trois types de jeux de données</text>
+
+  <g transform="translate(24,52)">
+    <rect width="238" height="214" rx="14" fill="#fff" stroke="#c5cbd8"/>
+    <rect width="238" height="38" rx="14" fill="#e3fafc"/><rect y="22" width="238" height="16" fill="#e3fafc"/>
+    <text x="119" y="25" text-anchor="middle" font-size="14" font-weight="800" fill="#0c8599">3D · « Imagerie 3D »</text>
+    <!-- stack of slices -->
+    <g transform="translate(79,56)" fill="#e3fafc" stroke="#0c8599" stroke-width="1.5">
+      <polygon points="0,36 56,36 80,20 24,20"/>
+      <polygon points="0,28 56,28 80,12 24,12"/>
+      <polygon points="0,20 56,20 80,4 24,4"/>
+    </g>
+    <text x="119" y="130" text-anchor="middle" font-size="13" font-weight="700" fill="#1c2333">Un volume figé</text>
+    <text x="119" y="150" text-anchor="middle" font-size="12" fill="#4a5468">piles confocales multicanaux</text>
+    <text x="119" y="168" text-anchor="middle" font-size="12" fill="#4a5468">page : viewer.html</text>
+    <rect x="49" y="180" width="140" height="22" rx="11" fill="#e3fafc"/>
+    <text x="119" y="195" text-anchor="middle" font-size="12" font-weight="700" fill="#0c8599">dossier DATA_WEB/3d/</text>
+  </g>
+
+  <g transform="translate(281,52)">
+    <rect width="238" height="214" rx="14" fill="#fff" stroke="#c5cbd8"/>
+    <rect width="238" height="38" rx="14" fill="#fff4e6"/><rect y="22" width="238" height="16" fill="#fff4e6"/>
+    <text x="119" y="25" text-anchor="middle" font-size="14" font-weight="800" fill="#e67700">Live · « Imagerie en direct »</text>
+    <g transform="translate(59,58)" stroke="#e67700" stroke-width="1.5" fill="#fff4e6">
+      <rect x="0" y="6" width="34" height="34" rx="4"/><rect x="42" y="6" width="34" height="34" rx="4"/><rect x="84" y="6" width="34" height="34" rx="4"/>
+      <circle cx="17" cy="23" r="5" fill="#e67700"/><circle cx="59" cy="19" r="5" fill="#e67700"/><circle cx="101" cy="28" r="5" fill="#e67700"/>
+    </g>
+    <text x="119" y="130" text-anchor="middle" font-size="13" font-weight="700" fill="#1c2333">Un volume qui évolue</text>
+    <text x="119" y="150" text-anchor="middle" font-size="12" fill="#4a5468">time-lapse : 1 volume par instant</text>
+    <text x="119" y="168" text-anchor="middle" font-size="12" fill="#4a5468">page : viewer.html + ligne de temps</text>
+    <rect x="29" y="180" width="180" height="22" rx="11" fill="#fff4e6"/>
+    <text x="119" y="195" text-anchor="middle" font-size="12" font-weight="700" fill="#e67700">DATA_WEB/live/ (+ suivi cellulaire)</text>
+  </g>
+
+  <g transform="translate(538,52)">
+    <rect width="238" height="214" rx="14" fill="#fff" stroke="#c5cbd8"/>
+    <rect width="238" height="38" rx="14" fill="#f3f0ff"/><rect y="22" width="238" height="16" fill="#f3f0ff"/>
+    <text x="119" y="25" text-anchor="middle" font-size="14" font-weight="800" fill="#7048e8">2D · « Imagerie 2D »</text>
+    <g transform="translate(79,58)" stroke="#7048e8" stroke-width="1.5" fill="#f3f0ff">
+      <rect x="0" y="0" width="80" height="50" rx="5"/>
+      <path d="M10 40 L30 20 L45 32 L58 22 L72 40 Z" fill="#7048e8" opacity="0.5" stroke="none"/>
+    </g>
+    <text x="119" y="130" text-anchor="middle" font-size="13" font-weight="700" fill="#1c2333">Une photographie</text>
+    <text x="119" y="150" text-anchor="middle" font-size="12" fill="#4a5468">stéréomicroscope, calibrée en µm</text>
+    <text x="119" y="168" text-anchor="middle" font-size="12" fill="#4a5468">page : 2d.html</text>
+    <rect x="49" y="180" width="140" height="22" rx="11" fill="#f3f0ff"/>
+    <text x="119" y="195" text-anchor="middle" font-size="12" font-weight="700" fill="#7048e8">dossier DATA_WEB/2d/</text>
+  </g>
+
+  <rect x="24" y="278" width="752" height="38" rx="10" fill="#fff" stroke="#c92a2a" stroke-dasharray="5 4"/>
+  <text x="400" y="294" text-anchor="middle" font-size="12.5" font-weight="700" fill="#c92a2a">Le suivi cellulaire n'est pas un type : c'est une couche d'un jeu « Live »</text>
+  <text x="400" y="309" text-anchor="middle" font-size="12" fill="#4a5468">(points, trajectoires, surface), affichée dans le viewer et analysée par cinq outils dédiés.</text>
+</svg>

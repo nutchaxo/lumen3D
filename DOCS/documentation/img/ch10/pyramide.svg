@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 360" font-family="Inter, sans-serif">
+  <rect width="800" height="360" rx="16" fill="#f8f9fd"/>
+  <text x="400" y="32" text-anchor="middle" font-size="18" font-weight="800" fill="#1c2333">La pyramide de niveaux du jeu de démonstration E9.5</text>
+  <g stroke="#3b5bdb" stroke-width="1.5">
+    <rect x="40" y="60" width="300" height="50" rx="8" fill="#3b5bdb" fill-opacity="0.9"/>
+    <rect x="80" y="120" width="220" height="50" rx="8" fill="#3b5bdb" fill-opacity="0.65"/>
+    <rect x="120" y="180" width="140" height="50" rx="8" fill="#3b5bdb" fill-opacity="0.45"/>
+    <rect x="155" y="240" width="70" height="50" rx="8" fill="#3b5bdb" fill-opacity="0.3"/>
+  </g>
+  <g font-size="13" font-weight="800" fill="#fff" text-anchor="middle"><text x="190" y="90">niveau 0</text><text x="190" y="150">niveau 1</text><text x="190" y="210" fill="#1c2333">niveau 2</text><text x="190" y="270" fill="#1c2333">niveau 3</text></g>
+  <g font-size="13" fill="#1c2333">
+    <text x="380" y="82" font-weight="700">768 × 576 × 112 voxels</text><text x="380" y="99" fill="#4a5468" font-size="12">voxel 1,2 × 1,2 × 3,0 µm · 269 briques</text>
+    <text x="380" y="142" font-weight="700">384 × 288 × 56</text><text x="380" y="159" fill="#4a5468" font-size="12">voxel 2,4 × 2,4 × 6,0 µm · 53 briques</text>
+    <text x="380" y="202" font-weight="700">192 × 144 × 28</text><text x="380" y="219" fill="#4a5468" font-size="12">voxel 4,8 × 4,8 × 12 µm · 24 briques</text>
+    <text x="380" y="262" font-weight="700">96 × 72 × 14</text><text x="380" y="279" fill="#4a5468" font-size="12">voxel 9,6 × 9,6 × 24 µm · 12 briques</text>
+  </g>
+  <rect x="560" y="60" width="216" height="230" rx="12" fill="#fff" stroke="#c5cbd8"/>
+  <text x="668" y="86" text-anchor="middle" font-size="13" font-weight="800" fill="#e67700">Qualité → niveau</text>
+  <text x="576" y="116" font-size="12.5" fill="#1c2333">512 : max(X, Y) ≤ 768</text><text x="576" y="134" font-size="12.5" font-weight="700" fill="#3b5bdb">→ niveau 0 (768 ≤ 768)</text>
+  <text x="576" y="168" font-size="12.5" fill="#1c2333">1024 : max(X, Y) ≤ 1536</text><text x="576" y="186" font-size="12.5" font-weight="700" fill="#3b5bdb">→ niveau 0</text>
+  <text x="576" y="220" font-size="12.5" fill="#1c2333">Natif : toujours le niveau 0</text><text x="576" y="238" font-size="12.5" font-weight="700" fill="#3b5bdb">→ niveau 0</text>
+  <text x="668" y="270" text-anchor="middle" font-size="12" fill="#4a5468">les trois coïncident ici</text>
+  <text x="400" y="330" text-anchor="middle" font-size="12.5" fill="#4a5468">Chaque niveau a 4 fois moins de voxels en X × Y que le précédent (et la moitié en Z).</text>
+</svg>

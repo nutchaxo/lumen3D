@@ -64,7 +64,7 @@ Les pastilles de la fiche en disent long : **Web** (affichable), **Brut** (fichi
 
 C'est le cœur de la plateforme. Ouvrez un jeu 3D : le volume apparaît d'abord flou puis s'affine.
 
-![Le viewer sur un jeu 3D (viewer.html?id=3d/…).](img/ch03/viewer-3d.png){.shot width=100%}
+![Le viewer sur un jeu 3D (viewer.html?id=3d/…).](img/ch03/viewer-3d.png){.shot width=92%}
 
 ::: legend
 | n | ce que c'est |
@@ -92,22 +92,18 @@ Les boutons dépendent des **plugins installés** sur votre instance. Chapitre 1
 
 ## 3.5 Le viewer Live : la ligne de temps
 
-Un jeu Live s'ouvre dans la même page. Deux choses s'ajoutent : la **ligne de temps** en bas, et, s'il a été suivi, la couche [Points de suivi]{.ui} dans le panneau des canaux.
+Un jeu Live s'ouvre dans la même page. Deux choses s'ajoutent : la **ligne de temps** en bas, et, s'il a été suivi, la couche [Points de suivi]{.ui} dans le panneau des canaux. Sur un vrai time-lapse, la lecture **attend** que l'instant demandé soit chargé : vous voyez des images terminées, à la vitesse où elles arrivent (chapitre 10).
 
-![Le viewer sur un jeu Live (jeu de démonstration à 4 instants, 50 cellules suivies). Le menu des outils est ouvert.](img/ch03/viewer-live.png){.shot width=100%}
+![Le viewer sur un jeu Live (jeu de démonstration à 4 instants, 50 cellules suivies). Le menu des outils est ouvert.](img/ch03/viewer-live.png){.shot width=80%}
 
 ::: legend
 | n | ce que c'est |
 |--|----------------------|
-| 1 | Le menu des outils. Quand le titre est long ou la fenêtre étroite, les groupes se replient derrière le bouton ☰. Ici apparaissent aussi les outils de suivi : [Inspecter une cellule]{.ui}, [Distance entre cellules]{.ui}, [Graphiques de suivi]{.ui}, trajectoires, surface. |
+| 1 | Le menu des outils. Quand le titre est long ou la fenêtre étroite, les groupes se replient derrière le bouton ☰. Y figurent les outils de suivi (inspecter une cellule, distance entre cellules, graphiques, trajectoires, surface). |
 | 2 | La couche [Points de suivi]{.ui} : taille et opacité des sphères, mitoses, fusions, couleur par région. |
 | 3 | Lecture / pause et vitesse (en images par seconde ; chaque clic change de vitesse). |
 | 4 | Le compteur : instant actuel / dernier instant (numérotés à partir de 0). |
 | 5 | Le curseur de temps ; la bande claire indique les instants déjà en mémoire. |
-:::
-
-::: note
-Sur ce petit jeu, la lecture est instantanée. Sur un vrai time-lapse, la lecture **attend** que l'instant demandé soit chargé : vous voyez des images terminées, à la vitesse où elles arrivent (chapitre 10).
 :::
 
 ## 3.6 La page 2D {.page}

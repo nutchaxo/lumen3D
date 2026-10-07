@@ -10,7 +10,7 @@
 
 Survolez un bouton : une info-bulle donne son nom. La barre est rangée en **cinq groupes** (Outils, Exporter, Visuels, Dispositions, Aide). Quand la fenêtre est étroite ou le titre très long, elle se replie derrière le bouton ☰.
 
-![La barre d'outils du viewer, numérotée (jeu de démonstration).](img/ch12/barre-outils.png){.shot width=100%}
+![La barre d'outils du viewer, numérotée (jeu de démonstration).](img/ch12/barre-outils.png){.shot width=92%}
 
 :::::: cols
 ::::: col
@@ -78,7 +78,7 @@ Survolez un bouton : une info-bulle donne son nom. La barre est rangée en **cin
 - Un clic dans le vide est **refusé**.
 :::
 
-![Deux points (1, 2), le segment et la liste des mesures. Jeu de démonstration, 204,8 µm.](img/ch12/mesure-distance.png){.shot width=100%}
+![Deux points (1, 2), le segment et la liste des mesures. Jeu de démonstration, 204,8 µm.](img/ch12/mesure-distance.png){.shot width=88%}
 
 ::: legend
 | n | ce que c'est |
@@ -100,7 +100,7 @@ Survolez un bouton : une info-bulle donne son nom. La barre est rangée en **cin
 
 Le viewer ne garde **aucune copie** du volume en mémoire centrale : il interroge la carte graphique. Pour votre clic, il refait un mini-rendu d'**un seul pixel** avec exactement les mêmes réglages que l'écran (fenêtre, gamma, canaux allumés, rognage).
 
-![Le point mesuré est la première structure qui atteint 55 % du maximum affiché.](img/ch12/pick.svg){width=92%}
+![Le point mesuré est la première structure qui atteint 55 % du maximum affiché.](img/ch12/pick.svg){width=85%}
 
 ::: tech
 Deux passes le long du rayon. Passe 1 : le maximum affiché `m`. Passe 2 : le premier point où la valeur affichée atteint `max(0,02 ; 0,55 × m)`, interpolé entre les deux échantillons qui encadrent le seuil. Le plancher 0,02 empêche de « mesurer » du bruit quand tout est presque noir. Conséquence : **éteindre un canal ou changer sa fenêtre déplace le point** (vous mesurez ce que vous voyez).
@@ -120,7 +120,7 @@ Les coordonnées normalisées (0 à 1) sont converties en micromètres avec la t
 Les points de la capture : A = (498,5 ; 163,4 ; 211,1) µm et B = (639,3 ; 311,9 ; 203,2) µm. Les écarts valent Δx = 140,8, Δy = 148,5, Δz = 8,0 µm. Donc d = √(19 838 + 22 043 + 63) = √41 944 ≈ **204,8 µm**, la valeur affichée.
 :::
 
-![Pourquoi on ne peut pas « compter les voxels » : Z est 2,5 fois plus long.](img/ch12/voxels.svg){width=92%}
+![Pourquoi on ne peut pas « compter les voxels » : Z est 2,5 fois plus long.](img/ch12/voxels.svg){width=80%}
 
 ::: why
 Le jeu de démonstration a des voxels de 1,2 × 1,2 × 3,0 µm. Compter les voxels comme s'ils étaient cubiques sous-estime ici de 20 % une distance en biais. Le viewer fait toujours le calcul en µm, jamais en voxels.
@@ -132,11 +132,11 @@ Le jeu de démonstration a des voxels de 1,2 × 1,2 × 3,0 µm. Compter les voxe
 
 Allumez la grille (bouton 7) : une barre d'échelle apparaît en bas à droite, avec une longueur « ronde » (règle **1-2-5** : 1, 2, 5, 10, 20, 50, 100 µm…). Elle vise environ 20 % de la largeur de la vue, entre 60 et 200 pixels.
 
-![La grille et la barre d'échelle (1) : 100 µm. Le bouton de la grille est le 2.](img/ch12/grille-echelle.png){.shot width=88%}
+![La grille et la barre d'échelle (1) : 100 µm. Le bouton de la grille est le 2.](img/ch12/grille-echelle.png){.shot width=80%}
 
 À cause de la **perspective**, un objet lointain paraît plus petit : la barre n'est exacte qu'à la profondeur du **centre de l'échantillon**.
 
-![Même longueur, trois profondeurs : la barre vaut pour le plan central.](img/ch12/perspective.svg){width=92%}
+![Même longueur, trois profondeurs : la barre vaut pour le plan central.](img/ch12/perspective.svg){width=80%}
 
 ::: tech
 µm par pixel = 2·tan(champ/2) · profondeur · (taille physique X / échelle du cube) / hauteur de la vue en pixels. La barre est masquée sans calibration ou si la grille est éteinte.
@@ -150,8 +150,10 @@ Allumez la grille (bouton 7) : une barre d'échelle apparaît en bas à droite, 
 - On ne peut pas l'utiliser en même temps que l'explorateur Z-Stack.
 :::
 
-![Coupe XY au milieu du volume (jeu de démonstration).](img/ch12/coupe-oblique.png){.shot width=100%}
+![Coupe XY au milieu du volume (jeu de démonstration).](img/ch12/coupe-oblique.png){.shot width=88%}
 
+:::::: cols
+::::: col
 ::: legend
 | n | ce que c'est |
 |---|---|
@@ -159,11 +161,19 @@ Allumez la grille (bouton 7) : une barre d'échelle apparaît en bas à droite, 
 | 2 | Barre d'échelle exacte de la coupe (200 µm ici) |
 | 3 | Le volume en miniature : on y déplace le plan |
 | 4 | Préréglages [XY]{.ui}, [XZ]{.ui}, [YZ]{.ui} |
+:::
+:::::
+::::: col
+::: legend
+| n | ce que c'est |
+|---|---|
 | 5 | [Position]{.ui} du plan, puis [Lacet]{.ui}, [Tangage]{.ui}, [Roulis]{.ui} |
 | 6 | [Épaisseur]{.ui} : nombre d'échantillons dans la tranche |
 | 7 | [Projection]{.ui} : [Unique]{.ui}, [MIP]{.ui} ou [Moyenne]{.ui} |
 | 8 | Bouton vers le Studio (§ 12.7) |
 :::
+:::::
+::::::
 
 ::: steps
 1. Appuyez sur <kbd>C</kbd> : un plan translucide apparaît, la coupe remplit l'écran.
@@ -188,37 +198,32 @@ Les préréglages XY/XZ/YZ suivent les axes **du fichier**, pas ceux de l'embryo
 - Le curseur peut montrer une coupe, plusieurs coupes (une « épaisseur ») ou toute la pile en 3D.
 :::
 
-![Z-stack ouvert en mode 3D : toutes les coupes conservées.](img/ch12/zstack-3d.png){.shot width=100%}
-
+::::::: cols-wide-left
+:::::: col
+![Z-stack en mode coupe : 12 coupes (59 à 70), soit 36 µm.](img/ch12/zstack-coupe-c.png){.shot width=100%}
+::::::
+:::::: col
 ::: legend
 | n | ce que c'est |
 |---|---|
-| 1 | Schéma de la pile (cliquer un plan = aller à cette coupe) |
-| 2 | Le **cran 3D** : curseur ici = toutes les coupes en 3D, rotation libre |
-| 3 | La **piste** : une position par coupe (coupe 1 en haut) |
-| 4 | Les deux **triangles de rognage** : masquent les coupes du dessus / du dessous |
-| 5 | Résumé : [Les 112 coupes sont conservées]{.ui} |
-| 6 | [Infos de pile]{.ui} : tranches, étendue, intervalle, voxel Z |
+| 1 | Le **curseur** : sa hauteur = nombre de coupes montrées |
+| 2 | [59–70 / 112]{.ui} : coupes affichées / total |
+| 3 | [Épaisseur]{.ui} : 12 coupes = 36,00 µm |
+| 4 | [Rotation]{.ui} 0–360° |
+| 5 | Position : 174 à 207 µm de profondeur |
+| 6 | Ouvrir la tranche dans le Studio |
+| 7 | Le **cran 3D** : curseur ici = toute la pile en 3D |
+| 8 | La **piste** : une position par coupe |
+| 9 | **Triangles de rognage** (dessus / dessous) |
 :::
+::::::
+:::::::
 
 ::: steps
-1. Cliquez [Explorateur Z-Stack]{.ui} : la pile se couche à plat.
-2. Tirez le curseur du cran 3D **vers le bas** dans la piste : la vue se verrouille de dessus sur la coupe choisie.
-3. Tirez un **bord** du curseur (ou le bouton [Épaisseur]{.ui}) pour montrer plusieurs coupes à la fois.
-4. Ramenez le curseur dans le cran pour revenir au 3D de toutes les coupes conservées.
-:::
-
-![Mode coupe : 12 coupes (59 à 70), soit 36 µm.](img/ch12/zstack-coupe.png){.shot width=100%}
-
-::: legend
-| n | ce que c'est |
-|---|---|
-| 1 | Le curseur : sa hauteur = le nombre de coupes montrées |
-| 2 | [59–70 / 112]{.ui} : coupes affichées sur le total (flèches pour avancer) |
-| 3 | [Épaisseur]{.ui} : 12 coupes, soit 36,00 µm (12 × 3 µm) |
-| 4 | [Rotation]{.ui} 0–360° : tourne les coupes à l'écran |
-| 5 | Position : de 174,00 à 207,00 µm de profondeur |
-| 6 | Ouvrir cette tranche dans le Studio |
+1. Cliquez [Explorateur Z-Stack]{.ui} : la pile se couche à plat, en mode 3D (cran 7).
+2. Tirez le curseur **vers le bas** dans la piste (8) : la vue se verrouille de dessus sur la coupe choisie.
+3. Tirez un **bord** du curseur, ou le bouton [Épaisseur]{.ui}, pour montrer plusieurs coupes.
+4. Les triangles (9) masquent des coupes en haut ou en bas ([Les 112 coupes sont conservées]{.ui} devient [Conservées…]{.ui}). Remontez le curseur dans le cran 7 pour revenir au 3D.
 :::
 
 ::: tech
@@ -237,7 +242,7 @@ Une seule opération rogne le volume en Z : `setClipRange_z` avec l'intervalle `
 
 ### Les axes d'orientation
 
-![La boussole : rouge R1/R2 (±X), vert G1/G2 (±Y), bleu B1/B2 (±Z).](img/ch12/orientation.png){.shot width=88%}
+![La boussole : rouge R1/R2 (±X), vert G1/G2 (±Y), bleu B1/B2 (±Z).](img/ch12/orientation.png){.shot width=80%}
 
 Chaque bras a un **nom court** (R1, R2, G1, G2, B1, B2). L'administrateur peut les renommer (« Antérieur », « Dorsal »…) ou en masquer. Glissez la petite sphère centrale pour déplacer la boussole ; sa position est conservée dans l'espace de travail.
 
@@ -252,8 +257,6 @@ Le fichier a sa rotation `Q_base` (axes du fichier → axes anatomiques). La bou
 :::
 
 ### La grille, les axes, le volume
-
-![Le volume masqué : il ne reste que la grille et ses projections (bouton 1).](img/ch12/projections.png){.shot width=88%}
 
 - **Grille** (7) : un clic fait défiler *Aucune → Normale (10 divisions) → Fine (40) → Aucune*. Les trois murs montrent une **projection** du volume avec le même mode de rendu. Une poignée orange redimensionne un mur (double-clic : retour).
 - **Axes** (8) : un repère XYZ coloré, à ne pas confondre avec la boussole. Glissez sa sphère pour le déplacer.
@@ -274,7 +277,7 @@ L'**export de la vue 3D** (bouton 20) refait le rendu **à n'importe quelle tail
 
 :::::: cols
 ::::: col
-![La fenêtre d'export (2). Le bouton 1 l'ouvre.](img/ch12/export-vue.png){.shot width=100%}
+![La fenêtre d'export (2). Le bouton 1 l'ouvre.](img/ch12/export-vue-c.png){.shot width=100%}
 :::::
 ::::: col
 - [Taille]{.ui} : [Écran]{.ui}, 2×, 4×, [Personnalisé]{.ui} (largeur de 16 à 16 384 px).
@@ -294,19 +297,24 @@ Le bouton 12 masque l'interface pour que le volume remplisse l'écran : utile po
 
 ### Centre de téléchargement
 
-![Les fichiers du dossier `download/` d'un jeu de données (jeu de démonstration).](img/ch12/centre-telechargement.png){.shot width=86%}
+![Les fichiers du dossier `download/` d'un jeu de données (jeu de démonstration).](img/ch12/centre-telechargement.png){.shot width=72%}
 
 Dans le viewer, il affiche une **liste de fichiers** : le fichier Imaris d'origine, le TIFF calibré, les projections par canal (PNG), l'archive web, un fichier README. Ils n'existent que si le pipeline a été lancé avec les téléchargements (chapitre 8). Ces fichiers sont toujours servis en **pièce jointe**. S'il y a des mesures, un bouton [Mesures CSV]{.ui} apparaît (colonnes : étiquette, type, distance, unité, point A, point B…).
 
 ### Décomposer par canal
 
-![Une vignette par canal : DAPI, Pecam1, Sox2.](img/ch12/decomposer.png){.shot width=88%}
-
+::::::: cols-wide-left
+:::::: col
+![Une vignette par canal : DAPI, Pecam1, Sox2.](img/ch12/decomposer-c.png){.shot width=100%}
+::::::
+:::::: col
 Chaque canal allumé reçoit sa **vignette** (le même volume, avec ce canal seul). Cliquer une vignette permet de régler ce canal dans le panneau de gauche ([Terminé]{.ui} pour sortir, [Revenir à l'original]{.ui}). Les trois boutons (1) choisissent la disposition ; [Export]{.ui} (2) écrit un PNG `decomposition_<disposition>_<date>.png`. Chaque vignette est rendue à la taille du volume (512 à 4096 px) et le viewer refuse une image trop grande pour la carte graphique (« Trop de vues pour une seule image »).
+::::::
+:::::::
 
 ### Débogage des chunks
 
-![Les briques de 64³ voxels dessinées en jaune ; survol de l'une d'elles.](img/ch12/chunk-debug.png){.shot width=100%}
+![Les briques de 64³ voxels dessinées en jaune ; survol de l'une d'elles.](img/ch12/chunk-debug.png){.shot width=84%}
 
 L'outil le plus pédagogique du chapitre 7 : il **dessine les arêtes de chaque brique non vide** du niveau affiché. Survolez une brique : son identifiant, sa taille (ici 64×64×48 voxels, 76,8 × 76,8 × 144 µm), sa taille stockée (66³ avec une bordure d'un voxel), son fichier de pack et son niveau de détail. Clic : copie ces informations. <kbd>Ctrl</kbd> + molette : parcourt les briques superposées sous le curseur.
 
@@ -318,8 +326,10 @@ L'outil le plus pédagogique du chapitre 7 : il **dessine les arêtes de chaque 
 - Les canaux se **recolorient** dans le Studio sans refaire le rendu du volume.
 :::
 
-![Le Slice Studio avec un rectangle tourné de 20°, une flèche, une distance, une barre d'échelle.](img/ch12/studio.png){.shot width=100%}
+![Le Slice Studio avec un rectangle tourné de 20°, une flèche, une distance, une barre d'échelle.](img/ch12/studio.png){.shot width=92%}
 
+:::::: cols
+::::: col
 ::: legend
 | n | ce que c'est |
 |---|---|
@@ -328,11 +338,19 @@ L'outil le plus pédagogique du chapitre 7 : il **dessine les arêtes de chaque 
 | 3 | Une mesure de distance : 399,68 µm (étiquette calculée en µm) |
 | 4 | [Propriétés]{.ui} du calque choisi : nom, couleur, opacité, épaisseur, [Rotation]{.ui} (−180 à 180°) |
 | 5 | [Canaux]{.ui} : couleur, min/max, gamma, on/off, avec leurs histogrammes |
+:::
+:::::
+::::: col
+::: legend
+| n | ce que c'est |
+|---|---|
 | 6 | [Importer JSON]{.ui} / [Sauvegarder JSON]{.ui} |
 | 7 | [Exporter PNG]{.ui} |
 | 8 | Rotation de la **vue** (affichage seulement) |
 | 9 | Mini-carte |
 :::
+:::::
+::::::
 
 ::: steps
 1. Dans la coupe oblique ou le Z-stack, cliquez le bouton d'ouverture du Studio.
@@ -374,8 +392,10 @@ Sur le jeu de démonstration (768 × 576 px), le natif est aussi petit que l'ape
 - Une mémoire graphique unique est **partagée** entre les panneaux (qualité automatique).
 :::
 
-![Trois panneaux : deux volumes et une photographie. (1) ajouter, (2) outils communs, (8) synchronisations.](img/ch12/comparer.png){.shot width=100%}
+![Trois panneaux : deux volumes et une photographie. (1) ajouter, (2) outils communs, (8) synchronisations.](img/ch12/comparer.png){.shot width=92%}
 
+:::::: cols
+::::: col
 ::: legend
 | n | ce que c'est |
 |---|---|
@@ -384,12 +404,20 @@ Sur le jeu de démonstration (768 × 576 px), le natif est aussi petit que l'ape
 | 3 | [Studio]{.ui} : une figure avec tous les panneaux |
 | 4 | [Exporter]{.ui} : figure PNG / WebP de la grille |
 | 5 | [Sauvegarder]{.ui} / [Restaurer]{.ui} l'espace de travail |
+:::
+:::::
+::::: col
+::: legend
+| n | ce que c'est |
+|---|---|
 | 6 | Disposition : Auto, colonnes, lignes, grille (gouttières réglables) |
 | 7 | Qualité : auto, 512, 1024, natif |
 | 8 | SYNC : [Plan Z]{.ui}, [Temps]{.ui}, [Caméra / vue]{.ui}, [Canaux]{.ui} |
 | 9 | Le nom du jeu de données du panneau |
 | 10 | Les boutons à bascule **décrits par la page** de ce panneau |
 :::
+:::::
+::::::
 
 ### Ce qui est synchronisé
 
@@ -412,7 +440,7 @@ Les panneaux démarrent en 512 ; la montée de qualité se fait **un panneau à 
 
 ### Décomposer, figure, espace de travail
 
-![Un volume à trois canaux, [Décomposer]{.ui} : trois panneaux, un canal chacun. La synchro [Canaux]{.ui} (1) a été décochée automatiquement.](img/ch12/comparer-decomposer.png){.shot width=100%}
+![Un volume à trois canaux, [Décomposer]{.ui} : trois panneaux, un canal chacun. La synchro [Canaux]{.ui} (1) a été décochée automatiquement.](img/ch12/comparer-decomposer.png){.shot width=85%}
 
 - **Décomposer** n'apparaît que s'il y a **un seul** panneau volumique de plusieurs canaux : il le clone en panneaux (4 au plus), un canal chacun, en gardant temps et caméra synchrones.
 - **Studio** : une figure avec tous les panneaux, en [Taille Visuelle]{.ui} ou en [Échelle Physique]{.ui} (une seule échelle en µm/px pour tous, jamais sur-échantillonnée).
@@ -427,7 +455,7 @@ Les panneaux démarrent en 512 ; la montée de qualité se fait **un panneau à 
 - Exemple : le jeu de démonstration de 4 images avec suivi (50 cellules).
 :::
 
-![La frise : lecture (1), vitesse (2), compteur (3), piste (4) ; et la couche [Points de suivi]{.ui} (5).](img/ch12/timeline.png){.shot width=100%}
+![La frise : lecture (1), vitesse (2), compteur (3), piste (4) ; et la couche [Points de suivi]{.ui} (5).](img/ch12/timeline-c.png){.shot width=100%}
 
 ::: legend
 | n | ce que c'est |
@@ -443,8 +471,11 @@ Les panneaux démarrent en 512 ; la montée de qualité se fait **un panneau à 
 - Les images suivantes sont préchargées. [Tampon 4/4 · 512×512]{.ui} indique ce qui tient en mémoire.
 - Il n'y a pas d'horloge en minutes sur la frise : l'affichage est en numéro d'image.
 
-![Sur cette série, la barre est repliée : le menu ☰ regroupe les outils de suivi (1 à 5).](img/ch12/suivi-menu.png){.shot width=60%}
-
+::::::: cols
+:::::: col
+![Sur cette série, la barre est repliée : le menu ☰ regroupe les outils de suivi.](img/ch12/suivi-menu.png){.shot width=100%}
+::::::
+:::::: col
 ::: legend
 | n | ce que c'est |
 |---|---|
@@ -454,13 +485,20 @@ Les panneaux démarrent en 512 ; la montée de qualité se fait **un panneau à 
 | 4 | [Trajectoires]{.ui} |
 | 5 | [Surface de suivi]{.ui} |
 :::
+::::::
+:::::::
 
 ### Trajectoires et surface
 
-![Les sections [Surface de suivi]{.ui} (2) et [Trajectoires]{.ui} (1) dans la colonne de gauche, à la dernière image.](img/ch12/suivi-trajectoires.png){.shot width=100%}
-
+::::::: cols-wide-left
+:::::: col
+![[Trajectoires]{.ui} (1) et [Surface de suivi]{.ui} (2) dans la colonne de gauche, dernière image.](img/ch12/suivi-trajectoires-c.png){.shot width=100%}
+::::::
+:::::: col
 - **Trajectoires** : longueur de la trace (0 = toutes les images), chemin à venir, opacité, couleur par **région** ou par **vitesse** (bleu lent → rouge rapide, échelle fixe sur toute la série).
 - **Surface de suivi** : la surface du tissu (`model.glb`) dans le volume, colorée en uniforme, par **densité cellulaire** ou par région, avec une palette au choix et un **plan de coupe** (XY, XZ, YZ ou oblique).
+::::::
+:::::::
 
 ::: tech
 Densité locale d'un sommet : somme de gaussiennes `exp(−|v−c|²/2σ²)` sur les cellules de l'image courante, avec σ = 0,52 × rayon de voisinage, borné entre 8 et 54 µm, puis deux lissages sur le maillage. Vitesse d'un segment : |Δposition| en µm / Δt.
@@ -472,7 +510,7 @@ Sur le jeu de démonstration, les cellules se déplacent de quelques micromètre
 
 ### Inspecter une cellule
 
-![Cellule 15 sélectionnée (1). Colonne de gauche : identifiant (2), métriques (3), voisines (4).](img/ch12/suivi-inspecteur.png){.shot width=100%}
+![Cellule 15 sélectionnée (1). Colonne de gauche : identifiant (2), métriques (3), voisines (4).](img/ch12/suivi-inspecteur-c.png){.shot width=100%}
 
 ::: steps
 1. Appuyez sur <kbd>I</kbd>, puis cliquez une sphère (ou tapez son numéro et [Trouver]{.ui}).
@@ -490,10 +528,10 @@ Boutons d'export : [CSV de la piste]{.ui}, [CSV des voisines]{.ui}, [JSON du lig
 
 :::::: cols
 ::::: col
-![Deux cellules (1, 2) et le panneau (3) : 41,6 µm.](img/ch12/suivi-distance.png){.shot width=100%}
+![Deux cellules (1, 2) et le panneau (3) : 41,4 µm.](img/ch12/suivi-distance-c.png){.shot width=100%}
 :::::
 ::::: col
-![Population par région (jeu de démonstration).](img/ch12/suivi-graphiques.png){.shot width=100%}
+![Population par région (jeu de démonstration).](img/ch12/suivi-graphiques-c.png){.shot width=100%}
 :::::
 ::::::
 
@@ -508,8 +546,10 @@ Boutons d'export : [CSV de la piste]{.ui}, [CSV des voisines]{.ui}, [JSON du lig
 - **Isoler le marquage** est une aide visuelle : rien de ce qui est mesuré ne la lit.
 :::
 
-![La page 2D (1 à 17 : les boutons ; 18 : barre d'échelle ; 19 : zoom et µm/px ; 20 : fiche du spécimen).](img/ch12/2d-barre.png){.shot width=100%}
+![La page 2D (1 à 17 : les boutons ; 18 : barre d'échelle ; 19 : zoom et µm/px ; 20 : fiche du spécimen).](img/ch12/2d-barre.png){.shot width=92%}
 
+:::::: cols
+::::: col
 ::: legend
 | n | ce que c'est |
 |---|---|
@@ -517,18 +557,26 @@ Boutons d'export : [CSV de la piste]{.ui}, [CSV des voisines]{.ui}, [JSON du lig
 | 3 | [Ouvrir dans le Studio (annoter)]{.ui} |
 | 4, 5, 6 | Téléchargement, [Constructeur de planche]{.ui}, capture |
 | 7, 8 | [Ajuster à l'écran (F)]{.ui}, [Résolution native 1:1]{.ui} |
+:::
+:::::
+::::: col
+::: legend
+| n | ce que c'est |
+|---|---|
 | 9 | [Isoler le marquage]{.ui} |
 | 10, 11, 12 | [Grille calibrée]{.ui}, [Réglages d'affichage]{.ui}, [Orientation]{.ui} |
 | 13, 14, 15 | Photographie précédente, parcourir la collection, suivante |
 | 16, 17 | Mode présentation, [Vue divisée]{.ui} |
 :::
+:::::
+::::::
 
 - **Navigation** : molette pour zoomer autour du curseur, glisser pour déplacer, double-clic pour ajuster. Le zoom va de 0,25 × l'ajustement à 32 pixels d'écran par pixel d'image.
 - **Chargement en deux temps** : un aperçu (≈ 640 px) puis l'image native.
 - **Barre d'échelle** en bas à gauche, valeur 1-2-5, calculée avec la taille de pixel (ici 2,000 µm/px). Sans calibration : [Non calibré]{.ui}.
 - [Parcourir la collection]{.ui} (<kbd>B</kbd>) ouvre une planche-contact filtrable par stade et lignée.
 
-![Une mesure : 1,58 mm (1,576 mm dans la liste).](img/ch12/2d-mesure.png){.shot width=88%}
+![Une mesure : 1,58 mm (1,576 mm dans la liste).](img/ch12/2d-mesure.png){.shot width=80%}
 
 La mesure est `√(Δx² + Δy²) × taille de pixel` : la photographie est plane, il n'y a pas de Z. Les étiquettes se déplacent à la souris.
 
@@ -538,7 +586,7 @@ La mesure est `√(Δx² + Δy²) × taille de pixel` : la photographie est plan
 
 Le X-gal rend un pixel plus **bleu** que le tissu voisin. Mais le fond mat porte aussi des grains bleutés. Pour ne pas les allumer, l'outil exige que le bleu soit **à l'intérieur d'un tissu jaune**.
 
-![Le calcul, pixel par pixel.](img/ch12/xgal.svg){width=96%}
+![Le calcul, pixel par pixel.](img/ch12/xgal.svg){width=90%}
 
 ::: tech
 Constantes du code : rapport bas 1,0, haut 1,8 ; contexte à 1/4 de résolution, flou de rayon 5 (≈ 40 px), seuil 5. Luminosité = 0,299 R + 0,587 V + 0,114 B. Le tout tourne dans un *worker* (la page reste fluide), seule la dernière requête est traitée, la carte de contexte est gardée tant que l'image ne change pas. L'outil est réglé pour du X-gal sur tissu jaune : d'autres colorations ou fonds peuvent être mal détectés.
@@ -546,30 +594,32 @@ Constantes du code : rapport bas 1,0, haut 1,8 ; contexte à 1/4 de résolution,
 
 ### Affichage, grille, orientation
 
-:::::: cols
-::::: col
-![[Réglages d'affichage]{.ui}.](img/ch12/2d-affichage.png){.shot width=100%}
-:::::
-::::: col
-![[Grille calibrée]{.ui} (200 µm).](img/ch12/2d-grille.png){.shot width=100%}
-:::::
-::::::
+![[Grille calibrée]{.ui} (200 µm) : une échelle de lecture sur la photographie.](img/ch12/2d-grille.png){.shot width=80%}
 
+
+::::::: cols-wide-left
+:::::: col
+![[Réglages d'affichage]{.ui} (panneau [Affichage]{.ui}).](img/ch12/2d-affichage-c.png){.shot width=100%}
+::::::
+:::::: col
 - **Réglages d'affichage** : [Luminosité]{.ui}, [Contraste]{.ui}, [Gamma]{.ui}, balance [Rouge]{.ui}/[Bleu]{.ui}, [Aplatir le fond (vignettage)]{.ui}. *Affichage seulement* : les mesures lisent la photo intacte. Par canal : `x = (v/255 · balance − ½)(1 + contraste/100) + ½ + luminosité/100`, puis `x^(1/gamma)`.
 - **Aplatir le fond** : une surface lissée (quadratique) est ajustée sur les 40 % de pixels les plus sombres (le fond) et le gain correspondant est appliqué, entre 0,5 et 3.
+::::::
+:::::::
+
 - **Grille calibrée** : un clic = aucune → large (≈ 120 px) → fine (≈ 60 px), pas en 1-2-5 µm.
 
-![[Orientation]{.ui} : rotation de 25°, boussole A (antérieur) / P (postérieur).](img/ch12/2d-orientation.png){.shot width=88%}
+![[Orientation]{.ui} : rotation de 25°, boussole A (antérieur) / P (postérieur).](img/ch12/2d-orientation.png){.shot width=75%}
 
 L'**orientation** tourne l'image sans changer l'échelle (rotation, ±90°, miroir). L'administrateur enregistre la pose avec le jeu de données ; elle est réappliquée à chaque ouverture.
 
 ### Vue divisée et planche de figure
 
-![[Vue divisée]{.ui} : deux embryons au **même grossissement physique**.](img/ch12/2d-vue-divisee.png){.shot width=100%}
+![[Vue divisée]{.ui} : deux embryons au **même grossissement physique**.](img/ch12/2d-vue-divisee.png){.shot width=85%}
 
 La vue divisée échange une vue **physique** (µm par pixel d'écran + position) entre les deux côtés : deux photos prises à des zooms différents sont à la même échelle, et déplacer l'une déplace l'autre de la même distance réelle.
 
-![Le [Constructeur de planche]{.ui} : liste (1), options (2), aperçu (3), export (4).](img/ch12/2d-planche.png){.shot width=100%}
+![Le [Constructeur de planche]{.ui} : liste (1), options (2), aperçu (3), export (4).](img/ch12/2d-planche.png){.shot width=80%}
 
 La planche assemble plusieurs photographies en un PNG : **même échelle physique** (une barre commune, chaque image est ramenée au pixel le plus grossier, jamais agrandie) ou **même taille d'image** (une barre par panneau). Limites : 6000 px de large, 120 mégapixels. Elle s'ouvre aussi dans le Studio.
 

@@ -286,7 +286,7 @@ La liste des jeux que voit le public (`/DATA_WEB/catalog.json`) n'est **stockée
 Les règles exactes de la construction :
 
 - un dossier dont le nom commence par un point n'est **jamais** un jeu (c'est un chantier) ;
-- un dossier **sans** `metadata.json` (traitement en cours) donne une ligne « non configurée », sans vignette ;
+- un dossier **sans** `metadata.json` (traitement en cours) donne une ligne « non configurée », sans vignette — donc absente du catalogue public ;
 - `id`, `path`, `type`, `folderName` sont **imposés** d'après l'emplacement ; `thumbnail` est le fichier s'il existe, `null` sinon ;
 - on garde les jeux **configurés ou vignettés**, et **non masqués** ;
 - l'ordre met la date la plus récente d'abord ; les jeux sans date (les volumes en ont rarement) viennent ensuite, par nom décroissant.
@@ -404,7 +404,7 @@ L'onglet décide ainsi, pour chaque jeu **publié** de type `3d` ou `live` (les 
 | manifeste illisible ou absent (`manifest_invalid`, `no_manifest`) | un problème signalé sur la ligne du jeu |
 | série dont les images n'ont pas toutes les mêmes dimensions | refus (`trees_differ`) : m004 ne sait pas la convertir |
 
-Avant de commencer, le serveur **refuse un travail que le disque ne peut pas contenir** (erreur 507, comme l'import) : il estime la place du résultat à 1,3 fois le niveau natif pour `planes/`, 5 % pour `mips/` et 1,3 fois pour les briques v3, à la fois dans le magasin de travail et à côté du jeu, avec une réserve de 512 Mio.
+Avant de commencer, le serveur **refuse un travail que le disque ne peut pas contenir** (erreur 507, comme l'import) : il estime la place du résultat — environ 1,3 fois le niveau natif pour `planes/`, 5 % de la taille de `planes/` pour `mips/`, environ 1,3 fois l'ancienne pyramide pour les briques v3 — et exige qu'elle tienne à la fois dans le magasin de travail et à côté du jeu (deux fois sur un même disque), avec une réserve de 512 Mio.
 
 ### Un essai réel de bout en bout
 

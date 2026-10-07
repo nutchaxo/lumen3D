@@ -13,9 +13,10 @@
 //     a dense texture holding the 64³ interiors at 64·b;
 //   • live v3 manifests: one tree per timepoint, its index inside it (memoised);
 //   • zooming past the resident level's resolution streams the finer level's bricks in
-//     view into a detail atlas (ROI_DETAIL), within the budget; zooming out drops it;
-//     a new round cancels the previous round's loads (loader group 'roi'); bricks that
-//     left the view are recycled first; a new volume tears the detail down.
+//     view into a detail atlas (ROI_DETAIL), within the budget, in short byte-range
+//     batches; a camera move cancels nothing and no brick is fetched twice; zooming out
+//     keeps the atlas (zooming back in downloads nothing); bricks that left the view are
+//     recycled first; a new volume tears the detail down.
 //
 // Run: node tests/js/test_v3_render_roi.mjs
 import assert from 'node:assert/strict';
@@ -54,14 +55,30 @@ const SVR = svrCtx.__S;
   assert.ok(Math.abs(Roi.pixelsPerVoxel(1000, 0.002, 1) - 2) < 1e-12);
   const levels = [{ level: 0, voxelWorld: 1 / 1024 }, { level: 1, voxelWorld: 1 / 512 }, { level: 2, voxelWorld: 1 / 256 }, { level: 3, voxelWorld: 1 / 128 }];
   const at = (basePpv) => Roi.chooseDetailLevel({ levels, baseLevel: 2, focalPx: 256 * basePpv, distance: 1 });
-  assert.equal(at(1.2).level, null, 'a base voxel under 1.5 px: no detail');
-  assert.equal(at(1.5).level, null, 'exactly 1.5 px: still fine');
-  assert.equal(at(2).level, 1, 'base at 2 px: level 1 (1 px) is enough — the coarsest finer level that resolves it');
-  assert.equal(at(2.9).level, 1, 'level 1 at 1.45 px');
-  assert.equal(at(3.2).level, 0, 'level 1 at 1.6 px is not enough: level 0');
+  assert.equal(at(1.5).level, null, 'a base voxel under 2 px: no detail');
+  assert.equal(at(2).level, null, 'exactly 2 px: still fine');
+  assert.equal(at(2.5).level, 1, 'base at 2.5 px: level 1 (1.25 px) is enough — the coarsest finer level that resolves it');
+  assert.equal(at(3.9).level, 1, 'level 1 at 1.95 px');
+  assert.equal(at(4.4).level, 0, 'level 1 at 2.2 px is not enough: level 0');
   assert.equal(at(50).level, 0, 'zoomed far in: the finest level there is');
   assert.equal(Roi.chooseDetailLevel({ levels, baseLevel: 0, focalPx: 1e6, distance: 1 }).level, null, 'level 0 resident: nothing finer');
-  console.log('detail level choice (1.5 px per voxel): OK');
+  // Hysteresis (1.3): the level held stays around its switch points.
+  const hold = (basePpv, current) => Roi.chooseDetailLevel({ levels, baseLevel: 2, focalPx: 256 * basePpv, distance: 1, current }).level;
+  assert.equal(hold(1.8, 1), 1, 'base at 1.8 px is not comfortably enough (> 2/1.3): level 1 kept');
+  assert.equal(hold(1.4, 1), null, 'base at 1.4 px: the detail is let go');
+  assert.equal(hold(4.4, 1), 1, 'level 1 at 2.2 px is within 2·1.3: kept instead of switching to level 0');
+  assert.equal(hold(5.6, 1), 0, 'level 1 at 2.8 px: level 0');
+  assert.equal(hold(4.4, 0), 0, 'level 0 kept while level 1 (2.2 px) is not comfortably enough');
+  assert.equal(hold(2.8, 0), 1, 'level 1 at 1.4 px is comfortably enough: back to it');
+  assert.equal(Roi.depthQuantile([5, 1, 3, 2, 4], 0.5), 3);
+  assert.equal(Roi.depthQuantile([5, 1, 3, 2, 4], 0), 1);
+  assert.equal(Roi.depthQuantile([], 0.5), null);
+  // Wanted bricks: the viewport two bricks deep, within [48, 320].
+  const wb = (depth) => Roi.wantedBricks({ viewportW: 1000, viewportH: 600, focalPx: 1000, voxelWorld: 0.002, depth });
+  assert.equal(wb(1), 108, 'bricks of 128 px: (8 + 1) × (5 + 1) across the viewport, two deep');
+  assert.equal(wb(0.1), 48, 'a few huge bricks: never fewer than 48');
+  assert.equal(wb(10), 320, 'tiny bricks: never more than 320');
+  console.log('detail level choice (2 px per voxel, hysteresis), depth quantile, wanted bricks: OK');
 }
 
 {
@@ -77,6 +94,9 @@ const SVR = svrCtx.__S;
   assert.deepEqual(plain(clipped.map(r => r.bx)), [1, 2], 'a brick wholly outside the clip box is not in view');
   const near = Roi.rankVisible({ bricks: bricks.slice(0, 2), dims, planes: [], project: (u) => ({ x: 0, y: 0, depth: u < 0.25 ? 4 : 1 }) });
   assert.deepEqual(plain(near.map(r => r.bx)), [1, 0], 'nearer (bigger on screen) first');
+  const deep = Roi.rankVisible({ bricks: bricks.slice(0, 2), dims, planes: [], project: (u) => ({ x: 0, y: 0, depth: u < 0.25 ? 4 : 1 }), maxDepth: 2 });
+  assert.deepEqual(plain(deep.map(r => r.bx)), [1], 'a brick deeper than maxDepth is left out (the resident level resolves it)');
+  assert.equal(deep[0].depth, 1, 'each entry carries its depth');
   assert.equal(Roi.boxOutside({ x: 0, y: 0, z: 0 }, { x: 1, y: 1, z: 1 }, [[0, 0, 1, -1.01]]), true, 'box behind a plane');
 
   const rk = (keys) => keys.map(k => ({ key: k, bx: 0, by: 0, bz: 0 }));
@@ -316,7 +336,7 @@ const tree2 = buildV3Tree({ base: BASE_SVR, channels: 2, levels: LEVELS, value, 
   const batches = [];
   const orig = W.BL.loadBrickTasks;
   W.BL.loadBrickTasks = async (tasks, options) => {
-    const rec = { group: options.group, tasks: tasks.length, summary: null };
+    const rec = { group: options.group, tasks: tasks.length, byteRanges: options.byteRanges === true, summary: null };
     batches.push(rec);
     const r = await orig(tasks, options);
     rec.summary = r.summary;
@@ -347,50 +367,62 @@ const tree2 = buildV3Tree({ base: BASE_SVR, channels: 2, levels: LEVELS, value, 
   assert.ok(m.uniforms.detailPageTable.value, 'detail page table bound');
   assert.equal(m.uniforms.detailSlotStride.value, 66);
   const roiBatch = batches.filter(b => b.group === 'roi');
-  assert.ok(roiBatch.length >= 1 && roiBatch[0].tasks === st.resident * 2, 'one task per brick and channel in view');
-  const fetched = W.fetch.log.filter(e => /\/l(\d)\//.test(e.path)).map(e => Number(/\/l(\d)\//.exec(e.path)[1]));
-  assert.ok(fetched.includes(st.level), 'the finer level is fetched');
+  assert.ok(roiBatch.length >= 1 && roiBatch.every(b => b.tasks <= 24 * 2), 'short batches: at most 24 bricks each');
+  assert.equal(roiBatch.reduce((n, b) => n + b.tasks, 0), st.resident * 2, 'one task per wanted brick and channel, none twice');
+  assert.ok(st.wanted <= st.inView && st.resident === st.wanted, 'every wanted brick resident');
+  const roiFetches = W.fetch.log.filter(e => /\/l(\d)\//.test(e.path) && Number(/\/l(\d)\//.exec(e.path)[1]) === st.level);
+  assert.ok(roiFetches.length > 0, 'the finer level is fetched');
+  assert.ok(roiBatch.every(b => b.byteRanges), 'detail batches ask byte ranges (a pack is fetched whole only when most of it is wanted)');
 
-  // A second round while the first still loads: the first is cancelled (loader group).
+  // A second round while the first still loads: the first goes on (nothing downloaded
+  // is thrown away), the next batch follows the new view, no brick is fetched twice.
   const slow = makeWorld({ files: tree2.files, max3D: 264, delay: 150 });
   slow.SVR.setVramBudget(2048 * MiB);
   slow.VV.setDetailMode('on');
   slow.VV.init('webgl-canvas');
   const sb = [];
   const so = slow.BL.loadBrickTasks;
-  slow.BL.loadBrickTasks = async (tasks, options) => { const rec = { group: options.group, summary: null }; sb.push(rec); const r = await so(tasks, options); rec.summary = r.summary; return r; };
+  slow.BL.loadBrickTasks = async (tasks, options) => {
+    const rec = { group: options.group, keys: tasks.map(t => `${t.bx}_${t.by}_${t.bz}:${t.channel}`), summary: null };
+    sb.push(rec);
+    const r = await so(tasks, options);
+    rec.summary = r.summary;
+    return r;
+  };
   await slow.VV.loadBrickedVolumeStream('D/s', meta('D/s', LEVELS[0].dims, 2), null, null, { quality: 'lod2' });
   slow.VV.setCameraState({ kind: 'volume', cameraZ: 0.9 });
   slow.VV.refreshDetail();
   await waitFor(() => sb.some(b => b.group === 'roi'), 5000, 'slow round started');
-  // The volume slides far to the side: what the first round fetches is no longer wanted.
-  slow.VV.setCameraState({ kind: 'volume', cameraZ: 0.9, position: [0.55, 0, 0] });
+  slow.VV.setCameraState({ kind: 'volume', cameraZ: 0.9, position: [0.3, 0, 0] });
   slow.VV.refreshDetail();
-  await waitFor(() => sb.filter(b => b.group === 'roi').length >= 2, 10000, 'second round');
-  const firstRoi = sb.find(b => b.group === 'roi');
-  await waitFor(() => firstRoi.summary, 10000, 'first round settles');
-  assert.equal(firstRoi.summary.cancelled, true, 'the obsolete round was cancelled');
-  await waitFor(() => slow.VV.getDetailStatus().reason === 'ready', 10000, 'second round done');
+  await waitFor(() => slow.VV.getDetailStatus().reason === 'ready', 20000, 'rounds done');
+  const slowRoi = sb.filter(b => b.group === 'roi');
+  assert.ok(slowRoi.every(b => b.summary && !b.summary.cancelled), 'a camera move cancels no batch');
+  const all = slowRoi.flatMap(b => b.keys);
+  assert.equal(new Set(all).size, all.length, 'no brick fetched twice');
   slow.VV.dispose();
 
-  // Zoom out: the detail atlas is released and the define removed.
+  // Zoom out: the detail atlas stays (finer is never wrong) and nothing more is fetched;
+  // zooming back in finds its bricks there.
+  const roiBefore = batches.filter(b => b.group === 'roi').length;
   W.VV.setCameraState({ kind: 'volume', cameraZ: 6 });
   W.VV.refreshDetail();
-  await waitFor(() => W.VV.getDetailStatus().reason === 'zoomed-out', 5000, 'zoom-out teardown');
-  assert.ok(!('ROI_DETAIL' in m.defines), 'define removed');
-  assert.equal(m.uniforms.detailPageCount.value, 0);
-
-  // 'off' never streams; a new volume tears the detail down.
+  await waitFor(() => W.VV.getDetailStatus().reason === 'zoomed-out', 5000, 'zoom-out');
+  assert.equal(m.defines.ROI_DETAIL, 1, 'the detail atlas stays published');
+  assert.equal(W.VV.getDetailStatus().active, false);
   W.VV.setCameraState({ kind: 'volume', cameraZ: 0.9 });
   W.VV.refreshDetail();
   await waitFor(() => W.VV.getDetailStatus().reason === 'ready', 10000, 'detail again');
+  assert.equal(batches.filter(b => b.group === 'roi').length, roiBefore, 'zooming back in downloads nothing: the bricks were kept');
+
+  // 'off' never streams; a new volume tears the detail down.
   await W.VV.loadBrickedVolumeStream('D/s', meta('D/s', LEVELS[0].dims, 2), null, null, { quality: 'lod1' });
   assert.ok(!('ROI_DETAIL' in m.defines) || W.VV.getDetailStatus().level === 0, 'the old detail went with its volume');
   W.VV.setDetailMode('off');
   assert.ok(!('ROI_DETAIL' in m.defines), "'off' drops it at once");
   assert.equal(W.VV.getDetailStatus().mode, 'off');
   W.VV.dispose();
-  console.log('region of interest: zoom-in streams the finer level in view, rounds cancel, zoom-out and off release: OK');
+  console.log('region of interest: short ranged batches, no cancellation on move, kept on zoom-out, released with the volume and off: OK');
 }
 
 // ── ROI within a small budget: capacity, eviction of bricks that left the view ─

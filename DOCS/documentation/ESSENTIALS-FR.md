@@ -131,7 +131,7 @@ le découpage en tuiles des très gros volumes.
 - Le volume est coupé en **briques** de 64 × 64 × 64 voxels, compressées **sans perte** (WebP) ; les briques vides ne sont **pas stockées**.
 :::
 
-![La pyramide de résolutions du jeu de démonstration et le réglage « Qualité » du viewer.](img/ess/pyramide.svg){width=100%}
+![La pyramide de résolutions d'une grande pile et le réglage « Qualité » du viewer : « 512 » prend le niveau le plus fin dont le grand côté ne dépasse pas 768 px.](img/ess/pyramide.svg){width=100%}
 
 :::: cols
 ::: col

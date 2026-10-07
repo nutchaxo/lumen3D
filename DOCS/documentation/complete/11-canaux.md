@@ -21,7 +21,7 @@ Chaque voxel est stocké sous la forme d'un **octet** (un nombre de 0 à 255). A
 | Couleur | vous | pastille de couleur |
 | Exposition | vous | curseur [Visibilité (exposition)]{.ui}, global |
 
-## 11.2 L'étape cachée : le plancher du fond {.page}
+## 11.2 L'étape cachée : le plancher du fond
 
 Avant même que vous touchiez à un réglage, le viewer **écrase le fond** : toutes les valeurs inférieures ou égales à un seuil, le **plancher**, deviennent **0**, et les valeurs restantes sont **étirées** pour occuper toute l'échelle 0–255.
 
@@ -108,7 +108,7 @@ Une colonne géante au niveau 0 écraserait tout le reste. Le panneau applique d
 La case [Ignorer le fond]{.ui} ne change que le **dessin** : elle multiplie les colonnes affichées par (i / 63)² pour aplatir la bosse du fond. Elle **ne modifie pas l'image**.
 :::
 
-## 11.6 Les boutons de réglage rapide {.page}
+## 11.6 Les boutons de réglage rapide
 
 Les boutons sous l'histogramme posent d'un coup Min, Max et le milieu. Ils s'appellent **Auto**, **Soft**, **Contrast** et **Reset** dans le panneau (texte anglais affiché tel quel, même en interface française).
 

@@ -131,7 +131,7 @@ tiling of very large volumes.
 - The volume is cut into **bricks** of 64 × 64 × 64 voxels, compressed **losslessly** (WebP); empty bricks are **not stored**.
 :::
 
-![The resolution pyramid of the demonstration dataset and the viewer's "Quality" setting.](img-en/ess/pyramide.svg){width=100%}
+![The resolution pyramid of a large stack and the viewer's "Quality" setting: "512" picks the finest level whose longest side is at most 768 px.](img-en/ess/pyramide.svg){width=100%}
 
 :::: cols
 ::: col

@@ -57,7 +57,7 @@ def gouverneur():
     ax1.set_ylabel(tr("débit autorisé (requêtes/s)", "allowed rate (requests/s)"))
     ax1.set_title(tr("Le plafond de débit du régulateur réseau (la vraie classe, horloge virtuelle)", "The network governor's rate ceiling (the real class, virtual clock)"),
                   fontsize=12, fontweight="bold", loc="left")
-    ax1.legend(frameon=False, loc="center right", bbox_to_anchor=(1.0, 0.62), fontsize=10)
+    ax1.legend(frameon=False, loc="center left", bbox_to_anchor=(0.08, 0.60), fontsize=10)
     ax1.spines[["top", "right"]].set_visible(False)
 
     # b. requêtes réellement parties chaque seconde

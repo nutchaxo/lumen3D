@@ -335,7 +335,7 @@ def pivot():
             s.line(x + 142, 106, x + 154, 106, INK2, 2, arrow=True)
     # branches
     s.path("M742,158 V216", ACC["green"][0], 2.4)
-    s.text(750, 190, T("répond", "answers"), 11.5, 700, ACC["green"][0])
+    s.text(T(750, 748), 186, T("répond", "answers"), 11.5, 700, ACC["green"][0], anchor=T("start", "start"))
     s.path("M690,158 V190 H205 V214", ACC["red"][0], 2.4)
     s.text(450, 184, T("aucune réponse en 30 s, ou mauvaise version", "no answer in 30 s, or wrong version"), 11.5, 700, ACC["red"][0], anchor="middle", maxw=380)
     s.rect(400, 216, 380, 100, ACC["green"][1], ACC["green"][0])
@@ -522,7 +522,7 @@ def tests():
         y += 72
     s.rect(24, 290, 420, 170, "#fff", LINE)
     s.text(40, 316, T("Les modes de run_all.py", "run_all.py modes"), 14, 800, INK)
-    for i, (a, b) in enumerate([("-k texte", T("fichiers dont le chemin contient texte", "files whose path contains text")),
+    for i, (a, b) in enumerate([(T("-k texte", "-k text"), T("fichiers dont le chemin contient texte", "files whose path contains text")),
                                 ("-j 4", T("quatre fichiers à la fois", "four files at a time")),
                                 ("--timeout 600", T("limite par fichier", "limit per file")),
                                 ("--strict-skips", T("un test sauté compte comme un échec", "a skipped test counts as a failure")),

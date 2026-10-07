@@ -410,8 +410,8 @@ On the demo dataset (768 × 576 px), the native version is as small as the previ
 ::: legend
 | n | what it is |
 |---|---|
-| 6 | Layout: Auto, columns, rows, grid (adjustable gutters) |
-| 7 | Quality: auto, 512, 1024, native |
+| 6 | [Auto layout]{.ui}: Auto, columns, rows, grid (adjustable gutters) |
+| 7 | [Auto quality]{.ui}: auto, 512, 1024, native |
 | 8 | SYNC: [Z-Stack]{.ui}, [Time]{.ui}, [Camera / view]{.ui}, [Channels]{.ui} |
 | 9 | The name of the panel's dataset |
 | 10 | The toggle buttons **described by the page** of this panel |

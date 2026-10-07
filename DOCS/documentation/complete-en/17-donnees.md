@@ -356,7 +356,7 @@ A dataset **never declares a structure it does not have**. The pipeline writes t
 
 ### A v2 brick and a v3 brick
 
-![What migration m004 changes, point by point.](img-en/ch17/v2-v3.svg){width=100%}
+![What migration m004 changes, point by point.](img-en/ch17/v2-v3.svg){width=78%}
 
 ### When does a level also reduce Z?
 
@@ -705,7 +705,7 @@ The rest is detailed in sections 17.16 (blocks and journal) and 17.18 (verify, p
 
 Only what the **pipeline produces** is accepted. Everything else is refused **before the first byte**, by two successive barriers.
 
-![Two barriers: the shape of the path, then an explicit rule per dataset type.](img-en/ch17/liste-blanche.svg){width=100%}
+![Two barriers: the shape of the path, then an explicit rule per dataset type.](img-en/ch17/liste-blanche.svg){width=78%}
 
 ::: why
 **Why a closed list rather than a list of prohibitions?** A blocklist always forgets something (a rare extension, a Windows device name). A list of what is **allowed** cannot forget: whatever was not anticipated is refused. The landing area is also **never served** (chapter 19), and publication happens only after validation.
@@ -756,7 +756,7 @@ As soon as you **save** an edit on a dataset being uploaded, the server writes y
 
 Each file is cut into **8 MiB blocks** by default. The server may impose a smaller size (never larger): a PHP host limits the size of a request.
 
-![A block, from reading to writing: hashing, check, writing at its exact offset, note in the journal.](img-en/ch17/bloc.svg){width=100%}
+![A block, from reading to writing: hashing, check, writing at its exact offset, note in the journal.](img-en/ch17/bloc.svg){width=84%}
 
 | Block limit | Value |
 |---|---|
@@ -788,7 +788,7 @@ When the upload fails, two families of failures are handled differently: a **ser
 
 ### The journal: three files, one shared format
 
-![The import journal: the state of each file, the table of planned files, the log of received blocks.](img-en/ch17/journal-import.svg){width=100%}
+![The import journal: the state of each file, the table of planned files, the log of received blocks.](img-en/ch17/journal-import.svg){width=88%}
 
 They live in `uploads/state/` and are named `<type>__<folder>`. Python and PHP both read **and** write them: **an import started under one server resumes under the other**.
 

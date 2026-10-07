@@ -6,7 +6,7 @@ from pathlib import Path
 from svglib import *
 
 HERE = Path(__file__).resolve().parent
-ROOT = HERE.parents[3]
+ROOT = Path(__file__).resolve().parents[4]
 DATA = HERE / "data"
 sys.path.insert(0, str(ROOT))
 
@@ -22,10 +22,10 @@ def import_flux():
                tr("Six étapes ; seules les trois du milieu transportent des octets.", "Six steps; only the three in the middle move bytes."))]
     steps = [
         ("blue", "1", tr("Déposer", "Drop"), [tr("glissez le dossier", "drag the folder"), tr("le navigateur le lit", "the browser reads it"), tr("(8 fichiers à la fois)", "(8 files at a time)")]),
-        ("blue", "2", tr("Planifier", "Plan"), [tr("1 requête par jeu :", "1 request per dataset:"), tr("la liste des fichiers", "the list of files"), tr("+ leurs tailles", "+ their sizes")]),
+        ("blue", "2", tr("Planifier", "Plan"), [tr("1 requête par jeu :", "1 request/dataset:"), tr("la liste des fichiers", "the list of files"), tr("+ leurs tailles", "+ their sizes")]),
         ("violet", "3", tr("Envoyer", "Send"), [tr("blocs de 8 Mio", "8 MiB chunks"), tr("SHA-256 par bloc", "SHA-256 per chunk"), tr("4 en parallèle", "4 in parallel")]),
         ("violet", "4", tr("Refermer", "Close"), [tr("un fichier fini :", "a finished file:"), tr("taille + contenu +", "size + content +"), tr("empreinte globale", "overall fingerprint")]),
-        ("amber", "5", tr("Vérifier", "Validate"), [tr("le jeu est-il", "is the dataset"), tr("entier et cohérent ?", "whole and consistent?"), tr("(codes d'erreur)", "(error codes)")]),
+        ("amber", "5", tr("Vérifier", "Validate"), [tr("le jeu est-il", "is the dataset"), tr("entier et cohérent ?", "whole, consistent?"), tr("(codes d'erreur)", "(error codes)")]),
         ("green", "6", tr("Publier", "Publish"), [tr("un renommage", "one rename"), tr("vers DATA_WEB/", "into DATA_WEB/"), tr("masqué par défaut", "hidden by default")]),
     ]
     w = 118
@@ -212,7 +212,7 @@ def bloc():
     steps = [
         ("blue", "1", tr("Lire et hacher", "Read and hash"), [tr("le Worker lit la tranche", "the Worker reads the slice"), "SHA-256 = " + hs[-1][:10] + "…", tr("(crypto.subtle : HTTPS exigé)", "(crypto.subtle: HTTPS required)")]),
         ("violet", "2", tr("Envoyer", "Send"), [tr("POST ?action=chunk", "POST ?action=chunk"), "&path=…&index=" + str(n - 1), "&sha256=…&fid=4"]),
-        ("amber", "3", tr("Le serveur contrôle", "The server checks"), [tr("chemin permis ? numéro de fichier", "path allowed? file number"), tr("↔ chemin ? longueur attendue ?", "↔ path? expected length?"), tr("SHA-256 recalculé = annoncé ?", "SHA-256 recomputed = announced?")]),
+        ("amber", "3", tr("Le serveur contrôle", "The server checks"), [tr("chemin permis ? numéro de fichier", "path allowed? file number"), tr("↔ chemin ? longueur attendue ?", "↔ path? expected length?"), tr("SHA-256 recalculé = annoncé ?", "SHA-256 = announced?")]),
         ("green", "4", tr("Écrire, noter", "Write, note"), [tr("écrit à l'offset index × taille", "writes at offset index × size"), tr("fsync puis 16 octets ajoutés", "fsync then 16 bytes appended"), tr("au journal des blocs", "to the chunk log")]),
     ]
     w = 178
@@ -231,7 +231,7 @@ def bloc():
     b.append(R(24, 312, 752, 92, "#fff", LINE, 12))
     b.append(T(40, 334, tr("Ce que répond le serveur", "What the server answers"), 13, 800))
     errs = [("200", tr("reçu, écrit, noté", "received, written, noted"), "green"), ("400", "checksum_required · bad_chunk_length", "red"),
-            ("409", "file_not_planned (" + tr("replanifier", "re-plan") + ")", "amber"), ("413", "chunk_too_large (> 16 Mio)", "red"),
+            ("409", "file_not_planned (" + tr("replanifier", "re-plan") + ")", "amber"), ("413", "chunk_too_large (> 16 MiB)", "red"),
             ("422", "checksum_mismatch (" + tr("le client renvoie", "the client resends") + ")", "red"), ("507", "insufficient_disk (" + tr("fin du transfert", "end of transfer") + ")", "red")]
     for i, (c, d, col) in enumerate(errs):
         x = 40 + (i % 2) * 370
@@ -309,15 +309,15 @@ def etats_import():
     b = [title(tr("Les états d'un jeu en cours d'import", "The states of a dataset being imported"),
                tr("Ce qu'on peut faire dans chaque état, et ce qui arrive à un import abandonné.", "What you can do in each state, and what happens to an abandoned import."))]
     nodes = [
-        ("amber", 24, tr("Envoi — non éditable", "Sending — not editable"), "uploading", [tr("fichiers du palier ≤ 1", "tier ≤ 1 files"), tr("pas encore tous là", "not all there yet")], [tr("ouvrir : non", "open: no"), tr("éditer : non", "edit: no")]),
-        ("blue", 214, tr("Envoi — éditable", "Sending — editable"), "editable", [tr("metadata + manifeste", "metadata + manifest"), tr("+ niveau grossier", "+ coarse level")], [tr("ouvrir : oui (basse résolution)", "open: yes (low resolution)"), tr("éditer : oui", "edit: yes")]),
-        ("green", 404, tr("Envoyé — à publier", "Sent — to publish"), "staged", [tr("tous les fichiers", "every file"), tr("terminés et vérifiés", "finished and checked")], [tr("vérifier, publier", "validate, publish"), tr("jamais purgé", "never purged")]),
+        ("amber", 24, tr("Envoi — non éditable", "Uploading — not editable"), "uploading", [tr("fichiers du palier ≤ 1", "tier ≤ 1 files"), tr("pas encore tous là", "not all there yet")], [tr("ouvrir : non", "open: no"), tr("éditer : non", "edit: no")]),
+        ("blue", 214, tr("Envoi — éditable", "Uploading — editable"), "editable", [tr("metadata + manifeste", "metadata + manifest"), tr("+ niveau grossier", "+ coarse level")], [tr("ouvrir : oui (basse résolution)", "open: yes (low resolution)"), tr("éditer : oui", "edit: yes")]),
+        ("green", 404, tr("Envoyé — à publier", "Uploaded — ready to publish"), "staged", [tr("tous les fichiers", "every file"), tr("terminés et vérifiés", "finished and checked")], [tr("vérifier, publier", "validate, publish"), tr("jamais purgé", "never purged")]),
         ("grey", 594, tr("Publié", "Published"), "published", [tr("déplacé dans DATA_WEB/", "moved to DATA_WEB/"), tr("masqué par défaut", "hidden by default")], [tr("journal supprimé", "journal deleted"), tr("(visibilité à activer)", "(visibility to enable)")]),
     ]
     for col, x, hd, code, l1, l2 in nodes:
         s, soft = P[col]
         b.append(R(x, 80, 182, 156, soft, s, 12, 1.8))
-        b.append(T(x + 91, 104, hd, 12.5, 800, s, "middle", maxw=170))
+        b.append(T(x + 91, 104, hd, 11.4, 800, s, "middle", maxw=170))
         b.append(T(x + 91, 122, code, 11.5, 700, s, "middle", mono=True))
         for j, ln in enumerate(l1):
             b.append(T(x + 12, 148 + j * 17, ln, 11.2, 400, INK, maxw=160))
@@ -331,7 +331,7 @@ def etats_import():
     for i, s in enumerate([
         tr("• aucun bloc accepté depuis 7 jours (604 800 s) : l'état devient « stalled » (Interrompu) ;", "• no chunk accepted for 7 days (604,800 s): the state becomes “stalled” (Interrupted);"),
         tr("• le nettoyage (à chaque affichage de la liste, ou action gc) efface alors ses fichiers et son journal ;", "• the cleanup (on every list, or the gc action) then deletes its files and journal;"),
-        tr("• un jeu « Envoyé — à publier » n'est JAMAIS purgé : c'est du travail fini qui n'attend que votre clic ;", "• a “Sent — to publish” dataset is NEVER purged: it is finished work waiting for your click;"),
+        tr("• un jeu « Envoyé — à publier » n'est JAMAIS purgé : c'est du travail fini qui n'attend que votre clic ;", "• a “Uploaded — ready to publish” dataset is NEVER purged: it is finished work waiting for your click;"),
         tr("• reglisser le même dossier relance le compte à rebours : seuls les blocs manquants repartent.", "• dropping the same folder again restarts the clock: only the missing chunks are resent.")]):
         b.append(T(44, 312 + i * 19, s, 11.6, 400, INK, maxw=715))
     b.append(R(24, 404, 752, 52, P["amber"][1], P["amber"][0], 10, 1.4))
@@ -348,7 +348,7 @@ def publication():
                tr("Tout ou rien : le visiteur voit l'ancien jeu ou le nouveau, jamais un mélange.", "All or nothing: visitors see the old dataset or the new one, never a mix."))]
     steps = [
         ("blue", "1", tr("Valider", "Validate"), [tr("validate_dataset", "validate_dataset"), tr("sinon 409", "else 409"), "validation_failed"]),
-        ("violet", "2", tr("Clés curées", "Curated keys"), [tr("si le dossier existe déjà", "if the folder already exists"), tr("et overwrite = true", "and overwrite = true"), tr("(clés absentes du nouveau)", "(keys missing from the new one)")]),
+        ("violet", "2", tr("Clés curées", "Curated keys"), [tr("si le dossier existe déjà", "if the folder already exists"), tr("et overwrite = true", "and overwrite = true"), tr("(clés absentes du nouveau)", "(keys the new one lacks)")]),
         ("amber", "3", tr("Échanger les dossiers", "Swap the folders"), [tr("ancien → .replaced-<jeu>-<date>", "old → .replaced-<set>-<date>"), tr("nouveau → DATA_WEB/<type>/", "new → DATA_WEB/<type>/"), tr("(deux renommages)", "(two renames)")]),
         ("green", "4", tr("Conclure", "Conclude"), [tr("galerie de l'ancien reprise", "old gallery carried over"), tr(".replaced supprimé", ".replaced deleted"), tr("journal supprimé", "journal deleted")]),
     ]

@@ -74,7 +74,7 @@ def arbre_3d():
         (2, "manifest.json  l00000/1.bin", "", ["pipe", "plat"], "lumen-mips-v1", "last"),
         (1, "download/", f(size_of(d / "download")), ["pipe"], tr("toujours servi en pièce jointe", "always served as an attachment"), "dir"),
         (2, "….ims  ….tif  _web.zip  README", "", ["pipe"], tr("original (lien physique), composite, archive", "original (hard link), composite, archive"), ""),
-        (2, "…_C1_DAPI_MIP.png  (un par canal)", "", ["pipe"], tr("aperçus de projection", "projection previews"), "last"),
+        (2, tr("…_C1_DAPI_MIP.png  (un par canal)", "…_C1_DAPI_MIP.png  (one per channel)"), "", ["pipe"], tr("aperçus de projection", "projection previews"), "last"),
         (1, "gallery/", tr("(absent ici)", "(absent here)"), ["oper"], tr("images jointes : ≤ 40 images de ≤ 8 Mio", "attached images: ≤ 40 images of ≤ 8 MiB"), "dir"),
         (2, "a.png  thumbs/a.png.webp …", "", ["oper"], tr("extension d'après les octets magiques", "extension from the magic bytes"), "last"),
     ]
@@ -167,10 +167,10 @@ def qui_ecrit():
     s1, f1 = P["blue"]
     b.append(R(24, 346, 752, 118, "#fff", LINE, 12))
     b.append(T(40, 372, tr("Quand le même jeu de données est refait ou remplacé", "When the same dataset is redone or replaced"), 14, 800))
-    b.append(T(40, 398, tr("Le pipeline refait un jeu :", "The pipeline redoes a dataset:"), 12.5, 700, P["blue"][0]))
+    b.append(T(40, 398, tr("Le pipeline refait un jeu :", "Pipeline redoes it:"), 12.5, 700, P["blue"][0]))
     b.append(T(215, 398, tr("mesures du nouveau passage ; les 20 clés « curées » de l'ancien fichier gagnent.",
                             "measurements from the new run; the 20 “curated” keys of the old file win."), 12.5, maxw=550))
-    b.append(T(40, 424, tr("L'import remplace un jeu :", "The import replaces a dataset:"), 12.5, 700, P["green"][0]))
+    b.append(T(40, 424, tr("L'import remplace un jeu :", "Import replaces it:"), 12.5, 700, P["green"][0]))
     b.append(T(215, 424, tr("le nouveau fichier gagne ; une clé curée n'est reprise que s'il en manque.",
                             "the new file wins; a curated key is carried only if it is missing."), 12.5, maxw=550))
     b.append(T(40, 450, tr("Dans les deux cas :", "In both cases:"), 12.5, 700, P["red"][0]))
@@ -250,7 +250,7 @@ def empreintes():
 
 # ── Le catalogue calculé à chaque requête ─────────────────────────────────────
 def catalogue():
-    b = [title(tr("Le catalogue n'est pas un fichier : il est calculé", "The catalog is not a file: it is computed"),
+    b = [title(tr("Le catalogue n'est pas un fichier : il est calculé", "The catalogue is not a file: it is computed"),
                tr("GET /DATA_WEB/catalog.json → une réponse construite depuis les metadata.json.",
                   "GET /DATA_WEB/catalog.json → an answer built from the metadata.json files."))]
     b.append(card(24, 74, 210, 190, "blue", "DATA_WEB/", ["3d/  <jeu>/metadata.json" if LANG == "fr" else "3d/  <set>/metadata.json", "2d/  <jeu>/metadata.json" if LANG == "fr" else "2d/  <set>/metadata.json",
@@ -280,7 +280,7 @@ def catalogue():
         b.append(T(40, 332 + i * 18, ln, 11.8, 400, INK2, maxw=725))
     b.append(R(24, 396, 752, 44, P["amber"][1], P["amber"][0], 10, 1.4))
     b.append(T(400, 423, tr("Conséquence : un jeu copié par SFTP apparaît seul ; un jeu « masqué » reste invisible du public mais visible de l'admin.",
-                            "Consequence: a dataset copied over SFTP appears by itself; a “hidden” dataset stays invisible to the public but visible to the admin."), 12, 600, INK, "middle", maxw=730))
+                            "Result: a dataset copied over SFTP appears by itself; a “hidden” one stays invisible to the public."), 12, 600, INK, "middle", maxw=730))
     save("catalogue.svg", 454, b)
 
 
@@ -331,7 +331,7 @@ def carte_chapitre():
     parts = [
         ("blue", "A", tr("Les fichiers", "The files"), tr("De quoi est fait un jeu de données ?", "What is a dataset made of?"),
          [tr("17.1  les trois arbres annotés", "17.1  the three annotated trees"), tr("17.2  qui écrit quoi", "17.2  who writes what"), tr("17.3  metadata.json, champ par champ", "17.3  metadata.json, field by field"),
-          tr("17.4  manifestes, index, tracks.json", "17.4  manifests, index, tracks.json"), tr("17.5  catalogue et vocabulaire", "17.5  catalog and vocabulary"), tr("17.6  download/ et gallery/", "17.6  download/ and gallery/")]),
+          tr("17.4  manifestes, index, tracks.json", "17.4  manifests, index, tracks.json"), tr("17.5  catalogue et vocabulaire", "17.5  catalogue and vocabulary"), tr("17.6  download/ et gallery/", "17.6  download/ and gallery/")]),
         ("amber", "B", tr("Les formats et les migrations", "Formats and migrations"), tr("Comment un jeu change-t-il de format ?", "How does a dataset change format?"),
          [tr("17.7  les formats 1 à 4", "17.7  formats 1 to 4"), tr("17.8  trois migrations", "17.8  three migrations"), tr("17.9  unités et journal", "17.9  units and journal"),
           tr("17.10  deux exécutants", "17.10  two executors"), tr("17.11  finalize", "17.11  finalize"), tr("17.12  régulateur, hébergeurs lents", "17.12  governor, slow hosts")]),
@@ -370,7 +370,7 @@ def pack_planes():
     b.append(R(24, 70, 752, 84, "#fff", P["blue"][0], 12, 1.6))
     b.append(T(40, 92, tr("les 16 premiers octets", "the first 16 bytes"), 12.5, 800, P["blue"][0]))
     b.append(T(40, 114, hx, 13, 700, INK, mono=True))
-    labs = [("4c 50 4c 4e", "« LPLN »", 0, 4), ("01 00", tr("version 1", "version 1"), 4, 2), ("03 00", "C = 3", 6, 2), ("02 00", "TX = 2", 8, 2), ("02 00", "TY = 2", 10, 2), ("1e 00 00 00", "z = 30", 12, 4)]
+    labs = [("4c 50 4c 4e", tr("« LPLN »", "“LPLN”"), 0, 4), ("01 00", tr("version 1", "version 1"), 4, 2), ("03 00", "C = 3", 6, 2), ("02 00", "TX = 2", 8, 2), ("02 00", "TY = 2", 10, 2), ("1e 00 00 00", "z = 30", 12, 4)]
     for hxs, lab, off, ln in labs:
         x = 40 + off * 3 * 7.8 + (ln * 3 * 7.8) / 2 - 3
         b.append(T(x, 138, lab, 10.8, 700, P["blue"][0], "middle"))

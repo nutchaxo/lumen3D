@@ -63,7 +63,7 @@ def spheres():
                 if zoom == 4:
                     side = 26
                 s.rect(cx - side / 2, cy - side / 2, side, side, "#ffc9c9", st, 0, 1.6)
-                s.text(cx, cy + 50, tr("carré, ≈ même taille", "square, about the same size"), 11, 600, st, "middle")
+                s.text(cx, cy + 50, tr("carré, ≈ même taille", "square, ≈ same size"), 11, 600, st, "middle")
             else:
                 r = 8 * zoom
                 s.circle(cx, cy, r, "#b2f2bb", st, 1.6)

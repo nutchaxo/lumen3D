@@ -333,7 +333,7 @@ try {
     $src = (string)file_get_contents(__DIR__ . '/../api/migrations.php');
     check('endpoint: session released after auth, before dispatch',
         strpos($src, 'admin_session_start();') < strpos($src, 'session_write_close();') && strpos($src, 'session_write_close();') < strpos($src, 'switch ($action)'));
-    check('endpoint: every write action is POST + CSRF', LUMEN_MIG_WRITE_ACTIONS === ['plan', 'unit_put', 'unit_run', 'finalize', 'cancel', 'bench', 'unit_inputs', 'speedtest', 'speedtest_put']
+    check('endpoint: every write action is POST + CSRF', LUMEN_MIG_WRITE_ACTIONS === ['plan', 'unit_put', 'unit_run', 'finalize', 'cancel', 'bench', 'unit_inputs', 'speedtest', 'speedtest_put', 'drop_previous']
         && strpos($src, "in_array(\$action, LUMEN_MIG_WRITE_ACTIONS, true)") !== false && strpos($src, '$csrfOk') !== false);
 } catch (Throwable $e) {
     check('no exception', false, get_class($e) . ': ' . $e->getMessage() . ' @' . $e->getFile() . ':' . $e->getLine());

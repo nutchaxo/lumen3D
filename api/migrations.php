@@ -7,7 +7,9 @@
  *   POST ?action=unit_put&dataset=&migration=&unit=&dry=0|1     RAW body = unit blob
  *   POST ?action=unit_run   { dataset, migration, maxSeconds, dry }
  *   POST ?action=finalize   { dataset, migration, maxSeconds? }   (complete:false ⇒ call again)
+ *   POST ?action=finalize   … keepPrevious: true (m004) keeps the v2 tree as bricks.previous/
  *   POST ?action=cancel     { dataset, migration }
+ *   POST ?action=drop_previous { dataset }   deletes the kept bricks.previous/
  *   POST ?action=bench      { dataset, units: N, migration? }
  *   POST ?action=unit_inputs { dataset, migration, unit }        what a browser unit reads
  *   POST ?action=speedtest  { maxSeconds }   server side of the executors' speed test
@@ -89,7 +91,7 @@ if (in_array($action, LUMEN_MIG_BINARY_ACTIONS, true)) {
 
 switch ($action) {
 case 'status': case 'plan': case 'unit_put': case 'unit_run': case 'finalize': case 'cancel': case 'bench': case 'unit_inputs':
-case 'speedtest': case 'speedtest_put':
+case 'speedtest': case 'speedtest_put': case 'drop_previous':
     [$status, $payload] = lumen_mig_handle($action, $params, $body);
     admin_json_out($payload, $status);
 }

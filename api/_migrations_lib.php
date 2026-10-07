@@ -2748,6 +2748,43 @@ function lumen_mig_bricks_dir_schema(string $d) {
     return is_array($doc) ? ($doc['schema'] ?? null) : null;
 }
 
+/**
+ * The v2 tree an m004 run was asked to keep (finalize `keepPrevious`), for comparing the two
+ * formats in the viewer (`viewer.html?bricks=previous`). Never read by a migration.
+ */
+const LUMEN_MIG_PREVIOUS_BRICKS = 'bricks.previous';
+
+/** After the bump: bricks.v2-old/ deleted, or kept as bricks.previous/ (replacing an older one). */
+function lumen_mig_retire_old_bricks(string $ds, bool $keep): void {
+    $old = "$ds/bricks.v2-old";
+    if ($keep && is_file("$old/manifest.json")) {
+        $prev = "$ds/" . LUMEN_MIG_PREVIOUS_BRICKS;
+        lumen_mig_rrmdir($prev);
+        if (!@rename($old, $prev)) throw new LumenMigError('swap_failed', 500);
+    } else {
+        lumen_mig_rrmdir($old);
+    }
+}
+
+/** ['schema', 'bytes'] of the kept previous tree, or null. */
+function lumen_mig_previous_info(string $ds): ?array {
+    $prev = "$ds/" . LUMEN_MIG_PREVIOUS_BRICKS;
+    if (!is_file("$prev/manifest.json")) return null;
+    $total = 0;
+    $it = new RecursiveIteratorIterator(new RecursiveDirectoryIterator($prev, FilesystemIterator::SKIP_DOTS));
+    foreach ($it as $f) if ($f->isFile()) $total += (int)$f->getSize();
+    return ['schema' => lumen_mig_bricks_dir_schema($prev) ?? 'iribhm-bricks-v2', 'bytes' => $total];
+}
+
+/** Deletes the kept previous brick tree of a dataset (idempotent). */
+function lumen_mig_drop_previous($datasetId): array {
+    [, , $ds] = lumen_mig_resolve($datasetId);
+    $prev = "$ds/" . LUMEN_MIG_PREVIOUS_BRICKS;
+    $existed = file_exists($prev);
+    lumen_mig_rrmdir($prev);
+    return ['ok' => true, 'dropped' => $existed];
+}
+
 /** bricks/ → bricks.v2-old/, .bricks-incoming/ → bricks/ (SPEC §13.6); re-entrant. */
 function lumen_mig_swap_bricks(string $ds): void {
     $incoming = "$ds/.bricks-incoming"; $live = "$ds/bricks"; $old = "$ds/bricks.v2-old";
@@ -2890,14 +2927,15 @@ function lumen_mig_assemble_v3(array $plan, array $us, string $store, string $in
 
 /**
  * Assemble the v3 tree, validate, swap bricks/, re-stamp planes/ and mips/, bump to 4,
- * delete bricks.v2-old/ (SPEC §13.6). Re-entrant at every step.
+ * delete bricks.v2-old/ — or keep it as bricks.previous/ with $keepPrevious (SPEC §13.6).
+ * Re-entrant at every step.
  */
-function lumen_mig_finalize_m004(array $m, $datasetId, float $deadline): array {
+function lumen_mig_finalize_m004(array $m, $datasetId, float $deadline, bool $keepPrevious = false): array {
     [$type, $folder, $ds] = lumen_mig_resolve($datasetId);
     $path = lumen_mig_journal_path($type, $folder, LUMEN_M004);
     $base = lumen_mig_job_base($type, $folder, LUMEN_M004);
     $incoming = "$ds/.bricks-incoming"; $live = "$ds/bricks"; $old = "$ds/bricks.v2-old";
-    return lumen_mig_with_job_lock($base, function () use ($m, $datasetId, $type, $folder, $ds, $path, $deadline, $incoming, $live, $old) {
+    return lumen_mig_with_job_lock($base, function () use ($m, $datasetId, $type, $folder, $ds, $path, $deadline, $incoming, $live, $old, $keepPrevious) {
         $j = lumen_mig_load_journal($path);
         if ($j === null) {
             $plan = lumen_mig_plan_for($datasetId);
@@ -2905,7 +2943,7 @@ function lumen_mig_finalize_m004(array $m, $datasetId, float $deadline): array {
                 $oldSha = is_file("$old/manifest.json") ? hash_file('sha256', "$old/manifest.json") : null;
                 lumen_mig_restamp_derived($plan, $oldSha);
                 $fv = lumen_mig_bump_metadata($ds, $m['to']);
-                lumen_mig_rrmdir($old);
+                lumen_mig_retire_old_bricks($ds, $keepPrevious);
                 return ['ok' => true, 'complete' => true, 'formatVersion' => $fv];
             }
             throw new LumenMigError('no_job', 404);
@@ -2978,7 +3016,7 @@ function lumen_mig_finalize_m004(array $m, $datasetId, float $deadline): array {
             if ($oldSha === null && is_file("$old/manifest.json")) $oldSha = hash_file('sha256', "$old/manifest.json");
             lumen_mig_restamp_derived($plan, $oldSha);
             $fv = lumen_mig_bump_metadata($ds, $m['to']);
-            lumen_mig_rrmdir($old);
+            lumen_mig_retire_old_bricks($ds, $keepPrevious);
             lumen_mig_rrmdir(lumen_mig_store_dir($type, $folder, LUMEN_M004));
             @unlink($path);
             return ['ok' => true, 'complete' => true, 'formatVersion' => $fv];
@@ -2992,13 +3030,13 @@ function lumen_mig_finalize_m004(array $m, $datasetId, float $deadline): array {
  * always time-bounded here (a shared host kills a request at max_execution_time):
  * `complete: false` + `assembly` means "call again".
  */
-function lumen_mig_finalize($datasetId, $mid, $maxSeconds = null): array {
+function lumen_mig_finalize($datasetId, $mid, $maxSeconds = null, bool $keepPrevious = false): array {
     $deadline = microtime(true) + lumen_mig_budget($maxSeconds ?? LUMEN_MIG_MAX_RUN_S);
     $m = lumen_mig_migration($mid);
     $met = (int)ini_get('max_execution_time');
     if ($met > 0) @set_time_limit($met);
     if ($m['id'] === LUMEN_M003) return lumen_mig_finalize_m003($m, $datasetId, $deadline);
-    if ($m['id'] === LUMEN_M004) return lumen_mig_finalize_m004($m, $datasetId, $deadline);
+    if ($m['id'] === LUMEN_M004) return lumen_mig_finalize_m004($m, $datasetId, $deadline, $keepPrevious);
     return lumen_mig_finalize_m002($m, $datasetId, $deadline);
 }
 
@@ -3056,6 +3094,8 @@ function lumen_mig_dataset_status(string $type, string $folder, string $dir): ar
             'formatVersion' => $fv, 'pending' => [], 'repair' => false, 'trees' => 0, 'job' => null, 'jobs' => [],
             'estimate' => ['units' => 0, 'bytes' => 0]];
     if (!in_array($type, LUMEN_VOLUME_DATASET_TYPES, true)) return $row;
+    $prev = lumen_mig_previous_info($dir);
+    if ($prev !== null) $row['previous'] = $prev;
     try {
         $plan = lumen_mig_plan_for($row['id']);
     } catch (LumenMigError $e) {
@@ -3125,7 +3165,7 @@ function lumen_mig_status(): array {
 
 // ── Dispatch (api/migrations.php) ────────────────────────────────────────────
 
-const LUMEN_MIG_WRITE_ACTIONS = ['plan', 'unit_put', 'unit_run', 'finalize', 'cancel', 'bench', 'unit_inputs', 'speedtest', 'speedtest_put'];
+const LUMEN_MIG_WRITE_ACTIONS = ['plan', 'unit_put', 'unit_run', 'finalize', 'cancel', 'bench', 'unit_inputs', 'speedtest', 'speedtest_put', 'drop_previous'];
 /** Binary answers (application/octet-stream) — routed to lumen_mig_handle_binary. */
 const LUMEN_MIG_BINARY_ACTIONS = ['store_get', 'store_get_many', 'speedtest_sample'];
 /** Bricks per store_get_many answer (a level-k+1 unit reads up to 10³ stored bricks). */
@@ -3162,7 +3202,10 @@ function lumen_mig_handle(string $action, array $params, array $body, ?string $r
                 return [200, lumen_mig_unit_run($body['dataset'] ?? null, $body['migration'] ?? null,
                                                 $body['maxSeconds'] ?? LUMEN_MIG_MAX_RUN_S, !empty($body['dry']))];
             case 'finalize':
-                return [200, lumen_mig_finalize($body['dataset'] ?? null, $body['migration'] ?? null, $body['maxSeconds'] ?? null)];
+                return [200, lumen_mig_finalize($body['dataset'] ?? null, $body['migration'] ?? null, $body['maxSeconds'] ?? null,
+                                                ($body['keepPrevious'] ?? null) === true)];
+            case 'drop_previous':
+                return [200, lumen_mig_drop_previous($body['dataset'] ?? null)];
             case 'cancel':
                 return [200, lumen_mig_cancel($body['dataset'] ?? null, $body['migration'] ?? null)];
             case 'bench':

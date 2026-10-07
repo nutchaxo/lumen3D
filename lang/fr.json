@@ -375,7 +375,9 @@
     "gpuCompressionAuto": "Timelapses",
     "gpuCompressionActive": "Affiché depuis des blocs compressés par le GPU : moitié moins de mémoire, donc plus de frames gardées ; les valeurs des voxels sont approchées (environ 1 à 2 niveaux sur 255). Le passage natif du Studio lit les voxels exacts.",
     "gpuCompressionInactive": "Affiché depuis les voxels exacts.",
-    "gpuCompressionUnsupported": "Indisponible sur ce GPU : affiché depuis les voxels exacts."
+    "gpuCompressionUnsupported": "Indisponible sur ce GPU : affiché depuis les voxels exacts.",
+    "previousBricks": "version précédente (avant la mise à jour des données)",
+    "previousBricksMissing": "Ce dataset n'a conservé aucune version précédente : affichage de la version actuelle."
   },
   "compare": {
     "title": "Mode comparaison",
@@ -2141,6 +2143,16 @@
     "loadFailed": "Impossible de lire l'état des mises à jour ({status}).",
     "network": "réseau",
     "recommended": "Le plus rapide au test de vitesse",
-    "paced": "L'hébergeur répond lentement : les requêtes sont ralenties pour qu'il ne bloque pas cette adresse."
+    "paced": "L'hébergeur répond lentement : les requêtes sont ralenties pour qu'il ne bloque pas cette adresse.",
+    "keepPrev": "Conserver la version précédente",
+    "keepPrevHint": "Une mise à jour 3 → 4 garde les bricks qu'elle remplace à côté des nouvelles : le viewer peut afficher l'une ou l'autre (outil Chunk debug) pour comparer avant et après. Cela prend une seconde fois la place des bricks de chaque dataset ; supprimez-la ci-dessous une fois la comparaison faite.",
+    "prevKept": "Versions précédentes conservées ({n})",
+    "prevSize": "bricks v2 · {size}",
+    "prevOpen": "Ouvrir la version précédente",
+    "prevDrop": "Supprimer",
+    "confirmDropPrev": "Supprimer la version précédente de {name} ? Le dataset lui-même reste tel quel.",
+    "prevDropped": "Version précédente de {name} supprimée.",
+    "prevDropFailed": "Impossible de supprimer la version précédente.",
+    "unitGB": "Go"
   }
 }

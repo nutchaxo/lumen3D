@@ -14,5 +14,13 @@
   "tipDepth": "overlap",
   "copied": "Chunk metadata copied to clipboard",
   "hintCopy": "Click to copy",
-  "hintCycle": "Ctrl + wheel: depth"
+  "hintCycle": "Ctrl + wheel: depth",
+  "versionTitle": "Bricks on screen",
+  "versionFormat": "v{v}, {n}³ per brick",
+  "versionLabel": "Version",
+  "versionCurrent": "Current (after the data update)",
+  "versionPrevious": "Previous (before the data update)",
+  "versionReload": "Switching reloads the page on the same view.",
+  "versionNone": "No previous version was kept for this dataset. To compare, tick “Keep the previous version” in the admin Data updates tab before its 3 → 4 update.",
+  "versionUnsupported": "This platform version cannot switch brick versions."
 }

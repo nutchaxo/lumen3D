@@ -3479,6 +3479,47 @@ def _bricks_dir_schema(d: Path):
     return doc.get("schema") if isinstance(doc, dict) else None
 
 
+# The v2 tree an m004 run was asked to keep (finalize `keepPrevious`), for comparing the
+# two formats in the viewer (`viewer.html?bricks=previous`). Never read by a migration.
+PREVIOUS_BRICKS = "bricks.previous"
+
+
+def _retire_old_bricks(ds_dir: Path, keep: bool) -> None:
+    """After the bump: bricks.v2-old/ is deleted, or kept as bricks.previous/ (replacing an
+    older one). Re-entrant: nothing left aside means nothing to do."""
+    old = ds_dir / "bricks.v2-old"
+    if keep and (old / "manifest.json").is_file():
+        prev = ds_dir / PREVIOUS_BRICKS
+        _rmtree(prev)
+        _replace_retry(old, prev)
+    else:
+        _rmtree(old)
+
+
+def previous_bricks_info(ds_dir: Path):
+    """{schema, bytes} of the kept previous tree, or None."""
+    prev = ds_dir / PREVIOUS_BRICKS
+    if not (prev / "manifest.json").is_file():
+        return None
+    total = 0
+    for root, _dirs, files in os.walk(prev):
+        for name in files:
+            try:
+                total += os.path.getsize(os.path.join(root, name))
+            except OSError:
+                pass
+    return {"schema": _bricks_dir_schema(prev) or "iribhm-bricks-v2", "bytes": total}
+
+
+def drop_previous(dataset_id) -> dict:
+    """Deletes the kept previous brick tree of a dataset (idempotent)."""
+    _type_dir, _folder, ds_dir = _resolve_dataset(dataset_id)
+    prev = ds_dir / PREVIOUS_BRICKS
+    existed = prev.exists()
+    _rmtree(prev)
+    return {"ok": True, "dropped": existed}
+
+
 
 def _swap_bricks(ds_dir: Path) -> None:
     """bricks/ → bricks.v2-old/, .bricks-incoming/ → bricks/ (SPEC §13.6). Re-entrant:
@@ -3633,10 +3674,11 @@ def _assemble_v3(plan: Plan, us: UnitSet, store: Path, incoming: Path, j: dict, 
 
 
 
-def _finalize_m004(dataset_id, m, max_seconds=None) -> dict:
+def _finalize_m004(dataset_id, m, max_seconds=None, keep_previous=False) -> dict:
     """Assemble the v3 tree, validate, swap bricks/, re-stamp planes/ and mips/, bump to
-    4, delete bricks.v2-old/ (SPEC §13.6). Re-entrant at every step; `max_seconds`
-    pauses the assembly (call again until complete)."""
+    4, delete bricks.v2-old/ — or keep it as bricks.previous/ with `keep_previous` (SPEC
+    §13.6). Re-entrant at every step; `max_seconds` pauses the assembly (call again until
+    complete)."""
     type_dir, folder, ds_dir = _resolve_dataset(dataset_id)
     path = journal_path(type_dir, folder, M004)
     base = _job_base(type_dir, folder, M004)
@@ -3651,7 +3693,7 @@ def _finalize_m004(dataset_id, m, max_seconds=None) -> dict:
                 old_sha = _manifest_sha(old / "manifest.json") if (old / "manifest.json").is_file() else None
                 _restamp_derived(plan, old_sha)
                 fv = _bump_metadata(ds_dir, m["to"])
-                _rmtree(old)
+                _retire_old_bricks(ds_dir, keep_previous)
                 return {"ok": True, "complete": True, "formatVersion": fv}
             raise MigrationError("no_job", 404)
         state = j.get("state")
@@ -3712,7 +3754,7 @@ def _finalize_m004(dataset_id, m, max_seconds=None) -> dict:
                 old_sha = _manifest_sha(old / "manifest.json")
             _restamp_derived(plan, old_sha)
             fv = _bump_metadata(ds_dir, m["to"])
-            _rmtree(old)
+            _retire_old_bricks(ds_dir, keep_previous)
             _rmtree(tile_store_dir(type_dir, folder, M004))
             try:
                 path.unlink()
@@ -3723,15 +3765,16 @@ def _finalize_m004(dataset_id, m, max_seconds=None) -> dict:
 
 
 
-def finalize(dataset_id, mid, max_seconds=None) -> dict:
+def finalize(dataset_id, mid, max_seconds=None, keep_previous=False) -> dict:
     """Assemble, validate, swap, bump (SPEC §5.2, §12, §13.6). Re-entrant at every step:
     a crash or a deadline (`max_seconds`, optional) leaves a state the next call
-    completes; call again until `complete` is true."""
+    completes; call again until `complete` is true. `keep_previous` (m004 only) keeps the
+    v2 tree as bricks.previous/."""
     m = _migration(mid)
     if m["id"] == M003:
         return _finalize_m003(dataset_id, mid, max_seconds)
     if m["id"] == M004:
-        return _finalize_m004(dataset_id, m, max_seconds)
+        return _finalize_m004(dataset_id, m, max_seconds, bool(keep_previous))
     return _finalize_m002(dataset_id, mid, max_seconds)
 
 
@@ -3818,6 +3861,9 @@ def dataset_status(type_dir: str, folder: str, ds_dir: Path) -> dict:
            "repair": False, "trees": 0, "job": None, "jobs": [], "estimate": {"units": 0, "bytes": 0}}
     if type_dir not in VOLUME_TYPES:
         return row
+    prev = previous_bricks_info(ds_dir)
+    if prev:
+        row["previous"] = prev
     try:
         plan = _plan_for(row["id"])
     except MigrationError as exc:
@@ -3933,7 +3979,7 @@ def _estimate_for(plan: Plan, m: dict, j) -> dict:
 # ── HTTP dispatch (the dev server only routes here) ────────────────────────────
 
 WRITE_ACTIONS = ("plan", "unit_put", "unit_run", "finalize", "cancel", "bench", "unit_inputs",
-                 "speedtest", "speedtest_put")
+                 "speedtest", "speedtest_put", "drop_previous")
 # Binary answers (application/octet-stream) — routed to handle_binary(), not handle().
 BINARY_ACTIONS = ("store_get", "store_get_many", "speedtest_sample")
 # Binary answers to a POST (JSON body, CSRF like the write actions).
@@ -3959,7 +4005,10 @@ def handle(action: str, params: dict, body, raw: bytes | None = None) -> tuple[i
             return 200, unit_run(body.get("dataset"), body.get("migration"),
                                  body.get("maxSeconds", MAX_RUN_SECONDS), dry=bool(body.get("dry")))
         if action == "finalize":
-            return 200, finalize(body.get("dataset"), body.get("migration"), body.get("maxSeconds"))
+            return 200, finalize(body.get("dataset"), body.get("migration"), body.get("maxSeconds"),
+                                 keep_previous=body.get("keepPrevious") is True)
+        if action == "drop_previous":
+            return 200, drop_previous(body.get("dataset"))
         if action == "cancel":
             return 200, cancel(body.get("dataset"), body.get("migration"))
         if action == "bench":

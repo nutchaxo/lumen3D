@@ -375,7 +375,9 @@
     "gpuCompressionAuto": "Series temporales",
     "gpuCompressionActive": "Mostrado desde bloques comprimidos por la GPU: la mitad de memoria, así se mantienen más fotogramas; los valores de los vóxeles son aproximados (unos 1–2 niveles de 255). El pase nativo del Studio lee vóxeles exactos.",
     "gpuCompressionInactive": "Mostrado desde vóxeles exactos.",
-    "gpuCompressionUnsupported": "No disponible en esta GPU: mostrado desde vóxeles exactos."
+    "gpuCompressionUnsupported": "No disponible en esta GPU: mostrado desde vóxeles exactos.",
+    "previousBricks": "versión anterior (antes de la actualización de datos)",
+    "previousBricksMissing": "Este dataset no conservó ninguna versión anterior: se muestra la actual."
   },
   "compare": {
     "title": "Modo de comparación",
@@ -2141,6 +2143,16 @@
     "loadFailed": "No se pudo leer el estado de las actualizaciones ({status}).",
     "network": "red",
     "recommended": "El más rápido en la prueba de velocidad",
-    "paced": "El servidor responde con lentitud: las solicitudes se ralentizan para que no bloquee esta dirección."
+    "paced": "El servidor responde con lentitud: las solicitudes se ralentizan para que no bloquee esta dirección.",
+    "keepPrev": "Conservar la versión anterior",
+    "keepPrevHint": "Una actualización 3 → 4 guarda los bricks que reemplaza junto a los nuevos, de modo que el visor puede mostrar cualquiera de los dos (herramienta Chunk debug) y comparar antes y después. Ocupa otra vez el espacio de los bricks de cada dataset; elimínela abajo una vez comparado.",
+    "prevKept": "Versiones anteriores conservadas ({n})",
+    "prevSize": "bricks v2 · {size}",
+    "prevOpen": "Abrir la versión anterior",
+    "prevDrop": "Eliminar",
+    "confirmDropPrev": "¿Eliminar la versión anterior de {name}? El dataset en sí no cambia.",
+    "prevDropped": "Versión anterior de {name} eliminada.",
+    "prevDropFailed": "No se pudo eliminar la versión anterior.",
+    "unitGB": "GB"
   }
 }

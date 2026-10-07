@@ -375,7 +375,9 @@
     "gpuCompressionAuto": "Timelapses",
     "gpuCompressionActive": "Shown from GPU-compressed blocks: half the memory, so more frames stay loaded; voxel values are approximate (about 1–2 levels out of 255). The Studio's native pass reads exact voxels.",
     "gpuCompressionInactive": "Shown from exact voxels.",
-    "gpuCompressionUnsupported": "Not available on this GPU: shown from exact voxels."
+    "gpuCompressionUnsupported": "Not available on this GPU: shown from exact voxels.",
+    "previousBricks": "previous version (before the data update)",
+    "previousBricksMissing": "This dataset kept no previous version: showing the current one."
   },
   "compare": {
     "title": "Comparison Mode",
@@ -2141,6 +2143,16 @@
     "loadFailed": "Could not read the update status ({status}).",
     "network": "network",
     "recommended": "Fastest in the speed test",
-    "paced": "The host is answering slowly: requests are paced down so that it does not block this address."
+    "paced": "The host is answering slowly: requests are paced down so that it does not block this address.",
+    "keepPrev": "Keep the previous version",
+    "keepPrevHint": "A 3 → 4 update keeps the bricks it replaces beside the new ones, so the viewer can show either (Chunk debug tool) and you can compare before and after. It takes as much room again as the bricks of each dataset; delete it below once compared.",
+    "prevKept": "Previous versions kept ({n})",
+    "prevSize": "v2 bricks · {size}",
+    "prevOpen": "Open the previous version",
+    "prevDrop": "Delete",
+    "confirmDropPrev": "Delete the previous version of {name}? The dataset itself stays as it is.",
+    "prevDropped": "Previous version of {name} deleted.",
+    "prevDropFailed": "Could not delete the previous version.",
+    "unitGB": "GB"
   }
 }

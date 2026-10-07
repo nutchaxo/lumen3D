@@ -136,6 +136,12 @@
 .dupd-migs li { display: flex; gap: 10px; align-items: flex-start; }
 .dupd-migs p { margin: 2px 0 0; }
 .dupd-log { margin-bottom: 10px; }
+.dupd-keep { display: flex; gap: 10px; align-items: flex-start; margin-bottom: 12px; font-size: 13px; cursor: pointer; }
+.dupd-keep input { margin-top: 3px; flex-shrink: 0; }
+.dupd-prev-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.dupd-prev-list li { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; font-size: 13px; }
+.dupd-prev-list li > i { width: 14px; height: 14px; flex-shrink: 0; color: var(--adm-muted, currentColor); }
+.dupd-prev-name { flex: 1 1 220px; min-width: 0; display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; overflow-wrap: anywhere; }
 .dupd-log li { display: flex; gap: 8px; align-items: flex-start; font-size: 13px; }
 .dupd-log li > i { width: 15px; height: 15px; flex-shrink: 0; margin-top: 2px; color: var(--adm-success); }
 .dupd-log li.is-failed > i { color: var(--adm-danger, #f87171); }

@@ -44,6 +44,7 @@ const EXECS = ['browser', 'server'];
 const DS_EXEC_KEY = 'lumen-dupd-ds-executor';   // { datasetId: 'browser' | 'server' }
 const SPEED_KEY = 'lumen-dupd-speedtest';       // the last speed test
 const LOG_KEY = 'lumen-dupd-log';
+const KEEP_PREV_KEY = 'lumen-dupd-keep-previous';  // '1' = a 3 → 4 update keeps the v2 bricks
 // Two entries per dataset (one per step): a whole catalogue must fit, or the count stops moving.
 const LOG_MAX = 1000;
 // The speed test's block needs WebP decode + zlib on the server: m002's capability.
@@ -179,6 +180,8 @@ function readJson(key, fallback) {
   try { const v = JSON.parse(storageGet(key) || 'null'); return v === null ? fallback : v; } catch (_) { return fallback; }
 }
 
+function keepPreviousOn() { return storageGet(KEEP_PREV_KEY) === '1'; }
+
 function readLog() { const v = readJson(LOG_KEY, []); return Array.isArray(v) ? v : []; }
 function pushLog(entry) {
   storageSet(LOG_KEY, JSON.stringify([{ at: new Date().toISOString(), ...entry }, ...readLog()].slice(0, LOG_MAX)));
@@ -298,6 +301,8 @@ function lane(x) {
       datasetBase,
       onEvent: (e) => onLaneEvent(x, e),
       executorFor: (mid) => stepExec(x, mid),
+      // Read when the step finalizes: the box applies to every 3 → 4 update finishing from then on.
+      keepPrevious: (_ds, mid) => mid === 'm004-bricks-v3' && keepPreviousOn(),
     });
   }
   return _lanes[x];
@@ -729,6 +734,42 @@ function laneStrip() {
     ${isRunning() ? `<p class="adm-muted dupd-small dupd-note"><i data-lucide="info"></i>${escHtml(t('dupd.keepOpen', 'Keep this tab open: closing it or leaving it pauses the updates.'))}</p>` : ''}`;
 }
 
+function fmtSize(bytes) {
+  const gb = (bytes || 0) / (1024 ** 3);
+  return gb >= 1 ? `${fmtNum(gb, 1)} ${t('dupd.unitGB', 'GB')}` : fmtMB(bytes);
+}
+
+function keepPreviousBox() {
+  return `<label class="dupd-keep"><input type="checkbox" data-dupd-keep ${keepPreviousOn() ? 'checked' : ''}>
+    <span><b>${escHtml(t('dupd.keepPrev', 'Keep the previous version'))}</b>
+    <span class="adm-muted dupd-small dupd-block">${escHtml(t('dupd.keepPrevHint', 'A 3 → 4 update keeps the bricks it replaces beside the new ones, so the viewer can show either (Chunk debug tool) and you can compare before and after. It takes as much room again as the bricks of each dataset; delete it below once compared.'))}</span></span></label>`;
+}
+
+/** The datasets that kept the brick tree of their 3 → 4 update. */
+function previousCard() {
+  const kept = datasets().filter((ds) => ds.previous);
+  if (!kept.length) return '';
+  const total = kept.reduce((n, ds) => n + (Number(ds.previous.bytes) || 0), 0);
+  const rows = kept.map((ds) => {
+    const href = `${Utils.datasetUrl(ds)}&bricks=previous`;
+    return `<li><i data-lucide="history"></i><div class="dupd-prev-name">${escHtml(dsName(ds))}
+        <span class="adm-muted dupd-small">${escHtml(t('dupd.prevSize', 'v2 bricks · {size}', { size: fmtSize(ds.previous.bytes) }))}</span></div>
+      <a class="adm-btn adm-btn-ghost adm-btn-sm" href="${escHtml(href)}" target="_blank" rel="noopener"><i data-lucide="external-link"></i> ${escHtml(t('dupd.prevOpen', 'Open the previous version'))}</a>
+      <button class="adm-btn adm-btn-ghost adm-btn-sm" data-dupd="drop-prev" data-id="${escHtml(ds.id)}"><i data-lucide="trash-2"></i> ${escHtml(t('dupd.prevDrop', 'Delete'))}</button></li>`;
+  }).join('');
+  return `<details class="dupd-fold" open><summary>${escHtml(t('dupd.prevKept', 'Previous versions kept ({n})', { n: kept.length }))} <span class="adm-muted">· ${escHtml(fmtSize(total))}</span></summary>
+    <ul class="dupd-prev-list">${rows}</ul></details>`;
+}
+
+async function dropPrevious(id) {
+  const ds = dsById(id);
+  if (!confirm(t('dupd.confirmDropPrev', 'Delete the previous version of {name}? The dataset itself stays as it is.', { name: nameOf(id) }))) return;
+  const r = await api.dropPrevious(id);
+  if (r.ok && r.data && r.data.ok) toast(t('dupd.prevDropped', 'Previous version of {name} deleted.', { name: ds ? dsName(ds) : id }), 'success');
+  else toast(t('dupd.prevDropFailed', 'Could not delete the previous version.'), 'error');
+  await load();
+}
+
 function datasetsCard() {
   const todo = datasets().filter(needsWork);
   const done = datasets().filter((ds) => !needsWork(ds));
@@ -746,9 +787,11 @@ function datasetsCard() {
     <div class="adm-card-head"><i data-lucide="database"></i><span>${escHtml(t('dupd.datasets', 'Datasets to update'))}</span>
       <span class="adm-card-count">${escHtml(t('dupd.pendingCount', '{n} to update', { n: todo.length }))}</span>${bulk}</div>
     <div class="adm-card-body">
+      ${keepPreviousBox()}
       <div data-dupd-lanes>${laneStrip()}</div>
       ${list}
       ${upToDate}
+      ${previousCard()}
     </div>
   </div>`;
 }
@@ -877,8 +920,13 @@ function bindRoot() {
         paint();
         break;
       case 'clear-log': storageSet(LOG_KEY, '[]'); paint(); break;
+      case 'drop-prev': dropPrevious(id); break;
       default: break;
     }
+  });
+  host.addEventListener('change', (e) => {
+    const box = e.target.closest('[data-dupd-keep]');
+    if (box) storageSet(KEEP_PREV_KEY, box.checked ? '1' : '0');
   });
 }
 

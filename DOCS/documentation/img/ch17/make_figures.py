@@ -15,9 +15,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import svglib
 import svgs_files
 import svgs_migr
+import svgs_import
 
 svgs_files.run()
 svgs_files.run2()
 svgs_migr.run()
+svgs_import.run()
 for w in svglib.WARN:
     print("WARN", w)

@@ -50,7 +50,7 @@ Hover over a button and a tooltip gives its name. The bar is arranged in **five 
 ::::::
 
 ::: note
-**Your toolbar may look different.** The tools are *plugins* that the administrator installs from the catalogue (chapter 14). Chunk debug, the "sandboxed" capture and the 2D tools are optional. The cell-tracking tools appear only on a tracked time series.
+**Your toolbar may look different.** The tools are *plugins* that the administrator installs from the catalogue (chapter 15). Chunk debug, the "sandboxed" capture and the 2D tools are optional. The cell-tracking tools appear only on a tracked time series.
 :::
 
 ### I want to… → I use…

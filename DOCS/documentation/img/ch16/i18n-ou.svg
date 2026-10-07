@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 440" font-family="Inter, sans-serif">
+<defs><marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#4a5468"/></marker></defs><rect width="800" height="440" rx="16" fill="#f8f9fd"/>
+<text x="400" y="34" font-family="Inter, sans-serif" font-size="18" font-weight="800" fill="#1c2333" text-anchor="middle">Où vit chaque texte du site ?</text>
+<rect x="16" y="56" width="768" height="66" rx="12" fill="#fff" stroke="#c5cbd8" stroke-width="1.2"/>
+<rect x="16" y="56" width="8" height="66" rx="4" fill="#3b5bdb" stroke="#3b5bdb" stroke-width="1.2"/>
+<text x="38" y="82" font-family="JetBrains Mono, Consolas, monospace" font-size="13.5" font-weight="800" fill="#3b5bdb" text-anchor="start">lang/&lt;code&gt;.json</text>
+<text x="38" y="104" font-family="Inter, sans-serif" font-size="12" font-weight="400" fill="#1c2333" text-anchor="start">l'interface (boutons, messages, panneau d'admin)</text>
+<text x="400" y="82" font-family="Inter, sans-serif" font-size="11" font-weight="800" fill="#4a5468" text-anchor="start">Comment</text>
+<text x="400" y="104" font-family="Inter, sans-serif" font-size="12" font-weight="400" fill="#1c2333" text-anchor="start">1 943 clés × 4 langues, parité testée</text>
+<rect x="16" y="130" width="768" height="66" rx="12" fill="#fff" stroke="#c5cbd8" stroke-width="1.2"/>
+<rect x="16" y="130" width="8" height="66" rx="4" fill="#7048e8" stroke="#7048e8" stroke-width="1.2"/>
+<text x="38" y="156" font-family="JetBrains Mono, Consolas, monospace" font-size="13.5" font-weight="800" fill="#7048e8" text-anchor="start">plugins/…/lang/&lt;code&gt;.json</text>
+<text x="38" y="178" font-family="Inter, sans-serif" font-size="12" font-weight="400" fill="#1c2333" text-anchor="start">les mots de chaque outil</text>
+<text x="400" y="156" font-family="Inter, sans-serif" font-size="11" font-weight="800" fill="#4a5468" text-anchor="start">Comment</text>
+<text x="400" y="178" font-family="Inter, sans-serif" font-size="12" font-weight="400" fill="#1c2333" text-anchor="start">28 dictionnaires (240 clés en anglais) ; manque → anglais du plugin</text>
+<rect x="16" y="204" width="768" height="66" rx="12" fill="#fff" stroke="#c5cbd8" stroke-width="1.2"/>
+<rect x="16" y="204" width="8" height="66" rx="4" fill="#2b8a3e" stroke="#2b8a3e" stroke-width="1.2"/>
+<text x="38" y="230" font-family="JetBrains Mono, Consolas, monospace" font-size="13.5" font-weight="800" fill="#2b8a3e" text-anchor="start">config/instance.json</text>
+<text x="38" y="252" font-family="Inter, sans-serif" font-size="12" font-weight="400" fill="#1c2333" text-anchor="start">nom, accroche, spécimen, pied de page, SEO, types</text>
+<text x="400" y="230" font-family="Inter, sans-serif" font-size="11" font-weight="800" fill="#4a5468" text-anchor="start">Comment</text>
+<text x="400" y="252" font-family="Inter, sans-serif" font-size="12" font-weight="400" fill="#1c2333" text-anchor="start">valeurs « par langue » : { en, fr, es, nl }</text>
+<rect x="16" y="278" width="768" height="66" rx="12" fill="#fff" stroke="#c5cbd8" stroke-width="1.2"/>
+<rect x="16" y="278" width="8" height="66" rx="4" fill="#e67700" stroke="#e67700" stroke-width="1.2"/>
+<text x="38" y="304" font-family="JetBrains Mono, Consolas, monospace" font-size="13.5" font-weight="800" fill="#e67700" text-anchor="start">config/pages/&lt;slug&gt;.json</text>
+<text x="38" y="326" font-family="Inter, sans-serif" font-size="12" font-weight="400" fill="#1c2333" text-anchor="start">le texte des pages que vous construisez</text>
+<text x="400" y="304" font-family="Inter, sans-serif" font-size="11" font-weight="800" fill="#4a5468" text-anchor="start">Comment</text>
+<text x="400" y="326" font-family="Inter, sans-serif" font-size="12" font-weight="400" fill="#1c2333" text-anchor="start">dans le document lui-même, par langue</text>
+<rect x="16" y="352" width="768" height="66" rx="12" fill="#fff" stroke="#c5cbd8" stroke-width="1.2"/>
+<rect x="16" y="352" width="8" height="66" rx="4" fill="#0c8599" stroke="#0c8599" stroke-width="1.2"/>
+<text x="38" y="378" font-family="JetBrains Mono, Consolas, monospace" font-size="13.5" font-weight="800" fill="#0c8599" text-anchor="start">config/legal.json</text>
+<text x="38" y="400" font-family="Inter, sans-serif" font-size="12" font-weight="400" fill="#1c2333" text-anchor="start">les mentions légales</text>
+<text x="400" y="378" font-family="Inter, sans-serif" font-size="11" font-weight="800" fill="#4a5468" text-anchor="start">Comment</text>
+<text x="400" y="400" font-family="Inter, sans-serif" font-size="12" font-weight="400" fill="#1c2333" text-anchor="start">sections { title, body } par langue</text>
+<text x="400" y="444" font-family="Inter, sans-serif" font-size="12.5" font-weight="800" fill="#4a5468" text-anchor="middle">Les trois derniers appartiennent à VOTRE site : ils ne sont ni dans lang/ ni touchés par une mise à jour.</text>
+</svg>

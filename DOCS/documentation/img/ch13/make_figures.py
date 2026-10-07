@@ -176,7 +176,7 @@ def d2_aplatir():
     axes[2].imshow(d["flat"][:, :, :3]); axes[2].set_title(tr("③ après « Aplatir le fond »", "③ after “Flatten the background”"), fontsize=10.5, fontweight="bold", loc="left")
     for ax in axes:
         ax.axis("off")
-    fig.text(0.5, 0.01, tr(f"Gain réel de cette photographie : de {dec(float(gain.min()), 2)} à {dec(float(gain.max()), 2)} (borné entre 0,5 et 3).",
+    fig.text(0.5, 0.01, tr(f"Gain réel de cette photographie : de {dec(float(gain.min()), 2)} à {dec(float(gain.max()), 2)} (borné entre 0,5 et 3). Cette photo synthétique n'a pas de vrai vignettage : la figure montre le mécanisme, pas un bénéfice.",
                            f"Actual gain of this photograph: from {dec(float(gain.min()), 2)} to {dec(float(gain.max()), 2)} (clamped between 0.5 and 3)."),
              ha="center", fontsize=9, color=INK2, style="italic")
     fig.tight_layout(rect=(0, 0.04, 1, 1))

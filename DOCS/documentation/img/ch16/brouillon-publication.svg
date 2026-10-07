@@ -1,0 +1,57 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 450" font-family="Inter, sans-serif">
+<defs><marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#4a5468"/></marker></defs><rect width="800" height="450" rx="16" fill="#f8f9fd"/>
+<text x="400" y="34" font-family="Inter, sans-serif" font-size="18" font-weight="800" fill="#1c2333" text-anchor="middle">Brouillon, publication : deux fichiers, deux publics</text>
+<rect x="16" y="56" width="190" height="130" rx="12" fill="#fff" stroke="#c5cbd8" stroke-width="1.2"/>
+<path d="M16,90 L16,68 Q16,56 28,56 L194,56 Q206,56 206,68 L206,90 Z" fill="#f3f0ff"/>
+<text x="111.0" y="78" font-family="Inter, sans-serif" font-size="12" font-weight="800" fill="#7048e8" text-anchor="middle">L'éditeur</text>
+<text x="28" y="112.0" font-family="Inter, sans-serif" font-size="12" font-weight="400" fill="#1c2333" text-anchor="start">vous modifiez la vraie</text>
+<text x="28" y="128.2" font-family="Inter, sans-serif" font-size="12" font-weight="400" fill="#1c2333" text-anchor="start">page dans un cadre</text>
+<text x="28" y="144.4" font-family="Inter, sans-serif" font-size="12" font-weight="400" fill="#1c2333" text-anchor="start">(?edit=1)</text>
+<line x1="210" y1="106" x2="262" y2="106" stroke="#4a5468" stroke-width="2.2" marker-end="url(#arr)"/>
+<text x="236" y="94" font-family="Inter, sans-serif" font-size="11" font-weight="800" fill="#4a5468" text-anchor="middle">1,2 s</text>
+<rect x="266" y="56" width="250" height="130" rx="12" fill="#fff" stroke="#c5cbd8" stroke-width="1.2"/>
+<path d="M266,90 L266,68 Q266,56 278,56 L504,56 Q516,56 516,68 L516,90 Z" fill="#fff4e6"/>
+<text x="391.0" y="78" font-family="Inter, sans-serif" font-size="12" font-weight="800" fill="#e67700" text-anchor="middle">Brouillon (privé)</text>
+<text x="278" y="112.0" font-family="Inter, sans-serif" font-size="12" font-weight="400" fill="#1c2333" text-anchor="start">api/page-drafts/&lt;slug&gt;.json</text>
+<text x="278" y="128.2" font-family="Inter, sans-serif" font-size="12" font-weight="400" fill="#1c2333" text-anchor="start">droits 0600, jamais servi</text>
+<text x="278" y="144.4" font-family="Inter, sans-serif" font-size="12" font-weight="400" fill="#1c2333" text-anchor="start">visible de l'opérateur seul</text>
+<line x1="520" y1="106" x2="560" y2="106" stroke="#4a5468" stroke-width="2.2" marker-end="url(#arr)"/>
+<text x="540" y="94" font-family="Inter, sans-serif" font-size="11" font-weight="800" fill="#4a5468" text-anchor="middle">Publier</text>
+<rect x="564" y="56" width="220" height="130" rx="12" fill="#fff" stroke="#c5cbd8" stroke-width="1.2"/>
+<path d="M564,90 L564,68 Q564,56 576,56 L772,56 Q784,56 784,68 L784,90 Z" fill="#ebfbee"/>
+<text x="674.0" y="78" font-family="Inter, sans-serif" font-size="12" font-weight="800" fill="#2b8a3e" text-anchor="middle">Page publiée (publique)</text>
+<text x="576" y="112.0" font-family="Inter, sans-serif" font-size="12" font-weight="400" fill="#1c2333" text-anchor="start">config/pages/&lt;slug&gt;.json</text>
+<text x="576" y="128.2" font-family="Inter, sans-serif" font-size="12" font-weight="400" fill="#1c2333" text-anchor="start">lue par page.html,</text>
+<text x="576" y="144.4" font-family="Inter, sans-serif" font-size="12" font-weight="400" fill="#1c2333" text-anchor="start">l'accueil, À propos</text>
+<text x="24" y="216" font-family="Inter, sans-serif" font-size="14" font-weight="800" fill="#1c2333" text-anchor="start">Quatre garde-fous</text>
+<rect x="16" y="228" width="186" height="160" rx="12" fill="#fff" stroke="#c5cbd8" stroke-width="1.2"/>
+<path d="M16,262 L16,240 Q16,228 28,228 L190,228 Q202,228 202,240 L202,262 Z" fill="#e8edff"/>
+<text x="109.0" y="250" font-family="Inter, sans-serif" font-size="12" font-weight="800" fill="#3b5bdb" text-anchor="middle">Révision</text>
+<text x="28" y="284.0" font-family="Inter, sans-serif" font-size="11.5" font-weight="400" fill="#1c2333" text-anchor="start">chaque enregistrement</text>
+<text x="28" y="299.525" font-family="Inter, sans-serif" font-size="11.5" font-weight="400" fill="#1c2333" text-anchor="start">porte la révision lue :</text>
+<text x="28" y="315.05" font-family="Inter, sans-serif" font-size="11.5" font-weight="400" fill="#1c2333" text-anchor="start">document changé ailleurs</text>
+<text x="28" y="330.575" font-family="Inter, sans-serif" font-size="11.5" font-weight="400" fill="#1c2333" text-anchor="start">→ refus 409 « stale »</text>
+<rect x="211" y="228" width="186" height="160" rx="12" fill="#fff" stroke="#c5cbd8" stroke-width="1.2"/>
+<path d="M211,262 L211,240 Q211,228 223,228 L385,228 Q397,228 397,240 L397,262 Z" fill="#e3fafc"/>
+<text x="304.0" y="250" font-family="Inter, sans-serif" font-size="12" font-weight="800" fill="#0c8599" text-anchor="middle">Un seul éditeur</text>
+<text x="223" y="284.0" font-family="Inter, sans-serif" font-size="11.5" font-weight="400" fill="#1c2333" text-anchor="start">deux onglets sur la même</text>
+<text x="223" y="299.525" font-family="Inter, sans-serif" font-size="11.5" font-weight="400" fill="#1c2333" text-anchor="start">page : le second se tait</text>
+<text x="223" y="315.05" font-family="Inter, sans-serif" font-size="11.5" font-weight="400" fill="#1c2333" text-anchor="start">(BroadcastChannel) puis</text>
+<text x="223" y="330.575" font-family="Inter, sans-serif" font-size="11.5" font-weight="400" fill="#1c2333" text-anchor="start">« reprendre la main »</text>
+<rect x="406" y="228" width="186" height="160" rx="12" fill="#fff" stroke="#c5cbd8" stroke-width="1.2"/>
+<path d="M406,262 L406,240 Q406,228 418,228 L580,228 Q592,228 592,240 L592,262 Z" fill="#f3f0ff"/>
+<text x="499.0" y="250" font-family="Inter, sans-serif" font-size="12" font-weight="800" fill="#7048e8" text-anchor="middle">Historique</text>
+<text x="418" y="284.0" font-family="Inter, sans-serif" font-size="11.5" font-weight="400" fill="#1c2333" text-anchor="start">annuler / rétablir :</text>
+<text x="418" y="299.525" font-family="Inter, sans-serif" font-size="11.5" font-weight="400" fill="#1c2333" text-anchor="start">60 états, pris après</text>
+<text x="418" y="315.05" font-family="Inter, sans-serif" font-size="11.5" font-weight="400" fill="#1c2333" text-anchor="start">450 ms de calme</text>
+<text x="418" y="330.575" font-family="Inter, sans-serif" font-size="11.5" font-weight="400" fill="#1c2333" text-anchor="start"></text>
+<rect x="601" y="228" width="186" height="160" rx="12" fill="#fff" stroke="#c5cbd8" stroke-width="1.2"/>
+<path d="M601,262 L601,240 Q601,228 613,228 L775,228 Q787,228 787,240 L787,262 Z" fill="#fff0f0"/>
+<text x="694.0" y="250" font-family="Inter, sans-serif" font-size="12" font-weight="800" fill="#c92a2a" text-anchor="middle">Limites</text>
+<text x="613" y="284.0" font-family="Inter, sans-serif" font-size="11.5" font-weight="400" fill="#1c2333" text-anchor="start">2 Mo par page,</text>
+<text x="613" y="299.525" font-family="Inter, sans-serif" font-size="11.5" font-weight="400" fill="#1c2333" text-anchor="start">300 sections, 12 colonnes</text>
+<text x="613" y="315.05" font-family="Inter, sans-serif" font-size="11.5" font-weight="400" fill="#1c2333" text-anchor="start">(6 dans l'éditeur),</text>
+<text x="613" y="330.575" font-family="Inter, sans-serif" font-size="11.5" font-weight="400" fill="#1c2333" text-anchor="start">500 widgets/colonne</text>
+<text x="400" y="416" font-family="Inter, sans-serif" font-size="12" font-weight="400" fill="#4a5468" text-anchor="middle">Le brouillon est sauvé tout seul ; « Publier » enregistre d'abord le brouillon puis le promeut en version publique.</text>
+<text x="400" y="436" font-family="Inter, sans-serif" font-size="12" font-weight="400" fill="#4a5468" text-anchor="middle">Réseau coupé ou session expirée : la sauvegarde est retentée (et au retour du réseau).</text>
+</svg>

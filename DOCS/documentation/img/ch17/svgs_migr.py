@@ -18,16 +18,15 @@ def formats_escalier():
                tr("Chaque marche ajoute une structure à côté des briques ; une migration sait y monter.",
                   "Each step adds a structure beside the bricks; a migration knows how to climb to it."))]
     steps = [
-        ("grey", "1", tr("briques v2", "v2 bricks"), ["bricks/ : 64³ sans bordure", "manifeste JSON (brickToPack)", "avant la 1.58.0" if LANG == "fr" else "before 1.58.0"], tr("(point de départ)", "(starting point)")),
-        ("amber", "2", "planes/", ["un fichier par plan Z", "PNG 512², sans perte", "coupes XY natives rapides" if LANG == "fr" else "fast native XY cuts"], "m002-planes"),
-        ("teal", "3", "mips/", ["MIP par couche de 64 plans", "même moule que planes/", "figures z-stack rapides" if LANG == "fr" else "fast z-stack figures"], "m003-layer-mips"),
-        ("green", "4", tr("briques v3", "v3 bricks"), ["bricks/ reconstruit : 66³", "bordure, Z réduit, index.bin", "détail local, filtrage sans couture" if LANG == "fr" else "local detail, seamless filtering"], "m004-bricks-v3"),
+        ("grey", "1", tr("briques v2", "v2 bricks"), [tr("64³ sans bordure", "64³, no border"), tr("manifeste JSON", "JSON manifest"), tr("avant la 1.58.0", "before 1.58.0")], tr("(point de départ)", "(starting point)")),
+        ("amber", "2", "planes/", [tr("un fichier par plan Z", "one file per Z plane"), tr("PNG 512² sans perte", "lossless 512² PNG"), tr("coupes XY rapides", "fast XY cuts")], "m002-planes"),
+        ("teal", "3", "mips/", [tr("MIP par couche de 64", "MIP per 64-plane layer"), tr("même moule que planes/", "same mould as planes/"), tr("z-stack rapides", "fast z-stack")], "m003-layer-mips"),
+        ("green", "4", tr("briques v3", "v3 bricks"), [tr("bricks/ reconstruit (66³)", "bricks/ rebuilt (66³)"), tr("bordure, Z réduit", "border, Z reduced"), tr("index.bin, détail local", "index.bin, local detail")], "m004-bricks-v3"),
     ]
     x0, w = 24, 178
     for i, (col, num, hd, lines, mig) in enumerate(steps):
         x = x0 + i * (w + 13)
         top = 215 - i * 38
-        h = 330 - top + 0
         s, soft = P[col]
         b.append(R(x, top, w, 330 - top + 24, soft, s, 12, 1.8))
         b.append(CIRC(x + 24, top + 26, 15, s))
@@ -35,10 +34,10 @@ def formats_escalier():
         b.append(T(x + 48, top + 32, hd, 15, 800, s, maxw=w - 58))
         for j, ln in enumerate(lines):
             b.append(T(x + 14, top + 62 + j * 18, ln, 11.5, 400, INK, maxw=w - 22))
-        b.append(R(x + 10, 330 - 8 + 0, w - 20, 22, "#fff", s, 11, 1.3))
-        b.append(T(x + w / 2, 330 + 7, mig, 11.5, 700, s, "middle", mono=True, maxw=w - 24))
+        b.append(R(x + 10, 322, w - 20, 22, "#fff", s, 11, 1.3))
+        b.append(T(x + w / 2, 337, mig, 11.5, 700, s, "middle", mono=True, maxw=w - 24))
         if i:
-            b.append(PATH(f"M {x - 12} {top + 70 + 38} Q {x - 6} {top + 40 + 38} {x + 4} {top + 40}", s, 2.2, arrow=True))
+            b.append(L(x - 13, top + 60, x, top + 60, s, 2.4, arrow=True))
     b.append(R(24, 372, 752, 70, "#fff", LINE, 12))
     b.append(T(40, 396, tr("Trois faits à retenir", "Three facts to remember"), 13.5, 800))
     b.append(T(40, 416, tr("• le viewer sait lire les formats 1 à 4 ; les marches 2 à 4 ne servent qu'à aller plus vite et plus beau ;",
@@ -55,16 +54,16 @@ def v2_v3():
     cols = [(24, "grey", "v2", [
         (tr("taille", "size"), "64 × 64 × 64"),
         (tr("bordure", "border"), tr("aucune", "none")),
-        (tr("mosaïque", "mosaic"), tr("8 × 8 coupes de 64², image 512²", "8 × 8 slices of 64², 512² image")),
+        (tr("mosaïque", "mosaic"), tr("8 × 8 coupes de 64² (512²)", "8 × 8 slices of 64² (512²)")),
         (tr("lecture GPU", "GPU sampling"), tr("plus proche voisin (NEAREST)", "nearest neighbour (NEAREST)")),
         (tr("niveaux", "levels"), tr("seuil d'occupation 0,05 %", "occupancy threshold 0.05 %")),
-        (tr("où est la brique ?", "where is the brick?"), tr("manifeste JSON : une entrée par brique", "JSON manifest: one entry per brick")),
+        (tr("où est la brique ?", "where is the brick?"), tr("JSON : une entrée par brique", "JSON: one entry per brick")),
         (tr("paquets", "packs"), "lod0/c0/pack_00.bin"),
         (tr("gros embryon", "big embryo"), tr("manifeste ≈ 7,6 Mo", "manifest ≈ 7.6 MB")),
     ]), (412, "green", "v3", [
         (tr("taille", "size"), "66 × 66 × 66"),
         (tr("bordure", "border"), tr("1 voxel (clamp-to-edge)", "1 voxel (clamp-to-edge)")),
-        (tr("mosaïque", "mosaic"), tr("9 × 8 coupes de 66², image 594 × 528", "9 × 8 slices of 66², 594 × 528 image")),
+        (tr("mosaïque", "mosaic"), tr("9 × 8 coupes de 66² (594 × 528)", "9 × 8 slices of 66² (594 × 528)")),
         (tr("lecture GPU", "GPU sampling"), tr("LINÉAIRE, sans couture", "LINEAR, seamless")),
         (tr("niveaux", "levels"), tr("exacts : un voxel ≥ 1 suffit", "exact: one voxel ≥ 1 is enough")),
         (tr("où est la brique ?", "where is the brick?"), tr("index.bin : 10 octets par case", "index.bin: 10 bytes per slot")),
@@ -96,8 +95,8 @@ def unites():
     # clé
     b.append(R(24, 70, 752, 74, "#fff", LINE, 12))
     key = "t0.z0.c1.y1.x0"
-    parts = [("t0", "blue", tr("arbre (image)", "tree (frame)")), (".z0", "violet", tr("couche de 64 plans", "64-plane layer")), (".c1", "green", tr("canal", "channel")),
-             (".y1", "amber", tr("tuile en Y", "tile in Y")), (".x0", "amber", tr("tuile en X", "tile in X"))]
+    parts = [("t0", "blue", tr("arbre", "tree")), (".z0", "violet", tr("couche", "layer")), (".c1", "green", tr("canal", "channel")),
+             (".y1", "amber", tr("tuile Y", "tile Y")), (".x0", "amber", tr("tuile X", "tile X"))]
     x = 60
     for txt, col, lab in parts:
         w = len(txt) * 16.2 + 14
@@ -131,17 +130,17 @@ def unites():
         tr("  ses propres tuiles sans rien casser ;", "  its own tiles without breaking anything;"),
         tr("• deux exécutants peuvent s'en partager la liste ;", "• two executors can share the list;"),
         tr("• on s'arrête et on reprend à n'importe quel moment.", "• you can stop and resume at any time.")], size=12))
-    b.append(R(420, 320, 356, 124, "#fff", LINE, 12))
+    b.append(R(420, 320, 356, 136, "#fff", LINE, 12))
     b.append(T(434, 342, tr("Les trois formes de clé", "The three key shapes"), 13, 800))
     for i, (k, d) in enumerate([("t{t}.z{bz}.c{c}.y{ty}.x{tx}", "m002  " + tr("couche de plans", "plane layer")),
                                 ("t{t}.l{l}.c{c}.y{ty}.x{tx}", "m003  " + tr("couche pour le MIP", "layer for the MIP")),
                                 ("t{t}.k{k}.c{c}.z{BZ}.y{BY}.x{BX}", "m004  " + tr("super-bloc 4×4×4", "4×4×4 super-block"))]):
-        b.append(T(434, 366 + i * 24, k, 11.4, 400, INK, mono=True, maxw=330))
-        b.append(T(434, 380 + i * 24, d, 10.8, 600, INK2, maxw=330))
-    b.append(R(24, 462, 752, 50, P["grey"][1], LINE, 10))
-    b.append(T(400, 484, tr("Une unité vide (toutes ses briques absentes) est comptée « faite » d'emblée : elle ne demande aucun travail.", "An empty unit (all its bricks absent) counts as “done” from the start: it needs no work."), 12, 600, INK, "middle", maxw=730))
-    b.append(T(400, 502, tr("Pour le jeu live de démonstration (4 images × 2 canaux × 1 tuile) : 8 unités.", "For the live demo dataset (4 frames × 2 channels × 1 tile): 8 units."), 12, 400, INK2, "middle", maxw=730))
-    save("unites.svg", 528, b)
+        b.append(T(434, 368 + i * 28, k, 11.4, 400, INK, mono=True, maxw=330))
+        b.append(T(434, 382 + i * 28, d, 10.8, 600, INK2, maxw=330))
+    b.append(R(24, 470, 752, 50, P["grey"][1], LINE, 10))
+    b.append(T(400, 492, tr("Une unité vide (toutes ses briques absentes) est comptée « faite » d'emblée : elle ne demande aucun travail.", "An empty unit (all its bricks absent) counts as “done” from the start: it needs no work."), 12, 600, INK, "middle", maxw=730))
+    b.append(T(400, 510, tr("Pour le jeu live de démonstration (4 images × 2 canaux × 1 tuile) : 8 unités.", "For the live demo dataset (4 frames × 2 channels × 1 tile): 8 units."), 12, 400, INK2, "middle", maxw=730))
+    save("unites.svg", 536, b)
 
 
 # ── Le journal (la feuille de pointage) ────────────────────────────────────────
@@ -151,43 +150,46 @@ def journal_migration():
                tr("Journal et magasin de tuiles d'une vraie conversion m002 (jeu synthétique de test).",
                   "Journal and tile store of a real m002 conversion (synthetic test dataset)."))]
     # journal à gauche (JSON annoté)
-    b.append(R(24, 70, 430, 330, "#fff", P["blue"][0], 12, 1.6))
-    b.append(T(40, 94, "uploads/migrations/3d__<jeu>__m002-planes.json".replace("<jeu>", tr("<jeu>", "<set>")), 11.5, 700, P["blue"][0], mono=True, maxw=405))
+    b.append(R(24, 70, 440, 370, "#fff", P["blue"][0], 12, 1.6))
+    b.append(T(40, 94, tr("uploads/migrations/3d__<jeu>__m002-planes.json", "uploads/migrations/3d__<set>__m002-planes.json"), 11.5, 700, P["blue"][0], mono=True, maxw=405))
     lines = [
         ('{ "migration": "m002-planes",', None),
         ('  "dataset": "3d/Synthetique-E95",', None),
         ('  "sourceManifests": { "0": "46475b1a…" },', ("blue", tr("empreinte du manifeste de départ", "fingerprint of the starting manifest"))),
-        ('  "units": { "total": 24, "empty": 1 },', ("violet", tr("24 caisses, 1 vide d'office", "24 boxes, 1 empty from the start"))),
-        ('  "done": [ "t0.z0.c0.y0.x0", …(23) ],', ("green", tr("les caisses cochées", "the boxes ticked"))),
-        ('  "executors": { "browser": 0, "server": 23 },', ("amber", tr("qui a porté combien", "who carried how many"))),
+        ('  "units": { "total": 24, "empty": 1 },', ("violet", tr("24 caisses, dont 1 vide d'office", "24 boxes, 1 of them empty from the start"))),
+        ('  "done": [ "t0.z0.c0.y0.x0", …(23) ],', ("green", tr("les caisses déjà cochées", "the boxes already ticked"))),
+        ('  "executors": { "browser": 0, "server": 23 },', ("amber", tr("qui a porté combien de caisses", "who carried how many boxes"))),
         ('  "state": "running",', ("red", tr("running → assembling → swapped", "running → assembling → swapped"))),
         ('  "updatedAt": "2026-10-07T18:49:55Z" }', None),
     ]
-    for i, (ln, note) in enumerate(lines):
-        y = 122 + i * 30
+    y = 122
+    for ln, note in lines:
         b.append(T(40, y, ln, 11.6, 400, INK, mono=True, maxw=410))
         if note:
             col, txt = note
-            b.append(R(40, y + 6, len(txt) * 6.1 + 14, 17, P[col][1], P[col][0], 8, 1))
-            b.append(T(47, y + 18, txt, 10.5, 600, P[col][0]))
+            b.append(R(58, y + 7, len(txt) * 6.1 + 14, 18, P[col][1], P[col][0], 9, 1))
+            b.append(T(65, y + 20, txt, 10.8, 600, P[col][0]))
+            y += 42
+        else:
+            y += 26
     # magasin à droite
-    b.append(R(470, 70, 306, 330, "#fff", P["green"][0], 12, 1.6))
-    b.append(T(486, 94, tr("Le magasin de tuiles", "The tile store"), 13.5, 800, P["green"][0]))
+    b.append(R(478, 70, 298, 370, "#fff", P["green"][0], 12, 1.6))
+    b.append(T(494, 94, tr("Le magasin de tuiles", "The tile store"), 13.5, 800, P["green"][0]))
     store = ["uploads/migrations/", "└ 3d__…__m002-planes/", "   └ t0/", "      ├ z0/  c0.y0.x0.png", "      │      c0.y0.x1.png", "      │      c0.y1.x0.png …", "      ├ z1/  …", "      └ z129/ …"]
     for i, ln in enumerate(store):
-        b.append(T(486, 122 + i * 22, ln, 11.2, 400, INK, mono=True, maxw=280))
-    b.append(T(486, 318, tr("un PNG gris par plan et par tuile :", "one grey PNG per plane and per tile:"), 11.5, 600, INK2))
-    b.append(T(486, 336, tr("une unité = jusqu'à 64 petits fichiers", "one unit = up to 64 small files"), 11.5, 400, INK2))
+        b.append(T(494, 122 + i * 22, ln, 11.2, 400, INK, mono=True, maxw=270))
+    b.append(T(494, 330, tr("un PNG gris par plan et par tuile :", "one grey PNG per plane and per tile:"), 11.5, 600, INK2))
+    b.append(T(494, 348, tr("une unité = jusqu'à 64 petits fichiers", "one unit = up to 64 small files"), 11.5, 400, INK2))
     if r:
         st = [s for s in r["steps"] if s["label"].startswith("m002-planes : toutes")][0]
-        b.append(T(486, 360, tr("ici : 42,0 Mo de tuiles avant l'assemblage", "here: 42.0 MB of tiles before assembly"), 11.5, 700, P["green"][0]))
-    b.append(T(486, 382, tr("jamais servi : c'est un atelier, pas une vitrine", "never served: a workshop, not a shop window"), 11.5, 400, INK2, maxw=280))
+        b.append(T(494, 376, tr("ici : 42,0 Mo de tuiles avant l'assemblage", "here: 42.0 MB of tiles before assembly"), 11.5, 700, P["green"][0]))
+    b.append(T(494, 398, tr("jamais servi : c'est un atelier, pas une vitrine", "never served: a workshop, not a shop window"), 11.5, 400, INK2, maxw=280))
     # bas
-    b.append(R(24, 414, 752, 74, P["amber"][1], P["amber"][0], 10, 1.4))
-    b.append(T(40, 438, tr("Pourquoi une feuille de pointage ?", "Why a tally sheet?"), 13, 800, P["amber"][0]))
-    b.append(T(40, 458, tr("Comme un déménageur coche chaque caisse livrée : si le camion tombe en panne, ou qu'on change de camion", "Like a mover ticking each delivered box: if the truck breaks down, or you switch trucks,"), 12, 400, INK, maxw=725))
-    b.append(T(40, 476, tr("(navigateur → serveur), on repart de la dernière caisse cochée. Une caisse livrée deux fois ne gêne personne.", "(browser → server), you restart from the last ticked box. A box delivered twice bothers no one."), 12, 400, INK, maxw=725))
-    save("journal-migration.svg", 504, b)
+    b.append(R(24, 454, 752, 74, P["amber"][1], P["amber"][0], 10, 1.4))
+    b.append(T(40, 478, tr("Pourquoi une feuille de pointage ?", "Why a tally sheet?"), 13, 800, P["amber"][0]))
+    b.append(T(40, 498, tr("Comme un déménageur coche chaque caisse livrée : si le camion tombe en panne, ou qu'on change de camion", "Like a mover ticking each delivered box: if the truck breaks down, or you switch trucks,"), 12, 400, INK, maxw=725))
+    b.append(T(40, 516, tr("(navigateur → serveur), on repart de la dernière caisse cochée. Une caisse livrée deux fois ne gêne personne.", "(browser → server), you restart from the last ticked box. A box delivered twice bothers no one."), 12, 400, INK, maxw=725))
+    save("journal-migration.svg", 544, b)
 
 
 # ── Deux voies, un journal ─────────────────────────────────────────────────────
@@ -257,43 +259,40 @@ def machine_etats():
         if sub:
             out.append(T(x + w / 2, y + 40, sub, 10.8, 400, INK2, "middle", maxw=w - 10))
         return out
-    b.append(T(70, 112, tr("(aucun journal)", "(no journal)"), 12, 600, INK2, "middle"))
-    b.append(node(150, 90, 140, 56, "blue", "running", tr("unités en cours", "units in progress")))
-    b.append(node(350, 90, 150, 56, "amber", "assembling", tr("assemblage reprenable", "resumable assembly")))
-    b.append(node(560, 90, 130, 56, "green", "swapped", tr("échange fait", "swap done")))
-    b.append(node(350, 220, 150, 56, "red", "failed", tr("source_changed…", "source_changed…")))
-    b.append(R(560, 220, 190, 56, "#fff", P["green"][0], 14, 2))
-    b.append(T(655, 244, tr("terminé", "finished"), 15, 800, P["green"][0], "middle"))
-    b.append(T(655, 262, tr("journal et tuiles supprimés", "journal and tiles deleted"), 10.8, 400, INK2, "middle"))
-    b.append(L(104, 118, 150, 118, INK2, 2, arrow=True))
-    b.append(T(127, 108, "plan", 10.5, 700, INK2, "middle", mono=True))
-    b.append(L(290, 118, 350, 118, INK2, 2, arrow=True))
-    b.append(T(320, 108, "finalize", 10.5, 700, INK2, "middle", mono=True))
-    b.append(L(500, 118, 560, 118, INK2, 2, arrow=True))
-    b.append(T(530, 108, "finalize", 10.5, 700, INK2, "middle", mono=True))
-    b.append(L(625, 146, 655, 220, INK2, 2, arrow=True))
-    b.append(T(655, 188, "finalize", 10.5, 700, INK2, "middle", mono=True))
-    b.append(PATH("M 220 146 L 220 160 Q 220 168 228 168 L 262 168", INK2, 2))
-    b.append(T(240, 186, "unit_put", 10.5, 700, P["blue"][0], "middle", mono=True))
-    b.append(T(240, 200, "unit_run", 10.5, 700, P["blue"][0], "middle", mono=True))
-    b.append(PATH("M 185 146 C 150 190 270 190 255 146", P["blue"][0], 2, arrow=True))
-    b.append(L(420, 146, 420, 220, P["red"][0], 2, dash="5 4", arrow=True))
-    b.append(T(428, 188, tr("le manifeste a changé", "the manifest changed"), 10.5, 600, P["red"][0]))
-    b.append(PATH("M 350 248 L 220 248 L 220 150", P["red"][0], 2, dash="5 4", arrow=True))
-    b.append(T(285, 240, tr("plan : on repart propre", "plan: start clean"), 10.5, 600, P["red"][0], "middle"))
+    b.append(T(56, 123, tr("(rien)", "(none)"), 12, 600, INK2, "middle"))
+    b.append(node(170, 90, 140, 60, "blue", "running", "unit_put / unit_run"))
+    b.append(node(380, 90, 150, 56, "amber", "assembling", tr("assemblage reprenable", "resumable assembly")))
+    b.append(node(590, 90, 130, 56, "green", "swapped", tr("échange fait", "swap done")))
+    b.append(node(380, 226, 150, 56, "red", "failed", "source_changed…"))
+    b.append(R(560, 226, 200, 56, "#fff", P["green"][0], 14, 2))
+    b.append(T(660, 250, tr("terminé", "finished"), 15, 800, P["green"][0], "middle"))
+    b.append(T(660, 268, tr("journal et tuiles supprimés", "journal and tiles deleted"), 10.8, 400, INK2, "middle"))
+    b.append(L(86, 120, 170, 120, INK2, 2, arrow=True))
+    b.append(T(128, 110, "plan", 10.5, 700, INK2, "middle", mono=True))
+    b.append(L(310, 118, 380, 118, INK2, 2, arrow=True))
+    b.append(T(345, 108, "finalize", 10.5, 700, INK2, "middle", mono=True))
+    b.append(L(530, 118, 590, 118, INK2, 2, arrow=True))
+    b.append(T(560, 108, "finalize", 10.5, 700, INK2, "middle", mono=True))
+    b.append(L(655, 146, 660, 226, INK2, 2, arrow=True))
+    b.append(T(668, 190, "finalize", 10.5, 700, INK2, mono=True))
+    b.append(L(455, 146, 455, 226, P["red"][0], 2, dash="5 4", arrow=True))
+    b.append(T(463, 190, tr("le manifeste a changé", "the manifest changed"), 10.8, 600, P["red"][0]))
+    b.append(PATH("M 270 150 L 270 254 L 380 254", P["red"][0], 2, dash="5 4", arrow=True))
+    b.append(PATH("M 380 272 L 205 272 L 205 152", P["red"][0], 2, dash="5 4", arrow=True))
+    b.append(T(293, 290, tr("plan : on repart propre", "plan: start clean"), 10.5, 600, P["red"][0], "middle"))
     # cancel
-    b.append(R(24, 300, 752, 188, "#fff", LINE, 12))
-    b.append(T(40, 324, tr("Ce qu'il faut savoir", "What to know"), 14, 800))
+    b.append(R(24, 312, 752, 188, "#fff", LINE, 12))
+    b.append(T(40, 336, tr("Ce qu'il faut savoir", "What to know"), 14, 800))
     pts = [
         tr("• Pause : c'est l'onglet qui s'arrête, pas le journal — il reste « running » et se reprend tel quel.", "• Pause: it is the tab that stops, not the journal — it stays “running” and resumes as is."),
         tr("• finalize rend complete:false tant qu'il n'a pas fini : on le rappelle (assemblage par morceaux).", "• finalize answers complete:false until done: call it again (assembly in pieces)."),
         tr("• swapped = les nouveaux fichiers sont en place, la version n'est pas encore montée. Un plantage ici est sans danger.", "• swapped = the new files are in place, the version is not bumped yet. A crash here is harmless."),
-        tr("• failed + source_changed : le jeu a été retraité pendant le travail ; plan vide les tuiles et recommence.", "• failed + source_changed: the dataset was re-processed meanwhile; plan empties the tiles and restarts."),
+        tr("• failed + source_changed (depuis running ou assembling) : le jeu a été retraité ; plan vide les tuiles et recommence.", "• failed + source_changed (from running or assembling): the dataset was re-processed; plan empties the tiles and restarts."),
         tr("• cancel (la croix) : supprime journal et tuiles ; le jeu de données reste exactement comme il était.", "• cancel (the cross): deletes journal and tiles; the dataset stays exactly as it was."),
     ]
     for i, s in enumerate(pts):
-        b.append(T(44, 350 + i * 26, s, 12, 400, INK, maxw=720))
-    save("machine-etats.svg", 504, b)
+        b.append(T(44, 362 + i * 26, s, 12, 400, INK, maxw=720))
+    save("machine-etats.svg", 516, b)
 
 
 # ── finalize ───────────────────────────────────────────────────────────────────
@@ -303,49 +302,44 @@ def finalize():
                tr("Exemple m002 ; m003 est identique avec mips/, m004 ajoute deux gestes (voir le texte).",
                   "m002 example; m003 is identical with mips/, m004 adds two moves (see text)."))]
     steps = [
-        ("blue", "1", tr("Tout est fait ?", "All done?"), [tr("toutes les unités cochées", "all units ticked"), tr("manifestes sources intacts", "source manifests intact")]),
-        ("blue", "2", tr("Assembler", "Assemble"), [tr("un fichier zNNNNN.bin à la fois", "one zNNNNN.bin at a time"), tr("dans .planes-incoming/", "in .planes-incoming/"), tr("chaque PNG : en-tête vérifié", "every PNG: header checked")]),
-        ("amber", "3", tr("Échanger", "Swap"), [tr("planes/ → .planes-old/", "planes/ → .planes-old/"), tr(".planes-incoming/ → planes/", ".planes-incoming/ → planes/"), tr("(deux renommages)", "(two renames)")]),
-        ("green", "4", tr("Monter la version", "Bump the version"), [tr("formatVersion = 2", "formatVersion = 2"), tr("sous le verrou de metadata.json", "under the metadata.json lock"), tr("fusionné, jamais écrasé", "merged, never overwritten")]),
-        ("grey", "5", tr("Nettoyer", "Clean up"), [tr("supprime .planes-old/", "deletes .planes-old/"), tr("journal et tuiles", "journal and tiles")]),
+        ("blue", "1", tr("Tout est fait ?", "All done?"), tr("toutes les unités sont cochées et les manifestes sources n'ont pas changé", "all units are ticked and the source manifests have not changed")),
+        ("blue", "2", tr("Assembler", "Assemble"), tr("un fichier zNNNNN.bin à la fois dans .planes-incoming/ ; chaque PNG a son en-tête vérifié", "one zNNNNN.bin at a time in .planes-incoming/; every PNG has its header checked")),
+        ("amber", "3", tr("Échanger", "Swap"), tr("planes/ → .planes-old/, puis .planes-incoming/ → planes/ : deux renommages", "planes/ → .planes-old/, then .planes-incoming/ → planes/: two renames")),
+        ("green", "4", tr("Monter la version", "Bump the version"), tr("formatVersion = 2, sous le verrou de metadata.json, fusionné dans le fichier courant", "formatVersion = 2, under the metadata.json lock, merged into the current file")),
+        ("grey", "5", tr("Nettoyer", "Clean up"), tr("supprime .planes-old/, le journal et le magasin de tuiles", "deletes .planes-old/, the journal and the tile store")),
     ]
-    w = 140
-    for i, (col, n, hd, ls) in enumerate(steps):
-        x = 24 + i * (w + 13)
+    for i, (col, n, hd, ds) in enumerate(steps):
+        y = 68 + i * 44
         s, soft = P[col]
-        b.append(R(x, 72, w, 138, soft, s, 12, 1.7))
-        b.append(CIRC(x + 20, 96, 12, s))
-        b.append(T(x + 20, 101, n, 13, 800, "#fff", "middle"))
-        b.append(T(x + 38, 101, hd, 12.5, 800, s, maxw=w - 44))
-        for j, ln in enumerate(ls):
-            b.append(T(x + 10, 128 + j * 19, ln, 10.8, 400, INK, maxw=w - 14))
-        if i:
-            b.append(L(x - 13, 140, x, 140, INK2, 2, arrow=True))
+        b.append(R(24, y, 752, 38, soft, s, 10, 1.6))
+        b.append(CIRC(48, y + 19, 12, s))
+        b.append(T(48, y + 24, n, 13, 800, "#fff", "middle"))
+        b.append(T(70, y + 24, hd, 13, 800, s, maxw=150))
+        b.append(T(226, y + 24, ds, 11.5, 400, INK, maxw=540))
     # frise de l'état du disque
-    b.append(T(24, 246, tr("Ce que voit le disque, instant après instant", "What the disk looks like, moment by moment"), 14, 800))
+    b.append(T(24, 316, tr("Ce que voit le disque, instant après instant", "What the disk looks like, moment by moment"), 14, 800))
     segs = [(24, 330, "red", tr("version 1 + ancien état", "version 1 + old state"), tr("tout est intact", "everything intact")),
             (354, 206, "amber", tr("version 1 + nouveaux fichiers", "version 1 + new files"), tr("« à mettre à jour » : relançable", "“needs update”: can be re-run")),
             (560, 216, "green", tr("version 2", "version 2"), tr("terminé", "finished"))]
     for x, w2, col, lab, sub in segs:
         s, soft = P[col]
-        b.append(R(x, 258, w2, 56, soft, s, 8, 1.6))
-        b.append(T(x + w2 / 2, 281, lab, 12.2, 800, s, "middle", maxw=w2 - 10))
-        b.append(T(x + w2 / 2, 300, sub, 11, 400, INK2, "middle", maxw=w2 - 10))
-    # marqueurs
-    b.append(L(354, 250, 354, 322, P["amber"][0], 2.2))
-    b.append(T(354, 336, tr("renommage", "rename"), 11, 700, P["amber"][0], "middle"))
-    b.append(L(560, 250, 560, 322, P["green"][0], 2.6))
-    b.append(T(560, 336, tr("◆ le changement de version = le point de validation", "◆ the version bump = the commit point"), 11.2, 800, P["green"][0], "middle"))
+        b.append(R(x, 328, w2, 56, soft, s, 8, 1.6))
+        b.append(T(x + w2 / 2, 351, lab, 12.2, 800, s, "middle", maxw=w2 - 10))
+        b.append(T(x + w2 / 2, 370, sub, 11, 400, INK2, "middle", maxw=w2 - 10))
+    b.append(L(354, 320, 354, 392, P["amber"][0], 2.2))
+    b.append(T(346, 406, tr("étape 3 : renommage", "step 3: rename"), 11, 700, P["amber"][0], "end"))
+    b.append(L(560, 320, 560, 392, P["green"][0], 2.6))
+    b.append(T(770, 406, tr("étape 4 : la version monte = point de validation", "step 4: version bump = commit point"), 11.2, 800, P["green"][0], "end"))
     # crash
-    b.append(R(24, 358, 752, 128, "#fff", LINE, 12))
-    b.append(T(40, 382, tr("Et si ça plante ?", "What if it crashes?"), 14, 800))
+    b.append(R(24, 424, 752, 128, "#fff", LINE, 12))
+    b.append(T(40, 448, tr("Et si ça plante ?", "What if it crashes?"), 14, 800))
     for i, s in enumerate([
         tr("• pendant l'assemblage : l'ancien état est intact ; on rappelle finalize, il finit les fichiers manquants ;", "• during assembly: the old state is intact; call finalize again, it finishes the missing files;"),
         tr("• entre l'échange et la version : la structure neuve est là, la version est restée basse ; finalize est idempotent ;", "• between swap and version: the new structure is there, the version stayed low; finalize is idempotent;"),
         tr("• m004 : bricks/ est échangé avec .bricks-incoming/ ; les manifestes planes/ et mips/ sont re-signés AVANT la version ;", "• m004: bricks/ is swapped with .bricks-incoming/; the planes/ and mips/ manifests are re-stamped BEFORE the version;"),
         tr("• m004 : l'ancien arbre (bricks.v2-old/) n'est supprimé qu'APRÈS le changement de version.", "• m004: the old tree (bricks.v2-old/) is deleted only AFTER the version bump.")]):
-        b.append(T(44, 406 + i * 19, s, 11.8, 400, INK, maxw=722))
-    save("finalize.svg", 502, b)
+        b.append(T(44, 472 + i * 19, s, 11.8, 400, INK, maxw=722))
+    save("finalize.svg", 568, b)
 
 
 # ── Le test de vitesse ─────────────────────────────────────────────────────────
@@ -393,29 +387,30 @@ def speedtest():
 
 # ── Hébergements mutualisés : octants et unit_timeout ──────────────────────────
 def octants():
-    b = [title(tr("Quand le serveur est trop lent : octants et prise en main par le navigateur", "When the server is too slow: octants and browser takeover"),
-               tr("Hébergement PHP mutualisé : une requête qui dépasse max_execution_time est tuée.", "Shared PHP host: a request that exceeds max_execution_time is killed."))]
+    b = [title(tr("Serveur trop lent : octants et reprise par le navigateur", "Server too slow: octants and browser takeover"),
+               tr("Hébergement PHP mutualisé : une requête qui dépasse max_execution_time est tuée. Les octants concernent m004.", "Shared PHP host: a request that exceeds max_execution_time is killed. Octants concern m004."))]
     cols = [
-        ("blue", "1", tr("On essaie l'unité entière", "Try the whole unit"), [tr("un super-bloc 4×4×4 (≤ 64 briques)", "one 4×4×4 super-block (≤ 64 bricks)"), tr("le journal note attempts[unité] = 1", "the journal notes attempts[unit] = 1"), tr("AVANT de commencer", "BEFORE starting")]),
-        ("amber", "2", tr("La requête est tuée ?", "The request is killed?"), [tr("le délai de l'hébergeur est dépassé", "the host's time limit is exceeded"), tr("au prochain appel, l'unité est", "at the next call, the unit is"), tr("découpée en 8 octants (2×2×2)", "split into 8 octants (2×2×2)")]),
-        ("violet", "3", tr("Octant par octant", "Octant by octant"), [tr("chacun est rangé puis noté", "each is stored then noted"), tr("(partial[unité] = [0, 3, 5…])", "(partial[unit] = [0, 3, 5…])"), tr("l'unité est cochée quand tous y sont", "the unit is ticked when all are in")]),
-        ("red", "4", tr("Encore tuée : deux fois", "Killed again: twice"), [tr("409 unit_timeout", "409 unit_timeout"), tr("le journal reste « running »", "the journal stays “running”"), tr("→ le NAVIGATEUR reprend cette étape", "→ the BROWSER takes this step over")]),
+        ("blue", "1", tr("Le serveur lance l'unité entière", "The server starts the whole unit"), [tr("(m004 : un super-bloc 4×4×4, ≤ 64 briques)", "(m004: one 4×4×4 super-block, ≤ 64 bricks)"), tr("attempts[unité] monte de 1 AVANT le départ", "attempts[unit] goes up by 1 BEFORE the start"), tr("(suivi tenu seulement si l'hôte limite le temps)", "(kept only when the host limits time)")]),
+        ("amber", "2", tr("L'hôte tue la requête ?", "The host kills the request?"), [tr("max_execution_time est dépassé : coupure", "max_execution_time exceeded: cut off"), tr("au prochain appel, la même unité est", "at the next call, the same unit is"), tr("reprise en 8 octants (2×2×2 briques)", "redone as 8 octants (2×2×2 bricks)")]),
+        ("violet", "3", tr("Octant par octant", "Octant by octant"), [tr("chacun est rangé puis noté dans le journal", "each is stored then noted in the journal"), tr("(partial[unité] = [0, 3, 5…])", "(partial[unit] = [0, 3, 5…])"), tr("l'unité est cochée quand tous y sont", "the unit is ticked when all are in")]),
+        ("red", "4", tr("Tuée une deuxième fois", "Killed a second time"), [tr("409 unit_timeout (au bout de 2 morts)", "409 unit_timeout (after 2 deaths)"), tr("le journal reste « running », rien n'est perdu", "the journal stays “running”, nothing is lost"), tr("→ le NAVIGATEUR reprend cette étape", "→ the BROWSER takes this step over")]),
     ]
-    w = 178
     for i, (col, n, hd, ls) in enumerate(cols):
-        x = 24 + i * (w + 13)
+        x = 24 + (i % 2) * 388
+        y = 72 + (i // 2) * 116
+        w = 364
         s, soft = P[col]
-        b.append(R(x, 78, w, 146, soft, s, 12, 1.7))
-        b.append(CIRC(x + 20, 102, 12, s))
-        b.append(T(x + 20, 107, n, 13, 800, "#fff", "middle"))
-        b.append(T(x + 38, 107, hd, 12.3, 800, s, maxw=w - 44))
+        b.append(R(x, y, w, 104, soft, s, 12, 1.7))
+        b.append(CIRC(x + 22, y + 24, 12, s))
+        b.append(T(x + 22, y + 29, n, 13, 800, "#fff", "middle"))
+        b.append(T(x + 44, y + 29, hd, 13.5, 800, s, maxw=w - 54))
         for j, ln in enumerate(ls):
-            b.append(T(x + 10, 136 + j * 22, ln, 10.9, 400, INK, maxw=w - 14))
-        if i:
-            b.append(L(x - 13, 150, x, 150, INK2, 2, arrow=True))
-    # schéma octants
-    b.append(T(24, 258, tr("Un super-bloc et ses 8 octants", "A super-block and its 8 octants"), 13.5, 800))
-    ox, oy = 40, 274
+            b.append(T(x + 16, y + 52 + j * 19, ln, 11.8, 400, INK, maxw=w - 24))
+    b.append(L(388, 124, 412, 124, INK2, 2, arrow=True))
+    b.append(L(594, 176, 594, 188, INK2, 2, arrow=True))
+    b.append(L(412, 240, 388, 240, INK2, 2, arrow=True))
+    b.append(T(24, 322, tr("Un super-bloc et ses 8 octants", "A super-block and its 8 octants"), 13.5, 800))
+    ox, oy = 40, 338
     cell = 22
     for z in range(2):
         for y in range(2):
@@ -426,16 +421,17 @@ def octants():
                 done = n in (0, 1, 2, 4)
                 b.append(R(px, py, cell * 2, cell * 2, P["green"][1] if done else "#fff", P["green"][0] if done else LINE, 4, 1.4))
                 b.append(T(px + cell, py + cell + 5, str(n), 13, 700, P["green"][0] if done else INK2, "middle"))
-    b.append(T(ox + 70, oy + 100, tr("couche basse", "lower half"), 11, 400, INK2, "middle"))
-    b.append(T(ox + 220, oy + 100, tr("couche haute", "upper half"), 11, 400, INK2, "middle"))
-    b.append(card(400, 262, 376, 124, "grey", tr("Ce que garantit le mécanisme", "What the mechanism guarantees"), [
+    b.append(T(ox + 48, oy + 116, tr("moitié basse", "lower half"), 11, 400, INK2, "middle"))
+    b.append(T(ox + 198, oy + 116, tr("moitié haute", "upper half"), 11, 400, INK2, "middle"))
+    b.append(T(ox + 124, oy + 134, tr("verts = déjà rangés (partial)", "green = already stored (partial)"), 11, 600, P["green"][0], "middle"))
+    b.append(card(400, 326, 376, 128, "grey", tr("Ce que garantit le mécanisme", "What the mechanism guarantees"), [
         tr("• aucun travail déjà rangé n'est perdu ;", "• no work already stored is lost;"),
         tr("• un octant n'est lancé que s'il tient dans le temps restant ;", "• an octant starts only if it fits in the time left;"),
         tr("• un nouveau plan remet les compteurs à zéro ;", "• a new plan resets the counters;"),
         tr("• le navigateur n'a pas ce plafond de temps.", "• the browser has no such time ceiling.")], size=11.8))
-    b.append(R(24, 404, 752, 44, P["amber"][1], P["amber"][0], 10, 1.4))
-    b.append(T(400, 431, tr("L'état « limits.resettable » dit si l'hôte honore set_time_limit() : sinon l'échéance est le début de la requête + max_execution_time.", "“limits.resettable” says whether the host honours set_time_limit(): otherwise the deadline is request start + max_execution_time."), 11.5, 600, INK, "middle", maxw=735))
-    save("octants.svg", 464, b)
+    b.append(R(24, 488, 752, 44, P["amber"][1], P["amber"][0], 10, 1.4))
+    b.append(T(400, 515, tr("« limits.resettable » dit si l'hôte honore set_time_limit() ; sinon l'échéance est le début de la requête + max_execution_time.", "“limits.resettable” says whether the host honours set_time_limit(); otherwise the deadline is request start + max_execution_time."), 11.5, 600, INK, "middle", maxw=735))
+    save("octants.svg", 548, b)
 
 
 def run():

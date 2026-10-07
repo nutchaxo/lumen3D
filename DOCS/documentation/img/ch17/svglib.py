@@ -46,6 +46,8 @@ def T(x, y, s, size=13, weight=400, fill=INK, anchor="start", mono=False, maxw=N
         if est > maxw:
             WARN.append(f"[{LANG}] texte trop long ({est:.0f} > {maxw}) : {s[:50]}")
     ff = f' font-family="{MONO}"' if mono else ""
+    if mono:
+        s = s.replace(" ", "\u00a0")
     return (f'<text x="{x}" y="{y}" font-size="{size}" font-weight="{weight}" fill="{fill}" '
             f'text-anchor="{anchor}"{ff} {extra}>{esc(s)}</text>')
 

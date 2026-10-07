@@ -6,8 +6,7 @@
 - Les noms entre crochets, comme [Studio]{.ui}, sont ceux que vous voyez à l'écran.
 :::
 
-:::: cols
-::: col
+::: glossary
 Atlas
 : Grande texture 3D en mémoire graphique où l'on range les briques à afficher, comme les cases d'un casier. → chapitre 10
 
@@ -25,9 +24,7 @@ Cache
 
 Canal
 : Une image du même objet pour une couleur de fluorescence donnée (par exemple DAPI, Pecam1, Sox2). → chapitre 4
-:::
 
-::: col
 Compression avec perte, sans perte
 : Avec perte, le fichier est plus petit mais les valeurs sont légèrement modifiées ; sans perte, on retrouve exactement les valeurs d'origine. Les briques sont stockées sans perte. → chapitre 6
 
@@ -45,12 +42,7 @@ Ed25519 (signature)
 
 ESS (Empty Space Skipping, saut de l'espace vide)
 : Les briques presque entièrement vides ne sont pas stockées ni parcourues, ce qui économise octets et calcul. → chapitres 7 et 9
-:::
 
-::::
-
-:::: cols
-::: col
 Exposition
 : Réglage de luminosité globale appliqué à l'affichage ; il n'altère pas les données. → chapitre 11
 
@@ -68,9 +60,7 @@ Format de données
 
 Gamma
 : Réglage qui éclaircit ou assombrit les tons moyens sans toucher aux extrêmes. → chapitre 11
-:::
 
-::: col
 GPU
 : Processeur de la carte graphique, spécialisé dans le calcul parallèle ; il exécute le lancer de rayons. → chapitre 9
 
@@ -88,12 +78,7 @@ index.bin
 
 Interpolation trilinéaire
 : Estimation d'une valeur entre voxels en mélangeant les huit voisins, ce qui donne une image lisse. → chapitre 9
-:::
 
-::::
-
-:::: cols
-::: col
 Kabsch (algorithme)
 : Méthode qui trouve la rotation et le décalage alignant au mieux deux nuages de points ; utilisée pour stabiliser un timelapse. → chapitre 8
 
@@ -111,9 +96,7 @@ Masque
 
 Migration
 : Mise à jour d'un dataset déjà publié vers un format plus récent, sans repasser par le pipeline. → chapitre 13
-:::
 
-::: col
 MIP (projection d'intensité maximale)
 : Image où chaque pixel prend la valeur la plus forte rencontrée le long d'un axe. → chapitres 7 et 12
 
@@ -131,12 +114,7 @@ Ouverture morphologique
 
 Pack
 : Fichier `.bin` qui regroupe de nombreuses briques pour limiter le nombre de téléchargements. → chapitre 7
-:::
 
-::::
-
-:::: cols
-::: col
 Percentile
 : Valeur sous laquelle se trouve un pourcentage donné des mesures : le 99e percentile est dépassé par 1 % des valeurs. → chapitre 5
 
@@ -154,9 +132,7 @@ PNG
 
 Profondeur de bits
 : Nombre de bits par valeur : 8 bits donnent 256 niveaux, 16 bits en donnent 65 536. → chapitre 4
-:::
 
-::: col
 Pyramide
 : Ensemble de versions du volume à des résolutions de plus en plus grossières, empilées comme les étages d'une pyramide. → chapitre 6
 
@@ -174,12 +150,7 @@ Staging
 
 Streaming
 : Chargement progressif : on affiche ce qui est arrivé et on complète en continu, sans attendre tout le fichier. → chapitre 10
-:::
 
-::::
-
-:::: cols
-::: col
 Studio
 : Outil de figures : recadrage, annotations, barres d'échelle et export d'images pour publication. → chapitre 12
 
@@ -197,9 +168,7 @@ Three.js
 
 Timelapse
 : Série d'acquisitions du même spécimen au fil du temps, chaque image étant un volume 3D. → chapitre 4
-:::
 
-::: col
 Voxel
 : Pixel en 3D : un petit cube de valeur d'intensité. Sa taille réelle (en µm) est la calibration. → chapitre 4
 
@@ -215,5 +184,3 @@ WebP sans perte
 Worker (Web Worker)
 : Processus d'arrière-plan du navigateur : il décode et calcule sans geler l'écran. → chapitre 10
 :::
-
-::::

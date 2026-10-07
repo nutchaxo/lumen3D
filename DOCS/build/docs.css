@@ -66,7 +66,9 @@ nav.toc a { text-decoration: none; display: flex; align-items: baseline; gap: 2m
 nav.toc a .toc-text { flex: 0 1 auto; }
 nav.toc a::after { content: ""; flex: 1 1 auto; border-bottom: 1px dotted #c5cbd8; transform: translateY(-1mm); }
 nav.toc a .toc-page { order: 2; flex: 0 0 auto; min-width: 7mm; text-align: right; font-variant-numeric: tabular-nums; color: var(--muted); }
-nav.toc.compact > ul { columns: 2; column-gap: 10mm; }
+nav.toc.compact > ul { columns: 2; column-gap: 9mm; font-size: 92%; }
+nav.toc.compact ul ul li { font-size: 8.2pt; margin: .2mm 0; }
+nav.toc.compact > ul > li { margin-top: 1.6mm; }
 nav.toc.compact > ul > li { break-inside: avoid; }
 
 /* ───── Headings ───── */
@@ -250,3 +252,13 @@ dd { margin: .6mm 0 0 0; padding-left: 4mm; border-left: 2px solid #dbe4ff; brea
 :lang(nl) .why::before { content: "❓  Waarom deze keuze?"; }
 :lang(nl) .remember::before { content: "📌  Onthoud"; }
 :lang(nl) .see::before { content: "📖  Verder lezen"; }
+
+/* Short documents: chapters flow on without a forced page break */
+body.flow main h1 { page-break-before: auto; break-before: auto; padding-top: 4mm; margin-top: 4mm; }
+body.flow main h1:first-child { page-break-before: auto; }
+
+/* Glossary: one definition list flowing over two columns */
+.glossary { columns: 2; column-gap: 8mm; }
+.glossary dl { margin: 0; }
+.glossary dt { break-after: avoid; }
+.glossary dd { break-inside: avoid; margin-bottom: 1mm; }

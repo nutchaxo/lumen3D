@@ -7,6 +7,7 @@ date: "Octobre 2026"
 abstract: "Comment un fichier Imaris de plusieurs gigaoctets devient un embryon que l'on fait tourner dans un navigateur : les langages, les pages, le nettoyage de l'image, la compression, les briques, le rendu 3D, les outils de mesure et le panneau d'administration. Écrit pour des biologistes, illustré à chaque page."
 lang: fr
 toc-title: "Sommaire"
+toc-class: compact
 cover-image: img/cover.png
 ---
 
@@ -69,14 +70,7 @@ Une limite à connaître avant d'interpréter vos images.
 | → chapitre 7 | la notion est expliquée en détail ailleurs |
 
 ::: note
-Les images de volumes de ce document proviennent d'**embryons de démonstration synthétiques**,
-fabriqués pour cette documentation puis traités par le vrai pipeline de la plateforme.
-Ce ne sont pas des données du laboratoire. Les chiffres cités (seuils, tailles, formules)
-sont lus dans le code de la version 1.59.2 de la plateforme et 0.21.0 du pipeline.
-:::
-
-::: see
-Une version courte de ce document, **« L'essentiel pour le biologiste »** (10 pages), et le
-**Guide de l'administrateur** sont publiés au même endroit, dans l'onglet *Documentation*
-du panneau d'administration.
+Les images de volumes proviennent d'**embryons de démonstration synthétiques**, traités par le vrai
+pipeline ; ce ne sont pas des données du laboratoire. Les chiffres sont lus dans le code (plateforme 1.59.2,
+pipeline 0.21.0). Version courte : **« L'essentiel »** (10 pages), dans l'onglet *Documentation* du panneau d'administration.
 :::

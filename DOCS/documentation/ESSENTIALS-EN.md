@@ -7,6 +7,7 @@ date: "October 2026"
 abstract: "Ten pages to understand how an Imaris file is cleaned, reduced, cut into bricks and rendered in 3D in the browser — and what to keep in mind when you interpret your images. Each section points to the chapter of the full documentation that gives every detail."
 lang: en
 toc-title: "Contents"
+body-class: flow
 cover-image: img/cover.png
 ---
 
@@ -253,7 +254,7 @@ are displayed at once.
 ::::
 
 ::: see
-→ chapter 11 (transfer function, histograms, Gaussian filter, colour-blind palettes).
+→ chapter 11 (transfer function, histograms, Gaussian filter, colour-vision simulation).
 :::
 
 # 8. Measuring, slicing, exporting

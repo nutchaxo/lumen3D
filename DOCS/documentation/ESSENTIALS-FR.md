@@ -7,6 +7,7 @@ date: "Octobre 2026"
 abstract: "Dix pages pour comprendre comment un fichier Imaris est nettoyé, réduit, découpé et affiché en 3D dans le navigateur — et ce qu'il faut garder en tête pour interpréter vos images. Chaque section renvoie au chapitre de la documentation complète qui donne tous les détails."
 lang: fr
 toc-title: "Sommaire"
+body-class: flow
 cover-image: img/cover.png
 ---
 
@@ -253,7 +254,7 @@ sont affichés à la fois.
 ::::
 
 ::: see
-→ chapitre 11 (fonction de transfert, histogrammes, filtre gaussien, palettes daltoniens).
+→ chapitre 11 (fonction de transfert, histogrammes, filtre gaussien, simulation des daltonismes).
 :::
 
 # 8. Mesurer, couper, exporter

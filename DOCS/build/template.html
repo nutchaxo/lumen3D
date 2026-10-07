@@ -24,7 +24,7 @@ $if(extra-css)$<link rel="stylesheet" href="$extra-css$">$endif$
 </section>
 
 $if(toc)$
-<nav class="toc" id="sommaire">
+<nav class="toc $toc-class$" id="sommaire">
   <h2 class="toc-title">$if(toc-title)$$toc-title$$else$Sommaire$endif$</h2>
 $table-of-contents$
 </nav>

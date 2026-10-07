@@ -14,5 +14,13 @@
   "tipDepth": "overlap",
   "copied": "Blokmetadata naar het klembord gekopieerd",
   "hintCopy": "Klik om te kopiëren",
-  "hintCycle": "Ctrl + scrollen: diepte"
+  "hintCycle": "Ctrl + scrollen: diepte",
+  "versionTitle": "Bricks op het scherm",
+  "versionFormat": "v{v}, {n}³ per brick",
+  "versionLabel": "Versie",
+  "versionCurrent": "Huidig (na de data-update)",
+  "versionPrevious": "Vorig (vóór de data-update)",
+  "versionReload": "Wisselen herlaadt de pagina met hetzelfde beeld.",
+  "versionNone": "Voor deze dataset is geen vorige versie bewaard. Vink om te vergelijken „Vorige versie bewaren” aan in het tabblad Data-updates van de beheerder vóór de 3 → 4-update.",
+  "versionUnsupported": "Deze platformversie kan niet tussen brickversies wisselen."
 }

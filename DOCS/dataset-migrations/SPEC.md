@@ -129,8 +129,9 @@ JSON answers. Session lock released after authentication (cf. `session_write_clo
 | `plan` | POST | `{ dataset, migration }` | journal summary `{ total, empty, done, units:[pending keys] (paged: offset/limit) }` |
 | `unit_put` | POST (binary, `Content-Type: application/octet-stream`) | query `dataset, migration, unit, dry=0/1`; body = **unit blob** (§5.1) | `{ ok, done, total }` (`dry=1`: body read and discarded — upload benchmark) |
 | `unit_run` | POST | `{ dataset, migration, maxSeconds (≤ 20, clamped to max_execution_time − 5), dry }` | `{ processed:[keys], done, total, seconds, bytesRead }` |
-| `finalize` | POST | `{ dataset, migration, maxSeconds? }` | `{ ok, complete, formatVersion?, assembly:{planes, written} }` — assembles, validates, swaps, bumps; resumable: call again until `complete:true` |
+| `finalize` | POST | `{ dataset, migration, maxSeconds?, keepPrevious? }` | `{ ok, complete, formatVersion?, assembly:{planes, written} }` — assembles, validates, swaps, bumps; resumable: call again until `complete:true`. `keepPrevious: true` (JSON true only; m004) keeps the replaced tree as `bricks.previous/` (§13.6) |
 | `cancel` | POST | `{ dataset, migration }` | deletes journal + tile store |
+| `drop_previous` | POST | `{ dataset }` | `{ ok, dropped }` — deletes the dataset's `bricks.previous/` (idempotent; web 1.60.4) |
 | `bench` | POST | `{ dataset, units: N (≤ 8) }` | server executor on N sample units (dry: tiles discarded) → `{ seconds, units, bytesRead, bytesWritten }` |
 | `speedtest` | POST | `{ maxSeconds (≤ 3) }` | server side of the speed test (§7): test blocks back to back until the next one would end past `maxSeconds` (≥ 1 block) → `{ blocks, seconds, bytesRead, bytesWritten }`; needs m002's capability (409 `server_unavailable` otherwise) |
 | `speedtest_put` | POST (binary) | body = one converted test batch (≤ 4 MiB) | `{ ok, bytes }` — read and dropped |
@@ -388,7 +389,12 @@ browser probe per handler).
 ### 13.6 Finalize
 Assemble packs + `index.bin` + manifest v3 into `.bricks-incoming/`, swap `bricks/` ↔ it, re-stamp
 `planes/manifest.json` and `mips/manifest.json` `source.manifestSha256` with the new manifest's
-sha256 (their voxels are LOD0, unchanged), bump to 4. Old `bricks.v2-old/` deleted after the bump.
+sha256 (their voxels are LOD0, unchanged), bump to 4. Old `bricks.v2-old/` deleted after the bump —
+or, with `keepPrevious: true` on the finalize call that completes, renamed `bricks.previous/`
+(replacing an older one): byte for byte the v2 tree the dataset had, never read by a migration,
+reported by `status` as `previous: { schema, bytes }`, shown by `viewer.html?bricks=previous`
+(the page mounts `bricks.previous/` instead of `bricks/`; the planes/mips are not stamped for it,
+so the Studio reads its bricks), deleted by `drop_previous` (web 1.60.4).
 
 ### 13.7 Reader (viewer)
 `BrickLoader` reads v2 and v3 (by `schema`). v3: binary index, packs per (level, channel), decode

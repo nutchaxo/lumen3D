@@ -25,6 +25,10 @@ const ViewerApp = (() => {
   let _preloadedTimepoints = new Set();
   let _qualityProgressUnsub = null;
   let _brickManifest = null;
+  // 'previous' = the brick tree a 3 → 4 data update kept beside the new one
+  // (bricks.previous/, admin *Keep the previous version*), opened by ?bricks=previous.
+  let _brickTree = 'current';
+  let _previousBricksProbe = null;
   let _volumeMeasurements = [];
   let _isInitialized = false;
   let _pendingWorkspaceState = null;
@@ -191,6 +195,9 @@ const ViewerApp = (() => {
     if (datasetMeta.volumeSources.length === 0 && typeof VolumeSourceManager !== 'undefined') {
       datasetMeta.volumeSources = VolumeSourceManager.normalizeSources(datasetMeta);
     }
+    if (params.get('bricks') === 'previous') await _mountPreviousBricks();
+    const handoff = _takeBrickTreeHandoff();
+    if (handoff) _pendingWorkspaceState = handoff;
 
     _zDisplayScale = _loadZDisplayScale();
     _volumeMeasurements = MeasurementStore.list(datasetId, 'viewer');
@@ -225,7 +232,8 @@ const ViewerApp = (() => {
     // Update UI Header
     document.getElementById('dataset-title').textContent = datasetMeta.name;
     document.getElementById('dataset-subtitle').textContent =
-      `${Utils.datasetTypeLabel(datasetMeta.type)} - ${Utils.formatStage(datasetMeta.stage)} - ${Utils.formatDate(datasetMeta.date)}`;
+      `${Utils.datasetTypeLabel(datasetMeta.type)} - ${Utils.formatStage(datasetMeta.stage)} - ${Utils.formatDate(datasetMeta.date)}`
+      + (_brickTree === 'previous' ? ` - ${_t('viewer.previousBricks', 'previous version (before the data update)')}` : '');
 
     // A #state= link is somebody's *saved view*, not the dataset: it reopens their
     // camera, channel curves, measurements and tool layout on top of it. Ask which
@@ -371,7 +379,12 @@ const ViewerApp = (() => {
       dataset: {
         getMeta: () => datasetMeta,
         getId: () => datasetId,
-        getBasePath: () => _basePath
+        getBasePath: () => _basePath,
+        // The brick tree on screen ('current' | 'previous'), whether a previous one was
+        // kept (Promise<boolean>), and a reload of the page on the other one, same view.
+        brickTree: () => _brickTree,
+        hasPreviousBricks: () => _hasPreviousBricks(),
+        openBrickTree: (tree) => _openBrickTree(tree)
       },
       viewer: {
         getRenderer: () => VolumeViewer.getRenderer(),
@@ -910,6 +923,62 @@ const ViewerApp = (() => {
     if (meta.gallery !== undefined && !Array.isArray(meta.gallery)) drop('gallery');
     if (dropped.length) console.warn(`[ViewerApp] metadata.json: malformed block(s) ignored: ${dropped.join(', ')}`);
     return dropped;
+  }
+
+  // ── Previous brick tree (kept by a 3 → 4 data update) ─────────────────────────
+  const _PREVIOUS_BRICKS_DIR = 'bricks.previous';
+  const _BRICK_TREE_HANDOFF = 'lumen3d.brickTreeHandoff';
+
+  /** Resolves true when the published dataset kept a previous brick tree. Never throws. */
+  function _hasPreviousBricks() {
+    if (_previousBricksProbe) return _previousBricksProbe;
+    const path = datasetMeta?.path || datasetMeta?.id;
+    // A staged import is read through the blob proxy and has no previous tree.
+    if (!path || String(path).startsWith(_STAGING_PREFIX)) return Promise.resolve(false);
+    const base = _datasetBase(path);
+    _previousBricksProbe = fetch(`${base}/${_PREVIOUS_BRICKS_DIR}/manifest.json`, { method: 'HEAD', cache: 'no-cache' })
+      .then((r) => r.ok)
+      .catch(() => false);
+    return _previousBricksProbe;
+  }
+
+  /** ?bricks=previous: every brick read goes to bricks.previous/ — or, without one, a notice. */
+  async function _mountPreviousBricks() {
+    if (!(await _hasPreviousBricks())) {
+      if (typeof ExportManager !== 'undefined') ExportManager.toast?.(_t('viewer.previousBricksMissing', 'This dataset kept no previous version: showing the current one.'));
+      return;
+    }
+    _brickTree = 'previous';
+    const q = datasetMeta.qualities || {};
+    datasetMeta.qualities = { ...q, native: { ...(q.native || {}), directory: _PREVIOUS_BRICKS_DIR } };
+  }
+
+  /** Reloads the page on the other brick tree; the workspace on screen follows through sessionStorage. */
+  function _openBrickTree(tree) {
+    const want = tree === 'previous' ? 'previous' : 'current';
+    if (want === _brickTree) return false;
+    try {
+      sessionStorage.setItem(_BRICK_TREE_HANDOFF, JSON.stringify({ id: datasetId, state: _getWorkspaceState() }));
+    } catch (_) { /* no storage: the page opens on the dataset's own view */ }
+    const url = new URL(window.location.href);
+    if (want === 'previous') url.searchParams.set('bricks', 'previous');
+    else url.searchParams.delete('bricks');
+    url.hash = '';
+    window.location.assign(url.toString());
+    return true;
+  }
+
+  /** The workspace an _openBrickTree reload handed over, once, for this dataset only. */
+  function _takeBrickTreeHandoff() {
+    let raw = null;
+    try {
+      raw = sessionStorage.getItem(_BRICK_TREE_HANDOFF);
+      sessionStorage.removeItem(_BRICK_TREE_HANDOFF);
+    } catch (_) { return null; }
+    try {
+      const doc = raw ? JSON.parse(raw) : null;
+      return doc && doc.id === datasetId && doc.state && typeof doc.state === 'object' ? doc.state : null;
+    } catch (_) { return null; }
   }
 
   async function _mergeDatasetMetadata() {

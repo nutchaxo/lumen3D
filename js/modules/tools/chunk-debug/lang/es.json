@@ -14,5 +14,13 @@
   "tipDepth": "superposición",
   "copied": "Metadatos del chunk copiados al portapapeles",
   "hintCopy": "Clic: copiar",
-  "hintCycle": "Ctrl + rueda: profundidad"
+  "hintCycle": "Ctrl + rueda: profundidad",
+  "versionTitle": "Bricks en pantalla",
+  "versionFormat": "v{v}, {n}³ por brick",
+  "versionLabel": "Versión",
+  "versionCurrent": "Actual (tras la actualización de datos)",
+  "versionPrevious": "Anterior (antes de la actualización de datos)",
+  "versionReload": "Cambiar de versión recarga la página con la misma vista.",
+  "versionNone": "No se conservó ninguna versión anterior de este dataset. Para comparar, marque «Conservar la versión anterior» en la pestaña Actualizaciones de datos del administrador antes de su actualización 3 → 4.",
+  "versionUnsupported": "Esta versión de la plataforma no permite cambiar la versión de los bricks."
 }

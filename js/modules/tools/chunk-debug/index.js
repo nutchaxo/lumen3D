@@ -101,7 +101,61 @@ PluginRegistry.implement('chunk-debug', {
 
   reset() { this.setState({ active: false }); },
 
-  dispose() { this._disable(); this._ctx = null; },
+  dispose() {
+    this._disable();
+    if (this._vpanel) { this._vpanel.remove(); this._vpanel = null; }
+    this._ctx = null;
+  },
+
+  // ── Brick version (the tree a 3 → 4 data update kept, bricks.previous/) ──────
+
+  /**
+   * A small panel while the overlay is on: the brick format on screen and, when the
+   * dataset kept its previous tree, a choice between the two — the page reloads on the
+   * other one with the same view (ctx.dataset.openBrickTree). A core without that API
+   * shows the format alone.
+   */
+  _showVersionPanel() {
+    const ds = this._ctx && this._ctx.dataset;
+    const canSwitch = !!(ds && typeof ds.openBrickTree === 'function' && typeof ds.hasPreviousBricks === 'function');
+    const tree = canSwitch ? ds.brickTree() : 'current';
+    const probe = canSwitch ? ds.hasPreviousBricks() : Promise.resolve(false);
+    probe.then((has) => {
+      if (!this._active || !this._ctx) return;
+      const html = this._versionHtml(tree, has || tree === 'previous', canSwitch);
+      if (!this._vpanel) {
+        this._vpanel = this._ctx.ui.addCanvasPanel({
+          id: 'chunk-debug-version',
+          className: 'chunk-debug-version',
+          html,
+          bind: (root) => root.addEventListener('change', (e) => {
+            const sel = e.target.closest('[data-cd-tree]');
+            if (sel && this._ctx) this._ctx.dataset.openBrickTree(sel.value);
+          })
+        });
+      } else {
+        this._vpanel.setHtml(html);
+      }
+      if (this._vpanel) this._vpanel.show();
+    }).catch(() => {});
+  },
+
+  _versionHtml(tree, hasPrevious, canSwitch) {
+    const esc = s => (this._ctx.ui && this._ctx.ui.escapeHtml) ? this._ctx.ui.escapeHtml(String(s)) : String(s);
+    const fmt = (typeof BrickLoader !== 'undefined' && BrickLoader.getFormat) ? BrickLoader.getFormat() : null;
+    const onScreen = fmt ? this._t('versionFormat', { v: fmt.version, n: fmt.brickStride }) : '';
+    const choice = canSwitch && hasPrevious
+      ? `<label class="chunk-debug-version-row"><span>${esc(this._t('versionLabel'))}</span>
+          <select class="input input-sm" data-cd-tree aria-label="${esc(this._t('versionLabel'))}">
+            <option value="current" ${tree === 'current' ? 'selected' : ''}>${esc(this._t('versionCurrent'))}</option>
+            <option value="previous" ${tree === 'previous' ? 'selected' : ''}>${esc(this._t('versionPrevious'))}</option>
+          </select></label>
+         <p class="chunk-debug-version-note">${esc(this._t('versionReload'))}</p>`
+      : `<p class="chunk-debug-version-note">${esc(this._t(canSwitch ? 'versionNone' : 'versionUnsupported'))}</p>`;
+    return `<div class="scientific-panel-body">
+      <div class="chunk-debug-version-row"><b>${esc(this._t('versionTitle'))}</b><span>${esc(onScreen)}</span></div>
+      ${choice}</div>`;
+  },
 
   // ── helpers ──────────────────────────────────────────────────────────────
 
@@ -167,6 +221,7 @@ PluginRegistry.implement('chunk-debug', {
       }, this._POLL_MS);
 
       this._rebuild();
+      this._showVersionPanel();
     } catch (e) {
       // Never leave listeners / interval / DOM dangling on a partial enable.
       console.error('[chunk-debug] enable failed:', e);
@@ -184,6 +239,7 @@ PluginRegistry.implement('chunk-debug', {
       this._canvas.removeEventListener('wheel', this._onWheel, this._wheelOpts);
     }
     window.removeEventListener('resize', this._onResize);
+    if (this._vpanel) this._vpanel.hide();
     if (this._ro) { try { this._ro.disconnect(); } catch (e) {} this._ro = null; }
     if (this._pollId) { clearInterval(this._pollId); this._pollId = null; }
     if (this._moveRaf) { cancelAnimationFrame(this._moveRaf); this._moveRaf = null; }

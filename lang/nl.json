@@ -375,7 +375,9 @@
     "gpuCompressionAuto": "Tijdreeksen",
     "gpuCompressionActive": "Weergegeven uit door de GPU gecomprimeerde blokken: half zoveel geheugen, dus meer frames blijven geladen; voxelwaarden zijn benaderd (ongeveer 1–2 niveaus op 255). De native pass van de Studio leest exacte voxels.",
     "gpuCompressionInactive": "Weergegeven uit exacte voxels.",
-    "gpuCompressionUnsupported": "Niet beschikbaar op deze GPU: weergegeven uit exacte voxels."
+    "gpuCompressionUnsupported": "Niet beschikbaar op deze GPU: weergegeven uit exacte voxels.",
+    "previousBricks": "vorige versie (vóór de data-update)",
+    "previousBricksMissing": "Deze dataset heeft geen vorige versie bewaard: de huidige wordt getoond."
   },
   "compare": {
     "title": "Vergelijkingsmodus",
@@ -2141,6 +2143,16 @@
     "loadFailed": "De updatestatus kon niet worden gelezen ({status}).",
     "network": "netwerk",
     "recommended": "Snelste in de snelheidstest",
-    "paced": "De host antwoordt traag: verzoeken worden vertraagd zodat hij dit adres niet blokkeert."
+    "paced": "De host antwoordt traag: verzoeken worden vertraagd zodat hij dit adres niet blokkeert.",
+    "keepPrev": "Vorige versie bewaren",
+    "keepPrevHint": "Een 3 → 4-update bewaart de bricks die ze vervangt naast de nieuwe, zodat de viewer beide kan tonen (tool Chunk debug) en u voor en na kunt vergelijken. Dat kost nog eens evenveel ruimte als de bricks van elke dataset; verwijder de vorige versie hieronder na de vergelijking.",
+    "prevKept": "Bewaarde vorige versies ({n})",
+    "prevSize": "v2-bricks · {size}",
+    "prevOpen": "Vorige versie openen",
+    "prevDrop": "Verwijderen",
+    "confirmDropPrev": "De vorige versie van {name} verwijderen? De dataset zelf blijft zoals hij is.",
+    "prevDropped": "Vorige versie van {name} verwijderd.",
+    "prevDropFailed": "De vorige versie kon niet worden verwijderd.",
+    "unitGB": "GB"
   }
 }

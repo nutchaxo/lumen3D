@@ -307,8 +307,12 @@ export function createApi(request, base = API_MIGRATIONS) {
     },
     unitRun: (dataset, migration, dry = false) => postJson('unit_run', { dataset, migration, maxSeconds: SERVER_SLICE_SECONDS, dry: !!dry }),
     // Assembly is bounded in time too: an answer { complete: false, assembly } asks for another call.
-    finalize: (dataset, migration) => postJson('finalize', { dataset, migration, maxSeconds: SERVER_SLICE_SECONDS }),
+    // keepPrevious (m004): the v2 tree is kept as bricks.previous/ instead of deleted.
+    finalize: (dataset, migration, opts = {}) => postJson('finalize', opts.keepPrevious
+      ? { dataset, migration, maxSeconds: SERVER_SLICE_SECONDS, keepPrevious: true }
+      : { dataset, migration, maxSeconds: SERVER_SLICE_SECONDS }),
     cancel: (dataset, migration) => postJson('cancel', { dataset, migration }),
+    dropPrevious: (dataset) => postJson('drop_previous', { dataset }),
     bench: (dataset, units, migration) => postJson('bench', migration ? { dataset, migration, units } : { dataset, units }),
     speedtest: (maxSeconds) => postJson('speedtest', { maxSeconds }),
   };
@@ -598,6 +602,7 @@ export async function runBrowserUnits({ pool, dataset, migration, keys, dry = fa
  * @param {(e: object) => void} o.onEvent
  * @param {(migration: string, dataset: string) => string|null} [o.executorFor]
  * @param {(dataset: string, migration: string) => number|null} [o.estimateStep]  seconds
+ * @param {(dataset: string, migration: string) => boolean} [o.keepPrevious]  finalize keeps the replaced tree
  * @param {() => number} [o.now]   seconds
  */
 export class Runner {
@@ -844,7 +849,8 @@ export class Runner {
     let fin;
     let stalled = 0;
     for (;;) {
-      fin = await this._call(() => api.finalize(item.dataset, item.migration));
+      const keepPrevious = !!(this.o.keepPrevious && this.o.keepPrevious(item.dataset, item.migration));
+      fin = await this._call(() => api.finalize(item.dataset, item.migration, { keepPrevious }));
       if (fin.stopped) return 'paused';
       if (!fin.ok || !fin.data || fin.data.ok === false) throw apiError(fin, 'finalize failed');
       if (fin.data.complete !== false) break;

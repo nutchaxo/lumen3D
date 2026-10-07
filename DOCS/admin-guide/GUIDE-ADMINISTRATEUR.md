@@ -942,7 +942,7 @@ Les variables de page `{type3d}`, `{type2d}` et `{typeLive}` (chapitre 10) repre
 | 4 | Le détail **par jeu de données** ; cliquez un en-tête (Dataset, Vues, Téléch.) pour trier. |
 :::
 
-- **Visites** — ouvertures d'une page du site.
+- **Visites** — ouvertures de la page d'accueil, comptées une fois par onglet du navigateur.
 - **Vues dataset** — fois où un jeu de données a été ouvert dans le visualiseur : l'indicateur le plus parlant.
 - **Téléchargements** — fichiers récupérés depuis le Download Center.
 
@@ -1061,7 +1061,7 @@ Réinitialiser demande « Réinitialiser l'identité aux valeurs par défaut ? �
 | **Erreur** | Les messages d'erreur (rouge par défaut) |
 | **Avertissement** | Les alertes (orange par défaut) |
 
-Cliquez sur un carré de couleur pour ouvrir le sélecteur : **l'aperçu se met à jour instantanément**. Les boutons principaux sont dérivés de la couleur de l'instance et respectent le contraste **WCAG AA** ; le thème enregistré s'applique avant le premier affichage.
+Cliquez sur un carré de couleur pour ouvrir le sélecteur : **l'aperçu se met à jour instantanément**. Les boutons principaux sont dérivés de la couleur de l'instance et visent le contraste **WCAG AA** (sans le garantir pour toutes les couleurs : un texte blanc sur un orange ou un turquoise vif reste en dessous ; vérifiez la lisibilité dans l'aperçu) ; le thème enregistré s'applique avant le premier affichage.
 
 ::: tip
 Gardez Succès / Erreur / Avertissement **proches du vert / rouge / orange** : ce sont des repères universels.

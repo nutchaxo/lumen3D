@@ -942,7 +942,7 @@ The page variables `{type3d}`, `{type2d}` and `{typeLive}` (chapter 10) pick up 
 | 4 | The detail **by dataset**; click a header (Dataset, Views, Downl.) to sort. |
 :::
 
-- **Visits** — openings of a page of the site.
+- **Visits** — openings of the home page, counted once per browser tab.
 - **Dataset views** — times a dataset was opened in the viewer: the most telling indicator.
 - **Downloads** — files fetched from the Download Center.
 
@@ -1061,7 +1061,7 @@ Resetting asks "Reset identity to defaults? Business content will be removed.". 
 | **Error** | Error messages (red by default) |
 | **Warning** | Alerts (orange by default) |
 
-Click a colour square to open the picker: **the preview updates instantly**. The main buttons are derived from the instance colour and respect **WCAG AA** contrast; the saved theme is applied before the first display.
+Click a colour square to open the picker: **the preview updates instantly**. The main buttons are derived from the instance colour and aim for **WCAG AA** contrast (without guaranteeing it for every colour: white text on a bright orange or turquoise stays below it; check readability in the preview); the saved theme is applied before the first display.
 
 ::: tip
 Keep Success / Error / Warning **close to green / red / orange**: they are universal cues.

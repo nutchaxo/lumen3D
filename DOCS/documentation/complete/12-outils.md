@@ -50,7 +50,7 @@ Survolez un bouton : une info-bulle donne son nom. La barre est rangée en **cin
 ::::::
 
 ::: note
-**Votre barre peut être différente.** Les outils sont des *plugins* installés par l'administrateur depuis le catalogue (chapitre 13). Dix-sept boutons sont recommandés par défaut ; le débogage des chunks, la capture « bac à sable » et les outils 2D sont optionnels. Les outils de suivi cellulaire n'apparaissent que sur une série temporelle suivie.
+**Votre barre peut être différente.** Les outils sont des *plugins* installés par l'administrateur depuis le catalogue (chapitre 13). Le débogage des chunks, la capture « bac à sable » et les outils 2D sont optionnels. Les outils de suivi cellulaire n'apparaissent que sur une série temporelle suivie.
 :::
 
 ### Je veux… → j'utilise…
@@ -70,7 +70,7 @@ Survolez un bouton : une info-bulle donne son nom. La barre est rangée en **cin
 | Suivre des cellules dans le temps | Les cinq outils de suivi (§ 12.9) | <kbd>I</kbd>, <kbd>D</kbd> |
 | Partager ce que je vois | Copier l'adresse de la page (§ 12.11) | — |
 
-## 12.2 Mesurer une distance {.page}
+## 12.2 Mesurer une distance
 
 ::: tldr
 - **À quoi ça sert** : connaître en micromètres la distance entre deux points du volume.
@@ -142,7 +142,7 @@ Allumez la grille (bouton 7) : une barre d'échelle apparaît en bas à droite, 
 µm par pixel = 2·tan(champ/2) · profondeur · (taille physique X / échelle du cube) / hauteur de la vue en pixels. La barre est masquée sans calibration ou si la grille est éteinte.
 :::
 
-## 12.3 La coupe oblique {.page}
+## 12.3 La coupe oblique
 
 ::: tldr
 - **À quoi ça sert** : voir une tranche plane du volume, droite ou inclinée, au lieu de la vue d'ensemble.
@@ -180,7 +180,7 @@ La coupe lit le **même atlas** que la vue 3D, donc mêmes fenêtres, gamma et c
 Les préréglages XY/XZ/YZ suivent les axes **du fichier**, pas ceux de l'embryon, sauf si le jeu de données a été calibré (§ 12.5).
 :::
 
-## 12.4 L'explorateur Z-Stack {.page}
+## 12.4 L'explorateur Z-Stack
 
 ::: tldr
 - **À quoi ça sert** : feuilleter les plans de la pile comme dans un logiciel de microscopie.
@@ -227,7 +227,7 @@ Une seule opération rogne le volume en Z : `setClipRange_z` avec l'intervalle `
 
 **Échantillon « à l'envers ».** Certains fichiers Imaris montrent l'échantillon vu de dessous. L'administrateur l'indique dans les métadonnées (`upsideDown`) : la « face supérieure » est alors la face −Z, et le Z-stack, ainsi que les figures du Studio, la présentent du bon côté. La calibration d'orientation n'en dépend pas.
 
-## 12.5 Les axes d'orientation, la grille et les affichages {.page}
+## 12.5 Les axes d'orientation, la grille et les affichages
 
 ::: tldr
 - **Axes d'orientation** : une boussole de l'embryon (R1/R2, G1/G2, B1/B2).
@@ -259,7 +259,7 @@ Le fichier a sa rotation `Q_base` (axes du fichier → axes anatomiques). La bou
 - **Axes** (8) : un repère XYZ coloré, à ne pas confondre avec la boussole. Glissez sa sphère pour le déplacer.
 - **Volume** (10) : cache le volume ray-marché ; la grille, les axes, les mesures et le suivi restent.
 
-## 12.6 Capture, export, présentation, téléchargement, canaux, chunks {.page}
+## 12.6 Capture, export, présentation, téléchargement, canaux, chunks
 
 ::: tldr
 - Trois façons d'obtenir une image : [Capture d'ecran]{.ui} (rapide), [Exporter la vue 3D en PNG]{.ui} (grande taille), le Studio (figure annotée).
@@ -300,7 +300,7 @@ Dans le viewer, il affiche une **liste de fichiers** : le fichier Imaris d'origi
 
 ### Décomposer par canal
 
-![Un vignette par canal : DAPI, Pecam1, Sox2.](img/ch12/decomposer.png){.shot width=88%}
+![Une vignette par canal : DAPI, Pecam1, Sox2.](img/ch12/decomposer.png){.shot width=88%}
 
 Chaque canal allumé reçoit sa **vignette** (le même volume, avec ce canal seul). Cliquer une vignette permet de régler ce canal dans le panneau de gauche ([Terminé]{.ui} pour sortir, [Revenir à l'original]{.ui}). Les trois boutons (1) choisissent la disposition ; [Export]{.ui} (2) écrit un PNG `decomposition_<disposition>_<date>.png`. Chaque vignette est rendue à la taille du volume (512 à 4096 px) et le viewer refuse une image trop grande pour la carte graphique (« Trop de vues pour une seule image »).
 
@@ -310,7 +310,7 @@ Chaque canal allumé reçoit sa **vignette** (le même volume, avec ce canal seu
 
 L'outil le plus pédagogique du chapitre 7 : il **dessine les arêtes de chaque brique non vide** du niveau affiché. Survolez une brique : son identifiant, sa taille (ici 64×64×48 voxels, 76,8 × 76,8 × 144 µm), sa taille stockée (66³ avec une bordure d'un voxel), son fichier de pack et son niveau de détail. Clic : copie ces informations. <kbd>Ctrl</kbd> + molette : parcourt les briques superposées sous le curseur.
 
-## 12.7 Le Studio : annoter et exporter une figure {.page}
+## 12.7 Le Studio : annoter et exporter une figure
 
 ::: tldr
 - **À quoi ça sert** : fabriquer une figure de publication à partir d'une coupe (barre d'échelle, flèches, mesures, texte).
@@ -336,7 +336,7 @@ L'outil le plus pédagogique du chapitre 7 : il **dessine les arêtes de chaque 
 
 ::: steps
 1. Dans la coupe oblique ou le Z-stack, cliquez le bouton d'ouverture du Studio.
-2. Annotez : chaque outil a une lettre (tableau § 12.10). Une barre d'échelle est posée à l'ouverture si le volume est calibré.
+2. Annotez : chaque outil a une lettre (tableau § 12.11). Une barre d'échelle est posée à l'ouverture si le volume est calibré.
 3. Recolorez les canaux si besoin (colonne de droite).
 4. [Exporter PNG]{.ui} pour l'image, [Sauvegarder JSON]{.ui} pour pouvoir reprendre plus tard.
 :::
@@ -352,7 +352,7 @@ L'outil le plus pédagogique du chapitre 7 : il **dessine les arêtes de chaque 
 L'aperçu (au plus 2048 px) vient de la carte graphique. La passe native va chercher les **voxels de la résolution maximale** pour ce plan précis, et remplace l'image pendant qu'elle arrive. Une barre indique octets, chunks et temps restant, avec [S'arrêter ici]{.ui}.
 
 - Une coupe **XY** d'un jeu de format 2 ou plus lit le dossier `planes/` : uniquement les voxels du plan.
-- Un plan **oblique** ou un volume ancien passe par les briques (lectures d'octets ciblées, § 10).
+- Un plan **oblique** ou un volume ancien passe par les briques (lectures d'octets ciblées, chapitre 10).
 - Une brique absente parce que vide est comptée comme **zéro**, jamais comme « manquante ».
 - Si une figure demande plus de 256 Mo, une boîte propose natif, résolution réduite ou aperçu.
 
@@ -366,7 +366,7 @@ Sur le jeu de démonstration (768 × 576 px), le natif est aussi petit que l'ape
 - **JSON** (`<jeu>_studio.json`) : calques, repères, canaux, plan, calibration. **Jamais de pixels.** À l'import, un fichier de plus de **5 Mo**, 2 000 calques ou 10 000 points est refusé ; un fichier d'une autre figure n'applique que les calques.
 - Au-delà de 4 canaux, seuls les 4 premiers sont montrés. Sans calibration : pas de barre d'échelle, mesures en pixels.
 
-## 12.8 La page Comparer {.page}
+## 12.8 La page Comparer
 
 ::: tldr
 - **À quoi ça sert** : afficher jusqu'à **quatre** jeux de données côte à côte, en gardant les vues synchronisées.
@@ -419,7 +419,7 @@ Les panneaux démarrent en 512 ; la montée de qualité se fait **un panneau à 
 - **Exporter** compose la grille visible (4096 px de côté au plus).
 - **Sauvegarder** garde l'espace de travail dans le navigateur ; **Restaurer** le recharge. L'adresse de la page contient aussi l'état (`#state=…`).
 
-## 12.9 La frise temporelle et le suivi cellulaire {.page}
+## 12.9 La frise temporelle et le suivi cellulaire
 
 ::: tldr
 - Une **série temporelle** (type *Live*) ajoute une frise en bas de l'écran pour la lire.
@@ -500,7 +500,7 @@ Boutons d'export : [CSV de la piste]{.ui}, [CSV des voisines]{.ui}, [JSON du lig
 - **Distance entre cellules** (<kbd>D</kbd>) : cliquez deux cellules suivies. Mode [Instantané]{.ui} (positions gardées) ou [Suivre les cellules]{.ui} (relue à chaque image ; « Hors image » si l'une disparaît). Formule : √(Δx² + Δy² + Δz²) en µm.
 - **Graphiques de suivi** : [Population]{.ui}, [Vitesse]{.ui}, [Voisines]{.ui}, [Mitoses]{.ui}, échelle [Linéaire]{.ui} ou [Log]{.ui}, une courbe par région.
 
-## 12.10 La page 2D : les photographies {.page}
+## 12.10 La page 2D : les photographies
 
 ::: tldr
 - **À quoi ça sert** : afficher une photographie calibrée (stéréomicroscope, ici X-gal), la mesurer et la comparer.
@@ -573,7 +573,7 @@ La vue divisée échange une vue **physique** (µm par pixel d'écran + position
 
 La planche assemble plusieurs photographies en un PNG : **même échelle physique** (une barre commune, chaque image est ramenée au pixel le plus grossier, jamais agrandie) ou **même taille d'image** (une barre par panneau). Limites : 6000 px de large, 120 mégapixels. Elle s'ouvre aussi dans le Studio.
 
-## 12.11 Raccourcis clavier et partage d'une vue {.page}
+## 12.11 Raccourcis clavier et partage d'une vue
 
 ::: tldr
 - Les raccourcis sont ignorés quand vous tapez dans un champ.

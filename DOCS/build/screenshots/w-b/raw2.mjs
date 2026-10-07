@@ -1,0 +1,13 @@
+import { launch, newPage, BASE, sleep } from '../shotlib.mjs';
+const b = await launch();
+const R='/tmp/claude-0/-home-user-lumen3D/5ffff1c0-bcbf-5d42-83df-ee43f5e6cbc6/scratchpad/w-b/raw/';
+let page = await newPage(b, {});
+await page.goto(BASE+'/viewer.html?id=3d/Embryo-E95-Em2-Pecam1-Sox2',{waitUntil:'domcontentloaded'}); await sleep(35000);
+await page.screenshot({path:R+'viewer.png',timeout:180000});
+const p2 = await newPage(b, {});
+await p2.goto(BASE+'/viewer.html?id=live/Demo-Lumen3D-E85-Em1-30min-2ch-4tp',{waitUntil:'domcontentloaded'}); await sleep(30000);
+await p2.screenshot({path:R+'live.png',timeout:180000});
+const p3 = await newPage(b, {});
+await p3.goto(BASE+'/compare.html?add=3d/Embryo-E85-Em1-Pecam1-Sox2&add=3d/Embryo-E95-Em2-Pecam1-Sox2&add=3d/Embryo-E105-Em3-Pecam1',{waitUntil:'domcontentloaded'}); await sleep(70000);
+await p3.screenshot({path:R+'compare.png',timeout:180000});
+await b.close();

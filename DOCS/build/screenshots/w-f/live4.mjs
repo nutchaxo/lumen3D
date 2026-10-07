@@ -1,0 +1,12 @@
+import {DIR,launch,newPage,shot,openViewer,LIVE,sleep,boxes,scrollSidebar} from './lib.mjs';
+const b=await launch(); const p=await newPage(b);
+p.on('console',m=>{if(['error','warning'].includes(m.type()))console.log('C',m.text().slice(0,150))});
+await openViewer(p,LIVE,4000);
+await p.mouse.click(255+1329*0.97,911); await sleep(4000);
+await p.evaluate(()=>document.querySelector('[data-plugin-id="tracking-trails"]').click()); await sleep(3000);
+await p.evaluate(()=>{const o=document.getElementById('tt-opacity');o.value=100;o.dispatchEvent(new Event('input',{bubbles:true}));const f=document.getElementById('tt-future');f.click();const c=document.getElementById('tt-color');c.value='speed';c.dispatchEvent(new Event('change',{bubbles:true}));});
+await sleep(2500);
+await p.evaluate(()=>{const c=[...document.querySelectorAll('input[type=checkbox]')].find(e=>e.getBoundingClientRect().x<60&&e.getBoundingClientRect().y>600&&e.getBoundingClientRect().y<700); c&&c.click();});
+await sleep(2000);
+await p.screenshot({path:'l_tr2.png',clip:{x:600,y:150,width:700,height:600}});
+await b.close();

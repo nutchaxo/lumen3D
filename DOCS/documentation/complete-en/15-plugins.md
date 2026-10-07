@@ -481,12 +481,12 @@ A viewer that is **already open** polls the server (`api/health`, every 8 second
 
 For an "in-page" plugin, code that has already run cannot be undone: the revocation takes effect **at the next load**. And on a PHP host, which does not emit `trustEpoch`, revocation also takes effect only at the next load.
 
-### The sandbox: an armoured booth with an intercom
+### The sandbox: an armoured counter with an intercom
 
 ![An empty iframe, a monitored intercom, eight message types.](img-en/ch15/bac-a-sable.svg){width=100%}
 
 ::: analogy
-**An armoured booth.** The plugin works in a closed cabin. It cannot see the room (the DOM) and has no telephone (no network). It has an intercom: it asks a question, the clerk (the page) checks that it is entitled to, then answers with **a copy** of the information, never the original.
+**An armoured counter.** The plugin works in a closed booth behind it. It cannot see the room (the DOM) and has no telephone (no network). It has an intercom: it asks a question, the clerk (the page) checks that it is entitled to, then answers with **a copy** of the information, never the original.
 :::
 
 **The booth**: an `<iframe sandbox="allow-scripts">` **without** `allow-same-origin`. The browser gives it a "null" origin: no access to the page's DOM, cookies, storage or administration calls. An internal policy (`default-src 'none'`, `connect-src 'none'`) forbids any network, worker or sub-frame. A continuous-integration test rejects any change that would add `allow-same-origin`.

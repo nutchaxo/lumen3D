@@ -1,0 +1,10 @@
+import { launch, page0, snap, outDir, openViewer, sleep } from './common.mjs';
+const dir = outDir('ch10');
+const b = await launch();
+const page = await page0(b);
+await openViewer(page, 'live/Demo-Lumen3D-E85-Em1-30min-2ch-4tp', 20000);
+await sleep(15000);
+await snap(page, dir, 'live-page');
+const info = await page.evaluate(() => ({ tl: document.getElementById('timeline-panel')?.className, buf: document.getElementById('buffer-status')?.innerText, q: document.getElementById('select-quality')?.innerText }));
+console.log(JSON.stringify(info));
+await b.close();

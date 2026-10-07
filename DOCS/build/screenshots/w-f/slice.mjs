@@ -1,0 +1,11 @@
+import {launch,newPage,shot,openViewer,E95,sleep,boxes} from './lib.mjs';
+const b=await launch(); const p=await newPage(b);
+await openViewer(p,E95,2000);
+await p.keyboard.press('c'); await sleep(15000);
+let tg=await boxes(p,[{sel:'#slice-stage',n:1,side:'inside',noBox:true,dx:-300,dy:-200},{sel:'#slice-stage-scale',n:2,side:'left'},{sel:'#slicer-preview-mount',n:3,side:'left'},{sel:'#slice-inspector .preset-row, #slice-inspector [data-preset]',n:4,side:'left'},{sel:'#slicer-position',n:5,side:'left',pad:10},{sel:'#slicer-slab',n:6,side:'left',pad:10},{sel:'#slicer-projection',n:7,side:'left'},{sel:'#btn-slicer-studio',n:8,side:'left'}]);
+await shot(p,'coupe-oblique',{targets:tg});
+await p.evaluate(()=>document.getElementById('btn-slicer-studio').click());
+await sleep(40000);
+await p.screenshot({path:'studio0.png'});
+console.log(await p.evaluate(()=>[...document.querySelectorAll('[id*=studio]')].map(e=>e.id+' '+Math.round(e.getBoundingClientRect().x)+','+Math.round(e.getBoundingClientRect().y)+','+Math.round(e.getBoundingClientRect().width)+'x'+Math.round(e.getBoundingClientRect().height)).join('\n')));
+await b.close();

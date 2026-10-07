@@ -1,0 +1,14 @@
+import {launch,newPage,shot,openViewer,E95,sleep,boxes} from './lib.mjs';
+const b=await launch(); const p=await newPage(b);
+await openViewer(p,E95,2000);
+const click=async s=>{await p.evaluate(s=>document.querySelector(s).click(),s);await sleep(4000)};
+await p.mouse.move(960,480); await p.mouse.wheel(0,500); await sleep(3000);
+await click('[data-plugin-id="orientation-axes"]');
+await sleep(3000);
+let tg=await boxes(p,[{sel:'[data-plugin-id="orientation-axes"]',n:1,side:'bottom'}]);
+await shot(p,'orientation',{targets:tg});
+await p.evaluate(s=>document.querySelector(s).click(),'[data-plugin-id="orientation-axes"]');
+await click('[data-plugin-id="toggle-axes"]');
+tg=await boxes(p,[{sel:'[data-plugin-id="toggle-axes"]',n:2,side:'bottom'}]);
+await shot(p,'axes',{targets:tg});
+await b.close();

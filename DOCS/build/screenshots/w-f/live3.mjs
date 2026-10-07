@@ -1,0 +1,16 @@
+import {DIR,launch,newPage,shot,openViewer,LIVE,sleep,boxes,scrollSidebar} from './lib.mjs';
+const b=await launch(); const p=await newPage(b);
+await openViewer(p,LIVE,4000);
+const click=async s=>{await p.evaluate(s=>document.querySelector(s).click(),s);await sleep(2500)};
+await p.mouse.click(255+1329*0.97,911); await sleep(4000);
+await p.keyboard.press('i'); await sleep(800); await p.mouse.click(997,339); await sleep(3500);
+await scrollSidebar(p,-640); await sleep(800);
+await p.screenshot({path:'l_insp_a.png'});
+await p.keyboard.press('v');
+await click('[data-plugin-id="tracking-trails"]');
+await p.mouse.click(35,645).catch(()=>{});
+await scrollSidebar(p,0); await sleep(500);
+await p.evaluate(()=>{const c=[...document.querySelectorAll('input[type=checkbox]')].find(e=>e.closest('div')&&/Points de suivi/.test(e.closest('div').textContent)&&e.getBoundingClientRect().x<60); if(c) c.click();});
+await sleep(2500);
+await p.screenshot({path:'l_trailtest.png'});
+await b.close();

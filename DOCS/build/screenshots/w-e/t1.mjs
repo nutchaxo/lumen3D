@@ -1,0 +1,10 @@
+import { launch, newPage, shot, sleep, BASE } from '../shotlib.mjs';
+const b = await launch();
+const page = await newPage(b);
+await page.goto(BASE + '/viewer.html?id=3d/Embryo-E95-Em2-Pecam1-Sox2');
+await sleep(30000);
+await page.screenshot({ path: 'v1.png' });
+const info = await page.evaluate(() => ({q: VolumeViewer.getQualityLevels(['512x512','1024x1024','native']), caps: VolumeViewer.getCapabilities()}));
+console.log(JSON.stringify(info));
+console.log(await page.evaluate(()=>document.getElementById('select-quality').innerText));
+await b.close();

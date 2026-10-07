@@ -1,0 +1,14 @@
+import {DIR,launch,newPage,shot,openViewer,LIVE,sleep,boxes,scrollSidebar} from './lib.mjs';
+const b=await launch(); const p=await newPage(b);
+await openViewer(p,LIVE,4000);
+const click=async s=>{await p.evaluate(s=>document.querySelector(s).click(),s);await sleep(2500)};
+await click('[data-plugin-id="tracking-trails"]');
+await click('[data-plugin-id="tracking-surface"]'); await sleep(4000);
+await scrollSidebar(p); await sleep(1000);
+await p.screenshot({path:'l_side1.png'});
+await p.keyboard.press('i'); await sleep(500); await p.mouse.click(997,339); await sleep(3000);
+await scrollSidebar(p); await sleep(1000);
+await p.screenshot({path:'l_side2.png'});
+await click('#btn-hamburger'); await sleep(1000);
+await p.screenshot({path:'l_menu.png'});
+await b.close();

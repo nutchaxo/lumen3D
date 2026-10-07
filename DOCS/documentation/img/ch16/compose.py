@@ -81,7 +81,7 @@ cells = [labelled(Image.open(f"{RAW}/cb-{k}.png"), labs[k], 300, 40, fs=18) for 
 save(grid(cells, 5, gap=10), "daltonisme-viewer.png")
 
 mob = [("m-home", L("Accueil", "Home")), ("m-explorer", L("Explorateur", "Explorer")),
-       ("m-viewer", L("Viewer", "Viewer")), ("m-viewer-menu", L("Viewer, menu ☰", "Viewer, ☰ menu"))]
+       ("m-viewer", L("Viewer", "Viewer")), ("m-viewer-menu", L("Viewer, menu ouvert", "Viewer, menu open"))]
 cells = [labelled(Image.open(f"{RAW}/{n}.png"), lab, 360, 40, fs=18) for n, lab in mob]
 save(grid(cells, 4, gap=12), "mobile.png")
 

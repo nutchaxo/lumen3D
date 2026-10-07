@@ -1,0 +1,17 @@
+import {launch,newPage,shot,openViewer,E95,sleep,boxes,t} from './lib.mjs';
+const b=await launch(); const p=await newPage(b);
+await openViewer(p,E95,2000);
+await p.keyboard.press('m'); await sleep(1500);
+await p.mouse.click(600,300); await sleep(7000);
+await p.screenshot({path:'meas_empty.png',clip:{x:1180,y:660,width:420,height:290}});
+await p.mouse.click(1000,700); await sleep(8000);
+await p.screenshot({path:'meas_a.png'});
+await p.mouse.click(1150,540); await sleep(8000);
+await sleep(2000);
+await p.evaluate(()=>{const r=document.getElementById('measure-text-size'); r.value=30; r.dispatchEvent(new Event('input',{bubbles:true})); r.dispatchEvent(new Event('change',{bubbles:true}));});
+await sleep(2500);
+console.log(await p.evaluate(()=>JSON.stringify(MeasurementStore.list('3d/Embryo-E95-Em2-Pecam1-Sox2','viewer').map(m=>({d:m.distance,pts:m.points})))));
+const tg=await boxes(p,[{sel:'#volume-measure-list',n:3,side:'left'},{sel:'#toggle-measure-3d-labels',n:4,side:'left'},{sel:'#volume-measure-status',n:5,side:'left'}]);
+tg.push({box:{x:1000-8,y:700-8,width:16,height:16},n:1,side:'left',pad:6},{box:{x:1150-8,y:540-8,width:16,height:16},n:2,side:'right',pad:6});
+await shot(p,'mesure-distance',{targets:tg});
+await b.close();

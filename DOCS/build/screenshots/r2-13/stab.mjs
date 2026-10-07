@@ -1,0 +1,11 @@
+import {DIR,launch,newPage,shot,openViewer,LIVE,sleep} from './lib.mjs';
+const b=await launch(); const p=await newPage(b);
+await openViewer(p,LIVE,4000);
+const seek=async f=>{await p.mouse.click(255+1329*f,911); await sleep(5000)};
+await p.screenshot({path:'/tmp/s0.png'});
+await seek(0.97);
+await p.screenshot({path:'/tmp/s3_stab.png'});
+await p.evaluate(()=>ViewerApp.setVolumeStabilized(false));
+await seek(0.33); await seek(0.97);
+await p.screenshot({path:'/tmp/s3_raw.png'});
+await b.close();

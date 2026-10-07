@@ -1,0 +1,10 @@
+import {DIR,launch,newPage,shot,sleep,boxes,P2D,BASE} from './lib.mjs';
+const b=await launch(); const p=await newPage(b,{theme:'dark'});
+await p.goto(BASE+'/2d.html?id='+P2D); await sleep(15000);
+const click=async s=>{await p.evaluate(s=>document.querySelector(s).click(),s);await sleep(2500)};
+const id=s=>`#${s}`;
+const bt=[['[data-tool="navigate"]',1],['[data-tool="measure"]',2],['#btn-studio',3],['[data-plugin-id="download-center"]',4],['#btn-figure-panel',5],['#btn-screenshot',6],['#btn-fit',7],['#btn-native',8],['#btn-isolate',9],['#btn-calibrated-grid',10],['#btn-display-adjust',11],['#btn-orientation-2d',12],['#btn-prev',13],['#btn-browse',14],['#btn-next',15],['#btn-presentation',16],['#btn-split-view',17]];
+let tg=await boxes(p,bt.map(([sel,n])=>({sel,n,side:'bottom',pad:2})));
+tg.push({box:{x:336,y:902,width:58,height:30},n:18,side:'right',pad:2},{box:{x:1456,y:73,width:124,height:22},n:19,side:'bottom',pad:2},{box:{x:0,y:117,width:320,height:250},n:20,side:"right",dx:-6,dy:0,pad:0});
+await shot(p,'2d-barre',{targets:tg});
+await b.close();

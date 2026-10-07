@@ -86,11 +86,12 @@ In the demonstration, the top bar shows "**IRIBHM — ULB**": that is `brand.org
 **Unticking hides the link, not the page.** If you untick [Show "Compare"]{.ui}, the address `compare.html` stays valid: only the link disappears from the bar. The pages you create are added after the links, in list order, with the label in the visitor's language.
 :::
 
-### The two fields that have no place on screen (yet)
+### The organization link and the footer links
 
-::: warning
-- **`org.url`** (*Organization link*) and **`footer.links`** (*Footer → Links*) can be entered and are **stored** in `instance.json`, but **no shipped page displays them** today. The footer shows the copyright, [About]{.ui}, [Contact]{.ui} and, if ticked, [Legal]{.ui}.
-- To show an institution link, use a page of the editor (the [Link list]{.ui} or [Logo strip]{.ui} widget).
+::: note
+- **`footer.links`** (*Footer → Links*): the public footer (home, Explorer, About, Legal, custom pages) shows your links **before** [Legal]{.ui}. Only `http(s)://`, `mailto:` and relative addresses are accepted; an external link opens in a new tab.
+- **`org.url`** (*Organization link*): after the copyright, the footer adds " · " followed by the organization's name, linked to that address (the address's host name if no organization name is set; nothing if `org.url` is empty).
+- A copyright entered **per language** is displayed in the visitor's language.
 :::
 
 ### Settings with no administration screen
@@ -211,7 +212,7 @@ This is not a fault, it is the fallback working: the fix is to fill in the **NL*
 | 1 | **Identity** card: names, monogram, emoji, organisation. |
 | 2 | **Terminology** card: the word for your objects of study, singular and plural. |
 | 3 | **Tagline & SEO** card: tagline, description and keywords, per language. |
-| 4 | **Footer** card: copyright (per language) and links (see 16.2: not displayed). |
+| 4 | **Footer** card: copyright (per language) and links, shown in the public footer (see 16.2). |
 | 5 | **Navigation** card: one box per entry of the public menu. [Show "Legal"]{.ui} is unticked by default. |
 | 6 | [Save]{.ui}: active only when a field has changed. |
 | 7 | A **multilingual** field: one line per available language. Here the **NL** line is empty. |
@@ -300,7 +301,7 @@ A single colour picker is not enough: a button needs a hover shade, a dark shade
 | `--color-primary-hover` | lightness (HSL) **+ 8** points |
 | `--color-primary-dark` | lightness **− 10** points |
 | `--color-primary-subtle` | the same colour at **15%** opacity (accent: 12%) |
-| `--color-primary-strong` | the colour mixed with **77%** black (hover: 64%) |
+| `--color-primary-strong` | **77%** of the colour over black, then darkened one point at a time until white text reaches **4.5 : 1** (hover: 64/77 of that factor) |
 
 Success, error and warning derive in the same way (hover, subtle background at 12%).
 
@@ -310,8 +311,17 @@ Solid buttons carry **white text** on `--color-primary-strong`. This is the whol
 
 ![Contrast of white text on the button, for the six colours offered by the wizard.](img-en/ch16/contraste.svg){width=82%}
 
-::: warning
-The calculation **darkens** the chosen colour; it checks nothing. Shades that are already dark fare well; **orange** (4.22) and **turquoise** (3.61) stay **below the threshold**. After changing the primary colour, look at your buttons in both themes.
+::: note
+The figure shows the plain 77% mix. As soon as a primary colour is set, the server's **theme compiler** computes the filled-button colour itself: it starts at 77% and darkens one point at a time until white text reaches **4.5 : 1**. The AA threshold is therefore **guaranteed** for every colour it can parse (`#rgb`, `#rrggbb`, `rgb()`/`rgba()`). Shades that are already dark do not move; **orange** #FF7A2F (4.22 at 77%) gives #BD5A23 (**4.52 : 1**) and **turquoise** #0FC5A8 (3.61 at 77%) gives #0A8672 (**4.50 : 1**). The Appearance tab's preview shows the same colours before saving, and an existing `theme.css` is recompiled once, automatically, after the update. With no colour set, the factory green comes from the stylesheet (#00803F, 5.05 : 1).
+
+| Wizard colour | Button (hover) | Contrast |
+|-----------|-------------|------|
+| #00A654 | #008041 (#006A36) | 5.04 : 1 |
+| #2F6BFF | #2452C4 (#1E44A3) | 6.82 : 1 |
+| #7C5CFF | #5F47C4 (#4F3BA3) | 6.59 : 1 |
+| #0FC5A8 | #0A8672 (#097060) | 4.50 : 1 |
+| #FF7A2F | #BD5A23 (#9E4C1D) | 4.52 : 1 |
+| #E5484D | #B0373B (#932E31) | 6.08 : 1 |
 :::
 
 ::: tech
@@ -515,7 +525,7 @@ A public site needs a **publisher**, a **host**, a **data** policy. The [Legal]{
 | 2 | The **text**: one paragraph per blank line. The `[square brackets]` are to be replaced by your information. |
 :::
 
-- As long as you have published nothing, the page shows the shipped **neutral template** (publisher, data protection, cookies and local storage, intellectual property, disclaimer, contact). It is written in **English, French and Spanish**.
+- As long as you have published nothing, the page shows the shipped **neutral template** (publisher, data protection, cookies and local storage, intellectual property, disclaimer, contact). It is written in **English, French, Spanish and Dutch**.
 - The text is displayed with `textContent`: no HTML, no formatting, one section per block.
 - The link appears in the footer only if the [Show "Legal"]{.ui} box is ticked (unticked by default).
 
@@ -779,16 +789,16 @@ A lab wants to know whether its datasets are being looked at. Lumen3D tells it *
 
 | Counter | When it goes up |
 |-------|---------------------|
-| **Visits** | once per **browsing session** (a tab), when the **home page** opens |
-| **Views** | once per session and per dataset, when a dataset opens in the viewer |
-| **Downloads** | when a file of a dataset's `download/` folder (the one the Download Center offers) is served **in full** |
+| **Visits** | once per **browsing session** (a tab), on the **first public page** opened, whichever it is (home, explorer, viewer, 2D page, compare, about, legal, custom page…) |
+| **Views** | once per session and per dataset, when a dataset opens (a volume in the viewer or a photograph in the 2D page) |
+| **Downloads** | when a file of an existing dataset's `download/` folder (the one the Download Center offers) is served **in full**: a complete `GET`, not a `HEAD`, not a partial resume (`Range`) |
 
 ::: tech
 - The beacons are `POST` requests sent by `navigator.sendBeacon`, without waiting for an answer (they survive the closing of the tab). A `GET` is **refused** (405): a third-party image cannot inflate your figures.
 - "Once per session" means: a `sessionStorage` key (`lumen_visit`, `lumen_view_<dataset>`) remembers that it has been done. It stays in the browser and disappears when the tab is closed.
-- **Administration previews** (`mode=admin`) do not count: editing a dataset does not inflate its views.
-- A visitor who arrives **directly** at a dataset (a link received by email) counts one **view** but no **visit**: only the home page counts visits.
-- Downloads are counted **on the Python server side**, at the moment the file is served (a partial resume is not counted again). PHP hosts have the counting entry point but no code in the repository calls it for a download: their counter stays at zero.
+- **Administration previews** (`mode=admin`) do not count: editing a dataset does not inflate its views. The admin panel counts no visit, nor does a page embedded in another (a panel of the Compare page, the admin preview, the page editor).
+- A visitor who arrives **directly** at a dataset (a link received by email) counts one **visit** and one **view**: a deliberate choice, the visit is counted on the landing page, whichever it is.
+- Downloads are counted **by both servers**, with the same rule, at the moment the file is served (a partial resume is not counted again). On an Apache/PHP host, the root `.htaccess` routes the request through `api/download.php`, which counts it and then redirects (302) to the same file marked `?lumen_dl=1`, which Apache serves itself (resume, ranges and the "attachment" header unchanged); under `php -S`, `router.php` counts it.
 :::
 
 ### What is kept: `api/stats.json`
@@ -829,11 +839,13 @@ The [Statistics]{.ui} tab shows three cards (with the **last 30 days** plot draw
 ::: legend
 | n | what it is |
 |--|----------------------|
-| 1 | **Visits** (openings of the home page), with the curve of the last 30 days. |
+| 1 | **Visits** (one per tab, on any public page), with the curve of the last 30 days. |
 | 2 | **Dataset views**: the most telling indicator. |
 | 3 | **Downloads**. |
 | 4 | The detail per dataset: views, downloads, last view. Click a header to sort. |
 :::
+
+Under each figure, a line recalls its definition ("One per browser tab, on any public page (admin panel and embedded pages excluded).", "One per dataset opened in a browser tab.", "One per complete download of a file from a dataset's download/ folder.").
 
 Changing the **name** of a data type changes none of these figures. When moving from the old type vocabulary, the counters of the old keys are **added** to those of the new ones.
 
@@ -889,7 +901,6 @@ Only the viewer page loads `PerfTelemetry`. The progress line you see while load
 |-----------|-------------|
 | "My Appearance change does not show" | it is applied only after [Save]{.ui}; clear the cache if the browser keeps the old `theme.css` |
 | "The Legal link has disappeared" | the box is unticked by default in [Identity]{.ui} |
-| "My footer links are not displayed" | see 16.2: they are saved but not displayed |
 | "The Dutch talks about embryos" | the **NL** line of *Terminology* is empty |
 | "My page is saved but invisible" | the draft is saved; you must [Publish]{.ui} |
 | "The editor says the page is open elsewhere" | another tab is editing it: take back control or close the other |

@@ -113,7 +113,7 @@ Si las credenciales son incorrectas, aparece el mensaje «Credenciales incorrect
 ## 1.4. Intentos repetidos y duración de la sesión
 
 ::: warning
-**El panel se protege de los intentos repetidos.** Cada fallo se cuenta **antes** de comprobar la contraseña, por dirección: tras **10 fallos en 15 minutos**, el acceso queda bloqueado durante **15 minutos** («Demasiados intentos. Inténtelo de nuevo más tarde.»). Un tope global de 200 intentos por 15 minutos protege además el sitio contra un ataque procedente de varias direcciones.
+**El panel se protege de los intentos repetidos.** Cada fallo se cuenta **antes** de comprobar la contraseña, por dirección: tras **10 fallos en 15 minutos**, el acceso queda bloqueado durante **15 minutos** («Demasiados intentos. Vuelva a intentarlo en N min.», en el idioma del panel; el mismo mensaje vale para el cambio de contraseña, la aprobación de un plugin y la instalación desde el Catálogo). Un tope global de 200 intentos por 15 minutos protege además el sitio contra un ataque procedente de varias direcciones.
 :::
 
 - Un usuario incorrecto cuesta **el mismo tiempo** que una contraseña incorrecta: no se puede adivinar qué cuentas existen.
@@ -438,8 +438,8 @@ Un volumen contiene varios **canales**, uno por marcaje fluorescente. Aquí deci
 - **El nombre.** Los canales llegan nombrados «Canal 1», «Canal 2»… Sustitúyalos por el marcaje real: `DAPI`, `GFP`, `Pecam1`.
 - **El color.** Algunos se asignan según el nombre: `DAPI` pasa a azul, `GFP` a verde, `Pecam1` a magenta. Si no, colores de reserva: verde, magenta, azul, rojo.
 - **Mostrado u oculto.** Desmarque un canal poco informativo (vacío, autofluorescencia): sigue disponible, pero el visitante no lo ve al principio.
-- **Mín / máx / gamma.** El histograma muestra el reparto de las intensidades; los tiradores ajustan el umbral bajo, el umbral alto y el gamma. [Auto]{.ui}, [Soft]{.ui} y [Contrast]{.ui} ofrecen ajustes ya preparados; [Restablecer]{.ui} vuelve al punto de partida.
-- **Aislar el canal** es un interruptor: una segunda pulsación restablece la visualización anterior.
+- **Mín / máx / gamma.** El histograma muestra el reparto de las intensidades; los tiradores ajustan el umbral bajo, el umbral alto y el gamma. [Auto]{.ui}, [Suave]{.ui} y [Contraste]{.ui} ofrecen ajustes ya preparados; [Restab.]{.ui} vuelve al punto de partida.
+- **Aislar canal** es un interruptor: una segunda pulsación restablece la visualización anterior.
 
 ::: warning
 **Estos ajustes son cosméticos, no destructivos.** Cambian la *visualización*, nunca los datos. No olvide [Guardar]{.ui}: sin él, los ajustes de canales se pierden al cambiar de dataset.
@@ -942,9 +942,9 @@ Las variables de página `{type3d}`, `{type2d}` y `{typeLive}` (capítulo 10) to
 | 4 | El detalle **por conjunto de datos**; haga clic en un encabezado (Dataset, Vistas, Descar.) para ordenar. |
 :::
 
-- **Visitas** — aperturas de la página de inicio, contadas una vez por pestaña del navegador.
-- **Vistas de dataset** — veces que se ha abierto un conjunto de datos en el visor: el indicador más elocuente.
-- **Descargas** — archivos recuperados desde el Download Center.
+- **Visitas** — una por pestaña del navegador, en la primera página pública a la que llega el visitante, sea cual sea (inicio, explorador, visor, página 2D…); ni el panel de administración ni una página integrada en otra (panel de Comparar, vista previa de la administración, editor de páginas) cuentan. Un visitante que llega directamente a un dataset cuenta, pues, una visita y una vista.
+- **Vistas de dataset** — veces que se ha abierto un conjunto de datos (volumen o fotografía 2D), una vez por pestaña: el indicador más elocuente.
+- **Descargas** — descargas completas de un archivo de la carpeta `download/` de un dataset (el Download Center), contadas de la misma manera en un alojamiento Python o PHP; una reanudación parcial no se vuelve a contar. Bajo cada cifra, una línea de la pestaña recuerda su definición.
 
 La tabla «Por dataset» da vistas, descargas y última consulta. Sin datos: «Aún no hay datos de uso.». Cambiar el nombre de un tipo no altera estas cifras.
 
@@ -993,7 +993,7 @@ Los campos **(multilingüe)** muestran **una línea por idioma disponible**: `EN
 | **Monograma (2–3 car.)** | Las letras de la pastilla del logo | `IR` |
 | **Emoji del logo** | El emoji mostrado junto al nombre | 🔬 |
 | **Organización** | Su laboratorio o institución | `IRIBHM — ULB` |
-| **Enlace de la organización** | La dirección de su sitio | `https://…` |
+| **Enlace de la organización** | La dirección de su sitio: el nombre de la organización enlaza a ella en el pie de página público | `https://…` |
 
 ## 8.3. Tarjeta «Terminología» — la más útil
 
@@ -1009,7 +1009,7 @@ Esa palabra se usa después **automáticamente** en toda la interfaz pública: t
 | n | qué es |
 |-|----------------------|
 | 1 | Tarjeta **Pie de página**: el aviso de copyright (por idioma). |
-| 2 | Un **enlace** del pie de página: [Etiqueta]{.ui} + dirección; la cruz lo quita. |
+| 2 | Un **enlace** del pie de página: [Etiqueta]{.ui} + dirección (`http(s)://`, `mailto:` o relativa), mostrado antes de «Aviso legal»; la cruz lo quita. |
 | 3 | [Añadir enlace]{.ui}. |
 | 4 | Tarjeta **Navegación**. |
 | 5 | Las casillas que deciden las entradas del menú público. |
@@ -1061,7 +1061,7 @@ Restablecer pregunta «Restablecer la identidad a los valores predeterminados? S
 | **Error** | Los mensajes de error (rojo por defecto) |
 | **Advertencia** | Las alertas (naranja por defecto) |
 
-Haga clic en un cuadrado de color para abrir el selector: **la vista previa se actualiza al instante**. Los botones principales se derivan del color de la instancia y buscan el contraste **WCAG AA** (sin garantizarlo para todos los colores: un texto blanco sobre un naranja o un turquesa vivo queda por debajo; compruebe la legibilidad en la vista previa); el tema guardado se aplica antes de la primera visualización.
+Haga clic en un cuadrado de color para abrir el selector: **la vista previa se actualiza al instante**. Los botones principales se derivan del color de la instancia y alcanzan siempre el contraste **WCAG AA**: el servidor oscurece su color lo justo para que un texto blanco sea legible sobre él (4,5 : 1), incluso sobre un naranja o un turquesa vivo, como ya muestra la vista previa; el tema guardado se aplica antes de la primera visualización.
 
 ::: tip
 Mantenga Éxito / Error / Advertencia **cerca del verde / rojo / naranja**: son referencias universales.
@@ -1151,7 +1151,7 @@ El editor guarda **automáticamente el borrador**, nunca la versión publicada. 
 
 | Pastilla | Significado |
 |---|---|
-| ● No guardado | Hay modificaciones pendientes. |
+| ● Sin guardar | Hay modificaciones pendientes. |
 | ✓ Guardado hh:mm | El borrador está al día. |
 | ⚠ Falló el guardado automático, haga clic para reintentar | Nuevo intento automático, y al volver la red. |
 | 🔒 Abierta en otra pestaña, haga clic para tomar el control | Bloqueo entre dos pestañas de edición de la **misma página**. |
@@ -1527,7 +1527,7 @@ Estos plugins **no** se entregan con el sitio: se instalan bajo demanda (asisten
 | **Slice through Volume** | Un corte plano orientable a través del volumen |
 | **Z-Stack Browser** | Recorrer los cortes: apertura plana animada, muesca 3D, recorte superior / inferior, barra de grosor ajustable, control «Rotación» |
 | **Decompose by Channel** | Mostrar los canales lado a lado |
-| **Download Center** | Recuperar archivos, mediciones, metadatos, exportaciones |
+| **Download Center** | Recuperar los archivos de la carpeta `download/` y el CSV de las mediciones |
 | **Screenshot** | Capturar la vista 3D en PNG |
 | **Screenshot (sandboxed)** | La misma captura, aislada: el ejemplo de plugin aislado |
 | **Presentation Mode** | Pantalla completa sin interfaz, para proyectar |
@@ -2009,9 +2009,9 @@ Es **imposible** recuperarla: el servidor solo guarda una huella irreversible. L
 
 **No se pierde nada más**: ni datasets, ni páginas, ni ajustes. Durante ese breve lapso, cualquiera que abriera la página podría crear la cuenta en su lugar: hágalo de una sola vez.
 
-### «Demasiados intentos. Inténtelo de nuevo más tarde.»
+### «Demasiados intentos. Vuelva a intentarlo en N min.»
 
-Tras 10 fallos en 15 minutos, el acceso queda bloqueado 15 minutos. Espere y vuelva a intentarlo con la contraseña correcta. Detrás de un proxy, véase el §1.4.
+Tras 10 fallos en 15 minutos, el acceso queda bloqueado 15 minutos; el mensaje indica la espera restante en minutos. Espere y vuelva a intentarlo con la contraseña correcta. Detrás de un proxy, véase el §1.4.
 
 ### «He modificado algo y el sitio se ha roto»
 

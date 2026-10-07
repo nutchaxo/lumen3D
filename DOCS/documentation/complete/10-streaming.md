@@ -28,7 +28,7 @@ La **première image** s'affiche quand **25 %** des briques du niveau en cours s
 
 ### Où voir la progression
 
-![La ligne de progression en bas à gauche du viewer : qualité, pourcentage de briques traitées et étape en cours (le texte de cette ligne est en anglais, même quand l'interface est en français).](img/ch10/progression.png){.shot width=70%}
+![La ligne de progression en bas à gauche du viewer : qualité, pourcentage de briques traitées et étape en cours (le texte suit la langue de l'interface, par exemple « Diffusion des briques 1024x1024 (LOD…, N briques)... »).](img/ch10/progression.png){.shot width=70%}
 
 Le pourcentage est la part des briques **déjà traitées** (déposées ou abandonnées), pas des octets téléchargés. La ligne disparaît quand le niveau est complet.
 

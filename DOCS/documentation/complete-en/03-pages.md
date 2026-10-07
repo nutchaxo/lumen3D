@@ -46,7 +46,7 @@ The Explorer lists the published datasets. **Hidden** datasets do not appear in 
 | 1 | The search: it looks in the name, description, channel names, stage and embryo. |
 | 2 | The [Data Type]{.ui} filter: 3D, Live or 2D. |
 | 3 | The [Stage]{.ui} filter: one box per stage present (E8, E8.5, E9…). [Clear filters]{.ui} resets everything. |
-| 4 | The sort order (Name, Date, Stage) and the grid / list choice; next to it, the number of results. |
+| 4 | The sort order ([Name (A-Z)]{.ui}, [Name (Z-A)]{.ui}, [Newest first]{.ui}, [Stage (earliest)]{.ui}) and the grid / list choice; next to it, the number of results. |
 | 5 | A card: thumbnail, type, badges, name, description, stage and date. |
 :::
 

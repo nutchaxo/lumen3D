@@ -286,7 +286,7 @@ Result: **the toolbar changes from one dataset to the next**, without a line of 
 
 ### Workspace
 
-Each plugin's `getState()` is gathered into the **same object** as the camera and the channels: this is what the Download Center's [Save state]{.ui} and [Restore state]{.ui} keep, and what the `#state=…` address contains. A plugin without `getState` is not affected. A plugin still "registered" (not yet initialised) is skipped.
+Each plugin's `getState()` is gathered into the **same object** as the camera and the channels: this is what the [Save state]{.ui} and [Restore state]{.ui} buttons of the Compare page's Download Center keep, and what the `#state=…` address contains. A plugin without `getState` is not affected. A plugin still "registered" (not yet initialised) is skipped.
 
 ### Exports
 
@@ -329,7 +329,7 @@ An embedded page has no visible toolbar. It therefore **describes** what it offe
 
 | Plugin | Context | In one line |
 |---|---|---|
-| Download Center | page | Files, measurements, metadata, figures, workspace |
+| Download Center | page | Files of the dataset's `download/` folder, and a measurements CSV when there are any |
 | Screenshot | page | PNG capture of the view |
 | Screenshot (sandboxed) | page | The same, **in a sandbox** (reference plugin) |
 | Presentation Mode | page | Full screen without interface |

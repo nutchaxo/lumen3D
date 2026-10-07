@@ -29,6 +29,11 @@ for f in d['files']:
     t = tiers.setdefault(f['tier'], {'files': 0, 'bytes': 0, 'kinds': {}})
     t['files'] += 1; t['bytes'] += f['size']; t['kinds'][f['kind']] = t['kinds'].get(f['kind'], 0) + 1
 out['tiers'] = {str(k): v for k, v in sorted(tiers.items())}
+ex = ['metadata.json', 'bricks/manifest.json', 'bricks/index.bin', 'bricks/lod0/c0/pack_00.bin', 'bricks/l0/c0/p00000.bin',
+      'bricks/t001/index.bin', 'planes/z00007.bin', 'mips/l00000.bin', 'download/Embryo.ims', 'download/x.html', 'download/x.svg',
+      'download/a.php.png', 'gallery/a.png', 'model.glb', 'evil.php', '../x', 'bricks/l0/c0/p0.bin']
+out['classify'] = {p: (list(us.classify_path('3d', p)) if us.classify_path('3d', p) else None) for p in ex}
+out['classify_live'] = {p: (list(us.classify_path('live', p)) if us.classify_path('live', p) else None) for p in ['bricks/t001/index.bin', 'planes/t001/z00001.bin', 'tracks.json', 'model.glb']}
 # upload in tier order, record state changes
 order = sorted(d['files'], key=lambda f: (f['tier'], f['path']))
 trace = []

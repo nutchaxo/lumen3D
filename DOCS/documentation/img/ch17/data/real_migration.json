@@ -1,0 +1,1047 @@
+{
+ "dataset": "3d/Synthetique-E95",
+ "dims": [
+  520,
+  520,
+  130,
+  2
+ ],
+ "steps": [
+  {
+   "label": "format 1 (avant)",
+   "journals": {},
+   "sizes": {
+    "bricks": 40051543,
+    "planes": 0,
+    "mips": 0,
+    ".planes-incoming": 0,
+    ".bricks-incoming": 0,
+    "bricks.v2-old": 0,
+    ".planes-old": 0
+   },
+   "root": [
+    "bricks",
+    "metadata.json"
+   ],
+   "store": 0
+  },
+  {
+   "label": "m002-planes : apr\u00e8s plan",
+   "journals": {
+    "3d__Synthetique-E95__m002-planes.json": {
+     "migration": "m002-planes",
+     "dataset": "3d/Synthetique-E95",
+     "createdAt": "2026-10-07T18:58:37Z",
+     "sourceManifests": {
+      "0": "46475b1a8b15a8de38d26bfc9e9610b0e4596509fb7164d1a7e271098104c3f8"
+     },
+     "units": {
+      "total": 24,
+      "empty": 1
+     },
+     "done": [],
+     "executors": {
+      "browser": 0,
+      "server": 0
+     },
+     "state": "running",
+     "updatedAt": "2026-10-07T18:58:37Z"
+    }
+   },
+   "sizes": {
+    "bricks": 40051543,
+    "planes": 0,
+    "mips": 0,
+    ".planes-incoming": 0,
+    ".bricks-incoming": 0,
+    "bricks.v2-old": 0,
+    ".planes-old": 0
+   },
+   "root": [
+    "bricks",
+    "metadata.json"
+   ],
+   "store": 315,
+   "plan": {
+    "migration": "m002-planes",
+    "dataset": "3d/Synthetique-E95",
+    "state": "running",
+    "total": 24,
+    "empty": 1,
+    "done": 1,
+    "executors": {
+     "browser": 0,
+     "server": 0
+    },
+    "createdAt": "2026-10-07T18:58:37Z",
+    "updatedAt": "2026-10-07T18:58:37Z",
+    "bytesRemaining": 40011038,
+    "pending": 23,
+    "runnable": 23,
+    "offset": 0,
+    "firstUnits": [
+     "t0.z0.c0.y0.x0",
+     "t0.z0.c0.y0.x1",
+     "t0.z0.c0.y1.x0",
+     "t0.z0.c1.y0.x0"
+    ]
+   }
+  },
+  {
+   "label": "m002-planes : apr\u00e8s quelques unit\u00e9s",
+   "journals": {
+    "3d__Synthetique-E95__m002-planes.json": {
+     "migration": "m002-planes",
+     "dataset": "3d/Synthetique-E95",
+     "createdAt": "2026-10-07T18:58:37Z",
+     "sourceManifests": {
+      "0": "46475b1a8b15a8de38d26bfc9e9610b0e4596509fb7164d1a7e271098104c3f8"
+     },
+     "units": {
+      "total": 24,
+      "empty": 1
+     },
+     "done": [
+      "t0.z0.c0.y0.x0"
+     ],
+     "executors": {
+      "browser": 0,
+      "server": 1
+     },
+     "state": "running",
+     "updatedAt": "2026-10-07T18:58:37Z"
+    }
+   },
+   "sizes": {
+    "bricks": 40051543,
+    "planes": 0,
+    "mips": 0,
+    ".planes-incoming": 0,
+    ".bricks-incoming": 0,
+    "bricks.v2-old": 0,
+    ".planes-old": 0
+   },
+   "root": [
+    "bricks",
+    "metadata.json"
+   ],
+   "store": 9681656
+  },
+  {
+   "label": "m002-planes : toutes unit\u00e9s faites",
+   "journals": {
+    "3d__Synthetique-E95__m002-planes.json": {
+     "migration": "m002-planes",
+     "dataset": "3d/Synthetique-E95",
+     "createdAt": "2026-10-07T18:58:37Z",
+     "sourceManifests": {
+      "0": "46475b1a8b15a8de38d26bfc9e9610b0e4596509fb7164d1a7e271098104c3f8"
+     },
+     "units": {
+      "total": 24,
+      "empty": 1
+     },
+     "done": [
+      "t0.z0.c0.y0.x0",
+      "t0.z0.c0.y0.x1",
+      "t0.z0.c0.y1.x0",
+      "t0.z0.c1.y0.x0",
+      "t0.z0.c1.y0.x1",
+      "t0.z0.c1.y1.x0",
+      "t0.z0.c1.y1.x1",
+      "t0.z1.c0.y0.x0",
+      "t0.z1.c0.y0.x1",
+      "t0.z1.c0.y1.x0",
+      "t0.z1.c0.y1.x1",
+      "t0.z1.c1.y0.x0",
+      "t0.z1.c1.y0.x1",
+      "t0.z1.c1.y1.x0",
+      "t0.z1.c1.y1.x1",
+      "t0.z2.c0.y0.x0",
+      "t0.z2.c0.y0.x1",
+      "t0.z2.c0.y1.x0",
+      "t0.z2.c0.y1.x1",
+      "t0.z2.c1.y0.x0",
+      "t0.z2.c1.y0.x1",
+      "t0.z2.c1.y1.x0",
+      "t0.z2.c1.y1.x1"
+     ],
+     "executors": {
+      "browser": 0,
+      "server": 23
+     },
+     "state": "running",
+     "updatedAt": "2026-10-07T18:58:39Z"
+    }
+   },
+   "sizes": {
+    "bricks": 40051543,
+    "planes": 0,
+    "mips": 0,
+    ".planes-incoming": 0,
+    ".bricks-incoming": 0,
+    "bricks.v2-old": 0,
+    ".planes-old": 0
+   },
+   "root": [
+    "bricks",
+    "metadata.json"
+   ],
+   "store": 41956563
+  },
+  {
+   "label": "m002-planes : finalize (budget minuscule)",
+   "journals": {
+    "3d__Synthetique-E95__m002-planes.json": {
+     "migration": "m002-planes",
+     "dataset": "3d/Synthetique-E95",
+     "createdAt": "2026-10-07T18:58:37Z",
+     "sourceManifests": {
+      "0": "46475b1a8b15a8de38d26bfc9e9610b0e4596509fb7164d1a7e271098104c3f8"
+     },
+     "units": {
+      "total": 24,
+      "empty": 1
+     },
+     "done": [
+      "t0.z0.c0.y0.x0",
+      "t0.z0.c0.y0.x1",
+      "t0.z0.c0.y1.x0",
+      "t0.z0.c1.y0.x0",
+      "t0.z0.c1.y0.x1",
+      "t0.z0.c1.y1.x0",
+      "t0.z0.c1.y1.x1",
+      "t0.z1.c0.y0.x0",
+      "t0.z1.c0.y0.x1",
+      "t0.z1.c0.y1.x0",
+      "t0.z1.c0.y1.x1",
+      "t0.z1.c1.y0.x0",
+      "t0.z1.c1.y0.x1",
+      "t0.z1.c1.y1.x0",
+      "t0.z1.c1.y1.x1",
+      "t0.z2.c0.y0.x0",
+      "t0.z2.c0.y0.x1",
+      "t0.z2.c0.y1.x0",
+      "t0.z2.c0.y1.x1",
+      "t0.z2.c1.y0.x0",
+      "t0.z2.c1.y0.x1",
+      "t0.z2.c1.y1.x0",
+      "t0.z2.c1.y1.x1"
+     ],
+     "executors": {
+      "browser": 0,
+      "server": 23
+     },
+     "state": "assembling",
+     "updatedAt": "2026-10-07T18:58:39Z",
+     "producer": "migration-server",
+     "assembledAt": "2026-10-07T18:58:39Z",
+     "assembly": {
+      "planes": 130,
+      "written": 0
+     }
+    }
+   },
+   "sizes": {
+    "bricks": 40051543,
+    "planes": 0,
+    "mips": 0,
+    ".planes-incoming": 0,
+    ".bricks-incoming": 0,
+    "bricks.v2-old": 0,
+    ".planes-old": 0
+   },
+   "root": [
+    ".planes-incoming",
+    "bricks",
+    "metadata.json"
+   ],
+   "store": 41956671,
+   "finalize": [
+    {
+     "ok": true,
+     "complete": false,
+     "assembly": {
+      "planes": 130,
+      "written": 0
+     }
+    },
+    {
+     "ok": true,
+     "complete": true,
+     "formatVersion": 2
+    }
+   ],
+   "ncalls": 2
+  },
+  {
+   "label": "m002-planes : termin\u00e9",
+   "journals": {},
+   "sizes": {
+    "bricks": 40051543,
+    "planes": 41970785,
+    "mips": 0,
+    ".planes-incoming": 0,
+    ".bricks-incoming": 0,
+    "bricks.v2-old": 0,
+    ".planes-old": 0
+   },
+   "root": [
+    "bricks",
+    "metadata.json",
+    "planes"
+   ],
+   "store": 0,
+   "seconds": 2.45,
+   "formatVersion": 2
+  },
+  {
+   "label": "m003-layer-mips : apr\u00e8s plan",
+   "journals": {
+    "3d__Synthetique-E95__m003-layer-mips.json": {
+     "migration": "m003-layer-mips",
+     "dataset": "3d/Synthetique-E95",
+     "createdAt": "2026-10-07T18:58:39Z",
+     "sourceManifests": {
+      "0": "46475b1a8b15a8de38d26bfc9e9610b0e4596509fb7164d1a7e271098104c3f8"
+     },
+     "units": {
+      "total": 24,
+      "empty": 1
+     },
+     "done": [],
+     "executors": {
+      "browser": 0,
+      "server": 0
+     },
+     "state": "running",
+     "inputManifests": {
+      "0": "906a47fd435bbe71310590c3a9ea31c86dd103c87ad0bd0d822d431d3e06fb47"
+     },
+     "updatedAt": "2026-10-07T18:58:39Z"
+    }
+   },
+   "sizes": {
+    "bricks": 40051543,
+    "planes": 41970785,
+    "mips": 0,
+    ".planes-incoming": 0,
+    ".bricks-incoming": 0,
+    "bricks.v2-old": 0,
+    ".planes-old": 0
+   },
+   "root": [
+    "bricks",
+    "metadata.json",
+    "planes"
+   ],
+   "store": 409,
+   "plan": {
+    "migration": "m003-layer-mips",
+    "dataset": "3d/Synthetique-E95",
+    "state": "running",
+    "total": 24,
+    "empty": 1,
+    "done": 1,
+    "executors": {
+     "browser": 0,
+     "server": 0
+    },
+    "createdAt": "2026-10-07T18:58:39Z",
+    "updatedAt": "2026-10-07T18:58:39Z",
+    "bytesRemaining": 41955857,
+    "pending": 23,
+    "runnable": 23,
+    "offset": 0,
+    "firstUnits": [
+     "t0.l0.c0.y0.x0",
+     "t0.l0.c0.y0.x1",
+     "t0.l0.c0.y1.x0",
+     "t0.l0.c1.y0.x0"
+    ]
+   }
+  },
+  {
+   "label": "m003-layer-mips : apr\u00e8s quelques unit\u00e9s",
+   "journals": {
+    "3d__Synthetique-E95__m003-layer-mips.json": {
+     "migration": "m003-layer-mips",
+     "dataset": "3d/Synthetique-E95",
+     "createdAt": "2026-10-07T18:58:39Z",
+     "sourceManifests": {
+      "0": "46475b1a8b15a8de38d26bfc9e9610b0e4596509fb7164d1a7e271098104c3f8"
+     },
+     "units": {
+      "total": 24,
+      "empty": 1
+     },
+     "done": [
+      "t0.l0.c0.y0.x0",
+      "t0.l0.c0.y0.x1",
+      "t0.l0.c0.y1.x0",
+      "t0.l0.c1.y0.x0",
+      "t0.l0.c1.y0.x1",
+      "t0.l0.c1.y1.x0",
+      "t0.l0.c1.y1.x1",
+      "t0.l1.c0.y0.x0",
+      "t0.l1.c0.y0.x1",
+      "t0.l1.c0.y1.x0",
+      "t0.l1.c0.y1.x1",
+      "t0.l1.c1.y0.x0",
+      "t0.l1.c1.y0.x1",
+      "t0.l1.c1.y1.x0",
+      "t0.l1.c1.y1.x1",
+      "t0.l2.c0.y0.x0",
+      "t0.l2.c0.y0.x1",
+      "t0.l2.c0.y1.x0",
+      "t0.l2.c0.y1.x1",
+      "t0.l2.c1.y0.x0",
+      "t0.l2.c1.y0.x1",
+      "t0.l2.c1.y1.x0",
+      "t0.l2.c1.y1.x1"
+     ],
+     "executors": {
+      "browser": 0,
+      "server": 23
+     },
+     "state": "running",
+     "inputManifests": {
+      "0": "906a47fd435bbe71310590c3a9ea31c86dd103c87ad0bd0d822d431d3e06fb47"
+     },
+     "updatedAt": "2026-10-07T18:58:40Z"
+    }
+   },
+   "sizes": {
+    "bricks": 40051543,
+    "planes": 41970785,
+    "mips": 0,
+    ".planes-incoming": 0,
+    ".bricks-incoming": 0,
+    "bricks.v2-old": 0,
+    ".planes-old": 0
+   },
+   "root": [
+    "bricks",
+    "metadata.json",
+    "planes"
+   ],
+   "store": 704938
+  },
+  {
+   "label": "m003-layer-mips : toutes unit\u00e9s faites",
+   "journals": {
+    "3d__Synthetique-E95__m003-layer-mips.json": {
+     "migration": "m003-layer-mips",
+     "dataset": "3d/Synthetique-E95",
+     "createdAt": "2026-10-07T18:58:39Z",
+     "sourceManifests": {
+      "0": "46475b1a8b15a8de38d26bfc9e9610b0e4596509fb7164d1a7e271098104c3f8"
+     },
+     "units": {
+      "total": 24,
+      "empty": 1
+     },
+     "done": [
+      "t0.l0.c0.y0.x0",
+      "t0.l0.c0.y0.x1",
+      "t0.l0.c0.y1.x0",
+      "t0.l0.c1.y0.x0",
+      "t0.l0.c1.y0.x1",
+      "t0.l0.c1.y1.x0",
+      "t0.l0.c1.y1.x1",
+      "t0.l1.c0.y0.x0",
+      "t0.l1.c0.y0.x1",
+      "t0.l1.c0.y1.x0",
+      "t0.l1.c0.y1.x1",
+      "t0.l1.c1.y0.x0",
+      "t0.l1.c1.y0.x1",
+      "t0.l1.c1.y1.x0",
+      "t0.l1.c1.y1.x1",
+      "t0.l2.c0.y0.x0",
+      "t0.l2.c0.y0.x1",
+      "t0.l2.c0.y1.x0",
+      "t0.l2.c0.y1.x1",
+      "t0.l2.c1.y0.x0",
+      "t0.l2.c1.y0.x1",
+      "t0.l2.c1.y1.x0",
+      "t0.l2.c1.y1.x1"
+     ],
+     "executors": {
+      "browser": 0,
+      "server": 23
+     },
+     "state": "running",
+     "inputManifests": {
+      "0": "906a47fd435bbe71310590c3a9ea31c86dd103c87ad0bd0d822d431d3e06fb47"
+     },
+     "updatedAt": "2026-10-07T18:58:40Z"
+    }
+   },
+   "sizes": {
+    "bricks": 40051543,
+    "planes": 41970785,
+    "mips": 0,
+    ".planes-incoming": 0,
+    ".bricks-incoming": 0,
+    "bricks.v2-old": 0,
+    ".planes-old": 0
+   },
+   "root": [
+    "bricks",
+    "metadata.json",
+    "planes"
+   ],
+   "store": 704938
+  },
+  {
+   "label": "m003-layer-mips : finalize (budget minuscule)",
+   "journals": {
+    "3d__Synthetique-E95__m003-layer-mips.json": {
+     "migration": "m003-layer-mips",
+     "dataset": "3d/Synthetique-E95",
+     "createdAt": "2026-10-07T18:58:39Z",
+     "sourceManifests": {
+      "0": "46475b1a8b15a8de38d26bfc9e9610b0e4596509fb7164d1a7e271098104c3f8"
+     },
+     "units": {
+      "total": 24,
+      "empty": 1
+     },
+     "done": [
+      "t0.l0.c0.y0.x0",
+      "t0.l0.c0.y0.x1",
+      "t0.l0.c0.y1.x0",
+      "t0.l0.c1.y0.x0",
+      "t0.l0.c1.y0.x1",
+      "t0.l0.c1.y1.x0",
+      "t0.l0.c1.y1.x1",
+      "t0.l1.c0.y0.x0",
+      "t0.l1.c0.y0.x1",
+      "t0.l1.c0.y1.x0",
+      "t0.l1.c0.y1.x1",
+      "t0.l1.c1.y0.x0",
+      "t0.l1.c1.y0.x1",
+      "t0.l1.c1.y1.x0",
+      "t0.l1.c1.y1.x1",
+      "t0.l2.c0.y0.x0",
+      "t0.l2.c0.y0.x1",
+      "t0.l2.c0.y1.x0",
+      "t0.l2.c0.y1.x1",
+      "t0.l2.c1.y0.x0",
+      "t0.l2.c1.y0.x1",
+      "t0.l2.c1.y1.x0",
+      "t0.l2.c1.y1.x1"
+     ],
+     "executors": {
+      "browser": 0,
+      "server": 23
+     },
+     "state": "assembling",
+     "inputManifests": {
+      "0": "906a47fd435bbe71310590c3a9ea31c86dd103c87ad0bd0d822d431d3e06fb47"
+     },
+     "updatedAt": "2026-10-07T18:58:40Z",
+     "producer": "migration-server",
+     "assembledAt": "2026-10-07T18:58:40Z",
+     "assembly": {
+      "layers": 3,
+      "written": 1
+     }
+    }
+   },
+   "sizes": {
+    "bricks": 40051543,
+    "planes": 41970785,
+    "mips": 0,
+    ".planes-incoming": 0,
+    ".bricks-incoming": 0,
+    "bricks.v2-old": 0,
+    ".planes-old": 0
+   },
+   "root": [
+    ".mips-incoming",
+    "bricks",
+    "metadata.json",
+    "planes"
+   ],
+   "store": 705044,
+   "finalize": [
+    {
+     "ok": true,
+     "complete": false,
+     "assembly": {
+      "layers": 3,
+      "written": 1
+     }
+    },
+    {
+     "ok": true,
+     "complete": true,
+     "formatVersion": 3
+    }
+   ],
+   "ncalls": 2
+  },
+  {
+   "label": "m003-layer-mips : termin\u00e9",
+   "journals": {},
+   "sizes": {
+    "bricks": 40051543,
+    "planes": 41970785,
+    "mips": 704867,
+    ".planes-incoming": 0,
+    ".bricks-incoming": 0,
+    "bricks.v2-old": 0,
+    ".planes-old": 0
+   },
+   "root": [
+    "bricks",
+    "metadata.json",
+    "mips",
+    "planes"
+   ],
+   "store": 0,
+   "seconds": 0.6,
+   "formatVersion": 3
+  },
+  {
+   "label": "m004-bricks-v3 : apr\u00e8s plan",
+   "journals": {
+    "3d__Synthetique-E95__m004-bricks-v3.json": {
+     "migration": "m004-bricks-v3",
+     "dataset": "3d/Synthetique-E95",
+     "createdAt": "2026-10-07T18:58:40Z",
+     "sourceManifests": {
+      "0": "46475b1a8b15a8de38d26bfc9e9610b0e4596509fb7164d1a7e271098104c3f8"
+     },
+     "units": {
+      "total": 30,
+      "empty": 0
+     },
+     "done": [],
+     "executors": {
+      "browser": 0,
+      "server": 0
+     },
+     "state": "running",
+     "updatedAt": "2026-10-07T18:58:40Z"
+    }
+   },
+   "sizes": {
+    "bricks": 40051543,
+    "planes": 41970785,
+    "mips": 704867,
+    ".planes-incoming": 0,
+    ".bricks-incoming": 0,
+    "bricks.v2-old": 0,
+    ".planes-old": 0
+   },
+   "root": [
+    "bricks",
+    "metadata.json",
+    "mips",
+    "planes"
+   ],
+   "store": 318,
+   "plan": {
+    "migration": "m004-bricks-v3",
+    "dataset": "3d/Synthetique-E95",
+    "state": "running",
+    "total": 30,
+    "empty": 0,
+    "done": 0,
+    "executors": {
+     "browser": 0,
+     "server": 0
+    },
+    "createdAt": "2026-10-07T18:58:40Z",
+    "updatedAt": "2026-10-07T18:58:40Z",
+    "bytesRemaining": 45715731,
+    "pending": 30,
+    "runnable": 18,
+    "offset": 0,
+    "levels": [
+     {
+      "level": 0,
+      "dimensions": {
+       "x": 520,
+       "y": 520,
+       "z": 130
+      },
+      "voxelSize": {
+       "x": 1.2,
+       "y": 1.2,
+       "z": 3.0
+      },
+      "gridSize": {
+       "x": 9,
+       "y": 9,
+       "z": 3
+      },
+      "halveZ": false,
+      "units": 18,
+      "done": 0
+     },
+     {
+      "level": 1,
+      "dimensions": {
+       "x": 260,
+       "y": 260,
+       "z": 65
+      },
+      "voxelSize": {
+       "x": 2.4,
+       "y": 2.4,
+       "z": 6.0
+      },
+      "gridSize": {
+       "x": 5,
+       "y": 5,
+       "z": 2
+      },
+      "halveZ": true,
+      "units": 8,
+      "done": 0
+     },
+     {
+      "level": 2,
+      "dimensions": {
+       "x": 130,
+       "y": 130,
+       "z": 33
+      },
+      "voxelSize": {
+       "x": 4.8,
+       "y": 4.8,
+       "z": 12.0
+      },
+      "gridSize": {
+       "x": 3,
+       "y": 3,
+       "z": 1
+      },
+      "halveZ": true,
+      "units": 2,
+      "done": 0
+     },
+     {
+      "level": 3,
+      "dimensions": {
+       "x": 65,
+       "y": 65,
+       "z": 17
+      },
+      "voxelSize": {
+       "x": 9.6,
+       "y": 9.6,
+       "z": 24.0
+      },
+      "gridSize": {
+       "x": 2,
+       "y": 2,
+       "z": 1
+      },
+      "halveZ": true,
+      "units": 2,
+      "done": 0
+     }
+    ],
+    "firstUnits": [
+     "t0.k0.c0.z0.y0.x0",
+     "t0.k0.c0.z0.y0.x1",
+     "t0.k0.c0.z0.y0.x2",
+     "t0.k0.c0.z0.y1.x0"
+    ]
+   }
+  },
+  {
+   "label": "m004-bricks-v3 : apr\u00e8s quelques unit\u00e9s",
+   "journals": {
+    "3d__Synthetique-E95__m004-bricks-v3.json": {
+     "migration": "m004-bricks-v3",
+     "dataset": "3d/Synthetique-E95",
+     "createdAt": "2026-10-07T18:58:40Z",
+     "sourceManifests": {
+      "0": "46475b1a8b15a8de38d26bfc9e9610b0e4596509fb7164d1a7e271098104c3f8"
+     },
+     "units": {
+      "total": 30,
+      "empty": 0
+     },
+     "done": [
+      "t0.k0.c0.z0.y0.x0"
+     ],
+     "executors": {
+      "browser": 0,
+      "server": 1
+     },
+     "state": "running",
+     "updatedAt": "2026-10-07T18:58:41Z"
+    }
+   },
+   "sizes": {
+    "bricks": 40051543,
+    "planes": 41970785,
+    "mips": 704867,
+    ".planes-incoming": 0,
+    ".bricks-incoming": 0,
+    "bricks.v2-old": 0,
+    ".planes-old": 0
+   },
+   "root": [
+    "bricks",
+    "metadata.json",
+    "mips",
+    "planes"
+   ],
+   "store": 4097929
+  },
+  {
+   "label": "m004-bricks-v3 : toutes unit\u00e9s faites",
+   "journals": {
+    "3d__Synthetique-E95__m004-bricks-v3.json": {
+     "migration": "m004-bricks-v3",
+     "dataset": "3d/Synthetique-E95",
+     "createdAt": "2026-10-07T18:58:40Z",
+     "sourceManifests": {
+      "0": "46475b1a8b15a8de38d26bfc9e9610b0e4596509fb7164d1a7e271098104c3f8"
+     },
+     "units": {
+      "total": 30,
+      "empty": 0
+     },
+     "done": [
+      "t0.k0.c0.z0.y0.x0",
+      "t0.k0.c0.z0.y0.x1",
+      "t0.k0.c0.z0.y0.x2",
+      "t0.k0.c0.z0.y1.x0",
+      "t0.k0.c0.z0.y1.x1",
+      "t0.k0.c0.z0.y1.x2",
+      "t0.k0.c0.z0.y2.x0",
+      "t0.k0.c0.z0.y2.x1",
+      "t0.k0.c0.z0.y2.x2",
+      "t0.k0.c1.z0.y0.x0",
+      "t0.k0.c1.z0.y0.x1",
+      "t0.k0.c1.z0.y0.x2",
+      "t0.k0.c1.z0.y1.x0",
+      "t0.k0.c1.z0.y1.x1",
+      "t0.k0.c1.z0.y1.x2",
+      "t0.k0.c1.z0.y2.x0",
+      "t0.k0.c1.z0.y2.x1",
+      "t0.k0.c1.z0.y2.x2",
+      "t0.k1.c0.z0.y0.x0",
+      "t0.k1.c0.z0.y0.x1",
+      "t0.k1.c0.z0.y1.x0",
+      "t0.k1.c0.z0.y1.x1",
+      "t0.k1.c1.z0.y0.x0",
+      "t0.k1.c1.z0.y0.x1",
+      "t0.k1.c1.z0.y1.x0",
+      "t0.k1.c1.z0.y1.x1",
+      "t0.k2.c0.z0.y0.x0",
+      "t0.k2.c1.z0.y0.x0",
+      "t0.k3.c0.z0.y0.x0",
+      "t0.k3.c1.z0.y0.x0"
+     ],
+     "executors": {
+      "browser": 0,
+      "server": 30
+     },
+     "state": "running",
+     "updatedAt": "2026-10-07T18:58:57Z"
+    }
+   },
+   "sizes": {
+    "bricks": 40051543,
+    "planes": 41970785,
+    "mips": 704867,
+    ".planes-incoming": 0,
+    ".bricks-incoming": 0,
+    "bricks.v2-old": 0,
+    ".planes-old": 0
+   },
+   "root": [
+    "bricks",
+    "metadata.json",
+    "mips",
+    "planes"
+   ],
+   "store": 48904470
+  },
+  {
+   "label": "m004-bricks-v3 : finalize (budget minuscule)",
+   "journals": {
+    "3d__Synthetique-E95__m004-bricks-v3.json": {
+     "migration": "m004-bricks-v3",
+     "dataset": "3d/Synthetique-E95",
+     "createdAt": "2026-10-07T18:58:40Z",
+     "sourceManifests": {
+      "0": "46475b1a8b15a8de38d26bfc9e9610b0e4596509fb7164d1a7e271098104c3f8"
+     },
+     "units": {
+      "total": 30,
+      "empty": 0
+     },
+     "done": [
+      "t0.k0.c0.z0.y0.x0",
+      "t0.k0.c0.z0.y0.x1",
+      "t0.k0.c0.z0.y0.x2",
+      "t0.k0.c0.z0.y1.x0",
+      "t0.k0.c0.z0.y1.x1",
+      "t0.k0.c0.z0.y1.x2",
+      "t0.k0.c0.z0.y2.x0",
+      "t0.k0.c0.z0.y2.x1",
+      "t0.k0.c0.z0.y2.x2",
+      "t0.k0.c1.z0.y0.x0",
+      "t0.k0.c1.z0.y0.x1",
+      "t0.k0.c1.z0.y0.x2",
+      "t0.k0.c1.z0.y1.x0",
+      "t0.k0.c1.z0.y1.x1",
+      "t0.k0.c1.z0.y1.x2",
+      "t0.k0.c1.z0.y2.x0",
+      "t0.k0.c1.z0.y2.x1",
+      "t0.k0.c1.z0.y2.x2",
+      "t0.k1.c0.z0.y0.x0",
+      "t0.k1.c0.z0.y0.x1",
+      "t0.k1.c0.z0.y1.x0",
+      "t0.k1.c0.z0.y1.x1",
+      "t0.k1.c1.z0.y0.x0",
+      "t0.k1.c1.z0.y0.x1",
+      "t0.k1.c1.z0.y1.x0",
+      "t0.k1.c1.z0.y1.x1",
+      "t0.k2.c0.z0.y0.x0",
+      "t0.k2.c1.z0.y0.x0",
+      "t0.k3.c0.z0.y0.x0",
+      "t0.k3.c1.z0.y0.x0"
+     ],
+     "executors": {
+      "browser": 0,
+      "server": 30
+     },
+     "state": "assembling",
+     "updatedAt": "2026-10-07T18:58:57Z",
+     "producer": "migration-server",
+     "assembledAt": "2026-10-07T18:58:57Z",
+     "assembly": {
+      "packs": 13,
+      "written": 1
+     }
+    }
+   },
+   "sizes": {
+    "bricks": 40051543,
+    "planes": 41970785,
+    "mips": 704867,
+    ".planes-incoming": 0,
+    ".bricks-incoming": 7924552,
+    "bricks.v2-old": 0,
+    ".planes-old": 0
+   },
+   "root": [
+    ".bricks-incoming",
+    "bricks",
+    "metadata.json",
+    "mips",
+    "planes"
+   ],
+   "store": 48904576,
+   "finalize": [
+    {
+     "ok": true,
+     "complete": false,
+     "assembly": {
+      "packs": 13,
+      "written": 1
+     }
+    },
+    {
+     "ok": true,
+     "complete": true,
+     "formatVersion": 4
+    }
+   ],
+   "ncalls": 2
+  },
+  {
+   "label": "m004-bricks-v3 : termin\u00e9",
+   "journals": {},
+   "sizes": {
+    "bricks": 48910765,
+    "planes": 41970785,
+    "mips": 704867,
+    ".planes-incoming": 0,
+    ".bricks-incoming": 0,
+    "bricks.v2-old": 0,
+    ".planes-old": 0
+   },
+   "root": [
+    "bricks",
+    "metadata.json",
+    "mips",
+    "planes"
+   ],
+   "store": 0,
+   "seconds": 17.28,
+   "formatVersion": 4
+  }
+ ],
+ "status0": {
+  "formatVersion": 1,
+  "pending": [
+   "m002-planes",
+   "m003-layer-mips",
+   "m004-bricks-v3"
+  ],
+  "repair": false,
+  "trees": 1,
+  "estimate": {
+   "units": 77,
+   "bytes": 137741118,
+   "unitsTotal": 77,
+   "bytesTotal": 137741118,
+   "migrations": {
+    "m002-planes": {
+     "units": 23,
+     "bytes": 40011038,
+     "unitsTotal": 23,
+     "bytesTotal": 40011038,
+     "exact": true
+    },
+    "m003-layer-mips": {
+     "units": 24,
+     "bytes": 52014349,
+     "unitsTotal": 24,
+     "bytesTotal": 52014349,
+     "exact": false
+    },
+    "m004-bricks-v3": {
+     "units": 30,
+     "bytes": 45715731,
+     "unitsTotal": 30,
+     "bytesTotal": 45715731,
+     "exact": true
+    }
+   }
+  }
+ },
+ "server": {
+  "available": true,
+  "reasons": [],
+  "webpDecode": true,
+  "pngEncode": true,
+  "webpLosslessEncode": true,
+  "migrations": {
+   "m002-planes": {
+    "available": true,
+    "reasons": []
+   },
+   "m003-layer-mips": {
+    "available": true,
+    "reasons": []
+   },
+   "m004-bricks-v3": {
+    "available": true,
+    "reasons": []
+   }
+  }
+ }
+}

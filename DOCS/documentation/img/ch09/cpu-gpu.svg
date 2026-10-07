@@ -4,7 +4,7 @@
   <!-- CPU -->
   <rect x="24" y="52" width="360" height="250" rx="14" fill="#fff" stroke="#c5cbd8"/>
   <rect x="24" y="52" width="360" height="36" rx="14" fill="#fff4e6"/><rect x="24" y="72" width="360" height="16" fill="#fff4e6"/>
-  <text x="204" y="76" text-anchor="middle" font-size="14" font-weight="800" fill="#e67700">LE PROCESSEUR (CPU) : un grand chef</text>
+  <text x="204" y="76" text-anchor="middle" font-size="14" font-weight="800" fill="#e67700">LE PROCESSEUR (CPU) : un chef</text>
   <text x="204" y="150" text-anchor="middle" font-size="64">👨‍🍳</text>
   <text x="204" y="188" text-anchor="middle" font-size="13" fill="#1c2333" font-weight="700">Très habile, mais seul</text>
   <text x="204" y="208" text-anchor="middle" font-size="13" fill="#4a5468">prépare les assiettes une par une</text>
@@ -14,7 +14,7 @@
   <!-- GPU -->
   <rect x="416" y="52" width="360" height="250" rx="14" fill="#fff" stroke="#c5cbd8"/>
   <rect x="416" y="52" width="360" height="36" rx="14" fill="#ebfbee"/><rect x="416" y="72" width="360" height="16" fill="#ebfbee"/>
-  <text x="596" y="76" text-anchor="middle" font-size="14" font-weight="800" fill="#2b8a3e">LA CARTE GRAPHIQUE (GPU) : des milliers de commis</text>
+  <text x="596" y="76" text-anchor="middle" font-size="14" font-weight="800" fill="#2b8a3e">LA CARTE GRAPHIQUE (GPU) : des commis</text>
   <g font-size="22" text-anchor="middle">
     <text x="452" y="124">🧑‍🍳</text><text x="488" y="124">🧑‍🍳</text><text x="524" y="124">🧑‍🍳</text><text x="560" y="124">🧑‍🍳</text><text x="596" y="124">🧑‍🍳</text><text x="632" y="124">🧑‍🍳</text><text x="668" y="124">🧑‍🍳</text><text x="704" y="124">🧑‍🍳</text><text x="740" y="124">🧑‍🍳</text>
     <text x="452" y="156">🧑‍🍳</text><text x="488" y="156">🧑‍🍳</text><text x="524" y="156">🧑‍🍳</text><text x="560" y="156">🧑‍🍳</text><text x="596" y="156">🧑‍🍳</text><text x="632" y="156">🧑‍🍳</text><text x="668" y="156">🧑‍🍳</text><text x="704" y="156">🧑‍🍳</text><text x="740" y="156">🧑‍🍳</text>

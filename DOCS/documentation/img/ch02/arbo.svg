@@ -1,0 +1,46 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 560" font-family="Inter, sans-serif">
+  <rect width="800" height="560" rx="16" fill="#f8f9fd"/>
+  <text x="400" y="30" text-anchor="middle" font-size="17" font-weight="800" fill="#1c2333">Le dossier du projet, vu de haut (deux niveaux)</text>
+  <g font-size="12.5" fill="#1c2333">
+    <!-- left column -->
+    <rect x="20" y="46" width="372" height="226" rx="12" fill="#e8edff" stroke="#3b5bdb"/>
+    <text x="34" y="68" font-size="13.5" font-weight="800" fill="#3b5bdb">Ce que voit le visiteur</text>
+    <text x="34" y="92" font-family="monospace" font-weight="700">*.html</text><text x="150" y="92" fill="#4a5468">une page = un fichier (accueil, viewer…)</text>
+    <text x="34" y="114" font-family="monospace" font-weight="700">css/</text><text x="150" y="114" fill="#4a5468">16 feuilles de style (l'habillage)</text>
+    <text x="34" y="136" font-family="monospace" font-weight="700">js/</text><text x="150" y="136" fill="#4a5468">tout le code du navigateur :</text>
+    <text x="48" y="154" font-family="monospace" font-size="12" fill="#4a5468">core/ pages/ viewers/ components/</text>
+    <text x="48" y="172" font-family="monospace" font-size="12" fill="#4a5468">workers/ modules/ (outils) vendor/</text>
+    <text x="34" y="196" font-family="monospace" font-weight="700">lang/</text><text x="150" y="196" fill="#4a5468">traductions : en, fr, es, nl</text>
+    <text x="34" y="218" font-family="monospace" font-weight="700">config/</text><text x="150" y="218" fill="#4a5468">nom du site, thème, pages</text>
+    <text x="34" y="240" font-family="monospace" font-weight="700">assets/ logos/</text><text x="150" y="240" fill="#4a5468">images fixes</text>
+    <text x="34" y="262" font-family="monospace" font-weight="700">DATA_WEB/</text><text x="150" y="262" fill="#4a5468">les jeux de données publiés</text>
+
+    <!-- right column -->
+    <rect x="408" y="46" width="372" height="226" rx="12" fill="#f3f0ff" stroke="#7048e8"/>
+    <text x="422" y="68" font-size="13.5" font-weight="800" fill="#7048e8">Ce qui sert les fichiers</text>
+    <g font-family="monospace" font-weight="700"><text x="422" y="94">dev_server.py</text><text x="422" y="118">api/</text><text x="422" y="142">install.php</text><text x="422" y="166">.htaccess, router.php</text><text x="422" y="190">upload_staging.py</text><text x="422" y="214">dataset_migrations.py</text><text x="422" y="238">fast_server.py</text></g>
+    <g fill="#4a5468"><text x="600" y="94">serveur Python complet</text><text x="600" y="118">jumeau PHP du serveur</text><text x="600" y="142">installeur en un fichier</text><text x="600" y="166">règles Apache / PHP</text><text x="600" y="190">moteur d'import</text><text x="600" y="214">mises à jour des données</text><text x="600" y="238">serveur de test simple</text></g>
+
+    <!-- bottom row -->
+    <rect x="20" y="288" width="372" height="130" rx="12" fill="#ebfbee" stroke="#2b8a3e"/>
+    <text x="34" y="310" font-size="13.5" font-weight="800" fill="#2b8a3e">Ce qui prépare les données</text>
+    <text x="34" y="334" font-family="monospace" font-weight="700">preprocess/</text><text x="150" y="334" fill="#4a5468">le pipeline Python (étapes 1 à 5)</text>
+    <text x="34" y="356" font-family="monospace" font-weight="700">SCRIPTS/</text><text x="150" y="356" fill="#4a5468">analyses du labo (suivi cellulaire)</text>
+    <text x="34" y="384" fill="#4a5468">Le pipeline tourne sur l'ordinateur du</text><text x="34" y="402" fill="#4a5468">technicien, pas sur le serveur web.</text>
+
+    <rect x="408" y="288" width="372" height="130" rx="12" fill="#fff4e6" stroke="#e67700"/>
+    <text x="422" y="310" font-size="13.5" font-weight="800" fill="#e67700">Ce qui garantit la qualité</text>
+    <text x="422" y="334" font-family="monospace" font-weight="700">tests/</text><text x="520" y="334" fill="#4a5468">201 fichiers de tests automatiques</text>
+    <text x="422" y="356" font-family="monospace" font-weight="700">changelog/</text><text x="520" y="356" fill="#4a5468">une fiche par version (147)</text>
+    <text x="422" y="378" font-family="monospace" font-weight="700">tools/</text><text x="520" y="378" fill="#4a5468">fabrication des versions signées</text>
+    <text x="422" y="400" font-family="monospace" font-weight="700">marketplace/</text><text x="525" y="400" fill="#4a5468">catalogue de plugins signé</text>
+
+    <rect x="20" y="434" width="760" height="108" rx="12" fill="#fff" stroke="#c5cbd8"/>
+    <text x="34" y="456" font-size="13.5" font-weight="800" fill="#1c2333">Créés sur un serveur en fonctionnement (jamais publics)</text>
+    <text x="34" y="480" font-family="monospace" font-weight="700">uploads/</text><text x="120" y="480" fill="#4a5468">imports en cours</text>
+    <text x="300" y="480" font-family="monospace" font-weight="700">backups/</text><text x="388" y="480" fill="#4a5468">sauvegardes avant mise à jour</text>
+    <text x="34" y="502" font-family="monospace" font-weight="700">logs/</text><text x="120" y="502" fill="#4a5468">journaux du serveur</text>
+    <text x="300" y="502" font-family="monospace" font-weight="700">secrets/</text><text x="388" y="502" fill="#4a5468">clés de signature (poste local)</text>
+    <text x="34" y="526" fill="#4a5468" font-size="12">Le serveur refuse de les servir : une adresse web ne peut jamais les atteindre.</text>
+  </g>
+</svg>

@@ -18,7 +18,7 @@ Un grand chef étoilé prépare une assiette parfaite en deux minutes. Pour serv
 
 Dans Lumen3D, la « recette » s'appelle un **shader** : un petit programme écrit une fois, exécuté simultanément pour chaque pixel. Tout le calcul du volume se passe là.
 
-## 9.2 WebGL2 et Three.js : qui fait quoi {.page}
+## 9.2 WebGL2 et Three.js : qui fait quoi
 
 **WebGL2** est le langage standard que les navigateurs comprennent pour parler à la carte graphique. Il sait notamment manipuler des **textures 3D** : des blocs de voxels stockés directement dans la mémoire vidéo. C'est indispensable pour un volume.
 
@@ -80,7 +80,7 @@ La parade est simple : le **premier échantillon de chaque rayon est décalé** 
 
 Le même décalage est utilisé à l'export d'une image : il se poursuit d'une tuile à l'autre, sans couture.
 
-## 9.5 Sauter le vide {.page}
+## 9.5 Sauter le vide
 
 Un embryon n'occupe qu'une partie de sa boîte. Les briques sans signal ne sont même pas stockées (chapitre 7). Quand un rayon arrive dans une brique **absente**, il n'y lit rien : il **saute directement** à la face de sortie de cette brique.
 
@@ -169,7 +169,7 @@ Imaginons un rayon qui rencontre d'abord un nuage vert, puis, un peu derrière, 
 - **Naturelle** : la lumière du nuage magenta est un peu **atténuée** par le nuage vert qui est devant (la transmittance descend à environ 0,67).
 - **Structure** : le nuage vert **cache** partiellement le magenta ; l'opacité cumulée finit autour de 0,68.
 
-## 9.7 Lisser entre les voxels {.page}
+## 9.7 Lisser entre les voxels
 
 Entre deux voxels, le viewer ne montre pas des marches d'escalier : il **interpole**. Sur le **format 4** (celui de tous les jeux de démonstration), la carte graphique mélange les huit voxels voisins : c'est l'**interpolation trilinéaire**.
 

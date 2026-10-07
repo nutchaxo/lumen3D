@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 360" font-family="Inter, sans-serif">
+<rect width="800" height="360" rx="16" fill="#f8f9fd"/>
+<text x="400" y="32" text-anchor="middle" font-size="17" font-weight="800" fill="#1c2333">Combien de lignes de code, par langage ?</text>
+<text x="400" y="52" text-anchor="middle" font-size="12.5" fill="#4a5468">Fichiers suivis par git, hors bibliothèques tierces, hors tests</text>
+<text x="178" y="95" text-anchor="end" font-size="14" font-weight="700" fill="#1c2333">JavaScript</text>
+<rect x="190" y="76" width="520" height="28" rx="6" fill="#e67700"/>
+<text x="700" y="95" text-anchor="end" font-size="13" font-weight="800" fill="#fff">68 400</text>
+<text x="178" y="135" text-anchor="end" font-size="14" font-weight="700" fill="#1c2333">Python</text>
+<rect x="190" y="116" width="208" height="28" rx="6" fill="#3b5bdb"/>
+<text x="388" y="135" text-anchor="end" font-size="13" font-weight="800" fill="#fff">27 342</text>
+<text x="178" y="175" text-anchor="end" font-size="14" font-weight="700" fill="#1c2333">PHP</text>
+<rect x="190" y="156" width="129" height="28" rx="6" fill="#7048e8"/>
+<text x="309" y="175" text-anchor="end" font-size="13" font-weight="800" fill="#fff">16 941</text>
+<text x="178" y="215" text-anchor="end" font-size="14" font-weight="700" fill="#1c2333">CSS</text>
+<rect x="190" y="196" width="71" height="28" rx="6" fill="#0c8599"/>
+<text x="269" y="215" font-size="13" font-weight="800" fill="#1c2333">9 403</text>
+<text x="178" y="255" text-anchor="end" font-size="14" font-weight="700" fill="#1c2333">HTML</text>
+<rect x="190" y="236" width="32" height="28" rx="6" fill="#c92a2a"/>
+<text x="230" y="255" font-size="13" font-weight="800" fill="#1c2333">4 210</text>
+<text x="178" y="295" text-anchor="end" font-size="14" font-weight="700" fill="#1c2333">GLSL (shaders)</text>
+<rect x="190" y="276" width="14" height="28" rx="6" fill="#2b8a3e"/>
+<text x="212" y="295" font-size="13" font-weight="800" fill="#1c2333">≈ 1 800</text>
+<text x="190" y="324" font-size="12" font-style="italic" fill="#4a5468">≈ 1 800 lignes, écrites à l'intérieur de fichiers JavaScript</text>
+<text x="400" y="342" text-anchor="middle" font-size="12" fill="#4a5468">Les tests (≈ 26 000 lignes de JavaScript, 12 000 de Python, 3 000 de PHP) ne sont pas comptés.</text>
+</svg>

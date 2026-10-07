@@ -32,7 +32,7 @@ La **première image** s'affiche quand **25 %** des briques du niveau en cours s
 
 Le pourcentage est la part des briques **déjà traitées** (déposées ou abandonnées), pas des octets téléchargés. La ligne disparaît quand le niveau est complet.
 
-## 10.2 Le menu de qualité : 512, 1024, Natif {.page}
+## 10.2 Le menu de qualité : 512, 1024, Natif
 
 La pyramide de niveaux a été fabriquée par le pipeline (chapitre 6) : chaque niveau a **4 fois moins de voxels en X × Y** que le précédent. Le menu choisit **le plus fin des niveaux qui reste raisonnable** pour le réglage demandé.
 
@@ -52,7 +52,7 @@ Jeu **fictif** de 3 072 × 2 304 voxels en XY, niveaux à 3 072, 1 536, 768 et 3
 Sur le jeu de démonstration E9.5, le plus grand côté est 768 : les trois réglages tombent sur le niveau 0. Le menu **n'affiche alors qu'une seule option**, avec les vraies dimensions : [Natif (768x576x112)]{.ui}.
 :::
 
-![Le menu [Qualité de Rendu]{.ui} (ici déplié) : une seule ligne par niveau réellement distinct, avec ses dimensions.](img/ch10/qualite-liste.png){.shot width=45%}
+![Le panneau [Qualité de Rendu]{.ui} : une seule ligne par niveau réellement distinct (ici une seule, avec ses dimensions), la ligne d'état (« 512x512 actif ») et, dessous, le sélecteur [Détail au zoom]{.ui} (section 10.8).](img/ch10/qualite-liste.png){.shot width=45%}
 
 ::: note
 Le viewer s'ouvre en qualité **512**. Un changement de qualité qui échoue laisse le volume précédent à l'écran et remet le menu en place.
@@ -105,7 +105,7 @@ Exemple **fictif** : vous demandez **Natif** et le niveau 0 réclame 1,9 Gio pou
 
 Si la carte **refuse** une allocation malgré le calcul, le viewer retombe aussi sur un niveau plus grossier ; l'avis le précise : « (Le GPU a refusé l'allocation.) ». Le volume reste **toujours visible**, jamais un onglet planté.
 
-## 10.5 Télécharger et décoder sans bloquer la page {.page}
+## 10.5 Télécharger et décoder sans bloquer la page
 
 Décoder une brique (une image WebP à défaire en voxels) est un calcul lourd. Il est confié à un **groupe d'ouvriers** (workers) qui travaillent **en parallèle de la page** : l'interface reste fluide.
 
@@ -178,7 +178,6 @@ Le mode n'existe que pour le **format 4** (briques à bordure). Il est suspendu 
 
 Le texte d'état affiche, selon le cas : « Détail : N briques du niveau L visibles », « Détail : chargement de x sur y briques du niveau L », ou « Détail indisponible : mémoire GPU insuffisante ».
 
-![Le sélecteur [Détail au zoom]{.ui} (déplié) sous le menu de qualité.](img/ch10/detail-liste.png){.shot width=45%}
 
 ## 10.9 Quand la carte graphique plante
 

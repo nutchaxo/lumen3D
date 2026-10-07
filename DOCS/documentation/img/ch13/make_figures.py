@@ -118,7 +118,91 @@ def suivi_reperes():
     save(fig, "suivi-reperes.png")
 
 
-ALL = {"suivi_reperes": suivi_reperes}
+
+# ── 2. La page 2D : cartes intermédiaires (le vrai code de pixel-ops-2d.js tourne sous Node) ───
+W2, H2 = 1920, 1440
+D2 = Path(os.environ.get("D2_DIR", "/tmp/claude-0/-home-user-lumen3D/5ffff1c0-bcbf-5d42-83df-ee43f5e6cbc6/scratchpad/r2-13/d2"))
+
+
+def _d2_data():
+    """Exécute js/workers/pixel-ops-2d.js sur la photographie de démonstration (voir make_2d_data.mjs)."""
+    if not (D2 / "iso.rgba").exists():
+        D2.mkdir(parents=True, exist_ok=True)
+        from PIL import Image
+        photo = ROOT / "DATA_WEB/2d/DLL4xCD1-E95-x3.2-240913-1/image.webp"
+        im = Image.open(photo).convert("RGBA")
+        np.array(im).tofile(D2 / "full.rgba")
+        for name, div in (("s4", 4), ("s8", 8)):
+            w, h = -(-im.width // div), -(-im.height // div)
+            np.array(im.resize((w, h), Image.BILINEAR)).tofile(D2 / f"{name}.rgba")
+        subprocess.run(["node", str(HERE / "make_2d_data.mjs"), str(D2), str(ROOT)], check=True)
+    rd = lambda n, dt, shp: np.fromfile(D2 / n, dtype=dt).reshape(shp)
+    return {"full": rd("full.rgba", np.uint8, (H2, W2, 4)), "iso": rd("iso.rgba", np.uint8, (H2, W2, 4)),
+            "flat": rd("flat.rgba", np.uint8, (H2, W2, 4)), "ctx": rd("ctx.f32", np.float32, (360, 480)),
+            "gain": rd("gain.f32", np.float32, (180, 240)), "curves": json.loads((D2 / "curves.json").read_text())}
+
+
+def d2_isolation():
+    d = _d2_data()
+    full, ctx = d["full"], d["ctx"]
+    r, g, b = [full[:, :, i].astype(np.float32) for i in range(3)]
+    ctx_big = np.kron(ctx, np.ones((4, 4)))[:H2, :W2]
+    ratio = b / (r + 1)
+    v = np.where(ctx_big > 5, np.clip((ratio - 1.0) / 0.8, 0, 1), 0)
+    fig, axes = plt.subplots(1, 4, figsize=(15.5, 4.4))
+    ims = [(full[:, :, :3], tr("① photographie", "① photograph"), None),
+           (ctx_big, tr("② contexte « tissu jaune »\n(moyenne locale de (R+V)/2 − B)", "② “yellow tissue” context\n(local mean of (R+G)/2 − B)"), "magma"),
+           (v, tr("③ v : le marquage (B/R de 1,0 à 1,8,\ndans le tissu seulement)", "③ v: the stain (B/R from 1.0 to 1.8,\ninside tissue only)"), "viridis"),
+           (d["iso"][:, :, :3], tr("④ résultat : gris sombre + cyan", "④ result: dim grey + cyan"), None)]
+    for ax, (img, ttl, cm) in zip(axes, ims):
+        ax.imshow(img, cmap=cm, vmin=0 if cm else None, vmax=(max(12.0, float(np.percentile(ctx_big, 99))) if cm == "magma" else 1) if cm else None)
+        ax.set_title(ttl, fontsize=10.5, fontweight="bold", color=INK, loc="left")
+        ax.axis("off")
+    fig.text(0.5, 0.01, tr("Photographie de démonstration (synthétique). Le seuil du contexte est 5 : en dessous, v = 0 (le fond mat, même bleuté, ne s'allume pas).",
+                           "Demo photograph (synthetic). The context threshold is 5: below it, v = 0 (the matte background, even bluish, does not light up)."),
+             ha="center", fontsize=9, color=INK2, style="italic")
+    fig.tight_layout(rect=(0, 0.04, 1, 1))
+    save(fig, "2d-isolation-cartes.png", 150)
+
+
+def d2_aplatir():
+    d = _d2_data()
+    fig, axes = plt.subplots(1, 3, figsize=(13.5, 4.4), gridspec_kw={"width_ratios": [1, 1, 1]})
+    axes[0].imshow(d["full"][:, :, :3]); axes[0].set_title(tr("① photographie", "① photograph"), fontsize=10.5, fontweight="bold", loc="left")
+    gain = np.kron(d["gain"], np.ones((8, 8)))[:H2, :W2]
+    im = axes[1].imshow(gain, cmap="coolwarm", vmin=0.5, vmax=1.5)
+    axes[1].set_title(tr("② gain = éclairage moyen / éclairage local\n(surface fittée sur les 40 % de pixels les plus sombres)", "② gain = mean illumination / local illumination\n(surface fitted on the darkest 40 % of pixels)"), fontsize=10.5, fontweight="bold", loc="left")
+    fig.colorbar(im, ax=axes[1], fraction=0.046, pad=0.02)
+    axes[2].imshow(d["flat"][:, :, :3]); axes[2].set_title(tr("③ après « Aplatir le fond »", "③ after “Flatten the background”"), fontsize=10.5, fontweight="bold", loc="left")
+    for ax in axes:
+        ax.axis("off")
+    fig.text(0.5, 0.01, tr(f"Gain réel de cette photographie : de {dec(float(gain.min()), 2)} à {dec(float(gain.max()), 2)} (borné entre 0,5 et 3).",
+                           f"Actual gain of this photograph: from {dec(float(gain.min()), 2)} to {dec(float(gain.max()), 2)} (clamped between 0.5 and 3)."),
+             ha="center", fontsize=9, color=INK2, style="italic")
+    fig.tight_layout(rect=(0, 0.04, 1, 1))
+    save(fig, "2d-aplatir.png", 150)
+
+
+def d2_lut():
+    c = _d2_data()["curves"]
+    x = np.arange(256)
+    fig, ax = plt.subplots(figsize=(6.6, 5.0))
+    ax.plot(x, c["id"]["g"], color="#adb5bd", lw=2, label=tr("rien (identité)", "none (identity)"))
+    ax.plot(x, c["bright"]["g"], color=BLUE, lw=2, label=tr("luminosité +30", "brightness +30"))
+    ax.plot(x, c["contrast"]["g"], color=GREEN, lw=2, label=tr("contraste +50", "contrast +50"))
+    ax.plot(x, c["gamma2"]["g"], color=AMBER, lw=2, label=tr("gamma 2", "gamma 2"))
+    ax.plot(x, c["blue14"]["b"], color=VIOLET, lw=2, ls="--", label=tr("bleu ×1,4 (canal bleu seul)", "blue ×1.4 (blue channel only)"))
+    ax.set_xlim(0, 255); ax.set_ylim(0, 260); ax.set_aspect("equal")
+    ax.set_xlabel(tr("valeur du pixel avant (0-255)", "pixel value before (0-255)")); ax.set_ylabel(tr("valeur après (0-255)", "value after (0-255)"))
+    ax.set_title(tr("La table de correspondance : 256 valeurs, calculée une fois", "The look-up table: 256 values, computed once"), fontsize=11.5, fontweight="bold", loc="left")
+    ax.legend(frameon=False, fontsize=9.5, loc="lower right")
+    for sp in ("top", "right"):
+        ax.spines[sp].set_visible(False)
+    fig.tight_layout()
+    save(fig, "2d-lut.png")
+
+
+ALL = {"suivi_reperes": suivi_reperes, "d2_isolation": d2_isolation, "d2_aplatir": d2_aplatir, "d2_lut": d2_lut}
 
 if __name__ == "__main__":
     names = sys.argv[1:] or list(ALL)

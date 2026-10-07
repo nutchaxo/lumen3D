@@ -70,7 +70,7 @@ Une pastille orange « Modifications non sauvegardées » s'allume en haut dès 
 :::
 
 
-## 13.4 Mettre un dataset en ligne
+## 13.3 Mettre un dataset en ligne
 
 Le pipeline (chapitres 4 à 8) produit **un dossier**. Il y a deux façons de le déposer sur le serveur.
 
@@ -82,9 +82,9 @@ Le pipeline (chapitres 4 à 8) produit **un dossier**. Il y a deux façons de le
 
 ### L'onglet Import, pas à pas
 
-![L'onglet Import, avec un envoi en cours (jeu de démonstration).](img/ch13/admin-import.png){.shot width=66%}
+![L'onglet Import, avant le dépôt d'un dossier.](img/ch13/admin-import.png){.shot width=66%}
 
-[1]{.callout-num} Zone de dépôt : glissez le dossier ou cliquez sur [Choisir un dossier]{.ui} · [2]{.callout-num} Rappel : transit par un dossier privé, seuls les fichiers attendus sont acceptés · [3]{.callout-num} Progression globale : pourcentage, volume transféré, vitesse, temps restant · [4]{.callout-num} État du dataset (voir ci-dessous) · [5]{.callout-num} Boutons de la carte : [Éditer]{.ui}, [Vérifier]{.ui}, [Publier]{.ui}, [Supprimer]{.ui} selon l'état
+[1]{.callout-num} Zone de dépôt : glissez le dossier ou cliquez sur [Choisir un dossier]{.ui} · [2]{.callout-num} Rappel : transit par un dossier privé, seuls les fichiers attendus sont acceptés. Une fois le dossier déposé, l'onglet affiche la progression globale (pourcentage, volume, vitesse, temps restant) et une carte par dataset avec son état et ses boutons [Éditer]{.ui}, [Vérifier]{.ui}, [Publier]{.ui}, [Supprimer]{.ui}.
 
 Les états d'un dataset en cours d'import :
 
@@ -104,7 +104,7 @@ Un dataset publié par l'Import est **masqué par défaut**. Allez dans [Dataset
 :::
 
 
-## 13.5 Éditer un dataset
+## 13.4 Éditer un dataset
 
 Cliquez un dataset dans la liste de l'onglet [Datasets]{.ui} : l'aperçu s'ouvre au centre, les réglages à droite. Voici ce que vous pouvez y régler :
 
@@ -124,7 +124,7 @@ Ce que l'éditeur enregistre est un **réglage** : il est fusionné dans le `met
 
 Le bouton [Redéfinir la preview]{.ui} (sous l'aperçu) fait de la vue actuelle la vignette de l'explorateur. L'orientation 3D (axes, vue par défaut) est expliquée au chapitre 12.
 
-## 13.6 Mises à jour des données
+## 13.5 Mises à jour des données
 
 La façon dont les datasets sont stockés a évolué quatre fois (**formats 1 à 4**, voir chapitre 7). Un ancien dataset reste lisible, mais il peut être **mis au format actuel sans repasser par le pipeline**, comme on met à jour un logiciel.
 
@@ -146,7 +146,7 @@ Le niveau natif est conservé voxel pour voxel : rien n'est perdu. L'ancien arbr
 
 Ces mises à jour ne sont **pas obligatoires** : le viewer lit les formats 1 à 4. Elles accélèrent certaines opérations du Studio et améliorent l'affichage.
 
-## 13.7 Plugins et catalogue signé
+## 13.6 Plugins et catalogue signé
 
 Les plugins sont les outils du viewer (chapitre 12). Ils **ne sont pas livrés avec la plateforme** : on les installe à la demande depuis le [Catalogue]{.ui}, comme dans une boutique d'applications.
 
@@ -156,7 +156,7 @@ Les plugins sont les outils du viewer (chapitre 12). Ils **ne sont pas livrés a
 - Certains plugins n'apparaissent pas dans l'aperçu de l'onglet Datasets, ni dans la page Comparer : ils ne se déclarent compatibles qu'avec la page complète. Ce n'est pas une panne.
 
 
-## 13.8 Mettre à jour la plateforme
+## 13.7 Mettre à jour la plateforme
 
 Depuis [Système › Mises à jour]{.ui}, un bouton lance la mise à jour. Ce qui se passe derrière a été pensé pour qu'**un site ne reste jamais cassé**.
 
@@ -169,7 +169,7 @@ Depuis [Système › Mises à jour]{.ui}, un bouton lance la mise à jour. Ce qu
 - L'onglet affiche les **notes de version** de chaque version qui sera installée, et vérifie vos plugins avant : ceux qui seraient incompatibles sont mis de côté, puis réactivés plus tard.
 - Il montre aussi la version du **pack Pipeline** (onglet [Pipeline]{.ui}) : c'est un autre logiciel, qui s'installe sur le poste de traitement, pas sur le serveur.
 
-## 13.9 Personnaliser le site (marque blanche)
+## 13.8 Personnaliser le site (marque blanche)
 
 Lumen3D n'est pas lié à un laboratoire : tout ce que le public voit se règle sans écrire de code.
 

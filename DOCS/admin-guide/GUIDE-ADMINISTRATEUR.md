@@ -6,6 +6,7 @@ version: "Plateforme Web 1.59.2"
 date: "Octobre 2026"
 abstract: "Tout ce qu'on peut faire depuis le panneau d'administration du site : gérer et importer les jeux de données, les mettre au format courant, personnaliser le site public, installer des fonctions, mettre la plateforme à jour. Écrit pour quelqu'un qui n'a jamais vu ce panneau et qui ne sait pas coder."
 lang: fr
+toc-class: compact
 toc-title: "Sommaire"
 cover-image: img/shell-overview.png
 ---
@@ -99,7 +100,7 @@ Dans la version PDF de ce guide, vous pouvez imprimer cette page et écrire à l
 
 ::: legend
 | n | ce que c'est |
-|---|---|
+|-|----------------------|
 | 1 | Votre **identifiant** (`admin` par défaut). |
 | 2 | Votre **mot de passe**. |
 | 3 | [Se connecter]{.ui} ouvre le panneau. La touche <kbd>Entrée</kbd> fait la même chose. |
@@ -139,11 +140,11 @@ Une fois connecté, l'écran se divise en trois zones qui ne changent jamais : l
 
 ## 2.1. Le menu de gauche
 
-![Vue générale du panneau : le menu en quatre groupes, la barre du haut.](img/shell-overview.png){.shot width=100%}
+![Vue générale du panneau : le menu en quatre groupes, la barre du haut.](img/shell-overview.png){.shot width=88%}
 
 ::: legend
 | n | ce que c'est |
-|---|---|
+|-|----------------------|
 | 1 | Groupe **Données** : Datasets, Import, Mises à jour des données, Types de données, Statistiques. |
 | 2 | Groupe **Site public** : Identité, Apparence, Pages, Mentions légales. |
 | 3 | Groupe **Extensions** : Plugins, Catalogue. |
@@ -156,19 +157,17 @@ Une fois connecté, l'écran se divise en trois zones qui ne changent jamais : l
 | 10 | [← Explorer]{.ui} : ouvre le site public dans un nouvel onglet, pratique pour vérifier l'effet d'une modification. |
 :::
 
-Un **petit point coloré** apparaît à côté de [Mises à jour]{.ui} quand une nouvelle version de la plateforme existe. Un autre apparaît à côté d'[Import]{.ui} quand un transfert est en cours.
-
-![Menu replié en icônes.](img/shell-sidebar-collapsed.png){.shot width=42%}
+Le bouton [Réduire]{.ui} replie le menu en icônes seules. Un **petit point coloré** apparaît à côté de [Mises à jour]{.ui} quand une nouvelle version de la plateforme existe. Un autre apparaît à côté d'[Import]{.ui} quand un transfert est en cours.
 
 Sur un téléphone, le menu devient un tiroir (bouton [Menu]{.ui}). Le panneau reste pensé pour un **écran large** : l'éditeur de datasets en particulier.
 
 ## 2.2. La barre du haut
 
-![La barre du haut avec la pastille « Modifications non sauvegardées ».](img/shell-topbar.png){.shot width=100%}
+![La barre du haut avec la pastille « Modifications non sauvegardées ».](img/shell-topbar.png){.shot width=88%}
 
 ::: legend
 | n | ce que c'est |
-|---|---|
+|-|----------------------|
 | 1 | Le **fil d'Ariane** : groupe puis onglet. |
 | 2 | La pastille orange **« Modifications non sauvegardées »**. |
 | 3 | Le **thème** du panneau. |
@@ -223,11 +222,11 @@ Quand un **import est en cours**, la déconnexion et les liens qui quittent le p
 - Un dataset arrive par l'onglet **Import** (ou par FTP) ; ici, on le rend présentable.
 :::
 
-![L'onglet Datasets avec un dataset ouvert (jeu de démonstration).](img/tab-datasets.png){.shot width=100%}
+![L'onglet Datasets avec un dataset ouvert (jeu de démonstration).](img/tab-datasets.png){.shot width=88%}
 
 ::: legend
 | n | ce que c'est |
-|---|---|
+|-|----------------------|
 | 1 | Le nombre total de jeux de données. |
 | 2 | La **recherche** : nom, stade, spécimen. |
 | 3 | Les **filtres** par type (voir §3.2). |
@@ -256,11 +255,14 @@ Un dataset **publié par l'Import** arrive **masqué** de l'explorateur public. 
 
 ## 3.2. La colonne de gauche : trouver un jeu de données
 
-![La liste, avec un dataset masqué (le premier).](img/datasets-list.png){.shot width=44%}
-
+:::::: cols-wide-right
+::::: col
+![La liste, avec un dataset masqué (le premier).](img/datasets-list.png){.shot width=100%}
+:::::
+::::: col
 ::: legend
 | n | ce que c'est |
-|---|---|
+|-|----------------------|
 | 1 | Le **nombre** de jeux de données. |
 | 2 | La **recherche** : un morceau de nom, la liste se filtre en direct ; la croix efface. |
 | 3 | Les **filtres** : [Tous]{.ui}, **un filtre par type de données** ([3D]{.ui}, [2D]{.ui}, [Live]{.ui}), [Masqués]{.ui} et [Import]{.ui}. |
@@ -269,6 +271,8 @@ Un dataset **publié par l'Import** arrive **masqué** de l'explorateur public. 
 | 6 | L'**œil** : montre ou masque le dataset **immédiatement**, sans passer par [Sauvegarder]{.ui}. |
 | 7 | Le **point coloré** : [Configuré]{.ui} (vert) ou [Non configuré]{.ui} (ambre). |
 :::
+:::::
+::::::
 
 - Les noms des filtres de type sont **ceux que vous avez choisis** dans l'onglet Types de données (chapitre 6). Il y a **trois** types : le suivi de cellules est une couche d'un dataset *Live*, pas un type à part.
 - Le filtre [Import]{.ui} montre les datasets dont le transfert n'est pas publié (§3.10).
@@ -282,15 +286,20 @@ Une liste vide affiche « Aucun dataset trouvé. ». Si la liste ne peut pas se 
 
 ## 3.3. La colonne du milieu : l'aperçu
 
-![L'aperçu : le vrai visualiseur dans le panneau.](img/datasets-preview.png){.shot width=70%}
-
+:::::: cols-wide-right
+::::: col
+![L'aperçu : le vrai visualiseur dans le panneau.](img/datasets-preview.png){.shot width=100%}
+:::::
+::::: col
 ::: legend
 | n | ce que c'est |
-|---|---|
+|-|----------------------|
 | 1 | Le **visualiseur 3D** (ou 2D pour une photographie), tel que le voit un visiteur. |
 | 2 | Le nom du dataset et ses **dimensions** (`X×Y×Z · n canaux`, ou `X×Y px`). |
 | 3 | [📸 Redéfinir la preview]{.ui} : fige la vue actuelle comme **vignette** du dataset dans l'explorateur. |
 :::
+:::::
+::::::
 
 Vous pouvez faire tourner le volume, changer les couleurs, régler le contraste : exactement comme un visiteur. Le chargement d'un gros volume prend quelques secondes (les données arrivent par petits blocs).
 
@@ -314,11 +323,14 @@ Tout le reste — position de la caméra, mode de rendu, qualité, fond, plan de
 
 ## 3.4. La colonne de droite : les réglages
 
-![Le haut de la colonne de droite : visibilité et identification.](img/datasets-config-top.png){.shot width=46%}
-
+:::::: cols-wide-right
+::::: col
+![Le haut de la colonne de droite : visibilité et identification.](img/datasets-config-top.png){.shot width=100%}
+:::::
+::::: col
 ::: legend
 | n | ce que c'est |
-|---|---|
+|-|----------------------|
 | 1 | [Sauvegarder]{.ui} (<kbd>Ctrl</kbd> + <kbd>S</kbd>) : enregistre le formulaire. |
 | 2 | [↺ Reset]{.ui} : annule vos changements non enregistrés. |
 | 3 | **Visibilité** : l'interrupteur applique **tout de suite**. |
@@ -327,6 +339,8 @@ Tout le reste — position de la caméra, mode de rendu, qualité, fond, plan de
 | 6 | **Description** : texte libre de la fiche publique. |
 | 7 | **Dossier source** (et **Dimensions**) : en gris, non modifiables. |
 :::
+:::::
+::::::
 
 En-tête de la colonne : le nom du dataset et, dessous, « type · identifiant » (par exemple « 3D · 3d/Embryo-E105-Em3-Pecam1 »).
 
@@ -349,17 +363,22 @@ Un dataset mal formé est **refusé** plutôt que monté de travers : toast « D
 
 Une galerie permet d'attacher à un dataset des **captures annotées, schémas, figures**. Elles apparaissent dans le visualiseur, en bas à droite, sous forme de vignettes qui s'agrandissent au clic.
 
-![La section « Galerie d'images » avec trois images de démonstration.](img/datasets-gallery.png){.shot width=46%}
-
+:::::: cols-wide-right
+::::: col
+![La section « Galerie d'images » avec trois images de démonstration.](img/datasets-gallery.png){.shot width=100%}
+:::::
+::::: col
 ::: legend
 | n | ce que c'est |
-|---|---|
+|-|----------------------|
 | 1 | La **zone de dépôt** : glissez des images, ou cliquez pour parcourir. |
 | 2 | La **légende** (optionnelle, 400 caractères). |
 | 3 | ↑ ↓ : **déplacer** l'image dans l'ordre d'affichage. |
 | 4 | 🗑 : **supprimer** l'image (confirmation, puis « Image supprimée ✓ »). |
 | 5 | Formats : PNG, JPEG, WebP, GIF — 8 Mo max. |
 :::
+:::::
+::::::
 
 - **40 images au maximum** par dataset (« Maximum 40 images par dataset. »).
 - Les **octets sont envoyés tout de suite** à l'ajout. L'**ordre** et les **légendes** sont enregistrés par [Sauvegarder]{.ui}.
@@ -372,16 +391,21 @@ Erreurs possibles : « « X » : format non supporté (PNG, JPEG, WebP, GIF). »
 
 ## 3.6. Calibration physique et affichage
 
-![Le milieu de la colonne : calibration, exposition, début de l'orientation.](img/datasets-config-bottom.png){.shot width=46%}
-
+:::::: cols-wide-right
+::::: col
+![Le milieu de la colonne : calibration, exposition, début de l'orientation.](img/datasets-config-bottom.png){.shot width=100%}
+:::::
+::::: col
 ::: legend
 | n | ce que c'est |
-|---|---|
+|-|----------------------|
 | 1 | **Voxel X / Y / Z** : la taille réelle d'un voxel, en µm. |
 | 2 | **Visibilité (Exposure)** : la luminosité à l'ouverture. |
 | 3 | **Sens de l'échantillon** (§3.8). |
 | 4 | [🧭 Définir l'orientation]{.ui} (§3.8). |
 :::
+:::::
+::::::
 
 **Calibration physique — le champ le plus important.** Les trois valeurs `Voxel X / Y / Z` (pas de 0,001) donnent la taille réelle d'un point de l'image, en micromètres. **Toutes les mesures des visiteurs en dépendent** : outil de distance, barre d'échelle, dimensions affichées.
 
@@ -403,7 +427,7 @@ Un volume contient plusieurs **canaux**, un par marquage fluorescent. C'est ici 
 
 ::: legend
 | n | ce que c'est |
-|---|---|
+|-|----------------------|
 | 1 | La **case à cocher** : canal affiché ou masqué à l'ouverture. |
 | 2 | Le **nom** du canal : cliquez et tapez pour le renommer. |
 | 3 | La **couleur** d'affichage. |
@@ -425,11 +449,11 @@ Un volume contient plusieurs **canaux**, un par marquage fluorescent. C'est ici 
 
 La section **Orientation 3D** a quatre réglages, de haut en bas : le **sens de l'échantillon**, le **repère de référence**, les **axes affichés** et la **vue par défaut**.
 
-![La section Orientation 3D avec le gizmo d'axes dans l'aperçu.](img/datasets-orientation.png){.shot width=100%}
+![La section Orientation 3D avec le gizmo d'axes dans l'aperçu.](img/datasets-orientation.png){.shot width=88%}
 
 ::: legend
 | n | ce que c'est |
-|---|---|
+|-|----------------------|
 | 1 | **Sens de l'échantillon** : deux boutons radio. |
 | 2 | [🧭 Définir l'orientation]{.ui} : place le gizmo d'axes dans l'aperçu. |
 | 3 | **Axes affichés** : cocher, masquer, renommer. |
@@ -453,9 +477,7 @@ Le sens est pris en compte par la vue initiale, le bouton de réinitialisation d
 
 ### Repère de référence et axes
 
-Le bouton [🧭 Définir l'orientation]{.ui} (qui devient [❌ Annuler l'orientation]{.ui}) sert à indiquer où se trouvent l'avant, le haut et la droite du spécimen. Il repart de l'alignement déjà enregistré.
-
-![Les trois axes colorés dans l'aperçu, pendant la définition de l'orientation.](img/datasets-orientation-zoom.png){.shot width=50%}
+Le bouton [🧭 Définir l'orientation]{.ui} (qui devient [❌ Annuler l'orientation]{.ui}) sert à indiquer où se trouvent l'avant, le haut et la droite du spécimen. Il repart de l'alignement déjà enregistré. Trois axes colorés apparaissent sur le volume, dans l'aperçu (voir la figure ci-dessus).
 
 | Axe | Couleur | Affiché |
 |---|---|---|
@@ -497,7 +519,7 @@ Un dataset de type **2D** est **une photographie calibrée** de stéréomicrosco
 
 ::: legend
 | n | ce que c'est |
-|---|---|
+|-|----------------------|
 | 1 | L'**aperçu 2D** : photographie, barre d'échelle, panneau « Spécimen ». |
 | 2 | **Dimensions** : « X × Y px · 0,xxx µm/px » (ou « non calibré »). |
 :::
@@ -510,16 +532,21 @@ Un dataset de type **2D** est **une photographie calibrée** de stéréomicrosco
 
 Un dataset en cours d'envoi apparaît **dans cette liste** (filtre [Import]{.ui}), avec une pastille d'état à la place de l'œil. L'ouvrir affiche un **bandeau d'état** en haut de la colonne de droite.
 
-![Un dataset « Envoi — éditable ».](img/datasets-staging-banner.png){.shot width=46%}
-
+:::::: cols-wide-right
+::::: col
+![Un dataset « Envoi — éditable ».](img/datasets-staging-banner.png){.shot width=100%}
+:::::
+::::: col
 ::: legend
 | n | ce que c'est |
-|---|---|
+|-|----------------------|
 | 1 | Le **bandeau d'état** (icône, état, phrase d'aide). |
 | 2 | **Visibilité** : grisée, un import n'est pas encore public. |
 | 3 | Les champs d'identification : **modifiables** dès que l'état est « éditable ». |
 | 4 | [Sauvegarder]{.ui}. |
 :::
+:::::
+::::::
 
 | État | Ce que vous pouvez faire dans l'onglet Datasets |
 |---|---|
@@ -550,11 +577,11 @@ C'est l'écran d'accueil de l'onglet : « Aucun dataset sélectionné — Clique
 
 ## 4.1. L'onglet vide
 
-![L'onglet Import, avant tout dépôt.](img/import-empty.png){.shot width=100%}
+![L'onglet Import, avant tout dépôt.](img/import-empty.png){.shot width=88%}
 
 ::: legend
 | n | ce que c'est |
-|---|---|
+|-|----------------------|
 | 1 | [Actualiser]{.ui} : relit les imports en attente côté serveur. |
 | 2 | La **zone de dépôt** : glissez-y un dossier (ou cliquez n'importe où dedans). |
 | 3 | [Choisir un dossier]{.ui} : le sélecteur de dossier du navigateur. |
@@ -569,11 +596,11 @@ Un dossier lâché **à côté** de la zone est ignoré : le navigateur ne quitt
 
 ## 4.2. Un transfert en cours
 
-![Deux états d'un même transfert : progression globale et carte du dataset.](img/import-running.png){.shot width=100%}
+![Deux états d'un même transfert : progression globale et carte du dataset.](img/import-running.png){.shot width=88%}
 
 ::: legend
 | n | ce que c'est |
-|---|---|
+|-|----------------------|
 | 1 | La **progression globale** : [Progression]{.ui}, [Transféré]{.ui}, [Vitesse]{.ui}, [Temps restant]{.ui}, et la barre. |
 | 2 | [Pause]{.ui} (devient [Reprendre]{.ui}) ; à côté, [Arrêter]{.ui}. |
 | 3 | La **carte d'un dataset** : nom, type, octets, nombre de fichiers. |
@@ -607,11 +634,11 @@ Un import **interrompu** n'est pas gardé indéfiniment : la carte affiche « pu
 
 ## 4.4. Quand le transfert est terminé
 
-![Un dataset « Envoyé — à publier ».](img/import-staged.png){.shot width=100%}
+![Un dataset « Envoyé — à publier ».](img/import-staged.png){.shot width=88%}
 
 ::: legend
 | n | ce que c'est |
-|---|---|
+|-|----------------------|
 | 1 | La carte du dataset : 100 %, tous les fichiers. |
 | 2 | L'état **Envoyé — à publier**. |
 | 3 | [Éditer]{.ui} : renommer, régler canaux et orientation. |
@@ -634,7 +661,7 @@ Un import **interrompu** n'est pas gardé indéfiniment : la carte affiche « pu
 
 ## 4.5. Les fichiers ignorés
 
-![Les fichiers refusés, avec la raison.](img/import-rejected.png){.shot width=100%}
+![Les fichiers refusés, avec la raison.](img/import-rejected.png){.shot width=88%}
 
 Seuls les fichiers que produit le pipeline sont acceptés. **Tout le reste est refusé avant le moindre octet écrit** : les `.php` et `.js`, les fichiers cachés, les chemins remontants (`../`), les fichiers hors d'un dossier de dataset.
 
@@ -656,14 +683,14 @@ Dès qu'un import est à signaler, un petit **dock** s'ancre en bas à droite, *
 ![La bulle.](img/import-dock-bubble.png){.shot width=70%}
 
 | n | ce que c'est |
-|---|---|
+|-|----------------------|
 | 1 | Anneau de progression et pourcentage. Un clic l'agrandit. |
 :::
 ::: col
-![La barre (taille par défaut).](img/import-dock-bar.png){.shot width=100%}
+![La barre (taille par défaut).](img/import-dock-bar.png){.shot width=88%}
 
 | n | ce que c'est |
-|---|---|
+|-|----------------------|
 | 1 | Chevron : réduire en bulle. |
 | 2–4 | Titre d'état, barre, vitesse et temps restant. |
 | 5 | [Détails]{.ui} : ouvre le panneau. |
@@ -674,7 +701,7 @@ Dès qu'un import est à signaler, un petit **dock** s'ancre en bas à droite, *
 
 ::: legend
 | n | ce que c'est |
-|---|---|
+|-|----------------------|
 | 1 | Titre « Import de datasets ». |
 | 2 | La progression globale. |
 | 3 | Une **ligne par dataset** : nom, état, barre, octets, fichiers. |
@@ -690,7 +717,7 @@ Titres d'état du dock : « Transfert en cours », « Transfert en pause », « 
 
 ::: legend
 | n | ce que c'est |
-|---|---|
+|-|----------------------|
 | 1 | [Rester sur la page]{.ui} : le transfert continue. |
 | 2 | [Mettre en pause et quitter]{.ui} : le transfert est mis en pause, les fichiers envoyés sont gardés. |
 :::
@@ -758,17 +785,17 @@ Elles s'enchaînent dans l'ordre : un dataset en format 1 reçoit les trois.
 
 ## 5.3. Vue d'ensemble de l'onglet
 
-![L'onglet pendant une conversion : l'un des datasets sur ce navigateur, l'autre sur le serveur.](img/dupd-running.png){.shot width=100%}
+![L'onglet pendant une conversion : l'un des datasets sur ce navigateur, l'autre sur le serveur.](img/dupd-running.png){.shot width=88%}
 
 ::: legend
 | n | ce que c'est |
-|---|---|
+|-|----------------------|
 | 1 | [Pause]{.ui} (ou [Reprendre]{.ui}) ; à côté [Actualiser]{.ui} et [Tout mettre à jour]{.ui}. |
 | 2 | La **bande des deux files** : une pastille par exécutant, avec son état. |
-| 3 | La **carte d'un dataset**. |
+| 3 | La **carte d'un dataset** : nom, type, « format 1 → 4 », unités et taille estimées, **étapes** numérotées. |
 | 4 | Le **sélecteur d'exécutant** : [Ce navigateur]{.ui} ou [Le serveur]{.ui}. |
-| 5 | La zone de **progression** du dataset. |
-| 6 | La croix : **annuler** (le dataset reste tel quel). |
+| 5 | La zone de **progression** : « étape i sur n », barre, pourcentage, unités faites, **temps restant**, unités par minute. |
+| 6 | La croix : **annuler** : « Abandonner la progression de cette mise à jour ? Le jeu de données reste tel quel. » |
 :::
 
 De haut en bas : l'en-tête et ses boutons, la carte **Test de vitesse**, la carte **Datasets à mettre à jour**, puis trois volets repliables : **À jour**, **Formats de données**, **Historique**. [Tout mettre à jour]{.ui} traite tous les datasets prêts, un par exécutant à la fois.
@@ -797,23 +824,13 @@ Sur un hébergement mutualisé où l'option [Le serveur]{.ui} est grisée, **[Ce
 
 ## 5.5. Le test de vitesse
 
-Un seul bouton : [Lancer le test (5 s)]{.ui} (puis [Relancer]{.ui}). Pendant 5 secondes, le navigateur **et** le serveur convertissent **en même temps** le même bloc synthétique (une brique 64³ livrée avec la plateforme). **Aucun dataset n'est lu ni modifié.**
+Un seul bouton : [Lancer le test (5 s)]{.ui} (puis [Relancer]{.ui}). Pendant 5 secondes (deux barres en course, une par exécutant), le navigateur **et** le serveur convertissent **en même temps** le même bloc synthétique (une brique 64³ livrée avec la plateforme). **Aucun dataset n'est lu ni modifié.**
 
-![Le test en cours : deux barres en course.](img/dupd-speedtest.png){.shot width=100%}
-
-::: legend
-| n | ce que c'est |
-|---|---|
-| 1 | Le bouton (« Test en cours… » pendant la course). |
-| 2 | Le **score** en « points » (blocs par 10 s). |
-| 3 | La barre de chaque exécutant. |
-:::
-
-![Le résultat : le plus rapide devient le choix par défaut.](img/dupd-speedtest-result.png){.shot width=100%}
+![Le résultat : le plus rapide devient le choix par défaut.](img/dupd-speedtest-result.png){.shot width=88%}
 
 ::: legend
 | n | ce que c'est |
-|---|---|
+|-|----------------------|
 | 1 | [Relancer]{.ui} le test. |
 | 2 | Le score de **Ce navigateur**. |
 | 3 | Le badge **Le plus rapide**. |
@@ -823,19 +840,6 @@ Un seul bouton : [Lancer le test (5 s)]{.ui} (puis [Relancer]{.ui}). Pendant 5 s
 Si les deux sont aussi rapides : « Les deux exécuteurs sont aussi rapides : choisissez librement. ». Un côté inutilisable affiche **sa raison** au lieu d'un score. Le résultat est conservé dans ce navigateur (« Testé le … »). Le test est indisponible pendant une mise à jour.
 
 ## 5.6. Lancer une mise à jour, pas à pas
-
-![Avant : deux datasets à mettre à jour, avec leurs étapes.](img/dupd-before.png){.shot width=100%}
-
-::: legend
-| n | ce que c'est |
-|---|---|
-| 1 | [Actualiser]{.ui} : relit l'état des datasets. |
-| 2 | [Tout mettre à jour (n)]{.ui}. |
-| 3 | La **carte d'un dataset** : nom, type, « format 1 → 4 », unités et taille estimées. |
-| 4 | Les **étapes** à faire, numérotées. |
-| 5 | Le **sélecteur d'exécutant**. |
-| 6 | [Mettre à jour]{.ui}. |
-:::
 
 ::: steps
 1. (Facultatif) Lancez le **test de vitesse**.
@@ -849,17 +853,6 @@ Le bouton principal s'appelle [Réparer]{.ui} si le dataset se dit à jour mais 
 
 ## 5.7. Pendant la conversion
 
-![Gros plan sur la carte d'un dataset en cours.](img/dupd-dataset-card.png){.shot width=88%}
-
-::: legend
-| n | ce que c'est |
-|---|---|
-| 1 | Les **étapes** restantes. |
-| 2 | L'exécutant, **verrouillé** pendant l'exécution. |
-| 3 | La croix **annuler** : « Abandonner la progression de cette mise à jour ? Le jeu de données reste tel quel. » |
-| 4 | La **progression** : « étape i sur n », barre, pourcentage, unités faites, **temps restant**, unités par minute. |
-:::
-
 États affichés : **En attente de son tour** (« prochain sur le serveur »), **En cours**, **Mise en pause…**, **En pause** (avec la cause : onglet quitté, page fermée, session expirée, serveur injoignable), **Assemblage** (« Assemblage des plans x/y », « assemblage et publication… »), **Échec** (avec la cause).
 
 - **[Pause]{.ui}** met toutes les files en pause ; **[Reprendre]{.ui}** repart là où elles s'étaient arrêtées.
@@ -871,11 +864,11 @@ Le bouton principal s'appelle [Réparer]{.ui} si le dataset se dit à jour mais 
 
 ## 5.8. Les volets du bas
 
-![Les volets « Formats de données » et « Historique » dépliés.](img/dupd-folds.png){.shot width=100%}
+![Les volets « Formats de données » et « Historique » dépliés.](img/dupd-folds.png){.shot width=88%}
 
 ::: legend
 | n | ce que c'est |
-|---|---|
+|-|----------------------|
 | 1 | **Formats de données** : le format le plus récent (4) et la liste des trois mises à jour (« 1 → 2 »…). |
 | 2 | **Historique** : les 20 dernières opérations, mémorisées dans ce navigateur. |
 | 3 | [Effacer]{.ui} : vide l'historique. |
@@ -906,11 +899,11 @@ Une ligne d'historique indique « format {v} · {n} unités · {durée} · {exé
 - Vous ne changez **que des noms affichés** : jamais un dossier, une adresse ou un fichier.
 :::
 
-![L'onglet Types de données.](img/tab-dataset-types.png){.shot width=100%}
+![L'onglet Types de données.](img/tab-dataset-types.png){.shot width=88%}
 
 ::: legend
 | n | ce que c'est |
-|---|---|
+|-|----------------------|
 | 1 | [Noms par défaut]{.ui} : vide les champs (il faut ensuite [Enregistrer]{.ui}). |
 | 2 | [Enregistrer]{.ui} (<kbd>Ctrl</kbd> + <kbd>S</kbd>), actif seulement s'il y a une modification. |
 | 3 | L'**identifiant technique** du type (`3d`, `2d`, `live`) : non modifiable. |
@@ -938,11 +931,11 @@ Les variables de page `{type3d}`, `{type2d}` et `{typeLive}` (chapitre 10) repre
 
 # 7. Statistiques — qui consulte quoi
 
-![L'onglet Statistiques.](img/tab-stats.png){.shot width=100%}
+![L'onglet Statistiques.](img/tab-stats.png){.shot width=88%}
 
 ::: legend
 | n | ce que c'est |
-|---|---|
+|-|----------------------|
 | 1 | [Actualiser]{.ui} : recharge les chiffres. |
 | 2 | Trois **compteurs** cumulés depuis l'installation. |
 | 3 | La petite courbe des **30 derniers jours**. |
@@ -969,11 +962,11 @@ Le tableau « Par dataset » donne vues, téléchargements et dernière consulta
 
 C'est ce qui permet à la même plateforme de servir un laboratoire d'embryologie ou un institut de neurosciences. Titre réel de la page : « Identité & personnalisation ».
 
-![L'onglet Identité : noms, terminologie, accroche et SEO.](img/tab-branding.png){.shot width=100%}
+![L'onglet Identité : noms, terminologie, accroche et SEO.](img/tab-branding.png){.shot width=88%}
 
 ::: legend
 | n | ce que c'est |
-|---|---|
+|-|----------------------|
 | 1 | [Réinitialiser]{.ui} : revient aux valeurs par défaut (« Le contenu métier sera retiré. »). |
 | 2 | [Enregistrer]{.ui} : actif dès qu'un champ change. |
 | 3 | Carte **Identité** : les noms de votre site. |
@@ -1010,11 +1003,11 @@ Ce mot est ensuite repris **automatiquement** dans toute l'interface publique : 
 
 ## 8.4. Cartes « Accroche & SEO », « Pied de page » et « Navigation »
 
-![Pied de page et navigation.](img/tab-branding-nav.png){.shot width=100%}
+![Pied de page et navigation.](img/tab-branding-nav.png){.shot width=88%}
 
 ::: legend
 | n | ce que c'est |
-|---|---|
+|-|----------------------|
 | 1 | Carte **Pied de page** : la mention de copyright (par langue). |
 | 2 | Un **lien** du pied de page : [Libellé]{.ui} + adresse ; la croix le retire. |
 | 3 | [Ajouter un lien]{.ui}. |
@@ -1045,11 +1038,11 @@ Réinitialiser demande « Réinitialiser l'identité aux valeurs par défaut ? �
 - Les boutons restent **lisibles** : le contraste est calculé pour vous.
 :::
 
-![L'onglet Apparence.](img/tab-appearance.png){.shot width=100%}
+![L'onglet Apparence.](img/tab-appearance.png){.shot width=88%}
 
 ::: legend
 | n | ce que c'est |
-|---|---|
+|-|----------------------|
 | 1 | **Couleurs de marque**. |
 | 2 | **Typographie** : la police. |
 | 3 | **Formes** : l'arrondi des coins. |
@@ -1099,11 +1092,11 @@ C'est la fonction la plus riche du panneau.
 
 ## 10.1. Choisir une page
 
-![L'onglet Pages.](img/tab-pages.png){.shot width=100%}
+![L'onglet Pages.](img/tab-pages.png){.shot width=88%}
 
 ::: legend
 | n | ce que c'est |
-|---|---|
+|-|----------------------|
 | 1 | La **page** à modifier. |
 | 2 | [Nouvelle page]{.ui}. |
 | 3 | La **langue** que vous éditez. |
@@ -1119,11 +1112,11 @@ Les modèles d'accueil et À propos ne contiennent plus de carte « Tracking » 
 
 L'éditeur s'ouvre **dans son propre onglet** pour disposer de tout l'écran.
 
-![L'éditeur de page.](img/editor-overview.png){.shot width=100%}
+![L'éditeur de page.](img/editor-overview.png){.shot width=88%}
 
 ::: legend
 | n | ce que c'est |
-|---|---|
+|-|----------------------|
 | 1 | **Quitter** : revient au panneau. |
 | 2 | La page en cours d'édition. |
 | 3 | La langue éditée. |
@@ -1136,11 +1129,11 @@ L'éditeur s'ouvre **dans son propre onglet** pour disposer de tout l'écran.
 
 ### La barre du haut
 
-![Barre de l'éditeur.](img/editor-topbar.png){.shot width=100%}
+![Barre de l'éditeur.](img/editor-topbar.png){.shot width=88%}
 
 ::: legend
 | n | ce que c'est |
-|---|---|
+|-|----------------------|
 | 1 – 2 | **Annuler** et **Rétablir**. |
 | 3 | **Ouvrir** : affiche la page publiée dans un nouvel onglet, pour comparer. |
 | 4 | **Défaut** : revient au modèle d'origine. Efface votre mise en page. |
@@ -1238,11 +1231,11 @@ L'élément **HTML** est nettoyé par **liste blanche** : liens, vidéo/audio et
 
 **Cliquez dessus dans la page** : il se cerne de vert et la barre latérale bascule sur ses réglages.
 
-![Un élément sélectionné.](img/editor-selected.png){.shot width=100%}
+![Un élément sélectionné.](img/editor-selected.png){.shot width=88%}
 
 ::: legend
 | n | ce que c'est |
-|---|---|
+|-|----------------------|
 | 1 | Le **fil d'Ariane** : `Section 2 › Colonne 1 › Compteur animé`. Chaque niveau est cliquable. |
 | 2 | Les trois onglets de réglages : **Contenu**, **Style**, **Avancé**. |
 :::
@@ -1296,7 +1289,7 @@ Une page est construite en trois niveaux : **Section** (une bande sur toute la l
 
 Six dispositions de colonnes : **1** (pleine largeur), **2**, **3**, **4** colonnes égales, **⅔ ⅓** et **⅓ ⅔**. Sur un téléphone, les colonnes **se remettent automatiquement les unes sous les autres**.
 
-![Aperçu mobile.](img/editor-mobile.png){.shot width=100%}
+![Aperçu mobile.](img/editor-mobile.png){.shot width=70%}
 
 Les trois icônes (ordinateur / tablette / mobile) redimensionnent l'aperçu. **Vérifiez en mobile avant de publier** : une bonne partie des visiteurs sont sur téléphone.
 
@@ -1304,17 +1297,17 @@ Les trois icônes (ordinateur / tablette / mobile) redimensionnent l'aperçu. **
 
 :::: cols3
 ::: col
-![Onglet Fond.](img/editor-side-background.png){.shot width=100%}
+![Onglet Fond.](img/editor-side-background.png){.shot width=88%}
 
 **Fond** : *Aucun fond*, *Souris* (réagit au curseur), *Passif* (se déroule seul). Respecte la préférence « réduire les animations ».
 :::
 ::: col
-![Onglet Traduire.](img/editor-side-translate.png){.shot width=100%}
+![Onglet Traduire.](img/editor-side-translate.png){.shot width=88%}
 
 **Traduire** liste **tous les textes** de la page et signale ceux qui manquent (« 24 textes · 7 traductions manquantes »).
 :::
 ::: col
-![Onglet Variables.](img/editor-side-variables.png){.shot width=100%}
+![Onglet Variables.](img/editor-side-variables.png){.shot width=88%}
 
 **Variables** : un texte défini **une fois**, réutilisé partout avec `{nom}`.
 :::
@@ -1351,11 +1344,11 @@ Erreurs : « Identifiant invalide. », « Cette page existe déjà. ». Supprime
 
 # 11. Mentions légales
 
-![L'onglet Mentions légales.](img/tab-legal.png){.shot width=100%}
+![L'onglet Mentions légales.](img/tab-legal.png){.shot width=88%}
 
 ::: legend
 | n | ce que c'est |
-|---|---|
+|-|----------------------|
 | 1 | Le sélecteur **Langue**. |
 | 2 | [Ajouter une section]{.ui} : un **titre** et un **texte**. |
 | 3 | [Enregistrer]{.ui} : publie. |
@@ -1396,11 +1389,11 @@ Chaque plugin occupe l'un des **trois emplacements** :
 
 ## 12.2. L'écran
 
-![L'onglet Plugins : 28 plugins installés, tous « dev » sur cette machine de développement.](img/tab-plugins.png){.shot width=100%}
+![L'onglet Plugins : 28 plugins installés, tous « dev » sur cette machine de développement.](img/tab-plugins.png){.shot width=88%}
 
 ::: legend
 | n | ce que c'est |
-|---|---|
+|-|----------------------|
 | 1 | Une **carte par emplacement** (Outils, Canaux, Modes de rendu). |
 | 2 | Le compteur `actifs / total` de la carte. |
 | 3 | Une **ligne par plugin**. |
@@ -1409,11 +1402,11 @@ Chaque plugin occupe l'un des **trois emplacements** :
 | 6 | **Révoquer** (sur un plugin que vous avez approuvé). |
 :::
 
-![Zoom sur une ligne de plugin.](img/plugins-row.png){.shot width=100%}
+![Zoom sur une ligne de plugin.](img/plugins-row.png){.shot width=88%}
 
 ::: legend
 | n | ce que c'est |
-|---|---|
+|-|----------------------|
 | 1 | Le **nom** du plugin. |
 | 2 | Son **niveau de confiance**. |
 | 3 | Version · auteur · dossier · **empreinte** du code. |
@@ -1456,11 +1449,11 @@ Un plugin est du **vrai code** qui s'exécute dans le navigateur des visiteurs. 
 
 Vous verrez ce cas si quelqu'un dépose un plugin sur le serveur (par FTP) au lieu de passer par le Catalogue.
 
-![Un plugin non approuvé.](img/plugins-untrusted.png){.shot width=100%}
+![Un plugin non approuvé.](img/plugins-untrusted.png){.shot width=88%}
 
 ::: legend
 | n | ce que c'est |
-|---|---|
+|-|----------------------|
 | 1 | L'étiquette rouge **NON FIABLE** : le plugin n'est pas chargé. |
 | 2 | [Approuver (bac à sable)]{.ui} : le plugin tourne isolé. **Choix recommandé.** |
 | 3 | [Approuver (in-page)]{.ui} : le plugin tourne avec les pleins pouvoirs de la page. |
@@ -1485,11 +1478,11 @@ Messages : « Mot de passe incorrect. », « Le contenu du plugin a changé — 
 
 ## 12.6. Mettre à jour un plugin
 
-![La mise à jour depuis l'onglet Plugins.](img/plugins-update.png){.shot width=100%}
+![La mise à jour depuis l'onglet Plugins.](img/plugins-update.png){.shot width=88%}
 
 ::: legend
 | n | ce que c'est |
-|---|---|
+|-|----------------------|
 | 1 | Le **bandeau** compte les plugins concernés. |
 | 2 | [Tout mettre à jour]{.ui} : à partir de deux plugins ; **un seul mot de passe** pour le lot. |
 | 3 | La ligne : étiquette **màj disponible**, trajet `v1.0.0 → v1.1.0`, bouton. |
@@ -1574,11 +1567,11 @@ Ces plugins ne sont **pas** livrés avec le site : ils s'installent à la demand
 - Une installation est **annulée** au moindre écart avec ce que le catalogue annonce.
 :::
 
-![L'onglet Catalogue (28 plugins installés).](img/tab-marketplace.png){.shot width=100%}
+![L'onglet Catalogue (28 plugins installés).](img/tab-marketplace.png){.shot width=88%}
 
 ::: legend
 | n | ce que c'est |
-|---|---|
+|-|----------------------|
 | 1 | **Signature vérifiée** : le catalogue est authentifié. |
 | 2 | [Actualiser]{.ui}. |
 | 3 | Une **carte de plugin** (nom, emplacement, version, description). |
@@ -1638,11 +1631,11 @@ Un plugin **déjà installé** ne porte jamais l'étiquette `incompatible` : cel
 **Ne confondez pas** avec l'onglet [Mises à jour des données]{.ui} (chapitre 5), qui met à niveau le **format** de vos jeux de données.
 :::
 
-![L'onglet Mises à jour (site à jour).](img/tab-updates.png){.shot width=100%}
+![L'onglet Mises à jour (site à jour).](img/tab-updates.png){.shot width=88%}
 
 ::: legend
 | n | ce que c'est |
-|---|---|
+|-|----------------------|
 | 1 | [Vérifier]{.ui} : relance les trois contrôles. |
 | 2 | **Versions installées** : Plateforme Web et Pipeline de préprocessing. |
 | 3 | **Mise à jour GitHub** : « Vous êtes à jour. » ou « Mise à jour disponible : vX ». |
@@ -1656,11 +1649,11 @@ Deux numéros de version sont affichés, deux composants indépendants : **Plate
 
 Quand une nouvelle version existe, ses **notes de version** s'affichent. Lisez-les : elles décrivent ce qui change.
 
-![Une mise à jour disponible : les notes de chaque version sautée (exemple : un site resté en 1.57.0).](img/updates-release-notes.png){.shot width=100%}
+![Une mise à jour disponible : les notes de chaque version sautée (exemple : un site resté en 1.57.0).](img/updates-release-notes.png){.shot width=88%}
 
 ::: legend
 | n | ce que c'est |
-|---|---|
+|-|----------------------|
 | 1 | Une **pastille par version** apportée ; la dernière est marquée « sera installée ». |
 | 2 | Les notes de la version choisie, en **arbre repliable** (ADDED, OPTIMIZED, FIXED, CHANGED). |
 | 3 | [Afficher les détails]{.ui} / [Titres seulement]{.ui}. |
@@ -1677,11 +1670,11 @@ Si votre site a **sauté plusieurs versions**, chacune a sa pastille (« 4 nouve
 4. Laissez faire : une barre d'étapes défile.
 :::
 
-![Le rapport de vérification avant installation.](img/updates-preflight.png){.shot width=100%}
+![Le rapport de vérification avant installation.](img/updates-preflight.png){.shot width=88%}
 
 ::: legend
 | n | ce que c'est |
-|---|---|
+|-|----------------------|
 | 1 | Le **rapport** : plugins compatibles avec la nouvelle version, plugins mis en quarantaine, blocage éventuel. |
 | 2 | [Confirmer la mise à jour]{.ui} : n'apparaît pas si quelque chose **bloque**. |
 | 3 | [Annuler]{.ui}. |
@@ -1718,24 +1711,15 @@ La **première** mise à jour vers une version ≥ 1.57 se vérifie par somme de
 
 Le bouton [Ouvrir dans une page]{.ui} ouvre, dans un nouvel onglet, `admpan.html?changelog=1` : une page **sans menu**, pour lire à l'aise.
 
-![La page Notes de version : « Nouveau dans cette mise à jour ».](img/changelog-page.png){.shot width=100%}
+![La page Notes de version : « Nouveau dans cette mise à jour ».](img/changelog-page.png){.shot width=88%}
 
 ::: legend
 | n | ce que c'est |
-|---|---|
+|-|----------------------|
 | 1 | [Tout déplier]{.ui} (et [Tout replier]{.ui}). |
 | 2 | L'étiquette **nouvelle** : une version à venir. |
 | 3 | L'étiquette **sera installée** : la plus récente. |
 | 4 | Le groupe « Nouveau dans cette mise à jour ». |
-:::
-
-![Le groupe « Versions installées ».](img/changelog-page-installed.png){.shot width=100%}
-
-::: legend
-| n | ce que c'est |
-|---|---|
-| 5 | Le groupe « Versions installées » : l'historique. |
-| 6 | L'étiquette **installée** : la version courante. |
 :::
 
 Si vous êtes à jour : « Rien à installer : vous êtes à jour. ». Chaque version, chaque section et chaque entrée se plie séparément. Pendant le chargement : « Chargement des notes de version… » ; en cas d'échec : « Notes de version indisponibles. ».
@@ -1744,11 +1728,11 @@ Si vous êtes à jour : « Rien à installer : vous êtes à jour. ». Chaque ve
 
 Une carte **Mises à jour des plugins** répond à la même question pour les modules : « {n} plugin(s) à mettre à jour », avec [Tout mettre à jour]{.ui} (un seul mot de passe). Un plugin dont la nouvelle version exige une plateforme plus récente apparaît dans une seconde liste, **« Mises à jour qui attendent la plateforme »**, avec la raison : il n'est pas escamoté.
 
-![Mises à jour des plugins.](img/updates-plugins.png){.shot width=100%}
+![Mises à jour des plugins.](img/updates-plugins.png){.shot width=88%}
 
 ::: legend
 | n | ce que c'est |
-|---|---|
+|-|----------------------|
 | 1 | Le **nombre** de plugins à traiter. |
 | 2 | Pour chacun : la version installée et la version vers laquelle on irait. |
 | 3 | [Tout mettre à jour]{.ui} : un seul mot de passe pour le lot. |
@@ -1768,11 +1752,11 @@ Il s'installe **sur le poste de traitement, pas sur ce serveur** : téléchargez
 - Le dossier produit s'envoie ensuite par l'onglet **Import**.
 :::
 
-![L'onglet Pipeline : le trajet des données et les deux éditions.](img/tab-pipeline.png){.shot width=100%}
+![L'onglet Pipeline : le trajet des données et les deux éditions.](img/tab-pipeline.png){.shot width=88%}
 
 ::: legend
 | n | ce que c'est |
-|---|---|
+|-|----------------------|
 | 1 | Le **trajet des données** en quatre étapes. |
 | 2 | « Livré avec la plateforme vX » : la version du pack livrée avec ce site. |
 | 3 | **Édition légère** (recommandée). |
@@ -1818,11 +1802,11 @@ L'édition complète est jointe à la version publiée sur GitHub, pas au site. 
 
 ## 15.3. Comment s'en servir
 
-![La carte « Utilisation ».](img/tab-pipeline-usage.png){.shot width=100%}
+![La carte « Utilisation ».](img/tab-pipeline-usage.png){.shot width=88%}
 
 ::: legend
 | n | ce que c'est |
-|---|---|
+|-|----------------------|
 | 1 | Les trois étapes d'**utilisation**. |
 | 2 | La mise en garde : le nom du fichier Excel doit contenir l'intervalle entre images. |
 :::
@@ -1851,11 +1835,11 @@ Le détail de ce que fait chaque étape (nettoyage du bruit, pyramide, briques, 
 - Le mot de passe n'est **jamais** stocké en clair.
 :::
 
-![L'onglet Sécurité.](img/tab-security.png){.shot width=100%}
+![L'onglet Sécurité.](img/tab-security.png){.shot width=88%}
 
 ::: legend
 | n | ce que c'est |
-|---|---|
+|-|----------------------|
 | 1 | **Changer le mot de passe** : actuel, nouveau, confirmation. |
 | 2 | **Stockage sécurisé** : comment il est gardé. |
 | 3 | **Permissions des fichiers** : l'état, et [Réparer les permissions]{.ui}. |
@@ -1896,11 +1880,11 @@ La ligne d'état dit par exemple « PHP (www-data) ≠ propriétaire du site (�
 - **Votre langue** est choisie d'office.
 :::
 
-![L'onglet Documentation.](img/tab-docs.png){.shot width=100%}
+![L'onglet Documentation.](img/tab-docs.png){.shot width=88%}
 
 ::: legend
 | n | ce que c'est |
-|---|---|
+|-|----------------------|
 | 1 | [Actualiser]{.ui} : relit la liste depuis le dépôt. |
 | 2 | Une **carte par document**, toutes langues et versions confondues. |
 | 3 | La **langue** proposée (la vôtre est choisie d'office). |
@@ -1956,7 +1940,7 @@ Quand aucun compte administrateur n'existe, l'ouverture de `admpan.html` déclen
 
 ::: legend
 | n | ce que c'est |
-|---|---|
+|-|----------------------|
 | 1 | La **progression** (5 segments). |
 | 2 | **Identifiant** (`admin` par défaut). |
 | 3 | **Nouveau mot de passe** : **8 caractères minimum**. |
@@ -1972,7 +1956,7 @@ C'est **la seule étape obligatoire**. La création est **exclusive** : elle ne 
 
 ::: legend
 | n | ce que c'est |
-|---|---|
+|-|----------------------|
 | 1 | **Nom de l'instance**. |
 | 2 | **Organisation** (optionnelle). |
 | 3 | **Objet (singulier)** et **(pluriel)** : le mot qui désigne vos objets d'étude. |

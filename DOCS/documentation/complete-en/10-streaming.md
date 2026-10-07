@@ -52,7 +52,7 @@ A **fictional** dataset of 3,072 × 2,304 voxels in XY, with levels at 3,072, 1,
 On the E9.5 demo dataset, the longest side is 768: all three settings land on level 0. The menu then **shows only one option**, with the real dimensions: [Native (768x576x112)]{.ui}.
 :::
 
-![The [Render Quality]{.ui} panel: one line per genuinely distinct level (here a single one, with its dimensions), the status line and, below it, the [Zoom detail]{.ui} selector (section 10.8).](img-en/ch10/qualite-liste.png){.shot width=45%}
+![The [Render Quality]{.ui} panel: one line per genuinely distinct level (here a single one, with its dimensions), the status line ("512×512 active"), and, below it, the [Zoom detail]{.ui} selector (section 10.8).](img-en/ch10/qualite-liste.png){.shot width=45%}
 
 ::: note
 The viewer opens at **512** quality. A quality change that fails leaves the previous volume on screen and puts the menu back as it was.

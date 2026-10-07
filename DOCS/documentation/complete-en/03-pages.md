@@ -161,11 +161,11 @@ On a fresh installation, the legal notice is a template to complete (organisatio
 
 Other pages may exist: the administrator can create **custom pages**, opened by `page.html?slug=<name>` and added to the top bar.
 
-## 3.9 The administration: an overview
+## 3.9 The administration: an overview {.page}
 
 The administration lives in `admpan.html` and asks for a password. It is not in the public bar. Here is only what it looks like; the detail is in chapter 13.
 
-![The administration panel, Datasets tab.](img-en/ch03/admin-apercu.png){.shot width=88%}
+![The administration panel, Datasets tab.](img-en/ch03/admin-apercu.png){.shot width=80%}
 
 ::: legend
 | n | what it is |

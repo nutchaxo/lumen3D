@@ -70,7 +70,7 @@ An orange "Unsaved changes" badge lights up at the top as soon as a tab holds ch
 :::
 
 
-## 13.4 Putting a dataset online
+## 13.3 Putting a dataset online
 
 The pipeline (chapters 4 to 8) produces **one folder**. There are two ways to put it on the server.
 
@@ -82,9 +82,11 @@ The pipeline (chapters 4 to 8) produces **one folder**. There are two ways to pu
 
 ### The Import tab, step by step
 
-![The Import tab, with an upload in progress (demo dataset).](img-en/ch13/admin-import.png){.shot width=66%}
+![The Import tab, before any transfer (demo dataset).](img-en/ch13/admin-import.png){.shot width=66%}
 
-[1]{.callout-num} Drop zone: drag the folder or click [Choose a folder]{.ui} · [2]{.callout-num} Reminder: transit through a private folder, only the expected files are accepted · [3]{.callout-num} Overall progress: percentage, volume transferred, speed, time remaining · [4]{.callout-num} Dataset state (see below) · [5]{.callout-num} Card buttons: [Edit]{.ui}, [Verify]{.ui}, [Publish]{.ui}, [Delete]{.ui} depending on the state
+[1]{.callout-num} Drop zone: drag the folder or click [Choose a folder]{.ui} · [2]{.callout-num} Reminder: transit through a private folder, only the expected files are accepted
+
+Once a transfer is running, a card appears under the drop zone. It shows the overall progress (percentage, volume transferred, speed, time remaining), the dataset's state (see below) and the buttons [Edit]{.ui}, [Verify]{.ui}, [Publish]{.ui} and [Delete]{.ui}, depending on that state.
 
 The states of a dataset being imported:
 
@@ -104,7 +106,7 @@ A dataset published by Import is **hidden by default**. Go to [Datasets]{.ui}, t
 :::
 
 
-## 13.5 Editing a dataset
+## 13.4 Editing a dataset
 
 Click a dataset in the [Datasets]{.ui} tab's list: the preview opens in the centre, the settings on the right. Here is what you can set there:
 
@@ -124,7 +126,7 @@ What the editor saves is a **setting**: it is merged into the dataset's `metadat
 
 The [Reset the preview]{.ui} button (under the preview) makes the current view the explorer's thumbnail. The 3D orientation (axes, default view) is explained in chapter 12.
 
-## 13.6 Data updates
+## 13.5 Data updates
 
 The way datasets are stored has evolved four times (**formats 1 to 4**, see chapter 7). An old dataset remains readable, but it can be **brought to the current format without going through the pipeline again**, like updating software.
 
@@ -146,7 +148,7 @@ The native level is kept voxel for voxel: nothing is lost. The old `bricks/` tre
 
 These updates are **not mandatory**: the viewer reads formats 1 to 4. They speed up some Studio operations and improve the display.
 
-## 13.7 Plugins and the signed catalogue
+## 13.6 Plugins and the signed catalogue
 
 Plugins are the viewer's tools (chapter 12). They are **not shipped with the platform**: you install them on demand from the [Catalog]{.ui}, as in an app store.
 
@@ -156,7 +158,7 @@ Plugins are the viewer's tools (chapter 12). They are **not shipped with the pla
 - Some plugins do not appear in the Datasets tab's preview, nor in the Compare page: they declare themselves compatible with the full page only. This is not a fault.
 
 
-## 13.8 Updating the platform
+## 13.7 Updating the platform
 
 From [System › Updates]{.ui}, a button starts the update. What happens behind the scenes was designed so that **a site is never left broken**.
 
@@ -169,7 +171,7 @@ From [System › Updates]{.ui}, a button starts the update. What happens behind 
 - The tab shows the **release notes** of every version that will be installed, and checks your plugins beforehand: any that would be incompatible are set aside, then re-enabled later.
 - It also shows the version of the **Pipeline pack** ([Pipeline]{.ui} tab): this is a different piece of software, which is installed on the processing workstation, not on the server.
 
-## 13.9 Customising the site (white label)
+## 13.8 Customising the site (white label)
 
 Lumen3D is not tied to one laboratory: everything the public sees can be set without writing code.
 

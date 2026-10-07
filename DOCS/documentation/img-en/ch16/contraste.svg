@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 440" font-family="Inter, sans-serif">
+<defs><marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#4a5468"/></marker></defs><rect width="800" height="440" rx="16" fill="#f8f9fd"/>
+<text x="400" y="34" font-family="Inter, sans-serif" font-size="18" font-weight="800" fill="#1c2333" text-anchor="middle" xml:space="preserve">White text on a brand-colour button</text>
+<text x="24" y="60" font-family="Inter, sans-serif" font-size="12.5" font-weight="400" fill="#4a5468" text-anchor="start" xml:space="preserve">Contrast of white on --color-primary-strong (the colour darkened to 77 %),</text>
+<text x="24" y="78" font-family="Inter, sans-serif" font-size="12.5" font-weight="400" fill="#4a5468" text-anchor="start" xml:space="preserve">for the 6 colours offered by the first-run wizard.</text>
+<text x="24" y="124" font-family="Inter, sans-serif" font-size="13" font-weight="800" fill="#1c2333" text-anchor="start" xml:space="preserve">Green</text>
+<rect x="130" y="106" width="20" height="24" rx="4" fill="#008041" stroke="#999" stroke-width="1.2"/>
+<rect x="160" y="108" width="302.5937058742065" height="20" rx="6" fill="#ebfbee" stroke="#2b8a3e" stroke-width="1.4"/>
+<text x="470.5937058742065" y="124" font-family="Inter, sans-serif" font-size="13" font-weight="800" fill="#2b8a3e" text-anchor="start" xml:space="preserve">5.04 : 1</text>
+<text x="24" y="164" font-family="Inter, sans-serif" font-size="13" font-weight="800" fill="#1c2333" text-anchor="start" xml:space="preserve">Blue</text>
+<rect x="130" y="146" width="20" height="24" rx="4" fill="#2452C4" stroke="#999" stroke-width="1.2"/>
+<rect x="160" y="148" width="409.219071163497" height="20" rx="6" fill="#ebfbee" stroke="#2b8a3e" stroke-width="1.4"/>
+<text x="577.219071163497" y="164" font-family="Inter, sans-serif" font-size="13" font-weight="800" fill="#2b8a3e" text-anchor="start" xml:space="preserve">6.82 : 1</text>
+<text x="24" y="204" font-family="Inter, sans-serif" font-size="13" font-weight="800" fill="#1c2333" text-anchor="start" xml:space="preserve">Purple</text>
+<rect x="130" y="186" width="20" height="24" rx="4" fill="#5F47C4" stroke="#999" stroke-width="1.2"/>
+<rect x="160" y="188" width="395.60700824940324" height="20" rx="6" fill="#ebfbee" stroke="#2b8a3e" stroke-width="1.4"/>
+<text x="563.6070082494032" y="204" font-family="Inter, sans-serif" font-size="13" font-weight="800" fill="#2b8a3e" text-anchor="start" xml:space="preserve">6.59 : 1</text>
+<text x="24" y="244" font-family="Inter, sans-serif" font-size="13" font-weight="800" fill="#1c2333" text-anchor="start" xml:space="preserve">Teal</text>
+<rect x="130" y="226" width="20" height="24" rx="4" fill="#0C9881" stroke="#999" stroke-width="1.2"/>
+<rect x="160" y="228" width="216.3490180308775" height="20" rx="6" fill="#fff4e6" stroke="#e67700" stroke-width="1.4"/>
+<text x="444.0" y="244" font-family="Inter, sans-serif" font-size="13" font-weight="800" fill="#e67700" text-anchor="start" xml:space="preserve">3.61 : 1</text>
+<text x="24" y="284" font-family="Inter, sans-serif" font-size="13" font-weight="800" fill="#1c2333" text-anchor="start" xml:space="preserve">Orange</text>
+<rect x="130" y="266" width="20" height="24" rx="4" fill="#C45E24" stroke="#999" stroke-width="1.2"/>
+<rect x="160" y="268" width="253.33207531440164" height="20" rx="6" fill="#fff4e6" stroke="#e67700" stroke-width="1.4"/>
+<text x="444.0" y="284" font-family="Inter, sans-serif" font-size="13" font-weight="800" fill="#e67700" text-anchor="start" xml:space="preserve">4.22 : 1</text>
+<text x="24" y="324" font-family="Inter, sans-serif" font-size="13" font-weight="800" fill="#1c2333" text-anchor="start" xml:space="preserve">Crimson</text>
+<rect x="130" y="306" width="20" height="24" rx="4" fill="#B0373B" stroke="#999" stroke-width="1.2"/>
+<rect x="160" y="308" width="364.62026225897665" height="20" rx="6" fill="#ebfbee" stroke="#2b8a3e" stroke-width="1.4"/>
+<text x="532.6202622589767" y="324" font-family="Inter, sans-serif" font-size="13" font-weight="800" fill="#2b8a3e" text-anchor="start" xml:space="preserve">6.08 : 1</text>
+<line x1="430.0" y1="98" x2="430.0" y2="338" stroke="#c92a2a" stroke-width="2" stroke-dasharray="6 4"/>
+<text x="430.0" y="356" font-family="Inter, sans-serif" font-size="12" font-weight="800" fill="#c92a2a" text-anchor="middle" xml:space="preserve">4.5: WCAG AA threshold for body text</text>
+<rect x="24" y="376" width="752" height="48" rx="10" fill="#fff4e6" stroke="#e67700" stroke-width="1.2"/>
+<text x="40" y="396" font-family="Inter, sans-serif" font-size="12" font-weight="400" fill="#1c2333" text-anchor="start" xml:space="preserve">The calculation only darkens the colour: it keeps the original contrast without guaranteeing a minimum.</text>
+<text x="40" y="414" font-family="Inter, sans-serif" font-size="12" font-weight="800" fill="#1c2333" text-anchor="start" xml:space="preserve">After changing the colour, check the buttons in both the light and the dark theme.</text>
+</svg>

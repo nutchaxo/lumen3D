@@ -176,7 +176,7 @@ How is the single window measured?
 In a sparse series, the signal covers only ~0.4% of the voxels: the 99.9th percentile of the whole volume would fall **inside the background** and saturate 15% of the real signal. By ranking only the voxels above the background, the saturated share falls to about 0.06% (measurements from the version 0.15.0 log).
 :::
 
-Photobleaching is **measured, never erased**: the pipeline records one signal level per image and per channel (99.9th percentile of the raw data) in `metadata.json`. The viewer can offer an optional, reversible compensation.
+Photobleaching is **measured, never erased**: the pipeline records one signal level per image and per channel (99.9th percentile of the raw data) in `metadata.json`. No viewer setting uses these levels yet: a fading series therefore really does look darker, and nothing "catches it up" on screen.
 
 ## 5.10 Large volumes: in tiles, without changing the result
 

@@ -1,0 +1,14 @@
+import { launch, sleep, BASE } from '../shotlib.mjs';
+import { adminPage } from '../admlogin.mjs';
+const b = await launch();
+const page = await adminPage(b, {});
+const ed = await page.context().newPage();
+await ed.setViewportSize({ width: 1600, height: 950 });
+await ed.goto(BASE + '/admpan.html?editor=about', { waitUntil: 'networkidle' });
+await sleep(5000);
+console.log(await ed.evaluate(() => [...document.querySelectorAll('[id]')].map(e => e.id).filter(i => /^pe-|pages|save|chip|side/.test(i)).join(' ')));
+console.log(await ed.evaluate(() => [...document.querySelectorAll('button')].slice(0,30).map(e => (e.id||'?')+':'+e.textContent.trim().slice(0,20)).join(' | ')));
+await page.goto(BASE + '/admpan.html#dataset-types'); await sleep(3000);
+console.log(await page.evaluate(() => [...document.querySelectorAll('#dtypes-root [id], #dtypes-root summary, #dataset-types-root [id]')].map(e => e.id || e.tagName).join(' ')));
+console.log(await page.evaluate(() => [...document.querySelectorAll('[id*=types]')].map(e => e.id).join(' ')));
+await b.close();

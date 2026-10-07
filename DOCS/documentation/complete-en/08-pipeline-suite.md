@@ -60,7 +60,11 @@ This is the only place where the facts about a dataset are written; the site's c
 | `volumeSources` | where the viewer finds the bricks |
 
 ::: note
-For a time series (`live`), the file also contains `timeline` (number of images, interval, timestamps) and `intensityNormalization` (the normalisation window shared by the whole series, and one signal level per image to measure photobleaching).
+For a time series (`live`), the file also contains `timeline` (number of images, interval, timestamps) and `intensityNormalization` (the normalisation window shared by the whole series, and one signal level per image to measure photobleaching; the viewer does not use it yet, see chapter 5).
+:::
+
+::: note
+The pipeline writes **all** the channels of the original file; the viewer **displays only the first four** (limit of the RGBA graphics texture, chapter 11).
 :::
 
 ### Stage and embryo, read from the file name
@@ -237,7 +241,7 @@ The type is decided automatically: more than one image in the file means `live`,
 - **Route B, without FTP**: in the admin panel, open the [Import]{.ui} tab and drag the folder into the [Drop a folder here]{.ui} area. The transfer picks up where it stopped if you restart it; then click [Publish]{.ui}.
 
 ::: warning
-A dataset published through the [Import]{.ui} tab is **hidden by default**: go to the [Datasets]{.ui} tab and turn its visibility on so that it appears in the public explorer (chapter 13).
+A dataset published through the [Import]{.ui} tab is **hidden by default**: go to the [Datasets]{.ui} tab and turn its visibility on so that it appears in the public explorer (chapter 14).
 :::
 
 ::: remember

@@ -1,0 +1,10 @@
+import {launch,newPage,openViewer,E95,sleep} from './lib.mjs';
+const b=await launch(); const p=await newPage(b);
+await openViewer(p,E95,2000);
+await p.keyboard.press('c'); await sleep(12000);
+await p.evaluate(()=>document.getElementById('btn-slicer-studio').click());
+await sleep(25000);
+const h=await p.evaluate(()=>document.getElementById('studio-channels').innerHTML.slice(0,3000));
+console.log(h);
+await p.screenshot({path:'/tmp/st_a.png'});
+await b.close();

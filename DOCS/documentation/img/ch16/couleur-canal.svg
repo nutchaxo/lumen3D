@@ -1,0 +1,42 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 450" font-family="Inter, sans-serif">
+<defs><marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#4a5468"/></marker></defs><rect width="800" height="450" rx="16" fill="#f8f9fd"/>
+<text x="400" y="34" font-family="Inter, sans-serif" font-size="18" font-weight="800" fill="#1c2333" text-anchor="middle" xml:space="preserve">D'où vient la couleur de départ d'un canal ?</text>
+<text x="24" y="62" font-family="Inter, sans-serif" font-size="12.5" font-weight="400" fill="#4a5468" text-anchor="start" xml:space="preserve">Le viewer prend la première réponse non vide, de haut en bas (valeurs d'exemple ; canal « Pecam1 ») :</text>
+<rect x="24" y="78" width="752" height="56" rx="10" fill="#fff" stroke="#c5cbd8" stroke-width="1.2"/>
+<rect x="34" y="90" width="34" height="32" rx="16.0" fill="#f3f0ff" stroke="#7048e8" stroke-width="1"/>
+<text x="51.0" y="111.25" font-family="Inter, sans-serif" font-size="15" font-weight="800" fill="#7048e8" text-anchor="middle" xml:space="preserve">1</text>
+<text x="80" y="102" font-family="JetBrains Mono, Consolas, monospace" font-size="13.5" font-weight="800" fill="#1c2333" text-anchor="start" xml:space="preserve">display_defaults[i].color</text>
+<text x="80" y="122" font-family="Inter, sans-serif" font-size="12" font-weight="400" fill="#4a5468" text-anchor="start" xml:space="preserve">réglages d'affichage du jeu de données</text>
+<rect x="640" y="90" width="60" height="32" rx="6" fill="#FF8800" stroke="#999" stroke-width="1.2"/>
+<text x="708" y="111" font-family="JetBrains Mono, Consolas, monospace" font-size="11" font-weight="400" fill="#4a5468" text-anchor="start" xml:space="preserve">#FF8800</text>
+<rect x="24" y="142" width="752" height="56" rx="10" fill="#fff" stroke="#c5cbd8" stroke-width="1.2"/>
+<rect x="34" y="154" width="34" height="32" rx="16.0" fill="#e8edff" stroke="#3b5bdb" stroke-width="1"/>
+<text x="51.0" y="175.25" font-family="Inter, sans-serif" font-size="15" font-weight="800" fill="#3b5bdb" text-anchor="middle" xml:space="preserve">2</text>
+<text x="80" y="166" font-family="JetBrains Mono, Consolas, monospace" font-size="13.5" font-weight="800" fill="#1c2333" text-anchor="start" xml:space="preserve">colors[i]</text>
+<text x="80" y="186" font-family="Inter, sans-serif" font-size="12" font-weight="400" fill="#4a5468" text-anchor="start" xml:space="preserve">liste de couleurs (ancien format)</text>
+<rect x="640" y="154" width="60" height="32" rx="6" fill="#FFFF00" stroke="#999" stroke-width="1.2"/>
+<text x="708" y="175" font-family="JetBrains Mono, Consolas, monospace" font-size="11" font-weight="400" fill="#4a5468" text-anchor="start" xml:space="preserve">#FFFF00</text>
+<rect x="24" y="206" width="752" height="56" rx="10" fill="#fff" stroke="#c5cbd8" stroke-width="1.2"/>
+<rect x="34" y="218" width="34" height="32" rx="16.0" fill="#ebfbee" stroke="#2b8a3e" stroke-width="1"/>
+<text x="51.0" y="239.25" font-family="Inter, sans-serif" font-size="15" font-weight="800" fill="#2b8a3e" text-anchor="middle" xml:space="preserve">3</text>
+<text x="80" y="230" font-family="JetBrains Mono, Consolas, monospace" font-size="13.5" font-weight="800" fill="#1c2333" text-anchor="start" xml:space="preserve">channels[i].color</text>
+<text x="80" y="250" font-family="Inter, sans-serif" font-size="12" font-weight="400" fill="#4a5468" text-anchor="start" xml:space="preserve">ce que le pipeline ou l'éditeur a écrit</text>
+<rect x="640" y="218" width="60" height="32" rx="6" fill="#FF00FF" stroke="#999" stroke-width="1.2"/>
+<text x="708" y="239" font-family="JetBrains Mono, Consolas, monospace" font-size="11" font-weight="400" fill="#4a5468" text-anchor="start" xml:space="preserve">#FF00FF</text>
+<rect x="24" y="270" width="752" height="56" rx="10" fill="#fff" stroke="#c5cbd8" stroke-width="1.2"/>
+<rect x="34" y="282" width="34" height="32" rx="16.0" fill="#fff4e6" stroke="#e67700" stroke-width="1"/>
+<text x="51.0" y="303.25" font-family="Inter, sans-serif" font-size="15" font-weight="800" fill="#e67700" text-anchor="middle" xml:space="preserve">4</text>
+<text x="80" y="294" font-family="Inter, sans-serif" font-size="13.5" font-weight="800" fill="#1c2333" text-anchor="start" xml:space="preserve">préréglage par nom</text>
+<text x="80" y="314" font-family="Inter, sans-serif" font-size="12" font-weight="400" fill="#4a5468" text-anchor="start" xml:space="preserve">config/instance.json : channelColorPresets</text>
+<rect x="640" y="282" width="60" height="32" rx="6" fill="#FF00FF" stroke="#999" stroke-width="1.2"/>
+<text x="708" y="303" font-family="JetBrains Mono, Consolas, monospace" font-size="11" font-weight="400" fill="#4a5468" text-anchor="start" xml:space="preserve">#FF00FF</text>
+<rect x="24" y="334" width="752" height="56" rx="10" fill="#fff" stroke="#c5cbd8" stroke-width="1.2"/>
+<rect x="34" y="346" width="34" height="32" rx="16.0" fill="#eef0f5" stroke="#4a5468" stroke-width="1"/>
+<text x="51.0" y="367.25" font-family="Inter, sans-serif" font-size="15" font-weight="800" fill="#4a5468" text-anchor="middle" xml:space="preserve">5</text>
+<text x="80" y="358" font-family="Inter, sans-serif" font-size="13.5" font-weight="800" fill="#1c2333" text-anchor="start" xml:space="preserve">cycle neutre</text>
+<text x="80" y="378" font-family="Inter, sans-serif" font-size="12" font-weight="400" fill="#4a5468" text-anchor="start" xml:space="preserve">vert · bleu clair · magenta · rouge</text>
+<rect x="640" y="346" width="60" height="32" rx="6" fill="#00FF00" stroke="#999" stroke-width="1.2"/>
+<text x="708" y="367" font-family="JetBrains Mono, Consolas, monospace" font-size="11" font-weight="400" fill="#4a5468" text-anchor="start" xml:space="preserve">#00FF00</text>
+<rect x="24" y="402" width="752" height="36" rx="10" fill="#fff4e6" stroke="#e67700" stroke-width="1.2"/>
+<text x="40" y="425" font-family="Inter, sans-serif" font-size="11.5" font-weight="400" fill="#1c2333" text-anchor="start" xml:space="preserve">Le pipeline écrit toujours une couleur (étape 3) : l'étape 4 ne sert qu'aux jeux dont les métadonnées n'en ont pas.</text>
+</svg>

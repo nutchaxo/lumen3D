@@ -655,7 +655,7 @@ Een **onderbroken** import wordt niet eeuwig bewaard: de kaart toont “wordt ge
 **Publiceren maakt de dataset niet openbaar.** Hij komt **verborgen** aan. Ga naar Datasets, open hem en zet [Zichtbaarheid]{.ui} aan.
 :::
 
-**Een reeds gepubliceerde dataset vervangen**: bestaat de naam al, dan vraagt het paneel “Er bestaat al een gepubliceerde dataset met deze naam. Vervangen? De afbeeldingengalerij en de velden die u invulde (naam, oriëntatie, bijschriften…) blijven behouden als de nieuwe import ze niet levert.”. Na de vervanging somt een toast op wat behouden bleef (de galerij, enz.).
+**Een reeds gepubliceerde dataset vervangen**: bestaat de naam al, dan vraagt het paneel “Er bestaat al een gepubliceerde dataset met deze naam. Vervangen? De afbeeldingengalerij en de velden die u invulde (naam, oriëntatie, bijschriften…) blijven behouden als de nieuwe import ze niet levert.”. Na de vervanging somt een toast op wat behouden bleef (de galerij, enz.). Let op: een `metadata.json` die door de verwerkingsketen is gemaakt, bevat altijd een naam; daarom wordt **de nieuwe naam** getoond. De oriëntatie en de galerij worden wel overgenomen van de oude versie.
 
 **[Verwijderen]{.ui}**: “De al verzonden bestanden van deze dataset definitief verwijderen?”, daarna “Import verwijderd.”. Beschikbaar in alle statussen behalve **Gepubliceerd**.
 
@@ -942,7 +942,7 @@ De paginavariabelen `{type3d}`, `{type2d}` en `{typeLive}` (hoofdstuk 10) nemen 
 | 4 | Het detail **per dataset**; klik op een kop (Dataset, Weergaven, Downl.) om te sorteren. |
 :::
 
-- **Bezoeken** — keren dat een pagina van de site is geopend.
+- **Bezoeken** — keren dat de startpagina is geopend, één keer per browsertabblad geteld.
 - **Datasetweergaven** — keren dat een dataset in de viewer is geopend: de meest veelzeggende indicator.
 - **Downloads** — bestanden opgehaald via het Download Center.
 
@@ -1061,7 +1061,7 @@ Herstellen vraagt “Identiteit terugzetten op de standaardwaarden? De eigen inh
 | **Fout** | De foutmeldingen (standaard rood) |
 | **Waarschuwing** | De waarschuwingen (standaard oranje) |
 
-Klik op een kleurvlak om de kiezer te openen: **het voorbeeld wordt direct bijgewerkt**. De hoofdknoppen worden afgeleid van de kleur van de instantie en respecteren het **WCAG AA**-contrast; het opgeslagen thema wordt toegepast vóór de eerste weergave.
+Klik op een kleurvlak om de kiezer te openen: **het voorbeeld wordt direct bijgewerkt**. De hoofdknoppen worden afgeleid van de kleur van de instantie en streven naar het **WCAG AA**-contrast (zonder het voor elke kleur te garanderen: witte tekst op fel oranje of turkoois blijft eronder; controleer de leesbaarheid in het voorbeeld); het opgeslagen thema wordt toegepast vóór de eerste weergave.
 
 ::: tip
 Houd Geslaagd / Fout / Waarschuwing **dicht bij groen / rood / oranje**: het zijn universele herkenningspunten.

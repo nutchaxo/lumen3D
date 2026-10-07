@@ -1,0 +1,10 @@
+import {DIR,launch,newPage,shot,sleep,boxes,BASE,E95,P2D} from './lib.mjs';
+const b=await launch(); let p=await newPage(b);
+await p.goto(BASE+`/compare.html?add=${E95}&add=3d/Embryo-E85-Em1-Pecam1-Sox2&add=${P2D}`); await sleep(120000);
+await p.screenshot({path:'c1.png'});
+console.log(await p.evaluate(()=>[...document.querySelectorAll('button, select, label, input')].filter(e=>e.getBoundingClientRect().y<125&&e.getBoundingClientRect().width>0).map(b=>(b.id||b.className.toString().slice(0,30))+'|'+(b.textContent||'').trim().slice(0,20)+'|'+Math.round(b.getBoundingClientRect().x)+','+Math.round(b.getBoundingClientRect().y)+','+Math.round(b.getBoundingClientRect().width)).join('\n')));
+await p.context().close();
+p=await newPage(b);
+await p.goto(BASE+`/compare.html?add=${E95}`); await sleep(60000);
+await p.screenshot({path:'c2.png'});
+await b.close();

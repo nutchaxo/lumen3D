@@ -655,7 +655,7 @@ Una importación **interrumpida** no se guarda indefinidamente: la tarjeta muest
 **Publicar no hace público el dataset.** Llega **oculto**. Vaya a Datasets, ábralo y active [Visibilidad]{.ui}.
 :::
 
-**Sustituir un dataset ya publicado**: si el nombre ya existe, el panel pregunta «Ya hay un dataset publicado con este nombre. ¿Reemplazarlo? Su galería y los campos que rellenó (nombre, orientación, leyendas…) se conservan si la nueva importación no los aporta.». Tras la sustitución, un aviso enumera lo que se ha conservado (la galería, etc.).
+**Sustituir un dataset ya publicado**: si el nombre ya existe, el panel pregunta «Ya hay un dataset publicado con este nombre. ¿Reemplazarlo? Su galería y los campos que rellenó (nombre, orientación, leyendas…) se conservan si la nueva importación no los aporta.». Tras la sustitución, un aviso enumera lo que se ha conservado (la galería, etc.). Atención: un `metadata.json` producido por el pipeline siempre contiene un nombre, así que se muestra **el nuevo nombre**. La orientación y la galería sí se conservan de la versión anterior.
 
 **[Eliminar]{.ui}**: «¿Eliminar definitivamente los archivos ya enviados de este dataset?» y luego «Importación eliminada.». Disponible en todos los estados salvo **Publicado**.
 
@@ -942,7 +942,7 @@ Las variables de página `{type3d}`, `{type2d}` y `{typeLive}` (capítulo 10) to
 | 4 | El detalle **por conjunto de datos**; haga clic en un encabezado (Dataset, Vistas, Descar.) para ordenar. |
 :::
 
-- **Visitas** — aperturas de una página del sitio.
+- **Visitas** — aperturas de la página de inicio, contadas una vez por pestaña del navegador.
 - **Vistas de dataset** — veces que se ha abierto un conjunto de datos en el visor: el indicador más elocuente.
 - **Descargas** — archivos recuperados desde el Download Center.
 
@@ -1061,7 +1061,7 @@ Restablecer pregunta «Restablecer la identidad a los valores predeterminados? S
 | **Error** | Los mensajes de error (rojo por defecto) |
 | **Advertencia** | Las alertas (naranja por defecto) |
 
-Haga clic en un cuadrado de color para abrir el selector: **la vista previa se actualiza al instante**. Los botones principales se derivan del color de la instancia y respetan el contraste **WCAG AA**; el tema guardado se aplica antes de la primera visualización.
+Haga clic en un cuadrado de color para abrir el selector: **la vista previa se actualiza al instante**. Los botones principales se derivan del color de la instancia y buscan el contraste **WCAG AA** (sin garantizarlo para todos los colores: un texto blanco sobre un naranja o un turquesa vivo queda por debajo; compruebe la legibilidad en la vista previa); el tema guardado se aplica antes de la primera visualización.
 
 ::: tip
 Mantenga Éxito / Error / Advertencia **cerca del verde / rojo / naranja**: son referencias universales.

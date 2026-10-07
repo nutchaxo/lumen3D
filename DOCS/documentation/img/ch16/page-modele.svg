@@ -1,0 +1,52 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 470" font-family="Inter, sans-serif">
+<defs><marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#4a5468"/></marker></defs><rect width="800" height="470" rx="16" fill="#f8f9fd"/>
+<text x="400" y="34" font-family="Inter, sans-serif" font-size="18" font-weight="800" fill="#1c2333" text-anchor="middle" xml:space="preserve">Une page = des sections, des colonnes, des widgets</text>
+<rect x="24" y="52" width="540" height="400" rx="14" fill="#fff" stroke="#c5cbd8" stroke-width="1.2"/>
+<text x="36" y="74" font-family="Inter, sans-serif" font-size="11" font-weight="800" fill="#3b5bdb" text-anchor="start" xml:space="preserve">SECTION 1 (bande pleine largeur)</text>
+<rect x="36" y="82" width="516" height="104" rx="10" fill="#e8edff" stroke="#3b5bdb" stroke-width="1.2" stroke-dasharray="4 3"/>
+<rect x="46" y="92" width="166" height="84" rx="8" fill="#fff" stroke="#3b5bdb" stroke-width="1.2"/>
+<text x="129" y="112" font-family="Inter, sans-serif" font-size="11.5" font-weight="800" fill="#3b5bdb" text-anchor="middle" xml:space="preserve">Colonne  4/12</text>
+<text x="129" y="132" font-family="Inter, sans-serif" font-size="11.5" font-weight="400" fill="#1c2333" text-anchor="middle" xml:space="preserve">Texte (étiquette)</text>
+<text x="129" y="150" font-family="Inter, sans-serif" font-size="11.5" font-weight="400" fill="#1c2333" text-anchor="middle" xml:space="preserve">Titre</text>
+<rect x="222" y="92" width="320" height="84" rx="8" fill="#fff" stroke="#3b5bdb" stroke-width="1.2"/>
+<text x="382" y="112" font-family="Inter, sans-serif" font-size="11.5" font-weight="800" fill="#3b5bdb" text-anchor="middle" xml:space="preserve">Colonne  8/12</text>
+<text x="382" y="132" font-family="Inter, sans-serif" font-size="11.5" font-weight="400" fill="#1c2333" text-anchor="middle" xml:space="preserve">Texte, Liste de liens,</text>
+<text x="382" y="150" font-family="Inter, sans-serif" font-size="11.5" font-weight="400" fill="#1c2333" text-anchor="middle" xml:space="preserve">Fiche d'informations…</text>
+<text x="36" y="210" font-family="Inter, sans-serif" font-size="11" font-weight="800" fill="#2b8a3e" text-anchor="start" xml:space="preserve">SECTION 2</text>
+<rect x="36" y="218" width="516" height="84" rx="10" fill="#ebfbee" stroke="#2b8a3e" stroke-width="1.2" stroke-dasharray="4 3"/>
+<rect x="46" y="228" width="120" height="64" rx="8" fill="#fff" stroke="#2b8a3e" stroke-width="1.2"/>
+<text x="106" y="248" font-family="Inter, sans-serif" font-size="11" font-weight="800" fill="#2b8a3e" text-anchor="middle" xml:space="preserve">Col. 3/12</text>
+<text x="106" y="270" font-family="Inter, sans-serif" font-size="11.5" font-weight="400" fill="#1c2333" text-anchor="middle" xml:space="preserve">Compteur</text>
+<rect x="172" y="228" width="120" height="64" rx="8" fill="#fff" stroke="#2b8a3e" stroke-width="1.2"/>
+<text x="232" y="248" font-family="Inter, sans-serif" font-size="11" font-weight="800" fill="#2b8a3e" text-anchor="middle" xml:space="preserve">Col. 3/12</text>
+<text x="232" y="270" font-family="Inter, sans-serif" font-size="11.5" font-weight="400" fill="#1c2333" text-anchor="middle" xml:space="preserve">Compteur</text>
+<rect x="298" y="228" width="120" height="64" rx="8" fill="#fff" stroke="#2b8a3e" stroke-width="1.2"/>
+<text x="358" y="248" font-family="Inter, sans-serif" font-size="11" font-weight="800" fill="#2b8a3e" text-anchor="middle" xml:space="preserve">Col. 3/12</text>
+<text x="358" y="270" font-family="Inter, sans-serif" font-size="11.5" font-weight="400" fill="#1c2333" text-anchor="middle" xml:space="preserve">Compteur</text>
+<rect x="424" y="228" width="120" height="64" rx="8" fill="#fff" stroke="#2b8a3e" stroke-width="1.2"/>
+<text x="484" y="248" font-family="Inter, sans-serif" font-size="11" font-weight="800" fill="#2b8a3e" text-anchor="middle" xml:space="preserve">Col. 3/12</text>
+<text x="484" y="270" font-family="Inter, sans-serif" font-size="11.5" font-weight="400" fill="#1c2333" text-anchor="middle" xml:space="preserve">Compteur</text>
+<text x="36" y="326" font-family="Inter, sans-serif" font-size="11" font-weight="800" fill="#7048e8" text-anchor="start" xml:space="preserve">SECTION 3</text>
+<rect x="36" y="334" width="516" height="66" rx="10" fill="#f3f0ff" stroke="#7048e8" stroke-width="1.2" stroke-dasharray="4 3"/>
+<rect x="46" y="344" width="496" height="46" rx="8" fill="#fff" stroke="#7048e8" stroke-width="1.2"/>
+<text x="294" y="364" font-family="Inter, sans-serif" font-size="11.5" font-weight="800" fill="#7048e8" text-anchor="middle" xml:space="preserve">Colonne 12/12</text>
+<text x="294" y="381" font-family="Inter, sans-serif" font-size="11.5" font-weight="400" fill="#1c2333" text-anchor="middle" xml:space="preserve">Derniers datasets</text>
+<text x="294" y="424" font-family="Inter, sans-serif" font-size="11.5" font-weight="400" fill="#4a5468" text-anchor="middle" xml:space="preserve">… autant de sections que nécessaire (jusqu'à 300)</text>
+<rect x="584" y="56" width="200" height="396" rx="12" fill="#fff" stroke="#c5cbd8" stroke-width="1.2"/>
+<path d="M584,90 L584,68 Q584,56 596,56 L772,56 Q784,56 784,68 L784,90 Z" fill="#eef0f5"/>
+<text x="684.0" y="78" font-family="Inter, sans-serif" font-size="12.5" font-weight="800" fill="#4a5468" text-anchor="middle" xml:space="preserve">Les règles</text>
+<text x="596" y="98" font-family="Inter, sans-serif" font-size="13" font-weight="800" fill="#1c2333" text-anchor="start" xml:space="preserve">Section</text>
+<text x="596" y="116" font-family="Inter, sans-serif" font-size="11.5" font-weight="400" fill="#4a5468" text-anchor="start" xml:space="preserve">une bande de la page,</text>
+<text x="596" y="132" font-family="Inter, sans-serif" font-size="11.5" font-weight="400" fill="#4a5468" text-anchor="start" xml:space="preserve">avec ses marges et</text>
+<text x="596" y="148" font-family="Inter, sans-serif" font-size="11.5" font-weight="400" fill="#4a5468" text-anchor="start" xml:space="preserve">son fond</text>
+<text x="596" y="182" font-family="Inter, sans-serif" font-size="13" font-weight="800" fill="#1c2333" text-anchor="start" xml:space="preserve">Colonne</text>
+<text x="596" y="200" font-family="Inter, sans-serif" font-size="11.5" font-weight="400" fill="#4a5468" text-anchor="start" xml:space="preserve">largeur de 1 à 12</text>
+<text x="596" y="216" font-family="Inter, sans-serif" font-size="11.5" font-weight="400" fill="#4a5468" text-anchor="start" xml:space="preserve">(douzièmes), 6 colonnes</text>
+<text x="596" y="232" font-family="Inter, sans-serif" font-size="11.5" font-weight="400" fill="#4a5468" text-anchor="start" xml:space="preserve">au plus par section ;</text>
+<text x="596" y="248" font-family="Inter, sans-serif" font-size="11.5" font-weight="400" fill="#4a5468" text-anchor="start" xml:space="preserve">empilées sur mobile</text>
+<text x="596" y="282" font-family="Inter, sans-serif" font-size="13" font-weight="800" fill="#1c2333" text-anchor="start" xml:space="preserve">Widget</text>
+<text x="596" y="300" font-family="Inter, sans-serif" font-size="11.5" font-weight="400" fill="#4a5468" text-anchor="start" xml:space="preserve">une brique de contenu :</text>
+<text x="596" y="316" font-family="Inter, sans-serif" font-size="11.5" font-weight="400" fill="#4a5468" text-anchor="start" xml:space="preserve">27 types, jusqu'à</text>
+<text x="596" y="332" font-family="Inter, sans-serif" font-size="11.5" font-weight="400" fill="#4a5468" text-anchor="start" xml:space="preserve">500 par colonne</text>
+<text x="684" y="446" font-family="Inter, sans-serif" font-size="11.5" font-weight="400" fill="#4a5468" text-anchor="middle" xml:space="preserve">(≤ 2 Mo par page)</text>
+</svg>

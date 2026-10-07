@@ -1,0 +1,12 @@
+import { createRequire } from 'module';
+const require = createRequire(import.meta.url);
+const { chromium } = require('/opt/node22/lib/node_modules/playwright');
+const browser = await chromium.launch({ args: ['--use-angle=swiftshader','--enable-unsafe-swiftshader','--ignore-gpu-blocklist'] });
+const page = await browser.newPage({ viewport: { width: 1600, height: 950 }, deviceScaleFactor: 1 });
+page.on('console', m => { if (m.type()==='error') console.log('ERR', m.text()); });
+await page.goto('http://localhost:8080/viewer.html?id=3d/Embryo-E95-Em2-Pecam1-Sox2', { waitUntil: 'networkidle' });
+await page.waitForTimeout(20000);
+await page.screenshot({ path: 'shots/test_viewer.png' });
+const gl = await page.evaluate(() => { const c=document.createElement('canvas'); const g=c.getContext('webgl2'); return g? g.getParameter(g.VERSION)+' '+g.getParameter(g.MAX_3D_TEXTURE_SIZE):'none'; });
+console.log(gl);
+await browser.close();

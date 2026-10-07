@@ -315,6 +315,6 @@ the measuring tool or a slice.
 | Can I share a view? | Yes: the page link keeps the state of the view; the Compare page can also save a workspace. |
 
 ::: see
-**Full documentation**: 15 chapters, about 100 pages, every step illustrated.
+**Full documentation**: 21 chapters, more than 350 pages, every step illustrated.
 **Administrator guide**: every screen of the panel, step by step.
 :::

@@ -1,0 +1,325 @@
+{
+ "chunkSize": 262144,
+ "nfiles": 136,
+ "rejected": [
+  {
+   "path": "evil.php",
+   "reason": "not_allowed"
+  },
+  {
+   "path": ".htaccess",
+   "reason": "unsafe_path"
+  },
+  {
+   "path": "../x.png",
+   "reason": "unsafe_path"
+  },
+  {
+   "path": "download/report.html",
+   "reason": "not_allowed"
+  },
+  {
+   "path": "gallery/a.png",
+   "reason": "not_allowed"
+  }
+ ],
+ "total": 18425013,
+ "state0": "uploading",
+ "tiers": {
+  "0": {
+   "files": 4,
+   "bytes": 47005,
+   "kinds": {
+    "index": 1,
+    "manifest": 1,
+    "metadata": 1,
+    "thumbnail": 1
+   }
+  },
+  "1": {
+   "files": 3,
+   "bytes": 31884,
+   "kinds": {
+    "pack": 3
+   }
+  },
+  "2": {
+   "files": 6,
+   "bytes": 1326262,
+   "kinds": {
+    "pack": 6
+   }
+  },
+  "3": {
+   "files": 6,
+   "bytes": 7906624,
+   "kinds": {
+    "pack": 6
+   }
+  },
+  "4": {
+   "files": 117,
+   "bytes": 9113238,
+   "kinds": {
+    "download": 1,
+    "mips_pack": 2,
+    "mips_manifest": 1,
+    "planes_manifest": 1,
+    "planes_pack": 112
+   }
+  }
+ },
+ "classify": {
+  "metadata.json": [
+   0,
+   "metadata"
+  ],
+  "bricks/manifest.json": [
+   0,
+   "manifest"
+  ],
+  "bricks/index.bin": [
+   0,
+   "index"
+  ],
+  "bricks/lod0/c0/pack_00.bin": [
+   3,
+   "pack"
+  ],
+  "bricks/l0/c0/p00000.bin": [
+   3,
+   "pack"
+  ],
+  "bricks/t001/index.bin": null,
+  "planes/z00007.bin": [
+   4,
+   "planes_pack"
+  ],
+  "mips/l00000.bin": [
+   4,
+   "mips_pack"
+  ],
+  "download/Embryo.ims": [
+   4,
+   "download"
+  ],
+  "download/x.html": null,
+  "download/x.svg": null,
+  "download/a.php.png": [
+   4,
+   "download"
+  ],
+  "gallery/a.png": null,
+  "model.glb": [
+   3,
+   "extra"
+  ],
+  "evil.php": null,
+  "../x": null,
+  "bricks/l0/c0/p0.bin": null
+ },
+ "classify_live": {
+  "bricks/t001/index.bin": [
+   0,
+   "index"
+  ],
+  "planes/t001/z00001.bin": [
+   4,
+   "planes_pack"
+  ],
+  "tracks.json": [
+   1,
+   "extra"
+  ],
+  "model.glb": [
+   3,
+   "extra"
+  ]
+ },
+ "trace": [
+  {
+   "after": "bricks/index.bin",
+   "tier": 0,
+   "state": "uploading",
+   "bytes": 7846
+  },
+  {
+   "after": "bricks/l3/c2/p00000.bin",
+   "tier": 1,
+   "state": "editable",
+   "bytes": 78889
+  },
+  {
+   "after": "planes/z00111.bin",
+   "tier": 4,
+   "state": "staged",
+   "bytes": 18425013
+  }
+ ],
+ "journal_names": [
+  "3d__Embryo-E95-Em2-Pecam1-Sox2.files",
+  "3d__Embryo-E95-Em2-Pecam1-Sox2.json"
+ ],
+ "journal_keys": {
+  "version": 1,
+  "type": "3d",
+  "folder": "Embryo-E95-Em2-Pecam1-Sox2",
+  "createdAt": "2026-10-07T18:59:06+00:00",
+  "updatedAt": "2026-10-07T18:59:07+00:00",
+  "files": "136 files",
+  "rejected": [
+   {
+    "path": "evil.php",
+    "reason": "not_allowed"
+   },
+   {
+    "path": ".htaccess",
+    "reason": "unsafe_path"
+   },
+   {
+    "path": "../x.png",
+    "reason": "unsafe_path"
+   },
+   {
+    "path": "download/report.html",
+    "reason": "not_allowed"
+   },
+   {
+    "path": "gallery/a.png",
+    "reason": "not_allowed"
+   }
+  ],
+  "metaLocked": false,
+  "publishedAt": null,
+  "nextId": 136,
+  "lastChunkAt": "2026-10-07T18:59:07+00:00"
+ },
+ "journal_entry_example": {
+  "size": 329046,
+  "chunkSize": 262144,
+  "kind": "pack",
+  "tier": 3,
+  "bits": "Aw==",
+  "done": true,
+  "sha": "0c7c826a73d9e3965d67442038c8d3c7f0f2c2a1b1d985c9d837fb89faa9ef9a",
+  "id": 4
+ },
+ "journal_entry_manifest": {
+  "size": 3734,
+  "chunkSize": 262144,
+  "kind": "manifest",
+  "tier": 0,
+  "bits": "AQ==",
+  "done": true,
+  "sha": "ccd35aeae758809dc46cfef738b02a3b0e92e7714ed82e22cb8b43dd455b03aa",
+  "id": 16
+ },
+ "validate_ok": {
+  "ok": true,
+  "errors": [],
+  "warnings": []
+ },
+ "validate_truncated": {
+  "ok": false,
+  "errors": [
+   "truncated_pack:l0/c1/p00001.bin"
+  ],
+  "warnings": []
+ },
+ "validate_missing": {
+  "ok": false,
+  "errors": [
+   "missing_pack:l0/c1/p00001.bin"
+  ],
+  "warnings": []
+ },
+ "validate_index_hash": {
+  "ok": false,
+  "errors": [
+   "index_hash_mismatch:bricks"
+  ],
+  "warnings": []
+ },
+ "validate_stray": {
+  "ok": false,
+  "errors": [
+   "stray_files"
+  ],
+  "warnings": [
+   "stray.txt"
+  ]
+ },
+ "validate_ok2": {
+  "ok": true,
+  "errors": [],
+  "warnings": []
+ },
+ "bad_checksum": [
+  422,
+  {
+   "error": "checksum_mismatch",
+   "expected": "3608bca1e44ea6c4d268eb6db02260269892c0b42b86bbf1e77a6fa16c3c9282"
+  }
+ ],
+ "no_checksum": [
+  400,
+  {
+   "error": "checksum_required"
+  }
+ ],
+ "log_record_hex": "07000000030000004c554331213ffdb0",
+ "log_record_fid7_idx3": "07 00 00 00 03 00 00 00 4c 55 43 31 21 3f fd b0",
+ "publish1": [
+  200,
+  {
+   "ok": true,
+   "id": "3d/Embryo-E95-Em2-Pecam1-Sox2",
+   "hidden": true,
+   "carriedKeys": [],
+   "carriedGallery": false
+  }
+ ],
+ "published_hidden": true,
+ "replan_published": true,
+ "replan_state": "uploading",
+ "publish_no_overwrite": [
+  409,
+  {
+   "error": "already_exists"
+  }
+ ],
+ "publish_overwrite": [
+  200,
+  {
+   "ok": true,
+   "id": "3d/Embryo-E95-Em2-Pecam1-Sox2",
+   "hidden": false,
+   "carriedKeys": [
+    "gallery",
+    "orientation"
+   ],
+   "carriedGallery": true
+  }
+ ],
+ "after_overwrite": {
+  "name": "Embryo-E95-Em2-Pecam1-Sox2",
+  "orientation": [
+   0,
+   0,
+   0,
+   1
+  ],
+  "hidden": false,
+  "gallery": [
+   {
+    "file": "a.png",
+    "caption": "x"
+   }
+  ],
+  "formatVersion": 4
+ },
+ "gallery_dir": true,
+ "dirs_left": [
+  "Embryo-E95-Em2-Pecam1-Sox2"
+ ]
+}

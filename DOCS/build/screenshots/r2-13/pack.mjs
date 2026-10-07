@@ -1,0 +1,16 @@
+import fs from 'fs';
+const src = fs.readFileSync('/home/user/lumen3D/js/workers/tracks-load-worker.js','utf8');
+const f = new Function('self', src + '; return packTracks;');
+const packTracks = f({});
+const doc = JSON.parse(fs.readFileSync(process.argv[2],'utf8'));
+const r = packTracks(doc);
+const out = {};
+for (const k of ['frameCount','maxN','cellTotal','hasRaw','unmapped','malformed']) out[k]=r[k];
+out.counts=Array.from(r.counts);
+out.sizes={};
+for (const k of ['posStab','posRaw','cellIdx','counts','palette','parent','daughterStart','daughterIdx','flags','regionIdx','firstFrame','lastFrame','cellFrameSlot','hasRawCell','timepoints']) out.sizes[k]=[r[k].constructor.name, r[k].length, r[k].byteLength];
+out.total=Object.values(out.sizes).reduce((s,v)=>s+v[2],0);
+out.regionNames=r.regionNames;
+console.log(JSON.stringify(out));
+console.log(Object.keys(doc), Object.keys(doc.cells).slice(0,3), JSON.stringify(doc.cells[Object.keys(doc.cells)[0]]).slice(0,500));
+console.log(fs.statSync(process.argv[2]).size, fs.statSync(process.argv[2]+'.gz').size);

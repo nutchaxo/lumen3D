@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 390" font-family="Inter, sans-serif">
+<defs><marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#4a5468"/></marker></defs><rect width="800" height="390" rx="16" fill="#f8f9fd"/>
+<text x="400" y="34" font-family="Inter, sans-serif" font-size="18" font-weight="800" fill="#1c2333" text-anchor="middle" xml:space="preserve">PerfTelemetry : un carnet de bord qui ne quitte jamais l'onglet</text>
+<rect x="16" y="56" width="230" height="190" rx="12" fill="#fff" stroke="#c5cbd8" stroke-width="1.2"/>
+<path d="M16,90 L16,68 Q16,56 28,56 L234,56 Q246,56 246,68 L246,90 Z" fill="#e8edff"/>
+<text x="131.0" y="78" font-family="Inter, sans-serif" font-size="12" font-weight="800" fill="#3b5bdb" text-anchor="middle" xml:space="preserve">Le viewer note</text>
+<text x="28" y="112.0" font-family="Inter, sans-serif" font-size="12" font-weight="400" fill="#1c2333" text-anchor="start" xml:space="preserve">viewer.init</text>
+<text x="28" y="128.2" font-family="Inter, sans-serif" font-size="12" font-weight="400" fill="#1c2333" text-anchor="start" xml:space="preserve">viewer.timepoint.load</text>
+<text x="28" y="144.4" font-family="Inter, sans-serif" font-size="12" font-weight="400" fill="#1c2333" text-anchor="start" xml:space="preserve">volume.load.bricks</text>
+<text x="28" y="160.60000000000002" font-family="Inter, sans-serif" font-size="12" font-weight="400" fill="#1c2333" text-anchor="start" xml:space="preserve">texture.upload.prepare</text>
+<text x="28" y="176.8" font-family="Inter, sans-serif" font-size="12" font-weight="400" fill="#1c2333" text-anchor="start" xml:space="preserve">viewer.frame_time (≈ 4 s)</text>
+<text x="28" y="193.0" font-family="Inter, sans-serif" font-size="12" font-weight="400" fill="#1c2333" text-anchor="start" xml:space="preserve">viewer.context_lost …</text>
+<line x1="250" y1="150" x2="288" y2="150" stroke="#4a5468" stroke-width="2.2" marker-end="url(#arr)"/>
+<rect x="292" y="56" width="230" height="190" rx="12" fill="#fff" stroke="#c5cbd8" stroke-width="1.2"/>
+<path d="M292,90 L292,68 Q292,56 304,56 L510,56 Q522,56 522,68 L522,90 Z" fill="#ebfbee"/>
+<text x="407.0" y="78" font-family="Inter, sans-serif" font-size="12" font-weight="800" fill="#2b8a3e" text-anchor="middle" xml:space="preserve">En mémoire, bornés</text>
+<text x="304" y="112.0" font-family="Inter, sans-serif" font-size="12" font-weight="400" fill="#1c2333" text-anchor="start" xml:space="preserve">3 000 durées (spans)</text>
+<text x="304" y="128.2" font-family="Inter, sans-serif" font-size="12" font-weight="400" fill="#1c2333" text-anchor="start" xml:space="preserve">5 000 événements</text>
+<text x="304" y="144.4" font-family="Inter, sans-serif" font-size="12" font-weight="400" fill="#1c2333" text-anchor="start" xml:space="preserve">500 mesures en cours</text>
+<text x="304" y="160.60000000000002" font-family="Inter, sans-serif" font-size="12" font-weight="400" fill="#1c2333" text-anchor="start" xml:space="preserve">des compteurs</text>
+<text x="304" y="176.8" font-family="Inter, sans-serif" font-size="12" font-weight="400" fill="#1c2333" text-anchor="start" xml:space="preserve">rien n'est écrit</text>
+<line x1="526" y1="150" x2="564" y2="150" stroke="#4a5468" stroke-width="2.2" marker-end="url(#arr)"/>
+<rect x="568" y="56" width="216" height="190" rx="12" fill="#fff" stroke="#c5cbd8" stroke-width="1.2"/>
+<path d="M568,90 L568,68 Q568,56 580,56 L772,56 Q784,56 784,68 L784,90 Z" fill="#f3f0ff"/>
+<text x="676.0" y="78" font-family="Inter, sans-serif" font-size="12" font-weight="800" fill="#7048e8" text-anchor="middle" xml:space="preserve">Console seulement</text>
+<text x="580" y="112.0" font-family="Inter, sans-serif" font-size="12" font-weight="400" fill="#1c2333" text-anchor="start" xml:space="preserve">PerfTelemetry</text>
+<text x="580" y="128.2" font-family="Inter, sans-serif" font-size="12" font-weight="400" fill="#1c2333" text-anchor="start" xml:space="preserve">.getSummary()</text>
+<text x="580" y="144.4" font-family="Inter, sans-serif" font-size="12" font-weight="400" fill="#1c2333" text-anchor="start" xml:space="preserve">min, moyenne, p50, p95</text>
+<text x="580" y="160.60000000000002" font-family="Inter, sans-serif" font-size="12" font-weight="400" fill="#1c2333" text-anchor="start" xml:space="preserve">par opération</text>
+<text x="580" y="176.8" font-family="Inter, sans-serif" font-size="12" font-weight="400" fill="#1c2333" text-anchor="start" xml:space="preserve">pour un diagnostic</text>
+<rect x="16" y="266" width="768" height="106" rx="12" fill="#fff0f0" stroke="#c92a2a" stroke-width="1.4" stroke-dasharray="5 4"/>
+<text x="32" y="292" font-family="Inter, sans-serif" font-size="12.5" font-weight="400" fill="#1c2333" text-anchor="start" xml:space="preserve">Aucun envoi réseau : rien dans PerfTelemetry n'est posté au serveur ni à un tiers.</text>
+<text x="32" y="316" font-family="Inter, sans-serif" font-size="12.5" font-weight="400" fill="#1c2333" text-anchor="start" xml:space="preserve">Les compteurs de visites (api/stats.json) sont un système tout à fait distinct.</text>
+<text x="32" y="340" font-family="Inter, sans-serif" font-size="12.5" font-weight="400" fill="#1c2333" text-anchor="start" xml:space="preserve">Il n'est chargé que par la page du viewer ; on le lit à la main, depuis la console du navigateur.</text>
+</svg>

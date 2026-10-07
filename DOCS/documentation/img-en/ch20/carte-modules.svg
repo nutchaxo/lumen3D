@@ -1,0 +1,45 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 436" font-family="Inter, sans-serif">
+<defs><marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#4a5468"/></marker></defs>
+<rect width="800" height="436" rx="16" fill="#f8f9fd"/>
+<text x="400" y="32" text-anchor="middle" font-size="18" font-weight="800" fill="#1c2333">Module map: who calls whom?</text>
+<rect x="24" y="52" width="548" height="74" rx="12" fill="#f3f0ff" stroke="#7048e8" stroke-width="1.6"/>
+<text x="40" y="77" font-size="15" font-weight="800" fill="#7048e8">Pages</text>
+<text x="102" y="77" font-size="12" fill="#4a5468" font-family="monospace">js/pages/</text>
+<text x="40" y="98" font-size="12.5" fill="#1c2333">The conductor of each page</text>
+<text x="40" y="116" font-size="11.5" fill="#4a5468">viewer · explorer · compare · 2d · landing · admpan (+ 27 admin modules)</text>
+<rect x="24" y="138" width="548" height="74" rx="12" fill="#e3fafc" stroke="#0c8599" stroke-width="1.6"/>
+<text x="40" y="163" font-size="15" font-weight="800" fill="#0c8599">Components</text>
+<text x="142" y="163" font-size="12" fill="#4a5468" font-family="monospace">js/components/</text>
+<text x="40" y="184" font-size="12.5" fill="#1c2333">Reusable interface pieces</text>
+<text x="40" y="202" font-size="11.5" fill="#4a5468">channel panel · timeline · Studio · gallery · decomposition</text>
+<rect x="24" y="224" width="548" height="74" rx="12" fill="#e8edff" stroke="#3b5bdb" stroke-width="1.6"/>
+<text x="40" y="249" font-size="15" font-weight="800" fill="#3b5bdb">Viewers</text>
+<text x="118" y="249" font-size="12" fill="#4a5468" font-family="monospace">js/viewers/</text>
+<text x="40" y="270" font-size="12.5" fill="#1c2333">The ones that draw</text>
+<text x="40" y="288" font-size="11.5" fill="#4a5468">volume-viewer · volume-slicer · volume-grid · tracking-overlay · 2d-viewer</text>
+<rect x="24" y="310" width="548" height="74" rx="12" fill="#ebfbee" stroke="#2b8a3e" stroke-width="1.6"/>
+<text x="40" y="335" font-size="15" font-weight="800" fill="#2b8a3e">Core</text>
+<text x="94" y="335" font-size="12" fill="#4a5468" font-family="monospace">js/core/</text>
+<text x="40" y="356" font-size="12.5" fill="#1c2333">Services shared by every page</text>
+<text x="40" y="374" font-size="11.5" fill="#4a5468">brick-loader · svr-manager · catalog · i18n · plugin-registry · url-state · …</text>
+<line x1="298" y1="126" x2="298" y2="138" stroke="#4a5468" stroke-width="2.2" marker-end="url(#arr)"/>
+<line x1="298" y1="212" x2="298" y2="224" stroke="#4a5468" stroke-width="2.2" marker-end="url(#arr)"/>
+<line x1="298" y1="298" x2="298" y2="310" stroke="#4a5468" stroke-width="2.2" marker-end="url(#arr)"/>
+<rect x="596" y="52" width="180" height="214" rx="12" fill="#fff4e6" stroke="#e67700" stroke-width="1.6"/>
+<text x="686" y="78" text-anchor="middle" font-size="15" font-weight="800" fill="#e67700">Workers</text>
+<text x="686" y="96" text-anchor="middle" font-size="12" fill="#4a5468" font-family="monospace">js/workers/</text>
+<text x="686" y="118" text-anchor="middle" font-size="11.5" fill="#1c2333">Heavy computing, in the background</text>
+<text x="686" y="146" text-anchor="middle" font-size="12.5" fill="#1c2333">• brick decoding</text>
+<text x="686" y="168" text-anchor="middle" font-size="12.5" fill="#1c2333">• file upload</text>
+<text x="686" y="190" text-anchor="middle" font-size="12.5" fill="#1c2333">• data conversion</text>
+<text x="686" y="212" text-anchor="middle" font-size="12.5" fill="#1c2333">• gaussian blur</text>
+<text x="686" y="234" text-anchor="middle" font-size="12.5" fill="#1c2333">• planes, tracking, 2D</text>
+<rect x="596" y="282" width="180" height="102" rx="12" fill="#fff0f0" stroke="#c92a2a" stroke-width="1.6"/>
+<text x="686" y="308" text-anchor="middle" font-size="15" font-weight="800" fill="#c92a2a">Plugins</text>
+<text x="686" y="326" text-anchor="middle" font-size="12" fill="#4a5468" font-family="monospace">js/modules/</text>
+<text x="686" y="350" text-anchor="middle" font-size="12.5" fill="#1c2333">installed from</text>
+<text x="686" y="368" text-anchor="middle" font-size="12.5" fill="#1c2333">the signed catalogue</text>
+<line x1="572" y1="347" x2="594" y2="347" stroke="#4a5468" stroke-width="2.2" marker-end="url(#arr)"/>
+<line x1="572" y1="160" x2="594" y2="160" stroke="#4a5468" stroke-width="2.2" marker-end="url(#arr)"/>
+<text x="400" y="422" text-anchor="middle" font-size="12" font-weight="700" fill="#1c2333">An arrow means 'relies on'. Pages draw nothing themselves: they hand rendering to the viewers.</text>
+</svg>

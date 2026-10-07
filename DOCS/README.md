@@ -44,7 +44,23 @@ missing.
 To publish a correction, add a file with a **newer date and the same id** — do
 not delete the old one, it becomes the previous version.
 
-## Source of these guides
+## Source of these documents
+
+All PDFs are built by `DOCS/build/build_docs.py` (Markdown → HTML → Chromium; writing rules in
+`DOCS/build/STYLE.md`):
+
+| Document | Languages | Sources |
+|---|---|---|
+| `GUIDE-ADMIN` — administrator guide | FR, EN, ES, NL, MULTI | `DOCS/admin-guide/` |
+| `FULL DOCUMENTATION` — how the whole platform works, for biologists | EN, FR | `DOCS/documentation/complete-en/`, `complete/` |
+| `ESSENTIALS` — the 10-page summary for biologists | EN, FR | `DOCS/documentation/ESSENTIALS-*.md` |
+
+```
+python DOCS/build/build_docs.py                 # everything
+python DOCS/build/build_docs.py admin complete-en essential-fr   # a selection
+```
+
+## Source of these guides (historical note)
 
 The administrator guide is built from `DOCS/admin-guide/` (markdown +
 screenshots per language). The PDFs published here are copies of

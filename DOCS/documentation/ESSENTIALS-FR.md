@@ -315,6 +315,6 @@ mesure précise, utilisez l'outil de mesure ou une coupe.
 | Puis-je partager une vue ? | Oui : le lien de la page conserve l'état de la vue ; la page Comparer sait aussi enregistrer un espace de travail. |
 
 ::: see
-**Documentation complète** : 15 chapitres, environ 100 pages, chaque étape illustrée.
+**Documentation complète** : 21 chapitres, plus de 350 pages, chaque étape illustrée.
 **Guide de l'administrateur** : tous les écrans du panneau, pas à pas.
 :::

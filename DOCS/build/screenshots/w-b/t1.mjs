@@ -1,0 +1,10 @@
+import { launch, newPage, BASE, sleep, waitLoaded } from './common.mjs';
+const b = await launch();
+const p = await newPage(b, {});
+await p.goto(BASE + '/viewer.html?id=live/Demo-Lumen3D-E85-Em1-30min-2ch-4tp', { waitUntil: 'domcontentloaded' });
+await waitLoaded(p); await sleep(8000);
+await p.click('#btn-hamburger, header button:has(svg.lucide-menu), .viewer-header-hamburger').catch(e=>console.log('click fail', e.message.slice(0,100)));
+await sleep(1500);
+await p.screenshot({path:'raw/live2.png'});
+console.log(await p.evaluate(()=>[...document.querySelectorAll('header button, header [id]')].slice(0,30).map(e=>e.id||e.className).join(' | ')));
+await b.close();

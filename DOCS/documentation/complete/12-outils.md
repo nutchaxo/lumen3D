@@ -37,7 +37,7 @@ Survolez un bouton : une info-bulle donne son nom. La barre est rangée en **cin
 | 12 | [Mode présentation]{.ui} |
 | 13 | [Décomposer par canal]{.ui} |
 | 14 | [Explorateur Z-Stack]{.ui} |
-| 15 | [Aide et méthodes]{.ui} |
+| 15 | [Aide et méthodes]{.ui} : un lien vers la page À propos (présentation et méthodes) |
 | 16 | [Filtres daltonisme]{.ui} |
 | 17 | [Changer le theme]{.ui} (clair / sombre) |
 | 18 | [Centrer l'échantillon]{.ui} |
@@ -50,7 +50,7 @@ Survolez un bouton : une info-bulle donne son nom. La barre est rangée en **cin
 ::::::
 
 ::: note
-**Votre barre peut être différente.** Les outils sont des *plugins* installés par l'administrateur depuis le catalogue (chapitre 13). Le débogage des chunks, la capture « bac à sable » et les outils 2D sont optionnels. Les outils de suivi cellulaire n'apparaissent que sur une série temporelle suivie.
+**Votre barre peut être différente.** Les outils sont des *plugins* installés par l'administrateur depuis le catalogue (chapitre 15). Le débogage des chunks, la capture « bac à sable » et les outils 2D sont optionnels. Les outils de suivi cellulaire n'apparaissent que sur une série temporelle suivie.
 :::
 
 ### Je veux… → j'utilise…
@@ -211,7 +211,7 @@ Les préréglages XY/XZ/YZ suivent les axes **du fichier**, pas ceux de l'embryo
 | 3 | [Épaisseur]{.ui} : 12 coupes = 36,00 µm |
 | 4 | [Rotation]{.ui} 0–360° |
 | 5 | Position : 174 à 207 µm de profondeur |
-| 6 | Ouvrir la tranche dans le Studio |
+| 6 | [Open in Slice Studio]{.ui} : ouvrir la tranche dans le Studio (libellé affiché en anglais) |
 | 7 | Le **cran 3D** : curseur ici = toute la pile en 3D |
 | 8 | La **piste** : une position par coupe |
 | 9 | **Triangles de rognage** (dessus / dessous) |
@@ -433,10 +433,10 @@ Un panneau ajouté tard est « rattrapé » : il reçoit la dernière caméra, l
 ### La mémoire partagée
 
 ::: analogy
-**Un buffet à budget fixe.** La carte graphique offre 1,5 Gio pour tous les panneaux. Chaque volume dit ce que coûte chaque qualité. Le viewer rabaisse le plus gourmand tant que le total dépasse, puis remonte le plus modeste tant que ça rentre, sans dépasser 1024 en automatique.
+**Un buffet à budget fixe.** Comparer retient un budget commun **fixe** de 1,5 Gio pour l'ensemble des panneaux (ce n'est pas une mesure de votre carte graphique). Chaque volume dit ce que coûte chaque qualité. Le viewer rabaisse le plus gourmand tant que le total dépasse, puis remonte le plus modeste tant que ça rentre, sans dépasser 1024 en automatique. Ce réglage ne concerne que les **volumes** : une photographie 2D n'a pas de qualité.
 :::
 
-Les panneaux démarrent en 512 ; la montée de qualité se fait **un panneau à la fois** (délai de 180 s). Choisir 512/1024/Natif à la main force le niveau.
+Les panneaux démarrent en 512 ; la montée de qualité se fait **un panneau à la fois** ; un panneau qui ne se stabilise pas en 180 s est abandonné (message dans la console) et le suivant est traité. Choisir 512/1024/Natif à la main force le niveau.
 
 ### Décomposer, figure, espace de travail
 

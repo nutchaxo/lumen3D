@@ -1,0 +1,20 @@
+import {launch,newPage,shot,openViewer,E95,sleep,boxes} from './lib.mjs';
+const b=await launch(); const p=await newPage(b);
+await openViewer(p,E95,2000);
+const click=async s=>{await p.evaluate(s=>document.querySelector(s).click(),s);await sleep(4000)};
+await click('[data-plugin-id="toggle-grid"]');
+await sleep(4000);
+let tg=await boxes(p,[{sel:'#viewer-scale-bar',n:1,side:'top'},{sel:'[data-plugin-id="toggle-grid"]',n:2,side:'bottom'}]);
+await shot(p,'grille-echelle',{targets:tg});
+// hide volume: projections only
+await click('[data-plugin-id="toggle-volume"]');
+tg=await boxes(p,[{sel:'[data-plugin-id="toggle-volume"]',n:1,side:'bottom'}]);
+await shot(p,'projections',{targets:tg});
+await click('[data-plugin-id="toggle-volume"]');
+await click('[data-plugin-id="toggle-grid"]');await click('[data-plugin-id="toggle-grid"]');
+await click('[data-plugin-id="toggle-axes"]');
+await click('[data-plugin-id="orientation-axes"]');
+await sleep(3000);
+tg=await boxes(p,[{sel:'[data-plugin-id="toggle-axes"]',n:1,side:'bottom'},{sel:'[data-plugin-id="orientation-axes"]',n:2,side:'bottom'}]);
+await shot(p,'orientation',{targets:tg});
+await b.close();

@@ -1,0 +1,12 @@
+import fs from 'fs';
+const src = fs.readFileSync('/home/user/lumen3D/js/pages/compare-policy.js','utf8');
+const CompareQuality = new Function(src + '; return CompareQuality;')();
+const MB=1024*1024, GB=1024*MB;
+const A={'512x512':180*MB,'1024x1024':620*MB,native:2400*MB};
+const B={'512x512':240*MB,'1024x1024':900*MB,native:3300*MB};
+const C={'512x512':90*MB,'1024x1024':330*MB,native:1100*MB};
+const show=(label,panels,reserve=0)=>{const m=CompareQuality.plan(panels,1.5*GB,reserve,'1024x1024');console.log(label,[...m.entries()].map(([k,v])=>k+':'+v).join('  '), 'total MB', Math.round(panels.reduce((s,p)=>s+({...p.bytes})[m.get(p.key)],0)/MB));};
+show('2 panels A,C start 512', [{key:'A',quality:'512x512',bytes:A},{key:'C',quality:'512x512',bytes:C}]);
+show('3 panels A,B,C start 512', [{key:'A',quality:'512x512',bytes:A},{key:'B',quality:'512x512',bytes:B},{key:'C',quality:'512x512',bytes:C}]);
+show('3 panels all at 1024 (lowering)', [{key:'A',quality:'1024x1024',bytes:A},{key:'B',quality:'1024x1024',bytes:B},{key:'C',quality:'1024x1024',bytes:C}]);
+show('3 panels + 1 unpriced', [{key:'A',quality:'512x512',bytes:A},{key:'B',quality:'512x512',bytes:B},{key:'C',quality:'512x512',bytes:C}], 256*MB);

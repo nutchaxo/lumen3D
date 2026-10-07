@@ -232,7 +232,7 @@ Le pipeline actuel (version 0.21.0) écrit **directement le format 4**. Un jeu d
 
 ### « Mises à jour des données »
 
-Comme une mise à jour de logiciel, l'onglet [Mises à jour des données]{.ui} du panneau d'administration (chapitre 13) détecte les jeux de données restés en format 1, 2 ou 3 et les convertit **sur place**, un par un. Le niveau natif est conservé voxel pour voxel : rien n'est recalculé à partir de l'original.
+Comme une mise à jour de logiciel, l'onglet [Mises à jour des données]{.ui} du panneau d'administration (chapitre 17) détecte les jeux de données restés en format 1, 2 ou 3 et les convertit **sur place**, un par un. Le niveau natif est conservé voxel pour voxel : rien n'est recalculé à partir de l'original.
 
 ::: cards
 ::: card

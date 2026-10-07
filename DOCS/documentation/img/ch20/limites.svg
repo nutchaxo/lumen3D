@@ -1,0 +1,38 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 380" font-family="Inter, sans-serif">
+<defs><marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#4a5468"/></marker></defs>
+<rect width="800" height="380" rx="16" fill="#f8f9fd"/>
+<text x="400" y="32" text-anchor="middle" font-size="18" font-weight="800" fill="#1c2333">Ce que Lumen3D ne fait pas</text>
+<rect x="24" y="62" width="178" height="116" rx="12" fill="#fff0f0" stroke="#c92a2a" stroke-width="1.6"/>
+<text x="113" y="106" text-anchor="middle" font-size="30">📏</text>
+<text x="113" y="134" text-anchor="middle" font-size="12.5" font-weight="800" fill="#c92a2a">Pas de quantification</text>
+<text x="113" y="154" text-anchor="middle" font-size="12" fill="#1c2333">calibrée de l'intensité</text>
+<rect x="214" y="62" width="178" height="116" rx="12" fill="#fff4e6" stroke="#e67700" stroke-width="1.6"/>
+<text x="303" y="106" text-anchor="middle" font-size="30">🎨</text>
+<text x="303" y="134" text-anchor="middle" font-size="12.5" font-weight="800" fill="#e67700">4 canaux affichés</text>
+<text x="303" y="154" text-anchor="middle" font-size="12" fill="#1c2333">au maximum</text>
+<rect x="404" y="62" width="178" height="116" rx="12" fill="#fff4e6" stroke="#e67700" stroke-width="1.6"/>
+<text x="493" y="106" text-anchor="middle" font-size="30">🔬</text>
+<text x="493" y="134" text-anchor="middle" font-size="12.5" font-weight="800" fill="#e67700">Pas de déconvolution</text>
+<text x="493" y="154" text-anchor="middle" font-size="12" fill="#1c2333">ni de champ plat</text>
+<rect x="594" y="62" width="178" height="116" rx="12" fill="#fff0f0" stroke="#c92a2a" stroke-width="1.6"/>
+<text x="683" y="106" text-anchor="middle" font-size="30">🧩</text>
+<text x="683" y="134" text-anchor="middle" font-size="12.5" font-weight="800" fill="#c92a2a">Pas de segmentation</text>
+<text x="683" y="154" text-anchor="middle" font-size="12" fill="#1c2333">ni de détection de cellules</text>
+<rect x="24" y="192" width="178" height="116" rx="12" fill="#fff0f0" stroke="#c92a2a" stroke-width="1.6"/>
+<text x="113" y="236" text-anchor="middle" font-size="30">✏️</text>
+<text x="113" y="264" text-anchor="middle" font-size="12.5" font-weight="800" fill="#c92a2a">Pas d'édition</text>
+<text x="113" y="284" text-anchor="middle" font-size="12" fill="#1c2333">de vos voxels</text>
+<rect x="214" y="192" width="178" height="116" rx="12" fill="#fff0f0" stroke="#c92a2a" stroke-width="1.6"/>
+<text x="303" y="236" text-anchor="middle" font-size="30">🌓</text>
+<text x="303" y="264" text-anchor="middle" font-size="12.5" font-weight="800" fill="#c92a2a">Pas de compensation</text>
+<text x="303" y="284" text-anchor="middle" font-size="12" fill="#1c2333">du photoblanchiment</text>
+<rect x="404" y="192" width="178" height="116" rx="12" fill="#fff4e6" stroke="#e67700" stroke-width="1.6"/>
+<text x="493" y="236" text-anchor="middle" font-size="30">👥</text>
+<text x="493" y="264" text-anchor="middle" font-size="12.5" font-weight="800" fill="#e67700">Un seul compte</text>
+<text x="493" y="284" text-anchor="middle" font-size="12" fill="#1c2333">administrateur</text>
+<rect x="594" y="192" width="178" height="116" rx="12" fill="#fff4e6" stroke="#e67700" stroke-width="1.6"/>
+<text x="683" y="236" text-anchor="middle" font-size="30">🖥️</text>
+<text x="683" y="264" text-anchor="middle" font-size="12.5" font-weight="800" fill="#e67700">WebGL2 obligatoire</text>
+<text x="683" y="284" text-anchor="middle" font-size="12" fill="#1c2333">dans le navigateur</text>
+<text x="400" y="366" text-anchor="middle" font-size="12.5" font-weight="700" fill="#1c2333">Lumen3D montre et mesure les distances ; l'analyse quantitative reste dans vos outils d'analyse.</text>
+</svg>

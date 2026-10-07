@@ -29,7 +29,7 @@ Lance le **pipeline** Python qui transforme le fichier Imaris en dossier web.
 #### L'administrateur
 Importe, publie, personnalise le site, met à jour la plateforme.
 
-[chapitres 13 et 14]{.pill}
+[chapitres 14 à 19]{.pill}
 :::
 ::: card
 #### Le visiteur public
@@ -105,7 +105,7 @@ De l'échantillon à l'écran, les données traversent quatre lieux.
 |---|---|---|---|
 | 1. Acquisition | microscope confocal + logiciel Imaris | selon l'échantillon | 4 |
 | 2. Préparation | technicien, pipeline Python sur son ordinateur | minutes à heures, une seule fois | 5 à 8 |
-| 3. Mise en ligne | administrateur : import par glisser-déposer ou SFTP, puis publication | selon le débit | 13 |
+| 3. Mise en ligne | administrateur : import par glisser-déposer ou SFTP, puis publication | selon le débit | 14 et 17 |
 | 4. Affichage | n'importe qui, avec un navigateur | quelques secondes pour la première image | 9 à 12 |
 
 ::: remember
@@ -152,14 +152,29 @@ fichiers de tests automatiques
 Quelques repères de version, valables à la date de ce document :
 
 - plateforme web **1.59.3** ; pipeline de préparation **0.21.0** ;
-- format de données courant : [format 4]{.pill .green} (les formats 1 à 3 sont convertis en place, voir chapitre 13) ;
+- format de données courant : [format 4]{.pill .green} (les formats 1 à 3 sont convertis en place, voir chapitre 17) ;
 - chaque version est vérifiée par les tests automatiques avant d'être publiée.
 
 ## 1.6 Carte de la documentation
 
-Ce document est organisé comme le trajet de la donnée. Retrouvez votre question ci-dessous.
+Ce document compte **21 chapitres**, organisés comme le trajet de la donnée : du microscope à l'écran, puis l'administration, la fiabilité et les annexes. Retrouvez votre question ci-dessous.
 
-![Quelle question, quel chapitre ?](img/ch01/carte.svg){width=95%}
+![Quelle question, quel chapitre ?](img/ch01/carte.svg){width=78%}
+
+| Chapitre | Titre | Pour qui |
+|---|---|---|
+| 1 – 3 | La plateforme en un coup d'œil ; les technologies ; le tour des pages | tout le monde |
+| 4 – 8 | De l'Imaris au dossier web : fond, réduction, briques, métadonnées et suivi | technicien |
+| 9 – 11 | Le rendu 3D, le streaming, les canaux et les histogrammes | biologiste, curieux |
+| 12 – 13 | Les outils un par un, puis sous le capot | biologiste |
+| 14 | Le panneau d'administration en bref | administrateur |
+| 15 | Les plugins, la confiance et le catalogue signé | administrateur |
+| 16 | Personnaliser et traduire | administrateur |
+| 17 | Les données en profondeur : fichiers, formats, migrations, import | administrateur, technicien |
+| 18 | Héberger, mettre à jour, publier une version | administrateur système |
+| 19 | Sécurité et fiabilité, avec le tableau « Que se passe-t-il si… ? » | tout le monde |
+| 20 | Annexes : carte des modules, mémoires du navigateur, limites, chiffres, versions | référence |
+| 21 | Glossaire | tout le monde |
 
 ::: tip
 Pressé ? Lisez les encadrés **En 30 secondes** au début de chaque chapitre : ils suffisent pour savoir si la suite vous concerne.

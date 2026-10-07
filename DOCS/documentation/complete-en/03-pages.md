@@ -13,7 +13,7 @@
 All public pages share the same top bar: the logo, the four links, then three buttons on the right: **language**, **colour-blind filter** and **light/dark theme**.
 
 ::: note
-The screenshots in this document are in English and in the dark theme. The site name ("IRIBHM — ULB"), the colours and even the texts of the home page are those of the instance that was photographed: another institution may have changed them (chapter 13).
+The screenshots in this document are in English and in the dark theme. The site name ("IRIBHM — ULB"), the colours and even the texts of the home page are those of the instance that was photographed: another institution may have changed them (chapter 16).
 :::
 
 ## 3.2 The Home page {.page}
@@ -151,7 +151,7 @@ Up to **four panels** side by side. Each panel is a **real viewer** (or a real 2
 
 ## 3.8 About and Legal notice
 
-**About** presents the project. Its default content is a page the administrator can edit (page editor, chapter 13). **Legal** displays the legal text entered in the [Legal]{.ui} tab; the footer link appears only if it is enabled.
+**About** presents the project. Its default content is a page the administrator can edit (page editor, chapter 16). **Legal** displays the legal text entered in the [Legal]{.ui} tab; the footer link appears only if it is enabled.
 
 ![The About page.](img-en/ch03/a-propos.png){.shot width=80%}
 
@@ -163,7 +163,7 @@ Other pages may exist: the administrator can create **custom pages**, opened by 
 
 ## 3.9 The administration: an overview {.page}
 
-The administration lives in `admpan.html` and asks for a password. It is not in the public bar. Here is only what it looks like; the detail is in chapter 13.
+The administration lives in `admpan.html` and asks for a password. It is not in the public bar. Here is only what it looks like; the detail is in chapter 14.
 
 ![The administration panel, Datasets tab.](img-en/ch03/admin-apercu.png){.shot width=80%}
 

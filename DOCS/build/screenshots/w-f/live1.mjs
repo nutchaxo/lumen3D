@@ -1,0 +1,24 @@
+import {DIR,launch,newPage,shot,openViewer,LIVE,sleep,boxes} from './lib.mjs';
+const b=await launch(); const p=await newPage(b);
+await openViewer(p,LIVE,4000);
+const click=async s=>{await p.evaluate(s=>document.querySelector(s).click(),s);await sleep(2500)};
+// seek to frame 2
+await p.mouse.click(255+1329*0.66,911); await sleep(5000);
+await p.screenshot({path:'l_time.png'});
+await click('[data-plugin-id="tracking-trails"]'); await sleep(2500);
+await p.screenshot({path:'l_trails.png'});
+await click('[data-plugin-id="tracking-trails"]');
+await click('[data-plugin-id="tracking-surface"]'); await sleep(6000);
+await p.screenshot({path:'l_surface.png'});
+await click('[data-plugin-id="tracking-surface"]');
+await p.keyboard.press('i'); await sleep(1000);
+await p.mouse.click(997,339); await sleep(3000);
+await p.screenshot({path:'l_inspect.png'});
+await p.keyboard.press('d'); await sleep(1000);
+await p.mouse.click(933,337); await sleep(2500);
+await p.mouse.click(1020,241); await sleep(3000);
+await p.screenshot({path:'l_dist.png'});
+await p.keyboard.press('Escape');
+await click('[data-plugin-id="tracking-charts"]'); await sleep(6000);
+await p.screenshot({path:'l_charts.png'});
+await b.close();

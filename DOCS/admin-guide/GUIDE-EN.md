@@ -655,7 +655,7 @@ An **interrupted** import is not kept forever: the card shows "purged in {d}", a
 **Publishing does not make the dataset public.** It arrives **hidden**. Go to Datasets, open it, switch on [Visibility]{.ui}.
 :::
 
-**Replacing an already published dataset**: if the name already exists, the panel asks "A published dataset already has this name. Replace it? Its image gallery and the fields you filled in (name, orientation, captions…) are kept when the new import does not provide them.". After the replacement, a toast lists what was kept (the gallery, etc.).
+**Replacing an already published dataset**: if the name already exists, the panel asks "A published dataset already has this name. Replace it? Its image gallery and the fields you filled in (name, orientation, captions…) are kept when the new import does not provide them.". After the replacement, a toast lists what was kept (the gallery, etc.). Note: a `metadata.json` produced by the pipeline always contains a name, so **the new name** is the one displayed. The orientation and the gallery are carried over from the old version.
 
 **[Delete]{.ui}**: "Permanently delete the files already uploaded for this dataset?", then "Import deleted.". Available in every state except **Published**.
 
@@ -942,7 +942,7 @@ The page variables `{type3d}`, `{type2d}` and `{typeLive}` (chapter 10) pick up 
 | 4 | The detail **by dataset**; click a header (Dataset, Views, Downl.) to sort. |
 :::
 
-- **Visits** — openings of a page of the site.
+- **Visits** — openings of the home page, counted once per browser tab.
 - **Dataset views** — times a dataset was opened in the viewer: the most telling indicator.
 - **Downloads** — files fetched from the Download Center.
 
@@ -1061,7 +1061,7 @@ Resetting asks "Reset identity to defaults? Business content will be removed.". 
 | **Error** | Error messages (red by default) |
 | **Warning** | Alerts (orange by default) |
 
-Click a colour square to open the picker: **the preview updates instantly**. The main buttons are derived from the instance colour and respect **WCAG AA** contrast; the saved theme is applied before the first display.
+Click a colour square to open the picker: **the preview updates instantly**. The main buttons are derived from the instance colour and aim for **WCAG AA** contrast (without guaranteeing it for every colour: white text on a bright orange or turquoise stays below it; check readability in the preview); the saved theme is applied before the first display.
 
 ::: tip
 Keep Success / Error / Warning **close to green / red / orange**: they are universal cues.

@@ -1,0 +1,50 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 450" font-family="Inter, sans-serif">
+<defs><marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#4a5468"/></marker></defs><rect width="800" height="450" rx="16" fill="#f8f9fd"/>
+<text x="400" y="34" font-family="Inter, sans-serif" font-size="18" font-weight="800" fill="#1c2333" text-anchor="middle" xml:space="preserve">Une valeur de instance.json, trois chemins vers l'écran</text>
+<rect x="16" y="56" width="246" height="350" rx="12" fill="#fff" stroke="#c5cbd8" stroke-width="1.2"/>
+<path d="M16,90 L16,68 Q16,56 28,56 L250,56 Q262,56 262,68 L262,90 Z" fill="#e8edff"/>
+<text x="139.0" y="78" font-family="Inter, sans-serif" font-size="12.5" font-weight="800" fill="#3b5bdb" text-anchor="middle" xml:space="preserve">① Serveur, avant l'envoi</text>
+<text x="28" y="106" font-family="Inter, sans-serif" font-size="11.5" font-weight="800" fill="#4a5468" text-anchor="start" xml:space="preserve">Syntaxe</text>
+<rect x="26" y="114" width="226" height="50" rx="8" fill="#f1f3f9" stroke="#c5cbd8" stroke-width="1.2"/>
+<text x="34" y="134" font-family="JetBrains Mono, Consolas, monospace" font-size="11" font-weight="400" fill="#1c2333" text-anchor="start" xml:space="preserve">&lt;title&gt;{{SITE:pageTitles.</text>
+<text x="34" y="150" font-family="JetBrains Mono, Consolas, monospace" font-size="11" font-weight="400" fill="#1c2333" text-anchor="start" xml:space="preserve">home|Lumen3D}}&lt;/title&gt;</text>
+<text x="28" y="194" font-family="Inter, sans-serif" font-size="11.5" font-weight="800" fill="#4a5468" text-anchor="start" xml:space="preserve">Ce qu'il fait</text>
+<text x="28" y="212" font-family="Inter, sans-serif" font-size="12" font-weight="400" fill="#1c2333" text-anchor="start" xml:space="preserve">Remplace le marqueur par la</text>
+<text x="28" y="228" font-family="Inter, sans-serif" font-size="12" font-weight="400" fill="#1c2333" text-anchor="start" xml:space="preserve">valeur (échappée) ; sinon le</text>
+<text x="28" y="244" font-family="Inter, sans-serif" font-size="12" font-weight="400" fill="#1c2333" text-anchor="start" xml:space="preserve">texte de repli.</text>
+<text x="28" y="280" font-family="Inter, sans-serif" font-size="11.5" font-weight="800" fill="#4a5468" text-anchor="start" xml:space="preserve">Pourquoi</text>
+<text x="28" y="298" font-family="Inter, sans-serif" font-size="12" font-weight="400" fill="#1c2333" text-anchor="start" xml:space="preserve">Bon titre et bonne description</text>
+<text x="28" y="314" font-family="Inter, sans-serif" font-size="12" font-weight="400" fill="#1c2333" text-anchor="start" xml:space="preserve">avant tout JavaScript : moteurs</text>
+<text x="28" y="330" font-family="Inter, sans-serif" font-size="12" font-weight="400" fill="#1c2333" text-anchor="start" xml:space="preserve">de recherche, aperçus de liens.</text>
+<rect x="277" y="56" width="246" height="350" rx="12" fill="#fff" stroke="#c5cbd8" stroke-width="1.2"/>
+<path d="M277,90 L277,68 Q277,56 289,56 L511,56 Q523,56 523,68 L523,90 Z" fill="#ebfbee"/>
+<text x="400.0" y="78" font-family="Inter, sans-serif" font-size="12.5" font-weight="800" fill="#2b8a3e" text-anchor="middle" xml:space="preserve">② Navigateur, au chargement</text>
+<text x="289" y="106" font-family="Inter, sans-serif" font-size="11.5" font-weight="800" fill="#4a5468" text-anchor="start" xml:space="preserve">Syntaxe</text>
+<rect x="287" y="114" width="226" height="50" rx="8" fill="#f1f3f9" stroke="#c5cbd8" stroke-width="1.2"/>
+<text x="295" y="134" font-family="JetBrains Mono, Consolas, monospace" font-size="11" font-weight="400" fill="#1c2333" text-anchor="start" xml:space="preserve">&lt;b data-instance=</text>
+<text x="295" y="150" font-family="JetBrains Mono, Consolas, monospace" font-size="11" font-weight="400" fill="#1c2333" text-anchor="start" xml:space="preserve">"brand.monogram"&gt;IR&lt;/b&gt;</text>
+<text x="289" y="194" font-family="Inter, sans-serif" font-size="11.5" font-weight="800" fill="#4a5468" text-anchor="start" xml:space="preserve">Ce qu'il fait</text>
+<text x="289" y="212" font-family="Inter, sans-serif" font-size="12" font-weight="400" fill="#1c2333" text-anchor="start" xml:space="preserve">Écrit la valeur dans l'élément :</text>
+<text x="289" y="228" font-family="Inter, sans-serif" font-size="12" font-weight="400" fill="#1c2333" text-anchor="start" xml:space="preserve">texte, ou attribut avec data-</text>
+<text x="289" y="244" font-family="Inter, sans-serif" font-size="12" font-weight="400" fill="#1c2333" text-anchor="start" xml:space="preserve">instance-attr.</text>
+<text x="289" y="280" font-family="Inter, sans-serif" font-size="11.5" font-weight="800" fill="#4a5468" text-anchor="start" xml:space="preserve">Pourquoi</text>
+<text x="289" y="298" font-family="Inter, sans-serif" font-size="12" font-weight="400" fill="#1c2333" text-anchor="start" xml:space="preserve">Logo, nom, pied de page, menu :</text>
+<text x="289" y="314" font-family="Inter, sans-serif" font-size="12" font-weight="400" fill="#1c2333" text-anchor="start" xml:space="preserve">tout ce qui est dans la page mais</text>
+<text x="289" y="330" font-family="Inter, sans-serif" font-size="12" font-weight="400" fill="#1c2333" text-anchor="start" xml:space="preserve">pas dans une phrase.</text>
+<rect x="538" y="56" width="246" height="350" rx="12" fill="#fff" stroke="#c5cbd8" stroke-width="1.2"/>
+<path d="M538,90 L538,68 Q538,56 550,56 L772,56 Q784,56 784,68 L784,90 Z" fill="#f3f0ff"/>
+<text x="661.0" y="78" font-family="Inter, sans-serif" font-size="12.5" font-weight="800" fill="#7048e8" text-anchor="middle" xml:space="preserve">③ Navigateur, dans les textes</text>
+<text x="550" y="106" font-family="Inter, sans-serif" font-size="11.5" font-weight="800" fill="#4a5468" text-anchor="start" xml:space="preserve">Syntaxe</text>
+<rect x="548" y="114" width="226" height="50" rx="8" fill="#f1f3f9" stroke="#c5cbd8" stroke-width="1.2"/>
+<text x="556" y="134" font-family="JetBrains Mono, Consolas, monospace" font-size="11" font-weight="400" fill="#1c2333" text-anchor="start" xml:space="preserve">« Explorez les</text>
+<text x="556" y="150" font-family="JetBrains Mono, Consolas, monospace" font-size="11" font-weight="400" fill="#1c2333" text-anchor="start" xml:space="preserve">{specimenPlural} »</text>
+<text x="550" y="194" font-family="Inter, sans-serif" font-size="11.5" font-weight="800" fill="#4a5468" text-anchor="start" xml:space="preserve">Ce qu'il fait</text>
+<text x="550" y="212" font-family="Inter, sans-serif" font-size="12" font-weight="400" fill="#1c2333" text-anchor="start" xml:space="preserve">I18n.t() remplace chaque {jeton}</text>
+<text x="550" y="228" font-family="Inter, sans-serif" font-size="12" font-weight="400" fill="#1c2333" text-anchor="start" xml:space="preserve">par la valeur de l'instance, dans</text>
+<text x="550" y="244" font-family="Inter, sans-serif" font-size="12" font-weight="400" fill="#1c2333" text-anchor="start" xml:space="preserve">la langue du visiteur.</text>
+<text x="550" y="280" font-family="Inter, sans-serif" font-size="11.5" font-weight="800" fill="#4a5468" text-anchor="start" xml:space="preserve">Pourquoi</text>
+<text x="550" y="298" font-family="Inter, sans-serif" font-size="12" font-weight="400" fill="#1c2333" text-anchor="start" xml:space="preserve">Les fichiers de langue restent</text>
+<text x="550" y="314" font-family="Inter, sans-serif" font-size="12" font-weight="400" fill="#1c2333" text-anchor="start" xml:space="preserve">neutres : aucun « embryon » écrit</text>
+<text x="550" y="330" font-family="Inter, sans-serif" font-size="12" font-weight="400" fill="#1c2333" text-anchor="start" xml:space="preserve">en dur.</text>
+<text x="400" y="432" font-family="Inter, sans-serif" font-size="13" font-weight="800" fill="#4a5468" text-anchor="middle" xml:space="preserve">Le même fichier alimente les trois : ils ne peuvent pas se contredire.</text>
+</svg>

@@ -17,7 +17,7 @@ Dit ce qu'il y a sur la page : un titre, un bouton, une zone de dessin. Un fichi
 :::
 ::: card
 #### CSS : les vêtements
-Dit à quoi ça ressemble : couleurs, tailles, thème clair ou sombre. 16 feuilles de style.
+Dit à quoi ça ressemble : couleurs, tailles, thème clair ou sombre. 15 feuilles de style (plus le thème généré par l'administrateur).
 :::
 ::: card
 #### JavaScript : les muscles
@@ -87,13 +87,14 @@ Le même serveur existe **en deux langages**, avec la même interface vers le na
 #### Python : `dev_server.py`
 - recommandé, port 8080 ;
 - bibliothèque standard seulement : rien à installer ;
-- c'est lui qui sait se mettre à jour en un bloc, avec retour arrière automatique.
+- il se met à jour en un bloc : échange vérifié par une sonde de santé, avec **retour arrière automatique** si la nouvelle version ne démarre pas.
 :::
 ::: col
 #### PHP : dossier `api/`
 - pour les hébergements classiques d'université ou d'institut, qui offrent PHP mais pas Python ;
 - mêmes fichiers, mêmes formats, même mot de passe : un import commencé sous l'un reprend sous l'autre ;
-- PHP 8.1 ou plus.
+- PHP 8.1 ou plus ;
+- il sait aussi se mettre à jour (en une seule requête, avec vérification SHA-256 et signature, sans redémarrage), mais **sans retour arrière automatique** : une mise à jour ratée se relance simplement (chapitre 18).
 :::
 ::::
 
@@ -182,5 +183,5 @@ Si la qualité demandée dépasse le budget, la plateforme choisit le niveau plu
 ![Le projet vu de haut : visiteur, serveur, préparation, qualité.](img/ch02/arbo.svg){width=100%}
 
 ::: see
-Les dossiers `DATA_WEB/` (données publiées) et `uploads/` (imports en attente) sont décrits au chapitre 7 et au chapitre 13. Les règles qui empêchent de les atteindre depuis une adresse web sont au chapitre 14.
+Les dossiers `DATA_WEB/` (données publiées) et `uploads/` (imports en attente) sont décrits au chapitre 7 et au chapitre 17. Les règles qui empêchent de les atteindre depuis une adresse web sont au chapitre 19.
 :::

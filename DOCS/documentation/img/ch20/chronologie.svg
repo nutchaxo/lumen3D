@@ -1,0 +1,73 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 440" font-family="Inter, sans-serif">
+<defs><marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#4a5468"/></marker></defs>
+<rect width="800" height="440" rx="16" fill="#f8f9fd"/>
+<text x="400" y="32" text-anchor="middle" font-size="18" font-weight="800" fill="#1c2333">Les grandes étapes de la plateforme et du pipeline</text>
+<text x="30" y="62" font-size="13" font-weight="800" fill="#3b5bdb">Plateforme web</text>
+<line x1="64" y1="150" x2="746" y2="150" stroke="#3b5bdb" stroke-width="3"/>
+<circle cx="84.0" cy="150" r="8" fill="#3b5bdb"/>
+<text x="84.0" y="134" text-anchor="middle" font-size="14" font-weight="800" fill="#3b5bdb">1.5</text>
+<text x="84.0" y="104" text-anchor="middle" font-size="11.5" fill="#1c2333">mise à jour sûre,</text>
+<text x="84.0" y="118" text-anchor="middle" font-size="11.5" fill="#1c2333">1re version publique</text>
+<circle cx="154.22222222222223" cy="150" r="8" fill="#3b5bdb"/>
+<text x="154.22222222222223" y="178" text-anchor="middle" font-size="14" font-weight="800" fill="#3b5bdb">1.7</text>
+<text x="154.22222222222223" y="194" text-anchor="middle" font-size="11.5" fill="#1c2333">versions signées</text>
+<text x="154.22222222222223" y="208" text-anchor="middle" font-size="11.5" fill="#1c2333">(Ed25519)</text>
+<circle cx="224.44444444444446" cy="150" r="8" fill="#3b5bdb"/>
+<text x="224.44444444444446" y="134" text-anchor="middle" font-size="14" font-weight="800" fill="#3b5bdb">1.12</text>
+<text x="224.44444444444446" y="104" text-anchor="middle" font-size="11.5" fill="#1c2333">marque blanche,</text>
+<text x="224.44444444444446" y="118" text-anchor="middle" font-size="11.5" fill="#1c2333">catalogue de plugins</text>
+<circle cx="294.66666666666663" cy="150" r="8" fill="#3b5bdb"/>
+<text x="294.66666666666663" y="178" text-anchor="middle" font-size="14" font-weight="800" fill="#3b5bdb">1.31</text>
+<text x="294.66666666666663" y="194" text-anchor="middle" font-size="11.5" fill="#1c2333">le suivi cellulaire</text>
+<text x="294.66666666666663" y="208" text-anchor="middle" font-size="11.5" fill="#1c2333">est dessiné</text>
+<circle cx="364.8888888888889" cy="150" r="8" fill="#3b5bdb"/>
+<text x="364.8888888888889" y="134" text-anchor="middle" font-size="14" font-weight="800" fill="#3b5bdb">1.43</text>
+<text x="364.8888888888889" y="104" text-anchor="middle" font-size="11.5" fill="#1c2333">import dans</text>
+<text x="364.8888888888889" y="118" text-anchor="middle" font-size="11.5" fill="#1c2333">le navigateur</text>
+<circle cx="435.1111111111111" cy="150" r="8" fill="#3b5bdb"/>
+<text x="435.1111111111111" y="178" text-anchor="middle" font-size="14" font-weight="800" fill="#3b5bdb">1.47</text>
+<text x="435.1111111111111" y="194" text-anchor="middle" font-size="11.5" fill="#1c2333">photographies 2D</text>
+<circle cx="505.3333333333333" cy="150" r="8" fill="#3b5bdb"/>
+<text x="505.3333333333333" y="134" text-anchor="middle" font-size="14" font-weight="800" fill="#3b5bdb">1.51</text>
+<text x="505.3333333333333" y="118" text-anchor="middle" font-size="11.5" fill="#1c2333">types 3d · 2d · live</text>
+<circle cx="575.5555555555555" cy="150" r="8" fill="#3b5bdb"/>
+<text x="575.5555555555555" y="178" text-anchor="middle" font-size="14" font-weight="800" fill="#3b5bdb">1.57</text>
+<text x="575.5555555555555" y="194" text-anchor="middle" font-size="11.5" fill="#1c2333">budget mémoire,</text>
+<text x="575.5555555555555" y="208" text-anchor="middle" font-size="11.5" fill="#1c2333">streaming réécrit</text>
+<circle cx="645.7777777777778" cy="150" r="8" fill="#3b5bdb"/>
+<text x="645.7777777777778" y="134" text-anchor="middle" font-size="14" font-weight="800" fill="#3b5bdb">1.58</text>
+<text x="645.7777777777778" y="104" text-anchor="middle" font-size="11.5" fill="#1c2333">mises à jour</text>
+<text x="645.7777777777778" y="118" text-anchor="middle" font-size="11.5" fill="#1c2333">des données</text>
+<circle cx="716.0" cy="150" r="8" fill="#3b5bdb"/>
+<text x="716.0" y="178" text-anchor="middle" font-size="14" font-weight="800" fill="#3b5bdb">1.59</text>
+<text x="716.0" y="194" text-anchor="middle" font-size="11.5" fill="#1c2333">formats 3 et 4</text>
+<text x="30" y="262" font-size="13" font-weight="800" fill="#2b8a3e">Pipeline de préparation</text>
+<line x1="64" y1="340" x2="746" y2="340" stroke="#2b8a3e" stroke-width="3"/>
+<circle cx="84.0" cy="340" r="8" fill="#2b8a3e"/>
+<text x="84.0" y="324" text-anchor="middle" font-size="14" font-weight="800" fill="#2b8a3e">0.12</text>
+<text x="84.0" y="294" text-anchor="middle" font-size="11.5" fill="#1c2333">fond par percentile</text>
+<text x="84.0" y="308" text-anchor="middle" font-size="11.5" fill="#1c2333">des coins</text>
+<circle cx="189.33333333333331" cy="340" r="8" fill="#2b8a3e"/>
+<text x="189.33333333333331" y="368" text-anchor="middle" font-size="14" font-weight="800" fill="#2b8a3e">0.15</text>
+<text x="189.33333333333331" y="384" text-anchor="middle" font-size="11.5" fill="#1c2333">séries 4D</text>
+<circle cx="294.66666666666663" cy="340" r="8" fill="#2b8a3e"/>
+<text x="294.66666666666663" y="324" text-anchor="middle" font-size="14" font-weight="800" fill="#2b8a3e">0.16</text>
+<text x="294.66666666666663" y="294" text-anchor="middle" font-size="11.5" fill="#1c2333">suivi cellulaire</text>
+<text x="294.66666666666663" y="308" text-anchor="middle" font-size="11.5" fill="#1c2333">automatique</text>
+<circle cx="400.0" cy="340" r="8" fill="#2b8a3e"/>
+<text x="400.0" y="368" text-anchor="middle" font-size="14" font-weight="800" fill="#2b8a3e">0.17</text>
+<text x="400.0" y="384" text-anchor="middle" font-size="11.5" fill="#1c2333">importeur de</text>
+<text x="400.0" y="398" text-anchor="middle" font-size="11.5" fill="#1c2333">photographies</text>
+<circle cx="505.3333333333333" cy="340" r="8" fill="#2b8a3e"/>
+<text x="505.3333333333333" y="324" text-anchor="middle" font-size="14" font-weight="800" fill="#2b8a3e">0.19</text>
+<text x="505.3333333333333" y="294" text-anchor="middle" font-size="11.5" fill="#1c2333">publication</text>
+<text x="505.3333333333333" y="308" text-anchor="middle" font-size="11.5" fill="#1c2333">tout ou rien</text>
+<circle cx="610.6666666666666" cy="340" r="8" fill="#2b8a3e"/>
+<text x="610.6666666666666" y="368" text-anchor="middle" font-size="14" font-weight="800" fill="#2b8a3e">0.20</text>
+<text x="610.6666666666666" y="384" text-anchor="middle" font-size="11.5" fill="#1c2333">plans XY (format 2)</text>
+<circle cx="716.0" cy="340" r="8" fill="#2b8a3e"/>
+<text x="716.0" y="324" text-anchor="middle" font-size="14" font-weight="800" fill="#2b8a3e">0.21</text>
+<text x="716.0" y="294" text-anchor="middle" font-size="11.5" fill="#1c2333">format 4</text>
+<text x="716.0" y="308" text-anchor="middle" font-size="11.5" fill="#1c2333">directement</text>
+<text x="400" y="426" text-anchor="middle" font-size="12.5" font-weight="700" fill="#1c2333">aujourd'hui : web 1.59.3 · pipeline 0.21.0</text>
+</svg>

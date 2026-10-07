@@ -176,7 +176,7 @@ Comment la fenêtre unique est-elle mesurée ?
 Dans une série éparse, le signal ne couvre que ~0,4 % des voxels : le 99,9e percentile du volume entier tomberait **dans le fond** et ferait saturer 15 % du vrai signal. En ne classant que les voxels au-dessus du fond, la part saturée tombe à environ 0,06 % (mesures du journal de version 0.15.0).
 :::
 
-Le photoblanchiment est **mesuré, jamais effacé** : le pipeline enregistre un niveau de signal par image et par canal (99,9e percentile du brut) dans `metadata.json`. Le viewer peut proposer une compensation facultative et réversible.
+Le photoblanchiment est **mesuré, jamais effacé** : le pipeline enregistre un niveau de signal par image et par canal (99,9e percentile du brut) dans `metadata.json`. Aucun réglage du viewer n'utilise encore ces niveaux : une série qui s'éteint s'affiche donc réellement plus sombre, et rien ne la « rattrape » à l'écran.
 
 ## 5.10 Gros volumes : par tuiles, sans changer le résultat
 

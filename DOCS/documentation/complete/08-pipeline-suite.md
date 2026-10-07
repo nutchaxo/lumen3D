@@ -60,7 +60,11 @@ C'est le seul endroit où sont écrits les faits sur un jeu de données ; le cat
 | `volumeSources` | où le viewer trouve les briques |
 
 ::: note
-Pour une série temporelle (`live`), le fichier contient aussi `timeline` (nombre d'images, intervalle, horodatages) et `intensityNormalization` (la fenêtre de normalisation commune à toute la série, et un niveau de signal par image pour mesurer le photoblanchiment).
+Pour une série temporelle (`live`), le fichier contient aussi `timeline` (nombre d'images, intervalle, horodatages) et `intensityNormalization` (la fenêtre de normalisation commune à toute la série, et un niveau de signal par image pour mesurer le photoblanchiment ; le viewer ne l'exploite pas encore, voir chapitre 5).
+:::
+
+::: note
+Le pipeline écrit **tous** les canaux du fichier d'origine ; le viewer, lui, n'en **affiche que les quatre premiers** (limite de la texture graphique RGBA, chapitre 11).
 :::
 
 ### Stade et embryon, lus dans le nom du fichier

@@ -1,0 +1,45 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 430" font-family="Inter, sans-serif">
+<defs><marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#4a5468"/></marker><marker id="arrr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#c92a2a"/></marker></defs>
+<rect width="800" height="430" rx="16" fill="#f8f9fd"/>
+<text x="400" y="32" text-anchor="middle" font-size="18" font-weight="800" fill="#1c2333">Perte du contexte graphique : une reprise, avec garde-fou</text>
+<rect x="24" y="54" width="224" height="100" rx="12" fill="#fff0f0" stroke="#c92a2a" stroke-width="1.6"/>
+<text x="136.0" y="80" text-anchor="middle" font-size="14" font-weight="800" fill="#c92a2a">1 · Le GPU est réinitialisé</text>
+<text x="136.0" y="100" text-anchor="middle" font-size="12.5" fill="#1c2333">textures libérées, flux arrêtés,</text>
+<text x="136.0" y="118" text-anchor="middle" font-size="12.5" fill="#1c2333">budget mémoire ÷ 2</text>
+<text x="136.0" y="136" text-anchor="middle" font-size="12.5" fill="#1c2333">(plancher 256 Mo)</text>
+<rect x="288" y="54" width="224" height="100" rx="12" fill="#fff4e6" stroke="#e67700" stroke-width="1.6"/>
+<text x="400.0" y="80" text-anchor="middle" font-size="14" font-weight="800" fill="#e67700">2 · Le navigateur rend la main</text>
+<text x="400.0" y="100" text-anchor="middle" font-size="12.5" fill="#1c2333">le dernier affichage est rechargé</text>
+<text x="400.0" y="118" text-anchor="middle" font-size="12.5" fill="#1c2333">avec le budget réduit</text>
+<rect x="552" y="54" width="224" height="100" rx="12" fill="#ebfbee" stroke="#2b8a3e" stroke-width="1.6"/>
+<text x="664.0" y="80" text-anchor="middle" font-size="14" font-weight="800" fill="#2b8a3e">3 · Le volume revient</text>
+<text x="664.0" y="100" text-anchor="middle" font-size="12.5" fill="#1c2333">souvent à un niveau plus grossier,</text>
+<text x="664.0" y="118" text-anchor="middle" font-size="12.5" fill="#1c2333">que vous pouvez relever ensuite</text>
+<line x1="250" y1="104" x2="286" y2="104" stroke="#4a5468" stroke-width="2.2" marker-end="url(#arr)"/>
+<line x1="514" y1="104" x2="550" y2="104" stroke="#4a5468" stroke-width="2.2" marker-end="url(#arr)"/>
+<text x="400" y="190" text-anchor="middle" font-size="14" font-weight="800" fill="#1c2333">Garde-fou : 3 pertes en moins de 120 s</text>
+<line x1="70" y1="250" x2="730" y2="250" stroke="#4a5468" stroke-width="2.4"/>
+<line x1="70.0" y1="245" x2="70.0" y2="255" stroke="#4a5468" stroke-width="2"/>
+<text x="70.0" y="274" text-anchor="middle" font-size="12" fill="#4a5468">0</text>
+<line x1="235.0" y1="245" x2="235.0" y2="255" stroke="#4a5468" stroke-width="2"/>
+<text x="235.0" y="274" text-anchor="middle" font-size="12" fill="#4a5468">30</text>
+<line x1="400.0" y1="245" x2="400.0" y2="255" stroke="#4a5468" stroke-width="2"/>
+<text x="400.0" y="274" text-anchor="middle" font-size="12" fill="#4a5468">60</text>
+<line x1="565.0" y1="245" x2="565.0" y2="255" stroke="#4a5468" stroke-width="2"/>
+<text x="565.0" y="274" text-anchor="middle" font-size="12" fill="#4a5468">90</text>
+<line x1="730.0" y1="245" x2="730.0" y2="255" stroke="#4a5468" stroke-width="2"/>
+<text x="730.0" y="274" text-anchor="middle" font-size="12" fill="#4a5468">120</text>
+<text x="742" y="274" text-anchor="start" font-size="12" fill="#4a5468">secondes</text>
+<circle cx="114.0" cy="250" r="9" fill="#c92a2a"/>
+<text x="114.0" y="232" text-anchor="middle" font-size="12" font-weight="700" fill="#c92a2a">perte</text>
+<circle cx="350.5" cy="250" r="9" fill="#c92a2a"/>
+<text x="350.5" y="232" text-anchor="middle" font-size="12" font-weight="700" fill="#c92a2a">perte</text>
+<circle cx="642.0" cy="250" r="9" fill="#c92a2a"/>
+<text x="642.0" y="232" text-anchor="middle" font-size="12" font-weight="700" fill="#c92a2a">perte</text>
+<line x1="642.0" y1="264" x2="560" y2="296" stroke="#c92a2a" stroke-width="2.2" marker-end="url(#arrr)"/>
+<rect x="200" y="296" width="560" height="80" rx="12" fill="#fff0f0" stroke="#c92a2a" stroke-width="1.6"/>
+<text x="480.0" y="322" text-anchor="middle" font-size="12.5" fill="#1c2333">Plus de rechargement automatique.</text>
+<text x="480.0" y="341" text-anchor="middle" font-size="12.5" fill="#1c2333">Message : choisissez une qualité plus basse</text>
+<text x="480.0" y="360" text-anchor="middle" font-size="12.5" fill="#1c2333">ou rechargez la page.</text>
+<text x="400" y="404" text-anchor="middle" font-size="12" fill="#4a5468">Le budget est retenu une semaine par navigateur (jusqu'à 4 pertes comptées) : 4 Gio → 2 → 1 → 0,5 → 0,25 Gio</text>
+</svg>

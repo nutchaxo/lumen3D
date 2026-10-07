@@ -225,7 +225,7 @@ Jeu E9.5 : 768 × 576 × 112 voxels de 1,2 × 1,2 × 3,0 µm.
 - Le plus grand côté (X) vaut 1 ; le cube mesure donc **1 × 0,75 × 0,365** (336 / 921,6).
 :::
 
-Le viewer classe la calibration en trois états : **exacte** (tailles de voxel et épaisseur de coupe connues), **estimée**, ou **absente**. Sans calibration, la **barre d'échelle** 3D est cachée plutôt que fausse.
+Le viewer classe la calibration en trois états : **exacte** (tailles de voxel et épaisseur de coupe connues), **estimée**, ou **absente**. Sans calibration, la **barre d'échelle** 3D est cachée plutôt que fausse. Ce statut est **recalculé par le viewer** à partir des métadonnées reçues (« exacte » seulement si une épaisseur de coupe est connue) ; le pipeline, lui, n'écrit que `exact` ou `metadata-missing` (chapitre 8).
 
 Dans le panneau [Échelle Physique]{.ui}, le curseur [Surcharge Z]{.ui} (de ×0,25 à ×2,0) étire seulement l'**affichage** en Z pour mieux voir les couches fines ; le bouton [1:1]{.ui} le remet à zéro. Les mesures en µm ignorent cet étirement.
 

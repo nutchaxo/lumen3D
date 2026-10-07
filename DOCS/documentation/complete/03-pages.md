@@ -13,7 +13,7 @@
 Toutes les pages publiques partagent la même barre du haut : le logo, les quatre liens, puis trois boutons à droite : **langue**, **filtre pour daltoniens** et **thème clair/sombre**.
 
 ::: note
-Les captures de ce document sont en français et en thème sombre. Le nom du site (« IRIBHM — ULB »), les couleurs et même les textes de l'accueil sont ceux de l'instance photographiée : une autre institution peut les avoir changés (chapitre 14).
+Les captures de ce document sont en français et en thème sombre. Le nom du site (« IRIBHM — ULB »), les couleurs et même les textes de l'accueil sont ceux de l'instance photographiée : une autre institution peut les avoir changés (chapitre 16).
 :::
 
 ## 3.2 L'Accueil {.page}
@@ -152,7 +152,7 @@ Jusqu'à **quatre panneaux** côte à côte. Chaque panneau est un **vrai viewer
 
 ## 3.8 À propos et Mentions légales
 
-**À propos** présente le projet. Son contenu par défaut est une page modifiable par l'administrateur (éditeur de pages, chapitre 14). **Mentions légales** affiche le texte juridique saisi dans l'onglet [Mentions légales]{.ui} ; le lien du pied de page n'apparaît que s'il est activé.
+**À propos** présente le projet. Son contenu par défaut est une page modifiable par l'administrateur (éditeur de pages, chapitre 16). **Mentions légales** affiche le texte juridique saisi dans l'onglet [Mentions légales]{.ui} ; le lien du pied de page n'apparaît que s'il est activé.
 
 ![La page À propos.](img/ch03/a-propos.png){.shot width=80%}
 

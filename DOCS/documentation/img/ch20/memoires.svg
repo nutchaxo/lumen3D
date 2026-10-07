@@ -1,0 +1,40 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 400" font-family="Inter, sans-serif">
+<defs><marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#4a5468"/></marker></defs>
+<rect width="800" height="400" rx="16" fill="#f8f9fd"/>
+<text x="400" y="32" text-anchor="middle" font-size="18" font-weight="800" fill="#1c2333">Où vit chaque mémoire ? Quatre endroits</text>
+<rect x="24" y="56" width="178" height="276" rx="12" fill="#e8edff" stroke="#3b5bdb" stroke-width="1.6"/>
+<text x="113" y="86" text-anchor="middle" font-size="15" font-weight="800" fill="#3b5bdb">Ce navigateur</text>
+<text x="113" y="106" text-anchor="middle" font-size="12" fill="#4a5468" font-family="monospace">localStorage</text>
+<text x="36" y="140" font-size="11.5" fill="#1c2333">• thème, langue, daltonisme</text>
+<text x="36" y="170" font-size="11.5" fill="#1c2333">• espaces de travail</text>
+<text x="36" y="200" font-size="11.5" fill="#1c2333">• échelle Z, vitesse</text>
+<text x="36" y="230" font-size="11.5" fill="#1c2333">• budget mémoire graphique</text>
+<text x="36" y="260" font-size="11.5" fill="#1c2333">• réglages de l'admin</text>
+<rect x="38" y="298" width="150" height="24" rx="12" fill="#fff" stroke="#3b5bdb"/>
+<text x="113" y="315" text-anchor="middle" font-size="11.5" font-weight="700" fill="#3b5bdb">reste après fermeture</text>
+<rect x="214" y="56" width="178" height="276" rx="12" fill="#e3fafc" stroke="#0c8599" stroke-width="1.6"/>
+<text x="303" y="86" text-anchor="middle" font-size="15" font-weight="800" fill="#0c8599">Cet onglet</text>
+<text x="303" y="106" text-anchor="middle" font-size="12" fill="#4a5468" font-family="monospace">sessionStorage</text>
+<text x="226" y="140" font-size="11.5" fill="#1c2333">• visite déjà comptée</text>
+<text x="226" y="170" font-size="11.5" fill="#1c2333">• vue déjà comptée</text>
+<text x="226" y="200" font-size="11.5" fill="#1c2333">• presse-papiers de widget</text>
+<rect x="228" y="298" width="150" height="24" rx="12" fill="#fff" stroke="#0c8599"/>
+<text x="303" y="315" text-anchor="middle" font-size="11.5" font-weight="700" fill="#0c8599">s'efface à la fermeture</text>
+<rect x="404" y="56" width="178" height="276" rx="12" fill="#f3f0ff" stroke="#7048e8" stroke-width="1.6"/>
+<text x="493" y="86" text-anchor="middle" font-size="15" font-weight="800" fill="#7048e8">L'adresse</text>
+<text x="493" y="106" text-anchor="middle" font-size="12" fill="#4a5468" font-family="monospace">URL</text>
+<text x="416" y="140" font-size="11.5" fill="#1c2333">• ?id=  ?quality=  ?type=</text>
+<text x="416" y="170" font-size="11.5" fill="#1c2333">• ?slug=  ?add=  ?mode=</text>
+<text x="416" y="200" font-size="11.5" fill="#1c2333">• #state= : la vue complète</text>
+<rect x="418" y="298" width="150" height="24" rx="12" fill="#fff" stroke="#7048e8"/>
+<text x="493" y="315" text-anchor="middle" font-size="11.5" font-weight="700" fill="#7048e8">se copie, se partage</text>
+<rect x="594" y="56" width="178" height="276" rx="12" fill="#fff4e6" stroke="#e67700" stroke-width="1.6"/>
+<text x="683" y="86" text-anchor="middle" font-size="15" font-weight="800" fill="#e67700">Le serveur</text>
+<text x="683" y="106" text-anchor="middle" font-size="12" fill="#4a5468" font-family="monospace">cookie + fichiers</text>
+<text x="606" y="140" font-size="11.5" fill="#1c2333">• cookie de session (8 h)</text>
+<text x="606" y="170" font-size="11.5" fill="#1c2333">• config/, api/stats.json</text>
+<text x="606" y="200" font-size="11.5" fill="#1c2333">• DATA_WEB/, uploads/</text>
+<rect x="608" y="298" width="150" height="24" rx="12" fill="#fff" stroke="#e67700"/>
+<text x="683" y="315" text-anchor="middle" font-size="11.5" font-weight="700" fill="#e67700">commun à tous</text>
+<text x="400" y="378" text-anchor="middle" font-size="12.5" font-weight="700" fill="#1c2333">Un visiteur anonyme n'écrit rien sur le serveur, sauf trois compteurs anonymes.</text>
+</svg>

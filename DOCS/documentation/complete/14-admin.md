@@ -167,6 +167,10 @@ Depuis [Système › Mises à jour]{.ui}, un bouton lance la mise à jour. Ce qu
 :::
 
 - L'onglet affiche les **notes de version** de chaque version qui sera installée, et vérifie vos plugins avant : ceux qui seraient incompatibles sont mis de côté, puis réactivés plus tard.
+::: warning
+Ce filet de sécurité complet (bascule vérifiée par une sonde de santé, **retour automatique** à l'ancienne version) existe sur un serveur **Python**. Sur un hébergement **PHP**, la mise à jour se fait en une seule requête, avec la même vérification d'empreinte SHA-256 et de signature, mais **sans retour automatique** : les fichiers déjà copiés restent en place. → chapitre 18.
+:::
+
 - Il montre aussi la version du **pack Pipeline** (onglet [Pipeline]{.ui}) : c'est un autre logiciel, qui s'installe sur le poste de traitement, pas sur le serveur.
 
 ## 14.8 Personnaliser le site (marque blanche)

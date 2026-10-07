@@ -59,7 +59,9 @@ function makeLoader(world, { contentLength = true, hash = null } = {}) {
     navigator: { hardwareConcurrency: 2 },
     performance: { now: () => Date.now() },
     window: {},
-    crypto: globalThis.crypto,
+    // The loader runs in a vm context: its ArrayBuffers belong to another realm, which
+    // Node 20's webcrypto refuses. Hand subtle.digest a copy made in this realm.
+    crypto: { subtle: { digest: (alg, data) => globalThis.crypto.subtle.digest(alg, Uint8Array.from(new Uint8Array(data.buffer || data, data.byteOffset || 0, data.byteLength))) } },
     AbortController: globalThis.AbortController,
     DOMException: globalThis.DOMException,
     ReadableStream: globalThis.ReadableStream,

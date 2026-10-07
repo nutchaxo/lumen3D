@@ -44,6 +44,7 @@ function simulate({ ver, seconds = 70, latency = 0.25, failAt = [], clients = 8 
   })();
 }
 const out = {};
-out.v159_3 = await simulate({ ver: '1.59.3', failAt: [20, 22, 23] });
-out.v159_2 = await simulate({ ver: '1.59.2', failAt: [20, 22, 23] });
+out.v159_3 = await simulate({ ver: '1.59.3', seconds: 70, failAt: [20] });
+out.v159_2 = await simulate({ ver: '1.59.2', seconds: 70, failAt: [20] });
+out.v159_3_double = await simulate({ ver: '1.59.3', seconds: 90, failAt: [20, 23] });
 console.log(JSON.stringify(out));

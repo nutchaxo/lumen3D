@@ -300,7 +300,7 @@ def journal_import():
             b.append(T(x + wd / 2, y + 13, lab, 9.8, 600, P[col][0], "middle"))
             x += wd + 8
     b.append(T(40, 466, tr("un enregistrement n'est ajouté qu'APRÈS le fsync des octets ; queue tronquée ou CRC faux : ignoré (coûte un renvoi).", "a record is appended only AFTER the bytes are fsynced; torn tail or bad CRC: ignored (costs a resend)."), 11.2, 400, INK2, maxw=715))
-    b.append(T(400, 494, tr("Ajouter 16 octets coûte un millième de réécrire un journal de 20 000 fichiers : les 4 blocs parallèles ne s'attendent plus.", "Appending 16 bytes costs a fraction of rewriting a 20,000-file journal: the 4 parallel chunks no longer wait for each other."), 11.5, 700, INK, "middle", maxw=740))
+    b.append(T(400, 494, tr("Avant : réécrire tout le journal à chaque bloc coûtait 40 ms pour 20 000 fichiers ; maintenant : 16 octets ajoutés.", "Before: rewriting the whole journal for each chunk cost 40 ms for 20,000 files; now: 16 bytes appended."), 11.5, 700, INK, "middle", maxw=740))
     save("journal-import.svg", 512, b)
 
 
@@ -348,8 +348,8 @@ def publication():
                tr("Tout ou rien : le visiteur voit l'ancien jeu ou le nouveau, jamais un mélange.", "All or nothing: visitors see the old dataset or the new one, never a mix."))]
     steps = [
         ("blue", "1", tr("Valider", "Validate"), [tr("validate_dataset", "validate_dataset"), tr("sinon 409", "else 409"), "validation_failed"]),
-        ("violet", "2", tr("Reprendre les clés curées", "Carry the curated keys"), [tr("si le dossier existe déjà", "if the folder already exists"), tr("et overwrite = true", "and overwrite = true"), tr("(clés absentes du nouveau)", "(keys missing from the new one)")]),
-        ("amber", "3", tr("Échanger les dossiers", "Swap the folders"), [tr("ancien → .replaced-<jeu>-<date>", "old → .replaced-<set>-<date>"), tr("staging → DATA_WEB/…/<jeu>", "staging → DATA_WEB/…/<set>"), tr("(deux renommages)", "(two renames)")]),
+        ("violet", "2", tr("Clés curées", "Curated keys"), [tr("si le dossier existe déjà", "if the folder already exists"), tr("et overwrite = true", "and overwrite = true"), tr("(clés absentes du nouveau)", "(keys missing from the new one)")]),
+        ("amber", "3", tr("Échanger les dossiers", "Swap the folders"), [tr("ancien → .replaced-<jeu>-<date>", "old → .replaced-<set>-<date>"), tr("nouveau → DATA_WEB/<type>/", "new → DATA_WEB/<type>/"), tr("(deux renommages)", "(two renames)")]),
         ("green", "4", tr("Conclure", "Conclude"), [tr("galerie de l'ancien reprise", "old gallery carried over"), tr(".replaced supprimé", ".replaced deleted"), tr("journal supprimé", "journal deleted")]),
     ]
     w = 178

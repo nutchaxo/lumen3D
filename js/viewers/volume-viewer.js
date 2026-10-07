@@ -45,6 +45,11 @@ const VolumeViewer = (() => {
   // part of the volume in view, its mode ('auto' | 'on' | 'off'), the debounce timer,
   // the round counter and the status the page shows.
   let _roi = null;
+  // The detail atlas of the level held before the last level switch, unpublished but
+  // kept: zooming back to that level finds its bricks there instead of downloading them.
+  let _roiParked = null;
+  // The resident level's stored bricks, once per volume entry (content-depth probe).
+  const _roiBaseBricks = new WeakMap();
   let _roiMode = 'auto';
   // GPU-compressed display atlas: 'auto' compresses the atlases of a timelapse (where
   // the cache must hold many frames), 'on' every bricked volume, 'off' none. Kept for
@@ -57,8 +62,17 @@ const VolumeViewer = (() => {
   let _roiStatus = { mode: 'auto', active: false, level: null, baseLevel: null, inView: 0, resident: 0, loading: 0, loaded: 0, capacity: 0, pixelsPerVoxel: null, reason: 'idle', message: '' };
   const _roiListeners = new Set();
   // Tuning of the region-of-interest rounds (see _roiUpdate).
-  const ROI_DEBOUNCE_MS = 350;
-  const ROI_MAX_BYTES = 768 * 1024 * 1024;
+  const ROI_DEBOUNCE_MS = 300;
+  const ROI_MAX_BYTES = 384 * 1024 * 1024;
+  // One loader batch fetches at most this many bricks (most important first); the next
+  // batch is planned on the view as it is when this one ends. A batch is never cancelled
+  // by a camera move: what it downloads stays useful and nothing is fetched twice.
+  const ROI_BATCH_BRICKS = 24;
+  const ROI_NEXT_BATCH_MS = 16;
+  // The depth that decides the detail level: this quantile of the depths of the
+  // resident level's non-empty bricks in view (what the user looks at, nearer half
+  // weighted), not the bounding box's near face.
+  const ROI_CONTENT_DEPTH_QUANTILE = 0.35;
   const ROI_AUTO_MIN_BUDGET = 1024 * 1024 * 1024;
   const ROI_BUDGET_SHARE = 0.75;
   const ROI_MIN_SLOTS = 32;
@@ -2879,7 +2893,7 @@ const VolumeViewer = (() => {
     }
     const previous = _activeVolumeEntry;
     // Detail bricks belong to the volume they refine: another volume drops them.
-    if (_roi && _roi.entry !== entry) _roiTeardown('volume-changed');
+    if ((_roi && _roi.entry !== entry) || (_roiParked && _roiParked.entry !== entry)) _roiTeardown('volume-changed');
     if (entry.svrManager) {
       // The manager it replaces belongs to `previous`, released below unless cached.
       _svrManager = entry.svrManager;
@@ -7339,28 +7353,65 @@ const VolumeViewer = (() => {
     return '';
   }
 
-  function _roiSchedule(reason = 'camera') {
+  function _roiSchedule(reason = 'camera', delayMs = ROI_DEBOUNCE_MS) {
     if (_roiMode === 'off' && !_roi) return;
     if (!renderer) return;
     if (_roiTimer) clearTimeout(_roiTimer);
     _roiTimer = setTimeout(() => {
       _roiTimer = null;
       _roiUpdate().catch((err) => console.warn('[VolumeViewer] detail streaming failed:', err));
-    }, ROI_DEBOUNCE_MS);
+    }, delayMs);
+  }
+
+  /** Stop a detail atlas's loads (its running batch, the loader group 'roi'). */
+  function _roiStop(roi) {
+    if (!roi) return;
+    roi.stopped = true;
+    try { roi.controller?.abort(); } catch (e) { /* already aborted */ }
+    if (typeof BrickLoader !== 'undefined') BrickLoader.cancelGroup?.('roi');
   }
 
   function _roiTeardown(reason) {
     const roi = _roi;
+    const parked = _roiParked;
     _roi = null;
-    if (roi) {
-      roi.seq = -1;
-      try { roi.controller?.abort(); } catch (e) { /* already aborted */ }
-      if (typeof BrickLoader !== 'undefined') BrickLoader.cancelGroup?.('roi');
-      roi.mgr?.dispose?.();
+    _roiParked = null;
+    for (const r of [roi, parked]) {
+      if (!r) continue;
+      _roiStop(r);
+      r.mgr?.dispose?.();
     }
     if (material && typeof SVRManager !== 'undefined' && SVRManager.unpublishDetail) SVRManager.unpublishDetail(material);
     if (roi) _scheduleFrame();
-    if (roi || _roiStatus.active) _setRoiStatus({ active: false, level: null, inView: 0, resident: 0, loading: 0, loaded: 0, capacity: 0, reason });
+    if (roi || _roiStatus.active || _roiStatus.level !== null) _setRoiStatus({ active: false, level: null, inView: 0, wanted: 0, resident: 0, loading: 0, loaded: 0, capacity: 0, reason });
+  }
+
+  /** The detail atlas on screen goes aside (unpublished, bricks kept) for another level. */
+  function _roiPark() {
+    const roi = _roi;
+    if (!roi) return;
+    _roi = null;
+    _roiStop(roi);
+    roi.running = false;
+    if (_roiParked) _roiParked.mgr?.dispose?.();
+    _roiParked = roi;
+    if (material) SVRManager.unpublishDetail(material);
+    _scheduleFrame();
+  }
+
+  /** The detail atlas of level k for `entry`: the parked one when it is that level. */
+  function _roiActivate(entry, k, budget) {
+    const parked = _roiParked;
+    if (parked && parked.entry === entry && parked.level === k && parked.mgr?.isUsable?.()) {
+      _roiParked = null;
+      parked.stopped = false;
+      parked.controller = null;
+      parked.failed = new Set();
+      parked.mgr.updateUniforms();
+      return parked;
+    }
+    if (parked && parked.entry !== entry) { parked.mgr?.dispose?.(); _roiParked = null; }
+    return _roiCreate(entry, k, budget);
   }
 
   /** What the scheduler needs from the view: the focal length in device pixels, the
@@ -7388,7 +7439,7 @@ const VolumeViewer = (() => {
       const hit = ray.intersectBox(box, new THREE.Vector3()) || box.clampPoint(oLocal, new THREE.Vector3());
       distance = camPos.distanceTo(hit.applyMatrix4(cube.matrixWorld));
     }
-    return { focalPx, distance: Math.max(camera.near, distance), worldScale: { x: worldScale.x, y: worldScale.y, z: worldScale.z } };
+    return { focalPx, distance: Math.max(camera.near, distance), worldScale: { x: worldScale.x, y: worldScale.y, z: worldScale.z }, viewportW: size.x * _idlePixelRatio(), viewportH: size.y * _idlePixelRatio() };
   }
 
   /** Texture space (uvw) → world: the cube's world matrix after the inverse of the
@@ -7457,12 +7508,15 @@ const VolumeViewer = (() => {
       _setRoiStatus({ active: false, level: k, baseLevel: entry.lod, capacity: 0, reason: 'alloc-failed' });
       return null;
     }
-    return { entry, level: k, mgr, channels, dims, bricks: null, inFlight: new Set(), controller: null, seq: 0, loaded: 0 };
+    return { entry, level: k, mgr, channels, dims, bricks: null, inFlight: new Set(), failed: new Set(), controller: null, running: false, dirty: false, stopped: false, loaded: 0 };
   }
 
   /**
-   * One round: choose the level the view needs, rank its bricks in view, keep what is
-   * resident and wanted, load what is missing (one loader batch, group 'roi').
+   * One round: choose the level the view needs (from the depth of the content in view),
+   * rank its bricks in view where the resident level does not resolve them, keep what is
+   * resident and wanted, and fetch the next few missing ones (one short batch, byte
+   * ranges, group 'roi'). A camera move while a batch runs re-ranks (the LRU keeps what
+   * is wanted) and the next batch follows the new view; the running one is not cancelled.
    */
   async function _roiUpdate() {
     if (!renderer || !camera || !cube || !material || _contextLost) return;
@@ -7480,6 +7534,7 @@ const VolumeViewer = (() => {
     // A denoised channel is filtered in the dense texture only: raw detail bricks over it
     // would show another picture.
     if (_channelSigma.some(sigma => sigma > 0.05)) { _roiTeardown('denoise'); _setRoiStatus({ reason: 'denoise' }); return; }
+    if ((_roi && _roi.entry !== entry) || (_roiParked && _roiParked.entry !== entry)) _roiTeardown('volume-changed');
     if (BrickLoader.getManifest?.() !== entry.manifest) {
       // Another tree of the same dataset is mounted (a cached timepoint was shown):
       // mount this one; nothing running is cancelled by it.
@@ -7488,13 +7543,41 @@ const VolumeViewer = (() => {
     }
     const levels = (BrickLoader.getFormat?.()?.levels || []).filter(l => l && l.dims);
     const view = _roiViewGeometry();
-    const choice = SVRRoi.chooseDetailLevel({
-      levels: levels.map(l => ({ level: l.level, voxelWorld: Math.min(view.worldScale.x / l.dims.x, view.worldScale.y / l.dims.y) })),
-      baseLevel: entry.lod, focalPx: view.focalPx, distance: view.distance
-    });
+    const voxelWorldOf = (l) => Math.min(view.worldScale.x / l.dims.x, view.worldScale.y / l.dims.y);
+    const baseInfo = levels.find(l => l.level === entry.lod);
+    const texToWorld = _roiTextureToWorld();
+    const planes = _roiFrustumPlanes(texToWorld);
+    const project = _roiProjector(texToWorld);
+    const clip = _warpActive
+      ? { min: { x: 0, y: 0, z: 0 }, max: { x: 1, y: 1, z: 1 } }
+      : { min: { x: clipPlanes.xMin, y: clipPlanes.yMin, z: clipPlanes.zMin }, max: { x: clipPlanes.xMax, y: clipPlanes.yMax, z: clipPlanes.zMax } };
+
+    // The depth of what is seen: the resident level's non-empty bricks in view (few:
+    // it is the coarse level), their depth quantile. Nothing in view, no detail.
+    let baseBricks = _roiBaseBricks.get(entry);
+    if (!baseBricks) { baseBricks = BrickLoader.activeBricks(entry.lod) || []; _roiBaseBricks.set(entry, baseBricks); }
+    const baseDims = baseInfo ? baseInfo.dims : BrickLoader.getDimensions(entry.lod);
+    const baseVisible = baseDims ? SVRRoi.rankVisible({
+      bricks: baseBricks, dims: baseDims, planes, clipMin: clip.min, clipMax: clip.max,
+      worldScale: view.worldScale, project, near: camera.near, brickSize: VOLUME_BRICK_SIZE
+    }) : [];
+    const contentDepth = SVRRoi.depthQuantile(baseVisible.map(b => b.depth), ROI_CONTENT_DEPTH_QUANTILE);
+    const current = _roi ? _roi.level : null;
+    const choice = contentDepth === null
+      ? { level: null, basePixelsPerVoxel: 0 }
+      : SVRRoi.chooseDetailLevel({
+        levels: levels.map(l => ({ level: l.level, voxelWorld: voxelWorldOf(l) })),
+        baseLevel: entry.lod, focalPx: view.focalPx, distance: Math.max(camera.near, contentDepth), current
+      });
     if (choice.level === null) {
-      _roiTeardown('zoomed-out');
-      _setRoiStatus({ baseLevel: entry.lod, pixelsPerVoxel: choice.basePixelsPerVoxel, reason: 'zoomed-out' });
+      // Zoomed out: what is resident stays (finer is never wrong, and zooming back in
+      // finds it there); nothing more is fetched.
+      if (_roi) { _roiStop(_roi); _roi.running = false; }
+      _setRoiStatus({
+        active: false, level: _roi ? _roi.level : null, baseLevel: entry.lod, inView: 0, wanted: 0,
+        resident: _roi ? _roi.mgr.residentCount() : 0, loading: 0, loaded: 0,
+        pixelsPerVoxel: choice.basePixelsPerVoxel, reason: 'zoomed-out'
+      });
       return;
     }
     const budget = _gpuBudgetBytes();
@@ -7503,108 +7586,115 @@ const VolumeViewer = (() => {
       _setRoiStatus({ baseLevel: entry.lod, pixelsPerVoxel: choice.basePixelsPerVoxel, reason: 'budget-low' });
       return;
     }
+    if (_roi && _roi.level !== choice.level) _roiPark();
     let roi = _roi;
-    if (roi && (roi.level !== choice.level || roi.entry !== entry)) { _roiTeardown('level'); roi = null; }
     if (!roi) {
-      roi = _roiCreate(entry, choice.level, budget);
+      roi = _roiActivate(entry, choice.level, budget);
       if (!roi) return;
       _roi = roi;
+      _scheduleFrame();
     }
-    const seq = ++_roiSeq;
-    roi.seq = seq;
-    const texToWorld = _roiTextureToWorld();
+    roi.stopped = false;
     if (!roi.bricks) roi.bricks = BrickLoader.activeBricks(roi.level);
-    const clip = _warpActive
-      ? { min: { x: 0, y: 0, z: 0 }, max: { x: 1, y: 1, z: 1 } }
-      : { min: { x: clipPlanes.xMin, y: clipPlanes.yMin, z: clipPlanes.zMin }, max: { x: clipPlanes.xMax, y: clipPlanes.yMax, z: clipPlanes.zMax } };
+    // Detail is fetched only where the resident level does not resolve the view: up
+    // to the depth at which one of its voxels covers `threshold` pixels.
+    const baseVoxel = baseInfo ? voxelWorldOf(baseInfo) : 0;
+    const maxDepth = baseVoxel > 0 ? view.focalPx * baseVoxel / SVRRoi.DETAIL_PIXELS_PER_VOXEL : Infinity;
     const ranked = SVRRoi.rankVisible({
-      bricks: roi.bricks, dims: roi.dims, planes: _roiFrustumPlanes(texToWorld),
+      bricks: roi.bricks, dims: roi.dims, planes,
       clipMin: clip.min, clipMax: clip.max, worldScale: view.worldScale,
-      project: _roiProjector(texToWorld), near: camera.near, brickSize: VOLUME_BRICK_SIZE
-    });
+      project, near: camera.near, brickSize: VOLUME_BRICK_SIZE, maxDepth
+    }).filter(r => !roi.failed.has(r.key));
+    const detailInfo = levels.find(l => l.level === roi.level);
+    const wantCap = Math.min(roi.mgr.maxSlots, SVRRoi.wantedBricks({
+      viewportW: view.viewportW, viewportH: view.viewportH, focalPx: view.focalPx,
+      voxelWorld: detailInfo ? voxelWorldOf(detailInfo) : baseVoxel / 2, depth: Math.max(camera.near, contentDepth)
+    }));
     const keyXYZ = (key) => key.split('_').map(Number);
     const plan = SVRRoi.plan({
       ranked,
       isResident: (key) => { const [x, y, z] = keyXYZ(key); return roi.mgr.has(x, y, z); },
       inFlight: roi.inFlight,
-      capacity: roi.mgr.maxSlots,
+      capacity: wantCap,
       residentKeys: roi.mgr.residentKeys()
     });
     for (const key of plan.keep) { const [x, y, z] = keyXYZ(key); roi.mgr.touch(x, y, z); }
     roi.wanted = new Set(plan.want);
     const residentInView = () => { let n = 0; for (const key of roi.wanted) { const [x, y, z] = keyXYZ(key); if (roi.mgr.has(x, y, z)) n++; } return n; };
     const status = (extra = {}) => _setRoiStatus({
-      active: true, level: roi.level, baseLevel: entry.lod, inView: plan.inView, resident: residentInView(),
-      capacity: roi.mgr.maxSlots, pixelsPerVoxel: choice.basePixelsPerVoxel, ...extra
+      active: true, level: roi.level, baseLevel: entry.lod, inView: plan.inView, wanted: plan.want.length,
+      resident: residentInView(), capacity: roi.mgr.maxSlots, pixelsPerVoxel: choice.basePixelsPerVoxel, ...extra
     });
     _scheduleFrame();
-    // The running batch goes on when it fetches exactly bricks still wanted and nothing
-    // else is missing; otherwise it is replaced by one fetching every wanted brick not
-    // resident (what it had in flight included).
-    const wantSet = roi.wanted;
-    const stale = [...roi.inFlight].some(k => !wantSet.has(k));
-    if (!plan.load.length && !stale) {
-      if (!roi.inFlight.size) status({ loading: 0, loaded: 0, reason: 'ready' });
+    if (roi.running) {
+      // The running batch ends on its own; the next one is planned on this view.
+      roi.dirty = true;
+      status();
       return;
     }
-    const missing = ranked.slice(0, roi.mgr.maxSlots).filter(r => !roi.mgr.has(...keyXYZ(r.key)));
-    if (!missing.length) {
-      try { roi.controller?.abort(); } catch (e) { /* already aborted */ }
-      roi.inFlight = new Set();
-      status({ loading: 0, loaded: 0, reason: 'ready' });
-      return;
-    }
-    try { roi.controller?.abort(); } catch (e) { /* already aborted */ }
+    const batchList = plan.load.slice(0, ROI_BATCH_BRICKS);
+    if (!batchList.length) { status({ loading: 0, loaded: 0, reason: 'ready' }); return; }
+
     const controller = typeof AbortController === 'function' ? new AbortController() : null;
     roi.controller = controller;
-    roi.batchSeq = seq;
-    roi.inFlight = new Set(missing.map(b => b.key));
+    roi.running = true;
+    roi.dirty = false;
+    roi.inFlight = new Set(batchList.map(b => b.key));
+    const toLoad = plan.load.length;
     let loaded = 0;
-    status({ loading: missing.length, loaded: 0, reason: 'loading' });
-    const stopped = () => roi !== _roi || roi.batchSeq !== seq || _contextLost;
+    status({ loading: toLoad, loaded: 0, reason: 'loading' });
+    const stopped = () => roi !== _roi || roi.stopped || _contextLost;
     const tasks = [];
-    for (const b of missing) for (let c = 0; c < roi.channels; c++) tasks.push({ bx: b.bx, by: b.by, bz: b.bz, channel: c, lod: roi.level });
+    for (const b of batchList) for (let c = 0; c < roi.channels; c++) tasks.push({ bx: b.bx, by: b.by, bz: b.bz, channel: c, lod: roi.level });
     const bs = VOLUME_BRICK_SIZE;
     const stride = roi.mgr.slotStride;
     let lastStatusAt = 0;
-    const outcome = await BrickLoader.loadBrickTasks(tasks, {
-      manifest: entry.manifest,
-      group: 'roi',
-      streamOnly: true,
-      concurrency: ROI_CONCURRENCY,
-      signal: controller?.signal,
-      shouldAbort: stopped,
-      compose: { channels: roi.channels, luts: entry.floorLuts || [], components: roi.mgr.components, cropToVolume: true },
-      onBrickLoaded: (row) => {
-        if (roi !== _roi || !row?.data) return;
-        const r = row.region;
-        const bw = r ? r.x1 - r.x0 : (stride > bs ? stride : Math.min(bs, roi.dims.x - row.bx * bs));
-        const bh = r ? r.y1 - r.y0 : (stride > bs ? stride : Math.min(bs, roi.dims.y - row.by * bs));
-        const bd = r ? r.z1 - r.z0 : (stride > bs ? stride : Math.min(bs, roi.dims.z - row.bz * bs));
-        const key = `${row.bx}_${row.by}_${row.bz}`;
-        roi.inFlight.delete(key);
-        if (roi.mgr.writeRgbaBrick(row.bx, row.by, row.bz, row.data, bw, bh, bd)) loaded++;
-        _scheduleStreamRedraw();
-        const now = Date.now();
-        if (roi.batchSeq === seq && now - lastStatusAt > 200) { lastStatusAt = now; status({ loading: missing.length, loaded, reason: 'loading' }); }
-      },
-      onBrickError: ({ bx, by, bz } = {}) => { roi.inFlight.delete(`${bx}_${by}_${bz}`); }
-    }).catch((err) => {
+    let outcome;
+    try {
+      outcome = await BrickLoader.loadBrickTasks(tasks, {
+        manifest: entry.manifest,
+        group: 'roi',
+        streamOnly: true,
+        byteRanges: true,
+        concurrency: ROI_CONCURRENCY,
+        signal: controller?.signal,
+        shouldAbort: stopped,
+        compose: { channels: roi.channels, luts: entry.floorLuts || [], components: roi.mgr.components, cropToVolume: true },
+        onBrickLoaded: (row) => {
+          if (stopped() || !row?.data) return;
+          const r = row.region;
+          const bw = r ? r.x1 - r.x0 : (stride > bs ? stride : Math.min(bs, roi.dims.x - row.bx * bs));
+          const bh = r ? r.y1 - r.y0 : (stride > bs ? stride : Math.min(bs, roi.dims.y - row.by * bs));
+          const bd = r ? r.z1 - r.z0 : (stride > bs ? stride : Math.min(bs, roi.dims.z - row.bz * bs));
+          const key = `${row.bx}_${row.by}_${row.bz}`;
+          roi.inFlight.delete(key);
+          if (roi.mgr.writeRgbaBrick(row.bx, row.by, row.bz, row.data, bw, bh, bd)) loaded++;
+          _scheduleStreamRedraw();
+          const now = Date.now();
+          if (now - lastStatusAt > 200) { lastStatusAt = now; status({ loading: toLoad, loaded, reason: 'loading' }); }
+        },
+        onBrickError: ({ bx, by, bz } = {}) => { const key = `${bx}_${by}_${bz}`; roi.inFlight.delete(key); roi.failed.add(key); }
+      });
+    } catch (err) {
       // Another tree got mounted while this round waited (a timepoint prefetch's index):
       // these coordinates are not its bricks. The next round mounts the frame again.
-      if (err?.code === 'BRICKS_MOUNT_CHANGED') return { mountChanged: true };
-      throw err;
-    });
-    if (outcome?.mountChanged) {
-      if (roi === _roi && roi.batchSeq === seq) { roi.inFlight = new Set(); _roiSchedule('mount'); }
-      return;
+      roi.running = false;
+      roi.inFlight = new Set();
+      if (err?.code !== 'BRICKS_MOUNT_CHANGED') throw err;
+      outcome = { mountChanged: true };
     }
-    if (roi !== _roi) return;
-    roi.mgr.flushUploadErrors();
-    if (roi.batchSeq !== seq) return;
+    roi.running = false;
     roi.inFlight = new Set();
+    if (roi.mgr.isUsable?.()) roi.mgr.flushUploadErrors();
+    if (roi !== _roi || roi.stopped || _contextLost) return;
     _scheduleFrame();
-    status({ loading: 0, loaded, reason: 'ready' });
+    // Next batch at once while bricks are missing: the round re-plans on the view of
+    // now and reports 'ready' when nothing is left to fetch.
+    if (outcome?.mountChanged || roi.dirty || toLoad > batchList.length) {
+      _roiSchedule('next', outcome?.mountChanged ? ROI_DEBOUNCE_MS : ROI_NEXT_BATCH_MS);
+    } else {
+      status({ loading: 0, loaded, reason: 'ready' });
+    }
   }
 
   // ── WebGL context loss ──────────────────────────────────────────────────────

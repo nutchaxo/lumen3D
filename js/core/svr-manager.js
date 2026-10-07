@@ -1318,7 +1318,17 @@ const SVRRoi = {
   // A level is fine enough while one of its voxels covers at most this many screen
   // pixels; beyond it (the user zoomed past the resolution on screen) a finer level
   // is streamed for what is in view.
-  DETAIL_PIXELS_PER_VOXEL: 1.5,
+  DETAIL_PIXELS_PER_VOXEL: 2,
+  // A level once chosen is kept until the view leaves it by this factor either way
+  // (finer needed past threshold·H, coarser enough under threshold/H): a small zoom
+  // around the switch point never trades one detail atlas for another.
+  LEVEL_HYSTERESIS: 1.3,
+  // Detail bricks a view asks for: enough to cover the viewport LAYERS bricks deep at
+  // the chosen level, never fewer than MIN (a narrow view still gets its neighbours)
+  // nor more than MAX (a round's download stays a few tens of MB at most).
+  WANTED_LAYERS: 2,
+  WANTED_MIN: 48,
+  WANTED_MAX: 320,
 
   /** Focal length in pixels of a perspective camera: H / (2·tan(fov/2)). */
   focalPx(viewportHeightPx, fovDeg) {
@@ -1339,22 +1349,60 @@ const SVRRoi = {
    * Detail is needed when a base voxel covers more than `threshold` pixels; it is
    * then the COARSEST finer level whose voxel covers at most `threshold` pixels (the
    * fewest bytes that resolve the view), level 0 when none does.
+   * `distance` must be the depth of what is seen (depthQuantile of the content in
+   * view), not of the volume's bounding box: the box's near face is where the camera
+   * is when zoomed in, and measuring there asks for the finest level at once.
+   * `current` (the detail level held now, or null) gets the hysteresis: it stays while
+   * it is not too coarse by LEVEL_HYSTERESIS and the next coarser level (or the base,
+   * i.e. no detail) is not comfortably enough.
    * → { level: k | null, basePixelsPerVoxel, pixelsPerVoxel (of the chosen level) }
    */
-  chooseDetailLevel({ levels, baseLevel, focalPx, distance, threshold = SVRRoi.DETAIL_PIXELS_PER_VOXEL }) {
+  chooseDetailLevel({ levels, baseLevel, focalPx, distance, threshold = SVRRoi.DETAIL_PIXELS_PER_VOXEL, current = null, hysteresis = SVRRoi.LEVEL_HYSTERESIS }) {
     const byLevel = new Map((levels || []).map(l => [Number(l.level), Number(l.voxelWorld)]));
     const base = Number(baseLevel);
-    const basePpv = SVRRoi.pixelsPerVoxel(focalPx, byLevel.get(base), distance);
+    const ppvOf = (k) => SVRRoi.pixelsPerVoxel(focalPx, byLevel.get(k), distance);
+    const basePpv = ppvOf(base);
     const out = { level: null, basePixelsPerVoxel: basePpv, pixelsPerVoxel: basePpv };
-    if (!(base > 0) || !(basePpv > threshold)) return out;
+    if (!(base > 0)) return out;
+    const cur = current === null || current === undefined ? null : Number(current);
+    if (cur !== null && cur >= 0 && cur < base && byLevel.has(cur)) {
+      const h = Math.max(1, Number(hysteresis) || 1);
+      const curPpv = ppvOf(cur);
+      let coarser = cur + 1;
+      while (coarser < base && !byLevel.has(coarser)) coarser++;
+      const tooCoarse = cur > 0 && curPpv > threshold * h;
+      const coarserEnough = ppvOf(coarser) <= threshold / h;
+      if (!tooCoarse && !coarserEnough) return { ...out, level: cur, pixelsPerVoxel: curPpv };
+    }
+    if (!(basePpv > threshold)) return out;
     for (let k = base - 1; k >= 0; k--) {
       if (!byLevel.has(k)) continue;
-      const ppv = SVRRoi.pixelsPerVoxel(focalPx, byLevel.get(k), distance);
+      const ppv = ppvOf(k);
       out.level = k;
       out.pixelsPerVoxel = ppv;
       if (ppv <= threshold) break;
     }
     return out;
+  },
+
+  /** The q-quantile (0..1) of `values` (null when empty). */
+  depthQuantile(values, q = 0.5) {
+    const v = (values || []).filter(Number.isFinite).sort((a, b) => a - b);
+    if (!v.length) return null;
+    const i = Math.min(v.length - 1, Math.max(0, Math.round((v.length - 1) * q)));
+    return v[i];
+  },
+
+  /**
+   * How many detail bricks the view can use: the viewport covered LAYERS bricks deep
+   * by bricks of `brickSize` voxels of world length `voxelWorld` seen at `depth`
+   * (side on screen = brickSize · focalPx · voxelWorld / depth), within [MIN, MAX].
+   */
+  wantedBricks({ viewportW, viewportH, focalPx, voxelWorld, depth, brickSize = 64, layers = SVRRoi.WANTED_LAYERS, min = SVRRoi.WANTED_MIN, max = SVRRoi.WANTED_MAX }) {
+    const side = Math.max(1, brickSize * SVRRoi.pixelsPerVoxel(focalPx, voxelWorld, depth));
+    const across = Math.ceil(Math.max(1, Number(viewportW) || 1) / side) + 1;
+    const down = Math.ceil(Math.max(1, Number(viewportH) || 1) / side) + 1;
+    return Math.max(min, Math.min(max, across * down * Math.max(1, layers)));
   },
 
   /** Is the box [min, max] entirely outside one of `planes` ([nx, ny, nz, d], the
@@ -1382,8 +1430,11 @@ const SVRRoi = {
    * priority = (world diagonal of the brick / depth of its centre) / (1 + 4·r²), r the
    * NDC distance of its centre from the view centre: big on screen and central first.
    * Ties keep the (bz, by, bx) order.
+   *   maxDepth    bricks whose nearest corner lies deeper are left out: there the
+   *               resident level already resolves the view (see the viewer).
+   * Each entry carries `depth`, the view depth of the brick's centre.
    */
-  rankVisible({ bricks, dims, planes, clipMin = { x: 0, y: 0, z: 0 }, clipMax = { x: 1, y: 1, z: 1 }, worldScale = { x: 1, y: 1, z: 1 }, project, near = 1e-3, brickSize = 64 }) {
+  rankVisible({ bricks, dims, planes, clipMin = { x: 0, y: 0, z: 0 }, clipMax = { x: 1, y: 1, z: 1 }, worldScale = { x: 1, y: 1, z: 1 }, project, near = 1e-3, brickSize = 64, maxDepth = Infinity }) {
     const out = [];
     const min = { x: 0, y: 0, z: 0 };
     const max = { x: 0, y: 0, z: 0 };
@@ -1397,7 +1448,9 @@ const SVRRoi = {
       const depth = Math.max(near, p ? Number(p.depth) || near : near);
       const r = p ? Math.hypot(Number(p.x) || 0, Number(p.y) || 0) : 0;
       const diag = Math.hypot((max.x - min.x) * worldScale.x, (max.y - min.y) * worldScale.y, (max.z - min.z) * worldScale.z);
-      out.push({ bx: b.bx, by: b.by, bz: b.bz, key: `${b.bx}_${b.by}_${b.bz}`, priority: (diag / depth) / (1 + 4 * r * r), order: out.length });
+      // Nearest corner ≈ centre depth minus half the brick's world diagonal.
+      if (depth - diag / 2 > maxDepth) continue;
+      out.push({ bx: b.bx, by: b.by, bz: b.bz, key: `${b.bx}_${b.by}_${b.bz}`, depth, priority: (diag / depth) / (1 + 4 * r * r), order: out.length });
     }
     out.sort((a, b) => (b.priority - a.priority) || (a.order - b.order));
     return out;

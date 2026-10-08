@@ -132,46 +132,56 @@ Two editions of the pack: **light** (~3 MB, downloads Python on first run) and *
 # 4. Cleaning the image
 
 ::: tldr
-- The **camera noise** is measured in the **8 corners** of the volume, where there is no embryo.
-- **Inside the signal**, nothing is changed; **outside the signal**, the noise is smoothed.
-- The image is then converted to **8 bits** by a simple rule of three: the background becomes exactly **0**.
+- The pipeline asks **a single question** of every voxel: *is it part of the embryo?*
+- **Yes** → its value is **not changed**. **No** → it is replaced by the **median** of its neighbours, which almost always brings it to **0**.
+- Then everything goes to **8 bits** by a simple rule of three: the background becomes exactly **0**.
 :::
 
-![The five stages of cleaning one channel.](img-en/ch05/chaine.svg){width=90%}
+![The fate of a voxel. Percentages measured over the whole volume of the demonstration dataset (DAPI channel).](img-en/ch05/destin.svg){width=88%}
 
-## 4.1 Floor and ceiling
+## 4.1 The five landmarks, one sentence each
 
-::: steps
-1. **Background floor**: 8 small cubes (up to 32 × 32 × 32 voxels) at the 8 corners. The floor = the value below which **99 %** of these corner voxels lie.
-2. **Signal ceiling**: the value below which **99.9 %** of the voxels lie (one voxel in 4 in each direction is examined). The brightest 0.1 % saturate.
-:::
-
-![Left, the corner noise forms a bell; the red line marks the 99th percentile (floor). Right, the whole volume, with the ceiling. Demonstration dataset, DAPI channel.](img-en/ch05/histogramme.png){width=75%}
-
-## 4.2 The mask: protecting the real signal
-
-::: steps
-1. Every voxel **above 1.1 × the floor** is marked “signal”.
-2. An **opening** removes isolated hot pixels (a lone white dot is not a cell).
-3. The mask is **widened by 3 voxels** to protect the natural halo around cells.
-4. **Outside the mask only**, each voxel is replaced by the **median** of its 27 neighbours (3 × 3 × 3).
-:::
-
-![The mask steps on a real slice (z = 56). In red, the voxels marked “signal”. Demonstration dataset.](img-en/ch05/masque.png){width=78%}
-
-## 4.3 Conversion to 8 bits
-
-![The window: 0 below the floor, 255 above the ceiling, a straight line in between (no gamma).](img-en/ch05/fenetre.png){width=80%}
+| | Question | The pipeline's answer |
+|---|---|---|
+| **Floor** | Where does signal start? | the value below which **99 %** of the voxels of the **8 corners** of the volume lie (where there is no embryo) |
+| **Ceiling** | Where should white be? | the value below which **99.9 %** of the voxels lie (1 in 4 in each direction is examined) |
+| **Mask** | Where is the embryo? | the voxels **above 1.1 × floor**, **without isolated points**, plus a **3-voxel halo** |
+| **Median** | What to do with the rest? | each voxel outside the mask takes the **middle value** of its 27 neighbours (3 × 3 × 3 cube) |
+| **Window** | How to go to 8 bits? | floor → **0**, ceiling → **255**, a straight line in between |
 
 ::: example
-On the DAPI channel of the demonstration dataset: floor = 4,524, ceiling = 33,663.
+On the DAPI channel of the demonstration dataset: floor = **4,524**, ceiling = **33,663**.
 A raw voxel of **20,000** becomes 255 × (20,000 − 4,524) ÷ (33,663 − 4,524) = **135** (decimal part truncated).
-A voxel at 4,000 becomes **0**; a voxel at 40,000 becomes **255**. Result: **88 %** of the voxels are 0.
+A voxel at 4,000 becomes **0**; a voxel at 40,000 becomes **255**.
 :::
 
-![The same slice before (raw) and after cleaning. The background disappears, the cells stay sharp.](img-en/ch05/avant_apres.png){width=75%}
+## 4.2 A complete example, voxel by voxel
 
-## 4.4 For a timelapse: one shared window
+![19 voxels in a row, with the real landmarks of the demonstration dataset. In one dimension so that every number can be read; the pipeline does the same in 3D.](img-en/ch05/profil_etapes.svg){width=100%}
+
+::: steps
+1. **Threshold**: only the cell and the hot pixel (9,000) are above 4,976. The noise peak (4,700) does not pass.
+2. **Opening**: the hot pixel is **alone**, it is removed. The cell, wide enough, stays.
+3. **Halo**: the mask grows by 3 voxels around the cell; its faint edge (4,800) is protected.
+4. **Median** outside the mask: the 4,700 noise peak → 2,900, the 9,000 hot pixel → 3,300.
+5. **Window**: everything below the floor → 0. The cell goes from 12 to 187, its faint edge gives 2.
+:::
+
+Last row of the figure: **without mask or median**, the noise peak and the hot pixel would stay visible (1 and 39). Over the whole volume, mask + median remove **97 %** of these stray dots (341,674 → 10,069). → ch. 5
+
+## 4.3 On a real slice
+
+![Left the raw slice, centre what becomes of each voxel, right the result, in an area where the tissue is faint. Green: kept as it is. Orange: crushed by the median. Red (rare): faint but extended area, which survives.](img-en/ch05/destin_carte.png){width=100%}
+
+## 4.4 The limit to know: minimum size
+
+![Bars with a square cross-section, bright (20,000) or faint (6,000). The 1 × 1 and 2 × 2 cross-sections are erased; from 3 × 3 on, the object is kept, even when faint.](img-en/ch05/epaisseur.png){width=88%}
+
+::: warning
+**An object thinner than about 3 voxels in one direction is erased, however bright** (a point, a thread, a sheet one voxel thick). With 1.2 × 1.2 × 3 µm voxels, that is **3.6 µm in X and Y, 9 µm in Z**: an object present on only one or two slices can disappear. Do the calculation with **your** voxel sizes; when in doubt, compare with the original `.ims`. A thin object **touching** (within 3 voxels) a thicker one is protected by the halo. → ch. 5
+:::
+
+## 4.5 For a timelapse: one shared window
 
 ![With one window per frame, a fading series would seem to keep the same intensity. Lumen3D uses a single window for the whole series (diagram, illustrative numbers).](img-en/ch05/serie_temporelle.png){width=70%}
 
@@ -181,7 +191,7 @@ really displayed darker.
 
 ::: why
 An automatic thresholding method (Otsu) and a neural-network denoiser (Noise2Void) were
-tried and then **removed** in version 0.12.0: they created artificial coloured “blobs”. → ch. 5
+tried and then **removed** in version 0.12.0: they created artificial coloured "blobs". → ch. 5
 :::
 
 # 5. Reducing the size without loss
@@ -511,6 +521,7 @@ pixel exact, useful if you want to quantify the blue / red ratio. The calibratio
   an intensity cannot be compared between two channels or between two datasets. In a timelapse, the window is
   **shared by all time points**: a drop in intensity stays visible, as in reality.
 - **Inside the signal, nothing is changed**; **outside the signal**, the noise is smoothed (3 × 3 × 3 median).
+- **An object thinner than about 3 voxels** in one direction is erased by the cleaning, even a bright one (§ 4.4).
 - **8 bits** are enough for morphology; to **quantify**, go back to the original `.ims` (in `download/` if the option was enabled).
 - **Bricks that are not stored** are areas that really are 0 after cleaning, not lost data.
 - **The display floor** (6 to 48) hides the faintest values on screen: lowering *min* will not bring them back.

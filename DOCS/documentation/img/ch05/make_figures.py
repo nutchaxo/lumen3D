@@ -101,6 +101,66 @@ TX = {
  "t_why": ("1 (ouverture : érosion) + 1 (dilatation) + 3 (dilatations) = 5 voxels d'influence", "1 (opening: erosion) + 1 (dilation) + 3 (dilations) = 5 voxels of influence"),
  "t_res": ("Résultat identique octet pour octet, quel que soit le découpage", "Byte-identical result, whatever the tiling"),
  "t_budget": ("≤ 24 millions de voxels par tuile, marge comprise", "≤ 24 million voxels per tile, margin included"),
+ # fate of a voxel
+ "fa_title": ("Le destin d'un voxel : une seule question décide de tout", "The fate of a voxel: one question decides everything"),
+ "fa_in": ("un voxel du volume brut (16 bits)", "a voxel of the raw volume (16 bits)"),
+ "fa_q": ("Fait-il partie du masque ?", "Is it inside the mask?"),
+ "fa_q2": ("(embryon + halo de 3 voxels)", "(embryo + 3-voxel halo)"),
+ "fa_yes": ("OUI", "YES"), "fa_no": ("NON", "NO"),
+ "fa_keep": ("valeur d'origine gardée", "original value kept"), "fa_keep2": ("rien n'est modifié", "nothing is changed"),
+ "fa_med": ("remplacé par la médiane", "replaced by the median"), "fa_med2": ("de ses 27 voisins", "of its 27 neighbours"),
+ "fa_win": ("fenêtre 16 → 8 bits", "window 16 → 8 bits"),
+ "fa_win2": ("plancher → 0, plafond → 255", "floor → 0, ceiling → 255"),
+ "fa_r1": ("le signal, intact", "the signal, intact"), "fa_r1b": ("étiré entre 0 et 255", "stretched between 0 and 255"),
+ "fa_r2": ("presque toujours sous", "almost always below"), "fa_r2b": ("le plancher → 0 (noir)", "the floor → 0 (black)"),
+ "fa_who1": ("{} % des voxels", "{} % of the voxels"),
+ "fa_who2a": ("{} % : fond sous le plancher", "{} %: background below the floor"),
+ "fa_who2b": ("{} % : pics de bruit au-dessus du plancher", "{} %: noise peaks above the floor"),
+ "fa_who2c": ("et pixels chauds isolés", "and isolated hot pixels"),
+ "fa_foot": ("Démo, canal DAPI, 49,5 millions de voxels", "Demo set, DAPI channel, 49.5 million voxels"),
+ # strip
+ "s_title": ("Le nettoyage voxel par voxel, sur une ligne de 19 voxels", "Cleaning voxel by voxel, on a line of 19 voxels"),
+ "s_r0": ("① Valeurs brutes (16 bits). Plancher = 4 524, seuil = 1,1 × plancher = 4 976, plafond = 33 663",
+          "① Raw values (16 bits). Floor = 4,524, threshold = 1.1 × floor = 4,976, ceiling = 33,663"),
+ "s_r1": ("② Seuil : au-dessus de 4 976 ?", "② Threshold: above 4,976?"),
+ "s_r2": ("③ Ouverture : les points isolés sont retirés", "③ Opening: isolated points are removed"),
+ "s_r3": ("④ Dilatation × 3 : le masque s'élargit de 3 voxels de chaque côté (halo)", "④ Dilation × 3: the mask grows by 3 voxels on each side (halo)"),
+ "s_r4": ("⑤ Hors du masque : médiane de 3 voxels (ici en 1D ; 27 en 3D)", "⑤ Outside the mask: median of 3 voxels (here in 1D; 27 in 3D)"),
+ "s_r5": ("⑥ Fenêtre → résultat 8 bits (0 à 255)", "⑥ Window → 8-bit result (0 to 255)"),
+ "s_r6": ("Pour comparer : la fenêtre seule, sans masque ni médiane", "For comparison: the window alone, without mask or median"),
+ "s_peak": ("pic de bruit", "noise peak"), "s_hot": ("pixel chaud", "hot pixel"), "s_cell": ("cellule", "cell"),
+ "s_halo": ("halo", "halo"),
+ "s_left": ("restent visibles : du bruit", "stay visible: noise"),
+ "s_note": ("Exemple en 1D pour la lisibilité, calculé avec les mêmes fonctions (scipy) ; le pipeline fait exactement cela en 3D.",
+            "1D example for readability, computed with the same functions (scipy); the pipeline does exactly this in 3D."),
+ # real profile
+ "p_title": ("Une vraie ligne de l'image : y = 300, coupe z = 56, canal DAPI (bord de l'embryon)", "A real line of the image: y = 300, slice z = 56, DAPI channel (edge of the embryo)"),
+ "p_title2": ("Une ligne dans une zone de tissu faible : y = 472, coupe z = 56 (axes agrandis ; plafond hors cadre)", "A line through a faint tissue area: y = 472, slice z = 56 (axes enlarged; ceiling off the chart)"),
+ "p_raw": ("valeur brute (16 bits)", "raw value (16 bits)"), "p_u8": ("résultat (8 bits)", "result (8 bits)"),
+ "p_x": ("position le long de la ligne (voxels, x)", "position along the line (voxels, x)"),
+ "p_floor": ("plancher 4 524", "floor 4,524"), "p_thr": ("seuil 4 976", "threshold 4,976"), "p_sig": ("plafond 33 663", "ceiling 33,663"),
+ "p_mask": ("dans le masque (valeur gardée)", "inside the mask (value kept)"),
+ "p_out": ("hors masque : médiane", "outside the mask: median"),
+ "p_win": ("fenêtre seule (sans médiane)", "window alone (no median)"), "p_pipe": ("pipeline", "pipeline"),
+ "p_bg": ("fond", "background"), "p_tis": ("tissu", "tissue"),
+ # fate map
+ "fm_raw": ("Brut (16 bits)", "Raw (16 bits)"), "fm_map": ("Ce que devient chaque voxel", "What becomes of each voxel"),
+ "fm_fin": ("Résultat (8 bits)", "Result (8 bits)"),
+ "fm_a": ("fond sous le plancher → 0", "background below the floor → 0"),
+ "fm_b": ("au-dessus du plancher mais hors masque → écrasé par la médiane → 0", "above the floor but outside the mask → crushed by the median → 0"),
+ "fm_s": ("hors masque, survit à la médiane (structure faible étendue)", "outside the mask, survives the median (faint extended structure)"),
+ "fm_c": ("dans le masque → valeur d'origine gardée", "inside the mask → original value kept"),
+ "fm_sup": ("Coupe z = 56, canal DAPI, zone de 160 × 110 voxels où le tissu est faible (jeu de démonstration).",
+            "Slice z = 56, DAPI channel, 160 × 110-voxel area where the tissue is faint (demonstration set)."),
+ # minimum thickness
+ "e_title": ("Taille minimale : environ 3 voxels d'épaisseur dans chaque direction", "Minimum size: about 3 voxels thick in every direction"),
+ "e_raw": ("Avant : 5 objets brillants (20 000) et 1 faible (6 000), sur du bruit de caméra", "Before: 5 bright objects (20,000) and 1 faint one (6,000), on camera noise"),
+ "e_fin": ("Après le nettoyage (résultat 8 bits)", "After cleaning (8-bit result)"),
+ "e_w": ("section\n{0} × {0}", "section\n{0} × {0}"), "e_ws": ("section\n{0} × {0}", "section\n{0} × {0}"), "e_pt": ("point\nisolé", "isolated\npoint"),
+ "e_faint": ("7 × 7,\nfaible", "7 × 7,\nfaint"),
+ "e_gone": ("effacé", "erased"), "e_kept": ("gardé", "kept"),
+ "e_sup": ("Volume synthétique de test, coupe du milieu : chaque barre a une section carrée (même épaisseur en X et en Z). Même plancher et même plafond que le canal DAPI de démonstration.",
+           "Synthetic test volume, middle slice: each bar has a square cross-section (same thickness in X and in Z). Same floor and ceiling as the demonstration DAPI channel."),
 }
 def T(k): return TX[k][0 if LANG == "fr" else 1]
 def esc(s): return html.escape(s, quote=False)
@@ -472,6 +532,210 @@ def fig_flicker():
     ax.set_ylim(0, 115); ax.set_xlabel(T("f_x")); ax.set_ylabel(T("f_y")); ax.set_title(T("f_title"), fontsize=10.5, color=INK)
     ax.legend(frameon=False, fontsize=8.2, loc="lower left"); ax.grid(alpha=.25); style_ax(ax)
     fig.tight_layout(); save_fig(fig, "serie_temporelle.png")
+
+# ---------------------------------------------------------------- the fate of a voxel (v1.60 rewrite)
+def fmt(x, nd=1):
+    t = f"{x:,.{nd}f}"
+    return t.replace(",", " ").replace(".", ",") if LANG == "fr" else t
+
+def fig_fate(st):
+    s = Svg(480, T("fa_title"))
+    s.rect(250, 56, 300, 40, "#fff", INK2, 10, 1.4); s.text(400, 81, T("fa_in"), 14, 700, INK, "middle")
+    s.line(400, 96, 400, 116, INK2, 2, True)
+    s.poly([(400, 118), (560, 160), (400, 202), (240, 160)], ACC["blue"][1], ACC["blue"][0], 1.8)
+    s.text(400, 157, T("fa_q"), 15, 800, ACC["blue"][0], "middle"); s.text(400, 177, T("fa_q2"), 11.5, 500, INK2, "middle")
+    # yes branch (left), no branch (right)
+    for side, key, col, x in (("l", "fa_yes", "green", 170), ("r", "fa_no", "amber", 630)):
+        x0 = 240 if side == "l" else 560
+        s.line(x0, 160, x, 160, INK2, 2); s.line(x, 160, x, 222, INK2, 2, True)
+        s.text((x0 + x) / 2, 152, T(key), 13, 800, ACC[col][0], "middle")
+    boxes = [(170, "green", "fa_keep", "fa_keep2", "fa_r1", "fa_r1b"), (630, "amber", "fa_med", "fa_med2", "fa_r2", "fa_r2b")]
+    for x, col, a, b, r1, r2 in boxes:
+        st_, so = ACC[col]
+        s.rect(x - 125, 224, 250, 54, so, st_, 12, 1.6)
+        s.text(x, 247, T(a), 14, 800, st_, "middle"); s.text(x, 267, T(b), 12, 500, INK2, "middle")
+        s.line(x, 278, x, 298, INK2, 2, True)
+        s.rect(x - 125, 300, 250, 44, "#fff", ACC["red"][0], 12, 1.4)
+        s.text(x, 320, T("fa_win"), 13.5, 700, ACC["red"][0], "middle"); s.text(x, 337, T("fa_win2"), 11, 500, INK2, "middle")
+        s.line(x, 344, x, 362, INK2, 2, True)
+        s.rect(x - 125, 364, 250, 50, "#1c2333" if col == "amber" else "#fff", INK, 12, 1.6)
+        fill = "#fff" if col == "amber" else st_
+        s.text(x, 386, T(r1), 13.5, 800, fill, "middle"); s.text(x, 404, T(r2), 11.5, 500, "#d0d6e2" if col == "amber" else INK2, "middle")
+    # who goes where
+    s.rect(30, 230, 0, 0)
+    s.text(170, 438, T("fa_who1").format(fmt(st["C"])), 13, 800, ACC["green"][0], "middle")
+    s.text(630, 434, T("fa_who2a").format(fmt(st["A"])), 12, 700, INK, "middle")
+    s.text(630, 450, T("fa_who2b").format(fmt(st["B"])), 12, 700, ACC["amber"][0], "middle")
+    s.text(630, 465, T("fa_who2c"), 12, 700, ACC["amber"][0], "middle")
+    s.text(170, 465, T("fa_foot"), 9.5, 400, INK2, "middle")
+    s.save("destin.svg")
+
+STRIP = np.array([2200, 4700, 2900, 2400, 3300, 9000, 2700, 2500, 3600, 4800,
+                  6000, 14000, 22000, 26000, 19000, 8000, 4300, 3500, 2800], float)
+
+def fig_strip(bg, sig):
+    v = STRIP; n = v.size; thr = bg * 1.1
+    m1 = v > thr
+    m2 = ndi.binary_opening(m1, iterations=1)
+    m3 = ndi.binary_dilation(m2, iterations=3)
+    med = ndi.median_filter(v, size=3)
+    comp = np.where(m3, v, med)
+    u8 = u8_formula(comp, bg, sig).astype(int); win = u8_formula(v, bg, sig).astype(int)
+    cw, x0 = 40, 20; rh = 28
+    rows_y = [104, 170, 224, 278, 332, 400, 462]
+    s = Svg(524, T("s_title"))
+    def cell(i, y, txt, fill="#fff", stroke=LINE, col=INK, w=600, sw=1):
+        x = x0 + i * cw
+        s.add(f'<rect x="{x+1}" y="{y}" width="{cw-2}" height="{rh}" rx="4" fill="{fill}" stroke="{stroke}" stroke-width="{sw}"/>')
+        if txt != "": s.text(x + cw / 2, y + 19, str(txt), 11.5 if len(str(txt)) > 4 else 13, w, col, "middle")
+    def label(y, k, col=INK): s.text(x0, y - 7, T(k), 13, 700, col)
+    # brackets above the raw row
+    def bracket(i0, i1, k, col):
+        xa, xb = x0 + i0 * cw + 3, x0 + (i1 + 1) * cw - 3
+        s.add(f'<path d="M{xa},98 L{xa},92 L{xb},92 L{xb},98" fill="none" stroke="{col}" stroke-width="1.6"/>')
+        s.text((xa + xb) / 2, 87, T(k), 11, 700, col, "middle")
+    s.text(x0, 62, T("s_r0"), 13, 700, INK)
+    bracket(1, 1, "s_peak", ACC["amber"][0]); bracket(5, 5, "s_hot", ACC["red"][0])
+    bracket(7, 9, "s_halo", ACC["blue"][0]); bracket(10, 15, "s_cell", ACC["green"][0]); bracket(16, 18, "s_halo", ACC["blue"][0])
+    for i in range(n):
+        g = int(255 - min(1.0, v[i] / sig) * 200)
+        above = v[i] > bg
+        cell(i, rows_y[0], int(v[i]), f"rgb({g},{g},{min(255,g+10)})", ACC["red"][0] if above else LINE, "#fff" if g < 140 else INK, 600, 1.8 if above else 1)
+    label(rows_y[1], "s_r1")
+    for i in range(n): cell(i, rows_y[1], "✓" if m1[i] else "", ACC["green"][1] if m1[i] else "#fff", ACC["green"][0] if m1[i] else LINE, ACC["green"][0], 800)
+    label(rows_y[2], "s_r2")
+    for i in range(n):
+        if m1[i] and not m2[i]: cell(i, rows_y[2], "✗", ACC["red"][1], ACC["red"][0], ACC["red"][0], 800, 1.6)
+        else: cell(i, rows_y[2], "✓" if m2[i] else "", ACC["green"][1] if m2[i] else "#fff", ACC["green"][0] if m2[i] else LINE, ACC["green"][0], 800)
+    label(rows_y[3], "s_r3")
+    for i in range(n):
+        if m3[i] and not m2[i]: cell(i, rows_y[3], "+", ACC["blue"][1], ACC["blue"][0], ACC["blue"][0], 800, 1.6)
+        else: cell(i, rows_y[3], "✓" if m3[i] else "", ACC["green"][1] if m3[i] else "#fff", ACC["green"][0] if m3[i] else LINE, ACC["green"][0], 800)
+    label(rows_y[4], "s_r4")
+    for i in range(n):
+        if m3[i]: cell(i, rows_y[4], int(v[i]), ACC["green"][1], ACC["green"][0], INK, 500)
+        else:
+            ch = med[i] != v[i]
+            cell(i, rows_y[4], int(med[i]), ACC["amber"][1] if ch else "#fff", ACC["amber"][0] if ch else LINE, ACC["amber"][0] if ch else INK2, 700 if ch else 500, 1.6 if ch else 1)
+    label(rows_y[5], "s_r5", ACC["red"][0])
+    for i in range(n):
+        g = 255 - int(u8[i] / 255 * 220)
+        cell(i, rows_y[5], u8[i], "#0b0d12" if u8[i] == 0 else f"rgb({255-g},{255-g},{255-g})", INK, "#fff", 800)
+    label(rows_y[6], "s_r6", INK2)
+    for i in range(n):
+        bad = win[i] > 0 and not u8[i] > 0
+        cell(i, rows_y[6], win[i], ACC["red"][1] if bad else "#f1f3f5", ACC["red"][0] if bad else LINE, ACC["red"][0] if bad else INK2, 700 if bad else 400, 1.6 if bad else 1)
+    s.text(400, 510, T("s_note"), 10.5, 400, INK2, "middle")
+    s.save("profil_etapes.svg")
+    return dict(m1=m1.tolist(), m2=m2.tolist(), m3=m3.tolist(), med=med.tolist(), u8=u8.tolist(), win=win.tolist())
+
+def slab_pipeline(v, bg, sig, z=Z):
+    """Mask, median and 8-bit result of slice z, exactly as level_tile (mask needs 5 voxels of context)."""
+    a, b = max(0, z - 6), min(v.shape[0], z + 7)
+    slab = v[a:b].astype(np.float32)
+    m = ndi.binary_dilation(ndi.binary_opening(slab > bg * 1.1, iterations=1), iterations=3)[z - a]
+    med = ndi.median_filter(v[z - 1:z + 2].astype(np.float32), size=3)[1]
+    raw = v[z].astype(np.float32)
+    u8 = u8_formula(np.where(m, raw, med), bg, sig).astype(np.uint8)
+    return raw, m, med, u8
+
+def fate_stats(v, bg, sig):
+    """Whole-volume shares of the three fates (the median is computed on the whole volume: slow)."""
+    f = CACHE / f"fate_c{CH}.npy"
+    if f.exists():
+        return dict(zip(("A", "B", "C", "Bsurv", "speck_win", "speck_pipe"), np.load(f).tolist()))
+    vv = v.astype(np.float32)
+    m = ndi.binary_dilation(ndi.binary_opening(vv > bg * 1.1, iterations=1), iterations=3)
+    med = ndi.median_filter(vv, size=3)
+    out = ~m; N = vv.size
+    u8 = u8_formula(np.where(m, vv, med), bg, sig); win = u8_formula(vv, bg, sig)
+    r = [100 * (out & (vv <= bg)).sum() / N, 100 * (out & (vv > bg)).sum() / N, 100 * m.sum() / N,
+         100 * (out & (vv > bg) & (med > bg)).sum() / N, float(((win > 0) & out).sum()), float(((u8 > 0) & out).sum())]
+    CACHE.mkdir(parents=True, exist_ok=True); np.save(f, np.array(r))
+    return dict(zip(("A", "B", "C", "Bsurv", "speck_win", "speck_pipe"), r))
+
+def fig_profile(v, bg, sig, y=300, xa=140, xb=330, ymax=None, name="profil_reel.png", title="p_title"):
+    raw, m, med, u8 = slab_pipeline(v, bg, sig)
+    x = np.arange(xa, xb); r = raw[y, xa:xb]; mm = m[y, xa:xb]; md = med[y, xa:xb]
+    win = u8_formula(r, bg, sig); fin = u8[y, xa:xb].astype(float)
+    fig, (a1, a2) = plt.subplots(2, 1, figsize=(10, 6.2), sharex=True, gridspec_kw=dict(height_ratios=[1.35, 1], hspace=0.12))
+    for ax in (a1, a2):
+        for i, inside in enumerate(mm):
+            if inside: ax.axvspan(x[i] - .5, x[i] + .5, color="#ebfbee", lw=0, zorder=0)
+    a1.plot(x, r, color="#4a5468", lw=1.1, zorder=2)
+    a1.scatter(x[mm], r[mm], s=9, color="#2b8a3e", zorder=3, label=T("p_mask"))
+    a1.scatter(x[~mm], md[~mm], s=9, color="#e67700", zorder=3, marker="s", label=T("p_out"))
+    top = ymax or max(sig * 1.12, r.max() * 1.05); k_ = 350 * top / 37000
+    lines = [(bg, "#c92a2a", "p_floor", "--", -k_, "top"), (bg * 1.1, "#7048e8", "p_thr", ":", k_, "bottom")]
+    if sig < top: lines.append((sig, "#2b8a3e", "p_sig", "--", k_, "bottom"))
+    for val, col, k, ls, dy, va in lines:
+        a1.axhline(val, color=col, ls=ls, lw=1.3); a1.text(xb - 1, val + dy, T(k), color=col, ha="right", va=va, fontsize=8.5, fontweight="bold",
+                                                       bbox=dict(fc="white", ec="none", pad=0.5, alpha=0.85))
+    a1.set_ylim(0, top); a1.set_ylabel(T("p_raw")); a1.legend(frameon=False, fontsize=8.5, loc="upper left")
+    a1.set_title(T(title), fontsize=10.5, color=INK); a1.grid(alpha=.2); style_ax(a1)
+    a2.plot(x, win, color="#c92a2a", lw=1, ls=":", label=T("p_win"))
+    a2.plot(x, fin, color="#1c2333", lw=1.6, label=T("p_pipe"))
+    a2.set_ylim(-5, 260 if ymax is None else 60); a2.set_ylabel(T("p_u8")); a2.set_xlabel(T("p_x")); a2.legend(frameon=False, fontsize=8.5, loc="upper left")
+    a2.grid(alpha=.2); style_ax(a2)
+    fig.subplots_adjust(left=0.08, right=0.98, top=0.94, bottom=0.09); save_fig(fig, name)
+    return int(mm.sum()), int(((win > 0) & ~mm).sum()), int(((fin > 0) & ~mm).sum())
+
+def fig_fatemap(v, bg, sig, y0=345, x0=409, wh=110, ww=160):
+    raw, m, med, u8 = slab_pipeline(v, bg, sig)
+    b = (slice(y0, y0 + wh), slice(x0, x0 + ww))
+    r, mm, md, uu = raw[b], m[b], med[b], u8[b]
+    cat = np.zeros(r.shape + (3,))
+    cat[~mm & (r <= bg)] = (0.13, 0.15, 0.2)
+    cat[~mm & (r > bg)] = (0.96, 0.55, 0.05)
+    cat[~mm & (r > bg) & (md > bg)] = (0.85, 0.1, 0.1)
+    cat[mm] = (0.18, 0.62, 0.28)
+    fig = plt.figure(figsize=(11, 3.9))
+    gs = fig.add_gridspec(1, 3, wspace=0.03, left=0.01, right=0.99, top=0.9, bottom=0.25)
+    for k, (img, t, kw) in enumerate(((np.clip(r / sig, 0, 1), "fm_raw", dict(cmap="gray", vmin=0, vmax=1)),
+                                      (cat, "fm_map", {}), (uu, "fm_fin", dict(cmap="gray", vmin=0, vmax=255)))):
+        a = fig.add_subplot(gs[0, k]); a.imshow(img, interpolation="nearest", **kw); a.axis("off"); a.set_title(T(t), fontsize=10, color=INK)
+    from matplotlib.patches import Patch
+    hs = [Patch(color=c, label=T(k)) for c, k in (((0.13, 0.15, 0.2), "fm_a"), ((0.96, 0.55, 0.05), "fm_b"), ((0.85, 0.1, 0.1), "fm_s"), ((0.18, 0.62, 0.28), "fm_c"))]
+    fig.legend(handles=hs, loc="lower center", ncol=2, frameon=False, fontsize=8.5, bbox_to_anchor=(0.5, 0.06))
+    fig.text(0.5, 0.01, T("fm_sup"), ha="center", fontsize=8, color=INK2)
+    save_fig(fig, "destin_carte.png")
+    o = ~mm
+    return dict(bg_out=int((o & (r <= bg)).sum()), peaks=int((o & (r > bg)).sum()), surv=int((o & (r > bg) & (md > bg)).sum()), mask=int(mm.sum()))
+
+
+def fig_thickness(bg, sig):
+    rng = np.random.default_rng(0)
+    v = rng.normal(2626, 806, (20, 80, 150)).clip(0)
+    objs = [("pt", 14, 1, 20000), ("w1", 34, 1, 20000), ("w2", 54, 2, 20000), ("w3", 74, 3, 20000), ("w5", 96, 5, 20000), ("faint", 121, 7, 6000)]
+    for k, x, w, val in objs:
+        if k == "pt": v[10, 40, x] = val
+        else: v[10 - w // 2:10 - w // 2 + w, 20:70, x:x + w] = val
+    m = ndi.binary_dilation(ndi.binary_opening(v > bg * 1.1, iterations=1), iterations=3)
+    med = ndi.median_filter(v, size=3)
+    u8 = u8_formula(np.where(m, v, med), bg, sig)
+    fig = plt.figure(figsize=(10.5, 3.9))
+    gs = fig.add_gridspec(1, 2, wspace=0.04, left=0.01, right=0.99, top=0.86, bottom=0.13)
+    out = []
+    for j, (img, t, kw) in enumerate(((np.clip(v[10] / sig, 0, 1), "e_raw", dict(vmin=0, vmax=1)), (u8[10], "e_fin", dict(vmin=0, vmax=255)))):
+        a = fig.add_subplot(gs[0, j]); a.imshow(img, cmap="gray", interpolation="nearest", **kw); a.axis("off")
+        a.set_title(T(t), fontsize=9.5, color=INK)
+        for k, x, w, val in objs:
+            kept = u8[10, 40, x:x + w].max() > 0
+            lab = T("e_pt") if k == "pt" else T("e_faint") if k == "faint" else (T("e_w") if w == 1 else T("e_ws")).format(w)
+            if j == 0: a.text(x + w / 2 - .5, 2, lab, color="#ffd43b", ha="center", va="top", fontsize=7.5, fontweight="bold", linespacing=1.0)
+            else:
+                a.text(x + w / 2 - .5, 74, T("e_kept") if kept else T("e_gone"), color="#69db7c" if kept else "#ff6b6b", ha="center", va="top", fontsize=8, fontweight="bold")
+                out.append((k, bool(kept)))
+    fig.suptitle(T("e_title"), fontsize=10.5, color=INK, y=0.985)
+    fig.text(0.5, 0.015, T("e_sup"), ha="center", fontsize=7.8, color=INK2, wrap=True)
+    save_fig(fig, "epaisseur.png")
+    return out
+
+if __name__ == "__main__" and os.environ.get("ONLY") == "fate":
+    fig_chain(); v = load_raw(); cd, sub, bg, sig = estimate(v)
+    st = fate_stats(v, bg, sig); print("fate", st); fig_fate(st)
+    print("strip", fig_strip(bg, sig)); print("profile", fig_profile(v, bg, sig), fig_profile(v, bg, sig, 472, 330, 520, 9000, "profil_faible.png", "p_title2")); print("map", fig_fatemap(v, bg, sig)); print("thickness", fig_thickness(bg, sig))
+    sys.exit(0)
 
 if __name__ == "__main__":
     fig_chain(); fig_corners(); fig_lattice(); fig_cross()

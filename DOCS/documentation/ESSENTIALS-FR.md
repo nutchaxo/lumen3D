@@ -132,46 +132,56 @@ Deux éditions du pack : **légère** (~3 Mo, télécharge Python au premier lan
 # 4. Le nettoyage de l'image
 
 ::: tldr
-- Le **bruit de la caméra** est mesuré dans les **8 coins** du volume, là où il n'y a pas d'embryon.
-- **Dans le signal**, rien n'est modifié ; **hors du signal**, le bruit est lissé.
-- L'image est ensuite convertie en **8 bits** par une simple règle de trois : le fond devient exactement **0**.
+- Le pipeline pose **une seule question** à chaque voxel : *fait-il partie de l'embryon ?*
+- **Oui** → sa valeur n'est **pas modifiée**. **Non** → il est remplacé par la **médiane** de ses voisins, ce qui le ramène presque toujours à **0**.
+- Puis tout passe en **8 bits** par une simple règle de trois : le fond devient exactement **0**.
 :::
 
-![Les cinq temps du nettoyage d'un canal.](img/ch05/chaine.svg){width=90%}
+![Le destin d'un voxel. Pourcentages mesurés sur tout le volume du jeu de démonstration (canal DAPI).](img/ch05/destin.svg){width=88%}
 
-## 4.1 Plancher et plafond
+## 4.1 Les cinq repères, en une phrase chacun
 
-::: steps
-1. **Plancher du fond** : 8 petits cubes (jusqu'à 32 × 32 × 32 voxels) aux 8 coins. Le plancher = la valeur sous laquelle se trouvent **99 %** de ces voxels de coin.
-2. **Plafond du signal** : la valeur sous laquelle se trouvent **99,9 %** des voxels (un voxel sur 4 dans chaque direction est examiné). Les 0,1 % les plus brillants saturent.
-:::
-
-![À gauche, le bruit des coins forme une cloche ; le trait rouge marque le 99ᵉ centile (plancher). À droite, tout le volume, avec le plafond. Jeu de démonstration, canal DAPI.](img/ch05/histogramme.png){width=75%}
-
-## 4.2 Le masque : protéger le vrai signal
-
-::: steps
-1. Tout voxel **au-dessus de 1,1 × le plancher** est marqué « signal ».
-2. Une **ouverture** retire les pixels chauds isolés (un point blanc seul n'est pas une cellule).
-3. Le masque est **élargi de 3 voxels** pour protéger le halo naturel autour des cellules.
-4. **Hors du masque seulement**, chaque voxel est remplacé par la **médiane** de ses 27 voisins (3 × 3 × 3).
-:::
-
-![Les étapes du masque sur une vraie coupe (z = 56). En rouge, les voxels marqués « signal ». Jeu de démonstration.](img/ch05/masque.png){width=78%}
-
-## 4.3 La conversion en 8 bits
-
-![La fenêtre : 0 sous le plancher, 255 au-dessus du plafond, une ligne droite entre les deux (pas de gamma).](img/ch05/fenetre.png){width=80%}
+| | Question | Réponse du pipeline |
+|---|---|---|
+| **Plancher** | À partir d'où est-ce du signal ? | la valeur sous laquelle se trouvent **99 %** des voxels des **8 coins** du volume (là où il n'y a pas d'embryon) |
+| **Plafond** | Où mettre le blanc ? | la valeur sous laquelle se trouvent **99,9 %** des voxels (1 sur 4 dans chaque direction est examiné) |
+| **Masque** | Où est l'embryon ? | les voxels **au-dessus de 1,1 × plancher**, **sans les points isolés**, plus un **halo de 3 voxels** |
+| **Médiane** | Que faire du reste ? | chaque voxel hors masque prend la **valeur du milieu** de ses 27 voisins (cube 3 × 3 × 3) |
+| **Fenêtre** | Comment passer en 8 bits ? | plancher → **0**, plafond → **255**, une ligne droite entre les deux |
 
 ::: example
-Sur le canal DAPI du jeu de démonstration : plancher = 4 524, plafond = 33 663.
+Sur le canal DAPI du jeu de démonstration : plancher = **4 524**, plafond = **33 663**.
 Un voxel brut de **20 000** devient 255 × (20 000 − 4 524) ÷ (33 663 − 4 524) = **135** (partie décimale tronquée).
-Un voxel à 4 000 devient **0** ; un voxel à 40 000 devient **255**. Résultat : **88 %** des voxels valent 0.
+Un voxel à 4 000 devient **0** ; un voxel à 40 000 devient **255**.
 :::
 
-![La même coupe avant (brut) et après nettoyage. Le fond disparaît, les cellules gardent leur netteté.](img/ch05/avant_apres.png){width=75%}
+## 4.2 Un exemple complet, voxel par voxel
 
-## 4.4 Pour un timelapse : une fenêtre commune
+![19 voxels alignés, avec les vrais repères du jeu de démonstration. En une dimension pour pouvoir lire chaque nombre ; le pipeline fait la même chose en 3D.](img/ch05/profil_etapes.svg){width=100%}
+
+::: steps
+1. **Seuil** : seuls la cellule et le pixel chaud (9 000) dépassent 4 976. Le pic de bruit (4 700) ne passe pas.
+2. **Ouverture** : le pixel chaud est **seul**, il est retiré. La cellule, assez large, reste.
+3. **Halo** : le masque s'élargit de 3 voxels autour de la cellule ; son bord faible (4 800) est protégé.
+4. **Médiane** hors du masque : le pic de bruit 4 700 → 2 900, le pixel chaud 9 000 → 3 300.
+5. **Fenêtre** : tout ce qui est sous le plancher → 0. La cellule va de 12 à 187, son bord faible donne 2.
+:::
+
+Dernière ligne de la figure : **sans masque ni médiane**, le pic de bruit et le pixel chaud resteraient visibles (1 et 39). Sur le volume entier, masque + médiane éliminent **97 %** de ces points parasites (341 674 → 10 069). → ch. 5
+
+## 4.3 Sur une vraie coupe
+
+![À gauche le brut, au milieu ce que devient chaque voxel, à droite le résultat, dans une zone où le tissu est faible. Vert : gardé tel quel. Orange : écrasé par la médiane. Rouge (rare) : zone faible mais étendue, qui survit.](img/ch05/destin_carte.png){width=100%}
+
+## 4.4 La limite à connaître : la taille minimale
+
+![Barres de section carrée, brillantes (20 000) ou faibles (6 000). Les sections 1 × 1 et 2 × 2 sont effacées ; à partir de 3 × 3, l'objet est gardé, même faible.](img/ch05/epaisseur.png){width=88%}
+
+::: warning
+**Un objet plus fin qu'environ 3 voxels dans une direction est effacé, même très brillant** (un point, un fil, une feuille d'un voxel d'épaisseur). Avec des voxels de 1,2 × 1,2 × 3 µm, cela fait **3,6 µm en X et Y, 9 µm en Z** : un objet présent sur une ou deux coupes seulement peut disparaître. Calculez avec **vos** tailles de voxel ; en cas de doute, comparez avec le `.ims` d'origine. Un objet fin **collé** (à moins de 3 voxels) à un objet plus épais est protégé par le halo. → ch. 5
+:::
+
+## 4.5 Pour un timelapse : une fenêtre commune
 
 ![Avec une fenêtre par image, une série qui s'éteint semblerait garder la même intensité. Lumen3D utilise une seule fenêtre pour toute la série (schéma, chiffres illustratifs).](img/ch05/serie_temporelle.png){width=70%}
 
@@ -511,6 +521,7 @@ pixel exact, utile si l'on veut quantifier le rapport bleu / rouge. La calibrati
   on ne compare pas une intensité entre deux canaux ni entre deux datasets. Dans un timelapse, la fenêtre est
   **commune à tous les instants** : une baisse d'intensité reste visible, comme dans la réalité.
 - **Dans le signal, rien n'est modifié** ; **hors du signal**, le bruit est lissé (médiane 3 × 3 × 3).
+- **Un objet plus fin qu'environ 3 voxels** dans une direction est effacé par le nettoyage, même brillant (§ 4.4).
 - **8 bits** suffisent pour la morphologie ; pour **quantifier**, repartez du `.ims` d'origine (dans `download/` si l'option a été activée).
 - **Les briques non stockées** sont des zones réellement à 0 après nettoyage, pas des données perdues.
 - **Le plancher d'affichage** (6 à 48) masque les valeurs les plus faibles à l'écran : baissez *min* ne les fera pas revenir.

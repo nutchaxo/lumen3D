@@ -204,6 +204,7 @@ Un bon outil dit ce qu'il ne sait pas faire. Voici les limites **assumées**, v�
 | Limite | Pourquoi, et que faire |
 |---|---|
 | **Pas de quantification calibrée de l'intensité** | Le pipeline ramène 12 ou 16 bits sur 0–255 entre un fond et un signal estimés ; les gris affichés sont **relatifs** (chapitres 5 et 11). Pour comparer des intensités entre échantillons, revenez au fichier Imaris d'origine |
+| **Pas d'objets plus fins qu'environ 3 voxels** | Le nettoyage retire les points isolés puis lisse le fond par une médiane : un point, un fil ou une feuille d'un ou deux voxels d'épaisseur est effacé, même brillant (chapitre 5, § 5.10). Vérifiez dans le fichier Imaris d'origine |
 | **4 canaux affichés au maximum** | Les volumes sont chargés dans une texture à quatre composantes (rouge, vert, bleu, alpha). Le pipeline écrit tous les canaux ; le viewer dessine les quatre premiers (chapitre 11) |
 | **Pas de déconvolution, pas de correction de champ plat** | Le pipeline soustrait un fond et règle une fenêtre ; il ne corrige ni le flou de l'objectif (fonction d'étalement) ni l'éclairage inégal |
 | **Pas de segmentation, pas de détection de cellules** | Le suivi cellulaire est **lu** dans l'analyse faite sous Imaris, jamais recalculé (chapitre 8) |

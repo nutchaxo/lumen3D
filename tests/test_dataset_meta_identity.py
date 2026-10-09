@@ -108,5 +108,16 @@ class DatasetMetaIdentity(unittest.TestCase):
         self.assertEqual((self.ds_dir / "metadata.json").read_bytes(), before, "not rewritten, not even reformatted")
 
 
+    def test_boot_moves_volume_sources_off_the_staging_proxy(self):
+        self._boot_env()
+        proxy = "api/upload.php?action=blob&ds=3d%2Fdemo&path="
+        self._write({**self.pipeline, "volumeSources": [
+            {"kind": "bricks", "path": proxy, "manifestPath": proxy + "bricks/manifest.json"}]})
+        self.assertEqual(dev_server._migrate_dataset_types(), ["metadata 3d/demo"])
+        src = self._stored()["volumeSources"][0]
+        self.assertEqual(src["path"], "DATA_WEB/3d/demo")
+        self.assertEqual(src["manifestPath"], "DATA_WEB/3d/demo/bricks/manifest.json")
+        self.assertEqual(dev_server._migrate_dataset_types(), [], "idempotent")
+
 if __name__ == "__main__":
     unittest.main(verbosity=1)

@@ -1,8 +1,8 @@
 {
   "id": "tracking-surface",
   "name": "Tracking Surface",
-  "version": "1.0.2",
-  "platformCompat": ">=1.53.0",
+  "version": "1.0.3",
+  "platformCompat": ">=1.60.7",
   "dataTypes": [
     "live"
   ],
@@ -11,7 +11,8 @@
     "panel"
   ],
   "requires": [
-    "tracking"
+    "tracking",
+    "tracking-surface"
   ],
   "creator": "IRIBHM",
   "placement": "tools",

@@ -375,6 +375,11 @@
     "gpuCompressionAuto": "Timelapses",
     "gpuCompressionActive": "Shown from GPU-compressed blocks: half the memory, so more frames stay loaded; voxel values are approximate (about 1–2 levels out of 255). The Studio's native pass reads exact voxels.",
     "gpuCompressionInactive": "Shown from exact voxels.",
+    "stabilization": "Stabilisation",
+    "stabilizationOn": "Stabilised",
+    "stabilizationOff": "Raw images",
+    "stabilizationActive": "Drift and rotation removed using the cell tracking.",
+    "stabilizationRaw": "Raw acquisition: each frame as the microscope recorded it.",
     "gpuCompressionUnsupported": "Not available on this GPU: shown from exact voxels.",
     "previousBricks": "previous version (before the data update)",
     "previousBricksMissing": "This dataset kept no previous version: showing the current one."

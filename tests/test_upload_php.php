@@ -209,6 +209,16 @@ $onDisk = lumen_up_read_json(lumen_up_dataset_dir('3d', 'DS') . '/metadata.json'
 $leaked = array_intersect(LUMEN_UP_COMPUTED, array_keys($onDisk));
 check('computed view fields never reach metadata.json', $leaked === []);
 
+// The editor's view points volume sources at the session-gated blob proxy; saved
+// back verbatim they survived publication and answered 401 to every visitor.
+$proxy = 'api/upload.php?action=blob&ds=3d%2FDS&path=';
+lumen_up_write_metadata('3d', 'DS', ['volumeSources' => [['kind' => 'bricks', 'label' => 'Chunked',
+    'path' => $proxy, 'manifestPath' => $proxy . 'bricks/manifest.json']]]);
+$src = lumen_up_read_json(lumen_up_dataset_dir('3d', 'DS') . '/metadata.json')['volumeSources'][0] ?? [];
+check('proxy volume sources are saved as their DATA_WEB location',
+    ($src['path'] ?? '') === 'DATA_WEB/3d/DS' && ($src['manifestPath'] ?? '') === 'DATA_WEB/3d/DS/bricks/manifest.json'
+    && ($src['label'] ?? '') === 'Chunked');
+
 // ── 6. Publish ───────────────────────────────────────────────────────────────
 echo "publish\n";
 [$st, $pl] = lumen_up_publish('3d', 'DS', false, true);

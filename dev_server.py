@@ -5298,8 +5298,9 @@ def _migrate_journals(state_dir: Path, log: list) -> None:
 
 def _migrate_metadata(log: list) -> None:
     """Make every published metadata.json agree with its folder: `type` is the
-    directory it sits in, `id` is '<type>/<folder>', and any dataset relation the
-    operator recorded is re-pointed at the new id."""
+    directory it sits in, `id` is '<type>/<folder>', any dataset relation the
+    operator recorded is re-pointed at the new id, and no volume source is still
+    addressed through the staging proxy (an edit made during the import)."""
     for type_dir in ALLOWED_TYPE_DIRS:
         base = DATA_WEB / type_dir
         if not base.is_dir():
@@ -5331,6 +5332,11 @@ def _migrate_metadata(log: list) -> None:
                     rebuilt.append(value)
                 if rebuilt != related:
                     meta["relatedIds"] = rebuilt
+            sources, moved = upload_staging.canonical_volume_sources(
+                meta.get("volumeSources"), type_dir, ds_dir.name)
+            if moved:
+                meta["volumeSources"] = sources
+                changed = True
             if not changed:
                 continue
             try:

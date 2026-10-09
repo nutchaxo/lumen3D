@@ -1881,6 +1881,33 @@ _COMPUTED_META_KEYS = frozenset({
 })
 
 
+STAGING_PROXY_PREFIX = "api/upload.php"
+
+
+def canonical_volume_sources(sources, type_dir: str, folder: str):
+    """The editor's view of a staged dataset points its volume sources at the
+    session-gated blob proxy so the admin preview can mount bytes that are not web
+    served yet (dev_server._get_staged_dataset). Written back into metadata.json,
+    those URLs survive publication and answer 401 to every visitor. Map any source
+    addressed through the proxy back onto the published DATA_WEB location; returns
+    (sources, changed). Twin: _admin_lib.php lumen_canonical_volume_sources."""
+    if not isinstance(sources, list):
+        return sources, False
+    base = f"DATA_WEB/{type_dir}/{folder}"
+    out, changed = [], False
+    for src in sources:
+        if not isinstance(src, dict):
+            out.append(src)
+            continue
+        s = dict(src)
+        for key, value in (("path", base), ("manifestPath", f"{base}/bricks/manifest.json")):
+            if isinstance(s.get(key), str) and s[key].startswith(STAGING_PROXY_PREFIX):
+                s[key] = value
+                changed = True
+        out.append(s)
+    return out, changed
+
+
 def read_staged_metadata(type_dir: str, folder: str) -> dict | None:
     ds_dir = staging_dataset_dir(type_dir, folder)
     if ds_dir is None:
@@ -1908,6 +1935,8 @@ def write_staged_metadata(type_dir: str, folder: str, meta: dict) -> tuple[int, 
     existing = _read_json(ds_dir / "metadata.json") or {}
     merged = dict(existing)
     merged.update({k: v for k, v in meta.items() if k not in _COMPUTED_META_KEYS})
+    if "volumeSources" in merged:
+        merged["volumeSources"], _ = canonical_volume_sources(merged["volumeSources"], type_dir, folder)
     merged["type"] = type_dir
     merged["folderName"] = folder
     merged["id"] = dataset_key(type_dir, folder)   # one id shape everywhere: '<type>/<folder>'

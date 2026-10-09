@@ -152,6 +152,14 @@
               <span data-i18n="viewer.customColor">Custom colour</span>
               <input type="color" id="input-background-color" value="#000000" class="form-input" style="height:36px;padding:4px;">
             </label>
+            <label class="detail-mode-row text-xs text-muted hidden" id="label-stabilization" for="select-stabilization">
+              <span data-i18n="viewer.stabilization">Stabilisation</span>
+              <select id="select-stabilization" class="form-select text-sm p-1 rounded border border-light bg-surface text-primary">
+                <option value="on" selected data-i18n="viewer.stabilizationOn">Stabilised</option>
+                <option value="off" data-i18n="viewer.stabilizationOff">Raw images</option>
+              </select>
+            </label>
+            <div class="quality-status hidden" id="stabilization-status" role="status" aria-live="polite"></div>
             <div class="quality-status" id="volume-source-status" data-i18n="viewer.volSource">Volume source: web slice stack.</div>
           </div>
         </div>

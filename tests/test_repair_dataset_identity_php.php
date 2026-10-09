@@ -74,5 +74,19 @@ echo "\nthe editor can open it again\n";
 $g = get_dataset_meta('3d/demo', "$DATA_WEB/3d/demo");
 check('get returns the repaired identity', is_array($g) && $g['type'] === '3d' && $g['id'] === '3d/demo' && $g['folderName'] === 'demo');
 
+echo "\nvolume sources left on the staging proxy by an edit during the import\n";
+$proxy = 'api/upload.php?action=blob&ds=live%2Ftl&path=';
+put("$DATA_WEB/live/tl", ['id' => 'live/tl', 'type' => 'live', 'name' => 'TL',
+    'volumeSources' => [['kind' => 'bricks', 'label' => 'Chunked', 'path' => $proxy, 'manifestPath' => $proxy . 'bricks/manifest.json']]]);
+lumen_migration_metadata();
+$s = stored("$DATA_WEB/live/tl")['volumeSources'][0] ?? [];
+check('path points at the published folder', ($s['path'] ?? null) === 'DATA_WEB/live/tl');
+check('manifestPath points at the published manifest', ($s['manifestPath'] ?? null) === 'DATA_WEB/live/tl/bricks/manifest.json');
+check('the rest of the source is kept', ($s['kind'] ?? null) === 'bricks' && ($s['label'] ?? null) === 'Chunked');
+$tlAfter = file_get_contents("$DATA_WEB/live/tl/metadata.json");
+lumen_migration_metadata();
+check('a second pass changes nothing', file_get_contents("$DATA_WEB/live/tl/metadata.json") === $tlAfter);
+check('the sound file is still untouched', file_get_contents("$DATA_WEB/3d/sound/metadata.json") === $soundBefore);
+
 echo $fails ? "\n$fails FAILURE(S)\n" : "\nALL PASS\n";
 exit($fails ? 1 : 0);

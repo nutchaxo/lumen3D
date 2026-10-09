@@ -151,4 +151,22 @@ PR.buildToolbarButtons({
 });
 assert.equal(btns('layouts').length, 3, 'rebuild does not duplicate (idempotent)');
 
+// ── requires: 'tracking' / 'tracking-surface' ─────────────────────────────────
+// A tracked timelapse without an exported surface model shows the trails, never
+// the surface button (it could only fail to load model.glb).
+await PR.loadModules('js/modules', ['tools/tracking-trails', 'tools/tracking-surface'], { dataType: 'live' });
+const trackingButtons = (tracking) => {
+  PR.buildToolbarButtons({
+    dataset: { type: 'live', volumeSources: [{ kind: 'bricks', available: true }], tracking },
+    groups: [{ group: 'visuals', container: '[data-tool-group="visuals"]' }],
+  });
+  const shown = (id) => { const b = btns('visuals').find(x => x.dataset.pluginId === id); return Boolean(b) && b.style.display !== 'none'; };
+  return { trails: shown('tracking-trails'), surface: shown('tracking-surface') };
+};
+assert.deepEqual(trackingButtons(undefined), { trails: false, surface: false }, 'no tracking block: both hidden');
+assert.deepEqual(trackingButtons({ tracksPath: 'tracks.json', surfacePath: null }), { trails: true, surface: false },
+  'tracking without a surface model: trails only');
+assert.deepEqual(trackingButtons({ tracksPath: 'tracks.json', surfacePath: 'model.glb' }), { trails: true, surface: true },
+  'tracking with a surface model: both');
+
 console.log('plugin autonomy (discover hybrid + dynamic toolbar generation): OK');

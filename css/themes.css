@@ -47,6 +47,11 @@
   --badge-2d-text:       #8B7CFF;
   --badge-live-bg:       rgba(255, 167, 38, 0.15);
   --badge-live-text:     #FFA726;
+
+  /* The accent as TEXT (links of the page builder's text widgets, css/pages.css
+     .pr-links). On the dark background the accent itself reads well. */
+  --color-accent-text:        var(--color-accent);
+  --color-accent-text-hover:  var(--color-accent-hover);
 }
 
 /* ── Light Theme ─────────────────────────────────────────── */
@@ -97,4 +102,18 @@
   --badge-2d-text:       #5B4BD6;
   --badge-live-bg:       rgba(230, 140, 20, 0.10);
   --badge-live-text:     #A06000;
+
+  /* The accent cyan is 1.8:1 on white: as text it takes 45 % of the accent over
+     the text colour (#0E6D8C for the default accent: 5.9:1 on white, 5.4:1 on
+     --bg-body), hover 25 %. Derived, so an operator's accent keeps its hue; the
+     fixed pair is the default accent's, for browsers without color-mix(). */
+  --color-accent-text:        #0E6D8C;
+  --color-accent-text-hover:  #144862;
+}
+
+@supports (color: color-mix(in srgb, red 50%, black)) {
+  [data-theme="light"] {
+    --color-accent-text:        color-mix(in srgb, var(--color-accent) 45%, var(--text-primary));
+    --color-accent-text-hover:  color-mix(in srgb, var(--color-accent) 25%, var(--text-primary));
+  }
 }

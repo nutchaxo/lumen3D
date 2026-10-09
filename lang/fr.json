@@ -1452,6 +1452,7 @@
     "valueColor": "Couleur des valeurs",
     "valueSize": "Taille des valeurs",
     "labelColor": "Couleur des libellés",
+    "linkColor": "Couleur des liens",
     "thickness": "Épaisseur",
     "widthPct": "Largeur",
     "lineStyle": "Trait",

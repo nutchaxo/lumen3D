@@ -293,7 +293,8 @@ const PageEditFrame = (() => {
     _syncers.push(() => { cbar.style.opacity = _chromeOn({ si, ci, wi: null }, selected) ? '1' : '0'; });
 
     const widgets = Array.isArray(col.widgets) ? col.widgets : [];
-    widgets.forEach((w, wi) => c.appendChild(_widgetNode(w, si, ci, wi)));
+    const fill = !!(PageRenderer.fillsColumn && PageRenderer.fillsColumn(col));
+    widgets.forEach((w, wi) => c.appendChild(_widgetNode(w, si, ci, wi, fill)));
     if (!widgets.length) {
       const dz = document.createElement('div');
       dz.style.cssText = 'text-align:center;opacity:.5;font-size:13px;padding:26px 8px;border:1px dashed var(--border-subtle,#2a2a3a);border-radius:8px;pointer-events:none';
@@ -303,7 +304,9 @@ const PageEditFrame = (() => {
     return c;
   }
 
-  function _widgetNode(w, si, ci, wi) {
+  // `fill`: the column stretches its only card (PageRenderer.fillsColumn); the
+  // chrome box and the view pass the height down to the renderer's widget box.
+  function _widgetNode(w, si, ci, wi, fill) {
     const selected = _sel && _sel.si === si && _sel.ci === ci && _sel.wi === wi;
     const box = document.createElement('div');
     box.dataset.ebWi = wi; box.dataset.ebSi = si; box.dataset.ebCi = ci;
@@ -335,7 +338,16 @@ const PageEditFrame = (() => {
 
     const view = document.createElement('div');
     view.style.cssText = 'pointer-events:none';
-    try { if (typeof PageRenderer !== 'undefined') { const n = PageRenderer.renderWidget(w); if (n) view.appendChild(n); } } catch (_) {}
+    if (fill) {
+      box.style.cssText += ';' + PageRenderer.FILL_ITEM;
+      view.style.cssText += ';height:100%;display:flex;flex-direction:column';
+    }
+    try {
+      if (typeof PageRenderer !== 'undefined') {
+        const n = PageRenderer.renderWidget(w);
+        if (n) { if (fill) n.style.cssText += ';' + PageRenderer.FILL_ITEM; view.appendChild(n); }
+      }
+    } catch (_) {}
     if (!view.childNodes.length) {
       view.style.cssText = 'opacity:.55;font-size:13px;padding:14px;border:1px dashed var(--border-subtle,#2a2a3a);border-radius:8px';
       view.textContent = _lv(w.text) || (w.type || 'widget');

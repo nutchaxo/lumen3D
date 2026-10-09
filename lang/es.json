@@ -1452,6 +1452,7 @@
     "valueColor": "Color de los valores",
     "valueSize": "Tamaño de los valores",
     "labelColor": "Color de las etiquetas",
+    "linkColor": "Color de los enlaces",
     "thickness": "Grosor",
     "widthPct": "Ancho",
     "lineStyle": "Trazo",

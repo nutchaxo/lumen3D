@@ -1452,6 +1452,7 @@
     "valueColor": "Kleur van de waarde",
     "valueSize": "Grootte van de waarde",
     "labelColor": "Kleur van het label",
+    "linkColor": "Kleur van de links",
     "thickness": "Dikte",
     "widthPct": "Breedte",
     "lineStyle": "Lijnstijl",

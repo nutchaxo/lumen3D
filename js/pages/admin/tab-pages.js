@@ -634,8 +634,12 @@ function _styleGroupsSpecific(type) {
   const align = _alignField();
   switch (type) {
     case 'heading':
-    case 'richtext':
       return [{ title: t('pages.grp.format', 'Mise en forme'), icon: 'align-left', fields: [align] }];
+    case 'richtext':
+      return [{ title: t('pages.grp.format', 'Mise en forme'), icon: 'align-left', fields: [
+        align,
+        { k: 'props.linkColor', t: 'color', l: t('pages.linkColor', 'Couleur des liens') },
+      ] }];
     case 'image':
       return [{ title: t('pages.grp.layout', 'Mise en page'), icon: 'layout-grid', fields: [
         { k: 'props.width', t: 'slider', l: t('pages.width', 'Largeur'), min: 40, max: 1200, step: 10, ph: 'auto', dv: 400 },
@@ -784,6 +788,7 @@ function _styleGroupsSpecific(type) {
       return [{ title: t('pages.grp.layout', 'Mise en page'), icon: 'layout-grid', fields: [
         { k: 'props.layout', t: 'seg', l: t('pages.il.layout', 'Disposition'), opts: [['v', t('pages.il.v', 'Vertical')], ['h', t('pages.il.h', 'Horizontal')]] },
         { k: 'props.iconColor', t: 'color', l: t('pages.il.iconColor', 'Couleur des icônes') },
+        { k: 'props.linkColor', t: 'color', l: t('pages.linkColor', 'Couleur des liens') },
         { k: 'props.iconSize', t: 'slider', l: t('pages.il.iconSize', 'Taille des icônes'), min: 8, max: 80, ph: 'auto', dv: 18 },
         { k: 'props.gap', t: 'slider', l: t('pages.il.gap', 'Espacement'), min: 0, max: 80, ph: 'auto', dv: 12 },
       ] }];
@@ -838,6 +843,7 @@ function _styleGroupsSpecific(type) {
         { k: 'props.mono', t: 'check', l: t('pages.bd.mono', 'Police mono') },
         { k: 'props.labelColor', t: 'color', l: t('pages.sl.labelColor', 'Couleur des intitulés') },
         { k: 'props.valueColor', t: 'color', l: t('pages.sl.valueColor', 'Couleur des valeurs') },
+        { k: 'props.linkColor', t: 'color', l: t('pages.linkColor', 'Couleur des liens') },
         { k: 'props.lineColor', t: 'color', l: t('pages.lineColor', 'Couleur des filets') },
       ] }];
     case 'logo-strip':

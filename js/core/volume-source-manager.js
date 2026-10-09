@@ -68,6 +68,15 @@ const VolumeSourceManager = (() => {
     return sources.find(source => source.available) || null;
   }
 
+  /** True when the dataset has a slice stack (`preview/slices/`, `slices/`) to read: an
+   *  available 'webstack' source. A dataset that lists only 'bricks' sources has no
+   *  slice file at all, and a slice URL built for it is a guaranteed 404 — a burst of
+   *  hundreds of them per timepoint, which a shared host's firewall answers with a ban.
+   *  A dataset that lists nothing is a legacy slice-stack dataset (normalizeSources). */
+  function hasSliceStack(dataset = null) {
+    return normalizeSources(dataset).some(source => source.kind === 'webstack' && source.available);
+  }
+
   function _label(kind) {
     if (kind === 'bricks') return 'Chunked bricks volume';
     if (kind === 'webstack') return 'Web slice stack';
@@ -76,6 +85,7 @@ const VolumeSourceManager = (() => {
 
   return {
     normalizeSources,
-    preferred
+    preferred,
+    hasSliceStack
   };
 })();

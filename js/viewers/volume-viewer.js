@@ -2301,7 +2301,14 @@ const VolumeViewer = (() => {
    * @param {number} timepoint Optional timepoint to load
    * @param {function} onProgress Progress callback
    */
+  /** A dataset that declares only brick sources has no slice file: building a slice URL
+   *  for it is a guaranteed 404 (VolumeSourceManager.hasSliceStack). */
+  function _hasSliceStack(metadata) {
+    return typeof VolumeSourceManager === 'undefined' || VolumeSourceManager.hasSliceStack(metadata);
+  }
+
   async function loadVolume(basePath, metadata, timepoint = null, onProgress = null, options = {}) {
+    if (!_hasSliceStack(metadata)) return { available: false, reason: 'no-slice-stack' };
     // Registered for the whole load, whatever way it ends (a throw included), so a
     // view export never waits on a load that is over (_isVolumeStreaming).
     const job = { loadId: 0 };
@@ -2587,6 +2594,7 @@ const VolumeViewer = (() => {
    */
   async function preloadVolume(basePath, metadata, timepoint = null, options = {}) {
     const quality = options.quality || '256x256';
+    if (!_hasSliceStack(metadata)) return { quality, requested: 0, successfulLoads: 0, failedLoads: 0 };
     const qualityInfo = _resolveQuality(metadata, quality);
     const { z: sourceDepth, c: channels } = metadata.dimensions || {};
     const isLive = metadata.type === 'live';

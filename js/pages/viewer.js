@@ -5228,13 +5228,17 @@ const ViewerApp = (() => {
     if (!candidates.length) return;
 
     // A bricked dataset has no slice stack. preloadVolume() only ever builds slice URLs,
-    // so on a 4D brick dataset this preloader fired hundreds of doomed requests per
-    // timepoint (preview/slices/tNNN_zNNN_c0.webp -> 404), burning the browser's
-    // connection budget on nothing and, on a shared host, inviting the 429 bursts the
-    // project .htaccess already documents. Warm the actual pack files instead: they are
-    // 45-125 KB per timepoint here, and the switch then costs a decode, not a round-trip.
+    // so on a 4D brick dataset it fires hundreds of doomed requests per timepoint
+    // (preview/slices/tNNN_zNNN_c0.webp -> 404), burning the browser's connection
+    // budget on nothing and, on a shared host, inviting the IP ban its firewall answers
+    // a burst with. Warm the actual pack files instead: they are 45-125 KB per timepoint
+    // here, and the switch then costs a decode, not a round-trip. Which path is decided
+    // by the dataset's declared sources: a bricked dataset whose manifest has not been
+    // read yet (or failed to load) warms nothing rather than falling to the slices.
     const tpRows = _brickManifest?.timepoints;
-    const work = tpRows && typeof tpRows === 'object'
+    const packRows = Boolean(tpRows && typeof tpRows === 'object');
+    if (!packRows && !_hasSliceStack(datasetMeta)) return;
+    const work = packRows
       ? () => {
         const brickDir = datasetMeta?.qualities?.native?.directory || 'bricks';
         const lod = _lodForQuality(_qualityMode);
@@ -5320,9 +5324,19 @@ const ViewerApp = (() => {
       if (streamed?.available) {
         return streamed;
       }
+      // A bricked dataset has no slice stack to fall back on: the slice path would
+      // only fire a 404 per slice and channel. Its failure is reported as it is.
+      if (!_hasSliceStack(meta)) return streamed;
       console.warn('[ViewerApp] Brick streaming unavailable, fallback to slices:', streamed?.reason || 'unknown');
     }
     return VolumeViewer.loadVolume(basePath, meta, timepoint, onProgress, { quality, ...extraOptions });
+  }
+
+  /** Whether the dataset has slice files to read (VolumeSourceManager.hasSliceStack),
+   *  decided from its declared sources — never from whether its brick manifest has
+   *  landed yet. Without the source manager, a dataset is assumed to have none. */
+  function _hasSliceStack(meta) {
+    return typeof VolumeSourceManager !== 'undefined' && VolumeSourceManager.hasSliceStack(meta);
   }
 
   function _handleQualityProgress(state) {

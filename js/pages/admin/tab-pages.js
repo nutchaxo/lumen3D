@@ -37,6 +37,7 @@ import { setUnsaved, registerDirtyGuard } from './bus.js';
 import { renderFields, renderGroups } from './pages-controls.js';
 import { renderTranslatePanel } from './pages-translate.js';
 import { renderVariablesPanel } from './pages-variables.js';
+import { openExportDialog, pickImportFile } from './pages-transfer-ui.js';
 
 const SPECIAL = [{ slug: 'home', builtin: true }, { slug: 'about', builtin: true }];
 
@@ -979,6 +980,8 @@ function renderLauncher() {
         <select class="adm-field-input" id="pages-select" style="width:auto;min-width:200px">${_pageOptions()}</select>
         <button class="adm-btn adm-btn-ghost adm-btn-sm" id="pages-new"><i data-lucide="plus"></i> ${escHtml(t('pages.new', 'Nouvelle page'))}</button>
         <button class="adm-btn adm-btn-ghost adm-btn-sm" id="pages-delete"><i data-lucide="trash-2"></i> ${escHtml(t('pages.delete', 'Supprimer'))}</button>
+        <button class="adm-btn adm-btn-ghost adm-btn-sm" id="pages-export" title="${escHtml(t('pages.xfer.exportTitle', 'Exporter des pages'))}"><i data-lucide="file-down"></i> ${escHtml(t('pages.xfer.export', 'Exporter'))}</button>
+        <button class="adm-btn adm-btn-ghost adm-btn-sm" id="pages-import" title="${escHtml(t('pages.xfer.importTitle', 'Importer des pages'))}"><i data-lucide="file-up"></i> ${escHtml(t('pages.xfer.import', 'Importer'))}</button>
         <label style="display:flex;gap:6px;align-items:center;font-size:13px">${escHtml(t('pages.lang', 'Langue'))}<select class="adm-field-input" id="pages-loc" style="width:auto">${_locOptions()}</select></label>
         <span style="flex:1"></span>
         <button class="adm-btn adm-btn-accent" id="pages-edit"><i data-lucide="pencil-ruler"></i> ${escHtml(t('pages.editWith', 'Modifier avec l\'éditeur'))}</button>
@@ -995,6 +998,8 @@ function renderLauncher() {
   el('pages-select').addEventListener('change', (e) => switchPage(e.target.value));
   el('pages-new').addEventListener('click', newPage);
   el('pages-delete').addEventListener('click', deletePage);
+  el('pages-export').addEventListener('click', () => openExportDialog(_xferCtx()));
+  el('pages-import').addEventListener('click', () => pickImportFile(_xferCtx()));
   el('pages-loc').addEventListener('change', (e) => { _editLoc = e.target.value; });
   el('pages-edit').addEventListener('click', enterEditor);
   refreshIcons(root);
@@ -1836,6 +1841,32 @@ function addWidgetToSelection(type) {
   _sel = { si, ci: realCi, wi: at };
   _side = 'settings';
   _afterMutate();
+}
+
+// ── Import / export of pages (pages-transfer-ui.js) ─────────────
+// The dialogs write through the same endpoints as the editor; this is what they
+// need from the tab's state.
+function _xferCtx() {
+  return {
+    pages: () => _pages,
+    currentSlug: () => _slug,
+    instance: () => _instance,
+    locale: () => _editLoc,
+    isBusy: () => _switching || _dirty || _autosaveFailed || !!_autosaveTimer,
+    normalizeContent: (b) => {
+      const out = { sections: _sanitizeSections(_migrate(b)) };
+      if (_isObj(b) && _isObj(b.background) && b.background.preset) out.background = JSON.parse(JSON.stringify(b.background));
+      return out;
+    },
+    reconcileInstance: _reconcileInstance,
+    saveInstancePaths: _saveInstancePaths,
+    takeOver: (slug) => { try { _chan?.postMessage({ t: 'takeover', slug, id: _tabId }); } catch (_) { /* channel closed */ } },
+    afterImport: async (slugs) => {
+      _buildPageList();
+      const show = (slugs || []).find((s) => _pages.some((p) => p.slug === s)) || (_pages.some((p) => p.slug === _slug) ? _slug : 'home');
+      await selectPage(show);
+    },
+  };
 }
 
 // ── Page management + persistence ───────────────────────────────

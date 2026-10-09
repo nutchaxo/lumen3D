@@ -1273,6 +1273,7 @@ const ViewerApp = (() => {
 
     _bindDetailControls();
     _bindGpuCompressionControls();
+    _bindStabilizationControl();
     _bindViewExport();
   }
 
@@ -4048,6 +4049,7 @@ const ViewerApp = (() => {
     // Only a timelapse has a playback rate; on a still volume the key would be
     // noise in the saved workspace.
     if (isLive) state.viewer.playbackFps = _playbackFps;
+    if (_registration) state.viewer.stabilized = _stabilizeVolume;
     // Merge plugin states
     if (typeof PluginRegistry !== 'undefined') {
       state.plugins = PluginRegistry.getWorkspaceState();
@@ -4201,6 +4203,7 @@ const ViewerApp = (() => {
       _renderVolumeMeasurement();
     }
 
+    if (typeof viewerState.stabilized === 'boolean') setVolumeStabilized(viewerState.stabilized);
     if (isLive && Number.isFinite(viewerState.playbackFps)) {
       // The onChange callback wired at init() picks the new rate up and persists it.
       Timeline.setSpeed?.(viewerState.playbackFps);
@@ -4853,6 +4856,33 @@ const ViewerApp = (() => {
     _registration = reg;
     VolumeViewer.setStabilizationSpace?.(extent, reg.imageBoxUnionUm || null);
     _stabilizeVolume = true;
+    _renderStabilizationControl();
+  }
+
+  /** The Display panel's Stabilisation select: shown only for a timelapse whose
+   *  registration applies to the volume. "Raw images" shows each frame where the
+   *  microscope recorded it (the specimen drifts and turns); the tracking layer and
+   *  the tracking tools follow into the same frame of reference. */
+  function _renderStabilizationControl() {
+    const label = document.getElementById('label-stabilization');
+    const select = document.getElementById('select-stabilization');
+    const line = document.getElementById('stabilization-status');
+    const available = Boolean(_registration);
+    label?.classList.toggle('hidden', !available);
+    line?.classList.toggle('hidden', !available);
+    if (!available) return;
+    if (select) select.value = _stabilizeVolume ? 'on' : 'off';
+    if (line) {
+      line.textContent = _stabilizeVolume
+        ? _tt('viewer.stabilizationActive', 'Drift and rotation removed using the cell tracking.')
+        : _tt('viewer.stabilizationRaw', 'Raw acquisition: each frame as the microscope recorded it.');
+    }
+  }
+
+  function _bindStabilizationControl() {
+    const select = document.getElementById('select-stabilization');
+    if (!select) return;
+    select.addEventListener('change', () => setVolumeStabilized(select.value !== 'off'));
   }
 
   function _transformForTimepoint(t) {
@@ -4870,8 +4900,18 @@ const ViewerApp = (() => {
   /** Toggle between the stabilised frame and the raw acquisition frame. */
   function setVolumeStabilized(enabled) {
     if (!_registration) return false;
-    _stabilizeVolume = Boolean(enabled);
+    const next = Boolean(enabled);
+    if (next === _stabilizeVolume) { _renderStabilizationControl(); return _stabilizeVolume; }
+    _stabilizeVolume = next;
     _applyStabilization(_currentTimepoint);
+    _renderStabilizationControl();
+    // The overlays place themselves from this event: the frame on screen is the
+    // same one, its frame of reference is not.
+    window.dispatchEvent(new CustomEvent('viewer-timepoint-ready', {
+      detail: { frame: Number.isFinite(_currentTimepoint) ? _currentTimepoint : 0,
+        stabilized: Boolean(VolumeViewer.isStabilized?.()) }
+    }));
+    VolumeViewer.triggerRender?.();
     return _stabilizeVolume;
   }
 

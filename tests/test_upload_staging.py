@@ -671,6 +671,18 @@ class TestOperatorEdits(StagingCase):
         published = json.loads((self.tmp / "DATA_WEB/3d/DS/metadata.json").read_text())
         self.assertNotIn("staging", published)
 
+    def test_proxy_volume_sources_never_reach_metadata_json(self):
+        """The editor's view points volume sources at the session-gated blob proxy;
+        saved back verbatim they survived publication and answered 401 to visitors."""
+        self.stage_complete()
+        proxy = "api/upload.php?action=blob&ds=3d%2FDS&path="
+        us.write_staged_metadata("3d", "DS", {"name": "Edited", "volumeSources": [
+            {"kind": "bricks", "label": "Chunked", "path": proxy, "manifestPath": proxy + "bricks/manifest.json"}]})
+        src = json.loads((us.STAGING_DIR / "3d/DS/metadata.json").read_text())["volumeSources"][0]
+        self.assertEqual(src["path"], "DATA_WEB/3d/DS")
+        self.assertEqual(src["manifestPath"], "DATA_WEB/3d/DS/bricks/manifest.json")
+        self.assertEqual((src["kind"], src["label"]), ("bricks", "Chunked"))
+
     def test_an_edit_cannot_retype_or_rehome_the_dataset(self):
         self.stage_complete()
         us.write_staged_metadata("3d", "DS", {"type": "live", "folderName": "../evil", "id": "../evil"})

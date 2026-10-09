@@ -897,10 +897,15 @@ const PluginRegistry = (() => {
     const sources = Array.isArray(opts.dataset?.volumeSources) ? opts.dataset.volumeSources : [];
     // `requires` names a volume source kind ('bricks', 'webstack', …) — or
     // 'tracking', satisfied when the dataset carries a cell-tracking block, so a
-    // tracking tool hides itself on a timelapse that was never tracked.
-    const hasSource = (kind) => (kind === 'tracking')
-      ? Boolean(opts.dataset?.tracking && opts.dataset.tracking.tracksPath)
-      : sources.some(s => s && s.kind === kind && s.available !== false);
+    // tracking tool hides itself on a timelapse that was never tracked; or
+    // 'tracking-surface', satisfied when that block names an exported surface
+    // model (tracking.surfacePath), which many tracked timelapses do not have.
+    const tracking = opts.dataset?.tracking;
+    const hasSource = (kind) => {
+      if (kind === 'tracking') return Boolean(tracking && tracking.tracksPath);
+      if (kind === 'tracking-surface') return Boolean(tracking && tracking.tracksPath && tracking.surfacePath);
+      return sources.some(s => s && s.kind === kind && s.available !== false);
+    };
 
     const containerFor = {};
     const touched = [];

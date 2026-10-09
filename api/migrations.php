@@ -92,7 +92,9 @@ if (in_array($action, LUMEN_MIG_BINARY_ACTIONS, true)) {
 switch ($action) {
 case 'status': case 'plan': case 'unit_put': case 'unit_run': case 'finalize': case 'cancel': case 'bench': case 'unit_inputs':
 case 'speedtest': case 'speedtest_put': case 'drop_previous':
+    $t0 = microtime(true);
     [$status, $payload] = lumen_mig_handle($action, $params, $body);
+    if ($action === 'status') header('Server-Timing: ' . lumen_mig_status_server_timing((microtime(true) - $t0) * 1000));
     admin_json_out($payload, $status);
 }
 

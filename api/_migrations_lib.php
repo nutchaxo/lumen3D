@@ -3086,7 +3086,62 @@ function lumen_mig_estimate_for(array $plan, array $m, ?array $j): array {
  * pending repair), the jobs, and an estimate summed over the pending migrations
  * (estimate.migrations[id] each; m003 before planes/ exists is an upper bound).
  */
+/**
+ * What a status row of a volume dataset depends on, as one hash of (path, mtime, size): its
+ * metadata, its bricks manifest and every index.bin, the directories of its packs, planes/
+ * and mips/ (a pack created or removed changes its directory), their manifests, the kept
+ * previous tree, the journals of its jobs, and this file (an update may change the row).
+ * PHP rebuilds nothing between requests: without it every visit of the Data updates tab
+ * re-read, re-hashed and re-decoded every index.bin of every dataset (seconds per large
+ * dataset on a shared host). The Python server keeps its plans in memory instead.
+ */
+function lumen_mig_status_sig(string $type, string $folder, string $dir): string {
+    $parts = ['status-row-v1', LUMEN_MIG_LATEST];
+    $stat = function (string $p) use (&$parts): void {
+        $mt = @filemtime($p);
+        // The inode too: an atomic rewrite (journal, metadata) is a new file even within the same second.
+        $parts[] = $p . '|' . ($mt === false ? '-' : $mt . '|' . @fileinode($p) . '|' . (is_dir($p) ? 'd' : (string)@filesize($p)));
+    };
+    clearstatcache();
+    $stat(__FILE__);
+    foreach (['metadata.json', LUMEN_MIG_PREVIOUS_BRICKS . '/manifest.json'] as $rel) $stat("$dir/$rel");
+    // Packs live 3 levels down in bricks/ (tNNN/lK/cC of a v3 timelapse), planes and MIP packs
+    // directly in planes/ and mips/ (or planes/tNNN/).
+    foreach (['bricks' => 3, 'planes' => 1, 'mips' => 1] as $root => $maxDepth) {
+        $stat("$dir/$root");
+        $stat("$dir/$root/manifest.json");
+        $stat("$dir/$root/index.bin");
+        $level = ["$dir/$root"];
+        for ($depth = 0; $depth < $maxDepth && $level; $depth++) {
+            $next = [];
+            foreach ($level as $d) foreach (glob("$d/*", GLOB_ONLYDIR) ?: [] as $sub) {
+                $stat($sub);
+                if ($depth === 0) { $stat("$sub/manifest.json"); $stat("$sub/index.bin"); }
+                $next[] = $sub;
+            }
+            $level = $next;
+        }
+    }
+    foreach (LUMEN_MIGRATIONS as $m) $stat(lumen_mig_journal_path($type, $folder, $m['id']));
+    return hash('sha256', implode("
+", $parts));
+}
+
+/** The status row of one dataset, from the row cache when nothing it depends on changed. */
 function lumen_mig_dataset_status(string $type, string $folder, string $dir): array {
+    if (!in_array($type, LUMEN_VOLUME_DATASET_TYPES, true)) return lumen_mig_dataset_status_compute($type, $folder, $dir);
+    $sig = lumen_mig_status_sig($type, $folder, $dir);
+    $file = lumen_mig_root() . '/.status/' . $type . '__' . $folder . '.json';
+    $hit = is_file($file) ? json_decode((string)@file_get_contents($file), true) : null;
+    if (is_array($hit) && ($hit['sig'] ?? null) === $sig && is_array($hit['row'] ?? null)) return $hit['row'];
+    $row = lumen_mig_dataset_status_compute($type, $folder, $dir);
+    if (is_dir(dirname($file)) || @mkdir(dirname($file), 0755, true)) {
+        @lumen_write_file_atomic($file, json_encode(['sig' => $sig, 'row' => $row], JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE));
+    }
+    return $row;
+}
+
+function lumen_mig_dataset_status_compute(string $type, string $folder, string $dir): array {
     $meta = lumen_mig_read_metadata($dir);
     $fv = lumen_mig_format_version($meta);
     $row = ['id' => "$type/$folder", 'type' => $type, 'folder' => $folder,
@@ -3149,7 +3204,23 @@ function lumen_mig_dataset_status(string $type, string $folder, string $dir): ar
     return $row;
 }
 
+/**
+ * `Server-Timing` of the last status: the total and the three slowest datasets, so a slow
+ * Data updates tab can be diagnosed from the browser's network panel.
+ */
+function lumen_mig_status_server_timing(float $totalMs): string {
+    $per = $GLOBALS['lumen_mig_status_ms'] ?? [];
+    arsort($per);
+    $out = [sprintf('status;dur=%.1f', $totalMs)];
+    $i = 0;
+    foreach (array_slice($per, 0, 3, true) as $id => $ms) {
+        $out[] = sprintf('ds%d;desc="%s";dur=%.1f', ++$i, preg_replace('/[^A-Za-z0-9._\/-]/', '_', (string)$id), $ms);
+    }
+    return implode(', ', $out);
+}
+
 function lumen_mig_status(): array {
+    $GLOBALS['lumen_mig_status_ms'] = [];
     $datasets = [];
     foreach (['3d', '2d', 'live'] as $type) {
         $base = data_web() . '/' . $type;
@@ -3157,7 +3228,11 @@ function lumen_mig_status(): array {
         $names = array_values(array_filter(@scandir($base) ?: [], fn($n) => $n !== '' && $n[0] !== '.'
             && preg_match('/^[A-Za-z0-9_][A-Za-z0-9._-]*$/D', $n) && is_dir("$base/$n")));
         usort($names, fn($a, $b) => strcmp(strtolower($a), strtolower($b)));
-        foreach ($names as $folder) $datasets[] = lumen_mig_dataset_status($type, $folder, "$base/$folder");
+        foreach ($names as $folder) {
+            $t0 = microtime(true);
+            $datasets[] = lumen_mig_dataset_status($type, $folder, "$base/$folder");
+            $GLOBALS['lumen_mig_status_ms']["$type/$folder"] = (microtime(true) - $t0) * 1000;
+        }
     }
     return ['ok' => true, 'latest' => LUMEN_MIG_LATEST, 'migrations' => LUMEN_MIGRATIONS,
             'datasets' => $datasets, 'server' => lumen_mig_capabilities()];

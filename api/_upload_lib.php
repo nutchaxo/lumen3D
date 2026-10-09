@@ -1478,6 +1478,9 @@ function lumen_up_write_metadata($type, $folder, $meta): array {
 
     $existing = lumen_read_json_doc("$dir/metadata.json") ?: [];
     $merged = array_merge($existing, array_diff_key($meta, array_flip(LUMEN_UP_COMPUTED)));
+    if (isset($merged['volumeSources'])) {
+        $merged['volumeSources'] = lumen_canonical_volume_sources($merged['volumeSources'], $type, $folder)[0];
+    }
     $merged['type'] = $type;
     $merged['folderName'] = $folder;
     // One id shape everywhere: '<type>/<folder>'. It is what the catalog publishes

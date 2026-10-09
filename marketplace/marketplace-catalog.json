@@ -1,7 +1,7 @@
 {
   "version": 1,
-  "serial": 5,
-  "issuedAt": "2026-10-07T22:56:51Z",
+  "serial": 6,
+  "issuedAt": "2026-10-09T08:39:15Z",
   "plugins": [
     {
       "id": "gaussian-filter",
@@ -442,13 +442,13 @@
       "description": "Shows the specimen surface exported with the cell tracking (model.glb) inside the volume, per timepoint and in the frame of reference on screen: uniform, local cell density or region colouring, the volume's own clipping, and an oblique cut plane with a filled cap.",
       "creator": "IRIBHM",
       "icon": "shell",
-      "platformCompat": ">=1.53.0",
+      "platformCompat": ">=1.60.7",
       "sandboxCapabilities": null,
-      "latestVersion": "1.0.2",
-      "assetUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/tracking-surface/plugin-tracking-surface-1.0.2.zip",
+      "latestVersion": "1.0.3",
+      "assetUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/tracking-surface/plugin-tracking-surface-1.0.3.zip",
       "sumsUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/tracking-surface/SHA256SUMS",
       "sigUrl": "https://raw.githubusercontent.com/nutchaxo/lumen3D/main/marketplace/plugins/tracking-surface/SHA256SUMS.sig",
-      "sha256": "90af409175ff4c1783448b1b4702b5b6b1f7d820b53e1df29b504ce38491bc96",
+      "sha256": "9011a5901584c8e52af7a9c23e57143cfc9256565b28f0a1f0e8eb4ed8d7a674",
       "recommended": true
     },
     {

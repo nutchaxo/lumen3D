@@ -375,6 +375,11 @@
     "gpuCompressionAuto": "Tijdreeksen",
     "gpuCompressionActive": "Weergegeven uit door de GPU gecomprimeerde blokken: half zoveel geheugen, dus meer frames blijven geladen; voxelwaarden zijn benaderd (ongeveer 1–2 niveaus op 255). De native pass van de Studio leest exacte voxels.",
     "gpuCompressionInactive": "Weergegeven uit exacte voxels.",
+    "stabilization": "Stabilisatie",
+    "stabilizationOn": "Gestabiliseerd",
+    "stabilizationOff": "Ruwe beelden",
+    "stabilizationActive": "Drift en rotatie gecorrigeerd met de celtracking.",
+    "stabilizationRaw": "Ruwe opname: elk beeld zoals de microscoop het vastlegde.",
     "gpuCompressionUnsupported": "Niet beschikbaar op deze GPU: weergegeven uit exacte voxels.",
     "previousBricks": "vorige versie (vóór de data-update)",
     "previousBricksMissing": "Deze dataset heeft geen vorige versie bewaard: de huidige wordt getoond."

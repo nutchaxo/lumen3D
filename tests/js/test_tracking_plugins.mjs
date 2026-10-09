@@ -310,8 +310,11 @@ ok('tracking plugin manifests', () => {
     const meta = JSON.parse(readFileSync(path.join(base, id, 'plugin.json'), 'utf8'));
     assert.equal(meta.id, id);
     assert.deepEqual(meta.dataTypes, ['live'], `${id} is a timelapse tool`);
-    assert.deepEqual(meta.requires, ['tracking'], `${id} hides itself without a tracking block`);
-    assert.ok(/>=1\.53\.0/.test(meta.platformCompat), `${id} needs the ctx.tracking façade`);
+    // The surface also hides itself on a tracked timelapse without a surface model
+    // (tracking.surfacePath), which needs the core that knows that requirement.
+    const surface = id === 'tracking-surface';
+    assert.deepEqual(meta.requires, surface ? ['tracking', 'tracking-surface'] : ['tracking'], `${id} hides itself without a tracking block`);
+    assert.ok((surface ? />=1\.60\.7/ : />=1\.53\.0/).test(meta.platformCompat), `${id} needs the ctx.tracking façade`);
     if (meta.subtype === 'tool') {
       assert.ok(meta.tool && !tools.has(meta.tool) && meta.tool !== 'measure', `${id} tool id ${meta.tool} is unique`);
       tools.add(meta.tool);
@@ -323,7 +326,7 @@ ok('tracking plugin manifests', () => {
     assert.ok(viewer.includes(needle), `viewer.js provides ${needle}`);
   }
   const registry = readFileSync(path.join(ROOT, 'js/core/plugin-registry.js'), 'utf8');
-  assert.ok(/function collect\(hook\)/.test(registry) && /kind === 'tracking'/.test(registry), 'PluginRegistry.collect + requires:tracking');
+  assert.ok(/function collect\(hook\)/.test(registry) && /kind === 'tracking'/.test(registry) && /kind === 'tracking-surface'/.test(registry), 'PluginRegistry.collect + requires:tracking / tracking-surface');
 });
 
 console.log('OK  tracking plugins: %d checks', checks);

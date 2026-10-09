@@ -1078,9 +1078,35 @@ function lumen_migration_has_legacy_ids($ids): bool {
 }
 
 /**
+ * The editor's view of a staged dataset points its volume sources at the
+ * session-gated blob proxy so the admin preview can mount bytes that are not web
+ * served yet (lumen_staged_dataset). Written back into metadata.json, those URLs
+ * survive publication and answer 401 to every visitor. Map any source addressed
+ * through the proxy back onto the published DATA_WEB location; returns
+ * [sources, changed]. Twin: upload_staging.py canonical_volume_sources.
+ */
+function lumen_canonical_volume_sources($sources, string $type, string $folder): array {
+    if (!is_array($sources)) return [$sources, false];
+    $base = "DATA_WEB/$type/$folder";
+    $targets = ['path' => $base, 'manifestPath' => "$base/bricks/manifest.json"];
+    $changed = false;
+    foreach ($sources as $i => $src) {
+        if (!is_array($src)) continue;
+        foreach ($targets as $key => $value) {
+            if (isset($src[$key]) && is_string($src[$key]) && strncmp($src[$key], 'api/upload.php', 14) === 0) {
+                $sources[$i][$key] = $value;
+                $changed = true;
+            }
+        }
+    }
+    return [$sources, $changed];
+}
+
+/**
  * Make every published metadata.json agree with its folder: `type` is the directory
- * it sits in, `id` is '<type>/<folder>', and any dataset relation the operator
- * recorded is re-pointed at the new id.
+ * it sits in, `id` is '<type>/<folder>', any dataset relation the operator recorded
+ * is re-pointed at the new id, and no volume source is still addressed through the
+ * staging proxy (an edit made during the import).
  */
 function lumen_migration_metadata(): void {
     foreach (LUMEN_DATASET_TYPES as $type) {
@@ -1095,7 +1121,8 @@ function lumen_migration_metadata(): void {
             $peek = admin_read_json($path);
             if ($peek === null) continue;
             if (($peek['type'] ?? null) === $type && ($peek['id'] ?? null) === "$type/$folder"
-                && !lumen_migration_has_legacy_ids($peek['relatedIds'] ?? null)) continue;
+                && !lumen_migration_has_legacy_ids($peek['relatedIds'] ?? null)
+                && !lumen_canonical_volume_sources($peek['volumeSources'] ?? null, $type, $folder)[1]) continue;
             lumen_with_lock($path, function () use ($path, $type, $folder) {
                 $meta = lumen_read_json_doc($path);       // keeps `{}` maps as maps
                 if ($meta === null) return;
@@ -1103,6 +1130,9 @@ function lumen_migration_metadata(): void {
                 $meta['id']   = "$type/$folder";
                 if (isset($meta['relatedIds']) && is_array($meta['relatedIds'])) {
                     $meta['relatedIds'] = array_map('lumen_migrate_legacy_id', $meta['relatedIds']);
+                }
+                if (isset($meta['volumeSources'])) {
+                    $meta['volumeSources'] = lumen_canonical_volume_sources($meta['volumeSources'], $type, $folder)[0];
                 }
                 if (!lumen_migration_write_json($path, $meta)) error_log("dataset-type migration: FAILED metadata $type/$folder");
             });

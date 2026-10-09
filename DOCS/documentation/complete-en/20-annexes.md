@@ -204,6 +204,7 @@ A good tool says what it cannot do. Here are the **deliberate** limits, checked 
 | Limit | Why, and what to do |
 |---|---|
 | **No calibrated intensity quantification** | The pipeline brings 12 or 16 bits down to 0–255 between an estimated background and signal; the grey levels shown are **relative** (chapters 5 and 11). To compare intensities between samples, go back to the original Imaris file |
+| **No objects thinner than about 3 voxels** | The cleaning removes isolated points and then smooths the background with a median: a point, a thread or a sheet one or two voxels thick is erased, even when bright (chapter 5, § 5.10). Check in the original Imaris file |
 | **4 channels displayed at most** | Volumes are loaded into a four-component texture (red, green, blue, alpha). The pipeline writes all the channels; the viewer draws the first four (chapter 11) |
 | **No deconvolution, no flat-field correction** | The pipeline subtracts a background and sets a window; it corrects neither the lens blur (point spread function) nor uneven illumination |
 | **No segmentation, no cell detection** | Cell tracking is **read** from the analysis done in Imaris, never recomputed (chapter 8) |

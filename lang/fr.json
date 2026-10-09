@@ -375,6 +375,11 @@
     "gpuCompressionAuto": "Timelapses",
     "gpuCompressionActive": "Affiché depuis des blocs compressés par le GPU : moitié moins de mémoire, donc plus de frames gardées ; les valeurs des voxels sont approchées (environ 1 à 2 niveaux sur 255). Le passage natif du Studio lit les voxels exacts.",
     "gpuCompressionInactive": "Affiché depuis les voxels exacts.",
+    "stabilization": "Stabilisation",
+    "stabilizationOn": "Stabilisé",
+    "stabilizationOff": "Images brutes",
+    "stabilizationActive": "Dérive et rotation corrigées grâce au suivi cellulaire.",
+    "stabilizationRaw": "Acquisition brute : chaque image telle que le microscope l'a enregistrée.",
     "gpuCompressionUnsupported": "Indisponible sur ce GPU : affiché depuis les voxels exacts.",
     "previousBricks": "version précédente (avant la mise à jour des données)",
     "previousBricksMissing": "Ce dataset n'a conservé aucune version précédente : affichage de la version actuelle."

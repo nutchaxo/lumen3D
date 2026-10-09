@@ -375,6 +375,11 @@
     "gpuCompressionAuto": "Series temporales",
     "gpuCompressionActive": "Mostrado desde bloques comprimidos por la GPU: la mitad de memoria, así se mantienen más fotogramas; los valores de los vóxeles son aproximados (unos 1–2 niveles de 255). El pase nativo del Studio lee vóxeles exactos.",
     "gpuCompressionInactive": "Mostrado desde vóxeles exactos.",
+    "stabilization": "Estabilización",
+    "stabilizationOn": "Estabilizado",
+    "stabilizationOff": "Imágenes sin procesar",
+    "stabilizationActive": "Deriva y rotación corregidas con el seguimiento celular.",
+    "stabilizationRaw": "Adquisición sin procesar: cada imagen tal como la registró el microscopio.",
     "gpuCompressionUnsupported": "No disponible en esta GPU: mostrado desde vóxeles exactos.",
     "previousBricks": "versión anterior (antes de la actualización de datos)",
     "previousBricksMissing": "Este dataset no conservó ninguna versión anterior: se muestra la actual."

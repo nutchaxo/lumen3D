@@ -660,7 +660,7 @@
   padding: var(--space-3) var(--space-4);
   text-align: left;
   color: var(--text-primary);
-  background: var(--bg-base);
+  background: var(--bg-body);
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-md);
   cursor: pointer;

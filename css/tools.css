@@ -61,7 +61,7 @@ body.modal-open {
 .advanced-clip-details {
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-md);
-  background: var(--bg-base);
+  background: var(--bg-body);
   padding: var(--space-2) var(--space-3);
 }
 
@@ -128,7 +128,7 @@ body.presentation-mode .viewer-layout {
   display: flex;
   gap: 2px;
   padding: 2px;
-  background: var(--bg-base);
+  background: var(--bg-body);
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-md);
 }
@@ -177,7 +177,7 @@ body.presentation-mode .viewer-layout {
   min-height: 32px;
   padding: 4px 8px;
   color: var(--text-primary);
-  background: var(--bg-base);
+  background-color: var(--bg-body);
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-sm);
 }
@@ -207,7 +207,7 @@ body.presentation-mode .viewer-layout {
   height: 88px;
   border: 1px solid var(--border-light);
   border-radius: 50%;
-  background: radial-gradient(circle at center, var(--bg-base), var(--bg-surface));
+  background: radial-gradient(circle at center, var(--bg-body), var(--bg-surface));
   cursor: default;
 }
 
@@ -365,7 +365,7 @@ body.presentation-mode .viewer-layout {
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-sm);
   color: var(--text-secondary);
-  background: var(--bg-base);
+  background: var(--bg-body);
   font-size: 10px;
   font-weight: var(--weight-semibold);
   text-transform: uppercase;
@@ -425,7 +425,7 @@ body.presentation-mode .viewer-layout {
   padding: var(--space-2);
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-md);
-  background: var(--bg-base);
+  background: var(--bg-body);
 }
 
 .lineage-node,
@@ -477,7 +477,7 @@ body.presentation-mode .viewer-layout {
   padding: var(--space-2);
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-md);
-  background: var(--bg-base);
+  background: var(--bg-body);
 }
 
 .metric-tile small {
@@ -596,7 +596,7 @@ body.presentation-mode .viewer-layout {
   border-radius: var(--radius-md);
   color: var(--text-primary);
   text-decoration: none;
-  background: var(--bg-base);
+  background: var(--bg-body);
 }
 
 .download-item:hover {

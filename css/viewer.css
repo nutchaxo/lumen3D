@@ -14,7 +14,7 @@ body {
   bottom: 0;
   display: flex;
   flex-direction: column;
-  background: var(--bg-base);
+  background: var(--bg-body);
   z-index: var(--z-viewer-base); /* Above everything else */
 }
 
@@ -172,7 +172,7 @@ body {
   border-bottom: 1px solid var(--border-subtle);
   flex-shrink: 0;
   min-height: 40px;
-  background: color-mix(in srgb, var(--bg-surface) 80%, var(--bg-base));
+  background: color-mix(in srgb, var(--bg-surface) 80%, var(--bg-body));
 }
 
 .sidebar-topbar-title {
@@ -243,7 +243,7 @@ body {
 
 /* ── Channel Controls ────────────────────────────────────── */
 .channel-item {
-  background: var(--bg-base);
+  background: var(--bg-body);
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-md);
   padding: var(--space-3);
@@ -967,7 +967,7 @@ body.viewer-iframe .scientific-panel {
   padding: var(--space-3);
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-md);
-  background: var(--bg-base);
+  background: var(--bg-body);
   color: var(--text-primary);
   text-decoration: none;
   min-width: 0;
@@ -1087,7 +1087,7 @@ body.viewer-iframe .scientific-panel {
 
 .scrubber-track {
   height: 24px;
-  background: var(--bg-base);
+  background: var(--bg-body);
   border-radius: var(--radius-sm);
   border: 1px solid var(--border-subtle);
   position: relative;
@@ -1099,7 +1099,7 @@ body.viewer-iframe .scientific-panel {
 }
 
 .scrubber-track.scrubber-stepped {
-  background-color: var(--bg-base);
+  background-color: var(--bg-body);
   background-image: linear-gradient(
     90deg,
     rgba(255, 255, 255, 0.28) 0,
@@ -1288,7 +1288,7 @@ body.viewer-iframe .scientific-panel {
 
 .studio-workspace {
   flex: 1;
-  background: var(--bg-base);
+  background: var(--bg-body);
   position: relative;
   overflow: auto;
   display: flex;
@@ -2218,7 +2218,7 @@ body.viewer-iframe .scientific-panel {
 
 .slicer-presets .btn.active {
   background: var(--color-primary);
-  color: var(--bg-base);
+  color: var(--text-inverse);
   border-color: var(--color-primary);
 }
 
@@ -2391,7 +2391,7 @@ body.viewer-iframe .scientific-panel {
   aspect-ratio: 1;
   border: 1px solid var(--border-default);
   border-radius: var(--radius-sm);
-  background: var(--bg-base);
+  background: var(--bg-body);
   overflow: hidden;
   cursor: zoom-in;
   transition: border-color 0.15s, transform 0.15s, box-shadow 0.15s;
@@ -2458,7 +2458,6 @@ body.gallery-lightbox-open { overflow: hidden; }
   object-fit: contain;
   border-radius: var(--radius-md);
   box-shadow: var(--shadow-xl);
-  background: var(--bg-base);
 }
 
 .gallery-lb-caption {

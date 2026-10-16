@@ -57,7 +57,7 @@ La carte graphique est faite pour cela : elle les exécute en parallèle. Le pet
 - Le navigateur les confie à **WebGL2**, l'interface standard pour parler à la carte graphique.
 
 ::: tech
-Le volume est stocké dans la carte graphique sous forme de **textures 3D**, découpées en emplacements de 64³ voxels (66³ en format 4). Le shader lit ces emplacements ; ceux qui sont vides sont sautés. Les détails sont aux chapitres 9 et 10.
+Le volume est stocké dans la carte graphique sous forme de **textures 3D**, découpées en emplacements de 64³ voxels (66³ en formats 4 et 5). Le shader lit ces emplacements ; ceux qui sont vides sont sautés. Les détails sont aux chapitres 9 et 10.
 :::
 
 ## 2.4 Le serveur : un guichet, pas un cerveau

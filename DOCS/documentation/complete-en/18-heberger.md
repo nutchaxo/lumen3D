@@ -11,7 +11,7 @@ This chapter is for the person who **installs and maintains** the site: the admi
 Nothing here requires writing code. But understanding these mechanisms lets you **diagnose** a slow site, a refused update or a temperamental host.
 
 ::: note
-The version numbers quoted are those of this document: web platform **1.59.3**, pipeline **0.21.0**, data format **4**. The administration panel in brief is in chapter 14; security in general is in chapter 19.
+The version numbers quoted are those of this document: web platform **1.65.0**, pipeline **0.22.0**, data format **5**. The administration panel in brief is in chapter 14; security in general is in chapter 19.
 :::
 
 ## 18.1 Three ways to serve Lumen3D
@@ -263,9 +263,9 @@ An update is started from [System › Updates]{.ui}. The administrator sees the 
 
 ![The version numbers you will come across.](img-en/ch18/versions.svg){width=100%}
 
-- The **platform** has **no** version constant: it is the **name of the most recent changelog file** (`changelog_1.59.3.md`). Releasing = creating that file.
+- The **platform** has **no** version constant: it is the **name of the most recent changelog file** (`changelog_1.65.0.md`). Releasing = creating that file.
 - The **Python server** has its own version (`0.16.0`), which **deliberately drifts**: it tracks the server tool, not the platform.
-- The **pipeline** (0.21.0) is another piece of software, installed on the processing computer.
+- The **pipeline** (0.22.0) is another piece of software, installed on the processing computer.
 
 ### How the platform learns that a version exists
 

@@ -4,6 +4,7 @@
 - A volume of several gigabytes cannot be loaded in one go: it is cut into **bricks** (small cubes of 64 × 64 × 64 voxels) that the browser fetches one by one.
 - Each brick becomes **a single WebP image** (lossless); the bricks are stored in **packs**, and found again thanks to an **index** of a few kilobytes.
 - Two side structures, `planes/` and `mips/`, make slices and projections fast; the whole forms **data format 4**.
+- **Format 5** (section 7.11) stores the same volume as a **matrix**: several resolutions × five compressions, plus three copies for fast cuts.
 :::
 
 In this chapter, the data images (mosaic, seam, packs…) all come from the **demonstration dataset**: the synthetic embryo `Embryo-E95-Em2-Pecam1-Sox2` (768 × 576 × 112 voxels, 3 channels), published by the real pipeline. It is not lab data.
@@ -217,9 +218,9 @@ For an arbitrary thickness, the Studio combines: the **MIPs of the layers entire
 
 ![A thickness of 220 planes: 3 layer MIPs + 28 end planes, i.e. 31 images instead of 220, with an identical result.](img-en/ch07/mips-schema.svg){width=100%}
 
-## 7.10 Data formats 1 to 4
+## 7.10 Data formats 1 to 5
 
-Over the versions, the file organisation has evolved. Each dataset carries a number, `formatVersion`, in its `metadata.json`. Format **4** is the current format.
+Over the versions, the file organisation has evolved. Each dataset carries a number, `formatVersion`, in its `metadata.json`. Format **5** is the current format (platform 1.65).
 
 | format | what it adds | migration |
 |---|---|---|
@@ -227,33 +228,139 @@ Over the versions, the file organisation has evolved. Each dataset carries a num
 | 2 | `planes/`: fast XY slices | `m002-planes` |
 | 3 | `mips/`: MIP per layer of 64 planes | `m003-layer-mips` |
 | 4 | v3 bricks: 66³ border, 9 × 8 mosaic, packs in super-blocks, `index.bin` | `m004-bricks-v3` |
+| 5 | the **matrix**: levels at 256 · 2^k^ that keep every slice, **five compressions** per level, three copies for fast cuts (section 7.11) | `m005-matrix` |
 
-The current pipeline (version 0.21.0) writes **format 4 directly**. A dataset published earlier is not lost: the platform knows how to upgrade it.
+The pipeline (version 0.22.0) writes **format 4 by default**, and format 5 on request (`--format 5`). A dataset published in format 4, or older, is not lost: the platform knows how to upgrade it, up to 5.
 
 ### "Data updates"
 
-Like a software update, the [Data updates]{.ui} tab of the admin panel (chapter 17) detects the datasets still in format 1, 2 or 3 and converts them **in place**, one by one. The native level is kept voxel for voxel: nothing is recomputed from the original.
+Like a software update, the [Data updates]{.ui} tab of the admin panel (chapter 17) detects the datasets that are behind and converts them **in place**, one by one. The native level is kept voxel for voxel: nothing is recomputed from the original.
 
-::: cards
+:::: cards
 ::: card
 #### In this browser
 
-Your browser does the work (WebP decoding and encoding) and sends the files to the server.
+Your browser does the work (WebP decoding and encoding) and sends the files to the server. On a PHP host, it is the **only** way to reach format 5.
 :::
 ::: card
 #### On the server
 
-The server converts by itself, if its hosting can encode lossless WebP.
+The server converts by itself, if its hosting can do it (a Python server for format 5).
 :::
 ::: card
 #### Pause and resume
 
 The work is cut into small units noted in a journal: you can pause, close, resume, even changing who does the work.
 :::
+::::
+
+## 7.11 Format 5: a resolution × compression matrix
+
+::: tldr
+- The same volume is stored **several times**: at several **resolutions** (the rows) and in **five compressions** (the columns). The visitor picks a cell.
+- The reduced levels **keep every slice**; their long side is exactly 4096, 2048, 1024, 512 or 256.
+- Three **re-cut copies** (XY, XZ / YZ, oblique) make the Studio's cuts fast, and everything that **measures** always reads the voxels **losslessly**.
+:::
+
+::: analogy
+A **photo library** keeps each picture in several sizes and several qualities: the thumbnail to browse, the original to print. Format 5 does the same with a volume: you **look** at a light version, you **measure** and **export** from the original.
+:::
+
+The principle: **disk is spent; the network and the graphics card are not.** What is displayed may be compressed with loss, as long as the picture is not visibly altered; what measures reads the original.
+
+### The rows: levels that keep every slice
+
+![The levels of the same demonstration dataset in format 4 and in format 5 (real dimensions).](img-en/f5/niveaux.svg){width=95%}
+
+- **Level 0** is the native volume, never resampled.
+- The other levels have an XY long side of **exactly** 256, 512, 1024, 2048 or 4096 voxels: every one of these powers of two smaller than the native size is made. A 5192 × 5192 × 312 dataset therefore has six rows: native, 4096, 2048, 1024, 512, 256.
+- **Z is never reduced**: every level keeps the 312 slices (here 112). In format 4, the coarse levels lost slices.
+- Each voxel of a level is the **exact area average** of the native voxels it covers, in integers, rounded once. Each level is computed **directly from the native level**, never from another level.
+
+::: example
+To go from 768 to 512 voxels, one reduced voxel covers 1.5 native voxels. The pipeline cuts the line into whole pieces (768 × 512 units), counts how much of each reduced voxel every native voxel covers, and takes the weighted average: reduced voxel 0 takes all of native voxel 0 and half of voxel 1. No voxel is forgotten or counted twice.
+:::
+
+### The columns: five compressions
+
+| column | on screen | what is guaranteed | size (relative to "lossless") |
+|---|---|---|---|
+| **Lossless** (`ll`) | [Lossless]{.ui} | every voxel exact (as in format 4) | 1 |
+| **±2** (`b2`) | [±2]{.ui} | no voxel moves by more than **2** out of 255 | 0.62 to 0.82 |
+| **±4** (`b4`) | [±4]{.ui} | no voxel moves by more than **4** | 0.50 to 0.69 |
+| **Light** (`q80`) | [Light]{.ui} | lossy WebP, quality 80 (no bound; ≈ 36 dB) | 0.35 to 0.61 |
+| **Very light** (`q50`) | [Very light]{.ui} | lossy WebP, quality 50 (≈ 31–33 dB) | 0.22 to 0.40 |
+
+Sizes measured on 1,673 native bricks of three of the lab's embryos (specification, § 14.11).
+
+![The same real brick in the five compressions: top, the middle slice; bottom, the difference from the original, multiplied by 16 to be visible.](img-en/f5/colonnes.png){width=100%}
+
+::: example
+**Read the figure.** On this dense brick (164 KB lossless), ±2 weighs 102 KB and changes no voxel by more than 2; "Very light" weighs 37 KB (4.4 times less) but a voxel can be off by 35. By eye, the five top slices are almost identical: that is the promise of the light columns. To measure, the platform **never** uses them (section "What measures reads the original").
+:::
+
+#### ±2 and ±4: "bins" of values
+
+![The ±2 column: values are grouped in bins of 5; the viewer shows the bin's centre.](img-en/f5/quantif.svg){width=100%}
+
+- The value **0 stays alone** in its bin: the background stays exactly black, empty bricks stay empty.
+- The other values are grouped by 5 (±2) or by 9 (±4); **the bin number** is stored, losslessly. Fewer distinct values → the image compresses better.
+- The manifest carries the "bin → value" table; the viewer applies it **together with** its display setting, at no extra cost.
+
+#### Light and Very light: lossy WebP, but watched
+
+1. **A dead zone.** A lossy compression "bleeds": a few voxels of the black background take small values. The encoder, which knows the original, chooses a threshold τ (0 to 12) below which everything goes back to 0, and writes it in **one byte** at the end of the brick.
+2. **Never heavier than a faithful column.** On an almost empty brick, the lossy image can weigh more than the lossless one. The encoder then keeps the smallest of three: the lossy image, the ±4 image or the lossless image. The final byte says which (0 to 12 = τ; 254 = ±4; 255 = lossless).
+3. **A mosaic on an 80-pixel pitch.** Lossy WebP works in blocks of 16 pixels. On a 66 pitch, a block would straddle two neighbouring slices and mix them. On an 80 pitch, each 66-pixel slice is centred with a 7-pixel margin: no block touches two slices.
+
+![Why the lossy columns place the slices every 80 pixels.](img-en/f5/grille80.svg){width=100%}
+
+::: example
+**Measured on the DAPI channel of the demonstration dataset** (100 native bricks, Very light column): without the dead zone, 3.9 % of the black voxels become non-zero; with it, 1.8 %. And 12 bricks out of 100 are stored as ±4 rather than lossy WebP, because that was smaller.
+:::
+
+::: why
+**Why not AVIF or JPEG XL?** AVIF gives the same size / quality trade-off as WebP within a few percent, encodes twice as slowly and has no encoder in browsers, which therefore could not do the conversion. JPEG XL is not decoded by Chrome or Firefox by default (October 2026). Measurements: specification § 14.3.
+:::
+
+### Three copies for fast cuts
+
+A cut drawn from 64³ bricks downloads far more than it shows: an XY cut one voxel thick reads 64 slices. Format 5 adds, **at every level**, three re-cut copies, all **lossless**:
+
+![The three cut copies, and what they save.](img-en/f5/coupes.svg){width=100%}
+
+| cut | read from | what is read |
+|---|---|---|
+| XY | `planes/` (native) or `xy/` (reduced levels) | **one** plane |
+| XZ or YZ | `xz/` or `yz/`: packs of 64 re-cut rows | one row: three small reads per channel |
+| oblique | `cuts/`: small bricks of 32 × 32 × *bz* voxels, without border | only those the plane crosses |
+
+*bz* is chosen so that the small brick is roughly cubic **in micrometres**: 32 × 32 × 16 on the demonstration dataset (1.2 × 1.2 × 3 µm voxel), 32 × 32 × 4 on an embryo at 0.344 × 0.344 × 3 µm.
+
+::: example
+**Measured on a 1946² × 72-voxel embryo** (platform 1.64): a native oblique cut downloaded **23 MB in 15 requests** instead of 60 MB in 30 through the bricks, and every picture is identical voxel for voxel.
+:::
+
+### What measures reads the original
+
+Every measurement, every plugin that reports a number and every "native" export reads the **lossless column of the native level**, whatever cell is displayed (chapters 12 and 15). A light display setting therefore never skews a number.
+
+### The tree of a format-5 dataset
+
+![The `bricks/` folder of the demonstration dataset after conversion, with real sizes.](img-en/f5/arbre.svg){width=100%}
+
+- Everything format 5 adds lives **inside** `bricks/`: one manifest (`iribhm-bricks-v5`) describes it, and one rename installs it.
+- `bricks/index/ll.bin`, `b2.bin`…: one index per column (same structure as format 4's `index.bin`). The viewer reads the lossless index when the dataset opens, the others only when their column is chosen.
+- The packs of the lossless column of level 0 **are** those of format 4: the migration links them (hard link) instead of re-encoding them.
+- `planes/` and `mips/` do not change: they already hold the native level.
+
+::: warning
+**Disk use grows a lot**: on the demonstration dataset, 9 MB of bricks in format 4 become about 80 MB in format 5 (28 MB of which are XZ / YZ copies). That is intended: what costs is what each visitor downloads and what their graphics card keeps, and format 5 reduces that. Check the free space of the host before converting large datasets.
 :::
 
 ::: remember
 - A brick = 64³ useful voxels + 1 border voxel = **66³**, stored as **one lossless WebP image** of 594 × 528 pixels (9 × 8 slices).
 - The bricks are in **packs** (4 × 4 × 4 super-blocks); `index.bin` gives the pack, start and length of each (10 bytes per brick).
-- `planes/` speeds up XY slices, `mips/` projections; current format = **4**.
+- `planes/` speeds up XY slices, `mips/` projections.
+- Current format = **5**: levels at 256 · 2^k^ that keep every slice, five compressions per level (lossless, ±2, ±4, light, very light), three re-cut copies for cuts; everything that measures reads the lossless column of the native level.
 :::

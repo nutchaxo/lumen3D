@@ -28,7 +28,7 @@ The left-hand sidebar arranges the tabs into four groups. The breadcrumb at the 
 | **Data** | | |
 | [Datasets]{.ui} | List, preview, settings | often |
 | [Import]{.ui} | Upload a pipeline folder | for every new dataset |
-| [Data updates]{.ui} | Bring datasets to format 4 | rarely |
+| [Data updates]{.ui} | Bring datasets to format 5 | rarely |
 | [Data types]{.ui} | Rename 3D, 2D, Live | once |
 | [Statistics]{.ui} | Visits, views, downloads | occasionally |
 | **Public site** | | |
@@ -128,25 +128,23 @@ The [Reset the preview]{.ui} button (under the preview) makes the current view t
 
 ## 14.5 Data updates
 
-The way datasets are stored has evolved four times (**formats 1 to 4**, see chapter 7). An old dataset remains readable, but it can be **brought to the current format without going through the pipeline again**, like updating software.
+The way datasets are stored has evolved five times (**formats 1 to 5**, see chapter 7). An old dataset remains readable, but it can be **brought to the current format without going through the pipeline again**, like updating software.
 
-![The three updates, the two executors, the speed test.](img-en/ch14/migrations.svg){width=100%}
-
-The three steps add: `planes/` (one file per plane, fast native XY slices in the Studio), `mips/` (maximum projection of each layer of 64 planes, fast z-stack figures), then a v3 brick pyramid (66³, one-voxel border, `index.bin`).
+The four steps add: `planes/` (one file per plane, fast native XY slices in the Studio), `mips/` (maximum projection of each layer of 64 planes, fast z-stack figures), a v3 brick pyramid (66³, one-voxel border, `index.bin`), then the **format-5 matrix** (levels that keep every slice, five compressions, cut copies; section 7.11).
 
 ::: why
-The native level is kept voxel for voxel: nothing is lost. The old `bricks/` tree is deleted only after the dataset's version has changed. A dataset produced by pipeline 0.21.0 is **already** in format 4: there is nothing to do.
+The native level is kept voxel for voxel: nothing is lost. The old `bricks/` tree is deleted only after the dataset's version has changed. A dataset produced by pipeline 0.22.0 arrives in format 4 (in format 5 with `--format 5`): the tab then offers only the 4 → 5 step. On a PHP host, this step runs **in the browser**.
 :::
 
-![The Data updates tab (demo dataset, before launch).](img-en/ch14/admin-dataset-updates.png){.shot width=66%}
+![The Data updates tab during a conversion to format 5 (demonstration dataset).](../admin-guide/img-en/dupd-running.png){.shot width=80%}
 
-[1]{.callout-num} [2]{.callout-num} Speed test: [Run the test (5 s)]{.ui} compares browser and server · [3]{.callout-num} Choice of executor, dataset by dataset (locked while running) · [4]{.callout-num} [Update]{.ui} this dataset · [5]{.callout-num} [Update all]{.ui}: processes every dataset that is ready
+[1]{.callout-num} [Pause]{.ui} · [2]{.callout-num} The two queues: this browser and the server, each with its running dataset · [3]{.callout-num} A dataset card: "format 1 → 5", its steps · [4]{.callout-num} Choice of executor, dataset by dataset (locked while running) · [5]{.callout-num} The progress · [6]{.callout-num} Cancel. The details are in the *Administrator guide*, chapter 5.
 
 ::: warning
 **Keep the tab open** during an update. Leaving it pauses the update; nothing is lost, you resume later. Do not open several tabs at once: a host has already blocked the address of an operator who sent too many requests. The tab's network governor limits the rate to avoid this.
 :::
 
-These updates are **not mandatory**: the viewer reads formats 1 to 4. They speed up some Studio operations and improve the display.
+These updates are **not mandatory**: the viewer reads formats 1 to 5. They speed up some Studio operations and improve the display.
 
 ## 14.6 Plugins and the signed catalogue
 

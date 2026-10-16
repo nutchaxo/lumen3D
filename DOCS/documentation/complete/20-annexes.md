@@ -23,6 +23,8 @@ Lumen3D est écrit en JavaScript « simple » : pas de framework, pas de compila
 | `brick-loader.js` | va chercher les briques dans les packs, par lots, sans télécharger deux fois la même chose | 10 |
 | `brick-decode-worker.js` | worker : décode les images WebP et redécoupe les mosaïques en briques | 10 |
 | `svr-manager.js` | gère l'atlas 3D en mémoire graphique et son budget de mémoire | 10 |
+| `cut-store.js` | lit les copies de coupe du format 5 (`xz/`, `yz/`, `cuts/`) pour le Studio | 7, 12 |
+| `data-access.js` | `ctx.data` : les voxels exacts, sans perte, pour les outils qui mesurent | 15 |
 | `catalog.js` | charge la liste des jeux de données, la filtre, la cherche, trouve les jeux liés | 3 |
 | `utils.js` | boîte à outils commune : vocabulaire des types (3d, 2d, live), dates, barres d'échelle 1-2-5 | 1 |
 | `tool-manager.js` | sait quel outil est actif (naviguer, couper, mesurer) et gère les raccourcis clavier | 12 |
@@ -123,6 +125,8 @@ Un worker est un employé d'arrière-plan : il travaille sans bloquer l'écran (
 | `fast_server.py` | un serveur statique rapide, sans administration (tests de performance) | 2 |
 | `upload_staging.py` | le moteur d'import (liste blanche, journal, validation, publication) | 17 |
 | `dataset_migrations.py` | les conversions de format de données, côté Python | 17 |
+| `format5.py` | le moteur partagé du format 5 (niveaux, compressions, mosaïques, paquets, copies de coupe), utilisé par la migration et par le pipeline | 7, 17 |
+| `tools/convert_dataset.py` | convertir un jeu au dernier format sur son propre ordinateur | 17 |
 | `ed25519_pure.py` | vérificateur de signatures Ed25519, en Python pur | 19 |
 | `js/migrations/` | les trois conversions (`m002`, `m003`, `m004`) côté navigateur, et un bloc de test de vitesse | 17 |
 | `js/modules/` | les plugins : `tools/` (barre d'outils), `channels/` (panneau des canaux), `shaders/` (modes de rendu) | 12, 15 |
@@ -229,7 +233,7 @@ Toutes les constantes importantes, regroupées. La dernière colonne dit où l'i
 
 | Constante | Valeur | Chap. |
 |---|---|---|
-| Brique | 64³ voxels utiles ; 66³ stockés avec 1 voxel de bordure (format 4) | 7 |
+| Brique | 64³ voxels utiles ; 66³ stockés avec 1 voxel de bordure (formats 4 et 5) | 7 |
 | Mosaïque d'une brique | 9 × 8 coupes de 66² : une image WebP sans perte de 594 × 528 px | 7 |
 | Pack | au plus 64 briques ou 16 Mio, par super-blocs de 4 × 4 × 4 briques | 7 |
 | Niveaux de détail | divisés par deux en X et Y ; en Z seulement tant que vz ≤ 1,5 × vxy | 6, 7 |
@@ -336,6 +340,8 @@ La version de la plateforme n'existe que dans le **nom du dernier fichier de not
 | **1.57** | « Vague d'audit » : streaming réécrit en lots, budget de mémoire graphique, version signée et suite de tests obligatoire à chaque publication |
 | **1.58** | Mises à jour des données : conversion en place d'un jeu vers le format 2 |
 | **1.59** | Formats 3 et 4 (briques v3 avec bordure, `index.bin`, détail au zoom) ; exécutant choisi par jeu et test de vitesse (1.59.1) ; régulateur de requêtes (1.59.2) ; huit fois moins de requêtes (1.59.3) |
+| 1.60 – 1.62 | Compression graphique des timelapses (1.60) ; corbeille de 60 jours pour les jeux supprimés (1.62) ; import / export des pages (1.61) |
+| **1.63 – 1.65** | **Format 5** : la matrice résolution × compression, les copies de coupe, l'accès sans perte pour les outils (`ctx.data`), un choix « sans perte » à chaque export (1.64) ; conversion dans le navigateur sur tout hébergement, import d'un arbre v5, outil de conversion locale (1.65) |
 
 ### E.2 Pipeline de préparation
 
@@ -347,8 +353,9 @@ La version de la plateforme n'existe que dans le **nom du dernier fichier de not
 | 0.17 – 0.18 | Importeur de photographies ; nouveau vocabulaire de types |
 | 0.19 | Publication « tout ou rien » en zone d'attente, avec reprise après interruption |
 | 0.20 | Plans XY écrits directement (format 2) |
-| **0.21** | Format 4 écrit directement, identique octet pour octet à la conversion ; saut exact de l'espace vide |
+| 0.21 | Format 4 écrit directement, identique octet pour octet à la conversion ; saut exact de l'espace vide |
+| **0.22** | Format 5 sur demande (`--format 5`), identique octet pour octet à la conversion m005 |
 
 ::: remember
-Version actuelle de ce document : plateforme **1.59.3**, pipeline **0.21.0**, format de données **4**.
+Version actuelle de ce document : plateforme **1.65.0**, pipeline **0.22.0**, format de données **5**.
 :::

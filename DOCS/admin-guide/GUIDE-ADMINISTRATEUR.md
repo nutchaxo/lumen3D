@@ -2,7 +2,7 @@
 title: "Guide de l'administrateur"
 subtitle: "Le panneau d'administration de Lumen3D, onglet par onglet"
 eyebrow: "IRIBHM · ULB — Lumen3D"
-version: "Plateforme Web 1.59.3"
+version: "Plateforme Web 1.65.0"
 date: "Octobre 2026"
 abstract: "Tout ce qu'on peut faire depuis le panneau d'administration du site : gérer et importer les jeux de données, les mettre au format courant, personnaliser le site public, installer des fonctions, mettre la plateforme à jour. Écrit pour quelqu'un qui n'a jamais vu ce panneau et qui ne sait pas coder."
 lang: fr
@@ -730,7 +730,7 @@ Ce message apparaît quand vous cliquez la **déconnexion** ou un lien qui quitt
 - Le transfert tourne dans un **Web Worker** : l'interface reste fluide. Blocs bruts de **8 Mio** (réduits sur un hôte PHP aux limites strictes : « Taille de bloc réduite à {n} — relancez le dossier pour reprendre. »), **4 blocs en parallèle**.
 - Chaque bloc porte une **empreinte SHA-256** vérifiée **avant** écriture. Un **journal serveur** retient les blocs reçus : reglisser le même dossier reprend **au bloc près** ; un fichier déjà complet n'est pas renvoyé.
 - Le journal est le même sous les deux serveurs (Python ou PHP) : un import commencé sous l'un peut reprendre sous l'autre.
-- Formats acceptés : les **formats 2 à 4** (`planes/`, `mips/`, briques v3 et `index.bin`).
+- Formats acceptés : les **formats 2 à 5** (`planes/`, `mips/`, briques v3 et `index.bin`, matrice du format 5 avec ses index par compression et ses copies de coupe `xy/`, `xz/`, `yz/`, `cuts/`, envoyées en dernier).
 :::
 
 ## 4.9. Si quelque chose se passe mal
@@ -752,7 +752,7 @@ Ce message apparaît quand vous cliquez la **déconnexion** ou un lien qui quitt
 # 5. Mises à jour des données — le format des jeux de données
 
 ::: chapter-intro
-- Un jeu de données publié a un **format** (1 à 4). Le format courant est le **4**.
+- Un jeu de données publié a un **format** (1 à 5). Le format courant est le **5**.
 - Cet onglet les met à niveau **sur place**, comme une mise à jour de logiciel.
 - Vous choisissez **qui travaille** : ce navigateur ou le serveur. Rien n'est obligatoire.
 :::
@@ -763,24 +763,29 @@ Ce message apparaît quand vous cliquez la **déconnexion** ou un lien qui quitt
 
 ## 5.1. Pourquoi et pour qui
 
-Chaque dataset volumique (`3d`, `live`) porte un **format de données** (`formatVersion`, absent = format 1). Un dataset sorti du pipeline **0.21.0** est déjà au **format 4** : il n'a **rien** à faire. Les **photographies 2D** ne sont jamais concernées.
+Chaque dataset volumique (`3d`, `live`) porte un **format de données** (`formatVersion`, absent = format 1). Un dataset sorti du pipeline **0.22.0** arrive au **format 4** : il ne lui reste que l'étape **4 → 5** (le pipeline écrit directement le format 5 avec l'option `--format 5`). Les **photographies 2D** ne sont jamais concernées.
 
 ::: note
-**Les mises à jour de données ne sont pas nécessaires pour que le site fonctionne.** Le visualiseur lit toujours les formats 1, 2, 3 et 4 ; le Studio retombe sur les briques si `planes/` manque. Elles **accélèrent** certaines opérations du Studio et **améliorent** la qualité d'affichage.
+**Les mises à jour de données ne sont pas nécessaires pour que le site fonctionne.** Le visualiseur lit toujours les formats 1 à 5 ; le Studio retombe sur les briques si `planes/` manque. Elles **accélèrent** certaines opérations du Studio et **améliorent** la qualité d'affichage.
 :::
 
-## 5.2. Les trois étapes
+## 5.2. Les quatre étapes
 
-Elles s'enchaînent dans l'ordre : un dataset en format 1 reçoit les trois.
+Elles s'enchaînent dans l'ordre : un dataset en format 1 reçoit les quatre.
 
 | Étape | Titre à l'écran | Ce qu'elle crée | Ce que ça apporte |
 |---|---|---|---|
 | **1 → 2** | Copie par plans du niveau natif (coupes XY rapides dans le Studio) | `planes/` : un fichier par plan z, tuiles PNG 512² sans perte (≈ 1,3× le niveau natif en place disque). Les briques ne sont pas touchées. | Une coupe XY native lit **un plan** au lieu d'une couche de 64 plans : des dizaines de fois moins d'octets, résultat identique au pixel. |
 | **2 → 3** | Projections maximales de chaque couche de briques (figures z-stack de toute la pile rapides) | `mips/` : une projection maximale par couche de 64 plans. | Une figure z-stack sur toute la pile lit ~3 paquets au lieu d'environ 150. |
 | **3 → 4** | Pyramide de briques v3 : réduite aussi en Z, bordure d'un voxel, index binaire | **Reconstruit** `bricks/` : briques 66³ avec bordure, niveaux réduits aussi en Z, `index.bin`. | Filtrage sans couture, détail local (« Zoom detail »), atlas plus légers pour 1 à 2 canaux. |
+| **4 → 5** | Matrice résolution × compression : niveaux à 256·2ᵏ avec toutes les tranches, cinq compressions, coupes rapides | **Reconstruit** `bricks/` : niveaux de 4096, 2048… 256 voxels de côté qui gardent toutes les tranches ; chacun en cinq compressions (sans perte, ±2, ±4, légère, très légère) ; copies pour les coupes XY, XZ / YZ et obliques. | Le visiteur choisit sa case dans un **tableau de qualité** ; téléchargements plus légers ; coupes natives rapides dans toutes les directions ; mesures et exports toujours sans perte. |
 
 ::: warning
-**L'étape 3 → 4 reconstruit l'arbre `bricks/`.** Le **niveau natif est conservé voxel pour voxel** ; les niveaux plus grossiers sont recalculés. L'ancien arbre est supprimé **après** le changement de version. Pour des données précieuses, gardez une copie de sauvegarde, comme pour toute opération sur des fichiers.
+**Les étapes 3 → 4 et 4 → 5 reconstruisent l'arbre `bricks/`.** Le **niveau natif est conservé voxel pour voxel** ; les niveaux plus grossiers sont recalculés. L'ancien arbre est supprimé **après** le changement de version, sauf si la case [Conserver la version précédente]{.ui} est cochée (il est alors gardé à côté, en `bricks.previous/`, pour comparer avec l'outil *Chunk debug* ; il prend une seconde fois la place des briques, supprimez-le une fois la comparaison faite). Pour des données précieuses, gardez une copie de sauvegarde, comme pour toute opération sur des fichiers.
+:::
+
+::: note
+**Le format 5 prend beaucoup plus de place sur le disque** : il range le même volume plusieurs fois. Sur le jeu de démonstration, 9 Mo de briques deviennent environ 80 Mo. Le panneau refuse de démarrer si le résultat ne tient pas (§ 5.9).
 :::
 
 ## 5.3. Vue d'ensemble de l'onglet
@@ -792,7 +797,7 @@ Elles s'enchaînent dans l'ordre : un dataset en format 1 reçoit les trois.
 |-|----------------------|
 | 1 | [Pause]{.ui} (ou [Reprendre]{.ui}) ; à côté [Actualiser]{.ui} et [Tout mettre à jour]{.ui}. |
 | 2 | La **bande des deux files** : une pastille par exécutant, avec son état. |
-| 3 | La **carte d'un dataset** : nom, type, « format 1 → 4 », unités et taille estimées, **étapes** numérotées. |
+| 3 | La **carte d'un dataset** : nom, type, « format 1 → 5 », unités et taille estimées, **étapes** numérotées. |
 | 4 | Le **sélecteur d'exécutant** : [Ce navigateur]{.ui} ou [Le serveur]{.ui}. |
 | 5 | La zone de **progression** : « étape i sur n », barre, pourcentage, unités faites, **temps restant**, unités par minute. |
 | 6 | La croix : **annuler** : « Abandonner la progression de cette mise à jour ? Le jeu de données reste tel quel. » |
@@ -809,7 +814,7 @@ Deux « exécutants » peuvent faire le travail :
 | Exécutant | Qui calcule | Ce qu'il faut |
 |---|---|---|
 | **Ce navigateur** | Votre navigateur télécharge les briques, les recompose (Web Workers) et renvoie le résultat **unité par unité**. | Un navigateur qui sait compresser, relire les PNG à l'identique et encoder du WebP sans perte. |
-| **Le serveur** | Le serveur convertit lui-même, par petites requêtes bornées dans le temps. Adapté aux hébergements mutualisés. | Décodage (et, pour l'étape 3 → 4, encodage) du WebP sans perte (GD de PHP ou Pillow de Python), zlib, NumPy côté Python, au moins 128 Mio par requête et 10 s d'exécution. |
+| **Le serveur** | Le serveur convertit lui-même, par petites requêtes bornées dans le temps. Adapté aux hébergements mutualisés. | Décodage (et, pour l'étape 3 → 4, encodage) du WebP sans perte (GD de PHP ou Pillow de Python), zlib, NumPy côté Python, au moins 128 Mio par requête et 10 s d'exécution. **Étape 4 → 5 : serveur Python seulement.** |
 
 - Le choix se fait **par dataset**, **avant** de démarrer ; il est **verrouillé pendant l'exécution**, modifiable entre deux exécutions.
 - Un exécutant incapable est **grisé**, avec une info-bulle qui dit pourquoi (par exemple « le serveur ne sait pas décoder les images WebP sans perte »).
@@ -820,6 +825,10 @@ Deux « exécutants » peuvent faire le travail :
 
 ::: tip
 Sur un hébergement mutualisé où l'option [Le serveur]{.ui} est grisée, **[Ce navigateur]{.ui} fonctionne toujours** : c'est lui qui travaille, le serveur ne fait que stocker.
+:::
+
+::: note
+**Étape 4 → 5 sur un hébergement PHP.** Le serveur PHP ne sait pas faire cette étape lui-même : l'info-bulle de [Le serveur]{.ui} dit « sur ce serveur, cette mise à jour s'exécute dans le navigateur ». Le navigateur demande au serveur quoi lire, calcule et renvoie chaque unité ; le serveur vérifie tout et assemble le résultat. Il faut un navigateur qui sait encoder du WebP **avec** perte (sinon : « ce navigateur ne sait pas encoder d'images WebP avec perte »). Mesuré sur le jeu de démonstration E8 (un ancien format 1) : l'étape 4 → 5 a pris **339 unités et 4 minutes** dans le navigateur.
 :::
 
 ## 5.5. Le test de vitesse
@@ -869,7 +878,7 @@ Le bouton principal s'appelle [Réparer]{.ui} si le dataset se dit à jour mais 
 ::: legend
 | n | ce que c'est |
 |-|----------------------|
-| 1 | **Formats de données** : le format le plus récent (4) et la liste des trois mises à jour (« 1 → 2 »…). |
+| 1 | **Formats de données** : le format le plus récent (5) et la liste des quatre mises à jour (« 1 → 2 »…). |
 | 2 | **Historique** : les 20 dernières opérations, mémorisées dans ce navigateur. |
 | 3 | [Effacer]{.ui} : vide l'historique. |
 :::
@@ -890,6 +899,17 @@ Une ligne d'historique indique « format {v} · {n} unités · {durée} · {exé
 | Aucun exécuteur ne peut réaliser toutes les étapes de : … | Essayez [Ce navigateur]{.ui}, ou retraitez avec le pipeline. |
 | Mise à jour de {nom} arrêtée : le serveur ne peut pas convertir une unité dans son délai. | Relancez-la dans ce navigateur. |
 | Impossible de lire l'état des mises à jour. | [Actualiser]{.ui}. |
+
+## 5.10. Convertir sur un ordinateur, puis importer
+
+Pour un très gros dataset, ou un hébergement trop lent, la conversion peut se faire **sur un ordinateur** équipé de Python (le poste de traitement, par exemple) :
+
+::: steps
+1. Copiez le dossier du dataset (par exemple `DATA_WEB/3d/<dossier>`) sur l'ordinateur, dans une copie de la plateforme.
+2. Lancez `python tools/convert_dataset.py DATA_WEB/3d/<dossier>`. `--list` montre seulement les étapes en attente ; `--keep-previous` garde l'ancien arbre.
+3. Une conversion interrompue **reprend** au même endroit si vous relancez la commande.
+4. Glissez le dossier converti dans l'onglet **Import** (chapitre 4) : il accepte un dataset au format 5 et le vérifie en entier avant de le laisser publier.
+:::
 
 # 6. Types de données — le nom public de chaque catégorie
 
@@ -1778,7 +1798,7 @@ Il s'installe **sur le poste de traitement, pas sur ce serveur** : téléchargez
 Le pack contient **deux pipelines** (volumes avec tracking, analyse de tracking), l'**import de photographies 2D**, des exemples d'entrée (utilisable tout de suite pour se faire la main), et un lanceur qui **vérifie sa propre intégrité** (SHA-256).
 
 ::: note
-**Deux numéros, et c'est normal.** L'en-tête affiche `pipeline v0.21.0` : la version **du pack**, pas celle du site. Le pipeline 0.21.0 écrit **directement le format 4** (aucune mise à jour de données à faire sur ses sorties), **conserve la curation** faite dans le panneau quand on retraite un dataset (masqué, nom, orientation…) et **publie tout ou rien**.
+**Deux numéros, et c'est normal.** L'en-tête affiche `pipeline v0.21.0` : la version **du pack**, pas celle du site. Le pipeline 0.22.0 écrit **le format 4** (il ne reste que l'étape 4 → 5 dans **Mises à jour des données**), ou le format 5 avec l'option `--format 5`, **conserve la curation** faite dans le panneau quand on retraite un dataset (masqué, nom, orientation…) et **publie tout ou rien**.
 :::
 
 Quand une version plus récente du pack est publiée, un **bandeau** apparaît en tête : « Nouvelle version du pack : v… — Ce serveur propose la v…. Téléchargez la nouvelle ci-dessous — la plateforme n'a pas besoin d'être mise à jour pour ça. » avec [Télécharger la v…]{.ui} ; pour l'édition légère, [Version installée]{.ui} garde accessible le pack du serveur.
@@ -2081,13 +2101,14 @@ Un onglet qui ne charge pas affiche « Impossible de charger cet onglet. Recharg
 |---|---|
 | **Canal** | Un marquage fluorescent (DAPI, GFP, Pecam1…). Un jeu de données en contient souvent plusieurs, superposés. |
 | **Voxel** | L'équivalent d'un pixel en trois dimensions. Sa taille réelle est donnée par la calibration (§3.6). |
-| **Brique** | Un petit cube de volume (64×64×64 voxels, ou 66³ avec bordure au format 4). Le site les charge à la demande pour afficher des volumes de plusieurs gigaoctets sans tout télécharger. |
+| **Brique** | Un petit cube de volume (64×64×64 voxels, ou 66³ avec bordure aux formats 4 et 5). Le site les charge à la demande pour afficher des volumes de plusieurs gigaoctets sans tout télécharger. |
 | **LOD** | *Level of Detail* : plusieurs résolutions du même volume. Le site affiche d'abord une version grossière, puis affine. |
 | **Type de jeu de données** | L'une des trois catégories : `3d` (volume figé), `2d` (photographie calibrée), `live` (série temporelle 4D, avec éventuellement le suivi de ses cellules). Ce sont les dossiers du serveur ; le nom vu du public se règle dans **Types de données** (chapitre 6). |
 | **Format de données** (`formatVersion`) | Le « niveau d'aménagement » d'un dataset publié, de 1 à 4 (courant : 4). Se met à niveau dans **Mises à jour des données**. |
 | **Plans** (`planes/`) | Format 2 : une copie du niveau natif **plan par plan** (PNG sans perte), pour des coupes XY rapides dans le Studio. |
 | **Projections de couche** (`mips/`) | Format 3 : la projection maximale de chaque couche de 64 plans, pour des figures z-stack rapides. |
 | **Pyramide de briques v3** | Format 4 : briques 66³ avec bordure d'un voxel, niveaux réduits aussi en Z, `index.bin`. Apporte le filtrage sans couture et le « Zoom detail ». |
+| **Matrice (format 5)** | Format 5 : le même volume à plusieurs résolutions (toutes les tranches gardées) et en cinq compressions (sans perte, ±2, ±4, légère, très légère), plus des copies pour les coupes rapides. Le visiteur choisit sa case dans un tableau ; mesures et exports restent sans perte. |
 | **Sens de l'échantillon** | Réglage qui dit si le fichier montre l'échantillon vu de dessus (« à l'endroit ») ou de dessous (« à l'envers »). |
 | **Vue par défaut** | La pose dans laquelle un dataset s'ouvre, enregistrée depuis l'aperçu. |
 
@@ -2114,4 +2135,4 @@ Un onglet qui ne charge pas affiche « Impossible de charger cet onglet. Recharg
 
 ---
 
-*Document écrit pour la version **1.59.3** de la plateforme (pipeline 0.21.0, format de données 4). Les captures d'écran montrent un jeu de démonstration (embryons synthétiques) ; les couleurs peuvent différer si le thème a été modifié.*
+*Document écrit pour la version **1.65.0** de la plateforme (pipeline 0.22.0, format de données 5). Les captures d'écran montrent un jeu de démonstration (embryons synthétiques) ; les couleurs peuvent différer si le thème a été modifié.*

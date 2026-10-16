@@ -121,7 +121,7 @@ types de données : 3D, Live, 2D
 :::
 ::: keynum
 **64³**
-voxels par brique (66³ avec bord, format 4)
+voxels par brique (66³ avec bord, formats 4 et 5)
 :::
 ::: keynum
 **4**
@@ -151,8 +151,8 @@ fichiers de tests automatiques
 
 Quelques repères de version, valables à la date de ce document :
 
-- plateforme web **1.59.3** ; pipeline de préparation **0.21.0** ;
-- format de données courant : [format 4]{.pill .green} (les formats 1 à 3 sont convertis en place, voir chapitre 17) ;
+- plateforme web **1.65.0** ; pipeline de préparation **0.22.0** ;
+- format de données courant : [format 5]{.pill .green} (les formats 1 à 4 sont convertis en place, voir chapitre 17) ;
 - chaque version est vérifiée par les tests automatiques avant d'être publiée.
 
 ## 1.6 Carte de la documentation

@@ -11,7 +11,7 @@ Ce chapitre s'adresse à la personne qui **installe et entretient** le site : l'
 Rien ici n'oblige à écrire du code. Mais comprendre ces mécanismes permet de **diagnostiquer** un site lent, une mise à jour refusée ou un hébergeur capricieux.
 
 ::: note
-Les numéros de version cités sont ceux de ce document : plateforme web **1.59.3**, pipeline **0.21.0**, format de données **4**. Le panneau d'administration en bref est au chapitre 14 ; la sécurité en général au chapitre 19.
+Les numéros de version cités sont ceux de ce document : plateforme web **1.65.0**, pipeline **0.22.0**, format de données **5**. Le panneau d'administration en bref est au chapitre 14 ; la sécurité en général au chapitre 19.
 :::
 
 ## 18.1 Trois façons de servir Lumen3D
@@ -263,9 +263,9 @@ Une mise à jour se déclenche depuis [Système › Mises à jour]{.ui}. L'admin
 
 ![Les numéros de version que l'on croise.](img/ch18/versions.svg){width=100%}
 
-- La **plateforme** n'a **pas** de constante de version : c'est le **nom du fichier de changelog le plus récent** (`changelog_1.59.3.md`). Publier = créer ce fichier.
+- La **plateforme** n'a **pas** de constante de version : c'est le **nom du fichier de changelog le plus récent** (`changelog_1.65.0.md`). Publier = créer ce fichier.
 - Le **serveur Python** a sa propre version (`0.16.0`), qui **dérive volontairement** : elle suit l'outil serveur, pas la plateforme.
-- Le **pipeline** (0.21.0) est un autre logiciel, qui s'installe sur le poste de traitement.
+- Le **pipeline** (0.22.0) est un autre logiciel, qui s'installe sur le poste de traitement.
 
 ### Comment la plateforme apprend qu'une version existe
 

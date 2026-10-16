@@ -121,7 +121,7 @@ data types: 3D, Live, 2D
 :::
 ::: keynum
 **64³**
-voxels per brick (66³ with border, format 4)
+voxels per brick (66³ with border, formats 4 and 5)
 :::
 ::: keynum
 **4**
@@ -151,8 +151,8 @@ automatic test files
 
 A few version landmarks, valid at the date of this document:
 
-- web platform **1.59.3**; preparation pipeline **0.21.0**;
-- current data format: [format 4]{.pill .green} (formats 1 to 3 are converted in place, see chapter 17);
+- web platform **1.65.0**; preparation pipeline **0.22.0**;
+- current data format: [format 5]{.pill .green} (formats 1 to 4 are converted in place, see chapter 17);
 - every release is checked by the automatic tests before it is published.
 
 ## 1.6 Map of the documentation

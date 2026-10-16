@@ -28,7 +28,7 @@ La barre latérale de gauche range les onglets en quatre groupes. Le fil d'Arian
 | **Données** | | |
 | [Datasets]{.ui} | Liste, aperçu, réglages | souvent |
 | [Import]{.ui} | Envoyer un dossier du pipeline | à chaque nouveau dataset |
-| [Mises à jour des données]{.ui} | Remettre au format 4 | rarement |
+| [Mises à jour des données]{.ui} | Mettre au format 5 | rarement |
 | [Types de données]{.ui} | Renommer 3D, 2D, Live | une fois |
 | [Statistiques]{.ui} | Visites, vues, téléchargements | à l'occasion |
 | **Site public** | | |
@@ -126,25 +126,23 @@ Le bouton [Redéfinir la preview]{.ui} (sous l'aperçu) fait de la vue actuelle 
 
 ## 14.5 Mises à jour des données
 
-La façon dont les datasets sont stockés a évolué quatre fois (**formats 1 à 4**, voir chapitre 7). Un ancien dataset reste lisible, mais il peut être **mis au format actuel sans repasser par le pipeline**, comme on met à jour un logiciel.
+La façon dont les datasets sont stockés a évolué cinq fois (**formats 1 à 5**, voir chapitre 7). Un ancien dataset reste lisible, mais il peut être **mis au format actuel sans repasser par le pipeline**, comme on met à jour un logiciel.
 
-![Les trois mises à jour, les deux exécutants, le test de vitesse.](img/ch14/migrations.svg){width=100%}
-
-Les trois étapes ajoutent : `planes/` (un fichier par plan, coupes XY natives rapides dans le Studio), `mips/` (projection max de chaque couche de 64 plans, figures z-stack rapides), puis une pyramide de briques v3 (66³, bordure d'un voxel, `index.bin`).
+Les quatre étapes ajoutent : `planes/` (un fichier par plan, coupes XY natives rapides dans le Studio), `mips/` (projection max de chaque couche de 64 plans, figures z-stack rapides), une pyramide de briques v3 (66³, bordure d'un voxel, `index.bin`), puis la **matrice du format 5** (niveaux qui gardent toutes les tranches, cinq compressions, copies de coupe ; section 7.11).
 
 ::: why
-Le niveau natif est conservé voxel pour voxel : rien n'est perdu. L'ancien arbre `bricks/` n'est supprimé qu'après le changement de version du dataset. Un dataset produit par le pipeline 0.21.0 est **déjà** au format 4 : il n'y a rien à faire.
+Le niveau natif est conservé voxel pour voxel : rien n'est perdu. L'ancien arbre `bricks/` n'est supprimé qu'après le changement de version du dataset. Un dataset produit par le pipeline 0.22.0 arrive au format 4 (au format 5 avec `--format 5`) : l'onglet propose alors la seule étape 4 → 5. Sur un hébergement PHP, cette étape se fait **dans le navigateur**.
 :::
 
-![L'onglet Mises à jour des données (jeu de démonstration, avant lancement).](img/ch14/admin-dataset-updates.png){.shot width=66%}
+![L'onglet Mises à jour des données pendant une conversion vers le format 5 (jeu de démonstration).](../admin-guide/img/dupd-running.png){.shot width=80%}
 
-[1]{.callout-num} [2]{.callout-num} Test de vitesse : [Lancer le test (5 s)]{.ui} compare navigateur et serveur · [3]{.callout-num} Choix de l'exécutant, dataset par dataset (verrouillé pendant l'exécution) · [4]{.callout-num} [Mettre à jour]{.ui} ce dataset · [5]{.callout-num} [Tout mettre à jour]{.ui} : traite tous les datasets prêts
+[1]{.callout-num} [Pause]{.ui} · [2]{.callout-num} Les deux files : ce navigateur et le serveur, chacune avec son dataset en cours · [3]{.callout-num} La carte d'un dataset : « format 1 → 5 », ses étapes · [4]{.callout-num} Choix de l'exécutant, dataset par dataset (verrouillé pendant l'exécution) · [5]{.callout-num} La progression · [6]{.callout-num} Annuler. Le détail est dans le *Guide de l'administrateur*, chapitre 5.
 
 ::: warning
 **Gardez l'onglet ouvert** pendant une mise à jour. Le quitter la met en pause ; rien n'est perdu, vous reprenez plus tard. N'ouvrez pas plusieurs onglets à la fois : un hébergeur a déjà bloqué l'adresse d'un opérateur qui lançait trop de requêtes. Le régulateur réseau de l'onglet limite le débit pour éviter cela.
 :::
 
-Ces mises à jour ne sont **pas obligatoires** : le viewer lit les formats 1 à 4. Elles accélèrent certaines opérations du Studio et améliorent l'affichage.
+Ces mises à jour ne sont **pas obligatoires** : le viewer lit les formats 1 à 5. Elles accélèrent certaines opérations du Studio et améliorent l'affichage.
 
 ## 14.6 Plugins et catalogue signé
 

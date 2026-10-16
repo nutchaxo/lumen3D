@@ -2,6 +2,7 @@
 
 ::: chapter-intro
 - Un embryon de plusieurs gigaoctets ne passe pas sur Internet tel quel : le pipeline le **réduit** en quatre mouvements — 16 → 8 bits, pyramide de résolutions, suppression des briques vides, compression **sans perte**.
+- Le **format 5** ajoute, pour l'affichage seulement, quatre compressions plus légères (dont deux avec perte) ; ce qui mesure lit toujours la version sans perte (section 7.11).
 - Aucun de ces mouvements ne modifie une intensité du niveau le plus fin : ce que vous voyez à pleine résolution est **exactement** le résultat du nettoyage du chapitre 5.
 - Sur le jeu de démonstration : **297 Mo de voxels bruts → 9,3 Mo de briques**, soit environ 32 fois moins.
 :::
@@ -102,6 +103,19 @@ On s'arrête au niveau 3 : 96 ≤ 128.
 ::: note
 J'ai reconstruit cette pyramide avec les fonctions du pipeline à partir du résultat du chapitre 5, puis comparé aux briques publiées : **358 briques sur 358 identiques**, voxel pour voxel.
 :::
+
+### Et en format 5 ?
+
+Le format 5 (section 7.11) change la règle de la pyramide :
+
+| | format 4 | format 5 |
+|---|---|---|
+| tailles des niveaux | divisées par 2 à chaque fois | grand côté **exactement** 4096, 2048, 1024, 512, 256 |
+| tranches (Z) | divisées tant que le voxel reste ≈ cubique | **toutes gardées** à chaque niveau |
+| calcul | moyenne de 2 × 2 (× 2) voxels du niveau précédent | moyenne **exacte de surface** des voxels natifs, depuis le niveau 0 |
+| jeu de démonstration | 768, 384, 192, 96 (et 112, 56, 28, 14 tranches) | 768 (natif), 512, 256, toujours 112 tranches |
+
+Le niveau 0 reste, dans les deux cas, l'image nettoyée telle quelle.
 
 ## 6.4 Compresser sans rien perdre
 

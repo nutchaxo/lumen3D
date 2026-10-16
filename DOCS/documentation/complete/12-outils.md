@@ -277,12 +277,13 @@ L'**export de la vue 3D** (bouton 20) refait le rendu **à n'importe quelle tail
 
 :::::: cols
 ::::: col
-![La fenêtre d'export (2). Le bouton 1 l'ouvre.](img/ch12/export-vue-c.png){.shot width=100%}
+![La fenêtre d'export de la vue 3D (bouton 20 de la barre), avec le choix de qualité.](img/f5/export-vue.png){.shot width=90%}
 :::::
 ::::: col
 - [Taille]{.ui} : [Écran]{.ui}, 2×, 4×, [Personnalisé]{.ui} (largeur de 16 à 16 384 px).
 - [Arrière-plan]{.ui} : comme affiché, [Transparent]{.ui}, noir, blanc.
 - [Barre d'échelle]{.ui} : désactivée sans calibration (elle compterait des voxels, pas des µm).
+- [Qualité]{.ui} : [Actuelle]{.ui} (la case affichée) ou [Sans perte]{.ui}. *Sans perte* charge la colonne sans perte du niveau natif, ou du niveau le plus fin que la carte graphique peut contenir (la fenêtre dit lequel), rend l'image, puis remet la qualité précédente.
 - Fichier : `<jeu>_3d_<L>x<H>.png`.
 :::::
 ::::::
@@ -373,6 +374,7 @@ L'aperçu (au plus 2048 px) vient de la carte graphique. La passe native va cher
 - Un plan **oblique** ou un volume ancien passe par les briques (lectures d'octets ciblées, chapitre 10).
 - Une brique absente parce que vide est comptée comme **zéro**, jamais comme « manquante ».
 - Si une figure demande plus de 256 Mo, une boîte propose natif, résolution réduite ou aperçu.
+- Sur un jeu au **format 5**, la passe native lit les **copies de coupe** (section 7.11) : une coupe XZ ou YZ = une ligne du paquet `xz/` ou `yz/`, trois petites lectures par canal ; une coupe oblique = seulement les petites briques de 32 × 32 × *bz* que le plan traverse. Si une copie manque ou échoue, la passe retombe sur les briques. Les images obtenues sont identiques, voxel pour voxel.
 
 ::: note
 Sur le jeu de démonstration (768 × 576 px), le natif est aussi petit que l'aperçu : la barre de progression n'a presque rien à charger. Elle prend tout son sens sur un volume de plusieurs gigaoctets.
@@ -381,6 +383,7 @@ Sur le jeu de démonstration (768 × 576 px), le natif est aussi petit que l'ape
 ### Exports et limites
 
 - **PNG** : taille native, fond noir, avec une **ligne de légende toujours incrustée** en haut à gauche (jeu | plan | taille | pixel). Refusé au-delà de 16 384 px de côté ou 2²⁸ pixels.
+- Avant l'export PNG, une question : [Native sans perte]{.ui} ou [Cette image]{.ui}. *Native sans perte* attend la passe native (ou la relance si vous l'aviez arrêtée) ; les calques sont remis à l'échelle de la nouvelle image et **gardent leur place**. *Décomposer par canal* pose la même question.
 - **JSON** (`<jeu>_studio.json`) : calques, repères, canaux, plan, calibration. **Jamais de pixels.** À l'import, un fichier de plus de **5 Mo**, 2 000 calques ou 10 000 points est refusé ; un fichier d'une autre figure n'applique que les calques.
 - Au-delà de 4 canaux, seuls les 4 premiers sont montrés. Sans calibration : pas de barre d'échelle, mesures en pixels.
 

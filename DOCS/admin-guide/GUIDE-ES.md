@@ -2,7 +2,7 @@
 title: "Guía del administrador"
 subtitle: "El panel de administración de Lumen3D, pestaña por pestaña"
 eyebrow: "IRIBHM · ULB — Lumen3D"
-version: "Plataforma web 1.59.3"
+version: "Plataforma web 1.65.0"
 date: "Octubre de 2026"
 abstract: "Todo lo que se puede hacer desde el panel de administración del sitio: gestionar e importar los conjuntos de datos, llevarlos al formato actual, personalizar el sitio público, instalar funciones y actualizar la plataforma. Escrita para quien nunca ha visto este panel y no sabe programar."
 lang: es
@@ -730,7 +730,7 @@ Este mensaje aparece cuando hace clic en **cerrar sesión** o en un enlace que s
 - La transferencia corre en un **Web Worker**: la interfaz sigue fluida. Bloques brutos de **8 MiB** (reducidos en un alojamiento PHP con límites estrictos: «Tamaño de bloque reducido a {n}: vuelva a soltar la carpeta para reanudar.»), **4 bloques en paralelo**.
 - Cada bloque lleva una **huella SHA-256** verificada **antes** de escribir. Un **registro del servidor** recuerda los bloques recibidos: volver a arrastrar la misma carpeta reanuda **al bloque exacto**; un archivo ya completo no se reenvía.
 - El registro es el mismo con los dos servidores (Python o PHP): una importación empezada con uno puede reanudarse con el otro.
-- Formatos aceptados: los **formatos 2 a 4** (`planes/`, `mips/`, ladrillos v3 e `index.bin`).
+- Formatos aceptados: los **formatos 2 a 5** (`planes/`, `mips/`, ladrillos v3 e `index.bin`, la matriz del formato 5 con sus índices por compresión y sus copias de corte `xy/`, `xz/`, `yz/`, `cuts/`, enviadas al final).
 :::
 
 ## 4.9. Si algo sale mal
@@ -752,7 +752,7 @@ Este mensaje aparece cuando hace clic en **cerrar sesión** o en un enlace que s
 # 5. Actualizaciones de datos — el formato de los conjuntos de datos
 
 ::: chapter-intro
-- Un conjunto de datos publicado tiene un **formato** (1 a 4). El formato actual es el **4**.
+- Un conjunto de datos publicado tiene un **formato** (1 a 5). El formato actual es el **5**.
 - Esta pestaña los lleva al día **en el sitio**, como una actualización de software.
 - Usted elige **quién trabaja**: este navegador o el servidor. Nada es obligatorio.
 :::
@@ -763,24 +763,29 @@ Este mensaje aparece cuando hace clic en **cerrar sesión** o en un enlace que s
 
 ## 5.1. Por qué y para quién
 
-Cada dataset volumétrico (`3d`, `live`) lleva un **formato de datos** (`formatVersion`; ausente = formato 1). Un dataset salido del pipeline **0.21.0** ya está en **formato 4**: **no** tiene nada que hacer. Las **fotografías 2D** nunca están afectadas.
+Cada dataset volumétrico (`3d`, `live`) lleva un **formato de datos** (`formatVersion`; ausente = formato 1). Un dataset salido del pipeline **0.22.0** llega en **formato 4**: solo le queda el paso **4 → 5** (el pipeline escribe directamente el formato 5 con la opción `--format 5`). Las **fotografías 2D** nunca están afectadas.
 
 ::: note
-**Las actualizaciones de datos no son necesarias para que el sitio funcione.** El visor siempre lee los formatos 1, 2, 3 y 4; el Studio recurre a los ladrillos (bricks) si falta `planes/`. **Aceleran** algunas operaciones del Studio y **mejoran** la calidad de visualización.
+**Las actualizaciones de datos no son necesarias para que el sitio funcione.** El visor siempre lee los formatos 1 a 5; el Studio recurre a los ladrillos (bricks) si falta `planes/`. **Aceleran** algunas operaciones del Studio y **mejoran** la calidad de visualización.
 :::
 
-## 5.2. Los tres pasos
+## 5.2. Los cuatro pasos
 
-Se encadenan en orden: un dataset en formato 1 recibe los tres.
+Se encadenan en orden: un dataset en formato 1 recibe los cuatro.
 
 | Paso | Título en pantalla | Qué crea | Qué aporta |
 |---|---|---|---|
 | **1 → 2** | Copia por planos del nivel nativo (cortes XY rápidos en el Studio) | `planes/`: un archivo por plano z, teselas PNG de 512² sin pérdida (≈ 1,3× el nivel nativo en espacio de disco). Los ladrillos no se tocan. | Un corte XY nativo lee **un plano** en lugar de una capa de 64 planos: decenas de veces menos bytes, resultado idéntico al píxel. |
 | **2 → 3** | Proyecciones máximas de cada capa de ladrillos (figuras z-stack de toda la pila rápidas) | `mips/`: una proyección máxima por capa de 64 planos. | Una figura z-stack sobre toda la pila lee ~3 paquetes en lugar de unos 150. |
 | **3 → 4** | Pirámide de ladrillos v3: reducida también en Z, borde de un vóxel, índice binario | **Reconstruye** `bricks/`: ladrillos 66³ con borde, niveles reducidos también en Z, `index.bin`. | Filtrado sin costuras, detalle local («Zoom detail»), atlas más ligeros para 1 a 2 canales. |
+| **4 → 5** | Matriz resolución × compresión: niveles a 256·2ᵏ con todos los cortes, cinco compresiones, cortes rápidos | **Reconstruye** `bricks/`: niveles de 4096, 2048… 256 vóxeles de lado que conservan todos los cortes; cada uno en cinco compresiones (sin pérdidas, ±2, ±4, ligera, muy ligera); copias para los cortes XY, XZ / YZ y oblicuos. | El visitante elige su casilla en una **tabla de calidad**; descargas más ligeras; cortes nativos rápidos en todas las direcciones; medidas y exportaciones siempre sin pérdidas. |
 
 ::: warning
-**El paso 3 → 4 reconstruye el árbol `bricks/`.** El **nivel nativo se conserva vóxel a vóxel**; los niveles más gruesos se recalculan. El árbol antiguo se elimina **después** del cambio de versión. Para datos valiosos, guarde una copia de seguridad, como en cualquier operación sobre archivos.
+**Los pasos 3 → 4 y 4 → 5 reconstruyen el árbol `bricks/`.** El **nivel nativo se conserva vóxel a vóxel**; los niveles más gruesos se recalculan. El árbol antiguo se elimina **después** del cambio de versión, salvo si la casilla [Conservar la versión anterior]{.ui} está marcada (se guarda entonces al lado, como `bricks.previous/`, para comparar con la herramienta *Chunk debug*; ocupa por segunda vez el espacio de los ladrillos, bórrelo una vez hecha la comparación). Para datos valiosos, guarde una copia de seguridad, como en cualquier operación sobre archivos.
+:::
+
+::: note
+**El formato 5 ocupa mucho más espacio en disco**: guarda el mismo volumen varias veces. En el dataset de demostración, 9 MB de ladrillos pasan a unos 80 MB. El panel se niega a empezar si el resultado no cabe (§ 5.9).
 :::
 
 ## 5.3. Vista general de la pestaña
@@ -792,7 +797,7 @@ Se encadenan en orden: un dataset en formato 1 recibe los tres.
 |-|----------------------|
 | 1 | [Pausa]{.ui} (o [Reanudar]{.ui}); al lado [Actualizar]{.ui} y [Actualizar todo]{.ui}. |
 | 2 | La **banda de las dos colas**: una pastilla por ejecutor, con su estado. |
-| 3 | La **tarjeta de un dataset**: nombre, tipo, «formato 1 → 4», unidades y tamaño estimados, **pasos** numerados. |
+| 3 | La **tarjeta de un dataset**: nombre, tipo, «formato 1 → 5», unidades y tamaño estimados, **pasos** numerados. |
 | 4 | El **selector de ejecutor**: [Este navegador]{.ui} o [El servidor]{.ui}. |
 | 5 | La zona de **progreso**: «paso i de n», barra, porcentaje, unidades hechas, **tiempo restante**, unidades por minuto. |
 | 6 | La cruz: **cancelar**: «¿Descartar el progreso de esta actualización? El conjunto de datos queda como estaba.» |
@@ -809,7 +814,7 @@ Dos «ejecutores» pueden hacer el trabajo:
 | Ejecutor | Quién calcula | Qué hace falta |
 |---|---|---|
 | **Este navegador** | Su navegador descarga los ladrillos, los recompone (Web Workers) y devuelve el resultado **unidad por unidad**. | Un navegador que sepa comprimir, releer los PNG de forma idéntica y codificar WebP sin pérdida. |
-| **El servidor** | El servidor convierte por sí mismo, con pequeñas peticiones limitadas en el tiempo. Adaptado a los alojamientos compartidos. | Decodificación (y, para el paso 3 → 4, codificación) de WebP sin pérdida (GD de PHP o Pillow de Python), zlib, NumPy en el lado de Python, al menos 128 MiB por petición y 10 s de ejecución. |
+| **El servidor** | El servidor convierte por sí mismo, con pequeñas peticiones limitadas en el tiempo. Adaptado a los alojamientos compartidos. | Decodificación (y, para el paso 3 → 4, codificación) de WebP sin pérdida (GD de PHP o Pillow de Python), zlib, NumPy en el lado de Python, al menos 128 MiB por petición y 10 s de ejecución. **Paso 4 → 5: solo servidor Python.** |
 
 - La elección se hace **por dataset**, **antes** de empezar; queda **bloqueada durante la ejecución** y se puede modificar entre dos ejecuciones.
 - Un ejecutor incapaz aparece **en gris**, con una información emergente que dice por qué (por ejemplo «el servidor no puede decodificar imágenes WebP sin pérdida»).
@@ -820,6 +825,10 @@ Dos «ejecutores» pueden hacer el trabajo:
 
 ::: tip
 En un alojamiento compartido donde la opción [El servidor]{.ui} aparece en gris, **[Este navegador]{.ui} funciona siempre**: es él quien trabaja y el servidor solo almacena.
+:::
+
+::: note
+**El paso 4 → 5 en un alojamiento PHP.** Un servidor PHP no puede hacer este paso por sí mismo: la información emergente de [El servidor]{.ui} dice «en este servidor, esta actualización se ejecuta en el navegador». El navegador pregunta al servidor qué leer, calcula y devuelve cada unidad; el servidor lo comprueba todo y ensambla el resultado. Hace falta un navegador que sepa codificar WebP **con** pérdida (si no: «este navegador no puede codificar imágenes WebP con pérdida»). Medido en el dataset de demostración E8 (un antiguo formato 1): el paso 4 → 5 tardó **339 unidades y 4 minutos** en el navegador.
 :::
 
 ## 5.5. La prueba de velocidad
@@ -869,7 +878,7 @@ Estados mostrados: **Esperando su turno** («siguiente en el servidor»), **En c
 ::: legend
 | n | qué es |
 |-|----------------------|
-| 1 | **Formatos de datos**: el formato más reciente (4) y la lista de las tres actualizaciones («1 → 2»…). |
+| 1 | **Formatos de datos**: el formato más reciente (5) y la lista de las cuatro actualizaciones («1 → 2»…). |
 | 2 | **Historial**: las 20 últimas operaciones, guardadas en este navegador. |
 | 3 | [Borrar]{.ui}: vacía el historial. |
 :::
@@ -890,6 +899,17 @@ Una línea del historial indica «formato {v} · {n} unidades · {duración} · 
 | Ningún ejecutor puede realizar todos los pasos de: … | Pruebe [Este navegador]{.ui}, o reprocese con el pipeline. |
 | Actualización de {nombre} detenida: el servidor no puede convertir una unidad dentro de su límite de tiempo | Vuelva a lanzarla en este navegador. |
 | No se pudo leer el estado de las actualizaciones. | [Actualizar]{.ui}. |
+
+## 5.10. Convertir en un ordenador y luego importar
+
+Para un dataset muy grande, o un alojamiento demasiado lento, la conversión puede hacerse **en un ordenador** con Python (el puesto de procesamiento, por ejemplo):
+
+::: steps
+1. Copie la carpeta del dataset (por ejemplo `DATA_WEB/3d/<carpeta>`) en el ordenador, dentro de una copia de la plataforma.
+2. Ejecute `python tools/convert_dataset.py DATA_WEB/3d/<carpeta>`. `--list` solo muestra los pasos pendientes; `--keep-previous` conserva el árbol antiguo.
+3. Una conversión interrumpida **se reanuda** donde se paró si vuelve a ejecutar la orden.
+4. Arrastre la carpeta convertida a la pestaña **Importar** (capítulo 4): acepta un dataset en formato 5 y lo verifica entero antes de dejarle publicarlo.
+:::
 
 # 6. Tipos de datos — el nombre público de cada categoría
 
@@ -1778,7 +1798,7 @@ Se instala **en el puesto de procesamiento, no en este servidor**: descárguelo 
 El paquete contiene **dos pipelines** (volúmenes con tracking, análisis de tracking), la **importación de fotografías 2D**, ejemplos de entrada (utilizables de inmediato para familiarizarse) y un lanzador que **verifica su propia integridad** (SHA-256).
 
 ::: note
-**Dos números, y es normal.** El encabezado muestra `pipeline v0.21.0`: la versión **del paquete**, no la del sitio. El pipeline 0.21.0 escribe **directamente el formato 4** (no hay que hacer ninguna actualización de datos sobre sus salidas), **conserva la curación** hecha en el panel cuando se reprocesa un dataset (oculto, nombre, orientación…) y **publica todo o nada**.
+**Dos números, y es normal.** El encabezado muestra `pipeline v0.21.0`: la versión **del paquete**, no la del sitio. El pipeline 0.22.0 escribe **el formato 4** (solo queda el paso 4 → 5 en **Actualizaciones de datos**), o el formato 5 con la opción `--format 5`, **conserva la curación** hecha en el panel cuando se reprocesa un dataset (oculto, nombre, orientación…) y **publica todo o nada**.
 :::
 
 Cuando se publica una versión más reciente del paquete, aparece un **banner** en la parte superior: «Nueva versión del paquete: v… — Este servidor ofrece la v…. Descargue la nueva más abajo: no hace falta actualizar la plataforma para esto.» con [Descargar la v…]{.ui}; para la edición ligera, [Versión instalada]{.ui} mantiene accesible el paquete del servidor.
@@ -2081,13 +2101,14 @@ Una pestaña que no carga muestra «No se pudo cargar esta pestaña. Recargue la
 |---|---|
 | **Canal** | Un marcaje fluorescente (DAPI, GFP, Pecam1…). Un conjunto de datos suele contener varios, superpuestos. |
 | **Vóxel** | El equivalente de un píxel en tres dimensiones. Su tamaño real lo da la calibración (§3.6). |
-| **Ladrillo (brick)** | Un pequeño cubo de volumen (64×64×64 vóxeles, o 66³ con borde en el formato 4). El sitio los carga bajo demanda para mostrar volúmenes de varios gigabytes sin descargarlo todo. |
+| **Ladrillo (brick)** | Un pequeño cubo de volumen (64×64×64 vóxeles, o 66³ con borde en los formatos 4 y 5). El sitio los carga bajo demanda para mostrar volúmenes de varios gigabytes sin descargarlo todo. |
 | **LOD** | *Level of Detail*: varias resoluciones del mismo volumen. El sitio muestra primero una versión gruesa y luego afina. |
 | **Tipo de conjunto de datos** | Una de las tres categorías: `3d` (volumen fijo), `2d` (fotografía calibrada), `live` (serie temporal 4D, con el seguimiento de sus células si lo hay). Son las carpetas del servidor; el nombre que ve el público se ajusta en **Tipos de datos** (capítulo 6). |
 | **Formato de datos** (`formatVersion`) | El «nivel de acondicionamiento» de un dataset publicado, de 1 a 4 (actual: 4). Se lleva al día en **Actualizaciones de datos**. |
 | **Planos** (`planes/`) | Formato 2: una copia del nivel nativo **plano a plano** (PNG sin pérdida), para cortes XY rápidos en el Studio. |
 | **Proyecciones de capa** (`mips/`) | Formato 3: la proyección máxima de cada capa de 64 planos, para figuras z-stack rápidas. |
 | **Pirámide de ladrillos v3** | Formato 4: ladrillos 66³ con borde de un vóxel, niveles reducidos también en Z, `index.bin`. Aporta el filtrado sin costuras y el «Zoom detail». |
+| **Matriz (formato 5)** | Formato 5: el mismo volumen a varias resoluciones (se conservan todos los cortes) y en cinco compresiones (sin pérdidas, ±2, ±4, ligera, muy ligera), más copias para cortes rápidos. El visitante elige su casilla en una tabla; las medidas y exportaciones siguen sin pérdidas. |
 | **Lado de la muestra** | Ajuste que dice si el archivo muestra la muestra vista desde arriba («al derecho») o desde abajo («al revés»). |
 | **Vista por defecto** | La pose en la que se abre un dataset, guardada desde la vista previa. |
 
@@ -2114,4 +2135,4 @@ Una pestaña que no carga muestra «No se pudo cargar esta pestaña. Recargue la
 
 ---
 
-*Documento escrito para la versión **1.59.3** de la plataforma (pipeline 0.21.0, formato de datos 4). Las capturas de pantalla muestran un conjunto de datos de demostración (embriones sintéticos); los colores pueden diferir si se ha modificado el tema.*
+*Documento escrito para la versión **1.65.0** de la plataforma (pipeline 0.22.0, formato de datos 5). Las capturas de pantalla muestran un conjunto de datos de demostración (embriones sintéticos); los colores pueden diferir si se ha modificado el tema.*

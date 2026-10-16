@@ -74,7 +74,7 @@ This is the heart of the platform. Open a 3D dataset: the volume first appears b
 | 3 | **Visuals** group: grid, axes, orientation axes, hide the volume, brick debugging. |
 | 4 | **Layouts** group: [Presentation mode]{.ui}, [Decompose by channel]{.ui}, [Z-Stack Browser]{.ui}. |
 | 5 | The [Channels]{.ui} panel: one row per channel (checkbox, colour, adjustable histogram). |
-| 6 | [Render Quality]{.ui}: 512, 1024 or native. The text below gives the quality actually active. |
+| 6 | [Render Quality]{.ui}: 512, 1024 or native; on a format-5 dataset, a "resolution × compression" table (chapter 10). The text below gives the quality actually active. |
 | 7 | Four buttons on the volume: centre the sample, reset the view, export the view as PNG, reset the workspace. |
 :::
 

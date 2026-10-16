@@ -57,7 +57,7 @@ The graphics card is built for this: it runs them in parallel. The small program
 - The browser hands them to **WebGL2**, the standard interface for talking to the graphics card.
 
 ::: tech
-The volume is stored in the graphics card as **3D textures**, divided into slots of 64³ voxels (66³ in format 4). The shader reads these slots; empty ones are skipped. The details are in chapters 9 and 10.
+The volume is stored in the graphics card as **3D textures**, divided into slots of 64³ voxels (66³ in formats 4 and 5). The shader reads these slots; empty ones are skipped. The details are in chapters 9 and 10.
 :::
 
 ## 2.4 The server: a counter, not a brain

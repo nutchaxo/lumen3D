@@ -23,6 +23,8 @@ Lumen3D is written in "plain" JavaScript: no framework, no compilation. Each fil
 | `brick-loader.js` | fetches bricks from the packs, in batches, without downloading the same thing twice | 10 |
 | `brick-decode-worker.js` | worker: decodes the WebP images and cuts the mosaics back into bricks | 10 |
 | `svr-manager.js` | manages the 3D atlas in graphics memory and its memory budget | 10 |
+| `cut-store.js` | reads the format-5 cut copies (`xz/`, `yz/`, `cuts/`) for the Studio | 7, 12 |
+| `data-access.js` | `ctx.data`: the exact, lossless voxels for tools that measure | 15 |
 | `catalog.js` | loads the list of datasets, filters it, searches it, finds related datasets | 3 |
 | `utils.js` | common toolbox: the type vocabulary (3d, 2d, live), dates, 1-2-5 scale bars | 1 |
 | `tool-manager.js` | knows which tool is active (navigate, slice, measure) and handles keyboard shortcuts | 12 |
@@ -123,6 +125,8 @@ A worker is a background employee: it works without blocking the screen (chapter
 | `fast_server.py` | a fast static server, with no administration (performance tests) | 2 |
 | `upload_staging.py` | the import engine (allowlist, journal, validation, publication) | 17 |
 | `dataset_migrations.py` | the data-format conversions, Python side | 17 |
+| `format5.py` | the shared format-5 engine (levels, compressions, mosaics, packs, cut copies), used by the migration and by the pipeline | 7, 17 |
+| `tools/convert_dataset.py` | convert a dataset to the latest format on your own computer | 17 |
 | `ed25519_pure.py` | Ed25519 signature verifier, in pure Python | 19 |
 | `js/migrations/` | the three conversions (`m002`, `m003`, `m004`) on the browser side, and a speed-test block | 17 |
 | `js/modules/` | the plugins: `tools/` (toolbar), `channels/` (channel panel), `shaders/` (render modes) | 12, 15 |
@@ -229,7 +233,7 @@ All the important constants, gathered. The last column says where the idea is ex
 
 | Constant | Value | Ch. |
 |---|---|---|
-| Brick | 64³ useful voxels; 66³ stored with a 1-voxel border (format 4) | 7 |
+| Brick | 64³ useful voxels; 66³ stored with a 1-voxel border (formats 4 and 5) | 7 |
 | Mosaic of a brick | 9 × 8 slices of 66²: a lossless WebP image of 594 × 528 px | 7 |
 | Pack | at most 64 bricks or 16 MiB, in super-blocks of 4 × 4 × 4 bricks | 7 |
 | Levels of detail | halved in X and Y; in Z only while vz ≤ 1.5 × vxy | 6, 7 |
@@ -336,6 +340,8 @@ The platform version exists only in the **name of the latest notes file**: to mo
 | **1.57** | "Audit wave": streaming rewritten in batches, graphics-memory budget, signed release and mandatory test suite at every publication |
 | **1.58** | Data updates: in-place conversion of a dataset to format 2 |
 | **1.59** | Formats 3 and 4 (v3 bricks with border, `index.bin`, detail on zoom); executor chosen per dataset and speed test (1.59.1); request governor (1.59.2); eight times fewer requests (1.59.3) |
+| 1.60 – 1.62 | Graphics compression of timelapses (1.60); 60-day trash for deleted datasets (1.62); import / export of pages (1.61) |
+| **1.63 – 1.65** | **Format 5**: the resolution × compression matrix, the cut copies, lossless access for tools (`ctx.data`), a "lossless" choice on every export (1.64); conversion in the browser on any host, import of a v5 tree, local conversion tool (1.65) |
 
 ### E.2 Preparation pipeline
 
@@ -347,8 +353,9 @@ The platform version exists only in the **name of the latest notes file**: to mo
 | 0.17 – 0.18 | Photograph importer; new type vocabulary |
 | 0.19 | "All or nothing" publication in a staging area, with recovery after interruption |
 | 0.20 | XY planes written directly (format 2) |
-| **0.21** | Format 4 written directly, byte-identical to the conversion; exact skipping of empty space |
+| 0.21 | Format 4 written directly, byte-identical to the conversion; exact skipping of empty space |
+| **0.22** | Format 5 on request (`--format 5`), byte-identical to the m005 conversion |
 
 ::: remember
-Current version of this document: platform **1.59.3**, pipeline **0.21.0**, data format **4**.
+Current version of this document: platform **1.65.0**, pipeline **0.22.0**, data format **5**.
 :::

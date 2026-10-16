@@ -4,6 +4,7 @@
 - Un volume de plusieurs gigaoctets ne peut pas être chargé d'un bloc : on le découpe en **briques** (des petits cubes de 64 × 64 × 64 voxels) que le navigateur va chercher une par une.
 - Chaque brique devient **une seule image WebP** (sans perte) ; les briques sont rangées dans des **paquets**, retrouvées grâce à un **index** de quelques kilo-octets.
 - Deux structures annexes, `planes/` et `mips/`, rendent les coupes et les projections rapides ; le tout forme le **format de données 4**.
+- Le **format 5** (section 7.11) range le même volume en une **matrice** : plusieurs résolutions × cinq compressions, plus trois copies pour couper vite.
 :::
 
 Dans ce chapitre, les images de données (mosaïque, couture, paquets…) viennent toutes du **jeu de démonstration** : l'embryon synthétique `Embryo-E95-Em2-Pecam1-Sox2` (768 × 576 × 112 voxels, 3 canaux), publié par le vrai pipeline. Ce n'est pas une donnée du laboratoire.
@@ -217,9 +218,9 @@ Pour une épaisseur quelconque, le Studio combine : les **MIP des couches entiè
 
 ![Épaisseur de 220 plans : 3 MIP de couches + 28 plans d'extrémité, soit 31 images au lieu de 220, avec un résultat identique.](img/ch07/mips-schema.svg){width=100%}
 
-## 7.10 Les formats de données 1 à 4
+## 7.10 Les formats de données 1 à 5
 
-Au fil des versions, l'organisation des fichiers a évolué. Chaque jeu de données porte un numéro, `formatVersion`, dans son `metadata.json`. Le format **4** est le format actuel.
+Au fil des versions, l'organisation des fichiers a évolué. Chaque jeu de données porte un numéro, `formatVersion`, dans son `metadata.json`. Le format **5** est le format actuel (plateforme 1.65).
 
 | format | ce qu'il ajoute | migration |
 |---|---|---|
@@ -227,33 +228,139 @@ Au fil des versions, l'organisation des fichiers a évolué. Chaque jeu de donn�
 | 2 | `planes/` : coupes XY rapides | `m002-planes` |
 | 3 | `mips/` : MIP par couche de 64 plans | `m003-layer-mips` |
 | 4 | briques v3 : bordure 66³, mosaïque 9 × 8, paquets en super-blocs, `index.bin` | `m004-bricks-v3` |
+| 5 | la **matrice** : des niveaux à 256 · 2^k^ qui gardent toutes les tranches, **cinq compressions** par niveau, trois copies pour couper vite (section 7.11) | `m005-matrix` |
 
-Le pipeline actuel (version 0.21.0) écrit **directement le format 4**. Un jeu de données publié plus tôt n'est pas perdu : la plateforme sait le mettre à niveau.
+Le pipeline (version 0.22.0) écrit **le format 4 par défaut**, et le format 5 sur demande (`--format 5`). Un jeu publié en format 4, ou plus ancien, n'est pas perdu : la plateforme sait le mettre à niveau, jusqu'au 5.
 
 ### « Mises à jour des données »
 
-Comme une mise à jour de logiciel, l'onglet [Mises à jour des données]{.ui} du panneau d'administration (chapitre 17) détecte les jeux de données restés en format 1, 2 ou 3 et les convertit **sur place**, un par un. Le niveau natif est conservé voxel pour voxel : rien n'est recalculé à partir de l'original.
+Comme une mise à jour de logiciel, l'onglet [Mises à jour des données]{.ui} du panneau d'administration (chapitre 17) détecte les jeux de données en retard et les convertit **sur place**, un par un. Le niveau natif est conservé voxel pour voxel : rien n'est recalculé à partir de l'original.
 
-::: cards
+:::: cards
 ::: card
 #### Dans ce navigateur
 
-Votre navigateur fait le travail (décodage et encodage WebP) et envoie les fichiers au serveur.
+Votre navigateur fait le travail (décodage et encodage WebP) et envoie les fichiers au serveur. Sur un hébergement PHP, c'est **la seule** façon de passer au format 5.
 :::
 ::: card
 #### Sur le serveur
 
-Le serveur convertit lui-même, si son hébergement sait encoder du WebP sans perte.
+Le serveur convertit lui-même, si son hébergement sait le faire (serveur Python pour le format 5).
 :::
 ::: card
 #### Pause et reprise
 
 Le travail est découpé en petites unités notées dans un journal : on peut mettre en pause, fermer, reprendre, même en changeant d'exécutant.
 :::
+::::
+
+## 7.11 Le format 5 : une matrice résolution × compression
+
+::: tldr
+- Le même volume est rangé **plusieurs fois** : à plusieurs **résolutions** (les lignes) et dans **cinq compressions** (les colonnes). Le visiteur choisit sa case.
+- Les niveaux réduits **gardent toutes les tranches** ; leur grand côté vaut exactement 4096, 2048, 1024, 512 ou 256.
+- Trois **copies recoupées** (XY, XZ / YZ, oblique) rendent les coupes du Studio rapides, et tout ce qui **mesure** lit toujours les voxels **sans perte**.
+:::
+
+::: analogy
+Une **photothèque** garde chaque photo en plusieurs tailles et plusieurs qualités : la vignette pour feuilleter, l'original pour imprimer. Le format 5 fait de même avec un volume : on **regarde** dans une version légère, on **mesure** et on **exporte** dans l'original.
+:::
+
+Le principe : **le disque est dépensé, le réseau et la carte graphique ne le sont pas.** Ce qui s'affiche peut être compressé avec perte, tant que l'image n'est pas visiblement altérée ; ce qui mesure lit l'original.
+
+### Les lignes : des niveaux qui gardent toutes les tranches
+
+![Les niveaux du même jeu de démonstration en format 4 et en format 5 (dimensions réelles).](img/f5/niveaux.svg){width=95%}
+
+- Le **niveau 0** est le volume natif, jamais rééchantillonné.
+- Les autres niveaux ont pour grand côté XY **exactement** 256, 512, 1024, 2048 ou 4096 voxels : toutes ces puissances de deux plus petites que le natif sont faites. Un jeu de 5192 × 5192 × 312 voxels a donc six lignes : natif, 4096, 2048, 1024, 512, 256.
+- **Z n'est jamais réduit** : chaque niveau garde les 312 tranches (ici 112). En format 4, les niveaux grossiers perdaient des tranches.
+- Chaque voxel d'un niveau est la **moyenne exacte de la surface** des voxels natifs qu'il recouvre, en nombres entiers, arrondie une seule fois. Chaque niveau est calculé **directement depuis le natif**, jamais depuis un autre niveau.
+
+::: example
+Pour passer de 768 à 512 voxels, un voxel réduit recouvre 1,5 voxel natif. Le pipeline découpe la ligne en morceaux entiers (768 × 512 unités), compte combien chaque voxel natif recouvre de chaque voxel réduit, et fait la moyenne pondérée : le voxel réduit 0 prend tout le voxel natif 0 et la moitié du voxel 1. Aucun voxel n'est oublié ni compté deux fois.
+:::
+
+### Les colonnes : cinq compressions
+
+| colonne | à l'écran | ce qui est garanti | taille (par rapport à « sans perte ») |
+|---|---|---|---|
+| **Sans perte** (`ll`) | [Sans perte]{.ui} | chaque voxel exact (comme le format 4) | 1 |
+| **±2** (`b2`) | [±2]{.ui} | aucun voxel ne bouge de plus de **2** sur 255 | 0,62 à 0,82 |
+| **±4** (`b4`) | [±4]{.ui} | aucun voxel ne bouge de plus de **4** | 0,50 à 0,69 |
+| **Légère** (`q80`) | [Légère]{.ui} | WebP avec perte, qualité 80 (pas de borne ; ≈ 36 dB) | 0,35 à 0,61 |
+| **Très légère** (`q50`) | [Très légère]{.ui} | WebP avec perte, qualité 50 (≈ 31–33 dB) | 0,22 à 0,40 |
+
+Tailles mesurées sur 1 673 briques natives de trois embryons du laboratoire (spécification, § 14.11).
+
+![La même vraie brique dans les cinq compressions : en haut la tranche du milieu, en bas l'écart avec l'original, multiplié par 16 pour être visible.](img/f5/colonnes.png){width=100%}
+
+::: example
+**Lisez la figure.** Sur cette brique dense (164 Ko sans perte), ±2 pèse 102 Ko et ne change aucun voxel de plus de 2 ; « Très légère » pèse 37 Ko (4,4 fois moins) mais un voxel peut s'écarter de 35. À l'œil, les cinq tranches du haut sont presque identiques : c'est la promesse des colonnes légères. Pour mesurer, la plateforme ne les utilise **jamais** (section « Ce qui mesure lit l'original »).
+:::
+
+#### ±2 et ±4 : des « casiers » de valeurs
+
+![La colonne ±2 : les valeurs sont rangées par casiers de 5 ; le viewer affiche le centre du casier.](img/f5/quantif.svg){width=100%}
+
+- La valeur **0 reste seule** dans son casier : le fond reste exactement noir, les briques vides restent vides.
+- Les autres valeurs sont groupées par 5 (±2) ou par 9 (±4) ; on stocke **le numéro du casier**, sans perte. Moins de valeurs différentes → l'image se compresse mieux.
+- Le manifeste porte la table « casier → valeur » ; le viewer l'applique **en même temps** que son réglage d'affichage, sans calcul en plus.
+
+#### Légère et Très légère : du WebP avec perte, mais surveillé
+
+1. **Une zone morte.** Une compression avec perte « bave » : quelques voxels du fond noir prennent de petites valeurs. L'encodeur, qui connaît l'original, choisit un seuil τ (de 0 à 12) sous lequel tout redevient 0, et l'écrit dans **un octet** à la fin de la brique.
+2. **Jamais plus lourde qu'une colonne fidèle.** Sur une brique presque vide, l'image avec perte peut peser plus que l'image sans perte. L'encodeur garde alors la plus petite des trois : l'image avec perte, l'image ±4 ou l'image sans perte. L'octet final dit laquelle (0 à 12 = τ ; 254 = ±4 ; 255 = sans perte).
+3. **Une mosaïque au pas de 80.** Le WebP avec perte travaille par blocs de 16 pixels. Au pas de 66, un bloc chevaucherait deux tranches voisines et les mélangerait. Au pas de 80, chaque tranche de 66 pixels est centrée avec 7 pixels de marge : aucun bloc ne touche deux tranches.
+
+![Pourquoi les colonnes avec perte rangent les tranches tous les 80 pixels.](img/f5/grille80.svg){width=100%}
+
+::: example
+**Mesuré sur le canal DAPI du jeu de démonstration** (100 briques natives, colonne Très légère) : sans zone morte, 3,9 % des voxels noirs deviennent non nuls ; avec elle, 1,8 %. Et 12 briques sur 100 sont rangées en ±4 plutôt qu'en WebP avec perte, parce que c'était plus petit.
+:::
+
+::: why
+**Pourquoi pas AVIF ou JPEG XL ?** AVIF donne le même compromis taille / qualité que WebP à quelques pour cent près, encode deux fois plus lentement et n'a pas d'encodeur dans les navigateurs, qui ne pourraient donc pas faire la conversion. JPEG XL n'est pas décodé par Chrome ni Firefox par défaut (octobre 2026). Mesures : spécification § 14.3.
+:::
+
+### Trois copies pour couper vite
+
+Une coupe tirée des briques de 64³ télécharge bien plus qu'elle n'affiche : une coupe XY d'un voxel d'épaisseur lit 64 tranches. Le format 5 ajoute, **à chaque niveau**, trois copies recoupées, toutes **sans perte** :
+
+![Les trois copies de coupe, et ce qu'elles économisent.](img/f5/coupes.svg){width=100%}
+
+| coupe | lue dans | ce qui est lu |
+|---|---|---|
+| XY | `planes/` (natif) ou `xy/` (niveaux réduits) | **un** plan |
+| XZ ou YZ | `xz/` ou `yz/` : des paquets de 64 lignes recoupées | une ligne : trois petites lectures par canal |
+| oblique | `cuts/` : des petites briques de 32 × 32 × *bz* voxels, sans bordure | seulement celles que le plan traverse |
+
+*bz* est choisi pour que la petite brique soit à peu près cubique **en micromètres** : 32 × 32 × 16 sur le jeu de démonstration (voxel 1,2 × 1,2 × 3 µm), 32 × 32 × 4 sur un embryon à 0,344 × 0,344 × 3 µm.
+
+::: example
+**Mesuré sur un embryon de 1946² × 72 voxels** (plateforme 1.64) : une coupe oblique native a téléchargé **23 Mo en 15 requêtes** au lieu de 60 Mo en 30 par les briques, et chaque image est identique voxel pour voxel.
+:::
+
+### Ce qui mesure lit l'original
+
+Toute mesure, tout plugin qui rend un nombre, et tout export « natif » lit la colonne **sans perte du niveau natif**, quelle que soit la case affichée (chapitre 12 et 15). Un réglage d'affichage léger ne fausse donc jamais un chiffre.
+
+### L'arbre d'un jeu au format 5
+
+![Le dossier `bricks/` du jeu de démonstration après conversion, avec les tailles réelles.](img/f5/arbre.svg){width=100%}
+
+- Tout ce que le format 5 ajoute vit **dans** `bricks/` : un seul manifeste (`iribhm-bricks-v5`) le décrit, et un seul renommage l'installe.
+- `bricks/index/ll.bin`, `b2.bin`… : un index par colonne (même structure que l'`index.bin` du format 4). Le viewer lit l'index « sans perte » à l'ouverture, les autres seulement quand on choisit leur colonne.
+- Les paquets de la colonne sans perte du niveau 0 **sont** ceux du format 4 : la migration les relie (lien physique) au lieu de les recoder.
+- `planes/` et `mips/` ne changent pas : ils contiennent déjà le niveau natif.
+
+::: warning
+**La place disque augmente beaucoup** : sur le jeu de démonstration, 9 Mo de briques en format 4 deviennent environ 80 Mo en format 5 (dont 28 Mo de copies XZ / YZ). C'est voulu : ce qui coûte, c'est ce que chaque visiteur télécharge et ce que sa carte graphique garde, et cela, le format 5 le réduit. Vérifiez l'espace libre de l'hébergement avant de convertir de gros jeux.
 :::
 
 ::: remember
 - Une brique = 64³ voxels utiles + 1 voxel de bordure = **66³**, stockée en **une image WebP sans perte** de 594 × 528 pixels (9 × 8 coupes).
 - Les briques sont dans des **paquets** (super-blocs de 4 × 4 × 4) ; `index.bin` donne paquet, début et longueur de chacune (10 octets par brique).
-- `planes/` accélère les coupes XY, `mips/` les projections ; format actuel = **4**.
+- `planes/` accélère les coupes XY, `mips/` les projections.
+- Format actuel = **5** : des niveaux à 256 · 2^k^ qui gardent toutes les tranches, cinq compressions par niveau (sans perte, ±2, ±4, légère, très légère), trois copies recoupées pour les coupes ; tout ce qui mesure lit la colonne sans perte du natif.
 :::

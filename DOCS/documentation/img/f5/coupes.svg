@@ -1,0 +1,41 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 470" font-family="Inter, sans-serif"><defs><marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#4a5468"/></marker></defs>
+<rect width="800" height="470" rx="16" fill="#f8f9fd"/>
+<text x="400.0" y="34" font-size="18" font-weight="800" fill="#1c2333" text-anchor="middle" >Trois copies de plus pour couper vite, à chaque niveau</text>
+<rect x="30" y="60" width="236" height="150" rx="14" fill="#e8edff" stroke="#3b5bdb" stroke-width="1.6" />
+<text x="148" y="92" font-size="16" font-weight="800" fill="#3b5bdb" text-anchor="middle" >Coupe XY</text>
+<text x="148" y="120" font-size="12" font-weight="500" fill="#1c2333" text-anchor="middle" >un plan entier, déjà prêt</text>
+<text x="148" y="150" font-size="12.5" font-weight="700" fill="#4a5468" text-anchor="middle" font-family="monospace">xy/ · planes/</text>
+<text x="148" y="186" font-size="12.5" font-weight="800" fill="#3b5bdb" text-anchor="middle" >1 fichier</text>
+<rect x="282" y="60" width="236" height="150" rx="14" fill="#ebfbee" stroke="#2b8a3e" stroke-width="1.6" />
+<text x="400" y="92" font-size="16" font-weight="800" fill="#2b8a3e" text-anchor="middle" >Coupe XZ / YZ</text>
+<text x="400" y="120" font-size="12" font-weight="500" fill="#1c2333" text-anchor="middle" >une ligne de 64 coupes recoupées</text>
+<text x="400" y="150" font-size="12.5" font-weight="700" fill="#4a5468" text-anchor="middle" font-family="monospace">xz/ · yz/</text>
+<text x="400" y="186" font-size="12.5" font-weight="800" fill="#2b8a3e" text-anchor="middle" >3 lectures par canal</text>
+<rect x="534" y="60" width="236" height="150" rx="14" fill="#f3f0ff" stroke="#7048e8" stroke-width="1.6" />
+<text x="652" y="92" font-size="16" font-weight="800" fill="#7048e8" text-anchor="middle" >Coupe oblique</text>
+<text x="652" y="120" font-size="12" font-weight="500" fill="#1c2333" text-anchor="middle" >petites briques de 32 × 32 × bz</text>
+<text x="652" y="150" font-size="12.5" font-weight="700" fill="#4a5468" text-anchor="middle" font-family="monospace">cuts/</text>
+<text x="652" y="186" font-size="12.5" font-weight="800" fill="#7048e8" text-anchor="middle" >≈ 4 à 6 voxels lus par pixel</text>
+<text x="400" y="246" font-size="13" font-weight="700" fill="#1c2333" text-anchor="middle" >Voxels lus pour chaque pixel d'une coupe native (simulation sur un embryon de 5735² × 178)</text>
+<text x="130" y="288" font-size="12.5" font-weight="700" fill="#1c2333" text-anchor="end" >XY</text>
+<rect x="140" y="270" width="555.6923076923077" height="16" rx="3" fill="#f1f3f5" stroke="#868e96" stroke-width="1" />
+<text x="701.6923076923077" y="283" font-size="11" font-weight="600" fill="#4a5468" text-anchor="start" >64,5 (briques 64³)</text>
+<rect x="140" y="289" width="8.615384615384615" height="16" rx="3" fill="#e8edff" stroke="#3b5bdb" stroke-width="1" />
+<text x="154.6153846153846" y="302" font-size="11" font-weight="700" fill="#3b5bdb" text-anchor="start" >1,0 (copies de coupe)</text>
+<text x="130" y="334" font-size="12.5" font-weight="700" fill="#1c2333" text-anchor="end" >XZ</text>
+<rect x="140" y="316" width="68.92307692307692" height="16" rx="3" fill="#f1f3f5" stroke="#868e96" stroke-width="1" />
+<text x="214.9230769230769" y="329" font-size="11" font-weight="600" fill="#4a5468" text-anchor="start" >8,0 (briques 64³)</text>
+<rect x="140" y="335" width="32.738461538461536" height="16" rx="3" fill="#e8edff" stroke="#3b5bdb" stroke-width="1" />
+<text x="178.73846153846154" y="348" font-size="11" font-weight="700" fill="#3b5bdb" text-anchor="start" >3,8 (copies de coupe)</text>
+<text x="130" y="380" font-size="12.5" font-weight="700" fill="#1c2333" text-anchor="end" >incliné 30°</text>
+<rect x="140" y="362" width="514.3384615384615" height="16" rx="3" fill="#f1f3f5" stroke="#868e96" stroke-width="1" />
+<text x="660.3384615384615" y="375" font-size="11" font-weight="600" fill="#4a5468" text-anchor="start" >59,7 (briques 64³)</text>
+<rect x="140" y="381" width="75.81538461538462" height="16" rx="3" fill="#e8edff" stroke="#3b5bdb" stroke-width="1" />
+<text x="221.81538461538463" y="394" font-size="11" font-weight="700" fill="#3b5bdb" text-anchor="start" >8,8 (copies de coupe)</text>
+<text x="130" y="426" font-size="12.5" font-weight="700" fill="#1c2333" text-anchor="end" >(1,1,1)</text>
+<rect x="140" y="408" width="383.38461538461536" height="16" rx="3" fill="#f1f3f5" stroke="#868e96" stroke-width="1" />
+<text x="529.3846153846154" y="421" font-size="11" font-weight="600" fill="#4a5468" text-anchor="start" >44,5 (briques 64³)</text>
+<rect x="140" y="427" width="75.81538461538462" height="16" rx="3" fill="#e8edff" stroke="#3b5bdb" stroke-width="1" />
+<text x="221.81538461538463" y="440" font-size="11" font-weight="700" fill="#3b5bdb" text-anchor="start" >8,8 (copies de coupe)</text>
+<text x="400" y="458" font-size="10.5" font-weight="500" fill="#4a5468" text-anchor="middle" >XY : la copie par plans en lit exactement 1. Chiffres : SPEC § 14.5.</text>
+</svg>

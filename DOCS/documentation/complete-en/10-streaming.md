@@ -58,6 +58,40 @@ On the E9.5 demo dataset, the longest side is 768: all three settings land on le
 The viewer opens at **512** quality. A quality change that fails leaves the previous volume on screen and puts the menu back as it was.
 :::
 
+### On a format-5 dataset: the matrix
+
+On a format-5 dataset (section 7.11), the menu gives way to a **table**: one row per level, one column per compression. Each cell is a way of displaying the same volume; **a click loads it**.
+
+![The [Render Quality]{.ui} panel of a format-5 dataset (demonstration dataset; sidebar widened to show the five columns).](img-en/f5/matrice.png){.shot width=85%}
+
+::: legend
+| n | what it is |
+|-|----------------------|
+| 1 | The **rows**: one level, with its real dimensions (here native 768 × 576 × 112, then 512 and 256). |
+| 2 | The **columns**: [Lossless]{.ui}, [±2]{.ui}, [±4]{.ui}, [Light]{.ui}, [Very light]{.ui}. A tooltip on the header explains each compression. |
+| 3 | The level's **graphics memory** ("GPU 21.0 MB"), with a coloured mark. |
+| 4 | The **active cell**, framed: here **512 · ±2**, the opening setting. Each cell shows the **size to download** and, once the throughput is measured, the **estimated time**. |
+:::
+
+| colour | meaning |
+|---|---|
+| green | fits within three quarters of the estimated graphics memory |
+| amber | tight: above three quarters, or only thanks to graphics compression (section 10.3) |
+| red | does not fit: the overview stays at the finest level that fits, and **zoom detail** (section 10.8) fetches the chosen cell around what you look at |
+
+::: example
+**Demonstration dataset** (read on the capture). The lossless native weighs **7.5 MB**; the opening cell, 512 · ±2, **2.3 MB**, three times less; 256 · Very light, **0.4 MB**. The graphics memory depends only on the row: 189 MB at native, 84 MB at 512, 21 MB at 256.
+:::
+
+- The chosen cell is kept in the workspace, the page address (`512x512@b2`, `native@ll`…) and this browser.
+- **Zoom detail** stays in the **same column** as the chosen cell.
+- The **Compare** page still shares memory by rows; each panel keeps its column.
+- The sidebar is 320 pixels wide: the last columns are reached by **scrolling the table to the right**.
+
+::: warning
+A lossy column **changes the displayed voxels**, not the data: measurements, computing plugins and "lossless" exports always read the lossless column of the native level (chapters 12 and 15).
+:::
+
 ## 10.3 The GPU atlas and the page table
 
 A brick of 64³ voxels is too small to deserve its own texture; creating hundreds of them would be unmanageable. The viewer therefore reserves in video memory **large blocks of identical slots**: the **atlas**.
@@ -77,6 +111,10 @@ The atlas is a **warehouse** whose shelves are all the same size. The **page tab
 ::: tech
 A small volume stays in one piece: if the level fits in less than **512 MiB** (at 4 bytes per voxel) and within the card's limits, it is stored in **a single dense 3D texture**. The E9.5 dataset at level 0 is an example: 768 × 576 × 112 × 4 bytes ≈ **189 MiB**. The paged atlas is used only for large levels.
 :::
+
+### Graphics compression (timelapses)
+
+Since platform 1.60, the frames of a **timelapse** can be kept on the graphics card in **compressed** form (BC4 / BC5 blocks): **0.5 byte** per voxel and channel instead of 1, so about **twice as many time points** in memory. It is display only (displayed values differ by about 1 to 2 grey levels); the Studio and zoom detail stay exact. Setting [GPU compression]{.ui} of the panel: [Timelapses]{.ui} (default), [On]{.ui} or [Off]{.ui}. On a software renderer the option is unavailable and the panel says so.
 
 ## 10.4 The video memory budget
 
@@ -173,7 +211,7 @@ You zoom in hard on an area: the voxels of the chosen level become larger than t
 - At the boundary of the fine area, the image switches from one level to the other **at a brick face**, with no cross-fade.
 
 ::: warning
-The mode exists only for **format 4** (bricks with a border). It is suspended while a volume is loading and as soon as you apply a **Gaussian blur** to a channel (chapter 11), because raw bricks on a blurred channel would give a different image.
+The mode exists only for **formats 4 and 5** (bricks with a border); in format 5 it stays in the chosen compression column. It is suspended while a volume is loading and as soon as you apply a **Gaussian blur** to a channel (chapter 11), because raw bricks on a blurred channel would give a different image.
 :::
 
 The status text shows, depending on the case: "Detail: N bricks of level L in view", "Detail: loading x of y bricks of level L", or "Detail unavailable: not enough GPU memory left".

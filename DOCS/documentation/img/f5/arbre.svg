@@ -1,0 +1,33 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 418" font-family="Inter, sans-serif"><defs><marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#4a5468"/></marker></defs>
+<rect width="800" height="418" rx="16" fill="#f8f9fd"/>
+<text x="400.0" y="34" font-size="18" font-weight="800" fill="#1c2333" text-anchor="middle" >Le dossier d'un jeu au format 5 (jeu de démonstration, tailles réelles)</text>
+<text x="30" y="80" font-size="12.5" font-weight="700" fill="#1c2333" text-anchor="start" font-family="monospace">bricks/index/</text>
+<text x="30" y="97" font-size="11" font-weight="500" fill="#4a5468" text-anchor="start" >un index par compression</text>
+<rect x="500" y="72" width="2" height="18" rx="3" fill="#e8edff" stroke="#3b5bdb" stroke-width="1" />
+<text x="510" y="86" font-size="11.5" font-weight="700" fill="#1c2333" text-anchor="start" >0,1 Mo</text>
+<text x="30" y="124" font-size="12.5" font-weight="700" fill="#1c2333" text-anchor="start" font-family="monospace">bricks/l0/ll  b2  b4  q80  q50/</text>
+<text x="30" y="141" font-size="11" font-weight="500" fill="#4a5468" text-anchor="start" >niveau natif, cinq compressions</text>
+<rect x="500" y="116" width="176.8772911246555" height="18" rx="3" fill="#e8edff" stroke="#3b5bdb" stroke-width="1" />
+<text x="684.8772911246555" y="130" font-size="11.5" font-weight="700" fill="#1c2333" text-anchor="start" >21,8 Mo</text>
+<text x="30" y="168" font-size="12.5" font-weight="700" fill="#1c2333" text-anchor="start" font-family="monospace">bricks/l1/…  l2/…</text>
+<text x="30" y="185" font-size="11" font-weight="500" fill="#4a5468" text-anchor="start" >niveaux 512 et 256, cinq compressions</text>
+<rect x="500" y="160" width="115.22756564327062" height="18" rx="3" fill="#e8edff" stroke="#3b5bdb" stroke-width="1" />
+<text x="623.2275656432706" y="174" font-size="11.5" font-weight="700" fill="#1c2333" text-anchor="start" >14,2 Mo</text>
+<text x="30" y="212" font-size="12.5" font-weight="700" fill="#1c2333" text-anchor="start" font-family="monospace">bricks/xy/</text>
+<text x="30" y="229" font-size="11" font-weight="500" fill="#4a5468" text-anchor="start" >plans XY des niveaux réduits</text>
+<rect x="500" y="204" width="41.75882302631263" height="18" rx="3" fill="#e8edff" stroke="#3b5bdb" stroke-width="1" />
+<text x="549.7588230263126" y="218" font-size="11.5" font-weight="700" fill="#1c2333" text-anchor="start" >5,1 Mo</text>
+<text x="30" y="256" font-size="12.5" font-weight="700" fill="#1c2333" text-anchor="start" font-family="monospace">bricks/xz/  bricks/yz/</text>
+<text x="30" y="273" font-size="11" font-weight="500" fill="#4a5468" text-anchor="start" >coupes XZ et YZ recoupées</text>
+<rect x="500" y="248" width="230.0" height="18" rx="3" fill="#e8edff" stroke="#3b5bdb" stroke-width="1" />
+<text x="738.0" y="262" font-size="11.5" font-weight="700" fill="#1c2333" text-anchor="start" >28,3 Mo</text>
+<text x="30" y="300" font-size="12.5" font-weight="700" fill="#1c2333" text-anchor="start" font-family="monospace">bricks/cuts/</text>
+<text x="30" y="317" font-size="11" font-weight="500" fill="#4a5468" text-anchor="start" >petites briques des coupes obliques</text>
+<rect x="500" y="292" width="96.21560119873081" height="18" rx="3" fill="#e8edff" stroke="#3b5bdb" stroke-width="1" />
+<text x="604.2156011987308" y="306" font-size="11.5" font-weight="700" fill="#1c2333" text-anchor="start" >11,9 Mo</text>
+<text x="30" y="344" font-size="12.5" font-weight="700" fill="#1c2333" text-anchor="start" font-family="monospace">planes/  mips/</text>
+<text x="30" y="361" font-size="11" font-weight="500" fill="#4a5468" text-anchor="start" >inchangés (niveau natif)</text>
+<rect x="500" y="336" width="73.9481220363746" height="18" rx="3" fill="#e8edff" stroke="#3b5bdb" stroke-width="1" />
+<text x="581.9481220363746" y="350" font-size="11.5" font-weight="700" fill="#1c2333" text-anchor="start" >9,1 Mo</text>
+<text x="400" y="394" font-size="11.5" font-weight="600" fill="#4a5468" text-anchor="middle" >Format 4 du même jeu : 9 Mo de briques. Le disque est dépensé ; le réseau et la carte graphique, non.</text>
+</svg>

@@ -1,0 +1,16 @@
+# Changelog v1.63.0 (Web Platform)
+
+## [ADDED]
+
+- **Format 5 specification**: `DOCS/dataset-migrations/SPEC.md` Part III (§14) defines the next dataset format. It has one row per resolution: native, then 4096, 2048, 1024, 512 and 256 below the native size, with the long XY axis exactly at the target and every slice kept. Each row comes in five compressions: lossless, ±2, ±4, WebP 80 and WebP 50. It adds plane stores for fast XY, XZ and YZ cuts and small bricks of about 11 µm for oblique cuts. It also specifies the quality matrix the viewer will show, a lossless data-access API for measuring tools, native-quality exports with annotations anchored in micrometres, and an OME-Zarr v0.5 copy for the Download Center.
+- **Shared format-5 engine**: `format5.py`, at the repository root and shipped in the release and in the pipeline pack, holds everything both producers need. That covers the level ladder, the exact integer area average used to make each level from the native voxels, and the five column codecs: bounded quantizers stored losslessly with a lookup table, and WebP lossy with a dead-zone byte that keeps the background at zero. It also holds the 80-pixel mosaic, so no WebP block ever mixes two slices, the brick packs and indexes, the XY/XZ/YZ plane packs, the cut-brick records, the v5 manifest, the structural validator and the writer of a whole tree. Because the migration and the pipeline call the same functions, they write the same bytes.
+- **Migration m005-matrix, off by default**: `dataset_migrations.py` can rebuild a format-4 dataset as format 5 on the Python server. It runs in four kinds of resumable units: plane resampling, bricks of every column, XZ/YZ packs and cut-brick super-blocks. Units run in threads, because Pillow's WebP encoder and numpy release the GIL; WebP encoding is about 6× faster on 8 threads. Level-0 lossless packs are hard-linked from format 4, not re-encoded. The finalize step pauses and resumes under a deadline, validates the tree, swaps it in, re-stamps `planes/` and `mips/`, and bumps the version. The migration is registered only with `LUMEN_FORMAT5=1` or `enable_format5()`, because the viewer does not read format 5 yet. With the default setting nothing changes for any host: the latest format is still 4, and the PHP twin and the browser executor are untouched.
+- **Codec benchmark**: `tools/bench_brick_codecs.py` measures every candidate codec on native bricks of real datasets: size, maximum error, PSNR, Dice at the Otsu threshold, intensity drift and encode time. Its results on three embryos are the normative inputs of SPEC §14.3. AVIF is no better than WebP and has no browser encoder. JPEG XL is not decoded by Chrome or Firefox by default. A noise-bounded quantizer would need the raw sensor counts.
+
+## [CHANGED]
+
+- **Plane manifests accept a v5 bricks manifest**: `preprocess/planes_writer.py` reads the trees of a format-5 manifest as it does format 4.
+
+## [FIXED]
+
+- **Tests**: `tests/test_format5.py` covers the pure functions against brute-force references, a pipeline tree decoded back to independent references, and a synthetic dataset taken through m002 → m003 → m004 → m005. Its format-5 tree is checked byte for byte against the pipeline writer's output. A timelapse, cancellation and a source change are also covered.

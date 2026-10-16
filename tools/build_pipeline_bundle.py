@@ -77,6 +77,12 @@ PIPELINE_SCRIPTS = (
     "2d_importer.py",
 )
 
+# Modules of the repository root the pipeline imports (shared with the web platform,
+# so both producers of a format write the same bytes). They land beside the scripts.
+SHARED_MODULES = (
+    "format5.py",
+)
+
 # Optional extra invoked by --with-downloads. run_preprocess.py accepts it either
 # in tools/ (repo layout) or beside itself (extracted layout) — we use the latter.
 DOWNLOAD_TOOL = "build_download_bundles.py"
@@ -191,6 +197,11 @@ def stage_sources(stage: Path):
         src = REPO_ROOT / "preprocess" / name
         if not src.is_file():
             raise SystemExit(f"[FATAL] script de pipeline introuvable : {src}")
+        _copy(src, stage / "pipeline" / name)
+    for name in SHARED_MODULES:
+        src = REPO_ROOT / name
+        if not src.is_file():
+            raise SystemExit(f"[FATAL] module partage introuvable : {src}")
         _copy(src, stage / "pipeline" / name)
 
     # build_download_bundles.py carries a hardcoded lab path in RAW_DATA_DIRS. It is

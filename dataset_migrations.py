@@ -654,6 +654,7 @@ def mips_manifest(dimensions: dict, channels: int, source_sha256: str, producer:
 # ── Format 4 — brick pyramid v3 (SPEC §13) ────────────────────────────────────
 
 V3_SCHEMA = "iribhm-bricks-v3"
+V5_SCHEMA = "iribhm-bricks-v5"            # format5.SCHEMA (format 5, SPEC §14.4)
 V3_ENCODING = "webp-lossless-v3"      # internal Tree.encoding tag, never written to disk
 V3_APRON = 1
 V3_SLICE = BRICK_SIZE + 2 * V3_APRON  # 66
@@ -1325,7 +1326,7 @@ class Tree:
 class Plan:
     __slots__ = ("dataset", "type", "folder", "ds_dir", "manifest_path", "sha", "trees",
                  "units", "unit_bytes", "total", "empty",
-                 "v3", "v3_problem", "voxel", "manifest", "extra")
+                 "v3", "v3_problem", "v5", "v5_problem", "voxel", "manifest", "extra")
 
 
 def _int_dim(v) -> int:
@@ -1421,7 +1422,7 @@ def _manifest_voxel(manifest: dict, ds_dir: Path):
     """LOD0 voxel size (µm) that drives the v3 Z-halving rule: the bricks manifest's
     `voxelSize` (v3: levels[0].voxelSize), else metadata.json `voxel_size`, else 1 µm
     isotropic (the rule then halves Z with X and Y from the first level on)."""
-    if manifest.get("schema") == V3_SCHEMA:
+    if manifest.get("schema") in (V3_SCHEMA, V5_SCHEMA):
         lv = manifest.get("levels")
         if isinstance(lv, list) and lv and isinstance(lv[0], dict):
             v = _voxel_triplet(lv[0].get("voxelSize"))
@@ -1582,6 +1583,11 @@ def _v3_index_stamp(plan) -> tuple:
     return _v3_index_stamp_trees([plan.trees[t] for t in sorted(plan.trees)])
 
 
+def _index_stamp(plan) -> tuple:
+    trees = [plan.trees[t] for t in sorted(plan.trees)]
+    return _v5_index_stamp_trees(trees) if plan.v5 else _v3_index_stamp_trees(trees)
+
+
 def _frame_number(key: str, fallback: int) -> int:
     m = re.match(r"^t(\d{1,6})$", str(key))
     return int(m.group(1)) if m else fallback
@@ -1601,7 +1607,7 @@ def _plan_for(dataset_id: str) -> Plan:
     with _CACHE_LOCK:
         hit = _PLAN_CACHE.get(cache_key)
     if hit and hit[0] == st.st_mtime_ns and hit[1] == st.st_size and (
-            not hit[2].v3 or hit[2].extra.get("_index_stamp") == _v3_index_stamp(hit[2])):
+            not (hit[2].v3 or hit[2].v5) or hit[2].extra.get("_index_stamp") == _index_stamp(hit[2])):
         return hit[2]
     try:
         raw = manifest_path.read_bytes()
@@ -1615,9 +1621,12 @@ def _plan_for(dataset_id: str) -> Plan:
         bricks_root = ds_dir / "bricks"
         tps = manifest.get("timepoints")
         is_v3 = manifest.get("schema") == V3_SCHEMA
-        v3_problem = None
+        is_v5 = manifest.get("schema") == V5_SCHEMA
+        v3_problem = v5_problem = None
         if is_v3:
             trees, v3_problem = _build_v3_trees(type_dir, bricks_root, manifest)
+        elif is_v5:
+            trees, v5_problem = _build_v5_trees(type_dir, bricks_root, manifest)
         elif type_dir == "live" and isinstance(tps, dict) and tps:
             rows = sorted(((_frame_number(k, i), k, v) for i, (k, v) in enumerate(tps.items())),
                           key=lambda r: r[0])
@@ -1648,8 +1657,11 @@ def _plan_for(dataset_id: str) -> Plan:
     plan.dataset, plan.type, plan.folder, plan.ds_dir = f"{type_dir}/{folder}", type_dir, folder, ds_dir
     plan.manifest_path = manifest_path
     plan.v3, plan.v3_problem, plan.manifest, plan.extra = is_v3, v3_problem, manifest, {}
+    plan.v5, plan.v5_problem = is_v5, v5_problem
     if is_v3:
         plan.extra["_index_stamp"] = _v3_index_stamp_trees(trees)
+    elif is_v5:
+        plan.extra["_index_stamp"] = _v5_index_stamp_trees(trees)
     plan.voxel = _manifest_voxel(manifest, ds_dir)
     plan.sha = hashlib.sha256(raw).hexdigest()
     with _CACHE_LOCK:
@@ -1842,11 +1854,15 @@ def unit_key_for(mid: str, unit) -> str:
         return "t%d.l%d.c%d.y%d.x%d" % tuple(unit)
     if mid == M004:
         return "t%d.k%d.c%d.z%d.y%d.x%d" % tuple(unit)
+    if mid == M005:
+        return _m005_key(unit)
     return unit_key(*unit)
 
 
 
 def parse_unit_key_for(mid: str, key) -> tuple:
+    if mid == M005:
+        return _m005_parse(key)
     rx = {M003: _UNIT_RE_M003, M004: _UNIT_RE_M004}.get(mid, _UNIT_RE)
     m = rx.match(str(key or ""))
     if not m:
@@ -1867,6 +1883,8 @@ def _unitset(plan: Plan, mid: str) -> UnitSet:
         return _m003_unitset(plan)
     if mid == M004:
         return _m004_unitset(plan)
+    if mid == M005:
+        return _m005_unitset(plan)
     raise MigrationError("unknown_migration")
 
 
@@ -1959,7 +1977,7 @@ def _m004_unitset(plan: Plan) -> UnitSet:
     hit = plan.extra.get(M004)
     if hit is not None:
         return hit
-    if plan.v3:
+    if plan.v3 or plan.v5:
         raise MigrationError("already_v3", 409)
     levels = _m004_geometry(plan)
     zshift = [0]
@@ -1998,6 +2016,8 @@ def _pending_units(us: UnitSet, done) -> tuple:
     done — its inputs are those levels' bricks; every other migration's pending units
     are all runnable."""
     pending = [u for u in us.units if unit_key_for(us.mid, u) not in done]
+    if us.mid == M005:
+        return _m005_runnable(us, pending), pending
     if us.mid != M004:
         return pending, pending
     frontier = {}
@@ -2327,7 +2347,11 @@ def _repair_needed(plan: Plan, fv: int, m: dict) -> bool:
     if fv < m["to"]:
         return False
     if m["id"] == M004:
-        return not plan.v3
+        return not (plan.v3 or plan.v5)
+    if m["id"] == M005:
+        # Damaged v5 bricks cannot be rebuilt (their format-4 source is gone): a problem,
+        # not a repair. A v4 tree under a version-5 metadata is repaired from that tree.
+        return not plan.v5
     return not _structure_valid(plan, m["id"])
 
 
@@ -2386,6 +2410,8 @@ def _check_disk(plan: Plan, mid: str = M002, us: "UnitSet | None" = None) -> Non
     elif mid == M004:
         # The v2 pyramid weighs ~8/7 of its LOD0; v3 ~BRICKS_V3_SIZE_RATIO of v2.
         est = int(sum(plan.unit_bytes.values()) * 8 / 7 * BRICKS_V3_SIZE_RATIO)
+    elif mid == M005:
+        est = int(sum(plan.unit_bytes.values()) * FORMAT5_SIZE_RATIO)
     else:
         est = int(sum(plan.unit_bytes.values()) * PLANES_SIZE_RATIO)
     store_free, store_dev = _volume_key(MIGRATIONS_DIR)
@@ -2408,10 +2434,10 @@ def plan_job(dataset_id, mid, offset: int = 0, limit: int = 10000) -> dict:
         m, plan, path = _open_job(dataset_id, mid)
     except MigrationError as exc:
         # m004 interrupted between its two renames: bricks/ is momentarily absent.
-        if m["id"] == M004 and exc.code in ("no_manifest", "manifest_invalid"):
+        if m["id"] in (M004, M005) and exc.code in ("no_manifest", "manifest_invalid"):
             type_dir, folder, _ds = _resolve_dataset(dataset_id)
             j = _load_journal(journal_path(type_dir, folder, m["id"]))
-            if j is not None and (j.get("state") == "swapped" or (_ds / ".bricks-incoming").is_dir()):
+            if j is not None and (j.get("state") == "swapped" or (_ds / _SWAP_DIRS[m["id"]][0]).is_dir()):
                 return _swapped_only_summary(j)
         raise
     base = _job_base(plan, mid=m["id"])
@@ -2452,6 +2478,15 @@ def plan_job(dataset_id, mid, offset: int = 0, limit: int = 10000) -> dict:
                      "newManifestSha": plan.sha}
                 _save_journal(path, j)
                 return _swapped_only_summary(j)
+            if m["id"] == M005 and plan.v5:
+                if plan.v5_problem:
+                    raise MigrationError("bricks_v5_invalid", 409, plan.v5_problem)
+                j = {"migration": m["id"], "dataset": plan.dataset, "createdAt": _utc_iso(),
+                     "sourceManifests": {}, "units": {"total": 0, "empty": 0}, "done": [],
+                     "executors": {"browser": 0, "server": 0}, "state": "swapped",
+                     "newManifestSha": plan.sha}
+                _save_journal(path, j)
+                return _swapped_only_summary(j)
             us = _unitset(plan, m["id"])
             _rmtree(plan.ds_dir / incoming)
             _check_disk(plan, m["id"], us)
@@ -2477,6 +2512,10 @@ def plan_job(dataset_id, mid, offset: int = 0, limit: int = 10000) -> dict:
                 "units": keys[offset:offset + limit]})
     if m["id"] == M004:
         out["levels"] = _levels_progress(us, done)
+    elif m["id"] == M005:
+        out["stages"] = _m005_stage_progress(us, done)
+        out["levels"] = [{"level": L["level"], "target": L["target"], "dimensions": L["dimensions"],
+                          "voxelSize": L["voxelSize"]} for L in us.levels]
     return out
 
 
@@ -2567,6 +2606,8 @@ def unit_put(dataset_id, mid, key, body: bytes, dry: bool = False) -> dict:
         return out
     m, plan, path = _open_job(dataset_id, mid)
     mid = m["id"]
+    if mid == M005:
+        raise MigrationError("browser_unsupported", 409, "m005 runs on the server executor")
     unit = parse_unit_key_for(mid, key)
     store = tile_store_dir(plan.type, plan.folder, mid)
     if mid == M002:
@@ -2651,14 +2692,25 @@ def _release(base: str, key: str) -> None:
         (_CLAIMS.get(base) or {}).pop(key, None)
 
 
-def unit_run(dataset_id, mid, max_seconds=MAX_RUN_SECONDS, dry: bool = False) -> dict:
-    """Server executor: process runnable units for at most ~max_seconds (at least one)."""
+def unit_run(dataset_id, mid, max_seconds=MAX_RUN_SECONDS, dry: bool = False, workers=None) -> dict:
+    """Server executor: process runnable units for at most ~max_seconds (at least one).
+    m005 runs up to `workers` units at once (default M005_WORKERS)."""
     m, plan, path = _open_job(dataset_id, mid)
     try:
         budget = float(max_seconds)
     except (TypeError, ValueError):
         budget = MAX_RUN_SECONDS
     budget = max(1.0, min(float(MAX_RUN_SECONDS), budget))
+    if m["id"] == M005:
+        with _JobLock(_job_base(plan, mid=M005)):
+            j = _load_journal(path)
+            if j is None:
+                raise MigrationError("no_job", 404)
+            _check_source(plan, j, path)
+        if j.get("state") != "running":
+            raise MigrationError("job_not_running", 409)
+        n = max(1, min(64, _as_int(workers, M005_WORKERS) or M005_WORKERS))
+        return _unit_run_m005(dataset_id, m, plan, path, budget, dry, n)
     base = _job_base(plan, mid=m["id"])
     store = tile_store_dir(plan.type, plan.folder, m["id"])
     t0 = time.monotonic()
@@ -2803,7 +2855,9 @@ def _structure_valid(plan: Plan, mid: str) -> bool:
     if mid == M003:
         return dataset_mips_valid(plan)
     if mid == M004:
-        return dataset_bricks_v3_valid(plan)
+        return dataset_bricks_v3_valid(plan) or bool(plan.v5)
+    if mid == M005:
+        return bool(plan.v5) and plan.v5_problem is None
     return False
 
 
@@ -2952,6 +3006,9 @@ def _process_any(plan: Plan, us: UnitSet, unit, store: Path, cache):
     if us.mid == M003:
         png, nread = process_unit_m003(plan, us, unit)
         return png, nread, len(png) if png else 0
+    if us.mid == M005:
+        result, nread = process_unit_m005(plan, us, unit, store)
+        return result, nread, _m005_result_bytes(result)
     bricks, nread = process_unit_m004(plan, us, unit, store, cache)
     return bricks, nread, sum(len(p) for p in bricks.values())
 
@@ -2962,6 +3019,8 @@ def _store_any(plan: Plan, us: UnitSet, unit, store: Path, result) -> None:
         _write_unit_tiles(plan, M002, unit, result)
     elif us.mid == M003:
         _write_mip_tile(store, unit, result)
+    elif us.mid == M005:
+        _store_m005(store, unit, result)
     else:
         _write_unit_m004(us, store, unit, result)
 
@@ -2975,6 +3034,8 @@ def unit_inputs(dataset_id, mid, key) -> dict:
     voxel ranges the reduction works on. m002: the unit's v2 bricks."""
     m, plan, _path = _open_job(dataset_id, mid)
     mid = m["id"]
+    if mid == M005:
+        raise MigrationError("browser_unsupported", 409, "m005 runs on the server executor")
     unit = parse_unit_key_for(mid, key)
     us = _unitset(plan, mid)
     out = {"ok": True, "migration": mid, "unit": unit_key_for(mid, unit), "empty": unit not in us.unit_bytes}
@@ -3321,7 +3382,7 @@ def cancel(dataset_id, mid) -> dict:
         if j is not None and j.get("state") == "swapped":
             # The new structure is live already: finishing is the only consistent exit.
             raise MigrationError("finalize_in_progress", 409)
-        if m["id"] == M004 and not (ds_dir / live_name).exists():
+        if m["id"] in (M004, M005) and not (ds_dir / live_name).exists():
             if (ds_dir / inc_name).is_dir():
                 raise MigrationError("finalize_in_progress", 409)
             if (ds_dir / old_name).is_dir():
@@ -3484,10 +3545,11 @@ def _bricks_dir_schema(d: Path):
 PREVIOUS_BRICKS = "bricks.previous"
 
 
-def _retire_old_bricks(ds_dir: Path, keep: bool) -> None:
-    """After the bump: bricks.v2-old/ is deleted, or kept as bricks.previous/ (replacing an
-    older one). Re-entrant: nothing left aside means nothing to do."""
-    old = ds_dir / "bricks.v2-old"
+def _retire_old_bricks(ds_dir: Path, keep: bool, old_name: str = "bricks.v2-old") -> None:
+    """After the bump: the old tree (bricks.v2-old/, m005: bricks.v4-old/) is deleted, or
+    kept as bricks.previous/ (replacing an older one). Re-entrant: nothing left aside means
+    nothing to do."""
+    old = ds_dir / old_name
     if keep and (old / "manifest.json").is_file():
         prev = ds_dir / PREVIOUS_BRICKS
         _rmtree(prev)
@@ -3521,15 +3583,18 @@ def drop_previous(dataset_id) -> dict:
 
 
 
-def _swap_bricks(ds_dir: Path) -> None:
-    """bricks/ → bricks.v2-old/, .bricks-incoming/ → bricks/ (SPEC §13.6). Re-entrant:
-    after a crash between the two renames bricks/ is absent and only the second one
-    remains; bricks.v2-old/ is deleted by the caller after the version bump."""
-    incoming, live, old = ds_dir / ".bricks-incoming", ds_dir / "bricks", ds_dir / "bricks.v2-old"
+def _swap_bricks(ds_dir: Path, mid: str = None) -> None:
+    """bricks/ → bricks.v2-old/, .bricks-incoming/ → bricks/ (SPEC §13.6; m005: bricks.v4-old/
+    and .bricks5-incoming/, §14.10). Re-entrant: after a crash between the two renames
+    bricks/ is absent and only the second one remains; the old tree is deleted by the
+    caller after the version bump."""
+    inc_name, _live, old_name = _SWAP_DIRS[mid or M004]
+    target = V5_SCHEMA if mid == M005 else V3_SCHEMA
+    incoming, live, old = ds_dir / inc_name, ds_dir / "bricks", ds_dir / old_name
     if not incoming.is_dir():
         return
     if live.exists():
-        if _bricks_dir_schema(live) == V3_SCHEMA:
+        if _bricks_dir_schema(live) == target:
             _rmtree(incoming)
             return
         _rmtree(old)   # a stale leftover: the live v2 tree is the one to keep aside
@@ -3775,8 +3840,956 @@ def finalize(dataset_id, mid, max_seconds=None, keep_previous=False) -> dict:
         return _finalize_m003(dataset_id, mid, max_seconds)
     if m["id"] == M004:
         return _finalize_m004(dataset_id, m, max_seconds, bool(keep_previous))
+    if m["id"] == M005:
+        return _finalize_m005(dataset_id, m, max_seconds, bool(keep_previous))
     return _finalize_m002(dataset_id, mid, max_seconds)
 
+
+
+# ── Format 5 — m005-matrix (SPEC §14) ─────────────────────────────────────────
+#
+# The arithmetic and the byte layouts live in format5.py, shared with the pipeline; this
+# section cuts the work into units, runs them on the server, and assembles the tree.
+# Units (SPEC §14.10), tuples (stage, t, k, c, a, b, d):
+#   A (0, t, 0, c, z, 0, 0)        plane z of every level k >= 1 (stage-A store, one LPLN
+#                                  pack of one channel per level), from the native plane;
+#   B (1, t, k, c, BZ, BY, BX)     the bricks of super-block (BZ, BY, BX) of level k in
+#                                  every column (level 0: all but `ll`, whose format-4
+#                                  packs are reused as they are);
+#   C (2, t, k, c, kind, block, 0) one xz (kind 0) / yz (kind 1) pack of 64 rows;
+#   D (3, t, k, c, SZ, SY, SX)     the record of one cut super-block.
+# A level-k >= 1 unit of B, C or D reads stage-A planes: it waits for every A unit of its
+# tree and channel. Level 0 reads planes/ (format 2) and the format-4 bricks.
+
+try:
+    import format5 as _f5
+except Exception:  # pragma: no cover - numpy missing
+    _f5 = None
+
+M005 = "m005-matrix"
+M005_ENTRY = {
+    "id": M005,
+    "from": 4,
+    "to": 5,
+    "types": ["3d", "live"],
+    "title": {
+        "en": "Resolution × compression matrix: full-depth levels at 256·2ᵏ, five compressions, fast cuts",
+        "fr": "Matrice résolution × compression : niveaux à 256·2ᵏ avec toutes les tranches, cinq compressions, coupes rapides",
+        "es": "Matriz resolución × compresión: niveles a 256·2ᵏ con todos los cortes, cinco compresiones, cortes rápidos",
+        "nl": "Matrix resolutie × compressie: niveaus op 256·2ᵏ met alle coupes, vijf compressies, snelle sneden",
+    },
+    "description": {
+        "en": "Rebuilds the levels from the native voxels at 256, 512, 1024… pixels with every slice kept, "
+              "stores each level in five compressions (lossless, ±2, ±4, light, very light) and adds "
+              "XY/XZ/YZ plane stores and small cut bricks so slices and oblique cuts read only what "
+              "they show. The native level stays lossless.",
+        "fr": "Reconstruit les niveaux à partir des voxels natifs à 256, 512, 1024… pixels en gardant toutes "
+              "les tranches, range chaque niveau en cinq compressions (sans perte, ±2, ±4, légère, très "
+              "légère) et ajoute des plans XY/XZ/YZ et de petites briques de coupe pour que les coupes, "
+              "même obliques, ne lisent que ce qu'elles montrent. Le niveau natif reste sans perte.",
+        "es": "Reconstruye los niveles a partir de los vóxeles nativos a 256, 512, 1024… píxeles conservando "
+              "todos los cortes, guarda cada nivel en cinco compresiones (sin pérdidas, ±2, ±4, ligera, muy "
+              "ligera) y añade planos XY/XZ/YZ y pequeños ladrillos de corte para que los cortes, incluso "
+              "oblicuos, lean solo lo que muestran. El nivel nativo sigue sin pérdidas.",
+        "nl": "Bouwt de niveaus opnieuw op vanuit de native voxels op 256, 512, 1024… pixels met alle coupes, "
+              "bewaart elk niveau in vijf compressies (verliesvrij, ±2, ±4, licht, zeer licht) en voegt "
+              "XY/XZ/YZ-vlakken en kleine snijbricks toe, zodat sneden, ook schuine, alleen lezen wat ze "
+              "tonen. Het native niveau blijft verliesvrij.",
+    },
+}
+_SWAP_DIRS[M005] = (".bricks5-incoming", "bricks", "bricks.v4-old")
+# Bytes of a format-5 tree per byte of the format-4 level 0 it is made from (measured on the
+# synthetic test volume and the codec benchmark: the five columns weigh ~3x the lossless
+# level, the coarser levels ~1/3 more, the xy/xz/yz/cut stores ~3 lossless copies).
+FORMAT5_SIZE_RATIO = 7.0
+M005_WORKERS = max(1, min(8, (os.cpu_count() or 2) - 1))
+_M005_STAGES = "ABCD"
+_M005_ORTH = ("xz", "yz")
+_UNIT_RE_M005 = {
+    "A": re.compile(r"^A\.t(\d{1,6})\.c(\d{1,3})\.z(\d{1,5})\Z", re.ASCII),
+    "B": re.compile(r"^B\.t(\d{1,6})\.k(\d{1,2})\.c(\d{1,3})\.z(\d{1,5})\.y(\d{1,5})\.x(\d{1,5})\Z", re.ASCII),
+    "C": re.compile(r"^C\.t(\d{1,6})\.k(\d{1,2})\.c(\d{1,3})\.(xz|yz)\.b(\d{1,5})\Z", re.ASCII),
+    "D": re.compile(r"^D\.t(\d{1,6})\.k(\d{1,2})\.c(\d{1,3})\.z(\d{1,5})\.y(\d{1,5})\.x(\d{1,5})\Z", re.ASCII),
+}
+
+
+def enable_format5() -> None:
+    """Registers m005-matrix and raises LATEST to 5. Off by default until the viewer reads
+    format 5 (a dataset migrated before would not open); `LUMEN_FORMAT5=1` turns it on at
+    import, tests and tools call this."""
+    global LATEST
+    if M005 not in _MIGRATIONS_BY_ID:
+        MIGRATIONS.append(M005_ENTRY)
+        _MIGRATIONS_BY_ID[M005] = M005_ENTRY
+    LATEST = max(LATEST, 5)
+
+
+def disable_format5() -> None:
+    global LATEST
+    if M005 in _MIGRATIONS_BY_ID:
+        MIGRATIONS.remove(_MIGRATIONS_BY_ID.pop(M005))
+    LATEST = 4
+
+
+def _m005_key(u) -> str:
+    s, t, k, c, a, b, d = u
+    if s == 0:
+        return "A.t%d.c%d.z%d" % (t, c, a)
+    if s == 1:
+        return "B.t%d.k%d.c%d.z%d.y%d.x%d" % (t, k, c, a, b, d)
+    if s == 2:
+        return "C.t%d.k%d.c%d.%s.b%d" % (t, k, c, _M005_ORTH[a], b)
+    return "D.t%d.k%d.c%d.z%d.y%d.x%d" % (t, k, c, a, b, d)
+
+
+def _m005_parse(key) -> tuple:
+    key = str(key or "")
+    rx = _UNIT_RE_M005.get(key[:1])
+    m = rx.match(key) if rx else None
+    if not m:
+        raise MigrationError("bad_unit")
+    g = m.groups()
+    if key[0] == "A":
+        return (0, int(g[0]), 0, int(g[1]), int(g[2]), 0, 0)
+    if key[0] == "C":
+        return (2, int(g[0]), int(g[1]), int(g[2]), _M005_ORTH.index(g[3]), int(g[4]), 0)
+    return (_M005_STAGES.index(key[0]), *(int(x) for x in g))
+
+
+def _sat3(grid_shape, cells):
+    """Summed-area table (z, y, x) of a brick grid: cells = {(bz, by, bx): value}."""
+    gz, gy, gx = grid_shape
+    a = _np.zeros((gz + 1, gy + 1, gx + 1), dtype=_np.int64)
+    for (bz, by, bx), v in cells.items():
+        a[bz + 1, by + 1, bx + 1] += v
+    return a.cumsum(0).cumsum(1).cumsum(2)
+
+
+def _sat_box(s, z0, z1, y0, y1, x0, x1) -> int:
+    """Sum of the cells [z0, z1) × [y0, y1) × [x0, x1) (clipped)."""
+    gz, gy, gx = (n - 1 for n in s.shape)
+    z0, z1 = max(0, z0), min(gz, z1)
+    y0, y1 = max(0, y0), min(gy, y1)
+    x0, x1 = max(0, x0), min(gx, x1)
+    if z0 >= z1 or y0 >= y1 or x0 >= x1:
+        return 0
+    return int(s[z1, y1, x1] - s[z0, y1, x1] - s[z1, y0, x1] - s[z1, y1, x0]
+               + s[z0, y0, x1] + s[z0, y1, x0] + s[z1, y0, x0] - s[z0, y0, x0])
+
+
+def _m005_footprint(dims0, dimsk, xr, yr, zr):
+    """Level-0 brick range [lo, hi) per axis (z, y, x) under a level-k voxel range."""
+    X0, Y0, _Z0 = dims0
+    Xk, Yk, _Zk = dimsk
+    (x0, x1), (y0, y1), (z0, z1) = xr, yr, zr
+    vx0, vx1 = x0 * X0 // Xk, -(-x1 * X0 // Xk)
+    vy0, vy1 = y0 * Y0 // Yk, -(-y1 * Y0 // Yk)
+    return ((z0 // BRICK_SIZE, -(-z1 // BRICK_SIZE)), (vy0 // BRICK_SIZE, -(-vy1 // BRICK_SIZE)),
+            (vx0 // BRICK_SIZE, -(-vx1 // BRICK_SIZE)))
+
+
+def _m005_unitset(plan: Plan) -> UnitSet:
+    """Every unit of m005 (SPEC §14.10). A unit is empty when no format-4 level-0 brick of
+    its channel lies under it (its output is all zero); its bytes are the level-0 bytes
+    under it scaled to the level (an estimate, but A's are the exact plane bytes)."""
+    stamp = []
+    for t in sorted(plan.trees):
+        p = _tree_planes_dir(plan.ds_dir, plan.trees[t]) / "manifest.json"
+        try:
+            st = p.stat()
+            stamp.append((st.st_mtime_ns, st.st_size))
+        except OSError:
+            stamp.append(None)
+    hit = plan.extra.get(M005)
+    if hit is not None and hit[0] == stamp:
+        return hit[1]
+    if _f5 is None or _np is None:
+        raise MigrationError("server_unavailable", 409, "numpy is not installed")
+    if plan.v5:
+        raise MigrationError("already_v5", 409)
+    if not plan.v3:
+        raise MigrationError("needs_format4", 409)
+    if plan.v3_problem:
+        raise MigrationError("bricks_v3_invalid", 409, plan.v3_problem)
+    if not dataset_planes_valid(plan):
+        raise MigrationError("planes_missing", 409)
+    _m004_geometry(plan)       # every frame of a timelapse has the same dimensions
+    first = plan.trees[min(plan.trees)]
+    X0, Y0, Z0 = first.dims
+    levels = _f5.level_ladder((X0, Y0, Z0), plan.voxel)
+    us = UnitSet(M005)
+    us.levels = levels
+    units, unit_bytes, total = [], {}, 0
+    for t in sorted(plan.trees):
+        tree = plan.trees[t]
+        d = _tree_planes_dir(plan.ds_dir, tree)
+        us.inputs[str(t)] = _manifest_sha(d / "manifest.json")
+        hb = pack_header_bytes(tree.channels, tree.tiles_x, tree.tiles_y)
+        per_c = tree.tiles_y * tree.tiles_x
+        plane_bytes_ = {}
+        if len(levels) > 1:
+            for z in range(Z0):
+                try:
+                    with open(d / pack_name(z), "rb") as fh:
+                        head = fh.read(hb)
+                    _zz, cc, _tx, _ty, entries = parse_plane_pack(head, header_only=True)
+                except (OSError, ValueError) as exc:
+                    raise MigrationError("planes_invalid", 409, "%s: %s" % (pack_name(z), exc))
+                for c in range(cc):
+                    plane_bytes_[(c, z)] = sum(ln for _o, ln in entries[c * per_c:(c + 1) * per_c])
+        for c in range(tree.channels):
+            cells_n, cells_b = {}, {}
+            for (cc, bx, by, bz), (_p, _o, ln) in tree.index.items():
+                if cc == c:
+                    cells_n[(bz, by, bx)] = 1
+                    cells_b[(bz, by, bx)] = ln
+            g0 = (tree.nbz, tree.nby, tree.nbx)
+            sn, sb = _sat3(g0, cells_n), _sat3(g0, cells_b)
+            if len(levels) > 1:
+                for z in range(Z0):
+                    total += 1
+                    n = plane_bytes_.get((c, z), 0)
+                    if n:
+                        u = (0, t, 0, c, z, 0, 0)
+                        units.append(u)
+                        unit_bytes[u] = n
+            for L in levels:
+                k = L["level"]
+                dk = (L["dimensions"]["x"], L["dimensions"]["y"], L["dimensions"]["z"])
+                Xk, Yk, Zk = dk
+                scale = (Xk * Yk) / float(X0 * Y0)
+
+                def add(u, xr, yr, zr):
+                    nonlocal total
+                    total += 1
+                    (bz0, bz1), (by0, by1), (bx0, bx1) = _m005_footprint((X0, Y0, Z0), dk, xr, yr, zr)
+                    if _sat_box(sn, bz0, bz1, by0, by1, bx0, bx1):
+                        units.append(u)
+                        unit_bytes[u] = max(1, int(_sat_box(sb, bz0, bz1, by0, by1, bx0, bx1) * scale))
+
+                gx, gy, gz = L["gridSize"]["x"], L["gridSize"]["y"], L["gridSize"]["z"]
+                span = BRICK_SIZE * V3_SUPER
+                for BZ in range(-(-gz // V3_SUPER)):
+                    for BY in range(-(-gy // V3_SUPER)):
+                        for BX in range(-(-gx // V3_SUPER)):
+                            add((1, t, k, c, BZ, BY, BX),
+                                (max(0, span * BX - 1), min(Xk, span * BX + span + 1)),
+                                (max(0, span * BY - 1), min(Yk, span * BY + span + 1)),
+                                (max(0, span * BZ - 1), min(Zk, span * BZ + span + 1)))
+                for kind, n in ((0, Yk), (1, Xk)):
+                    for b in range(_f5.orth_blocks(n)):
+                        r = (b * _f5.ORTH_ROWS, min(n, b * _f5.ORTH_ROWS + _f5.ORTH_ROWS))
+                        if kind == 0:
+                            add((2, t, k, c, 0, b, 0), (0, Xk), r, (0, Zk))
+                        else:
+                            add((2, t, k, c, 1, b, 0), r, (0, Yk), (0, Zk))
+                bz = _f5.cut_depth(L["voxelSize"])
+                sgx, sgy, sgz = _f5.cut_super_grid(L["dimensions"], bz)
+                sxy, sz_ = _f5.CUT_XY * _f5.CUT_SUPER, bz * _f5.CUT_SUPER
+                for SZ in range(sgz):
+                    for SY in range(sgy):
+                        for SX in range(sgx):
+                            add((3, t, k, c, SZ, SY, SX), (sxy * SX, min(Xk, sxy * SX + sxy)),
+                                (sxy * SY, min(Yk, sxy * SY + sxy)), (sz_ * SZ, min(Zk, sz_ * SZ + sz_)))
+    us.units = sorted(units, key=lambda u: (0 if u[0] == 0 else 1, u[2], u[1], u[0], u[3], u[4], u[5], u[6]))
+    us.unit_bytes = unit_bytes
+    us.total, us.empty = total, total - len(units)
+    plan.extra[M005] = (stamp, us)
+    return us
+
+
+def _m005_runnable(us: UnitSet, pending) -> list:
+    """Level-0 units and stage A run at once; a level-k >= 1 unit of B, C or D waits for
+    every A unit of its tree and channel."""
+    a_left = {(u[1], u[3]) for u in pending if u[0] == 0}
+    return [u for u in pending if u[0] == 0 or u[2] == 0 or (u[1], u[3]) not in a_left]
+
+
+def _m005_store_a(store: Path, t: int, k: int, c: int, z: int) -> Path:
+    return store / "A" / ("t%d" % t) / ("k%d" % k) / ("c%d" % c) / ("z%d.bin" % z)
+
+
+def _m005_store_path(store: Path, u) -> Path:
+    s, t, k, c, a, b, d = u
+    base = store / _M005_STAGES[s] / ("t%d" % t) / ("k%d" % k) / ("c%d" % c)
+    if s == 1:
+        return base / ("z%d.y%d.x%d.bin" % (a, b, d))
+    if s == 2:
+        return base / _M005_ORTH[a] / ("b%d.bin" % b)
+    return base / ("z%d.y%d.x%d.bin" % (a, b, d))
+
+
+class _M005Planes:
+    """Level-k plane regions of one tree and channel: level 0 from planes/ (format 2),
+    level k >= 1 from the job's stage-A store (a missing file = an all-zero plane)."""
+
+    def __init__(self, plan: Plan, us: UnitSet, store: Path, t: int, c: int):
+        self.plan, self.us, self.store, self.t, self.c = plan, us, store, t, c
+        self.tree = plan.trees[t]
+        self.bytes_read = 0
+
+    def region(self, k: int, z: int, y0: int, y1: int, x0: int, x1: int):
+        L = self.us.levels[k]["dimensions"]
+        X, Y = L["x"], L["y"]
+        out = _np.zeros((y1 - y0, x1 - x0), dtype=_np.uint8)
+        txn, tyn = -(-X // TILE_SIZE), -(-Y // TILE_SIZE)
+        if k == 0:
+            path = _tree_planes_dir(self.plan.ds_dir, self.tree) / pack_name(z)
+            channels, cidx = self.tree.channels, self.c
+        else:
+            path = _m005_store_a(self.store, self.t, k, self.c, z)
+            channels, cidx = 1, 0
+        try:
+            fh = open(path, "rb")
+        except FileNotFoundError:
+            if k == 0:
+                raise MigrationError("plane_unreadable", 500, pack_name(z))
+            return out
+        with fh:
+            hb = pack_header_bytes(channels, txn, tyn)
+            head = fh.read(hb)
+            try:
+                _zz, cc, ttx, tty, entries = parse_plane_pack(head, header_only=True)
+            except ValueError as exc:
+                raise MigrationError("plane_unreadable", 500, f"{path.name}: {exc}")
+            if (cc, ttx, tty) != (channels, txn, tyn):
+                raise MigrationError("plane_unreadable", 500, f"{path.name}: header")
+            for ty in range(y0 // TILE_SIZE, -(-y1 // TILE_SIZE)):
+                for tx in range(x0 // TILE_SIZE, -(-x1 // TILE_SIZE)):
+                    off, ln = entries[(cidx * tyn + ty) * txn + tx]
+                    if not ln:
+                        continue
+                    fh.seek(off)
+                    png = fh.read(ln)
+                    self.bytes_read += ln
+                    try:
+                        tile = _f5.unpng_gray8(png)
+                    except ValueError:
+                        try:
+                            w, h, px = decode_png_gray8(png)
+                        except ValueError as exc:
+                            raise MigrationError("plane_undecodable", 500, f"{path.name} y{ty} x{tx}: {exc}")
+                        tile = _np.frombuffer(px, dtype=_np.uint8).reshape(h, w)
+                    ty0, tx0 = ty * TILE_SIZE, tx * TILE_SIZE
+                    a0, a1 = max(y0, ty0), min(y1, ty0 + tile.shape[0])
+                    b0, b1 = max(x0, tx0), min(x1, tx0 + tile.shape[1])
+                    out[a0 - y0:a1 - y0, b0 - x0:b1 - x0] = tile[a0 - ty0:a1 - ty0, b0 - tx0:b1 - tx0]
+        return out
+
+    def volume(self, k: int, z0: int, z1: int, y0: int, y1: int, x0: int, x1: int):
+        v = _np.zeros((z1 - z0, y1 - y0, x1 - x0), dtype=_np.uint8)
+        for z in range(z0, z1):
+            v[z - z0] = self.region(k, z, y0, y1, x0, x1)
+        return v
+
+
+def _m005_columns(k: int):
+    return tuple(c for c in _f5.COLUMN_IDS if k or c != "ll")
+
+
+def _m005_brick_blob(bricks: dict, columns) -> bytes:
+    """Stage-B store blob: u32 count, count × (u32 bz, by, bx), then per column count × u32
+    length, then the payloads column-major, brick-minor (bricks in (bz, by, bx) order)."""
+    keys = sorted(bricks)
+    parts = [struct.pack("<I", len(keys))]
+    parts += [struct.pack("<III", *b) for b in keys]
+    for cid in columns:
+        parts.append(struct.pack("<%dI" % len(keys), *(len(bricks[b][cid]) for b in keys)))
+    for cid in columns:
+        parts += [bricks[b][cid] for b in keys]
+    return b"".join(parts)
+
+
+def _m005_parse_brick_blob(data: bytes, columns) -> dict:
+    """{(bz, by, bx): {cid: bytes}} of a stage-B blob."""
+    n = struct.unpack_from("<I", data, 0)[0]
+    pos = 4
+    keys = [struct.unpack_from("<III", data, pos + 12 * i) for i in range(n)]
+    pos += 12 * n
+    lens = {}
+    for cid in columns:
+        lens[cid] = struct.unpack_from("<%dI" % n, data, pos)
+        pos += 4 * n
+    out = {tuple(b): {} for b in keys}
+    for cid in columns:
+        for b, ln in zip(keys, lens[cid]):
+            out[tuple(b)][cid] = data[pos:pos + ln]
+            pos += ln
+    if pos != len(data):
+        raise MigrationError("bad_tile", 500, "stage-B blob size")
+    return out
+
+
+def process_unit_m005(plan: Plan, us: UnitSet, unit, store: Path):
+    """Server executor of one m005 unit: (result, bytes_read). A: {k: pack or None};
+    B: blob or None; C: pack; D: record or None."""
+    if _f5 is None or _np is None:
+        raise MigrationError("server_unavailable", 409, "numpy is not installed")
+    s, t, k, c, a, b, d = unit
+    tree = plan.trees.get(t)
+    if tree is None or c >= tree.channels or k >= len(us.levels):
+        raise MigrationError("bad_unit")
+    rd = _M005Planes(plan, us, store, t, c)
+    L = us.levels[k]
+    X, Y, Z = L["dimensions"]["x"], L["dimensions"]["y"], L["dimensions"]["z"]
+    if s == 0:
+        X0, Y0, _ = tree.dims
+        plane = rd.region(0, a, 0, Y0, 0, X0)
+        out = {}
+        for Lk in us.levels[1:]:
+            dk = Lk["dimensions"]
+            lv = _f5.resample_plane(plane, dk["x"], dk["y"])
+            out[Lk["level"]] = (_f5.plane_pack(a, 1, -(-dk["x"] // TILE_SIZE), -(-dk["y"] // TILE_SIZE),
+                                               _f5.plane_tiles(lv)) if lv.any() else None)
+        return out, rd.bytes_read
+    if s == 1:
+        gx, gy, gz = L["gridSize"]["x"], L["gridSize"]["y"], L["gridSize"]["z"]
+        cols = _m005_columns(k)
+        wanted = [(bz, by, bx) for bz in range(V3_SUPER * a, min(gz, V3_SUPER * a + V3_SUPER))
+                  for by in range(V3_SUPER * b, min(gy, V3_SUPER * b + V3_SUPER))
+                  for bx in range(V3_SUPER * d, min(gx, V3_SUPER * d + V3_SUPER))]
+        bricks, nread = {}, 0
+        if k == 0:
+            by_file: dict = {}
+            for bz, by, bx in wanted:
+                ref = tree.index.get((c, bx, by, bz))
+                if ref is not None:
+                    by_file.setdefault(ref[0], []).append((ref[1], ref[2], (bz, by, bx)))
+            for path, items in by_file.items():
+                items.sort()
+                try:
+                    fh = open(path, "rb")
+                except OSError:
+                    raise MigrationError("brick_unreadable", 500, f"{path.name}: missing")
+                with fh:
+                    for off, length, bk in items:
+                        fh.seek(off)
+                        raw = fh.read(length)
+                        if len(raw) != length:
+                            raise MigrationError("brick_unreadable", 500, f"{path.name}@{off}: short read")
+                        nread += length
+                        try:
+                            b66 = decode_brick_v3(raw)
+                        except Exception as exc:
+                            raise MigrationError("brick_undecodable", 500, f"c{c} {bk}: {exc}")
+                        bricks[bk] = _f5.encode_brick_columns(b66, cols, known={"ll": raw})
+        else:
+            span = BRICK_SIZE * V3_SUPER
+            x0, x1 = max(0, span * d - 1), min(X, span * d + span + 1)
+            y0, y1 = max(0, span * b - 1), min(Y, span * b + span + 1)
+            z0, z1 = max(0, span * a - 1), min(Z, span * a + span + 1)
+            region = rd.volume(k, z0, z1, y0, y1, x0, x1)
+            nread = rd.bytes_read
+            for bz, by, bx in wanted:
+                b66 = _f5.brick_with_apron(region, bx, by, bz, (X, Y, Z), (x0, y0, z0))
+                if _f5.brick_kept(b66):
+                    bricks[(bz, by, bx)] = _f5.encode_brick_columns(b66, cols)
+        return (_m005_brick_blob(bricks, cols) if bricks else None), nread
+    if s == 2:
+        n = Y if a == 0 else X
+        first, last = b * _f5.ORTH_ROWS, min(n, b * _f5.ORTH_ROWS + _f5.ORTH_ROWS)
+        if a == 0:
+            band = rd.volume(k, 0, Z, first, last, 0, X)
+            images = [band[:, r, :] for r in range(last - first)]
+        else:
+            band = rd.volume(k, 0, Z, 0, Y, first, last)
+            images = [band[:, :, r] for r in range(last - first)]
+        return _f5.orth_pack(_M005_ORTH[a], first, images), rd.bytes_read
+    bz = _f5.cut_depth(L["voxelSize"])
+    sxy, szz = _f5.CUT_XY * _f5.CUT_SUPER, bz * _f5.CUT_SUPER
+    x0, x1 = sxy * d, min(X, sxy * d + sxy)
+    y0, y1 = sxy * b, min(Y, sxy * b + sxy)
+    z0, z1 = szz * a, min(Z, szz * a + szz)
+    region = rd.volume(k, z0, z1, y0, y1, x0, x1)
+    return _f5.cut_record(region, (x0, y0, z0), (X, Y, Z), bz, a, b, d), rd.bytes_read
+
+
+def _store_m005(store: Path, unit, result) -> None:
+    s, t, k, c, a, _b, _d = unit
+    with _thread_lock("unit:%s:%s" % (store, _m005_key(unit))):
+        if s == 0:
+            for kk, data in result.items():
+                p = _m005_store_a(store, t, kk, c, a)
+                if data:
+                    _atomic_write(p, data)
+                else:
+                    try:
+                        p.unlink()
+                    except FileNotFoundError:
+                        pass
+            return
+        p = _m005_store_path(store, unit)
+        if result:
+            _atomic_write(p, result)
+        else:
+            try:
+                p.unlink()
+            except FileNotFoundError:
+                pass
+
+
+def _m005_result_bytes(result) -> int:
+    if isinstance(result, dict):
+        return sum(len(v) for v in result.values() if v)
+    return len(result) if result else 0
+
+
+def _unit_run_m005(dataset_id, m: dict, plan: Plan, path: Path, budget: float, dry: bool,
+                   workers: int) -> dict:
+    """Server executor of m005: up to `workers` units at once in threads (Pillow's WebP
+    encoder and numpy release the GIL), new units started while the budget allows."""
+    from concurrent.futures import ThreadPoolExecutor, FIRST_COMPLETED, wait
+    base = _job_base(plan, mid=M005)
+    store = tile_store_dir(plan.type, plan.folder, M005)
+    us = _unitset(plan, M005)
+    t0 = time.monotonic()
+    processed, bytes_read, bytes_written, slowest = [], 0, 0, 0.0
+    j = _load_journal(path) or {}
+    taken = set()
+    running = {}
+    with ThreadPoolExecutor(max_workers=workers) as ex:
+        def submit_more():
+            nonlocal j
+            while len(running) < workers:
+                if time.monotonic() - t0 + slowest > budget and (processed or running):
+                    return
+                done = set(j.get("done") or [])
+                pending = [u for u in us.units if _m005_key(u) not in done]
+                runnable = _m005_runnable(us, pending)
+                key = _claim(base, (k for k in (_m005_key(u) for u in runnable) if k not in taken))
+                if key is None:
+                    return
+                taken.add(key)
+                unit = _m005_parse(key)
+                running[ex.submit(_m005_timed, plan, us, unit, store)] = key
+
+        submit_more()
+        try:
+            while running:
+                finished, _ = wait(list(running), return_when=FIRST_COMPLETED)
+                for fut in finished:
+                    key = running.pop(fut)
+                    try:
+                        result, nread, secs = fut.result()
+                        bytes_read += nread
+                        bytes_written += _m005_result_bytes(result)
+                        slowest = max(slowest, secs)
+                        if not dry:
+                            _store_m005(store, _m005_parse(key), result)
+                            j = _mark_done(plan, m, path, [key], "server")
+                        processed.append(key)
+                    finally:
+                        _release(base, key)
+                submit_more()
+        finally:
+            for fut, key in list(running.items()):
+                fut.cancel()
+                _release(base, key)
+    s = _summary(j)
+    return {"ok": True, "processed": processed, "done": s["done"], "total": s["total"],
+            "seconds": round(time.monotonic() - t0, 3), "bytesRead": bytes_read,
+            "bytesWritten": bytes_written, "dry": bool(dry), "workers": workers}
+
+
+def _m005_timed(plan, us, unit, store):
+    u0 = time.monotonic()
+    result, nread = process_unit_m005(plan, us, unit, store)
+    return result, nread, time.monotonic() - u0
+
+
+def _m005_stage_progress(us: UnitSet, done) -> list:
+    rows = []
+    for s, name in enumerate(_M005_STAGES):
+        units = [u for u in us.units if u[0] == s]
+        rows.append({"stage": name, "units": len(units),
+                     "done": sum(1 for u in units if _m005_key(u) in done)})
+    return rows
+
+
+# ── m005 finalize: assembly of the v5 tree ────────────────────────────────────
+
+def _m005_v4_index(tree: Tree):
+    """The format-4 index of a tree, parsed."""
+    return parse_index_bin((tree.bricks_dir / INDEX_NAME).read_bytes())
+
+
+def _m005_link(src: Path, dst: Path) -> None:
+    """dst = the bytes of src: a hard link (same volume, no copy), else a copy."""
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        if dst.exists():
+            if dst.stat().st_size == src.stat().st_size:
+                return
+            dst.unlink()
+        os.link(src, dst)
+    except OSError:
+        tmp = dst.with_name(_TMP_PREFIX + dst.name)
+        shutil.copyfile(src, tmp)
+        _replace_retry(tmp, dst)
+
+
+def _m005_entries_path(incoming: Path, rel: str, name: str) -> Path:
+    return incoming / ".entries" / (rel or "_") / (name + ".bin")
+
+
+def _m005_assemble(plan: Plan, us: UnitSet, store: Path, incoming: Path, j: dict, deadline):
+    """Write the v5 tree(s) into `incoming` (SPEC §14.4–§14.5). Every step writes its
+    outputs and then a marker (an `.entries/` file, or the output itself), so a deadline
+    or a crash only pauses it. Returns (complete, steps done, steps total)."""
+    if not plan.ds_dir.is_dir():
+        raise MigrationError("no_dataset", 404)
+    levels = us.levels
+    channels = plan.trees[min(plan.trees)].channels
+    steps = []
+    for t in sorted(plan.trees):
+        for k in range(len(levels)):
+            for c in range(channels):
+                steps.append(("cols", t, k, c))
+            if k:
+                for z in range(levels[k]["dimensions"]["z"]):
+                    steps.append(("xy", t, k, z))
+            for c in range(channels):
+                for kind, n in ((0, levels[k]["dimensions"]["y"]), (1, levels[k]["dimensions"]["x"])):
+                    for b in range(_f5.orth_blocks(n)):
+                        steps.append(("orth", t, k, c, kind, b))
+                steps.append(("cuts", t, k, c))
+    done_n, wrote_now = 0, False
+    v4_index = {}
+    for step in steps:
+        kind_s, t = step[0], step[1]
+        tree = plan.trees[t]
+        out_dir = incoming / tree.rel if tree.rel else incoming
+        if kind_s == "cols":
+            _k, _c = step[2], step[3]
+            marker = _m005_entries_path(incoming, tree.rel, "cols.k%d.c%d" % (_k, _c))
+        elif kind_s == "xy":
+            marker = out_dir / _f5.xy_pack_rel(step[2], step[3])
+        elif kind_s == "orth":
+            marker = out_dir / _f5.orth_pack_rel(_M005_ORTH[step[4]], step[2], step[3], step[5])
+        else:
+            marker = _m005_entries_path(incoming, tree.rel, "cuts.k%d.c%d" % (step[2], step[3]))
+        if marker.is_file():
+            done_n += 1
+            continue
+        if wrote_now and deadline is not None and time.monotonic() > deadline:
+            return False, done_n, len(steps)
+        if not plan.ds_dir.is_dir():
+            raise MigrationError("no_dataset", 404)
+        L = levels[step[2]]
+        dims = L["dimensions"]
+        if kind_s == "cols":
+            k, c = step[2], step[3]
+            gx, gy, gz = L["gridSize"]["x"], L["gridSize"]["y"], L["gridSize"]["z"]
+            ents = {cid: _np.zeros(gx * gy * gz, dtype=_f5.INDEX_ENTRY) for cid in _f5.COLUMN_IDS}
+            if k == 0:
+                if t not in v4_index:
+                    v4_index[t] = _m005_v4_index(tree)
+                arr = v4_index[t]["levels"][0]["entries"][c]
+                ents["ll"]["pack"], ents["ll"]["offset"], ents["ll"]["length"] = arr["p"], arr["o"], arr["l"]
+                for pk in sorted(set(int(p) for p in arr["p"][arr["l"] > 0].tolist())):
+                    _m005_link(tree.bricks_dir / v3_pack_rel(0, c, pk), out_dir / _f5.brick_pack_rel(0, "ll", c, pk))
+            cols = _m005_columns(k)
+            writers = {cid: _f5.PackWriter(lambda pk, cid=cid: str(out_dir / _f5.brick_pack_rel(k, cid, c, pk)))
+                       for cid in cols}
+            try:
+                for BZ in range(-(-gz // V3_SUPER)):
+                    for BY in range(-(-gy // V3_SUPER)):
+                        for BX in range(-(-gx // V3_SUPER)):
+                            p = _m005_store_path(store, (1, t, k, c, BZ, BY, BX))
+                            try:
+                                blob = p.read_bytes()
+                            except FileNotFoundError:
+                                continue
+                            bricks = _m005_parse_brick_blob(blob, cols)
+                            keys = sorted(bricks)
+                            for cid in cols:
+                                for (bz, by, bx), e in zip(keys, writers[cid].add_group([bricks[b][cid] for b in keys])):
+                                    ents[cid][(bz * gy + by) * gx + bx] = e
+            finally:
+                for w in writers.values():
+                    w.close()
+            _atomic_write(marker, b"".join(ents[cid].tobytes() for cid in _f5.COLUMN_IDS))
+        elif kind_s == "xy":
+            k, z = step[2], step[3]
+            txn, tyn = -(-dims["x"] // TILE_SIZE), -(-dims["y"] // TILE_SIZE)
+            tiles = []
+            for c in range(channels):
+                try:
+                    data = _m005_store_a(store, t, k, c, z).read_bytes()
+                except FileNotFoundError:
+                    tiles.extend([None] * (txn * tyn))
+                    continue
+                _zz, _cc, _tx, _ty, entries = _f5.parse_plane_pack(data)
+                tiles.extend(data[o:o + ln] if ln else None for o, ln in entries)
+            _atomic_write(marker, _f5.plane_pack(z, channels, txn, tyn, tiles), public=True)
+        elif kind_s == "orth":
+            k, c, kind, b = step[2], step[3], step[4], step[5]
+            src = _m005_store_path(store, (2, t, k, c, kind, b, 0))
+            if src.is_file():
+                marker.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(src, marker.with_name(_TMP_PREFIX + marker.name))
+                _replace_retry(marker.with_name(_TMP_PREFIX + marker.name), marker)
+            else:
+                n = dims["y"] if kind == 0 else dims["x"]
+                first = b * _f5.ORTH_ROWS
+                count = min(n, first + _f5.ORTH_ROWS) - first
+                width = dims["x"] if kind == 0 else dims["y"]
+                zero = _np.zeros((dims["z"], width), dtype=_np.uint8)
+                _atomic_write(marker, _f5.orth_pack(_M005_ORTH[kind], first, [zero] * count), public=True)
+        else:
+            k, c = step[2], step[3]
+            bz = _f5.cut_depth(L["voxelSize"])
+            sgx, sgy, sgz = _f5.cut_super_grid(dims, bz)
+            ents = _np.zeros(sgx * sgy * sgz, dtype=_f5.INDEX_ENTRY)
+            writer = _f5.PackWriter(lambda pk: str(out_dir / _f5.cut_pack_rel(k, c, pk)),
+                                    max_items=1 << 30, max_bytes=_f5.CUT_PACK_MAX_BYTES)
+            try:
+                for SZ in range(sgz):
+                    for SY in range(sgy):
+                        for SX in range(sgx):
+                            p = _m005_store_path(store, (3, t, k, c, SZ, SY, SX))
+                            try:
+                                rec = p.read_bytes()
+                            except FileNotFoundError:
+                                continue
+                            ents[(SZ * sgy + SY) * sgx + SX] = writer.add_group([rec])[0]
+            finally:
+                writer.close()
+            _atomic_write(marker, ents.tobytes())
+        done_n += 1
+        wrote_now = True
+    # Indexes and manifest (cheap: rewritten on every complete pass).
+    trees_doc, histos = {}, {}
+    for t in sorted(plan.trees):
+        tree = plan.trees[t]
+        out_dir = incoming / tree.rel if tree.rel else incoming
+        col_entries = {cid: [] for cid in _f5.COLUMN_IDS}
+        col_levels = {cid: [] for cid in _f5.COLUMN_IDS}
+        nbytes, stored = {}, []
+        for k, L in enumerate(levels):
+            gx, gy, gz = L["gridSize"]["x"], L["gridSize"]["y"], L["gridSize"]["z"]
+            n = gx * gy * gz
+            per = {cid: _np.zeros((channels, n), dtype=_f5.INDEX_ENTRY) for cid in _f5.COLUMN_IDS}
+            for c in range(channels):
+                raw = _m005_entries_path(incoming, tree.rel, "cols.k%d.c%d" % (k, c)).read_bytes()
+                if len(raw) != n * _f5.INDEX_ENTRY.itemsize * len(_f5.COLUMN_IDS):
+                    raise MigrationError("assembly_invalid", 500, f"entries k{k} c{c}")
+                for i, cid in enumerate(_f5.COLUMN_IDS):
+                    per[cid][c] = _np.frombuffer(raw, dtype=_f5.INDEX_ENTRY, count=n,
+                                                 offset=i * n * _f5.INDEX_ENTRY.itemsize)
+            nbytes[str(k)] = {}
+            for cid in _f5.COLUMN_IDS:
+                e = per[cid]
+                packs = sum(int(e[c]["pack"][e[c]["length"] > 0].max()) + 1 if (e[c]["length"] > 0).any() else 0
+                            for c in range(channels))
+                col_entries[cid].append(e)
+                col_levels[cid].append((gx, gy, gz, packs))
+                nbytes[str(k)][cid] = [int(e[c]["length"].astype(_np.int64).sum()) for c in range(channels)]
+            stored.append(int((per["ll"]["length"] > 0).sum()))
+        column_refs = {}
+        for cid in _f5.COLUMN_IDS:
+            blob = _f5.index_bin_bytes(col_levels[cid], channels, col_entries[cid])
+            _atomic_write(out_dir / _f5.index_rel(cid), blob, public=True)
+            column_refs[cid] = {"bytes": len(blob), "sha256": hashlib.sha256(blob).hexdigest()}
+        cut_refs = []
+        for k, L in enumerate(levels):
+            bz = _f5.cut_depth(L["voxelSize"])
+            sgx, sgy, sgz = _f5.cut_super_grid(L["dimensions"], bz)
+            n = sgx * sgy * sgz
+            e = _np.zeros((channels, n), dtype=_f5.INDEX_ENTRY)
+            for c in range(channels):
+                e[c] = _np.frombuffer(_m005_entries_path(incoming, tree.rel, "cuts.k%d.c%d" % (k, c)).read_bytes(),
+                                      dtype=_f5.INDEX_ENTRY, count=n)
+            packs = sum(int(e[c]["pack"][e[c]["length"] > 0].max()) + 1 if (e[c]["length"] > 0).any() else 0
+                        for c in range(channels))
+            blob = _f5.index_bin_bytes([(sgx, sgy, sgz, packs)], channels, [e])
+            _atomic_write(out_dir / _f5.cut_index_rel(k), blob, public=True)
+            cut_refs.append({"bytes": len(blob), "sha256": hashlib.sha256(blob).hexdigest()})
+        trees_doc[tree.rel] = {"index": {"columns": column_refs, "cuts": cut_refs}, "bytes": nbytes, "stored": stored}
+    v4 = plan.manifest or {}
+    tph = v4.get("timepointHistograms") if isinstance(v4.get("timepointHistograms"), dict) else None
+    doc = _f5.manifest_v5(levels, channels, trees_doc, v4.get("histograms"),
+                          j.get("assembledAt") or _utc_iso(), tph,
+                          dataset=v4.get("dataset") if isinstance(v4.get("dataset"), str) else None,
+                          producer=j.get("producer") or _producer(j))
+    _atomic_write(incoming / "manifest.json", _f5.manifest_bytes(doc), public=True)
+    return True, done_n, len(steps)
+
+
+def _finalize_m005(dataset_id, m, max_seconds=None, keep_previous=False) -> dict:
+    """Assemble the v5 tree, validate, swap bricks/, re-stamp planes/ and mips/, bump to
+    5, delete bricks.v4-old/ — or keep it as bricks.previous/. Re-entrant at every step;
+    `max_seconds` pauses the assembly (call again until complete)."""
+    type_dir, folder, ds_dir = _resolve_dataset(dataset_id)
+    path = journal_path(type_dir, folder, M005)
+    base = _job_base(type_dir, folder, M005)
+    secs = _as_seconds(max_seconds)
+    deadline = time.monotonic() + secs if secs is not None else None
+    inc_name, _live, old_name = _SWAP_DIRS[M005]
+    incoming, live, old = ds_dir / inc_name, ds_dir / "bricks", ds_dir / old_name
+    with _JobLock(base):
+        j = _load_journal(path)
+        if j is None:
+            plan = _plan_for(dataset_id)
+            if plan.type in m["types"] and plan.v5 and not plan.v5_problem:
+                old_sha = _manifest_sha(old / "manifest.json") if (old / "manifest.json").is_file() else None
+                _restamp_derived(plan, old_sha)
+                fv = _bump_metadata(ds_dir, m["to"])
+                _retire_old_bricks(ds_dir, keep_previous, old_name)
+                return {"ok": True, "complete": True, "formatVersion": fv}
+            raise MigrationError("no_job", 404)
+        state = j.get("state")
+        if state == "assembling" and (_bricks_dir_schema(live) == _f5.SCHEMA or
+                                      (not live.exists() and incoming.is_dir())):
+            state = "swapped"
+        plan = None
+        if state in ("running", "assembling"):
+            plan = _plan_for(dataset_id)
+            _check_source(plan, j, path)
+        if state == "running":
+            us = _unitset(plan, M005)
+            done = set(j.get("done") or [])
+            missing = sum(1 for u in us.units if _m005_key(u) not in done)
+            if missing:
+                raise MigrationError("units_pending", 409, f"{missing} unit(s) not done")
+            _rmtree(incoming)
+            j["state"], j["producer"], j["assembledAt"] = "assembling", _producer(j), _utc_iso()
+            _save_journal(path, j)
+            state = "assembling"
+        if state == "assembling":
+            us = _unitset(plan, M005)
+            store = tile_store_dir(type_dir, folder, M005)
+            complete, written, total = _m005_assemble(plan, us, store, incoming, j, deadline)
+            if not complete:
+                j["assembly"] = {"steps": total, "written": written}
+                _save_journal(path, j)
+                return {"ok": True, "complete": False, "assembly": j["assembly"]}
+            _rmtree(incoming / ".entries")
+            try:
+                doc = json.loads((incoming / "manifest.json").read_text(encoding="utf-8"))
+                problem = next((p for p in (_f5.tree_problem(incoming, doc, rel) for rel in _f5.tree_rels(doc)) if p), None)
+            except Exception as exc:
+                problem = str(exc)
+            if problem:
+                raise MigrationError("assembly_invalid", 500, problem)
+            _check_source(plan, j, path)
+            j["oldManifestSha"] = plan.sha
+            _swap_bricks(ds_dir, M005)
+            j["state"] = "swapped"
+            j.pop("assembly", None)
+            _save_journal(path, j)
+            state = "swapped"
+        if state == "swapped":
+            _swap_bricks(ds_dir, M005)
+            if j.get("state") != "swapped":
+                j["state"] = "swapped"
+                _save_journal(path, j)
+            plan = _plan_for(dataset_id)
+            if not plan.v5 or plan.v5_problem:
+                j["state"], j["error"] = "failed", "assembly_invalid"
+                _save_journal(path, j)
+                raise MigrationError("assembly_invalid", 500, plan.v5_problem)
+            old_sha = j.get("oldManifestSha")
+            if old_sha is None and (old / "manifest.json").is_file():
+                old_sha = _manifest_sha(old / "manifest.json")
+            _restamp_derived(plan, old_sha)
+            fv = _bump_metadata(ds_dir, m["to"])
+            _retire_old_bricks(ds_dir, keep_previous, old_name)
+            _rmtree(tile_store_dir(type_dir, folder, M005))
+            try:
+                path.unlink()
+            except FileNotFoundError:
+                pass
+            return {"ok": True, "complete": True, "formatVersion": fv}
+        raise MigrationError("job_failed", 409, str(j.get("error") or state))
+
+
+def _build_v5_trees(type_dir: str, bricks_root: Path, manifest: dict):
+    """Trees of a format-5 manifest: Tree.index = the level-0 entries of `index/ll.bin`
+    (the native lossless bricks, pack l0/ll/c{c}), so m002 / m003 repairs read them.
+    Returns (trees, problem) — `problem` from format5.tree_problem."""
+    if _f5 is None:
+        raise ValueError("format 5 needs numpy")
+    levels = manifest.get("levels")
+    channels = manifest.get("channels")
+    if not isinstance(levels, list) or not levels or not isinstance(levels[0], dict):
+        raise ValueError("levels")
+    if isinstance(channels, bool) or not isinstance(channels, int) or not 1 <= channels <= 64:
+        raise ValueError("channels")
+    d0 = levels[0].get("dimensions") or {}
+    dims0 = (_int_dim(d0.get("x")), _int_dim(d0.get("y")), _int_dim(d0.get("z")))
+    rels = _f5.tree_rels(manifest)
+    trees, problem, seen = [], None, set()
+    for i, rel in enumerate(rels):
+        if rel and not _SAFE_TREE_RE.match(str(rel)):
+            raise ValueError("timepoint path %r" % rel)
+        if type_dir != "live" and rel:
+            raise ValueError("timepoints on a non-live dataset")
+        t = _frame_number(rel, i) if rel else 0
+        if t in seen:
+            raise ValueError("timepoint %r twice" % rel)
+        seen.add(t)
+        tree = Tree()
+        tree.t, tree.rel = t, rel
+        tree.bricks_dir = bricks_root / rel if rel else bricks_root
+        tree.dims = dims0
+        tree.channels = channels
+        tree.nbx, tree.nby, tree.nbz = (-(-n // BRICK_SIZE) for n in dims0)
+        tree.tiles_x, tree.tiles_y = -(-dims0[0] // TILE_SIZE), -(-dims0[1] // TILE_SIZE)
+        tree.encoding = V3_ENCODING
+        tree.packing = {"mode": "grid", "cols": V3_COLS, "rows": V3_ROWS, "slice": V3_SLICE}
+        tree.v3_index_ref = None
+        tree.index = {}
+        p = _f5.tree_problem(bricks_root, manifest, rel)
+        if p:
+            problem = problem or p
+        else:
+            parsed = _f5.parse_index_bin((tree.bricks_dir / _f5.index_rel("ll")).read_bytes())
+            gx, gy, _gz = parsed["levels"][0][:3]
+            for c in range(channels):
+                arr = parsed["entries"][0][c]
+                for i_ in _np.nonzero(arr["length"])[0].tolist():
+                    bx, rest = i_ % gx, i_ // gx
+                    by, bz = rest % gy, rest // gy
+                    tree.index[(c, bx, by, bz)] = (tree.bricks_dir / _f5.brick_pack_rel(0, "ll", c, int(arr["pack"][i_])),
+                                                   int(arr["offset"][i_]), int(arr["length"][i_]))
+        trees.append(tree)
+    return trees, problem
+
+
+def _v5_index_stamp_trees(trees) -> tuple:
+    out = []
+    for tree in sorted(trees, key=lambda tr: tr.t):
+        for name in [_f5.index_rel(cid) for cid in _f5.COLUMN_IDS] + ["cuts"]:
+            try:
+                st = (tree.bricks_dir / name).stat()
+                out.append((st.st_mtime_ns, st.st_size))
+            except OSError:
+                out.append(None)
+    return tuple(out)
+
+
+def _probe_m005() -> list:
+    """Reasons the server cannot run m005 (empty = it can): every column of a brick holding
+    every byte value round-trips within its bound through the real encoders."""
+    if _f5 is None or _np is None:
+        return ["no_numpy"]
+    if _PILImage is None:
+        return ["no_webp_decode"]
+    try:
+        i = _np.arange(V3_SLICE ** 3, dtype=_np.uint32)
+        brick = ((i * 2654435761) >> 13).astype(_np.uint8).reshape(V3_SLICE, V3_SLICE, V3_SLICE)
+        brick[:8] = 0
+        for cid in _f5.COLUMN_IDS:
+            dec = _f5.decode_brick(_f5.encode_brick(brick, cid), cid)
+            bound = _f5.column(cid)["maxError"]
+            if bound is not None and int(_np.abs(dec.astype(int) - brick).max()) > bound:
+                return ["no_webp_lossless_encode"]
+            if dec.shape != brick.shape:
+                return ["no_webp_lossy_encode"]
+    except Exception:
+        return ["no_webp_encode"]
+    return []
 
 
 # ── Capability probe and status ────────────────────────────────────────────────
@@ -3840,6 +4853,9 @@ def server_capabilities(force: bool = False) -> dict:
             M004: {"available": not m004, "reasons": m004},
         },
     }
+    if M005 in _MIGRATIONS_BY_ID:
+        m005 = _probe_m005()
+        _CAPS["migrations"][M005] = {"available": not m005, "reasons": m005, "browser": False}
     if _PILImage is None:
         _CAPS["detail"] = "Pillow is not installed"
     return _CAPS
@@ -3880,10 +4896,13 @@ def dataset_status(type_dir: str, folder: str, ds_dir: Path) -> dict:
         row["job"] = row["jobs"][0] if row["jobs"] else None
         return row
     row["trees"] = len(plan.trees)
-    row["bricksSchema"] = V3_SCHEMA if plan.v3 else "iribhm-bricks-v2"
+    row["bricksSchema"] = V5_SCHEMA if plan.v5 else (V3_SCHEMA if plan.v3 else "iribhm-bricks-v2")
     if plan.v3 and plan.v3_problem:
         row["problem"] = "bricks_v3_invalid"
         row["problemDetail"] = plan.v3_problem[:300]
+    if plan.v5 and plan.v5_problem:
+        row["problem"] = "bricks_v5_invalid"
+        row["problemDetail"] = plan.v5_problem[:300]
     est = {"units": 0, "bytes": 0, "unitsTotal": 0, "bytesTotal": 0, "migrations": {}}
     for m in MIGRATIONS:
         if plan.type not in m["types"]:
@@ -3894,7 +4913,9 @@ def dataset_status(type_dir: str, folder: str, ds_dir: Path) -> dict:
             j = {"migration": m["id"], "state": "failed", "error": "journal_corrupt"}
         repair = _repair_needed(plan, fv, m)
         pending = m["from"] >= fv or repair
-        if m["id"] == M004 and plan.v3 and fv >= m["to"]:
+        if m["id"] == M004 and (plan.v3 or plan.v5) and fv >= m["to"]:
+            pending = False
+        if m["id"] == M005 and plan.v5 and fv >= m["to"]:
             pending = False
         if pending:
             row["pending"].append(m["id"])
@@ -4003,7 +5024,8 @@ def handle(action: str, params: dict, body, raw: bytes | None = None) -> tuple[i
             _migration(body.get("migration"))
             _require_server(body.get("migration"))
             return 200, unit_run(body.get("dataset"), body.get("migration"),
-                                 body.get("maxSeconds", MAX_RUN_SECONDS), dry=bool(body.get("dry")))
+                                 body.get("maxSeconds", MAX_RUN_SECONDS), dry=bool(body.get("dry")),
+                                 workers=body.get("workers"))
         if action == "finalize":
             return 200, finalize(body.get("dataset"), body.get("migration"), body.get("maxSeconds"),
                                  keep_previous=body.get("keepPrevious") is True)
@@ -4051,3 +5073,7 @@ def handle_binary(action: str, params: dict, body=None) -> tuple[int, str, bytes
         if exc.detail and exc.detail != exc.code:
             payload["detail"] = exc.detail[:500]
         return exc.status, "application/json", json.dumps(payload).encode("utf-8")
+
+
+if os.environ.get("LUMEN_FORMAT5") == "1":
+    enable_format5()

@@ -562,7 +562,10 @@ def process_image(input_ims: Path, metadata_json: Path, temp_dir: Path, pack_int
 
             if bricks_dir is not None:
                 key = f"t{t_idx:03d}" if is_timelapse else ""
-                if v4:
+                if dataset_format >= 5:
+                    packed = _packer().pack_timepoint_v5(temp_dir, bricks_dir, t_idx, lod_info,
+                                                         n_ch, executor, key)
+                elif v4:
                     packed = _packer().pack_timepoint_v3(temp_dir, bricks_dir, t_idx, lod_info,
                                                          n_ch, executor, key)
                 else:
@@ -610,8 +613,9 @@ if __name__ == "__main__":
     ap.add_argument("--pack-into", default=None,
                     help="dataset directory: pack each timepoint into its bricks/ as soon as "
                          "it is levelled, then delete its temporary LOD files")
-    ap.add_argument("--format", type=int, choices=(2, 4), default=DEFAULT_DATASET_FORMAT,
-                    help="dataset format to produce (default 4; 2 = the legacy v2 bricks)")
+    ap.add_argument("--format", type=int, choices=(2, 4, 5), default=DEFAULT_DATASET_FORMAT,
+                    help="dataset format to produce (default 4; 5 = the resolution x compression "
+                         "matrix, not readable by the viewer before web 1.64; 2 = the legacy v2 bricks)")
     args = ap.parse_args()
 
     try:

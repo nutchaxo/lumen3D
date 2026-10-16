@@ -102,7 +102,25 @@
     "measuresJson": "Mesures JSON",
     "metadataJson": "Métadonnées JSON",
     "noMeasures": "Aucune mesure à exporter",
-    "noMetadata": "Aucune métadonnée disponible"
+    "noMetadata": "Aucune métadonnée disponible",
+    "omezarr": {
+      "title": "Export OME-Zarr (napari, Fiji, Python)",
+      "hint": "Les voxels sans perte des niveaux choisis, dans un stockage OME-Zarr v0.5 en un seul zip, calibré en micromètres, avec les noms et couleurs des canaux. Construit dans ce navigateur à partir des briques du dataset.",
+      "liveHint": "Un timelapse exporte le temps affiché.",
+      "levels": "Niveaux",
+      "native": "Natif",
+      "channels": "Canaux",
+      "start": "Exporter .ome.zarr.zip",
+      "cancel": "Annuler",
+      "total": "Lit {size} de briques sans perte",
+      "memoryWarn": "Ce navigateur garde tout le fichier en mémoire avant de l'enregistrer ({size} ou plus). Continuer ?",
+      "preparing": "Préparation…",
+      "progress": "{pct} % · {step} · {out} écrits · encore {eta}",
+      "done": "Terminé : {size}, {chunks} blocs.",
+      "cancelled": "Export annulé.",
+      "failed": "Échec de l'export : {error}",
+      "step": "Niveau {level} · canal {channel} · couche {z}"
+    }
   },
   "nav": {
     "back": "Retour",

@@ -237,7 +237,11 @@ const ExportManager = (() => {
         </div>
         <div id="download-explorer" class="dl-explorer">${_explorerLoadingHtml()}</div>
       </section>
+      ${scope === 'viewer' && typeof OmeZarrExport !== 'undefined' ? '<section class="dl-section" id="download-omezarr" hidden></section>' : ''}
     `;
+    // The lossless levels of the mounted dataset as an OME-Zarr store, built in this browser.
+    const oz = document.getElementById('download-omezarr');
+    if (oz) OmeZarrExport.mount(oz, { dataset });
     if (window.lucide) lucide.createIcons({ nodes: [body, _modal] });
   }
 

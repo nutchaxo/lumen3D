@@ -102,7 +102,25 @@
     "measuresJson": "Mediciones JSON",
     "metadataJson": "Metadatos JSON",
     "noMeasures": "No hay mediciones para exportar",
-    "noMetadata": "No hay metadatos disponibles"
+    "noMetadata": "No hay metadatos disponibles",
+    "omezarr": {
+      "title": "Exportación OME-Zarr (napari, Fiji, Python)",
+      "hint": "Los vóxeles sin pérdidas de los niveles elegidos en un almacén OME-Zarr v0.5 dentro de un zip, calibrado en micrómetros, con los nombres y colores de los canales. Construido en este navegador a partir de los ladrillos del dataset.",
+      "liveHint": "Un timelapse exporta el instante en pantalla.",
+      "levels": "Niveles",
+      "native": "Nativo",
+      "channels": "Canales",
+      "start": "Exportar .ome.zarr.zip",
+      "cancel": "Cancelar",
+      "total": "Lee {size} de ladrillos sin pérdidas",
+      "memoryWarn": "Este navegador guarda todo el archivo en memoria antes de guardarlo ({size} o más). ¿Continuar?",
+      "preparing": "Preparando…",
+      "progress": "{pct} % · {step} · {out} escritos · quedan {eta}",
+      "done": "Listo: {size}, {chunks} bloques.",
+      "cancelled": "Exportación cancelada.",
+      "failed": "La exportación falló: {error}",
+      "step": "Nivel {level} · canal {channel} · capa {z}"
+    }
   },
   "nav": {
     "back": "Atrás",

@@ -1089,3 +1089,91 @@ body[data-active-tool="slice"] #webgl-canvas:active {
 .chunk-debug-version-row { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); font-size: var(--text-sm); }
 .chunk-debug-version-row select { flex: 1 1 auto; min-width: 0; }
 .chunk-debug-version-note { margin: 0; font-size: var(--text-xs); color: var(--text-muted); }
+
+/* OME-Zarr export of the lossless levels (js/core/ome-zarr-export.js). */
+.dl-omezarr {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: var(--space-3);
+}
+
+.dl-omezarr-group {
+  margin: 0;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-sm);
+  min-width: 0;
+}
+
+.dl-omezarr-group legend {
+  padding: 0 4px;
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+}
+
+.dl-omezarr-opt {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 0;
+  font-size: var(--text-xs);
+  color: var(--text-primary);
+  cursor: pointer;
+}
+
+.dl-omezarr-size {
+  margin-left: auto;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.dl-omezarr-swatch {
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+  flex: none;
+}
+
+/* .btn sets display: an attribute-hidden button of the panel must stay hidden. */
+.dl-omezarr [hidden] {
+  display: none !important;
+}
+
+.dl-omezarr-foot {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.dl-omezarr-total {
+  margin-right: auto;
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+}
+
+.dl-omezarr-progress {
+  grid-column: 1 / -1;
+}
+
+.dl-omezarr-bar {
+  height: 6px;
+  background: var(--bg-hover);
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.dl-omezarr-fill {
+  height: 100%;
+  width: 0;
+  background: var(--color-primary);
+  transition: width var(--transition-fast);
+}
+
+.dl-omezarr-label {
+  margin-top: 4px;
+  font-size: var(--text-xs);
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+}

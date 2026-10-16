@@ -442,3 +442,277 @@ levels by the level's XY size: "512" = the finest level with `max(x,y) ≤ 768`,
   `plan` resets the counts.
 * `bench` stops at the time budget and reports `unitsMeasured` (m004 measured octant by octant
   under a limit).
+
+# Part III — web 1.63.0: format 5 (resolution × compression matrix, cut stores, lossless access)
+
+LATEST becomes **5**. Registry (append):
+
+| id | from | to | title (en) | applies to |
+|---|---|---|---|---|
+| `m005-matrix` | 4 | 5 | Full-depth pyramid at 256·2ᵏ, compression columns, fast cut stores | `3d`, `live` |
+
+The platform is first a place to **look**: what is displayed may be compressed with loss as long
+as the picture is not visibly altered. Everything that **measures** (measurement tools, plugins,
+exports in native quality) reads the lossless native voxels through §14.8. Format 5 therefore
+stores the same volume several times: once per (resolution, compression) cell for display, once
+lossless at native resolution for measuring, and three re-cut copies for fast cuts (§14.5).
+Disk is spent freely; bytes on the wire and GPU memory are not.
+
+The source of every structure is the **lossless level 0 of the format-4 tree** (the native
+voxels, never resampled; read through `planes/`, which holds the same voxels plane by plane).
+The raw acquisition (`.ims`) is never needed. The pipeline (≥ 0.22.0) writes format 5 directly.
+
+## 14. Format 5
+
+### 14.1 Levels (the rows of the matrix)
+* `N = max(X, Y)` of level 0. Targets `T_j = 256 · 2^j` for every `j ≥ 0` with `T_j < N`. The
+  levels are **level 0 = native** followed by the targets from the largest down:
+  5192×5192×312 → `0: 5192×5192×312`, `1: 4096×4096×312`, `2: 2048…`, `3: 1024…`, `4: 512…`,
+  `5: 256×256×312`. A volume with `N ≤ 256` has level 0 only. Every power of two below `N` is
+  always made, even when it is close to `N` (520 → 512 and 520): equal labels compare across
+  datasets.
+* Dimensions of a level with target `T`: the long XY axis is exactly `T`; the other XY axis is
+  `max(1, (2·n·T + N) // (2·N))` (n·T/N rounded half up); **Z is never reduced** (every plane of
+  level 0 is in every level). Voxel size: `v' = v · n₀ / n'` per XY axis, `vz' = vz`.
+* Resampling — exact **area average** from level 0, integers, one rounding, the same in every
+  implementation. Along an axis of `n₀` source voxels and `n'` output voxels, source voxel `j`
+  covers `[j·n', (j+1)·n')` and output voxel `i` covers `[i·n₀, (i+1)·n₀)` on an integer line of
+  length `n₀·n'`; `w(i, j)` = the length of their overlap (an integer; `Σⱼ w(i,j) = n₀`). Then
+  `out(iₓ, i_y, z) = (Σ wₓ(iₓ,jₓ)·w_y(i_y,j_y)·v(jₓ,j_y,z) + D/2) // D` with `D = X₀·Y₀`. The
+  sum may reach `255·X₀·Y₀` (≈ 8.4·10⁹ for 5735²): 64-bit integers (PHP needs a 64-bit build;
+  JavaScript stays exact below 2⁵³). Computed separably (X pass then Y pass, sums kept, no
+  intermediate rounding), every level **directly from level 0**, plane by plane: a level is never
+  derived from another level.
+* ESS: a brick of any level is stored iff its 64³ interior holds a **source** voxel ≥ 1 (decided
+  on the level's exact voxels, never on a decoded lossy copy).
+
+### 14.2 Bricks
+Bricks keep the v3 geometry of §13.2: 64³ interior + 1-voxel clamp-to-edge apron (66³), absent
+brick = zeros including its apron. The mosaic depends on the column's codec (§14.3):
+* **`grid66`** — the §13.2 mosaic: 66 slices of 66², 9 × 8 slots, 594 × 528.
+* **`grid80`** — for the lossy codecs: the same 9 × 8 slots on an **80-pixel pitch**, each 66²
+  slice centred (7 pixels of edge replication on each side) → 720 × 640. A 16-pixel WebP
+  macroblock (and a 4×4…16×16 AVIF transform) never straddles two slices, and the in-loop
+  deblocking filter (≤ 3 pixels from a block edge) never reaches a stored voxel, so no slice
+  bleeds into its neighbour in Z. The decoder reads the 66² window at offset (7, 7) of each slot.
+
+### 14.3 Compression columns
+Five columns, the same for every level. The first three never move a voxel by more than a
+guaranteed bound; the last two are perceptual (WebP lossy) and exist to make big levels light.
+
+| id | label (en) | codec | mosaic | max \|error\| | size vs `ll`† |
+|---|---|---|---|---|---|
+| `ll` | Lossless | `webp-lossless` | grid66 | 0 | 1 |
+| `b2` | Visually lossless (±2) | `webp-lossless-lut` | grid66 | 2 | 0.62 – 0.82 |
+| `b4` | Near lossless (±4) | `webp-lossless-lut` | grid66 | 4 | 0.50 – 0.69 |
+| `q80` | Light (WebP 80) | `webp-lossy-dz` | grid80 | not bounded (PSNR ≈ 36 dB on signal) | 0.35 – 0.61 |
+| `q50` | Very light (WebP 50) | `webp-lossy-dz` | grid80 | not bounded (PSNR ≈ 31–33 dB) | 0.22 – 0.40 |
+
+† measured on 1,673 native bricks of three embryos (§14.11).
+
+* **`webp-lossless`** — §13.2 exactly (Pillow `lossless=True, quality=75, method=4`).
+* **`webp-lossless-lut`** — the brick stores **bin indices**, losslessly, and the manifest stores
+  the column's 256-entry LUT `value_of[index]`. Quantizer with half-width `e` (2 for `b2`, 4 for
+  `b4`): 0 is alone in bin 0 (zero stays exactly zero, so empty space and ESS are untouched);
+  then bins of `2e+1` consecutive values starting at 1 (`[1, 2e+1]`, `[2e+2, 4e+2]`, …), the last
+  one cut at 255; a bin is reconstructed at its centre `s + e` (its last value when cut).
+  `index_of[v]` is a fixed table; `|value_of[index_of[v]] − v| ≤ e` for every v. The decoder
+  applies `value_of` where it already applies the display LUT (no extra pass).
+* **`webp-lossy-dz`** — WebP lossy (VP8) of the grid80 mosaic at quality 80 / 50, `method=6`,
+  followed by **one byte τ** (the dead zone) appended to the payload. A lossy codec smears the
+  zero background into small values (2–14 % of the zero voxels of our embryos); the encoder,
+  which knows the source, picks τ ∈ 0..12 minimising the squared error of the 64³ interior once
+  every decoded value ≤ τ is set to 0, and the decoder applies it (again through the LUT it
+  already applies: `lut'[v] = v ≤ τ ? 0 : lut[v]`). The image is opaque greyscale; the decoder
+  reads R.
+* **Why not AVIF** — measured on the same bricks, AVIF 4:0:0 reaches the same size/quality
+  trade-off as WebP within a few percent (`avif-q70` ≈ `webp-q80`), encodes 2× slower, has no
+  encoder in a browser (the browser executor of §14.10 could not produce it), and decodes no
+  faster. **Why not JPEG XL** — not decoded by Chrome and Firefox by default (2026-10). **Why
+  not a noise-bounded quantizer (B3D)** — the published uint8 voxels are median-filtered and
+  windowed by `2-image_processor.py`; the photon noise is no longer measurable in them (the
+  neighbour-difference σ reads structure: 4–99 grey levels), so a bound "within the noise"
+  would need the raw counts, which format 5 never reads.
+* Decode cost (Chrome 152, 22 cores, the loader's own `createImageBitmap` → OffscreenCanvas
+  path, 8 workers): 450–680 bricks/s for every candidate, 6–15 ms per brick on one worker — the
+  network, not the decoder, bounds the stream.
+* Encode cost (Pillow, one core): `ll` / `b2` / `b4` 85–150 ms a brick, `q80` / `q50`
+  170–230 ms a brick.
+
+### 14.4 Manifest v5, indexes, packs
+```json
+{ "schema": "iribhm-bricks-v5", "version": 5, "formatVersion": 5,
+  "channels": C, "brickSize": 64, "apron": 1,
+  "levels": [ { "level": 0, "target": "native" | 4096 | …, "dimensions": {"x","y","z"},
+                "voxelSize": {"x","y","z"}, "gridSize": {"x","y","z"}, "brickCount": n } … ],
+  "columns": [ { "id": "ll", "codec": "webp-lossless", "mosaic": "grid66", "maxError": 0 },
+               { "id": "b2", "codec": "webp-lossless-lut", "mosaic": "grid66", "maxError": 2, "lut": [256 ints] },
+               { "id": "b4", … "maxError": 4, "lut": […] },
+               { "id": "q80", "codec": "webp-lossy-dz", "mosaic": "grid80", "quality": 80, "maxError": null },
+               { "id": "q50", … "quality": 50 } ],
+  "index": { "ll": { "url": "index/ll.bin", "bytes": N, "sha256": "…" }, "b2": {…}, … },
+  "bytes": { "0": { "ll": [per channel], "b2": […], … }, "1": { … }, … },
+  "timepoints": null | [ { "path": "t000", "index": { "ll": {…}, … }, "bytes": {…} } … ],
+  "histograms": [ … ], "createdAt": "…" }
+```
+* `index/<column>.bin` — the LBIX layout of §13.3, unchanged (version 1), one file per column
+  (a client reads only the columns it shows). `bytes[level][column][channel]` = the summed
+  payload lengths — what the quality matrix prints without reading an index.
+* Packs `l{k}/{column}/c{c}/pNNNNN.bin`, grouped by super-block as in §13.4. Pack URLs carry
+  `?v=<first 12 hex of that column's index sha256>`.
+* The `ll` column of level 0 **is** the format-4 level 0: the migration moves those packs
+  (`l0/c{c}/p*.bin` → `l0/ll/c{c}/p*.bin`) and keeps their index entries; nothing is re-encoded.
+
+### 14.5 Cut stores (fast slices; every level, lossless)
+A cut drawn from 64³ bricks downloads far more than it shows. Simulated on a 5735²×178 embryo
+(0.344 × 0.344 × 3 µm), voxels fetched per output pixel of a native cut, by brick shape:
+
+| plane | 64×64×64 (bricks) | 64×64×8 | 32×32×8 | 32×32×4 | 16×16×2 |
+|---|---:|---:|---:|---:|---:|
+| XY | 64.5 | 8.1 | 8.1 | 4.0 | 2.0 |
+| XZ | 8.0 | 7.6 | 3.8 | 3.7 | 1.8 |
+| tilted 10° | 65.0 | 9.2 | 8.6 | 4.6 | 2.3 |
+| tilted 30° | 59.7 | 10.8 | 8.8 | 5.3 | 2.6 |
+| tilted 60° | 39.1 | 10.3 | 7.2 | 5.2 | 2.5 |
+| (1,1,1) | 44.5 | 13.2 | 8.8 | 6.4 | 3.1 |
+
+Three re-cut copies, per tree (`live`: under `…/tNNN/`), for every level k:
+* **XY** — `planes/` (format 2, level 0, unchanged) and `planes/l{k}/` for k ≥ 1, the §3 layout
+  (png-gray8, 512² tiles, one pack per z), manifest `planes/l{k}/manifest.json` with `"level": k`.
+  An XY cut = one plane.
+* **XZ / YZ** — `planes-xz/l{k}/` and `planes-yz/l{k}/`: one pack per block of 64 consecutive
+  rows y (resp. columns x), `bNNNNN.bin`, magic `LPXZ` / `LPYZ`, header `{magic, u16 version 1,
+  u16 channels, u16 tilesA, u16 tilesZ, u32 first, u32 count}` then entries in order (row, c,
+  tz, ta) `{u64 offset, u32 length}`; tiles = png-gray8 of ≤ 512 (along x, resp. y) × ≤ 512
+  (along z), `length 0` iff all zero; manifest `lumen-planes-xz-v1` / `-yz-v1` with
+  `rowsPerPack: 64`. An XZ or YZ cut = one row of one pack (one range read per channel).
+* **Oblique** — `cuts/l{k}/`: small bricks of `32 × 32 × bz` voxels with
+  `bz = 2^round(log₂(32·vxy/vz))` clamped to [1, 32] (about isotropic in µm: 32×32×4 at
+  0.344/3 µm, 32×32×8 at 0.43/2.06 µm), **no apron** (a cut samples voxel `floor(value·dim)`,
+  never between voxels), lossless WebP mosaic of the bz slices of 32² (`min(bz, 8)` columns),
+  stored iff non-zero; `cuts/l{k}/index.bin` (LBIX entries), packs grouped by super-blocks of
+  8×8×8 small bricks; manifest `lumen-cuts-v1` with the brick shape. An oblique native cut
+  fetches ≈ 4–6 voxels per pixel instead of 40–65.
+* Routing of the Studio native pass (`_renderNativeSliceForStudio`): XY → planes, XZ / YZ →
+  planes-xz / -yz, anything else (or a warped timelapse) → cuts; bricks only as the fallback of
+  a store that is missing or fails. The pass reads the **coarsest level whose voxel is not
+  larger than the figure's output pixel** (a native figure reads level 0).
+
+### 14.6 Viewer — the quality matrix
+* The quality control becomes a table: one **row per level** (label `512 · 512×512×312`, the
+  real dimensions) and one **column per compression** (§14.3). Each cell prints the bytes the
+  stream would download (`bytes[level][column]` summed over the channels shown, one timepoint)
+  and an estimated time at the throughput the loader measured this session.
+* Each row prints the GPU memory of that level (`VolumeViewer.getQualityFootprints`: atlas slots
+  with their pitch, R8 / RG8 / RGBA by channel count, halved under the BC display compression).
+  Cell colour, from `SVRManager.vramBudget(renderer)`: **green** fits within 75 % of the budget;
+  **amber** fits only with the BC display compression, or above 75 %; **red** does not fit — the
+  overview stays at the finest level that fits and region-of-interest detail streams the chosen
+  cell around the view. A column the browser cannot decode is greyed with its reason.
+* Default: column `b2`, the finest green row. The choice is a `{ level target, column }` pair,
+  stored in the workspace, the URL and `localStorage['lumen3d.qualityCell']`.
+* ROI detail streams the next finer level **in the same column**. *Refine at rest* (on by
+  default for `q80` / `q50`): when the camera has rested 1 s, the detail atlas re-streams the
+  view in `ll`.
+* Compare: `CompareQuality` plans the rows within the host's column (one shared budget, §3.4).
+
+### 14.7 Working copies and exports
+* What a user works on (Studio slices, Decompose panels, 3D annotations) is the displayed cell:
+  light, decoded once, recoloured on the GPU.
+* Every export (3D view image, Studio figure, Decompose panels, Compare figure) offers, every
+  time: **Current quality — `<row · column>`** or **Native, lossless**. Native re-renders from
+  level 0 `ll`: a Studio figure through the native pass (§14.5); a 3D view through the tiled
+  renderer, each tile streaming into the detail atlas the `ll` bricks of the finest level its
+  pixel footprint needs before it renders.
+* Annotations and measurements are **anchored in micrometres of their frame**, never in screen
+  or image pixels: a Studio layer stores its points in µm from the plane's top-left corner along
+  the plane's axes; a 3D measurement stores `physicalUm` (it already does). At draw time a layer
+  is rasterised at the output pixel size (`p_px = p_µm / pixelSizeUm_out`), so the same document
+  lands on the right pixel at any resolution; stroke widths and text are in figure points and
+  scale with the output. A document of an older version (image pixels + `pixelSizeUm`) is
+  converted on load.
+* An exported file records its source cell (`level`, `column`, `maxError`) in its JSON sidecar
+  and PNG `tEXt`.
+
+### 14.8 Lossless access for measuring tools (`DataAccess`, `ctx.data`)
+`js/core/data-access.js` (`DataAccess`, exposed to plugins as `ctx.data`) is the one door to the
+native voxels. Frames: screen pixel → display box [0, 1]³ → physical µm (level-0 voxel size,
+origin at the corner of voxel (0, 0, 0)) → level-k voxel (`µm / v_k`) → file.
+* `screenToVoxel(x, y)` → `{ um, voxel, onBoundingBox }` through `VolumeViewer.pickVolumePoint`;
+  `toVoxel(um, { level })`, `toUm(voxel, { level })`.
+* `locate(voxel, channel)` → `{ level0Brick: {bx, by, bz}, pack: {url, offset, length},
+  plane: {url, tile, offset, length}, omeZarr: {path, shard, offset, length} | null }` — which
+  file, and which bytes of it, hold that lossless voxel.
+* `readRegion(box, channels, { level = 0 })` → `{ dims, data: Uint8Array per channel }`, the
+  exact lossless voxels (planes for flat boxes, `ll` bricks otherwise), decoded in a worker,
+  refused above 512 MiB with `REGION_TOO_LARGE`.
+* `valueAt(voxel)` → per-channel lossless values.
+* Rule: a measuring tool (intensity profile, histogram of a region, the tracking measurements,
+  any plugin that reports a number) reads through `ctx.data`, never the GPU atlas, whatever the
+  displayed column.
+
+### 14.9 OME-Zarr v0.5 export (Download Center)
+Every format-5 dataset carries `download/<folder>.ome.zarr/` — Zarr v3 / OME-NGFF 0.5:
+`multiscales` with axes `c, z, y, x` (`z, y, x` in `micrometer`), one dataset per §14.1 level
+(`scale` = its voxel size), `uint8`, **sharding** codec (shards of 1 × 64 × 1024 × 1024, inner
+chunks 1 × 64 × 64 × 64, inner codecs `bytes` + `zstd` level 3, index at the end), `omero`
+channel names / colours / windows from `metadata.json`. Served like any `download/` file (byte
+ranges), so napari / Fiji / Neuroglancer open it by URL. The Download Center lists it as one
+entry (total size, *Copy URL*, *Open in napari* hint) and offers `<folder>.ome.zarr.zip` — the
+same store in an uncompressed (STORED) zip, written beside it — for a one-file download. It is
+also what `DataAccess.locate` names for a voxel.
+
+### 14.10 Migration `m005-matrix` — stages and units
+Units, in order (a stage runs once the previous one is complete for that tree and channel):
+
+| stage | unit key | reads | writes |
+|---|---|---|---|
+| A levels | `t{t}.c{c}.z{z}` | native plane z (`planes/`) | plane z of every level k ≥ 1 (`planes/l{k}/`) |
+| B bricks | `t{t}.k{k}.c{c}.z{BZ}.y{BY}.x{BX}` | the level's planes under the super-block (+ apron) | its bricks in every column (level 0: all but `ll`, which is moved) |
+| C cuts | `t{t}.k{k}.c{c}.{xz,yz}.b{n}`, `t{t}.k{k}.c{c}.cut.z{}.y{}.x{}` | level planes | `planes-xz`, `planes-yz`, `cuts` packs |
+| D OME-Zarr | `t{t}.k{k}.s{shard}` | level planes | one shard |
+| finalize | — | — | indexes, manifests, the `ll` level-0 move, the swap of §13.6, version 5 |
+
+* Executors: the **Python server** runs every stage. The **browser** runs A, B and C (lossy WebP
+  via `OffscreenCanvas.convertToBlob({ type: 'image/webp', quality: 0.8 | 0.5 })` — not
+  byte-identical to Pillow, which is allowed for `q80` / `q50` only; their bricks are checked by
+  decoding) and is the executor of a PHP host. D needs zstd: Python (`compression.zstd`, 3.14)
+  or the browser through a WebAssembly encoder shipped in `js/vendor/`. The PHP server stores
+  units and finalizes; it encodes nothing for m005 (shared hosts kill long requests, §13.9).
+* Requests follow §7.2 (one `NetGovernor`, `read_ranges` for every input run).
+* A level is resampled from level 0 only (§14.1), so stage A units of different z are
+  independent and run on both executors at once.
+
+### 14.11 Benchmark (normative inputs of §14.3)
+`tools/bench_brick_codecs.py` (re-runnable): 1,673 native 66³ bricks (2 crops of 6 × 6 bricks ×
+every z × every channel) of `Egfl7eGFP-E8-Em13` (10×, 3789²×252, 4 ch), `Egfl7eGFP-Em2-E9`
+(25×, deconvolved, 5735²×178, 3 ch), `Egfl7eGFP-E85-Em1` (10×, 1946²×72, 3 ch). Sizes relative
+to format 4 (`webp-ll-m4`), per dataset; PSNR on the voxels non-zero in the source or the
+result; Dice at the channel's Otsu threshold.
+
+| codec | Em13 | Em2-E9 | E85-Em1 | max err | PSNR (dB) | Dice |
+|---|---:|---:|---:|---:|---:|---:|
+| deflate9 (raw, lossless) | 1.004 | 1.036 | 1.030 | 0 | ∞ | 1 |
+| `b2` (qU2) | 0.677 | 0.617 | 0.820 | 2 | 45.1 | 0.974–0.993 |
+| `b4` (qU4) | 0.559 | 0.497 | 0.693 | 4 | 39.8–39.9 | 0.960–0.986 |
+| webp-q95 | 0.785 | 0.664 | 1.027 | 13–14 | 44.4–44.9 | 0.983–0.987 |
+| webp-q90 | 0.639 | 0.511 | 0.844 | 21–22 | 40.7–41.3 | 0.972–0.981 |
+| `q80` | 0.457 | 0.345 | 0.609 | 42–49 | 35.6–36.9 | 0.950–0.964 |
+| webp-q70 | 0.371 | 0.275 | 0.496 | 51–57 | 33.0–34.8 | 0.934–0.949 |
+| `q50` | 0.300 | 0.220 | 0.402 | 64–71 | 30.9–33.0 | 0.912–0.933 |
+| avif-q80 | 0.593 | 0.462 | 0.753 | 21–27 | 39.9–41.3 | 0.970–0.978 |
+| avif-q70 | 0.490 | 0.373 | 0.646 | 29–42 | 36.9–38.8 | 0.957–0.967 |
+| avif-q50 | 0.281 | 0.212 | 0.398 | 83–92 | 30.0–33.0 | 0.887–0.925 |
+
+The `b2`/`b4` sizes include a 256-byte LUT per brick in the benchmark (stored once per column in
+format 5: −0.3 %). Lossless WebP `method=6, quality=100` saves 2 % for 25× the encode time and is
+not used. Compression alone gives at most ≈ 3–4×; each row of the matrix gives 4×.
+
+### 14.12 Tests (minimum)
+Level ladder and dimensions (N ≤ 256, N = 520, non-square); area-average arithmetic identical in
+Python / PHP / JS on random planes (exact integers); quantizer tables and bounds; dead-zone rule;
+grid80 round trip; v5 manifest / index validation in `BrickLoader`; the `ll` level-0 move keeps
+every byte; cut stores give voxels identical to the bricks; Studio routing per plane kind;
+`DataAccess.locate` / `readRegion` against the source; a native-quality export re-places
+µm-anchored layers on the exact pixel; the OME-Zarr store read back with zarr-python equals
+level k.

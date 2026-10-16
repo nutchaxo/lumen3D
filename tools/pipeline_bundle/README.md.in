@@ -16,11 +16,13 @@ Il enchaîne quatre étapes et s'arrête net à la première qui échoue :
 
 1. **Intégrité du pack** — chaque fichier est re-vérifié par empreinte SHA-256
    contre `MANIFEST.sha256`. Un fichier manquant ou altéré interrompt le lancement.
-2. **Environnement Python** — utilise le Python embarqué s'il est fourni, sinon
-   détecte un Python 3.9 → 3.13 sur le poste, sinon propose de l'installer localement.
+2. **Environnement Python** — utilise le Python local `.runtime\python` s'il existe,
+   sinon détecte un Python 3.9 → 3.13 sur le poste, sinon l'installe dans `.runtime\python`.
 3. **Dépendances** — vérifie que les bibliothèques scientifiques sont importables,
    et les installe si nécessaire.
-4. **Traitement** — un menu propose les trois opérations décrites plus bas.
+4. **Traitement** — un menu propose quatre opérations, décrites plus bas : `[1]` volumes Imaris,
+   `[2]` analyse de tracking, `[3]` photographies 2D, `[4]` rattachement d'un tracking à un dataset.
+   `[5]` vérifie seulement l'environnement, `[0]` quitte.
 
 > **Édition *complète*** : `.runtime\python` est déjà livré avec toutes les
 > dépendances. **Aucun accès réseau n'est nécessaire**, à aucun moment.
@@ -35,11 +37,13 @@ d'intégrité — déconseillé).
 
 ---
 
-## Les deux pipelines
+## Les pipelines
 
 ### 1. Preprocessing de volumes Imaris (`.ims`)
 
-Déposez vos fichiers `.ims` dans **`input\`**, puis choisissez `[1]`.
+Déposez vos fichiers `.ims` dans **`input\`**, puis choisissez `[1]`. Le lanceur
+demande le dossier d'entrée, le dossier de sortie (par défaut `output\`) et si
+les archives de téléchargement doivent être générées (plus long).
 
 Le résultat est écrit dans **`output\`**, dans l'arborescence attendue par la
 plateforme :
@@ -50,36 +54,50 @@ output\
   live\<nom-du-fichier>\         <- série temporelle (2 points ou plus)
       metadata.json
       thumbnail.webp
-      bricks\manifest.json
-      bricks\...\pack_00.bin
+      bricks\manifest.json       <- index des briques (format 4)
+      bricks\index.bin
+      bricks\l<niveau>\c<canal>\pNNNNN.bin
+      planes\                    <- coupes XY du niveau natif
+      mips\                      <- projections maximales par couche
 ```
+
+Le lanceur produit le **format 4** (valeur par défaut du pipeline). L'option
+`--format 5` de `run_preprocess.py` existe, mais elle n'est pas proposée dans le menu.
 
 Le nom du dossier produit est celui du fichier `.ims`, et il est *interprété* :
 
 | Motif dans le nom | Effet |
 |---|---|
-| `-E85-` ou `-E8-` | stade embryonnaire (`E8.5`, `E8`) |
-| `-Em1-` | identifiant d'embryon — **les deux tirets sont nécessaires** |
+| `-E85-` (E8.5) ou `-E8-` (E8) | stade embryonnaire ; `E8.5`, `E8,5` et `E8-5` sont aussi reconnus |
+| `-Em1-` | identifiant d'embryon, séparé de ses voisins par `-`, `_` ou un espace (ou en début/fin de nom) |
+| `-E95-1-` (sans `Em<n>`) | le nombre qui suit le stade désigne l'embryon : ici `Em1` |
 
 Le choix `3d` / `live` n'est pas un réglage : il découle du nombre de points
 temporels trouvés dans le fichier.
 
-Pour publier le dataset, copiez le dossier produit dans le `DATA_WEB\` du
-serveur. Il apparaît immédiatement dans le catalogue — rien à régénérer.
+Pour publier le dataset, deux voies : déposer le dossier produit dans l'onglet
+**Import** de l'administration de la plateforme (import reprenable, vérifié), ou le
+copier dans le `DATA_WEB\` du serveur. Dans les deux cas, le catalogue le
+retrouve sans rien régénérer.
 
-**Mémoire vive** : c'est la vraie contrainte. L'étape de traitement d'image
-alloue simultanément plusieurs copies du volume ; comptez ~32 Go de RAM pour un
-volume de 3789 × 3789 × 178. Un poste à 16 Go échouera sur de gros volumes réels.
+**Mémoire vive** : c'est la contrainte à surveiller. Chaque processus de traitement
+garde son propre espace de travail (une tuile du volume), et Windows limite la
+somme des processus à la mémoire disponible plus le fichier d'échange. Un échec
+mesuré (erreur système 1455, « fichier d'échange trop petit ») a été relevé sur un
+volume de 3789 × 3789 × 125 × 4 canaux, sur une machine de 63,5 Gio. La variable
+d'environnement `LUMEN_PREPROCESS_WORKERS` limite le nombre de processus.
 
 ### 1b. Photographies 2D (TIFF ImageJ / Leica)
 
 Une photographie couleur d'embryon entier (stéréomicroscope, export TIFF depuis
-un `.lif`) devient un dataset `2d` — un par fichier. Déposez les TIFF
-dans un dossier et choisissez `[3]` (le lanceur demande la coloration, la lignée
-et s'il faut joindre l'original). En ligne de commande :
+un `.lif`) devient un dataset `2d` — un par fichier, sous `output\2d\`. Déposez les TIFF
+dans un dossier et choisissez `[3]`. Le lanceur demande la coloration (`X-gal` par défaut),
+la lignée (vide : lue dans le nom du `.lif`), s'il faut copier le TIFF d'origine dans `download\`,
+et s'il faut réimporter les datasets déjà présents. En ligne de commande, avec le Python du lanceur
+(`.runtime\python\python.exe` en édition complète) :
 
 ```
-pipeline\python.exe pipeline\2d_importer.py --input <dossier TIFF> --output output --staining X-gal --with-downloads
+.runtime\python\python.exe pipeline\2d_importer.py --input <dossier TIFF> --output output --staining X-gal --with-downloads
 ```
 
 Le stade, le zoom et la date de dissection sont lus dans le nom du fichier
@@ -88,16 +106,17 @@ Un repassage (`--force`) conserve ce que le labo a édité dans `metadata.json`.
 
 ### 2. Analyse de tracking Imaris (export Excel)
 
-Créez un dossier par échantillon sous **`tracking\DATA\`** et déposez-y l'export
-Excel produit par Imaris, puis choisissez `[2]`.
+Créez un dossier par échantillon sous **`tracking\DATA\`** et déposez-y le classeur
+`.xlsx` exporté par Imaris, puis choisissez `[2]`. L'analyse lit les fichiers `.xlsx`
+de chaque dossier ; un `.xls`, un `.imaris_track` ou un `.ims` passe par `[4]`.
 
 ```
 tracking\DATA\<NOM-ECHANTILLON>\<...>30min<...>.xlsx
 ```
 
-> ⚠️ **Le nom du fichier doit contenir l'intervalle entre images**, sous la forme
-> `30min`, `15min`… C'est de là que l'analyse tire sa base de temps. Sans ce
-> motif, le script s'arrête et vous le demande de façon interactive.
+> **Attention** : le nom du fichier doit contenir l'intervalle entre images, sous la forme
+> `30min`, `15min`… L'analyse le lit dans le nom (`(\d+)min`) pour sa base de temps. Sans ce
+> motif, le script demande l'intervalle en minutes au cours de l'exécution.
 
 Le classeur doit être une **table simple**, une ligne par (cellule, temps), avec
 les en-têtes sur la première ligne. Les intitulés natifs d'Imaris sont reconnus :
@@ -107,28 +126,36 @@ les en-têtes sur la première ligne. Les intitulés natifs d'Imaris sont reconn
 | `ID` | identifiant de l'objet | **oui** |
 | `Time` | numéro de l'image | **oui** |
 | `Position X` / `Position Y` / `Position Z` | coordonnées en µm | **oui** |
-| `TrackID` | trajectoire persistante | non — à défaut, `ID` est utilisé |
+| `TrackID` | trajectoire persistante | non — à défaut, un identifiant propre est donné à chaque ligne sans trajectoire |
 | `Region` | groupe / population | non — à défaut, `Unknown` |
 
-Les variantes usuelles (`x`, `x_um`, `Position_X`, `Frame`, `Spot ID`, `Group`…)
-sont acceptées, casse et espaces indifférents.
+Les variantes usuelles (`x`, `x_um`, `Position_X`, `Frame`, `Spot ID`, `Group`, `Population`…)
+sont reconnues ; la casse est indifférente.
 
-Résultats dans **`tracking\OUTPUT\<date-heure>\<échantillon>\`** :
+Résultats dans **`tracking\OUTPUT\<AA.MM.JJ-HH.MM>\<échantillon>\`** :
 
 | Fichier | Contenu |
 |---|---|
-| `<échantillon>_analysis.xlsx` | classeur d'analyse : trajectoires brutes et stabilisées, métriques, distances aux voisins, directionnalité, statistiques de population |
+| `<échantillon>_analysis.xlsx` | classeur d'analyse : feuilles de métriques et de population |
 | `<échantillon>.imaris_track` | conteneur consommé par la plateforme (choix `[4]`) |
-| `<échantillon>.glb` | surfaces de population pré-calculées |
+| `<échantillon>.glb` | surfaces exportées avec le conteneur, quand l'analyse en produit |
 
-L'analyse **stabilise** les trajectoires : elle retire le mouvement d'ensemble du
-spécimen par recalage rigide successif, ce qui isole le déplacement propre des
-cellules. Les coordonnées brutes sont conservées à côté des coordonnées stabilisées.
+L'analyse **stabilise** les trajectoires : chaque point temporel est recalé de façon rigide
+sur le précédent, ce qui retire le mouvement d'ensemble du spécimen et isole le déplacement
+propre des cellules. Les coordonnées brutes sont conservées à côté des coordonnées stabilisées.
 
 ### 3. Rattacher un tracking à un dataset
 
-Choisissez `[4]`, puis indiquez le `.imaris_track` et le dossier du dataset déjà
-traité (celui qui contient `metadata.json`).
+Choisissez `[4]`, puis indiquez le fichier de tracking et le dossier du dataset déjà
+traité (celui qui contient `metadata.json`). Trois formes sont acceptées :
+
+- `.imaris_track` — le conteneur produit par `[2]` ;
+- `.ims` — le volume dont les objets Imaris (Spots / Tracks, groupe `Scene8`) portent le suivi ;
+- `.xls` / `.xlsx` — le classeur de statistiques exporté par Imaris.
+
+Quand plusieurs sources existent à côté d'un volume, l'ordre de priorité est : conteneur
+`.imaris_track`, puis objets Scene8 du `.ims`, puis classeur. Le menu `[1]` effectue ce
+rattachement tout seul pour les nouveaux volumes.
 
 Le tracking est converti au format du visualiseur et la transformation de
 recalage est inscrite dans `metadata.json`. Comme la stabilisation est un
@@ -137,7 +164,7 @@ stabilisé : le visualiseur superpose donc les trajectoires aux images en
 déformant les coordonnées d'échantillonnage, sans ré-échantillonner les voxels et
 sans perte.
 
-Le compte rendu affiche un résidu de recalage. S'il n'est pas quasi nul, la
+Le compte rendu affiche le résidu de recalage. S'il dépasse 0,05 µm, la
 stabilisation n'était pas un mouvement rigide et ne doit pas être appliquée aux
 images — le message le signale explicitement.
 
@@ -148,15 +175,15 @@ images — le message le signale explicitement.
 Le pack contient un jeu de démonstration cohérent, utilisable tel quel :
 
 - `input\Demo-Lumen3D-E85-Em1-30min-2ch-4tp.ims` — 96 × 96 × 24, 2 canaux, 4 points temporels
-- `tracking\DATA\DEMO-E85-Em1\Live-Demo-...-30min-Positions-Analysis.xlsx` — 48 cellules, 4 points temporels, une mitose
+- `tracking\DATA\DEMO-E85-Em1\Live-Demo-Lumen3D-E85-Em1-30min-Positions-Analysis.xlsx` — 48 cellules, 4 points temporels, une mitose
 
 Les deux décrivent **le même embryon simulé** : les noyaux du volume se trouvent
 exactement là où le tableau de tracking place les cellules. Enchaîner `[1]`, `[2]`
 puis `[4]` sur ces fichiers exécute donc la chaîne complète et produit un dataset
 avec ses trajectoires attachées, sans aucune donnée réelle.
 
-Le mouvement simulé comporte une composante rigide d'ensemble : à l'étape `[4]`,
-le résidu de recalage doit ressortir à ~1e-14 µm, c'est-à-dire exact.
+Le jeu est construit avec un mouvement d'ensemble rigide : à l'étape `[4]`, le
+compte rendu doit donc indiquer un recalage rigide (résidu sous 0,05 µm).
 
 ---
 
@@ -169,13 +196,15 @@ VERSION.json             versions, édition, date de génération
 requirements.txt         dépendances Python des deux pipelines
 LISEZ-MOI.md             ce document
 
-pipeline\                pipeline volumes : orchestrateur + 5 étapes + importeur 2D
-tracking\SCRIPTS\        pipeline tracking : analyse, export, surfaces
+pipeline\                pipeline volumes : orchestrateur run_preprocess.py, étapes 1 à 4,
+                         importeurs de tracking (5-tracking_importer.py, tracking_sources.py)
+                         et 2D (2d_importer.py), écrivains de formats, format5.py partagé
+tracking\SCRIPTS\        pipeline tracking : Analysis.py, export HTML/.imaris_track, maillage GLB, surfaces
 tracking\DATA\           entrées tracking (un dossier par échantillon)
 tracking\OUTPUT\         sorties tracking
 input\                   entrées volumes (.ims)
 output\                  sorties volumes
-.runtime\                Python embarqué (édition complète uniquement)
+.runtime\                Python local : livré (édition complète) ou téléchargé au premier lancement (édition légère)
 ```
 
 ## Dépendances
@@ -189,8 +218,8 @@ installation manuelle : `pip install -r requirements.txt`.
 
 - Le pack est entièrement relatif : déplacez-le, renommez-le ou copiez-le sur une
   clé USB sans rien reconfigurer.
-- `Ctrl+C` pendant un traitement demande confirmation avant d'interrompre.
 - Une erreur sur un fichier `.ims` n'arrête pas le lot : les suivants sont traités
   et l'erreur est affichée. Vérifiez le compte rendu final.
-- `.runtime\` est régénérable : en cas de doute sur l'environnement, supprimez ce
-  dossier et relancez `RUN.bat`.
+- `.runtime\` contient le Python du lanceur. En édition complète, sa suppression
+  oblige le lanceur à utiliser un Python du poste (3.9 à 3.13) ou à réinstaller
+  l'environnement, ce qui demande un accès réseau.

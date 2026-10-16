@@ -481,7 +481,7 @@ const StudioEditor = (() => {
       _fitImageToViewport();
       _viewportChanged();
     });
-    document.getElementById('btn-studio-export-png')?.addEventListener('click', _exportPng);
+    document.getElementById('btn-studio-export-png')?.addEventListener('click', _exportPngWithChoice);
     document.getElementById('btn-studio-export-json')?.addEventListener('click', _exportJson);
     document.getElementById('btn-studio-import')?.addEventListener('click', () => document.getElementById('studio-import-file')?.click());
     document.getElementById('studio-import-file')?.addEventListener('change', _importJson);
@@ -3178,7 +3178,7 @@ const StudioEditor = (() => {
     if (command === 'add-guide-x') _toggleGuide('x');
     if (command === 'add-guide-y') _toggleGuide('y');
     if (command === 'export-json') _exportJson();
-    if (command === 'export-png') _exportPng();
+    if (command === 'export-png') _exportPngWithChoice();
     _closePalette();
     _renderAll();
   }
@@ -3203,6 +3203,45 @@ const StudioEditor = (() => {
   // The export is the picture the Studio shows, as coloured: the slice it holds is the
   // best the page produced (viewer.js upgrades it to native in place), so nothing is
   // re-rendered here.
+  // The page's native pass of the figure on screen (viewer.js), for the lossless export.
+  let _nativeProvider = null;
+  function setNativeProvider(fn) { _nativeProvider = typeof fn === 'function' ? fn : null; }
+
+  /**
+   * Every PNG export offers the picture as it is or the native lossless one (SPEC §14.7):
+   * the latter waits for (or re-runs) the native pass; the layers, stored in the
+   * picture's pixels, are rescaled with it (setSliceResult) and land on the same voxels.
+   */
+  async function _exportPngWithChoice() {
+    if (!_doc || !_sliceResult) return;
+    const isNative = String(_sliceResult.quality || _doc.quality || '') === 'native';
+    if (!_nativeProvider || _doc.layoutMaps?.length > 0 || typeof Dialog === 'undefined' || !Dialog.ask) {
+      _exportPng();
+      return;
+    }
+    const choice = await Dialog.ask({
+      icon: 'image',
+      title: _t('studio.exportQualityTitle', 'Export quality'),
+      message: isNative
+        ? _t('studio.exportQualityNativeMsg', 'This picture is already the native lossless one.')
+        : _t('studio.exportQualityPreviewMsg', 'This picture is the preview drawn from the volume on screen. The native lossless picture is read from the stored voxels; your layers keep their place.'),
+      dismissId: 'cancel',
+      options: [
+        { id: 'native', primary: true, variant: 'primary', label: _t('studio.exportNative', 'Native lossless') },
+        { id: 'current', label: _t('studio.exportCurrent', 'This picture') },
+        { id: 'cancel', label: _t('common.cancel', 'Cancel') }
+      ]
+    });
+    if (choice === 'current') { _exportPng(); return; }
+    if (choice !== 'native') return;
+    if (!isNative) {
+      _toast(_t('studio.loadingNativeExport', 'Loading the native lossless picture…'));
+      const ok = await _nativeProvider();
+      if (!ok) { _toast(_t('studio.nativeExportFailed', 'The native picture could not be loaded; nothing was exported.')); return; }
+    }
+    _exportPng();
+  }
+
   function _exportPng() {
     if (!_doc || !_sliceResult) return;
     // A channel edit still waiting for its frame is part of the figure being exported.
@@ -4282,7 +4321,8 @@ const StudioEditor = (() => {
     isOpen: () => _isOpen,
     close,
     getDocument,
-    documentToken
+    documentToken,
+    setNativeProvider
   };
 })();
 

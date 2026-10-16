@@ -1,0 +1,17 @@
+# Changelog v1.64.0 (Web Platform)
+
+## [ADDED]
+
+- **The viewer reads format 5**: `BrickLoader` mounts a v5 brick tree (`iribhm-bricks-v5`, SPEC §14.4). Its lossless column's index is read at mount and every other column's on first use (`ensureColumns`). Each column's packs are stamped with the sha256 of their own index, and a brick task names its `column`. A lossy-column brick is decoded according to its trailer byte: a dead zone, a fallback to the `b4` image, or a fallback to the `ll` image. Any other byte is refused as corrupt. The value LUT is chained with the display LUT into one table, so the decode workers only learned the 80-px slot pitch of the lossy mosaic.
+- **Quality matrix**: on a format-5 dataset, the *Render Quality* panel shows a table instead of the select. There is one row per level (its real dimensions and the GPU memory its atlas takes) and one column per compression (Lossless, ±2, ±4, Light, Very light). Each cell shows its download size and, once the page has measured the link, the time to fetch it. Cells are coloured by what this browser's GPU budget holds: green fits within 75 %, amber is close, red is more than it holds. A click loads that cell. Quality keys become `<resolution>@<column>` (for example `512x512@b2`) in the workspace, the URL and the hidden select. The Compare host still speaks the resolution ladder, and the page keeps its own column.
+- **Fast cuts from the cut stores**: the Studio's native pass reads an XZ or YZ cut of a format-5 tree as one row of the `xz` / `yz` pack per channel. That is three small range reads instead of a voxel plane of every 64³ brick the cut crosses. An oblique cut reads only the 32 × 32 × bz cut bricks the plane crosses (`js/core/cut-store.js`, `CutStore`), in multi-range requests, into the throwaway atlas. Measured on a 1946² × 72 embryo, every picture is identical to the brick path voxel for voxel. An oblique native cut fetched 23 MB in 15 requests instead of 60 MB in 30. Any failure falls back to the bricks.
+- **Lossless data access for tools (`ctx.data`)**: `js/core/data-access.js` (`DataAccess`) converts screen points to µm and to voxels of any level, and back. It locates a native voxel's pack, byte offset and length, and reads lossless regions (up to 512 MiB) and single voxels from level 0's lossless column, whatever cell is displayed. It works on format 2–5 trees and is exposed to plugins as `ctx.data` (SPEC §14.8).
+- **Every export offers lossless**: the 3D view export has a *Quality* choice, *Current* or *Lossless*. Lossless loads the native level of the lossless column, or the finest one this GPU holds, as the note says; it renders, then puts the previous quality back. The Studio's PNG export asks *Native lossless* or *This picture*. The native choice waits for the native pass, or runs it again if it was stopped, and the layers are rescaled with the picture, so they keep their place. The Decompose export asks the same question.
+
+## [CHANGED]
+
+- **Format 5 stays opt-in on the server**: `m005-matrix` is still registered only with `LUMEN_FORMAT5=1`, because the PHP twin of the migration engine does not know format 5 yet. The pipeline writes it with `--format 5`.
+
+## [FIXED]
+
+- **Tests**: `tests/js/test_format5_reader.mjs` covers v5 manifest validation, the lazy column indexes and stamped pack paths, the trailer bytes and LUT chaining, CutStore XZ rows and multi-range runs, and the DataAccess frames and locate. The viewer-page tests that lift the Studio pass and the quality control now include the new helpers.

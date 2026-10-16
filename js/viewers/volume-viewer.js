@@ -3122,7 +3122,8 @@ const VolumeViewer = (() => {
     if (entry?.degraded) return false;
     if (!entry?.svrManager) return true;
     const quality = _normalizeQualityKey(entry.quality || '');
-    if (quality === 'native' || quality === '4096x4096') return Boolean(window.VolumeViewerDebug?.cacheNativeSvr);
+    const base = _qualityBase(quality);
+    if (base === 'native' || base === '4096x4096') return Boolean(window.VolumeViewerDebug?.cacheNativeSvr);
     return true;
   }
 
@@ -5345,7 +5346,7 @@ const VolumeViewer = (() => {
   function setQualityTarget(target = '512x512', mode = null) {
     if (mode !== null) {
       _currentQualityMode = mode;
-    } else if (target === '256x256' || target === '512x512' || target === '1024x1024' || target === 'native') {
+    } else if (_isPresetQuality(target)) {
       _currentQualityMode = target;
     }
     const safe = _normalizeQualityKey(target);
@@ -6173,6 +6174,7 @@ const VolumeViewer = (() => {
     getCapabilities,
     getQualityFootprints,
     getQualityLevels,
+    getQualityMatrix,
     getActiveLevel,
     selectBrickManifest: (manifest, timepoint) => _selectBrickManifestForTimepoint(manifest, timepoint),
     setDetailMode,
@@ -6377,7 +6379,7 @@ const VolumeViewer = (() => {
       if (options.qualityMode) {
         _currentQualityMode = options.qualityMode;
       } else if (options.quality) {
-        if (options.quality === '256x256' || options.quality === '512x512' || options.quality === '1024x1024' || options.quality === 'native') {
+        if (_isPresetQuality(options.quality)) {
           _currentQualityMode = options.quality;
         }
       }
@@ -6489,7 +6491,9 @@ const VolumeViewer = (() => {
       const levelCount = levels ? (Array.isArray(levels) ? levels.length : Object.keys(levels).length) : 1;
       const treeFormat = BrickLoader.getFormat?.() || null;
       const bordered = Boolean(treeFormat && treeFormat.apron > 0);
-      const requestedLod = _lodForQuality(quality, levelCount, levels, treeFormat?.version === 3);
+      const requestedLod = _lodForQuality(quality, levelCount, levels, (treeFormat?.version || 0) >= 3);
+      // The compression column of a v5 tree (SPEC §14.3): the key's `@col`, else `b2`.
+      const qualityColumn = treeFormat?.version === 5 ? _qualityColumnFor(quality, treeFormat) : null;
 
       // ── Coarse level first ─────────────────────────────────────────────────────
       let previewLod = null;
@@ -6498,7 +6502,7 @@ const VolumeViewer = (() => {
         emitState({ target: _qualityTarget, active: quality, mode: 'bricks', progress: 0, streaming: true, message: _t('viewer.qStreamingPreview', 'Streaming preview (LOD{lod}) before {quality}...', { lod: coarse, quality }) });
         const preview = await loadBrickedVolumeStream(basePath, metadata, timepoint, null, {
           ...options,
-          quality: `lod${coarse}`,
+          quality: qualityColumn ? `lod${coarse}@${qualityColumn}` : `lod${coarse}`,
           coarseFirst: false,
           deferActivation: false,
           onFirstPicture: null,
@@ -6694,6 +6698,7 @@ const VolumeViewer = (() => {
         basePath,
         timepoint,
         quality,
+        column: qualityColumn,
         lod,
         requestedLod,
         downgraded: lod !== requestedLod,
@@ -6773,7 +6778,7 @@ const VolumeViewer = (() => {
       for (const brick of orderedBricks) {
         const region = denseRegion(brick);
         if (rgbaTransport) streamTasks.push({ bx: brick.bx, by: brick.by, bz: brick.bz, channel: -1, lod });
-        else for (let c = 0; c < channels; c++) streamTasks.push({ bx: brick.bx, by: brick.by, bz: brick.bz, channel: c, lod, ...(region ? { region } : {}) });
+        else for (let c = 0; c < channels; c++) streamTasks.push({ bx: brick.bx, by: brick.by, bz: brick.bz, channel: c, lod, ...(qualityColumn ? { column: qualityColumn } : {}), ...(region ? { region } : {}) });
       }
 
       let summary = null;
@@ -7204,6 +7209,43 @@ const VolumeViewer = (() => {
     });
   }
 
+  /**
+   * The quality matrix of the mounted v5 tree (SPEC §14.6), or null on any other tree:
+   * { levels: [{ level, target, key, dims, voxelSize, gpu: footprint }], columns: [{ id,
+   * codec, maxError }], bytes: { level: { column: total bytes over `channels` } }, budgetBytes,
+   * active: { level, column } | null }. `key` is the resolution part of a quality key
+   * ("native", "512x512", …); a cell's key is `${key}@${column}`.
+   */
+  function getQualityMatrix(channels = null) {
+    const m = typeof BrickLoader !== 'undefined' ? BrickLoader.getManifest?.() : null;
+    if (!m || m.schema !== 'iribhm-bricks-v5' || !Array.isArray(m.levels)) return null;
+    const keys = m.levels.map(L => (L.target === 'native' ? 'native' : `${L.target}x${L.target}`));
+    const fp = getQualityFootprints(keys) || { budgetBytes: null, qualities: {} };
+    const want = Array.isArray(channels) ? channels : null;
+    const bytes = {};
+    for (const L of m.levels) {
+      const row = (m.bytes && m.bytes[String(L.level)]) || {};
+      bytes[L.level] = {};
+      for (const col of m.columns || []) {
+        const per = Array.isArray(row[col.id]) ? row[col.id] : [];
+        bytes[L.level][col.id] = per.reduce((sum, b, c) => sum + (want && !want.includes(c) ? 0 : (Number(b) || 0)), 0);
+      }
+    }
+    const e = _activeVolumeEntry;
+    return {
+      levels: m.levels.map((L, i) => ({
+        level: L.level, target: L.target, key: keys[i],
+        dims: { x: L.dimensions.x, y: L.dimensions.y, z: L.dimensions.z },
+        voxelSize: L.voxelSize ? { ...L.voxelSize } : null,
+        gpu: fp.qualities ? fp.qualities[keys[i]] || null : null
+      })),
+      columns: (m.columns || []).map(c => ({ id: c.id, codec: c.codec, maxError: c.maxError ?? null, quality: c.quality ?? null })),
+      bytes,
+      budgetBytes: fp.budgetBytes ?? null,
+      active: e && e.column ? { level: e.lod, column: e.column } : null
+    };
+  }
+
   /** The level on screen: { level, quality, dims, treeVersion, apron, components, mode }, or null. */
   function getActiveLevel() {
     const e = _activeVolumeEntry;
@@ -7217,6 +7259,7 @@ const VolumeViewer = (() => {
       components: e.svrManager ? e.svrManager.components : (e.stride === 1 ? 1 : RGBA_TEXTURE_BYTES_PER_VOXEL),
       mode: e.svrManager ? 'svr' : 'monolithic',
       compressed: Boolean(e.gpuCompressed),
+      column: e.column || null,
       detailLevel: _roi && _roi.entry === e ? _roi.level : null
     };
   }
@@ -7653,7 +7696,8 @@ const VolumeViewer = (() => {
     status({ loading: toLoad, loaded: 0, reason: 'loading' });
     const stopped = () => roi !== _roi || roi.stopped || _contextLost;
     const tasks = [];
-    for (const b of batchList) for (let c = 0; c < roi.channels; c++) tasks.push({ bx: b.bx, by: b.by, bz: b.bz, channel: c, lod: roi.level });
+    const roiColumn = roi.entry && roi.entry.column ? { column: roi.entry.column } : {};
+    for (const b of batchList) for (let c = 0; c < roi.channels; c++) tasks.push({ bx: b.bx, by: b.by, bz: b.bz, channel: c, lod: roi.level, ...roiColumn });
     const bs = VOLUME_BRICK_SIZE;
     const stride = roi.mgr.slotStride;
     let lastStatusAt = 0;
@@ -7897,7 +7941,25 @@ const VolumeViewer = (() => {
 
   function _lodForQuality(quality, levelCount, levels = null, v3 = false) {
     const maxIdx = Math.max(0, levelCount - 1);
+    quality = _qualityBase(quality);
     if (!quality || quality === 'native') return 0;
+    // v5 (SPEC §14.1): every level names its target; "512" is the level of target 512.
+    // A target the tree does not have takes the largest target below it (native when
+    // the request is at least the native size, the coarsest when below every target).
+    if (Array.isArray(levels) && levels.length && levels[0] && levels[0].target === 'native') {
+      const m = /^(\d+)x\d+$/.exec(quality);
+      if (m) {
+        const want = parseInt(m[1], 10);
+        const d0 = levels[0].dimensions || {};
+        if (want >= Math.max(Number(d0.x) || 0, Number(d0.y) || 0)) return 0;
+        let best = -1;
+        for (let i = 1; i < levels.length; i++) {
+          const t = Number(levels[i].target);
+          if (t <= want && (best < 0 || t > Number(levels[best].target))) best = i;
+        }
+        return Math.min(maxIdx, best < 0 ? levels.length - 1 : best);
+      }
+    }
 
     const lodMatch = quality.match(/^lod(\d+)$/);
     if (lodMatch) {
@@ -7952,7 +8014,15 @@ const VolumeViewer = (() => {
   /** Canonical quality key: a resolution label, 'native', or 'lodN' (one level of the
    *  pyramid, e.g. a coarse preview). Anything else is 512x512, with a warning. */
   function _normalizeQualityKey(value) {
-    const key = String(value || '').trim().toLowerCase();
+    const raw = String(value || '').trim().toLowerCase();
+    // A v5 matrix cell (SPEC §14.6): "<resolution>@<column>", e.g. "512x512@b2".
+    const at = raw.indexOf('@');
+    if (at > 0) {
+      const col = raw.slice(at + 1);
+      const base = _normalizeQualityKey(raw.slice(0, at));
+      return /^[a-z0-9]{1,8}$/.test(col) ? `${base}@${col}` : base;
+    }
+    const key = raw;
     if (key === 'low' || key === 'preview' || key === '256x256') return '256x256';
     if (key === 'balanced' || key === 'medium' || key === '512x512') return '512x512';
     if (key === 'high' || key === '1024x1024') return '1024x1024';
@@ -7962,6 +8032,34 @@ const VolumeViewer = (() => {
     if (/^lod\d+$/.test(key)) return key;
     if (key) console.warn(`[VolumeViewer] unknown quality "${value}" — using 512x512`);
     return '512x512'; // default target
+  }
+
+  /** The resolution part of a quality key ("512x512@b2" → "512x512"). */
+  function _qualityBase(key) {
+    const s = String(key || '');
+    const at = s.indexOf('@');
+    return at > 0 ? s.slice(0, at) : s;
+  }
+
+  /** The column part of a quality key, or null. */
+  function _qualityColumnOf(key) {
+    const s = String(key || '');
+    const at = s.indexOf('@');
+    return at > 0 ? s.slice(at + 1) : null;
+  }
+
+  function _isPresetQuality(key) {
+    const b = _qualityBase(key);
+    return b === '256x256' || b === '512x512' || b === '1024x1024' || b === 'native';
+  }
+
+  /** The column a quality key shows on a v5 tree: its own when the tree has it, else
+   *  `b2` (the visually lossless default, SPEC §14.6), else `ll`. */
+  function _qualityColumnFor(key, format) {
+    const ids = Array.isArray(format?.columns) ? format.columns.map(c => c.id) : [];
+    const own = _qualityColumnOf(key);
+    if (own && ids.includes(own)) return own;
+    return ids.includes('b2') ? 'b2' : 'll';
   }
 
   function _brickConcurrencyForQuality(quality) {
@@ -8153,6 +8251,36 @@ const VolumeViewer = (() => {
   }
 
   function _selectBrickManifestUncached(manifest, timepoint) {
+    if (manifest && manifest.schema === 'iribhm-bricks-v5' && Array.isArray(manifest.timepoints)) {
+      // v5 (SPEC §14.4): each frame row carries its column and cut indexes, urls inside
+      // its own tree; the frame is mounted at bricks/<path> with them made relative.
+      const tp = Number.isFinite(Number(timepoint)) ? Number(timepoint) : 0;
+      const name = `t${String(tp).padStart(3, '0')}`;
+      const row = manifest.timepoints.find(r => r && r.path === name) || manifest.timepoints[tp] || null;
+      const sub = row ? String(row.path || name).replace(/^\/+|\/+$/g, '') : '';
+      const cols = row && row.index && row.index.columns;
+      if (!sub || !cols || typeof cols !== 'object') return { available: false, reason: `No bricks for requested timepoint ${tp}` };
+      const strip = (ref) => {
+        const url = String(ref && ref.url || '').replace(/^\/+/, '');
+        return url.startsWith(`${sub}/`) ? { ...ref, url: url.slice(sub.length + 1) } : null;
+      };
+      const columns = {};
+      for (const id of Object.keys(cols)) {
+        const r = strip(cols[id]);
+        if (!r) return { available: false, reason: `Timepoint ${tp}: index of column ${id} is not inside its tree ${sub}/` };
+        columns[id] = r;
+      }
+      const cuts = Array.isArray(row.index.cuts) ? row.index.cuts.map(strip) : [];
+      const own = manifest.timepointHistograms && typeof manifest.timepointHistograms === 'object'
+        ? manifest.timepointHistograms[sub] : null;
+      const histograms = Array.isArray(own) ? own : (Array.isArray(manifest.histograms) ? manifest.histograms : []);
+      return {
+        available: true,
+        manifest: { ...manifest, timepoints: null, histograms, bytes: row.bytes || manifest.bytes, index: { columns, cuts } },
+        subPath: sub,
+        histograms
+      };
+    }
     if (_isV3Manifest(manifest) && Array.isArray(manifest.timepoints)) {
       const tp = Number.isFinite(Number(timepoint)) ? Number(timepoint) : 0;
       const name = `t${String(tp).padStart(3, '0')}`;

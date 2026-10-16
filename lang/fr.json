@@ -382,7 +382,25 @@
     "stabilizationRaw": "Acquisition brute : chaque image telle que le microscope l'a enregistrée.",
     "gpuCompressionUnsupported": "Indisponible sur ce GPU : affiché depuis les voxels exacts.",
     "previousBricks": "version précédente (avant la mise à jour des données)",
-    "previousBricksMissing": "Ce dataset n'a conservé aucune version précédente : affichage de la version actuelle."
+    "previousBricksMissing": "Ce dataset n'a conservé aucune version précédente : affichage de la version actuelle.",
+    "qualityMatrix": {
+      "caption": "Résolution × compression",
+      "resolution": "Niveau",
+      "colLl": "Sans perte",
+      "colB2": "±2",
+      "colB4": "±4",
+      "colQ80": "Légère",
+      "colQ50": "Très légère",
+      "hintLl": "Sans perte : chaque voxel exact.",
+      "hintB2": "Visuellement sans perte : aucun voxel ne bouge de plus de 2 niveaux de gris.",
+      "hintB4": "Quasi sans perte : aucun voxel ne bouge de plus de 4 niveaux de gris.",
+      "hintQ80": "WebP 80 : plus léger, petits changements visuels.",
+      "hintQ50": "WebP 50 : le plus léger, lissage visible.",
+      "over": "Plus que ce GPU ne peut contenir : le viewer affichera un niveau plus grossier.",
+      "tight": "Tient, proche du budget de ce GPU.",
+      "fits": "Tient largement sur ce GPU.",
+      "legend": "Taille à télécharger par case · vert tient sur le GPU, orange est juste, rouge est trop grand."
+    }
   },
   "compare": {
     "title": "Mode comparaison",
@@ -675,7 +693,15 @@
     "errContext": "Le contexte GPU a été perdu pendant l'export. Rechargez la page et réessayez.",
     "errUnstable": "Le volume n'a cessé de changer pendant l'export. Réessayez une fois son chargement terminé.",
     "errEncode": "Le navigateur n'a pas pu encoder un PNG aussi grand. Choisissez une taille plus petite.",
-    "errGeneric": "Échec de l'export : {message}"
+    "errGeneric": "Échec de l'export : {message}",
+    "quality": "Qualité",
+    "qualityCurrent": "Actuelle",
+    "qualityLossless": "Sans perte",
+    "losslessUnknown": "Sans perte : le niveau le plus fin que ce GPU peut contenir.",
+    "losslessNative": "Sans perte à la résolution native ({x} × {y} × {z}).",
+    "losslessLevel": "Sans perte à {x} × {y} × {z} : le niveau natif dépasse ce que ce GPU peut contenir.",
+    "loadingLossless": "Chargement du niveau sans perte…",
+    "currentIs": "Comme affiché : {current}."
   },
   "studio": {
     "importOtherFigure": "Ce fichier Studio a été enregistré pour une autre figure : ses annotations ont été importées, mais ses réglages de canaux n'ont été appliqués que là où la figure correspond.",
@@ -733,7 +759,14 @@
     "uncalibrated": "non calibrée",
     "bigPassMessagePlanes": "Cette figure projette {n} coupes : son image native lit {planes} plans stockés, environ {mb} Mo ({tiles} tuiles d'image).",
     "bigPassMessageMips": "Cette figure projette {n} coupes : son image native lit {layers} projections de couches stockées et {planes} plans stockés, environ {mb} Mo ({tiles} tuiles d'image).",
-    "noLayers": "Aucun calque pour l'instant."
+    "noLayers": "Aucun calque pour l'instant.",
+    "exportQualityTitle": "Qualité de l'export",
+    "exportQualityNativeMsg": "Cette image est déjà l'image native sans perte.",
+    "exportQualityPreviewMsg": "Cette image est l'aperçu tiré du volume affiché. L'image native sans perte est lue dans les voxels stockés ; vos calques gardent leur place.",
+    "exportNative": "Native sans perte",
+    "exportCurrent": "Cette image",
+    "loadingNativeExport": "Chargement de l'image native sans perte…",
+    "nativeExportFailed": "L'image native n'a pas pu être chargée ; rien n'a été exporté."
   },
   "admin": {
     "loginTitle": "{brand} Admin",
@@ -2245,5 +2278,14 @@
     "prevDropped": "Version précédente de {name} supprimée.",
     "prevDropFailed": "Impossible de supprimer la version précédente.",
     "unitGB": "Go"
+  },
+  "exportQuality": {
+    "title": "Qualité de l'export",
+    "message": "Affiché actuellement : {current}. {lossless}",
+    "lossless": "Sans perte",
+    "current": "Qualité actuelle"
+  },
+  "common": {
+    "cancel": "Annuler"
   }
 }

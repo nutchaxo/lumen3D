@@ -212,7 +212,7 @@ function makeEnv({ dims = { x: 70, y: 52, z: 41, brickSize: BS, channels: 4 }, l
       '_needsCoverageMask', '_withCoverageMask', '_nativeSliceChannels', '_nativePassPlan', '_atlasNativeBackend', '_planeNativeBackend',
       '_renderNativeSliceForStudio', '_studioGeometry', '_studioCalibrated', '_planeWorkerInstance', '_planeJob', '_studioCoverageMask',
       '_reducePlaneTile', '_nativeLabel', '_scaleCropRect', '_tf', '_nativePassEstimate', '_confirmLargeNativePass',
-      '_upgradeStudioSliceToNative', '_renderStudioPreviewSlice', '_planesBaseOnScreen', '_planesTreeOnScreen', '_planesServePass',
+      '_upgradeStudioSliceToNative', '_renderStudioPreviewSlice', '_planesBaseOnScreen', '_planesTreeOnScreen', '_planesServePass', '_cutTreeOnScreen', '_cutDepthOf',
       '_planesPassEstimate', '_nativeBrickFrame', '_nativeLoaderRegion', '_nativeInteriorRegion', '_mipsTreeOnScreen', '_mipsSlabOf', '_mipsSlabEstimate'].map(lift).join('\n')}
     return {
       upgrade: _upgradeStudioSliceToNative,

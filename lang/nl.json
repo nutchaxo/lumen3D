@@ -382,7 +382,25 @@
     "stabilizationRaw": "Ruwe opname: elk beeld zoals de microscoop het vastlegde.",
     "gpuCompressionUnsupported": "Niet beschikbaar op deze GPU: weergegeven uit exacte voxels.",
     "previousBricks": "vorige versie (vóór de data-update)",
-    "previousBricksMissing": "Deze dataset heeft geen vorige versie bewaard: de huidige wordt getoond."
+    "previousBricksMissing": "Deze dataset heeft geen vorige versie bewaard: de huidige wordt getoond.",
+    "qualityMatrix": {
+      "caption": "Resolutie × compressie",
+      "resolution": "Niveau",
+      "colLl": "Verliesvrij",
+      "colB2": "±2",
+      "colB4": "±4",
+      "colQ80": "Licht",
+      "colQ50": "Zeer licht",
+      "hintLl": "Verliesvrij: elke voxel exact.",
+      "hintB2": "Visueel verliesvrij: geen voxel verschuift meer dan 2 grijswaarden.",
+      "hintB4": "Bijna verliesvrij: geen voxel verschuift meer dan 4 grijswaarden.",
+      "hintQ80": "WebP 80: lichter, kleine visuele verschillen.",
+      "hintQ50": "WebP 50: het lichtst, zichtbare afvlakking.",
+      "over": "Meer dan deze GPU aankan: de viewer toont een grover niveau.",
+      "tight": "Past, dicht bij het budget van deze GPU.",
+      "fits": "Past ruim op deze GPU.",
+      "legend": "Downloadgrootte per cel · groen past op de GPU, oranje is krap, rood is te groot."
+    }
   },
   "compare": {
     "title": "Vergelijkingsmodus",
@@ -675,7 +693,15 @@
     "errContext": "De GPU-context ging verloren tijdens de export. Laad de pagina opnieuw en probeer het nog eens.",
     "errUnstable": "Het volume bleef veranderen tijdens de export. Probeer het opnieuw zodra het volledig is geladen.",
     "errEncode": "De browser kon zo'n grote PNG niet coderen. Kies een kleiner formaat.",
-    "errGeneric": "Export mislukt: {message}"
+    "errGeneric": "Export mislukt: {message}",
+    "quality": "Kwaliteit",
+    "qualityCurrent": "Huidig",
+    "qualityLossless": "Verliesvrij",
+    "losslessUnknown": "Verliesvrij: het fijnste niveau dat deze GPU aankan.",
+    "losslessNative": "Verliesvrij op de native resolutie ({x} × {y} × {z}).",
+    "losslessLevel": "Verliesvrij op {x} × {y} × {z}: het native niveau is meer dan deze GPU aankan.",
+    "loadingLossless": "Verliesvrij niveau laden…",
+    "currentIs": "Zoals getoond: {current}."
   },
   "studio": {
     "importOtherFigure": "Dit Studio-bestand is opgeslagen voor een andere figuur: de annotaties zijn geïmporteerd, maar de kanaalinstellingen zijn alleen toegepast waar de figuur overeenkomt.",
@@ -733,7 +759,14 @@
     "uncalibrated": "niet gekalibreerd",
     "bigPassMessagePlanes": "Deze figuur projecteert {n} coupes: het native beeld leest {planes} opgeslagen vlakken, ongeveer {mb} MB ({tiles} beeldtegels).",
     "bigPassMessageMips": "Deze figuur projecteert {n} coupes: het native beeld leest {layers} opgeslagen laagprojecties en {planes} opgeslagen vlakken, ongeveer {mb} MB ({tiles} beeldtegels).",
-    "noLayers": "Nog geen lagen."
+    "noLayers": "Nog geen lagen.",
+    "exportQualityTitle": "Exportkwaliteit",
+    "exportQualityNativeMsg": "Dit beeld is al het native verliesvrije beeld.",
+    "exportQualityPreviewMsg": "Dit beeld is het voorbeeld uit het getoonde volume. Het native verliesvrije beeld wordt uit de opgeslagen voxels gelezen; uw lagen blijven op hun plaats.",
+    "exportNative": "Native verliesvrij",
+    "exportCurrent": "Dit beeld",
+    "loadingNativeExport": "Native verliesvrij beeld laden…",
+    "nativeExportFailed": "Het native beeld kon niet worden geladen; er is niets geëxporteerd."
   },
   "admin": {
     "loginTitle": "{brand} Beheer",
@@ -2245,5 +2278,14 @@
     "prevDropped": "Vorige versie van {name} verwijderd.",
     "prevDropFailed": "De vorige versie kon niet worden verwijderd.",
     "unitGB": "GB"
+  },
+  "exportQuality": {
+    "title": "Exportkwaliteit",
+    "message": "Nu getoond: {current}. {lossless}",
+    "lossless": "Verliesvrij",
+    "current": "Huidige kwaliteit"
+  },
+  "common": {
+    "cancel": "Annuleren"
   }
 }

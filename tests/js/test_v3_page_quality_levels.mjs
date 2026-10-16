@@ -37,7 +37,7 @@ assert.ok(!/V3_PRESET_MAX_XY/.test(pageSrc), 'the page keeps no quality rule of 
 function renderer(mounted) {
   const body = `
     const BrickLoader = { getManifest: () => env.mounted };
-    ${['getQualityLevels', '_isV3Manifest', '_lodForQuality', '_normalizeQualityKey'].map(n => lift(vvSrc, n)).join('\n')}
+    ${['getQualityLevels', '_isV3Manifest', '_lodForQuality', '_normalizeQualityKey', '_qualityBase'].map(n => lift(vvSrc, n)).join('\n')}
     return { getQualityLevels, lodFor: (q, m) => _lodForQuality(_normalizeQualityKey(q), m.levels.length, m.levels, _isV3Manifest(m)) };
   `;
   return new Function('env', body)({ mounted });
@@ -62,7 +62,9 @@ function page({ manifest, quality = '512x512', withRenderer = true }) {
     function _t(k, f) { return f; }
     ${liftConst(pageSrc, 'QUALITY_KEYS_V3')}
     ${liftConst(pageSrc, 'QUALITY_KEYS_V2')}
-    ${['_isV3BrickManifest', '_rendererQualityLevels', '_qualityLevels', '_updateQualityOptionLabels', '_qualityValueForLod', '_lodForQuality', '_showQualityInSelect',
+    const QUALITY_COLUMN_LABELS = {};
+    function _renderQualityMatrix() {}
+    ${['_isV5BrickManifest', '_qualityBaseOf', '_currentColumn', '_withColumn', '_v5LevelKey', '_qualityColumnLabel', '_isV3BrickManifest', '_rendererQualityLevels', '_qualityLevels', '_updateQualityOptionLabels', '_qualityValueForLod', '_lodForQuality', '_showQualityInSelect',
       '_normalizeQualityParam', '_qualityDimsLabel', '_qualityDims'].map(n => lift(pageSrc, n)).join('\n')}
     return { update: _updateQualityOptionLabels, levels: _qualityLevels, lodFor: _lodForQuality, valueFor: _qualityValueForLod, show: _showQualityInSelect };
   `;

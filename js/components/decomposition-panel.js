@@ -141,7 +141,7 @@ const DecompositionPanel = (() => {
     }
 
     if (btnExport) {
-      btnExport.addEventListener('click', _exportImage);
+      btnExport.addEventListener('click', _exportImageWithChoice);
     }
 
     if (typeof VolumeViewer !== 'undefined') {
@@ -748,6 +748,15 @@ const DecompositionPanel = (() => {
       if (itemSize < 64) break;
     }
     return null;
+  }
+
+  /** The current-or-lossless choice of every export (SPEC §14.7), then the export. */
+  async function _exportImageWithChoice() {
+    const app = typeof window !== 'undefined' ? window.ViewerApp : null;
+    const choice = app && app.askExportQuality ? await app.askExportQuality() : 'current';
+    if (!choice) return;
+    if (choice === 'lossless' && app.withLosslessQuality) await app.withLosslessQuality(() => _exportImage());
+    else _exportImage();
   }
 
   function _exportImage() {

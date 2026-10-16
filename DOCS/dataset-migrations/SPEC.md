@@ -623,6 +623,12 @@ Three re-cut copies per tree, for every level k:
   pack, offset and length, so a reader fetches the index once, then the record tables it needs,
   then the bricks (two range rounds). An oblique native cut fetches ≈ 4–6 voxels per pixel
   instead of 40–65.
+* Reader (web 1.64.0): `js/core/cut-store.js` (`CutStore`). An XZ / YZ row = three range reads
+  (the 20-byte header, the row's entries, its contiguous tiles); cut bricks = the record tables
+  of every needed super-block, then the bricks, runs of a pack merged across 32 KiB gaps, both
+  rounds as multi-range requests (≤ 64 ranges each, `multipart/byteranges` parsed by
+  BrickLoader's reader; a host that answers 200 is read whole once per pack). Cut bricks are
+  decoded on the main thread (createImageBitmap); moving them to workers is a later step.
 * Routing of the Studio native pass (`_renderNativeSliceForStudio`): XY → planes, XZ / YZ → xz /
   yz, anything else (or a warped timelapse) → cuts; bricks only as the fallback of a store that is
   missing or fails. The pass reads the **coarsest level whose voxel is not larger than the
@@ -646,6 +652,16 @@ Three re-cut copies per tree, for every level k:
   view in `ll`.
 * Compare: `CompareQuality` plans the rows within the host's column (one shared budget, §3.4).
 
+* **Implementation (web 1.64.0).** A cell is the quality key `<resolution>@<column>`
+  (`512x512@b2`, `native@ll`); a bare resolution on a v5 tree takes the page's current column
+  (`b2` by default). `VolumeViewer.getQualityMatrix()` gives the table (levels with their GPU
+  footprint, columns, bytes per level and column over the channels, the budget); the page draws
+  it in `#quality-matrix` and keeps the select (every cell) hidden for the workspace, the URL
+  and Compare, whose `SET_QUALITY` / `QUALITY_STATUS` / `PANEL_READY` keep speaking the
+  resolution ladder. The time estimate uses the loader's `fetchedBytes` rate measured on the
+  page. *Refine at rest* is not implemented yet: region-of-interest detail streams the chosen
+  column.
+
 ### 14.7 Working copies and exports
 * What a user works on (Studio slices, Decompose panels, 3D annotations) is the displayed cell:
   light, decoded once, recoloured on the GPU.
@@ -664,6 +680,14 @@ Three re-cut copies per tree, for every level k:
 * An exported file records its source cell (`level`, `column`, `maxError`) in its JSON sidecar
   and PNG `tEXt`.
 
+* **Implementation (web 1.64.0).** The 3D view export's *Lossless* choice loads the `ll`
+  column at the native level when its atlas fits the GPU budget, else at the finest level that
+  does (the dialog says which), renders, and restores the previous quality; tiled detail
+  streaming of `ll` per tile is not implemented. The Studio's *Native lossless* export awaits
+  (or re-runs) the native pass, which always reads level 0 losslessly (planes, xz / yz, cut
+  bricks, else `ll` bricks); layers are rescaled with the picture (`_rescaleDocumentGeometry`).
+  Decompose asks the same choice and exports with the lossless level on screen.
+
 ### 14.8 Lossless access for measuring tools (`DataAccess`, `ctx.data`)
 `js/core/data-access.js` (`DataAccess`, exposed to plugins as `ctx.data`) is the one door to the
 native voxels. Frames: screen pixel → display box [0, 1]³ → physical µm (level-0 voxel size,
@@ -680,6 +704,11 @@ origin at the corner of voxel (0, 0, 0)) → level-k voxel (`µm / v_k`) → fil
 * Rule: a measuring tool (intensity profile, histogram of a region, the tracking measurements,
   any plugin that reports a number) reads through `ctx.data`, never the GPU atlas, whatever the
   displayed column.
+
+* **Implementation (web 1.64.0).** `readRegion` reads the level's `ll` bricks through
+  `BrickLoader` (byte ranges, decode workers), on format 2–5 trees; `locate` returns the brick,
+  its pack path (relative to the tree, without the `?v=` stamp), offset and length, and the
+  plane file of format 2. `omeZarr` is not returned until §14.9 exists.
 
 ### 14.9 OME-Zarr v0.5 export (Download Center)
 A format-5 dataset can carry `download/<folder>.ome.zarr/` — Zarr v3 / OME-NGFF 0.5: `multiscales`

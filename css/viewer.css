@@ -922,6 +922,76 @@ body.viewer-iframe .scientific-panel {
   color: var(--text-muted);
 }
 
+/* Quality matrix of a v5 dataset (SPEC §14.6): rows = levels, columns = compressions. */
+.quality-matrix {
+  margin-top: var(--space-1);
+  overflow-x: auto;
+}
+
+.quality-matrix-table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 2px;
+  font-size: var(--text-xs);
+  color: var(--text-primary);
+}
+
+.quality-matrix-table caption {
+  text-align: left;
+  color: var(--text-muted);
+  padding-bottom: 2px;
+}
+
+.quality-matrix-table thead th {
+  font-weight: var(--weight-medium);
+  color: var(--text-secondary);
+  padding: 2px;
+  cursor: help;
+  white-space: nowrap;
+}
+
+.quality-matrix-table tbody th {
+  text-align: left;
+  padding: 2px 4px 2px 0;
+  white-space: nowrap;
+  vertical-align: middle;
+}
+
+.qm-level { display: block; font-weight: var(--weight-semibold); }
+.qm-dims, .qm-gpu { display: block; color: var(--text-muted); font-weight: var(--weight-normal); }
+.qm-gpu { border-left: 3px solid transparent; padding-left: 3px; }
+.qm-gpu.qm-ok { border-left-color: var(--color-success); }
+.qm-gpu.qm-tight { border-left-color: var(--color-warning); }
+.qm-gpu.qm-over { border-left-color: var(--color-error); }
+
+.qm-cell {
+  width: 100%;
+  min-width: 44px;
+  padding: 3px 2px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-surface);
+  color: var(--text-primary);
+  font: inherit;
+  line-height: 1.2;
+  cursor: pointer;
+}
+
+.qm-cell.qm-ok { box-shadow: inset 0 -3px 0 var(--color-success); }
+.qm-cell.qm-tight { box-shadow: inset 0 -3px 0 var(--color-warning); }
+.qm-cell.qm-over { box-shadow: inset 0 -3px 0 var(--color-error); background: var(--color-error-subtle); }
+.qm-cell:hover { background: var(--bg-hover); }
+.qm-cell:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 1px; }
+.qm-cell.qm-active { border-color: var(--color-primary); background: var(--color-primary-subtle); font-weight: var(--weight-semibold); }
+.qm-size, .qm-eta { display: block; }
+.qm-eta { color: var(--text-muted); font-size: 0.625rem; }
+
+.qm-legend {
+  margin-top: 2px;
+  font-size: 0.625rem;
+  color: var(--text-muted);
+}
+
 .detail-mode-row {
   display: flex;
   align-items: center;

@@ -382,7 +382,25 @@
     "stabilizationRaw": "Adquisición sin procesar: cada imagen tal como la registró el microscopio.",
     "gpuCompressionUnsupported": "No disponible en esta GPU: mostrado desde vóxeles exactos.",
     "previousBricks": "versión anterior (antes de la actualización de datos)",
-    "previousBricksMissing": "Este dataset no conservó ninguna versión anterior: se muestra la actual."
+    "previousBricksMissing": "Este dataset no conservó ninguna versión anterior: se muestra la actual.",
+    "qualityMatrix": {
+      "caption": "Resolución × compresión",
+      "resolution": "Nivel",
+      "colLl": "Sin pérdidas",
+      "colB2": "±2",
+      "colB4": "±4",
+      "colQ80": "Ligera",
+      "colQ50": "Muy ligera",
+      "hintLl": "Sin pérdidas: cada vóxel exacto.",
+      "hintB2": "Visualmente sin pérdidas: ningún vóxel cambia más de 2 niveles de gris.",
+      "hintB4": "Casi sin pérdidas: ningún vóxel cambia más de 4 niveles de gris.",
+      "hintQ80": "WebP 80: más ligero, pequeños cambios visuales.",
+      "hintQ50": "WebP 50: el más ligero, suavizado visible.",
+      "over": "Más de lo que cabe en esta GPU: el visor mostrará un nivel más grueso.",
+      "tight": "Cabe, cerca del presupuesto de esta GPU.",
+      "fits": "Cabe holgadamente en esta GPU.",
+      "legend": "Tamaño de descarga por celda · verde cabe en la GPU, ámbar va justo, rojo es demasiado grande."
+    }
   },
   "compare": {
     "title": "Modo de comparación",
@@ -675,7 +693,15 @@
     "errContext": "Se perdió el contexto de la GPU durante la exportación. Recargue la página e inténtelo de nuevo.",
     "errUnstable": "El volumen siguió cambiando durante la exportación. Inténtelo de nuevo cuando haya terminado de cargarse.",
     "errEncode": "El navegador no pudo codificar un PNG tan grande. Elija un tamaño menor.",
-    "errGeneric": "Error en la exportación: {message}"
+    "errGeneric": "Error en la exportación: {message}",
+    "quality": "Calidad",
+    "qualityCurrent": "Actual",
+    "qualityLossless": "Sin pérdidas",
+    "losslessUnknown": "Sin pérdidas: el nivel más fino que cabe en esta GPU.",
+    "losslessNative": "Sin pérdidas a la resolución nativa ({x} × {y} × {z}).",
+    "losslessLevel": "Sin pérdidas a {x} × {y} × {z}: el nivel nativo no cabe en esta GPU.",
+    "loadingLossless": "Cargando el nivel sin pérdidas…",
+    "currentIs": "Como se muestra: {current}."
   },
   "studio": {
     "importOtherFigure": "Este archivo de Studio se guardó para otra figura: sus anotaciones se importaron, pero sus ajustes de canales solo se aplicaron donde la figura coincide.",
@@ -733,7 +759,14 @@
     "uncalibrated": "sin calibrar",
     "bigPassMessagePlanes": "Esta figura proyecta {n} cortes: su imagen nativa lee {planes} planos almacenados, unos {mb} MB ({tiles} teselas de imagen).",
     "bigPassMessageMips": "Esta figura proyecta {n} cortes: su imagen nativa lee {layers} proyecciones de capas almacenadas y {planes} planos almacenados, unos {mb} MB ({tiles} teselas de imagen).",
-    "noLayers": "Todavía no hay capas."
+    "noLayers": "Todavía no hay capas.",
+    "exportQualityTitle": "Calidad de la exportación",
+    "exportQualityNativeMsg": "Esta imagen ya es la nativa sin pérdidas.",
+    "exportQualityPreviewMsg": "Esta imagen es la vista previa sacada del volumen en pantalla. La imagen nativa sin pérdidas se lee de los vóxeles guardados; sus capas conservan su lugar.",
+    "exportNative": "Nativa sin pérdidas",
+    "exportCurrent": "Esta imagen",
+    "loadingNativeExport": "Cargando la imagen nativa sin pérdidas…",
+    "nativeExportFailed": "No se pudo cargar la imagen nativa; no se exportó nada."
   },
   "admin": {
     "loginTitle": "{brand} Admin",
@@ -2245,5 +2278,14 @@
     "prevDropped": "Versión anterior de {name} eliminada.",
     "prevDropFailed": "No se pudo eliminar la versión anterior.",
     "unitGB": "GB"
+  },
+  "exportQuality": {
+    "title": "Calidad de la exportación",
+    "message": "Mostrado ahora: {current}. {lossless}",
+    "lossless": "Sin pérdidas",
+    "current": "Calidad actual"
+  },
+  "common": {
+    "cancel": "Cancelar"
   }
 }

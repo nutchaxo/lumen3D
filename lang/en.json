@@ -382,7 +382,25 @@
     "stabilizationRaw": "Raw acquisition: each frame as the microscope recorded it.",
     "gpuCompressionUnsupported": "Not available on this GPU: shown from exact voxels.",
     "previousBricks": "previous version (before the data update)",
-    "previousBricksMissing": "This dataset kept no previous version: showing the current one."
+    "previousBricksMissing": "This dataset kept no previous version: showing the current one.",
+    "qualityMatrix": {
+      "caption": "Resolution × compression",
+      "resolution": "Level",
+      "colLl": "Lossless",
+      "colB2": "±2",
+      "colB4": "±4",
+      "colQ80": "Light",
+      "colQ50": "Very light",
+      "hintLl": "Lossless: every voxel exact.",
+      "hintB2": "Visually lossless: no voxel moves by more than 2 grey levels.",
+      "hintB4": "Near lossless: no voxel moves by more than 4 grey levels.",
+      "hintQ80": "WebP 80: lighter, small visual changes.",
+      "hintQ50": "WebP 50: lightest, visible smoothing.",
+      "over": "More than this GPU holds: the viewer will show a coarser level.",
+      "tight": "Fits, close to this GPU's budget.",
+      "fits": "Fits comfortably on this GPU.",
+      "legend": "Download size per cell · green fits the GPU, amber is close, red is too large."
+    }
   },
   "compare": {
     "title": "Comparison Mode",
@@ -675,7 +693,15 @@
     "errContext": "The GPU context was lost during the export. Reload the page and try again.",
     "errUnstable": "The volume kept changing during the export. Try again once it has finished loading.",
     "errEncode": "The browser could not encode a PNG this large. Choose a smaller size.",
-    "errGeneric": "Export failed: {message}"
+    "errGeneric": "Export failed: {message}",
+    "quality": "Quality",
+    "qualityCurrent": "Current",
+    "qualityLossless": "Lossless",
+    "losslessUnknown": "Lossless: the finest level this GPU holds.",
+    "losslessNative": "Lossless at the native resolution ({x} × {y} × {z}).",
+    "losslessLevel": "Lossless at {x} × {y} × {z}: the native level is more than this GPU holds.",
+    "loadingLossless": "Loading the lossless level…",
+    "currentIs": "As shown: {current}."
   },
   "studio": {
     "importOtherFigure": "This Studio file was saved for another figure: its annotations were imported, but its channel settings were applied only where the figure matches.",
@@ -733,7 +759,14 @@
     "uncalibrated": "uncalibrated",
     "bigPassMessagePlanes": "This figure projects {n} slices: its native picture reads {planes} stored planes, about {mb} MB ({tiles} image tiles).",
     "bigPassMessageMips": "This figure projects {n} slices: its native picture reads {layers} stored layer projections and {planes} stored planes, about {mb} MB ({tiles} image tiles).",
-    "noLayers": "No layers yet."
+    "noLayers": "No layers yet.",
+    "exportQualityTitle": "Export quality",
+    "exportQualityNativeMsg": "This picture is already the native lossless one.",
+    "exportQualityPreviewMsg": "This picture is the preview drawn from the volume on screen. The native lossless picture is read from the stored voxels; your layers keep their place.",
+    "exportNative": "Native lossless",
+    "exportCurrent": "This picture",
+    "loadingNativeExport": "Loading the native lossless picture…",
+    "nativeExportFailed": "The native picture could not be loaded; nothing was exported."
   },
   "admin": {
     "loginTitle": "{brand} Admin",
@@ -2245,5 +2278,14 @@
     "prevDropped": "Previous version of {name} deleted.",
     "prevDropFailed": "Could not delete the previous version.",
     "unitGB": "GB"
+  },
+  "exportQuality": {
+    "title": "Export quality",
+    "message": "Shown now: {current}. {lossless}",
+    "lossless": "Lossless",
+    "current": "Current quality"
+  },
+  "common": {
+    "cancel": "Cancel"
   }
 }

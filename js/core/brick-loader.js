@@ -101,6 +101,21 @@ const BrickLoader = (() => {
   const V3_MAX_BRICK_BYTES = 16 * MiB;              // a pack is ≤ 16 MiB, so is a brick
   const V3_INDEX_CACHE = 16;
 
+  // ── Brick tree v5 (DOCS/dataset-migrations/SPEC.md §14) ──────────────────────
+  // The v3 brick geometry, one tree per compression COLUMN: `index/{col}.bin` and packs
+  // `l{k}/{col}/c{c}/pNNNNN.bin`. `ll` is the v3 image; `webp-lossless-lut` columns store
+  // bin indices mapped through the manifest's LUT; `webp-lossy-dz` columns store a WebP
+  // lossy mosaic on an 80-px slot pitch (each 66² slice at (7, 7) of its slot) followed by
+  // one trailer byte: 0..12 = the dead zone (decoded values ≤ τ are 0), 0xFE = the payload
+  // is the brick's `b4` image instead, 0xFF = its `ll` image.
+  const V5_SCHEMA = 'iribhm-bricks-v5';
+  const V5_CODECS = new Set(['webp-lossless', 'webp-lossless-lut', 'webp-lossy-dz']);
+  const V5_PITCH = 80;
+  const V5_ORIGIN = 7;
+  const V5_TAG_B4 = 0xFE;
+  const V5_TAG_LL = 0xFF;
+  const V5_DEAD_ZONE_MAX = 12;
+
   // The worker script carries the platform's own cache-busting stamp (the `?v=` of
   // this script's tag), so a release reloads it and a dataset switch does not.
   const _WORKER_URL = (() => {
@@ -239,6 +254,7 @@ const BrickLoader = (() => {
     const reject = (msg) => { throw new Error('[BrickLoader] Manifest rejected: ' + msg); };
     if (!manifest || typeof manifest !== 'object') reject('manifest is not an object.');
     if (_isV3(manifest)) { _validateManifestV3(manifest, reject); return; }
+    if (_isV5(manifest)) { _validateManifestV5(manifest, reject); return; }
     if (!Array.isArray(manifest.levels) || manifest.levels.length === 0) reject('levels must be a non-empty array.');
     if (manifest.channels !== undefined && !(Number.isInteger(manifest.channels) && manifest.channels >= 1)) {
       reject('channels must be an integer >= 1.');
@@ -302,7 +318,61 @@ const BrickLoader = (() => {
     return Boolean(manifest) && (manifest.schema === V3_SCHEMA || manifest.version === 3);
   }
 
+  /** A v5 tree (the resolution × compression matrix, SPEC §14). */
+  function _isV5(manifest) {
+    return Boolean(manifest) && manifest.schema === V5_SCHEMA;
+  }
+
+  /** A tree read through binary indexes and 66³ bricks (v3 or v5). */
+  function _isIndexed(manifest) {
+    return _isV3(manifest) || _isV5(manifest);
+  }
+
   const _gridOf = (n) => Math.ceil(n / BRICK_SIZE);
+
+  function _validRef(ref) {
+    return Boolean(ref) && typeof ref === 'object' && _isSafePackUrl(ref.url)
+      && Number.isInteger(ref.bytes) && ref.bytes > 0
+      && typeof ref.sha256 === 'string' && /^[0-9a-f]{64}$/.test(ref.sha256);
+  }
+
+  /** SPEC §14.4: the manifest of ONE v5 tree (a timelapse frame's, as the viewer selects it). */
+  function _validateManifestV5(m, reject) {
+    if (m.version !== 5) reject('version must be 5.');
+    if (!(Number.isInteger(m.channels) && m.channels >= 1 && m.channels <= 0xFFFF)) reject('channels must be an integer in 1..65535.');
+    if (m.brickSize !== BRICK_SIZE) reject('brickSize must be ' + BRICK_SIZE + '.');
+    if (m.apron !== V3_APRON) reject('apron must be ' + V3_APRON + '.');
+    if (!Array.isArray(m.levels) || m.levels.length === 0 || m.levels.length > 0xFFFF) reject('levels must be a non-empty array.');
+    m.levels.forEach((level, i) => {
+      if (!level || typeof level !== 'object') reject('level[' + i + '] is not an object.');
+      if (level.level !== i) reject('level[' + i + '].level must be ' + i + ' (levels listed in order).');
+      const d = level.dimensions;
+      const g = level.gridSize;
+      if (!d || typeof d !== 'object' || !g || typeof g !== 'object') reject('level[' + i + '] needs dimensions and gridSize.');
+      for (const axis of ['x', 'y', 'z']) {
+        if (!(Number.isInteger(d[axis]) && d[axis] > 0)) reject('level[' + i + '].dimensions.' + axis + ' must be a positive integer.');
+        if (g[axis] !== _gridOf(d[axis])) reject('level[' + i + '].gridSize.' + axis + ' must be ' + _gridOf(d[axis]) + '.');
+      }
+      if (i > 0 && d.z !== m.levels[0].dimensions.z) reject('level[' + i + '] must keep every plane (z = ' + m.levels[0].dimensions.z + ').');
+      if (!(level.target === 'native' || (Number.isInteger(level.target) && level.target >= 256))) reject('level[' + i + '].target must be "native" or a power of two ≥ 256.');
+    });
+    if (!Array.isArray(m.columns) || !m.columns.length) reject('columns must be a non-empty array.');
+    const ids = new Set();
+    for (const col of m.columns) {
+      if (!col || typeof col.id !== 'string' || !/^[a-z0-9]{1,8}$/.test(col.id) || ids.has(col.id)) reject('columns: bad or repeated id.');
+      ids.add(col.id);
+      if (!V5_CODECS.has(col.codec)) reject(`column ${col.id}: unknown codec "${col.codec}".`);
+      if (col.codec === 'webp-lossless-lut') {
+        if (!Array.isArray(col.lut) || col.lut.length !== 256 || !col.lut.every(v => Number.isInteger(v) && v >= 0 && v <= 255)) {
+          reject(`column ${col.id}: lut must be 256 integers in 0..255.`);
+        }
+      }
+    }
+    if (!ids.has('ll')) reject('columns must hold the lossless column "ll".');
+    const ix = m.index;
+    if (!ix || typeof ix !== 'object' || !ix.columns || typeof ix.columns !== 'object') reject('index.columns is missing (mount one tree of a timelapse, not the dataset manifest).');
+    for (const id of ids) if (!_validRef(ix.columns[id])) reject(`index.columns.${id} must be {url, bytes, sha256}.`);
+  }
 
   /** SPEC §13.3: the manifest of a v3 tree, every field the reader relies on. */
   function _validateManifestV3(m, reject) {
@@ -364,7 +434,7 @@ const BrickLoader = (() => {
    * tables: the raw entries (read in place), the per-level occupancy union over
    * channels and every pack's size (the end of its last brick).
    */
-  function _parseV3Index(bytes, manifest) {
+  function _parseV3Index(bytes, manifest, relOf = _v3PackRel) {
     const u8 = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
     if (u8.length < V3_INDEX_HEAD) throw _v3IndexError(`${u8.length} bytes, shorter than its header`);
     for (let i = 0; i < 4; i++) {
@@ -410,7 +480,7 @@ const BrickLoader = (() => {
           if (length > V3_MAX_BRICK_BYTES) throw _v3IndexError(`level ${lv.k} channel ${c} brick ${i}: ${length} bytes`);
           if (pack !== lastPack) {
             if (lastPack >= 0 && lastEnd > (packSizes.get(lastRel) || 0)) packSizes.set(lastRel, lastEnd);
-            lastPack = pack; lastRel = _v3PackRel(lv.k, c, pack); lastEnd = packSizes.get(lastRel) || 0;
+            lastPack = pack; lastRel = relOf(lv.k, c, pack); lastEnd = packSizes.get(lastRel) || 0;
           }
           if (offset + length > lastEnd) lastEnd = offset + length;
           if (!bits[i]) { bits[i] = 1; count++; }
@@ -420,7 +490,7 @@ const BrickLoader = (() => {
       lv.bits = bits;
       lv.count = count;
     }
-    return { u8, dv, channels: C, levels, packSizes };
+    return { u8, dv, channels: C, levels, packSizes, relOf };
   }
 
   /** One brick's location in a parsed v3 index, or null (absent ⇒ zeros). O(1). */
@@ -431,7 +501,7 @@ const BrickLoader = (() => {
     const e = lv.base + V3_ENTRY * (c * lv.slots + (bz * lv.ny + by) * lv.nx + bx);
     const length = index.dv.getUint32(e + 6, true);
     if (!length) return null;
-    return { url: _v3PackRel(k, c, index.dv.getUint16(e, true)), offset: index.dv.getUint32(e + 2, true), length };
+    return { url: (index.relOf || _v3PackRel)(k, c, index.dv.getUint16(e, true)), offset: index.dv.getUint32(e + 2, true), length };
   }
 
   /** SHA-256 hex of `bytes`: PlaneLoader's (crypto.subtle, else its FIPS 180-4 JS digest), else crypto.subtle. */
@@ -447,8 +517,7 @@ const BrickLoader = (() => {
    * The parsed index of the v3 tree at `basePath` (fetched once per url + sha256):
    * its length must be `index.bytes` and its sha256 `index.sha256`.
    */
-  function _loadV3Index(basePath, manifest, signal) {
-    const ix = manifest.index;
+  function _loadV3Index(basePath, manifest, signal, ix = manifest.index, relOf = _v3PackRel) {
     const url = `${String(basePath).replace(/\/$/, '')}/${String(ix.url).replace(/^\/+/, '')}?v=${ix.sha256.slice(0, 12)}`;
     let p = _v3IndexCache.get(url);
     if (p) {
@@ -470,7 +539,7 @@ const BrickLoader = (() => {
       if (bytes.length !== ix.bytes) throw _v3IndexError(`${bytes.length} bytes ≠ index.bytes ${ix.bytes}`);
       const digest = await _sha256HexAny(bytes);
       if (digest !== ix.sha256) throw _v3IndexError('sha256 differs from the manifest\'s index.sha256');
-      return _parseV3Index(bytes, manifest);
+      return _parseV3Index(bytes, manifest, relOf);
     })();
     _v3IndexCache.set(url, p);
     p.catch(() => { if (_v3IndexCache.get(url) === p) _v3IndexCache.delete(url); });
@@ -623,6 +692,98 @@ const BrickLoader = (() => {
     };
   }
 
+  /** Pack path of column `id` (its index's sha256 as the version stamp, SPEC §14.4). */
+  function _v5RelOf(id, stamp) {
+    return (k, c, p) => `l${k}/${id}/c${c}/p${String(p).padStart(5, '0')}.bin?v=${stamp}`;
+  }
+
+  function _makeMountV5(basePath, manifest, llIndex) {
+    const grids = new Map();
+    for (const lv of llIndex.levels) {
+      const ml = manifest.levels[lv.k];
+      grids.set(lv.k, { dims: ml.dimensions, nx: lv.nx, ny: lv.ny, nz: lv.nz, bits: lv.bits, count: lv.count, voxelSize: ml.voxelSize || null, packCount: lv.packCount, target: ml.target });
+    }
+    const columns = new Map();
+    for (const spec of manifest.columns) {
+      const ref = manifest.index.columns[spec.id];
+      const stamp = ref.sha256.slice(0, 12);
+      columns.set(spec.id, {
+        id: spec.id, spec, ref, relOf: _v5RelOf(spec.id, stamp),
+        lut: spec.codec === 'webp-lossless-lut' ? Uint8Array.from(spec.lut) : null,
+        index: spec.id === 'll' ? llIndex : null,
+        loading: null
+      });
+    }
+    const b4 = columns.get('b4');
+    return {
+      version: 5,
+      bs: V3_STRIDE,
+      apron: V3_APRON,
+      hasPackIndex: true,
+      lookup: (lod, channel, bx, by, bz, column = 'll') => {
+        const col = columns.get(column || 'll');
+        return col && col.index ? _v3Lookup(col.index, lod, channel, bx, by, bz) : null;
+      },
+      packQuery: '',
+      basePath,
+      manifest,
+      index: llIndex,
+      columns,
+      b4Lut: b4 && b4.lut ? b4.lut : null,
+      encoding: 'webp-lossless',
+      packMode: true,
+      packing: { mode: 'grid', cols: V3_COLS, rows: V3_ROWS, slice: V3_STRIDE },
+      packIndex: null,
+      packSizes: new Map(llIndex.packSizes),
+      packHashes: null,
+      brickHashes: null,
+      grids
+    };
+  }
+
+  /** The indexes of `ids` on a v5 mount, fetched (and checked) once; unknown ids refused. */
+  function _ensureColumnsOn(mount, ids, signal) {
+    if (!mount || mount.version !== 5) return Promise.resolve();
+    const waits = [];
+    for (const id of ids) {
+      const col = mount.columns.get(id || 'll');
+      if (!col) return Promise.reject(Object.assign(new Error(`[BrickLoader] column "${id}" does not exist in this tree`), { fatal: true, code: 'BRICKS_COLUMN_UNKNOWN' }));
+      if (col.index) continue;
+      if (!col.loading) {
+        col.loading = _loadV3Index(mount.basePath, mount.manifest, signal, col.ref, col.relOf).then((index) => {
+          col.index = index;
+          for (const [rel, size] of index.packSizes) mount.packSizes.set(rel, size);
+          return index;
+        });
+        col.loading.catch(() => { col.loading = null; });
+      }
+      waits.push(col.loading);
+    }
+    return Promise.all(waits).then(() => undefined);
+  }
+
+  /** Public: load the indexes of columns `ids` of the mounted v5 tree (no-op otherwise). */
+  function ensureColumns(ids) {
+    const list = Array.isArray(ids) ? ids : [ids];
+    return (_pendingInit || Promise.resolve()).then(() => _ensureColumnsOn(_mount, list));
+  }
+
+  /** τ's dead zone as a value LUT: v ≤ τ → 0. */
+  function _deadZoneLut(tau) {
+    const out = new Uint8Array(256);
+    for (let v = 0; v < 256; v++) out[v] = v <= tau ? 0 : v;
+    return out;
+  }
+
+  /** A value LUT applied before a display LUT, as one table. */
+  function _chainLuts(valueLut, displayLut) {
+    if (!valueLut) return displayLut || null;
+    if (!displayLut) return valueLut;
+    const out = new Uint8Array(256);
+    for (let v = 0; v < 256; v++) out[v] = displayLut[valueLut[v]];
+    return out;
+  }
+
   /** Dataset root = the mount path without its trailing per-timepoint segment.
    *  ".../bricks/t007" and ".../bricks/t008" are the same dataset, one frame apart. */
   function _datasetRoot(path) {
@@ -641,7 +802,7 @@ const BrickLoader = (() => {
     _validateManifest(manifest);     // ELE-21 (Rule 1.4): rejet AVANT toute mutation d'état
     const next = String(basePath).replace(/\/$/, '');
     const token = ++_initSeq;
-    if (!_isV3(manifest)) {
+    if (!_isIndexed(manifest)) {
       _pendingInit = null;
       _commitMount(next, manifest, () => _makeMount(next, manifest));
       return Promise.resolve();
@@ -652,9 +813,13 @@ const BrickLoader = (() => {
       _pendingInit = null;
       return Promise.resolve();
     }
-    const p = _loadV3Index(next, manifest, options.signal).then((index) => {
+    const v5 = _isV5(manifest);
+    const p = (v5
+      ? _loadV3Index(next, manifest, options.signal, manifest.index.columns.ll, _v5RelOf('ll', manifest.index.columns.ll.sha256.slice(0, 12)))
+      : _loadV3Index(next, manifest, options.signal)
+    ).then((index) => {
       if (token !== _initSeq) return;    // a later init won
-      _commitMount(next, manifest, () => _makeMountV3(next, manifest, index));
+      _commitMount(next, manifest, () => (v5 ? _makeMountV5(next, manifest, index) : _makeMountV3(next, manifest, index)));
     });
     const tracked = p.catch(() => {}).then(() => { if (_pendingInit === tracked) _pendingInit = null; });
     _pendingInit = tracked;
@@ -779,7 +944,7 @@ const BrickLoader = (() => {
     if (!_mount) return null;
     const levels = [];
     for (const k of [..._mount.grids.keys()].sort((a, b) => a - b)) levels.push(getLevelInfo(k));
-    return {
+    const out = {
       version: _mount.version,
       apron: _mount.apron,
       brickStride: _mount.bs,
@@ -787,6 +952,8 @@ const BrickLoader = (() => {
       channels: _mount.manifest.channels || 1,
       levels
     };
+    if (_mount.version === 5) out.columns = _mount.manifest.columns.map(c => ({ id: c.id, codec: c.codec, maxError: c.maxError ?? null }));
+    return out;
   }
 
   /** One level of the mounted tree (see getFormat), or null. v3 adds `packCount`. */
@@ -802,7 +969,8 @@ const BrickLoader = (() => {
       grid: { x: g.nx, y: g.ny, z: g.nz },
       brickCount: g.count
     };
-    if (_mount.version === 3) info.packCount = g.packCount;
+    if (_mount.version >= 3) info.packCount = g.packCount;
+    if (_mount.version === 5) info.target = g.target;
     return info;
   }
 
@@ -968,6 +1136,7 @@ const BrickLoader = (() => {
     }
     const mount = _mount;
     const list = Array.isArray(tasks) ? tasks : [];
+    if (mount.version === 5) await _ensureColumnsOn(mount, new Set(list.map(t => (t && t.column) || 'll')), options.signal);
     const explicitGroup = typeof options.group === 'string' && options.group ? options.group : null;
     const group = explicitGroup || (options.cancelPrevious === false ? null : 'stream');
     if (group && options.cancelPrevious !== false) {
@@ -1072,14 +1241,16 @@ const BrickLoader = (() => {
     const channel = (task.channel === -1 || task.channel === 'rgba') ? -1
       : (Number.isFinite(Number(task.channel)) ? Number(task.channel) : 0);
     const { bx, by, bz } = task;
-    const rel = mount.version === 3 ? `l${lod}/c${channel}/${bz}_${by}_${bx}` : _relBrickPath(lod, channel, bx, by, bz);
-    const packed = mount.lookup(lod, channel, bx, by, bz);
+    const column = mount.version === 5 ? (task.column || 'll') : null;
+    const rel = mount.version === 5 ? `l${lod}/${column}/c${channel}/${bz}_${by}_${bx}`
+      : (mount.version === 3 ? `l${lod}/c${channel}/${bz}_${by}_${bx}` : _relBrickPath(lod, channel, bx, by, bz));
+    const packed = mount.lookup(lod, channel, bx, by, bz, column);
     const nregion = _normalizeRegion(task.region, mount.bs);
     return {
-      index, lod, channel, bx, by, bz, rel, packed,
+      index, lod, channel, bx, by, bz, rel, packed, column,
       region: task.region || null,
       nregion,
-      brickKey: `${lod}:${bx}_${by}_${bz}|${_regionKey(nregion)}`,
+      brickKey: `${lod}:${column ? column + ':' : ''}${bx}_${by}_${bz}|${_regionKey(nregion)}`,
       src: null,
       unrefed: false
     };
@@ -1289,7 +1460,7 @@ const BrickLoader = (() => {
     const lut = batch.luts && t.channel >= 0 ? batch.luts[t.channel] || null : null;
     const bs = mount.bs;
     const whole = bs * bs * bs;
-    if (mount.version === 3 && !(Number.isInteger(t.channel) && t.channel >= 0 && t.channel < (mount.manifest.channels || 1))) {
+    if (mount.version >= 3 && !(Number.isInteger(t.channel) && t.channel >= 0 && t.channel < (mount.manifest.channels || 1))) {
       throw _fatal(`channel ${t.channel} does not exist in this tree (${mount.manifest.channels} channels)`);
     }
 
@@ -1333,18 +1504,50 @@ const BrickLoader = (() => {
       throw _fatal('unknown brick packing ' + JSON.stringify(packing.mode) + ' for ' + t.rel);
     }
     const expected = _expectedLength(mount, t, 1);
-    const job = { buffer: bytes, brickSize: bs, packing, region: t.nregion, lut };
-    // A v3 mosaic has one exact size; any other picture is a corrupt brick, not a
+    const cut = mount.version === 5 ? _v5Payload(mount, t, bytes) : null;
+    if (cut) bytes = cut.bytes;
+    const job = { buffer: bytes, brickSize: bs, packing: cut ? cut.packing : packing, region: t.nregion, lut: _chainLuts(cut && cut.valueLut, lut) };
+    // A v3 / v5 mosaic has one exact size; any other picture is a corrupt brick, not a
     // truncated one to pad with zeros.
-    if (mount.version === 3) job.expect = { width: V3_COLS * V3_STRIDE, height: V3_ROWS * V3_STRIDE };
+    if (mount.version >= 3) job.expect = cut ? cut.expect : { width: V3_COLS * V3_STRIDE, height: V3_ROWS * V3_STRIDE };
     if (assemble) {
-      return _decodeInto(batch, job, assemble);
+      return _decodeInto(batch, job, cut && cut.valueLut ? { ...assemble, lut: _chainLuts(cut.valueLut, assemble.lut) } : assemble);
     }
     const data = await _decodeWebp(batch, job);
     if (data.length !== expected) {
       throw _fatal(`brick ${t.rel} decoded to ${data.length} voxels, expected ${expected}`);
     }
     return data;
+  }
+
+  /**
+   * How one stored v5 brick decodes (SPEC §14.3): { bytes (the image alone), packing
+   * (the slot pitch / origin of its mosaic), expect (its exact size), valueLut (applied
+   * to the decoded value before any display LUT, or null) }.
+   */
+  function _v5Payload(mount, t, bytes) {
+    const col = mount.columns.get(t.column || 'll');
+    if (!col) throw _fatal(`column ${t.column} does not exist in this tree`);
+    const grid66 = { width: V3_COLS * V3_STRIDE, height: V3_ROWS * V3_STRIDE };
+    const codec = col.spec.codec;
+    if (codec === 'webp-lossless') return { bytes, packing: mount.packing, expect: grid66, valueLut: null };
+    if (codec === 'webp-lossless-lut') return { bytes, packing: mount.packing, expect: grid66, valueLut: col.lut };
+    const u8 = new Uint8Array(bytes);
+    if (u8.length < 2) throw _fatal(`brick ${t.rel}: no trailer byte`);
+    const tag = u8[u8.length - 1];
+    const image = bytes.slice(0, u8.length - 1);
+    if (tag === V5_TAG_LL) return { bytes: image, packing: mount.packing, expect: grid66, valueLut: null };
+    if (tag === V5_TAG_B4) {
+      if (!mount.b4Lut) throw _fatal(`brick ${t.rel}: a b4 fallback in a tree without a b4 column`);
+      return { bytes: image, packing: mount.packing, expect: grid66, valueLut: mount.b4Lut };
+    }
+    if (tag > V5_DEAD_ZONE_MAX) throw _fatal(`brick ${t.rel}: trailer byte ${tag} is neither a dead zone nor a fallback tag`);
+    return {
+      bytes: image,
+      packing: { ...mount.packing, pitch: V5_PITCH, origin: V5_ORIGIN },
+      expect: { width: V3_COLS * V5_PITCH, height: V3_ROWS * V5_PITCH },
+      valueLut: tag ? _deadZoneLut(tag) : null
+    };
   }
 
   // ── Sources ─────────────────────────────────────────────────────────────────
@@ -1356,7 +1559,7 @@ const BrickLoader = (() => {
     // (wide gap merging, few runs per pack), not 512 one-run requests per pack.
     if (mount && _multiRangeBadHosts.has(_hostOf(mount.basePath))) return false;
     if (mode === 'on') return true;
-    return Boolean(mount && mount.version === 3);
+    return Boolean(mount && mount.version >= 3);
   }
 
   function _hostOf(basePath) {
@@ -2029,8 +2232,9 @@ const BrickLoader = (() => {
    * @param {number} maxPacks
    * @returns {Promise<number>} packs now held
    */
-  function prefetchPacks(baseDir, transport, lod = 0, channel = 0, maxPacks = 8) {
+  function prefetchPacks(baseDir, transport, lod = 0, channel = 0, maxPacks = 8, column = 'll') {
     if (_isV3(transport)) return _prefetchPacksV3(baseDir, transport, lod, channel, maxPacks);
+    if (_isV5(transport)) return _prefetchPacksV3(baseDir, transport, lod, channel, maxPacks, column);
     const b2p = transport?.brickToPack;
     if (!b2p || typeof b2p !== 'object') return Promise.resolve(0);
     const prefix = channel === null || channel === undefined ? `lod${lod}/` : `lod${lod}/c${channel}/`;
@@ -2066,14 +2270,18 @@ const BrickLoader = (() => {
    * of level `lod` — one channel, or every channel when `channel` is null — in pack
    * order, up to `maxPacks`, under the same prefetch budget.
    */
-  async function _prefetchPacksV3(baseDir, manifest, lod, channel, maxPacks) {
+  async function _prefetchPacksV3(baseDir, manifest, lod, channel, maxPacks, column = null) {
     try { _validateManifest(manifest); } catch (e) { return 0; }
     const base = String(baseDir).replace(/\/$/, '');
+    const v5 = _isV5(manifest);
+    const ref = v5 ? manifest.index.columns[column || 'll'] : manifest.index;
+    if (!ref) return 0;
+    const relOf = v5 ? _v5RelOf(column || 'll', ref.sha256.slice(0, 12)) : _v3PackRel;
     let index;
-    try { index = await _loadV3Index(base, manifest); } catch (e) { return 0; }
+    try { index = await _loadV3Index(base, manifest, undefined, ref, relOf); } catch (e) { return 0; }
     const lv = index.levels[Number(lod)];
     if (!lv) return 0;
-    const query = `?v=${manifest.index.sha256.slice(0, 12)}`;
+    const query = v5 ? '' : `?v=${manifest.index.sha256.slice(0, 12)}`;
     const channels = channel === null || channel === undefined
       ? Array.from({ length: index.channels }, (_, c) => c)
       : [Number(channel)];
@@ -2081,7 +2289,7 @@ const BrickLoader = (() => {
     outer:
     for (const c of channels) {
       for (let p = 0; p < lv.packCount; p++) {
-        const rel = _v3PackRel(lv.k, c, p);
+        const rel = relOf(lv.k, c, p);
         const size = index.packSizes.get(rel);
         if (!size) continue;
         if (sizes.size >= maxPacks) break outer;
@@ -2120,7 +2328,7 @@ const BrickLoader = (() => {
     for (const task of Array.isArray(tasks) ? tasks : []) {
       const packed = task.packed !== undefined
         ? task.packed
-        : mount.lookup(task.lod ?? 0, task.channel ?? 0, task.bx, task.by, task.bz);
+        : mount.lookup(task.lod ?? 0, task.channel ?? 0, task.bx, task.by, task.bz, task.column);
       if (!packed) continue;
       let list = perPack.get(packed.url);
       if (!list) perPack.set(packed.url, list = []);
@@ -2155,13 +2363,13 @@ const BrickLoader = (() => {
   /** Compressed bytes of one brick task in its pack (0 when the pack index has no entry). */
   function taskBytes(task) {
     if (!task || !_mount || !_mount.hasPackIndex) return 0;
-    return _mount.lookup(task.lod ?? 0, task.channel ?? 0, task.bx, task.by, task.bz)?.length || 0;
+    return _mount.lookup(task.lod ?? 0, task.channel ?? 0, task.bx, task.by, task.bz, task.column)?.length || 0;
   }
 
   /** Where one brick task's bytes are stored: { url (pack, relative to the tree), offset, length } or null. */
   function brickLocation(task) {
     if (!task || !_mount || !_mount.hasPackIndex) return null;
-    const loc = _mount.lookup(task.lod ?? 0, task.channel ?? 0, task.bx, task.by, task.bz);
+    const loc = _mount.lookup(task.lod ?? 0, task.channel ?? 0, task.bx, task.by, task.bz, task.column);
     return loc ? { url: loc.url, offset: loc.offset, length: loc.length } : null;
   }
 
@@ -2475,9 +2683,11 @@ const BrickLoader = (() => {
         const gridCols = Number(packing.cols);
         const cols = (Number.isFinite(gridCols) && gridCols >= 1) ? gridCols : Math.ceil(bs / Math.ceil(Math.sqrt(bs)));
         const w = img.width;
+        const pitch = Number(packing.pitch) > 0 ? Number(packing.pitch) : bs;
+        const origin = Number(packing.origin) > 0 ? Number(packing.origin) : 0;
         for (let z = r.z0; z < r.z1; z++) {
-          const px0 = (z % cols) * bs;
-          const py0 = Math.floor(z / cols) * bs;
+          const px0 = (z % cols) * pitch + origin;
+          const py0 = Math.floor(z / cols) * pitch + origin;
           for (let y = r.y0; y < r.y1; y++) {
             let dst = ((z - r.z0) * rh + (y - r.y0)) * rw;
             const py = py0 + y;
@@ -2743,12 +2953,15 @@ const BrickLoader = (() => {
     taskBytes,
     brickLocation,
     estimateTaskBytes,
+    ensureColumns,
     _planRanges,       // exposed for unit testing
     _packMajorOrder,   // exposed for unit testing
     _fetchPackBuffer,  // exposed for unit testing (ELE-17)
     _validateManifest, // exposed for unit testing (ELE-21)
     _parseV3Index,     // exposed for unit testing (SPEC §13.3)
     _parseMultipartByteranges,  // exposed for unit testing
-    _parseContentRange          // exposed for unit testing
+    _parseContentRange,         // exposed for unit testing
+    _v5Payload,                 // exposed for unit testing (SPEC §14.3)
+    _chainLuts                  // exposed for unit testing
   };
 })();

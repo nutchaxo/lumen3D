@@ -302,6 +302,10 @@
             <div class="panel-header-row">
               <span class="panel-title" data-i18n="admin.datasets">Datasets</span>
               <span class="datasets-count-badge" id="dataset-count">0</span>
+              <button type="button" class="adm-btn adm-btn-ghost adm-btn-sm" id="btn-open-trash" style="margin-left:auto"
+                      data-i18n-title="admin.trashOpenTitle" title="Corbeille">
+                <i data-lucide="trash-2"></i> <span id="trash-count" class="datasets-count-badge"></span>
+              </button>
             </div>
             <div class="list-search-wrap">
               <span class="list-search-icon">🔍</span>
@@ -374,6 +378,8 @@
                 <div class="config-topbar-name" id="topbar-name">—</div>
                 <div class="config-topbar-type" id="topbar-type"></div>
               </div>
+              <button class="adm-btn adm-btn-ghost adm-btn-sm adm-trash-danger" id="btn-delete"
+                      data-i18n-title="admin.deleteDatasetTitle" title="Supprimer (corbeille, 60 jours)"><i data-lucide="trash-2"></i></button>
               <button class="adm-btn adm-btn-ghost adm-btn-sm" id="btn-reset"
                       data-i18n="admin.reset" data-i18n-title="admin.resetTitle" title="Annuler les modifications">↺ Reset</button>
               <button class="adm-btn adm-btn-accent adm-btn-sm" id="btn-save"

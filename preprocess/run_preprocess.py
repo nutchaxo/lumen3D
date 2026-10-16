@@ -15,7 +15,7 @@ import traceback
 from datetime import datetime
 from pathlib import Path
 
-__version__ = "0.21.0"
+__version__ = "0.22.0"
 
 # ── Paths ──────────────────────────────────────────────────────────────────────
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -577,7 +577,8 @@ def dataset_folder_name(stem: str, type_dir: Path) -> str:
 
 
 def process_ims_file(ims_path: Path, output_root: Path, idx: int = 0, total: int = 0,
-                     with_downloads: bool = False, tracking: str = "auto") -> bool:
+                     with_downloads: bool = False, tracking: str = "auto",
+                     dataset_format: int = 4) -> bool:
     """Run the whole pipeline on one .ims. Returns True once the dataset is published."""
     display_name = ims_path.stem
     counter = f"[{idx}/{total}] " if total else ""
@@ -621,7 +622,7 @@ def process_ims_file(ims_path: Path, output_root: Path, idx: int = 0, total: int
         # packed into the staging tree as soon as it is levelled, so the temporary
         # disk never holds more than one frame's LOD set.
         run_step("2-image_processor.py", str(ims_path), str(temp_meta_json), str(temp_dir),
-                 "--pack-into", str(stage_dir))
+                 "--pack-into", str(stage_dir), "--format", str(dataset_format))
 
         # Step 3: Compute thumbnail MIP
         with open(temp_dir / "processing_meta.json", "r", encoding="utf-8") as fm:
@@ -701,6 +702,10 @@ def main():
     parser.add_argument("--with-downloads", action="store_true",
                         help="After each dataset, also build its download/ bundle "
                              "(web archive, original .ims, ImageJ TIFF, per-channel MIP, README).")
+    parser.add_argument("--format", type=int, choices=(4, 5), default=4,
+                        help="Dataset format: 4 (default) or 5 = the resolution x compression "
+                             "matrix of SPEC Part III (levels 256, 512, ... with every slice, five "
+                             "compressions, fast cut stores). The viewer reads format 5 from web 1.64.")
     parser.add_argument("--tracking", default="auto", metavar="auto|off|FILE",
                         help="Cell tracking for timelapse datasets. 'auto' (default) looks for "
                              "a .imaris_track beside the volume, then the Imaris objects inside "
@@ -751,7 +756,8 @@ def main():
             continue
         try:
             ok = process_ims_file(ims_file, output_dir, i + 1, len(ims_files),
-                                  with_downloads=args.with_downloads, tracking=args.tracking)
+                                  with_downloads=args.with_downloads, tracking=args.tracking,
+                                  dataset_format=args.format)
             if not ok:
                 failed.append(ims_file.name)
         except KeyboardInterrupt:

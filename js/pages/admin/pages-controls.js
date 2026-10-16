@@ -86,12 +86,19 @@ function registerPopover(pop, trigger, close) { _bindPopDismiss(); _popovers.add
 const THEME_SWATCHES = [
   ['var(--color-primary)', '#00A654', 'colorPrimary', 'Couleur primaire'],
   ['var(--color-accent)', '#00D2FF', 'colorAccent', 'Couleur accent'],
-  ['var(--bg-base)', '#0d0d1a', 'colorBgBase', 'Fond du site'],
+  ['var(--bg-body)', '#0d0d1a', 'colorBgBase', 'Fond du site'],
   ['var(--bg-surface)', '#161622', 'colorSurface', 'Surface / carte'],
   ['var(--text-primary)', '#e8e8f0', 'colorText', 'Texte'],
   ['var(--text-muted)', '#8a8a9a', 'colorTextMuted', 'Texte atténué'],
   ['var(--border-subtle)', '#2a2a3a', 'colorBorder', 'Bordure'],
 ];
+// "Site background" was stored as var(--bg-base), a token no theme defines (the
+// renderer reads it as the page background): it still names that swatch.
+const SWATCH_ALIASES = { '--bg-base': '--bg-body' };
+function _swatchFor(name) {
+  const tok = `var(${SWATCH_ALIASES[name] || name})`;
+  return THEME_SWATCHES.find((x) => x[0] === tok) || null;
+}
 const PALETTE_COLORS = [
   '#ffffff', '#d8dbe6', '#9aa0b5', '#5a6072', '#2b2f3d', '#14161f', '#000000',
   '#ef4444', '#f97316', '#f59e0b', '#eab308', '#84cc16', '#22c55e', '#10b981',
@@ -208,7 +215,7 @@ function prettyColorLabel(v) {
   if (isGradient(s)) return t('pages.pc.gradient', 'Dégradé');
   const { base, alpha } = parseAlphaColor(s);
   const tm = /^var\(\s*(--[\w-]+)/.exec(base);
-  const sw = tm ? THEME_SWATCHES.find((x) => x[0] === `var(${tm[1]})`) : null;
+  const sw = tm ? _swatchFor(tm[1]) : null;
   const name = sw ? swatchTitle(sw) : (tm ? tm[1] : base);
   return alpha < 100 ? `${name} · ${alpha}%` : name;
 }
@@ -217,7 +224,7 @@ function prettyColorLabel(v) {
 // var() already carrying a fallback is left untouched.
 function previewBg(v) {
   return String(v || '').replace(/var\(\s*(--[\w-]+)\s*\)/g, (m, name) => {
-    const sw = THEME_SWATCHES.find((x) => x[0] === `var(${name})`);
+    const sw = _swatchFor(name);
     return sw ? `var(${name}, ${sw[1]})` : m;
   });
 }

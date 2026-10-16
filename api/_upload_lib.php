@@ -169,10 +169,16 @@ function lumen_up_classify(string $type, $rel): ?array {
         if ($inner === 'manifest.json') return [LUMEN_UP_TIER_CORE, 'manifest'];
     }
     // Format 4 (SPEC §13): the v3 binary index mounts a tree like the v2 manifest;
-    // packs are l{k}/c{c}/pNNNNN.bin.
-    if ($inner === 'index.bin') return [LUMEN_UP_TIER_CORE, 'index'];
+    // packs are l{k}/c{c}/pNNNNN.bin. Format 5 (SPEC §14.4): one index per column,
+    // packs l{k}/{column}/c{c}/pNNNNN.bin; its plane stores and cut bricks go last.
+    if ($inner === 'index.bin' || preg_match('#^index/(?:ll|b2|b4|q80|q50)\.bin$#D', $inner)) return [LUMEN_UP_TIER_CORE, 'index'];
+    if (preg_match('#^xy/l\d{1,2}/z\d{5}\.bin$#D', $inner)) return [LUMEN_UP_TIER_EXTRA, 'planes_pack'];
+    if (preg_match('#^(?:xz|yz)/l\d{1,2}/c\d{1,2}/b\d{5}\.bin$#D', $inner)) return [LUMEN_UP_TIER_EXTRA, 'orth_pack'];
+    if (preg_match('#^cuts/l\d{1,2}/index\.bin$#D', $inner)) return [LUMEN_UP_TIER_EXTRA, 'index'];
+    if (preg_match('#^cuts/l\d{1,2}/c\d{1,2}/p\d{5}\.bin$#D', $inner)) return [LUMEN_UP_TIER_EXTRA, 'cut_pack'];
     if (!preg_match('#^lod(\d{1,2})/(c\d{1,2}|rgba)/pack_\d{1,6}\.bin$#D', $inner, $m)
-        && !preg_match('#^l(\d{1,2})/c\d{1,2}/p\d{5}\.bin$#D', $inner, $m)) return null;
+        && !preg_match('#^l(\d{1,2})/c\d{1,2}/p\d{5}\.bin$#D', $inner, $m)
+        && !preg_match('#^l(\d{1,2})/(?:ll|b2|b4|q80|q50)/c\d{1,2}/p\d{5}\.bin$#D', $inner, $m)) return null;
     $lod  = (int)$m[1];
     $tier = $lod === 0 ? LUMEN_UP_TIER_FULL : LUMEN_UP_TIER_MID;
     if ($timepoint !== null && $timepoint !== 0 && $tier < LUMEN_UP_TIER_FULL) $tier = LUMEN_UP_TIER_FULL;
@@ -184,7 +190,8 @@ function lumen_up_pack_lod(string $rel): ?array {
     $inner = strncmp($rel, 'bricks/', 7) === 0 ? substr($rel, 7) : $rel;
     $tp = 0;
     if (preg_match('#^t(\d{1,6})/(.+)$#', $inner, $m)) { $tp = (int)$m[1]; $inner = $m[2]; }
-    if (!preg_match('#^lod(\d{1,2})/#', $inner, $m) && !preg_match('#^l(\d{1,2})/c\d{1,2}/p\d{5}\.bin$#D', $inner, $m)) return null;
+    if (!preg_match('#^lod(\d{1,2})/#', $inner, $m) && !preg_match('#^l(\d{1,2})/c\d{1,2}/p\d{5}\.bin$#D', $inner, $m)
+        && !preg_match('#^l(\d{1,2})/(?:ll|b2|b4|q80|q50)/c\d{1,2}/p\d{5}\.bin$#D', $inner, $m)) return null;
     return [(int)$m[1], $tp];
 }
 
@@ -1013,6 +1020,15 @@ function lumen_up_validate_file(string $type, string $rel, string $path, ?string
         $shape = lumen_up_index_v3_shape((string)@file_get_contents($path));
         return [$shape[0], $shape[1]];
     }
+    if ($kind === 'orth_pack') {
+        // Magic, version 1 and a file long enough for its entry table (20 + 12·rows·TA·TZ).
+        $head = lumen_up_head($path, 20);
+        if (strlen($head) < 20 || !in_array(substr($head, 0, 4), ['LPXZ', 'LPYZ'], true)) return [false, 'orth_pack_bad_magic'];
+        $h = unpack('vver/vta/vtz/vres/Vfirst/Vcount', substr($head, 4, 16));
+        clearstatcache(true, $path);
+        if ($h['ver'] !== 1 || !$h['ta'] || !$h['tz'] || !$h['count'] || (int)@filesize($path) < 20 + 12 * $h['count'] * $h['ta'] * $h['tz']) return [false, 'orth_pack_bad_header'];
+        return [true, null];
+    }
     if ($kind === 'extra' && substr($rel, -4) === '.glb') {
         if (strncmp(lumen_up_head($path, 4), 'glTF', 4) !== 0) return [false, 'glb_bad_magic'];
         return [true, null];
@@ -1149,8 +1165,142 @@ function lumen_up_cross_check_v3(string $dir, array $man): array {
     return $errors;
 }
 
+// ── Brick tree v5 (format 5) — twin of upload_staging._validate_manifest_v5 /
+// _cross_check_v5.
+const LUMEN_UP_BRICKS_V5_SCHEMA = 'iribhm-bricks-v5';
+const LUMEN_UP_V5_COLUMNS = ['ll', 'b2', 'b4', 'q80', 'q50'];
+
+function lumen_up_is_ref($info, string $url): bool {
+    return is_array($info) && ($info['url'] ?? null) === $url && is_int($info['bytes'] ?? null)
+        && is_string($info['sha256'] ?? null) && preg_match('/^[0-9a-f]{64}$/D', $info['sha256']);
+}
+
+/** [[sgx, sgy, sgz]] per level from stores.cuts.levels, or null. */
+function lumen_up_v5_cut_grids(array $man): ?array {
+    $rows = $man['stores']['cuts']['levels'] ?? null;
+    if (!is_array($rows) || array_keys($rows) !== range(0, max(0, count($rows) - 1))) return null;
+    $out = [];
+    foreach ($rows as $k => $row) {
+        $g = is_array($row) ? ($row['superGrid'] ?? null) : null;
+        if (!is_array($g) || ($row['level'] ?? null) !== $k) return null;
+        $v = [$g['x'] ?? null, $g['y'] ?? null, $g['z'] ?? null];
+        foreach ($v as $n) if (!is_int($n) || $n <= 0) return null;
+        $out[] = $v;
+    }
+    return $out;
+}
+
+function lumen_up_validate_manifest_v5(array $man): array {
+    if (($man['version'] ?? null) !== 5) return [false, 'manifest_v5_bad_version'];
+    if (!is_int($man['channels'] ?? null) || $man['channels'] < 1) return [false, 'manifest_bad_channels'];
+    if (($man['brickSize'] ?? null) !== LUMEN_UP_BRICK_SIZE || ($man['apron'] ?? null) !== 1) return [false, 'manifest_bad_brick_size'];
+    $levels = $man['levels'] ?? null;
+    if (!is_array($levels) || !$levels || array_keys($levels) !== range(0, count($levels) - 1)) return [false, 'manifest_no_levels'];
+    foreach ($levels as $i => $level) {
+        if (!is_array($level) || ($level['level'] ?? null) !== $i) return [false, "manifest_level_{$i}_out_of_order"];
+        foreach (['dimensions', 'gridSize'] as $key) {
+            $d = $level[$key] ?? null;
+            if (!is_array($d)) return [false, "manifest_level_{$i}_bad_{$key}"];
+            foreach (['x', 'y', 'z'] as $a) if (!is_int($d[$a] ?? null) || $d[$a] <= 0) return [false, "manifest_level_{$i}_bad_{$key}"];
+        }
+    }
+    $cols = $man['columns'] ?? null;
+    if (!is_array($cols) || array_map(fn($c) => is_array($c) ? ($c['id'] ?? null) : null, $cols) !== LUMEN_UP_V5_COLUMNS) return [false, 'manifest_v5_bad_columns'];
+    $grids = lumen_up_v5_cut_grids($man);
+    if ($grids === null || count($grids) !== count($levels)) return [false, 'manifest_v5_bad_cuts'];
+    foreach (lumen_up_v3_trees($man) as [$key, $info]) {
+        if ($key === null) return [false, 'manifest_v5_bad_timepoints'];
+        $pre = $key !== '' ? "$key/" : '';
+        if (!is_array($info) || !is_array($info['columns'] ?? null) || !is_array($info['cuts'] ?? null)) return [false, 'manifest_v5_bad_index'];
+        foreach (LUMEN_UP_V5_COLUMNS as $cid) if (!lumen_up_is_ref($info['columns'][$cid] ?? null, "{$pre}index/$cid.bin")) return [false, 'manifest_v5_bad_index'];
+        if (count($info['cuts']) !== count($levels)) return [false, 'manifest_v5_bad_index'];
+        foreach (array_values($info['cuts']) as $k => $ref) if (!lumen_up_is_ref($ref, "{$pre}cuts/l$k/index.bin")) return [false, 'manifest_v5_bad_index'];
+    }
+    return [true, null];
+}
+
+/** [(level, channel) => [pack => end]] of an LBIX file of known shape. */
+function lumen_up_index_extents(string $data, array $levels, int $channels): array {
+    $out = [];
+    $pos = 12 + 16 * count($levels);
+    foreach ($levels as $k => [$gx, $gy, $gz]) {
+        $n = $gx * $gy * $gz;
+        for ($c = 0; $c < $channels; $c++) {
+            $ext = [];
+            for ($b = 0; $b < $n; $b++, $pos += 10) {
+                $e = unpack('vpack/Voffset/Vlength', $data, $pos);
+                if ($e['length'] && $e['offset'] + $e['length'] > ($ext[$e['pack']] ?? 0)) $ext[$e['pack']] = $e['offset'] + $e['length'];
+            }
+            $out["$k:$c"] = $ext;
+        }
+    }
+    return $out;
+}
+
+/** Every v5 index the manifest hashed, its grids, the packs it lists, and every plane store present. */
+function lumen_up_cross_check_v5(string $dir, array $man): array {
+    $errors = [];
+    $levels = $man['levels'] ?? [];
+    $channels = $man['channels'] ?? null;
+    $grids = array_map(fn($L) => [$L['gridSize']['x'], $L['gridSize']['y'], $L['gridSize']['z']], $levels);
+    $cutGrids = lumen_up_v5_cut_grids($man) ?? [];
+    $readIndex = function (string $tree, string $rel, array $info, string $label) use (&$errors, $channels): ?array {
+        clearstatcache(true, "$tree/$rel");
+        $sz = @filesize("$tree/$rel");
+        if ($sz === false) { $errors[] = "missing_index:$label/$rel"; return null; }
+        $data = $sz <= LUMEN_UP_INDEX_V3_MAX ? (string)@file_get_contents("$tree/$rel") : '';
+        if (strlen($data) !== $info['bytes'] || hash('sha256', $data) !== $info['sha256']) { $errors[] = "index_hash_mismatch:$label/$rel"; return null; }
+        [$ok, $reason, $idxLevels, $ch] = lumen_up_index_v3_shape($data);
+        if (!$ok) { $errors[] = "$reason:$label/$rel"; return null; }
+        if ($ch !== $channels) { $errors[] = "index_shape_mismatch:$label/$rel"; return null; }
+        return [$data, $idxLevels];
+    };
+    $checkPacks = function (string $tree, string $label, array $extents, callable $relOf) use (&$errors): void {
+        foreach ($extents as $kc => $ext) {
+            [$k, $c] = array_map('intval', explode(':', (string)$kc));
+            foreach ($ext as $pack => $end) {
+                $rel = $relOf($k, $c, $pack);
+                clearstatcache(true, "$tree/$rel");
+                $size = @filesize("$tree/$rel");
+                if ($size === false) $errors[] = "missing_pack:$label/$rel";
+                elseif ($size < $end) $errors[] = "truncated_pack:$label/$rel";
+            }
+        }
+    };
+    foreach (lumen_up_v3_trees($man) as [$key, $info]) {
+        $tree = $key !== '' ? "$dir/bricks/$key" : "$dir/bricks";
+        $label = $key !== '' ? $key : 'bricks';
+        foreach (LUMEN_UP_V5_COLUMNS as $cid) {
+            $got = $readIndex($tree, "index/$cid.bin", $info['columns'][$cid], $label);
+            if ($got === null) continue;
+            [$data, $idxLevels] = $got;
+            if (array_map(fn($l) => array_slice($l, 0, 3), $idxLevels) !== $grids) { $errors[] = "index_grid_mismatch:$label/index/$cid.bin"; continue; }
+            $checkPacks($tree, $label, lumen_up_index_extents($data, $idxLevels, $channels), fn($k, $c, $p) => sprintf('l%d/%s/c%d/p%05d.bin', $k, $cid, $c, $p));
+        }
+        foreach (array_values($info['cuts']) as $k => $ref) {
+            $got = $readIndex($tree, "cuts/l$k/index.bin", $ref, $label);
+            if ($got === null) continue;
+            [$data, $idxLevels] = $got;
+            if (array_map(fn($l) => array_slice($l, 0, 3), $idxLevels) !== [$cutGrids[$k] ?? null]) { $errors[] = "index_grid_mismatch:$label/cuts/l$k/index.bin"; continue; }
+            $checkPacks($tree, $label, lumen_up_index_extents($data, $idxLevels, $channels), fn($kk, $c, $p) => sprintf('cuts/l%d/c%d/p%05d.bin', $k, $c, $p));
+        }
+        foreach ($levels as $k => $L) {
+            $d = $L['dimensions'];
+            $rels = [];
+            if ($k) for ($z = 0; $z < $d['z']; $z++) $rels[] = sprintf('xy/l%d/z%05d.bin', $k, $z);
+            foreach (['xz' => $d['y'], 'yz' => $d['x']] as $kind => $n) {
+                for ($c = 0; $c < $channels; $c++) for ($b = 0; $b < intdiv($n + 63, 64); $b++) $rels[] = sprintf('%s/l%d/c%d/b%05d.bin', $kind, $k, $c, $b);
+            }
+            foreach ($rels as $rel) if (!is_file("$tree/$rel")) { $errors[] = "missing_store:$label/$rel"; break; }
+        }
+        if (count($errors) >= 20) return array_slice($errors, 0, 20);
+    }
+    return $errors;
+}
+
 function lumen_up_validate_manifest(array $man): array {
     if (($man['schema'] ?? null) === LUMEN_UP_BRICKS_V3_SCHEMA) return lumen_up_validate_manifest_v3($man);
+    if (($man['schema'] ?? null) === LUMEN_UP_BRICKS_V5_SCHEMA) return lumen_up_validate_manifest_v5($man);
     $levels = $man['levels'] ?? null;
     if (!is_array($levels) || !$levels || array_keys($levels) !== range(0, count($levels) - 1)) return [false, 'manifest_no_levels'];
     if (array_key_exists('channels', $man) && $man['channels'] !== null
@@ -1233,6 +1383,9 @@ function lumen_up_check_bricks(string $dir): array {
     $errors = $ok ? [] : [$reason ?: 'manifest_invalid'];
     if (($man['schema'] ?? null) === LUMEN_UP_BRICKS_V3_SCHEMA) {
         return $ok ? array_merge($errors, lumen_up_cross_check_v3($dir, $man)) : $errors;
+    }
+    if (($man['schema'] ?? null) === LUMEN_UP_BRICKS_V5_SCHEMA) {
+        return $ok ? array_merge($errors, lumen_up_cross_check_v5($dir, $man)) : $errors;
     }
     return array_merge($errors, lumen_up_cross_check_packs($dir, $man));
 }

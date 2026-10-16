@@ -180,6 +180,10 @@ async function processDecode(msg, epoch) {
         ? _gridCols
         : Math.ceil(bs / Math.ceil(Math.sqrt(bs)));
       const bmpWidth = bmp.width;
+      // A v5 lossy mosaic lays its slices on an 80-px slot pitch, each at (7, 7) of its
+      // slot (SPEC §14.2 grid80); every other mosaic has slots of exactly the slice.
+      const pitch = Number(packing.pitch) > 0 ? Number(packing.pitch) : bs;
+      const origin = Number(packing.origin) > 0 ? Number(packing.origin) : 0;
 
       // Tile (tx, ty) of the mosaic holds z = ty·cols + tx; voxel (x, y, z) sits at
       // mosaic pixel (tx·bs + x, ty·bs + y). Only the wanted y rows of each wanted
@@ -191,13 +195,13 @@ async function processDecode(msg, epoch) {
       const bands = [];
       if (rh < bs && tileY1 > tileY0) {
         for (let ty = tileY0; ty <= tileY1; ty++) {
-          const top = ty * bs + ry0;
+          const top = ty * pitch + origin + ry0;
           const h = Math.max(0, Math.min(bmp.height - top, rh));
           bands.push({ ty0: ty, ty1: ty, top, h, data: h > 0 ? ctx.getImageData(0, top, bmpWidth, h).data : null });
         }
       } else {
-        const top = tileY0 * bs;
-        const h = Math.max(1, Math.min(bmp.height - top, (tileY1 - tileY0 + 1) * bs));
+        const top = tileY0 * pitch;
+        const h = Math.max(1, Math.min(bmp.height - top, (tileY1 - tileY0 + 1) * pitch));
         bands.push({ ty0: tileY0, ty1: tileY1, top, h, data: ctx.getImageData(0, top, bmpWidth, h).data });
       }
       t2 = performance.now();
@@ -206,8 +210,8 @@ async function processDecode(msg, epoch) {
         const src = band.data;
         const srcLen = src ? src.length : 0;
         for (let z = Math.max(rz0, band.ty0 * cols); z < Math.min(rz1, (band.ty1 + 1) * cols); z++) {
-          const tileX_bs = (z % cols) * bs;
-          const tileTop = Math.floor(z / cols) * bs;
+          const tileX_bs = (z % cols) * pitch + origin;
+          const tileTop = Math.floor(z / cols) * pitch + origin;
           const zOff = (z - rz0) * rh * rw;
           for (let y = ry0; y < ry1; y++) {
             const py = tileTop + y - band.top;          // row inside the band

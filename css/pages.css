@@ -33,6 +33,15 @@
 .pr-linkrow:hover .pr-linkrow-a, .pr-linkrow:focus-visible .pr-linkrow-a { transform: translateX(5px); opacity: 1; }
 .pr-linkrow:focus-visible { outline: 2px solid var(--color-primary, #00A654); outline-offset: 2px; }
 
+/* Links of the text widgets (richtext, spec-list, icon-list: root class pr-links)
+   read --color-accent, a cyan made for the dark background. In the light theme the
+   widget's accent becomes the text-safe one of themes.css. A class rule, so an
+   inline `--color-accent: …` in the widget's custom CSS still wins. */
+[data-theme="light"] .pr-links {
+  --color-accent: var(--color-accent-text);
+  --color-accent-hover: var(--color-accent-text-hover);
+}
+
 /* logo-strip: desaturated partner logos that colorise on hover (props.grayscale) */
 .pr-logo-mono { filter: grayscale(1); opacity: .72; transition: filter .25s ease, opacity .25s ease; }
 a:hover > .pr-logo-mono, a:focus-visible > .pr-logo-mono { filter: none; opacity: 1; }

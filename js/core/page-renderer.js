@@ -133,20 +133,27 @@ const PageRenderer = (() => {
     box.appendChild(inner);
     return box;
   }
+  // The page background. --bg-base is defined by no theme: it stays a widget-level
+  // override hook (pages carry `--bg-base: …` in their custom CSS) and otherwise
+  // falls back to the theme's real page background, so light and dark both resolve.
+  const BG_PAGE = 'var(--bg-base, var(--bg-body,#0d0d1a))';
+  // The editor's "site background" swatch used to write a bare var(--bg-base),
+  // which resolved to nothing in either theme; stored values read it as BG_PAGE.
+  function _legacyTokens(s) { return s.replace(/var\(\s*--bg-base\s*\)/g, 'var(--bg-base, var(--bg-body))'); }
   // One CSS *value* (color, gradient, …) — never a declaration: strip anything
   // that could close the property or smuggle extra ones in. 400 chars leaves
   // room for a 3-stop gradient whose stops are color-mix(...)-wrapped var()s.
-  function _sanitizeCss(v) { return String(v == null ? '' : v).replace(/[<>;{}]/g, '').replace(/expression\s*\(/gi, '').slice(0, 400); }
+  function _sanitizeCss(v) { return _legacyTokens(String(v == null ? '' : v).replace(/[<>;{}]/g, '').replace(/expression\s*\(/gi, '').slice(0, 400)); }
   function _urlCss(u) { return String(u == null ? '' : u).replace(/["'\\<>;{}()]/g, '').slice(0, 500); }
   // A raw CSS *block* (props.style.css power-user escape hatch) — unlike
   // _sanitizeCss this legitimately contains `;` (it separates declarations),
   // so only the genuinely dangerous constructs are stripped.
   function _sanitizeCssBlock(v) {
-    return String(v == null ? '' : v)
+    return _legacyTokens(String(v == null ? '' : v)
       .replace(/[<>{}]/g, '')
       .replace(/expression\s*\(/gi, '')
       .replace(/javascript\s*:/gi, '')
-      .slice(0, 600);
+      .slice(0, 600));
   }
   // Anchor href guard for widget-authored links: never let a javascript:/
   // vbscript:/data: URI reach an href. Used by the link-accepting fields
@@ -416,12 +423,29 @@ const PageRenderer = (() => {
     return null;
   }
 
+  // Gallery automatic columns. `fit` tracks of ≥ GALLERY_MIN_TRACK px fit the
+  // measured width (what auto-fill would draw). Returns 0 when the n images fit
+  // on one row (auto-fill kept), else a column count c ≤ fit for n images: the
+  // largest even split (n % c = 0) that keeps at least half the tracks, else the
+  // largest c whose last row holds more than one image, else fit (n = 7 on 3
+  // tracks has no layout without a lone image).
+  const GALLERY_MIN_TRACK = 160;
+  function galleryColumns(n, fit) {
+    n = Math.max(0, Math.floor(+n) || 0);
+    fit = Math.max(1, Math.floor(+fit) || 1);
+    if (n <= fit) return 0;
+    if (fit === 1) return 1;
+    for (let c = fit; c >= Math.ceil(fit / 2); c--) if (n % c === 0) return c;
+    for (let c = fit; c >= 2; c--) if (n % c !== 1) return c;
+    return fit;
+  }
+
   // ── Shared widget-rendering helpers ─────────────────────────────────────────
   // richtext mini-markup — **bold**, *italic*, [text](url) — parsed and built
   // as DOM nodes (never innerHTML). Plain text with no markup produces exactly
   // one text node, matching the pre-v1.18.0 textContent assignment byte-for-byte.
   const _RICH_RE = /\*\*([^*]+)\*\*|\*([^*]+)\*|\[([^\]]+)\]\(([^)]+)\)/g;
-  function _appendRichInline(container, text) {
+  function _appendRichInline(container, text, linkCss) {
     _RICH_RE.lastIndex = 0;
     let last = 0, m;
     while ((m = _RICH_RE.exec(text))) {
@@ -430,7 +454,7 @@ const PageRenderer = (() => {
       else if (m[2] !== undefined) container.appendChild(_el('em', '', m[2]));
       else {
         const href = _safeHref(m[4]);
-        if (href) { const a = document.createElement('a'); a.href = href; a.textContent = m[3]; container.appendChild(a); }
+        if (href) { const a = document.createElement('a'); a.href = href; a.textContent = m[3]; if (linkCss) a.style.cssText = linkCss; container.appendChild(a); }
         else container.appendChild(document.createTextNode(m[3]));
       }
       last = _RICH_RE.lastIndex;
@@ -438,15 +462,26 @@ const PageRenderer = (() => {
     if (last < text.length) container.appendChild(document.createTextNode(text.slice(last)));
   }
 
+  // Links of the text widgets (richtext, spec-list, icon-list) are coloured by
+  // --color-accent, a cyan chosen for the dark theme (1.8:1 on white). Their root
+  // carries LINKS_CLASS: in the light theme css/pages.css points --color-accent at
+  // --color-accent-text (themes.css, ≥ 4.5:1) on that element. An inline
+  // `--color-accent: …` in the widget's custom CSS outranks the class, so pages
+  // that set their own accent keep it. props.linkColor colours the links directly.
+  const LINKS_CLASS = 'pr-links';
+  function _linkCss(p) { return p && p.linkColor ? _textFillCss(p.linkColor) : ''; }
+
   // feature-card media box: icon | image | monogram | none. `compact` selects
   // the fixed 64×64 sizing used by the horizontal (props.layout:'h') layout;
-  // compact=false (the 'v' layout / legacy default) reproduces the pre-v1.18.0
-  // icon markup byte-for-byte when media is unset.
+  // compact=false is the 'v' layout / legacy default, whose card is a flex
+  // column: the media never shrinks there, and the inline icon badge sits in a
+  // block of its own, the line box the block card used to give it (same height,
+  // placed by the card's text-align).
   function _featureMedia(p, compact) {
     const media = p.media || 'icon';
     if (media === 'none') return null;
     const mb = compact ? '' : 'margin-bottom:14px;';
-    const flexRule = compact ? 'flex:0 0 auto;' : '';
+    const flexRule = 'flex:0 0 auto;';
     if (media === 'image') {
       if (!p.img) return null;
       const imgH = _n(p.imgH, 20, 800) || 96;
@@ -480,7 +515,10 @@ const PageRenderer = (() => {
     i.setAttribute('data-lucide', iconName);
     i.style.cssText = `width:${isz}px;height:${isz}px;color:${p.iconColor ? _sanitizeCss(p.iconColor) : 'var(--color-primary,#00A654)'}`;
     badge.appendChild(i);
-    return badge;
+    if (compact) return badge;
+    const line = _el('div', flexRule);
+    line.appendChild(badge);
+    return line;
   }
 
   // ── Widget renderers (the former block renderers; type names unchanged) ─────
@@ -512,9 +550,11 @@ const PageRenderer = (() => {
       // only content authored against the parser gets parsed. The editor sets
       // markup:true on newly created richtext widgets.
       const markup = !!(b.props && b.props.markup);
+      const linkCss = _linkCss(b.props);
+      wrap.classList.add(LINKS_CLASS);
       _lv(b.text).split(/\n{2,}/).forEach((para) => {
         const p = _el('p', 'line-height:1.7;margin:0 0 14px;white-space:pre-wrap;' + pText + gradFit);
-        if (markup) _appendRichInline(p, para);
+        if (markup) _appendRichInline(p, para, linkCss);
         else p.textContent = para;
         wrap.appendChild(p);
       });
@@ -523,14 +563,25 @@ const PageRenderer = (() => {
     image(b) {
       const p = b.props || {}, st = p.style || {};
       const hasCaption = !!_lv(p.caption);
-      const wrap = _el(hasCaption ? 'figure' : 'div', `text-align:${ALIGN(p.align || 'center')};${hasCaption ? 'margin:0;' : ''}` + styleCss(st, ['spacing', 'text']));
+      const align = ALIGN(p.align || 'center');
+      const wrap = _el(hasCaption ? 'figure' : 'div', `text-align:${align};${hasCaption ? 'margin:0;' : ''}` + styleCss(st, ['spacing', 'text']));
       const img = document.createElement('img');
       img.src = p.src || ''; img.alt = _lv(p.alt) || ''; img.loading = 'lazy';
       const h = _n(p.height, 10, 2000);
-      img.style.cssText = `max-width:100%;height:${h ? h + 'px' : 'auto'};` +
+      // base.css makes <img> a block, so the wrapper's text-align never moved it:
+      // the side margins place it. style.maxWidth caps the image without ever
+      // exceeding its column (min(100%, …)) — the generic size group would write
+      // a bare px max-width, wider than a phone, and always centre the image.
+      // The image goes where the wrapper's text goes: style.align (text group,
+      // appended after props.align) wins there, so it wins here too.
+      const place = st.align ? ALIGN(st.align) : align;
+      const mw = _n(st.maxWidth, 40, 1920);
+      const stImg = Object.assign({}, st); delete stImg.maxWidth;
+      img.style.cssText = `max-width:${mw != null ? `min(100%, ${mw}px)` : '100%'};height:${h ? h + 'px' : 'auto'};` +
         `${(h || p.fit) ? `object-fit:${p.fit === 'contain' ? 'contain' : 'cover'};` : ''}` +
         `border-radius:var(--radius-md,10px);${p.width ? 'width:' + (parseInt(p.width) || 0) + 'px;' : ''}` +
-        styleCss(st, ['surface', 'size']);
+        (place === 'center' ? 'margin-left:auto;margin-right:auto;' : place === 'right' ? 'margin-left:auto;margin-right:0;' : '') +
+        styleCss(stImg, ['surface', 'size']);
       const imgHref = _safeHref(p.href);
       if (imgHref) { const a = document.createElement('a'); a.href = imgHref; a.appendChild(img); wrap.appendChild(a); }
       else wrap.appendChild(img);
@@ -666,8 +717,11 @@ const PageRenderer = (() => {
       const h = _n(p.height, 40, 1000) || 160;
       const r = _n(st.radius, 0, 300);
       const radiusCss = r != null ? r + 'px' : 'var(--radius-md,10px)';
-      const grid = _el('div', `display:grid;grid-template-columns:${cols ? `repeat(${cols},1fr)` : 'repeat(auto-fill,minmax(160px,1fr))'};gap:${gp != null ? gp : 12}px`);
-      (Array.isArray(p.images) ? p.images : []).forEach((im) => {
+      const g = gp != null ? gp : 12;
+      const AUTO_COLS = `repeat(auto-fill,minmax(${GALLERY_MIN_TRACK}px,1fr))`;
+      const grid = _el('div', `display:grid;grid-template-columns:${cols ? `repeat(${cols},1fr)` : AUTO_COLS};gap:${g}px`);
+      const images = Array.isArray(p.images) ? p.images : [];
+      images.forEach((im) => {
         const img = document.createElement('img');
         img.src = im.src || ''; img.alt = _lv(im.alt) || ''; img.loading = 'lazy';
         const needWrap = !!(p.zoom || p.captions);
@@ -678,12 +732,37 @@ const PageRenderer = (() => {
           img.style.cssText = `width:100%;height:${h}px;object-fit:cover;border-radius:${radiusCss}`;
         }
         if (!needWrap) { grid.appendChild(img); return; }
-        const cell = _el('div', p.zoom ? `overflow:hidden;border-radius:${radiusCss}` : '');
+        const cell = _el('div', p.zoom && !p.captions ? `overflow:hidden;border-radius:${radiusCss}` : '');
         if (p.zoom) cell.className = 'pr-hov-parent';
-        cell.appendChild(img);
+        if (p.zoom && p.captions) {
+          // The zoom clip belongs to the picture alone: on the whole cell its
+          // rounded corner cut into the first letter of the caption.
+          const frame = _el('div', `overflow:hidden;border-radius:${radiusCss}`);
+          frame.appendChild(img);
+          cell.appendChild(frame);
+        } else {
+          cell.appendChild(img);
+        }
         if (p.captions) cell.appendChild(_el('div', 'font-size:.78rem;opacity:.6;margin-top:4px', _lv(im.alt)));
         grid.appendChild(cell);
       });
+      // Automatic columns: auto-fill puts as many tracks as fit, so 6 images on a
+      // 5-track width leave one alone on the last row. The column count is
+      // re-chosen from the measured width (galleryColumns); a row that fits
+      // everything keeps the auto-fill tracks untouched.
+      if (!cols && images.length > 2 && typeof ResizeObserver !== 'undefined') {
+        let applied = null;
+        const ro = new ResizeObserver((entries) => {
+          if (!grid.isConnected) { ro.disconnect(); return; }
+          const w = entries[entries.length - 1].contentRect.width;
+          if (!(w > 0)) return;
+          const c = galleryColumns(images.length, Math.floor((w + g) / (GALLERY_MIN_TRACK + g)));
+          if (c === applied) return;
+          applied = c;
+          grid.style.gridTemplateColumns = c ? `repeat(${c},minmax(0,1fr))` : AUTO_COLS;
+        });
+        ro.observe(grid);
+      }
       return grid;
     },
     icon(b) {
@@ -802,16 +881,21 @@ const PageRenderer = (() => {
       // Whole-card link (v1.18.0): the card itself becomes an <a> when a valid
       // href is supplied; falls back to a plain <div> otherwise (unchanged).
       const href = p.href ? _safeHref(p.href) : '';
+      // A flex column ('v'; the text column of 'h'), so the link can sit at the
+      // bottom of a card taller than its content. height:100% takes effect in a
+      // column holding this card alone (fillsColumn: the column and the widget
+      // box become flex containers), which stretches every card of a row to the
+      // row's height; anywhere else it resolves to auto, the card's own height.
       const card = href ? document.createElement('a') : document.createElement('div');
       card.style.cssText = `padding:26px;background:var(--bg-surface,#161622);border-radius:var(--radius-md,12px);text-align:${align};height:100%;box-sizing:border-box` +
-        (href ? ';display:block;color:inherit;text-decoration:none' : '') +
-        (layout === 'h' ? ';display:flex;align-items:flex-start;gap:18px' : '');
+        (href ? ';color:inherit;text-decoration:none' : '') +
+        (layout === 'h' ? ';display:flex;align-items:flex-start;gap:18px' : ';display:flex;flex-direction:column');
       if (href) card.href = href;
 
       const mediaNode = _featureMedia(p, layout === 'h');
       if (mediaNode) _scheduleIcons();
 
-      const textCol = layout === 'h' ? _el('div', 'flex:1 1 auto;min-width:0;text-align:' + align) : null;
+      const textCol = layout === 'h' ? _el('div', 'flex:1 1 auto;min-width:0;align-self:stretch;display:flex;flex-direction:column;text-align:' + align) : null;
       const target = textCol || card;
 
       const titleSize = _n(p.titleSize, 10, 60);
@@ -824,7 +908,11 @@ const PageRenderer = (() => {
         a.href = _hrefOr(p.link.href);
         a.style.cssText = `display:inline-flex;align-items:center;gap:6px;margin-top:14px;color:${p.linkColor ? _sanitizeCss(p.linkColor) : 'var(--color-primary,#00A654)'};text-decoration:none;font-weight:600;font-size:.92rem`;
         a.textContent = _lv(p.link.text) + (p.linkArrow === false ? '' : ' →');
-        target.appendChild(a);
+        // margin-top:auto takes the card's spare height; the link keeps its own
+        // 14px margin inside the line box, as when it followed the text directly.
+        const foot = _el('div', 'margin-top:auto');
+        foot.appendChild(a);
+        target.appendChild(foot);
       }
 
       if (layout === 'h') {
@@ -932,16 +1020,22 @@ const PageRenderer = (() => {
       const root = _el('div', `position:relative;overflow:hidden;display:flex;align-items:center;gap:20px 28px;flex-wrap:wrap;padding:30px 34px;` +
         `border-radius:var(--radius-lg,14px);background:${bg};color:#fff;` +
         (centered ? 'flex-direction:column;text-align:center;justify-content:center;' : 'justify-content:space-between;'));
-      const txt = _el('div', centered ? '' : 'flex:1;min-width:220px');
+      const txt = _el('div', centered ? '' : 'flex:1;min-width:min(220px,100%)');
       if (_lv(b.text)) txt.appendChild(_el('h3', 'margin:0 0 6px;font-size:1.45rem;line-height:1.25;color:inherit', _lv(b.text)));
-      if (_lv(p.subtitle)) txt.appendChild(_el('p', 'margin:0;opacity:.85;line-height:1.55', _lv(p.subtitle)));
+      // color:inherit: base.css gives every <p> the theme's secondary text colour,
+      // grey on the coloured band in the light theme; the subtitle follows the band.
+      if (_lv(p.subtitle)) txt.appendChild(_el('p', 'margin:0;opacity:.85;line-height:1.55;color:inherit', _lv(p.subtitle)));
       root.appendChild(txt);
+      // Buttons and their row may shrink (flex 0 1, max-width 100%) and a label
+      // may wrap: a line too narrow for them (a phone) wraps them instead of
+      // clipping the second one at the band's edge. With room they stay as wide
+      // as their one-line label, as before.
       const mkCta = (cta, ghost) => {
         const a = document.createElement('a');
         a.href = _hrefOr(cta.href);
         a.style.cssText = ghost
-          ? 'flex:0 0 auto;display:inline-block;padding:12px 24px;border-radius:10px;background:transparent;border:1px solid rgba(255,255,255,.5);color:#fff;font-weight:700;text-decoration:none;white-space:nowrap'
-          : 'flex:0 0 auto;display:inline-block;padding:12px 24px;border-radius:10px;background:#fff;color:#14141f;font-weight:700;text-decoration:none;white-space:nowrap;box-shadow:0 4px 14px rgba(0,0,0,.22)';
+          ? 'flex:0 1 auto;max-width:100%;box-sizing:border-box;display:inline-block;padding:12px 24px;border-radius:10px;background:transparent;border:1px solid rgba(255,255,255,.5);color:#fff;font-weight:700;text-decoration:none;text-align:center'
+          : 'flex:0 1 auto;max-width:100%;box-sizing:border-box;display:inline-block;padding:12px 24px;border-radius:10px;background:#fff;color:#14141f;font-weight:700;text-decoration:none;text-align:center;box-shadow:0 4px 14px rgba(0,0,0,.22)';
         a.textContent = _lv(cta.text);
         return a;
       };
@@ -949,7 +1043,7 @@ const PageRenderer = (() => {
       const hasCta2 = p.cta2 && _lv(p.cta2.text);
       if (hasCta1 && hasCta2) {
         // Two buttons: group them so they wrap/center together.
-        const row = _el('div', 'flex:0 0 auto;display:flex;gap:12px;flex-wrap:wrap;' + (centered ? 'justify-content:center;' : ''));
+        const row = _el('div', 'flex:0 1 auto;max-width:100%;display:flex;gap:12px;flex-wrap:wrap;' + (centered ? 'justify-content:center;' : ''));
         row.appendChild(mkCta(p.cta, false));
         row.appendChild(mkCta(p.cta2, true));
         root.appendChild(row);
@@ -965,7 +1059,7 @@ const PageRenderer = (() => {
       const p = b.props || {};
       const align = ALIGN(p.align);
       const items = Array.isArray(p.items) ? p.items : [];
-      const pillBg = p.pillBg ? _sanitizeCss(p.pillBg) : 'color-mix(in srgb, var(--bg-base,#0d0d1a) 65%, transparent)';
+      const pillBg = p.pillBg ? _sanitizeCss(p.pillBg) : `color-mix(in srgb, ${BG_PAGE} 65%, transparent)`;
       const pillColor = p.pillColor ? _sanitizeCss(p.pillColor) : 'var(--text-secondary,#b8b8c8)';
       const borderColor = p.borderColor ? _sanitizeCss(p.borderColor) : 'var(--border-default,#3a3a4a)';
       const size = _n(p.size, 8, 60) || 12.5;
@@ -1004,6 +1098,8 @@ const PageRenderer = (() => {
       const gp = gap != null ? gap : 12;
       const textSize = _n(p.textSize, 8, 60);
       const wrap = _el('div', `display:flex;${layout === 'h' ? 'flex-direction:row;flex-wrap:wrap;' : 'flex-direction:column;'}gap:${gp}px`);
+      wrap.classList.add(LINKS_CLASS);
+      const linkCss = _linkCss(p) || 'color:var(--color-accent,#00D2FF);';
       let needIcons = false;
       items.forEach((it) => {
         const row = _el('div', `display:flex;align-items:center;gap:10px${textSize != null ? `;font-size:${textSize}px` : ''}`);
@@ -1018,7 +1114,7 @@ const PageRenderer = (() => {
         if (href) {
           const a = document.createElement('a');
           a.href = href; a.textContent = _lv(it.text);
-          a.style.cssText = 'color:var(--color-accent,#00D2FF);text-decoration:none';
+          a.style.cssText = linkCss + 'text-decoration:none';
           row.appendChild(a);
         } else {
           row.appendChild(_el('span', '', _lv(it.text)));
@@ -1090,7 +1186,7 @@ const PageRenderer = (() => {
       if (showCopy) {
         copyBtn = document.createElement('button');
         copyBtn.type = 'button';
-        copyBtn.style.cssText = 'display:inline-flex;align-items:center;gap:6px;height:30px;padding:0 12px;font-size:.75rem;font-weight:600;background:var(--bg-base,#0d0d1a);border:1px solid var(--border-default,#3a3a4a);border-radius:8px;cursor:pointer;color:var(--text-secondary,#b8b8c8)';
+        copyBtn.style.cssText = `display:inline-flex;align-items:center;gap:6px;height:30px;padding:0 12px;font-size:.75rem;font-weight:600;background:${BG_PAGE};border:1px solid var(--border-default,#3a3a4a);border-radius:8px;cursor:pointer;color:var(--text-secondary,#b8b8c8)`;
         const ic = document.createElement('i');
         ic.setAttribute('data-lucide', 'copy');
         ic.style.cssText = 'width:14px;height:14px';
@@ -1132,7 +1228,7 @@ const PageRenderer = (() => {
         toggleLabelEl.textContent = _lv(p.extraLabel) || 'BibTeX';
         toggle.appendChild(ic2); toggle.appendChild(toggleLabelEl);
         const pre = document.createElement('pre');
-        pre.style.cssText = 'display:none;margin-top:10px;padding:14px;border:1px solid var(--border-subtle,#2a2a3a);border-radius:12px;background:var(--bg-base,#0d0d1a);font-family:var(--font-mono,monospace);font-size:.75rem;overflow-x:auto';
+        pre.style.cssText = `display:none;margin-top:10px;padding:14px;border:1px solid var(--border-subtle,#2a2a3a);border-radius:12px;background:${BG_PAGE};font-family:var(--font-mono,monospace);font-size:.75rem;overflow-x:auto`;
         pre.textContent = _lv(p.extra);
         toggle.addEventListener('click', () => { pre.style.display = pre.style.display === 'none' ? 'block' : 'none'; });
         body.appendChild(toggle);
@@ -1313,6 +1409,8 @@ const PageRenderer = (() => {
       const pv = _n(p.padY, 0, 60); const padY = pv != null ? pv : 13;
       const mono = !!p.mono;
       const wrap = _el('div', 'display:flex;flex-direction:column');
+      wrap.classList.add(LINKS_CLASS);
+      const linkCss = _linkCss(p) || 'color:var(--color-accent,#00D2FF);';
       items.forEach((it) => {
         // flex-wrap (not a grid): on a narrow column the value drops under its
         // label instead of being squeezed into a few characters per line.
@@ -1323,7 +1421,7 @@ const PageRenderer = (() => {
         if (href) {
           const a = document.createElement('a');
           a.href = href; a.textContent = _lv(it.value);
-          a.style.cssText = 'color:var(--color-accent,#00D2FF);text-decoration:none';
+          a.style.cssText = linkCss + 'text-decoration:none';
           val.appendChild(a);
         } else {
           val.textContent = _lv(it.value);
@@ -1474,12 +1572,26 @@ const PageRenderer = (() => {
     return { outer, inner, row, gap: g };
   }
 
+  // A column whose only widget is a card fills its row: the row stretches the
+  // column (align-items: stretch, a definite height for its content), the column
+  // becomes a flex column, its widget box takes the free height (FILL_ITEM, a
+  // definite flex basis) and the card's height:100% resolves against it. So the
+  // cards of one row line up, bottom edges and links included. Several widgets
+  // in a column keep the block flow (and its collapsing margins) untouched.
+  const FILL_TYPES = new Set(['feature-card']);
+  const FILL_ITEM = 'flex:1 1 0%';
+  function fillsColumn(col) {
+    const ws = Array.isArray(col && col.widgets) ? col.widgets : [];
+    return ws.length === 1 && !!ws[0] && FILL_TYPES.has(ws[0].type);
+  }
+
   function columnCss(col, gap, n) {
     const width = Math.min(12, Math.max(1, +(col && col.width) || 12));
     const pct = (width / 12) * 100;
     const share = n > 1 ? (gap * (n - 1)) / n + 0.5 : 0;
     const p = (col && col.props) || {};
     let css = `flex:1 1 calc(${pct}% - ${share.toFixed(2)}px);min-width:min(100%,240px);box-sizing:border-box;`;
+    if (fillsColumn(col)) css += 'display:flex;flex-direction:column;';
     if (p.padding) css += `padding:${parseInt(p.padding) || 0}px;`;
     if (p.vAlign && ['flex-start', 'center', 'flex-end'].includes(p.vAlign)) css += `align-self:${p.vAlign};`;
     css += styleCss(p.style);
@@ -1490,7 +1602,13 @@ const PageRenderer = (() => {
     const el = _el('div', columnCss(col, gap, n));
     applyStyleExtras(el, (col && col.props || {}).style);
     const widgets = Array.isArray(col && col.widgets) ? col.widgets : [];
-    widgets.forEach((w) => { const node = renderWidget(w); if (node) el.appendChild(node); });
+    const fill = fillsColumn(col);
+    widgets.forEach((w) => {
+      const node = renderWidget(w);
+      if (!node) return;
+      if (fill) node.style.cssText += ';' + FILL_ITEM;
+      el.appendChild(node);
+    });
     if (!widgets.length) el.appendChild(_el('div', 'min-height:1px'));
     return el;
   }
@@ -1563,7 +1681,8 @@ const PageRenderer = (() => {
 
   return {
     render, renderSource, renderWidget, renderSection,
-    styleCss, sectionCss, columnCss, overlayNode, styleClasses, applyStyleExtras,
+    styleCss, sectionCss, columnCss, overlayNode, styleClasses, applyStyleExtras, fillsColumn, FILL_ITEM,
+    galleryColumns,
     fetchSource, fetchBlocks, normalize: _normalize, lv: _lv,
     sanitizeHtml: _sanitizeHtml, sanitizeNode: _cleanChildren, safeHref: _safeHref, schemeOf: _schemeOf, cleanInlineStyle: _cleanInlineStyle,
     WIDGET_TYPES, BLOCK_TYPES: WIDGET_TYPES,

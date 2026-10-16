@@ -30,8 +30,9 @@ declare(strict_types=1);
 
 require_once __DIR__ . '/_upload_lib.php';
 require_once __DIR__ . '/_migrations_formats.php';
+require_once __DIR__ . '/_migrations_m005.php';
 
-const LUMEN_MIG_LATEST          = 4;
+const LUMEN_MIG_LATEST          = 5;
 const LUMEN_MIG_BRICK           = 64;
 const LUMEN_MIG_TILE            = 512;
 const LUMEN_MIG_BRICKS_PER_TILE = 8;            // LUMEN_MIG_TILE / LUMEN_MIG_BRICK
@@ -98,6 +99,21 @@ const LUMEN_MIGRATIONS = [
             'fr' => 'Reconstruit l\'arbre de briques : le niveau natif est conservé voxel pour voxel, chaque niveau plus grossier réduit aussi Z dès que les voxels sont presque isotropes, chaque brique porte une bordure d\'un voxel (filtrage sans couture entre briques) et un index binaire compact remplace le gros manifeste JSON. Sans perte.',
             'es' => 'Reconstruye el árbol de ladrillos: el nivel nativo se conserva vóxel a vóxel, cada nivel más grueso reduce también Z cuando los vóxeles son casi isótropos, cada ladrillo lleva un borde de un vóxel (filtrado sin costuras entre ladrillos) y un índice binario compacto sustituye al gran manifiesto JSON. Sin pérdidas.',
             'nl' => 'Bouwt de brick-boom opnieuw op: het native niveau blijft voxel voor voxel behouden, elk grover niveau halveert ook Z zodra de voxels bijna isotroop zijn, elke brick heeft een rand van één voxel (naadloze filtering tussen bricks) en een compacte binaire index vervangt het grote JSON-manifest. Verliesvrij.',
+        ],
+    ],
+    [
+        'id' => 'm005-matrix', 'from' => 4, 'to' => 5, 'types' => ['3d', 'live'],
+        'title' => [
+            'en' => 'Resolution × compression matrix: full-depth levels at 256·2ᵏ, five compressions, fast cuts',
+            'fr' => 'Matrice résolution × compression : niveaux à 256·2ᵏ avec toutes les tranches, cinq compressions, coupes rapides',
+            'es' => 'Matriz resolución × compresión: niveles a 256·2ᵏ con todos los cortes, cinco compresiones, cortes rápidos',
+            'nl' => 'Matrix resolutie × compressie: niveaus op 256·2ᵏ met alle coupes, vijf compressies, snelle sneden',
+        ],
+        'description' => [
+            'en' => 'Rebuilds the levels from the native voxels at 256, 512, 1024… pixels with every slice kept, stores each level in five compressions (lossless, ±2, ±4, light, very light) and adds XY/XZ/YZ plane stores and small cut bricks so slices and oblique cuts read only what they show. The native level stays lossless.',
+            'fr' => 'Reconstruit les niveaux à partir des voxels natifs à 256, 512, 1024… pixels en gardant toutes les tranches, range chaque niveau en cinq compressions (sans perte, ±2, ±4, légère, très légère) et ajoute des plans XY/XZ/YZ et de petites briques de coupe pour que les coupes, même obliques, ne lisent que ce qu\'elles montrent. Le niveau natif reste sans perte.',
+            'es' => 'Reconstruye los niveles a partir de los vóxeles nativos a 256, 512, 1024… píxeles conservando todos los cortes, guarda cada nivel en cinco compresiones (sin pérdidas, ±2, ±4, ligera, muy ligera) y añade planos XY/XZ/YZ y pequeños ladrillos de corte para que los cortes, incluso oblicuos, lean solo lo que muestran. El nivel nativo sigue sin pérdidas.',
+            'nl' => 'Bouwt de niveaus opnieuw op vanuit de native voxels op 256, 512, 1024… pixels met alle coupes, bewaart elk niveau in vijf compressies (verliesvrij, ±2, ±4, licht, zeer licht) en voegt XY/XZ/YZ-vlakken en kleine snijbricks toe, zodat sneden, ook schuine, alleen lezen wat ze tonen. Het native niveau blijft verliesvrij.',
         ],
     ],
 ];
@@ -397,7 +413,7 @@ function lumen_mig_voxel_triplet($v): ?array {
 
 /** LOD0 voxel size driving the v3 Z rule: v3 levels[0].voxelSize, the manifest's voxelSize, metadata voxel_size, else 1 µm. */
 function lumen_mig_manifest_voxel(array $man, string $dir): array {
-    if (($man['schema'] ?? null) === LUMEN_V3_SCHEMA && is_array($man['levels'][0] ?? null)) {
+    if (in_array($man['schema'] ?? null, [LUMEN_V3_SCHEMA, LUMEN_V5_SCHEMA], true) && is_array($man['levels'][0] ?? null)) {
         $v = lumen_mig_voxel_triplet($man['levels'][0]['voxelSize'] ?? null);
         if ($v) return $v;
     }
@@ -535,7 +551,7 @@ function lumen_mig_plan_for($datasetId): array {
     if (is_file($diskCache)) {
         $hit = @unserialize((string)@file_get_contents($diskCache), ['allowed_classes' => false]);
         if (is_array($hit) && ($hit['sig'] ?? null) === $sig && is_array($hit['plan'] ?? null) && ($hit['plan']['dir'] ?? null) === $dir
-            && array_key_exists('carry', $hit['plan'])) {
+            && array_key_exists('carry', $hit['plan']) && array_key_exists('v5', $hit['plan'])) {
             $cache = [$dir => ['sig' => $sig, 'plan' => $hit['plan']]];
             return $hit['plan'];
         }
@@ -551,12 +567,15 @@ function lumen_mig_plan_for($datasetId): array {
         $trees = [];
         $tps = $man['timepoints'] ?? null;
         $isV3 = ($man['schema'] ?? null) === LUMEN_V3_SCHEMA;
-        $v3Problem = null;
-        $carry = $isV3 ? ['histograms' => null, 'dataset' => null, 'tph' => []] : lumen_mig_v2_carry($reduced);
+        $isV5 = ($man['schema'] ?? null) === LUMEN_V5_SCHEMA;
+        $v3Problem = null; $v5Problem = null;
+        $carry = ($isV3 || $isV5) ? ['histograms' => null, 'dataset' => null, 'tph' => []] : lumen_mig_v2_carry($reduced);
         unset($reduced);
         $voxel = lumen_mig_manifest_voxel($man, $dir);
         if ($isV3) {
             [$trees, $v3Problem] = lumen_mig_build_v3_trees($type, "$dir/bricks", $man);
+        } elseif ($isV5) {
+            [$trees, $v5Problem] = lumen_v5_build_trees($type, "$dir/bricks", $man);
         } elseif ($type === 'live' && is_array($tps) && $tps && array_keys($tps) !== range(0, count($tps) - 1)) {
             $rows = []; $i = 0;
             foreach ($tps as $k => $row) {
@@ -602,12 +621,13 @@ function lumen_mig_plan_for($datasetId): array {
              'units' => array_map(fn($e) => $e['u'], $unitBytes),      // key => [t,bz,c,ty,tx]
              'unitBytes' => array_map(fn($e) => $e['bytes'], $unitBytes),
              'total' => $total, 'empty' => $total - count($unitBytes),
-             'v3' => $isV3, 'v3Problem' => $v3Problem, 'voxel' => $voxel, 'carry' => $carry, 'sig' => $sig];
+             'v3' => $isV3, 'v3Problem' => $v3Problem, 'v5' => $isV5, 'v5Problem' => $v5Problem,
+             'voxel' => $voxel, 'carry' => $carry, 'sig' => $sig];
     // One plan cached per request: status walks every dataset, and keeping each one
     // (tens of MB for the largest) would add them all up against memory_limit.
     $cache = [$dir => ['sig' => $sig, 'plan' => $plan]];
-    // A v3 plan also depends on index.bin and the packs (its validity): never cached on disk.
-    if (!$isV3 && (is_dir(dirname($diskCache)) || @mkdir(dirname($diskCache), 0755, true))) {
+    // A v3 / v5 plan also depends on its indexes and packs (its validity): never cached on disk.
+    if (!$isV3 && !$isV5 && (is_dir(dirname($diskCache)) || @mkdir(dirname($diskCache), 0755, true))) {
         @lumen_write_file_atomic($diskCache, serialize(['sig' => $sig, 'plan' => $plan]));
     }
     return $plan;
@@ -633,6 +653,7 @@ const LUMEN_MIG_SWAP_DIRS = [
     LUMEN_M002 => ['.planes-incoming', 'planes', '.planes-old'],
     LUMEN_M003 => ['.mips-incoming', 'mips', '.mips-old'],
     LUMEN_M004 => ['.bricks-incoming', 'bricks', 'bricks.v2-old'],
+    LUMEN_M005 => ['.bricks5-incoming', 'bricks', 'bricks.v4-old'],
 ];
 
 /** SPEC §3.1, keys in the normative order. */
@@ -728,7 +749,8 @@ function lumen_mig_bricks_v3_valid(array $plan): bool {
 function lumen_mig_structure_valid(array $plan, string $mid): bool {
     if ($mid === LUMEN_M002) return lumen_mig_planes_valid($plan);
     if ($mid === LUMEN_M003) return lumen_mig_mips_valid($plan);
-    if ($mid === LUMEN_M004) return lumen_mig_bricks_v3_valid($plan);
+    if ($mid === LUMEN_M004) return lumen_mig_bricks_v3_valid($plan) || !empty($plan['v5']);
+    if ($mid === LUMEN_M005) return !empty($plan['v5']) && $plan['v5Problem'] === null;
     return false;
 }
 
@@ -739,7 +761,9 @@ function lumen_mig_structure_valid(array $plan, string $mid): bool {
  */
 function lumen_mig_repair_needed(array $plan, int $fv, array $m): bool {
     if ($fv < $m['to']) return false;
-    if ($m['id'] === LUMEN_M004) return empty($plan['v3']);
+    if ($m['id'] === LUMEN_M004) return empty($plan['v3']) && empty($plan['v5']);
+    // Damaged v5 bricks cannot be rebuilt (their format-4 source is gone): a problem, not a repair.
+    if ($m['id'] === LUMEN_M005) return empty($plan['v5']);
     return !lumen_mig_structure_valid($plan, $m['id']);
 }
 
@@ -799,6 +823,8 @@ function lumen_mig_capabilities(): array {
             LUMEN_M002 => ['available' => !$m002, 'reasons' => $m002],
             LUMEN_M003 => ['available' => !$m003, 'reasons' => $m003],
             LUMEN_M004 => ['available' => !$m004, 'reasons' => $m004],
+            // No server executor on PHP: the browser computes every m005 unit (SPEC §14.10).
+            LUMEN_M005 => ['available' => false, 'reasons' => ['browser_only']],
         ],
     ];
     if (!$webp) $caps['detail'] = function_exists('gd_info') ? 'GD cannot decode lossless WebP exactly' : 'the gd extension is not loaded';
@@ -1120,10 +1146,12 @@ function lumen_mig_process_unit(array $plan, array $unit): array {
 function lumen_mig_unit_key_for(string $mid, array $u): string {
     if ($mid === LUMEN_M003) return vsprintf('t%d.l%d.c%d.y%d.x%d', $u);
     if ($mid === LUMEN_M004) return vsprintf('t%d.k%d.c%d.z%d.y%d.x%d', $u);
+    if ($mid === LUMEN_M005) return lumen_m005_key($u);
     return lumen_mig_unit_key(...$u);
 }
 
 function lumen_mig_parse_key_for(string $mid, $key): array {
+    if ($mid === LUMEN_M005) return lumen_m005_parse($key);
     $rx = [LUMEN_M003 => '/^t(\d{1,6})\.l(\d{1,5})\.c(\d{1,3})\.y(\d{1,4})\.x(\d{1,4})$/D',
            LUMEN_M004 => '/^t(\d{1,6})\.k(\d{1,2})\.c(\d{1,3})\.z(\d{1,5})\.y(\d{1,5})\.x(\d{1,5})$/D'][$mid] ?? null;
     if ($rx === null) return lumen_mig_parse_key($key);
@@ -1144,9 +1172,9 @@ function lumen_mig_unitset(array $plan, string $mid): array {
         return ['mid' => LUMEN_M002, 'units' => $plan['units'], 'unitBytes' => $plan['unitBytes'],
                 'total' => $plan['total'], 'empty' => $plan['empty'], 'inputs' => [], 'refs' => null, 'levels' => null];
     }
-    if ($mid !== LUMEN_M003 && $mid !== LUMEN_M004) throw new LumenMigError('unknown_migration');
+    if ($mid !== LUMEN_M003 && $mid !== LUMEN_M004 && $mid !== LUMEN_M005) throw new LumenMigError('unknown_migration');
     $stamp = '';
-    if ($mid === LUMEN_M003) {
+    if ($mid === LUMEN_M003 || $mid === LUMEN_M005) {
         $ts = array_keys($plan['trees']);
         sort($ts);
         foreach ($ts as $t) {
@@ -1157,14 +1185,14 @@ function lumen_mig_unitset(array $plan, string $mid): array {
     }
     $ck = $plan['dir'] . '|' . $plan['sig'] . '|' . $mid . '|' . $stamp;
     if (isset($cache[$ck])) return $cache[$ck];
-    if ($mid === LUMEN_M003) {
-        // Across requests too: m003's plan reads one pack header per plane of every tree.
-        $disk = lumen_mig_root() . '/.plans/' . $plan['type'] . '__' . $plan['folder'] . '__' . LUMEN_M003 . '.ser';
+    if ($mid === LUMEN_M003 || $mid === LUMEN_M005) {
+        // Across requests too: m003's and m005's plans read one pack header per plane of every tree.
+        $disk = lumen_mig_root() . '/.plans/' . $plan['type'] . '__' . $plan['folder'] . '__' . $mid . '.ser';
         $hit = is_file($disk) ? @unserialize((string)@file_get_contents($disk), ['allowed_classes' => false]) : null;
         if (is_array($hit) && ($hit['key'] ?? null) === $ck && is_array($hit['us'] ?? null)) {
             $us = $hit['us'];
         } else {
-            $us = lumen_mig_m003_unitset($plan);
+            $us = $mid === LUMEN_M003 ? lumen_mig_m003_unitset($plan) : lumen_m005_unitset($plan);
             if (is_dir(dirname($disk)) || @mkdir(dirname($disk), 0755, true)) @lumen_write_file_atomic($disk, serialize(['key' => $ck, 'us' => $us]));
         }
     } else {
@@ -1295,6 +1323,7 @@ function lumen_mig_m004_unitset(array $plan): array {
 function lumen_mig_pending_units(array $us, array $done): array {
     $pending = [];
     foreach ($us['units'] as $k => $u) if (!isset($done[$k])) $pending[$k] = $u;
+    if ($us['mid'] === LUMEN_M005) return [lumen_m005_runnable($pending), $pending];
     if ($us['mid'] !== LUMEN_M004) return [$pending, $pending];
     $front = [];
     foreach ($pending as $u) {
@@ -1597,6 +1626,7 @@ function lumen_mig_open_job($datasetId, $mid): array {
 function lumen_mig_check_disk(array $plan, string $mid = LUMEN_M002, ?array $us = null): void {
     if ($mid === LUMEN_M003 && $us !== null) $est = (int)(array_sum($us['unitBytes']) * 0.05);
     elseif ($mid === LUMEN_M004) $est = (int)(array_sum($plan['unitBytes']) * 8 / 7 * 1.3);
+    elseif ($mid === LUMEN_M005) $est = (int)(array_sum($plan['unitBytes']) * LUMEN_V5_SIZE_RATIO);
     else $est = (int)(array_sum($plan['unitBytes']) * LUMEN_MIG_PLANES_RATIO);
     [$sf, $sd] = lumen_mig_volume(lumen_mig_root());
     [$df, $dd] = lumen_mig_volume($plan['dir']);
@@ -1637,10 +1667,10 @@ function lumen_mig_plan($datasetId, $mid, $offset = 0, $limit = 10000): array {
         [$m, $plan, $path] = lumen_mig_open_job($datasetId, $mid);
     } catch (LumenMigError $e) {
         // m004 interrupted between its two renames: bricks/ is momentarily absent.
-        if ($m['id'] === LUMEN_M004 && in_array($e->codeName, ['no_manifest', 'manifest_invalid'], true)) {
+        if (($m['id'] === LUMEN_M004 || $m['id'] === LUMEN_M005) && in_array($e->codeName, ['no_manifest', 'manifest_invalid'], true)) {
             [$type, $folder, $ds] = lumen_mig_resolve($datasetId);
             $j = lumen_mig_load_journal(lumen_mig_journal_path($type, $folder, $m['id']));
-            if ($j !== null && (($j['state'] ?? null) === 'swapped' || is_dir("$ds/.bricks-incoming"))) return lumen_mig_swapped_only_summary($j);
+            if ($j !== null && (($j['state'] ?? null) === 'swapped' || is_dir("$ds/" . LUMEN_MIG_SWAP_DIRS[$m['id']][0]))) return lumen_mig_swapped_only_summary($j);
         }
         throw $e;
     }
@@ -1687,6 +1717,14 @@ function lumen_mig_plan($datasetId, $mid, $offset = 0, $limit = 10000): array {
                 lumen_mig_save_journal($path, $j);
                 return $j;
             }
+            if ($m['id'] === LUMEN_M005 && !empty($plan['v5'])) {
+                if ($plan['v5Problem'] !== null) throw new LumenMigError('bricks_v5_invalid', 409, $plan['v5Problem']);
+                $j = ['migration' => $m['id'], 'dataset' => $plan['dataset'], 'createdAt' => lumen_mig_now(),
+                      'sourceManifests' => [], 'units' => ['total' => 0, 'empty' => 0], 'done' => [],
+                      'executors' => ['browser' => 0, 'server' => 0], 'state' => 'swapped', 'newManifestSha' => $plan['sha']];
+                lumen_mig_save_journal($path, $j);
+                return $j;
+            }
             $us = lumen_mig_unitset($plan, $m['id']);
             lumen_mig_rrmdir($plan['dir'] . '/' . $incoming);
             lumen_mig_check_disk($plan, $m['id'], $us);
@@ -1712,6 +1750,11 @@ function lumen_mig_plan($datasetId, $mid, $offset = 0, $limit = 10000): array {
                        ['pending' => count($pending), 'runnable' => count($runnable), 'offset' => $offset,
                         'units' => array_slice(array_keys($runnable), $offset, $limit)]);
     if ($m['id'] === LUMEN_M004) $out['levels'] = lumen_mig_levels_progress($us, $done);
+    elseif ($m['id'] === LUMEN_M005) {
+        $out['stages'] = lumen_m005_stage_progress($us, $done);
+        $out['levels'] = array_map(fn($L) => ['level' => $L['level'], 'target' => $L['target'], 'dimensions' => $L['dimensions'],
+                                              'voxelSize' => $L['voxelSize']], $us['levels']);
+    }
     return $out;
 }
 
@@ -1805,6 +1848,7 @@ function lumen_mig_unit_put($datasetId, $mid, $key, bool $dry, ?string $body = n
     }
     [$m, $plan, $path] = lumen_mig_open_job($datasetId, $mid);
     $mid = $m['id'];
+    if ($mid === LUMEN_M005) return lumen_m005_unit_put($plan, $m, $path, $key, $body ?? (string)lumen_mig_read_body(false));
     $unit = lumen_mig_parse_key_for($mid, $key);
     $store = lumen_mig_store_dir($plan['type'], $plan['folder'], $mid);
     if ($mid === LUMEN_M002) [, $w, $h, $z0, $depth] = lumen_mig_unit_geometry($plan, $unit);
@@ -2142,6 +2186,7 @@ function lumen_mig_speedtest_put(?string $raw): array {
 function lumen_mig_unit_inputs($datasetId, $mid, $key): array {
     [$m, $plan, $path] = lumen_mig_open_job($datasetId, $mid);
     $mid = $m['id'];
+    if ($mid === LUMEN_M005) return lumen_m005_unit_inputs($plan, $path, $key);
     $unit = lumen_mig_parse_key_for($mid, $key);
     $us = lumen_mig_unitset($plan, $mid);
     $ukey = lumen_mig_unit_key_for($mid, $unit);
@@ -2260,18 +2305,28 @@ function lumen_mig_read_ranges($datasetId, $ranges): string {
     $root = realpath($dir);
     if ($root === false) throw new LumenMigError('no_dataset', 404);
     $plan = []; $sizes = []; $total = 0;
+    [$type, $folder] = lumen_mig_resolve($datasetId);
+    $store = lumen_mig_store_dir($type, $folder, LUMEN_M005);
     foreach ($ranges as $r) {
+        // A stage-A plane pack of the dataset's m005 job (SPEC §14.10): mapped to the job's
+        // tile store, never to a published path.
+        $sm = is_array($r) && is_string($r[0] ?? null) && preg_match('#^@store/A/t(\d{1,6})/k(\d{1,2})/c(\d{1,3})/z(\d{1,5})\.bin$#D', $r[0], $mm);
         if (!is_array($r) || count($r) !== 3 || !is_string($r[0] ?? null)
-            || !preg_match('#^(?:bricks|planes|mips)(?:/[A-Za-z0-9_][A-Za-z0-9._-]{0,127}){1,6}\.bin$#D', $r[0])) {
+            || (!$sm && !preg_match('#^(?:bricks|planes|mips)(?:/[A-Za-z0-9_][A-Za-z0-9._-]{0,127}){1,6}\.bin$#D', $r[0]))) {
             throw new LumenMigError('bad_range');
         }
-        foreach (explode('/', $r[0]) as $seg) if ($seg === '' || $seg[0] === '.') throw new LumenMigError('bad_range');
+        if (!$sm) foreach (explode('/', $r[0]) as $seg) if ($seg === '' || $seg[0] === '.') throw new LumenMigError('bad_range');
         [$rel, $start, $end] = $r;
         if (!is_int($start) || !is_int($end) || $start < 0 || $end <= $start) throw new LumenMigError('bad_range');
-        $path = realpath($root . '/' . $rel);
-        if ($path === false || !is_file($path)) throw new LumenMigError('range_missing', 404, $rel);
-        $rootSep = rtrim(str_replace('\\', '/', $root), '/') . '/';
-        if (strpos(str_replace('\\', '/', $path), $rootSep) !== 0) throw new LumenMigError('bad_range');
+        if ($sm) {
+            $path = lumen_m005_store_a($store, (int)$mm[1], (int)$mm[2], (int)$mm[3], (int)$mm[4]);
+            if (!is_file($path)) throw new LumenMigError('range_missing', 404, $rel);
+        } else {
+            $path = realpath($root . '/' . $rel);
+            if ($path === false || !is_file($path)) throw new LumenMigError('range_missing', 404, $rel);
+            $rootSep = rtrim(str_replace('\\', '/', $root), '/') . '/';
+            if (strpos(str_replace('\\', '/', $path), $rootSep) !== 0) throw new LumenMigError('bad_range');
+        }
         if (!isset($sizes[$path])) $sizes[$path] = (int)filesize($path);
         if ($end > $sizes[$path]) throw new LumenMigError('bad_range', 416, $rel);
         $total += $end - $start;
@@ -2754,9 +2809,9 @@ function lumen_mig_bricks_dir_schema(string $d) {
  */
 const LUMEN_MIG_PREVIOUS_BRICKS = 'bricks.previous';
 
-/** After the bump: bricks.v2-old/ deleted, or kept as bricks.previous/ (replacing an older one). */
-function lumen_mig_retire_old_bricks(string $ds, bool $keep): void {
-    $old = "$ds/bricks.v2-old";
+/** After the bump: the old tree (bricks.v2-old/, m005: bricks.v4-old/) deleted, or kept as bricks.previous/ (replacing an older one). */
+function lumen_mig_retire_old_bricks(string $ds, bool $keep, string $oldName = 'bricks.v2-old'): void {
+    $old = "$ds/$oldName";
     if ($keep && is_file("$old/manifest.json")) {
         $prev = "$ds/" . LUMEN_MIG_PREVIOUS_BRICKS;
         lumen_mig_rrmdir($prev);
@@ -2785,12 +2840,14 @@ function lumen_mig_drop_previous($datasetId): array {
     return ['ok' => true, 'dropped' => $existed];
 }
 
-/** bricks/ → bricks.v2-old/, .bricks-incoming/ → bricks/ (SPEC §13.6); re-entrant. */
-function lumen_mig_swap_bricks(string $ds): void {
-    $incoming = "$ds/.bricks-incoming"; $live = "$ds/bricks"; $old = "$ds/bricks.v2-old";
+/** bricks/ → bricks.v2-old/, .bricks-incoming/ → bricks/ (SPEC §13.6; m005: bricks.v4-old/ and .bricks5-incoming/); re-entrant. */
+function lumen_mig_swap_bricks(string $ds, string $mid = LUMEN_M004): void {
+    [$incName, , $oldName] = LUMEN_MIG_SWAP_DIRS[$mid];
+    $incoming = "$ds/$incName"; $live = "$ds/bricks"; $old = "$ds/$oldName";
+    $target = $mid === LUMEN_M005 ? LUMEN_V5_SCHEMA : LUMEN_V3_SCHEMA;
     if (!is_dir($incoming)) return;
     if (file_exists($live)) {
-        if (lumen_mig_bricks_dir_schema($live) === LUMEN_V3_SCHEMA) { lumen_mig_rrmdir($incoming); return; }
+        if (lumen_mig_bricks_dir_schema($live) === $target) { lumen_mig_rrmdir($incoming); return; }
         lumen_mig_rrmdir($old);   // a stale leftover: the live v2 tree is the one to keep aside
         if (!@rename($live, $old)) throw new LumenMigError('swap_failed', 500);
     }
@@ -3037,6 +3094,7 @@ function lumen_mig_finalize($datasetId, $mid, $maxSeconds = null, bool $keepPrev
     if ($met > 0) @set_time_limit($met);
     if ($m['id'] === LUMEN_M003) return lumen_mig_finalize_m003($m, $datasetId, $deadline);
     if ($m['id'] === LUMEN_M004) return lumen_mig_finalize_m004($m, $datasetId, $deadline, $keepPrevious);
+    if ($m['id'] === LUMEN_M005) return lumen_m005_finalize($m, $datasetId, $deadline, $keepPrevious);
     return lumen_mig_finalize_m002($m, $datasetId, $deadline);
 }
 
@@ -3052,7 +3110,7 @@ function lumen_mig_cancel($datasetId, $mid): array {
         try { $j = lumen_mig_load_journal($path); } catch (LumenMigError $e) { }
         // The new structure is live already: finishing is the only consistent exit.
         if ($j !== null && ($j['state'] ?? null) === 'swapped') throw new LumenMigError('finalize_in_progress', 409);
-        if ($m['id'] === LUMEN_M004 && !file_exists("$dir/$liveName")) {
+        if (($m['id'] === LUMEN_M004 || $m['id'] === LUMEN_M005) && !file_exists("$dir/$liveName")) {
             if (is_dir("$dir/$inc")) throw new LumenMigError('finalize_in_progress', 409);
             if (is_dir("$dir/$oldName")) @rename("$dir/$oldName", "$dir/$liveName");
         }
@@ -3096,7 +3154,7 @@ function lumen_mig_estimate_for(array $plan, array $m, ?array $j): array {
  * dataset on a shared host). The Python server keeps its plans in memory instead.
  */
 function lumen_mig_status_sig(string $type, string $folder, string $dir): string {
-    $parts = ['status-row-v1', LUMEN_MIG_LATEST];
+    $parts = ['status-row-v2', LUMEN_MIG_LATEST, (string)@filemtime(__DIR__ . '/_migrations_m005.php')];
     $stat = function (string $p) use (&$parts): void {
         $mt = @filemtime($p);
         // The inode too: an atomic rewrite (journal, metadata) is a new file even within the same second.
@@ -3164,10 +3222,14 @@ function lumen_mig_dataset_status_compute(string $type, string $folder, string $
         return $row;
     }
     $row['trees'] = count($plan['trees']);
-    $row['bricksSchema'] = !empty($plan['v3']) ? LUMEN_V3_SCHEMA : 'iribhm-bricks-v2';
+    $row['bricksSchema'] = !empty($plan['v5']) ? LUMEN_V5_SCHEMA : (!empty($plan['v3']) ? LUMEN_V3_SCHEMA : 'iribhm-bricks-v2');
     if (!empty($plan['v3']) && $plan['v3Problem'] !== null) {
         $row['problem'] = 'bricks_v3_invalid';
         $row['problemDetail'] = substr($plan['v3Problem'], 0, 300);
+    }
+    if (!empty($plan['v5']) && $plan['v5Problem'] !== null) {
+        $row['problem'] = 'bricks_v5_invalid';
+        $row['problemDetail'] = substr($plan['v5Problem'], 0, 300);
     }
     $est = ['units' => 0, 'bytes' => 0, 'unitsTotal' => 0, 'bytesTotal' => 0, 'migrations' => []];
     foreach (LUMEN_MIGRATIONS as $m) {
@@ -3179,7 +3241,8 @@ function lumen_mig_dataset_status_compute(string $type, string $folder, string $
         }
         $repair = lumen_mig_repair_needed($plan, $fv, $m);
         $pending = $m['from'] >= $fv || $repair;
-        if ($m['id'] === LUMEN_M004 && !empty($plan['v3']) && $fv >= $m['to']) $pending = false;
+        if ($m['id'] === LUMEN_M004 && (!empty($plan['v3']) || !empty($plan['v5'])) && $fv >= $m['to']) $pending = false;
+        if ($m['id'] === LUMEN_M005 && !empty($plan['v5']) && $fv >= $m['to']) $pending = false;
         if ($pending) {
             $row['pending'][] = $m['id'];
             $row['repair'] = $row['repair'] || $repair;

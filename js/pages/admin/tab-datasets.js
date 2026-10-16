@@ -16,6 +16,7 @@ import {
 } from './shared.js';
 import { setUnsaved, registerDirtyGuard, setDatasetOpener, bindTabSave } from './bus.js';
 import * as Upload from './upload-manager.js';
+import { moveToTrash, openTrash, fetchTrash } from './dataset-trash.js';
 
 const PREVIEW_DEBOUNCE = 150;
 
@@ -82,6 +83,9 @@ function refDom() {
     topbarType: el('topbar-type'),
     btnSave: el('btn-save'),
     btnReset: el('btn-reset'),
+    btnDelete: el('btn-delete'),
+    btnTrash: el('btn-open-trash'),
+    trashCount: el('trash-count'),
     fName: el('f-name'),
     fStage: el('f-stage'),
     fEmbryo: el('f-embryo'),
@@ -363,20 +367,24 @@ function renderList() {
     const stagingBadge = ds.staging ? stagingChip(ds.stagingState) : '';
     const statusClass = ds.configured ? 'configured' : 'unconfigured';
     // Per-item visibility toggle. Icon reflects current state (eye = visible,
-    // eye-off = hidden); the title spells out the action. No delete control —
-    // dataset removal is a filesystem operation by design.
+    // eye-off = hidden); the title spells out the action. The trash control sends
+    // a published dataset to the 60-day trash (a dataset still importing is
+    // discarded from the Import tab, so it has none).
     const visTitle = ds.hidden ? t('admin.showDataset', 'Afficher dans l\'explorer') : t('admin.hideDataset', 'Masquer de l\'explorer');
     // Visibility is a property of PUBLICATION: a staged dataset has none to
     // toggle, so the control is omitted rather than shown broken.
     const visBtn = ds.staging ? '' :
       `<button type="button" class="item-vis-btn${ds.hidden ? ' is-off' : ''}" data-vis-btn title="${escHtml(visTitle)}" aria-label="${escHtml(visTitle)}"><i data-lucide="${ds.hidden ? 'eye-off' : 'eye'}"></i></button>`;
+    const delTitle = t('admin.deleteDatasetTitle', 'Supprimer (corbeille, 60 jours)');
+    const delBtn = ds.staging ? '' :
+      `<button type="button" class="item-vis-btn item-del-btn" data-del-btn title="${escHtml(delTitle)}" aria-label="${escHtml(delTitle)}"><i data-lucide="trash-2"></i></button>`;
     item.innerHTML = `
       ${thumbHtml}
       <div class="item-info">
         <div class="item-name">${escHtml(ds.name)}</div>
         <div class="item-meta">${stageBadge}${embryoText}${hiddenBadge}${stagingBadge}</div>
       </div>
-      ${visBtn}
+      ${visBtn}${delBtn}
       <span class="item-status ${statusClass}" title="${escHtml(ds.configured ? t('admin.configured', 'Configuré') : t('admin.unconfigured', 'Non configuré'))}"></span>`;
     item.addEventListener('click', () => selectDataset(ds.id));
     item.addEventListener('keydown', (e) => { if (e.key === 'Enter') selectDataset(ds.id); });
@@ -388,9 +396,56 @@ function renderList() {
       vbtn.addEventListener('click', (e) => { e.stopPropagation(); toggleItemVisibility(ds.id, vbtn); });
       vbtn.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') e.stopPropagation(); });
     }
+    const dbtn = item.querySelector('[data-del-btn]');
+    if (dbtn) {
+      dbtn.addEventListener('click', (e) => { e.stopPropagation(); deleteDataset(ds.id, dbtn); });
+      dbtn.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') e.stopPropagation(); });
+    }
     DOM.datasetList.appendChild(item);
   });
   refreshIcons(DOM.datasetList);
+}
+
+// ── Delete / trash ─────────────────────────────────────────────
+// The dataset's folder is moved to the server-side trash (60 days, then reclaimed).
+// The same name may be deleted again and again: every deletion is a separate entry.
+
+async function refreshTrashCount() {
+  if (!DOM.trashCount) return;
+  const entries = await fetchTrash();
+  DOM.trashCount.textContent = entries && entries.length ? String(entries.length) : '';
+}
+
+/** The editor shows nothing any more: the open dataset is gone. */
+function closeEditor() {
+  clearTimeout(_previewTimer);
+  clearTimeout(_axesPushTimer);
+  _isCalibratingOrientation = false;
+  _formBound = false;
+  _current = null; _draft = null; _original = null;
+  clearDirty();
+  showPreviewPending();
+  DOM.previewFrame.src = 'about:blank';   // stop the viewer streaming a dataset that left
+  DOM.configPanel.style.display = 'none';
+  DOM.configEmpty.style.display = '';
+}
+
+async function deleteDataset(id, btn) {
+  const ds = _datasets.find((d) => d.id === id);
+  if (!ds || ds.staging) return;
+  const isOpen = _current?.id === id;
+  // Unsaved edits of the dataset about to leave are moot, but say so before dropping them.
+  if (isOpen && _dirty && !confirm(t('admin.confirmDiscard', 'Modifications non sauvegardées. Continuer sans sauvegarder ?'))) return;
+  if (btn) btn.disabled = true;
+  const ok = await moveToTrash(ds);
+  if (!ok) { if (btn) btn.disabled = false; return; }
+  if (isOpen) closeEditor();
+  await loadDatasets();
+  refreshTrashCount();
+}
+
+function deleteCurrent() {
+  if (_current && !_current.staging) deleteDataset(_current.id, DOM.btnDelete);
 }
 
 // ── Datasets still being imported ──────────────────────────────
@@ -451,6 +506,7 @@ function isStagingEditable(meta) {
 function applyStagingChrome(meta) {
   const panel = DOM.configPanel;
   if (!panel) return;
+  if (DOM.btnDelete) DOM.btnDelete.style.display = meta?.staging ? 'none' : '';
   let banner = panel.querySelector('.ds-staging-banner');
 
   if (!meta?.staging) {
@@ -1237,6 +1293,10 @@ function parseStageNumeric(stage) {
 function wire() {
   DOM.btnSave.addEventListener('click', saveDataset);
   DOM.btnReset.addEventListener('click', resetDataset);
+  DOM.btnDelete?.addEventListener('click', deleteCurrent);
+  DOM.btnTrash?.addEventListener('click', () => openTrash({
+    onChange: () => { loadDatasets(); refreshTrashCount(); },
+  }));
   wireGallery();
 
   let _searchTimer = null;
@@ -1404,6 +1464,7 @@ export const DatasetsTab = {
     wire();
     _firstLoadPending = true;
     loadDatasets().finally(() => { _firstLoadPending = false; });
+    refreshTrashCount();
     // An import promotes a dataset from "not editable" to "editable" the instant
     // its coarse LOD lands, and that must show up here without a reload. The
     // manager emits on every progress tick (a few times a second), so re-list only

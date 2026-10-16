@@ -240,7 +240,7 @@ async function makePage({ supportsApron = false } = {}) {
     ${['_cancelNativeSlice', '_nativeSliceBricksForSpec', '_nativeStudioRenderSize', '_slicePixelSizeUm', '_sliceWindowForRect',
       '_needsCoverageMask', '_withCoverageMask', '_nativeSliceChannels', '_nativePassPlan', '_atlasNativeBackend', '_planeNativeBackend',
       '_renderNativeSliceForStudio', '_studioGeometry', '_studioCalibrated', '_planeWorkerInstance', '_planeJob', '_studioCoverageMask',
-      '_reducePlaneTile', '_nativeLabel', '_scaleCropRect', '_tf', '_planesBaseOnScreen', '_planesTreeOnScreen', '_planesServePass',
+      '_reducePlaneTile', '_nativeLabel', '_scaleCropRect', '_tf', '_planesBaseOnScreen', '_planesTreeOnScreen', '_planesServePass', '_cutTreeOnScreen', '_cutDepthOf',
       '_nativeBrickFrame', '_nativeLoaderRegion', '_nativeInteriorRegion', '_mipsTreeOnScreen', '_mipsSlabOf', '_mipsSlabEstimate'].map(lift).join('\n')}
     return { native: _renderNativeSliceForStudio };
   `;

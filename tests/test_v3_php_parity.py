@@ -54,6 +54,7 @@ except Exception as exc:  # pragma: no cover
 PHP = base.PHP
 FULL = os.environ.get("LUMEN_V3_FULL") == "1"
 M2, M3, M4 = "m002-planes", "m003-layer-mips", "m004-bricks-v3"
+M5 = "m005-matrix"   # what a format-4 dataset has left since web 1.65
 strip = base.strip_times
 
 
@@ -289,7 +290,7 @@ class V3Parity(unittest.TestCase):
             self.assertFalse((b.data_web / ds / "bricks.v2-old").exists())
             st, sbb = b.php_handle("status")
             row = {r["id"]: r for r in sbb["datasets"]}[ds]
-            self.assertEqual((row["pending"], row["bricksSchema"], row.get("problem")), ([], "iribhm-bricks-v3", None))
+            self.assertEqual((row["pending"], row["bricksSchema"], row.get("problem")), ([M5], "iribhm-bricks-v3", None))
             print(f"  {ds}: chain exact under both backends ({n} MIP tiles, {nb} v3 bricks)")
 
     # ── 2. m004 resumed across backends ──

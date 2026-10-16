@@ -40,6 +40,8 @@ ROOT_FILES = (
     "ed25519_pure.py",  # vendored release-signature verifier (updater authenticity)
     "upload_staging.py",  # dataset import staging engine (admin Import tab)
     "dataset_migrations.py",  # dataset format upgrades engine (admin Data updates tab)
+    "format5.py",  # format 5 arithmetic and layouts, shared by m005 and the pipeline
+    "dataset_trash.py",  # dataset trash, 60-day retention (admin Datasets tab Delete button)
     "DATA_WEB/.htaccess",  # execution ban for the published tree (see the file's header)
     "router.php",
     "_serve.php",     # Apache HTML entry (nonce-CSP) — rewritten to by the root .htaccess

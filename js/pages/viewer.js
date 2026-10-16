@@ -386,6 +386,9 @@ const ViewerApp = (() => {
         hasPreviousBricks: () => _hasPreviousBricks(),
         openBrickTree: (tree) => _openBrickTree(tree)
       },
+      // The native lossless voxels and the coordinate frames (SPEC §14.8): a plugin that
+      // reports a number reads here, never the displayed (possibly compressed) volume.
+      data: typeof DataAccess !== 'undefined' ? DataAccess : null,
       viewer: {
         getRenderer: () => VolumeViewer.getRenderer(),
         getMaterial: () => VolumeViewer.getMaterial(),
@@ -547,6 +550,7 @@ const ViewerApp = (() => {
     // Bind UI controls (synchronous — overlaps the in-flight volume load above)
     _bindScreenshot();
     _bindQualityControls();
+    if (typeof StudioEditor !== 'undefined' && StudioEditor.setNativeProvider) StudioEditor.setNativeProvider(_ensureStudioNative);
     _updateQualityOptionLabels();
     _bindVolumeControls();
     _bindZScaleControls();
@@ -1046,6 +1050,15 @@ const ViewerApp = (() => {
     const select = document.getElementById('select-quality');
     if (!select) return;
     select.addEventListener('change', () => { _setQualityMode(select.value); });
+    const matrix = document.getElementById('quality-matrix');
+    if (matrix) {
+      matrix.addEventListener('click', (e) => {
+        const cell = e.target.closest('[data-quality]');
+        if (!cell || cell.disabled) return;
+        _setQualityMode(cell.dataset.quality).catch(() => {}).finally(() => _renderQualityMatrix());
+        _renderQualityMatrix();
+      });
+    }
   }
 
   /**
@@ -1095,6 +1108,39 @@ const ViewerApp = (() => {
     return Boolean(manifest) && (manifest.schema === 'iribhm-bricks-v3' || manifest.version === 3);
   }
 
+  /** True when the dataset's brick manifest is the v5 matrix (SPEC §14). */
+  function _isV5BrickManifest(manifest = _brickManifest) {
+    return Boolean(manifest) && manifest.schema === 'iribhm-bricks-v5';
+  }
+
+  /** "512x512@b2" → "512x512" (the resolution a host and the Compare ladder know). */
+  function _qualityBaseOf(key) {
+    const s = String(key || '');
+    const at = s.indexOf('@');
+    return at > 0 ? s.slice(0, at) : s;
+  }
+
+  /** The compression column of the quality on screen (v5), `b2` by default. */
+  function _currentColumn() {
+    const s = String(_qualityMode || '');
+    const at = s.indexOf('@');
+    const ids = (_brickManifest?.columns || []).map(c => c.id);
+    const own = at > 0 ? s.slice(at + 1) : null;
+    if (own && ids.includes(own)) return own;
+    return ids.includes('b2') ? 'b2' : 'll';
+  }
+
+  /** On a v5 tree a quality always names its column: a bare resolution gets the current one. */
+  function _withColumn(quality) {
+    if (!quality || !_isV5BrickManifest() || String(quality).includes('@')) return quality;
+    return `${quality}@${_currentColumn()}`;
+  }
+
+  /** The resolution key of a v5 level ("native", "512x512"). */
+  function _v5LevelKey(level) {
+    return level && level.target !== 'native' ? `${level.target}x${level.target}` : 'native';
+  }
+
   // The quality keys the select may offer, in order of preference when several land on
   // one level (native always wins level 0; 512, the default, before the others). A v3
   // tree offers the presets of SPEC §13.7; a v2 tree every power-of-two key, each level
@@ -1124,6 +1170,17 @@ const ViewerApp = (() => {
    * the renderer reaches, finest first — or null before a bricked dataset is mounted.
    */
   function _qualityLevels() {
+    if (_isV5BrickManifest()) {
+      // Every cell of the matrix (SPEC §14.6), finest level first, columns in order.
+      const out = [];
+      for (const L of _brickManifest.levels || []) {
+        for (const col of _brickManifest.columns || []) {
+          const d = L.dimensions;
+          out.push({ value: `${_v5LevelKey(L)}@${col.id}`, lod: L.level, column: col.id, dims: { x: d.x, y: d.y, z: d.z } });
+        }
+      }
+      return out.length ? out : null;
+    }
     const resolved = _rendererQualityLevels(_isV3BrickManifest() ? QUALITY_KEYS_V3 : QUALITY_KEYS_V2);
     if (!resolved) return null;
     const byLevel = new Map();
@@ -1147,11 +1204,14 @@ const ViewerApp = (() => {
     const offered = _qualityLevels();
     if (offered && offered.length > 0) {
       select.innerHTML = '';
-      offered.forEach(({ value, dims }) => {
+      offered.forEach(({ value, dims, column }) => {
         const opt = document.createElement('option');
         opt.value = value;
-        const name = value === 'native' ? _t('viewer.native', 'Native') : value.split('x')[0];
-        opt.textContent = `${name} (${dims.x}x${dims.y}x${dims.z})`;
+        const base = _qualityBaseOf(value);
+        const name = base === 'native' ? _t('viewer.native', 'Native') : base.split('x')[0];
+        opt.textContent = column
+          ? `${name} · ${_qualityColumnLabel(column)} (${dims.x}x${dims.y}x${dims.z})`
+          : `${name} (${dims.x}x${dims.y}x${dims.z})`;
         select.appendChild(opt);
       });
     } else {
@@ -1176,6 +1236,164 @@ const ViewerApp = (() => {
     select.value = options.some(option => option.value === current)
       ? current
       : (sameLevel && options.some(option => option.value === sameLevel) ? sameLevel : (fallback?.value || '512x512'));
+    _renderQualityMatrix();
+  }
+
+  // ── Quality matrix (v5, SPEC §14.6) ─────────────────────────────────────────
+  const QUALITY_COLUMN_LABELS = {
+    ll: ['viewer.qualityMatrix.colLl', 'Lossless'],
+    b2: ['viewer.qualityMatrix.colB2', '±2'],
+    b4: ['viewer.qualityMatrix.colB4', '±4'],
+    q80: ['viewer.qualityMatrix.colQ80', 'Light'],
+    q50: ['viewer.qualityMatrix.colQ50', 'Very light']
+  };
+  const QUALITY_COLUMN_HINTS = {
+    ll: ['viewer.qualityMatrix.hintLl', 'Lossless: every voxel exact.'],
+    b2: ['viewer.qualityMatrix.hintB2', 'Visually lossless: no voxel moves by more than 2 grey levels.'],
+    b4: ['viewer.qualityMatrix.hintB4', 'Near lossless: no voxel moves by more than 4 grey levels.'],
+    q80: ['viewer.qualityMatrix.hintQ80', 'WebP 80: lighter, small visual changes.'],
+    q50: ['viewer.qualityMatrix.hintQ50', 'WebP 50: lightest, visible smoothing.']
+  };
+  // Download rate measured on this page (EMA of the loader's fetched bytes while it
+  // streams), for the time estimate of a cell; null until something was measured.
+  const _rateProbe = { bytes: null, at: 0, rate: null };
+
+  function _qualityColumnLabel(id) {
+    const e = QUALITY_COLUMN_LABELS[id];
+    return e ? _t(e[0], e[1]) : id;
+  }
+
+  function _sampleDownloadRate() {
+    const stats = typeof BrickLoader !== 'undefined' ? BrickLoader.getCacheStats?.() : null;
+    const bytes = Number(stats?.fetchedBytes);
+    const now = performance.now();
+    if (!Number.isFinite(bytes)) return;
+    if (_rateProbe.bytes !== null && now - _rateProbe.at > 250 && bytes > _rateProbe.bytes) {
+      const rate = (bytes - _rateProbe.bytes) / ((now - _rateProbe.at) / 1000);
+      _rateProbe.rate = _rateProbe.rate ? 0.7 * _rateProbe.rate + 0.3 * rate : rate;
+    }
+    if (_rateProbe.bytes === null || now - _rateProbe.at > 250) {
+      _rateProbe.bytes = bytes;
+      _rateProbe.at = now;
+    }
+  }
+
+  function _fmtMB(bytes) {
+    const mb = Number(bytes) / 1048576;
+    if (!Number.isFinite(mb)) return '—';
+    if (mb >= 1024) return `${(mb / 1024).toFixed(1)} GB`;
+    return `${mb >= 100 ? mb.toFixed(0) : mb.toFixed(1)} MB`;
+  }
+
+  function _fmtSeconds(s) {
+    if (!Number.isFinite(s)) return '';
+    if (s < 1) return '<1 s';
+    if (s < 90) return `${Math.round(s)} s`;
+    return `${Math.round(s / 60)} min`;
+  }
+
+  /**
+   * The quality control of a v5 tree: one row per level (its real dimensions and the GPU
+   * memory its atlas takes), one column per compression; a cell shows the bytes its
+   * stream downloads (and the time at the rate measured here) and is coloured by what the
+   * GPU budget holds — green within 75 %, amber up to the budget, red beyond (the viewer
+   * then settles on a coarser level). Other trees keep the select.
+   */
+  function _renderQualityMatrix() {
+    const box = document.getElementById('quality-matrix');
+    const select = document.getElementById('select-quality');
+    if (!box) return;
+    const qm = _isV5BrickManifest() ? VolumeViewer.getQualityMatrix?.() : null;
+    if (!qm) {
+      box.classList.add('hidden');
+      box.replaceChildren();
+      select?.classList.remove('hidden');
+      return;
+    }
+    select?.classList.add('hidden');
+    box.classList.remove('hidden');
+    const budget = Number(qm.budgetBytes) || Infinity;
+    const current = _withColumn(_qualityMode);
+    const curLevel = _lodForQuality(current);
+    const curColumn = _currentColumn();
+    const table = document.createElement('table');
+    table.className = 'quality-matrix-table';
+    const caption = document.createElement('caption');
+    caption.textContent = _t('viewer.qualityMatrix.caption', 'Resolution × compression');
+    table.appendChild(caption);
+    const head = document.createElement('tr');
+    const corner = document.createElement('th');
+    corner.scope = 'col';
+    corner.textContent = _t('viewer.qualityMatrix.resolution', 'Level');
+    head.appendChild(corner);
+    for (const col of qm.columns) {
+      const th = document.createElement('th');
+      th.scope = 'col';
+      th.textContent = _qualityColumnLabel(col.id);
+      const hint = QUALITY_COLUMN_HINTS[col.id];
+      if (hint) th.title = _t(hint[0], hint[1]);
+      head.appendChild(th);
+    }
+    const thead = document.createElement('thead');
+    thead.appendChild(head);
+    table.appendChild(thead);
+    const tbody = document.createElement('tbody');
+    for (const L of qm.levels) {
+      const tr = document.createElement('tr');
+      const fp = L.gpu;
+      const gpuBytes = fp && fp.planned !== false ? Number(fp.bytes) : Infinity;
+      const fit = !Number.isFinite(gpuBytes) || gpuBytes > budget ? 'qm-over'
+        : (gpuBytes > 0.75 * budget ? 'qm-tight' : 'qm-ok');
+      const th = document.createElement('th');
+      th.scope = 'row';
+      const name = document.createElement('span');
+      name.className = 'qm-level';
+      name.textContent = L.target === 'native' ? _t('viewer.native', 'Native') : String(L.target);
+      const dims = document.createElement('span');
+      dims.className = 'qm-dims';
+      dims.textContent = `${L.dims.x}×${L.dims.y}×${L.dims.z}`;
+      const gpu = document.createElement('span');
+      gpu.className = `qm-gpu ${fit}`;
+      gpu.textContent = `GPU ${Number.isFinite(gpuBytes) ? _fmtMB(gpuBytes) : '—'}`;
+      gpu.title = fit === 'qm-over'
+        ? _t('viewer.qualityMatrix.over', 'More than this GPU holds: the viewer will show a coarser level.')
+        : (fit === 'qm-tight'
+          ? _t('viewer.qualityMatrix.tight', 'Fits, close to this GPU\'s budget.')
+          : _t('viewer.qualityMatrix.fits', 'Fits comfortably on this GPU.'));
+      th.append(name, dims, gpu);
+      tr.appendChild(th);
+      for (const col of qm.columns) {
+        const td = document.createElement('td');
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        const key = `${L.key}@${col.id}`;
+        btn.dataset.quality = key;
+        btn.className = `qm-cell ${fit}`;
+        const bytes = qm.bytes?.[L.level]?.[col.id];
+        const size = document.createElement('span');
+        size.className = 'qm-size';
+        size.textContent = _fmtMB(bytes);
+        btn.appendChild(size);
+        if (_rateProbe.rate && Number(bytes) > 0) {
+          const eta = document.createElement('span');
+          eta.className = 'qm-eta';
+          eta.textContent = `≈ ${_fmtSeconds(Number(bytes) / _rateProbe.rate)}`;
+          btn.appendChild(eta);
+        }
+        const active = L.level === curLevel && col.id === curColumn;
+        btn.setAttribute('aria-pressed', active ? 'true' : 'false');
+        if (active) btn.classList.add('qm-active');
+        btn.setAttribute('aria-label', `${name.textContent} ${dims.textContent}, ${_qualityColumnLabel(col.id)}, ${size.textContent}`);
+        td.appendChild(btn);
+        tr.appendChild(td);
+      }
+      tbody.appendChild(tr);
+    }
+    table.appendChild(tbody);
+    const legend = document.createElement('div');
+    legend.className = 'qm-legend';
+    legend.textContent = _t('viewer.qualityMatrix.legend', 'Download size per cell · green fits the GPU, amber is close, red is too large.');
+    box.replaceChildren(table, legend);
   }
 
   /**
@@ -1195,6 +1413,10 @@ const ViewerApp = (() => {
   // index back to the <select> value it is shown under. Used to sync the selector to the
   // resolution actually rendered. null for a level no offered quality reaches.
   function _qualityValueForLod(lod) {
+    if (_isV5BrickManifest()) {
+      const L = (_brickManifest.levels || [])[Number(lod)];
+      return L ? `${_v5LevelKey(L)}@${_currentColumn()}` : null;
+    }
     const offered = _qualityLevels();
     const hit = offered ? offered.find(o => o.lod === Number(lod)) : null;
     return hit ? hit.value : null;
@@ -1597,6 +1819,12 @@ const ViewerApp = (() => {
   }
 
   function _refreshViewExport() {
+    const qNote = document.getElementById('view-export-quality-note');
+    if (qNote) {
+      qNote.textContent = _viewExportChoice('view-export-quality') === 'lossless'
+        ? _losslessTargetText(_losslessExportTarget())
+        : _tf('exportView.currentIs', 'As shown: {current}.', { current: _qualityLabel(_qualityMode) });
+    }
     const plan = _viewExportPlan();
     const dims = document.getElementById('view-export-dims');
     const widthInput = document.getElementById('view-export-width');
@@ -1683,8 +1911,9 @@ const ViewerApp = (() => {
     // One frame of a timelapse: playback would swap the volume under the tiles.
     if (isLive && typeof Timeline !== 'undefined' && Timeline.pause) Timeline.pause();
     let canvas = null;
+    const lossless = _viewExportChoice('view-export-quality') === 'lossless';
     try {
-      canvas = await VolumeViewer.renderViewImage({
+      const render = () => VolumeViewer.renderViewImage({
         width,
         height,
         background: plan.background,
@@ -1701,6 +1930,9 @@ const ViewerApp = (() => {
           }
         }
       });
+      canvas = lossless
+        ? await _withLosslessQuality(() => render(), (text) => _setViewExportStatus(text, { fraction: 0 }))
+        : await render();
       if (plan.scaleBar) {
         _drawExportScaleBar(canvas, _exportScaleBarLayout({
           width,
@@ -1985,6 +2217,8 @@ const ViewerApp = (() => {
   // A z-stack figure whose native pass would download more than this asks first.
   const STUDIO_CONFIRM_BYTES = 256 * 1024 * 1024;
   let _studioOpening = false;
+  let _studioPreview = null;          // the preview the Studio opened on (its native pass input)
+  let _studioUpgradePromise = null;   // the native pass running for it
   let _nativePassSeq = 0;
 
   async function openStudio() {
@@ -2015,7 +2249,27 @@ const ViewerApp = (() => {
     } finally {
       _studioOpening = false;
     }
-    if (preview && token !== null && token !== undefined) await _upgradeStudioSliceToNative(preview, token);
+    _studioPreview = preview;
+    if (preview && token !== null && token !== undefined) {
+      _studioUpgradePromise = _upgradeStudioSliceToNative(preview, token);
+      try { await _studioUpgradePromise; } finally { _studioUpgradePromise = null; }
+    }
+  }
+
+  /**
+   * The Studio's "native lossless" export (SPEC §14.7): the native pass of the figure
+   * on screen — awaited when it is still running, run again when it was stopped or
+   * fell short. → true once the document holds the native picture.
+   */
+  async function _ensureStudioNative() {
+    if (_studioUpgradePromise) { try { await _studioUpgradePromise; } catch (err) { /* checked below */ } }
+    const isNative = () => String(StudioEditor.getDocument?.()?.quality || '') === 'native';
+    if (isNative()) return true;
+    if (!_studioPreview || !StudioEditor.isOpen?.()) return false;
+    const token = StudioEditor.documentToken ? StudioEditor.documentToken() : null;
+    _studioUpgradePromise = _upgradeStudioSliceToNative(_studioPreview, token);
+    try { await _studioUpgradePromise; } catch (err) { return false; } finally { _studioUpgradePromise = null; }
+    return isNative();
   }
 
   /**
@@ -2931,6 +3185,79 @@ const ViewerApp = (() => {
     return `${_basePath}/planes`;
   }
 
+  // ── Format-5 cut stores (SPEC §14.5) ───────────────────────────────────────────
+  const _cutTrees = new Map();     // tree base → CutStore tree
+
+  /** The brick tree on screen (<ds>/bricks, or <ds>/bricks/tNNN of a timelapse). */
+  function _brickTreeBaseOnScreen() {
+    if (!_basePath) return null;
+    const brickDir = datasetMeta?.qualities?.native?.directory || 'bricks';
+    const tps = _brickManifest?.timepoints;
+    if (Array.isArray(tps) && tps.length) {
+      const tp = Number.isFinite(Number(_currentTimepoint)) ? Number(_currentTimepoint) : 0;
+      const key = `t${String(tp).padStart(3, '0')}`;
+      const row = tps.find(r => r && r.path === key) || tps[tp];
+      return row ? `${_basePath}/${brickDir}/${row.path || key}` : null;
+    }
+    return `${_basePath}/${brickDir}`;
+  }
+
+  /** The CutStore of the v5 tree mounted on screen, or null (any other tree). */
+  function _cutTreeOnScreen() {
+    if (typeof CutStore === 'undefined' || typeof BrickLoader === 'undefined') return null;
+    const manifest = BrickLoader.getManifest?.();
+    if (!manifest || manifest.schema !== 'iribhm-bricks-v5') return null;
+    const base = _brickTreeBaseOnScreen();
+    if (!base) return null;
+    let tree = _cutTrees.get(base);
+    if (!tree || tree.manifest !== manifest) {
+      try { tree = CutStore.open(base, manifest); } catch (err) { return null; }
+      _cutTrees.set(base, tree);
+    }
+    return tree;
+  }
+
+  /** The depth of the cut bricks of level `lod`, as the manifest records it. */
+  function _cutDepthOf(manifest, lod) {
+    const row = manifest?.stores?.cuts?.levels?.find?.(l => l && l.level === lod);
+    const bz = Number(row?.brickZ);
+    return Number.isInteger(bz) && bz >= 1 && bz <= 32 ? bz : null;
+  }
+
+  /**
+   * The 32 × 32 × bz cut bricks of an oblique native pass: the bricks of `bricks` (64³,
+   * from _nativeSliceBricksForSpec) split into cut bricks, each kept when its box comes
+   * within the slab's half-thickness (plus one voxel along the normal) of the plane the
+   * slicer samples — the same test as for the bricks, on boxes up to 64× thinner.
+   * → [{ cx, cy, cz, brick }] (brick = its 64³ brick).
+   */
+  function _cutBricksForSpec(spec, dims, bricks, bz) {
+    const space = VolumeSlicer.samplingSpace ? VolumeSlicer.samplingSpace(VolumeViewer.getMaterial?.() || null) : null;
+    const geom = VolumeSlicer.planeGeometry(spec, VolumeViewer.getPhysicalSize?.(), space);
+    const n = geom.normal;
+    const nc = geom.center;
+    const dx = Math.max(1, dims.x), dy = Math.max(1, dims.y), dz = Math.max(1, dims.z);
+    const tolerance = geom.halfThickness + Math.abs(n.x) / dx + Math.abs(n.y) / dy + Math.abs(n.z) / dz;
+    const C = 32;
+    const out = [];
+    for (const b of bricks) {
+      const ox = b.bx * 64, oy = b.by * 64, oz = b.bz * 64;
+      for (let z0 = oz; z0 < Math.min(dims.z, oz + 64); z0 += bz) {
+        for (let y0 = oy; y0 < Math.min(dims.y, oy + 64); y0 += C) {
+          for (let x0 = ox; x0 < Math.min(dims.x, ox + 64); x0 += C) {
+            const w = Math.min(C, dims.x - x0), h = Math.min(C, dims.y - y0), d = Math.min(bz, dims.z - z0);
+            const ex = w / (2 * dx), ey = h / (2 * dy), ez = d / (2 * dz);
+            const cx = x0 / dx + ex, cy = y0 / dy + ey, cz = z0 / dz + ez;
+            const dist = Math.abs(n.x * (cx - nc.x) + n.y * (cy - nc.y) + n.z * (cz - nc.z));
+            if (dist > Math.abs(n.x) * ex + Math.abs(n.y) * ey + Math.abs(n.z) * ez + tolerance) continue;
+            out.push({ cx: x0 / C, cy: y0 / C, cz: z0 / bz, brick: b });
+          }
+        }
+      }
+    }
+    return out;
+  }
+
   /** The opened planes tree on screen (once per tree), or null — never throws. */
   function _planesTreeOnScreen(dims0) {
     const base = _planesBaseOnScreen();
@@ -3624,6 +3951,139 @@ const ViewerApp = (() => {
       });
     };
 
+    /**
+     * The XZ / YZ pass of a v5 tree (SPEC §14.5): each voxel row the plane samples read
+     * as ONE row of the xz / yz pack of each channel (instead of a voxel plane of every
+     * brick it crosses), floor LUTs applied as the brick compose does, uploaded as a
+     * whole layer of the plane texture. A MIP slab takes the per-channel maximum of its
+     * rows. → a slice result, or throws (the caller reads the bricks).
+     */
+    const orthPass = async (tree, kind) => {
+      const plan = passPlan.plan;
+      const plane = backend.plane;
+      const chans = wantedChannels || Array.from({ length: channels }, (_, c) => c);
+      const signal = controller.signal;
+      const W = plane.width, H = plane.height;
+      const bs = plan.bs;
+      const cu = Math.ceil(W / bs), cv = Math.ceil(H / bs);
+      chunkTotal = plan.voxels.length * chans.length;
+      PARTIAL_MIN_CHUNKS = Math.max(1, Math.ceil(chunkTotal / 50));
+      startedAt = now();
+      const onBytes = (n) => { bytesDone += n; bytesTotal = Math.max(bytesTotal, bytesDone); lastBrickAt = now(); };
+      onProgress?.({ percent: 0, chunks: 0, totalChunks: chunkTotal, bytesDone, bytesTotal, etaSeconds: null, lod, dims });
+      const acc = plan.reduced ? new Uint8Array(W * H * 4) : null;
+      for (const r of plan.voxels) {
+        const rgba = plan.reduced ? null : new Uint8Array(W * H * 4);
+        for (const c of chans) {
+          const row = await tree.orthRow(kind, lod, c, r, { signal, onBytes });
+          throwIfAborted(null);
+          if (row.width !== W || row.height !== H) throw new Error(`${kind} row ${r}: ${row.width}×${row.height}, the plane is ${W}×${H}`);
+          const lut = floorLuts[c] || null;
+          const src = row.data;
+          const dst = rgba || acc;
+          for (let i = 0, o = c; i < src.length; i++, o += 4) {
+            const v = lut ? lut[src[i]] : src[i];
+            if (rgba || v > dst[o]) dst[o] = v;
+          }
+          written += 1;
+          fraction = written / chunkTotal;
+          status(false);
+        }
+        if (rgba) {
+          const layer = r - plan.layerBase;
+          if (!plane.upload(0, 0, W, H, layer, rgba)) throw new Error('the GPU refused a layer of the plane texture');
+          for (let bv = 0; bv < cv; bv++) for (let bu = 0; bu < cu; bu++) plane.setPresent(bu, bv, layer, true);
+          writtenSinceRender += chans.length;
+          schedulePartial();
+        }
+      }
+      if (acc) {
+        if (!plane.upload(0, 0, W, H, 0, acc)) throw new Error('the GPU refused the plane texture');
+        for (let bv = 0; bv < cv; bv++) for (let bu = 0; bu < cu; bu++) plane.setPresent(bu, bv, 0, true);
+      }
+      await maskReady;
+      throwIfAborted(null);
+      cancelPartial();
+      if (backend.flush()) throw new Error('the GPU refused part of the plane texture');
+      written = chunkTotal;
+      fraction = 1;
+      status(true);
+      const picture = renderSlice();
+      if (!picture) return null;
+      _setSliceStatus(_tf('studio.nativeReady', 'Native slice ready ({n} chunks).', { n: chunkTotal }));
+      return sliceResult(picture, {
+        quality: lod === 0 ? 'native' : `lod${lod}`, missingChunks: 0, path: kind,
+        bytesTotal, elapsedMs: now() - startedAt, netMs: lastBrickAt ? Math.max(1, lastBrickAt - startedAt) : 0
+      });
+    };
+
+    /**
+     * The oblique pass of a v5 tree (SPEC §14.5): the throwaway atlas gets only the
+     * 32 × 32 × bz cut bricks the plane crosses (≈ 4–6 voxels fetched per pixel instead of
+     * 40–65 for whole bricks), every channel of a cut brick composed (floor LUTs) and
+     * written as a box of its 64³ brick's slot. A cut brick the store does not hold is
+     * zero voxels, which a fresh atlas slot already is. → a slice result, or throws.
+     */
+    const cutsPass = async (tree, bz) => {
+      const list = _cutBricksForSpec(spec, dims, bricks, bz);
+      if (!list.length) return null;
+      const chans = wantedChannels || Array.from({ length: channels }, (_, c) => c);
+      const signal = controller.signal;
+      const C = 32;
+      const boxes = new Map();
+      const keyOf = (b) => `${b.cx}_${b.cy}_${b.cz}`;
+      const byKey = new Map(list.map(b => [keyOf(b), b]));
+      chunkTotal = list.length;
+      PARTIAL_MIN_CHUNKS = Math.max(1, Math.ceil(chunkTotal / 50));
+      startedAt = now();
+      const onBytes = (n) => { bytesDone += n; bytesTotal = Math.max(bytesTotal, bytesDone); lastBrickAt = now(); status(false); };
+      onProgress?.({ percent: 0, chunks: 0, totalChunks: chunkTotal, bytesDone, bytesTotal, etaSeconds: null, lod, dims });
+      let arrivals = 0;
+      await Promise.all(chans.map(c => tree.loadCutBricks(lod, c, bz, list, {
+        signal, onBytes,
+        onBrick: ({ cx, cy, cz, data }) => {
+          const b = byKey.get(`${cx}_${cy}_${cz}`);
+          if (!b) return;
+          const x0 = cx * C, y0 = cy * C, z0 = cz * bz;
+          const w = Math.min(C, dims.x - x0), h = Math.min(C, dims.y - y0), d = Math.min(bz, dims.z - z0);
+          let box = boxes.get(keyOf(b));
+          if (!box) boxes.set(keyOf(b), box = { b, w, h, d, rgba: new Uint8Array(w * h * d * 4) });
+          const lut = floorLuts[c] || null;
+          for (let z = 0; z < d; z++) {
+            for (let y = 0; y < h; y++) {
+              let s = (z * C + y) * C;
+              let o = ((z * h + y) * w) * 4 + c;
+              for (let x = 0; x < w; x++, s++, o += 4) box.rgba[o] = lut ? lut[data[s]] : data[s];
+            }
+          }
+          arrivals++;
+          fraction = Math.min(0.99, arrivals / (list.length * chans.length));
+        }
+      })));
+      throwIfAborted(null);
+      const a = backend.apron ? 1 : 0;
+      for (const box of boxes.values()) {
+        const { b } = box;
+        const bx = b.brick.bx, by = b.brick.by, bbz = b.brick.bz;
+        const rx = b.cx * C - bx * 64 + a, ry = b.cy * C - by * 64 + a, rz = b.cz * bz - bbz * 64 + a;
+        backend.write(b.brick, box.rgba, { x0: rx, x1: rx + box.w, y0: ry, y1: ry + box.h, z0: rz, z1: rz + box.d });
+      }
+      await maskReady;
+      throwIfAborted(null);
+      cancelPartial();
+      if (backend.flush()) throw new Error('the GPU refused part of the cut atlas');
+      written = chunkTotal;
+      fraction = 1;
+      status(true);
+      const picture = renderSlice();
+      if (!picture) return null;
+      _setSliceStatus(_tf('studio.nativeReady', 'Native slice ready ({n} chunks).', { n: chunkTotal }));
+      return sliceResult(picture, {
+        quality: lod === 0 ? 'native' : `lod${lod}`, missingChunks: 0, path: 'cuts',
+        bytesTotal, elapsedMs: now() - startedAt, netMs: lastBrickAt ? Math.max(1, lastBrickAt - startedAt) : 0
+      });
+    };
+
     // A failed source, from scratch, on a fresh plane texture.
     const restartOnFreshPlane = () => {
       cancelPartial();
@@ -3643,6 +4103,44 @@ const ViewerApp = (() => {
     };
 
     try {
+      // A v5 tree's cut stores (SPEC §14.5): XZ / YZ rows, or the cut bricks of an
+      // oblique plane; any failure falls back to the bricks below, on a fresh texture.
+      const cutTree = !rgbaTransport ? _cutTreeOnScreen() : null;
+      const orthKind = cutTree && backend.plane && passPlan.path === 'plane' && passPlan.plan && !passPlan.plan.empty
+        ? (passPlan.plan.axis === 'y' ? 'xz' : (passPlan.plan.axis === 'x' ? 'yz' : null)) : null;
+      if (orthKind) {
+        try {
+          const result = await orthPass(cutTree, orthKind);
+          if (result) return result;
+        } catch (err) {
+          if (controller.signal.aborted || err?.name === 'AbortError') throw new DOMException('Native slice render cancelled', 'AbortError');
+          console.warn(`[ViewerApp] Native Studio pass: ${orthKind}/ failed; reading the bricks instead.`, err?.message || err);
+        }
+        restartOnFreshPlane();
+      }
+      const cutDepth = cutTree && !backend.plane && passPlan.path === 'atlas' && !geom.warped
+        ? _cutDepthOf(BrickLoader.getManifest?.(), lod) : null;
+      if (cutDepth) {
+        try {
+          const result = await cutsPass(cutTree, cutDepth);
+          if (result) return result;
+        } catch (err) {
+          if (controller.signal.aborted || err?.name === 'AbortError') throw new DOMException('Native slice render cancelled', 'AbortError');
+          console.warn('[ViewerApp] Native Studio pass: cuts/ failed; reading the bricks instead.', err?.message || err);
+        }
+        // From scratch on a fresh atlas.
+        cancelPartial();
+        backend.dispose();
+        backend = _atlasNativeBackend(dims, channels, bricks, lod);
+        borderFrame = Boolean(backend.apron);
+        written = 0;
+        writtenSinceRender = 0;
+        fraction = 0;
+        bytesDone = 0;
+        lastBrickAt = 0;
+        chunkTotal = bricks.length;
+        PARTIAL_MIN_CHUNKS = Math.max(1, Math.ceil(bricks.length / 50));
+      }
       if (planesTree) {
         // mips/ + planes/, then planes/ alone, then the bricks.
         for (const mips of mipsTree ? [mipsTree, null] : [null]) {
@@ -5062,6 +5560,7 @@ const ViewerApp = (() => {
       }
       if (!_isStale() && result && result.manifest) {
         _brickManifest = result.manifest;
+        if (_isV5BrickManifest()) _qualityMode = _withColumn(_qualityMode);
         _updateQualityOptionLabels();
       }
     } catch (err) {
@@ -5094,6 +5593,7 @@ const ViewerApp = (() => {
 
     if (result && result.manifest) {
       _brickManifest = result.manifest;
+      if (_isV5BrickManifest()) _qualityMode = _withColumn(_qualityMode);
       _updateQualityOptionLabels();
     }
 
@@ -5228,13 +5728,17 @@ const ViewerApp = (() => {
     if (!candidates.length) return;
 
     // A bricked dataset has no slice stack. preloadVolume() only ever builds slice URLs,
-    // so on a 4D brick dataset this preloader fired hundreds of doomed requests per
-    // timepoint (preview/slices/tNNN_zNNN_c0.webp -> 404), burning the browser's
-    // connection budget on nothing and, on a shared host, inviting the 429 bursts the
-    // project .htaccess already documents. Warm the actual pack files instead: they are
-    // 45-125 KB per timepoint here, and the switch then costs a decode, not a round-trip.
+    // so on a 4D brick dataset it fires hundreds of doomed requests per timepoint
+    // (preview/slices/tNNN_zNNN_c0.webp -> 404), burning the browser's connection
+    // budget on nothing and, on a shared host, inviting the IP ban its firewall answers
+    // a burst with. Warm the actual pack files instead: they are 45-125 KB per timepoint
+    // here, and the switch then costs a decode, not a round-trip. Which path is decided
+    // by the dataset's declared sources: a bricked dataset whose manifest has not been
+    // read yet (or failed to load) warms nothing rather than falling to the slices.
     const tpRows = _brickManifest?.timepoints;
-    const work = tpRows && typeof tpRows === 'object'
+    const packRows = Boolean(tpRows && typeof tpRows === 'object');
+    if (!packRows && !_hasSliceStack(datasetMeta)) return;
+    const work = packRows
       ? () => {
         const brickDir = datasetMeta?.qualities?.native?.directory || 'bricks';
         const lod = _lodForQuality(_qualityMode);
@@ -5291,12 +5795,96 @@ const ViewerApp = (() => {
   }
 
   function _qualityLabel(quality) {
-    if (quality === 'native') return _t('viewer.native', 'Native');
-    return quality; // returns resolution key directly (e.g. '256x256')
+    const base = _qualityBaseOf(quality);
+    const at = String(quality || '').indexOf('@');
+    const col = at > 0 ? ` · ${_qualityColumnLabel(String(quality).slice(at + 1))}` : '';
+    if (base === 'native') return _t('viewer.native', 'Native') + col;
+    return base + col; // resolution key (e.g. '256x256'), with its column on a v5 tree
+  }
+
+  // ── Exports in lossless quality (SPEC §14.7) ─────────────────────────────────
+  /**
+   * The finest LOSSLESS quality this GPU holds: level 0 of the `ll` column when its
+   * atlas fits the budget, else the finest `ll` level that does (a v2 / v3 tree: the
+   * finest of its qualities, all lossless). → { key, lod, dims, native } or null.
+   */
+  function _losslessExportTarget() {
+    if (_isV5BrickManifest()) {
+      const qm = VolumeViewer.getQualityMatrix?.();
+      if (!qm || !qm.levels.length) return null;
+      const budget = Number(qm.budgetBytes) || Infinity;
+      const fits = qm.levels.find(L => L.gpu && L.gpu.planned !== false && Number(L.gpu.bytes) <= budget)
+        || qm.levels[qm.levels.length - 1];
+      return { key: `${fits.key}@ll`, lod: fits.level, dims: fits.dims, native: fits.level === 0 };
+    }
+    const keys = ['native', '1024x1024', '512x512', '256x256'];
+    const fp = VolumeViewer.getQualityFootprints?.(keys);
+    const budget = Number(fp?.budgetBytes) || Infinity;
+    for (const k of keys) {
+      const q = fp?.qualities?.[k];
+      if (q && q.planned !== false && Number(q.bytes) <= budget) {
+        const lod = _lodForQuality(k);
+        const d = _brickManifest?.levels?.[lod]?.dimensions || null;
+        return { key: k, lod, dims: d, native: lod === 0 };
+      }
+    }
+    return null;
+  }
+
+  function _losslessTargetText(t) {
+    if (!t) return _t('exportView.losslessUnknown', 'Lossless: the finest level this GPU holds.');
+    const d = t.dims || {};
+    return t.native
+      ? _tf('exportView.losslessNative', 'Lossless at the native resolution ({x} × {y} × {z}).', d)
+      : _tf('exportView.losslessLevel', 'Lossless at {x} × {y} × {z}: the native level is more than this GPU holds.', d);
+  }
+
+  /** Runs `fn` with the volume on screen at the lossless target, then puts the quality back. */
+  async function _withLosslessQuality(fn, onStatus = null) {
+    const target = _losslessExportTarget();
+    const previous = _qualityMode;
+    const already = target && _lodForQuality(previous) === target.lod
+      && (!_isV5BrickManifest() || _currentColumn() === 'll');
+    if (!target || already) return fn(target);
+    onStatus?.(_t('exportView.loadingLossless', 'Loading the lossless level…'));
+    await _setQualityMode(target.key);
+    try {
+      return await fn(target);
+    } finally {
+      try { await _setQualityMode(previous); } catch (err) { /* the volume on screen stays */ }
+    }
+  }
+
+  /** The export choice every export offers: 'current' | 'lossless' | null (cancelled). */
+  async function _askExportQuality() {
+    if (typeof Dialog === 'undefined' || !Dialog.ask) return 'current';
+    const target = _losslessExportTarget();
+    const choice = await Dialog.ask({
+      icon: 'image',
+      title: _t('exportQuality.title', 'Export quality'),
+      message: _tf('exportQuality.message', 'Shown now: {current}. {lossless}', {
+        current: _qualityLabel(_qualityMode), lossless: _losslessTargetText(target)
+      }),
+      dismissId: 'cancel',
+      options: [
+        { id: 'lossless', primary: true, variant: 'primary', label: _t('exportQuality.lossless', 'Lossless') },
+        { id: 'current', label: _t('exportQuality.current', 'Current quality') },
+        { id: 'cancel', label: _t('common.cancel', 'Cancel') }
+      ]
+    });
+    return choice === 'lossless' || choice === 'current' ? choice : null;
   }
 
   function _normalizeQualityParam(value) {
-    const key = String(value || '').trim().toLowerCase();
+    const raw = String(value || '').trim().toLowerCase();
+    // A v5 matrix cell (SPEC §14.6): "<resolution>@<column>".
+    const at = raw.indexOf('@');
+    if (at > 0) {
+      const base = _normalizeQualityParam(raw.slice(0, at));
+      const col = raw.slice(at + 1);
+      return base && /^[a-z0-9]{1,8}$/.test(col) ? `${base}@${col}` : base;
+    }
+    const key = raw;
     if (key === 'preview' || key === 'low' || key === '256x256') return '256x256';
     if (key === 'balanced' || key === 'medium' || key === '512x512') return '512x512';
     if (key === 'high' || key === '1024x1024') return '1024x1024';
@@ -5320,12 +5908,23 @@ const ViewerApp = (() => {
       if (streamed?.available) {
         return streamed;
       }
+      // A bricked dataset has no slice stack to fall back on: the slice path would
+      // only fire a 404 per slice and channel. Its failure is reported as it is.
+      if (!_hasSliceStack(meta)) return streamed;
       console.warn('[ViewerApp] Brick streaming unavailable, fallback to slices:', streamed?.reason || 'unknown');
     }
     return VolumeViewer.loadVolume(basePath, meta, timepoint, onProgress, { quality, ...extraOptions });
   }
 
+  /** Whether the dataset has slice files to read (VolumeSourceManager.hasSliceStack),
+   *  decided from its declared sources — never from whether its brick manifest has
+   *  landed yet. Without the source manager, a dataset is assumed to have none. */
+  function _hasSliceStack(meta) {
+    return typeof VolumeSourceManager !== 'undefined' && VolumeSourceManager.hasSliceStack(meta);
+  }
+
   function _handleQualityProgress(state) {
+    _sampleDownloadRate();
     const panel = document.getElementById('quality-stream-progress');
     const fill = document.getElementById('quality-stream-progress-fill');
     const text = document.getElementById('quality-stream-progress-text');
@@ -5682,11 +6281,13 @@ const ViewerApp = (() => {
       _activateHostPlugin(data.id);
     } else if (data.type === 'SET_QUALITY') {
       // Always answered: the host stages one panel at a time and waits for this reply.
-      const quality = _normalizeQualityParam(data.quality);
+      // A host speaks the resolution ladder; on a v5 tree the page keeps its column.
+      const asked = _normalizeQualityParam(data.quality);
+      const quality = _withColumn(asked);
       if (!quality) {
-        _postToHost({ type: 'QUALITY_STATUS', quality: _qualityMode, requested: String(data.quality ?? ''), phase: 'error', message: 'unknown quality' });
+        _postToHost({ type: 'QUALITY_STATUS', quality: _qualityBaseOf(_qualityMode), requested: String(data.quality ?? ''), phase: 'error', message: 'unknown quality' });
       } else if (quality === _qualityMode && _loadedQualities.has(_qualityKey(_currentTimepoint, quality))) {
-        _postToHost({ type: 'QUALITY_STATUS', quality, phase: 'ready' });
+        _postToHost({ type: 'QUALITY_STATUS', quality: _qualityBaseOf(quality), phase: 'ready' });
       } else {
         // Up or down alike: the volume is reloaded at that level.
         Promise.resolve(_setQualityMode(quality))
@@ -5695,11 +6296,11 @@ const ViewerApp = (() => {
           // made the viewer settle on a coarser one (downgraded) — asking again would
           // only reload the same coarser level.
           .then((result) => _postToHost({
-            type: 'QUALITY_STATUS', quality: _qualityMode, requested: quality,
+            type: 'QUALITY_STATUS', quality: _qualityBaseOf(_qualityMode), requested: _qualityBaseOf(quality),
             downgraded: Boolean(result?.ok && _qualityMode !== quality),
             phase: result?.ok ? 'ready' : 'superseded'
           }))
-          .catch((err) => _postToHost({ type: 'QUALITY_STATUS', quality, phase: 'error', message: String(err?.message || err) }));
+          .catch((err) => _postToHost({ type: 'QUALITY_STATUS', quality: _qualityBaseOf(quality), phase: 'error', message: String(err?.message || err) }));
       }
     } else if (data.type === 'SET_SAMPLE_UPSIDE_DOWN') {
       // The admin editor's sample-side switch, on its preview: lay the volume
@@ -5946,7 +6547,7 @@ const ViewerApp = (() => {
         // GPU bytes each quality's atlas would take, for the host's quality staging.
         qualityBytes: _qualityBytes()
       },
-      quality: _qualityMode,
+      quality: _qualityBaseOf(_qualityMode),
       tool: typeof ToolManager !== 'undefined' ? ToolManager.current() : 'navigate'
     });
   }
@@ -5958,7 +6559,11 @@ const ViewerApp = (() => {
    */
   function _qualityBytes() {
     const select = document.getElementById('select-quality');
-    const offered = select ? [...select.options].map(o => o.value) : ['512x512', '1024x1024', 'native'];
+    // A v5 tree is priced on the ladder the host plans with (GPU bytes do not depend
+    // on the column).
+    const offered = _isV5BrickManifest()
+      ? (_brickManifest.levels || []).map(_v5LevelKey)
+      : (select ? [...select.options].map(o => o.value) : ['512x512', '1024x1024', 'native']);
     const footprints = VolumeViewer.getQualityFootprints?.(offered);
     if (footprints?.qualities) {
       const out = {};
@@ -6494,6 +7099,8 @@ const ViewerApp = (() => {
   return {
     init,
     openStudio,
+    askExportQuality: _askExportQuality,
+    withLosslessQuality: _withLosslessQuality,
     getCurrentSliceResult,
     getCaptureCanvas,
     getSamplingVolume,

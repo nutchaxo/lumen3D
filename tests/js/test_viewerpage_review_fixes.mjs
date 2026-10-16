@@ -162,6 +162,8 @@ const plain = (v) => JSON.parse(JSON.stringify(v));
     const _loadedQualities = new Set();
     const _qualityKey = (t, q) => q;
     const _normalizeQualityParam = (q) => (['512x512', '1024x1024', 'native'].includes(q) ? q : null);
+    const _withColumn = (q) => q;   // a v2 / v3 tree: no compression column
+    const _qualityBaseOf = (q) => String(q || '').split('@')[0];
     function _postToHost(m) { posts.push(m); }
     function _setQualityMode(q) { _qualityMode = q === 'native' ? '1024x1024' : q; return Promise.resolve({ ok: true }); }
     globalThis.handle = (data) => { ${block[1]} };

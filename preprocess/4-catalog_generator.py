@@ -13,6 +13,11 @@ from run_preprocess import merge_curated, atomic_write_json, read_json_file  # n
 import planes_writer  # noqa: E402
 import mips_writer  # noqa: E402
 import bricks_v3_writer  # noqa: E402
+try:
+    import format5  # noqa: E402  (beside the scripts in the pipeline pack)
+except ImportError:  # in the repository it lives at the root, shared with the web platform
+    sys.path.insert(0, str(HERE.parent))
+    import format5  # noqa: E402
 
 COLORS = ["#00FF00", "#00AAFF", "#FF00FF", "#FF0000", "#FFFF00", "#00FFFF"]
 
@@ -117,13 +122,15 @@ def merge_volume_metadata(existing: dict, fresh: dict) -> dict:
 
 def dataset_format_version(output_dir: Path) -> int:
     """The highest format whose structures are complete on disk, each naming the bricks
-    manifest as it stands now: 4 = v3 bricks + planes + layer MIPs, 3 = v2 bricks +
+    manifest as it stands now: 5 = v5 bricks (SPEC §14) + planes + layer MIPs, 4 = v3 bricks + planes + layer MIPs, 3 = v2 bricks +
     planes + MIPs, 2 = v2 bricks + planes, else 1. A dataset never claims a structure it
     does not have; the admin's Data updates tab completes a lower one."""
     if not planes_writer.planes_complete(output_dir):
         return 1
     if not mips_writer.mips_complete(output_dir):
         return planes_writer.FORMAT_VERSION
+    if format5.bricks_complete(output_dir):
+        return format5.FORMAT_VERSION
     if bricks_v3_writer.bricks_complete(output_dir):
         return bricks_v3_writer.FORMAT_VERSION
     return mips_writer.FORMAT_VERSION
@@ -296,7 +303,7 @@ def _inject_histograms(temp_dir, manifest_path, manifest, lod_levels, n_ch, n_tp
     packer = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(packer)
     coarsest = lod_levels[-1]["lod"]
-    v3 = manifest.get("schema") == bricks_v3_writer.SCHEMA
+    v3 = manifest.get("schema") in (bricks_v3_writer.SCHEMA, format5.SCHEMA)
     print(f"[CATALOG] Computing histograms on LOD {coarsest}"
           f"{f' for {n_tp} timepoints' if n_tp > 1 else ''}...")
     histograms = packer.histograms_for_timepoint(temp_dir, 0, n_ch, coarsest)

@@ -133,6 +133,8 @@ const REASONS = {
   no_zlib: () => t('dupd.reasonZlib', 'the server has no zlib compression'),
   low_memory: () => t('dupd.reasonMemory', 'the server allows less than 128 MiB of memory per request'),
   exec_time_too_short: () => t('dupd.reasonTime', 'the server stops requests after less than 10 seconds'),
+  no_webp_lossy_encode: () => t('dupd.reasonWebpLossy', 'this browser cannot encode lossy WebP images'),
+  browser_only: () => t('dupd.reasonBrowserOnly', 'on this server, this update runs in the browser'),
 };
 // Codes both executors may report, worded for the one that reported them.
 const EXEC_REASONS = {
@@ -157,6 +159,7 @@ const ERRORS = {
   unauthorized: () => t('dupd.reasonAuth', 'session expired'),
   unit_blocked: () => t('dupd.errBlocked', 'a lower level of the pyramid is not complete yet'),
   bad_webp: () => t('dupd.errBadWebp', 'the server refused a converted brick'),
+  bad_blob: () => t('dupd.errBadBlob', 'the server refused a converted unit'),
   insufficient_disk: () => t('dupd.errDisk', 'not enough disk space on the server (needed / free)'),
   no_executor: () => t('dupd.errNoExecutor', 'neither this browser nor the server can run this update'),
   unit_timeout: () => t('dupd.errUnitTimeout', 'the server cannot convert one unit within its time limit'),
@@ -302,7 +305,7 @@ function lane(x) {
       onEvent: (e) => onLaneEvent(x, e),
       executorFor: (mid) => stepExec(x, mid),
       // Read when the step finalizes: the box applies to every 3 → 4 update finishing from then on.
-      keepPrevious: (_ds, mid) => mid === 'm004-bricks-v3' && keepPreviousOn(),
+      keepPrevious: (_ds, mid) => (mid === 'm004-bricks-v3' || mid === 'm005-matrix') && keepPreviousOn(),
     });
   }
   return _lanes[x];
@@ -742,7 +745,7 @@ function fmtSize(bytes) {
 function keepPreviousBox() {
   return `<label class="dupd-keep"><input type="checkbox" data-dupd-keep ${keepPreviousOn() ? 'checked' : ''}>
     <span><b>${escHtml(t('dupd.keepPrev', 'Keep the previous version'))}</b>
-    <span class="adm-muted dupd-small dupd-block">${escHtml(t('dupd.keepPrevHint', 'A 3 → 4 update keeps the bricks it replaces beside the new ones, so the viewer can show either (Chunk debug tool) and you can compare before and after. It takes as much room again as the bricks of each dataset; delete it below once compared.'))}</span></span></label>`;
+    <span class="adm-muted dupd-small dupd-block">${escHtml(t('dupd.keepPrevHint', 'A 3 → 4 or 4 → 5 update keeps the bricks it replaces beside the new ones, so the viewer can show either (Chunk debug tool) and you can compare before and after. It takes as much room again as the bricks of each dataset; delete it below once compared.'))}</span></span></label>`;
 }
 
 /** The datasets that kept the brick tree of their 3 → 4 update. */

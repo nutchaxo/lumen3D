@@ -123,6 +123,7 @@ function makeViewer(world, onTile) {
     ${lift('_sameExportFingerprint')}
     ${lift('_waitForSteadyVolume')}
     ${lift('renderViewImage')}
+    ${lift('_hasSliceStack')}
     ${lift('loadVolume')}
     api = {
       renderViewImage, loadVolume, _isVolumeStreaming, _exportFingerprint, _sameExportFingerprint,

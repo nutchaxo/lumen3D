@@ -37,6 +37,7 @@ import { setUnsaved, registerDirtyGuard } from './bus.js';
 import { renderFields, renderGroups } from './pages-controls.js';
 import { renderTranslatePanel } from './pages-translate.js';
 import { renderVariablesPanel } from './pages-variables.js';
+import { openExportDialog, pickImportFile } from './pages-transfer-ui.js';
 
 const SPECIAL = [{ slug: 'home', builtin: true }, { slug: 'about', builtin: true }];
 
@@ -633,8 +634,12 @@ function _styleGroupsSpecific(type) {
   const align = _alignField();
   switch (type) {
     case 'heading':
-    case 'richtext':
       return [{ title: t('pages.grp.format', 'Mise en forme'), icon: 'align-left', fields: [align] }];
+    case 'richtext':
+      return [{ title: t('pages.grp.format', 'Mise en forme'), icon: 'align-left', fields: [
+        align,
+        { k: 'props.linkColor', t: 'color', l: t('pages.linkColor', 'Couleur des liens') },
+      ] }];
     case 'image':
       return [{ title: t('pages.grp.layout', 'Mise en page'), icon: 'layout-grid', fields: [
         { k: 'props.width', t: 'slider', l: t('pages.width', 'Largeur'), min: 40, max: 1200, step: 10, ph: 'auto', dv: 400 },
@@ -783,6 +788,7 @@ function _styleGroupsSpecific(type) {
       return [{ title: t('pages.grp.layout', 'Mise en page'), icon: 'layout-grid', fields: [
         { k: 'props.layout', t: 'seg', l: t('pages.il.layout', 'Disposition'), opts: [['v', t('pages.il.v', 'Vertical')], ['h', t('pages.il.h', 'Horizontal')]] },
         { k: 'props.iconColor', t: 'color', l: t('pages.il.iconColor', 'Couleur des icônes') },
+        { k: 'props.linkColor', t: 'color', l: t('pages.linkColor', 'Couleur des liens') },
         { k: 'props.iconSize', t: 'slider', l: t('pages.il.iconSize', 'Taille des icônes'), min: 8, max: 80, ph: 'auto', dv: 18 },
         { k: 'props.gap', t: 'slider', l: t('pages.il.gap', 'Espacement'), min: 0, max: 80, ph: 'auto', dv: 12 },
       ] }];
@@ -837,6 +843,7 @@ function _styleGroupsSpecific(type) {
         { k: 'props.mono', t: 'check', l: t('pages.bd.mono', 'Police mono') },
         { k: 'props.labelColor', t: 'color', l: t('pages.sl.labelColor', 'Couleur des intitulés') },
         { k: 'props.valueColor', t: 'color', l: t('pages.sl.valueColor', 'Couleur des valeurs') },
+        { k: 'props.linkColor', t: 'color', l: t('pages.linkColor', 'Couleur des liens') },
         { k: 'props.lineColor', t: 'color', l: t('pages.lineColor', 'Couleur des filets') },
       ] }];
     case 'logo-strip':
@@ -979,6 +986,8 @@ function renderLauncher() {
         <select class="adm-field-input" id="pages-select" style="width:auto;min-width:200px">${_pageOptions()}</select>
         <button class="adm-btn adm-btn-ghost adm-btn-sm" id="pages-new"><i data-lucide="plus"></i> ${escHtml(t('pages.new', 'Nouvelle page'))}</button>
         <button class="adm-btn adm-btn-ghost adm-btn-sm" id="pages-delete"><i data-lucide="trash-2"></i> ${escHtml(t('pages.delete', 'Supprimer'))}</button>
+        <button class="adm-btn adm-btn-ghost adm-btn-sm" id="pages-export" title="${escHtml(t('pages.xfer.exportTitle', 'Exporter des pages'))}"><i data-lucide="file-down"></i> ${escHtml(t('pages.xfer.export', 'Exporter'))}</button>
+        <button class="adm-btn adm-btn-ghost adm-btn-sm" id="pages-import" title="${escHtml(t('pages.xfer.importTitle', 'Importer des pages'))}"><i data-lucide="file-up"></i> ${escHtml(t('pages.xfer.import', 'Importer'))}</button>
         <label style="display:flex;gap:6px;align-items:center;font-size:13px">${escHtml(t('pages.lang', 'Langue'))}<select class="adm-field-input" id="pages-loc" style="width:auto">${_locOptions()}</select></label>
         <span style="flex:1"></span>
         <button class="adm-btn adm-btn-accent" id="pages-edit"><i data-lucide="pencil-ruler"></i> ${escHtml(t('pages.editWith', 'Modifier avec l\'éditeur'))}</button>
@@ -995,6 +1004,8 @@ function renderLauncher() {
   el('pages-select').addEventListener('change', (e) => switchPage(e.target.value));
   el('pages-new').addEventListener('click', newPage);
   el('pages-delete').addEventListener('click', deletePage);
+  el('pages-export').addEventListener('click', () => openExportDialog(_xferCtx()));
+  el('pages-import').addEventListener('click', () => pickImportFile(_xferCtx()));
   el('pages-loc').addEventListener('change', (e) => { _editLoc = e.target.value; });
   el('pages-edit').addEventListener('click', enterEditor);
   refreshIcons(root);
@@ -1836,6 +1847,32 @@ function addWidgetToSelection(type) {
   _sel = { si, ci: realCi, wi: at };
   _side = 'settings';
   _afterMutate();
+}
+
+// ── Import / export of pages (pages-transfer-ui.js) ─────────────
+// The dialogs write through the same endpoints as the editor; this is what they
+// need from the tab's state.
+function _xferCtx() {
+  return {
+    pages: () => _pages,
+    currentSlug: () => _slug,
+    instance: () => _instance,
+    locale: () => _editLoc,
+    isBusy: () => _switching || _dirty || _autosaveFailed || !!_autosaveTimer,
+    normalizeContent: (b) => {
+      const out = { sections: _sanitizeSections(_migrate(b)) };
+      if (_isObj(b) && _isObj(b.background) && b.background.preset) out.background = JSON.parse(JSON.stringify(b.background));
+      return out;
+    },
+    reconcileInstance: _reconcileInstance,
+    saveInstancePaths: _saveInstancePaths,
+    takeOver: (slug) => { try { _chan?.postMessage({ t: 'takeover', slug, id: _tabId }); } catch (_) { /* channel closed */ } },
+    afterImport: async (slugs) => {
+      _buildPageList();
+      const show = (slugs || []).find((s) => _pages.some((p) => p.slug === s)) || (_pages.some((p) => p.slug === _slug) ? _slug : 'home');
+      await selectPage(show);
+    },
+  };
 }
 
 // ── Page management + persistence ───────────────────────────────

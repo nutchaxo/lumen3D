@@ -173,6 +173,7 @@
               <option value="1024x1024">1024x1024</option>
               <option value="native">Native</option>
             </select>
+            <div id="quality-matrix" class="quality-matrix hidden"></div>
             <div class="quality-status" id="quality-status" role="status" data-i18n="viewer.qualityDefault">512x512 by default, 256x256 when unavailable.</div>
             <div class="quality-status" id="buffer-status"></div>
             <label class="detail-mode-row text-xs text-muted" for="select-detail-mode">
@@ -402,6 +403,14 @@
             </div>
           </fieldset>
           <fieldset class="view-export-group">
+            <legend data-i18n="exportView.quality">Quality</legend>
+            <div class="view-export-choices">
+              <label class="view-export-choice"><input type="radio" name="view-export-quality" value="current" checked><span data-i18n="exportView.qualityCurrent">Current</span></label>
+              <label class="view-export-choice"><input type="radio" name="view-export-quality" value="lossless"><span data-i18n="exportView.qualityLossless">Lossless</span></label>
+            </div>
+            <div class="view-export-note" id="view-export-quality-note" aria-live="polite"></div>
+          </fieldset>
+          <fieldset class="view-export-group">
             <legend data-i18n="exportView.overlays">Overlays</legend>
             <label class="view-export-check"><input type="checkbox" id="view-export-scalebar" checked><span data-i18n="exportView.scaleBar">Scale bar</span></label>
             <div class="view-export-note hidden" id="view-export-scalebar-note" data-i18n="exportView.noCalibration">This dataset has no physical calibration: a scale bar would count voxels, not µm.</div>
@@ -605,6 +614,8 @@
   <script src="js/workers/studio-plane-ops.js"></script>
   <script src="js/core/plane-codec.js"></script>
   <script src="js/core/plane-loader.js"></script>
+  <script src="js/core/cut-store.js"></script>
+  <script src="js/core/data-access.js"></script>
   <script src="js/viewers/volume-slicer.js?v=20260615-fixed1"></script>
   <script src="js/viewers/volume-viewer.js?v=20260615-fixed1"></script>
   <script src="js/viewers/tracking-overlay.js?v=20260615-fixed1"></script>

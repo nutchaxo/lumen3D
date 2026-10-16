@@ -37,6 +37,7 @@ from PIL import Image  # noqa: E402
 from test_mig_py_server import _write_tree, _volume  # noqa: E402
 
 M2, M3, M4 = "m002-planes", "m003-layer-mips", "m004-bricks-v3"
+M5 = "m005-matrix"   # what a format-4 dataset has left since web 1.65
 REAL_ROOT = Path(ROOT) / "DATA_WEB" / "3d"
 
 
@@ -426,18 +427,18 @@ class Engine(unittest.TestCase):
         voxel = (0.5, 0.5, 1.6)
         ds, truth = make_3d(self.data_web, voxel=voxel)
         row = self.row("3d/SYN3")
-        self.assertEqual(row["pending"], [M2, M3, M4])
+        self.assertEqual(row["pending"], [M2, M3, M4, M5])
         self.assertFalse(row["estimate"]["migrations"][M3]["exact"])
         self.assertTrue(row["estimate"]["migrations"][M4]["exact"])
         # m004 needs format 3 first
         self.assertEqual(dm.handle("plan", {}, {"dataset": "3d/SYN3", "migration": M4})[0], 409)
         self.assertEqual(dm.handle("plan", {}, {"dataset": "3d/SYN3", "migration": M3})[0], 409)
         run_job(self, "3d/SYN3", M2)
-        self.assertEqual(self.row("3d/SYN3")["pending"], [M3, M4])
+        self.assertEqual(self.row("3d/SYN3")["pending"], [M3, M4, M5])
         fin, _ = run_job(self, "3d/SYN3", M3)
         self.assertEqual(fin["formatVersion"], 3)
         assert_mips(self, ds, truth, lambda t: "")
-        self.assertEqual(self.row("3d/SYN3")["pending"], [M4])
+        self.assertEqual(self.row("3d/SYN3")["pending"], [M4, M5])
         # geometry: Z kept at level 1 (1.6 > 1.5 x 1.0), halved at level 2 (1.6 <= 3.0)
         plan = dm.plan_job("3d/SYN3", M4)
         self.assertEqual([L["halveZ"] for L in plan["levels"]], [False, False, True])
@@ -458,7 +459,7 @@ class Engine(unittest.TestCase):
             self.assertFalse((ds / gone).exists())
         self.assertFalse(dm.tile_store_dir("3d", "SYN3", M4).exists())
         row = self.row("3d/SYN3")
-        self.assertEqual((row["pending"], row["repair"], row.get("problem")), ([], False, None))
+        self.assertEqual((row["pending"], row["repair"], row.get("problem")), ([M5], False, None))
         v3_bytes = sum(p.stat().st_size for p in (ds / "bricks").rglob("*.bin"))
         self.assertGreater(v3_bytes, 0)
         self.assertGreater(v2_bytes, 0)
@@ -466,16 +467,16 @@ class Engine(unittest.TestCase):
         # Repair on a v4 dataset: mips (from planes), then planes (read from the v3 bricks).
         (ds / "mips" / "l00001.bin").unlink()
         row = self.row("3d/SYN3")
-        self.assertEqual((row["formatVersion"], row["pending"], row["repair"]), (4, [M3], True))
+        self.assertEqual((row["formatVersion"], row["pending"], row["repair"]), (4, [M3, M5], True))
         self.assertEqual(run_job(self, "3d/SYN3", M3)[0]["formatVersion"], 4)
         assert_mips(self, ds, truth, lambda t: "")
         (ds / "planes" / dm.pack_name(100)).unlink()
         # mips/ is stamped with the bricks manifest, not the planes: it stays valid
-        self.assertEqual(self.row("3d/SYN3")["pending"], [M2])
+        self.assertEqual(self.row("3d/SYN3")["pending"], [M2, M5])
         run_job(self, "3d/SYN3", M2)
         from test_mig_py_server import assert_planes_equal
         assert_planes_equal(self, ds, truth)
-        self.assertEqual(self.row("3d/SYN3")["pending"], [])        # mips manifest still stamped right
+        self.assertEqual(self.row("3d/SYN3")["pending"], [M5])        # mips manifest still stamped right
 
         # Damaged v3 bricks: a problem, never a pending m004 (its source is gone).
         idx = ds / "bricks" / "index.bin"
@@ -502,7 +503,7 @@ class Engine(unittest.TestCase):
             for root in ("planes", "mips"):
                 m = json.loads((ds / root / t / "manifest.json").read_text(encoding="utf-8"))
                 self.assertEqual(m["source"]["manifestSha256"], sha)
-        self.assertEqual(self.row("live/LIVE3")["pending"], [])
+        self.assertEqual(self.row("live/LIVE3")["pending"], [M5])
 
     def test_browser_executor_ordering_and_blobs(self):
         voxel = (1.0, 1.0, 1.0)
@@ -634,18 +635,18 @@ class Engine(unittest.TestCase):
                     finally:
                         dm._bump_metadata = real_bump
                     self.assertEqual(self.meta(ds)["formatVersion"], 3)
-                    self.assertEqual(self.row("3d/RS")["pending"], [M4])
+                    self.assertEqual(self.row("3d/RS")["pending"], [M4, M5])
             self.assertGreaterEqual(calls, 3)
         finally:
             dm.V3_PACK_MAX_BRICKS = old
         self.assertEqual(dm.finalize("3d/RS", M4)["formatVersion"], 4)
         verify_v3(self, ds, truth, voxel)
-        self.assertEqual(self.row("3d/RS")["pending"], [])
+        self.assertEqual(self.row("3d/RS")["pending"], [M5])
         # journal lost after a swap: version 3 + v3 bricks → plan creates a finalize-only job
         meta = self.meta(ds)
         meta["formatVersion"] = 3
         (ds / "metadata.json").write_text(json.dumps(meta), encoding="utf-8")
-        self.assertEqual(self.row("3d/RS")["pending"], [M4])
+        self.assertEqual(self.row("3d/RS")["pending"], [M4, M5])
         self.assertEqual(dm.plan_job("3d/RS", M4)["state"], "swapped")
         self.assertEqual(dm.finalize("3d/RS", M4)["formatVersion"], 4)
 

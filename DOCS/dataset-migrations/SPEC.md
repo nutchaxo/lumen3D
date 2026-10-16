@@ -743,16 +743,48 @@ Units are tuples `(stage, t, k, c, a, b, d)`; keys:
   (`bricks/` → `bricks.v4-old/`, `.bricks5-incoming/` → `bricks/`), the re-stamp of `planes/` and
   `mips/` (their voxels are level 0, unchanged), the bump to 5, and `bricks.v4-old/` deleted — or
   kept as `bricks.previous/` with `keepPrevious`.
-* Executors (web 1.63): the **Python server** only, `M005_WORKERS` units at once in threads
-  (`unit_run` body `workers`), capability `status.server.migrations["m005-matrix"]` with
-  `browser: false`; `unit_put` / `unit_inputs` answer 409 `browser_unsupported`. The browser
-  executor (and through it PHP hosts) is a later step: lossy WebP via `OffscreenCanvas.convertToBlob`
-  is not byte-identical to Pillow, which this section allows for `q80` / `q50` only (checked by
-  decoding).
-* Registration: m005 joins `MIGRATIONS` (and LATEST becomes 5) only with `LUMEN_FORMAT5=1` or
-  `dataset_migrations.enable_format5()` until the viewer reads format 5; with the default nothing
-  changes for any host. The pipeline writes format 5 with `--format 5` (preprocess ≥ 0.22.0),
-  byte-identical to m005 (both call `format5.py`).
+* Executors: the **Python server** (`M005_WORKERS` units at once in threads, `unit_run` body
+  `workers`) and, since web 1.65, the **browser** (`js/migrations/m005-matrix.js`). A PHP host has
+  no executor of its own: `status.server.migrations["m005-matrix"]` = `{available: false,
+  reasons: ["browser_only"]}`, so the Data updates tab converts its datasets in the browser.
+* Browser protocol (web 1.65). The handler does not plan a unit itself: it posts `unit_inputs`
+  `{dataset, migration, unit}` and the server answers `{unit, empty, stage, tree, t, level,
+  channel, levels: [{level, target, dimensions, voxelSize}], columns, box: {x, y, z: [lo, hi)},
+  tiles: [{rel, start, end, z, x0, y0, w, h}], bricks: [{rel, start, end, bz, by, bx}]}` plus
+  `outBricks` (B), `kind` / `first` / `count` (C), `brickZ` / `super` (D); 409 `unit_blocked` for a
+  level-k ≥ 1 unit before stage A of its tree and channel. `tiles` are the non-empty png-gray8
+  tiles of the level's planes meeting the box (level 0: `planes/`; k ≥ 1: `@store/A/t{t}/k{k}/c{c}/z{z}.bin`,
+  the stage-A packs, which `read_ranges` maps to the job's tile store and never to a published
+  path); `bricks` are the format-4 level-0 bricks of a level-0 B unit. The worker reads them with
+  `read_ranges` (`io.readRels`, ≤ 512 runs / 16 MiB per request; compressed tiles cached across
+  units, 128 MiB per worker) and posts the result: A = `u32 n`, `n × (u32 k, u32 length)`, then
+  the n LPLN packs (length 0 = all-zero plane, every level ≥ 1 named once); B = the blob above
+  (empty body = no brick kept); C = the orth pack; D = the cut record (empty = all zero).
+  `unit_put` checks the shape of everything before storing it (`bad_blob`): pack headers and tile
+  sizes, every column image's kind and size (`ll` / `b2` / `b4` and the fallbacks: a 594 × 528
+  VP8L; a lossy image: 720 × 640 with a trailer 0..12), every cut brick a lossless WebP of its
+  mosaic size, bricks inside the unit.
+* The browser's WebP encoders are not Pillow's: lossless images (the `ll`, `b2`, `b4` columns,
+  the fallbacks, the cut bricks) decode to the same voxels, lossy ones look the same; png-gray8
+  tiles decode to the same pixels. The arithmetic (level average, apron, quantizer, dead zone,
+  mosaics, record and pack layouts) is format5.py's, so a browser-made tree differs from a
+  server-made one only in the bytes of its images (`tests/test_format5_browser_protocol.py`,
+  `tests/js/test_m005_handler.mjs`).
+* PHP twin (`api/_migrations_m005.php`, web 1.65): plan (units, empties, order and the stage-A
+  rule identical to Python), `unit_inputs`, `unit_put`, `read_ranges` of `@store/A`, finalize
+  (assembly, indexes, manifest, validation, swap, re-stamp, bump, `keepPrevious`) and the v5
+  reader of the status (`bricksSchema` `iribhm-bricks-v5`, `bricks_v5_invalid`); fed the same
+  units, the PHP and Python trees are byte-identical (`tests/test_format5_php_parity.py`). A C unit
+  of a native level holds X × 64 × Z voxels; its body must stay under `maxUnitBody` (32 MiB).
+* Other route (web 1.65): `tools/convert_dataset.py <DATA_WEB>/<type>/<folder>` runs every pending
+  migration with the Python server executor on the operator's machine; the converted folder is then
+  dragged into the admin Import tab, whose allowlist accepts a v5 tree (`index/{col}.bin` core tier,
+  packs tiered by level, `xy/`, `xz/`, `yz/`, `cuts/` last) and whose validation proves it whole
+  (both twins: every index hashed as the manifest says and of its grids, every brick inside an
+  arrived pack, every plane store present).
+* Registration: m005 is part of `MIGRATIONS` and LATEST is 5 on both backends since web 1.65 (the
+  viewer reads format 5 since 1.64). The pipeline writes format 5 with `--format 5` (preprocess
+  ≥ 0.22.0), byte-identical to m005's server executor (both call `format5.py`).
 * A level is resampled from level 0 only (§14.1), so stage-A units of different z are independent.
 
 ### 14.11 Benchmark (normative inputs of §14.3)

@@ -9,9 +9,13 @@
    js/migrations/<id>.js that registers itself on `self.LumenMigrationHandlers[id]`:
      prepare(ctx)                → state     ctx = { datasetBase, fetchJson(url), fetchText(url) }
      listUnits(state, opts)      → [{ key, empty, level? }]   (may be async; opts.sample = for a benchmark)
-     planUnitWork(key, state)    → work      (may be async)
+     planUnitWork(key, state, io) → work     (may be async; io as below)
      runUnit(work, state, io)    → { body: Uint8Array unit blob, bytesIn, tiles }
-                                   io = { fetchRange(url, start, end), fetchStored(req) → [{bz, by, bx, bytes}], signal }
+                                   io = { fetchRange(url, start, end), fetchRanges([{url, start, end}]),
+                                          fetchStored(req) → [{bz, by, bx, bytes}],
+                                          readRels([{rel, start, end}]) → [Uint8Array]  (read_ranges by
+                                            dataset-relative path, `@store/…` included),
+                                          unitInputs() → the server's unit_inputs answer, signal }
      probe()                     → { available, reasons:[codes] }   optional: can THIS browser run it
      requires: [ids]             optional: handlers whose code this one reuses (imported after it)
      slotsPerWorker: n           optional: units one worker may hold at once (memory bound)
@@ -325,6 +329,47 @@ let _rangesMissing = false;   // a server older than read_ranges: one request pe
 /** A server older than an action answers 400 `unknown_action` (PHP) or `Unknown action` (Python). */
 function unknownAction(err) { return !!(err && err.status === 400 && /^unknown[ _]action$/i.test(String(err.code || ''))); }
 
+/**
+ * io.readRels([{ rel, start, end }]) → [Uint8Array], request order: runs named by their path
+ * relative to the dataset (or `@store/…`, a file of the job's store), batched like
+ * fetchRanges. A server without read_ranges cannot serve them.
+ */
+async function readRels(dataset, list, signal) {
+  const out = new Array(list.length);
+  for (let k = 0; k < list.length;) {
+    let bytes = 0;
+    let j = k;
+    while (j < list.length && j - k < RANGES_BATCH && (j === k || bytes + list[j].end - list[j].start <= RANGES_BATCH_BYTES)) {
+      bytes += list[j].end - list[j].start;
+      j++;
+    }
+    const got = await readRanges(dataset, list.slice(k, j), signal);
+    for (let n = 0; n < got.length; n++) out[k + n] = got[n];
+    k = j;
+  }
+  return out;
+}
+
+/** POST unit_inputs: what the server says one unit reads and makes (m005-matrix). */
+async function unitInputs(migration, dataset, unit, signal) {
+  return withRetries(async () => {
+    const headers = { 'Content-Type': 'application/json' };
+    if (_csrf) headers['X-CSRF-Token'] = _csrf;
+    const res = await fetch(`${_endpoint}?action=unit_inputs`, {
+      method: 'POST', headers, credentials: 'same-origin', signal,
+      body: JSON.stringify({ dataset, migration, unit }),
+    });
+    let data = null;
+    try { data = await res.json(); } catch (_) { data = null; }
+    if (!res.ok || !data || data.ok === false) {
+      const err = httpError(res.ok ? 500 : res.status, data && data.error, (data && (data.message || data.error)) || `HTTP ${res.status}`);
+      if (data && data.detail) err.detail = String(data.detail);
+      throw err;
+    }
+    return data;
+  }, signal);
+}
+
 /** Runs [{ rel, start, end }] of the dataset's packs in one request → Uint8Array views, request order. */
 async function readRanges(dataset, part, signal) {
   return withRetries(async () => {
@@ -460,13 +505,15 @@ async function onRun(msg) {
   try {
     const h = handlerFor(msg.migration);
     const state = stateOf(msg);
-    const work = await h.planUnitWork(msg.unit, state);
     const io = {
       fetchRange: (url, s, e) => fetchRange(url, s, e, ac.signal),
       fetchRanges: (list) => fetchRanges(msg.dataset, _bases.get(`${msg.migration}|${msg.dataset}`), list, ac.signal),
       fetchStored: (req) => fetchStored(msg.migration, msg.dataset, req, ac.signal),
+      readRels: (list) => readRels(msg.dataset, list, ac.signal),
+      unitInputs: () => unitInputs(msg.migration, msg.dataset, msg.unit, ac.signal),
       signal: ac.signal,
     };
+    const work = await h.planUnitWork(msg.unit, state, io);
     const res = await h.runUnit(work, state, io);
     const reply = await putUnit(msg.migration, msg.dataset, msg.unit, res.body, !!msg.dry, ac.signal);
     post({

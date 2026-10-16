@@ -2269,7 +2269,7 @@
     "recommended": "Le plus rapide au test de vitesse",
     "paced": "L'hébergeur répond lentement : les requêtes sont ralenties pour qu'il ne bloque pas cette adresse.",
     "keepPrev": "Conserver la version précédente",
-    "keepPrevHint": "Une mise à jour 3 → 4 garde les bricks qu'elle remplace à côté des nouvelles : le viewer peut afficher l'une ou l'autre (outil Chunk debug) pour comparer avant et après. Cela prend une seconde fois la place des bricks de chaque dataset ; supprimez-la ci-dessous une fois la comparaison faite.",
+    "keepPrevHint": "Une mise à jour 3 → 4 ou 4 → 5 garde les bricks qu'elle remplace à côté des nouvelles : le viewer peut afficher l'une ou l'autre (outil Chunk debug) pour comparer avant et après. Cela prend une seconde fois la place des bricks de chaque dataset ; supprimez-la ci-dessous une fois la comparaison faite.",
     "prevKept": "Versions précédentes conservées ({n})",
     "prevSize": "bricks v2 · {size}",
     "prevOpen": "Ouvrir la version précédente",
@@ -2277,7 +2277,10 @@
     "confirmDropPrev": "Supprimer la version précédente de {name} ? Le dataset lui-même reste tel quel.",
     "prevDropped": "Version précédente de {name} supprimée.",
     "prevDropFailed": "Impossible de supprimer la version précédente.",
-    "unitGB": "Go"
+    "unitGB": "Go",
+    "reasonWebpLossy": "ce navigateur ne sait pas encoder d'images WebP avec perte",
+    "reasonBrowserOnly": "sur ce serveur, cette mise à jour s'exécute dans le navigateur",
+    "errBadBlob": "le serveur a refusé une unité convertie"
   },
   "exportQuality": {
     "title": "Qualité de l'export",

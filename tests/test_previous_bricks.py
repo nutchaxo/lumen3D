@@ -27,6 +27,7 @@ except Exception as exc:  # pragma: no cover
     sys.exit(0)
 
 M2, M3, M4 = "m002-planes", "m003-layer-mips", "m004-bricks-v3"
+M5 = "m005-matrix"   # what a format-4 dataset has left since web 1.65
 DS = "3d/prev"
 
 
@@ -95,7 +96,7 @@ class PreviousBricks(unittest.TestCase):
         self.assertFalse((self.ds_dir / "bricks.v2-old").exists())
         self.assertEqual(dm._bricks_dir_schema(self.ds_dir / "bricks"), dm.V3_SCHEMA)
         self.assertEqual(row["formatVersion"], 4)
-        self.assertEqual(row["pending"], [])
+        self.assertEqual(row["pending"], [M5])
         self.assertEqual(row["previous"]["schema"], "iribhm-bricks-v2")
         self.assertEqual(row["previous"]["bytes"], sum((prev / k).stat().st_size for k in self.v2))
 

@@ -353,24 +353,19 @@ class Migration(unittest.TestCase):
         for t in ("3d", "2d", "live"):
             (self.data_web / t).mkdir(parents=True)
         dm.configure(self.tmp)
-        dm.enable_format5()
         dm.server_capabilities(force=True)
 
     def tearDown(self):
-        dm.disable_format5()
         dm.server_capabilities(force=True)
         shutil.rmtree(self.tmp, ignore_errors=True)
 
     def row(self, ds_id):
         return next(r for r in dm.status()["datasets"] if r["id"] == ds_id)
 
-    def test_disabled_by_default(self):
-        dm.disable_format5()
-        self.assertEqual(dm.LATEST, 4)
-        self.assertNotIn(M5, [m["id"] for m in dm.registry()])
-        self.assertNotIn(M5, dm.server_capabilities(force=True)["migrations"])
-        dm.enable_format5()
+    def test_enabled_by_default(self):
         self.assertEqual(dm.LATEST, 5)
+        self.assertEqual([m["id"] for m in dm.registry()][-1], M5)
+        self.assertIn(M5, dm.server_capabilities(force=True)["migrations"])
 
     def test_3d_chain_matches_pipeline(self):
         voxel = (0.5, 0.5, 1.6)
@@ -385,8 +380,9 @@ class Migration(unittest.TestCase):
         self.assertEqual([L["target"] for L in out["levels"]], ["native", 256])
         # a level-1 unit waits for stage A of its channel
         self.assertTrue(all(dm._m005_parse(k)[0] == 0 or dm._m005_parse(k)[2] == 0 for k in out["units"]))
-        self.assertEqual(dm.handle("unit_put", {"dataset": "3d/SYN3", "migration": M5, "unit": "A.t0.c0.z0"},
-                                   {}, b"")[0], 409)
+        # the browser protocol takes units too (SPEC §14.10): an empty stage-A body is malformed
+        st, out = dm.handle("unit_put", {"dataset": "3d/SYN3", "migration": M5, "unit": "A.t0.c0.z0"}, {}, b"")
+        self.assertEqual((st, out.get("error")), (400, "bad_blob"))
         v4_l0 = {p.name: p.read_bytes() for p in (ds / "bricks" / "l0" / "c0").glob("*.bin")}
         for _ in range(10000):
             r = dm.unit_run("3d/SYN3", M5, max_seconds=20, workers=4)

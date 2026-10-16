@@ -60,7 +60,7 @@ except Exception:
 
 # ── Registry ───────────────────────────────────────────────────────────────────
 
-LATEST = 4
+LATEST = 5
 
 MIGRATIONS = [
     {
@@ -2607,7 +2607,7 @@ def unit_put(dataset_id, mid, key, body: bytes, dry: bool = False) -> dict:
     m, plan, path = _open_job(dataset_id, mid)
     mid = m["id"]
     if mid == M005:
-        raise MigrationError("browser_unsupported", 409, "m005 runs on the server executor")
+        return _unit_put_m005(plan, m, path, key, body)
     unit = parse_unit_key_for(mid, key)
     store = tile_store_dir(plan.type, plan.folder, mid)
     if mid == M002:
@@ -3035,7 +3035,7 @@ def unit_inputs(dataset_id, mid, key) -> dict:
     m, plan, _path = _open_job(dataset_id, mid)
     mid = m["id"]
     if mid == M005:
-        raise MigrationError("browser_unsupported", 409, "m005 runs on the server executor")
+        return _unit_inputs_m005(plan, _path, key)
     unit = parse_unit_key_for(mid, key)
     us = _unitset(plan, mid)
     out = {"ok": True, "migration": mid, "unit": unit_key_for(mid, unit), "empty": unit not in us.unit_bytes}
@@ -3151,6 +3151,9 @@ def store_get_many(dataset_id, mid, base, bricks) -> bytes:
 READ_RANGES_MAX = 1024
 READ_RANGES_MAX_BYTES = 32 * 1024 * 1024
 _RANGE_REL_RE = re.compile(r"^(?:bricks|planes|mips)(?:/[A-Za-z0-9_][A-Za-z0-9._-]{0,127}){1,6}\.bin\Z", re.ASCII)
+# A stage-A plane pack of the dataset's m005 job (SPEC §14.10): what a browser unit of a
+# level >= 1 reads its planes from. Mapped to the job's tile store, never to a published path.
+_RANGE_STORE_RE = re.compile(r"^@store/A/t(\d{1,6})/k(\d{1,2})/c(\d{1,3})/z(\d{1,5})\.bin\Z", re.ASCII)
 
 
 def read_ranges(dataset_id, ranges) -> bytes:
@@ -3158,24 +3161,30 @@ def read_ranges(dataset_id, ranges) -> bytes:
     end], …] (rel: a .bin under bricks/, planes/ or mips/ of the dataset; end exclusive; at most
     READ_RANGES_MAX runs and READ_RANGES_MAX_BYTES in all). Body: uint32 LE count, count ×
     uint32 LE length, then the bytes. Every run is checked before a byte is read."""
-    _type_dir, _folder, ds_dir = _resolve_dataset(dataset_id)
+    type_dir, folder, ds_dir = _resolve_dataset(dataset_id)
     if not isinstance(ranges, list) or not 1 <= len(ranges) <= READ_RANGES_MAX:
         raise MigrationError("bad_range", 400, "1..%d ranges" % READ_RANGES_MAX)
     root = ds_dir.resolve()
+    store = tile_store_dir(type_dir, folder, M005)
     plan, sizes, total = [], {}, 0
     for r in ranges:
-        if (not isinstance(r, (list, tuple)) or len(r) != 3 or not isinstance(r[0], str)
-                or not _RANGE_REL_RE.match(r[0]) or any(seg.startswith(".") for seg in r[0].split("/"))):
+        if not isinstance(r, (list, tuple)) or len(r) != 3 or not isinstance(r[0], str):
+            raise MigrationError("bad_range")
+        sm = _RANGE_STORE_RE.match(r[0])
+        if not sm and (not _RANGE_REL_RE.match(r[0]) or any(seg.startswith(".") for seg in r[0].split("/"))):
             raise MigrationError("bad_range")
         start, end = r[1], r[2]
         if isinstance(start, bool) or isinstance(end, bool) or not isinstance(start, int) or not isinstance(end, int) \
                 or start < 0 or end <= start:
             raise MigrationError("bad_range")
-        path = (root / r[0]).resolve()
-        try:
-            path.relative_to(root)
-        except ValueError:
-            raise MigrationError("bad_range")
+        if sm:
+            path = _m005_store_a(store, *(int(g) for g in sm.groups()))
+        else:
+            path = (root / r[0]).resolve()
+            try:
+                path.relative_to(root)
+            except ValueError:
+                raise MigrationError("bad_range")
         if path not in sizes:
             try:
                 sizes[path] = path.stat().st_size
@@ -3913,22 +3922,9 @@ _UNIT_RE_M005 = {
 }
 
 
-def enable_format5() -> None:
-    """Registers m005-matrix and raises LATEST to 5. Off by default until the viewer reads
-    format 5 (a dataset migrated before would not open); `LUMEN_FORMAT5=1` turns it on at
-    import, tests and tools call this."""
-    global LATEST
-    if M005 not in _MIGRATIONS_BY_ID:
-        MIGRATIONS.append(M005_ENTRY)
-        _MIGRATIONS_BY_ID[M005] = M005_ENTRY
-    LATEST = max(LATEST, 5)
-
-
-def disable_format5() -> None:
-    global LATEST
-    if M005 in _MIGRATIONS_BY_ID:
-        MIGRATIONS.remove(_MIGRATIONS_BY_ID.pop(M005))
-    LATEST = 4
+# Registered after its entry is defined (the m005 section lives at the end of the registry).
+MIGRATIONS.append(M005_ENTRY)
+_MIGRATIONS_BY_ID[M005] = M005_ENTRY
 
 
 def _m005_key(u) -> str:
@@ -4406,6 +4402,287 @@ def _m005_stage_progress(us: UnitSet, done) -> list:
     return rows
 
 
+# ── m005, browser executor (SPEC §14.10) ──────────────────────────────────────
+#
+# A browser unit asks `unit_inputs` for the exact byte runs it needs (png-gray8 tiles of the
+# level's planes — level 0 in planes/, levels >= 1 in the job's stage-A packs, addressed
+# "@store/A/t/k/c/z.bin" — or, for stage B of level 0, the format-4 66³ images), reads them
+# all through `read_ranges`, computes with the same arithmetic as format5.py, and posts the
+# store file through `unit_put`, which checks its structure before storing it.
+
+def _m005_plane_tiles(plan: Plan, store: Path, t: int, k: int, c: int, z: int, y0: int, y1: int,
+                      x0: int, x1: int, levels) -> list:
+    """The non-empty png-gray8 tiles of level-k plane z of channel c meeting the box:
+    [{rel, start, end, z, x0, y0, w, h}] (rel relative to the dataset, or @store/A/…)."""
+    L = levels[k]["dimensions"]
+    X, Y = L["x"], L["y"]
+    txn, tyn = -(-X // TILE_SIZE), -(-Y // TILE_SIZE)
+    tree = plan.trees[t]
+    if k == 0:
+        path = _tree_planes_dir(plan.ds_dir, tree) / pack_name(z)
+        rel = path.relative_to(plan.ds_dir).as_posix()
+        channels, cidx = tree.channels, c
+    else:
+        path = _m005_store_a(store, t, k, c, z)
+        rel = "@store/A/t%d/k%d/c%d/z%d.bin" % (t, k, c, z)
+        channels, cidx = 1, 0
+    try:
+        with open(path, "rb") as fh:
+            head = fh.read(pack_header_bytes(channels, txn, tyn))
+    except FileNotFoundError:
+        if k == 0:
+            raise MigrationError("plane_unreadable", 500, pack_name(z))
+        return []
+    _zz, _cc, _tx, _ty, entries = parse_plane_pack(head, header_only=True)
+    out = []
+    for ty in range(y0 // TILE_SIZE, -(-y1 // TILE_SIZE)):
+        for tx in range(x0 // TILE_SIZE, -(-x1 // TILE_SIZE)):
+            off, ln = entries[(cidx * tyn + ty) * txn + tx]
+            if ln:
+                out.append({"rel": rel, "start": off, "end": off + ln, "z": z, "x0": tx * TILE_SIZE, "y0": ty * TILE_SIZE,
+                            "w": min(TILE_SIZE, X - tx * TILE_SIZE), "h": min(TILE_SIZE, Y - ty * TILE_SIZE)})
+    return out
+
+
+def _unit_inputs_m005(plan: Plan, journal: Path, key) -> dict:
+    """What a browser m005 unit reads and makes (see the section header)."""
+    us = _unitset(plan, M005)
+    unit = _m005_parse(key)
+    s, t, k, c, a, b, d = unit
+    tree = plan.trees.get(t)
+    if tree is None or c >= tree.channels or k >= len(us.levels):
+        raise MigrationError("bad_unit")
+    j = _load_journal(journal) or {}
+    done = set(j.get("done") or [])
+    if unit not in us.unit_bytes:
+        return {"ok": True, "migration": M005, "unit": _m005_key(unit), "empty": True}
+    if s and k and any(u[0] == 0 and u[1] == t and u[3] == c and _m005_key(u) not in done for u in us.units):
+        raise MigrationError("unit_blocked", 409, "stage A of this tree/channel is not complete")
+    store = tile_store_dir(plan.type, plan.folder, M005)
+    L = us.levels[k]
+    X, Y, Z = L["dimensions"]["x"], L["dimensions"]["y"], L["dimensions"]["z"]
+    out = {"ok": True, "migration": M005, "unit": _m005_key(unit), "empty": False,
+           "stage": _M005_STAGES[s], "tree": tree.rel, "t": t, "level": k, "channel": c,
+           "levels": [{"level": x["level"], "target": x["target"], "dimensions": x["dimensions"],
+                       "voxelSize": x["voxelSize"]} for x in us.levels],
+           "columns": list(_m005_columns(k))}
+    tiles, bricks = [], []
+    if s == 0:
+        X0, Y0, _ = tree.dims
+        out["box"] = {"x": [0, X0], "y": [0, Y0], "z": [a, a + 1]}
+        tiles = _m005_plane_tiles(plan, store, t, 0, c, a, 0, Y0, 0, X0, us.levels)
+    elif s == 1:
+        gx, gy, gz = L["gridSize"]["x"], L["gridSize"]["y"], L["gridSize"]["z"]
+        out["outBricks"] = [[bz, by, bx] for bz in range(V3_SUPER * a, min(gz, V3_SUPER * a + V3_SUPER))
+                            for by in range(V3_SUPER * b, min(gy, V3_SUPER * b + V3_SUPER))
+                            for bx in range(V3_SUPER * d, min(gx, V3_SUPER * d + V3_SUPER))]
+        if k == 0:
+            for bz, by, bx in out["outBricks"]:
+                ref = tree.index.get((c, bx, by, bz))
+                if ref is not None:
+                    bricks.append({"rel": ref[0].relative_to(plan.ds_dir).as_posix(), "start": ref[1],
+                                   "end": ref[1] + ref[2], "bz": bz, "by": by, "bx": bx})
+        else:
+            span = BRICK_SIZE * V3_SUPER
+            x0, x1 = max(0, span * d - 1), min(X, span * d + span + 1)
+            y0, y1 = max(0, span * b - 1), min(Y, span * b + span + 1)
+            z0, z1 = max(0, span * a - 1), min(Z, span * a + span + 1)
+            out["box"] = {"x": [x0, x1], "y": [y0, y1], "z": [z0, z1]}
+            for z in range(z0, z1):
+                tiles += _m005_plane_tiles(plan, store, t, k, c, z, y0, y1, x0, x1, us.levels)
+    elif s == 2:
+        n = Y if a == 0 else X
+        first, last = b * _f5.ORTH_ROWS, min(n, b * _f5.ORTH_ROWS + _f5.ORTH_ROWS)
+        out.update({"kind": _M005_ORTH[a], "first": first, "count": last - first})
+        if a == 0:
+            out["box"] = {"x": [0, X], "y": [first, last], "z": [0, Z]}
+        else:
+            out["box"] = {"x": [first, last], "y": [0, Y], "z": [0, Z]}
+        bx_ = out["box"]
+        for z in range(Z):
+            tiles += _m005_plane_tiles(plan, store, t, k, c, z, bx_["y"][0], bx_["y"][1], bx_["x"][0], bx_["x"][1], us.levels)
+    else:
+        bz = _f5.cut_depth(L["voxelSize"])
+        sxy, szz = _f5.CUT_XY * _f5.CUT_SUPER, bz * _f5.CUT_SUPER
+        out.update({"brickZ": bz, "super": [a, b, d]})
+        out["box"] = {"x": [sxy * d, min(X, sxy * d + sxy)], "y": [sxy * b, min(Y, sxy * b + sxy)],
+                      "z": [szz * a, min(Z, szz * a + szz)]}
+        bx_ = out["box"]
+        for z in range(bx_["z"][0], bx_["z"][1]):
+            tiles += _m005_plane_tiles(plan, store, t, k, c, z, bx_["y"][0], bx_["y"][1], bx_["x"][0], bx_["x"][1], us.levels)
+    out["tiles"] = tiles
+    out["bricks"] = bricks
+    return out
+
+
+def _riff_chunks(data: bytes):
+    """(fourcc, payload offset, size) of a WebP's RIFF chunks; ValueError when malformed."""
+    n = len(data)
+    if n < 20 or data[:4] != b"RIFF" or data[8:12] != b"WEBP" or struct.unpack_from("<I", data, 4)[0] + 8 != n:
+        raise ValueError("not a WebP")
+    pos, out = 12, []
+    while pos < n:
+        if pos + 8 > n:
+            raise ValueError("truncated chunk")
+        size = struct.unpack_from("<I", data, pos + 4)[0]
+        if pos + 8 + size > n:
+            raise ValueError("chunk overruns the file")
+        out.append((data[pos:pos + 4], pos + 8, size))
+        pos += 8 + size + (size & 1)
+    return out
+
+
+def webp_size(data: bytes):
+    """(width, height, lossless) of a still WebP (VP8 or VP8L, with or without VP8X/ALPH)."""
+    for kind, at, size in _riff_chunks(data):
+        if kind == b"VP8L":
+            if size < 5 or data[at] != 0x2F:
+                raise ValueError("bad VP8L signature")
+            bits = struct.unpack_from("<I", data, at + 1)[0]
+            return (bits & 0x3FFF) + 1, ((bits >> 14) & 0x3FFF) + 1, True
+        if kind == b"VP8 ":
+            if size < 10 or data[at + 3:at + 6] != b"\x9d\x01\x2a":
+                raise ValueError("bad VP8 frame")
+            w, h = struct.unpack_from("<HH", data, at + 6)
+            return w & 0x3FFF, h & 0x3FFF, False
+        if kind in (b"ANIM", b"ANMF"):
+            raise ValueError("animated WebP")
+    raise ValueError("no image chunk")
+
+
+def _m005_check_brick(data: bytes, cid: str) -> None:
+    """A column's stored image has the shape SPEC §14.3 gives it."""
+    codec = _f5.column(cid)["codec"]
+    if codec == "webp-lossy-dz":
+        if len(data) < 2:
+            raise ValueError("no trailer byte")
+        tag = data[-1]
+        w, h, lossless = webp_size(data[:-1])
+        if tag in (_f5.TAG_B4, _f5.TAG_LL):
+            if (w, h, lossless) != (_f5.MOSAIC66_W, _f5.MOSAIC66_H, True):
+                raise ValueError("fallback image %dx%d" % (w, h))
+        elif tag <= _f5.DEAD_ZONE_MAX:
+            if (w, h) != (_f5.MOSAIC80_W, _f5.MOSAIC80_H):
+                raise ValueError("lossy image %dx%d" % (w, h))
+        else:
+            raise ValueError("trailer byte %d" % tag)
+        return
+    w, h, lossless = webp_size(data)
+    if (w, h, lossless) != (_f5.MOSAIC66_W, _f5.MOSAIC66_H, True):
+        raise ValueError("image %dx%d%s" % (w, h, "" if lossless else " lossy"))
+
+
+def _m005_validate_put(us: UnitSet, unit, body: bytes):
+    """The store file of a browser unit, checked (MigrationError bad_blob). A: a dict
+    {k: LPLN pack or None}; B, C, D: bytes or None."""
+    s, t, k, c, a, b, d = unit
+    L = us.levels[k]
+    X, Y, Z = L["dimensions"]["x"], L["dimensions"]["y"], L["dimensions"]["z"]
+    try:
+        if s == 0:
+            if len(body) < 4:
+                raise ValueError("short")
+            n = struct.unpack_from("<I", body, 0)[0]
+            if n != len(us.levels) - 1:
+                raise ValueError("%d levels, expected %d" % (n, len(us.levels) - 1))
+            pos = 4 + 8 * n
+            out = {}
+            for i in range(n):
+                kk, ln = struct.unpack_from("<II", body, 4 + 8 * i)
+                if not 1 <= kk < len(us.levels) or kk in out:
+                    raise ValueError("level %d" % kk)
+                data = body[pos:pos + ln]
+                if len(data) != ln:
+                    raise ValueError("truncated")
+                pos += ln
+                if ln:
+                    dk = us.levels[kk]["dimensions"]
+                    zz, cc, ttx, tty, entries = parse_plane_pack(data)
+                    if (zz, cc, ttx, tty) != (a, 1, -(-dk["x"] // TILE_SIZE), -(-dk["y"] // TILE_SIZE)):
+                        raise ValueError("plane pack header")
+                    for i_, (off, l2) in enumerate(entries):
+                        if l2:
+                            ty, tx = divmod(i_, ttx)
+                            w, h = min(TILE_SIZE, dk["x"] - tx * TILE_SIZE), min(TILE_SIZE, dk["y"] - ty * TILE_SIZE)
+                            if png_ihdr(data[off:off + l2])[:2] != (w, h):
+                                raise ValueError("tile size")
+                out[kk] = data or None
+            if pos != len(body):
+                raise ValueError("trailing bytes")
+            return out
+        if not body:
+            return None
+        if s == 1:
+            cols = _m005_columns(k)
+            bricks = _m005_parse_brick_blob(body, cols)
+            gx, gy, gz = L["gridSize"]["x"], L["gridSize"]["y"], L["gridSize"]["z"]
+            allowed = {(bz, by, bx) for bz in range(V3_SUPER * a, min(gz, V3_SUPER * a + V3_SUPER))
+                       for by in range(V3_SUPER * b, min(gy, V3_SUPER * b + V3_SUPER))
+                       for bx in range(V3_SUPER * d, min(gx, V3_SUPER * d + V3_SUPER))}
+            for bk, per in bricks.items():
+                if bk not in allowed:
+                    raise ValueError("brick %r outside the unit" % (bk,))
+                for cid in cols:
+                    _m005_check_brick(per[cid], cid)
+            return body
+        if s == 2:
+            kind = _M005_ORTH[a]
+            first, count, ta, tz, entries = _f5.parse_orth_pack(body, kind)
+            n = Y if a == 0 else X
+            width = X if a == 0 else Y
+            if (first, count, ta, tz) != (b * _f5.ORTH_ROWS, min(n, b * _f5.ORTH_ROWS + _f5.ORTH_ROWS) - b * _f5.ORTH_ROWS,
+                                          -(-width // TILE_SIZE), -(-Z // TILE_SIZE)):
+                raise ValueError("%s pack header" % kind)
+            return body
+        bz = _f5.cut_depth(L["voxelSize"])
+        table = _f5.parse_cut_record(body)
+        h, w = _f5.cut_mosaic_shape(bz)
+        for off, ln in table:
+            if ln:
+                ww, hh, lossless = webp_size(body[off:off + ln])
+                if (ww, hh, lossless) != (w, h, True):
+                    raise ValueError("cut brick %dx%d" % (ww, hh))
+        return body
+    except MigrationError:
+        raise
+    except (ValueError, struct.error) as exc:
+        raise MigrationError("bad_blob", 400, "%s: %s" % (_m005_key(unit), exc))
+
+
+def _unit_put_m005(plan: Plan, m: dict, path: Path, key, body: bytes) -> dict:
+    us = _unitset(plan, M005)
+    unit = _m005_parse(key)
+    s, t, k, c = unit[0], unit[1], unit[2], unit[3]
+    tree = plan.trees.get(t)
+    if tree is None or c >= tree.channels or k >= len(us.levels):
+        raise MigrationError("bad_unit")
+    if unit not in us.unit_bytes:
+        raise MigrationError("empty_unit", 409)
+    j = _load_journal(path)
+    if j is None:
+        raise MigrationError("no_job", 404)
+    _check_source(plan, j, path, persist=False)
+    if j.get("state") != "running":
+        raise MigrationError("job_not_running", 409)
+    done = set(j.get("done") or [])
+    if s and k and any(u[0] == 0 and u[1] == t and u[3] == c and _m005_key(u) not in done for u in us.units):
+        raise MigrationError("unit_blocked", 409, "stage A of this tree/channel is not complete")
+    result = _m005_validate_put(us, unit, body)
+    _store_m005(tile_store_dir(plan.type, plan.folder, M005), unit, result)
+    j = _mark_done(plan, m, path, [_m005_key(unit)], "browser")
+    sm = _summary(j)
+    return {"ok": True, "done": sm["done"], "total": sm["total"]}
+
+
+def build_m005_put_body(unit, result) -> bytes:
+    """The unit_put body of a unit's result as process_unit_m005 makes it (tests, tools)."""
+    if unit[0] == 0:
+        ks = sorted(result)
+        head = struct.pack("<I", len(ks)) + b"".join(struct.pack("<II", kk, len(result[kk] or b"")) for kk in ks)
+        return head + b"".join(result[kk] or b"" for kk in ks)
+    return result or b""
+
+
 # ── m005 finalize: assembly of the v5 tree ────────────────────────────────────
 
 def _m005_v4_index(tree: Tree):
@@ -4855,7 +5132,7 @@ def server_capabilities(force: bool = False) -> dict:
     }
     if M005 in _MIGRATIONS_BY_ID:
         m005 = _probe_m005()
-        _CAPS["migrations"][M005] = {"available": not m005, "reasons": m005, "browser": False}
+        _CAPS["migrations"][M005] = {"available": not m005, "reasons": m005}
     if _PILImage is None:
         _CAPS["detail"] = "Pillow is not installed"
     return _CAPS
@@ -5074,6 +5351,3 @@ def handle_binary(action: str, params: dict, body=None) -> tuple[int, str, bytes
             payload["detail"] = exc.detail[:500]
         return exc.status, "application/json", json.dumps(payload).encode("utf-8")
 
-
-if os.environ.get("LUMEN_FORMAT5") == "1":
-    enable_format5()

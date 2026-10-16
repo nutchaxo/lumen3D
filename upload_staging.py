@@ -187,6 +187,17 @@ _MIPS_MAGIC = b"LMIP"
 _RE_PACK_V3 = re.compile(r"^l(\d{1,2})/c(\d{1,2})/p\d{5}\.bin\Z", re.ASCII)
 _INDEX_V3_MAGIC = b"LBIX"
 BRICKS_V3_SCHEMA = "iribhm-bricks-v3"
+# Format 5 (SPEC §14.4–§14.5): one index per compression column, packs per (level, column,
+# channel), the xy / xz / yz plane stores and the cut bricks with one index per level.
+BRICKS_V5_SCHEMA = "iribhm-bricks-v5"
+V5_COLUMNS = ("ll", "b2", "b4", "q80", "q50")
+_RE_V5_INDEX = re.compile(r"^index/(ll|b2|b4|q80|q50)\.bin\Z", re.ASCII)
+_RE_PACK_V5 = re.compile(r"^l(\d{1,2})/(?:ll|b2|b4|q80|q50)/c\d{1,2}/p\d{5}\.bin\Z", re.ASCII)
+_RE_V5_XY = re.compile(r"^xy/l\d{1,2}/z\d{5}\.bin\Z", re.ASCII)
+_RE_V5_ORTH = re.compile(r"^(xz|yz)/l\d{1,2}/c\d{1,2}/b\d{5}\.bin\Z", re.ASCII)
+_RE_V5_CUT_INDEX = re.compile(r"^cuts/l\d{1,2}/index\.bin\Z", re.ASCII)
+_RE_V5_CUT_PACK = re.compile(r"^cuts/l\d{1,2}/c\d{1,2}/p\d{5}\.bin\Z", re.ASCII)
+_ORTH_MAGIC = {b"LPXZ", b"LPYZ"}
 
 # download/ originals. Deliberately data-only: no archive that a server might
 # expand, no markup, no script. `.zip` is the one container, and it is only ever
@@ -318,10 +329,20 @@ def classify_path(type_dir: str, rel: str):
         if inner == "manifest.json":
             return TIER_CORE, "manifest"
 
-    # The v3 binary index is what makes a tree mountable, like the v2 manifest.
-    if inner == "index.bin":
+    # The v3 binary index is what makes a tree mountable, like the v2 manifest; a v5
+    # tree has one per column.
+    if inner == "index.bin" or _RE_V5_INDEX.match(inner):
         return TIER_CORE, "index"
-    m = _RE_PACK.match(inner) or _RE_PACK_V3.match(inner)
+    # v5 plane stores and cut bricks only speed up cuts: last, like planes/.
+    if _RE_V5_XY.match(inner):
+        return TIER_EXTRA, "planes_pack"
+    if _RE_V5_ORTH.match(inner):
+        return TIER_EXTRA, "orth_pack"
+    if _RE_V5_CUT_INDEX.match(inner):
+        return TIER_EXTRA, "index"
+    if _RE_V5_CUT_PACK.match(inner):
+        return TIER_EXTRA, "cut_pack"
+    m = _RE_PACK.match(inner) or _RE_PACK_V3.match(inner) or _RE_PACK_V5.match(inner)
     if not m:
         return None
     lod = int(m.group(1))
@@ -342,7 +363,7 @@ def _pack_lod(rel: str):
     if tp:
         timepoint = int(tp.group(1))
         inner = tp.group(2)
-    m = _RE_PACK.match(inner) or _RE_PACK_V3.match(inner)
+    m = _RE_PACK.match(inner) or _RE_PACK_V3.match(inner) or _RE_PACK_V5.match(inner)
     return (int(m.group(1)), timepoint) if m else None
 
 
@@ -1299,6 +1320,16 @@ def _validate_file_content(type_dir: str, rel: str, path: Path, kind: str | None
             with path.open("rb") as fh:
                 data = fh.read(_INDEX_V3_MAX_BYTES + 1)
             return _index_v3_shape(data)[0:2]
+        if kind == "orth_pack":
+            # Magic, version 1 and a file long enough for its entry table (20 + 12·rows·TA·TZ).
+            with path.open("rb") as fh:
+                head = fh.read(20)
+            if len(head) < 20 or head[:4] not in _ORTH_MAGIC:
+                return False, "orth_pack_bad_magic"
+            ver, ta, tz, _r, _first, count = struct.unpack_from("<HHHHII", head, 4)
+            if ver != 1 or not ta or not tz or not count or path.stat().st_size < 20 + 12 * count * ta * tz:
+                return False, "orth_pack_bad_header"
+            return True, None
         if kind == "extra" and rel.endswith(".glb"):
             with path.open("rb") as fh:
                 head = fh.read(4)
@@ -1470,6 +1501,165 @@ def _cross_check_v3(ds_dir: Path, man: dict) -> list[str]:
     return errors
 
 
+def _is_ref(info, url) -> bool:
+    return (isinstance(info, dict) and info.get("url") == url and isinstance(info.get("bytes"), int)
+            and not isinstance(info.get("bytes"), bool) and isinstance(info.get("sha256"), str)
+            and re.fullmatch(r"[0-9a-f]{64}", info["sha256"]) is not None)
+
+
+def _v5_cut_grids(man: dict):
+    """[(sgx, sgy, sgz)] per level from stores.cuts.levels, or None."""
+    rows = ((man.get("stores") or {}).get("cuts") or {}).get("levels") if isinstance(man.get("stores"), dict) else None
+    if not isinstance(rows, list):
+        return None
+    out = []
+    for k, row in enumerate(rows):
+        g = row.get("superGrid") if isinstance(row, dict) else None
+        if not isinstance(g, dict) or row.get("level") != k:
+            return None
+        v = tuple(g.get(a) for a in "xyz")
+        if not all(isinstance(n, int) and not isinstance(n, bool) and n > 0 for n in v):
+            return None
+        out.append(v)
+    return out
+
+
+def _validate_manifest_v5(man: dict):
+    """bricks/manifest.json of format 5 (SPEC §14.4): the geometry the v5 reader builds
+    on, its five columns in order, and per tree one index per column and per level."""
+    def _int(v):
+        return isinstance(v, int) and not isinstance(v, bool)
+
+    if man.get("version") != 5:
+        return False, "manifest_v5_bad_version"
+    if not (_int(man.get("channels")) and man["channels"] >= 1):
+        return False, "manifest_bad_channels"
+    if man.get("brickSize") != BRICK_SIZE or man.get("apron") != 1:
+        return False, "manifest_bad_brick_size"
+    levels = man.get("levels")
+    if not isinstance(levels, list) or not levels:
+        return False, "manifest_no_levels"
+    for i, level in enumerate(levels):
+        if not isinstance(level, dict) or level.get("level") != i:
+            return False, f"manifest_level_{i}_out_of_order"
+        for key in ("dimensions", "gridSize"):
+            d = level.get(key)
+            if not isinstance(d, dict) or not all(_int(d.get(a)) and d[a] > 0 for a in ("x", "y", "z")):
+                return False, f"manifest_level_{i}_bad_{key}"
+    cols = man.get("columns")
+    if not isinstance(cols, list) or [c.get("id") if isinstance(c, dict) else None for c in cols] != list(V5_COLUMNS):
+        return False, "manifest_v5_bad_columns"
+    grids = _v5_cut_grids(man)
+    if grids is None or len(grids) != len(levels):
+        return False, "manifest_v5_bad_cuts"
+    for key, info in _v3_trees(man):
+        if key is None:
+            return False, "manifest_v5_bad_timepoints"
+        pre = f"{key}/" if key else ""
+        if not isinstance(info, dict) or not isinstance(info.get("columns"), dict) or not isinstance(info.get("cuts"), list):
+            return False, "manifest_v5_bad_index"
+        if not all(_is_ref(info["columns"].get(cid), f"{pre}index/{cid}.bin") for cid in V5_COLUMNS):
+            return False, "manifest_v5_bad_index"
+        if len(info["cuts"]) != len(levels) or not all(
+                _is_ref(ref, f"{pre}cuts/l{k}/index.bin") for k, ref in enumerate(info["cuts"])):
+            return False, "manifest_v5_bad_index"
+    return True, None
+
+
+def _index_extents(data: bytes, levels, channels):
+    """{(level, channel): {pack: highest byte end}} of an LBIX file of known shape."""
+    out = {}
+    pos = 12 + 16 * len(levels)
+    for k, (gx, gy, gz, _p) in enumerate(levels):
+        n = gx * gy * gz
+        for c in range(channels):
+            ext: dict[int, int] = {}
+            for pack, offset, length in struct.iter_unpack("<HII", data[pos:pos + 10 * n]):
+                if length and offset + length > ext.get(pack, 0):
+                    ext[pack] = offset + length
+            pos += 10 * n
+            out[(k, c)] = ext
+    return out
+
+
+def _cross_check_v5(ds_dir: Path, man: dict) -> list[str]:
+    """Every tree's column and cut indexes are the ones the manifest hashed and describe
+    its grids, every brick they list lies inside a pack that arrived, and every xy / xz /
+    yz plane pack the reader may open is present (format5.tree_problem's checks)."""
+    errors: list[str] = []
+    bricks = ds_dir / "bricks"
+    levels = man.get("levels") or []
+    channels = man.get("channels")
+    grids = [tuple(L["gridSize"][a] for a in "xyz") for L in levels]
+    cut_grids = _v5_cut_grids(man) or []
+
+    def read_index(tree, rel, info, label):
+        try:
+            data = (tree / rel).read_bytes() if (tree / rel).stat().st_size <= _INDEX_V3_MAX_BYTES else b""
+        except OSError:
+            errors.append(f"missing_index:{label}/{rel}")
+            return None
+        if len(data) != info.get("bytes") or hashlib.sha256(data).hexdigest() != info.get("sha256"):
+            errors.append(f"index_hash_mismatch:{label}/{rel}")
+            return None
+        ok, reason, idx_levels, ch = _index_v3_shape(data)
+        if not ok:
+            errors.append(f"{reason}:{label}/{rel}")
+            return None
+        if ch != channels:
+            errors.append(f"index_shape_mismatch:{label}/{rel}")
+            return None
+        return data, idx_levels
+
+    def check_packs(tree, label, extents, rel_of):
+        for (k, c), ext in extents.items():
+            for pack, end in ext.items():
+                rel = rel_of(k, c, pack)
+                try:
+                    size = (tree / rel).stat().st_size
+                except OSError:
+                    errors.append(f"missing_pack:{label}/{rel}")
+                    continue
+                if size < end:
+                    errors.append(f"truncated_pack:{label}/{rel}")
+
+    for key, info in _v3_trees(man):
+        tree = bricks / key if key else bricks
+        label = key or "bricks"
+        for cid in V5_COLUMNS:
+            got = read_index(tree, f"index/{cid}.bin", info["columns"][cid], label)
+            if got is None:
+                continue
+            data, idx_levels = got
+            if [lv[:3] for lv in idx_levels] != grids:
+                errors.append(f"index_grid_mismatch:{label}/index/{cid}.bin")
+                continue
+            check_packs(tree, label, _index_extents(data, idx_levels, channels),
+                        lambda k, c, p, cid=cid: f"l{k}/{cid}/c{c}/p{p:05d}.bin")
+        for k, ref in enumerate(info["cuts"]):
+            got = read_index(tree, f"cuts/l{k}/index.bin", ref, label)
+            if got is None:
+                continue
+            data, idx_levels = got
+            if [lv[:3] for lv in idx_levels] != [cut_grids[k]]:
+                errors.append(f"index_grid_mismatch:{label}/cuts/l{k}/index.bin")
+                continue
+            check_packs(tree, label, _index_extents(data, idx_levels, channels),
+                        lambda _k, c, p, k=k: f"cuts/l{k}/c{c}/p{p:05d}.bin")
+        for k, L in enumerate(levels):
+            d = L["dimensions"]
+            rels = [f"xy/l{k}/z{z:05d}.bin" for z in range(d["z"])] if k else []
+            for kind, n in (("xz", d["y"]), ("yz", d["x"])):
+                rels += [f"{kind}/l{k}/c{c}/b{b:05d}.bin" for c in range(channels) for b in range(-(-n // 64))]
+            for rel in rels:
+                if not (tree / rel).is_file():
+                    errors.append(f"missing_store:{label}/{rel}")
+                    break
+        if len(errors) >= 20:
+            return errors[:20]
+    return errors
+
+
 def _validate_manifest(man: dict):
     """Mirror of js/core/brick-loader.js `_validateManifest`, minus the parts that
     only matter once decoding starts.
@@ -1485,6 +1675,8 @@ def _validate_manifest(man: dict):
 
     if man.get("schema") == BRICKS_V3_SCHEMA:
         return _validate_manifest_v3(man)
+    if man.get("schema") == BRICKS_V5_SCHEMA:
+        return _validate_manifest_v5(man)
     levels = man.get("levels")
     if not isinstance(levels, list) or not levels:
         return False, "manifest_no_levels"
@@ -1749,6 +1941,9 @@ def _check_bricks(ds_dir: Path) -> list[str]:
     if man.get("schema") == BRICKS_V3_SCHEMA:
         if ok:
             errors.extend(_cross_check_v3(ds_dir, man))
+    elif man.get("schema") == BRICKS_V5_SCHEMA:
+        if ok:
+            errors.extend(_cross_check_v5(ds_dir, man))
     else:
         errors.extend(_cross_check_packs(ds_dir, man))
     return errors

@@ -7,7 +7,7 @@
      {op:'handle', action, params?, body?, rawFile?}   → [status, payload]
      {op:'unit_tiles', dataset, unit}                  → {z: base64 PNG} (server executor)
      {op:'caps'}                                       → lumen_mig_capabilities()
-     {op:'binary', action, params}                     → [status, type, base64 body]
+     {op:'binary', action, params, body?}                   → [status, type, base64 body]
      {op:'unit_result', dataset, migration, unit, part?} → {result: {name: base64}, bytesRead} (server executor, nothing
                                                         stored; part 0..7 = one m004 octant)
      {op:'peak'}                                       → memory_get_peak_usage() so far      */
@@ -39,7 +39,7 @@ foreach ($req['ops'] as $op) {
             $out[] = lumen_mig_capabilities();
             break;
         case 'binary':
-            [$st, $type, $data, $file] = lumen_mig_handle_binary($op['action'], $op['params'] ?? []);
+            [$st, $type, $data, $file] = lumen_mig_handle_binary($op['action'], $op['params'] ?? [], $op['body'] ?? []);
             $out[] = [$st, $type, base64_encode($file !== null ? (string)file_get_contents($file) : (string)$data)];
             break;
         case 'unit_result':

@@ -290,6 +290,7 @@ check('no expiry countdown on a finished dataset', lumen_up_describe('3d', 'RP')
 // invisible to any test that only reads the file. Loading datasets.php in library
 // mode (as api/catalog.php does) proves the symbols are there before the router runs.
 echo "datasets.php symbol loading\n";
+copy(__DIR__ . '/../api/_trash_lib.php', $root . '/api/_trash_lib.php');
 copy(__DIR__ . '/../api/datasets.php', $root . '/api/datasets.php');
 define('LUMEN_DATASETS_LIB', 1);
 require_once $root . '/api/datasets.php';

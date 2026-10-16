@@ -118,7 +118,7 @@ class PythonThumbs(unittest.TestCase):
 class PhpThumbs(unittest.TestCase):
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp(prefix="lumen-gthumb-php-"))
-        self.twin = PhpTwin(self.tmp, ["_admin_lib.php", "_upload_lib.php", "datasets.php"], need_gd=True)
+        self.twin = PhpTwin(self.tmp, ["_admin_lib.php", "_upload_lib.php", "_trash_lib.php", "datasets.php"], need_gd=True)
         if not self.twin.available():
             self.skipTest("no php interpreter with GD + WebP")
         self.ds = self.tmp / "DATA_WEB" / "3d" / "demo"

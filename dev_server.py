@@ -68,6 +68,8 @@ import upload_staging
 # split: the engine and its pure format functions live in dataset_migrations.py,
 # this file only authenticates and routes /api/migrations.php to it.
 import dataset_migrations
+# The admin "Delete" button: a dataset goes to uploads/trash/ for 60 days.
+import dataset_trash
 
 __version__ = "0.16.0"
 
@@ -1653,7 +1655,8 @@ def _get_cookie_token(cookie_header: str | None) -> str | None:
 
 
 WRITE_ACTIONS = ("save", "save_thumbnail", "rebuild_catalog", "set_visibility",
-                 "gallery_add", "gallery_delete", "gallery_thumbs")
+                 "gallery_add", "gallery_delete", "gallery_thumbs",
+                 "delete", "trash_restore", "trash_purge", "trash_empty")
 
 
 def _is_write_action(action: str) -> bool:
@@ -7154,8 +7157,39 @@ class AdminHandler(http.server.SimpleHTTPRequestHandler):
                 # editor is ONE list: an import becomes editable the moment its
                 # coarse LOD lands, long before it is published (Rule 1.3 — the
                 # operator should never have to watch a progress bar to start work).
+                try:
+                    dataset_trash.purge_expired(UPLOADS_DIR)   # 60 days, then gone
+                except OSError:
+                    pass
                 self._json(200, {"datasets": _list_datasets() + _staged_dataset_rows(),
                                  "galleryMaxBytes": MAX_GALLERY_BYTES})
+
+            elif action == "delete":
+                ds_id = params.get("id", "")
+                if _is_staged_id(ds_id):
+                    # A dataset still importing is discarded from the Import tab.
+                    self._json(409, {"error": "use_import_discard"})
+                else:
+                    status, payload = dataset_trash.move_to_trash(DATA_WEB, UPLOADS_DIR, ds_id)
+                    if status == 200:
+                        _rebuild_catalog()
+                    self._json(status, payload)
+
+            elif action == "trash_list":
+                self._json(200, dataset_trash.list_entries(UPLOADS_DIR))
+
+            elif action == "trash_restore":
+                status, payload = dataset_trash.restore(
+                    DATA_WEB, UPLOADS_DIR, (body or {}).get("trashId"), (body or {}).get("folder"))
+                if status == 200:
+                    _rebuild_catalog()
+                self._json(status, payload)
+
+            elif action == "trash_purge":
+                self._json(*dataset_trash.purge(UPLOADS_DIR, (body or {}).get("trashId")))
+
+            elif action == "trash_empty":
+                self._json(*dataset_trash.empty(UPLOADS_DIR))
 
             elif action == "get":
                 ds_id = params.get("id", "")

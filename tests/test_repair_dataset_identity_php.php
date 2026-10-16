@@ -18,7 +18,7 @@ $root = sys_get_temp_dir() . '/lumen-repair-' . bin2hex(random_bytes(4));
 @mkdir("$root/DATA_WEB/3d", 0777, true);
 @mkdir("$root/uploads/state", 0777, true);
 @mkdir("$root/config", 0777, true);
-foreach (['_admin_lib.php', '_upload_lib.php', 'datasets.php'] as $f) copy(__DIR__ . "/../api/$f", "$root/api/$f");
+foreach (['_admin_lib.php', '_upload_lib.php', '_trash_lib.php', 'datasets.php'] as $f) copy(__DIR__ . "/../api/$f", "$root/api/$f");
 define('LUMEN_DATASETS_LIB', true);
 require_once "$root/api/datasets.php";
 

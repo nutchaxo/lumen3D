@@ -36,6 +36,7 @@ require_once __DIR__ . '/_admin_lib.php';   // admin_check_csrf, admin_record_ev
 // LUMEN_STAGING_PREFIX constant. Requiring it only inside that branch made a
 // plain ?action=list fatal on PHP hosts.
 require_once __DIR__ . '/_upload_lib.php';
+require_once __DIR__ . '/_trash_lib.php';   // the Delete button: uploads/trash, 60 days
 
 // ── Session / Auth ───────────────────────────────────────────────────────────
 if (!LUMEN_DATASETS_AS_LIB) {
@@ -97,6 +98,14 @@ function write_json(string $path, array $data): bool {
     $ok = lumen_write_json_doc($path, $data);
     if ($ok) lumen_catalog_invalidate();
     return $ok;
+}
+
+/** Keep the static catalog copy (only hosts without mod_rewrite serve it) from still
+ *  listing a dataset that was just deleted, or from missing one just restored. */
+function write_json_catalog_if_present(): void {
+    $p = data_web() . DIRECTORY_SEPARATOR . 'catalog.json';
+    if (is_file($p)) write_json($p, rebuild_catalog());
+    else lumen_catalog_invalidate();
 }
 
 // ── Dataset gallery (operator-attached images) ───────────────────────────────
@@ -575,7 +584,8 @@ require_auth();
 // to flip a dataset public (`?action=set_visibility&id=…` with an empty body).
 // admin_require_write() enforces POST *and* the token together.
 const DATASET_WRITE_ACTIONS = ['save', 'save_thumbnail', 'rebuild_catalog', 'set_visibility',
-                               'gallery_add', 'gallery_delete', 'gallery_thumbs'];
+                               'gallery_add', 'gallery_delete', 'gallery_thumbs',
+                               'delete', 'trash_restore', 'trash_purge', 'trash_empty'];
 if (in_array($action, DATASET_WRITE_ACTIONS, true)) {
     admin_require_write();   // POST + X-CSRF-Token; exits on failure
 }
@@ -605,6 +615,9 @@ if (strncmp($id, LUMEN_STAGING_PREFIX, strlen(LUMEN_STAGING_PREFIX)) === 0) {
             // A staged dataset is never in the public catalog — visibility is a
             // property of publication, decided when it is published.
             json_out(['error' => 'not_published'], 409);
+        case 'delete':
+            // A dataset still importing is discarded from the Import tab.
+            json_out(['error' => 'use_import_discard'], 409);
         case 'gallery_add':
         case 'gallery_delete':
         case 'gallery_thumbs':
@@ -640,7 +653,37 @@ switch ($action) {
             error_log('datasets.php list: staged rows unavailable: ' . $e->getMessage());
             $staged = [];
         }
+        try {
+            lumen_trash_purge_expired();   // 60 days, then gone
+        } catch (Throwable $e) {
+            error_log('datasets.php list: trash purge failed: ' . $e->getMessage());
+        }
         json_out(['datasets' => array_merge(list_datasets(), $staged), 'galleryMaxBytes' => gallery_max_bytes()]);
+
+    case 'delete':
+        if (!$id) json_out(['error' => 'Missing id'], 400);
+        [$st, $pl] = lumen_trash_move($id);
+        if ($st === 200) write_json_catalog_if_present();
+        json_out($pl, $st);
+
+    case 'trash_list':
+        [$st, $pl] = lumen_trash_list();
+        json_out($pl, $st);
+
+    case 'trash_restore':
+        $body = lumen_request_json() ?? [];
+        [$st, $pl] = lumen_trash_restore($body['trashId'] ?? null, $body['folder'] ?? null);
+        if ($st === 200) write_json_catalog_if_present();
+        json_out($pl, $st);
+
+    case 'trash_purge':
+        $body = lumen_request_json() ?? [];
+        [$st, $pl] = lumen_trash_purge($body['trashId'] ?? null);
+        json_out($pl, $st);
+
+    case 'trash_empty':
+        [$st, $pl] = lumen_trash_empty();
+        json_out($pl, $st);
 
     case 'get':
         if (!$id) json_out(['error' => 'Missing id'], 400);

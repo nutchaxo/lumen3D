@@ -51,6 +51,10 @@ const VolumeViewer = (() => {
   // The resident level's stored bricks, once per volume entry (content-depth probe).
   const _roiBaseBricks = new WeakMap();
   let _roiMode = 'auto';
+  // Format 5 shown in a compressed column: once the camera rests, the bricks in view are
+  // streamed again from the lossless `ll` column into the detail atlas (also at the level on
+  // screen), so a still picture is exact. localStorage 'lumen3d.losslessAtRest' = '0' turns it off.
+  let _losslessAtRest = (() => { try { return localStorage.getItem('lumen3d.losslessAtRest') !== '0'; } catch (e) { return true; } })();
   // GPU-compressed display atlas: 'auto' compresses the atlases of a timelapse (where
   // the cache must hold many frames), 'on' every bricked volume, 'off' none. Kept for
   // the session and in localStorage 'lumen3d.gpuCompression'; a volume already loaded
@@ -6183,6 +6187,8 @@ const VolumeViewer = (() => {
     getDetailStatus,
     onDetailStatus,
     refreshDetail: () => _roiSchedule('request'),
+    setLosslessAtRest,
+    getLosslessAtRest,
     loadVolume,
     preloadVolume,
     updateChannel,
@@ -6256,6 +6262,8 @@ const VolumeViewer = (() => {
     setExposure,
     setFluorescenceParams,
     getRenderer: () => renderer,
+    /** SVRManager.vramBudget of this page's renderer: { bytes, source, gpuClass, contextLosses, … }. */
+    getGpuBudget: () => (typeof SVRManager !== 'undefined' && SVRManager.vramBudget ? SVRManager.vramBudget(renderer) : null),
     getMaterial: () => material,
     makeRgbaBrickFromScalarChannels: _composeRgbaBrickFromScalarChannels,
     applyRgbaBrickLuts: _applyRgbaBrickLuts,
@@ -6548,6 +6556,10 @@ const VolumeViewer = (() => {
       let downgradeReason = null;
       let firstRefusal = null;
       const budget = _gpuBudgetBytes();
+      // What the volume may take: the budget less what stays resident whatever is loaded
+      // (other atlases, the volume kept on screen while this one streams) — the figure the
+      // choice below compares with, and the one a refusal reports.
+      let availableForVolume = budget;
       for (;;) {
         const candidates = [];
         for (let l = lod; l < levelCount; l++) {
@@ -6555,6 +6567,7 @@ const VolumeViewer = (() => {
           if (fp) candidates.push(fp);
         }
         const pinned = _pinnedGpuBytes();
+        availableForVolume = Math.max(0, budget - pinned);
         // Nothing on screen and nothing else to show: the coarsest level is attempted
         // even over the heuristic budget (only the GPU refusing it ends the load).
         const choice = _chooseStreamLevel(candidates, { available: budget - pinned, preload, preloadSvr, lastResort: !preload && !deferActivation });
@@ -6569,7 +6582,7 @@ const VolumeViewer = (() => {
           const reason = preload && choice.skipped.some(s => s.reason === 'svr-preload') ? 'svr' : 'Insufficient GPU memory for every level';
           _perf()?.end(perfId, { status: 'unavailable', quality, reason });
           if (!preload) emitState({ message: `${quality}: no level fits the GPU memory budget (${_mib(budget)} MiB)` });
-          return { available: false, reason, budgetBytes: budget, neededBytes: firstRefusal?.bytes || null };
+          return { available: false, reason, budgetBytes: budget, availableBytes: availableForVolume, neededBytes: firstRefusal?.bytes || null };
         }
         footprint = choice.level;
         lod = footprint.lod;
@@ -6965,6 +6978,7 @@ const VolumeViewer = (() => {
         downgradeReason,
         neededBytes: firstRefusal?.bytes || null,
         budgetBytes: budget,
+        availableBytes: availableForVolume,
         successfulLoads: delivered,
         failedLoads: missingCount,
         missingBricks: missingCount,
@@ -7366,6 +7380,28 @@ const VolumeViewer = (() => {
     return _roiMode;
   }
 
+  /** Lossless detail once the camera rests (format 5 in a compressed column); returns the setting. */
+  function setLosslessAtRest(on) {
+    _losslessAtRest = Boolean(on);
+    try { localStorage.setItem('lumen3d.losslessAtRest', _losslessAtRest ? '1' : '0'); } catch (e) { /* storage blocked */ }
+    if (_roi && _roi.column !== _roiDetailColumn(_activeVolumeEntry)) _roiTeardown('column');
+    _roiSchedule('mode');
+    return _losslessAtRest;
+  }
+
+  function getLosslessAtRest() { return _losslessAtRest; }
+
+  /** The column the detail bricks come from: 'll' when refining at rest, else the column on screen. */
+  function _roiDetailColumn(entry) {
+    if (!entry) return null;
+    return _roiRefines(entry) ? 'll' : (entry.column || null);
+  }
+
+  /** The entry is a format-5 level shown in a compressed column, and refining at rest is on. */
+  function _roiRefines(entry) {
+    return Boolean(_losslessAtRest && entry && (entry.treeVersion || 2) === 5 && entry.column && entry.column !== 'll');
+  }
+
   /**
    * { mode, active, level, baseLevel, inView, resident, loading, loaded, capacity,
    *   pixelsPerVoxel, reason, message } — reason: 'idle' | 'off' | 'zoomed-out' |
@@ -7394,6 +7430,9 @@ const VolumeViewer = (() => {
   function _roiMessage(s) {
     if (s.reason === 'loading') {
       return _t('viewer.detailLoading', 'Detail: loading {loaded} of {total} bricks of level {level}', { loaded: s.loaded, total: s.loading, level: s.level });
+    }
+    if (s.active && s.level !== null && s.lossless && s.level === s.baseLevel) {
+      return _t('viewer.detailLossless', 'Lossless detail: {count} bricks in view', { count: s.resident });
     }
     if (s.active && s.level !== null) {
       return _t('viewer.detailStatus', 'Detail: {count} bricks of level {level} in view', { count: s.resident, level: s.level });
@@ -7577,7 +7616,8 @@ const VolumeViewer = (() => {
       && typeof BrickLoader !== 'undefined' && typeof SVRManager !== 'undefined' && typeof SVRRoi !== 'undefined';
     if (!ready) { _roiTeardown('no-volume'); return; }
     if (_fgStreamActive > 0 || _transitionEntry) { _setRoiStatus({ reason: 'streaming' }); return; }   // re-run when the stream ends
-    if (entry.lod === 0) { _roiTeardown('finest'); _setRoiStatus({ baseLevel: 0, reason: 'finest' }); return; }
+    const refine = _roiRefines(entry);
+    if (entry.lod === 0 && !refine) { _roiTeardown('finest'); _setRoiStatus({ baseLevel: 0, reason: 'finest' }); return; }
     // v2 trees keep the 1.58 behaviour: their levels are not an isotropic pyramid and
     // their packs are not grouped by region, so a few detail bricks would pull whole
     // multi-MiB packs. Detail streaming is a v3 (bordered pyramid) feature.
@@ -7586,6 +7626,7 @@ const VolumeViewer = (() => {
     // would show another picture.
     if (_channelSigma.some(sigma => sigma > 0.05)) { _roiTeardown('denoise'); _setRoiStatus({ reason: 'denoise' }); return; }
     if ((_roi && _roi.entry !== entry) || (_roiParked && _roiParked.entry !== entry)) _roiTeardown('volume-changed');
+    if ((_roi && _roi.column !== _roiDetailColumn(entry)) || (_roiParked && _roiParked.column !== _roiDetailColumn(entry))) _roiTeardown('column');
     if (BrickLoader.getManifest?.() !== entry.manifest) {
       // Another tree of the same dataset is mounted (a cached timepoint was shown):
       // mount this one; nothing running is cancelled by it.
@@ -7614,12 +7655,15 @@ const VolumeViewer = (() => {
     }) : [];
     const contentDepth = SVRRoi.depthQuantile(baseVisible.map(b => b.depth), ROI_CONTENT_DEPTH_QUANTILE);
     const current = _roi ? _roi.level : null;
-    const choice = contentDepth === null
+    let choice = contentDepth === null
       ? { level: null, basePixelsPerVoxel: 0 }
       : SVRRoi.chooseDetailLevel({
         levels: levels.map(l => ({ level: l.level, voxelWorld: voxelWorldOf(l) })),
         baseLevel: entry.lod, focalPx: view.focalPx, distance: Math.max(camera.near, contentDepth), current
       });
+    // Not zoomed past the level on screen (or on the native level): refining at rest
+    // replaces the bricks in view by their lossless copy at that same level.
+    if (refine && choice.level === null && contentDepth !== null) choice = { ...choice, level: entry.lod };
     if (choice.level === null) {
       // Zoomed out: what is resident stays (finer is never wrong, and zooming back in
       // finds it there); nothing more is fetched.
@@ -7642,6 +7686,7 @@ const VolumeViewer = (() => {
     if (!roi) {
       roi = _roiActivate(entry, choice.level, budget);
       if (!roi) return;
+      roi.column = _roiDetailColumn(entry);
       _roi = roi;
       _scheduleFrame();
     }
@@ -7650,7 +7695,9 @@ const VolumeViewer = (() => {
     // Detail is fetched only where the resident level does not resolve the view: up
     // to the depth at which one of its voxels covers `threshold` pixels.
     const baseVoxel = baseInfo ? voxelWorldOf(baseInfo) : 0;
-    const maxDepth = baseVoxel > 0 ? view.focalPx * baseVoxel / SVRRoi.DETAIL_PIXELS_PER_VOXEL : Infinity;
+    // Refining the level on screen, every brick in view is wanted, whatever its depth.
+    const maxDepth = roi.level === entry.lod ? Infinity
+      : (baseVoxel > 0 ? view.focalPx * baseVoxel / SVRRoi.DETAIL_PIXELS_PER_VOXEL : Infinity);
     const ranked = SVRRoi.rankVisible({
       bricks: roi.bricks, dims: roi.dims, planes,
       clipMin: clip.min, clipMax: clip.max, worldScale: view.worldScale,
@@ -7674,7 +7721,8 @@ const VolumeViewer = (() => {
     const residentInView = () => { let n = 0; for (const key of roi.wanted) { const [x, y, z] = keyXYZ(key); if (roi.mgr.has(x, y, z)) n++; } return n; };
     const status = (extra = {}) => _setRoiStatus({
       active: true, level: roi.level, baseLevel: entry.lod, inView: plan.inView, wanted: plan.want.length,
-      resident: residentInView(), capacity: roi.mgr.maxSlots, pixelsPerVoxel: choice.basePixelsPerVoxel, ...extra
+      resident: residentInView(), capacity: roi.mgr.maxSlots, pixelsPerVoxel: choice.basePixelsPerVoxel,
+      lossless: roi.column === 'll' || !roi.column, ...extra
     });
     _scheduleFrame();
     if (roi.running) {
@@ -7696,7 +7744,7 @@ const VolumeViewer = (() => {
     status({ loading: toLoad, loaded: 0, reason: 'loading' });
     const stopped = () => roi !== _roi || roi.stopped || _contextLost;
     const tasks = [];
-    const roiColumn = roi.entry && roi.entry.column ? { column: roi.entry.column } : {};
+    const roiColumn = roi.column ? { column: roi.column } : {};
     for (const b of batchList) for (let c = 0; c < roi.channels; c++) tasks.push({ bx: b.bx, by: b.by, bz: b.bz, channel: c, lod: roi.level, ...roiColumn });
     const bs = VOLUME_BRICK_SIZE;
     const stride = roi.mgr.slotStride;

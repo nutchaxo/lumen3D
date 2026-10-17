@@ -194,6 +194,13 @@
               </select>
             </label>
             <div class="quality-status" id="gpu-compression-status" role="status" aria-live="polite"></div>
+            <label class="detail-mode-row text-xs text-muted" for="select-gpu-memory">
+              <span data-i18n="viewer.gpuMemory">GPU memory</span>
+              <select id="select-gpu-memory" class="form-select text-sm p-1 rounded border border-light bg-surface text-primary">
+                <option value="auto" selected data-i18n="viewer.gpuMemoryAuto">Automatic</option>
+              </select>
+            </label>
+            <div class="quality-status" id="gpu-memory-status" role="status" aria-live="polite"></div>
         </div>
 
         <!-- Physical Scale Panel -->
@@ -616,6 +623,8 @@
   <script src="js/core/plane-loader.js"></script>
   <script src="js/core/cut-store.js"></script>
   <script src="js/core/data-access.js"></script>
+  <script src="js/core/ome-zarr.js"></script>
+  <script src="js/core/ome-zarr-export.js"></script>
   <script src="js/viewers/volume-slicer.js?v=20260615-fixed1"></script>
   <script src="js/viewers/volume-viewer.js?v=20260615-fixed1"></script>
   <script src="js/viewers/tracking-overlay.js?v=20260615-fixed1"></script>

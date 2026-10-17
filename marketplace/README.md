@@ -9,7 +9,6 @@ distribué en **release signée Ed25519**, vérifiée *fail-closed* à l'install
 marketplace/
 ├── marketplace-catalog.json         # le catalogue (liste des plugins) — SIGNÉ
 ├── marketplace-catalog.json.sig     # signature Ed25519 détachée du catalogue
-├── src/<placement>/<id>/            # (option.) sources des plugins propres au marketplace
 └── plugins/<id>/                    # artefacts de release par plugin :
     ├── plugin-<id>-<ver>.zip        #   le plugin, zip déterministe
     ├── SHA256SUMS                   #   empreinte du zip (format coreutils)
@@ -43,9 +42,11 @@ Sans `--push`, l'outil prépare tout localement et t'affiche la commande git à 
 | `publish_plugin.py <dossier> --push` | + commit + push → **live** |
 | `publish_plugin.py <dossier> --recommended false --push` | publie mais **non coché** par défaut dans le sélecteur de 1ʳᵉ install |
 | `publish_plugin.py --remove <id> --push` | **dépublie** (retire du catalogue + supprime les artefacts + re-signe) |
+| `publish_plugin.py --resign --push` | re-émet le catalogue **inchangé** sous le `serial` suivant (voir *Serial anti-rollback*) |
 
 > Re-publier un plugin **inchangé** ne crée rien (« rien à committer ») — la signature Ed25519
-> est déterministe. Change au moins la `version` (ou le contenu) pour publier une mise à jour.
+> est déterministe et le catalogue n'est réécrit que si son contenu change. Change au moins la
+> `version` (ou le contenu) pour publier une mise à jour.
 
 ---
 
@@ -54,7 +55,7 @@ Sans `--push`, l'outil prépare tout localement et t'affiche la commande git à 
 Un plugin est un dossier contenant au minimum `plugin.json` + `index.js` (+ `lang/<code>.json`).
 Voir les plugins existants sous `js/modules/<placement>/<id>/` comme modèles.
 
-`plugin.json` (métadonnées lues par le catalogue **et** par la plateforme) :
+`plugin.json` (la plateforme lit le fichier complet ; le catalogue n'en retient qu'un sous-ensemble, voir ci-dessous) :
 
 ```json
 {
@@ -64,19 +65,26 @@ Voir les plugins existants sous `js/modules/<placement>/<id>/` comme modèles.
   "platformCompat": ">=1.8.0",        // versions de plateforme compatibles (résolveur compat.js)
   "creator": "Mon Labo",
   "placement": "tools",               // "tools" | "channels" | "shaders"
-  "subtype": "action",                // "action" | "toggle" | "tool" (pour tools)
+  "subtype": "action",                // tools : "action" | "toggle" | "tool" ; channels : "per-channel"
   "group": "view",                    // cluster de la barre d'outils
   "icon": "info",                     // icône Lucide
   "order": 60,
-  "dataTypes": ["3d", "live", "2d"],  // types de données couverts (3d | 2d | live) ; absent = visualiseur de volumes seulement
+  "dataTypes": ["3d", "live", "2d"],  // types couverts (3d | 2d | live) ; absent = chargé seulement par le visualiseur de volumes (viewer.js)
   "contexts": ["page", "panel"],      // "page" = page autonome ; "panel" = embarqué (page Comparer, vue divisée, aperçu admin) ; absent = ["page"]
+  "requires": ["tracking"],           // optionnel : sources que le dataset doit offrir pour que le bouton apparaisse
   "description": "Ce que fait le plugin (affiché sur la carte du catalogue).",
-  "sandbox": true,                    // true = exécuté isolé (iframe) ; voir ci-dessous
+  "sandbox": true,                    // true = exécuté isolé (iframe) ; réservé aux tools action/toggle, voir ci-dessous
   "sandboxCapabilities": ["toolbar.addButton", "viewer.getInfo", "ui.toast"],
   "i18nTitle": "title",
   "i18nLanguages": ["en", "fr"]
 }
 ```
+
+**Ce que retient le catalogue.** L'entrée de `marketplace-catalog.json` porte `id`, `name`,
+`placement`, `subtype`, `description`, `creator`, `icon`, `platformCompat`, `sandboxCapabilities`,
+`latestVersion` (le `version`), `recommended`, les trois URLs des artefacts et le `sha256` du zip.
+`dataTypes`, `contexts`, `requires` et `sandbox` ne sont **pas** recopiés : ils restent dans le
+`plugin.json` du zip, que la plateforme lit à l'installation.
 
 ### Sandboxé (recommandé) vs in-page — **le niveau de confiance**
 
@@ -84,8 +92,9 @@ Voir les plugins existants sous `js/modules/<placement>/<id>/` comme modèles.
   au `ViewerContext`, aux cookies ni à l'API admin : uniquement le SDK `LumenPlugin` qui broke
   un jeu **restreint de capacités** (`toolbar.addButton`, `ui.toast`, `ui.download`,
   `viewer.getCanvasBlob`, `viewer.getInfo`, `viewer.setRenderMode`, `channels.getState`,
-  `events.subscribe`). C'est le mode **le plus sûr** ; à privilégier. Seuls les `tools`
-  (`action`/`toggle`) peuvent être sandboxés.
+  `events.subscribe`). Un plugin qui ne déclare pas `sandboxCapabilities` reçoit `toolbar.addButton`,
+  `ui.toast` et `viewer.getInfo`. C'est le mode **le plus sûr** ; à privilégier. Seuls les `tools`
+  (`action`/`toggle`) peuvent être sandboxés : `plugin-registry.js` met en quarantaine tout autre placement sandboxé.
 - **In-page (`sandbox` absent/false)** — le plugin s'exécute **en pleine confiance** dans la page
   (accès direct au viewer). Obligatoire pour les `shaders` (GLSL synchrone) et les `channels`
   (remise directe du nœud DOM). Barre de risque plus haute — réservé au first-party.
@@ -118,10 +127,10 @@ Contrôlé par `--recommended true|false` (par défaut : conserve l'existant, `t
   **Toute échec laisse `js/modules/` intact.**
 - **URLs.** L'outil dérive automatiquement la base d'URL du `_MARKETPLACE_CATALOG_URL` épinglé, donc
   les `assetUrl`/`sumsUrl`/`sigUrl` correspondent toujours à ce que la plateforme va chercher. Le
-  catalogue est servi via **GitHub raw** sur la **branche** de cette URL (**`main`** depuis v1.12.4,
-  pour que le marketplace soit servi depuis la branche stable des releases) — un plugin n'est **live**
-  qu'une fois sur `main`. Comme le dev se fait sur `dev` ([[CLAUDE.md §1.6]]), publie puis **merge
-  `dev → main`** (l'outil t'avertit si tu publies depuis une autre branche que `main`).
+  catalogue est servi via **GitHub raw** sur la **branche** de cette URL (**`main`**, la branche stable
+  des releases) — un plugin n'est **live** qu'une fois sur `main`. Comme le dev se fait sur `dev`
+  (CLAUDE.md §1.6), publie puis **merge `dev → main`** (avec `--push`, l'outil t'avertit si la branche
+  courante n'est pas `main`).
 - **Octets stables.** `SHA256SUMS` et le catalogue sont écrits en **octets bruts (LF)** pour que
   *signé == publié* (une conversion CRLF casserait la signature). Les zips sont **déterministes**
   (entrées triées, timestamp 1980, 0644) → sha256 reproductible.
@@ -129,7 +138,27 @@ Contrôlé par `--recommended true|false` (par défaut : conserve l'existant, `t
   `tools/build_release.py` les exclut) : une install fraîche démarre sans plugin et installe la
   sélection à la demande depuis ce catalogue.
 
-## Amorcer la clé (si le marketplace n'est pas encore keyé)
+## Serial anti-rollback
+
+Le catalogue porte un entier `serial` et une date `issuedAt`. `publish_plugin.py` incrémente le
+`serial` à chaque changement de contenu (et sur `--resign`), jamais sur une publication sans effet.
+Chaque hôte enregistre le plus haut `serial` qu'il a accepté, dans `api/marketplace-state.json`
+(Python : `dev_server.py:_marketplace_check_serial` ; PHP : `api/_admin_lib.php:mkt_check_serial`), et
+refuse un catalogue de `serial` inférieur (erreur `catalog_rollback`, affichée dans l'onglet Catalogue).
+Seul un catalogue dont la signature est vérifiée peut faire monter ce `serial` : un hôte non keyé ne
+peut pas être figé par un faux `serial` énorme.
+
+## État du catalogue
+
+Au moment de cette mise à jour, `marketplace-catalog.json` compte **28 plugins** au `serial` **6**
+(émis le 2026-10-09). Chacun des 28 dossiers `plugins/<id>/` contient son zip, `SHA256SUMS`,
+`SHA256SUMS.sig` et `version.json`, et correspond à une entrée du catalogue. La liste exacte se lit
+dans le catalogue lui-même ; elle change à chaque publication.
+
+## Amorcer la clé (déjà fait sur ce dépôt)
+
+La clé publique et l'URL du catalogue sont déjà épinglées dans les sources. Cette procédure ne sert
+que pour une nouvelle paire de clés :
 
 ```bash
 python tools/gen_signing_key.py     # génère la paire

@@ -2,7 +2,7 @@
 title: "Administrator's guide"
 subtitle: "The Lumen3D admin panel, tab by tab"
 eyebrow: "IRIBHM · ULB — Lumen3D"
-version: "Web platform 1.59.3"
+version: "Web platform 1.65.0"
 date: "October 2026"
 abstract: "Everything you can do from the site's admin panel: manage and import datasets, bring them to the current format, customise the public site, install features, update the platform. Written for someone who has never seen this panel and cannot code."
 lang: en
@@ -730,7 +730,7 @@ This message appears when you click **sign out** or a link that leaves the panel
 - The transfer runs in a **Web Worker**: the interface stays smooth. Raw blocks of **8 MiB** (reduced on a PHP host with strict limits: "Block size reduced to {n} — drop the folder again to resume."), **4 blocks in parallel**.
 - Each block carries a **SHA-256 fingerprint** checked **before** writing. A **server journal** remembers the blocks received: dropping the same folder again resumes **to the nearest block**; a file already complete is not sent again.
 - The journal is the same under both servers (Python or PHP): an import started under one can resume under the other.
-- Accepted formats: **formats 2 to 4** (`planes/`, `mips/`, v3 bricks and `index.bin`).
+- Accepted formats: **formats 2 to 5** (`planes/`, `mips/`, v3 bricks and `index.bin`, the format-5 matrix with its per-compression indexes and its cut copies `xy/`, `xz/`, `yz/`, `cuts/`, sent last).
 :::
 
 ## 4.9. If something goes wrong
@@ -752,7 +752,7 @@ This message appears when you click **sign out** or a link that leaves the panel
 # 5. Data updates — the datasets' format
 
 ::: chapter-intro
-- A published dataset has a **format** (1 to 4). The current format is **4**.
+- A published dataset has a **format** (1 to 5). The current format is **5**.
 - This tab upgrades them **in place**, like a software update.
 - You choose **who does the work**: this browser or the server. Nothing is mandatory.
 :::
@@ -763,24 +763,29 @@ This message appears when you click **sign out** or a link that leaves the panel
 
 ## 5.1. Why, and for whom
 
-Each volume dataset (`3d`, `live`) carries a **data format** (`formatVersion`, absent = format 1). A dataset that came out of pipeline **0.21.0** is already in **format 4**: it has **nothing** to do. **2D photographs** are never concerned.
+Each volume dataset (`3d`, `live`) carries a **data format** (`formatVersion`, absent = format 1). A dataset that came out of pipeline **0.22.0** arrives in **format 4**: only the **4 → 5** step is left (the pipeline writes format 5 directly with the `--format 5` option). **2D photographs** are never concerned.
 
 ::: note
-**Data updates are not needed for the site to work.** The viewer always reads formats 1, 2, 3 and 4; the Studio falls back to the bricks if `planes/` is missing. They **speed up** some Studio operations and **improve** display quality.
+**Data updates are not needed for the site to work.** The viewer always reads formats 1 to 5; the Studio falls back to the bricks if `planes/` is missing. They **speed up** some Studio operations and **improve** display quality.
 :::
 
-## 5.2. The three steps
+## 5.2. The four steps
 
-They follow one another in order: a dataset in format 1 receives all three.
+They follow one another in order: a dataset in format 1 receives all four.
 
 | Step | Title on screen | What it creates | What it brings |
 |---|---|---|---|
 | **1 → 2** | Plane copy of the native level (fast XY slices in the Studio) | `planes/`: one file per z plane, lossless 512² PNG tiles (≈ 1.3× the native level in disk space). The bricks are not touched. | A native XY slice reads **one plane** instead of a layer of 64 planes: tens of times fewer bytes, pixel-identical result. |
 | **2 → 3** | Maximum projections of each layer of bricks (fast z-stack figures over the whole stack) | `mips/`: one maximum projection per layer of 64 planes. | A z-stack figure over the whole stack reads ~3 packs instead of about 150. |
 | **3 → 4** | Brick pyramid v3: reduced in Z too, one-voxel border, binary index | **Rebuilds** `bricks/`: 66³ bricks with a border, levels reduced in Z too, `index.bin`. | Seamless filtering, local detail ("Zoom detail"), lighter atlases for 1 to 2 channels. |
+| **4 → 5** | Resolution × compression matrix: full-depth levels at 256·2ᵏ, five compressions, fast cuts | **Rebuilds** `bricks/`: levels of 4096, 2048… 256 voxels across that keep every slice; each in five compressions (lossless, ±2, ±4, light, very light); copies for XY, XZ / YZ and oblique cuts. | Visitors pick their cell in a **quality table**; lighter downloads; fast native cuts in every direction; measurements and exports always lossless. |
 
 ::: warning
-**The 3 → 4 step rebuilds the `bricks/` tree.** The **native level is kept voxel for voxel**; the coarser levels are recomputed. The old tree is deleted **after** the version change. For precious data, keep a backup copy, as for any operation on files.
+**The 3 → 4 and 4 → 5 steps rebuild the `bricks/` tree.** The **native level is kept voxel for voxel**; the coarser levels are recomputed. The old tree is deleted **after** the version change, unless the [Keep the previous version]{.ui} box is ticked (it is then kept beside the new one, as `bricks.previous/`, for comparison with the *Chunk debug* tool; it takes the bricks' space a second time, so delete it once the comparison is done). For precious data, keep a backup copy, as for any operation on files.
+:::
+
+::: note
+**Format 5 takes much more disk space**: it stores the same volume several times. On the demonstration dataset, 9 MB of bricks become about 80 MB. The panel refuses to start if the result does not fit (§ 5.9).
 :::
 
 ## 5.3. Overview of the tab
@@ -792,7 +797,7 @@ They follow one another in order: a dataset in format 1 receives all three.
 |-|----------------------|
 | 1 | [Pause]{.ui} (or [Resume]{.ui}); next to it [Refresh]{.ui} and [Update all]{.ui}. |
 | 2 | The **two-queue strip**: one badge per executor, with its state. |
-| 3 | A **dataset card**: name, type, "format 1 → 4", estimated units and size, numbered **steps**. |
+| 3 | A **dataset card**: name, type, "format 1 → 5", estimated units and size, numbered **steps**. |
 | 4 | The **executor selector**: [This browser]{.ui} or [The server]{.ui}. |
 | 5 | The **progress** area: "step i of n", bar, percentage, units done, **time left**, units per minute. |
 | 6 | The cross: **cancel**: "Discard the progress of this update? The dataset stays as it was." |
@@ -809,7 +814,7 @@ Two "executors" can do the work:
 | Executor | Who computes | What is needed |
 |---|---|---|
 | **This browser** | Your browser downloads the bricks, reassembles them (Web Workers) and sends the result back **unit by unit**. | A browser that can compress, re-read PNGs identically and encode lossless WebP. |
-| **The server** | The server converts by itself, in small time-bounded requests. Suited to shared hosting. | Lossless WebP decoding (and, for the 3 → 4 step, encoding) (PHP's GD or Python's Pillow), zlib, NumPy on the Python side, at least 128 MiB per request and 10 s of execution. |
+| **The server** | The server converts by itself, in small time-bounded requests. Suited to shared hosting. | Lossless WebP decoding (and, for the 3 → 4 step, encoding) (PHP's GD or Python's Pillow), zlib, NumPy on the Python side, at least 128 MiB per request and 10 s of execution. **4 → 5 step: Python server only.** |
 
 - The choice is made **per dataset**, **before** starting; it is **locked while running**, and can be changed between runs.
 - An executor that cannot do the job is **greyed out**, with a tooltip saying why (for example "the server cannot decode lossless WebP images").
@@ -820,6 +825,10 @@ Two "executors" can do the work:
 
 ::: tip
 On shared hosting where the [The server]{.ui} option is greyed out, **[This browser]{.ui} always works**: it does the work, the server merely stores.
+:::
+
+::: note
+**The 4 → 5 step on a PHP host.** A PHP server cannot do this step itself: the tooltip of [The server]{.ui} says "on this server, this update runs in the browser". The browser asks the server what to read, computes and sends back each unit; the server checks everything and assembles the result. It needs a browser that can encode **lossy** WebP (otherwise: "this browser cannot encode lossy WebP images"). Measured on the demonstration dataset E8 (an old format 1): the 4 → 5 step took **339 units and 4 minutes** in the browser.
 :::
 
 ## 5.5. The speed test
@@ -869,7 +878,7 @@ States shown: **Waiting for its turn** ("next on the server"), **Running**, **Pa
 ::: legend
 | n | what it is |
 |-|----------------------|
-| 1 | **Data formats**: the most recent format (4) and the list of the three updates ("1 → 2"…). |
+| 1 | **Data formats**: the most recent format (5) and the list of the four updates ("1 → 2"…). |
 | 2 | **History**: the last 20 operations, remembered in this browser. |
 | 3 | [Clear]{.ui}: empties the history. |
 :::
@@ -890,6 +899,17 @@ A history row reads "format {v} · {n} units · {duration} · {executor}", or sh
 | Neither executor can run every step of: … | Try [This browser]{.ui}, or re-process with the pipeline. |
 | Update of {name} stopped: the server cannot convert a unit in time. | Run it again in this browser. |
 | Could not read the update status. | [Refresh]{.ui}. |
+
+## 5.10. Converting on a computer, then importing
+
+For a very large dataset, or a host that is too slow, the conversion can run **on a computer** with Python (the processing workstation, for example):
+
+::: steps
+1. Copy the dataset folder (for example `DATA_WEB/3d/<folder>`) to the computer, into a copy of the platform.
+2. Run `python tools/convert_dataset.py DATA_WEB/3d/<folder>`. `--list` only shows the pending steps; `--keep-previous` keeps the old tree.
+3. An interrupted conversion **resumes** where it stopped if you run the command again.
+4. Drag the converted folder into the **Import** tab (chapter 4): it accepts a format-5 dataset and checks it whole before letting you publish it.
+:::
 
 # 6. Data types — the public name of each category
 
@@ -1778,7 +1798,7 @@ It installs **on the processing workstation, not on this server**: download it a
 The pack contains **two pipelines** (volumes with tracking, tracking analysis), the **2D photograph import**, sample inputs (usable right away to get a feel for it), and a launcher that **checks its own integrity** (SHA-256).
 
 ::: note
-**Two numbers, and that is normal.** The header shows `pipeline v0.21.0`: the version **of the pack**, not of the site. Pipeline 0.21.0 writes **format 4 directly** (no data update needed on its outputs), **keeps the curation** done in the panel when a dataset is re-processed (hidden, name, orientation…) and **publishes all or nothing**.
+**Two numbers, and that is normal.** The header shows `pipeline v0.21.0`: the version **of the pack**, not of the site. Pipeline 0.22.0 writes **format 4** (only the 4 → 5 step remains in **Data updates**), or format 5 with the `--format 5` option, **keeps the curation** done in the panel when a dataset is re-processed (hidden, name, orientation…) and **publishes all or nothing**.
 :::
 
 When a newer version of the pack is published, a **banner** appears at the top: "New pack version: v… — This server offers v…. Download the new one below — the platform does not need updating for this." with [Download v…]{.ui}; for the light edition, [Installed version]{.ui} keeps the server's pack accessible.
@@ -2081,13 +2101,14 @@ A tab that does not load shows "Could not load this tab. Reload the page.".
 |---|---|
 | **Channel** | A fluorescent staining (DAPI, GFP, Pecam1…). A dataset often contains several, superimposed. |
 | **Voxel** | The equivalent of a pixel in three dimensions. Its real size is given by the calibration (§3.6). |
-| **Brick** | A small cube of volume (64×64×64 voxels, or 66³ with a border in format 4). The site loads them on demand to display volumes of several gigabytes without downloading everything. |
+| **Brick** | A small cube of volume (64×64×64 voxels, or 66³ with a border in formats 4 and 5). The site loads them on demand to display volumes of several gigabytes without downloading everything. |
 | **LOD** | *Level of Detail*: several resolutions of the same volume. The site first shows a coarse version, then refines. |
 | **Dataset type** | One of the three categories: `3d` (fixed volume), `2d` (calibrated photograph), `live` (4D time series, possibly with its cell tracking). These are the server's folders; the name seen by the public is set in **Data types** (chapter 6). |
 | **Data format** (`formatVersion`) | The "level of fitting-out" of a published dataset, from 1 to 4 (current: 4). Upgraded in **Data updates**. |
 | **Planes** (`planes/`) | Format 2: a copy of the native level **plane by plane** (lossless PNG), for fast XY slices in the Studio. |
 | **Layer projections** (`mips/`) | Format 3: the maximum projection of each layer of 64 planes, for fast z-stack figures. |
 | **Brick pyramid v3** | Format 4: 66³ bricks with a one-voxel border, levels reduced in Z too, `index.bin`. Brings seamless filtering and "Zoom detail". |
+| **Matrix (format 5)** | Format 5: the same volume at several resolutions (every slice kept) and in five compressions (lossless, ±2, ±4, light, very light), plus copies for fast cuts. Visitors pick their cell in a table; measurements and exports stay lossless. |
 | **Sample side** | A setting that says whether the file shows the sample from above ("right side up") or from below ("upside down"). |
 | **Default view** | The pose in which a dataset opens, saved from the preview. |
 
@@ -2114,4 +2135,4 @@ A tab that does not load shows "Could not load this tab. Reload the page.".
 
 ---
 
-*Document written for version **1.59.3** of the platform (pipeline 0.21.0, data format 4). Screenshots show a demonstration dataset (synthetic embryos); colours may differ if the theme has been modified.*
+*Document written for version **1.65.0** of the platform (pipeline 0.22.0, data format 5). Screenshots show a demonstration dataset (synthetic embryos); colours may differ if the theme has been modified.*

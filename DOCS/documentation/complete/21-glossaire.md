@@ -23,7 +23,7 @@ Boîte englobante (bounding box)
 : Parallélépipède qui entoure tout le volume. Un clic qui n'atteint que cette boîte, sans structure visible dessous, n'est pas une mesure valable. → chapitre 12
 
 Bordure (apron)
-: Voxel supplémentaire autour d'une brique, copié depuis ses voisines, pour que le filtrage ne laisse pas de couture entre deux briques. Les briques du format 4 font 66³ pour 64³ utiles. → chapitre 7
+: Voxel supplémentaire autour d'une brique, copié depuis ses voisines, pour que le filtrage ne laisse pas de couture entre deux briques. Les briques des formats 4 et 5 font 66³ pour 64³ utiles. → chapitre 7
 
 Brique
 : Petit cube de 64×64×64 voxels : l'unité de découpage et de chargement d'un volume. → chapitre 7
@@ -47,7 +47,13 @@ Catalogue
 : Deux sens à distinguer : la liste des jeux de données du site, générée à la demande à partir des fichiers, et le catalogue de plugins signé, d'où l'on installe les outils. → chapitres 3 et 15
 
 Compression avec perte, sans perte
-: Avec perte, le fichier est plus petit mais les valeurs sont légèrement modifiées ; sans perte, on retrouve exactement les valeurs d'origine. Les briques sont stockées sans perte. → chapitre 6
+: Avec perte, le fichier est plus petit mais les valeurs sont légèrement modifiées ; sans perte, on retrouve exactement les valeurs d'origine. Les briques sont stockées sans perte ; le format 5 ajoute, pour l'affichage seulement, des colonnes ±2, ±4 et avec perte. → chapitres 6 et 7
+
+Colonne (de compression)
+: En format 5, l'une des cinq façons de stocker un même niveau : sans perte, ±2, ±4, légère (WebP 80), très légère (WebP 50). Choisie dans la matrice de qualité. → chapitres 7 et 10
+
+Copies de coupe
+: En format 5, trois copies du volume recoupées (plans XY, lignes XZ / YZ, petites briques obliques) qui rendent les coupes natives du Studio rapides. → chapitre 7
 
 Confocal (microscope)
 : Microscope qui n'enregistre que la lumière venue d'un plan très mince du spécimen, plan après plan ; l'empilement des plans forme le volume. → chapitre 4
@@ -86,7 +92,7 @@ Empreinte (hachage, SHA-256)
 : Court code calculé à partir du contenu d'un fichier : si un seul octet change, l'empreinte change. Elle sert à vérifier un téléchargement, un plugin, un morceau d'import. → chapitres 15 et 19
 
 ESS (Empty Space Skipping, saut de l'espace vide)
-: Les briques dont tous les voxels valent 0 ne sont ni stockées ni parcourues, ce qui économise octets et calcul. Au format 4 la règle est exacte (un seul voxel non nul suffit à garder la brique) ; avant, un seuil d'occupation de 0,05 % écartait aussi les briques presque vides. → chapitres 7 et 9
+: Les briques dont tous les voxels valent 0 ne sont ni stockées ni parcourues, ce qui économise octets et calcul. Aux formats 4 et 5 la règle est exacte (un seul voxel non nul suffit à garder la brique) ; avant, un seuil d'occupation de 0,05 % écartait aussi les briques presque vides. → chapitres 7 et 9
 
 Exécutant
 : Celui qui fait le travail d'une conversion de données : le navigateur ou le serveur. Il peut changer en cours de route, le journal est commun. → chapitre 17
@@ -110,7 +116,7 @@ Fonction de transfert
 : Règle qui convertit une valeur du volume en couleur et en opacité. Dans Lumen3D, c'est la chaîne fenêtre, gamma, opacité et couleur du panneau des canaux ; le chapitre 11 la décrit sans employer ce terme. → chapitre 11
 
 Format de données
-: Façon dont un dataset est rangé sur le disque ; numéroté de 1 à 4. Le format courant est le 4. → chapitres 7 et 17
+: Façon dont un dataset est rangé sur le disque ; numéroté de 1 à 5. Le format courant est le 5. → chapitres 7 et 17
 
 Gamma
 : Réglage qui éclaircit ou assombrit les tons moyens sans toucher aux extrêmes. → chapitre 11
@@ -134,7 +140,7 @@ Idempotent
 : Fichier Imaris : un conteneur HDF5 qui contient les canaux, les niveaux de résolution et les métadonnées d'une acquisition. → chapitre 4
 
 index.bin
-: Fichier binaire du format 4 qui dit dans quel pack se trouve chaque brique ; il remplace le gros manifeste JSON. → chapitre 7
+: Fichier binaire des formats 4 et 5 (un par colonne en format 5) qui dit dans quel pack se trouve chaque brique ; il remplace le gros manifeste JSON. → chapitre 7
 
 Intensité
 : Valeur d'un voxel : combien de lumière a été mesurée à cet endroit. Dans le viewer elle est relative (0 à 255), pas calibrée. → chapitres 4 et 11
@@ -183,6 +189,9 @@ Migration
 
 MIP (projection d'intensité maximale)
 : Image où chaque pixel prend la valeur la plus forte rencontrée le long d'un axe. → chapitres 7 et 12
+
+Matrice (de qualité)
+: Le tableau « résolution × compression » du panneau de qualité d'un jeu au format 5 : une ligne par niveau, une colonne par compression ; chaque case affiche son poids et sa mémoire graphique. → chapitre 10
 
 Mosaïque
 : Plusieurs petites images collées en une grande ; une brique est stockée comme une mosaïque de ses coupes. → chapitre 7
@@ -315,4 +324,7 @@ Worker (Web Worker)
 
 X-gal
 : Coloration qui rend bleues les cellules exprimant un gène rapporteur ; le viewer 2D sait isoler cette coloration. → chapitre 12
+
+Zone morte
+: En format 5, seuil (de 0 à 12) sous lequel une brique compressée avec perte remet les petites valeurs à 0, pour que le fond reste noir ; écrit dans un octet à la fin de la brique. → chapitre 7
 :::

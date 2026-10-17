@@ -2,6 +2,7 @@
 
 ::: chapter-intro
 - An embryo of several gigabytes cannot travel over the Internet as it is: the pipeline **shrinks** it in four moves — 16 → 8 bits, a pyramid of resolutions, removal of empty bricks, **lossless** compression.
+- **Format 5** adds, for display only, four lighter compressions (two of them lossy); what measures always reads the lossless version (section 7.11).
 - None of these moves changes an intensity at the finest level: what you see at full resolution is **exactly** the result of the cleaning in chapter 5.
 - On the demonstration dataset: **297 MB of raw voxels → 9.3 MB of bricks**, about 32 times less.
 :::
@@ -102,6 +103,19 @@ We stop at level 3: 96 ≤ 128.
 ::: note
 I rebuilt this pyramid with the pipeline's functions from the result of chapter 5, then compared it with the published bricks: **358 bricks out of 358 identical**, voxel for voxel.
 :::
+
+### And in format 5?
+
+Format 5 (section 7.11) changes the pyramid rule:
+
+| | format 4 | format 5 |
+|---|---|---|
+| level sizes | halved each time | long side **exactly** 4096, 2048, 1024, 512, 256 |
+| slices (Z) | halved while the voxel stays ≈ cubic | **all kept** at every level |
+| computation | average of 2 × 2 (× 2) voxels of the previous level | **exact area average** of the native voxels, from level 0 |
+| demonstration dataset | 768, 384, 192, 96 (and 112, 56, 28, 14 slices) | 768 (native), 512, 256, always 112 slices |
+
+In both cases, level 0 stays the cleaned image as it is.
 
 ## 6.4 Compressing without losing anything
 

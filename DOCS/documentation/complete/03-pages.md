@@ -74,7 +74,7 @@ C'est le cœur de la plateforme. Ouvrez un jeu 3D : le volume apparaît d'abord 
 | 3 | Groupe **Visuels** : grille, axes, axes d'orientation, masquer le volume, débogage des briques. |
 | 4 | Groupe **Dispositions** : [Mode présentation]{.ui}, [Décomposer par canal]{.ui}, [Explorateur Z-Stack]{.ui}. |
 | 5 | Panneau [Canaux]{.ui} : une ligne par canal (case, couleur, histogramme réglable). |
-| 6 | [Qualité de Rendu]{.ui} : 512, 1024 ou natif. Le texte dessous donne la qualité réellement active. |
+| 6 | [Qualité de Rendu]{.ui} : 512, 1024 ou natif ; sur un jeu au format 5, un tableau « résolution × compression » (chapitre 10). Le texte dessous donne la qualité réellement active. |
 | 7 | Quatre boutons sur le volume : centrer l'échantillon, réinitialiser la vue, exporter la vue en PNG, réinitialiser l'espace de travail. |
 :::
 

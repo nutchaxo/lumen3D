@@ -224,6 +224,7 @@ Les **plugins de canal** et de **mode de rendu** ont des contrats propres : un p
 | `ctx.ui` | `toast`, `addSidebarSection`, `addCanvasPanel`, `getCanvas`, `openStudio`… |
 | `ctx.tools` | L'outil exclusif courant, `activate`, `onChange` |
 | `ctx.tracking` | Le suivi cellulaire d'un timelapse (ci-dessous) |
+| `ctx.data` | Les **voxels exacts**, sans perte, quelle que soit la qualité affichée (ci-dessous) |
 | `ctx.workspace` | Lire / appliquer l'espace de travail |
 | `ctx.i18n` | `t('clé')` : cherche `plugins.<id>.clé`, repli automatique sur l'anglais |
 | `ctx.slicer` | Le plan de coupe oblique |
@@ -251,6 +252,22 @@ Les cinq plugins de suivi ne lisent jamais `tracks.json` eux-mêmes. La page en 
 | `on('loaded' · 'frame' · 'refresh' · 'selection' · 'options' · 'style', rappel)` | S'abonner ; renvoie la fonction de désabonnement |
 
 Résultat : cliquer une cellule dans l'Inspecteur la sélectionne aussi dans les trajectoires et les graphiques, sans qu'ils se parlent.
+
+### Les voxels exacts : `ctx.data`
+
+Depuis la plateforme 1.64, un plugin qui **calcule** quelque chose (profil d'intensité, histogramme d'une région, mesure) passe par `ctx.data` : il lit la colonne **sans perte** des briques, jamais l'image de la carte graphique, qui peut être une colonne avec perte (section 7.11).
+
+| Fonction | Rôle |
+|---|---|
+| `screenToVoxel(x, y)` | Le point sous le curseur : `{ um, voxel, onBoundingBox }` (µm et voxel natif) |
+| `toVoxel(um, { level })`, `toUm(voxel, { level })` | Passer des micromètres aux voxels d'un niveau, et retour |
+| `locate(voxel, canal)` | Quel fichier, et quels octets, contiennent ce voxel sans perte |
+| `readRegion(boîte, canaux, { level })` | Les voxels exacts d'une boîte (décodés dans un worker ; refusé au-delà de 512 Mio) |
+| `valueAt(voxel)` | La valeur exacte de chaque canal en un voxel |
+
+::: example
+Un plugin qui affiche « intensité au point cliqué » appelle `ctx.data.screenToVoxel(x, y)`, puis `ctx.data.valueAt(voxel)`. Même si le visiteur regarde la case 256 · Très légère, la valeur rendue est celle du voxel natif, exacte. Fonctionne sur les formats 2 à 5.
+:::
 
 ### Les textes d'un plugin
 

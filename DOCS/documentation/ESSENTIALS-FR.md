@@ -2,7 +2,7 @@
 title: "Lumen3D — l'essentiel"
 subtitle: "Ce que devient votre fichier Imaris, du microscope à l'écran — et comment bien s'en servir"
 eyebrow: "IRIBHM · ULB — Lumen3D"
-version: "Plateforme Web 1.59.3 · Pipeline 0.21.0"
+version: "Plateforme Web 1.65.0 · Pipeline 0.22.0 · Format de données 5"
 date: "Octobre 2026"
 abstract: "Le guide du biologiste : préparer son acquisition, la faire traiter, la mettre en ligne, l'explorer en 3D, mesurer, faire des figures, et savoir interpréter ce que l'on voit. Chaque section renvoie au chapitre de la documentation complète (« Lumen3D, de A à Z ») qui donne tous les détails."
 lang: fr
@@ -209,6 +209,7 @@ essayés puis **retirés** en version 0.12.0 : ils créaient des « taches » co
 - X et Y sont divisés par 2 à chaque niveau ; **Z seulement tant que** le voxel en Z ne devient pas plus de 1,5 fois plus grand qu'en XY.
 - La moyenne est **entière, arrondie au plus proche**. On s'arrête quand le plus grand côté fait 128 voxels ou moins.
 - Le niveau 0 est l'image nettoyée telle quelle, **jamais rééchantillonnée**. → ch. 6
+- C'est la règle du **format 4**, celle qu'écrit le pipeline. Le **format 5** garde toutes les tranches et vise des tailles exactes (512, 256…) : voir § 6.1.
 
 ## 5.2 Compression sans perte
 
@@ -254,8 +255,32 @@ Sur le jeu de démonstration : **358 briques stockées sur 777** possibles.
 
 - **La bordure** copie le voxel voisin : l'image peut être lissée sans couture visible entre deux briques. → ch. 7
 - **Les plans** (`planes/`) : une coupe XY à pleine résolution lit **94 Ko au lieu de 5 078 Ko** sur le jeu de démonstration.
-- **Les formats** : un dataset porte un numéro de format (1 à 4, le plus récent est 4). Le pipeline 0.21.0 écrit
-  directement le format 4. Un ancien dataset se met à jour depuis l'onglet *Mises à jour des données*, sans retraitement. → ch. 17
+- **Les formats** : un dataset porte un numéro de format (1 à 5, le plus récent est **5**). Le pipeline 0.22.0 écrit
+  le format 4 (le 5 avec `--format 5`) ; l'onglet *Mises à jour des données* monte un dataset au format 5, sans retraitement. → ch. 17
+
+## 6.1 Le format 5 : une matrice résolution × compression
+
+::: tldr
+- Le même volume est rangé à **plusieurs résolutions** (les lignes) et dans **cinq compressions** (les colonnes). Vous choisissez votre case.
+- Les niveaux réduits **gardent toutes les tranches** (Z n'est plus réduit).
+- Tout ce qui **mesure** ou **exporte en natif** lit la version **sans perte**, quelle que soit la case affichée.
+:::
+
+![Les niveaux du jeu de démonstration en format 4 et en format 5 (dimensions réelles).](img/f5/niveaux.svg){width=80%}
+
+| Colonne | Ce qui est garanti | Poids (vs sans perte) |
+|---|---|---|
+| **Sans perte** | chaque voxel exact | 1 |
+| **±2** | aucun voxel ne bouge de plus de 2 niveaux de gris (sur 255) | 0,62 – 0,82 |
+| **±4** | aucun voxel ne bouge de plus de 4 | 0,50 – 0,69 |
+| **Légère** | WebP avec perte (qualité 80) : petits changements visuels | 0,35 – 0,61 |
+| **Très légère** | WebP avec perte (qualité 50) : lissage visible | 0,22 – 0,40 |
+
+![La même vraie brique dans les cinq compressions : en haut la tranche du milieu, en bas l'écart avec l'original (× 16).](img/f5/colonnes.png){width=100%}
+
+- Le **fond reste exactement noir** dans toutes les colonnes : ±2 et ±4 gardent le 0 à part ; les colonnes avec perte remettent à 0 les petites valeurs qui « bavent » (une **zone morte**).
+- Trois **copies de coupe** (plans XY, lignes XZ / YZ, petites briques obliques) rendent les coupes natives du Studio rapides : une coupe oblique native a lu 23 Mo au lieu de 60 sur un embryon de 1946² × 72. → ch. 7
+- Le prix : **plus de place sur le disque** (9 Mo de briques → environ 80 Mo pour le jeu de démonstration). Ce que chaque visiteur télécharge, lui, diminue.
 
 # 7. La fin du pipeline
 
@@ -338,6 +363,16 @@ référence). Le viewer applique ce déplacement **au regard**, pas aux voxels :
 | **512** (par défaut) | le niveau le plus fin dont le grand côté XY ne dépasse pas **768** px |
 | **1024** | le niveau le plus fin dont le grand côté ne dépasse pas **1 536** px |
 | **Natif** | le niveau 0, pleine résolution |
+
+Sur un jeu au **format 5**, le menu devient un **tableau** : une ligne par niveau, une colonne par compression. Chaque case donne son poids à télécharger, le temps estimé et la mémoire graphique ; un clic la charge. Elle s'ouvre sur **512 · ±2**.
+
+![La matrice de qualité du jeu de démonstration (barre latérale élargie pour la capture ; à l'écran, faites défiler le tableau vers la droite).](img/f5/matrice.png){.shot width=80%}
+
+| Couleur | Signification |
+|---|---|
+| vert | tient largement dans la mémoire graphique |
+| orange | juste |
+| rouge | trop grand : l'ensemble reste plus grossier, le détail au zoom charge la case autour de la vue |
 
 Si la carte graphique n'a pas assez de mémoire, le viewer prend **le niveau suivant plus léger** et le dit
 dans un message. Une ligne de progression indique la qualité, le pourcentage et l'étape en cours. → ch. 10
@@ -462,6 +497,7 @@ l'adresse de la page (elles voyagent dans le lien) ou en téléchargeant le **CS
 - Ouvrir une coupe dans le Studio la recharge **au niveau natif** (plans XY ou plages d'octets), avec une progression.
 - Les **couleurs des canaux** se règlent dans le Studio sans toucher aux annotations.
 - Export **PNG** (la figure) ou **JSON** (pour la reprendre plus tard) ; au-delà de 5 Mo, l'export est refusé avec un message.
+- **Chaque export propose « sans perte »** : la vue 3D ([Qualité]{.ui} : [Actuelle]{.ui} ou [Sans perte]{.ui}), le Studio ([Native sans perte]{.ui} ou [Cette image]{.ui}) et *Décomposer par canal*. Vos annotations gardent leur place.
 
 ![Comparer : deux volumes et une photographie, outils communs et synchronisation (caméra, temps, coupes, canaux).](img/ch12/comparer.png){.shot width=70%}
 
@@ -526,6 +562,7 @@ pixel exact, utile si l'on veut quantifier le rapport bleu / rouge. La calibrati
 - **Les briques non stockées** sont des zones réellement à 0 après nettoyage, pas des données perdues.
 - **Le plancher d'affichage** (6 à 48) masque les valeurs les plus faibles à l'écran : baissez *min* ne les fera pas revenir.
 - **Au plus 4 canaux** sont affichés en même temps.
+- **Une case légère ne fausse aucune mesure** : en format 5, les colonnes ±2, ±4, Légère et Très légère changent ce que vous **voyez**, jamais ce qui est **mesuré** ou **exporté sans perte**.
 - **Sans calibration** dans le fichier, aucune mesure en µm n'est proposée.
 - **La vue 3D est en perspective** : mesurez avec l'outil de mesure ou sur une coupe, pas avec la barre d'échelle 3D.
 :::
@@ -600,7 +637,10 @@ Studio
 : L'atelier de figures annotées à pleine résolution. → ch. 12 et 13
 
 Format de données
-: Le numéro de version de l'organisation des fichiers d'un dataset (1 à 4). → ch. 17
+: Le numéro de version de l'organisation des fichiers d'un dataset (1 à 5). → ch. 17
+
+Matrice (de qualité)
+: En format 5, le tableau « résolution × compression » du panneau de qualité : chaque case est une façon d'afficher le volume. → ch. 10
 :::
 
 ::: see

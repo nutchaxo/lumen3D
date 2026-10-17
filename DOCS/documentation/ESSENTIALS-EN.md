@@ -2,7 +2,7 @@
 title: "Lumen3D — the essentials"
 subtitle: "What happens to your Imaris file, from the microscope to the screen — and how to make good use of it"
 eyebrow: "IRIBHM · ULB — Lumen3D"
-version: "Web platform 1.59.3 · Pipeline 0.21.0"
+version: "Web platform 1.65.0 · Pipeline 0.22.0 · Data format 5"
 date: "October 2026"
 abstract: "The biologist's guide: prepare an acquisition, have it processed, put it online, explore it in 3D, measure, build figures, and know how to interpret what you see. Each section points to the chapter of the full documentation (“Lumen3D, from A to Z”) that gives every detail."
 lang: en
@@ -209,6 +209,7 @@ tried and then **removed** in version 0.12.0: they created artificial coloured "
 - X and Y are halved at each level; **Z only as long as** the Z voxel does not become more than 1.5 times larger than in XY.
 - The average is an **integer, rounded to the nearest**. The pyramid stops when the longest side is 128 voxels or less.
 - Level 0 is the cleaned image as it is, **never resampled**. → ch. 6
+- This is the rule of **format 4**, the one the pipeline writes. **Format 5** keeps every slice and aims at exact sizes (512, 256…): see § 6.1.
 
 ## 5.2 Lossless compression
 
@@ -254,8 +255,32 @@ On the demonstration dataset: **358 bricks stored out of 777** possible.
 
 - **The border** copies the neighbouring voxel: the image can be smoothed with no visible seam between two bricks. → ch. 7
 - **The planes** (`planes/`): a full-resolution XY slice reads **94 KB instead of 5,078 KB** on the demonstration dataset.
-- **The formats**: a dataset carries a format number (1 to 4, the latest is 4). Pipeline 0.21.0 writes
-  format 4 directly. An older dataset is upgraded from the *Data updates* tab, without reprocessing. → ch. 17
+- **The formats**: a dataset carries a format number (1 to 5, the latest is **5**). Pipeline 0.22.0 writes
+  format 4 (5 with `--format 5`); the *Data updates* tab brings a dataset to format 5, without reprocessing. → ch. 17
+
+## 6.1 Format 5: a resolution × compression matrix
+
+::: tldr
+- The same volume is stored at **several resolutions** (the rows) and in **five compressions** (the columns). You pick your cell.
+- The reduced levels **keep every slice** (Z is no longer reduced).
+- Everything that **measures** or **exports at native quality** reads the **lossless** version, whatever cell is displayed.
+:::
+
+![The levels of the demonstration dataset in format 4 and in format 5 (real dimensions).](img-en/f5/niveaux.svg){width=80%}
+
+| Column | What is guaranteed | Size (vs lossless) |
+|---|---|---|
+| **Lossless** | every voxel exact | 1 |
+| **±2** | no voxel moves by more than 2 grey levels (out of 255) | 0.62 – 0.82 |
+| **±4** | no voxel moves by more than 4 | 0.50 – 0.69 |
+| **Light** | lossy WebP (quality 80): small visual changes | 0.35 – 0.61 |
+| **Very light** | lossy WebP (quality 50): visible smoothing | 0.22 – 0.40 |
+
+![The same real brick in the five compressions: top, the middle slice; bottom, the difference from the original (× 16).](img-en/f5/colonnes.png){width=100%}
+
+- The **background stays exactly black** in every column: ±2 and ±4 keep 0 apart; the lossy columns put back to 0 the small values that "bleed" (a **dead zone**).
+- Three **cut copies** (XY planes, XZ / YZ rows, small oblique bricks) make the Studio's native cuts fast: a native oblique cut read 23 MB instead of 60 on a 1946² × 72 embryo. → ch. 7
+- The price: **more disk space** (9 MB of bricks → about 80 MB for the demonstration dataset). What each visitor downloads, on the other hand, goes down.
 
 # 7. The end of the pipeline
 
@@ -338,6 +363,16 @@ cells). The viewer applies this displacement **to the view**, not to the voxels:
 | **512** (default) | the finest level whose longest XY side is at most **768** px |
 | **1024** | the finest level whose longest side is at most **1,536** px |
 | **Native** | level 0, full resolution |
+
+On a **format-5** dataset, the menu becomes a **table**: one row per level, one column per compression. Each cell gives its download size, the estimated time and the graphics memory; a click loads it. It opens on **512 · ±2**.
+
+![The quality matrix of the demonstration dataset (sidebar widened for the capture; on screen, scroll the table to the right).](img-en/f5/matrice.png){.shot width=80%}
+
+| Colour | Meaning |
+|---|---|
+| green | fits comfortably in graphics memory |
+| amber | tight |
+| red | too large: the overview stays coarser, zoom detail loads the cell around the view |
 
 If the graphics card does not have enough memory, the viewer takes **the next lighter level** and says so
 in a message. A progress line shows the quality, the percentage and the current step. → ch. 10
@@ -462,6 +497,7 @@ the page address (they travel in the link) or by downloading the **measurements 
 - Opening a slice in the Studio reloads it **at native level** (XY planes or byte ranges), with a progress bar.
 - **Channel colours** can be adjusted in the Studio without touching the annotations.
 - Export as **PNG** (the figure) or **JSON** (to resume it later); above 5 MB, the export is refused with a message.
+- **Every export offers "lossless"**: the 3D view ([Quality]{.ui}: [Current]{.ui} or [Lossless]{.ui}), the Studio ([Native lossless]{.ui} or [This picture]{.ui}) and *Decompose by channel*. Your annotations keep their place.
 
 ![Compare: two volumes and a photograph, shared tools and synchronisation (camera, time, slices, channels).](img-en/ch12/comparer.png){.shot width=70%}
 
@@ -526,6 +562,7 @@ pixel exact, useful if you want to quantify the blue / red ratio. The calibratio
 - **Bricks that are not stored** are areas that really are 0 after cleaning, not lost data.
 - **The display floor** (6 to 48) hides the faintest values on screen: lowering *min* will not bring them back.
 - **At most 4 channels** are displayed at the same time.
+- **A light cell skews no measurement**: in format 5, the ±2, ±4, Light and Very light columns change what you **see**, never what is **measured** or **exported losslessly**.
 - **Without calibration** in the file, no measurement in µm is offered.
 - **The 3D view is in perspective**: measure with the measuring tool or on a slice, not with the 3D scale bar.
 :::
@@ -600,7 +637,10 @@ Studio
 : The workshop for annotated figures at full resolution. → ch. 12 and 13
 
 Data format
-: The version number of how a dataset's files are organised (1 to 4). → ch. 17
+: The version number of how a dataset's files are organised (1 to 5). → ch. 17
+
+Matrix (quality)
+: In format 5, the "resolution × compression" table of the quality panel: each cell is a way of displaying the volume. → ch. 10
 :::
 
 ::: see

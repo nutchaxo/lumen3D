@@ -2,7 +2,7 @@
 title: "Handleiding voor de beheerder"
 subtitle: "Het beheerpaneel van Lumen3D, tabblad voor tabblad"
 eyebrow: "IRIBHM · ULB — Lumen3D"
-version: "Webplatform 1.59.3"
+version: "Webplatform 1.65.0"
 date: "Oktober 2026"
 abstract: "Alles wat u kunt doen vanuit het beheerpaneel van de site: datasets beheren en importeren, ze naar het huidige formaat brengen, de publieke site aanpassen, functies installeren en het platform bijwerken. Geschreven voor iemand die dit paneel nog nooit heeft gezien en niet kan programmeren."
 lang: nl
@@ -730,7 +730,7 @@ Dit bericht verschijnt wanneer u op **uitloggen** klikt of op een link die het p
 - De overdracht draait in een **Web Worker**: de interface blijft vloeiend. Ruwe blokken van **8 MiB** (kleiner op een PHP-host met strenge limieten: “Blokgrootte verlaagd naar {n} — sleep de map opnieuw om te hervatten.”), **4 blokken tegelijk**.
 - Elk blok draagt een **SHA-256-vingerafdruk** die **vóór** het schrijven wordt gecontroleerd. Een **serverjournaal** onthoudt de ontvangen blokken: dezelfde map opnieuw slepen hervat **tot op het blok nauwkeurig**; een al volledig bestand wordt niet opnieuw verstuurd.
 - Het journaal is hetzelfde onder beide servers (Python of PHP): een import die onder de ene is begonnen, kan onder de andere hervat worden.
-- Aanvaarde formaten: **formaten 2 tot 4** (`planes/`, `mips/`, bricks v3 en `index.bin`).
+- Aanvaarde formaten: **formaten 2 tot 5** (`planes/`, `mips/`, bricks v3 en `index.bin`, de matrix van formaat 5 met zijn indexen per compressie en zijn snijkopieën `xy/`, `xz/`, `yz/`, `cuts/`, als laatste verzonden).
 :::
 
 ## 4.9. Als er iets misgaat
@@ -752,7 +752,7 @@ Dit bericht verschijnt wanneer u op **uitloggen** klikt of op een link die het p
 # 5. Data-updates — het formaat van de datasets
 
 ::: chapter-intro
-- Een gepubliceerde dataset heeft een **formaat** (1 tot 4). Het huidige formaat is **4**.
+- Een gepubliceerde dataset heeft een **formaat** (1 tot 5). Het huidige formaat is **5**.
 - Dit tabblad brengt ze **ter plekke** op niveau, zoals een software-update.
 - U kiest **wie het werk doet**: deze browser of de server. Niets is verplicht.
 :::
@@ -763,24 +763,29 @@ Dit bericht verschijnt wanneer u op **uitloggen** klikt of op een link die het p
 
 ## 5.1. Waarom en voor wie
 
-Elke volumedataset (`3d`, `live`) heeft een **gegevensformaat** (`formatVersion`, afwezig = formaat 1). Een dataset uit de verwerkingsketen **0.21.0** is al in **formaat 4**: hij hoeft **niets**. De **2D-foto's** worden nooit geraakt.
+Elke volumedataset (`3d`, `live`) heeft een **gegevensformaat** (`formatVersion`, afwezig = formaat 1). Een dataset uit de verwerkingsketen **0.22.0** komt aan in **formaat 4**: alleen stap **4 → 5** blijft over (de pipeline schrijft formaat 5 rechtstreeks met de optie `--format 5`). De **2D-foto's** worden nooit geraakt.
 
 ::: note
-**Data-updates zijn niet nodig om de site te laten werken.** De viewer leest altijd de formaten 1, 2, 3 en 4; de Studio valt terug op de bricks als `planes/` ontbreekt. Ze **versnellen** bepaalde bewerkingen van de Studio en **verbeteren** de weergavekwaliteit.
+**Data-updates zijn niet nodig om de site te laten werken.** De viewer leest altijd de formaten 1 tot 5; de Studio valt terug op de bricks als `planes/` ontbreekt. Ze **versnellen** bepaalde bewerkingen van de Studio en **verbeteren** de weergavekwaliteit.
 :::
 
-## 5.2. De drie stappen
+## 5.2. De vier stappen
 
-Ze volgen elkaar in volgorde op: een dataset in formaat 1 krijgt ze alle drie.
+Ze volgen elkaar in volgorde op: een dataset in formaat 1 krijgt ze alle vier.
 
 | Stap | Titel op het scherm | Wat ze aanmaakt | Wat het oplevert |
 |---|---|---|---|
 | **1 → 2** | Kopie per vlak van het native niveau (snelle XY-sneden in de Studio) | `planes/`: één bestand per z-vlak, verliesloze PNG-tegels van 512² (≈ 1,3× het native niveau in schijfruimte). De bricks worden niet aangeraakt. | Een native XY-snede leest **één vlak** in plaats van een laag van 64 vlakken: tientallen keren minder bytes, resultaat pixelidentiek. |
 | **2 → 3** | Maximumprojecties van elke brick-laag (snelle z-stackfiguren over de hele stapel) | `mips/`: één maximumprojectie per laag van 64 vlakken. | Een z-stackfiguur over de hele stapel leest ~3 pakketten in plaats van ongeveer 150. |
 | **3 → 4** | Brick-piramide v3: ook in Z gehalveerd, rand van één voxel, binaire index | **Bouwt** `bricks/` **opnieuw op**: bricks van 66³ met rand, ook in Z gehalveerde niveaus, `index.bin`. | Naadloze filtering, lokaal detail (“Detail bij inzoomen”), lichtere atlassen voor 1 tot 2 kanalen. |
+| **4 → 5** | Matrix resolutie × compressie: niveaus op 256·2ᵏ met alle coupes, vijf compressies, snelle sneden | **Bouwt** `bricks/` **opnieuw op**: niveaus van 4096, 2048… 256 voxels breed die alle coupes behouden; elk in vijf compressies (verliesvrij, ±2, ±4, licht, zeer licht); kopieën voor XY-, XZ / YZ- en schuine sneden. | De bezoeker kiest zijn vakje in een **kwaliteitstabel**; lichtere downloads; snelle native sneden in alle richtingen; metingen en exports altijd verliesvrij. |
 
 ::: warning
-**Stap 3 → 4 bouwt de boom `bricks/` opnieuw op.** Het **native niveau blijft voxel voor voxel behouden**; de grovere niveaus worden herberekend. De oude boom wordt verwijderd **nadat** de versie is omgezet. Bewaar bij kostbare data een reservekopie, zoals bij elke bewerking op bestanden.
+**Stappen 3 → 4 en 4 → 5 bouwen de boom `bricks/` opnieuw op.** Het **native niveau blijft voxel voor voxel behouden**; de grovere niveaus worden herberekend. De oude boom wordt verwijderd **nadat** de versie is omgezet, behalve als het vakje [Vorige versie bewaren]{.ui} is aangevinkt (hij blijft dan ernaast staan als `bricks.previous/`, om te vergelijken met het hulpmiddel *Chunk debug*; hij neemt de ruimte van de bricks een tweede keer in, verwijder hem na de vergelijking). Bewaar bij kostbare data een reservekopie, zoals bij elke bewerking op bestanden.
+:::
+
+::: note
+**Formaat 5 neemt veel meer schijfruimte in**: het bewaart hetzelfde volume meerdere keren. Bij de demodataset worden 9 MB bricks ongeveer 80 MB. Het paneel weigert te starten als het resultaat niet past (§ 5.9).
 :::
 
 ## 5.3. Overzicht van het tabblad
@@ -792,7 +797,7 @@ Ze volgen elkaar in volgorde op: een dataset in formaat 1 krijgt ze alle drie.
 |-|----------------------|
 | 1 | [Pauzeren]{.ui} (of [Hervatten]{.ui}); ernaast [Vernieuwen]{.ui} en [Alles bijwerken]{.ui}. |
 | 2 | De **strook met de twee wachtrijen**: een label per uitvoerder, met zijn status. |
-| 3 | De **kaart van een dataset**: naam, soort, “formaat 1 → 4”, geschatte eenheden en grootte, genummerde **stappen**. |
+| 3 | De **kaart van een dataset**: naam, soort, “formaat 1 → 5”, geschatte eenheden en grootte, genummerde **stappen**. |
 | 4 | De **uitvoerderskiezer**: [Deze browser]{.ui} of [De server]{.ui}. |
 | 5 | Het **voortgangsgebied**: “stap i van n”, balk, percentage, voltooide eenheden, **resterende tijd**, eenheden per minuut. |
 | 6 | Het kruisje: **annuleren**: “De voortgang van deze update verwijderen? De dataset blijft zoals hij was.” |
@@ -809,7 +814,7 @@ Twee “uitvoerders” kunnen het werk doen:
 | Uitvoerder | Wie rekent | Wat nodig is |
 |---|---|---|
 | **Deze browser** | Uw browser downloadt de bricks, zet ze opnieuw samen (Web Workers) en stuurt het resultaat **eenheid voor eenheid** terug. | Een browser die kan comprimeren, PNG-tegels exact terug kan lezen en verliesloze WebP kan coderen. |
-| **De server** | De server converteert zelf, via kleine verzoeken met een tijdslimiet. Geschikt voor gedeelde hosting. | Decoderen (en, voor stap 3 → 4, coderen) van verliesloze WebP (GD van PHP of Pillow van Python), zlib, NumPy aan Python-kant, minstens 128 MiB per verzoek en 10 s uitvoertijd. |
+| **De server** | De server converteert zelf, via kleine verzoeken met een tijdslimiet. Geschikt voor gedeelde hosting. | Decoderen (en, voor stap 3 → 4, coderen) van verliesloze WebP (GD van PHP of Pillow van Python), zlib, NumPy aan Python-kant, minstens 128 MiB per verzoek en 10 s uitvoertijd. **Stap 4 → 5: alleen Python-server.** |
 
 - De keuze gebeurt **per dataset**, **vóór** het starten; ze is **tijdens de uitvoering vergrendeld** en tussen twee uitvoeringen te wijzigen.
 - Een uitvoerder die het niet kan, is **grijs**, met een tooltip die zegt waarom (bijvoorbeeld “de server kan lossless WebP-afbeeldingen niet decoderen”).
@@ -820,6 +825,10 @@ Twee “uitvoerders” kunnen het werk doen:
 
 ::: tip
 Staat op een gedeelde hosting de optie [De server]{.ui} op grijs, dan **werkt [Deze browser]{.ui} altijd**: hij doet het werk, de server bewaart alleen.
+:::
+
+::: note
+**Stap 4 → 5 op een PHP-host.** Een PHP-server kan deze stap niet zelf uitvoeren: de tooltip van [De server]{.ui} zegt “op deze server draait deze update in de browser”. De browser vraagt de server wat hij moet lezen, berekent elke eenheid en stuurt die terug; de server controleert alles en stelt het resultaat samen. Er is een browser nodig die WebP **met** verlies kan coderen (anders: “deze browser kan geen WebP-afbeeldingen met verlies coderen”). Gemeten op de demodataset E8 (een oud formaat 1): stap 4 → 5 duurde **339 eenheden en 4 minuten** in de browser.
 :::
 
 ## 5.5. De snelheidstest
@@ -869,7 +878,7 @@ Getoonde statussen: **Wacht op zijn beurt** (“volgende op de server”), **Bez
 ::: legend
 | n | wat het is |
 |-|----------------------|
-| 1 | **Gegevensformaten**: het nieuwste formaat (4) en de lijst van de drie updates (“1 → 2”…). |
+| 1 | **Gegevensformaten**: het nieuwste formaat (5) en de lijst van de vier updates (“1 → 2”…). |
 | 2 | **Geschiedenis**: de laatste 20 bewerkingen, onthouden in deze browser. |
 | 3 | [Wissen]{.ui}: maakt de geschiedenis leeg. |
 :::
@@ -890,6 +899,17 @@ Een geschiedenisregel toont “formaat {v} · {n} eenheden · {duur} · {uitvoer
 | Geen enkele uitvoerder kan alle stappen uitvoeren van: … | Probeer [Deze browser]{.ui}, of verwerk opnieuw met de verwerkingsketen. |
 | Update van {naam} gestopt: de server kan een eenheid niet binnen zijn tijdslimiet converteren. | Start hem opnieuw in deze browser. |
 | De updatestatus kon niet worden gelezen. | [Vernieuwen]{.ui}. |
+
+## 5.10. Op een computer converteren en daarna importeren
+
+Voor een zeer grote dataset, of een te trage host, kan de conversie **op een computer** met Python gebeuren (bijvoorbeeld de verwerkingswerkplek):
+
+::: steps
+1. Kopieer de map van de dataset (bijvoorbeeld `DATA_WEB/3d/<map>`) naar de computer, in een kopie van het platform.
+2. Start `python tools/convert_dataset.py DATA_WEB/3d/<map>`. `--list` toont alleen de wachtende stappen; `--keep-previous` bewaart de oude boom.
+3. Een onderbroken conversie **gaat verder** waar ze stopte als u de opdracht opnieuw start.
+4. Sleep de geconverteerde map naar het tabblad **Importeren** (hoofdstuk 4): het aanvaardt een dataset in formaat 5 en controleert hem volledig voordat u hem kunt publiceren.
+:::
 
 # 6. Soorten data — de publieke naam van elke categorie
 
@@ -1778,7 +1798,7 @@ Het wordt **op het verwerkingswerkstation geïnstalleerd, niet op deze server**:
 Het pakket bevat **twee pipelines** (volumes met tracking, trackinganalyse), de **import van 2D-foto's**, voorbeeldinvoer (meteen bruikbaar om te oefenen) en een starter die **zijn eigen integriteit controleert** (SHA-256).
 
 ::: note
-**Twee nummers, en dat is normaal.** De kop toont `pipeline v0.21.0`: de versie **van het pakket**, niet die van de site. De pipeline 0.21.0 schrijft **rechtstreeks formaat 4** (geen data-update nodig op zijn uitvoer), **behoudt de curatie** die in het paneel is gedaan wanneer een dataset opnieuw wordt verwerkt (verborgen, naam, oriëntatie…) en **publiceert alles of niets**.
+**Twee nummers, en dat is normaal.** De kop toont `pipeline v0.21.0`: de versie **van het pakket**, niet die van de site. De pipeline 0.22.0 schrijft **formaat 4** (alleen stap 4 → 5 blijft over in **Data-updates**), of formaat 5 met de optie `--format 5`, **behoudt de curatie** die in het paneel is gedaan wanneer een dataset opnieuw wordt verwerkt (verborgen, naam, oriëntatie…) en **publiceert alles of niets**.
 :::
 
 Wanneer een nieuwere versie van het pakket wordt gepubliceerd, verschijnt bovenaan een **banner**: “Nieuwe versie van het pakket: v… — Deze server biedt v… aan. Download hieronder de nieuwe versie; het platform zelf hoeft hiervoor niet te worden bijgewerkt.” met [Download v…]{.ui}; voor de lichte editie houdt [Geïnstalleerde versie]{.ui} het pakket van de server bereikbaar.
@@ -2081,13 +2101,14 @@ Een tabblad dat niet laadt, toont “Dit tabblad kon niet worden geladen. Herlaa
 |---|---|
 | **Kanaal** | Een fluorescente kleuring (DAPI, GFP, Pecam1…). Een dataset bevat er vaak meerdere, over elkaar heen gelegd. |
 | **Voxel** | Het equivalent van een pixel in drie dimensies. Zijn werkelijke grootte wordt door de kalibratie gegeven (§3.6). |
-| **Brick** | Een kleine volumekubus (64×64×64 voxels, of 66³ met rand in formaat 4). De site laadt ze op aanvraag om volumes van meerdere gigabytes te tonen zonder alles te downloaden. |
+| **Brick** | Een kleine volumekubus (64×64×64 voxels, of 66³ met rand in de formaten 4 en 5). De site laadt ze op aanvraag om volumes van meerdere gigabytes te tonen zonder alles te downloaden. |
 | **LOD** | *Level of Detail*: meerdere resoluties van hetzelfde volume. De site toont eerst een grove versie en verfijnt dan. |
 | **Soort dataset** | Een van de drie categorieën: `3d` (vast volume), `2d` (gekalibreerde foto), `live` (4D-tijdreeks, eventueel met de tracking van zijn cellen). Dit zijn de mappen van de server; de naam die het publiek ziet, stelt u in bij **Soorten data** (hoofdstuk 6). |
 | **Gegevensformaat** (`formatVersion`) | Het “inrichtingsniveau” van een gepubliceerde dataset, van 1 tot 4 (huidig: 4). Wordt op niveau gebracht in **Data-updates**. |
 | **Vlakken** (`planes/`) | Formaat 2: een kopie van het native niveau **vlak voor vlak** (verliesloze PNG), voor snelle XY-sneden in de Studio. |
 | **Laagprojecties** (`mips/`) | Formaat 3: de maximumprojectie van elke laag van 64 vlakken, voor snelle z-stackfiguren. |
 | **Brick-piramide v3** | Formaat 4: bricks van 66³ met een rand van één voxel, ook in Z gehalveerde niveaus, `index.bin`. Brengt naadloze filtering en “Detail bij inzoomen”. |
+| **Matrix (formaat 5)** | Formaat 5: hetzelfde volume op meerdere resoluties (alle coupes behouden) en in vijf compressies (verliesvrij, ±2, ±4, licht, zeer licht), plus kopieën voor snelle sneden. De bezoeker kiest zijn vakje in een tabel; metingen en exports blijven verliesvrij. |
 | **Zijde van het monster** | Instelling die zegt of het bestand het monster van bovenaf (“rechtop”) of van onderaf (“ondersteboven”) toont. |
 | **Standaardweergave** | De stand waarin een dataset opent, vastgelegd vanuit het voorbeeld. |
 
@@ -2114,4 +2135,4 @@ Een tabblad dat niet laadt, toont “Dit tabblad kon niet worden geladen. Herlaa
 
 ---
 
-*Document geschreven voor versie **1.59.3** van het platform (pipeline 0.21.0, gegevensformaat 4). De schermafbeeldingen tonen een demodataset (synthetische embryo's); de kleuren kunnen afwijken als het thema is gewijzigd.*
+*Document geschreven voor versie **1.65.0** van het platform (pipeline 0.22.0, gegevensformaat 5). De schermafbeeldingen tonen een demodataset (synthetische embryo's); de kleuren kunnen afwijken als het thema is gewijzigd.*

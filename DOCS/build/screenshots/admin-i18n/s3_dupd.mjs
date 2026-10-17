@@ -32,7 +32,7 @@ await shot(page, 'dupd-running', { clip: full, targets: [
 const card = await page.locator('.dupd-ds').first().boundingBox();
 await shot(page, 'dupd-dataset-card', { clip: { x: card.x - 6, y: card.y - 6, width: card.width + 12, height: card.height + 12 }, targets: [
   { sel: '.dupd-ds .dupd-ds-steps', n: 1, side: 'bottom', dy: -4 }, { sel: '.dupd-ds .dupd-seg', n: 2, side: 'left' }, { sel: '.dupd-ds [data-dupd="cancel"]', n: 3, side: 'left' }, { sel: '.dupd-ds-live', n: 4, side: 'right', dx: -300 } ] });
-for (let i = 0; i < 100; i++) { await sleep(2000); if (!(await page.locator('.dupd-ds').count())) break; }
+for (let i = 0; i < 300; i++) { await sleep(2000); if (!(await page.locator('.dupd-ds').count())) break; }
 await top(); await sleep(1500);
 await page.evaluate(() => document.querySelectorAll('.dupd-fold').forEach(d => { d.open = true; }));
 await sleep(600);

@@ -224,6 +224,7 @@ At `init`, the page hands each plugin a **context**: a façade that gives access
 | `ctx.ui` | `toast`, `addSidebarSection`, `addCanvasPanel`, `getCanvas`, `openStudio`… |
 | `ctx.tools` | The current exclusive tool, `activate`, `onChange` |
 | `ctx.tracking` | The cell tracking of a timelapse (below) |
+| `ctx.data` | The **exact voxels**, lossless, whatever quality is displayed (below) |
 | `ctx.workspace` | Read / apply the workspace |
 | `ctx.i18n` | `t('key')`: looks up `plugins.<id>.key`, automatic fallback to English |
 | `ctx.slicer` | The oblique slice plane |
@@ -251,6 +252,22 @@ The five tracking plugins never read `tracks.json` themselves. The page keeps **
 | `on('loaded' · 'frame' · 'refresh' · 'selection' · 'options' · 'style', callback)` | Subscribe; returns the unsubscribe function |
 
 Result: clicking a cell in the Inspector also selects it in the trajectories and the charts, without them talking to each other.
+
+### The exact voxels: `ctx.data`
+
+Since platform 1.64, a plugin that **computes** something (intensity profile, histogram of a region, measurement) goes through `ctx.data`: it reads the **lossless** column of the bricks, never the graphics card's image, which may be a lossy column (section 7.11).
+
+| Function | Role |
+|---|---|
+| `screenToVoxel(x, y)` | The point under the cursor: `{ um, voxel, onBoundingBox }` (µm and native voxel) |
+| `toVoxel(um, { level })`, `toUm(voxel, { level })` | Go from micrometres to the voxels of a level, and back |
+| `locate(voxel, channel)` | Which file, and which bytes, hold this lossless voxel |
+| `readRegion(box, channels, { level })` | The exact voxels of a box (decoded in a worker; refused above 512 MiB) |
+| `valueAt(voxel)` | The exact value of each channel at a voxel |
+
+::: example
+A plugin that shows "intensity at the clicked point" calls `ctx.data.screenToVoxel(x, y)`, then `ctx.data.valueAt(voxel)`. Even if the visitor is looking at the 256 · Very light cell, the value returned is the native voxel's, exact. Works on formats 2 to 5.
+:::
 
 ### A plugin's texts
 

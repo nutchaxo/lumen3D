@@ -708,19 +708,32 @@ origin at the corner of voxel (0, 0, 0)) → level-k voxel (`µm / v_k`) → fil
 * **Implementation (web 1.64.0).** `readRegion` reads the level's `ll` bricks through
   `BrickLoader` (byte ranges, decode workers), on format 2–5 trees; `locate` returns the brick,
   its pack path (relative to the tree, without the `?v=` stamp), offset and length, and the
-  plane file of format 2. `omeZarr` is not returned until §14.9 exists.
+  plane file of format 2. `locate` names no OME-Zarr path: the §14.9 store is a download the
+  browser builds, not a file of the dataset.
 
 ### 14.9 OME-Zarr v0.5 export (Download Center)
-A format-5 dataset can carry `download/<folder>.ome.zarr/` — Zarr v3 / OME-NGFF 0.5: `multiscales`
-with axes `c, z, y, x` (`z, y, x` in `micrometer`), one dataset per §14.1 level (`scale` = its
-voxel size), `uint8`, **sharding** codec (shards of 1 × 64 × 1024 × 1024, inner chunks
-1 × 64 × 64 × 64, inner codecs `bytes` + `zstd` level 3, index at the end), `omero` channel names /
-colours / windows from `metadata.json`. Served like any `download/` file (byte ranges), so napari /
-Fiji / Neuroglancer open it by URL. The Download Center lists it as one entry (total size, *Copy
-URL*, *Open in napari* hint) and offers `<folder>.ome.zarr.zip` — the same store in an
-uncompressed (STORED) zip — for a one-file download. It is also what `DataAccess.locate` names for
-a voxel. It is an export, not part of the format: a dataset is format 5 without it, and it is made
-by its own step (web 1.65 plan) from the `ll` levels.
+Built **in the browser** (web 1.66, `js/core/ome-zarr.js` + `ome-zarr-export.js` +
+`js/workers/ome-zarr-worker.js`) from the mounted dataset's lossless bricks (`ll` of a format-5
+tree, the only column of a v2 / v3 tree — the same reads as `DataAccess.readRegion`), so every host
+offers it without any server work, and saved as **one file** `<folder>.ome.zarr.zip` (STORED zip,
+ZIP64 past 4 GiB or 65 535 entries; through the File System Access API when the browser has it —
+no size limit — else a Blob, with a warning above 1.5 GB). Zarr v3 / OME-NGFF 0.5:
+* root `zarr.json`: group, `attributes.ome = {version: "0.5", multiscales: [{axes c, z, y, x (z, y, x
+  in micrometer), datasets: one per exported level, path = its index, scale [1, vz, vy, vx]}],
+  omero: {channels: label / colour / window from `metadata.json`, rdefs}}`;
+* `<k>/zarr.json`: shape [C, Z_k, Y_k, X_k], `uint8`, fill 0, regular chunk grid
+  1 × 64 × 1024 × 1024, chunk keys `default` / `/`, codec `sharding_indexed` (inner chunk
+  1 × 64 × 64 × 64, inner codecs `bytes` + **`gzip`**, index codecs `bytes` + `crc32c`, index at the
+  end, 2⁶⁴ − 1 for an absent chunk);
+* one inner chunk = one 64³ brick of the level (0 past the volume), so a shard file
+  `<k>/c/<c>/<bz>/<sy>/<sx>` = one brick layer × 16 × 16 bricks of one channel; an all-zero chunk is
+  absent, an all-absent shard has no file.
+The operator picks the levels (native first; sizes shown from the pack index) and the channels
+(renumbered 0..n−1 in the store). A timelapse exports the timepoint on screen (axes c, z, y, x).
+**gzip, not zstd**: a browser has no zstd encoder (`CompressionStream` offers gzip / deflate), and
+every OME-Zarr reader decodes gzip. Checked by `tests/js/test_ome_zarr.mjs` (Python's zipfile and,
+when installed, zarr-python ≥ 3 read the store back voxel for voxel). A store served by URL beside
+`download/` (napari / Neuroglancer by URL) is not produced: the export is a download.
 
 ### 14.10 Migration `m005-matrix` — stages and units
 Units are tuples `(stage, t, k, c, a, b, d)`; keys:

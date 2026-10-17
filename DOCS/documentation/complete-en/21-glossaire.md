@@ -8,7 +8,7 @@
 
 ::: glossary
 Apron (border)
-: An extra voxel around a brick, copied from its neighbours, so that filtering leaves no seam between two bricks. Format 4 bricks are 66³ for 64³ of useful data. → chapter 7
+: An extra voxel around a brick, copied from its neighbours, so that filtering leaves no seam between two bricks. Format 4 and 5 bricks are 66³ for 64³ of useful data. → chapter 7
 
 Atlas
 : A large 3D texture in graphics memory where the bricks to display are stored, like the pigeonholes of a locker. → chapter 10
@@ -49,6 +49,9 @@ Cell tracking
 Channel
 : One image of the same object for a given fluorescence colour (for example DAPI, Pecam1, Sox2). → chapter 4
 
+Column (compression)
+: In format 5, one of the five ways to store a level: lossless, ±2, ±4, light (WebP 80), very light (WebP 50). Chosen in the quality matrix. → chapters 7 and 10
+
 Confocal (microscope)
 : A microscope that records only the light coming from a very thin plane of the specimen, plane after plane; the stack of planes forms the volume. → chapter 4
 
@@ -61,11 +64,17 @@ CSP (Content Security Policy)
 CSRF (anti-forgery token)
 : An attack in which a third-party site makes a request without your knowledge, from your session. A secret token, required for every change, prevents it. → chapter 19
 
+Cut copies
+: In format 5, three re-cut copies of the volume (XY planes, XZ / YZ rows, small oblique bricks) that make the Studio's native cuts fast. → chapter 7
+
 DAPI, Pecam1, Sox2
 : The three channels of the demonstration dataset: DAPI stains DNA (the nuclei), Pecam1 marks the vessels, Sox2 the neural tissue. → chapter 4
 
 Data format
-: The way a dataset is laid out on disk; numbered 1 to 4. The current format is 4. → chapters 7 and 17
+: The way a dataset is laid out on disk; numbered 1 to 5. The current format is 5. → chapters 7 and 17
+
+Dead zone
+: In format 5, a threshold (0 to 12) below which a lossy-compressed brick puts small values back to 0, so the background stays black; written in one byte at the end of the brick. → chapter 7
 
 Deconvolution
 : A calculation that tries to undo the blur of the optics to sharpen the image. Lumen3D does not do it. → chapter 20
@@ -80,7 +89,7 @@ Embryonic day (E8.5)
 : The age of a mouse embryo: E8.5 means eight and a half days after fertilisation. The platform reads the stage from the file name (E8-5 means E8.5). → chapter 8
 
 ESS (Empty Space Skipping)
-: Bricks whose voxels are all 0 are neither stored nor traversed, which saves bytes and computation. In format 4 the rule is exact (a single non-zero voxel is enough to keep the brick); before, an occupancy threshold of 0.05 % also discarded nearly empty bricks. → chapters 7 and 9
+: Bricks whose voxels are all 0 are neither stored nor traversed, which saves bytes and computation. In formats 4 and 5 the rule is exact (a single non-zero voxel is enough to keep the brick); before, an occupancy threshold of 0.05 % also discarded nearly empty bricks. → chapters 7 and 9
 
 Executor
 : Whoever does the work of a data conversion: the browser or the server. It can change along the way, the journal is shared. → chapter 17
@@ -122,7 +131,7 @@ Idempotent
 : An Imaris file: an HDF5 container that holds the channels, the resolution levels and the metadata of an acquisition. → chapter 4
 
 index.bin
-: A format 4 binary file that says which pack holds each brick; it replaces the large JSON manifest. → chapter 7
+: A binary file of formats 4 and 5 (one per column in format 5) that says which pack holds each brick; it replaces the large JSON manifest. → chapter 7
 
 Intensity
 : The value of a voxel: how much light was measured at that spot. In the viewer it is relative (0 to 255), not calibrated. → chapters 4 and 11
@@ -146,13 +155,16 @@ Lossless WebP
 : A compressed image format that restores the original values exactly; it stores the brick mosaics. → chapter 6
 
 Lossy, lossless compression
-: With loss, the file is smaller but the values are slightly modified; lossless, the original values are recovered exactly. Bricks are stored losslessly. → chapter 6
+: With loss, the file is smaller but the values are slightly modified; lossless, the original values are recovered exactly. Bricks are stored losslessly; format 5 adds, for display only, ±2, ±4 and lossy columns. → chapters 6 and 7
 
 Manifest
 : A file that describes the content of a dataset (levels, bricks, packs). → chapter 7
 
 Mask
 : A black-and-white image that says which pixels count (white) and which are discarded (black). → chapter 5
+
+Matrix (quality)
+: The "resolution × compression" table of the quality panel of a format-5 dataset: one row per level, one column per compression; each cell shows its size and graphics memory. → chapter 10
 
 Median filter
 : Replaces each value with the median of its neighbours: it removes isolated spots without blurring the edges. → chapter 5

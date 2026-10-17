@@ -245,6 +245,42 @@ function makeLoader(files) {
   assert.deepEqual(Array.from(runs.get(100)), Array.from(pack.subarray(100, 120)), 'a multipart answer sliced per run');
   assert.equal(requests[requests.length - 1].split(',').length, 3, 'three runs, one request');
   console.log('CutStore xz row and multi-range runs: OK');
+
+  // The same rows decoded through the worker pool (js/workers/cut-decode-worker.js, which
+  // loads plane-codec.js and cut-store.js itself), run here in a vm behind a Worker stand-in.
+  const { readFileSync } = await import('node:fs');
+  const vmMod = await import('node:vm');
+  const pathMod = await import('node:path');
+  const root = pathMod.resolve(pathMod.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1')), '..', '..');
+  let handled = 0;
+  class FakeWorker {
+    constructor() {
+      const ctx = vmMod.createContext({ console, URL, Blob: globalThis.Blob, Response: globalThis.Response,
+        DecompressionStream: globalThis.DecompressionStream, CompressionStream: globalThis.CompressionStream, BigInt,
+        location: { href: 'http://x/js/workers/cut-decode-worker.js' } });
+      ctx.self = ctx;
+      ctx.importScripts = (...files) => { for (const f of files) vmMod.runInContext(readFileSync(pathMod.join(root, 'js', f.replace(/^\.\.\//, '').split('?')[0]), 'utf8') + '\n;globalThis.PlaneCodec = typeof PlaneCodec !== "undefined" ? PlaneCodec : globalThis.PlaneCodec; globalThis.CutStore = typeof CutStore !== "undefined" ? CutStore : globalThis.CutStore;', ctx); };
+      ctx.postMessage = (m) => setTimeout(() => this.onmessage?.({ data: m }), 0);
+      vmMod.runInContext(readFileSync(pathMod.join(root, 'js/workers/cut-decode-worker.js'), 'utf8'), ctx);
+      this._ctx = ctx;
+    }
+    postMessage(m) { handled++; setTimeout(() => this._ctx.onmessage({ data: m }), 0); }
+  }
+  const CSW = loadModule('js/core/cut-store.js', 'CutStore', {
+    fetch: fetchImpl, PlaneCodec, BrickLoader: BL, URL, Blob: globalThis.Blob, OffscreenCanvas: undefined, createImageBitmap: undefined,
+    Worker: FakeWorker, document: { querySelector: () => null }, navigator: { hardwareConcurrency: 4 }
+  });
+  const treeW = CSW.open('DATA_WEB/3d/F/bricks', {
+    schema: 'iribhm-bricks-v5',
+    levels: [{ level: 0, dimensions: { x: W, y: 300, z: Z } }],
+    index: { columns: { ll: { url: 'index/ll.bin', sha256: 'a'.repeat(64) } }, cuts: [] }
+  });
+  for (const r of [0, 2]) {
+    const got = await treeW.orthRow('xz', 0, 0, 64 + r);
+    assert.deepEqual(Array.from(got.data), Array.from(rows[r]), `row ${r} decoded in the worker pool`);
+  }
+  assert.ok(handled >= 3, `the pool decoded the tiles (${handled} jobs)`);
+  console.log('CutStore decode pool: OK');
 }
 
 // ── T5: DataAccess frames and locate ──────────────────────────────────────────

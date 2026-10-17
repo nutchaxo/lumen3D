@@ -1,0 +1,33 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 420" font-family="Inter, sans-serif"><defs><marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#4a5468"/></marker></defs>
+<rect width="800" height="420" rx="16" fill="#f8f9fd"/>
+<text x="400.0" y="34" font-size="18" font-weight="800" fill="#1c2333" text-anchor="middle" >The levels of the demonstration dataset: format 4 and format 5</text>
+<text x="200" y="70" font-size="15" font-weight="800" fill="#868e96" text-anchor="middle" >Format 4</text>
+<text x="200" y="89" font-size="11.5" font-weight="500" fill="#4a5468" text-anchor="middle" >X, Y halved; Z too while the voxel stays ≈ cubic</text>
+<rect x="50.0" y="108" width="300.0" height="54.0" rx="6" fill="#f1f3f5" stroke="#868e96" stroke-width="1.5" />
+<text x="200" y="136.0" font-size="12.5" font-weight="700" fill="#1c2333" text-anchor="middle" >768 × 576 × 112</text>
+<text x="200" y="150.0" font-size="10" font-weight="500" fill="#4a5468" text-anchor="middle" >1.2 × 1.2 × 3.0 µm</text>
+<rect x="115.0" y="172.0" width="170" height="47.0" rx="6" fill="#f1f3f5" stroke="#868e96" stroke-width="1.5" />
+<text x="200" y="196.5" font-size="12.5" font-weight="700" fill="#1c2333" text-anchor="middle" >384 × 288 × 56</text>
+<text x="200" y="210.5" font-size="10" font-weight="500" fill="#4a5468" text-anchor="middle" >2.4 × 2.4 × 6.0 µm</text>
+<rect x="115.0" y="229.0" width="170" height="43.5" rx="6" fill="#f1f3f5" stroke="#868e96" stroke-width="1.5" />
+<text x="200" y="251.75" font-size="12.5" font-weight="700" fill="#1c2333" text-anchor="middle" >192 × 144 × 28</text>
+<text x="200" y="265.75" font-size="10" font-weight="500" fill="#4a5468" text-anchor="middle" >4.8 × 4.8 × 12.0 µm</text>
+<rect x="115.0" y="282.5" width="170" height="41.75" rx="6" fill="#f1f3f5" stroke="#868e96" stroke-width="1.5" />
+<text x="200" y="304.375" font-size="12.5" font-weight="700" fill="#1c2333" text-anchor="middle" >96 × 72 × 14</text>
+<text x="200" y="318.375" font-size="10" font-weight="500" fill="#4a5468" text-anchor="middle" >9.6 × 9.6 × 24.0 µm</text>
+<text x="600" y="70" font-size="15" font-weight="800" fill="#3b5bdb" text-anchor="middle" >Format 5</text>
+<text x="600" y="89" font-size="11.5" font-weight="500" fill="#4a5468" text-anchor="middle" >the long side is 512 then 256; every slice kept</text>
+<rect x="450.0" y="108" width="300.0" height="54.0" rx="6" fill="#e8edff" stroke="#3b5bdb" stroke-width="1.5" />
+<text x="600" y="136.0" font-size="12.5" font-weight="700" fill="#1c2333" text-anchor="middle" >768 × 576 × 112</text>
+<text x="600" y="150.0" font-size="10" font-weight="500" fill="#4a5468" text-anchor="middle" >1.2 × 1.2 × 3.0 µm</text>
+<text x="442.0" y="140.0" font-size="12" font-weight="800" fill="#3b5bdb" text-anchor="end" >native</text>
+<rect x="500.0" y="172.0" width="200.0" height="54.0" rx="6" fill="#e8edff" stroke="#3b5bdb" stroke-width="1.5" />
+<text x="600" y="200.0" font-size="12.5" font-weight="700" fill="#1c2333" text-anchor="middle" >512 × 384 × 112</text>
+<text x="600" y="214.0" font-size="10" font-weight="500" fill="#4a5468" text-anchor="middle" >1.8 × 1.8 × 3.0 µm</text>
+<text x="492.0" y="204.0" font-size="12" font-weight="800" fill="#3b5bdb" text-anchor="end" >512</text>
+<rect x="515.0" y="236.0" width="170" height="54.0" rx="6" fill="#e8edff" stroke="#3b5bdb" stroke-width="1.5" />
+<text x="600" y="264.0" font-size="12.5" font-weight="700" fill="#1c2333" text-anchor="middle" >256 × 192 × 112</text>
+<text x="600" y="278.0" font-size="10" font-weight="500" fill="#4a5468" text-anchor="middle" >3.6 × 3.6 × 3.0 µm</text>
+<text x="507.0" y="268.0" font-size="12" font-weight="800" fill="#3b5bdb" text-anchor="end" >256</text>
+<text x="400" y="400" font-size="11.5" font-weight="600" fill="#4a5468" text-anchor="middle" >The same 112 slices in every level of format 5: depth never loses detail.</text>
+</svg>

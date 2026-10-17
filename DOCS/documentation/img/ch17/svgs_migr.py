@@ -14,19 +14,20 @@ def real_run():
 
 # ── Les quatre formats ─────────────────────────────────────────────────────────
 def formats_escalier():
-    b = [title(tr("Les quatre formats de données", "The four data formats"),
+    b = [title(tr("Les cinq formats de données", "The five data formats"),
                tr("Chaque marche ajoute une structure à côté des briques ; une migration sait y monter.",
                   "Each step adds a structure beside the bricks; a migration knows how to climb to it."))]
     steps = [
         ("grey", "1", tr("briques v2", "v2 bricks"), [tr("64³ sans bordure", "64³, no border"), tr("manifeste JSON", "JSON manifest"), tr("avant la 1.58.0", "before 1.58.0")], tr("(point de départ)", "(starting point)")),
         ("amber", "2", "planes/", [tr("un fichier par plan Z", "one file per Z plane"), tr("PNG 512² sans perte", "lossless 512² PNG"), tr("coupes XY rapides", "fast XY cuts")], "m002-planes"),
-        ("teal", "3", "mips/", [tr("MIP par couche de 64", "MIP per 64-plane layer"), tr("même moule que planes/", "same mould as planes/"), tr("z-stack rapides", "fast z-stack")], "m003-layer-mips"),
-        ("green", "4", tr("briques v3", "v3 bricks"), [tr("bricks/ reconstruit (66³)", "bricks/ rebuilt (66³)"), tr("bordure, Z réduit", "border, Z reduced"), tr("index.bin, détail local", "index.bin, local detail")], "m004-bricks-v3"),
+        ("teal", "3", "mips/", [tr("MIP par couche de 64", "MIP per 64-plane layer"), tr("rangé comme planes/", "laid out as planes/"), tr("z-stack rapides", "fast z-stack")], "m003-layer-mips"),
+        ("green", "4", tr("briques v3", "v3 bricks"), [tr("briques 66³", "66³ bricks"), tr("bordure, Z réduit", "border, Z reduced"), tr("index.bin, détail local", "index.bin, local detail")], "m004-bricks-v3"),
+        ("blue", "5", tr("matrice", "matrix"), [tr("niveaux 256·2ᵏ, tout Z", "levels 256·2ᵏ, all Z"), tr("5 compressions", "5 compressions"), tr("copies de coupe", "cut copies")], "m005-matrix"),
     ]
-    x0, w = 24, 178
+    x0, w = 24, 141
     for i, (col, num, hd, lines, mig) in enumerate(steps):
-        x = x0 + i * (w + 13)
-        top = 215 - i * 38
+        x = x0 + i * (w + 12)
+        top = 215 - i * 32
         s, soft = P[col]
         b.append(R(x, top, w, 330 - top + 24, soft, s, 12, 1.8))
         b.append(CIRC(x + 24, top + 26, 15, s))
@@ -37,13 +38,13 @@ def formats_escalier():
         b.append(R(x + 10, 322, w - 20, 22, "#fff", s, 11, 1.3))
         b.append(T(x + w / 2, 337, mig, 11.5, 700, s, "middle", mono=True, maxw=w - 24))
         if i:
-            b.append(L(x - 13, top + 60, x, top + 60, s, 2.4, arrow=True))
+            b.append(L(x - 12, top + 60, x, top + 60, s, 2.4, arrow=True))
     b.append(R(24, 372, 752, 70, "#fff", LINE, 12))
-    b.append(T(40, 396, tr("Trois faits à retenir", "Three facts to remember"), 13.5, 800))
-    b.append(T(40, 416, tr("• le viewer sait lire les formats 1 à 4 ; les marches 2 à 4 ne servent qu'à aller plus vite et plus beau ;",
-                           "• the viewer reads formats 1 to 4; steps 2 to 4 only make things faster and nicer;"), 12, 400, INK2, maxw=725))
-    b.append(T(40, 434, tr("• le pipeline 0.21.0 écrit directement le format 4 : un jeu fraîchement traité n'a rien à migrer.",
-                           "• pipeline 0.21.0 writes format 4 directly: a freshly processed dataset has nothing to migrate."), 12, 400, INK2, maxw=725))
+    b.append(T(40, 396, tr("À retenir", "To remember"), 13.5, 800))
+    b.append(T(40, 416, tr("• le viewer sait lire les formats 1 à 5 ; les marches 2 à 5 ne servent qu'à aller plus vite et plus beau ;",
+                           "• the viewer reads formats 1 to 5; steps 2 to 5 only make things faster and nicer;"), 12, 400, INK2, maxw=725))
+    b.append(T(40, 434, tr("• le pipeline 0.22.0 écrit le format 4 (le 5 avec --format 5) ; l'onglet Mises à jour des données monte au 5.",
+                           "• pipeline 0.22.0 writes format 4 (5 with --format 5); the Data updates tab climbs to 5."), 12, 400, INK2, maxw=725))
     save("formats-escalier.svg", 458, b)
 
 

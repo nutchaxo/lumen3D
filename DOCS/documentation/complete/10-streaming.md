@@ -58,6 +58,40 @@ Sur le jeu de démonstration E9.5, le plus grand côté est 768 : les trois rég
 Le viewer s'ouvre en qualité **512**. Un changement de qualité qui échoue laisse le volume précédent à l'écran et remet le menu en place.
 :::
 
+### Sur un jeu au format 5 : la matrice
+
+Sur un jeu au format 5 (section 7.11), le menu laisse place à un **tableau** : une ligne par niveau, une colonne par compression. Chaque case est une façon d'afficher le même volume ; **un clic la charge**.
+
+![Le panneau [Qualité de Rendu]{.ui} d'un jeu au format 5 (jeu de démonstration ; barre latérale élargie pour montrer les cinq colonnes).](img/f5/matrice.png){.shot width=85%}
+
+::: legend
+| n | ce que c'est |
+|-|----------------------|
+| 1 | Les **lignes** : un niveau, avec ses vraies dimensions (ici natif 768 × 576 × 112, puis 512 et 256). |
+| 2 | Les **colonnes** : [Sans perte]{.ui}, [±2]{.ui}, [±4]{.ui}, [Légère]{.ui}, [Très légère]{.ui}. Une info-bulle sur l'en-tête explique chaque compression. |
+| 3 | La **mémoire graphique** du niveau (« GPU 21,0 MB »), avec un trait de couleur. |
+| 4 | La **case active**, encadrée : ici **512 · ±2**, le réglage d'ouverture. Chaque case indique le **poids à télécharger** et, une fois le débit mesuré, le **temps estimé**. |
+:::
+
+| couleur | signification |
+|---|---|
+| vert | tient dans les trois quarts de la mémoire graphique estimée |
+| orange | juste : au-delà des trois quarts, ou seulement grâce à la compression graphique (section 10.3) |
+| rouge | ne tient pas : l'ensemble reste au niveau le plus fin qui tient, et le **détail au zoom** (section 10.8) va chercher la case choisie autour de ce que vous regardez |
+
+::: example
+**Jeu de démonstration** (lu sur la capture). Le natif sans perte pèse **7,5 Mo** ; la case d'ouverture, 512 · ±2, **2,3 Mo**, trois fois moins ; 256 · Très légère, **0,4 Mo**. La mémoire graphique dépend seulement de la ligne : 189 Mo au natif, 84 Mo à 512, 21 Mo à 256.
+:::
+
+- La case choisie est gardée dans l'espace de travail, l'adresse de la page (`512x512@b2`, `native@ll`…) et ce navigateur.
+- Le **détail au zoom** reste dans la **même colonne** que la case choisie.
+- La page **Comparer** répartit toujours la mémoire par lignes ; chaque panneau garde sa colonne.
+- La barre latérale fait 320 pixels de large : les dernières colonnes se voient en **faisant défiler le tableau vers la droite**.
+
+::: warning
+Une colonne avec perte **change les voxels affichés**, pas les données : les mesures, les plugins de calcul et les exports « sans perte » lisent toujours la colonne sans perte du niveau natif (chapitres 12 et 15).
+:::
+
 ## 10.3 L'atlas GPU et la table des pages
 
 Une brique de 64³ voxels est trop petite pour mériter sa propre texture ; en créer des centaines serait ingérable. Le viewer réserve donc en mémoire vidéo **de grands blocs d'emplacements identiques** : l'**atlas**.
@@ -77,6 +111,10 @@ L'atlas est un **entrepôt** dont toutes les étagères ont la même taille. La 
 ::: tech
 Un petit volume reste d'un seul tenant : si le niveau tient dans moins de **512 Mio** (en 4 octets par voxel) et dans les limites de la carte, il est stocké dans **une seule texture 3D** dense. Le jeu E9.5 au niveau 0 en est un exemple : 768 × 576 × 112 × 4 octets ≈ **189 Mio**. L'atlas à pages ne sert que pour les gros niveaux.
 :::
+
+### La compression graphique (timelapses)
+
+Depuis la plateforme 1.60, les images d'un **timelapse** peuvent être gardées dans la carte graphique sous forme **compressée** (blocs BC4 / BC5) : **0,5 octet** par voxel et par canal au lieu de 1, donc environ **deux fois plus d'instants** en mémoire. C'est de l'affichage seulement (les valeurs affichées s'écartent d'environ 1 à 2 niveaux de gris) ; le Studio et le détail au zoom restent exacts. Réglage [Compression GPU]{.ui} du panneau : [Timelapses]{.ui} (par défaut), [Activé]{.ui} ou [Désactivé]{.ui}. Sur un rendu logiciel, l'option est indisponible et le panneau le dit.
 
 ## 10.4 Le budget de mémoire vidéo
 
@@ -173,7 +211,7 @@ Vous zoomez fort sur une zone : les voxels du niveau choisi deviennent plus gros
 - À la frontière de la zone fine, l'image passe d'un niveau à l'autre **à une face de brique**, sans fondu.
 
 ::: warning
-Le mode n'existe que pour le **format 4** (briques à bordure). Il est suspendu pendant qu'un volume se charge et dès que vous appliquez un **flou gaussien** à un canal (chapitre 11), car des briques brutes sur un canal flou donneraient une autre image.
+Le mode n'existe que pour les **formats 4 et 5** (briques à bordure) ; en format 5, il reste dans la colonne de compression choisie. Il est suspendu pendant qu'un volume se charge et dès que vous appliquez un **flou gaussien** à un canal (chapitre 11), car des briques brutes sur un canal flou donneraient une autre image.
 :::
 
 Le texte d'état affiche, selon le cas : « Détail : N briques du niveau L visibles », « Détail : chargement de x sur y briques du niveau L », ou « Détail indisponible : mémoire GPU insuffisante ».

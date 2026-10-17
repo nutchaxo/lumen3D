@@ -102,7 +102,25 @@
     "measuresJson": "Metingen JSON",
     "metadataJson": "Metadata JSON",
     "noMeasures": "Geen metingen om te exporteren",
-    "noMetadata": "Geen metadata beschikbaar"
+    "noMetadata": "Geen metadata beschikbaar",
+    "omezarr": {
+      "title": "OME-Zarr-export (napari, Fiji, Python)",
+      "hint": "De verliesvrije voxels van de gekozen niveaus als één OME-Zarr v0.5-opslag in een zip, gekalibreerd in micrometer, met de namen en kleuren van de kanalen. In deze browser opgebouwd uit de bricks van de dataset.",
+      "liveHint": "Een timelapse exporteert het getoonde tijdstip.",
+      "levels": "Niveaus",
+      "native": "Native",
+      "channels": "Kanalen",
+      "start": "Exporteer .ome.zarr.zip",
+      "cancel": "Annuleren",
+      "total": "Leest {size} aan verliesvrije bricks",
+      "memoryWarn": "Deze browser houdt het hele bestand in het geheugen voor het opslaan ({size} of meer). Doorgaan?",
+      "preparing": "Voorbereiden…",
+      "progress": "{pct} % · {step} · {out} geschreven · nog {eta}",
+      "done": "Klaar: {size}, {chunks} blokken.",
+      "cancelled": "Export geannuleerd.",
+      "failed": "Export mislukt: {error}",
+      "step": "Niveau {level} · kanaal {channel} · laag {z}"
+    }
   },
   "nav": {
     "back": "Terug",
@@ -399,8 +417,23 @@
       "over": "Meer dan deze GPU aankan: de viewer toont een grover niveau.",
       "tight": "Past, dicht bij het budget van deze GPU.",
       "fits": "Past ruim op deze GPU.",
-      "legend": "Downloadgrootte per cel · groen past op de GPU, oranje is krap, rood is te groot."
-    }
+      "legend": "Elk vak: de te downloaden grootte. GPU: het geheugen dat het niveau na het laden inneemt, gelijk in elke kolom (de GPU bewaart de gedecomprimeerde voxels). Groen past, oranje is krap, rood is te groot.",
+      "losslessAtRest": "Verliesvrij zodra het beeld stilstaat",
+      "losslessAtRestHint": "Met een gecomprimeerde cel worden de zichtbare bricks kort na het stoppen van de camera opnieuw verliesvrij geladen."
+    },
+    "detailLossless": "Verliesvrij detail: {count} bricks in beeld",
+    "gpuMemory": "GPU-geheugen",
+    "gpuMemoryAuto": "Automatisch",
+    "gpuMemorySet": "De viewer gebruikt hoogstens {gb} GB GPU-geheugen (uw instelling).",
+    "gpuMemoryEstimated": "Geschat: {gb} GB ({kind}). Een browser geeft het echte geheugen van de kaart niet door: kies het uwe als u het kent.",
+    "gpuMemoryLosses": "Gehalveerd na {n} verlies/verliezen van de grafische context deze week.",
+    "gpuDiscrete": "aparte kaart",
+    "gpuIntegrated": "geïntegreerde grafische chip",
+    "gpuSoftware": "softwarerendering",
+    "gpuUnknown": "onbekende kaart",
+    "resDowngradeHeld": "De andere {held} MB van het budget van {total} MB worden ingenomen door volumes die geladen blijven.",
+    "resDowngradeEstimate": "Dit budget is een schatting (een browser geeft het echte GPU-geheugen niet door): stel het uwe in onder Renderkwaliteit › GPU-geheugen.",
+    "gbShort": "GB"
   },
   "compare": {
     "title": "Vergelijkingsmodus",

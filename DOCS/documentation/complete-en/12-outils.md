@@ -277,12 +277,13 @@ The **3D view export** (button 20) redoes the render **at any size**.
 
 :::::: cols
 ::::: col
-![The export window (2). Button 1 opens it.](img-en/ch12/export-vue-c.png){.shot width=100%}
+![The 3D view export window (button 20 of the toolbar), with the quality choice.](img-en/f5/export-vue.png){.shot width=90%}
 :::::
 ::::: col
 - [Size]{.ui}: [Screen]{.ui}, 2×, 4×, [Custom]{.ui} (width from 16 to 16,384 px).
 - [Background]{.ui}: as displayed, [Transparent]{.ui}, black, white.
 - [Scale bar]{.ui}: disabled without calibration (it would count voxels, not µm).
+- [Quality]{.ui}: [Current]{.ui} (the displayed cell) or [Lossless]{.ui}. *Lossless* loads the lossless column of the native level, or of the finest level the graphics card can hold (the dialog says which), renders the picture, then puts the previous quality back.
 - File: `<dataset>_3d_<W>x<H>.png`.
 :::::
 ::::::
@@ -373,6 +374,7 @@ The preview (at most 2,048 px) comes from the graphics card. The native pass fet
 - An **oblique** plane or an old volume goes through the bricks (targeted byte reads, chapter 10).
 - A brick that is absent because it is empty counts as **zero**, never as "missing".
 - If a figure needs more than 256 MB, a dialogue offers native, reduced resolution or preview.
+- On a **format-5** dataset, the native pass reads the **cut copies** (section 7.11): an XZ or YZ cut = one row of the `xz/` or `yz/` pack, three small reads per channel; an oblique cut = only the small 32 × 32 × *bz* bricks the plane crosses. If a copy is missing or fails, the pass falls back to the bricks. The pictures are identical, voxel for voxel.
 
 ::: note
 On the demo dataset (768 × 576 px), the native version is as small as the preview: the progress bar has almost nothing to load. It comes into its own on a volume of several gigabytes.
@@ -381,6 +383,7 @@ On the demo dataset (768 × 576 px), the native version is as small as the previ
 ### Exports and limits
 
 - **PNG**: native size, black background, with a **caption line always burned in** at the top left (dataset | plane | size | pixel). Refused beyond 16,384 px per side or 2²⁸ pixels.
+- Before the PNG export, a question: [Native lossless]{.ui} or [This picture]{.ui}. *Native lossless* waits for the native pass (or runs it again if you had stopped it); the layers are rescaled to the new picture and **keep their place**. *Decompose by channel* asks the same question.
 - **JSON** (`<dataset>_studio.json`): layers, guides, channels, plane, calibration. **Never any pixels.** On import, a file larger than **5 MB**, or with more than 2,000 layers or 10,000 points, is refused; a file from another figure applies only its layers.
 - Beyond 4 channels, only the first 4 are shown. Without calibration: no scale bar, and measurements are in pixels.
 

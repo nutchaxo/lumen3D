@@ -2,7 +2,7 @@
 title: "Lumen3D from A to Z"
 subtitle: "The complete documentation of the platform"
 eyebrow: "IRIBHM · ULB — Lumen3D"
-version: "Web platform 1.59.3 · Pipeline 0.21.0 · Data format 4"
+version: "Web platform 1.65.0 · Pipeline 0.22.0 · Data format 5"
 date: "October 2026"
 abstract: "How an Imaris file of several gigabytes becomes an embryo you can spin around in a browser — and everything around that journey: the languages and pages, image cleaning, compression, bricks, 3D rendering, streaming, histograms, every tool and how it works inside, plugins, customisation and languages, data formats, import, hosting, updates and security. 21 chapters written for biologists, illustrated on every page."
 lang: en
@@ -71,4 +71,4 @@ A limit to know before interpreting images.
 | [3]{.callout-num} | numbered marker 3 on the screenshot above |
 | `metadata.json` | a file name or a technical value; “→ chapter 7” = explained in detail elsewhere |
 
-*Images come from synthetic demonstration embryos, not laboratory data; numbers are read from the code (platform 1.59.3, pipeline 0.21.0). A short version of about 25 pages, "The Essentials", is in the administration panel.*
+*Images come from synthetic demonstration embryos, not laboratory data; numbers are read from the code (platform 1.65.0, pipeline 0.22.0). A short version of about 25 pages, "The Essentials", is in the administration panel.*

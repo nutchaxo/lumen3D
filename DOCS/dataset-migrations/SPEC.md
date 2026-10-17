@@ -229,6 +229,12 @@ get `net_grant`, and return it with `net_release { outcome }` once the body is r
 Measured on the synthetic pair of the tests (two 1100×900×130 / 1000×900×130 2-channel volumes,
 one per executor, formats 1 → 4): 1.59.1 ≈ 3 400 requests at over 40/s; 1.59.2 3 443 requests,
 8/s on average, 436 s; 1.59.3 424 requests, 3.7/s on average, 11 in the busiest second, 115 s.
+Format 5 (web 1.68): m005 units travel in batches (§14.10), about 0.3 request per unit instead of
+three, and the pool runs up to four workers (two below 8 GB of device memory, never more than
+half the cores), so the governor's rate stops being what bounds a browser conversion. Measured on
+a 600×500×80 2-channel volume on `php -S` (default `post_max_size` 8 MB): 298 units, 87 requests,
+about 90 s to the end of finalize, against about 100 units per minute and a pause on the first
+body over 8 MB before.
 
 ## 8. Reader (viewer / Studio)
 
@@ -789,6 +795,30 @@ Units are tuples `(stage, t, k, c, a, b, d)`; keys:
   reader of the status (`bricksSchema` `iribhm-bricks-v5`, `bricks_v5_invalid`); fed the same
   units, the PHP and Python trees are byte-identical (`tests/test_format5_php_parity.py`). A C unit
   of a native level holds X × 64 × Z voxels; its body must stay under `maxUnitBody` (32 MiB).
+* Batches (web 1.68). A worker takes up to `batchUnits` = 16 m005 units at once (`run_batch`; at
+  most 64 per request on both twins): their inputs in ONE POST `unit_inputs_many {dataset,
+  migration, units}` → `{ok, items}` (each item the `unit_inputs` answer, or `{ok: false, unit,
+  error, status, detail?}`), every byte run of the batch read once (one or a few `read_ranges`,
+  48 MiB prefetch), the units computed one after another, their results in POST
+  `unit_put_many?dataset=&migration=` with the raw body `u32 n`, then n × `{u16 key length, key
+  (ASCII), u32 length, body}` (little-endian, ≤ 64 units, nothing after the last) → `{ok,
+  results: [{unit, ok, error?, status?, detail?}], done, total}`. Each unit is checked as
+  `unit_put` checks it and refused alone; the journal is written once per request; a stage-A unit
+  accepted earlier in the same request counts for the stage-A rule of a later one. A server
+  without the actions answers 400 *unknown action* and the worker answers `batch_unsupported`: the
+  pool goes back to one unit per request.
+* Request bodies (web 1.68). `status.server.maxUnitBody` is the largest body one request may carry:
+  32 MiB on Python; on PHP, min(32 MiB, `post_max_size` − 64 KiB, floor 1 MiB) — PHP drops a body
+  over `post_max_size` before the script runs and answers a 200 that is not JSON (the default
+  8 MB is less than a level-0 B unit of a large dataset). The pool passes it to its workers
+  (`config.maxBody`); a batch is flushed before it would pass it (and at 16 MiB), and a result
+  larger than it goes up alone in pieces: POST `unit_put_part?dataset=&migration=&unit=&offset=
+  &total=` with one raw piece; pieces arrive in order (`offset` = the bytes received; a piece
+  past them is 409 `bad_blob`, a repeated one is written again), kept in the job's tile store
+  under `.parts/`, and the last one (offset + length = total) is stored as `unit_put` would and
+  answers its reply + `complete: true` (before: `{ok, complete: false, received}`).
+  Tests `tests/test_format5_batches.py` (both twins, a whole job of batches and pieces = the
+  server executor's tree), `tests/js/test_mig_worker_batches.mjs`.
 * Other route (web 1.65): `tools/convert_dataset.py <DATA_WEB>/<type>/<folder>` runs every pending
   migration with the Python server executor on the operator's machine; the converted folder is then
   dragged into the admin Import tab, whose allowlist accepts a v5 tree (`index/{col}.bin` core tier,

@@ -402,24 +402,57 @@
     "previousBricks": "vorige versie (vóór de data-update)",
     "previousBricksMissing": "Deze dataset heeft geen vorige versie bewaard: de huidige wordt getoond.",
     "qualityMatrix": {
-      "caption": "Resolutie × compressie",
-      "resolution": "Niveau",
-      "colLl": "Verliesvrij",
-      "colB2": "±2",
-      "colB4": "±4",
-      "colQ80": "Licht",
-      "colQ50": "Zeer licht",
-      "hintLl": "Verliesvrij: elke voxel exact.",
-      "hintB2": "Visueel verliesvrij: geen voxel verschuift meer dan 2 grijswaarden.",
-      "hintB4": "Bijna verliesvrij: geen voxel verschuift meer dan 4 grijswaarden.",
-      "hintQ80": "WebP 80: lichter, kleine visuele verschillen.",
-      "hintQ50": "WebP 50: het lichtst, zichtbare afvlakking.",
-      "over": "Meer dan deze GPU aankan: de viewer toont een grover niveau.",
-      "tight": "Past, dicht bij het budget van deze GPU.",
-      "fits": "Past ruim op deze GPU.",
-      "legend": "Elk vak: de te downloaden grootte. GPU: het geheugen dat het niveau na het laden inneemt, gelijk in elke kolom (de GPU bewaart de gedecomprimeerde voxels). Groen past, oranje is krap, rood is te groot.",
-      "losslessAtRest": "Verliesvrij zodra het beeld stilstaat",
-      "losslessAtRestHint": "Met een gecomprimeerde cel worden de zichtbare bricks kort na het stoppen van de camera opnieuw verliesvrij geladen."
+      "help": "Hoe kiezen?",
+      "resolutionHead": "Resolutie",
+      "qualityHead": "Kwaliteit",
+      "gpuHead": "GPU-geheugen",
+      "summary": "{res} · {tier}: {size}",
+      "shownCoarser": "Getoond op {shown}: de GPU heeft geen ruimte voor {chosen}.",
+      "legend": "GPU-geheugen van een niveau: groen = past, oranje = dicht bij het budget, rood = te groot.",
+      "eta": "≈ {time}",
+      "guideTitle": "Resolutie en kwaliteit kiezen",
+      "close": "Sluiten",
+      "guideIntro": "Het volume is opgeslagen in meerdere resoluties en, per resolutie, in meerdere kwaliteiten. Deze keuze bepaalt hoeveel data wordt gedownload, hoeveel grafisch geheugen ze innemen en hoe getrouw het beeld is. De groottes hieronder gelden exact voor deze dataset.",
+      "resolutionText": "Een resolutie is hetzelfde volume op een grover voxelrooster: elke stap halveert X en Y ongeveer, Z behoudt de volledige diepte. Native is de acquisitie zelf. Een grover niveau downloadt sneller en neemt minder grafisch geheugen in; het fijnste niveau dat de kaart comfortabel aankan, toont het meeste detail.",
+      "rateLabel": "Downloadsnelheid voor de tijden",
+      "rateMeasured": "Hier gemeten ({rate} Mb/s)",
+      "rateMbps": "{rate} Mb/s",
+      "tableHead": "Alle combinaties",
+      "tableNote": "Grootte: alles wat voor dat niveau moet worden gedownload, alle kanalen. Tijd: grootte ÷ snelheid. De eerste weergave laadt alleen de zichtbare bricks, dus die gaat vaak sneller dan de getoonde tijd.",
+      "gpuOk": "Groen: de kaart past het comfortabel (minder dan 75 % van het budget van {budget}).",
+      "gpuTight": "Oranje: dicht bij het budget (75 tot 100 %).",
+      "gpuOver": "Rood: boven het budget. De viewer toont dan het eerstvolgende grovere niveau.",
+      "gpuNote": "De GPU-kolom is het geheugen dat het niveau inneemt zodra het geladen is. Dat is voor elke kwaliteit gelijk: de kaart krijgt de uitgepakte voxels.",
+      "budget": "Huidig GPU-budget: {budget}.",
+      "qualitiesHead": "Wat de kwaliteiten betekenen",
+      "tierSize": "Grootte op deze dataset: {range} van Max",
+      "tier": {
+        "max": {
+          "short": "Exact",
+          "long": "Elke voxel zoals gemeten, niets verloren. Voor metingen, figuren en exports."
+        },
+        "extra": {
+          "short": "±2 niveaus",
+          "long": "Visueel zonder verlies: geen enkele voxel verschuift met meer dan 2 van de 256 grijswaarden. Op het scherm nauwelijks te onderscheiden; de standaard om te verkennen."
+        },
+        "high": {
+          "short": "±4 niveaus",
+          "long": "Bijna zonder verlies: geen enkele voxel verschuift met meer dan 4 grijswaarden. Moeilijk te zien, ook ingezoomd."
+        },
+        "medium": {
+          "short": "WebP 80",
+          "long": "Verliesgevende WebP, kwaliteit 80: lichtere bestanden, een beetje textuur en ruis zijn afgevlakt, kleine artefacten bij scherpe randen. Goed voor een overzicht."
+        },
+        "low": {
+          "short": "WebP 50",
+          "long": "Verliesgevende WebP, kwaliteit 50: het lichtst. Zichtbare afvlakking en verlies van fijne details. Alleen om een zeer groot niveau op een trage verbinding te bekijken."
+        }
+      },
+      "adviceHead": "Welke kiezen",
+      "advice": "Aanbevolen: de fijnste resolutie in groen, in kwaliteit Extra. Voor een meting of figuur: Max op Native.",
+      "adviceRest": "Bij een gecomprimeerde kwaliteit worden de zichtbare bricks zonder verlies opnieuw geladen zodra de camera stilstaat (vinkje onder de lijsten).",
+      "losslessAtRest": "Zonder verlies zodra het beeld stilstaat",
+      "losslessAtRestHint": "Bij een gecomprimeerde cel worden de zichtbare bricks kort nadat de camera stilstaat zonder verlies opnieuw geladen."
     },
     "detailLossless": "Verliesvrij detail: {count} bricks in beeld",
     "gpuMemory": "GPU-geheugen",

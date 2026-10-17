@@ -1053,10 +1053,22 @@ const ViewerApp = (() => {
     const matrix = document.getElementById('quality-matrix');
     if (matrix) {
       matrix.addEventListener('click', (e) => {
-        const cell = e.target.closest('[data-quality]');
+        if (e.target.closest('.qm-help')) { _openQualityGuide(); return; }
+        const opt = e.target.closest('.qm-opt');
+        if (!opt || opt.disabled) return;
+        // A list button changes one half of the quality; the other half stays as it is.
+        const chosen = _currentQualityParts();
+        _pickQuality(opt.dataset.res || chosen.res, opt.dataset.col || chosen.col);
+      });
+    }
+    const guide = document.getElementById('quality-guide');
+    if (guide) {
+      guide.addEventListener('click', (e) => {
+        if (e.target === guide || e.target.closest('.qm-guide-close')) { guide.close(); return; }
+        const cell = e.target.closest('.qm-full-cell');
         if (!cell || cell.disabled) return;
-        _setQualityMode(cell.dataset.quality).catch(() => {}).finally(() => _renderQualityMatrix());
-        _renderQualityMatrix();
+        _pickQuality(cell.dataset.res, cell.dataset.col);
+        guide.close();
       });
     }
   }
@@ -1240,27 +1252,57 @@ const ViewerApp = (() => {
   }
 
   // ── Quality matrix (v5, SPEC §14.6) ─────────────────────────────────────────
-  const QUALITY_COLUMN_LABELS = {
-    ll: ['viewer.qualityMatrix.colLl', 'Lossless'],
-    b2: ['viewer.qualityMatrix.colB2', '±2'],
-    b4: ['viewer.qualityMatrix.colB4', '±4'],
-    q80: ['viewer.qualityMatrix.colQ80', 'Light'],
-    q50: ['viewer.qualityMatrix.colQ50', 'Very light']
+  // A v5 tree is picked through two lists, the resolution (a level) and the quality (a
+  // compression column), and a guide that shows every combination with its size, its
+  // download time and its GPU memory. The compressions carry the viewer's tier names,
+  // most faithful first; the guide says what each one stores and what it costs here.
+  const QUALITY_TIERS = {
+    ll: {
+      name: 'Max',
+      short: ['viewer.qualityMatrix.tier.max.short', 'Exact'],
+      long: ['viewer.qualityMatrix.tier.max.long', 'Every voxel as acquired, nothing lost. For measurements, figures and exports.']
+    },
+    b2: {
+      name: 'Extra',
+      short: ['viewer.qualityMatrix.tier.extra.short', '±2 levels'],
+      long: ['viewer.qualityMatrix.tier.extra.long', 'Visually lossless: no voxel moves by more than 2 of the 256 grey levels. Hard to tell apart on screen; the default for exploring.']
+    },
+    b4: {
+      name: 'High',
+      short: ['viewer.qualityMatrix.tier.high.short', '±4 levels'],
+      long: ['viewer.qualityMatrix.tier.high.long', 'Near lossless: no voxel moves by more than 4 grey levels. Small enough to be hard to see, even zoomed in.']
+    },
+    q80: {
+      name: 'Medium',
+      short: ['viewer.qualityMatrix.tier.medium.short', 'WebP 80'],
+      long: ['viewer.qualityMatrix.tier.medium.long', 'Lossy WebP at quality 80: smaller files, faint texture and noise smoothed, slight artefacts near sharp edges. Good for overviews.']
+    },
+    q50: {
+      name: 'Low',
+      short: ['viewer.qualityMatrix.tier.low.short', 'WebP 50'],
+      long: ['viewer.qualityMatrix.tier.low.long', 'Lossy WebP at quality 50: the lightest. Visible smoothing and loss of fine detail. Only to browse a very large level on a slow link.']
+    }
   };
-  const QUALITY_COLUMN_HINTS = {
-    ll: ['viewer.qualityMatrix.hintLl', 'Lossless: every voxel exact.'],
-    b2: ['viewer.qualityMatrix.hintB2', 'Visually lossless: no voxel moves by more than 2 grey levels.'],
-    b4: ['viewer.qualityMatrix.hintB4', 'Near lossless: no voxel moves by more than 4 grey levels.'],
-    q80: ['viewer.qualityMatrix.hintQ80', 'WebP 80: lighter, small visual changes.'],
-    q50: ['viewer.qualityMatrix.hintQ50', 'WebP 50: lightest, visible smoothing.']
-  };
-  // Download rate measured on this page (EMA of the loader's fetched bytes while it
-  // streams), for the time estimate of a cell; null until something was measured.
+  const MBPS_TO_BYTES_PER_SECOND = 125000;   // 1 Mb/s = 10⁶ bit/s = 125 000 byte/s
+
+  // Download rate of this page (EMA of the loader's fetched bytes while it streams), for
+  // the time estimates; null until something was measured.
   const _rateProbe = { bytes: null, at: 0, rate: null };
+  // The link speed the guide's times are computed at: 'measured', or Mb/s; null until the
+  // guide opens (then the measured rate when there is one, else 20 Mb/s).
+  let _qmRateChoice = null;
 
   function _qualityColumnLabel(id) {
-    const e = QUALITY_COLUMN_LABELS[id];
-    return e ? _t(e[0], e[1]) : id;
+    return QUALITY_TIERS[id]?.name || id;
+  }
+
+  function _qualityTierText(id, which) {
+    const e = QUALITY_TIERS[id]?.[which];
+    return e ? _t(e[0], e[1]) : '';
+  }
+
+  function _levelName(L) {
+    return L.target === 'native' ? _t('viewer.native', 'Native') : String(L.target);
   }
 
   function _sampleDownloadRate() {
@@ -1285,26 +1327,92 @@ const ViewerApp = (() => {
     return `${mb >= 100 ? mb.toFixed(0) : mb.toFixed(1)} MB`;
   }
 
-  function _fmtSeconds(s) {
+  function _fmtDuration(s) {
     if (!Number.isFinite(s)) return '';
     if (s < 1) return '<1 s';
     if (s < 90) return `${Math.round(s)} s`;
-    return `${Math.round(s / 60)} min`;
+    const min = Math.round(s / 60);
+    if (min < 90) return `${min} min`;
+    return `${Math.floor(min / 60)} h ${String(min % 60).padStart(2, '0')}`;
+  }
+
+  /** "≈ 12 s", or "<1 s" (a bound, not an estimate, so no mark). */
+  function _etaLabel(seconds) {
+    const t = _fmtDuration(seconds);
+    return t.startsWith('<') ? t : _tf('viewer.qualityMatrix.eta', '≈ {time}', { time: t });
+  }
+
+  function _qmRateBytesPerSecond() {
+    if (_qmRateChoice === 'measured' && _rateProbe.rate) return _rateProbe.rate;
+    if (typeof _qmRateChoice === 'number') return _qmRateChoice * MBPS_TO_BYTES_PER_SECOND;
+    return _rateProbe.rate || 20 * MBPS_TO_BYTES_PER_SECOND;
   }
 
   /**
-   * The quality control of a v5 tree: one row per level (its real dimensions and the GPU
-   * memory its atlas takes), one column per compression; a cell shows the bytes its
-   * stream downloads (and the time at the rate measured here) and is coloured by what the
-   * GPU budget holds — green within 75 %, amber up to the budget, red beyond (the viewer
-   * then settles on a coarser level). Other trees keep the select.
+   * A level's GPU footprint against the budget: 'qm-ok' within 75 %, 'qm-tight' up to it,
+   * 'qm-over' beyond — the viewer then settles on a coarser level.
+   */
+  function _gpuFit(fp, budget) {
+    const bytes = fp && fp.planned !== false ? Number(fp.bytes) : Infinity;
+    const cls = !Number.isFinite(bytes) || bytes > budget ? 'qm-over'
+      : (bytes > 0.75 * budget ? 'qm-tight' : 'qm-ok');
+    return { bytes, cls };
+  }
+
+  /** The resolution key and the compression column the page is set to ("512x512", "b2"). */
+  function _currentQualityParts() {
+    return { res: _qualityBaseOf(_withColumn(_qualityMode)), col: _currentColumn() };
+  }
+
+  /** Loads the quality `res@col` (a level key and a column), unless it is the one on screen. */
+  function _pickQuality(res, col) {
+    const next = `${res}@${col}`;
+    if (next === _withColumn(_qualityMode)) return;
+    _setQualityMode(next).catch(() => {}).finally(() => _renderQualityMatrix());
+    _renderQualityMatrix();
+  }
+
+  function _qmOption({ main, sub = '', extra = '', fit = '', active = false, attrs = {} }) {
+    const li = document.createElement('li');
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = ['qm-opt', fit, active ? 'is-active' : ''].filter(Boolean).join(' ');
+    btn.setAttribute('aria-pressed', active ? 'true' : 'false');
+    for (const [k, v] of Object.entries(attrs)) btn.dataset[k] = v;
+    for (const [cls, text] of [['qm-opt-main', main], ['qm-opt-sub', sub], ['qm-opt-extra', extra]]) {
+      if (!text) continue;
+      const s = document.createElement('span');
+      s.className = cls;
+      s.textContent = text;
+      btn.appendChild(s);
+    }
+    li.appendChild(btn);
+    return li;
+  }
+
+  function _qmSection(title, list) {
+    const section = document.createElement('section');
+    section.className = 'qm-pick';
+    const head = document.createElement('h4');
+    head.className = 'qm-head';
+    head.textContent = title;
+    section.append(head, list);
+    return section;
+  }
+
+  /**
+   * The quality control of a v5 tree: the resolution list (finest first, with the GPU memory
+   * each level takes), the quality list (the compressions of the chosen level, with the bytes
+   * they download), a summary and a button that opens the full guide. Other trees keep the
+   * select. Times appear here only once a download was measured; the guide gives them at a
+   * stated speed.
    */
   function _renderQualityMatrix() {
     const box = document.getElementById('quality-matrix');
     const select = document.getElementById('select-quality');
     if (!box) return;
     const qm = _isV5BrickManifest() ? VolumeViewer.getQualityMatrix?.() : null;
-    if (!qm) {
+    if (!qm || !qm.levels.length) {
       box.classList.add('hidden');
       box.replaceChildren();
       select?.classList.remove('hidden');
@@ -1313,87 +1421,72 @@ const ViewerApp = (() => {
     select?.classList.add('hidden');
     box.classList.remove('hidden');
     const budget = Number(qm.budgetBytes) || Infinity;
-    const current = _withColumn(_qualityMode);
-    const curLevel = _lodForQuality(current);
-    const curColumn = _currentColumn();
-    const table = document.createElement('table');
-    table.className = 'quality-matrix-table';
-    const caption = document.createElement('caption');
-    caption.textContent = _t('viewer.qualityMatrix.caption', 'Resolution × compression');
-    table.appendChild(caption);
-    const head = document.createElement('tr');
-    const corner = document.createElement('th');
-    corner.scope = 'col';
-    corner.textContent = _t('viewer.qualityMatrix.resolution', 'Level');
-    head.appendChild(corner);
-    for (const col of qm.columns) {
-      const th = document.createElement('th');
-      th.scope = 'col';
-      th.textContent = _qualityColumnLabel(col.id);
-      const hint = QUALITY_COLUMN_HINTS[col.id];
-      if (hint) th.title = _t(hint[0], hint[1]);
-      head.appendChild(th);
+    const chosen = _currentQualityParts();
+    const level = qm.levels.find(L => L.key === chosen.res) || qm.levels[0];
+    const column = qm.columns.find(c => c.id === chosen.col) || qm.columns[0];
+    const shown = qm.active ? qm.levels.find(L => L.level === qm.active.level) : null;
+    const bytesOf = (L, col) => qm.bytes?.[L.level]?.[col.id];
+
+    const top = document.createElement('div');
+    top.className = 'qm-top';
+    const summary = document.createElement('div');
+    summary.className = 'qm-summary';
+    summary.textContent = _tf('viewer.qualityMatrix.summary', '{res} · {tier}: {size}', {
+      res: _levelName(level), tier: _qualityColumnLabel(column.id), size: _fmtMB(bytesOf(level, column))
+    });
+    if (shown && shown.level !== level.level) {
+      const note = document.createElement('div');
+      note.className = 'qm-note';
+      note.textContent = _tf('viewer.qualityMatrix.shownCoarser', 'Shown at {shown}: the GPU does not hold {chosen}.', {
+        shown: _levelName(shown), chosen: _levelName(level)
+      });
+      summary.appendChild(note);
     }
-    const thead = document.createElement('thead');
-    thead.appendChild(head);
-    table.appendChild(thead);
-    const tbody = document.createElement('tbody');
+    const help = document.createElement('button');
+    help.type = 'button';
+    help.className = 'qm-help';
+    help.textContent = _t('viewer.qualityMatrix.help', 'How to choose?');
+    top.append(summary, help);
+
+    const resList = document.createElement('ul');
+    resList.className = 'qm-list';
     for (const L of qm.levels) {
-      const tr = document.createElement('tr');
-      const fp = L.gpu;
-      const gpuBytes = fp && fp.planned !== false ? Number(fp.bytes) : Infinity;
-      const fit = !Number.isFinite(gpuBytes) || gpuBytes > budget ? 'qm-over'
-        : (gpuBytes > 0.75 * budget ? 'qm-tight' : 'qm-ok');
-      const th = document.createElement('th');
-      th.scope = 'row';
-      const name = document.createElement('span');
-      name.className = 'qm-level';
-      name.textContent = L.target === 'native' ? _t('viewer.native', 'Native') : String(L.target);
-      const dims = document.createElement('span');
-      dims.className = 'qm-dims';
-      dims.textContent = `${L.dims.x}×${L.dims.y}×${L.dims.z}`;
-      const gpu = document.createElement('span');
-      gpu.className = `qm-gpu ${fit}`;
-      gpu.textContent = `GPU ${Number.isFinite(gpuBytes) ? _fmtMB(gpuBytes) : '—'}`;
-      gpu.title = fit === 'qm-over'
-        ? _t('viewer.qualityMatrix.over', 'More than this GPU holds: the viewer will show a coarser level.')
-        : (fit === 'qm-tight'
-          ? _t('viewer.qualityMatrix.tight', 'Fits, close to this GPU\'s budget.')
-          : _t('viewer.qualityMatrix.fits', 'Fits comfortably on this GPU.'));
-      th.append(name, dims, gpu);
-      tr.appendChild(th);
-      for (const col of qm.columns) {
-        const td = document.createElement('td');
-        const btn = document.createElement('button');
-        btn.type = 'button';
-        const key = `${L.key}@${col.id}`;
-        btn.dataset.quality = key;
-        btn.className = `qm-cell ${fit}`;
-        const bytes = qm.bytes?.[L.level]?.[col.id];
-        const size = document.createElement('span');
-        size.className = 'qm-size';
-        size.textContent = _fmtMB(bytes);
-        btn.appendChild(size);
-        if (_rateProbe.rate && Number(bytes) > 0) {
-          const eta = document.createElement('span');
-          eta.className = 'qm-eta';
-          eta.textContent = `≈ ${_fmtSeconds(Number(bytes) / _rateProbe.rate)}`;
-          btn.appendChild(eta);
-        }
-        const active = L.level === curLevel && col.id === curColumn;
-        btn.setAttribute('aria-pressed', active ? 'true' : 'false');
-        if (active) btn.classList.add('qm-active');
-        btn.setAttribute('aria-label', `${name.textContent} ${dims.textContent}, ${_qualityColumnLabel(col.id)}, ${size.textContent}`);
-        td.appendChild(btn);
-        tr.appendChild(td);
-      }
-      tbody.appendChild(tr);
+      const { bytes: gpuBytes, cls } = _gpuFit(L.gpu, budget);
+      resList.appendChild(_qmOption({
+        main: _levelName(L),
+        sub: `${L.dims.x}×${L.dims.y}×${L.dims.z}`,
+        extra: `GPU ${Number.isFinite(gpuBytes) ? _fmtMB(gpuBytes) : '—'}`,
+        fit: cls,
+        active: L.key === chosen.res,
+        attrs: { res: L.key }
+      }));
     }
-    table.appendChild(tbody);
+    const colList = document.createElement('ul');
+    colList.className = 'qm-list';
+    for (const col of qm.columns) {
+      const bytes = bytesOf(level, col);
+      // The time only once a download was measured here; the guide gives it at a stated speed.
+      const eta = _rateProbe.rate && Number(bytes) > 0 ? _etaLabel(Number(bytes) / _rateProbe.rate) : '';
+      colList.appendChild(_qmOption({
+        main: _qualityColumnLabel(col.id),
+        sub: _qualityTierText(col.id, 'short'),
+        extra: [_fmtMB(bytes), eta].filter(Boolean).join(' · '),
+        active: col.id === chosen.col,
+        attrs: { col: col.id }
+      }));
+    }
+    const lists = document.createElement('div');
+    lists.className = 'qm-lists';
+    lists.append(
+      _qmSection(_t('viewer.qualityMatrix.resolutionHead', 'Resolution'), resList),
+      _qmSection(_t('viewer.qualityMatrix.qualityHead', 'Quality'), colList)
+    );
+
     const legend = document.createElement('div');
     legend.className = 'qm-legend';
-    legend.textContent = _t('viewer.qualityMatrix.legend', 'Each cell: the size to download. GPU: the memory the level takes once loaded, the same in every column (the GPU holds the decompressed voxels). Green fits, amber is close, red is too large.');
-    // A compressed cell is refined to the lossless column for what is in view once the camera rests.
+    legend.textContent = _t('viewer.qualityMatrix.legend', 'GPU memory of a resolution: green fits, amber is close to the budget, red is too large.');
+
+    // A compressed quality is refined to the lossless column for what is in view once the camera rests.
     const rest = document.createElement('label');
     rest.className = 'qm-rest';
     const restBox = document.createElement('input');
@@ -1404,7 +1497,175 @@ const ViewerApp = (() => {
     restText.textContent = _t('viewer.qualityMatrix.losslessAtRest', 'Lossless once the view rests');
     rest.title = _t('viewer.qualityMatrix.losslessAtRestHint', 'With a compressed cell, the bricks in view are loaded again without loss a moment after the camera stops.');
     rest.append(restBox, restText);
-    box.replaceChildren(table, legend, rest);
+    box.replaceChildren(top, lists, legend, rest);
+  }
+
+  /** Opens the guide: every combination, the qualities, the GPU colour code and the advice. */
+  function _openQualityGuide() {
+    const dlg = document.getElementById('quality-guide');
+    if (!dlg || typeof dlg.showModal !== 'function' || !VolumeViewer.getQualityMatrix?.()) return;
+    if (_qmRateChoice === null) _qmRateChoice = _rateProbe.rate ? 'measured' : 20;
+    _renderQualityGuide();
+    if (!dlg.open) dlg.showModal();
+  }
+
+  function _guideEl(tag, className, text) {
+    const el = document.createElement(tag);
+    if (className) el.className = className;
+    if (text !== undefined) el.textContent = text;
+    return el;
+  }
+
+  function _pctRange(lo, hi) {
+    const a = Math.round(lo * 100);
+    const b = Math.round(hi * 100);
+    return a === b ? `${a} %` : `${a}–${b} %`;
+  }
+
+  function _renderQualityGuide() {
+    const body = document.getElementById('quality-guide-body');
+    const qm = VolumeViewer.getQualityMatrix?.();
+    if (!body || !qm) return;
+    const budget = Number(qm.budgetBytes) || Infinity;
+    const frag = document.createDocumentFragment();
+
+    frag.append(
+      _guideEl('p', 'qm-guide-p', _t('viewer.qualityMatrix.guideIntro', 'The volume is stored at several resolutions and, for each, in several qualities. This choice sets how much data is downloaded, how much graphics memory it takes and how faithful the picture is. The sizes below are exact for this dataset.')),
+      _guideEl('p', 'qm-guide-p', _t('viewer.qualityMatrix.resolutionText', 'A resolution is the same volume on a coarser voxel grid: each step roughly halves X and Y, Z keeps its full depth. Native is the acquisition itself. A coarser level downloads faster and takes less graphics memory; the finest one the card holds comfortably shows the most detail.'))
+    );
+
+    // The speed the times are computed at.
+    const rateRow = document.createElement('label');
+    rateRow.className = 'qm-guide-rate';
+    const rateLabel = _guideEl('span', '', _t('viewer.qualityMatrix.rateLabel', 'Download speed for the times'));
+    const sel = document.createElement('select');
+    sel.id = 'qm-guide-rate';
+    sel.className = 'form-select text-sm p-1 rounded border border-light bg-surface text-primary';
+    if (_rateProbe.rate) {
+      sel.appendChild(new Option(_tf('viewer.qualityMatrix.rateMeasured', 'Measured here ({rate} Mb/s)', {
+        rate: Math.round(_rateProbe.rate * 8 / 1e6)
+      }), 'measured'));
+    }
+    for (const mbps of [5, 20, 100]) {
+      sel.appendChild(new Option(_tf('viewer.qualityMatrix.rateMbps', '{rate} Mb/s', { rate: mbps }), String(mbps)));
+    }
+    sel.value = String(_qmRateChoice === 'measured' && !_rateProbe.rate ? 20 : _qmRateChoice);
+    sel.addEventListener('change', () => {
+      _qmRateChoice = sel.value === 'measured' ? 'measured' : Number(sel.value);
+      _renderGuideTable();
+    });
+    rateRow.append(rateLabel, sel);
+
+    const tableHost = _guideEl('div', 'qm-guide-table');
+    tableHost.id = 'qm-guide-table';
+    frag.append(
+      _guideEl('h3', 'qm-guide-h', _t('viewer.qualityMatrix.tableHead', 'Every combination')),
+      rateRow,
+      tableHost,
+      _guideEl('p', 'qm-guide-note', _t('viewer.qualityMatrix.tableNote', 'Size: everything to download for that level, all channels. Time: size ÷ speed. The first view loads only the bricks in view, so it is usually quicker than the time shown.'))
+    );
+
+    const key = document.createElement('ul');
+    key.className = 'qm-guide-key';
+    const keyItems = [
+      ['qm-ok', _tf('viewer.qualityMatrix.gpuOk', 'Green: the GPU holds it comfortably (under 75 % of the {budget} budget).', { budget: _fmtMB(budget) })],
+      ['qm-tight', _t('viewer.qualityMatrix.gpuTight', 'Amber: close to the budget (75 to 100 %).')],
+      ['qm-over', _t('viewer.qualityMatrix.gpuOver', 'Red: more than the budget. The viewer then shows the next coarser level.')]
+    ];
+    for (const [cls, text] of keyItems) {
+      const li = _guideEl('li', '');
+      li.append(_guideEl('span', `qm-swatch ${cls}`), _guideEl('span', '', text));
+      key.appendChild(li);
+    }
+    frag.append(key, _guideEl('p', 'qm-guide-note', _t('viewer.qualityMatrix.gpuNote', 'The GPU column is the memory the level takes once loaded. It is the same for every quality, because the card holds the decompressed voxels.')));
+
+    frag.append(_guideEl('h3', 'qm-guide-h', _t('viewer.qualityMatrix.qualitiesHead', 'What the qualities mean')));
+    const maxCol = qm.columns.find(c => c.id === 'll') || qm.columns[0];
+    for (const col of qm.columns) {
+      const ratios = qm.levels
+        .map(L => ({ b: qm.bytes?.[L.level]?.[col.id], ref: qm.bytes?.[L.level]?.[maxCol.id] }))
+        .filter(({ b, ref }) => Number(ref) > 0 && Number.isFinite(Number(b)))
+        .map(({ b, ref }) => Number(b) / Number(ref));
+      const item = _guideEl('div', 'qm-tier');
+      const head = _guideEl('div', 'qm-tier-head');
+      head.append(
+        _guideEl('b', '', _qualityColumnLabel(col.id)),
+        _guideEl('span', 'qm-tier-short', _qualityTierText(col.id, 'short')),
+        _guideEl('span', 'qm-tier-size', ratios.length
+          ? _tf('viewer.qualityMatrix.tierSize', 'Size on this dataset: {range} of Max', {
+            range: _pctRange(Math.min(...ratios), Math.max(...ratios))
+          })
+          : '')
+      );
+      item.append(head, _guideEl('p', 'qm-guide-p', _qualityTierText(col.id, 'long')));
+      frag.appendChild(item);
+    }
+
+    frag.append(
+      _guideEl('h3', 'qm-guide-h', _t('viewer.qualityMatrix.adviceHead', 'Which to choose')),
+      _guideEl('p', 'qm-guide-p', _t('viewer.qualityMatrix.advice', 'Recommended: the finest resolution shown green, at Extra. For a measurement or a figure: Max at Native.')),
+      _guideEl('p', 'qm-guide-p', _t('viewer.qualityMatrix.adviceRest', 'With a compressed quality, the bricks in view are loaded again without loss when the camera stops (the checkbox under the lists).')),
+      _guideEl('p', 'qm-guide-p qm-guide-budget', _tf('viewer.qualityMatrix.budget', 'Current GPU budget: {budget}.', { budget: _fmtMB(budget) }))
+    );
+
+    body.replaceChildren(frag);
+    _renderGuideTable();
+  }
+
+  /** The full matrix of the guide: one row per level, one column per quality, colour = GPU fit of the row. */
+  function _renderGuideTable() {
+    const host = document.getElementById('qm-guide-table');
+    const qm = VolumeViewer.getQualityMatrix?.();
+    if (!host || !qm) return;
+    const budget = Number(qm.budgetBytes) || Infinity;
+    const bps = _qmRateBytesPerSecond();
+    const chosen = _currentQualityParts();
+    const table = document.createElement('table');
+    table.className = 'qm-full';
+    const head = document.createElement('tr');
+    const corner = _guideEl('th', '', _t('viewer.qualityMatrix.resolutionHead', 'Resolution'));
+    corner.scope = 'col';
+    const gpuHead = _guideEl('th', '', _t('viewer.qualityMatrix.gpuHead', 'GPU memory'));
+    gpuHead.scope = 'col';
+    head.append(corner, gpuHead);
+    for (const col of qm.columns) {
+      const th = _guideEl('th', '');
+      th.scope = 'col';
+      th.append(_guideEl('span', '', _qualityColumnLabel(col.id)), _guideEl('span', 'qm-full-tier', _qualityTierText(col.id, 'short')));
+      head.appendChild(th);
+    }
+    const thead = document.createElement('thead');
+    thead.appendChild(head);
+    table.appendChild(thead);
+    const tbody = document.createElement('tbody');
+    for (const L of qm.levels) {
+      const tr = document.createElement('tr');
+      const { bytes: gpuBytes, cls } = _gpuFit(L.gpu, budget);
+      const th = _guideEl('th', '');
+      th.scope = 'row';
+      th.append(_guideEl('span', 'qm-level', _levelName(L)), _guideEl('span', 'qm-dims', `${L.dims.x}×${L.dims.y}×${L.dims.z}`));
+      const gpu = _guideEl('td', `qm-full-gpu ${cls}`, Number.isFinite(gpuBytes) ? _fmtMB(gpuBytes) : '—');
+      tr.append(th, gpu);
+      for (const col of qm.columns) {
+        const td = document.createElement('td');
+        const bytes = qm.bytes?.[L.level]?.[col.id];
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = `qm-full-cell ${cls}`;
+        const active = L.key === chosen.res && col.id === chosen.col;
+        if (active) btn.classList.add('is-active');
+        btn.setAttribute('aria-pressed', active ? 'true' : 'false');
+        btn.dataset.res = L.key;
+        btn.dataset.col = col.id;
+        btn.append(_guideEl('span', 'qm-full-size', _fmtMB(bytes)));
+        if (Number(bytes) > 0) btn.append(_guideEl('span', 'qm-full-time', _etaLabel(Number(bytes) / bps)));
+        td.appendChild(btn);
+        tr.appendChild(td);
+      }
+      tbody.appendChild(tr);
+    }
+    table.appendChild(tbody);
+    host.replaceChildren(table);
   }
 
   /**

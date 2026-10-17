@@ -19,6 +19,9 @@
      probe()                     → { available, reasons:[codes] }   optional: can THIS browser run it
      requires: [ids]             optional: handlers whose code this one reuses (imported after it)
      slotsPerWorker: n           optional: units one worker may hold at once (memory bound)
+     batchUnits: n               optional: the handler takes n units per batch (run_batch): their
+                                 inputs in one unit_inputs_many, the shared byte runs read once,
+                                 their results in one unit_put_many (m005)
    (see js/migrations/m002-planes.js, m003-layer-mips.js, m004-bricks-v3.js).
 
    Concurrency is owned by the page: it never posts more `run` messages than the slots
@@ -29,6 +32,8 @@
      probe   { reqId, migration }                         → probed   { reqId, ok, available, reasons }
      prepare { reqId, migration, dataset, datasetBase }  → prepared { reqId, ok, error?, trees?, slotsPerWorker? }
      list    { reqId, migration, dataset, opts? }         → listed   { reqId, units:[{key, empty}] }
+     run_batch { reqId, migration, dataset, units, dry }  → batch_done { reqId, results: [unit_done |
+                                                              unit_failed without reqId] } | batch_unsupported
      run     { reqId, migration, dataset, unit, dry }     → unit_done { reqId, key, done, total, bytesIn,
                                                               bytesOut, tiles, seconds } | unit_failed
                                                               { reqId, key, error, status, fatal }
@@ -48,6 +53,9 @@ importScripts('../core/plane-codec.js' + _V);
 
 let _endpoint = '';
 let _csrf = null;
+// The largest body one request may carry on this host (status.server.maxUnitBody: the PHP
+// host's post_max_size): a batch is flushed below it, a larger unit goes in pieces.
+let _maxBody = 8 * 1024 * 1024;
 const _states = new Map();      // `${migration}|${dataset}` → handler state
 const _bases = new Map();       // `${migration}|${dataset}` → absolute URL of the published dataset
 const _inflight = new Map();    // reqId → AbortController
@@ -370,6 +378,58 @@ async function unitInputs(migration, dataset, unit, signal) {
   }, signal);
 }
 
+/** POST unit_inputs_many: the inputs of several units in one answer ({ items }). */
+async function unitInputsMany(migration, dataset, units, signal) {
+  return withRetries(async () => {
+    const headers = { 'Content-Type': 'application/json' };
+    if (_csrf) headers['X-CSRF-Token'] = _csrf;
+    const res = await fetch(`${_endpoint}?action=unit_inputs_many`, {
+      method: 'POST', headers, credentials: 'same-origin', signal,
+      body: JSON.stringify({ dataset, migration, units }),
+    });
+    let data = null;
+    try { data = await res.json(); } catch (_) { data = null; }
+    if (!res.ok || !data || data.ok === false || !Array.isArray(data.items)) {
+      const err = httpError(res.ok ? 500 : res.status, data && data.error, (data && (data.message || data.error)) || `HTTP ${res.status}`);
+      if (data && data.detail) err.detail = String(data.detail);
+      throw err;
+    }
+    return data.items;
+  }, signal);
+}
+
+/** POST unit_put_many: u32 n, n × { u16 key length, key, u32 body length, body }. */
+async function putMany(migration, dataset, entries, signal) {
+  const enc = new TextEncoder();
+  let total = 4;
+  const keys = entries.map((e) => enc.encode(e.key));
+  entries.forEach((e, i) => { total += 6 + keys[i].length + e.body.length; });
+  const body = new Uint8Array(total);
+  const dv = new DataView(body.buffer);
+  dv.setUint32(0, entries.length, true);
+  let o = 4;
+  entries.forEach((e, i) => {
+    dv.setUint16(o, keys[i].length, true); o += 2;
+    body.set(keys[i], o); o += keys[i].length;
+    dv.setUint32(o, e.body.length, true); o += 4;
+    body.set(e.body, o); o += e.body.length;
+  });
+  const q = new URLSearchParams({ action: 'unit_put_many', dataset, migration });
+  return withRetries(async () => {
+    const headers = { 'Content-Type': 'application/octet-stream' };
+    if (_csrf) headers['X-CSRF-Token'] = _csrf;
+    const res = await fetch(`${_endpoint}?${q}`, { method: 'POST', headers, body, credentials: 'same-origin', signal });
+    let data = null;
+    try { data = await res.json(); } catch (_) { data = null; }
+    if (!res.ok || !data || data.ok === false || !Array.isArray(data.results)) {
+      const err = httpError(res.ok ? 500 : res.status, data && data.error, (data && (data.message || data.error)) || `HTTP ${res.status}`);
+      if (data && data.detail) err.detail = String(data.detail);
+      throw err;
+    }
+    return data;
+  }, signal);
+}
+
 /** Runs [{ rel, start, end }] of the dataset's packs in one request → Uint8Array views, request order. */
 async function readRanges(dataset, part, signal) {
   return withRetries(async () => {
@@ -477,6 +537,7 @@ async function onPrepare(msg) {
     post({
       type: 'prepared', reqId: msg.reqId, ok: true, trees: state.trees ? state.trees.length : null,
       slotsPerWorker: Number.isInteger(h.slotsPerWorker) && h.slotsPerWorker > 0 ? h.slotsPerWorker : null,
+      batchUnits: Number.isInteger(h.batchUnits) && h.batchUnits > 1 ? h.batchUnits : null,
     });
   } catch (err) {
     post({ type: 'prepared', reqId: msg.reqId, ok: false, error: String(err && err.message || err) });
@@ -515,7 +576,10 @@ async function onRun(msg) {
     };
     const work = await h.planUnitWork(msg.unit, state, io);
     const res = await h.runUnit(work, state, io);
-    const reply = await putUnit(msg.migration, msg.dataset, msg.unit, res.body, !!msg.dry, ac.signal);
+    // m005 results can outgrow the host's request limit: they go in pieces.
+    const reply = !msg.dry && msg.migration === 'm005-matrix' && res.body.length + PIECE_MARGIN > _maxBody
+      ? await putInPieces(msg.migration, msg.dataset, msg.unit, res.body, ac.signal)
+      : await putUnit(msg.migration, msg.dataset, msg.unit, res.body, !!msg.dry, ac.signal);
     post({
       type: 'unit_done', reqId: msg.reqId, key: msg.unit,
       done: reply.done, total: reply.total,
@@ -531,6 +595,166 @@ async function onRun(msg) {
       fatal: !!(err && err.fatal),
       aborted: !!(err && err.name === 'AbortError'),
     });
+  } finally {
+    _inflight.delete(msg.reqId);
+  }
+}
+
+// A batch: the byte runs every unit of it reads are fetched once (shared ones too: neighbouring
+// units read the same plane tiles) up to BATCH_PREFETCH_BYTES, the units are computed one after
+// the other, and their results leave in unit_put_many requests of at most BATCH_PUT_BYTES.
+const BATCH_PREFETCH_BYTES = 48 * 1024 * 1024;
+const BATCH_PUT_BYTES = 16 * 1024 * 1024;
+const PIECE_MARGIN = 64 * 1024;
+
+/** A unit result in pieces of at most the host's limit (unit_put_part); the last stores it. */
+async function putInPieces(migration, dataset, key, body, signal) {
+  const piece = Math.max(256 * 1024, _maxBody - PIECE_MARGIN);
+  let reply = null;
+  for (let off = 0; off < body.length; off += piece) {
+    const part = body.subarray(off, Math.min(body.length, off + piece));
+    const q = new URLSearchParams({ action: 'unit_put_part', dataset, migration, unit: key, offset: String(off), total: String(body.length) });
+    reply = await withRetries(async () => {
+      const headers = { 'Content-Type': 'application/octet-stream' };
+      if (_csrf) headers['X-CSRF-Token'] = _csrf;
+      const res = await fetch(`${_endpoint}?${q}`, { method: 'POST', headers, body: part, credentials: 'same-origin', signal });
+      let data = null;
+      try { data = await res.json(); } catch (_) { data = null; }
+      if (!res.ok || !data || data.ok === false) {
+        const err = httpError(res.ok ? 500 : res.status, data && data.error, (data && (data.message || data.error)) || `HTTP ${res.status}`);
+        if (data && data.detail) err.detail = String(data.detail);
+        throw err;
+      }
+      return data;
+    }, signal);
+  }
+  return reply;
+}
+const RUN_KEY = (r) => `${r.rel}|${r.start}|${r.end}`;
+
+function failure(key, err) {
+  return {
+    type: 'unit_failed', key,
+    error: String(err && err.message || err),
+    code: err && err.code || (err && err.name === 'AbortError' ? 'aborted' : null),
+    status: err && err.status || 0,
+    fatal: !!(err && err.fatal),
+    aborted: !!(err && err.name === 'AbortError'),
+  };
+}
+
+async function onRunBatch(msg) {
+  const ac = new AbortController();
+  _inflight.set(msg.reqId, ac);
+  const t0 = performance.now();
+  const keys = msg.units || [];
+  const results = new Map();
+  try {
+    const h = handlerFor(msg.migration);
+    const state = stateOf(msg);
+    let items;
+    try {
+      items = await unitInputsMany(msg.migration, msg.dataset, keys, ac.signal);
+    } catch (err) {
+      if (unknownAction(err)) { post({ type: 'batch_unsupported', reqId: msg.reqId }); return; }
+      throw err;
+    }
+    const byKey = new Map(items.map((it) => [it.unit, it]));
+    // The runs of the batch, each once, as far as the prefetch budget goes.
+    const cache = new Map();
+    const want = [];
+    let bytes = 0;
+    for (const it of items) {
+      if (!it || it.ok === false || it.empty) continue;
+      for (const r of [...(it.tiles || []), ...(it.bricks || [])]) {
+        const k = RUN_KEY(r);
+        if (cache.has(k)) continue;
+        if (bytes + (r.end - r.start) > BATCH_PREFETCH_BYTES) continue;
+        cache.set(k, null);
+        want.push(r);
+        bytes += r.end - r.start;
+      }
+    }
+    let bytesIn = 0;
+    if (want.length) {
+      const got = await readRels(msg.dataset, want, ac.signal);
+      want.forEach((r, i) => { cache.set(RUN_KEY(r), got[i]); bytesIn += got[i].length; });
+    }
+    const io = {
+      fetchRange: (url, s, e) => fetchRange(url, s, e, ac.signal),
+      fetchRanges: (list) => fetchRanges(msg.dataset, _bases.get(`${msg.migration}|${msg.dataset}`), list, ac.signal),
+      fetchStored: (req) => fetchStored(msg.migration, msg.dataset, req, ac.signal),
+      readRels: async (list) => {
+        const missing = list.filter((r) => !cache.get(RUN_KEY(r)));
+        if (missing.length) {
+          const got = await readRels(msg.dataset, missing, ac.signal);
+          missing.forEach((r, i) => { bytesIn += got[i].length; cache.set(RUN_KEY(r), got[i]); });
+        }
+        return list.map((r) => cache.get(RUN_KEY(r)));
+      },
+      signal: ac.signal,
+    };
+    let pending = [];
+    let pendingBytes = 0;
+    const flush = async () => {
+      if (!pending.length) return;
+      const batch = pending;
+      pending = [];
+      pendingBytes = 0;
+      if (msg.dry) {
+        for (const e of batch) results.set(e.key, { type: 'unit_done', key: e.key, bytesIn: e.bytesIn, bytesOut: e.body.length, tiles: e.tiles });
+        return;
+      }
+      // A result the host could not take in one request goes in pieces, alone.
+      const limit = _maxBody - PIECE_MARGIN;
+      for (const e of batch.filter((x) => x.body.length + 64 > limit)) {
+        try {
+          const r = await putInPieces(msg.migration, msg.dataset, e.key, e.body, ac.signal);
+          results.set(e.key, { type: 'unit_done', key: e.key, done: r.done, total: r.total, bytesIn: e.bytesIn, bytesOut: e.body.length, tiles: e.tiles });
+        } catch (err) {
+          if (err && err.name === 'AbortError') throw err;
+          results.set(e.key, failure(e.key, err));
+        }
+      }
+      const fits = batch.filter((x) => x.body.length + 64 <= limit);
+      if (!fits.length) return;
+      const reply = await putMany(msg.migration, msg.dataset, fits, ac.signal);
+      const byUnit = new Map(reply.results.map((r) => [r.unit, r]));
+      for (const e of fits) {
+        const r = byUnit.get(e.key);
+        if (r && r.ok) {
+          results.set(e.key, { type: 'unit_done', key: e.key, done: reply.done, total: reply.total, bytesIn: e.bytesIn, bytesOut: e.body.length, tiles: e.tiles });
+        } else {
+          const err = httpError(r ? r.status || 400 : 500, r && r.error, (r && (r.detail || r.error)) || 'not stored');
+          results.set(e.key, failure(e.key, err));
+        }
+      }
+    };
+    for (const key of keys) {
+      if (ac.signal.aborted) throw abortError();
+      const inp = byKey.get(key);
+      if (!inp) { results.set(key, failure(key, httpError(500, 'bad_unit_inputs', 'no inputs for ' + key))); continue; }
+      if (inp.ok === false) { results.set(key, failure(key, httpError(inp.status || 400, inp.error, inp.detail || inp.error))); continue; }
+      if (inp.empty) { results.set(key, failure(key, httpError(409, 'empty_unit', 'the server lists no work for ' + key))); continue; }
+      const before = bytesIn;
+      try {
+        const res = await h.runUnit(inp, state, io);
+        // Flush first when this result would take the batch past what one request may carry.
+        if (pending.length && pendingBytes + res.body.length + 64 * (pending.length + 1) > Math.min(BATCH_PUT_BYTES, _maxBody - PIECE_MARGIN)) await flush();
+        pending.push({ key, body: res.body, bytesIn: bytesIn - before, tiles: res.tiles });
+        pendingBytes += res.body.length;
+      } catch (err) {
+        if (err && err.name === 'AbortError') throw err;
+        results.set(key, failure(key, err));
+        continue;
+      }
+      if (pendingBytes >= Math.min(BATCH_PUT_BYTES, _maxBody - PIECE_MARGIN)) await flush();
+    }
+    await flush();
+    const secs = (performance.now() - t0) / 1000;
+    post({ type: 'batch_done', reqId: msg.reqId, seconds: secs, results: keys.map((k) => results.get(k) || failure(k, new Error('not run'))) });
+  } catch (err) {
+    post({ type: 'batch_done', reqId: msg.reqId, results: keys.map((k) => results.get(k) || failure(k, err)) });
   } finally {
     _inflight.delete(msg.reqId);
   }
@@ -605,11 +829,13 @@ self.onmessage = (e) => {
       if (msg.governed !== undefined) _governed = !!msg.governed;
       if (msg.endpoint) _endpoint = msg.endpoint;
       if (msg.csrf !== undefined) _csrf = msg.csrf;
+      if (Number(msg.maxBody) > 0) _maxBody = Math.max(1024 * 1024, Number(msg.maxBody));
       break;
     case 'probe': onProbe(msg); break;
     case 'prepare': onPrepare(msg); break;
     case 'list': onList(msg); break;
     case 'run': onRun(msg); break;
+    case 'run_batch': onRunBatch(msg); break;
     case 'speedtest': onSpeedtest(msg); break;
     case 'abort':
       if (msg.reqId !== undefined && msg.reqId !== null) _inflight.get(msg.reqId)?.abort();

@@ -347,6 +347,7 @@ export class WorkerPool {
     this.waiters = [];
     this.bases = new Map();     // `${migration}|${dataset}` → datasetBase, to prepare a replacement worker
     this.hints = new Map();     // migration → slots per worker its handler asks for
+    this.batches = new Map();   // migration → units per batch its handler takes (run_batch)
     this.probes = new Map();    // migration → Promise<{ available, reasons }>
     this.offline = new Set();   // workers whose units are waiting for the link
     this.dead = false;
@@ -361,6 +362,12 @@ export class WorkerPool {
 
   /** Units in flight for `migration` (a handler holding more memory per unit asks for fewer). */
   capacityFor(migration) { return this.o.workers * this.slotsFor(migration); }
+
+  /** Units per batch for `migration` (1 = one unit per request: no batch protocol). */
+  batchFor(migration) { return this.batches.get(migration) || 1; }
+
+  /** The server answered unknown_action to a batch: one unit per request from now on. */
+  noBatch(migration) { this.batches.set(migration, 1); }
 
   /** Can this browser run `migration`? Asked once per pool, answered by the handler's probe. */
   probe(migration) {
@@ -379,7 +386,7 @@ export class WorkerPool {
       const slot = { w, busy: 0, prepared: new Set(), grants: new Map() };
       w.onmessage = (e) => this._onMessage(slot, e.data || {});
       w.onerror = (e) => this._onCrash(slot, e);
-      w.postMessage({ type: 'config', endpoint: this.o.endpoint, csrf: this.o.csrf(), governed: !!this.o.governor });
+      w.postMessage({ type: 'config', endpoint: this.o.endpoint, csrf: this.o.csrf(), governed: !!this.o.governor, maxBody: this.o.maxBody ? this.o.maxBody() : 0 });
       this.workers.push(slot);
     }
   }
@@ -420,6 +427,8 @@ export class WorkerPool {
       this.pending.delete(id);
       p.resolve(p.unit === SPEEDTEST_JOB
         ? { type: 'speedtest_done', ok: false, error: 'worker crashed: ' + (e && e.message || '') }
+        : p.batch
+        ? { type: 'batch_done', results: p.batch.map((k) => ({ type: 'unit_failed', key: k, error: 'worker crashed: ' + (e && e.message || ''), fatal: false })) }
         : p.unit
         ? { type: 'unit_failed', key: p.unit, error: 'worker crashed: ' + (e && e.message || ''), fatal: false }
         : { ok: false, error: 'worker crashed' });
@@ -429,10 +438,10 @@ export class WorkerPool {
 
   _wake() { const w = this.waiters.shift(); if (w) w(); }
 
-  _send(slot, msg, unit) {
+  _send(slot, msg, unit, batch = null) {
     const reqId = ++this.seq;
     return new Promise((resolve) => {
-      this.pending.set(reqId, { resolve, slot, unit, dataset: msg.dataset });
+      this.pending.set(reqId, { resolve, slot, unit, batch, dataset: msg.dataset });
       slot.w.postMessage({ ...msg, reqId });
     });
   }
@@ -444,6 +453,7 @@ export class WorkerPool {
     const r = await this._send(slot, { type: 'prepare', migration, dataset, datasetBase });
     if (r && r.ok) slot.prepared.add(key);
     if (r && r.ok && Number.isInteger(r.slotsPerWorker) && r.slotsPerWorker > 0) this.hints.set(migration, r.slotsPerWorker);
+    if (r && r.ok && Number.isInteger(r.batchUnits) && r.batchUnits > 1 && !this.batches.has(migration)) this.batches.set(migration, r.batchUnits);
     return r || { ok: false };
   }
 
@@ -484,6 +494,30 @@ export class WorkerPool {
           }
         }
         return this._send(slot, { type: 'run', migration, dataset, unit, dry: !!dry }, unit);
+      }
+      await new Promise((r) => this.waiters.push(r));
+    }
+  }
+
+  /** Several units in one worker turn (run_batch); resolves batch_done or batch_unsupported. */
+  async runBatch(dataset, migration, units, dry) {
+    for (;;) {
+      if (this.dead) return { type: 'batch_done', results: units.map((k) => ({ type: 'unit_failed', key: k, error: 'terminated', aborted: true })) };
+      this._ensure();
+      const slots = this.slotsFor(migration);
+      const slot = this.workers.filter((s) => s.busy < slots).sort((a, b) => a.busy - b.busy)[0];
+      if (slot) {
+        slot.busy++;
+        const key = `${migration}|${dataset}`;
+        if (!slot.prepared.has(key) && this.bases.has(key)) {
+          const r = await this._prepareSlot(slot, dataset, migration, this.bases.get(key));
+          if (!r.ok) {
+            slot.busy--;
+            this._wake();
+            return { type: 'batch_done', results: units.map((k) => ({ type: 'unit_failed', key: k, error: r.error || 'prepare failed', code: 'prepare_failed', fatal: true })) };
+          }
+        }
+        return this._send(slot, { type: 'run_batch', migration, dataset, units, dry: !!dry }, units[0], units);
       }
       await new Promise((r) => this.waiters.push(r));
     }
@@ -538,6 +572,7 @@ export class WorkerPool {
     for (const s of this.workers) { try { s.w.terminate(); } catch (_) { /* gone */ } }
     this.workers = [];
     for (const p of this.pending.values()) {
+      if (p.batch) { p.resolve({ type: 'batch_done', results: p.batch.map((k) => ({ type: 'unit_failed', key: k, error: 'terminated', aborted: true })) }); continue; }
       p.resolve(p.unit && p.unit !== SPEEDTEST_JOB
         ? { type: 'unit_failed', key: p.unit, error: 'terminated', aborted: true }
         : { ok: false, error: 'terminated', aborted: true });
@@ -560,20 +595,37 @@ export async function runBrowserUnits({ pool, dataset, migration, keys, dry = fa
   const tries = new Map();
   const deferred = [];
   let fatal = null;
+  // One unit's answer: done, put back, deferred to the next wave, or fatal (false = stop the lane).
+  const settle = (key, r) => {
+    if (r.type === 'unit_done') { ctl.onUnit(r); return true; }
+    if (r.aborted || ctl.stop()) { queue.unshift(key); return false; }
+    if (r.code && DEFER_CODES.has(r.code)) { deferred.push(key); return true; }
+    const n = (tries.get(key) || 0) + 1;
+    tries.set(key, n);
+    if (r.fatal || n > UNIT_REQUEUE) {
+      fatal = Object.assign(new Error(r.error || 'unit failed'), { status: r.status, code: r.code, unit: key });
+      return false;
+    }
+    queue.push(key);
+    return true;
+  };
+  const batchOf = () => (typeof pool.batchFor === 'function' ? pool.batchFor(migration) : 1);
   const lane = async () => {
     while (queue.length && !fatal && !ctl.stop()) {
+      const size = batchOf();
+      if (size > 1 && typeof pool.runBatch === 'function') {
+        const units = queue.splice(0, size);
+        const r = await pool.runBatch(dataset, migration, units, dry);
+        if (r.type === 'batch_unsupported') { pool.noBatch?.(migration); queue.unshift(...units); continue; }
+        let go = true;
+        const results = Array.isArray(r.results) ? r.results : units.map((k) => ({ type: 'unit_failed', key: k, error: 'no answer' }));
+        for (const one of results) if (!settle(one.key, one)) go = false;
+        if (!go) return;
+        continue;
+      }
       const key = queue.shift();
       const r = await pool.runUnit(dataset, migration, key, dry);
-      if (r.type === 'unit_done') { ctl.onUnit(r); continue; }
-      if (r.aborted || ctl.stop()) { queue.unshift(key); return; }
-      if (r.code && DEFER_CODES.has(r.code)) { deferred.push(key); continue; }
-      const n = (tries.get(key) || 0) + 1;
-      tries.set(key, n);
-      if (r.fatal || n > UNIT_REQUEUE) {
-        fatal = Object.assign(new Error(r.error || 'unit failed'), { status: r.status, code: r.code, unit: key });
-        return;
-      }
-      queue.push(key);
+      if (!settle(key, r)) return;
     }
   };
   const cap = typeof pool.capacityFor === 'function' ? pool.capacityFor(migration) : pool.capacity;

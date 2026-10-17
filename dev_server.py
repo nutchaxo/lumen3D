@@ -6649,8 +6649,8 @@ class AdminHandler(http.server.SimpleHTTPRequestHandler):
         if not ok:
             self._reject(status, payload)
             return
-        if params.get("action") in ("unit_put", "speedtest_put"):
-            cap = (dataset_migrations.MAX_UNIT_BODY if params.get("action") == "unit_put"
+        if params.get("action") in ("unit_put", "unit_put_many", "unit_put_part", "speedtest_put"):
+            cap = (dataset_migrations.MAX_UNIT_BODY if params.get("action") in ("unit_put", "unit_put_many", "unit_put_part")
                    else dataset_migrations.SPEEDTEST_PUT_MAX)
             length = self._content_length(cap)
             if length is None:

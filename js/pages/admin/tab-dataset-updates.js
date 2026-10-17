@@ -269,15 +269,20 @@ function datasetBase(id) {
 
 function poolOptions(extra) {
   const cores = (typeof navigator !== 'undefined' && navigator.hardwareConcurrency) || 4;
+  // navigator.deviceMemory is capped at 8 (GB) by the browsers that give it: below 8, two.
+  const mem = (typeof navigator !== 'undefined' && Number(navigator.deviceMemory)) || 8;
   return {
-    // Each unit holds ≈ 16 MiB of planes plus its compressed bricks and tiles: four in
-    // flight stay well under 200 MiB while keeping both the link and two cores busy.
-    workers: Math.max(1, Math.min(2, Math.floor(cores / 2))),
+    // Each unit holds ≈ 16 MiB of planes plus its compressed bricks and tiles (an m005 batch
+    // up to 48 MiB of inputs): up to four workers on a machine with the cores and memory, every
+    // request still through the page's governor.
+    workers: Math.max(1, Math.min(mem >= 8 ? 4 : 2, Math.floor(cores / 2))),
     slots: 2,
     endpoint: absUrl(API_MIGRATIONS),
     csrf: () => getCsrf(),
     spawn: () => new Worker(absUrl(`js/workers/migration-worker.js${V}`)),
     governor: netGovernor,
+    // What one request body may carry on this host (a PHP host's post_max_size).
+    maxBody: () => Number(_status && _status.server && _status.server.maxUnitBody) || 0,
     onNet: (online) => setOnline('pool', online),
     ...(extra || {}),
   };

@@ -4674,6 +4674,164 @@ def _unit_put_m005(plan: Plan, m: dict, path: Path, key, body: bytes) -> dict:
     return {"ok": True, "done": sm["done"], "total": sm["total"]}
 
 
+# ── m005, browser batches (SPEC §14.10) ───────────────────────────────────────
+#
+# A browser worker takes several units at once: their inputs in ONE unit_inputs_many, their
+# results in ONE unit_put_many (u32 n, then n × {u16 key length, key (ASCII), u32 body length,
+# body}, little-endian). The plan is loaded and the journal written once per batch instead of
+# once per unit: on a shared PHP host, and under the request rate the operator's address may
+# send (SPEC §7.2), that is most of a small unit's cost. Each unit is checked on its own; one
+# refused unit does not refuse the others.
+
+UNIT_BATCH_MAX = 64
+
+
+def _unit_error(key, exc: "MigrationError") -> dict:
+    out = {"ok": False, "unit": str(key), "error": exc.code, "status": exc.status}
+    if exc.detail and exc.detail != exc.code:
+        out["detail"] = str(exc.detail)[:300]
+    return out
+
+
+def unit_inputs_many(dataset_id, mid, keys) -> dict:
+    """unit_inputs of up to UNIT_BATCH_MAX m005 units: {ok, items: [answer or error, in order]}."""
+    if not isinstance(keys, list) or not 1 <= len(keys) <= UNIT_BATCH_MAX:
+        raise MigrationError("bad_unit", 400, "1..%d units" % UNIT_BATCH_MAX)
+    m, plan, path = _open_job(dataset_id, mid)
+    if m["id"] != M005:
+        raise MigrationError("not_applicable", 409, "batches are an m005 protocol")
+    items = []
+    for key in keys:
+        try:
+            items.append(_unit_inputs_m005(plan, path, key))
+        except MigrationError as exc:
+            items.append(_unit_error(key, exc))
+    return {"ok": True, "items": items}
+
+
+def parse_put_many(body: bytes) -> list:
+    """[(key, body)] of a unit_put_many body; MigrationError bad_blob when malformed."""
+    try:
+        if len(body) < 4:
+            raise ValueError("short")
+        n = struct.unpack_from("<I", body, 0)[0]
+        if not 1 <= n <= UNIT_BATCH_MAX:
+            raise ValueError("%d units" % n)
+        pos, out = 4, []
+        for _ in range(n):
+            kl = struct.unpack_from("<H", body, pos)[0]
+            pos += 2
+            key = body[pos:pos + kl].decode("ascii")
+            if len(key) != kl:
+                raise ValueError("truncated key")
+            pos += kl
+            ln = struct.unpack_from("<I", body, pos)[0]
+            pos += 4
+            data = body[pos:pos + ln]
+            if len(data) != ln:
+                raise ValueError("truncated body")
+            pos += ln
+            out.append((key, data))
+        if pos != len(body):
+            raise ValueError("trailing bytes")
+        return out
+    except (ValueError, struct.error, UnicodeDecodeError) as exc:
+        raise MigrationError("bad_blob", 400, "unit_put_many: %s" % exc)
+
+
+def build_put_many(entries) -> bytes:
+    """The unit_put_many body of [(key, body)] (tests, tools)."""
+    parts = [struct.pack("<I", len(entries))]
+    for key, data in entries:
+        k = key.encode("ascii")
+        parts += [struct.pack("<H", len(k)), k, struct.pack("<I", len(data)), data]
+    return b"".join(parts)
+
+
+def unit_put_many(dataset_id, mid, body: bytes) -> dict:
+    """Store the results of several m005 units, journaled at once: {ok, results: [{unit, ok,
+    error?}], done, total}."""
+    if len(body) > MAX_UNIT_BODY:
+        raise MigrationError("body_too_large", 413)
+    m, plan, path = _open_job(dataset_id, mid)
+    if m["id"] != M005:
+        raise MigrationError("not_applicable", 409, "batches are an m005 protocol")
+    entries = parse_put_many(body)
+    us = _unitset(plan, M005)
+    j = _load_journal(path)
+    if j is None:
+        raise MigrationError("no_job", 404)
+    _check_source(plan, j, path, persist=False)
+    if j.get("state") != "running":
+        raise MigrationError("job_not_running", 409)
+    done = set(j.get("done") or [])
+    store = tile_store_dir(plan.type, plan.folder, M005)
+    results, accepted = [], []
+    for key, data in entries:
+        try:
+            unit = _m005_parse(key)
+            s, t, k, c = unit[0], unit[1], unit[2], unit[3]
+            tree = plan.trees.get(t)
+            if tree is None or c >= tree.channels or k >= len(us.levels):
+                raise MigrationError("bad_unit")
+            if unit not in us.unit_bytes:
+                raise MigrationError("empty_unit", 409)
+            if s and k and any(u[0] == 0 and u[1] == t and u[3] == c and _m005_key(u) not in done for u in us.units):
+                raise MigrationError("unit_blocked", 409, "stage A of this tree/channel is not complete")
+            _store_m005(store, unit, _m005_validate_put(us, unit, data))
+            accepted.append(_m005_key(unit))
+            # A stage-A unit of this batch counts for the later units of the same batch.
+            done.add(_m005_key(unit))
+            results.append({"ok": True, "unit": key})
+        except MigrationError as exc:
+            results.append(_unit_error(key, exc))
+    if accepted:
+        j = _mark_done(plan, m, path, accepted, "browser")
+    sm = _summary(j)
+    return {"ok": True, "results": results, "done": sm["done"], "total": sm["total"]}
+
+
+def _part_path(plan: Plan, key: str) -> Path:
+    return tile_store_dir(plan.type, plan.folder, M005) / ".parts" / (re.sub(r"[^A-Za-z0-9._-]", "_", key) + ".part")
+
+
+def unit_put_part(dataset_id, mid, key, offset, total, body: bytes) -> dict:
+    """One piece of an m005 unit result larger than one request may carry (the host's
+    post_max_size): pieces arrive in order (`offset` = the bytes received so far; a repeated
+    piece is accepted again), and the last one (offset + length = total) stores the unit like
+    unit_put. {ok, complete, received} or unit_put's answer + complete: true."""
+    m, plan, path = _open_job(dataset_id, mid)
+    if m["id"] != M005:
+        raise MigrationError("not_applicable", 409, "pieces are an m005 protocol")
+    try:
+        offset, total = int(offset), int(total)
+    except (TypeError, ValueError):
+        raise MigrationError("bad_blob", 400, "offset / total")
+    if total < 1 or total > MAX_UNIT_BODY or offset < 0 or offset + len(body) > total or not body:
+        raise MigrationError("bad_blob", 400, "piece outside the unit")
+    _m005_parse(key)
+    p = _part_path(plan, str(key))
+    p.parent.mkdir(parents=True, exist_ok=True)
+    have = p.stat().st_size if p.exists() else 0
+    if offset > have:
+        raise MigrationError("bad_blob", 409, "piece at %d, %d bytes received" % (offset, have))
+    with open(p, "r+b" if p.exists() else "wb") as fh:
+        fh.seek(offset)
+        fh.write(body)
+        fh.truncate(offset + len(body))
+    if offset + len(body) < total:
+        return {"ok": True, "complete": False, "received": offset + len(body)}
+    data = p.read_bytes()
+    try:
+        out = _unit_put_m005(plan, m, path, key, data)
+    finally:
+        try:
+            p.unlink()
+        except FileNotFoundError:
+            pass
+    return {**out, "complete": True}
+
+
 def build_m005_put_body(unit, result) -> bytes:
     """The unit_put body of a unit's result as process_unit_m005 makes it (tests, tools)."""
     if unit[0] == 0:
@@ -5277,7 +5435,8 @@ def _estimate_for(plan: Plan, m: dict, j) -> dict:
 # ── HTTP dispatch (the dev server only routes here) ────────────────────────────
 
 WRITE_ACTIONS = ("plan", "unit_put", "unit_run", "finalize", "cancel", "bench", "unit_inputs",
-                 "speedtest", "speedtest_put", "drop_previous")
+                 "speedtest", "speedtest_put", "drop_previous", "unit_inputs_many", "unit_put_many",
+                 "unit_put_part")
 # Binary answers (application/octet-stream) — routed to handle_binary(), not handle().
 BINARY_ACTIONS = ("store_get", "store_get_many", "speedtest_sample")
 # Binary answers to a POST (JSON body, CSRF like the write actions).
@@ -5315,6 +5474,13 @@ def handle(action: str, params: dict, body, raw: bytes | None = None) -> tuple[i
                               require_server=True)
         if action == "unit_inputs":
             return 200, unit_inputs(body.get("dataset"), body.get("migration"), body.get("unit"))
+        if action == "unit_inputs_many":
+            return 200, unit_inputs_many(body.get("dataset"), body.get("migration"), body.get("units"))
+        if action == "unit_put_many":
+            return 200, unit_put_many(params.get("dataset"), params.get("migration"), raw or b"")
+        if action == "unit_put_part":
+            return 200, unit_put_part(params.get("dataset"), params.get("migration"), params.get("unit"),
+                                      params.get("offset"), params.get("total"), raw or b"")
         if action == "speedtest":
             return 200, speedtest(body.get("maxSeconds", 1.0))
         if action == "speedtest_put":

@@ -749,6 +749,9 @@
         id: ID,
         // A unit holds at most one native plane band (an XZ unit: X × 64 × Z voxels).
         slotsPerWorker: 1,
+        // Units per batch (worker run_batch): one unit_inputs_many, the shared runs read once,
+        // one unit_put_many per 16 MiB of results — most of a small unit was its three requests.
+        batchUnits: 16,
         prepare, listUnits, planUnitWork, runUnit, probe,
         _internals: {
             quantizerIndex, axisWeights, resamplePlane, apronIndex, brickWithApron, brickKept, mosaic66, unmosaic66,

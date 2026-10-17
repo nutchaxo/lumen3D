@@ -887,6 +887,121 @@ function lumen_m005_unit_put(array $plan, array $m, string $path, $key, string $
     return ['ok' => true, 'done' => $sm['done'], 'total' => $sm['total']];
 }
 
+// ── m005, browser batches (dataset_migrations.unit_inputs_many / unit_put_many) ─
+
+const LUMEN_M005_BATCH_MAX = 64;
+
+function lumen_m005_unit_error($key, LumenMigError $e): array {
+    $out = ['ok' => false, 'unit' => (string)$key, 'error' => $e->codeName, 'status' => $e->status];
+    if ($e->detail !== null && $e->detail !== $e->codeName) $out['detail'] = substr($e->detail, 0, 300);
+    return $out;
+}
+
+/** unit_inputs of up to 64 m005 units in one answer: {ok, items: [answer or error, in order]}. */
+function lumen_m005_unit_inputs_many(array $plan, string $path, $keys): array {
+    if (!is_array($keys) || count($keys) < 1 || count($keys) > LUMEN_M005_BATCH_MAX || array_keys($keys) !== range(0, count($keys) - 1)) {
+        throw new LumenMigError('bad_unit', 400, '1..' . LUMEN_M005_BATCH_MAX . ' units');
+    }
+    $items = [];
+    foreach ($keys as $key) {
+        try {
+            $items[] = lumen_m005_unit_inputs($plan, $path, $key);
+        } catch (LumenMigError $e) {
+            $items[] = lumen_m005_unit_error($key, $e);
+        }
+    }
+    return ['ok' => true, 'items' => $items];
+}
+
+/** [[key, body]] of a unit_put_many body: u32 n, n × {u16 key length, key, u32 length, body}. */
+function lumen_m005_parse_put_many(string $body): array {
+    $n = strlen($body);
+    if ($n < 4) throw new LumenMigError('bad_blob', 400, 'unit_put_many: short');
+    $count = unpack('V', $body, 0)[1];
+    if ($count < 1 || $count > LUMEN_M005_BATCH_MAX) throw new LumenMigError('bad_blob', 400, "unit_put_many: $count units");
+    $pos = 4; $out = [];
+    for ($i = 0; $i < $count; $i++) {
+        if ($pos + 2 > $n) throw new LumenMigError('bad_blob', 400, 'unit_put_many: truncated key');
+        $kl = unpack('v', $body, $pos)[1]; $pos += 2;
+        if ($pos + $kl + 4 > $n) throw new LumenMigError('bad_blob', 400, 'unit_put_many: truncated key');
+        $key = substr($body, $pos, $kl); $pos += $kl;
+        if (!preg_match('/^[\x20-\x7E]*$/D', $key)) throw new LumenMigError('bad_blob', 400, 'unit_put_many: key');
+        $ln = unpack('V', $body, $pos)[1]; $pos += 4;
+        if ($pos + $ln > $n) throw new LumenMigError('bad_blob', 400, 'unit_put_many: truncated body');
+        $out[] = [$key, substr($body, $pos, $ln)];
+        $pos += $ln;
+    }
+    if ($pos !== $n) throw new LumenMigError('bad_blob', 400, 'unit_put_many: trailing bytes');
+    return $out;
+}
+
+/** Store several m005 unit results, journaled at once: {ok, results: [{unit, ok, error?}], done, total}. */
+function lumen_m005_unit_put_many(array $plan, array $m, string $path, string $body): array {
+    $entries = lumen_m005_parse_put_many($body);
+    unset($body);
+    $us = lumen_mig_unitset($plan, LUMEN_M005);
+    $j = lumen_mig_load_journal($path);
+    if ($j === null) throw new LumenMigError('no_job', 404);
+    lumen_mig_check_source($plan, $j, $path, false);
+    if (($j['state'] ?? null) !== 'running') throw new LumenMigError('job_not_running', 409);
+    $done = array_flip($j['done'] ?? []);
+    $store = lumen_mig_store_dir($plan['type'], $plan['folder'], LUMEN_M005);
+    $results = []; $accepted = [];
+    foreach ($entries as $i => [$key, $data]) {
+        $entries[$i] = null;
+        try {
+            $unit = lumen_m005_parse($key);
+            [$s, $t, $k, $c] = $unit;
+            $tree = $plan['trees'][$t] ?? null;
+            if ($tree === null || $c >= $tree['C'] || $k >= count($us['levels'])) throw new LumenMigError('bad_unit');
+            $ukey = lumen_m005_key($unit);
+            if (!isset($us['unitBytes'][$ukey])) throw new LumenMigError('empty_unit', 409);
+            if (!lumen_m005_stage_ready($us, $done, $unit)) throw new LumenMigError('unit_blocked', 409, 'stage A of this tree/channel is not complete');
+            lumen_m005_store($store, $unit, lumen_m005_validate_put($us, $unit, $data));
+            $accepted[] = $ukey;
+            // A stage-A unit of this batch counts for the later units of the same batch.
+            $done[$ukey] = true;
+            $results[] = ['ok' => true, 'unit' => $key];
+        } catch (LumenMigError $e) {
+            $results[] = lumen_m005_unit_error($key, $e);
+        }
+        unset($data);
+    }
+    if ($accepted) $j = lumen_mig_mark_done($plan, $m, $path, $accepted, 'browser');
+    $sm = lumen_mig_summary($j);
+    return ['ok' => true, 'results' => $results, 'done' => $sm['done'], 'total' => $sm['total']];
+}
+
+/** One piece of a unit result larger than one request may carry (dataset_migrations.unit_put_part). */
+function lumen_m005_unit_put_part(array $plan, array $m, string $path, $key, $offset, $total, string $body): array {
+    if (!is_numeric($offset) || !is_numeric($total)) throw new LumenMigError('bad_blob', 400, 'offset / total');
+    $offset = (int)$offset; $total = (int)$total;
+    if ($total < 1 || $total > LUMEN_MIG_MAX_BODY || $offset < 0 || $offset + strlen($body) > $total || $body === '') throw new LumenMigError('bad_blob', 400, 'piece outside the unit');
+    lumen_m005_parse($key);
+    $dir = lumen_mig_store_dir($plan['type'], $plan['folder'], LUMEN_M005) . '/.parts';
+    if (!is_dir($dir) && !admin_make_dir($dir)) throw new LumenMigError('store_write_failed', 500);
+    $p = $dir . '/' . preg_replace('/[^A-Za-z0-9._-]/', '_', (string)$key) . '.part';
+    clearstatcache(true, $p);
+    $have = is_file($p) ? (int)filesize($p) : 0;
+    if ($offset > $have) throw new LumenMigError('bad_blob', 409, "piece at $offset, $have bytes received");
+    $fh = @fopen($p, is_file($p) ? 'r+b' : 'wb');
+    if ($fh === false) throw new LumenMigError('store_write_failed', 500);
+    fseek($fh, $offset);
+    $ok = fwrite($fh, $body) === strlen($body);
+    ftruncate($fh, $offset + strlen($body));
+    fclose($fh);
+    if (!$ok) throw new LumenMigError('store_write_failed', 500);
+    if ($offset + strlen($body) < $total) return ['ok' => true, 'complete' => false, 'received' => $offset + strlen($body)];
+    unset($body);
+    $data = (string)file_get_contents($p);
+    try {
+        $out = lumen_m005_unit_put($plan, $m, $path, $key, $data);
+    } finally {
+        @unlink($p);
+    }
+    return $out + ['complete' => true];
+}
+
 // ── m005 finalize: assembly of the v5 tree (dataset_migrations._m005_assemble) ─
 
 function lumen_m005_entries_path(string $incoming, string $rel, string $name): string {

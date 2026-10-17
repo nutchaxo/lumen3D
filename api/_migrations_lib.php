@@ -818,7 +818,7 @@ function lumen_mig_capabilities(): array {
         'limits' => ['maxExecutionTime' => $met, 'memoryLimitBytes' => $mem ?: null,
                      'resettable' => lumen_mig_time_limit_resettable()],
         'backend' => 'php', 'vectorized' => false,
-        'maxRunSeconds' => LUMEN_MIG_MAX_RUN_S, 'maxUnitBody' => LUMEN_MIG_MAX_BODY,
+        'maxRunSeconds' => LUMEN_MIG_MAX_RUN_S, 'maxUnitBody' => lumen_mig_max_request_body(),
         'migrations' => [
             LUMEN_M002 => ['available' => !$m002, 'reasons' => $m002],
             LUMEN_M003 => ['available' => !$m003, 'reasons' => $m003],
@@ -830,6 +830,18 @@ function lumen_mig_capabilities(): array {
     if (!$webp) $caps['detail'] = function_exists('gd_info') ? 'GD cannot decode lossless WebP exactly' : 'the gd extension is not loaded';
     elseif (!$lossless) $caps['detail'] = (PHP_VERSION_ID < 80100 || !defined('IMG_WEBP_LOSSLESS')) ? 'lossless WebP encoding needs PHP 8.1 or later' : 'GD does not encode lossless WebP exactly';
     return $caps;
+}
+
+/**
+ * The largest request body a browser unit may send here: the engine's own cap, or less when
+ * the host's post_max_size is smaller (PHP drops a body over it before a line of ours runs, and
+ * answers what looks like a success with no JSON). 64 KiB are kept for the query and headers.
+ */
+function lumen_mig_max_request_body(): int {
+    $post = lumen_up_ini_bytes((string)ini_get('post_max_size'));   // 0 = unlimited
+    $cap = LUMEN_MIG_MAX_BODY;
+    if ($post > 0) $cap = min($cap, max(1048576, $post - 65536));
+    return $cap;
 }
 
 /** m004's server probe: a 66³ brick holding every byte value, encoded, sniffed as a 594×528 VP8L, decoded back exactly. */
@@ -3303,7 +3315,7 @@ function lumen_mig_status(): array {
 
 // ── Dispatch (api/migrations.php) ────────────────────────────────────────────
 
-const LUMEN_MIG_WRITE_ACTIONS = ['plan', 'unit_put', 'unit_run', 'finalize', 'cancel', 'bench', 'unit_inputs', 'speedtest', 'speedtest_put', 'drop_previous'];
+const LUMEN_MIG_WRITE_ACTIONS = ['plan', 'unit_put', 'unit_run', 'finalize', 'cancel', 'bench', 'unit_inputs', 'speedtest', 'speedtest_put', 'drop_previous', 'unit_inputs_many', 'unit_put_many', 'unit_put_part'];
 /** Binary answers (application/octet-stream) — routed to lumen_mig_handle_binary. */
 const LUMEN_MIG_BINARY_ACTIONS = ['store_get', 'store_get_many', 'speedtest_sample'];
 /** Bricks per store_get_many answer (a level-k+1 unit reads up to 10³ stored bricks). */
@@ -3350,6 +3362,22 @@ function lumen_mig_handle(string $action, array $params, array $body, ?string $r
                 return [200, lumen_mig_bench($body['dataset'] ?? null, $body['units'] ?? 4, $body['migration'] ?? null, true)];
             case 'unit_inputs':
                 return [200, lumen_mig_unit_inputs($body['dataset'] ?? null, $body['migration'] ?? null, $body['unit'] ?? null)];
+            case 'unit_inputs_many':
+                [$m, $plan, $path] = lumen_mig_open_job($body['dataset'] ?? null, $body['migration'] ?? null);
+                if ($m['id'] !== LUMEN_M005) throw new LumenMigError('not_applicable', 409, 'batches are an m005 protocol');
+                return [200, lumen_m005_unit_inputs_many($plan, $path, $body['units'] ?? null)];
+            case 'unit_put_many':
+                $rawMany = $raw ?? lumen_mig_read_body(false);
+                if (strlen((string)$rawMany) > LUMEN_MIG_MAX_BODY) throw new LumenMigError('body_too_large', 413);
+                [$m, $plan, $path] = lumen_mig_open_job($params['dataset'] ?? null, $params['migration'] ?? null);
+                if ($m['id'] !== LUMEN_M005) throw new LumenMigError('not_applicable', 409, 'batches are an m005 protocol');
+                return [200, lumen_m005_unit_put_many($plan, $m, $path, (string)$rawMany)];
+            case 'unit_put_part':
+                $rawPart = $raw ?? lumen_mig_read_body(false);
+                if (strlen((string)$rawPart) > LUMEN_MIG_MAX_BODY) throw new LumenMigError('body_too_large', 413);
+                [$m, $plan, $path] = lumen_mig_open_job($params['dataset'] ?? null, $params['migration'] ?? null);
+                if ($m['id'] !== LUMEN_M005) throw new LumenMigError('not_applicable', 409, 'pieces are an m005 protocol');
+                return [200, lumen_m005_unit_put_part($plan, $m, $path, $params['unit'] ?? null, $params['offset'] ?? null, $params['total'] ?? null, (string)$rawPart)];
             case 'speedtest':
                 return [200, lumen_mig_speedtest($body['maxSeconds'] ?? 1.0)];
             case 'speedtest_put':

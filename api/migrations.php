@@ -12,6 +12,9 @@
  *   POST ?action=drop_previous { dataset }   deletes the kept bricks.previous/
  *   POST ?action=bench      { dataset, units: N, migration? }
  *   POST ?action=unit_inputs { dataset, migration, unit }        what a browser unit reads
+ *   POST ?action=unit_inputs_many { dataset, migration, units: [≤ 64 keys] }   m005: the same, in one answer
+ *   POST ?action=unit_put_many&dataset=&migration=   RAW body = u32 n, n × {u16 key len, key, u32 len, body}
+ *   POST ?action=unit_put_part&dataset=&migration=&unit=&offset=&total=   RAW body = one piece of a unit result
  *   POST ?action=speedtest  { maxSeconds }   server side of the executors' speed test
  *   POST ?action=speedtest_put   RAW body = one converted test batch (dropped)
  *   GET  ?action=speedtest_sample&n=1..16   the test brick repeated n times (octet-stream)
@@ -52,12 +55,12 @@ if (in_array($action, LUMEN_MIG_WRITE_ACTIONS, true) || in_array($action, LUMEN_
 }
 
 $params = [];
-foreach (['dataset', 'migration', 'unit', 'dry'] as $k) {
+foreach (['dataset', 'migration', 'unit', 'dry', 'offset', 'total'] as $k) {
     $v = lumen_str($_GET[$k] ?? null);
     if ($v !== null) $params[$k] = $v;
 }
 // unit_put's body is the raw unit blob, streamed by the engine; every other POST is JSON.
-$body = ($method === 'POST' && $action !== 'unit_put' && $action !== 'speedtest_put') ? (lumen_request_json() ?? []) : [];
+$body = ($method === 'POST' && $action !== 'unit_put' && $action !== 'unit_put_many' && $action !== 'unit_put_part' && $action !== 'speedtest_put') ? (lumen_request_json() ?? []) : [];
 
 if (in_array($action, LUMEN_MIG_BINARY_POST_ACTIONS, true)) {
     // A browser unit's input runs in one answer (POST + CSRF, checked above).
@@ -91,7 +94,7 @@ if (in_array($action, LUMEN_MIG_BINARY_ACTIONS, true)) {
 
 switch ($action) {
 case 'status': case 'plan': case 'unit_put': case 'unit_run': case 'finalize': case 'cancel': case 'bench': case 'unit_inputs':
-case 'speedtest': case 'speedtest_put': case 'drop_previous':
+case 'speedtest': case 'speedtest_put': case 'drop_previous': case 'unit_inputs_many': case 'unit_put_many': case 'unit_put_part':
     $t0 = microtime(true);
     [$status, $payload] = lumen_mig_handle($action, $params, $body);
     if ($action === 'status') header('Server-Timing: ' . lumen_mig_status_server_timing((microtime(true) - $t0) * 1000));

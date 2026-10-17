@@ -402,24 +402,57 @@
     "previousBricks": "version précédente (avant la mise à jour des données)",
     "previousBricksMissing": "Ce dataset n'a conservé aucune version précédente : affichage de la version actuelle.",
     "qualityMatrix": {
-      "caption": "Résolution × compression",
-      "resolution": "Niveau",
-      "colLl": "Sans perte",
-      "colB2": "±2",
-      "colB4": "±4",
-      "colQ80": "Légère",
-      "colQ50": "Très légère",
-      "hintLl": "Sans perte : chaque voxel exact.",
-      "hintB2": "Visuellement sans perte : aucun voxel ne bouge de plus de 2 niveaux de gris.",
-      "hintB4": "Quasi sans perte : aucun voxel ne bouge de plus de 4 niveaux de gris.",
-      "hintQ80": "WebP 80 : plus léger, petits changements visuels.",
-      "hintQ50": "WebP 50 : le plus léger, lissage visible.",
-      "over": "Plus que ce GPU ne peut contenir : le viewer affichera un niveau plus grossier.",
-      "tight": "Tient, proche du budget de ce GPU.",
-      "fits": "Tient largement sur ce GPU.",
-      "legend": "Chaque case : la taille à télécharger. GPU : la mémoire que prend le niveau une fois chargé, la même dans toutes les colonnes (le GPU garde les voxels décompressés). Vert tient, orange est juste, rouge est trop grand.",
-      "losslessAtRest": "Sans perte quand la vue s'arrête",
-      "losslessAtRestHint": "Avec une cellule compressée, les briques visibles sont rechargées sans perte un instant après l'arrêt de la caméra."
+      "help": "Comment choisir ?",
+      "resolutionHead": "Résolution",
+      "qualityHead": "Qualité",
+      "gpuHead": "Mémoire GPU",
+      "summary": "{res} · {tier} : {size}",
+      "shownCoarser": "Affiché en {shown} : le GPU ne tient pas {chosen}.",
+      "legend": "Mémoire GPU d’un niveau : vert = tient, orange = proche du budget, rouge = trop grand.",
+      "eta": "≈ {time}",
+      "guideTitle": "Choisir la résolution et la qualité",
+      "close": "Fermer",
+      "guideIntro": "Le volume est stocké à plusieurs résolutions et, pour chacune, avec plusieurs qualités. Ce choix fixe la quantité de données téléchargée, la mémoire de la carte graphique qu’elle occupe et la fidélité de l’image. Les tailles ci-dessous sont exactes pour ce jeu de données.",
+      "resolutionText": "Une résolution est le même volume sur une grille de voxels plus grossière : chaque palier divise à peu près X et Y par deux, Z garde toute sa profondeur. Native est l’acquisition elle-même. Un niveau plus grossier se télécharge plus vite et prend moins de mémoire graphique ; le plus fin que la carte tient confortablement montre le plus de détail.",
+      "rateLabel": "Débit pour les temps",
+      "rateMeasured": "Mesuré ici ({rate} Mb/s)",
+      "rateMbps": "{rate} Mb/s",
+      "tableHead": "Toutes les combinaisons",
+      "tableNote": "Taille : tout ce qu’il faut télécharger pour ce niveau, tous canaux. Temps : taille ÷ débit. Le premier affichage ne charge que les bricks visibles ; il est donc souvent plus rapide que le temps indiqué.",
+      "gpuOk": "Vert : la carte tient le niveau à l’aise (moins de 75 % du budget de {budget}).",
+      "gpuTight": "Orange : proche du budget (75 à 100 %).",
+      "gpuOver": "Rouge : au-delà du budget. Le viewer affiche alors le niveau plus grossier suivant.",
+      "gpuNote": "La colonne GPU est la mémoire qu’occupe le niveau une fois chargé. Elle est la même pour toutes les qualités : la carte reçoit les voxels décompressés.",
+      "budget": "Budget GPU actuel : {budget}.",
+      "qualitiesHead": "Ce que signifient les qualités",
+      "tierSize": "Taille sur ce jeu : {range} de Max",
+      "tier": {
+        "max": {
+          "short": "Exacte",
+          "long": "Chaque voxel tel qu’acquis, rien n’est perdu. Pour les mesures, les figures et les exports."
+        },
+        "extra": {
+          "short": "±2 niveaux",
+          "long": "Visuellement sans perte : aucun voxel ne bouge de plus de 2 niveaux de gris sur 256. Indiscernable à l’écran ; le réglage par défaut pour explorer."
+        },
+        "high": {
+          "short": "±4 niveaux",
+          "long": "Quasi sans perte : aucun voxel ne bouge de plus de 4 niveaux de gris. Difficile à voir, même zoomé."
+        },
+        "medium": {
+          "short": "WebP 80",
+          "long": "WebP avec perte, qualité 80 : fichiers plus légers, légère perte de texture et de bruit, petits artefacts près des bords nets. Bon pour une vue d’ensemble."
+        },
+        "low": {
+          "short": "WebP 50",
+          "long": "WebP avec perte, qualité 50 : le plus léger. Lissage visible et perte des détails fins. Seulement pour parcourir un très grand niveau sur une liaison lente."
+        }
+      },
+      "adviceHead": "Quelle qualité choisir",
+      "advice": "Recommandé : la résolution la plus fine affichée en vert, en qualité Extra. Pour une mesure ou une figure : Max en Native.",
+      "adviceRest": "Avec une qualité compressée, les bricks visibles sont rechargés sans perte quand la caméra s’arrête (case sous les listes).",
+      "losslessAtRest": "Sans perte une fois la vue posée",
+      "losslessAtRestHint": "Avec une cellule compressée, les bricks visibles sont rechargés sans perte peu après l’arrêt de la caméra."
     },
     "detailLossless": "Détail sans perte : {count} briques visibles",
     "gpuMemory": "Mémoire GPU",

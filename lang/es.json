@@ -402,24 +402,57 @@
     "previousBricks": "versión anterior (antes de la actualización de datos)",
     "previousBricksMissing": "Este dataset no conservó ninguna versión anterior: se muestra la actual.",
     "qualityMatrix": {
-      "caption": "Resolución × compresión",
-      "resolution": "Nivel",
-      "colLl": "Sin pérdidas",
-      "colB2": "±2",
-      "colB4": "±4",
-      "colQ80": "Ligera",
-      "colQ50": "Muy ligera",
-      "hintLl": "Sin pérdidas: cada vóxel exacto.",
-      "hintB2": "Visualmente sin pérdidas: ningún vóxel cambia más de 2 niveles de gris.",
-      "hintB4": "Casi sin pérdidas: ningún vóxel cambia más de 4 niveles de gris.",
-      "hintQ80": "WebP 80: más ligero, pequeños cambios visuales.",
-      "hintQ50": "WebP 50: el más ligero, suavizado visible.",
-      "over": "Más de lo que cabe en esta GPU: el visor mostrará un nivel más grueso.",
-      "tight": "Cabe, cerca del presupuesto de esta GPU.",
-      "fits": "Cabe holgadamente en esta GPU.",
-      "legend": "Cada casilla: el tamaño a descargar. GPU: la memoria que ocupa el nivel una vez cargado, la misma en todas las columnas (la GPU guarda los vóxeles descomprimidos). Verde cabe, naranja va justo, rojo es demasiado grande.",
-      "losslessAtRest": "Sin pérdidas cuando la vista se detiene",
-      "losslessAtRestHint": "Con una celda comprimida, los ladrillos visibles se vuelven a cargar sin pérdidas un momento después de que la cámara se detenga."
+      "help": "¿Cómo elegir?",
+      "resolutionHead": "Resolución",
+      "qualityHead": "Calidad",
+      "gpuHead": "Memoria GPU",
+      "summary": "{res} · {tier}: {size}",
+      "shownCoarser": "Mostrado en {shown}: la GPU no admite {chosen}.",
+      "legend": "Memoria GPU de un nivel: verde = cabe, naranja = cerca del presupuesto, rojo = demasiado grande.",
+      "eta": "≈ {time}",
+      "guideTitle": "Elegir resolución y calidad",
+      "close": "Cerrar",
+      "guideIntro": "El volumen se guarda en varias resoluciones y, para cada una, en varias calidades. Esta elección fija cuántos datos se descargan, cuánta memoria gráfica ocupan y la fidelidad de la imagen. Los tamaños de abajo son exactos para este conjunto de datos.",
+      "resolutionText": "Una resolución es el mismo volumen en una rejilla de vóxeles más gruesa: cada paso reduce X e Y aproximadamente a la mitad, Z conserva toda su profundidad. Native es la adquisición misma. Un nivel más grueso se descarga más rápido y ocupa menos memoria gráfica; el más fino que la tarjeta admite cómodamente muestra más detalle.",
+      "rateLabel": "Velocidad de descarga para los tiempos",
+      "rateMeasured": "Medida aquí ({rate} Mb/s)",
+      "rateMbps": "{rate} Mb/s",
+      "tableHead": "Todas las combinaciones",
+      "tableNote": "Tamaño: todo lo que hay que descargar para ese nivel, todos los canales. Tiempo: tamaño ÷ velocidad. La primera vista sólo carga los bricks visibles, así que suele ser más rápida que el tiempo indicado.",
+      "gpuOk": "Verde: la tarjeta lo admite cómodamente (menos del 75 % del presupuesto de {budget}).",
+      "gpuTight": "Naranja: cerca del presupuesto (75 a 100 %).",
+      "gpuOver": "Rojo: por encima del presupuesto. El visor muestra entonces el nivel más grueso siguiente.",
+      "gpuNote": "La columna GPU es la memoria que ocupa el nivel una vez cargado. Es la misma para todas las calidades: la tarjeta recibe los vóxeles descomprimidos.",
+      "budget": "Presupuesto GPU actual: {budget}.",
+      "qualitiesHead": "Qué significan las calidades",
+      "tierSize": "Tamaño en este conjunto: {range} de Max",
+      "tier": {
+        "max": {
+          "short": "Exacta",
+          "long": "Cada vóxel tal como se adquirió, sin pérdida. Para mediciones, figuras y exportaciones."
+        },
+        "extra": {
+          "short": "±2 niveles",
+          "long": "Visualmente sin pérdida: ningún vóxel cambia más de 2 niveles de gris de 256. Indistinguible en pantalla; el valor por defecto para explorar."
+        },
+        "high": {
+          "short": "±4 niveles",
+          "long": "Casi sin pérdida: ningún vóxel cambia más de 4 niveles de gris. Difícil de ver, incluso ampliado."
+        },
+        "medium": {
+          "short": "WebP 80",
+          "long": "WebP con pérdida, calidad 80: archivos más ligeros, algo de textura y ruido suavizados, pequeños artefactos junto a bordes nítidos. Bueno para vistas generales."
+        },
+        "low": {
+          "short": "WebP 50",
+          "long": "WebP con pérdida, calidad 50: el más ligero. Suavizado visible y pérdida de detalle fino. Sólo para recorrer un nivel muy grande con una conexión lenta."
+        }
+      },
+      "adviceHead": "Qué elegir",
+      "advice": "Recomendado: la resolución más fina en verde, con calidad Extra. Para una medición o una figura: Max en Native.",
+      "adviceRest": "Con una calidad comprimida, los bricks visibles se vuelven a cargar sin pérdida cuando la cámara se detiene (casilla bajo las listas).",
+      "losslessAtRest": "Sin pérdida al detenerse la vista",
+      "losslessAtRestHint": "Con una celda comprimida, los bricks visibles se vuelven a cargar sin pérdida poco después de que la cámara se detenga."
     },
     "detailLossless": "Detalle sin pérdidas: {count} ladrillos a la vista",
     "gpuMemory": "Memoria GPU",

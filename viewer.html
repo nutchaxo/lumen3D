@@ -23,7 +23,7 @@
   <link rel="stylesheet" href="config/theme.css">
   <link rel="stylesheet" href="css/base.css">
   <link rel="stylesheet" href="css/components.css?v=20260615-fixed1">
-  <link rel="stylesheet" href="css/viewer.css?v=20260615-fixed1">
+  <link rel="stylesheet" href="css/viewer.css?v=20261017-qm1">
   <link rel="stylesheet" href="css/tools.css?v=20260615-fixed1">
   <script src="js/core/theme-boot.js"></script>
 </head>
@@ -628,8 +628,16 @@
   <script src="js/viewers/volume-slicer.js?v=20260615-fixed1"></script>
   <script src="js/viewers/volume-viewer.js?v=20260615-fixed1"></script>
   <script src="js/viewers/tracking-overlay.js?v=20260615-fixed1"></script>
-  <script src="js/pages/viewer.js?v=20260615-fixed1"></script>
+  <script src="js/pages/viewer.js?v=20261017-qm1"></script>
   <script src="js/core/font-loader.js"></script>
   <!-- Modules are loaded dynamically by PluginRegistry.loadModules() in viewer.js -->
+  <!-- Quality guide of a v5 dataset: viewer.js _openQualityGuide fills the body when it opens. -->
+  <dialog id="quality-guide" class="qm-guide" aria-labelledby="quality-guide-title">
+    <div class="qm-guide-head">
+      <h2 id="quality-guide-title" data-i18n="viewer.qualityMatrix.guideTitle">Choosing a resolution and a quality</h2>
+      <button type="button" class="qm-guide-close" data-i18n-aria="viewer.qualityMatrix.close" aria-label="Close">&times;</button>
+    </div>
+    <div class="qm-guide-body" id="quality-guide-body"></div>
+  </dialog>
 </body>
 </html>

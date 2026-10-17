@@ -402,22 +402,55 @@
     "previousBricks": "previous version (before the data update)",
     "previousBricksMissing": "This dataset kept no previous version: showing the current one.",
     "qualityMatrix": {
-      "caption": "Resolution × compression",
-      "resolution": "Level",
-      "colLl": "Lossless",
-      "colB2": "±2",
-      "colB4": "±4",
-      "colQ80": "Light",
-      "colQ50": "Very light",
-      "hintLl": "Lossless: every voxel exact.",
-      "hintB2": "Visually lossless: no voxel moves by more than 2 grey levels.",
-      "hintB4": "Near lossless: no voxel moves by more than 4 grey levels.",
-      "hintQ80": "WebP 80: lighter, small visual changes.",
-      "hintQ50": "WebP 50: lightest, visible smoothing.",
-      "over": "More than this GPU holds: the viewer will show a coarser level.",
-      "tight": "Fits, close to this GPU's budget.",
-      "fits": "Fits comfortably on this GPU.",
-      "legend": "Each cell: the size to download. GPU: the memory the level takes once loaded, the same in every column (the GPU holds the decompressed voxels). Green fits, amber is close, red is too large.",
+      "help": "How to choose?",
+      "resolutionHead": "Resolution",
+      "qualityHead": "Quality",
+      "gpuHead": "GPU memory",
+      "summary": "{res} · {tier}: {size}",
+      "shownCoarser": "Shown at {shown}: the GPU does not hold {chosen}.",
+      "legend": "GPU memory of a resolution: green fits, amber is close to the budget, red is too large.",
+      "eta": "≈ {time}",
+      "guideTitle": "Choosing a resolution and a quality",
+      "close": "Close",
+      "guideIntro": "The volume is stored at several resolutions and, for each, in several qualities. This choice sets how much data is downloaded, how much graphics memory it takes and how faithful the picture is. The sizes below are exact for this dataset.",
+      "resolutionText": "A resolution is the same volume on a coarser voxel grid: each step roughly halves X and Y, Z keeps its full depth. Native is the acquisition itself. A coarser level downloads faster and takes less graphics memory; the finest one the card holds comfortably shows the most detail.",
+      "rateLabel": "Download speed for the times",
+      "rateMeasured": "Measured here ({rate} Mb/s)",
+      "rateMbps": "{rate} Mb/s",
+      "tableHead": "Every combination",
+      "tableNote": "Size: everything to download for that level, all channels. Time: size ÷ speed. The first view loads only the bricks in view, so it is usually quicker than the time shown.",
+      "gpuOk": "Green: the GPU holds it comfortably (under 75 % of the {budget} budget).",
+      "gpuTight": "Amber: close to the budget (75 to 100 %).",
+      "gpuOver": "Red: more than the budget. The viewer then shows the next coarser level.",
+      "gpuNote": "The GPU column is the memory the level takes once loaded. It is the same for every quality, because the card holds the decompressed voxels.",
+      "budget": "Current GPU budget: {budget}.",
+      "qualitiesHead": "What the qualities mean",
+      "tierSize": "Size on this dataset: {range} of Max",
+      "tier": {
+        "max": {
+          "short": "Exact",
+          "long": "Every voxel as acquired, nothing lost. For measurements, figures and exports."
+        },
+        "extra": {
+          "short": "±2 levels",
+          "long": "Visually lossless: no voxel moves by more than 2 of the 256 grey levels. Hard to tell apart on screen; the default for exploring."
+        },
+        "high": {
+          "short": "±4 levels",
+          "long": "Near lossless: no voxel moves by more than 4 grey levels. Small enough to be hard to see, even zoomed in."
+        },
+        "medium": {
+          "short": "WebP 80",
+          "long": "Lossy WebP at quality 80: smaller files, faint texture and noise smoothed, slight artefacts near sharp edges. Good for overviews."
+        },
+        "low": {
+          "short": "WebP 50",
+          "long": "Lossy WebP at quality 50: the lightest. Visible smoothing and loss of fine detail. Only to browse a very large level on a slow link."
+        }
+      },
+      "adviceHead": "Which to choose",
+      "advice": "Recommended: the finest resolution shown green, at Extra. For a measurement or a figure: Max at Native.",
+      "adviceRest": "With a compressed quality, the bricks in view are loaded again without loss when the camera stops (the checkbox under the lists).",
       "losslessAtRest": "Lossless once the view rests",
       "losslessAtRestHint": "With a compressed cell, the bricks in view are loaded again without loss a moment after the camera stops."
     },

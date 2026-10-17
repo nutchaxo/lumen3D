@@ -17,6 +17,10 @@
  * An XZ / YZ cut costs three small reads per channel (header, the row's entries, its
  * tiles); oblique cut bricks two rounds (the record tables, then the bricks, runs of a
  * pack merged across small gaps).
+ *
+ * Decoding (the png-gray8 tiles of a row, the WebP cut bricks) runs in a small pool of
+ * js/workers/cut-decode-worker.js, which loads this very file; without Worker (a test,
+ * a worker scope) it runs here.
  */
 const CutStore = (() => {
   const ORTH_MAGIC = { xz: 'LPXZ', yz: 'LPYZ' };
@@ -195,16 +199,19 @@ const CutStore = (() => {
         // The row's tiles are contiguous in the pack: one read.
         const run = await readRange(rel, lo, hi, signal);
         onBytes?.(run.length);
+        const jobs = [];
         for (let tz = 0; tz < head.tz; tz++) {
           for (let ta = 0; ta < head.ta; ta++) {
             const t = tiles[tz * head.ta + ta];
             if (!t.len) continue;
-            const img = await PlaneCodec.decodePngGray(run.subarray(t.off - lo, t.off - lo + t.len));
-            for (let y = 0; y < img.height; y++) {
-              data.set(img.data.subarray(y * img.width, (y + 1) * img.width), (tz * 512 + y) * width + ta * 512);
-            }
+            jobs.push(_decodePng(run.subarray(t.off - lo, t.off - lo + t.len)).then((img) => {
+              for (let y = 0; y < img.height; y++) {
+                data.set(img.data.subarray(y * img.width, (y + 1) * img.width), (tz * 512 + y) * width + ta * 512);
+              }
+            }));
           }
         }
+        await Promise.all(jobs);
       }
       return { width, height, data };
     }
@@ -313,12 +320,13 @@ const CutStore = (() => {
           for (const r of runs) {
             const bytes = got.get(r.start);
             onBytes?.(bytes.length);
-            for (const it of r.items) {
-              if (signal && signal.aborted) return;
+            if (signal && signal.aborted) return;
+            await Promise.all(r.items.map(async (it) => {
               const data = await decodeCutBrick(bytes.subarray(it.start - r.start, it.end - r.start), bz);
+              if (signal && signal.aborted) return;
               onBrick?.({ cx: it.brick.cx, cy: it.brick.cy, cz: it.brick.cz, data });
               delivered++;
-            }
+            }));
           }
         })());
       }
@@ -329,11 +337,88 @@ const CutStore = (() => {
     return { base: root, manifest, orthRow, loadCutBricks, cutIndex: _cutIndex, readRange, readRuns };
   }
 
+  // ── Decode pool ─────────────────────────────────────────────────────────────
+  let _pool = null;            // [{ w, pending }] once created; [] = no worker here
+  let _seq = 0;
+  const _waiting = new Map();  // id → { resolve, reject, slot }
+
+  function _poolSlots() {
+    if (_pool) return _pool;
+    _pool = [];
+    if (typeof Worker === 'undefined' || typeof document === 'undefined') return _pool;
+    const src = document.querySelector('script[src*="cut-store.js"]')?.getAttribute('src') || '';
+    const q = (src.match(/\?[^#]*/) || [''])[0];
+    const n = Math.max(1, Math.min(4, (navigator.hardwareConcurrency || 2) - 1));
+    for (let i = 0; i < n; i++) {
+      try {
+        const w = new Worker('js/workers/cut-decode-worker.js' + q);
+        const slot = { w, pending: 0 };
+        w.onmessage = (e) => {
+          const m = e.data || {};
+          const job = _waiting.get(m.id);
+          if (!job) return;
+          _waiting.delete(m.id);
+          slot.pending--;
+          if (m.error) job.reject(new Error(m.error)); else job.resolve(m);
+        };
+        w.onerror = (e) => {
+          // A dead worker leaves the pool; its jobs fail over to this thread.
+          _pool = _pool.filter(x => x !== slot);
+          for (const [id, job] of _waiting) if (job.slot === slot) { _waiting.delete(id); job.reject(Object.assign(new Error(e.message || 'cut decode worker failed'), { workerFailed: true })); }
+        };
+        _pool.push(slot);
+      } catch (e) {
+        break;
+      }
+    }
+    return _pool;
+  }
+
+  function _remote(msg, bytes) {
+    const pool = _poolSlots();
+    if (!pool.length) return null;
+    const slot = pool.reduce((a, b) => (b.pending < a.pending ? b : a));
+    const id = ++_seq;
+    const copy = bytes.slice();
+    slot.pending++;
+    return new Promise((resolve, reject) => {
+      _waiting.set(id, { resolve, reject, slot });
+      slot.w.postMessage({ ...msg, id, bytes: copy.buffer }, [copy.buffer]);
+    });
+  }
+
+  /** A png-gray8 tile → { width, height, data } (in the pool when there is one). */
+  async function _decodePng(bytes) {
+    const job = _remote({ op: 'png' }, bytes);
+    if (job) {
+      try {
+        const m = await job;
+        return { width: m.width, height: m.height, data: new Uint8Array(m.data) };
+      } catch (err) {
+        if (!err.workerFailed) throw err;
+      }
+    }
+    return PlaneCodec.decodePngGray(bytes);
+  }
+
+  /** The bz·32·32 voxels (z-major) of one stored cut brick, decoded in the pool when there is one. */
+  async function decodeCutBrick(bytes, bz) {
+    const job = _remote({ op: 'cut', bz }, bytes);
+    if (job) {
+      try {
+        return new Uint8Array((await job).data);
+      } catch (err) {
+        if (!err.workerFailed) throw err;
+      }
+    }
+    return decodeCutBrickLocal(bytes, bz);
+  }
+
   let _canvas = null;
   let _ctx = null;
 
-  /** The bz·32·32 voxels (z-major) of one stored cut brick (lossless WebP, R channel). */
-  async function decodeCutBrick(bytes, bz) {
+  /** decodeCutBrick on this thread: lossless WebP, R channel, mosaic of bz slices of 32². */
+  async function decodeCutBrickLocal(bytes, bz) {
     const cols = Math.min(bz, 8);
     const w = CUT_XY * cols;
     const h = CUT_XY * Math.ceil(bz / cols);
@@ -372,5 +457,5 @@ const CutStore = (() => {
     return Math.min(32, Math.max(1, 2 ** Math.round(Math.log2(r))));
   }
 
-  return { open, decodeCutBrick, cutDepth, CUT_XY, ORTH_ROWS };
+  return { open, decodeCutBrick, decodeCutBrickLocal, cutDepth, CUT_XY, ORTH_ROWS };
 })();

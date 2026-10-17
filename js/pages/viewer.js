@@ -1392,8 +1392,19 @@ const ViewerApp = (() => {
     table.appendChild(tbody);
     const legend = document.createElement('div');
     legend.className = 'qm-legend';
-    legend.textContent = _t('viewer.qualityMatrix.legend', 'Download size per cell · green fits the GPU, amber is close, red is too large.');
-    box.replaceChildren(table, legend);
+    legend.textContent = _t('viewer.qualityMatrix.legend', 'Each cell: the size to download. GPU: the memory the level takes once loaded, the same in every column (the GPU holds the decompressed voxels). Green fits, amber is close, red is too large.');
+    // A compressed cell is refined to the lossless column for what is in view once the camera rests.
+    const rest = document.createElement('label');
+    rest.className = 'qm-rest';
+    const restBox = document.createElement('input');
+    restBox.type = 'checkbox';
+    restBox.checked = VolumeViewer.getLosslessAtRest?.() !== false;
+    restBox.addEventListener('change', () => VolumeViewer.setLosslessAtRest?.(restBox.checked));
+    const restText = document.createElement('span');
+    restText.textContent = _t('viewer.qualityMatrix.losslessAtRest', 'Lossless once the view rests');
+    rest.title = _t('viewer.qualityMatrix.losslessAtRestHint', 'With a compressed cell, the bricks in view are loaded again without loss a moment after the camera stops.');
+    rest.append(restBox, restText);
+    box.replaceChildren(table, legend, rest);
   }
 
   /**
@@ -1571,6 +1582,64 @@ const ViewerApp = (() => {
     }
     window.addEventListener('volume-capabilities', _renderGpuCompressionStatus);
     _renderGpuCompressionStatus();
+    _bindGpuMemoryControls();
+  }
+
+  // ── GPU memory budget ───────────────────────────────────────────────────────────
+  // A browser never tells a page how much memory the graphics card has: the budget is
+  // estimated from the GPU class (SVRManager.vramBudget: 4 GiB for a dedicated card, 1–2
+  // for an integrated one). The operator who knows better sets the real figure here; it
+  // is kept in this browser (localStorage 'lumen3d.vramBudgetMB', what SVRManager reads)
+  // and applies to the next quality loaded.
+  const GPU_MEMORY_CHOICES_MB = [2048, 3072, 4096, 6144, 8192, 12288, 16384, 24576];
+
+  function _gpuMemoryOverrideMB() {
+    try { const v = Number(localStorage.getItem('lumen3d.vramBudgetMB')); return Number.isFinite(v) && v > 0 ? v : null; } catch (e) { return null; }
+  }
+
+  function _renderGpuMemoryStatus() {
+    const line = document.getElementById('gpu-memory-status');
+    const b = VolumeViewer.getGpuBudget?.();
+    if (!line || !b) return;
+    const gb = (bytes) => (Number(bytes) / 2 ** 30).toFixed(Number(bytes) % 2 ** 30 ? 1 : 0);
+    const losses = Number(b.contextLosses) > 0
+      ? ` ${_tf('viewer.gpuMemoryLosses', 'Halved after {n} graphics-context loss(es) this week.', { n: b.contextLosses })}` : '';
+    line.textContent = b.source === 'override'
+      ? _tf('viewer.gpuMemorySet', 'The viewer uses at most {gb} GB of GPU memory (your setting).', { gb: gb(b.bytes) }) + losses
+      : _tf('viewer.gpuMemoryEstimated', 'Estimated: {gb} GB ({kind}). A browser does not tell the real memory of the card: choose yours if you know it.', {
+        gb: gb(b.bytes),
+        kind: b.gpuClass === 'discrete' ? _tf('viewer.gpuDiscrete', 'dedicated card')
+          : b.gpuClass === 'integrated' ? _tf('viewer.gpuIntegrated', 'integrated graphics')
+            : b.gpuClass === 'software' ? _tf('viewer.gpuSoftware', 'software rendering') : _tf('viewer.gpuUnknown', 'unknown card')
+      }) + losses;
+  }
+
+  function _bindGpuMemoryControls() {
+    const select = document.getElementById('select-gpu-memory');
+    if (!select || typeof VolumeViewer.getGpuBudget !== 'function') { select?.closest('label')?.classList.add('hidden'); return; }
+    for (const mb of GPU_MEMORY_CHOICES_MB) {
+      const o = document.createElement('option');
+      o.value = String(mb);
+      o.textContent = `${mb / 1024} ${_t('viewer.gbShort', 'GB')}`;
+      select.appendChild(o);
+    }
+    const cur = _gpuMemoryOverrideMB();
+    if (cur && !GPU_MEMORY_CHOICES_MB.includes(cur)) {
+      const o = document.createElement('option');
+      o.value = String(cur);
+      o.textContent = `${(cur / 1024).toFixed(1)} ${_t('viewer.gbShort', 'GB')}`;
+      select.appendChild(o);
+    }
+    select.value = cur ? String(cur) : 'auto';
+    select.addEventListener('change', () => {
+      try {
+        if (select.value === 'auto') localStorage.removeItem('lumen3d.vramBudgetMB');
+        else localStorage.setItem('lumen3d.vramBudgetMB', String(Number(select.value)));
+      } catch (e) { /* storage blocked: the estimate stays */ }
+      _renderGpuMemoryStatus();
+      _renderQualityMatrix();
+    });
+    _renderGpuMemoryStatus();
   }
 
   // ── 3D view export (PNG) ─────────────────────────────────────────────────────────
@@ -5956,7 +6025,15 @@ const ViewerApp = (() => {
     );
     const mb = (b) => String(Math.round(Number(b) / (1024 * 1024)));
     if (Number(result?.neededBytes) > 0 && Number(result?.budgetBytes) > 0) {
-      text += ` ${_tf('viewer.resDowngradeBytes', '({needed} MB needed, {budget} MB available for the volume.)', { needed: mb(result.neededBytes), budget: mb(result.budgetBytes) })}`;
+      // The figure the choice was made against: the budget less what stays resident.
+      const avail = Number.isFinite(Number(result.availableBytes)) ? Number(result.availableBytes) : Number(result.budgetBytes);
+      text += ` ${_tf('viewer.resDowngradeBytes', '({needed} MB needed, {budget} MB available for the volume.)', { needed: mb(result.neededBytes), budget: mb(avail) })}`;
+      if (avail < Number(result.budgetBytes) - 1024 * 1024) {
+        text += ` ${_tf('viewer.resDowngradeHeld', 'The other {held} MB of the {total} MB budget hold volumes that stay loaded.', { held: mb(Number(result.budgetBytes) - avail), total: mb(result.budgetBytes) })}`;
+      }
+      if (VolumeViewer.getGpuBudget?.()?.source === 'heuristic') {
+        text += ` ${_t('viewer.resDowngradeEstimate', 'This budget is an estimate (a browser does not tell the real GPU memory): set yours under Render quality › GPU memory.')}`;
+      }
     } else if (result?.downgradeReason === 'alloc-failed') {
       text += ` ${_t('viewer.resDowngradeRefused', '(The GPU refused the allocation.)')}`;
     }

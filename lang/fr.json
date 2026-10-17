@@ -417,8 +417,23 @@
       "over": "Plus que ce GPU ne peut contenir : le viewer affichera un niveau plus grossier.",
       "tight": "Tient, proche du budget de ce GPU.",
       "fits": "Tient largement sur ce GPU.",
-      "legend": "Taille à télécharger par case · vert tient sur le GPU, orange est juste, rouge est trop grand."
-    }
+      "legend": "Chaque case : la taille à télécharger. GPU : la mémoire que prend le niveau une fois chargé, la même dans toutes les colonnes (le GPU garde les voxels décompressés). Vert tient, orange est juste, rouge est trop grand.",
+      "losslessAtRest": "Sans perte quand la vue s'arrête",
+      "losslessAtRestHint": "Avec une cellule compressée, les briques visibles sont rechargées sans perte un instant après l'arrêt de la caméra."
+    },
+    "detailLossless": "Détail sans perte : {count} briques visibles",
+    "gpuMemory": "Mémoire GPU",
+    "gpuMemoryAuto": "Automatique",
+    "gpuMemorySet": "Le viewer utilise au plus {gb} Go de mémoire GPU (votre réglage).",
+    "gpuMemoryEstimated": "Estimée : {gb} Go ({kind}). Un navigateur ne donne pas la mémoire réelle de la carte : choisissez la vôtre si vous la connaissez.",
+    "gpuMemoryLosses": "Divisée par deux après {n} perte(s) du contexte graphique cette semaine.",
+    "gpuDiscrete": "carte dédiée",
+    "gpuIntegrated": "graphisme intégré",
+    "gpuSoftware": "rendu logiciel",
+    "gpuUnknown": "carte inconnue",
+    "resDowngradeHeld": "Les {held} autres Mo du budget de {total} Mo sont occupés par des volumes qui restent chargés.",
+    "resDowngradeEstimate": "Ce budget est une estimation (un navigateur ne donne pas la mémoire réelle de la carte) : réglez la vôtre dans Qualité de rendu › Mémoire GPU.",
+    "gbShort": "Go"
   },
   "compare": {
     "title": "Mode comparaison",

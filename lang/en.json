@@ -417,8 +417,23 @@
       "over": "More than this GPU holds: the viewer will show a coarser level.",
       "tight": "Fits, close to this GPU's budget.",
       "fits": "Fits comfortably on this GPU.",
-      "legend": "Download size per cell · green fits the GPU, amber is close, red is too large."
-    }
+      "legend": "Each cell: the size to download. GPU: the memory the level takes once loaded, the same in every column (the GPU holds the decompressed voxels). Green fits, amber is close, red is too large.",
+      "losslessAtRest": "Lossless once the view rests",
+      "losslessAtRestHint": "With a compressed cell, the bricks in view are loaded again without loss a moment after the camera stops."
+    },
+    "detailLossless": "Lossless detail: {count} bricks in view",
+    "gpuMemory": "GPU memory",
+    "gpuMemoryAuto": "Automatic",
+    "gpuMemorySet": "The viewer uses at most {gb} GB of GPU memory (your setting).",
+    "gpuMemoryEstimated": "Estimated: {gb} GB ({kind}). A browser does not tell the real memory of the card: choose yours if you know it.",
+    "gpuMemoryLosses": "Halved after {n} graphics-context loss(es) this week.",
+    "gpuDiscrete": "dedicated card",
+    "gpuIntegrated": "integrated graphics",
+    "gpuSoftware": "software rendering",
+    "gpuUnknown": "unknown card",
+    "resDowngradeHeld": "The other {held} MB of the {total} MB budget hold volumes that stay loaded.",
+    "resDowngradeEstimate": "This budget is an estimate (a browser does not tell the real GPU memory): set yours under Render quality › GPU memory.",
+    "gbShort": "GB"
   },
   "compare": {
     "title": "Comparison Mode",

@@ -417,8 +417,23 @@
       "over": "Meer dan deze GPU aankan: de viewer toont een grover niveau.",
       "tight": "Past, dicht bij het budget van deze GPU.",
       "fits": "Past ruim op deze GPU.",
-      "legend": "Downloadgrootte per cel · groen past op de GPU, oranje is krap, rood is te groot."
-    }
+      "legend": "Elk vak: de te downloaden grootte. GPU: het geheugen dat het niveau na het laden inneemt, gelijk in elke kolom (de GPU bewaart de gedecomprimeerde voxels). Groen past, oranje is krap, rood is te groot.",
+      "losslessAtRest": "Verliesvrij zodra het beeld stilstaat",
+      "losslessAtRestHint": "Met een gecomprimeerde cel worden de zichtbare bricks kort na het stoppen van de camera opnieuw verliesvrij geladen."
+    },
+    "detailLossless": "Verliesvrij detail: {count} bricks in beeld",
+    "gpuMemory": "GPU-geheugen",
+    "gpuMemoryAuto": "Automatisch",
+    "gpuMemorySet": "De viewer gebruikt hoogstens {gb} GB GPU-geheugen (uw instelling).",
+    "gpuMemoryEstimated": "Geschat: {gb} GB ({kind}). Een browser geeft het echte geheugen van de kaart niet door: kies het uwe als u het kent.",
+    "gpuMemoryLosses": "Gehalveerd na {n} verlies/verliezen van de grafische context deze week.",
+    "gpuDiscrete": "aparte kaart",
+    "gpuIntegrated": "geïntegreerde grafische chip",
+    "gpuSoftware": "softwarerendering",
+    "gpuUnknown": "onbekende kaart",
+    "resDowngradeHeld": "De andere {held} MB van het budget van {total} MB worden ingenomen door volumes die geladen blijven.",
+    "resDowngradeEstimate": "Dit budget is een schatting (een browser geeft het echte GPU-geheugen niet door): stel het uwe in onder Renderkwaliteit › GPU-geheugen.",
+    "gbShort": "GB"
   },
   "compare": {
     "title": "Vergelijkingsmodus",

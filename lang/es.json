@@ -417,8 +417,23 @@
       "over": "Más de lo que cabe en esta GPU: el visor mostrará un nivel más grueso.",
       "tight": "Cabe, cerca del presupuesto de esta GPU.",
       "fits": "Cabe holgadamente en esta GPU.",
-      "legend": "Tamaño de descarga por celda · verde cabe en la GPU, ámbar va justo, rojo es demasiado grande."
-    }
+      "legend": "Cada casilla: el tamaño a descargar. GPU: la memoria que ocupa el nivel una vez cargado, la misma en todas las columnas (la GPU guarda los vóxeles descomprimidos). Verde cabe, naranja va justo, rojo es demasiado grande.",
+      "losslessAtRest": "Sin pérdidas cuando la vista se detiene",
+      "losslessAtRestHint": "Con una celda comprimida, los ladrillos visibles se vuelven a cargar sin pérdidas un momento después de que la cámara se detenga."
+    },
+    "detailLossless": "Detalle sin pérdidas: {count} ladrillos a la vista",
+    "gpuMemory": "Memoria GPU",
+    "gpuMemoryAuto": "Automática",
+    "gpuMemorySet": "El visor usa como máximo {gb} GB de memoria GPU (su ajuste).",
+    "gpuMemoryEstimated": "Estimada: {gb} GB ({kind}). Un navegador no da la memoria real de la tarjeta: elija la suya si la conoce.",
+    "gpuMemoryLosses": "Reducida a la mitad tras {n} pérdida(s) del contexto gráfico esta semana.",
+    "gpuDiscrete": "tarjeta dedicada",
+    "gpuIntegrated": "gráficos integrados",
+    "gpuSoftware": "renderizado por software",
+    "gpuUnknown": "tarjeta desconocida",
+    "resDowngradeHeld": "Los otros {held} MB del presupuesto de {total} MB los ocupan volúmenes que siguen cargados.",
+    "resDowngradeEstimate": "Este presupuesto es una estimación (un navegador no da la memoria real de la tarjeta): ajuste la suya en Calidad de renderizado › Memoria GPU.",
+    "gbShort": "GB"
   },
   "compare": {
     "title": "Modo de comparación",

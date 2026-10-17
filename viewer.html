@@ -194,6 +194,13 @@
               </select>
             </label>
             <div class="quality-status" id="gpu-compression-status" role="status" aria-live="polite"></div>
+            <label class="detail-mode-row text-xs text-muted" for="select-gpu-memory">
+              <span data-i18n="viewer.gpuMemory">GPU memory</span>
+              <select id="select-gpu-memory" class="form-select text-sm p-1 rounded border border-light bg-surface text-primary">
+                <option value="auto" selected data-i18n="viewer.gpuMemoryAuto">Automatic</option>
+              </select>
+            </label>
+            <div class="quality-status" id="gpu-memory-status" role="status" aria-live="polite"></div>
         </div>
 
         <!-- Physical Scale Panel -->

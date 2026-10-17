@@ -13,7 +13,7 @@ It was designed and built by **Morgan CLIMENT**, originally for the **IRIBHM** (
 
 The platform bridges raw scientific data and seamless web exploration through a **Python preprocessing pipeline** (Imaris `.ims` → brick-packed LOD pyramids, 3D **and 4D**) and a **vanilla-JS / Three.js client** with a custom WebGL2 ray-marcher and sparse 3D atlas streaming. It is **offline-capable** (all JS libraries self-hosted, no CDN) and ships with a **signed self-updater**, a **signed plugin marketplace** and in-place **data updates** that upgrade published datasets to newer storage formats.
 
-> **Current versions** — Web platform `1.65.0` · Preprocessing tool `0.22.0`.
+> **Current versions** — Web platform `1.66.0` · Preprocessing tool `0.22.0`.
 > The web version is defined solely by the newest `changelog/changelog_X.Y.Z.md` (there is **no** source `__version__` constant for the platform); the preprocessing tool tracks its own `__version__` in `preprocess/run_preprocess.py`.
 
 ---
@@ -28,6 +28,7 @@ The platform bridges raw scientific data and seamless web exploration through a 
 
 ### 2. Smart Slicing & Volume Navigation
 *   **Off-Thread Brick Decoding**: bricks are streamed out of `.bin` packs (whole packs for a level stream, byte ranges for a cut) and decoded off-thread (`createImageBitmap` + un-mosaic) in a worker pool (`js/core/brick-decode-worker.js`), keeping the UI thread reserved for Three.js and DOM. A pack is read progressively: each brick is cut out as soon as its bytes have arrived (v1.60.3).
+*   **OME-Zarr export**: the Download Center builds `<folder>.ome.zarr.zip` in the browser from the open dataset's lossless bricks (`js/core/ome-zarr-export.js`, shards encoded in `js/workers/ome-zarr-worker.js`, pure format code in `js/core/ome-zarr.js`): NGFF 0.5 / Zarr v3, `sharding_indexed` shards whose 64³ inner chunks are the bricks, stored ZIP64 archive, saved through `showSaveFilePicker` when available. A timelapse exports the timepoint on screen (v1.66.0).
 *   **Brick selection by plane**: a cut through the volume downloads only the bricks it crosses, computed in the slicer's own texture-space geometry (`VolumeSlicer.planeGeometry`), so an oblique plane is never tested against the wrong normal.
 *   **Oblique / orthogonal slicing + Z-stack browser**: Extract arbitrary 2D cut planes from the volume (`js/viewers/volume-slicer.js`, `slice-inspector` tool) or step through Z-slices in high resolution (`zstack-browser` tool). Opening the Z-stack browser lays the stack flat, with the sample's upper face toward the camera.
 *   **Empty Space Skipping**: a brick with no visible voxel is not stored at preprocessing time (`preprocess/bricks_v3_writer.py`); an absent brick reads as zeros, so the streamed dataset shrinks by orders of magnitude.

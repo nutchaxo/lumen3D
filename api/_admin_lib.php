@@ -1464,6 +1464,133 @@ function lumen_write_guard(string $path, string $body): void {
     lumen_write_file_atomic($path, $body);
 }
 
+// ── Storage report (admin Stockage tab) ─────────────────────────────────────
+// Twin of dev_server.py _storage_bucket / _scan_storage_tree / _admin_storage: the
+// classification must match byte for byte. The walk is cached in admin_private_dir()
+// for LUMEN_STORAGE_TTL seconds (a scan of a large DATA_WEB takes seconds); the free
+// space of the volume is read on every request.
+const LUMEN_STORAGE_TTL = 600;
+const LUMEN_STORAGE_UPLOAD_CHILDREN = ['staging', 'trash', 'migrations', 'state'];
+
+/** [category, child, dataset id|null, dataset part|null] of one file, from its path parts. */
+function storage_bucket(array $rel): array {
+    $head = $rel[0];
+    if ($head === 'DATA_WEB') {
+        if (count($rel) >= 3 && in_array($rel[1], LUMEN_DATASET_TYPES, true)) {
+            if (count($rel) === 3) return ['data', $rel[1], null, null];
+            $part = count($rel) >= 5 ? $rel[3] : '(racine)';
+            return ['data', $rel[1], $rel[1] . '/' . $rel[2], $part];
+        }
+        return ['data', 'autres', null, null];
+    }
+    if ($head === 'uploads') {
+        $child = (count($rel) >= 3 && in_array($rel[1], LUMEN_STORAGE_UPLOAD_CHILDREN, true)) ? $rel[1] : 'autres';
+        return ['uploads', $child, null, null];
+    }
+    if ($head === 'js' && count($rel) > 1 && in_array($rel[1], ['modules', 'vendor'], true)) {
+        return ['code', 'js/' . $rel[1], null, null];
+    }
+    return ['code', count($rel) > 1 ? $head : '(racine)', null, null];
+}
+
+/** Walk the install (symlinks never followed, unreadable entries skipped) and total it. */
+function storage_scan_tree(): array {
+    @set_time_limit(300);
+    $t0 = microtime(true);
+    $root = rtrim(str_replace('\\', '/', admin_root()), '/');
+    $cats = [];
+    $datasets = [];
+    $it = new RecursiveIteratorIterator(
+        new RecursiveDirectoryIterator($root, FilesystemIterator::SKIP_DOTS | FilesystemIterator::UNIX_PATHS),
+        RecursiveIteratorIterator::LEAVES_ONLY,
+        RecursiveIteratorIterator::CATCH_GET_CHILD
+    );
+    $linked = [];
+    foreach ($it as $path => $info) {
+        if ($info->isLink() || !$info->isFile()) continue;
+        // A hard link is one set of bytes on the disk (format-4 `ll` columns shared with
+        // bricks.previous/): counted once. stat() carries nlink and the file identity on
+        // Windows too (dev_server.py does the same with os.stat).
+        $st = @stat((string)$path);
+        if (is_array($st) && ($st['nlink'] ?? 1) > 1) {
+            $ident = $st['dev'] . ':' . $st['ino'];
+            if (isset($linked[$ident])) continue;
+            $linked[$ident] = true;
+        }
+        $size = (int)$info->getSize();
+        $rel = explode('/', ltrim(substr(str_replace('\\', '/', (string)$path), strlen($root)), '/'));
+        [$cat, $child, $dsId, $part] = storage_bucket($rel);
+        $cats[$cat] ??= ['bytes' => 0, 'files' => 0, 'children' => []];
+        $cats[$cat]['bytes'] += $size;
+        $cats[$cat]['files']++;
+        $cats[$cat]['children'][$child] ??= [0, 0];
+        $cats[$cat]['children'][$child][0] += $size;
+        $cats[$cat]['children'][$child][1]++;
+        if ($dsId !== null) {
+            $datasets[$dsId] ??= ['bytes' => 0, 'files' => 0, 'parts' => []];
+            $datasets[$dsId]['bytes'] += $size;
+            $datasets[$dsId]['files']++;
+            $datasets[$dsId]['parts'][$part] = ($datasets[$dsId]['parts'][$part] ?? 0) + $size;
+        }
+    }
+    $names = [];
+    foreach (rebuild_catalog() as $ds) {
+        if (isset($ds['path'])) $names[$ds['path']] = $ds['name'] ?? $ds['path'];
+    }
+    $order = ['data' => 0, 'uploads' => 1, 'code' => 2];
+    uksort($cats, fn($a, $b) => ($order[$a] ?? 9) <=> ($order[$b] ?? 9));
+    $categories = [];
+    $tracked = 0;
+    foreach ($cats as $id => $c) {
+        uasort($c['children'], fn($a, $b) => $b[0] <=> $a[0]);
+        $children = [];
+        foreach ($c['children'] as $k => $v) $children[] = ['id' => (string)$k, 'bytes' => $v[0], 'files' => $v[1]];
+        $categories[] = ['id' => $id, 'bytes' => $c['bytes'], 'files' => $c['files'], 'children' => $children];
+        $tracked += $c['bytes'];
+    }
+    uasort($datasets, fn($a, $b) => $b['bytes'] <=> $a['bytes']);
+    $rows = [];
+    foreach ($datasets as $dsId => $d) {
+        arsort($d['parts']);
+        $parts = [];
+        foreach ($d['parts'] as $k => $v) $parts[] = ['id' => (string)$k, 'bytes' => $v];
+        $rows[] = ['id' => (string)$dsId, 'name' => $names[$dsId] ?? $dsId,
+                   'type' => explode('/', (string)$dsId, 2)[0],
+                   'bytes' => $d['bytes'], 'files' => $d['files'], 'parts' => $parts];
+    }
+    return [
+        'scannedAt' => date('c'),
+        'scanSeconds' => round(microtime(true) - $t0, 2),
+        'trackedBytes' => $tracked,
+        'categories' => $categories,
+        'datasets' => $rows,
+    ];
+}
+
+/** The storage report: cached walk (refresh=true forces one) + live volume figures. */
+function admin_storage_report(bool $refresh): array {
+    $file = admin_private_dir() . '/storage-scan.json';
+    $cached = $refresh ? null : admin_read_json($file);
+    $now = time();
+    $fresh = !is_array($cached) || !isset($cached['at'], $cached['data'])
+        || ($now - (int)$cached['at']) > LUMEN_STORAGE_TTL;
+    if ($fresh) {
+        $cached = ['at' => $now, 'data' => storage_scan_tree()];
+        admin_write_json($file, $cached);
+    }
+    $data = $cached['data'];
+    $total = (float)disk_total_space(admin_root());
+    $free = (float)disk_free_space(admin_root());
+    $used = max(0.0, $total - $free);
+    return $data + [
+        'disk' => ['totalBytes' => (int)$total, 'usedBytes' => (int)$used, 'freeBytes' => (int)$free],
+        'otherBytes' => (int)max(0, $used - (int)$data['trackedBytes']),
+        'cached' => !$fresh,
+        'ageSeconds' => $now - (int)$cached['at'],
+        'ttlSeconds' => LUMEN_STORAGE_TTL,
+    ];
+}
+
 // ── Usage stats ─────────────────────────────────────────────────────────────
 function admin_load_stats(): array {
     $d = admin_read_json(stats_file());

@@ -52,6 +52,7 @@ registerTab({ id: 'dataset-types', titleKey: 'dtypes.nav', titleDefault: 'Types 
 registerTab({ id: 'dataset-updates', titleKey: 'dupd.nav', titleDefault: 'Data updates', load: async () => { return (await import(`./admin/tab-dataset-updates.js${V}`)).DatasetUpdatesTab; } });
 registerTab({ id: 'upload', titleKey: 'admin.navUpload', titleDefault: 'Import', load: async () => { return (await import(`./admin/tab-upload.js${V}`)).UploadTab; } });
 registerTab({ id: 'stats', titleKey: 'admin.navStats', titleDefault: 'Statistiques', load: async () => { return (await import(`./admin/tab-stats.js${V}`)).StatsTab; } });
+registerTab({ id: 'storage', titleKey: 'admin.navStorage', titleDefault: 'Stockage', load: async () => { return (await import(`./admin/tab-storage.js${V}`)).StorageTab; } });
 registerTab({ id: 'plugins', titleKey: 'admin.navPlugins', titleDefault: 'Plugins', load: async () => { return (await import(`./admin/tab-plugins.js${V}`)).PluginsTab; } });
 registerTab({ id: 'security', titleKey: 'admin.navSecurity', titleDefault: 'Sécurité', load: async () => { return (await import(`./admin/tab-security.js${V}`)).SecurityTab; } });
 registerTab({ id: 'updates', titleKey: 'admin.navUpdates', titleDefault: 'Mises à jour', load: async () => { return (await import(`./admin/tab-updates.js${V}`)).UpdatesTab; } });

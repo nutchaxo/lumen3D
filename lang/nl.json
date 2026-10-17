@@ -2348,7 +2348,11 @@
     "unitGB": "GB",
     "reasonWebpLossy": "deze browser kan geen WebP-afbeeldingen met verlies coderen",
     "reasonBrowserOnly": "op deze server draait deze update in de browser",
-    "errBadBlob": "de server weigerde een geconverteerde eenheid"
+    "errBadBlob": "de server weigerde een geconverteerde eenheid",
+    "toastElsewhere": "{name} wordt al bijgewerkt in een ander tabblad van deze browser.",
+    "stElsewhere": "In een ander tabblad",
+    "elsewhereHint": "Een ander tabblad van deze browser werkt deze dataset bij; volg het daar.",
+    "sharedTabs": "{n} tabbladen van deze browser werken datasets bij: ze delen één verzoekquotum."
   },
   "exportQuality": {
     "title": "Exportkwaliteit",

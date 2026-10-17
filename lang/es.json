@@ -2348,7 +2348,11 @@
     "unitGB": "GB",
     "reasonWebpLossy": "este navegador no puede codificar imágenes WebP con pérdida",
     "reasonBrowserOnly": "en este servidor, esta actualización se ejecuta en el navegador",
-    "errBadBlob": "el servidor rechazó una unidad convertida"
+    "errBadBlob": "el servidor rechazó una unidad convertida",
+    "toastElsewhere": "{name} ya se está actualizando en otra pestaña de este navegador.",
+    "stElsewhere": "En otra pestaña",
+    "elsewhereHint": "Otra pestaña de este navegador está actualizando este dataset; sígalo allí.",
+    "sharedTabs": "{n} pestañas de este navegador actualizan datasets: comparten una sola cuota de peticiones."
   },
   "exportQuality": {
     "title": "Calidad de la exportación",

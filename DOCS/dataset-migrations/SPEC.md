@@ -236,6 +236,25 @@ a 600×500×80 2-channel volume on `php -S` (default `post_max_size` 8 MB): 298 
 about 90 s to the end of finalize, against about 100 units per minute and a pause on the first
 body over 8 MB before.
 
+## 7.3 Several tabs of one browser (web 1.69.2)
+
+Each admin tab has its own governor and worker pool; the "Data updates" tabs of one origin
+coordinate over a BroadcastChannel named after the panel's directory
+(`js/pages/admin/migration-tabs.js` `TabCoordinator`):
+* presence: every 2 s a tab posts whether a lane of it runs and which datasets it holds; a tab
+  silent for 6.5 s is forgotten, a closing tab (`pagehide`) says goodbye at once;
+* one quota: while N tabs convert, each governor takes 1/N of the limits
+  (`NetGovernor.setShare`: in flight ⌊6/N⌋ ≥ 1, rate and its floor ÷ N, burst ÷ N ≥ 1), so the
+  browser as a whole stays within §7.2; an idle tab takes no share. A failure-driven cooldown
+  (no answer, 429, 503) is posted (`onThrottle`) and every other tab halves its rate and holds
+  its requests for the same time (`penalize`);
+* one tab per dataset: a lane converts a dataset only while it holds the Web Lock
+  `lumen3d-mig:<scope>:<dataset>` (`navigator.locks`, `ifAvailable`; the browser frees it when the
+  tab dies), else the heartbeat's claims stand in. A dataset another tab holds is skipped (event
+  `elsewhere`, a notice), shown as *in another tab* without actions, and left out of *Update
+  all*; a lane lets its datasets go when it pauses, fails or ends, so another tab may take them up.
+Test `tests/js/test_mig_tabs.mjs`.
+
 ## 8. Reader (viewer / Studio)
 
 * `js/core/plane-loader.js` (`PlaneLoader`): `open(treeBase)` reads `planes/manifest.json`

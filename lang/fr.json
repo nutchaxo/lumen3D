@@ -2348,7 +2348,11 @@
     "unitGB": "Go",
     "reasonWebpLossy": "ce navigateur ne sait pas encoder d'images WebP avec perte",
     "reasonBrowserOnly": "sur ce serveur, cette mise à jour s'exécute dans le navigateur",
-    "errBadBlob": "le serveur a refusé une unité convertie"
+    "errBadBlob": "le serveur a refusé une unité convertie",
+    "toastElsewhere": "{name} est déjà en cours de mise à jour dans un autre onglet de ce navigateur.",
+    "stElsewhere": "Dans un autre onglet",
+    "elsewhereHint": "Un autre onglet de ce navigateur met ce dataset à jour ; suivez-le là-bas.",
+    "sharedTabs": "{n} onglets de ce navigateur mettent des datasets à jour : ils se partagent un seul quota de requêtes."
   },
   "exportQuality": {
     "title": "Qualité de l'export",

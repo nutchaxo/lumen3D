@@ -37,6 +37,7 @@ import {
   API_MIGRATIONS, createApi, Runner, WorkerPool, buildQueue, migrationChain, remainingUnits, workProgress, serverCapability,
   runSpeedtest, speedtestScores, SPEEDTEST_SECONDS, netGovernor,
 } from './migration-runner.js';
+import { TabCoordinator } from './migration-tabs.js';
 
 const V = (() => { try { return new URL(import.meta.url).search; } catch (_) { return ''; } })();
 const TAB_ID = 'dataset-updates';
@@ -62,6 +63,17 @@ function t(key, def, params) {
 // stops answering, so the operator's address is never taken for a flood.
 const api = createApi((url, init) => netGovernor.run(() => apiFetchStatus(url, init)));
 netGovernor.onChange = () => schedulePaint();
+// The other admin tabs of this browser: one request quota, one tab per dataset (SPEC §7.3).
+// Another tab took or left a dataset: its buttons and the counts change, so the whole view is redrawn.
+let _tabsPaint = null;
+const tabs = new TabCoordinator({
+  governor: netGovernor,
+  onChange: () => { if (!_tabsPaint) _tabsPaint = setTimeout(() => { _tabsPaint = null; paint(); }, 250); },
+});
+if (typeof window !== 'undefined') window.addEventListener('pagehide', (e) => { if (!e.persisted) tabs.close(); });
+
+/** Another tab of this browser converts `id` (and this one does not). */
+function elsewhere(id) { return !laneOf(id) && tabs.heldElsewhere(id); }
 
 let _status = null;
 let _loading = false;
@@ -316,6 +328,7 @@ function lane(x) {
       datasetBase,
       onEvent: (e) => onLaneEvent(x, e),
       executorFor: (mid) => stepExec(x, mid),
+      claim: (id) => tabs.claim(id),
       // Read when the step finalizes: the box applies to every 3 → 4 update finishing from then on.
       keepPrevious: (_ds, mid) => (mid === 'm004-bricks-v3' || mid === 'm005-matrix') && keepPreviousOn(),
     });
@@ -346,6 +359,11 @@ function probeBrowser() {
 function onLaneEvent(x, e) {
   if (e.type === 'progress') { _progress.set(e.dataset, e); schedulePaint(); return; }
   if (e.type === 'net') { setOnline(`lane:${x}`, !!e.online); return; }
+  if (e.type === 'elsewhere') {
+    toast(t('dupd.toastElsewhere', '{name} is already being updated in another tab of this browser.', { name: nameOf(e.dataset) }), 'info');
+    schedulePaint();
+    return;
+  }
   if (e.type === 'job_done') {
     pushLog({ ok: true, dataset: e.dataset, name: nameOf(e.dataset), migration: e.migration, executor: e.executor, seconds: e.seconds, units: e.units, formatVersion: e.formatVersion });
     _progress.delete(e.dataset);
@@ -365,6 +383,7 @@ function onLaneEvent(x, e) {
     return;
   }
   if (e.type === 'state') {
+    tabs.setActive(isRunning());
     if (e.state === 'paused' && e.reason === 'unauthorized') {
       toast(t('dupd.toastSession', 'Session expired — sign in again, then resume.'), 'warning');
       // A 401 seen by a worker never reaches the shell's handler: this status read does,
@@ -411,7 +430,7 @@ async function freshLoad() {
 
 function updateDatasets(ids) {
   if (!_status) return;
-  const list = (ids ? ids.map(dsById).filter(Boolean) : datasets()).filter((ds) => needsWork(ds) && !laneOf(ds.id));
+  const list = (ids ? ids.map(dsById).filter(Boolean) : datasets()).filter((ds) => needsWork(ds) && !laneOf(ds.id) && !elsewhere(ds.id));
   if (!list.length) { if (!ids) toast(t('dupd.nothing', 'Everything is up to date.'), 'info'); return; }
   const stuck = new Set();
   for (const ds of list) {
@@ -645,6 +664,7 @@ function stepChips(ds) {
 }
 
 function rowActions(ds) {
+  if (elsewhere(ds.id)) return '';
   const active = laneOf(ds.id);
   const out = [];
   if (!active) {
@@ -692,6 +712,10 @@ function rowLive(ds) {
       ${bar(pct, r.state === 'running' ? 'is-run' : '')}
       <div class="dupd-live-stats"><span>${ws.html}</span>
         <span>${escHtml(eta)}${rate}</span></div>`;
+  }
+  if (elsewhere(ds.id)) {
+    return `<div class="dupd-live-line"><span class="dupd-state is-run">${escHtml(t('dupd.stElsewhere', 'In another tab'))}</span>
+      <span class="adm-muted">${escHtml(t('dupd.elsewhereHint', 'Another tab of this browser is updating this dataset; follow it there.'))}</span></div>`;
   }
   const j = ds.job;
   if (!j) return '';
@@ -750,7 +774,11 @@ function laneStrip() {
   const paced = netGovernor.holding
     ? `<p class="adm-muted dupd-small dupd-note"><i data-lucide="timer"></i>${escHtml(t('dupd.paced', 'The host is answering slowly: requests are paced down so that it does not block this address.'))}</p>`
     : '';
-  return `<div class="dupd-lanes">${pills}</div>${paced}
+  const n = tabs.activeTabs();
+  const shared = n > 1
+    ? `<p class="adm-muted dupd-small dupd-note"><i data-lucide="layers"></i>${escHtml(t('dupd.sharedTabs', '{n} tabs of this browser are updating datasets: they share one request quota.', { n }))}</p>`
+    : '';
+  return `<div class="dupd-lanes">${pills}</div>${paced}${shared}
     ${isOnline() ? '' : `<p class="adm-warn dupd-small dupd-note"><i data-lucide="wifi-off"></i>${escHtml(t('dupd.offline', 'Connection lost — waiting for the network, nothing is lost.'))}</p>`}
     ${isRunning() ? `<p class="adm-muted dupd-small dupd-note"><i data-lucide="info"></i>${escHtml(t('dupd.keepOpen', 'Keep this tab open: closing it or leaving it pauses the updates.'))}</p>` : ''}`;
 }
@@ -794,7 +822,7 @@ async function dropPrevious(id) {
 function datasetsCard() {
   const todo = datasets().filter(needsWork);
   const done = datasets().filter((ds) => !needsWork(ds));
-  const idle = todo.filter((ds) => !laneOf(ds.id));
+  const idle = todo.filter((ds) => !laneOf(ds.id) && !elsewhere(ds.id));
   const bulk = idle.length > 1 ? `<div class="dupd-bulk"><span class="adm-muted dupd-small">${escHtml(t('dupd.bulk', 'All on:'))}</span>
       ${EXECS.map((x) => `<button class="adm-btn adm-btn-ghost adm-btn-sm" data-dupd="exec-all" data-exec="${x}"><i data-lucide="${execIcon(x)}"></i> ${escHtml(execName(x))}</button>`).join('')}</div>` : '';
   const list = todo.length
@@ -873,7 +901,7 @@ function paint() {
       : '<div class="adm-loading"><span class="spinner"></span></div>';
     return;
   }
-  const idle = datasets().filter((ds) => needsWork(ds) && !laneOf(ds.id) && execOf(ds));
+  const idle = datasets().filter((ds) => needsWork(ds) && !laneOf(ds.id) && !elsewhere(ds.id) && execOf(ds));
   const lanesBtn = isRunning()
     ? `<button class="adm-btn adm-btn-ghost adm-btn-sm" data-dupd="pause"><i data-lucide="pause"></i> ${escHtml(t('dupd.pauseAll', 'Pause'))}</button>`
     : isPaused() ? `<button class="adm-btn adm-btn-ghost adm-btn-sm" data-dupd="resume"><i data-lucide="play"></i> ${escHtml(t('dupd.resumeAll', 'Resume'))}</button>` : '';

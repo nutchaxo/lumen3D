@@ -2348,7 +2348,11 @@
     "unitGB": "GB",
     "reasonWebpLossy": "this browser cannot encode lossy WebP images",
     "reasonBrowserOnly": "on this server, this update runs in the browser",
-    "errBadBlob": "the server refused a converted unit"
+    "errBadBlob": "the server refused a converted unit",
+    "toastElsewhere": "{name} is already being updated in another tab of this browser.",
+    "stElsewhere": "In another tab",
+    "elsewhereHint": "Another tab of this browser is updating this dataset; follow it there.",
+    "sharedTabs": "{n} tabs of this browser are updating datasets: they share one request quota."
   },
   "exportQuality": {
     "title": "Export quality",

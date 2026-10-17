@@ -53,6 +53,10 @@ const SPEEDTEST_JOB = '#speedtest';
  * continue); each answered request raises the rate by `step` up to `maxRate`.
  *
  * acquire() → Promise<release(outcome)>, outcome = 'ok' | 'fail' | 'throttled' | 'cancel'.
+ *
+ * Several tabs (migration-tabs.js, SPEC §7.3): setShare(n) gives this page 1/n of every limit
+ * while n tabs convert at once, so the browser as a whole stays within them; onThrottle(ms) is
+ * told of each failure-driven cooldown so the other tabs take it too (penalize(ms)).
  */
 export class NetGovernor {
   constructor(o = {}) {
@@ -78,6 +82,35 @@ export class NetGovernor {
     this.cooldown = 0;
     this._timer = null;
     this.onChange = o.onChange || null;
+    this.onThrottle = o.onThrottle || null;
+    this.base = { maxInFlight: this.maxInFlight, maxRate: this.maxRate, minRate: this.minRate, burst: this.burst };
+    this.share = 1;
+  }
+
+  /** This page's part of the limits when `n` tabs convert at the same time. */
+  setShare(n) {
+    n = Math.max(1, Math.floor(Number(n) || 1));
+    if (n === this.share) return;
+    this.share = n;
+    const b = this.base;
+    this.maxInFlight = Math.max(1, Math.floor(b.maxInFlight / n));
+    this.maxRate = b.maxRate / n;
+    this.minRate = b.minRate / n;
+    this.burst = Math.max(1, b.burst / n);
+    this._refill();
+    this.rate = Math.min(this.maxRate, Math.max(this.minRate, n > 1 ? this.rate / n : this.rate));
+    this.tokens = Math.min(this.tokens, this.burst);
+    try { this.onChange?.(this); } catch (_) { /* view */ }
+    this._pump();
+  }
+
+  /** Another tab met no answer / a 429 / a 503: the same host, so the same back-off here. */
+  penalize(cooldownMs) {
+    const ms = Math.max(0, Math.min(this.cooldownMax, Number(cooldownMs) || this.cooldownMin));
+    this.rate = Math.max(this.minRate, this.rate / 2);
+    this.holdUntil = Math.max(this.holdUntil, this.now() + ms);
+    this.tokens = Math.min(this.tokens, 0);
+    try { this.onChange?.(this); } catch (_) { /* view */ }
   }
 
   acquire() {
@@ -128,6 +161,7 @@ export class NetGovernor {
       this.holdUntil = Math.max(this.holdUntil, this.now() + this.cooldown);
       this.tokens = Math.min(this.tokens, 0);
       try { this.onChange?.(this); } catch (_) { /* view */ }
+      try { this.onThrottle?.(this.cooldown); } catch (_) { /* other tabs */ }
     } else if (outcome === 'ok') {
       const was = this.rate;
       this.rate = Math.min(this.maxRate, this.rate + this.step);
@@ -685,7 +719,30 @@ export class Runner {
     this._loop = null;
     this.reason = null;
     this.backoffMs = o.backoffMs || CALL_BACKOFF_MS;
+    this._claims = new Map();   // dataset → release() of its cross-tab claim (o.claim)
   }
+
+  /**
+   * Holds `dataset` for this runner (o.claim: another tab of the browser may be converting it).
+   * True when held; false when another tab has it.
+   */
+  async _claim(dataset) {
+    if (!this.o.claim || this._claims.has(dataset)) return true;
+    let release = null;
+    try { release = await this.o.claim(dataset); } catch (_) { release = null; }
+    if (!release) return false;
+    this._claims.set(dataset, release);
+    return true;
+  }
+
+  _release(dataset) {
+    const r = this._claims.get(dataset);
+    if (!r) return;
+    this._claims.delete(dataset);
+    try { r(); } catch (_) { /* already gone */ }
+  }
+
+  _releaseAll() { for (const ds of [...this._claims.keys()]) this._release(ds); }
 
   _emit(e) { try { this.o.onEvent?.(e); } catch (err) { console.error(err); } }
   _setState(s, reason = null) { this.state = s; this.reason = reason; this._emit({ type: 'state', state: s, reason }); }
@@ -763,9 +820,24 @@ export class Runner {
   }
 
   async _run() {
+    try {
+      await this._runQueue();
+    } finally {
+      // A paused or finished lane keeps no dataset: another tab may take it up.
+      this._releaseAll();
+    }
+  }
+
+  async _runQueue() {
     while (this.queue.length) {
       if (this._stop) { this._setState('paused', this.reason); return; }
       const item = this.queue[0];
+      if (!(await this._claim(item.dataset))) {
+        this.queue = this.queue.filter((q) => q.dataset !== item.dataset);
+        this.chains.delete(item.dataset);
+        this._emit({ type: 'elsewhere', dataset: item.dataset, migration: item.migration });
+        continue;
+      }
       let outcome;
       try {
         outcome = await this._runJob(item);
@@ -778,13 +850,14 @@ export class Runner {
         this.queue = this.queue.filter((q) => q.dataset !== item.dataset);
         this.chains.delete(item.dataset);
         this.current = null;
+        this._release(item.dataset);
         this._emit({ type: 'job_failed', dataset: item.dataset, migration: item.migration, error: String(err && err.message || err), code: err && err.code || null, detail: err && err.detail || null });
         continue;
       }
       if (outcome === 'paused') { this._setState('paused', this.reason); return; }
       this.queue.shift();
       this.current = null;
-      if (!this.queue.some((q) => q.dataset === item.dataset)) this.chains.delete(item.dataset);
+      if (!this.queue.some((q) => q.dataset === item.dataset)) { this.chains.delete(item.dataset); this._release(item.dataset); }
     }
     this._setState('idle');
   }

@@ -2298,6 +2298,8 @@
     "etaLeft": "nog {t}",
     "rateVal": "{n} eenheden/min",
     "units": "eenheden",
+    "emptyDone": "{n} zonder gegevens, al klaar",
+    "mbLeft": "(nog {mb})",
     "stFailed": "Mislukt",
     "stAssembling": "Samenstellen",
     "resumeHint": "Hervat om verder te gaan waar het stopte.",

@@ -2298,6 +2298,8 @@
     "etaLeft": "reste {t}",
     "rateVal": "{n} unités/min",
     "units": "unités",
+    "emptyDone": "{n} sans données, déjà terminées",
+    "mbLeft": "(reste {mb})",
     "stFailed": "Échec",
     "stAssembling": "Assemblage",
     "resumeHint": "Reprenez pour continuer là où elle s'est arrêtée.",

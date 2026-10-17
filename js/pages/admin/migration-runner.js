@@ -236,6 +236,19 @@ export function estimateSeconds(units, secondsPerUnit) {
 }
 
 /** Units left to do for `ds`: the job's when one exists, else the status estimate. */
+/**
+ * The work part of a job's progress. A unit with no data under it (`empty`) has nothing to
+ * compute and is done from the plan on, so the server's `done` starts at `empty`: the bar and
+ * the counts leave those units out and start at 0.
+ */
+export function workProgress(p) {
+  const total = Math.max(0, Number(p && p.total) || 0);
+  const empty = Math.max(0, Math.min(total, Number(p && p.empty) || 0));
+  const work = total - empty;
+  const done = Math.max(0, Math.min(work, (Number(p && p.done) || 0) - empty));
+  return { done, total: work, empty, pct: work ? (100 * done) / work : (total ? 100 : 0) };
+}
+
 export function remainingUnits(ds) {
   if (ds.job && Number.isFinite(ds.job.total)) {
     return Math.max(0, ds.job.total - (ds.job.done || 0));
@@ -888,7 +901,7 @@ export class Runner {
       if (!plan.ok || !plan.data) throw apiError(plan, 'plan failed');
       p = plan.data;
       const advanced = p.done > before;
-      cur.done = p.done; cur.total = p.total;
+      cur.done = p.done; cur.total = p.total; cur.empty = p.empty || 0;
       progress();
       if (cur.done >= cur.total) break;
       if (this._stop) return 'paused';

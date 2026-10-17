@@ -34,7 +34,7 @@
 
 import { Utils, I18n, t as _t, escHtml, apiFetchStatus, getCsrf, toast, el, refreshIcons, storageGet, storageSet } from './shared.js';
 import {
-  API_MIGRATIONS, createApi, Runner, WorkerPool, buildQueue, migrationChain, remainingUnits, serverCapability,
+  API_MIGRATIONS, createApi, Runner, WorkerPool, buildQueue, migrationChain, remainingUnits, workProgress, serverCapability,
   runSpeedtest, speedtestScores, SPEEDTEST_SECONDS, netGovernor,
 } from './migration-runner.js';
 
@@ -81,7 +81,14 @@ let _guardsBound = false;
 
 function fmtMB(bytes) {
   const mb = (bytes || 0) / (1024 * 1024);
-  return `${mb >= 100 ? mb.toFixed(0) : mb.toFixed(1)} ${t('dupd.unitMB', 'MB')}`;
+  return `${fmtNum(mb, mb >= 100 ? 0 : 1)} ${t('dupd.unitMB', 'MB')}`;
+}
+
+/** "12.5 % · 40 / 320 units · 96 without data, already done" — the counts of workProgress. */
+function workStats(p) {
+  const w = workProgress(p);
+  const empty = w.empty ? ` · ${escHtml(t('dupd.emptyDone', '{n} without data, already done', { n: w.empty }))}` : '';
+  return { pct: w.pct, html: `<b>${fmtNum(w.pct, 1)} %</b> · ${w.done} / ${w.total} ${escHtml(t('dupd.units', 'units'))}${empty}` };
 }
 
 function fmtDuration(sec) {
@@ -670,7 +677,8 @@ function rowLive(ds) {
       return `<div class="dupd-live-line"><span class="dupd-state is-wait">${escHtml(label)}</span>
         <span class="adm-muted">${escHtml(t('dupd.stQueuedOn', 'next on {who}', { who: execName(x).toLowerCase() }))}</span></div>`;
     }
-    const pct = p.total ? (100 * p.done) / p.total : 0;
+    const ws = workStats(p);
+    const pct = ws.pct;
     const st = r.state === 'running' ? `<span class="dupd-state is-run">${escHtml(t('dupd.stRunning', 'Running'))}</span>`
       : r.state === 'pausing' ? `<span class="dupd-state is-wait">${escHtml(t('dupd.stPausing', 'Pausing…'))}</span>`
         : `<span class="dupd-state is-wait">${escHtml(t('dupd.stPaused', 'Paused'))}${pauseReason(r) ? ' · ' + escHtml(pauseReason(r)) : ''}</span>`;
@@ -682,7 +690,7 @@ function rowLive(ds) {
     return `<div class="dupd-live-line">${st}<span>${step}${escHtml(migTitle(p.migration))}</span>
         <span class="dupd-exec-tag"><i data-lucide="${execIcon(p.executor)}"></i>${escHtml(execName(p.executor))}</span></div>
       ${bar(pct, r.state === 'running' ? 'is-run' : '')}
-      <div class="dupd-live-stats"><span><b>${fmtNum(pct, 1)} %</b> · ${p.done} / ${p.total} ${escHtml(t('dupd.units', 'units'))}</span>
+      <div class="dupd-live-stats"><span>${ws.html}</span>
         <span>${escHtml(eta)}${rate}</span></div>`;
   }
   const j = ds.job;
@@ -690,18 +698,23 @@ function rowLive(ds) {
   if (j.state === 'failed') {
     return `<div class="dupd-live-line"><span class="dupd-state is-bad">${escHtml(t('dupd.stFailed', 'Failed'))}</span><span>${escHtml(errorText(j.error, j.detail))}</span></div>`;
   }
-  const pct = j.total ? (100 * (j.done || 0)) / j.total : 0;
+  const ws = workStats(j);
+  const pct = ws.pct;
   const label = j.state === 'assembling' ? t('dupd.stAssembling', 'Assembling') : t('dupd.stPaused', 'Paused');
   return `<div class="dupd-live-line"><span class="dupd-state is-wait">${escHtml(label)}</span><span>${escHtml(migTitle(j.migration))}</span></div>
     ${bar(pct)}
-    <div class="dupd-live-stats"><span><b>${fmtNum(pct, 1)} %</b> · ${j.done || 0} / ${j.total || 0} ${escHtml(t('dupd.units', 'units'))}</span>
+    <div class="dupd-live-stats"><span>${ws.html}</span>
       <span class="adm-muted">${escHtml(t('dupd.resumeHint', 'Resume to continue where it stopped.'))}</span></div>`;
 }
 
 function datasetRow(ds) {
   const active = !!laneOf(ds.id);
   const latest = (_status && _status.latest) || '?';
-  const size = ds.estimate && !ds.job ? ` · ${remainingUnits(ds)} ${escHtml(t('dupd.units', 'units'))} · ${fmtMB(ds.estimate.bytes)}` : '';
+  const est = ds.estimate;
+  const size = !est ? ''
+    : !ds.job ? ` · ${remainingUnits(ds)} ${escHtml(t('dupd.units', 'units'))} · ${fmtMB(est.bytes)}`
+      : ` · ${fmtMB(est.bytesTotal || est.bytes)}${est.bytesTotal && est.bytes < est.bytesTotal
+        ? ` ${escHtml(t('dupd.mbLeft', '({mb} left)', { mb: fmtMB(est.bytes) }))}` : ''}`;
   return `<article class="dupd-ds ${active ? 'is-active' : ''}">
     <div class="dupd-ds-main">
       <div class="dupd-ds-id">

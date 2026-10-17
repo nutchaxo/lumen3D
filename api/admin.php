@@ -6,6 +6,7 @@
  * session; writes additionally require the CSRF token.
  *
  *   GET  ?action=stats          → {global, daily, datasets:[...]}
+ *   GET  ?action=storage[&refresh=1] → {disk, categories, datasets, otherBytes, cached, ...}
  *   GET  ?action=plugins        → {plugins:[{...,enabled,protected}]}
  *   POST ?action=set_plugin     {id,enabled} → {ok}
  *   POST ?action=update_plugin  {id,password} → {ok,path,mode,version}
@@ -35,6 +36,9 @@ if (in_array($action, ['set_plugin', 'update_apply', 'approve_plugin', 'revoke_p
 if (session_status() === PHP_SESSION_ACTIVE) session_write_close();
 
 switch ($action) {
+
+    case 'storage':
+        admin_json_out(admin_storage_report(($_GET['refresh'] ?? '') === '1'));
 
     case 'stats': {
         $stats = admin_load_stats();

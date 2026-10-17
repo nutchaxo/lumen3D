@@ -248,6 +248,30 @@ body.adm-editor-only .adm-tab-inner { max-width: none; padding: 0; }
 .adm-spark-line { fill: none; stroke: var(--adm-accent); stroke-width: 2; vector-effect: non-scaling-stroke; stroke-linejoin: round; stroke-linecap: round; }
 .adm-chart-cap { font-size: 11px; color: var(--adm-text-muted); text-align: right; margin-top: 8px; }
 
+/* ── Storage (Stockage tab) ────────────────────────────────── */
+.adm-storage-head { display: flex; justify-content: flex-end; margin-bottom: 14px; }
+.adm-storage-volume { margin-top: 18px; }
+.adm-storage-bar { display: flex; height: 14px; border-radius: 999px; overflow: hidden; background: var(--adm-border); }
+.adm-storage-bar > span { display: block; height: 100%; min-width: 0; }
+.adm-storage-legend { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 8px 18px; margin-top: 12px; }
+.adm-storage-leg { display: flex; align-items: center; gap: 8px; font-size: 12.5px; min-width: 0; }
+.adm-storage-dot { width: 10px; height: 10px; border-radius: 3px; flex: none; }
+.adm-storage-leg-label { color: var(--adm-text-sec); }
+.adm-storage-leg-val { margin-left: auto; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.adm-storage-note { font-size: 11.5px; line-height: 1.45; margin: 14px 0 0; }
+.adm-storage-grid .adm-card-body { display: flex; flex-direction: column; gap: 12px; }
+.adm-storage-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 5px 12px; align-items: center; }
+.adm-storage-name { font-size: 13px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.adm-storage-val { font-size: 13px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.adm-storage-track { height: 6px; border-radius: 999px; background: var(--adm-border); overflow: hidden; }
+.adm-storage-track > span { display: block; height: 100%; min-width: 0; }
+.adm-storage-row .adm-storage-track { grid-column: 1 / -1; }
+.adm-storage-meta { grid-column: 1 / -1; font-size: 11.5px; font-variant-numeric: tabular-nums; }
+.adm-storage-id { font-size: 11px; font-family: 'JetBrains Mono', monospace; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 46ch; }
+.adm-storage-parts { font-size: 11.5px; }
+.adm-storage-part { display: inline-block; margin: 0 6px 4px 0; padding: 2px 7px; border-radius: 6px; background: var(--adm-accent-subtle); color: var(--adm-text-sec); white-space: nowrap; }
+.adm-storage-part b { color: var(--adm-text); font-weight: 600; }
+
 .adm-table-wrap { overflow-x: auto; }
 .adm-table { width: 100%; border-collapse: collapse; font-size: 13px; }
 .adm-table th { text-align: left; padding: 10px 14px; color: var(--adm-text-sec); font-weight: 600; font-size: 11px; text-transform: uppercase; letter-spacing: 0.03em; border-bottom: 1px solid var(--adm-border); }

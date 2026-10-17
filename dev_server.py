@@ -19,7 +19,7 @@ API routes handled:
     POST /api/datasets.php?action=save | save_thumbnail | rebuild_catalog | set_visibility
                                        | gallery_add | gallery_delete
     POST /api/telemetry.php?action=visit | view | download   (public usage beacons)
-    GET  /api/admin.php?action=stats | plugins | version | update_check | update_status
+    GET  /api/admin.php?action=stats | storage[&refresh=1] | plugins | version | update_check | update_status
     POST /api/admin.php?action=set_plugin | update_apply
     GET  /api/plugins            (auto-discovery, honoring api/disabled-plugins.json)
 
@@ -1878,6 +1878,128 @@ def _admin_stats() -> dict:
         })
     rows.sort(key=lambda r: (r["views"] + r["downloads"]), reverse=True)
     return {"global": stats.get("global", {}), "daily": stats.get("daily", {}), "datasets": rows}
+
+
+# ── Storage report (admin Stockage tab) ───────────────────────────────────────
+# A walk of the whole install is seconds on a dataset tree of tens of thousands of
+# pack files, so the walk is cached for STORAGE_SCAN_TTL_S; the free space of the
+# volume is read on every request (it moves while the platform runs). Twin:
+# api/_admin_lib.php admin_storage_report — the classification below must match it.
+STORAGE_SCAN_TTL_S = 600
+_STORAGE_LOCK = threading.Lock()
+_STORAGE_CACHE: dict = {}
+_STORAGE_UPLOAD_CHILDREN = ("staging", "trash", "migrations", "state")
+
+
+def _storage_bucket(rel: tuple) -> tuple:
+    """(category, child, dataset id, dataset part) of one file, from its path parts
+    under the install root. The one place that says where a byte belongs."""
+    head = rel[0]
+    if head == "DATA_WEB":
+        if len(rel) >= 3 and rel[1] in ALLOWED_TYPE_DIRS:
+            if len(rel) == 3:
+                return ("data", rel[1], None, None)
+            part = rel[3] if len(rel) >= 5 else "(racine)"
+            return ("data", rel[1], f"{rel[1]}/{rel[2]}", part)
+        return ("data", "autres", None, None)
+    if head == "uploads":
+        child = rel[1] if len(rel) >= 3 and rel[1] in _STORAGE_UPLOAD_CHILDREN else "autres"
+        return ("uploads", child, None, None)
+    if head == "js" and len(rel) > 1 and rel[1] in ("modules", "vendor"):
+        return ("code", f"js/{rel[1]}", None, None)
+    return ("code", head if len(rel) > 1 else "(racine)", None, None)
+
+
+def _scan_storage_tree() -> dict:
+    cats: dict = {}
+    datasets: dict = {}
+    t0 = time.monotonic()
+    linked: set = set()
+    stack = [(str(ROOT), ())]
+    while stack:
+        path, rel = stack.pop()
+        try:
+            it = os.scandir(path)
+        except OSError:
+            continue
+        with it:
+            for entry in it:
+                try:
+                    if entry.is_symlink():
+                        continue
+                    if entry.is_dir(follow_symlinks=False):
+                        stack.append((entry.path, rel + (entry.name,)))
+                        continue
+                    if not entry.is_file(follow_symlinks=False):
+                        continue
+                    # os.stat, not DirEntry.stat: only the full stat carries the link
+                    # count and file identity on Windows. A hard link (format-4 `ll`
+                    # columns shared with bricks.previous/, the download hardlink) is
+                    # one set of bytes on the disk, counted once.
+                    st = os.stat(entry.path, follow_symlinks=False)
+                    size = st.st_size
+                    if st.st_nlink > 1:
+                        ident = (st.st_dev, st.st_ino)
+                        if ident in linked:
+                            continue
+                        linked.add(ident)
+                except OSError:
+                    continue
+                cat, child, ds_id, part = _storage_bucket(rel + (entry.name,))
+                c = cats.setdefault(cat, {"bytes": 0, "files": 0, "children": {}})
+                c["bytes"] += size
+                c["files"] += 1
+                ch = c["children"].setdefault(child, [0, 0])
+                ch[0] += size
+                ch[1] += 1
+                if ds_id is not None:
+                    d = datasets.setdefault(ds_id, {"bytes": 0, "files": 0, "parts": {}})
+                    d["bytes"] += size
+                    d["files"] += 1
+                    d["parts"][part] = d["parts"].get(part, 0) + size
+    names = {}
+    try:
+        for ds in _list_datasets_cached():
+            names[ds.get("id")] = ds.get("name")
+    except Exception:
+        pass
+    order = {"data": 0, "uploads": 1, "code": 2}
+    categories = [{
+        "id": cat, "bytes": c["bytes"], "files": c["files"],
+        "children": [{"id": k, "bytes": v[0], "files": v[1]}
+                     for k, v in sorted(c["children"].items(), key=lambda kv: -kv[1][0])],
+    } for cat, c in sorted(cats.items(), key=lambda kv: order.get(kv[0], 9))]
+    rows = [{
+        "id": ds_id, "name": names.get(ds_id) or ds_id, "type": ds_id.split("/", 1)[0],
+        "bytes": d["bytes"], "files": d["files"],
+        "parts": [{"id": k, "bytes": v} for k, v in sorted(d["parts"].items(), key=lambda kv: -kv[1])],
+    } for ds_id, d in sorted(datasets.items(), key=lambda kv: -kv[1]["bytes"])]
+    return {
+        "scannedAt": datetime.now().astimezone().isoformat(timespec="seconds"),
+        "scanSeconds": round(time.monotonic() - t0, 2),
+        "trackedBytes": sum(c["bytes"] for c in categories),
+        "categories": categories,
+        "datasets": rows,
+    }
+
+
+def _admin_storage(refresh: bool = False) -> dict:
+    with _STORAGE_LOCK:  # single flight: concurrent opens of the tab share one walk
+        now = time.time()
+        scan = _STORAGE_CACHE.get("scan")
+        fresh = scan is None or refresh or now - scan["at"] > STORAGE_SCAN_TTL_S
+        if fresh:
+            scan = {"at": now, "data": _scan_storage_tree()}
+            _STORAGE_CACHE["scan"] = scan
+    usage = shutil.disk_usage(str(ROOT))
+    return {
+        **scan["data"],
+        "disk": {"totalBytes": usage.total, "usedBytes": usage.used, "freeBytes": usage.free},
+        "otherBytes": max(0, usage.used - scan["data"]["trackedBytes"]),
+        "cached": not fresh,
+        "ageSeconds": int(now - scan["at"]),
+        "ttlSeconds": STORAGE_SCAN_TTL_S,
+    }
 
 
 # ── Plugin enable/disable state ────────────────────────────────────────────────
@@ -7310,6 +7432,8 @@ class AdminHandler(http.server.SimpleHTTPRequestHandler):
 
             if action == "stats":
                 self._json(200, _admin_stats())
+            elif action == "storage":
+                self._json(200, _admin_storage(refresh=params.get("refresh") == "1"))
             elif action == "plugins":
                 self._json(200, {"plugins": _admin_plugins()})
             elif action == "set_plugin":

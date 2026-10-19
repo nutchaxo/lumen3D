@@ -39,7 +39,7 @@ except Exception:  # pragma: no cover
 
 MID = "m002-planes"
 # Since web 1.59.0 a format-1 dataset also needs m003 (layer MIPs) and m004 (bricks v3).
-LATER = ["m003-layer-mips", "m004-bricks-v3", "m005-matrix"]
+LATER = ["m003-layer-mips", "m004-bricks-v3", "m005-matrix", "m006-q30"]
 REAL_DS = Path(ROOT) / "DATA_WEB" / "3d" / "Egfl7eGFP-E825-Em2-10122024-DAPI-Pecam1647-10x-07xzoom-2x2Tiles-stack_Stitch"
 
 
@@ -834,7 +834,7 @@ class HttpRoute(unittest.TestCase):
         cookie, csrf = hdrs["Set-Cookie"].split(";")[0], data["csrf"]
         st, data, _ = self.req("GET", base + "?action=status", cookie=cookie)
         self.assertEqual(st, 200, data)
-        self.assertEqual(data["latest"], 5)
+        self.assertEqual(data["latest"], 6)
         self.assertEqual(data["migrations"][0]["id"], MID)
         self.assertTrue(data["server"]["available"])
         self.assertEqual(self.req("POST", base + "?action=plan", {"dataset": "3d/SYN", "migration": MID},

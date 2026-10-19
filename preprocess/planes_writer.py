@@ -267,8 +267,8 @@ def brick_trees(bricks_manifest: dict):
     """[(tree key or '', LOD0 dims (X, Y, Z), channels)] of a bricks manifest — one
     entry for a '3d' dataset, one per timepoint for a 'live' one."""
     channels = int(bricks_manifest.get("channels") or 0)
-    if bricks_manifest.get("schema") in ("iribhm-bricks-v3", "iribhm-bricks-v5"):
-        # One level list for every tree of a v3 / v5 manifest; `timepoints` lists the trees.
+    if bricks_manifest.get("schema") in ("iribhm-bricks-v3", "iribhm-bricks-v5", "iribhm-bricks-v6"):
+        # One level list for every tree of a v3 / v5 / v6 manifest; `timepoints` lists the trees.
         levels = bricks_manifest.get("levels") or []
         row = next((lv for lv in levels if int(lv.get("level", -1)) == 0), None)
         if row is None:

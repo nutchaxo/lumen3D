@@ -120,6 +120,14 @@
       "cancelled": "Exportación cancelada.",
       "failed": "La exportación falló: {error}",
       "step": "Nivel {level} · canal {channel} · capa {z}"
+    },
+    "q30": {
+      "title": "Ladrillos de visualización (WebP Q30)",
+      "hint": "Los ladrillos comprimidos que este sitio muestra, tal como están guardados (WebP calidad 30), para los niveles elegidos: mucho más ligeros que los datos sin pérdidas, pero legibles solo por las herramientas de Lumen3D (formato descrito en el README del zip). Para medir, use la exportación OME-Zarr sin pérdidas de arriba.",
+      "start": "Descargar el .q30.zip",
+      "total": "{size} a descargar",
+      "progress": "{pct} % · {out} escritos",
+      "done": "Terminado: {size}, {packs} paquete(s)."
     }
   },
   "nav": {
@@ -452,7 +460,9 @@
       "advice": "Recomendado: la resolución más fina en verde, con calidad Extra. Para una medición o una figura: Max en Native.",
       "adviceRest": "Con una calidad comprimida, los bricks visibles se vuelven a cargar sin pérdida cuando la cámara se detiene (casilla bajo las listas).",
       "losslessAtRest": "Sin pérdida al detenerse la vista",
-      "losslessAtRestHint": "Con una celda comprimida, los bricks visibles se vuelven a cargar sin pérdida poco después de que la cámara se detenga."
+      "losslessAtRestHint": "Con una celda comprimida, los bricks visibles se vuelven a cargar sin pérdida poco después de que la cámara se detenga.",
+      "q30Note": "Todos los volúmenes se muestran comprimidos en WebP calidad 30. Las medidas y las exportaciones leen los datos sin pérdidas, en la resolución elegida aquí.",
+      "summaryQ30": "{res} · WebP Q30: {size}"
     },
     "detailLossless": "Detalle sin pérdidas: {count} ladrillos a la vista",
     "gpuMemory": "Memoria GPU",
@@ -767,7 +777,8 @@
     "losslessNative": "Sin pérdidas a la resolución nativa ({x} × {y} × {z}).",
     "losslessLevel": "Sin pérdidas a {x} × {y} × {z}: el nivel nativo no cabe en esta GPU.",
     "loadingLossless": "Cargando el nivel sin pérdidas…",
-    "currentIs": "Como se muestra: {current}."
+    "currentIs": "Como se muestra: {current}.",
+    "losslessChosen": "Sin pérdidas, en la resolución mostrada ({x} × {y} × {z})."
   },
   "studio": {
     "importOtherFigure": "Este archivo de Studio se guardó para otra figura: sus anotaciones se importaron, pero sus ajustes de canales solo se aplicaron donde la figura coincide.",
@@ -832,7 +843,8 @@
     "exportNative": "Nativa sin pérdidas",
     "exportCurrent": "Esta imagen",
     "loadingNativeExport": "Cargando la imagen nativa sin pérdidas…",
-    "nativeExportFailed": "No se pudo cargar la imagen nativa; no se exportó nada."
+    "nativeExportFailed": "No se pudo cargar la imagen nativa; no se exportó nada.",
+    "loadingLosslessExport": "Cargando la imagen sin pérdidas…"
   },
   "admin": {
     "loginTitle": "{brand} Admin",

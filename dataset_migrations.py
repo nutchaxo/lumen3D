@@ -60,7 +60,7 @@ except Exception:
 
 # ── Registry ───────────────────────────────────────────────────────────────────
 
-LATEST = 5
+LATEST = 6
 
 MIGRATIONS = [
     {
@@ -655,6 +655,7 @@ def mips_manifest(dimensions: dict, channels: int, source_sha256: str, producer:
 
 V3_SCHEMA = "iribhm-bricks-v3"
 V5_SCHEMA = "iribhm-bricks-v5"            # format5.SCHEMA (format 5, SPEC §14.4)
+V6_SCHEMA = "iribhm-bricks-v6"            # format5.SCHEMA_V6 (format 6, SPEC §15)
 V3_ENCODING = "webp-lossless-v3"      # internal Tree.encoding tag, never written to disk
 V3_APRON = 1
 V3_SLICE = BRICK_SIZE + 2 * V3_APRON  # 66
@@ -1326,7 +1327,7 @@ class Tree:
 class Plan:
     __slots__ = ("dataset", "type", "folder", "ds_dir", "manifest_path", "sha", "trees",
                  "units", "unit_bytes", "total", "empty",
-                 "v3", "v3_problem", "v5", "v5_problem", "voxel", "manifest", "extra")
+                 "v3", "v3_problem", "v5", "v5_problem", "v6", "voxel", "manifest", "extra")
 
 
 def _int_dim(v) -> int:
@@ -1422,7 +1423,7 @@ def _manifest_voxel(manifest: dict, ds_dir: Path):
     """LOD0 voxel size (µm) that drives the v3 Z-halving rule: the bricks manifest's
     `voxelSize` (v3: levels[0].voxelSize), else metadata.json `voxel_size`, else 1 µm
     isotropic (the rule then halves Z with X and Y from the first level on)."""
-    if manifest.get("schema") in (V3_SCHEMA, V5_SCHEMA):
+    if manifest.get("schema") in (V3_SCHEMA, V5_SCHEMA, V6_SCHEMA):
         lv = manifest.get("levels")
         if isinstance(lv, list) and lv and isinstance(lv[0], dict):
             v = _voxel_triplet(lv[0].get("voxelSize"))
@@ -1621,7 +1622,8 @@ def _plan_for(dataset_id: str) -> Plan:
         bricks_root = ds_dir / "bricks"
         tps = manifest.get("timepoints")
         is_v3 = manifest.get("schema") == V3_SCHEMA
-        is_v5 = manifest.get("schema") == V5_SCHEMA
+        is_v6 = manifest.get("schema") == V6_SCHEMA
+        is_v5 = manifest.get("schema") == V5_SCHEMA or is_v6
         v3_problem = v5_problem = None
         if is_v3:
             trees, v3_problem = _build_v3_trees(type_dir, bricks_root, manifest)
@@ -1657,7 +1659,7 @@ def _plan_for(dataset_id: str) -> Plan:
     plan.dataset, plan.type, plan.folder, plan.ds_dir = f"{type_dir}/{folder}", type_dir, folder, ds_dir
     plan.manifest_path = manifest_path
     plan.v3, plan.v3_problem, plan.manifest, plan.extra = is_v3, v3_problem, manifest, {}
-    plan.v5, plan.v5_problem = is_v5, v5_problem
+    plan.v5, plan.v5_problem, plan.v6 = is_v5, v5_problem, is_v6
     if is_v3:
         plan.extra["_index_stamp"] = _v3_index_stamp_trees(trees)
     elif is_v5:
@@ -1856,6 +1858,8 @@ def unit_key_for(mid: str, unit) -> str:
         return "t%d.k%d.c%d.z%d.y%d.x%d" % tuple(unit)
     if mid == M005:
         return _m005_key(unit)
+    if mid == M006:
+        return _m006_key(unit)
     return unit_key(*unit)
 
 
@@ -1863,6 +1867,8 @@ def unit_key_for(mid: str, unit) -> str:
 def parse_unit_key_for(mid: str, key) -> tuple:
     if mid == M005:
         return _m005_parse(key)
+    if mid == M006:
+        return _m006_parse(key)
     rx = {M003: _UNIT_RE_M003, M004: _UNIT_RE_M004}.get(mid, _UNIT_RE)
     m = rx.match(str(key or ""))
     if not m:
@@ -1885,6 +1891,8 @@ def _unitset(plan: Plan, mid: str) -> UnitSet:
         return _m004_unitset(plan)
     if mid == M005:
         return _m005_unitset(plan)
+    if mid == M006:
+        return _m006_unitset(plan)
     raise MigrationError("unknown_migration")
 
 
@@ -2352,6 +2360,9 @@ def _repair_needed(plan: Plan, fv: int, m: dict) -> bool:
         # Damaged v5 bricks cannot be rebuilt (their format-4 source is gone): a problem,
         # not a repair. A v4 tree under a version-5 metadata is repaired from that tree.
         return not plan.v5
+    if m["id"] == M006:
+        # A v5 tree under a version-6 metadata is converted again; a damaged v6 tree is a problem.
+        return not plan.v6
     return not _structure_valid(plan, m["id"])
 
 
@@ -2412,6 +2423,8 @@ def _check_disk(plan: Plan, mid: str = M002, us: "UnitSet | None" = None) -> Non
         est = int(sum(plan.unit_bytes.values()) * 8 / 7 * BRICKS_V3_SIZE_RATIO)
     elif mid == M005:
         est = int(sum(plan.unit_bytes.values()) * FORMAT5_SIZE_RATIO)
+    elif mid == M006:
+        est = int(sum((us or _unitset(plan, M006)).unit_bytes.values()) * M006_SIZE_RATIO)
     else:
         est = int(sum(plan.unit_bytes.values()) * PLANES_SIZE_RATIO)
     store_free, store_dev = _volume_key(MIGRATIONS_DIR)
@@ -2478,6 +2491,15 @@ def plan_job(dataset_id, mid, offset: int = 0, limit: int = 10000) -> dict:
                      "newManifestSha": plan.sha}
                 _save_journal(path, j)
                 return _swapped_only_summary(j)
+            if m["id"] == M006 and plan.v6:
+                if plan.v5_problem:
+                    raise MigrationError("bricks_v5_invalid", 409, plan.v5_problem)
+                j = {"migration": m["id"], "dataset": plan.dataset, "createdAt": _utc_iso(),
+                     "sourceManifests": {}, "units": {"total": 0, "empty": 0}, "done": [],
+                     "executors": {"browser": 0, "server": 0}, "state": "swapped",
+                     "newManifestSha": plan.sha}
+                _save_journal(path, j)
+                return _swapped_only_summary(j)
             if m["id"] == M005 and plan.v5:
                 if plan.v5_problem:
                     raise MigrationError("bricks_v5_invalid", 409, plan.v5_problem)
@@ -2512,6 +2534,9 @@ def plan_job(dataset_id, mid, offset: int = 0, limit: int = 10000) -> dict:
                 "units": keys[offset:offset + limit]})
     if m["id"] == M004:
         out["levels"] = _levels_progress(us, done)
+    elif m["id"] == M006:
+        out["levels"] = [{"level": L["level"], "target": L["target"], "dimensions": L["dimensions"],
+                          "voxelSize": L["voxelSize"]} for L in us.levels]
     elif m["id"] == M005:
         out["stages"] = _m005_stage_progress(us, done)
         out["levels"] = [{"level": L["level"], "target": L["target"], "dimensions": L["dimensions"],
@@ -2608,6 +2633,8 @@ def unit_put(dataset_id, mid, key, body: bytes, dry: bool = False) -> dict:
     mid = m["id"]
     if mid == M005:
         return _unit_put_m005(plan, m, path, key, body)
+    if mid == M006:
+        return _unit_put_m006(plan, m, path, key, body)
     unit = parse_unit_key_for(mid, key)
     store = tile_store_dir(plan.type, plan.folder, mid)
     if mid == M002:
@@ -2711,6 +2738,16 @@ def unit_run(dataset_id, mid, max_seconds=MAX_RUN_SECONDS, dry: bool = False, wo
             raise MigrationError("job_not_running", 409)
         n = max(1, min(64, _as_int(workers, M005_WORKERS) or M005_WORKERS))
         return _unit_run_m005(dataset_id, m, plan, path, budget, dry, n)
+    if m["id"] == M006:
+        with _JobLock(_job_base(plan, mid=M006)):
+            j = _load_journal(path)
+            if j is None:
+                raise MigrationError("no_job", 404)
+            _check_source(plan, j, path)
+        if j.get("state") != "running":
+            raise MigrationError("job_not_running", 409)
+        n = max(1, min(64, _as_int(workers, M005_WORKERS) or M005_WORKERS))
+        return _unit_run_m006(dataset_id, m, plan, path, budget, dry, n)
     base = _job_base(plan, mid=m["id"])
     store = tile_store_dir(plan.type, plan.folder, m["id"])
     t0 = time.monotonic()
@@ -2858,6 +2895,8 @@ def _structure_valid(plan: Plan, mid: str) -> bool:
         return dataset_bricks_v3_valid(plan) or bool(plan.v5)
     if mid == M005:
         return bool(plan.v5) and plan.v5_problem is None
+    if mid == M006:
+        return bool(plan.v6) and plan.v5_problem is None
     return False
 
 
@@ -3009,6 +3048,9 @@ def _process_any(plan: Plan, us: UnitSet, unit, store: Path, cache):
     if us.mid == M005:
         result, nread = process_unit_m005(plan, us, unit, store)
         return result, nread, _m005_result_bytes(result)
+    if us.mid == M006:
+        result, nread = process_unit_m006(plan, us, unit)
+        return result, nread, len(result)
     bricks, nread = process_unit_m004(plan, us, unit, store, cache)
     return bricks, nread, sum(len(p) for p in bricks.values())
 
@@ -3021,6 +3063,8 @@ def _store_any(plan: Plan, us: UnitSet, unit, store: Path, result) -> None:
         _write_mip_tile(store, unit, result)
     elif us.mid == M005:
         _store_m005(store, unit, result)
+    elif us.mid == M006:
+        _store_m006(store, unit, result)
     else:
         _write_unit_m004(us, store, unit, result)
 
@@ -3036,6 +3080,8 @@ def unit_inputs(dataset_id, mid, key) -> dict:
     mid = m["id"]
     if mid == M005:
         return _unit_inputs_m005(plan, _path, key)
+    if mid == M006:
+        return _unit_inputs_m006(plan, key)
     unit = parse_unit_key_for(mid, key)
     us = _unitset(plan, mid)
     out = {"ok": True, "migration": mid, "unit": unit_key_for(mid, unit), "empty": unit not in us.unit_bytes}
@@ -3396,6 +3442,13 @@ def cancel(dataset_id, mid) -> dict:
                 raise MigrationError("finalize_in_progress", 409)
             if (ds_dir / old_name).is_dir():
                 _replace_retry(ds_dir / old_name, ds_dir / live_name)
+        if m["id"] == M006 and j is not None:
+            try:
+                live_plan = _plan_for(f"{type_dir}/{folder}")
+                if not live_plan.v6:
+                    _m006_drop_q30([tr.bricks_dir for tr in live_plan.trees.values()])
+            except MigrationError:
+                pass
         _rmtree(tile_store_dir(type_dir, folder, m["id"]))
         _rmtree(ds_dir / inc_name)
         try:
@@ -3851,6 +3904,8 @@ def finalize(dataset_id, mid, max_seconds=None, keep_previous=False) -> dict:
         return _finalize_m004(dataset_id, m, max_seconds, bool(keep_previous))
     if m["id"] == M005:
         return _finalize_m005(dataset_id, m, max_seconds, bool(keep_previous))
+    if m["id"] == M006:
+        return _finalize_m006(dataset_id, m, max_seconds)
     return _finalize_m002(dataset_id, mid, max_seconds)
 
 
@@ -4698,12 +4753,12 @@ def unit_inputs_many(dataset_id, mid, keys) -> dict:
     if not isinstance(keys, list) or not 1 <= len(keys) <= UNIT_BATCH_MAX:
         raise MigrationError("bad_unit", 400, "1..%d units" % UNIT_BATCH_MAX)
     m, plan, path = _open_job(dataset_id, mid)
-    if m["id"] != M005:
-        raise MigrationError("not_applicable", 409, "batches are an m005 protocol")
+    if m["id"] not in (M005, M006):
+        raise MigrationError("not_applicable", 409, "batches are an m005 / m006 protocol")
     items = []
     for key in keys:
         try:
-            items.append(_unit_inputs_m005(plan, path, key))
+            items.append(_unit_inputs_m005(plan, path, key) if m["id"] == M005 else _unit_inputs_m006(plan, key))
         except MigrationError as exc:
             items.append(_unit_error(key, exc))
     return {"ok": True, "items": items}
@@ -4754,10 +4809,10 @@ def unit_put_many(dataset_id, mid, body: bytes) -> dict:
     if len(body) > MAX_UNIT_BODY:
         raise MigrationError("body_too_large", 413)
     m, plan, path = _open_job(dataset_id, mid)
-    if m["id"] != M005:
-        raise MigrationError("not_applicable", 409, "batches are an m005 protocol")
+    if m["id"] not in (M005, M006):
+        raise MigrationError("not_applicable", 409, "batches are an m005 / m006 protocol")
     entries = parse_put_many(body)
-    us = _unitset(plan, M005)
+    us = _unitset(plan, m["id"])
     j = _load_journal(path)
     if j is None:
         raise MigrationError("no_job", 404)
@@ -4765,9 +4820,20 @@ def unit_put_many(dataset_id, mid, body: bytes) -> dict:
     if j.get("state") != "running":
         raise MigrationError("job_not_running", 409)
     done = set(j.get("done") or [])
-    store = tile_store_dir(plan.type, plan.folder, M005)
+    store = tile_store_dir(plan.type, plan.folder, m["id"])
     results, accepted = [], []
     for key, data in entries:
+        if m["id"] == M006:
+            try:
+                unit = _m006_parse(key)
+                if unit not in us.unit_bytes:
+                    raise MigrationError("empty_unit", 409)
+                _store_m006(store, unit, _m006_validate_put(plan, us, unit, data))
+                accepted.append(_m006_key(unit))
+                results.append({"ok": True, "unit": key})
+            except MigrationError as exc:
+                results.append(_unit_error(key, exc))
+            continue
         try:
             unit = _m005_parse(key)
             s, t, k, c = unit[0], unit[1], unit[2], unit[3]
@@ -4791,8 +4857,8 @@ def unit_put_many(dataset_id, mid, body: bytes) -> dict:
     return {"ok": True, "results": results, "done": sm["done"], "total": sm["total"]}
 
 
-def _part_path(plan: Plan, key: str) -> Path:
-    return tile_store_dir(plan.type, plan.folder, M005) / ".parts" / (re.sub(r"[^A-Za-z0-9._-]", "_", key) + ".part")
+def _part_path(plan: Plan, key: str, mid: str = None) -> Path:
+    return tile_store_dir(plan.type, plan.folder, mid or M005) / ".parts" / (re.sub(r"[^A-Za-z0-9._-]", "_", key) + ".part")
 
 
 def unit_put_part(dataset_id, mid, key, offset, total, body: bytes) -> dict:
@@ -4801,16 +4867,16 @@ def unit_put_part(dataset_id, mid, key, offset, total, body: bytes) -> dict:
     piece is accepted again), and the last one (offset + length = total) stores the unit like
     unit_put. {ok, complete, received} or unit_put's answer + complete: true."""
     m, plan, path = _open_job(dataset_id, mid)
-    if m["id"] != M005:
-        raise MigrationError("not_applicable", 409, "pieces are an m005 protocol")
+    if m["id"] not in (M005, M006):
+        raise MigrationError("not_applicable", 409, "pieces are an m005 / m006 protocol")
     try:
         offset, total = int(offset), int(total)
     except (TypeError, ValueError):
         raise MigrationError("bad_blob", 400, "offset / total")
     if total < 1 or total > MAX_UNIT_BODY or offset < 0 or offset + len(body) > total or not body:
         raise MigrationError("bad_blob", 400, "piece outside the unit")
-    _m005_parse(key)
-    p = _part_path(plan, str(key))
+    (_m005_parse if m["id"] == M005 else _m006_parse)(key)
+    p = _part_path(plan, str(key), m["id"])
     p.parent.mkdir(parents=True, exist_ok=True)
     have = p.stat().st_size if p.exists() else 0
     if offset > have:
@@ -4823,7 +4889,7 @@ def unit_put_part(dataset_id, mid, key, offset, total, body: bytes) -> dict:
         return {"ok": True, "complete": False, "received": offset + len(body)}
     data = p.read_bytes()
     try:
-        out = _unit_put_m005(plan, m, path, key, data)
+        out = _unit_put_m005(plan, m, path, key, data) if m["id"] == M005 else _unit_put_m006(plan, m, path, key, data)
     finally:
         try:
             p.unlink()
@@ -5139,6 +5205,480 @@ def _finalize_m005(dataset_id, m, max_seconds=None, keep_previous=False) -> dict
         raise MigrationError("job_failed", 409, str(j.get("error") or state))
 
 
+# ── Format 6 — m006-q30 (SPEC §15) ─────────────────────────────────────────────
+#
+# A format-5 tree keeps its `ll` column, its stores and its levels; its four other columns are
+# replaced by one, `q30` (WebP lossy at quality 30, dead zone, `ll` fallback). Units: one 4×4×4
+# super-block of `ll` bricks (t, k, c, BZ, BY, BX), all runnable at once; empty iff the
+# super-block holds no `ll` brick. Finalize works IN PLACE: the q30 packs and index are written
+# beside the format-5 columns, the v6 manifest is the commit point, then the format-5 columns
+# are deleted.
+
+M006 = "m006-q30"
+M006_ENTRY = {
+    "id": M006,
+    "from": 5,
+    "to": 6,
+    "types": ["3d", "live"],
+    "title": {
+        "en": "One display quality: WebP Q30 at every level, lossless kept for measurements and exports",
+        "fr": "Une seule qualité d'affichage : WebP Q30 à chaque niveau, sans perte gardé pour les mesures et les exports",
+        "es": "Una sola calidad de visualización: WebP Q30 en cada nivel, sin pérdidas para medidas y exportaciones",
+        "nl": "Eén weergavekwaliteit: WebP Q30 op elk niveau, verliesvrij bewaard voor metingen en exports",
+    },
+    "description": {
+        "en": "Encodes every level once in WebP quality 30 for display and deletes the ±2, ±4, light "
+              "and very light copies of format 5. The lossless bricks and the fast cut stores are "
+              "kept as they are: measurements, exports and downloads still read the exact data.",
+        "fr": "Encode chaque niveau une fois en WebP qualité 30 pour l'affichage et supprime les copies "
+              "±2, ±4, légère et très légère du format 5. Les briques sans perte et les copies de coupe "
+              "rapides sont gardées telles quelles : mesures, exports et téléchargements lisent toujours "
+              "les données exactes.",
+        "es": "Codifica cada nivel una vez en WebP calidad 30 para la visualización y borra las copias "
+              "±2, ±4, ligera y muy ligera del formato 5. Los ladrillos sin pérdidas y las copias de corte "
+              "rápidas se conservan tal cual: medidas, exportaciones y descargas siguen leyendo los datos "
+              "exactos.",
+        "nl": "Codeert elk niveau één keer in WebP-kwaliteit 30 voor de weergave en verwijdert de kopieën "
+              "±2, ±4, licht en zeer licht van formaat 5. De verliesvrije bricks en de snelle snijkopieën "
+              "blijven zoals ze zijn: metingen, exports en downloads lezen nog steeds de exacte gegevens.",
+    },
+}
+_SWAP_DIRS[M006] = (".bricks6-unused", "bricks", ".bricks6-unused")
+M006_DROPPED = ("b2", "b4", "q80", "q50")
+# q30 bytes per byte of the ll bricks it is made from (E8.5 Em1, native level: 26.1 / 89.3 MB).
+M006_SIZE_RATIO = 0.35
+_UNIT_RE_M006 = re.compile(r"^t(\d{1,6})\.k(\d{1,2})\.c(\d{1,3})\.z(\d{1,5})\.y(\d{1,5})\.x(\d{1,5})\Z", re.ASCII)
+
+MIGRATIONS.append(M006_ENTRY)
+_MIGRATIONS_BY_ID[M006] = M006_ENTRY
+
+
+def _m006_key(u) -> str:
+    return "t%d.k%d.c%d.z%d.y%d.x%d" % tuple(u)
+
+
+def _m006_parse(key) -> tuple:
+    m = _UNIT_RE_M006.match(str(key or ""))
+    if not m:
+        raise MigrationError("bad_unit")
+    return tuple(int(g) for g in m.groups())
+
+
+def _m006_tree_index(plan: Plan, tree) -> dict:
+    """The parsed `index/ll.bin` of one tree (cached in the plan)."""
+    cache = plan.extra.setdefault("_m006_ll", {})
+    if tree.t not in cache:
+        cache[tree.t] = _f5.parse_index_bin((tree.bricks_dir / _f5.index_rel("ll")).read_bytes())
+    return cache[tree.t]
+
+
+def _m006_unitset(plan: Plan) -> UnitSet:
+    hit = plan.extra.get(M006)
+    if hit is not None:
+        return hit
+    if _f5 is None or _np is None:
+        raise MigrationError("server_unavailable", 409, "numpy is not installed")
+    if plan.v6:
+        raise MigrationError("already_v6", 409)
+    if not plan.v5:
+        raise MigrationError("needs_format5", 409)
+    if plan.v5_problem:
+        raise MigrationError("bricks_v5_invalid", 409, plan.v5_problem)
+    levels = plan.manifest.get("levels") or []
+    us = UnitSet(M006)
+    us.levels = levels
+    units, unit_bytes, total = [], {}, 0
+    for t in sorted(plan.trees):
+        tree = plan.trees[t]
+        idx = _m006_tree_index(plan, tree)
+        for k, (gx, gy, gz, _np_) in enumerate(idx["levels"]):
+            for c in range(tree.channels):
+                e = idx["entries"][k][c]
+                present = (_np.asarray(e["length"]) > 0).reshape(gz, gy, gx)
+                ln = _np.asarray(e["length"], dtype=_np.int64).reshape(gz, gy, gx)
+                for BZ in range(-(-gz // V3_SUPER)):
+                    for BY in range(-(-gy // V3_SUPER)):
+                        for BX in range(-(-gx // V3_SUPER)):
+                            total += 1
+                            sl = (slice(V3_SUPER * BZ, V3_SUPER * BZ + V3_SUPER),
+                                  slice(V3_SUPER * BY, V3_SUPER * BY + V3_SUPER),
+                                  slice(V3_SUPER * BX, V3_SUPER * BX + V3_SUPER))
+                            if present[sl].any():
+                                u = (t, k, c, BZ, BY, BX)
+                                units.append(u)
+                                unit_bytes[u] = int(ln[sl].sum())
+    # Coarsest level first: the light levels are converted (and visible) early.
+    us.units = sorted(units, key=lambda u: (-u[1], u[0], u[2], u[3], u[4], u[5]))
+    us.unit_bytes = unit_bytes
+    us.total, us.empty = total, total - len(units)
+    plan.extra[M006] = us
+    return us
+
+
+def _m006_bricks(plan: Plan, us: UnitSet, unit) -> list:
+    """[(bz, by, bx, path, offset, length)] of the unit's stored `ll` bricks, (bz, by, bx) order."""
+    t, k, c, BZ, BY, BX = unit
+    tree = plan.trees.get(t)
+    if tree is None or c >= tree.channels or k >= len(us.levels):
+        raise MigrationError("bad_unit")
+    idx = _m006_tree_index(plan, tree)
+    gx, gy, gz, _n = idx["levels"][k]
+    e = idx["entries"][k][c]
+    out = []
+    for bz in range(V3_SUPER * BZ, min(gz, V3_SUPER * BZ + V3_SUPER)):
+        for by in range(V3_SUPER * BY, min(gy, V3_SUPER * BY + V3_SUPER)):
+            for bx in range(V3_SUPER * BX, min(gx, V3_SUPER * BX + V3_SUPER)):
+                i = (bz * gy + by) * gx + bx
+                ln = int(e["length"][i])
+                if ln:
+                    out.append((bz, by, bx, tree.bricks_dir / _f5.brick_pack_rel(k, "ll", c, int(e["pack"][i])),
+                                int(e["offset"][i]), ln))
+    return out
+
+
+def _m006_store_path(store: Path, unit) -> Path:
+    t, k, c, BZ, BY, BX = unit
+    return store / ("t%d" % t) / ("k%d" % k) / ("c%d" % c) / ("z%d.y%d.x%d.bin" % (BZ, BY, BX))
+
+
+def process_unit_m006(plan: Plan, us: UnitSet, unit):
+    """Server executor of one m006 unit: (blob of its q30 bricks, bytes read)."""
+    if _f5 is None or _np is None:
+        raise MigrationError("server_unavailable", 409, "numpy is not installed")
+    out, nread, handles = {}, 0, {}
+    try:
+        for bz, by, bx, path, off, ln in _m006_bricks(plan, us, unit):
+            fh = handles.get(path)
+            if fh is None:
+                fh = handles[path] = open(path, "rb")
+            fh.seek(off)
+            raw = fh.read(ln)
+            if len(raw) != ln:
+                raise MigrationError("bad_tile", 500, "short ll brick")
+            nread += ln
+            b66 = _f5.decode_brick(raw, "ll")
+            out[(bz, by, bx)] = {"q30": _f5.encode_brick(b66, "q30", known={"ll": raw})}
+    finally:
+        for fh in handles.values():
+            fh.close()
+    return _m005_brick_blob(out, ("q30",)), nread
+
+
+def _m006_timed(plan, us, unit, store):
+    u0 = time.monotonic()
+    result, nread = process_unit_m006(plan, us, unit)
+    return result, nread, time.monotonic() - u0
+
+
+def _store_m006(store: Path, unit, result) -> None:
+    with _thread_lock("unit:%s:%s" % (store, _m006_key(unit))):
+        _atomic_write(_m006_store_path(store, unit), result)
+
+
+def _m006_check_q30(data: bytes) -> None:
+    """A stored q30 image (SPEC §15.2): lossy 720×640 + τ ≤ 12, or the ll image + 0xFF."""
+    if len(data) < 2:
+        raise ValueError("no trailer byte")
+    tag = data[-1]
+    w, h, lossless = webp_size(data[:-1])
+    if tag == _f5.TAG_LL:
+        if (w, h, lossless) != (_f5.MOSAIC66_W, _f5.MOSAIC66_H, True):
+            raise ValueError("fallback image %dx%d" % (w, h))
+    elif tag <= _f5.DEAD_ZONE_MAX:
+        if (w, h) != (_f5.MOSAIC80_W, _f5.MOSAIC80_H) or lossless:
+            raise ValueError("lossy image %dx%d" % (w, h))
+    else:
+        raise ValueError("trailer byte %d" % tag)
+
+
+def _m006_validate_put(plan: Plan, us: UnitSet, unit, body: bytes) -> bytes:
+    try:
+        bricks = _m005_parse_brick_blob(body, ("q30",))
+    except (MigrationError, struct.error, ValueError) as exc:
+        raise MigrationError("bad_blob", 400, "m006 blob: %s" % getattr(exc, "detail", exc))
+    want = {(bz, by, bx) for bz, by, bx, _p, _o, _l in _m006_bricks(plan, us, unit)}
+    if set(bricks) != want:
+        raise MigrationError("bad_blob", 400, "%d brick(s), the super-block holds %d" % (len(bricks), len(want)))
+    try:
+        for per in bricks.values():
+            _m006_check_q30(per["q30"])
+    except ValueError as exc:
+        raise MigrationError("bad_blob", 400, str(exc))
+    return body
+
+
+def _unit_inputs_m006(plan: Plan, key) -> dict:
+    us = _unitset(plan, M006)
+    unit = _m006_parse(key)
+    t, k, c = unit[0], unit[1], unit[2]
+    tree = plan.trees.get(t)
+    if tree is None or c >= tree.channels or k >= len(us.levels):
+        raise MigrationError("bad_unit")
+    if unit not in us.unit_bytes:
+        return {"ok": True, "migration": M006, "unit": _m006_key(unit), "empty": True}
+    return {"ok": True, "migration": M006, "unit": _m006_key(unit), "empty": False,
+            "tree": tree.rel, "t": t, "level": k, "channel": c,
+            "bricks": [{"rel": p.relative_to(plan.ds_dir).as_posix(), "start": o, "end": o + ln,
+                        "bz": bz, "by": by, "bx": bx}
+                       for bz, by, bx, p, o, ln in _m006_bricks(plan, us, unit)]}
+
+
+def _unit_put_m006(plan: Plan, m: dict, path: Path, key, body: bytes) -> dict:
+    us = _unitset(plan, M006)
+    unit = _m006_parse(key)
+    if unit not in us.unit_bytes:
+        raise MigrationError("empty_unit", 409)
+    j = _load_journal(path)
+    if j is None:
+        raise MigrationError("no_job", 404)
+    _check_source(plan, j, path, persist=False)
+    if j.get("state") != "running":
+        raise MigrationError("job_not_running", 409)
+    _store_m006(tile_store_dir(plan.type, plan.folder, M006), unit, _m006_validate_put(plan, us, unit, body))
+    j = _mark_done(plan, m, path, [_m006_key(unit)], "browser")
+    sm = _summary(j)
+    return {"ok": True, "done": sm["done"], "total": sm["total"]}
+
+
+def _unit_run_m006(dataset_id, m: dict, plan: Plan, path: Path, budget: float, dry: bool,
+                   workers: int) -> dict:
+    """Server executor of m006: `workers` units at once in threads (Pillow releases the GIL)."""
+    from concurrent.futures import ThreadPoolExecutor, FIRST_COMPLETED, wait
+    base = _job_base(plan, mid=M006)
+    store = tile_store_dir(plan.type, plan.folder, M006)
+    us = _unitset(plan, M006)
+    t0 = time.monotonic()
+    processed, bytes_read, bytes_written, slowest = [], 0, 0, 0.0
+    j = _load_journal(path) or {}
+    taken, running = set(), {}
+    with ThreadPoolExecutor(max_workers=workers) as ex:
+        def submit_more():
+            while len(running) < workers:
+                if time.monotonic() - t0 + slowest > budget and (processed or running):
+                    return
+                done = set(j.get("done") or [])
+                key = _claim(base, (k for k in (_m006_key(u) for u in us.units)
+                                    if k not in done and k not in taken))
+                if key is None:
+                    return
+                taken.add(key)
+                running[ex.submit(_m006_timed, plan, us, _m006_parse(key), store)] = key
+
+        submit_more()
+        try:
+            while running:
+                finished, _ = wait(list(running), return_when=FIRST_COMPLETED)
+                for fut in finished:
+                    key = running.pop(fut)
+                    try:
+                        result, nread, secs = fut.result()
+                        bytes_read += nread
+                        bytes_written += len(result)
+                        slowest = max(slowest, secs)
+                        if not dry:
+                            _store_m006(store, _m006_parse(key), result)
+                            j = _mark_done(plan, m, path, [key], "server")
+                        processed.append(key)
+                    finally:
+                        _release(base, key)
+                submit_more()
+        finally:
+            for fut, key in list(running.items()):
+                fut.cancel()
+                _release(base, key)
+    s = _summary(j)
+    return {"ok": True, "processed": processed, "done": s["done"], "total": s["total"],
+            "seconds": round(time.monotonic() - t0, 3), "bytesRead": bytes_read,
+            "bytesWritten": bytes_written, "dry": bool(dry), "workers": workers}
+
+
+def _m006_entries_path(store: Path, t: int, k: int, c: int) -> Path:
+    return store / "entries" / ("t%d.k%d.c%d.bin" % (t, k, c))
+
+
+def _m006_manifest(plan: Plan, column_refs: dict, nbytes: dict, producer: str) -> dict:
+    """The v6 manifest of the plan's v5 one: the same levels, stores, `ll` index and cut
+    indexes; columns ll + q30; bytes {ll, q30}. column_refs[t] = {bytes, sha256} of index/q30.bin;
+    nbytes[t][k] = per-channel q30 bytes."""
+    src = plan.manifest
+    doc = json.loads(json.dumps(src))
+    doc["schema"], doc["version"], doc["formatVersion"] = _f5.SCHEMA_V6, 6, 6
+    doc["columns"] = _f5.manifest_columns(6)
+    doc["producer"] = producer
+    doc["migratedAt"] = _utc_iso()
+
+    def fix(index_doc, rel, t, bytes_doc):
+        cols = index_doc.get("columns") or {}
+        pre = f"{rel}/" if rel else ""
+        index_doc["columns"] = {"ll": cols["ll"],
+                                "q30": {"url": pre + _f5.index_rel("q30"), **column_refs[t]}}
+        out = {}
+        for kk, per_col in (bytes_doc or {}).items():
+            out[kk] = {"ll": per_col.get("ll"), "q30": nbytes[t].get(int(kk), [0] * len(per_col.get("ll") or []))}
+        return out
+
+    tps = doc.get("timepoints")
+    if isinstance(tps, list) and tps:
+        by_rel = {plan.trees[t].rel: t for t in plan.trees}
+        worst = {}
+        for row in tps:
+            t = by_rel[row["path"]]
+            row["bytes"] = fix(row["index"], row["path"], t, row.get("bytes"))
+            for kk, per_col in row["bytes"].items():
+                for cid, per_c in per_col.items():
+                    cur = worst.setdefault(kk, {}).setdefault(cid, [0] * len(per_c))
+                    worst[kk][cid] = [max(a, b) for a, b in zip(cur, per_c)]
+        doc["bytes"] = worst
+    else:
+        t = min(plan.trees)
+        doc["bytes"] = fix(doc["index"], "", t, doc.get("bytes"))
+    return doc
+
+
+def _m006_drop_v5_columns(plan_or_dir, trees) -> None:
+    """Deletes the format-5 columns of the trees (after the v6 manifest is in place)."""
+    for tree_dir in trees:
+        for cid in M006_DROPPED:
+            try:
+                (tree_dir / _f5.index_rel(cid)).unlink()
+            except FileNotFoundError:
+                pass
+            for lv in sorted(tree_dir.glob("l*")):
+                if lv.is_dir() and re.fullmatch(r"l\d{1,2}", lv.name):
+                    _rmtree(lv / cid)
+
+
+def _m006_drop_q30(trees) -> None:
+    """Removes q30 packs / index written before a cancel (not in any manifest yet)."""
+    for tree_dir in trees:
+        try:
+            (tree_dir / _f5.index_rel("q30")).unlink()
+        except FileNotFoundError:
+            pass
+        for lv in sorted(tree_dir.glob("l*")):
+            if lv.is_dir() and re.fullmatch(r"l\d{1,2}", lv.name):
+                _rmtree(lv / "q30")
+
+
+def _finalize_m006(dataset_id, m: dict, max_seconds) -> dict:
+    """Write the q30 packs and index of every tree in place, then the v6 manifest (commit),
+    then delete the format-5 columns, re-stamp planes/ and mips/, bump to 6. Re-entrant."""
+    type_dir, folder, ds_dir = _resolve_dataset(dataset_id)
+    path = journal_path(type_dir, folder, M006)
+    base = _job_base(type_dir, folder, M006)
+    store = tile_store_dir(type_dir, folder, M006)
+    secs = _as_seconds(max_seconds)
+    deadline = time.monotonic() + secs if secs is not None else None
+    with _JobLock(base):
+        j = _load_journal(path)
+        plan = _plan_for(dataset_id)
+        if j is None:
+            if plan.type in m["types"] and plan.v6 and not plan.v5_problem:
+                _m006_drop_v5_columns(ds_dir, [tr.bricks_dir for tr in plan.trees.values()])
+                fv = _bump_metadata(ds_dir, m["to"])
+                return {"ok": True, "complete": True, "formatVersion": fv}
+            raise MigrationError("no_job", 404)
+        state = j.get("state")
+        if state == "assembling" and plan.v6:
+            state = "swapped"
+        if state in ("running", "assembling"):
+            _check_source(plan, j, path)
+        if state == "running":
+            us = _unitset(plan, M006)
+            done = set(j.get("done") or [])
+            missing = sum(1 for u in us.units if _m006_key(u) not in done)
+            if missing:
+                raise MigrationError("units_pending", 409, f"{missing} unit(s) not done")
+            _m006_drop_q30([tr.bricks_dir for tr in plan.trees.values()])
+            _rmtree(store / "entries")
+            j["state"], j["producer"], j["assembledAt"] = "assembling", _producer(j), _utc_iso()
+            _save_journal(path, j)
+            state = "assembling"
+        if state == "assembling":
+            us = _unitset(plan, M006)
+            steps = [(t, k, c) for t in sorted(plan.trees) for k in range(len(us.levels))
+                     for c in range(plan.trees[t].channels)]
+            done_n, wrote = 0, False
+            for t, k, c in steps:
+                marker = _m006_entries_path(store, t, k, c)
+                if marker.is_file():
+                    done_n += 1
+                    continue
+                if wrote and deadline is not None and time.monotonic() > deadline:
+                    j["assembly"] = {"steps": len(steps), "written": done_n}
+                    _save_journal(path, j)
+                    return {"ok": True, "complete": False, "assembly": j["assembly"]}
+                tree = plan.trees[t]
+                idx = _m006_tree_index(plan, tree)
+                gx, gy, gz, _n = idx["levels"][k]
+                ents = _np.zeros(gx * gy * gz, dtype=_f5.INDEX_ENTRY)
+                writer = _f5.PackWriter(lambda pk: str(tree.bricks_dir / _f5.brick_pack_rel(k, "q30", c, pk)))
+                try:
+                    for BZ in range(-(-gz // V3_SUPER)):
+                        for BY in range(-(-gy // V3_SUPER)):
+                            for BX in range(-(-gx // V3_SUPER)):
+                                u = (t, k, c, BZ, BY, BX)
+                                if u not in us.unit_bytes:
+                                    continue
+                                bricks = _m005_parse_brick_blob(_m006_store_path(store, u).read_bytes(), ("q30",))
+                                keys = sorted(bricks)
+                                for (bz, by, bx), e in zip(keys, writer.add_group([bricks[b]["q30"] for b in keys])):
+                                    ents[(bz * gy + by) * gx + bx] = e
+                finally:
+                    writer.close()
+                _atomic_write(marker, struct.pack("<I", writer.pack_count) + ents.tobytes())
+                done_n += 1
+                wrote = True
+            # Indexes, then the manifest (the commit point).
+            refs, nbytes = {}, {}
+            for t in sorted(plan.trees):
+                tree = plan.trees[t]
+                idx = _m006_tree_index(plan, tree)
+                levels_rows, entries = [], []
+                nbytes[t] = {}
+                for k, (gx, gy, gz, _n) in enumerate(idx["levels"]):
+                    per = _np.zeros((tree.channels, gx * gy * gz), dtype=_f5.INDEX_ENTRY)
+                    npacks = 0
+                    for c in range(tree.channels):
+                        raw = _m006_entries_path(store, t, k, c).read_bytes()
+                        npacks += struct.unpack_from("<I", raw, 0)[0]
+                        per[c] = _np.frombuffer(raw[4:], dtype=_f5.INDEX_ENTRY)
+                    nbytes[t][k] = [int(per[c]["length"].sum()) for c in range(tree.channels)]
+                    levels_rows.append((gx, gy, gz, npacks))
+                    entries.append(per)
+                blob = _f5.index_bin_bytes(levels_rows, tree.channels, entries)
+                _atomic_write(tree.bricks_dir / _f5.index_rel("q30"), blob, public=True)
+                refs[t] = {"bytes": len(blob), "sha256": hashlib.sha256(blob).hexdigest()}
+            doc = _m006_manifest(plan, refs, nbytes, _producer(j))
+            problem = next((p for p in (_f5.tree_problem(ds_dir / "bricks", doc, rel) for rel in _f5.tree_rels(doc)) if p), None)
+            if problem:
+                raise MigrationError("assembly_invalid", 500, problem)
+            _check_source(plan, j, path)
+            j["oldManifestSha"] = plan.sha
+            _save_journal(path, j)
+            _atomic_write(ds_dir / "bricks" / "manifest.json", _f5.manifest_bytes(doc), public=True)
+            j["state"] = "swapped"
+            j.pop("assembly", None)
+            _save_journal(path, j)
+            state = "swapped"
+        if state == "swapped":
+            plan = _plan_for(dataset_id)
+            if not plan.v6 or plan.v5_problem:
+                j["state"], j["error"] = "failed", "assembly_invalid"
+                _save_journal(path, j)
+                raise MigrationError("assembly_invalid", 500, plan.v5_problem or "not a v6 manifest")
+            _m006_drop_v5_columns(ds_dir, [tr.bricks_dir for tr in plan.trees.values()])
+            _restamp_derived(plan, j.get("oldManifestSha"))
+            fv = _bump_metadata(ds_dir, m["to"])
+            _rmtree(store)
+            try:
+                path.unlink()
+            except FileNotFoundError:
+                pass
+            return {"ok": True, "complete": True, "formatVersion": fv}
+        raise MigrationError("job_failed", 409, str(j.get("error") or state))
+
+
 def _build_v5_trees(type_dir: str, bricks_root: Path, manifest: dict):
     """Trees of a format-5 manifest: Tree.index = the level-0 entries of `index/ll.bin`
     (the native lossless bricks, pack l0/ll/c{c}), so m002 / m003 repairs read them.
@@ -5195,7 +5735,7 @@ def _build_v5_trees(type_dir: str, bricks_root: Path, manifest: dict):
 def _v5_index_stamp_trees(trees) -> tuple:
     out = []
     for tree in sorted(trees, key=lambda tr: tr.t):
-        for name in [_f5.index_rel(cid) for cid in _f5.COLUMN_IDS] + ["cuts"]:
+        for name in [_f5.index_rel(cid) for cid in _f5.COLUMN_IDS + ("q30",)] + ["cuts"]:
             try:
                 st = (tree.bricks_dir / name).stat()
                 out.append((st.st_mtime_ns, st.st_size))
@@ -5291,6 +5831,8 @@ def server_capabilities(force: bool = False) -> dict:
     if M005 in _MIGRATIONS_BY_ID:
         m005 = _probe_m005()
         _CAPS["migrations"][M005] = {"available": not m005, "reasons": m005}
+        # m006 needs the same encoders (lossless decode, lossy encode) as m005.
+        _CAPS["migrations"][M006] = {"available": not m005, "reasons": list(m005)}
     if _PILImage is None:
         _CAPS["detail"] = "Pillow is not installed"
     return _CAPS
@@ -5331,7 +5873,7 @@ def dataset_status(type_dir: str, folder: str, ds_dir: Path) -> dict:
         row["job"] = row["jobs"][0] if row["jobs"] else None
         return row
     row["trees"] = len(plan.trees)
-    row["bricksSchema"] = V5_SCHEMA if plan.v5 else (V3_SCHEMA if plan.v3 else "iribhm-bricks-v2")
+    row["bricksSchema"] = (V6_SCHEMA if plan.v6 else V5_SCHEMA) if plan.v5 else (V3_SCHEMA if plan.v3 else "iribhm-bricks-v2")
     if plan.v3 and plan.v3_problem:
         row["problem"] = "bricks_v3_invalid"
         row["problemDetail"] = plan.v3_problem[:300]
@@ -5352,6 +5894,10 @@ def dataset_status(type_dir: str, folder: str, ds_dir: Path) -> dict:
             pending = False
         if m["id"] == M005 and plan.v5 and fv >= m["to"]:
             pending = False
+        if m["id"] == M006 and plan.v6 and fv >= m["to"]:
+            pending = False
+        if m["id"] == M006 and plan.v5 and plan.v5_problem:
+            pending = False         # a damaged matrix tree is a problem, never a pending conversion
         if pending:
             row["pending"].append(m["id"])
             row["repair"] = row["repair"] or repair

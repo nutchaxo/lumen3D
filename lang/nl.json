@@ -120,6 +120,14 @@
       "cancelled": "Export geannuleerd.",
       "failed": "Export mislukt: {error}",
       "step": "Niveau {level} · kanaal {channel} · laag {z}"
+    },
+    "q30": {
+      "title": "Weergavebricks (WebP Q30)",
+      "hint": "De gecomprimeerde bricks die deze site toont, zoals ze zijn opgeslagen (WebP-kwaliteit 30), voor de gekozen niveaus: veel lichter dan de verliesvrije gegevens, maar alleen leesbaar voor Lumen3D-tools (formaat beschreven in de README van de zip). Gebruik voor metingen de verliesvrije OME-Zarr-export hierboven.",
+      "start": ".q30.zip downloaden",
+      "total": "{size} te downloaden",
+      "progress": "{pct} % · {out} geschreven",
+      "done": "Klaar: {size}, {packs} pack(s)."
     }
   },
   "nav": {
@@ -452,7 +460,9 @@
       "advice": "Aanbevolen: de fijnste resolutie in groen, in kwaliteit Extra. Voor een meting of figuur: Max op Native.",
       "adviceRest": "Bij een gecomprimeerde kwaliteit worden de zichtbare bricks zonder verlies opnieuw geladen zodra de camera stilstaat (vinkje onder de lijsten).",
       "losslessAtRest": "Zonder verlies zodra het beeld stilstaat",
-      "losslessAtRestHint": "Bij een gecomprimeerde cel worden de zichtbare bricks kort nadat de camera stilstaat zonder verlies opnieuw geladen."
+      "losslessAtRestHint": "Bij een gecomprimeerde cel worden de zichtbare bricks kort nadat de camera stilstaat zonder verlies opnieuw geladen.",
+      "q30Note": "Elk volume wordt gecomprimeerd weergegeven in WebP-kwaliteit 30. Metingen en exports lezen de verliesvrije gegevens, op de hier gekozen resolutie.",
+      "summaryQ30": "{res} · WebP Q30: {size}"
     },
     "detailLossless": "Verliesvrij detail: {count} bricks in beeld",
     "gpuMemory": "GPU-geheugen",
@@ -767,7 +777,8 @@
     "losslessNative": "Verliesvrij op de native resolutie ({x} × {y} × {z}).",
     "losslessLevel": "Verliesvrij op {x} × {y} × {z}: het native niveau is meer dan deze GPU aankan.",
     "loadingLossless": "Verliesvrij niveau laden…",
-    "currentIs": "Zoals getoond: {current}."
+    "currentIs": "Zoals getoond: {current}.",
+    "losslessChosen": "Verliesvrij op de getoonde resolutie ({x} × {y} × {z})."
   },
   "studio": {
     "importOtherFigure": "Dit Studio-bestand is opgeslagen voor een andere figuur: de annotaties zijn geïmporteerd, maar de kanaalinstellingen zijn alleen toegepast waar de figuur overeenkomt.",
@@ -832,7 +843,8 @@
     "exportNative": "Native verliesvrij",
     "exportCurrent": "Dit beeld",
     "loadingNativeExport": "Native verliesvrij beeld laden…",
-    "nativeExportFailed": "Het native beeld kon niet worden geladen; er is niets geëxporteerd."
+    "nativeExportFailed": "Het native beeld kon niet worden geladen; er is niets geëxporteerd.",
+    "loadingLosslessExport": "Het verliesvrije beeld wordt geladen…"
   },
   "admin": {
     "loginTitle": "{brand} Beheer",

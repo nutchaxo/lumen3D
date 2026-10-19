@@ -109,6 +109,11 @@ const BrickLoader = (() => {
   // one trailer byte: 0..12 = the dead zone (decoded values ≤ τ are 0), 0xFE = the payload
   // is the brick's `b4` image instead, 0xFF = its `ll` image.
   const V5_SCHEMA = 'iribhm-bricks-v5';
+  // Format 6 (SPEC §15): a v5 tree with exactly two columns, ll and q30. It mounts as a v5 tree
+  // (`version` 5 inside the loader: same layout, indexes, packs and payloads); `getFormat()`
+  // tells the two apart (`matrixFormat`).
+  const V6_SCHEMA = 'iribhm-bricks-v6';
+  const V6_COLUMNS = ['ll', 'q30'];
   const V5_CODECS = new Set(['webp-lossless', 'webp-lossless-lut', 'webp-lossy-dz']);
   const V5_PITCH = 80;
   const V5_ORIGIN = 7;
@@ -318,9 +323,9 @@ const BrickLoader = (() => {
     return Boolean(manifest) && (manifest.schema === V3_SCHEMA || manifest.version === 3);
   }
 
-  /** A v5 tree (the resolution × compression matrix, SPEC §14). */
+  /** A v5 or v6 tree (the resolution × compression matrix, SPEC §14, and its two-column form, §15). */
   function _isV5(manifest) {
-    return Boolean(manifest) && manifest.schema === V5_SCHEMA;
+    return Boolean(manifest) && (manifest.schema === V5_SCHEMA || manifest.schema === V6_SCHEMA);
   }
 
   /** A tree read through binary indexes and 66³ bricks (v3 or v5). */
@@ -338,7 +343,8 @@ const BrickLoader = (() => {
 
   /** SPEC §14.4: the manifest of ONE v5 tree (a timelapse frame's, as the viewer selects it). */
   function _validateManifestV5(m, reject) {
-    if (m.version !== 5) reject('version must be 5.');
+    const fmt = m.schema === V6_SCHEMA ? 6 : 5;
+    if (m.version !== fmt) reject('version must be ' + fmt + '.');
     if (!(Number.isInteger(m.channels) && m.channels >= 1 && m.channels <= 0xFFFF)) reject('channels must be an integer in 1..65535.');
     if (m.brickSize !== BRICK_SIZE) reject('brickSize must be ' + BRICK_SIZE + '.');
     if (m.apron !== V3_APRON) reject('apron must be ' + V3_APRON + '.');
@@ -369,6 +375,7 @@ const BrickLoader = (() => {
       }
     }
     if (!ids.has('ll')) reject('columns must hold the lossless column "ll".');
+    if (fmt === 6 && [...ids].join(',') !== V6_COLUMNS.join(',')) reject('a format-6 tree has exactly the columns ll and q30.');
     const ix = m.index;
     if (!ix || typeof ix !== 'object' || !ix.columns || typeof ix.columns !== 'object') reject('index.columns is missing (mount one tree of a timelapse, not the dataset manifest).');
     for (const id of ids) if (!_validRef(ix.columns[id])) reject(`index.columns.${id} must be {url, bytes, sha256}.`);
@@ -918,6 +925,11 @@ const BrickLoader = (() => {
     return _mount ? _mount.manifest : null;
   }
 
+  /** The URL of the mounted tree (bricks/, or bricks/tNNN/ of a timelapse frame), or null. */
+  function getBasePath() {
+    return _mount ? _mount.basePath : null;
+  }
+
   /** Dimensions of a level, or null for a level the manifest does not have. */
   function getDimensions(lod = 0) {
     const g = _grid(lod);
@@ -952,7 +964,10 @@ const BrickLoader = (() => {
       channels: _mount.manifest.channels || 1,
       levels
     };
-    if (_mount.version === 5) out.columns = _mount.manifest.columns.map(c => ({ id: c.id, codec: c.codec, maxError: c.maxError ?? null }));
+    if (_mount.version === 5) {
+      out.columns = _mount.manifest.columns.map(c => ({ id: c.id, codec: c.codec, maxError: c.maxError ?? null, quality: c.quality ?? null }));
+      out.matrixFormat = _mount.manifest.schema === V6_SCHEMA ? 6 : 5;
+    }
     return out;
   }
 
@@ -2932,6 +2947,7 @@ const BrickLoader = (() => {
     init,
     isReady,
     getManifest,
+    getBasePath,
     getTransportEncoding: () => (_mount ? _mount.encoding : null),
     getDimensions,
     getFormat,

@@ -238,10 +238,14 @@ const ExportManager = (() => {
         <div id="download-explorer" class="dl-explorer">${_explorerLoadingHtml()}</div>
       </section>
       ${scope === 'viewer' && typeof OmeZarrExport !== 'undefined' ? '<section class="dl-section" id="download-omezarr" hidden></section>' : ''}
+      ${scope === 'viewer' && typeof Q30Export !== 'undefined' ? '<section class="dl-section" id="download-q30" hidden></section>' : ''}
     `;
     // The lossless levels of the mounted dataset as an OME-Zarr store, built in this browser.
     const oz = document.getElementById('download-omezarr');
     if (oz) OmeZarrExport.mount(oz, { dataset });
+    // Format 6: the display bricks (WebP Q30) as stored.
+    const q30 = document.getElementById('download-q30');
+    if (q30) Q30Export.mount(q30, { dataset });
     if (window.lucide) lucide.createIcons({ nodes: [body, _modal] });
   }
 

@@ -882,3 +882,94 @@ every byte; cut stores give voxels identical to the bricks; Studio routing per p
 `DataAccess.locate` / `readRegion` against the source; a native-quality export re-places
 µm-anchored layers on the exact pixel; the OME-Zarr store read back with zarr-python equals
 level k.
+
+---
+
+# Part IV — web 1.70.0: format 6 (lossless + WebP Q30)
+
+## 15. Format 6
+
+### 15.1 Why
+Measured on E8.5 Em1 (1946² × 72, three channels, native level, 120 bricks sampled): WebP Q30 is
+**26.1 MB** against 89.3 MB lossless, with a mean error of 1.48 grey levels out of 255 — visually
+indistinguishable from the exact data at every zoom the viewer offers (Q50 35.7 MB / 1.05, Q10
+14.5 MB / 2.10 with visible smoothing of the fine grain). The operator's decision (2026-10-18):
+**one display quality for every dataset, Q30; lossless kept for measurements, exports and
+downloads; the five-column choice of format 5 goes away.**
+
+### 15.2 The tree
+A format-6 tree is a format-5 tree (§14.1 levels, §14.2 bricks, §14.4 layout, §14.5 cut stores —
+all unchanged, the stores stay lossless) with **exactly two columns**, in this order:
+
+| id | codec | mosaic | role |
+|---|---|---|---|
+| `ll` | `webp-lossless` (§14.3) | grid66 | measurements, exports, downloads, cut stores' twin |
+| `q30` | `webp-lossy-dz`, quality 30, `method=6`, + τ | grid80 | everything shown on screen |
+
+* Manifest: `"schema": "iribhm-bricks-v6", "version": 6, "formatVersion": 6`; `columns` = the two
+  rows above (no LUT); `index.columns` = `{ll, q30}`; `bytes[k]` = `{ll: […], q30: […]}`. Paths:
+  `index/ll.bin`, `index/q30.bin`, `l{k}/ll/c{c}/pNNNNN.bin`, `l{k}/q30/c{c}/pNNNNN.bin`, plus the
+  §14.4 stores. No `b2`, `b4`, `q80`, `q50` file exists in a format-6 tree.
+* `q30` brick: the smaller of (WebP lossy of the grid80 mosaic at quality 30 + τ ∈ 0..12) and
+  (its `ll` image + `0xFF`), `ll` on a tie. **`0xFE` is a corrupt `q30` brick** (there is no `b4`
+  to fall back on). A `q30` brick exists iff the `ll` brick exists (same ESS rule).
+* Valid (`format5.tree_problem`, `bricks_problem(dir, 6)`): §14.4's checks with the format's
+  columns, and the manifest's `columns` ids exactly `["ll", "q30"]`.
+* `format5.py` holds both formats (`FORMAT_COLUMNS`, `columns_of`, `schema_format`); one module,
+  never forked. The pipeline writes format 6 by default (`--format 6`, preprocess ≥ 0.23.0).
+
+### 15.3 What reads what
+| use | reads |
+|---|---|
+| 3D view, slice tool, z-stack browser, Compare panels, region-of-interest detail | `q30` of the chosen level |
+| Studio working picture | the slice of the displayed `q30` volume (the GPU atlas): no automatic native pass |
+| measurements, histograms, value read-outs (`DataAccess`, §14.8) | `ll` (planes / `ll` bricks) |
+| every export (3D view image, Studio figure, Decompose panels, Compare figure) | `ll` at the resolution the user picks in the export dialog (cut stores, else `ll` bricks) |
+| Download Center | OME-Zarr of `ll` (§14.9), or the `q30` bricks as stored (§15.5) |
+
+* The quality control is a **list of resolutions** (the levels of §14.1 with their dimensions,
+  download size of `q30` and GPU memory) and a note: *every displayed volume is compressed in
+  WebP Q30; measurements and exports use the lossless data*. The quality key of a v6 tree is the
+  bare resolution (`512x512`, `native`); `<res>@q30` is accepted, `<res>@<other>` falls back to
+  `q30`. *Lossless at rest* does not exist on a v6 tree.
+* Format-5 trees (datasets not converted yet) keep the §14.6 matrix.
+
+### 15.4 Migration `m006-q30` (5 → 6)
+* Units `(t, k, c, BZ, BY, BX)`: one 4 × 4 × 4 super-block of `ll` bricks of tree t, level k,
+  channel c; key `t{t}.k{k}.c{c}.z{BZ}.y{BY}.x{BX}`; empty iff no `ll` brick of the super-block is
+  stored. No unit depends on another (every unit is runnable from the plan on). Units are ordered
+  coarsest level first, so the light levels finish early.
+* Inputs (`unit_inputs`): `{unit, empty, tree, t, level, channel, bricks: [{rel, start, end, bz, by,
+  bx}]}` — the `ll` packs of the tree (`rel` relative to the dataset folder, as `read_ranges`
+  takes it: `bricks/l{k}/ll/c{c}/pNNNNN.bin`, `bricks/tNNN/…` for a timelapse frame). A browser batch (`unit_inputs_many`, `unit_put_many`, `unit_put_part`, §14.10)
+  works exactly as for m005.
+* Result body: `u32 n`, `n × (u32 bz, by, bx)` in (bz, by, bx) order, `n × u32 length`, the n `q30`
+  payloads. `unit_put` refuses (`bad_blob`) a set of bricks other than the super-block's stored `ll`
+  bricks, and a payload that is neither a 720 × 640 lossy WebP + τ ≤ 12 nor a 594 × 528 VP8L +
+  `0xFF`.
+* Executors: Python server (threads, Pillow — the `ll` brick decoded, `format5.encode_brick(…,
+  "q30", known={"ll": raw})`); browser (`js/migrations/m006-q30.js`, the m005 handler's lossy path at
+  quality 0.30); PHP: plan, inputs, validation, assembly — no executor of its own (`browser_only`).
+  Lossy bytes differ between encoders; decoded voxels stay within the same codec.
+* Finalize, **in place**, resumable: per (t, k, c) the `q30` packs `l{k}/q30/c{c}/p*.bin` (§13.4 pack
+  rule, super-blocks in order) and a marker; then `index/q30.bin`; then the v6 manifest written
+  atomically — **the commit point** (the `ll` index, packs and every store are kept as they are,
+  `?v=` stamps unchanged for them); then the `b2`, `b4`, `q80`, `q50` packs and indexes are deleted;
+  then `metadata.json` `formatVersion` = 6. A finalize interrupted after the commit point resumes
+  with the deletions. `keepPrevious` does not apply (the format-5 columns are not kept).
+* Registry: `m006-q30`, from 5 to 6, types `3d` and `live`, after `m005-matrix`; LATEST = 6 on both
+  backends.
+
+### 15.5 Download of the `q30` bricks
+`<folder>.q30.zip` (STORED, the §14.9 ZIP writer), built in the browser from the packs: for every
+level the operator picks, `bricks/index/q30.bin` and `bricks/l{k}/q30/c{c}/p*.bin` as stored, plus
+`metadata.json`, `bricks/manifest.json` and a `README.txt` naming this section. The bricks decode
+with `format5.decode_brick(data, "q30")` (or any WebP decoder + the τ rule of §14.3).
+
+### 15.6 Tests (minimum)
+`columns_of` / `schema_format`; a `q30` brick never heavier than its `ll` image, `0xFE` refused;
+`write_tree(fmt=6)` = m006 applied to `write_tree(fmt=5)` of the same volume (`ll`, stores and
+manifest byte for byte, `q30` bricks identical with the same encoder); m006 Python ↔ PHP plan,
+inputs and finalize identical for the same bodies; finalize resumed after the commit point;
+BrickLoader mounts v6 and loads `q30`; the quality list of a v6 tree has no column choice; every
+export reads `ll`.

@@ -26,6 +26,11 @@ const LUMEN_M005 = 'm005-matrix';
 const LUMEN_V5_SCHEMA = 'iribhm-bricks-v5';
 const LUMEN_V5_MIN_TARGET = 256;
 const LUMEN_V5_COLUMN_IDS = ['ll', 'b2', 'b4', 'q80', 'q50'];
+// Format 6 (SPEC §15, format5.SCHEMA_V6 / FORMAT_COLUMNS): the same tree, two columns.
+const LUMEN_V6_SCHEMA = 'iribhm-bricks-v6';
+const LUMEN_V6_COLUMN_IDS = ['ll', 'q30'];
+const LUMEN_V5_FORMAT_COLUMNS = [5 => LUMEN_V5_COLUMN_IDS, 6 => LUMEN_V6_COLUMN_IDS];
+const LUMEN_V5_FORMAT_SCHEMAS = [5 => LUMEN_V5_SCHEMA, 6 => LUMEN_V6_SCHEMA];
 const LUMEN_V5_SUPER = 4;
 const LUMEN_V5_ORTH_ROWS = 64;
 const LUMEN_V5_ORTH_MAGIC = ['xz' => 'LPXZ', 'yz' => 'LPYZ'];
@@ -116,15 +121,30 @@ function lumen_v5_quantizer_values(int $e): array {
     return $v;
 }
 
-/** The manifest's `columns` rows (format5.manifest_columns), keys in its order. */
-function lumen_v5_manifest_columns(): array {
-    return [
-        ['id' => 'll', 'codec' => 'webp-lossless', 'mosaic' => 'grid66', 'maxError' => 0],
-        ['id' => 'b2', 'codec' => 'webp-lossless-lut', 'mosaic' => 'grid66', 'maxError' => 2, 'lut' => lumen_v5_quantizer_values(2)],
-        ['id' => 'b4', 'codec' => 'webp-lossless-lut', 'mosaic' => 'grid66', 'maxError' => 4, 'lut' => lumen_v5_quantizer_values(4)],
-        ['id' => 'q80', 'codec' => 'webp-lossy-dz', 'mosaic' => 'grid80', 'quality' => 80, 'maxError' => null],
-        ['id' => 'q50', 'codec' => 'webp-lossy-dz', 'mosaic' => 'grid80', 'quality' => 50, 'maxError' => null],
+/** 5 or 6 for a matrix-tree schema, else null (format5.schema_format). */
+function lumen_v5_schema_format($schema): ?int {
+    foreach (LUMEN_V5_FORMAT_SCHEMAS as $fmt => $s) if ($schema === $s) return $fmt;
+    return null;
+}
+
+/** The column ids of format $fmt, or of a manifest (its schema) (format5.columns_of). */
+function lumen_v5_columns_of($fmt): array {
+    if (is_array($fmt)) $fmt = lumen_v5_schema_format($fmt['schema'] ?? null);
+    if (!is_int($fmt) || !isset(LUMEN_V5_FORMAT_COLUMNS[$fmt])) throw new InvalidArgumentException('no brick format ' . var_export($fmt, true));
+    return LUMEN_V5_FORMAT_COLUMNS[$fmt];
+}
+
+/** The manifest's `columns` rows of format $fmt (format5.manifest_columns), keys in its order. */
+function lumen_v5_manifest_columns(int $fmt = 5): array {
+    $rows = [
+        'll' => ['id' => 'll', 'codec' => 'webp-lossless', 'mosaic' => 'grid66', 'maxError' => 0],
+        'b2' => ['id' => 'b2', 'codec' => 'webp-lossless-lut', 'mosaic' => 'grid66', 'maxError' => 2, 'lut' => lumen_v5_quantizer_values(2)],
+        'b4' => ['id' => 'b4', 'codec' => 'webp-lossless-lut', 'mosaic' => 'grid66', 'maxError' => 4, 'lut' => lumen_v5_quantizer_values(4)],
+        'q80' => ['id' => 'q80', 'codec' => 'webp-lossy-dz', 'mosaic' => 'grid80', 'quality' => 80, 'maxError' => null],
+        'q50' => ['id' => 'q50', 'codec' => 'webp-lossy-dz', 'mosaic' => 'grid80', 'quality' => 50, 'maxError' => null],
+        'q30' => ['id' => 'q30', 'codec' => 'webp-lossy-dz', 'mosaic' => 'grid80', 'quality' => 30, 'maxError' => null],
     ];
+    return array_map(fn($cid) => $rows[$cid], lumen_v5_columns_of($fmt));
 }
 
 function lumen_v5_xyz(array $v): array { return ['x' => $v[0], 'y' => $v[1], 'z' => $v[2]]; }
@@ -279,8 +299,16 @@ function lumen_v5_tree_problem(string $bricksDir, array $man, string $rel, bool 
                 }
             }
         };
+        $ids = lumen_v5_columns_of($man);
         $cols = is_array($info['columns'] ?? null) ? $info['columns'] : [];
-        foreach (LUMEN_V5_COLUMN_IDS as $cid) {
+        $have = array_map('strval', array_keys($cols));
+        $want = $ids;
+        sort($have, SORT_STRING); sort($want, SORT_STRING);
+        if ($have !== $want) throw new InvalidArgumentException("index columns differ from the format's");
+        $mcols = [];
+        foreach (is_array($man['columns'] ?? null) ? $man['columns'] : [] as $row) if (is_array($row)) $mcols[] = $row['id'] ?? null;
+        if ($mcols !== $ids) throw new InvalidArgumentException("manifest columns differ from the format's");
+        foreach ($ids as $cid) {
             [$blob, $idx] = $readRef($cols[$cid] ?? null, lumen_v5_index_rel($cid));
             if ($idx['channels'] !== $C || array_map(fn($l) => array_slice($l, 0, 3), $idx['levels']) !== $grids) throw new InvalidArgumentException("index/$cid.bin grids differ from the manifest");
             foreach ($idx['levels'] as $k => $_l) $checkPacks($blob, $idx, $k, fn($c, $pk) => lumen_v5_brick_pack_rel($k, $cid, $c, $pk));
@@ -897,15 +925,15 @@ function lumen_m005_unit_error($key, LumenMigError $e): array {
     return $out;
 }
 
-/** unit_inputs of up to 64 m005 units in one answer: {ok, items: [answer or error, in order]}. */
-function lumen_m005_unit_inputs_many(array $plan, string $path, $keys): array {
+/** unit_inputs of up to 64 m005 (or m006: $mid) units in one answer: {ok, items: [answer or error, in order]}. */
+function lumen_m005_unit_inputs_many(array $plan, string $path, $keys, string $mid = LUMEN_M005): array {
     if (!is_array($keys) || count($keys) < 1 || count($keys) > LUMEN_M005_BATCH_MAX || array_keys($keys) !== range(0, count($keys) - 1)) {
         throw new LumenMigError('bad_unit', 400, '1..' . LUMEN_M005_BATCH_MAX . ' units');
     }
     $items = [];
     foreach ($keys as $key) {
         try {
-            $items[] = lumen_m005_unit_inputs($plan, $path, $key);
+            $items[] = $mid === LUMEN_M005 ? lumen_m005_unit_inputs($plan, $path, $key) : lumen_m006_unit_inputs($plan, $key);
         } catch (LumenMigError $e) {
             $items[] = lumen_m005_unit_error($key, $e);
         }
@@ -977,8 +1005,10 @@ function lumen_m005_unit_put_part(array $plan, array $m, string $path, $key, $of
     if (!is_numeric($offset) || !is_numeric($total)) throw new LumenMigError('bad_blob', 400, 'offset / total');
     $offset = (int)$offset; $total = (int)$total;
     if ($total < 1 || $total > LUMEN_MIG_MAX_BODY || $offset < 0 || $offset + strlen($body) > $total || $body === '') throw new LumenMigError('bad_blob', 400, 'piece outside the unit');
-    lumen_m005_parse($key);
-    $dir = lumen_mig_store_dir($plan['type'], $plan['folder'], LUMEN_M005) . '/.parts';
+    $mid = $m['id'];
+    if ($mid === LUMEN_M005) lumen_m005_parse($key); else lumen_m006_parse($key);
+    // In the job's own store, so a cancel of that job drops its pieces too.
+    $dir = lumen_mig_store_dir($plan['type'], $plan['folder'], $mid) . '/.parts';
     if (!is_dir($dir) && !admin_make_dir($dir)) throw new LumenMigError('store_write_failed', 500);
     $p = $dir . '/' . preg_replace('/[^A-Za-z0-9._-]/', '_', (string)$key) . '.part';
     clearstatcache(true, $p);
@@ -995,7 +1025,7 @@ function lumen_m005_unit_put_part(array $plan, array $m, string $path, $key, $of
     unset($body);
     $data = (string)file_get_contents($p);
     try {
-        $out = lumen_m005_unit_put($plan, $m, $path, $key, $data);
+        $out = $mid === LUMEN_M005 ? lumen_m005_unit_put($plan, $m, $path, $key, $data) : lumen_m006_unit_put($plan, $m, $path, $key, $data);
     } finally {
         @unlink($p);
     }
@@ -1334,10 +1364,11 @@ function lumen_v5_manifest_bytes(array $doc): string {
     return $s;
 }
 
-/** Every tree of an assembled v5 manifest checked, or the first problem. */
-function lumen_v5_problem_of(string $bricksDir): ?string {
+/** Every tree of an assembled v5 (v6: $fmt 6, null = either) manifest checked, or the first problem (format5.bricks_problem). */
+function lumen_v5_problem_of(string $bricksDir, ?int $fmt = 5): ?string {
     $doc = admin_read_json("$bricksDir/manifest.json");
-    if (!is_array($doc) || ($doc['schema'] ?? null) !== LUMEN_V5_SCHEMA) return 'not a v5 manifest';
+    $have = is_array($doc) ? lumen_v5_schema_format($doc['schema'] ?? null) : null;
+    if ($have === null || ($fmt !== null && $have !== $fmt)) return 'not a v' . ($fmt ?? '5/6') . ' manifest';
     foreach (lumen_v5_tree_rels($doc) as $rel) {
         $p = lumen_v5_tree_problem($bricksDir, $doc, is_string($rel) ? $rel : '');
         if ($p !== null) return $p;

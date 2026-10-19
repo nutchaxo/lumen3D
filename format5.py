@@ -1,9 +1,10 @@
-"""Format 5 of a volume dataset — the resolution × compression matrix (SPEC Part III, §14).
+"""Formats 5 and 6 of a volume dataset — the resolution × compression matrix (SPEC Part III, §14)
+and its two-column successor (SPEC Part IV, §15).
 
 Normative contract: DOCS/dataset-migrations/SPEC.md §14. One module, used by both producers:
 the preprocessing pipeline (preprocess/3-chunk_packer.py, `--format 5`, through
-`write_tree`) and the migration m005-matrix (dataset_migrations.py, unit by unit). Both
-call the same functions, so they write the same bytes. It needs numpy and Pillow (WebP)
+`write_tree`) and the migrations m005-matrix / m006-q30 (dataset_migrations.py, unit by
+unit). Both call the same functions, so they write the same bytes. It needs numpy and Pillow (WebP)
 and nothing of the web platform: the pipeline pack ships a copy of this file.
 
 A brick tree (`bricks/` of a '3d' dataset, `bricks/tNNN/` of a 'live' one) holds:
@@ -13,7 +14,8 @@ A brick tree (`bricks/` of a '3d' dataset, `bricks/tNNN/` of a 'live' one) holds
            each level the exact integer area average of level 0 (`resample_plane`).
   bricks   per level, column and channel: 64³ bricks stored as 66³ (1-voxel clamp-to-edge
            border), stored iff the 64³ interior holds a voxel >= 1, encoded per column
-           (`COLUMNS`, `encode_brick`), packed by 4×4×4 super-block
+           (`COLUMNS`, `encode_brick`; the columns of a tree are its format's,
+           `columns_of`: format 5 ll b2 b4 q80 q50, format 6 ll q30), packed by 4×4×4 super-block
            (`l{k}/{col}/c{c}/pNNNNN.bin`), indexed per column (`index/{col}.bin`, LBIX).
   xy       per level k >= 1, one LPLN pack of 512² png-gray8 tiles per plane
            (`xy/l{k}/zNNNNN.bin`); level 0 is `planes/` beside bricks/ (format 2).
@@ -41,6 +43,8 @@ import numpy as np
 SCHEMA = "iribhm-bricks-v5"
 MANIFEST_VERSION = 5
 FORMAT_VERSION = 5
+SCHEMA_V6 = "iribhm-bricks-v6"
+FORMAT_VERSION_V6 = 6
 BRICK = 64
 APRON = 1
 SLICE = BRICK + 2 * APRON                     # 66
@@ -106,9 +110,35 @@ COLUMNS = (
     {"id": "b4", "codec": "webp-lossless-lut", "mosaic": "grid66", "maxError": 4},
     {"id": "q80", "codec": "webp-lossy-dz", "mosaic": "grid80", "quality": 80, "maxError": None},
     {"id": "q50", "codec": "webp-lossy-dz", "mosaic": "grid80", "quality": 50, "maxError": None},
+    # Format 6 (SPEC §15): the one display column. Its fallback is `ll` only (no `b4` there).
+    {"id": "q30", "codec": "webp-lossy-dz", "mosaic": "grid80", "quality": 30, "maxError": None},
 )
-COLUMN_IDS = tuple(c["id"] for c in COLUMNS)
 _COLUMN = {c["id"]: c for c in COLUMNS}
+# The columns of each format, in manifest order.
+FORMAT_COLUMNS = {5: ("ll", "b2", "b4", "q80", "q50"), 6: ("ll", "q30")}
+FORMAT_SCHEMAS = {5: SCHEMA, 6: SCHEMA_V6}
+COLUMN_IDS = FORMAT_COLUMNS[5]
+COLUMN_IDS_V6 = FORMAT_COLUMNS[6]
+# A lossy column stores itself, or the smallest faithful form these name (trailer tag, column).
+_FALLBACKS = {"q80": ((0xFF, "ll"), (0xFE, "b4")), "q50": ((0xFF, "ll"), (0xFE, "b4")), "q30": ((0xFF, "ll"),)}
+
+
+def columns_of(fmt) -> tuple:
+    """The column ids of format `fmt` (5 or 6), or of a manifest (its schema)."""
+    if isinstance(fmt, dict):
+        fmt = schema_format(fmt.get("schema"))
+    try:
+        return FORMAT_COLUMNS[int(fmt)]
+    except (KeyError, TypeError, ValueError):
+        raise ValueError(f"no brick format {fmt!r}")
+
+
+def schema_format(schema):
+    """5 or 6 for a matrix-tree schema, else None."""
+    for fmt, s in FORMAT_SCHEMAS.items():
+        if schema == s:
+            return fmt
+    return None
 
 
 def column(cid: str) -> dict:
@@ -118,10 +148,11 @@ def column(cid: str) -> dict:
         raise ValueError(f"unknown column {cid!r}")
 
 
-def manifest_columns() -> list:
-    """The manifest's `columns` rows (a `lut` for the quantized ones)."""
+def manifest_columns(fmt: int = 5) -> list:
+    """The manifest's `columns` rows of format `fmt` (a `lut` for the quantized ones)."""
     out = []
-    for c in COLUMNS:
+    for cid in columns_of(fmt):
+        c = _COLUMN[cid]
         row = dict(c)
         if c["codec"] == "webp-lossless-lut":
             row["lut"] = _QUANT[c["maxError"]][1].tolist()
@@ -339,7 +370,6 @@ def apply_dead_zone(dec66, tau: int) -> np.ndarray:
 
 # Trailer of a lossy-column brick stored in a better, smaller form (SPEC §14.3).
 TAG_B4, TAG_LL = 0xFE, 0xFF
-_FALLBACK = ((TAG_LL, "ll"), (TAG_B4, "b4"))
 
 
 def encode_brick(brick66, cid: str, known: dict | None = None) -> bytes:
@@ -360,7 +390,7 @@ def encode_brick(brick66, cid: str, known: dict | None = None) -> bytes:
     tau = dead_zone(brick66, unmosaic80(_unwebp(data)))
     best = data + bytes([tau])
     known = known if known is not None else {}
-    for tag, other in _FALLBACK:
+    for tag, other in _FALLBACKS[cid]:
         alt = known.get(other)
         if alt is None:
             alt = known[other] = encode_brick(brick66, other)
@@ -382,7 +412,7 @@ def decode_brick(data: bytes, cid: str) -> np.ndarray:
     tag = data[-1]
     if tag == TAG_LL:
         return decode_brick(data[:-1], "ll")
-    if tag == TAG_B4:
+    if tag == TAG_B4 and any(t == TAG_B4 for t, _o in _FALLBACKS[cid]):
         return decode_brick(data[:-1], "b4")
     if tag > DEAD_ZONE_MAX:
         raise ValueError(f"trailer byte {tag}: neither a dead zone nor a fallback tag")
@@ -824,23 +854,23 @@ def stores_doc(levels: list) -> dict:
     }
 
 
-def tree_index_doc(rel: str, column_refs: dict, cut_refs: list) -> dict:
+def tree_index_doc(rel: str, column_refs: dict, cut_refs: list, fmt: int = 5) -> dict:
     """{columns: {cid: {url, bytes, sha256}}, cuts: [{url, bytes, sha256} per level]};
     urls relative to bricks/ (a live tree's carry its 'tNNN/' prefix)."""
     pre = f"{rel}/" if rel else ""
-    return {"columns": {cid: {"url": pre + index_rel(cid), **column_refs[cid]} for cid in COLUMN_IDS},
+    return {"columns": {cid: {"url": pre + index_rel(cid), **column_refs[cid]} for cid in columns_of(fmt)},
             "cuts": [{"url": pre + cut_index_rel(k), **ref} for k, ref in enumerate(cut_refs)]}
 
 
 def manifest_v5(levels: list, channels: int, trees: dict, histograms, created_at: str,
                 histograms_by_tree: dict | None = None, dataset: str | None = None,
-                producer: str = "pipeline") -> dict:
+                producer: str = "pipeline", fmt: int = 5) -> dict:
     """bricks/manifest.json. trees: {"": tree} ('3d') or {"t000": tree, …} ('live'); a tree =
     {"index": tree_index_doc(...)-like {columns, cuts} WITHOUT url prefix, "bytes": {k:
     {cid: [per channel]}}, "stored": [per level, bricks present over channels in `ll`]}."""
     keys = sorted(trees)
     live = keys != [""]
-    doc = {"schema": SCHEMA, "version": MANIFEST_VERSION, "formatVersion": FORMAT_VERSION}
+    doc = {"schema": FORMAT_SCHEMAS[fmt], "version": fmt, "formatVersion": fmt}
     if dataset:
         doc["dataset"] = dataset
     rows = []
@@ -849,11 +879,11 @@ def manifest_v5(levels: list, channels: int, trees: dict, histograms, created_at
                      "voxelSize": dict(L["voxelSize"]), "gridSize": dict(L["gridSize"]),
                      "brickCount": int(sum(trees[t]["stored"][k] for t in keys))})
     doc.update({"channels": int(channels), "brickSize": BRICK, "apron": APRON,
-                "levels": rows, "columns": manifest_columns(), "stores": stores_doc(levels)})
+                "levels": rows, "columns": manifest_columns(fmt), "stores": stores_doc(levels)})
 
     def index_with_urls(rel, tree):
         idx = tree["index"]
-        return tree_index_doc(rel, idx["columns"], idx["cuts"])
+        return tree_index_doc(rel, idx["columns"], idx["cuts"], fmt)
 
     if live:
         doc["index"] = None
@@ -903,7 +933,7 @@ def _sha(data: bytes) -> str:
 
 
 def tree_problem(bricks_dir, manifest: dict, rel: str, plane_count=None) -> str | None:
-    """The first structural fault of one tree of a v5 manifest, or None: every column
+    """The first structural fault of one tree of a v5 / v6 manifest, or None: every column
     index and cut index present with the size and sha256 the manifest records, every pack
     they reference present and long enough, every xy plane pack (levels >= 1) and every
     xz / yz block pack present. `plane_count`: skip the per-plane stat (callers that only
@@ -948,8 +978,14 @@ def tree_problem(bricks_dir, manifest: dict, rel: str, plane_count=None) -> str 
                     raise ValueError(f"{rel_of(c, pk)} missing")
 
     try:
+        ids = columns_of(manifest)
         cols = info.get("columns") or {}
-        for cid in COLUMN_IDS:
+        if set(cols) != set(ids):
+            raise ValueError("index columns differ from the format's")
+        mcols = [row.get("id") for row in manifest.get("columns") or [] if isinstance(row, dict)]
+        if mcols != list(ids):
+            raise ValueError("manifest columns differ from the format's")
+        for cid in ids:
             idx = read_ref(cols.get(cid), index_rel(cid))
             if idx["channels"] != channels or [L[:3] for L in idx["levels"]] != grids:
                 raise ValueError(f"index/{cid}.bin grids differ from the manifest")
@@ -981,16 +1017,18 @@ def tree_problem(bricks_dir, manifest: dict, rel: str, plane_count=None) -> str 
     return None
 
 
-def bricks_problem(dataset_dir) -> str | None:
-    """None when bricks/manifest.json is a v5 manifest whose every tree is complete."""
+def bricks_problem(dataset_dir, fmt: int | None = 5) -> str | None:
+    """None when bricks/manifest.json is a manifest of format `fmt` (5 or 6; None = either)
+    whose every tree is complete."""
     bricks = os.path.join(os.fspath(dataset_dir), "bricks")
     try:
         with open(os.path.join(bricks, "manifest.json"), "rb") as fh:
             manifest = json.loads(fh.read().decode("utf-8"))
     except (OSError, ValueError):
         return "manifest unreadable"
-    if not isinstance(manifest, dict) or manifest.get("schema") != SCHEMA:
-        return "not a v5 manifest"
+    have = schema_format(manifest.get("schema")) if isinstance(manifest, dict) else None
+    if have is None or (fmt is not None and have != fmt):
+        return "not a v%s manifest" % (fmt or "5/6")
     for rel in tree_rels(manifest):
         p = tree_problem(bricks, manifest, rel)
         if p:
@@ -1118,8 +1156,8 @@ def cut_task(args):
     return sz, sy, out
 
 
-def write_tree(level0_files, dims, voxel, tree_dir, work_dir, run, progress=None) -> dict:
-    """Every structure of one format-5 tree from its level-0 volumes.
+def write_tree(level0_files, dims, voxel, tree_dir, work_dir, run, progress=None, fmt: int = 5) -> dict:
+    """Every structure of one format-5 (or 6: `fmt`) tree from its level-0 volumes.
 
     level0_files[c]: the (Z, Y, X) uint8 raw file of channel c (None: an empty channel).
     work_dir: where the level files are made (deleted when done). run(fn, tasks): an
@@ -1128,6 +1166,7 @@ def write_tree(level0_files, dims, voxel, tree_dir, work_dir, run, progress=None
     part of manifest_v5."""
     levels = level_ladder(dims, voxel)
     channels = len(level0_files)
+    COLUMN_IDS = columns_of(fmt)        # noqa: N806 (the tree's own columns)
     os.makedirs(tree_dir, exist_ok=True)
     os.makedirs(work_dir, exist_ok=True)
     X0, Y0, Z0 = levels[0]["dimensions"]["x"], levels[0]["dimensions"]["y"], levels[0]["dimensions"]["z"]

@@ -191,8 +191,16 @@ BRICKS_V3_SCHEMA = "iribhm-bricks-v3"
 # channel), the xy / xz / yz plane stores and the cut bricks with one index per level.
 BRICKS_V5_SCHEMA = "iribhm-bricks-v5"
 V5_COLUMNS = ("ll", "b2", "b4", "q80", "q50")
-_RE_V5_INDEX = re.compile(r"^index/(ll|b2|b4|q80|q50)\.bin\Z", re.ASCII)
-_RE_PACK_V5 = re.compile(r"^l(\d{1,2})/(?:ll|b2|b4|q80|q50)/c\d{1,2}/p\d{5}\.bin\Z", re.ASCII)
+# Format 6 (SPEC §15): the same tree with exactly two columns. The allowlist takes a file
+# of any matrix column; a column the manifest's format does not have is refused when the
+# tree is validated (`_foreign_columns`), since only the manifest knows the format.
+BRICKS_V6_SCHEMA = "iribhm-bricks-v6"
+V6_COLUMNS = ("ll", "q30")
+MATRIX_COLUMNS = {BRICKS_V5_SCHEMA: V5_COLUMNS, BRICKS_V6_SCHEMA: V6_COLUMNS}
+MATRIX_FORMATS = {BRICKS_V5_SCHEMA: 5, BRICKS_V6_SCHEMA: 6}
+_MATRIX_COLUMN_IDS = ("ll", "b2", "b4", "q80", "q50", "q30")
+_RE_V5_INDEX = re.compile(r"^index/(ll|b2|b4|q80|q50|q30)\.bin\Z", re.ASCII)
+_RE_PACK_V5 = re.compile(r"^l(\d{1,2})/(?:ll|b2|b4|q80|q50|q30)/c\d{1,2}/p\d{5}\.bin\Z", re.ASCII)
 _RE_V5_XY = re.compile(r"^xy/l\d{1,2}/z\d{5}\.bin\Z", re.ASCII)
 _RE_V5_ORTH = re.compile(r"^(xz|yz)/l\d{1,2}/c\d{1,2}/b\d{5}\.bin\Z", re.ASCII)
 _RE_V5_CUT_INDEX = re.compile(r"^cuts/l\d{1,2}/index\.bin\Z", re.ASCII)
@@ -1524,14 +1532,16 @@ def _v5_cut_grids(man: dict):
     return out
 
 
-def _validate_manifest_v5(man: dict):
-    """bricks/manifest.json of format 5 (SPEC §14.4): the geometry the v5 reader builds
-    on, its five columns in order, and per tree one index per column and per level."""
+def _validate_manifest_v5(man: dict, fmt: int = 5):
+    """bricks/manifest.json of format 5 (SPEC §14.4) or 6 (§15.2, `fmt`): the geometry the
+    reader builds on, the format's columns in order (five, or ll + q30), and per tree one
+    index per column and per level. Refusal codes carry the format: manifest_v{fmt}_…"""
     def _int(v):
         return isinstance(v, int) and not isinstance(v, bool)
 
-    if man.get("version") != 5:
-        return False, "manifest_v5_bad_version"
+    columns = V6_COLUMNS if fmt == 6 else V5_COLUMNS
+    if man.get("version") != fmt:
+        return False, f"manifest_v{fmt}_bad_version"
     if not (_int(man.get("channels")) and man["channels"] >= 1):
         return False, "manifest_bad_channels"
     if man.get("brickSize") != BRICK_SIZE or man.get("apron") != 1:
@@ -1547,22 +1557,24 @@ def _validate_manifest_v5(man: dict):
             if not isinstance(d, dict) or not all(_int(d.get(a)) and d[a] > 0 for a in ("x", "y", "z")):
                 return False, f"manifest_level_{i}_bad_{key}"
     cols = man.get("columns")
-    if not isinstance(cols, list) or [c.get("id") if isinstance(c, dict) else None for c in cols] != list(V5_COLUMNS):
-        return False, "manifest_v5_bad_columns"
+    if not isinstance(cols, list) or [c.get("id") if isinstance(c, dict) else None for c in cols] != list(columns):
+        return False, f"manifest_v{fmt}_bad_columns"
     grids = _v5_cut_grids(man)
     if grids is None or len(grids) != len(levels):
-        return False, "manifest_v5_bad_cuts"
+        return False, f"manifest_v{fmt}_bad_cuts"
     for key, info in _v3_trees(man):
         if key is None:
-            return False, "manifest_v5_bad_timepoints"
+            return False, f"manifest_v{fmt}_bad_timepoints"
         pre = f"{key}/" if key else ""
         if not isinstance(info, dict) or not isinstance(info.get("columns"), dict) or not isinstance(info.get("cuts"), list):
-            return False, "manifest_v5_bad_index"
-        if not all(_is_ref(info["columns"].get(cid), f"{pre}index/{cid}.bin") for cid in V5_COLUMNS):
-            return False, "manifest_v5_bad_index"
+            return False, f"manifest_v{fmt}_bad_index"
+        # Exactly the format's columns: an index of another column is not part of the tree.
+        if sorted(info["columns"]) != sorted(columns) or not all(
+                _is_ref(info["columns"].get(cid), f"{pre}index/{cid}.bin") for cid in columns):
+            return False, f"manifest_v{fmt}_bad_index"
         if len(info["cuts"]) != len(levels) or not all(
                 _is_ref(ref, f"{pre}cuts/l{k}/index.bin") for k, ref in enumerate(info["cuts"])):
-            return False, "manifest_v5_bad_index"
+            return False, f"manifest_v{fmt}_bad_index"
     return True, None
 
 
@@ -1582,11 +1594,41 @@ def _index_extents(data: bytes, levels, channels):
     return out
 
 
+def _foreign_columns(tree: Path, label: str, columns) -> list[str]:
+    """Files of a matrix column the tree's format does not have (a b2 pack in a format-6
+    tree, a q30 index in a format-5 one): the allowlist takes any matrix column path, only
+    the manifest says which ones belong."""
+    out = []
+    try:
+        names = sorted(p.name for p in (tree / "index").iterdir() if p.is_file())
+    except OSError:
+        names = []
+    for name in names:
+        m = _RE_V5_INDEX.match("index/" + name)
+        if m and m.group(1) not in columns:
+            out.append(f"foreign_column:{label}/index/{name}")
+    try:
+        levels = sorted(p.name for p in tree.iterdir() if p.is_dir() and re.fullmatch(r"l\d{1,2}", p.name, re.ASCII))
+    except OSError:
+        levels = []
+    for lv in levels:
+        try:
+            cids = sorted(p.name for p in (tree / lv).iterdir() if p.is_dir())
+        except OSError:
+            continue
+        for cid in cids:
+            if cid in _MATRIX_COLUMN_IDS and cid not in columns:
+                out.append(f"foreign_column:{label}/{lv}/{cid}")
+    return out
+
+
 def _cross_check_v5(ds_dir: Path, man: dict) -> list[str]:
     """Every tree's column and cut indexes are the ones the manifest hashed and describe
-    its grids, every brick they list lies inside a pack that arrived, and every xy / xz /
-    yz plane pack the reader may open is present (format5.tree_problem's checks)."""
+    its grids, every brick they list lies inside a pack that arrived, every xy / xz / yz
+    plane pack the reader may open is present (format5.tree_problem's checks), and no file
+    of a column outside the manifest's format (format 5 or 6) is in the tree."""
     errors: list[str] = []
+    columns = MATRIX_COLUMNS.get(man.get("schema"), V5_COLUMNS)
     bricks = ds_dir / "bricks"
     levels = man.get("levels") or []
     channels = man.get("channels")
@@ -1626,7 +1668,8 @@ def _cross_check_v5(ds_dir: Path, man: dict) -> list[str]:
     for key, info in _v3_trees(man):
         tree = bricks / key if key else bricks
         label = key or "bricks"
-        for cid in V5_COLUMNS:
+        errors.extend(_foreign_columns(tree, label, columns))
+        for cid in columns:
             got = read_index(tree, f"index/{cid}.bin", info["columns"][cid], label)
             if got is None:
                 continue
@@ -1675,8 +1718,8 @@ def _validate_manifest(man: dict):
 
     if man.get("schema") == BRICKS_V3_SCHEMA:
         return _validate_manifest_v3(man)
-    if man.get("schema") == BRICKS_V5_SCHEMA:
-        return _validate_manifest_v5(man)
+    if man.get("schema") in MATRIX_FORMATS:
+        return _validate_manifest_v5(man, MATRIX_FORMATS[man["schema"]])
     levels = man.get("levels")
     if not isinstance(levels, list) or not levels:
         return False, "manifest_no_levels"
@@ -1941,7 +1984,7 @@ def _check_bricks(ds_dir: Path) -> list[str]:
     if man.get("schema") == BRICKS_V3_SCHEMA:
         if ok:
             errors.extend(_cross_check_v3(ds_dir, man))
-    elif man.get("schema") == BRICKS_V5_SCHEMA:
+    elif man.get("schema") in MATRIX_FORMATS:
         if ok:
             errors.extend(_cross_check_v5(ds_dir, man))
     else:

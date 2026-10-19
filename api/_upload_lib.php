@@ -171,14 +171,14 @@ function lumen_up_classify(string $type, $rel): ?array {
     // Format 4 (SPEC §13): the v3 binary index mounts a tree like the v2 manifest;
     // packs are l{k}/c{c}/pNNNNN.bin. Format 5 (SPEC §14.4): one index per column,
     // packs l{k}/{column}/c{c}/pNNNNN.bin; its plane stores and cut bricks go last.
-    if ($inner === 'index.bin' || preg_match('#^index/(?:ll|b2|b4|q80|q50)\.bin$#D', $inner)) return [LUMEN_UP_TIER_CORE, 'index'];
+    if ($inner === 'index.bin' || preg_match('#^index/(?:ll|b2|b4|q80|q50|q30)\.bin$#D', $inner)) return [LUMEN_UP_TIER_CORE, 'index'];
     if (preg_match('#^xy/l\d{1,2}/z\d{5}\.bin$#D', $inner)) return [LUMEN_UP_TIER_EXTRA, 'planes_pack'];
     if (preg_match('#^(?:xz|yz)/l\d{1,2}/c\d{1,2}/b\d{5}\.bin$#D', $inner)) return [LUMEN_UP_TIER_EXTRA, 'orth_pack'];
     if (preg_match('#^cuts/l\d{1,2}/index\.bin$#D', $inner)) return [LUMEN_UP_TIER_EXTRA, 'index'];
     if (preg_match('#^cuts/l\d{1,2}/c\d{1,2}/p\d{5}\.bin$#D', $inner)) return [LUMEN_UP_TIER_EXTRA, 'cut_pack'];
     if (!preg_match('#^lod(\d{1,2})/(c\d{1,2}|rgba)/pack_\d{1,6}\.bin$#D', $inner, $m)
         && !preg_match('#^l(\d{1,2})/c\d{1,2}/p\d{5}\.bin$#D', $inner, $m)
-        && !preg_match('#^l(\d{1,2})/(?:ll|b2|b4|q80|q50)/c\d{1,2}/p\d{5}\.bin$#D', $inner, $m)) return null;
+        && !preg_match('#^l(\d{1,2})/(?:ll|b2|b4|q80|q50|q30)/c\d{1,2}/p\d{5}\.bin$#D', $inner, $m)) return null;
     $lod  = (int)$m[1];
     $tier = $lod === 0 ? LUMEN_UP_TIER_FULL : LUMEN_UP_TIER_MID;
     if ($timepoint !== null && $timepoint !== 0 && $tier < LUMEN_UP_TIER_FULL) $tier = LUMEN_UP_TIER_FULL;
@@ -191,7 +191,7 @@ function lumen_up_pack_lod(string $rel): ?array {
     $tp = 0;
     if (preg_match('#^t(\d{1,6})/(.+)$#', $inner, $m)) { $tp = (int)$m[1]; $inner = $m[2]; }
     if (!preg_match('#^lod(\d{1,2})/#', $inner, $m) && !preg_match('#^l(\d{1,2})/c\d{1,2}/p\d{5}\.bin$#D', $inner, $m)
-        && !preg_match('#^l(\d{1,2})/(?:ll|b2|b4|q80|q50)/c\d{1,2}/p\d{5}\.bin$#D', $inner, $m)) return null;
+        && !preg_match('#^l(\d{1,2})/(?:ll|b2|b4|q80|q50|q30)/c\d{1,2}/p\d{5}\.bin$#D', $inner, $m)) return null;
     return [(int)$m[1], $tp];
 }
 
@@ -1169,6 +1169,12 @@ function lumen_up_cross_check_v3(string $dir, array $man): array {
 // _cross_check_v5.
 const LUMEN_UP_BRICKS_V5_SCHEMA = 'iribhm-bricks-v5';
 const LUMEN_UP_V5_COLUMNS = ['ll', 'b2', 'b4', 'q80', 'q50'];
+// Format 6 (SPEC §15): two columns. Any matrix column path is allowed; a column the
+// manifest's format lacks is refused at validation (lumen_up_foreign_columns).
+const LUMEN_UP_BRICKS_V6_SCHEMA = 'iribhm-bricks-v6';
+const LUMEN_UP_V6_COLUMNS = ['ll', 'q30'];
+const LUMEN_UP_MATRIX_FORMATS = [LUMEN_UP_BRICKS_V5_SCHEMA => 5, LUMEN_UP_BRICKS_V6_SCHEMA => 6];
+const LUMEN_UP_MATRIX_COLUMN_IDS = ['ll', 'b2', 'b4', 'q80', 'q50', 'q30'];
 
 function lumen_up_is_ref($info, string $url): bool {
     return is_array($info) && ($info['url'] ?? null) === $url && is_int($info['bytes'] ?? null)
@@ -1190,8 +1196,9 @@ function lumen_up_v5_cut_grids(array $man): ?array {
     return $out;
 }
 
-function lumen_up_validate_manifest_v5(array $man): array {
-    if (($man['version'] ?? null) !== 5) return [false, 'manifest_v5_bad_version'];
+function lumen_up_validate_manifest_v5(array $man, int $fmt = 5): array {
+    $columns = $fmt === 6 ? LUMEN_UP_V6_COLUMNS : LUMEN_UP_V5_COLUMNS;
+    if (($man['version'] ?? null) !== $fmt) return [false, "manifest_v{$fmt}_bad_version"];
     if (!is_int($man['channels'] ?? null) || $man['channels'] < 1) return [false, 'manifest_bad_channels'];
     if (($man['brickSize'] ?? null) !== LUMEN_UP_BRICK_SIZE || ($man['apron'] ?? null) !== 1) return [false, 'manifest_bad_brick_size'];
     $levels = $man['levels'] ?? null;
@@ -1205,16 +1212,22 @@ function lumen_up_validate_manifest_v5(array $man): array {
         }
     }
     $cols = $man['columns'] ?? null;
-    if (!is_array($cols) || array_map(fn($c) => is_array($c) ? ($c['id'] ?? null) : null, $cols) !== LUMEN_UP_V5_COLUMNS) return [false, 'manifest_v5_bad_columns'];
+    if (!is_array($cols) || array_values(array_map(fn($c) => is_array($c) ? ($c['id'] ?? null) : null, $cols)) !== $columns) return [false, "manifest_v{$fmt}_bad_columns"];
     $grids = lumen_up_v5_cut_grids($man);
-    if ($grids === null || count($grids) !== count($levels)) return [false, 'manifest_v5_bad_cuts'];
+    if ($grids === null || count($grids) !== count($levels)) return [false, "manifest_v{$fmt}_bad_cuts"];
+    $want = $columns;
+    sort($want, SORT_STRING);
     foreach (lumen_up_v3_trees($man) as [$key, $info]) {
-        if ($key === null) return [false, 'manifest_v5_bad_timepoints'];
+        if ($key === null) return [false, "manifest_v{$fmt}_bad_timepoints"];
         $pre = $key !== '' ? "$key/" : '';
-        if (!is_array($info) || !is_array($info['columns'] ?? null) || !is_array($info['cuts'] ?? null)) return [false, 'manifest_v5_bad_index'];
-        foreach (LUMEN_UP_V5_COLUMNS as $cid) if (!lumen_up_is_ref($info['columns'][$cid] ?? null, "{$pre}index/$cid.bin")) return [false, 'manifest_v5_bad_index'];
-        if (count($info['cuts']) !== count($levels)) return [false, 'manifest_v5_bad_index'];
-        foreach (array_values($info['cuts']) as $k => $ref) if (!lumen_up_is_ref($ref, "{$pre}cuts/l$k/index.bin")) return [false, 'manifest_v5_bad_index'];
+        if (!is_array($info) || !is_array($info['columns'] ?? null) || !is_array($info['cuts'] ?? null)) return [false, "manifest_v{$fmt}_bad_index"];
+        // Exactly the format's columns: an index of another column is not part of the tree.
+        $have = array_map('strval', array_keys($info['columns']));
+        sort($have, SORT_STRING);
+        if ($have !== $want) return [false, "manifest_v{$fmt}_bad_index"];
+        foreach ($columns as $cid) if (!lumen_up_is_ref($info['columns'][$cid] ?? null, "{$pre}index/$cid.bin")) return [false, "manifest_v{$fmt}_bad_index"];
+        if (count($info['cuts']) !== count($levels)) return [false, "manifest_v{$fmt}_bad_index"];
+        foreach (array_values($info['cuts']) as $k => $ref) if (!lumen_up_is_ref($ref, "{$pre}cuts/l$k/index.bin")) return [false, "manifest_v{$fmt}_bad_index"];
     }
     return [true, null];
 }
@@ -1237,9 +1250,33 @@ function lumen_up_index_extents(string $data, array $levels, int $channels): arr
     return $out;
 }
 
-/** Every v5 index the manifest hashed, its grids, the packs it lists, and every plane store present. */
+/** Files of a matrix column the tree's format lacks (twin of upload_staging._foreign_columns). */
+function lumen_up_foreign_columns(string $tree, string $label, array $columns): array {
+    $out = [];
+    $names = [];
+    foreach (@scandir("$tree/index") ?: [] as $n) if (is_file("$tree/index/$n")) $names[] = $n;
+    sort($names, SORT_STRING);
+    foreach ($names as $n) {
+        if (preg_match('#^(ll|b2|b4|q80|q50|q30)\.bin$#D', $n, $m) && !in_array($m[1], $columns, true)) $out[] = "foreign_column:$label/index/$n";
+    }
+    $levels = [];
+    foreach (@scandir($tree) ?: [] as $n) if (preg_match('/^l\d{1,2}$/D', $n) && is_dir("$tree/$n")) $levels[] = $n;
+    sort($levels, SORT_STRING);
+    foreach ($levels as $lv) {
+        $cids = [];
+        foreach (@scandir("$tree/$lv") ?: [] as $n) if ($n !== '.' && $n !== '..' && is_dir("$tree/$lv/$n")) $cids[] = $n;
+        sort($cids, SORT_STRING);
+        foreach ($cids as $cid) {
+            if (in_array($cid, LUMEN_UP_MATRIX_COLUMN_IDS, true) && !in_array($cid, $columns, true)) $out[] = "foreign_column:$label/$lv/$cid";
+        }
+    }
+    return $out;
+}
+
+/** Every v5 / v6 index the manifest hashed, its grids, the packs it lists, every plane store present, no foreign column. */
 function lumen_up_cross_check_v5(string $dir, array $man): array {
     $errors = [];
+    $columns = ($man['schema'] ?? null) === LUMEN_UP_BRICKS_V6_SCHEMA ? LUMEN_UP_V6_COLUMNS : LUMEN_UP_V5_COLUMNS;
     $levels = $man['levels'] ?? [];
     $channels = $man['channels'] ?? null;
     $grids = array_map(fn($L) => [$L['gridSize']['x'], $L['gridSize']['y'], $L['gridSize']['z']], $levels);
@@ -1270,7 +1307,8 @@ function lumen_up_cross_check_v5(string $dir, array $man): array {
     foreach (lumen_up_v3_trees($man) as [$key, $info]) {
         $tree = $key !== '' ? "$dir/bricks/$key" : "$dir/bricks";
         $label = $key !== '' ? $key : 'bricks';
-        foreach (LUMEN_UP_V5_COLUMNS as $cid) {
+        foreach (lumen_up_foreign_columns($tree, $label, $columns) as $e) $errors[] = $e;
+        foreach ($columns as $cid) {
             $got = $readIndex($tree, "index/$cid.bin", $info['columns'][$cid], $label);
             if ($got === null) continue;
             [$data, $idxLevels] = $got;
@@ -1300,7 +1338,8 @@ function lumen_up_cross_check_v5(string $dir, array $man): array {
 
 function lumen_up_validate_manifest(array $man): array {
     if (($man['schema'] ?? null) === LUMEN_UP_BRICKS_V3_SCHEMA) return lumen_up_validate_manifest_v3($man);
-    if (($man['schema'] ?? null) === LUMEN_UP_BRICKS_V5_SCHEMA) return lumen_up_validate_manifest_v5($man);
+    $mf = LUMEN_UP_MATRIX_FORMATS[(string)($man['schema'] ?? '')] ?? null;
+    if ($mf !== null) return lumen_up_validate_manifest_v5($man, $mf);
     $levels = $man['levels'] ?? null;
     if (!is_array($levels) || !$levels || array_keys($levels) !== range(0, count($levels) - 1)) return [false, 'manifest_no_levels'];
     if (array_key_exists('channels', $man) && $man['channels'] !== null
@@ -1384,7 +1423,7 @@ function lumen_up_check_bricks(string $dir): array {
     if (($man['schema'] ?? null) === LUMEN_UP_BRICKS_V3_SCHEMA) {
         return $ok ? array_merge($errors, lumen_up_cross_check_v3($dir, $man)) : $errors;
     }
-    if (($man['schema'] ?? null) === LUMEN_UP_BRICKS_V5_SCHEMA) {
+    if (isset(LUMEN_UP_MATRIX_FORMATS[(string)($man['schema'] ?? '')])) {
         return $ok ? array_merge($errors, lumen_up_cross_check_v5($dir, $man)) : $errors;
     }
     return array_merge($errors, lumen_up_cross_check_packs($dir, $man));

@@ -31,8 +31,9 @@ declare(strict_types=1);
 require_once __DIR__ . '/_upload_lib.php';
 require_once __DIR__ . '/_migrations_formats.php';
 require_once __DIR__ . '/_migrations_m005.php';
+require_once __DIR__ . '/_migrations_m006.php';
 
-const LUMEN_MIG_LATEST          = 5;
+const LUMEN_MIG_LATEST          = 6;
 const LUMEN_MIG_BRICK           = 64;
 const LUMEN_MIG_TILE            = 512;
 const LUMEN_MIG_BRICKS_PER_TILE = 8;            // LUMEN_MIG_TILE / LUMEN_MIG_BRICK
@@ -114,6 +115,21 @@ const LUMEN_MIGRATIONS = [
             'fr' => 'Reconstruit les niveaux à partir des voxels natifs à 256, 512, 1024… pixels en gardant toutes les tranches, range chaque niveau en cinq compressions (sans perte, ±2, ±4, légère, très légère) et ajoute des plans XY/XZ/YZ et de petites briques de coupe pour que les coupes, même obliques, ne lisent que ce qu\'elles montrent. Le niveau natif reste sans perte.',
             'es' => 'Reconstruye los niveles a partir de los vóxeles nativos a 256, 512, 1024… píxeles conservando todos los cortes, guarda cada nivel en cinco compresiones (sin pérdidas, ±2, ±4, ligera, muy ligera) y añade planos XY/XZ/YZ y pequeños ladrillos de corte para que los cortes, incluso oblicuos, lean solo lo que muestran. El nivel nativo sigue sin pérdidas.',
             'nl' => 'Bouwt de niveaus opnieuw op vanuit de native voxels op 256, 512, 1024… pixels met alle coupes, bewaart elk niveau in vijf compressies (verliesvrij, ±2, ±4, licht, zeer licht) en voegt XY/XZ/YZ-vlakken en kleine snijbricks toe, zodat sneden, ook schuine, alleen lezen wat ze tonen. Het native niveau blijft verliesvrij.',
+        ],
+    ],
+    [
+        'id' => 'm006-q30', 'from' => 5, 'to' => 6, 'types' => ['3d', 'live'],
+        'title' => [
+            'en' => 'One display quality: WebP Q30 at every level, lossless kept for measurements and exports',
+            'fr' => 'Une seule qualité d\'affichage : WebP Q30 à chaque niveau, sans perte gardé pour les mesures et les exports',
+            'es' => 'Una sola calidad de visualización: WebP Q30 en cada nivel, sin pérdidas para medidas y exportaciones',
+            'nl' => 'Eén weergavekwaliteit: WebP Q30 op elk niveau, verliesvrij bewaard voor metingen en exports',
+        ],
+        'description' => [
+            'en' => 'Encodes every level once in WebP quality 30 for display and deletes the ±2, ±4, light and very light copies of format 5. The lossless bricks and the fast cut stores are kept as they are: measurements, exports and downloads still read the exact data.',
+            'fr' => 'Encode chaque niveau une fois en WebP qualité 30 pour l\'affichage et supprime les copies ±2, ±4, légère et très légère du format 5. Les briques sans perte et les copies de coupe rapides sont gardées telles quelles : mesures, exports et téléchargements lisent toujours les données exactes.',
+            'es' => 'Codifica cada nivel una vez en WebP calidad 30 para la visualización y borra las copias ±2, ±4, ligera y muy ligera del formato 5. Los ladrillos sin pérdidas y las copias de corte rápidas se conservan tal cual: medidas, exportaciones y descargas siguen leyendo los datos exactos.',
+            'nl' => 'Codeert elk niveau één keer in WebP-kwaliteit 30 voor de weergave en verwijdert de kopieën ±2, ±4, licht en zeer licht van formaat 5. De verliesvrije bricks en de snelle snijkopieën blijven zoals ze zijn: metingen, exports en downloads lezen nog steeds de exacte gegevens.',
         ],
     ],
 ];
@@ -413,7 +429,7 @@ function lumen_mig_voxel_triplet($v): ?array {
 
 /** LOD0 voxel size driving the v3 Z rule: v3 levels[0].voxelSize, the manifest's voxelSize, metadata voxel_size, else 1 µm. */
 function lumen_mig_manifest_voxel(array $man, string $dir): array {
-    if (in_array($man['schema'] ?? null, [LUMEN_V3_SCHEMA, LUMEN_V5_SCHEMA], true) && is_array($man['levels'][0] ?? null)) {
+    if (in_array($man['schema'] ?? null, [LUMEN_V3_SCHEMA, LUMEN_V5_SCHEMA, LUMEN_V6_SCHEMA], true) && is_array($man['levels'][0] ?? null)) {
         $v = lumen_mig_voxel_triplet($man['levels'][0]['voxelSize'] ?? null);
         if ($v) return $v;
     }
@@ -551,7 +567,7 @@ function lumen_mig_plan_for($datasetId): array {
     if (is_file($diskCache)) {
         $hit = @unserialize((string)@file_get_contents($diskCache), ['allowed_classes' => false]);
         if (is_array($hit) && ($hit['sig'] ?? null) === $sig && is_array($hit['plan'] ?? null) && ($hit['plan']['dir'] ?? null) === $dir
-            && array_key_exists('carry', $hit['plan']) && array_key_exists('v5', $hit['plan'])) {
+            && array_key_exists('carry', $hit['plan']) && array_key_exists('v5', $hit['plan']) && array_key_exists('v6', $hit['plan'])) {
             $cache = [$dir => ['sig' => $sig, 'plan' => $hit['plan']]];
             return $hit['plan'];
         }
@@ -567,7 +583,9 @@ function lumen_mig_plan_for($datasetId): array {
         $trees = [];
         $tps = $man['timepoints'] ?? null;
         $isV3 = ($man['schema'] ?? null) === LUMEN_V3_SCHEMA;
-        $isV5 = ($man['schema'] ?? null) === LUMEN_V5_SCHEMA;
+        // A format-6 tree is a format-5 tree with two columns (SPEC §15.2): 'v5' covers both, 'v6' names it.
+        $isV6 = ($man['schema'] ?? null) === LUMEN_V6_SCHEMA;
+        $isV5 = ($man['schema'] ?? null) === LUMEN_V5_SCHEMA || $isV6;
         $v3Problem = null; $v5Problem = null;
         $carry = ($isV3 || $isV5) ? ['histograms' => null, 'dataset' => null, 'tph' => []] : lumen_mig_v2_carry($reduced);
         unset($reduced);
@@ -621,7 +639,7 @@ function lumen_mig_plan_for($datasetId): array {
              'units' => array_map(fn($e) => $e['u'], $unitBytes),      // key => [t,bz,c,ty,tx]
              'unitBytes' => array_map(fn($e) => $e['bytes'], $unitBytes),
              'total' => $total, 'empty' => $total - count($unitBytes),
-             'v3' => $isV3, 'v3Problem' => $v3Problem, 'v5' => $isV5, 'v5Problem' => $v5Problem,
+             'v3' => $isV3, 'v3Problem' => $v3Problem, 'v5' => $isV5, 'v5Problem' => $v5Problem, 'v6' => $isV6,
              'voxel' => $voxel, 'carry' => $carry, 'sig' => $sig];
     // One plan cached per request: status walks every dataset, and keeping each one
     // (tens of MB for the largest) would add them all up against memory_limit.
@@ -654,6 +672,7 @@ const LUMEN_MIG_SWAP_DIRS = [
     LUMEN_M003 => ['.mips-incoming', 'mips', '.mips-old'],
     LUMEN_M004 => ['.bricks-incoming', 'bricks', 'bricks.v2-old'],
     LUMEN_M005 => ['.bricks5-incoming', 'bricks', 'bricks.v4-old'],
+    LUMEN_M006 => ['.bricks6-unused', 'bricks', '.bricks6-unused'],
 ];
 
 /** SPEC §3.1, keys in the normative order. */
@@ -751,6 +770,7 @@ function lumen_mig_structure_valid(array $plan, string $mid): bool {
     if ($mid === LUMEN_M003) return lumen_mig_mips_valid($plan);
     if ($mid === LUMEN_M004) return lumen_mig_bricks_v3_valid($plan) || !empty($plan['v5']);
     if ($mid === LUMEN_M005) return !empty($plan['v5']) && $plan['v5Problem'] === null;
+    if ($mid === LUMEN_M006) return !empty($plan['v6']) && $plan['v5Problem'] === null;
     return false;
 }
 
@@ -764,6 +784,8 @@ function lumen_mig_repair_needed(array $plan, int $fv, array $m): bool {
     if ($m['id'] === LUMEN_M004) return empty($plan['v3']) && empty($plan['v5']);
     // Damaged v5 bricks cannot be rebuilt (their format-4 source is gone): a problem, not a repair.
     if ($m['id'] === LUMEN_M005) return empty($plan['v5']);
+    // A v5 tree under a version-6 metadata is converted again; a damaged v6 tree is a problem.
+    if ($m['id'] === LUMEN_M006) return empty($plan['v6']);
     return !lumen_mig_structure_valid($plan, $m['id']);
 }
 
@@ -825,6 +847,8 @@ function lumen_mig_capabilities(): array {
             LUMEN_M004 => ['available' => !$m004, 'reasons' => $m004],
             // No server executor on PHP: the browser computes every m005 unit (SPEC §14.10).
             LUMEN_M005 => ['available' => false, 'reasons' => ['browser_only']],
+            // Nor for m006: the browser encodes every q30 brick (SPEC §15.4).
+            LUMEN_M006 => ['available' => false, 'reasons' => ['browser_only']],
         ],
     ];
     if (!$webp) $caps['detail'] = function_exists('gd_info') ? 'GD cannot decode lossless WebP exactly' : 'the gd extension is not loaded';
@@ -1159,11 +1183,13 @@ function lumen_mig_unit_key_for(string $mid, array $u): string {
     if ($mid === LUMEN_M003) return vsprintf('t%d.l%d.c%d.y%d.x%d', $u);
     if ($mid === LUMEN_M004) return vsprintf('t%d.k%d.c%d.z%d.y%d.x%d', $u);
     if ($mid === LUMEN_M005) return lumen_m005_key($u);
+    if ($mid === LUMEN_M006) return lumen_m006_key($u);
     return lumen_mig_unit_key(...$u);
 }
 
 function lumen_mig_parse_key_for(string $mid, $key): array {
     if ($mid === LUMEN_M005) return lumen_m005_parse($key);
+    if ($mid === LUMEN_M006) return lumen_m006_parse($key);
     $rx = [LUMEN_M003 => '/^t(\d{1,6})\.l(\d{1,5})\.c(\d{1,3})\.y(\d{1,4})\.x(\d{1,4})$/D',
            LUMEN_M004 => '/^t(\d{1,6})\.k(\d{1,2})\.c(\d{1,3})\.z(\d{1,5})\.y(\d{1,5})\.x(\d{1,5})$/D'][$mid] ?? null;
     if ($rx === null) return lumen_mig_parse_key($key);
@@ -1184,6 +1210,7 @@ function lumen_mig_unitset(array $plan, string $mid): array {
         return ['mid' => LUMEN_M002, 'units' => $plan['units'], 'unitBytes' => $plan['unitBytes'],
                 'total' => $plan['total'], 'empty' => $plan['empty'], 'inputs' => [], 'refs' => null, 'levels' => null];
     }
+    if ($mid === LUMEN_M006) return lumen_m006_unitset($plan);
     if ($mid !== LUMEN_M003 && $mid !== LUMEN_M004 && $mid !== LUMEN_M005) throw new LumenMigError('unknown_migration');
     $stamp = '';
     if ($mid === LUMEN_M003 || $mid === LUMEN_M005) {
@@ -1639,6 +1666,7 @@ function lumen_mig_check_disk(array $plan, string $mid = LUMEN_M002, ?array $us 
     if ($mid === LUMEN_M003 && $us !== null) $est = (int)(array_sum($us['unitBytes']) * 0.05);
     elseif ($mid === LUMEN_M004) $est = (int)(array_sum($plan['unitBytes']) * 8 / 7 * 1.3);
     elseif ($mid === LUMEN_M005) $est = (int)(array_sum($plan['unitBytes']) * LUMEN_V5_SIZE_RATIO);
+    elseif ($mid === LUMEN_M006) $est = (int)(array_sum(($us ?? lumen_mig_unitset($plan, LUMEN_M006))['unitBytes']) * LUMEN_M006_SIZE_RATIO);
     else $est = (int)(array_sum($plan['unitBytes']) * LUMEN_MIG_PLANES_RATIO);
     [$sf, $sd] = lumen_mig_volume(lumen_mig_root());
     [$df, $dd] = lumen_mig_volume($plan['dir']);
@@ -1729,6 +1757,14 @@ function lumen_mig_plan($datasetId, $mid, $offset = 0, $limit = 10000): array {
                 lumen_mig_save_journal($path, $j);
                 return $j;
             }
+            if ($m['id'] === LUMEN_M006 && !empty($plan['v6'])) {
+                if ($plan['v5Problem'] !== null) throw new LumenMigError('bricks_v5_invalid', 409, $plan['v5Problem']);
+                $j = ['migration' => $m['id'], 'dataset' => $plan['dataset'], 'createdAt' => lumen_mig_now(),
+                      'sourceManifests' => [], 'units' => ['total' => 0, 'empty' => 0], 'done' => [],
+                      'executors' => ['browser' => 0, 'server' => 0], 'state' => 'swapped', 'newManifestSha' => $plan['sha']];
+                lumen_mig_save_journal($path, $j);
+                return $j;
+            }
             if ($m['id'] === LUMEN_M005 && !empty($plan['v5'])) {
                 if ($plan['v5Problem'] !== null) throw new LumenMigError('bricks_v5_invalid', 409, $plan['v5Problem']);
                 $j = ['migration' => $m['id'], 'dataset' => $plan['dataset'], 'createdAt' => lumen_mig_now(),
@@ -1762,7 +1798,10 @@ function lumen_mig_plan($datasetId, $mid, $offset = 0, $limit = 10000): array {
                        ['pending' => count($pending), 'runnable' => count($runnable), 'offset' => $offset,
                         'units' => array_slice(array_keys($runnable), $offset, $limit)]);
     if ($m['id'] === LUMEN_M004) $out['levels'] = lumen_mig_levels_progress($us, $done);
-    elseif ($m['id'] === LUMEN_M005) {
+    elseif ($m['id'] === LUMEN_M006) {
+        $out['levels'] = array_map(fn($L) => ['level' => $L['level'], 'target' => $L['target'], 'dimensions' => $L['dimensions'],
+                                              'voxelSize' => $L['voxelSize']], $us['levels']);
+    } elseif ($m['id'] === LUMEN_M005) {
         $out['stages'] = lumen_m005_stage_progress($us, $done);
         $out['levels'] = array_map(fn($L) => ['level' => $L['level'], 'target' => $L['target'], 'dimensions' => $L['dimensions'],
                                               'voxelSize' => $L['voxelSize']], $us['levels']);
@@ -1861,6 +1900,7 @@ function lumen_mig_unit_put($datasetId, $mid, $key, bool $dry, ?string $body = n
     [$m, $plan, $path] = lumen_mig_open_job($datasetId, $mid);
     $mid = $m['id'];
     if ($mid === LUMEN_M005) return lumen_m005_unit_put($plan, $m, $path, $key, $body ?? (string)lumen_mig_read_body(false));
+    if ($mid === LUMEN_M006) return lumen_m006_unit_put($plan, $m, $path, $key, $body ?? (string)lumen_mig_read_body(false));
     $unit = lumen_mig_parse_key_for($mid, $key);
     $store = lumen_mig_store_dir($plan['type'], $plan['folder'], $mid);
     if ($mid === LUMEN_M002) [, $w, $h, $z0, $depth] = lumen_mig_unit_geometry($plan, $unit);
@@ -2199,6 +2239,7 @@ function lumen_mig_unit_inputs($datasetId, $mid, $key): array {
     [$m, $plan, $path] = lumen_mig_open_job($datasetId, $mid);
     $mid = $m['id'];
     if ($mid === LUMEN_M005) return lumen_m005_unit_inputs($plan, $path, $key);
+    if ($mid === LUMEN_M006) return lumen_m006_unit_inputs($plan, $key);
     $unit = lumen_mig_parse_key_for($mid, $key);
     $us = lumen_mig_unitset($plan, $mid);
     $ukey = lumen_mig_unit_key_for($mid, $unit);
@@ -3107,6 +3148,7 @@ function lumen_mig_finalize($datasetId, $mid, $maxSeconds = null, bool $keepPrev
     if ($m['id'] === LUMEN_M003) return lumen_mig_finalize_m003($m, $datasetId, $deadline);
     if ($m['id'] === LUMEN_M004) return lumen_mig_finalize_m004($m, $datasetId, $deadline, $keepPrevious);
     if ($m['id'] === LUMEN_M005) return lumen_m005_finalize($m, $datasetId, $deadline, $keepPrevious);
+    if ($m['id'] === LUMEN_M006) return lumen_m006_finalize($m, $datasetId, $deadline);
     return lumen_mig_finalize_m002($m, $datasetId, $deadline);
 }
 
@@ -3125,6 +3167,14 @@ function lumen_mig_cancel($datasetId, $mid): array {
         if (($m['id'] === LUMEN_M004 || $m['id'] === LUMEN_M005) && !file_exists("$dir/$liveName")) {
             if (is_dir("$dir/$inc")) throw new LumenMigError('finalize_in_progress', 409);
             if (is_dir("$dir/$oldName")) @rename("$dir/$oldName", "$dir/$liveName");
+        }
+        if ($m['id'] === LUMEN_M006 && $j !== null) {
+            // q30 files written before the commit point are in no manifest yet: removed.
+            try {
+                $live = lumen_mig_plan_for("$type/$folder");
+                if (empty($live['v6'])) lumen_m006_drop_columns($live, ['q30']);
+            } catch (LumenMigError $e) {
+            }
         }
         lumen_mig_rrmdir(lumen_mig_store_dir($type, $folder, $m['id']));
         lumen_mig_rrmdir("$dir/$inc");
@@ -3166,7 +3216,7 @@ function lumen_mig_estimate_for(array $plan, array $m, ?array $j): array {
  * dataset on a shared host). The Python server keeps its plans in memory instead.
  */
 function lumen_mig_status_sig(string $type, string $folder, string $dir): string {
-    $parts = ['status-row-v2', LUMEN_MIG_LATEST, (string)@filemtime(__DIR__ . '/_migrations_m005.php')];
+    $parts = ['status-row-v2', LUMEN_MIG_LATEST, (string)@filemtime(__DIR__ . '/_migrations_m005.php'), (string)@filemtime(__DIR__ . '/_migrations_m006.php')];
     $stat = function (string $p) use (&$parts): void {
         $mt = @filemtime($p);
         // The inode too: an atomic rewrite (journal, metadata) is a new file even within the same second.
@@ -3234,7 +3284,7 @@ function lumen_mig_dataset_status_compute(string $type, string $folder, string $
         return $row;
     }
     $row['trees'] = count($plan['trees']);
-    $row['bricksSchema'] = !empty($plan['v5']) ? LUMEN_V5_SCHEMA : (!empty($plan['v3']) ? LUMEN_V3_SCHEMA : 'iribhm-bricks-v2');
+    $row['bricksSchema'] = !empty($plan['v5']) ? (!empty($plan['v6']) ? LUMEN_V6_SCHEMA : LUMEN_V5_SCHEMA) : (!empty($plan['v3']) ? LUMEN_V3_SCHEMA : 'iribhm-bricks-v2');
     if (!empty($plan['v3']) && $plan['v3Problem'] !== null) {
         $row['problem'] = 'bricks_v3_invalid';
         $row['problemDetail'] = substr($plan['v3Problem'], 0, 300);
@@ -3255,6 +3305,9 @@ function lumen_mig_dataset_status_compute(string $type, string $folder, string $
         $pending = $m['from'] >= $fv || $repair;
         if ($m['id'] === LUMEN_M004 && (!empty($plan['v3']) || !empty($plan['v5'])) && $fv >= $m['to']) $pending = false;
         if ($m['id'] === LUMEN_M005 && !empty($plan['v5']) && $fv >= $m['to']) $pending = false;
+        if ($m['id'] === LUMEN_M006 && !empty($plan['v6']) && $fv >= $m['to']) $pending = false;
+        // A damaged matrix tree (v5 or v6) is a problem, never a pending conversion.
+        if ($m['id'] === LUMEN_M006 && !empty($plan['v5']) && $plan['v5Problem'] !== null) $pending = false;
         if ($pending) {
             $row['pending'][] = $m['id'];
             $row['repair'] = $row['repair'] || $repair;
@@ -3364,19 +3417,20 @@ function lumen_mig_handle(string $action, array $params, array $body, ?string $r
                 return [200, lumen_mig_unit_inputs($body['dataset'] ?? null, $body['migration'] ?? null, $body['unit'] ?? null)];
             case 'unit_inputs_many':
                 [$m, $plan, $path] = lumen_mig_open_job($body['dataset'] ?? null, $body['migration'] ?? null);
-                if ($m['id'] !== LUMEN_M005) throw new LumenMigError('not_applicable', 409, 'batches are an m005 protocol');
-                return [200, lumen_m005_unit_inputs_many($plan, $path, $body['units'] ?? null)];
+                if ($m['id'] !== LUMEN_M005 && $m['id'] !== LUMEN_M006) throw new LumenMigError('not_applicable', 409, 'batches are an m005 / m006 protocol');
+                return [200, lumen_m005_unit_inputs_many($plan, $path, $body['units'] ?? null, $m['id'])];
             case 'unit_put_many':
                 $rawMany = $raw ?? lumen_mig_read_body(false);
                 if (strlen((string)$rawMany) > LUMEN_MIG_MAX_BODY) throw new LumenMigError('body_too_large', 413);
                 [$m, $plan, $path] = lumen_mig_open_job($params['dataset'] ?? null, $params['migration'] ?? null);
-                if ($m['id'] !== LUMEN_M005) throw new LumenMigError('not_applicable', 409, 'batches are an m005 protocol');
+                if ($m['id'] !== LUMEN_M005 && $m['id'] !== LUMEN_M006) throw new LumenMigError('not_applicable', 409, 'batches are an m005 / m006 protocol');
+                if ($m['id'] === LUMEN_M006) return [200, lumen_m006_unit_put_many($plan, $m, $path, (string)$rawMany)];
                 return [200, lumen_m005_unit_put_many($plan, $m, $path, (string)$rawMany)];
             case 'unit_put_part':
                 $rawPart = $raw ?? lumen_mig_read_body(false);
                 if (strlen((string)$rawPart) > LUMEN_MIG_MAX_BODY) throw new LumenMigError('body_too_large', 413);
                 [$m, $plan, $path] = lumen_mig_open_job($params['dataset'] ?? null, $params['migration'] ?? null);
-                if ($m['id'] !== LUMEN_M005) throw new LumenMigError('not_applicable', 409, 'pieces are an m005 protocol');
+                if ($m['id'] !== LUMEN_M005 && $m['id'] !== LUMEN_M006) throw new LumenMigError('not_applicable', 409, 'pieces are an m005 / m006 protocol');
                 return [200, lumen_m005_unit_put_part($plan, $m, $path, $params['unit'] ?? null, $params['offset'] ?? null, $params['total'] ?? null, (string)$rawPart)];
             case 'speedtest':
                 return [200, lumen_mig_speedtest($body['maxSeconds'] ?? 1.0)];

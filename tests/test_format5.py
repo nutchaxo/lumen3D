@@ -363,8 +363,8 @@ class Migration(unittest.TestCase):
         return next(r for r in dm.status()["datasets"] if r["id"] == ds_id)
 
     def test_enabled_by_default(self):
-        self.assertEqual(dm.LATEST, 5)
-        self.assertEqual([m["id"] for m in dm.registry()][-1], M5)
+        self.assertEqual(dm.LATEST, 6)
+        self.assertEqual([m["id"] for m in dm.registry()][-2:], [M5, "m006-q30"])
         self.assertIn(M5, dm.server_capabilities(force=True)["migrations"])
 
     def test_3d_chain_matches_pipeline(self):
@@ -373,7 +373,7 @@ class Migration(unittest.TestCase):
         for mid in (M2, M3, M4):
             run_job(self, "3d/SYN3", mid)
         row = self.row("3d/SYN3")
-        self.assertEqual(row["pending"], [M5])
+        self.assertEqual(row["pending"], [M5, "m006-q30"])
         self.assertTrue(dm.server_capabilities()["migrations"][M5]["available"])
         out = dm.plan_job("3d/SYN3", M5)
         self.assertEqual([s["stage"] for s in out["stages"]], ["A", "B", "C", "D"])
@@ -408,7 +408,7 @@ class Migration(unittest.TestCase):
         self.assertTrue(dm.dataset_planes_valid(plan))
         self.assertTrue(dm.dataset_mips_valid(plan))
         row = self.row("3d/SYN3")
-        self.assertEqual(row["pending"], [])
+        self.assertEqual(row["pending"], ["m006-q30"])
         self.assertEqual(row["formatVersion"], 5)
         self.assertEqual(row["bricksSchema"], f5.SCHEMA)
         # the level-0 lossless packs are the format-4 bytes
@@ -467,7 +467,7 @@ class Migration(unittest.TestCase):
         self.assertTrue(dm.tile_store_dir("3d", "SYN3", M5).is_dir())
         self.assertEqual(dm.cancel("3d/SYN3", M5), {"ok": True})
         self.assertFalse(dm.tile_store_dir("3d", "SYN3", M5).exists())
-        self.assertEqual(self.row("3d/SYN3")["pending"], [M5])
+        self.assertEqual(self.row("3d/SYN3")["pending"], [M5, "m006-q30"])
         dm.plan_job("3d/SYN3", M5)
         man = ds / "planes" / "manifest.json"
         man.write_bytes(man.read_bytes() + b" ")

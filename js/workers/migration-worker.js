@@ -358,7 +358,7 @@ async function readRels(dataset, list, signal) {
   return out;
 }
 
-/** POST unit_inputs: what the server says one unit reads and makes (m005-matrix). */
+/** POST unit_inputs: what the server says one unit reads and makes (m005-matrix, m006-q30). */
 async function unitInputs(migration, dataset, unit, signal) {
   return withRetries(async () => {
     const headers = { 'Content-Type': 'application/json' };
@@ -577,7 +577,7 @@ async function onRun(msg) {
     const work = await h.planUnitWork(msg.unit, state, io);
     const res = await h.runUnit(work, state, io);
     // m005 results can outgrow the host's request limit: they go in pieces.
-    const reply = !msg.dry && msg.migration === 'm005-matrix' && res.body.length + PIECE_MARGIN > _maxBody
+    const reply = !msg.dry && (msg.migration === 'm005-matrix' || msg.migration === 'm006-q30') && res.body.length + PIECE_MARGIN > _maxBody
       ? await putInPieces(msg.migration, msg.dataset, msg.unit, res.body, ac.signal)
       : await putUnit(msg.migration, msg.dataset, msg.unit, res.body, !!msg.dry, ac.signal);
     post({

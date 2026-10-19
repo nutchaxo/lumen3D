@@ -10,7 +10,7 @@ channels and a live one with two timepoints:
   unit_inputs answer identical, unit_blocked before stage A on both;
 * bad_blob for a malformed body, read_ranges of `@store/A/…` identical;
 * the finalized v5 trees byte for byte identical (manifest compared parsed, its timestamp
-  aside), version 5 on both, the PHP status row naming a valid v5 tree with nothing pending;
+  aside), version 5 on both, the PHP status row naming a valid v5 tree with only m006 pending;
 * the PHP capability row: m005 is browser only.
 
 Run: python tests/test_format5_php_parity.py   (php ≥ 8.1, numpy, Pillow)
@@ -178,7 +178,7 @@ class Format5Parity(unittest.TestCase):
         st, status = ph.php_handle("status")
         row = next(r for r in status["datasets"] if r["id"] == ds)
         self.assertEqual((row["formatVersion"], row["bricksSchema"], row["pending"], row.get("problem")),
-                         (5, "iribhm-bricks-v5", [], None), row)
+                         (5, "iribhm-bricks-v5", ["m006-q30"], None), row)
         py.py()
         prow = jsonish(dm.dataset_status(*ds.split("/"), py.data_web / ds))
         self.assertEqual(strip({k: v for k, v in prow.items() if k != "name"}), strip({k: v for k, v in row.items() if k != "name"}))

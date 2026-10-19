@@ -349,7 +349,7 @@ class Orchestrator(unittest.TestCase):
             self.assertEqual(r.returncode, 0, r.stdout[-2000:] + r.stderr[-2000:])
             ds = out / "3d" / "Dll4-E10-5-Em3"
             meta = json.loads((ds / "metadata.json").read_text(encoding="utf-8"))
-            self.assertEqual(meta["formatVersion"], 4)       # the pipeline writes format 4
+            self.assertEqual(meta["formatVersion"], 6)       # the pipeline writes format 6 by default
             self.assertTrue(pw.planes_complete(ds))
             first = {p.name: p.read_bytes() for p in (ds / "planes").glob("z*.bin")}
             self.assertEqual(len(first), 20)
@@ -361,7 +361,7 @@ class Orchestrator(unittest.TestCase):
             r = subprocess.run(cmd, capture_output=True, text=True, env=env, timeout=600)
             self.assertEqual(r.returncode, 0, r.stdout[-2000:] + r.stderr[-2000:])
             meta = json.loads((ds / "metadata.json").read_text(encoding="utf-8"))
-            self.assertEqual(meta["formatVersion"], 4)
+            self.assertEqual(meta["formatVersion"], 6)
             self.assertFalse((ds / "planes" / "stale.txt").exists())
             self.assertFalse(list(ds.glob("*.pre-swap")))
             self.assertEqual({p.name: p.read_bytes() for p in (ds / "planes").glob("z*.bin")}, first)

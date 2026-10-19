@@ -298,7 +298,7 @@ class Orchestrator(unittest.TestCase):
 
     def _run(self, *extra):
         return subprocess.run([sys.executable, str(PRE / "run_preprocess.py"), "--input", str(self.raw),
-                               "--output", str(self.out), "--tracking", "off", *extra],
+                               "--output", str(self.out), "--tracking", "off", "--format", "4", *extra],
                               capture_output=True, text=True, env=self.env, timeout=600)
 
     def test_publish_rerun_and_failure(self):

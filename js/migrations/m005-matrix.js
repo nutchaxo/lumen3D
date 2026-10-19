@@ -66,6 +66,8 @@
         b4: { codec: 'webp-lossless-lut', maxError: 4 },
         q80: { codec: 'webp-lossy-dz', quality: 80 },
         q50: { codec: 'webp-lossy-dz', quality: 50 },
+        // Format 6 (SPEC §15): its only fallback is the ll image (there is no b4 there).
+        q30: { codec: 'webp-lossy-dz', quality: 30, fallbacks: [[TAG_LL, 'll']] },
     };
     const isLossy = (cid) => column(cid).codec === 'webp-lossy-dz';
 
@@ -382,7 +384,7 @@
         const dec = await decodeWebp(data);
         if (dec.width !== M80_W || dec.height !== M80_H) throw fail('brick_undecodable', 'lossy brick decoded at the wrong size');
         let best = withByte(data, deadZone(b66, unmosaic80(dec.data)));
-        for (const [tag, other] of [[TAG_LL, 'll'], [TAG_B4, 'b4']]) {
+        for (const [tag, other] of col.fallbacks || [[TAG_LL, 'll'], [TAG_B4, 'b4']]) {
             let alt = known[other];
             if (!alt) alt = known[other] = await encodeBrick(b66, other, known);
             if (alt.length + 1 <= best.length) best = withByte(alt, tag);
@@ -756,7 +758,7 @@
         _internals: {
             quantizerIndex, axisWeights, resamplePlane, apronIndex, brickWithApron, brickKept, mosaic66, unmosaic66,
             mosaic80, unmosaic80, deadZone, webpSize, encodeBrick, encodeBrickColumns, brickBlob, planeTiles, planePack,
-            orthPack, cutMosaicShape, cutRecord, regionFromTiles, readRuns,
+            orthPack, cutMosaicShape, cutRecord, regionFromTiles, readRuns, decodeWebp, encodeWebp, M66_W, M66_H, M80_W, M80_H,
             _clearTileCache: () => { _tileCache.clear(); _tileCacheBytes = 0; },
         },
     };

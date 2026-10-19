@@ -36,6 +36,7 @@ except Exception as exc:  # pragma: no cover
 
 M2, M3, M4 = "m002-planes", "m003-layer-mips", "m004-bricks-v3"
 M5 = "m005-matrix"   # what a format-4 dataset has left since web 1.65
+M6 = "m006-q30"      # and since web 1.70
 DS = "3d/rc"
 VOLATILE = ("createdAt", "updatedAt", "assembledAt")
 
@@ -93,7 +94,7 @@ class StatusRowCache(unittest.TestCase):
     def test_cache_hits_and_invalidates(self):
         first = self.php_row()
         self.assertTrue(self.cache.is_file())
-        self.assertEqual(first["pending"], [M2, M3, M4, M5])
+        self.assertEqual(first["pending"], [M2, M3, M4, M5, M6])
         self.assertEqual(self.assert_hit(), first)
         self.assertEqual(strip(first), strip(self.py_row()))
 
@@ -118,7 +119,7 @@ class StatusRowCache(unittest.TestCase):
             row = self.php_row()
             self.assertEqual(row["formatVersion"], {M2: 2, M3: 3, M4: 4}[mid])
             self.assertIsNone(row["job"])
-        self.assertEqual(row["pending"], [M5])
+        self.assertEqual(row["pending"], [M5, M6])
         self.assertEqual(row["previous"]["schema"], "iribhm-bricks-v2")
         self.assertEqual(self.assert_hit(), row)
         self.assertEqual(strip(row), strip(self.py_row()))

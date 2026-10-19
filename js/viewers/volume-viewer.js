@@ -7232,7 +7232,7 @@ const VolumeViewer = (() => {
    */
   function getQualityMatrix(channels = null) {
     const m = typeof BrickLoader !== 'undefined' ? BrickLoader.getManifest?.() : null;
-    if (!m || m.schema !== 'iribhm-bricks-v5' || !Array.isArray(m.levels)) return null;
+    if (!m || (m.schema !== 'iribhm-bricks-v5' && m.schema !== 'iribhm-bricks-v6') || !Array.isArray(m.levels)) return null;
     const keys = m.levels.map(L => (L.target === 'native' ? 'native' : `${L.target}x${L.target}`));
     const fp = getQualityFootprints(keys) || { budgetBytes: null, qualities: {} };
     const want = Array.isArray(channels) ? channels : null;
@@ -7397,9 +7397,11 @@ const VolumeViewer = (() => {
     return _roiRefines(entry) ? 'll' : (entry.column || null);
   }
 
-  /** The entry is a format-5 level shown in a compressed column, and refining at rest is on. */
+  /** The entry is a format-5 level shown in a compressed column, and refining at rest is on
+   *  (never on format 6: its display column is q30 by design, SPEC §15.3). */
   function _roiRefines(entry) {
-    return Boolean(_losslessAtRest && entry && (entry.treeVersion || 2) === 5 && entry.column && entry.column !== 'll');
+    return Boolean(_losslessAtRest && entry && (entry.treeVersion || 2) === 5 && entry.column
+      && entry.column !== 'll' && entry.column !== 'q30');
   }
 
   /**
@@ -8107,6 +8109,7 @@ const VolumeViewer = (() => {
     const ids = Array.isArray(format?.columns) ? format.columns.map(c => c.id) : [];
     const own = _qualityColumnOf(key);
     if (own && ids.includes(own)) return own;
+    if (ids.includes('q30')) return 'q30';         // format 6 (SPEC §15.3)
     return ids.includes('b2') ? 'b2' : 'll';
   }
 
@@ -8299,7 +8302,7 @@ const VolumeViewer = (() => {
   }
 
   function _selectBrickManifestUncached(manifest, timepoint) {
-    if (manifest && manifest.schema === 'iribhm-bricks-v5' && Array.isArray(manifest.timepoints)) {
+    if (manifest && (manifest.schema === 'iribhm-bricks-v5' || manifest.schema === 'iribhm-bricks-v6') && Array.isArray(manifest.timepoints)) {
       // v5 (SPEC §14.4): each frame row carries its column and cut indexes, urls inside
       // its own tree; the frame is mounted at bricks/<path> with them made relative.
       const tp = Number.isFinite(Number(timepoint)) ? Number(timepoint) : 0;

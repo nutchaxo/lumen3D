@@ -15,7 +15,7 @@ import traceback
 from datetime import datetime
 from pathlib import Path
 
-__version__ = "0.22.0"
+__version__ = "0.23.0"
 
 # ── Paths ──────────────────────────────────────────────────────────────────────
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -702,10 +702,11 @@ def main():
     parser.add_argument("--with-downloads", action="store_true",
                         help="After each dataset, also build its download/ bundle "
                              "(web archive, original .ims, ImageJ TIFF, per-channel MIP, README).")
-    parser.add_argument("--format", type=int, choices=(4, 5), default=4,
-                        help="Dataset format: 4 (default) or 5 = the resolution x compression "
-                             "matrix of SPEC Part III (levels 256, 512, ... with every slice, five "
-                             "compressions, fast cut stores). The viewer reads format 5 from web 1.64.")
+    parser.add_argument("--format", type=int, choices=(4, 5, 6), default=6,
+                        help="Dataset format: 6 (default) = SPEC Part IV, every level stored "
+                             "lossless and in WebP Q30 (levels 256, 512, ... with every slice, fast "
+                             "cut stores), read by the viewer from web 1.70; 5 = the five-compression "
+                             "matrix of SPEC Part III (web 1.64); 4 = the v3 bricks.")
     parser.add_argument("--tracking", default="auto", metavar="auto|off|FILE",
                         help="Cell tracking for timelapse datasets. 'auto' (default) looks for "
                              "a .imaris_track beside the volume, then the Imaris objects inside "

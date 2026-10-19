@@ -550,7 +550,9 @@ const ViewerApp = (() => {
     // Bind UI controls (synchronous — overlaps the in-flight volume load above)
     _bindScreenshot();
     _bindQualityControls();
-    if (typeof StudioEditor !== 'undefined' && StudioEditor.setNativeProvider) StudioEditor.setNativeProvider(_ensureStudioNative);
+    if (typeof StudioEditor !== 'undefined' && StudioEditor.setNativeProvider) {
+      StudioEditor.setNativeProvider(_ensureStudioNative, { alwaysLossless: () => _isV6BrickManifest() });
+    }
     _updateQualityOptionLabels();
     _bindVolumeControls();
     _bindZScaleControls();
@@ -1122,8 +1124,20 @@ const ViewerApp = (() => {
 
   /** True when the dataset's brick manifest is the v5 matrix (SPEC §14). */
   function _isV5BrickManifest(manifest = _brickManifest) {
-    return Boolean(manifest) && manifest.schema === 'iribhm-bricks-v5';
+    return Boolean(manifest) && (manifest.schema === 'iribhm-bricks-v5' || manifest.schema === 'iribhm-bricks-v6');
   }
+
+  /**
+   * Format 6 (SPEC §15): one display column, `q30`; the page offers resolutions only and
+   * every export reads `ll` at the resolution on screen.
+   */
+  function _isV6BrickManifest(manifest = _brickManifest) {
+    return Boolean(manifest) && manifest.schema === 'iribhm-bricks-v6';
+  }
+
+  // True while an export holds the volume in `ll` (_withLosslessQuality): the only time a
+  // format-6 tree shows its lossless column.
+  let _exportingLossless = false;
 
   /** "512x512@b2" → "512x512" (the resolution a host and the Compare ladder know). */
   function _qualityBaseOf(key) {
@@ -1132,18 +1146,20 @@ const ViewerApp = (() => {
     return at > 0 ? s.slice(0, at) : s;
   }
 
-  /** The compression column of the quality on screen (v5), `b2` by default. */
+  /** The compression column of the quality on screen (v5), `b2` by default; `q30` on v6. */
   function _currentColumn() {
     const s = String(_qualityMode || '');
     const at = s.indexOf('@');
     const ids = (_brickManifest?.columns || []).map(c => c.id);
     const own = at > 0 ? s.slice(at + 1) : null;
+    if (_isV6BrickManifest()) return _exportingLossless && own === 'll' ? 'll' : 'q30';
     if (own && ids.includes(own)) return own;
     return ids.includes('b2') ? 'b2' : 'll';
   }
 
   /** On a v5 tree a quality always names its column: a bare resolution gets the current one. */
   function _withColumn(quality) {
+    if (quality && _isV6BrickManifest()) return `${_qualityBaseOf(quality)}@${_currentColumn()}`;
     if (!quality || !_isV5BrickManifest() || String(quality).includes('@')) return quality;
     return `${quality}@${_currentColumn()}`;
   }
@@ -1431,9 +1447,11 @@ const ViewerApp = (() => {
     top.className = 'qm-top';
     const summary = document.createElement('div');
     summary.className = 'qm-summary';
-    summary.textContent = _tf('viewer.qualityMatrix.summary', '{res} · {tier}: {size}', {
-      res: _levelName(level), tier: _qualityColumnLabel(column.id), size: _fmtMB(bytesOf(level, column))
-    });
+    summary.textContent = _isV6BrickManifest()
+      ? _tf('viewer.qualityMatrix.summaryQ30', '{res} · WebP Q30: {size}', { res: _levelName(level), size: _fmtMB(bytesOf(level, column)) })
+      : _tf('viewer.qualityMatrix.summary', '{res} · {tier}: {size}', {
+        res: _levelName(level), tier: _qualityColumnLabel(column.id), size: _fmtMB(bytesOf(level, column))
+      });
     if (shown && shown.level !== level.level) {
       const note = document.createElement('div');
       note.className = 'qm-note';
@@ -1477,6 +1495,20 @@ const ViewerApp = (() => {
     }
     const lists = document.createElement('div');
     lists.className = 'qm-lists';
+    if (_isV6BrickManifest()) {
+      // Format 6: one display quality; the note says what is shown and what exports read.
+      lists.classList.add('qm-lists-single');
+      lists.append(_qmSection(_t('viewer.qualityMatrix.resolutionHead', 'Resolution'), resList));
+      const q30 = document.createElement('div');
+      q30.className = 'qm-legend qm-q30';
+      q30.textContent = _t('viewer.qualityMatrix.q30Note', 'Every volume is displayed compressed in WebP quality 30. Measurements and exports read the lossless data, at the resolution chosen here.');
+      const legend6 = document.createElement('div');
+      legend6.className = 'qm-legend';
+      legend6.textContent = _t('viewer.qualityMatrix.legend', 'GPU memory of a resolution: green fits, amber is close to the budget, red is too large.');
+      top.querySelector('.qm-help')?.remove();
+      box.replaceChildren(top, lists, q30, legend6);
+      return;
+    }
     lists.append(
       _qmSection(_t('viewer.qualityMatrix.resolutionHead', 'Resolution'), resList),
       _qmSection(_t('viewer.qualityMatrix.qualityHead', 'Quality'), colList)
@@ -2150,6 +2182,11 @@ const ViewerApp = (() => {
 
   function _refreshViewExport() {
     const qNote = document.getElementById('view-export-quality-note');
+    const v6 = _isV6BrickManifest();
+    document.querySelectorAll('input[name="view-export-quality"]').forEach((input) => {
+      input.closest('.view-export-choice')?.classList.toggle('hidden', v6);
+      if (v6 && input.value === 'lossless') input.checked = true;
+    });
     if (qNote) {
       qNote.textContent = _viewExportChoice('view-export-quality') === 'lossless'
         ? _losslessTargetText(_losslessExportTarget())
@@ -2580,7 +2617,8 @@ const ViewerApp = (() => {
       _studioOpening = false;
     }
     _studioPreview = preview;
-    if (preview && token !== null && token !== undefined) {
+    // Format 6: the Studio works on the q30 picture; the lossless pass runs for an export only.
+    if (preview && token !== null && token !== undefined && !_isV6BrickManifest()) {
       _studioUpgradePromise = _upgradeStudioSliceToNative(preview, token);
       try { await _studioUpgradePromise; } finally { _studioUpgradePromise = null; }
     }
@@ -2593,11 +2631,14 @@ const ViewerApp = (() => {
    */
   async function _ensureStudioNative() {
     if (_studioUpgradePromise) { try { await _studioUpgradePromise; } catch (err) { /* checked below */ } }
-    const isNative = () => String(StudioEditor.getDocument?.()?.quality || '') === 'native';
+    // Format 6: the lossless picture at the resolution shown (SPEC §15.3), else native.
+    const lod = _isV6BrickManifest() ? Math.max(0, Number(VolumeViewer.getActiveLevel?.()?.level) || 0) : 0;
+    const want = lod === 0 ? 'native' : `lod${lod}`;
+    const isNative = () => String(StudioEditor.getSliceQuality?.() ?? StudioEditor.getDocument?.()?.quality ?? '') === want;
     if (isNative()) return true;
     if (!_studioPreview || !StudioEditor.isOpen?.()) return false;
     const token = StudioEditor.documentToken ? StudioEditor.documentToken() : null;
-    _studioUpgradePromise = _upgradeStudioSliceToNative(_studioPreview, token);
+    _studioUpgradePromise = _upgradeStudioSliceToNative(_studioPreview, token, _isV6BrickManifest() ? { lod } : {});
     try { await _studioUpgradePromise; } catch (err) { return false; } finally { _studioUpgradePromise = null; }
     return isNative();
   }
@@ -2994,13 +3035,13 @@ const ViewerApp = (() => {
    * document it was opened for. A level the GPU cannot hold (the 3D atlas of an
    * oblique cut over budget) is retried one level down, and labelled so.
    */
-  async function _upgradeStudioSliceToNative(preview, token) {
+  async function _upgradeStudioSliceToNative(preview, token, opts = {}) {
     if (typeof BrickLoader === 'undefined' || !BrickLoader.isReady?.()) return;
     const dims0 = BrickLoader.getDimensions(0);
     if (!dims0) return;
     const scoped = { token };
     const spec = preview.planeSpec;
-    let lod = await _confirmLargeNativePass(spec);
+    let lod = Number.isInteger(opts.lod) ? opts.lod : await _confirmLargeNativePass(spec);
     if (lod === null || !StudioEditor.isOpen?.() || (StudioEditor.documentToken && StudioEditor.documentToken() !== token)) return;
 
     _cancelNativeSlice(false);
@@ -3536,7 +3577,7 @@ const ViewerApp = (() => {
   function _cutTreeOnScreen() {
     if (typeof CutStore === 'undefined' || typeof BrickLoader === 'undefined') return null;
     const manifest = BrickLoader.getManifest?.();
-    if (!manifest || manifest.schema !== 'iribhm-bricks-v5') return null;
+    if (!manifest || (manifest.schema !== 'iribhm-bricks-v5' && manifest.schema !== 'iribhm-bricks-v6')) return null;
     const base = _brickTreeBaseOnScreen();
     if (!base) return null;
     let tree = _cutTrees.get(base);
@@ -6139,6 +6180,14 @@ const ViewerApp = (() => {
    * finest of its qualities, all lossless). → { key, lod, dims, native } or null.
    */
   function _losslessExportTarget() {
+    if (_isV6BrickManifest()) {
+      // Format 6: the resolution the user picked, read losslessly (the same GPU memory as q30).
+      const qm = VolumeViewer.getQualityMatrix?.();
+      if (!qm || !qm.levels.length) return null;
+      const res = _qualityBaseOf(_qualityMode);
+      const L = qm.levels.find(x => x.key === res) || qm.levels.find(x => qm.active && x.level === qm.active.level) || qm.levels[0];
+      return { key: `${L.key}@ll`, lod: L.level, dims: L.dims, native: L.level === 0, chosen: true };
+    }
     if (_isV5BrickManifest()) {
       const qm = VolumeViewer.getQualityMatrix?.();
       if (!qm || !qm.levels.length) return null;
@@ -6164,6 +6213,7 @@ const ViewerApp = (() => {
   function _losslessTargetText(t) {
     if (!t) return _t('exportView.losslessUnknown', 'Lossless: the finest level this GPU holds.');
     const d = t.dims || {};
+    if (t.chosen) return _tf('exportView.losslessChosen', 'Lossless at the resolution shown ({x} × {y} × {z}).', d);
     return t.native
       ? _tf('exportView.losslessNative', 'Lossless at the native resolution ({x} × {y} × {z}).', d)
       : _tf('exportView.losslessLevel', 'Lossless at {x} × {y} × {z}: the native level is more than this GPU holds.', d);
@@ -6177,16 +6227,20 @@ const ViewerApp = (() => {
       && (!_isV5BrickManifest() || _currentColumn() === 'll');
     if (!target || already) return fn(target);
     onStatus?.(_t('exportView.loadingLossless', 'Loading the lossless level…'));
-    await _setQualityMode(target.key);
+    _exportingLossless = true;
     try {
+      await _setQualityMode(target.key);
       return await fn(target);
     } finally {
-      try { await _setQualityMode(previous); } catch (err) { /* the volume on screen stays */ }
+      _exportingLossless = false;
+      try { await _setQualityMode(_isV6BrickManifest() ? `${_qualityBaseOf(previous)}@q30` : previous); } catch (err) { /* the volume on screen stays */ }
     }
   }
 
   /** The export choice every export offers: 'current' | 'lossless' | null (cancelled). */
   async function _askExportQuality() {
+    // Format 6: every export is lossless, at the resolution shown (SPEC §15.3).
+    if (_isV6BrickManifest()) return 'lossless';
     if (typeof Dialog === 'undefined' || !Dialog.ask) return 'current';
     const target = _losslessExportTarget();
     const choice = await Dialog.ask({

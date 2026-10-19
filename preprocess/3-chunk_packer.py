@@ -453,11 +453,12 @@ def pack_timepoint_v3(temp_dir: Path, bricks_dir: Path, t_idx: int, lod_levels, 
 
 
 def pack_timepoint_v5(temp_dir: Path, bricks_dir: Path, t_idx: int, lod_levels, n_ch: int,
-                      executor, tp_subdir: str, planes_fn=None, mip_fn=None):
-    """Format 5 of one timepoint (SPEC §14): format5.write_tree makes the levels, the five
-    columns, the xy/xz/yz planes and the cut bricks from the level-0 files of step 2
-    (t{t}_c{c}_lod0.bin), then the native XY planes (planes/) and the layer MIPs (mips/)
-    are written as for format 4. Returns {"format": 5, "tree": write_tree's result}."""
+                      executor, tp_subdir: str, planes_fn=None, mip_fn=None, fmt: int = 5):
+    """Format 5 or 6 (`fmt`) of one timepoint (SPEC §14, §15): format5.write_tree makes the
+    levels, the format's columns (5: ll b2 b4 q80 q50; 6: ll q30), the xy/xz/yz planes and
+    the cut bricks from the level-0 files of step 2 (t{t}_c{c}_lod0.bin), then the native XY
+    planes (planes/) and the layer MIPs (mips/) are written as for format 4. Returns
+    {"format": fmt, "tree": write_tree's result}."""
     window = 2 * (getattr(executor, "_max_workers", 1) or 1)
     tree_dir = bricks_dir / tp_subdir if tp_subdir else bricks_dir
     label = tp_subdir or "t000"
@@ -469,14 +470,14 @@ def pack_timepoint_v5(temp_dir: Path, bricks_dir: Path, t_idx: int, lod_levels, 
         return ordered_results(executor, fn, tasks, window)
 
     def progress(step, done, total):
-        print(f"[PACKER] {label} format 5 : {step} ({done}/{total})", flush=True)
+        print(f"[PACKER] {label} format {fmt} : {step} ({done}/{total})", flush=True)
 
     tree = format5.write_tree([str(p) if p.exists() else None for p in files], dims,
                               lod0.get("voxelSize") or {"x": 1, "y": 1, "z": 1}, tree_dir,
-                              temp_dir / f"f5work_t{t_idx:03d}", run, progress)
+                              temp_dir / f"f5work_t{t_idx:03d}", run, progress, fmt=fmt)
     for k, L in enumerate(tree["levels"]):
         d = L["dimensions"]
-        sizes = ", ".join(f"{cid} {sum(tree['bytes'][str(k)][cid]) / 1e6:.1f} MB" for cid in format5.COLUMN_IDS)
+        sizes = ", ".join(f"{cid} {sum(tree['bytes'][str(k)][cid]) / 1e6:.1f} MB" for cid in format5.columns_of(fmt))
         print(f"[PACKER] {label} niveau {k} ({L['target']}): {d['x']}x{d['y']}x{d['z']}, "
               f"{tree['stored'][k]} brick(s) — {sizes}")
     planes_root = bricks_dir.parent / "planes"
@@ -495,7 +496,7 @@ def pack_timepoint_v5(temp_dir: Path, bricks_dir: Path, t_idx: int, lod_levels, 
                                        mips_root / tp_subdir if tp_subdir else mips_root, run_mip)
     print(f"[PACKER] {label} MIP par couche : {mips_writer.layer_count(dims[2])} couche(s), "
           f"{mip_bytes / 1e6:.1f} MB")
-    return {"format": format5.FORMAT_VERSION, "tree": tree}
+    return {"format": fmt, "tree": tree}
 
 
 def histograms_for_timepoint(temp_dir: Path, t_idx: int, n_ch: int, lod_num: int):
@@ -540,7 +541,7 @@ def build_packs(temp_dir: Path, output_dir: Path):
     if not proc_meta:
         raise FileNotFoundError(f"{temp_dir / 'processing_meta.json'} absent ou illisible")
 
-    if int(proc_meta.get("datasetFormat") or 2) >= format5.FORMAT_VERSION:
+    if int(proc_meta.get("datasetFormat") or 2) >= format5.FORMAT_VERSION:   # 5 and 6
         return build_packs_v5(temp_dir, output_dir, proc_meta)
     if int(proc_meta.get("datasetFormat") or 2) >= v3.FORMAT_VERSION:
         return build_packs_v3(temp_dir, output_dir, proc_meta)
@@ -674,8 +675,9 @@ def build_packs_v3(temp_dir: Path, output_dir: Path, proc_meta: dict):
 
 
 def build_packs_v5(temp_dir: Path, output_dir: Path, proc_meta: dict):
-    """bricks/manifest.json of a format-5 dataset (SPEC §14.4), then the planes and MIP
-    manifests that record its sha256. A tree step 2 has not packed is packed now."""
+    """bricks/manifest.json of a format-5 or 6 dataset (SPEC §14.4, §15), then the planes and
+    MIP manifests that record its sha256. A tree step 2 has not packed is packed now."""
+    fmt = 6 if int(proc_meta.get("datasetFormat") or 5) >= 6 else 5
     lod_levels = proc_meta["lod_levels"]
     n_ch = proc_meta["n_channels"]
     n_tp = proc_meta["n_timepoints"]
@@ -689,13 +691,13 @@ def build_packs_v5(temp_dir: Path, output_dir: Path, proc_meta: dict):
         for t_idx in range(n_tp):
             key = f"t{t_idx:03d}"
             packed = read_json_file(temp_dir / f"pack_{key}.json")
-            if not packed or packed.get("format") != format5.FORMAT_VERSION:
+            if not packed or packed.get("format") != fmt:
                 if executor is None:
                     executor = ProcessPoolExecutor(max_workers=worker_count())
                 if is_timelapse:
                     print(f"[PACKER] === timepoint {t_idx + 1}/{n_tp} ({key}) ===")
                 packed = pack_timepoint_v5(temp_dir, bricks_dir, t_idx, lod_levels, n_ch,
-                                           executor, key if is_timelapse else "")
+                                           executor, key if is_timelapse else "", fmt=fmt)
             trees[key if is_timelapse else ""] = packed["tree"]
             histograms[key] = histograms_for_timepoint(temp_dir, t_idx, n_ch, coarsest)
     finally:
@@ -704,14 +706,14 @@ def build_packs_v5(temp_dir: Path, output_dir: Path, proc_meta: dict):
     levels = trees[sorted(trees)[0]]["levels"]
     manifest = format5.manifest_v5(levels, n_ch, trees, histograms["t000"],
                                    __import__("datetime").datetime.now().isoformat(),
-                                   histograms if is_timelapse else None, dataset=output_dir.name)
+                                   histograms if is_timelapse else None, dataset=output_dir.name, fmt=fmt)
     manifest_path = bricks_dir / "manifest.json"
     atomic_write_json(manifest_path, manifest, separators=(",", ":"))
-    print(f"[PACKER] Wrote manifest.json (v5) to {manifest_path} "
+    print(f"[PACKER] Wrote manifest.json (v{fmt}) to {manifest_path} "
           f"({manifest_path.stat().st_size / 1e3:.1f} kB)")
     planes_writer.write_manifests(output_dir)
     mips_writer.write_manifests(output_dir)
-    print(f"[PACKER] planes/ + mips/ : manifests ecrits, format {format5.FORMAT_VERSION}")
+    print(f"[PACKER] planes/ + mips/ : manifests ecrits, format {fmt}")
 
 
 if __name__ == "__main__":

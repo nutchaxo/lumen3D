@@ -54,9 +54,9 @@ class ConvertDataset(unittest.TestCase):
     def test_to_latest_then_nothing_to_do(self):
         code, out = self.run_cli()
         self.assertEqual(code, 0, out)
-        self.assertEqual(self.fv(), 5)
-        self.assertIsNone(f5.bricks_problem(self.ds))
-        for mid in ("m002-planes", "m003-layer-mips", "m004-bricks-v3", "m005-matrix"):
+        self.assertEqual(self.fv(), 6)
+        self.assertIsNone(f5.bricks_problem(self.ds, 6))
+        for mid in ("m002-planes", "m003-layer-mips", "m004-bricks-v3", "m005-matrix", "m006-q30"):
             self.assertIn(f"{mid}: done", out)
         self.assertFalse((self.tmp / "uploads" / "migrations" / "3d__SYN3__m005-matrix.json").exists())
         code, out = self.run_cli()

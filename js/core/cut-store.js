@@ -57,7 +57,7 @@ const CutStore = (() => {
    * `manifest` = that tree's manifest (index urls relative to it, as the viewer mounts it).
    */
   function open(base, manifest) {
-    if (!manifest || manifest.schema !== 'iribhm-bricks-v5') throw new Error('CutStore: not a v5 tree');
+    if (!manifest || (manifest.schema !== 'iribhm-bricks-v5' && manifest.schema !== 'iribhm-bricks-v6')) throw new Error('CutStore: not a v5 / v6 tree');
     const root = String(base).replace(/\/$/, '');
     const llRef = manifest.index && manifest.index.columns && manifest.index.columns.ll;
     const stamp = llRef && typeof llRef.sha256 === 'string' ? llRef.sha256.slice(0, 12) : '';

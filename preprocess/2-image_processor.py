@@ -18,6 +18,11 @@ if str(HERE) not in sys.path:
     sys.path.insert(0, str(HERE))
 from run_preprocess import worker_count, thumbnail_lod, atomic_write_json  # noqa: E402
 import bricks_v3_writer as v3  # noqa: E402
+# format5.py sits beside the scripts in the pipeline pack, at the repository root otherwise. The
+# worker pool is started before the packer is imported: its processes get THIS sys.path, so the
+# root must be on it from the start, or a format-5/6 task cannot be unpickled in a worker.
+if not (Path(__file__).resolve().parent / "format5.py").is_file() and str(Path(__file__).resolve().parent.parent) not in sys.path:
+    sys.path.append(str(Path(__file__).resolve().parent.parent))
 
 __version__ = "0.15.0"
 
@@ -564,7 +569,7 @@ def process_image(input_ims: Path, metadata_json: Path, temp_dir: Path, pack_int
                 key = f"t{t_idx:03d}" if is_timelapse else ""
                 if dataset_format >= 5:
                     packed = _packer().pack_timepoint_v5(temp_dir, bricks_dir, t_idx, lod_info,
-                                                         n_ch, executor, key)
+                                                         n_ch, executor, key, fmt=min(6, dataset_format))
                 elif v4:
                     packed = _packer().pack_timepoint_v3(temp_dir, bricks_dir, t_idx, lod_info,
                                                          n_ch, executor, key)
@@ -613,9 +618,10 @@ if __name__ == "__main__":
     ap.add_argument("--pack-into", default=None,
                     help="dataset directory: pack each timepoint into its bricks/ as soon as "
                          "it is levelled, then delete its temporary LOD files")
-    ap.add_argument("--format", type=int, choices=(2, 4, 5), default=DEFAULT_DATASET_FORMAT,
-                    help="dataset format to produce (default 4; 5 = the resolution x compression "
-                         "matrix, not readable by the viewer before web 1.64; 2 = the legacy v2 bricks)")
+    ap.add_argument("--format", type=int, choices=(2, 4, 5, 6), default=DEFAULT_DATASET_FORMAT,
+                    help="dataset format to produce (default 4; 6 = lossless + WebP Q30 per level, "
+                         "read by the viewer from web 1.70; 5 = the resolution x compression matrix, "
+                         "web 1.64; 2 = the legacy v2 bricks)")
     args = ap.parse_args()
 
     try:

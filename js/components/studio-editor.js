@@ -3205,7 +3205,17 @@ const StudioEditor = (() => {
   // re-rendered here.
   // The page's native pass of the figure on screen (viewer.js), for the lossless export.
   let _nativeProvider = null;
-  function setNativeProvider(fn) { _nativeProvider = typeof fn === 'function' ? fn : null; }
+  /** The quality of the picture in the Studio ('native', 'lod1', … or '' for a preview). */
+  function getSliceQuality() {
+    return String((_sliceResult && _sliceResult.quality) || (_doc && _doc.quality) || '');
+  }
+
+  // The page's policy: true when every export must be the lossless picture (format 6, SPEC §15.3).
+  let _nativeAlways = null;
+  function setNativeProvider(fn, opts = {}) {
+    _nativeProvider = typeof fn === 'function' ? fn : null;
+    _nativeAlways = typeof opts.alwaysLossless === 'function' ? opts.alwaysLossless : null;
+  }
 
   /**
    * Every PNG export offers the picture as it is or the native lossless one (SPEC §14.7):
@@ -3215,6 +3225,14 @@ const StudioEditor = (() => {
   async function _exportPngWithChoice() {
     if (!_doc || !_sliceResult) return;
     const isNative = String(_sliceResult.quality || _doc.quality || '') === 'native';
+    if (_nativeProvider && !(_doc.layoutMaps?.length > 0) && _nativeAlways && _nativeAlways()) {
+      // Format 6: the figure is worked on in q30 and always exported losslessly.
+      _toast(_t('studio.loadingLosslessExport', 'Loading the lossless picture…'));
+      const ok = await _nativeProvider();
+      if (!ok) { _toast(_t('studio.nativeExportFailed', 'The native picture could not be loaded; nothing was exported.')); return; }
+      _exportPng();
+      return;
+    }
     if (!_nativeProvider || _doc.layoutMaps?.length > 0 || typeof Dialog === 'undefined' || !Dialog.ask) {
       _exportPng();
       return;
@@ -4322,7 +4340,8 @@ const StudioEditor = (() => {
     close,
     getDocument,
     documentToken,
-    setNativeProvider
+    setNativeProvider,
+    getSliceQuality
   };
 })();
 

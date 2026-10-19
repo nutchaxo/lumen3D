@@ -122,13 +122,15 @@ def merge_volume_metadata(existing: dict, fresh: dict) -> dict:
 
 def dataset_format_version(output_dir: Path) -> int:
     """The highest format whose structures are complete on disk, each naming the bricks
-    manifest as it stands now: 5 = v5 bricks (SPEC §14) + planes + layer MIPs, 4 = v3 bricks + planes + layer MIPs, 3 = v2 bricks +
+    manifest as it stands now: 6 = v6 bricks (SPEC §15) + planes + layer MIPs, 5 = v5 bricks (SPEC §14) + planes + layer MIPs, 4 = v3 bricks + planes + layer MIPs, 3 = v2 bricks +
     planes + MIPs, 2 = v2 bricks + planes, else 1. A dataset never claims a structure it
     does not have; the admin's Data updates tab completes a lower one."""
     if not planes_writer.planes_complete(output_dir):
         return 1
     if not mips_writer.mips_complete(output_dir):
         return planes_writer.FORMAT_VERSION
+    if format5.bricks_problem(output_dir, 6) is None:
+        return format5.FORMAT_VERSION_V6
     if format5.bricks_complete(output_dir):
         return format5.FORMAT_VERSION
     if bricks_v3_writer.bricks_complete(output_dir):

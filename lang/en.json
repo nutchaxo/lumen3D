@@ -120,6 +120,14 @@
       "cancelled": "Export cancelled.",
       "failed": "Export failed: {error}",
       "step": "Level {level} · channel {channel} · layer {z}"
+    },
+    "q30": {
+      "title": "Display bricks (WebP Q30)",
+      "hint": "The compressed bricks this site displays, as stored (WebP quality 30), for the chosen levels: much lighter than the lossless data, but read only by Lumen3D tools (format described in the README of the zip). For measurements, use the lossless OME-Zarr export above.",
+      "start": "Download .q30.zip",
+      "total": "{size} to download",
+      "progress": "{pct} % · {out} written",
+      "done": "Done: {size}, {packs} pack(s)."
     }
   },
   "nav": {
@@ -452,7 +460,9 @@
       "advice": "Recommended: the finest resolution shown green, at Extra. For a measurement or a figure: Max at Native.",
       "adviceRest": "With a compressed quality, the bricks in view are loaded again without loss when the camera stops (the checkbox under the lists).",
       "losslessAtRest": "Lossless once the view rests",
-      "losslessAtRestHint": "With a compressed cell, the bricks in view are loaded again without loss a moment after the camera stops."
+      "losslessAtRestHint": "With a compressed cell, the bricks in view are loaded again without loss a moment after the camera stops.",
+      "q30Note": "Every volume is displayed compressed in WebP quality 30. Measurements and exports read the lossless data, at the resolution chosen here.",
+      "summaryQ30": "{res} · WebP Q30: {size}"
     },
     "detailLossless": "Lossless detail: {count} bricks in view",
     "gpuMemory": "GPU memory",
@@ -767,7 +777,8 @@
     "losslessNative": "Lossless at the native resolution ({x} × {y} × {z}).",
     "losslessLevel": "Lossless at {x} × {y} × {z}: the native level is more than this GPU holds.",
     "loadingLossless": "Loading the lossless level…",
-    "currentIs": "As shown: {current}."
+    "currentIs": "As shown: {current}.",
+    "losslessChosen": "Lossless at the resolution shown ({x} × {y} × {z})."
   },
   "studio": {
     "importOtherFigure": "This Studio file was saved for another figure: its annotations were imported, but its channel settings were applied only where the figure matches.",
@@ -832,7 +843,8 @@
     "exportNative": "Native lossless",
     "exportCurrent": "This picture",
     "loadingNativeExport": "Loading the native lossless picture…",
-    "nativeExportFailed": "The native picture could not be loaded; nothing was exported."
+    "nativeExportFailed": "The native picture could not be loaded; nothing was exported.",
+    "loadingLosslessExport": "Loading the lossless picture…"
   },
   "admin": {
     "loginTitle": "{brand} Admin",

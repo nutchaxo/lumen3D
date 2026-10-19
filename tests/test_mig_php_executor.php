@@ -77,8 +77,8 @@ try {
     // ── Status before ──────────────────────────────────────────────────────
     [$code, $st] = api('status');
     $rows = rows_by_id();
-    check('status: latest 5 + registry', $code === 200 && $st['latest'] === 5 && array_column($st['migrations'], 'id') === ['m002-planes', 'm003-layer-mips', 'm004-bricks-v3', 'm005-matrix'] && ($st['migrations'][0]['id'] ?? '') === 'm002-planes' && count($st['migrations'][0]['title']) === 4);
-    check('status: 3d dataset at v1 needs m002-planes', ($rows['3d/synthA']['pending'] ?? null) === ['m002-planes', 'm003-layer-mips', 'm004-bricks-v3', 'm005-matrix'] && $rows['3d/synthA']['formatVersion'] === 1 && $rows['3d/synthA']['name'] === 'synthA');
+    check('status: latest 6 + registry', $code === 200 && $st['latest'] === 6 && array_column($st['migrations'], 'id') === ['m002-planes', 'm003-layer-mips', 'm004-bricks-v3', 'm005-matrix', 'm006-q30'] && ($st['migrations'][0]['id'] ?? '') === 'm002-planes' && count($st['migrations'][0]['title']) === 4);
+    check('status: 3d dataset at v1 needs m002-planes', ($rows['3d/synthA']['pending'] ?? null) === ['m002-planes', 'm003-layer-mips', 'm004-bricks-v3', 'm005-matrix', 'm006-q30'] && $rows['3d/synthA']['formatVersion'] === 1 && $rows['3d/synthA']['name'] === 'synthA');
     check('status: live dataset has 2 trees', ($rows['live/synthL']['trees'] ?? 0) === 2);
     check('status: 2d dataset has nothing pending', ($rows['2d/photo']['pending'] ?? null) === []);
     $est = $rows['3d/synthA']['estimate'];
@@ -126,14 +126,14 @@ try {
     check('finalize: journal and tile store deleted', journal('3d', 'synthA') === null && !is_dir(lumen_mig_store_dir('3d', 'synthA', 'm002-planes')));
     check('finalize: no leftover dot-folder', !is_dir("$dir3d/.planes-incoming") && !is_dir("$dir3d/.planes-old"));
     $rows = rows_by_id();
-    check('status: 3d now at version 2, m003 and m004 pending', $rows['3d/synthA']['pending'] === ['m003-layer-mips', 'm004-bricks-v3', 'm005-matrix'] && $rows['3d/synthA']['formatVersion'] === 2 && !$rows['3d/synthA']['repair']);
+    check('status: 3d now at version 2, m003 and m004 pending', $rows['3d/synthA']['pending'] === ['m003-layer-mips', 'm004-bricks-v3', 'm005-matrix', 'm006-q30'] && $rows['3d/synthA']['formatVersion'] === 2 && !$rows['3d/synthA']['repair']);
     [$c] = api('plan', ['dataset' => '3d/synthA', 'migration' => 'm002-planes']);
     check('plan: refused on an up-to-date dataset', $c === 409);
 
     // ── Repair detection ───────────────────────────────────────────────────
     rename("$dir3d/planes/z00069.bin", "$root/z69.bak");
     $rows = rows_by_id();
-    check('repair: a missing plane pack is detected at v2', $rows['3d/synthA']['repair'] === true && $rows['3d/synthA']['pending'] === ['m002-planes', 'm003-layer-mips', 'm004-bricks-v3', 'm005-matrix']);
+    check('repair: a missing plane pack is detected at v2', $rows['3d/synthA']['repair'] === true && $rows['3d/synthA']['pending'] === ['m002-planes', 'm003-layer-mips', 'm004-bricks-v3', 'm005-matrix', 'm006-q30']);
     [$c] = api('plan', ['dataset' => '3d/synthA', 'migration' => 'm002-planes']);
     check('repair: plan accepted at version 2', $c === 200);
     api('cancel', ['dataset' => '3d/synthA', 'migration' => 'm002-planes']);
@@ -147,7 +147,7 @@ try {
     $m = json_decode((string)file_get_contents("$dir3d/metadata.json"), true); unset($m['formatVersion']);
     file_put_contents("$dir3d/metadata.json", json_encode($m));
     $rows = rows_by_id();
-    check('crash: valid planes + v1 shows as needing the update', $rows['3d/synthA']['pending'] === ['m002-planes', 'm003-layer-mips', 'm004-bricks-v3', 'm005-matrix'] && !$rows['3d/synthA']['repair']);
+    check('crash: valid planes + v1 shows as needing the update', $rows['3d/synthA']['pending'] === ['m002-planes', 'm003-layer-mips', 'm004-bricks-v3', 'm005-matrix', 'm006-q30'] && !$rows['3d/synthA']['repair']);
     [$c, $fin] = api('finalize', ['dataset' => '3d/synthA', 'migration' => 'm002-planes']);
     check('crash: finalize without a job only bumps the version', $c === 200 && $fin['formatVersion'] === 2
         && json_decode((string)file_get_contents("$dir3d/metadata.json"), true)['formatVersion'] === 2);

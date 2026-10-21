@@ -398,7 +398,7 @@
     "qStreamingPreviewBricks": "Voorbeeld streamen (LOD{lod}, {count} blokken) vóór {quality}...",
     "qStreamingBricks": "{quality}-blokken streamen (LOD{lod}, {count} blokken)...",
     "gpuCompression": "GPU-compressie",
-    "gpuCompressionAuto": "Tijdreeksen",
+    "gpuCompressionAuto": "Automatisch",
     "gpuCompressionActive": "Weergegeven uit door de GPU gecomprimeerde blokken: half zoveel geheugen, dus meer frames blijven geladen; voxelwaarden zijn benaderd (ongeveer 1–2 niveaus op 255). De native pass van de Studio leest exacte voxels.",
     "gpuCompressionInactive": "Weergegeven uit exacte voxels.",
     "stabilization": "Stabilisatie",

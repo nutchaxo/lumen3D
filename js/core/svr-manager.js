@@ -286,7 +286,24 @@ class SVRManager {
 
   /** Remove every atlas define from a material (a dense texture is bound next). */
   static clearAtlasDefines(material) {
-    for (const d of ['ENABLE_SVR', 'SVR_COMPONENTS', 'SVR_ARRAY', 'SVR_ARRAY_PAIRS']) SVRManager._setDefine(material, d, null);
+    for (const d of ['ENABLE_SVR', 'SVR_COMPONENTS', 'SVR_ARRAY', 'SVR_ARRAY_PAIRS', 'SVR_SPLIT']) SVRManager._setDefine(material, d, null);
+  }
+
+  /**
+   * The textures of a split atlas (three channels without the fourth byte an RGBA8
+   * page would spend on nothing): RG8 for channels 0 and 1, R8 for channel 2. `bytes`
+   * is the texel size of each plane; `components` the bytes per voxel over both.
+   */
+  static splitPlanes() {
+    return [
+      { channels: [0, 1], bytes: 2, internal: 'RG8', format: 'RG' },
+      { channels: [2], bytes: 1, internal: 'R8', format: 'RED' }
+    ];
+  }
+
+  /** Does an uncompressed atlas of `channels` channels save bytes as a split atlas? */
+  static canSplit(channels) {
+    return Math.round(Number(channels) || 0) === 3;
   }
 
   /** Bytes held right now by the atlases of every live manager of this page. */
@@ -410,8 +427,13 @@ class SVRManager {
     // rounded up to whole 4 × 4 blocks (pitchFor).
     this.slotPitch = 64;
     this.compressed = false;
-    // Compressed: one texture per page and plane (BCCodec.planesFor), planeAtlases[p][page];
-    // `atlases` is plane 0's. texelBytes: bytes per texel over every plane.
+    // Split (uncompressed, three channels): an RG8 and an R8 texture per page instead of
+    // one RGBA8 — `components` stays 4 (what the loader composes and every writer passes);
+    // the unused fourth byte is dropped when a brick is uploaded.
+    this.split = false;
+    // Compressed or split: one texture per page and plane (BCCodec.planesFor /
+    // splitPlanes), planeAtlases[p][page]; `atlases` is plane 0's. texelBytes: bytes per
+    // texel over every plane.
     this.planes = null;
     this.planeAtlases = [];
     this.texelBytes = null;
@@ -483,6 +505,10 @@ class SVRManager {
    *                 throws err.code 'SVR_BAD_FORMAT' otherwise). Bricks then go in
    *                 through writeEncodedBrick (or writeRgbaBrick / writeBrick, encoded
    *                 on this thread); writeRgbaBrickRegion is refused.
+   *   split         true: an uncompressed atlas of exactly three channels (base role,
+   *                 components 4) is laid out as an RG8 and an R8 texture per page — 3
+   *                 bytes per voxel instead of 4, at most four pages. Ignored otherwise.
+   *                 writeRgbaBrickRegion is refused.
    */
   init(channels, volumeDim, renderer, material, options = {}) {
     this._releaseGpuResources();
@@ -512,10 +538,16 @@ class SVRManager {
       this.texelBytes = this.planes.reduce((sum, p) => sum + p.texelBytes, 0);
       SVRManager._liveCompressed.add(this);
     }
+    this.split = Boolean(options.split) && !this.compressed && this.role === 'base'
+      && this.components === 4 && SVRManager.canSplit(channels);
+    if (this.split) {
+      this.planes = SVRManager.splitPlanes();
+      this.texelBytes = this.planes.reduce((sum, p) => sum + p.bytes, 0);
+    }
     this.slotPitch = SVRManager.pitchFor(this.slotStride, this.compressed);
     const pageCap = this.role === 'detail'
       ? SVRManager.DETAIL_MAX_PAGES
-      : (this.compressed ? Math.floor(SVRManager.MAX_PAGES / this.planes.length) : SVRManager.MAX_PAGES);
+      : (this.compressed || this.split ? Math.floor(SVRManager.MAX_PAGES / this.planes.length) : SVRManager.MAX_PAGES);
     this.pageLimit = Math.max(1, Math.min(pageCap, Math.floor(Number(options.maxPages) || pageCap)));
     this.brickMap.clear();
     this._lru = new Map();
@@ -537,9 +569,11 @@ class SVRManager {
     const others = options.countLiveAtlases === false ? 0 : SVRManager.liveAtlasBytes(this);
     const available = options.ignoreBudget ? Infinity : Math.max(0, budget - others);
     const maxPageBytes = SVRManager._maxPageBytes(options.ignoreBudget ? Infinity : budget);
+    // Bytes a voxel takes in the atlas: 3 split, `components` otherwise (compressed: texelBytes).
+    const planComponents = this.split ? this.texelBytes : this.components;
     const slotBytes = this.compressed
       ? this.slotPitch * this.slotPitch * this.slotPitch * this.texelBytes
-      : SVRManager.slotBytes(this.components, this.slotStride);
+      : SVRManager.slotBytes(planComponents, this.slotStride);
     const requested = Math.ceil(Number(options.targetSlots) || 0);
     const targeted = requested > 1;
 
@@ -550,7 +584,7 @@ class SVRManager {
     let lastError = null;
     for (;;) {
       const plan = SVRManager.planAtlas(target, {
-        max3D, components: this.components, maxPageBytes, brickSize: this.slotPitch, maxPages: this.pageLimit,
+        max3D, components: planComponents, maxPageBytes, brickSize: this.slotPitch, maxPages: this.pageLimit,
         texelBytes: this.compressed ? this.texelBytes : null
       });
       if (!plan) {
@@ -612,7 +646,7 @@ class SVRManager {
     this._applyAtlasConfig(plan);
     const TextureClass = this.compressed ? THREE.DataArrayTexture : (THREE.Data3DTexture || THREE.DataTexture3D);
     const format = this.components === 1 ? THREE.RedFormat : this.components === 2 ? THREE.RGFormat : THREE.RGBAFormat;
-    const planes = this.compressed ? this.planes : [null];
+    const planes = this.compressed || this.split ? this.planes : [null];
     const byPlane = planes.map(() => []);
     try {
       for (let p = 0; p < planes.length; p++) {
@@ -620,7 +654,7 @@ class SVRManager {
           const atlas = new TextureClass(null, this.atlasDim, this.atlasDim, this.atlasDepth);
           // A compressed page's storage is made here (texStorage3D of its RGTC format);
           // three.js only binds it, so the format fields below are never uploaded from.
-          atlas.format = this.compressed ? (planes[p].channels.length === 2 ? THREE.RGFormat : THREE.RedFormat) : format;
+          atlas.format = this.compressed || this.split ? (planes[p].channels.length === 2 ? THREE.RGFormat : THREE.RedFormat) : format;
           atlas.type = THREE.UnsignedByteType;
           // Slots are packed edge to edge. Without a border, linear filtering would blend
           // the neighbouring slot's brick in at every brick face: nearest. With the 1-voxel
@@ -648,7 +682,7 @@ class SVRManager {
       }
       throw err;
     }
-    this.planeAtlases = this.compressed ? byPlane : [];
+    this.planeAtlases = this.compressed || this.split ? byPlane : [];
     this.atlases = byPlane[0];
   }
 
@@ -663,7 +697,8 @@ class SVRManager {
     this.maxSlots = this.slotsPerAtlas * this.atlasPages;
   }
 
-  _glFormats(gl) {
+  _glFormats(gl, plane = null) {
+    if (this.split && plane) return plane.channels.length === 2 ? { internal: gl.RG8, format: gl.RG } : { internal: gl.R8, format: gl.RED };
     if (this.components === 1) return { internal: gl.R8, format: gl.RED };
     if (this.components === 2) return { internal: gl.RG8, format: gl.RG };
     return { internal: gl.RGBA8, format: gl.RGBA };
@@ -697,7 +732,7 @@ class SVRManager {
       // WebGL zero-initialises new storage: an all-zero RGTC block decodes to 0.
       gl.texStorage3D(target, 1, plane.glFormat, this.atlasDim, this.atlasDim, this.atlasDepth);
     } else {
-      const { internal, format } = this._glFormats(gl);
+      const { internal, format } = this._glFormats(gl, plane);
       if (typeof gl.texStorage3D === 'function') {
         gl.texStorage3D(target, 1, internal, this.atlasDim, this.atlasDim, this.atlasDepth);
       } else {
@@ -711,7 +746,7 @@ class SVRManager {
       if (prevBinding !== null) {
         gl.bindTexture(target, prevBinding);
       }
-      throw new Error(`SVR atlas GPU allocation failed (${this.atlasDim}x${this.atlasDim}x${this.atlasDepth}${this.compressed ? ` ${plane.format}` : ''}, glError=${err})`);
+      throw new Error(`SVR atlas GPU allocation failed (${this.atlasDim}x${this.atlasDim}x${this.atlasDepth}${this.compressed ? ` ${plane.format}` : ''}${this.split ? ` ${plane.channels.length === 2 ? 'RG8' : 'R8'}` : ''}, glError=${err})`);
     }
     if (prevBinding !== null) {
       gl.bindTexture(target, prevBinding);
@@ -795,6 +830,8 @@ class SVRManager {
     // with two planes svrAtlas0..3 hold the first one's pages, svrAtlas4..7 the second's.
     SVRManager._setDefine(this.material, 'SVR_ARRAY', this.compressed ? 1 : null);
     SVRManager._setDefine(this.material, 'SVR_ARRAY_PAIRS', this.compressed && this.planes.length > 1 ? 1 : null);
+    // Split: ordinary 3D pages, RG8 in svrAtlas0..3 and R8 in svrAtlas4..7.
+    SVRManager._setDefine(this.material, 'SVR_SPLIT', this.split ? 1 : null);
     this.material.needsUpdate = true;
     const set = (name, value) => { if (this.material.uniforms[name]) this.material.uniforms[name].value = value; };
     // Slot addressing (the shader's slotCoord): texel = slot·slotStride + brickApron +
@@ -818,7 +855,7 @@ class SVRManager {
     this.material.uniforms.ptScale.value = new THREE.Vector3(scaleX, scaleY, scaleZ);
     this.material.uniforms.brickSize.value = this.brickSize;
 
-    if (this.compressed && this.planes.length > 1) {
+    if ((this.compressed && this.planes.length > 1) || this.split) {
       const half = SVRManager.MAX_PAGES / 2;
       for (let i = 0; i < SVRManager.MAX_PAGES; i++) {
         const pages = this.planeAtlases[i < half ? 0 : 1] || [];
@@ -1037,10 +1074,32 @@ class SVRManager {
    *  to blocks on this thread first when the atlas is compressed. */
   _uploadSlotBox(coord, bw, bh, bd, uploadData) {
     const p = this.slotPitch;
+    if (this.split) return this._uploadSplit(coord, bw, bh, bd, uploadData);
     if (!this.compressed) return this._uploadRgbaRegion(coord.atlas, coord.x * p, coord.y * p, coord.z * p, bw, bh, bd, uploadData);
     if (!uploadData || typeof BCCodec === 'undefined') return false;
     const enc = BCCodec.encodeBox(uploadData, this.components, bw, bh, bd, this.channels);
     return this._encodedFits(enc) ? this._uploadEncoded(coord, enc) : false;
+  }
+
+  /** A box of RGBA voxels into the RG8 and R8 textures of a split atlas (byte 3 is dropped). */
+  _uploadSplit(coord, bw, bh, bd, rgba) {
+    if (!rgba) return false;
+    const n = bw * bh * bd;
+    if (rgba.length < n * 4) return false;
+    const rg = new Uint8Array(n * 2);
+    const b = new Uint8Array(n);
+    for (let i = 0, s = 0; i < n; i++, s += 4) {
+      rg[i * 2] = rgba[s];
+      rg[i * 2 + 1] = rgba[s + 1];
+      b[i] = rgba[s + 2];
+    }
+    const p = this.slotPitch;
+    const sx = coord.x * p, sy = coord.y * p, sz = coord.z * p;
+    const first = this._uploadRgbaRegion(coord.atlas, sx, sy, sz, bw, bh, bd, rg, 0);
+    if (first === false) return false;
+    const second = this._uploadRgbaRegion(coord.atlas, sx, sy, sz, bw, bh, bd, b, 1);
+    if (second === false) return false;
+    return first === 'unchecked' || second === 'unchecked' ? 'unchecked' : true;
   }
 
   /** compressedTexSubImage3D of each plane of an encoded box at a slot's origin. */
@@ -1067,7 +1126,7 @@ class SVRManager {
    */
   writeRgbaBrickRegion(bx, by, bz, data, rx, ry, rz, rw, rh, rd) {
     const bs = this.slotStride;
-    if (this.compressed) return false;
+    if (this.compressed || this.split) return false;
     if (!data || !(rw > 0 && rh > 0 && rd > 0)) return false;
     if (rx < 0 || ry < 0 || rz < 0 || rx + rw > bs || ry + rh > bs || rz + rd > bs) return false;
     const needed = rw * rh * rd * this.components;
@@ -1231,9 +1290,9 @@ class SVRManager {
    * 'unchecked' after a real upload (its GL error is read in flushUploadErrors), and
    * true without a renderer (headless bookkeeping, unit tests).
    */
-  _uploadRgbaRegion(atlasIndex, sx, sy, sz, bw, bh, bd, uploadData) {
+  _uploadRgbaRegion(atlasIndex, sx, sy, sz, bw, bh, bd, uploadData, plane = 0) {
     if (!this.renderer) return true;
-    const atlas = this.atlases[atlasIndex];
+    const atlas = plane ? this.planeAtlases[plane]?.[atlasIndex] : this.atlases[atlasIndex];
     if (!atlas || !uploadData) return false;
     if (
       sx < 0 || sy < 0 || sz < 0 ||
@@ -1274,7 +1333,7 @@ class SVRManager {
       gl.bindBuffer(gl.PIXEL_UNPACK_BUFFER, null);
     }
 
-    gl.texSubImage3D(gl.TEXTURE_3D, 0, sx, sy, sz, bw, bh, bd, this._glFormats(gl).format, gl.UNSIGNED_BYTE, uploadData);
+    gl.texSubImage3D(gl.TEXTURE_3D, 0, sx, sy, sz, bw, bh, bd, this._glFormats(gl, this.split ? this.planes[plane] : null).format, gl.UNSIGNED_BYTE, uploadData);
 
     gl.pixelStorei(gl.UNPACK_ALIGNMENT, 4);
     if (prevBinding !== null) {

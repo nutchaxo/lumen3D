@@ -55,8 +55,9 @@ const VolumeViewer = (() => {
   // streamed again from the lossless `ll` column into the detail atlas (also at the level on
   // screen), so a still picture is exact. localStorage 'lumen3d.losslessAtRest' = '0' turns it off.
   let _losslessAtRest = (() => { try { return localStorage.getItem('lumen3d.losslessAtRest') !== '0'; } catch (e) { return true; } })();
-  // GPU-compressed display atlas: 'auto' compresses the atlases of a timelapse (where
-  // the cache must hold many frames), 'on' every bricked volume, 'off' none. Kept for
+  // GPU-compressed display atlas: 'auto' and 'on' compress every bricked volume the GPU can
+  // hold in RGTC (a device without it, or a software renderer, keeps exact voxels: a
+  // three-channel volume is then laid out RG8 + R8, see SVRManager 'split'), 'off' none. Kept for
   // the session and in localStorage 'lumen3d.gpuCompression'; a volume already loaded
   // keeps its form until it is loaded again.
   const GPU_COMPRESSION_MODES = ['auto', 'on', 'off'];
@@ -638,6 +639,16 @@ const VolumeViewer = (() => {
     }
     #else
     vec4 sampleSVRAtlas(vec3 atlasCoord, float atlasPage) {
+        #ifdef SVR_SPLIT
+        // Three channels in two 3D textures per page, so no byte is spent on a fourth:
+        // svrAtlas<k> is RG8 (channels 0, 1), svrAtlas<k+4> is R8 (channel 2).
+        vec4 a; vec4 b;
+        if (atlasPage < 0.5) { a = textureLod(svrAtlas0, atlasCoord, 0.0); b = textureLod(svrAtlas4, atlasCoord, 0.0); }
+        else if (atlasPage < 1.5) { a = textureLod(svrAtlas1, atlasCoord, 0.0); b = textureLod(svrAtlas5, atlasCoord, 0.0); }
+        else if (atlasPage < 2.5) { a = textureLod(svrAtlas2, atlasCoord, 0.0); b = textureLod(svrAtlas6, atlasCoord, 0.0); }
+        else { a = textureLod(svrAtlas3, atlasCoord, 0.0); b = textureLod(svrAtlas7, atlasCoord, 0.0); }
+        return vec4(a.rg, b.r, 0.0);
+        #else
         if (atlasPage < 0.5) return textureLod(svrAtlas0, atlasCoord, 0.0);
         if (atlasPage < 1.5) return textureLod(svrAtlas1, atlasCoord, 0.0);
         if (atlasPage < 2.5) return textureLod(svrAtlas2, atlasCoord, 0.0);
@@ -646,6 +657,7 @@ const VolumeViewer = (() => {
         if (atlasPage < 5.5) return textureLod(svrAtlas5, atlasCoord, 0.0);
         if (atlasPage < 6.5) return textureLod(svrAtlas6, atlasCoord, 0.0);
         return textureLod(svrAtlas7, atlasCoord, 0.0);
+        #endif
     }
     #endif
     #endif
@@ -6608,6 +6620,7 @@ const VolumeViewer = (() => {
               components: footprint.components,
               apron: bordered ? 1 : 0,
               ...(footprint.compressed ? { compression: 'bc' } : {}),
+              ...(footprint.split ? { split: true } : {}),
               // Dense textures are not SVR managers: the budget left for atlases is
               // the page's budget minus them (init subtracts the other live atlases).
               budgetBytes: Math.max(0, budget - (_residentGpuBytes() - SVRClass.liveAtlasBytes())),
@@ -6721,6 +6734,7 @@ const VolumeViewer = (() => {
         svrManager: streamSvrManager || null,
         // Display voxels in the GPU's BC4 / BC5 blocks (lossy, display only).
         gpuCompressed: Boolean(streamSvrManager?.compressed),
+        gpuSplit: Boolean(streamSvrManager?.split),
         manifest: tpSelection.manifest,
         histograms: manifestHistograms.length
           ? manifestHistograms
@@ -7121,6 +7135,17 @@ const VolumeViewer = (() => {
       ? S.planAtlas(Math.max(1, activeBricks), { max3D, components, maxPageBytes, brickSize: stride })
       : null;
     const pageTableBytes = Math.ceil(dims.x / VOLUME_BRICK_SIZE) * Math.ceil(dims.y / VOLUME_BRICK_SIZE) * Math.ceil(dims.z / VOLUME_BRICK_SIZE) * 4;
+    // Exact voxels of three channels: an RG8 and an R8 texture per page (3 bytes a voxel,
+    // not 4), when that layout also fits in the four pages a split atlas is limited to.
+    const splitPlan = !rgbaTransport && components === 4 && S && typeof S.canSplit === 'function' && S.canSplit(channels)
+      ? S.planAtlas(Math.max(1, activeBricks), { max3D, components: 3, maxPageBytes, brickSize: stride, maxPages: S.MAX_PAGES / 2 })
+      : null;
+    if (splitPlan) {
+      return {
+        ...base, mode: 'svr', scalar: false, components, stride, split: true,
+        bytes: splitPlan.bytes + pageTableBytes, planned: true
+      };
+    }
     return {
       ...base, mode: 'svr', scalar: false, components, stride,
       bytes: plan ? plan.bytes + pageTableBytes : Infinity, planned: Boolean(plan)
@@ -7307,14 +7332,9 @@ const VolumeViewer = (() => {
     return 'auto';
   }
 
-  function _isTimelapse(metadata) {
-    return metadata?.type === 'live' || Number(metadata?.dimensions?.t) > 1;
-  }
-
   /** Should a volume of `metadata` stream into a compressed atlas on this renderer? */
   function _gpuCompressionWanted(metadata) {
-    const mode = _gpuCompressionMode();
-    if (mode === 'off' || (mode === 'auto' && !_isTimelapse(metadata))) return false;
+    if (_gpuCompressionMode() === 'off') return false;
     if (!renderer || typeof SVRManager === 'undefined' || typeof SVRManager.compressionSupport !== 'function') return false;
     return SVRManager.compressionSupport(renderer).bc;
   }
